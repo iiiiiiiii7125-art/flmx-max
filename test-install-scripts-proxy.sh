@@ -1572,7 +1572,10 @@ Description=Gost Proxy Service
 WorkingDirectory=$LEGACY_GOST_CONFIG_DIR
 ExecStart=$LEGACY_GOST_CONFIG_DIR/gost
 EOF
-  : > "$LEGACY_GOST_CONFIG_DIR/config.json"
+  # C4-F01: 清理现须先过归属判定；本夹具的旧装连接地址与本次面板
+  # 地址一致（本面板改名前的旧装），属有归属放行路径。
+  SERVER_ADDR="https://mine.example.com:443"
+  printf '%s' '{"addr": "https://mine.example.com:443", "secret": "x"}' > "$LEGACY_GOST_CONFIG_DIR/config.json"
   : > "$LEGACY_GOST_CONFIG_DIR/gost.json"
 
   local systemctl_calls=""
@@ -1649,7 +1652,9 @@ test_cleanup_legacy_gost_installation_skips_systemd_on_openrc() (
 WorkingDirectory=$LEGACY_GOST_CONFIG_DIR
 ExecStart=$LEGACY_GOST_CONFIG_DIR/gost
 EOF
-  : > "$LEGACY_GOST_CONFIG_DIR/config.json"
+  # C4-F01: 同 removes 夹具口径——旧装地址与本面板一致才放行清理。
+  SERVER_ADDR="https://mine.example.com:443"
+  printf '%s' '{"addr": "https://mine.example.com:443", "secret": "x"}' > "$LEGACY_GOST_CONFIG_DIR/config.json"
   : > "$LEGACY_GOST_CONFIG_DIR/gost.json"
 
   local systemctl_calls=""
@@ -1662,6 +1667,260 @@ EOF
 
   [[ -z "$systemctl_calls" ]] || fail "OpenRC cleanup should not invoke systemctl"
   [[ ! -e "$LEGACY_GOST_SERVICE_FILE_ETC" ]] || fail "OpenRC cleanup should still remove the legacy service file"
+)
+
+# C4-F01：旧式 gost 清理的归属门——连接地址属于其他面板（或无法
+# 判定）时非交互跳过清理：服务文件/二进制逐字保留、不停服、输出
+# 含跳过披露与现存地址；TAKEOVER 逃生口与「与现装 agent 地址一
+# 致」的更新路径口径则照常放行清理。
+test_cleanup_legacy_gost_installation_skips_foreign_agent() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  LEGACY_GOST_BINARY=$(mktemp)
+  LEGACY_GOST_SERVICE_FILE_ETC=$(mktemp)
+  LEGACY_GOST_SERVICE_FILE_LIB=$(mktemp -u)
+  LEGACY_GOST_SERVICE_FILE_USR_LIB=$(mktemp -u)
+  LEGACY_GOST_CONFIG_DIR=$(mktemp -d)
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR="https://mine.example.com:443"
+  cat > "$LEGACY_GOST_SERVICE_FILE_ETC" <<EOF
+[Unit]
+Description=Gost Proxy Service
+
+[Service]
+WorkingDirectory=$LEGACY_GOST_CONFIG_DIR
+ExecStart=$LEGACY_GOST_CONFIG_DIR/gost
+EOF
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$LEGACY_GOST_CONFIG_DIR/config.json"
+  : > "$LEGACY_GOST_CONFIG_DIR/gost.json"
+  : > "$LEGACY_GOST_CONFIG_DIR/gost"
+
+  local systemctl_calls=""
+  systemctl() {
+    systemctl_calls+=$'\n'"$*"
+    if [[ "$1" == "list-units" ]]; then
+      printf 'gost.service loaded active running\n'
+    fi
+    return 0
+  }
+
+  local out
+  out=$(cleanup_legacy_gost_installation </dev/null 2>&1)
+
+  [[ -e "$LEGACY_GOST_BINARY" ]] || fail "C4-F01: foreign legacy gost binary must be preserved"
+  [[ -e "$LEGACY_GOST_SERVICE_FILE_ETC" ]] || fail "C4-F01: foreign legacy gost service file must be preserved"
+  [[ -e "$LEGACY_GOST_CONFIG_DIR/gost" ]] || fail "C4-F01: foreign legacy gost dir binary must be preserved"
+  [[ "$systemctl_calls" != *"stop gost"* ]] || fail "C4-F01: foreign legacy gost service must not be stopped"
+  [[ "$out" == *"已跳过旧式 gost 安装的清理"* ]] || fail "C4-F01: skip must be disclosed in the output"
+  [[ "$out" == *"https://other.example.com:443"* ]] || fail "C4-F01: skip disclosure must name the existing addr"
+)
+
+test_cleanup_legacy_gost_installation_skips_unreadable_addr() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  LEGACY_GOST_BINARY=$(mktemp)
+  LEGACY_GOST_SERVICE_FILE_ETC=$(mktemp)
+  LEGACY_GOST_SERVICE_FILE_LIB=$(mktemp -u)
+  LEGACY_GOST_SERVICE_FILE_USR_LIB=$(mktemp -u)
+  LEGACY_GOST_CONFIG_DIR=$(mktemp -d)
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR="https://mine.example.com:443"
+  cat > "$LEGACY_GOST_SERVICE_FILE_ETC" <<EOF
+[Unit]
+WorkingDirectory=$LEGACY_GOST_CONFIG_DIR
+ExecStart=$LEGACY_GOST_CONFIG_DIR/gost
+EOF
+  : > "$LEGACY_GOST_CONFIG_DIR/config.json"
+  : > "$LEGACY_GOST_CONFIG_DIR/gost.json"
+
+  systemctl() { return 0; }
+
+  local out
+  out=$(cleanup_legacy_gost_installation </dev/null 2>&1)
+
+  [[ -e "$LEGACY_GOST_BINARY" ]] || fail "C4-F01: legacy gost with unreadable addr must be preserved (fail-closed)"
+  [[ -e "$LEGACY_GOST_SERVICE_FILE_ETC" ]] || fail "C4-F01: legacy gost service file must be preserved when addr is unreadable"
+  [[ "$out" == *"已跳过旧式 gost 安装的清理"* ]] || fail "C4-F01: undecidable ownership skip must be disclosed"
+)
+
+test_cleanup_legacy_gost_installation_takeover_cleans_foreign_agent() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  LEGACY_GOST_BINARY=$(mktemp)
+  LEGACY_GOST_SERVICE_FILE_ETC=$(mktemp)
+  LEGACY_GOST_SERVICE_FILE_LIB=$(mktemp -u)
+  LEGACY_GOST_SERVICE_FILE_USR_LIB=$(mktemp -u)
+  LEGACY_GOST_CONFIG_DIR=$(mktemp -d)
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR="https://mine.example.com:443"
+  cat > "$LEGACY_GOST_SERVICE_FILE_ETC" <<EOF
+[Unit]
+WorkingDirectory=$LEGACY_GOST_CONFIG_DIR
+ExecStart=$LEGACY_GOST_CONFIG_DIR/gost
+EOF
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$LEGACY_GOST_CONFIG_DIR/config.json"
+  : > "$LEGACY_GOST_CONFIG_DIR/gost.json"
+
+  systemctl() {
+    if [[ "$1" == "list-units" ]]; then
+      printf 'gost.service loaded active running\n'
+    fi
+    return 0
+  }
+
+  local out
+  out=$(FLMX_AGENT_TAKEOVER="1" cleanup_legacy_gost_installation </dev/null 2>&1)
+
+  [[ ! -e "$LEGACY_GOST_BINARY" ]] || fail "C4-F01: takeover should let cleanup remove the legacy binary"
+  [[ ! -e "$LEGACY_GOST_SERVICE_FILE_ETC" ]] || fail "C4-F01: takeover should let cleanup remove the legacy service file"
+  [[ "$out" == *"FLMX_AGENT_TAKEOVER=1"* ]] || fail "C4-F01: takeover cleanup must leave a trace line"
+)
+
+test_cleanup_legacy_gost_installation_matches_installed_agent_addr() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  LEGACY_GOST_BINARY=$(mktemp)
+  LEGACY_GOST_SERVICE_FILE_ETC=$(mktemp)
+  LEGACY_GOST_SERVICE_FILE_LIB=$(mktemp -u)
+  LEGACY_GOST_SERVICE_FILE_USR_LIB=$(mktemp -u)
+  LEGACY_GOST_CONFIG_DIR=$(mktemp -d)
+  SERVICE_MANAGER="systemd"
+  # 菜单更新上下文：SERVER_ADDR 为空，归属证据取自现装 agent 的
+  # 连接地址——与旧式安装一致即同面板旧装，放行清理。
+  SERVER_ADDR=""
+  INSTALL_DIR=$(mktemp -d)
+  printf '%s' '{"addr": "https://mine.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  cat > "$LEGACY_GOST_SERVICE_FILE_ETC" <<EOF
+[Unit]
+WorkingDirectory=$LEGACY_GOST_CONFIG_DIR
+ExecStart=$LEGACY_GOST_CONFIG_DIR/gost
+EOF
+  printf '%s' '{"addr": "https://mine.example.com:443", "secret": "x"}' > "$LEGACY_GOST_CONFIG_DIR/config.json"
+  : > "$LEGACY_GOST_CONFIG_DIR/gost.json"
+
+  systemctl() {
+    if [[ "$1" == "list-units" ]]; then
+      printf 'gost.service loaded active running\n'
+    fi
+    return 0
+  }
+
+  cleanup_legacy_gost_installation </dev/null >/dev/null
+
+  [[ ! -e "$LEGACY_GOST_BINARY" ]] || fail "C4-F01: legacy install matching the installed agent addr should be cleaned"
+  [[ ! -e "$LEGACY_GOST_SERVICE_FILE_ETC" ]] || fail "C4-F01: legacy service file should be cleaned when it matches the installed agent addr"
+)
+
+test_cleanup_legacy_gost_installation_interactive_confirm() (
+  set -euo pipefail
+
+  local work
+  work=$(mktemp -d)
+
+  build_fixture() {
+    CLEANUP_TEST_BINARY=$(mktemp)
+    CLEANUP_TEST_SERVICE=$(mktemp)
+    CLEANUP_TEST_CONFIG_DIR=$(mktemp -d)
+    cat > "$CLEANUP_TEST_SERVICE" <<EOF
+[Unit]
+WorkingDirectory=$CLEANUP_TEST_CONFIG_DIR
+ExecStart=$CLEANUP_TEST_CONFIG_DIR/gost
+EOF
+    printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$CLEANUP_TEST_CONFIG_DIR/config.json"
+    : > "$CLEANUP_TEST_CONFIG_DIR/gost.json"
+    export CLEANUP_TEST_BINARY CLEANUP_TEST_SERVICE CLEANUP_TEST_CONFIG_DIR
+  }
+
+  build_fixture
+  local harness="$work/cleanup-harness.sh"
+  {
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh"
+    cat <<'STUBEOF'
+LEGACY_GOST_BINARY="$CLEANUP_TEST_BINARY"
+LEGACY_GOST_SERVICE_FILE_ETC="$CLEANUP_TEST_SERVICE"
+LEGACY_GOST_SERVICE_FILE_LIB="$CLEANUP_TEST_CONFIG_DIR/no-lib-service"
+LEGACY_GOST_SERVICE_FILE_USR_LIB="$CLEANUP_TEST_CONFIG_DIR/no-usr-lib-service"
+LEGACY_GOST_CONFIG_DIR="$CLEANUP_TEST_CONFIG_DIR"
+SERVICE_MANAGER="systemd"
+SERVER_ADDR="https://mine.example.com:443"
+systemctl() { return 0; }
+cleanup_legacy_gost_installation
+STUBEOF
+  } > "$harness"
+
+  # 交互答 y：放行清理，服务文件被删。
+  pty_run $'y\n' "$harness"
+  [[ ! -e "$CLEANUP_TEST_SERVICE" ]] || fail "C4-F01: interactive y should let cleanup remove the legacy service file"
+
+  # 交互答 n：跳过清理，服务文件保留。
+  build_fixture
+  pty_run $'n\n' "$harness"
+  [[ -e "$CLEANUP_TEST_SERVICE" ]] || fail "C4-F01: interactive n must preserve the legacy service file"
+)
+
+# C4-F02：卸载宿主清理的 legacy 同名共享资源（99-flvx-tuning.conf、
+# nft 表 flvx_kernel）在机器上仍有旧式 gost agent 足迹时跳过并披
+# 露；足迹消失后按本产品旧装遗留照常清理。flmx 专名资源不受影响。
+test_uninstall_flux_agent_host_cleanup_preserves_foreign_legacy_resources() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_PROC_SYS_DIR="$work/proc/sys"
+  LEGACY_GOST_CONFIG_DIR="$work/gost"
+  LEGACY_GOST_BINARY="$work/bin/gost"
+  LEGACY_GOST_SERVICE_FILE_ETC="$work/systemd/gost.service"
+  LEGACY_GOST_SERVICE_FILE_LIB="$work/no-lib-service"
+  LEGACY_GOST_SERVICE_FILE_USR_LIB="$work/no-usr-lib-service"
+  mkdir -p "$INSTALL_DIR" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")" "$LEGACY_GOST_CONFIG_DIR" "$(dirname "$LEGACY_GOST_SERVICE_FILE_ETC")"
+  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  printf '%s' '{"addr": "https://mine.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  echo 'tuned' > "$FLMX_TUNING_SYSCTL_CONF"
+  echo 'tuned-legacy' > "$FLMX_TUNING_SYSCTL_CONF_LEGACY"
+  # 旧式 gost 足迹（他人面板现役 agent）：指纹服务文件＋连接配置。
+  cat > "$LEGACY_GOST_SERVICE_FILE_ETC" <<EOF
+[Unit]
+WorkingDirectory=$LEGACY_GOST_CONFIG_DIR
+ExecStart=$LEGACY_GOST_CONFIG_DIR/gost
+EOF
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$LEGACY_GOST_CONFIG_DIR/config.json"
+  : > "$LEGACY_GOST_CONFIG_DIR/gost"
+
+  systemctl() { return 0; }
+  nft() { cat > "$work/nft-input"; return 0; }
+
+  local out
+  out=$(uninstall_flux_agent_host_cleanup 2>&1)
+
+  [[ ! -e "$FLMX_TUNING_SYSCTL_CONF" ]] || fail "C4-F02: own tuning conf should still be removed"
+  [[ -e "$FLMX_TUNING_SYSCTL_CONF_LEGACY" ]] || fail "C4-F02: legacy tuning conf must be preserved while a foreign legacy agent footprint exists"
+  [[ "$out" == *"跳过删除可能由其持有的调优文件"* ]] || fail "C4-F02: legacy tuning conf skip must be disclosed"
+  grep -q 'flmx_kernel' "$work/nft-input" || fail "C4-F02: own nft tables should still be deleted"
+  if grep -q 'flvx_kernel' "$work/nft-input"; then
+    fail "C4-F02: flvx_kernel must not be deleted while a foreign legacy agent footprint exists"
+  fi
+  [[ "$out" == *"跳过删除与其同名的 nft 表"* ]] || fail "C4-F02: flvx_kernel skip must be disclosed"
+
+  # 足迹消失（旧式 agent 已被其所属面板卸载）后重跑：legacy 资源
+  # 按本产品旧装遗留照常清理。
+  rm -f "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_CONFIG_DIR/config.json" "$LEGACY_GOST_CONFIG_DIR/gost"
+  out=$(uninstall_flux_agent_host_cleanup 2>&1)
+
+  [[ ! -e "$FLMX_TUNING_SYSCTL_CONF_LEGACY" ]] || fail "C4-F02: legacy tuning conf should be removed once no legacy footprint remains"
+  grep -q 'flvx_kernel' "$work/nft-input" || fail "C4-F02: flvx_kernel should be deleted once no legacy footprint remains"
 )
 
 test_install_script_accepts_proxy_url_env_without_prompt() (
@@ -4556,6 +4815,62 @@ STUBEOF
     fail "R4B11-005: success path should print the completion line"
 )
 
+# C4-F04: panel_install.sh 的 main/delete_self 与 install.sh 的
+# R4B11-005 口径对齐。夹具以子进程实跑 panel main（保留真实
+# delete_self）：操作失败时退出码非 0、脚本保留、无「操作已完
+# 成」；成功时自删且有完成文案；操作函数置 PANEL_OP_CANCELLED
+# 标志报告用户取消时退出 0、脚本保留、同样无完成文案（操作函数
+# 本身的返回码口径不变，取消仍 return 0，AI-09）。panel main 有 EUID 前置
+# 检查，非 root 环境跳过本用例。
+test_panel_main_delete_self_only_on_success() (
+  set -euo pipefail
+  if [[ $EUID -ne 0 ]]; then
+    echo "skip: test_panel_main_delete_self_only_on_success needs a root environment"
+    return 0
+  fi
+
+  local work
+  work=$(mktemp -d)
+
+  build_case() {
+    local name="$1" stub="$2"
+    local file="$work/$name.sh"
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/panel_install.sh" > "$file"
+    cat >> "$file" <<STUBEOF
+$stub
+main
+STUBEOF
+    printf '%s' "$file"
+  }
+
+  local rc="0" file out
+
+  file=$(build_case panel-fail 'install_panel() { return 1; }')
+  rc="0"; out=$(printf '1\n' | SELF_UPDATE_SKIP=1 bash "$file" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "C4-F04: failed panel operation should exit non-zero"
+  [[ -f "$file" ]] || fail "C4-F04: panel script must be kept after a failed operation"
+  if [[ "$out" == *"操作已完成"* ]]; then
+    fail "C4-F04: failure path must not print 操作已完成"
+  fi
+  [[ "$out" == *"已保留"* ]] || \
+    fail "C4-F04: failure path should say the script was kept for retry"
+
+  file=$(build_case panel-ok 'install_panel() { return 0; }')
+  rc="0"; out=$(printf '1\n' | SELF_UPDATE_SKIP=1 bash "$file" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "C4-F04: successful panel operation should exit 0"
+  [[ ! -f "$file" ]] || fail "C4-F04: panel script should delete itself after success"
+  [[ "$out" == *"操作已完成"* ]] || \
+    fail "C4-F04: success path should print the completion line"
+
+  file=$(build_case panel-cancel 'uninstall_panel() { echo "❌ 取消卸载"; PANEL_OP_CANCELLED="1"; return 0; }')
+  rc="0"; out=$(printf '3\n' | SELF_UPDATE_SKIP=1 bash "$file" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "C4-F04: user-cancelled operation should exit 0"
+  [[ -f "$file" ]] || fail "C4-F04: panel script must be kept when the user cancels"
+  if [[ "$out" == *"操作已完成"* ]]; then
+    fail "C4-F04: cancel path must not print 操作已完成"
+  fi
+)
+
 # R4B11-004: main 的 root 前置检查。EUID 只读、夹具内无法伪造，
 # root 环境（本地沙箱）下跳过；非 root 环境（CI）实测 fail-fast。
 test_main_requires_root() (
@@ -6310,6 +6625,12 @@ test_remove_flux_agent_service_uses_openrc
 test_cleanup_legacy_gost_installation_removes_service_and_binary
 test_cleanup_legacy_gost_installation_preserves_unrelated_gost
 test_cleanup_legacy_gost_installation_skips_systemd_on_openrc
+test_cleanup_legacy_gost_installation_skips_foreign_agent
+test_cleanup_legacy_gost_installation_skips_unreadable_addr
+test_cleanup_legacy_gost_installation_takeover_cleans_foreign_agent
+test_cleanup_legacy_gost_installation_matches_installed_agent_addr
+test_cleanup_legacy_gost_installation_interactive_confirm
+test_uninstall_flux_agent_host_cleanup_preserves_foreign_legacy_resources
 test_install_script_accepts_proxy_url_env_without_prompt
 test_panel_install_script_can_disable_proxy
 test_panel_install_script_builds_canonical_compose_urls
@@ -6340,6 +6661,7 @@ test_panel_menu5_caddy_list_truncated_not_landed
 test_panel_menu5_caddy_list_removed_when_install_fails
 test_install_flux_agent_rejects_flapping_service
 test_main_delete_self_only_on_success
+test_panel_main_delete_self_only_on_success
 test_main_requires_root
 test_script_secret_surfaces_closed
 test_ensure_compose_trusted_proxy_hops_injects_mapping_form

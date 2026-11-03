@@ -1209,11 +1209,13 @@ flux_agent_service_status_hint() {
   esac
 }
 
-cleanup_legacy_gost_installation() {
-  local matched_service_files=()
+# 旧式 gost 形态 agent 的服务文件指纹扫描：命中「WorkingDirectory
+# 指向旧配置目录，且 ExecStart 指向旧 gost 二进制（或 /usr/local/bin
+# 形态下旧配置双文件并存）」的服务文件逐行输出。cleanup_legacy_
+# gost_installation 与卸载宿主清理的足迹判定共用同一指纹口径，不
+# 另造第二套。
+legacy_gost_matched_service_files() {
   local service_file=""
-  local removed_service_file="0"
-
   for service_file in "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_SERVICE_FILE_LIB" "$LEGACY_GOST_SERVICE_FILE_USR_LIB"; do
     if [[ ! -f "$service_file" ]]; then
       continue
@@ -1223,13 +1225,77 @@ cleanup_legacy_gost_installation() {
     fi
     if grep -Fq "ExecStart=$LEGACY_GOST_CONFIG_DIR/gost" "$service_file" || \
       (grep -Fq "ExecStart=$LEGACY_GOST_BINARY" "$service_file" && [[ -f "$LEGACY_GOST_CONFIG_DIR/config.json" && -f "$LEGACY_GOST_CONFIG_DIR/gost.json" ]]); then
-      matched_service_files+=("$service_file")
+      echo "$service_file"
     fi
   done
+}
+
+# 机器上是否存在旧式 gost 形态 agent 的足迹（服务文件指纹命中，或
+# 旧配置目录内仍有二进制/连接配置）。卸载宿主清理据此判定 legacy
+# 同名共享资源（99-flvx-tuning.conf、nft 表 flvx_kernel）是否可能
+# 属于它。
+legacy_gost_footprint_present() {
+  [[ -n "$(legacy_gost_matched_service_files)" ]] && return 0
+  [[ -e "$LEGACY_GOST_CONFIG_DIR/gost" || -e "$LEGACY_GOST_CONFIG_DIR/config.json" ]]
+}
+
+# 旧式 gost 清理的归属判定（C4-F01）：指纹命中的旧式落位与旧谱系
+# 面板在节点上的 agent 落位完全同形，仅凭指纹无法区分「本面板改
+# 名前的旧装」与「他人面板现役的 agent」；而清理会停服删文件，故
+# 与 guard_agent_dir_ownership 同口径设归属门：旧配置的连接地址
+# （agent_config_addr 读取、已做 JSON 转义归一化）与本次面板地址
+# （SERVER_ADDR）或现装 agent 的连接地址任一逐字相等，才认作本
+# 面板旧装放行；FLMX_AGENT_TAKEOVER=1 为显式逃生口（打印留痕）；
+# 交互终端可人工确认。其余情形一律不放行，由调用方跳过清理并已
+# 在此明示——绝不静默摘除他人 agent。
+legacy_gost_cleanup_ownership_confirmed() {
+  local legacy_addr installed_addr
+  legacy_addr=$(agent_config_addr "$LEGACY_GOST_CONFIG_DIR")
+  if [[ -n "$legacy_addr" ]]; then
+    if [[ -n "${SERVER_ADDR:-}" && "$legacy_addr" == "$SERVER_ADDR" ]]; then
+      return 0
+    fi
+    installed_addr=$(agent_config_addr "$INSTALL_DIR")
+    if [[ -n "$installed_addr" && "$legacy_addr" == "$installed_addr" ]]; then
+      return 0
+    fi
+  fi
+  if [[ "${FLMX_AGENT_TAKEOVER:-}" == "1" ]]; then
+    echo "⚠️ FLMX_AGENT_TAKEOVER=1：按显式确认清理旧式 gost 安装（其连接地址：${legacy_addr:-无法读取}）"
+    return 0
+  fi
+  echo "⚠️ 检测到旧式 gost 形态的 agent（连接地址：${legacy_addr:-无法读取}），无法确认它属于本面板。"
+  echo "   它可能属于其他面板；清理会停止它的服务并删除它的程序文件，本脚本不会未经确认这样做。"
+  if [[ -t 0 ]]; then
+    local confirm
+    read -p "确认该旧式 agent 属于本面板（例如本面板改名前的旧装）并继续清理吗？(y/N): " confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+      return 0
+    fi
+  fi
+  echo "ℹ️ 已跳过旧式 gost 安装的清理：未改动它的任何文件，本次安装/更新不受影响。"
+  echo "   如确认它属于本面板，请在交互终端重跑并在提示时确认，或设置 FLMX_AGENT_TAKEOVER=1 后重试；也可按其所属面板的方式人工处理。"
+  return 1
+}
+
+cleanup_legacy_gost_installation() {
+  local matched_service_files=()
+  local service_file=""
+  local removed_service_file="0"
+
+  while IFS= read -r service_file; do
+    if [[ -n "$service_file" ]]; then
+      matched_service_files+=("$service_file")
+    fi
+  done < <(legacy_gost_matched_service_files)
 
   if [[ ${#matched_service_files[@]} -eq 0 ]]; then
     return 0
   fi
+
+  # C4-F01：指纹命中只证明「旧式形态」、不证明归属。无归属确认时
+  # 跳过清理（披露已由判定函数输出），安装/更新照常继续。
+  legacy_gost_cleanup_ownership_confirmed || return 0
 
   if [[ "$SERVICE_MANAGER" == "systemd" ]] && \
     systemctl list-units --full -all 2>/dev/null | grep -Fq "gost.service"; then
@@ -1597,9 +1663,13 @@ rollback_flux_agent() {
 # 行同一清理全集。口径与面板路径一致：逐项尽力而为，单项失败只
 # 告警并逐项列明、不中断后续项；全部以「存在才处理」为前提，重
 # 复执行只剩跳过、无副作用（幂等）。
-# 归属圈定：只处理带 flmx 标识的自有产物（路径常量与三张表名均
-# 为本产品专名，legacy flvx 名是本产品改名前的自有旧名、与面板
-# 路径的删除集逐字一致），不触碰同机其他程序的文件。
+# 归属圈定：只处理带 flmx 标识的自有产物，不触碰同机其他程序的
+# 文件。其中两件 legacy 同名资源（99-flvx-tuning.conf、nft 表
+# flvx_kernel）与旧谱系面板的 agent 同名共用——它们既是本产品改
+# 名前的自有旧名（现行 agent 自身仍以 flvx_kernel 计数），也可能
+# 由同机另一套旧谱系 agent 持有；机器上仍有旧式 gost 形态 agent
+# 足迹时无从区分归属，一律跳过并披露（C4-F02），无足迹时才按本
+# 产品旧装遗留删除（与面板路径的删除集逐字一致）。
 uninstall_flux_agent_host_cleanup() {
   local failures=0
   local engine_dir="$INSTALL_DIR/tcpfit"
@@ -1657,11 +1727,11 @@ uninstall_flux_agent_host_cleanup() {
     fi
   fi
 
-  # 3) 宿主调优文件：sysctl conf（现行＋改名前 legacy）、BBR 开机
-  # 加载 conf。删掉后调优值不再开机重放；运行时值已在第 2 步恢
-  # 复（无备份时运行时值保留至重启，与面板路径无备份时同口径）。
+  # 3) 宿主调优文件：sysctl conf（现行名）、BBR 开机加载 conf。删
+  # 掉后调优值不再开机重放；运行时值已在第 2 步恢复（无备份时运
+  # 行时值保留至重启，与面板路径无备份时同口径）。
   local host_file=""
-  for host_file in "$FLMX_TUNING_SYSCTL_CONF" "$FLMX_TUNING_SYSCTL_CONF_LEGACY" "$FLMX_TUNING_BBR_MODULE_FILE"; do
+  for host_file in "$FLMX_TUNING_SYSCTL_CONF" "$FLMX_TUNING_BBR_MODULE_FILE"; do
     if [[ -e "$host_file" ]]; then
       if rm -f "$host_file"; then
         echo "🧹 删除调优宿主文件: $host_file"
@@ -1671,6 +1741,20 @@ uninstall_flux_agent_host_cleanup() {
       fi
     fi
   done
+
+  # 3b) 改名前 legacy 名的 sysctl conf（99-flvx-tuning.conf）：与
+  # 旧谱系 agent 同名共用，归属判定见函数头注（C4-F02）——仍有旧
+  # 式 gost 足迹时跳过并披露，无足迹时按本产品旧装遗留删除。
+  if [[ -e "$FLMX_TUNING_SYSCTL_CONF_LEGACY" ]]; then
+    if legacy_gost_footprint_present; then
+      echo "⚠️ 检测到旧式 gost agent 足迹，跳过删除可能由其持有的调优文件: $FLMX_TUNING_SYSCTL_CONF_LEGACY（如确认属本产品旧装可人工删除）"
+    elif rm -f "$FLMX_TUNING_SYSCTL_CONF_LEGACY"; then
+      echo "🧹 删除调优宿主文件: $FLMX_TUNING_SYSCTL_CONF_LEGACY"
+    else
+      failures=$((failures + 1))
+      echo "⚠️ 删除调优宿主文件失败: $FLMX_TUNING_SYSCTL_CONF_LEGACY"
+    fi
+  fi
 
   # 4) 队列整形 systemd unit：先 disable --now 再删文件，否则它
   # 在下次开机仍会去执行安装目录里已被删除的整形脚本（悬空启用
@@ -1692,18 +1776,38 @@ uninstall_flux_agent_host_cleanup() {
 
   # 5) agent 自建 nft 三表：沿用 agent 侧 removeTables 的「先建空
   # 表再删」惯例，表不存在时整条脚本也成功（幂等）。没有 nft 命
-  # 令时删不了表，明确提示残留与人工清理法，不假装已清理。
+  # 令时删不了表，明确提示残留与人工清理法，不假装已清理。其中
+  # flvx_kernel 与旧谱系 agent 同名共用：仍有旧式 gost 足迹时只
+  # 删 flmx 专名两表、该表跳过并披露（C4-F02，归属判定见函数头
+  # 注）；无足迹时三表照常全删。
   if command -v nft >/dev/null 2>&1; then
     local nft_script="" table=""
-    for table in $FLMX_AGENT_NFT_TABLES; do
-      nft_script+="table inet ${table} {}"$'\n'
-      nft_script+="delete table inet ${table}"$'\n'
-    done
-    if printf '%s' "$nft_script" | nft -f - >/dev/null 2>&1; then
-      echo "🧹 已删除 agent 自建 nft 表: $FLMX_AGENT_NFT_TABLES"
-    else
-      failures=$((failures + 1))
-      echo "⚠️ nft 表删除失败，表会残留至宿主机重启或人工清理（nft delete table inet <表名>）: $FLMX_AGENT_NFT_TABLES"
+    local nft_tables="$FLMX_AGENT_NFT_TABLES"
+    local skipped_legacy_table=""
+    if legacy_gost_footprint_present; then
+      nft_tables=""
+      for table in $FLMX_AGENT_NFT_TABLES; do
+        if [[ "$table" == "flvx_kernel" ]]; then
+          skipped_legacy_table="$table"
+        else
+          nft_tables="${nft_tables:+$nft_tables }$table"
+        fi
+      done
+    fi
+    if [[ -n "$nft_tables" ]]; then
+      for table in $nft_tables; do
+        nft_script+="table inet ${table} {}"$'\n'
+        nft_script+="delete table inet ${table}"$'\n'
+      done
+      if printf '%s' "$nft_script" | nft -f - >/dev/null 2>&1; then
+        echo "🧹 已删除 agent 自建 nft 表: $nft_tables"
+      else
+        failures=$((failures + 1))
+        echo "⚠️ nft 表删除失败，表会残留至宿主机重启或人工清理（nft delete table inet <表名>）: $nft_tables"
+      fi
+    fi
+    if [[ -n "$skipped_legacy_table" ]]; then
+      echo "⚠️ 检测到旧式 gost agent 足迹，跳过删除与其同名的 nft 表: $skipped_legacy_table（如确认属本产品可人工执行 nft delete table inet $skipped_legacy_table）"
     fi
   else
     echo "ℹ️ 未找到 nft 命令，跳过 nft 表清理（如曾建表，表会残留至宿主机重启，或装回 nftables 后人工删除）: $FLMX_AGENT_NFT_TABLES"

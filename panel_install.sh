@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261103.04"
+SCRIPT_VERSION="20261104.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -2517,7 +2517,21 @@ wait_for_backend_healthy() {
 }
 
 # 删除脚本自身
+# C4-F04: 与 install.sh 的 R4B11-005 口径对齐——按 main 传入的操
+# 作返回码分流：失败（非 0）保留脚本并给失败文案、绝不印「操作已
+# 完成」；成功（0）才自删。旧实现无条件自删且恒印完成：操作失败
+# 时脚本能保留全靠 set -e 在 main 调用点中止的副作用，而用户取
+# 消这类 return 0 路径仍走到自删并谎报完成。用户取消单独走
+# PANEL_OP_CANCELLED 标志（见 uninstall_panel 两处）：操作函数
+# 的返回码口径不变（取消仍是干净的 return 0，AI-09 钉格），main
+# 见标志不调用本函数、保留脚本并以 0 退出。
 delete_self() {
+  local rc="${1:-0}"
+  if [[ "$rc" != "0" ]]; then
+    echo ""
+    echo "⚠️ 操作未成功（退出码 $rc），脚本文件已保留，可直接重新运行重试"
+    return 0
+  fi
   # 通过 bash <(curl ...) 进程替换执行时，$0 是 /dev/fd/63，无需清理
   if [[ "$PANEL_SCRIPT_PATH" == /dev/fd/* ]]; then
     return 0
@@ -3219,6 +3233,9 @@ uninstall_panel() {
       read -p "无法确认上述文件属于本面板，仍要删除吗？(y/N): " nodocker_confirm || nodocker_confirm=""
       if [[ "$nodocker_confirm" != "y" && "$nodocker_confirm" != "Y" ]]; then
         echo "❌ 未确认，保留上述文件，未做任何修改"
+        # 用户取消（C4-F04）：置标志，main 见标志不自删、退出 0；
+        # 返回码维持 0 的干净 no-op 口径（AI-09）。
+        PANEL_OP_CANCELLED="1"
         return 0
       fi
     fi
@@ -3253,6 +3270,9 @@ uninstall_panel() {
   read -p "确认卸载面板（部署目录：$PANEL_DEPLOY_DIR，后端容器：${PANEL_BACKEND_CONTAINER:-未知}）吗？此操作将停止并删除该部署的所有容器和数据 (y/N): " confirm
   if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     echo "❌ 取消卸载"
+    # 用户取消（C4-F04）：置标志，main 见标志不自删、退出 0；
+    # 返回码维持 0 的干净 no-op 口径（AI-09）。
+    PANEL_OP_CANCELLED="1"
     return 0
   fi
 
@@ -3298,36 +3318,31 @@ main() {
     show_menu
     read -p "请输入选项 (1-7): " choice
 
+    # C4-F04：各分支以 install.sh 同款 `op || rc=$?` 捕获操作返回
+    # 码并以其退出，delete_self 接收同一返回码分流（失败保留脚
+    # 本、成功才自删）；不再靠 set -e 在调用点中止来保留失败现
+    # 场。用户取消由操作函数置 PANEL_OP_CANCELLED 标志（其已打
+    # 印取消说明）：不自删、退出 0。
+    local rc=0
+    PANEL_OP_CANCELLED=""
     case $choice in
       1)
-        install_panel
-        delete_self
-        exit 0
+        install_panel || rc=$?
         ;;
       2)
-        update_panel
-        delete_self
-        exit 0
+        update_panel || rc=$?
         ;;
       3)
-        uninstall_panel
-        delete_self
-        exit 0
+        uninstall_panel || rc=$?
         ;;
       4)
-        migrate_to_postgres
-        delete_self
-        exit 0
+        migrate_to_postgres || rc=$?
         ;;
       5)
-        setup_domain_proxy
-        delete_self
-        exit 0
+        setup_domain_proxy || rc=$?
         ;;
       6)
-        setup_subscription_front_domain
-        delete_self
-        exit 0
+        setup_subscription_front_domain || rc=$?
         ;;
       7)
         echo "👋 退出脚本"
@@ -3337,8 +3352,14 @@ main() {
       *)
         echo "❌ 无效选项，请输入 1-7"
         echo ""
+        continue
         ;;
     esac
+    if [[ "${PANEL_OP_CANCELLED:-}" == "1" ]]; then
+      exit 0
+    fi
+    delete_self "$rc"
+    exit "$rc"
   done
 }
 
