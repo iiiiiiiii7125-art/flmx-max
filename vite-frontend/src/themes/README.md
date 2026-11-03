@@ -84,7 +84,7 @@ tokens: {
     "--content1": "#ffffff",      // 卡片背景
 
     // 品牌色
-    "--primary": "#2563eb",       // 主色
+    "--primary": "#4f46e5",       // 主色
     "--primary-foreground": "#fff", // 主色上的文字
     "--secondary": "#6366f1",     // 辅色
 
@@ -94,9 +94,9 @@ tokens: {
     "--warning": "#d97706",
 
     // 每种品牌色都有 50-900 共 10 级色阶
-    "--primary-50": "#eff6ff",    // 最浅
-    "--primary-500": "#3b82f6",   // 中间
-    "--primary-900": "#1e3a8a",   // 最深
+    "--primary-50": "#eef2ff",    // 最浅
+    "--primary-500": "#6366f1",   // 中间
+    "--primary-900": "#312e81",   // 最深
 
     // 字体
     "--font-sans": '"Inter", sans-serif',
