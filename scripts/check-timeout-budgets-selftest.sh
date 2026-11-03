@@ -7,6 +7,10 @@
 # B05-001 规则。若哪天「版本发现禁登 class」规则被误删/改坏，本
 # 自检先红。
 #
+# 另含 R2-C6-02 回归变体：kernel_external literal 锚点漂移
+# （20s→500s）必须 FAIL 且点名 T061——守 literal/const 提取的
+# fail-closed 口径与 T061–T063 锚点 case 不被删改。
+#
 # 用法：check-timeout-budgets-selftest.sh（无参数，作用于本仓库）。
 # 退出码：0 = 基线 PASS 且变体被抓；1 = 任一断言不成立。
 set -u
@@ -178,4 +182,30 @@ fi
 grep -q 'latencyProbeTimeout' "$TMP/var5.log" || { echo "FAIL: gate failed but did not name latencyProbeTimeout:"; cat "$TMP/var5.log"; exit 1; }
 echo "OK: variant caught, latencyProbeTimeout named"
 cp "$ROOT/vite-frontend/src/api/index.ts" "$FE_API"
+
+# ── R2-C6-02 回归变体：literal 后端界锚点漂移必须 FAIL 点名。
+# kernel_external.go 的抓取腿界 20s→500s 后，be_literal_anchor 的
+# 值钉 grep 必然失配、提取为空——旧口径下 strict 漂移比对「空即跳
+# 过」、门全绿（真实界已是前端 60s 的 8 倍仍无人看见）；且
+# T061/T062/T063 出厂时不在锚点 case 内、从未被验。本变体断言修
+# 复后门必须 FAIL 且点名 T061 与「提取为空」fail-closed 结论。
+echo "== variant R2-C6-02: kernel_external literal anchor drift 20s->500s must FAIL, naming T061 =="
+KE_GO="$MIR/go-backend/internal/http/handler/kernel_external.go"
+python3 - "$KE_GO" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = 'context.WithTimeout(ctx, 20*time.Second)'
+new = 'context.WithTimeout(ctx, 500*time.Second)'
+assert old in s, 'kernel_external WithTimeout anchor not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/var6.log" 2>&1; then
+  echo "FAIL: gate PASSED on the literal-anchor drift variant — backend bound drift still invisible"
+  exit 1
+fi
+grep -q 'T061' "$TMP/var6.log" || { echo "FAIL: gate failed but did not name T061:"; cat "$TMP/var6.log"; exit 1; }
+grep -q '提取为空' "$TMP/var6.log" || { echo "FAIL: gate failure is not the fail-closed empty-extraction verdict:"; cat "$TMP/var6.log"; exit 1; }
+echo "OK: variant caught, T061 named with fail-closed empty-extraction verdict"
+cp "$ROOT/go-backend/internal/http/handler/kernel_external.go" "$MIR/go-backend/internal/http/handler/kernel_external.go"
 echo "SELFTEST: PASS"

@@ -266,7 +266,7 @@ be_literal_anchor() {
   case "$1" in
     T006) grep -qP '"RollbackAgent".*,\s*30\s*\*\s*time\.Second' "$HANDLER_DIR/upgrade.go" && echo 30 ;;
     T010) grep -qP 'WithTimeout\(ctx,\s*60\s*\*\s*time\.Second\)' "$HANDLER_DIR/gist_backup.go" && echo 60 ;;
-    T017|T018|T024) grep -qP 'WithTimeout\(ctx,\s*20\s*\*\s*time\.Second\)' "$HANDLER_DIR/kernel_external.go" && echo 20 ;;
+    T017|T018|T024|T061|T062|T063) grep -qP 'WithTimeout\(ctx,\s*20\s*\*\s*time\.Second\)' "$HANDLER_DIR/kernel_external.go" && echo 20 ;;
     A001) grep -oP 'downloadTimeout\s*=\s*\K4\s*\*\s*time\.Minute' "$ROOT/go-gost/x/kernel/install.go" >/dev/null && echo 240 ;;
   esac
 }
@@ -357,9 +357,22 @@ EOF
   # 后端界提取（可机械求值者）
   be_x=""
   case "$be_kind" in
-    const) be_x="$(go_const_s "$be_src" "$HANDLER_DIR")" ;;
+    # const 的 be_src 个别行带括注（如 F001/F003 的
+    # "defaultNodeCommandTimeout (peer per-item)"）：符号名取首个
+    # 空格前部分，括注只是说明——旧口径下整串作符号名提取恒空、
+    # 这两格的后端界从未被验（与 R2-C6-02 同族）。
+    const) be_x="$(go_const_s "${be_src%% (*}" "$HANDLER_DIR")" ;;
     literal) be_x="$(be_literal_anchor "$cell")" ;;
   esac
+  # 提取为空即 fail-closed 点名（R2-C6-02）：const/literal 界的锚点或
+  # 符号漂移/缺失时提取为空，旧口径下 strict/formula 的漂移比对被
+  # 「空即跳过」静默吞掉（实证：kernel_external 20s→500s 门仍 PASS），
+  # 边距还继续按登记值算。可机械求值的界提取不到只能是漂移或登记
+  # 失效，必须红且点名；不可机械求值者的显式出口是 go_const_s 的
+  # DEFER（值由 Go 门测试钉住），不受此条影响。
+  if { [ "$be_kind" = "const" ] || [ "$be_kind" = "literal" ]; } && [ -z "$be_x" ]; then
+    fail "$tag 后端界提取为空：锚点/符号「$be_src」未命中（漂移或缺失），fail-closed（R2-C6-02）"
+  fi
 
   case "$check" in
     strict)
