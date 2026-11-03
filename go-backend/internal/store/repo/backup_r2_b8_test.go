@@ -254,67 +254,6 @@ func TestR2B8ImportTunnelTrafficRatioZero(t *testing.T) {
 // R2X-037：grant 组键强制取父 permission 组键——bogus 自带值不得
 // 落库（红：999/888 原样落库）；同 id 正确组重导入须能纠正存量
 // 错误行（红：DoUpdates 不含组键，永不更新）；不一致计 warning。
-func TestR2B8ImportPermissionGrantGroupKeysForcedToParent(t *testing.T) {
-	now := time.Now().UnixMilli()
-	seedPermDeps := func(t *testing.T, dest *Repository) {
-		t.Helper()
-		createRow(t, dest, &model.UserGroup{ID: 4, Name: "ug", Status: 1, CreatedTime: now, UpdatedTime: now})
-		createRow(t, dest, &model.TunnelGroup{ID: 3, Name: "tg", Status: 1, CreatedTime: now, UpdatedTime: now})
-		createRow(t, dest, &model.UserTunnel{ID: 20, UserID: 1, TunnelID: 1, Status: 1})
-	}
-
-	// bogus 组 grant → 落库组键 = 父组键 (4,3)，零 999/888 行。
-	dest := openBackupRepo(t, "b8-grant-bogus.db")
-	seedPermDeps(t, dest)
-	backup := &model.BackupData{
-		Version: "1.0",
-		Permissions: []model.PermissionBackup{
-			{ID: 50, UserGroupID: 4, TunnelGroupID: 3, CreatedTime: now, Grants: []model.PermissionGrantBackup{
-				{ID: 60, UserGroupID: 999, TunnelGroupID: 888, UserTunnelID: 20, CreatedTime: now, CreatedByGroup: 1},
-			}},
-		},
-	}
-	result, err := dest.Import(backup, []string{"permissions"})
-	if err != nil {
-		t.Fatalf("import: %v", err)
-	}
-	var grant model.GroupPermissionGrant
-	if err := dest.DB().Where("id = ?", 60).First(&grant).Error; err != nil {
-		t.Fatalf("grant row must land: %v", err)
-	}
-	if grant.UserGroupID != 4 || grant.TunnelGroupID != 3 {
-		t.Fatalf("R2X-037: grant group keys must be forced to parent (4,3), got (%d,%d)", grant.UserGroupID, grant.TunnelGroupID)
-	}
-	if n := countWhere(t, dest, "group_permission_grant", "user_group_id = ? OR tunnel_group_id = ?", 999, 888); n != 0 {
-		t.Fatalf("R2X-037: bogus group rows must not exist, got %d", n)
-	}
-	if len(result.ImportWarnings) == 0 {
-		t.Fatalf("R2X-037: mismatched grant group keys must be counted in ImportWarnings, got %v", result.ImportWarnings)
-	}
-
-	// 存量错误行（同 id、bogus 组）+ 正确组重导入 → 被纠正。
-	dest2 := openBackupRepo(t, "b8-grant-correct.db")
-	seedPermDeps(t, dest2)
-	createRow(t, dest2, &model.GroupPermission{ID: 50, UserGroupID: 4, TunnelGroupID: 3, CreatedTime: now})
-	createRow(t, dest2, &model.GroupPermissionGrant{ID: 60, UserGroupID: 999, TunnelGroupID: 888, UserTunnelID: 20, CreatedTime: now, CreatedByGroup: 1})
-	goodBackup := &model.BackupData{
-		Version: "1.0",
-		Permissions: []model.PermissionBackup{
-			{ID: 50, UserGroupID: 4, TunnelGroupID: 3, CreatedTime: now, Grants: []model.PermissionGrantBackup{
-				{ID: 60, UserGroupID: 4, TunnelGroupID: 3, UserTunnelID: 20, CreatedTime: now, CreatedByGroup: 1},
-			}},
-		},
-	}
-	if _, err := dest2.Import(goodBackup, []string{"permissions"}); err != nil {
-		t.Fatalf("reimport: %v", err)
-	}
-	if err := dest2.DB().Where("id = ?", 60).First(&grant).Error; err != nil {
-		t.Fatalf("grant row: %v", err)
-	}
-	if grant.UserGroupID != 4 || grant.TunnelGroupID != 3 {
-		t.Fatalf("R2X-037: re-import with correct groups must correct the stored row, got (%d,%d)", grant.UserGroupID, grant.TunnelGroupID)
-	}
-}
 
 // R2X-046：内核行替换（同节点同类型、新 id）前须把备份外存量入站
 // 的 kernel_id 重指向新行（红：旧行裸删、入站悬空、列表类型为空）；

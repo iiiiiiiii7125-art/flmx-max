@@ -19,7 +19,7 @@ import (
 // PORT-3342/G-recovery：Gist 指定版本恢复必须走与现有 backupImport
 // 完全相同的导入尾钩子全集（计量对账、configs 缓存失效、内核
 // reconcile、撤销清理、转发重推含 FINAL-P2-1 七段谓词、缓存失效），
-// 恢复段用我方 16 段全集，不得照抄上游 11 段直调 Import。SEC-01：
+// 恢复段用我方 13 段全集，不得照抄上游 11 段直调 Import。SEC-01：
 // 回执不再含 AutoBackup（导入前快照会泄露凭据），以下测试断言其缺席。
 // 全部用 httptest mock GitHub API，不联网、不使用真实令牌。
 
@@ -71,14 +71,16 @@ func seedGistRestoreConfigs(t *testing.T, r *repo.Repository) {
 	}
 }
 
-// 16 段全集（T-3）：与 repository.go validBackupTypes / 前端
+// 13 段全集（T-3）：与 repository.go validBackupTypes / 前端
 // BACKUP_TYPE_VALUES 同集，顺序与之一致；上游 11 段不在此列。
-func TestGistRestoreTypesAreSixteenSegmentFullSet(t *testing.T) {
+// 分组三件套三段已随功能移除（1.9.6），旧备份中的三段由 Import
+// 点名披露已忽略。
+func TestGistRestoreTypesAreThirteenSegmentFullSet(t *testing.T) {
 	want := []string{"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
-		"tunnelGroups", "userGroups", "permissions", "configs", "inbounds", "userInbounds",
+		"configs", "inbounds", "userInbounds",
 		"announcements", "monitorPermissions", "userSubscriptions", "serviceMonitors"}
 	if len(gistRestoreTypes) != len(want) {
-		t.Fatalf("gistRestoreTypes = %v (%d segments), want 16", gistRestoreTypes, len(gistRestoreTypes))
+		t.Fatalf("gistRestoreTypes = %v (%d segments), want 13", gistRestoreTypes, len(gistRestoreTypes))
 	}
 	seen := map[string]bool{}
 	for _, v := range gistRestoreTypes {
@@ -236,7 +238,7 @@ func TestGistRestoreRejectsBadPassword(t *testing.T) {
 	}
 }
 
-// 加密恢复走通：正确密码解密后按 16 段全集导入。
+// 加密恢复走通：正确密码解密后按 13 段全集导入。
 func TestGistRestoreEncryptedRoundTrip(t *testing.T) {
 	h := setupGistTest(t)
 	r := gistTestRepo(t, h)

@@ -24,13 +24,12 @@ import (
 // 逐条 resolveForwardIngress（每条 2 SQL，其中 forward_port 按
 // forward_id 全表扫描），查询数 1+2N、耗时二次型（3000 条 4.37s）；
 // exportForwards 逐条 exportForwardPorts（同为全表扫描），3000 条
-// 5.41s；exportTunnelGroups/exportUserGroups/exportPermissions 亦有
-// 逐行查询。
+// 5.41s。
 //
 // 本文件的断言分三层：
 //  1. 等价性：批量结果与保留的单条实现（resolveForwardIngress /
-//     exportForwardPorts）逐字段一致，且关键金值（inIp 串、分组导出
-//     的索引序成员、forwardPorts 的 null 语义）与改造前探针实测一致；
+//     exportForwardPorts）逐字段一致，且关键金值（inIp 串、
+//     forwardPorts 的 null 语义）与改造前探针实测一致；
 //  2. 查询次数：计数 logger 断言语句数不随条数线性增长；
 //  3. 阶梯耗时：200/1000/3000 下单位条数耗时近似恒定（修复后 T/N
 //     不再单调上升），阈值留足沙箱噪声余量。
@@ -70,21 +69,6 @@ func seedC12Fixture(t *testing.T, r *Repository) {
 	fp(20, 11, 0, sql.NullString{String: "192.0.2.1", Valid: true}, "")        // port=0 边沿
 	fp(22, 12, 10022, sql.NullString{}, "bind-warn-22")                        // C06 bindWarnings 透出
 	// f21 无任何 forward_port
-
-	// 分组成员乱序插入：旧 Pluck 走唯一索引序输出，批量版必须同序。
-	must(db.Create(&model.TunnelGroup{ID: 5, Name: "tg5", CreatedTime: now, UpdatedTime: now, Status: 1}).Error)
-	must(db.Create(&model.TunnelGroup{ID: 6, Name: "tg6", CreatedTime: now, UpdatedTime: now, Status: 1}).Error)
-	for _, tid := range []int64{30, 10, 20} {
-		must(db.Create(&model.TunnelGroupTunnel{TunnelGroupID: 5, TunnelID: tid, CreatedTime: now}).Error)
-	}
-	must(db.Create(&model.UserGroup{ID: 7, Name: "ug7", CreatedTime: now, UpdatedTime: now, Status: 1}).Error)
-	for _, uid := range []int64{9, 3, 7} {
-		must(db.Create(&model.UserGroupUser{UserGroupID: 7, UserID: uid, CreatedTime: now}).Error)
-	}
-	must(db.Create(&model.GroupPermission{ID: 8, UserGroupID: 7, TunnelGroupID: 5, CreatedTime: now}).Error)
-	for _, utid := range []int64{300, 100, 200} {
-		must(db.Create(&model.GroupPermissionGrant{UserGroupID: 7, TunnelGroupID: 5, UserTunnelID: utid, CreatedTime: now}).Error)
-	}
 }
 
 func TestForwardBatchEquivalence_X04(t *testing.T) {
@@ -197,39 +181,6 @@ func TestForwardBatchEquivalence_X04(t *testing.T) {
 	raw, _ := json.Marshal(ef)
 	if !strings.Contains(string(raw), `"forwardPorts":null`) {
 		t.Fatalf("export JSON must contain forwardPorts:null for portless forward: %s", raw)
-	}
-
-	// 5) 分组/权限导出：成员顺序锁定为改造前实测的索引序。
-	etg, err := r.exportTunnelGroups()
-	if err != nil {
-		t.Fatalf("exportTunnelGroups: %v", err)
-	}
-	if len(etg) != 2 || !reflect.DeepEqual(etg[0].Tunnels, []int64{10, 20, 30}) {
-		t.Fatalf("tunnel groups = %+v, want tg5 tunnels [10 20 30]", etg)
-	}
-	if etg[1].Tunnels != nil {
-		t.Fatalf("empty tunnel group Tunnels = %v, want nil", etg[1].Tunnels)
-	}
-	eug, err := r.exportUserGroups()
-	if err != nil {
-		t.Fatalf("exportUserGroups: %v", err)
-	}
-	if len(eug) != 1 || !reflect.DeepEqual(eug[0].Users, []int64{3, 7, 9}) {
-		t.Fatalf("user groups = %+v, want ug7 users [3 7 9]", eug)
-	}
-	ep, err := r.exportPermissions()
-	if err != nil {
-		t.Fatalf("exportPermissions: %v", err)
-	}
-	if len(ep) != 1 || len(ep[0].Grants) != 3 {
-		t.Fatalf("permissions = %+v", ep)
-	}
-	var grantUTs []int64
-	for _, g := range ep[0].Grants {
-		grantUTs = append(grantUTs, g.UserTunnelID)
-	}
-	if !reflect.DeepEqual(grantUTs, []int64{100, 200, 300}) {
-		t.Fatalf("grant order = %v, want [100 200 300] (index order)", grantUTs)
 	}
 }
 

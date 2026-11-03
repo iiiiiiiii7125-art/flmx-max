@@ -20,7 +20,7 @@ import (
 
 var allBackupTypes = []string{
 	"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
-	"tunnelGroups", "userGroups", "permissions", "configs", "inbounds",
+	"configs", "inbounds",
 	"userInbounds", "announcements", "monitorPermissions",
 	"userSubscriptions", "serviceMonitors",
 }
@@ -181,9 +181,6 @@ func TestBackupTableCoverage(t *testing.T) {
 		"node": "nodes", "tunnel": "tunnels", "chain_tunnel": "tunnels",
 		"forward": "forwards", "forward_port": "forwards",
 		"user_tunnel": "userTunnels", "speed_limit": "speedLimits",
-		"tunnel_group": "tunnelGroups", "tunnel_group_tunnel": "tunnelGroups",
-		"user_group": "userGroups", "user_group_user": "userGroups",
-		"group_permission": "permissions", "group_permission_grant": "permissions",
 		"vite_config":           "configs",
 		"user_inbound":          "userInbounds",
 		"user_subscription":     "userSubscriptions",
@@ -202,6 +199,10 @@ func TestBackupTableCoverage(t *testing.T) {
 		// FIX132-C：A3-04 订阅计数基线随 inbounds 段；A3-05 两表随
 		// nodes 段（nodeSSHConfigs / peerShares 独立键）。
 		"subscription_counter": "inbounds",
+		// F6-02：删除屏蔽登记随 inbounds 段往返——源按 ID 保号恢复，
+		// 屏蔽键的源 ID 恢复后仍指向同一源，先前「跨恢复不稳定」的
+		// 排除理由已被现行实现推翻。
+		"remote_source_shield": "inbounds",
 		"node_ssh_config":      "nodeSSHConfigs",
 		"peer_share":           "peerShares",
 	}
@@ -212,7 +213,6 @@ func TestBackupTableCoverage(t *testing.T) {
 		"nft_counter_state":          "nft 计数基线，运行时状态",
 		"nft_pending_delete":         "pending-delete 重试台账，运行时状态",
 		"node_uninstall":             "删服务器待卸载登记，运行时台账（180 天保留），非配置数据",
-		"remote_source_shield":       "导入节点删除屏蔽登记（R10-04），源派生的删除意图簿记；屏蔽键含源 ID、跨恢复不保证稳定，搬运会造悬空屏蔽，恢复后由再次手工删除重建",
 		"node_seq":                   "agent 流量序号，运行时状态",
 		"traffic_stream_cursor":      "可靠上报 v2 流游标，运行时状态；备份恢复后游标回退/缺失由 reset_stream 自愈闭环处理（agent 换 stream 原字节重报），随备份搬运反而会与 agent spool 状态错位",
 		"statistics_flow":            "流量统计时序，非配置数据",

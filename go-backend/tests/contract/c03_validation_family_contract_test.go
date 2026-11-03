@@ -9,10 +9,10 @@ import (
 )
 
 // C03 校验族回归（Round 1 分诊簇 C03）：写侧合法集/在场数值校验与
-// 口径统一。覆盖 B02-001、B02-002、B02-004、B02-005、B03-001、
-// B03-002、B03-003（permission/remove 子项）、B06-001、B09-001、
+// 口径统一。覆盖 B02-001、B02-002、B02-005、B06-001、B09-001、
 // B09-002、B04-003。修复前每条断言对应的坏请求均 code=0 落库或
-// 回吐 DB 原文。
+// 回吐 DB 原文。（B02-004 与 B03 分组各格已随分组三件套于 1.9.6
+// 整套移除，专属契约一并删除。）
 
 func c03AdminToken(t *testing.T, secret string) string {
 	t.Helper()
@@ -84,34 +84,6 @@ func TestC03UserUpdateShortPasswordRejected(t *testing.T) {
 	}
 }
 
-// B02-004：user/groups 查不存在用户报错（不再 code=0 空列表）。
-func TestC03UserGroupsPhantomUserRejected(t *testing.T) {
-	secret := "c03-secret"
-	router, r := setupContractRouter(t, secret)
-	admin := c03AdminToken(t, secret)
-
-	out := requestContractEnvelope(t, router, admin, "/api/v1/user/groups",
-		map[string]interface{}{"id": 999999})
-	if out.Code == 0 {
-		t.Fatalf("groups of phantom user must fail, got %+v", out)
-	}
-	if !strings.Contains(out.Msg, "用户不存在") {
-		t.Fatalf("error must name 用户不存在, got %q", out.Msg)
-	}
-
-	out = requestContractEnvelope(t, router, admin, "/api/v1/user/create",
-		map[string]interface{}{"user": "c03-grp", "pwd": "secret1"})
-	if out.Code != 0 {
-		t.Fatalf("seed create: %+v", out)
-	}
-	uid := mustQueryInt64(t, r, `SELECT id FROM user WHERE user = 'c03-grp'`)
-	out = requestContractEnvelope(t, router, admin, "/api/v1/user/groups",
-		map[string]interface{}{"id": uid})
-	if out.Code != 0 {
-		t.Fatalf("groups of real user must succeed: %+v", out)
-	}
-}
-
 // B02-005：user/quota/reset 非法 scope 前置校验、人话报错（不透
 // repo 英文内部错误、不回 -2 原文）。
 func TestC03QuotaResetBadScopeRejected(t *testing.T) {
@@ -139,158 +111,6 @@ func TestC03QuotaResetBadScopeRejected(t *testing.T) {
 		map[string]interface{}{"userId": uid, "scope": "Daily"})
 	if out.Code != 0 {
 		t.Fatalf("case-insensitive valid scope must succeed: %+v", out)
-	}
-}
-
-// B03-001：group assign 非正成员 ID 整单拒绝且成员/授权不变（用户
-// 侧与隧道侧、混合数组、0 与负数）。
-func TestC03GroupAssignNonPositiveIDsRejected(t *testing.T) {
-	secret := "c03-secret"
-	router, r := setupContractRouter(t, secret)
-	admin := c03AdminToken(t, secret)
-	now := time.Now().UnixMilli()
-
-	if err := r.DB().Exec(`INSERT INTO user(id, user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, created_time, updated_time, status) VALUES(200, 'c03-member', 'x', 1, 2727251700000, 99999, 0, 0, 1, 99999, ?, ?, 1)`, now, now).Error; err != nil {
-		t.Fatalf("insert user: %v", err)
-	}
-	if err := r.DB().Exec(`INSERT INTO user_group(name, created_time, updated_time, status) VALUES('c03-ug', ?, ?, 1)`, now, now).Error; err != nil {
-		t.Fatalf("insert user_group: %v", err)
-	}
-	ugID := mustLastInsertID(t, r, "c03-ug")
-	if err := r.DB().Exec(`INSERT INTO tunnel(name, traffic_ratio, type, protocol, flow, created_time, updated_time, status, in_ip, inx) VALUES('c03-tun', 1.0, 1, 'tls', 99999, ?, ?, 1, NULL, 0)`, now, now).Error; err != nil {
-		t.Fatalf("insert tunnel: %v", err)
-	}
-	tunID := mustLastInsertID(t, r, "c03-tun")
-	if err := r.DB().Exec(`INSERT INTO tunnel_group(name, created_time, updated_time, status) VALUES('c03-tg', ?, ?, 1)`, now, now).Error; err != nil {
-		t.Fatalf("insert tunnel_group: %v", err)
-	}
-	tgID := mustLastInsertID(t, r, "c03-tg")
-
-	// 先合法分配，建立基线成员。
-	out := requestContractEnvelope(t, router, admin, "/api/v1/group/user/assign",
-		map[string]interface{}{"groupId": ugID, "userIds": []int64{200}})
-	if out.Code != 0 {
-		t.Fatalf("baseline user assign: %+v", out)
-	}
-	out = requestContractEnvelope(t, router, admin, "/api/v1/group/tunnel/assign",
-		map[string]interface{}{"groupId": tgID, "tunnelIds": []int64{tunID}})
-	if out.Code != 0 {
-		t.Fatalf("baseline tunnel assign: %+v", out)
-	}
-
-	for _, ids := range [][]int64{{-5}, {0}, {200, -5}} {
-		out = requestContractEnvelope(t, router, admin, "/api/v1/group/user/assign",
-			map[string]interface{}{"groupId": ugID, "userIds": ids})
-		if out.Code == 0 {
-			t.Fatalf("user assign %v must be rejected, got success", ids)
-		}
-		if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM user_group_user WHERE user_group_id = ? AND user_id = 200`, ugID); n != 1 {
-			t.Fatalf("user assign %v must not clear members, member rows=%d", ids, n)
-		}
-	}
-	for _, ids := range [][]int64{{-5}, {0}} {
-		out = requestContractEnvelope(t, router, admin, "/api/v1/group/tunnel/assign",
-			map[string]interface{}{"groupId": tgID, "tunnelIds": ids})
-		if out.Code == 0 {
-			t.Fatalf("tunnel assign %v must be rejected, got success", ids)
-		}
-		if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM tunnel_group_tunnel WHERE tunnel_group_id = ? AND tunnel_id = ?`, tgID, tunID); n != 1 {
-			t.Fatalf("tunnel assign %v must not clear members, member rows=%d", ids, n)
-		}
-	}
-}
-
-// B03-002：分组重名（创建与改名）回人话错误，不泄漏 DB 原文。
-func TestC03GroupDuplicateNameFriendlyError(t *testing.T) {
-	secret := "c03-secret"
-	router, r := setupContractRouter(t, secret)
-	admin := c03AdminToken(t, secret)
-
-	out := requestContractEnvelope(t, router, admin, "/api/v1/group/user/create",
-		map[string]interface{}{"name": "c03-dup", "status": 1})
-	if out.Code != 0 {
-		t.Fatalf("first create: %+v", out)
-	}
-	out = requestContractEnvelope(t, router, admin, "/api/v1/group/user/create",
-		map[string]interface{}{"name": "c03-dup", "status": 1})
-	if out.Code == 0 {
-		t.Fatalf("duplicate create must fail, got %+v", out)
-	}
-	if out.Msg != "分组名称已存在" {
-		t.Fatalf("duplicate create must return the friendly message, got %q", out.Msg)
-	}
-	if strings.Contains(out.Msg, "UNIQUE") || strings.Contains(out.Msg, "constraint") || strings.Contains(out.Msg, "2067") {
-		t.Fatalf("error must not leak DB internals, got %q", out.Msg)
-	}
-
-	// 改名撞重名同口径。
-	out = requestContractEnvelope(t, router, admin, "/api/v1/group/user/create",
-		map[string]interface{}{"name": "c03-other", "status": 1})
-	if out.Code != 0 {
-		t.Fatalf("second group create: %+v", out)
-	}
-	otherID := mustQueryInt64(t, r, `SELECT id FROM user_group WHERE name = 'c03-other'`)
-	out = requestContractEnvelope(t, router, admin, "/api/v1/group/user/update",
-		map[string]interface{}{"id": otherID, "name": "c03-dup"})
-	if out.Code == 0 {
-		t.Fatalf("rename to existing name must fail, got %+v", out)
-	}
-	if out.Msg != "分组名称已存在" {
-		t.Fatalf("rename duplicate must return the friendly message, got %q", out.Msg)
-	}
-	if name := mustQueryInt(t, r, `SELECT COUNT(*) FROM user_group WHERE name = 'c03-dup'`); name != 1 {
-		t.Fatalf("exactly one group may hold the name, got %d", name)
-	}
-
-	// 隧道分组同形。
-	out = requestContractEnvelope(t, router, admin, "/api/v1/group/tunnel/create",
-		map[string]interface{}{"name": "c03-tdup", "status": 1})
-	if out.Code != 0 {
-		t.Fatalf("tunnel group create: %+v", out)
-	}
-	out = requestContractEnvelope(t, router, admin, "/api/v1/group/tunnel/create",
-		map[string]interface{}{"name": "c03-tdup", "status": 1})
-	if out.Code == 0 || out.Msg != "分组名称已存在" {
-		t.Fatalf("tunnel group duplicate must return the friendly message, got %+v", out)
-	}
-}
-
-// B03-003（拆分项）：permission/remove 对不存在记录报错；存在记录
-// 正常移除。分组单删幂等属既定语义，不在本测试范围。
-func TestC03GroupPermissionRemoveNonexistentRejected(t *testing.T) {
-	secret := "c03-secret"
-	router, r := setupContractRouter(t, secret)
-	admin := c03AdminToken(t, secret)
-	now := time.Now().UnixMilli()
-
-	out := requestContractEnvelope(t, router, admin, "/api/v1/group/permission/remove",
-		map[string]interface{}{"id": 88888})
-	if out.Code == 0 {
-		t.Fatalf("remove of nonexistent permission must fail, got %+v", out)
-	}
-
-	if err := r.DB().Exec(`INSERT INTO user_group(name, created_time, updated_time, status) VALUES('c03-pug', ?, ?, 1)`, now, now).Error; err != nil {
-		t.Fatalf("insert user_group: %v", err)
-	}
-	ugID := mustLastInsertID(t, r, "c03-pug")
-	if err := r.DB().Exec(`INSERT INTO tunnel_group(name, created_time, updated_time, status) VALUES('c03-ptg', ?, ?, 1)`, now, now).Error; err != nil {
-		t.Fatalf("insert tunnel_group: %v", err)
-	}
-	tgID := mustLastInsertID(t, r, "c03-ptg")
-	if err := r.DB().Exec(`INSERT INTO group_permission(user_group_id, tunnel_group_id, created_time) VALUES(?, ?, ?)`, ugID, tgID, now).Error; err != nil {
-		t.Fatalf("insert group_permission: %v", err)
-	}
-	permID := mustQueryInt64(t, r, `SELECT id FROM group_permission WHERE user_group_id = ? AND tunnel_group_id = ?`, ugID, tgID)
-
-	out = requestContractEnvelope(t, router, admin, "/api/v1/group/permission/remove",
-		map[string]interface{}{"id": permID})
-	if out.Code != 0 {
-		t.Fatalf("remove of existing permission must succeed: %+v", out)
-	}
-	out = requestContractEnvelope(t, router, admin, "/api/v1/group/permission/remove",
-		map[string]interface{}{"id": permID})
-	if out.Code == 0 {
-		t.Fatalf("second remove of the same permission must fail, got %+v", out)
 	}
 }
 

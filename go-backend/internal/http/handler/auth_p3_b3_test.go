@@ -17,8 +17,9 @@ import (
 	"go-backend/internal/store/repo"
 )
 
-// B3 同批 P3 回归测试：F-066（user/groups 归属）、F-068（同毫秒签发边界）、
-// F-069（passkey register 限流）。F-067 在 internal/auth 包内单测。
+// B3 同批 P3 回归测试：F-068（同毫秒签发边界）、F-069（passkey
+// register 限流）。F-067 在 internal/auth 包内单测。（F-066 的
+// user/groups 面已随分组三件套于 1.9.6 整套移除，专测一并删除。）
 
 func claimsCtxReq(method, path, remoteAddr, body string, userID int64, roleID int) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -44,56 +45,6 @@ func decodeEnvelope(t *testing.T, w *httptest.ResponseRecorder) envelope {
 		t.Fatalf("decode envelope: %v (body=%s)", err, w.Body.String())
 	}
 	return env
-}
-
-// ---- F-066 ----
-
-// 旧缺陷：/api/v1/user/groups 无归属校验，任意登录用户可查任意用户的分组 ID。
-func TestUserGroupsOwnershipF066(t *testing.T) {
-	r, err := repo.Open(filepath.Join(t.TempDir(), "panel.db"))
-	if err != nil {
-		t.Fatalf("open repo: %v", err)
-	}
-	t.Cleanup(func() { _ = r.Close() })
-	h := New(r, "test-secret")
-	now := time.Now().UnixMilli()
-	mk := func(name string, roleID int) int64 {
-		id, err := r.CreateUser(name, "hash", roleID, now+86400000, 1, 1, 100, 1, 0, now)
-		if err != nil {
-			t.Fatalf("create %s: %v", name, err)
-		}
-		return id
-	}
-	adminID := mk("admin", 0)
-	userA := mk("usera", 1)
-	userB := mk("userb", 1)
-	// userA 属于分组 1（测试夹具直插，与 forward 排序测试的夹具方式一致）。
-	if err := r.DB().Exec(`INSERT INTO user_group (id, name, created_time, updated_time, status) VALUES (1, 'g1', ?, ?, 1)`, now, now).Error; err != nil {
-		t.Fatalf("insert group: %v", err)
-	}
-	if err := r.DB().Exec(`INSERT INTO user_group_user (user_group_id, user_id, created_time) VALUES (1, ?, ?)`, userA, now).Error; err != nil {
-		t.Fatalf("insert membership: %v", err)
-	}
-
-	call := func(actorID int64, roleID int, targetID int64) envelope {
-		w := httptest.NewRecorder()
-		h.userGroups(w, claimsCtxReq(http.MethodPost, "/api/v1/user/groups", "",
-			`{"id":`+strconv.FormatInt(targetID, 10)+`}`, actorID, roleID))
-		return decodeEnvelope(t, w)
-	}
-
-	// 他人查询必须 403（修复前返回 code=0 与分组数据 → FAIL）。
-	if env := call(userB, 1, userA); env.Code != 403 {
-		t.Fatalf("other user's groups must be 403, got code=%d data=%s", env.Code, env.Data)
-	}
-	// 本人查询照常。
-	if env := call(userA, 1, userA); env.Code != 0 || !strings.Contains(string(env.Data), "1") {
-		t.Fatalf("self query must succeed with group id, got code=%d data=%s", env.Code, env.Data)
-	}
-	// 管理员查询照常。
-	if env := call(adminID, 0, userA); env.Code != 0 || !strings.Contains(string(env.Data), "1") {
-		t.Fatalf("admin query must succeed with group id, got code=%d data=%s", env.Code, env.Data)
-	}
 }
 
 // ---- F-069 ----

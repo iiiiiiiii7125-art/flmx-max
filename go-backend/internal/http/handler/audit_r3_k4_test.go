@@ -174,18 +174,11 @@ func TestK4MethodGuardCensus(t *testing.T) {
 }
 
 // TestK4WriteFacesRejectNonPost 逐面行为回归：普查清单内全部补守卫
-// 写面（B03-002 五面 + 普查新增八面）在 GET/PUT 下必须回「请求失败」
+// 写面在 GET/PUT 下必须回「请求失败」
 // 且零落库。
 func TestK4WriteFacesRejectNonPost(t *testing.T) {
 	h, r := k4Handler(t)
 	faces := map[string]func(http.ResponseWriter, *http.Request){
-		"groupUserCreate":          h.groupUserCreate,
-		"groupTunnelCreate":        h.groupTunnelCreate,
-		"groupUserUpdate":          h.groupUserUpdate,
-		"groupTunnelUpdate":        h.groupTunnelUpdate,
-		"groupUserAssign":          h.groupUserAssign,
-		"groupTunnelAssign":        h.groupTunnelAssign,
-		"groupPermissionAssign":    h.groupPermissionAssign,
 		"userTunnelAssign":         h.userTunnelAssign,
 		"userTunnelBatchAssign":    h.userTunnelBatchAssign,
 		"userTunnelUpdate":         h.userTunnelUpdate,
@@ -203,65 +196,14 @@ func TestK4WriteFacesRejectNonPost(t *testing.T) {
 			}
 		}
 	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM user_group WHERE name = 'GETMADE'`); n != 0 {
-		t.Fatalf("GET group create leaked a row")
-	}
 	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM speed_limit WHERE name = 'GETMADE'`); n != 0 {
 		t.Fatalf("GET speed-limit create leaked a row")
 	}
-	// 对照：POST 仍可达业务校验（守卫不误伤正常方法）。
-	code, msg := k4Call(t, h.groupUserCreate, http.MethodPost, map[string]interface{}{"name": "POSTOK", "status": 1}, true)
+	// 对照：POST 正常方法不受守卫误伤（原对照面 groupUserCreate
+	// 已随分组三件套移除，改以 speedLimitCreate 同口径顶替）。
+	code, msg := k4Call(t, h.speedLimitCreate, http.MethodPost, map[string]interface{}{"name": "POSTOK", "status": 1}, true)
 	if code != 0 {
-		t.Fatalf("POST group create must succeed, got code=%d msg=%q", code, msg)
-	}
-}
-
-// TestK4UserGroupIdsNonPositive 覆盖 B03-001：user/create、user/update
-// 的 groupIds 含非正 ID 整单拒绝，update 被拒时归属零变化。
-func TestK4UserGroupIdsNonPositive(t *testing.T) {
-	h, r := k4Handler(t)
-	stmts := []string{
-		`INSERT INTO user(id, user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, created_time, updated_time, status) VALUES(2, 'member', 'pwd', 1, 0, 100, 0, 0, 0, 10, 1000, 1000, 1)`,
-		`INSERT INTO user_group(id, name, created_time, updated_time, status) VALUES(1, 'g-one', 1000, 1000, 1)`,
-		`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(1, 2, 1000)`,
-	}
-	for _, s := range stmts {
-		if err := r.DB().Exec(s).Error; err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-	}
-	membership := func() int {
-		return mustQueryInt(t, r, `SELECT COUNT(*) FROM user_group_user WHERE user_id = 2`)
-	}
-	for _, gids := range []interface{}{[]int64{-5}, []int64{1, -5}} {
-		code, _ := k4Call(t, h.userUpdate, http.MethodPost, map[string]interface{}{
-			"id": 2, "user": "member", "groupIds": gids,
-		}, true)
-		if code == 0 {
-			t.Fatalf("userUpdate groupIds=%v must be rejected", gids)
-		}
-		if membership() != 1 {
-			t.Fatalf("userUpdate groupIds=%v changed membership despite rejection", gids)
-		}
-	}
-	// create 面：[-5] 不建户；对照 [1] 正常建户并入组。
-	code, _ := k4Call(t, h.userCreate, http.MethodPost, map[string]interface{}{
-		"user": "newbie", "pwd": "Secret@123", "groupIds": []int64{-5},
-	}, true)
-	if code == 0 {
-		t.Fatalf("userCreate groupIds=[-5] must be rejected")
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM user WHERE user = 'newbie'`); n != 0 {
-		t.Fatalf("userCreate with [-5] leaked a user row")
-	}
-	code, msg := k4Call(t, h.userCreate, http.MethodPost, map[string]interface{}{
-		"user": "newbie", "pwd": "Secret@123", "groupIds": []int64{1},
-	}, true)
-	if code != 0 {
-		t.Fatalf("userCreate control case failed: code=%d msg=%q", code, msg)
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM user_group_user WHERE user_group_id = 1`); n != 2 {
-		t.Fatalf("control create must add membership, got %d rows", n)
+		t.Fatalf("POST speed-limit create must succeed, got code=%d msg=%q", code, msg)
 	}
 }
 

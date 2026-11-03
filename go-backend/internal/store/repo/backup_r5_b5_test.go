@@ -24,9 +24,9 @@ func r5b5WarningsContain(warnings []string, substr string) bool {
 	return false
 }
 
-// R5X-009：users/userGroups/tunnelGroups 三段 status {0,1} 枚举门——
-// status=2/-1 逐行跳过 + skipped/warning，合法 0/1 逐字落库；被跳过
-// 的分组不得触发成员替换等任何后续处置。
+// R5X-009：users 段 status {0,1} 枚举门——status=2/-1 逐行跳过 +
+// skipped/warning，合法 0/1 逐字落库（分组两段的同门已随分组
+// 三件套于 1.9.6 整套移除）。
 func TestR5B5ImportStatusEnumGate(t *testing.T) {
 	now := time.Now().UnixMilli()
 	dest := openBackupRepo(t, "r5b5-status.db")
@@ -38,29 +38,16 @@ func TestR5B5ImportStatusEnumGate(t *testing.T) {
 			{ID: 4, User: "bad-two", Pwd: r5b5Bcrypt, RoleID: 1, Status: 2, CreatedTime: now},
 			{ID: 5, User: "bad-neg", Pwd: r5b5Bcrypt, RoleID: 1, Status: -1, CreatedTime: now},
 		},
-		UserGroups: []model.UserGroupBackup{
-			{ID: 1, Name: "ug-ok", Status: 1, CreatedTime: now},
-			{ID: 2, Name: "ug-off", Status: 0, CreatedTime: now},
-			{ID: 3, Name: "ug-bad", Status: 2, CreatedTime: now, Users: []int64{2}},
-			{ID: 4, Name: "ug-neg", Status: -1, CreatedTime: now, Users: []int64{2}},
-		},
-		TunnelGroups: []model.TunnelGroupBackup{
-			{ID: 1, Name: "tg-ok", Status: 1, CreatedTime: now},
-			{ID: 2, Name: "tg-off", Status: 0, CreatedTime: now},
-			{ID: 3, Name: "tg-bad", Status: 2, CreatedTime: now, Tunnels: []int64{1}},
-			{ID: 4, Name: "tg-neg", Status: -1, CreatedTime: now, Tunnels: []int64{1}},
-		},
 	}
-	result, err := dest.Import(backup, []string{"users", "userGroups", "tunnelGroups"})
+	result, err := dest.Import(backup, []string{"users"})
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if result.UsersImported != 2 || result.UserGroupsImported != 2 || result.TunnelGroupsImported != 2 {
-		t.Fatalf("R5X-009: imported counts = users %d userGroups %d tunnelGroups %d, want 2/2/2",
-			result.UsersImported, result.UserGroupsImported, result.TunnelGroupsImported)
+	if result.UsersImported != 2 {
+		t.Fatalf("R5X-009: imported counts = users %d, want 2", result.UsersImported)
 	}
-	if result.SkippedRows["users"] != 2 || result.SkippedRows["userGroups"] != 2 || result.SkippedRows["tunnelGroups"] != 2 {
-		t.Fatalf("R5X-009: skipped = %v, want users/userGroups/tunnelGroups each 2", result.SkippedRows)
+	if result.SkippedRows["users"] != 2 {
+		t.Fatalf("R5X-009: skipped = %v, want users 2", result.SkippedRows)
 	}
 	if !r5b5WarningsContain(result.ImportWarnings, "status") {
 		t.Fatalf("R5X-009: illegal status skips must be disclosed in warnings, got %v", result.ImportWarnings)
@@ -74,40 +61,6 @@ func TestR5B5ImportStatusEnumGate(t *testing.T) {
 		if st != want {
 			t.Fatalf("R5X-009: legal user %d status = %d, want %d verbatim", id, st, want)
 		}
-	}
-	for id, want := range map[int64]int{1: 1, 2: 0} {
-		if err := dest.DB().Raw(`SELECT status FROM user_group WHERE id = ?`, id).Scan(&st).Error; err != nil {
-			t.Fatalf("user_group %d: %v", id, err)
-		}
-		if st != want {
-			t.Fatalf("R5X-009: legal user_group %d status = %d, want %d verbatim", id, st, want)
-		}
-		if err := dest.DB().Raw(`SELECT status FROM tunnel_group WHERE id = ?`, id).Scan(&st).Error; err != nil {
-			t.Fatalf("tunnel_group %d: %v", id, err)
-		}
-		if st != want {
-			t.Fatalf("R5X-009: legal tunnel_group %d status = %d, want %d verbatim", id, st, want)
-		}
-	}
-	// 非法行不得以任何形态落库，库内无 status∉{0,1} 行。
-	if n := countRaw(t, dest, `SELECT COUNT(1) FROM user WHERE status NOT IN (0,1)`); n != 0 {
-		t.Fatalf("R5X-009: %d user rows with illegal status landed", n)
-	}
-	if n := countRaw(t, dest, `SELECT COUNT(1) FROM user_group WHERE status NOT IN (0,1)`); n != 0 {
-		t.Fatalf("R5X-009: %d user_group rows with illegal status landed", n)
-	}
-	if n := countRaw(t, dest, `SELECT COUNT(1) FROM tunnel_group WHERE status NOT IN (0,1)`); n != 0 {
-		t.Fatalf("R5X-009: %d tunnel_group rows with illegal status landed", n)
-	}
-	if n := countRaw(t, dest, `SELECT COUNT(1) FROM user WHERE id IN (4,5)`); n != 0 {
-		t.Fatalf("R5X-009: illegal-status users must not land, got %d rows", n)
-	}
-	// 被跳过的分组不得处理成员（成员替换在跳过之后不得发生）。
-	if n := countWhere(t, dest, "user_group_user", "user_group_id IN (3,4)"); n != 0 {
-		t.Fatalf("R5X-009: skipped user groups must not write members, got %d", n)
-	}
-	if n := countWhere(t, dest, "tunnel_group_tunnel", "tunnel_group_id IN (3,4)"); n != 0 {
-		t.Fatalf("R5X-009: skipped tunnel groups must not write members, got %d", n)
 	}
 }
 
@@ -220,48 +173,33 @@ func TestR5B5NestedPreDeleteSkipWarnings(t *testing.T) {
 		t.Fatalf("R5X-017: pre-delete + skip on forward ports must warn, got no warnings (skipped=%v)", resultB.SkippedRows)
 	}
 
-	// (c) tunnelGroup 成员：存量成员被预删、备份成员引用缺失隧道被跳过。
-	destC := openBackupRepo(t, "r5b5-nested-tgm.db")
-	createRow(t, destC, &model.Tunnel{ID: 1, Name: "t1", TrafficRatio: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
-	createRow(t, destC, &model.TunnelGroup{ID: 1, Name: "tg", Status: 1, CreatedTime: now, UpdatedTime: now})
-	createRow(t, destC, &model.TunnelGroupTunnel{TunnelGroupID: 1, TunnelID: 1, CreatedTime: now})
+	// (c) 已移除段披露：旧备份携带的分组三件套三段不落库（表已不
+	// 建），但必须在 ImportWarnings 中逐段点名计数，不许静默丢。
+	destC := openBackupRepo(t, "r5b5-removed-segments.db")
 	backupC := &model.BackupData{
 		Version: "1.0",
 		TunnelGroups: []model.TunnelGroupBackup{
-			{ID: 1, Name: "tg", Status: 1, CreatedTime: now, Tunnels: []int64{999}},
+			{ID: 1, Name: "tg", Status: 1, CreatedTime: now, Tunnels: []int64{1}},
 		},
-	}
-	resultC, err := destC.Import(backupC, []string{"tunnelGroups"})
-	if err != nil {
-		t.Fatalf("import tunnelGroups: %v", err)
-	}
-	if n := countWhere(t, destC, "tunnel_group_tunnel", "tunnel_group_id = ?", 1); n != 0 {
-		t.Fatalf("setup expectation: pre-deleted tunnel group members must be gone, got %d", n)
-	}
-	if len(resultC.ImportWarnings) == 0 {
-		t.Fatalf("R5X-017: pre-delete + skip on tunnel group members must warn, got no warnings (skipped=%v)", resultC.SkippedRows)
-	}
-
-	// (d) userGroup 成员：存量成员被预删、备份成员引用缺失用户被跳过。
-	destD := openBackupRepo(t, "r5b5-nested-ugm.db")
-	createRow(t, destD, &model.User{ID: 2, User: "u2", Pwd: r5b5Bcrypt, RoleID: 1, Status: 1, CreatedTime: now})
-	createRow(t, destD, &model.UserGroup{ID: 1, Name: "ug", Status: 1, CreatedTime: now, UpdatedTime: now})
-	createRow(t, destD, &model.UserGroupUser{UserGroupID: 1, UserID: 2, CreatedTime: now})
-	backupD := &model.BackupData{
-		Version: "1.0",
 		UserGroups: []model.UserGroupBackup{
-			{ID: 1, Name: "ug", Status: 1, CreatedTime: now, Users: []int64{999}},
+			{ID: 1, Name: "ug", Status: 1, CreatedTime: now, Users: []int64{2}},
+		},
+		Permissions: []model.PermissionBackup{
+			{ID: 1, UserGroupID: 1, TunnelGroupID: 1, CreatedTime: now},
 		},
 	}
-	resultD, err := destD.Import(backupD, []string{"userGroups"})
+	resultC, err := destC.Import(backupC, []string{"users"})
 	if err != nil {
-		t.Fatalf("import userGroups: %v", err)
+		t.Fatalf("import with removed segments: %v", err)
 	}
-	if n := countWhere(t, destD, "user_group_user", "user_group_id = ?", 1); n != 0 {
-		t.Fatalf("setup expectation: pre-deleted user group members must be gone, got %d", n)
+	for _, seg := range []string{"tunnelGroups", "userGroups", "permissions"} {
+		if !r5b5WarningsContain(resultC.ImportWarnings, seg) {
+			t.Fatalf("removed segment %s must be named in import warnings, got %v", seg, resultC.ImportWarnings)
+		}
 	}
-	if len(resultD.ImportWarnings) == 0 {
-		t.Fatalf("R5X-017: pre-delete + skip on user group members must warn, got no warnings (skipped=%v)", resultD.SkippedRows)
+	if resultC.TunnelGroupsImported != 0 || resultC.UserGroupsImported != 0 || resultC.PermissionsImported != 0 {
+		t.Fatalf("removed segments must import zero rows, got %d/%d/%d",
+			resultC.TunnelGroupsImported, resultC.UserGroupsImported, resultC.PermissionsImported)
 	}
 
 	// 防过修对照：存量 chain 被备份 chain 完整重建（跳过=0）时不得

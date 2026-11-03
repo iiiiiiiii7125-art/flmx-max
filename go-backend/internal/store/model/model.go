@@ -428,13 +428,13 @@ func (FederationTunnelBinding) TableName() string { return "federation_tunnel_bi
 
 // BackupData represents the full backup structure.
 type BackupData struct {
-	Version      string              `json:"version"`
-	ExportedAt   int64               `json:"exportedAt"`
-	Users        []UserBackup        `json:"users,omitempty"`
-	Nodes        []NodeBackup        `json:"nodes,omitempty"`
-	Tunnels      []TunnelBackup      `json:"tunnels,omitempty"`
-	Forwards     []ForwardBackup     `json:"forwards,omitempty"`
-	UserTunnels  []UserTunnelBackup  `json:"userTunnels,omitempty"`
+	Version     string             `json:"version"`
+	ExportedAt  int64              `json:"exportedAt"`
+	Users       []UserBackup       `json:"users,omitempty"`
+	Nodes       []NodeBackup       `json:"nodes,omitempty"`
+	Tunnels     []TunnelBackup     `json:"tunnels,omitempty"`
+	Forwards    []ForwardBackup    `json:"forwards,omitempty"`
+	UserTunnels []UserTunnelBackup `json:"userTunnels,omitempty"`
 	SpeedLimits []SpeedLimitBackup `json:"speedLimits,omitempty"`
 	// 分组三件套备份段（tunnelGroups/userGroups/permissions）已随
 	// 功能移除（1.9.6）：三字段仅作导入兼容壳保留——旧备份解码时
@@ -536,15 +536,15 @@ type InboundsBackup struct {
 }
 
 type SubscriptionBackup struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Token       string `json:"token"`
-	UUID        string `json:"uuid"`
-	Password    string `json:"password"`
-	SourceAll   int    `json:"sourceAll"`
-	InboundIDs  string `json:"inboundIds"`
-	SourceIDs   string `json:"sourceIds,omitempty"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Token      string `json:"token"`
+	UUID       string `json:"uuid"`
+	Password   string `json:"password"`
+	SourceAll  int    `json:"sourceAll"`
+	InboundIDs string `json:"inboundIds"`
+	SourceIDs  string `json:"sourceIds,omitempty"`
 	// GroupIDs 仅作导入兼容壳保留（节点组功能已移除，1.9.6）：
 	// 导入时订阅行不再写入该引用，携带非空 groupIds 的订阅计数
 	// 并在 ImportWarnings 中点名披露；新导出永不填充。
@@ -986,10 +986,10 @@ type ImportResult struct {
 	InboundSourcesImported              int `json:"inboundSourcesImported"`
 	// F6-02：随 inbounds 段恢复的删除屏蔽登记数（屏蔽随源往返，
 	// 恢复后手工删过的导入节点不会被同步复活）。
-	InboundShieldsImported int `json:"inboundShieldsImported"`
-	InboundNodeGroupsImported           int `json:"inboundNodeGroupsImported"`
-	InboundTemplatesImported            int `json:"inboundTemplatesImported"`
-	InboundLegacyUsersImported          int `json:"inboundLegacyUsersImported"`
+	InboundShieldsImported     int `json:"inboundShieldsImported"`
+	InboundNodeGroupsImported  int `json:"inboundNodeGroupsImported"`
+	InboundTemplatesImported   int `json:"inboundTemplatesImported"`
+	InboundLegacyUsersImported int `json:"inboundLegacyUsersImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int `json:"announcementsImported"`
 	MonitorPermissionsImported int `json:"monitorPermissionsImported"`

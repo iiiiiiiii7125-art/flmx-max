@@ -15,10 +15,10 @@ import (
 	"go-backend/internal/store/model"
 )
 
-// R2 批 7 回归：分配引用完整性（R2X-012）/ 分组停用执法（R2X-013）/
-// UT 单删台账（R2X-035）/ 校验前置（R2X-036）/ 删除幂等回执（R2X-048）。
-// 复用 r1_b2_group_grants_test.go 的 seedB2Fixture（G=1/TG=1、UT10/13 组建、
-// UT11/12 手工、forward20/21）。
+// R2 批 7 回归：分配引用完整性（R2X-012）/ 校验前置（R2X-036）/
+// 删除幂等回执（R2X-048）。分组三件套已于 1.9.6 整套移除，原
+// R2X-013 分组停用执法与 R2X-035 UT 单删台账两族随功能删除。
+// 复用 b2_fixture_test.go 的 seedB2Fixture（UT10–UT13、forward20/21）。
 
 // postB7Admin 以管理员 claims 调用需要 roleID==0 的 handler。
 func (f *b2Fixture) postB7Admin(t *testing.T, fn func(http.ResponseWriter, *http.Request), body interface{}) (int, string) {
@@ -61,63 +61,6 @@ func (f *b2Fixture) mkSubscriptionB7(t *testing.T) int64 {
 }
 
 // ─── R2X-012 ────────────────────────────────────────────────────────────────
-
-func TestR2B7_012_GroupUserAssignPhantomUserRejected(t *testing.T) {
-	f := seedB2Fixture(t)
-	code, body := f.post(t, f.h.groupUserAssign, map[string]interface{}{"groupId": 1, "userIds": []int64{2, 99999}})
-	if code == 0 {
-		t.Fatalf("phantom user must error; body=%s", body)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_group_user WHERE user_id = 99999`); n != 0 {
-		t.Fatalf("phantom membership rows=%d", n)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_group_user WHERE user_group_id = 1`); n != 2 {
-		t.Fatalf("existing membership must be unchanged, got %d", n)
-	}
-}
-
-func TestR2B7_012_GroupTunnelAssignPhantomTunnelRejected(t *testing.T) {
-	f := seedB2Fixture(t)
-	code, body := f.post(t, f.h.groupTunnelAssign, map[string]interface{}{"groupId": 1, "tunnelIds": []int64{1, 99998}})
-	if code == 0 {
-		t.Fatalf("phantom tunnel must error; body=%s", body)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM tunnel_group_tunnel WHERE tunnel_id = 99998`); n != 0 {
-		t.Fatalf("phantom membership rows=%d", n)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM tunnel_group_tunnel WHERE tunnel_group_id = 1`); n != 2 {
-		t.Fatalf("existing membership must be unchanged, got %d", n)
-	}
-}
-
-func TestR2B7_012_GroupAssignPhantomGroupRejected(t *testing.T) {
-	f := seedB2Fixture(t)
-	code, body := f.post(t, f.h.groupUserAssign, map[string]interface{}{"groupId": 99999, "userIds": []int64{2}})
-	if code == 0 {
-		t.Fatalf("phantom user group must error; body=%s", body)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_group_user WHERE user_group_id = 99999`); n != 0 {
-		t.Fatalf("phantom rows=%d", n)
-	}
-	code, body = f.post(t, f.h.groupTunnelAssign, map[string]interface{}{"groupId": 99999, "tunnelIds": []int64{1}})
-	if code == 0 {
-		t.Fatalf("phantom tunnel group must error; body=%s", body)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM tunnel_group_tunnel WHERE tunnel_group_id = 99999`); n != 0 {
-		t.Fatalf("phantom rows=%d", n)
-	}
-}
-
-func TestR2B7_012_GroupPermissionPhantomGroupsRejected(t *testing.T) {
-	f := seedB2Fixture(t)
-	code, body := f.post(t, f.h.groupPermissionAssign, map[string]interface{}{"userGroupId": 99998, "tunnelGroupId": 99999})
-	if code == 0 {
-		t.Fatalf("phantom groups must error; body=%s", body)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission WHERE user_group_id = 99998 OR tunnel_group_id = 99999`); n != 0 {
-		t.Fatalf("phantom permission rows=%d", n)
-	}
-}
 
 func TestR2B7_012_UserTunnelAssignPhantomRejected(t *testing.T) {
 	f := seedB2Fixture(t)
@@ -246,102 +189,7 @@ func TestR2B7_012_SetUserInboundsValidInboundSucceeds(t *testing.T) {
 	}
 }
 
-// ─── R2X-013 ────────────────────────────────────────────────────────────────
-
-func TestR2B7_013_AssignToDisabledGroupRejected(t *testing.T) {
-	f := seedB2Fixture(t)
-	// UG2 停用（成员 U4）；TG2 启用（含隧道 T2，U4 对 T2 无现存 UT）。
-	f.execB7(t,
-		`INSERT INTO user_group(id, name, created_time, updated_time, status) VALUES(2, 'g-off', 1000, 1000, 0)`,
-		`INSERT INTO tunnel_group(id, name, created_time, updated_time, status) VALUES(2, 'tg-on', 1000, 1000, 1)`,
-		`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(2, 4, 1000)`,
-		`INSERT INTO tunnel_group_tunnel(tunnel_group_id, tunnel_id, created_time) VALUES(2, 2, 1000)`,
-		// UG3 启用；TG3 停用。
-		`INSERT INTO user_group(id, name, created_time, updated_time, status) VALUES(3, 'g-on', 1000, 1000, 1)`,
-		`INSERT INTO tunnel_group(id, name, created_time, updated_time, status) VALUES(3, 'tg-off', 1000, 1000, 0)`,
-		`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(3, 4, 1000)`,
-		`INSERT INTO tunnel_group_tunnel(tunnel_group_id, tunnel_id, created_time) VALUES(3, 2, 1000)`,
-	)
-	code, body := f.post(t, f.h.groupPermissionAssign, map[string]interface{}{"userGroupId": 2, "tunnelGroupId": 2})
-	if code == 0 {
-		t.Fatalf("assign with disabled user group must error; body=%s", body)
-	}
-	if !strings.Contains(body, "停用") {
-		t.Fatalf("error must state the group is disabled; body=%s", body)
-	}
-	code, body = f.post(t, f.h.groupPermissionAssign, map[string]interface{}{"userGroupId": 3, "tunnelGroupId": 3})
-	if code == 0 {
-		t.Fatalf("assign with disabled tunnel group must error; body=%s", body)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission WHERE user_group_id IN (2, 3)`); n != 0 {
-		t.Fatalf("permission rows for disabled assigns=%d", n)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE user_id = 4 AND tunnel_id = 2`); n != 0 {
-		t.Fatalf("disabled assign must not materialize user_tunnel, got %d", n)
-	}
-}
-
-// R5-FGRP 改版：停用用户组只改状态——既有授权、台账、转发逐行保留；
-// 重新启用也不补发任何授权（授权集合与操作前逐行一致）。
-func TestR2B7_013_DisableUserGroupLeavesGrantsIntact(t *testing.T) {
-	f := seedB2Fixture(t)
-	code, body := f.post(t, f.h.groupUserUpdate, map[string]interface{}{"id": 1, "name": "g-one", "status": 0})
-	if code != 0 {
-		t.Fatalf("groupUserUpdate disable code=%d body=%s", code, body)
-	}
-	f.assertGrantsIntactT1(t)
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_group_id = 1`); n != 3 {
-		t.Fatalf("R5-FGRP: grant ledger of disabled group must be retained, got %d", n)
-	}
-	code, body = f.post(t, f.h.groupUserUpdate, map[string]interface{}{"id": 1, "name": "g-one", "status": 1})
-	if code != 0 {
-		t.Fatalf("groupUserUpdate enable code=%d body=%s", code, body)
-	}
-	f.assertGrantsIntactT1(t)
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel`); n != 4 {
-		t.Fatalf("R5-FGRP: re-enable must not materialize any user_tunnel, got %d total", n)
-	}
-}
-
-// R5-FGRP 改版：停用隧道组同口径——只改状态，授权逐行保留。
-func TestR2B7_013_DisableTunnelGroupLeavesGrantsIntact(t *testing.T) {
-	f := seedB2Fixture(t)
-	code, body := f.post(t, f.h.groupTunnelUpdate, map[string]interface{}{"id": 1, "name": "tg-one", "status": 0})
-	if code != 0 {
-		t.Fatalf("groupTunnelUpdate disable code=%d body=%s", code, body)
-	}
-	f.assertGrantsIntactT1(t)
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE tunnel_group_id = 1`); n != 3 {
-		t.Fatalf("R5-FGRP: grant ledger of disabled tunnel group must be retained, got %d", n)
-	}
-}
-
 // ─── R2X-035 + R2X-048（联动） ─────────────────────────────────────────────
-
-func TestR2B7_035_UserTunnelRemoveClearsGrant(t *testing.T) {
-	f := seedB2Fixture(t)
-	code, body := f.post(t, f.h.userTunnelRemove, map[string]interface{}{"id": 10})
-	if code != 0 {
-		t.Fatalf("userTunnelRemove code=%d body=%s", code, body)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id = 10`); n != 0 {
-		t.Fatalf("user_tunnel 10 must be deleted")
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_tunnel_id = 10`); n != 0 {
-		t.Fatalf("grant ledger for removed user_tunnel must be cleared, got %d", n)
-	}
-	// R2X-048 联动：组建 UT 的转发清理照常。
-	if n := f.count(t, `SELECT COUNT(*) FROM forward WHERE id = 20`); n != 0 {
-		t.Fatalf("forward on removed user_tunnel must be cleaned")
-	}
-	// repo 非 Tx 变体同口径。
-	if err := f.r.DeleteUserTunnel(12); err != nil {
-		t.Fatalf("DeleteUserTunnel: %v", err)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission_grant WHERE user_tunnel_id = 12`); n != 0 {
-		t.Fatalf("DeleteUserTunnel must clear grant ledger, got %d", n)
-	}
-}
 
 func TestR2B7_048_UserTunnelRemoveNonexistentIsIdempotent(t *testing.T) {
 	f := seedB2Fixture(t)
@@ -355,19 +203,9 @@ func TestR2B7_048_UserTunnelRemoveNonexistentIsIdempotent(t *testing.T) {
 
 func TestR2B7_036_UserUpdateValidationBeforeWrite(t *testing.T) {
 	f := seedB2Fixture(t)
-	code, body := f.post(t, f.h.userUpdate, map[string]interface{}{"id": 2, "user": "renamed-member", "groupIds": []int64{99999}})
-	if code == 0 {
-		t.Fatalf("nonexistent group must error; body=%s", body)
-	}
+	// 配额校验在首写之前：负配额 + 改名 → 报错且不落库。
 	var name string
-	if err := f.r.DB().Raw(`SELECT user FROM user WHERE id = 2`).Scan(&name).Error; err != nil {
-		t.Fatalf("read username: %v", err)
-	}
-	if name != "member" {
-		t.Fatalf("username must stay original when validation fails, got %q", name)
-	}
-	// 配额校验同为首写之前：负配额 + 改名 → 报错且不落库。
-	code, body = f.post(t, f.h.userUpdate, map[string]interface{}{"id": 2, "user": "renamed-member", "dailyQuotaGB": 10, "monthlyQuotaGB": -5})
+	code, body := f.post(t, f.h.userUpdate, map[string]interface{}{"id": 2, "user": "renamed-member", "dailyQuotaGB": 10, "monthlyQuotaGB": -5})
 	if code == 0 {
 		t.Fatalf("negative quota must error; body=%s", body)
 	}
@@ -376,18 +214,5 @@ func TestR2B7_036_UserUpdateValidationBeforeWrite(t *testing.T) {
 	}
 	if name != "member" {
 		t.Fatalf("username must stay original when quota validation fails, got %q", name)
-	}
-}
-
-func TestR2B7_036_GroupPermissionAssignRejectsBeforeInsert(t *testing.T) {
-	// 代码顺序断言的动态面：假组 ID 必须在 Insert 之前被拒（零落行）。
-	// 故障注入验证未做（见批报告），关闭证据限于本用例 + 预读代码顺序。
-	f := seedB2Fixture(t)
-	code, body := f.post(t, f.h.groupPermissionAssign, map[string]interface{}{"userGroupId": 99998, "tunnelGroupId": 1})
-	if code == 0 {
-		t.Fatalf("phantom user group must error before insert; body=%s", body)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM group_permission WHERE user_group_id = 99998`); n != 0 {
-		t.Fatalf("no permission row may be inserted, got %d", n)
 	}
 }
