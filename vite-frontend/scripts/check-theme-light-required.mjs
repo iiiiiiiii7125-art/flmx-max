@@ -54,6 +54,20 @@
 //      "0" 被浏览器忽略）同结局。此次一并钉死：全部同拒并点名、
 //      被拒包不得激活、同 id 不顶替；空串与实值混合的部分集计数
 //      ≥1 仍属合法，不得误伤。
+//   ⑬ 「有效计数＝有效注入」三轴收口（R8-01 / H-C5-01）：⑫的计
+//      数只验值——词表外键（--not-a-token／大小写变体／裸键／尾
+//      空格键／数字键）计数过关而注入恒 0；light 为字符串或
+//      boxed String 时被 Object.values 逐字枚举成单字符「值」
+//      过关；纯格式字符值（U+200B／U+2060 等 Unicode Cf 类：
+//      JS trim 不剥、CSS 计算值阶段无效）计数过关——三轴均可同
+//      id 顶掉合法包。本轮谓词改为三轴合取：键 ∈ ThemeTokens
+//      词表 ∧ light 为非数组普通对象 ∧ 值剔除空白与 Cf 后非
+//      空。本节逐轴钉死（键轴五形态、容器轴两形态、值轴异体两
+//      格、逐轴同 id 顶替矩阵），并把注册表的 THEME_TOKEN_KEYS
+//      与 types.ts 的 ThemeTokens 命名键集逐一对账（双向差集
+//      ∅），防词表两处漂移。正对照：词表外键与词表内实值混合
+//      的部分集仍合法（词表内实值计数）；含实义但夹带格式字
+//      符的值剔除后非空、仍合法。
 //
 // 提取面（修复轮 6，R6-C4-10 机制处置）：断言⑨的 globals 侧旧实现
 // 以正则合并 :root 块、无注释剥离——在 :root 块内给改过的 token
@@ -595,6 +609,150 @@ check(
 
 registerTheme(noTokensPkg);
 check("无 tokens 的包（仅组件覆盖面）仍可注册", getTheme("ok-no-tokens") === noTokensPkg);
+
+// ─── ⑬ R8-01：有效计数三轴收口（H-C5-01） ────────────────────────────────
+
+// 词表对账：注册表运行时的 THEME_TOKEN_KEYS 必须与 types.ts 中
+// ThemeTokens 的命名键集逐一相等（双向差集 ∅）——谓词以此集判
+// 键轴，集与类型两处定义不许漂移。命名键以 `"--名"?:` 形态抽取
+// （索引签名的转义舱 [key: `--${string}`] 不在此形态内）。
+const { THEME_TOKEN_KEYS } = mod.exports;
+const typesNamedKeys = new Set(
+  [...stripComments(typesSrc).matchAll(/"(--[a-zA-Z0-9-]+)"\?:/g)].map(
+    (m) => m[1],
+  ),
+);
+
+check(
+  "THEME_TOKEN_KEYS 导出存在且为非空 Set（R8-01）",
+  THEME_TOKEN_KEYS instanceof Set && THEME_TOKEN_KEYS.size > 0,
+  `实得 ${Object.prototype.toString.call(THEME_TOKEN_KEYS)}`,
+);
+if (THEME_TOKEN_KEYS instanceof Set) {
+  const onlyInRegistry = [...THEME_TOKEN_KEYS].filter(
+    (k) => !typesNamedKeys.has(k),
+  );
+  const onlyInTypes = [...typesNamedKeys].filter(
+    (k) => !THEME_TOKEN_KEYS.has(k),
+  );
+
+  check(
+    "THEME_TOKEN_KEYS 与 types.ts ThemeTokens 命名键集双向差集＝∅（R8-01）",
+    typesNamedKeys.size > 0 &&
+      onlyInRegistry.length === 0 &&
+      onlyInTypes.length === 0,
+    `仅注册表: ${onlyInRegistry.join(",")}；仅类型: ${onlyInTypes.join(",")}`,
+  );
+}
+
+// 三轴坏形态（[标签, light 形态]）：键轴五形态、容器轴两形态、
+// 值轴异体两格。逐形态钉 validate 点名拒＋register 拒；逐轴再跑
+// 同 id 顶替矩阵（先注册合法包，再以该轴全部形态同 id 喂入，
+// 合法包必须逐一留存）。
+const axisGroups = [
+  [
+    "键轴",
+    [
+      ["词表外键", { "--not-a-token": "#ffffff" }],
+      ["大小写变体键", { "--Primary": "#ffffff" }],
+      ["裸键", { primary: "#ffffff" }],
+      ["尾空格键", { "--primary ": "#ffffff" }],
+      ["数字键", { 0: "#ffffff" }],
+    ],
+  ],
+  [
+    "容器轴",
+    [
+      ["字符串 light", "#ffffff"],
+      ["boxed String light", new String("#ffffff")],
+    ],
+  ],
+  [
+    "值轴异体",
+    [
+      ["零宽空格值 U+200B", { "--primary": "\u200B" }],
+      ["词组连接符值 U+2060", { "--primary": "\u2060" }],
+    ],
+  ],
+];
+
+let axisSeq = 0;
+
+for (const [axisLabel, forms] of axisGroups) {
+  for (const [formLabel, light] of forms) {
+    axisSeq++;
+    const badPkg = { ...base, id: `bad-axis-${axisSeq}`, tokens: { light } };
+
+    if (typeof validateThemePackage === "function") {
+      check(
+        `validateThemePackage：${axisLabel}${formLabel} → 点名缺 light（R8-01）`,
+        /light/.test(validateThemePackage(badPkg) ?? ""),
+        `实得 ${JSON.stringify(validateThemePackage(badPkg))}`,
+      );
+    }
+    registerTheme(badPkg);
+    check(
+      `${axisLabel}${formLabel}的主题包被拒注册（R8-01）`,
+      getTheme(badPkg.id) === undefined &&
+        errorLog.some((m) => m.includes(badPkg.id) && /light/.test(m)),
+      `捕获到: ${JSON.stringify(errorLog)}`,
+    );
+  }
+  const anchorPkg = {
+    ...base,
+    id: `ok-axis-anchor-${axisLabel}`,
+    tokens: { light: { "--primary": "#123456" } },
+  };
+
+  registerTheme(anchorPkg);
+  check(
+    `${axisLabel}顶替矩阵锚点合法包注册成功（R8-01）`,
+    getTheme(anchorPkg.id) === anchorPkg,
+  );
+  for (const [formLabel, light] of forms) {
+    registerTheme({ ...base, id: anchorPkg.id, tokens: { light } });
+    check(
+      `同 id ${axisLabel}${formLabel}包不能顶掉合法包（R8-01）`,
+      getTheme(anchorPkg.id) === anchorPkg,
+    );
+  }
+}
+
+// 正对照（不误伤）：词表外键与词表内实值混合 → 词表内实值计数、
+// 合法；值含实义但夹带格式字符 → 剔除空白与 Cf 后非空、合法。
+const mixedVocabPkg = {
+  ...base,
+  id: "ok-mixed-vocab",
+  tokens: { light: { "--not-a-token": "#000000", "--primary": "#123456" } },
+};
+const cfMixedPkg = {
+  ...base,
+  id: "ok-cf-mixed",
+  tokens: { light: { "--primary": "#123456\u200B" } },
+};
+
+if (typeof validateThemePackage === "function") {
+  check(
+    "validateThemePackage：词表外键＋词表内实值混合 → 通过（合法部分集）",
+    validateThemePackage(mixedVocabPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(mixedVocabPkg))}`,
+  );
+  check(
+    "validateThemePackage：实义值夹带格式字符 → 通过（剔除后非空）",
+    validateThemePackage(cfMixedPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(cfMixedPkg))}`,
+  );
+}
+registerTheme(mixedVocabPkg);
+check(
+  "词表外键＋实值混合的部分集仍可注册（不误伤）",
+  getTheme("ok-mixed-vocab") === mixedVocabPkg,
+);
+registerTheme(cfMixedPkg);
+check(
+  "实义值夹带格式字符的包仍可注册（不误伤）",
+  getTheme("ok-cf-mixed") === cfMixedPkg,
+);
 
 console.error = origError;
 

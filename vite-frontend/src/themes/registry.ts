@@ -58,6 +58,127 @@ function notify() {
 
 // ─── public API ──────────────────────────────────────────────────────────────
 
+// ─── token vocabulary ────────────────────────────────────────────────────────
+
+/**
+ * The named token keys of the ThemeTokens contract (types.ts).  Only
+ * an entry under one of these keys can ever take effect: a key
+ * outside this set (a typo, a case variant — CSS custom properties
+ * are case-sensitive — a bare name without the `--` prefix, a name
+ * with a trailing space, a numeric key) names a property nothing in
+ * the app consumes, so it must not count towards a usable light set.
+ * The index-signature escape hatch in ThemeTokens lets authors stage
+ * extra variables for their own `css`, but such entries alone do
+ * not make a token set usable.  This list is pinned against types.ts
+ * by check-theme-light-required.mjs — extend both together.
+ */
+export const THEME_TOKEN_KEYS: ReadonlySet<string> = new Set([
+    "--background",
+    "--foreground",
+    "--border",
+    "--input",
+    "--ring",
+    "--content1",
+    "--divider",
+    "--default-50",
+    "--default-100",
+    "--default-200",
+    "--default-300",
+    "--default-400",
+    "--default-500",
+    "--default-600",
+    "--default-700",
+    "--default-800",
+    "--default-900",
+    "--primary",
+    "--primary-foreground",
+    "--primary-50",
+    "--primary-100",
+    "--primary-200",
+    "--primary-300",
+    "--primary-400",
+    "--primary-500",
+    "--primary-600",
+    "--primary-700",
+    "--primary-800",
+    "--primary-900",
+    "--secondary",
+    "--secondary-foreground",
+    "--secondary-50",
+    "--secondary-100",
+    "--secondary-200",
+    "--secondary-300",
+    "--secondary-400",
+    "--secondary-500",
+    "--secondary-600",
+    "--secondary-700",
+    "--secondary-800",
+    "--secondary-900",
+    "--danger",
+    "--danger-50",
+    "--danger-100",
+    "--danger-200",
+    "--danger-300",
+    "--danger-400",
+    "--danger-500",
+    "--danger-600",
+    "--danger-700",
+    "--danger-800",
+    "--danger-900",
+    "--success",
+    "--success-50",
+    "--success-100",
+    "--success-200",
+    "--success-300",
+    "--success-400",
+    "--success-500",
+    "--success-600",
+    "--success-700",
+    "--success-800",
+    "--success-900",
+    "--warning",
+    "--warning-50",
+    "--warning-100",
+    "--warning-200",
+    "--warning-300",
+    "--warning-400",
+    "--warning-500",
+    "--warning-600",
+    "--warning-700",
+    "--warning-800",
+    "--warning-900",
+    "--font-sans",
+    "--font-mono",
+    "--radius",
+    "--radius-sm",
+    "--radius-lg",
+]);
+
+/**
+ * A token value is usable only when something remains after removing
+ * whitespace and Unicode format characters (category Cf — zero-width
+ * space, word joiner, soft hyphen, bidi controls, …).  A value made
+ * solely of format characters survives `String.prototype.trim`
+ * (they are not in its whitespace set) yet is not a valid token
+ * value once substituted through var(), so it computes to nothing
+ * at used-value time — the same "injects nothing" outcome as a
+ * blank string.
+ */
+const isUsableTokenValue = (value: unknown): value is string =>
+  typeof value === "string" && value.replace(/[\s\p{Cf}]/gu, "") !== "";
+
+/**
+ * `light` must be a key→value map: a plain object.  A string (whose
+ * entries would enumerate single characters under numeric keys), a
+ * boxed String object, an array, and every non-object form are
+ * rejected as containers outright.
+ */
+const isTokenMap = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" &&
+  value !== null &&
+  !Array.isArray(value) &&
+  !(value instanceof String);
+
 /**
  * Validate a theme package against the format contract.  Returns a
  * human-readable rejection reason, or null when the package is valid.
@@ -67,38 +188,48 @@ function notify() {
  * dark-only package is rejected outright — there is no dark fallback
  * to read colours from, and silently injecting nothing while
  * pretending activation succeeded would hide the mistake.  "Usable"
- * means at least one token whose value is a non-blank string: a
- * light set that is present but empty (`light: {}`), whose values
- * are all `undefined` (injectTokens skips undefined values, so it
- * would inject nothing), or whose values are all empty/whitespace
- * strings (`setProperty(name, "")` removes the property, and a
- * whitespace-only value computes to nothing after var()
- * substitution) counts as no light set at all and is rejected the
- * same way.  Runtime values outside the type contract (null,
- * numbers, booleans, objects) and a non-map `light` (e.g. an array,
- * whose entries would inject under numeric keys the browser
- * ignores) likewise count as no usable value.  A light set that
- * mixes unusable entries with real values is a valid partial set —
- * the unusable entries are skipped and the rest fall back as usual.
- * A package without `tokens` at all (component / layout / page
- * overrides only) is fine: the `tokens` field itself stays optional.
+ * is a conjunction of three axes, all judged against what injection
+ * would actually put to work:
+ *   - container: `light` itself is a plain key→value object (not an
+ *     array, not a string or boxed String, not any non-object);
+ *   - key: the entry's key is a named ThemeTokens token (see
+ *     THEME_TOKEN_KEYS above) — out-of-vocabulary keys inject
+ *     properties nothing consumes;
+ *   - value: the value is a string with real content — non-blank
+ *     after removing whitespace and Unicode format characters.
+ * A light set with no entry passing all three axes counts as no
+ * light set at all and is rejected the same way: that covers a
+ * present-but-empty set (`light: {}`), all-`undefined` values
+ * (injectTokens skips undefined values, so it would inject
+ * nothing), empty/whitespace/format-only strings
+ * (`setProperty(name, "")` removes the property, and a blank value
+ * computes to nothing after var() substitution), runtime values
+ * outside the type contract (null, numbers, booleans, objects),
+ * sets whose keys are all outside the token vocabulary, and
+ * non-map `light` values.  A light set that mixes unusable entries
+ * with real values is a valid partial set — the unusable entries
+ * are skipped and the rest fall back as usual.  A package without
+ * `tokens` at all (component / layout / page overrides only) is
+ * fine: the `tokens` field itself stays optional.
  */
 export function validateThemePackage(pkg: ThemePackage): string | null {
   if (pkg.tokens != null) {
-    const light = pkg.tokens.light;
-    const usableCount =
-      light != null && !Array.isArray(light)
-        ? Object.values(light).filter(
-            (value) => typeof value === "string" && value.trim() !== "",
-          ).length
-        : 0;
+    const light: unknown = pkg.tokens.light;
+    const usableCount = isTokenMap(light)
+      ? Object.entries(light).filter(
+          ([key, value]) =>
+            THEME_TOKEN_KEYS.has(key) && isUsableTokenValue(value),
+        ).length
+      : 0;
 
     if (usableCount === 0) {
       return (
         `theme "${pkg.id}" provides tokens but no usable light token set ` +
-        `(tokens.light must define at least one token with a non-empty ` +
-        `string value; missing, empty, all-undefined, and blank-valued ` +
-        `light sets are not accepted)`
+        `(tokens.light must be a plain object defining at least one known ` +
+        `token — a ThemeTokens key from types.ts — with a non-empty string ` +
+        `value; missing, empty, all-undefined, blank- or format-only-valued, ` +
+        `non-string-valued, unknown-key-only, and non-object light sets are ` +
+        `not accepted)`
       );
     }
   }
