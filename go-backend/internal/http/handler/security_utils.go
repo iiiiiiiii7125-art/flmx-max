@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"go-backend/internal/http/client"
 	"go-backend/internal/kernel"
@@ -26,10 +27,11 @@ func init() {
 // It resolves domains to IPs to prevent DNS rebinding attacks pointing to internal networks.
 // Supports multiple addresses separated by commas or newlines (one per line).
 func IsSafeRemoteAddr(addr string) error {
-	// R7-04（G-F3-01）：切分后段集为空集（纯分隔符/纯空白）时显式
-	// 拒绝——逐段校验对零个目标真空成立，零目标转发曾可绕过全部
-	// 段校验落库。此为格式无效判、与 SSRF 段校验无关，故置于测试
-	// 旁路之前，对全部调用方恒生效。
+	// R7-04（G-F3-01）/R9-09（I-F3-01）：无任何有效目标（归一后有
+	// 效段集为空，见 validateRemoteAddrHasTargets）时显式拒绝——
+	// 逐段校验对零个目标真空成立，零目标转发曾可绕过全部段校验
+	// 落库。此为格式无效判、与 SSRF 段校验无关，故置于测试旁路
+	// 之前，对全部调用方恒生效。
 	if err := validateRemoteAddrHasTargets(addr); err != nil {
 		return err
 	}
@@ -45,15 +47,51 @@ func IsSafeRemoteAddr(addr string) error {
 	return nil
 }
 
-// validateRemoteAddrHasTargets 是 R7-04 空段集谓词的单一定义点：
+// validateRemoteAddrHasTargets 是零有效目标判的单一定义点：
 // IsSafeRemoteAddr 本体与 forwardCreate/forwardUpdate 的无条件格式
 // 判共用同一口径。管理员豁免与 allow_local_remote_addr 开关只针对
 // netguard 段校验；零有效目标属格式无效、不在豁免范围内。
+//
+// R9-09（I-F3-01）：判据由 R7-04 的「归一前段集非空」改为「归一
+// 后有效段集非空」——逐段按消费侧同一归一（normalizeServerAddressInput：
+// 剥 scheme、首个 /、?、# 截断）折算，归一后无实质内容的段不计入
+// 有效段。此前 "#"、"http://"、"#frag" 等段集非空、归一得零有效
+// 目标的转发可过全部写面门落库，消费侧渲染空节点（gost 以 "" 建
+// node、realm 写 remote = ""）。归一后仍非空的段（如
+// "http://:8080"→":8080"）按有效计——本判据只判有效性计数，不判
+// 可拨性，垃圾但非空的目标仍归 netguard 段校验/管理员豁免口径。
+// 恢复面镜像 remoteAddrHasNoTargets（repo 包）与本判据同定义、
+// 双边钉格表对齐。
 func validateRemoteAddrHasTargets(addr string) error {
-	if len(splitRemoteParts(addr)) == 0 {
-		return fmt.Errorf("目标地址不能为空")
+	for _, part := range splitRemoteParts(addr) {
+		if remotePartHasEffectiveTarget(part) {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("目标地址不能为空")
+}
+
+// remotePartHasEffectiveTarget 报告一个切分段经消费侧归一后是否
+// 仍是有效目标（R9-09）。
+func remotePartHasEffectiveTarget(part string) bool {
+	return remoteNormalizedTargetEffective(normalizeServerAddressInput(part))
+}
+
+// remoteNormalizedTargetEffective 是 R9-09 的有效性判据（单一定义
+// 点，写面谓词与消费侧切分器共用）：归一后的目标值须含至少一个
+// 既非空白、亦非 Unicode 格式符（类别 Cf：零宽空格、词连接符、
+// 软连字符、BOM 等）的字符。空白已由切分/归一的 TrimSpace 剥除，
+// 此处保留为空段与混合形态兜底；Cf 一轴承接 I-F3-03 的同批裁定
+// （落字与 R8-01 主题值轴先例同口径：纯格式符内容不构成有效内
+// 容）——纯 Cf 段不计入有效段，四写面与消费面同判。
+func remoteNormalizedTargetEffective(normalized string) bool {
+	for _, r := range normalized {
+		if unicode.Is(unicode.Cf, r) || unicode.IsSpace(r) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // remoteAddrTargetsChanged 是 R7-05（G-F3-02）的目标变更判定：以

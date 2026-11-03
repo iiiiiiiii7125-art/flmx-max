@@ -2140,11 +2140,24 @@ func (h *Handler) udpPingViaNode(nodeID int64, ip string, port int, options diag
 // （切分、TrimSpace、丢空段全一致），每段再过 processServerAddress
 // 做 IPv6 括号化等渲染归一。存量已落库的换行形态行无需迁移：新口
 // 径下自动按多目标正确渲染（复活属预期）。
+//
+// R9-09（I-F3-01）在此之上加有效段过滤：归一后无有效目标的段
+// （"#"、纯 scheme、纯格式符段，判据 remoteNormalizedTargetEffective
+// 与写面谓词共用）在消费侧丢弃、不渲染空/不可拨节点——R9-09 前
+// 经管理员面/开关面/恢复面落库的存量坏行（如 "1.2.3.4:80,#"）自
+// 此只渲染其有效目标，全死行渲染零目标、四消费面（gost 零节点、
+// realm 的 len(Remotes)==0 显式拒绝、诊断与中转延迟的 len==0 显
+// 式收口）均有定义行为，不再静默生成空节点。切分口径本身不变：
+// 有效段与 splitRemoteParts 逐段对应、逐段渲染归一同前。
 func splitRemoteTargets(remoteAddr string) []string {
 	parts := splitRemoteParts(remoteAddr)
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
-		out = append(out, processServerAddress(part))
+		processed := processServerAddress(part)
+		if !remoteNormalizedTargetEffective(processed) {
+			continue
+		}
+		out = append(out, processed)
 	}
 	return out
 }

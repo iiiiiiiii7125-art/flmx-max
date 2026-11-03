@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	gsqlite "github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
@@ -4601,10 +4602,12 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			continue
 		}
 		// R8-07（H-F3-02）：恢复面补 R7-04 空段集谓词——零有效目标
-		// （纯分隔符/空串/纯空白）与写面同口径逐行跳过 + warning，
-		// 不整批中止。本地导入与 gist 恢复共用本路径，一处修两面通；
-		// 修复前版本落库的零目标行不得借备份迁移绕过新门重入（重入
-		// 行占端口且在补正目标前被更新面冻结）。
+		// 与写面同口径逐行跳过 + warning，不整批中止。本地导入与
+		// gist 恢复共用本路径，一处修两面通；修复前版本落库的零
+		// 目标行不得借备份迁移绕过新门重入（重入行占端口且在补正
+		// 目标前被更新面冻结）。R9-09 起零目标按归一后有效段集计
+		// （remoteAddrHasNoTargets 镜像写面新定义）："#"、纯 scheme、
+		// 纯格式符段构成的行同在此逐行跳过 + warning。
 		if remoteAddrHasNoTargets(f.RemoteAddr) {
 			rep.skip("forwards")
 			rep.warnf("备份恢复：转发 #%d（%q）的目标地址 %q 切分后无任何有效目标，已跳过该行未恢复", f.ID, f.Name, f.RemoteAddr)
@@ -6842,21 +6845,65 @@ func addrsHaveEmptyLabel(addr string) bool {
 	return false
 }
 
-// remoteAddrHasNoTargets 镜像 handler 侧 R7-04 空段集谓词
-// （validateRemoteAddrHasTargets / splitRemoteParts）：按逗号/换行/CR
-// 切分并逐段 TrimSpace 后无任何非空段，即零有效目标。R8-07
-// （H-F3-02）：恢复面此前只有空标签判，修复前版本落库的零目标行
-// （如 ",,,"）可随备份迁移绕过写面新门逐字重入——importForwards
-// 以本判与写面同口径逐行跳过 + warning。
+// remoteAddrHasNoTargets 镜像 handler 侧零有效目标判
+// （validateRemoteAddrHasTargets）。R8-07（H-F3-02）：恢复面此前
+// 只有空标签判，修复前版本落库的零目标行（如 ",,,"）可随备份迁
+// 移绕过写面新门逐字重入——importForwards 以本判与写面同口径逐
+// 行跳过 + warning。R9-09（I-F3-01）起与写面同为「归一后有效段
+// 集」口径：逐段按下方的镜像归一（剥 scheme、首个 /?# 截断）折
+// 算，归一后无实质内容的段不计；全部段均无效才判零目标。纯
+// Unicode 格式符（Cf）段不计入有效段，与写面 I-F3-03 裁定同字
+// 落定（见 repoRemotePartHasEffectiveTarget）。
 func remoteAddrHasNoTargets(addr string) bool {
 	for _, part := range strings.FieldsFunc(addr, func(r rune) bool {
 		return r == ',' || r == '\n' || r == '\r'
 	}) {
-		if strings.TrimSpace(part) != "" {
+		if repoRemotePartHasEffectiveTarget(part) {
 			return false
 		}
 	}
 	return true
+}
+
+// repoRemotePartHasEffectiveTarget 镜像 handler 侧
+// remotePartHasEffectiveTarget / remoteNormalizedTargetEffective
+// （security_utils.go，R9-09 单一定义点）：归一后的值须含至少一
+// 个既非空白、亦非 Unicode 格式符（Cf）的字符。纯 Cf 段不计入
+// 有效段系 I-F3-03 的同批裁定，与 R8-01 主题值轴先例同口径（纯
+// 格式符内容不构成有效内容）；repo 包不反向依赖 handler 包，故
+// 在此逐行镜像，双边钉格表对齐。
+func repoRemotePartHasEffectiveTarget(part string) bool {
+	normalized := repoNormalizeRemoteAddrInput(part)
+	for _, r := range normalized {
+		if unicode.Is(unicode.Cf, r) || unicode.IsSpace(r) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// repoNormalizeRemoteAddrInput 逐行镜像 handler 侧
+// normalizeServerAddressInput（control_plane.go）：TrimSpace 后，
+// 含 "://" 时优先取 URL 的 Host（无 Host 则截去 scheme 前缀），
+// 再在首个 /、?、# 处截断。
+func repoNormalizeRemoteAddrInput(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	if idx := strings.Index(s, "://"); idx > 0 {
+		if parsed, err := url.Parse(s); err == nil {
+			if host := strings.TrimSpace(parsed.Host); host != "" {
+				return host
+			}
+		}
+		s = s[idx+3:]
+	}
+	if idx := strings.IndexAny(s, "/?#"); idx >= 0 {
+		s = s[:idx]
+	}
+	return strings.TrimSpace(s)
 }
 
 // urlHostHasEmptyLabel 报告 URL 的 host 段是否含空标签；解析失败或
