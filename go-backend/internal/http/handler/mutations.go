@@ -8822,10 +8822,6 @@ func (h *Handler) batchForwardDelete(ids []int64) (int, int) {
 	return s, f
 }
 
-func (h *Handler) batchForwardStatus(ids []int64, status int) (int, int) {
-	return h.repo.BatchUpdateForwardStatus(ids, status)
-}
-
 func (h *Handler) tunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {
 	return h.repo.TunnelEntryNodeIDs(tunnelID)
 }
