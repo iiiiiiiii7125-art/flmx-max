@@ -61,9 +61,13 @@ note_ok()   { echo "OK:   $*"; }
 note_pend() { echo "PENDING(known, F-064): $*"; }
 
 # ── 1. XHTTP：share.go 输出 xhttp-opts 时，nodes.md 的 Clash/Shadowrocket 行不得再列 XHTTP 为「不包含」
+#    前提 grep 必须带引号、只命中代码里的 Go 字符串字面量 "xhttp-opts"：
+#    share.go 的 ClashProxy 注释散文里另有一处无引号的 xhttp-opts 提及，
+#    无引号匹配会被注释拷贝自满足（R5-03 同族，第五轮复扫发现）——代码
+#    发射行删掉时前提仍绿、整节静默放行。
 SHARE_GO="go-backend/internal/kernel/share.go"
 NODES_MD="doc/guide/nodes.md"
-if grep -q "xhttp-opts" "$SHARE_GO"; then
+if grep -q '"xhttp-opts"' "$SHARE_GO"; then
   for row in "Clash / Mihomo" "Shadowrocket"; do
     line=$(grep -F "| $row |" "$NODES_MD" | head -1)
     if [ -z "$line" ]; then
