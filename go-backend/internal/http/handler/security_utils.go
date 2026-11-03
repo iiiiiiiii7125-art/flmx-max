@@ -44,6 +44,34 @@ func validateRemoteAddrSegmentCount(addr string) error {
 	return nil
 }
 
+// validateRemoteAddrPorts 是转发目标端口的格式层判定（F2-F1-02）：
+// 逐段按消费侧同一归一（normalizeServerAddressInput）折算后取
+// SplitHostPort 的端口段，端口段在场时须为 1–65535 的数字端口——
+// 与消费面 parseTargetAddress 的 Atoi＋范围判同口径，服务名端口
+// （example.com:http）同拒。此前写面从不验端口，example.com:99999、
+// example.com:abc 对全角色可落库、坏端口到拨号/诊断期才暴露。
+// 职责边界：无端口段（裸主机）既有口径放行、SplitHostPort 无法切分
+// 的形态（裸 IPv6 等）由段校验/诊断面各自收口，本判定只补「端口段
+// 在场却非法」一格。与段数帽同为与角色/开关无关的格式层判定：
+// forwardCreate/forwardUpdate 无条件调用（管理员豁免的只是
+// netguard 段校验），恢复面不镜像（与段数帽口径一致）。
+func validateRemoteAddrPorts(addr string) error {
+	for _, part := range splitRemoteParts(addr) {
+		normalized := normalizeServerAddressInput(part)
+		if normalized == "" {
+			continue
+		}
+		_, port, err := net.SplitHostPort(normalized)
+		if err != nil {
+			continue
+		}
+		if !isDecimalPort(port) {
+			return fmt.Errorf("目标地址 %q 的端口 %q 无效（须为 1-65535 的数字端口）", part, port)
+		}
+	}
+	return nil
+}
+
 // safeRemoteLookupIP 是 checkSingleRemoteAddr 的解析点（与
 // federationDiagnoseLookupIP 同形态的可注入点，供计数型钉格在不
 // 依赖真实 DNS 的前提下验证 R10-09 的按主机名 memo 化）。
@@ -184,10 +212,17 @@ func checkSingleRemoteAddr(addr string) error {
 // 解析失败不入缓存——IsSafeRemoteAddr 首个失败即整单返回，缓存
 // 误差结果无后续消费者。
 func checkSingleRemoteAddrMemo(addr string, resolutions map[string][]net.IP) error {
-	host, _, err := net.SplitHostPort(addr)
+	// F2-F1-01：先按消费侧同一归一（normalizeServerAddressInput：剥
+	// scheme、首个 /?# 截断）折算再 SplitHostPort——原始段带 scheme 时
+	// 冒号数恒超限、非 missing-port 错误会把 forward.md 宣称的 URL 形态
+	// 目标整体误拒，而无 scheme 的同语义段却可落库。无 scheme 段归一为
+	// 恒等，与既有口径同结果；原文照存、拨号截断的消费面行为不变。
+	// 错误文案仍以用户提交的原始段呈现（下方 %q 均为 addr）。
+	normalized := normalizeServerAddressInput(addr)
+	host, _, err := net.SplitHostPort(normalized)
 	if err != nil {
 		if strings.Contains(err.Error(), "missing port in address") {
-			host = addr
+			host = normalized
 		} else {
 			return fmt.Errorf("invalid address format: %v", err)
 		}

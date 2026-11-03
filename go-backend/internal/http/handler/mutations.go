@@ -4437,6 +4437,13 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// F2-F1-02：端口格式同为格式层判定，管理员面同样在此拒绝——
+	// 端口段在场却非 1–65535 数字端口的目标不得落库（判定点
+	// validateRemoteAddrPorts，与消费面 parseTargetAddress 同口径）。
+	if err := validateRemoteAddrPorts(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	if roleID != 0 && !h.allowLocalRemoteAddr() {
 		if err := IsSafeRemoteAddr(remoteAddr); err != nil {
 			response.WriteJSON(w, response.Err(403, err.Error()))
@@ -4660,6 +4667,12 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	// 对回填后的合并值判定（存量超帽行任何编辑须先削减目标，
 	// 与上方零目标口径一致）。
 	if err := validateRemoteAddrSegmentCount(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	// F2-F1-02：端口格式与创建面同口径，对回填后的合并值判定
+	// （存量坏端口行任何编辑须先补正端口，与上方段数帽口径一致）。
+	if err := validateRemoteAddrPorts(remoteAddr); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
