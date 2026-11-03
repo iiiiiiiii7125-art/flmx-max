@@ -61,6 +61,15 @@ func validateRemoteAddrHasTargets(addr string) error {
 // 空段与首尾空白差不构成变更，段集相同即目标未实际变更。段集为空
 // 的提交由 R7-04 的格式判在更前处拒绝（空段集与任一非空段集恒不
 // 相等），本谓词不作零目标兜底。
+//
+// 多重集而非集合口径是 R8-18（H-F3-03）的实测定谳，不得改集合义：
+// 重复段在消费侧非惰性——gost 渲染逐段成节点，round/rand/hash 选点
+// 按节点条目计权（重复地址得双倍份额），realm 渲染把重复段排成等
+// 权 roundrobin 条目，诊断亦逐条目探测；去重/增重即改变负载语义、
+// 构成实际变更，须触发复检。仅中转延迟取首段一面对重数惰性，不
+// 足以推翻其余三面。段序差不算变更的依据不同：复检对象是地址本
+// 身，重排不引入新地址、无漏检面（主备次序属下发语义、落库原文
+// 即新序）。
 func remoteAddrTargetsChanged(submitted, stored string) bool {
 	a := splitRemoteParts(submitted)
 	b := splitRemoteParts(stored)

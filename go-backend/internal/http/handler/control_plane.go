@@ -2132,14 +2132,18 @@ func (h *Handler) udpPingViaNode(nodeID int64, ip string, port int, options diag
 	return res.Data, nil
 }
 
+// splitRemoteTargets 是转发目标的消费侧切分器（gost 渲染、realm
+// 端点、转发诊断、中转延迟共用）。R8-06（H-F3-01）：此前只切逗号，
+// 与校验侧 splitRemoteParts（逗号/换行/CR，forward.md 明文承诺）口
+// 径分歧——换行分隔的多目标校验按 N 段过、渲染成 1 个含 \n 的不可
+// 拨号节点静默全灭。现直接复用 splitRemoteParts 保证两侧恒同口径
+// （切分、TrimSpace、丢空段全一致），每段再过 processServerAddress
+// 做 IPv6 括号化等渲染归一。存量已落库的换行形态行无需迁移：新口
+// 径下自动按多目标正确渲染（复活属预期）。
 func splitRemoteTargets(remoteAddr string) []string {
-	parts := strings.Split(remoteAddr, ",")
+	parts := splitRemoteParts(remoteAddr)
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
 		out = append(out, processServerAddress(part))
 	}
 	return out

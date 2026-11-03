@@ -83,13 +83,10 @@ func validateRealmForwardStrategy(tunnel *tunnelRecord, remoteAddr, strategy str
 	case "", "round", "hash":
 		return nil
 	}
-	targets := 0
-	for _, part := range strings.Split(remoteAddr, ",") {
-		if strings.TrimSpace(part) != "" {
-			targets++
-		}
-	}
-	if targets < 2 {
+	// R8-06（H-F3-01 同族）：目标计数走校验/消费共用的 splitRemoteParts
+	// （逗号/换行/CR）——此前只切逗号，换行分隔的双目标被误计为单目标、
+	// fifo 等策略绕过本门后仍被 realm 按双目标 roundrobin 渲染。
+	if len(splitRemoteParts(remoteAddr)) < 2 {
 		return nil
 	}
 	return fmt.Errorf("realm 引擎仅支持轮询（round）与 IP 哈希（hash）负载策略，多目标转发不能使用 %s 策略", strings.TrimSpace(strategy))
