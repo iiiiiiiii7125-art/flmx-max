@@ -2482,7 +2482,9 @@ export default function ForwardPage() {
           id: form.id,
           name: form.name,
           tunnelId: form.tunnelId,
-          inPort: form.inPort,
+          // R4-01：编辑不提交 inPort——入口端口创建后不可变更，
+          // 编辑走后端缺席路径（逐节点保口）；异口转发没有单一
+          // 「现行口」可回填，提交列表口曾被逐行比对锁误拒。
           ...(inIpTouched ? { inIp: form.inIp || "" } : {}),
           remoteAddr: processedRemoteAddr,
           strategy: addressCount > 1 ? form.strategy : "fifo",
