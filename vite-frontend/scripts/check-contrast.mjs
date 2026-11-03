@@ -28,6 +28,19 @@
 // 及顺序后者胜；同级按源码顺序后者胜。token 只存在于条件块时
 // 视为未定义（fail-closed，断言点名缺失）。
 //
+// 嵌套与匿名层口径（修复轮 8，R8-02/R8-03 / H-C4-01/02 机制处
+// 置）：轮 7 求值器仍有两处与浏览器级联不一致。其一，匿名
+// @layer 块的层名落为 null、被按无层声明计权（普通级最高优
+// 先）——把改浅值写进无条件 :root、再用匿名层存档旧值即可骗
+// 绿；现匿名层分配合成层名、按出现位置参与层序。其二，求值
+// 不建模规则嵌套：永不匹配祖先选择器内的 :root 被当顶层计、
+// :root 体内嵌套条件块第二位起的声明被逐片当作无条件声明
+// 计——现分发携带祖先选择器上下文（有规则祖先后，内层 :root
+// 恒不匹配、不计数），parseDecls 按花括号深度切分、嵌套块整
+// 块交回分发。与 check-theme-light-required.mjs 内嵌的
+// resolveRootTokens 同口径（各门自含、不跨文件引用），两门
+// 同修、逐字同构。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-contrast.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -98,6 +111,15 @@ const resolveRootTokens = (code) => {
       if (name && !layerOrder.has(name)) layerOrder.set(name, layerSeq++);
     }
   };
+  // 匿名 @layer 块（R8-02 / H-C4-01）：级联中每个匿名块是一个独立
+  // 的新层、按出现位置参与层序，必须分配合成层名——落为 null 会
+  // 被 consider 当作无层声明（普通级最高优先），与浏览器正相反
+  // （无层恒胜有层），层内存档旧值就此骗过求值。
+  const freshAnonLayer = () => {
+    const name = `(anon-layer-${layerSeq})`;
+    layerOrder.set(name, layerSeq++);
+    return name;
+  };
   const winners = new Map();
   let srcIdx = 0;
   const rankCmp = (a, b) => {
@@ -118,13 +140,85 @@ const resolveRootTokens = (code) => {
     const cur = winners.get(name);
     if (!cur || rankCmp(rank, cur.rank) > 0) winners.set(name, { rank, value });
   };
-  const parseDecls = (body, layerName) => {
+  // 取从 openIdx（指向 "{"）起的花括号配平块：返回 { body, next }
+  // （next 为配平 "}" 之后的位置），不配平返回 null。引号内的花
+  // 括号不计深度。
+  const extractBlock = (text, openIdx) => {
+    let d = 0;
+    let q = null;
+    for (let j = openIdx; j < text.length; j++) {
+      const c = text[j];
+      if (q) {
+        if (c === "\\") j++;
+        else if (c === q) q = null;
+        continue;
+      }
+      if (c === '"' || c === "'") { q = c; continue; }
+      if (c === "{") d++;
+      else if (c === "}") {
+        d--;
+        if (d === 0) return { body: text.slice(openIdx + 1, j), next: j + 1 };
+      }
+    }
+    return null;
+  };
+  const applyDecl = (decl, layerName) => {
+    const m = decl.match(/^(--[a-zA-Z0-9-]+)\s*:\s*([\s\S]+)$/);
+    if (!m) return;
+    let value = m[2].trim();
+    let important = false;
+    const im = value.match(/!\s*important\s*$/i);
+    if (im) {
+      important = true;
+      value = value.slice(0, im.index).trim();
+    }
+    consider(m[1], value, important, layerName);
+  };
+  // 单条规则按上下文分发。frames 记 at-rule 与祖先选择器上下文：
+  // 存在 type:"rule" 祖先时，内层 :root 的有效选择器是「祖先
+  // :root」——根元素不可能是任何元素的后代，恒不匹配，不计数，
+  // 仅继续遍历（R8-03 / H-C4-02）。
+  const dispatchRule = (prelude, body, frames) => {
+    if (/^@layer\b/i.test(prelude)) {
+      const names = prelude.replace(/^@layer\b/i, "").trim();
+      noteLayers(names);
+      // 匿名层分配合成层名参与层序（R8-02 / H-C4-01），不落 null。
+      const name = names.split(",")[0].trim() || freshAnonLayer();
+      walk(body, [...frames, { type: "layer", name }]);
+    } else if (prelude.startsWith("@")) {
+      // 条件 at-rule（@media/@supports/@container/@document/未知
+      // 块级 at-rule）：子树整棵排除，不入 token 集。
+      return;
+    } else {
+      if (frames.some((f) => f.type === "cond")) return;
+      const inner = [...frames, { type: "rule" }];
+      if (frames.some((f) => f.type === "rule")) {
+        walk(body, inner);
+        return;
+      }
+      const layerFrame = [...frames]
+        .reverse()
+        .find((f) => f.type === "layer");
+      if (prelude.split(",").some((s) => s.trim() === ":root")) {
+        parseDecls(body, layerFrame ? layerFrame.name : null, frames);
+      } else {
+        walk(body, inner);
+      }
+    }
+  };
+  // 解析一个 :root 规则体（R8-03 / H-C4-02 起按花括号深度切分）：
+  // 声明以 ";" 收尾；若先遇 "{"，此前分片是嵌套规则的 prelude，
+  // 整块交回 dispatchRule 按上下文处置——嵌套条件块内第二位起的
+  // 声明不再被当作 :root 的无条件声明逐片计数。嵌套 prelude 为
+  // "&" 时即父选择器本身，在 :root 体内等于继续 :root。
+  const parseDecls = (body, layerName, frames) => {
     let i = 0;
     const n = body.length;
     while (i < n) {
-      let depth = 0;
+      let paren = 0;
       let q = null;
       const start = i;
+      let kind = null;
       while (i < n) {
         const c = body[i];
         if (q) {
@@ -134,23 +228,30 @@ const resolveRootTokens = (code) => {
           continue;
         }
         if (c === '"' || c === "'") { q = c; i++; continue; }
-        if (c === "(") depth++;
-        else if (c === ")") depth--;
-        else if (c === ";" && depth === 0) break;
+        if (c === "(") paren++;
+        else if (c === ")") paren--;
+        else if (paren === 0 && c === ";") { kind = "decl"; break; }
+        else if (paren === 0 && c === "{") { kind = "rule"; break; }
         i++;
       }
-      const decl = body.slice(start, i).trim();
-      i++;
-      const m = decl.match(/^(--[a-zA-Z0-9-]+)\s*:\s*([\s\S]+)$/);
-      if (!m) continue;
-      let value = m[2].trim();
-      let important = false;
-      const im = value.match(/!\s*important\s*$/i);
-      if (im) {
-        important = true;
-        value = value.slice(0, im.index).trim();
+      if (kind === null) {
+        applyDecl(body.slice(start).trim(), layerName);
+        break;
       }
-      consider(m[1], value, important, layerName);
+      if (kind === "decl") {
+        applyDecl(body.slice(start, i).trim(), layerName);
+        i++;
+        continue;
+      }
+      const prelude = body.slice(start, i).trim();
+      const blk = extractBlock(body, i);
+      if (!blk) break;
+      i = blk.next;
+      if (prelude === "&") {
+        parseDecls(blk.body, layerName, frames);
+      } else {
+        dispatchRule(prelude, blk.body, [...frames, { type: "rule" }]);
+      }
     }
   };
   const walk = (text, frames) => {
@@ -189,46 +290,10 @@ const resolveRootTokens = (code) => {
         }
         continue;
       }
-      const open = i - 1;
-      let d = 0;
-      let end = -1;
-      q = null;
-      for (let j = open; j < n; j++) {
-        const c = text[j];
-        if (q) {
-          if (c === "\\") j++;
-          else if (c === q) q = null;
-          continue;
-        }
-        if (c === '"' || c === "'") { q = c; continue; }
-        if (c === "{") d++;
-        else if (c === "}") {
-          d--;
-          if (d === 0) { end = j; break; }
-        }
-      }
-      if (end < 0) break;
-      const body = text.slice(open + 1, end);
-      i = end + 1;
-      if (/^@layer\b/i.test(prelude)) {
-        const names = prelude.replace(/^@layer\b/i, "").trim();
-        noteLayers(names);
-        const name = names.split(",")[0].trim() || null;
-        walk(body, [...frames, { type: "layer", name }]);
-      } else if (prelude.startsWith("@")) {
-        // 条件 at-rule（@media/@supports/@container/@document/未知
-        // 块级 at-rule）：子树整棵排除，不入 token 集。
-        continue;
-      } else {
-        if (frames.some((f) => f.type === "cond")) continue;
-        const layerFrame = [...frames]
-          .reverse()
-          .find((f) => f.type === "layer");
-        if (prelude.split(",").some((s) => s.trim() === ":root")) {
-          parseDecls(body, layerFrame ? layerFrame.name : null);
-        }
-        walk(body, frames);
-      }
+      const blk = extractBlock(text, i - 1);
+      if (!blk) break;
+      i = blk.next;
+      dispatchRule(prelude, blk.body, frames);
     }
   };
   walk(code, []);
