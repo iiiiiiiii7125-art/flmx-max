@@ -36,6 +36,7 @@ import { extractBatchFailures } from "@/api/error-message";
 import { PageLoadingState } from "@/components/page-state";
 import { SearchBar } from "@/components/search-bar";
 import { useLocalStorageState } from "@/hooks/use-local-storage-state";
+import { useTargetIdemKey } from "@/hooks/useIdemKey";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { latestProbe } from "@/utils/latest-probe";
 import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
@@ -261,6 +262,12 @@ export default function InboundPage() {
     item: InboundApiItem;
   } | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+  // C1-06：重新生成密钥（凭据轮换）的幂等键，按入站目标绑定——
+  // 超时后在同一弹窗重试复用同键，后端回放首轮回执不二次轮换。
+  const {
+    keyFor: regenKeyFor,
+    clearTargetIdemKey: clearRegenKey,
+  } = useTargetIdemKey();
   const [toggling, setToggling] = useState<number | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -426,7 +433,7 @@ export default function InboundPage() {
         action === "delete"
           ? await deleteInbound(item.id)
           : action === "regenerate"
-            ? await regenerateInbound(item.id)
+            ? await regenerateInbound(item.id, regenKeyFor(item.id))
             : await resetInboundTraffic(item.id);
 
       if (res.code !== 0) {
@@ -434,6 +441,7 @@ export default function InboundPage() {
 
         return;
       }
+      if (action === "regenerate") clearRegenKey();
       if (res.msg && res.msg !== "操作成功") {
         toast(res.msg, { icon: "⚠️" });
       } else {

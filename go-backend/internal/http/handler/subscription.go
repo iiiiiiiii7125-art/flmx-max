@@ -1434,6 +1434,16 @@ func (h *Handler) rotateSubscriptionCredentials(s *model.Subscription) (rows []m
 // subscriptionReset issues a new link; a share subscription also gets new
 // credentials, so a leaked link or imported config stops working.
 func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
+	// C1-06：凭据轮换接入幂等——同键重试回放首轮回执（含首轮新
+	// token），不再二次轮换使刚分发的链接失效（scope 登记见
+	// idempotency.go）。
+	var finish func()
+	var replayed bool
+	w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "subscription:reset")
+	defer finish()
+	if replayed {
+		return
+	}
 	id := idFromBody(r, w)
 	if id <= 0 {
 		return
@@ -1601,6 +1611,17 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 		// 换 token 是管理员操作（F-001 回归点：reset 仍仅管理员）。
 		if authErr != nil || roleID != 0 {
 			response.WriteJSON(w, response.Err(403, "无权限，仅管理员可操作"))
+			return
+		}
+		// C1-06：reset 分支与 subscriptionReset 同为凭据轮换，接入
+		// 幂等（管理员校验通过后才占位：403 不落缓存、未授权者
+		// 不能预占键）。回放命中时首轮回执（含新 token）原样返回，
+		// 函数尾部的共用 OK 回执不会再执行。
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "inbound-sub-info:reset")
+		defer finish()
+		if replayed {
 			return
 		}
 		// X-P3-13（L-03-2）：与主路径共用全轮换（token+UUID/密码+下发

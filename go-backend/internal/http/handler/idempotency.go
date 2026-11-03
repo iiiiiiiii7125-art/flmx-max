@@ -36,8 +36,19 @@ import (
 // userCreate "user:create" （mutations.go）
 // groupCreate "user-group:create" / "tunnel-group:create"
 //
-// 明确不接：一切 update/delete/assign/set/install/import/split
-// （ID 定位或替换语义；kernelInstall 为单例 upsert）。
+// C1-06（1.9.5 发版后审计）补接凭据轮换三面：轮换不是创建，但
+// 与重复创建同害型——重复执行使首轮刚生成/分发的凭据立即作废，
+// 且三面回执都在轮换并下发后才返回、写截止放宽到 kernelApply 级，
+// 超时重试/双击是现实路径。接入后同键重试回放首轮回执（含首轮
+// 新凭据），不再二次轮换：
+// inboundRegenerate "inbound:regenerate"（kernel.go）
+// subscriptionReset "subscription:reset"（subscription.go）
+// inboundSubInfo reset 分支 "inbound-sub-info:reset"（subscription.go）
+//
+// 明确不接：其余 update/delete/assign/set/install/import/split
+// （ID 定位或替换语义、重复执行收敛于同一状态；kernelInstall
+// 为单例 upsert；reset-traffic/reset-flow 等计数清零面同理，
+// 重复清零不产生新凭据、不使既有产物失效）。
 //
 // 语义：请求头 Idempotency-Key 存在时，后端按（用户, scope, 键）缓存
 // 首次成功结果 10 分钟；同键重复提交直接回放首次结果，不再执行创建。

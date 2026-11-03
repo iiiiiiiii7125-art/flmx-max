@@ -62,6 +62,36 @@ export function useIdemKey(): {
 }
 
 /**
+ * C1-06：动作型一次性操作的幂等键（确认弹窗类动作，如凭据轮换）。
+ *
+ * 与创建表单的会话键同机制、不同生命周期：键按目标绑定——同一
+ * 目标的超时重试/双击复用同键（后端回放首轮回执，不重复执行），
+ * 换目标自动换键，调用方在确认成功后 clear() 丢弃。键保存在 ref
+ * 中：弹窗关闭重开不换键（「响应丢失后关窗重开再提交」正是要防
+ * 的重复执行路径），只有成功或换目标才失效——与创建表单
+ * R3X-027 的开窗轮换口径不同，因为动作的载荷（目标 id）在弹窗
+ * 标题上已点名、不存在改参再提交的歧义。
+ */
+export function useTargetIdemKey(): {
+  keyFor: (target: number) => string;
+  clearTargetIdemKey: () => void;
+} {
+  const ref = useRef<{ target: number; key: string } | null>(null);
+  const keyFor = useCallback((target: number) => {
+    if (!ref.current || ref.current.target !== target) {
+      ref.current = { target, key: newIdemKey() };
+    }
+
+    return ref.current.key;
+  }, []);
+  const clearTargetIdemKey = useCallback(() => {
+    ref.current = null;
+  }, []);
+
+  return { keyFor, clearTargetIdemKey };
+}
+
+/**
  * R3X-027：开窗轮换的判定谓词（纯函数，供桩验证）。
  *
  * 仅在「弹窗由关到开的上升沿」且「新建模式」时轮换：

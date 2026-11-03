@@ -1374,8 +1374,10 @@ export const refreshSubscriptionTemplate = (id: number) =>
   Network.post<SubTemplateItem>("/subscription/template/refresh", { id });
 export const deleteSubscriptionTemplate = (id: number) =>
   Network.post("/subscription/template/delete", { id });
-export const resetSubscription = (id: number) =>
-  Network.post<SubscriptionItem>("/subscription/reset", { id });
+export const resetSubscription = (id: number, idemKey?: string) =>
+  // C1-06：凭据轮换带幂等键（useTargetIdemKey 按目标生成）——超时
+  // 重试/双击回放首轮回执（含首轮新 token），不触发二次轮换。
+  Network.post<SubscriptionItem>("/subscription/reset", { id }, { idemKey });
 export type RemoteSourceRole = "" | "relay" | "landing";
 export interface RemoteSourceItem {
   id: number;
@@ -1534,10 +1536,12 @@ export const toggleInbound = (id: number, enabled: boolean) =>
   Network.post("/inbound/toggle", { id, enabled }, { timeout: 330_000 });
 export const resetInboundTraffic = (id: number) =>
   Network.post("/inbound/reset-traffic", { id });
-export const regenerateInbound = (id: number) =>
+export const regenerateInbound = (id: number, idemKey?: string) =>
   // B11-001 家族（R2-K2）：重生成末尾下发所在内核及链式引用方，
   // 未装版本时带 300s 条件界，前端 ≥330s。
-  Network.post("/inbound/regenerate", { id }, { timeout: 330_000 });
+  // C1-06：凭据轮换带幂等键（useTargetIdemKey 按目标生成），
+  // 超时重试/双击不触发二次轮换。
+  Network.post("/inbound/regenerate", { id }, { timeout: 330_000, idemKey });
 export const importInbounds = (links: string, relayOnly: boolean) =>
   Network.post<{ created: number[]; errors: string[] }>("/inbound/import", {
     links,
@@ -1560,8 +1564,10 @@ export const updateExternalInbound = (data: {
   Network.post("/inbound/external/update", data, { timeout: 330_000 });
 export const getInboundShare = (id: number) =>
   Network.post<InboundShareEntry[]>("/inbound/share", { id });
-export const getSubInfo = (reset = false, silent = false) =>
-  Network.post<SubInfoApiData>("/inbound/sub/info", { reset }, { silent });
+export const getSubInfo = (reset = false, silent = false, idemKey?: string) =>
+  // C1-06：reset=true 是凭据轮换，可带幂等键（useTargetIdemKey）；
+  // 读分支不带键、行为不变。
+  Network.post<SubInfoApiData>("/inbound/sub/info", { reset }, { silent, idemKey });
 export const getInboundRelays = (inboundId: number) =>
   Network.post<InboundRelayApiItem[]>("/inbound/relay/list", { inboundId });
 /** 立即测量中转线路（空 ids = 全部）及其入口节点的延迟。 */
