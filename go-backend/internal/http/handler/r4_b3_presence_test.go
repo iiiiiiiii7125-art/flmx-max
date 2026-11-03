@@ -180,58 +180,6 @@ func TestR4B3SpeedLimitUpdatePresence(t *testing.T) {
 	}
 }
 
-// ─── R4X-012：分组校验 ──────────────────────────────────────────────────
-
-func TestR4B3GroupValidation(t *testing.T) {
-	f := seedB2Fixture(t)
-
-	// create：status∉{0,1} 拒绝且不落库。
-	code, body := f.post(t, f.h.groupUserCreate, map[string]interface{}{"name": "g-bad", "status": 2})
-	if code == 0 {
-		t.Fatalf("R4X-012: group create status=2 must be rejected, body=%s", body)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_group WHERE name = 'g-bad'`); n != 0 {
-		t.Fatalf("rejected group create must not persist, got %d rows", n)
-	}
-	code, body = f.post(t, f.h.groupTunnelCreate, map[string]interface{}{"name": "tg-bad", "status": 7})
-	if code == 0 {
-		t.Fatalf("R4X-012: tunnel group create status=7 must be rejected, body=%s", body)
-	}
-	// update：status=2 拒绝、存量不变（僵尸组形态：启用组 G1 不得落入 2）。
-	code, body = f.post(t, f.h.groupUserUpdate, map[string]interface{}{"id": 1, "status": 2})
-	if code == 0 {
-		t.Fatalf("R4X-012: group update status=2 must be rejected, body=%s", body)
-	}
-	if _, status := b5GroupNameStatus(t, f, "user_group", 1); status != 1 {
-		t.Fatalf("rejected update must not change stored status, got %d", status)
-	}
-	if n := f.count(t, `SELECT COUNT(*) FROM user_tunnel WHERE id = 10`); n != 1 {
-		t.Fatalf("grants of enabled group must survive rejected zombie update, got %d", n)
-	}
-	// update：显式空名拒绝、组名不变。
-	code, body = f.post(t, f.h.groupUserUpdate, map[string]interface{}{"id": 1, "name": ""})
-	if code == 0 {
-		t.Fatalf("R4X-012: group update empty name must be rejected, body=%s", body)
-	}
-	if name, _ := b5GroupNameStatus(t, f, "user_group", 1); name != "g-one" {
-		t.Fatalf("rejected empty-name update must not clear the name, got %q", name)
-	}
-	// update：合法 status=0 成功落库；R5-FGRP 后停用不撤销任何
-	// 存量授权（旧「撤销谓词」已删）。
-	seedB5Stock(t, f, 0, 1)
-	code, body = f.post(t, f.h.groupUserUpdate, map[string]interface{}{"id": 2, "status": 0})
-	if code != 0 {
-		t.Fatalf("group update status=0 must succeed, code=%d body=%s", code, body)
-	}
-	assertB5StockIntact(t, f)
-
-	// create：status=0 合法（置于存量种子之后，避免自增 ID 与 seedB5Stock 的显式 id=2 相撞）。
-	code, body = f.post(t, f.h.groupUserCreate, map[string]interface{}{"name": "g-off-new", "status": 0})
-	if code != 0 {
-		t.Fatalf("group create status=0 must succeed, code=%d body=%s", code, body)
-	}
-}
-
 // ─── R4X-018：入站整对象更新 8 键 presence ──────────────────────────────
 
 func r4b3SeedPresenceInbound(t *testing.T, r *repo.Repository, k *model.NodeKernel, targetID int64) *model.NodeInbound {

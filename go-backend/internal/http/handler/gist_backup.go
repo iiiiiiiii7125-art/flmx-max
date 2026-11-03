@@ -1069,13 +1069,16 @@ func gistVersionContent(ctx context.Context, token, id, version, password string
 
 // --- restore（PORT-3342/G-recovery）---
 
-// gistRestoreTypes 是 Gist 恢复的段全集（T-3 钉死）：我方 16 段，
+// gistRestoreTypes 是 Gist 恢复的段全集（T-3 钉死）：我方 13 段，
 // 与 repository.go validBackupTypes / 前端 BACKUP_TYPE_VALUES 同集。
 // 不得照抄上游 11 项类型表（丢 userInbounds、announcements、
 // monitorPermissions、userSubscriptions、serviceMonitors）。
+// 分组三件套三段（tunnelGroups/userGroups/permissions）已随功能
+// 移除（1.9.6）：旧 Gist 备份中的三段经 BackupData 兼容壳解码，
+// 由 Import 在回执中点名披露已忽略，不在此名单内。
 var gistRestoreTypes = []string{
 	"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
-	"tunnelGroups", "userGroups", "permissions", "configs", "inbounds",
+	"configs", "inbounds",
 	"userInbounds", "announcements", "monitorPermissions",
 	"userSubscriptions", "serviceMonitors",
 }
@@ -1083,7 +1086,7 @@ var gistRestoreTypes = []string{
 // gistBackupRestore 按指定版本从 Gist 恢复：取版本内容（复用
 // gistVersionContent：版本校验→取版本文件→truncated 经 raw_url 再取
 // →gistOpen 解密，双认 flyx/flmx 信封）→JSON 解码为 BackupData 且
-// Version 非空才继续→Import（16 段全集，其 1.0 版本门与 configs 段
+// Version 非空才继续→Import（13 段全集，其 1.0 版本门与 configs 段
 // 导入过滤仍在：Gist 设置与凭据既不出备份、即使夹带也被导入面
 // filterRestoreConfigs 滤掉，恢复不覆盖当前 Gist 设置）→与现有 backupImport 完全相同
 // 的导入尾钩子全集 runBackupImportTailHooks（计量对账、configs 缓存

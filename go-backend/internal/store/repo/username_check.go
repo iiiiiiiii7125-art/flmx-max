@@ -23,9 +23,8 @@ import (
 //   - Repository.CreateUser（非事务版，生产无调用方）→ 唯一索引 +
 //     冲突映射兜底，无应用层预检（与改前同构）
 //
-// 旧注曾列 groupUserCreate/groupUserUpdate：经 K10 复核，二者写的是
-// user_group.name（分组名判重属 B03 族），不写 user 表用户名，不在本
-// 全集内。
+// 分组名判重（B03 族）曾与本全集相邻登记；分组三件套已于 1.9.6
+// 整套移除，该面不复存在。
 //
 // 语义：
 //   - 写入前折叠查重（usernameFoldCount 或等价）；

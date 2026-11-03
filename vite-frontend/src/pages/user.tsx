@@ -37,7 +37,6 @@ import { Progress } from "@/shadcn-bridge/heroui/progress";
 import {
   User,
   UserForm,
-  UserGroup,
   UserTunnel,
   TunnelAssignItem,
   Tunnel,
@@ -57,8 +56,6 @@ import {
   getSpeedLimitList,
   resetUserFlow,
   resetUserQuota,
-  getUserGroupList,
-  getUserGroups,
   getMonitorPermissionList,
   assignMonitorPermission,
   removeMonitorPermission,
@@ -266,10 +263,6 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
     maxConn: 0,
   });
   const [userFormLoading, setUserFormLoading] = useState(false);
-  // 编辑时 per-user 分组归属拉取失败标志：失败被装成空集会随全量提交
-  // 清掉该用户全部分组（X1-02）；失败时提交不带 groupIds，后端 presence
-  // 语义下不带即不替换，归属保持原样。
-  const [userGroupLoadFailed, setUserGroupLoadFailed] = useState(false);
   const [userFlowInput, setUserFlowInput] = useState("1000");
   const [userFlowUnit, setUserFlowUnit] = useState<TrafficUnit>("GB");
   const [quotaResetLoading, setQuotaResetLoading] = useState(false);
@@ -353,7 +346,6 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
   // 其他数据
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
   const [speedLimits, setSpeedLimits] = useState<SpeedLimit[]>([]);
-  const [userGroups, setUserGroups] = useState<UserGroup[]>([]);
 
   // 限速选择只按 id/空值判定：id 为空即不限速，任何规则（含恰好名为
   // 「不限速」的真实规则）都按普通规则可选、绑定不得按名归一清除。
@@ -477,20 +469,6 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
     }
   }, []);
 
-  const loadUserGroups = useCallback(async () => {
-    try {
-      const response = await getUserGroupList();
-
-      if (response.code === 0) {
-        setUserGroups(Array.isArray(response.data) ? response.data : []);
-      } else {
-        toast.error(response.msg || "获取用户分组列表失败");
-      }
-    } catch {
-      toast.error("获取用户分组列表失败");
-    }
-  }, []);
-
   const loadMonitorPermissions = useCallback(async () => {
     setMonitorPermissionLoading(true);
     try {
@@ -555,9 +533,8 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
   useEffect(() => {
     void loadTunnels();
     void loadSpeedLimits();
-    void loadUserGroups();
     void loadMonitorPermissions();
-  }, [loadMonitorPermissions, loadSpeedLimits, loadTunnels, loadUserGroups]);
+  }, [loadMonitorPermissions, loadSpeedLimits, loadTunnels]);
 
   useEffect(() => {
     if (searchDebounceRef.current) {
@@ -598,7 +575,6 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
   const handleAdd = () => {
     setIsEdit(false);
-    setUserGroupLoadFailed(false);
     setUserFlowInput("1000");
     setUserFlowUnit("GB");
     setUserForm({
@@ -612,7 +588,6 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
       expTime: null,
       flowResetTime: 0,
       maxConn: 0,
-      groupIds: [],
     });
     onUserModalOpen();
   };
@@ -623,26 +598,6 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
     setUserFlowInput(trafficInput.value);
     setUserFlowUnit(trafficInput.unit);
-    let currentGroupIds: number[] = [];
-    let groupLoadFailed = false;
-
-    try {
-      const groupRes = await getUserGroups(user.id);
-
-      if (groupRes.code === 0) {
-        currentGroupIds = groupRes.data || [];
-      } else {
-        groupLoadFailed = true;
-      }
-    } catch {
-      groupLoadFailed = true;
-    }
-
-    setUserGroupLoadFailed(groupLoadFailed);
-    if (groupLoadFailed) {
-      toast.error("该用户的分组归属加载失败，本次保存将不修改其分组");
-    }
-
     setUserForm({
       id: user.id,
       name: user.name,
@@ -656,7 +611,6 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
       expTime: user.expTime ? new Date(user.expTime) : null,
       flowResetTime: user.flowResetTime ?? 0,
       maxConn: user.maxConn ?? 0,
-      groupIds: currentGroupIds,
     });
     onUserModalOpen();
   };
@@ -739,14 +693,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
         flowMiB:
           userFlowInput === "99999" && userFlowUnit === "GB" ? 0 : flowMiB,
         expTime: userForm.expTime ? userForm.expTime.getTime() : 0,
-        groupIds: userForm.groupIds ?? [],
       };
-
-      // 分组归属拉取失败时不下发 groupIds：后端按 presence 语义处理，
-      // 字段缺席即不替换分组，避免把失败装成的空集写成「清空分组」（X1-02）
-      if (isEdit && userGroupLoadFailed) {
-        delete submitData.groupIds;
-      }
 
       if (isEdit && !submitData.pwd) {
         delete submitData.pwd;
@@ -1911,32 +1858,6 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               <Radio value="0">禁用</Radio>
             </RadioGroup>
 
-            {userGroups.length > 0 && (
-              <Select
-                isDisabled={isEdit && userGroupLoadFailed}
-                label="用户分组（可选）"
-                placeholder="选择要加入的分组"
-                selectedKeys={new Set((userForm.groupIds ?? []).map(String))}
-                selectionMode="multiple"
-                onSelectionChange={(keys) => {
-                  const selected = Array.from(keys as Set<string>).map(Number);
-
-                  setUserForm((prev) => ({ ...prev, groupIds: selected }));
-                }}
-              >
-                {userGroups.map((g) => (
-                  <SelectItem key={g.id.toString()} textValue={g.name}>
-                    {g.name}
-                  </SelectItem>
-                ))}
-              </Select>
-            )}
-
-            {isEdit && userGroupLoadFailed && (
-              <p className="text-xs font-semibold text-danger-700">
-                该用户的分组归属加载失败，上方分组选择不可信；本次保存不会修改其分组归属。
-              </p>
-            )}
           </ModalBody>
           <ModalFooter>
             <Button onPress={onUserModalClose}>取消</Button>

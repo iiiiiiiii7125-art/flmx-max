@@ -172,44 +172,6 @@ func TestFix132ImportMonitorPermissionConflictDoesNotRollbackAll(t *testing.T) {
 	}
 }
 
-// D4-02：分组名唯一冲突与权限复合唯一冲突同治。
-func TestFix132ImportGroupNameAndPermissionConflicts(t *testing.T) {
-	now := time.Now().UnixMilli()
-	dest := openBackupRepo(t, "group-conflict.db")
-	// 用户 id 避开 New() 播种的默认管理员（id=1）。
-	createRow(t, dest, &model.User{ID: 101, User: "alice", Pwd: "x", RoleID: 1, Status: 1, CreatedTime: now})
-	createRow(t, dest, &model.Tunnel{ID: 5, Name: "t5", Type: 1, CreatedTime: now, UpdatedTime: now})
-	// 同名异 id 的既有分组 + 同复合键异 id 的既有权限行
-	createRow(t, dest, &model.UserGroup{ID: 9, Name: "vip", CreatedTime: now, UpdatedTime: now, Status: 1})
-	createRow(t, dest, &model.TunnelGroup{ID: 8, Name: "tg", CreatedTime: now, UpdatedTime: now, Status: 1})
-	createRow(t, dest, &model.GroupPermission{ID: 9, UserGroupID: 5, TunnelGroupID: 8, CreatedTime: now})
-
-	backup := &model.BackupData{
-		Version: "1.0",
-		UserGroups: []model.UserGroupBackup{
-			{ID: 5, Name: "vip", CreatedTime: now, Status: 1, Users: []int64{101}},
-		},
-		TunnelGroups: []model.TunnelGroupBackup{
-			{ID: 8, Name: "tg", CreatedTime: now, Status: 1, Tunnels: []int64{5}},
-		},
-		Permissions: []model.PermissionBackup{
-			{ID: 5, UserGroupID: 5, TunnelGroupID: 8, CreatedTime: now},
-		},
-	}
-	if _, err := dest.Import(backup, []string{"userGroups", "tunnelGroups", "permissions"}); err != nil {
-		t.Fatalf("D4-02: group/permission business-key conflicts must not fail the import: %v", err)
-	}
-	if n := countWhere(t, dest, "user_group", "name = ?", "vip"); n != 1 {
-		t.Fatalf("exactly one group named vip must remain, got %d", n)
-	}
-	if n := countWhere(t, dest, "user_group_user", "user_group_id = ? AND user_id = ?", 5, 101); n != 1 {
-		t.Fatalf("restored group membership must land, got %d", n)
-	}
-	if n := countWhere(t, dest, "group_permission", "user_group_id = ? AND tunnel_group_id = ?", 5, 8); n != 1 {
-		t.Fatalf("exactly one permission for the pair must remain, got %d", n)
-	}
-}
-
 // D4-03（探针 C 同构）：部分段恢复不得写悬空行，跳过须回执计数。
 func TestFix132ImportUserInboundsSkipsDangling(t *testing.T) {
 	dest := openBackupRepo(t, "dangling-ui.db")

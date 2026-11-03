@@ -457,12 +457,6 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.Tunnel{},
 		&model.ChainTunnel{},
 		&model.UserTunnel{},
-		&model.TunnelGroup{},
-		&model.UserGroup{},
-		&model.TunnelGroupTunnel{},
-		&model.UserGroupUser{},
-		&model.GroupPermission{},
-		&model.GroupPermissionGrant{},
 		&model.MonitorPermission{},
 		&model.ViteConfig{},
 		&model.PeerShare{},
@@ -1871,138 +1865,6 @@ func (r *Repository) ListTunnels() ([]map[string]interface{}, error) {
 	return result, nil
 }
 
-// ─── Group Queries ───────────────────────────────────────────────────
-
-func (r *Repository) ListTunnelGroups() ([]map[string]interface{}, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var groups []model.TunnelGroup
-	if err := r.db.Order("id ASC").Find(&groups).Error; err != nil {
-		return nil, err
-	}
-	result := make([]map[string]interface{}, 0, len(groups))
-	for _, g := range groups {
-		ids, names, err := r.listTunnelGroupMembers(g.ID)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, map[string]interface{}{
-			"id": g.ID, "name": g.Name, "status": g.Status,
-			"tunnelIds": ids, "tunnelNames": names,
-			"createdTime": g.CreatedTime,
-		})
-	}
-	return result, nil
-}
-
-func (r *Repository) ListUserGroups() ([]map[string]interface{}, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var groups []model.UserGroup
-	if err := r.db.Order("id ASC").Find(&groups).Error; err != nil {
-		return nil, err
-	}
-	result := make([]map[string]interface{}, 0, len(groups))
-	for _, g := range groups {
-		ids, names, err := r.listUserGroupMembers(g.ID)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, map[string]interface{}{
-			"id": g.ID, "name": g.Name, "status": g.Status,
-			"userIds": ids, "userNames": names,
-			"createdTime": g.CreatedTime,
-		})
-	}
-	return result, nil
-}
-
-func (r *Repository) ListGroupPermissions() ([]map[string]interface{}, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-
-	type permRow struct {
-		ID              int64
-		UserGroupID     int64
-		UserGroupName   sql.NullString
-		TunnelGroupID   int64
-		TunnelGroupName sql.NullString
-		CreatedTime     int64
-	}
-	var rows []permRow
-	err := r.db.Model(&model.GroupPermission{}).
-		Select("group_permission.id, group_permission.user_group_id, user_group.name AS user_group_name, group_permission.tunnel_group_id, tunnel_group.name AS tunnel_group_name, group_permission.created_time").
-		Joins("LEFT JOIN user_group ON user_group.id = group_permission.user_group_id").
-		Joins("LEFT JOIN tunnel_group ON tunnel_group.id = group_permission.tunnel_group_id").
-		Order("group_permission.id ASC").
-		Find(&rows).Error
-	if err != nil {
-		return nil, err
-	}
-	result := make([]map[string]interface{}, 0, len(rows))
-	for _, r := range rows {
-		result = append(result, map[string]interface{}{
-			"id": r.ID, "userGroupId": r.UserGroupID,
-			"userGroupName":   nullableString(r.UserGroupName),
-			"tunnelGroupId":   r.TunnelGroupID,
-			"tunnelGroupName": nullableString(r.TunnelGroupName),
-			"createdTime":     r.CreatedTime,
-		})
-	}
-	return result, nil
-}
-
-func (r *Repository) listTunnelGroupMembers(groupID int64) ([]int64, []string, error) {
-	type row struct {
-		ID   int64
-		Name string
-	}
-	var rows []row
-	err := r.db.Model(&model.TunnelGroupTunnel{}).
-		Select("tunnel.id, tunnel.name").
-		Joins("JOIN tunnel ON tunnel.id = tunnel_group_tunnel.tunnel_id").
-		Where("tunnel_group_tunnel.tunnel_group_id = ?", groupID).
-		Order("tunnel.id ASC").
-		Find(&rows).Error
-	if err != nil {
-		return nil, nil, err
-	}
-	ids := make([]int64, 0, len(rows))
-	names := make([]string, 0, len(rows))
-	for _, r := range rows {
-		ids = append(ids, r.ID)
-		names = append(names, r.Name)
-	}
-	return ids, names, nil
-}
-
-func (r *Repository) listUserGroupMembers(groupID int64) ([]int64, []string, error) {
-	type row struct {
-		ID   int64
-		Name string
-	}
-	var rows []row
-	err := r.db.Model(&model.UserGroupUser{}).
-		Select(`"user".id, "user"."user" AS name`).
-		Joins(`JOIN "user" ON "user".id = user_group_user.user_id`).
-		Where("user_group_user.user_group_id = ?", groupID).
-		Order(`"user".id ASC`).
-		Find(&rows).Error
-	if err != nil {
-		return nil, nil, err
-	}
-	ids := make([]int64, 0, len(rows))
-	names := make([]string, 0, len(rows))
-	for _, r := range rows {
-		ids = append(ids, r.ID)
-		names = append(names, r.Name)
-	}
-	return ids, names, nil
-}
-
 // ─── PeerShare CRUD ──────────────────────────────────────────────────
 
 func (r *Repository) CreatePeerShare(share *model.PeerShare) error {
@@ -2539,24 +2401,6 @@ func (r *Repository) ExportAll() (*model.BackupData, error) {
 	}
 	backup.SpeedLimits = speedLimits
 
-	tunnelGroups, err := r.exportTunnelGroups()
-	if err != nil {
-		return nil, fmt.Errorf("export tunnel groups failed: %w", err)
-	}
-	backup.TunnelGroups = tunnelGroups
-
-	userGroups, err := r.exportUserGroups()
-	if err != nil {
-		return nil, fmt.Errorf("export user groups failed: %w", err)
-	}
-	backup.UserGroups = userGroups
-
-	permissions, err := r.exportPermissions()
-	if err != nil {
-		return nil, fmt.Errorf("export permissions failed: %w", err)
-	}
-	backup.Permissions = permissions
-
 	configs, err := r.ListConfigs()
 	if err != nil {
 		return nil, fmt.Errorf("export configs failed: %w", err)
@@ -2610,12 +2454,15 @@ func (r *Repository) ExportAll() (*model.BackupData, error) {
 // validBackupTypes is the full set of top-level backup segment names
 // accepted by ExportPartial / Import (R13X-005). It must stay identical
 // to the frontend BACKUP_TYPE_VALUES list (vite-frontend config.tsx,
-// 16 values): any drift reopens the silent-ignore gap for API callers,
+// 13 values): any drift reopens the silent-ignore gap for API callers,
 // since the handler's non-empty check cannot catch an all-unknown list.
+// The group-trio segment names (tunnelGroups/userGroups/permissions)
+// were removed with the feature in 1.9.6: old backups carrying them
+// still decode (BackupData keeps the fields as shells) and Import
+// discloses the ignored rows by name in ImportWarnings.
 var validBackupTypes = map[string]bool{
 	"users": true, "nodes": true, "tunnels": true, "forwards": true,
-	"userTunnels": true, "speedLimits": true, "tunnelGroups": true,
-	"userGroups": true, "permissions": true, "configs": true,
+	"userTunnels": true, "speedLimits": true, "configs": true,
 	"inbounds": true, "userInbounds": true, "announcements": true,
 	"monitorPermissions": true, "userSubscriptions": true,
 	"serviceMonitors": true,
@@ -2700,27 +2547,6 @@ func (r *Repository) ExportPartial(types []string) (*model.BackupData, error) {
 			return nil, fmt.Errorf("export speed limits failed: %w", err)
 		}
 		backup.SpeedLimits = v
-	}
-	if typeSet["tunnelGroups"] {
-		v, err := r.exportTunnelGroups()
-		if err != nil {
-			return nil, fmt.Errorf("export tunnel groups failed: %w", err)
-		}
-		backup.TunnelGroups = v
-	}
-	if typeSet["userGroups"] {
-		v, err := r.exportUserGroups()
-		if err != nil {
-			return nil, fmt.Errorf("export user groups failed: %w", err)
-		}
-		backup.UserGroups = v
-	}
-	if typeSet["permissions"] {
-		v, err := r.exportPermissions()
-		if err != nil {
-			return nil, fmt.Errorf("export permissions failed: %w", err)
-		}
-		backup.Permissions = v
 	}
 	if typeSet["configs"] {
 		v, err := r.ListConfigs()
@@ -3222,101 +3048,6 @@ func (r *Repository) exportMonitorPermissions() ([]model.MonitorPermissionBackup
 	return out, nil
 }
 
-func (r *Repository) exportTunnelGroups() ([]model.TunnelGroupBackup, error) {
-	var groups []model.TunnelGroup
-	if err := r.db.Order("id ASC").Find(&groups).Error; err != nil {
-		return nil, err
-	}
-	// X04-002：成员行改一次批量取数（原逐组 Pluck）。组内顺序与原
-	// Pluck 一致——原查询走唯一索引 (tunnel_group_id, tunnel_id)，
-	// 组内按 tunnel_id 升序（探针实测），故批量查询同序 ORDER BY。
-	var memberRows []model.TunnelGroupTunnel
-	r.db.Order("tunnel_group_id ASC, tunnel_id ASC").Find(&memberRows)
-	tunnelsByGroup := make(map[int64][]int64, len(groups))
-	for _, mr := range memberRows {
-		tunnelsByGroup[mr.TunnelGroupID] = append(tunnelsByGroup[mr.TunnelGroupID], mr.TunnelID)
-	}
-
-	out := make([]model.TunnelGroupBackup, 0, len(groups))
-	for _, tg := range groups {
-		b := model.TunnelGroupBackup{
-			ID: tg.ID, Name: tg.Name, CreatedTime: tg.CreatedTime,
-			UpdatedTime: tg.UpdatedTime, Status: tg.Status,
-		}
-		if tunnelIDs, ok := tunnelsByGroup[tg.ID]; ok {
-			b.Tunnels = tunnelIDs
-		}
-		out = append(out, b)
-	}
-	return out, nil
-}
-
-func (r *Repository) exportUserGroups() ([]model.UserGroupBackup, error) {
-	var groups []model.UserGroup
-	if err := r.db.Order("id ASC").Find(&groups).Error; err != nil {
-		return nil, err
-	}
-	// X04-002：成员行改一次批量取数（原逐组 Pluck）。组内顺序与原
-	// Pluck 一致——原查询走唯一索引 (user_group_id, user_id)，组内
-	// 按 user_id 升序（探针实测），故批量查询同序 ORDER BY。
-	var memberRows []model.UserGroupUser
-	r.db.Order("user_group_id ASC, user_id ASC").Find(&memberRows)
-	usersByGroup := make(map[int64][]int64, len(groups))
-	for _, mr := range memberRows {
-		usersByGroup[mr.UserGroupID] = append(usersByGroup[mr.UserGroupID], mr.UserID)
-	}
-
-	out := make([]model.UserGroupBackup, 0, len(groups))
-	for _, ug := range groups {
-		b := model.UserGroupBackup{
-			ID: ug.ID, Name: ug.Name, CreatedTime: ug.CreatedTime,
-			UpdatedTime: ug.UpdatedTime, Status: ug.Status,
-		}
-		if userIDs, ok := usersByGroup[ug.ID]; ok {
-			b.Users = userIDs
-		}
-		out = append(out, b)
-	}
-	return out, nil
-}
-
-func (r *Repository) exportPermissions() ([]model.PermissionBackup, error) {
-	var perms []model.GroupPermission
-	if err := r.db.Order("id ASC").Find(&perms).Error; err != nil {
-		return nil, err
-	}
-	// X04-002：grants 改一次批量取数（原逐权限 Find）。同一
-	// (user_group_id, tunnel_group_id) 内的顺序与原 Find 一致——原
-	// 查询走唯一索引 (user_group_id, tunnel_group_id, user_tunnel_id)，
-	// 组内按 user_tunnel_id 升序（探针实测），故批量查询同序 ORDER BY。
-	var allGrants []model.GroupPermissionGrant
-	r.db.Order("user_group_id ASC, tunnel_group_id ASC, user_tunnel_id ASC").Find(&allGrants)
-	type permPair struct{ userGroupID, tunnelGroupID int64 }
-	grantsByPair := make(map[permPair][]model.GroupPermissionGrant, len(perms))
-	for _, g := range allGrants {
-		k := permPair{g.UserGroupID, g.TunnelGroupID}
-		grantsByPair[k] = append(grantsByPair[k], g)
-	}
-
-	out := make([]model.PermissionBackup, 0, len(perms))
-	for _, p := range perms {
-		b := model.PermissionBackup{
-			ID: p.ID, UserGroupID: p.UserGroupID, TunnelGroupID: p.TunnelGroupID,
-			CreatedTime: p.CreatedTime,
-		}
-		grants := grantsByPair[permPair{p.UserGroupID, p.TunnelGroupID}]
-		for _, g := range grants {
-			b.Grants = append(b.Grants, model.PermissionGrantBackup{
-				ID: g.ID, UserGroupID: g.UserGroupID, TunnelGroupID: g.TunnelGroupID,
-				UserTunnelID: g.UserTunnelID, CreatedTime: g.CreatedTime,
-				CreatedByGroup: g.CreatedByGroup,
-			})
-		}
-		out = append(out, b)
-	}
-	return out, nil
-}
-
 // ─── Import Methods ──────────────────────────────────────────────────
 
 // importReport 收集一次 Import 的跳过与提示，最终落入 ImportResult
@@ -3327,13 +3058,11 @@ type importReport struct {
 	skipped            map[string]int
 	warnings           []string
 	restoredSSHNodeIDs []int64
-	// R3X-005 facet (a)：导入事务内撤销的组建授权，最终经
+	// R3X-005 facet (a)：导入事务内撤销的用户隧道授权，最终经
 	// ImportResult.RevokedUserTunnels 回传 handler 清转发。
 	revoked []RevokedUserTunnelPair
 }
 
-// addRevoked 登记导入撤销的 (user, tunnel) 对，按对去重（同一 UT
-// 可能先后命中成员替换与停用收敛两条路径，删行只发生一次）。
 func (rep *importReport) addRevoked(pairs []RevokedUserTunnelPair) {
 	if rep == nil {
 		return
@@ -3382,6 +3111,24 @@ func rowExistsTx(tx *gorm.DB, model interface{}, id int64) (bool, error) {
 	return n > 0, nil
 }
 
+// noteRemovedGroupSegments discloses the group-trio backup segments
+// an old backup still carries (分组三件套已于 1.9.6 整套移除): the
+// BackupData fields survive only as decode shells, so the rows are
+// counted and named in the import warnings instead of being silently
+// dropped. Runs for every import that carries the segments, whatever
+// segment set the caller selected.
+func noteRemovedGroupSegments(backup *model.BackupData, rep *importReport) {
+	if n := len(backup.TunnelGroups); n > 0 {
+		rep.warnf("备份恢复：隧道分组功能已移除，备份中的 tunnelGroups 段（%d 条）已忽略未恢复", n)
+	}
+	if n := len(backup.UserGroups); n > 0 {
+		rep.warnf("备份恢复：用户分组功能已移除，备份中的 userGroups 段（%d 条）已忽略未恢复", n)
+	}
+	if n := len(backup.Permissions); n > 0 {
+		rep.warnf("备份恢复：分组权限功能已移除，备份中的 permissions 段（%d 条）已忽略未恢复", n)
+	}
+}
+
 func (r *Repository) Import(backup *model.BackupData, types []string) (*model.ImportResult, error) {
 	// O7-009：版本兼容性检查（导出仅写 "1.0"），未知版本拒绝导入，
 	// 避免不兼容格式被错误恢复。
@@ -3420,6 +3167,11 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 	rep := newImportReport()
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		now := unixMilliNow()
+		// 分组三件套段披露：旧备份的 tunnelGroups/userGroups/
+		// permissions 段随功能移除不再落库，在回执中点名计数，
+		// 不静默丢（inbounds 段内的 nodeGroups/groupIds 同口径在
+		// importInbounds 内披露）。
+		noteRemovedGroupSegments(backup, rep)
 		// R4X-006：事务尾转发授权收口只裁定本次导入新落的行——先
 		// 快照 forwards 备份 id 在目标库的存量存在性，尾部清扫据此
 		// 区分「本次新落」与「存量行被刷新」（后者是目标库现行
@@ -3505,27 +3257,6 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			}
 			result.SpeedLimitsImported = count
 		}
-		if typeSet["tunnelGroups"] && len(backup.TunnelGroups) > 0 {
-			count, err := importTunnelGroups(r, tx, backup.TunnelGroups, now, rep)
-			if err != nil {
-				return fmt.Errorf("import tunnel groups failed: %w", err)
-			}
-			result.TunnelGroupsImported = count
-		}
-		if typeSet["userGroups"] && len(backup.UserGroups) > 0 {
-			count, err := importUserGroups(r, tx, backup.UserGroups, now, rep)
-			if err != nil {
-				return fmt.Errorf("import user groups failed: %w", err)
-			}
-			result.UserGroupsImported = count
-		}
-		if typeSet["permissions"] && len(backup.Permissions) > 0 {
-			count, err := importPermissions(r, tx, backup.Permissions, now, rep)
-			if err != nil {
-				return fmt.Errorf("import permissions failed: %w", err)
-			}
-			result.PermissionsImported = count
-		}
 		if typeSet["configs"] && len(backup.Configs) > 0 {
 			count, err := importConfigs(tx, backup.Configs, now, rep)
 			if err != nil {
@@ -3545,6 +3276,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.InboundSubscriptionsImported = counts.subscriptions
 			result.InboundSubscriptionCountersImported = counts.subscriptionCounter
 			result.InboundSourcesImported = counts.sources
+			result.InboundShieldsImported = counts.shields
 			result.InboundNodeGroupsImported = counts.groups
 			result.InboundTemplatesImported = counts.templates
 			result.InboundLegacyUsersImported = counts.legacyUsers
@@ -5194,415 +4926,6 @@ func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup,
 	return count, nil
 }
 
-func importTunnelGroups(r *Repository, tx *gorm.DB, tunnelGroups []model.TunnelGroupBackup, now int64, rep *importReport) (int, error) {
-	count := 0
-	// R5X-017：成员先删后建——预删行数（各组旧成员数之和）与本批
-	// 跳过数先行记账，重建后若「预删>0 且跳过>0」补 warning。
-	var preDeletedMembers int64
-	membersSkippedBefore := 0
-	if rep != nil {
-		membersSkippedBefore = rep.skipped["tunnelGroupMembers"]
-	}
-	for _, tg := range tunnelGroups {
-		// R5X-009：status {0,1} 枚举门（同 importUsers）——非法行
-		// 整行跳过，不触发占位删除/成员替换/停用收敛等任何处置。
-		if tg.Status != 0 && tg.Status != 1 {
-			rep.skip("tunnelGroups")
-			rep.warnf("备份恢复：隧道分组 #%d（%q）的 status=%d 不在合法枚举 {0,1} 内，已跳过该行未恢复", tg.ID, tg.Name, tg.Status)
-			continue
-		}
-		// D4-02：组名唯一——同名异 id 的既有组先删占位（含其成员），
-		// 以备份为准（与 kernels/relays/user_subscriptions 既有处理一致）。
-		if err := deleteSameNameGroupTx(tx, &model.TunnelGroup{}, "tunnel_group_id", tg.Name, tg.ID, rep); err != nil {
-			return count, err
-		}
-		// R5-FGRP：成员替换只是范围记账——替换前只读旧成员数供
-		// R5X-017 记账；分组状态/成员变动不再撤销任何 user_tunnel
-		// 授权（旧 R3X-005 facet (a) 的差集撤销已随组语义改版删除）。
-		var prevTunnelIDs []int64
-		if err := tx.Model(&model.TunnelGroupTunnel{}).Where("tunnel_group_id = ?", tg.ID).Pluck("tunnel_id", &prevTunnelIDs).Error; err != nil {
-			return count, err
-		}
-		preDeletedMembers += int64(len(prevTunnelIDs))
-		item := model.TunnelGroup{
-			ID:          tg.ID,
-			Name:        tg.Name,
-			CreatedTime: tg.CreatedTime,
-			UpdatedTime: now,
-			Status:      tg.Status,
-		}
-		err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "updated_time", "status"}),
-		}).Create(&item).Error
-		if err != nil {
-			return count, err
-		}
-		if err := tx.Where("tunnel_group_id = ?", tg.ID).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
-			return count, err
-		}
-		for _, tunnelID := range tg.Tunnels {
-			// D4-03：成员引用的隧道不存在时跳过该成员并计数。
-			tunnelExists, err := rowExistsTx(tx, &model.Tunnel{}, tunnelID)
-			if err != nil {
-				return count, err
-			}
-			if !tunnelExists {
-				rep.skip("tunnelGroupMembers")
-				continue
-			}
-			if err := tx.Create(&model.TunnelGroupTunnel{TunnelGroupID: tg.ID, TunnelID: tunnelID, CreatedTime: now}).Error; err != nil {
-				return count, err
-			}
-		}
-		// R5-FGRP：导入落 status≠1 的组只恢复其范围记账，不再按
-		// 停用口径收敛任何授权（旧 R3X-005 facet (c) 已删除）。
-		count++
-	}
-	// R5X-017：预删>0 且本批成员跳过>0 时补 warning（口径同
-	// importTunnels 的 chain 段）。
-	if rep != nil && preDeletedMembers > 0 {
-		if skipped := rep.skipped["tunnelGroupMembers"] - membersSkippedBefore; skipped > 0 {
-			rep.warnf("备份恢复：隧道分组成员（tunnelGroupMembers）重建时目标库原有 %d 条成员行已被移除，其中 %d 条备份成员行因引用隧道不存在被跳过未恢复（原成员已移除且未恢复），请核对分组成员配置", preDeletedMembers, skipped)
-		}
-	}
-	return count, nil
-}
-
-// deleteSameNameGroupTx 删除与待恢复分组同名、异 id 的既有分组行
-// （分组名全局唯一，占位行不删则 upsert 撞唯一约束整单回滚——
-// D4-02）。成员行按组 id 一并删除（成员随后按备份重建）。
-// groupModel 为 TunnelGroup/UserGroup，memberGroupColumn 为成员表
-// 的组外键列名（与 group_permission / group_permission_grant 的
-// 组键列同名）。
-//
-// R3X-005 facet (b)（verdicts §5 裁定，从 H 案、不走删台账路线）：
-// 删占位组前先把 permission/grant 中引用占位组 id 的组键重指向
-// 同名继任组 keepID（同名即同一业务组的继任者，授权随组延续），
-// 计数入 ImportWarnings；继任组已有同键行时合并去重（删占位侧
-// 行），避免撞复合唯一约束整单回滚。grant 合并时按 R5X-005 做
-// 来源 OR/提升（被删行 cb=1 先提升保留行，见 grants 循环内注）。
-func deleteSameNameGroupTx(tx *gorm.DB, groupModel interface{}, memberGroupColumn, name string, keepID int64, rep *importReport) error {
-	var occupying []int64
-	if err := tx.Model(groupModel).Where("name = ? AND id <> ?", name, keepID).Pluck("id", &occupying).Error; err != nil {
-		return err
-	}
-	if len(occupying) == 0 {
-		return nil
-	}
-	var memberModel interface{}
-	switch groupModel.(type) {
-	case *model.TunnelGroup:
-		memberModel = &model.TunnelGroupTunnel{}
-	case *model.UserGroup:
-		memberModel = &model.UserGroupUser{}
-	default:
-		return nil
-	}
-	groupCol := memberGroupColumn
-	otherCol := "tunnel_group_id"
-	if groupCol == "tunnel_group_id" {
-		otherCol = "user_group_id"
-	}
-	repointed, merged := 0, 0
-	for _, occID := range occupying {
-		var perms []model.GroupPermission
-		if err := tx.Where(groupCol+" = ?", occID).Find(&perms).Error; err != nil {
-			return err
-		}
-		for _, p := range perms {
-			otherVal := p.TunnelGroupID
-			if groupCol == "tunnel_group_id" {
-				otherVal = p.UserGroupID
-			}
-			var dup int64
-			if err := tx.Model(&model.GroupPermission{}).Where(groupCol+" = ? AND "+otherCol+" = ?", keepID, otherVal).Count(&dup).Error; err != nil {
-				return err
-			}
-			if dup > 0 {
-				if err := tx.Where("id = ?", p.ID).Delete(&model.GroupPermission{}).Error; err != nil {
-					return err
-				}
-				merged++
-				continue
-			}
-			if err := tx.Model(&model.GroupPermission{}).Where("id = ?", p.ID).Update(groupCol, keepID).Error; err != nil {
-				return err
-			}
-			repointed++
-		}
-		var grants []model.GroupPermissionGrant
-		if err := tx.Where(groupCol+" = ?", occID).Find(&grants).Error; err != nil {
-			return err
-		}
-		for _, g := range grants {
-			otherVal := g.TunnelGroupID
-			if groupCol == "tunnel_group_id" {
-				otherVal = g.UserGroupID
-			}
-			var survivors []model.GroupPermissionGrant
-			if err := tx.Where(groupCol+" = ? AND "+otherCol+" = ? AND user_tunnel_id = ?", keepID, otherVal, g.UserTunnelID).Find(&survivors).Error; err != nil {
-				return err
-			}
-			if len(survivors) > 0 {
-				// R5X-005：合并去重不得直删 cb=1 行而丢组建来源——
-				// 两条同键 grant 并非真重复（cb 是复合唯一键外的语义
-				// 列），删行前先做来源 OR/提升：被删行 cb=1 且保留行
-				// cb=0 时把保留行提升为 cb=1。否则组建来源标记被
-				// 静默抹除、来源台账失真（R5-FGRP 后 cb 仅为来源
-				// 记账，此处保留为台账保真）。
-				if g.CreatedByGroup == 1 {
-					for _, s := range survivors {
-						if s.CreatedByGroup == 1 {
-							continue
-						}
-						if err := tx.Model(&model.GroupPermissionGrant{}).Where("id = ?", s.ID).Update("created_by_group", 1).Error; err != nil {
-							return err
-						}
-					}
-				}
-				if err := tx.Where("id = ?", g.ID).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-					return err
-				}
-				merged++
-				continue
-			}
-			if err := tx.Model(&model.GroupPermissionGrant{}).Where("id = ?", g.ID).Update(groupCol, keepID).Error; err != nil {
-				return err
-			}
-			repointed++
-		}
-	}
-	if repointed+merged > 0 {
-		rep.warnf("备份恢复：同名分组 %q 的占位组被继任组 #%d 替换，已将 %d 条分组权限/授权的组引用重指向继任组（其中 %d 条与继任组既有记录重复、已合并去重）", name, keepID, repointed+merged, merged)
-	}
-	if err := tx.Where(memberGroupColumn+" IN ?", occupying).Delete(memberModel).Error; err != nil {
-		return err
-	}
-	return tx.Where("id IN ?", occupying).Delete(groupModel).Error
-}
-
-func importUserGroups(r *Repository, tx *gorm.DB, userGroups []model.UserGroupBackup, now int64, rep *importReport) (int, error) {
-	count := 0
-	// R5X-017：成员先删后建——预删/跳过记账（同 importTunnelGroups）。
-	var preDeletedMembers int64
-	membersSkippedBefore := 0
-	if rep != nil {
-		membersSkippedBefore = rep.skipped["userGroupMembers"]
-	}
-	for _, ug := range userGroups {
-		// R5X-009：status {0,1} 枚举门（同 importUsers）——非法行
-		// 整行跳过，不触发占位删除/成员替换/停用收敛等任何处置。
-		if ug.Status != 0 && ug.Status != 1 {
-			rep.skip("userGroups")
-			rep.warnf("备份恢复：用户分组 #%d（%q）的 status=%d 不在合法枚举 {0,1} 内，已跳过该行未恢复", ug.ID, ug.Name, ug.Status)
-			continue
-		}
-		// D4-02：组名唯一占位预处理（同 importTunnelGroups）。
-		if err := deleteSameNameGroupTx(tx, &model.UserGroup{}, "user_group_id", ug.Name, ug.ID, rep); err != nil {
-			return count, err
-		}
-		// R5-FGRP：成员替换只是范围记账——替换前只读旧成员数供
-		// R5X-017 记账；不再撤销被移出成员的任何授权（旧 R3X-005
-		// facet (a) 的差集撤销已随组语义改版删除）。
-		var prevUserIDs []int64
-		if err := tx.Model(&model.UserGroupUser{}).Where("user_group_id = ?", ug.ID).Pluck("user_id", &prevUserIDs).Error; err != nil {
-			return count, err
-		}
-		preDeletedMembers += int64(len(prevUserIDs))
-		item := model.UserGroup{
-			ID:          ug.ID,
-			Name:        ug.Name,
-			CreatedTime: ug.CreatedTime,
-			UpdatedTime: now,
-			Status:      ug.Status,
-		}
-		err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "updated_time", "status"}),
-		}).Create(&item).Error
-		if err != nil {
-			return count, err
-		}
-		if err := tx.Where("user_group_id = ?", ug.ID).Delete(&model.UserGroupUser{}).Error; err != nil {
-			return count, err
-		}
-		for _, userID := range ug.Users {
-			// D4-03：成员引用的用户不存在时跳过该成员并计数。
-			userExists, err := rowExistsTx(tx, &model.User{}, userID)
-			if err != nil {
-				return count, err
-			}
-			if !userExists {
-				rep.skip("userGroupMembers")
-				continue
-			}
-			if err := tx.Create(&model.UserGroupUser{UserGroupID: ug.ID, UserID: userID, CreatedTime: now}).Error; err != nil {
-				return count, err
-			}
-		}
-		// R5-FGRP：导入落 status≠1 的组只恢复其范围记账，不再按
-		// 停用口径收敛任何授权（旧 R3X-005 facet (c) 已删除，
-		// 与隧道组段同口径，见 importTunnelGroups）。
-		count++
-	}
-	// R5X-017：预删>0 且本批成员跳过>0 时补 warning（口径同
-	// importTunnelGroups）。
-	if rep != nil && preDeletedMembers > 0 {
-		if skipped := rep.skipped["userGroupMembers"] - membersSkippedBefore; skipped > 0 {
-			rep.warnf("备份恢复：用户分组成员（userGroupMembers）重建时目标库原有 %d 条成员行已被移除，其中 %d 条备份成员行因引用用户不存在被跳过未恢复（原成员已移除且未恢复），请核对分组成员配置", preDeletedMembers, skipped)
-		}
-	}
-	return count, nil
-}
-
-func importPermissions(r *Repository, tx *gorm.DB, permissions []model.PermissionBackup, _ int64, rep *importReport) (int, error) {
-	count := 0
-	for _, p := range permissions {
-		// D4-03：引用的用户组/隧道组不存在时整行跳过并计数。
-		ugExists, err := rowExistsTx(tx, &model.UserGroup{}, p.UserGroupID)
-		if err != nil {
-			return count, err
-		}
-		tgExists, err := rowExistsTx(tx, &model.TunnelGroup{}, p.TunnelGroupID)
-		if err != nil {
-			return count, err
-		}
-		if !ugExists || !tgExists {
-			rep.skip("permissions")
-			continue
-		}
-		// D4-02：(user_group_id, tunnel_group_id) 复合唯一——同键
-		// 异 id 的既有行先删占位，以备份为准。
-		if err := tx.Where("user_group_id = ? AND tunnel_group_id = ? AND id <> ?", p.UserGroupID, p.TunnelGroupID, p.ID).
-			Delete(&model.GroupPermission{}).Error; err != nil {
-			return count, err
-		}
-		item := model.GroupPermission{
-			ID:            p.ID,
-			UserGroupID:   p.UserGroupID,
-			TunnelGroupID: p.TunnelGroupID,
-			CreatedTime:   p.CreatedTime,
-		}
-		err = tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"user_group_id", "tunnel_group_id"}),
-		}).Create(&item).Error
-		if err != nil {
-			return count, err
-		}
-		// R5-FGRP：台账只是来源记账——任一侧组停用时 grants 照常
-		// 按备份恢复，不跳过、不收敛（旧 R3X-005 facet (c) 的停用
-		// 跳过＋收敛撤销已随组语义改版删除）。
-		for _, g := range p.Grants {
-			// D4-03：grant 引用的 user_tunnel 不存在时跳过该条并计数。
-			utExists, err := rowExistsTx(tx, &model.UserTunnel{}, g.UserTunnelID)
-			if err != nil {
-				return count, err
-			}
-			if !utExists {
-				rep.skip("permissionGrants")
-				continue
-			}
-			// R2X-037：grant 组键强制取父 permission 组键。导出不变量
-			// 是「grant 组键恒等于父组键」（exportPermissions 按父组键
-			// 查 grant），自带值与父不一致本身即不一致数据——忽略
-			// 自带值、按父组键写回并计 warning，不写悬空/错组行。
-			if g.UserGroupID != p.UserGroupID || g.TunnelGroupID != p.TunnelGroupID {
-				rep.warnf("备份恢复：权限 #%d 的授权 #%d 自带组引用（用户组 %d / 隧道组 %d）与父权限组（%d / %d）不一致，已按父权限组写回", p.ID, g.ID, g.UserGroupID, g.TunnelGroupID, p.UserGroupID, p.TunnelGroupID)
-			}
-			// R4-G-S02 顺查（批 4 落地）：grant 的成员对应校验——
-			// UT 的 (user,tunnel) 应分别属父权限对的 user_group /
-			// tunnel_group 成员（合法备份的导出不变量）。对应关系
-			// 不成立时不跳行：permissions 单段部分导入时成员面由
-			// 分组段另行恢复，跳行会误伤 R2X-037 已定的父组键
-			// 写回口径。
-			// R5X-014 窄硬门案 A（verdicts §5.3 写死）：在上述口径
-			// 上仅对 cb=1 且对应不成立的行加硬门——写回时降级为
-			// cb=0 并以 warning 明示降级，使错位备份的组建标志
-			// 不被写回为真：来源台账只记录成员对应成立的组展开
-			// 来源（R5-FGRP 后 cb 仅为来源记账、无任何连带删除
-			// 语义，此门保留为台账保真）；cb=0 行维持原 warning
-			// 原样。回执语义与 H 域对齐一套：走 ImportWarnings、
-			// 不计 SkippedRows、行照常落库、PermissionsImported
-			// 计数不变。
-			var utRow model.UserTunnel
-			if err := tx.Select("user_id", "tunnel_id").Where("id = ?", g.UserTunnelID).First(&utRow).Error; err != nil {
-				return count, err
-			}
-			holds, err := grantPairMembershipHoldsTx(tx, p.UserGroupID, p.TunnelGroupID, utRow.UserID, utRow.TunnelID)
-			if err != nil {
-				return count, err
-			}
-			effectiveCB := g.CreatedByGroup
-			if !holds {
-				if g.CreatedByGroup == 1 {
-					effectiveCB = 0
-					rep.warnf("备份恢复：权限 #%d 的授权 #%d 指向的用户隧道 #%d（用户 %d / 隧道 %d）与权限对成员对应关系不成立（用户不在用户组 #%d 成员内或隧道不在隧道组 #%d 成员内），其组建来源（created_by_group=1）已降级为普通登记来源（created_by_group=0）按父权限组写回，请核对该授权来源", p.ID, g.ID, g.UserTunnelID, utRow.UserID, utRow.TunnelID, p.UserGroupID, p.TunnelGroupID)
-				} else {
-					rep.warnf("备份恢复：权限 #%d 的授权 #%d 指向的用户隧道 #%d（用户 %d / 隧道 %d）与权限对成员对应关系不成立（用户不在用户组 #%d 成员内或隧道不在隧道组 #%d 成员内），已按父权限组写回，请核对该授权来源", p.ID, g.ID, g.UserTunnelID, utRow.UserID, utRow.TunnelID, p.UserGroupID, p.TunnelGroupID)
-				}
-			}
-			// D4-02：(user_group_id, tunnel_group_id, user_tunnel_id)
-			// 复合唯一占位预处理（键取强制后的父组键）。
-			// R6X-004：删占位行前先查其 cb——同键合并去重删 grant
-			// 前必须做来源 OR（R5X-005 已在 deleteSameNameGroupTx
-			// 确立的口径，本点为同型第四份实现）：占位行任一
-			// cb=1 且本行有效 cb（effectiveCB，经 R5X-014 降级
-			// 判定后）为 0 时，把落库行提升为 cb=1 并以 warning
-			// 披露合并，否则组建来源标记被静默抹除、来源台账
-			// 失真；effectiveCB==1 时合并无损、免 warning。
-			var occupyingGrants []model.GroupPermissionGrant
-			if err := tx.Where("user_group_id = ? AND tunnel_group_id = ? AND user_tunnel_id = ? AND id <> ?",
-				p.UserGroupID, p.TunnelGroupID, g.UserTunnelID, g.ID).
-				Find(&occupyingGrants).Error; err != nil {
-				return count, err
-			}
-			if effectiveCB == 0 {
-				for _, occ := range occupyingGrants {
-					if occ.CreatedByGroup == 1 {
-						effectiveCB = 1
-						rep.warnf("备份恢复：权限 #%d 的授权 #%d 与目标库同键既有授权 #%d 合并，既有授权的组建来源（created_by_group=1）已合并保留至恢复行（created_by_group=1），请核对", p.ID, g.ID, occ.ID)
-						break
-					}
-				}
-			}
-			if err := tx.Where("user_group_id = ? AND tunnel_group_id = ? AND user_tunnel_id = ? AND id <> ?",
-				p.UserGroupID, p.TunnelGroupID, g.UserTunnelID, g.ID).
-				Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-				return count, err
-			}
-			grantItem := model.GroupPermissionGrant{
-				ID:             g.ID,
-				UserGroupID:    p.UserGroupID,
-				TunnelGroupID:  p.TunnelGroupID,
-				UserTunnelID:   g.UserTunnelID,
-				CreatedTime:    g.CreatedTime,
-				CreatedByGroup: effectiveCB,
-			}
-			// R2X-037：DoUpdates 补组键两列，存量错误行可被重导入纠正
-			//（旧列单只有 user_tunnel_id/created_by_group，错组永不更新）。
-			err = tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "id"}},
-				DoUpdates: clause.AssignmentColumns([]string{"user_group_id", "tunnel_group_id", "user_tunnel_id", "created_by_group"}),
-			}).Create(&grantItem).Error
-			if err != nil {
-				return count, err
-			}
-		}
-		count++
-	}
-	return count, nil
-}
-
-// normalizeImportedMonitoringConfigValue 是 B14-002 的恢复面校验落点：
-// 保存面 normalizeAndValidateConfigValue（handler）的等价校验在
-// 恢复面复刻——监控开关枚举 true/false（归一为小写）、保留天数与
-// 探测间隔走 monitoring.Normalize* 可解析性（归一为标准整数串）；
-// R2-048 起 notify_daily_hour（0–23 值域）同入本面，走同包单点
-// NormalizeNotifyDailyHour，与其保存面 case 共用同一实现。
-// 与保存面同源的 Normalize* 是唯一校验源，不另写一份范围常量；
-// 未列名键原样返回。返回归一后的值（与保存面落库形态一致）。
 func normalizeImportedMonitoringConfigValue(name, value string) (string, error) {
 	switch name {
 	case "monitor_tunnel_quality_enabled":

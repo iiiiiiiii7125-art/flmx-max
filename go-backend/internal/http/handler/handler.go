@@ -297,7 +297,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/user/delete", h.userDelete)
 	mux.HandleFunc("/api/v1/user/reset", h.userResetFlow)
 	mux.HandleFunc("/api/v1/user/quota/reset", h.userQuotaReset)
-	mux.HandleFunc("/api/v1/user/groups", h.userGroups)
 	mux.HandleFunc("/api/v1/public/config/get", h.getPublicConfigByName)
 	mux.HandleFunc("/api/v1/config/get", h.getConfigByName)
 	mux.HandleFunc("/api/v1/config/list", h.getConfigs)
@@ -454,19 +453,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/speed-limit/delete", h.speedLimitDelete)
 	mux.HandleFunc("/api/v1/tunnel/user/tunnel", h.userTunnelVisibleList)
 	mux.HandleFunc("/api/v1/tunnel/user/list", h.userTunnelList)
-	mux.HandleFunc("/api/v1/group/tunnel/list", h.tunnelGroupList)
-	mux.HandleFunc("/api/v1/group/tunnel/create", h.groupTunnelCreate)
-	mux.HandleFunc("/api/v1/group/tunnel/update", h.groupTunnelUpdate)
-	mux.HandleFunc("/api/v1/group/tunnel/delete", h.groupTunnelDelete)
-	mux.HandleFunc("/api/v1/group/tunnel/assign", h.groupTunnelAssign)
-	mux.HandleFunc("/api/v1/group/user/list", h.userGroupList)
-	mux.HandleFunc("/api/v1/group/user/create", h.groupUserCreate)
-	mux.HandleFunc("/api/v1/group/user/update", h.groupUserUpdate)
-	mux.HandleFunc("/api/v1/group/user/delete", h.groupUserDelete)
-	mux.HandleFunc("/api/v1/group/user/assign", h.groupUserAssign)
-	mux.HandleFunc("/api/v1/group/permission/list", h.groupPermissionList)
-	mux.HandleFunc("/api/v1/group/permission/assign", h.groupPermissionAssign)
-	mux.HandleFunc("/api/v1/group/permission/remove", h.groupPermissionRemove)
 	mux.HandleFunc("/api/v1/open_api/sub_store", h.openAPISubStore)
 	mux.HandleFunc("/api/v1/federation/share/list", h.federationShareList)
 	mux.HandleFunc("/api/v1/federation/share/create", h.federationShareCreate)
@@ -1267,48 +1253,6 @@ func (h *Handler) userTunnelList(w http.ResponseWriter, r *http.Request) {
 		out = append(out, item)
 	}
 	response.WriteJSON(w, response.OK(out))
-}
-
-func (h *Handler) tunnelGroupList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		response.WriteJSON(w, response.ErrDefault("请求失败"))
-		return
-	}
-
-	items, err := h.repo.ListTunnelGroups()
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OK(items))
-}
-
-func (h *Handler) userGroupList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		response.WriteJSON(w, response.ErrDefault("请求失败"))
-		return
-	}
-
-	items, err := h.repo.ListUserGroups()
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OK(items))
-}
-
-func (h *Handler) groupPermissionList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		response.WriteJSON(w, response.ErrDefault("请求失败"))
-		return
-	}
-
-	items, err := h.repo.ListGroupPermissions()
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OK(items))
 }
 
 func (h *Handler) checkCaptcha(w http.ResponseWriter, r *http.Request) {

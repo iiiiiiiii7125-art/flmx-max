@@ -175,14 +175,12 @@ func TestK8DeleteTunnelCascadeBeyondSQLiteVariableLimit(t *testing.T) {
 	if err := r.DB().CreateInBatches(userTunnels, 1000).Error; err != nil {
 		t.Fatalf("seed user tunnels: %v", err)
 	}
-	// 样本附属行：前 32 条 forward 的端口/计数/relay+授权、
-	// 前 32 条 user_tunnel 的分组授权台账。
+	// 样本附属行：前 32 条 forward 的端口/计数/relay+授权。
 	const attachN = 32
 	fps := make([]model.ForwardPort, 0, attachN)
 	nfts := make([]model.NftCounterState, 0, attachN)
 	relays := make([]model.NodeInboundRelay, 0, attachN)
 	grants := make([]model.UserInbound, 0, attachN)
-	permGrants := make([]model.GroupPermissionGrant, 0, attachN)
 	for i := 0; i < attachN; i++ {
 		fwdID := 200000 + int64(i)
 		relayID := 500000 + int64(i)
@@ -190,13 +188,10 @@ func TestK8DeleteTunnelCascadeBeyondSQLiteVariableLimit(t *testing.T) {
 		nfts = append(nfts, model.NftCounterState{NodeID: 1, ForwardID: fwdID, Protocol: "tcp", Direction: "in"})
 		relays = append(relays, model.NodeInboundRelay{ID: relayID, InboundID: 99, ForwardID: fwdID, CreatedTime: now})
 		grants = append(grants, model.UserInbound{UserID: 9, InboundID: 99, RelayID: relayID})
-		permGrants = append(permGrants, model.GroupPermissionGrant{
-			UserGroupID: 1, TunnelGroupID: 1, UserTunnelID: 300000 + int64(i), CreatedTime: now,
-		})
 	}
 	for name, rows := range map[string]interface{}{
 		"forward ports": fps, "nft states": nfts, "relays": relays,
-		"grants": grants, "permission grants": permGrants,
+		"grants": grants,
 	} {
 		if err := r.DB().CreateInBatches(rows, 1000).Error; err != nil {
 			t.Fatalf("seed %s: %v", name, err)
@@ -231,9 +226,6 @@ func TestK8DeleteTunnelCascadeBeyondSQLiteVariableLimit(t *testing.T) {
 	}
 	if n := countWhere(t, r, "user_inbound", "relay_id >= ? AND relay_id < ?", 500000, 500000+attachN); n != 0 {
 		t.Fatalf("sample relay grants left: %d", n)
-	}
-	if n := countWhere(t, r, "group_permission_grant", "user_tunnel_id >= ? AND user_tunnel_id < ?", 300000, 300000+attachN); n != 0 {
-		t.Fatalf("sample permission grants left: %d", n)
 	}
 	// 墓碑语义不因分块改变。
 	if n := countWhere(t, r, "forward", "id = ?", 900001); n != 1 {

@@ -19,7 +19,7 @@ import (
 // （R2X-003/004/032，BC-R2-06）：创建类 POST 的请求级幂等。
 //
 // 新增创建端点必须同批接入幂等（idemBegin），
-// 不得留待后续批次补接。当前覆盖面 14 个创建 handler（scope 常量）：
+// 不得留待后续批次补接。当前覆盖面 13 个创建 handler（scope 常量）：
 //
 // forwardCreate "forward:create" （mutations.go）
 // nodeCreate "node:create" （mutations.go）
@@ -33,7 +33,6 @@ import (
 // subscriptionTemplateSave "subscription-template:create" （仅 ID==0 新建分支，R10-06 补接）
 // tunnelCreate "tunnel:create" （mutations.go）
 // userCreate "user:create" （mutations.go）
-// groupCreate "user-group:create" / "tunnel-group:create"
 //
 // C1-06（1.9.5 发版后审计）补接凭据轮换三面：轮换不是创建，但
 // 与重复创建同害型——重复执行使首轮刚生成/分发的凭据立即作废，

@@ -97,7 +97,7 @@ func TestR31H01StatisticsFlowInflationAfterRestore(t *testing.T) {
 
 var r31H01AllBackupTypes = []string{
 	"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
-	"tunnelGroups", "userGroups", "permissions", "configs", "inbounds",
+	"configs", "inbounds",
 	"userInbounds", "announcements", "monitorPermissions",
 	"userSubscriptions", "serviceMonitors",
 }

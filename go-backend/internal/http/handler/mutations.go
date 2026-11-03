@@ -133,17 +133,8 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// O5-004：CreateUser + 配额配置 + 分组三步包在同一个事务里，任一步失败整体回滚。
-	// 旧逻辑三步各自提交，后续失败会留下半成品账号（重试时用户名已被占用）。
-	// B03-001（R3 K4）：groupIds 原始值先于 asInt64Slice 的过滤做
-	// fail-closed 检查——asInt64Slice 静默丢弃 id<=0，[-5] 会被当作
-	// 未指定分组静默建户；与分组 assign 面「成员ID非法」同口径整单
-	// 拒绝（首写之前；repo 侧 AddUserToGroupsTx 另有同守卫兜底）。
-	if bad := nonPositiveRawIDs(req["groupIds"]); len(bad) > 0 {
-		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("成员ID非法: %v", bad)))
-		return
-	}
-	groupIDs := asInt64Slice(req["groupIds"])
+	// O5-004：CreateUser + 配额配置两步包在同一个事务里，任一步失败整体回滚。
+	// 旧逻辑两步各自提交，后续失败会留下半成品账号（重试时用户名已被占用）。
 	tx := h.repo.BeginTx()
 	if tx == nil || tx.Error != nil {
 		response.WriteJSON(w, response.Err(-2, "database unavailable"))
@@ -166,19 +157,11 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(groupIDs) > 0 {
-		if err := h.repo.AddUserToGroupsTx(tx, userID, groupIDs, now); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
-			return
-		}
-	}
 	if err := tx.Commit().Error; err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 
-	// R5-FGRP：分组只是分配范围记账——建用户时登记成员关系即止，
-	// 不再按组权限展开任何隧道授权（旧「分组父权限同步」已删除）。
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -313,29 +296,10 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// R2X-036（校验前置档）：分组存在性与配额解析全部前移到首写之前。
-	// 旧实现主行先落库、分组段/配额段后失败，报错与落库事实不符
+	// R2X-036（校验前置档）：配额解析全部前移到首写之前。
+	// 旧实现主行先落库、配额段后失败，报错与落库事实不符
 	// （改名已生效却回「保存失败」）。配额单侧补齐的只读查询同理前移，
 	// 其读取失败也不再发生在主行写入之后。
-	var updateGroupIDs []int64
-	hasUpdateGroupIDs := false
-	if groupIDsRaw, ok := req["groupIds"]; ok {
-		hasUpdateGroupIDs = true
-		// B03-001（R3 K4）：同 userCreate——原始值 fail-closed 前置
-		// 检查（本块为 R2X-036 校验前置段，仍在首写之前）。此前
-		// [-5] 被 asInt64Slice 过滤为空集，替换语义会把该用户全部
-		// 分组归属静默清空却回成功（repo 侧
-		// ReplaceUserGroupsByUserIDTx 另有同守卫兜底）。
-		if bad := nonPositiveRawIDs(groupIDsRaw); len(bad) > 0 {
-			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("成员ID非法: %v", bad)))
-			return
-		}
-		updateGroupIDs = asInt64Slice(groupIDsRaw)
-		if err := h.repo.ValidateIDsExist("user_group", updateGroupIDs); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
-			return
-		}
-	}
 	var updateDailyQuotaGB, updateMonthlyQuotaGB int64
 	hasUpdateQuota := hasDailyQuota || hasMonthlyQuota
 	if hasUpdateQuota {
@@ -427,27 +391,6 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if hasUpdateGroupIDs {
-		newGroupIDs := updateGroupIDs
-		// X-P2-6：分组成员替换在事务内完成；replaceErr 必须上抛，
-		// 不再吞错回成功。R5-FGRP：成员变动只是范围记账——被移出
-		// 分组不再连带撤销任何隧道授权、加入分组也不再展开授权
-		// （旧 X-P1-2① 撤销与父权限同步已随组语义改版删除）。
-		tx := h.repo.BeginTx()
-		if tx == nil || tx.Error != nil {
-			response.WriteJSON(w, response.Err(-2, "database unavailable"))
-			return
-		}
-		defer func() { tx.Rollback() }()
-		if _, _, replaceErr := h.repo.ReplaceUserGroupsByUserIDTx(tx, id, newGroupIDs, now); replaceErr != nil {
-			response.WriteJSON(w, response.Err(-2, replaceErr.Error()))
-			return
-		}
-		if err := tx.Commit().Error; err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
-			return
-		}
-	}
 	if oldUser.MaxConn != maxConn {
 		warnings, syncErr := h.syncUserMaxConnForwards(id)
 		if syncErr != nil {
@@ -461,45 +404,6 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.WriteJSON(w, response.OKEmpty())
-}
-
-func (h *Handler) userGroups(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		response.WriteJSON(w, response.ErrDefault("请求失败"))
-		return
-	}
-	// F-066：分组归属可辅助推断组织/权限结构，仅管理员或本人可查
-	// （同组其余 user 管理端点均仅管理员；此前任意登录用户可查任意用户）。
-	actorID, roleID, err := userRoleFromRequest(r)
-	if err != nil {
-		response.WriteJSON(w, response.Err(401, "未登录或token已过期"))
-		return
-	}
-	id := idFromBody(r, w)
-	if id <= 0 {
-		return
-	}
-	if roleID != 0 && actorID != id {
-		response.WriteJSON(w, response.Err(403, "无权限"))
-		return
-	}
-	// B02-004：与同族接口（G-QUOTA-01 等）对齐——查不存在的用户
-	// 报错，不再回 code=0 空列表（空列表与「真实无分组」不可区分）。
-	u, err := h.repo.GetUserByID(id)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if u == nil {
-		response.WriteJSON(w, response.ErrDefault("用户不存在"))
-		return
-	}
-	ids, err := h.repo.GetUserGroupIDsByUserID(id)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OK(ids))
 }
 
 func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
@@ -6218,328 +6122,6 @@ func (h *Handler) resyncForwardsForSpeedLimit(speedLimitID int64, forwardIDs []i
 	return warnings
 }
 
-func (h *Handler) groupTunnelCreate(w http.ResponseWriter, r *http.Request) {
-	h.groupCreate(w, r, "tunnel_group")
-}
-
-func (h *Handler) groupTunnelUpdate(w http.ResponseWriter, r *http.Request) {
-	h.groupUpdate(w, r, "tunnel_group")
-}
-
-func (h *Handler) groupTunnelDelete(w http.ResponseWriter, r *http.Request) {
-	h.groupDelete(w, r, "tunnel_group")
-}
-
-func (h *Handler) groupUserCreate(w http.ResponseWriter, r *http.Request) {
-	h.groupCreate(w, r, "user_group")
-}
-
-func (h *Handler) groupUserUpdate(w http.ResponseWriter, r *http.Request) {
-	h.groupUpdate(w, r, "user_group")
-}
-
-func (h *Handler) groupUserDelete(w http.ResponseWriter, r *http.Request) {
-	h.groupDelete(w, r, "user_group")
-}
-
-func (h *Handler) groupTunnelAssign(w http.ResponseWriter, r *http.Request) {
-	if !requirePost(w, r) {
-		return
-	}
-	var req struct {
-		GroupID   int64   `json:"groupId"`
-		TunnelIDs []int64 `json:"tunnelIds"`
-	}
-	if err := decodeJSON(r.Body, &req); err != nil || req.GroupID <= 0 {
-		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
-		return
-	}
-	tx := h.repo.BeginTx()
-	if tx.Error != nil {
-		response.WriteJSON(w, response.Err(-2, tx.Error.Error()))
-		return
-	}
-	defer func() { tx.Rollback() }()
-	// R5-FGRP：隧道入组/出组只是范围记账——成员替换即止，不再按
-	// 差集撤销任何隧道授权、不再同步展开（旧 X-P1-2② 撤销与父
-	// 权限同步已随组语义改版删除）。
-	if err := h.repo.ReplaceTunnelGroupMembersTx(tx, req.GroupID, req.TunnelIDs, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if err := tx.Commit().Error; err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OKEmpty())
-}
-
-func (h *Handler) groupUserAssign(w http.ResponseWriter, r *http.Request) {
-	if !requirePost(w, r) {
-		return
-	}
-	var req struct {
-		GroupID int64   `json:"groupId"`
-		UserIDs []int64 `json:"userIds"`
-	}
-	if err := decodeJSON(r.Body, &req); err != nil || req.GroupID <= 0 {
-		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
-		return
-	}
-	tx := h.repo.BeginTx()
-	if tx.Error != nil {
-		response.WriteJSON(w, response.Err(-2, tx.Error.Error()))
-		return
-	}
-	defer func() { tx.Rollback() }()
-	// R5-FGRP：成员增减只是范围记账——替换即止，不再按差集撤销
-	// 被移出成员的任何隧道授权、不再同步展开（与 groupTunnelAssign
-	// 同口径，旧差集撤销与父权限同步已随组语义改版删除）。
-	if err := h.repo.ReplaceUserGroupMembersTx(tx, req.GroupID, req.UserIDs, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if err := tx.Commit().Error; err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OKEmpty())
-}
-
-func (h *Handler) groupPermissionAssign(w http.ResponseWriter, r *http.Request) {
-	if !requirePost(w, r) {
-		return
-	}
-	var req struct {
-		UserGroupID   int64 `json:"userGroupId"`
-		TunnelGroupID int64 `json:"tunnelGroupId"`
-	}
-	if err := decodeJSON(r.Body, &req); err != nil || req.UserGroupID <= 0 || req.TunnelGroupID <= 0 {
-		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
-		return
-	}
-	// R2X-013: assigning to a disabled group is an explicit error, and
-	// R2X-012: both groups must exist — both checked before any write.
-	for _, g := range []struct {
-		table string
-		id    int64
-		label string
-	}{
-		{"user_group", req.UserGroupID, "用户分组"},
-		{"tunnel_group", req.TunnelGroupID, "隧道分组"},
-	} {
-		gStatus, gExists, gErr := h.repo.GetGroupStatus(g.table, g.id)
-		if gErr != nil {
-			response.WriteJSON(w, response.Err(-2, gErr.Error()))
-			return
-		}
-		if !gExists {
-			response.WriteJSON(w, response.ErrDefault(g.label+"不存在"))
-			return
-		}
-		if gStatus != 1 {
-			response.WriteJSON(w, response.ErrDefault(g.label+"已停用，无法分配权限"))
-			return
-		}
-	}
-	// R5-FGRP：组权限只是范围登记——Insert 即止，不再把组内用户
-	// ×组内隧道展开成实体授权、不触发任何转发下发。该范围只在
-	// 日后给组内用户逐个分配隧道时，由 upsertUserTunnelDB 的
-	// 分组范围门执法（超范围分配显式拒绝并点名）。
-	if err := h.repo.InsertGroupPermission(req.UserGroupID, req.TunnelGroupID, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OK("权限分配成功"))
-}
-
-func (h *Handler) groupPermissionRemove(w http.ResponseWriter, r *http.Request) {
-	id := idFromBody(r, w)
-	if id <= 0 {
-		return
-	}
-	tx := h.repo.BeginTx()
-	if tx.Error != nil {
-		response.WriteJSON(w, response.Err(-2, tx.Error.Error()))
-		return
-	}
-	defer func() { tx.Rollback() }()
-
-	_, _, exists, err := h.repo.GetGroupPermissionPairByIDTx(tx, id)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	// B03-003（拆分项）：permission/remove 对不存在的记录报错——
-	// remove 非单删、不在 X-P3-28 单删幂等清单内，且同族 assign/
-	// update 均对不存在报错；此前 exists=false 仍走完删除回成功，
-	// 管理员删错 id 无从察觉。（分组单删子项属既定幂等语义，不修。）
-	if !exists {
-		response.WriteJSON(w, response.ErrDefault("分组权限记录不存在"))
-		return
-	}
-
-	// R5-FGRP：撤权只是删范围登记行——不再按台账撤销任何实体
-	// 授权、不清理转发（旧 pair 撤销已随组语义改版删除）。范围
-	// 收缩只影响之后的新分配。
-	if err := h.repo.DeleteGroupPermissionByIDTx(tx, id); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-
-	if err := tx.Commit().Error; err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OKEmpty())
-}
-
-func (h *Handler) groupCreate(w http.ResponseWriter, r *http.Request, table string) {
-	if !requirePost(w, r) {
-		return
-	}
-	var req map[string]interface{}
-	if err := decodeJSON(r.Body, &req); err != nil {
-		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
-		return
-	}
-	// R2X-004：创建面接入 Idempotency-Key（机制见 idempotency.go）。
-	{
-		groupScope := "user-group:create"
-		if table == "tunnel_group" {
-			groupScope = "tunnel-group:create"
-		}
-		var finish func()
-		var replayed bool
-		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), groupScope)
-		defer finish()
-		if replayed {
-			return
-		}
-	}
-	name := asString(req["name"])
-	if name == "" {
-		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
-		return
-	}
-	// R2 B03-001：名称按列宽 varchar(100) 校验（O5-002 同型）——此前
-	// 无长度门，SQLite 静默落库、PG 吐未转译的原始落库错误。
-	if len([]rune(name)) > 100 {
-		response.WriteJSON(w, response.ErrDefault("分组名称长度不能超过100个字符"))
-		return
-	}
-	// R4X-012: status 枚举 {0,1}（与 user 族同口径）——非法值直存会造出
-	// 既非启用又非停用的「僵尸组」：分配范围门按 !=1 不计入约束、
-	// 停用记账又不触发，两头不靠。
-	if status := asInt(req["status"], 1); status != 0 && status != 1 {
-		response.WriteJSON(w, response.ErrDefault("分组状态只能为 0 或 1"))
-		return
-	}
-	now := time.Now().UnixMilli()
-	if err := h.repo.GroupCreate(table, name, asInt(req["status"], 1), now); err != nil {
-		// B03-002：重名命中唯一约束时转译为人话文案（与隧道创建的
-		// 「隧道名称重复」口径对齐），不回吐 DB 原文。
-		if isUniqueConstraintErr(err) {
-			response.WriteJSON(w, response.ErrDefault("分组名称已存在"))
-			return
-		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OKEmpty())
-}
-
-func (h *Handler) groupUpdate(w http.ResponseWriter, r *http.Request, table string) {
-	if !requirePost(w, r) {
-		return
-	}
-	var req map[string]interface{}
-	if err := decodeJSON(r.Body, &req); err != nil {
-		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
-		return
-	}
-	id := asInt64(req["id"], 0)
-	if id <= 0 {
-		response.WriteJSON(w, response.ErrDefault("分组ID不能为空"))
-		return
-	}
-	// R5-FGRP（取代 R2X-013/R3X-004 的停用执法）：停用/启用只是
-	// 范围记账的状态位——停用使该组不再产生分配范围约束，启用使
-	// 其恢复，两种方向都不新建、不删除任何实体授权、不清理转发
-	// （旧「停用按台账撤销＋启用 sync 补发」已随组语义改版删除）。
-	// R3X-020：presence 语义（对照 userUpdate 正本）——req 缺 name/
-	// status key 时以旧行现值填充，不再把缺省 status 当 1 启用停用组、
-	// 不再把缺省 name 清空。
-	tx := h.repo.BeginTx()
-	if tx == nil || tx.Error != nil {
-		response.WriteJSON(w, response.Err(-2, "database unavailable"))
-		return
-	}
-	defer func() { tx.Rollback() }()
-	oldName, oldStatus, exists, err := h.repo.GetGroupRowTx(tx, table, id)
-	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if !exists {
-		response.WriteJSON(w, response.ErrDefault("分组不存在"))
-		return
-	}
-	newName := oldName
-	if _, ok := req["name"]; ok {
-		newName = asString(req["name"])
-	}
-	newStatus := oldStatus
-	if _, ok := req["status"]; ok {
-		newStatus = asInt(req["status"], oldStatus)
-	}
-	// R4X-012: presence 回填后仍须过 create 同口径校验——显式空名拒绝
-	// （缺席已由旧行回填）、status 枚举 {0,1}；校验在落库之前，
-	// 拒绝即整单不生效。
-	if newName == "" {
-		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
-		return
-	}
-	// R2 B03-001：同 groupCreate——回填后的合并名按列宽 100 校验。
-	if len([]rune(newName)) > 100 {
-		response.WriteJSON(w, response.ErrDefault("分组名称长度不能超过100个字符"))
-		return
-	}
-	if newStatus != 0 && newStatus != 1 {
-		response.WriteJSON(w, response.ErrDefault("分组状态只能为 0 或 1"))
-		return
-	}
-	if err := h.repo.GroupUpdateTx(tx, table, id, newName, newStatus, time.Now().UnixMilli()); err != nil {
-		// B03-002：改名撞重名同 groupCreate 转译，不回吐 DB 原文。
-		if isUniqueConstraintErr(err) {
-			response.WriteJSON(w, response.ErrDefault("分组名称已存在"))
-			return
-		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	if err := tx.Commit().Error; err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OKEmpty())
-}
-
-func (h *Handler) groupDelete(w http.ResponseWriter, r *http.Request, table string) {
-	id := idFromBody(r, w)
-	if id <= 0 {
-		return
-	}
-	// R5-FGRP：删组只删组与范围记账行（成员/权限对/台账），不再
-	// 撤销任何实体授权、不清理转发（旧 X-P1-2③ 的级联撤销已随
-	// 组语义改版删除）；已分配授权的增删只走用户分配面。
-	if err := h.repo.GroupDeleteCascade(table, id); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
-		return
-	}
-	response.WriteJSON(w, response.OKEmpty())
-}
-
 type tunnelRuntimeNode struct {
 	NodeID    int64
 	Protocol  string
@@ -9223,43 +8805,6 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 	return nil
 }
 
-// checkGroupAssignmentScope enforces the R5-FGRP group scope on NEW
-// user-tunnel assignments (the single chokepoint shared by single and
-// batch assignment): when the user's enabled user groups hold group
-// permissions, the assignable set is the union of the authorized
-// tunnel groups' tunnels, and assigning a tunnel outside it is an
-// explicit rejection naming the tunnel — groups define the selectable
-// range only, they never grant anything by themselves. Users without
-// constraining pairs assign freely. Existing rows (the update branch
-// of upsertUserTunnelDB) are not gated: editing a grant that already
-// exists is not a new assignment.
-func (h *Handler) checkGroupAssignmentScope(tx *gorm.DB, userID, tunnelID int64) error {
-	var constrained bool
-	var scope map[int64]struct{}
-	var err error
-	if tx != nil {
-		constrained, scope, err = h.repo.GroupAssignmentScopeTx(tx, userID)
-	} else {
-		constrained, scope, err = h.repo.GroupAssignmentScope(userID)
-	}
-	if err != nil {
-		return err
-	}
-	if !constrained {
-		return nil
-	}
-	if _, ok := scope[tunnelID]; ok {
-		return nil
-	}
-	// 点名取隧道名必须走同一事务（批量路径）：连接池句柄会被未决
-	// 事务占住（SQLite MaxOpenConns(1)），池上查询将死锁。
-	name, nameErr := h.repo.GetTunnelNameTx(tx, tunnelID)
-	if nameErr != nil || name == "" {
-		return fmt.Errorf("隧道 #%d 不在该用户所属分组的授权范围内，无法分配（分组仅限定可分配范围，请先调整分组权限或分组成员）", tunnelID)
-	}
-	return fmt.Errorf("隧道「%s」(#%d) 不在该用户所属分组的授权范围内，无法分配（分组仅限定可分配范围，请先调整分组权限或分组成员）", name, tunnelID)
-}
-
 // upsertUserTunnelDB performs only the DB portion of a user-tunnel
 // assignment. With tx == nil it writes directly (single assignment); with a
 // tx it participates in the caller's transaction (X-P3-22 batch assignment).
@@ -9343,11 +8888,6 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 	}
 
 	if lookupErr == sql.ErrNoRows {
-		// R5-FGRP 分组范围门：新建授权时执法（单条与批量分配共用
-		// 本落点）；命中范围外即整单拒绝，批量时整批回滚不落半批。
-		if err := h.checkGroupAssignmentScope(tx, userID, tunnelID); err != nil {
-			return nil, err
-		}
 		if reqFlow < 0 || reqNum < 0 || reqExpTime < 0 || reqFlowReset < 0 {
 			var uFlow, uExp, uReset int64
 			var uNum int

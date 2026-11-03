@@ -311,63 +311,11 @@ type UserSubscription struct {
 
 func (UserSubscription) TableName() string { return "user_subscription" }
 
-type TunnelGroup struct {
-	ID          int64  `gorm:"primaryKey;autoIncrement"`
-	Name        string `gorm:"type:varchar(100);not null;uniqueIndex:idx_tunnel_group_name"`
-	CreatedTime int64  `gorm:"column:created_time;not null"`
-	UpdatedTime int64  `gorm:"column:updated_time;not null"`
-	Status      int    `gorm:"not null"`
-}
-
-func (TunnelGroup) TableName() string { return "tunnel_group" }
-
-type UserGroup struct {
-	ID          int64  `gorm:"primaryKey;autoIncrement"`
-	Name        string `gorm:"type:varchar(100);not null;uniqueIndex:idx_user_group_name"`
-	CreatedTime int64  `gorm:"column:created_time;not null"`
-	UpdatedTime int64  `gorm:"column:updated_time;not null"`
-	Status      int    `gorm:"not null"`
-}
-
-func (UserGroup) TableName() string { return "user_group" }
-
-type TunnelGroupTunnel struct {
-	ID            int64 `gorm:"primaryKey;autoIncrement"`
-	TunnelGroupID int64 `gorm:"column:tunnel_group_id;not null;uniqueIndex:idx_tunnel_group_tunnel_unique"`
-	TunnelID      int64 `gorm:"column:tunnel_id;not null;uniqueIndex:idx_tunnel_group_tunnel_unique"`
-	CreatedTime   int64 `gorm:"column:created_time;not null"`
-}
-
-func (TunnelGroupTunnel) TableName() string { return "tunnel_group_tunnel" }
-
-type UserGroupUser struct {
-	ID          int64 `gorm:"primaryKey;autoIncrement"`
-	UserGroupID int64 `gorm:"column:user_group_id;not null;uniqueIndex:idx_user_group_user_unique"`
-	UserID      int64 `gorm:"column:user_id;not null;uniqueIndex:idx_user_group_user_unique"`
-	CreatedTime int64 `gorm:"column:created_time;not null"`
-}
-
-func (UserGroupUser) TableName() string { return "user_group_user" }
-
-type GroupPermission struct {
-	ID            int64 `gorm:"primaryKey;autoIncrement"`
-	UserGroupID   int64 `gorm:"column:user_group_id;not null;uniqueIndex:idx_group_permission_unique"`
-	TunnelGroupID int64 `gorm:"column:tunnel_group_id;not null;uniqueIndex:idx_group_permission_unique"`
-	CreatedTime   int64 `gorm:"column:created_time;not null"`
-}
-
-func (GroupPermission) TableName() string { return "group_permission" }
-
-type GroupPermissionGrant struct {
-	ID             int64 `gorm:"primaryKey;autoIncrement"`
-	UserGroupID    int64 `gorm:"column:user_group_id;not null;uniqueIndex:idx_group_permission_grant_unique"`
-	TunnelGroupID  int64 `gorm:"column:tunnel_group_id;not null;uniqueIndex:idx_group_permission_grant_unique"`
-	UserTunnelID   int64 `gorm:"column:user_tunnel_id;not null;uniqueIndex:idx_group_permission_grant_unique"`
-	CreatedByGroup int   `gorm:"column:created_by_group;not null;default:0"`
-	CreatedTime    int64 `gorm:"column:created_time;not null"`
-}
-
-func (GroupPermissionGrant) TableName() string { return "group_permission_grant" }
+// 分组三件套（隧道分组/用户分组/分组权限）已整套移除（1.9.6）：
+// 六张表（tunnel_group、user_group、tunnel_group_tunnel、
+// user_group_user、group_permission、group_permission_grant）的模型
+// 与 AutoMigrate 注册一并删除。物理表不 DROP（GORM 本就不删表），
+// 以便回滚到 1.9.5 时数据仍在；新版本不再读写这些表。
 
 // MonitorPermission grants a non-admin user access to monitoring endpoints.
 // One row per user_id.
@@ -480,14 +428,19 @@ func (FederationTunnelBinding) TableName() string { return "federation_tunnel_bi
 
 // BackupData represents the full backup structure.
 type BackupData struct {
-	Version      string              `json:"version"`
-	ExportedAt   int64               `json:"exportedAt"`
-	Users        []UserBackup        `json:"users,omitempty"`
-	Nodes        []NodeBackup        `json:"nodes,omitempty"`
-	Tunnels      []TunnelBackup      `json:"tunnels,omitempty"`
-	Forwards     []ForwardBackup     `json:"forwards,omitempty"`
-	UserTunnels  []UserTunnelBackup  `json:"userTunnels,omitempty"`
-	SpeedLimits  []SpeedLimitBackup  `json:"speedLimits,omitempty"`
+	Version     string             `json:"version"`
+	ExportedAt  int64              `json:"exportedAt"`
+	Users       []UserBackup       `json:"users,omitempty"`
+	Nodes       []NodeBackup       `json:"nodes,omitempty"`
+	Tunnels     []TunnelBackup     `json:"tunnels,omitempty"`
+	Forwards    []ForwardBackup    `json:"forwards,omitempty"`
+	UserTunnels []UserTunnelBackup `json:"userTunnels,omitempty"`
+	SpeedLimits []SpeedLimitBackup `json:"speedLimits,omitempty"`
+	// 分组三件套备份段（tunnelGroups/userGroups/permissions）已随
+	// 功能移除（1.9.6）：三字段仅作导入兼容壳保留——旧备份解码时
+	// 承接数据，导入侧只计数并在 ImportWarnings 中点名披露已忽略，
+	// 不再落库；导出侧永不填充（段集 18→15，validBackupTypes 与
+	// gistRestoreTypes、前端 BACKUP_TYPE_VALUES 已同步删除三段名）。
 	TunnelGroups []TunnelGroupBackup `json:"tunnelGroups,omitempty"`
 	UserGroups   []UserGroupBackup   `json:"userGroups,omitempty"`
 	Permissions  []PermissionBackup  `json:"permissions,omitempty"`
@@ -564,9 +517,15 @@ type InboundsBackup struct {
 	// 同等待遇）；恢复时订阅 id 经 subRemap 按 token 落位。
 	SubscriptionCounters []SubscriptionCounterBackup `json:"subscriptionCounters,omitempty"`
 	Sources              []RemoteSourceBackup        `json:"sources,omitempty"`
-	// NodeGroups are upserted by id on import (like kernels and
-	// sources), so a subscription's groupIds keep pointing at the
-	// restored groups without a remap.
+	// Shields are the remote-source deletion shields (F6-02): they
+	// round-trip with the sources they belong to so a hand-deleted
+	// imported node stays deleted after a restore instead of being
+	// resurrected by the next source sync.
+	Shields []RemoteSourceShieldBackup `json:"shields,omitempty"`
+	// NodeGroups 仅作导入兼容壳保留（节点组功能已移除，1.9.6）：
+	// 旧备份解码时承接数据，导入侧只计数并在 ImportWarnings 中
+	// 点名披露已忽略，不再落库；导出侧永不填充。订阅的 groupIds
+	// 同口径（见 SubscriptionBackup.GroupIDs）。
 	NodeGroups []NodeGroupBackup `json:"nodeGroups,omitempty"`
 	// 订阅模板随入站段备份：订阅 Options 按模板 id 引用模板，恢复时
 	// 先落模板再落订阅，悬空引用在导入订阅时剔除并计数披露。
@@ -577,15 +536,18 @@ type InboundsBackup struct {
 }
 
 type SubscriptionBackup struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Token       string `json:"token"`
-	UUID        string `json:"uuid"`
-	Password    string `json:"password"`
-	SourceAll   int    `json:"sourceAll"`
-	InboundIDs  string `json:"inboundIds"`
-	SourceIDs   string `json:"sourceIds,omitempty"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Token      string `json:"token"`
+	UUID       string `json:"uuid"`
+	Password   string `json:"password"`
+	SourceAll  int    `json:"sourceAll"`
+	InboundIDs string `json:"inboundIds"`
+	SourceIDs  string `json:"sourceIds,omitempty"`
+	// GroupIDs 仅作导入兼容壳保留（节点组功能已移除，1.9.6）：
+	// 导入时订阅行不再写入该引用，携带非空 groupIds 的订阅计数
+	// 并在 ImportWarnings 中点名披露；新导出永不填充。
 	GroupIDs    string `json:"groupIds,omitempty"`
 	Options     string `json:"options"`
 	ExpireTime  int64  `json:"expireTime"`
@@ -693,6 +655,17 @@ type RemoteSourceBackup struct {
 	// FIX2-B（D4-04）：机场套餐 Subscription-Userinfo 随备份往返；
 	// file 源无刷新自愈，丢失即永久。
 	Userinfo string `json:"userinfo,omitempty"`
+}
+
+// RemoteSourceShieldBackup 是删除屏蔽登记的备份行（F6-02）：键为
+// （源 ID，身份键）——源按 ID 保号恢复（见 repository_inbound_backup
+// 的 sources 落库），故屏蔽随 inbounds 段往返即可保真。Name 仅作
+// 诊断保留。
+type RemoteSourceShieldBackup struct {
+	SourceID    int64  `json:"sourceId"`
+	IdentityKey string `json:"identityKey"`
+	Name        string `json:"name,omitempty"`
+	CreatedTime int64  `json:"createdTime"`
 }
 
 type SubscriptionTemplateBackup struct {
@@ -1011,9 +984,12 @@ type ImportResult struct {
 	InboundSubscriptionsImported        int `json:"inboundSubscriptionsImported"`
 	InboundSubscriptionCountersImported int `json:"inboundSubscriptionCountersImported"`
 	InboundSourcesImported              int `json:"inboundSourcesImported"`
-	InboundNodeGroupsImported           int `json:"inboundNodeGroupsImported"`
-	InboundTemplatesImported            int `json:"inboundTemplatesImported"`
-	InboundLegacyUsersImported          int `json:"inboundLegacyUsersImported"`
+	// F6-02：随 inbounds 段恢复的删除屏蔽登记数（屏蔽随源往返，
+	// 恢复后手工删过的导入节点不会被同步复活）。
+	InboundShieldsImported     int `json:"inboundShieldsImported"`
+	InboundNodeGroupsImported  int `json:"inboundNodeGroupsImported"`
+	InboundTemplatesImported   int `json:"inboundTemplatesImported"`
+	InboundLegacyUsersImported int `json:"inboundLegacyUsersImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int `json:"announcementsImported"`
 	MonitorPermissionsImported int `json:"monitorPermissionsImported"`

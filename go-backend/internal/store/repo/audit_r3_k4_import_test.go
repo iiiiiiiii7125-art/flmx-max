@@ -8,66 +8,11 @@ import (
 	"go-backend/internal/store/model"
 )
 
-// Round 3 K4 回归：B03-001 用户侧分组写面非正 ID 守卫（Tx 层）、
-// B02-001 备份导入用户名归一、B09-001 导入限速规则名长校验。
+// Round 3 K4 回归：B02-001 备份导入用户名归一、B09-001 导入
+// 限速规则名长校验。（B03-001 分组写面格已随分组三件套于
+// 1.9.6 整套移除。）
 
 const k4Bcrypt = "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012"
-
-func TestK4UserGroupTxRejectsNonPositiveIDs(t *testing.T) {
-	r, err := Open(t.TempDir() + "/k4-groups.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = r.Close() })
-	now := time.Now().UnixMilli()
-	if err := r.DB().Exec(`INSERT INTO user(id, user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, created_time, updated_time, status) VALUES(2, 'member', 'pwd', 1, 0, 100, 0, 0, 0, 10, 1000, 1000, 1)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := r.DB().Exec(`INSERT INTO user_group(id, name, created_time, updated_time, status) VALUES(1, 'g-one', 1000, 1000, 1)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := r.DB().Exec(`INSERT INTO user_group_user(user_group_id, user_id, created_time) VALUES(1, 2, 1000)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	membership := func() int64 {
-		var n int64
-		if err := r.DB().Model(&model.UserGroupUser{}).Where("user_id = ?", 2).Count(&n).Error; err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
-
-	// Replace 面：[-5] 与 [1,-5] 均整单拒绝且归属零变化。
-	for _, ids := range [][]int64{{-5}, {1, -5}} {
-		tx := r.DB().Begin()
-		_, _, err := r.ReplaceUserGroupsByUserIDTx(tx, 2, ids, now)
-		_ = tx.Rollback()
-		if err == nil || !strings.Contains(err.Error(), "成员ID非法") {
-			t.Fatalf("ReplaceUserGroupsByUserIDTx(%v): want 成员ID非法 rejection, got %v", ids, err)
-		}
-		if membership() != 1 {
-			t.Fatalf("ReplaceUserGroupsByUserIDTx(%v) changed membership despite rejection", ids)
-		}
-	}
-	// Add 面：[-5] 拒绝；对照 [1] 正常（已存在则 DoNothing）。
-	tx := r.DB().Begin()
-	if err := r.AddUserToGroupsTx(tx, 2, []int64{-5}, now); err == nil {
-		_ = tx.Rollback()
-		t.Fatalf("AddUserToGroupsTx([-5]): want rejection, got nil")
-	}
-	_ = tx.Rollback()
-	tx = r.DB().Begin()
-	if err := r.AddUserToGroupsTx(tx, 2, []int64{1}, now); err != nil {
-		_ = tx.Rollback()
-		t.Fatalf("AddUserToGroupsTx([1]) control: %v", err)
-	}
-	if err := tx.Commit().Error; err != nil {
-		t.Fatal(err)
-	}
-	if membership() != 1 {
-		t.Fatalf("control add changed membership count unexpectedly: %d", membership())
-	}
-}
 
 func TestK4ImportUsersUsernameNormalization(t *testing.T) {
 	r, err := Open(t.TempDir() + "/k4-import-users.db")

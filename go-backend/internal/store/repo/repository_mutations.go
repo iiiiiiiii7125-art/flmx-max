@@ -15,7 +15,6 @@ import (
 	"go-backend/internal/store/model"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // UserExists 用户名占用检查。B02-003：大小写不敏感（经
@@ -313,14 +312,7 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 		if err := tx.Where("user_id = ?", userID).Delete(&model.Forward{}).Error; err != nil {
 			return err
 		}
-		userTunnelIDs := tx.Model(&model.UserTunnel{}).Select("id").Where("user_id = ?", userID)
-		if err := tx.Where("user_tunnel_id IN (?)", userTunnelIDs).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-			return err
-		}
 		if err := tx.Where("user_id = ?", userID).Delete(&model.UserTunnel{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("user_id = ?", userID).Delete(&model.UserGroupUser{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("user_id = ?", userID).Delete(&model.StatisticsFlow{}).Error; err != nil {
@@ -1071,11 +1063,6 @@ func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
 	if err := tx.Where("tunnel_id = ? AND status <> ?", tunnelID, model.ForwardStatusPendingDelete).Delete(&model.Forward{}).Error; err != nil {
 		return err
 	}
-	// AUDIT-R1 (TST-001): GroupPermissionGrant 没有 tunnel_id 列，它通过
-	// user_tunnel_id 关联本隧道的用户隧道；在 UserTunnel 删除前清理。
-	if err := deleteByIDSliceInChunksTx(tx, &model.GroupPermissionGrant{}, "user_tunnel_id", userTunnelIDs); err != nil {
-		return err
-	}
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.UserTunnel{}).Error; err != nil {
 		return err
 	}
@@ -1089,9 +1076,6 @@ func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
 		return err
 	}
 	// R5-B7 C-009: 补全隧道级联删除（以下模型确有 tunnel_id 列）。
-	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
-		return err
-	}
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.SpeedLimit{}).Error; err != nil {
 		return err
 	}
@@ -1139,10 +1123,7 @@ func (r *Repository) TunnelIDsByEntryNode(nodeID int64) ([]int64, error) {
 	return ids, nil
 }
 
-// DeleteUserTunnel removes a user_tunnel row together with its
-// GroupPermissionGrant ledger rows (R2X-035): every other UT deletion path
-// (tunnel/user cascades, group revoke) clears the ledger first; leaving it
-// behind orphans the row forever because revoke paths scope by live UTs.
+// DeleteUserTunnel removes a user_tunnel row.
 func (r *Repository) DeleteUserTunnel(id int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -1160,9 +1141,6 @@ func (r *Repository) DeleteUserTunnelTx(tx *gorm.DB, id int64) error {
 }
 
 func deleteUserTunnelTx(tx *gorm.DB, id int64) error {
-	if err := tx.Where("user_tunnel_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-		return err
-	}
 	return tx.Where("id = ?", id).Delete(&model.UserTunnel{}).Error
 }
 
@@ -1601,311 +1579,11 @@ func (r *Repository) DeleteSpeedLimit(id int64) error {
 	return r.db.Where("id = ?", id).Delete(&model.SpeedLimit{}).Error
 }
 
-func (r *Repository) GroupCreate(table, name string, status int, now int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	switch table {
-	case "tunnel_group":
-		return r.db.Create(&model.TunnelGroup{
-			Name:        name,
-			CreatedTime: now,
-			UpdatedTime: now,
-			Status:      status,
-		}).Error
-	case "user_group":
-		return r.db.Create(&model.UserGroup{
-			Name:        name,
-			CreatedTime: now,
-			UpdatedTime: now,
-			Status:      status,
-		}).Error
-	default:
-		return errors.New("invalid group table")
-	}
-}
-
-func (r *Repository) GroupUpdate(table string, id int64, name string, status int, now int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return groupUpdateTx(r.db, table, id, name, status, now)
-}
-
-// GroupUpdateTx is the transactional variant of GroupUpdate.
-func (r *Repository) GroupUpdateTx(tx *gorm.DB, table string, id int64, name string, status int, now int64) error {
-	if tx == nil {
-		return errors.New("database unavailable")
-	}
-	return groupUpdateTx(tx, table, id, name, status, now)
-}
-
-func groupUpdateTx(db *gorm.DB, table string, id int64, name string, status int, now int64) error {
-	updates := map[string]interface{}{"name": name, "status": status, "updated_time": now}
-	switch table {
-	case "tunnel_group":
-		return db.Model(&model.TunnelGroup{}).Where("id = ?", id).Updates(updates).Error
-	case "user_group":
-		return db.Model(&model.UserGroup{}).Where("id = ?", id).Updates(updates).Error
-	default:
-		return errors.New("invalid group table")
-	}
-}
-
-// GetGroupStatus returns a group's status; exists=false when there is no
-// such group (R2X-013: status had writers but no readers before this).
-func (r *Repository) GetGroupStatus(table string, id int64) (status int, exists bool, err error) {
-	if r == nil || r.db == nil {
-		return 0, false, errors.New("repository not initialized")
-	}
-	return getGroupStatusTx(r.db, table, id)
-}
-
-// GetGroupStatusTx is the transactional variant of GetGroupStatus.
-func (r *Repository) GetGroupStatusTx(tx *gorm.DB, table string, id int64) (status int, exists bool, err error) {
-	if tx == nil {
-		return 0, false, errors.New("database unavailable")
-	}
-	return getGroupStatusTx(tx, table, id)
-}
-
-func getGroupStatusTx(db *gorm.DB, table string, id int64) (int, bool, error) {
-	switch table {
-	case "tunnel_group":
-		var g model.TunnelGroup
-		err := db.Select("status").Where("id = ?", id).First(&g).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return 0, false, nil
-		}
-		if err != nil {
-			return 0, false, err
-		}
-		return g.Status, true, nil
-	case "user_group":
-		var g model.UserGroup
-		err := db.Select("status").Where("id = ?", id).First(&g).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return 0, false, nil
-		}
-		if err != nil {
-			return 0, false, err
-		}
-		return g.Status, true, nil
-	default:
-		return 0, false, errors.New("invalid group table")
-	}
-}
-
-// GetGroupRowTx reads a group's name and status inside the caller's
-// transaction (R3X-020: groupUpdate fills absent name/status keys from
-// the current row instead of overwriting them with zero values).
-func (r *Repository) GetGroupRowTx(tx *gorm.DB, table string, id int64) (name string, status int, exists bool, err error) {
-	if tx == nil {
-		return "", 0, false, errors.New("database unavailable")
-	}
-	switch table {
-	case "tunnel_group":
-		var g model.TunnelGroup
-		err := tx.Select("name", "status").Where("id = ?", id).First(&g).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", 0, false, nil
-		}
-		if err != nil {
-			return "", 0, false, err
-		}
-		return g.Name, g.Status, true, nil
-	case "user_group":
-		var g model.UserGroup
-		err := tx.Select("name", "status").Where("id = ?", id).First(&g).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", 0, false, nil
-		}
-		if err != nil {
-			return "", 0, false, err
-		}
-		return g.Name, g.Status, true, nil
-	default:
-		return "", 0, false, errors.New("invalid group table")
-	}
-}
-
-func (r *Repository) ListUserIDsByUserGroupTx(tx *gorm.DB, userGroupID int64) ([]int64, error) {
-	if tx == nil {
-		return nil, errors.New("database unavailable")
-	}
-	var ids []int64
-	err := tx.Model(&model.UserGroupUser{}).
-		Where("user_group_id = ?", userGroupID).
-		Pluck("user_id", &ids).Error
-	if err != nil {
-		return nil, err
-	}
-	if ids == nil {
-		ids = make([]int64, 0)
-	}
-	return ids, nil
-}
-
-// rejectNonPositiveMemberIDs 是 B03-001 的 fail-closed 守卫：组成员
-// 替换面（assign）中任一成员 ID 非正即整单拒绝。validateIDsExistTx
-// 与落库循环都把 id<=0 当「不在场」跳过，于是 [-5] 会被等价处理为
-// 「替换为空集」——成员被整体清空、组授权连带撤销却回成功；与不
-// 存在正 ID 的报错口径对齐，非正 ID 同样在首写之前拒绝。
-func rejectNonPositiveMemberIDs(ids []int64) error {
-	bad := make([]int64, 0)
-	for _, id := range ids {
-		if id <= 0 {
-			bad = append(bad, id)
-		}
-	}
-	if len(bad) > 0 {
-		return fmt.Errorf("成员ID非法: %v", bad)
-	}
-	return nil
-}
-
-func (r *Repository) ReplaceTunnelGroupMembersTx(tx *gorm.DB, groupID int64, tunnelIDs []int64, now int64) error {
-	if tx == nil {
-		return errors.New("database unavailable")
-	}
-	// R2X-012: the group itself and every referenced tunnel must exist;
-	// phantom member rows would silently become live grants later.
-	// B03-001: 非正成员 ID 在校验/删除之前整单拒绝（见
-	// rejectNonPositiveMemberIDs）。
-	if err := rejectNonPositiveMemberIDs(tunnelIDs); err != nil {
-		return err
-	}
-	if err := validateIDsExistTx(tx, &model.TunnelGroup{}, "隧道分组不存在", []int64{groupID}); err != nil {
-		return err
-	}
-	if err := validateIDsExistTx(tx, &model.Tunnel{}, "隧道不存在", tunnelIDs); err != nil {
-		return err
-	}
-	if err := tx.Where("tunnel_group_id = ?", groupID).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
-		return err
-	}
-	if len(tunnelIDs) == 0 {
-		return nil
-	}
-	rows := make([]model.TunnelGroupTunnel, 0, len(tunnelIDs))
-	for _, tunnelID := range tunnelIDs {
-		if tunnelID <= 0 {
-			continue
-		}
-		rows = append(rows, model.TunnelGroupTunnel{TunnelGroupID: groupID, TunnelID: tunnelID, CreatedTime: now})
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
-}
-
-func (r *Repository) ReplaceUserGroupMembersTx(tx *gorm.DB, groupID int64, userIDs []int64, now int64) error {
-	if tx == nil {
-		return errors.New("database unavailable")
-	}
-	// R2X-012: the group itself and every referenced user must exist.
-	// B03-001: 非正成员 ID 在校验/删除之前整单拒绝（见
-	// rejectNonPositiveMemberIDs）。
-	if err := rejectNonPositiveMemberIDs(userIDs); err != nil {
-		return err
-	}
-	if err := validateIDsExistTx(tx, &model.UserGroup{}, "用户分组不存在", []int64{groupID}); err != nil {
-		return err
-	}
-	if err := validateIDsExistTx(tx, &model.User{}, "用户不存在", userIDs); err != nil {
-		return err
-	}
-	if err := tx.Where("user_group_id = ?", groupID).Delete(&model.UserGroupUser{}).Error; err != nil {
-		return err
-	}
-	if len(userIDs) == 0 {
-		return nil
-	}
-	rows := make([]model.UserGroupUser, 0, len(userIDs))
-	for _, userID := range userIDs {
-		if userID <= 0 {
-			continue
-		}
-		rows = append(rows, model.UserGroupUser{UserGroupID: groupID, UserID: userID, CreatedTime: now})
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
-}
-
-func (r *Repository) GetGroupPermissionPairByIDTx(tx *gorm.DB, id int64) (userGroupID int64, tunnelGroupID int64, exists bool, err error) {
-	if tx == nil {
-		return 0, 0, false, errors.New("database unavailable")
-	}
-	var gp model.GroupPermission
-	err = tx.Select("user_group_id", "tunnel_group_id").Where("id = ?", id).First(&gp).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return 0, 0, false, nil
-	}
-	if err != nil {
-		return 0, 0, false, err
-	}
-	return gp.UserGroupID, gp.TunnelGroupID, true, nil
-}
-
-func (r *Repository) DeleteGroupPermissionByIDTx(tx *gorm.DB, id int64) error {
-	if tx == nil {
-		return errors.New("database unavailable")
-	}
-	return tx.Where("id = ?", id).Delete(&model.GroupPermission{}).Error
-}
-
 // RevokedUserTunnelPair holds the (userID, tunnelID) of a deleted user_tunnel row,
 // so the handler layer can clean up associated forwarding rules.
 type RevokedUserTunnelPair struct {
 	UserID   int64
 	TunnelID int64
-}
-
-// grantPairMembershipHoldsTx reports whether a grant's (user, tunnel)
-// matches its permission pair's memberships: the user belongs to the
-// grant's user_group and the tunnel belongs to its tunnel_group. This
-// is the correspondence invariant legitimate group-expanded grants
-// always satisfied (they were materialized from exactly those
-// memberships); it is the G-S02 yardstick for imported grant ledger
-// rows (R5-FGRP: the ledger is provenance bookkeeping only — nothing
-// materializes or revokes grants from it any more).
-func grantPairMembershipHoldsTx(tx *gorm.DB, userGroupID, tunnelGroupID, userID, tunnelID int64) (bool, error) {
-	var n int64
-	if err := tx.Model(&model.UserGroupUser{}).
-		Where("user_group_id = ? AND user_id = ?", userGroupID, userID).
-		Count(&n).Error; err != nil {
-		return false, err
-	}
-	if n == 0 {
-		return false, nil
-	}
-	if err := tx.Model(&model.TunnelGroupTunnel{}).
-		Where("tunnel_group_id = ? AND tunnel_id = ?", tunnelGroupID, tunnelID).
-		Count(&n).Error; err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
-// ListTunnelIDsByTunnelGroupTx is the Tx variant of ListTunnelIDsByTunnelGroup.
-func (r *Repository) ListTunnelIDsByTunnelGroupTx(tx *gorm.DB, tunnelGroupID int64) ([]int64, error) {
-	if tx == nil {
-		return nil, errors.New("database unavailable")
-	}
-	var ids []int64
-	err := tx.Model(&model.TunnelGroupTunnel{}).
-		Where("tunnel_group_id = ?", tunnelGroupID).
-		Pluck("tunnel_id", &ids).Error
-	if err != nil {
-		return nil, err
-	}
-	if ids == nil {
-		ids = make([]int64, 0)
-	}
-	return ids, nil
 }
 
 func (r *Repository) ReplaceFederationTunnelBindingsTx(tx *gorm.DB, tunnelID int64, bindings []FederationTunnelBinding) error {
@@ -1961,154 +1639,6 @@ func (r *Repository) ReplaceFederationTunnelBindingsTx(tx *gorm.DB, tunnelID int
 		}
 	}
 	return nil
-}
-
-// GroupDeleteCascade deletes a group and its bookkeeping rows (member
-// rows, group_permission pairs, and the group's grant-ledger rows) in
-// one transaction (R5-FGRP). Groups are pure scope bookkeeping: the
-// cascade never touches user_tunnel rows or forwards — entity grants
-// are created and removed only by explicit per-user assignment,
-// regardless of how they were historically recorded in the ledger.
-func (r *Repository) GroupDeleteCascade(table string, id int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		switch table {
-		case "tunnel_group":
-			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.TunnelGroupTunnel{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.GroupPermission{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("tunnel_group_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-				return err
-			}
-			return tx.Where("id = ?", id).Delete(&model.TunnelGroup{}).Error
-		case "user_group":
-			if err := tx.Where("user_group_id = ?", id).Delete(&model.UserGroupUser{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("user_group_id = ?", id).Delete(&model.GroupPermission{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("user_group_id = ?", id).Delete(&model.GroupPermissionGrant{}).Error; err != nil {
-				return err
-			}
-			return tx.Where("id = ?", id).Delete(&model.UserGroup{}).Error
-		default:
-			return errors.New("invalid group table")
-		}
-	})
-}
-
-// GroupAssignmentScope resolves the group-scope constraint that applies
-// to manually assigning tunnels to userID (R5-FGRP, replacing the
-// pre-1.9.2 grant-expansion semantics):
-//
-//   - the user belongs to at least one ENABLED user group,
-//   - at least one of those groups holds a group_permission pair with
-//     an ENABLED tunnel group,
-//
-// then manual assignment is constrained to the union of those tunnel
-// groups' tunnels (constrained=true, scope=that union). In every other
-// case — no groups, only disabled groups, groups without permission
-// pairs — the user is unconstrained and any tunnel may be assigned.
-// Disabled groups contribute neither constraint nor scope, matching
-// the rest of the group machinery (disabled groups are inert).
-func (r *Repository) GroupAssignmentScope(userID int64) (bool, map[int64]struct{}, error) {
-	if r == nil || r.db == nil {
-		return false, nil, errors.New("repository not initialized")
-	}
-	return r.groupAssignmentScope(r.db, userID)
-}
-
-// GroupAssignmentScopeTx is the Tx variant of GroupAssignmentScope.
-func (r *Repository) GroupAssignmentScopeTx(tx *gorm.DB, userID int64) (bool, map[int64]struct{}, error) {
-	if tx == nil {
-		return false, nil, errors.New("database unavailable")
-	}
-	return r.groupAssignmentScope(tx, userID)
-}
-
-func (r *Repository) groupAssignmentScope(db *gorm.DB, userID int64) (bool, map[int64]struct{}, error) {
-	// 全部 IN 点位经 chunkInt64IDs 分块（用户组归属/权限对集无
-	// 上界；见 in_list_sentinel 登记 groupAssignmentScope）。
-	pluckChunked := func(model interface{}, where, column string, ids []int64) ([]int64, error) {
-		var out []int64
-		for _, chunk := range chunkInt64IDs(ids) {
-			var part []int64
-			if err := db.Model(model).Where(where, chunk).Pluck(column, &part).Error; err != nil {
-				return nil, err
-			}
-			out = append(out, part...)
-		}
-		return out, nil
-	}
-	var userGroupIDs []int64
-	if err := db.Model(&model.UserGroupUser{}).
-		Where("user_id = ?", userID).
-		Pluck("user_group_id", &userGroupIDs).Error; err != nil {
-		return false, nil, err
-	}
-	if len(userGroupIDs) == 0 {
-		return false, nil, nil
-	}
-	enabledUserGroups, err := pluckChunked(&model.UserGroup{}, "id IN ? AND status = 1", "id", userGroupIDs)
-	if err != nil {
-		return false, nil, err
-	}
-	if len(enabledUserGroups) == 0 {
-		return false, nil, nil
-	}
-	pairedTunnelGroups, err := pluckChunked(&model.GroupPermission{}, "user_group_id IN ?", "tunnel_group_id", enabledUserGroups)
-	if err != nil {
-		return false, nil, err
-	}
-	if len(pairedTunnelGroups) == 0 {
-		return false, nil, nil
-	}
-	tunnelGroupSet := make(map[int64]struct{}, len(pairedTunnelGroups))
-	for _, id := range pairedTunnelGroups {
-		tunnelGroupSet[id] = struct{}{}
-	}
-	pairedIDs := make([]int64, 0, len(tunnelGroupSet))
-	for id := range tunnelGroupSet {
-		pairedIDs = append(pairedIDs, id)
-	}
-	enabledTunnelGroups, err := pluckChunked(&model.TunnelGroup{}, "id IN ? AND status = 1", "id", pairedIDs)
-	if err != nil {
-		return false, nil, err
-	}
-	if len(enabledTunnelGroups) == 0 {
-		return false, nil, nil
-	}
-	tunnelIDs, err := pluckChunked(&model.TunnelGroupTunnel{}, "tunnel_group_id IN ?", "tunnel_id", enabledTunnelGroups)
-	if err != nil {
-		return false, nil, err
-	}
-	scope := make(map[int64]struct{}, len(tunnelIDs))
-	for _, id := range tunnelIDs {
-		scope[id] = struct{}{}
-	}
-	return true, scope, nil
-}
-
-func (r *Repository) InsertGroupPermission(userGroupID, tunnelGroupID int64, now int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	// R2X-012: both groups must exist; a permission pair pointing at
-	// nonexistent groups constrains nothing yet reported success.
-	if err := validateIDsExistTx(r.db, &model.UserGroup{}, "用户分组不存在", []int64{userGroupID}); err != nil {
-		return err
-	}
-	if err := validateIDsExistTx(r.db, &model.TunnelGroup{}, "隧道分组不存在", []int64{tunnelGroupID}); err != nil {
-		return err
-	}
-	gp := model.GroupPermission{UserGroupID: userGroupID, TunnelGroupID: tunnelGroupID, CreatedTime: now}
-	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&gp).Error
 }
 
 func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnelID int64, remoteAddr, strategy string, now int64, inx int, entryNodeIDs []int64, port int, inIp string, speedID interface{}, maxConn int, ipMaxConn int, ipSpeedID interface{}, proxyProtocol int, proxyProtocolReceive int, proxyProtocolSend int) (int64, error) {
@@ -2453,10 +1983,6 @@ func validateKindTarget(kind string) (interface{}, string, error) {
 		return &model.User{}, "用户不存在", nil
 	case "tunnel":
 		return &model.Tunnel{}, "隧道不存在", nil
-	case "user_group":
-		return &model.UserGroup{}, "用户分组不存在", nil
-	case "tunnel_group":
-		return &model.TunnelGroup{}, "隧道分组不存在", nil
 	case "inbound":
 		return &model.NodeInbound{}, "入站不存在", nil
 	case "subscription":
@@ -2467,8 +1993,8 @@ func validateKindTarget(kind string) (interface{}, string, error) {
 }
 
 // ValidateIDsExistTx validates referenced IDs of the given kind inside the
-// caller's transaction (R2X-012). Kinds: user, tunnel, user_group,
-// tunnel_group, inbound, subscription.
+// caller's transaction (R2X-012). Kinds: user, tunnel, inbound,
+// subscription.
 func (r *Repository) ValidateIDsExistTx(tx *gorm.DB, kind string, ids []int64) error {
 	if tx == nil {
 		return errors.New("database unavailable")
@@ -2491,109 +2017,6 @@ func (r *Repository) ValidateIDsExist(kind string, ids []int64) error {
 		return err
 	}
 	return validateIDsExistTx(r.db, target, label, ids)
-}
-
-// validateUserGroupIDsExistTx checks (X-P3-5) that every referenced user
-// group exists; now a thin wrapper over validateIDsExistTx.
-func validateUserGroupIDsExistTx(tx *gorm.DB, groupIDs []int64) error {
-	return validateIDsExistTx(tx, &model.UserGroup{}, "用户分组不存在", groupIDs)
-}
-
-// AddUserToGroupsTx 是 O5-004 的事务版：跑在调用方事务内（与 CreateUserTx 同 tx）。
-func (r *Repository) AddUserToGroupsTx(tx *gorm.DB, userID int64, groupIDs []int64, now int64) error {
-	if tx == nil {
-		return errors.New("database unavailable")
-	}
-	// B03-001（R3 K4）：非正分组 ID 在首写之前整单拒绝，与分组
-	// assign 面 rejectNonPositiveMemberIDs 同口径（此前 [-5] 被
-	// validateIDsExistTx 与落库循环双双跳过、静默当作未指定）。
-	if err := rejectNonPositiveMemberIDs(groupIDs); err != nil {
-		return err
-	}
-	if len(groupIDs) == 0 {
-		return nil
-	}
-	if err := validateUserGroupIDsExistTx(tx, groupIDs); err != nil {
-		return err
-	}
-	rows := make([]model.UserGroupUser, 0, len(groupIDs))
-	for _, gid := range groupIDs {
-		if gid <= 0 {
-			continue
-		}
-		rows = append(rows, model.UserGroupUser{UserGroupID: gid, UserID: userID, CreatedTime: now})
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
-}
-
-// ReplaceUserGroupsByUserIDTx is the transactional variant of the old
-// ReplaceUserGroupsByUserID (X-P2-6): it runs entirely on the caller's tx
-// (same shape as ReplaceUserGroupMembersTx) so the handler can wrap
-// "replace + revoke removed groups' grants" in one transaction, and any
-// failure propagates instead of leaving membership half-replaced.
-// removedGroupIDs reports old − new so the caller can revoke group grants
-// for exactly the groups the user left.
-func (r *Repository) ReplaceUserGroupsByUserIDTx(tx *gorm.DB, userID int64, newGroupIDs []int64, now int64) (affectedGroupIDs []int64, removedGroupIDs []int64, err error) {
-	if tx == nil {
-		return nil, nil, errors.New("database unavailable")
-	}
-	// B03-001（R3 K4）：非正分组 ID 在首写之前整单拒绝，与分组
-	// assign 面同口径。此前 [-5] 的 newSet 为空集、替换语义即清空
-	// 该用户全部分组归属并连带撤销组授权却回成功（数据伤害面）。
-	if err := rejectNonPositiveMemberIDs(newGroupIDs); err != nil {
-		return nil, nil, err
-	}
-	if err := validateUserGroupIDsExistTx(tx, newGroupIDs); err != nil {
-		return nil, nil, err
-	}
-
-	var oldGroupIDs []int64
-	if err = tx.Model(&model.UserGroupUser{}).
-		Where("user_id = ?", userID).
-		Pluck("user_group_id", &oldGroupIDs).Error; err != nil {
-		return nil, nil, err
-	}
-
-	newSet := make(map[int64]struct{})
-	for _, id := range newGroupIDs {
-		if id > 0 {
-			newSet[id] = struct{}{}
-		}
-	}
-	seen := make(map[int64]struct{})
-	for _, id := range oldGroupIDs {
-		seen[id] = struct{}{}
-		if _, ok := newSet[id]; !ok {
-			removedGroupIDs = append(removedGroupIDs, id)
-		}
-	}
-	for id := range newSet {
-		seen[id] = struct{}{}
-	}
-	for id := range seen {
-		affectedGroupIDs = append(affectedGroupIDs, id)
-	}
-
-	if err = tx.Where("user_id = ?", userID).Delete(&model.UserGroupUser{}).Error; err != nil {
-		return nil, nil, err
-	}
-
-	rows := make([]model.UserGroupUser, 0, len(newGroupIDs))
-	for _, gid := range newGroupIDs {
-		if gid <= 0 {
-			continue
-		}
-		rows = append(rows, model.UserGroupUser{UserGroupID: gid, UserID: userID, CreatedTime: now})
-	}
-	if len(rows) > 0 {
-		if err = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error; err != nil {
-			return nil, nil, err
-		}
-	}
-	return affectedGroupIDs, removedGroupIDs, nil
 }
 
 func (r *Repository) AdvanceNodeRenewalCycles(now int64) (int, error) {

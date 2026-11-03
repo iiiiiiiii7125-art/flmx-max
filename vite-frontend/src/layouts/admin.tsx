@@ -477,7 +477,7 @@ export default function AdminLayout({
                   isAdmin &&
                   ["/tunnel", "/forward"].includes(location.pathname)) ||
                 (item.path === "/user" &&
-                  ["/group", "/limit"].includes(location.pathname));
+                  ["/limit"].includes(location.pathname));
               const isMonitor = item.path === "/monitor";
               const isMonitorBlocked = isMonitor && monitorAllowed !== true;
 

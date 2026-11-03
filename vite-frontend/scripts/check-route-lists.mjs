@@ -142,8 +142,8 @@ const sameSet = (a, b) =>
   a.length === b.length && sorted(a).every((v, i) => v === sorted(b)[i]);
 const diff = (a, b) => a.filter((v) => !b.includes(v));
 
-// 基线（AG-06 审计实测 18/14/14）：页面增删须同步改此处并说明。
-const EXPECTED_ROUTE_COUNT = 18;
+// 基线（AG-06 审计实测 18/14/14；1.9.6 分组三件套移除删 /group 路由 → 17）：页面增删须同步改此处并说明。
+const EXPECTED_ROUTE_COUNT = 17;
 const EXPECTED_LOADER_COUNT = 14;
 const EXPECTED_PATHS = [
   "/",
@@ -155,7 +155,6 @@ const EXPECTED_PATHS = [
   "/tunnel",
   "/node",
   "/user",
-  "/group",
   "/profile",
   "/limit",
   "/inbound",

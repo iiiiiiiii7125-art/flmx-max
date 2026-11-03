@@ -56,7 +56,6 @@ Create a new user.
   "num": 10,
   "expTime": 1767225600000,
   "flowResetTime": 1,
-  "groupIds": [1, 2]
 }
 ```
 
@@ -72,7 +71,6 @@ Create a new user.
 | num | number | No | Max forwards allowed (default: 0 = unlimited) |
 | expTime | number | No | Expiry timestamp in ms (0 = never) |
 | flowResetTime | number | No | Monthly reset day 1-28 (0 = no reset) |
-| groupIds | number[] | No | User group IDs to assign |
 
 **Response:**
 ```json
@@ -95,7 +93,6 @@ Update user details.
   "num": 20,
   "expTime": 1767225600000,
   "flowResetTime": 15,
-  "groupIds": [1]
 }
 ```
 
@@ -139,25 +136,6 @@ Reset user traffic at user or tunnel level.
 **Response:**
 ```json
 {"code": 0, "msg": "success"}
-```
-
-## POST /api/v1/user/groups
-
-Get groups a user belongs to.
-
-**Request:**
-```json
-{"id": 2}
-```
-
-**Response:**
-```json
-{
-  "code": 0,
-  "data": [
-    {"id": 1, "name": "VIP Users"}
-  ]
-}
 ```
 
 ## Traffic Units

@@ -19,7 +19,8 @@ import (
 //
 // - R2X-004：新接入 7 面（monitorServiceCreate、inboundRelayCreate、
 //   federationShareCreate、remoteSourceSave 新建分支、tunnelCreate、
-//   userCreate、groupCreate）每面一条「同键重发只建一行」。
+//   userCreate）每面一条「同键重发只建一行」。（groupCreate 面已随
+//   分组三件套于 1.9.6 整套移除。）
 // - R2X-032：同键异端点各建一条——请求必须用真实注册路径构造
 //   （现行 xp327 测试用 "/" 假路径正是缺陷掩盖者，本批已改掉）；
 //   同键 subscription create 后同键 update（ID>0）正常执行不被回放。
@@ -93,30 +94,6 @@ func TestR2B2_UserCreateIdempotent(t *testing.T) {
 	}
 	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM "user" WHERE user = 'idem-user-b2'`); n != 1 {
 		t.Fatalf("userCreate 同键建出 %d 行, want 1", n)
-	}
-}
-
-func TestR2B2_GroupCreateIdempotent(t *testing.T) {
-	r, h := r2b2Open(t)
-	ug := map[string]interface{}{"name": "idem-ugroup-b2"}
-	b1 := r2b2Post(t, h.groupUserCreate, "/api/v1/group/user/create", ug, "b2-ugroup-key")
-	r2b2AssertCode0(t, "groupUserCreate first", b1)
-	b2 := r2b2Post(t, h.groupUserCreate, "/api/v1/group/user/create", ug, "b2-ugroup-key")
-	if b2 != b1 {
-		t.Fatalf("groupUserCreate 同键应回放:\n%s\n%s", b1, b2)
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM user_group WHERE name = 'idem-ugroup-b2'`); n != 1 {
-		t.Fatalf("groupUserCreate 同键建出 %d 行, want 1", n)
-	}
-	tg := map[string]interface{}{"name": "idem-tgroup-b2"}
-	b1 = r2b2Post(t, h.groupTunnelCreate, "/api/v1/group/tunnel/create", tg, "b2-tgroup-key")
-	r2b2AssertCode0(t, "groupTunnelCreate first", b1)
-	b2 = r2b2Post(t, h.groupTunnelCreate, "/api/v1/group/tunnel/create", tg, "b2-tgroup-key")
-	if b2 != b1 {
-		t.Fatalf("groupTunnelCreate 同键应回放:\n%s\n%s", b1, b2)
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM tunnel_group WHERE name = 'idem-tgroup-b2'`); n != 1 {
-		t.Fatalf("groupTunnelCreate 同键建出 %d 行, want 1", n)
 	}
 }
 

@@ -54,7 +54,6 @@ interface UserCreateRequest {
   num?: number;
   expTime?: number;
   flowResetTime?: number;
-  groupIds?: number[];
 }
 
 interface UserPackage {
@@ -187,35 +186,6 @@ interface SpeedLimit {
 }
 ```
 
-## Groups
-
-```typescript
-interface TunnelGroup {
-  id: number;
-  name: string;
-  status: number;
-  tunnel_ids?: number[];
-  created_at?: number;
-}
-
-interface UserGroup {
-  id: number;
-  name: string;
-  status: number;
-  user_ids?: number[];
-  created_at?: number;
-}
-
-interface GroupPermission {
-  id: number;
-  user_group_id: number;
-  user_group_name?: string;
-  tunnel_group_id: number;
-  tunnel_group_name?: string;
-  created_at?: number;
-}
-```
-
 ## User-Tunnel Assignment
 
 ```typescript
@@ -264,9 +234,6 @@ interface BackupExport {
   tunnels?: Tunnel[];
   forwards?: Forward[];
   speedLimits?: SpeedLimit[];
-  tunnelGroups?: TunnelGroup[];
-  userGroups?: UserGroup[];
-  groupPermissions?: GroupPermission[];
   configs?: Record<string, string>;
 }
 ```

@@ -301,7 +301,6 @@ export default MyAdminLayout;
 | `TunnelPage` | `/tunnel` |
 | `NodePage` | `/node` |
 | `UserPage` | `/user` |
-| `GroupPage` | `/group` |
 | `ProfilePage` | `/profile` |
 | `LimitPage` | `/limit` |
 | `ConfigPage` | `/config` |

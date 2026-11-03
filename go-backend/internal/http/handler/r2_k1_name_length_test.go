@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// R2 B03-001 / B09-004: 分组名（user_group / tunnel_group）与限速规则名
-// 此前无长度校验、列宽同为 varchar(100)——SQLite 静默落库、PG 吐未
-// 转译的原始落库错误（O5-002 用户名同型先例）。修复后四个写面
-// （group create/update、speed-limit create/update）一律按列宽 100
-// 点名拒绝、不落库；100 字符整好合法。
+// R2 B09-004: 限速规则名此前无长度校验、列宽为 varchar(100)——
+// SQLite 静默落库、PG 吐未转译的原始落库错误（O5-002 用户名同型
+// 先例）。修复后 speed-limit create/update 两面一律按列宽 100
+// 点名拒绝、不落库；100 字符整好合法。（B03-001 分组名格已随
+// 分组三件套于 1.9.6 整套移除。）
 
 func k1Code(t *testing.T, body string) int {
 	t.Helper()
@@ -21,44 +21,6 @@ func k1Code(t *testing.T, body string) int {
 		t.Fatalf("decode %q: %v", body, err)
 	}
 	return env.Code
-}
-
-func TestR2K1GroupNameLengthBounded(t *testing.T) {
-	r, h := r2b2Open(t)
-	name101 := strings.Repeat("g", 101)
-	name100 := strings.Repeat("g", 100)
-
-	if body := r2b2Post(t, h.groupUserCreate, "/api/v1/group/user/create", map[string]interface{}{"name": name101}, ""); k1Code(t, body) == 0 {
-		t.Fatalf("user group create with 101-rune name accepted: %s", body)
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM user_group`); n != 0 {
-		t.Fatalf("rejected user group create persisted %d rows", n)
-	}
-	if body := r2b2Post(t, h.groupTunnelCreate, "/api/v1/group/tunnel/create", map[string]interface{}{"name": name101}, ""); k1Code(t, body) == 0 {
-		t.Fatalf("tunnel group create with 101-rune name accepted: %s", body)
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM tunnel_group`); n != 0 {
-		t.Fatalf("rejected tunnel group create persisted %d rows", n)
-	}
-
-	// 100 字符整好合法。
-	r2b2AssertCode0(t, "user group create 100", r2b2Post(t, h.groupUserCreate, "/api/v1/group/user/create", map[string]interface{}{"name": name100}, ""))
-	var gid int64
-	if err := r.DB().Raw(`SELECT id FROM user_group WHERE name = ?`, name100).Scan(&gid).Error; err != nil || gid <= 0 {
-		t.Fatalf("read created group: %v", err)
-	}
-
-	// update 改名超长：拒绝且原名不变。
-	if body := r2b2Post(t, h.groupUserUpdate, "/api/v1/group/user/update", map[string]interface{}{"id": gid, "name": name101}, ""); k1Code(t, body) == 0 {
-		t.Fatalf("user group update with 101-rune name accepted: %s", body)
-	}
-	var got string
-	if err := r.DB().Raw(`SELECT name FROM user_group WHERE id = ?`, gid).Scan(&got).Error; err != nil {
-		t.Fatalf("read group name: %v", err)
-	}
-	if got != name100 {
-		t.Fatalf("group name changed to %d runes after rejected update, want unchanged 100", len([]rune(got)))
-	}
 }
 
 func TestR2K1SpeedLimitNameLengthBounded(t *testing.T) {

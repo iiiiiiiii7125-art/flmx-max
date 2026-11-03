@@ -45,7 +45,6 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_flow.go:GetFlowUploadForwardMetas":          {"chunkFlowUploadForwardIDs", "整表转发集，经 flow 专用分块器（500/块）分块"},
 	"repository_mutations.go:ListTunnelIPPreferences":       {"chunkInt64IDs", "整轮探测隧道集，已分块"},
 	"repository_mutations.go:validateIDsExistTx":            {"chunkInt64IDs", "请求载荷无上限，已分块"},
-	"repository_mutations.go:groupAssignmentScope":          {"chunkInt64IDs", "R5-FGRP 分配范围门：组归属/权限对集经本地 pluckChunked 分块"},
 	"repository_monitor_nodes.go:SetNodesLatencyTargets":    {"chunkInt64IDs", "R2 X01-001 已分块"},
 	"repository_nft_pending_delete.go:GetForwardStatusMap":  {"chunkInt64IDs", "请求载荷无上限，已分块"},
 	"repository_user_quota.go:ListUserQuotaViewsByUserIDs":  {"chunkInt64IDs", "整表用户集，已分块"},
@@ -74,7 +73,6 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	// —— 有界豁免（前提经 R3 复核仍成立，见 rescan.md）——
 	"repository.go:GetConfigsByNames":               {"", "全部调用方传代码字面量小清单（X01 A 集已核 5 处）"},
 	"repository.go:importPeerShares":                {"", "同 token 占位 share 集：按单个 token 的分享行物化，管理面创建、实际恒小（X01 A 集）"},
-	"repository.go:deleteSameNameGroupTx":           {"", "同名分组占位集：按单个分组名物化，实际恒小（X01 A 集）"},
 	"repository_kernel.go:applyInboundCounterChunk": {"", "调用方 ApplyInboundCounters 已按 200 条分片（X01 A 集）"},
 
 	// —— 排除集反连接（K8/B5）——
