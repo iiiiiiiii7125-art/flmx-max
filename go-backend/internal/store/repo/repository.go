@@ -4600,6 +4600,16 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			rep.warnf("备份恢复：转发 #%d（%q）的目标地址 %q 含空标签主机名，已跳过该行未恢复", f.ID, f.Name, f.RemoteAddr)
 			continue
 		}
+		// R8-07（H-F3-02）：恢复面补 R7-04 空段集谓词——零有效目标
+		// （纯分隔符/空串/纯空白）与写面同口径逐行跳过 + warning，
+		// 不整批中止。本地导入与 gist 恢复共用本路径，一处修两面通；
+		// 修复前版本落库的零目标行不得借备份迁移绕过新门重入（重入
+		// 行占端口且在补正目标前被更新面冻结）。
+		if remoteAddrHasNoTargets(f.RemoteAddr) {
+			rep.skip("forwards")
+			rep.warnf("备份恢复：转发 #%d（%q）的目标地址 %q 切分后无任何有效目标，已跳过该行未恢复", f.ID, f.Name, f.RemoteAddr)
+			continue
+		}
 		// D4-03：引用（用户/隧道）不存在时整行跳过并计数，不写悬空行。
 		userExists, err := rowExistsTx(tx, &model.User{}, f.UserID)
 		if err != nil {
@@ -6830,6 +6840,23 @@ func addrsHaveEmptyLabel(addr string) bool {
 		}
 	}
 	return false
+}
+
+// remoteAddrHasNoTargets 镜像 handler 侧 R7-04 空段集谓词
+// （validateRemoteAddrHasTargets / splitRemoteParts）：按逗号/换行/CR
+// 切分并逐段 TrimSpace 后无任何非空段，即零有效目标。R8-07
+// （H-F3-02）：恢复面此前只有空标签判，修复前版本落库的零目标行
+// （如 ",,,"）可随备份迁移绕过写面新门逐字重入——importForwards
+// 以本判与写面同口径逐行跳过 + warning。
+func remoteAddrHasNoTargets(addr string) bool {
+	for _, part := range strings.FieldsFunc(addr, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	}) {
+		if strings.TrimSpace(part) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // urlHostHasEmptyLabel 报告 URL 的 host 段是否含空标签；解析失败或
