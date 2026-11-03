@@ -10,6 +10,11 @@
 # 覆盖、ulimit -c unlimited 覆盖、cd /tmp 覆盖），钉死三锚点的
 # 生效值口径——存在性锚在追加形态下全绿即为自检红。
 #
+# 修复轮 8（R8-04）追加变体 9–13：子壳复合 exec 行与顶层复合
+# exec 行（废值须点名）、设置子壳在 exec 前的对照（子壳赋值不
+# 外泄、必须 PASS）、env 包装 exec（模型外形态须点名 FAIL）、
+# 包名移入同块 echo 命令（安装跨度外token 不计数、须点名缺包）。
+#
 # 用法：check-agent-image-tools-selftest.sh（无参数，作用于本仓库）。
 # 退出码：0 = 基线 PASS 且全部变体均被抓；1 = 任一断言不成立。
 set -u
@@ -125,6 +130,65 @@ if grep -q 'cd /etc/flmx_agent' "$TMP/v8.log"; then
 else
   echo "FAIL: variant 8 caught but the overridden anchor was not named"; sed 's/^/    /' "$TMP/v8.log"; exit 1
 fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 9: subshell compound exec line must FAIL and name the effective values (R8-04) =="
+sed -i 's|^exec .*|(cd /tmp \&\& ulimit -c unlimited \&\& exec /usr/local/bin/flmx-agent "$@")|' "$MIR/go-gost/docker-entrypoint.sh"
+if bash "$GATE" "$MIR" > "$TMP/v9.log" 2>&1; then
+  echo "FAIL: variant 9 was not caught (subshell compound exec still counted as guarded)"; exit 1
+fi
+if grep -q '/tmp' "$TMP/v9.log" && grep -q 'unlimited' "$TMP/v9.log"; then
+  echo "OK: variant 9 caught and named"
+else
+  echo "FAIL: variant 9 caught but the effective values were not named"; sed 's/^/    /' "$TMP/v9.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 10: top-level compound exec line must FAIL and name the effective values (R8-04) =="
+sed -i 's|^exec .*|cd /tmp \&\& ulimit -c unlimited \&\& exec /usr/local/bin/flmx-agent "$@\"|' "$MIR/go-gost/docker-entrypoint.sh"
+if bash "$GATE" "$MIR" > "$TMP/v10.log" 2>&1; then
+  echo "FAIL: variant 10 was not caught (compound exec line still counted as guarded)"; exit 1
+fi
+if grep -q '/tmp' "$TMP/v10.log" && grep -q 'unlimited' "$TMP/v10.log"; then
+  echo "OK: variant 10 caught and named"
+else
+  echo "FAIL: variant 10 caught but the effective values were not named"; sed 's/^/    /' "$TMP/v10.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 11: setup subshell before the exec line must still PASS (R8-04 control) =="
+sed -i 's|^exec .*|(cd /tmp \&\& ulimit -c unlimited)\nexec /usr/local/bin/flmx-agent "$@\"|' "$MIR/go-gost/docker-entrypoint.sh"
+if bash "$GATE" "$MIR" > "$TMP/v11.log" 2>&1; then
+  echo "OK: variant 11 control PASS (subshell assignments do not leak)"
+else
+  echo "FAIL: variant 11 control did not pass (subshell assignments wrongly counted as effective)"; sed 's/^/    /' "$TMP/v11.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 12: env-wrapped exec must FAIL as outside the command-flow model (R8-04) =="
+sed -i 's|^exec .*|env FLMX_PROBE=1 exec /usr/local/bin/flmx-agent "$@\"|' "$MIR/go-gost/docker-entrypoint.sh"
+if bash "$GATE" "$MIR" > "$TMP/v12.log" 2>&1; then
+  echo "FAIL: variant 12 was not caught (wrapped exec silently accepted)"; exit 1
+fi
+if grep -q 'command-flow model' "$TMP/v12.log"; then
+  echo "OK: variant 12 caught and named"
+else
+  echo "FAIL: variant 12 caught but the unparseable form was not named"; sed 's/^/    /' "$TMP/v12.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 13: package name moved into an echo in the same block must FAIL and name it (R8-04, ex R-11) =="
+sed -i 's| iperf3 \\| \\|' "$MIR/go-gost/Dockerfile"
+sed -i 's|&& rm -rf|\&\& echo iperf3 \&\& rm -rf|' "$MIR/go-gost/Dockerfile"
+if bash "$GATE" "$MIR" > "$TMP/v13.log" 2>&1; then
+  echo "FAIL: variant 13 was not caught (package name in echo still counted as installed)"; exit 1
+fi
+if grep -q 'iperf3' "$TMP/v13.log"; then
+  echo "OK: variant 13 caught and named"
+else
+  echo "FAIL: variant 13 caught but the missing package was not named"; sed 's/^/    /' "$TMP/v13.log"; exit 1
+fi
+cp "$ROOT/go-gost/Dockerfile" "$MIR/go-gost/Dockerfile"
 
 echo "SELFTEST PASS: baseline green, all variants caught and named"
 exit 0

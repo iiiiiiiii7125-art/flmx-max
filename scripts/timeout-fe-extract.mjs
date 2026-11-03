@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // timeout-fe-extract.mjs — check-timeout-budgets.sh 的前端提取助手
-// （修复轮 7，R7-26 / G-C4-09 机制处置）。
+// （修复轮 7，R7-26 / G-C4-09 机制处置；修复轮 8，R8-05 /
+// H-C4-04 绑定建模补全）。
 //
 // 背景：超时门的前端提取旧实现是 grep/awk 文本首命中——
 // helper_params 以 `grep -A10 '^const HELPER'` 取首命中窗口内的
@@ -22,6 +23,26 @@
 // 静态数值求值只认数字字面量与 + - * / 括号组合；不可静态求值
 // 的形态以 otherexpr 显式输出、由门按前提异常点名（fail-closed，
 // 绝不静默归零）。
+//
+// 绑定口径（修复轮 8，R8-05 / H-C4-04）：轮 7 的 AST 提取仍有三
+// 处「按文本/按名取首命中」的残余，均可被同文件内的诱饵形态遮
+// 蔽真值（第八轮探针 tfe-t1/t3/t4 实证）：
+//   ① helper 定义改为数据流绑定：cap/floor 只读「流向 return 的
+//      表达式」的最外层 Math.min/Math.max 结构——块体内的诱饵局
+//      部量（携登记值）不再入选；多 return 且取值不一致、或结果
+//      表达式内 Math.min 不唯一时不输出该 helper 行，门以「参数
+//      无法提取」点名（fail-closed）；
+//   ② 调用点 timeout 改为调用内绑定：只在该 Network./axios. 调
+//      用自身的实参对象字面量内找 timeout 属性（计算键字符串字
+//      面量同认；计算键非字面量、或配置对象含展开元素 → 该调用
+//      记 otherexpr）；配置以标识符传参时按作用域解析到其声明
+//      的对象字面量。调用之外的同名属性（如同函数体内的诱饵对
+//      象）不再冒充调用的 timeout；
+//   ③ 「公式助手」分类改为声明绑定：timeout 实参的标识符调用只
+//      有在作用域解析（局部声明/形参/导入均构成遮蔽）后确为本
+//      文件顶层 helper 声明时才记 formula；同名遮蔽/跨文件同名
+//      一律落 otherexpr 交门点名。另：export { x } 列表形态导出
+//      的同文件声明同入普查（此前脱集、靠格点查找失败兜底）。
 //
 // 用法：node scripts/timeout-fe-extract.mjs <REPO_ROOT>
 // 输出（TSV）：
@@ -133,6 +154,127 @@ for (const st of indexSf.statements) {
   }
 }
 
+// ── 作用域绑定解析（R8-05）──────────────────────────────────────
+// 模块级绑定全集：顶层变量/函数声明与导入绑定。同名既有本地声
+// 明又有导入属重复绑定错误，按 fail-closed 归「非本地」。
+const topDecls = new Map(topVarDecls);
+const importBindings = new Set();
+for (const st of indexSf.statements) {
+  if (ts.isFunctionDeclaration(st) && st.name) topDecls.set(st.name.text, st);
+  if (ts.isImportDeclaration(st) && st.importClause) {
+    const ic = st.importClause;
+    if (ic.name) importBindings.add(ic.name.text);
+    if (ic.namedBindings) {
+      if (ts.isNamespaceImport(ic.namedBindings)) {
+        importBindings.add(ic.namedBindings.name.text);
+      } else {
+        for (const el of ic.namedBindings.elements) {
+          importBindings.add(el.name.text);
+        }
+      }
+    }
+  }
+}
+
+// 绑定名全集：标识符名、解构模式内的全部标识符。
+const boundNames = (nameNode, acc = new Set()) => {
+  if (!nameNode) return acc;
+  if (ts.isIdentifier(nameNode)) acc.add(nameNode.text);
+  else if (ts.isObjectBindingPattern(nameNode) || ts.isArrayBindingPattern(nameNode)) {
+    for (const el of nameNode.elements) {
+      if (ts.isBindingElement(el)) boundNames(el.name, acc);
+    }
+  }
+  return acc;
+};
+
+// 某个父节点是否为其子节点引入名为 name 的作用域绑定（不含源
+// 文件级——顶层绑定由 resolveBinding 的终点判定处理）。
+const scopeBinds = (parent, name) => {
+  if (
+    ts.isFunctionDeclaration(parent) ||
+    ts.isFunctionExpression(parent) ||
+    ts.isArrowFunction(parent) ||
+    ts.isMethodDeclaration(parent) ||
+    ts.isConstructorDeclaration(parent) ||
+    ts.isGetAccessor(parent) ||
+    ts.isSetAccessor(parent)
+  ) {
+    for (const p of parent.parameters) {
+      if (boundNames(p.name).has(name)) return true;
+    }
+    return false;
+  }
+  if (ts.isBlock(parent) || ts.isModuleBlock(parent)) {
+    for (const s of parent.statements) {
+      if (ts.isVariableStatement(s)) {
+        for (const d of s.declarationList.declarations) {
+          if (boundNames(d.name).has(name)) return true;
+        }
+      } else if (ts.isFunctionDeclaration(s) && s.name && s.name.text === name) {
+        return true;
+      } else if (
+        (ts.isClassDeclaration(s) || ts.isEnumDeclaration(s)) &&
+        s.name &&
+        s.name.text === name
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (ts.isVariableDeclaration(parent)) {
+    return boundNames(parent.name).has(name);
+  }
+  if (
+    ts.isForStatement(parent) ||
+    ts.isForInStatement(parent) ||
+    ts.isForOfStatement(parent)
+  ) {
+    if (parent.initializer && ts.isVariableDeclarationList(parent.initializer)) {
+      for (const d of parent.initializer.declarations) {
+        if (boundNames(d.name).has(name)) return true;
+      }
+    }
+    return false;
+  }
+  if (ts.isCatchClause(parent) && parent.variableDeclaration) {
+    return boundNames(parent.variableDeclaration.name).has(name);
+  }
+  if (ts.isCaseBlock(parent)) {
+    for (const c of parent.clauses) {
+      for (const s of c.statements) {
+        if (ts.isVariableStatement(s)) {
+          for (const d of s.declarationList.declarations) {
+            if (boundNames(d.name).has(name)) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+  return false;
+};
+
+// resolveBinding(name, useNode)：useNode 处标识符 name 的绑定归属
+// ——"top"（本文件顶层同名声明）｜"other"（局部遮蔽/导入/同名其
+// 他顶层形态）｜"none"（无任何绑定）。自 useNode 沿父链上行，首
+// 个引入该名绑定的作用域决定归属（与 TS 作用域解析同序）。
+const resolveBinding = (name, useNode) => {
+  let node = useNode;
+  while (node.parent) {
+    const p = node.parent;
+    if (ts.isSourceFile(p)) {
+      if (topDecls.has(name) && !importBindings.has(name)) return "top";
+      if (topDecls.has(name) || importBindings.has(name)) return "other";
+      return "none";
+    }
+    if (scopeBinds(p, name)) return "other";
+    node = p;
+  }
+  return "none";
+};
+
 // ── helper 参数：Math.min(cap, Math.max(floor, …)) 结构 ──────────
 const HELPERS = [
   "batchCallTimeout",
@@ -148,28 +290,81 @@ const isMathCall = (node, prop) =>
   node.expression.expression.text === "Math" &&
   node.expression.name.text === prop;
 
-for (const name of HELPERS) {
-  const decl = topVarDecls.get(name);
-  if (!decl || !decl.initializer) continue;
-  let minCall = null;
-  const findMin = (node) => {
-    if (minCall) return;
-    if (isMathCall(node, "min")) {
-      minCall = node;
+// helper 的结果表达式集（R8-05 数据流绑定）：箭头/函数表达式的
+// 表达式体本身，或块体内全部属于该函数自身的 return 表达式
+// （不下潜嵌套函数）。诱饵局部量不流向 return、永不入选。
+const resultExprs = (fn) => {
+  if (!fn.body) return [];
+  if (!ts.isBlock(fn.body)) return [fn.body];
+  const rets = [];
+  const walk = (n) => {
+    if (ts.isReturnStatement(n)) {
+      rets.push(n.expression ?? null);
       return;
     }
-    ts.forEachChild(node, findMin);
+    if (
+      ts.isFunctionDeclaration(n) ||
+      ts.isFunctionExpression(n) ||
+      ts.isArrowFunction(n) ||
+      ts.isClassDeclaration(n)
+    ) {
+      return;
+    }
+    ts.forEachChild(n, walk);
   };
-  findMin(decl.initializer);
-  if (!minCall || minCall.arguments.length < 2) continue;
+  for (const s of fn.body.statements) walk(s);
+  return rets;
+};
+
+// 从一个结果表达式读 (cap, floor)：结果表达式自身（解括号后）
+// 须为 Math.min 调用，或其子树内 Math.min 恰一处；否则 null。
+const helperParamsOf = (expr) => {
+  expr = unwrap(expr);
+  if (!expr) return null;
+  let minCall = null;
+  if (isMathCall(expr, "min")) {
+    minCall = expr;
+  } else {
+    const mins = [];
+    const find = (n) => {
+      if (isMathCall(n, "min")) mins.push(n);
+      ts.forEachChild(n, find);
+    };
+    find(expr);
+    if (mins.length !== 1) return null;
+    minCall = mins[0];
+  }
+  if (!minCall || minCall.arguments.length < 2) return null;
   const cap = numEval(minCall.arguments[0]);
   const floorArg = unwrap(minCall.arguments[1]);
   const floor =
     floorArg && isMathCall(floorArg, "max")
       ? numEval(floorArg.arguments[0])
       : null;
-  if (cap === null || floor === null) continue;
-  out.push(`helper\t${name}\t${cap}\t${floor}`);
+  if (cap === null || floor === null) return null;
+  return [cap, floor];
+};
+
+for (const name of HELPERS) {
+  const decl = topVarDecls.get(name);
+  if (!decl || !decl.initializer) continue;
+  const fn = unwrap(decl.initializer);
+  if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) continue;
+  const exprs = resultExprs(fn);
+  if (exprs.length === 0) continue;
+  const first = helperParamsOf(exprs[0]);
+  if (!first) continue;
+  // 多个 return 表达式取值必须一致，否则不输出（fail-closed）。
+  let consistent = true;
+  for (let i = 1; i < exprs.length; i++) {
+    const p = helperParamsOf(exprs[i]);
+    if (!p || p[0] !== first[0] || p[1] !== first[1]) {
+      consistent = false;
+      break;
+    }
+  }
+  if (!consistent) continue;
+  out.push(`helper\t${name}\t${first[0]}\t${first[1]}`);
 }
 
 // ── 调用点普查：导出声明 → 首个 timeout 形态 ─────────────────────
@@ -185,7 +380,11 @@ const classifyTimeoutInit = (init) => {
   init = unwrap(init);
   if (ts.isCallExpression(init) && ts.isIdentifier(init.expression)) {
     const fe = HELPER_FE_NAME.get(init.expression.text);
-    if (fe) return ["formula", fe];
+    // 声明绑定（R8-05）：仅当调用标识符解析到本文件顶层 helper
+    // 声明才记 formula；同名遮蔽/导入同名落 otherexpr。
+    if (fe && resolveBinding(init.expression.text, init) === "top") {
+      return ["formula", fe];
+    }
   }
   if (isMathCall(init, "max")) {
     const v = numEval(init.arguments[0]);
@@ -195,6 +394,117 @@ const classifyTimeoutInit = (init) => {
   return v === null ? ["otherexpr", ""] : ["literal", fmtSec(v)];
 };
 
+// 在配置对象字面量内找 timeout（R8-05 调用内绑定）：只认该对象
+// 的顶层属性。返回 [kind, value] 或 null（未见 timeout 面）。
+// 计算键字符串字面量同认；见计算键非字面量或展开元素时，无法
+// 排除 timeout 藏匿 → otherexpr（fail-closed）。
+const scanConfigObject = (obj) => {
+  let sawOpaque = false;
+  for (const prop of obj.properties) {
+    if (ts.isSpreadAssignment(prop)) {
+      sawOpaque = true;
+      continue;
+    }
+    if (ts.isPropertyAssignment(prop)) {
+      const nm = prop.name;
+      if (
+        (ts.isIdentifier(nm) || ts.isStringLiteral(nm)) &&
+        nm.text === "timeout"
+      ) {
+        return classifyTimeoutInit(prop.initializer);
+      }
+      if (ts.isComputedPropertyName(nm)) {
+        const e = unwrap(nm.expression);
+        if (ts.isStringLiteral(e) && e.text === "timeout") {
+          return classifyTimeoutInit(prop.initializer);
+        }
+        sawOpaque = true;
+      }
+      continue;
+    }
+    if (
+      ts.isShorthandPropertyAssignment(prop) &&
+      prop.name.text === "timeout"
+    ) {
+      // { timeout } 简写：值即同名标识符，按其表达式分类。
+      return classifyTimeoutInit(prop.name);
+    }
+  }
+  return sawOpaque ? ["otherexpr", ""] : null;
+};
+
+// 单个导出声明的 timeout 形态：定位首个 Network./axios. 调用，
+// 只在该调用自身内取证（实参对象字面量、或以标识符传参时解析
+// 到的声明对象字面量）；调用之外一概不看。
+const censusDecl = (declNode) => {
+  const ordered = [];
+  const collect = (n) => {
+    ordered.push(n);
+    ts.forEachChild(n, collect);
+  };
+  collect(declNode);
+  const callNode = ordered.find(
+    (n) =>
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      (n.expression.expression.text === "Network" ||
+        n.expression.expression.text === "axios"),
+  );
+  if (!callNode) return ["none", ""];
+  let sawOpaque = false;
+  for (const arg of callNode.arguments) {
+    const a = unwrap(arg);
+    if (ts.isObjectLiteralExpression(a)) {
+      const r = scanConfigObject(a);
+      if (r) {
+        if (r[0] === "otherexpr") {
+          sawOpaque = true;
+          continue;
+        }
+        return r;
+      }
+    } else if (ts.isIdentifier(a)) {
+      // 配置以标识符传参：解析到其声明的对象字面量初始化式。
+      if (resolveBinding(a.text, a) !== "none") {
+        let node = a;
+        let decl = null;
+        while (node.parent && !decl) {
+          const p = node.parent;
+          if (ts.isVariableDeclaration(p) && boundNames(p.name).has(a.text)) {
+            decl = p;
+          } else if (ts.isSourceFile(p)) {
+            decl = topDecls.get(a.text) ?? null;
+          }
+          node = p;
+        }
+        if (decl && ts.isVariableDeclaration(decl) && decl.initializer) {
+          const init = unwrap(decl.initializer);
+          if (ts.isObjectLiteralExpression(init)) {
+            const r = scanConfigObject(init);
+            if (r) {
+              if (r[0] === "otherexpr") {
+                sawOpaque = true;
+                continue;
+              }
+              return r;
+            }
+          }
+        }
+      }
+    }
+  }
+  return sawOpaque ? ["otherexpr", ""] : ["none", ""];
+};
+
+const emittedCalls = new Set();
+const emitCall = (name, declNode) => {
+  if (emittedCalls.has(name)) return;
+  emittedCalls.add(name);
+  const [kind, value] = censusDecl(declNode);
+  out.push(`call\t${name}\t${kind}\t${value}`);
+};
+
 for (const st of indexSf.statements) {
   const exported =
     ts.canHaveModifiers(st) &&
@@ -202,47 +512,23 @@ for (const st of indexSf.statements) {
       (m) => m.kind === ts.SyntaxKind.ExportKeyword,
     );
   if (!exported) continue;
-  const decls = [];
   if (ts.isVariableStatement(st)) {
     for (const d of st.declarationList.declarations) {
-      if (ts.isIdentifier(d.name)) decls.push([d.name.text, d]);
+      if (ts.isIdentifier(d.name)) emitCall(d.name.text, d);
     }
   } else if (ts.isFunctionDeclaration(st) && st.name) {
-    decls.push([st.name.text, st]);
+    emitCall(st.name.text, st);
   }
-  for (const [name, declNode] of decls) {
-    // 文档序收集子树节点，自首个 Network./axios. 调用起找首个
-    // timeout 属性赋值（与旧 awk 的子串定位口径对齐）。
-    const ordered = [];
-    const collect = (n) => {
-      ordered.push(n);
-      ts.forEachChild(n, collect);
-    };
-    collect(declNode);
-    const callIdx = ordered.findIndex(
-      (n) =>
-        ts.isCallExpression(n) &&
-        ts.isPropertyAccessExpression(n.expression) &&
-        ts.isIdentifier(n.expression.expression) &&
-        (n.expression.expression.text === "Network" ||
-          n.expression.expression.text === "axios"),
-    );
-    let kind = "none";
-    let value = "";
-    if (callIdx >= 0) {
-      for (let i = callIdx; i < ordered.length; i++) {
-        const n = ordered[i];
-        if (
-          ts.isPropertyAssignment(n) &&
-          (ts.isIdentifier(n.name) || ts.isStringLiteral(n.name)) &&
-          n.name.text === "timeout"
-        ) {
-          [kind, value] = classifyTimeoutInit(n.initializer);
-          break;
-        }
-      }
-    }
-    out.push(`call\t${name}\t${kind}\t${value}`);
+}
+// export { x } / export { x as y } 列表形态（R8-05）：同文件顶层
+// 声明经导出列表对外者同入普查，输出名取导出名。
+for (const st of indexSf.statements) {
+  if (!ts.isExportDeclaration(st) || !st.exportClause) continue;
+  if (!ts.isNamedExports(st.exportClause)) continue;
+  for (const el of st.exportClause.elements) {
+    const local = (el.propertyName ?? el.name).text;
+    const decl = topDecls.get(local);
+    if (decl) emitCall(el.name.text, decl);
   }
 }
 
