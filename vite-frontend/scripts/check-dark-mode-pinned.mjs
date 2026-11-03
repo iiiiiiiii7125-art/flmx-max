@@ -24,7 +24,8 @@
 //   - 口径宁严勿漏：实参区内（含嵌套表达式）出现的 'dark' token 一律
 //     判红，与仓内文本钉族 fail-closed 取舍一致。
 // 变异钉死形态：add("dark")、add(f(), "dark")、add(`x ${"dark"}`)、
-// toggle("dark", true) 必须红；toggle("has-...", cond) 等现行形态与
+// toggle("dark", true)、classList 断行 .add("dark")、
+// classList?.add("dark") 必须红；toggle("has-...", cond) 等现行形态与
 // 'darkness' 等非精确 token 必须绿。
 //
 // 已知边界（D-C4-01，第四轮审计登记接受，修复轮 4 落字）：断言①的
@@ -36,6 +37,14 @@
 // remove('dark')，后两环由断言②③钉住）——单靠绕过本门无法静默复
 // 活深色。故此边界登记为已知取舍，本门不扩扫描面去追有意规避；本
 // 门的职责是钉死无意/顺手形态的重新引入。
+//
+// R5-06 收口（第五轮审计 E-C4-02，修复轮 5）：上段登记的是非字面量
+// 构造一族；其后发现的「调用点模式中断」子族——classList 与方法名
+// 之间被空白/换行或 ?. 隔开（classList 断行 .add、classList?.add）
+// ——'dark' 字面量完整在场、属顺手写出的普通形态而非构造规避，旧
+// 调用点正则要求两端相邻而整体漏扫（探针实证 exit 0）。现正则放宽
+// 为 classList\s*\??\.\s*(add|toggle)\s*\( 收口，两形态已并入上方
+// 变异钉死形态；非字面量构造一族维持上段登记接受不变。
 //
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-dark-mode-pinned.mjs
@@ -172,7 +181,7 @@ let addCallCount = 0;
 let toggleCallCount = 0;
 for (const file of walk(srcDir)) {
   const text = readFileSync(file, "utf8");
-  for (const m of text.matchAll(/classList\.(add|toggle)\s*\(/g)) {
+  for (const m of text.matchAll(/classList\s*\??\.\s*(add|toggle)\s*\(/g)) {
     const method = m[1];
     if (method === "add") addCallCount++;
     else toggleCallCount++;
