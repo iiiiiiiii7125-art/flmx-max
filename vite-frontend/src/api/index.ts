@@ -1361,8 +1361,13 @@ export const getSubscriptionTemplates = () =>
   Network.post<SubTemplateItem[]>("/subscription/template/list");
 export const getTemplateCatalog = () =>
   Network.post<TemplateRuleCategoryItem[]>("/subscription/template/catalog");
-export const saveSubscriptionTemplate = (data: SubTemplateDraft) =>
-  Network.post<SubTemplateItem>("/subscription/template/save", data);
+export const saveSubscriptionTemplate = (
+  data: SubTemplateDraft,
+  idemKey?: string,
+) =>
+  Network.post<SubTemplateItem>("/subscription/template/save", data, {
+    idemKey,
+  });
 export const checkSubscriptionTemplate = (data: SubTemplateDraft) =>
   Network.post<TemplateCheckResult>("/subscription/template/check", data);
 export const refreshSubscriptionTemplate = (id: number) =>
@@ -1475,10 +1480,11 @@ export const getNodeGroups = () =>
   Network.post<{ items: NodeGroupItem[]; regions: string[] }>(
     "/subscription/group/list",
   );
-export const saveNodeGroup = (data: NodeGroupDraft) =>
+export const saveNodeGroup = (data: NodeGroupDraft, idemKey?: string) =>
   // 保存后要给引用了这个组的订阅重新下发凭据（与保存订阅同口径）。
   Network.post<NodeGroupItem>("/subscription/group/save", data, {
     timeout: 330_000,
+    idemKey,
   });
 export const deleteNodeGroup = (id: number) =>
   Network.post("/subscription/group/delete", { id }, { timeout: 330_000 });

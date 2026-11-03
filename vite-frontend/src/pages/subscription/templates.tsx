@@ -21,6 +21,7 @@ import {
   refreshSubscriptionTemplate,
   saveSubscriptionTemplate,
 } from "@/api";
+import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Input, Textarea } from "@/shadcn-bridge/heroui/input";
@@ -189,6 +190,16 @@ export function SubscriptionTemplatesModal({
     }
   };
 
+  // R10-06：模板新建表单幂等键（同表单复用、成功轮换；更新不带键）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
+  // 编辑表单打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(
+    Boolean(edit),
+    Boolean(edit) && !edit?.id,
+    rotateIdemKey,
+  );
+
   const save = async () => {
     const d = draft();
     if (!d) return;
@@ -198,11 +209,12 @@ export function SubscriptionTemplatesModal({
     }
     setBusy(true);
     try {
-      const res = await saveSubscriptionTemplate(d);
+      const res = await saveSubscriptionTemplate(d, d.id ? undefined : idemKey);
       if (res.code !== 0) {
         toast.error(res.msg || "保存失败");
         return;
       }
+      if (!d.id) rotateIdemKey();
       toast.success("模板已保存");
       setEdit(null);
       setCheck(null);

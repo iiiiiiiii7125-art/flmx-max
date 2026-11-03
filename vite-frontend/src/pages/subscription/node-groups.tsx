@@ -17,6 +17,7 @@ import {
   previewNodeGroup,
   saveNodeGroup,
 } from "@/api";
+import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
 import { Segmented, ToggleRow } from "@/pages/subscription/controls";
 import { RenameRules } from "@/pages/subscription/rename-rules";
@@ -431,17 +432,28 @@ export default function NodeGroupsSection({
   );
   const [busy, setBusy] = useState(false);
 
+  // R10-06：节点组新建表单幂等键（同表单复用、成功轮换；更新不带键）。
+  const { idemKey, rotateIdemKey } = useIdemKey();
+
+  // 创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
+  useRotateIdemKeyOnCreateOpen(
+    Boolean(draft),
+    Boolean(draft) && !draft?.id,
+    rotateIdemKey,
+  );
+
   const save = async () => {
     if (!draft) return;
     setSaving(true);
     try {
-      const res = await saveNodeGroup(draft);
+      const res = await saveNodeGroup(draft, draft.id ? undefined : idemKey);
 
       if (res.code !== 0) {
         toast.error(res.msg || "保存失败");
 
         return;
       }
+      if (!draft.id) rotateIdemKey();
       if (res.msg && res.msg !== "操作成功") toast(res.msg, { icon: "⚠️" });
       else toast.success("已保存");
       setDraft(null);
