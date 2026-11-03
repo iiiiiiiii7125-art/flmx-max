@@ -778,6 +778,7 @@ func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error 
 	if err != nil {
 		return err
 	}
+	mode = capEnvFileMode(mode)
 	data, err := os.ReadFile(envPath)
 	if err != nil {
 		return err
@@ -813,6 +814,7 @@ func (e *systemUpgradeExecutor) backupFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	mode = capEnvFileMode(mode)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -830,6 +832,7 @@ func (e *systemUpgradeExecutor) restoreBackup(path string) error {
 	if err != nil {
 		return err
 	}
+	mode = capEnvFileMode(mode)
 	data, err := os.ReadFile(backupPath)
 	if err != nil {
 		return err
@@ -1291,6 +1294,20 @@ func fileModeOrDefault(path string, fallback os.FileMode) (os.FileMode, error) {
 		return 0, err
 	}
 	return info.Mode().Perm(), nil
+}
+
+// capEnvFileMode 把 .env 族写点（updateEnvVersion 的 .env 改写、
+// backupFile 的 .upgrade.bak、restoreBackup 的恢复写）继承来的
+// 文件 mode 封顶到 0600（I-C3-03(b)）：.env 与其备份含
+// JWT_SECRET/数据库口令，此前自升级改写只继承现行 mode、永不收
+// 紧——运维手工建的 0644 .env 经改写后原样保留全局可读，无任何
+// 一面纠正。口径：(继承值 &^ 077) | 0600，即清组/其他位并保属主
+// 读写；继承值不存在时 fileModeOrDefault 的回落已是 0600、本函
+// 数对其为恒等。三写点共用 backupFile/restoreBackup 的 compose
+// 备份/恢复同受此帽（compose 同为部署配置面，0600 对其属主读
+// 写无影响）。
+func capEnvFileMode(mode os.FileMode) os.FileMode {
+	return (mode &^ 0o077) | 0o600
 }
 
 // writeFileAtomicWithMode 以「同目录临时文件 + Rename 覆盖」原子落盘：
