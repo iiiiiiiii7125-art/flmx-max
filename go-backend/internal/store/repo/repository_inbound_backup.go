@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 
 	"go-backend/internal/kernel"
@@ -1327,7 +1328,189 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 	if snellStripped > 0 {
 		rep.warnf("备份恢复：%d 条 Snell 内核入站带有链式出站/分流（Snell 内核不支持，已清除其出站与分流配置改直连），入站本身已照常恢复", snellStripped)
 	}
+	// R2-F2-C-B01：链式策略冲突只披露不改行。恢复出的「出站 IP 策略 ×
+	// 链式下一跳字面 IP」冲突组合在保存面会被拒绝（validateChainVersion），
+	// 导入面不改恢复语义（行照常恢复、路由列不动），但必须在回执点名——
+	// 否则渲染期把链式出站静默标 unreachable 丢弃流量、回执无声。以剥离
+	// 后的最终落库形态判定（悬空/Snell 已清为直连的行不再算冲突）。
+	conflictNames := []string{}
+	for _, ib := range rows {
+		var row model.NodeInbound
+		res := tx.Where("id = ?", ib.ID).Limit(1).Find(&row)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 || row.OutboundIPStrategy == "" {
+			continue
+		}
+		conflict, err := importedChainPolicyConflictTx(tx, &row)
+		if err != nil {
+			return err
+		}
+		if conflict {
+			conflictNames = append(conflictNames, row.Name)
+		}
+	}
+	if len(conflictNames) > 0 {
+		names := conflictNames
+		suffix := ""
+		if len(names) > 10 {
+			suffix = fmt.Sprintf(" 等共 %d 条", len(conflictNames))
+			names = names[:10]
+		}
+		rep.warnf("备份恢复：%d 条入站的出站 IP 策略与其链式下一跳的地址冲突（%s%s），已照常恢复，但其链式流量将被丢弃，请在入站设置中调整出站 IP 策略或下一跳地址", len(conflictNames), strings.Join(names, "、"), suffix)
+	}
 	return nil
+}
+
+// importedChainPolicyConflictTx reports whether a restored inbound's
+// outbound IP strategy conflicts with the literal address of any of
+// its chained next hops — the combination the save surface refuses
+// (handler validateChainVersion). Disclosure only; nothing is
+// modified.
+func importedChainPolicyConflictTx(tx *gorm.DB, row *model.NodeInbound) (bool, error) {
+	targetIDs := []int64{}
+	if row.OutboundID > 0 {
+		targetIDs = append(targetIDs, row.OutboundID)
+	}
+	if strings.TrimSpace(row.SplitRules) != "" {
+		var rawRules []json.RawMessage
+		if err := json.Unmarshal([]byte(row.SplitRules), &rawRules); err == nil {
+			for _, rr := range rawRules {
+				var probe struct {
+					OutboundID int64 `json:"outboundId"`
+				}
+				if err := json.Unmarshal(rr, &probe); err == nil && probe.OutboundID > 0 {
+					targetIDs = append(targetIDs, probe.OutboundID)
+				}
+			}
+		}
+	}
+	for _, tid := range targetIDs {
+		var target model.NodeInbound
+		res := tx.Where("id = ?", tid).Limit(1).Find(&target)
+		if res.Error != nil {
+			return false, res.Error
+		}
+		if res.RowsAffected == 0 {
+			continue
+		}
+		host, err := importedChainHostTx(tx, row, &target)
+		if err != nil {
+			return false, err
+		}
+		if host == "" {
+			continue
+		}
+		if err := kernel.ValidateOutboundIPServer(row.OutboundIPStrategy, host); err != nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// importedChainHostTx mirrors the host selection of the handler's
+// chainEndpoint (the repo layer cannot import the handler; the
+// handler stays authoritative — the same restatement discipline as
+// meteringShapeBlockedBackup). Only the dialed host matters here.
+// Cases where the handler's endpoint resolution errors out (a
+// PROXY-protocol target, a loopback-only listen on another node, a
+// missing share address) yield "": those fail the referrer's next
+// apply loudly and by name, unlike the silent strategy drop this
+// disclosure exists for.
+func importedChainHostTx(tx *gorm.DB, referrer, target *model.NodeInbound) (string, error) {
+	if target.KernelID == 0 { // imported (external) inbound
+		if h := strings.TrimSpace(target.ShareHost); h != "" {
+			return h, nil
+		}
+		return target.Listen, nil
+	}
+	if target.AcceptProxyProtocol == 1 {
+		return "", nil
+	}
+	if target.NodeID == referrer.NodeID {
+		if ip := net.ParseIP(target.Listen); ip != nil && !ip.IsUnspecified() {
+			return ip.String(), nil
+		}
+		return "127.0.0.1", nil
+	}
+	if ip := net.ParseIP(target.Listen); ip != nil && ip.IsLoopback() {
+		return "", nil
+	}
+	var node model.Node
+	res := tx.Where("id = ?", target.NodeID).Limit(1).Find(&node)
+	if res.Error != nil {
+		return "", res.Error
+	}
+	var np *model.Node
+	if res.RowsAffected > 0 {
+		np = &node
+	}
+	return importedShareAddress(target, np), nil
+}
+
+// importedShareMode / importedShareAddress / importedNodeShareIP /
+// importedStripShareHostPort mirror the handler's share-address
+// resolution (handler/kernel_share_address.go) for the disclosure
+// check above; keep them in agreement with the handler.
+func importedShareMode(row *model.NodeInbound) string {
+	mode := strings.TrimSpace(row.ShareAddressMode)
+	if (mode == "" || mode == "auto") && strings.TrimSpace(row.ShareHost) != "" {
+		return "custom"
+	}
+	switch mode {
+	case "ipv4", "ipv6", "custom":
+		return mode
+	default:
+		return "auto"
+	}
+}
+
+func importedShareAddress(row *model.NodeInbound, node *model.Node) string {
+	switch importedShareMode(row) {
+	case "custom":
+		return kernel.CanonicalShareHostValue(row.ShareHost)
+	case "ipv4":
+		return importedNodeShareIP(node, false)
+	case "ipv6":
+		return importedNodeShareIP(node, true)
+	default:
+		if node == nil {
+			return ""
+		}
+		if h := importedStripShareHostPort(node.ServerIP); h != "" {
+			return h
+		}
+		if h := importedNodeShareIP(node, false); h != "" {
+			return h
+		}
+		return importedNodeShareIP(node, true)
+	}
+}
+
+func importedNodeShareIP(node *model.Node, ipv6 bool) string {
+	if node == nil {
+		return ""
+	}
+	value := node.ServerIPV4.String
+	if ipv6 {
+		value = node.ServerIPV6.String
+	}
+	for _, host := range []string{value, node.ServerIP} {
+		addr, err := netip.ParseAddr(importedStripShareHostPort(host))
+		if err == nil && addr.Is6() == ipv6 && !addr.Is4In6() {
+			return addr.String()
+		}
+	}
+	return ""
+}
+
+func importedStripShareHostPort(value string) string {
+	value = strings.TrimSpace(value)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return host
+	}
+	return strings.Trim(value, "[]")
 }
 
 // pruneDanglingSplitRulesTx 剔除 splitRules 中 outboundId 指向不可用
