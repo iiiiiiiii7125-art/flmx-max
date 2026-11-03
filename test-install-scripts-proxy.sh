@@ -1962,6 +1962,88 @@ test_install_docker_rejects_unverified_script() (
   assert_equals "1" "$rc" "F-050: install_docker should fail when script is unverified and package fallback fails"
 )
 
+# R6-01（行为半）：兜底成功路径——官方脚本 pin 校验不过、包管理器
+# 桩成成功应答时，install_docker 必须经包管理器兜底返回 0 并走到
+# 装成判定。F-050 只桩了全失败形态，成功路径此前从未被验过。断言
+# 按本机发行版分支取（CI/沙箱为 Debian 支）：Debian 支必须装
+# docker.io、且请求清单中不得出现发行源不存在的
+# docker-compose-plugin；RHEL 支必须先落官方源再装 docker-ce。
+test_install_docker_fallback_succeeds_with_working_package_managers() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local sentinel pm_log
+  sentinel=$(mktemp -u)
+  pm_log=$(mktemp)
+  export DOCKER_INSTALL_SENTINEL="$sentinel"
+  export DOCKER_PM_LOG="$pm_log"
+  curl() {
+    local out="" prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      prev="$a"
+    done
+    if [[ -n "$out" ]]; then
+      printf '#!/bin/sh\ntouch "%s"\n' "$DOCKER_INSTALL_SENTINEL" > "$out"
+    else
+      printf '#!/bin/sh\ntouch "%s"\n' "$DOCKER_INSTALL_SENTINEL"
+    fi
+    return 0
+  }
+  systemctl() { return 0; }
+  service() { return 0; }
+  apt-get() { printf 'apt-get %s\n' "$*" >> "$DOCKER_PM_LOG"; return 0; }
+  dnf() { printf 'dnf %s\n' "$*" >> "$DOCKER_PM_LOG"; return 0; }
+  yum() { printf 'yum %s\n' "$*" >> "$DOCKER_PM_LOG"; return 0; }
+  apk() { printf 'apk %s\n' "$*" >> "$DOCKER_PM_LOG"; return 0; }
+
+  local rc="0"
+  ( install_docker >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R6-01: install_docker must succeed via the package-manager fallback when the package manager succeeds"
+  [[ ! -f "$sentinel" ]] || fail "R6-01: unverified Docker installer script must not be executed on the fallback path either"
+  [[ -s "$pm_log" ]] || fail "R6-01: fallback must actually invoke a package manager"
+  if [[ -f /etc/debian_version ]]; then
+    grep -q 'docker\.io' "$pm_log" || \
+      fail "R6-01: Debian fallback must install docker.io"
+    if grep -q 'docker-compose-plugin' "$pm_log"; then
+      fail "R6-01: Debian fallback must not request docker-compose-plugin (absent from distro repos, fails the whole apt command)"
+    fi
+    grep -Eq 'docker-compose-v2|docker-compose' "$pm_log" || \
+      fail "R6-01: Debian fallback must install a compose package that exists in distro repos"
+  elif [[ -f /etc/redhat-release ]]; then
+    grep -q 'docker-ce\.repo' "$pm_log" || \
+      fail "R6-01: RHEL fallback must add the Docker official repo before installing"
+    grep -q 'docker-ce' "$pm_log" || \
+      fail "R6-01: RHEL fallback must install docker-ce from the official repo"
+  elif [[ -f /etc/alpine-release ]]; then
+    grep -q 'docker' "$pm_log" || \
+      fail "R6-01: Alpine fallback must install docker"
+  fi
+)
+
+# R6-01（静态半）：以真实包名清单为断言钉住 install_docker 函数体
+# ——apt 的 install 行不得再含发行源不存在的 docker-compose-plugin；
+# 旧 RHEL 坏支签名「install -y docker 」不得在函数内复现；RHEL 支
+# 必须出现官方源地址（先落源、再装官方包名）。
+test_install_docker_fallback_package_names_exist_in_repos() (
+  set -euo pipefail
+  local body
+  body=$(awk '/^install_docker\(\) \{/,/^\}/' "$ROOT_DIR/panel_install.sh")
+  [[ -n "$body" ]] || fail "R6-01: install_docker body must be extractable"
+  if grep 'apt-get install' <<< "$body" | grep -q 'docker-compose-plugin'; then
+    fail "R6-01: the apt fallback line must not contain docker-compose-plugin (not in Debian/Ubuntu distro repos)"
+  fi
+  grep -q 'docker\.io' <<< "$body" || \
+    fail "R6-01: Debian fallback must install docker.io"
+  grep -Eq 'docker-compose-v2|docker-compose' <<< "$body" || \
+    fail "R6-01: Debian fallback must name a distro-repo compose package"
+  if grep -q 'install -y docker ' <<< "$body"; then
+    fail "R6-01: the old RHEL fallback form (install -y docker ...) must not reappear"
+  fi
+  grep -q 'download\.docker\.com/linux/centos/docker-ce\.repo' <<< "$body" || \
+    fail "R6-01: RHEL fallback must add the Docker official repo before using official package names"
+)
+
 # F-138: download_verified 边角——空 .sha256 必须拒；逃生口误填 yes 不得静默跳过校验。
 test_download_verified_fail_closed_edges() (
   set -euo pipefail
@@ -3176,6 +3258,8 @@ test_install_flux_agent_keeps_service_when_download_fails
 test_install_panel_refuses_existing_deployment
 test_install_panel_waits_for_backend_health
 test_install_docker_rejects_unverified_script
+test_install_docker_fallback_succeeds_with_working_package_managers
+test_install_docker_fallback_package_names_exist_in_repos
 test_download_verified_fail_closed_edges
 test_verify_downloaded_binary_retries_transient_checksum_failure
 test_verify_downloaded_binary_surfaces_curl_error_after_retries
@@ -3193,6 +3277,10 @@ panel_caddyfile_fixture_env() {
   ISACTIVE_FAIL_FLAG="$FIXTURE_DIR/isactive-fail"
   sleep() { :; }
   getent() { printf '203.0.113.10 %s\n' "$2"; }
+  # R6-04 后菜单 5 会把解析结果与本机公网 IP 比对：夹具的解析恒指
+  # 203.0.113.10，本机公网 IP 桩同值，既有菜单 5 用例才仍走「已核
+  # 对指向本机」分支（不额外消耗确认输入）。
+  get_public_ip() { printf '203.0.113.10'; }
   caddy() {
     if [[ -f "$VALIDATE_FAIL_FLAG" ]]; then
       return 1
@@ -4908,6 +4996,129 @@ test_panel_domain_compare_case_insensitive() (
     "L2-31: exactly one panel site block may remain after a case-variant re-run"
 )
 
+# R6-03（菜单 5 命中支）：部署目录外运行菜单 5——resolve 定位到部
+# 署目录（.env 写 FRONTEND_PORT=7366）后，Caddyfile 必须反代到
+# 7366、完成输出必须打印实际反代端口。resolve 桩只回填
+# PANEL_DEPLOY_DIR、不 cd（比真实 resolve 更严：证明端口确从定位
+# 到的部署 .env 读出，而非恰好 cwd 命中）。旧实现从不调用
+# resolve、候选链全不中、静默按 6366 写——本用例对旧代码必红。
+test_panel_menu5_resolves_deploy_dir_port_outside_cwd() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+  unset FRONTEND_PORT
+
+  local deploy_dir scratch_dir
+  deploy_dir=$(mktemp -d)
+  scratch_dir=$(mktemp -d)
+  printf 'FRONTEND_PORT=7366\n' > "$deploy_dir/.env"
+  export R6_DEPLOY_DIR="$deploy_dir"
+  resolve_panel_deployment() {
+    PANEL_DEPLOY_DIR="$R6_DEPLOY_DIR"
+    export PANEL_DEPLOY_DIR
+    return 0
+  }
+
+  local log="$FIXTURE_DIR/menu5-resolve.log" rc="0"
+  ( cd "$scratch_dir" && setup_domain_proxy <<< "panel.example.com" >"$log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R6-03: menu 5 should succeed when deployment resolution finds the deploy dir"
+  grep -q 'reverse_proxy 127.0.0.1:7366' "$CADDYFILE_PATH" || \
+    fail "R6-03: menu 5 must proxy to the FRONTEND_PORT of the resolved deployment .env"
+  grep -q '实际反代端口: 127.0.0.1:7366' "$log" || \
+    fail "R6-03: menu 5 completion output must print the actual reverse-proxy port"
+)
+
+# R6-03（菜单 6 命中支）：同菜单 5——目录外运行、resolve 定位到写
+# 有 7366 的部署 .env 时，追加的订阅前置块必须反代到 7366 且完成
+# 输出打印实际反代端口（旧实现静默 6366，必红）。
+test_panel_menu6_resolves_deploy_dir_port_outside_cwd() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+  unset FRONTEND_PORT
+
+  cat > "$CADDYFILE_PATH" <<'EOF'
+panel.example.com {
+    reverse_proxy 127.0.0.1:7366
+}
+EOF
+
+  local deploy_dir scratch_dir
+  deploy_dir=$(mktemp -d)
+  scratch_dir=$(mktemp -d)
+  printf 'FRONTEND_PORT=7366\n' > "$deploy_dir/.env"
+  export R6_DEPLOY_DIR="$deploy_dir"
+  resolve_panel_deployment() {
+    PANEL_DEPLOY_DIR="$R6_DEPLOY_DIR"
+    export PANEL_DEPLOY_DIR
+    return 0
+  }
+
+  local log="$FIXTURE_DIR/menu6-resolve.log" rc="0"
+  ( cd "$scratch_dir" && setup_subscription_front_domain <<< "sub.example.com" >"$log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R6-03: menu 6 should succeed when deployment resolution finds the deploy dir"
+  grep -q '^sub.example.com {' "$CADDYFILE_PATH" || \
+    fail "R6-03: menu 6 must append the front block"
+  grep -A1 '^sub.example.com {' "$CADDYFILE_PATH" | grep -q 'reverse_proxy 127.0.0.1:7366' || \
+    fail "R6-03: menu 6 must proxy the front block to the resolved deployment FRONTEND_PORT"
+  grep -q '实际反代端口: 127.0.0.1:7366' "$log" || \
+    fail "R6-03: menu 6 completion output must print the actual reverse-proxy port"
+)
+
+# R6-03（未命中支）：定位失败、候选链全不中时不得静默——必须显
+# 式告警「未定位到部署 .env」后才回退 6366（旧实现无任何告警，
+# 必红）。
+test_panel_menu5_warns_when_deploy_env_not_found() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+  unset FRONTEND_PORT
+  unset PANEL_DEPLOY_DIR
+
+  resolve_panel_deployment() { return 1; }
+
+  local scratch_dir
+  scratch_dir=$(mktemp -d)
+  local log="$FIXTURE_DIR/menu5-noresolve.log" rc="0"
+  ( cd "$scratch_dir" && setup_domain_proxy <<< "panel.example.com" >"$log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R6-03: menu 5 should still complete with the default port when nothing is located"
+  grep -q '未定位到部署 .env' "$log" || \
+    fail "R6-03: menu 5 must explicitly warn when no deployment .env is located"
+  grep -q '实际反代端口: 127.0.0.1:6366' "$log" || \
+    fail "R6-03: menu 5 completion output must print the actual reverse-proxy port even on the default fallback"
+  grep -q 'reverse_proxy 127.0.0.1:6366' "$CADDYFILE_PATH" || \
+    fail "R6-03: menu 5 should fall back to 6366 after warning"
+)
+
+# R6-04：域名解析到非本机 IP 时不得打 ✅ 假绿——必须按未解析同级
+# 警告并要求显式确认：拒绝确认则终止且不写 Caddyfile，确认后才
+# 继续（旧实现只判能否解析、直接 ✅ 放行，两幕对旧代码必红）。
+test_panel_menu5_dns_pointing_elsewhere_warns() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+  # 夹具 getent 恒解析到 203.0.113.10；本机公网 IP 改桩为他值即
+  # 构造「解析未指向本机」。
+  get_public_ip() { printf '198.51.100.99'; }
+
+  local rc="0" log="$FIXTURE_DIR/menu5-dns-mismatch-refuse.log"
+  setup_domain_proxy <<< "panel.example.com" >"$log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R6-04: menu 5 must stop when DNS points elsewhere and the operator does not confirm"
+  grep -q '未指向本机' "$log" || \
+    fail "R6-04: DNS pointing elsewhere must be warned as not pointing at this machine"
+  if grep -q '✅ 域名解析到' "$log"; then
+    fail "R6-04: DNS pointing elsewhere must not print the green check"
+  fi
+  [[ ! -f "$CADDYFILE_PATH" ]] || \
+    fail "R6-04: no Caddyfile may be written when the operator refuses at the DNS warning"
+
+  local ok_log="$FIXTURE_DIR/menu5-dns-mismatch-confirm.log"
+  setup_domain_proxy <<< $'panel.example.com\ny' >"$ok_log" 2>&1 || \
+    fail "R6-04: menu 5 should proceed after explicit confirmation despite the DNS mismatch"
+  grep -q '^panel.example.com {' "$CADDYFILE_PATH" || \
+    fail "R6-04: menu 5 must write the site block after explicit confirmation"
+)
+
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -4933,6 +5144,10 @@ test_panel_download_verified_uses_timeouts
 test_panel_menu6_dedicated_coverage
 test_panel_menu_is_active_failure_rolls_back
 test_panel_domain_compare_case_insensitive
+test_panel_menu5_resolves_deploy_dir_port_outside_cwd
+test_panel_menu6_resolves_deploy_dir_port_outside_cwd
+test_panel_menu5_warns_when_deploy_env_not_found
+test_panel_menu5_dns_pointing_elsewhere_warns
 test_install_script_respects_disabled_proxy
 test_install_script_never_asks_for_proxy_config
 test_install_script_builds_canonical_download_url
