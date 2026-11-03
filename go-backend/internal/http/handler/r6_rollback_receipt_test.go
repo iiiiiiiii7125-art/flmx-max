@@ -52,9 +52,20 @@ func TestRollbackReceiptDisclosesLegacyBackup(t *testing.T) {
 	}
 }
 
-func TestRollbackReceiptOldAgentPassthrough(t *testing.T) {
+func TestRollbackReceiptOldAgentDisclosesUnverified(t *testing.T) {
+	// R7-13: an agent from before the pairing mechanism reports no
+	// data at all — its rollback ran with no generation check, so
+	// the panel receipt must carry the same unverified disclosure
+	// as the legacy-backup cell instead of the bare agent message.
 	data := rollbackReceiptData(ws.CommandResult{Success: true, Message: "OK"})
-	if len(data) != 1 || data["message"] != "OK" {
-		t.Fatalf("agent without pairing data must keep the previous receipt shape, got %+v", data)
+	msg, _ := data["message"].(string)
+	if !strings.Contains(msg, "未经紧邻上一代校验") {
+		t.Fatalf("old-agent receipt must disclose the unverified generation, got %q", msg)
+	}
+	if msg == "OK" {
+		t.Fatalf("old-agent receipt must not forward the bare agent message, got %q", msg)
+	}
+	if _, ok := data["toVersion"]; ok {
+		t.Fatalf("old-agent receipt must not invent a landing version, got %+v", data)
 	}
 }

@@ -1374,7 +1374,16 @@ export default function NodePage({
       const res = await rollbackNode(node.id);
 
       if (res.code === 0) {
-        toast.success(`节点 ${node.name} 回退命令已发送，节点将自动重启`);
+        // R7-03（承 R2X-021 同口径）：后端回执 data.message 点名实际
+        // 落到的版本，存量备份/旧 agent 未经代际校验时同一字段带
+        // 未校验披露，须直接显示后端 message；data 缺失时才回落
+        // 本地文案。
+        const data = (res.data ?? null) as { message?: string } | null;
+
+        toast.success(
+          data?.message ||
+            `节点 ${node.name} 回退命令已发送，节点将自动重启`,
+        );
       } else {
         toast.error(res.msg || "回退失败");
       }

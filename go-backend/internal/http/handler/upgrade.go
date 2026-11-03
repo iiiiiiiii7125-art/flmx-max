@@ -878,12 +878,16 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 // The backupGeneration field is passed through verbatim; a
 // "legacy-unknown" backup (written before pairing records existed)
 // is disclosed as unverified in the message. Older agents report
-// no data at all: the receipt then keeps the previous shape
-// (the command result message only).
+// no data at all (R7-13): their rollback ran under the pre-pairing
+// semantics with no generation check at all, so the receipt
+// carries the same unverified disclosure instead of forwarding
+// the agent's bare message — in a mixed-version fleet every
+// unverified rollback shows the same signal.
 func rollbackReceiptData(result ws.CommandResult) map[string]interface{} {
 	data := map[string]interface{}{"message": result.Message}
 	toVersion, _ := result.Data["toVersion"].(string)
 	if toVersion == "" {
+		data["message"] = "回退命令已发送，节点将自动重启（该备份无代际配对记录，未经紧邻上一代校验）"
 		return data
 	}
 	data["toVersion"] = toVersion
