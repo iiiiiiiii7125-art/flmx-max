@@ -8,7 +8,7 @@
 // 都会静默把它们全部重新武装。本门把惰性证据链里最关键的三环钉死：
 //   ① src 内任何 classList.add(...) 的参数不得含 'dark' 类名 token；
 //   ② themes/registry.ts 的 getEffectiveMode / resolveSystemMode
-//      函数体内每条 return 必须恒返回 "light"（文本钉）；
+//      恒返回 "light"（行为断言：转译执行、三种环境变体实测）；
 //   ③ index.html 引导脚本必须含 classList.remove('dark')。
 // 断言范围只此三项：dark: 工具类与 html.dark CSS 的存量清理是另一条
 // 线（R2-027），本门不据此判红。
@@ -60,6 +60,24 @@
 // 注释存档原文——四者必须红（修复轮 6 探针实证，见
 // fix6-reports/gatesmech.md）。
 //
+// R7 收口（第七轮审计 R7-23/24，修复轮 7）：轮 6 的注释剥离器不
+// 识正则字面量——任一被扫文件里出现 /[/*]/ 形正则，剥离器即误入
+// 块注释态、吞掉其后的真实 add 调用（PROBE3a 实证「实扫 add 0
+// 处」全绿）；断言②的 fnBody 以 indexOf("function "+名) 在保留
+// 字符串内容的剥离文本上定位，注册表前的模板常量里放一份假签
+// 名即可劫持锚点、真身 return "dark" 蒙混（PROBE3b 实证）。两
+// 处的共同根因仍是「发现/定位跑在词法近似文本上」。本轮按机制
+// 迁移：断言①改 TS 编译器 API 的 AST 调用点发现（callee 为
+// *.classList 的 add/toggle 调用表达式，实参字面量按 AST 已求
+// 值文本收集——正则字面量只是一个普通节点、再不能污染发现，
+// 字符串/注释里的调用样式文本也不再是调用点）；断言②改行为断
+// 言（转译 registry 后在存储为空/存储 dark/存储 system＋系统
+// 偏好深色三种环境变体下实测两函数返回值恒 "light"，与主题门
+// 同执行面）。词法剥离器与 fnBody 截取随之退役；D-C4-01 登记
+// 的非字面量构造一族（变量间接、拼接、括号记法、别名）维持已
+// 知取舍不变——但 Unicode 转义写出的字面量因 AST 取已求值文本
+// 自本轮起落网，属该族内的局部收紧。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-dark-mode-pinned.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -78,115 +96,21 @@ const check = (label, ok, detail = "") => {
   if (!ok) failures.push(label);
 };
 
-// 词法剥注释：// 与 /* */ 注释逐字替换为空格（换行保留、行号不变），
-// 字符串/模板字面量内容原样保留（模板 ${} 内的代码照常扫描）。
-// 扫描面先经此处理：注释中断还原为普通分隔，注释拷贝整体消失。
-const stripComments = (src) => {
-  const out = [];
-  const n = src.length;
-  let i = 0;
-  let mode = "code"; // code | line | block | sq | dq | tpl
-  const tplDepths = [];
-  let braceDepth = 0;
-  while (i < n) {
-    const c = src[i];
-    const d = src[i + 1] ?? "";
-    if (mode === "code") {
-      if (c === "/" && d === "/") {
-        out.push("  ");
-        i += 2;
-        mode = "line";
-        continue;
-      }
-      if (c === "/" && d === "*") {
-        out.push("  ");
-        i += 2;
-        mode = "block";
-        continue;
-      }
-      if (c === "'") mode = "sq";
-      else if (c === '"') mode = "dq";
-      else if (c === "`") mode = "tpl";
-      else if (c === "{") braceDepth++;
-      else if (c === "}") {
-        if (tplDepths.length && braceDepth === tplDepths[tplDepths.length - 1]) {
-          tplDepths.pop();
-          braceDepth--;
-          mode = "tpl";
-          out.push(c);
-          i++;
-          continue;
-        }
-        braceDepth--;
-      }
-      out.push(c);
-      i++;
-      continue;
-    }
-    if (mode === "line") {
-      if (c === "\n") {
-        out.push(c);
-        i++;
-        mode = "code";
-        continue;
-      }
-      out.push(" ");
-      i++;
-      continue;
-    }
-    if (mode === "block") {
-      if (c === "*" && d === "/") {
-        out.push("  ");
-        i += 2;
-        mode = "code";
-        continue;
-      }
-      out.push(c === "\n" ? "\n" : " ");
-      i++;
-      continue;
-    }
-    if (mode === "sq" || mode === "dq") {
-      const q = mode === "sq" ? "'" : '"';
-      out.push(c);
-      if (c === "\\") {
-        out.push(d);
-        i += 2;
-        continue;
-      }
-      if (c === q) mode = "code";
-      i++;
-      continue;
-    }
-    // tpl
-    out.push(c);
-    if (c === "\\") {
-      out.push(d);
-      i += 2;
-      continue;
-    }
-    if (c === "`") {
-      mode = "code";
-      i++;
-      continue;
-    }
-    if (c === "$" && d === "{") {
-      out.push(d);
-      i += 2;
-      braceDepth++;
-      tplDepths.push(braceDepth);
-      mode = "code";
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-};
+import { createRequire } from "node:module";
 
-// 剥 HTML 注释（换行保留），注释内的脚本拷贝不再构成满足点。
-const stripHtmlComments = (src) =>
-  src.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+const require = createRequire(import.meta.url);
 
-// ── ① src 内 classList.add / toggle 不得带 'dark' ────────────────────
+let ts;
+try {
+  ts = require("typescript");
+} catch {
+  // worktree 尚未 pnpm install 时，退回主仓的 node_modules。
+  ts = require(
+    "/home/hatch/workspace/flvx-max/vite-frontend/node_modules/typescript",
+  );
+}
+
+// ── ① src 内 classList.add / toggle 不得带 'dark'（AST 发现） ──────
 const walk = (dir) => {
   const out = [];
   for (const name of readdirSync(dir)) {
@@ -197,134 +121,77 @@ const walk = (dir) => {
   return out;
 };
 
-// 括号配平截取一个调用的实参区：text[openIdx] 必须是 '('。
-// 返回 { literals, firstArgLiterals, end }：literals 为实参区内全部
-// 字符串字面量的静态文本（模板字面量按 ${} 切段、表达式内字符串亦
-// 收集）；firstArgLiterals 为第一顶层逗号之前的子集；end 为匹配
-// ')' 之后的下标。
-const extractCallLiterals = (text, openIdx) => {
-  const literals = [];
-  const firstArgLiterals = [];
-  const n = text.length;
-  let topCommaSeen = false;
-  const pushLit = (s) => {
-    literals.push(s);
-    if (!topCommaSeen) firstArgLiterals.push(s);
-  };
-  // 扫描模板字面量 ${ ... } 内部：i 指向 '{' 后一字，返回匹配 '}' 后下标。
-  const scanTemplateExpr = (i) => {
-    let braceDepth = 1;
-    while (i < n && braceDepth > 0) {
-      const c = text[i];
-      if (c === '"' || c === "'" || c === "`") {
-        i = scanString(i, c);
-        continue;
-      }
-      if (c === "/" && text[i + 1] === "/") {
-        const e = text.indexOf("\n", i);
-        i = e < 0 ? n : e + 1;
-        continue;
-      }
-      if (c === "/" && text[i + 1] === "*") {
-        const e = text.indexOf("*/", i + 2);
-        i = e < 0 ? n : e + 2;
-        continue;
-      }
-      if (c === "{") braceDepth++;
-      else if (c === "}") {
-        braceDepth--;
-        if (braceDepth === 0) return i + 1;
-      }
-      i++;
-    }
-    return i;
-  };
-  // 扫描一个字符串字面量：i 指向开引号，返回闭引号后的下标。
-  const scanString = (i, quote) => {
-    let buf = "";
-    i++;
-    while (i < n) {
-      const c = text[i];
-      if (c === "\\") {
-        buf += text[i + 1] ?? "";
-        i += 2;
-        continue;
-      }
-      if (quote === "`" && c === "$" && text[i + 1] === "{") {
-        pushLit(buf);
-        buf = "";
-        i = scanTemplateExpr(i + 2);
-        continue;
-      }
-      if (c === quote) {
-        pushLit(buf);
-        return i + 1;
-      }
-      buf += c;
-      i++;
-    }
-    pushLit(buf);
-    return i;
-  };
-  let depth = 0;
-  let i = openIdx;
-  while (i < n) {
-    const c = text[i];
-    if (c === '"' || c === "'" || c === "`") {
-      i = scanString(i, c);
-      continue;
-    }
-    if (c === "/" && text[i + 1] === "/") {
-      const e = text.indexOf("\n", i);
-      i = e < 0 ? n : e + 1;
-      continue;
-    }
-    if (c === "/" && text[i + 1] === "*") {
-      const e = text.indexOf("*/", i + 2);
-      i = e < 0 ? n : e + 2;
-      continue;
-    }
-    if (c === "(") depth++;
-    else if (c === ")") {
-      depth--;
-      i++;
-      if (depth === 0) break;
-      continue;
-    } else if (c === "," && depth === 1) {
-      topCommaSeen = true;
-    }
-    i++;
+const scriptKindFor = (path) =>
+  path.endsWith(".tsx")
+    ? ts.ScriptKind.TSX
+    : path.endsWith(".ts")
+      ? ts.ScriptKind.TS
+      : path.endsWith(".jsx")
+        ? ts.ScriptKind.JSX
+        : ts.ScriptKind.JS;
+
+// 收集一个表达式子树内的全部字面量静态文本：字符串、无插值模板、
+// 模板的头/中/尾段（${} 内表达式递归收集），与旧实参区扫描同口
+// 径。AST 字面量的 .text 是已求值文本——Unicode 转义写出的
+// 'dark' 同样落网（旧文本扫描的盲区，方向为 fail-closed 收紧）。
+const collectLiterals = (node, out) => {
+  if (
+    ts.isStringLiteral(node) ||
+    ts.isNoSubstitutionTemplateLiteral(node) ||
+    ts.isTemplateHead(node) ||
+    ts.isTemplateMiddle(node) ||
+    ts.isTemplateTail(node)
+  ) {
+    out.push(node.text);
+    return;
   }
-  return { literals, firstArgLiterals, end: i };
+  ts.forEachChild(node, (c) => collectLiterals(c, out));
 };
 
 const darkOffenders = [];
 let addCallCount = 0;
 let toggleCallCount = 0;
 for (const file of walk(srcDir)) {
-  const text = stripComments(readFileSync(file, "utf8"));
-  for (const m of text.matchAll(/classList\s*\??\.\s*(add|toggle)\s*\(/g)) {
-    const method = m[1];
-    if (method === "add") addCallCount++;
-    else toggleCallCount++;
-    const { literals, firstArgLiterals, end } = extractCallLiterals(
-      text,
-      m.index + m[0].length - 1,
-    );
-    // toggle 的类名只在第一实参；add 的每个实参都是类名。
-    const pool = method === "toggle" ? firstArgLiterals : literals;
-    // 字符串字面量按空白切 token，精确匹配 'dark'。
-    const hasDark = pool.some((lit) => lit.split(/\s+/).includes("dark"));
-    if (hasDark) {
-      const callText = text
-        .slice(m.index, end)
-        .replace(/\s+/g, " ")
-        .slice(0, 100);
-      darkOffenders.push(
-        `${file.slice(frontendDir.length + 1)}: ${callText}`,
-      );
+  const text = readFileSync(file, "utf8");
+  const sf = ts.createSourceFile(
+    file,
+    text,
+    ts.ScriptTarget.ES2020,
+    true,
+    scriptKindFor(file),
+  );
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression)
+    ) {
+      const method = node.expression.name.text;
+      if (method === "add" || method === "toggle") {
+        const objText = node.expression.expression.getText();
+        if (/(^|\.)classList$/.test(objText)) {
+          if (method === "add") addCallCount++;
+          else toggleCallCount++;
+          // toggle 的类名只在第一实参；add 的每个实参都是类名。
+          const args =
+            method === "toggle"
+              ? node.arguments.slice(0, 1)
+              : [...node.arguments];
+          const lits = [];
+          for (const a of args) collectLiterals(a, lits);
+          if (lits.some((lit) => lit.split(/\s+/).includes("dark"))) {
+            darkOffenders.push(
+              `${file.slice(frontendDir.length + 1)}: ${node
+                .getText()
+                .replace(/\s+/g, " ")
+                .slice(0, 100)}`,
+            );
+          }
+        }
+      }
     }
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
 }
 check(
   `① src 内 classList.add/toggle 不含 'dark'（实扫 add ${addCallCount} 处、toggle ${toggleCallCount} 处调用）`,
@@ -332,71 +199,95 @@ check(
   darkOffenders.join("; "),
 );
 
-// ── ② registry 两函数恒返回 "light" ──────────────────────────────────
+// ── ② registry 两函数恒返回 "light"（行为断言，R7-24） ────────────
 const registryPath = join(srcDir, "themes/registry.ts");
-let registry = "";
+let registrySrc = "";
 try {
-  // 先剥注释：注释内的 } 与假 return 不再进入截取/判定（R6-C4-03）。
-  registry = stripComments(readFileSync(registryPath, "utf8"));
+  registrySrc = readFileSync(registryPath, "utf8");
 } catch {
   check("② themes/registry.ts 可读", false, "文件不存在");
 }
-
-// 函数体截取：括号配平扫描跳过字符串/模板/注释，字符串内的 { }
-// 不干扰配平（与断言①的 extractCallLiterals 同纪律）。
-const fnBody = (src, name) => {
-  const start = src.indexOf(`function ${name}`);
-  if (start < 0) return null;
-  const open = src.indexOf("{", start);
-  if (open < 0) return null;
-  let depth = 0;
-  for (let i = open; i < src.length; i++) {
-    const c = src[i];
-    if (c === '"' || c === "'" || c === "`") {
-      i++;
-      while (i < src.length && src[i] !== c) {
-        if (src[i] === "\\") i++;
-        i++;
-      }
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "/") {
-      const e = src.indexOf("\n", i);
-      i = e < 0 ? src.length : e;
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      const e = src.indexOf("*/", i + 2);
-      i = e < 0 ? src.length : e + 1;
-      continue;
-    }
-    if (c === "{") depth++;
-    else if (c === "}") {
-      depth--;
-      if (depth === 0) return src.slice(open + 1, i);
-    }
-  }
-  return null;
-};
-
-for (const fn of ["resolveSystemMode", "getEffectiveMode"]) {
-  const body = registry ? fnBody(registry, fn) : null;
-  if (body === null) {
-    check(`② ${fn} 存在`, false, "未找到函数定义");
-    continue;
-  }
-  const returns = [...body.matchAll(/return\s+([^;]+);/g)].map((m) =>
-    m[1].trim(),
-  );
-  const allLight =
-    returns.length > 0 &&
-    returns.every((v) => v === '"light"' || v === "'light'");
+if (registrySrc) {
+  const { outputText } = ts.transpileModule(registrySrc, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+    },
+  });
+  const runtimeRequires = [
+    ...outputText.matchAll(/require\(["']([^"']+)["']\)/g),
+  ].map((m) => m[1]);
   check(
-    `② ${fn} 每条 return 恒为 "light"（实测 ${returns.length} 条）`,
-    allLight,
-    `return 值: ${returns.join(", ") || "（无）"}`,
+    "② registry 转译产物无运行时 require",
+    runtimeRequires.length === 0,
+    `发现 require: ${runtimeRequires.join(", ")}`,
   );
+  if (runtimeRequires.length === 0) {
+    // 环境变体：存储为空 / 存储遗留 "dark" / 存储 "system" 且系统
+    // 偏好深色——三种环境下两函数都必须实测返回 "light"（存量
+    // dark 偏好强制亮色是定案口径）。每变体以全新模块实例执行，
+    // 模块级缓存不跨变体。
+    const variants = [
+      ["存储为空", () => null, false],
+      ["存储为 dark", () => "dark", false],
+      ["存储为 system 且系统偏好深色", () => "system", true],
+    ];
+    const results = { resolveSystemMode: [], getEffectiveMode: [] };
+    let execError = "";
+    for (const [, getItem, prefersDark] of variants) {
+      globalThis.localStorage = {
+        getItem,
+        setItem: () => {},
+        removeItem: () => {},
+      };
+      globalThis.document = {
+        documentElement: {
+          classList: { add: () => {}, remove: () => {} },
+          style: { setProperty: () => {}, removeProperty: () => {} },
+        },
+        head: { appendChild: () => {} },
+        createElement: () => ({ setAttribute: () => {}, remove: () => {} }),
+      };
+      const matchMedia = () => ({ matches: prefersDark });
+      globalThis.window = {
+        matchMedia,
+        localStorage: globalThis.localStorage,
+      };
+      globalThis.matchMedia = matchMedia;
+      const mod = { exports: {} };
+      try {
+        new Function("module", "exports", "require", outputText)(
+          mod,
+          mod.exports,
+          require,
+        );
+        for (const fn of Object.keys(results)) {
+          results[fn].push(
+            typeof mod.exports[fn] === "function"
+              ? mod.exports[fn]()
+              : "<导出缺失>",
+          );
+        }
+      } catch (e) {
+        execError = String(e);
+        break;
+      }
+    }
+    for (const fn of ["resolveSystemMode", "getEffectiveMode"]) {
+      const vals = results[fn];
+      check(
+        `② ${fn} 行为实测恒为 "light"（3 种环境变体）`,
+        !execError && vals.length === 3 && vals.every((v) => v === "light"),
+        execError || `返回值: ${vals.join(", ") || "（无）"}`,
+      );
+    }
+  }
 }
+
+// 剥 HTML 注释（换行保留），注释内的脚本拷贝不再构成满足点。
+const stripHtmlComments = (src) =>
+  src.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+
 
 // ── ③ index.html 引导脚本含 remove('dark') ───────────────────────────
 let indexHtml = "";
