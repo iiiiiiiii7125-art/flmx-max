@@ -60,14 +60,58 @@ note_fail() { echo "FAIL: $*"; FAIL=1; }
 note_ok()   { echo "OK:   $*"; }
 note_pend() { echo "PENDING(known, F-064): $*"; }
 
+# go_strip：Go 词法剥注释（awk 状态机，跨行携带块注释/原始字符串
+# 状态；字符串、原始字符串、符文字面量内容原样保留，注释整体丢
+# 弃）。本脚本凡以 grep 对 Go 源码计数/取集/验前提者（§1 前提、
+# §7 事件集、§10(a) 计数）一律只对剥离后的代码面判定——注释掉
+# 的代码行与删除同效、注释里的字面量拷贝不构成满足点（修复轮 6
+# 机制处置，R6-C4-12/13/14）。
+go_strip() {
+  awk '
+    BEGIN { st = 0; q = sprintf("%c", 39) }
+    {
+      line = $0; out = ""; n = length(line)
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1); nx = substr(line, i + 1, 1)
+        if (st == 0) {
+          if (c == "/" && nx == "/") { st = 1; i++; continue }
+          if (c == "/" && nx == "*") { st = 2; i++; continue }
+          if (c == "\"") st = 3
+          else if (c == "`") st = 4
+          else if (c == q) st = 5
+          out = out c
+        } else if (st == 1) {
+          break
+        } else if (st == 2) {
+          if (c == "*" && nx == "/") { st = 0; i++ }
+        } else if (st == 3) {
+          out = out c
+          if (c == "\\") { out = out nx; i++ }
+          else if (c == "\"") st = 0
+        } else if (st == 4) {
+          out = out c
+          if (c == "`") st = 0
+        } else if (st == 5) {
+          out = out c
+          if (c == "\\") { out = out nx; i++ }
+          else if (c == q) st = 0
+        }
+      }
+      if (st == 1) st = 0
+      print out
+    }'
+}
+
 # ── 1. XHTTP：share.go 输出 xhttp-opts 时，nodes.md 的 Clash/Shadowrocket 行不得再列 XHTTP 为「不包含」
-#    前提 grep 必须带引号、只命中代码里的 Go 字符串字面量 "xhttp-opts"：
-#    share.go 的 ClashProxy 注释散文里另有一处无引号的 xhttp-opts 提及，
-#    无引号匹配会被注释拷贝自满足（R5-03 同族，第五轮复扫发现）——代码
-#    发射行删掉时前提仍绿、整节静默放行。
+#    前提沿革：初版无引号 grep 被注释散文提及自满足（R5-03 同族）；
+#    第五轮改引号化 grep 后，第六轮复证把注释里的键名加上引号即可
+#    再满足（R6-C4-12）——逐形态收紧关不死。本轮按机制处置：前提
+#    只对 go_strip 剥注释后的代码面判定 '"xhttp-opts"' 字面量在位，
+#    注释提及（无论带不带引号）整体不在证据面内；发射行删除时前
+#    提失效、整节按 fail-closed 报红。
 SHARE_GO="go-backend/internal/kernel/share.go"
 NODES_MD="doc/guide/nodes.md"
-if grep -q '"xhttp-opts"' "$SHARE_GO"; then
+if go_strip < "$SHARE_GO" | grep -q '"xhttp-opts"'; then
   for row in "Clash / Mihomo" "Shadowrocket"; do
     line=$(grep -F "| $row |" "$NODES_MD" | head -1)
     if [ -z "$line" ]; then
@@ -168,7 +212,9 @@ fi
 # 中以 "- `event`" 开头的那一行的全部反引号取值（首个 `event` 本身除外，
 # 含行尾以「测试消息是 `test`」形式列出的 test）。
 NOTIFY_MD="doc/guide/notify.md"
-code_events=$(grep -rhoP --exclude='*_test.go' 'notifyEvent[A-Za-z]+\s*=\s*"\K[a-z_]+' go-backend/internal/http/handler/ | sort -u)
+# 代码侧事件集只对剥注释后的代码面枚举（R6-C4-14：注释掉的常量
+# 行不再计入事件集）。
+code_events=$(for f in $(find go-backend/internal/http/handler -name '*.go' ! -name '*_test.go' | sort); do go_strip < "$f"; done | grep -oP 'notifyEvent[A-Za-z]+\s*=\s*"\K[a-z_]+' | sort -u)
 doc_events=$(grep -P '^- `event`' "$NOTIFY_MD" | grep -oP '`[a-z_]+`' | tr -d '`' | grep -vx event | sort -u)
 if [ -z "$code_events" ] || [ -z "$doc_events" ]; then
   note_fail "notify.md event 枚举检查前提失效（代码常量集或文档枚举为空，请人工复核）"
@@ -221,14 +267,16 @@ fi
 # ── 10. 易漂移计数对账（X05-OPT-01 / R3-K11）：TestPostgres* 用例数 + x 包计数
 # 声称值只认 [K11-COUNT:<键>=<数字>] 标记（可多处声明，各处须彼此一致且等于实数）。
 # (a) TestPostgres* 契约用例数：文档声称 vs tests/contract 的 func TestPostgres* 实数。
-tp_actual=$(grep -rh 'func TestPostgres' go-backend/tests/contract --include='*_test.go' | wc -l | tr -d ' ')
+# 计数只对剥注释后的代码面、按顶层函数行首锚定（R6-C4-13：注释掉
+# 的测试函数不参与编译运行，不再计入实数）。
+tp_actual=$(for f in go-backend/tests/contract/*_test.go; do go_strip < "$f"; done | grep -c '^func TestPostgres' | tr -d ' ')
 tp_claims=$(grep -rhoP '\[K11-COUNT:testpostgres=\K[0-9]+' doc/guide/postgresql.md AGENTS.md 2>/dev/null | sort -u)
 if [ -z "$tp_actual" ] || [ "$tp_actual" = "0" ]; then
   note_fail "计数对账前提失效：go-backend/tests/contract 未数到 TestPostgres* 用例"
 elif [ -z "$tp_claims" ]; then
   note_fail "计数对账：doc/guide/postgresql.md 与 AGENTS.md 未声明 [K11-COUNT:testpostgres=N] 标记（实数 $tp_actual，裸数字计数不受门守）"
 elif [ "$tp_claims" != "$tp_actual" ]; then
-  note_fail "计数对账：TestPostgres* 文档声称「$(echo "$tp_claims" | tr '\n' ' ')」≠ 实数 $tp_actual（grep 'func TestPostgres' go-backend/tests/contract）"
+  note_fail "计数对账：TestPostgres* 文档声称「$(echo "$tp_claims" | tr '\n' ' ')」≠ 实数 $tp_actual（剥注释后 grep -c '^func TestPostgres' go-backend/tests/contract）"
 else
   note_ok "计数对账：TestPostgres* 用例数文档声称与实数一致（$tp_actual）"
 fi

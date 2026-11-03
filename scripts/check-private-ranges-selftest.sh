@@ -48,5 +48,29 @@ if grep -q "2001:db8::/3" "$TMP/v2.log"; then
 else
   echo "FAIL: variant 2 caught but the drifted segment was not named"; sed 's/^/    /' "$TMP/v2.log"; exit 1
 fi
+cp "$ROOT/go-gost/x/kernel/snell_guard.go" "$MIR/go-gost/x/kernel/snell_guard.go"
+
+echo "== variant 3: comment out one panel CIDR line must FAIL and name the segment (R6-C4-05) =="
+sed -i 's|^\t"198.18.0.0/15",|\t// "198.18.0.0/15",|' "$MIR/go-backend/internal/kernel/private_ranges.go"
+if bash "$GATE" "$MIR" > "$TMP/v3.log" 2>&1; then
+  echo "FAIL: variant 3 was not caught (commented-out CIDR still counted)"; exit 1
+fi
+if grep -q "198.18.0.0/15" "$TMP/v3.log"; then
+  echo "OK: variant 3 caught and named"
+else
+  echo "FAIL: variant 3 caught but the segment was not named"; sed 's/^/    /' "$TMP/v3.log"; exit 1
+fi
+cp "$ROOT/go-backend/internal/kernel/private_ranges.go" "$MIR/go-backend/internal/kernel/"
+
+echo "== variant 4: delete the ::ffff: derivation code (comments keep the word) must FAIL (R6-C4-06) =="
+sed -i 's|fmt.Sprintf("::ffff:%s/%d"|fmt.Sprintf("%s/%d"|' "$MIR/go-backend/internal/kernel/private_ranges.go" "$MIR/go-gost/x/kernel/snell_guard.go"
+if bash "$GATE" "$MIR" > "$TMP/v4.log" 2>&1; then
+  echo "FAIL: variant 4 was not caught (comment mentions satisfied the mapped premise)"; exit 1
+fi
+if grep -q "IPv4-mapped" "$TMP/v4.log"; then
+  echo "OK: variant 4 caught and named"
+else
+  echo "FAIL: variant 4 caught but the missing derivation was not named"; sed 's/^/    /' "$TMP/v4.log"; exit 1
+fi
 
 echo "SELFTEST PASS"

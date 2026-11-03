@@ -25,6 +25,11 @@
  *
  * 已登记的设计性差异见 scripts/contract-whitelist.json（只登记、不拦截）。
  *
+ * 提取卫生（修复轮 6，R6-C4-16）：全部源码读取先经词法剥注释，
+ * interface 块与 C3 函数体以字符串/模板感知的括号配平截取——旧
+ * 实现的大括号计数无字符串/注释意识、C3 为无界尾切片，注释拷贝
+ * 与注释内的 } 都能满足或截断判定，现整体失效。
+ *
  * 用法：node scripts/check-contract-fields.mjs [repoRoot]
  * 退出码：0 全过；1 任一检查失败。
  */
@@ -38,16 +43,134 @@ const root =
 
 const read = (rel) => readFileSync(join(root, rel), "utf8");
 
+// 词法剥注释（修复轮 6，R6-C4-16 机制处置）：注释逐字替换为空格
+// （换行保留），字符串内容原样保留。goMode 下反引号是无插值原始
+// 字符串、单引号是符文字面量；JS/TS 模式下反引号是带 ${} 插值的
+// 模板字面量。全部源码读取先经此处理：注释里的字段形行、函数形
+// 文本不再被 fieldDecl / goFuncSpan / 正则命中，也不能截断块提取。
+const stripComments = (src, goMode) => {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  let mode = "code"; // code | line | block | sq | dq | tpl | raw
+  const tplDepths = [];
+  let braceDepth = 0;
+  while (i < n) {
+    const c = src[i];
+    const d = src[i + 1] ?? "";
+    if (mode === "code") {
+      if (c === "/" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "line";
+        continue;
+      }
+      if (c === "/" && d === "*") {
+        out.push("  ");
+        i += 2;
+        mode = "block";
+        continue;
+      }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = goMode ? "raw" : "tpl";
+      else if (c === "{") braceDepth++;
+      else if (c === "}") {
+        if (
+          !goMode &&
+          tplDepths.length &&
+          braceDepth === tplDepths[tplDepths.length - 1]
+        ) {
+          tplDepths.pop();
+          braceDepth--;
+          mode = "tpl";
+          out.push(c);
+          i++;
+          continue;
+        }
+        braceDepth--;
+      }
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (mode === "line") {
+      if (c === "\n") {
+        out.push(c);
+        i++;
+        mode = "code";
+        continue;
+      }
+      out.push(" ");
+      i++;
+      continue;
+    }
+    if (mode === "block") {
+      if (c === "*" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "code";
+        continue;
+      }
+      out.push(c === "\n" ? "\n" : " ");
+      i++;
+      continue;
+    }
+    if (mode === "sq" || mode === "dq") {
+      const q = mode === "sq" ? "'" : '"';
+      out.push(c);
+      if (c === "\\") {
+        out.push(d);
+        i += 2;
+        continue;
+      }
+      if (c === q) mode = "code";
+      i++;
+      continue;
+    }
+    if (mode === "raw") {
+      out.push(c);
+      if (c === "`") mode = "code";
+      i++;
+      continue;
+    }
+    out.push(c);
+    if (c === "\\") {
+      out.push(d);
+      i += 2;
+      continue;
+    }
+    if (c === "`") {
+      mode = "code";
+      i++;
+      continue;
+    }
+    if (c === "$" && d === "{") {
+      out.push(d);
+      i += 2;
+      braceDepth++;
+      tplDepths.push(braceDepth);
+      mode = "code";
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+};
+
+const readCode = (rel, goMode) => stripComments(read(rel), goMode);
+
 const FE = "vite-frontend/src";
-const typesTs = read(`${FE}/api/types.ts`);
-const indexTs = read(`${FE}/api/index.ts`);
-const configTsx = read(`${FE}/pages/config.tsx`);
-const repositoryGo = read("go-backend/internal/store/repo/repository.go");
-const handlerGo = read("go-backend/internal/http/handler/handler.go");
-const proberGo = read(
+const typesTs = readCode(`${FE}/api/types.ts`, false);
+const indexTs = readCode(`${FE}/api/index.ts`, false);
+const configTsx = readCode(`${FE}/pages/config.tsx`, false);
+const repositoryGo = readCode("go-backend/internal/store/repo/repository.go", true);
+const handlerGo = readCode("go-backend/internal/http/handler/handler.go", true);
+const proberGo = readCode(
   "go-backend/internal/http/handler/tunnel_quality_prober.go",
+  true,
 );
-const modelGo = read("go-backend/internal/store/model/model.go");
+const modelGo = readCode("go-backend/internal/store/model/model.go", true);
 const whitelist = JSON.parse(read("scripts/contract-whitelist.json"));
 
 let failures = 0;
@@ -57,7 +180,31 @@ const fail = (id, msg) => {
 };
 const pass = (id, msg) => console.log(`PASS ${id}: ${msg}`);
 
-/** 提取 TS interface 块（从 `interface NAME {` 起按花括号深度配平）。 */
+/** 括号配平的块端点扫描：自 openIdx 的 { 起，跳过字符串/模板内容，
+ *  返回匹配 } 的下标（找不到返回 -1）。输入已剥注释。 */
+function scanBlockEnd(source, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < source.length; i += 1) {
+    const c = source[i];
+    if (c === '"' || c === "'" || c === "`") {
+      i += 1;
+      while (i < source.length && source[i] !== c) {
+        if (source[i] === "\\") i += 1;
+        i += 1;
+      }
+      continue;
+    }
+    if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** 提取 TS interface 块（从 `interface NAME {` 起按花括号深度配平，
+ *  配平跳过字符串/模板内容）。 */
 function tsInterfaceBlock(source, name) {
   const start = source.search(
     new RegExp(`(?:export\\s+)?interface\\s+${name}\\b`),
@@ -65,15 +212,8 @@ function tsInterfaceBlock(source, name) {
   if (start < 0) return null;
   const open = source.indexOf("{", start);
   if (open < 0) return null;
-  let depth = 0;
-  for (let i = open; i < source.length; i += 1) {
-    if (source[i] === "{") depth += 1;
-    else if (source[i] === "}") {
-      depth -= 1;
-      if (depth === 0) return source.slice(start, i + 1);
-    }
-  }
-  return source.slice(start);
+  const end = scanBlockEnd(source, open);
+  return end < 0 ? source.slice(start) : source.slice(start, end + 1);
 }
 
 /** 在 interface 块里取某字段的声明文本（无声明返回 null）。 */
@@ -181,9 +321,16 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
   if (!hist) problems.push("types.ts 缺 TunnelQualityHistoryApiItem");
   else if (fieldDecl(hist, "success") !== "number")
     problems.push("TunnelQualityHistoryApiItem.success 应为 number");
-  const fnBody = indexTs.slice(
-    indexTs.indexOf("getMonitorTunnelQualityHistory"),
-  );
+  // 函数体有界截取（旧实现为自首个 indexOf 起的无界尾切片，尾内
+  // 任一注释/代码拷贝都能满足其上正则——R6-C4-16）。现按括号配平
+  // 只取该函数本体（输入已剥注释）。
+  const fnAnchor = indexTs.indexOf("getMonitorTunnelQualityHistory");
+  let fnBody = "";
+  if (fnAnchor >= 0) {
+    const open = indexTs.indexOf("{", fnAnchor);
+    const end = open >= 0 ? scanBlockEnd(indexTs, open) : -1;
+    if (end >= 0) fnBody = indexTs.slice(open + 1, end);
+  }
   if (!/Network\.get<TunnelQualityHistoryApiItem\[\]>/.test(fnBody))
     problems.push("getMonitorTunnelQualityHistory 未按历史形态取数");
   if (!/success:\s*item\.success !== 0/.test(fnBody))
@@ -288,7 +435,7 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
 {
   const problems = [];
   const check = (rel, iface, field, { mustNull = false, mustNotContain = null, absent = false } = {}) => {
-    const block = tsInterfaceBlock(read(rel), iface);
+    const block = tsInterfaceBlock(readCode(rel, false), iface);
     if (!block) {
       problems.push(`${rel} 未找到本地 interface ${iface}（字段 ${field}）`);
       return;

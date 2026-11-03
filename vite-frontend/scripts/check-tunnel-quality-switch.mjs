@@ -14,16 +14,29 @@
 //      调用 resolveTunnelQualityEnabled；
 //   4. config 页 monitorTunnelQualityEnabledChanged 广播的 enabled
 //      必须经 resolveSwitchSelected / resolveTunnelQualityEnabled。
-// R5-03 收窄（第五轮审计 E-C4-01）：断言 1 原以整文件正则钉
-// !== "false"，而 tunnel-quality.ts 头注散文里恰有同一字面量拷贝，
-// 代码行单独翻转（=== "true"）时被头注拷贝自满足、静默放行。现只
-// 截取 resolveTunnelQualityEnabled 函数体、剥除注释后判定，且函数
-// 体内不得出现 === "true" 判读——散文拷贝不再构成满足点。
+//
+// 证据形态沿革（为什么断言 1 是行为断言）：
+//   - 初版以整文件正则钉 !== "false"，被函数头注里的散文字面量拷贝
+//     自满足（R5-03）；
+//   - 第五轮改「只截函数体、剥注释后判定」，第六轮仍被三种新构造
+//     绕过（R6-11）：锚点前的块注释里放假签名＋假函数体使截取落到
+//     假体（锚点劫持）、函数体内字符串拷贝字面量满足正向钉、
+//     if(false) 死代码支携带被钉形态而活路翻转。共同根因是文本钉
+//     桩的证据可由非行为文本（注释/字符串/死代码）满足。
+//   - 本轮（修复轮 6，R6-11 机制处置）：断言 1 改为行为断言——把
+//     tunnel-quality.ts 转译后实际执行 resolveTunnelQualityEnabled，
+//     以输入表逐格断言返回值（缺失/非字符串/空串→开启，仅 trim＋
+//     小写后恰为 "false"→关闭）。注释、字符串拷贝、死代码与锚点
+//     位置对执行结果均无影响，该族构造整体失效。断言 2–4 的提取
+//     面同步改为先经词法剥注释（字符串内容保留、行号不变）再匹
+//     配，注释拷贝不再构成满足点、注释中断不再构成漏检点。
 // 供 CI / 发版前检查调用：pnpm run check:tunnel-quality-switch
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
+const require = createRequire(import.meta.url);
 const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = join(frontendRoot, "src");
 const truthFile = join(srcRoot, "config", "tunnel-quality.ts");
@@ -31,100 +44,183 @@ const truthFile = join(srcRoot, "config", "tunnel-quality.ts");
 const failures = [];
 const fail = (msg) => failures.push(msg);
 
-// 1. 真源函数与语义（R5-03：只在函数体内、剥除注释后判定，
-//    文件头注等散文中的字面量拷贝不构成满足点）。
-const truthSource = readFileSync(truthFile, "utf8");
-if (!/export const resolveTunnelQualityEnabled/.test(truthSource)) {
-  fail("src/config/tunnel-quality.ts 缺少 resolveTunnelQualityEnabled 导出");
+let ts;
+try {
+  ts = require("typescript");
+} catch {
+  // worktree 尚未 pnpm install 时，退回主仓的 node_modules。
+  ts = require(
+    "/home/hatch/workspace/flvx-max/vite-frontend/node_modules/typescript",
+  );
 }
 
-// 截取箭头函数体：自 export 锚点后第一个 { 起括号配平，扫描时跳过
-// 字符串与注释，避免其中的括号干扰配平。返回 { 与其匹配 } 之间文本。
-const extractBody = (src) => {
-  const anchor = src.indexOf("export const resolveTunnelQualityEnabled");
-  if (anchor < 0) return null;
-  const open = src.indexOf("{", anchor);
-  if (open < 0) return null;
-  let depth = 0;
-  for (let i = open; i < src.length; i++) {
+// 词法剥注释：把 // 与 /* */ 注释逐字替换为空格（换行保留，故行号
+// 与列位不变），字符串/模板字面量内容原样保留。提取面先经此处理，
+// 注释中的拷贝既不能满足正向钉、也不能打断调用点形态。
+const stripComments = (src) => {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  let mode = "code"; // code | line | block | sq | dq | tpl
+  const tplDepths = [];
+  let braceDepth = 0;
+  while (i < n) {
     const c = src[i];
-    if (c === '"' || c === "'" || c === "`") {
+    const d = src[i + 1] ?? "";
+    if (mode === "code") {
+      if (c === "/" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "line";
+        continue;
+      }
+      if (c === "/" && d === "*") {
+        out.push("  ");
+        i += 2;
+        mode = "block";
+        continue;
+      }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      else if (c === "{") braceDepth++;
+      else if (c === "}") {
+        if (tplDepths.length && braceDepth === tplDepths[tplDepths.length - 1]) {
+          tplDepths.pop();
+          braceDepth--;
+          mode = "tpl";
+          out.push(c);
+          i++;
+          continue;
+        }
+        braceDepth--;
+      }
+      out.push(c);
       i++;
-      while (i < src.length && src[i] !== c) {
-        if (src[i] === "\\") i++;
+      continue;
+    }
+    if (mode === "line") {
+      if (c === "\n") {
+        out.push(c);
         i++;
+        mode = "code";
+        continue;
       }
+      out.push(" ");
+      i++;
       continue;
     }
-    if (c === "/" && src[i + 1] === "/") {
-      const e = src.indexOf("\n", i);
-      i = e < 0 ? src.length : e;
+    if (mode === "block") {
+      if (c === "*" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "code";
+        continue;
+      }
+      out.push(c === "\n" ? "\n" : " ");
+      i++;
       continue;
     }
-    if (c === "/" && src[i + 1] === "*") {
-      const e = src.indexOf("*/", i + 2);
-      i = e < 0 ? src.length : e + 1;
+    if (mode === "sq" || mode === "dq") {
+      const q = mode === "sq" ? "'" : '"';
+      out.push(c);
+      if (c === "\\") {
+        out.push(d);
+        i += 2;
+        continue;
+      }
+      if (c === q) mode = "code";
+      i++;
       continue;
     }
-    if (c === "{") depth++;
-    else if (c === "}") {
-      depth--;
-      if (depth === 0) return src.slice(open + 1, i);
+    // tpl
+    out.push(c);
+    if (c === "\\") {
+      out.push(d);
+      i += 2;
+      continue;
     }
+    if (c === "`") {
+      mode = "code";
+      i++;
+      continue;
+    }
+    if (c === "$" && d === "{") {
+      out.push(d);
+      i += 2;
+      braceDepth++;
+      tplDepths.push(braceDepth);
+      mode = "code";
+      continue;
+    }
+    i++;
   }
-  return null;
+  return out.join("");
 };
 
-// 剥除注释（字符串内容原样保留），散文不得参与语义判定。
-const stripComments = (text) => {
-  let out = "";
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === '"' || c === "'" || c === "`") {
-      let j = i + 1;
-      while (j < text.length && text[j] !== c) {
-        if (text[j] === "\\") j++;
-        j++;
-      }
-      out += text.slice(i, Math.min(j + 1, text.length));
-      i = j;
-      continue;
-    }
-    if (c === "/" && text[i + 1] === "/") {
-      const e = text.indexOf("\n", i);
-      i = e < 0 ? text.length : e - 1;
-      continue;
-    }
-    if (c === "/" && text[i + 1] === "*") {
-      const e = text.indexOf("*/", i + 2);
-      i = e < 0 ? text.length : e + 1;
-      continue;
-    }
-    out += c;
-  }
-  return out;
-};
-
-const resolverBody = extractBody(truthSource);
-if (resolverBody === null) {
+// 1. 真源函数与语义（行为断言：转译后实测返回值表）。
+const truthSource = readFileSync(truthFile, "utf8");
+const { outputText } = ts.transpileModule(truthSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2020,
+  },
+  reportDiagnostics: true,
+});
+const runtimeRequires = [
+  ...outputText.matchAll(/require\(["']([^"']+)["']\)/g),
+].map((m) => m[1]);
+if (runtimeRequires.length > 0) {
   fail(
-    "src/config/tunnel-quality.ts 未能截取 resolveTunnelQualityEnabled 函数体",
+    `src/config/tunnel-quality.ts 转译产物出现运行时 require（${runtimeRequires.join(", ")}），行为断言无法隔离执行`,
   );
 } else {
-  const bodyCode = stripComments(resolverBody);
-  if (!/!==\s*"false"/.test(bodyCode)) {
-    fail(
-      'resolveTunnelQualityEnabled 语义漂移：函数体应为 !== "false"（缺失＝开启）',
-    );
-  }
-  if (/===\s*"true"/.test(bodyCode)) {
-    fail(
-      'resolveTunnelQualityEnabled 语义漂移：函数体内出现 === "true" 判读（应为 !== "false"）',
-    );
+  const mod = { exports: {} };
+  new Function("module", "exports", "require", outputText)(
+    mod,
+    mod.exports,
+    require,
+  );
+  const resolveFn = mod.exports.resolveTunnelQualityEnabled;
+  if (typeof resolveFn !== "function") {
+    fail("src/config/tunnel-quality.ts 缺少 resolveTunnelQualityEnabled 导出");
+  } else {
+    // [输入, 期望]：与后端 isTunnelQualityMonitoringEnabled 同口径——
+    // 键缺失/非字符串/空串/任意非 "false" 值＝开启；仅 trim＋小写后
+    // 恰为 "false"＝关闭。
+    const cases = [
+      [undefined, true],
+      [null, true],
+      [true, true],
+      [0, true],
+      ["", true],
+      ["true", true],
+      ["TRUE", true],
+      ["0", true],
+      ["false", false],
+      ["FALSE", false],
+      [" false ", false],
+    ];
+    for (const [input, expected] of cases) {
+      let actual;
+      try {
+        actual = resolveFn(input);
+      } catch (e) {
+        fail(
+          `resolveTunnelQualityEnabled(${JSON.stringify(input)}) 抛错：${e.message}`,
+        );
+        continue;
+      }
+      if (actual !== expected) {
+        fail(
+          `resolveTunnelQualityEnabled(${JSON.stringify(input)}) = ${actual}，期望 ${expected}（口径：缺失＝开启、仅 "false" 为关闭）`,
+        );
+      }
+    }
   }
 }
 
-// 2. 全 src 扫描：质量键标识与布尔字面量的直接比较。
+// 2. 全 src 扫描：质量键标识与布尔字面量的直接比较（剥注释后逐行）。
 const keyIdentifier =
   /monitor_tunnel_quality_enabled|TUNNEL_QUALITY_ENABLED/;
 const boolCompare =
@@ -135,7 +231,7 @@ const sourceFiles = readdirSync(srcRoot, { recursive: true })
 
 for (const file of sourceFiles) {
   if (file === truthFile) continue;
-  const lines = readFileSync(file, "utf8").split("\n");
+  const lines = stripComments(readFileSync(file, "utf8")).split("\n");
   lines.forEach((line, idx) => {
     if (keyIdentifier.test(line) && boolCompare.test(line)) {
       fail(
@@ -145,28 +241,30 @@ for (const file of sourceFiles) {
   });
 }
 
-// 3. 隧道监控页自读面。
+// 3. 隧道监控页自读面（剥注释后判定：注释拷贝不算调用、注释中断
+//    不再漏检 .value 直读）。
 const monitorViewFile = join(srcRoot, "pages", "node", "tunnel-monitor-view.tsx");
-const monitorViewSource = readFileSync(monitorViewFile, "utf8");
-monitorViewSource.split("\n").forEach((line, idx) => {
+const monitorViewCode = stripComments(readFileSync(monitorViewFile, "utf8"));
+monitorViewCode.split("\n").forEach((line, idx) => {
   if (/\.value\s*(===|!==)\s*["'](true|false)["']/.test(line)) {
     fail(
       `src/pages/node/tunnel-monitor-view.tsx:${idx + 1} 对配置值 .value 直接判读，应改走 resolveTunnelQualityEnabled`,
     );
   }
 });
-if (!/resolveTunnelQualityEnabled\(/.test(monitorViewSource)) {
+if (!/resolveTunnelQualityEnabled\(/.test(monitorViewCode)) {
   fail("tunnel-monitor-view.tsx 未调用 resolveTunnelQualityEnabled");
 }
 
-// 4. config 页保存广播面。
+// 4. config 页保存广播面（剥注释后定位锚点并截窗：注释里的广播名
+//    拷贝不能劫持锚点、注释里的判读形态不能满足窗口断言）。
 const configPageFile = join(srcRoot, "pages", "config.tsx");
-const configPageSource = readFileSync(configPageFile, "utf8");
-const broadcastAt = configPageSource.indexOf("monitorTunnelQualityEnabledChanged");
+const configPageCode = stripComments(readFileSync(configPageFile, "utf8"));
+const broadcastAt = configPageCode.indexOf("monitorTunnelQualityEnabledChanged");
 if (broadcastAt < 0) {
   fail("config.tsx 未找到 monitorTunnelQualityEnabledChanged 广播");
 } else {
-  const block = configPageSource.slice(broadcastAt, broadcastAt + 900);
+  const block = configPageCode.slice(broadcastAt, broadcastAt + 900);
   if (
     !/enabled:\s*(resolveSwitchSelected|resolveTunnelQualityEnabled)\(/.test(
       block,
@@ -185,5 +283,5 @@ if (failures.length) {
 }
 
 console.log(
-  "隧道质量开关判读单点门禁通过：全仓判读收敛 resolveTunnelQualityEnabled",
+  "隧道质量开关判读单点门禁通过：真源函数行为实测合口径，全仓判读收敛 resolveTunnelQualityEnabled",
 );
