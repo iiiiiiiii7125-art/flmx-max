@@ -30,18 +30,52 @@
  * 实现的大括号计数无字符串/注释意识、C3 为无界尾切片，注释拷贝
  * 与注释内的 } 都能满足或截断判定，现整体失效。
  *
+ * AST 迁移（修复轮 7 普查处置）：本门的 JS 剥离器无正则字面量
+ * 意识，index.ts:143 的普通正则（转义斜杠与闭合斜杠在原文里
+ * 构成字面 //）令剥离器误入行注释态、模板栈污染，该文件 133
+ * 条行注释在剥离后文本里存活——C3 的函数体钉可被尾随注释里的
+ * 归一化原文满足（复攻实证）。C3 函数体判定与 C4 的前端两面
+ * （BackupTypes 接口成员、BACKUP_TYPE_OPTIONS 值集）改走 TS
+ * 编译器 API 的 AST 提取；index.ts/config.tsx 不再经剥离器。
+ * 其余读取面（types.ts、C7 各页——同法实测剥离同步无污染；
+ * 全部 Go 文件——Go 无正则字面量语法）保留剥离＋文本提取，
+ * 残面与构造代价登记于 fix7-reports/gatesmech2.md 普查表。
+ *
  * 用法：node scripts/check-contract-fields.mjs [repoRoot]
  * 退出码：0 全过；1 任一检查失败。
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const root =
   process.argv[2] ||
   join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const read = (rel) => readFileSync(join(root, rel), "utf8");
+
+const require = createRequire(import.meta.url);
+let ts;
+for (const cand of [
+  join(root, "vite-frontend/node_modules/typescript"),
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../vite-frontend/node_modules/typescript",
+  ),
+  "/home/hatch/workspace/flvx-max/vite-frontend/node_modules/typescript",
+]) {
+  try {
+    ts = require(cand);
+    break;
+  } catch {
+    // try next candidate
+  }
+}
+if (!ts) {
+  console.error("FAIL: typescript 不可解析，C3/C4 的 AST 提取无法执行");
+  process.exit(2);
+}
 
 // 词法剥注释（修复轮 6，R6-C4-16 机制处置）：注释逐字替换为空格
 // （换行保留），字符串内容原样保留。goMode 下反引号是无插值原始
@@ -162,8 +196,29 @@ const readCode = (rel, goMode) => stripComments(read(rel), goMode);
 
 const FE = "vite-frontend/src";
 const typesTs = readCode(`${FE}/api/types.ts`, false);
-const indexTs = readCode(`${FE}/api/index.ts`, false);
-const configTsx = readCode(`${FE}/pages/config.tsx`, false);
+// index.ts 与 config.tsx 改走 AST（修复轮 7 普查处置）：本门的
+// JS 词法剥离器无正则字面量意识——index.ts:143 的普通正则
+// /^\//（转义斜杠与闭合斜杠在原文里构成字面 //）即令剥离器误
+// 入行注释态并污染模板栈，该文件 133 条行注释在「剥离后」文本
+// 里存活，C3 函数体钉曾被尾随注释里的归一化原文满足（复攻
+// CONTRACT-N1 实证绿）。两文件的 C3/C4 提取自此只认 AST 声明
+// 与表达式结构，注释/字符串拷贝不再是证据。其余文件（types.ts
+// 与 C7 各页）经同法实测剥离同步无污染、Go 文件无正则字面量
+// 语法，均保留文本提取（残面登记见 fix7 普查表）。
+const indexSf = ts.createSourceFile(
+  "index.ts",
+  read(`${FE}/api/index.ts`),
+  ts.ScriptTarget.ES2020,
+  true,
+  ts.ScriptKind.TS,
+);
+const configSf = ts.createSourceFile(
+  "config.tsx",
+  read(`${FE}/pages/config.tsx`),
+  ts.ScriptTarget.ES2020,
+  true,
+  ts.ScriptKind.TSX,
+);
 const repositoryGo = readCode("go-backend/internal/store/repo/repository.go", true);
 const handlerGo = readCode("go-backend/internal/http/handler/handler.go", true);
 const proberGo = readCode(
@@ -321,19 +376,66 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
   if (!hist) problems.push("types.ts 缺 TunnelQualityHistoryApiItem");
   else if (fieldDecl(hist, "success") !== "number")
     problems.push("TunnelQualityHistoryApiItem.success 应为 number");
-  // 函数体有界截取（旧实现为自首个 indexOf 起的无界尾切片，尾内
-  // 任一注释/代码拷贝都能满足其上正则——R6-C4-16）。现按括号配平
-  // 只取该函数本体（输入已剥注释）。
-  const fnAnchor = indexTs.indexOf("getMonitorTunnelQualityHistory");
-  let fnBody = "";
-  if (fnAnchor >= 0) {
-    const open = indexTs.indexOf("{", fnAnchor);
-    const end = open >= 0 ? scanBlockEnd(indexTs, open) : -1;
-    if (end >= 0) fnBody = indexTs.slice(open + 1, end);
+  // 函数体判定改 AST 结构（修复轮 7 普查处置）：旧实现以剥注释
+  // 文本＋括号配平截取函数体再正则——而 index.ts 的剥离面已被
+  // 该文件自身的正则字面量污染（见文件头 C3/C4 注），尾随注释
+  // 里的归一化原文即可满足。现于顶层声明
+  // getMonitorTunnelQualityHistory 的 AST 子树内要求：(a) 一次
+  // 带 TunnelQualityHistoryApiItem[] 类型实参的 Network.get 调
+  // 用；(b) success 属性赋值的初值是 item.success !== 0 二元
+  // 表达式。注释/字符串中的同形文本不构成节点，无从满足。
+  let histFn = null;
+  for (const st of indexSf.statements) {
+    if (!ts.isVariableStatement(st)) continue;
+    for (const d of st.declarationList.declarations) {
+      if (
+        ts.isIdentifier(d.name) &&
+        d.name.text === "getMonitorTunnelQualityHistory"
+      ) {
+        histFn = d;
+      }
+    }
   }
-  if (!/Network\.get<TunnelQualityHistoryApiItem\[\]>/.test(fnBody))
+  let callsHistoryShape = false;
+  let normalizesSuccess = false;
+  if (histFn) {
+    const visit = (node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === "Network" &&
+        node.expression.name.text === "get" &&
+        node.typeArguments?.length === 1 &&
+        ts.isArrayTypeNode(node.typeArguments[0]) &&
+        ts.isTypeReferenceNode(node.typeArguments[0].elementType) &&
+        node.typeArguments[0].elementType.typeName.text ===
+          "TunnelQualityHistoryApiItem"
+      ) {
+        callsHistoryShape = true;
+      }
+      if (
+        ts.isPropertyAssignment(node) &&
+        node.name.text === "success" &&
+        ts.isBinaryExpression(node.initializer) &&
+        node.initializer.operatorToken.kind ===
+          ts.SyntaxKind.ExclamationEqualsEqualsToken &&
+        ts.isPropertyAccessExpression(node.initializer.left) &&
+        ts.isIdentifier(node.initializer.left.expression) &&
+        node.initializer.left.expression.text === "item" &&
+        node.initializer.left.name.text === "success" &&
+        ts.isNumericLiteral(node.initializer.right) &&
+        node.initializer.right.text === "0"
+      ) {
+        normalizesSuccess = true;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(histFn);
+  }
+  if (!callsHistoryShape)
     problems.push("getMonitorTunnelQualityHistory 未按历史形态取数");
-  if (!/success:\s*item\.success !== 0/.test(fnBody))
+  if (!normalizesSuccess)
     problems.push("getMonitorTunnelQualityHistory 未把 success 归一化为 boolean");
   if (problems.length) problems.forEach((p) => fail("C3", p));
   else pass("C3", "TunnelQuality 双形态已在前端分型 + api 层归一化");
@@ -347,13 +449,50 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
       : [];
   const exportKeys = typeSetKeys(goFuncSpan(repositoryGo, "func (r *Repository) ExportPartial("));
   const importKeys = typeSetKeys(goFuncSpan(repositoryGo, "func (r *Repository) Import("));
-  const backupTypesBlock = tsInterfaceBlock(indexTs, "BackupTypes");
-  const feKeys = backupTypesBlock
-    ? [...backupTypesBlock.matchAll(/^\s*(\w+)\?:/gm)].map((m) => m[1]).sort()
-    : [];
-  const optStart = configTsx.indexOf("BACKUP_TYPE_OPTIONS");
-  const optBlock = configTsx.slice(optStart, configTsx.indexOf("] as const", optStart));
-  const optKeys = [...optBlock.matchAll(/value:\s*"(\w+)"/g)].map((m) => m[1]).sort();
+  // 前端两面改 AST 提取（修复轮 7 普查处置，同 C3 注）：接口成
+  // 员名与选项字面量值只认声明节点，注释/字符串拷贝不入集。
+  const feKeys = [];
+  for (const st of indexSf.statements) {
+    if (ts.isInterfaceDeclaration(st) && st.name.text === "BackupTypes") {
+      for (const mem of st.members) {
+        if (ts.isPropertySignature(mem)) feKeys.push(mem.name.text);
+      }
+    }
+  }
+  feKeys.sort();
+  const optKeys = [];
+  for (const st of configSf.statements) {
+    if (!ts.isVariableStatement(st)) continue;
+    for (const d of st.declarationList.declarations) {
+      let init = d.initializer;
+      while (
+        init &&
+        (ts.isAsExpression(init) || ts.isParenthesizedExpression(init))
+      ) {
+        init = init.expression;
+      }
+      if (
+        ts.isIdentifier(d.name) &&
+        d.name.text === "BACKUP_TYPE_OPTIONS" &&
+        init &&
+        ts.isArrayLiteralExpression(init)
+      ) {
+        for (const el of init.elements) {
+          if (!ts.isObjectLiteralExpression(el)) continue;
+          for (const prop of el.properties) {
+            if (
+              ts.isPropertyAssignment(prop) &&
+              prop.name.text === "value" &&
+              ts.isStringLiteral(prop.initializer)
+            ) {
+              optKeys.push(prop.initializer.text);
+            }
+          }
+        }
+      }
+    }
+  }
+  optKeys.sort();
   const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const problems = [];
   if (!eq(exportKeys, importKeys))

@@ -45,158 +45,83 @@ for (const p of [typesPath, indexPath, fixturesPath]) {
     process.exit(1);
   }
 }
-// Extraction hygiene (round-6 gatesmech): strip comments lexically
-// before parsing declarations, and scan type bodies with a
-// string/template-aware brace matcher. Previously a commented-out
-// declaration block could satisfy/shadow the real one and braces
-// inside comments truncated bodies early — text pins satisfiable by
-// non-behavior text.
-const stripComments = (src) => {
-  const out = [];
-  const n = src.length;
-  let i = 0;
-  let mode = "code";
-  const tplDepths = [];
-  let braceDepth = 0;
-  while (i < n) {
-    const c = src[i];
-    const d = src[i + 1] ?? "";
-    if (mode === "code") {
-      if (c === "/" && d === "/") {
-        out.push("  ");
-        i += 2;
-        mode = "line";
-        continue;
-      }
-      if (c === "/" && d === "*") {
-        out.push("  ");
-        i += 2;
-        mode = "block";
-        continue;
-      }
-      if (c === "'") mode = "sq";
-      else if (c === '"') mode = "dq";
-      else if (c === "`") mode = "tpl";
-      else if (c === "{") braceDepth++;
-      else if (c === "}") {
-        if (tplDepths.length && braceDepth === tplDepths[tplDepths.length - 1]) {
-          tplDepths.pop();
-          braceDepth--;
-          mode = "tpl";
-          out.push(c);
-          i++;
-          continue;
-        }
-        braceDepth--;
-      }
-      out.push(c);
-      i++;
-      continue;
-    }
-    if (mode === "line") {
-      if (c === "\n") {
-        out.push(c);
-        i++;
-        mode = "code";
-        continue;
-      }
-      out.push(" ");
-      i++;
-      continue;
-    }
-    if (mode === "block") {
-      if (c === "*" && d === "/") {
-        out.push("  ");
-        i += 2;
-        mode = "code";
-        continue;
-      }
-      out.push(c === "\n" ? "\n" : " ");
-      i++;
-      continue;
-    }
-    if (mode === "sq" || mode === "dq") {
-      const q = mode === "sq" ? "'" : '"';
-      out.push(c);
-      if (c === "\\") {
-        out.push(d);
-        i += 2;
-        continue;
-      }
-      if (c === q) mode = "code";
-      i++;
-      continue;
-    }
-    out.push(c);
-    if (c === "\\") {
-      out.push(d);
-      i += 2;
-      continue;
-    }
-    if (c === "`") {
-      mode = "code";
-      i++;
-      continue;
-    }
-    if (c === "$" && d === "{") {
-      out.push(d);
-      i += 2;
-      braceDepth++;
-      tplDepths.push(braceDepth);
-      mode = "code";
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-};
+// Extraction (round-7 gatesmech2): declarations and endpoint type
+// arguments are read from TypeScript ASTs, not from comment-stripped
+// text. The round-6 lexical stripper has no regex-literal awareness,
+// and src/api/index.ts line 143 contains an ordinary regex whose
+// escaped slash plus closing delimiter form a literal // in the raw
+// text — the stripper derails there (133 line comments survive
+// "stripping" in that file), so interface bodies and Network call
+// shapes read from the stripped text were evidence-compromised.
+// AST nodes cannot be satisfied or hidden by comment/string text.
+import { createRequire } from "node:module";
 
-const typesSrc = stripComments(fs.readFileSync(typesPath, "utf8"));
-const indexSrc = stripComments(fs.readFileSync(indexPath, "utf8"));
+const require = createRequire(import.meta.url);
+let ts;
+for (const cand of [
+  path.join(frontendRoot, "node_modules/typescript"),
+  path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../node_modules/typescript",
+  ),
+  "/home/hatch/workspace/flvx-max/vite-frontend/node_modules/typescript",
+]) {
+  try {
+    ts = require(cand);
+    break;
+  } catch {
+    // try next candidate
+  }
+}
+if (!ts) {
+  console.log("FAIL  typescript not resolvable; AST extraction unavailable");
+  process.exit(1);
+}
+
+const typesSf = ts.createSourceFile(
+  "types.ts",
+  fs.readFileSync(typesPath, "utf8"),
+  ts.ScriptTarget.ES2020,
+  true,
+  ts.ScriptKind.TS,
+);
+const indexSf = ts.createSourceFile(
+  "index.ts",
+  fs.readFileSync(indexPath, "utf8"),
+  ts.ScriptTarget.ES2020,
+  true,
+  ts.ScriptKind.TS,
+);
 const fixtures = JSON.parse(fs.readFileSync(fixturesPath, "utf8"));
 
-/** Extract the brace-balanced body of `interface NAME { ... }` / `type NAME = { ... }`.
- *  The scan skips string/template contents so braces inside literals
- *  cannot truncate or extend the body (input is already comment-stripped). */
-function typeBody(src, name) {
-  const m = new RegExp(`(?:export\\s+)?(?:interface|type)\\s+${name}\\b`).exec(src);
-  if (!m) return null;
-  const open = src.indexOf("{", m.index);
-  if (open < 0) return null;
-  let depth = 0;
-  for (let i = open; i < src.length; i += 1) {
-    const c = src[i];
-    if (c === '"' || c === "'" || c === "`") {
-      i += 1;
-      while (i < src.length && src[i] !== c) {
-        if (src[i] === "\\") i += 1;
-        i += 1;
+// Declared top-level fields per interface / object type alias:
+// Map name -> Map field -> required (no `?`). AST members are
+// exactly the depth-0 fields the old line scanner read.
+const declFields = (sf) => {
+  const map = new Map();
+  for (const st of sf.statements) {
+    let members = null;
+    if (ts.isInterfaceDeclaration(st)) {
+      members = st.members;
+    } else if (
+      ts.isTypeAliasDeclaration(st) &&
+      ts.isTypeLiteralNode(st.type)
+    ) {
+      members = st.type.members;
+    }
+    if (!members) continue;
+    const fields = new Map();
+    for (const mem of members) {
+      if (ts.isPropertySignature(mem)) {
+        fields.set(mem.name.text, !mem.questionToken);
       }
-      continue;
     }
-    if (c === "{") depth += 1;
-    else if (c === "}") {
-      depth -= 1;
-      if (depth === 0) return src.slice(open + 1, i);
-    }
+    map.set(st.name.text, fields);
   }
-  return null;
-}
-
-/** Top-level fields of a type body: Map name -> required (no `?`). */
-function topLevelFields(body) {
-  const fields = new Map();
-  let depth = 0;
-  for (const line of body.split("\n")) {
-    const s = line.trim();
-    if (depth === 0) {
-      const fm = /^(?:readonly\s+)?([A-Za-z_]\w*)(\?)?:/.exec(s);
-      if (fm) fields.set(fm[1], fm[2] !== "?");
-    }
-    depth += (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
-  }
-  return fields;
-}
+  return map;
+};
+const typesDecls = declFields(typesSf);
+const indexDecls = declFields(indexSf);
 
 const requiredCache = new Map();
 function requiredFields(name) {
@@ -204,39 +129,44 @@ function requiredFields(name) {
     // Dual source (R7X-007): types.ts first (the bulk of the wire
     // types), then index.ts, where the api layer declares its own
     // response types (SubTraffic, SubscriptionItem, LoginResponse, …).
-    const body = typeBody(typesSrc, name) ?? typeBody(indexSrc, name);
-    if (body === null) {
-      requiredCache.set(name, null);
-    } else {
-      const all = topLevelFields(body);
-      requiredCache.set(name, [...all].filter(([, req]) => req).map(([f]) => f));
-    }
+    const fields = typesDecls.get(name) ?? indexDecls.get(name);
+    requiredCache.set(
+      name,
+      fields === undefined
+        ? null
+        : [...fields].filter(([, req]) => req).map(([f]) => f),
+    );
   }
   return requiredCache.get(name);
 }
 
 /** Endpoint -> response type expression, from Network.<T>("path") calls. */
-function endpointTypes(src) {
+function endpointTypes(sf, srcText) {
   const map = new Map();
-  const re = /Network\.(?:get|post|put|delete)</g;
-  let m;
-  while ((m = re.exec(src)) !== null) {
-    let i = re.lastIndex;
-    let depth = 1;
-    const start = i;
-    while (i < src.length && depth > 0) {
-      if (src[i] === "<") depth += 1;
-      else if (src[i] === ">") depth -= 1;
-      i += 1;
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === "Network" &&
+      ["get", "post", "put", "delete"].includes(node.expression.name.text) &&
+      node.typeArguments?.length >= 1 &&
+      node.arguments.length >= 1 &&
+      ts.isStringLiteral(node.arguments[0])
+    ) {
+      const typeExpr = srcText.slice(
+        node.typeArguments[0].getStart(),
+        node.typeArguments[0].getEnd(),
+      );
+      map.set(node.arguments[0].text.replace(/^\//, ""), typeExpr);
     }
-    const typeExpr = src.slice(start, i - 1);
-    const pm = /^\s*\(\s*"([^"]+)"/.exec(src.slice(i));
-    if (pm) map.set(pm[1].replace(/^\//, ""), typeExpr);
-    re.lastIndex = i;
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
   return map;
 }
-const endpoints = endpointTypes(indexSrc);
+const endpoints = endpointTypes(indexSf, fs.readFileSync(indexPath, "utf8"));
+
 
 /**
  * Which (interface, objects) pairs a recorded `data` payload must satisfy:
