@@ -1058,6 +1058,21 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
 		return
 	}
+	// C1-03（1.9.5 发版后审计）：用户名维度全局桶——与 login 共用
+	// globalLoginUsernameLimiter（同一批账号口令的尝试必须跨面
+	// 聚合：此前两桶键都含 IP，轮换源 IP 即可对单账号线性放大
+	// 猜测预算）。计数口径与 login 一致（每次尝试都计、无论用户
+	// 是否存在、成功后由 noteLoginUsernameSuccess 清桶）。login
+	// 面该桶只作信号（升级验证码强度），本面无验证码可升级，
+	// 故触发即硬拒 429：单账号全局预算封顶为既有口径的 30 次/
+	// 10 分钟——合法订阅客户端的拉取远低于此；代价是持续喷洒
+	// 期间该账号在本面（存量兼容面）被一并挡下至窗口滚动，
+	// login 面不受影响（其用户名桶仍只作信号、永不硬拒）。
+	if globalLoginUsernameLimiter.recordAttempt(username, now) {
+		w.Header().Set("Retry-After", "60")
+		response.WriteJSON(w, response.Err(429, "请求过于频繁，请稍后再试"))
+		return
+	}
 
 	authOK := false
 	defer func() {
@@ -1117,6 +1132,9 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	authOK = true
+	// C1-03：与 login 同口径——鉴权成功清除该用户名的限流状态，
+	// 正常用户的历史失败计数不累积误伤后续拉取。
+	h.noteLoginUsernameSuccess(username)
 
 	// R10X-005（T1）：total 必须经 flowLimitBytes(Flow, FlowMiB) 按字节
 	// 精确下发，与执法面同值——旧读法 Flow×1GiB 忽略 FlowMiB，非整 GiB
@@ -1443,6 +1461,12 @@ func (h *Handler) flowTest(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *Handler) flowConfig(w http.ResponseWriter, r *http.Request) {
+	// C1-01：与 v2（flow_upload_v2.go）同口径补方法校验——v1 两面
+	// 此前不验方法，任意方法带 secret 均可达处理逻辑。
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
 	// R8-060：鉴权失败已达上限的来源不再查库，回包与未知 secret
 	// 同形（"ok"、不处理 body）。
 	failKey, throttled := h.flowAuthThrottleKey(r)
@@ -1486,7 +1510,33 @@ func parseFlowSeqFromHeaders(r *http.Request) *int64 {
 	return nil
 }
 
+// C1-01（1.9.5 发版后审计）：flow 加密信封 timestamp 新鲜度窗口。
+// agent 在每次发送时以 time.Now().Unix()（秒）现场封包（go-gost
+// encryptReportPayload，v1/v2/flowConfig 三面同路），重试亦重新
+// 封包，故正常上报恒新鲜，窗口只需覆盖节点与面板之间的时钟偏差。
+// 取值 15 分钟：宽于本仓既有的消息时效口径（passkey 仪式 2 分钟、
+// 幂等缓存 10 分钟），为无 NTP 同步的节点留偏差余量，正常旧 agent
+// 不受影响（钉格见 flow_v1_tighten_c101_test.go 的 ±10 分钟放行用例）。
+const flowEnvelopeMaxSkew = 15 * time.Minute
+
+// flowV1LegacySunset 是 v1 无 seq（legacy）上报的落日时刻，与
+// sub_store GET 的弃用窗口同型（R5-B2 D1：保留＋90 天窗口＋Sunset
+// 点名）：此前无 seq 批次照常入账、回执带 Deprecation/Sunset 头；
+// 此后整批拒收（非 ok，agent 保留批次待其升级）。带 seq 的 v1
+// 上报（X-Flmx-Seq 头或 {seq, items} 体）与 v2 均不受落日影响——
+// 落日只关停无重放防护的兼容形态。为包级 var 作测试注入缝
+// （与 turnstileSiteVerifyURL 同例）。
+var flowV1LegacySunset = time.Date(2027, time.February, 2, 0, 0, 0, 0, time.UTC)
+
+const flowV1LegacySunsetHTTPDate = "Tue, 02 Feb 2027 00:00:00 GMT"
+
 func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
+	// C1-01：与 v2 同口径补方法校验（v2 在 flow_upload_v2.go 强制
+	// POST，v1 此前任意方法均可达）。
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
 	// R8-060：鉴权失败已达上限的来源不再查库，回包与未知 secret
 	// 同形（非 ok，agent 保留批次稍后重报）。不记 secret。
 	failKey, throttled := h.flowAuthThrottleKey(r)
@@ -1544,6 +1594,20 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			_, _ = w.Write([]byte("error"))
 			return
+		}
+		if seq == nil {
+			// C1-01：无 seq 的 legacy 形态没有任何重放防护，纳入
+			// 落日收紧（flowV1LegacySunset）：落日后整批拒收返非
+			// ok；落日前照常入账，但回执点名弃用（与 sub_store
+			// GET 同型），运维可从响应头/日志识别存量旧 agent。
+			if !time.Now().Before(flowV1LegacySunset) {
+				log.Printf("flow upload legacy (no seq) rejected after sunset node_id=%d", node.ID)
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				_, _ = w.Write([]byte("error"))
+				return
+			}
+			w.Header().Set("Deprecation", "true")
+			w.Header().Set("Sunset", flowV1LegacySunsetHTTPDate)
 		}
 		if items != nil {
 			now := time.Now()
@@ -2354,6 +2418,32 @@ func getOrCreateFlowCrypto(secret string) *security.AESCrypto {
 	return c
 }
 
+// checkFlowEnvelopeTimestamp 校验 flow 加密信封外层 timestamp 的
+// 新鲜度（C1-01）。timestamp 位于外层明文 JSON、可被改写，故本校验
+// 只约束「原样重放」：捕获的信封不改一字重发时，窗口外即被拒；
+// 真正的重放防护由 seq 游标（带 seq 的 v1 与 v2）承担，无 seq 的
+// legacy 形态则由 flowV1LegacySunset 落日关停。单位归一：现行
+// agent 写秒级（time.Now().Unix()），≥1e11 的值按毫秒级折算，
+// 避免跨代单位差把合法信封误判为未来时间。timestamp==0（无此
+// 字段的更古老构建）按 legacy 兼容放行。
+func checkFlowEnvelopeTimestamp(ts int64, now time.Time) error {
+	if ts == 0 {
+		return nil
+	}
+	sec := ts
+	if sec >= 100_000_000_000 {
+		sec /= 1000
+	}
+	delta := now.Unix() - sec
+	if delta < 0 {
+		delta = -delta
+	}
+	if maxSkewSec := int64(flowEnvelopeMaxSkew / time.Second); delta > maxSkewSec {
+		return fmt.Errorf("flow envelope timestamp outside freshness window: skew %ds exceeds %ds", delta, maxSkewSec)
+	}
+	return nil
+}
+
 func readAndDecryptFlowBody(body io.ReadCloser, secret string) (string, error) {
 	defer body.Close()
 	// R4B03-003：ReadAll 前以 MaxBytesReader 包裹与 decodeJSON/WS 同一
@@ -2376,6 +2466,14 @@ func readAndDecryptFlowBody(body io.ReadCloser, secret string) (string, error) {
 	}
 	if err := json.Unmarshal(raw, &wrap); err != nil || !wrap.Encrypted || strings.TrimSpace(wrap.Data) == "" {
 		return text, nil
+	}
+
+	// C1-01：信封 timestamp 此前只解析从不校验——加密形态的重放
+	// 不受任何时间窗约束。在此收口校验（v1/v2/flowConfig 三个
+	// 调用面共用本函数，同批收紧）；超窗整批拒收，agent 保留
+	// 批次、以新封包重报即自愈。
+	if err := checkFlowEnvelopeTimestamp(wrap.Timestamp, time.Now()); err != nil {
+		return "", err
 	}
 
 	// F-01：解密失败必须返回 error，不得把密文原文当明文返回——

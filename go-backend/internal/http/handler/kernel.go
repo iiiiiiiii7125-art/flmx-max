@@ -1866,6 +1866,15 @@ func (h *Handler) inboundRegenerate(w http.ResponseWriter, r *http.Request) {
 	// the chain referrers' applies, each with the conditional
 	// kernelApplyTimeout bound; arm the write relief.
 	extendWriteDeadline(w, kernelApplyWriteDeadline)
+	// C1-06：凭据轮换接入幂等——同键重试/双击回放首轮回执，不再
+	// 二次轮换使首轮刚下发的凭据作废（scope 登记见 idempotency.go）。
+	var finish func()
+	var replayed bool
+	w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "inbound:regenerate")
+	defer finish()
+	if replayed {
+		return
+	}
 	id := idFromBody(r, w)
 	if id <= 0 {
 		return

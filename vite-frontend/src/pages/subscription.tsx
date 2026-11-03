@@ -17,7 +17,11 @@ import { ArrowDown, ArrowUp, ChevronDown, Copy, QrCode } from "lucide-react";
 import SubscriptionAssignSection from "./subscription/assign";
 import NodeGroupsSection from "./subscription/node-groups";
 
-import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
+import {
+  useIdemKey,
+  useRotateIdemKeyOnCreateOpen,
+  useTargetIdemKey,
+} from "@/hooks/useIdemKey";
 import {
   deleteSubscription,
   getInboundList,
@@ -1429,6 +1433,12 @@ export default function SubscriptionPage() {
 
   // R2X-004：订阅新建表单幂等键（同表单复用、成功轮换；更新不带键）。
   const { idemKey, rotateIdemKey } = useIdemKey();
+  // C1-06：重置订阅（凭据轮换）的幂等键，按订阅目标绑定——超时
+  // 重试复用同键，后端回放首轮回执（含新 token）不二次轮换。
+  const {
+    keyFor: resetKeyFor,
+    clearTargetIdemKey: clearResetKey,
+  } = useTargetIdemKey();
 
   // R3X-027：创建弹窗打开（上升沿且新建模式）时轮换幂等键；窗内重试仍复用同键。
   useRotateIdemKeyOnCreateOpen(
@@ -1503,7 +1513,7 @@ export default function SubscriptionPage() {
     try {
       const res =
         confirm === "reset"
-          ? await resetSubscription(detail.id)
+          ? await resetSubscription(detail.id, resetKeyFor(detail.id))
           : await deleteSubscription(detail.id);
 
       if (res.code !== 0) {
@@ -1511,6 +1521,7 @@ export default function SubscriptionPage() {
 
         return;
       }
+      if (confirm === "reset") clearResetKey();
       showResult(
         res.msg,
         confirm === "reset" ? "已重置，旧链接立即失效" : "已删除",

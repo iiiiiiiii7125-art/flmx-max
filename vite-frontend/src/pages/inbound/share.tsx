@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { Copy, QrCode, RefreshCw } from "lucide-react";
 
+import { useTargetIdemKey } from "@/hooks/useIdemKey";
 import { copyWithToast } from "@/utils/clipboard";
 import { panelOrigin } from "@/utils/panel-origin";
 import { SubFrontPicker } from "@/pages/subscription/front-picker";
@@ -424,11 +425,20 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
   const resetInFlightRef = useRef(false);
+  // C1-06：重置默认订阅（凭据轮换）的幂等键——load(true) 超时后
+  // 重试复用同键，后端回放首轮回执（含新 token）不二次轮换；
+  // 成功后清除，下一次重置是新意图、新键。目标恒为默认订阅，
+  // 以 0 为绑定键。
+  const {
+    keyFor: subResetKeyFor,
+    clearTargetIdemKey: clearSubResetKey,
+  } = useTargetIdemKey();
   const [expandedInbound, setExpandedInbound] = useState<number | null>(null);
 
   const load = (reset = false) =>
-    getSubInfo(reset).then((res) => {
+    getSubInfo(reset, false, reset ? subResetKeyFor(0) : undefined).then((res) => {
       if (res.code === 0) {
+        if (reset) clearSubResetKey();
         // R4X-017（回执面 #26）：reset 成功但下发节点失败时后端回
         // code=0 + 非标准 Msg，必须透出——与 subscription.tsx
         // showResult 同型通道；标准 Msg 不弹，doReset 成功文案不变。

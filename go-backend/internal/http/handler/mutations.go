@@ -2939,6 +2939,17 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			if ch.ChainType == 2 {
 				segment = "链路"
 			}
+			if ch.RoleChanged {
+				// F2-T1-02：成因是段角色变更（原段口不跨段沿用，
+				// 与占用/范围无关）——按真实成因点名，不再沿用
+				// 「已被占用或不在范围内」的错误后缀误导排查。
+				fromSegment := "出口"
+				if ch.FromChainType == 2 {
+					fromSegment = "链路"
+				}
+				portChangeWarnings = append(portChangeWarnings, fmt.Sprintf("节点 %s 由%s段改任%s段，端口由 %d 变更为 %d（改任另一段不沿用原段口）", nodeName, fromSegment, segment, ch.OldPort, ch.NewPort))
+				continue
+			}
 			portChangeWarnings = append(portChangeWarnings, fmt.Sprintf("节点 %s %s端口由 %d 变更为 %d（原端口已被占用或不在节点端口范围内）", nodeName, segment, ch.OldPort, ch.NewPort))
 		}
 	}
@@ -6524,13 +6535,22 @@ type tunnelRuntimeNode struct {
 }
 
 // tunnelPortChange describes one non-entry segment port that an update
-// prepare had to move because the persisted port was no longer usable
-// (occupied by someone else, or outside the node's current port spec).
+// prepare had to move. Two distinct causes, told apart by RoleChanged
+// because the receipt warning must name the real one (F2-T1-02):
+//   - RoleChanged=false: the persisted port was no longer usable
+//     (occupied by someone else, or outside the node's current port
+//     spec) and was re-picked within the same segment role;
+//   - RoleChanged=true: the node kept a persisted port in this tunnel
+//     but in a different segment role (FromChainType); segment ports
+//     are not carried across roles, so a fresh port was picked even
+//     if the old one was free and in spec.
 type tunnelPortChange struct {
-	NodeID    int64
-	ChainType int // 2 = chain hop, 3 = exit
-	OldPort   int
-	NewPort   int
+	NodeID        int64
+	ChainType     int // 2 = chain hop, 3 = exit
+	OldPort       int
+	NewPort       int
+	RoleChanged   bool
+	FromChainType int // previous segment role; only set when RoleChanged
 }
 
 type tunnelCreateState struct {
@@ -6642,6 +6662,7 @@ func (h *Handler) resolveTunnelSegmentPort(tx *gorm.DB, state *tunnelCreateState
 			if port != nodePort.port {
 				state.PortChanges = append(state.PortChanges, tunnelPortChange{
 					NodeID: nodeID, ChainType: chainType, OldPort: nodePort.port, NewPort: port,
+					RoleChanged: true, FromChainType: nodePort.chainType,
 				})
 			}
 			return port, nil
