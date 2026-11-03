@@ -1087,8 +1087,11 @@ var gistRestoreTypes = []string{
 // filterRestoreConfigs 滤掉，恢复不覆盖当前 Gist 设置）→与现有 backupImport 完全相同
 // 的导入尾钩子全集 runBackupImportTailHooks（计量对账、configs 缓存
 // 失效、内核 reconcile、撤销清理、转发重推含 FINAL-P2-1 七段谓词）。
-// SEC-01：恢复前不再做全量自动备份导出、回执不再含 autoBackup 快照
-// （旧逻辑把整库快照塞进回执泄露凭据，且 Import 失败时从不用它回滚）。
+// SEC-01：回执不再含 autoBackup 快照（旧逻辑把整库快照塞进回执
+// 泄露凭据）。R7-06：恢复前快照改为与本地 backupImport 同口径的
+// 服务端留存（saveImportAutoBackup：只落服务端文件、0600、只留
+// 一份、24h 有效），快照字节仍绝不进回执；生成失败按 O7-010
+// 警告续行并在回执 ImportWarnings 披露。
 // 严禁只调内核 reconcile、严禁直调 Import 后收尾了事。
 // 仅管理员；请求体 {version, password}，password 为上传时用的加密
 // 密码（明文 Gist 内容可空密码直通，由 gistOpen 判定）。
@@ -1156,6 +1159,26 @@ func (h *Handler) gistBackupRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.backupImportMu.Unlock()
+	// R7-06：与本地 backupImport 同口径——ImportContext 改写 DB
+	// 之前先生成恢复前服务端快照（saveImportAutoBackup）。快照
+	// 相位仍绑请求 ctx 且在互斥内（快照必须反映本单写入前状态，
+	// 与本地导入的锁内快照同序）；生成失败只记警告并继续恢复
+	//（O7-010：现有库已损坏致导出失败时，用户正是最需要恢复的
+	// 场景，不得中断），警告随回执 ImportWarnings 向用户披露，
+	// 文案与本地导入侧一致。快照字节绝不进回执、日志与错误信息。
+	h.purgeExpiredImportAutoBackup()
+	snapshotErr := h.saveImportAutoBackup(r.Context())
+	if snapshotErr != nil {
+		log.Printf("gistBackupRestore: save pre-restore auto-backup snapshot failed: %v", snapshotErr)
+	}
+	// 快照相位结束后、写入相位开始之前再核一次请求 ctx：写入前
+	// 中止（关页/断网）则整单不启动、无副作用（与本地导入的
+	// 可取消窗口边界同口径；快照因别的原因失败只警告续行、
+	// 不在此列）。越过此边界后 ctx 解绑，断连不再影响恢复。
+	if err := r.Context().Err(); err != nil {
+		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("恢复已取消: %v", err)))
+		return
+	}
 	// 写入相位：解绑 ctx + 与本地导入同量级的独立上限
 	//（backupImportTimeout）。整单事务维持；repo 层 ImportContext
 	// 尊重所传入 ctx 的契约（TestR1B8_XP321）不触碰。
@@ -1167,5 +1190,13 @@ func (h *Handler) gistBackupRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.runBackupImportTailHooks(result, &backup, gistRestoreTypes)
+	// O7-010：快照生成失败只警告、不中断恢复（见上）；警告随
+	// 回执披露，文案与本地导入回执同形态。
+	if snapshotErr != nil {
+		result.ImportWarnings = append(result.ImportWarnings, "导入前自动备份失败：未生成服务端快照，本次导入仍继续；如需回滚请使用此前的手动备份")
+	}
+	// 与本地导入同口径：每次成功恢复后顺带清理过期快照（本次
+	// 刚写入新鲜快照时为 no-op；懒清理在恢复入口的落点）。
+	h.purgeExpiredImportAutoBackup()
 	response.WriteJSON(w, response.OK(result))
 }
