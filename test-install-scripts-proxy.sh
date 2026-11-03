@@ -2163,6 +2163,240 @@ test_install_docker_fallback_package_names_exist_in_repos() (
     fail "R6-01: RHEL fallback must add the Docker official repo before using official package names"
 )
 
+# R7-02（行为半）：兜底各支装后必须启动守护进程——包管理器与服务
+# 管理器桩共用一份保序 argv 日志，逐发行版断言：装包成功后、返回
+# 0 前出现本发行版的启动动作（systemd 支 systemctl enable --now；
+# Alpine 支 rc-update 入默认运行级＋rc-service 启动、且不得出现
+# systemctl）。发行版分支按 /etc 标记文件选择，这里以 `[` 函数覆
+# 盖只拦截这三个探针在沙箱内逐支驱动（其余 `[` 调用委托 builtin
+# test 并剥掉尾随 ]），结论与宿主发行版无关。RHEL 的 yum 子支
+# （无 dnf 时）同口径、同断言。
+test_install_docker_fallback_starts_daemon_all_distros() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work sentinel argv_log
+  work=$(mktemp -d)
+  sentinel="$work/SENTINEL"
+  argv_log="$work/argv.log"
+  export DOCKER_INSTALL_SENTINEL="$sentinel"
+  export DOCKER_ARGV_LOG="$argv_log"
+  curl() {
+    local out="" prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      prev="$a"
+    done
+    if [[ -n "$out" ]]; then
+      printf '#!/bin/sh\ntouch "%s"\n' "$DOCKER_INSTALL_SENTINEL" > "$out"
+    fi
+    return 0
+  }
+  apt-get()   { printf 'apt-get %s\n'   "$*" >> "$DOCKER_ARGV_LOG"; return 0; }
+  dnf()       { printf 'dnf %s\n'       "$*" >> "$DOCKER_ARGV_LOG"; return 0; }
+  yum()       { printf 'yum %s\n'       "$*" >> "$DOCKER_ARGV_LOG"; return 0; }
+  yum-config-manager() { printf 'yum-config-manager %s\n' "$*" >> "$DOCKER_ARGV_LOG"; return 0; }
+  apk()       { printf 'apk %s\n'       "$*" >> "$DOCKER_ARGV_LOG"; return 0; }
+  systemctl() { printf 'systemctl %s\n' "$*" >> "$DOCKER_ARGV_LOG"; return 0; }
+  service()   { printf 'service %s\n'   "$*" >> "$DOCKER_ARGV_LOG"; return 0; }
+  rc-update() { printf 'rc-update %s\n' "$*" >> "$DOCKER_ARGV_LOG"; return 0; }
+  rc-service(){ printf 'rc-service %s\n' "$*" >> "$DOCKER_ARGV_LOG"; return 0; }
+  [() {
+    if [[ "${1:-}" == "-f" ]]; then
+      case "${2:-}" in
+        /etc/debian_version) [[ "${SIM_DISTRO:-}" == "debian" ]]; return ;;
+        /etc/redhat-release) [[ "${SIM_DISTRO:-}" == "rhel" ]]; return ;;
+        /etc/alpine-release) [[ "${SIM_DISTRO:-}" == "alpine" ]]; return ;;
+      esac
+    fi
+    builtin test "${@:1:$#-1}"
+  }
+
+  local distro rc install_line start_line
+  for distro in debian rhel alpine; do
+    : > "$argv_log"
+    SIM_DISTRO="$distro"
+    rc="0"
+    ( install_docker >/dev/null 2>&1 ) || rc="$?"
+    assert_equals "0" "$rc" "R7-02: $distro fallback install_docker should succeed"
+    [[ ! -f "$sentinel" ]] || fail "R7-02: unverified installer script must not be executed ($distro)"
+    case "$distro" in
+      debian)
+        install_line=$(grep -n 'apt-get install' "$argv_log" | head -1 | cut -d: -f1 || true)
+        start_line=$(grep -n '^systemctl enable --now docker$' "$argv_log" | head -1 | cut -d: -f1 || true)
+        [[ -n "$install_line" ]] || fail "R7-02: Debian fallback must install packages"
+        [[ -n "$start_line" ]] || fail "R7-02: Debian fallback must start the daemon (systemctl enable --now docker)"
+        ;;
+      rhel)
+        install_line=$(grep -n 'dnf install -y docker-ce' "$argv_log" | head -1 | cut -d: -f1 || true)
+        start_line=$(grep -n '^systemctl enable --now docker$' "$argv_log" | head -1 | cut -d: -f1 || true)
+        [[ -n "$install_line" ]] || fail "R7-02: RHEL fallback must install docker-ce"
+        [[ -n "$start_line" ]] || fail "R7-02: RHEL fallback must start the daemon (systemctl enable --now docker)"
+        ;;
+      alpine)
+        install_line=$(grep -n 'apk add' "$argv_log" | head -1 | cut -d: -f1 || true)
+        start_line=$(grep -n '^rc-service docker start$' "$argv_log" | head -1 | cut -d: -f1 || true)
+        [[ -n "$install_line" ]] || fail "R7-02: Alpine fallback must install packages"
+        grep -q '^rc-update add docker default$' "$argv_log" || \
+          fail "R7-02: Alpine fallback must add docker to the OpenRC default runlevel"
+        [[ -n "$start_line" ]] || fail "R7-02: Alpine fallback must start the daemon (rc-service docker start)"
+        if grep -q '^systemctl ' "$argv_log"; then
+          fail "R7-02: Alpine fallback must use OpenRC, not systemctl"
+        fi
+        ;;
+    esac
+    [[ "$start_line" -gt "$install_line" ]] || \
+      fail "R7-02: $distro daemon start must come after the package install"
+  done
+
+  # RHEL 的 yum 子支（PATH/函数面上无 dnf 时）同口径：装后同样启动。
+  unset -f dnf
+  : > "$argv_log"
+  SIM_DISTRO="rhel"
+  rc="0"
+  ( install_docker >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R7-02: rhel/yum fallback install_docker should succeed"
+  install_line=$(grep -n 'yum install -y docker-ce' "$argv_log" | head -1 | cut -d: -f1 || true)
+  start_line=$(grep -n '^systemctl enable --now docker$' "$argv_log" | head -1 | cut -d: -f1 || true)
+  [[ -n "$install_line" && -n "$start_line" && "$start_line" -gt "$install_line" ]] || \
+    fail "R7-02: RHEL/yum fallback must install docker-ce and then start the daemon"
+  unset -f '['
+)
+
+# R7-02（复检半）：安装路径的 check_docker 必须验 daemon 可达——
+# CLI 与 compose 在场、daemon 不可达时必须以点名 daemon 的文案失
+# 败退出，不许以「检测到命令」放行到后面的健康等待；daemon 可达
+# 时才放行。两个入口形态都验：已装检出（docker 桩预置在 PATH
+# 上）与装后复检（入口 PATH 无 docker、apt 桩在 install 时把
+# docker 桩落进 PATH 目录、模拟装包产物落盘）。docker 桩的 info
+# 子命令以标志文件控制 daemon 在/不在。
+test_check_docker_requires_reachable_daemon_on_install_path() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work stubbin cli_log daemon_flag
+  work=$(mktemp -d)
+  stubbin="$work/bin"
+  mkdir -p "$stubbin"
+  cli_log="$work/docker-cli.log"
+  daemon_flag="$work/daemon-up"
+  export DOCKER_CLI_LOG="$cli_log"
+  export DAEMON_UP_FLAG="$daemon_flag"
+  export DOCKER_STUB_SRC="$work/docker-stub"
+  export DOCKER_STUBBIN="$stubbin"
+  cat > "$DOCKER_STUB_SRC" <<'EOF'
+#!/bin/bash
+printf 'docker %s\n' "$*" >> "$DOCKER_CLI_LOG"
+case "${1:-}" in
+  compose) exit 0 ;;
+  info) [[ -f "$DAEMON_UP_FLAG" ]] && exit 0 || exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+  # 官方脚本校验不过（同 F-050 形态）使 install_docker 落兜底。
+  curl() {
+    local out="" prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      prev="$a"
+    done
+    if [[ -n "$out" ]]; then printf '#!/bin/sh\nexit 0\n' > "$out"; fi
+    return 0
+  }
+  systemctl() { return 0; }
+  service() { return 0; }
+  # apt 桩：install 时把 docker 桩落进 stubbin，模拟装包产物落盘。
+  apt-get() {
+    if [[ "$*" == *install* ]]; then
+      cp "$DOCKER_STUB_SRC" "$DOCKER_STUBBIN/docker"
+      chmod +x "$DOCKER_STUBBIN/docker"
+    fi
+    return 0
+  }
+
+  local rc out
+  # 形态一：已装检出。daemon 不可达 → 退出 1 且点名守护进程。
+  cp "$DOCKER_STUB_SRC" "$stubbin/docker"
+  chmod +x "$stubbin/docker"
+  rm -f "$daemon_flag"
+  hash -r
+  rc="0"; out=""
+  out=$( PATH="$stubbin:$PATH" check_docker 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R7-02: check_docker must fail when the daemon is unreachable"
+  grep -q '守护进程（daemon）不可达' <<< "$out" || \
+    fail "R7-02: daemon-unreachable failure must name the daemon"
+  grep -q '^docker info' "$cli_log" || \
+    fail "R7-02: check_docker must probe the daemon via docker info"
+  # daemon 可达 → 放行并报出命令。
+  touch "$daemon_flag"
+  hash -r
+  rc="0"; out=""
+  out=$( PATH="$stubbin:$PATH" check_docker 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R7-02: check_docker must pass when the daemon is reachable"
+  grep -q '检测到 Docker 命令' <<< "$out" || \
+    fail "R7-02: check_docker should report the detected command once the daemon is verified"
+
+  # 形态二：装后复检。入口 PATH 无 docker（删桩），兜底经 apt 桩
+  # 装出 docker 桩；daemon 仍不可达 → 复检退出 1、点名 daemon。
+  [() {
+    if [[ "${1:-}" == "-f" ]]; then
+      case "${2:-}" in
+        /etc/debian_version) return 0 ;;
+        /etc/redhat-release) return 1 ;;
+        /etc/alpine-release) return 1 ;;
+      esac
+    fi
+    builtin test "${@:1:$#-1}"
+  }
+  rm -f "$stubbin/docker" "$daemon_flag"
+  hash -r
+  rc="0"; out=""
+  out=$( PATH="$stubbin:$PATH" check_docker 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R7-02: post-install recheck must fail when the daemon stays unreachable"
+  grep -q '守护进程（daemon）不可达' <<< "$out" || \
+    fail "R7-02: post-install recheck failure must name the daemon"
+  # 同形态 daemon 可达 → 装后复检放行。
+  rm -f "$stubbin/docker"
+  touch "$daemon_flag"
+  hash -r
+  rc="0"; out=""
+  out=$( PATH="$stubbin:$PATH" check_docker 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R7-02: post-install recheck must pass once the daemon is reachable"
+  grep -q '检测到 Docker 命令' <<< "$out" || \
+    fail "R7-02: post-install recheck should report the detected command once the daemon is verified"
+  unset -f '['
+)
+
+# R7-02（静态半）：钉住启动接线与复检探活，防文本回退——helper
+# 本体必须含 systemd 与 OpenRC 两种启动形态；install_docker 本
+# 体必须在官方路径与兜底各支共 5 处以上调用 start_docker_
+# daemon、Alpine 支传 openrc；check_docker 本体必须含 docker
+# info 探活与点名 daemon 的失败文案。
+test_install_docker_daemon_start_wiring_static() (
+  set -euo pipefail
+  local helper_body install_body check_body calls
+  helper_body=$(awk '/^start_docker_daemon\(\) \{/,/^\}/' "$ROOT_DIR/panel_install.sh")
+  install_body=$(awk '/^install_docker\(\) \{/,/^\}/' "$ROOT_DIR/panel_install.sh")
+  check_body=$(awk '/^check_docker\(\) \{/,/^\}/' "$ROOT_DIR/panel_install.sh")
+  [[ -n "$helper_body" && -n "$install_body" && -n "$check_body" ]] || \
+    fail "R7-02: start_docker_daemon/install_docker/check_docker bodies must be extractable"
+  grep -q 'systemctl enable --now docker' <<< "$helper_body" || \
+    fail "R7-02: start_docker_daemon must enable+start docker via systemd"
+  grep -q 'rc-update add docker default' <<< "$helper_body" || \
+    fail "R7-02: start_docker_daemon openrc form must add docker to the default runlevel"
+  grep -q 'rc-service docker start' <<< "$helper_body" || \
+    fail "R7-02: start_docker_daemon openrc form must start docker via rc-service"
+  calls=$(grep -c 'start_docker_daemon' <<< "$install_body" || true)
+  [[ "$calls" -ge 5 ]] || \
+    fail "R7-02: install_docker must call start_docker_daemon on the official path and every fallback branch (found $calls)"
+  grep -q 'start_docker_daemon openrc' <<< "$install_body" || \
+    fail "R7-02: the Alpine fallback must call start_docker_daemon with openrc"
+  grep -q 'docker info' <<< "$check_body" || \
+    fail "R7-02: check_docker must probe daemon reachability via docker info"
+  grep -q '守护进程（daemon）不可达' <<< "$check_body" || \
+    fail "R7-02: check_docker daemon failure must name the daemon"
+)
+
 # F-138: download_verified 边角——空 .sha256 必须拒；逃生口误填 yes 不得静默跳过校验。
 test_download_verified_fail_closed_edges() (
   set -euo pipefail
@@ -3379,6 +3613,9 @@ test_install_panel_waits_for_backend_health
 test_install_docker_rejects_unverified_script
 test_install_docker_fallback_succeeds_with_working_package_managers
 test_install_docker_fallback_package_names_exist_in_repos
+test_install_docker_fallback_starts_daemon_all_distros
+test_check_docker_requires_reachable_daemon_on_install_path
+test_install_docker_daemon_start_wiring_static
 test_download_verified_fail_closed_edges
 test_verify_downloaded_binary_retries_transient_checksum_failure
 test_verify_downloaded_binary_surfaces_curl_error_after_retries
