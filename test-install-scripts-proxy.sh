@@ -2839,10 +2839,29 @@ test_check_docker_requires_reachable_daemon_on_install_path() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
 
-  local work stubbin cli_log daemon_flag
+  local work stubbin sysbin sealed_path cli_log daemon_flag
   work=$(mktemp -d)
   stubbin="$work/bin"
-  mkdir -p "$stubbin"
+  sysbin="$work/sysbin"
+  mkdir -p "$stubbin" "$sysbin"
+  # 密封 PATH（CI 定谳后立）：本格全部 check_docker 调用只走
+  # stubbin＋sysbin，不继承宿主 $PATH。GitHub runner 与一般宿主
+  # 机自带在跑的 docker——形态二删桩后若把宿主 PATH 后缀带进
+  # 来，check_docker 会检出宿主 docker、对活 daemon 探活成功，
+  # 以 rc=0 假绿（CI 实测：expected 1, actual 0；同一形态在无
+  # docker 的容器内则全过，红只取决于宿主 PATH 里有没有活
+  # docker，与产品复检逻辑无关）。sysbin 是符号链接农场：只放
+  # 被测路径真正执行的宿主工具（官方脚本校验的 sha256sum/
+  # mktemp/awk/rm 与 apt 桩落桩用的 cp/chmod），缺一即点名失
+  # 败，不许静默退回未密封形态。
+  local tool tool_path
+  for tool in sha256sum mktemp awk rm cp chmod; do
+    tool_path=$(command -v "$tool" || true)
+    [[ -n "$tool_path" ]] || \
+      fail "R7-02: cannot seal PATH, core tool missing: $tool"
+    ln -s "$tool_path" "$sysbin/$tool"
+  done
+  sealed_path="$stubbin:$sysbin"
   cli_log="$work/docker-cli.log"
   daemon_flag="$work/daemon-up"
   export DOCKER_CLI_LOG="$cli_log"
@@ -2886,7 +2905,7 @@ EOF
   rm -f "$daemon_flag"
   hash -r
   rc="0"; out=""
-  out=$( PATH="$stubbin:$PATH" check_docker 2>&1 ) || rc="$?"
+  out=$( PATH="$sealed_path" check_docker 2>&1 ) || rc="$?"
   assert_equals "1" "$rc" "R7-02: check_docker must fail when the daemon is unreachable"
   grep -q '守护进程（daemon）不可达' <<< "$out" || \
     fail "R7-02: daemon-unreachable failure must name the daemon"
@@ -2896,13 +2915,15 @@ EOF
   touch "$daemon_flag"
   hash -r
   rc="0"; out=""
-  out=$( PATH="$stubbin:$PATH" check_docker 2>&1 ) || rc="$?"
+  out=$( PATH="$sealed_path" check_docker 2>&1 ) || rc="$?"
   assert_equals "0" "$rc" "R7-02: check_docker must pass when the daemon is reachable"
   grep -q '检测到 Docker 命令' <<< "$out" || \
     fail "R7-02: check_docker should report the detected command once the daemon is verified"
 
   # 形态二：装后复检。入口 PATH 无 docker（删桩），兜底经 apt 桩
   # 装出 docker 桩；daemon 仍不可达 → 复检退出 1、点名 daemon。
+  # 「入口无 docker」由密封 PATH 构造保证（删桩＋不继承宿主
+  # PATH），不依赖运行机恰好没装 docker。
   [() {
     if [[ "${1:-}" == "-f" ]]; then
       case "${2:-}" in
@@ -2915,8 +2936,15 @@ EOF
   }
   rm -f "$stubbin/docker" "$daemon_flag"
   hash -r
+  # 密封自检：删桩后密封 PATH 内不得再解析出任何 docker /
+  # docker-compose——解析得出说明密封构造被环境击穿、本格结论
+  # 不可信，按构造失败点名退出，绝不拿宿主 docker 假绿/假红。
+  if ( export PATH="$sealed_path"; hash -r; command -v docker ) >/dev/null 2>&1 || \
+     ( export PATH="$sealed_path"; hash -r; command -v docker-compose ) >/dev/null 2>&1; then
+    fail "R7-02: sealed PATH still resolves a host docker/docker-compose; the hermetic construction is broken"
+  fi
   rc="0"; out=""
-  out=$( PATH="$stubbin:$PATH" check_docker 2>&1 ) || rc="$?"
+  out=$( PATH="$sealed_path" check_docker 2>&1 ) || rc="$?"
   assert_equals "1" "$rc" "R7-02: post-install recheck must fail when the daemon stays unreachable"
   grep -q '守护进程（daemon）不可达' <<< "$out" || \
     fail "R7-02: post-install recheck failure must name the daemon"
@@ -2925,7 +2953,7 @@ EOF
   touch "$daemon_flag"
   hash -r
   rc="0"; out=""
-  out=$( PATH="$stubbin:$PATH" check_docker 2>&1 ) || rc="$?"
+  out=$( PATH="$sealed_path" check_docker 2>&1 ) || rc="$?"
   assert_equals "0" "$rc" "R7-02: post-install recheck must pass once the daemon is reachable"
   grep -q '检测到 Docker 命令' <<< "$out" || \
     fail "R7-02: post-install recheck should report the detected command once the daemon is verified"
