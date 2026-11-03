@@ -32,8 +32,7 @@ import (
 	"go-backend/internal/store/repo"
 )
 
-// PORT-3342/B1：备份上传 GitHub Gist（移植自上游 kure29/flyx 3.3.42
-// go-backend/internal/http/handler/gist_backup.go，仅上传链）。
+// PORT-3342/B1：备份上传 GitHub Gist（仅上传链）。
 // PORT-3342/G-backend（本批，在 B1 基础上）：
 //   - 新增 versions 端点（列 Gist history 最近 10 版本）；restore 端点
 //     本批不接（归 G-恢复链批），但恢复侧复用的取版本内容 helper
