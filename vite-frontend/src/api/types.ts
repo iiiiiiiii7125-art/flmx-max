@@ -256,6 +256,8 @@ export interface BatchOperationResult {
   uninstallUnsupportedCount?: number;
   /** 连带卸载的逐条告警（带节点名前缀，后端 batchOperationResult.UninstallWarnings）。 */
   uninstallWarnings?: string[];
+  /** 批量删节点使隧道失去唯一入口/出口的点名（后端 batchOperationResult.SoleRoleWarnings，仅删节点批量入口填充）。 */
+  soleRoleWarnings?: string[];
   [key: string]: unknown;
 }
 

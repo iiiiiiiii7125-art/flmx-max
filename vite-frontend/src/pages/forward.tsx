@@ -2209,9 +2209,16 @@ export default function ForwardPage() {
       newErrors.tunnelId = "请选择关联隧道";
     }
 
-    if (form.inPort !== null && form.inPort !== undefined && form.inPort > 0) {
+    if (
+      !isEdit &&
+      form.inPort !== null &&
+      form.inPort !== undefined &&
+      form.inPort > 0
+    ) {
       // 与后端 mutations.go 口径一致：端口本身须在 1-65535，
       // 有隧道端口范围时还须落在范围内（留空/0 走后端自动分配，不校验）。
+      // 编辑态跳过：入口端口只读且提交不带 inPort（R4-01），隧道事后
+      // 收窄端口范围时存量端口落到范围外，不得让不可改字段拦死编辑。
       if (form.inPort < 1 || form.inPort > 65535) {
         newErrors.inPort = `端口 ${form.inPort} 超出允许范围 1-65535`;
       } else if (

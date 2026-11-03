@@ -230,6 +230,8 @@ export const deleteNode = (id: number, uninstall = false) =>
   Network.post<{
     brokenReferrers?: string[];
     brokenReferrerCount?: number;
+    /** 删除使隧道失去唯一入口/出口的点名（后端 mutations.go L4-03）。 */
+    soleRoleWarnings?: string[];
     /** 连带卸载三态：done 已确认卸载 / pending 离线待重连卸载 / unsupported agent 过旧。 */
     uninstall?: "done" | "pending" | "unsupported";
     uninstallWarnings?: string[];
