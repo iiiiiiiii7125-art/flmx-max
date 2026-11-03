@@ -34,7 +34,7 @@ func TestR3B1HardDenyOrLoopbackStillAllowsPrivateCGNATPublic(t *testing.T) {
 		"100.64.0.1", "100.127.0.1", // CGNAT
 		"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", // 公网
 		"fd00::1", "fc00::1", // ULA 私网
-		"2001:db8::1", "192.0.2.10", // 文档段在分类器口径下为 public（既有矩阵在位）
+		"2001:db8::1", "192.0.2.10", // 文档段在分类器口径下为 public（既有矩阵在位；与规范集的差集为 R3-C2-01 已裁定登记，由 scripts/check-private-ranges.sh 钉死）
 	}
 	for _, s := range allow {
 		a := netip.MustParseAddr(s)

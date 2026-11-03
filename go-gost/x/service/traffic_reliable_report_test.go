@@ -6,8 +6,10 @@ import (
 )
 
 // v2 发送器 URL 改写（A-T-07）：只替换尾段、保留地址形态，与 v1
-// 同源。此前整段覆盖 Path，候选 URL 若带反代路径前缀，前缀会被
-// 丢掉——v1 可达、v2 永远 404 等不到确认。
+// 同源。其中「带路径前缀」用例是防御性覆盖：唯一生产者
+// buildReportURLCandidates 的地址归一化恒丢弃路径、候选恒为
+// host 形态（R3-C3-O1 前提订正），前缀形态生产不可达——钉住的
+// 是改写函数对该形态的保守行为，而非生产路径。
 func TestReliableReportURLReplacesOnlyTailSegment(t *testing.T) {
 	cases := []struct {
 		name string

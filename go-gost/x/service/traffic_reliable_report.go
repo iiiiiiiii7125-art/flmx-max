@@ -24,9 +24,13 @@ const (
 type trafficReportRejection string
 
 // reliableReportURL 把 v1 上报候选 URL 改写为 v2 端点，只替换尾段
-// 路径：候选 URL 的地址形态（含反代路径前缀等）与 v1 完全同源，
-// 整段覆盖 Path 会把前缀丢掉、v2 永远得不到确认（审计 A-T-07）。
-// 尾段不是 /flow/upload 的未知形态保持整段覆盖的旧行为兜底。
+// 路径（审计 A-T-07）。前提订正（R3-C3-O1）：候选 URL 的唯一生产
+// 者 buildReportURLCandidates 先经 normalizeReportAddress 归一
+// 化——只取 host 形态、路径整体丢弃，再拼上 /flow/upload，故生产
+// 候选恒为无路径前缀的 host 形态，「带反代路径前缀的候选」在现
+// 行链路下不会出现。只替换尾段是防御性写法：候选形态若将来带上
+// 前缀，v2 沿用同一前缀，不被整段覆盖丢掉；尾段不是 /flow/upload
+// 的未知形态保持整段覆盖的旧行为兜底。
 func reliableReportURL(parsed *url.URL) {
 	if strings.HasSuffix(parsed.Path, "/flow/upload") {
 		parsed.Path = strings.TrimSuffix(parsed.Path, "/flow/upload") + "/flow/upload/v2"

@@ -24,6 +24,18 @@ import (
 // benchmarking range 198.18.0.0/15 and several other special-purpose
 // ranges below — a sing-box node silently let those destinations
 // through while the Xray and Snell guards blocked them.
+//
+// Registered divergence from the netguard classifier lineage
+// (R3-C2-01 adjudication): this canonical set blocks the four
+// documentation ranges (192.0.2.0/24, 198.51.100.0/24,
+// 203.0.113.0/24, 2001:db8::/32), while the netguard lineage
+// (internal/netguard plus its mirrors in go-gost/x/bypass and
+// go-gost/x/socket) deliberately classifies them as public — its
+// import/share/probe faces accept literal documentation addresses
+// as placeholder targets. The difference is exactly those four
+// ranges, in that direction only, and
+// scripts/check-private-ranges.sh pins it mechanically; do not
+// "align" one side without revisiting the adjudication.
 
 // guardPrivateCIDRsV4 is the IPv4 half of the canonical set.
 var guardPrivateCIDRsV4 = []string{
