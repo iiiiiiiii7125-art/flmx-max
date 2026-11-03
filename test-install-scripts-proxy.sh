@@ -1100,6 +1100,125 @@ STUBEOF
     fail "AI-06: install dir must stay intact after interactive n"
 )
 
+# R6-02：脚本菜单卸载须与面板自卸载路径对齐清理宿主残留——按
+# tuning-backup.json 恢复 sysctl 原值、回放整形前队列、删调优宿
+# 主三件套与改名前 legacy conf、disable 并删队列整形 unit、删
+# agent 自建 nft 三表，且全部赶在删安装目录之前（备份在目录里）。
+test_uninstall_flux_agent_cleans_host_tuning_residue() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
+  FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_PROC_SYS_DIR="$work/proc/sys"
+  mkdir -p "$INSTALL_DIR/tcpfit" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")" \
+    "$(dirname "$FLMX_TUNING_BBR_MODULE_FILE")" "$(dirname "$FLMX_TUNING_QDISC_UNIT_FILE")" \
+    "$FLMX_PROC_SYS_DIR/net/ipv4" "$FLMX_PROC_SYS_DIR/net/core"
+
+  printf 'bbr\n' > "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control"
+  printf '999999\n' > "$FLMX_PROC_SYS_DIR/net/core/rmem_max"
+  cat > "$INSTALL_DIR/tuning-backup.json" <<'JSON'
+{
+  "net.core.rmem_max": "212992",
+  "net.ipv4.tcp_congestion_control": "cubic"
+}
+JSON
+  cat > "$INSTALL_DIR/tcpfit/original-qdisc.sh" <<EOF
+#!/bin/bash
+echo restored >> "$work/qdisc-replayed"
+EOF
+  chmod +x "$INSTALL_DIR/tcpfit/original-qdisc.sh"
+  echo '#!/bin/bash' > "$INSTALL_DIR/tcpfit/shape.sh"
+  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  echo 'net.core.rmem_max = 999999' > "$FLMX_TUNING_SYSCTL_CONF"
+  echo 'legacy' > "$FLMX_TUNING_SYSCTL_CONF_LEGACY"
+  echo 'tcp_bbr' > "$FLMX_TUNING_BBR_MODULE_FILE"
+  echo '[Unit]' > "$FLMX_TUNING_QDISC_UNIT_FILE"
+  echo '[Unit]' > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+
+  local systemctl_calls="$work/systemctl-calls" nft_input="$work/nft-input"
+  : > "$systemctl_calls"
+  systemctl() { echo "$*" >> "$systemctl_calls"; return 0; }
+  nft() { cat > "$nft_input"; return 0; }
+
+  local rc="0" out
+  out=$(mktemp)
+  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R6-02: uninstall with host residue should succeed"
+  [[ ! -d "$INSTALL_DIR" ]] || fail "R6-02: install dir should be removed"
+  assert_equals "cubic" "$(cat "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control")" \
+    "R6-02: sysctl tcp_congestion_control should be restored from tuning backup"
+  assert_equals "212992" "$(cat "$FLMX_PROC_SYS_DIR/net/core/rmem_max")" \
+    "R6-02: sysctl rmem_max should be restored from tuning backup"
+  [[ -f "$work/qdisc-replayed" ]] || fail "R6-02: original-qdisc.sh should be replayed before dir removal"
+  [[ ! -e "$FLMX_TUNING_SYSCTL_CONF" ]] || fail "R6-02: 99-flmx-tuning.conf should be removed"
+  [[ ! -e "$FLMX_TUNING_SYSCTL_CONF_LEGACY" ]] || fail "R6-02: legacy 99-flvx-tuning.conf should be removed"
+  [[ ! -e "$FLMX_TUNING_BBR_MODULE_FILE" ]] || fail "R6-02: flmx-bbr.conf should be removed"
+  [[ ! -e "$FLMX_TUNING_QDISC_UNIT_FILE" ]] || fail "R6-02: flmx-tuning-qdisc.service should be removed"
+  grep -q 'disable --now flmx-tuning-qdisc.service' "$systemctl_calls" || \
+    fail "R6-02: qdisc unit should be disabled before removal"
+  local table
+  for table in flmx_kernel flvx_kernel flmx_hop_probe; do
+    grep -q "delete table inet $table" "$nft_input" || \
+      fail "R6-02: nft delete should be issued for table $table"
+  done
+)
+
+# R6-02：宿主清理逐项尽力而为——nft 删除失败只告警并逐项列明，
+# 不中断其余卸载步骤；清理函数对已清状态重复执行幂等无失败。
+test_uninstall_flux_agent_host_cleanup_partial_failure_and_idempotent() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
+  FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_PROC_SYS_DIR="$work/proc/sys"
+  mkdir -p "$INSTALL_DIR" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")"
+  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  echo 'tuned' > "$FLMX_TUNING_SYSCTL_CONF"
+  echo '[Unit]' > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+
+  systemctl() { return 0; }
+  nft() { cat >/dev/null; return 1; }
+
+  local rc="0" out
+  out=$(mktemp)
+  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R6-02: nft failure must not fail the whole uninstall"
+  [[ ! -d "$INSTALL_DIR" ]] || fail "R6-02: install dir should still be removed when nft cleanup fails"
+  [[ ! -e "$FLMX_TUNING_SYSCTL_CONF" ]] || fail "R6-02: other cleanup items should still run when nft fails"
+  grep -q 'nft 表删除失败' "$out" || fail "R6-02: nft failure should be disclosed per item in the receipt"
+
+  # 幂等：对已清状态再次执行清理函数，无失败行、返回 0。
+  nft() { cat >/dev/null; return 0; }
+  rc="0"
+  uninstall_flux_agent_host_cleanup >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R6-02: repeated host cleanup should succeed"
+  if grep -q '⚠️' "$out"; then
+    fail "R6-02: repeated host cleanup on a clean state should report no failures"
+  fi
+)
+
 test_install_flux_agent_writes_json_safe_config() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -5183,6 +5302,8 @@ test_update_flux_agent_menu_guard_pass_forms
 test_update_flux_agent_menu_guard_interactive
 test_uninstall_flux_agent_refuses_unowned_agent
 test_uninstall_flux_agent_menu_guard_pass_forms
+test_uninstall_flux_agent_cleans_host_tuning_residue
+test_uninstall_flux_agent_host_cleanup_partial_failure_and_idempotent
 test_install_flux_agent_writes_json_safe_config
 test_install_script_bootstraps_bash_for_alpine
 test_install_flux_agent_uses_openrc
