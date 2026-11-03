@@ -158,6 +158,14 @@ func TestFormatWebSocketDialErrorIncludesHTTPStatus(t *testing.T) {
 }
 
 func TestAgentUpgradeRestartScriptStopsLegacyGostService(t *testing.T) {
+	// The legacy cleanup is ownership-gated (C4-F01 twin guard, see
+	// fixh2_legacy_gost_guard_test.go): stub both config reads to
+	// the same panel addr so the confirmed morphology is what this
+	// test pins.
+	origRead := readAgentConfigAddr
+	readAgentConfigAddr = func(string) string { return "wss://panel.example.com:443" }
+	defer func() { readAgentConfigAddr = origRead }()
+
 	script := buildAgentRestartScript("/tmp/flux_agent.new", "/etc/flux_agent/flux_agent")
 
 	if !strings.Contains(script, "systemctl stop flux_agent") {

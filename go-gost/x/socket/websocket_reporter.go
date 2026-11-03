@@ -1899,6 +1899,86 @@ func scriptStartCommand(manager serviceManager, start string) string {
 	return start
 }
 
+// legacyGostConfigPath is the legacy pre-FLMX gost agent's connection
+// config; its addr field is the ownership evidence for the cleanup
+// guard below.
+const legacyGostConfigPath = "/etc/gost/config.json"
+
+// readAgentConfigAddr extracts the addr field from an agent
+// config.json. The value comes back JSON-decoded, so it compares
+// verbatim against a configured panel address — the same
+// normalization install.sh's agent_config_addr applies (JSON
+// unescape) before its verbatim comparison. A missing or unreadable
+// file, malformed JSON, or an absent addr yields "" (ownership
+// undecidable). A package-level variable so tests can stub the
+// filesystem reads.
+var readAgentConfigAddr = func(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Addr string `json:"addr"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return ""
+	}
+	return cfg.Addr
+}
+
+// legacyGostCleanupOwnershipConfirmed is the agent-side twin of
+// install.sh's legacy_gost_cleanup_ownership_confirmed (C4-F01). The
+// legacy gost footprint — gost.service pointing at /etc/gost, the
+// gost binary — is shape-identical for this panel's own pre-rename
+// installs and for another panel's live agent, so the fingerprint
+// cannot prove ownership, while the cleanup stops the service and
+// deletes its files. Cleanup is confirmed only when the legacy
+// config's addr is non-empty and verbatim-equal to this agent's own
+// configured panel addr (the address this agent connects to — the
+// panel that issued the upgrade command now running). Any other
+// outcome — a different addr, or either side unreadable — leaves the
+// legacy install untouched.
+//
+// Evidence-surface difference from the script side: install.sh also
+// accepts the address passed to that install run, and offers the
+// FLMX_AGENT_TAKEOVER=1 and interactive-confirmation escapes. A
+// remote upgrade command has no operator present and no second
+// address, so neither exists here; an operator who confirms
+// ownership runs the panel install/update script on the node, whose
+// guard has them.
+func legacyGostCleanupOwnershipConfirmed(ownAddr, legacyAddr string) bool {
+	return ownAddr != "" && legacyAddr != "" && ownAddr == legacyAddr
+}
+
+// legacyGostCleanupSegment renders the legacy gost cleanup portion
+// of the systemd upgrade restart script. The service-file
+// fingerprint scan (WorkingDirectory=/etc/gost plus the ExecStart
+// shapes, the /usr/local/bin form additionally requiring both legacy
+// config files) is unchanged from the pre-guard morphology. What a
+// fingerprint match triggers is gated on ownership:
+//   - confirmed: stop/disable gost.service and delete its files,
+//     exactly as before the guard;
+//   - not confirmed: stop and delete nothing, and echo a skip line
+//     naming the legacy addr found (or that it could not be read).
+//     The restart script redirects all output to agent-upgrade.log,
+//     so the skip is on the record for this command.
+func legacyGostCleanupSegment(ownAddr, legacyAddr string) string {
+	scan := "legacy_service='' && for service_file in /etc/systemd/system/gost.service /lib/systemd/system/gost.service /usr/lib/systemd/system/gost.service; do if [ -f \"$service_file\" ] && grep -Fq \"WorkingDirectory=/etc/gost\" \"$service_file\" && (grep -Fq \"ExecStart=/etc/gost/gost\" \"$service_file\" || (grep -Fq \"ExecStart=/usr/local/bin/gost\" \"$service_file\" && [ -f /etc/gost/config.json ] && [ -f /etc/gost/gost.json ])); then legacy_service=\"$service_file\"; break; fi; done; "
+	if legacyGostCleanupOwnershipConfirmed(ownAddr, legacyAddr) {
+		return scan + "if [ -n \"$legacy_service\" ]; then (systemctl stop gost 2>/dev/null || true) && (systemctl disable gost 2>/dev/null || true) && rm -f /usr/local/bin/gost /etc/gost/gost \"$legacy_service\" && (systemctl daemon-reload 2>/dev/null || true); fi; "
+	}
+	shownLegacy := legacyAddr
+	if shownLegacy == "" {
+		shownLegacy = "无法读取"
+	}
+	shownOwn := ownAddr
+	if shownOwn == "" {
+		shownOwn = "无法读取"
+	}
+	msg := fmt.Sprintf("⚠️ 检测到旧式 gost 形态的 agent（连接地址：%s），无法确认它属于本面板（本 agent 的面板地址：%s），已跳过旧式 gost 清理：未停止其服务、未删除其任何文件。如确认它属于本面板，请在本机运行面板安装/更新脚本处理。", shownLegacy, shownOwn)
+	return scan + "if [ -n \"$legacy_service\" ]; then echo " + tuneShellQuote(msg) + "; fi; "
+}
+
 // buildAgentRestartScriptFor builds the self-contained upgrade restart
 // script: stop, swap the binary in, start, then verify the service
 // actually came up — if it did not, restore the backup copy and start
@@ -1920,8 +2000,12 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	var b strings.Builder
 	fmt.Fprintf(&b, "exec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s; sleep 1; %s; ", logPath, healthFn, stop)
 	if manager == serviceManagerSystemd {
-		// Legacy pre-FLMX gost cleanup (systemd units only).
-		b.WriteString("legacy_service='' && for service_file in /etc/systemd/system/gost.service /lib/systemd/system/gost.service /usr/lib/systemd/system/gost.service; do if [ -f \"$service_file\" ] && grep -Fq \"WorkingDirectory=/etc/gost\" \"$service_file\" && (grep -Fq \"ExecStart=/etc/gost/gost\" \"$service_file\" || (grep -Fq \"ExecStart=/usr/local/bin/gost\" \"$service_file\" && [ -f /etc/gost/config.json ] && [ -f /etc/gost/gost.json ])); then legacy_service=\"$service_file\"; break; fi; done; if [ -n \"$legacy_service\" ]; then (systemctl stop gost 2>/dev/null || true) && (systemctl disable gost 2>/dev/null || true) && rm -f /usr/local/bin/gost /etc/gost/gost \"$legacy_service\" && (systemctl daemon-reload 2>/dev/null || true); fi; ")
+		// Legacy pre-FLMX gost cleanup (systemd units only), gated
+		// on the C4-F01 ownership guard: the fingerprint alone does
+		// not prove the legacy install belongs to this panel, so the
+		// segment is rendered from the two config addresses.
+		ownAddr := readAgentConfigAddr(filepath.Join(filepath.Dir(binaryPath), "config.json"))
+		b.WriteString(legacyGostCleanupSegment(ownAddr, readAgentConfigAddr(legacyGostConfigPath)))
 	}
 	// R4-N2：判活走 flmx_agent_health_ok 的两次采样（PID 稳定），
 	// 不再单次 is-active 采样——flap 窗口内的假活会跳过自动回滚。
