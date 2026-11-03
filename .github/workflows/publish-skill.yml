@@ -1,15 +1,32 @@
 name: Publish Skill to npm
 
 on:
-  push:
-    tags:
-      # AUDIT-R1 (SCR-001): 与仓库纯数字 tag 发版惯例对齐（docker-build.yml 用 '[0-9]*'）。
-      # 原 'v*' 触发器下该 workflow 永远不运行，skill 自动发布链死亡。
-      - '[0-9]*'
+  # R3-C4-03: the former tag-push trigger (AUDIT-R1 SCR-001) ran in
+  # parallel with docker-build with no ordering between them, so npm
+  # could publish a skill for a release that verify later blocked —
+  # in the 1.9.6 first run only the missing NPM_TOKEN (ENEEDAUTH)
+  # accidentally prevented that. Publishing is now chained off the
+  # release build: workflow_run fires only after "Build and Push
+  # Images" completes, and the job below requires conclusion ==
+  # 'success', so a blocked or failed release never reaches npm.
+  # Only tag-push runs are chained: their head_branch is the version
+  # tag itself. A manually dispatched docker-build carries its
+  # version as an input rather than a ref, so there is no version to
+  # read off the run; publishing for such a release stays a manual
+  # workflow_dispatch here, as before.
+  workflow_run:
+    workflows:
+      - Build and Push Images
+    types:
+      - completed
   workflow_dispatch:
 
 jobs:
   publish:
+    # R3-C4-03: under workflow_run, publish only when the release
+    # build succeeded end to end (verify + builds + create-release)
+    # and was a tag push, whose head_branch names the version.
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -17,6 +34,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # R3-C4-03: pin the tree explicitly. Under workflow_run the
+          # default checkout would be the default branch, which may
+          # differ from the released tree (in 1.9.6 the tag was moved
+          # and re-pushed mid-release: b6e4ca2e -> 08984f66). Publish
+          # exactly the commit the successful release build ran on.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -31,6 +55,11 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION=$(node -p "require('./skills/flmx-api/package.json').version")
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # R3-C4-03: no tag ref exists on this event; for the
+            # tag-push release build chained above, head_branch is
+            # the version tag itself (e.g. 1.9.6).
+            VERSION="${{ github.event.workflow_run.head_branch }}"
           else
             # AUDIT-R1 (SCR-001): 纯数字 tag（如 1.0.2）没有 v 前缀，
             # 原 "${GITHUB_REF#refs/tags/v}" 剥不掉前缀，会得到完整 ref。
@@ -48,6 +77,9 @@ jobs:
         # 版，全程无红。这里在任何改写之前断言仓库内 package.json
         # 已与 tag 对齐，不齐即红、绝不发布。workflow_dispatch 无
         # tag、版本本就取自 package.json，断言恒真，故跳过。
+        # R3-C4-03: workflow_run 的版本取自发版 run 的 head_branch
+        # （即 tag），同样在本断言覆盖内，且检出的树已钉在该
+        # run 的 head_sha 上。
         if: github.event_name != 'workflow_dispatch'
         working-directory: skills/flmx-api
         run: |

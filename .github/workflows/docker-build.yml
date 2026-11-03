@@ -30,6 +30,7 @@ jobs:
       should_build_gost: ${{ steps.version.outputs.should_build_gost }}
       is_tag: ${{ steps.version.outputs.is_tag }}
       image_owner: ${{ steps.version.outputs.image_owner }}
+      push_latest: ${{ steps.version.outputs.push_latest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -58,6 +59,20 @@ jobs:
           echo "is_tag=true" >> $GITHUB_OUTPUT
           echo "should_build=true" >> $GITHUB_OUTPUT
           echo "should_build_gost=true" >> $GITHUB_OUTPUT
+          # R3-C4-04: the floating GHCR :latest tag is reserved for
+          # plain dotted-numeric versions. The test is the exact same
+          # regex create-release's J-02 guard uses to decide
+          # PRERELEASE_FLAG, so the two can never disagree: a
+          # prerelease-shaped version (1.9.7-beta, -rc, ...) publishes
+          # its Release as a prerelease AND pushes only its versioned
+          # image tags, never overwriting :latest (the repo compose
+          # files default to ${FLUX_VERSION:-latest}, so a beta in
+          # :latest would silently reach direct compose users).
+          if [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            echo "push_latest=true" >> $GITHUB_OUTPUT
+          else
+            echo "push_latest=false" >> $GITHUB_OUTPUT
+          fi
 
   # C4-02（第三轮再审计）：发版路径门禁前置校验。本 workflow 的触发
   # （tag push + workflow_dispatch）与 ci-build（分支 push + PR）不相交，
@@ -196,11 +211,18 @@ jobs:
           VERSION="${{ needs.check-version.outputs.version }}"
           OWNER="${{ needs.check-version.outputs.image_owner }}"
 
+          # R3-C4-04: prereleases push only the versioned tag;
+          # :latest moves solely on plain dotted-numeric versions
+          # (check-version's push_latest, same test as J-02).
+          TAGS=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-vite-frontend:${VERSION}")
+          if [ "${{ needs.check-version.outputs.push_latest }}" = "true" ]; then
+            TAGS+=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-vite-frontend:latest")
+          fi
+
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
-            -t ${{ env.REGISTRY }}/${OWNER}/flmx-vite-frontend:latest \
-            -t ${{ env.REGISTRY }}/${OWNER}/flmx-vite-frontend:${VERSION} \
+            "${TAGS[@]}" \
             ./vite-frontend
 
   build-go-backend:
@@ -248,12 +270,17 @@ jobs:
           VERSION="${{ needs.check-version.outputs.version }}"
           OWNER="${{ needs.check-version.outputs.image_owner }}"
 
+          # R3-C4-04: same conditional :latest as build-vite.
+          TAGS=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:${VERSION}")
+          if [ "${{ needs.check-version.outputs.push_latest }}" = "true" ]; then
+            TAGS+=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:latest")
+          fi
+
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --build-arg GITHUB_REPO=${{ github.repository }} \
             --push \
-            -t ${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:latest \
-            -t ${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:${VERSION} \
+            "${TAGS[@]}" \
             ./go-backend
 
   build-agent:
@@ -291,12 +318,17 @@ jobs:
           VERSION="${{ needs.check-version.outputs.version }}"
           OWNER="${{ needs.check-version.outputs.image_owner }}"
 
+          # R3-C4-04: same conditional :latest as build-vite.
+          TAGS=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-agent:${VERSION}")
+          if [ "${{ needs.check-version.outputs.push_latest }}" = "true" ]; then
+            TAGS+=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-agent:latest")
+          fi
+
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --build-arg VERSION=${VERSION} \
             --push \
-            -t ${{ env.REGISTRY }}/${OWNER}/flmx-agent:latest \
-            -t ${{ env.REGISTRY }}/${OWNER}/flmx-agent:${VERSION} \
+            "${TAGS[@]}" \
             ./go-gost
 
   create-release:

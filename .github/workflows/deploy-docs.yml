@@ -7,6 +7,24 @@ on:
       - 'doc/**'
       - 'vite-frontend/**'
       - '.github/workflows/deploy-docs.yml'
+  # R3-C4-01: re-run after every successful release build so the demo
+  # version (read from releases/latest at build time, see Build demo)
+  # aligns with the release that just landed instead of lagging one
+  # version until someone dispatches this workflow by hand. This must
+  # NOT be a `release: published` trigger: docker-build creates the
+  # Release with GITHUB_TOKEN, and events fired by GITHUB_TOKEN never
+  # start new workflow runs, so such a trigger would silently never
+  # fire. workflow_run is the supported chain: it fires when the whole
+  # "Build and Push Images" run completes, and create-release (its
+  # final job) has by then already published the Release, so
+  # releases/latest already names the new version when the demo is
+  # rebuilt. The job below gates on conclusion == 'success', so a
+  # release blocked by verify never triggers a redeploy either.
+  workflow_run:
+    workflows:
+      - Build and Push Images
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -18,6 +36,10 @@ concurrency:
 
 jobs:
   deploy:
+    # R3-C4-01: workflow_run fires for failed and cancelled release
+    # builds too; only a successful one means a Release landed and the
+    # demo version needs realigning.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     # Pinned (not ubuntu-latest), same reason as ci-build's frontend
     # job: the demo check below installs the Chromium pinned by
     # playwright-core 1.55.0, whose newest supported Ubuntu is 24.04;
@@ -28,6 +50,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0 # lastUpdated reads git history
+          # R3-C4-01: pin the tree explicitly. On workflow_run the
+          # default checkout would be the default branch's current
+          # HEAD, which may have advanced past the release; build the
+          # docs/demo from the exact commit the release build released
+          # (the tag commit). Other events fall back to their own sha
+          # (main tip for push/dispatch — the pre-existing behavior).
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -82,7 +111,46 @@ jobs:
         run: |
           CHROME="$(node -e "const { chromium } = require('playwright-core'); process.stdout.write(chromium.executablePath())")" node scripts/demo/check.mjs ../doc/.vitepress/dist/demo
 
+      # R3-C4-02: the push gets up to three attempts. A single
+      # transient network failure (HTTP 408 during send-pack in the
+      # 1.9.6 first run) previously voided an otherwise fully green
+      # deploy until a human re-ran the workflow. Retrying re-runs the
+      # same action from scratch — it stages the publish in a fresh
+      # temp clone every time, so each attempt re-syncs with the
+      # remote instead of resuming a half-pushed state — with a pause
+      # between attempts. Same action, same publish_dir and
+      # force_orphan semantics on every attempt; the last attempt has
+      # no continue-on-error, so a persistent failure still turns the
+      # run red.
       - name: Deploy to gh-pages
+        id: deploy_attempt_1
+        continue-on-error: true
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: doc/.vitepress/dist
+          force_orphan: true
+
+      - name: Wait before deploy retry
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Deploy to gh-pages (retry 1)
+        id: deploy_attempt_2
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        continue-on-error: true
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: doc/.vitepress/dist
+          force_orphan: true
+
+      - name: Wait before final deploy retry
+        if: steps.deploy_attempt_2.outcome == 'failure'
+        run: sleep 60
+
+      - name: Deploy to gh-pages (retry 2)
+        if: steps.deploy_attempt_2.outcome == 'failure'
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
