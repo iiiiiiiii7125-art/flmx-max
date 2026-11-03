@@ -76,11 +76,16 @@ rc-service flux_agent status
 # Update must retain config and restart through OpenRC.
 cp "$TEST_DIR/flux_agent/config.json" "$TEST_DIR/config-before-update.json"
 cp "$TEST_DIR/manage.sh" "$TEST_DIR/update.sh"
-printf '2\n' | PROXY_ENABLED=false "$TEST_DIR/update.sh"
+# AI-06: menu update runs the agent-dir ownership guard; the fixture
+# operator asserts ownership via TAKEOVER (same form as the proxy
+# suite), so this step exercises the update mechanism itself.
+printf '2\n' | PROXY_ENABLED=false FLMX_AGENT_TAKEOVER=1 "$TEST_DIR/update.sh"
 cmp "$TEST_DIR/config-before-update.json" "$TEST_DIR/flux_agent/config.json"
 rc-service flux_agent status
 
-printf '3\ny\n' | "$TEST_DIR/manage.sh"
+# AI-06: menu uninstall runs the same ownership guard — TAKEOVER form
+# as the update step above; the trailing 'y' is the uninstall confirm.
+printf '3\ny\n' | FLMX_AGENT_TAKEOVER=1 "$TEST_DIR/manage.sh"
 test ! -e /etc/init.d/flux_agent
 test ! -e /etc/runlevels/default/flux_agent
 test ! -e "$TEST_DIR/flux_agent"
