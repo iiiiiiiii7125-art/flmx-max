@@ -12,17 +12,18 @@ export interface ProvidersProps {
 
 // Shared toast surface for every toast type: the per-type style in
 // react-hot-toast replaces rather than merges, so each type spreads this.
-// Flat recipe (2026-11-03): --toaster-bg is solid white and
-// --toaster-color the near-black foreground - opaque, no backdrop
-// filter, the same panel surface as every other floating layer.
-// The toast itself opts out of elevation shadow (boxShadow: none
-// below); the recipe permits shadows elsewhere and mandates none.
+// Matte glass (2026-11-04): --toaster-bg is the surface-tier glass
+// gradient (stops 0.85 -> 0.75 -> 0.70) and --toaster-color the
+// near-black foreground, so toasts follow the site-wide matte-glass
+// recipe like every floating surface, with the surface-tier blur.
 const toastSurfaceStyle = {
   background: "var(--toaster-bg)",
   color: "var(--toaster-color)",
   border: "1px solid var(--toaster-border)",
   borderRadius: 12,
-  boxShadow: "none",
+  boxShadow: "0 6px 20px rgb(24 24 27 / 0.08)",
+  backdropFilter: "blur(18px) saturate(150%)",
+  WebkitBackdropFilter: "blur(18px) saturate(150%)",
 } as const;
 
 export function Provider({ children }: ProvidersProps) {

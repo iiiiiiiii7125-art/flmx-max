@@ -24,13 +24,13 @@ export interface AccordionItemProps {
 
 function variantClass(variant: AccordionProps["variant"]) {
   if (variant === "splitted") {
-    // Item surface comes from the .accordion-splitted rule in globals.css
-    // (a component class like .panel-card cannot be applied through a
+    // Item glass comes from the .accordion-splitted rule in globals.css
+    // (a component class like .glass-card cannot be applied through a
     // Tailwind arbitrary variant — it is not a utility).
     return "accordion-splitted [&>[data-slot=accordion-item]]:mb-3 [&>[data-slot=accordion-item]]:rounded-xl [&>[data-slot=accordion-item]]:overflow-hidden [&>[data-slot=accordion-item]:last-child]:mb-0";
   }
   if (variant === "bordered") {
-    return "panel-card rounded-xl overflow-hidden [&>[data-slot=accordion-item]]:border-b [&>[data-slot=accordion-item]:last-child]:border-b-0";
+    return "glass-card rounded-xl overflow-hidden [&>[data-slot=accordion-item]]:border-b [&>[data-slot=accordion-item]:last-child]:border-b-0";
   }
 
   return "";

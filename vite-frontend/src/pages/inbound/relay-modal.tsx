@@ -211,6 +211,7 @@ export function RelayModal({
   return (
     <>
       <Modal
+        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(item)}
         placement="center"
@@ -394,6 +395,7 @@ export function RelayModal({
       </Modal>
 
       <Modal
+        backdrop="blur"
         classNames={{ base: modalBase }}
         isOpen={Boolean(removing)}
         placement="center"

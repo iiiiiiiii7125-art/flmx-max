@@ -499,6 +499,7 @@ export function InboundFormModal({
 
   return (
     <Modal
+      backdrop="blur"
       classNames={{
         base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
       }}
@@ -592,7 +593,7 @@ export function InboundFormModal({
                             className={`text-left rounded-xl border px-3 py-2 transition-colors ${
                               active
                                 ? "border-primary bg-primary-500/10"
-                                : "border-divider hover:bg-default-100"
+                                : "border-divider hover:bg-white/40"
                             }`}
                             type="button"
                             onClick={() => {
@@ -1348,7 +1349,7 @@ export function InboundFormModal({
                     </div>
                     {form.kernelType !== "xray" &&
                       form.connIdleSeconds.trim() !== "" && (
-                        <div className="flex items-center justify-between gap-2 rounded-lg border border-divider panel-inset px-3 py-2">
+                        <div className="flex items-center justify-between gap-2 rounded-lg border border-divider glass-inset px-3 py-2">
                           <p className="text-xs font-semibold text-warning-700">
                             该入站为非 Xray 内核，存量空闲超时{" "}
                             {form.connIdleSeconds === "-1"

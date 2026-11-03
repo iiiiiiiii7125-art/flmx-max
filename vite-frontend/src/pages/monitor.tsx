@@ -113,7 +113,7 @@ function UserTunnelMonitorOverview() {
     <AnimatedPage className="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
       <div className="mb-6 space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0 rounded-xl panel-card px-3 py-2">
+          <div className="min-w-0 rounded-xl glass-card px-3 py-2">
             <h2 className="text-xl font-semibold truncate">监控面板</h2>
           </div>
           <Button
@@ -365,13 +365,13 @@ function AdminMonitorOverview() {
     <AnimatedPage className="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
       {/* 顶部英雄数据指标 (Hero Metrics) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <div className="panel-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
+        <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
           <div className="flex justify-between items-center z-10 relative">
-            <span className="panel-surface rounded-full px-2.5 py-1 font-semibold text-foreground text-sm">
+            <span className="glass-surface rounded-full px-2.5 py-1 font-semibold text-foreground text-sm">
               System Load
             </span>
           </div>
-          <div className="z-10 relative w-fit rounded-xl panel-surface px-3 py-1.5">
+          <div className="z-10 relative w-fit rounded-xl glass-surface px-3 py-1.5">
             <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
               {aggregateMetrics.avgCpu.toFixed(1)}%
             </span>
@@ -386,13 +386,13 @@ function AdminMonitorOverview() {
           </div>
         </div>
 
-        <div className="panel-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
+        <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
           <div className="flex justify-between items-center z-10 relative">
-            <span className="panel-surface rounded-full px-2.5 py-1 font-semibold text-foreground text-sm">
+            <span className="glass-surface rounded-full px-2.5 py-1 font-semibold text-foreground text-sm">
               Active Connections
             </span>
           </div>
-          <div className="z-10 relative w-fit rounded-xl panel-surface px-3 py-1.5">
+          <div className="z-10 relative w-fit rounded-xl glass-surface px-3 py-1.5">
             <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
               {aggregateMetrics.totalConns}
             </span>
@@ -407,13 +407,13 @@ function AdminMonitorOverview() {
           </div>
         </div>
 
-        <div className="panel-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
+        <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
           <div className="flex justify-between items-center z-10 relative">
-            <span className="panel-surface rounded-full px-2.5 py-1 font-semibold text-foreground text-sm">
+            <span className="glass-surface rounded-full px-2.5 py-1 font-semibold text-foreground text-sm">
               Bandwidth
             </span>
           </div>
-          <div className="z-10 relative w-fit rounded-xl panel-surface px-3 py-1.5">
+          <div className="z-10 relative w-fit rounded-xl glass-surface px-3 py-1.5">
             <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
               {formatBytesPerSecond(aggregateMetrics.totalBandwidth)}
             </span>
@@ -431,7 +431,7 @@ function AdminMonitorOverview() {
 
       <div className="mb-6 space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0 rounded-xl panel-card px-3 py-2">
+          <div className="min-w-0 rounded-xl glass-card px-3 py-2">
             <h2 className="text-xl font-semibold truncate">监控面板</h2>
           </div>
           <div className="flex items-center gap-2">
@@ -462,12 +462,12 @@ function AdminMonitorOverview() {
         </div>
 
         {/* Tab Switcher */}
-        <div className="panel-surface flex items-center gap-1 p-1 rounded-full w-fit shadow-sm">
+        <div className="glass-surface flex items-center gap-1 p-1 rounded-full w-fit shadow-sm">
           <button
             className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
               activeTab === "nodes"
-                ? "bg-primary-700 text-white"
-                : "text-foreground hover:bg-default-100"
+                ? "bg-gradient-to-r from-primary-700 to-secondary-700 shadow-sm text-white"
+                : "text-foreground hover:bg-white/30"
             }`}
             onClick={() => setActiveTab("nodes")}
           >
@@ -477,8 +477,8 @@ function AdminMonitorOverview() {
           <button
             className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
               activeTab === "tunnels"
-                ? "bg-primary-700 text-white"
-                : "text-foreground hover:bg-default-100"
+                ? "bg-gradient-to-r from-primary-700 to-secondary-700 shadow-sm text-white"
+                : "text-foreground hover:bg-white/30"
             }`}
             onClick={() => setActiveTab("tunnels")}
           >

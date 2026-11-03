@@ -45,7 +45,7 @@ export function Navbar({
   return (
     <nav
       className={cn(
-        "w-full border-b border-divider bg-content1",
+        "w-full border-b border-white/45 [background:var(--glass-bg)] backdrop-blur-[18px] backdrop-saturate-[1.5]",
         position === "sticky" ? "sticky top-0 z-40" : "",
         className,
       )}

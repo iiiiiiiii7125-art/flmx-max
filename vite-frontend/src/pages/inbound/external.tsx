@@ -209,6 +209,7 @@ export function ImportModal({
 
   return (
     <Modal
+      backdrop="blur"
       classNames={{ base: modalBase }}
       isOpen={isOpen}
       placement="center"
@@ -465,6 +466,7 @@ export function ExternalEditModal({
 
   return (
     <Modal
+      backdrop="blur"
       classNames={{ base: modalBase }}
       isOpen={Boolean(item)}
       placement="center"

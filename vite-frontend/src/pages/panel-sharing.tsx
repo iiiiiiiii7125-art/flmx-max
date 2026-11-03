@@ -570,7 +570,7 @@ export default function PanelSharingPage() {
         >
           <Card>
             <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider panel-inset p-4 md:flex-row md:items-center md:justify-between">
+              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider glass-inset p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <h2 className="text-lg font-semibold text-foreground">
                     Provider 共享
@@ -727,7 +727,7 @@ export default function PanelSharingPage() {
         >
           <Card>
             <CardBody className="space-y-5">
-              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider panel-inset p-4 md:flex-row md:items-center md:justify-between">
+              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-divider glass-inset p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <h2 className="text-lg font-semibold text-foreground">
                     Consumer 接入
@@ -841,6 +841,7 @@ export default function PanelSharingPage() {
 
       {/* Create Share Modal */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
@@ -957,6 +958,7 @@ export default function PanelSharingPage() {
 
       {/* Edit Share Modal */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
@@ -1065,6 +1067,7 @@ export default function PanelSharingPage() {
 
       {/* Import Node Modal */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}
@@ -1106,6 +1109,7 @@ export default function PanelSharingPage() {
 
       {/* 删除/重置流量确认弹窗 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}

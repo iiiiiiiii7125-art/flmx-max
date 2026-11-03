@@ -205,8 +205,8 @@ export default function SubscriptionAssignSection() {
                         key={s.id}
                         className={`flex cursor-pointer items-center gap-3 rounded-lg border border-divider px-4 py-3 transition-all ${
                           isSelected
-                            ? "panel-card border-primary bg-primary-500/10"
-                            : "panel-card hover:bg-default-100"
+                            ? "glass-card border-primary bg-primary-500/10"
+                            : "glass-card hover:bg-white/40"
                         }`}
                       >
                         <input

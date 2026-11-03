@@ -69,7 +69,7 @@ export const AnnouncementBanner = ({
                     </code>
                   ),
                   pre: ({ children }) => (
-                    <pre className="mb-2 font-mono overflow-x-auto rounded-md panel-inset p-2.5 text-xs font-semibold leading-relaxed">
+                    <pre className="mb-2 font-mono overflow-x-auto rounded-md glass-inset p-2.5 text-xs font-semibold leading-relaxed">
                       {children}
                     </pre>
                   ),

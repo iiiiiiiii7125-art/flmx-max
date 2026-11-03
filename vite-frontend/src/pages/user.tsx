@@ -1224,9 +1224,9 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
             classNames={{
               wrapper:
                 "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-              th: "bg-transparent text-foreground font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+              th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
               td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-              tr: "hover:bg-default-100  transition-colors",
+              tr: "hover:bg-white/40 transition-colors",
             }}
           >
             <TableHeader>
@@ -1645,6 +1645,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       {/* 用户表单模态框 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl",
         }}
@@ -1776,7 +1777,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               ((editingUser.dailyQuotaGB ?? 0) > 0 ||
                 (editingUser.monthlyQuotaGB ?? 0) > 0 ||
                 (editingUser.disabledByQuota ?? 0) > 0) && (
-                <div className="panel-card space-y-3 rounded-xl p-4">
+                <div className="glass-card space-y-3 rounded-xl p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-semibold text-foreground">
@@ -1798,14 +1799,14 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <div className="rounded-lg panel-inset p-3">
+                    <div className="rounded-lg glass-inset p-3">
                       <div className="text-xs font-semibold text-foreground">每日用量</div>
                       <div className="mt-1 text-sm font-semibold text-foreground">
                         {formatFlow(Number(editingUser.dailyUsedBytes ?? 0))} /{" "}
                         {formatQuotaLimit(editingUser.dailyQuotaGB)}
                       </div>
                     </div>
-                    <div className="rounded-lg panel-inset p-3">
+                    <div className="rounded-lg glass-inset p-3">
                       <div className="text-xs font-semibold text-foreground">每月用量</div>
                       <div className="mt-1 text-sm font-semibold text-foreground">
                         {formatFlow(Number(editingUser.monthlyUsedBytes ?? 0))}{" "}
@@ -1874,6 +1875,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       {/* 隧道权限管理模态框 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "max-w-[95vw] sm:max-w-4xl",
         }}
@@ -1891,7 +1893,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               {/* 监控权限部分 */}
               <div>
                 <h3 className="text-lg font-semibold mb-4">监控权限</h3>
-                <div className="flex items-center justify-between gap-4 panel-inset p-4 rounded-lg border border-divider">
+                <div className="flex items-center justify-between gap-4 glass-inset p-4 rounded-lg border border-divider">
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-foreground">
                       允许访问监控功能
@@ -1926,7 +1928,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               <div>
                 <h3 className="text-lg font-semibold mb-4">分配新权限</h3>
                 <div className="space-y-4">
-                  <div className="text-sm text-foreground panel-inset p-3 rounded-lg border border-divider">
+                  <div className="text-sm text-foreground glass-inset p-3 rounded-lg border border-divider">
                     流量限制、规则数量、到期时间、流量重置时间将自动继承用户设置
                   </div>
 
@@ -1946,10 +1948,10 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                             px-4 py-3 rounded-lg border transition-all duration-200 cursor-pointer
                             ${
                               isAssigned
-                                ? "panel-inset border-divider opacity-60 cursor-not-allowed"
+                                ? "glass-inset border-divider opacity-60 cursor-not-allowed"
                                 : isSelected
                                   ? "bg-primary-500/10 border-primary-300 shadow-sm"
-                                  : "panel-card border-divider hover:border-primary-200"
+                                  : "glass-card border-divider hover:border-primary-200 hover:shadow-sm"
                             }
                           `}
                           role="button"
@@ -2078,9 +2080,9 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                 <Table
                   aria-label="用户隧道权限列表"
                   classNames={{
-                    th: "bg-transparent text-foreground font-semibold text-sm border-b border-divider py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
+                    th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
                     td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
-                    tr: "hover:bg-default-100  transition-colors",
+                    tr: "hover:bg-white/40 transition-colors",
                   }}
                 >
                   <TableHeader>
@@ -2227,6 +2229,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       {/* 编辑隧道权限模态框 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl",
         }}
@@ -2401,6 +2404,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       {/* 删除确认对话框 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl",
         }}
@@ -2450,6 +2454,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       {/* 删除隧道权限确认对话框 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl",
         }}
@@ -2501,6 +2506,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       {/* 重置流量确认对话框 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl",
         }}
@@ -2592,6 +2598,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       {/* 重置隧道流量确认对话框 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl",
         }}

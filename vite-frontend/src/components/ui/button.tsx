@@ -12,13 +12,13 @@ const buttonVariants = cva(
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
         destructive: "bg-danger-800 text-white hover:bg-danger-700",
         outline:
-          "border border-input bg-content1 hover:bg-default-100 hover:text-foreground",
+          "border border-input bg-content1 hover:bg-white/40 hover:text-foreground",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-default-100 hover:text-foreground",
+        ghost: "hover:bg-white/40 hover:text-foreground",
         link: "text-primary-700 underline-offset-4 hover:underline",
         // flat/light carry no background here: the bridge colour maps own
-        // the tray background, so the label always sits on a solid plate.
+        // the (Round 4 tray) background so text never lands on glass.
         light: "",
         flat: "",
       },

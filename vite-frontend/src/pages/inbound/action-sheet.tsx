@@ -35,6 +35,7 @@ export function ActionSheet({
 }) {
   return (
     <Modal
+      backdrop="blur"
       classNames={{ base: modalBase }}
       isOpen={isOpen}
       placement="center"

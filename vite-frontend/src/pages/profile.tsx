@@ -223,7 +223,7 @@ export default function ProfilePage() {
                 adminMenuItems.map((item) => (
                   <button
                     key={item.path}
-                    className="panel-card flex flex-col items-center p-3 rounded-2xl hover:bg-default-100 transition-colors duration-200"
+                    className="glass-card flex flex-col items-center p-3 rounded-2xl hover:bg-white/40 transition-colors duration-200"
                     onClick={() => navigate(item.path)}
                   >
                     <div
@@ -239,7 +239,7 @@ export default function ProfilePage() {
 
               {/* 修改密码 */}
               <button
-                className="panel-card flex flex-col items-center p-3 rounded-2xl hover:bg-default-100 transition-colors duration-200"
+                className="glass-card flex flex-col items-center p-3 rounded-2xl hover:bg-white/40 transition-colors duration-200"
                 onClick={onOpen}
               >
                 <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-2">
@@ -262,7 +262,7 @@ export default function ProfilePage() {
 
               {/* 退出登录 */}
               <button
-                className="panel-card flex flex-col items-center p-3 rounded-2xl hover:bg-default-100 transition-colors duration-200"
+                className="glass-card flex flex-col items-center p-3 rounded-2xl hover:bg-white/40 transition-colors duration-200"
                 onClick={handleLogout}
               >
                 <div className="w-10 h-10 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-2">
@@ -288,17 +288,18 @@ export default function ProfilePage() {
 
         <VersionFooter
           containerClassName="fixed inset-x-0 bottom-20 text-center py-4"
-          poweredClassName="text-xs font-semibold text-foreground mx-auto mt-1 w-fit panel-surface rounded-full px-3 py-0.5"
+          poweredClassName="text-xs font-semibold text-foreground mx-auto mt-1 w-fit glass-surface rounded-full px-3 py-0.5"
           updateBadgeClassName="ml-2 inline-flex items-center rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white"
           version={
             isWebViewFunc() ? siteConfig.app_version : siteConfig.version
           }
-          versionClassName="text-xs font-semibold text-foreground mt-1 mx-auto w-fit panel-surface rounded-full px-3 py-1"
+          versionClassName="text-xs font-semibold text-foreground mt-1 mx-auto w-fit glass-surface rounded-full px-3 py-1"
         />
       </div>
 
       {/* 修改密码弹窗 */}
       <Modal
+        backdrop="blur"
         classNames={{
           base: "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden",
         }}

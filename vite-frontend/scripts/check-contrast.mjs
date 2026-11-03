@@ -1,7 +1,13 @@
 // check-contrast.mjs — 文字对比度回归校验（无测试框架版）。
 //
-// 定案纪律：全站素面亮色单模，正文文字用所属色族最深档（-700 起），
-// 禁灰字，对比度目标 7、底线 4.5（WCAG AA 正文）。此前该自检只是
+// 定案纪律：亮色单模＋哑光玻璃面＋托盘承载小字，正文文字用所属
+// 色族最深档（-700 起），禁灰字，对比度目标 7、底线 4.5（WCAG AA
+// 正文）。2026-11-04 玻璃恢复后，「面」的定义分三层：实色面
+// （--content1 表单填充／--background 页底）沿用下方 25 对钉值；
+// 玻璃面（三级配方）按文末「玻璃合成网格」段复算——梯度停点与四
+// 种底色（纯黑／纯白／内置壁纸明暗双区采样）逐格合成后断言正文
+// 对；小字恒在不透明托盘上（托盘六对在 25 对内），不入玻璃网格。
+// 此前该自检只是
 // 审计时的一次性临时脚本、未落仓库（A-front 复核时独立复算 25 对
 // 全过），本脚本把它沉淀为常设门：解析 src/styles/globals.css 的
 // :root token 实值，按 WCAG 相对亮度公式复算 25 对正文/托盘文字
@@ -1031,6 +1037,143 @@ for (const [fg, bg, pinned] of PAIRS) {
   );
 }
 
+
+// ── 玻璃合成网格（2026-11-04 玻璃恢复，I-C5 注记 2 承接）─────
+// 层叠变更必须重建采样网格：本段即随哑光玻璃层叠重建的网格。
+// 模型：三级玻璃配方（卡片 --glass-card／浮层 --glass-bg／内嵌
+// .glass-inset）的三个白色梯度停点，逐个与四种底合成（sRGB 空间
+// alpha 合成，与浏览器一致）——纯黑、纯白（自定义壁纸双极端）、
+// 内置壁纸 bg-light.jpg 的暗区/明区代表色（8×8 瓦片均值采样，
+// 2026-11-04 实测：暗区 #01043c、明区 #d4d2b7；资源更换须重采样
+// 并改钉值，资源存在性由 check-wallpaper-chain 门守）。内嵌层不
+// 直接贴壁纸：其底为卡片层最低停点先行合成的结果（最差载体）。
+// 断言：① 三级停点与 backdrop blur 逐值钉住（14/18/10px），改浅
+// 或降 blur 都会点名；② 正文色 --foreground 在全部 36 格 ≥ 4.5
+// 底线；③ 卡片中位停点在四种底上 ≥ 7 目标、浮层最低停点在黑/
+// 暗区底上 ≥ 7；④ 四个最差格钉值 ±0.1。模型边界（明示）：次级
+// 文字 -700 档在卡片最低停点×纯黑底一格为 3.67——纪律口径是正文
+// （--foreground）全格守底线、次级信息靠字号字重与托盘，-700 全
+// 格 4.5 不在本门断言内（与 S-UI 恢复方案 ③-3 的断言设计一致）。
+const lumRgb = (rgb) => {
+  const f = (c) => {
+    const s = c / 255;
+
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+
+  return 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]);
+};
+const contrastRgb = (a, b) => {
+  const [hi, lo] = [lumRgb(a), lumRgb(b)].sort((x, y) => y - x);
+
+  return (hi + 0.05) / (lo + 0.05);
+};
+const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const compositeOver = (alpha, bg) =>
+  [0, 1, 2].map((i) => alpha * 255 + (1 - alpha) * bg[i]);
+const gradientStops = (value) =>
+  typeof value === "string"
+    ? [...value.matchAll(/rgb\(255 255 255 \/ ([\d.]+)\)/g)].map((m) =>
+        parseFloat(m[1]),
+      )
+    : [];
+const classBlock = (cls) => {
+  const m = stripCssComments(css).match(
+    new RegExp(`\\.${cls}\\s*\\{([^}]*)\\}`),
+  );
+
+  return m ? m[1] : "";
+};
+// 类内嵌渐变的停点只从 background 声明取（边框色同为白色 alpha，
+// 不限定声明面会把 border 的 0.5 误作第四停点）。
+const blockGradientStops = (block) => {
+  const m = block.match(/background:\s*linear-gradient\(([^;]*)\)/);
+
+  return m ? gradientStops(m[1]) : [];
+};
+const blurOf = (cls) => {
+  const m = classBlock(cls).match(/backdrop-filter:\s*blur\((\d+)px\)/);
+
+  return m ? parseInt(m[1], 10) : null;
+};
+
+const GLASS_TIERS = [
+  { name: "卡片 glass-card", stops: gradientStops(resolvedTokens["--glass-card"]), pinned: [0.78, 0.66, 0.6], blur: blurOf("glass-card"), pinnedBlur: 14 },
+  { name: "浮层 glass-surface", stops: gradientStops(resolvedTokens["--glass-bg"]), pinned: [0.85, 0.75, 0.7], blur: blurOf("glass-surface"), pinnedBlur: 18 },
+  { name: "内嵌 glass-inset", stops: blockGradientStops(classBlock("glass-inset")), pinned: [0.5, 0.35, 0.28], blur: blurOf("glass-inset"), pinnedBlur: 10 },
+];
+const GLASS_BACKDROPS = [
+  ["纯黑", [0, 0, 0]],
+  ["壁纸暗区 #01043c", hexToRgb("#01043c")],
+  ["壁纸明区 #d4d2b7", hexToRgb("#d4d2b7")],
+  ["纯白", [255, 255, 255]],
+];
+const fgRgb = tokens["--foreground"] ? hexToRgb(tokens["--foreground"]) : null;
+
+for (const tier of GLASS_TIERS) {
+  check(
+    `玻璃停点钉值：${tier.name} = [${tier.pinned.join(", ")}]、blur ${tier.pinnedBlur}px`,
+    JSON.stringify(tier.stops) === JSON.stringify(tier.pinned) &&
+      tier.blur === tier.pinnedBlur,
+    `实测停点 [${tier.stops.join(", ")}]、blur ${tier.blur}px`,
+  );
+}
+
+check(
+  "玻璃合成：--toaster-bg 与浮层 --glass-bg 同停点（浮层档）",
+  JSON.stringify(gradientStops(resolvedTokens["--toaster-bg"])) ===
+    JSON.stringify(GLASS_TIERS[1].stops),
+  `实测 [${gradientStops(resolvedTokens["--toaster-bg"]).join(", ")}]`,
+);
+
+const glassCell = {};
+if (fgRgb && GLASS_TIERS.every((t) => t.stops.length === 3)) {
+  for (const tier of GLASS_TIERS) {
+    for (const [bgName, bg] of GLASS_BACKDROPS) {
+      tier.stops.forEach((stop, si) => {
+        const carrier =
+          tier.name.startsWith("内嵌")
+            ? compositeOver(GLASS_TIERS[0].stops[2], bg)
+            : bg;
+        const ratio = contrastRgb(fgRgb, compositeOver(stop, carrier));
+
+        glassCell[`${tier.name}|${bgName}|${si}`] = ratio;
+        check(
+          `玻璃合成格：--foreground on ${tier.name} 停点${si + 1}(${stop}) × ${bgName} = ${ratio.toFixed(2)}（底线 4.5）`,
+          ratio >= 4.5,
+          `实测 ${ratio.toFixed(2)}`,
+        );
+      });
+    }
+  }
+  for (const [bgName] of GLASS_BACKDROPS) {
+    const mid = glassCell[`卡片 glass-card|${bgName}|1`];
+
+    check(
+      `玻璃合成目标格：--foreground on 卡片中位停点 × ${bgName} = ${mid?.toFixed(2)}（目标 7）`,
+      mid !== undefined && mid >= 7,
+      `实测 ${mid?.toFixed(2)}`,
+    );
+  }
+  const WORST_PINS = [
+    ["卡片 glass-card|纯黑|2", 6.22],
+    ["卡片 glass-card|壁纸暗区 #01043c|2", 6.46],
+    ["浮层 glass-surface|纯黑|2", 8.4],
+    ["内嵌 glass-inset|纯黑|2", 8.69],
+  ];
+
+  for (const [key, pinned] of WORST_PINS) {
+    const v = glassCell[key];
+
+    check(
+      `玻璃合成最差格钉值：${key} = ${v?.toFixed(2)}（钉值 ${pinned}）`,
+      v !== undefined && Math.abs(v - pinned) <= 0.1,
+      `实测 ${v?.toFixed(2)}`,
+    );
+  }
+} else {
+  check("玻璃合成网格可复算（--foreground 与三级停点齐备）", false, "token 或停点缺失");
+}
 
 // 级联求值建模问题（R9-17 的 fail-closed 通道）：求值中记录的
 // 非法层名等问题在两门逐个点名报红，不并入 token 胜出判定。
