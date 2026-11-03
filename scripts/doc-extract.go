@@ -71,6 +71,17 @@ func buildFiles(dir string, recursive bool, wantTests bool) ([]string, error) {
 				return err
 			}
 			if info.IsDir() {
+				// 与 go 工具的目录约定对齐（修复轮 8，H-C4 信息
+				// 项处置）：testdata 与 _/. 前缀目录永不属于任何
+				// 包的编译集——其内 .go 文件既不是产品声明、也不
+				// 被 MatchFile 的单文件视角排除，必须在 Walk 层
+				// 整目录跳过，否则夹具声明会污染事件普查集。
+				if path != dir {
+					name := info.Name()
+					if name == "testdata" || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
+						return filepath.SkipDir
+					}
+				}
 				return nil
 			}
 			return add(path)
