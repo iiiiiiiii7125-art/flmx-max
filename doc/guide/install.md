@@ -130,6 +130,14 @@ wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest
 - Alpine/OpenRC 查看状态: `rc-service flux_agent status`
 - 若面板未显示在线，看 agent 的 WebSocket 连接日志（地址 scheme 是否与面板对外方式一致、是否被 308/握手拒绝等都会写在日志里），再对照下一节排查：systemd 节点执行 `journalctl -u flux_agent -n 100`；Alpine/OpenRC 节点没有 journald，日志在文件 `/var/log/flux_agent.log`（错误日志 `/var/log/flux_agent.err.log`），用 `tail -n 100 /var/log/flux_agent.log` 查看。
 
+### 内核目录覆盖（FLMX_KERNEL_DIR）
+
+agent 把各内核的二进制、`state.json` 等状态文件与 geodata 都放在一个**内核状态根目录**下。默认不用设置：脚本形态是 `/etc/flux_agent/kernels`，容器形态由镜像把该目录钉在数据卷上（容器重建不丢内核状态）。要改到别的目录，用 agent 进程的环境变量 `FLMX_KERNEL_DIR=<绝对路径>` 覆盖（`FLVX_KERNEL_DIR` 是旧名前缀兜底，两者都设时以 `FLMX_` 为准）。
+
+- **设置方法（脚本形态）**：执行 `systemctl edit flux_agent`，在覆盖文件里写 `[Service]` 段加一行 `Environment=FLMX_KERNEL_DIR=<绝对路径>`，保存后 `systemctl daemon-reload && systemctl restart flux_agent` 生效。容器形态下此变量由镜像与面板生成的安装命令管理，**不要手工改**——改了会与数据卷锚点口径冲突，容器重建后内核状态对不上。
+- **防错**：目录必须落在**持久化存储**上（放进容器可写层或内存盘，重启 / 重建即丢全部内核状态）；换目录等于换一整套内核状态根，旧目录的内核与状态**不会自动迁移**，切换后按全新根由面板重新下发，切换前先确认能接受节点内核短暂重建。
+- **自检**：重启 agent 后，`systemctl show flux_agent -p Environment` 应能看到所设值，且所设目录下应出现 `state.json` 等状态文件。
+
 ### 节点连不上：地址写法与时钟（1.3.4 起）
 
 agent 与面板之间有两条通道，都**不再自动降级到明文**：
@@ -274,6 +282,15 @@ sudo systemctl restart caddy
 
 > 子网提示：旧版本部署的容器网络子网是 `172.80.0.0/16`，它不在 RFC1918 私网段内，后端不把该网段当作可信代理来源，经前端进来的登录请求限流键会坍缩成少数共享桶（有效预算翻倍、且可被单点洪泛耗尽）。新安装的模板已改用 `172.30.0.0/16`，**该模板子网只对全新安装生效**：1.3.4 起两条升级路径（脚本更新与面板内升级）都会把存量 `docker-compose.yml` 里在用的子网与网络名原样保留进新文件，不会因为升级模板而重建容器网络。**存量部署也不要手工改在用子网**（会重建容器网络、容器 IP 全变）；在意限流桶问题的存量部署，可改用宿主机 Caddy / nginx 直接反代后端、或等待后续版本的迁移指引。
 
+### 日志脱敏豁免前缀（FLMX_LOG_REDACT_EXEMPT_PREFIXES）
+
+面板写日志时会对 URL 脱敏：query 整体丢弃，路径里疑似 token 的长随机段（长度 ≥ 16、字母与数字混合）掩码成 `***`——订阅源拉取等外发 URL 的日志走的也是这条规则，机场订阅链接里的 path 型 token 因此不会明文落盘。只有在排障确实需要看原文路径、且该路径段确知是**公开资源 ID 而不是凭据**时，才用这个变量豁免：`FLMX_LOG_REDACT_EXEMPT_PREFIXES` 是**后端进程的环境变量**，取值为逗号分隔的 URL 路径前缀（每项以 `/` 开头），路径命中任一前缀的 URL 在日志里**整条路径原文落盘**、不再做段掩码；`FLVX_LOG_REDACT_EXEMPT_PREFIXES` 是旧名前缀兜底，两者都设时以 `FLMX_` 为准；不设（默认）即无豁免。
+
+> **风险警告（这是放松脱敏的开关）**：命中豁免前缀的路径若实际含凭据（典型如机场订阅链接 `https://机场/link/<token>`），token 会**明文写进面板日志文件**，日志一旦外发排障就等于凭据外泄。只豁免确知段内容为公开 ID 的前缀，排障完及时撤下。另注意：豁免只作用于上述「疑似 token 段」的启发式掩码，面板自身订阅路径 `/api/v1/open_api/sub/<token>` 的硬掩码不受豁免影响、永远掩码。
+
+- **设置位置与生效方法**：与 `FLMX_FETCH_*` 同口径——随版 `docker-compose.yml` 的 `backend` 服务默认没有它的传递行，只写部署目录 `.env` 不会进入后端进程、不会生效。需在部署目录 `docker-compose.yml` 的 `backend` 服务 `environment:` 段补上 `- FLMX_LOG_REDACT_EXEMPT_PREFIXES=<前缀1>,<前缀2>`（或写 `- FLMX_LOG_REDACT_EXEMPT_PREFIXES=${FLMX_LOG_REDACT_EXEMPT_PREFIXES}` 再把值放进同目录 `.env`），再执行 `docker compose up -d backend` 重建后端容器才生效。
+- **自检**：`docker exec <后端容器> printenv FLMX_LOG_REDACT_EXEMPT_PREFIXES` 能打印出所设值，即已进入后端进程；打印为空就是传递行没补对。再触发一次命中该前缀的外发请求（如刷新对应订阅源），日志里该 URL 的路径应为原文，即豁免已生效。
+
 ### 登录验证码（Cloudflare Turnstile）
 
 在 **网站配置 → 基本设置** 里可以开启登录验证码，三项缺一不可：先打开 **启用验证码** 开关，再填入 **Cloudflare Site Key** 与 **Cloudflare Secret Key**（只填两把钥匙、不打开开关，不会生效）。开启后，登录页会出现人机验证，登录请求必须携带有效验证结果才会被处理。未配置密钥时该功能不启用、登录流程与原来一致。两把钥匙的区别要分清：**Secret Key** 是敏感凭据，只存面板配置，保存后不回显、任何角色（含管理员）都无法读回已保存的值——配置页里该字段恒为空待填是正常现象，不要据此判断没保存成功；**Site Key** 按 Turnstile 的设计本来就是公开值，会随登录页下发、在未登录的浏览器里渲染验证组件，公开它没有安全影响。它同时影响上文的限流收紧逻辑（启用验证码后，用户名信号不再触发 IP 收紧）。
@@ -301,7 +318,7 @@ sudo systemctl restart caddy
 
 - 必填字段：`id`（kebab-case，与文件夹名一致）、`name`、`author`、`version`；可选：`description`、`tokens`、`css`（原始 CSS 注入）、`components` / `layouts` / `pages` 覆盖、`onActivate` / `onDeactivate` 钩子。
 - **light 集必填（硬性口径）**：只要提供 `tokens`，就必须提供 `tokens.light`——亮色 token 集，键为 CSS 变量名（如 `--primary`、`--background`、`--primary-500`），只给想改的变量即可，其余沿用默认值。全站只读 light 集，没有暗色集可回退。
-- **被拒表现**：只有 dark 集，或 `light` 集给不出哪怕一个**有效 token** 的主题包，会在注册时被**拒绝**。有效 token 须三条同时成立：①键名是 `types.ts` 的 `ThemeTokens` 词表内的已知 token（键名拼错、大小写不符、漏 `--` 前缀、带尾空格，或只给词表外的自定义变量，都不计数）；②值是非空字符串（只含空白、或只含零宽空格等不可见格式字符的值不算）；③`light` 本身是一个键值对象（给成字符串、数组等非对象形态，整体不算）。被拒形态与代码的拒绝文案同步枚举为：`light` 缺失、为空集、值全为 `undefined`、值全为空白/纯格式字符、值全为非字符串（`null`／数字／布尔／对象）、键全为词表外键名、值全为 CSS 全域关键字（`initial`／`inherit`／`unset`／`revert`／`revert-layer`，整值命中时计算值恒无效）、值全为 var() 自引用或环引用（集内互相引用成环、计算值恒无效）、`light` 非对象。届时浏览器控制台以 `[flmx-theme] registerTheme rejected` 报错并点名主题 `id` 与上述要求，该主题不会出现在主题设置列表中、无法被激活；且同 `id` 已注册的合法主题包不会被坏包顶掉，仍保留原注册。反之，集里只要有一个有效 token 即算合法部分集（其余无效条目会被跳过、未给出的 token 沿用默认值）；完全不提供 `tokens` 的主题包（只覆盖组件 / 布局 / 页面）不受此限，可以正常注册。
+- **被拒表现**：只有 dark 集，或 `light` 集给不出哪怕一个**有效 token** 的主题包，会在注册时被**拒绝**。有效 token 须四条同时成立：①键名是 `types.ts` 的 `ThemeTokens` 词表内的已知 token（键名拼错、大小写不符、漏 `--` 前缀、带尾空格，或只给词表外的自定义变量，都不计数）；②值是非空字符串（只含空白、或只含零宽空格等不可见格式字符的值不算）；③`light` 本身是一个键值对象（给成字符串、数组等非对象形态，整体不算）；④值在计算上有效——整值不是 CSS 全域关键字（`initial`、`inherit`、`unset`、`revert`、`revert-layer`，这类值在浏览器里计算结果恒为无效），也不构成 `var()` 自引用或环引用（变量引用自己、或几个变量互相引用成环，计算值同样恒无效）。被拒形态与代码的拒绝文案同步枚举为：`light` 缺失、为空集、值全为 `undefined`、值全为空白/纯格式字符、值全为非字符串（`null`／数字／布尔／对象）、键全为词表外键名、值全为 CSS 全域关键字（`initial`／`inherit`／`unset`／`revert`／`revert-layer`，整值命中时计算值恒无效）、值全为 var() 自引用或环引用（集内互相引用成环、计算值恒无效）、`light` 非对象。届时浏览器控制台以 `[flmx-theme] registerTheme rejected` 报错并点名主题 `id` 与上述要求，该主题不会出现在主题设置列表中、无法被激活；且同 `id` 已注册的合法主题包不会被坏包顶掉，仍保留原注册。反之，集里只要有一个有效 token 即算合法部分集（其余无效条目会被跳过、未给出的 token 沿用默认值）；完全不提供 `tokens` 的主题包（只覆盖组件 / 布局 / 页面）不受此限，可以正常注册。
 - 旧主题包若还带着暗色集，请把配色迁入 `light` 集并删除暗色集后再注册，否则会被拒、无法使用。
 
 > 与源码内文档的关系：主题包的完整开发说明在前端源码 `vite-frontend/src/themes/README.md`（随仓库源码走，不在本文档站内）。**行为口径以本节（产品文档）为准**——light 集必填与被拒表现按本节执行；README 是源码内的开发示例与字段参考，字段与类型的最终定义以 `vite-frontend/src/themes/types.ts` 的 `ThemePackage` / `ThemeTokens` 类型为准。
