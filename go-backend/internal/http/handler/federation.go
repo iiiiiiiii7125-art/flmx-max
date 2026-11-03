@@ -678,10 +678,24 @@ func (h *Handler) federationShareDelete(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	h.cleanupFederationTunnels(req.ID)
+	failedTunnels, err := h.cleanupFederationTunnels(req.ID)
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 
 	if err := h.repo.DeletePeerShare(req.ID); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+
+	// R2-F3-02：个别联邦隧道清理失败时共享照常删除（其运行时已在上
+	// 一步释放），但未清隧道必须在回执点名披露，不得以无条件成功
+	// 掩盖孤儿残留——管理员据 ID 在隧道列表手工清理。
+	if len(failedTunnels) > 0 {
+		response.WriteJSON(w, response.OK(map[string]interface{}{
+			"uncleanedTunnelIds": failedTunnels,
+		}))
 		return
 	}
 
@@ -1073,6 +1087,51 @@ func parseRemoteShareUsageConfig(raw string) (int64, int64, int64, int64, int, i
 	return shareID, maxBandwidth, currentFlow, expiryTime, portRangeStart, portRangeEnd
 }
 
+// mergeRemoteConnectCredentials 把一次 Connect 回执中的 relay 凭据与
+// 对端版本合并进既有 RemoteConfig（保留其余键），供消费方凭据自愈的
+// 两条路径共用（建隧道前的 ensureRemoteNodeRelayAuth 与节点状态同步
+// syncRemoteNodeStatuses）。R2-F3-01：提供方从旧备份恢复到空库后凭据
+// 被重新补发，消费方存量凭据随之失效——旧实现仅在本地密码为空时才
+// 刷新（建隧道路径）或只在用量同步时覆写，持旧非空凭据的消费方数据
+// 面无限期被拒且面板无感。现两路均在每次成功 Connect 后比对刷新：
+// 回执未携带凭据（旧提供方）时保留存量值；凭据或版本变化时落盘并
+// 返回合并后的 JSON 与 true（调用方据此更新内存副本）；落盘失败记
+// 日志并按未变更处理，下次同步再试，不静默吞。
+func (h *Handler) mergeRemoteConnectCredentials(nodeID int64, rawConfig string, info *client.RemoteNodeInfo) (string, bool) {
+	if info == nil || strings.TrimSpace(info.RelayPassword) == "" {
+		return rawConfig, false
+	}
+	cfg := map[string]interface{}{}
+	if trimmed := strings.TrimSpace(rawConfig); trimmed != "" {
+		_ = json.Unmarshal([]byte(trimmed), &cfg)
+	}
+	oldUser, oldPass := parseRemoteShareRelayAuth(rawConfig)
+	changed := oldUser != strings.TrimSpace(info.RelayUsername) || oldPass != strings.TrimSpace(info.RelayPassword)
+	cfg["relayUsername"] = info.RelayUsername
+	cfg["relayPassword"] = info.RelayPassword
+	if panelVersion := strings.TrimSpace(info.PanelVersion); panelVersion != "" {
+		if asString(cfg["panelVersion"]) != panelVersion {
+			changed = true
+		}
+		cfg["panelVersion"] = panelVersion
+	}
+	if !changed {
+		return rawConfig, false
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return rawConfig, false
+	}
+	if err := h.repo.UpdateNodeRemoteConfig(nodeID, string(data)); err != nil {
+		log.Printf("federation credential self-heal: persist remote config for node %d: %v", nodeID, err)
+		return rawConfig, false
+	}
+	if oldPass != "" && oldPass != strings.TrimSpace(info.RelayPassword) {
+		log.Printf("federation credential self-heal: remote node %d relay credentials rotated by provider, refreshed", nodeID)
+	}
+	return string(data), true
+}
+
 // parseRemoteShareRelayAuth 从远端节点的 RemoteConfig 中取该 share
 // 的 relay 凭据（D3-04；Connect 时由 nodeImport / 用量同步写入）。
 func parseRemoteShareRelayAuth(raw string) (string, string) {
@@ -1246,10 +1305,13 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		data := map[string]interface{}{
 			"refreshed": true,
 			"nodeId":    existingID,
+			// R2-F3-06：对端版本恒随导入回执呈现（此前仅在有版本
+			// 警告时附带，无警告时回执看不到对端版本，与 relay.md
+			// 「导入回执可见」不符；用量/状态同步两面本就恒透出）。
+			"panelVersion": info.PanelVersion,
 		}
 		if strings.TrimSpace(info.VersionWarning) != "" {
 			data["versionWarning"] = info.VersionWarning
-			data["panelVersion"] = info.PanelVersion
 		}
 		resp := response.OK(data)
 		resp.Msg = "远端节点已存在，已刷新"
@@ -1279,14 +1341,14 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(info.VersionWarning) != "" {
-		response.WriteJSON(w, response.OK(map[string]interface{}{
-			"versionWarning": info.VersionWarning,
-			"panelVersion":   info.PanelVersion,
-		}))
-		return
+	// R2-F3-06：对端版本恒随导入回执呈现（同刷新路径口径）。
+	data := map[string]interface{}{
+		"panelVersion": info.PanelVersion,
 	}
-	response.WriteJSON(w, response.OKEmpty())
+	if strings.TrimSpace(info.VersionWarning) != "" {
+		data["versionWarning"] = info.VersionWarning
+	}
+	response.WriteJSON(w, response.OK(data))
 }
 
 func (h *Handler) authPeer(next http.HandlerFunc) http.HandlerFunc {
@@ -1631,8 +1693,7 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 
 	reservationID, randErr := randomToken(24)
 	if randErr != nil {
-		_ = h.deleteTunnelByID(tunnelID)
-		writePeerInternalError(w, "tunnel/create reservation id", randErr)
+		h.rollbackFailedFederationTunnel(w, "tunnel/create reservation id", tunnelID, randErr)
 		return
 	}
 	runtime := &repo.PeerShareRuntime{
@@ -1654,14 +1715,57 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 		UpdatedTime:   now,
 	}
 	if err := h.repo.CreatePeerShareRuntime(runtime); err != nil {
-		_ = h.deleteTunnelByID(tunnelID)
-		writePeerInternalError(w, "tunnel/create create runtime", err)
+		h.rollbackFailedFederationTunnel(w, "tunnel/create create runtime", tunnelID, err)
 		return
 	}
 
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"tunnelId": tunnelID,
 	}))
+}
+
+// rollbackFailedFederationTunnel 是 federationTunnelCreate 在隧道行已
+// 建、后续步骤失败时的回滚出口（R2-F3-05）：回滚删除成功走既有内部
+// 错误出口；回滚本身失败时不许静默留孤儿——日志记全错误，回执按
+// D3-08 口径只回分类文案但点名孤儿隧道 ID，供消费方向提供方管理员
+// 报障时定位清理（原始存储错误不回吐对端）。
+func (h *Handler) rollbackFailedFederationTunnel(w http.ResponseWriter, op string, tunnelID int64, cause error) {
+	if derr := h.deleteTunnelByID(tunnelID); derr != nil {
+		log.Printf("federation %s: rollback delete of tunnel %d failed: %v (original error: %v); orphaned tunnel requires manual cleanup", op, tunnelID, derr, cause)
+		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("Internal error: tunnel %d was created but cleanup after a failed create did not complete; the orphaned tunnel must be removed manually", tunnelID)))
+		return
+	}
+	writePeerInternalError(w, op, cause)
+}
+
+// normalizeFederationTarget 把联邦转发目标归一为可比形态（R2-F3-04）：
+// 主机名大小写不敏感、主机名尾随点等价、端口按数值归一（前导零等
+// 价）、IP 字面量按解析后标准形。无法按 host:port 解析时退化为去空
+// 格＋小写＋去尾点比较。回放判定两侧同走本归一，避免同义不同写被
+// 判为不同请求而漏回放落 403；落库的目标原文不改。
+func normalizeFederationTarget(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	host, portStr, err := net.SplitHostPort(s)
+	if err != nil {
+		return strings.TrimSuffix(strings.ToLower(s), ".")
+	}
+	host = strings.TrimSpace(host)
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	} else {
+		host = strings.TrimSuffix(strings.ToLower(host), ".")
+	}
+	if port, perr := strconv.Atoi(portStr); perr == nil {
+		portStr = strconv.Itoa(port)
+	}
+	return net.JoinHostPort(host, portStr)
+}
+
+func federationTargetsEqual(a, b string) bool {
+	return normalizeFederationTarget(a) == normalizeFederationTarget(b)
 }
 
 // parseFederationForwardResourceKey extracts the tunnel ID recorded in a
@@ -1706,15 +1810,23 @@ func (h *Handler) federationTunnelReplayID(runtime *repo.PeerShareRuntime, share
 	if !ok {
 		return 0, false
 	}
-	if runtime.Target != strings.TrimSpace(req.Target) {
+	if !federationTargetsEqual(runtime.Target, req.Target) {
 		return 0, false
 	}
 	if runtime.Protocol != defaultString(req.Protocol, "tcp") {
 		return 0, false
 	}
 	name, err := h.repo.GetTunnelName(tunnelID)
-	if err != nil || name != fmt.Sprintf("Share-%d-Port-%d", shareID, req.RemotePort) {
+	if err != nil {
 		return 0, false
+	}
+	if synthetic := fmt.Sprintf("Share-%d-Port-%d", shareID, req.RemotePort); name != synthetic {
+		// R2-F3-03 收养：隧道身份由 runtime 的 ResourceKey 恒记
+		// (share, tunnelId, port)，名称只是初建时的合成标签。提供方
+		// 管理员在本地改名后，旧实现以名称不等判非回放、同参重试落
+		// 403 且孤儿无从收养——现同 share/同参数（目标经归一、协议）
+		// 即视为同一笔建隧道的重投回放，改名一事记日志留痕。
+		log.Printf("federation tunnel/create: replay adopted renamed tunnel %d (share %d, port %d, current name %q)", tunnelID, shareID, req.RemotePort, name)
 	}
 	return tunnelID, true
 }
@@ -2800,9 +2912,11 @@ func isPeerIPAllowed(clientIP net.IP, whitelist string) bool {
 
 func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 	type remoteEntry struct {
-		index       int
-		remoteURL   string
-		remoteToken string
+		index        int
+		nodeID       int64
+		remoteURL    string
+		remoteToken  string
+		remoteConfig string
 	}
 
 	// R7-F2-01：列表 DTO 已不再回传 remoteToken（凭据最小暴露面），
@@ -2837,7 +2951,7 @@ func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 		if url == "" || token == "" {
 			continue
 		}
-		remotes = append(remotes, remoteEntry{index: i, remoteURL: url, remoteToken: token})
+		remotes = append(remotes, remoteEntry{index: i, nodeID: row.ID, remoteURL: url, remoteToken: token, remoteConfig: row.RemoteConfig.String})
 	}
 	if len(remotes) == 0 {
 		return
@@ -2879,6 +2993,12 @@ func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 				}
 			} else {
 				logFederationVersionWarning(info)
+				// R2-F3-01：状态同步同样是凭据自愈面（relay.md「下次
+				// 同步自动自愈」）——此前只 Connect 不落盘凭据，提供方
+				// 重新补发凭据后消费方持旧凭据永不自愈。按与建隧道
+				// 路径同一合并口径比对刷新 RemoteConfig；Connect 失败
+				// 的节点经下方 syncError 在状态面点名披露。
+				h.mergeRemoteConnectCredentials(e.nodeID, e.remoteConfig, info)
 				results[idx] = syncResult{index: e.index, status: info.Status, syncError: "", panelVersion: info.PanelVersion, versionWarning: info.VersionWarning}
 			}
 		}(i, entry)
@@ -2919,28 +3039,61 @@ func (h *Handler) cleanupPeerShareRuntimes(shareID int64) error {
 	return cleanupErr
 }
 
-func (h *Handler) cleanupFederationTunnels(shareID int64) {
+// cleanupFederationTunnels 删除一个共享名下的全部联邦隧道，返回未能
+// 删除的隧道 ID 清单（R2-F3-02：旧实现返回 void——查列表失败静默
+// return、逐条删失败以 _ = 丢弃、调用方无条件回成功，残留孤儿无日
+// 志无回执无重试）。现：识别口径双路——合成名前缀清单之外，再按
+// tunnel/create 运行时 ResourceKey 反查隧道 ID（与 R2-F3-03 回放收养
+// 同族：提供方改名后的联邦隧道不在前缀清单内，旧实现静默漏删）；
+// 查列表任一失败记日志并回错误（调用方中止删共享、保留重试路径）；
+// 逐条删失败逐条记日志并汇入返回清单，由调用方在回执点名披露。
+func (h *Handler) cleanupFederationTunnels(shareID int64) ([]int64, error) {
 	if h == nil || h.repo == nil || shareID <= 0 {
-		return
+		return nil, nil
 	}
+	idSet := make(map[int64]struct{})
 	namePrefix := fmt.Sprintf("Share-%d-Port-", shareID)
 	tunnelIDs, err := h.repo.ListTunnelIDsByNamePrefix(namePrefix)
-	if err != nil || len(tunnelIDs) == 0 {
-		return
+	if err != nil {
+		log.Printf("federation share delete: list tunnels by name prefix for share %d: %v", shareID, err)
+		return nil, err
 	}
+	for _, id := range tunnelIDs {
+		idSet[id] = struct{}{}
+	}
+	runtimes, err := h.repo.ListPeerShareRuntimesByShareID(shareID)
+	if err != nil {
+		log.Printf("federation share delete: list runtimes for share %d: %v", shareID, err)
+		return nil, err
+	}
+	for i := range runtimes {
+		if tunnelID, ok := parseFederationForwardResourceKey(runtimes[i].ResourceKey, shareID, runtimes[i].Port); ok {
+			idSet[tunnelID] = struct{}{}
+		}
+	}
+	ids := make([]int64, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
 	// R4X-024（E4-S1）：裸级联删隧道会连 NodeInboundRelay 一并删掉，
 	// 此前删后无从反查受影响入站、更无人刷新——landing 的 allow 残留
 	// 已删隧道入口且零 KernelApply。与 tunnelDelete 的 O3-001 同口径：
 	// 删前收集受影响入站集，删后逐一刷新白名单。
 	var affectedInboundIDs []int64
-	for _, tid := range tunnelIDs {
+	for _, tid := range ids {
 		affectedInboundIDs = append(affectedInboundIDs, h.inboundIDsForTunnel(tid)...)
 	}
 
-	for _, tid := range tunnelIDs {
-		_ = h.deleteTunnelByID(tid)
+	var failed []int64
+	for _, tid := range ids {
+		if err := h.deleteTunnelByID(tid); err != nil {
+			log.Printf("federation share delete: cleanup of tunnel %d for share %d failed: %v", tid, shareID, err)
+			failed = append(failed, tid)
+		}
 	}
 
 	h.refreshInboundWhitelists(affectedInboundIDs)
+	return failed, nil
 }
