@@ -775,6 +775,50 @@ caddy_install_prereqs() {
   return 0
 }
 
+# R6-03：菜单 5/6 的前端端口解析（原 SCR-003 两处同型候选链循环
+# 的统一实现，两菜单共用）。旧实现候选链首项 ${PANEL_DEPLOY_DIR}/.env
+# 在新进程中恒为空转（PANEL_DEPLOY_DIR 只有 resolve_panel_deployment
+# 会设置、菜单 5/6 从不调用它），实际只剩 ./.env 一条有效候选：操
+# 作者不在部署目录运行即全不中、无任何提示地按默认 6366 写
+# Caddyfile 并报配置完成——同机共存的第二套面板改过前端端口时必
+# 然写错且无从核对。现口径：
+#   1) 先按菜单 2/3 同口径做部署定位（resolve_panel_deployment 经
+#      容器标签/显式目录定位、不依赖 cwd）。定位是只读取向：失败
+#      不阻断本菜单，但必须撤销其半成品状态（PANEL_DEPLOY_DIR 与
+#      已变更的 cwd），并落到第 3 步的显式告警，绝不带着未证实的
+#      定位继续；
+#   2) 再按 PANEL_DEPLOY_DIR → ./.env → /opt 两旧路径的候选链读
+#      FRONTEND_PORT（合法端口才采，口径与旧循环一致）；
+#   3) 仍未命中时显式告警并回退默认 6366（不得静默）；两菜单的
+#      完成输出另打印实际反代端口供操作者核对（见各菜单成功块）。
+resolve_caddy_frontend_port() {
+  if [[ -n "${FRONTEND_PORT:-}" ]]; then
+    return 0
+  fi
+  if [[ -z "${PANEL_DEPLOY_DIR:-}" ]]; then
+    local _origin_dir="$PWD"
+    if ! resolve_panel_deployment; then
+      PANEL_DEPLOY_DIR=""
+      cd "$_origin_dir" || true
+      echo "⚠️ 部署定位未完成（见上方提示），改按候选路径查找部署 .env"
+    fi
+  fi
+  local _env_file _port
+  for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flmx-panel/.env" "/opt/flvx-panel/.env"; do
+    [[ "$_env_file" == "/.env" ]] && continue
+    _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t"' | tr -d "'" || true)
+    if [[ "$_port" =~ ^[0-9]+$ ]] && (( 10#$_port >= 1 && 10#$_port <= 65535 )); then
+      FRONTEND_PORT="$_port"
+      echo "📁 从 $_env_file 读取前端端口：$FRONTEND_PORT"
+      return 0
+    fi
+  done
+  FRONTEND_PORT=6366
+  echo "⚠️ 未定位到部署 .env 或其中无 FRONTEND_PORT，将按默认前端端口 6366 生成反代配置"
+  echo "   若本机面板的前端端口不是 6366（如同机共存的第二套面板改过端口），生成的配置会反代到无人监听的端口、站点打不开"
+  echo "   修正方法：cd 到部署目录后重跑本菜单，或以 PANEL_DEPLOY_DIR=<部署目录> 指定部署目录后重试（自建镜像部署另需同时指定 PANEL_BACKEND_CONTAINER=<后端容器名>）"
+}
+
 # 配置域名反向代理（Caddy 自动 HTTPS）
 setup_domain_proxy() {
   echo "🌐 配置域名反向代理"
@@ -796,14 +840,34 @@ setup_domain_proxy() {
 
   # 检查域名是否解析到本机
   echo "🔍 检查域名解析..."
-  local resolved_ip
-  resolved_ip=$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1 || true)
+  local resolved_ip resolved_ips
+  resolved_ips=$(getent hosts "$DOMAIN" | awk '{print $1}' || true)
+  resolved_ip=$(printf '%s\n' "$resolved_ips" | head -1)
   if [ -z "$resolved_ip" ]; then
     echo "⚠️  域名 $DOMAIN 未解析到任何 IP，请先配置 DNS 解析后再继续"
     read -p "仍要继续吗? (y/N): " _cont
     [[ "$_cont" =~ ^[Yy]$ ]] || return 1
   else
-    echo "✅ 域名解析到: $resolved_ip"
+    # R6-04: 解析成功不等于指向本机。旧实现只要能解析就打 ✅ 并报
+    # 配置完成，域名指到他人 IP 时同样绿灯——而 HTTPS 证书签发是
+    # 异步的（HTTP-01 验证请求会打到那台机器上），签发失败不在本
+    # 流程判据内，操作者拿到假成功信号。现与本机公网 IP 比对：
+    # 解析集含本机公网 IP 才算指向本机；取不到本机公网 IP 时只陈
+    # 述事实、不下结论；明确不含时按「未解析」同级处理（警告＋
+    # 显式确认），不阻断但绝不再打 ✅。
+    local _public_ip
+    _public_ip=$(get_public_ip)
+    if [[ "$_public_ip" == "服务器IP" ]]; then
+      echo "ℹ️ 域名解析到: $resolved_ip（未能获取本机公网 IP，未能核对该解析是否指向本机，请自行确认）"
+    elif printf '%s\n' "$resolved_ips" | grep -qx "$_public_ip"; then
+      echo "✅ 域名解析到: $resolved_ip（已核对：解析指向本机）"
+    else
+      echo "⚠️  域名 $DOMAIN 解析到 $resolved_ip，与本机公网 IP $_public_ip 不一致——解析未指向本机"
+      echo "   若继续，本菜单仍会写完配置并报完成，但 HTTPS 证书签发将失败（验证请求会打到 $resolved_ip 那台机器），本站点打不开"
+      echo "   请先把该域名的 DNS 解析改到本机公网 IP $_public_ip 后再继续"
+      read -p "仍要继续吗? (y/N): " _cont
+      [[ "$_cont" =~ ^[Yy]$ ]] || return 1
+    fi
   fi
 
   # 安装 Caddy（如未安装）。L2-29（R5-FD）：动 apt 源之前先过
@@ -871,22 +935,11 @@ setup_domain_proxy() {
     cp "$caddyfile" "$caddyfile_bak"
     echo "🗄️  已备份现有配置到 $caddyfile_bak"
   fi
-  # AUDIT-R1 (SCR-003): 菜单 5 是独立流程，不经过 get_config_params，
-  # 此处 FRONTEND_PORT 恒未设置。改为从部署目录 .env 读取用户实际安装的
-  # 前端端口（更新流程的 resolve_panel_deployment 已证明该信息可得）；
-  # 找不到才回退 6366。
-  local _env_file _port
-  if [[ -z "${FRONTEND_PORT:-}" ]]; then
-    for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flmx-panel/.env" "/opt/flvx-panel/.env"; do
-      [[ "$_env_file" == "/.env" ]] && continue
-      _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t"' | tr -d "'" || true)
-      if [[ "$_port" =~ ^[0-9]+$ ]] && (( 10#$_port >= 1 && 10#$_port <= 65535 )); then
-        FRONTEND_PORT="$_port"
-        echo "📁 从 $_env_file 读取前端端口：$FRONTEND_PORT"
-        break
-      fi
-    done
-  fi
+  # AUDIT-R1 (SCR-003)＋R6-03: 菜单 5 是独立流程，不经过
+  # get_config_params，FRONTEND_PORT 恒未设置。统一走
+  # resolve_caddy_frontend_port：先部署定位、再读部署 .env 的实际
+  # 前端端口，未命中显式告警后才回退 6366（旧两处同型循环已删除）。
+  resolve_caddy_frontend_port
   # R4B11-001: 保留式写入。旧实现整文件覆盖，会静默抹掉菜单 6 已追加的
   # 订阅前置站点块（先 6 后 5 的运维序列下订阅前置随即失效、仅存于 .bak）。
   # 改为按站点块合并：先从刚备份的旧文件中抽出面板域名之外的全部内容，
@@ -940,6 +993,7 @@ EOF
     echo ""
     echo "🎉 域名配置完成"
     echo "🌐 访问地址: https://$DOMAIN"
+    echo "🔌 实际反代端口: 127.0.0.1:${FRONTEND_PORT:-6366}（请核对与面板前端端口一致，不一致说明端口解析未命中部署 .env）"
     echo "📜 HTTPS 证书由 Caddy 自动申请和续期"
     echo ""
     echo "⚠️  重要：请在面板 → 网站配置 中将「面板后端地址」改为 https://$DOMAIN"
@@ -1006,20 +1060,10 @@ setup_subscription_front_domain() {
     return 1
   fi
 
-  # 前端端口解析与菜单 5 完全一致（SCR-003）：独立流程不经过
-  # get_config_params，从部署目录 .env 读取实际前端端口，找不到回退 6366。
-  local _env_file _port
-  if [[ -z "${FRONTEND_PORT:-}" ]]; then
-    for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flmx-panel/.env" "/opt/flvx-panel/.env"; do
-      [[ "$_env_file" == "/.env" ]] && continue
-      _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t"' | tr -d "'" || true)
-      if [[ "$_port" =~ ^[0-9]+$ ]] && (( 10#$_port >= 1 && 10#$_port <= 65535 )); then
-        FRONTEND_PORT="$_port"
-        echo "📁 从 $_env_file 读取前端端口：$FRONTEND_PORT"
-        break
-      fi
-    done
-  fi
+  # 前端端口解析与菜单 5 完全一致（SCR-003＋R6-03）：统一走
+  # resolve_caddy_frontend_port（先部署定位、再读部署 .env，未命
+  # 中显式告警后才回退 6366；旧两处同型循环已删除）。
+  resolve_caddy_frontend_port
 
   # 写前备份（命名沿用菜单 5），追加站点块而非整文件覆盖，原有站点
   # 块（面板域名等）逐字保留。
@@ -1062,6 +1106,7 @@ EOF
     echo ""
     echo "🎉 订阅前置域名配置完成"
     echo "🌐 前置地址: https://$SUB_DOMAIN"
+    echo "🔌 实际反代端口: 127.0.0.1:${FRONTEND_PORT:-6366}（请核对与面板前端端口一致，不一致说明端口解析未命中部署 .env）"
     echo "📜 HTTPS 证书由 Caddy 自动申请和续期"
     echo ""
     echo "⚠️  后续步骤（缺一不可）："
