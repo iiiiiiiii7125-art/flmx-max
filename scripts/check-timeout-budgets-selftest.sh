@@ -98,4 +98,84 @@ fi
 grep -q 'C113' "$TMP/var2.log" || { echo "FAIL: gate failed but did not name C113:"; cat "$TMP/var2.log"; exit 1; }
 grep -q 'B11-001' "$TMP/var2.log" || { echo "FAIL: gate failure does not cite the kernel-apply family rule (B11-001):"; cat "$TMP/var2.log"; exit 1; }
 echo "OK: variant caught, C113 named"
+
+# ── 修复轮 9（R9-23/24/25）提取器绑定变异：三构造在修复前提取
+# 输出与基线逐字相同、门全绿（I-C4-08/09/10 实证）；修复后必须
+# 分别以点名/真值/助手行缺失被抓。变异只动镜像 index.ts。
+FE_API="$MIR/vite-frontend/src/api/index.ts"
+
+echo "== variant R9-23: second Network call in one export must FAIL, naming probeNodeLatency =="
+cp "$ROOT/vite-frontend/src/api/index.ts" "$FE_API"
+python3 - "$FE_API" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '''export const probeNodeLatency = (ids: number[] = []) =>
+  Network.post<Record<string, InboundProbe>>(
+    "/node/latency/probe",
+    { ids },
+    // R8-T-08：扇出作业按公式放宽（见 latencyProbeTimeout）。
+    { timeout: latencyProbeTimeout(ids.length) },
+  );'''
+new = '''export const probeNodeLatency = (ids: number[] = []) => {
+Network.post("/node/latency/targets", { ids}, { timeout: latencyProbeTimeout(ids.length)});
+
+return Network.post<Record<string, InboundProbe>>(
+"/node/latency/probe",
+{ ids},
+{ timeout: 999_000},
+);
+};'''
+assert old in s, 'probeNodeLatency anchor not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/var3.log" 2>&1; then
+  echo "FAIL: gate PASSED on the second-call variant — later Network calls still invisible"
+  exit 1
+fi
+grep -q 'probeNodeLatency' "$TMP/var3.log" || { echo "FAIL: gate failed but did not name probeNodeLatency:"; cat "$TMP/var3.log"; exit 1; }
+echo "OK: variant caught, probeNodeLatency named"
+
+echo "== variant R9-24: parameter-shadowed config identifier must FAIL, naming rollbackNode =="
+cp "$ROOT/vite-frontend/src/api/index.ts" "$FE_API"
+python3 - "$FE_API" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '''export const rollbackNode = (id: number) =>
+  // R8-T-04：后端界 30s，须破恰等。
+  Network.post("/node/rollback", { id }, { timeout: 45_000 });'''
+new = '''const rollbackCfg = { timeout: 45_000 };
+export const rollbackNode = (id: number, rollbackCfg = { timeout: 999_000 }) =>
+  // R8-T-04：后端界 30s，须破恰等。
+  Network.post("/node/rollback", { id }, rollbackCfg);'''
+assert old in s, 'rollbackNode anchor not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/var4.log" 2>&1; then
+  echo "FAIL: gate PASSED on the parameter-shadowed config variant — top-level fallback still in effect"
+  exit 1
+fi
+grep -q 'rollbackNode' "$TMP/var4.log" || { echo "FAIL: gate failed but did not name rollbackNode:"; cat "$TMP/var4.log"; exit 1; }
+grep -q '999' "$TMP/var4.log" || { echo "FAIL: gate failure does not show the true value 999:"; cat "$TMP/var4.log"; exit 1; }
+echo "OK: variant caught, rollbackNode named with true value"
+
+echo "== variant R9-25: helper growth term replaced by a static value must FAIL, naming latencyProbeTimeout =="
+cp "$ROOT/vite-frontend/src/api/index.ts" "$FE_API"
+python3 - "$FE_API" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = 'return Math.min(600_000, Math.max(90_000, waves * 22_600 + 20_000));'
+new = 'return Math.min(600_000, Math.max(90_000, 20_000));'
+assert old in s, 'latencyProbeTimeout anchor not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/var5.log" 2>&1; then
+  echo "FAIL: gate PASSED on the static growth-term variant — helper dynamic args still unread"
+  exit 1
+fi
+grep -q 'latencyProbeTimeout' "$TMP/var5.log" || { echo "FAIL: gate failed but did not name latencyProbeTimeout:"; cat "$TMP/var5.log"; exit 1; }
+echo "OK: variant caught, latencyProbeTimeout named"
+cp "$ROOT/vite-frontend/src/api/index.ts" "$FE_API"
 echo "SELFTEST: PASS"
