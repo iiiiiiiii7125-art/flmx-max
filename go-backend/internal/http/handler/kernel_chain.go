@@ -347,6 +347,36 @@ func (h *Handler) chainReferrers(targetID int64) ([]model.NodeInbound, error) {
 	return ix.referrers(targetID), nil
 }
 
+// validateReferrerChainPolicies is the target-side mirror of the
+// save-time chain policy check (R2-F2-C-L01): when an inbound that other
+// inbounds chain through is edited, every referrer's outbound IP
+// strategy is re-validated against the endpoint this target will
+// present after the edit. Without it, changing the target's share
+// address to a literal IP of the family a referrer's strategy forbids
+// saved cleanly and the referrer's chained traffic was then silently
+// dropped at render time (egress marks the outbound unreachable) — the
+// same mechanism F2-N2-01 closed on the source side.
+func (h *Handler) validateReferrerChainPolicies(target *model.NodeInbound) error {
+	refs, err := h.chainReferrers(target.ID)
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		e, err := h.chainEndpoint(target, ref.NodeID)
+		if err != nil {
+			// Endpoint resolution failures (loopback-only listen,
+			// missing share address) fail the referrer's next apply
+			// loudly and by name; they are not the silent-drop family
+			// this check exists for.
+			continue
+		}
+		if err := kernel.ValidateOutboundIPServer(ref.OutboundIPStrategy, e.Host); err != nil {
+			return fmt.Errorf("入站「%s」被「%s」用作链式下一跳，本次修改后的地址与其出站 IP 策略冲突：%w", target.Name, h.chainReferrerDisplayName(ref), err)
+		}
+	}
+	return nil
+}
+
 // chainReferrerDisplayName renders a referrer inbound as
 // 「名称（节点名）」 (R2X-029): inbound names are only unique per node, so
 // a bare name cannot identify a referrer in guard messages or lists.

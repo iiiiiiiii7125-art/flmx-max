@@ -355,6 +355,7 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("版本号格式错误"))
 		return
 	}
+	requestedLatest := version == "latest"
 	// Kernels with a closed version list (Snell) store the concrete version
 	// so the binary directory and protocol checks agree with what is pinned.
 	resolved, err := kernel.ResolveVersion(info, version)
@@ -385,6 +386,25 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
+	}
+	// R2-F2-A2: an open-list kernel must not be stored (or dispatched) as
+	// the literal "latest": the agent keys its binary directory by the
+	// version string and skips the download whenever a binary already
+	// sits in bin/<type>/latest, so re-installing "latest" after an
+	// upstream release silently kept the old binary while reporting
+	// success. Resolve to the newest concrete release here — the same
+	// list the version picker shows — and store the concrete version.
+	prevInstalled := ""
+	if k != nil {
+		prevInstalled = k.InstalledVersion
+	}
+	if version == "latest" {
+		concrete, rerr := resolveLatestConcreteVersion(info)
+		if rerr != nil {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("无法解析最新版本（%v），请稍后重试或指定具体版本", rerr)))
+			return
+		}
+		version = concrete
 	}
 	if k == nil {
 		k = &model.NodeKernel{
@@ -422,10 +442,21 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("内核已登记，但下发失败: "+err.Error()))
 		return
 	}
+	// R2-F2-A2: re-installing the version the node already runs must not
+	// read as a silent success — the agent keeps the existing binary, so
+	// name the fact on the envelope.
+	warning := sameVersionInstallWarning(requestedLatest, prevInstalled, version)
 	// R8-005: an explicitly old Xray (< 26.5.9) installs fine but has
 	// no built-in private-range block; name that on the success
 	// envelope instead of letting it stay silent.
-	if warning := xrayPrivateBlockWarning(info.Type, version); warning != "" {
+	if w := xrayPrivateBlockWarning(info.Type, version); w != "" {
+		if warning != "" {
+			warning += "；" + w
+		} else {
+			warning = w
+		}
+	}
+	if warning != "" {
 		response.WriteJSON(w, response.OKWithWarning(nil, warning))
 		return
 	}
@@ -870,6 +901,11 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// Managed relay 重算物化 RemoteAddr。
 	var prevPort int
 	var prevListen string
+	// R2-F2-C-L01: pre-edit share address snapshot; the target-side
+	// referrer policy check below keys on these (plus Port/Listen)
+	// actually changing.
+	var prevShareHost string
+	var prevShareMode string
 	// prevMetering/prevMeteringBlock snapshot the stored metering
 	// switch and its shape eligibility before this save mutates the
 	// row (F1 gate below).
@@ -883,6 +919,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		}
 		row = *existing
 		prevPort, prevListen = existing.Port, existing.Listen
+		prevShareHost, prevShareMode = existing.ShareHost, inboundShareMode(existing)
 		if row.CompanionOf > 0 {
 			response.WriteJSON(w, response.ErrDefault("计量伴生入站由系统管理，不能编辑"))
 			return
@@ -1224,6 +1261,21 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		}
 	}
 	row.UpdatedTime = now
+
+	// R2-F2-C-L01: target-side save-time interception. If this edit
+	// changes the address other inbounds dial to reach this one (share
+	// host/mode, listen, port), re-validate every referrer's outbound
+	// IP strategy against the new endpoint before anything persists —
+	// the same rejection the source side applies (validateChainVersion),
+	// so a conflicting edit is refused here instead of silently
+	// dropping the referrers' chained traffic at render time.
+	if update && (row.ShareHost != prevShareHost || shareMode != prevShareMode || row.Listen != prevListen || row.Port != prevPort) {
+		if err := h.validateReferrerChainPolicies(&row); err != nil {
+			releasePortAlloc()
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+	}
 
 	if update {
 		err = h.repo.SaveNodeInbound(&row)
@@ -1737,10 +1789,15 @@ func (h *Handler) inboundBatchToggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// R10-08：本面自有解析不走 idsFromBody，同口径计数帽（见
-	// maxBatchIDs；本面不去重，按提交条数计）。
+	// maxBatchIDs；帽按提交条数计，去重在帽后另行）。
 	if !checkBatchIDsCap(w, len(req.IDs)) {
 		return
 	}
+	// R2-F2-B-L01: dedupe before processing — a repeated id otherwise
+	// passes the "already in target state" branch on its second
+	// occurrence and inflates SuccessCount (the batch-delete family
+	// dedupes via idsFromBody for exactly this reason).
+	req.IDs = uniqueInt64s(req.IDs)
 	s := 0
 	f := 0
 	failures := make([]batchFailureDetail, 0)
@@ -2220,6 +2277,42 @@ func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
 	return items, err
 }
 
+// sameVersionInstallWarning names a no-op reinstall on the success
+// envelope (R2-F2-A2): the node already runs the requested version, so
+// the agent keeps the existing binary and nothing was downloaded. The
+// Contains match on InstalledVersion is the same caliber the apply
+// timeout check uses. Returns "" when the install actually changes
+// (or first installs) the version.
+func sameVersionInstallWarning(requestedLatest bool, prevInstalled, version string) string {
+	if prevInstalled == "" || version == "" || !strings.Contains(prevInstalled, version) {
+		return ""
+	}
+	if requestedLatest {
+		return fmt.Sprintf("已是最新版 %s，无需更新", version)
+	}
+	return fmt.Sprintf("已安装该版本 %s，本次未重新下载", version)
+}
+
+// resolveLatestConcreteVersion maps an open-list kernel's "latest" to
+// the newest concrete release: the first non-prerelease entry of the
+// release list (newest first, drafts already excluded) — the same list
+// the version picker shows, matching GitHub's own "latest" semantics.
+func resolveLatestConcreteVersion(info kernel.Info) (string, error) {
+	items, err := kernelReleaseVersions(info)
+	if err != nil {
+		return "", err
+	}
+	for _, it := range items {
+		if !it.Prerelease {
+			return it.Version, nil
+		}
+	}
+	if len(items) > 0 {
+		return items[0].Version, nil
+	}
+	return "", fmt.Errorf("未获取到 %s 的版本列表", info.Name)
+}
+
 // fetchKernelReleaseVersionsWithFallback 是内核版本列表的一次实际
 // 抓取：按内置直选路线逐个尝试（F-059 的后继口径，见
 // kernelReleaseVersions），结果由调用方回填缓存。
@@ -2692,6 +2785,26 @@ func (h *Handler) applyKernelWith(kernelID int64, install bool, realmOverride ma
 	}
 	if k == nil {
 		return errors.New("内核不存在")
+	}
+	// R2-F2-A2: rows stored before "latest" was resolved at install time
+	// still carry the literal sentinel. Converge them here, at the
+	// dispatch entry: resolve via the release list and persist the
+	// concrete version so the payload (and every later apply) names a
+	// real version. A failed lookup keeps "latest" for this apply —
+	// config pushes must not break because GitHub is unreachable — and
+	// is logged by name; kernelInstall remains the loud surface.
+	if versionFloorExempt(k.Version) && k.Version != "" {
+		if info, ok := kernel.Lookup(k.KernelType); ok && len(info.Versions) == 0 {
+			if concrete, rerr := resolveLatestConcreteVersion(info); rerr == nil {
+				if uerr := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
+					"version": concrete, "updated_time": time.Now().UnixMilli(),
+				}); uerr == nil {
+					k.Version = concrete
+				}
+			} else {
+				log.Printf("kernel apply: resolve latest for kernel_id=%d type=%s failed, keeping %q: %v", k.ID, k.KernelType, k.Version, rerr)
+			}
+		}
 	}
 	// R14-A5-08：毒化行清理——下发前先把 Snell 内核上历史毒化行的
 	// 出站/分流清为直连，否则 renderSnell 拒绝整单、后续一切下发
