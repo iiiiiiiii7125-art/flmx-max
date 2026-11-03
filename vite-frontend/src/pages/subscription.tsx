@@ -1348,12 +1348,17 @@ function Editor({
   );
 }
 
+// R10-02：删除墓碑行（后端 subscriptionView.pendingDelete）——列表呈
+// 「删除中」态且开关禁用，避免管理员对残留行再点启用。后端共享类型
+// 在 api/index.ts，此处只做页面局部扩展，不改共享定义。
+type SubscriptionRow = SubscriptionItem & { pendingDelete?: boolean };
+
 export default function SubscriptionPage() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"manage" | "assign" | "groups">("manage");
   const [groups, setGroups] = useState<NodeGroupItem[]>([]);
   const [templatesOpen, setTemplatesOpen] = useState(false);
-  const [subs, setSubs] = useState<SubscriptionItem[]>([]);
+  const [subs, setSubs] = useState<SubscriptionRow[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
   // 移植自 kure29/flyx：订阅规则组（后端下发）。
   const [ruleGroups, setRuleGroups] = useState<SubRuleGroup[]>([]);
@@ -1361,7 +1366,7 @@ export default function SubscriptionPage() {
   const [sources, setSources] = useState<RemoteSourceItem[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
-  const [detail, setDetail] = useState<SubscriptionItem | null>(null);
+  const [detail, setDetail] = useState<SubscriptionRow | null>(null);
   // 详情弹窗内展开的订阅二维码（按订阅 id 记，切换订阅自动收起）
   const [qrDetailId, setQrDetailId] = useState<number | null>(null);
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
@@ -1520,7 +1525,7 @@ export default function SubscriptionPage() {
 
   if (loading) return <PageLoadingState message="正在加载..." />;
 
-  const card = (s: SubscriptionItem) => (
+  const card = (s: SubscriptionRow) => (
     <div
       key={s.id}
       className="panel-card flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-default-100"
@@ -1546,7 +1551,11 @@ export default function SubscriptionPage() {
               默认 · 个人链接
             </Chip>
           )}
-          {!s.enabled ? (
+          {s.pendingDelete ? (
+            <Chip color="warning" size="sm" variant="flat">
+              删除中
+            </Chip>
+          ) : !s.enabled ? (
             <Chip size="sm" variant="flat">
               已停用
             </Chip>
@@ -1592,7 +1601,7 @@ export default function SubscriptionPage() {
         </Button>
         <Switch
           aria-label={`${s.enabled ? "停用" : "启用"} ${s.name}`}
-          isDisabled={toggling === s.id}
+          isDisabled={toggling === s.id || !!s.pendingDelete}
           isSelected={s.enabled}
           size="sm"
           onValueChange={() => toggle(s)}
@@ -1710,6 +1719,11 @@ export default function SubscriptionPage() {
               <>
                 <ModalHeader className="flex flex-col gap-1">
                   <h2 className="text-lg font-bold break-all">{detail.name}</h2>
+                  {detail.pendingDelete && (
+                    <p className="text-small font-semibold text-warning">
+                      删除中：凭据撤销下发尚未完成，完成后此订阅将自动消失
+                    </p>
+                  )}
                   <p className="text-small font-normal text-foreground">
                     {detail.nodeCount} 个节点
                     {detail.expireTime

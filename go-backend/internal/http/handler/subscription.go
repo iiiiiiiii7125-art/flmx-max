@@ -563,6 +563,13 @@ func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User
 	out := map[int64][]kernel.User{}
 	for i := range subs {
 		s := &subs[i]
+		// R10-02（I-F3-01）纵深防御：删除墓碑永不进 payload——即使
+		// 墓碑行被任何写路径改回 Enabled=1∧PendingDelete=1 的状态机
+		// 外组合，凭据也不下发，使 completePendingSubscriptionDelete
+		// 的「墓碑已排除」前提由构造保证、而非靠各入口约定。
+		if s.PendingDelete == 1 {
+			continue
+		}
 		if !isShare(s) || !subActive(s, now) {
 			continue
 		}
@@ -841,8 +848,14 @@ type subscriptionView struct {
 	ExpireTime int64       `json:"expireTime"`
 	Enabled    bool        `json:"enabled"`
 	Active     bool        `json:"active"`
-	Remark     string      `json:"remark"`
-	NodeCount  int         `json:"nodeCount"`
+	// PendingDelete（R10-02/I-F3-01）：删除墓碑行对管理员可见——
+	// 此前墓碑与普通已禁用订阅在列表中同形、带完整编辑入口，
+	// 管理员把残留行重新启用即打穿删除完成路径的前提。前端据此
+	// 呈「删除中」态并禁用开关；后端 save/reset/resetTraffic 对
+	// 墓碑行一律拒绝（见各入口守卫）。
+	PendingDelete bool   `json:"pendingDelete"`
+	Remark        string `json:"remark"`
+	NodeCount     int    `json:"nodeCount"`
 	// Traffic (share subscriptions; bytes).
 	UploadBytes   int64 `json:"uploadBytes"`
 	DownloadBytes int64 `json:"downloadBytes"`
@@ -988,7 +1001,7 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
 		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, GroupIDs: groupIDs, SharedIDs: shared, Options: pipe,
-		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), Remark: s.Remark,
+		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), PendingDelete: s.PendingDelete == 1, Remark: s.Remark,
 		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
 		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s), RelayIDs: relayIDs,
@@ -1213,6 +1226,13 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("订阅不存在"))
 			return
 		}
+		// R10-02（I-F3-01）：墓碑是吸收态——删除完成前拒绝一切保存，
+		// 不许把墓碑改回启用（Enabled=1∧PendingDelete=1 会让凭据重入
+		// payload、删除完成后成无人撤销的孤儿）。
+		if s.PendingDelete == 1 {
+			response.WriteJSON(w, response.ErrDefault("订阅删除中，无法保存"))
+			return
+		}
 		if isShare(s) {
 			before = h.subAllInboundIDs(s, rows, nil)
 		}
@@ -1339,8 +1359,9 @@ func (h *Handler) subscriptionDelete(w http.ResponseWriter, r *http.Request) {
 // tombstoned subscription and, only on success, hard-deletes the row
 // together with its assignments in one transaction. The push list is
 // computed from the subscription's (former) inbounds; the payload itself
-// is rendered from current DB state, in which the tombstone is disabled
-// and therefore already excluded.
+// is rendered from current DB state, in which the tombstone is excluded
+// by construction: rawActiveUsersByInbound always skips pending-delete
+// rows (R10-02), regardless of their enabled flag.
 func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error {
 	var push []int64
 	if isShare(s) {
@@ -1365,6 +1386,12 @@ func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error
 // rotation itself is already persisted; AppliedActive is parked at -1
 // so the sync loop retries the push), or a persistence error.
 func (h *Handler) rotateSubscriptionCredentials(s *model.Subscription) (rows []model.NodeInbound, applyErr error, err error) {
+	// R10-02（I-F3-01）：轮换咽喉点同守墓碑——主路径 subscriptionReset
+	// 与 legacy inboundSubInfo reset 共用此实现，任一面都不得对墓碑
+	// 轮换凭据（行将被硬删、轮换产物指向 404）。
+	if s.PendingDelete == 1 {
+		return nil, nil, errText("订阅删除中，无法重置")
+	}
 	// 集成收口：随机源失败 fail-closed（批次 8 X-P3-14 的新签名）与
 	// 共享全轮换（批次 7 X-P3-13）在此合并——生成失败直接报错返回，
 	// 不落库、不下发。
@@ -1416,6 +1443,12 @@ func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("订阅不存在"))
 		return
 	}
+	// R10-02（I-F3-01）：墓碑行拒绝轮换——对即将硬删的行换凭据只会
+	// 产出一枚指向 404 的新 token，且轮换下发面同属墓碑可达操作面。
+	if s.PendingDelete == 1 {
+		response.WriteJSON(w, response.ErrDefault("订阅删除中，无法重置"))
+		return
+	}
 	rows, applyErr, err := h.rotateSubscriptionCredentials(s)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -1440,6 +1473,11 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 		response.WriteJSON(w, response.ErrDefault("订阅不存在"))
 		return
 	}
+	// R10-02（I-F3-01）：墓碑行拒绝重置流量（同 save/reset 口径）。
+	if s.PendingDelete == 1 {
+		response.WriteJSON(w, response.ErrDefault("订阅删除中，无法重置流量"))
+		return
+	}
 	now := time.Now()
 	if err := h.repo.ResetSubscriptionTraffic(id, now.UnixMilli()); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -1453,6 +1491,14 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 	}
 	h.syncSubscriptions(now)
 	s, _ = h.repo.GetSubscription(id)
+	if s == nil {
+		// R10-03（I-F3-02）兜底：请求内的 syncSubscriptions 可能已完成
+		// 该订阅的删除（入口读取后被标记墓碑并当场完成），回读为空
+		// 属正常收口——按已删除回执返回，不对 nil 解引用渲染视图
+		// （基线此处 panic、生产经 recover 变 500 且回执丢失）。
+		response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功，订阅已删除", Data: nil, TS: time.Now().UnixMilli()})
+		return
+	}
 	rows, _ := h.repo.ListNodeInbounds()
 	response.WriteJSON(w, response.OK(h.subscriptionView(s, rows, now, "")))
 }
