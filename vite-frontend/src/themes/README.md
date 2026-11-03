@@ -86,7 +86,7 @@ tokens: {
     // 品牌色
     "--primary": "#4f46e5",       // 主色
     "--primary-foreground": "#fff", // 主色上的文字
-    "--secondary": "#6366f1",     // 辅色
+    "--secondary": "#7c3aed",     // 辅色
 
     // 状态色
     "--danger": "#dc2626",

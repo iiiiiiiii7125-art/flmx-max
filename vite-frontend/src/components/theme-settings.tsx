@@ -54,10 +54,10 @@ export const ThemeSettings: React.FC = () => {
               const previewTokens = theme.tokens?.light;
 
               const primary = previewTokens?.["--primary"] ?? "#4f46e5";
-              const secondary = previewTokens?.["--secondary"] ?? "#6366f1";
+              const secondary = previewTokens?.["--secondary"] ?? "#7c3aed";
               const success = previewTokens?.["--success"] ?? "#16a34a";
               const danger = previewTokens?.["--danger"] ?? "#dc2626";
-              const bg = previewTokens?.["--background"] ?? "#ffffff";
+              const bg = previewTokens?.["--background"] ?? "#fafafa";
 
               return (
                 <button
