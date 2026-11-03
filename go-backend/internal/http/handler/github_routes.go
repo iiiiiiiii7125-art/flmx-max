@@ -288,3 +288,49 @@ func forEachGitHubRoute(stageBudget time.Duration, attempt func(prefix string, a
 	}
 	return lastErr
 }
+
+// PinGitHubVersionSourceForTesting 是跨包契约测试用的版本发现密封面
+// （与 DisableSafeRemoteAddrCheckForTesting 同例的测试专用导出）：
+// 把 GitHub API 基址钉到调用方给的本地 stub、路线钉为直连-only 且
+// 探测结论新鲜（不触发任何真实候选探测/尝试），并清空内核版本
+// 缓存——防同进程其他用例先行抓到的真实列表在 30 分钟缓存期内
+// 污染被密封用例。返回的 restore 恢复基址与路线状态并再清一次
+// 缓存。生产代码从不调用本函数；未被测试调用时行为与既往完全
+// 一致。包内用例仍用 stubReleasesAPI/seedGitHubRoutesForTest，
+// 本面只补契约测试（独立测试二进制、无从触达未导出 var）的缺口。
+func PinGitHubVersionSourceForTesting(apiBase string) (restore func()) {
+	oldBase := githubAPIBase
+	githubAPIBase = apiBase
+
+	githubRouteCache.Lock()
+	prevAt := githubRouteCache.at
+	prevDirectProbed, prevDirectAlive := githubRouteCache.directProbed, githubRouteCache.directAlive
+	prevProxiesProbed, prevProxyOrder := githubRouteCache.proxiesProbed, githubRouteCache.proxyOrder
+	githubRouteCache.at = time.Now()
+	githubRouteCache.directProbed = true
+	githubRouteCache.directAlive = true
+	githubRouteCache.proxiesProbed = true
+	githubRouteCache.proxyOrder = nil
+	githubRouteCache.Unlock()
+
+	clearKernelVersionCacheForPin()
+	return func() {
+		githubAPIBase = oldBase
+		githubRouteCache.Lock()
+		githubRouteCache.at = prevAt
+		githubRouteCache.directProbed, githubRouteCache.directAlive = prevDirectProbed, prevDirectAlive
+		githubRouteCache.proxiesProbed, githubRouteCache.proxyOrder = prevProxiesProbed, prevProxyOrder
+		githubRouteCache.Unlock()
+		clearKernelVersionCacheForPin()
+	}
+}
+
+// clearKernelVersionCacheForPin 清空内核版本缓存（含在飞合并表），
+// 与包内测试的 resetKernelVersionCache 同口径。
+func clearKernelVersionCacheForPin() {
+	kernelVersionCache.Lock()
+	kernelVersionCache.at = map[string]time.Time{}
+	kernelVersionCache.items = map[string][]kernelVersionItem{}
+	kernelVersionCache.flights = map[string]*kernelVersionFetchCall{}
+	kernelVersionCache.Unlock()
+}

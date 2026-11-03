@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"go-backend/internal/auth"
+	"go-backend/internal/http/handler"
 	"go-backend/internal/store/repo"
 )
 
@@ -323,7 +325,33 @@ func TestInboundProxyProtocolAndWhitelistContract(t *testing.T) {
 	}
 }
 
+// stubVersionListUnreachable 把内核版本列表来源密封为确定性不可达
+// （fixR2-A4）：本地 stub 恒回 500、路线钉直连-only，与 handler 包内
+// stubReleasesAPIFailing 同手法。未密封时「装 latest」的落库版本随
+// 环境翻转——沙箱 GitHub 不可达走 A3 回退存字面 "latest"，CI 可达
+// 则解析为具体版本落库（1.9.6 发布流水线实红：期望 latest、实际
+// 1.14.4）。返回 stub 命中计数，用例在安装后断言 ≥1，证明解析确实
+// 走了 stub 而非环境巧合；密封失效（抓取绕开 stub）时当场红。
+func stubVersionListUnreachable(t *testing.T) *atomic.Int32 {
+	t.Helper()
+	// 加固 fetch 拨号默认拒私网，本地 stub 须配 allowlist（与生产
+	// 内网代理同口径，handler 侧 stub 同例）。
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	restore := handler.PinGitHubVersionSourceForTesting(srv.URL)
+	t.Cleanup(restore)
+	return &hits
+}
+
 func TestPhase3KernelsContract(t *testing.T) {
+	// fixR2-A4 密封：下行 singbox 空版本安装断言落库字面 "latest"，
+	// 只在版本列表不可达（A3 回退）时成立，必须与环境网络解耦。
+	listHits := stubVersionListUnreachable(t)
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
 	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
@@ -337,6 +365,9 @@ func TestPhase3KernelsContract(t *testing.T) {
 	}
 	if got := mustQueryString(t, r, `SELECT version FROM node_kernel WHERE kernel_type = 'singbox'`); got != "latest" {
 		t.Fatalf("sing-box version: %q", got)
+	}
+	if listHits.Load() == 0 {
+		t.Fatal("version list fetch never reached the sealed stub; seal broken (fixR2-A4)")
 	}
 
 	create := func(body string) (int64, string) {
@@ -420,6 +451,11 @@ func TestPhase3KernelsContract(t *testing.T) {
 }
 
 func TestACMEAndNaiveContract(t *testing.T) {
+	// fixR2-A4 密封：本用例两处空版本安装的落库版本决定 ACME 版本门
+	// 判定路径（字面 "latest" 走豁免、具体版本走严格比较）——未密封
+	// 时 CI 侧实际消费真实列表内容（解析出的 latest 须 ≥1.14 才过
+	// 门），与 TestPhase3KernelsContract 同族，一并密封为不可达。
+	listHits := stubVersionListUnreachable(t)
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
 	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
@@ -428,6 +464,9 @@ func TestACMEAndNaiveContract(t *testing.T) {
 	n, o := jsonInt64(nodeID), jsonInt64(oldNode)
 	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+n+`,"kernelType":"singbox"}`)
 	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+n+`,"kernelType":"xray"}`)
+	if listHits.Load() == 0 {
+		t.Fatal("version list fetch never reached the sealed stub; seal broken (fixR2-A4)")
+	}
 	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+o+`,"kernelType":"singbox","version":"1.12.0"}`)
 
 	create := func(body string) (int64, string) {
