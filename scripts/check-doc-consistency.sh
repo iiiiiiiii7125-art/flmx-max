@@ -247,6 +247,10 @@ NOTIFY_MD="doc/guide/notify.md"
 # 注释掉的常量行、原始字符串里的声明形文本、构建排除文件均不
 # 入集——R6-C4-14 的注释口径并入编译集口径）。助手异常（值非
 # [a-z_]+ 形态等）按前提失效硬红；无 go 时 PENDING 未核。
+# 发射面同遍受守（修复轮 9，R9-27）：发射入口与 notifyJob/
+# notifyMessage 字面量的事件值若为字面量直发、或来源不可静态
+# 证明为 notifyEvent* 常量，助手退出 3 点名——「事件只来自常
+# 量」不再是隐含前提。
 code_events=""
 events_state="ok"
 if [ -n "$DOC_EXTRACT" ]; then
@@ -319,7 +323,9 @@ fi
 # 计数由 doc-extract 按编译集统计（R7-27：go/ast 数顶层 FuncDecl、
 # go/build 按构建约束定文件集；注释掉的测试函数、原始字符串里
 # 的函数形文本、构建排除文件均不计入——R6-C4-13 的注释口径并
-# 入编译集口径）。无 go 时 PENDING 未核（口径同 §10(b)）。
+# 入编译集口径）。自修复轮 9（R9-26）起递归子目录包，与
+# go test ./... 的执行面一致（testdata 与 _/. 前缀目录两面同
+# 跳过）。无 go 时 PENDING 未核（口径同 §10(b)）。
 tp_actual=""
 if [ -n "$DOC_EXTRACT" ]; then
   tp_actual=$("$DOC_EXTRACT" testfns go-backend/tests/contract TestPostgres 2>/dev/null | tr -d ' ')
