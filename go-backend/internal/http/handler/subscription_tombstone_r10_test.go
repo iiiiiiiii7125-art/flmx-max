@@ -55,7 +55,11 @@ func seedTombstoneFixture(t *testing.T) (*repo.Repository, *Handler, int64) {
 func mkShareSub(t *testing.T, r *repo.Repository, uuid string, sourceAll int) *model.Subscription {
 	t.Helper()
 	now := time.Now().UnixMilli()
-	s := &model.Subscription{Name: "tomb-" + uuid, Kind: model.SubscriptionShare, Token: strings.Repeat("a", 30) + uuid[:2],
+	// Token 必须在同一库内逐订阅唯一：用完整 uuid 派生（旧写法只取
+	// uuid[:2]，同测内两个订阅恒撞 subscription.token 唯一约束）。
+	tokenSrc := strings.ReplaceAll(uuid, "-", "")
+	token := (tokenSrc + strings.Repeat("a", 32))[:32]
+	s := &model.Subscription{Name: "tomb-" + uuid, Kind: model.SubscriptionShare, Token: token,
 		UUID: uuid, Password: "user-pw", SourceAll: sourceAll, Enabled: 1, CreatedTime: now, UpdatedTime: now}
 	if err := r.SaveSubscription(s); err != nil {
 		t.Fatal(err)
