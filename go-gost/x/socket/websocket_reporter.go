@@ -2962,21 +2962,25 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// A11-132-02: 备份失败必须中止升级——没有备份就没有回滚路径，
 	// 旧实现吞掉写错误继续替换是节点变砖的直接原因。
 	w.sendUpgradeProgress("installing", 50, "备份旧版本...")
-	if err := backupCurrentAgentBinary(binaryPath, backupPath); err != nil {
-		staging.Discard()
-		return err
-	}
-	fmt.Println("📦 旧版本已备份到", backupPath)
-
 	// R6-05: pair the backup with the binary being installed (see
 	// agentBackupMeta), so a later rollback can prove the backup is
 	// still the immediately previous generation even if another
 	// path (install.sh script update) replaced the binary in
 	// between. Failure aborts the upgrade with the same caliber as
 	// a backup failure — an unpairable backup would leave the
-	// rollback generation verdict unprovable. Only runs when a
-	// backup actually exists (a first install has nothing to pair).
-	if _, err := os.Stat(backupPath); err == nil {
+	// rollback generation verdict unprovable. The pairing is only
+	// written when this upgrade actually produced the backup: if
+	// there was no binary to back up, any pre-existing .old keeps
+	// its previous (or legacy, absent) pairing rather than being
+	// falsely paired with the incoming version.
+	_, binaryStatErr := os.Stat(binaryPath)
+	if err := backupCurrentAgentBinary(binaryPath, backupPath); err != nil {
+		staging.Discard()
+		return err
+	}
+	fmt.Println("📦 旧版本已备份到", backupPath)
+
+	if binaryStatErr == nil {
 		backupHash, herr := hashFileSHA256(backupPath)
 		if herr != nil {
 			staging.Discard()
