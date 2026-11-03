@@ -15,6 +15,11 @@
 # 外泄、必须 PASS）、env 包装 exec（模型外形态须点名 FAIL）、
 # 包名移入同块 echo 命令（安装跨度外token 不计数、须点名缺包）。
 #
+# 修复轮 9（R9-21/22）追加变体 14–17：eval 与 sh -c 字符串求
+# 值启动载体（模型外形态须点名 FAIL）、坏链先 exec 好链后
+# exec（快照首者胜、须点名坏链值）、同值双 exec 对照（必须
+# PASS）。
+#
 # 用法：check-agent-image-tools-selftest.sh（无参数，作用于本仓库）。
 # 退出码：0 = 基线 PASS 且全部变体均被抓；1 = 任一断言不成立。
 set -u
@@ -189,6 +194,101 @@ else
   echo "FAIL: variant 13 caught but the missing package was not named"; sed 's/^/    /' "$TMP/v13.log"; exit 1
 fi
 cp "$ROOT/go-gost/Dockerfile" "$MIR/go-gost/Dockerfile"
+
+echo "== variant 14: eval string-eval launch carrier must FAIL as outside the command-flow model (R9-21) =="
+python3 - "$MIR/go-gost/docker-entrypoint.sh" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding='utf-8').read().split('\n')
+out = []
+for l in lines:
+    if l.startswith('exec '):
+        out.append("eval 'cd /tmp && ulimit -c unlimited && exec /usr/local/bin/flmx-agent \"$@\"'")
+    else:
+        out.append(l)
+open(p, 'w', encoding='utf-8').write('\n'.join(out))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/v14.log" 2>&1; then
+  echo "FAIL: variant 14 was not caught (eval carrier silently accepted)"; exit 1
+fi
+if grep -q 'command-flow model' "$TMP/v14.log" && grep -q 'eval' "$TMP/v14.log"; then
+  echo "OK: variant 14 caught and named"
+else
+  echo "FAIL: variant 14 caught but the carrier was not named"; sed 's/^/    /' "$TMP/v14.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 15: sh -c string-eval launch carrier must FAIL as outside the command-flow model (R9-21) =="
+python3 - "$MIR/go-gost/docker-entrypoint.sh" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding='utf-8').read().split('\n')
+out = []
+for l in lines:
+    if l.startswith('exec '):
+        out.append("sh -c 'cd /tmp; ulimit -c unlimited; exec /usr/local/bin/flmx-agent' sh")
+    else:
+        out.append(l)
+open(p, 'w', encoding='utf-8').write('\n'.join(out))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/v15.log" 2>&1; then
+  echo "FAIL: variant 15 was not caught (sh -c carrier silently accepted)"; exit 1
+fi
+if grep -q 'command-flow model' "$TMP/v15.log"; then
+  echo "OK: variant 15 caught and named"
+else
+  echo "FAIL: variant 15 caught but the carrier was not named"; sed 's/^/    /' "$TMP/v15.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 16: bad chain exec first, good chain exec second must FAIL and name the first chain values (R9-22) =="
+python3 - "$MIR/go-gost/docker-entrypoint.sh" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding='utf-8').read().split('\n')
+out = []
+for l in lines:
+    if l.startswith('exec '):
+        out += [
+            'ulimit -c unlimited',
+            'cd /tmp',
+            'exec /usr/local/bin/flmx-agent "$@"',
+            'ulimit -c 0',
+            'cd /etc/flmx_agent',
+            'exec /usr/local/bin/flmx-agent "$@"',
+        ]
+    else:
+        out.append(l)
+open(p, 'w', encoding='utf-8').write('\n'.join(out))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/v16.log" 2>&1; then
+  echo "FAIL: variant 16 was not caught (last-exec-wins snapshot still in effect)"; exit 1
+fi
+if grep -q '/tmp' "$TMP/v16.log" && grep -q 'unlimited' "$TMP/v16.log"; then
+  echo "OK: variant 16 caught and named"
+else
+  echo "FAIL: variant 16 caught but the first chain values were not named"; sed 's/^/    /' "$TMP/v16.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 17: duplicate exec with identical good values must still PASS (R9-22 control) =="
+python3 - "$MIR/go-gost/docker-entrypoint.sh" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding='utf-8').read().split('\n')
+out = []
+for l in lines:
+    out.append(l)
+    if l.startswith('exec '):
+        out += ['ulimit -c 0', 'cd /etc/flmx_agent', 'exec /usr/local/bin/flmx-agent "$@"']
+open(p, 'w', encoding='utf-8').write('\n'.join(out))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/v17.log" 2>&1; then
+  echo "OK: variant 17 control PASS (first-wins snapshot keeps conforming duplicates green)"
+else
+  echo "FAIL: variant 17 control did not pass (first-wins wrongly condemns a conforming duplicate exec)"; sed 's/^/    /' "$TMP/v17.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
 
 echo "SELFTEST PASS: baseline green, all variants caught and named"
 exit 0
