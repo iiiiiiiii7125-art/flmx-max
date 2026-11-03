@@ -9,7 +9,7 @@ Export system data.
 **Request:**
 ```json
 {
-  "types": ["users", "nodes", "tunnels", "forwards", "speed_limits", "groups"]
+  "types": ["users", "nodes", "tunnels", "forwards", "speed_limits"]
 }
 ```
 
@@ -21,7 +21,6 @@ If `types` is empty or omitted, exports all data.
 - `tunnels` - Tunnel configurations
 - `forwards` - Forward rules
 - `speed_limits` - Speed limit rules
-- `groups` - User/tunnel groups and permissions
 - `configs` - System configurations
 
 **Response:**
@@ -37,9 +36,6 @@ If `types` is empty or omitted, exports all data.
     "tunnels": [...],
     "forwards": [...],
     "speedLimits": [...],
-    "tunnelGroups": [...],
-    "userGroups": [...],
-    "groupPermissions": [...],
     "configs": {...}
   }
 }

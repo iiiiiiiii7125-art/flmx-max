@@ -280,7 +280,6 @@ Non-admin users can only see/modify their own resources.
 | Nodes | CRUD, install, upgrade, status | [nodes.md](references/nodes.md) |
 | Tunnels | CRUD, user assignment | [tunnels.md](references/tunnels.md) |
 | Forwards | CRUD, pause/resume, diagnose | [forwards.md](references/forwards.md) |
-| Groups | User/tunnel groups, permissions | [groups.md](references/groups.md) |
 | Speed Limits | CRUD | [speed-limits.md](references/speed-limits.md) |
 | Federation | Share, remote nodes | [federation.md](references/federation.md) |
 | Kernels | Capabilities, install, versions, control, logs | [kernels.md](references/kernels.md) |
