@@ -30,7 +30,9 @@ import (
 // 外部回退后的落后段（C-C2-01），面板只确认不入账并落
 // agent_state_behind 日志，agent 收到 cursor 超前于所发序号即
 // 轮换 stream 自愈；序号等于游标且摘要一致的真重放落
-// replay_exact 日志，两类在面板日志上可区分。
+// replay_exact 日志，两类在面板日志上可区分。两路 409 拒绝
+// （reset_stream / identity_conflict）同样落同格结构化日志
+// （D-C2-01），面板日志覆盖全部未入账结局。
 // 旧 agent 继续走 v1，语义不变。
 
 type flowUploadV2Envelope struct {
@@ -114,14 +116,28 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 	itemsJSON, _ := json.Marshal(envelope.Items)
 	digest := fmt.Sprintf("%x", sha256.Sum256(itemsJSON))
 	scope := fmt.Sprintf("flow:%d:%s", node.ID, envelope.Stream)
+	var batchBytes int64
+	for _, item := range envelope.Items {
+		batchBytes += item.U + item.D
+	}
 	quotaViews, ack, err := h.repo.ApplyTrafficStreamAccounting(
 		batch.flowDeltas, batch.quotaUsage, now, scope, envelope.Sequence, digest)
 	if err != nil {
+		// 未入账拒绝的可观测（D-C2-01）：两路 409 与下方 behind/
+		// replay 确认同格落结构化日志（class=reset_stream /
+		// class=identity_conflict），面板日志对全部未入账结局闭
+		// 环；reset_stream 的 cursor 是判定前游标（gap.Expected
+		// 的前一序号），identity_conflict 的错误不带游标位置、
+		// 不落该字段。判定与回执语义不变，只加日志落点。
 		var gap *repo.TrafficStreamGap
 		switch {
 		case errors.As(err, &gap):
+			log.Printf("flow upload v2 rejected node_id=%d stream=%s sequence=%d cursor=%d items=%d bytes=%d class=reset_stream",
+				node.ID, envelope.Stream, envelope.Sequence, gap.Expected-1, len(envelope.Items), batchBytes)
 			reject(http.StatusConflict, "reset_stream")
 		case errors.Is(err, repo.ErrTrafficStreamConflict):
+			log.Printf("flow upload v2 rejected node_id=%d stream=%s sequence=%d items=%d bytes=%d class=identity_conflict",
+				node.ID, envelope.Stream, envelope.Sequence, len(envelope.Items), batchBytes)
 			reject(http.StatusConflict, "identity_conflict")
 		default:
 			log.Printf("flow upload v2 failed node_id=%d err=%v", node.ID, err)
@@ -134,10 +150,6 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 	// behind 段的字节数是「被确认但未在本请求入账」的规模——其
 	// 中已入账原批的重发本就该丢弃，回退后新计的同序号批次则
 	// 靠 agent 侧凭回执 cursor 切流止损，日志是面板侧唯一痕迹。
-	var batchBytes int64
-	for _, item := range envelope.Items {
-		batchBytes += item.U + item.D
-	}
 	switch {
 	case ack.Behind:
 		log.Printf("flow upload v2 ack not booked node_id=%d stream=%s sequence=%d cursor=%d items=%d bytes=%d class=agent_state_behind content_match=unverifiable_old_sequence",
