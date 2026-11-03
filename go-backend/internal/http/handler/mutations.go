@@ -4405,6 +4405,13 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("转发目标地址主机名格式无效："+err.Error()))
 		return
 	}
+	// R7-04（G-F3-01）：零有效目标（纯分隔符/纯空白，段集为空）属
+	// 格式无效，与 netguard 豁免无关——不绑进下方 roleID/开关的段
+	// 校验条件，管理员面与开关开启时同样在此拒绝。
+	if err := validateRemoteAddrHasTargets(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	if roleID != 0 && !h.allowLocalRemoteAddr() {
 		if err := IsSafeRemoteAddr(remoteAddr); err != nil {
 			response.WriteJSON(w, response.Err(403, err.Error()))
@@ -4616,6 +4623,14 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("转发目标地址主机名格式无效："+err.Error()))
 		return
 	}
+	// R7-04（G-F3-01）：与创建面同口径，零有效目标（段集为空）属
+	// 格式无效、与 netguard 豁免无关，管理员面同样拒绝。此处判的
+	// 是回填后的合并值：提交纯分隔符直接命中；存量若已是零目标
+	// （修复前落库的坏行），任何编辑也须先补正目标。
+	if err := validateRemoteAddrHasTargets(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	isNftTunnel, entryNodes, err := h.tunnelUsesNftables(tunnelID)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -4627,7 +4642,13 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if actorRole != 0 && !h.allowLocalRemoteAddr() {
+	// R7-05（G-F3-02）：netguard 段校验只在目标实际变更时复检。
+	// 此前对回填后的合并值无条件复检，存量内网目标规则在开关关闭
+	// 后被所有者冻结编辑（仅改名亦 403），与 forward.md「已保存的
+	// 规则不受开关变化影响」冲突。变更判定走 remoteAddrTargetsChanged
+	// 的段集口径：缺席回填、逐字相同或仅顺序/空段差的重提均视为
+	// 未变更、不复检；提交新目标（改公网/改内网）照常全检。
+	if actorRole != 0 && !h.allowLocalRemoteAddr() && remoteAddrTargetsChanged(remoteAddr, forward.RemoteAddr) {
 		if err := IsSafeRemoteAddr(remoteAddr); err != nil {
 			response.WriteJSON(w, response.Err(403, err.Error()))
 			return
