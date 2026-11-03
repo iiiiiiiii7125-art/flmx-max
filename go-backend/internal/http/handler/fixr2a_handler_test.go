@@ -121,6 +121,78 @@ func TestFixR2A2SameVersionInstallWarning(t *testing.T) {
 	}
 }
 
+// fixR2-A3 钉格：安装期 "latest" 解析失败回退。R2-F2-A2（2fd4acb2）
+// 在版本列表不可达时直接拒装、不落行，破坏了离线面板照样能装内核的
+// 既有保证（列表不可达存字面 "latest"、由 agent 在下载期自行解析）。
+// 修复后：解析成功存具体版本（A2 本意，见上列钉格）；解析失败回退存
+// 字面 "latest" 照常落行完成安装，回执点名警告。
+
+// stubReleasesAPIFailing mirrors stubReleasesAPI but answers 500, so
+// the release list fails the way an offline panel experiences it.
+func stubReleasesAPIFailing(t *testing.T) {
+	t.Helper()
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	old := githubAPIBase
+	githubAPIBase = srv.URL
+	t.Cleanup(func() { githubAPIBase = old })
+	seedGitHubRoutesForTest(t, true, nil)
+}
+
+func TestFixR2A3InstallLatestFallsBackWhenListUnreachable(t *testing.T) {
+	stubReleasesAPIFailing(t)
+	resetKernelVersionCache(t)
+	r, err := repo.Open(t.TempDir() + "/fixa3.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+
+	// 新装：列表不可达不得拒装——行必须落库、版本存字面 "latest"
+	// （节点离线使回执走下发失败面，但登记先于下发完成）。
+	nodeID := seedRelayTargetNode(t, r, "fixa3-node", "198.51.100.51")
+	_, msg := postKernelInstall(t, h, nodeID, kernel.TypeSingbox, "latest")
+	if strings.Contains(msg, "无法解析最新版本") {
+		t.Fatalf("unreachable release list must not refuse the install, got refusal %q", msg)
+	}
+	k, err := r.GetNodeKernelByType(nodeID, kernel.TypeSingbox)
+	if err != nil || k == nil {
+		t.Fatalf("fallback install must persist the kernel row: %v", err)
+	}
+	if k.Version != "latest" {
+		t.Fatalf("fallback install must store the literal \"latest\", stored %q", k.Version)
+	}
+
+	// 存量具体版本行重装 "latest"：同样回退落行，不拒装。
+	node2 := seedRelayTargetNode(t, r, "fixa3-node2", "198.51.100.52")
+	k2 := seedB8Kernel(t, r, node2, kernel.TypeSingbox, "1.14.2")
+	_, msg = postKernelInstall(t, h, node2, kernel.TypeSingbox, "latest")
+	if strings.Contains(msg, "无法解析最新版本") {
+		t.Fatalf("fallback reinstall must not be refused either, got %q", msg)
+	}
+	after, err := r.GetNodeKernel(k2.ID)
+	if err != nil || after == nil {
+		t.Fatalf("reload kernel: %v", err)
+	}
+	if after.Version != "latest" {
+		t.Fatalf("fallback reinstall must store the literal \"latest\", stored %q", after.Version)
+	}
+}
+
+func TestFixR2A3LatestFallbackWarning(t *testing.T) {
+	if got := latestFallbackWarning(false); got != "" {
+		t.Fatalf("no fallback must stay silent, got %q", got)
+	}
+	want := "未能确认最新版具体版本号，已按 latest 安装"
+	if got := latestFallbackWarning(true); got != want {
+		t.Fatalf("fallback must be named on the receipt: got %q, want %q", got, want)
+	}
+}
+
 // R2-F2-C-L01 钉格：目标侧编辑分享地址造出站策略冲突必须在保存期被拒。
 // 引用方以 ipv6_only 链向目标（初始分享地址为 IPv6 字面量，合法）；
 // 把目标分享地址改为 IPv4 字面量若在保存期放行，引用方链式流量将在

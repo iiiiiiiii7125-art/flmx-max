@@ -394,17 +394,26 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 	// upstream release silently kept the old binary while reporting
 	// success. Resolve to the newest concrete release here — the same
 	// list the version picker shows — and store the concrete version.
+	// fixR2-A3: resolution failure must not refuse the install, though:
+	// when the release list is unreachable (offline panel, GitHub rate
+	// limit) the install falls back to storing the literal "latest" and
+	// completes — the agent resolves it at download time through its
+	// own mirror routes (the pre-A2 guarantee), and the apply entry
+	// converges the stored row once the list is reachable again. The
+	// fallback is named on the receipt via latestFallbackWarning.
 	prevInstalled := ""
 	if k != nil {
 		prevInstalled = k.InstalledVersion
 	}
+	latestFellBack := false
 	if version == "latest" {
 		concrete, rerr := resolveLatestConcreteVersion(info)
 		if rerr != nil {
-			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("无法解析最新版本（%v），请稍后重试或指定具体版本", rerr)))
-			return
+			latestFellBack = true
+			log.Printf("kernel install: resolve latest for node_id=%d type=%s failed, installing as literal \"latest\": %v", req.NodeID, info.Type, rerr)
+		} else {
+			version = concrete
 		}
-		version = concrete
 	}
 	if k == nil {
 		k = &model.NodeKernel{
@@ -446,6 +455,13 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 	// read as a silent success — the agent keeps the existing binary, so
 	// name the fact on the envelope.
 	warning := sameVersionInstallWarning(requestedLatest, prevInstalled, version)
+	if w := latestFallbackWarning(latestFellBack); w != "" {
+		if warning != "" {
+			warning += "；" + w
+		} else {
+			warning = w
+		}
+	}
 	// R8-005: an explicitly old Xray (< 26.5.9) installs fine but has
 	// no built-in private-range block; name that on the success
 	// envelope instead of letting it stay silent.
@@ -2291,6 +2307,18 @@ func sameVersionInstallWarning(requestedLatest bool, prevInstalled, version stri
 		return fmt.Sprintf("已是最新版 %s，无需更新", version)
 	}
 	return fmt.Sprintf("已安装该版本 %s，本次未重新下载", version)
+}
+
+// latestFallbackWarning names an install that fell back to storing the
+// literal "latest" because the release list was unreachable at install
+// time (fixR2-A3): the row carries the sentinel and the agent resolves
+// it at download time through its own mirror routes. Returns "" when a
+// concrete version was resolved (or "latest" was never requested).
+func latestFallbackWarning(fellBack bool) string {
+	if !fellBack {
+		return ""
+	}
+	return "未能确认最新版具体版本号，已按 latest 安装"
 }
 
 // resolveLatestConcreteVersion maps an open-list kernel's "latest" to
