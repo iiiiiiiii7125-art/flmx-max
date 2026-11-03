@@ -494,7 +494,7 @@ export function NodeFormModal({
                   </div>
                   {/* 屏蔽协议 */}
                   <div>
-                    <div className="text-sm font-medium text-default-700 mb-2">
+                    <div className="text-sm font-medium text-default-800 mb-2">
                       屏蔽协议
                     </div>
                     <div className="text-xs font-semibold text-foreground mb-2">
@@ -527,7 +527,7 @@ export function NodeFormModal({
                             <rect height="16" rx="2" width="20" x="2" y="4" />
                             <path d="M2 10h20" />
                           </svg>
-                          <div className="text-sm font-medium text-default-700">
+                          <div className="text-sm font-medium text-default-800">
                             HTTP
                           </div>
                         </div>
@@ -568,7 +568,7 @@ export function NodeFormModal({
                             <path d="M6 10V7a6 6 0 1 1 12 0v3" />
                             <rect height="10" rx="2" width="16" x="4" y="10" />
                           </svg>
-                          <div className="text-sm font-medium text-default-700">
+                          <div className="text-sm font-medium text-default-800">
                             TLS
                           </div>
                         </div>
@@ -607,7 +607,7 @@ export function NodeFormModal({
                             <polyline points="7 10 12 15 17 10" />
                             <line x1="12" x2="12" y1="15" y2="3" />
                           </svg>
-                          <div className="text-sm font-medium text-default-700">
+                          <div className="text-sm font-medium text-default-800">
                             SOCKS
                           </div>
                         </div>

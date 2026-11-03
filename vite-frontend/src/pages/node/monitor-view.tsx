@@ -414,13 +414,13 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
         };
       case "disk":
         return {
-          lines: [{ dataKey: "disk", color: "#f59e0b", name: "磁盘 %" }],
+          lines: [{ dataKey: "disk", color: "#d97706", name: "磁盘 %" }],
           yAxisLabel: "使用率 (%)",
         };
       case "network":
         return {
           lines: [
-            { dataKey: "netIn", color: "#10b981", name: "接收速度" },
+            { dataKey: "netIn", color: "#059669", name: "接收速度" },
             { dataKey: "netOut", color: "#ef4444", name: "发送速度" },
           ],
           yAxisLabel: "速度 (bytes/s)",
@@ -430,7 +430,7 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
           lines: [
             { dataKey: "load1", color: "#6366f1", name: "负载 1m" },
             { dataKey: "load5", color: "#8b5cf6", name: "负载 5m" },
-            { dataKey: "load15", color: "#f59e0b", name: "负载 15m" },
+            { dataKey: "load15", color: "#d97706", name: "负载 15m" },
           ],
           yAxisLabel: "负载值",
         };
@@ -438,7 +438,7 @@ const NodeMetricsChartCard = React.memo(function NodeMetricsChartCard({
         return {
           lines: [
             { dataKey: "tcp", color: "#6366f1", name: "TCP 连接" },
-            { dataKey: "udp", color: "#10b981", name: "UDP 连接" },
+            { dataKey: "udp", color: "#059669", name: "UDP 连接" },
           ],
           yAxisLabel: "连接数",
         };
@@ -2163,7 +2163,7 @@ export function MonitorView({
                                 dataKey="latency"
                                 dot={false}
                                 name="延迟"
-                                stroke="#10b981"
+                                stroke="#059669"
                                 strokeWidth={2}
                                 type="monotone"
                               />

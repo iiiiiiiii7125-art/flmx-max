@@ -1680,7 +1680,7 @@ export default function ConfigPage() {
     return (
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-sm font-medium text-default-700">{label}</span>
+          <span className="text-sm font-medium text-default-800">{label}</span>
           <div className="flex items-center gap-2">
             <Button
               size="sm"
@@ -1726,7 +1726,7 @@ export default function ConfigPage() {
                     className={`font-medium ${
                       isSelected
                         ? "text-default-900"
-                        : "text-default-700"
+                        : "text-default-800"
                     }`}
                   >
                     {option.label}
@@ -2448,7 +2448,7 @@ export default function ConfigPage() {
         <ModalContent>
           <ModalHeader>确认导入备份</ModalHeader>
           <ModalBody>
-            <div className="space-y-3 text-sm text-default-700">
+            <div className="space-y-3 text-sm text-default-800">
               <p>
                 即将导入文件
                 <span className="font-medium text-default-900">
@@ -2509,7 +2509,7 @@ export default function ConfigPage() {
             <>
               <ModalHeader>确认面板升级</ModalHeader>
               <ModalBody>
-                <div className="space-y-3 text-sm text-default-700">
+                <div className="space-y-3 text-sm text-default-800">
                   {/* P3-1：回显本次升级的目标版本，避免点了确认还不知道装到哪一版 */}
                   <p className="font-medium text-default-900">
                     {systemUpgradeSelectedVersion

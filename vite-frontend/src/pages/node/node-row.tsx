@@ -517,7 +517,7 @@ const NodeCardContent = memo(function NodeCardContent({
                     <span className="text-foreground">
                       占用端口
                     </span>
-                    <span className="font-mono text-default-700">
+                    <span className="font-mono text-default-800">
                       {remoteUsage.usedPorts.length}/
                       {Math.max(
                         remoteUsage.portRangeEnd -
@@ -556,7 +556,7 @@ const NodeCardContent = memo(function NodeCardContent({
                     <span className="text-foreground">
                       绑定明细
                     </span>
-                    <span className="font-mono text-default-700">
+                    <span className="font-mono text-default-800">
                       {remoteUsage.activeBindingNum}
                     </span>
                   </div>

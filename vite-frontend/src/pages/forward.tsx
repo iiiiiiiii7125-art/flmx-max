@@ -1110,7 +1110,7 @@ const SortableCompactTableRow = ({
         className={`whitespace-nowrap ${selectedIds.has(forward.id) ? "bg-primary-500/10" : ""}`}
       >
         <div className="flex items-center">
-          <span className="font-medium text-default-700 text-sm">
+          <span className="font-medium text-default-800 text-sm">
             {forward.tunnelName}
           </span>
           {forward.tunnelTrafficRatio !== undefined &&
@@ -4792,7 +4792,7 @@ export default function ForwardPage() {
                               countClassName="text-xs font-semibold text-foreground"
                               groupUserId={group.userId}
                               headerClassName="flex items-center justify-between border-b border-divider px-4 py-2.5"
-                              titleClassName="truncate text-sm font-semibold text-default-700"
+                              titleClassName="truncate text-sm font-semibold text-default-800"
                               tunnel={tunnel}
                               wrapperClassName="rounded-2xl"
                               onToggleCollapsed={() =>

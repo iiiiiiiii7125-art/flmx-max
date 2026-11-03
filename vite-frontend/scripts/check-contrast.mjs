@@ -11,6 +11,13 @@
 // 语义色文字在玻璃语境下经 --glass-text-* 深档渲染，其全格网格与
 // src 普查（fail-closed 差集）入断言；桥 Button 的半透明白 wash
 // 载体族退役、由托盘与实色 -800 档承接，退役签名入断言。
+// R3 扩集（文末三段）：① 语义文字普查扩至全档位（100–900）并对
+// 透明后缀按 alpha 合成值复算（R3-C6-02，此前 100–400 浅档看不见、
+// /60 等后缀按不透明值算、均恒绿）；② 中性 default 玻璃面登记
+// 收窄（R3-S1-01：承载主要内容的 -700 已改 -800，留置 -700 逐文件
+// 钉数、仅限不透明钉面/内嵌安全格/枚举的次级信息，边界格 3.67
+// 只作登记记录）；③ 图表系列色入册（R3-S1-02：按非文本 3:1 对
+// 默认底常态格断言，纯黑壁纸界格钉值登记、靠图例/tooltip 冗余）。
 // 此前该自检只是
 // 审计时的一次性临时脚本、未落仓库（A-front 复核时独立复算 25 对
 // 全过），本脚本把它沉淀为常设门：解析 src/styles/globals.css 的
@@ -1055,11 +1062,15 @@ for (const [fg, bg, pinned] of PAIRS) {
 // 或降 blur 都会点名；② 正文色 --foreground 在全部 36 格 ≥ 4.5
 // 底线；③ 卡片中位停点在四种底上 ≥ 7 目标、浮层最低停点在黑/
 // 暗区底上 ≥ 7；④ 四个最差格钉值 ±0.1。模型边界（明示）：中性
-// 次级文字 default-700 在卡片最低停点×纯黑底一格为 3.67——它是
-// 已登记边界（中性次级信息、靠字号字重区分、不作语义信号），不
-// 在本门断言内；语义色族文字不在此列——R2-S1-01 后它们在玻璃语
-// 境下经深档渲染、全格入下文断言（恢复方案 ③-3 的「-700 全格不
-// 断言」只余 default 一族）。
+// 文字 default-700 在卡片最低停点×纯黑底一格为 3.67——原登记
+// 边界（中性次级信息）经 R3-S1-01 复核后收窄：37 处用量中承载
+// 主要内容者（表单标签/整段说明/正文行/名称/标题/数据值/透明
+// 底占位符/桥 Link 默认色等 22 处）已改 -800，留置 -700 仅限
+// 不透明钉面（content1 占位符、托盘面）、玻璃内嵌安全格
+// （5.15）与逐文件钉数的次级信息面，登记与普查钉数见文末
+// 「中性 default 玻璃面登记」段；3.67 格在本门只作边界记录
+// 钉值、不作通过断言。语义色族文字不在此列——R2-S1-01 后它
+// 们在玻璃语境下经深档渲染、全格入下文断言。
 const lumRgb = (rgb) => {
   const f = (c) => {
     const s = c / 255;
@@ -1362,6 +1373,13 @@ for (const fam of [
 }
 
 // 普查闭合：src 全部语义文字类字面量 ⊆ 覆盖集。
+// R3-C6-02 扩面：旧正则只认 [5-9]00 无后缀——100–400 更浅档
+// 完全看不见、/60 等透明后缀按不透明值计数，均恒绿放行（本轮
+// 实证现行零实例、纯潜伏）。现扩至 [1-9]00 全档并捕获透明后缀：
+// 浅档（-500 及以下）无玻璃覆盖块、直坐玻璃只会更差，点名红；
+// 透明后缀只在 -700 玻璃渲染面（深档 token）按 alpha 合成复算
+// ——以深档色在玻璃 36 格载体上逐格合成后取最低格，>= 4.5 才
+// 算覆盖，其余档位的透明后缀不在任何已建模面内、点名红。
 const SEMANTIC_TEXT_FAMS = new Set([
   ...GLASS_TEXT_TOKEN_FAMS,
   ...Object.keys(GLASS_TEXT_ALIAS),
@@ -1376,14 +1394,27 @@ const censusWalk = (dir) => {
     } else if (/\.tsx?$/.test(entry.name)) {
       const text = readFileSync(path, "utf8");
       const re =
-        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-([a-z]+)-([5-9]00)\b/g;
+        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-([a-z]+)-([1-9]00)(\/(?:\d+|\[[\d.]+\]))?\b/g;
       let m;
 
       while ((m = re.exec(text)) !== null) {
-        censusHits.push({ variant: m[1] ?? "", fam: m[2], shade: m[3], path });
+        const alpha =
+          m[4] === undefined
+            ? null
+            : m[4].startsWith("/[")
+              ? parseFloat(m[4].slice(2, -1))
+              : parseInt(m[4].slice(1), 10) / 100;
+
+        censusHits.push({
+          variant: m[1] ?? "",
+          fam: m[2],
+          shade: m[3],
+          alpha,
+          path,
+        });
       }
       if (/(?<![\w-])text-warning(?![-\w])/.test(text)) {
-        censusHits.push({ variant: "", fam: "warning", shade: "base", path });
+        censusHits.push({ variant: "", fam: "warning", shade: "base", alpha: null, path });
       }
     }
   }
@@ -1391,25 +1422,280 @@ const censusWalk = (dir) => {
 
 censusWalk(join(here, "..", "src"));
 const censusSemantic = censusHits.filter((h) => h.fam !== "default");
-const censusUncovered = censusSemantic.filter(
-  (h) =>
-    !SEMANTIC_TEXT_FAMS.has(h.fam) ||
-    !["", "hover", "focus"].includes(h.variant),
+
+// 玻璃 36 格载体面（与上文网格同模型）：透明文字以 alpha 在
+// 载体面上合成，取全格最低对比度判定。
+const glassSurfaces = [];
+if (GLASS_TIERS.every((t) => t.stops.length === 3)) {
+  for (const tier of GLASS_TIERS) {
+    for (const [, bg] of GLASS_BACKDROPS) {
+      tier.stops.forEach((stop) => {
+        const carrier = tier.name.startsWith("内嵌")
+          ? compositeOver(GLASS_TIERS[0].stops[2], bg)
+          : bg;
+
+        glassSurfaces.push(compositeOver(stop, carrier));
+      });
+    }
+  }
+}
+const alphaGlassMin = (hex, alpha) => {
+  const rgb = hexToRgb(hex);
+  let min = Infinity;
+
+  for (const s of glassSurfaces) {
+    const eff = rgb.map((v, i) => alpha * v + (1 - alpha) * s[i]);
+
+    min = Math.min(min, contrastRgb(eff, s));
+  }
+
+  return min;
+};
+
+// 覆盖判定：返回 null = 已覆盖，否则为点名原因。
+const censusCoverReason = (h) => {
+  if (!SEMANTIC_TEXT_FAMS.has(h.fam)) return "集外色族";
+  if (!["", "hover", "focus"].includes(h.variant)) return "集外变体";
+  if (h.shade === "base") return null;
+  if (Number(h.shade) <= 500) return "浅档无玻璃覆盖块（-500 及以下）";
+  if (h.alpha !== null) {
+    if (h.shade !== "700") return "透明后缀仅 -700 玻璃渲染面已建模";
+    const tokenFam = GLASS_TEXT_TOKEN_FAMS.includes(h.fam)
+      ? h.fam
+      : GLASS_TEXT_ALIAS[h.fam];
+    const hex = glassTextHex[tokenFam];
+
+    if (!hex || glassSurfaces.length === 0) return "深档 token 或玻璃格缺失";
+    const min = alphaGlassMin(hex, h.alpha);
+
+    return min >= 4.5
+      ? null
+      : `透明后缀合成最低格 ${min.toFixed(2)} < 4.5`;
+  }
+
+  return null;
+};
+const censusUncovered = censusSemantic
+  .map((h) => ({ h, reason: censusCoverReason(h) }))
+  .filter((x) => x.reason !== null);
+const censusShallow = censusSemantic.filter(
+  (h) => h.shade !== "base" && Number(h.shade) <= 500,
 );
+const censusAlpha = censusSemantic.filter((h) => h.alpha !== null);
 
 check(
-  `语义文字类普查非空（实扫 ${censusSemantic.length} 处，中性 default 登记边界除外）`,
+  `语义文字类普查非空（实扫 ${censusSemantic.length} 处，含浅档 ${censusShallow.length} 处、透明后缀 ${censusAlpha.length} 处，中性 default 登记边界除外）`,
   censusSemantic.length >= 150,
   `仅扫到 ${censusSemantic.length} 处，扫描面疑似失效`,
 );
 check(
-  "语义文字类普查差集 ∅（集外色族/变体即红）",
+  "语义文字类普查差集 ∅（集外色族/变体、浅档、未建模或合成不达标的透明后缀即红）",
   censusUncovered.length === 0,
   censusUncovered
     .slice(0, 5)
-    .map((h) => `${h.variant ? `${h.variant}:` : ""}text-${h.fam}-${h.shade} @ ${h.path}`)
+    .map(
+      ({ h, reason }) =>
+        `${h.variant ? `${h.variant}:` : ""}text-${h.fam}-${h.shade}${h.alpha !== null ? `/${Math.round(h.alpha * 100)}` : ""}（${reason}）@ ${h.path}`,
+    )
     .join("；"),
 );
+
+// ── 中性 default 玻璃面登记（R3-S1-01）────────────────────
+// R2 登记边界（「中性次级信息」）经 R3 复核时用量已漂移：37 处
+// -700 中含表单标签与整段说明文字，最差格 3.67、卡片中位 4.41
+// 均低于 4.5。本轮按内容角色收窄：承载主要内容者 22 处改 -800
+// （表单标签/说明段/正文行/名称/标题/数据值/透明底占位符/
+// 桥 Link 默认色/切换钮 hover 态等），留置 -700 仅三类面——
+// ① 不透明钉面（content1 占位符 PAIRS 已钉 10.44、bg-tray
+// 徽标/芯片、bg-default-300 实色徽标）；② 玻璃内嵌面（最差格
+// 5.15 >= 4.5，下方钉值断言）；③ 枚举的次级示意（应用名预
+// 览小字）。本段断言：① -700 卡片直坐最差格只作边界记录钉值
+// （token 漂移即点名，不作通过断言）；② 修复档 -800 同格
+// >= 4.5 且钉值；③ -700 内嵌全底最低格 >= 4.5 且钉值（留置
+// 面 ② 的机械依据）；④ src 普查逐文件钉数——留置文件与计数
+// 之外任何 -700 出现即红（把已改标签翻回 -700 必被抓），
+// -500/-600 用量恒为 0（纪律面）。
+const DEFAULT_700_FILE_PINS = {
+  "components/ui/input.tsx": 1, // bg-content1 占位符（PAIRS 钉 10.44）
+  "components/ui/textarea.tsx": 1, // 同上
+  "pages/config.tsx": 1, // 应用名预览小字（次级示意）
+  "pages/dashboard.tsx": 1, // bg-tray 徽标
+  "pages/dashboard/admin-overview.tsx": 1, // bg-tray 芯片
+  "pages/forward.tsx": 5, // glass-inset 地址钮 ×4＋inset 页眉组标题 ×1
+  "pages/node/node-row.tsx": 4, // bg-tray 芯片 hover ×2＋glass-inset 信息盒 ×2
+  "pages/subscription/controls.tsx": 1, // bg-default-300 实色徽标
+};
+{
+  const d700Hex = tokens["--default-700"];
+  const d800Hex = tokens["--default-800"];
+
+  if (d700Hex && d800Hex && GLASS_TIERS.every((t) => t.stops.length === 3)) {
+    const cardFloorOverBlack = compositeOver(GLASS_TIERS[0].stops[2], [0, 0, 0]);
+    const d700Worst = contrastRgb(hexToRgb(d700Hex), cardFloorOverBlack);
+
+    check(
+      `中性 default-700 玻璃边界格记录：卡片最低停点×纯黑 = ${d700Worst.toFixed(2)}（登记值 3.67，仅记录 token 漂移、非通过断言）`,
+      Math.abs(d700Worst - 3.67) <= 0.1,
+      `实测 ${d700Worst.toFixed(2)}`,
+    );
+    const d800Worst = contrastRgb(hexToRgb(d800Hex), cardFloorOverBlack);
+
+    check(
+      `中性 default-800 玻璃最差格：卡片最低停点×纯黑 = ${d800Worst.toFixed(2)}（钉值 5.23、底线 4.5）`,
+      d800Worst >= 4.5 && Math.abs(d800Worst - 5.23) <= 0.1,
+      `实测 ${d800Worst.toFixed(2)}`,
+    );
+    let d700InsetMin = Infinity;
+
+    for (const [, bg] of GLASS_BACKDROPS) {
+      const carrier = compositeOver(GLASS_TIERS[0].stops[2], bg);
+
+      for (const stop of GLASS_TIERS[2].stops) {
+        d700InsetMin = Math.min(
+          d700InsetMin,
+          contrastRgb(hexToRgb(d700Hex), compositeOver(stop, carrier)),
+        );
+      }
+    }
+    check(
+      `中性 default-700 内嵌安全格：全底最低 = ${d700InsetMin.toFixed(2)}（钉值 5.15、底线 4.5）`,
+      d700InsetMin >= 4.5 && Math.abs(d700InsetMin - 5.15) <= 0.1,
+      `实测 ${d700InsetMin.toFixed(2)}`,
+    );
+  } else {
+    check("中性 default 玻璃面登记可复算（--default-700/800 与三级停点齐备）", false, "token 或停点缺失");
+  }
+
+  const d700Counts = new Map();
+  let dShallowCount = 0;
+  const dWalk = (dir, rel) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      const r = rel ? `${rel}/${entry.name}` : entry.name;
+
+      if (entry.isDirectory()) {
+        dWalk(path, r);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        const text = readFileSync(path, "utf8");
+        const n = (text.match(/text-default-700/g) ?? []).length;
+
+        if (n > 0) d700Counts.set(r, n);
+        dShallowCount += (text.match(/text-default-[56]00/g) ?? []).length;
+      }
+    }
+  };
+
+  dWalk(join(here, "..", "src"), "");
+  const d700Drift = [];
+
+  for (const [file, n] of d700Counts) {
+    if (DEFAULT_700_FILE_PINS[file] !== n) {
+      d700Drift.push(`${file} 实扫 ${n} 处（钉数 ${DEFAULT_700_FILE_PINS[file] ?? "无登记"}）`);
+    }
+  }
+  for (const file of Object.keys(DEFAULT_700_FILE_PINS)) {
+    if (!d700Counts.has(file)) d700Drift.push(`${file} 实扫 0 处（钉数 ${DEFAULT_700_FILE_PINS[file]}）`);
+  }
+  const d700Total = [...d700Counts.values()].reduce((a, b) => a + b, 0);
+
+  check(
+    `中性 default-700 留置普查（实扫 ${d700Total} 处、逐文件钉数对表）`,
+    d700Drift.length === 0,
+    d700Drift.slice(0, 5).join("；") || "计数漂移",
+  );
+  check(
+    `中性 default-500/-600 用量恒为 0（实扫 ${dShallowCount} 处）`,
+    dShallowCount === 0,
+    `实扫 ${dShallowCount} 处——浅档中性文字不在纪律面内`,
+  );
+}
+
+// ── 图表系列色登记（R3-S1-02）────────────────────────────
+// 图表绘图区无自有底色、系列折线直坐玻璃卡片，此前无任何对比
+// 度登记。口径：按 WCAG 1.4.11 非文本 3:1 对「默认底常态格」
+// （无壁纸、卡片最低停点叠 --background）断言并钉值；纯黑壁
+// 纸界格全系列低于 3:1，只钉登记值作漂移记录——壁纸为 opt-in
+// 且 blur 匀化使界格为保守下界，系列靠色相＋位置区分、图例
+// 文字与 glass tooltip 提供数值冗余（R3-S1-02 缓解面）。
+// R3 修复：常态格不达标的五色由 -500 提至 -600 档（emerald
+// 2.49→#059669、warning 2.11→#d97706、cyan 2.39→#0891b2、
+// lime 1.94→#65a30d、orange 2.76→#ea580c），色相不变、系列间
+// 可区分。本段普查闭合：五个图表文件的全部 hex 字面量须恰
+// 等于登记集（多一个未登记色、少一个登记色都红）。
+const CHART_FILES = [
+  "components/latency-trend-modal.tsx",
+  "pages/dashboard/components/flow-chart-card.tsx",
+  "pages/node/monitor-view.tsx",
+  "pages/node/tunnel-monitor-view.tsx",
+  "pages/subscription/traffic-stats.tsx",
+];
+// [hex, 默认底常态格钉值, 纯黑界格登记值]
+const CHART_SERIES = [
+  ["#007aff", 3.95, 1.41],
+  ["#6366f1", 4.39, 1.57],
+  ["#059669", 3.7, 1.32],
+  ["#d97706", 3.13, 1.12],
+  ["#8b5cf6", 4.16, 1.49],
+  ["#ef4444", 3.7, 1.32],
+  ["#0891b2", 3.62, 1.29],
+  ["#ec4899", 3.47, 1.24],
+  ["#65a30d", 3.04, 1.08],
+  ["#ea580c", 3.5, 1.25],
+  ["#475569", 7.45, 2.66],
+  ["#3b82f6", 3.62, 1.29],
+];
+{
+  const bgHex = tokens["--background"];
+
+  if (bgHex && GLASS_TIERS.every((t) => t.stops.length === 3)) {
+    const floorStop = GLASS_TIERS[0].stops[2];
+    const defaultCarrier = compositeOver(floorStop, hexToRgb(bgHex));
+    const blackCarrier = compositeOver(floorStop, [0, 0, 0]);
+
+    for (const [hex, pinDefault, pinBlack] of CHART_SERIES) {
+      const rgb = hexToRgb(hex);
+      const rDefault = contrastRgb(rgb, defaultCarrier);
+      const rBlack = contrastRgb(rgb, blackCarrier);
+
+      check(
+        `图表系列色 ${hex} 默认底常态格 = ${rDefault.toFixed(2)}（钉值 ${pinDefault}、非文本底线 3）`,
+        rDefault >= 3 && Math.abs(rDefault - pinDefault) <= 0.1,
+        `实测 ${rDefault.toFixed(2)}`,
+      );
+      check(
+        `图表系列色 ${hex} 纯黑壁纸界格记录 = ${rBlack.toFixed(2)}（登记值 ${pinBlack}，靠图例/tooltip 冗余、非通过断言）`,
+        Math.abs(rBlack - pinBlack) <= 0.1,
+        `实测 ${rBlack.toFixed(2)}`,
+      );
+    }
+  } else {
+    check("图表系列色网格可复算（--background 与卡片停点齐备）", false, "token 或停点缺失");
+  }
+
+  const foundHexes = new Set();
+
+  for (const rel of CHART_FILES) {
+    const text = readFileSync(join(here, "..", "src", rel), "utf8");
+
+    for (const m of text.matchAll(/["'`](#[0-9a-fA-F]{6})["'`]/g)) {
+      foundHexes.add(m[1].toLowerCase());
+    }
+  }
+  const registeredHexes = new Set(CHART_SERIES.map(([hex]) => hex));
+  const unregistered = [...foundHexes].filter((h) => !registeredHexes.has(h));
+  const unused = [...registeredHexes].filter((h) => !foundHexes.has(h));
+
+  check(
+    `图表文件 hex 普查闭合（实扫 ${foundHexes.size} 色、登记 ${registeredHexes.size} 色）`,
+    unregistered.length === 0 && unused.length === 0,
+    [
+      unregistered.length ? `未登记：${unregistered.join(", ")}` : "",
+      unused.length ? `登记未用：${unused.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("；"),
+  );
+}
 
 // ── 桥 Button 载体（R2-S1-02）─────────────────────────────
 // bordered 六色与 solid/flat 的 default 曾用半透明白 wash 作载体

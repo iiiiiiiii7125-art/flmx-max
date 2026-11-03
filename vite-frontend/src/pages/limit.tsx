@@ -533,7 +533,7 @@ export default function LimitPage({
                         }))
                       }
                     />
-                    <span className="text-sm text-default-700">启用此规则</span>
+                    <span className="text-sm text-default-800">启用此规则</span>
                     <span className="text-xs font-semibold text-foreground">
                       停用后规则不再生效，可随时重新启用
                     </span>

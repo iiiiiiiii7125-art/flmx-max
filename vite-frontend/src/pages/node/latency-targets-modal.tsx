@@ -127,7 +127,7 @@ export function LatencyTargetsModal({
       className={`flex-1 rounded-md px-3 py-1.5 text-sm transition-colors ${
         on
           ? "bg-tray font-semibold shadow-sm"
-          : "text-foreground hover:text-default-700"
+          : "text-foreground hover:text-default-800"
       }`}
       type="button"
       onClick={onPress}

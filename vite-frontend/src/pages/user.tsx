@@ -1285,7 +1285,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                         </div>
                         <div className="flex items-center gap-1 text-xs font-semibold">
                           <span className="text-foreground">限制:</span>
-                          <span className="text-default-700 font-medium whitespace-nowrap">
+                          <span className="text-default-800 font-medium whitespace-nowrap">
                             {formatFlowLimit(user.flow, user.flowMiB)}
                           </span>
                         </div>
@@ -1984,7 +1984,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                                 }
                               />
                               <span
-                                className={`font-medium truncate ${isAssigned ? "text-foreground" : "text-default-700"}`}
+                                className={`font-medium truncate ${isAssigned ? "text-foreground" : "text-default-800"}`}
                               >
                                 {tunnel.name}
                               </span>

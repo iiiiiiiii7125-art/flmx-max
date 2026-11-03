@@ -155,6 +155,17 @@ const INTERACTIONS = {
   // Expanding a subscription's traffic section mounts SubTrafficStats,
   // which pulls user/subscription/traffic.
   "user my-subscription": `(() => { const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.includes("该订阅流量统计")); if (!b) return false; b.click(); return true; })()`,
+  // R3-C5-02: the Gist upload button only calls backup/gist/upload
+  // after a click, and the endpoint is a recorded fixture (not a
+  // WRITE_WORDS success) because the page consumes the response's
+  // {result, status} shape — the not-recorded empty array crashed
+  // the section (setStatus(undefined) + TypeError) while no walk
+  // ever clicked it. Fill token + password (the button stays
+  // disabled until both are present), then click 立即上传. Filling
+  // is idempotent, so the poll may re-run this step until the
+  // button enables; the click itself happens exactly once (the
+  // step returns true only on the evaluating pass that clicks).
+  "admin config": `(() => { const scope = document.querySelector("main") ?? document; const setVal = (el, v) => { const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; setter.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }; const token = scope.querySelector('input[aria-label="GitHub 令牌"]'); const password = scope.querySelector('input[aria-label="加密密码"]'); if (!token || !password) return false; if (!token.value) setVal(token, "ghp_demo_patrol_token"); if (!password.value) setVal(password, "demo-patrol-password"); const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "立即上传"); if (!b || b.disabled) return false; b.click(); return true; })()`,
 };
 
 async function interact(role, route) {

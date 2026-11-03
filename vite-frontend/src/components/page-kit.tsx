@@ -152,7 +152,7 @@ export function PageToolbar({
         <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-content1 px-3 sm:max-w-xs">
           <Search className="h-4 w-4 shrink-0 text-foreground" />
           <input
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-default-700"
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-default-800"
             enterKeyHint="search"
             placeholder={placeholder}
             type="text"

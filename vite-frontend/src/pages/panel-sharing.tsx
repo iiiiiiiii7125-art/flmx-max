@@ -508,14 +508,29 @@ export default function PanelSharingPage() {
 
       if (res.code === 0) {
         // B13-001: 后端对重复导入改为刷新既有远端节点并在 data.refreshed 标记。
-        const refreshed =
-          (res.data as { refreshed?: boolean } | null)?.refreshed === true;
+        const data = res.data as {
+          refreshed?: boolean;
+          panelVersion?: string;
+          versionWarning?: string;
+        } | null;
+        const refreshed = data?.refreshed === true;
+
+        // R3-C5-01：导入回执的对端版本与版本警告在导入当刻一并呈现
+        //（与远端用量卡片同口径：版本随成功提示附带、警告全文以
+        // 警告样式单列），不再只等导入后刷新的卡片兜底渲染——
+        // 「对端过旧、数据面将被拒」必须在导入结果里当场可见。
+        const versionSuffix = data?.panelVersion
+          ? `（对端面板版本: ${data.panelVersion}）`
+          : "";
 
         toast.success(
-          refreshed
+          (refreshed
             ? "远端节点已存在，已刷新其信息"
-            : "导入成功，请前往节点列表查看",
+            : "导入成功，请前往节点列表查看") + versionSuffix,
         );
+        if (data?.versionWarning) {
+          toast(data.versionWarning, { icon: "⚠️", duration: 8000 });
+        }
         setImportNodeOpen(false);
         setImportForm({ remoteUrl: "", token: "" });
         loadRemoteUsage();

@@ -167,7 +167,7 @@ function UserDashboard() {
           </span>
         </div>
 
-        <div className="mt-3 text-sm text-default-700">
+        <div className="mt-3 text-sm text-default-800">
           {formatNodeRenewalTime(renewalSnapshot.nextDueTime)}
         </div>
 

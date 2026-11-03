@@ -30,15 +30,15 @@ const RANGES = [
 ];
 
 const COLORS = [
-  "#10b981",
+  "#059669",
   "#6366f1",
-  "#f59e0b",
+  "#d97706",
   "#ef4444",
   "#8b5cf6",
-  "#06b6d4",
+  "#0891b2",
   "#ec4899",
-  "#84cc16",
-  "#f97316",
+  "#65a30d",
+  "#ea580c",
   "#475569",
 ];
 
@@ -138,7 +138,7 @@ export function LatencyTrendModal({
                 className={`rounded-md px-3 py-1 text-xs transition-colors ${
                   hours === r.hours
                     ? "bg-tray font-semibold shadow-sm"
-                    : "text-foreground hover:text-default-700"
+                    : "text-foreground hover:text-default-800"
                 }`}
                 type="button"
                 onClick={() => setHours(r.hours)}

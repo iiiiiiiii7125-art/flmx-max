@@ -18,7 +18,7 @@ import { Segmented } from "@/pages/subscription/controls";
 
 // 与我方既有图表（延迟趋势等）同一调色：下载蓝、上传橙。
 const DOWN = "#3b82f6";
-const UP = "#f97316";
+const UP = "#ea580c";
 // Fixed text colors for the up/down numbers: a series color must not be
 // the theme's primary (which recolors with the user's theme pick).
 const DOWN_TEXT = "text-blue-700";

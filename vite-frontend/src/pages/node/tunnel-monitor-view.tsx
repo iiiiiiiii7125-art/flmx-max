@@ -357,7 +357,7 @@ const QualityChartCard = React.memo(function QualityChartCard({
                   dataKey="entryToExit"
                   dot={false}
                   name="entryToExit"
-                  stroke="#10b981"
+                  stroke="#059669"
                   strokeWidth={2}
                   type="monotone"
                 />
@@ -475,7 +475,7 @@ const TrafficChartCard = React.memo(function TrafficChartCard({
                   dataKey="bytesIn"
                   dot={false}
                   name="上传流量"
-                  stroke="#10b981"
+                  stroke="#059669"
                   strokeWidth={2}
                   type="monotone"
                 />
@@ -766,7 +766,7 @@ const ForwardingChainTopology = React.memo(function ForwardingChainTopology({
   return (
     <Card className="border border-divider/60 shadow-sm transition-shadow mt-4">
       <CardHeader className="py-3 px-4 flex flex-row items-center justify-between pb-1">
-        <h3 className="text-sm font-semibold flex items-center gap-1.5 text-default-700">
+        <h3 className="text-sm font-semibold flex items-center gap-1.5 text-default-800">
           <Activity className="w-4 h-4 text-primary-700" />
           全链路拓扑状态 (实时)
         </h3>
