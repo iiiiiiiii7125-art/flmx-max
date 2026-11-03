@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"go-backend/internal/clientip"
 	"go-backend/internal/store/repo"
 )
 
@@ -30,7 +31,9 @@ import (
 // 外部回退后的落后段（C-C2-01），面板只确认不入账并落
 // agent_state_behind 日志，agent 收到 cursor 超前于所发序号即
 // 轮换 stream 自愈；序号等于游标且摘要一致的真重放落
-// replay_exact 日志，两类在面板日志上可区分。两路 409 拒绝
+// replay_exact 日志，两类在面板日志上可区分。behind 中被证明
+// 是并发克隆写者分岔的批次（近窗摘要不同＋异源，RM-C2-2）改落
+// class=identity_conflict 专用行，回执仍为 behind 确认。两路 409 拒绝
 // （reset_stream / identity_conflict）同样落同格结构化日志
 // （D-C2-01），面板日志覆盖全部未入账结局。
 // 旧 agent 继续走 v1，语义不变。
@@ -120,8 +123,15 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 	for _, item := range envelope.Items {
 		batchBytes += item.U + item.D
 	}
+	// RM-C2-2：本批写者来源走 clientip 可信链解析（与限流面同口
+	// 径），作为 behind 分类的写者维度证据传给记账判定；解析不出
+	// 时传空串（无异源证据，分类降级为 agent_state_behind）。
+	writerAddr := ""
+	if key, ok := clientip.RateLimitKey(r); ok {
+		writerAddr = key
+	}
 	quotaViews, ack, err := h.repo.ApplyTrafficStreamAccounting(
-		batch.flowDeltas, batch.quotaUsage, now, scope, envelope.Sequence, digest)
+		batch.flowDeltas, batch.quotaUsage, now, scope, envelope.Sequence, digest, writerAddr)
 	if err != nil {
 		// 未入账拒绝的可观测（D-C2-01）：两路 409 与下方 behind/
 		// replay 确认同格落结构化日志（class=reset_stream /
@@ -150,7 +160,14 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 	// behind 段的字节数是「被确认但未在本请求入账」的规模——其
 	// 中已入账原批的重发本就该丢弃，回退后新计的同序号批次则
 	// 靠 agent 侧凭回执 cursor 切流止损，日志是面板侧唯一痕迹。
+	// RM-C2-2 补充分支：behind 中被双证据证明为并发克隆写者分岔
+	// 的批次（近窗摘要不同＋来源异于记录写者，判据见 repo
+	// traffic_stream.go 头注）改落 class=identity_conflict 专用
+	// 行（LEDGER5 §7），回执仍为 behind 确认、语义不变。
 	switch {
+	case ack.Behind && ack.IdentityConflict:
+		log.Printf("flow upload v2 ack not booked node_id=%d stream=%s sequence=%d cursor=%d items=%d bytes=%d class=identity_conflict content_match=digest_mismatch writer_source=distinct",
+			node.ID, envelope.Stream, envelope.Sequence, ack.Cursor, len(envelope.Items), batchBytes)
 	case ack.Behind:
 		log.Printf("flow upload v2 ack not booked node_id=%d stream=%s sequence=%d cursor=%d items=%d bytes=%d class=agent_state_behind content_match=unverifiable_old_sequence",
 			node.ID, envelope.Stream, envelope.Sequence, ack.Cursor, len(envelope.Items), batchBytes)
