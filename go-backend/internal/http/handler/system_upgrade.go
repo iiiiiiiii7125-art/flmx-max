@@ -27,11 +27,15 @@ import (
 const (
 	panelDeployDirEnv        = "PANEL_DEPLOY_DIR"
 	panelBackendContainerEnv = "PANEL_BACKEND_CONTAINER"
-	// 改名过渡：新装部署目录为 /opt/flmx-panel；存量面板装在
-	// /opt/flvx-panel，自升级探测时双认（见 newSystemUpgradeExecutor）。
+	// env 透传丢失时的回退恒用 FLMX 标准名（部署目录
+	// /opt/flmx-panel、后端容器 flmx-panel-backend，见
+	// newSystemUpgradeExecutor）。存量旧名部署（/opt/flvx-panel、
+	// flux-panel-backend）的随版 Compose 恒把两键写进后端容器环
+	// 境，env 在场时逐字沿用、再由镜像归属断言把关；只有手写
+	// Compose 把两键一并丢掉时才落到回退，此时宁可报不可升级，
+	// 也绝不凭旧名去探同机另一套旧谱系部署（F4-02）。
 	defaultPanelDeployDir      = "/opt/flmx-panel"
-	legacyPanelDeployDir       = "/opt/flvx-panel"
-	defaultPanelBackendName    = "flux-panel-backend"
+	defaultPanelBackendName    = "flmx-panel-backend"
 	dockerSocketPath           = "/var/run/docker.sock"
 	systemUpgradeMessage       = "升级 helper 已启动，面板服务将短暂重启"
 	systemUpgradeConflictError = "已有面板升级任务执行中"
@@ -339,15 +343,12 @@ type systemUpgradeRequest struct {
 func newSystemUpgradeExecutor() *systemUpgradeExecutor {
 	deployDir := strings.TrimSpace(os.Getenv(panelDeployDirEnv))
 	if deployDir == "" {
-		// 未显式指定时按新名优先、旧名兜底探测实际部署目录；
-		// 都不存在（如全新部署尚未落盘）时用新名默认值。
+		// 未显式指定时恒用 FLMX 标准部署目录，不再回退探测旧名
+		// 目录 /opt/flvx-panel（F4-02）：env 丢失＋同机存量旧谱系
+		// 部署时，旧回退链会把升级动作指向他方部署，只剩镜像归
+		// 属断言兜底；标准名目录不存在时后续能力检查会如实报出
+		// 不可升级，不会误动他人部署。
 		deployDir = defaultPanelDeployDir
-		for _, cand := range []string{defaultPanelDeployDir, legacyPanelDeployDir} {
-			if st, err := os.Stat(cand); err == nil && st.IsDir() {
-				deployDir = cand
-				break
-			}
-		}
 	}
 	backendContainer := strings.TrimSpace(os.Getenv(panelBackendContainerEnv))
 	if backendContainer == "" {
@@ -1400,13 +1401,14 @@ func (e *systemUpgradeExecutor) backendImageRef(ctx context.Context) (string, er
 }
 
 // verifyBackendImageOwnership 是 R2-006（AI-08）的镜像归属断言：
-// 所 inspect 的容器必须确实在跑本项目发布的镜像。构造器在 env
-// 透传丢失时回退共享旧名 flux-panel-backend，同机他方旧装的同名
-// 容器只凭名字与镜像 ID 会被误认成本面板后端——helper 随后将以
-// 他方镜像在本方部署目录上执行升级脚本。引用不在本仓前缀下即
-// 拒绝，并指引脚本更新路径（脚本侧有自己的归属守卫，是这类
-// 部署完成升级的正道）。inspect 失败与现行 currentBackendImage
-// 同口径 fail-closed。
+// 所 inspect 的容器必须确实在跑本项目发布的镜像。容器名来自
+// env 显式指定时逐字沿用（含存量旧名 flux-panel-backend），同机
+// 他方旧装的同名容器只凭名字与镜像 ID 会被误认成本面板后端——
+// helper 随后将以他方镜像在本方部署目录上执行升级脚本。引用不
+// 在本仓前缀下即拒绝，并指引脚本更新路径（脚本侧有自己的归属
+// 守卫，是这类部署完成升级的正道）。inspect 失败与现行
+// currentBackendImage 同口径 fail-closed。env 透传丢失时构造器
+// 只回退 FLMX 标准名（F4-02），不再凭旧名撞同机旧谱系部署。
 func (e *systemUpgradeExecutor) verifyBackendImageOwnership(ctx context.Context) error {
 	ref, err := e.backendImageRef(ctx)
 	if err != nil {
