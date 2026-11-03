@@ -2233,38 +2233,109 @@ export default function ForwardPage() {
     if (!form.remoteAddr.trim()) {
       newErrors.remoteAddr = "请输入落地地址";
     } else {
-      // 验证地址格式
+      // R2-C5-03：校验与后端格式层同口径（此前强制 host:port，误拒
+      // 后端实收的 scheme 形态与裸主机）。口径来源（handler 包）：
+      // splitRemoteParts 按换行/逗号切段去空、段数帽 100
+      // （validateRemoteAddrSegmentCount）；逐段先按
+      // normalizeServerAddressInput 归一（剥 scheme 取 authority 并去
+      // userinfo、首个 /?# 截断）再判定；归一后为空的段不计有效目标，
+      // 全空整单拒（validateRemoteAddrHasTargets）；端口段在场时须为
+      // 1-65535 数字端口、服务名端口同拒（validateRemoteAddrPorts）；
+      // 裸主机按 missing-port 放行、裸 IPv6 的 too-many-colons 拒
+      // （checkSingleRemoteAddrMemo）。提交仍送原文（后端原文照存、
+      // 消费侧同归一），本层只做格式判定；域名解析与内网判定在后端。
+      const normalizeRemoteSegment = (raw: string): string => {
+        let s = raw.trim();
+
+        const schemeIdx = s.indexOf("://");
+
+        if (schemeIdx > 0) {
+          const rest = s.slice(schemeIdx + 3);
+          const authority = rest.split(/[/?#]/)[0];
+          const hostPort = authority.includes("@")
+            ? authority.slice(authority.lastIndexOf("@") + 1)
+            : authority;
+
+          s = hostPort !== "" ? hostPort : rest;
+        }
+        const cut = s.search(/[/?#]/);
+
+        if (cut >= 0) s = s.slice(0, cut);
+
+        return s.trim();
+      };
+      const ipv4HostPattern =
+        /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+      const domainHostPattern =
+        /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/;
+      const bracketedPattern = /^\[[0-9a-fA-F:]+\](?::(\d+))?$/;
+      const isValidPort = (p: string): boolean =>
+        /^\d+$/.test(p) && Number(p) >= 1 && Number(p) <= 65535;
+
       const addresses = form.remoteAddr
         .split("\n")
         .map((addr) => addr.trim())
         .filter((addr) => addr);
-      const ipv4Pattern =
-        /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):\d+$/;
-      const ipv6FullPattern =
-        /^\[((([0-9a-fA-F]{1,4}:){7}([0-9a-fA-F]{1,4}|:))|(([0-9a-fA-F]{1,4}:){6}(:[0-9a-fA-F]{1,4}|((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9a-fA-F]{1,4}:){5}(((:[0-9a-fA-F]{1,4}){1,2})|:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9a-fA-F]{1,4}:){4}(((:[0-9a-fA-F]{1,4}){1,3})|((:[0-9a-fA-F]{1,4})?:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9a-fA-F]{1,4}:){3}(((:[0-9a-fA-F]{1,4}){1,4})|((:[0-9a-fA-F]{1,4}){0,2}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9a-fA-F]{1,4}:){2}(((:[0-9a-fA-F]{1,4}){1,5})|((:[0-9a-fA-F]{1,4}){0,3}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9a-fA-F]{1,4}:){1}(((:[0-9a-fA-F]{1,4}){1,6})|((:[0-9a-fA-F]{1,4}){0,4}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(:(((:[0-9a-fA-F]{1,4}){1,7})|((:[0-9a-fA-F]{1,4}){0,5}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:)))\]:\d+$/;
-      const domainPattern =
-        /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*:\d+$/;
+      let segmentTotal = 0;
+      let remoteError = "";
 
-      for (let i = 0; i < addresses.length; i++) {
-        const addr = addresses[i];
+      for (let i = 0; i < addresses.length && !remoteError; i++) {
+        const segments = addresses[i]
+          .split(",")
+          .map((seg) => seg.trim())
+          .filter((seg) => seg);
 
-        if (
-          !ipv4Pattern.test(addr) &&
-          !ipv6FullPattern.test(addr) &&
-          !domainPattern.test(addr)
-        ) {
-          newErrors.remoteAddr = `第${i + 1}行地址格式错误`;
-          break;
+        segmentTotal += segments.length;
+        let lineHasTarget = false;
+
+        for (const rawSeg of segments) {
+          const seg = normalizeRemoteSegment(rawSeg);
+
+          if (!seg) continue;
+          lineHasTarget = true;
+
+          if (seg.startsWith("[")) {
+            const m = seg.match(bracketedPattern);
+
+            if (!m) {
+              remoteError = `第${i + 1}行地址格式错误`;
+            } else if (m[1] !== undefined && !isValidPort(m[1])) {
+              remoteError = `第${i + 1}行地址端口无效（须为 1-65535 的数字端口）`;
+            }
+          } else {
+            const colonCount = seg.split(":").length - 1;
+
+            if (colonCount === 0) {
+              if (!ipv4HostPattern.test(seg) && !domainHostPattern.test(seg)) {
+                remoteError = `第${i + 1}行地址格式错误`;
+              }
+            } else if (colonCount === 1) {
+              const [host, port] = seg.split(":");
+
+              if (!ipv4HostPattern.test(host) && !domainHostPattern.test(host)) {
+                remoteError = `第${i + 1}行地址格式错误`;
+              } else if (!isValidPort(port)) {
+                remoteError = `第${i + 1}行地址端口无效（须为 1-65535 的数字端口）`;
+              }
+            } else {
+              // 裸 IPv6：后端 SplitHostPort 报 too many colons，照拒；
+              // IPv6 请用 [addr] 或 [addr]:port 形态。
+              remoteError = `第${i + 1}行地址格式错误`;
+            }
+          }
+          if (remoteError) break;
         }
 
-        // 三个格式正则的端口段只限定 \d+，此处再与后端对齐校验 1-65535
-        const portMatch = addr.match(/:(\d+)$/);
-        const port = portMatch ? Number(portMatch[1]) : NaN;
-
-        if (!(port >= 1 && port <= 65535)) {
-          newErrors.remoteAddr = `第${i + 1}行地址端口超出允许范围 1-65535`;
-          break;
+        if (!remoteError && segments.length > 0 && !lineHasTarget) {
+          remoteError = `第${i + 1}行地址格式错误`;
         }
+      }
+
+      if (!remoteError && segmentTotal > 100) {
+        remoteError = "地址段数不能超过 100 个";
+      }
+      if (remoteError) {
+        newErrors.remoteAddr = remoteError;
       }
     }
 
