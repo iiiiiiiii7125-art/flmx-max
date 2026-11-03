@@ -61,31 +61,6 @@ Trigger an immediate sync of a source.
 
 Delete a source.
 
-## POST /api/v1/subscription/group/list
-
-List node groups. A group is a reusable, named node selection plus processing
-pipeline (same source and Options shape as a subscription); subscriptions
-reference groups in order and splice their processed nodes into the rendered
-list, so one recipe can be shared by many subscriptions.
-
-## POST /api/v1/subscription/group/save
-
-Create or update a node group. Saving re-pushes credentials for every
-subscription that references the group.
-
-## POST /api/v1/subscription/group/delete
-
-Delete a node group. Referencing subscriptions keep the (now dangling) id and
-render without the group; credentials on the group's inbounds are withdrawn.
-
-## POST /api/v1/subscription/group/order
-
-Set the display order of node groups.
-
-## POST /api/v1/subscription/group/preview
-
-Preview a group's processed node list without saving.
-
 ## POST /api/v1/subscription/template/list
 
 List subscription templates: admin-supplied Mihomo / sing-box / Surge profile
