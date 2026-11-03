@@ -8,7 +8,7 @@
 
 - 落地机已按 [安装部署](./install.md) 装好节点 agent，并在面板里显示在线
 - Linux amd64 / arm64，root 权限
-- 建议安装 nftables（`apt install nftables`）：入站流量统计、白名单和 Hysteria2 端口跳跃依赖它。一般功能没有 nftables 也能跑，但有一个例外要先知道：入站开启了**白名单**、或节点上有 **Snell** 服务端时，内核启动前必须先把 nft 规则同步成功；nftables 缺失或同步失败时，受保护的内核会**整体不启动**（该内核下全部入站下线）——这是刻意的 fail-closed 口径，不是「少几个功能」的降级运行。这类节点务必先装好 nftables 再启用白名单 / Snell
+- 建议安装 nftables（`apt install nftables`）：入站流量统计、白名单和 Hysteria2 端口跳跃依赖它。一般功能没有 nftables 也能跑，但有一个例外要先知道：入站开启了**白名单**、或节点上有**独立 Snell 内核**的服务端时，内核启动前必须先把 nft 规则同步成功；nftables 缺失或同步失败时，受保护的内核会**整体不启动**（该内核下全部入站下线）——这是刻意的 fail-closed 口径，不是「少几个功能」的降级运行。这类节点务必先装好 nftables 再启用白名单 / Snell。这里的 Snell 只指独立 Snell 内核：sing-box 内置的 Snell 入站走配置面拦截、不经 agent 的 nft 同步，不在这条前置要求之列
 
 ## 安装内核
 
@@ -93,7 +93,7 @@ Xray 内核的 VLESS 入站可开启 VLESS 加密（ENC），启用 ENC 的入�
 - 点红色的「**IEPL专用**」标签：套用纯 ENC 预设——VLESS / TCP / 安全无、ENC 开、ML-KEM-768 后量子认证、xorpub 外观、无 SNI，并同时勾选上面的空闲超时「不限」。只填表单、不创建，也不改已填的节点、端口与名称。
 - 直接拨动「启用 VLESS 加密（ENC）」开关：自动套用标准配置（TCP、安全无、ML-KEM-768 认证、native 外观），同样不开启流控。
 
-流控功能本身不受影响：VLESS Reality 等其他配置照常可以开启 XTLS Vision 流控。
+流控功能本身不受影响：VLESS Reality 等其他配置照常可以开启 XTLS Vision 流控。另外要分清：上面「纯 ENC 不开启流控」说的是两条**填充路径的预设结果**，不是后端禁令——手工编辑入站时把 ENC 与 Vision 流控组合使用是允许的（ENC 是 Vision 的合法加密层），保存与导入都不会被拒，只是没有任何预设会替你这样填。
 
 ### 出站
 
