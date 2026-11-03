@@ -27,6 +27,34 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 
 脚本会自动检测系统是否支持 IPv6，并自动配置 Docker 的 IPv6 支持。
 
+### 同机多面板共存（FLMX_INSTANCE）
+
+同一台服务器上要并存两套互不干扰的面板（一套正式、一套测试等），给第二套设置一个**实例键**：环境变量 `FLMX_INSTANCE`。带实例键的部署，其面板容器、数据卷、网络、Compose 项目名，以及它给节点生成的容器形态安装命令，都会带上 `-<实例键>` 后缀，与默认实例（不设该变量）完全分开；不设时一切命名与单套部署逐字一致，无感。
+
+- **取值规则**：以小写字母或数字开头，其余字符只能是小写字母、数字、`-`、`_`，全长不超过 32 个字符（如 `test`、`panel2`）。安装时脚本会硬校验，取值不合法直接拒绝安装并提示；部署后若 `.env` 里被改成非法值，读回时按默认实例处理并告警。
+- **设置时机**：在**首次运行安装脚本之前**、以环境变量方式传入新部署：换一个空目录，执行 `FLMX_INSTANCE=test ./panel_install.sh`。脚本会自动把实例键落盘到该部署的 `.env`，之后在该目录运行维护菜单（更新 / 卸载等）会自动读回，环境变量与 `.env` 并存时以环境变量为准。不要在首装前手工预置 `.env`：哪怕里面只有 `FLMX_INSTANCE` 一行，也会被当作已有部署触发重装守卫而拒绝。
+- **派生命名全集**（以实例键 `test` 为例）：
+
+  | 资源 | 默认实例 | 实例 `test` |
+  |------|----------|-------------|
+  | 后端容器 | `flmx-panel-backend` | `flmx-panel-backend-test` |
+  | 前端容器 | `flmx-panel-frontend` | `flmx-panel-frontend-test` |
+  | PostgreSQL 容器 | `flmx-panel-postgres` | `flmx-panel-postgres-test` |
+  | SQLite 数据卷 | `flmx-sqlite-data` | `flmx-sqlite-data-test` |
+  | PostgreSQL 数据卷 | `flmx-postgres-data` | `flmx-postgres-data-test` |
+  | 网络 | `flmx-network` | `flmx-network-test` |
+  | Compose 项目名 | `flmx-panel` | `flmx-panel-test` |
+  | 节点 agent 容器（容器形态安装时） | `flmx-agent` | `flmx-agent-test` |
+  | 节点 agent 宿主机数据目录 | `/etc/flmx_agent` | `/etc/flmx_agent-test` |
+  | 节点 agent Compose 落位目录 | `/opt/docker/flmx-agent` | `/opt/docker/flmx-agent-test` |
+
+- **并存注意事项**：
+  - 每套面板用**独立的部署目录**：脚本会拒绝在属于另一套面板的部署目录里安装（强制重装也不放行），不要把两套装进同一个目录。
+  - 两套的**前端 / 后端宿主机端口不能相同**：安装第二套时把端口改开，例如第一套用默认的前端 `6366` / 后端 `6365`，第二套改用 `7366` / `7365`。
+  - **不要给已部署的实例改实例键**：容器名与数据卷名都由实例键派生，改键等于换了一套新身份——会按新键起新容器、新数据卷，旧卷里的数据不会自动带过来。确需改名按迁移处理：先备份 / 导出旧实例数据，再以新键安装并恢复。
+  - 旧版 Compose 模板（资源名写死旧名的版本）不识别实例后缀：装这类版本时脚本会明确告警「实例后缀不生效」，该实例仍用旧缺省名，同机不要再并存第二套该版本部署。
+- **自检**：安装后在部署目录执行 `grep FLMX_INSTANCE .env` 应能看到实例键；`docker ps` 里该套面板的容器名都应带 `-<实例键>` 后缀；再到该面板的节点页生成一条 Docker 形态安装命令，命令里的容器名应为 `flmx-agent-<实例键>`、数据目录应为 `/etc/flmx_agent-<实例键>`。
+
 ### 访问面板
 
 安装完成后，访问：
