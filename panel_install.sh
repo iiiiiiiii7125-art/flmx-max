@@ -41,8 +41,10 @@ SCRIPT_VERSION="20261103.04"
 #      （无法确认方向就不动）；
 #   3) 单跳上限：换版 exec 时置 FLMX_SELF_UPDATE_HOPS=1，新进程据此
 #      不再自更新——任何未知翻转模式下至多跳一次。
-# 注：调用点在本文件末尾（main 之前）——此处仅定义函数，因为
-# resolve_version / 路由助手 / download_verified 定义在后面。
+# 注：调用点在 main() 入口（见文件末尾 main 头注 F-006）——此处
+# 仅定义函数，因为 resolve_version / 路由助手 / download_verified
+# 定义在后面；放 main 内也是刻意为之：测试夹具以「截断到 main 之
+# 前 + source」方式加载函数，顶层调用会误入夹具，切勿移回顶层。
 self_update_check() {
   # 通过进程替换 bash <(...) 执行时 $0 不是常规文件，跳过自更新；
   # 被 source 加载（测试夹具）时 BASH_SOURCE 与 $0 不一致，同样跳过。
@@ -815,6 +817,12 @@ caddy_install_prereqs() {
 # 作者不在部署目录运行即全不中、无任何提示地按默认 6366 写
 # Caddyfile 并报配置完成——同机共存的第二套面板改过前端端口时必
 # 然写错且无从核对。现口径：
+#   0) 调用方进程已预置 FRONTEND_PORT（环境变量/同进程前序步
+#      骤）时先校验再采：合法（^[0-9]+$ 且 1-65535，与下方 .env
+#      分支及安装/更新校验同口径）才直接采用；不合法则告警点名
+#      并忽略预置值、续走下述定位＋候选链（R8-16：旧实现对此分
+#      支零校验，abc/99999 亦静默采纳，可写出形如
+#      reverse_proxy 127.0.0.1:abc 的坏块）；
 #   1) 先按菜单 2/3 同口径做部署定位（resolve_panel_deployment 经
 #      容器标签/显式目录定位、不依赖 cwd）。定位是只读取向：失败
 #      不阻断本菜单，但必须撤销其半成品状态（PANEL_DEPLOY_DIR 与
@@ -826,7 +834,14 @@ caddy_install_prereqs() {
 #      完成输出另打印实际反代端口供操作者核对（见各菜单成功块）。
 resolve_caddy_frontend_port() {
   if [[ -n "${FRONTEND_PORT:-}" ]]; then
-    return 0
+    # R8-16：预置值与其它三条端口来源同口径校验（正则＋范围，算术
+    # 前 10# 强制十进制，同 get_config_params 口径）。合法才采；
+    # 不合法告警点名后清掉预置、续走部署定位＋候选链，不静默采纳。
+    if [[ "$FRONTEND_PORT" =~ ^[0-9]+$ ]] && (( 10#$FRONTEND_PORT >= 1 && 10#$FRONTEND_PORT <= 65535 )); then
+      return 0
+    fi
+    echo "⚠️ 环境预置的 FRONTEND_PORT 不是有效端口（1-65535）：$FRONTEND_PORT，已忽略，改按部署 .env 解析"
+    FRONTEND_PORT=""
   fi
   if [[ -z "${PANEL_DEPLOY_DIR:-}" ]]; then
     local _origin_dir="$PWD"
