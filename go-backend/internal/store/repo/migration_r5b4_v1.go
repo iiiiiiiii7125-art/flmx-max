@@ -94,7 +94,7 @@ func migrateV1PortUserUnique(db *gorm.DB) error {
 			precheck.ForwardPortDups, precheck.ChainTunnelDups, precheck.NodeInboundDups, precheck.UsernameDups)
 		log.Printf("  面板将正常启动，但唯一索引未创建。")
 		log.Printf("  清理步骤：运行 scripts/phase_a_dryrun.sql 定位重复，按手册清理后重启面板。")
-		log.Printf("  详见 doc/guide/upgrade.md「从旧版本升级」。")
+		log.Printf("  详见 doc/guide/upgrade.md「从旧版本升级（含 R5-B4 并发修复）」。")
 		// 记录预检失败（不标记为已应用，下次启动会重试）。
 		return nil
 	}

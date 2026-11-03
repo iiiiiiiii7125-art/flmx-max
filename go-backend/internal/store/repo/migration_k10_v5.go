@@ -68,7 +68,7 @@ func migrateV5UsernameCasefoldUnique(db *gorm.DB) error {
 		log.Printf("  面板将正常启动，但用户名大小写折叠唯一索引未创建；应用层判重仍按大小写不敏感执法。")
 		log.Printf("  上列用户仅大小写不同、按现行口径视为同名；系统不会自动合并/改名，请人工决定保留哪一个后清理。")
 		log.Printf("  定位：scripts/phase_a_dryrun.sql 第 6b 节；清理后重启面板将自动补建索引。")
-		log.Printf("  详见 doc/guide/upgrade.md「从旧版本升级」。")
+		log.Printf("  详见 doc/guide/upgrade.md「从旧版本升级（含 R5-B4 并发修复）」。")
 		return nil
 	}
 
