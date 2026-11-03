@@ -26,6 +26,13 @@ func init() {
 // It resolves domains to IPs to prevent DNS rebinding attacks pointing to internal networks.
 // Supports multiple addresses separated by commas or newlines (one per line).
 func IsSafeRemoteAddr(addr string) error {
+	// R7-04（G-F3-01）：切分后段集为空集（纯分隔符/纯空白）时显式
+	// 拒绝——逐段校验对零个目标真空成立，零目标转发曾可绕过全部
+	// 段校验落库。此为格式无效判、与 SSRF 段校验无关，故置于测试
+	// 旁路之前，对全部调用方恒生效。
+	if err := validateRemoteAddrHasTargets(addr); err != nil {
+		return err
+	}
 	if DisableSafeRemoteAddrCheckForTesting {
 		return nil
 	}
@@ -36,6 +43,41 @@ func IsSafeRemoteAddr(addr string) error {
 		}
 	}
 	return nil
+}
+
+// validateRemoteAddrHasTargets 是 R7-04 空段集谓词的单一定义点：
+// IsSafeRemoteAddr 本体与 forwardCreate/forwardUpdate 的无条件格式
+// 判共用同一口径。管理员豁免与 allow_local_remote_addr 开关只针对
+// netguard 段校验；零有效目标属格式无效、不在豁免范围内。
+func validateRemoteAddrHasTargets(addr string) error {
+	if len(splitRemoteParts(addr)) == 0 {
+		return fmt.Errorf("目标地址不能为空")
+	}
+	return nil
+}
+
+// remoteAddrTargetsChanged 是 R7-05（G-F3-02）的目标变更判定：以
+// splitRemoteParts 的段集（多重集）为准比较提交值与存量值——顺序、
+// 空段与首尾空白差不构成变更，段集相同即目标未实际变更。段集为空
+// 的提交由 R7-04 的格式判在更前处拒绝（空段集与任一非空段集恒不
+// 相等），本谓词不作零目标兜底。
+func remoteAddrTargetsChanged(submitted, stored string) bool {
+	a := splitRemoteParts(submitted)
+	b := splitRemoteParts(stored)
+	if len(a) != len(b) {
+		return true
+	}
+	counts := make(map[string]int, len(a))
+	for _, p := range a {
+		counts[p]++
+	}
+	for _, p := range b {
+		counts[p]--
+		if counts[p] < 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // splitRemoteParts splits a multi-address string by commas and newlines.
