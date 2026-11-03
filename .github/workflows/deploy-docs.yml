@@ -18,7 +18,12 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # Pinned (not ubuntu-latest), same reason as ci-build's frontend
+    # job: the demo check below installs the Chromium pinned by
+    # playwright-core 1.55.0, whose newest supported Ubuntu is 24.04;
+    # a floating latest runner breaks the install (and with it this
+    # gate) for environment reasons.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -60,6 +65,22 @@ jobs:
           VITE_APP_VERSION="$APP_VERSION" \
           VITE_GITHUB_REPO="https://github.com/${{ github.repository }}" \
             pnpm exec vite build --outDir ../doc/.vitepress/dist/demo --emptyOutDir
+
+      # R2-C4-03: gate the publish on the same demo check ci-build
+      # runs. Previously the check existed only in ci-build, which
+      # runs parallel to this workflow with no dependency — a broken
+      # demo (page errors, unrecorded API calls) could reach the
+      # public site on a direct push to main while ci-build was red.
+      # Same pinned browser and same check entry as ci-build's
+      # frontend job; a failure here skips the Deploy step.
+      - name: Install pinned Chromium for demo check
+        working-directory: vite-frontend
+        run: pnpm exec playwright-core install --with-deps chromium
+
+      - name: Check online demo before deploy
+        working-directory: vite-frontend
+        run: |
+          CHROME="$(node -e "const { chromium } = require('playwright-core'); process.stdout.write(chromium.executablePath())")" node scripts/demo/check.mjs ../doc/.vitepress/dist/demo
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4

@@ -58,6 +58,14 @@ FLUX_AGENT_SYSTEMD_SERVICE_FILE="/etc/systemd/system/flux_agent.service"
 FLUX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flux_agent"
 # OpenRC 服务文件里 pidfile="/run/${RC_SVCNAME}.pid"，服务名恒为 flux_agent。
 FLUX_AGENT_OPENRC_PIDFILE="${FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}"
+# 用户取消标志（R2-F7-01，与 panel_install.sh 的 PANEL_OP_CANCELLED
+# 同口径）：卸载确认答非 y 时由 uninstall_flux_agent 置 "1"，main
+# 见标志不调 delete_self、以 0 退出——取消不是「操作已完成」，脚
+# 本保留以便直接重跑。
+AGENT_OP_CANCELLED=""
+# 卸载时待清理的自定义内核目录（R2-F7-I02），由
+# resolve_custom_kernel_dir 在卸载入口判定后写入；空＝无需单独清理。
+CUSTOM_KERNEL_DIR=""
 LEGACY_GOST_BINARY="/usr/local/bin/gost"
 LEGACY_GOST_CONFIG_DIR="/etc/gost"
 LEGACY_GOST_SERVICE_FILE_ETC="/etc/systemd/system/gost.service"
@@ -693,7 +701,9 @@ show_menu() {
 # 下载脚本，自动化消费者也被文案误导。现按 main 传入的返回码分流：
 # 失败时保留脚本并给出失败文案。另补与 panel_install.sh 同口径的
 # /dev/fd 守卫：进程替换/管道执行时 $0 解析出的是 /dev/fd/* 而非脚本
-# 文件，不得对无关路径执行 rm、也不得照印「已删除」。
+# 文件，不得对无关路径执行 rm、也不得照印「已删除」。用户取消单独
+# 走 AGENT_OP_CANCELLED 标志（见 uninstall_flux_agent，R2-F7-01）：
+# main 见标志不调用本函数、保留脚本并以 0 退出。
 delete_self() {
   local rc="${1:-0}"
   if [[ "$rc" != "0" ]]; then
@@ -1819,6 +1829,72 @@ uninstall_flux_agent_host_cleanup() {
   return 0
 }
 
+# R2-F7-I02: 解析 agent 服务定义中配置的内核目录覆盖（FLMX_KERNEL_DIR，
+# 旧名前缀 FLVX_KERNEL_DIR 兜底；与 agent 侧 ResolveBaseDir 的优先级
+# 一致：FLMX_ 优先、同名以最后赋值为准）。来源只限本服务自己的
+# systemd 单元文件与 systemctl edit 落盘的 drop-in 覆盖文件
+# （<单元>.d/*.conf）——脚本形态下该变量只经这两处进入 agent 进程
+# 环境（见 doc/guide/install.md「内核目录覆盖」节）。无配置输出空。
+configured_kernel_dir() {
+  local unit="$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  local files="$unit"
+  local dropin
+  for dropin in "${unit}.d"/*.conf; do
+    [[ -f "$dropin" ]] && files="$files $dropin"
+  done
+  local dir=""
+  # files 是本函数拼的服务定义文件清单，须词分割成多个 grep 参数。
+  dir=$(grep -hoE 'FLMX_KERNEL_DIR=[^[:space:]]+' $files 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d "\"'")
+  if [[ -z "$dir" ]]; then
+    dir=$(grep -hoE 'FLVX_KERNEL_DIR=[^[:space:]]+' $files 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d "\"'")
+  fi
+  printf '%s' "${dir%/}"
+}
+
+# R2-F7-I02: 判定自定义内核目录是否随卸载清理，结果写入全局
+# CUSTOM_KERNEL_DIR（空＝不单独清理）。调用点在 uninstall_flux_agent
+# 已通过归属守卫之后（归属确认前提）；目录值来自 agent 自己的服务
+# 定义，仍须过形态校验：绝对路径、至少两级、不在系统目录名单内、
+# 不是安装目录或其默认内核子目录（那两处随安装目录一并删除）。配
+# 置值形态不可确认时不删、点名披露请人工确认——宁可留痕不误删。
+# 目录非空且找不到任何内核状态痕迹（state.json 或子目录）时同理。
+resolve_custom_kernel_dir() {
+  CUSTOM_KERNEL_DIR=""
+  local dir
+  dir=$(configured_kernel_dir)
+  [[ -n "$dir" ]] || return 0
+  if [[ "$dir" == "$INSTALL_DIR" || "$dir" == "$INSTALL_DIR/kernels" ]]; then
+    return 0
+  fi
+  case "$dir" in
+    /*/*) ;;
+    *)
+      echo "⚠️ FLMX_KERNEL_DIR 配置值（$dir）不是两级以上的绝对路径，卸载不自动清理该目录，请人工确认"
+      return 0
+      ;;
+  esac
+  case "$dir" in
+    /etc|/usr|/var|/bin|/sbin|/lib|/lib64|/boot|/dev|/proc|/sys|/run|/home|/root|/opt|/srv|/mnt|/media|/tmp)
+      echo "⚠️ FLMX_KERNEL_DIR 指向系统目录（$dir），卸载不自动清理，请人工确认"
+      return 0
+      ;;
+  esac
+  if [[ -d "$dir" && -n "$(ls -A "$dir" 2>/dev/null)" && ! -f "$dir/state.json" ]]; then
+    local entry has_subdir=""
+    for entry in "$dir"/*; do
+      if [[ -d "$entry" ]]; then
+        has_subdir="1"
+        break
+      fi
+    done
+    if [[ -z "$has_subdir" ]]; then
+      echo "⚠️ 自定义内核目录 $dir 内未见内核状态痕迹（state.json 或子目录），卸载不自动清理，请人工确认"
+      return 0
+    fi
+  fi
+  CUSTOM_KERNEL_DIR="$dir"
+}
+
 # 卸载功能
 uninstall_flux_agent() {
   echo "🗑️ 开始卸载 flux_agent..."
@@ -1828,10 +1904,22 @@ uninstall_flux_agent() {
   guard_agent_dir_ownership_menu "卸载" "继续卸载会停止并删除它，该节点将从其所属面板掉线。" || return 1
 
   ensure_service_manager || return 1
-  
-  read -p "确认卸载 flux_agent 吗？将停止服务，并删除安装目录、agent 服务文件、调优宿主文件与自建 nft 表，同时恢复调优前的系统参数 (y/N): " confirm
+
+  # R2-F7-I02：先于删服务文件读出自定义内核目录（值在单元/drop-in
+  # 里，服务文件删除后无从查起），卸载末尾一并清理。
+  resolve_custom_kernel_dir
+
+  local confirm_prompt="确认卸载 flux_agent 吗？将停止服务，并删除安装目录、agent 服务文件、调优宿主文件与自建 nft 表，同时恢复调优前的系统参数"
+  if [[ -n "$CUSTOM_KERNEL_DIR" ]]; then
+    confirm_prompt="$confirm_prompt，并删除自定义内核目录 $CUSTOM_KERNEL_DIR"
+  fi
+  read -p "$confirm_prompt (y/N): " confirm
   if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     echo "❌ 取消卸载"
+    # R2-F7-01（与 panel_install.sh 的 C4-F04 同口径）：用户取消置
+    # 标志，main 见标志不自删、退出 0；返回码维持 0 的干净 no-op
+    # 口径——什么都没卸，不谎报「操作已完成」、不删脚本。
+    AGENT_OP_CANCELLED="1"
     return 0
   fi
 
@@ -1858,6 +1946,13 @@ uninstall_flux_agent() {
   if [[ -d "$INSTALL_DIR" ]]; then
     rm -rf "$INSTALL_DIR"
     echo "🧹 删除安装目录: $INSTALL_DIR"
+  fi
+
+  # R2-F7-I02：自定义内核目录在安装目录之外，单独清理（判定见
+  # resolve_custom_kernel_dir，已在确认提示中点名）。
+  if [[ -n "$CUSTOM_KERNEL_DIR" && -d "$CUSTOM_KERNEL_DIR" ]]; then
+    rm -rf "$CUSTOM_KERNEL_DIR"
+    echo "🧹 删除自定义内核目录: $CUSTOM_KERNEL_DIR"
   fi
 
   echo "✅ 卸载完成"
@@ -1900,7 +1995,15 @@ main() {
   # 显示交互式菜单
   while true; do
     show_menu
-    read -p "请输入选项 (1-4): " choice
+    # R2-F7-03：stdin EOF 时 read 返回失败、choice 为空，旧实现走无
+    # 效选项分支后 while true 继续——install.sh 无 set -e 兜底，形
+    # 成刷屏忙循环。与 panel_install.sh 同行为：EOF 即退出（其
+    # set -e 下同一 read 失败令脚本以 1 退出）。
+    if ! read -p "请输入选项 (1-4): " choice; then
+      echo ""
+      echo "❌ 输入已结束（EOF），退出脚本"
+      exit 1
+    fi
 
     case $choice in
       1)
@@ -1914,7 +2017,13 @@ main() {
         exit "$rc"
         ;;
       3)
+        AGENT_OP_CANCELLED=""
         uninstall_flux_agent || rc=$?
+        # R2-F7-01：用户取消——操作函数已打印取消说明并置标志，
+        # 不自删、退出 0（与 panel_install.sh 的 C4-F04 同口径）。
+        if [[ "${AGENT_OP_CANCELLED:-}" == "1" ]]; then
+          exit 0
+        fi
         delete_self "$rc"
         exit "$rc"
         ;;
