@@ -5604,13 +5604,28 @@ test_panel_migrate_postgres_rollbacks() (
     esac
   }
   docker() {
+    case "$1" in
+      ps)
+        # 真等待函数按名查运行中容器：本夹具部署为旧缺省名三件套。
+        printf '%s\n' "flux-panel-postgres" "flux-panel-backend" "vite-frontend"
+        return 0
+        ;;
+      inspect)
+        case "$*" in
+          *Health.Status*) printf 'healthy\n' ;;
+        esac
+        return 0
+        ;;
+    esac
     case "$*" in
       *pgloader*) [[ ! -f "$FIXTURE_FLAGS/pgloader-fail" ]] ;;
       *) return 0 ;;
     esac
   }
-  wait_for_postgres_healthy() { return 0; }
-  wait_for_backend_healthy() { return 0; }
+  # R3-F7-01：两个健康等待函数不再整体打桩——等待内的容器名推导
+  # 须被真实执行。本夹具 .env 无身份键，真等待应按缺省旧名命中上
+  # 方 docker 桩的清单（存量部署口径）；flmx 身份名的推导由
+  # test_panel_migrate_waits_use_deployment_container_names 专测。
   sleep() { :; }
 
   local rc
@@ -5646,6 +5661,98 @@ test_panel_migrate_postgres_rollbacks() (
   assert_equals "0" "$rc" "L2-02: migration should succeed when every step succeeds"
   grep -q '^DB_TYPE=postgres' .env || fail "L2-02: successful migration must switch .env to postgres"
   [[ ! -e .env.pre-postgres-migration ]] || fail "L2-02: successful migration must delete the env snapshot"
+)
+
+# R3-F7-01: 迁移的健康等待必须按部署 .env 的身份名查容器——旧实
+# 现只把后端/前端名读进 local、PG 名从未自 .env 读过，两等待函数
+# 从全局重导恒落 DEFAULT 旧名（flux-panel-*），flmx 命名部署在 PG
+# 等待处 90 秒超时回滚。本例不打桩等待函数：docker 桩记录每次
+# inspect 的被查容器名、ps 只报部署的真实容器名，断言两等待命中
+# 的是 .env 身份名（默认实例与实例派生名各一幕）、旧名从未被查
+# 询、迁移走通。同幕兼验 R3-F7-02：已存在 compose 缺可信代理跳
+# 数传递行时，迁移后必须补齐（旧实现只在下载分支补行）。
+test_panel_migrate_waits_use_deployment_container_names() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  unset PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_DEPLOY_DIR FLMX_INSTANCE
+
+  check_docker() { DOCKER_CMD="fixture_compose"; return 0; }
+  fixture_compose() { return 0; }
+  sleep() { :; }
+
+  docker() {
+    case "$1" in
+      ps)
+        cat "$FIXTURE_PS_NAMES"
+        return 0
+        ;;
+      inspect)
+        # 记录被查容器名（恒为最后一个参数）；健康形态答 healthy，
+        # 镜像形态答本面板镜像（归属实物证据）。
+        local last="${!#}"
+        printf '%s\n' "$last" >> "$FIXTURE_INSPECT_LOG"
+        case "$*" in
+          *Health.Status*) printf 'healthy\n' ;;
+          *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test" ;;
+        esac
+        return 0
+        ;;
+    esac
+    return 0
+  }
+
+  # $1=后端名 $2=前端名 $3=PG名：构造该身份的部署并跑一次迁移，
+  # 断言等待查询名、补行与迁移结果。
+  run_migrate_name_scenario() {
+    local backend="$1" frontend="$2" postgres="$3"
+    local work
+    work=$(mktemp -d)
+    FIXTURE_PS_NAMES="$work/ps-names"
+    FIXTURE_INSPECT_LOG="$work/inspect-log"
+    printf '%s\n' "$postgres" "$backend" "$frontend" > "$FIXTURE_PS_NAMES"
+    : > "$FIXTURE_INSPECT_LOG"
+    cat > "$work/.env" <<EOF
+JWT_SECRET=test-secret
+DB_TYPE=sqlite
+POSTGRES_DB=flux_panel
+POSTGRES_USER=flux_panel
+POSTGRES_PASSWORD=test-pg-pass
+PANEL_BACKEND_CONTAINER=$backend
+PANEL_FRONTEND_CONTAINER=$frontend
+PANEL_POSTGRES_CONTAINER=$postgres
+EOF
+    # compose 带 backend environment 段但缺可信代理跳数行（F7-02 面）。
+    cat > "$work/docker-compose.yml" <<'EOF'
+services:
+  backend:
+    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test
+    environment:
+      DB_TYPE: sqlite
+  frontend:
+    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test
+EOF
+    local rc="0"
+    ( cd "$work" && migrate_to_postgres >"$work/migrate.log" 2>&1 ) || rc="$?"
+    assert_equals "0" "$rc" "R3-F7-01: migration must succeed for deployment identity $backend"
+    grep -Fxq "$postgres" "$FIXTURE_INSPECT_LOG" || \
+      fail "R3-F7-01: postgres wait must inspect the deployment container $postgres"
+    grep -Fxq "$backend" "$FIXTURE_INSPECT_LOG" || \
+      fail "R3-F7-01: backend wait must inspect the deployment container $backend"
+    if grep -Fxq "flux-panel-postgres" "$FIXTURE_INSPECT_LOG"; then
+      fail "R3-F7-01: postgres wait must never fall back to the legacy default name"
+    fi
+    if grep -Fxq "flux-panel-backend" "$FIXTURE_INSPECT_LOG"; then
+      fail "R3-F7-01: backend wait must never fall back to the legacy default name"
+    fi
+    grep -q 'FLMX_TRUSTED_PROXY_HOPS' "$work/docker-compose.yml" || \
+      fail "R3-F7-02: migration with an existing compose must add the trusted proxy hops line"
+    grep -q '^DB_TYPE=postgres' "$work/.env" || \
+      fail "R3-F7-01: scenario migration must switch .env to postgres"
+  }
+
+  run_migrate_name_scenario "flmx-panel-backend" "flmx-panel-frontend" "flmx-panel-postgres"
+  run_migrate_name_scenario "flmx-panel-backend-b2" "flmx-panel-frontend-b2" "flmx-panel-postgres-b2"
 )
 
 # AI-01/AI-02/AI-04/AI-05: 共存守卫归属谓词矩阵——守卫函数本体真实
@@ -6755,6 +6862,7 @@ test_install_script_download_resumes_across_routes
 test_install_script_resolve_budget_enforced
 test_install_script_uppercase_sha256_accepted
 test_panel_migrate_postgres_rollbacks
+test_panel_migrate_waits_use_deployment_container_names
 test_panel_ownership_predicates_matrix
 test_panel_resolve_refuses_foreign_panel_deployment
 test_panel_resolve_accepts_instance_deployment

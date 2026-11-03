@@ -3024,16 +3024,34 @@ migrate_to_postgres() {
       echo "❌ 写入 Compose 配置失败，迁移终止"
       return 1
     fi
-    # R6-L8-F-01：同安装路径，落盘前补齐可信代理跳数传递行。
-    ensure_compose_trusted_proxy_hops docker-compose.yml || true
     echo "✅ docker-compose.yml 下载完成"
   fi
 
+  # R3-F7-02：install.md 宣称安装、更新与迁移都会保证可信代理跳数
+  # 传递行存在（R6-L8-F-01）；旧实现只在上方「Compose 缺失 → 下载」
+  # 分支内补行，常态迁移（Compose 已存在）缺行不补、迁移后仍旧缺
+  # 行。现把补行提到分支外无条件执行：函数内已有该行即返回、
+  # best-effort（|| true）与安装/更新同口径；下载分支刚落盘的
+  # compose 也由这一处覆盖，不再单独调用。
+  ensure_compose_trusted_proxy_hops docker-compose.yml || true
+
   # 资源名：新装身份写在 .env 里，缺省回退旧名，存量部署行为不变。
-  local backend_container="${PANEL_BACKEND_CONTAINER:-$(get_env_var PANEL_BACKEND_CONTAINER || true)}"
-  backend_container="${backend_container:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
-  local frontend_container="${PANEL_FRONTEND_CONTAINER:-$(get_env_var PANEL_FRONTEND_CONTAINER || true)}"
-  frontend_container="${frontend_container:-vite-frontend}"
+  # R3-F7-01：健康等待函数（wait_for_postgres_healthy /
+  # wait_for_backend_healthy）从全局 PANEL_*_CONTAINER 取名，而迁移
+  # 路径不经 resolve_panel_deployment 填充全局——旧实现只把后端/
+  # 前端名读进 local、PG 名从未自 .env 读过，两等待恒落 DEFAULT
+  # 旧名（flux-panel-*），flmx 命名部署（含实例派生名）的迁移必
+  # 在 PG 健康等待处超时回滚、后端等待同理误判。现与 resolve 同
+  # 口径收口：三名一律按「显式全局 → 部署 .env → 缺省旧名」补齐
+  # 到全局，local 与两等待函数自此同源。
+  PANEL_BACKEND_CONTAINER="${PANEL_BACKEND_CONTAINER:-$(get_env_var PANEL_BACKEND_CONTAINER || true)}"
+  PANEL_BACKEND_CONTAINER="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-$(get_env_var PANEL_FRONTEND_CONTAINER || true)}"
+  PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-vite-frontend}"
+  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$(get_env_var PANEL_POSTGRES_CONTAINER || true)}"
+  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
+  local backend_container="$PANEL_BACKEND_CONTAINER"
+  local frontend_container="$PANEL_FRONTEND_CONTAINER"
   local sqlite_volume postgres_volume network_name
   sqlite_volume=$(panel_sqlite_volume_name)
   postgres_volume=$(panel_postgres_volume_name)
