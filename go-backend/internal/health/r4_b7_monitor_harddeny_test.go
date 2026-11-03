@@ -15,6 +15,8 @@ import (
 // checker 分发面对存量硬拒目标跳过下发并记结果（不发命令）。
 
 func TestR4B7ValidateNodeMonitorTargetHardDeny(t *testing.T) {
+	// 密封解析：nonexistent.invalid 恒走解析失败分支，不依赖环境 DNS。
+	sealMonitorDNSForTest(t, nil)
 	deny := []struct{ typ, target string }{
 		{"tcp", "169.254.169.254:80"},
 		{"tcp", "169.254.0.23:443"},

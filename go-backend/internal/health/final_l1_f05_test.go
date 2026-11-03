@@ -7,6 +7,8 @@ import "testing"
 // 空标签是纯语法判定、在任何 DNS 下都不可解析，语法层即拒，
 // 不触碰「面板与节点 DNS 分视图，解析失败不拒存」的设计。
 func TestFinalL1F05NodeMonitorTargetRejectsEmptyLabel(t *testing.T) {
+	// 密封解析：nonexistent.invalid 恒走解析失败分支，不依赖环境 DNS。
+	sealMonitorDNSForTest(t, nil)
 	reject := []struct{ typ, target string }{
 		{"tcp", "a..b:80"},
 		{"tcp", "a...b:443"},

@@ -1,6 +1,9 @@
 package health
 
-import "testing"
+import (
+	"net"
+	"testing"
+)
 
 // PORT-CLOSURE Lane D — PC-09（P3）：ValidateNodeMonitorTarget icmp 分支
 // 对 Target "host:port" 校验容忍（monitor_ssrf.go:97-102）。探针按
@@ -8,6 +11,11 @@ import "testing"
 // 合法域名/裸主机/icmp 目标仍通过（R4X-008「解析失败不拒存」的域名
 // Lookup 容忍原由不受影响）；tcp 面口径不变。
 func TestPortClosureDPC09ICMPTargetWithPortRejected(t *testing.T) {
+	// 密封解析：example.com 恒解析为公网地址、其余域名恒解析失败，
+	// 放行断言走哪条分支不依赖环境 DNS。
+	sealMonitorDNSForTest(t, map[string][]net.IP{
+		"example.com": {net.ParseIP("93.184.216.34")},
+	})
 	reject := []string{
 		"203.0.113.7:80",
 		"10.0.0.1:8080",

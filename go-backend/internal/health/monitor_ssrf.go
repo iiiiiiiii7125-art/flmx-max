@@ -56,6 +56,22 @@ func isMonitorIPAllowlisted(ip net.IP) bool {
 	return false
 }
 
+// monitorLookupIP 是监控目标校验的 DNS 解析面（本机面
+// ValidateMonitorTCPTarget 与节点面 ValidateNodeMonitorTarget 共用）。
+// 生产恒为 net.LookupIP；测试经 PinMonitorLookupIPForTesting 密封——
+// 校验断言不得依赖运行环境的真实解析结果（沙箱 DNS 曾把公网域名
+// 解析到保留段，致公网域名用例在基线与修复树上同形假红）。
+var monitorLookupIP = net.LookupIP
+
+// PinMonitorLookupIPForTesting 仅供测试：把监控目标校验的 DNS 解析
+// 钉到调用方给定的查询函数，返回恢复函数。生产代码从不调用本函数；
+// 未被测试调用时行为与既往完全一致（仍走 net.LookupIP）。
+func PinMonitorLookupIPForTesting(fn func(host string) ([]net.IP, error)) (restore func()) {
+	prev := monitorLookupIP
+	monitorLookupIP = fn
+	return func() { monitorLookupIP = prev }
+}
+
 // ValidateMonitorTCPTarget 校验面板本机执行的 TCP 监控目标。
 // target 形如 host:port。返回 nil 表示允许面板本机拨号。
 // 域名会做 DNS 解析并逐 IP 判定（任一命中即拒绝，fail-closed）。
@@ -126,7 +142,7 @@ func ValidateNodeMonitorTarget(typ, target string) error {
 		}
 		return nil
 	}
-	ips, err := net.LookupIP(host)
+	ips, err := monitorLookupIP(host)
 	if err != nil || len(ips) == 0 {
 		// 解析失败不拒存（见函数头注）。
 		return nil
@@ -149,7 +165,7 @@ func resolveValidatedMonitorIPs(host string) ([]net.IP, error) {
 		ips = []net.IP{ip}
 	} else {
 		var err error
-		ips, err = net.LookupIP(host)
+		ips, err = monitorLookupIP(host)
 		if err != nil || len(ips) == 0 {
 			return nil, fmt.Errorf("目标主机无法解析: %s", host)
 		}
