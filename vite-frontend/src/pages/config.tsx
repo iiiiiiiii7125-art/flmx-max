@@ -1131,7 +1131,9 @@ export default function ConfigPage() {
               src={bgImage}
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent flex items-end p-4">
-              <span className="text-white text-sm font-medium">预览效果</span>
+              <span className="rounded bg-black/70 px-1.5 py-0.5 text-white text-sm font-medium">
+                预览效果
+              </span>
             </div>
           </div>
         )}

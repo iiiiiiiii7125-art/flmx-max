@@ -41,9 +41,9 @@ const INSTALL_MODE_DESCRIPTIONS: Record<NodeInstallMode, string> = {
   script:
     "在节点服务器上下载安装脚本并以系统服务（systemd / OpenRC）方式安装 agent，配置与数据位于 /etc/flux_agent。",
   docker:
-    "节点服务器需已安装 Docker。命令把节点配置写入 /etc/flmx_agent/config.json（权限 600），并以 host 网络 + NET_ADMIN 能力启动容器 flmx-agent；重复执行会重建该容器（升级/重装同理）。容器日志用 docker logs flmx-agent 查看。",
+    "节点服务器需已安装 Docker。命令把节点配置写入宿主机数据目录下的 config.json（默认 /etc/flmx_agent/config.json，多面板共存实例为 /etc/flmx_agent-<实例键>/config.json，权限 600），并以 host 网络 + NET_ADMIN 能力启动容器（默认名 flmx-agent，实例为 flmx-agent-<实例键>）；重复执行会重建该容器（升级/重装同理）。容器日志用 docker logs <容器名> 查看（容器名以命令本身为准）。",
   "docker-compose":
-    "节点服务器需已安装 Docker Compose。命令把节点配置写入 /etc/flmx_agent/config.json（权限 600），并把 Compose 文件写到 /opt/docker/flmx-agent/docker-compose.yaml 后启动；之后可用 docker compose -f 该文件管理。修改调优开关后重新获取命令再执行一次即可，只重写这一个 Compose 文件。",
+    "节点服务器需已安装 Docker Compose。命令把节点配置写入宿主机数据目录下的 config.json（默认 /etc/flmx_agent/config.json，多面板共存实例为 /etc/flmx_agent-<实例键>/config.json，权限 600），并把 Compose 文件写到默认 /opt/docker/flmx-agent/docker-compose.yaml（实例为 /opt/docker/flmx-agent-<实例键>/docker-compose.yaml）后启动；之后可用 docker compose -f 该文件管理。修改调优开关后重新获取命令再执行一次即可，只重写这一个 Compose 文件。",
 };
 
 /** The command that installs the agent on a node. */
@@ -159,7 +159,9 @@ export function InstallCommandModal({
               {installMode === "script" ? (
                 <span className="font-mono">journalctl -u flux_agent -n 100</span>
               ) : (
-                <span className="font-mono">docker logs flmx-agent</span>
+                <span className="font-mono">
+                  docker logs flmx-agent（多面板共存实例为 flmx-agent-&lt;实例键&gt;）
+                </span>
               )}{" "}
               查看连接日志，并核对「网站配置」中面板后端地址的 scheme
               是否与面板实际对外方式一致（HTTPS 面板须为 https://）。
