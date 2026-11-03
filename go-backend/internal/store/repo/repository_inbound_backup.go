@@ -289,6 +289,17 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			Userinfo: src.Userinfo,
 		})
 	}
+	// F6-02：删除屏蔽登记随源一同导出——否则全量恢复后管理员手工
+	// 删过的导入节点会被下一轮源同步复活，且回执无从知晓。
+	var shields []model.RemoteSourceShield
+	if err := r.db.Order("source_id ASC, id ASC").Find(&shields).Error; err != nil {
+		return nil, err
+	}
+	for _, sh := range shields {
+		out.Shields = append(out.Shields, model.RemoteSourceShieldBackup{
+			SourceID: sh.SourceID, IdentityKey: sh.IdentityKey, Name: sh.Name, CreatedTime: sh.CreatedTime,
+		})
+	}
 	// A3-04：订阅计数基线与入站基线同等待遇随备份导出。
 	var subCounters []model.SubscriptionCounter
 	if err := r.db.Order("id ASC").Find(&subCounters).Error; err != nil {
@@ -307,20 +318,10 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 	for _, sub := range subs {
 		out.Subscriptions = append(out.Subscriptions, model.SubscriptionBackup{
 			ID: sub.ID, Name: sub.Name, Kind: sub.Kind, Token: sub.Token, UUID: sub.UUID, Password: sub.Password,
-			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, SourceIDs: sub.SourceIDs, GroupIDs: sub.GroupIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
+			SourceAll: sub.SourceAll, InboundIDs: sub.InboundIDs, SourceIDs: sub.SourceIDs, Options: sub.Options, ExpireTime: sub.ExpireTime,
 			Enabled: sub.Enabled, Remark: sub.Remark, Inx: sub.Inx, CreatedTime: sub.CreatedTime,
 			UploadBytes: sub.UploadBytes, DownloadBytes: sub.DownloadBytes, TrafficLimit: sub.TrafficLimit,
 			ResetDay: sub.ResetDay, TrafficResetTime: sub.TrafficResetTime, TrafficSince: sub.TrafficSince, PendingDelete: sub.PendingDelete,
-		})
-	}
-	var groups []model.NodeGroup
-	if err := r.db.Order("inx ASC, id ASC").Find(&groups).Error; err != nil {
-		return nil, err
-	}
-	for _, g := range groups {
-		out.NodeGroups = append(out.NodeGroups, model.NodeGroupBackup{
-			ID: g.ID, Name: g.Name, SourceAll: g.SourceAll, InboundIDs: g.InboundIDs, SourceIDs: g.SourceIDs,
-			Options: g.Options, Inx: g.Inx, CreatedTime: g.CreatedTime,
 		})
 	}
 	var templates []model.SubscriptionTemplate
@@ -500,6 +501,7 @@ type inboundImportCounts struct {
 	subscriptions       int
 	subscriptionCounter int
 	sources             int
+	shields             int
 	groups              int
 	templates           int
 	legacyUsers         int
@@ -665,22 +667,43 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		counts.sources++
 	}
 
-	// Node groups after sources (their source ids point at them) and
-	// before subscriptions (their group ids point at the groups).
-	// Upserted by id, so restored subscriptions keep working group
-	// references without a remap.
-	for _, gb := range b.NodeGroups {
-		item := model.NodeGroup{
-			ID: gb.ID, Name: gb.Name, SourceAll: gb.SourceAll, InboundIDs: gb.InboundIDs, SourceIDs: gb.SourceIDs,
-			Options: gb.Options, Inx: gb.Inx, CreatedTime: gb.CreatedTime, UpdatedTime: now,
+	// F6-02：删除屏蔽登记随源落库（源已按 ID 保号恢复，屏蔽键的
+	// 源 ID 仍指向同一源）。（source_id, identity_key）唯一键 upsert，
+	// 重复恢复幂等。源行不存在的屏蔽（源段被跳过/不在本备份内）
+	// 跳过并计数披露，不写悬空登记。
+	for _, sh := range b.Shields {
+		if sh.IdentityKey == "" {
+			rep.skip("shields")
+			continue
+		}
+		shieldSourceExists, err := rowExistsTx(tx, &model.RemoteSource{}, sh.SourceID)
+		if err != nil {
+			return inboundImportCounts{}, err
+		}
+		if !shieldSourceExists {
+			rep.skip("shields")
+			continue
+		}
+		created := sh.CreatedTime
+		if created == 0 {
+			created = now
+		}
+		item := model.RemoteSourceShield{
+			SourceID: sh.SourceID, IdentityKey: sh.IdentityKey, Name: sh.Name, CreatedTime: created,
 		}
 		if err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "source_all", "inbound_ids", "source_ids", "options", "inx", "updated_time"}),
+			Columns:   []clause.Column{{Name: "source_id"}, {Name: "identity_key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"name"}),
 		}).Create(&item).Error; err != nil {
 			return inboundImportCounts{}, err
 		}
-		counts.groups++
+		counts.shields++
+	}
+
+	// 节点组段披露：节点组功能已移除（1.9.6），旧备份的 nodeGroups
+	// 只计数点名、不再落库（InboundsBackup.NodeGroups 仅作解码壳）。
+	if len(b.NodeGroups) > 0 {
+		rep.warnf("备份恢复：节点组功能已移除，备份中的 nodeGroups 段（%d 条）已忽略未恢复", len(b.NodeGroups))
 	}
 
 	for _, i := range b.Inbounds {
@@ -1058,6 +1081,9 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		return inboundImportCounts{}, err
 	}
 	seedReused := false
+	// 节点组引用披露计数：订阅行不再写入 groupIds（节点组功能已
+	// 移除），携带非空引用的订阅在此计数、循环后统一披露。
+	subsWithGroupIDs := 0
 	subs := append([]model.SubscriptionBackup(nil), b.Subscriptions...)
 	for _, u := range b.Users {
 		subs = append(subs, model.SubscriptionBackup{
@@ -1078,9 +1104,12 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if res.Error != nil {
 			return inboundImportCounts{}, res.Error
 		}
+		if strings.TrimSpace(sb.GroupIDs) != "" {
+			subsWithGroupIDs++
+		}
 		item := model.Subscription{
 			Name: sb.Name, Kind: sb.Kind, Token: sb.Token, UUID: sb.UUID, Password: sb.Password,
-			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, GroupIDs: sb.GroupIDs, Options: remapTemplateRefs(sb.Options), ExpireTime: sb.ExpireTime, Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
+			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, Options: remapTemplateRefs(sb.Options), ExpireTime: sb.ExpireTime, Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
 			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
 			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime, TrafficSince: sb.TrafficSince, PendingDelete: sb.PendingDelete,
 		}
@@ -1118,6 +1147,10 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if sb.ID > 0 && subRemap != nil {
 			subRemap[sb.ID] = item.ID
 		}
+	}
+
+	if subsWithGroupIDs > 0 {
+		rep.warnf("备份恢复：节点组功能已移除，%d 条订阅携带的 groupIds 引用已忽略未恢复（订阅本身与其余来源照常恢复）", subsWithGroupIDs)
 	}
 
 	if danglingTemplateRefs > 0 {

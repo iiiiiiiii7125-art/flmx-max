@@ -19,7 +19,7 @@ import (
 // （R2X-003/004/032，BC-R2-06）：创建类 POST 的请求级幂等。
 //
 // 新增创建端点必须同批接入幂等（idemBegin），
-// 不得留待后续批次补接。当前覆盖面 14 个创建 handler（scope 常量）：
+// 不得留待后续批次补接。当前覆盖面 13 个创建 handler（scope 常量）：
 //
 // forwardCreate "forward:create" （mutations.go）
 // nodeCreate "node:create" （mutations.go）
@@ -34,7 +34,6 @@ import (
 // subscriptionTemplateSave "subscription-template:create" （仅 ID==0 新建分支，R10-06 补接）
 // tunnelCreate "tunnel:create" （mutations.go）
 // userCreate "user:create" （mutations.go）
-// groupCreate "user-group:create" / "tunnel-group:create"
 //
 // 明确不接：一切 update/delete/assign/set/install/import/split
 // （ID 定位或替换语义；kernelInstall 为单例 upsert）。
