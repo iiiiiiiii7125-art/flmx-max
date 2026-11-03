@@ -73,4 +73,17 @@ else
   echo "FAIL: variant 4 caught but the missing derivation was not named"; sed 's/^/    /' "$TMP/v4.log"; exit 1
 fi
 
+echo "== variant 5: rewrite one panel CIDR as a quoted-content raw string must FAIL and name the segment (R7 census) =="
+cp "$ROOT/go-backend/internal/kernel/private_ranges.go" "$MIR/go-backend/internal/kernel/private_ranges.go"
+cp "$ROOT/go-gost/x/kernel/snell_guard.go" "$MIR/go-gost/x/kernel/snell_guard.go"
+sed -i 's|"198.18.0.0/15",|`"198.18.0.0/15"`,|' "$MIR/go-backend/internal/kernel/private_ranges.go"
+if bash "$GATE" "$MIR" > "$TMP/v5.log" 2>&1; then
+  echo "FAIL: variant 5 was not caught (raw-string phantom CIDR still counted)"; exit 1
+fi
+if grep -q "198.18.0.0/15" "$TMP/v5.log"; then
+  echo "OK: variant 5 caught and named"
+else
+  echo "FAIL: variant 5 caught but the segment was not named"; sed 's/^/    /' "$TMP/v5.log"; exit 1
+fi
+
 echo "SELFTEST PASS"

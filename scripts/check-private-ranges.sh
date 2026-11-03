@@ -22,6 +22,9 @@
 # 符串/符文字面量内容保留）落临时副本，段集提取与 mapped 前提均
 # 只对剥离后的代码面判定；注释形态自本轮起与删除同效。自检新增
 # 两变体钉死此口径（注释掉一段必红、删派生代码仅留注释必红）。
+# 修复轮 7 普查追加：剥离副本再经 raw_blank 消隐原始字符串内容
+# （两文件本无原始字符串），防引号 CIDR 文本藏进原始字符串冒充
+# 段集元素；自检变体 5 钉死。
 #
 # 背景：sing-box 守卫曾用 ip_is_private 谓词，其 netip 段集缺 CGNAT
 # 100.64.0.0/10 与基准段 198.18.0.0/15，与 Snell 正本不一致而静默
@@ -81,11 +84,49 @@ go_strip() {
     }'
 }
 
-# 后续全部判定只对剥注释后的代码面副本进行。
+# raw_blank：把原始字符串（反引号）的内容逐字替换为空格（换行
+# 保留）。go_strip 按词法保留原始字符串内容——段集提取的
+# '"…"' grep 与 mapped 前提 grep 都会把原始字符串里引号包裹的
+# CIDR 形文本当作元素/派生在位：把某段元素改写成内容为带引号
+# CIDR 的原始字符串，运行时该元素是带引号的无效段、门却仍计
+# 数一致（修复轮 7 普查登记的同族残面，R7-27 机制在 doc 门之
+# 外的第二落点）。本门两文件不含任何原始字符串（段集元素与派
+# 生均以解释型字符串写出），故对剥注释副本再消隐原始字符串内
+# 容，提取面只剩代码与解释型字面量。输入已剥注释，只需跟踪
+# 字符串/符文/原始字符串三态。
+raw_blank() {
+  awk '
+    BEGIN { st = 0; q = sprintf("%c", 39) }
+    {
+      line = $0; out = ""; n = length(line)
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1); nx = substr(line, i + 1, 1)
+        if (st == 0) {
+          if (c == "\"") st = 3
+          else if (c == "`") { st = 4; out = out " "; continue }
+          else if (c == q) st = 5
+          out = out c
+        } else if (st == 3) {
+          out = out c
+          if (c == "\\") { out = out nx; i++ }
+          else if (c == "\"") st = 0
+        } else if (st == 4) {
+          if (c == "`") { st = 0; out = out " " } else out = out " "
+        } else if (st == 5) {
+          out = out c
+          if (c == "\\") { out = out nx; i++ }
+          else if (c == q) st = 0
+        }
+      }
+      print out
+    }'
+}
+
+# 后续全部判定只对剥注释＋消隐原始字符串后的代码面副本进行。
 BE_S="$(mktemp)"; AG_S="$(mktemp)"
 trap 'rm -f "$BE_S" "$AG_S"' EXIT
-go_strip < "$BE" > "$BE_S"
-go_strip < "$AG" > "$AG_S"
+go_strip < "$BE" | raw_blank > "$BE_S"
+go_strip < "$AG" | raw_blank > "$AG_S"
 
 # extract <file> <varname>：打印 var <varname> = []string{ ... } 块内
 # 全部 CIDR 形字符串字面量（去重排序）。输入已剥注释，注释掉的段
