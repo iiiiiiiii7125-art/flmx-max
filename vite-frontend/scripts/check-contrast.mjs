@@ -7,7 +7,7 @@
 // 玻璃面（三级配方）按文末「玻璃合成网格」段复算——梯度停点与四
 // 种底色（纯黑／纯白／内置壁纸明暗双区采样）逐格合成后断言正文
 // 对；小字恒在不透明托盘上（托盘六对在 25 对内），不入玻璃网格。
-// R2-S1-01/02/05 扩集（文末三段）：托盘 hover 六对入断言（>= 7）；
+// R2-S1-01/02/05 扩集与 ghost 同族尾项（文末各段）：托盘 hover 六对入断言（>= 7）；
 // 语义色文字在玻璃语境下经 --glass-text-* 深档渲染，其全格网格与
 // src 普查（fail-closed 差集）入断言；桥 Button 的半透明白 wash
 // 载体族退役、由托盘与实色 -800 档承接，退役签名入断言。
@@ -1457,6 +1457,113 @@ for (const mapName of [
     `solid default 标签对：#ffffff on --default-800 = ${ratio.toFixed(2)}（钉值 14.89、底线 4.5）`,
     ratio >= 4.5 && Math.abs(ratio - 14.89) <= 0.1,
     `实测 ${ratio.toFixed(2)}`,
+  );
+}
+
+// ── 桥 Button ghost 变体（R2-S1-02 同族尾项）────────────────
+// ghost 静止态无载体（透明底＋继承色）、hover 只有 white/40
+// wash：按本门数学（零 blur 抵扣）复算，继承正文色直坐壁纸暗
+// 区静止仅 1.09、hover wash 叠纯黑/暗区仅 3.09/3.32，与已退役
+// wash 族同形——S1-02 整改时登记为范围外观察，本尾项按同族不
+// 漏口径根治。修法在定义级：ui/button 的 ghost 类串加 btn-ghost
+// 标记（标记本身无样式），globals.css 覆盖块在两类暴露语境给
+// 它中性托盘载体——玻璃语境内（标签否则骑玻璃网格 6.22 的底
+// 线级最差格）、壁纸模式下（has-wallpaper-bg/has-custom-bg，可
+// 直坐图像）。覆盖语境外无任何规则命中，渲染逐值不变。本段断
+// 言：① ghost 类串逐字钉住（标记＋原 wash hover 在册）；
+// ② 桥 mapVariant 的 ghost→ghost 定义链在册；③ .btn-ghost 在
+// globals.css 只出现在覆盖块区域内，且区域内托盘三声明与两
+// 类语境选择器齐备（撤覆盖即红）；④ 覆盖后有效对按 token 复
+// 算：静止/hover 均 >= 7 目标并对平钉值 9.50/8.23；⑤ 使用面
+// 普查——整改在定义级，任何 variant="ghost" 使用面自动落入
+// 覆盖，普查报告计数并以定义链在册为覆盖依据。
+const uiButtonSrc = readFileSync(
+  join(here, "..", "src/components/ui/button.tsx"),
+  "utf8",
+);
+
+check(
+  "ghost 类串逐字钉住（btn-ghost 标记＋原 hover wash，覆盖语境外逐值不变）",
+  uiButtonSrc.includes('ghost: "btn-ghost hover:bg-white/40 hover:text-foreground"'),
+  "ui/button.tsx 的 ghost 变体类串已漂移——须同步评估覆盖块与本段",
+);
+check(
+  "桥 mapVariant ghost→ghost 定义链在册",
+  buttonSrc.includes('return "ghost";'),
+  "shadcn-bridge/heroui/button.tsx 的 ghost 映射缺失",
+);
+{
+  const ghostRegion =
+    glassTextRegion.length > 0
+      ? glassTextRegion.slice(glassTextRegion.indexOf(".btn-ghost"))
+      : "";
+  const cssOutsideRegion = glassTextRegion
+    ? css.split(glassTextRegion).join("")
+    : css;
+
+  check(
+    "ghost 覆盖规则只在 GLASS-TEXT-OVERRIDES 区域内（区域外 .btn-ghost 零命中）",
+    ghostRegion.length > 0 && !cssOutsideRegion.includes(".btn-ghost"),
+    "标记类样式泄漏到覆盖块之外——实色面行为将不再逐值不变",
+  );
+  check(
+    "ghost 覆盖块齐备（玻璃语境＋壁纸双模式选择器＋托盘三声明）",
+    ghostRegion.includes(".glass-card") &&
+      ghostRegion.includes("has-wallpaper-bg .btn-ghost") &&
+      ghostRegion.includes("has-custom-bg .btn-ghost") &&
+      ghostRegion.includes("background: var(--tray-default);") &&
+      ghostRegion.includes("color: var(--tray-default-foreground);") &&
+      ghostRegion.includes("background: var(--tray-default-hover);"),
+    "覆盖块缺选择器或托盘声明——撤覆盖/改浅即应由本断言点名",
+  );
+  const ghostStatic =
+    tokens["--tray-default-foreground"] && tokens["--tray-default"]
+      ? contrast(tokens["--tray-default-foreground"], tokens["--tray-default"])
+      : 0;
+  const ghostHover =
+    tokens["--tray-default-foreground"] && tokens["--tray-default-hover"]
+      ? contrast(
+          tokens["--tray-default-foreground"],
+          tokens["--tray-default-hover"],
+        )
+      : 0;
+
+  check(
+    `ghost 玻璃/壁纸语境有效对（静止）：--tray-default-foreground on --tray-default = ${ghostStatic.toFixed(2)}（钉值 9.50、目标 7）`,
+    ghostStatic >= 7 && Math.abs(ghostStatic - 9.5) <= 0.1,
+    `实测 ${ghostStatic.toFixed(2)}`,
+  );
+  check(
+    `ghost 玻璃/壁纸语境有效对（hover）：--tray-default-foreground on --tray-default-hover = ${ghostHover.toFixed(2)}（钉值 8.23、目标 7）`,
+    ghostHover >= 7 && Math.abs(ghostHover - 8.23) <= 0.1,
+    `实测 ${ghostHover.toFixed(2)}`,
+  );
+}
+{
+  let ghostUses = 0;
+  let scannedFiles = 0;
+  const ghostWalk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        ghostWalk(path);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        scannedFiles++;
+        const text = readFileSync(path, "utf8");
+
+        ghostUses += (
+          text.match(/variant=\{?["']ghost["']\}?/g) ?? []
+        ).length;
+      }
+    }
+  };
+
+  ghostWalk(join(here, "..", "src"));
+  check(
+    `ghost 使用面普查（实扫 ${scannedFiles} 文件、variant="ghost" ${ghostUses} 处，定义级覆盖自动落入）`,
+    scannedFiles > 0,
+    "普查扫描面失效",
   );
 }
 

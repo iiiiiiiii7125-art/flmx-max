@@ -15,7 +15,12 @@ const buttonVariants = cva(
           "border border-input bg-content1 hover:bg-white/40 hover:text-foreground",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-white/40 hover:text-foreground",
+        // btn-ghost is a marker only: it carries no styles of its own.
+        // In glass / wallpaper contexts globals.css gives it the opaque
+        // tray-default carrier (see GLASS-TEXT-OVERRIDES there); outside
+        // those contexts the variant renders exactly as before —
+        // transparent at rest, white/40 wash on hover.
+        ghost: "btn-ghost hover:bg-white/40 hover:text-foreground",
         link: "text-primary-700 underline-offset-4 hover:underline",
         // flat/light carry no background here: the bridge colour maps own
         // the (Round 4 tray) background so text never lands on glass.
