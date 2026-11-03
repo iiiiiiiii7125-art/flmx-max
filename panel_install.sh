@@ -2081,16 +2081,19 @@ validate_panel_update_compose() {
 # 要），同时把磁盘占用与密钥副本留置量一并钉死。
 BACKUP_RETENTION_KEEP=3
 
-# R9-11: 时间戳命名备份的保留轮换。备份名以时间戳开头（字典序即
-# 时间序），按名排序后只保留最近 keep 份、删更旧的；更新备份目
-# 录（backups/panel-update-*）与强制重装的 .env.bak.<ts> /
-# docker-compose.yml.bak.<ts> 同口径共用。轮换是收尾清理动作：
-# 单项失败只告警点名，不阻断主流程。
+# R9-11: 时间戳命名备份的保留轮换。只保留最近 keep 份、删更旧
+# 的；更新备份目录（backups/panel-update-*）与强制重装的
+# .env.bak.<ts> / docker-compose.yml.bak.<ts> 同口径共用。轮换
+# 是收尾清理动作：单项失败只告警点名，不阻断主流程。
+# I-C4-06: 排序键是 mtime（旧→新）、同秒并列以名序兜底，不再按
+# 名字典序——名字携带未来时间戳的备份（墙钟曾被拨快期间生成等
+# 形态）若按名排序会永久占住一个保留槽（真实保留份数被静默压
+# 到 keep-1），按其落盘 mtime 排序则回到正常年龄序。
 prune_timestamped_backups() {
   local keep="$1"
   shift
   local -a items=()
-  local item
+  local item mtime
   for item in "$@"; do
     if [[ -e "$item" ]]; then
       items+=("$item")
@@ -2101,7 +2104,12 @@ prune_timestamped_backups() {
     return 0
   fi
   local -a sorted=()
-  mapfile -t sorted < <(printf '%s\n' "${items[@]}" | LC_ALL=C sort)
+  mapfile -t sorted < <(
+    for item in "${items[@]}"; do
+      mtime=$(stat -c %Y -- "$item" 2>/dev/null) || mtime=0
+      printf '%s\t%s\n' "$mtime" "$item"
+    done | LC_ALL=C sort -t $'\t' -k1,1n -k2,2 | cut -f2-
+  )
   local i remove_count=$((total - keep))
   for (( i = 0; i < remove_count; i++ )); do
     rm -rf "${sorted[i]}" || echo "⚠️ 清理旧备份失败：${sorted[i]}（可手动删除）"

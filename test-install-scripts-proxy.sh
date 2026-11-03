@@ -2033,6 +2033,55 @@ test_prune_timestamped_backups_keeps_newest() (
     fail "R9-11: the oldest timestamped backups must be pruned"
 )
 
+# I-C4-06 钉格（fix10 S8）：轮换排序键是 mtime 而非名字典序。名字
+# 携带未来时间戳的备份（墙钟曾被拨快期间生成、其后又被以旧 mtime
+# 拷回/还原入位等形态）不得凭名字永久占住保留槽：构造未来戳条目
+# mtime 最旧、3 份真实备份 mtime 递增，keep=3 时未来戳被清、真实
+# 3 份全在。旧实现按名排序时本用例必红（2099 名最大必留、真实最
+# 旧者反被删）。文件族（.env.bak.*）与目录族（panel-update-*）同
+# 函数同口径，两形都钉。
+test_prune_timestamped_backups_future_name_old_mtime_pruned() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work ts
+  work=$(mktemp -d)
+  cd "$work"
+  printf 'x' > ".env.bak.20990101000000"
+  touch -d '2026-01-01 00:00:00' ".env.bak.20990101000000"
+  for ts in 20260101000001 20260101000002 20260101000003; do
+    printf 'x' > ".env.bak.$ts"
+  done
+  touch -d '2026-01-02 00:00:00' ".env.bak.20260101000001"
+  touch -d '2026-01-03 00:00:00' ".env.bak.20260101000002"
+  touch -d '2026-01-04 00:00:00' ".env.bak.20260101000003"
+  prune_timestamped_backups 3 .env.bak.*
+  assert_equals "3" "$(ls .env.bak.* | wc -l)" \
+    "I-C4-06: timestamped backups must rotate down to the keep count"
+  [[ ! -e .env.bak.20990101000000 ]] || \
+    fail "I-C4-06: a future-named backup with the oldest mtime must not occupy a retention slot"
+  [[ -f .env.bak.20260101000001 && -f .env.bak.20260101000002 && -f .env.bak.20260101000003 ]] || \
+    fail "I-C4-06: the three real backups must survive rotation"
+
+  mkdir -p backups
+  cd backups
+  mkdir "panel-update-20990101-000000.skewed"
+  touch -d '2026-01-01 00:00:00' "panel-update-20990101-000000.skewed"
+  for ts in 20260102-000000 20260103-000000 20260104-000000; do
+    mkdir "panel-update-$ts"
+  done
+  touch -d '2026-01-02 00:00:00' "panel-update-20260102-000000"
+  touch -d '2026-01-03 00:00:00' "panel-update-20260103-000000"
+  touch -d '2026-01-04 00:00:00' "panel-update-20260104-000000"
+  prune_timestamped_backups 3 panel-update-*
+  assert_equals "3" "$(ls -d panel-update-* | wc -l)" \
+    "I-C4-06: update backup dirs must rotate down to the keep count"
+  [[ ! -e "panel-update-20990101-000000.skewed" ]] || \
+    fail "I-C4-06: a future-named backup dir with the oldest mtime must not occupy a retention slot"
+  [[ -d "panel-update-20260102-000000" && -d "panel-update-20260103-000000" && -d "panel-update-20260104-000000" ]] || \
+    fail "I-C4-06: the three real backup dirs must survive rotation"
+)
+
 test_panel_install_script_accepts_proxy_url_env_without_prompt() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -6245,6 +6294,7 @@ test_backup_sqlite_for_update_pauses_copies_and_unpauses
 test_backup_sqlite_for_update_excludes_github_cache
 test_create_panel_update_backup_rotates_to_keep
 test_prune_timestamped_backups_keeps_newest
+test_prune_timestamped_backups_future_name_old_mtime_pruned
 test_install_panel_refusal_names_force_reinstall_usage
 test_install_panel_up_failure_names_force_reinstall
 test_install_panel_postgres_health_failure_has_guidance
