@@ -5446,6 +5446,85 @@ test_panel_menu5_warns_when_deploy_env_not_found() (
     fail "R6-03: menu 5 should fall back to 6366 after warning"
 )
 
+# R8-16（菜单 6 端到端）：环境预置 FRONTEND_PORT 为畸形值（abc /
+# 99999）时不得静默采纳——必须告警点名并忽略预置、回退到部署
+# .env 候选链（全不中时 6366），写出的前置块与完成回执只许出现
+# 合法端口。旧实现对预置分支零校验：abc 被逐字写成
+# reverse_proxy 127.0.0.1:abc 且成功回执照印该端口（caddy 二进制
+# 缺位、校验被跳过时坏块直接落盘），本用例对旧代码必红。
+test_panel_menu6_rejects_malformed_preset_frontend_port() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+  unset PANEL_DEPLOY_DIR
+  resolve_panel_deployment() { return 1; }
+
+  local scratch_dir
+  scratch_dir=$(mktemp -d)
+
+  cat > "$CADDYFILE_PATH" <<'EOF'
+panel.example.com {
+    reverse_proxy 127.0.0.1:6366
+}
+EOF
+
+  FRONTEND_PORT=abc
+  local log="$FIXTURE_DIR/menu6-badpreset.log" rc="0"
+  ( cd "$scratch_dir" && setup_subscription_front_domain <<< "sub.example.com" >"$log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R8-16: menu 6 should still complete via fallback when the preset port is malformed"
+  grep -q '环境预置的 FRONTEND_PORT 不是有效端口' "$log" || \
+    fail "R8-16: menu 6 must warn by name when the preset FRONTEND_PORT is malformed"
+  if grep -q '127.0.0.1:abc' "$CADDYFILE_PATH"; then
+    fail "R8-16: malformed preset port must never be written into the Caddyfile"
+  fi
+  grep -A1 '^sub.example.com {' "$CADDYFILE_PATH" | grep -q 'reverse_proxy 127.0.0.1:6366' || \
+    fail "R8-16: menu 6 must fall back to a valid port for the front block"
+  grep -q '实际反代端口: 127.0.0.1:6366' "$log" || \
+    fail "R8-16: menu 6 completion output must print the valid fallback port"
+
+  FRONTEND_PORT=99999
+  local log2="$FIXTURE_DIR/menu6-badpreset2.log" rc2="0"
+  ( cd "$scratch_dir" && setup_subscription_front_domain <<< "sub2.example.com" >"$log2" 2>&1 ) || rc2="$?"
+  assert_equals "0" "$rc2" "R8-16: menu 6 should still complete via fallback when the preset port is out of range"
+  grep -q '环境预置的 FRONTEND_PORT 不是有效端口' "$log2" || \
+    fail "R8-16: out-of-range preset port must be warned by name too"
+  if grep -q '127.0.0.1:99999' "$CADDYFILE_PATH"; then
+    fail "R8-16: out-of-range preset port must never be written into the Caddyfile"
+  fi
+  grep -A1 '^sub2.example.com {' "$CADDYFILE_PATH" | grep -q 'reverse_proxy 127.0.0.1:6366' || \
+    fail "R8-16: menu 6 must fall back to a valid port for the second front block"
+)
+
+# R8-16（resolve 单元支）：预置畸形时不是硬失败、也不是直接落到
+# 默认值——告警后清掉预置并续走候选链，部署 .env 的合法值仍须被
+# 采到（与 .env 分支「合法才采」同语义）。旧实现直接采纳 abc，
+# FRONTEND_PORT 终值为 abc，本用例对旧代码必红。
+test_panel_resolve_falls_through_chain_on_malformed_preset() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  unset PANEL_DEPLOY_DIR
+
+  local deploy_dir scratch_dir
+  deploy_dir=$(mktemp -d)
+  scratch_dir=$(mktemp -d)
+  printf 'FRONTEND_PORT=7366\n' > "$deploy_dir/.env"
+  export R8_DEPLOY_DIR="$deploy_dir"
+  resolve_panel_deployment() {
+    PANEL_DEPLOY_DIR="$R8_DEPLOY_DIR"
+    export PANEL_DEPLOY_DIR
+    return 0
+  }
+
+  # 在当前（测试子）壳内直调：resolve 对 FRONTEND_PORT 的修改须对断言可见。
+  FRONTEND_PORT=abc
+  local log="$scratch_dir/resolve-badpreset.log"
+  resolve_caddy_frontend_port >"$log" 2>&1
+  assert_equals "7366" "$FRONTEND_PORT" \
+    "R8-16: malformed preset must be ignored and the deployment .env port adopted"
+  grep -q '环境预置的 FRONTEND_PORT 不是有效端口' "$log" || \
+    fail "R8-16: resolve must warn by name when ignoring a malformed preset"
+)
+
 # R6-04：域名解析到非本机 IP 时不得打 ✅ 假绿——必须按未解析同级
 # 警告并要求显式确认：拒绝确认则终止且不写 Caddyfile，确认后才
 # 继续（旧实现只判能否解析、直接 ✅ 放行，两幕对旧代码必红）。
@@ -5503,6 +5582,8 @@ test_panel_domain_compare_case_insensitive
 test_panel_menu5_resolves_deploy_dir_port_outside_cwd
 test_panel_menu6_resolves_deploy_dir_port_outside_cwd
 test_panel_menu5_warns_when_deploy_env_not_found
+test_panel_menu6_rejects_malformed_preset_frontend_port
+test_panel_resolve_falls_through_chain_on_malformed_preset
 test_panel_menu5_dns_pointing_elsewhere_warns
 test_install_script_respects_disabled_proxy
 test_install_script_never_asks_for_proxy_config
