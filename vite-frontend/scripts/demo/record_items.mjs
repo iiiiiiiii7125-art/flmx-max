@@ -104,23 +104,14 @@ if (sub0) {
   for (const range of ["hour", "day", "month"])
     await call(tok, "POST", "subscription/traffic", { id: trafficSub.id, range, tzOffset: -480, tz: "Asia/Shanghai" });
 }
-// (l) node groups + subscription templates: the subscription page
-// fetches group/list on mount (the page walk records it too; the
-// direct call keeps the key if the walk's timing changes), while
-// template/list + template/catalog only fire when the templates modal
-// opens and group/preview + template/check only from the editors —
-// none of which the walk clicks. Record them here with editor-shaped
-// drafts taken from the first recorded group / template, mirroring
-// (i). The seed (seed_3) creates one group and one template and a
-// subscription using both, so these answers are non-empty.
-const groupList = (await call(tok, "POST", "subscription/group/list")).data;
+// (l) subscription templates: template/list + template/catalog only
+// fire when the templates modal opens and template/check only from
+// the editors — none of which the walk clicks. Record them here with
+// an editor-shaped draft taken from the first recorded template,
+// mirroring (i). The seed (seed_3) creates one template and a
+// subscription using it, so these answers are non-empty.
 const tplList = (await call(tok, "POST", "subscription/template/list")).data;
 await call(tok, "POST", "subscription/template/catalog");
-const grp0 = groupList?.items?.[0];
-if (grp0) {
-  const { id, name, sourceAll, inboundIds, sourceIds, options } = grp0;
-  await call(tok, "POST", "subscription/group/preview", { id, name, sourceAll, inboundIds, sourceIds, options });
-}
 const tpl0 = Array.isArray(tplList) ? tplList[0] : tplList?.items?.[0];
 if (tpl0) {
   const { id, name, kind, content, sourceUrl } = tpl0;
