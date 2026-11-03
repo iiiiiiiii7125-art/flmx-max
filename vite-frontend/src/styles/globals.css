@@ -570,6 +570,34 @@ body {
   :is(.glass-card, .glass-surface, .glass-inset).text-warning {
     color: var(--glass-text-warning);
   }
+  /* Ghost buttons (R2-S1-02 family tail): the bridge ghost variant
+     rests transparent with an inherited label colour and only gains a
+     translucent white/40 wash on hover — no carrier of its own. On a
+     dark wallpaper region that reads 1.09 at rest and 3.09–3.32 on
+     hover (gate math, zero blur credit), the same failure shape as
+     the retired wash carriers. Per the wash-retirement precedent it
+     takes the opaque neutral tray in the two exposed contexts: inside
+     a glass carrier (where its label otherwise rides the glass grid's
+     6.22 floor-grade worst cell instead of a target-grade pair) and
+     anywhere under a painted wallpaper (built-in or custom), where it
+     may sit directly on the image. Outside those contexts no rule
+     matches and the variant renders exactly as before; the tray pair
+     is gate-pinned (static 9.50, hover 8.23). check-contrast.mjs
+     censuses the .btn-ghost marker to this region. */
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) .btn-ghost,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.btn-ghost),
+  :root.has-wallpaper-bg .btn-ghost,
+  :root.has-custom-bg .btn-ghost {
+    background: var(--tray-default);
+    color: var(--tray-default-foreground);
+  }
+  :is(.glass-card, .glass-surface, .glass-inset, .accordion-splitted > [data-slot="accordion-item"]) .btn-ghost:hover,
+  :is(.glass-card, .glass-surface, .glass-inset):is(.btn-ghost):hover,
+  :root.has-wallpaper-bg .btn-ghost:hover,
+  :root.has-custom-bg .btn-ghost:hover {
+    background: var(--tray-default-hover);
+    color: var(--tray-default-foreground);
+  }
   /* GLASS-TEXT-OVERRIDES:END */
 
   .scrollbar-hide {
