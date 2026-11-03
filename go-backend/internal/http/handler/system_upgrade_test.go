@@ -392,6 +392,55 @@ func TestRestoreBackupPreservesOriginalFileMode(t *testing.T) {
 	}
 }
 
+// I-C3-02 钉格：自升级的部署文件写点（.env 版本行改写、.upgrade.bak
+// 备份与恢复）全部走原子写（同目录临时文件 + Rename）。可观察契约：
+// 写完内容与权限精确、部署目录不留 .tmp-* 临时残形；原非原子直写
+// helper 已删除，本测试与 TestUpdateEnvVersion*/TestUpgradeBackup*
+// 一起保证覆写语义（双备份路径、失败恢复）不回归。
+func TestUpgradeFileWritesLeaveNoTempResidue(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("FLUX_VERSION=2.1.8\nJWT_SECRET=<redacted>\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	exec := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
+	if _, err := exec.backupFile(envPath); err != nil {
+		t.Fatalf("backupFile() error = %v", err)
+	}
+	if err := exec.updateEnvVersion(envPath, "2.1.9"); err != nil {
+		t.Fatalf("updateEnvVersion() error = %v", err)
+	}
+	if err := exec.restoreBackup(envPath); err != nil {
+		t.Fatalf("restoreBackup() error = %v", err)
+	}
+
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "FLUX_VERSION=2.1.8\nJWT_SECRET=<redacted>\n"; string(data) != want {
+		t.Fatalf("restored env = %q, want %q (backup/restore roundtrip must be exact)", string(data), want)
+	}
+	info, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("env mode = %o, want 0600", got)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".tmp-") {
+			t.Fatalf("atomic write left temp residue %q in deploy dir", entry.Name())
+		}
+	}
+}
+
 func TestDecodeSystemUpgradeRequestRejectsTruncatedJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/check-updates", strings.NewReader(`{"channel":"stable"`))
 	var payload systemUpgradeRequest

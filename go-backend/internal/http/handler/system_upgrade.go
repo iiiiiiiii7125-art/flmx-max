@@ -802,10 +802,10 @@ func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error 
 		} else {
 			trimmed += "\nFLUX_VERSION=" + version
 		}
-		return writeFileWithMode(envPath, []byte(trimmed+"\n"), mode)
+		return writeFileAtomicWithMode(envPath, []byte(trimmed+"\n"), mode)
 	}
 	content := strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
-	return writeFileWithMode(envPath, []byte(content), mode)
+	return writeFileAtomicWithMode(envPath, []byte(content), mode)
 }
 
 func (e *systemUpgradeExecutor) backupFile(path string) (string, error) {
@@ -818,7 +818,7 @@ func (e *systemUpgradeExecutor) backupFile(path string) (string, error) {
 		return "", err
 	}
 	backupPath := path + ".upgrade.bak"
-	if err := writeFileWithMode(backupPath, data, mode); err != nil {
+	if err := writeFileAtomicWithMode(backupPath, data, mode); err != nil {
 		return "", err
 	}
 	return backupPath, nil
@@ -834,7 +834,7 @@ func (e *systemUpgradeExecutor) restoreBackup(path string) error {
 	if err != nil {
 		return err
 	}
-	return writeFileWithMode(path, data, mode)
+	return writeFileAtomicWithMode(path, data, mode)
 }
 
 func (e *systemUpgradeExecutor) restoreUpgradeBackups(paths ...string) error {
@@ -911,7 +911,7 @@ func (e *systemUpgradeExecutor) replaceCompose(path string, data []byte) error {
 	} else {
 		data = ensureComposeTrustedProxyHops(nil, data)
 	}
-	return writeFileWithMode(path, data, mode)
+	return writeFileAtomicWithMode(path, data, mode)
 }
 
 // preserveComposeNetworks 把存量 compose 的网络设置（networks.<name>
@@ -1293,16 +1293,13 @@ func fileModeOrDefault(path string, fallback os.FileMode) (os.FileMode, error) {
 	return info.Mode().Perm(), nil
 }
 
-func writeFileWithMode(path string, data []byte, mode os.FileMode) error {
-	if err := os.WriteFile(path, data, mode); err != nil {
-		return err
-	}
-	return os.Chmod(path, mode)
-}
-
 // writeFileAtomicWithMode 以「同目录临时文件 + Rename 覆盖」原子落盘：
 // 并发读者只会看到旧内容或新内容，不会读到截断写中途的撕裂态。用于
-// 升级状态文件这类写方回写瞬间读方正在判定的跨进程文件（B05-002）。
+// 升级状态文件这类写方回写瞬间读方正在判定的跨进程文件（B05-002），
+// 以及自升级对 .env / docker-compose.yml 的整份覆写与 .upgrade.bak
+// 备份/恢复——整机断电落在写中途时，现行文件保持旧内容完好，不再
+// 依赖人工拿 .upgrade.bak 还原（I-C3-02）。本文件的部署文件写点
+// 一律走此路，原非原子直写 helper 已删除，勿再引入。
 func writeFileAtomicWithMode(path string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
