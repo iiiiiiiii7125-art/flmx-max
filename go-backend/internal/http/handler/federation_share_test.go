@@ -481,7 +481,15 @@ func TestFederationTunnelCreateCreatesPeerShareRuntime(t *testing.T) {
 	}
 }
 
-func TestFederationTunnelCreateRejectsOccupiedPort(t *testing.T) {
+// TestFederationTunnelCreateOccupiedPortReplayOrReject pins the R10-07
+// caliber (LEDGER10): a retry of tunnel/create with the SAME (share, port,
+// target, protocol) after a lost first receipt replays the existing tunnelId
+// with code 0 instead of being rejected, while a create whose target differs
+// on an occupied port is still rejected 403. This test previously asserted
+// that even the identical retry was rejected with 403; that premise was
+// overturned by the R10-07 adjudication (see r10_fedidem_test.go for the
+// full replay matrix).
+func TestFederationTunnelCreateOccupiedPortReplayOrReject(t *testing.T) {
 	r, err := repo.Open(filepath.Join(t.TempDir(), "panel.db"))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -514,8 +522,8 @@ func TestFederationTunnelCreateRejectsOccupiedPort(t *testing.T) {
 		t.Fatalf("create share: %v", err)
 	}
 
-	create := func() response.R {
-		body, err := json.Marshal(federationTunnelRequest{Protocol: "tcp", RemotePort: 24101, Target: "1.1.1.1:443"})
+	create := func(target string) response.R {
+		body, err := json.Marshal(federationTunnelRequest{Protocol: "tcp", RemotePort: 24101, Target: target})
 		if err != nil {
 			t.Fatalf("marshal request: %v", err)
 		}
@@ -533,18 +541,40 @@ func TestFederationTunnelCreateRejectsOccupiedPort(t *testing.T) {
 		}
 		return payload
 	}
+	tunnelIDOf := func(payload response.R) int64 {
+		data, ok := payload.Data.(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected map data, got %T", payload.Data)
+		}
+		id, ok := data["tunnelId"].(float64)
+		if !ok || id <= 0 {
+			t.Fatalf("expected positive tunnelId, got %v", data["tunnelId"])
+		}
+		return int64(id)
+	}
 
-	first := create()
+	first := create("1.1.1.1:443")
 	if first.Code != 0 {
 		t.Fatalf("expected first create success, got %d (%s)", first.Code, first.Msg)
 	}
+	firstID := tunnelIDOf(first)
 
-	second := create()
-	if second.Code != 403 {
-		t.Fatalf("expected second create to be rejected with 403, got %d (%s)", second.Code, second.Msg)
+	// Identical retry (lost-receipt case): replays the existing tunnel.
+	second := create("1.1.1.1:443")
+	if second.Code != 0 {
+		t.Fatalf("expected identical retry to replay with code 0, got %d (%s)", second.Code, second.Msg)
 	}
-	if second.Msg != "Port already in use" {
-		t.Fatalf("expected occupied port message, got %q", second.Msg)
+	if got := tunnelIDOf(second); got != firstID {
+		t.Fatalf("expected replay of tunnelId %d, got %d", firstID, got)
+	}
+
+	// Same occupied port but a different target: still rejected.
+	third := create("8.8.8.8:443")
+	if third.Code != 403 {
+		t.Fatalf("expected different-target create on occupied port to be rejected with 403, got %d (%s)", third.Code, third.Msg)
+	}
+	if third.Msg != "Port already in use" {
+		t.Fatalf("expected occupied port message, got %q", third.Msg)
 	}
 }
 
