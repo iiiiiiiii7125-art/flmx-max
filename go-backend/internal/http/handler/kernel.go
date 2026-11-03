@@ -1434,10 +1434,25 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 	// 站删除失败时伴生已被删，须由后续对账以新端口 + 新身份凭据
 	// 重建，已分发的计量链接在窗口内指向失效的旧伴生。
 	h.deleteCompanionOf(id)
+	// R10-04：外部行若来自订阅源，手工删除同写删除屏蔽，源后续同步
+	// 不再自动恢复它（见 remote_source.go 的 shieldDeletedImportedRow）。
+	// 删除本体已落库，屏蔽登记失败不回滚删除、只在回执里点名。
+	var shieldErr error
+	if isExternalInbound(row) {
+		shieldErr = h.shieldDeletedImportedRow(row)
+	}
 	for _, target := range outboundTargets(*row) {
 		h.applyWhitelistedTarget(target)
 	}
 	if isExternalInbound(row) {
+		if shieldErr != nil {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已删除，但删除屏蔽登记失败，订阅源后续同步可能恢复该节点: " + shieldErr.Error(), TS: time.Now().UnixMilli()})
+			return
+		}
+		if row.SourceID > 0 {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已删除。该节点来自订阅源，已登记删除屏蔽，订阅源后续同步不会再自动恢复它", TS: time.Now().UnixMilli()})
+			return
+		}
 		response.WriteJSON(w, response.OKEmpty())
 		return
 	}
@@ -1659,6 +1674,11 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 		// E6-S1 同型补齐：伴生连带删除同样移至本行删除成功之后
 		// （失败项的伴生保持原样，理由同 inboundDelete）。
 		h.deleteCompanionOf(id)
+		// R10-04：批删同写删除屏蔽（与单删同口径，见 inboundDelete）；
+		// 登记失败不回滚已落库的删除、只记日志，批回执口径不变。
+		if err := h.shieldDeletedImportedRow(row); err != nil {
+			log.Printf("inbound batch delete: shield deleted imported inbound %d failed: %v", id, err)
+		}
 		deletedIDs[id] = true
 		s++
 		markKernel(row)

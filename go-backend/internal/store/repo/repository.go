@@ -492,6 +492,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.SubscriptionTraffic{},
 		&model.SubscriptionTemplate{},
 		&model.RemoteSource{},
+		&model.RemoteSourceShield{},
 	}
 
 	if db.Dialector.Name() != "sqlite" {

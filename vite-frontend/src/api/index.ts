@@ -1397,6 +1397,8 @@ export interface RemoteSyncResult {
   kept: number;
   keptUnknown: number;
   keptStale: number;
+  /** Entries skipped because the node was deleted by hand and shielded (R10-04). */
+  shielded: number;
   errors: string[];
 }
 export const getRemoteSources = () =>
