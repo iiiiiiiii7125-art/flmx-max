@@ -129,7 +129,7 @@ var snellDownload = &Download{
 		// 6.0.0 is a beta; Surge publishes no armv7 build of it.
 		"6.0.0": {
 			"amd64":   "8a9c4463ca87cfa5eaa37c6af0d37ab93ea275aa12391985bb2a375ca3abd7f2",
-			"aarch64": "a0b2915cbc77dc3baf8fa069e741c20808d8a93e709a0a580645c3bd7",
+			"aarch64": "a0b2915cbc77dc3baf8fa069e741c20808d8a10c3a8a93e709a0a580645c3bd7",
 		},
 		"5.0.1": {
 			"amd64":   "9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539",
