@@ -1723,11 +1723,19 @@ func agentImageRef(version string) string {
 // （addr/secret 两字段），umask 077 + chmod 600 保证 secret 不经
 // 宽松权限落盘。addr 在 handler 侧已过格式校验、secret 为库内
 // 取值，与脚本形态同一插值口径。
+//
+// 同一步播种 gost.json（与 install.sh 的初始 {} 对齐）：agent 的
+// 配置加载要求 gost.json 存在，缺失即 Fatal 退出——脚本形态靠
+// install.sh 播种，容器形态若无人播种则新节点容器无限重启、永
+// 不上线。已存在则绝不覆盖：gost.json 承载节点运行状态，而重跑
+// 本命令正是升级/重装路径。镜像 entrypoint 另有缺失播种兜底，
+// 两面同口径。
 func agentConfigWriteStep(agentAddr, secret string) string {
 	dataDir := agentDataDir()
 	return `mkdir -p ` + dataDir +
 		` && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' '` + agentAddr + `' '` + secret + `' > ` + dataDir + `/config.json)` +
-		` && chmod 600 ` + dataDir + `/config.json`
+		` && chmod 600 ` + dataDir + `/config.json` +
+		` && { [ -f ` + dataDir + `/gost.json ] || (umask 077; printf '{}\n' > ` + dataDir + `/gost.json); }`
 }
 
 // buildNodeDockerInstallCommand 生成 Docker 形态安装命令：写配置 →

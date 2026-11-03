@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -132,12 +135,12 @@ func TestBuildNodeDockerComposeInstallCommandPrivileged(t *testing.T) {
 func TestBuildNodeDockerCommandsDefaultInstanceGolden(t *testing.T) {
 	t.Setenv(panelInstanceEnv, "")
 
-	wantDocker := `mkdir -p /etc/flmx_agent && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' 'wss://panel.example.com:443' 's3cr3t' > /etc/flmx_agent/config.json) && chmod 600 /etc/flmx_agent/config.json && { docker rm -f flmx-agent >/dev/null 2>&1 || true; } && docker run -d --name flmx-agent --network host --cap-add NET_ADMIN --restart unless-stopped -v /etc/flmx_agent:/etc/flmx_agent ghcr.io/iiiiiiiii7125-art/flmx-agent:1.9.4`
+	wantDocker := `mkdir -p /etc/flmx_agent && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' 'wss://panel.example.com:443' 's3cr3t' > /etc/flmx_agent/config.json) && chmod 600 /etc/flmx_agent/config.json && { [ -f /etc/flmx_agent/gost.json ] || (umask 077; printf '{}\n' > /etc/flmx_agent/gost.json); } && { docker rm -f flmx-agent >/dev/null 2>&1 || true; } && docker run -d --name flmx-agent --network host --cap-add NET_ADMIN --restart unless-stopped -v /etc/flmx_agent:/etc/flmx_agent ghcr.io/iiiiiiiii7125-art/flmx-agent:1.9.4`
 	if got := buildNodeDockerInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", false); got != wantDocker {
 		t.Fatalf("default docker command drifted:\n got: %s\nwant: %s", got, wantDocker)
 	}
 
-	wantCompose := `mkdir -p /etc/flmx_agent && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' 'wss://panel.example.com:443' 's3cr3t' > /etc/flmx_agent/config.json) && chmod 600 /etc/flmx_agent/config.json && mkdir -p /opt/docker/flmx-agent && cat > /opt/docker/flmx-agent/docker-compose.yaml <<'FLMX_AGENT_COMPOSE_EOF' && docker compose -f /opt/docker/flmx-agent/docker-compose.yaml up -d
+	wantCompose := `mkdir -p /etc/flmx_agent && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' 'wss://panel.example.com:443' 's3cr3t' > /etc/flmx_agent/config.json) && chmod 600 /etc/flmx_agent/config.json && { [ -f /etc/flmx_agent/gost.json ] || (umask 077; printf '{}\n' > /etc/flmx_agent/gost.json); } && mkdir -p /opt/docker/flmx-agent && cat > /opt/docker/flmx-agent/docker-compose.yaml <<'FLMX_AGENT_COMPOSE_EOF' && docker compose -f /opt/docker/flmx-agent/docker-compose.yaml up -d
 services:
   flmx-agent:
     image: ghcr.io/iiiiiiiii7125-art/flmx-agent:1.9.4
@@ -292,6 +295,117 @@ func composeMountSourceTarget(t *testing.T, cmd string) (string, string) {
 		t.Fatalf("malformed compose volume %q in:\n%s", rest[:j], cmd)
 	}
 	return src, dst
+}
+
+// gost.json 播种（RM 收口景 2 定因）：容器形态的生成命令只写
+// config.json 时，新节点首启必死——agent 的配置加载要求 gost.json
+// 存在（脚本形态由 install.sh 在安装时写初始 {}），容器无限重启、
+// 节点永不上线。生成命令必须在写 config.json 的同一步播种
+// gost.json：已存在则绝不覆盖（文件承载节点运行状态，重跑安装
+// 命令是升级/重装路径，覆写即毁状态），且播种须在拉起容器之前。
+func gostSeedSegment(dataDir string) string {
+	return `{ [ -f ` + dataDir + `/gost.json ] || (umask 077; printf '{}\n' > ` + dataDir + `/gost.json); }`
+}
+
+func TestBuildNodeDockerCommandsSeedGostJSON(t *testing.T) {
+	t.Setenv(panelInstanceEnv, "")
+	// 两种容器形态（默认实例）：播种段逐字在位且位于拉起容器之前。
+	dockerCmd := buildNodeDockerInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", false)
+	if !strings.Contains(dockerCmd, gostSeedSegment("/etc/flmx_agent")) {
+		t.Fatalf("docker command missing gost.json seed segment:\n%s", dockerCmd)
+	}
+	if i, j := strings.Index(dockerCmd, "/gost.json"), strings.Index(dockerCmd, "docker run"); i < 0 || j < 0 || i > j {
+		t.Fatalf("gost.json seed must precede docker run:\n%s", dockerCmd)
+	}
+	composeCmd := buildNodeDockerComposeInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", false)
+	if !strings.Contains(composeCmd, gostSeedSegment("/etc/flmx_agent")) {
+		t.Fatalf("compose command missing gost.json seed segment:\n%s", composeCmd)
+	}
+	if i, j := strings.Index(composeCmd, "/gost.json"), strings.Index(composeCmd, "docker compose"); i < 0 || j < 0 || i > j {
+		t.Fatalf("gost.json seed must precede docker compose up:\n%s", composeCmd)
+	}
+	// 特权形态同带播种段（共用写配置步）。
+	for _, cmd := range []string{
+		buildNodeDockerInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", true),
+		buildNodeDockerComposeInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", true),
+	} {
+		if !strings.Contains(cmd, gostSeedSegment("/etc/flmx_agent")) {
+			t.Fatalf("privileged command missing gost.json seed segment:\n%s", cmd)
+		}
+	}
+	// 脚本形态不经本步（install.sh 自行播种），不得混入容器口径。
+	if strings.Contains(buildNodeInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t"), "gost.json") {
+		t.Fatalf("script-form command must not carry the container gost.json seed")
+	}
+}
+
+// 实例键非空：播种段落在带后缀的宿主机数据目录（与 config.json
+// 同目录），不得漏到默认实例目录。
+func TestBuildNodeDockerCommandsSeedGostJSONWithInstance(t *testing.T) {
+	t.Setenv(panelInstanceEnv, "east")
+	for _, cmd := range []string{
+		buildNodeDockerInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", false),
+		buildNodeDockerComposeInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", false),
+	} {
+		if !strings.Contains(cmd, gostSeedSegment("/etc/flmx_agent-east")) {
+			t.Fatalf("instance command missing suffixed gost.json seed segment:\n%s", cmd)
+		}
+		if strings.Contains(cmd, "/etc/flmx_agent/gost.json") {
+			t.Fatalf("instance command seeds the default instance's gost.json:\n%s", cmd)
+		}
+	}
+}
+
+// 播种语义实跑：把生成命令里的数据目录/Compose 落位换成临时目录、
+// docker 以桩代替，整条命令在 sh 下执行——首跑须写出 {} 的
+// gost.json，重跑（升级/重装）不得覆写已存在的 gost.json 内容，
+// config.json 则每跑必写。
+func TestBuildNodeDockerCommandsSeedGostJSONFunctional(t *testing.T) {
+	t.Setenv(panelInstanceEnv, "")
+	binDir := t.TempDir()
+	stub := "#!/bin/sh\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	run := func(t *testing.T, cmd, dataDir, composeDir string) {
+		t.Helper()
+		cmd = strings.ReplaceAll(cmd, "/opt/docker/flmx-agent", composeDir)
+		cmd = strings.ReplaceAll(cmd, "/etc/flmx_agent", dataDir)
+		c := exec.Command("sh", "-c", cmd)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("generated command failed: %v\n%s\ncommand:\n%s", err, out, cmd)
+		}
+	}
+	check := func(t *testing.T, cmd string) {
+		t.Helper()
+		dataDir := t.TempDir()
+		composeDir := t.TempDir()
+		run(t, cmd, dataDir, composeDir)
+		gostPath := filepath.Join(dataDir, "gost.json")
+		b, err := os.ReadFile(gostPath)
+		if err != nil {
+			t.Fatalf("gost.json not seeded by generated command: %v", err)
+		}
+		if strings.TrimSpace(string(b)) != "{}" {
+			t.Fatalf("seeded gost.json = %q, want {}", b)
+		}
+		if b, err := os.ReadFile(filepath.Join(dataDir, "config.json")); err != nil || !strings.Contains(string(b), "s3cr3t") {
+			t.Fatalf("config.json missing or wrong after generated command: %v %q", err, b)
+		}
+		// 重跑：gost.json 已带状态，不得被覆写；config.json 照写。
+		if err := os.WriteFile(gostPath, []byte("{\"services\":[\"live\"]}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run(t, cmd, dataDir, composeDir)
+		b, err = os.ReadFile(gostPath)
+		if err != nil || strings.TrimSpace(string(b)) != `{"services":["live"]}` {
+			t.Fatalf("rerun overwrote live gost.json: %v %q", err, b)
+		}
+	}
+	check(t, buildNodeDockerInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", false))
+	check(t, buildNodeDockerComposeInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", false))
 }
 
 // 实例键不合规：整体回退默认实例命名，畸形值不得漏进命令。
