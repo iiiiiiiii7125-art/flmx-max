@@ -346,7 +346,14 @@ const computeUsableTokenKeys = (
  *     THEME_TOKEN_KEYS above) — out-of-vocabulary keys inject
  *     properties nothing consumes;
  *   - value: the value is a string with real content — non-blank
- *     after removing whitespace and Unicode format characters.
+ *     after removing whitespace and Unicode format characters —
+ *     that can actually produce a value at computed-value time:
+ *     a whole-value CSS-wide keyword (initial / inherit / unset /
+ *     revert / revert-layer) or a value sitting on a var()
+ *     reference cycle within the set computes to the
+ *     guaranteed-invalid value and counts as unusable (the full
+ *     judgement lives in computeUsableTokenKeys, shared with
+ *     injection).
  * A light set with no entry passing all three axes counts as no
  * light set at all and is rejected the same way: that covers a
  * present-but-empty set (`light: {}`), all-`undefined` values
@@ -355,8 +362,9 @@ const computeUsableTokenKeys = (
  * (`setProperty(name, "")` removes the property, and a blank value
  * computes to nothing after var() substitution), runtime values
  * outside the type contract (null, numbers, booleans, objects),
- * sets whose keys are all outside the token vocabulary, and
- * non-map `light` values.  A light set that mixes unusable entries
+ * sets whose keys are all outside the token vocabulary, sets
+ * whose values are all CSS-wide keywords or all sit on var()
+ * reference cycles, and non-map `light` values.  A light set that mixes unusable entries
  * with real values is a valid partial set — the unusable entries
  * are skipped and the rest fall back as usual.  A package without
  * `tokens` at all (component / layout / page overrides only) is
@@ -375,8 +383,8 @@ export function validateThemePackage(pkg: ThemePackage): string | null {
         `(tokens.light must be a plain object defining at least one known ` +
         `token — a ThemeTokens key from types.ts — with a non-empty string ` +
         `value; missing, empty, all-undefined, blank- or format-only-valued, ` +
-        `non-string-valued, unknown-key-only, and non-object light sets are ` +
-        `not accepted)`
+        `non-string-valued, unknown-key-only, css-wide-keyword-valued, ` +
+        `var()-cycle-valued, and non-object light sets are not accepted)`
       );
     }
   }

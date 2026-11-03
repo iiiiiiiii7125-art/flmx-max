@@ -928,6 +928,44 @@ check(
   getTheme("ok-light") === lightPkg,
 );
 
+// 拒绝文案枚举钉（集成 9 文案补列）：拒绝文案与 install.md 的
+// 「被拒形态」枚举同为 9 形态——⑭新增的两类整包形态（CSS 全
+// 域关键字值、var() 自引用/环引用值）须在文案中被点名，旧 7
+// 形态的枚举措辞不得回退丢失；任一面漂移即红。
+if (typeof validateThemePackage === "function") {
+  const legacyReason =
+    validateThemePackage({ ...base, id: "msg-legacy", tokens: {} }) ?? "";
+  check(
+    "拒绝文案保留旧形态枚举（all-undefined / non-object 等）",
+    legacyReason.includes("all-undefined") &&
+      legacyReason.includes("unknown-key-only") &&
+      legacyReason.includes("non-object"),
+    `实得 ${JSON.stringify(legacyReason)}`,
+  );
+  const keywordReason =
+    validateThemePackage({
+      ...base,
+      id: "msg-keyword",
+      tokens: { light: { "--primary": "initial" } },
+    }) ?? "";
+  check(
+    "拒绝文案点名 CSS 全域关键字形态（R9-28 文案补列）",
+    keywordReason.includes("css-wide-keyword"),
+    `实得 ${JSON.stringify(keywordReason)}`,
+  );
+  const cycleReason =
+    validateThemePackage({
+      ...base,
+      id: "msg-cycle",
+      tokens: { light: { "--primary": "var(--primary)" } },
+    }) ?? "";
+  check(
+    "拒绝文案点名 var() 引用环形态（R9-29 文案补列）",
+    cycleReason.includes("var()-cycle"),
+    `实得 ${JSON.stringify(cycleReason)}`,
+  );
+}
+
 // 正对照（不误伤）：合法 var() 引用——指向他键、无环——照常
 // 计数与注入。
 const varChainPkg = {
