@@ -46,6 +46,20 @@
 // 为 classList\s*\??\.\s*(add|toggle)\s*\( 收口，两形态已并入上方
 // 变异钉死形态；非字面量构造一族维持上段登记接受不变。
 //
+// R6 收口（第六轮审计 R6-C4-02/03/04，修复轮 6）：中断子族冒出第六
+// 形态——注释中断（classList/**/.add、classList /*c*/ .add），放宽
+// 正则的分隔符类不含注释、实扫仍报 0；断言②的 fnBody 朴素大括号
+// 配平会被注释内的 } 截断、假 return 蒙混；断言③可被 index.html
+// 的 HTML 注释拷贝满足。三处共同根因是提取面无注释意识，本轮按
+// 机制迁移：断言①②的扫描对象先经词法剥注释（字符串保留、行号
+// 不变），注释中断在剥离后还原为普通分隔、注释拷贝整体消失；
+// 断言②的函数体截取改字符串/模板感知的配平扫描；断言③先剥
+// HTML 注释再判定。变异钉死形态新增：classList/**/.add("dark")、
+// classList /*c*/ .toggle("dark")、getEffectiveMode 体内含 } 的
+// 示例注释＋真身 return "dark"、index.html 引导脚本改坏＋HTML
+// 注释存档原文——四者必须红（修复轮 6 探针实证，见
+// fix6-reports/gatesmech.md）。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-dark-mode-pinned.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -63,6 +77,114 @@ const check = (label, ok, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${ok ? "" : ` — ${detail}`}`);
   if (!ok) failures.push(label);
 };
+
+// 词法剥注释：// 与 /* */ 注释逐字替换为空格（换行保留、行号不变），
+// 字符串/模板字面量内容原样保留（模板 ${} 内的代码照常扫描）。
+// 扫描面先经此处理：注释中断还原为普通分隔，注释拷贝整体消失。
+const stripComments = (src) => {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  let mode = "code"; // code | line | block | sq | dq | tpl
+  const tplDepths = [];
+  let braceDepth = 0;
+  while (i < n) {
+    const c = src[i];
+    const d = src[i + 1] ?? "";
+    if (mode === "code") {
+      if (c === "/" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "line";
+        continue;
+      }
+      if (c === "/" && d === "*") {
+        out.push("  ");
+        i += 2;
+        mode = "block";
+        continue;
+      }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      else if (c === "{") braceDepth++;
+      else if (c === "}") {
+        if (tplDepths.length && braceDepth === tplDepths[tplDepths.length - 1]) {
+          tplDepths.pop();
+          braceDepth--;
+          mode = "tpl";
+          out.push(c);
+          i++;
+          continue;
+        }
+        braceDepth--;
+      }
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (mode === "line") {
+      if (c === "\n") {
+        out.push(c);
+        i++;
+        mode = "code";
+        continue;
+      }
+      out.push(" ");
+      i++;
+      continue;
+    }
+    if (mode === "block") {
+      if (c === "*" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "code";
+        continue;
+      }
+      out.push(c === "\n" ? "\n" : " ");
+      i++;
+      continue;
+    }
+    if (mode === "sq" || mode === "dq") {
+      const q = mode === "sq" ? "'" : '"';
+      out.push(c);
+      if (c === "\\") {
+        out.push(d);
+        i += 2;
+        continue;
+      }
+      if (c === q) mode = "code";
+      i++;
+      continue;
+    }
+    // tpl
+    out.push(c);
+    if (c === "\\") {
+      out.push(d);
+      i += 2;
+      continue;
+    }
+    if (c === "`") {
+      mode = "code";
+      i++;
+      continue;
+    }
+    if (c === "$" && d === "{") {
+      out.push(d);
+      i += 2;
+      braceDepth++;
+      tplDepths.push(braceDepth);
+      mode = "code";
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+};
+
+// 剥 HTML 注释（换行保留），注释内的脚本拷贝不再构成满足点。
+const stripHtmlComments = (src) =>
+  src.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
 
 // ── ① src 内 classList.add / toggle 不得带 'dark' ────────────────────
 const walk = (dir) => {
@@ -180,7 +302,7 @@ const darkOffenders = [];
 let addCallCount = 0;
 let toggleCallCount = 0;
 for (const file of walk(srcDir)) {
-  const text = readFileSync(file, "utf8");
+  const text = stripComments(readFileSync(file, "utf8"));
   for (const m of text.matchAll(/classList\s*\??\.\s*(add|toggle)\s*\(/g)) {
     const method = m[1];
     if (method === "add") addCallCount++;
@@ -214,11 +336,14 @@ check(
 const registryPath = join(srcDir, "themes/registry.ts");
 let registry = "";
 try {
-  registry = readFileSync(registryPath, "utf8");
+  // 先剥注释：注释内的 } 与假 return 不再进入截取/判定（R6-C4-03）。
+  registry = stripComments(readFileSync(registryPath, "utf8"));
 } catch {
   check("② themes/registry.ts 可读", false, "文件不存在");
 }
 
+// 函数体截取：括号配平扫描跳过字符串/模板/注释，字符串内的 { }
+// 不干扰配平（与断言①的 extractCallLiterals 同纪律）。
 const fnBody = (src, name) => {
   const start = src.indexOf(`function ${name}`);
   if (start < 0) return null;
@@ -226,8 +351,27 @@ const fnBody = (src, name) => {
   if (open < 0) return null;
   let depth = 0;
   for (let i = open; i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}") {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") {
+      i++;
+      while (i < src.length && src[i] !== c) {
+        if (src[i] === "\\") i++;
+        i++;
+      }
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      const e = src.indexOf("\n", i);
+      i = e < 0 ? src.length : e;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      const e = src.indexOf("*/", i + 2);
+      i = e < 0 ? src.length : e + 1;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
       depth--;
       if (depth === 0) return src.slice(open + 1, i);
     }
@@ -264,7 +408,9 @@ try {
 if (indexHtml) {
   check(
     "③ index.html 引导脚本含 classList.remove('dark')",
-    /classList\.remove\(\s*['"]dark['"]\s*\)/.test(indexHtml),
+    /classList\.remove\(\s*['"]dark['"]\s*\)/.test(
+      stripHtmlComments(indexHtml),
+    ),
     "引导脚本未清除 dark 类",
   );
 }
