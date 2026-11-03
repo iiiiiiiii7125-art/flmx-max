@@ -10,4 +10,15 @@ ulimit -c 0
 # keeps all mutable state next to it, exactly like the script install.
 cd /etc/flmx_agent
 
+# Seed the gost config when missing, mirroring install.sh's initial
+# {}: the agent's config loader requires gost.json to exist and exits
+# fatally without it, so a fresh data volume would crash-loop the
+# container forever. The panel-generated install commands seed it on
+# the host side too, but a volume prepared any other way must still
+# boot. An existing file is never touched — it carries the node's
+# live services state.
+if [ ! -f gost.json ]; then
+  printf '{}\n' > gost.json
+fi
+
 exec /usr/local/bin/flmx-agent "$@"
