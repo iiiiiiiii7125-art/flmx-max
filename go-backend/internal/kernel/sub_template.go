@@ -575,7 +575,7 @@ func clashTemplateProfile(content string, endpoints []Endpoint, slot string, opt
 	if slot == TemplateShadowrocket {
 		proxies, names = shadowrocketProxies(endpoints, opts)
 	} else {
-		proxies, names, chainGroupNodes, hidden = clashTemplateProxies(endpoints, hideRelays)
+		proxies, names, chainGroupNodes, hidden = clashTemplateProxies(endpoints, hideRelays, slot == TemplateClash)
 	}
 	expand := slot == TemplateStash || slot == TemplateShadowrocket || hidden
 	types := proxyTypes(proxies)
@@ -677,12 +677,18 @@ func expandsAnchor(groups *yaml.Node, names []string, types map[string]string) b
 
 // clashTemplateProxies renders Mihomo / Stash proxies, with the chain
 // groups when the chain applies; names are the nodes groups list, and
-// hidden is set when relay nodes were left out of them.
-func clashTemplateProxies(endpoints []Endpoint, hideRelays bool) (proxies []interface{}, names []string, chainNodes []interface{}, hidden bool) {
+// hidden is set when relay nodes were left out of them. mihomo selects
+// the clash-format renderer (built Snell left out, R9-01) for the
+// TemplateClash slot; the Stash slot keeps ClashProxy.
+func clashTemplateProxies(endpoints []Endpoint, hideRelays bool, mihomo bool) (proxies []interface{}, names []string, chainNodes []interface{}, hidden bool) {
+	render := ClashProxy
+	if mihomo {
+		render = clashProxyMihomo
+	}
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
-		if p, ok := ClashProxy(e); ok {
+		if p, ok := render(e); ok {
 			rendered = append(rendered, e)
 			nodes = append(nodes, p)
 		}

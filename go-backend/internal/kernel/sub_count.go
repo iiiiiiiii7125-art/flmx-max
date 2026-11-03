@@ -20,9 +20,12 @@ func SubscriptionNodeCount(format string, endpoints []Endpoint, opts SubOptions)
 	switch format {
 	case FormatBase64:
 		return count(func(e Endpoint) bool { _, ok := ShareURI(e); return ok })
-	case FormatClash, FormatStash:
-		// Stash renders through the same ClashProxy gate as Clash (only
-		// the rule-set serialization differs), so the counts agree.
+	case FormatClash:
+		// The clash format renders through clashProxyMihomo, which
+		// leaves built Snell inbounds out (R9-01); Stash keeps them,
+		// so the two counts now differ on Snell.
+		return count(func(e Endpoint) bool { _, ok := clashProxyMihomo(e); return ok })
+	case FormatStash:
 		return count(func(e Endpoint) bool { _, ok := ClashProxy(e); return ok })
 	case FormatSingbox:
 		return count(func(e Endpoint) bool {

@@ -14,7 +14,8 @@ import (
 
 // A5-02/BC-11：列表的 NodeCount 按请求的目标格式实际渲染数计。
 // 夹具 5 入站（VLESS Reality、Snell v5、Snell v6、SS2022、Trojan）：
-// 旧口径恒为 5（渲染前计数）；新口径 clash 4 / sing-box 5 / surge 4 /
+// 旧口径恒为 5（渲染前计数）；现口径 clash 3（R9-01：自建 Snell
+// v5/v6 均不下发）/ stash 4（保留 v5）/ sing-box 5 / surge 4 /
 // base64 3（缺省与非法 format 均回落 base64）。
 func TestSubscriptionListNodeCountByFormat(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/sub_nodecount.db")
@@ -72,7 +73,8 @@ func TestSubscriptionListNodeCountByFormat(t *testing.T) {
 	cases := map[string]int{
 		`{}`:                    3, // 缺省 = 无 UA 默认格式 base64
 		`{"format":"base64"}`:   3,
-		`{"format":"clash"}`:    4, // snell v6 不下发
+		`{"format":"clash"}`:    3, // 自建 snell v5/v6 均不下发（R9-01）
+		`{"format":"stash"}`:    4, // stash 保留 snell v5、仅 v6 不下发
 		`{"format":"singbox"}`:  5, // 现行 sing-box 客户端全收（含 snell v6）
 		`{"format":"surge"}`:    4, // vless 不下发
 		`{"format":"nonsense"}`: 3, // 非法值回落 base64，不整单失败

@@ -141,7 +141,7 @@ Xray 内核的 VLESS 入站可开启 VLESS 加密（ENC），启用 ENC 的入�
 | 订阅格式 | 适用客户端 | 不包含 |
 |----------|------------|--------|
 | 自动识别 | 按客户端 UA 返回对应格式 | |
-| Clash / Mihomo | Clash Verge、Stash、FlClash | NaïveProxy |
+| Clash / Mihomo | Clash Verge、Stash、FlClash | NaïveProxy、Snell（自建入站） |
 | sing-box | SFA / SFI / SFM | XHTTP |
 | Shadowrocket | Shadowrocket | NaïveProxy |
 | Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy、TCP+HTTP 头伪装 |
@@ -149,11 +149,11 @@ Xray 内核的 VLESS 入站可开启 VLESS 加密（ENC），启用 ENC 的入�
 | 通用 base64 | v2rayN、NekoBox | Snell |
 | Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy、TCP+HTTP 头伪装 |
 
-Snell 的下发按版本与客户端区分：Clash / Mihomo 与 Shadowrocket 下发 v4 / v5 入站（按 v4 客户端口径渲染），v6 入站不下发（客户端无 v6 支持）；sing-box 仅 1.14 及以上版本下发。注意：sing-box 是否下发 Snell 按**拉取请求的 UA** 判定（须 sing-box 1.14+ 的 UA），与是否用 `?format=` 指定格式无关；用浏览器或普通工具拉取（UA 不带 sing-box 版本）时不含 Snell，属正常现象，用 sing-box 1.14+ 客户端直接拉取（含 `?format=singbox` 链接）即可。另注意：导入的 Snell v1–v3 节点在 sing-box 订阅侧会被略过（sing-box 侧只下发 v4 / v6 口径），在其他格式中照常出现。
+Snell 的下发按版本与客户端区分：Clash / Mihomo 不下发自建 Snell 入站（v4 / v5 / v6 均不下发，原因见下方版本提示）；Stash 与 Shadowrocket 下发 v4 / v5 入站（按 v4 客户端口径渲染），v6 入站不下发（客户端无 v6 支持）；sing-box 仅 1.14 及以上版本下发。注意：sing-box 是否下发 Snell 按**拉取请求的 UA** 判定（须 sing-box 1.14+ 的 UA），与是否用 `?format=` 指定格式无关；用浏览器或普通工具拉取（UA 不带 sing-box 版本）时不含 Snell，属正常现象，用 sing-box 1.14+ 客户端直接拉取（含 `?format=singbox` 链接）即可。另注意：导入的 Snell v1–v3 节点在 sing-box 订阅侧会被略过（sing-box 侧只下发 v4 / v6 口径），在其他格式中照常出现。
 
 NaïveProxy 的 sing-box 出站需要 sing-box 1.13 及以上：节点 sing-box 低于 1.13 时，以 NaïveProxy 节点为链式落地（默认去向或分流目标）在保存、下发和更换内核版本时会被点名拒绝，把节点 sing-box 升到 1.13 及以上即可；订阅侧同理，sing-box 客户端低于 1.13（按拉取请求的 UA 判定）时不下发 NaïveProxy 节点、其余节点照常下发。自建 NaïveProxy 入站本身不受此下限影响。
 
-> 客户端版本提示：mihomo 1.19.15 及更早版本自身存在 Snell v4 支持缺陷，会整份拒绝含 Snell v4 节点的配置（mihomo 官方示例在该版本上同样失败），升级 mihomo 到较新版本（如 1.19.33）即可，与面板的渲染无关。
+> 客户端版本提示：mihomo 官方版本（已实测 1.19.16 / 1.19.17，即 Clash Verge、Mihomo Party、FlClash 等现行发行所带内核线）只接受 Snell v3，含 Snell v4 条目的配置会被整份拒绝——这是现行版本的口径、不是旧版本缺陷，升级 mihomo 也不会改变。面板因此不在 Clash 格式下发自建 Snell 入站；Stash / Shadowrocket 与 sing-box（1.14 以上）侧照常下发。
 
 VLESS 加密（ENC）入站不在上表的协议排除之列，但只有 Clash / Mihomo、Stash 与通用 base64 输出会携带它的完整 `encryption` 参数，其余格式（sing-box、Shadowrocket、Loon、Quantumult X、Surge）直接略过这类入站。
 

@@ -185,12 +185,13 @@ func TestSharePhase3(t *testing.T) {
 			t.Fatalf("sing-box rejects uTLS on QUIC outbound %s", e.Name)
 		}
 	}
-	// B1 订正（1.3.1）：原断言把「Snell 不下发 Mihomo」钉成期望，其依据
-	// （Mihomo 只会 Snell v1-v3）已被 Mihomo v1.19.32 源码证伪——
-	// NewSnell 接受版本 1-4 并把 5 归一到 4（v5 服务端兼容 v4 客户端）。
-	// v5 入站现在必须出现在 Clash 段（黄金已同步更新）。
-	if !strings.Contains(out[strings.Index(out, "### clash"):strings.Index(out, "### singbox")], "snell") {
-		t.Fatal("snell v5 must be offered to Mihomo (B1)")
+	// R9-01 再订正：B1（1.3.1）曾据「Mihomo 接受 Snell 1-4、5 归一到
+	// 4」把 v5 入站钉进 Clash 段——该依据的钉版（v1.19.32）不在公开
+	// 发行线、不可复现；第九轮以官方 Mihomo v1.19.16 / v1.19.17 二进制
+	// 实测：v4 条目整份拒绝、仅 v3 可过。故 Clash 段不得出现 Snell
+	// （黄金已同步更新）；Surge 段的原生 Snell 行由上方 want 钉住。
+	if strings.Contains(out[strings.Index(out, "### clash"):strings.Index(out, "### singbox")], "snell") {
+		t.Fatal("snell must not be offered in the clash format (R9-01)")
 	}
 }
 

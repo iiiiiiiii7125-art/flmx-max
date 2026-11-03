@@ -5,8 +5,9 @@ import (
 )
 
 // A5-02/BC-11：与 R3 真机同构的 9 节点混合订阅（Reality、Hy2、Snell
-// v5、Snell v6 + ss2022/trojan/vmess-ws/tuic/anytls），四格式实得
-// 8/9/8/7——计数必须按目标格式的实际渲染数，不再是渲染前的 9。
+// v5、Snell v6 + ss2022/trojan/vmess-ws/tuic/anytls），计数必须按目标
+// 格式的实际渲染数，不再是渲染前的 9。R9-01 后 clash 不下发自建
+// Snell（v5/v6 均出局）实得 7，Stash / Shadowrocket 保留 v5 实得 8。
 func mixEndpoints(t *testing.T) []Endpoint {
 	t.Helper()
 	uuid := "11111111-2222-3333-4444-555555555555"
@@ -34,8 +35,14 @@ func mixEndpoints(t *testing.T) []Endpoint {
 }
 
 func TestSubscriptionNodeCountClash(t *testing.T) {
-	if got := SubscriptionNodeCount(FormatClash, mixEndpoints(t), SubOptions{}); got != 8 {
-		t.Fatalf("clash count = %d, want 8 (snell v6 dropped)", got)
+	if got := SubscriptionNodeCount(FormatClash, mixEndpoints(t), SubOptions{}); got != 7 {
+		t.Fatalf("clash count = %d, want 7 (built snell v5/v6 both dropped, R9-01)", got)
+	}
+	// 分流另一面：Stash / Shadowrocket 保留 v5、只丢 v6。
+	for _, format := range []string{FormatStash, FormatShadowrocket} {
+		if got := SubscriptionNodeCount(format, mixEndpoints(t), SubOptions{}); got != 8 {
+			t.Fatalf("%s count = %d, want 8 (snell v6 dropped only)", format, got)
+		}
 	}
 }
 
