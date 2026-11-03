@@ -2786,6 +2786,19 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 				return err, 0
 			}
 		}
+		// R2-F4-01：切入 realm 是 A4-004 策略门的第四写面——隧道下既有
+		// 转发逐条过门，命中点名整单拒绝（本段未落库）。realm→gost 与
+		// 引擎未变的编辑不查：gost 全策略可渲染；已在 realm 的转发入仓
+		// 时已过其余三面。switchTunnelEngine 入口另有同谓词兜底。
+		if engine == tunnelEngineRealm && oldTunnel.Engine != tunnelEngineRealm {
+			switchForwards, err := h.repo.ListForwardsByTunnelTx(validationTx, id)
+			if err != nil {
+				return err, -2
+			}
+			if err := validateRealmEngineSwitchForwards(switchForwards); err != nil {
+				return err, 0
+			}
+		}
 		if err := h.validateTunnelEntryPortConflictsForNewEntriesTx(validationTx, id, oldEntryNodeIDs, entryNodeIDs); err != nil {
 			return err, 0
 		}

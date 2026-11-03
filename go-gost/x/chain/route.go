@@ -36,6 +36,26 @@ func emptyRouteError(chainer chain.Chainer) error {
 	return ErrEmptyRoute
 }
 
+// dialStageError wraps a dial-stage failure — the route was selected,
+// but resolving, transport dialing, handshaking or the final connect
+// failed — with the chain name, the same caliber as emptyRouteError
+// (R2-F3-07). Previously only the route-selection failure named the
+// chain; dial-stage failures surfaced as bare transport errors, so
+// connections dying on a node that just failed (before its marker
+// reached the selection threshold) could not be attributed to their
+// chain from the error alone. errors.Is/As semantics are unchanged
+// (%w). ErrEmptyRoute passes through untouched: emptyRouteError has
+// already named it, wrapping again would double the prefix.
+func dialStageError(chainer chain.Chainer, err error) error {
+	if err == nil || errors.Is(err, ErrEmptyRoute) {
+		return err
+	}
+	if namer, ok := chainer.(chainNamer); ok && namer.Name() != "" {
+		return fmt.Errorf("chain %s: %w", namer.Name(), err)
+	}
+	return err
+}
+
 var (
 	DefaultRoute chain.Route = &defaultRoute{}
 )
@@ -156,7 +176,7 @@ func (r *chainRoute) Dial(ctx context.Context, network, address string, opts ...
 	}
 	conn, err := r.connect(ctx, options.Logger)
 	if err != nil {
-		return nil, err
+		return nil, dialStageError(r.options.Chain, err)
 	}
 
 	cc, err := r.getNode(len(r.Nodes())-1).Options().Transport.Connect(ctx, conn, network, address)
@@ -164,7 +184,7 @@ func (r *chainRoute) Dial(ctx context.Context, network, address string, opts ...
 		if conn != nil {
 			conn.Close()
 		}
-		return nil, err
+		return nil, dialStageError(r.options.Chain, err)
 	}
 	return cc, nil
 }
@@ -185,7 +205,7 @@ func (r *chainRoute) Bind(ctx context.Context, network, address string, opts ...
 
 	conn, err := r.connect(ctx, options.Logger)
 	if err != nil {
-		return nil, err
+		return nil, dialStageError(r.options.Chain, err)
 	}
 
 	ln, err := r.getNode(len(r.Nodes())-1).Options().Transport.Bind(ctx,
@@ -198,7 +218,7 @@ func (r *chainRoute) Bind(ctx context.Context, network, address string, opts ...
 	)
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return nil, dialStageError(r.options.Chain, err)
 	}
 
 	return ln, nil

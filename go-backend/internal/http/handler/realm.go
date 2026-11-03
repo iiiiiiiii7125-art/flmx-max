@@ -68,8 +68,9 @@ func realmIPHash(strategy string) bool { return strings.TrimSpace(strategy) == "
 // validateRealmForwardStrategy（A4-004 / BC-26）：realm 渲染多目标时非
 // iphash 一律 roundrobin——fifo（主备）/rand（随机）曾被静默改写为轮询，
 // 备目标在主目标健康时持续收到生产流量且用户无感知。改为明确拒绝：
-// 仅当隧道为 realm、目标 ≥2 且策略 ∉ {round, hash} 时报错（单目标无
-// 负载语义、策略不参与渲染，不拦，避免误伤存量默认 fifo 的单目标转发）。
+// 仅当隧道为 realm、有效目标 ≥2 且策略 ∉ {round, hash} 时报错（单目标
+// 无负载语义、策略不参与渲染，不拦，避免误伤存量默认 fifo 的单目标
+// 转发）。
 func validateRealmForwardStrategy(tunnel *tunnelRecord, remoteAddr, strategy string) error {
 	if !tunnelIsRealm(tunnel) {
 		return nil
@@ -83,13 +84,43 @@ func validateRealmForwardStrategy(tunnel *tunnelRecord, remoteAddr, strategy str
 	case "", "round", "hash":
 		return nil
 	}
-	// R8-06（H-F3-01 同族）：目标计数走校验/消费共用的 splitRemoteParts
+	// R8-06（H-F3-01 同族）：目标切分走校验/消费共用的 splitRemoteParts
 	// （逗号/换行/CR）——此前只切逗号，换行分隔的双目标被误计为单目标、
 	// fifo 等策略绕过本门后仍被 realm 按双目标 roundrobin 渲染。
-	if len(splitRemoteParts(remoteAddr)) < 2 {
+	// R2-F4-02：计数再按归一后有效段口径（remotePartHasEffectiveTarget，
+	// 与零目标判 validateRemoteAddrHasTargets、消费侧 splitRemoteTargets
+	// 同一判据）——"1.2.3.4:80,#"、"http://" 等归一后无实质内容的段实际
+	// 只渲染 1 个目标，按原始段数计数会把 fifo 等策略误拒，与 forward.md
+	// 「归一后为空的段不算一个目标」矛盾。
+	effectiveTargets := 0
+	for _, part := range splitRemoteParts(remoteAddr) {
+		if remotePartHasEffectiveTarget(part) {
+			effectiveTargets++
+		}
+	}
+	if effectiveTargets < 2 {
 		return nil
 	}
 	return fmt.Errorf("realm 引擎仅支持轮询（round）与 IP 哈希（hash）负载策略，多目标转发不能使用 %s 策略", strings.TrimSpace(strategy))
+}
+
+// validateRealmEngineSwitchForwards（R2-F4-01）：引擎切换 gost→realm
+// 此前是 A4-004 策略门的第四写面漏网——switchTunnelEngine 径直删除
+// gost 服务并以 realm 重渲染，多目标 fifo/rand 被静默改写为轮询、备
+// 目标在主目标健康时分到生产流量且无任何回执。现与 create/update/
+// 批量换隧道三面同口径：隧道下全部既有转发逐条以 realm 形态跑
+// validateRealmForwardStrategy，命中即点名该转发整单拒绝。落点两处：
+// tunnelUpdate 验证段在落库前整单拒绝；switchTunnelEngine 的
+// gost→realm 入口再以同一谓词兜底，防绕过更新面直调时静默转换。
+func validateRealmEngineSwitchForwards(forwards []forwardRecord) error {
+	realmTunnel := &tunnelRecord{Engine: tunnelEngineRealm}
+	for i := range forwards {
+		f := &forwards[i]
+		if err := validateRealmForwardStrategy(realmTunnel, f.RemoteAddr, f.Strategy); err != nil {
+			return fmt.Errorf("转发「%s」：%w", f.Name, err)
+		}
+	}
+	return nil
 }
 
 func realmListenAddr(node *nodeRecord, port int, bindIP string) string {
@@ -364,6 +395,12 @@ func (h *Handler) switchTunnelEngine(tunnelID int64, fromRealm bool, oldEntryNod
 			collect("gost 服务同步", h.syncForwardServices(&forwards[i], "UpdateService", true))
 		}
 		return errors.Join(hardErrs...)
+	}
+	// R2-F4-01 兜底：正常路径已由 tunnelUpdate 验证段以同一谓词整单
+	// 拒绝；此处在删任何 gost 服务之前复检，防绕过更新面直调本函数
+	// 时多目标 fifo/rand 被静默改写为 realm 轮询。
+	if err := validateRealmEngineSwitchForwards(forwards); err != nil {
+		return err
 	}
 	for i := range forwards {
 		for _, nodeID := range uniqueInt64s(nodes) {
