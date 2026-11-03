@@ -666,8 +666,16 @@ func SurgeLine(e Endpoint) (string, bool) {
 		}
 		return name + " = " + strings.Join(parts, ", "), true
 	case ProtocolSnell:
+		// C2-01：0 是存量行未归一的值——订阅装配经 inboundFromModel
+		// 直读存量行、不经 Normalize，逐字恢复行同样可达。Surge 的
+		// snell version 合法域为 1–6、直出 0 该节点独家无效；与
+		// clashSnell 同口径，0 取 DefaultSnellVersion，4/5/6 直出不变。
+		snellVersion := in.Settings.SnellVersion
+		if snellVersion == 0 {
+			snellVersion = DefaultSnellVersion
+		}
 		parts = append(parts, "snell", host, strconv.Itoa(e.Port), "psk="+surgeEscape(in.Settings.Password),
-			fmt.Sprintf("version=%d", in.Settings.SnellVersion), "reuse=true", "tfo=true")
+			fmt.Sprintf("version=%d", snellVersion), "reuse=true", "tfo=true")
 		if in.Settings.SnellMode != "" {
 			parts = append(parts, "mode="+in.Settings.SnellMode)
 		}
