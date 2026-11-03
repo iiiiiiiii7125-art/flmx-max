@@ -31,11 +31,21 @@
 # 启停与入站家族曾分别以 20s 界 / class 12s 登记，对「内核未装
 # 版本时下发升至 kernelApplyTimeout 300s」的条件升级不可见。
 #
+# 前端提取口径（修复轮 7，R7-26）：index.ts 调用点普查、公式助
+# 手参数、network.ts 默认值与 diagnosis-stream 常量改由
+# scripts/timeout-fe-extract.mjs 以 TS 编译器 API 提取（旧
+# grep/awk 首命中面可被模板字符串内的假 helper 定义遮蔽，见
+# 脚本内「前端提取」节）；本门自此需 node＋typescript 可解析
+# （与 vite-frontend 其余 check 同前提），助手不可用即前提失效
+# exit 2，不回退文本提取。Go 侧影子树口径不变。
+#
 # 用法：check-timeout-budgets.sh [REPO_ROOT]（默认脚本所在仓库根）。
 # 退出码：0 = 全格对账通过；1 = 存在漂移/缺格；2 = 前提失效。
 set -u
 
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
+ORIG_ROOT="$ROOT"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ── 代码面影子（修复轮 6 机制处置）──────────────────────────────
 # 本门对 Go 源码的提取（go_const_s 首命中取值、WriteTimeout、各
@@ -131,6 +141,28 @@ for f in "$REG" "$FE_TS" "$FE_STREAM" "$FE_NET" "$APP_GO"; do
 done
 [ -d "$HANDLER_DIR" ] || { echo "FAIL: 前提失效，目录不存在：$HANDLER_DIR"; exit 2; }
 
+# ── 前端提取（修复轮 7，R7-26 / G-C4-09 机制处置）──────────────
+# 前端三面（index.ts 调用点普查＋公式助手参数、network.ts 默认
+# 值、diagnosis-stream 常量）旧实现为 grep/awk 文本首命中：顶部
+# 模板字符串内放一行同名假 helper 定义（携登记值）即可遮蔽真
+# helper 的参数漂移（PROBE7 实证九格全绿）。现改由
+# scripts/timeout-fe-extract.mjs 以 TypeScript 编译器 API 按声
+# 明与 AST 结构提取（模板/注释中的同名文本不是声明），结果 TSV
+# 驱动下方全部前端判定。助手不可用（无 node / typescript 不可
+# 解析 / 提取报错）属前提失效 exit 2——绝不回退文本提取静默缩
+# 小证据面。助手读 ORIG_ROOT 的真实文件（影子树中的前端文件本
+# 就是指向原文的符号链接，内容同一）。
+FE_EXTRACT="$(mktemp)"
+if ! command -v node >/dev/null 2>&1; then
+  echo "FAIL: 前提失效，无 node 运行时，前端 AST 提取（timeout-fe-extract.mjs）不可用"
+  exit 2
+fi
+if ! node "$SCRIPT_DIR/timeout-fe-extract.mjs" "$ORIG_ROOT" > "$FE_EXTRACT" 2>"$FE_EXTRACT.err"; then
+  echo "FAIL: 前提失效，前端 AST 提取失败：$(cat "$FE_EXTRACT.err")"
+  exit 2
+fi
+rm -f "$FE_EXTRACT.err"
+
 # ── 数值求值助手 ──────────────────────────────────────────────────────
 # eval_go_dur "360 * time.Second" -> 360 ；"30 * time.Minute" -> 1800
 eval_go_dur() {
@@ -170,7 +202,11 @@ GLOBAL_SV="$(grep -oP 'WriteTimeout:\s*\K[^,]+' "$APP_GO" | head -1)"
 [ -n "$GLOBAL_SV" ] || { echo "FAIL: 前提失效，app.go 未找到 WriteTimeout"; exit 2; }
 GLOBAL_SV="$(eval_go_dur "$GLOBAL_SV")"
 
-NET_DEFAULT_MS="$(grep -oP 'timeout \?\? \K\d+' "$FE_NET" | head -1)"
+if grep -q '^netdefault-multi' "$FE_EXTRACT"; then
+  echo "FAIL: 前提失效，network.ts 各 timeout ?? 默认值不一致：$(grep '^netdefault-multi' "$FE_EXTRACT" | cut -f2)"
+  exit 2
+fi
+NET_DEFAULT_MS="$(grep '^netdefault' "$FE_EXTRACT" | cut -f2 | head -1)"
 [ -n "$NET_DEFAULT_MS" ] || { echo "FAIL: 前提失效，network.ts 未找到默认 timeout"; exit 2; }
 NET_DEFAULT_S="$(awk -v v="$NET_DEFAULT_MS" 'BEGIN{ printf "%g", v/1000 }')"
 [ "$(num_eq "$NET_DEFAULT_S" 30)" = 1 ] || fail "network.ts 默认超时漂移：提取值 ${NET_DEFAULT_S}s（登记表 default 格按 30s 登记）"
@@ -184,53 +220,46 @@ sv_value() {
   esac
 }
 
-# ── 前端调用点普查：name -> timeout 原始表达式（Network./axios. 之后首个 timeout:）──
+# ── 前端调用点普查：name -> timeout 形态（AST 提取，见上） ──────
+# FE_MAP 行格式：name \t kind \t value（kind/value 由助手按旧
+# fe_extract 口径产出：formula 时 value 为 fe 口径助手名、
+# dynamic/literal 时 value 为秒）。
 FE_MAP="$(mktemp)"
-awk '
-  /^export (const|function) / { flush(); name=$3; sub(/=$/,"",name); span=""; next }
-  /^export (interface|type) / { flush(); name=""; next }
-  { if (name != "") span = span $0 "\n" }
-  function flush(    p1,p2,p,sub2) {
-    if (name == "") return
-    p1 = index(span, "Network."); p2 = index(span, "axios.")
-    p = 0; if (p1 > 0) p = p1; if (p2 > 0 && (p == 0 || p2 < p)) p = p2
-    sub2 = (p > 0) ? substr(span, p) : span
-    if (match(sub2, /timeout:[ \t]*[^,}]+/)) {
-      expr = substr(sub2, RSTART, RLENGTH); sub(/^timeout:[ \t]*/, "", expr)
-    } else expr = ""
-    printf "%s\t%s\n", name, expr
-    name = ""; span = ""
-  }
-  END { flush() }
-' "$FE_TS" > "$FE_MAP"
+grep '^call' "$FE_EXTRACT" | cut -f2-4 > "$FE_MAP"
+# otherexpr：timeout 表达式非静态数值/助手形态，登记表无从对账
+# ——按漂移点名（fail-closed，不静默归零）。
+while IFS=$'\t' read -r _n _k _v; do
+  [ "$_k" = "otherexpr" ] && fail "普查提取：api/index.ts 导出 $_n 的 timeout 表达式非静态数值/公式助手形态，登记表无法对账"
+done < "$FE_MAP"
 
 # fe_extract CALL -> "KIND VALUE"：KIND = default|literal|formula:<helper>|dynamic
 fe_extract() {
-  local call="$1" expr
-  if ! awk -F'\t' -v n="$call" '$1==n{ f=1 } END{ exit !f }' "$FE_MAP"; then
-    echo "MISSING"; return
-  fi
-  expr="$(awk -F'\t' -v n="$call" '$1==n{ print $2; exit }' "$FE_MAP")"
-  [ -n "$expr" ] || { echo "default $NET_DEFAULT_S"; return; }
-  case "$expr" in
-    batchCallTimeout*) echo "formula:batchCallTimeout" ;;
-    latencyProbeTimeout*) echo "formula:latencyProbeTimeout" ;;
-    relayProbeTimeout*) echo "formula:relayProbeTimeout" ;;
-    Math.max*) echo "dynamic $(eval_ms_expr "$(echo "$expr" | grep -oP 'Math\.max\(\s*\K[\d_]+' | head -1)")" ;;
-    *) echo "literal $(eval_ms_expr "$expr")" ;;
+  local call="$1" row kind value
+  row="$(awk -F'\t' -v n="$call" '$1==n{ print; exit }' "$FE_MAP")"
+  [ -n "$row" ] || { echo "MISSING"; return; }
+  kind="$(printf '%s' "$row" | cut -f2)"
+  value="$(printf '%s' "$row" | cut -f3)"
+  case "$kind" in
+    none) echo "default $NET_DEFAULT_S" ;;
+    formula) echo "formula:$value" ;;
+    dynamic) echo "dynamic $value" ;;
+    literal) echo "literal $value" ;;
+    *) echo "MISSING" ;;
   esac
 }
-# helper_params HELPER -> "CAP FLOOR"（秒）
+# helper_params HELPER -> "CAP FLOOR"（秒；助手按声明结构提取）
 helper_params() {
-  local body cap floor
-  body="$(grep -A10 -P "^const $1\b" "$FE_TS" | head -12)"
-  cap="$(echo "$body" | grep -oP 'Math\.min\(\s*\K[\d_]+' | head -1)"
-  floor="$(echo "$body" | grep -oP 'Math\.max\(\s*\K[\d_]+' | head -1)"
-  [ -n "$cap" ] && [ -n "$floor" ] || { echo ""; return; }
+  local row cap floor
+  row="$(awk -F'\t' -v n="$1" '$1=="helper" && $2==n{ print $3, $4; exit }' "$FE_EXTRACT")"
+  [ -n "$row" ] || { echo ""; return; }
+  read -r cap floor <<EOF
+$row
+EOF
   echo "$(eval_ms_expr "$cap") $(eval_ms_expr "$floor")"
 }
-STREAM_S="$(grep -oP 'DIAGNOSIS_STREAM_TIMEOUT_MS\s*=\s*\K[^;]+' "$FE_STREAM" | head -1)"
-[ -n "$STREAM_S" ] && STREAM_S="$(eval_ms_expr "$STREAM_S")"
+STREAM_MS="$(grep '^stream' "$FE_EXTRACT" | cut -f2 | head -1)"
+STREAM_S=""
+[ -n "$STREAM_MS" ] && STREAM_S="$(awk -v v="$STREAM_MS" 'BEGIN{ printf "%g", v/1000 }')"
 
 # be_literal_anchor CELL -> 提取的后端界（秒），无锚点输出空
 be_literal_anchor() {
@@ -556,9 +585,9 @@ REG_FE_COUNT="$(grep -c . "$SEEN_CALLS")"
 MAP_COUNT="$(grep -c . "$FE_MAP")"
 [ "$REG_FE_COUNT" = "$MAP_COUNT" ] || fail "普查计数不一致：登记表 fe/fe-raw 行 $REG_FE_COUNT ≠ index.ts 导出 $MAP_COUNT（重复登记或缺格）"
 for s in diagnoseTunnelStream diagnoseForwardStream; do
-  grep -qP "^export const $s\b" "$FE_STREAM" || fail "普查差集：diagnosis-stream.ts 表面 $s 不存在"
+  grep -qx "streamexport	$s" "$FE_EXTRACT" || fail "普查差集：diagnosis-stream.ts 表面 $s 不存在"
 done
-rm -f "$FE_MAP" "$SEEN_CALLS"
+rm -f "$FE_MAP" "$SEEN_CALLS" "$FE_EXTRACT"
 
 echo "----"
 echo "timeout-budgets: $ROWS 格登记，普查 $MAP_COUNT 个 index.ts 调用点"
