@@ -487,7 +487,6 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.UserSubscription{},
 		&model.SubUser{},
 		&model.Subscription{},
-		&model.NodeGroup{},
 		&model.SubscriptionCounter{},
 		&model.SubscriptionTraffic{},
 		&model.SubscriptionTemplate{},

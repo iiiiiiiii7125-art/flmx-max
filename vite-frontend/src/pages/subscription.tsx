@@ -1,5 +1,4 @@
 import type {
-  NodeGroupItem,
   RemoteSourceItem,
   SubPipeline,
   SubTemplateItem,
@@ -12,10 +11,9 @@ import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { ArrowDown, ArrowUp, ChevronDown, Copy, QrCode } from "lucide-react";
+import { ChevronDown, Copy, QrCode } from "lucide-react";
 
 import SubscriptionAssignSection from "./subscription/assign";
-import NodeGroupsSection from "./subscription/node-groups";
 
 import {
   useIdemKey,
@@ -27,7 +25,6 @@ import {
   getInboundList,
   getSubscriptionTemplates,
   getInboundRelays,
-  getNodeGroups,
   getRemoteSources,
   getSubscriptions,
   previewSubscription,
@@ -329,7 +326,6 @@ function draftFrom(
       sourceAll: true,
       inboundIds: [],
       sourceIds: [],
-      groupIds: [],
       // Sources marked with a 用途 set up the chain by default: relay
       // sources relay, landing sources and the own nodes are the exits.
       options: {
@@ -355,7 +351,6 @@ function draftFrom(
     sourceAll: s.sourceAll,
     inboundIds: s.inboundIds,
     sourceIds: s.sourceIds ?? [],
-    groupIds: s.groupIds ?? [],
     options: {
       ...EMPTY_PIPELINE,
       ...s.options,
@@ -430,7 +425,6 @@ function Editor({
   setDraft,
   inbounds,
   sources,
-  groups,
   regions,
   ruleGroups,
   saving,
@@ -441,7 +435,6 @@ function Editor({
   setDraft: (d: Draft) => void;
   inbounds: InboundApiItem[];
   sources: RemoteSourceItem[];
-  groups: NodeGroupItem[];
   regions: string[];
   ruleGroups: SubRuleGroup[];
   saving: boolean;
@@ -805,90 +798,6 @@ function Editor({
               其中 {sharedPicked} 个是导入的节点或 Shadowsocks /
               Snell，没法单独分配凭据：对方拿到共用的密码，停用后订阅失效，但已导入的配置仍能连接。
             </p>
-          )}
-        </Section>
-
-        <Section
-          collapsible
-          defaultOpen={draft.groupIds.length > 0}
-          hint="节点组是存在「节点组」页里的共用规则：组内节点按勾选顺序拼在上面来源的节点前面，多个订阅可以共用同一组"
-          summary={
-            draft.groupIds.length
-              ? `已选 ${draft.groupIds.length} 个组`
-              : "未引用"
-          }
-          title="节点组"
-        >
-          {groups.length === 0 ? (
-            <p className="text-xs font-semibold text-foreground">
-              还没有节点组。先到「节点组」页建好，再回来勾选引用。
-            </p>
-          ) : (
-            <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-divider p-2">
-              {groups.map((g) => {
-                const at = draft.groupIds.indexOf(g.id);
-                const picked = at >= 0;
-
-                return (
-                  <div
-                    key={g.id}
-                    className="flex items-center justify-between gap-2"
-                  >
-                    <Checkbox
-                      className="min-w-0"
-                      isSelected={picked}
-                      onValueChange={(on) =>
-                        set({
-                          groupIds: on
-                            ? [...draft.groupIds, g.id]
-                            : draft.groupIds.filter((x) => x !== g.id),
-                        })
-                      }
-                    >
-                      <span className="text-sm">{g.name}</span>
-                      <span className="ml-1 text-xs font-semibold text-foreground">
-                        {g.nodeCount} 个节点
-                        {picked && ` · 第 ${at + 1} 个`}
-                      </span>
-                    </Checkbox>
-                    {picked && (
-                      <span className="flex shrink-0 gap-1">
-                        <Button
-                          isIconOnly
-                          aria-label="上移"
-                          isDisabled={at === 0}
-                          size="sm"
-                          variant="flat"
-                          onPress={() => {
-                            const next = [...draft.groupIds];
-
-                            [next[at - 1], next[at]] = [next[at], next[at - 1]];
-                            set({ groupIds: next });
-                          }}
-                        >
-                          <ArrowUp size={14} />
-                        </Button>
-                        <Button
-                          isIconOnly
-                          aria-label="下移"
-                          isDisabled={at === draft.groupIds.length - 1}
-                          size="sm"
-                          variant="flat"
-                          onPress={() => {
-                            const next = [...draft.groupIds];
-
-                            [next[at], next[at + 1]] = [next[at + 1], next[at]];
-                            set({ groupIds: next });
-                          }}
-                        >
-                          <ArrowDown size={14} />
-                        </Button>
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
           )}
         </Section>
 
@@ -1359,8 +1268,7 @@ type SubscriptionRow = SubscriptionItem & { pendingDelete?: boolean };
 
 export default function SubscriptionPage() {
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"manage" | "assign" | "groups">("manage");
-  const [groups, setGroups] = useState<NodeGroupItem[]>([]);
+  const [tab, setTab] = useState<"manage" | "assign">("manage");
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [subs, setSubs] = useState<SubscriptionRow[]>([]);
   const [regions, setRegions] = useState<string[]>([]);
@@ -1383,15 +1291,13 @@ export default function SubscriptionPage() {
 
   const load = useCallback(async () => {
     try {
-      const [subRes, inRes, srcRes, grpRes] = await Promise.all([
+      const [subRes, inRes, srcRes] = await Promise.all([
         getSubscriptions(),
         getInboundList(),
         getRemoteSources(),
-        getNodeGroups(),
       ]);
 
       if (srcRes.code === 0) setSources(srcRes.data ?? []);
-      if (grpRes.code === 0 && grpRes.data) setGroups(grpRes.data.items ?? []);
 
       if (subRes.code === 0 && subRes.data) {
         setSubs(subRes.data.items ?? []);
@@ -1652,12 +1558,11 @@ export default function SubscriptionPage() {
       </div>
 
       {/* 订阅管理 / 订阅分配 Tab */}
-      <div className="panel-surface grid grid-cols-3 gap-1 rounded-xl p-1">
+      <div className="panel-surface grid grid-cols-2 gap-1 rounded-xl p-1">
         {(
           [
             { key: "manage", label: "订阅管理" },
             { key: "assign", label: "订阅分配" },
-            { key: "groups", label: "节点组" },
           ] as const
         ).map((t) => (
           <button
@@ -1685,15 +1590,6 @@ export default function SubscriptionPage() {
       )}
 
       {tab === "assign" ? <SubscriptionAssignSection /> : <></>}
-      {tab === "groups" && (
-        <NodeGroupsSection
-          groups={groups}
-          inbounds={inbounds}
-          regions={regions}
-          sources={sources}
-          onChanged={load}
-        />
-      )}
       {tab === "manage" && (
         <>
           {inbounds.length === 0 && (
@@ -1905,7 +1801,6 @@ export default function SubscriptionPage() {
             draft && (
               <Editor
                 draft={draft}
-                groups={groups}
                 inbounds={inbounds}
                 regions={regions}
                 ruleGroups={ruleGroups}

@@ -693,11 +693,27 @@ func (h *Handler) subEndpointsMemo(s *model.Subscription, rows []model.NodeInbou
 	return h.subEndpointsForIDs(s, rows, memo, subInboundIDs(s, rows))
 }
 
-// subEndpointsForIDs is subEndpointsMemo for an explicit inbound id set
-// (a node group's sources): same endpoint building, credential stamping
-// and relay scope, driven by ids instead of the subscription's own
-// sources. s may be nil for a standalone group view; then no
-// credentials are stamped and no relay scope applies.
+// subAllInboundIDs are every inbound a subscription draws from: its own
+// sources, resolved by subInboundIDs. Credential pushes, membership
+// checks and traffic attribution must use this set.
+func (h *Handler) subAllInboundIDs(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo) []int64 {
+	return subInboundIDs(s, rows)
+}
+
+// subRenderEndpointsMemo is what a subscription renders: its own
+// sources (which the caller passes through the subscription's pipeline
+// at render time). Subscriptions render exactly subEndpointsMemo.
+func (h *Handler) subRenderEndpointsMemo(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo) []kernel.Endpoint {
+	return h.subEndpointsMemo(s, rows, memo)
+}
+
+func (h *Handler) subRenderEndpoints(s *model.Subscription, rows []model.NodeInbound) []kernel.Endpoint {
+	return h.subRenderEndpointsMemo(s, rows, nil)
+}
+
+// subEndpointsForIDs is subEndpointsMemo for an explicit inbound id set:
+// same endpoint building, credential stamping and relay scope, driven
+// by ids instead of the subscription's own sources.
 func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo, ids []int64) []kernel.Endpoint {
 	want := map[int64]bool{}
 	for _, id := range ids {
@@ -840,7 +856,6 @@ type subscriptionView struct {
 	SourceAll  bool    `json:"sourceAll"`
 	InboundIDs []int64 `json:"inboundIds"`
 	SourceIDs  []int64 `json:"sourceIds"`
-	GroupIDs   []int64 `json:"groupIds"`
 	// SharedIDs are selected inbounds of a share subscription that can't
 	// carry per-user credentials (Snell, Shadowsocks, imported nodes).
 	SharedIDs  []int64     `json:"sharedIds"`
@@ -994,13 +1009,9 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	if len(assignments) > 0 {
 		endpoints = filterEndpointsByUserAssignments(endpoints, assignments)
 	}
-	groupIDs := parseIDList(s.GroupIDs)
-	if groupIDs == nil {
-		groupIDs = []int64{}
-	}
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
-		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, GroupIDs: groupIDs, SharedIDs: shared, Options: pipe,
+		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, SharedIDs: shared, Options: pipe,
 		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), PendingDelete: s.PendingDelete == 1, Remark: s.Remark,
 		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
@@ -1068,7 +1079,6 @@ type subscriptionRequest struct {
 	SourceAll  bool        `json:"sourceAll"`
 	InboundIDs []int64     `json:"inboundIds"`
 	SourceIDs  []int64     `json:"sourceIds"`
-	GroupIDs   []int64     `json:"groupIds"`
 	Options    subPipeline `json:"options"`
 	ExpireTime int64       `json:"expireTime"`
 	Enabled    *bool       `json:"enabled"`
@@ -1162,12 +1172,8 @@ func (req *subscriptionRequest) validateDetailed(rows []model.NodeInbound) ([]in
 		}
 	}
 	req.SourceIDs = sources
-	req.GroupIDs = normalizeGroupIDs(req.GroupIDs)
-	if len(req.GroupIDs) > 100 {
-		return nil, nil, errText("选的节点组太多（最多 100 个）")
-	}
 	chainSources := len(req.Options.ChainLandingSources) + len(req.Options.ChainRelaySources)
-	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 && chainSources == 0 && len(req.GroupIDs) == 0 {
+	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 && chainSources == 0 {
 		return nil, nil, errText("请至少选择一个入站或订阅源，或选择全部")
 	}
 	return ids, excluded, nil
@@ -1195,10 +1201,6 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, excludedCompanions, err := req.validateDetailed(rows)
 	if err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
-	if err := h.validateGroupIDs(req.GroupIDs); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -1262,7 +1264,6 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	s.SourceAll = boolToInt(req.SourceAll)
 	s.InboundIDs = formatIDList(ids)
 	s.SourceIDs = formatIDList(req.SourceIDs)
-	s.GroupIDs = formatOrderedIDList(req.GroupIDs)
 	opts, _ := json.Marshal(req.Options)
 	s.Options = string(opts)
 	s.ExpireTime = req.ExpireTime
@@ -1552,13 +1553,9 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	if err := h.validateGroupIDs(req.GroupIDs); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
 	options, _ := json.Marshal(req.Options)
 	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids), SourceIDs: formatIDList(req.SourceIDs),
-		GroupIDs: formatOrderedIDList(req.GroupIDs), Options: string(options)}
+		Options: string(options)}
 	source := h.subRenderEndpoints(draft, rows)
 	opts := req.Options.options()
 	// F-024（O4-001 的另一半）：脚本出错时预览必须保留其他步骤的节点并

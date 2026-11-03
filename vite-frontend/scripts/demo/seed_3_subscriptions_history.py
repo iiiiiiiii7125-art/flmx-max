@@ -164,20 +164,12 @@ for sid, up_g, down_g in [(s2, 6, 62), (s3, 9, 83)]:
         x("INSERT INTO subscription_traffic(subscription_id, hour, upload_bytes, download_bytes) VALUES(?,?,?,?)",
           (sid, t - t % 3600000, int(up_g * G / hours * w * 1.6), int(down_g * G / hours * w * 1.6)))
 
-# Node groups + subscription templates (our own group/template
-# features): one reusable group over the Asian self-built inbounds,
-# one pasted Mihomo template, and a subscription that uses both — so
-# group/list carries a real referencing subscription, template/list a
-# used template, and the demo's group/template surfaces are not empty
-# shells. The recordings for these endpoints live in record_items.mjs.
+# Subscription templates: one pasted Mihomo template and a
+# subscription that uses it over the Asian self-built inbounds — so
+# template/list carries a used template and the demo's template
+# surfaces are not empty shells. The recordings for these endpoints
+# live in record_items.mjs.
 db.commit()
-grp = api("/subscription/group/save", {
-    "name": "亚洲优选", "sourceAll": False,
-    "inboundIds": [inb["香港 Reality"], inb["香港 ENC"], inb["东京 Reality"]],
-    "sourceIds": [],
-    "options": {"lines": "", "regions": [], "protocols": [], "include": "", "exclude": "",
-                "rename": "", "addFlag": True, "prefix": "", "dedupe": True, "sort": "name", "script": ""},
-})["data"]
 tpl = api("/subscription/template/save", {
     "name": "Mihomo 基础模板", "kind": "clash",
     "content": ("proxies: []\n"
@@ -188,7 +180,8 @@ tpl = api("/subscription/template/save", {
                 "  - GEOIP,CN,DIRECT\n"
                 "  - MATCH,节点选择\n"),
 })["data"]
-s5 = sub("小明 · 电视", sourceAll=False, groupIds=[grp["id"]],
+s5 = sub("小明 · 电视", sourceAll=False,
+         inboundIds=[inb["香港 Reality"], inb["香港 ENC"], inb["东京 Reality"]],
          options={"templates": {"clash": tpl["id"]}},
          trafficLimit=300 * G, resetDay=1, expireTime=now + 90 * DAY)
 
