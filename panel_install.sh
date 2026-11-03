@@ -559,13 +559,27 @@ install_docker() {
   fi
 
   echo "官方脚本安装失败或未通过校验，尝试系统包管理器..."
+  # R6-01: 兜底包名必须真实可得。旧实现 Debian 支装 docker-compose-
+  # plugin、RHEL 支装 docker＋docker-compose-plugin——这些包名只在
+  # Docker 官方源里、发行版默认源不提供，apt/dnf 对无法定位的包整
+  # 条命令失败，连同支的引擎本体也装不上，兜底必然失败。现口径：
+  # Debian/Ubuntu 用发行源内的 docker.io＋docker-compose-v2（旧发
+  # 行版只有 v1 包名 docker-compose 时退到它；两个包名提供的都是
+  # docker-compose 二进制，check_docker 先认 docker-compose、再认
+  # docker compose 子命令，两形态都可被检出）；RHEL 系默认源既无
+  # 引擎也无插件，先落 Docker 官方 yum 源（repo 文件自带
+  # gpgcheck=1、包经 Docker 发布密钥验签）再装官方包名。
   if [ -f /etc/debian_version ]; then
-    apt-get update && apt-get install -y docker.io docker-compose-plugin && return 0
+    apt-get update && { apt-get install -y docker.io docker-compose-v2 || apt-get install -y docker.io docker-compose; } && return 0
   elif [ -f /etc/redhat-release ]; then
     if command -v dnf &> /dev/null; then
-      dnf install -y docker docker-compose-plugin && return 0
+      dnf install -y dnf-plugins-core && \
+        dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo && \
+        dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin && return 0
     else
-      yum install -y docker docker-compose-plugin 2>/dev/null || yum install -y docker && return 0
+      yum install -y yum-utils && \
+        yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo && \
+        yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin && return 0
     fi
   elif [ -f /etc/alpine-release ]; then
     apk add --no-cache docker docker-compose && return 0
