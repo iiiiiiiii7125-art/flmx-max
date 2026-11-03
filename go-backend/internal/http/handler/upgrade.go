@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/ws"
 )
 
 // failedForward tracks a forward that failed redeployment, for retry.
@@ -865,9 +866,39 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"message": result.Message,
-	}))
+	response.WriteJSON(w, response.OK(rollbackReceiptData(result)))
+}
+
+// rollbackReceiptData builds the node rollback receipt (R6-05).
+// Agents that carry the backup-pairing pre-flight report the
+// landing version in the command data; the receipt must name that
+// version — a rollback whose target the operator cannot see is how
+// the cross-path generation skip (panel upgrade A->B, script
+// update B->C, rollback silently landing on A) stayed invisible.
+// The backupGeneration field is passed through verbatim; a
+// "legacy-unknown" backup (written before pairing records existed)
+// is disclosed as unverified in the message. Older agents report
+// no data at all: the receipt then keeps the previous shape
+// (the command result message only).
+func rollbackReceiptData(result ws.CommandResult) map[string]interface{} {
+	data := map[string]interface{}{"message": result.Message}
+	toVersion, _ := result.Data["toVersion"].(string)
+	if toVersion == "" {
+		return data
+	}
+	data["toVersion"] = toVersion
+	if fromVersion, _ := result.Data["fromVersion"].(string); fromVersion != "" {
+		data["fromVersion"] = fromVersion
+	}
+	message := fmt.Sprintf("回退命令已发送，节点将回退到版本 %s 并自动重启", toVersion)
+	if generation, _ := result.Data["backupGeneration"].(string); generation != "" {
+		data["backupGeneration"] = generation
+		if generation == "legacy-unknown" {
+			message += "（该备份无代际配对记录，未经紧邻上一代校验）"
+		}
+	}
+	data["message"] = message
+	return data
 }
 
 // --- 同节点升级类操作互斥（L2-10 / R5-FC）---

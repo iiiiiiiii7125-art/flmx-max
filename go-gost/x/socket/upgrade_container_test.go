@@ -46,7 +46,7 @@ func TestHandleUpgradeAgentContainerGuidance(t *testing.T) {
 
 func TestHandleRollbackAgentContainerGuidance(t *testing.T) {
 	stubUpgradeInContainer(t, true)
-	err := (&WebSocketReporter{}).handleRollbackAgent(nil)
+	_, err := (&WebSocketReporter{}).handleRollbackAgent(nil)
 	if err == nil {
 		t.Fatal("container form rollback must refuse, got nil error")
 	}
@@ -71,7 +71,7 @@ func TestHandleRollbackAgentNonContainerEntryUnchanged(t *testing.T) {
 	if _, err := os.Stat("/etc/flux_agent/flux_agent.old"); !os.IsNotExist(err) {
 		t.Skip("a real backup file exists on this host; control case not applicable")
 	}
-	err := (&WebSocketReporter{}).handleRollbackAgent(nil)
+	_, err := (&WebSocketReporter{}).handleRollbackAgent(nil)
 	if err == nil || !strings.Contains(err.Error(), "没有可用的备份文件") {
 		t.Fatalf("script form rollback entry behavior changed, got: %v", err)
 	}

@@ -565,7 +565,74 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		// 重启 Restore 会反复拉起坏配置；保留上一次的持久状态。
 		inst.logs.add("[flmx] 新配置未确认可用，未写入持久状态；重启后将恢复上一次的配置")
 	}
+
+	if confirmed {
+		// R6-09: enforce the kernel binary retention policy —
+		// only the current and previous generations' bin dirs
+		// survive a confirmed apply (see pruneStaleBinDirs). An
+		// unconfirmed apply prunes nothing: the persisted previous
+		// state must find every directory exactly where it was.
+		keep := make(map[string]bool)
+		for _, p := range prev.bins {
+			keep[filepath.Dir(p)] = true
+		}
+		m.mu.Lock()
+		for _, p := range inst.bins {
+			keep[filepath.Dir(p)] = true
+		}
+		m.mu.Unlock()
+		if removed, perr := m.pruneStaleBinDirs(req.Type, keep); perr != nil {
+			inst.logs.add("[flmx] 回收旧版本内核目录失败: " + perr.Error())
+		} else if len(removed) > 0 {
+			inst.logs.add("[flmx] 已回收旧版本内核目录: " + strings.Join(removed, ", "))
+		}
+	}
 	return m.state(req.Type, false), failure
+}
+
+// pruneStaleBinDirs enforces the kernel binary retention policy
+// (R6-09): under <base>/<type>/bin, only the directories in keep
+// survive; every other directory — a superseded version's main bin
+// dir or an extra's versioned dir, each carrying its own geodata
+// copy — is removed. Before this, install only ever replaced the
+// same-version directory and nothing enumerated the version dirs,
+// so every successful version change left one more generation on
+// disk forever, recoverable only by uninstalling the whole kernel.
+// The working set the code actually reads is two generations: the
+// current one (Apply/Restore) and the previous one (the intra-Apply
+// rollback source); anything older has no reader. Non-directory
+// entries are left alone. Removal is best-effort: every entry is
+// attempted, the first error is returned, and the caller logs it
+// without failing the apply.
+func (m *Manager) pruneStaleBinDirs(kernelType string, keep map[string]bool) ([]string, error) {
+	binRoot := filepath.Join(m.baseDir, kernelType, "bin")
+	entries, err := os.ReadDir(binRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var removed []string
+	var firstErr error
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(binRoot, e.Name())
+		if keep[dir] {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		removed = append(removed, e.Name())
+	}
+	sort.Strings(removed)
+	return removed, firstErr
 }
 
 // prevApply is what an instance ran before an apply, to go back to when the

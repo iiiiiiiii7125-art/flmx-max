@@ -1125,6 +1125,20 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UnixMilli()
+	// R6-21：SSH 配置的解析与校验前置到字段落库之前。旧顺序先
+	// UpdateNode 落全部字段、再 persistNodeSSHConfig，其确定性
+	// 校验失败（配置不完整/端口无效等）回错时字段已生效、回执
+	// 却不披露，属两段写非原子。校验只依赖请求与已存 SSH 配置
+	// （均可先行读取），故先 resolve 求解并校验、整单拒绝零落
+	// 库；落库后 apply 只剩单次仓库写，其失败只能是仓库错误。
+	// 与 kernelControl 的 B11-002 回执披露口径不同：那里的第二段
+	// 是不可预检的远程下发，这里的第二段是本地确定性校验，可
+	// 前置消除而非仅披露。
+	sshPlan, err := h.resolveNodeSSHConfig(id, req, forwardMode, true)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	if err := h.repo.UpdateNode(id,
 		nodeName,
 		serverIP,
@@ -1147,7 +1161,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	if err := h.persistNodeSSHConfig(id, req, forwardMode, now, true); err != nil {
+	if err := h.applyNodeSSHConfig(id, sshPlan, now); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -1192,15 +1206,33 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OKEmpty())
 }
 
-func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{}, forwardMode string, now int64, preserveSecrets bool) error {
+// nodeSSHConfigPlan is the resolved outcome of the SSH config
+// validation phase: everything persistNodeSSHConfig would write,
+// computed and fully validated before anything is persisted.
+// R6-21 split the function into resolve/apply because nodeUpdate
+// used to persist the node fields first and only then discover a
+// deterministic SSH validation failure — the update reported an
+// error while the fields had already landed, with a receipt that
+// disclosed neither fact. The validation depends only on the
+// request and the stored SSH config (both readable up front), so
+// nodeUpdate now resolves first and rejects the whole update
+// before any write; apply then performs the single write, whose
+// only remaining failure mode is a repository error.
+type nodeSSHConfigPlan struct {
+	delete bool
+	noop   bool
+	input  repo.NftSSHConfigInput
+}
+
+func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{}, forwardMode string, preserveSecrets bool) (*nodeSSHConfigPlan, error) {
 	if h == nil || h.repo == nil {
-		return errors.New("handler not initialized")
+		return nil, errors.New("handler not initialized")
 	}
 	if nodeID <= 0 {
-		return errors.New("节点ID不能为空")
+		return nil, errors.New("节点ID不能为空")
 	}
 	if forwardMode != "nftables" {
-		return h.repo.DeleteNodeSSHConfig(nodeID)
+		return &nodeSSHConfigPlan{delete: true}, nil
 	}
 	// V2-06：部分更新（preserveSecrets=true）未带 sshConfig 整段时
 	// 整段不动——旧实现仍会用请求值重建并 upsert，其中 port 被
@@ -1209,7 +1241,7 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 	// 节点 SSH 配置静默改回 22，数据面随之失联。
 	if preserveSecrets {
 		if _, ok := req["sshConfig"]; !ok {
-			return nil
+			return &nodeSSHConfigPlan{noop: true}, nil
 		}
 	}
 	cfgMap := asMap(req["sshConfig"])
@@ -1226,7 +1258,7 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 	// 报错）明确拒绝，不再静默默认 22；在场但不可解析直接报错。
 	if rawPort, ok := cfgMap["port"]; ok && asString(rawPort) != "" {
 		if _, err := strconv.ParseInt(asString(rawPort), 10, 64); err != nil {
-			return errors.New("nftables 节点 SSH 端口无效")
+			return nil, errors.New("nftables 节点 SSH 端口无效")
 		}
 	}
 	port := asInt(cfgMap["port"], 0)
@@ -1240,7 +1272,7 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 	if preserveSecrets {
 		existing, err := h.repo.GetNodeSSHConfig(nodeID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
+			return nil, err
 		}
 		if existing != nil {
 			if host == "" {
@@ -1271,34 +1303,34 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 	}
 
 	if host == "" || username == "" {
-		return errors.New("nftables 节点 SSH 配置不完整")
+		return nil, errors.New("nftables 节点 SSH 配置不完整")
 	}
 	// 复扫 R-04：SSH host 是拨号目标主机名（runner 以
 	// JoinHostPort(host, sshPort) 拼地址），显式填值此前无任何
 	// 主机名校验；空标签在任何 DNS 下都不可解析，写面即拒。
 	// serverIp 派生分支已由节点地址门覆盖，此处复核无害。
 	if err := validateNoEmptyLabelAddr(host); err != nil {
-		return fmt.Errorf("nftables 节点 SSH 主机名格式无效：%w", err)
+		return nil, fmt.Errorf("nftables 节点 SSH 主机名格式无效：%w", err)
 	}
 	if port <= 0 || port > 65535 {
-		return errors.New("nftables 节点 SSH 端口无效")
+		return nil, errors.New("nftables 节点 SSH 端口无效")
 	}
 
 	authType = strings.ToLower(authType)
 	switch authType {
 	case "password":
 		if strings.TrimSpace(password) == "" {
-			return errors.New("nftables 节点 SSH 密码不能为空")
+			return nil, errors.New("nftables 节点 SSH 密码不能为空")
 		}
 		privateKey = ""
 	case "private_key", "":
 		authType = "private_key"
 		if strings.TrimSpace(privateKey) == "" {
-			return errors.New("nftables 节点 SSH 私钥不能为空")
+			return nil, errors.New("nftables 节点 SSH 私钥不能为空")
 		}
 		password = ""
 	default:
-		return errors.New("nftables 节点 SSH 认证方式无效")
+		return nil, errors.New("nftables 节点 SSH 认证方式无效")
 	}
 
 	switch strings.ToLower(sudoMode) {
@@ -1306,10 +1338,10 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 		sudoMode = "none"
 	case "sudo", "sudo_su":
 	default:
-		return errors.New("nftables 节点 sudo 模式无效")
+		return nil, errors.New("nftables 节点 sudo 模式无效")
 	}
 
-	return h.repo.UpsertNodeSSHConfig(nodeID, repo.NftSSHConfigInput{
+	return &nodeSSHConfigPlan{input: repo.NftSSHConfigInput{
 		Host:       host,
 		Port:       port,
 		Username:   username,
@@ -1318,7 +1350,25 @@ func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{},
 		PrivateKey: privateKey,
 		Passphrase: passphrase,
 		SudoMode:   sudoMode,
-	}, now)
+	}}, nil
+}
+
+func (h *Handler) applyNodeSSHConfig(nodeID int64, plan *nodeSSHConfigPlan, now int64) error {
+	if plan == nil || plan.noop {
+		return nil
+	}
+	if plan.delete {
+		return h.repo.DeleteNodeSSHConfig(nodeID)
+	}
+	return h.repo.UpsertNodeSSHConfig(nodeID, plan.input, now)
+}
+
+func (h *Handler) persistNodeSSHConfig(nodeID int64, req map[string]interface{}, forwardMode string, now int64, preserveSecrets bool) error {
+	plan, err := h.resolveNodeSSHConfig(nodeID, req, forwardMode, preserveSecrets)
+	if err != nil {
+		return err
+	}
+	return h.applyNodeSSHConfig(nodeID, plan, now)
 }
 
 func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
