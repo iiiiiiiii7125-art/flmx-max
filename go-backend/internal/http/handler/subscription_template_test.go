@@ -182,7 +182,7 @@ func tplIDStr(id int64) string {
 // templates and enables info nodes must still lead with the expiry and
 // traffic placeholders in template-rendered formats (clash + sing-box).
 func TestOpenSubscriptionTemplateWithInfoNodes(t *testing.T) {
-	h, r, _ := groupFixture(t)
+	h, r, _ := subFixture(t)
 
 	_, env := tplPost(t, h.subscriptionTemplateSave, `{"name":"clash模板","kind":"clash","content":`+tplJSONStr(tplTestClash)+`}`)
 	if env["code"] != float64(0) {
@@ -229,14 +229,17 @@ func TestOpenSubscriptionTemplateWithInfoNodes(t *testing.T) {
 	}
 }
 
-// TestSubscriptionTemplateCheckIncludesGroupNodes: the template check
-// preview for a picked subscription must use the render set (group
-// splice included), matching subscriptionPreview — a group-only
-// subscription previously previewed with zero nodes.
-func TestSubscriptionTemplateCheckIncludesGroupNodes(t *testing.T) {
-	h, r, ids := groupFixture(t)
-	g := saveGroup(t, r, "HK组", []int64{ids["hk-1"], ids["hk-2"]}, "")
-	s := saveShareSub(t, r, "G", strings.Repeat("c", 32), []int64{g.ID}, "")
+// TestSubscriptionTemplateCheckIncludesRenderNodes: the template check
+// preview for a picked subscription must use the subscription's render
+// set, matching subscriptionPreview — checking against an empty or
+// all-nodes sample would misjudge whether the template's auto group
+// receives the subscription's nodes.
+func TestSubscriptionTemplateCheckIncludesRenderNodes(t *testing.T) {
+	h, r, ids := subFixture(t)
+	s := createShareSub(t, r, &model.Subscription{
+		Name: "G", Kind: model.SubscriptionShare, Token: strings.Repeat("c", 32), UUID: "uuid-g", Password: "pw-g",
+		InboundIDs: formatIDList([]int64{ids["hk-1"], ids["hk-2"]}), Enabled: 1,
+	})
 
 	_, env := tplPost(t, h.subscriptionTemplateCheck, `{"kind":"clash","content":`+tplJSONStr(tplTestClash)+`,"subscriptionId":`+tplIDStr(s.ID)+`}`)
 	if env["code"] != float64(0) {
@@ -244,7 +247,7 @@ func TestSubscriptionTemplateCheckIncludesGroupNodes(t *testing.T) {
 	}
 	data := env["data"].(map[string]interface{})
 	if data["nodes"] != float64(2) {
-		t.Fatalf("check sample must include the 2 group nodes, got nodes=%v (data=%v)", data["nodes"], data)
+		t.Fatalf("check sample must include the 2 render nodes, got nodes=%v (data=%v)", data["nodes"], data)
 	}
 	summary := data["summary"].(map[string]interface{})
 	var autoNodes string
@@ -255,6 +258,6 @@ func TestSubscriptionTemplateCheckIncludesGroupNodes(t *testing.T) {
 		}
 	}
 	if !strings.Contains(autoNodes, "hk-1") || !strings.Contains(autoNodes, "hk-2") {
-		t.Fatalf("auto group must preview the group nodes, got %s", autoNodes)
+		t.Fatalf("auto group must preview the render nodes, got %s", autoNodes)
 	}
 }

@@ -8,10 +8,11 @@ import (
 
 // R10 修复批 · fedidem 路回归钉格（LEDGER10 R10-06 / R10-07）。
 //
-// - R10-06（I-C2-01）：移植轮两个 save 型创建端点（nodeGroupSave、
-//   subscriptionTemplateSave）漏接 Idempotency-Key 幂等族——带键双发各
+// - R10-06（I-C2-01）：移植轮的 save 型创建端点
+//   subscriptionTemplateSave 漏接 Idempotency-Key 幂等族——带键双发各
 //   建两行。钉格按 r2_b2 形态：同键重发只建一行且回放首次结果；同键
-//   update（ID>0）正常执行不被回放吞掉。
+//   update（ID>0）正常执行不被回放吞掉。（同批的 nodeGroupSave 格已
+//   随节点组功能移除一并摘除。）
 // - R10-07（I-C2-02）：联邦 tunnel/create 无重投回放语义——首投建成
 //   而回执丢失后，同参重试被 (share, port) 占位检查恒 403 挡死。钉格：
 //   同 (share, port) 且 Target/Protocol 一致时回放既有 tunnelId；不一
@@ -21,41 +22,6 @@ import (
 // 互相回放污染（r2_b2 登记 #4 同口径）。
 func r10FedidemKey(prefix string) string {
 	return prefix + "-" + time.Now().Format("150405.000000000")
-}
-
-func TestR10NodeGroupSaveCreateIdempotent(t *testing.T) {
-	r, h := r2b2Open(t)
-	key := r10FedidemKey("r10-ngroup-key")
-	payload := map[string]interface{}{
-		"name": "idem-ngroup-r10", "sourceAll": true,
-		"inboundIds": []int64{}, "sourceIds": []int64{},
-		"options": map[string]interface{}{},
-	}
-	b1 := r2b2Post(t, h.nodeGroupSave, "/api/v1/subscription/group/save", payload, key)
-	r2b2AssertCode0(t, "nodeGroupSave first", b1)
-	b2 := r2b2Post(t, h.nodeGroupSave, "/api/v1/subscription/group/save", payload, key)
-	if b2 != b1 {
-		t.Fatalf("nodeGroupSave 同键应回放首次结果:\n%s\n%s", b1, b2)
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM node_group WHERE name = 'idem-ngroup-r10'`); n != 1 {
-		t.Fatalf("nodeGroupSave 同键建出 %d 行, want 1", n)
-	}
-
-	// 同键 update（ID>0）不参与幂等，必须正常执行改名。
-	groupID := int64(mustQueryInt(t, r, `SELECT id FROM node_group WHERE name = 'idem-ngroup-r10'`))
-	update := map[string]interface{}{
-		"id": groupID, "name": "idem-ngroup-r10-renamed", "sourceAll": true,
-		"inboundIds": []int64{}, "sourceIds": []int64{},
-		"options": map[string]interface{}{},
-	}
-	b3 := r2b2Post(t, h.nodeGroupSave, "/api/v1/subscription/group/save", update, key)
-	r2b2AssertCode0(t, "nodeGroupSave update same key", b3)
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM node_group WHERE name = 'idem-ngroup-r10-renamed'`); n != 1 {
-		t.Fatalf("同键 update 应正常执行改名, renamed rows = %d（被回放吞掉）", n)
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM node_group WHERE name LIKE 'idem-ngroup-r10%'`); n != 1 {
-		t.Fatalf("node_group rows = %d, want 1", n)
-	}
 }
 
 func TestR10SubscriptionTemplateSaveCreateIdempotent(t *testing.T) {

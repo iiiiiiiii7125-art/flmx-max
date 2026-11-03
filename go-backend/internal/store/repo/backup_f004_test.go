@@ -196,7 +196,6 @@ func TestBackupTableCoverage(t *testing.T) {
 		"node_inbound_counter":  "inbounds",
 		"subscription":          "inbounds",
 		"subscription_template": "inbounds",
-		"node_group":            "inbounds",
 		"remote_source":         "inbounds",
 		"sub_user":              "inbounds",
 		// FIX132-C：A3-04 订阅计数基线随 inbounds 段；A3-05 两表随

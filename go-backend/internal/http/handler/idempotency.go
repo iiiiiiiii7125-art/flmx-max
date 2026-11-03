@@ -30,7 +30,6 @@ import (
 // inboundRelayCreate "inbound-relay:create" （kernel_relay.go）
 // federationShareCreate "federation-share:create"（federation.go）
 // remoteSourceSave "remote-source:create" （仅 ID==0 新建分支）
-// nodeGroupSave "node-group:create" （仅 ID==0 新建分支，R10-06 补接）
 // subscriptionTemplateSave "subscription-template:create" （仅 ID==0 新建分支，R10-06 补接）
 // tunnelCreate "tunnel:create" （mutations.go）
 // userCreate "user:create" （mutations.go）
