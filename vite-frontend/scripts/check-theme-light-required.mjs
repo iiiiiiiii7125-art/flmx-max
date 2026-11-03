@@ -36,6 +36,15 @@
 //      此钉死——包 light 集声明的每个 token 必须在 globals.css 的
 //      :root 中存在且逐值相同，任一漂移（改包不改 globals、或反之
 //      只改 globals 一面）即红。
+//   ⑩ 「在场但为空」形态（R6-10 / F-C5-01）：light 键在场但集为空
+//      （light: {}），或 light 全值为 undefined（injectTokens 跳过
+//      undefined、实际注入 0）——两种形态的有效值计数均为 0，必须
+//      与「缺失」形态同拒并点名；被拒包同样不得激活。
+//   ⑪ 同 id 顶替保护对空形态同样成立：先注册合法包，再以同 id 喂
+//      空集包 / 全 undefined 包 → 合法包不被顶掉。附带正对照：
+//      light 集部分键为 undefined、其余为实值的包属合法部分集
+//      （未定义键由 injectTokens 跳过、其余照常注入，未给出的
+//      token 走回退），不得被新校验误伤。
 //
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-theme-light-required.mjs
@@ -180,6 +189,18 @@ const darkOnlyPkg = {
 };
 const emptyTokensPkg = { ...base, id: "bad-empty-tokens", tokens: {} };
 const noTokensPkg = { ...base, id: "ok-no-tokens" };
+// R6-10：在场但为空的两形态（有效值计数 0），与部分 undefined 的合法形态。
+const emptyLightPkg = { ...base, id: "bad-empty-light", tokens: { light: {} } };
+const undefLightPkg = {
+  ...base,
+  id: "bad-undef-light",
+  tokens: { light: { "--primary": undefined } },
+};
+const partialUndefPkg = {
+  ...base,
+  id: "ok-partial-undef",
+  tokens: { light: { "--primary": undefined, "--secondary": "#abcdef" } },
+};
 
 if (typeof validateThemePackage === "function") {
   check(
@@ -201,6 +222,21 @@ if (typeof validateThemePackage === "function") {
     "validateThemePackage：无 tokens → 通过（tokens 本身可选）",
     validateThemePackage(noTokensPkg) === null,
     `实得 ${JSON.stringify(validateThemePackage(noTokensPkg))}`,
+  );
+  check(
+    "validateThemePackage：light 为空集 {} → 点名缺 light（R6-10）",
+    /light/.test(validateThemePackage(emptyLightPkg) ?? ""),
+    `实得 ${JSON.stringify(validateThemePackage(emptyLightPkg))}`,
+  );
+  check(
+    "validateThemePackage：light 全值为 undefined → 点名缺 light（R6-10）",
+    /light/.test(validateThemePackage(undefLightPkg) ?? ""),
+    `实得 ${JSON.stringify(validateThemePackage(undefLightPkg))}`,
+  );
+  check(
+    "validateThemePackage：light 部分 undefined＋部分实值 → 通过（合法部分集）",
+    validateThemePackage(partialUndefPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(partialUndefPkg))}`,
   );
 }
 
@@ -238,6 +274,50 @@ registerTheme({ ...darkOnlyPkg, id: "ok-light" });
 check(
   "同 id 非法包不能顶掉已注册的合法包",
   getTheme("ok-light") === lightPkg,
+);
+
+// ─── ⑩⑪ R6-10：在场但为空的两形态 ────────────────────────────────────────
+
+registerTheme(emptyLightPkg);
+check(
+  "light 为空集 {} 的主题包被拒注册（R6-10）",
+  getTheme("bad-empty-light") === undefined &&
+    errorLog.some((m) => m.includes("bad-empty-light") && /light/.test(m)),
+  `捕获到: ${JSON.stringify(errorLog)}`,
+);
+
+registerTheme(undefLightPkg);
+check(
+  "light 全值为 undefined 的主题包被拒注册（R6-10）",
+  getTheme("bad-undef-light") === undefined &&
+    errorLog.some((m) => m.includes("bad-undef-light") && /light/.test(m)),
+  `捕获到: ${JSON.stringify(errorLog)}`,
+);
+
+activateTheme("bad-empty-light");
+activateTheme("bad-undef-light");
+check(
+  "被拒的空集包无法激活（active 仍为 null，不装作成功）",
+  getActiveThemeId() === null,
+  `实得 ${JSON.stringify(getActiveThemeId())}`,
+);
+
+registerTheme({ ...emptyLightPkg, id: "ok-light" });
+check(
+  "同 id 空集包不能顶掉已注册的合法包（R6-10）",
+  getTheme("ok-light") === lightPkg,
+);
+
+registerTheme({ ...undefLightPkg, id: "ok-light" });
+check(
+  "同 id 全 undefined 包不能顶掉已注册的合法包（R6-10）",
+  getTheme("ok-light") === lightPkg,
+);
+
+registerTheme(partialUndefPkg);
+check(
+  "light 部分 undefined 的合法部分集仍可注册（不误伤）",
+  getTheme("ok-partial-undef") === partialUndefPkg,
 );
 
 registerTheme(noTokensPkg);
