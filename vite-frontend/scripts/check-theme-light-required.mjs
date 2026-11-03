@@ -37,6 +37,13 @@
 //      :root 中存在且逐值相同，任一漂移（改包不改 globals、或反之
 //      只改 globals 一面）即红。
 //
+// 提取面（修复轮 6，R6-C4-10 机制处置）：断言⑨的 globals 侧旧实现
+// 以正则合并 :root 块、无注释剥离——在 :root 块内给改过的 token
+// 同行加注释存档旧值声明，注释声明后胜出、相异集报 ∅。现 globals
+// 侧先词法剥除 CSS 注释再合并；断言⑧的源码文本钉同样先剥 TS 注
+// 释（注释里的回退形态提及不算数、也不能靠注释拷贝满足/干扰判
+// 定），行为断言 ①–⑦ 的转译执行面不变。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-theme-light-required.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -66,9 +73,155 @@ const check = (label, ok, detail = "") => {
   if (!ok) failures.push(label);
 };
 
-// ─── 文本钉（源码形态） ────────────────────────────────────────────────────
+// ─── 文本钉（源码形态，剥注释后判定） ────────────────────────────────────
 
 const readSrc = (rel) => readFileSync(join(frontendDir, rel), "utf8");
+
+// 词法剥注释（TS/TSX）：// 与 /* */ 逐字替换为空格（换行保留），
+// 字符串/模板字面量内容原样保留。
+const stripComments = (src) => {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  let mode = "code";
+  const tplDepths = [];
+  let braceDepth = 0;
+  while (i < n) {
+    const c = src[i];
+    const d = src[i + 1] ?? "";
+    if (mode === "code") {
+      if (c === "/" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "line";
+        continue;
+      }
+      if (c === "/" && d === "*") {
+        out.push("  ");
+        i += 2;
+        mode = "block";
+        continue;
+      }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      else if (c === "{") braceDepth++;
+      else if (c === "}") {
+        if (tplDepths.length && braceDepth === tplDepths[tplDepths.length - 1]) {
+          tplDepths.pop();
+          braceDepth--;
+          mode = "tpl";
+          out.push(c);
+          i++;
+          continue;
+        }
+        braceDepth--;
+      }
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (mode === "line") {
+      if (c === "\n") {
+        out.push(c);
+        i++;
+        mode = "code";
+        continue;
+      }
+      out.push(" ");
+      i++;
+      continue;
+    }
+    if (mode === "block") {
+      if (c === "*" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "code";
+        continue;
+      }
+      out.push(c === "\n" ? "\n" : " ");
+      i++;
+      continue;
+    }
+    if (mode === "sq" || mode === "dq") {
+      const q = mode === "sq" ? "'" : '"';
+      out.push(c);
+      if (c === "\\") {
+        out.push(d);
+        i += 2;
+        continue;
+      }
+      if (c === q) mode = "code";
+      i++;
+      continue;
+    }
+    out.push(c);
+    if (c === "\\") {
+      out.push(d);
+      i += 2;
+      continue;
+    }
+    if (c === "`") {
+      mode = "code";
+      i++;
+      continue;
+    }
+    if (c === "$" && d === "{") {
+      out.push(d);
+      i += 2;
+      braceDepth++;
+      tplDepths.push(braceDepth);
+      mode = "code";
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+};
+
+// 词法剥除 CSS 注释（/* */，字符串内容保留）。
+const stripCssComments = (src) => {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  let quote = null;
+  while (i < n) {
+    const c = src[i];
+    if (quote) {
+      out.push(c);
+      if (c === "\\") {
+        out.push(src[i + 1] ?? "");
+        i += 2;
+        continue;
+      }
+      if (c === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      out.push("  ");
+      i += 2;
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        out.push(src[i] === "\n" ? "\n" : " ");
+        i++;
+      }
+      if (i < n) {
+        out.push("  ");
+        i += 2;
+      }
+      continue;
+    }
+    out.push(c);
+    i++;
+  }
+  return out.join("");
+};
 
 const registrySrc = readSrc("src/themes/registry.ts");
 const settingsSrc = readSrc("src/components/theme-settings.tsx");
@@ -79,27 +232,27 @@ const readmeSrc = readSrc("src/themes/README.md");
 
 check(
   "registry.ts 无 tokens?.dark 回退",
-  !/tokens\?\.dark/.test(registrySrc),
+  !/tokens\?\.dark/.test(stripComments(registrySrc)),
 );
 check(
   "theme-settings.tsx 无 tokens?.dark 回退",
-  !/tokens\?\.dark/.test(settingsSrc),
+  !/tokens\?\.dark/.test(stripComments(settingsSrc)),
 );
 check(
   "types.ts tokens 类型无 dark 成员",
-  !/dark\??:\s*ThemeTokens/.test(typesSrc),
+  !/dark\??:\s*ThemeTokens/.test(stripComments(typesSrc)),
 );
 check(
   "types.ts tokens.light 为必填成员",
-  /tokens\?:\s*\{\s*light:\s*ThemeTokens/.test(typesSrc),
+  /tokens\?:\s*\{\s*light:\s*ThemeTokens/.test(stripComments(typesSrc)),
 );
 check(
   "默认主题包无 dark token 数据集",
-  !/^\s*dark:\s*\{/m.test(defaultSrc),
+  !/^\s*dark:\s*\{/m.test(stripComments(defaultSrc)),
 );
 check(
   "赛博朋克主题包无 dark token 数据集",
-  !/^\s*dark:\s*\{/m.test(cyberpunkSrc),
+  !/^\s*dark:\s*\{/m.test(stripComments(cyberpunkSrc)),
 );
 check("themes/README.md 无 dark token 集示例", !/dark:\s*\{/.test(readmeSrc));
 
@@ -248,7 +401,8 @@ console.error = origError;
 // ─── ⑨ 默认包色板与 globals.css :root 对齐（R4-02 永久回归门） ────────────
 
 // 合并 globals.css 全部 :root 块（文件序、后声明胜出，与级联同义）。
-const globalsSrc = readSrc("src/styles/globals.css");
+// 先剥 CSS 注释：块内注释存档的旧值声明不再参与合并（R6-C4-10）。
+const globalsSrc = stripCssComments(readSrc("src/styles/globals.css"));
 const globalsTokens = {};
 
 for (const block of globalsSrc.matchAll(/:root\s*\{([^}]*)\}/g)) {

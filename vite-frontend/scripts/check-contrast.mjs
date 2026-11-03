@@ -10,6 +10,13 @@
 // 留痕）。主题包（themes/）是管理员主动启用的资产，不在本门范围；
 // 本门守的是出厂默认 token。
 //
+// 提取面（修复轮 6，R6-C4-09 机制处置）：旧实现以整文件正则收集
+// 声明、后声明胜出且不剥注释——把某 token 改浅后在文件尾以注释
+// 存档旧值声明，门会按旧值算出全过（渲染实值对比度可已跌破
+// 4.5）。现提取先词法剥除 CSS 注释，再只在 :root { } 块内按块内
+// 顺序合并声明（后声明胜出，与级联同义），与头注「解析 :root
+// token 实值」的口径一致；注释存档不再构成满足点。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-contrast.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -23,10 +30,74 @@ const css = readFileSync(
   "utf8",
 );
 
-const tokens = {};
+// 词法剥除 CSS 注释：/* */ 逐字替换为空格（换行保留），字符串
+// 内容原样保留。注释里的旧值存档声明在剥离后不复存在。
+const stripCssComments = (src) => {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  let quote = null;
+  while (i < n) {
+    const c = src[i];
+    if (quote) {
+      out.push(c);
+      if (c === "\\") {
+        out.push(src[i + 1] ?? "");
+        i += 2;
+        continue;
+      }
+      if (c === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      out.push("  ");
+      i += 2;
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        out.push(src[i] === "\n" ? "\n" : " ");
+        i++;
+      }
+      if (i < n) {
+        out.push("  ");
+        i += 2;
+      }
+      continue;
+    }
+    out.push(c);
+    i++;
+  }
+  return out.join("");
+};
 
-for (const m of css.matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;/g)) {
-  tokens[m[1]] = m[2].toLowerCase();
+// 只取 :root { } 块（括号配平）内的声明，按文件顺序合并、后声明
+// 胜出（与 CSS 级联同义）；块外声明与注释均不入集。
+const tokens = {};
+const code = stripCssComments(css);
+for (const m of code.matchAll(/:root\s*\{/g)) {
+  const open = m.index + m[0].length - 1;
+  let depth = 0;
+  let end = -1;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === "{") depth++;
+    else if (code[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) continue;
+  const block = code.slice(open + 1, end);
+  for (const d of block.matchAll(/(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;/g)) {
+    tokens[d[1]] = d[2].toLowerCase();
+  }
 }
 
 const failures = [];

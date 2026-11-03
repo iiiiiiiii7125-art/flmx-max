@@ -9,6 +9,14 @@
 // 组件必须全部出自 lazy 集（登录页 LoginRoute 与兜底 Navigate 除外），
 // 且每个 lazy 组件至少被一条路由使用（无死组件、无漏登路由）。
 //
+// 提取面（修复轮 6，R6-C4-11 机制处置）：旧实现对 App.tsx 原文做
+// 全部正则提取，无注释意识——把某页的 loader/lazy/预加载行逐行
+// 注释、<Route> 整块包进 JSX 注释，该页运行时已不存在，本门仍
+// 8/8 全绿。本门的职责正是抓页面增删静默漂移，最朴素的下线手法
+// 不得位于证据面之外：现提取前先词法剥注释（字符串保留、行号
+// 不变），被注释的清单行与路由块整体消失、计数与集合对账随之
+// 点名。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-route-lists.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -17,7 +25,111 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const app = readFileSync(join(here, "..", "src/App.tsx"), "utf8");
+
+// 词法剥注释：// 与 /* */ 逐字替换为空格（换行保留），字符串/模板
+// 字面量内容原样保留（模板 ${} 内的代码照常扫描；JSX 注释
+// {/* */} 即块注释、同样剥除）。
+const stripComments = (src) => {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  let mode = "code";
+  const tplDepths = [];
+  let braceDepth = 0;
+  while (i < n) {
+    const c = src[i];
+    const d = src[i + 1] ?? "";
+    if (mode === "code") {
+      if (c === "/" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "line";
+        continue;
+      }
+      if (c === "/" && d === "*") {
+        out.push("  ");
+        i += 2;
+        mode = "block";
+        continue;
+      }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      else if (c === "{") braceDepth++;
+      else if (c === "}") {
+        if (tplDepths.length && braceDepth === tplDepths[tplDepths.length - 1]) {
+          tplDepths.pop();
+          braceDepth--;
+          mode = "tpl";
+          out.push(c);
+          i++;
+          continue;
+        }
+        braceDepth--;
+      }
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (mode === "line") {
+      if (c === "\n") {
+        out.push(c);
+        i++;
+        mode = "code";
+        continue;
+      }
+      out.push(" ");
+      i++;
+      continue;
+    }
+    if (mode === "block") {
+      if (c === "*" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "code";
+        continue;
+      }
+      out.push(c === "\n" ? "\n" : " ");
+      i++;
+      continue;
+    }
+    if (mode === "sq" || mode === "dq") {
+      const q = mode === "sq" ? "'" : '"';
+      out.push(c);
+      if (c === "\\") {
+        out.push(d);
+        i += 2;
+        continue;
+      }
+      if (c === q) mode = "code";
+      i++;
+      continue;
+    }
+    out.push(c);
+    if (c === "\\") {
+      out.push(d);
+      i += 2;
+      continue;
+    }
+    if (c === "`") {
+      mode = "code";
+      i++;
+      continue;
+    }
+    if (c === "$" && d === "{") {
+      out.push(d);
+      i += 2;
+      braceDepth++;
+      tplDepths.push(braceDepth);
+      mode = "code";
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+};
+
+const app = stripComments(readFileSync(join(here, "..", "src/App.tsx"), "utf8"));
 
 const failures = [];
 const check = (label, ok, detail = "") => {

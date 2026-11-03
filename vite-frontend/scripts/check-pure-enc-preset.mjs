@@ -7,6 +7,11 @@
 // 源码断言：三处文件「IEPL专用」在位且为红色（danger）、旧文案
 // 「IX 中转专用协议」与独立「纯ENC」快捷标签全仓差集 ∅。
 //
+// 提取面（修复轮 6，同族机制处置）：标签面源码断言的提取对象先经
+// 词法剥注释（字符串保留）——被 JSX 注释整块包住的 Chip 不再被
+// extractChipBlocks 计入，注释里的旧文案提及也不再误报残留；转译
+// 执行的核心断言（预设/载荷）不变。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-pure-enc-preset.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -34,6 +39,109 @@ const srcPath = join(
   "src/pages/inbound/pure-enc-preset.ts",
 );
 const source = readFileSync(srcPath, "utf8");
+
+// 词法剥注释：// 与 /* */ 逐字替换为空格（换行保留），字符串/模板
+// 字面量内容原样保留（模板 ${} 内的代码照常扫描；JSX 注释即块注
+// 释、同样剥除）。标签面断言的读取一律经此处理。
+const stripComments = (src) => {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  let mode = "code";
+  const tplDepths = [];
+  let braceDepth = 0;
+  while (i < n) {
+    const c = src[i];
+    const d = src[i + 1] ?? "";
+    if (mode === "code") {
+      if (c === "/" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "line";
+        continue;
+      }
+      if (c === "/" && d === "*") {
+        out.push("  ");
+        i += 2;
+        mode = "block";
+        continue;
+      }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      else if (c === "{") braceDepth++;
+      else if (c === "}") {
+        if (tplDepths.length && braceDepth === tplDepths[tplDepths.length - 1]) {
+          tplDepths.pop();
+          braceDepth--;
+          mode = "tpl";
+          out.push(c);
+          i++;
+          continue;
+        }
+        braceDepth--;
+      }
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (mode === "line") {
+      if (c === "\n") {
+        out.push(c);
+        i++;
+        mode = "code";
+        continue;
+      }
+      out.push(" ");
+      i++;
+      continue;
+    }
+    if (mode === "block") {
+      if (c === "*" && d === "/") {
+        out.push("  ");
+        i += 2;
+        mode = "code";
+        continue;
+      }
+      out.push(c === "\n" ? "\n" : " ");
+      i++;
+      continue;
+    }
+    if (mode === "sq" || mode === "dq") {
+      const q = mode === "sq" ? "'" : '"';
+      out.push(c);
+      if (c === "\\") {
+        out.push(d);
+        i += 2;
+        continue;
+      }
+      if (c === q) mode = "code";
+      i++;
+      continue;
+    }
+    out.push(c);
+    if (c === "\\") {
+      out.push(d);
+      i += 2;
+      continue;
+    }
+    if (c === "`") {
+      mode = "code";
+      i++;
+      continue;
+    }
+    if (c === "$" && d === "{") {
+      out.push(d);
+      i += 2;
+      braceDepth++;
+      tplDepths.push(braceDepth);
+      mode = "code";
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+};
 
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
@@ -224,7 +332,7 @@ const labelFiles = [
   { rel: "src/pages/relay.tsx", count: 2 },
 ];
 for (const { rel, count } of labelFiles) {
-  const text = readFileSync(join(frontendDir, rel), "utf8");
+  const text = stripComments(readFileSync(join(frontendDir, rel), "utf8"));
   const hits = extractChipBlocks(text).filter((b) =>
     b.inner.includes("IEPL专用"),
   );
@@ -240,9 +348,11 @@ for (const { rel, count } of labelFiles) {
     "存在非 danger 的 IEPL专用 标签",
   );
 }
-const formText = readFileSync(
-  join(frontendDir, "src/pages/inbound/inbound-form-modal.tsx"),
-  "utf8",
+const formText = stripComments(
+  readFileSync(
+    join(frontendDir, "src/pages/inbound/inbound-form-modal.tsx"),
+    "utf8",
+  ),
 );
 check(
   "表单已无独立「纯ENC」快捷标签",
@@ -335,7 +445,7 @@ const srcFiles = readdirSync(join(frontendDir, "src"), {
   recursive: true,
 }).filter((p) => /\.(ts|tsx)$/.test(p));
 const oldCopyFiles = srcFiles.filter((p) =>
-  readFileSync(join(frontendDir, "src", p), "utf8").includes(
+  stripComments(readFileSync(join(frontendDir, "src", p), "utf8")).includes(
     "IX 中转专用协议",
   ),
 );
