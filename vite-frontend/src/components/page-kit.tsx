@@ -432,7 +432,7 @@ export function formatDate(ms?: number | string | null, withTime = false) {
 
 /**
  * A page that can also sit inside another page's tab (the 用户 page hosts
- * 分组 and 限速): embedded, it drops its own padding and header.
+ * the user list and 限速): embedded, it drops its own padding and header.
  */
 export function PageShell({
   embedded,

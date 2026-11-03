@@ -258,12 +258,6 @@ export const updateNodeOrder = (data: {
 }) => Network.post("/node/update-order", data);
 export const dismissNodeExpiryReminder = (id: number) =>
   Network.post("/node/dismiss-expiry-reminder", { id });
-export const checkNodeStatus = (nodeId?: number) => {
-  const params = nodeId ? { nodeId } : {};
-
-  return Network.post("/node/check-status", params);
-};
-
 export const upgradeNode = (
   id: number,
   version?: string,
@@ -295,28 +289,14 @@ export const getNodeReleases = (channel: ReleaseChannel = "stable") =>
 export const rollbackNode = (id: number) =>
   // R8-T-04：后端界 30s，须破恰等。
   Network.post("/node/rollback", { id }, { timeout: 45_000 });
-// R8-T-07：nftables 三面后端为逐操作 15s SSH、无 handler 上限，前端放宽到
-// 与典型对账时长相称的 300s；handler 侧封顶属 BC 路线，本批不做。
-export const testNodeNftables = (nodeId: number) =>
-  Network.post("/node/nftables/test", { nodeId }, { timeout: 300_000 });
-export const reconcileNodeNftables = (nodeId: number) =>
-  Network.post("/node/nftables/reconcile", { nodeId }, { timeout: 300_000 });
-export const clearNodeNftables = (nodeId: number) =>
-  Network.post("/node/nftables/clear", { nodeId }, { timeout: 300_000 });
-
 // 隧道CRUD操作 - 全部使用POST请求
 export const createTunnel = (data: TunnelMutationPayload, idemKey?: string) =>
   // R8-T-07：与 update 共用同等重腿，前端预算与 update 对齐 120s。
   Network.post("/tunnel/create", data, { idemKey, timeout: 120_000 });
 export const getTunnelList = () =>
   Network.post<TunnelApiItem[]>("/tunnel/list");
-export const getTunnelById = (id: number) =>
-  Network.post<TunnelApiItem>("/tunnel/get", { id });
 export const updateTunnel = (data: TunnelMutationPayload) =>
   Network.post("/tunnel/update", data, { timeout: 120_000 });
-export const deleteTunnel = (id: number) =>
-  // R8-T-07：删除按入口节点扇出（每节点 6s 命令），前端放宽至 120s。
-  Network.post("/tunnel/delete", { id }, { timeout: 120_000 });
 export const previewTunnelDelete = (id: number) =>
   Network.post<TunnelDeletePreviewApiData>(
     "/tunnel/delete-preview",
@@ -363,8 +343,6 @@ export const updateTunnelOrder = (data: {
 }) => Network.post("/tunnel/update-order", data);
 
 // 用户隧道权限管理操作 - 全部使用POST请求
-export const assignUserTunnel = (data: UserTunnelAssignPayload) =>
-  Network.post("/tunnel/user/assign", data);
 export const batchAssignUserTunnel = (data: {
   userId: number;
   tunnels: Array<{ tunnelId: number; speedId?: number | null }>;
@@ -501,13 +479,6 @@ export const getSystemUpgradeStatus = () =>
 // 进入写入相位后 ctx 解绑，服务端整单跑完，关页/断网不再回滚、也
 // 无法取消。前端放宽只抬高武装阈值；结果需重进页面核对（见导入确认框
 // 与 doc/guide/nodes.md 的同口径说明）。
-export const exportBackupData = () =>
-  Network.post("/backup/export", undefined, { timeout: 1_800_000 });
-export const importBackupData = (data: BackupImportPayload) =>
-  Network.post("/backup/import", data, { timeout: 1_800_000 });
-export const restoreBackupData = (data: BackupImportPayload) =>
-  Network.post("/backup/restore", data, { timeout: 1_800_000 });
-
 // 验证码相关接口
 export const checkCaptcha = () => Network.post("/captcha/check");
 
@@ -518,8 +489,6 @@ export const batchPauseForwards = (ids: number[]) =>
   Network.post<BatchOperationResult>("/forward/batch-pause", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchResumeForwards = (ids: number[]) =>
   Network.post<BatchOperationResult>("/forward/batch-resume", { ids }, { timeout: batchCallTimeout(ids.length) });
-export const batchDeleteTunnels = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/tunnel/batch-delete", { ids }, { timeout: batchCallTimeout(ids.length) });
 export const batchDeleteNodes = (ids: number[], uninstall = false) =>
   Network.post<BatchOperationResult>("/node/batch-delete", { ids, uninstall }, { timeout: batchCallTimeout(ids.length) });
 export const batchRedeployForwards = (ids: number[]) =>
@@ -601,7 +570,7 @@ export const exportBackup = async (types: string[] = []) => {
         "Content-Type": "application/json",
       },
       responseType: "blob",
-      // R8-T-08：与 exportBackupData 统一口径（此前裸 axios 无超时）。
+      // R8-T-08：与备份导入/导出长操作统一口径（此前裸 axios 无超时）。
       timeout: 1_800_000,
     },
   );
@@ -657,7 +626,7 @@ export const exportBackup = async (types: string[] = []) => {
 };
 
 export const importBackup = (data: BackupImportPayload) =>
-  // R8-T-02 元素 (a)：同 importBackupData 口径。
+  // R8-T-02 元素 (a)：与备份导出同为长操作口径。
   Network.post("/backup/import", data, { timeout: 1_800_000 });
 
 // SEC-01 BC-01(b)：导入前自动备份快照留存服务端 24 小时（A10-10 承诺的
@@ -834,7 +803,7 @@ export const restoreGistBackup = (data: {
   // R8-T-02 元素 (a)：下载腿 ≤120s（两次串行 gist 调用）叠同落点导入
   // （无界），与本地恢复统一 30 分钟口径；ctx 语义与本地导入同口径
   //（B14-001 裁决④的机制扩展）：下载/准备相位绑请求 ctx 可取消，
-  // 进入 ImportContext 写入相位后解绑整单跑完，见 importBackupData 注。
+  // 进入 ImportContext 写入相位后解绑整单跑完，见 importBackup 注。
   Network.post("/backup/gist/restore", data, { timeout: 1_800_000 });
 
 export interface AnnouncementData {
@@ -871,9 +840,6 @@ export const getNodeMetrics = (
     { timeout: 60_000, silent: true },
   );
 };
-
-export const getNodeMetricsLatest = (nodeId: number) =>
-  Network.get<NodeMetricApiItem>(`/monitor/nodes/${nodeId}/metrics/latest`, {}, { silent: true });
 
 export const getTunnelMetrics = (
   tunnelId: number,
@@ -1481,18 +1447,6 @@ export const createInboundRelay = (data: {
   Network.post<{ id: number }>("/inbound/relay/create", data, { idemKey });
 export const deleteInboundRelay = (id: number, force = false) =>
   Network.post("/inbound/relay/delete", { id, force });
-export interface UserInboundAssignment {
-  inboundId: number;
-  relayId: number;
-}
-export const getUserInbounds = (userId: number) =>
-  Network.post<UserInboundAssignment[]>("/user-inbound/list", { userId });
-// assignments: [{inboundId, relayId}]; relayId=0 means the inbound itself (direct).
-export const setUserInbounds = (userId: number, assignments: UserInboundAssignment[]) =>
-  Network.post("/user-inbound/set", { userId, assignments });
-// Legacy: plain inbound IDs (direct only). Kept for backward compatibility.
-export const setUserInboundsLegacy = (userId: number, inboundIds: number[]) =>
-  Network.post("/user-inbound/set", { userId, inboundIds });
 export const getMyInbounds = () => Network.post("/user-inbound/mine", {});
 
 /** 按订阅分配：某用户被分配的订阅 ID 列表（管理员）。 */
@@ -1703,48 +1657,6 @@ export const nodeTune = (
       ...(manualShapeMbps != null ? { manualShapeMbps } : {}),
     },
     { timeout: 40 * 1000 },
-  );
-/** 一键测算探测结果：只作调优输入框的建议值，绝不自动应用。
- * （INT 合并：T-agent 的超集接口为准，T-panel 的三字段为其子集，
- * 弹窗只读 rttMedianMs/panelRttMs/bandwidthMbps；其余字段调用方可忽略。
- * rttMedianMs 为节点现有 TCP 连接内核 RTT 中位数，bandwidthMbps 仅在
- * withSpeed 且有测速源时才有值，panelRttMs 为到面板的 TCP 建连 RTT
- * 参考值（可选）。写盘只发生在用户后续显式 Apply 时。 */
-export interface NodeTuneProbeResult {
-  suggested: NodeTuneLine;
-  rttMedianMs?: number;
-  rttSamples: number;
-  rttAvailable: boolean;
-  rttSource: string;
-  bandwidthMbps?: number;
-  bandwidthAvailable: boolean;
-  bandwidthSource: string;
-  panelRttMs?: number;
-  panelRttAvailable: boolean;
-  warnings?: string[];
-}
-/** 一键测算探测（opts 对象版；契约：POST /node/tune {id, action:"probe", withSpeed}。
- * 默认只测 RTT（现有连接中位数）；withSpeed 为 true 时 agent 再做一次
- * 短时测速（10s/64MiB 封顶，同步跑完即返回，不常驻后台），但测速需
- * 测速源——调用方如需实测带宽须另传 speedtestURL，否则带宽腿回落默认
- * 值并明示。结果只回填输入框，不自动应用。 */
-export const nodeTuneProbe = (
-  id: number,
-  opts: { withSpeed?: boolean; speedtestURL?: string; referenceHost?: string } = {},
-) =>
-  Network.post<NodeTuneProbeResult>(
-    "/node/tune",
-    { id, action: "probe", ...opts },
-    { timeout: 120 * 1000 },
-  );
-/** 一键测算探测（弹窗调用版，T-panel 原签名；与 nodeTuneProbe 同端点，
- * 返回的建议值由调用方按“未手动改过才回填”口径填入输入框；
- * 真正下发只走 nodeTune apply。 */
-export const probeNodeTune = (id: number, withSpeed: boolean) =>
-  Network.post<NodeTuneProbeResult>(
-    "/node/tune",
-    { id, action: "probe", withSpeed },
-    { timeout: 120 * 1000 },
   );
 /** 节点到延迟测试点的回程路由追踪结果。 */
 export const getNodeRoute = (id: number) =>

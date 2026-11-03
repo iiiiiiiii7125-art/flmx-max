@@ -66,7 +66,7 @@ export default function AdminLayout({
   });
   const isMobile = useMobileBreakpoint();
 
-  // 菜单项配置：管理员按 线路 / 分发 / 系统 分组（用户页含分组和限速），普通用户保持原样
+  // 菜单项配置：管理员按 线路 / 分发 / 系统 分组（用户页含用户与限速两标签），普通用户保持原样
   const menuItems: MenuItem[] = [
     {
       path: "/dashboard",
