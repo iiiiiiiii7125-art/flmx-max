@@ -5,6 +5,10 @@ FROM golang:1.25-bookworm AS builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
+# go.mod replaces github.com/go-gost/x with ./x, and `go mod download`
+# reads the replaced module's go.mod — it must be in the layer before
+# the download step. Keep in sync with the replace directives in go.mod.
+COPY x/go.mod x/go.sum ./x/
 RUN go mod download
 
 COPY . .
