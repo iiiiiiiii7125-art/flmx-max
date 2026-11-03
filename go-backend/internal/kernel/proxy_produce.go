@@ -383,6 +383,14 @@ func ssPluginString(p Proxy) string {
 // ---- Clash / Mihomo ----
 
 func proxyClash(e Endpoint) (yamlNode, bool) {
+	return proxyClashFor(e, false)
+}
+
+// proxyClashFor renders an imported node for the Clash-schema faces.
+// mihomo=false is the shared Stash/Shadowrocket render; mihomo=true is
+// the clash format, whose consumers are Mihomo-core clients — the
+// Snell branch then applies the R10-01 acceptance gate.
+func proxyClashFor(e Endpoint, mihomo bool) (yamlNode, bool) {
 	p := e.Proxy.forEndpoint(e)
 	// R5X-001/002/003 存量纵深：导入期校验集字段（枚举格 + Reality）
 	// 的存量坏值整节点略过，与导入期同一谓词（validImportedProxyFields，
@@ -406,11 +414,11 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 		return nil, false
 	}
 	if p.Type() == "snell" {
-		// Mihomo's snell client (v1.19.32, NewSnell) accepts versions
-		// 1-4, normalizes 5 to 4 (v5 servers accept v4 clients) and
-		// rejects 6 outright — keep 6 out, render the rest. 此前按
-		// v1-v3 的旧口径把 v4/v5 一并丢弃，与自建入站的 Clash 渲染
-		// (clashSnell) 同批订正。
+		// 版本口径按消费面分（R2X-002 矩阵）：本函数的共享渲染供
+		// Stash/Shadowrocket，其原生客户端公开支持 v4——1–4 直出、
+		// 5 归一为 4、6 与负数略过。clash（Mihomo）格式不经此口径：
+		// 官方 Mihomo 1.19.16/1.19.17 实测 v4 条目整份拒绝，其接受
+		// 域门在下方 mihomo 分支（R10-01，LEDGER10 §2）。
 		srcVersion := p.num("version")
 		switch {
 		case srcVersion < 0:
@@ -429,9 +437,10 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 			if version == 0 {
 				version = 3
 			}
-			// R5 批 1：mode 用 mihomo 规范拼写 shadow-tls——历史拼写
-			// shadowtls 经 mihomo v1.19.33 实测被本体拒绝（obfs mode
-			// error），自产形态此前即毒化 mihomo 整表。
+			// R5 批 1：mode 统一为规范拼写 shadow-tls（与导入侧归一
+			// 同口径）。注：clash（Mihomo）面上 snell+shadow-tls 任何
+			// 拼写均被实测整份拒绝（obfs mode error），该面的排除由
+			// 下方 R10-01 接受域门承担、与拼写无关。
 			p["obfs-opts"] = map[string]interface{}{"mode": "shadow-tls", "host": firstHeaderHostValue(st),
 				"password": st.str("password"), "version": version}
 		}
@@ -445,6 +454,21 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 			oo = cp
 			p["obfs-opts"] = map[string]interface{}(oo)
 		}
+		if mihomo {
+			// R10-01（LEDGER10 §2）：clash 格式的消费方是 Mihomo 内核
+			// 客户端，官方 1.19.16/1.19.17 双二进制实测其 Snell 接受
+			// 集只有 version 3（或无版本键的存量行）＋ obfs ∈ {http,
+			// tls} 或无——v4 条目（v5 归一同）报 snell version error
+			// 整份拒绝，shadow-tls/restls/jls 混淆模式报 obfs mode
+			// error 同样整份拒绝。导入面与自建面同门（自建入站在
+			// clashProxyMihomo 整类不下发）：上述形态在本面略过。
+			// v1/v2 本体可过、仅 udp 合成需改出 false（见下方覆写）。
+			mode := p.sub("obfs-opts").str("mode")
+			if srcVersion == 4 || srcVersion == 5 ||
+				mode == "shadow-tls" || mode == "restls" || mode == "jls" {
+				return nil, false
+			}
+		}
 		// X-P3-11（L-02-1）：udp 不透传源值（sing-box 来源恒 true、
 		// Clash 来源可缺键），按版本/ShadowTLS 语义合成，与自建入站
 		// clashSnell 的 Network() 口径一致：ShadowTLS 前置只暴露 TCP、
@@ -457,6 +481,13 @@ func proxyClash(e Endpoint) (yamlNode, bool) {
 		shadowTLS := p.sub("shadow-tls").str("password") != "" ||
 			p.sub("obfs-opts").str("mode") == "shadow-tls"
 		p["udp"] = !shadowTLS && effVersion != 4
+		if mihomo && srcVersion <= 2 {
+			// R10-01：v1/v2（及无版本键的 v0 存量行）在 Mihomo 上带
+			// udp:true 即被拒（snell version N not support UDP），本
+			// 体可接受——强制 udp:false 保节点。v0 经 effVersion=4
+			// 上方合成已为 false，此处覆写对三者同形无害。
+			p["udp"] = false
+		}
 	}
 	delete(p, "shadow-tls") // panel-only key for Snell over ShadowTLS (converted above)
 	node := yamlNode{{"name", e.Name}, {"type", p.Type()}, {"server", p.str("server")}, {"port", e.Port}}
@@ -668,10 +699,23 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 		o["password"] = p.str("password")
 		tls(true)
 	case "snell":
+		// R10-01（I-F4-02 转换对齐）：obfs-opts 形态的 Snell+
+		// ShadowTLS 与面板内 "shadow-tls" 键形态字段同集（host/
+		// password/version 俱全，此前却整节点静默略过、与键形态
+		// 处置不对称）——归一为同一 st 视图、同走下方 detour 转换
+		// （含同一 Snell 版本白名单门）。其余 obfs 模式 sing-box
+		// 无表达式，维持略过。
+		st := p.sub("shadow-tls")
 		if oo := p.sub("obfs-opts"); oo.str("mode") != "" {
-			// sing-box's snell client has no obfs modes; skip rather
-			// than emit a node stripped of its obfuscation layer.
-			return nil, false
+			if st.str("password") == "" &&
+				CanonicalSnellObfsMode(oo.str("mode")) == "shadow-tls" && oo.str("password") != "" {
+				st = Proxy{"password": oo.str("password"), "version": oo.num("version"),
+					"host": oo.str("host")}
+			} else {
+				// sing-box's snell client has no obfs modes; skip rather
+				// than emit a node stripped of its obfuscation layer.
+				return nil, false
+			}
 		}
 		o["type"] = "snell"
 		// R2X-002（verdicts §2.4）：sing-box 的 Snell 接受域经官方二进
@@ -692,7 +736,7 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 			return nil, false
 		}
 		o["psk"] = p.str("psk")
-		if st := p.sub("shadow-tls"); st.str("password") != "" {
+		if st.str("password") != "" {
 			tag := e.Name + " (shadowtls)"
 			delete(o, "server")
 			delete(o, "server_port")
