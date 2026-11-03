@@ -68,6 +68,23 @@
 //      ∅），防词表两处漂移。正对照：词表外键与词表内实值混合
 //      的部分集仍合法（词表内实值计数）；含实义但夹带格式字
 //      符的值剔除后非空、仍合法。
+//   ⑭ 「计数＝注入」同一判据＋计算有效性（R9-12 / I-C5-01 ≡
+//      I-F6-01；R9-28 / I-C4-13；R9-29 / I-C4-14）：⑬收口的是计
+//      数侧——注入侧 injectTokens 仍只判 !== undefined，混合包
+//      里词表内键下的不可用条目（纯空白/纯 Cf/非字符串）被原样
+//      setProperty、顶掉 :root 出厂回退，与 validateThemePackage
+//      头注「不可用条目会被跳过」的承诺不符；且值轴只及字符层
+//      ——CSS 全域关键字（initial 等五词全集）与 var() 自引用/
+//      环引用值字符非空、计算值阶段却 guaranteed-invalid，同
+//      属「计数过关、实注为零」。本轮收口为单一可用性函数
+//      computeUsableTokenKeys：计数与注入两消费者共用，值轴扩
+//      至计算有效性（全域关键字整值命中、集内 var() 依赖环成
+//      员计不可用）。本节钉：混合包激活后不可用条目逐键
+//      setProperty 0 次、可用条目照常注入（activate 与
+//      reapply 两面）；关键字五词＋大小写变体、自引用、两键/
+//      三键环的整包形态逐一拒并点名＋代表格同 id 不顶替；正
+//      对照钉 var() 链式引用（无环）、带回退引用不可用键、引
+//      用集外键、依赖环成员但本身不在环上四格不误伤。
 //
 // 提取面（修复轮 6，R6-C4-10 机制处置）：断言⑨的 globals 侧旧实现
 // 以正则合并 :root 块、无注释剥离——在 :root 块内给改过的 token
@@ -764,6 +781,260 @@ check(
   "实义值夹带格式字符的包仍可注册（不误伤）",
   getTheme("ok-cf-mixed") === cfMixedPkg,
 );
+
+// ─── ⑭ R9-12/R9-28/R9-29：注入同一判据＋计算有效性 ──────────────────────
+
+// 换上记录型 CSSOM 桩：此前各节的桩吞掉 setProperty，本节逐条
+// 核注入实录（哪把键被设、值是什么、哪把键零调用）。
+const setCalls = [];
+
+globalThis.document.documentElement.style.setProperty = (name, value) => {
+  setCalls.push([name, value]);
+};
+globalThis.document.documentElement.style.removeProperty = () => {};
+const { reapplyActiveTheme, deactivateTheme } = mod.exports;
+const callsFor = (name) => setCalls.filter(([n]) => n === name);
+
+// 混合包（R9-12）：1 个可用条目过校验，其余逐形态不可用——激
+// 活后不可用条目必须逐键 setProperty 0 次（被跳过、不顶掉回
+// 退），可用条目照常注入；词表外键同在跳过之列（计数与注入
+// 同一可用性集）。
+const mixedInjectPkg = {
+  ...base,
+  id: "ok-mixed-inject",
+  tokens: {
+    light: {
+      "--primary": "#111111",
+      "--background": "   ",
+      "--foreground": "\u200B",
+      "--border": null,
+      "--input": 42,
+      "--ring": false,
+      "--content1": {},
+      "--divider": new String("#333333"),
+      "--not-a-token": "#000000",
+    },
+  },
+};
+const mixedUnusableKeys = [
+  ["纯空白", "--background"],
+  ["纯格式字符", "--foreground"],
+  ["null（类型外）", "--border"],
+  ["数字 42（类型外）", "--input"],
+  ["布尔 false（类型外）", "--ring"],
+  ["对象（类型外）", "--content1"],
+  ["boxed String（类型外）", "--divider"],
+  ["词表外键", "--not-a-token"],
+];
+
+if (typeof validateThemePackage === "function") {
+  check(
+    "validateThemePackage：混合包（1 可用＋8 不可用）→ 通过（合法部分集）",
+    validateThemePackage(mixedInjectPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(mixedInjectPkg))}`,
+  );
+}
+registerTheme(mixedInjectPkg);
+check(
+  "混合包注册成功（R9-12）",
+  getTheme("ok-mixed-inject") === mixedInjectPkg,
+);
+
+setCalls.length = 0;
+activateTheme("ok-mixed-inject");
+check(
+  "混合包激活成功（active 为该包）",
+  getActiveThemeId() === "ok-mixed-inject",
+  `实得 ${JSON.stringify(getActiveThemeId())}`,
+);
+check(
+  "混合包可用条目照常注入（--primary = #111111，恰 1 次）",
+  callsFor("--primary").length === 1 &&
+    callsFor("--primary")[0][1] === "#111111",
+  `实录 ${JSON.stringify(setCalls)}`,
+);
+for (const [label, key] of mixedUnusableKeys) {
+  check(
+    `混合包不可用条目被跳过：${label} ${key} setProperty 0 次（R9-12）`,
+    callsFor(key).length === 0,
+    `实录 ${JSON.stringify(setCalls)}`,
+  );
+}
+
+setCalls.length = 0;
+reapplyActiveTheme();
+check(
+  "reapplyActiveTheme 同一判据：可用条目重注入、不可用条目仍 0 次（R9-12）",
+  callsFor("--primary").length === 1 &&
+    mixedUnusableKeys.every(([, key]) => callsFor(key).length === 0),
+  `实录 ${JSON.stringify(setCalls)}`,
+);
+deactivateTheme();
+
+// 计算有效性整包形态（R9-28/R9-29）：整集无一可用条目 → 与
+// ⑫⑬ 同形态拒并点名。
+const computeBadForms = [
+  ["CSS 全域关键字 initial", { "--primary": "initial" }],
+  ["CSS 全域关键字 unset", { "--primary": "unset" }],
+  ["CSS 全域关键字 inherit", { "--primary": "inherit" }],
+  ["CSS 全域关键字 revert", { "--primary": "revert" }],
+  ["CSS 全域关键字 revert-layer", { "--primary": "revert-layer" }],
+  ["CSS 全域关键字大小写/空白变体", { "--primary": " INITIAL " }],
+  ["var() 自引用", { "--primary": "var(--primary)" }],
+  [
+    "var() 两键互引用环",
+    { "--primary": "var(--secondary)", "--secondary": "var(--primary)" },
+  ],
+  [
+    "var() 三键环",
+    {
+      "--primary": "var(--secondary)",
+      "--secondary": "var(--background)",
+      "--background": "var(--primary)",
+    },
+  ],
+];
+
+let computeSeq = 0;
+
+for (const [label, light] of computeBadForms) {
+  computeSeq++;
+  const badPkg = { ...base, id: `bad-compute-${computeSeq}`, tokens: { light } };
+
+  if (typeof validateThemePackage === "function") {
+    check(
+      `validateThemePackage：${label} → 点名缺 light（R9-28/R9-29）`,
+      /light/.test(validateThemePackage(badPkg) ?? ""),
+      `实得 ${JSON.stringify(validateThemePackage(badPkg))}`,
+    );
+  }
+  registerTheme(badPkg);
+  check(
+    `${label}的主题包被拒注册（R9-28/R9-29）`,
+    getTheme(badPkg.id) === undefined &&
+      errorLog.some((m) => m.includes(badPkg.id) && /light/.test(m)),
+    `捕获到: ${JSON.stringify(errorLog)}`,
+  );
+}
+
+registerTheme({ ...base, id: "ok-light", tokens: { light: { "--primary": "initial" } } });
+check(
+  "同 id 关键字包不能顶掉已注册的合法包（R9-28）",
+  getTheme("ok-light") === lightPkg,
+);
+registerTheme({ ...base, id: "ok-light", tokens: { light: { "--primary": "var(--primary)" } } });
+check(
+  "同 id 自引用包不能顶掉已注册的合法包（R9-29）",
+  getTheme("ok-light") === lightPkg,
+);
+
+// 正对照（不误伤）：合法 var() 引用——指向他键、无环——照常
+// 计数与注入。
+const varChainPkg = {
+  ...base,
+  id: "ok-var-chain",
+  tokens: {
+    light: {
+      "--primary": "var(--secondary)",
+      "--secondary": "var(--background)",
+      "--background": "#fafafa",
+    },
+  },
+};
+const varFallbackPkg = {
+  ...base,
+  id: "ok-var-fallback",
+  tokens: {
+    light: {
+      "--primary": "var(--secondary, #654321)",
+      "--secondary": "initial",
+    },
+  },
+};
+const varExternalPkg = {
+  ...base,
+  id: "ok-var-external",
+  tokens: { light: { "--primary": "var(--background)" } },
+};
+const varDependentPkg = {
+  ...base,
+  id: "ok-var-dependent",
+  tokens: {
+    light: {
+      "--primary": "var(--secondary)",
+      "--secondary": "var(--secondary)",
+      "--background": "#111111",
+    },
+  },
+};
+
+if (typeof validateThemePackage === "function") {
+  check(
+    "validateThemePackage：var() 链式引用（无环）→ 通过（不误伤）",
+    validateThemePackage(varChainPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(varChainPkg))}`,
+  );
+  check(
+    "validateThemePackage：带回退引用关键字键 → 通过（引用方可用）",
+    validateThemePackage(varFallbackPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(varFallbackPkg))}`,
+  );
+  check(
+    "validateThemePackage：var() 引用集外键 → 通过（走应用默认值）",
+    validateThemePackage(varExternalPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(varExternalPkg))}`,
+  );
+  check(
+    "validateThemePackage：依赖自引用键但本身不在环上 → 通过（不误伤）",
+    validateThemePackage(varDependentPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(varDependentPkg))}`,
+  );
+}
+registerTheme(varChainPkg);
+registerTheme(varFallbackPkg);
+registerTheme(varExternalPkg);
+registerTheme(varDependentPkg);
+check(
+  "var() 正对照四包注册成功（不误伤）",
+  getTheme("ok-var-chain") === varChainPkg &&
+    getTheme("ok-var-fallback") === varFallbackPkg &&
+    getTheme("ok-var-external") === varExternalPkg &&
+    getTheme("ok-var-dependent") === varDependentPkg,
+);
+
+setCalls.length = 0;
+activateTheme("ok-var-chain");
+check(
+  "var() 链式引用三键照常注入（原样值，环外引用不设限）",
+  callsFor("--primary").length === 1 &&
+    callsFor("--primary")[0][1] === "var(--secondary)" &&
+    callsFor("--secondary").length === 1 &&
+    callsFor("--secondary")[0][1] === "var(--background)" &&
+    callsFor("--background").length === 1 &&
+    callsFor("--background")[0][1] === "#fafafa",
+  `实录 ${JSON.stringify(setCalls)}`,
+);
+
+setCalls.length = 0;
+activateTheme("ok-var-fallback");
+check(
+  "带回退引用：引用方照常注入、关键字键被跳过 0 次（R9-28）",
+  callsFor("--primary").length === 1 &&
+    callsFor("--primary")[0][1] === "var(--secondary, #654321)" &&
+    callsFor("--secondary").length === 0,
+  `实录 ${JSON.stringify(setCalls)}`,
+);
+
+setCalls.length = 0;
+activateTheme("ok-var-dependent");
+check(
+  "依赖环成员：环上键被跳过 0 次、环外键照常注入（R9-29）",
+  callsFor("--secondary").length === 0 &&
+    callsFor("--primary").length === 1 &&
+    callsFor("--background").length === 1,
+  `实录 ${JSON.stringify(setCalls)}`,
+);
+deactivateTheme();
 
 console.error = origError;
 

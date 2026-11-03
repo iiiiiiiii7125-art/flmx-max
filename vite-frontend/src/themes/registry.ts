@@ -180,6 +180,156 @@ const isTokenMap = (value: unknown): value is Record<string, unknown> =>
   !(value instanceof String);
 
 /**
+ * CSS-wide keywords (CSS Values and Units — the complete set,
+ * matched case-insensitively as CSS keywords are).  A custom
+ * property whose whole value is one of these computes to the
+ * guaranteed-invalid value, so every var() consumer of the token
+ * fails at computed-value time.  The value has real characters, so
+ * the character layer above passes it, yet it injects nothing —
+ * the same outcome as the blank / format-only forms.
+ */
+const CSS_WIDE_KEYWORDS: ReadonlySet<string> = new Set([
+  "initial",
+  "inherit",
+  "unset",
+  "revert",
+  "revert-layer",
+]);
+
+/**
+ * Decode CSS escapes in an identifier: a var() reference may spell
+ * a property name with escapes (`--prim\ary`), while the token
+ * map's keys are already literal — decode before comparing.
+ */
+const unescapeCssIdent = (raw: string): string =>
+  raw.replace(
+    /\\([0-9a-fA-F]{1,6})\s?|\\([\s\S])/g,
+    (_m, hex: string | undefined, ch: string | undefined) =>
+      hex !== undefined ? String.fromCodePoint(parseInt(hex, 16)) : (ch ?? ""),
+  );
+
+/**
+ * Extract the property name of every var() reference in a token
+ * value, including references nested inside fallbacks — the
+ * dependency graph is formed before fallback substitution, so a
+ * nested reference is still a dependency.  A `var(` not followed
+ * by a custom property name is not a reference and is ignored.
+ */
+const extractVarReferenceNames = (value: string): string[] => {
+  const names: string[] = [];
+  const lower = value.toLowerCase();
+  let i = 0;
+
+  for (;;) {
+    const start = lower.indexOf("var(", i);
+
+    if (start === -1) break;
+    let j = start + 4;
+
+    while (j < value.length && /\s/.test(value[j])) j++;
+    const nameMatch = /^--(?:\\[\s\S]|[^\s(),;])+/.exec(value.slice(j));
+
+    if (nameMatch) names.push(unescapeCssIdent(nameMatch[0]));
+    i = start + 4;
+  }
+
+  return names;
+};
+
+/**
+ * The single availability judgement for a light token set, shared
+ * by both consumers so the two can never drift apart (R9-12):
+ * validateThemePackage counts the entries in this set (a set with
+ * no available entry is no light set at all), and injectTokens
+ * sets exactly the entries in this set (an unavailable entry is
+ * skipped, so it can no longer overwrite the built-in :root
+ * fallback with a value that computes to nothing).  An entry is
+ * available when its key is a named ThemeTokens token and its
+ * value can actually produce a token stream at computed-value
+ * time (R9-28 / R9-29):
+ *   - character layer (isUsableTokenValue): a string with real
+ *     content after removing whitespace and format characters;
+ *   - keyword layer: the whole value is not a CSS-wide keyword
+ *     (guaranteed-invalid once substituted);
+ *   - reference layer: the value does not sit on a var()
+ *     dependency cycle within this set — a self-reference or a
+ *     mutual reference chain computes every member of the cycle
+ *     to the guaranteed-invalid value.
+ * References that leave the set do not taint a value: they
+ * resolve against the app defaults, and an entry this set skips
+ * leaves its default in place, so merely depending on an
+ * unavailable entry is survivable (a fallback, or the default
+ * itself, still produces a value) — only a cycle, whose members
+ * can resolve only through each other, cannot.
+ */
+const computeUsableTokenKeys = (
+  light: Record<string, unknown>,
+): Set<string> => {
+  const keys = Object.keys(light);
+  const inSet = new Set(keys);
+  const contentOk = new Map<string, boolean>();
+  const refsByKey = new Map<string, string[]>();
+
+  for (const key of keys) {
+    const value = light[key];
+    let ok = isUsableTokenValue(value);
+
+    if (ok) {
+      const whole = (value as string)
+        .replace(/[\s\p{Cf}]/gu, "")
+        .toLowerCase();
+
+      if (CSS_WIDE_KEYWORDS.has(whole)) ok = false;
+    }
+    contentOk.set(key, ok);
+    refsByKey.set(
+      key,
+      typeof value === "string" ? extractVarReferenceNames(value) : [],
+    );
+  }
+
+  // Dependency cycles within the set: a key is cyclic when it can
+  // reach itself by following var() references to other keys of
+  // the same set.
+  const cyclic = new Set<string>();
+
+  for (const key of keys) {
+    const seen = new Set<string>();
+    const stack = (refsByKey.get(key) ?? []).filter((name) =>
+      inSet.has(name),
+    );
+
+    while (stack.length > 0) {
+      const cur = stack.pop() as string;
+
+      if (cur === key) {
+        cyclic.add(key);
+        break;
+      }
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      for (const name of refsByKey.get(cur) ?? []) {
+        if (inSet.has(name)) stack.push(name);
+      }
+    }
+  }
+
+  const usable = new Set<string>();
+
+  for (const key of keys) {
+    if (
+      THEME_TOKEN_KEYS.has(key) &&
+      contentOk.get(key) === true &&
+      !cyclic.has(key)
+    ) {
+      usable.add(key);
+    }
+  }
+
+  return usable;
+};
+
+/**
  * Validate a theme package against the format contract.  Returns a
  * human-readable rejection reason, or null when the package is valid.
  *
@@ -216,10 +366,7 @@ export function validateThemePackage(pkg: ThemePackage): string | null {
   if (pkg.tokens != null) {
     const light: unknown = pkg.tokens.light;
     const usableCount = isTokenMap(light)
-      ? Object.entries(light).filter(
-          ([key, value]) =>
-            THEME_TOKEN_KEYS.has(key) && isUsableTokenValue(value),
-        ).length
+      ? computeUsableTokenKeys(light).size
       : 0;
 
     if (usableCount === 0) {
@@ -486,9 +633,14 @@ const injectedVars: string[] = [];
 
 function injectTokens(tokens: ThemeTokens): void {
   const root = document.documentElement;
+  // Injection applies the same availability judgement as
+  // validation (computeUsableTokenKeys): unavailable entries are
+  // skipped, never set — setting one would overwrite the built-in
+  // :root fallback with a value that computes to nothing.
+  const usable = computeUsableTokenKeys(tokens as Record<string, unknown>);
 
   for (const [varName, value] of Object.entries(tokens)) {
-    if (value !== undefined) {
+    if (value !== undefined && usable.has(varName)) {
       root.style.setProperty(varName, value);
       injectedVars.push(varName);
     }

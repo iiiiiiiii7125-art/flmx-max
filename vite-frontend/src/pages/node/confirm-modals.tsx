@@ -46,7 +46,7 @@ function UninstallAgentOption({
       >
         同时卸载服务器上的 agent
       </Checkbox>
-      <p className="pl-6 text-xs text-foreground">
+      <p className="pl-6 text-xs font-semibold text-foreground">
         停止并删除 agent、内核和 nftables
         规则，恢复调优前的系统参数。服务器离线时，会在它下次连接面板时自动卸载。只想把服务器移到另一个面板时请取消勾选。
       </p>
