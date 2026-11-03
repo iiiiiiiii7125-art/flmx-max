@@ -85,6 +85,19 @@
 //      三键环的整包形态逐一拒并点名＋代表格同 id 不顶替；正
 //      对照钉 var() 链式引用（无环）、带回退引用不可用键、引
 //      用集外键、依赖环成员但本身不在环上四格不误伤。
+//   ⑮ 引用名提取按 CSS 记法重写（修复轮 10，I-C4-02＋I-C4-05）：
+//      ⑭的环检测建在「提取名→解码→集内比对」上，但旧名捕获不
+//      按 CSS 标识符记法走——十六进制转义的终止空白属转义本
+//      身、其后名续接，旧正则却在该空白处截断名，转义拼写的自
+//      引用环（--prim\61 ry ⇒ --primary）对计数/注入双面不可
+//      见、被判可用注入；转义解出含标识符不可出现码点的名
+//      （\a ⇒ U+000A）永不可解析、同样被判可用；注释内的假
+//      var() 被当真依赖、整值可用却被拒（方向相反的过严）。
+//      现提取器：先剥注释、转义序列整体消费后逐字解码比对、
+//      解码名含不可出现码点计不可用（与关键字层同层）；解码
+//      按 CSS 口径对零/代理/越界码点取 U+FFFD、不再抛错。本
+//      节钉三形翻转（两逃逸形整包拒＋混合包跳过、注释形通过
+//      并注入）与转义正对照（转义指向他键的无环引用照常）。
 //
 // 提取面（修复轮 6，R6-C4-10 机制处置）：断言⑨的 globals 侧旧实现
 // 以正则合并 :root 块、无注释剥离——在 :root 块内给改过的 token
@@ -1071,6 +1084,188 @@ check(
     callsFor("--primary").length === 1 &&
     callsFor("--background").length === 1,
   `实录 ${JSON.stringify(setCalls)}`,
+);
+deactivateTheme();
+
+// ─── ⑮ 引用名提取按 CSS 记法（修复轮 10，I-C4-02＋I-C4-05） ────────────
+//
+// 逃逸形甲：十六进制转义的终止空白属转义本身——--prim\61 ry 按
+// CSS 记法解作 --primary，是自引用环；旧捕获在空白处截断名、解
+// 作 --prima（集外）而判可用。逃逸形乙：\a 解作 U+000A 混入名
+// 中，该名在本系统任何词表键与 :root 默认中都不可能出现、永不
+// 可解析。两形整包（单条目）须拒、混合包中该条须跳过。
+const escapeBadForms = [
+  ["转义自引用环（空格终止符）", "var(--prim\\61 ry)"],
+  ["转义自引用环（制表符终止符）", "var(--prim\\61\try)"],
+  ["转义解出不可出现码点（\\a ⇒ U+000A）", "var(--prim\\ary)"],
+];
+
+let escapeSeq = 0;
+
+for (const [label, badValue] of escapeBadForms) {
+  escapeSeq++;
+  const singlePkg = {
+    ...base,
+    id: `bad-escape-${escapeSeq}`,
+    tokens: { light: { "--primary": badValue } },
+  };
+
+  if (typeof validateThemePackage === "function") {
+    check(
+      `validateThemePackage：${label} → 点名缺 light（I-C4-02）`,
+      /light/.test(validateThemePackage(singlePkg) ?? ""),
+      `实得 ${JSON.stringify(validateThemePackage(singlePkg))}`,
+    );
+  }
+  registerTheme(singlePkg);
+  check(
+    `${label}的主题包被拒注册（I-C4-02）`,
+    getTheme(singlePkg.id) === undefined &&
+      errorLog.some((m) => m.includes(singlePkg.id) && /light/.test(m)),
+    `捕获到: ${JSON.stringify(errorLog)}`,
+  );
+
+  const mixedPkg = {
+    ...base,
+    id: `ok-escape-mixed-${escapeSeq}`,
+    tokens: {
+      light: { "--primary": badValue, "--background": "#111111" },
+    },
+  };
+
+  registerTheme(mixedPkg);
+  check(
+    `混合包（${label}＋实值）注册成功`,
+    getTheme(mixedPkg.id) === mixedPkg,
+  );
+  setCalls.length = 0;
+  activateTheme(mixedPkg.id);
+  check(
+    `混合包激活：${label}条目跳过、实值条目照常注入（I-C4-02）`,
+    callsFor("--primary").length === 0 &&
+      callsFor("--background").length === 1 &&
+      callsFor("--background")[0][1] === "#111111",
+    `实录 ${JSON.stringify(setCalls)}`,
+  );
+  deactivateTheme();
+}
+
+// 转义拼写跨键成环：--primary 以转义拼写指向 --secondary、后者
+// 明文指回——解码后同为集内环，两键俱死、整包拒。
+const escapeCyclePkg = {
+  ...base,
+  id: "bad-escape-cycle",
+  tokens: {
+    light: {
+      "--primary": "var(--second\\61 ry)",
+      "--secondary": "var(--primary)",
+    },
+  },
+};
+
+if (typeof validateThemePackage === "function") {
+  check(
+    "validateThemePackage：转义拼写跨键环 → 点名缺 light（I-C4-02）",
+    /light/.test(validateThemePackage(escapeCyclePkg) ?? ""),
+    `实得 ${JSON.stringify(validateThemePackage(escapeCyclePkg))}`,
+  );
+}
+registerTheme(escapeCyclePkg);
+check(
+  "转义拼写跨键环的主题包被拒注册（I-C4-02）",
+  getTheme("bad-escape-cycle") === undefined,
+);
+
+// 过严形（I-C4-05）：注释内的 var() 拼写不是引用——浏览器在记
+// 法阶段剥注释，值计算为注释后的纯色。整包须通过并照常注入。
+const commentValuePkg = {
+  ...base,
+  id: "ok-comment-value",
+  tokens: { light: { "--primary": "/* var(--primary) */ #222222" } },
+};
+
+if (typeof validateThemePackage === "function") {
+  check(
+    "validateThemePackage：注释内假引用 → 通过（I-C4-05）",
+    validateThemePackage(commentValuePkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(commentValuePkg))}`,
+  );
+}
+registerTheme(commentValuePkg);
+check("注释内假引用的主题包注册成功（I-C4-05）", getTheme("ok-comment-value") === commentValuePkg);
+setCalls.length = 0;
+activateTheme("ok-comment-value");
+check(
+  "注释内假引用：条目照常注入（原样值，I-C4-05）",
+  callsFor("--primary").length === 1 &&
+    callsFor("--primary")[0][1] === "/* var(--primary) */ #222222",
+  `实录 ${JSON.stringify(setCalls)}`,
+);
+deactivateTheme();
+
+// 转义正对照（不误伤）：转义拼写指向他键、无环——解码后为普通
+// 集内依赖，两键照常计数与注入。
+const escapeChainPkg = {
+  ...base,
+  id: "ok-escape-chain",
+  tokens: {
+    light: {
+      "--primary": "var(--second\\61 ry)",
+      "--secondary": "#123456",
+    },
+  },
+};
+
+if (typeof validateThemePackage === "function") {
+  check(
+    "validateThemePackage：转义拼写指向他键（无环）→ 通过（不误伤）",
+    validateThemePackage(escapeChainPkg) === null,
+    `实得 ${JSON.stringify(validateThemePackage(escapeChainPkg))}`,
+  );
+}
+registerTheme(escapeChainPkg);
+setCalls.length = 0;
+activateTheme("ok-escape-chain");
+check(
+  "转义拼写指向他键：两键照常注入（不误伤）",
+  callsFor("--primary").length === 1 &&
+    callsFor("--primary")[0][1] === "var(--second\\61 ry)" &&
+    callsFor("--secondary").length === 1 &&
+    callsFor("--secondary")[0][1] === "#123456",
+  `实录 ${JSON.stringify(setCalls)}`,
+);
+deactivateTheme();
+
+// 越界码点转义（\110000）：CSS 口径解作 U+FFFD——提取不得抛错
+// （旧解码 String.fromCodePoint 越界即 RangeError），该名仍为
+// 可解析形态之外的集外引用，条目照常可用。
+const escapeRangePkg = {
+  ...base,
+  id: "ok-escape-range",
+  tokens: {
+    light: {
+      "--primary": "var(--\\110000rimary)",
+      "--background": "#111111",
+    },
+  },
+};
+
+let rangeThrew = null;
+
+try {
+  registerTheme(escapeRangePkg);
+  setCalls.length = 0;
+  activateTheme("ok-escape-range");
+} catch (e) {
+  rangeThrew = String(e && e.message ? e.message : e);
+}
+check(
+  "越界码点转义不抛错且两键照常注入（解码 U+FFFD 口径）",
+  rangeThrew === null &&
+    getTheme("ok-escape-range") === escapeRangePkg &&
+    callsFor("--primary").length === 1 &&
+    callsFor("--background").length === 1,
+  `抛错: ${JSON.stringify(rangeThrew)}，实录 ${JSON.stringify(setCalls)}`,
 );
 deactivateTheme();
 

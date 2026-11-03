@@ -197,16 +197,88 @@ const CSS_WIDE_KEYWORDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Decode CSS escapes in an identifier: a var() reference may spell
- * a property name with escapes (`--prim\ary`), while the token
- * map's keys are already literal — decode before comparing.
+ * Strip CSS comments from a token value.  CSS removes comments at
+ * tokenisation time, before any value is examined, so a var()
+ * spelling inside a comment is not a reference (I-C4-05: a value
+ * whose only var() spelling sits inside a comment, in front of a
+ * plain colour, computes to that colour and must not be judged a
+ * self-reference).  Each comment is replaced by one space, and
+ * an unterminated comment runs to the end of the value, as in CSS.
  */
-const unescapeCssIdent = (raw: string): string =>
-  raw.replace(
-    /\\([0-9a-fA-F]{1,6})\s?|\\([\s\S])/g,
-    (_m, hex: string | undefined, ch: string | undefined) =>
-      hex !== undefined ? String.fromCodePoint(parseInt(hex, 16)) : (ch ?? ""),
-  );
+const stripCssComments = (value: string): string => {
+  let out = "";
+  let i = 0;
+
+  for (;;) {
+    const open = value.indexOf("/*", i);
+
+    if (open === -1) return out + value.slice(i);
+    out += `${value.slice(i, open)} `;
+    const close = value.indexOf("*/", open + 2);
+
+    if (close === -1) return out;
+    i = close + 2;
+  }
+};
+
+const isHexDigit = (ch: string): boolean =>
+  (ch >= "0" && ch <= "9") ||
+  (ch >= "a" && ch <= "f") ||
+  (ch >= "A" && ch <= "F");
+
+const isCssWhitespace = (ch: string): boolean =>
+  ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f";
+
+/**
+ * Consume one CSS escape sequence starting at the backslash at
+ * index `at`; returns the code point it stands for and the index
+ * just past it.  Follows CSS Syntax: a backslash followed by 1–6
+ * hex digits is a code-point escape, and ONE whitespace character
+ * after the digits is the escape's terminator — part of the
+ * escape, not a separator after it, so the name continues behind
+ * it (`--prim\61 ry` is the name `--primary`; a CRLF pair counts
+ * as one newline terminator).  A backslash followed by any other
+ * character stands for that character.  Code points that cannot
+ * exist (zero, a surrogate, above U+10FFFF) decode to U+FFFD, as
+ * in CSS — decoding never throws.  Returns null when the
+ * backslash starts no escape (end of input, or a newline follows:
+ * an escaped newline is not an escape, so the name ends in front
+ * of the backslash).
+ */
+const consumeCssEscape = (
+  text: string,
+  at: number,
+): { cp: number; next: number } | null => {
+  let i = at + 1;
+
+  if (i >= text.length) return null;
+  const first = text[i];
+
+  if (first === "\n" || first === "\r" || first === "\f") return null;
+
+  if (isHexDigit(first)) {
+    let hex = "";
+
+    while (i < text.length && hex.length < 6 && isHexDigit(text[i])) {
+      hex += text[i];
+      i++;
+    }
+    if (i < text.length && isCssWhitespace(text[i])) {
+      i += text[i] === "\r" && text[i + 1] === "\n" ? 2 : 1;
+    }
+    let cp = parseInt(hex, 16);
+
+    if (cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+      cp = 0xfffd;
+    }
+
+    return { cp, next: i };
+  }
+
+  const cp = text.codePointAt(i) as number;
+
+  return { cp, next: i + (cp > 0xffff ? 2 : 1) };
+};
 
 /**
  * Extract the property name of every var() reference in a token
@@ -214,10 +286,18 @@ const unescapeCssIdent = (raw: string): string =>
  * dependency graph is formed before fallback substitution, so a
  * nested reference is still a dependency.  A `var(` not followed
  * by a custom property name is not a reference and is ignored.
+ *
+ * Names are consumed per CSS identifier syntax and decoded as
+ * they are consumed, so the results compare directly against the
+ * token map's literal keys: escape sequences are consumed whole
+ * (I-C4-02 — a hex escape's whitespace terminator belongs to the
+ * escape, it does not truncate the name), and comments are
+ * stripped before extraction (I-C4-05).
  */
 const extractVarReferenceNames = (value: string): string[] => {
   const names: string[] = [];
-  const lower = value.toLowerCase();
+  const text = stripCssComments(value);
+  const lower = text.toLowerCase();
   let i = 0;
 
   for (;;) {
@@ -226,14 +306,66 @@ const extractVarReferenceNames = (value: string): string[] => {
     if (start === -1) break;
     let j = start + 4;
 
-    while (j < value.length && /\s/.test(value[j])) j++;
-    const nameMatch = /^--(?:\\[\s\S]|[^\s(),;])+/.exec(value.slice(j));
+    while (j < text.length && /\s/.test(text[j])) j++;
 
-    if (nameMatch) names.push(unescapeCssIdent(nameMatch[0]));
+    if (text.startsWith("--", j)) {
+      let name = "--";
+      let k = j + 2;
+
+      while (k < text.length) {
+        const ch = text[k];
+
+        if (ch === "\\") {
+          const esc = consumeCssEscape(text, k);
+
+          if (esc === null) break;
+          name += String.fromCodePoint(esc.cp);
+          k = esc.next;
+          continue;
+        }
+        if (/[\s(),;]/.test(ch)) break;
+        name += ch;
+        k++;
+      }
+
+      if (name.length > 2) names.push(name);
+    }
     i = start + 4;
   }
 
   return names;
+};
+
+/**
+ * Whether a code point can appear in a CSS identifier.  Name code
+ * points are letters, digits, `-`, `_` and anything at or above
+ * U+0080; controls and the remaining ASCII punctuation can never
+ * be part of one.
+ */
+const isCssNameCodePoint = (cp: number): boolean =>
+  cp >= 0x80 ||
+  (cp >= 0x30 && cp <= 0x39) ||
+  (cp >= 0x41 && cp <= 0x5a) ||
+  (cp >= 0x61 && cp <= 0x7a) ||
+  cp === 0x2d ||
+  cp === 0x5f;
+
+/**
+ * Whether a decoded var() reference name can match a property of
+ * this product at all.  Every name it could resolve against — a
+ * token key of the set, an application default in :root — is a
+ * plain identifier, so a decoded name carrying a code point no
+ * identifier may contain (I-C4-02: `\a` decodes to U+000A, giving
+ * `--prim␊ry`) matches nothing anywhere: the reference can never
+ * resolve and the value computes to the guaranteed-invalid value,
+ * exactly like a whole-value CSS-wide keyword.
+ */
+const canMatchAPropertyName = (name: string): boolean => {
+  for (const ch of name) {
+    if (!isCssNameCodePoint(ch.codePointAt(0) as number)) return false;
+  }
+
+  return true;
 };
 
 /**
@@ -254,7 +386,9 @@ const extractVarReferenceNames = (value: string): string[] => {
  *   - reference layer: the value does not sit on a var()
  *     dependency cycle within this set — a self-reference or a
  *     mutual reference chain computes every member of the cycle
- *     to the guaranteed-invalid value.
+ *     to the guaranteed-invalid value — and none of its var()
+ *     references decodes to a name no property can carry
+ *     (canMatchAPropertyName), which can resolve against nothing.
  * References that leave the set do not taint a value: they
  * resolve against the app defaults, and an entry this set skips
  * leaves its default in place, so merely depending on an
@@ -273,6 +407,8 @@ const computeUsableTokenKeys = (
   for (const key of keys) {
     const value = light[key];
     let ok = isUsableTokenValue(value);
+    const refs =
+      typeof value === "string" ? extractVarReferenceNames(value) : [];
 
     if (ok) {
       const whole = (value as string)
@@ -281,11 +417,15 @@ const computeUsableTokenKeys = (
 
       if (CSS_WIDE_KEYWORDS.has(whole)) ok = false;
     }
+    if (ok && refs.some((name) => !canMatchAPropertyName(name))) {
+      // A reference whose decoded name no property can carry
+      // resolves against nothing — not this set, not the app
+      // defaults — so the value is computationally unusable on
+      // the same footing as a whole-value CSS-wide keyword.
+      ok = false;
+    }
     contentOk.set(key, ok);
-    refsByKey.set(
-      key,
-      typeof value === "string" ? extractVarReferenceNames(value) : [],
-    );
+    refsByKey.set(key, refs);
   }
 
   // Dependency cycles within the set: a key is cyclic when it can
