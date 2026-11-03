@@ -60,6 +60,30 @@ if grep -q 'FLMX_KERNEL_DIR' "$TMP/v3.log"; then
 else
   echo "FAIL: variant 3 caught but the missing anchor was not named"; sed 's/^/    /' "$TMP/v3.log"; exit 1
 fi
+cp "$ROOT/go-gost/Dockerfile" "$MIR/go-gost/Dockerfile"
+
+echo "== variant 4: comment out the entrypoint ulimit line must FAIL and name it (R6-C4-07) =="
+sed -i 's|^ulimit -c 0|# ulimit -c 0|' "$MIR/go-gost/docker-entrypoint.sh"
+if bash "$GATE" "$MIR" > "$TMP/v4.log" 2>&1; then
+  echo "FAIL: variant 4 was not caught (commented-out line still counted)"; exit 1
+fi
+if grep -q 'ulimit -c 0' "$TMP/v4.log"; then
+  echo "OK: variant 4 caught and named"
+else
+  echo "FAIL: variant 4 caught but the missing line was not named"; sed 's/^/    /' "$TMP/v4.log"; exit 1
+fi
+cp "$ROOT/go-gost/docker-entrypoint.sh" "$MIR/go-gost/docker-entrypoint.sh"
+
+echo "== variant 5: comment out the ENV anchor must FAIL and name it (R6-C4-07) =="
+sed -i 's|^ENV FLMX_KERNEL_DIR=|# ENV FLMX_KERNEL_DIR=|' "$MIR/go-gost/Dockerfile"
+if bash "$GATE" "$MIR" > "$TMP/v5.log" 2>&1; then
+  echo "FAIL: variant 5 was not caught (commented-out ENV still counted)"; exit 1
+fi
+if grep -q 'FLMX_KERNEL_DIR' "$TMP/v5.log"; then
+  echo "OK: variant 5 caught and named"
+else
+  echo "FAIL: variant 5 caught but the missing anchor was not named"; sed 's/^/    /' "$TMP/v5.log"; exit 1
+fi
 
 echo "SELFTEST PASS: baseline green, all variants caught and named"
 exit 0

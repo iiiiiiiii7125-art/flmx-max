@@ -36,6 +36,85 @@
 set -u
 
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+# ── 代码面影子（修复轮 6 机制处置）──────────────────────────────
+# 本门对 Go 源码的提取（go_const_s 首命中取值、WriteTimeout、各
+# Timeout/WithTimeout 值锚、extendWriteDeadline 武装点计数、路由
+# 与函数体普查）旧实现直接读原文：注释里的同形文本可满足取值型
+# 断言——把期望值写进块注释、真身改值，首命中仍取注释值而全绿
+# （第六轮审计观察项 go_const_s 即此形态）。逐个 grep 点改造成
+# 本高，本轮按机制统一处置：开工先建影子树——全树以符号链接镜
+# 像（跳过 .git 与 vite-frontend/node_modules），go-backend 与
+# go-gost 下每个 .go 文件替换为 go_strip 词法剥注释后的实文件；
+# 此后本脚本的全部判定只对影子代码面进行。前端 TS、登记表与其
+# 他文件经符号链接读原文，口径不变；影子在退出时清除。
+# GO_STRIP_AWK：Go 词法剥注释状态机（注释整体丢弃，字符串/原始
+# 字符串/符文字面量内容原样保留）。batch=1 时逐文件重置状态并把
+# 结果写到 <文件>.stripped；否则写标准输出。
+GO_STRIP_AWK='
+  BEGIN { st = 0; q = sprintf("%c", 39); dest = "/dev/stdout" }
+  FNR == 1 && batch { st = 0; dest = FILENAME ".stripped" }
+  {
+    line = $0; out = ""; n = length(line)
+    for (i = 1; i <= n; i++) {
+      c = substr(line, i, 1); nx = substr(line, i + 1, 1)
+      if (st == 0) {
+        if (c == "/" && nx == "/") { st = 1; i++; continue }
+        if (c == "/" && nx == "*") { st = 2; i++; continue }
+        if (c == "\"") st = 3
+        else if (c == "`") st = 4
+        else if (c == q) st = 5
+        out = out c
+      } else if (st == 1) {
+        break
+      } else if (st == 2) {
+        if (c == "*" && nx == "/") { st = 0; i++ }
+      } else if (st == 3) {
+        out = out c
+        if (c == "\\") { out = out nx; i++ }
+        else if (c == "\"") st = 0
+      } else if (st == 4) {
+        out = out c
+        if (c == "`") st = 0
+      } else if (st == 5) {
+        out = out c
+        if (c == "\\") { out = out nx; i++ }
+        else if (c == q) st = 0
+      }
+    }
+    if (st == 1) st = 0
+    print out > dest
+  }'
+go_strip() { awk "$GO_STRIP_AWK"; }
+if [ -d "$ROOT/go-backend" ]; then
+  SHADOW="$(mktemp -d)"
+  trap 'rm -rf "$SHADOW"' EXIT
+  # 只镜像本门实际读取的顶层目录（doc 登记表、前端 TS、两 Go 树）。
+  for name in doc vite-frontend go-backend go-gost; do
+    e="$ROOT/$name"
+    [ -e "$e" ] || continue
+    if [ "$name" = "vite-frontend" ] && [ -d "$e" ]; then
+      mkdir -p "$SHADOW/vite-frontend"
+      for sub in "$e"/*; do
+        [ -e "$sub" ] || continue
+        [ "$(basename "$sub")" = "node_modules" ] && continue
+        cp -rs "$sub" "$SHADOW/vite-frontend/" 2>/dev/null || true
+      done
+    else
+      cp -rs "$e" "$SHADOW/" 2>/dev/null || true
+    fi
+  done
+  for d in go-backend go-gost; do
+    [ -d "$SHADOW/$d" ] || continue
+    find "$SHADOW/$d" -name '*.go' -type l -print0 \
+      | xargs -0 -n 100 awk -v batch=1 "$GO_STRIP_AWK"
+    find "$SHADOW/$d" -name '*.go.stripped' | while IFS= read -r s; do
+      mv "$s" "${s%.stripped}"
+    done
+  done
+  ROOT="$SHADOW"
+fi
+
 REG="$ROOT/doc/audit/timeout-budgets.tsv"
 FE_TS="$ROOT/vite-frontend/src/api/index.ts"
 FE_STREAM="$ROOT/vite-frontend/src/api/diagnosis-stream.ts"

@@ -25,6 +25,14 @@
 # 与 geodata 必须落挂载卷，缺了这行就回落到脚本形态的默认根，
 # 在镜像里只是容器可写层，容器一重建全部蒸发（R2-003）。
 #
+# 提取面（修复轮 6，R6-C4-07 机制处置）：旧实现对两文件整文件
+# grep -F，三处不变量均可被「把该行注释掉」满足（注释行仍含字面
+# 量）。现判定前先滤除注释行（Dockerfile 与 sh 同口径：首个非空
+# 白字符为 # 的行），入口两条另剥行尾注释后按行首锚定整行匹配，
+# ENV 锚按 Dockerfile 指令形态锚定；apt 块提取同样在滤除注释行
+# 的文本上进行（块内的注释行包名不计数）。自检新增注释形态两
+# 变体钉死此口径。
+#
 # 用法：check-agent-image-tools.sh [REPO_ROOT]（默认脚本所在仓库根）。
 # 退出码：0 = 工具集与入口不变量齐备；1 = 存在缺失；2 = 前提失效。
 set -u
@@ -40,9 +48,13 @@ if [ ! -f "$DOCKERFILE" ] || [ ! -f "$ENTRYPOINT" ]; then
   exit 2
 fi
 
+# 代码面：滤除注释行后的文本（注释行＝首个非空白字符为 #）。
+DOCKERFILE_CODE="$(grep -v '^[[:space:]]*#' "$DOCKERFILE")"
+ENTRYPOINT_CODE="$(grep -v '^[[:space:]]*#' "$ENTRYPOINT" | sed 's/[[:space:]]#.*$//')"
+
 # 提取 apt-get install 块：自含 "apt-get install" 的行起，到第一个
 # 不以反斜杠结尾的行止（块的最后一行）。
-BLOCK="$(awk '/apt-get install/{f=1} f{print} f && $0 !~ /\\[[:space:]]*$/{exit}' "$DOCKERFILE")"
+BLOCK="$(printf '%s\n' "$DOCKERFILE_CODE" | awk '/apt-get install/{f=1} f{print} f && $0 !~ /\\[[:space:]]*$/{exit}')"
 if [ -z "$BLOCK" ]; then
   echo "PREMISE FAIL: no apt-get install block found in $DOCKERFILE"
   exit 2
@@ -59,18 +71,18 @@ for pkg in $REQUIRED_PACKAGES; do
   fi
 done
 
-# 入口不变量逐行核对。
-if ! grep -Fq 'ulimit -c 0' "$ENTRYPOINT"; then
+# 入口不变量逐行核对（代码面、行首锚定整行）。
+if ! printf '%s\n' "$ENTRYPOINT_CODE" | grep -Eq '^[[:space:]]*ulimit -c 0[[:space:]]*$'; then
   echo "FAIL: docker-entrypoint.sh lost the core-dump guard line: ulimit -c 0"
   FAIL=1
 fi
-if ! grep -Fq 'cd /etc/flmx_agent' "$ENTRYPOINT"; then
+if ! printf '%s\n' "$ENTRYPOINT_CODE" | grep -Eq '^[[:space:]]*cd /etc/flmx_agent[[:space:]]*$'; then
   echo "FAIL: docker-entrypoint.sh lost the data-directory anchor line: cd /etc/flmx_agent"
   FAIL=1
 fi
 
-# 内核状态根锚点逐行核对。
-if ! grep -Fq 'ENV FLMX_KERNEL_DIR=/etc/flmx_agent/kernels' "$DOCKERFILE"; then
+# 内核状态根锚点按 Dockerfile 指令形态核对（代码面、行首锚定）。
+if ! printf '%s\n' "$DOCKERFILE_CODE" | grep -Eq '^[[:space:]]*ENV[[:space:]]+FLMX_KERNEL_DIR=/etc/flmx_agent/kernels[[:space:]]*$'; then
   echo "FAIL: Dockerfile lost the kernel state anchor: ENV FLMX_KERNEL_DIR=/etc/flmx_agent/kernels"
   FAIL=1
 fi
