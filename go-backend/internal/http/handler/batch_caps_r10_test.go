@@ -172,14 +172,11 @@ func r1008OrderEntries(n int) []map[string]any {
 //     （kernel_external、remote_source 各自的测试）、subscription
 //     save 选集 100、latency 目标 200/30；
 //   - 无帽但已裁定不属本族（信息级登记）：单资源的结构型列表字段
-//     （tunnel create/update 的节点列表、user 的 groupIds——单事务
-//     校验，C1-I08）；备份导入各段行数（users 段哈希预算 1000 另
-//     钉，C1-I07）；
-//   - 随功能移除消解（本轮代码尚在、暂无帽，移除落地后本注记须
-//     同步删除、届时无帽批量面清单归零）：/group/tunnel/assign、
-//     /group/user/assign、/subscription/group/order、
-//     /subscription/group/save 的选集——由节点组/分组三件套移除路
-//     （fixD/fixE）删除路由时收尾本注记。
+//     （tunnel create/update 的节点列表——单事务校验，C1-I08）；
+//     备份导入各段行数（users 段哈希预算 1000 另钉，C1-I07）；
+//   - 曾无帽的 /group/tunnel/assign、/group/user/assign、
+//     /subscription/group/order、/subscription/group/save 四面已随
+//     节点组/分组功能移除（1.9.6）整面删除，无帽批量面清单归零。
 //
 // TestR1008SelfParsedFacesOverCap 逐面钉死不走 idsFromBody 系的
 // 批量面（各自解析）在超帽时同口径点名拒绝。
