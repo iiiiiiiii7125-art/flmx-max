@@ -458,7 +458,8 @@ get_docker_compose_url() {
 }
 
 # 检查 docker-compose 或 docker compose 命令。
-# 默认（安装路径）：未安装则自动安装。
+# 默认（安装路径）：未安装则自动安装；且命令在场之外还要验守护进程
+# 可达（R7-02，见函数尾）。
 # noinstall（更新/迁移/卸载路径）：未检测到 Docker 时直接返回失败——没有
 # Docker 就不可能有容器化的面板部署，绝不为这些操作反向安装 Docker。
 check_docker() {
@@ -488,6 +489,20 @@ check_docker() {
       DOCKER_CMD="docker-compose"
     else
       echo "错误：Docker 安装后仍无法使用，请检查安装日志。"
+      exit 1
+    fi
+  fi
+  # R7-02: 安装路径上「检测到命令」不等于 Docker 可用——CLI 与 compose
+  # 子命令在场时守护进程可能根本没起（兜底装后未启 daemon、或存量安
+  # 装的 daemon 被停）。在此以 docker info（与 docker_ipv6_usable 同
+  # 一探活口径）判 daemon 可达，不可达即点名失败，不许以「已安装」
+  # 放行到 install_panel 的 up＋90 秒健康等待、以误导性根因收场。
+  # noinstall 路径不查：其 compose 操作会在首个命令处直接吃到 docker
+  # 自己的 daemon 报错、根因不被掩盖，卸载也不应被 daemon 状态卡死。
+  if [[ "$noinstall" != "noinstall" ]] && command -v docker &> /dev/null; then
+    if ! docker info &> /dev/null; then
+      echo "错误：Docker 已安装但守护进程（daemon）不可达，容器操作无法执行。"
+      echo "  请先启动 Docker 服务后重试：systemd 发行版执行 systemctl enable --now docker；Alpine 执行 rc-service docker start。"
       exit 1
     fi
   fi
@@ -535,6 +550,23 @@ run_verified_installer_script() {
   return $rc
 }
 
+# R7-02: 「装好」的口径是守护进程可用、不只是包装上。包管理器兜底
+# 三支此前装完即返回成功：dnf/yum、apk 按发行惯例装包不自启服务，
+# 装后复检又只验 CLI，daemon 不在的「成功」一路走到面板首装的健康
+# 检查、空等 90 秒才以误导性根因收场。启动动作在此单点收口，官方
+# 脚本路径与兜底三支共用：systemd 发行版 enable --now（已在运行时
+# 幂等无副作用；Debian 的 docker.io 本由包脚本在 systemd 下自启，
+# 显式再启同属无害）；Alpine 传 openrc——rc-update 入默认运行级＋
+# rc-service 启动（与 install.sh 的 OpenRC 服务惯例一致）。
+start_docker_daemon() {
+  if [ "${1:-}" = "openrc" ]; then
+    rc-update add docker default 2>/dev/null || true
+    rc-service docker start 2>/dev/null || true
+  else
+    systemctl enable --now docker 2>/dev/null || service docker start 2>/dev/null || true
+  fi
+}
+
 # 自动安装 Docker（支持 Debian/Ubuntu、RHEL 系、Alpine）
 install_docker() {
   echo "🔧 正在安装 Docker..."
@@ -553,7 +585,7 @@ install_docker() {
     if run_verified_installer_script "$docker_url" "$docker_script_sha"; then
       echo "✅ Docker 安装完成"
       # 启动并设置开机自启
-      systemctl enable --now docker 2>/dev/null || service docker start 2>/dev/null || true
+      start_docker_daemon
       return 0
     fi
   fi
@@ -568,21 +600,22 @@ install_docker() {
   # docker-compose 二进制，check_docker 先认 docker-compose、再认
   # docker compose 子命令，两形态都可被检出）；RHEL 系默认源既无
   # 引擎也无插件，先落 Docker 官方 yum 源（repo 文件自带
-  # gpgcheck=1、包经 Docker 发布密钥验签）再装官方包名。
+  # gpgcheck=1、包经 Docker 发布密钥验签）再装官方包名。装后还须
+  # 启动守护进程才算装好，见 start_docker_daemon（R7-02）。
   if [ -f /etc/debian_version ]; then
-    apt-get update && { apt-get install -y docker.io docker-compose-v2 || apt-get install -y docker.io docker-compose; } && return 0
+    apt-get update && { apt-get install -y docker.io docker-compose-v2 || apt-get install -y docker.io docker-compose; } && { start_docker_daemon; return 0; }
   elif [ -f /etc/redhat-release ]; then
     if command -v dnf &> /dev/null; then
       dnf install -y dnf-plugins-core && \
         dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo && \
-        dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin && return 0
+        dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin && { start_docker_daemon; return 0; }
     else
       yum install -y yum-utils && \
         yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo && \
-        yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin && return 0
+        yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin && { start_docker_daemon; return 0; }
     fi
   elif [ -f /etc/alpine-release ]; then
-    apk add --no-cache docker docker-compose && return 0
+    apk add --no-cache docker docker-compose && { start_docker_daemon openrc; return 0; }
   fi
 
   return 1
