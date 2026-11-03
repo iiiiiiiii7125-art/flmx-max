@@ -17,6 +17,8 @@ cleanup() {
   rc-service flux_agent stop >/dev/null 2>&1 || true
   rc-update del flux_agent default >/dev/null 2>&1 || true
   rm -f /etc/init.d/flux_agent
+  rm -f /etc/systemd/system/gost.service
+  rm -rf /etc/gost
   rm -rf "$TEST_DIR"
 }
 trap cleanup EXIT
@@ -82,6 +84,46 @@ cp "$TEST_DIR/manage.sh" "$TEST_DIR/update.sh"
 printf '2\n' | PROXY_ENABLED=false FLMX_AGENT_TAKEOVER=1 "$TEST_DIR/update.sh"
 cmp "$TEST_DIR/config-before-update.json" "$TEST_DIR/flux_agent/config.json"
 rc-service flux_agent status
+
+# C4-F01: the legacy gost cleanup must skip a legacy install whose
+# config addr belongs to another panel — service file and binary
+# survive, and the skip is disclosed in the output. The fixture sits
+# at the real absolute paths (the suite runs in a disposable
+# container) and is removed again before the uninstall step.
+mkdir -p /etc/gost /etc/systemd/system
+cat > /etc/gost/config.json <<'EOF'
+{
+  "addr": "wss://other-panel.example:443",
+  "secret": "alpine-foreign"
+}
+EOF
+: > /etc/gost/gost.json
+: > /etc/gost/gost
+cat > /etc/systemd/system/gost.service <<'EOF'
+[Unit]
+Description=Gost Proxy Service
+
+[Service]
+WorkingDirectory=/etc/gost
+ExecStart=/etc/gost/gost
+EOF
+sed '/^# 执行主函数$/,$d' "$INSTALL_SCRIPT" > "$TEST_DIR/cleanup-harness.sh"
+cat >> "$TEST_DIR/cleanup-harness.sh" <<'EOF'
+SERVICE_MANAGER="openrc"
+SERVER_ADDR="wss://this-panel.example:443"
+INSTALL_DIR="$TEST_DIR/no-agent"
+cleanup_legacy_gost_installation
+EOF
+chmod +x "$TEST_DIR/cleanup-harness.sh"
+cleanup_output=$("$TEST_DIR/cleanup-harness.sh")
+test -f /etc/systemd/system/gost.service
+test -f /etc/gost/gost
+case "$cleanup_output" in
+  *"已跳过旧式 gost 安装的清理"*) ;;
+  *) echo "C4-F01: legacy cleanup skip was not disclosed" >&2; exit 1 ;;
+esac
+rm -f /etc/systemd/system/gost.service
+rm -rf /etc/gost
 
 # AI-06: menu uninstall runs the same ownership guard — TAKEOVER form
 # as the update step above; the trailing 'y' is the uninstall confirm.
