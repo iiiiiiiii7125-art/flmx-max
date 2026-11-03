@@ -535,6 +535,40 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("节点卸载失败: "+err.Error()+"（可强制删除面板记录）"))
 			return
 		}
+		// R9-08（I-F2-03）：落库前按最终引用集复检——守卫与删除之间
+		// 隔着上面的卸载下发（超时 20s），期间新保存的引用不在守卫
+		// 清单内。非 Force：中止删除并点名新引用（下发已移除 agent
+		// 侧内核，解锁后按 R5X-004(f) 同口径补一次 applyKernel 按
+		// 现行 DB 复原）；Force：新引用并入回执清单后照删。复检查
+		// 询失败 fail-closed，同守卫口径（复原补偿同上）。
+		recheckNames, recheckMsg, recheckErr := h.kernelChainGuard(k.ID)
+		if recheckErr != nil {
+			unlock()
+			if aerr := h.applyKernel(k.ID, false); aerr != nil {
+				log.Printf("kernel remove: repush after recheck failure kernel_id=%d err=%v", k.ID, aerr)
+			}
+			response.WriteJSON(w, response.Err(-2, recheckErr.Error()))
+			return
+		}
+		if recheckMsg != "" {
+			if !req.Force {
+				unlock()
+				if aerr := h.applyKernel(k.ID, false); aerr != nil {
+					log.Printf("kernel remove: repush after recheck rejection kernel_id=%d err=%v", k.ID, aerr)
+				}
+				response.WriteJSON(w, response.R{
+					Code: -1,
+					Msg:  recheckMsg,
+					TS:   time.Now().UnixMilli(),
+					Data: map[string]interface{}{
+						"brokenReferrers":     recheckNames,
+						"brokenReferrerCount": len(recheckNames),
+					},
+				})
+				return
+			}
+			brokenReferrers = mergeReferrerNames(brokenReferrers, recheckNames)
+		}
 		kernelInboundRows, listErr := h.repo.ListNodeInboundsByKernel(k.ID)
 		if listErr == nil {
 			for _, row := range kernelInboundRows {
@@ -1359,6 +1393,22 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.removeInboundRelays(id)
+	// R9-08（I-F2-03）：落库前按最终引用集复检——守卫与删除之间隔
+	// 着 relay 清理，期间新保存的引用不在守卫结论内，照旧删除会
+	// 静默打断它。复检命中则中止删除并点名（relay 已清，按删除
+	// 失败同口径补刷白名单，见下方 R5X-004(e)）；查询失败
+	// fail-closed，同守卫口径。
+	recheckMsg, recheckErr := h.chainInUseMessage(row)
+	if recheckErr != nil {
+		h.refreshInboundWhitelist(id)
+		response.WriteJSON(w, response.Err(-2, recheckErr.Error()))
+		return
+	}
+	if recheckMsg != "" {
+		h.refreshInboundWhitelist(id)
+		response.WriteJSON(w, response.ErrDefault(recheckMsg))
+		return
+	}
 	if err := h.repo.DeleteNodeInbound(id); err != nil {
 		// R5X-004(e)：removeInboundRelays 已逐条删掉本入站的 relay
 		// 与其转发，入站本体尚存——失败返回前按现行 DB 补刷本入站
@@ -1463,6 +1513,33 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		h.removeInboundRelays(id)
+		// R9-08（I-F2-03）：落库前按最终引用集复检——整批共用快照在
+		// 首项时定格，批次处理期间新保存的引用不在快照内。此处逐
+		// 条现查新鲜引用集，批语义不变（批内已删引用由 liveRefs
+		// 滤除、引用方全在删除集内仍放行）；命中则该条记失败并点
+		// 名，按删除失败同口径把其内核汇入末尾 apply 集（relay 已
+		// 清、allow 按现行 DB 重算，理由同下方 R5X-004(e)）；查询
+		// 失败 fail-closed，同守卫口径。
+		freshIx, freshErr := h.loadChainRefIndex()
+		if freshErr != nil {
+			f++
+			failures = appendBatchFailure(failures, id, row.Name, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", id, freshErr))
+			if !isExternalInbound(row) && !seenKernel[row.KernelID] {
+				seenKernel[row.KernelID] = true
+				kernelIDs = append(kernelIDs, row.KernelID)
+			}
+			continue
+		}
+		freshRefs := liveRefs(freshIx, id)
+		if msg := h.chainInUseMessageFromRefs(row, freshRefs); msg != "" && !batchDeletesReferrers(ids, freshRefs) {
+			f++
+			failures = appendBatchFailureReason(failures, id, row.Name, msg)
+			if !isExternalInbound(row) && !seenKernel[row.KernelID] {
+				seenKernel[row.KernelID] = true
+				kernelIDs = append(kernelIDs, row.KernelID)
+			}
+			continue
+		}
 		if err := h.repo.DeleteNodeInbound(id); err != nil {
 			f++
 			failures = appendBatchFailure(failures, id, row.Name, err)

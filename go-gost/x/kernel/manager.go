@@ -31,9 +31,9 @@ type instance struct {
 	goodHash string
 }
 
-// Manager owns every kernel instance on this agent. Apply/Control are
-// serialized by applyMu (downloads can take minutes); mu guards the maps so
-// Status stays responsive meanwhile.
+// Manager owns every kernel instance on this agent. Apply/Control/Uninstall
+// are serialized by applyMu (downloads can take minutes); mu guards the maps
+// so Status stays responsive meanwhile.
 type Manager struct {
 	baseDir string
 
@@ -994,7 +994,20 @@ func (m *Manager) Status(logsFor string) Status {
 // whose counters, whitelists and port hopping would otherwise outlive
 // the agent in the kernel. Used when the panel deletes this server and
 // asks the agent to remove itself.
+//
+// R9-07 (I-F2-02): Uninstall takes applyMu like Apply/Control — it
+// previously bypassed the lock, so its Shutdown snapshot could predate
+// an in-flight Apply, which then kept writing config, starting
+// processes and persisting state into a directory being wiped. With
+// applyMu held across Shutdown, an in-flight Apply settles first and
+// no new instance can appear after the snapshot (Apply is the only
+// instance creator and needs applyMu), so the snapshot Shutdown stops
+// is final. Lock order stays applyMu → mu, the same order Apply and
+// Control already use, and Shutdown only takes mu, so this cannot
+// self-deadlock.
 func (m *Manager) Uninstall() error {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
 	m.Shutdown()
 	return m.nft.removeTables()
 }

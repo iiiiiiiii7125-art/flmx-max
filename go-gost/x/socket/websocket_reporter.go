@@ -1143,7 +1143,14 @@ func isMutationCommand(commandType string) bool {
 		"addclimiters", "updateclimiters", "deleteclimiters",
 		// R3-A01-OPT-01: 原列表尾部的 "reload" 是死分类——
 		// routeCommand 无此命令分支、面板从不下发，删去防误接线。
-		"setprotocol", "upgradeagent", "rollbackagent":
+		// R9-06（I-F2-01）：UninstallAgent 此前经只读通道派发，其卸载
+		// 协程与在途变更命令全程并发（升级下载中途被调优恢复/内核卸载/
+		// 自卸载交错）。纳入串行集后，卸载命令在变更队列里排到在途
+		// 变更之后，回执随之延后——面板侧删除漏斗已先行以在途登记挡下
+		// 这一时序，此处是 agent 侧的兜底串行化（老面板/重连拦截再下发
+		// 时同样有序）；回执超时上面板按未确认登记待卸载，重连时再下
+		// 发，与离线口径一致。
+		"setprotocol", "upgradeagent", "rollbackagent", "uninstallagent":
 		return true
 	default:
 		return false

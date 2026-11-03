@@ -32,7 +32,7 @@ func TestMutationCommandsAreSerialized(t *testing.T) {
 		"AddChains", "UpdateChains", "DeleteChains",
 		"AddLimiters", "UpdateLimiters", "DeleteLimiters",
 		"AddCLimiters", "UpdateCLimiters", "DeleteCLimiters",
-		"SetProtocol", "UpgradeAgent", "RollbackAgent",
+		"SetProtocol", "UpgradeAgent", "RollbackAgent", "UninstallAgent",
 	}
 	for _, command := range mutations {
 		if !isMutationCommand(command) {
