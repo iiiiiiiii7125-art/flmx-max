@@ -8576,10 +8576,13 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, []string, error
 
 // nodeDeleteGuard 是删节点漏斗第一段（守卫校验）的产物：跨节点
 // 引用清单、唯一角色点名、级联删后要刷新的受影响入站集合。
+// holdsUpgradeOp 标记守卫段已在 L2-10 在途登记里以「删除」占用本
+// 节点（R9-06），由级联段 deleteNodeByIDAfterGuards 收尾释放。
 type nodeDeleteGuard struct {
 	brokenReferrers    []nodeCrossReferrer
 	soleRoleWarnings   []string
 	affectedInboundIDs []int64
+	holdsUpgradeOp     bool
 }
 
 // checkNodeDeleteGuards 是漏斗的守卫校验段：任一守卫查询失败即
@@ -8593,6 +8596,28 @@ type nodeDeleteGuard struct {
 // 出站目标，见 inboundIDsAffectedByNodeDelete），级联删后由
 // AfterGuards 统一刷新；单删与 nodeBatchDelete 共用本漏斗同步受益。
 func (h *Handler) checkNodeDeleteGuards(id int64) (*nodeDeleteGuard, error) {
+	guard, err := h.collectNodeDeleteGuard(id)
+	if err != nil {
+		return nil, err
+	}
+	// R9-06（I-F2-01）：守卫全过后、任何不可逆附带动作（连带卸载
+	// 下发/待卸载登记）之前，删除漏斗接入 L2-10 同节点在途登记：
+	// 升级/回退在途时删除在此被拒并点名在途操作（与升级/回滚三
+	// 入口同文案），不再放行连带卸载与 agent 侧在途变更并发；同
+	// 时以「删除」占用登记至级联段结束，删除进行期间升级类入口
+	// 同理由登记被拒并得知在途的是删除。占用由 deleteNodeByID-
+	// AfterGuards 收尾释放（三入口都必经级联段）。
+	if existing, ok := h.tryAcquireNodeUpgradeOp(id, "删除"); !ok {
+		return nil, fmt.Errorf("该节点已有%s操作正在进行，请等待其完成后再试", existing)
+	}
+	guard.holdsUpgradeOp = true
+	return guard, nil
+}
+
+// collectNodeDeleteGuard 是守卫段的纯收集部分（引用清单/受影响集
+// 合/唯一角色点名）：不碰在途登记，供守卫段与级联段落库前复检
+// （R9-08）共用。
+func (h *Handler) collectNodeDeleteGuard(id int64) (*nodeDeleteGuard, error) {
 	guard := &nodeDeleteGuard{}
 	if h != nil && h.repo != nil {
 		// R3X-015：跨节点引用守卫查询失败 fail-closed——清单不可信
@@ -8655,6 +8680,11 @@ func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([
 	if guard == nil {
 		guard = &nodeDeleteGuard{}
 	}
+	// R9-06：守卫段以「删除」占用的在途登记在本段收尾释放——单删/
+	// 批删/创建补偿三入口都必经本段，无一遗漏。
+	if guard.holdsUpgradeOp {
+		defer h.releaseNodeUpgradeOp(id)
+	}
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
 			for _, forwardID := range forwardIDs {
@@ -8675,6 +8705,21 @@ func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([
 			}
 		}
 	}
+	// R9-08（I-F2-03）：落库前按最终引用集复检——守卫收集与级联删
+	// 除之间隔着调用方的连带卸载步（在线回执等待最长 15s），期间
+	// 新保存的跨节点引用不在守卫清单内，照旧删除会静默打断它且
+	// 回执不点名，与 nodes.md 承诺不符。删除语义不变（尽力而为）：
+	// 新引用并入回执清单、其入站并入下方白名单刷新集、唯一角色
+	// 点名同理并入。复检查询失败不中止：不可逆的连带卸载可能已
+	// 执行，此刻中止只会留下「agent 已卸载、记录还在」的撕裂态，
+	// 按守卫时清单继续并记日志（守卫段本身仍 fail-closed）。
+	if h != nil && h.repo != nil {
+		if fresh, ferr := h.collectNodeDeleteGuard(id); ferr == nil {
+			mergeNodeDeleteGuard(guard, fresh)
+		} else {
+			log.Printf("node delete: referrer recheck failed node_id=%d err=%v (continuing with guard-time snapshot)", id, ferr)
+		}
+	}
 	if err := h.repo.DeleteNodeCascade(id); err != nil {
 		return nil, nil, err
 	}
@@ -8688,6 +8733,49 @@ func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([
 	// R3X-017：级联删后统一刷新（漏斗收尾，见守卫段收集）。
 	h.refreshInboundWhitelists(guard.affectedInboundIDs)
 	return guard.brokenReferrers, guard.soleRoleWarnings, nil
+}
+
+// mergeNodeDeleteGuard 把落库前复检（R9-08）的新鲜守卫并入守卫时
+// 守卫：跨节点引用按引用方入站 ID 去重并入、受影响入站并入、唯
+// 一角色点名按文案去重并入。holdsUpgradeOp 不并（登记占用只属
+// 守卫段那一份）。
+func mergeNodeDeleteGuard(dst, fresh *nodeDeleteGuard) {
+	if dst == nil || fresh == nil {
+		return
+	}
+	seenRef := make(map[int64]struct{}, len(dst.brokenReferrers))
+	for _, ref := range dst.brokenReferrers {
+		seenRef[ref.ID] = struct{}{}
+	}
+	for _, ref := range fresh.brokenReferrers {
+		if _, dup := seenRef[ref.ID]; dup {
+			continue
+		}
+		seenRef[ref.ID] = struct{}{}
+		dst.brokenReferrers = append(dst.brokenReferrers, ref)
+	}
+	seenInbound := make(map[int64]struct{}, len(dst.affectedInboundIDs))
+	for _, inboundID := range dst.affectedInboundIDs {
+		seenInbound[inboundID] = struct{}{}
+	}
+	for _, inboundID := range fresh.affectedInboundIDs {
+		if _, dup := seenInbound[inboundID]; dup {
+			continue
+		}
+		seenInbound[inboundID] = struct{}{}
+		dst.affectedInboundIDs = append(dst.affectedInboundIDs, inboundID)
+	}
+	seenSole := make(map[string]struct{}, len(dst.soleRoleWarnings))
+	for _, warning := range dst.soleRoleWarnings {
+		seenSole[warning] = struct{}{}
+	}
+	for _, warning := range fresh.soleRoleWarnings {
+		if _, dup := seenSole[warning]; dup {
+			continue
+		}
+		seenSole[warning] = struct{}{}
+		dst.soleRoleWarnings = append(dst.soleRoleWarnings, warning)
+	}
 }
 
 func (h *Handler) deleteTunnelByID(id int64) error {

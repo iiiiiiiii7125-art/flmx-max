@@ -909,7 +909,9 @@ func rollbackReceiptData(result ws.CommandResult) map[string]interface{} {
 
 // tryAcquireNodeUpgradeOp 登记一条同节点升级类操作（op 为
 // "升级"/"回退"展示名）；该节点已有操作在途时返回在途操作名与
-// false。三个下发入口（单节点升级、批量升级、节点回退）共用：
+// false。三个下发入口（单节点升级、批量升级、节点回退）共用；
+// R9-06 起删节点漏斗（checkNodeDeleteGuards）亦接入：占用时拒绝
+// 删除并点名在途操作，通过后以 op "删除" 占用至级联段结束：
 // agent 侧 mutation 命令走单工串行队列，第二条命令不会被拒而是
 // 排队，首条升级的重启会把排队/执行中的第二条连进程一起杀掉、
 // 面板按 failPendingForNode 结算成失败——节点实际已被首条升级

@@ -490,6 +490,25 @@ func (h *Handler) kernelChainGuardIx(rows []model.NodeInbound, ix *chainRefIndex
 	return referrerNames, strings.Join(parts, "；")
 }
 
+// mergeReferrerNames unions two guard rounds' referrer display lists
+// (R9-08 delete-time recheck into the final receipt): entries are the
+// rendered display strings, deduplicated as rendered — the response
+// contract is the rendered list.
+func mergeReferrerNames(dst, src []string) []string {
+	seen := make(map[string]struct{}, len(dst))
+	for _, name := range dst {
+		seen[name] = struct{}{}
+	}
+	for _, name := range src {
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		dst = append(dst, name)
+	}
+	return dst
+}
+
 // applyChainReferrers re-applies the kernels of inbounds chained through the
 // target after it changed, returning a warning per failure.
 // R3X-015: 引用方查询失败以告警回传调用方（响应 Msg/Errors 可见），
