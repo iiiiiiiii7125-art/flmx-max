@@ -7,6 +7,10 @@
 // 玻璃面（三级配方）按文末「玻璃合成网格」段复算——梯度停点与四
 // 种底色（纯黑／纯白／内置壁纸明暗双区采样）逐格合成后断言正文
 // 对；小字恒在不透明托盘上（托盘六对在 25 对内），不入玻璃网格。
+// R2-S1-01/02/05 扩集（文末三段）：托盘 hover 六对入断言（>= 7）；
+// 语义色文字在玻璃语境下经 --glass-text-* 深档渲染，其全格网格与
+// src 普查（fail-closed 差集）入断言；桥 Button 的半透明白 wash
+// 载体族退役、由托盘与实色 -800 档承接，退役签名入断言。
 // 此前该自检只是
 // 审计时的一次性临时脚本、未落仓库（A-front 复核时独立复算 25 对
 // 全过），本脚本把它沉淀为常设门：解析 src/styles/globals.css 的
@@ -61,7 +65,7 @@
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-contrast.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1050,10 +1054,12 @@ for (const [fg, bg, pinned] of PAIRS) {
 // 断言：① 三级停点与 backdrop blur 逐值钉住（14/18/10px），改浅
 // 或降 blur 都会点名；② 正文色 --foreground 在全部 36 格 ≥ 4.5
 // 底线；③ 卡片中位停点在四种底上 ≥ 7 目标、浮层最低停点在黑/
-// 暗区底上 ≥ 7；④ 四个最差格钉值 ±0.1。模型边界（明示）：次级
-// 文字 -700 档在卡片最低停点×纯黑底一格为 3.67——纪律口径是正文
-// （--foreground）全格守底线、次级信息靠字号字重与托盘，-700 全
-// 格 4.5 不在本门断言内（与 S-UI 恢复方案 ③-3 的断言设计一致）。
+// 暗区底上 ≥ 7；④ 四个最差格钉值 ±0.1。模型边界（明示）：中性
+// 次级文字 default-700 在卡片最低停点×纯黑底一格为 3.67——它是
+// 已登记边界（中性次级信息、靠字号字重区分、不作语义信号），不
+// 在本门断言内；语义色族文字不在此列——R2-S1-01 后它们在玻璃语
+// 境下经深档渲染、全格入下文断言（恢复方案 ③-3 的「-700 全格不
+// 断言」只余 default 一族）。
 const lumRgb = (rgb) => {
   const f = (c) => {
     const s = c / 255;
@@ -1173,6 +1179,285 @@ if (fgRgb && GLASS_TIERS.every((t) => t.stops.length === 3)) {
   }
 } else {
   check("玻璃合成网格可复算（--foreground 与三级停点齐备）", false, "token 或停点缺失");
+}
+
+// ── 托盘 hover 对（R2-S1-05）──────────────────────────────
+// 此前 PAIRS 只钉托盘静止对，hover 对不在断言内，tray-danger
+// hover 一度跌到 6.93（底线虽守、目标 7 未达）无人报。现 hover
+// 六对同入断言：>= 7 目标＋钉值 ±0.1，改浅任一 hover 底色点名。
+const TRAY_HOVER_PAIRS = [
+  ["--tray-primary-foreground", "--tray-primary-hover", 7.66],
+  ["--tray-secondary-foreground", "--tray-secondary-hover", 7.89],
+  ["--tray-success-foreground", "--tray-success-hover", 7.52],
+  ["--tray-warning-foreground", "--tray-warning-hover", 7.28],
+  ["--tray-danger-foreground", "--tray-danger-hover", 7.18],
+  ["--tray-default-foreground", "--tray-default-hover", 8.23],
+];
+
+for (const [fg, bg, pinned] of TRAY_HOVER_PAIRS) {
+  const fgHex = tokens[fg];
+  const bgHex = tokens[bg];
+
+  if (!fgHex || !bgHex) {
+    check(`托盘 hover 对 ${fg} on ${bg}`, false, "token 未解析到 #rrggbb 生效值");
+    continue;
+  }
+  const ratio = contrast(fgHex, bgHex);
+
+  check(
+    `托盘 hover 对：${fg} on ${bg} = ${ratio.toFixed(2)}（钉值 ${pinned}、目标 7）`,
+    ratio >= 7 && Math.abs(ratio - pinned) <= 0.1,
+    `实测 ${ratio.toFixed(2)}`,
+  );
+}
+
+// ── 玻璃语境语义文字（R2-S1-01）────────────────────────────
+// 玻璃恢复后语义色阶梯档（-700 为主）直坐玻璃的最差格只有
+// 1.76–2.77：已登记边界只量化过中性 default-700（3.67），而语义
+// -700 亮度更高、且含表单错误行/到期徽标等主信号文字。整改不逐
+// 点打补丁、也不动色阶本体（实色面 25 对与实色填充的身份靠它）：
+// globals.css 在 @layer utilities 设玻璃语境覆盖块——玻璃载体
+// （.glass-card/.glass-surface/.glass-inset/手风琴玻璃项）内的语
+// 义文字类一律改用每族深档 --glass-text-<family> 渲染（背景/边框
+// 不受影响）。本段断言四件：① 12 个深档 token 存在且为 hex；
+// ② 每族深档在玻璃 36 格全 >= 4.5、卡片中位停点×纯黑 >= 7、最
+// 差格钉值 ±0.1；③ /10 tint 载体格（tint@10% 叠卡片最低停点×
+// 纯黑）>= 4.5；④ 普查闭合——机械扫 src 全部语义文字类字面量，
+// 每个（变体，色族，档位）必须落在覆盖集内（变体仅裸/hover/
+// focus，色族恰 17 族，中性 default 为登记边界族除外），且覆盖
+// 块原文含每族的类与深档引用；普查为空或出现集外成员即红
+// （fail-closed：新色族/新变体先扩覆盖块与本段清单再合入）。
+const GLASS_TEXT_TOKEN_FAMS = [
+  "primary", "secondary", "success", "warning", "danger",
+  "rose", "orange", "sky", "emerald", "blue", "purple", "teal",
+];
+const GLASS_TEXT_ALIAS = {
+  indigo: "primary",
+  violet: "secondary",
+  green: "success",
+  amber: "warning",
+  red: "danger",
+};
+const GLASS_TEXT_WORST_PINS = {
+  primary: 5.95, secondary: 5.9, success: 5.93, warning: 5.91,
+  danger: 5.91, rose: 5.91, orange: 5.92, sky: 5.94,
+  emerald: 5.92, blue: 5.95, purple: 5.91, teal: 5.93,
+};
+
+const glassTextRegion = (() => {
+  const begin = css.indexOf("GLASS-TEXT-OVERRIDES:BEGIN");
+  const end = css.indexOf("GLASS-TEXT-OVERRIDES:END");
+
+  return begin >= 0 && end > begin ? css.slice(begin, end) : "";
+})();
+
+check(
+  "玻璃语境覆盖块在册（GLASS-TEXT-OVERRIDES 标记对完整）",
+  glassTextRegion.length > 0,
+  "globals.css 未找到标记对",
+);
+
+const glassTextHex = {};
+for (const fam of GLASS_TEXT_TOKEN_FAMS) {
+  const hex = tokens[`--glass-text-${fam}`];
+
+  glassTextHex[fam] = hex ?? null;
+  check(
+    `--glass-text-${fam} 已定义为 #rrggbb`,
+    typeof hex === "string",
+    "token 缺失或非 hex 生效值",
+  );
+}
+
+if (GLASS_TIERS.every((t) => t.stops.length === 3)) {
+  for (const fam of GLASS_TEXT_TOKEN_FAMS) {
+    const hex = glassTextHex[fam];
+
+    if (!hex) continue;
+    const rgb = hexToRgb(hex);
+    let min = Infinity;
+    let worstKey = "";
+
+    for (const tier of GLASS_TIERS) {
+      for (const [bgName, bg] of GLASS_BACKDROPS) {
+        tier.stops.forEach((stop, si) => {
+          const carrier =
+            tier.name.startsWith("内嵌")
+              ? compositeOver(GLASS_TIERS[0].stops[2], bg)
+              : bg;
+          const ratio = contrastRgb(rgb, compositeOver(stop, carrier));
+
+          if (ratio < min) {
+            min = ratio;
+            worstKey = `${tier.name}|${bgName}|${si}`;
+          }
+        });
+      }
+    }
+    const midBlack = contrastRgb(
+      rgb,
+      compositeOver(GLASS_TIERS[0].stops[1], [0, 0, 0]),
+    );
+    const worstPin = GLASS_TEXT_WORST_PINS[fam];
+
+    check(
+      `玻璃语境深档：--glass-text-${fam} 全 36 格最低 = ${min.toFixed(2)}（${worstKey}，底线 4.5）`,
+      min >= 4.5,
+      `实测最低 ${min.toFixed(2)}`,
+    );
+    check(
+      `玻璃语境深档：--glass-text-${fam} 最差格钉值 = ${min.toFixed(2)}（钉值 ${worstPin}）、卡片中位×纯黑 = ${midBlack.toFixed(2)}（目标 7）`,
+      Math.abs(min - worstPin) <= 0.1 && midBlack >= 7,
+      `实测最差 ${min.toFixed(2)}、中位 ${midBlack.toFixed(2)}`,
+    );
+  }
+  // /10 tint 载体格：徽标/列表的 bg-<family>-500/10 叠在卡片最低
+  // 停点×纯黑之上，深档文字须仍 >= 4.5（别名族与本族同格）。
+  const floorOverBlack = compositeOver(GLASS_TIERS[0].stops[2], [0, 0, 0]);
+  const TINT_CELLS = [
+    ["danger", "#ef4444"],
+    ["warning", "#f59e0b"],
+    ["primary", "#6366f1"],
+    ["success", "#22c55e"],
+    ["orange", "#f97316"],
+    ["blue", "#3b82f6"],
+    ["teal", "#14b8a6"],
+  ];
+
+  for (const [fam, tintHex] of TINT_CELLS) {
+    const hex = glassTextHex[fam];
+
+    if (!hex) continue;
+    const tintRgb = hexToRgb(tintHex);
+    const carrier = tintRgb.map((v, i) => 0.1 * v + 0.9 * floorOverBlack[i]);
+    const ratio = contrastRgb(hexToRgb(hex), carrier);
+
+    check(
+      `玻璃语境 tint 格：--glass-text-${fam} on ${fam}-500/10 叠卡片最低停点×纯黑 = ${ratio.toFixed(2)}（底线 4.5）`,
+      ratio >= 4.5,
+      `实测 ${ratio.toFixed(2)}`,
+    );
+  }
+} else {
+  check("玻璃语境深档网格可复算（三级停点齐备）", false, "停点缺失");
+}
+
+// 覆盖块原文闭合：每族（含别名）的裸/hover/focus 类与深档引用在册。
+for (const fam of [
+  ...GLASS_TEXT_TOKEN_FAMS,
+  ...Object.keys(GLASS_TEXT_ALIAS),
+]) {
+  const tokenFam = GLASS_TEXT_TOKEN_FAMS.includes(fam)
+    ? fam
+    : GLASS_TEXT_ALIAS[fam];
+
+  check(
+    `玻璃语境覆盖块含 ${fam} 族（裸/hover/focus 类＋--glass-text-${tokenFam} 引用）`,
+    glassTextRegion.includes(`.text-${fam}-700`) &&
+      glassTextRegion.includes(`.hover\\:text-${fam}-700`) &&
+      glassTextRegion.includes(`.focus\\:text-${fam}-700`) &&
+      glassTextRegion.includes(`var(--glass-text-${tokenFam})`),
+    "覆盖块缺该族的类或引用",
+  );
+}
+
+// 普查闭合：src 全部语义文字类字面量 ⊆ 覆盖集。
+const SEMANTIC_TEXT_FAMS = new Set([
+  ...GLASS_TEXT_TOKEN_FAMS,
+  ...Object.keys(GLASS_TEXT_ALIAS),
+]);
+const censusHits = [];
+const censusWalk = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      censusWalk(path);
+    } else if (/\.tsx?$/.test(entry.name)) {
+      const text = readFileSync(path, "utf8");
+      const re =
+        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-([a-z]+)-([5-9]00)\b/g;
+      let m;
+
+      while ((m = re.exec(text)) !== null) {
+        censusHits.push({ variant: m[1] ?? "", fam: m[2], shade: m[3], path });
+      }
+      if (/(?<![\w-])text-warning(?![-\w])/.test(text)) {
+        censusHits.push({ variant: "", fam: "warning", shade: "base", path });
+      }
+    }
+  }
+};
+
+censusWalk(join(here, "..", "src"));
+const censusSemantic = censusHits.filter((h) => h.fam !== "default");
+const censusUncovered = censusSemantic.filter(
+  (h) =>
+    !SEMANTIC_TEXT_FAMS.has(h.fam) ||
+    !["", "hover", "focus"].includes(h.variant),
+);
+
+check(
+  `语义文字类普查非空（实扫 ${censusSemantic.length} 处，中性 default 登记边界除外）`,
+  censusSemantic.length >= 150,
+  `仅扫到 ${censusSemantic.length} 处，扫描面疑似失效`,
+);
+check(
+  "语义文字类普查差集 ∅（集外色族/变体即红）",
+  censusUncovered.length === 0,
+  censusUncovered
+    .slice(0, 5)
+    .map((h) => `${h.variant ? `${h.variant}:` : ""}text-${h.fam}-${h.shade} @ ${h.path}`)
+    .join("；"),
+);
+
+// ── 桥 Button 载体（R2-S1-02）─────────────────────────────
+// bordered 六色与 solid/flat 的 default 曾用半透明白 wash 作载体
+// （white/25、white/30＋blur 3px）：叠卡片最低停点后四色标签
+// < 4.5、直坐页面背景（PageHeader secondary 槽的 flat default）
+// 全色 ~1.9，且从未入任何门。整改：bordered/flat/light 全色走不
+// 透明托盘、solid default 走实色 default-800＋白字。本段断言：
+// ① wash 退役签名（类串原文）在桥 button.tsx 中不存在；② 三张
+// 托盘映射表（bordered/flat/light）逐表含 tray- 且不含 bg-white；
+// ③ solid default 的白字对（#ffffff on --default-800）钉值。
+const buttonSrc = readFileSync(
+  join(here, "..", "src/shadcn-bridge/heroui/button.tsx"),
+  "utf8",
+);
+
+for (const sig of ["bg-white/25", "bg-white/30", "backdrop-blur-[3px]"]) {
+  check(
+    `桥 Button wash 退役签名不存在：${sig}`,
+    !buttonSrc.includes(sig),
+    "wash 载体类串回潮——须改走托盘/实色并重建本段断言",
+  );
+}
+for (const mapName of [
+  "borderedColorClassMap",
+  "flatColorClassMap",
+  "lightColorClassMap",
+]) {
+  const block =
+    buttonSrc.match(
+      new RegExp(`${mapName}[^=]*=\\s*\\{([\\s\\S]*?)\\};`),
+    )?.[1] ?? "";
+
+  check(
+    `桥 Button ${mapName} 全走托盘（六色 tray 引用在册、无 bg-white）`,
+    (block.match(/tray-/g) ?? []).length >= 6 && !block.includes("bg-white"),
+    `tray 引用 ${(block.match(/tray-/g) ?? []).length} 处`,
+  );
+}
+{
+  const ratio = tokens["--default-800"]
+    ? contrast("#ffffff", tokens["--default-800"])
+    : 0;
+
+  check(
+    `solid default 标签对：#ffffff on --default-800 = ${ratio.toFixed(2)}（钉值 14.89、底线 4.5）`,
+    ratio >= 4.5 && Math.abs(ratio - 14.89) <= 0.1,
+    `实测 ${ratio.toFixed(2)}`,
+  );
 }
 
 // 级联求值建模问题（R9-17 的 fail-closed 通道）：求值中记录的

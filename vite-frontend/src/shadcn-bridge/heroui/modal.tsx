@@ -37,10 +37,32 @@ export function useDisclosure(options: DisclosureOptions = {}) {
 }
 
 interface ModalContextValue {
+  backdrop?: "blur" | "opaque" | "transparent";
   classNames?: Record<string, string>;
   onClose: () => void;
   scrollBehavior?: "inside" | "outside";
   size?: ModalSize;
+}
+
+// R2-S1-03: backdrop was declared on ModalProps but never consumed —
+// the overlay always rendered as plain bg-black/40. It is now threaded
+// to the Radix overlay: "blur" restores the 1.9.4-era blurred mask,
+// "opaque" deepens it, "transparent" removes it. No backdrop prop
+// keeps the historical plain mask.
+function overlayClassForBackdrop(
+  backdrop: ModalProps["backdrop"],
+): string | undefined {
+  if (backdrop === "blur") {
+    return "bg-black/40 backdrop-blur-sm";
+  }
+  if (backdrop === "opaque") {
+    return "bg-black/70";
+  }
+  if (backdrop === "transparent") {
+    return "bg-transparent";
+  }
+
+  return undefined;
 }
 
 const ModalContext = React.createContext<ModalContextValue | null>(null);
@@ -124,6 +146,7 @@ export interface ModalProps {
 }
 
 export function Modal({
+  backdrop,
   children,
   classNames,
   isOpen = false,
@@ -180,6 +203,7 @@ export function Modal({
   };
 
   const contextValue = {
+    backdrop,
     classNames,
     onClose: () => {
       handleOpenChange(false);
@@ -232,6 +256,7 @@ export function ModalContent({
           : "",
         className,
       )}
+      overlayClassName={overlayClassForBackdrop(context?.backdrop)}
       showCloseButton={false}
       onOpenAutoFocus={(event) => {
         // Focusing the first field on open pops the native picker for a

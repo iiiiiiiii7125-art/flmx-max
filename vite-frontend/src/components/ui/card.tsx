@@ -15,8 +15,10 @@ function Card({
         // A card is ONE matte-glass surface and its content sits directly
         // on the glass — no opaque tray plate under card interiors.
         // Readability comes from the matte stops (floor 0.60) plus
-        // deepest-shade foreground colors; solid trays survive only on
-        // small elements (pills, chips, badges, primary buttons).
+        // deepest-shade foreground colors — semantic signal text is
+        // deepened to the --glass-text-* shades by the glass-context
+        // rules in globals.css; solid trays survive only on small
+        // elements (pills, chips, badges, primary buttons).
         "glass-card rounded-2xl text-card-foreground shadow-sm",
         className,
       )}

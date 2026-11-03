@@ -83,11 +83,15 @@ function mapSize(
 }
 
 const solidColorClassMap: Partial<Record<HeroButtonColor, string>> = {
-  default: "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-default-800",
+  // R2-S1-02: the default solid used to rest on a translucent white
+  // wash — over a dark wallpaper region its label fell to ~1.9, and
+  // the wash family was never in the contrast gate. It now rests on
+  // the opaque -800 neutral like every other solid rests on its -800
+  // shade (white label, gate-pinned at 14.89), hovering one shade up.
+  default: "bg-default-800 text-white shadow-sm hover:bg-default-700",
   // Round 6: bright success/warning/danger solids pair with white at
   // only ≈2.2/2.0/4.1 — rest on the -800 shades (≈7.1/7.1/6.9) and
-  // hover one shade up. The default rests on the glass wash instead:
-  // the old opaque 200-stop slab read as a pale board on the wallpaper.
+  // hover one shade up.
   success: "bg-success-800 text-white shadow-sm hover:bg-success-700",
   warning: "bg-warning-800 text-white shadow-sm hover:bg-warning-700",
   primary:
@@ -97,23 +101,22 @@ const solidColorClassMap: Partial<Record<HeroButtonColor, string>> = {
   danger: "bg-danger-800 text-white shadow-sm hover:bg-danger-700",
 };
 
-// Round 6: bordered labels sat directly on glass at -700, which the
-// rendered sampling put at ~2.5 over the wallpaper's dark streak. They
-// keep their outline identity but gain a white/25 blurred carrier and
-// the -800 label shade; hover lifts the carrier, not a colour wash.
+// R2-S1-02: bordered labels used to ride a translucent white wash
+// carrier that was never in the contrast gate — stacked over the
+// card floor stop on a dark wallpaper region, four of six labels fell
+// under the 4.5 floor, and over the bare page background all six did.
+// They keep their outline identity (the coloured border) but the
+// carrier is now the family's opaque tray — the same tray tokens as
+// flat/light, hover included (tray pairs are gate-pinned, static and
+// hover, >= 7). The tray class supplies the label colour; no text-*
+// shade is set here.
 const borderedColorClassMap: Record<HeroButtonColor, string> = {
-  default:
-    "border-default-300 bg-white/25 backdrop-blur-[3px] text-default-800 hover:bg-white/40",
-  primary:
-    "border-primary/50 bg-white/25 backdrop-blur-[3px] text-primary-800 hover:bg-white/40",
-  secondary:
-    "border-secondary/50 bg-white/25 backdrop-blur-[3px] text-secondary-800 hover:bg-white/40",
-  success:
-    "border-success/50 bg-white/25 backdrop-blur-[3px] text-success-800 hover:bg-white/40",
-  warning:
-    "border-warning/50 bg-white/25 backdrop-blur-[3px] text-warning-800 hover:bg-white/40",
-  danger:
-    "border-danger/50 bg-white/25 backdrop-blur-[3px] text-danger-800 hover:bg-white/40",
+  default: "border-default-300 tray-default",
+  primary: "border-primary/50 tray-primary",
+  secondary: "border-secondary/50 tray-secondary",
+  success: "border-success/50 tray-success",
+  warning: "border-warning/50 tray-warning",
+  danger: "border-danger/50 tray-danger",
 };
 
 // Round 6 final verdict on light buttons: the glass-wash carrier was
@@ -121,8 +124,8 @@ const borderedColorClassMap: Record<HeroButtonColor, string> = {
 // put wash + semantic-label pairs at 2.2-4.4 local contrast — under the
 // floor. Light buttons therefore take the user-sanctioned tray fallback
 // (tinted solid tray + deepest label, >= 8 measured): the same tray
-// tokens as flat. Button scale is chip scale, not a board. The flat and
-// solid defaults keep the glass wash (near-black label, verified).
+// tokens as flat. Button scale is chip scale, not a board. (The flat
+// and solid defaults later left the wash family too — R2-S1-02.)
 const lightColorClassMap: Record<HeroButtonColor, string> = {
   default: "tray-default shadow-sm",
   primary: "tray-primary shadow-sm",
@@ -133,7 +136,11 @@ const lightColorClassMap: Record<HeroButtonColor, string> = {
 };
 
 const flatColorClassMap: Record<HeroButtonColor, string> = {
-  default: "bg-white/30 backdrop-blur-[3px] border border-white/50 shadow-sm hover:bg-white/45 text-default-800",
+  // R2-S1-02: the default flat was the last wash carrier in this map —
+  // it takes tray-default like every other flat colour takes its tray
+  // (this is also the PageHeader secondary slot's carrier, which sits
+  // directly on the page background, where the wash read ~1.9).
+  default: "tray-default",
   primary: "tray-primary",
   secondary: "tray-secondary",
   success: "tray-success",
