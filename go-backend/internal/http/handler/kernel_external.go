@@ -25,6 +25,9 @@ import (
 // and subscriptions treat them like any other inbound.
 
 // maxImportNodes bounds one import; subscriptions rarely carry more.
+// 两个消费面超帽语义刻意不同：手动导入（inboundImport）整单拒绝；
+// 订阅源同步截断保留前 500 并以 remoteSyncResult 的 Status/
+// Truncated 显式呈现（理由见 remote_source.go 的字段注释）。
 const maxImportNodes = 500
 
 // maxSubscriptionBytes bounds a fetched subscription body.

@@ -1406,6 +1406,10 @@ export interface RemoteSyncResult {
   keptStale: number;
   /** Entries skipped because the node was deleted by hand and shielded (R10-04). */
   shielded: number;
+  /** Machine-readable round status (C1-05): "ok", or "truncated" when the source exceeded the per-round node cap — branch on this, not on the errors prose. */
+  status: string;
+  /** Nodes dropped by the per-round cap this round (0 unless status is "truncated"). */
+  truncated: number;
   errors: string[];
 }
 export const getRemoteSources = () =>

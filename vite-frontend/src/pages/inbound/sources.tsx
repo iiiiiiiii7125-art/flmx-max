@@ -146,6 +146,10 @@ export function syncText(r: RemoteSyncResult): string {
     parts.push(`${r.keptStale} 个未匹配节点因本轮同步不完整，已保留待下轮确认`);
   if (r.shielded)
     parts.push(`${r.shielded} 个节点已手工删除屏蔽，本轮同步未恢复`);
+  // C1-05：截断以显式状态字段（status/truncated）呈现，不只靠
+  // errors 文案。
+  if (r.truncated)
+    parts.push(`${r.truncated} 个节点超出单轮同步上限，本轮未同步`);
   // R3X-025：逐节点同步失败明细（result.errors）必须带出条数 + 首条，
   // 不得只报计数、把部分失败报成全成功。
   if (r.errors?.length)

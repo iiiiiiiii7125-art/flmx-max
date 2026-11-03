@@ -1901,6 +1901,11 @@ func (h *Handler) nodeUpdateOrder(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// C1-04：逐条 UPDATE＋逐条回执的批量面，条目数同口径计数帽
+	// （见 maxBatchIDs；本面不去重，按提交条数计）。
+	if !checkBatchIDsCap(w, len(req.Nodes)) {
+		return
+	}
 	// B04-002（handler 半）：逐条聚合回执，与 nodeBatchDelete /
 	// tunnelUpdateOrder 同口径。repo 的 UpdateNodeOrder 已改返回
 	// (RowsAffected, error)（C04 立契约），此处消费之：0 行=节点不
@@ -3771,6 +3776,11 @@ func (h *Handler) tunnelUpdateOrder(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// C1-04：逐条 UPDATE＋逐条回执的批量面，条目数同口径计数帽
+	// （见 maxBatchIDs；本面不去重，按提交条数计）。
+	if !checkBatchIDsCap(w, len(req.Tunnels)) {
+		return
+	}
 	// B06-004：逐条回执（batchOperationResult 口径，与 tunnel
 	// batch-delete 一致）——不存在的 id（0 行更新）与真实 DB 错误
 	// 计入 failures，不再无条件报全成功。repo.UpdateTunnelOrder 已
@@ -5356,6 +5366,12 @@ func (h *Handler) forwardUpdateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r.Body, &req); err != nil {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	// C1-04：本面两段循环逐条归属校验＋逐条 UPDATE（任意登录用户
+	// 可达、工作量翻倍），条目数同口径计数帽（见 maxBatchIDs；本
+	// 面不去重，按提交条数计）。
+	if !checkBatchIDsCap(w, len(req.Forwards)) {
 		return
 	}
 	// B08-002：两段式——先全量校验所有条目的归属/存在性，全部通过

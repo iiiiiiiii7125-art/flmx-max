@@ -57,6 +57,14 @@ func sourceKind(s *model.RemoteSource) string {
 	return model.RemoteSourceURL
 }
 
+// remoteSyncResult.Status 的取值集（C1-05）：同步结果的机器可读
+// 状态。Errors 是给人看的散文，消费方（前端、回执组装）做分支判
+// 断只应看 Status，不得解析文案。
+const (
+	remoteSyncStatusOK        = "ok"
+	remoteSyncStatusTruncated = "truncated"
+)
+
 // remoteSyncResult is what one refresh changed.
 type remoteSyncResult struct {
 	Added   int `json:"added"`
@@ -79,8 +87,23 @@ type remoteSyncResult struct {
 	// Shielded are source entries skipped because an admin deleted the
 	// node by hand and the deletion shield (R10-04) keeps it deleted:
 	// the entry is not re-created this round.
-	Shielded int      `json:"shielded"`
-	Errors   []string `json:"errors"`
+	Shielded int `json:"shielded"`
+	// Status is the round's explicit machine-readable status:
+	// remoteSyncStatusOK for a complete round, or
+	// remoteSyncStatusTruncated when the maxImportNodes cap dropped
+	// part of the source (C1-05 — truncation previously surfaced
+	// only as Errors prose, which consumers could not branch on).
+	Status string `json:"status"`
+	// Truncated is how many parsed nodes the maxImportNodes cap
+	// dropped this round (0 = no truncation). Sync and manual import
+	// share the 500 cap but differ on purpose: import is a one-shot
+	// admin action and rejects the whole submission over the cap
+	// (inboundImport), while sync recurs automatically — rejecting
+	// whole rounds would freeze the source's node set forever — so
+	// sync keeps the first 500 and reports the truncation here
+	// instead of only in prose.
+	Truncated int      `json:"truncated"`
+	Errors    []string `json:"errors"`
 }
 
 func (r remoteSyncResult) summary() string {
@@ -96,6 +119,9 @@ func (r remoteSyncResult) summary() string {
 	}
 	if r.Shielded > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个节点已手工删除屏蔽，本轮同步未恢复", r.Shielded))
+	}
+	if r.Truncated > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个节点超出单轮同步上限 %d，本轮未同步", r.Truncated, maxImportNodes))
 	}
 	return strings.Join(parts, "，")
 }
@@ -137,7 +163,7 @@ func sameImported(row *model.NodeInbound, node kernel.ImportedNode, extra string
 func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource, upload string) (remoteSyncResult, error) {
 	remoteSourceMu.Lock()
 	defer remoteSourceMu.Unlock()
-	res := remoteSyncResult{Errors: []string{}}
+	res := remoteSyncResult{Errors: []string{}, Status: remoteSyncStatusOK}
 	// gateErrs 是完整性门的判定集：只有解析/转换/写入错误计入。展示
 	// 专用提示（F-025 重复条目）经 noticeErr 只进 Errors——重复条目每
 	// 个都被处理过（首条入册、余者跳过），不构成「本轮不完整」，计入
@@ -200,6 +226,12 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		nodes = unique
 	}
 	if len(nodes) > maxImportNodes {
+		// C1-05：截断除 Errors 文案外必须落显式状态（Status/
+		// Truncated），消费方据此分支——手动 refresh 与后台同步共
+		// 用本路，两面同结果。语义与手动导入的整单拒绝刻意不同，
+		// 理由见 remoteSyncResult.Truncated 字段注释。
+		res.Truncated = len(nodes) - maxImportNodes
+		res.Status = remoteSyncStatusTruncated
 		nodes = nodes[:maxImportNodes]
 		// 截断意味着确有条目未被处理，计入门（与 F-025 重复提示不同）。
 		gateErr(fmt.Sprintf("只保留前 %d 个节点", maxImportNodes))
