@@ -1505,9 +1505,25 @@ update_flux_agent() {
   fi
 
   # A9: 备份旧版本，失败可回滚
+  # R9-02: 备份步是回滚源的唯一生成点，此前是全链唯一未守卫步
+  # （本脚本无 set -e、cp 无返回码检查）：备份拷贝失败（如磁盘
+  # 写满）被静默吞掉、替换照常进行——无陈旧 .bak 时回滚无源、
+  # 坏二进制留活且旧版字节永失；有陈旧 .bak 时回滚静默跨代、
+  # 回执却报「已回滚成功」。现备份失败即在替换前中止：当前二进
+  # 制逐字未动，重启方才停掉的服务恢复更新前状态，并清掉本次
+  # 下载的 .new 与可能写了一半的 .bak（半成品备份不得被后续
+  # 回滚误认为可用的回滚源）。
   if [[ -f "$INSTALL_DIR/flux_agent" ]]; then
     echo "💾 备份当前版本..."
-    cp -f "$INSTALL_DIR/flux_agent" "$INSTALL_DIR/flux_agent.bak"
+    if ! cp -f "$INSTALL_DIR/flux_agent" "$INSTALL_DIR/flux_agent.bak"; then
+      echo "❌ 备份当前版本失败（磁盘空间不足或拷贝出错），已中止更新：当前版本未被替换、仍是更新前的版本。"
+      rm -f "$INSTALL_DIR/flux_agent.bak" "$INSTALL_DIR/flux_agent.new"
+      if flux_agent_service_exists; then
+        echo "🔄 正在重新启动更新前已停止的服务..."
+        start_flux_agent_service
+      fi
+      return 1
+    fi
   fi
 
   # 替换文件

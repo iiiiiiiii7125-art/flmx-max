@@ -93,12 +93,27 @@ self_update_check() {
     return 0
   fi
   echo "🔄 检测到新版本脚本 (v$latest_version，当前 v$SCRIPT_VERSION)，正在更新..."
-  if cat "$tmp_script" > "$0" && chmod +x "$0"; then
+  # R9-04: 覆写改原子——旧实现 cat 直写 $0，重定向在写出任何字节
+  # 前先截断，覆写失败/中断（ENOSPC、写错、掉电）即把当前脚本清
+  # 零，回执的「继续使用当前版本」与事实相悖。现先写同目录临时
+  # 文件、与已校验的下载副本逐字比对（cmp）、再 rename 换名；任
+  # 一步失败 $0 逐字不动，回执才成立。临时文件与 $0 同目录，保证
+  # rename 同文件系统原子生效。
+  local self_tmp=""
+  self_tmp=$(mktemp "$(dirname "$0")/.panel_install.sh.selfupdate.XXXXXX" 2>/dev/null) || self_tmp=""
+  if [[ -n "$self_tmp" ]] \
+    && cat "$tmp_script" > "$self_tmp" \
+    && cmp -s "$tmp_script" "$self_tmp" \
+    && { chmod --reference="$0" "$self_tmp" 2>/dev/null || chmod +x "$self_tmp"; } \
+    && mv -f "$self_tmp" "$0"; then
     rm -f "$tmp_script"
     echo "✅ 已更新到 v$latest_version，重新执行..."
     FLMX_SELF_UPDATE_HOPS=1 exec bash "$0" "$@"
   fi
   rm -f "$tmp_script"
+  if [[ -n "$self_tmp" ]]; then
+    rm -f "$self_tmp"
+  fi
   echo "⚠️ 自动更新失败，继续使用当前版本"
 }
 
@@ -854,11 +869,19 @@ resolve_caddy_frontend_port() {
   local _env_file _port
   for _env_file in "${PANEL_DEPLOY_DIR:-}/.env" "./.env" "/opt/flmx-panel/.env" "/opt/flvx-panel/.env"; do
     [[ "$_env_file" == "/.env" ]] && continue
-    _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t"' | tr -d "'" || true)
+    # I-F1-05: 读值只剥空白、不剥引号，与更新面
+    # validate_panel_update_environment 的原始读值统一判读——旧实
+    # 现在此剥掉引号，引号包裹的 "7366" 被菜单面静默正常化采纳、
+    # 却被更新面判「不是有效端口」终止更新，两面分歧。现两面同
+    # 口径：引号包裹同为无效（菜单面点名后忽略该候选、更新面终止）。
+    _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t' || true)
     if [[ "$_port" =~ ^[0-9]+$ ]] && (( 10#$_port >= 1 && 10#$_port <= 65535 )); then
       FRONTEND_PORT="$_port"
       echo "📁 从 $_env_file 读取前端端口：$FRONTEND_PORT"
       return 0
+    fi
+    if [[ -n "$_port" ]]; then
+      echo "⚠️ $_env_file 中的 FRONTEND_PORT 不是有效端口（须为 1-65535 的纯数字，引号包裹同样无效）：$_port，已忽略该值"
     fi
   done
   FRONTEND_PORT=6366
@@ -952,15 +975,38 @@ setup_domain_proxy() {
       # apt 操作（与上方 GPG key 的临时文件处置同形）。
       local caddy_list_tmp
       caddy_list_tmp=$(mktemp)
-      if curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o "$caddy_list_tmp" 2>/dev/null && [[ -s "$caddy_list_tmp" ]]; then
-        mv -f "$caddy_list_tmp" /etc/apt/sources.list.d/caddy-stable.list
-        chmod 644 /etc/apt/sources.list.d/caddy-stable.list
+      # CADDY_LIST_PATH 仅供测试夹具覆盖（与 CADDYFILE_PATH 同钩子），
+      # 默认即现行路径。
+      local caddy_list_path="${CADDY_LIST_PATH:-/etc/apt/sources.list.d/caddy-stable.list}"
+      local caddy_list_written=""
+      # R9-05: 落盘前验内容形态——R8-J-D 只收到「非空才落盘」，HTTP
+      # 200 的截断体（半截 deb 行）仍照常落盘：apt 从此对全机操作
+      # 报 Malformed entry、菜单失败路径又从不清理，坏列表长期污
+      # 染宿主。现要求至少含一行完整的 deb 条目（deb [可选项]
+      # <uri> <suite> <组件>），不合形态与下载失败同口径：不落盘、
+      # 走现有软件源兜底。
+      if curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o "$caddy_list_tmp" 2>/dev/null && [[ -s "$caddy_list_tmp" ]] \
+        && grep -Eq '^[[:space:]]*deb[[:space:]]+(\[[^]]*\][[:space:]]+)?[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+' "$caddy_list_tmp"; then
+        if mv -f "$caddy_list_tmp" "$caddy_list_path" && chmod 644 "$caddy_list_path"; then
+          caddy_list_written="$caddy_list_path"
+        else
+          rm -f "$caddy_list_tmp"
+          echo "⚠️  Caddy 官方源列表写入 apt 源目录失败，未写入 apt 源文件，尝试使用现有软件源安装..."
+        fi
       else
         rm -f "$caddy_list_tmp"
-        echo "⚠️  Caddy 官方源列表下载失败，未写入 apt 源文件，尝试使用现有软件源安装..."
+        echo "⚠️  Caddy 官方源列表下载失败或内容不完整（无完整的 deb 源条目），未写入 apt 源文件，尝试使用现有软件源安装..."
       fi
       apt-get update && apt-get install -y caddy || {
-        echo "❌ Caddy 安装失败"
+        # R9-05: 本次运行落盘的源列表若随即让安装失败，不得留盘
+        # 持续污染本机后续全部 apt 操作——删除并点名（同函数
+        # Caddyfile 失败路径的回滚口径）。
+        if [[ -n "$caddy_list_written" ]]; then
+          rm -f "$caddy_list_written"
+          echo "❌ Caddy 安装失败，已删除本次写入的官方源列表 $caddy_list_written（避免坏源影响本机后续 apt 操作），请排查后重试"
+        else
+          echo "❌ Caddy 安装失败"
+        fi
         return 1
       }
     fi
@@ -2029,6 +2075,39 @@ validate_panel_update_compose() {
   fi
 }
 
+# R9-11: 更新备份/强制重装备份的保留份数。单份更新备份含 .env
+# （JWT_SECRET/数据库口令）与全量 DB，是密钥级副本，份数必须有
+# 界；3 份覆盖「当前＋前两次」的回退窗口（连续升级排障的实际需
+# 要），同时把磁盘占用与密钥副本留置量一并钉死。
+BACKUP_RETENTION_KEEP=3
+
+# R9-11: 时间戳命名备份的保留轮换。备份名以时间戳开头（字典序即
+# 时间序），按名排序后只保留最近 keep 份、删更旧的；更新备份目
+# 录（backups/panel-update-*）与强制重装的 .env.bak.<ts> /
+# docker-compose.yml.bak.<ts> 同口径共用。轮换是收尾清理动作：
+# 单项失败只告警点名，不阻断主流程。
+prune_timestamped_backups() {
+  local keep="$1"
+  shift
+  local -a items=()
+  local item
+  for item in "$@"; do
+    if [[ -e "$item" ]]; then
+      items+=("$item")
+    fi
+  done
+  local total="${#items[@]}"
+  if (( total <= keep )); then
+    return 0
+  fi
+  local -a sorted=()
+  mapfile -t sorted < <(printf '%s\n' "${items[@]}" | LC_ALL=C sort)
+  local i remove_count=$((total - keep))
+  for (( i = 0; i < remove_count; i++ )); do
+    rm -rf "${sorted[i]}" || echo "⚠️ 清理旧备份失败：${sorted[i]}（可手动删除）"
+  done
+}
+
 backup_sqlite_for_update() (
   local destination="$1"
   local running paused="false"
@@ -2054,6 +2133,12 @@ backup_sqlite_for_update() (
     echo "❌ SQLite 数据备份失败"
     return 1
   fi
+
+  # R9-11: github-cache 是可弃缓存（本体有独立的 2GB 上限 LRU 淘
+  # 汰、缺失自动重建），不进更新备份——整目录复制会让单份备份连
+  # 带最高约 2GB 纯缓存，备份体积失控。复制完成后定点剔除，存
+  # 档内不含该目录。
+  rm -rf "$destination/github-cache"
 
   if [[ "$paused" == "true" ]] && ! docker unpause "$PANEL_BACKEND_CONTAINER" >/dev/null; then
     echo "❌ SQLite 备份完成，但恢复后端运行失败"
@@ -2102,6 +2187,10 @@ create_panel_update_backup() {
     backup_sqlite_for_update "$UPDATE_BACKUP_DIR/sqlite" || return 1
   fi
   echo "💾 更新备份：$UPDATE_BACKUP_DIR"
+  # R9-11: 备份轮换——此前每次更新留一整份且只在整机卸载时才删，
+  # 更新 N 次留 N 份，磁盘与密钥副本双双无界增长。新备份落成后
+  # 按名保留最近 BACKUP_RETENTION_KEEP 份（含本次），更旧的删除。
+  prune_timestamped_backups "$BACKUP_RETENTION_KEEP" "$PANEL_DEPLOY_DIR/backups"/panel-update-*
 }
 
 pull_panel_update_images() {
@@ -2507,6 +2596,17 @@ get_config_params() {
   JWT_SECRET=$(generate_random)
 }
 
+# R9-03: 首装死在启动步（容器从未创建，典型为拉镜像失败）会留下
+# 「.env＋compose 在、零容器」的半成品：重跑菜单 1 被 F-049 守卫
+# 拒绝、菜单 2 在备份步因容器不存在中止，两条路都收敛不了，唯
+# 一出口是强制重装。各失败回执统一经本指引点名出口与用法（字段
+# 级：变量名、设置方式、后续动作与文件后果）。
+print_force_reinstall_guidance() {
+  echo "   当前状态的唯一出口是强制重装：先自行备份当前部署目录，然后在终端执行："
+  echo "     PANEL_FORCE_REINSTALL=1 bash panel_install.sh"
+  echo "   再选择菜单「1. 安装面板」。脚本会先把现存 .env 与 docker-compose.yml 备份为 .env.bak.<时间戳> 与 docker-compose.yml.bak.<时间戳>，再覆写重装。"
+}
+
 # 安装功能
 install_panel() {
   echo "🚀 开始安装面板..."
@@ -2545,6 +2645,7 @@ install_panel() {
       echo "   如需升级请使用菜单「2. 更新面板」；继续安装将覆写部署文件并轮换密钥，"
       echo "   PostgreSQL 部署会因口令与数据卷脱钩而无法启动。"
       echo "   确需重装请先自行备份，或设置 PANEL_FORCE_REINSTALL=1 后重试（脚本会先备份现存的 .env 与 docker-compose.yml）。"
+      echo "   强制重装用法：在终端执行 PANEL_FORCE_REINSTALL=1 bash panel_install.sh 后选择菜单「1. 安装面板」。首次安装未完成（容器从未创建）的半成品状态也只能走此出口：菜单「2. 更新面板」会因后端容器不存在在备份步中止。"
       return 1
     fi
     local backup_ts
@@ -2557,6 +2658,11 @@ install_panel() {
       cp docker-compose.yml "docker-compose.yml.bak.$backup_ts"
       echo "⚠️  PANEL_FORCE_REINSTALL=1：已备份原 docker-compose.yml 到 docker-compose.yml.bak.$backup_ts，继续重装"
     fi
+    # R9-11: 强制重装的带时间戳备份与更新备份同轮换口径（各保留
+    # 最近 BACKUP_RETENTION_KEEP 份），避免反复强制重装同样无界
+    # 堆积密钥级 .env 副本。
+    prune_timestamped_backups "$BACKUP_RETENTION_KEEP" .env.bak.*
+    prune_timestamped_backups "$BACKUP_RETENTION_KEEP" docker-compose.yml.bak.*
   fi
 
   ensure_compose_urls_initialized || return 1
@@ -2633,11 +2739,26 @@ EOF
 
   echo "🚀 启动 docker 服务..."
   if [[ "$DB_TYPE" == "postgres" ]]; then
-    $DOCKER_CMD up -d postgres
-    wait_for_postgres_healthy
-    $DOCKER_CMD up -d backend frontend
-  else
-    $DOCKER_CMD up -d backend frontend
+    if ! $DOCKER_CMD up -d postgres; then
+      echo "❌ 部署未完成：PostgreSQL 容器启动失败（常见原因是镜像拉取失败），已中止后续启动，未打印成功信息与默认凭据。"
+      print_force_reinstall_guidance
+      return 1
+    fi
+    # I-F1-06: PG 健康等待改与同函数后端支同形（守卫＋失败指引
+    # 块）——旧实现裸调用，失败时只有等待函数自身的超时两行，无
+    # 「部署未完成」宣告、无 logs 指引、无后续路径提示。
+    if ! wait_for_postgres_healthy; then
+      echo "❌ 部署未完成：PostgreSQL 未通过健康检查，已中止后续启动，未打印成功信息与默认凭据。"
+      echo "🔍 排查指引：在部署目录执行 $DOCKER_CMD logs postgres 查看数据库日志；修复后重新运行本脚本、选择「2. 更新面板」即可完成启动。"
+      return 1
+    fi
+  fi
+  # R9-03: up 失败旧实现靠 set -e 静默退出、零失败指引，留下的半
+  # 成品状态也无回执点名出口。现显式守卫，失败即点名唯一出口。
+  if ! $DOCKER_CMD up -d backend frontend; then
+    echo "❌ 部署未完成：面板容器启动失败（常见原因是镜像拉取失败），未打印成功信息与默认凭据。"
+    print_force_reinstall_guidance
+    return 1
   fi
 
   # R8-J-C: 完成块之前先过既有后端健康等待——更新（start_panel_
@@ -2776,6 +2897,15 @@ update_panel() {
   if ! create_panel_update_backup "$CURRENT_DB_TYPE"; then
     rm -f "$UPDATE_COMPOSE_CANDIDATE"
     UPDATE_COMPOSE_CANDIDATE=""
+    echo "❌ 更新前备份失败，更新已中止（未改动现有部署与运行中的服务）"
+    # R9-03: 备份失败若源于后端容器不存在（首装未完成、容器从未
+    # 创建的半成品状态），更新路径无从收敛、菜单 1 又被守卫拒绝，
+    # 回执须点名唯一出口；容器存在的常规部署不打印此指引（其备
+    # 份失败多为磁盘/权限问题，强制重装不是解法）。
+    if ! docker inspect "${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}" >/dev/null 2>&1; then
+      echo "   后端容器不存在：这是首次安装未完成（容器从未创建）的半成品状态，更新无法为不存在的容器备份数据。"
+      print_force_reinstall_guidance
+    fi
     return 1
   fi
 
