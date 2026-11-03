@@ -39,6 +39,24 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing skill version: $VERSION"
 
+      - name: Assert package.json version matches the release tag
+        # R2-C4-01: 三处版本字面量（skills/flmx-api/SKILL.md、
+        # skills/flmx-api/package.json、doc/ai-skill.md 示例）由发版
+        # 提交人工统一 bump，check-doc-consistency 只验三者彼此一致、
+        # 不验与 tag 的关系。此前漏 bump 时旧版 package.json 会被下
+        # 一步 npm version 静默抬到 tag 发布，而 SKILL.md 仍停在旧
+        # 版，全程无红。这里在任何改写之前断言仓库内 package.json
+        # 已与 tag 对齐，不齐即红、绝不发布。workflow_dispatch 无
+        # tag、版本本就取自 package.json，断言恒真，故跳过。
+        if: github.event_name != 'workflow_dispatch'
+        working-directory: skills/flmx-api
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$PKG_VERSION" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::skills/flmx-api/package.json version ($PKG_VERSION) does not match the release tag (${{ steps.version.outputs.version }}); bump the three skill version literals in the release commit first"
+            exit 1
+          fi
+
       - name: Sync package.json version with tag
         # AUDIT-R1 (SCR-001): 原流程算出 version 却从不写回 package.json，
         # npm publish 发布的是写死的版本号，与 tag 脱钩。

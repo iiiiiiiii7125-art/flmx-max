@@ -353,6 +353,12 @@ jobs:
           sed -i "s|image: .*vite-frontend:[^[:space:]]*|image: ${{ env.REGISTRY }}/${OWNER}/flmx-vite-frontend:${VERSION}|g" ./artifacts/docker-compose-v4.yml
           sed -i "s|image: .*flux-panel-backend:[^[:space:]]*|image: ${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:${VERSION}|g" ./artifacts/docker-compose-v6.yml
           sed -i "s|image: .*vite-frontend:[^[:space:]]*|image: ${{ env.REGISTRY }}/${OWNER}/flmx-vite-frontend:${VERSION}|g" ./artifacts/docker-compose-v6.yml
+          # R2-C4-02: 与下方 REPO/PINNED 注入同形的后验断言——镜像行
+          # 格式漂移时 sed 会静默空转，未定版的 compose（仍是
+          # ${FLUX_VERSION:-latest} 原形）不得随发版资产发出。两文件
+          # 各自钉死 backend/frontend 两行已改写到本版镜像。
+          grep -q "flmx-flux-panel-backend:${VERSION}" ./artifacts/docker-compose-v4.yml && grep -q "flmx-vite-frontend:${VERSION}" ./artifacts/docker-compose-v4.yml
+          grep -q "flmx-flux-panel-backend:${VERSION}" ./artifacts/docker-compose-v6.yml && grep -q "flmx-vite-frontend:${VERSION}" ./artifacts/docker-compose-v6.yml
 
           # 复制并修改安装脚本
           cp install.sh ./artifacts/install.sh

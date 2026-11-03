@@ -4871,6 +4871,138 @@ STUBEOF
   fi
 )
 
+# R2-F7-01（R2-F7-B01）: install.sh 卸载取消路径以真实
+# uninstall_flux_agent 钉格——不覆写被测函数本体，只桩其前置
+# （root 检查、归属守卫、服务管理器探测）。菜单选 3、确认答 N：
+# 退出 0、脚本文件保留、无「操作已完成」、输出含取消说明，与
+# panel 侧 C4-F04 取消口径一致。此前 install.sh 侧只有覆写操作函
+# 数的 rc 传播用例（test_main_delete_self_only_on_success），真实
+# 取消路径（return 0 且无标志）无覆盖：main 把取消当成功自删并
+# 谎报完成（本用例对旧代码必红：脚本被删且出现完成文案）。
+test_install_uninstall_cancel_keeps_script() (
+  set -euo pipefail
+
+  local work
+  work=$(mktemp -d)
+
+  local file="$work/cancel.sh"
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$file"
+  cat >> "$file" <<'STUBEOF'
+require_root_privileges() { return 0; }
+guard_agent_dir_ownership_menu() { return 0; }
+ensure_service_manager() { return 0; }
+main
+STUBEOF
+
+  local rc="0" out
+  out=$(printf '3\nN\n' | bash "$file" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R2-F7-01: cancelled uninstall should exit 0"
+  [[ -f "$file" ]] || fail "R2-F7-01: script must be kept when the user cancels uninstall"
+  [[ "$out" == *"取消卸载"* ]] || \
+    fail "R2-F7-01: cancel path should print the cancellation line"
+  if [[ "$out" == *"操作已完成"* ]]; then
+    fail "R2-F7-01: cancel path must not print 操作已完成"
+  fi
+)
+
+# R2-F7-I02: 卸载清理 FLMX_KERNEL_DIR 自定义内核目录。值只认 agent
+# 自己的 systemd 单元/drop-in（卸载入口已过归属守卫）；正例（drop-in
+# 配置、内含 state.json）随卸载删除且确认提示点名；拒绝形态（指向
+# 系统目录）不删、点名披露、卸载本身仍成功。
+test_uninstall_removes_custom_kernel_dir() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  systemctl() { return 0; }
+  guard_agent_dir_ownership_menu() { return 0; }
+  ensure_service_manager() { return 0; }
+  flux_agent_service_exists() { return 1; }
+  uninstall_flux_agent_host_cleanup() { :; }
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+
+  # 正例：drop-in 配置自定义目录且内含 state.json → 随卸载删除
+  INSTALL_DIR="$work/agent"
+  mkdir -p "$INSTALL_DIR"
+  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
+  printf '[Service]\nExecStart=%s/flux_agent\n' "$INSTALL_DIR" > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  mkdir -p "${FLUX_AGENT_SYSTEMD_SERVICE_FILE}.d"
+  local kdir="$work/custom-kernels"
+  mkdir -p "$kdir"
+  printf '{}' > "$kdir/state.json"
+  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$kdir" > "${FLUX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+
+  local rc="0" out
+  out=$(mktemp)
+  rc="0"
+  printf 'y\n' | uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R2-F7-I02: uninstall with a custom kernel dir should succeed"
+  [[ ! -d "$INSTALL_DIR" ]] || fail "R2-F7-I02: install dir should be removed"
+  [[ ! -d "$kdir" ]] || fail "R2-F7-I02: custom kernel dir should be removed on uninstall"
+  grep -q "custom-kernels" "$out" || \
+    fail "R2-F7-I02: uninstall output should name the custom kernel dir"
+
+  # 拒绝形态：单元内指向系统目录 → 不删、点名披露、卸载仍成功
+  INSTALL_DIR="$work/agent2"
+  mkdir -p "$INSTALL_DIR"
+  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  rm -rf "${FLUX_AGENT_SYSTEMD_SERVICE_FILE}.d"
+  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=/etc\n' > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  rc="0"
+  printf 'y\n' | uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R2-F7-I02: uninstall should still succeed when the kernel dir value is refused"
+  grep -q "不自动清理" "$out" || \
+    fail "R2-F7-I02: refused kernel dir value should be disclosed, not silently skipped"
+)
+
+# R2-F7-02: 首装 get_config_params 校验失败（非法端口）必须在下载与
+# 写 .env 之前终止 install_panel。夹具保留真实 get_config_params、
+# 其余前置/后续全桩：download_verified 落标记、wait 健康恒过——旧
+# 实现裸调用校验函数，失败后继续下载并写出 .env、最终报成功（本
+# 用例对旧代码必红：标记与 .env 都会出现且 rc=0）。
+test_install_panel_invalid_port_aborts_before_download() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work rc="0"
+  work=$(mktemp -d)
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker compose"; return 0; }
+  download_verified() {
+    touch "$work/download-called"
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    return 0
+  }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() {
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+    esac
+    return 0
+  }
+  wait_for_backend_healthy() { return 0; }
+
+  ( cd "$work" && install_panel >"$work/fail.log" 2>&1 ) <<< "abc" || rc="$?"
+  assert_equals "1" "$rc" "R2-F7-02: install_panel must abort when the port validation fails"
+  grep -q "FRONTEND_PORT 不是有效端口" "$work/fail.log" || \
+    fail "R2-F7-02: the port validation error should be printed at the input point"
+  [[ ! -f "$work/download-called" ]] || \
+    fail "R2-F7-02: install must not proceed to downloads after a failed validation"
+  [[ ! -f "$work/.env" ]] || \
+    fail "R2-F7-02: install must not write .env after a failed validation"
+)
+
 # R4B11-004: main 的 root 前置检查。EUID 只读、夹具内无法伪造，
 # root 环境（本地沙箱）下跳过；非 root 环境（CI）实测 fail-fast。
 test_main_requires_root() (
@@ -6662,6 +6794,9 @@ test_panel_menu5_caddy_list_removed_when_install_fails
 test_install_flux_agent_rejects_flapping_service
 test_main_delete_self_only_on_success
 test_panel_main_delete_self_only_on_success
+test_install_uninstall_cancel_keeps_script
+test_uninstall_removes_custom_kernel_dir
+test_install_panel_invalid_port_aborts_before_download
 test_main_requires_root
 test_script_secret_surfaces_closed
 test_ensure_compose_trusted_proxy_hops_injects_mapping_form

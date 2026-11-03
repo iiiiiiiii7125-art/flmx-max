@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261104.01"
+SCRIPT_VERSION="20261104.02"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -2197,7 +2197,9 @@ create_panel_update_backup() {
   echo "💾 更新备份：$UPDATE_BACKUP_DIR"
   # R9-11: 备份轮换——此前每次更新留一整份且只在整机卸载时才删，
   # 更新 N 次留 N 份，磁盘与密钥副本双双无界增长。新备份落成后
-  # 按名保留最近 BACKUP_RETENTION_KEEP 份（含本次），更旧的删除。
+  # 按 mtime 保留最近 BACKUP_RETENTION_KEEP 份（含本次），更旧的
+  # 删除（排序口径见 prune_timestamped_backups 的 I-C4-06 注：
+  # mtime 旧→新、同秒以名序兜底，不按名字典序）。
   prune_timestamped_backups "$BACKUP_RETENTION_KEEP" "$PANEL_DEPLOY_DIR/backups"/panel-update-*
 }
 
@@ -2690,7 +2692,11 @@ install_panel() {
   ensure_compose_urls_initialized || return 1
 
   check_docker
-  get_config_params
+  # R2-F7-02: get_config_params 失败（非法端口等）必须在写 .env 前
+  # 终止。main 以 `install_panel || rc=$?` 调用本函数，该上下文下
+  # set -e 在本函数内失效，裸调用会带着非法端口与空密钥继续下载、
+  # 写 .env，直到 compose up 才失败并误导向强制重装指引。
+  get_config_params || return 1
 
   echo "🔽 下载必要文件..."
   # F-052: 选版时机后移——主机有 IPv6 地址不等于 Docker 能用 IPv6。
