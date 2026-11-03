@@ -1568,6 +1568,27 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 	portMu := repo.AcquirePortAllocLock(share.NodeID)
 	defer repo.ReleasePortAllocLock(portMu)
 
+	// R10-07（I-C2-02）：重投回放。首投已建成隧道+runtime、回执在网络
+	// 上丢失（客户端调用有专设超时）时本地按失败返回，用户同表单重试
+	// 曾被下方三处占位检查恒 403 挡死——该联邦隧道再无法经正常路径建
+	// 成、对端留孤儿隧道+端口占用须人工清理。故占位检查之前先查同
+	// (share, port) 的既有 tunnel/create 产物：Target 与 Protocol 与
+	// 首投一致即回放既有 tunnelId（与 reserve-port 的同 ResourceKey
+	// 回放同口径）；不一致维持 403 防占用。
+	existingRuntime, err := h.repo.GetActiveForwardPeerShareRuntimeByPort(share.ID, req.RemotePort)
+	if err != nil {
+		writePeerInternalError(w, "tunnel/create runtime lookup", err)
+		return
+	}
+	if existingRuntime != nil {
+		if tunnelID, ok := h.federationTunnelReplayID(existingRuntime, share.ID, req); ok {
+			response.WriteJSON(w, response.OK(map[string]interface{}{
+				"tunnelId": tunnelID,
+			}))
+			return
+		}
+	}
+
 	usedPorts, err := h.repo.ListUsedPortsOnNode(share.NodeID)
 	if err != nil {
 		writePeerInternalError(w, "tunnel/create list used ports", err)
@@ -1580,12 +1601,7 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	runtimeOnPort, err := h.repo.GetActiveForwardPeerShareRuntimeByPort(share.ID, req.RemotePort)
-	if err != nil {
-		writePeerInternalError(w, "tunnel/create runtime lookup", err)
-		return
-	}
-	if runtimeOnPort != nil {
+	if existingRuntime != nil {
 		response.WriteJSON(w, response.Err(403, "Port already in use"))
 		return
 	}
@@ -1646,6 +1662,61 @@ func (h *Handler) federationTunnelCreate(w http.ResponseWriter, r *http.Request)
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"tunnelId": tunnelID,
 	}))
+}
+
+// parseFederationForwardResourceKey extracts the tunnel ID recorded in a
+// tunnel/create runtime's ResourceKey
+// ("federation-forward-<shareID>-<tunnelID>-<port>"). Only keys minted by
+// federationTunnelCreate itself parse; forward service-binding runtimes
+// ("forward-runtime:…") and any other shape are rejected, as are keys
+// whose share/port do not match the lookup.
+func parseFederationForwardResourceKey(resourceKey string, shareID int64, port int) (int64, bool) {
+	parts := strings.Split(resourceKey, "-")
+	if len(parts) != 5 || parts[0] != "federation" || parts[1] != "forward" {
+		return 0, false
+	}
+	keyShare, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || keyShare != shareID {
+		return 0, false
+	}
+	tunnelID, err := strconv.ParseInt(parts[3], 10, 64)
+	if err != nil || tunnelID <= 0 {
+		return 0, false
+	}
+	keyPort, err := strconv.ParseInt(parts[4], 10, 64)
+	if err != nil || keyPort != int64(port) {
+		return 0, false
+	}
+	return tunnelID, true
+}
+
+// federationTunnelReplayID decides whether an active forward runtime on
+// (shareID, req.RemotePort) is the product of an earlier tunnel/create
+// carrying the same target and protocol — i.e. this request is a retry
+// of a create whose response was lost — and if so returns the original
+// tunnel ID to replay (R10-07 / I-C2-02). Any mismatch (a runtime left
+// by service binding, a release in flight, a different target/protocol,
+// or a tunnel row deleted locally in the meantime) is not a replay: the
+// caller's ordinary occupancy checks then decide, preserving the 403.
+func (h *Handler) federationTunnelReplayID(runtime *repo.PeerShareRuntime, shareID int64, req federationTunnelRequest) (int64, bool) {
+	if runtime == nil || runtime.ReleasePending != 0 {
+		return 0, false
+	}
+	tunnelID, ok := parseFederationForwardResourceKey(runtime.ResourceKey, shareID, req.RemotePort)
+	if !ok {
+		return 0, false
+	}
+	if runtime.Target != strings.TrimSpace(req.Target) {
+		return 0, false
+	}
+	if runtime.Protocol != defaultString(req.Protocol, "tcp") {
+		return 0, false
+	}
+	name, err := h.repo.GetTunnelName(tunnelID)
+	if err != nil || name != fmt.Sprintf("Share-%d-Port-%d", shareID, req.RemotePort) {
+		return 0, false
+	}
+	return tunnelID, true
 }
 
 func (h *Handler) federationRuntimeReservePort(w http.ResponseWriter, r *http.Request) {

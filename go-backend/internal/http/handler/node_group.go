@@ -465,6 +465,18 @@ func (h *Handler) nodeGroupSave(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// R10-06（I-C2-01）：新建分支接入 Idempotency-Key 机制（更新分支
+	// req.ID>0 不参与，更新本身按 ID 定位、无防重语义变化）。本端点
+	// 保存后重推凭据、前端超时 330s，慢请求重试/双击是现实路径。
+	if req.ID == 0 {
+		var finish func()
+		var replayed bool
+		w, finish, replayed = h.idemBegin(w, r, idemUserID(r), "node-group:create")
+		defer finish()
+		if replayed {
+			return
+		}
+	}
 	now := time.Now()
 	g := req.draft()
 	var push []int64
