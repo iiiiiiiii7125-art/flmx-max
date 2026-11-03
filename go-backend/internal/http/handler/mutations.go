@@ -4655,17 +4655,35 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	// R2-005 / L4-01（2026-11-03 拍板锁死）：入口端口创建后永不换口
 	// （2026-10-30 定案）。此前同隧道三条 replace 路径与切隧道分支
 	// 共用同一 port 解析、显式提交的 inPort 被全量接受替换，与定案
-	// 及 resolveTunnelSegmentPort 头注口径不符。锁点收敛于此：显式
-	// 提交的 inPort 与存量入口端口任一行不一致即拒绝；未提交 inPort
-	// （回填存量 min 口）与提交同值照常放行，切隧道沿用存量口、
-	// 中间/出口段在隧道更新面按既有口径换口均不受影响。
+	// 及 resolveTunnelSegmentPort 头注口径不符。
+	//
+	// R4-01（LEDGER4）：锁改集合语义。逐行比对下异口转发（同一
+	// forward 在不同入口节点的行口不同）的任何单值至多与一行相
+	// 等、其余行必然触发拒绝——前端编辑恒提交列表口，异口转发经
+	// 界面完全不可编辑，且回执引用首个不一致行的端口（非提交
+	// 值）。现口径：显式提交的 inPort 命中存量行口集任一成员 ⇒
+	// 非变更、放行；提交值不带逐节点含义，下游落库口径与未提交
+	// inPort 时一致（保留节点逐节点保口、新行用规范口），故此处
+	// 把 port 归一到规范口。未命中行口集 ⇒ 真变更企图，拒绝且
+	// 文案引用提交值本身。无存量行时无可变更对象，沿用提交值
+	// （与旧逐行比对的 vacuous 放行一致）。未提交 inPort（回填
+	// 规范口）照常放行，切隧道沿用存量口、中间/出口段在隧道更
+	// 新面按既有口径换口均不受影响。
 	if rawInPort, submitted := req["inPort"]; submitted {
-		if explicitPort := asInt(rawInPort, 0); explicitPort > 0 {
+		if explicitPort := asInt(rawInPort, 0); explicitPort > 0 && len(oldPorts) > 0 {
+			inRowSet := false
 			for _, fp := range oldPorts {
-				if fp.Port > 0 && fp.Port != explicitPort {
-					response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("入口端口不可变更：转发创建后入口端口固定为 %d，如需更换端口请删除该转发后重新创建", fp.Port)))
-					return
+				if fp.Port > 0 && fp.Port == explicitPort {
+					inRowSet = true
+					break
 				}
+			}
+			if !inRowSet {
+				response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("入口端口不可变更：转发创建后入口端口固定，提交的入口端口 %d 不是该转发任一入口节点现行端口，如需更换端口请删除该转发后重新创建", explicitPort)))
+				return
+			}
+			if canonical := pickForwardPortFromRecords(oldPorts); canonical > 0 {
+				port = canonical
 			}
 		}
 	}

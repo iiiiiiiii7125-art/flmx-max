@@ -648,10 +648,26 @@ func (h *Handler) planSingleTunnelDeleteForwardMigration(forward *forwardRecord,
 	removedNodeIDs := diffInt64s(oldNodeIDs, newNodeIDs)
 	keptNodeIDs := diffInt64s(oldNodeIDs, removedNodeIDs)
 
-	// portAdjusted 的「迁移前口」取对外规范口（MIN，与转发列表
-	// inPort 同源）：异口转发此前取首行口（id ASC）与规范口无关，
-	// 计数口径失真；同口转发下两者恒等、行为不变。
+	// portAdjusted 的「迁移前口」取 handler 侧规范口（MIN，
+	// pickForwardPortFromRecords，与 GetMinForwardPort 同义；转发
+	// 列表 inPort 是 assembleForwardIngress 的首行口定义，异口时
+	// 与规范口可不等，两定义分工现状见 LEDGER4 路 A 报告）。
 	previousPort := pickForwardPortFromRecords(oldPorts)
+
+	// D-F3-02：portAdjusted 改按「规范口漂移」判定——迁移后行集
+	// 的规范口与迁移前规范口不一致即计数。逐节点保口下保留行永
+	// 不改口，但 MIN 行所在节点随源隧道删除退出、且目标入口集无
+	// 新增节点时，行集 MIN 被动漂移（如 {15000, 35000} 迁到只含
+	// 35000 行节点的隧道后规范口变 35000）；旧口径拿迁移前 MIN
+	// 与同为迁移前 MIN 的 targetPort 比对恒等、漂移永不计数。
+	// 新增节点按 targetPort（＝迁移前规范口）落行，不产生漂移。
+	migratedPort := 0
+	for _, nodeID := range targetEntryNodes {
+		nodePort := forwardEntryPort(oldPortByNode, nodeID, targetPort)
+		if nodePort > 0 && (migratedPort == 0 || nodePort < migratedPort) {
+			migratedPort = nodePort
+		}
+	}
 
 	// X-P2-4 ②：托管中转转发按目标隧道出口集重算 RemoteAddr，随迁移
 	// 落库并经 sync 重下发，不再只改端口沿用旧址；重算失败（如目标
@@ -672,7 +688,7 @@ func (h *Handler) planSingleTunnelDeleteForwardMigration(forward *forwardRecord,
 		targetPort:        targetPort,
 		keptNodeIDs:       keptNodeIDs,
 		removedNodeIDs:    removedNodeIDs,
-		portAdjusted:      previousPort > 0 && previousPort != targetPort,
+		portAdjusted:      previousPort > 0 && migratedPort > 0 && previousPort != migratedPort,
 		newRemoteAddr:     newRemoteAddr,
 		remoteAddrChanged: remoteAddrChanged,
 	}, nil
