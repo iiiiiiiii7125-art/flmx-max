@@ -53,6 +53,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
   - 两套的**前端 / 后端宿主机端口不能相同**：安装第二套时把端口改开，例如第一套用默认的前端 `6366` / 后端 `6365`，第二套改用 `7366` / `7365`。
   - **不要给已部署的实例改实例键**：容器名与数据卷名都由实例键派生，改键等于换了一套新身份——会按新键起新容器、新数据卷，旧卷里的数据不会自动带过来。确需改名按迁移处理：先备份 / 导出旧实例数据，再以新键安装并恢复。
   - 旧版 Compose 模板（资源名写死旧名的版本）不识别实例后缀：装这类版本时脚本会明确告警「实例后缀不生效」，该实例仍用旧缺省名，同机不要再并存第二套该版本部署。
+  - **手工拼 Compose 部署必须在 `.env` 写全身份五键**：随版模板里容器/卷/网络名都是 `${PANEL_BACKEND_CONTAINER:-flux-panel-backend}` 这类带回退值的引用，**回退值仍是旧名**（`flux-panel-backend`、`sqlite_data`、`gost-network` 等）；脚本安装时会自动把新名身份写入部署 `.env`，手工部署漏写则起出来的全是旧名资源，两套手工部署同机会直接撞名、不具隔离性。五键清单与各自取值见 postgresql.md §四注记（`PANEL_BACKEND_CONTAINER`、`PANEL_POSTGRES_CONTAINER`、`FLMX_SQLITE_VOLUME`、`FLMX_POSTGRES_VOLUME`、`FLMX_NETWORK`）。自检：在部署目录执行 `grep -cE '^(PANEL_BACKEND_CONTAINER|PANEL_POSTGRES_CONTAINER|FLMX_SQLITE_VOLUME|FLMX_POSTGRES_VOLUME|FLMX_NETWORK)=' .env`，结果应为 `5`。
 - **自检**：安装后在部署目录执行 `grep FLMX_INSTANCE .env` 应能看到实例键；`docker ps` 里该套面板的容器名都应带 `-<实例键>` 后缀；再到该面板的节点页生成一条 Docker 形态安装命令，命令里的容器名应为 `flmx-agent-<实例键>`、数据目录应为 `/etc/flmx_agent-<实例键>`。
 
 ### 访问面板
@@ -129,6 +130,26 @@ wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest
 - systemd 查看状态: `systemctl status flux_agent`
 - Alpine/OpenRC 查看状态: `rc-service flux_agent status`
 - 若面板未显示在线，看 agent 的 WebSocket 连接日志（地址 scheme 是否与面板对外方式一致、是否被 308/握手拒绝等都会写在日志里），再对照下一节排查：systemd 节点执行 `journalctl -u flux_agent -n 100`；Alpine/OpenRC 节点没有 journald，日志在文件 `/var/log/flux_agent.log`（错误日志 `/var/log/flux_agent.err.log`），用 `tail -n 100 /var/log/flux_agent.log` 查看。
+
+### 节点机上已有其他面板的 agent 时（归属守卫）
+
+脚本形态 agent 与旧版/同类面板的 agent 共用同一个安装槽：目录 `/etc/flux_agent`、服务 `flux_agent`。往一台已经装有其他面板 agent 的节点机上执行本面板的安装命令时，脚本先做**归属判定**，判定不过不会改动现有 agent 的任何文件：
+
+- **守卫键**：现有 agent 配置文件 `/etc/flux_agent/config.json` 里的 `addr` 字段（该 agent 当前连接的面板地址）。脚本读取后先做 JSON 转义归一化（`\/`、`\uXXXX` 等写法差异不会造成误判），再与本次安装命令的面板地址**逐字比对**：相等才认定是本面板的旧 agent、允许就地覆盖安装（面板迁移、存量升级走的正是这条路）；不相等、或根本读不到 `addr`，一律按「他人面板的 agent」处理。守卫只比地址不比密钥：地址是面板的连接端点，同机端口唯一、异机地址不同，两套不同面板不可能撞同一串地址，同串即同一端点。
+- **触发面**：安装（面板生成的一键命令与手动 `./install.sh -a … -s …` 都一样）；维护菜单的**更新**与**卸载**（菜单上下文没有「本次面板地址」可比对，口径更严：非交互一律拒绝，交互时先明示现存 `addr` 再要求确认）。
+- **被拒绝时长什么样**（安装、非交互路径）：
+
+  ```
+  ⚠️ /etc/flux_agent 已存在一个 agent，其连接地址为 https://other.example.com:443，与本次面板地址 https://mine.example.com:443 不一致。
+     （地址比对已做 JSON 转义归一化，写法差异不会造成误判。）
+     它可能属于其他面板；继续安装会覆写它的配置、把它改连到本面板，本脚本不会未经确认这样做。
+  ❌ 安装终止：未改动 /etc/flux_agent 中的任何文件。
+     如确认该 agent 属于本面板（例如面板换过地址），请在交互终端重跑并在提示时确认，或设置 FLMX_AGENT_TAKEOVER=1 后重试。
+  ```
+
+- **两种解法**：① 确认机器上的 agent 本就属于本面板（典型情形：面板换过域名/地址）——在节点的交互终端重跑脚本，在提示时输 `y`；② 自动化场景无法交互时，显式设置环境变量 `FLMX_AGENT_TAKEOVER=1` 再执行，例如 `FLMX_AGENT_TAKEOVER=1 ./install.sh -a "https://…" -s "…"`，脚本会打印一行接管留痕。**防错警告**：TAKEOVER 是「我确认这台机器的 agent 归本面板、后果自担」的开关——机器上的 agent 若真属于另一套在用的面板，接管会覆写它的配置、把它改连到本面板，对方节点随即掉线；不要为了让命令跑通随手加。
+- **旧式 gost 形态的清理同样守卫**：安装/更新时脚本还会检查机器上有没有更老形态的 gost 式 agent（`gost.service` ＋ `/etc/gost` 落位）。它与旧谱系面板的 agent 完全同形、仅凭落位无法区分归属，故同样先比对 `/etc/gost/config.json` 的 `addr`：与本面板地址（或现装 agent 的地址）一致才清理；不一致或读不到时**跳过清理并在输出中明示**（以 `ℹ️ 已跳过旧式 gost 安装的清理` 开头），安装/更新本身不受影响。解法同上（交互确认或 `FLMX_AGENT_TAKEOVER=1`）。
+- **自检**：动手前先看节点机上现有 agent 连的是谁：`grep -o '"addr"[^,]*' /etc/flux_agent/config.json`（旧式形态看 `/etc/gost/config.json`），输出的地址与本面板地址一致才属同一面板。安装被守卫拒绝后，再看 `systemctl status flux_agent`（或 `rc-service flux_agent status`）与上述配置文件未被改动，即守卫按预期工作。
 
 ### 内核目录覆盖（FLMX_KERNEL_DIR）
 
