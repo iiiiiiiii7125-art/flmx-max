@@ -76,16 +76,26 @@ func TestG4ClashProxyRendersSnell(t *testing.T) {
 	}
 }
 
-// B1 端到端：整份 Clash 订阅里 Snell 节点在 proxies 与分组中同时出现；
-// Shadowrocket（消费 Clash 结构）同样拿得到。
+// B1 端到端（R9-01 改版）：B1 当年让 Snell 进 Clash 输出，前提是
+// Mihomo 接受 v4——第九轮以官方 Mihomo 1.19.16/1.19.17 实测推翻：
+// v4 条目整份拒绝。故 clash 格式不再下发自建 Snell（v4/v5 与 v6
+// 同口径），Stash / Shadowrocket 保留下发，本用例钉住分流后的形态；
+// 分流全矩阵见 snell_clash_split_r9_test.go。
 func TestG4SubscriptionClashCarriesSnell(t *testing.T) {
 	eps := []Endpoint{g4SnellEndpoint(t, 5, false)}
 	body, _, err := Subscription(FormatClash, eps, SubOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body, `type: "snell"`) || !strings.Contains(body, "G4 Snell") {
-		t.Fatalf("clash subscription must carry the snell node:\n%s", body)
+	if strings.Contains(body, "snell") || strings.Contains(body, "G4 Snell") {
+		t.Fatalf("clash subscription must not carry the snell node (R9-01):\n%s", body)
+	}
+	stash, _, err := Subscription(FormatStash, eps, SubOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stash, "snell") {
+		t.Fatalf("stash profile must carry the snell node:\n%s", stash)
 	}
 	sr, _, err := Subscription(FormatShadowrocket, eps, SubOptions{})
 	if err != nil {

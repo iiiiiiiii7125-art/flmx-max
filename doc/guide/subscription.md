@@ -32,7 +32,7 @@
 - Loon 和 Quantumult X 的节点格式没有前置代理参数，订阅里的落地节点是直连
 - 指定格式的链接：在订阅链接后加 `?format=clash`（或 `singbox`、`shadowrocket`、`loon`、`qx`、`surge`、`stash`、`base64`）
 - VLESS 加密（ENC）入站只出现在 Clash / Stash / 通用 base64 输出里（携带完整 `encryption` 参数），其他格式会略过这类入站
-- Snell 入站的下发按客户端区分：Clash / Stash / Shadowrocket 按 v4 口径下发（v4 / v5 入站可下发，v6 入站不下发，客户端不支持 v6）；sing-box 需要 1.14 以上版本、按拉取请求的 UA 判定下发——与是否用 `?format=singbox` 指定格式无关，用浏览器等普通工具拉取（UA 不带 sing-box 版本）时不含 Snell 属正常现象；Surge 原生支持；Loon、Quantumult X、通用 base64 不下发 Snell
+- Snell 入站的下发按客户端区分：**Clash 格式不下发 Snell**（v4 / v5 / v6 入站都不下发）——Clash Verge、Mihomo Party、FlClash 等 mihomo 内核客户端只接受 Snell v3，收到 v4 条目会把整份配置拒绝（一份订阅里只要有一个 Snell 入站，整份订阅都加载不了），而面板自建入站只有 v4 起步，所以 clash 面整体略过 Snell、订阅里其余节点照常下发；**Stash / Shadowrocket 仍按 v4 口径下发**（v4 / v5 入站渲染为 version 4，v6 入站不下发），这两个客户端原生支持 Snell v4（此口径按其公开支持下发，面板未在本地以其原生客户端实测）；sing-box 需要 1.14 以上版本、按拉取请求的 UA 判定下发——与是否用 `?format=singbox` 指定格式无关，用浏览器等普通工具拉取（UA 不带 sing-box 版本）时不含 Snell 属正常现象；Surge 原生支持；Loon、Quantumult X、通用 base64 不下发 Snell
 - NaïveProxy 节点在 sing-box 订阅侧需要客户端 1.13 以上版本：按拉取请求的 UA 判定，低于 1.13 时不下发 NaïveProxy 节点、其余节点照常下发（sing-box 出站对 NaïveProxy 的支持自 1.13 起，节点侧链式门同见节点文档）。下发格式只有 sing-box（1.13 以上）与通用 base64 两种：base64 分享链接的形态按节点来源区分——面板自建入站以 `naive+https://` 形态携带，通过导入进来的 NaïveProxy 节点以 `naive://` 形态携带；其余格式（Clash、Stash、Shadowrocket、Loon、Quantumult X、Surge）不下发 NaïveProxy 节点
 
 ## 来源

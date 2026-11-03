@@ -227,10 +227,23 @@ func addSecurityQuery(q url.Values, e Endpoint) {
 	}
 }
 
-// ClashProxy renders a Mihomo (Clash Meta) proxy entry. XHTTP is rendered
-// with xhttp-opts (Mihomo ≥1.19 supports it; the same shape proxy_produce
-// emits for imported nodes).
+// ClashProxy renders a Mihomo-schema proxy entry, as consumed by Stash
+// and Shadowrocket. XHTTP is rendered with xhttp-opts (Mihomo ≥1.19
+// supports it; the same shape proxy_produce emits for imported nodes).
+// The clash format itself goes through clashProxyMihomo: the two
+// disagree on built Snell inbounds (see clashSnell).
 func ClashProxy(e Endpoint) (yamlNode, bool) {
+	return clashProxy(e, false)
+}
+
+// clashProxyMihomo renders a proxy entry for the clash format, whose
+// consumers are Mihomo-core clients (Clash Verge, Mihomo Party, FlClash
+// and similar).
+func clashProxyMihomo(e Endpoint) (yamlNode, bool) {
+	return clashProxy(e, true)
+}
+
+func clashProxy(e Endpoint, mihomo bool) (yamlNode, bool) {
 	if e.Proxy != nil {
 		return proxyClash(e)
 	}
@@ -240,6 +253,14 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 		return nil, false
 	}
 	if in.Protocol == ProtocolSnell {
+		if mihomo {
+			// R9-01: official Mihomo builds refuse a whole clash file
+			// over any Snell entry this panel can render (see
+			// clashSnell), so the clash format leaves built Snell
+			// inbounds out entirely — v4/v5 join v6 there. Stash and
+			// Shadowrocket keep the entries via ClashProxy.
+			return nil, false
+		}
 		return clashSnell(e)
 	}
 	switch in.Protocol {
@@ -345,13 +366,18 @@ func ClashProxy(e Endpoint) (yamlNode, bool) {
 	return p, true
 }
 
-// clashSnell renders a built Snell inbound for Mihomo. Version support is
-// pinned to Mihomo v1.19.32 (adapter/outbound/snell.go NewSnell): versions
-// 1-4 are accepted and 5 is normalized to 4 — v5 servers accept v4 clients,
-// the same interop singboxOutbound relies on — while 6 is rejected with
-// "snell version error" and Snell v6's mode shaping has no Mihomo field at
-// all. Built inbounds are v4/v5/v6 only, so v4/v5 render as version 4 and
-// v6 stays out: genuinely unsupported, not silently broken.
+// clashSnell renders a built Snell inbound in the Mihomo schema for the
+// consumers that take it: Stash and Shadowrocket, whose native clients
+// support Snell v4. The clash format never reaches this function
+// (clashProxy leaves built Snell out there): measured against the
+// official Mihomo v1.19.16 / v1.19.17 binaries — the core line Clash
+// Verge, Mihomo Party and FlClash ship — a snell entry with version 4 is
+// rejected with "snell version error: 4" and the refusal is whole-file,
+// so one Snell inbound used to make a whole clash subscription
+// unloadable; of the versions tried only 3 loads there, and the
+// shadow-tls obfs mode is rejected at every version. Built inbounds are
+// v4/v5/v6 only, so v4/v5 render as version 4 (v5 servers accept v4
+// clients, the same interop singboxOutbound relies on) and v6 stays out.
 // B1 (W10 复审): 此前 Snell 在此无分支、被整体丢弃，Clash 系用户静默少节点。
 func clashSnell(e Endpoint) (yamlNode, bool) {
 	in := e.Inbound
@@ -372,13 +398,15 @@ func clashSnell(e Endpoint) (yamlNode, bool) {
 		{"version", 4},
 	}
 	if in.Security.Type == SecurityShadowTLS {
-		// Mihomo carries ShadowTLS as a snell obfs mode (obfs-opts
+		// ShadowTLS is carried as a snell obfs mode (obfs-opts
 		// mode=shadow-tls with host/password/version, plus the uTLS
-		// fingerprint at proxy level). R5 批 1: the canonical mihomo
-		// spelling is "shadow-tls" — the historical "shadowtls" this
-		// code emitted is rejected by mihomo itself (v1.19.33 -t:
-		// "snell obfs mode error: shadowtls"; official docs list
-		// http/tls/shadow-tls/restls/jls).
+		// fingerprint at proxy level). R5 批 1: the canonical spelling
+		// is "shadow-tls" — the historical "shadowtls" this code
+		// emitted is not a mode any consumer accepts (Mihomo's docs
+		// list http/tls/shadow-tls/restls/jls). The entry goes to
+		// Stash / Shadowrocket only: Mihomo itself rejects the
+		// shadow-tls snell obfs mode outright, one of the reasons the
+		// clash format takes no Snell at all (see above).
 		p = append(p,
 			yamlField{"client-fingerprint", in.Security.Fingerprint},
 			yamlField{"obfs-opts", yamlNode{
@@ -855,12 +883,18 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 }
 
 // stash writes rule sets as YAML and leaves out the Mihomo-only DNS and
-// sniffer settings.
+// sniffer settings. The clash format (stash=false) renders through
+// clashProxyMihomo, Stash through ClashProxy — the difference is the
+// built-Snell gate (R9-01).
 func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions, stash bool) string {
+	render := ClashProxy
+	if !stash {
+		render = clashProxyMihomo
+	}
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
-		if p, ok := ClashProxy(e); ok {
+		if p, ok := render(e); ok {
 			rendered = append(rendered, e)
 			nodes = append(nodes, p)
 		}

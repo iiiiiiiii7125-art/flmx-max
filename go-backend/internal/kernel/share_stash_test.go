@@ -118,13 +118,15 @@ func TestStashNodeSetAndCountParity(t *testing.T) {
 	eps[2].Name = "Snell v5 节点"
 	eps[3].Name = "Snell v6 节点"
 
+	// X-P3-2 的 stash=clash 计数平价自 R9-01 起在 Snell 格分叉：
+	// clash 不下发自建 Snell（v5/v6 均出局）得 2，stash 保留 v5 得 3。
 	countClash := SubscriptionNodeCount(FormatClash, eps, SubOptions{})
 	countStash := SubscriptionNodeCount(FormatStash, eps, SubOptions{})
-	if countStash != countClash {
-		t.Fatalf("node count stash=%d, want clash=%d (X-P3-2 parity)", countStash, countClash)
+	if countStash != 3 {
+		t.Fatalf("node count stash=%d, want 3 (trojan+enc+snell v5)", countStash)
 	}
-	if countClash != 3 {
-		t.Fatalf("fixture must render 3 nodes for clash family (trojan+enc+snell v5), got %d", countClash)
+	if countClash != 2 {
+		t.Fatalf("node count clash=%d, want 2 (built snell out, R9-01)", countClash)
 	}
 
 	stash, _, err := Subscription(FormatStash, eps, SubOptions{})
@@ -138,6 +140,19 @@ func TestStashNodeSetAndCountParity(t *testing.T) {
 	}
 	if strings.Contains(stash, "Snell v6 节点") {
 		t.Fatalf("snell v6 must stay out of stash (no client support):\n%s", stash)
+	}
+
+	clash, _, err := Subscription(FormatClash, eps, SubOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"普通 Trojan", "ENC 节点", "encryption"} {
+		if !strings.Contains(clash, want) {
+			t.Fatalf("clash output missing %q:\n%s", want, clash)
+		}
+	}
+	if strings.Contains(clash, "Snell v5 节点") || strings.Contains(clash, "Snell v6 节点") {
+		t.Fatalf("clash output must not carry built snell nodes (R9-01):\n%s", clash)
 	}
 }
 
