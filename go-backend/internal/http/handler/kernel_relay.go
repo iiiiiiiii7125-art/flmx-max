@@ -869,12 +869,28 @@ func (h *Handler) inboundShare(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(out))
 }
 
+// C1-02（1.9.5 发版后审计）：本端点此前是全部凭据面中唯一完全
+// 无限流者——错误 token 每次直达查库、有效 token 每次触发全量
+// 渲染，对单连接 SQLite 面板是低成本请求放大面。按源 IP 限流，
+// 量级与同族开放面齐平（gh 镜像/flow 均为 60 次/分钟）：订阅
+// 客户端的拉取间隔以分钟计，60/分钟远高于正常用量；键走
+// rateLimitKeyForRequest 收口，桶为 allowWithLimit 独立桶（不查
+// 登录紧缩集、不与 login 共用，两面互不外溢，与 sub_store 同型）。
+var openSubLimiter = &loginRateLimiter{buckets: make(map[string]*loginAttemptBucket)}
+
+const openSubMaxRequestsPerMinute = 60
+
 // openSubscription serves GET /api/v1/open_api/sub/{token}. It is outside
 // JWT auth; the 128-bit token is the credential and is compared in constant
 // time.
 func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !openSubLimiter.allowWithLimit(rateLimitKeyForRequest(r, "open_api sub rate limit"), time.Now(), openSubMaxRequestsPerMinute) {
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
 	token := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/open_api/sub/"), "/")
