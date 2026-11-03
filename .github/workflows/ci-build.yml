@@ -98,13 +98,32 @@ jobs:
   # so a gate that lost its teeth would fail silently. Wire both
   # selftests here as direct runs, mirroring the agent-image pair in the
   # frontend job. A dedicated job keeps the ~160s timeout-budgets
-  # selftest off the frontend job's critical path (it runs in parallel);
-  # both scripts need only bash + python3 on a bare checkout.
+  # selftest off the frontend job's critical path (it runs in parallel).
+  # The private-ranges script needs only bash + python3, but the
+  # timeout-budgets gate extracts frontend values with the TypeScript
+  # compiler API (scripts/timeout-fe-extract.mjs) and fails closed
+  # (exit 2) when typescript is unresolvable. Its resolution chain is
+  # audited-root -> gate-repo -> local main checkout, and on a bare CI
+  # checkout only the gate-repo tier can hit, so this job installs the
+  # vite-frontend dependencies (typescript lands in this checkout's
+  # vite-frontend/node_modules) before running the selftests.
   gate-selftests:
     name: Gate Mutation Selftests (timeout budgets + private ranges)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.28.1
+
+      - name: Install vite-frontend dependencies (typescript for the timeout gate)
+        working-directory: vite-frontend
+        run: pnpm install --frozen-lockfile
 
       - name: Run gate mutation selftests
         run: |
