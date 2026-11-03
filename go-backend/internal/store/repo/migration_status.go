@@ -46,7 +46,7 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 			return status // 无重复，下次启动会自动建（SQLite/PG 均已接线）
 		}
 		status.Required = true
-		status.Guide = "doc/guide/upgrade.md#从旧版本升级"
+		status.Guide = "doc/guide/upgrade.md#从旧版本升级-含-r5-b4-并发修复"
 		if precheck.ForwardPortDups > 0 {
 			var sample string
 			r.db.Raw(`SELECT 'node_id=' || node_id || ', port=' || port FROM forward_port GROUP BY node_id, port HAVING COUNT(*) > 1 LIMIT 1`).Scan(&sample)
@@ -68,7 +68,7 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 	if !applied(migrationV2Version) {
 		if def, exists, err := nodeInboundIndexDefinition(r.db); err == nil && exists && !nodeInboundIndexIsPartial(def) {
 			status.Required = true
-			status.Guide = "doc/guide/upgrade.md#从旧版本升级"
+			status.Guide = "doc/guide/upgrade.md#从旧版本升级-含-r5-b4-并发修复"
 			status.Tables = append(status.Tables, DuplicateDetail{
 				Table:  "node_inbound",
 				Sample: "索引 " + nodeInboundIndexName + " 仍为全量唯一定义，v2 部分索引迁移待处理（通常是 kernel 入站存在同节点同端口重复，需先清理）",
@@ -81,7 +81,7 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 	if !applied(migrationK10V5Version) {
 		if groups, err := listUsernameFoldDupGroups(r.db); err == nil && len(groups) > 0 {
 			status.Required = true
-			status.Guide = "doc/guide/upgrade.md#从旧版本升级"
+			status.Guide = "doc/guide/upgrade.md#从旧版本升级-含-r5-b4-并发修复"
 			sample := "大小写变体同名: folded=" + groups[0].Fold + " ids=[" + groups[0].IDs + "] stored=[" + groups[0].Forms + "]"
 			status.Tables = append(status.Tables, DuplicateDetail{
 				Table:           "user",
