@@ -152,9 +152,37 @@ func TestR1008ForwardBatchDeleteCap(t *testing.T) {
 	}
 }
 
+// r1008OrderEntries 构造 update-order 族的条目数组（id/inx 对）。
+func r1008OrderEntries(n int) []map[string]any {
+	entries := make([]map[string]any, 0, n)
+	for i := 0; i < n; i++ {
+		entries = append(entries, map[string]any{"id": int64(900000 + i), "inx": i})
+	}
+	return entries
+}
+
+// 批量面计数帽全集登记（C1-B01 收口；普查正本＝发版后审计
+// C1-caps-idem §1B 的 45 行表，本清单须与代码现状一致）：
+//   - maxBatchIDs=1000、超限整单点名拒绝：idsFromBody 系全集
+//     （node/tunnel/inbound/forward 的批删、批暂停/恢复/重部署/
+//     换隧道、隧道删除预览与连带转发删除）＋下方自有解析面 13 个
+//     （R10-08 的 10 面＋C1-04 补的 update-order 三面）；
+//   - 更严的专用帽先行判定、原样保留：node/batch-upgrade 50；
+//   - 语义不同的帽各有钉格、不并入本门：手动导入/订阅源同步 500
+//     （kernel_external、remote_source 各自的测试）、subscription
+//     save 选集 100、latency 目标 200/30；
+//   - 无帽但已裁定不属本族（信息级登记）：单资源的结构型列表字段
+//     （tunnel create/update 的节点列表、user 的 groupIds——单事务
+//     校验，C1-I08）；备份导入各段行数（users 段哈希预算 1000 另
+//     钉，C1-I07）；
+//   - 随功能移除消解（本轮代码尚在、暂无帽，移除落地后本注记须
+//     同步删除、届时无帽批量面清单归零）：/group/tunnel/assign、
+//     /group/user/assign、/subscription/group/order、
+//     /subscription/group/save 的选集——由节点组/分组三件套移除路
+//     （fixD/fixE）删除路由时收尾本注记。
+//
 // TestR1008SelfParsedFacesOverCap 逐面钉死不走 idsFromBody 系的
-// 批量面（各自解析）在超帽时同口径点名拒绝——R10-08 的全族清单
-// 见 fix10-reports/caps.md 普查表。
+// 批量面（各自解析）在超帽时同口径点名拒绝。
 func TestR1008SelfParsedFacesOverCap(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/r1008-faces.db")
 	if err != nil {
@@ -184,6 +212,9 @@ func TestR1008SelfParsedFacesOverCap(t *testing.T) {
 		{"userTunnelBatchAssign", map[string]any{"userId": 1, "tunnels": tunnels}, (*Handler).userTunnelBatchAssign},
 		{"userSubscriptionSet", map[string]any{"userId": 1, "subscriptionIds": over}, (*Handler).userSubscriptionSet},
 		{"setUserInbounds", map[string]any{"userId": 1, "inboundIds": over}, (*Handler).setUserInbounds},
+		{"nodeUpdateOrder", map[string]any{"nodes": r1008OrderEntries(1001)}, (*Handler).nodeUpdateOrder},
+		{"tunnelUpdateOrder", map[string]any{"tunnels": r1008OrderEntries(1001)}, (*Handler).tunnelUpdateOrder},
+		{"forwardUpdateOrder", map[string]any{"forwards": r1008OrderEntries(1001)}, (*Handler).forwardUpdateOrder},
 	}
 	for _, f := range faces {
 		req := newAuthenticatedJSONRequest(t, f.body)
@@ -193,5 +224,57 @@ func TestR1008SelfParsedFacesOverCap(t *testing.T) {
 		if code == 0 || !strings.Contains(msg, "单次批量操作最多 1000 条") {
 			t.Fatalf("%s over-cap: got code=%d msg=%q, want cap rejection naming 1000", f.name, code, msg)
 		}
+	}
+}
+
+// TestC104UpdateOrderAtCapProcessed 钉格帽边界内侧：恰 1000 条
+// update-order 条目须照常逐条处理，不得被帽误拒（帽只拦第 1001 条，
+// 超帽侧由 TestR1008SelfParsedFacesOverCap 的三面钉死）。
+func TestC104UpdateOrderAtCapProcessed(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/c104-uo.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "test-secret")
+
+	atCap := []struct {
+		name string
+		body map[string]any
+		call func(*Handler, http.ResponseWriter, *http.Request)
+	}{
+		{"nodeUpdateOrder", map[string]any{"nodes": r1008OrderEntries(1000)}, (*Handler).nodeUpdateOrder},
+		{"tunnelUpdateOrder", map[string]any{"tunnels": r1008OrderEntries(1000)}, (*Handler).tunnelUpdateOrder},
+	}
+	for _, f := range atCap {
+		req := newAuthenticatedJSONRequest(t, f.body)
+		res := httptest.NewRecorder()
+		f.call(h, res, req)
+		var env struct {
+			Code int `json:"code"`
+			Data struct {
+				SuccessCount int `json:"successCount"`
+				FailCount    int `json:"failCount"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &env); err != nil {
+			t.Fatalf("%s decode: %v body=%.200s", f.name, err, res.Body.String())
+		}
+		if env.Code != 0 || env.Data.SuccessCount != 0 || env.Data.FailCount != 1000 {
+			t.Fatalf("%s(1000 nonexistent) = code %d %+v, want code 0 fail 1000 (at-cap must be processed, not cap-rejected)", f.name, env.Code, env.Data)
+		}
+	}
+
+	// forward 面帽内放行后进两段式归属校验：不存在的转发以「转发
+	// 不存在」整单回执（非帽文案），证明 1000 条未被帽拦下。
+	req := newAuthenticatedJSONRequest(t, map[string]any{"forwards": r1008OrderEntries(1000)})
+	res := httptest.NewRecorder()
+	h.forwardUpdateOrder(res, req)
+	code, msg := r1008Envelope(t, res.Body.String())
+	if strings.Contains(msg, "单次批量操作最多") {
+		t.Fatalf("forwardUpdateOrder(1000) must not be cap-rejected, got msg=%q", msg)
+	}
+	if code == 0 || !strings.Contains(msg, "转发不存在") {
+		t.Fatalf("forwardUpdateOrder(1000 nonexistent) = code %d msg=%q, want 转发不存在 from the access check", code, msg)
 	}
 }
