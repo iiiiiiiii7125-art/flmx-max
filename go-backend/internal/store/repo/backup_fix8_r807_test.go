@@ -34,7 +34,7 @@ func TestFix8R807RemoteAddrHasNoTargets(t *testing.T) {
 		{"203.0.113.5:443", false},
 		{",203.0.113.5:443", false},
 		{"203.0.113.5:443\n198.51.100.7:443", false},
-		{"\u200b", false}, // ZWSP 非空白：写面按一段（管理员收、成员靠段校验拒），恢复面同判有目标
+		{"\u200b", true}, // R9-09/I-F3-03 裁定翻转本格：纯 Cf 段不计入有效段（fix8 时按一段计），四面同判零目标
 		{"a..b:443", false},
 	}
 	for _, c := range cases {

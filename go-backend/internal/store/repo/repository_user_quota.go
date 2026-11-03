@@ -69,11 +69,16 @@ func normalizeUserQuotaView(view *model.UserQuotaView, now time.Time) *model.Use
 	}
 	dayKey, monthKey := userQuotaWindowKeys(now)
 	out := *view
-	if out.DayKey != dayKey {
+	// R9-10（I-C2-01）：视图归一与落盘滚动同为单调口径（见
+	// applyUserQuotaWindowRoll）——仅当前窗口键严格大于已存键才在
+	// 视图上呈现新窗口；墙钟回拨时呈现已存窗口与已用量，不显示
+	// 假清零（否则执法面按视图判读会与行内状态分叉、回拨期误判
+	// 未超限）。
+	if dayKey > out.DayKey {
 		out.DayKey = dayKey
 		out.DailyUsedBytes = 0
 	}
-	if out.MonthKey != monthKey {
+	if monthKey > out.MonthKey {
 		out.MonthKey = monthKey
 		out.MonthlyUsedBytes = 0
 	}
@@ -158,18 +163,34 @@ func (r *Repository) loadOrCreateUserQuotaTx(tx *gorm.DB, userID int64, now time
 	return q, nil
 }
 
+// applyUserQuotaWindowRoll 是配额日/月窗口滚动的单一定义点，入账
+// 懒滚动（AddUserQuotaUsage / addUserQuotaUsageBatchTx）、管理员手
+// 动重置前置滚动（ResetUserQuotaUsage）与维护轮全量滚动
+// （RollUserQuotaWindows）三调用面共用。
+//
+// R9-10（I-C2-01）：滚动改单调——仅当当前窗口键严格大于已存键才
+// 滚动清零（键为可排序整数 YYYYMMDD/YYYYMM；形态对齐同仓
+// monthlyFlowDue 的标记单调＋恰一次口径）。旧实现以键不等式触
+// 发：面板墙钟回拨跨日/跨月即把窗口键回退、已用量清零，时钟恢
+// 复后再滚再清；同一回拨经维护轮滚动还会把已被配额封停的用户
+// 误判未超限而主动解禁、恢复其暂停转发。触发源无需攻击者控制
+// 面板（NTP 步进、VM 快照恢复、改日期、TZ 变更均可）。新键小于
+// 已存键（回拨）时窗口键与已用量原样保留、返回未变更，入账调用
+// 方随之走稳态累加把新流量计入已存窗口——fail-closed 方向，配
+// 额执行不被时钟回拨放宽；封停用户的超限判定（userQuotaExceeded
+// 对行内值的判读）因此在回拨下恒稳，维护轮不误解禁。
 func applyUserQuotaWindowRoll(q *model.UserQuota, now time.Time) bool {
 	if q == nil {
 		return false
 	}
 	changed := false
 	dayKey, monthKey := userQuotaWindowKeys(now)
-	if q.DayKey != dayKey {
+	if dayKey > q.DayKey {
 		q.DayKey = dayKey
 		q.DailyUsedBytes = 0
 		changed = true
 	}
-	if q.MonthKey != monthKey {
+	if monthKey > q.MonthKey {
 		q.MonthKey = monthKey
 		q.MonthlyUsedBytes = 0
 		changed = true
