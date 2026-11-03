@@ -4,7 +4,9 @@
 FLMX model (do NOT port upstream's): a subscription is a row in
 `subscription`; who gets it lives in `user_subscription` (UserSubscription)
 and is written through POST /user-subscription/set. There is no user_id on
-the subscription and no template feature. The default subscription is the
+the subscription. Node groups and subscription templates are our own
+features (not the upstream model); they are seeded at the end of this
+step. The default subscription is the
 panel's own auto-created one (first row by inx, id; personal ?user=&sig=
 links hang on it).
 """
@@ -162,10 +164,38 @@ for sid, up_g, down_g in [(s2, 6, 62), (s3, 9, 83)]:
         x("INSERT INTO subscription_traffic(subscription_id, hour, upload_bytes, download_bytes) VALUES(?,?,?,?)",
           (sid, t - t % 3600000, int(up_g * G / hours * w * 1.6), int(down_g * G / hours * w * 1.6)))
 
+# Node groups + subscription templates (our own group/template
+# features): one reusable group over the Asian self-built inbounds,
+# one pasted Mihomo template, and a subscription that uses both — so
+# group/list carries a real referencing subscription, template/list a
+# used template, and the demo's group/template surfaces are not empty
+# shells. The recordings for these endpoints live in record_items.mjs.
+db.commit()
+grp = api("/subscription/group/save", {
+    "name": "亚洲优选", "sourceAll": False,
+    "inboundIds": [inb["香港 Reality"], inb["香港 ENC"], inb["东京 Reality"]],
+    "sourceIds": [],
+    "options": {"lines": "", "regions": [], "protocols": [], "include": "", "exclude": "",
+                "rename": "", "addFlag": True, "prefix": "", "dedupe": True, "sort": "name", "script": ""},
+})["data"]
+tpl = api("/subscription/template/save", {
+    "name": "Mihomo 基础模板", "kind": "clash",
+    "content": ("proxies: []\n"
+                "proxy-groups:\n"
+                "  - {name: 节点选择, type: select, include-all: true}\n"
+                "  - {name: 自动选择, type: url-test, include-all: true, url: http://www.gstatic.com/generate_204, interval: 300}\n"
+                "rules:\n"
+                "  - GEOIP,CN,DIRECT\n"
+                "  - MATCH,节点选择\n"),
+})["data"]
+s5 = sub("小明 · 电视", sourceAll=False, groupIds=[grp["id"]],
+         options={"templates": {"clash": tpl["id"]}},
+         trafficLimit=300 * G, resetDay=1, expireTime=now + 90 * DAY)
+
 # everything online
 x("UPDATE node SET status = 1")
 x("UPDATE node_kernel SET status = 'running', installed_version = version")
 x("UPDATE node_inbound SET enabled = 1")
 db.commit()
-json.dump({**st, "subs": [s1, s2, s3, s4]}, open(DB + ".seed.json", "w"), ensure_ascii=False)
+json.dump({**st, "subs": [s1, s2, s3, s4, s5]}, open(DB + ".seed.json", "w"), ensure_ascii=False)
 print("ok")
