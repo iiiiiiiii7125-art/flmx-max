@@ -1351,8 +1351,47 @@ func (h *Handler) nodeImport(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(data))
 }
 
+// peerFailLimiter 返回 Handler 的 federation 对端鉴权失败限流器
+// （惰性初始化，兼容以结构体字面量构造的测试 Handler）。
+func (h *Handler) peerFailLimiter() *flowAuthFailLimiter {
+	h.peerAuthFailMu.Lock()
+	defer h.peerAuthFailMu.Unlock()
+	if h.peerAuthFail == nil {
+		h.peerAuthFail = newFlowAuthFailLimiter()
+	}
+	return h.peerAuthFail
+}
+
+// peerAuthThrottleKey 解析本请求的限流键，并报告该来源是否已达
+// 对端鉴权失败上限（已达上限时 authPeer 应跳过查库直接回拒）。
+// 键走本包统一收口 rateLimitKeyForRequest（与 flow 面同口径）。
+func (h *Handler) peerAuthThrottleKey(r *http.Request) (key string, throttled bool) {
+	key = rateLimitKeyForRequest(r, "federation peer auth fail limit")
+	return key, h.peerFailLimiter().blocked(key, time.Now())
+}
+
+// recordPeerAuthFailure 记一次对端鉴权失败（未知令牌）。
+// key 必须来自同请求的 peerAuthThrottleKey。
+func (h *Handler) recordPeerAuthFailure(key string) {
+	h.peerFailLimiter().recordFailure(key, time.Now())
+}
+
 func (h *Handler) authPeer(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// R3-C1-01：对端令牌是本面（7 条 federation 路由共用此
+		// 收口）唯一凭据，未知令牌的每次尝试此前都直达
+		// GetPeerShareByToken 查库、无任何失败节流，与 flow 面
+		// R8-060 同型。按同口径补齐：复用 flow 限流器类型与同值
+		// （60 次/分钟/IP、独立实例），只记未知令牌失败，有效
+		// 令牌永不计数；达上限后不再查库，回包与未知令牌同形
+		// （401 Invalid token），线协议不变。查库错误回 500 的
+		// 路径不记账——非鉴权失败（设计目标见
+		// flow_auth_fail_limit.go 文件头）。
+		failKey, throttled := h.peerAuthThrottleKey(r)
+		if throttled {
+			response.WriteJSON(w, response.Err(401, "Invalid token"))
+			return
+		}
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
 			response.WriteJSON(w, response.Err(401, "Missing Authorization header"))
@@ -1375,6 +1414,7 @@ func (h *Handler) authPeer(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if share == nil {
+			h.recordPeerAuthFailure(failKey)
 			response.WriteJSON(w, response.Err(401, "Invalid token"))
 			return
 		}

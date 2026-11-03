@@ -76,6 +76,11 @@ type Handler struct {
 	// 面同口径，见 flow_auth_fail_limit.go）；惰性初始化。
 	flowAuthFailMu sync.Mutex
 	flowAuthFail   *flowAuthFailLimiter
+	// R3-C1-01：/api/v1/federation/* 对端令牌鉴权失败限流（与 flow
+	// 面同口径同限流器类型、独立实例，见 federation.go 的
+	// authPeer）；惰性初始化。
+	peerAuthFailMu sync.Mutex
+	peerAuthFail   *flowAuthFailLimiter
 	passkeyMu      sync.Mutex
 	passkeyPending map[string]passkeyCeremony
 
