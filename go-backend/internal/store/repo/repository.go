@@ -3297,7 +3297,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.InboundSubscriptionCountersImported = counts.subscriptionCounter
 			result.InboundSourcesImported = counts.sources
 			result.InboundShieldsImported = counts.shields
-			result.InboundNodeGroupsImported = counts.groups
+			result.InboundNodeGroupsIgnored = counts.groupsIgnored
 			result.InboundTemplatesImported = counts.templates
 			result.InboundLegacyUsersImported = counts.legacyUsers
 		}

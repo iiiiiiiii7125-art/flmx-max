@@ -986,8 +986,13 @@ type ImportResult struct {
 	InboundSourcesImported              int `json:"inboundSourcesImported"`
 	// F6-02：随 inbounds 段恢复的删除屏蔽登记数（屏蔽随源往返，
 	// 恢复后手工删过的导入节点不会被同步复活）。
-	InboundShieldsImported     int `json:"inboundShieldsImported"`
-	InboundNodeGroupsImported  int `json:"inboundNodeGroupsImported"`
+	InboundShieldsImported int `json:"inboundShieldsImported"`
+	// R3-S2-01：旧备份 nodeGroups 段的被忽略条数。节点组功能已
+	// 移除（1.9.6），该段永不落库——旧字段名
+	// InboundNodeGroupsImported 名实相反且计数器从未累加、恒为
+	// 0，现改名据实计数（与 ImportWarnings 的文本披露同数）。
+	// 前端未消费此字段（仅消费 inboundShieldsImported）。
+	InboundNodeGroupsIgnored   int `json:"inboundNodeGroupsIgnored"`
 	InboundTemplatesImported   int `json:"inboundTemplatesImported"`
 	InboundLegacyUsersImported int `json:"inboundLegacyUsersImported"`
 	// O7-007/O7-008：公告与监控权限导入计数

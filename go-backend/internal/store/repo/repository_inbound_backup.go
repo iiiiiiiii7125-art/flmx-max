@@ -494,6 +494,9 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 // subsection by subsection against the DB instead of only reporting
 // the inbound-row total. Skipped rows are never counted here (they
 // are reported through SkippedRows, as with inboundsImported).
+// Sole exception: groupsIgnored counts the removed nodeGroups
+// segment's dropped rows (R3-S2-01) — that segment never lands by
+// design, and the receipt reports how many entries were ignored.
 type inboundImportCounts struct {
 	kernels             int
 	inbounds            int
@@ -503,7 +506,7 @@ type inboundImportCounts struct {
 	subscriptionCounter int
 	sources             int
 	shields             int
-	groups              int
+	groupsIgnored       int
 	templates           int
 	legacyUsers         int
 }
@@ -702,8 +705,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	}
 
 	// 节点组段披露：节点组功能已移除（1.9.6），旧备份的 nodeGroups
-	// 只计数点名、不再落库（InboundsBackup.NodeGroups 仅作解码壳）。
+	// 只计数点名、不再落库（InboundsBackup.NodeGroups 仅作解码壳）；
+	// 被忽略条数同时计入回执的 InboundNodeGroupsIgnored（R3-S2-01，
+	// 与上方 warnf 的文本披露同数）。
 	if len(b.NodeGroups) > 0 {
+		counts.groupsIgnored += len(b.NodeGroups)
 		rep.warnf("备份恢复：节点组功能已移除，备份中的 nodeGroups 段（%d 条）已忽略未恢复", len(b.NodeGroups))
 	}
 

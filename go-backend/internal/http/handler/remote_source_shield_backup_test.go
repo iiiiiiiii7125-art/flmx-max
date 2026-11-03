@@ -112,8 +112,10 @@ func TestImportDisclosesRemovedNodeGroupsAndGroupIDs(t *testing.T) {
 	if !strings.Contains(joined, "groupIds") {
 		t.Fatalf("warnings must disclose ignored subscription groupIds, got %v", result.ImportWarnings)
 	}
-	if result.InboundNodeGroupsImported != 0 {
-		t.Fatalf("removed node groups must import zero rows, got %d", result.InboundNodeGroupsImported)
+	// R3-S2-01：nodeGroups 段永不落库，被忽略条数据实计入
+	// InboundNodeGroupsIgnored（夹具含 1 条），与 warnings 文本同数。
+	if result.InboundNodeGroupsIgnored != 1 {
+		t.Fatalf("removed node groups must be counted as ignored, got %d", result.InboundNodeGroupsIgnored)
 	}
 	subs, err := dest.ListSubscriptions()
 	if err != nil {
