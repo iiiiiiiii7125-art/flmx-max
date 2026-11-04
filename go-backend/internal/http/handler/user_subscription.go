@@ -119,6 +119,10 @@ type userSubscriptionMineView struct {
 	ExpireTime    int64  `json:"expireTime"`
 	OverQuota     bool   `json:"overQuota"`
 	Enabled       bool   `json:"enabled"`
+	// PendingDelete（R1-02-L3）：删除墓碑滞留窗口内用户侧亦须可见
+	// 「删除中」，与管理员列表 subscriptionView.PendingDelete 同口径
+	// ——此前用户侧无此字段，只看到订阅照常列出、链接 404 无提示。
+	PendingDelete bool `json:"pendingDelete"`
 }
 
 // userSubscriptionMine 返回当前登录用户被分配的订阅（任意登录用户，仅自己的）。
@@ -169,7 +173,7 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 			ID: v.ID, Name: v.Name, Path: v.Path, NodeCount: v.NodeCount,
 			UploadBytes: v.UploadBytes, DownloadBytes: v.DownloadBytes,
 			TrafficLimit: v.TrafficLimit, TrafficSince: v.TrafficSince, ExpireTime: v.ExpireTime,
-			OverQuota: v.OverQuota, Enabled: v.Enabled,
+			OverQuota: v.OverQuota, Enabled: v.Enabled, PendingDelete: v.PendingDelete,
 		})
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{

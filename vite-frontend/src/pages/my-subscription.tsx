@@ -263,20 +263,26 @@ export default function MySubscriptionPage() {
           {assigned.map((s) => {
             const used = s.uploadBytes + s.downloadBytes;
             const expired = s.expireTime > 0 && s.expireTime <= Date.now();
-            const inactiveReason = !s.enabled
-              ? "已停用"
-              : s.overQuota
-                ? "流量已用完"
-                : expired
-                  ? "已过期"
-                  : undefined;
+            const inactiveReason = s.pendingDelete
+              ? "删除中"
+              : !s.enabled
+                ? "已停用"
+                : s.overQuota
+                  ? "流量已用完"
+                  : expired
+                    ? "已过期"
+                    : undefined;
             return (
               <Card key={`assigned-${s.id}`}>
                 <CardBody className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-medium">
                       {s.name}
-                      {!s.enabled ? (
+                      {s.pendingDelete ? (
+                        <Chip className="ml-2" color="warning" size="sm" variant="flat">
+                          删除中
+                        </Chip>
+                      ) : !s.enabled ? (
                         <Chip className="ml-2" size="sm" variant="flat">
                           已停用
                         </Chip>

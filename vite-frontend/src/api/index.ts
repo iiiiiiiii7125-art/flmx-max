@@ -1497,6 +1497,8 @@ export interface MySubscriptionItem {
   expireTime: number;
   overQuota: boolean;
   enabled: boolean;
+  /** 删除墓碑滞留中（管理员已删除、节点凭据下发未完成）：链接已 404，页面呈「删除中」。 */
+  pendingDelete: boolean;
 }
 export const getMySubscriptions = () =>
   Network.post<{ subscriptions: MySubscriptionItem[] }>(
