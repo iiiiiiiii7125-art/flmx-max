@@ -108,7 +108,11 @@ func TestGistRestoreRunsFullTailHooksAndRepushesOnlineNode(t *testing.T) {
 		if backup.Forwards[i].ID == s.forwardID && backup.Forwards[i].ForwardPorts != nil {
 			for j := range *backup.Forwards[i].ForwardPorts {
 				if (*backup.Forwards[i].ForwardPorts)[j].NodeID == s.frontID {
-					(*backup.Forwards[i].ForwardPorts)[j].Port = 20001
+					// R1-03-M2 后恢复面镜像写面节点端口范围门：
+					// 改口目标必须落在 front 节点规格 30000-30010
+					// 内（旧值 20001 在规格外，现会被恢复复检点名
+					// 跳过）；30005 规格内且未占用，改口语义不变。
+					(*backup.Forwards[i].ForwardPorts)[j].Port = 30005
 					mutated = true
 				}
 			}
@@ -146,7 +150,7 @@ func TestGistRestoreRunsFullTailHooksAndRepushesOnlineNode(t *testing.T) {
 	if result.AutoBackup != nil {
 		t.Fatal("SEC-01: AutoBackup must be absent from the restore receipt (pre-import snapshot leaks credentials)")
 	}
-	s.waitFrontUpdateWith(t, baseline, "20001")
+	s.waitFrontUpdateWith(t, baseline, "30005")
 	// 恢复不得覆盖当前 Gist 设置与凭据（B1 隔离 + importConfigs 过滤双层）。
 	cfg, err := s.repo.GetConfigsByNames([]string{gistConfigToken, gistConfigID})
 	if err != nil {
