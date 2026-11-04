@@ -7746,6 +7746,417 @@ EOF
   [[ ! -e "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" ]] || fail "RN-2 migration: the legacy service file must be removed"
 )
 
+# INV-9（事故专项审计路 3）：菜单 4 迁移的成败判据不再只有
+# pgloader 退出码——切换 .env 前逐表对账源（pgloader 实际读入的
+# 预处理副本）↔目标行数。夹具以真实 SQLite 文件冒充数据卷：预
+# 处理载荷与计数载荷都经 fake docker 在本机真实执行（与
+# RR-LIVE-01 同手法），pgloader 桩按副本计数生成目标计数表
+# （可经旗标令 node 表少一行模拟部分搬运），psql 计数经
+# docker exec 桩查表。第一幕计数全等（含 schema_migration 副本
+# 删行后的 2 行口径）→ 对账通过、迁移成功；第二幕 node 表目标
+# 少一行 → 必须点名差异表与两侧计数、经快照回滚判失败、.env
+# 逐字恢复。
+test_panel_migrate_reconciles_row_counts() (
+  set -euo pipefail
+  command -v sqlite3 >/dev/null 2>&1 || \
+    fail "INV-9: sqlite3 is required to execute the migration reconcile fixture"
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  unset PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_DEPLOY_DIR FLMX_INSTANCE
+  check_docker() { DOCKER_CMD="fixture_reconcile_compose"; return 0; }
+  sleep() { :; }
+
+  fixture_reconcile_compose() {
+    local svc
+    case "$1" in
+      down)
+        rm -f "$FIXTURE_STATE/containers"/* 2>/dev/null || true
+        return 0
+        ;;
+      up)
+        shift
+        for svc in "$@"; do
+          case "$svc" in
+            -d) ;;
+            postgres)
+              touch "$FIXTURE_STATE/containers/flmx-panel-postgres"
+              touch "$FIXTURE_STATE/volumes/flmx-postgres-data"
+              ;;
+            backend) touch "$FIXTURE_STATE/containers/flmx-panel-backend" ;;
+            frontend) touch "$FIXTURE_STATE/containers/flmx-panel-frontend" ;;
+          esac
+        done
+        return 0
+        ;;
+    esac
+    return 0
+  }
+
+  sh_payload_of() {
+    local prev="" arg
+    for arg in "$@"; do
+      if [[ "$prev" == "-c" ]]; then
+        printf '%s' "$arg"
+        return 0
+      fi
+      prev="$arg"
+    done
+    return 1
+  }
+
+  run_payload_locally() {
+    # 以 bash -c 语义执行（$0=名、$1=库路径），与真实
+    # docker run … sh -c '<payload>' <name> <db> 的位置参数口径一致；
+    # bash <file> 形态会把名字错位进 $1（预处理载荷用字面路径未暴露此差）。
+    local payload="$1" dbpath="$2" script_file rc
+    script_file=$(mktemp)
+    printf '%s' "$payload" | grep -v 'apk add' > "$script_file"
+    bash -c "$(cat "$script_file")" flmx-fixture "$FIXTURE_VOL/${dbpath##*/}"
+    rc=$?
+    rm -f "$script_file"
+    return $rc
+  }
+
+  run_preprocess_locally() {
+    local payload="$1" script_file rc
+    script_file=$(mktemp)
+    printf '%s' "$payload" | grep -v 'apk add' | \
+      sed -e "s|/sqlite/|$FIXTURE_VOL/|g" -e "s|/tmp/dump|$FIXTURE_WORK/dump|g" > "$script_file"
+    bash "$script_file"
+    rc=$?
+    rm -f "$script_file"
+    return $rc
+  }
+
+  fixture_pgloader_apply() {
+    local src="$FIXTURE_VOL/gost.db" t c
+    if [[ -f "$FIXTURE_VOL/gost-migrate.db" ]]; then
+      src="$FIXTURE_VOL/gost-migrate.db"
+    fi
+    : > "$FIXTURE_STATE/pg-counts.txt"
+    for t in $(sqlite3 "$src" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"); do
+      c=$(sqlite3 "$src" "SELECT COUNT(*) FROM \"$t\";")
+      if [[ -f "$FIXTURE_STATE/pg-drop-node" && "$t" == "node" ]]; then
+        c=$((c - 1))
+      fi
+      printf '%s|%s\n' "$t" "$c" >> "$FIXTURE_STATE/pg-counts.txt"
+    done
+    return 0
+  }
+
+  docker() {
+    case "$1" in
+      ps)
+        ls "$FIXTURE_STATE/containers" 2>/dev/null || true
+        return 0
+        ;;
+      inspect)
+        if [[ "$2" == "-f" ]]; then
+          case "$3" in
+            *Health.Status*) printf 'healthy\n' ;;
+            *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:v-test" ;;
+          esac
+          return 0
+        fi
+        [[ -e "$FIXTURE_STATE/containers/$2" ]]
+        return
+        ;;
+      stop)
+        return 0
+        ;;
+      exec)
+        if [[ "$*" =~ FROM\ \"([^\"]+)\" ]]; then
+          local tbl="${BASH_REMATCH[1]}" line=""
+          line=$(grep "^${tbl}|" "$FIXTURE_STATE/pg-counts.txt" 2>/dev/null | head -n 1 || true)
+          if [[ -n "$line" ]]; then
+            printf '%s\n' "${line##*|}"
+            return 0
+          fi
+        fi
+        return 1
+        ;;
+      volume)
+        case "$2" in
+          inspect) [[ -e "$FIXTURE_STATE/volumes/$3" ]]; return ;;
+          rm)
+            rm -f "$FIXTURE_STATE/volumes/$3"
+            return 0
+            ;;
+        esac
+        return 0
+        ;;
+      run)
+        local payload=""
+        payload=$(sh_payload_of "$@") || payload=""
+        case "$*" in
+          *flmx-migrate-reconcile*)
+            run_payload_locally "$payload" "${!#}"
+            return
+            ;;
+          *pgloader*)
+            fixture_pgloader_apply
+            return
+            ;;
+          *"DROP INDEX IF EXISTS"*)
+            run_preprocess_locally "$payload"
+            return
+            ;;
+          *) return 0 ;;
+        esac
+        ;;
+    esac
+    return 0
+  }
+
+  setup_reconcile_scenario() {
+    local work="$1"
+    FIXTURE_STATE="$work/state"
+    FIXTURE_VOL="$work/vol"
+    FIXTURE_WORK="$work"
+    mkdir -p "$FIXTURE_STATE/containers" "$FIXTURE_STATE/volumes" "$FIXTURE_VOL"
+    touch "$FIXTURE_STATE/containers/flmx-panel-backend" "$FIXTURE_STATE/containers/flmx-panel-frontend"
+    sqlite3 "$FIXTURE_VOL/gost.db" <<'EOF'
+CREATE TABLE "user" (id INTEGER PRIMARY KEY, "user" TEXT);
+INSERT INTO "user" VALUES (1, 'admin@user'), (2, 'alice'), (3, 'bob');
+CREATE UNIQUE INDEX idx_user_username_fold_unique ON "user"(LOWER("user"));
+CREATE TABLE node (id INTEGER PRIMARY KEY, name TEXT);
+INSERT INTO node VALUES (1, 'n1'), (2, 'n2');
+CREATE TABLE tunnel (id INTEGER PRIMARY KEY, name TEXT);
+INSERT INTO tunnel VALUES (1, 't1');
+CREATE TABLE user_subscription (id INTEGER PRIMARY KEY);
+INSERT INTO user_subscription VALUES (1), (2), (3), (4);
+CREATE TABLE peer_share_resource (id INTEGER PRIMARY KEY, release_legacy_family numeric DEFAULT 0);
+CREATE TABLE schema_migration (version VARCHAR(64) PRIMARY KEY, applied_at INTEGER NOT NULL);
+INSERT INTO schema_migration VALUES ('r5b4_v1_port_user_unique', 111);
+INSERT INTO schema_migration VALUES ('k10_v5_username_casefold_unique', 222);
+INSERT INTO schema_migration VALUES ('c12_v4_forward_lookup', 333);
+EOF
+    cat > "$work/.env" <<'EOF'
+JWT_SECRET=<redacted>
+DB_TYPE=sqlite
+POSTGRES_DB=flmx_panel
+POSTGRES_USER=flmx_panel
+POSTGRES_PASSWORD=<redacted>
+PANEL_BACKEND_CONTAINER=flmx-panel-backend
+PANEL_FRONTEND_CONTAINER=flmx-panel-frontend
+PANEL_POSTGRES_CONTAINER=flmx-panel-postgres
+FLMX_SQLITE_VOLUME=sqlite_data
+EOF
+    printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > "$work/docker-compose.yml"
+    cp "$work/.env" "$work/env-original"
+  }
+
+  local work1 work2 rc
+  work1=$(mktemp -d)
+  setup_reconcile_scenario "$work1"
+  rc="0"
+  ( cd "$work1" && migrate_to_postgres >"$work1/migrate.log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "INV-9: migration with matching row counts must succeed"
+  grep -q '迁移数据对账通过' "$work1/migrate.log" || fail "INV-9: a passed reconciliation must be named in the migration output"
+  grep -q '^DB_TYPE=postgres' "$work1/.env" || fail "INV-9: a reconciled migration must switch .env to postgres"
+
+  work2=$(mktemp -d)
+  setup_reconcile_scenario "$work2"
+  : > "$work2/state/pg-drop-node"
+  rc="0"
+  ( cd "$work2" && migrate_to_postgres >"$work2/migrate.log" 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "INV-9: a row-count mismatch must fail the migration even when pgloader exits 0"
+  grep -q '表 node：源 2 行，目标 1 行' "$work2/migrate.log" || fail "INV-9: the mismatch must name the differing table with both counts"
+  grep -q '数据对账未过' "$work2/migrate.log" || fail "INV-9: the reconciliation failure must go through the snapshot rollback path"
+  diff -q "$work2/env-original" "$work2/.env" >/dev/null || fail "INV-9: rollback must restore the pre-migration .env verbatim"
+  [[ ! -e "$work2/.env.pre-postgres-migration" ]] || fail "INV-9: rollback must delete the env snapshot"
+)
+
+# E4 窄子形：迁移源卷名此前只有「.env 键 → 字面旧名」两级解析、
+# 不实读——键值漂移（键里是陈旧名、真库在另一卷）时按错卷读数
+# 据。本例 .env 的 FLMX_SQLITE_VOLUME 故意写陈旧名，在跑后端的
+# inspect 实读给出真实卷名：迁移必须点名冲突、按实读卷名挂载
+# 全部数据面 docker run（备份/预处理/pgloader），陈旧名不得出
+# 现在任何挂载里。
+test_panel_migrate_source_volume_live_read_wins() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  unset PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_DEPLOY_DIR FLMX_INSTANCE
+  check_docker() { DOCKER_CMD="fixture_live_compose"; return 0; }
+  fixture_live_compose() { return 0; }
+  sleep() { :; }
+  docker() {
+    case "$1" in
+      ps)
+        printf '%s\n' "flmx-panel-postgres" "flmx-panel-backend" "flmx-panel-frontend"
+        return 0
+        ;;
+      inspect)
+        if [[ "$2" == "-f" ]]; then
+          case "$3" in
+            *Health.Status*) printf 'healthy\n' ;;
+            *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:v-test" ;;
+            *Mounts*) printf 'real_sqlite_vol' ;;
+          esac
+          return 0
+        fi
+        return 0
+        ;;
+      run)
+        local arg
+        for arg in "$@"; do
+          case "$arg" in
+            *:/sqlite|*:/sqlite:*|*:/data|*:/data:*) printf '%s\n' "$arg" >> "$FIXTURE_STATE/run-mounts.log" ;;
+          esac
+        done
+        return 0
+        ;;
+      volume)
+        return 1
+        ;;
+    esac
+    return 0
+  }
+
+  local work rc
+  work=$(mktemp -d)
+  FIXTURE_STATE="$work/state"
+  mkdir -p "$FIXTURE_STATE"
+  : > "$FIXTURE_STATE/run-mounts.log"
+  cat > "$work/.env" <<'EOF'
+JWT_SECRET=<redacted>
+DB_TYPE=sqlite
+POSTGRES_DB=flmx_panel
+POSTGRES_USER=flmx_panel
+POSTGRES_PASSWORD=<redacted>
+PANEL_BACKEND_CONTAINER=flmx-panel-backend
+PANEL_FRONTEND_CONTAINER=flmx-panel-frontend
+PANEL_POSTGRES_CONTAINER=flmx-panel-postgres
+FLMX_SQLITE_VOLUME=stale_sqlite_vol
+EOF
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > "$work/docker-compose.yml"
+
+  rc="0"
+  ( cd "$work" && migrate_to_postgres >"$work/migrate.log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "E4: migration must succeed on the live-read volume"
+  grep -q '迁移源卷名冲突' "$work/migrate.log" || fail "E4: the key/live-read volume conflict must be named in the migration output"
+  grep -q 'stale_sqlite_vol' "$work/migrate.log" || fail "E4: the conflict notice must name the key-resolved (stale) volume"
+  grep -q 'real_sqlite_vol' "$work/migrate.log" || fail "E4: the conflict notice must name the live-read volume"
+  grep -Fxq 'real_sqlite_vol:/data' "$FIXTURE_STATE/run-mounts.log" || fail "E4: the backup run must mount the live-read volume"
+  grep -Fxq 'real_sqlite_vol:/sqlite' "$FIXTURE_STATE/run-mounts.log" || fail "E4: the pgloader run must mount the live-read volume"
+  if grep -q 'stale_sqlite_vol' "$FIXTURE_STATE/run-mounts.log"; then
+    fail "E4: the stale key-resolved volume must not be mounted by any data run"
+  fi
+)
+
+# R-1（事故专项审计路 5）：布局迁移中途失败必须自动回滚——旧
+# 实现摘旧 unit 后 mv 失败、或迁后判活失败都只点名人工处理，
+# 节点停在离线态。本例两幕共用 systemd 桩（新服务恒判死、旧服
+# 务恒判活）：第一幕迁后判活失败 → 目录搬回、文件名改回、旧
+# unit 逐字还原、新 unit 摘除、回执点名已自动回滚；第二幕经旗
+# 标令整目录 mv 失败 → 目录未动、旧 unit 同样逐字还原并拉起。
+test_migrate_legacy_agent_rolls_back_on_failure() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  sleep() { :; }
+  systemctl() {
+    case "$*" in
+      *MainPID*flmx_agent*) echo 0 ;;
+      *MainPID*flux_agent*) echo 4242 ;;
+      *"is-active --quiet flmx_agent") return 1 ;;
+      *"is-active --quiet flux_agent") return 0 ;;
+    esac
+    return 0
+  }
+  mv() {
+    if [[ -n "${MV_FAIL:-}" && "$1" == "$LEGACY_INSTALL_DIR" && "$2" == "$INSTALL_DIR" ]]; then
+      return 1
+    fi
+    command mv "$@"
+  }
+
+  setup_legacy_layout() {
+    local root="$1"
+    INSTALL_DIR="$root/flmx_agent"
+    LEGACY_INSTALL_DIR="$root/flux_agent"
+    FLMX_AGENT_SYSTEMD_SERVICE_FILE="$root/flmx_agent.service"
+    LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE="$root/flux_agent.service"
+    mkdir -p "$LEGACY_INSTALL_DIR"
+    printf '#!/bin/bash\necho legacy agent\n' > "$LEGACY_INSTALL_DIR/flux_agent"
+    chmod +x "$LEGACY_INSTALL_DIR/flux_agent"
+    printf '{\n  "addr": "wss://panel.example.com",\n  "secret": "s3cret"\n}\n' > "$LEGACY_INSTALL_DIR/config.json"
+    printf 'node-state' > "$LEGACY_INSTALL_DIR/node-state.txt"
+    printf '[Unit]\nDescription=legacy agent\n[Service]\nExecStart=%s/flux_agent\n' "$LEGACY_INSTALL_DIR" > "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+    cp -p "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" "$root/unit.before"
+    cp -p "$LEGACY_INSTALL_DIR/config.json" "$root/config.before"
+  }
+
+  local root1 rc
+  root1=$(mktemp -d)
+  setup_legacy_layout "$root1"
+  MV_FAIL=""
+  rc="0"
+  migrate_legacy_agent_install >"$root1/migrate.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R-1: a migration whose new service never becomes healthy must fail"
+  grep -q '已自动回滚' "$root1/migrate.log" || fail "R-1: the health-failure path must report the automatic rollback"
+  [[ -d "$LEGACY_INSTALL_DIR" ]] || fail "R-1: rollback must move the install dir back to the legacy layout"
+  [[ ! -e "$INSTALL_DIR" ]] || fail "R-1: rollback must not leave the new layout dir behind"
+  [[ -f "$LEGACY_INSTALL_DIR/flux_agent" ]] || fail "R-1: rollback must rename the binary back to the legacy name"
+  [[ ! -e "$LEGACY_INSTALL_DIR/flmx_agent" ]] || fail "R-1: rollback must not leave the new binary name in the legacy layout"
+  diff -q "$root1/config.before" "$LEGACY_INSTALL_DIR/config.json" >/dev/null || fail "R-1: rollback must keep config.json byte-identical"
+  [[ -f "$LEGACY_INSTALL_DIR/node-state.txt" ]] || fail "R-1: rollback must keep the other state files"
+  diff -q "$root1/unit.before" "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" >/dev/null || fail "R-1: rollback must restore the legacy unit file byte-identical from the snapshot"
+  [[ ! -e "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" ]] || fail "R-1: rollback must remove the new service file"
+
+  local root2
+  root2=$(mktemp -d)
+  setup_legacy_layout "$root2"
+  MV_FAIL="1"
+  rc="0"
+  migrate_legacy_agent_install >"$root2/migrate.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R-1: a failed directory move must fail the migration"
+  grep -q '迁移安装目录失败' "$root2/migrate.log" || fail "R-1: the move failure must be named in the migration output"
+  grep -q '已自动回滚' "$root2/migrate.log" || fail "R-1: the move-failure path must report the automatic rollback"
+  [[ -d "$LEGACY_INSTALL_DIR" ]] || fail "R-1: after a failed move the legacy dir must still be in place"
+  diff -q "$root2/config.before" "$LEGACY_INSTALL_DIR/config.json" >/dev/null || fail "R-1: after a failed move config.json must be untouched"
+  diff -q "$root2/unit.before" "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" >/dev/null || fail "R-1: after a failed move the legacy unit file must be restored byte-identical"
+  MV_FAIL=""
+)
+
+# R-3（事故专项审计路 5）：install 整覆 config.json 必须保全存
+# 量协议计数 http/tls/socks（与 agent 侧 map 合并保全对齐）——
+# 身份（addr/secret）仍由本次参数决定，计数逐字带回；无存量时
+# 输出与旧实现逐字一致（不发明字段）；非数字的存量值不保全。
+test_install_flmx_agent_config_preserves_protocol_counts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVER_ADDR="wss://panel.example.com"
+  SECRET="s3cret"
+  PROXY_URL=""
+  PROXY_ENABLED=""
+
+  local work cfg actual expected
+  work=$(mktemp -d)
+  cfg="$work/config.json"
+
+  printf '{\n  "addr": "wss://old.example.com",\n  "secret": "oldsecret",\n  "http": 2,\n  "tls": 0,\n  "socks": 5\n}\n' > "$cfg"
+  write_flmx_agent_config "$cfg"
+  actual=$(<"$cfg")
+  expected=$'{\n  "addr": "wss://panel.example.com",\n  "secret": "s3cret",\n  "http": 2,\n  "tls": 0,\n  "socks": 5\n}'
+  assert_equals "$expected" "$actual" "R-3: rewriting config.json must preserve the stored protocol counts"
+
+  rm -f "$cfg"
+  write_flmx_agent_config "$cfg"
+  actual=$(<"$cfg")
+  expected=$'{\n  "addr": "wss://panel.example.com",\n  "secret": "s3cret"\n}'
+  assert_equals "$expected" "$actual" "R-3: a fresh config.json must keep the exact legacy two-field shape"
+
+  printf '{\n  "addr": "wss://old.example.com",\n  "secret": "oldsecret",\n  "http": "many",\n  "tls": 7\n}\n' > "$cfg"
+  write_flmx_agent_config "$cfg"
+  actual=$(<"$cfg")
+  expected=$'{\n  "addr": "wss://panel.example.com",\n  "secret": "s3cret",\n  "tls": 7\n}'
+  assert_equals "$expected" "$actual" "R-3: non-numeric stored counts must not be preserved"
+)
+
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -7819,6 +8230,7 @@ test_uninstall_flmx_agent_cleans_host_tuning_residue
 test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent
 test_uninstall_flmx_agent_host_cleanup_queue_backup_lost
 test_install_flmx_agent_writes_json_safe_config
+test_install_flmx_agent_config_preserves_protocol_counts
 test_install_script_bootstraps_bash_for_alpine
 test_install_flmx_agent_uses_openrc
 test_remove_flmx_agent_service_uses_openrc
@@ -7894,6 +8306,9 @@ test_panel_update_volume_check_existing_key_path
 test_panel_update_pins_keys_without_rename
 test_panel_migrate_placeholder_password_sentinels
 test_panel_migrate_volume_split_and_rollback_cleanup
+test_panel_migrate_reconciles_row_counts
+test_panel_migrate_source_volume_live_read_wins
 test_update_flmx_agent_migrates_legacy_layout
+test_migrate_legacy_agent_rolls_back_on_failure
 
 echo "install script tests passed"
