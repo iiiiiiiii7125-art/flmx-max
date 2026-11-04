@@ -15,7 +15,7 @@
 2. 确认实际使用的 `docker-compose.yml` 在 `backend` 服务的 `environment` 下有以下传递项；新版 Compose 模板已包含，旧模板若缺失需补上：
 
    ```yaml
-   FLMX_WEBAUTHN_ORIGIN: ${FLMX_WEBAUTHN_ORIGIN:-${FLVX_WEBAUTHN_ORIGIN:-}}
+   FLMX_WEBAUTHN_ORIGIN: ${FLMX_WEBAUTHN_ORIGIN:-}
    ```
 
    在该部署目录运行 `docker compose up -d --force-recreate backend`，使新环境变量进入后端容器。后端重建期间，面板 API 会短暂中断。容器恢复后重新加载前端页面；如果 PWA 提示“发现新版本”，选择“刷新”，也可以用新的无痕窗口核对是否仍加载旧页面。
@@ -37,4 +37,4 @@
 
 建议保留至少一种可用的密码恢复途径。数据库级备份会保留密钥记录；当前面板的 JSON 导出不包含通行证密钥，使用 JSON 导入迁移后，用户需要通过密码登录并重新绑定。
 
-> 改名兼容：旧名 `FLVX_WEBAUTHN_ORIGIN` 仍被后端双读识别，存量 `.env` 无需改动；新部署请用新名 `FLMX_WEBAUTHN_ORIGIN`。其余 `FLVX_*` 环境变量同理（新名 `FLMX_*` 优先、旧名兜底）。
+> 改名兼容（1.9.10 起变更）：旧名 `FLVX_WEBAUTHN_ORIGIN` 的双读已退场，后端只认新名 `FLMX_WEBAUTHN_ORIGIN`——存量 `.env` 里仍用旧名的，升级前必须改名为新名，否则通行证密钥入口会整体消失。其余 `FLVX_*` 环境变量同批退场，逐键对照与改名方法见 [升级指南](./upgrade.md) 的「FLVX_* 环境变量双读退场」节。

@@ -232,3 +232,27 @@ docker start <backend容器>
 - `FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true`：放行所有私网地址（不推荐）
 
 **设置位置与生效方法**：这两个变量是**后端进程的环境变量**，随版 `docker-compose.yml` 的 `backend` 服务默认**没有**它们的传递行——只把变量写进部署目录的 `.env` 文件不会进入后端容器、不会生效。需要在部署目录的 `docker-compose.yml` 里给 `backend` 服务的 `environment:` 段补上对应行（直接写字面量，或写 `- FLMX_FETCH_PRIVATE_ALLOWLIST=${FLMX_FETCH_PRIVATE_ALLOWLIST}` 再把值放进同目录 `.env`），然后执行 `docker compose up -d backend` 重建后端容器才生效。自检：`docker exec <后端容器> printenv FLMX_FETCH_PRIVATE_ALLOWLIST` 能打印出所设值，即已进入后端进程；打印为空就是传递行没补对。同一口径适用于全部 `FLMX_FETCH_*` 与 `FLMX_GIST_API_BASE` 环境变量（见 [导入节点](./import.md#订阅源地址安全策略) 与 [Gist 备份](./gist-backup.md#高级-api-基地址)）。
+
+## FLVX_* 环境变量双读退场（1.9.10 起）
+
+1.9.8 改名过渡期引入的 `FLVX_*` 旧名环境变量双读（新名 `FLMX_*` 优先、旧名兜底）自 **1.9.10 起退场**：后端、节点 agent 与安装脚本只认新名。仍在用旧名键的部署，升级到 1.9.10 后旧名键会被**静默忽略**、对应功能回落缺省行为，不报错——请在升级前按下表逐个改名（只换键名、值不变）。`FLUX_VERSION` 版本键不在此列：它仍是新旧双写、读取仍旧名回退，长期并存，不用改。
+
+| 旧名（1.9.10 起不再读取） | 改名为 | 消费面与不改名的后果 |
+|---|---|---|
+| `FLVX_TRUSTED_PROXY_HOPS` | `FLMX_TRUSTED_PROXY_HOPS` | 后端：可信代理跳数（登录限流与客户端 IP 解析）。不改名 → 回落默认 1 跳 |
+| `FLVX_FETCH_ALLOW_PRIVATE_NETWORKS` | `FLMX_FETCH_ALLOW_PRIVATE_NETWORKS` | 后端：出站抓取（订阅源、版本发现、联邦、监控探测）放行全部私网。不改名 → 私网目标恢复默认拒绝 |
+| `FLVX_FETCH_PRIVATE_ALLOWLIST` | `FLMX_FETCH_PRIVATE_ALLOWLIST` | 后端：出站抓取按 CIDR 放行私网。不改名 → 放行名单失效 |
+| `FLVX_FEDERATION_TRUSTED_PROXIES` | `FLMX_FEDERATION_TRUSTED_PROXIES` | 后端：联邦对端 IP 白名单解析的可信代理。不改名 → 只认连接对端地址、不解析转发头 |
+| `FLVX_WEBAUTHN_ORIGIN` | `FLMX_WEBAUTHN_ORIGIN` | 后端：Passkey Origin。不改名 → 通行证密钥按未配置处理、入口整体消失；随版 docker-compose 模板里旧名的透传行同步移除 |
+| `FLVX_GIST_API_BASE` | `FLMX_GIST_API_BASE` | 后端：Gist 备份的 GitHub API 基址。不改名 → 回落官方 `https://api.github.com` |
+| `FLVX_LOG_REDACT_EXEMPT_PREFIXES` | `FLMX_LOG_REDACT_EXEMPT_PREFIXES` | 后端：日志 URL 路径段脱敏的豁免前缀。不改名 → 豁免失效、恢复全量掩码 |
+| `FLVX_KERNEL_DIR` | `FLMX_KERNEL_DIR` | 节点 agent：内核状态根目录覆盖（写在 agent 的 systemd unit 或 drop-in 里）。不改名 → agent 回落缺省根目录、内核状态换根（旧目录文件不删） |
+| `FLVX_VERIFY_DOWNLOADS` | `FLMX_VERIFY_DOWNLOADS` | 面板安装脚本 `panel_install.sh`：下载校验开关。不改名 → 回落默认开启校验——曾用旧名关过校验的部署，升级后校验会重新打开 |
+
+**改名方法与生效口径**（与各键原有口径一致）：
+
+- 后端键（表中前七行）：它们是**后端进程的环境变量**，口径与上一节相同——部署目录 `.env` 里把键名改掉的同时，须保证 `docker-compose.yml` 的 `backend` 服务 `environment:` 段有**新名**的传递行（模板自带的只有 `FLMX_WEBAUTHN_ORIGIN` 一行，其余键手工补 `- FLMX_<键名>=${FLMX_<键名>}`），再执行 `docker compose up -d backend` 重建后端。自检：`docker exec <后端容器> printenv FLMX_<键名>` 能打印出所设值即已生效。
+- agent 键 `FLMX_KERNEL_DIR`：改写 agent 的 systemd unit 文件或 drop-in（`<单元名>.d/*.conf`）里的 `Environment=` 行，执行 `systemctl daemon-reload` 后重启 agent 生效。
+- 脚本键 `FLMX_VERIFY_DOWNLOADS`：它是运行 `panel_install.sh` 时的进程环境变量，在命令前设置（如 `FLMX_VERIFY_DOWNLOADS=0 ./panel_install.sh`）或先 `export` 再运行脚本。
+
+**升级前自检**：面板部署目录执行 `grep -E '^FLVX_' .env`，有输出即逐行按下表改名为同名 `FLMX_` 键；节点机上另查 `grep -rs 'FLVX_KERNEL_DIR' /etc/systemd/system/flmx_agent.service /etc/systemd/system/flmx_agent.service.d/ 2>/dev/null`（改名前装的节点单元名仍为 `flux_agent` 时，把路径换成对应的旧单元名）。
