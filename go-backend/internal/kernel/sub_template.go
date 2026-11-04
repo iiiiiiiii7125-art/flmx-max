@@ -143,6 +143,11 @@ func CheckTemplate(kind, content string, names []string) (TemplateSummary, error
 	if len(s.Groups) > 0 && s.AutoGroups() == 0 {
 		s.Warnings = append(s.Warnings, "没有策略组会自动收节点（"+autoHint(kind)+"），节点只会出现在节点列表里")
 	}
+	for _, g := range s.Groups {
+		if g.Name == ChainLandingGroup || g.Name == ChainRelayGroup {
+			s.Warnings = append(s.Warnings, fmt.Sprintf("策略组「%s」与链式分组保留名同名：订阅开启链式时，追加的链式组将以「%s · 链式 N」的形式改名以免同名冲突", g.Name, g.Name))
+		}
+	}
 	return s, nil
 }
 
@@ -154,6 +159,32 @@ func autoHint(kind string) string {
 		return "include-all-proxies"
 	}
 	return "include-all"
+}
+
+// chainNamesFor resolves the names the appended chain groups take in a
+// template render. The chain group names are reserved on the node side
+// (uniqueNamesExcept keeps node names off them), but a template may
+// already define a group with the same name: appending a second group
+// under that name makes sing-box reject the whole config (duplicate
+// outbound tag) and leaves Mihomo/Surge with one group shadowing the
+// other. On collision the appended chain group is renamed with a
+// "· 链式 N" suffix — the same rename-on-collision approach as the
+// template service groups — and the dialer references (dialer-proxy /
+// detour / underlying-proxy) follow the renamed relay group
+// (R4-C2C-01).
+func chainNamesFor(existing []string) (landing, relay string) {
+	taken := make(map[string]bool, len(existing))
+	for _, n := range existing {
+		taken[n] = true
+	}
+	pick := func(base string) string {
+		name := base
+		for i := 1; taken[name]; i++ {
+			name = fmt.Sprintf("%s · 链式 %d", base, i)
+		}
+		return name
+	}
+	return pick(ChainLandingGroup), pick(ChainRelayGroup)
 }
 
 // templateGroupNames lists a template's group names; node names must not
@@ -568,6 +599,8 @@ func clashTemplateProfile(content string, endpoints []Endpoint, slot string, opt
 		return "", err
 	}
 	root := doc.Content[0]
+	groups, gi := tplMapGet(root, "proxy-groups")
+	landingName, relayName := chainNamesFor(clashGroupNames(groups))
 	var proxies []interface{}
 	var names []string
 	var chainGroupNodes []interface{}
@@ -575,11 +608,10 @@ func clashTemplateProfile(content string, endpoints []Endpoint, slot string, opt
 	if slot == TemplateShadowrocket {
 		proxies, names = shadowrocketProxies(endpoints, opts)
 	} else {
-		proxies, names, chainGroupNodes, hidden = clashTemplateProxies(endpoints, hideRelays, slot == TemplateClash)
+		proxies, names, chainGroupNodes, hidden = clashTemplateProxies(endpoints, hideRelays, slot == TemplateClash, landingName, relayName)
 	}
 	expand := slot == TemplateStash || slot == TemplateShadowrocket || hidden
 	types := proxyTypes(proxies)
-	groups, gi := tplMapGet(root, "proxy-groups")
 	if root.Style&yaml.FlowStyle != 0 || groups == nil || groups.Kind != yaml.SequenceNode || groups.Style&yaml.FlowStyle != 0 ||
 		(expand && expandsAnchor(groups, names, types)) {
 		// Through the encoder: a rewritten group that carries an anchor
@@ -675,12 +707,27 @@ func expandsAnchor(groups *yaml.Node, names []string, types map[string]string) b
 	return false
 }
 
+// clashGroupNames lists the names of a clash template's own proxy
+// groups (nil when the template has no proxy-groups sequence).
+func clashGroupNames(groups *yaml.Node) []string {
+	if groups == nil || groups.Kind != yaml.SequenceNode {
+		return nil
+	}
+	out := []string{}
+	for _, g := range groups.Content {
+		if name := tplScalar(g, "name"); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // clashTemplateProxies renders Mihomo / Stash proxies, with the chain
 // groups when the chain applies; names are the nodes groups list, and
 // hidden is set when relay nodes were left out of them. mihomo selects
 // the clash-format renderer (built Snell left out, R9-01) for the
 // TemplateClash slot; the Stash slot keeps ClashProxy.
-func clashTemplateProxies(endpoints []Endpoint, hideRelays bool, mihomo bool) (proxies []interface{}, names []string, chainNodes []interface{}, hidden bool) {
+func clashTemplateProxies(endpoints []Endpoint, hideRelays bool, mihomo bool, landingName, relayName string) (proxies []interface{}, names []string, chainNodes []interface{}, hidden bool) {
 	render := ClashProxy
 	if mihomo {
 		render = clashProxyMihomo
@@ -698,7 +745,7 @@ func clashTemplateProxies(endpoints []Endpoint, hideRelays bool, mihomo bool) (p
 	for i, e := range rendered {
 		p := nodes[i]
 		if chain && e.ChainRole == ChainRoleLanding {
-			p = append(p, yamlField{"dialer-proxy", ChainRelayGroup})
+			p = append(p, yamlField{"dialer-proxy", relayName})
 		}
 		proxies = append(proxies, p)
 		if listed(e, chain, SubOptions{ChainHideRelays: hideRelays}) {
@@ -709,8 +756,8 @@ func clashTemplateProxies(endpoints []Endpoint, hideRelays bool, mihomo bool) (p
 	}
 	if chain {
 		chainNodes = []interface{}{
-			yamlNode{{"name", ChainLandingGroup}, {"type", "select"}, {"proxies", toInterfaces(landing)}},
-			yamlNode{{"name", ChainRelayGroup}, {"type", "select"}, {"proxies", toInterfaces(relay)}},
+			yamlNode{{"name", landingName}, {"type", "select"}, {"proxies", toInterfaces(landing)}},
+			yamlNode{{"name", relayName}, {"type", "select"}, {"proxies", toInterfaces(relay)}},
 		}
 	}
 	return proxies, names, chainNodes, hidden
@@ -868,12 +915,21 @@ func singboxTemplateProfile(content string, endpoints []Endpoint, opts SubOption
 		}
 	}
 	landing, relay, chain := chainGroups(rendered)
+	var existingTags []string
+	for _, o := range cfg["outbounds"].([]interface{}) {
+		if m, ok := o.(map[string]interface{}); ok {
+			if tag, _ := m["tag"].(string); tag != "" {
+				existingTags = append(existingTags, tag)
+			}
+		}
+	}
+	landingName, relayName := chainNamesFor(existingTags)
 	var nodeOutbounds, wgEndpoints []interface{}
 	names := make([]string, 0, len(rendered))
 	for i, e := range rendered {
 		for _, o := range obsList[i] {
 			if _, detour := o["detour"]; chain && e.ChainRole == ChainRoleLanding && !detour {
-				o["detour"] = ChainRelayGroup
+				o["detour"] = relayName
 			}
 			if o["type"] == "wireguard" {
 				wgEndpoints = append(wgEndpoints, o)
@@ -929,8 +985,8 @@ func singboxTemplateProfile(content string, endpoints []Endpoint, opts SubOption
 	outbounds := cfg["outbounds"].([]interface{})
 	if chain {
 		outbounds = append(outbounds,
-			map[string]interface{}{"type": "selector", "tag": ChainLandingGroup, "outbounds": landing},
-			map[string]interface{}{"type": "selector", "tag": ChainRelayGroup, "outbounds": relay})
+			map[string]interface{}{"type": "selector", "tag": landingName, "outbounds": landing},
+			map[string]interface{}{"type": "selector", "tag": relayName, "outbounds": relay})
 	}
 	cfg["outbounds"] = append(outbounds, nodeOutbounds...)
 	if len(wgEndpoints) > 0 {
@@ -946,6 +1002,27 @@ func singboxTemplateProfile(content string, endpoints []Endpoint, opts SubOption
 // --- Surge ---
 
 var surgeSection = regexp.MustCompile(`^\s*\[([^\]]+)\]\s*$`)
+
+// surgeGroupNames lists the group names a surge template defines in
+// its [Proxy Group] section.
+func surgeGroupNames(content string) []string {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	gi, ok := surgeSections(lines)["proxy group"]
+	if !ok {
+		return nil
+	}
+	out := []string{}
+	for _, l := range lines[gi+1 : surgeSectionEnd(lines, gi)] {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, ";") {
+			continue
+		}
+		if idx := strings.Index(l, "="); idx > 0 {
+			out = append(out, strings.TrimSpace(l[:idx]))
+		}
+	}
+	return out
+}
 
 // surgeSections splits a profile into lines and finds each section's
 // header line index (lower-cased name).
@@ -1101,11 +1178,12 @@ func surgeTemplateProfile(content string, endpoints []Endpoint, hideRelays bool)
 		}
 	}
 	landing, relay, chain := chainGroups(rendered)
+	landingName, relayName := chainNamesFor(surgeGroupNames(content))
 	var listedNames []string
 	hidden := false
 	for i := range proxyLines {
 		if chain && rendered[i].ChainRole == ChainRoleLanding {
-			proxyLines[i] += ", underlying-proxy=" + ChainRelayGroup
+			proxyLines[i] += ", underlying-proxy=" + relayName
 		}
 		if listed(rendered[i], chain, SubOptions{ChainHideRelays: hideRelays}) {
 			listedNames = append(listedNames, rendered[i].Name)
@@ -1123,8 +1201,8 @@ func surgeTemplateProfile(content string, endpoints []Endpoint, hideRelays bool)
 	if chain {
 		g := surgeSections(lines)["proxy group"]
 		insert(surgeSectionEnd(lines, g), []string{
-			ChainLandingGroup + " = select, " + strings.Join(landing, ", "),
-			ChainRelayGroup + " = select, " + strings.Join(relay, ", "),
+			landingName + " = select, " + strings.Join(landing, ", "),
+			relayName + " = select, " + strings.Join(relay, ", "),
 		})
 	}
 	secs := surgeSections(lines)
