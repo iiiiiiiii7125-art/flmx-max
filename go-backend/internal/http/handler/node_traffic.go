@@ -43,7 +43,7 @@ func (h *Handler) nodeTrafficMonth(w http.ResponseWriter, r *http.Request) {
 	month := nodeTrafficMonthStart(time.Now(), loc)
 	traffic, err := h.repo.NodeTrafficSince(month.UnixMilli())
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeTrafficMonth: NodeTrafficSince failed", err)
 		return
 	}
 	out := make(map[string][2]int64, len(traffic))

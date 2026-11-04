@@ -87,6 +87,10 @@ type tunnelQualitySnapshot struct {
 type tunnelQualityProber struct {
 	handler   *Handler
 	cache     sync.Map // tunnelID (int64) → *tunnelQualitySnapshot
+	// storeMu 串行化 storeResult 的「读缓存→判时间戳/落库门→写缓存」
+	// 全程（R1-09-L2）：probeAll 轮次与节点重连探测两个调用方可并发
+	// 探同一隧道，无串行时两份快照会同穿 30 秒落库门写出重复历史行。
+	storeMu   sync.Mutex
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wake      chan struct{}
@@ -1043,11 +1047,21 @@ func (p *tunnelQualityProber) storeResult(snap *tunnelQualitySnapshot) {
 		return
 	}
 
+	// R1-09-L2：整段串行（storeMu）＋时间戳守卫——并发调用方（轮次
+	// 探测与节点重连探测）对同一隧道交错时，先开始但后完成的旧快照
+	// 不得顶掉较新的缓存值；落库门在锁内读改写，同一 lastDBWrite
+	// 不能被两份快照同时穿过而在节流窗口内写出两行历史。
+	p.storeMu.Lock()
+	defer p.storeMu.Unlock()
+
 	// Update in-memory cache (latest per tunnel)
 	// Retain the lastDBWrite timestamp if it exists, so we only DB write every 30s
 	var lastWrite int64
 	if existing, ok := p.cache.Load(snap.TunnelID); ok {
 		if eg, ok := existing.(*tunnelQualitySnapshot); ok {
+			if eg.Timestamp > snap.Timestamp {
+				return
+			}
 			lastWrite = eg.lastDBWrite
 		}
 	}

@@ -128,9 +128,14 @@ func (h *Handler) monitorNodeListHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// R1-09-L3：本文件管理员面（节点/服务/权限各面）与 node_traffic
+	// 的仓储错误同走 respondInternalError——RR4-C1-01 当年只收口了
+	// 用户可达面，管理员面仍原文直出仓储错误（可含表名/SQL 片段），
+	// 与 :175 一带自陈的「本文件同族各面同口径」不符，现全集收口
+	// （monitoring.go + node_traffic.go 的 Err(-2, err.Error()) 差集 ∅）。
 	nodes, err := h.repo.ListMonitorNodes()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorNodeListHandler: ListMonitorNodes failed", err)
 		return
 	}
 
@@ -223,7 +228,7 @@ func (h *Handler) handleNodeMetrics(w http.ResponseWriter, r *http.Request, node
 
 	metrics, err := h.repo.GetNodeMetrics(nodeID, startMs, endMs)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "handleNodeMetrics: GetNodeMetrics failed", err)
 		return
 	}
 
@@ -239,7 +244,7 @@ func (h *Handler) handleNodeMetricsLatest(w http.ResponseWriter, _ *http.Request
 
 	metric, err := h.repo.GetLatestNodeMetric(nodeID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "handleNodeMetricsLatest: GetLatestNodeMetric failed", err)
 		return
 	}
 	if metric == nil {
@@ -445,7 +450,7 @@ func (h *Handler) monitorServiceListHandler(w http.ResponseWriter, r *http.Reque
 
 	monitors, err := h.repo.ListServiceMonitors()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorServiceListHandler: ListServiceMonitors failed", err)
 		return
 	}
 
@@ -574,7 +579,7 @@ func (h *Handler) monitorServiceCreate(w http.ResponseWriter, r *http.Request) {
 	if req.NodeID > 0 {
 		n, err := h.repo.GetNodeByID(req.NodeID)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "monitorServiceCreate: GetNodeByID failed", err)
 			return
 		}
 		if n == nil {
@@ -600,7 +605,7 @@ func (h *Handler) monitorServiceCreate(w http.ResponseWriter, r *http.Request) {
 	// enabled is already normalized above.
 
 	if err := h.repo.CreateServiceMonitor(m); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorServiceCreate: CreateServiceMonitor failed", err)
 		return
 	}
 
@@ -640,7 +645,7 @@ func (h *Handler) monitorServiceUpdate(w http.ResponseWriter, r *http.Request) {
 
 	existing, err := h.repo.GetServiceMonitor(req.ID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorServiceUpdate: GetServiceMonitor failed", err)
 		return
 	}
 	if existing == nil {
@@ -739,7 +744,7 @@ func (h *Handler) monitorServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	if existing.NodeID > 0 {
 		n, err := h.repo.GetNodeByID(existing.NodeID)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "monitorServiceUpdate: GetNodeByID failed", err)
 			return
 		}
 		if n == nil {
@@ -749,7 +754,7 @@ func (h *Handler) monitorServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.UpdateServiceMonitor(existing); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorServiceUpdate: UpdateServiceMonitor failed", err)
 		return
 	}
 
@@ -781,7 +786,7 @@ func (h *Handler) monitorServiceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.DeleteServiceMonitor(req.ID); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorServiceDelete: DeleteServiceMonitor failed", err)
 		return
 	}
 
@@ -813,7 +818,7 @@ func (h *Handler) monitorServiceRun(w http.ResponseWriter, r *http.Request) {
 
 	m, err := h.repo.GetServiceMonitor(req.ID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorServiceRun: GetServiceMonitor failed", err)
 		return
 	}
 	if m == nil {
@@ -823,7 +828,7 @@ func (h *Handler) monitorServiceRun(w http.ResponseWriter, r *http.Request) {
 
 	res, err := h.healthCheck.RunOnce(m)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorServiceRun: RunOnce failed", err)
 		return
 	}
 	if err := h.repo.InsertServiceMonitorResult(res); err != nil {
@@ -863,7 +868,7 @@ func (h *Handler) monitorServiceResultsHandler(w http.ResponseWriter, r *http.Re
 		}
 		results, err := h.repo.GetServiceMonitorResultsByTimeRange(monitorID, startMs, endMs)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "monitorServiceResultsHandler: GetServiceMonitorResultsByTimeRange failed", err)
 			return
 		}
 		response.WriteJSON(w, response.OK(results))
@@ -880,7 +885,7 @@ func (h *Handler) monitorServiceResultsHandler(w http.ResponseWriter, r *http.Re
 
 	results, err := h.repo.GetServiceMonitorResults(monitorID, limit)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorServiceResultsHandler: GetServiceMonitorResults failed", err)
 		return
 	}
 
@@ -948,7 +953,7 @@ func (h *Handler) monitorServiceLatestResultsHandler(w http.ResponseWriter, r *h
 			response.WriteJSON(w, response.OK(cached))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorServiceLatestResultsHandler: GetLatestServiceMonitorResults failed", err)
 		return
 	}
 	if len(cached) == 0 {
@@ -1142,7 +1147,7 @@ func (h *Handler) monitorPermissionList(w http.ResponseWriter, r *http.Request) 
 
 	items, err := h.repo.ListMonitorPermissions()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorPermissionList: ListMonitorPermissions failed", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(items))
@@ -1173,7 +1178,7 @@ func (h *Handler) monitorPermissionAssign(w http.ResponseWriter, r *http.Request
 
 	u, err := h.repo.GetUserByID(req.UserID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorPermissionAssign: GetUserByID failed", err)
 		return
 	}
 	if u == nil {
@@ -1182,7 +1187,7 @@ func (h *Handler) monitorPermissionAssign(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.repo.InsertMonitorPermission(req.UserID, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorPermissionAssign: InsertMonitorPermission failed", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -1208,7 +1213,7 @@ func (h *Handler) monitorPermissionRemove(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.repo.DeleteMonitorPermission(req.UserID); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorPermissionRemove: DeleteMonitorPermission failed", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())

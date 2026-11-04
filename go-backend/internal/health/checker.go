@@ -116,7 +116,17 @@ func (c *Checker) RunOnce(m *model.ServiceMonitor) (*model.ServiceMonitorResult,
 		return nil, errors.New("monitor is nil")
 	}
 	limits := c.loadServiceMonitorLimits()
-	return c.executeCheck(m, time.Now().UnixMilli(), limits), nil
+	result := c.executeCheck(m, time.Now().UnixMilli(), limits)
+	// R1-09-L1：手动执行的结果同步回写内存最新缓存（与调度写缓存
+	// 同点），否则总览读面在缓存完整时走纯缓存快径，手动结果被
+	// 上一调度轮遮蔽直到下一轮。只写 latestResults、不动 lastRun
+	// ——手动执行不重置调度节律；时间戳守卫防与并发调度轮乱序覆盖。
+	c.mu.Lock()
+	if existing := c.latestResults[m.ID]; existing == nil || existing.Timestamp <= result.Timestamp {
+		c.latestResults[m.ID] = result
+	}
+	c.mu.Unlock()
+	return result, nil
 }
 
 func (c *Checker) runChecks(ctx context.Context) {
