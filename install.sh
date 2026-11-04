@@ -52,14 +52,22 @@ get_architecture() {
     esac
 }
 
-# 安装目录
-INSTALL_DIR="/etc/flux_agent"
-FLUX_AGENT_SYSTEMD_SERVICE_FILE="/etc/systemd/system/flux_agent.service"
-FLUX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flux_agent"
-# OpenRC 服务文件里 pidfile="/run/${RC_SVCNAME}.pid"，服务名恒为 flux_agent。
-FLUX_AGENT_OPENRC_PIDFILE="${FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}"
+# 安装目录（现行布局）
+INSTALL_DIR="/etc/flmx_agent"
+FLMX_AGENT_SYSTEMD_SERVICE_FILE="/etc/systemd/system/flmx_agent.service"
+FLMX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flmx_agent"
+# OpenRC 服务文件里 pidfile="/run/${RC_SVCNAME}.pid"，服务名恒为 flmx_agent。
+# pidfile 覆盖变量改名后以 FLMX_ 为准，旧 FLUX_ 变量仅回退读。
+FLMX_AGENT_OPENRC_PIDFILE="${FLMX_AGENT_OPENRC_PIDFILE:-${FLUX_AGENT_OPENRC_PIDFILE:-/run/flmx_agent.pid}}"
+# 改名前的存量布局（识别集，本轮只加不删）：存量节点经脚本更新
+# 迁移到新布局之前一直是这套目录/服务名。更新路据此定位并整体
+# 迁移；卸载与足迹判定对未迁存量仍须认它，故下列旧名常量只用于
+# 「识别/迁移/清除存量」，绝不作为新装落点。
+LEGACY_INSTALL_DIR="/etc/flux_agent"
+LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE="/etc/systemd/system/flux_agent.service"
+LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flux_agent"
 # 用户取消标志（R2-F7-01，与 panel_install.sh 的 PANEL_OP_CANCELLED
-# 同口径）：卸载确认答非 y 时由 uninstall_flux_agent 置 "1"，main
+# 同口径）：卸载确认答非 y 时由 uninstall_flmx_agent 置 "1"，main
 # 见标志不调 delete_self、以 0 退出——取消不是「操作已完成」，脚
 # 本保留以便直接重跑。
 AGENT_OP_CANCELLED=""
@@ -77,7 +85,7 @@ SERVICE_MANAGER="${SERVICE_MANAGER:-}"
 # 侧 go-gost/x/socket/tuning.go 的路径常量一一对应（tuneConfPath /
 # legacyTuneConfPath / tuneBBRModule / tuneShapeUnitPath）。脚本卸载
 # 必须与面板自卸载路径（runAgentUninstall）对齐清理这些文件，见
-# uninstall_flux_agent_host_cleanup。做成变量以便测试夹具改指临时
+# uninstall_flmx_agent_host_cleanup。做成变量以便测试夹具改指临时
 # 目录。
 FLMX_TUNING_SYSCTL_CONF="/etc/sysctl.d/99-flmx-tuning.conf"
 FLMX_TUNING_SYSCTL_CONF_LEGACY="/etc/sysctl.d/99-flvx-tuning.conf"
@@ -451,6 +459,10 @@ resolve_version() {
     echo "$VERSION"
     return 0
   fi
+  if [[ -n "${FLMX_VERSION:-}" ]]; then
+    echo "$FLMX_VERSION"
+    return 0
+  fi
   if [[ -n "${FLUX_VERSION:-}" ]]; then
     echo "$FLUX_VERSION"
     return 0
@@ -702,7 +714,7 @@ show_menu() {
 # 失败时保留脚本并给出失败文案。另补与 panel_install.sh 同口径的
 # /dev/fd 守卫：进程替换/管道执行时 $0 解析出的是 /dev/fd/* 而非脚本
 # 文件，不得对无关路径执行 rm、也不得照印「已删除」。用户取消单独
-# 走 AGENT_OP_CANCELLED 标志（见 uninstall_flux_agent，R2-F7-01）：
+# 走 AGENT_OP_CANCELLED 标志（见 uninstall_flmx_agent，R2-F7-01）：
 # main 见标志不调用本函数、保留脚本并以 0 退出。
 delete_self() {
   local rc="${1:-0}"
@@ -801,8 +813,8 @@ verify_tcpkill_available() {
   return 1
 }
 
-# 检查并安装 tcpkill：安装（install_flux_agent）与更新
-# （update_flux_agent）两个调用点共用本入口，返回前统一复检存在性，
+# 检查并安装 tcpkill：安装（install_flmx_agent）与更新
+# （update_flmx_agent）两个调用点共用本入口，返回前统一复检存在性，
 # 缺失时明示告警（不阻断主流程，恒返回 0）。
 check_and_install_tcpkill() {
   if command -v tcpkill &> /dev/null; then
@@ -874,26 +886,36 @@ agent_config_addr() {
   json_unescape "$addr"
 }
 
-# 共存守卫（C2-02）：$INSTALL_DIR 已有 agent 时，只有其 config 的
+# 足迹判定：某目录是否住着一个 agent——连接配置或任一世代的二进
+# 制（现行 flmx_agent／存量 flux_agent）在位即认。归属守卫、布局
+# 迁移与卸载的存量识别共用这一口径，不另造第二套。
+agent_dir_has_agent() {
+  local dir="$1"
+  [[ -e "$dir/config.json" || -e "$dir/flmx_agent" || -e "$dir/flux_agent" ]]
+}
+
+# 共存守卫（C2-02）：目标目录已有 agent 时，只有其 config 的
 # addr 经 JSON 转义归一化后与本次面板地址逐字相等，才认作本面板
 # 的旧 agent、允许就地覆盖
 # 安装；不相等（或无法判定）一律视为其他面板的 agent——不覆写其
 # config、不删其文件、不停其服务。面板地址变更过的存量节点可在交
 # 互终端人工确认接管；非交互执行（面板一键命令 -a/-s）直接终止并
 # 说明，绝不静默接管。显式逃生口：FLMX_AGENT_TAKEOVER=1 表示运维
-# 已确认归属后自担接管。
+# 已确认归属后自担接管。$1=目标目录（缺省 $INSTALL_DIR；存量布局
+# 迁移前对 $LEGACY_INSTALL_DIR 同口径判定）。
 guard_agent_dir_ownership() {
-  [[ -e "$INSTALL_DIR/config.json" || -e "$INSTALL_DIR/flux_agent" ]] || return 0
+  local guard_dir="${1:-$INSTALL_DIR}"
+  agent_dir_has_agent "$guard_dir" || return 0
   local old_addr
-  old_addr=$(agent_config_addr "$INSTALL_DIR")
+  old_addr=$(agent_config_addr "$guard_dir")
   if [[ -n "$old_addr" && -n "$SERVER_ADDR" && "$old_addr" == "$SERVER_ADDR" ]]; then
     return 0
   fi
   if [[ "${FLMX_AGENT_TAKEOVER:-}" == "1" ]]; then
-    echo "⚠️ FLMX_AGENT_TAKEOVER=1：按显式确认接管 $INSTALL_DIR（原连接地址：${old_addr:-未知}）"
+    echo "⚠️ FLMX_AGENT_TAKEOVER=1：按显式确认接管 $guard_dir（原连接地址：${old_addr:-未知}）"
     return 0
   fi
-  echo "⚠️ $INSTALL_DIR 已存在一个 agent，其连接地址为 ${old_addr:-无法读取}，与本次面板地址 ${SERVER_ADDR:-未提供} 不一致。"
+  echo "⚠️ $guard_dir 已存在一个 agent，其连接地址为 ${old_addr:-无法读取}，与本次面板地址 ${SERVER_ADDR:-未提供} 不一致。"
   echo "   （地址比对已做 JSON 转义归一化，写法差异不会造成误判。）"
   echo "   它可能属于其他面板；继续安装会覆写它的配置、把它改连到本面板，本脚本不会未经确认这样做。"
   if [[ -t 0 ]]; then
@@ -903,7 +925,7 @@ guard_agent_dir_ownership() {
       return 0
     fi
   fi
-  echo "❌ 安装终止：未改动 $INSTALL_DIR 中的任何文件。"
+  echo "❌ 安装终止：未改动 $guard_dir 中的任何文件。"
   echo "   如确认该 agent 属于本面板（例如面板换过地址），请在交互终端重跑并在提示时确认，或设置 FLMX_AGENT_TAKEOVER=1 后重试。"
   return 1
 }
@@ -918,20 +940,22 @@ guard_agent_dir_ownership() {
 # install 守卫同一判据认作本面板旧 agent、静默放行。其余情形一律
 # 先明示当前连接地址、再要求显式确认——该 agent 可能属于其他面
 # 板，更新会替换其二进制、卸载会将其整体删除，绝不静默执行。
-# $1=动作名（更新/卸载），$2=继续执行的后果说明。
+# $1=动作名（更新/卸载），$2=继续执行的后果说明，$3=目标目录
+# （缺省 $INSTALL_DIR；存量布局由调用方以 $LEGACY_INSTALL_DIR 传入
+# 同口径判定）。
 guard_agent_dir_ownership_menu() {
-  local action="$1" consequence="$2"
-  [[ -e "$INSTALL_DIR/config.json" || -e "$INSTALL_DIR/flux_agent" ]] || return 0
+  local action="$1" consequence="$2" guard_dir="${3:-$INSTALL_DIR}"
+  agent_dir_has_agent "$guard_dir" || return 0
   local old_addr
-  old_addr=$(agent_config_addr "$INSTALL_DIR")
+  old_addr=$(agent_config_addr "$guard_dir")
   if [[ -n "$old_addr" && -n "${SERVER_ADDR:-}" && "$old_addr" == "$SERVER_ADDR" ]]; then
     return 0
   fi
   if [[ "${FLMX_AGENT_TAKEOVER:-}" == "1" ]]; then
-    echo "⚠️ FLMX_AGENT_TAKEOVER=1：按显式确认对 $INSTALL_DIR 执行${action}（当前连接地址：${old_addr:-无法读取}）"
+    echo "⚠️ FLMX_AGENT_TAKEOVER=1：按显式确认对 $guard_dir 执行${action}（当前连接地址：${old_addr:-无法读取}）"
     return 0
   fi
-  echo "⚠️ $INSTALL_DIR 中已有 agent，当前连接地址为 ${old_addr:-无法读取}。"
+  echo "⚠️ $guard_dir 中已有 agent，当前连接地址为 ${old_addr:-无法读取}。"
   echo "   （地址读取已做 JSON 转义归一化，写法差异不会造成误判。）"
   echo "   它可能属于其他面板；${consequence}"
   if [[ -t 0 ]]; then
@@ -941,12 +965,12 @@ guard_agent_dir_ownership_menu() {
       return 0
     fi
   fi
-  echo "❌ ${action}终止：未改动 $INSTALL_DIR 中的任何文件。"
+  echo "❌ ${action}终止：未改动 $guard_dir 中的任何文件。"
   echo "   如确认该 agent 属于本面板，请在交互终端重跑并在提示时确认，或设置 FLMX_AGENT_TAKEOVER=1 后重试。"
   return 1
 }
 
-write_flux_agent_config() {
+write_flmx_agent_config() {
   local path="$1"
   # GitHub 代理落盘口径（1.7.7）：agent 的下载路由恒由内置候选测速
   # 直选决定——面板内升级不读落盘 proxy 字段，面板下发的 proxyUrl
@@ -996,21 +1020,248 @@ ensure_service_manager() {
   return 1
 }
 
-flux_agent_service_exists() {
+flmx_agent_service_exists() {
   ensure_service_manager || return 1
 
   case "$SERVICE_MANAGER" in
     systemd)
-      [[ -f "$FLUX_AGENT_SYSTEMD_SERVICE_FILE" ]] || \
-        systemctl list-units --full -all 2>/dev/null | grep -Fq "flux_agent.service"
+      [[ -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" ]] || \
+        systemctl list-units --full -all 2>/dev/null | grep -Fq "flmx_agent.service"
       ;;
     openrc)
-      [[ -f "$FLUX_AGENT_OPENRC_SERVICE_FILE" ]]
+      [[ -f "$FLMX_AGENT_OPENRC_SERVICE_FILE" ]]
       ;;
   esac
 }
 
-stop_flux_agent_service() {
+stop_flmx_agent_service() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl stop flmx_agent 2>/dev/null || true
+      ;;
+    openrc)
+      rc-service flmx_agent stop 2>/dev/null || true
+      ;;
+  esac
+}
+
+disable_flmx_agent_service() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl disable flmx_agent 2>/dev/null || true
+      ;;
+    openrc)
+      rc-update del flmx_agent default 2>/dev/null || true
+      ;;
+  esac
+}
+
+write_flmx_agent_service() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      mkdir -p "$(dirname "$FLMX_AGENT_SYSTEMD_SERVICE_FILE")"
+      cat > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" <<EOF
+[Unit]
+Description=Flmx_agent Proxy Service
+After=network.target
+
+[Service]
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/flmx_agent
+Environment=GODEBUG=disablethp=1
+Restart=on-failure
+# Core dumps of the agent or its helpers must never pile up in the
+# data directory (the binary also zeroes RLIMIT_CORE itself at
+# startup and sweeps stockpiled core files, see go-gost/coredump.go).
+LimitCORE=0
+# R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
+# discarded the agent's startup logs, so a poisoned gost.json left no
+# diagnosable failure reason. Journal keeps them queryable via
+# journalctl -u flmx_agent. The binary additionally appends startup
+# failures to agent-startup.log next to agent-upgrade.log (go-gost/main.go).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=flmx_agent
+
+[Install]
+WantedBy=multi-user.target
+EOF
+      ;;
+    openrc)
+      mkdir -p "$(dirname "$FLMX_AGENT_OPENRC_SERVICE_FILE")"
+      cat > "$FLMX_AGENT_OPENRC_SERVICE_FILE" <<EOF
+#!/sbin/openrc-run
+
+name="flmx_agent"
+description="Flmx_agent Proxy Service"
+command="$INSTALL_DIR/flmx_agent"
+directory="$INSTALL_DIR"
+command_background="yes"
+pidfile="/run/\${RC_SVCNAME}.pid"
+# R17-C (R17-X-01): same rationale as the systemd unit — /dev/null
+# discarded startup logs; keep them in files for post-mortem diagnosis.
+output_log="/var/log/flmx_agent.log"
+error_log="/var/log/flmx_agent.err.log"
+
+depend() {
+  need net
+}
+EOF
+      chmod +x "$FLMX_AGENT_OPENRC_SERVICE_FILE"
+      ;;
+  esac
+}
+
+enable_and_start_flmx_agent_service() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl daemon-reload
+      systemctl enable flmx_agent
+      # R2X-020 (R2-J-02): 与 agent 侧 scriptStartCommand 同口径——
+      # start 前先清 failed 态，否则 flap 烧穿启动限速后 start 会被
+      # 「Start request repeated too quickly」拒绝。OpenRC 无此限速。
+      systemctl reset-failed flmx_agent 2>/dev/null || true
+      systemctl start flmx_agent
+      ;;
+    openrc)
+      rc-update add flmx_agent default
+      rc-service flmx_agent start
+      ;;
+  esac
+}
+
+start_flmx_agent_service() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      # R2X-020 (R2-J-02): 同 enable_and_start——start 前清 failed 态
+      # （更新/回滚三调用点共用本函数，一处收口全覆盖）。
+      systemctl reset-failed flmx_agent 2>/dev/null || true
+      systemctl start flmx_agent
+      ;;
+    openrc)
+      rc-service flmx_agent start
+      ;;
+  esac
+}
+
+flmx_agent_service_is_active() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl is-active --quiet flmx_agent
+      ;;
+    openrc)
+      rc-service flmx_agent status >/dev/null 2>&1
+      ;;
+  esac
+}
+
+flmx_agent_service_status() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl is-active flmx_agent 2>/dev/null || true
+      ;;
+    openrc)
+      rc-service flmx_agent status 2>/dev/null || true
+      ;;
+  esac
+}
+
+flmx_agent_main_pid() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl show -p MainPID --value flmx_agent 2>/dev/null
+      ;;
+    openrc)
+      cat "${FLMX_AGENT_OPENRC_PIDFILE:-/run/flmx_agent.pid}" 2>/dev/null
+      ;;
+  esac
+}
+
+# X-P2-11 (J-01): 与 agent 侧 flmx_agent_health_ok
+# （go-gost/x/socket/websocket_reporter.go）同规则的双采样判活：
+# 间隔 2 秒两次采样，每次都必须 is-active，且主 PID（systemd
+# MainPID / OpenRC pidfile PID）非空、非 0、两次一致。单次采样会
+# 把存活数秒后倒下的 flap 二进制在存活窗口内误判为活（见 R4-N2）。
+flmx_agent_health_ok() {
+  ensure_service_manager || return 1
+
+  local p1 p2
+  p1=$(flmx_agent_main_pid) || p1=""
+  p1=$(printf '%s' "$p1" | tr -d '[:space:]')
+  if ! flmx_agent_service_is_active; then
+    return 1
+  fi
+  sleep 2
+  p2=$(flmx_agent_main_pid) || p2=""
+  p2=$(printf '%s' "$p2" | tr -d '[:space:]')
+  if ! flmx_agent_service_is_active; then
+    return 1
+  fi
+  [[ -n "$p1" && "$p1" != "0" && "$p1" == "$p2" ]]
+}
+
+remove_flmx_agent_service() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      rm -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+      systemctl daemon-reload 2>/dev/null || true
+      ;;
+    openrc)
+      rm -f "$FLMX_AGENT_OPENRC_SERVICE_FILE"
+      ;;
+  esac
+}
+
+flmx_agent_service_status_hint() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      echo "systemctl status flmx_agent --no-pager"
+      ;;
+    openrc)
+      echo "rc-service flmx_agent status"
+      ;;
+  esac
+}
+
+# ---- 存量布局（改名前）服务助手：仅供布局迁移与卸载识别存量 ----
+# 与上方现行组同形态、对象是旧服务名 flux_agent。存量节点迁移/
+# 卸载完成前旧服务必须能被准确停用与摘除；新装路径绝不调用本组。
+
+legacy_flux_agent_service_exists() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      [[ -f "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" ]] || \
+        systemctl list-units --full -all 2>/dev/null | grep -Fq "flux_agent.service"
+      ;;
+    openrc)
+      [[ -f "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE" ]]
+      ;;
+  esac
+}
+
+stop_legacy_flux_agent_service() {
   ensure_service_manager || return 1
 
   case "$SERVICE_MANAGER" in
@@ -1023,7 +1274,7 @@ stop_flux_agent_service() {
   esac
 }
 
-disable_flux_agent_service() {
+disable_legacy_flux_agent_service() {
   ensure_service_manager || return 1
 
   case "$SERVICE_MANAGER" in
@@ -1036,187 +1287,66 @@ disable_flux_agent_service() {
   esac
 }
 
-write_flux_agent_service() {
+remove_legacy_flux_agent_service() {
   ensure_service_manager || return 1
 
   case "$SERVICE_MANAGER" in
     systemd)
-      mkdir -p "$(dirname "$FLUX_AGENT_SYSTEMD_SERVICE_FILE")"
-      cat > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE" <<EOF
-[Unit]
-Description=Flux_agent Proxy Service
-After=network.target
-
-[Service]
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/flux_agent
-Environment=GODEBUG=disablethp=1
-Restart=on-failure
-# Core dumps of the agent or its helpers must never pile up in the
-# data directory (the binary also zeroes RLIMIT_CORE itself at
-# startup and sweeps stockpiled core files, see go-gost/coredump.go).
-LimitCORE=0
-# R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
-# discarded the agent's startup logs, so a poisoned gost.json left no
-# diagnosable failure reason. Journal keeps them queryable via
-# journalctl -u flux_agent. The binary additionally appends startup
-# failures to agent-startup.log next to agent-upgrade.log (go-gost/main.go).
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=flux_agent
-
-[Install]
-WantedBy=multi-user.target
-EOF
-      ;;
-    openrc)
-      mkdir -p "$(dirname "$FLUX_AGENT_OPENRC_SERVICE_FILE")"
-      cat > "$FLUX_AGENT_OPENRC_SERVICE_FILE" <<EOF
-#!/sbin/openrc-run
-
-name="flux_agent"
-description="Flux_agent Proxy Service"
-command="$INSTALL_DIR/flux_agent"
-directory="$INSTALL_DIR"
-command_background="yes"
-pidfile="/run/\${RC_SVCNAME}.pid"
-# R17-C (R17-X-01): same rationale as the systemd unit — /dev/null
-# discarded startup logs; keep them in files for post-mortem diagnosis.
-output_log="/var/log/flux_agent.log"
-error_log="/var/log/flux_agent.err.log"
-
-depend() {
-  need net
-}
-EOF
-      chmod +x "$FLUX_AGENT_OPENRC_SERVICE_FILE"
-      ;;
-  esac
-}
-
-enable_and_start_flux_agent_service() {
-  ensure_service_manager || return 1
-
-  case "$SERVICE_MANAGER" in
-    systemd)
-      systemctl daemon-reload
-      systemctl enable flux_agent
-      # R2X-020 (R2-J-02): 与 agent 侧 scriptStartCommand 同口径——
-      # start 前先清 failed 态，否则 flap 烧穿启动限速后 start 会被
-      # 「Start request repeated too quickly」拒绝。OpenRC 无此限速。
-      systemctl reset-failed flux_agent 2>/dev/null || true
-      systemctl start flux_agent
-      ;;
-    openrc)
-      rc-update add flux_agent default
-      rc-service flux_agent start
-      ;;
-  esac
-}
-
-start_flux_agent_service() {
-  ensure_service_manager || return 1
-
-  case "$SERVICE_MANAGER" in
-    systemd)
-      # R2X-020 (R2-J-02): 同 enable_and_start——start 前清 failed 态
-      # （更新/回滚三调用点共用本函数，一处收口全覆盖）。
-      systemctl reset-failed flux_agent 2>/dev/null || true
-      systemctl start flux_agent
-      ;;
-    openrc)
-      rc-service flux_agent start
-      ;;
-  esac
-}
-
-flux_agent_service_is_active() {
-  ensure_service_manager || return 1
-
-  case "$SERVICE_MANAGER" in
-    systemd)
-      systemctl is-active --quiet flux_agent
-      ;;
-    openrc)
-      rc-service flux_agent status >/dev/null 2>&1
-      ;;
-  esac
-}
-
-flux_agent_service_status() {
-  ensure_service_manager || return 1
-
-  case "$SERVICE_MANAGER" in
-    systemd)
-      systemctl is-active flux_agent 2>/dev/null || true
-      ;;
-    openrc)
-      rc-service flux_agent status 2>/dev/null || true
-      ;;
-  esac
-}
-
-flux_agent_main_pid() {
-  ensure_service_manager || return 1
-
-  case "$SERVICE_MANAGER" in
-    systemd)
-      systemctl show -p MainPID --value flux_agent 2>/dev/null
-      ;;
-    openrc)
-      cat "${FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}" 2>/dev/null
-      ;;
-  esac
-}
-
-# X-P2-11 (J-01): 与 agent 侧 flmx_agent_health_ok
-# （go-gost/x/socket/websocket_reporter.go）同规则的双采样判活：
-# 间隔 2 秒两次采样，每次都必须 is-active，且主 PID（systemd
-# MainPID / OpenRC pidfile PID）非空、非 0、两次一致。单次采样会
-# 把存活数秒后倒下的 flap 二进制在存活窗口内误判为活（见 R4-N2）。
-flux_agent_health_ok() {
-  ensure_service_manager || return 1
-
-  local p1 p2
-  p1=$(flux_agent_main_pid) || p1=""
-  p1=$(printf '%s' "$p1" | tr -d '[:space:]')
-  if ! flux_agent_service_is_active; then
-    return 1
-  fi
-  sleep 2
-  p2=$(flux_agent_main_pid) || p2=""
-  p2=$(printf '%s' "$p2" | tr -d '[:space:]')
-  if ! flux_agent_service_is_active; then
-    return 1
-  fi
-  [[ -n "$p1" && "$p1" != "0" && "$p1" == "$p2" ]]
-}
-
-remove_flux_agent_service() {
-  ensure_service_manager || return 1
-
-  case "$SERVICE_MANAGER" in
-    systemd)
-      rm -f "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+      rm -f "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE"
       systemctl daemon-reload 2>/dev/null || true
       ;;
     openrc)
-      rm -f "$FLUX_AGENT_OPENRC_SERVICE_FILE"
+      rm -f "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE"
       ;;
   esac
 }
 
-flux_agent_service_status_hint() {
+# 存量布局迁移（改名）：把改名前的安装（$LEGACY_INSTALL_DIR＋
+# flux_agent 服务）整体迁到现行布局（$INSTALL_DIR＋flmx_agent
+# 服务）。调用前提：归属守卫已对存量目录通过、新目录尚无 agent
+# （调用方以 agent_dir_has_agent 判定）。步骤：停用并摘除旧服务
+# → 整目录搬移（config.json、gost.json、调优原值备份、内核目录、
+# 序号状态等内容逐字随目录走，零丢失）→ 二进制与回滚工件改新名
+# （.old/.old.meta/.bak 是回滚源与配对记录，随之改名保持代际对
+# 应；升级暂存半成品是未完成操作的残留，清掉不迁）→ 写新服务、
+# 启用并启动 → 与安装/更新同口径双采样判活。判活失败返回 1 并点
+# 名排查命令；此时目录已迁、旧服务已摘，人工重跑安装（以本次参
+# 数重写配置并换新二进制）或检查日志即可续上，不假装回滚。
+migrate_legacy_agent_install() {
   ensure_service_manager || return 1
 
-  case "$SERVICE_MANAGER" in
-    systemd)
-      echo "systemctl status flux_agent --no-pager"
-      ;;
-    openrc)
-      echo "rc-service flux_agent status"
-      ;;
-  esac
+  echo "🔀 检测到改名前的存量安装（$LEGACY_INSTALL_DIR），正在迁移到新布局 $INSTALL_DIR ..."
+
+  if legacy_flux_agent_service_exists; then
+    stop_legacy_flux_agent_service
+    disable_legacy_flux_agent_service
+  fi
+  remove_legacy_flux_agent_service
+
+  if [[ -d "$LEGACY_INSTALL_DIR" ]]; then
+    mv "$LEGACY_INSTALL_DIR" "$INSTALL_DIR" || { echo "❌ 迁移安装目录失败：$LEGACY_INSTALL_DIR → $INSTALL_DIR（存量目录未改动，请检查后重试）"; return 1; }
+  else
+    mkdir -p "$INSTALL_DIR"
+  fi
+
+  [[ -f "$INSTALL_DIR/flux_agent" ]] && mv -f "$INSTALL_DIR/flux_agent" "$INSTALL_DIR/flmx_agent"
+  [[ -f "$INSTALL_DIR/flux_agent.old" ]] && mv -f "$INSTALL_DIR/flux_agent.old" "$INSTALL_DIR/flmx_agent.old"
+  [[ -f "$INSTALL_DIR/flux_agent.old.meta" ]] && mv -f "$INSTALL_DIR/flux_agent.old.meta" "$INSTALL_DIR/flmx_agent.old.meta"
+  [[ -f "$INSTALL_DIR/flux_agent.bak" ]] && mv -f "$INSTALL_DIR/flux_agent.bak" "$INSTALL_DIR/flmx_agent.bak"
+  rm -f "$INSTALL_DIR"/.flux_agent.upgrade-* "$INSTALL_DIR"/.flux_agent.rollback-* "$INSTALL_DIR"/.flux_agent.upgrade-rollback-* "$INSTALL_DIR/flux_agent.new"
+
+  write_flmx_agent_service
+  enable_and_start_flmx_agent_service
+
+  echo "🔄 检查迁移后服务状态..."
+  sleep 3
+  if flmx_agent_health_ok; then
+    echo "✅ 存量安装已迁移到新布局：$INSTALL_DIR（服务名 flmx_agent，配置与状态原样保留）"
+    return 0
+  fi
+  echo "❌ 迁移后服务启动失败，请执行以下命令查看状态："
+  flmx_agent_service_status_hint
+  return 1
 }
 
 # 旧式 gost 形态 agent 的服务文件指纹扫描：命中「WorkingDirectory
@@ -1366,8 +1496,8 @@ while getopts "a:s:" opt; do
 done
 
 # 安装功能
-install_flux_agent() {
-  echo "🚀 开始安装 flux_agent..."
+install_flmx_agent() {
+  echo "🚀 开始安装 flmx_agent..."
 
   ensure_download_url_initialized || exit 1
 
@@ -1377,42 +1507,51 @@ install_flux_agent() {
   # 归属；不属于本面板时终止，不留任何改动。
   guard_agent_dir_ownership || exit 1
 
+  # 存量布局迁移：新目录无 agent、存量目录有 → 先对存量目录同口
+  # 径过一遍归属守卫，再整体迁到新布局，之后按新装流程继续（配
+  # 置以本次 -a/-s 参数重写、二进制换新版）。守卫不过则迁移不发
+  # 生、存量原样不动。
+  if ! agent_dir_has_agent "$INSTALL_DIR" && agent_dir_has_agent "$LEGACY_INSTALL_DIR"; then
+    guard_agent_dir_ownership "$LEGACY_INSTALL_DIR" || exit 1
+    migrate_legacy_agent_install || exit 1
+  fi
+
   # 检查并安装 tcpkill
   check_and_install_tcpkill
   ensure_service_manager || exit 1
 
   mkdir -p "$INSTALL_DIR"
 
-  local tmp_binary="$INSTALL_DIR/flux_agent.new"
+  local tmp_binary="$INSTALL_DIR/flmx_agent.new"
 
-  # 下载 flux_agent（内置路线逐个尝试、首成即用；同源校验在
+  # 下载 flmx_agent（内置路线逐个尝试、首成即用；同源校验在
   # download_agent_binary 内完成，失败自动切下一条路线）
-  echo "⬇️ 下载 flux_agent 中..."
+  echo "⬇️ 下载 flmx_agent 中..."
   download_agent_binary "$tmp_binary" || { rm -f "$tmp_binary"; echo "❌ 下载失败，请检查网络或下载链接。"; exit 1; }
   cleanup_legacy_gost_installation
 
-  # F-048: 停止并禁用已有服务移到下载+校验成功之后（与 update_flux_agent
+  # F-048: 停止并禁用已有服务移到下载+校验成功之后（与 update_flmx_agent
   # 同序）。旧顺序先 stop+disable 再下载，下载/校验失败即 exit 1，节点
   # agent 停摆且开机不自启、必须人工干预；现在失败时旧服务保持运行、
   # 自启状态不变，失败只是「没装上新版」。
-  if flux_agent_service_exists; then
-    echo "🔍 检测到已存在的flux_agent服务"
-    stop_flux_agent_service
+  if flmx_agent_service_exists; then
+    echo "🔍 检测到已存在的flmx_agent服务"
+    stop_flmx_agent_service
     echo "🛑 停止服务"
-    disable_flux_agent_service
+    disable_flmx_agent_service
     echo "🚫 禁用自启"
   fi
-  mv "$tmp_binary" "$INSTALL_DIR/flux_agent"
-  chmod +x "$INSTALL_DIR/flux_agent"
+  mv "$tmp_binary" "$INSTALL_DIR/flmx_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
   echo "✅ 下载完成"
 
   # 打印版本
-  echo "🔎 flux_agent 版本：$($INSTALL_DIR/flux_agent -V)"
+  echo "🔎 flmx_agent 版本：$($INSTALL_DIR/flmx_agent -V)"
 
   # 写入 config.json (安装时总是创建新的)
   CONFIG_FILE="$INSTALL_DIR/config.json"
   echo "📄 创建新配置: config.json"
-  write_flux_agent_config "$CONFIG_FILE"
+  write_flmx_agent_config "$CONFIG_FILE"
 
   # 写入 gost.json
   GOST_CONFIG="$INSTALL_DIR/gost.json"
@@ -1429,36 +1568,36 @@ EOF
   chmod 600 "$INSTALL_DIR"/*.json
 
   # 创建 systemd 或 OpenRC 服务
-  write_flux_agent_service
+  write_flmx_agent_service
 
   # 启动服务
-  enable_and_start_flux_agent_service
+  enable_and_start_flmx_agent_service
 
   # 检查状态
   # R2X-019 (R2-J-01): 判活结果必须进返回码——main（X-P3-6）只传播
   # 本函数给出的信号；旧实现失败分支末条是 echo 提示、恒返回 0，
   # 以退出码判断成败的自动化部署（-a/-s）会误判安装成功。
   # R4B11-003: 判活口径与更新/回滚路径统一（X-P2-11）：先沉降 3 秒
-  # 让 flap 二进制越过最初的存活窗口，再走 flux_agent_health_ok 双
+  # 让 flap 二进制越过最初的存活窗口，再走 flmx_agent_health_ok 双
   # 采样（间隔 2 秒、主 PID 稳定）。旧实现启动后立即单次 is-active，
   # 同样的 flap 形态在全新安装时会被误报「安装完成」。
   echo "🔄 检查服务状态..."
   sleep 3
-  if flux_agent_health_ok; then
-    echo "✅ 安装完成，flux_agent服务已启动并设置为开机启动。"
+  if flmx_agent_health_ok; then
+    echo "✅ 安装完成，flmx_agent服务已启动并设置为开机启动。"
     echo "📁 配置目录: $INSTALL_DIR"
-    echo "🔧 服务状态: $(flux_agent_service_status)"
+    echo "🔧 服务状态: $(flmx_agent_service_status)"
     # OBS-R7-J-01 (folded into R7-J-01): "service active" only proves
     # the process is up, not that the node connected to the panel.
     # Tell the operator the actual online check and where the
     # WebSocket connection log lives when it does not come online.
     echo "📍 节点连接地址: $SERVER_ADDR"
     echo "✔️ 请回面板「节点管理」页确认该节点显示为在线——安装完成只表示服务已启动，不代表已连上面板。"
-    echo "   若面板未显示在线，请在节点机执行 journalctl -u flux_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flux_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
+    echo "   若面板未显示在线，请在节点机执行 journalctl -u flmx_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flmx_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
     return 0
   else
-    echo "❌ flux_agent服务启动失败，请执行以下命令查看状态："
-    flux_agent_service_status_hint
+    echo "❌ flmx_agent服务启动失败，请执行以下命令查看状态："
+    flmx_agent_service_status_hint
     return 1
   fi
 }
@@ -1524,23 +1663,33 @@ extract_leading_semver() {
 
 # 现装 agent 的语义版本（取自二进制 -V）；取不到/不可解析时失败，
 # 调用方按不可比处理。
-flux_agent_installed_version() {
+flmx_agent_installed_version() {
   local raw
-  [[ -x "$INSTALL_DIR/flux_agent" ]] || return 1
-  raw=$("$INSTALL_DIR/flux_agent" -V 2>/dev/null) || return 1
+  [[ -x "$INSTALL_DIR/flmx_agent" ]] || return 1
+  raw=$("$INSTALL_DIR/flmx_agent" -V 2>/dev/null) || return 1
   extract_leading_semver "$raw"
 }
 
 # 更新功能
-update_flux_agent() {
-  echo "🔄 开始更新 flux_agent..."
+update_flmx_agent() {
+  echo "🔄 开始更新 flmx_agent..."
 
-  # 归属守卫（AI-06）：在下载、停服、替换二进制之前先判定既有
-  # agent 的归属；无法确认属于本面板时终止，不留任何改动。
-  guard_agent_dir_ownership_menu "更新" "继续更新会把它的二进制替换为本面板的构建版本（连接地址不变、仍连其所属面板）。" || return 1
+  # 布局解析（改名迁移）：新目录无 agent、存量目录有 → 该节点尚
+  # 是改名前的存量布局。先对存量目录过归属守卫（AI-06 同口径），
+  # 再整体迁到新布局，然后按现行布局走完本次更新（二进制换新版
+  # 本、配置不动）。迁移只换目录与服务名、不换二进制版本，下方
+  # 防降级判定仍以迁移后的现装版本为准。
+  if ! agent_dir_has_agent "$INSTALL_DIR" && agent_dir_has_agent "$LEGACY_INSTALL_DIR"; then
+    guard_agent_dir_ownership_menu "更新" "继续更新会先把它的安装目录与服务名迁移为新名（flmx_agent），再把二进制替换为本面板的构建版本（连接地址不变、仍连其所属面板）。" "$LEGACY_INSTALL_DIR" || return 1
+    migrate_legacy_agent_install || return 1
+  else
+    # 归属守卫（AI-06）：在下载、停服、替换二进制之前先判定既有
+    # agent 的归属；无法确认属于本面板时终止，不留任何改动。
+    guard_agent_dir_ownership_menu "更新" "继续更新会把它的二进制替换为本面板的构建版本（连接地址不变、仍连其所属面板）。" || return 1
+  fi
 
   if [[ ! -d "$INSTALL_DIR" ]]; then
-    echo "❌ flux_agent 未安装，请先选择安装。"
+    echo "❌ flmx_agent 未安装，请先选择安装。"
     return 1
   fi
 
@@ -1552,7 +1701,7 @@ update_flux_agent() {
   # panel_install 脚本更新）均已有此门，脚本路径此前独缺。任一侧
   # 不可比时沿用 panel_version_cmp 既有放行口径（V-19），不拦截。
   local current_version cmp_result
-  current_version=$(flux_agent_installed_version || true)
+  current_version=$(flmx_agent_installed_version || true)
   cmp_result=$(panel_version_cmp "${RESOLVED_VERSION:-}" "$current_version" || true)
   if [[ "$cmp_result" == "-1" ]]; then
     echo "❌ 目标版本 ${RESOLVED_VERSION:-} 低于当前版本 $current_version，拒绝降级更新。如确需降级请手动处理。"
@@ -1571,13 +1720,13 @@ update_flux_agent() {
   # 先下载新版本（内置路线逐个尝试、首成即用；同源校验在
   # download_agent_binary 内完成，失败自动切下一条路线）
   echo "⬇️ 下载最新版本..."
-  download_agent_binary "$INSTALL_DIR/flux_agent.new" || { rm -f "$INSTALL_DIR/flux_agent.new"; echo "❌ 下载失败。"; return 1; }
+  download_agent_binary "$INSTALL_DIR/flmx_agent.new" || { rm -f "$INSTALL_DIR/flmx_agent.new"; echo "❌ 下载失败。"; return 1; }
   cleanup_legacy_gost_installation
 
   # 停止服务
-  if flux_agent_service_exists; then
-    echo "🛑 停止 flux_agent 服务..."
-    stop_flux_agent_service
+  if flmx_agent_service_exists; then
+    echo "🛑 停止 flmx_agent 服务..."
+    stop_flmx_agent_service
   fi
 
   # A9: 备份旧版本，失败可回滚
@@ -1589,69 +1738,69 @@ update_flux_agent() {
   # 制逐字未动，重启方才停掉的服务恢复更新前状态，并清掉本次
   # 下载的 .new 与可能写了一半的 .bak（半成品备份不得被后续
   # 回滚误认为可用的回滚源）。
-  if [[ -f "$INSTALL_DIR/flux_agent" ]]; then
+  if [[ -f "$INSTALL_DIR/flmx_agent" ]]; then
     echo "💾 备份当前版本..."
-    if ! cp -f "$INSTALL_DIR/flux_agent" "$INSTALL_DIR/flux_agent.bak"; then
+    if ! cp -f "$INSTALL_DIR/flmx_agent" "$INSTALL_DIR/flmx_agent.bak"; then
       echo "❌ 备份当前版本失败（磁盘空间不足或拷贝出错），已中止更新：当前版本未被替换、仍是更新前的版本。"
-      rm -f "$INSTALL_DIR/flux_agent.bak" "$INSTALL_DIR/flux_agent.new"
-      if flux_agent_service_exists; then
+      rm -f "$INSTALL_DIR/flmx_agent.bak" "$INSTALL_DIR/flmx_agent.new"
+      if flmx_agent_service_exists; then
         echo "🔄 正在重新启动更新前已停止的服务..."
-        start_flux_agent_service
+        start_flmx_agent_service
       fi
       return 1
     fi
   fi
 
   # 替换文件
-  mv "$INSTALL_DIR/flux_agent.new" "$INSTALL_DIR/flux_agent"
-  chmod +x "$INSTALL_DIR/flux_agent"
+  mv "$INSTALL_DIR/flmx_agent.new" "$INSTALL_DIR/flmx_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
 
   # 烟雾测试：新二进制必须可执行
-  if ! "$INSTALL_DIR/flux_agent" -V >/dev/null 2>&1; then
+  if ! "$INSTALL_DIR/flmx_agent" -V >/dev/null 2>&1; then
     echo "❌ 新版本二进制无法执行，正在回滚..."
-    rollback_flux_agent
+    rollback_flmx_agent
     return 1
   fi
 
   # 打印版本
-  echo "🔎 新版本：$($INSTALL_DIR/flux_agent -V)"
+  echo "🔎 新版本：$($INSTALL_DIR/flmx_agent -V)"
 
   # 重启服务
   echo "🔄 重启服务..."
-  start_flux_agent_service
+  start_flmx_agent_service
 
   # 回滚检查：新版本服务起不来则恢复备份。
   # X-P2-11 (J-01): 与 agent 侧升级脚本同口径——先等待 3 秒让
   # flap 形态（二进制启动后数秒才倒下）越过最初的存活窗口，再走
-  # flux_agent_health_ok 双采样（间隔 2 秒、PID 稳定，采样点约在
+  # flmx_agent_health_ok 双采样（间隔 2 秒、PID 稳定，采样点约在
   # 启动后 3 秒与 5 秒）。旧实现 sleep 2 后单次 is-active 恰会命中
   # flap 窗口、误判成功并删掉 .bak 回滚源。
   sleep 3
-  if ! flux_agent_health_ok; then
+  if ! flmx_agent_health_ok; then
     echo "❌ 新版本服务启动失败，正在回滚到备份版本..."
-    rollback_flux_agent
+    rollback_flmx_agent
     return 1
   fi
-  rm -f "$INSTALL_DIR/flux_agent.bak"
+  rm -f "$INSTALL_DIR/flmx_agent.bak"
 
   echo "✅ 更新完成，服务已重新启动。"
   # R8-J-B: 与安装路径完成块同口径（OBS-R7-J-01 的上线确认指引）——
   # 服务重启只证明进程已启动，不代表节点已连上面板；更新路径此前
   # 只有一行成功断言、无确认指引、无日志指针。
   echo "✔️ 请回面板「节点管理」页确认该节点显示为在线——更新完成只表示服务已重新启动，不代表已连上面板。"
-  echo "   若面板未显示在线，请在节点机执行 journalctl -u flux_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flux_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
+  echo "   若面板未显示在线，请在节点机执行 journalctl -u flmx_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flmx_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
 }
 
 # A9: 更新失败时恢复备份的旧版本并重启
-rollback_flux_agent() {
-  if [[ -f "$INSTALL_DIR/flux_agent.bak" ]]; then
-    mv -f "$INSTALL_DIR/flux_agent.bak" "$INSTALL_DIR/flux_agent"
-    chmod +x "$INSTALL_DIR/flux_agent"
-    start_flux_agent_service
+rollback_flmx_agent() {
+  if [[ -f "$INSTALL_DIR/flmx_agent.bak" ]]; then
+    mv -f "$INSTALL_DIR/flmx_agent.bak" "$INSTALL_DIR/flmx_agent"
+    chmod +x "$INSTALL_DIR/flmx_agent"
+    start_flmx_agent_service
     # 观察 O-1（随 R2X-020 顺手对齐，不计数）：回滚后判活改与更新
-    # 路径/agent 侧同口径的双采样（flux_agent_health_ok），单次采样
+    # 路径/agent 侧同口径的双采样（flmx_agent_health_ok），单次采样
     # 会把回滚二进制的短暂存活窗口误报为成功。
-    if flux_agent_health_ok; then
+    if flmx_agent_health_ok; then
       echo "✅ 已回滚到旧版本并重启成功。"
     else
       echo "❌ 回滚后服务仍未启动，请手动检查：$INSTALL_DIR"
@@ -1683,10 +1832,11 @@ rollback_flux_agent() {
 # 板驱动的 agent 自卸载对 nft 三表无条件删除（无足迹守卫），本
 # 脚本则在有足迹时跳过该表并点名——两路删除集仅在无足迹时相同
 # （99-flvx-tuning.conf 两路同有足迹守卫，不在此列）。
-uninstall_flux_agent_host_cleanup() {
+uninstall_flmx_agent_host_cleanup() {
+  local target_dir="${1:-$INSTALL_DIR}"
   local failures=0
-  local engine_dir="$INSTALL_DIR/tcpfit"
-  local backup_file="$INSTALL_DIR/tuning-backup.json"
+  local engine_dir="$target_dir/tcpfit"
+  local backup_file="$target_dir/tuning-backup.json"
 
   # 1) 队列整形恢复：有整形前队列备份（original-qdisc.sh）则回
   # 放，与面板路径 restoreTuneQueues 执行的是同一份脚本。只有
@@ -1838,8 +1988,8 @@ uninstall_flux_agent_host_cleanup() {
 # systemd 单元文件与 systemctl edit 落盘的 drop-in 覆盖文件
 # （<单元>.d/*.conf）——脚本形态下该变量只经这两处进入 agent 进程
 # 环境（见 doc/guide/install.md「内核目录覆盖」节）。无配置输出空。
-configured_kernel_dir() {
-  local unit="$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+configured_kernel_dir_for() {
+  local unit="$1"
   local files="$unit"
   local dropin
   for dropin in "${unit}.d"/*.conf; do
@@ -1854,8 +2004,18 @@ configured_kernel_dir() {
   printf '%s' "${dir%/}"
 }
 
+# 现行单元优先、存量单元回退（未迁存量节点的覆盖只写在旧单元里）。
+configured_kernel_dir() {
+  local dir
+  dir=$(configured_kernel_dir_for "$FLMX_AGENT_SYSTEMD_SERVICE_FILE")
+  if [[ -z "$dir" ]]; then
+    dir=$(configured_kernel_dir_for "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE")
+  fi
+  printf '%s' "$dir"
+}
+
 # R2-F7-I02: 判定自定义内核目录是否随卸载清理，结果写入全局
-# CUSTOM_KERNEL_DIR（空＝不单独清理）。调用点在 uninstall_flux_agent
+# CUSTOM_KERNEL_DIR（空＝不单独清理）。调用点在 uninstall_flmx_agent
 # 已通过归属守卫之后（归属确认前提）；目录值来自 agent 自己的服务
 # 定义，仍须过形态校验：绝对路径、至少两级、不在系统目录名单内、
 # 不是安装目录或其默认内核子目录（那两处随安装目录一并删除）。配
@@ -1866,7 +2026,8 @@ resolve_custom_kernel_dir() {
   local dir
   dir=$(configured_kernel_dir)
   [[ -n "$dir" ]] || return 0
-  if [[ "$dir" == "$INSTALL_DIR" || "$dir" == "$INSTALL_DIR/kernels" ]]; then
+  if [[ "$dir" == "$INSTALL_DIR" || "$dir" == "$INSTALL_DIR/kernels" || \
+        "$dir" == "$LEGACY_INSTALL_DIR" || "$dir" == "$LEGACY_INSTALL_DIR/kernels" ]]; then
     return 0
   fi
   case "$dir" in
@@ -1899,20 +2060,34 @@ resolve_custom_kernel_dir() {
 }
 
 # 卸载功能
-uninstall_flux_agent() {
-  echo "🗑️ 开始卸载 flux_agent..."
+uninstall_flmx_agent() {
+  echo "🗑️ 开始卸载 flmx_agent..."
 
-  # 归属守卫（AI-06）：在停服、删文件之前先判定既有 agent 的归
-  # 属并明示当前连接地址；无法确认属于本面板时终止，不留改动。
+  # 布局双认（改名）：卸载对象是本机实际在位的布局——现行布局、
+  # 改名前的存量布局、或（异常残留时）两者都在位。归属守卫
+  # （AI-06）对每个在位布局各跑一次：在停服、删文件之前先判定
+  # 归属并明示当前连接地址；任一无法确认属于本面板时终止，不留
+  # 改动。无 agent 的目录守卫恒放行，故两遍调用对单布局节点无
+  # 额外打扰。
+  local has_current="" has_legacy=""
+  agent_dir_has_agent "$INSTALL_DIR" && has_current="1"
+  agent_dir_has_agent "$LEGACY_INSTALL_DIR" && has_legacy="1"
   guard_agent_dir_ownership_menu "卸载" "继续卸载会停止并删除它，该节点将从其所属面板掉线。" || return 1
+  if [[ -n "$has_legacy" ]]; then
+    guard_agent_dir_ownership_menu "卸载" "继续卸载会停止并删除它，该节点将从其所属面板掉线。" "$LEGACY_INSTALL_DIR" || return 1
+  fi
 
   ensure_service_manager || return 1
 
   # R2-F7-I02：先于删服务文件读出自定义内核目录（值在单元/drop-in
-  # 里，服务文件删除后无从查起），卸载末尾一并清理。
+  # 里，服务文件删除后无从查起；现行与存量单元都查，见
+  # configured_kernel_dir），卸载末尾一并清理。
   resolve_custom_kernel_dir
 
-  local confirm_prompt="确认卸载 flux_agent 吗？将停止服务，并删除安装目录、agent 服务文件、调优宿主文件与自建 nft 表，同时恢复调优前的系统参数"
+  local confirm_prompt="确认卸载 flmx_agent 吗？将停止服务，并删除安装目录、agent 服务文件、调优宿主文件与自建 nft 表，同时恢复调优前的系统参数"
+  if [[ -n "$has_legacy" ]]; then
+    confirm_prompt="$confirm_prompt（检测到改名前的存量布局 $LEGACY_INSTALL_DIR，将一并卸载）"
+  fi
   if [[ -n "$CUSTOM_KERNEL_DIR" ]]; then
     confirm_prompt="$confirm_prompt，并删除自定义内核目录 $CUSTOM_KERNEL_DIR"
   fi
@@ -1926,29 +2101,49 @@ uninstall_flux_agent() {
     return 0
   fi
 
-  # 停止并禁用服务
-  if flux_agent_service_exists; then
+  # 停止并禁用服务（在位的布局逐个处理）
+  if flmx_agent_service_exists; then
     echo "🛑 停止并禁用服务..."
-    stop_flux_agent_service
-    disable_flux_agent_service
+    stop_flmx_agent_service
+    disable_flmx_agent_service
+  fi
+  if legacy_flux_agent_service_exists; then
+    echo "🛑 停止并禁用改名前的存量服务..."
+    stop_legacy_flux_agent_service
+    disable_legacy_flux_agent_service
   fi
 
   # R6-02：宿主级残留清理（恢复调优原值与队列、删调优宿主文件
   # 与队列整形 unit、删 agent 自建 nft 表），与面板自卸载路径对
   # 齐。必须在删安装目录之前执行：调优原值备份 tuning-backup.json
-  # 与队列回放脚本都在安装目录里，目录删掉原值就永久丢失。
-  uninstall_flux_agent_host_cleanup
+  # 与队列回放脚本都在安装目录里，目录删掉原值就永久丢失。双布
+  # 局都在位时逐目录各跑一遍（清理本身幂等，宿主文件/nft 表在第
+  # 一遍后即不存在，第二遍为空转核对）。
+  if [[ -d "$INSTALL_DIR" ]]; then
+    uninstall_flmx_agent_host_cleanup "$INSTALL_DIR"
+  fi
+  if [[ -n "$has_legacy" && -d "$LEGACY_INSTALL_DIR" ]]; then
+    uninstall_flmx_agent_host_cleanup "$LEGACY_INSTALL_DIR"
+  fi
 
   # 删除服务文件
-  if [[ -f "$FLUX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$FLUX_AGENT_OPENRC_SERVICE_FILE" ]]; then
-    remove_flux_agent_service
+  if [[ -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$FLMX_AGENT_OPENRC_SERVICE_FILE" ]]; then
+    remove_flmx_agent_service
     echo "🧹 删除服务文件"
+  fi
+  if [[ -f "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE" ]]; then
+    remove_legacy_flux_agent_service
+    echo "🧹 删除改名前的存量服务文件"
   fi
 
   # 删除安装目录
   if [[ -d "$INSTALL_DIR" ]]; then
     rm -rf "$INSTALL_DIR"
     echo "🧹 删除安装目录: $INSTALL_DIR"
+  fi
+  if [[ -d "$LEGACY_INSTALL_DIR" ]]; then
+    rm -rf "$LEGACY_INSTALL_DIR"
+    echo "🧹 删除改名前的存量安装目录: $LEGACY_INSTALL_DIR"
   fi
 
   # R2-F7-I02：自定义内核目录在安装目录之外，单独清理（判定见
@@ -1962,14 +2157,14 @@ uninstall_flux_agent() {
 }
 
 # R4B11-004: 前置 root 检查（对齐 panel_install.sh 的 F-125）。安装/
-# 更新/卸载都要写 /etc/flux_agent 与系统服务文件；旧实现无此前置，
+# 更新/卸载都要写 /etc/flmx_agent 与系统服务文件；旧实现无此前置，
 # 非 root 运行要到 mkdir/下载落盘时才失败，且失败点落在下载分支、
 # 被误报为「下载失败，请检查网络」，掩盖真实根因（权限）。这里在
 # 任何落盘动作之前 fail-fast。独立成函数便于测试夹具以恒真桩承接
 # （X-P3-6 夹具以非 root 身份实跑 main 的返回码传播）。
 require_root_privileges() {
   if [[ $EUID -ne 0 ]]; then
-    echo "❌ install.sh 需要 root 权限运行（涉及 /etc/flux_agent 与系统服务写入）"
+    echo "❌ install.sh 需要 root 权限运行（涉及 /etc/flmx_agent 与系统服务写入）"
     echo "   请使用 root 用户或 sudo 重新执行"
     return 1
   fi
@@ -1984,13 +2179,13 @@ main() {
   # 旧实现无条件 exit 0，菜单更新/卸载失败（函数以 return 1 报告）
   # 也被以退出码判断成败的自动化消费者误判为成功；成功路径仍
   # exit 0。delete_self 接收同一返回码分流（R4B11-005：失败保留
-  # 脚本、成功才自删）。install_flux_agent 内部直接 exit 1 的失败
+  # 脚本、成功才自删）。install_flmx_agent 内部直接 exit 1 的失败
   # 路径不受影响（进程已以 1 退出）。
   local rc=0
 
   # 如果提供了命令行参数，直接执行安装
   if [[ -n "$SERVER_ADDR" && -n "$SECRET" ]]; then
-    install_flux_agent || rc=$?
+    install_flmx_agent || rc=$?
     delete_self "$rc"
     exit "$rc"
   fi
@@ -2010,18 +2205,18 @@ main() {
 
     case $choice in
       1)
-        install_flux_agent || rc=$?
+        install_flmx_agent || rc=$?
         delete_self "$rc"
         exit "$rc"
         ;;
       2)
-        update_flux_agent || rc=$?
+        update_flmx_agent || rc=$?
         delete_self "$rc"
         exit "$rc"
         ;;
       3)
         AGENT_OP_CANCELLED=""
-        uninstall_flux_agent || rc=$?
+        uninstall_flmx_agent || rc=$?
         # R2-F7-01：用户取消——操作函数已打印取消说明并置标志，
         # 不自删、退出 0（与 panel_install.sh 的 C4-F04 同口径）。
         if [[ "${AGENT_OP_CANCELLED:-}" == "1" ]]; then
