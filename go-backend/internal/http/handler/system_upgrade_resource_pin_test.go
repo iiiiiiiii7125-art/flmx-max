@@ -15,8 +15,10 @@ import (
 func TestParseEnvFileValues(t *testing.T) {
 	data := []byte("# 注释行\n\nFLMX_VERSION=1.9.8\nJWT_SECRET=abc=def\nEMPTY=\nFLMX_VERSION=9.9.9\nNOEQUALS\n SPACED = v \n")
 	values := parseEnvFileValues(data)
-	if got := values["FLMX_VERSION"]; got != "1.9.8" {
-		t.Fatalf("FLMX_VERSION = %q, want first occurrence 1.9.8", got)
+	// 重复键以后现为准（Compose 的 dotenv 解析口径，修复批 D 对
+	// 齐；旧实现取首现，与 Compose 运行时解析分歧）。
+	if got := values["FLMX_VERSION"]; got != "9.9.9" {
+		t.Fatalf("FLMX_VERSION = %q, want last occurrence 9.9.9 (Compose semantics)", got)
 	}
 	if got := values["JWT_SECRET"]; got != "abc=def" {
 		t.Fatalf("JWT_SECRET = %q, want value after first =", got)
@@ -82,7 +84,8 @@ func keylessInspect() resourceNameInspect {
 }
 
 func TestPlanLegacyResourcePinsKeylessDeployment(t *testing.T) {
-	pins, expected, err := planLegacyResourcePins(map[string]string{}, keylessInspect())
+	plan, err := planLegacyResourcePins(map[string]string{}, keylessInspect())
+	pins, expected := plan.pins, plan.expectedSQLiteVolume
 	if err != nil {
 		t.Fatalf("plan error = %v", err)
 	}
@@ -112,48 +115,70 @@ func TestPlanLegacyResourcePinsPreservesExistingKeys(t *testing.T) {
 		envKeyNetwork:        "my-network",
 		envKeyComposeProject: "myproject",
 	}
-	pins, expected, err := planLegacyResourcePins(env, keylessInspect())
+	// 实读与已有键一致时（常态）：不钉、不改写，期望值即键值。
+	// 键与实读冲突的处置见修复批 D 的冲突用例。
+	insp := resourceNameInspect{
+		backendName:    "flux-panel-backend",
+		backendExists:  true,
+		sqliteVolume:   "my_custom_volume",
+		pgVolume:       "my_pg_volume",
+		network:        "my-network",
+		composeProject: "myproject",
+	}
+	plan, err := planLegacyResourcePins(env, insp)
 	if err != nil {
 		t.Fatalf("plan error = %v", err)
 	}
-	if len(pins) != 0 {
-		t.Fatalf("existing keys must never be re-pinned, got %v", pins)
+	if len(plan.pins) != 0 {
+		t.Fatalf("existing keys must never be re-pinned, got %v", plan.pins)
 	}
-	if expected != "my_custom_volume" {
-		t.Fatalf("expected = %q, want the pre-existing .env value", expected)
+	if len(plan.corrections) != 0 {
+		t.Fatalf("consistent keys must not be corrected, got %v", plan.corrections)
+	}
+	if plan.expectedSQLiteVolume != "my_custom_volume" {
+		t.Fatalf("expected = %q, want the pre-existing .env value", plan.expectedSQLiteVolume)
+	}
+	if plan.expectedPostgresVolume != "my_pg_volume" {
+		t.Fatalf("expected PG = %q, want the pre-existing .env value", plan.expectedPostgresVolume)
 	}
 }
 
 func TestPlanLegacyResourcePinsEmptyValueCountsAsMissing(t *testing.T) {
 	env := map[string]string{envKeySQLiteVolume: ""}
-	pins, expected, err := planLegacyResourcePins(env, keylessInspect())
+	plan, err := planLegacyResourcePins(env, keylessInspect())
 	if err != nil {
 		t.Fatalf("plan error = %v", err)
 	}
-	if expected != "sqlite_data" || len(pins) == 0 || pins[0] != (envKeyValue{envKeySQLiteVolume, "sqlite_data"}) {
-		t.Fatalf("empty value must be treated as missing: pins=%v expected=%q", pins, expected)
+	if plan.expectedSQLiteVolume != "sqlite_data" || len(plan.pins) == 0 || plan.pins[0] != (envKeyValue{envKeySQLiteVolume, "sqlite_data"}) {
+		t.Fatalf("empty value must be treated as missing: pins=%v expected=%q", plan.pins, plan.expectedSQLiteVolume)
 	}
 }
 
 func TestPlanLegacyResourcePinsFailClosedOnUnreadableVolume(t *testing.T) {
 	insp := keylessInspect()
 	insp.sqliteVolume = "" // bind 挂载 / inspect 失败形态
-	_, _, err := planLegacyResourcePins(map[string]string{}, insp)
+	_, err := planLegacyResourcePins(map[string]string{}, insp)
 	if !errors.Is(err, errDataVolumeUndetermined) {
 		t.Fatalf("err = %v, want errDataVolumeUndetermined (fail-closed)", err)
 	}
-	// 同形态但 .env 已有键：键为准，不触发 fail-closed、不回退猜测。
-	pins, expected, err := planLegacyResourcePins(
+	// 同形态但 .env 已有键：实读为空无从证伪键值，键保留，不触发
+	// fail-closed、不回退猜测、不改写。
+	plan, err := planLegacyResourcePins(
 		map[string]string{envKeySQLiteVolume: "declared_data"}, insp)
 	if err != nil {
 		t.Fatalf("declared key must not fail-closed: %v", err)
 	}
-	if expected != "declared_data" {
-		t.Fatalf("expected = %q, want declared key value", expected)
+	if plan.expectedSQLiteVolume != "declared_data" {
+		t.Fatalf("expected = %q, want declared key value", plan.expectedSQLiteVolume)
 	}
-	for _, pin := range pins {
+	for _, pin := range plan.pins {
 		if pin.key == envKeySQLiteVolume {
-			t.Fatalf("declared key must not be re-pinned: %v", pins)
+			t.Fatalf("declared key must not be re-pinned: %v", plan.pins)
+		}
+	}
+	for _, correction := range plan.corrections {
+		if correction.key == envKeySQLiteVolume {
+			t.Fatalf("unverifiable key must not be corrected: %v", plan.corrections)
 		}
 	}
 }
@@ -161,12 +186,12 @@ func TestPlanLegacyResourcePinsFailClosedOnUnreadableVolume(t *testing.T) {
 func TestPlanLegacyResourcePinsFreshInstallPasses(t *testing.T) {
 	// 全新安装形态：无旧后端容器。不得 fail-closed、不得钉卷。
 	insp := resourceNameInspect{backendName: "flmx-panel-backend", backendExists: false}
-	pins, expected, err := planLegacyResourcePins(map[string]string{}, insp)
+	plan, err := planLegacyResourcePins(map[string]string{}, insp)
 	if err != nil {
 		t.Fatalf("fresh install must pass, got %v", err)
 	}
-	if len(pins) != 0 || expected != "" {
-		t.Fatalf("fresh install must pin nothing, got pins=%v expected=%q", pins, expected)
+	if len(plan.pins) != 0 || plan.expectedSQLiteVolume != "" {
+		t.Fatalf("fresh install must pin nothing, got pins=%v expected=%q", plan.pins, plan.expectedSQLiteVolume)
 	}
 }
 
@@ -174,28 +199,28 @@ func TestPlanLegacyResourcePinsPostgresFallbacks(t *testing.T) {
 	base := keylessInspect()
 	base.pgVolume = ""
 	// PG 容器不在、postgres_data 卷在场：钉历史缺省名（脚本同口径）。
-	pins, _, err := planLegacyResourcePins(map[string]string{}, base)
+	plan, err := planLegacyResourcePins(map[string]string{}, base)
 	if err != nil {
 		t.Fatalf("plan error = %v", err)
 	}
 	found := false
-	for _, pin := range pins {
+	for _, pin := range plan.pins {
 		if pin == (envKeyValue{envKeyPostgresVolume, "postgres_data"}) {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("postgres_data fallback pin missing: %v", pins)
+		t.Fatalf("postgres_data fallback pin missing: %v", plan.pins)
 	}
-	// PG 卷与 postgres_data 都不在：不钉 PG 键。
+	// PG 卷与 postgres_data 都不在（SQLite 模式）：不钉 PG 键、不拦。
 	base.postgresDataVolumeExists = false
-	pins, _, err = planLegacyResourcePins(map[string]string{}, base)
+	plan, err = planLegacyResourcePins(map[string]string{}, base)
 	if err != nil {
 		t.Fatalf("plan error = %v", err)
 	}
-	for _, pin := range pins {
+	for _, pin := range plan.pins {
 		if pin.key == envKeyPostgresVolume {
-			t.Fatalf("no PG pin expected, got %v", pins)
+			t.Fatalf("no PG pin expected, got %v", plan.pins)
 		}
 	}
 }
@@ -251,12 +276,15 @@ func TestPinLegacyResourceNamesKeylessEndToEnd(t *testing.T) {
 		t.Fatalf("WriteFile(.env) error = %v", err)
 	}
 	executor := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
-	expected, err := executor.pinLegacyResourceNames(context.Background())
+	expected, expectedPG, err := executor.pinLegacyResourceNames(context.Background())
 	if err != nil {
 		t.Fatalf("pinLegacyResourceNames error = %v", err)
 	}
 	if expected != "sqlite_data" {
 		t.Fatalf("expected = %q, want sqlite_data from inspect", expected)
+	}
+	if expectedPG != "" {
+		t.Fatalf("SQLite-mode deployment must not emit a PG expectation, got %q", expectedPG)
 	}
 	data, err := os.ReadFile(envPath)
 	if err != nil {
@@ -300,7 +328,7 @@ exit 0
 		t.Fatalf("WriteFile(.env) error = %v", err)
 	}
 	executor := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flux-panel-backend"}
-	_, err := executor.pinLegacyResourceNames(context.Background())
+	_, _, err := executor.pinLegacyResourceNames(context.Background())
 	if !errors.Is(err, errDataVolumeUndetermined) {
 		t.Fatalf("err = %v, want fail-closed errDataVolumeUndetermined", err)
 	}
@@ -322,7 +350,7 @@ func TestPinLegacyResourceNamesNoBackendPasses(t *testing.T) {
 		t.Fatalf("WriteFile(.env) error = %v", err)
 	}
 	executor := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flmx-panel-backend"}
-	expected, err := executor.pinLegacyResourceNames(context.Background())
+	expected, _, err := executor.pinLegacyResourceNames(context.Background())
 	if err != nil {
 		t.Fatalf("no-backend must pass, got %v", err)
 	}

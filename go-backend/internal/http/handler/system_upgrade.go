@@ -87,6 +87,13 @@ type systemUpgradeExecutor struct {
 	// 不一致即回滚。为空表示升级前无从记录（无旧后端等），helper
 	// 跳过校验。
 	expectedSQLiteVolume string
+	// expectedPostgresVolume 是 PG 模式下升级前记录的 PG 数据卷
+	// 名（来源同 expectedSQLiteVolume）：透传 helper 在重建后校
+	// 验新 PG 容器 /var/lib/postgresql/data 实际挂载卷与之一致，
+	// 不一致即回滚（修复批 D 补齐：此前 PG 卷在重建后无任何实读
+	// 比对，正确性全押钉键一步）。SQLite 模式恒为空、helper 跳
+	// 过校验。
+	expectedPostgresVolume string
 	// removeLegacyPGContainer 是改名后待 helper 在成功前删除的旧
 	// 名 PG 容器（仅 SQLite 模式且 PG 键被改名时非空，见
 	// applyIdentityRename 的模式分流裁定）。
@@ -143,19 +150,7 @@ var composeProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 // detectComposeProject reads the Compose project label of the backend
 // container, the same way panel_install.sh does.
 func (e *systemUpgradeExecutor) detectComposeProject(ctx context.Context) string {
-	if validateBackendContainerName(e.backendContainer) != nil {
-		return ""
-	}
-	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
-		`{{index .Config.Labels "com.docker.compose.project"}}`, e.backendContainer).Output()
-	if err != nil {
-		return ""
-	}
-	project := strings.TrimSpace(string(out))
-	if !composeProjectPattern.MatchString(project) {
-		return ""
-	}
-	return project
+	return e.dockerInspectComposeProject(ctx, e.backendContainer)
 }
 
 type systemUpgradeCapabilityData struct {
@@ -849,6 +844,30 @@ if [ -n "${FLMX_EXPECTED_SQLITE_VOLUME:-}" ]; then
   log "数据卷校验通过: /app/data 挂载卷与升级前一致（$actual_volume）"
 fi
 
+# PG 数据卷校验（1.9.9 修复批 D，PG 模式，面板侧以
+# FLMX_EXPECTED_POSTGRES_VOLUME 透传期望值时启用）：PG 模式下真
+# 数据在 PG 卷里，/app/data 校验与之无关——此前 PG 卷重建后无任
+# 何实读比对，钉键一步若漏（自定义卷名＋无键＋PG 容器定位不到
+# 的子形）新 PG 会落模板缺省空卷、后端播种后健康通过（1.9.8 事
+# 故在 PG 面的同构形态）。此处实读 PG 容器
+# /var/lib/postgresql/data 的挂载卷名比对，不一致（或读不到）即
+# 按挂错卷走 rollback，绝不以成功收场。期望值为空（SQLite 模
+# 式或升级前无从记录）时跳过。PG 容器未经本次重建时按 -a 取现
+# 存容器读其挂载（校验的是卷身份而非存活）。
+if [ -n "${FLMX_EXPECTED_POSTGRES_VOLUME:-}" ]; then
+  new_pg=$(docker compose ps -a postgres --format '{{.Name}}' 2>/dev/null | head -n 1 || true)
+  actual_pg_volume=""
+  if [ -n "$new_pg" ]; then
+    actual_pg_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$new_pg" 2>/dev/null || true)
+  fi
+  if [ "$actual_pg_volume" != "$FLMX_EXPECTED_POSTGRES_VOLUME" ]; then
+    log "错误: PG 容器 /var/lib/postgresql/data 实际挂载卷「${actual_pg_volume:-（空）}」与升级前记录的数据卷「$FLMX_EXPECTED_POSTGRES_VOLUME」不一致，疑似挂到空卷，执行回滚"
+    rollback
+    exit 1
+  fi
+  log "PG 数据卷校验通过: /var/lib/postgresql/data 挂载卷与升级前一致（$actual_pg_volume）"
+fi
+
 # 改名收尾（1.9.9，SQLite 模式，面板侧透传旧 PG 容器名时启用）：
 # PG 键已在同步段改写为现行名，旧 PG 容器随本次升级删除——脚本
 # 面改名流在 SQLite 模式下停删 PG 容器且不重建（菜单 4 迁移按
@@ -915,6 +934,12 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 		args = append(args,
 			"-e", expectedSQLiteVolumeEnvKey+"="+e.expectedSQLiteVolume)
 	}
+	// PG 数据卷校验期望值（PG 模式）：同上，helper 健康门后实读
+	// PG 容器挂载卷比对；为空不透传、helper 跳过校验。
+	if e.expectedPostgresVolume != "" {
+		args = append(args,
+			"-e", expectedPostgresVolumeEnvKey+"="+e.expectedPostgresVolume)
+	}
 	// 改名/快照安排（见 applyIdentityRename / prepareUpgradeSnapshot）：
 	// 均仅在非缺省时透传，helper 侧缺失即按缺省行为（服务集
 	// backend frontend、不删旧 PG 容器、无 DB 快照）。
@@ -979,7 +1004,9 @@ func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error 
 // 只有 preserveComposeNetworks 保网络段、updateEnvVersion 改版本
 // 键，对卷名零处理——双面同能力未对齐的缺口在此补齐：升级动任何
 // 文件之前，把缺失的资源名键按旧容器的现行有效值钉进 .env，已有
-// 键逐字保留、绝不覆盖。
+// 键原则上逐字保留；两卷键（FLMX_SQLITE_VOLUME /
+// FLMX_POSTGRES_VOLUME）与在跑旧容器实读冲突时以实读为准改写
+// 并点名（修复批 D，见 planLegacyResourcePins）。
 const (
 	envKeyFLMXVersion    = "FLMX_VERSION"
 	envKeyFLUXVersion    = "FLUX_VERSION"
@@ -994,6 +1021,10 @@ const (
 	// expectedSQLiteVolumeEnvKey 是透传 helper 的期望数据卷名键：
 	// helper 重建后实读新后端挂载卷与之比对，不一致即回滚。
 	expectedSQLiteVolumeEnvKey = "FLMX_EXPECTED_SQLITE_VOLUME"
+	// expectedPostgresVolumeEnvKey 是透传 helper 的期望 PG 数据
+	// 卷名键（PG 模式）：helper 健康门后实读 PG 容器挂载卷与之
+	// 比对，不一致即回滚。
+	expectedPostgresVolumeEnvKey = "FLMX_EXPECTED_POSTGRES_VOLUME"
 	// legacyPostgresDataVolume 是脚本面同口径的历史缺省 PG 卷名：
 	// PG 容器不在场但该卷存在时钉它（脚本面板迁移/存量识别同名）。
 	legacyPostgresDataVolume = "postgres_data"
@@ -1002,6 +1033,13 @@ const (
 // errDataVolumeUndetermined 是 fail-closed 哨兵：旧后端在场但其实
 // 读数据卷名为空、.env 又无键——中止升级且不做任何更改。
 var errDataVolumeUndetermined = fmt.Errorf("无法确定现有数据卷名")
+
+// errPGVolumeUndetermined 是 PG 模式的 fail-closed 哨兵（修复批
+// D）：PG 模式、.env 无 FLMX_POSTGRES_VOLUME、实读不到 PG 卷名、
+// 历史缺省卷 postgres_data 也不存在——与 SQLite 卷同标准中止升
+// 级且不做任何更改（否则新模板缺省 flmx-postgres-data 会接管成
+// 空卷，是 1.9.8 事故在 PG 面的同构复现）。
+var errPGVolumeUndetermined = fmt.Errorf("无法确定现有 PostgreSQL 数据卷名")
 
 // dockerResourceNamePattern 是 Docker 卷/网络名的合法形态（名称必
 // 以字母数字开头，其后为字母数字与 _ . -）：inspect 实读值不合此
@@ -1014,17 +1052,28 @@ type envKeyValue struct {
 	value string
 }
 
-// parseEnvFileValues 解析 .env 内容为键值表（与脚本 get_env_var 同
-// 口径：行首 KEY= 首现为准、值取首个 = 之后原文，此处另做首尾空
-// 白裁剪供空值判定；注释与空行跳过）。
+// parseEnvFileValues 解析 .env 内容为键值表。值语义与 Docker
+// Compose 消费该文件时的解析（compose-go 的 dotenv）对齐（修复
+// 批 D，RA-1 L-4）：成对引号（单/双）剥除、双引号内转义展开、
+// 未引号值的行尾注释（值首或空白后的 # 起）剥除、重复键以
+// 后现为准。实证依据：compose-go v2 dotenv.Parse 实测——重复
+// 键取后值、"v"/'v' 剥引号、`v # c` 剥注释、`abc#def` 的 # 保
+// 留、"a\nb" 展开为真换行。旧实现取原文＋首现：手写 .env 的
+// 带引号值（如 FLMX_SQLITE_VOLUME="sqlite_data"、"" 空引号、
+// 值后行尾注释）会被当成含引号/注释的真值，规划与 Compose 的
+// 运行时解析分歧，升级后卷名门必然误判、健康升级被假回滚。
+// 两点有意不跟：不做 $ 变量展开（规划面只需卷名等字面值，与
+// Compose 的插值是两个层面）；引号未闭合时 Compose 整场报
+// 错，此处宽容回退原文，不让一行怪值污染其余键的规划。
 func parseEnvFileValues(data []byte) map[string]string {
 	values := make(map[string]string)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSuffix(line, "\r")
-		if line == "" || strings.HasPrefix(line, "#") {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "#") {
 			continue
 		}
-		key, value, ok := strings.Cut(line, "=")
+		key, rawValue, ok := strings.Cut(line, "=")
 		if !ok {
 			continue
 		}
@@ -1032,12 +1081,73 @@ func parseEnvFileValues(data []byte) map[string]string {
 		if key == "" {
 			continue
 		}
-		if _, exists := values[key]; exists {
-			continue
-		}
-		values[key] = strings.TrimSpace(value)
+		values[key] = parseEnvFileValue(rawValue)
 	}
 	return values
+}
+
+// parseEnvFileValue 解析单个 .env 值（口径见 parseEnvFileValues）。
+func parseEnvFileValue(raw string) string {
+	v := strings.TrimSpace(raw)
+	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') {
+		quote := v[0]
+		for i := 1; i < len(v); i++ {
+			if quote == '"' && v[i] == '\\' {
+				i++
+				continue
+			}
+			if v[i] == quote {
+				inner := v[1:i]
+				if quote == '"' {
+					return expandEnvDoubleQuotedEscapes(inner)
+				}
+				return inner
+			}
+		}
+		return v
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] == '#' && (i == 0 || v[i-1] == ' ' || v[i-1] == '\t') {
+			return strings.TrimSpace(v[:i])
+		}
+	}
+	return v
+}
+
+// expandEnvDoubleQuotedEscapes 展开双引号值的反斜杠转义（与
+// compose-go dotenv 同集：\n \r \t \\ \" \$；未知转义保留原文
+// 两字符，不臆造语义）。
+func expandEnvDoubleQuotedEscapes(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		case '\\':
+			b.WriteByte('\\')
+		case '"':
+			b.WriteByte('"')
+		case '$':
+			b.WriteByte('$')
+		default:
+			b.WriteByte('\\')
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 // applyEnvPins 把 pins 钉进 .env 内容并返回新内容（纯函数）：同名
@@ -1151,10 +1261,33 @@ type resourceNameInspect struct {
 	composeProject string
 }
 
+// resourcePinPlan 是钉键规划结果（纯数据）。
+type resourcePinPlan struct {
+	// pins 是待补缺/补空的键（固定序：SQLite 卷、PG 卷、网络、
+	// 项目名），经 applyEnvPins 落盘、绝不覆盖已有非空值。
+	pins []envKeyValue
+	// corrections 是与在跑旧容器实读冲突的两卷键改写（实读为
+	// 准），经 applyEnvKeyUpdates 落盘并在日志中逐键点名（键名、
+	// 旧值、新值）。仅 FLMX_SQLITE_VOLUME / FLMX_POSTGRES_VOLUME
+	// 两键有此处置：.env 里的卷名只是声明，在跑容器的实际挂载
+	// 才是现行事实；网络名/项目名无等价的实读真值语义，维持只
+	// 补缺。
+	corrections []envKeyValue
+	// expectedSQLiteVolume / expectedPostgresVolume 是升级后校验
+	// 用的期望数据卷名（.env 原值优先、其次实读钉值/改写值），
+	// 透传 helper 在重建后实读新容器挂载比对。
+	expectedSQLiteVolume   string
+	expectedPostgresVolume string
+}
+
 // planLegacyResourcePins 是钉键的纯规划段：给定 .env 现值与旧容器
-// 实读，产出待钉键（固定序：SQLite 卷、PG 卷、网络、项目名）与升
-// 级后校验用的期望数据卷名（.env 原值优先、其次实读钉值）。
-// 已有非空键逐字保留、绝不进 pins。
+// 实读，产出 resourcePinPlan。已有非空键原则上逐字保留、不进
+// pins；两卷键是例外——键值与在跑旧容器的实际挂载不一致时以实
+// 读为准进 corrections（RA-1 L-2 / RA-2 S-01 收口：旧口径下钉键
+// 与升级后校验门的期望值同源于错键，错键会被自检「验证通过」，
+// 且事故态部署会被实读钉入错卷而正式化；migrate 路径在 E4 已立
+// 「键读冲突以实读为准」口径，本面补齐）。实读不到（无旧容器或
+// 挂载读空）时无从证伪键值，保留原样。
 //
 // fail-closed：.env 缺 FLMX_SQLITE_VOLUME、旧后端在场、但其实读
 // 卷名为空 → 返回 errDataVolumeUndetermined 缠绕错误，调用方必须
@@ -1165,36 +1298,58 @@ type resourceNameInspect struct {
 // 故此处不回退、只中止。PG 卷的 postgres_data 回退与脚本同口
 // 径保留：该键对 SQLite 部署惰性无害，且脚本的存量识别亦以此
 // 名为锚，语义是「历史缺省卷在场则认领」而非猜测现行卷名。
+// PG 卷 fail-closed（修复批 D，RA-3 §1）：PG 模式下缺 PG 卷键、
+// 实读为空且 postgres_data 也不存在时同标准中止
+// （errPGVolumeUndetermined）——此子形下不钉不拦，重建 PG 会落
+// 模板缺省空卷播种，事故在 PG 面同构复现；SQLite 模式下 PG 卷
+// 键惰性，维持不钉不拦。
 // 旧后端不存在（全新安装形态）时不钉卷、不报错、期望值为空。
-func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) ([]envKeyValue, string, error) {
-	pins := make([]envKeyValue, 0, 4)
+func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) (resourcePinPlan, error) {
+	plan := resourcePinPlan{pins: make([]envKeyValue, 0, 4)}
 	expected := env[envKeySQLiteVolume]
-	if expected == "" {
+	switch {
+	case expected == "":
 		switch {
 		case insp.backendExists && insp.sqliteVolume == "":
-			return nil, "", fmt.Errorf("%w：部署 .env 缺少 %s，旧后端容器 %s 的 /app/data 挂载实读为空（可能是 bind 挂载、无此挂载或 inspect 失败）",
+			return plan, fmt.Errorf("%w：部署 .env 缺少 %s，旧后端容器 %s 的 /app/data 挂载实读为空（可能是 bind 挂载、无此挂载或 inspect 失败）",
 				errDataVolumeUndetermined, envKeySQLiteVolume, insp.backendName)
 		case insp.backendExists:
-			pins = append(pins, envKeyValue{envKeySQLiteVolume, insp.sqliteVolume})
+			plan.pins = append(plan.pins, envKeyValue{envKeySQLiteVolume, insp.sqliteVolume})
 			expected = insp.sqliteVolume
 		}
+	case insp.backendExists && insp.sqliteVolume != "" && insp.sqliteVolume != expected:
+		plan.corrections = append(plan.corrections, envKeyValue{envKeySQLiteVolume, insp.sqliteVolume})
+		expected = insp.sqliteVolume
 	}
-	if env[envKeyPostgresVolume] == "" {
+	plan.expectedSQLiteVolume = expected
+
+	pgExpected := env[envKeyPostgresVolume]
+	switch {
+	case pgExpected == "":
 		pgVolume := insp.pgVolume
 		if pgVolume == "" && insp.postgresDataVolumeExists {
 			pgVolume = legacyPostgresDataVolume
 		}
 		if pgVolume != "" {
-			pins = append(pins, envKeyValue{envKeyPostgresVolume, pgVolume})
+			plan.pins = append(plan.pins, envKeyValue{envKeyPostgresVolume, pgVolume})
+			pgExpected = pgVolume
+		} else if isPostgresMode(env) {
+			return plan, fmt.Errorf("%w：部署为 PostgreSQL 模式但 .env 缺少 %s，旧 PG 容器未能定位或其实读卷名为空，且历史缺省卷 %s 不存在",
+				errPGVolumeUndetermined, envKeyPostgresVolume, legacyPostgresDataVolume)
 		}
+	case insp.pgVolume != "" && insp.pgVolume != pgExpected:
+		plan.corrections = append(plan.corrections, envKeyValue{envKeyPostgresVolume, insp.pgVolume})
+		pgExpected = insp.pgVolume
 	}
+	plan.expectedPostgresVolume = pgExpected
+
 	if env[envKeyNetwork] == "" && insp.network != "" {
-		pins = append(pins, envKeyValue{envKeyNetwork, insp.network})
+		plan.pins = append(plan.pins, envKeyValue{envKeyNetwork, insp.network})
 	}
 	if env[envKeyComposeProject] == "" && insp.composeProject != "" {
-		pins = append(pins, envKeyValue{envKeyComposeProject, insp.composeProject})
+		plan.pins = append(plan.pins, envKeyValue{envKeyComposeProject, insp.composeProject})
 	}
-	return pins, expected, nil
+	return plan, nil
 }
 
 // upgradeDataVolumeMismatch 是 helper 数据卷校验段的判定谓词（与
@@ -1270,68 +1425,125 @@ func (e *systemUpgradeExecutor) inspectLegacyResourceNames(ctx context.Context, 
 }
 
 // pinLegacyResourceNames 在升级动任何文件之前执行钉键：读部署
-// .env → 实读旧容器 → 纯规划 → 有钉键才原子改写 .env（mode 帽与
-// updateEnvVersion 同口径）。返回升级后校验用的期望数据卷名。
+// .env → 实读旧容器 → 纯规划 → 有钉键/改写才原子改写 .env（mode
+// 帽与 updateEnvVersion 同口径；钉入走 applyEnvPins 只补缺、卷键
+// 冲突改写走 applyEnvKeyUpdates，两段合成同一份内容一次原子
+// 写）。返回升级后校验用的期望数据卷名（SQLite 恒返回；PG 仅 PG
+// 模式返回，SQLite 模式下 PG 卷不被本次升级触碰、不下发校验）。
 // fail-closed 时 .env 一字未动，调用方直接中止升级。
-func (e *systemUpgradeExecutor) pinLegacyResourceNames(ctx context.Context) (string, error) {
+func (e *systemUpgradeExecutor) pinLegacyResourceNames(ctx context.Context) (string, string, error) {
 	data, err := os.ReadFile(e.envPath())
 	if err != nil {
-		return "", fmt.Errorf("读取部署 .env 失败: %v", err)
+		return "", "", fmt.Errorf("读取部署 .env 失败: %v", err)
 	}
 	env := parseEnvFileValues(data)
 	insp := e.inspectLegacyResourceNames(ctx, env)
-	pins, expected, err := planLegacyResourcePins(env, insp)
+	plan, err := planLegacyResourcePins(env, insp)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if len(pins) == 0 {
-		return expected, nil
+	expectedPG := plan.expectedPostgresVolume
+	if !isPostgresMode(env) {
+		expectedPG = ""
+	}
+	if len(plan.pins) == 0 && len(plan.corrections) == 0 {
+		return plan.expectedSQLiteVolume, expectedPG, nil
 	}
 	mode, err := fileModeOrDefault(e.envPath(), 0o600)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if err := writeFileAtomicWithMode(e.envPath(), applyEnvPins(data, pins), capEnvFileMode(mode)); err != nil {
-		return "", fmt.Errorf("钉入存量资源名失败: %v", err)
+	content := applyEnvPins(data, plan.pins)
+	content = applyEnvKeyUpdates(content, plan.corrections)
+	if err := writeFileAtomicWithMode(e.envPath(), content, capEnvFileMode(mode)); err != nil {
+		return "", "", fmt.Errorf("钉入存量资源名失败: %v", err)
 	}
-	pairs := make([]string, 0, len(pins))
-	for _, pin := range pins {
-		pairs = append(pairs, pin.key+"="+pin.value)
+	if len(plan.pins) > 0 {
+		pairs := make([]string, 0, len(plan.pins))
+		for _, pin := range plan.pins {
+			pairs = append(pairs, pin.key+"="+pin.value)
+		}
+		log.Printf("systemUpgrade: 已将存量资源名钉入 .env（升级前实读旧容器）: %s", strings.Join(pairs, ", "))
 	}
-	log.Printf("systemUpgrade: 已将存量资源名钉入 .env（升级前实读旧容器）: %s", strings.Join(pairs, ", "))
-	return expected, nil
+	for _, correction := range plan.corrections {
+		log.Printf("systemUpgrade: 警告: .env 的 %s=%s 与在跑旧容器的实际挂载卷名不一致，已按实读改写为 %s（卷键以实读为准）",
+			correction.key, env[correction.key], correction.value)
+	}
+	return plan.expectedSQLiteVolume, expectedPG, nil
 }
 
 // locatePostgresContainer 定位本部署的旧 PG 容器名（钉键采集与
 // 容器改名共用）：优先部署 .env 自带的 PANEL_POSTGRES_CONTAINER
-// 声明（本部署自述，不探他人部署）；其次按 Compose 项目 +
-// service=postgres 标签在本项目内查找（首个非空名定格，形态不
-// 合法即弃）。定位到的容器还须真实存在，不存在返回空串。
+// 声明，但声明只作线索、不无条件信任（RA-1 L-1）：声明名容器须
+// 真实存在，且其实读 Compose 项目标签与本部署项目名（由后端容
+// 器标签锚定）不得可证地不一致——声明陈旧且其名被同机另一部署
+// 的 PG 容器复用时，项目标签必然对不上，此时声明作废。声明名
+// 不存在或被作废，一律回落到按 Compose 项目 + service=postgres
+// 标签在本项目内查找（残差③硬化：旧实现声明名不存在即直接判
+// 定位失败，孤儿 PG 容器自此永远够不到）。两路皆空返回空串。
 func (e *systemUpgradeExecutor) locatePostgresContainer(ctx context.Context, env map[string]string, composeProject string) string {
-	pgContainer := strings.TrimSpace(env[envKeyPanelPostgresContainer])
-	if validateBackendContainerName(pgContainer) != nil {
-		pgContainer = ""
+	declared := strings.TrimSpace(env[envKeyPanelPostgresContainer])
+	if validateBackendContainerName(declared) != nil {
+		declared = ""
 	}
-	if pgContainer == "" && composeProject != "" {
-		out, err := exec.CommandContext(ctx, "docker", "ps", "-a",
-			"--filter", "label=com.docker.compose.project="+composeProject,
-			"--filter", "label=com.docker.compose.service=postgres",
-			"--format", "{{.Names}}").Output()
-		if err == nil {
-			for _, line := range strings.Split(string(out), "\n") {
-				if name := strings.TrimSpace(line); name != "" {
-					if validateBackendContainerName(name) == nil {
-						pgContainer = name
-					}
-					break
-				}
-			}
-		}
+	if declared != "" && e.dockerContainerExists(ctx, declared) &&
+		composeProjectMatches(e.dockerInspectComposeProject(ctx, declared), composeProject) {
+		return declared
 	}
-	if pgContainer == "" || !e.dockerContainerExists(ctx, pgContainer) {
+	return e.findPostgresContainerByProjectLabel(ctx, composeProject)
+}
+
+// composeProjectMatches 判容器项目标签是否可证地不属于本部署：
+// 任一侧读不到项目名时无从证伪，按相符处理（常态下部署项目名
+// 由后端容器标签读得、恒非空）；两侧俱在且不同才判不符。
+func composeProjectMatches(containerProject, deploymentProject string) bool {
+	if containerProject == "" || deploymentProject == "" {
+		return true
+	}
+	return containerProject == deploymentProject
+}
+
+// dockerInspectComposeProject 实读任意容器的 Compose 项目标签
+// （detectComposeProject 的泛化，模板/形态口径一致）：读不到或
+// 不合形态返回空串。
+func (e *systemUpgradeExecutor) dockerInspectComposeProject(ctx context.Context, container string) string {
+	if validateBackendContainerName(container) != nil {
 		return ""
 	}
-	return pgContainer
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
+		`{{index .Config.Labels "com.docker.compose.project"}}`, container).Output()
+	if err != nil {
+		return ""
+	}
+	project := strings.TrimSpace(string(out))
+	if !composeProjectPattern.MatchString(project) {
+		return ""
+	}
+	return project
+}
+
+// findPostgresContainerByProjectLabel 按 Compose 项目 +
+// service=postgres 标签在本项目内查找 PG 容器：首个形态合法且
+// 真实存在的名字定格（旧实现在首个非空行即停，首行不合形态便
+// 整体放弃，RA-1 I-5 一并收口）。
+func (e *systemUpgradeExecutor) findPostgresContainerByProjectLabel(ctx context.Context, composeProject string) string {
+	if composeProject == "" {
+		return ""
+	}
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a",
+		"--filter", "label=com.docker.compose.project="+composeProject,
+		"--filter", "label=com.docker.compose.service=postgres",
+		"--format", "{{.Names}}").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if name := strings.TrimSpace(line); name != "" && validateBackendContainerName(name) == nil &&
+			e.dockerContainerExists(ctx, name) {
+			return name
+		}
+	}
+	return ""
 }
 
 // —— 存量容器改名（1.9.9，补齐面板内升级面与脚本面
@@ -1395,8 +1607,12 @@ func panelInstanceSuffix(env map[string]string) string {
 // identityRenameEnabled 读改名开关：部署 .env 的
 // PANEL_IDENTITY_RENAME 优先、进程环境兜底（脚本面由操作者以
 // 进程环境传入；面板内升级面的操作面是 .env，故此序）；仅值
-// "0" 关闭，其余（含缺失与空值）开启——与脚本
-// ${PANEL_IDENTITY_RENAME:-1} == "0" 的判定同口径。
+// "0" 关闭，其余（含缺失与空值）开启——「什么值算关闭」的判定
+// 与脚本 ${PANEL_IDENTITY_RENAME:-1} == "0" 同口径，但开关的
+// 取值来源与脚本面并不等价：脚本只认进程环境，.env 里写的
+// PANEL_IDENTITY_RENAME=0 对脚本面无效（RA-1 L-3）。本面维持
+// .env 优先（面板进程的操作面就是 .env），来源对齐由脚本侧补
+// 齐，不在本面改。
 func identityRenameEnabled(env map[string]string) bool {
 	flag, ok := env[envKeyIdentityRename]
 	if !ok {
@@ -1421,10 +1637,12 @@ type identityRenameOutcome struct {
 	oldPGContainer string
 }
 
-// planIdentityRename 是改名的纯规划段（触发谓词与脚本
-// apply_panel_identity_rename 逐字同口径）：每个容器键在「缺失
-// 或为空」或「等于旧缺省名」时改写为现行名＋实例后缀；自定义
-// 名与已是现行名的键逐字保留、不进 writes。
+// planIdentityRename 是改名的纯规划段（触发谓词——每键何时改
+// 写——与脚本 apply_panel_identity_rename 逐字同口径；此同口径
+// 仅限谓词，不含改名开关的取值来源，见 identityRenameEnabled
+// 的 L-3 注）：每个容器键在「缺失或为空」或「等于旧缺省名」时
+// 改写为现行名＋实例后缀；自定义名与已是现行名的键逐字保留、
+// 不进 writes。
 func planIdentityRename(env map[string]string, suffix, oldPGContainer string) identityRenameOutcome {
 	out := identityRenameOutcome{}
 	rules := []struct{ key, legacy, current string }{
@@ -1527,10 +1745,13 @@ func (e *systemUpgradeExecutor) applyIdentityRename(ctx context.Context) error {
 // 照是宿主机上对在跑 PG 容器直接 pg_dump；面板内 helper 若同
 // 做，须在 shell 内再解析 PG 容器定位与 POSTGRES_* 凭据/
 // DATABASE_URL 形态并处理转储一致性，工具链与失败面显著大于
-// SQLite 的整目录复制；且 PG 模式下数据卷不被本次升级触碰
-// （helper 至多重建 PG 容器、卷名已由钉键保障），风险敞口与
-// SQLite 面不对等。故 PG 子项以 pgSnapshotDeferred 标记＋
-// helper 日志点名切出，待后续批次按同一 backups/ 口径补齐。
+// SQLite 的整目录复制；且 PG 模式下数据卷不被本次升级写
+// （helper 至多重建 PG 容器；卷名由钉键保障——PG 模式无键且
+// 实读不到卷名时升级前 fail-closed 中止、重建后 helper 实读
+// PG 卷挂载比对，见 planLegacyResourcePins 与 helper 的 PG 数
+// 据卷校验段），风险敞口与 SQLite 面不对等。故 PG 子项以
+// pgSnapshotDeferred 标记＋helper 日志点名切出，待后续批次按
+// 同一 backups/ 口径补齐。
 func (e *systemUpgradeExecutor) prepareUpgradeSnapshot(version string) {
 	data, err := os.ReadFile(e.envPath())
 	if err != nil {
@@ -2548,17 +2769,21 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 缺省卷名让后端挂空卷（1.9.8 事故，见 pinLegacyResourceNames）。
 	// 期望数据卷名随后透传 helper 做重建后校验。fail-closed 中止
 	// 时文件一字未动（钉键写点尚未发生、备份亦未做）。
-	expectedVolume, err := exec.pinLegacyResourceNames(r.Context())
+	expectedVolume, expectedPGVolume, err := exec.pinLegacyResourceNames(r.Context())
 	if err != nil {
 		msg := "升级已中止（未做任何更改）: " + err.Error()
 		if errors.Is(err, errDataVolumeUndetermined) {
 			msg += "。为防升级后挂到空卷，请在部署 .env 中显式设置 FLMX_SQLITE_VOLUME 为现有数据卷名后重试，或改用安装脚本的“更新面板”完成升级"
+		}
+		if errors.Is(err, errPGVolumeUndetermined) {
+			msg += "。为防升级后挂到空卷，请在部署 .env 中显式设置 FLMX_POSTGRES_VOLUME 为现有 PostgreSQL 数据卷名后重试，或改用安装脚本的“更新面板”完成升级"
 		}
 		log.Printf("systemUpgrade: %s", msg)
 		response.WriteJSON(w, response.Err(-2, msg))
 		return
 	}
 	exec.expectedSQLiteVolume = expectedVolume
+	exec.expectedPostgresVolume = expectedPGVolume
 
 	composePath := exec.composePath()
 	envPath := exec.envPath()
