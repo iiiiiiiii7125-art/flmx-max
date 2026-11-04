@@ -124,10 +124,14 @@ func NewFederationClientWithTimeout(timeout time.Duration) *FederationClient {
 	}
 }
 
-// localPanelVersion 与 handler.currentPanelVersion 同源（FLUX_VERSION
-// 环境变量，未设为 "dev"），供 Connect 上报本方面板版本（V5-3）。
+// localPanelVersion 与 handler.currentPanelVersion 同源（版本键
+// 环境变量：新键 FLMX_VERSION 优先、旧键 FLUX_VERSION 回退，未设
+// 为 "dev"），供 Connect 上报本方面板版本（V5-3）。
 func localPanelVersion() string {
-	version := strings.TrimSpace(os.Getenv("FLUX_VERSION"))
+	version := strings.TrimSpace(os.Getenv("FLMX_VERSION"))
+	if version == "" {
+		version = strings.TrimSpace(os.Getenv("FLUX_VERSION"))
+	}
 	if version == "" {
 		return "dev"
 	}

@@ -129,7 +129,7 @@ func TestUpdateEnvVersionReplacesExistingValue(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 
-	want := "FLUX_VERSION=2.1.9\nJWT_SECRET=test\n"
+	want := "FLMX_VERSION=2.1.9\nJWT_SECRET=test\n"
 	if string(data) != want {
 		t.Fatalf("env content = %q, want %q", string(data), want)
 	}
@@ -152,7 +152,7 @@ func TestUpdateEnvVersionAppendsMissingValue(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 
-	want := "JWT_SECRET=test\nFLUX_VERSION=2.1.9\n"
+	want := "JWT_SECRET=test\nFLMX_VERSION=2.1.9\n"
 	if string(data) != want {
 		t.Fatalf("env content = %q, want %q", string(data), want)
 	}
@@ -423,7 +423,7 @@ func TestUpdateEnvVersionCapsLooseModeAt0600(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if want := "FLUX_VERSION=2.1.9\nJWT_SECRET=test\n"; string(data) != want {
+	if want := "FLMX_VERSION=2.1.9\nJWT_SECRET=test\n"; string(data) != want {
 		t.Fatalf("env content = %q, want %q (content bytes must be unchanged by the mode cap)", string(data), want)
 	}
 }
@@ -726,7 +726,8 @@ func TestSystemUpgradeStatusHandler(t *testing.T) {
 	}
 }
 
-// U1-009：updateEnvVersion 不得误伤 FLUX_VERSION_EXTRA。
+// U1-009：updateEnvVersion 不得误伤 FLUX_VERSION_EXTRA；命中的旧键
+// FLUX_VERSION 行改写时迁为新键 FLMX_VERSION（改名迁移）。
 func TestUpdateEnvVersionDoesNotTouchExtraKey(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
@@ -742,7 +743,29 @@ func TestUpdateEnvVersionDoesNotTouchExtraKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	want := "FLUX_VERSION_EXTRA=9.9.9\nFLUX_VERSION=1.0.10\n"
+	want := "FLUX_VERSION_EXTRA=9.9.9\nFLMX_VERSION=1.0.10\n"
+	if string(data) != want {
+		t.Fatalf("env content = %q, want %q", string(data), want)
+	}
+}
+
+// 改名迁移：新旧两键并存的存量 .env 改写后只剩一行 FLMX_VERSION。
+func TestUpdateEnvVersionMigratesDualKeysToSingleFLMX(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	original := "FLUX_VERSION=1.0.0\nJWT_SECRET=test\nFLMX_VERSION=1.0.0\n"
+	if err := os.WriteFile(envPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	exec := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flmx-panel-backend"}
+	if err := exec.updateEnvVersion(envPath, "2.0.0"); err != nil {
+		t.Fatalf("updateEnvVersion() error = %v", err)
+	}
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	want := "FLMX_VERSION=2.0.0\nJWT_SECRET=test\n"
 	if string(data) != want {
 		t.Fatalf("env content = %q, want %q", string(data), want)
 	}
@@ -829,8 +852,8 @@ echo "2026-01-01T00:00:00Z"
 	cmd.Env = append(os.Environ(),
 		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"PANEL_DEPLOY_DIR="+deployDir,
-		"FLUX_UPGRADE_VERSION=9.9.9",
-		"FLUX_UPGRADE_STARTED_AT=2026-01-01T00:00:00Z",
+		"FLMX_UPGRADE_VERSION=9.9.9",
+		"FLMX_UPGRADE_STARTED_AT=2026-01-01T00:00:00Z",
 	)
 	out, runErr := cmd.CombinedOutput()
 	if runErr == nil {
@@ -971,7 +994,7 @@ func TestSystemUpgradeAnchorNotePlumbing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	wantEnv := "FLUX_UPGRADE_ANCHOR_NOTE=" + string(raw[1:len(raw)-1])
+	wantEnv := "FLMX_UPGRADE_ANCHOR_NOTE=" + string(raw[1:len(raw)-1])
 	found := false
 	for _, a := range args {
 		if a == wantEnv {
@@ -981,7 +1004,7 @@ func TestSystemUpgradeAnchorNotePlumbing(t *testing.T) {
 	if !found {
 		t.Fatalf("buildHelperRunArgs() missing %q in %#v", wantEnv, args)
 	}
-	if script := exec.helperScript(); !strings.Contains(script, "anchorNote") || !strings.Contains(script, "FLUX_UPGRADE_ANCHOR_NOTE") {
+	if script := exec.helperScript(); !strings.Contains(script, "anchorNote") || !strings.Contains(script, "FLMX_UPGRADE_ANCHOR_NOTE") {
 		t.Fatal("helper script must preserve anchorNote on status rewrite")
 	}
 

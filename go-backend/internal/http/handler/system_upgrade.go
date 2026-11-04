@@ -358,7 +358,12 @@ func newSystemUpgradeExecutor() *systemUpgradeExecutor {
 }
 
 func currentPanelVersion() string {
-	version := strings.TrimSpace(os.Getenv("FLUX_VERSION"))
+	// 改名过渡：新键 FLMX_VERSION 优先、旧键 FLUX_VERSION 回退
+	// （存量 .env 在下一次升级改写时迁到新键，见 updateEnvVersion）。
+	version := strings.TrimSpace(os.Getenv("FLMX_VERSION"))
+	if version == "" {
+		version = strings.TrimSpace(os.Getenv("FLUX_VERSION"))
+	}
 	if version == "" {
 		return "dev"
 	}
@@ -582,11 +587,11 @@ write_status() {
   # R8-003：透传的第二锚降级点名（已由面板侧 JSON 转义）原样保留进
   # 终态，未透传时不写该字段。
   anchor_field=""
-  if [ -n "${FLUX_UPGRADE_ANCHOR_NOTE:-}" ]; then
-    anchor_field=", \"anchorNote\": \"${FLUX_UPGRADE_ANCHOR_NOTE}\""
+  if [ -n "${FLMX_UPGRADE_ANCHOR_NOTE:-}" ]; then
+    anchor_field=", \"anchorNote\": \"${FLMX_UPGRADE_ANCHOR_NOTE}\""
   fi
   printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"%s}\n' \
-    "$1" "${FLUX_UPGRADE_VERSION:-}" "${FLUX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$anchor_field" > "$STATUS_FILE.tmp"
+    "$1" "${FLMX_UPGRADE_VERSION:-}" "${FLMX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$anchor_field" > "$STATUS_FILE.tmp"
   chmod 600 "$STATUS_FILE.tmp" 2>/dev/null || true
   mv -f "$STATUS_FILE.tmp" "$STATUS_FILE"
 }
@@ -753,8 +758,8 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 	// U1-003：透传目标版本/开始时间，helper 回写升级状态文件时用。
 	if e.upgradeVersion != "" {
 		args = append(args,
-			"-e", "FLUX_UPGRADE_VERSION="+e.upgradeVersion,
-			"-e", "FLUX_UPGRADE_STARTED_AT="+e.upgradeStartedAt)
+			"-e", "FLMX_UPGRADE_VERSION="+e.upgradeVersion,
+			"-e", "FLMX_UPGRADE_STARTED_AT="+e.upgradeStartedAt)
 	}
 	// R8-003：透传第二锚降级点名（JSON 字符串转义后的内容、不含外层
 	// 引号），helper 回写终态时原样保留进状态文件；为空则不透传，
@@ -762,7 +767,7 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 	if e.upgradeAnchorNote != "" {
 		if raw, err := json.Marshal(e.upgradeAnchorNote); err == nil && len(raw) >= 2 {
 			args = append(args,
-				"-e", "FLUX_UPGRADE_ANCHOR_NOTE="+string(raw[1:len(raw)-1]))
+				"-e", "FLMX_UPGRADE_ANCHOR_NOTE="+string(raw[1:len(raw)-1]))
 		}
 	}
 	return append(args,
@@ -784,25 +789,34 @@ func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error 
 	if err != nil {
 		return err
 	}
-	lines := strings.Split(string(data), "\n")
+	rawLines := strings.Split(string(data), "\n")
+	lines := make([]string, 0, len(rawLines))
 	replaced := false
-	for i, line := range lines {
+	for _, line := range rawLines {
 		// U1-009：按键名精确匹配（旧逻辑 HasPrefix 会误伤 FLUX_VERSION_EXTRA= 等同前缀变量）。
 		key := line
 		if idx := strings.Index(line, "="); idx >= 0 {
 			key = line[:idx]
 		}
-		if strings.TrimSpace(key) == "FLUX_VERSION" {
-			lines[i] = "FLUX_VERSION=" + version
-			replaced = true
+		// 改名迁移：新键 FLMX_VERSION 与旧键 FLUX_VERSION 都算版本
+		// 行；首个版本行改写为新键（存量 .env 升级一次即完成键迁
+		// 移），后续版本行（两键并存的存量）整行删去，保证迁移后
+		// 有且只有一行 FLMX_VERSION。
+		if k := strings.TrimSpace(key); k == "FLMX_VERSION" || k == "FLUX_VERSION" {
+			if !replaced {
+				lines = append(lines, "FLMX_VERSION="+version)
+				replaced = true
+			}
+			continue
 		}
+		lines = append(lines, line)
 	}
 	if !replaced {
 		trimmed := strings.TrimRight(strings.Join(lines, "\n"), "\n")
 		if trimmed == "" {
-			trimmed = "FLUX_VERSION=" + version
+			trimmed = "FLMX_VERSION=" + version
 		} else {
-			trimmed += "\nFLUX_VERSION=" + version
+			trimmed += "\nFLMX_VERSION=" + version
 		}
 		return writeFileAtomicWithMode(envPath, []byte(trimmed+"\n"), mode)
 	}
@@ -1381,7 +1395,8 @@ func panelImageRefOwned(ref string) bool {
 }
 
 // backendImageRef 返回后端容器创建时使用的镜像引用
-// （.Config.Image，如 ghcr.io/<owner>/flmx-flux-panel-backend:1.9.4）。
+// （.Config.Image，如 ghcr.io/<owner>/flmx-panel-backend:1.9.7；
+// 改名前的 flmx-flux-panel-backend 同前缀、归属判定同样通过）。
 // 与 currentBackendImage 返回的解析后镜像 ID 不同：归属断言必须
 // 看引用本身——镜像 ID 只证明某个镜像存在，无法区分同机同名的
 // 他方部署。

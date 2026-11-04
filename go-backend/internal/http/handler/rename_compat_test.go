@@ -33,6 +33,19 @@ func TestRenameCompatLegacyEnvFallback(t *testing.T) {
 	}
 }
 
+// FLMX 改名兼容：面板版本键新名 FLMX_VERSION 优先、旧名
+// FLUX_VERSION 回退（存量 .env 未迁移前继续可读）。
+func TestRenameCompatPanelVersionKeyPriority(t *testing.T) {
+	t.Setenv("FLUX_VERSION", "1.9.7")
+	if got := currentPanelVersion(); got != "1.9.7" {
+		t.Fatalf("legacy FLUX_VERSION ignored: got %q", got)
+	}
+	t.Setenv("FLMX_VERSION", "2.0.0")
+	if got := currentPanelVersion(); got != "2.0.0" {
+		t.Fatalf("FLMX_VERSION must win over legacy FLUX_VERSION: got %q", got)
+	}
+}
+
 // FLMX 改名兼容：改名前发出的 v2/v1 个人订阅链接签名必须继续有效，
 // 新链接使用 v3（flmx-subsig）签名。
 func TestRenameCompatSigVersions(t *testing.T) {
