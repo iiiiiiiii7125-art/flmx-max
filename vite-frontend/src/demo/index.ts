@@ -818,12 +818,31 @@ function exportAnswer(
   };
 }
 
+/**
+ * Gist versions: the recording holds an empty list (a seeded panel
+ * has no real Gist to list), which leaves the restore entry point
+ * unrendered and the whole restore surface unreachable in the demo.
+ * Same precedent as the synthesized upload fixture: present the one
+ * version the demo's own upload produced, stamped an hour ago.
+ */
+function gistVersionsAnswer(bare: string) {
+  if (bare !== "backup/gist/versions") return null;
+
+  return {
+    code: 0,
+    msg: "操作成功",
+    data: [{ version: "demo-v1", committedAt: Date.now() - 3600_000 }],
+    ts: Date.now(),
+  };
+}
+
 function receiptAnswer(
   bare: string,
   body: unknown,
   book: Record<string, Entry[]>,
 ) {
   return (
+    gistVersionsAnswer(bare) ??
     installAnswer(bare, body) ??
     templateRefreshAnswer(bare, body, book) ??
     backupImportAnswer(bare, body) ??
