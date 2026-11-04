@@ -3578,11 +3578,13 @@ func importAdminState(tx *gorm.DB) (admins int64, adminRow1 int64, err error) {
 // validateImportAdminInvariant 是 R1-06-L1 的导入后不变式：users 段
 // 落库后（仍在导入事务内）校验管理员面未被导入消灭，任一臂命中即
 // 返回点名错误、整单回滚——
-//   臂① 导入后全库 role_id=0 计数为 0（备份全段无管理员行、且现行
-//       管理员行被其同 id 非管理员行覆盖，或目标库本就无管理员）；
-//   臂② 导入前 id=1 为管理员、导入后 id=1 不再是管理员（id=1 行被
-//       备份降权覆盖，即便备份另带其他管理员行亦拒绝：id=1 是
-//       seedData 的播种锚点，静默换锚会让运维以为管理员未变）。
+//
+//	臂① 导入后全库 role_id=0 计数为 0（备份全段无管理员行、且现行
+//	    管理员行被其同 id 非管理员行覆盖，或目标库本就无管理员）；
+//	臂② 导入前 id=1 为管理员、导入后 id=1 不再是管理员（id=1 行被
+//	    备份降权覆盖，即便备份另带其他管理员行亦拒绝：id=1 是
+//	    seedData 的播种锚点，静默换锚会让运维以为管理员未变）。
+//
 // 正常备份（自家导出恒含其 id=1 管理员行）两臂均不命中。
 func validateImportAdminInvariant(tx *gorm.DB, preAdminRow1 int64) error {
 	admins, adminRow1, err := importAdminState(tx)

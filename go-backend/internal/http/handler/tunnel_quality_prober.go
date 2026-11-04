@@ -85,8 +85,8 @@ type tunnelQualitySnapshot struct {
 // tunnelQualityProber runs periodic TCP ping probes against all enabled tunnels.
 // Design mirrors health.Checker: background goroutine with worker pool + scheduled cleanup.
 type tunnelQualityProber struct {
-	handler   *Handler
-	cache     sync.Map // tunnelID (int64) → *tunnelQualitySnapshot
+	handler *Handler
+	cache   sync.Map // tunnelID (int64) → *tunnelQualitySnapshot
 	// storeMu 串行化 storeResult 的「读缓存→判时间戳/落库门→写缓存」
 	// 全程（R1-09-L2）：probeAll 轮次与节点重连探测两个调用方可并发
 	// 探同一隧道，无串行时两份快照会同穿 30 秒落库门写出重复历史行。
