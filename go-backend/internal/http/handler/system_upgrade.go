@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -80,6 +81,12 @@ type systemUpgradeExecutor struct {
 	// 一并落盘并透传 helper 回写，使状态轮询面也能透出单锚/双锚区别
 	// （此前只进发起回执的 message、前端又不读，UI 无从区分）。
 	upgradeAnchorNote string
+	// expectedSQLiteVolume 是升级前记录的后端数据卷名（.env 原有
+	// FLMX_SQLITE_VOLUME 值或钉键实读值，见 pinLegacyResourceNames）：
+	// 透传 helper 在重建后校验新后端 /app/data 实际挂载卷与之一致，
+	// 不一致即回滚。为空表示升级前无从记录（无旧后端等），helper
+	// 跳过校验。
+	expectedSQLiteVolume string
 	// composeProject is the Compose project the running containers belong
 	// to. It need not match the deploy directory's name (e.g. installed
 	// from /root, deployed in /opt/flvx-panel); without it Compose would
@@ -729,6 +736,27 @@ if ! wait_backend_healthy; then
   exit 1
 fi
 
+# 数据卷校验（1.9.9）：健康只证明新进程能跑，不证明它挂的是原来的
+# 数据卷——无键存量若被新模板缺省卷名接管，后端会对着空卷按新装
+# 播种且健康检查照样通过（1.9.8 生产事故）。面板侧升级前已把数据
+# 卷名钉进 .env 并经 FLMX_EXPECTED_SQLITE_VOLUME 透传期望值；此处
+# 实读新后端 /app/data 的挂载卷名比对，不一致（或读不到）即按挂错
+# 卷处理：走既有 rollback 恢复旧文件与旧容器，绝不以成功收场。
+# 期望值为空（升级前无旧后端可记录）时跳过。
+if [ -n "${FLMX_EXPECTED_SQLITE_VOLUME:-}" ]; then
+  new_backend=$(docker compose ps backend --format '{{.Name}}' 2>/dev/null | head -n 1 || true)
+  actual_volume=""
+  if [ -n "$new_backend" ]; then
+    actual_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$new_backend" 2>/dev/null || true)
+  fi
+  if [ "$actual_volume" != "$FLMX_EXPECTED_SQLITE_VOLUME" ]; then
+    log "错误: 新后端 /app/data 实际挂载卷「${actual_volume:-（空）}」与升级前记录的数据卷「$FLMX_EXPECTED_SQLITE_VOLUME」不一致，疑似挂到空卷，执行回滚"
+    rollback
+    exit 1
+  fi
+  log "数据卷校验通过: /app/data 挂载卷与升级前一致（$actual_volume）"
+fi
+
 log "升级完成"
 # U1-002：只有健康检查通过才清理备份文件；升级终态写入状态文件
 write_status "false" "success"
@@ -769,6 +797,13 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 			args = append(args,
 				"-e", "FLMX_UPGRADE_ANCHOR_NOTE="+string(raw[1:len(raw)-1]))
 		}
+	}
+	// 钉卷校验期望值：升级前记录的数据卷名透传 helper，重建后实读
+	// 新后端挂载卷比对（见 helperScript 数据卷校验段）；为空不透传、
+	// helper 跳过校验。
+	if e.expectedSQLiteVolume != "" {
+		args = append(args,
+			"-e", expectedSQLiteVolumeEnvKey+"="+e.expectedSQLiteVolume)
 	}
 	return append(args,
 		"--entrypoint", "/bin/sh", imageID,
@@ -822,6 +857,316 @@ func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error 
 	}
 	content := strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
 	return writeFileAtomicWithMode(envPath, []byte(content), mode)
+}
+
+// —— 存量资源名钉键（1.9.9，与 panel_install.sh 的
+// panel_pin_missing_resource_keys 同口径、补齐面板内升级面）——
+//
+// 1.9.8 生产事故：无身份键的存量部署（.env 无 FLMX_SQLITE_VOLUME
+// 等键）经面板内升级换上新 compose 模板后，模板卷名表达式
+// ${FLMX_SQLITE_VOLUME:-flmx-sqlite-data} 落缺省新卷，后端挂空卷按
+// 新装播种，真库卷被晾在一边。脚本更新流早有钉键防线（动容器前
+// inspect 旧后端实读卷名钉进 .env），面板内升级面（本文件）此前
+// 只有 preserveComposeNetworks 保网络段、updateEnvVersion 改版本
+// 键，对卷名零处理——双面同能力未对齐的缺口在此补齐：升级动任何
+// 文件之前，把缺失的资源名键按旧容器的现行有效值钉进 .env，已有
+// 键逐字保留、绝不覆盖。
+const (
+	envKeySQLiteVolume   = "FLMX_SQLITE_VOLUME"
+	envKeyPostgresVolume = "FLMX_POSTGRES_VOLUME"
+	envKeyNetwork        = "FLMX_NETWORK"
+	envKeyComposeProject = "COMPOSE_PROJECT_NAME"
+	// envKeyPanelPostgresContainer 是部署 .env 中 PG 容器名的身份
+	// 键（脚本 write_new_panel_identity 落盘同名键）：定位旧 PG 容
+	// 器时优先取部署自带声明，其次按 Compose 项目+服务标签查找。
+	envKeyPanelPostgresContainer = "PANEL_POSTGRES_CONTAINER"
+	// expectedSQLiteVolumeEnvKey 是透传 helper 的期望数据卷名键：
+	// helper 重建后实读新后端挂载卷与之比对，不一致即回滚。
+	expectedSQLiteVolumeEnvKey = "FLMX_EXPECTED_SQLITE_VOLUME"
+	// legacyPostgresDataVolume 是脚本面同口径的历史缺省 PG 卷名：
+	// PG 容器不在场但该卷存在时钉它（脚本面板迁移/存量识别同名）。
+	legacyPostgresDataVolume = "postgres_data"
+)
+
+// errDataVolumeUndetermined 是 fail-closed 哨兵：旧后端在场但其实
+// 读数据卷名为空、.env 又无键——中止升级且不做任何更改。
+var errDataVolumeUndetermined = fmt.Errorf("无法确定现有数据卷名")
+
+// dockerResourceNamePattern 是 Docker 卷/网络名的合法形态（名称必
+// 以字母数字开头，其后为字母数字与 _ . -）：inspect 实读值不合此
+// 式视为未读到，不钉入 .env。
+var dockerResourceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+// envKeyValue 是一条待钉入 .env 的键值。
+type envKeyValue struct {
+	key   string
+	value string
+}
+
+// parseEnvFileValues 解析 .env 内容为键值表（与脚本 get_env_var 同
+// 口径：行首 KEY= 首现为准、值取首个 = 之后原文，此处另做首尾空
+// 白裁剪供空值判定；注释与空行跳过）。
+func parseEnvFileValues(data []byte) map[string]string {
+	values := make(map[string]string)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, exists := values[key]; exists {
+			continue
+		}
+		values[key] = strings.TrimSpace(value)
+	}
+	return values
+}
+
+// applyEnvPins 把 pins 钉进 .env 内容并返回新内容（纯函数）：同名
+// 键的空值行就地补值（与脚本 upsert 对空键行的效果一致）、缺失键
+// 追加到文件尾；已有非空值行与其余一切行（注释、顺序）逐字保留。
+// 调用方（规划段）保证 pins 只含 .env 缺失或为空的键。
+func applyEnvPins(data []byte, pins []envKeyValue) []byte {
+	if len(pins) == 0 {
+		return data
+	}
+	pinByKey := make(map[string]string, len(pins))
+	for _, pin := range pins {
+		pinByKey[pin.key] = pin.value
+	}
+	seen := make(map[string]bool, len(pins))
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		key, value, ok := strings.Cut(strings.TrimSuffix(line, "\r"), "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		pin, wanted := pinByKey[key]
+		if !wanted {
+			continue
+		}
+		// 键已在文件中出现即标记 seen，防追加段再补一行同名键；
+		// 只有空值行就地补值，非空行逐字保留。
+		seen[key] = true
+		if strings.TrimSpace(value) != "" {
+			continue
+		}
+		lines[i] = key + "=" + pin
+	}
+	out := strings.TrimRight(strings.Join(lines, "\n"), "\n")
+	for _, pin := range pins {
+		if seen[pin.key] {
+			continue
+		}
+		if out != "" {
+			out += "\n"
+		}
+		out += pin.key + "=" + pin.value
+		seen[pin.key] = true
+	}
+	return []byte(out + "\n")
+}
+
+// resourceNameInspect 是升级前对旧容器的一次实读结果（采集段填
+// 报、规划段消费；纯数据，便于单测构造）。
+type resourceNameInspect struct {
+	// backendName 是旧后端容器名（fail-closed 点名用）。
+	backendName string
+	// backendExists 为旧后端容器存在且可 inspect。
+	backendExists bool
+	// sqliteVolume 是旧后端 /app/data 挂载的卷名；bind 挂载、
+	// 无此挂载或 inspect 失败时为空。
+	sqliteVolume string
+	// pgVolume 是旧 PG 容器 /var/lib/postgresql/data 的卷名；
+	// PG 容器不在场或读不到时为空。
+	pgVolume string
+	// postgresDataVolumeExists 为历史缺省名 PG 卷是否存在。
+	postgresDataVolumeExists bool
+	// network 是旧后端所连的唯一网络名；未连或多网络时为空。
+	network string
+	// composeProject 是旧后端的 Compose 项目标签；读不到为空。
+	composeProject string
+}
+
+// planLegacyResourcePins 是钉键的纯规划段：给定 .env 现值与旧容器
+// 实读，产出待钉键（固定序：SQLite 卷、PG 卷、网络、项目名）与升
+// 级后校验用的期望数据卷名（.env 原值优先、其次实读钉值）。
+// 已有非空键逐字保留、绝不进 pins。
+//
+// fail-closed：.env 缺 FLMX_SQLITE_VOLUME、旧后端在场、但其实读
+// 卷名为空 → 返回 errDataVolumeUndetermined 缠绕错误，调用方必须
+// 在动任何文件之前中止。与脚本面的口径差异（有意为之）：脚本面
+// 实读为空时回退旧缺省名 sqlite_data——其回退值恰是历史缺省卷
+// 名，对标准名存量无害；但面板内升级面同样面对自定义卷名部署，
+// 实读失败时回退缺省名等于把错卷钉死、重演 1.9.8 事故的变体，
+// 故此处不回退、只中止。PG 卷的 postgres_data 回退与脚本同口
+// 径保留：该键对 SQLite 部署惰性无害，且脚本的存量识别亦以此
+// 名为锚，语义是「历史缺省卷在场则认领」而非猜测现行卷名。
+// 旧后端不存在（全新安装形态）时不钉卷、不报错、期望值为空。
+func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) ([]envKeyValue, string, error) {
+	pins := make([]envKeyValue, 0, 4)
+	expected := env[envKeySQLiteVolume]
+	if expected == "" {
+		switch {
+		case insp.backendExists && insp.sqliteVolume == "":
+			return nil, "", fmt.Errorf("%w：部署 .env 缺少 %s，旧后端容器 %s 的 /app/data 挂载实读为空（可能是 bind 挂载、无此挂载或 inspect 失败）",
+				errDataVolumeUndetermined, envKeySQLiteVolume, insp.backendName)
+		case insp.backendExists:
+			pins = append(pins, envKeyValue{envKeySQLiteVolume, insp.sqliteVolume})
+			expected = insp.sqliteVolume
+		}
+	}
+	if env[envKeyPostgresVolume] == "" {
+		pgVolume := insp.pgVolume
+		if pgVolume == "" && insp.postgresDataVolumeExists {
+			pgVolume = legacyPostgresDataVolume
+		}
+		if pgVolume != "" {
+			pins = append(pins, envKeyValue{envKeyPostgresVolume, pgVolume})
+		}
+	}
+	if env[envKeyNetwork] == "" && insp.network != "" {
+		pins = append(pins, envKeyValue{envKeyNetwork, insp.network})
+	}
+	if env[envKeyComposeProject] == "" && insp.composeProject != "" {
+		pins = append(pins, envKeyValue{envKeyComposeProject, insp.composeProject})
+	}
+	return pins, expected, nil
+}
+
+// upgradeDataVolumeMismatch 是 helper 数据卷校验段的判定谓词（与
+// helperScript 内 shell 比对同式，由测试双向钉住）：期望值非空且
+// 实际挂载卷与之不同（含实际为空）即判不一致、触发回滚。
+func upgradeDataVolumeMismatch(expected, actual string) bool {
+	return expected != "" && actual != expected
+}
+
+// dockerInspectMountVolumeName 实读容器在 destination 处的挂载卷
+// 名（与脚本面 panel_pin_missing_resource_keys 的 inspect 模板同
+// 式）：bind 挂载该字段为空、inspect 失败返回空串。
+func (e *systemUpgradeExecutor) dockerInspectMountVolumeName(ctx context.Context, container, destination string) string {
+	tmpl := fmt.Sprintf(`{{range .Mounts}}{{if eq .Destination %q}}{{.Name}}{{end}}{{end}}`, destination)
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", tmpl, container).Output()
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimSpace(string(out))
+	if !dockerResourceNamePattern.MatchString(name) {
+		return ""
+	}
+	return name
+}
+
+// dockerContainerExists 报告容器是否存在且可 inspect。
+func (e *systemUpgradeExecutor) dockerContainerExists(ctx context.Context, container string) bool {
+	if validateBackendContainerName(container) != nil {
+		return false
+	}
+	return exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.Id}}", container).Run() == nil
+}
+
+// inspectLegacyResourceNames 采集规划段所需的旧容器实读（本文件既
+// 有 docker 执行通道：exec.CommandContext + inspect 模板，与
+// detectHostDeployDir/detectComposeProject 同形态）。任一单项读
+// 不到只影响该项钉键，唯独 SQLite 卷在规划段 fail-closed。
+func (e *systemUpgradeExecutor) inspectLegacyResourceNames(ctx context.Context, env map[string]string) resourceNameInspect {
+	insp := resourceNameInspect{backendName: e.backendContainer}
+	if !e.dockerContainerExists(ctx, e.backendContainer) {
+		return insp
+	}
+	insp.backendExists = true
+	insp.sqliteVolume = e.dockerInspectMountVolumeName(ctx, e.backendContainer, "/app/data")
+	insp.composeProject = e.detectComposeProject(ctx)
+
+	// 旧后端所连网络：恰一个时钉它；多网络时实读串无法无歧义归
+	// 一，跳过该键（脚本面同模板会把多网络名拼接成废串，此处不
+	// 沿袭该形态）。
+	networksOut, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
+		`{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}`, e.backendContainer).Output()
+	if err == nil {
+		names := make([]string, 0, 2)
+		for _, line := range strings.Split(string(networksOut), "\n") {
+			if name := strings.TrimSpace(line); name != "" {
+				names = append(names, name)
+			}
+		}
+		if len(names) == 1 && dockerResourceNamePattern.MatchString(names[0]) {
+			insp.network = names[0]
+		}
+	}
+
+	// 旧 PG 容器定位：优先部署 .env 自带的容器名声明（本部署自
+	// 述，不探他人部署）；其次按 Compose 项目 + 服务标签在本项
+	// 目内查找。两者都落空时只剩 postgres_data 卷存在性回退。
+	pgContainer := strings.TrimSpace(env[envKeyPanelPostgresContainer])
+	if validateBackendContainerName(pgContainer) != nil {
+		pgContainer = ""
+	}
+	if pgContainer == "" && insp.composeProject != "" {
+		out, err := exec.CommandContext(ctx, "docker", "ps", "-a",
+			"--filter", "label=com.docker.compose.project="+insp.composeProject,
+			"--filter", "label=com.docker.compose.service=postgres",
+			"--format", "{{.Names}}").Output()
+		if err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if name := strings.TrimSpace(line); name != "" {
+					if validateBackendContainerName(name) == nil {
+						pgContainer = name
+					}
+					break
+				}
+			}
+		}
+	}
+	if pgContainer != "" && e.dockerContainerExists(ctx, pgContainer) {
+		insp.pgVolume = e.dockerInspectMountVolumeName(ctx, pgContainer, "/var/lib/postgresql/data")
+	}
+	if insp.pgVolume == "" {
+		insp.postgresDataVolumeExists =
+			exec.CommandContext(ctx, "docker", "volume", "inspect", legacyPostgresDataVolume).Run() == nil
+	}
+	return insp
+}
+
+// pinLegacyResourceNames 在升级动任何文件之前执行钉键：读部署
+// .env → 实读旧容器 → 纯规划 → 有钉键才原子改写 .env（mode 帽与
+// updateEnvVersion 同口径）。返回升级后校验用的期望数据卷名。
+// fail-closed 时 .env 一字未动，调用方直接中止升级。
+func (e *systemUpgradeExecutor) pinLegacyResourceNames(ctx context.Context) (string, error) {
+	data, err := os.ReadFile(e.envPath())
+	if err != nil {
+		return "", fmt.Errorf("读取部署 .env 失败: %v", err)
+	}
+	env := parseEnvFileValues(data)
+	insp := e.inspectLegacyResourceNames(ctx, env)
+	pins, expected, err := planLegacyResourcePins(env, insp)
+	if err != nil {
+		return "", err
+	}
+	if len(pins) == 0 {
+		return expected, nil
+	}
+	mode, err := fileModeOrDefault(e.envPath(), 0o600)
+	if err != nil {
+		return "", err
+	}
+	if err := writeFileAtomicWithMode(e.envPath(), applyEnvPins(data, pins), capEnvFileMode(mode)); err != nil {
+		return "", fmt.Errorf("钉入存量资源名失败: %v", err)
+	}
+	pairs := make([]string, 0, len(pins))
+	for _, pin := range pins {
+		pairs = append(pairs, pin.key+"="+pin.value)
+	}
+	log.Printf("systemUpgrade: 已将存量资源名钉入 .env（升级前实读旧容器）: %s", strings.Join(pairs, ", "))
+	return expected, nil
 }
 
 func (e *systemUpgradeExecutor) backupFile(path string) (string, error) {
@@ -1818,6 +2163,23 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+
+	// 存量资源名钉键（1.9.9）：赶在备份/换 compose/改 .env 之前，
+	// 把 .env 缺失的卷/网络/项目名按旧容器现行值钉死，防新模板
+	// 缺省卷名让后端挂空卷（1.9.8 事故，见 pinLegacyResourceNames）。
+	// 期望数据卷名随后透传 helper 做重建后校验。fail-closed 中止
+	// 时文件一字未动（钉键写点尚未发生、备份亦未做）。
+	expectedVolume, err := exec.pinLegacyResourceNames(r.Context())
+	if err != nil {
+		msg := "升级已中止（未做任何更改）: " + err.Error()
+		if errors.Is(err, errDataVolumeUndetermined) {
+			msg += "。为防升级后挂到空卷，请在部署 .env 中显式设置 FLMX_SQLITE_VOLUME 为现有数据卷名后重试，或改用安装脚本的“更新面板”完成升级"
+		}
+		log.Printf("systemUpgrade: %s", msg)
+		response.WriteJSON(w, response.Err(-2, msg))
+		return
+	}
+	exec.expectedSQLiteVolume = expectedVolume
 
 	composePath := exec.composePath()
 	envPath := exec.envPath()
