@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261104.09"
+SCRIPT_VERSION="20261104.10"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1750,7 +1750,7 @@ panel_sibling_default() {
   fi
 }
 
-# ---- 存量身份改名（升级流内默认执行，PANEL_IDENTITY_RENAME=0 可关）----
+# ---- 存量身份改名（升级流内默认执行，PANEL_IDENTITY_RENAME=0 可关，.env 与进程环境双通道、.env 优先，见 panel_identity_rename_enabled）----
 # 触发面：部署 .env 的三个容器身份键任一缺失、或仍为旧缺省名
 # （flux-panel-backend / flux-panel-postgres / vite-frontend）。定制
 # 名（非旧非新）与实例派生名不触发；已是现行名的部署零动作。
@@ -1784,46 +1784,124 @@ panel_stop_remove_container() {
   fi
 }
 
+# 卷内文件探测：经卷挂载点在宿主机侧只读查看（脚本以 root 运行、
+# 本地卷挂载点恒可读），不为探测拉起容器、不写卷。挂载点读不到
+# 时按「无证据」返回 1，不臆断卷内有数据。
+panel_volume_file_exists() {
+  local volume="$1" relpath="$2" mountpoint=""
+  mountpoint=$(docker volume inspect -f '{{.Mountpoint}}' "$volume" 2>/dev/null || true)
+  [[ -n "$mountpoint" ]] || return 1
+  [[ -f "$mountpoint/$relpath" ]]
+}
+
 # 改名时把缺失的卷/网络/项目键钉为现行有效值：模板回退默认已翻
 # 为新名，无键存量若不钉值，重建时将按新回退挂空卷/建新网（数据
 # 还在旧卷、只是不可见）。有效值优先从真实容器实读（后端挂载的
 # 数据卷名、所在网络名，F7-01「名字从真实容器推导」同口径），读
 # 不到按该部署唯一可能的旧缺省；PG 卷无容器时查卷本身是否存在。
-# 已有键一律不碰。调用方须保证旧容器尚在册时调用：实读分支以容
-# 器存在为前提，容器删后再调用只剩回退名（RR4-F7-01）。
+# 调用方须保证旧容器尚在册时调用：实读分支以容器存在为前提，容
+# 器删后再调用只剩回退名（RR4-F7-01）。
+# 卷键的冲突处置（RA2-S-01／RA-1 L-2，与迁移 E4 的「实读为准」
+# 同口径）：键已存在但与在跑容器实读挂载不一致时，逐字信任错键
+# 会让钉键与升级后自检同源于错值、挂错卷还报成功——故点名三元
+# （键、旧值、实读值）并以实读为准改写；实读不到（容器不在/bind
+# 挂载）则保留既有键，不臆断。网络/项目键无「实读胜键」语义（网
+# 络名多值、项目名是标签口径），仍只补缺。
+# 事故态门（RA2-S-01 变体）：无键＋实读到的后端卷恰为模板新缺
+# 省 flmx-sqlite-data、且旧名卷 sqlite_data 存在并含 gost.db——
+# 新装恒写身份键（write_new_panel_identity），无键却坐在新缺省
+# 卷上、真库还在旧卷，只可能是 1.9.8 式事故后未救援的部署；此
+# 时钉键会把事故态正式化、后续自检也以错卷为期望。故 fail-
+# closed 中止并点名两卷与人工钉键方法，由人确认数据所在再钉。
+# 第三参 scope=live（迁移路径专用，RA2-S-02）：只钉两个数据卷
+# 键、且只凭实读挂载写值（PG 的 postgres_data 卷存在性回退在
+# 此 scope 下亦不写——卷在不等于卷属于本部署），不写回退缺省、
+# 不碰网络/项目键。缘由：迁移的 .env 快照兼作回滚源、逐字恢复
+# 是既有契约，无实证的写入会污染快照且对迁移的数据面毫无增
+# 益；迁移真正需要的是把后端实挂的卷钉进快照，使最终/回滚
+# up 不再落模板缺省空卷。更新/改名路径用缺省 scope（全量＋
+# 回退写＋PG 卷存在性回退）。
 panel_pin_missing_resource_keys() {
-  local backend_container="$1" postgres_container="$2"
-  if [[ -z "$(get_env_var FLMX_SQLITE_VOLUME || true)" ]]; then
-    local sqlite_volume=""
-    sqlite_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$backend_container" 2>/dev/null || true)
-    upsert_env_var .env FLMX_SQLITE_VOLUME "${sqlite_volume:-sqlite_data}" || return 1
+  local backend_container="$1" postgres_container="$2" pin_scope="${3:-}"
+  local sqlite_key sqlite_volume=""
+  sqlite_key=$(get_env_var FLMX_SQLITE_VOLUME || true)
+  sqlite_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$backend_container" 2>/dev/null || true)
+  if [[ -n "$sqlite_key" ]]; then
+    if [[ -n "$sqlite_volume" && "$sqlite_volume" != "$sqlite_key" ]]; then
+      echo "⚠️ 资源键冲突：.env 的 FLMX_SQLITE_VOLUME=$sqlite_key 与在跑后端 $backend_container 实际挂载的数据卷 $sqlite_volume 不一致；以实读为准改写为 $sqlite_volume（数据以实读为准，旧值不保留）"
+      upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume" || return 1
+    fi
+  else
+    if [[ "$sqlite_volume" == "flmx-sqlite-data$(panel_instance_suffix)" ]] \
+      && docker volume inspect sqlite_data >/dev/null 2>&1 \
+      && panel_volume_file_exists sqlite_data gost.db; then
+      echo "❌ 资源键钉值中止：在跑后端实际挂载的数据卷是新模板缺省名 $sqlite_volume，但部署 .env 没有 FLMX_SQLITE_VOLUME 键、且旧名卷 sqlite_data 存在并含有 gost.db——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
+      echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_SQLITE_VOLUME=sqlite_data；数据确在现行卷 → FLMX_SQLITE_VOLUME=$sqlite_volume。"
+      return 1
+    fi
+    if [[ "$pin_scope" == "live" ]]; then
+      if [[ -n "$sqlite_volume" ]]; then
+        upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume" || return 1
+      fi
+    else
+      upsert_env_var .env FLMX_SQLITE_VOLUME "${sqlite_volume:-sqlite_data}" || return 1
+    fi
   fi
-  if [[ -z "$(get_env_var FLMX_POSTGRES_VOLUME || true)" ]]; then
-    local postgres_volume=""
-    postgres_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$postgres_container" 2>/dev/null || true)
-    if [[ -z "$postgres_volume" ]] && docker volume inspect postgres_data >/dev/null 2>&1; then
+  local postgres_key postgres_volume=""
+  postgres_key=$(get_env_var FLMX_POSTGRES_VOLUME || true)
+  postgres_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$postgres_container" 2>/dev/null || true)
+  if [[ -n "$postgres_key" ]]; then
+    if [[ -n "$postgres_volume" && "$postgres_volume" != "$postgres_key" ]]; then
+      echo "⚠️ 资源键冲突：.env 的 FLMX_POSTGRES_VOLUME=$postgres_key 与在跑 PostgreSQL 容器 $postgres_container 实际挂载的数据卷 $postgres_volume 不一致；以实读为准改写为 $postgres_volume（数据以实读为准，旧值不保留）"
+      upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume" || return 1
+    fi
+  else
+    # scope=live 时不走卷存在性回退：postgres_data 存在只证明该卷
+    # 在，不证明它就是本部署 PG 的卷，写进迁移快照会污染逐字恢
+    # 复契约；迁移的 PG 卷候选由 F7-03/F7-04 的登记口径处理。
+    if [[ -z "$postgres_volume" && "$pin_scope" != "live" ]] && docker volume inspect postgres_data >/dev/null 2>&1; then
       postgres_volume="postgres_data"
     fi
     if [[ -n "$postgres_volume" ]]; then
       upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume" || return 1
     fi
   fi
-  if [[ -z "$(get_env_var FLMX_NETWORK || true)" ]]; then
-    local network_name=""
-    network_name=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$backend_container" 2>/dev/null || true)
-    upsert_env_var .env FLMX_NETWORK "${network_name:-gost-network}" || return 1
-  fi
-  if [[ -z "$(get_env_var COMPOSE_PROJECT_NAME || true)" ]]; then
-    local project_name="${PANEL_COMPOSE_PROJECT:-}"
-    if [[ -z "$project_name" ]]; then
-      project_name="flmx-panel$(panel_instance_suffix)"
+  if [[ "$pin_scope" != "live" ]]; then
+    if [[ -z "$(get_env_var FLMX_NETWORK || true)" ]]; then
+      local network_name=""
+      network_name=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$backend_container" 2>/dev/null || true)
+      upsert_env_var .env FLMX_NETWORK "${network_name:-gost-network}" || return 1
     fi
-    upsert_env_var .env COMPOSE_PROJECT_NAME "$project_name" || return 1
+    if [[ -z "$(get_env_var COMPOSE_PROJECT_NAME || true)" ]]; then
+      local project_name="${PANEL_COMPOSE_PROJECT:-}"
+      if [[ -z "$project_name" ]]; then
+        project_name="flmx-panel$(panel_instance_suffix)"
+      fi
+      upsert_env_var .env COMPOSE_PROJECT_NAME "$project_name" || return 1
+    fi
   fi
 }
 
+# 改名开关读取（RA-1 L-3 双面口径对齐）：与 Go 面
+# identityRenameEnabled 逐字同序——部署 .env 出现
+# PANEL_IDENTITY_RENAME 键即以其值为准（键在即赢，含空值），
+# 缺键才回退进程环境；仅值 "0" 关闭，其余（含缺失与空值）开
+# 启。旧实现只认进程环境：.env 里写的 =0 对脚本面无效、同一部
+# 署在两个升级入口的改名决定可相反（数据安全两侧均由钉键兜
+# 底，分家的是改名与否本身）。进程环境单独设 0（.env 无此键）
+# 仍照旧关闭。
+panel_identity_rename_enabled() {
+  local flag=""
+  if [[ -f .env ]] && grep -q '^PANEL_IDENTITY_RENAME=' .env; then
+    flag=$(get_env_var PANEL_IDENTITY_RENAME || true)
+  else
+    flag="${PANEL_IDENTITY_RENAME:-}"
+  fi
+  [[ "$flag" != "0" ]]
+}
+
 apply_panel_identity_rename() {
-  if [[ "${PANEL_IDENTITY_RENAME:-1}" == "0" ]]; then
+  if ! panel_identity_rename_enabled; then
     return 0
   fi
   [[ -f .env ]] || return 0
@@ -2856,10 +2934,80 @@ get_config_params() {
 # 拒绝、菜单 2 在备份步因容器不存在中止，两条路都收敛不了，唯
 # 一出口是强制重装。各失败回执统一经本指引点名出口与用法（字段
 # 级：变量名、设置方式、后续动作与文件后果）。
+# RA-3 #5 文案漏斗修正：旧指引把「后端容器不存在」一律断言为
+# 半成品——但容器不存在也可能是有数据的部署其后端容器被误删，
+# 操作员照指引强制重装即命中 E3 全后果（数据孤儿化＋PG 口令
+# 脱钩）。现指引先引导查数据卷：有数据先恢复部署文件走菜单 2，
+# 确认无任何数据卷（真半成品）才点名强制重装出口。
 print_force_reinstall_guidance() {
-  echo "   当前状态的唯一出口是强制重装：先自行备份当前部署目录，然后在终端执行："
+  echo "   后端容器不存在不等于没有数据（也可能是已有部署的容器被误删），先确认数据再决定，不要直接强制重装："
+  echo "     1) 执行 docker volume ls，查看是否存在面板数据卷（sqlite_data / flmx-sqlite-data / postgres_data / flmx-postgres-data，或 .env 中 FLMX_SQLITE_VOLUME / FLMX_POSTGRES_VOLUME 指定的卷名）；"
+  echo "     2) 若数据卷存在：数据未丢失——还原 .env 与 docker-compose.yml 的备份（如 .env.bak.<时间戳>）后用菜单「2. 更新面板」按原数据重建即可，不要强制重装（强制重装会按空白新装启动、旧数据卷被晾置，PostgreSQL 口令还会与数据卷脱钩）；"
+  echo "     3) 若确认从未安装成功、没有任何数据卷（首次安装未完成的半成品状态），唯一出口才是强制重装：先自行备份当前部署目录，然后在终端执行："
   echo "     PANEL_FORCE_REINSTALL=1 bash panel_install.sh"
-  echo "   再选择菜单「1. 安装面板」。脚本会先把现存 .env 与 docker-compose.yml 备份为 .env.bak.<时间戳> 与 docker-compose.yml.bak.<时间戳>，再覆写重装。"
+  echo "   再选择菜单「1. 安装面板」。脚本会先把现存 .env 与 docker-compose.yml 备份为 .env.bak.<时间戳> 与 docker-compose.yml.bak.<时间戳>，再覆写重装；覆写前若探到数据卷内有数据，还会逐个点名并要求交互确认。"
+}
+
+# E3 数据点名＋有数据确认（RA-3 #5 必须修）：强制重装放行后、覆
+# 写前，把候选数据卷逐个点名——候选＝.env 解析名（panel_sqlite_
+# volume_name / panel_postgres_volume_name）＋两代模板字面名
+# （sqlite_data / flmx-sqlite-data / postgres_data /
+# flmx-postgres-data，含实例后缀形），去重后只点名真实存在的。
+# 每个存在的卷都打印并给出恢复方法；再经挂载点探测卷内数据
+# （gost.db 与 PG_VERSION 都探，兼容自定义卷名）：探到任一卷有
+# 数据即认定这不是无数据的半成品——交互终端须输入部署目录名
+# 确认才继续，非 TTY 直接中止（把有数据的部署当半成品重装正
+# 是文案漏斗的事故形态）。无数据的半成品（R9-03 的合法出口）
+# 不加任何摩擦、照常直行。本步在守卫内两文件备份之后调用：
+# 中止时备份已在、.env/compose 未动，恢复路径现成。
+panel_force_reinstall_data_gate() {
+  local suffix candidates="" candidate
+  suffix=$(panel_instance_suffix)
+  candidates=""
+  for candidate in "$(panel_sqlite_volume_name)" "$(panel_postgres_volume_name)" \
+      sqlite_data "flmx-sqlite-data${suffix}" postgres_data "flmx-postgres-data${suffix}"; do
+    [[ -n "$candidate" ]] || continue
+    case " $candidates " in
+      *" $candidate "*) continue ;;
+    esac
+    candidates="$candidates $candidate"
+  done
+  local existing="" with_data=""
+  for candidate in $candidates; do
+    if docker volume inspect "$candidate" >/dev/null 2>&1; then
+      existing="$existing $candidate"
+      if panel_volume_file_exists "$candidate" gost.db || panel_volume_file_exists "$candidate" PG_VERSION; then
+        with_data="$with_data $candidate"
+      fi
+    fi
+  done
+  if [[ -n "$existing" ]]; then
+    echo "⚠️  强制重装前数据点名：下列现有数据卷不会被删除，但重装后不再挂载，面板将按空白新装启动："
+    for candidate in $existing; do
+      echo "     - $candidate"
+    done
+    echo "   恢复方法：用本次备份的 .env.bak.<时间戳> 还原 .env 后，运行菜单「2. 更新面板」，即可按原数据卷重建。"
+  fi
+  if [[ -z "$with_data" ]]; then
+    return 0
+  fi
+  echo "❌ 上列数据卷中探到实际数据（SQLite 的 gost.db 或 PostgreSQL 的 PG_VERSION），这不是无数据的半成品状态："
+  for candidate in $with_data; do
+    echo "     - $candidate（含数据）"
+  done
+  if [[ ! -t 0 ]]; then
+    echo "   当前为非交互终端，强制重装已中止，未覆写任何文件。如确认要丢弃卷内数据重装，请在交互终端中重新运行并按提示确认；如需保住数据，先还原 .env 备份并走菜单「2. 更新面板」。"
+    return 1
+  fi
+  local dir_name confirm=""
+  dir_name=$(basename "$(pwd -P)")
+  read -p "   如确认丢弃上述数据卷内的数据并继续重装，请输入部署目录名（$dir_name）确认: " confirm || confirm=""
+  if [[ "$confirm" != "$dir_name" ]]; then
+    echo "   确认输入不符，强制重装已中止，未覆写任何文件。"
+    return 1
+  fi
+  echo "⚠️  已确认：带数据强制重装继续，数据卷将被晾置（不删除），面板按空白新装启动"
+  return 0
 }
 
 # 安装功能
@@ -2900,7 +3048,7 @@ install_panel() {
       echo "   如需升级请使用菜单「2. 更新面板」；继续安装将覆写部署文件并轮换密钥，"
       echo "   PostgreSQL 部署会因口令与数据卷脱钩而无法启动。"
       echo "   确需重装请先自行备份，或设置 PANEL_FORCE_REINSTALL=1 后重试（脚本会先备份现存的 .env 与 docker-compose.yml）。"
-      echo "   强制重装用法：在终端执行 PANEL_FORCE_REINSTALL=1 bash panel_install.sh 后选择菜单「1. 安装面板」。首次安装未完成（容器从未创建）的半成品状态也只能走此出口：菜单「2. 更新面板」会因后端容器不存在在备份步中止。"
+      echo "   强制重装用法：在终端执行 PANEL_FORCE_REINSTALL=1 bash panel_install.sh 后选择菜单「1. 安装面板」。若部署的后端容器不存在，菜单「2. 更新面板」会在备份步中止——但容器不存在不等于没有数据（也可能是容器被误删）：先执行 docker volume ls 确认数据卷，无任何数据卷（首次安装未完成的半成品状态）时才走此出口，有数据卷时应先还原部署文件再走菜单「2. 更新面板」。"
       return 1
     fi
     local backup_ts
@@ -2918,6 +3066,10 @@ install_panel() {
     # 堆积密钥级 .env 副本。
     prune_timestamped_backups "$BACKUP_RETENTION_KEEP" .env.bak.*
     prune_timestamped_backups "$BACKUP_RETENTION_KEEP" docker-compose.yml.bak.*
+    # E3（RA-3 #5）：覆写前数据点名＋有数据时交互确认，见
+    # panel_force_reinstall_data_gate。排在备份之后：确认不过/
+    # 非 TTY 中止时备份已在、部署文件未动，恢复路径现成。
+    panel_force_reinstall_data_gate || return 1
   fi
 
   ensure_compose_urls_initialized || return 1
@@ -3164,12 +3316,13 @@ update_panel() {
     rm -f "$UPDATE_COMPOSE_CANDIDATE"
     UPDATE_COMPOSE_CANDIDATE=""
     echo "❌ 更新前备份失败，更新已中止（未改动现有部署与运行中的服务）"
-    # R9-03: 备份失败若源于后端容器不存在（首装未完成、容器从未
-    # 创建的半成品状态），更新路径无从收敛、菜单 1 又被守卫拒绝，
-    # 回执须点名唯一出口；容器存在的常规部署不打印此指引（其备
-    # 份失败多为磁盘/权限问题，强制重装不是解法）。
+    # R9-03: 备份失败若源于后端容器不存在，更新路径无从收敛、菜
+    # 单 1 又被守卫拒绝，回执须经指引点名处置路径；容器不存在的
+    # 成因不预断（首装未完成的半成品／已有部署容器被误删两可，
+    # RA-3 #5），指引内先查数据卷再分流。容器存在的常规部署不
+    # 打印此指引（其备份失败多为磁盘/权限问题，强制重装不是解法）。
     if ! docker inspect "${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}" >/dev/null 2>&1; then
-      echo "   后端容器不存在：这是首次安装未完成（容器从未创建）的半成品状态，更新无法为不存在的容器备份数据。"
+      echo "   后端容器不存在：更新无法为不存在的容器备份数据。容器不存在既可能是首次安装未完成，也可能是已有部署的容器被误删——先按下方指引确认数据卷再决定。"
       print_force_reinstall_guidance
     fi
     return 1
@@ -3371,6 +3524,25 @@ migrate_to_postgres() {
     return 0
   fi
 
+  # RA2-S-02：迁移的最终 up 与失败回滚 up 都以当前 compose＋.env
+  # 解析卷名，而迁移全程此前不钉键——无键存量＋在册 compose 已
+  # 是新模板（典型来源：1.9.8 面板内事故后的部署，compose 已换
+  # 新模板而键从未落盘）时，回滚会把后端按模板缺省挂到
+  # flmx-sqlite-data 空卷、面板如新装（真库未动、回执点名，人工
+  # 可恢复，但回滚本身落空）。故在任何 down/up 与下方 .env 快照
+  # 之前，先按 update 同口径钉一遍数据卷键（scope=live：只凭实
+  # 证写值，快照逐字契约不被无实证的回退写入污染，见
+  # panel_pin_missing_resource_keys 头注）；钉入值随快照走，最终
+  # 与回滚 up 都按实读卷名解析。钉键失败（含事故态门）即中止，
+  # 此时容器与 compose 未动、不走回滚。
+  if ! panel_pin_missing_resource_keys "$backend_container" "$PANEL_POSTGRES_CONTAINER" "live"; then
+    echo "❌ 迁移前资源键钉值失败，迁移已中止（未改动现有部署与运行中的服务）"
+    return 1
+  fi
+  sqlite_volume=$(panel_sqlite_volume_name)
+  postgres_volume=$(panel_postgres_volume_name)
+  network_name=$(panel_network_name)
+
   # RR4-F7-03/F7-04 共同前置：登记本次运行开始前已存在的 PG 容器
   # 与 PG 卷（卷候选名＝解析名＋旧模板字面名 postgres_data＋现行
   # 模板缺省名 flmx-postgres-data）。F7-03 据此判「半迁移存量」；
@@ -3566,10 +3738,29 @@ migrate_to_postgres() {
   # 实际搬运的对象为准，即它读入的那份 SQLite 文件（预处理副
   # 本或原库）中的全部用户表，逐表比源/目标行数；任一表不一
   # 致（含目标缺表）即点名差异表与两侧计数、由调用方经快照回
-  # 滚判失败。源计数通道不可用（容器内装不上 sqlite 等）时返
-  # 回 2 分开处置：响亮告警未经核对、按既有口径继续——与副本
-  # 预处理的降级哲学一致（工具缺席是环境事实，已数出的不一
-  # 致是数据事实，后者绝不放行）。
+  # 滚判失败。源计数通道整体不可用时返回 2 分开处置：响亮告
+  # 警未经核对、按既有口径继续——与副本预处理的降级哲学一致
+  # （工具缺席是环境事实，已数出的不一致是数据事实，后者绝不
+  # 放行）。
+  # 双通道（RA2-S-05）：通道一（容器内 apk 装 sqlite 后以
+  # sqlite3 计数）依赖 Alpine CDN，在出网受限、仅配了镜像加速
+  # 的真实部署上可达失败——镜像走 registry 面拉得到、apk 装
+  # 不上是现实组合，单通道时 INV-9 的门恰在最需要它的环境里
+  # 变软。故加通道二（migrate_reconcile_row_counts_via_scratch）：
+  # 借迁移本身已拉取的 dimitri/pgloader 镜像（内含独立的
+  # SQLite 读取栈，全程只走镜像仓库面、不碰任何包 CDN）把同
+  # 一份源文件重装进一次性复核库，再以 psql 逐表比复核库/目
+  # 标行数。两案取舍：①「从预处理 .dump 工件计数」被否——工
+  # 件产自通道一同一依赖链（alpine＋apk 的预处理容器），通道
+  # 一死时工件根本不存在，且 dump 文本计数还押在 shell 的
+  # dump 格式稳定性上；②「宿主机 sqlite3」被否——宿主二进制
+  # 不保证存在，通道二的前提必须是迁移自身前提的子集（镜像
+  # 已拉、PG 已起），pgloader 复核恰好满足。仅双通道皆不可用
+  # 才返回 2。计数锚点两通道同为 pgloader 实际消费的文件（预
+  # 处理副本或原库）：副本删 k10_v5 记录一行是刻意差异，锚原
+  # 库必假阳性回滚；原库↔副本的保真仍由 sqlite3 .dump 的确定
+  # 性承载（RA2-S-04 残余登记：两通道读的都是消费文件，dump/
+  # 重建步本身的静默少行不在本门可见域内）。
   migrate_reconcile_row_counts() {
     # 载荷经变量传递而非行内字面量：脚本套件以「行尾 alpine
     # sh -c '」为锚提取预处理载荷，全文件该形态只许预处理一处，
@@ -3585,7 +3776,8 @@ migrate_to_postgres() {
     local src_counts=""
     src_counts=$(docker run --rm -v "$sqlite_volume":/sqlite alpine sh -c "$reconcile_payload" flmx-migrate-reconcile "$pgloader_source" 2>/dev/null) || src_counts=""
     if [[ -z "$src_counts" ]]; then
-      return 2
+      migrate_reconcile_row_counts_via_scratch
+      return $?
     fi
     local mismatches="" reconcile_table reconcile_src_n reconcile_pg_n reconcile_tables=0
     while IFS='|' read -r reconcile_table reconcile_src_n; do
@@ -3604,6 +3796,78 @@ migrate_to_postgres() {
       return 1
     fi
     echo "✅ 迁移数据对账通过：${reconcile_tables} 张表源/目标行数一致"
+    return 0
+  }
+
+  # 对账通道二（RA2-S-05）：pgloader 复核库复算——把
+  # $pgloader_source 以迁移同法重装进一次性数据库
+  # flmx_reconcile_scratch，逐表（复核库∪目标库表集并集）比行
+  # 数。返回口径与通道一同构：0 一致／1 已数出不一致（点名差
+  # 异表与两侧计数）／2 通道本身不可用（建库/重装/枚举任一步
+  # 失败，或复核库侧逐表计数失败）。目标侧逐表计数失败按通道
+  # 一同口径记不一致（fail-closed 在目标侧不变）。复核库在所
+  # 有出口都尽力删除，删不掉时点名人工清理法。
+  migrate_reconcile_row_counts_via_scratch() {
+    local scratch_db="flmx_reconcile_scratch"
+    local scratch_load_file="" scratch_rc=0
+    echo "ℹ️ 对账通道一（容器内 sqlite 计数）不可用，改走通道二（pgloader 复核库复算）..."
+    reconcile_scratch_drop() {
+      docker exec "$PANEL_POSTGRES_CONTAINER" psql -U "$postgres_user" -d "$postgres_db" -At -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $scratch_db;" >/dev/null 2>&1
+    }
+    if ! reconcile_scratch_drop; then
+      return 2
+    fi
+    if ! docker exec "$PANEL_POSTGRES_CONTAINER" psql -U "$postgres_user" -d "$postgres_db" -At -v ON_ERROR_STOP=1 -c "CREATE DATABASE $scratch_db;" >/dev/null 2>&1; then
+      return 2
+    fi
+    scratch_load_file=$(mktemp) || { reconcile_scratch_drop || true; return 2; }
+    chmod 600 "$scratch_load_file"
+    # 连接串只落 0600 命令文件（与主迁移 R4B11-006 同口径）；
+    # INTO 行尾分号同为 pgloader 语句终止符，不可省（F-R4-01）。
+    cat > "$scratch_load_file" <<EOF
+LOAD DATABASE
+     FROM sqlite://${pgloader_source}
+     INTO postgresql://${postgres_user}:${postgres_password}@postgres:5432/${scratch_db};
+EOF
+    docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$scratch_load_file":/tmp/flmx-reconcile.load:ro dimitri/pgloader:latest pgloader /tmp/flmx-reconcile.load >/dev/null 2>&1 || scratch_rc=$?
+    rm -f "$scratch_load_file"
+    if [[ $scratch_rc -ne 0 ]]; then
+      reconcile_scratch_drop || true
+      return 2
+    fi
+    local scratch_tables="" target_tables="" all_tables=""
+    scratch_tables=$(docker exec "$PANEL_POSTGRES_CONTAINER" psql -U "$postgres_user" -d "$scratch_db" -At -v ON_ERROR_STOP=1 -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" 2>/dev/null) || scratch_tables=""
+    if [[ -z "$scratch_tables" ]]; then
+      reconcile_scratch_drop || true
+      return 2
+    fi
+    target_tables=$(docker exec "$PANEL_POSTGRES_CONTAINER" psql -U "$postgres_user" -d "$postgres_db" -At -v ON_ERROR_STOP=1 -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;" 2>/dev/null) || target_tables=""
+    all_tables=$(printf '%s\n%s\n' "$scratch_tables" "$target_tables" | sort -u)
+    local mismatches="" scratch_table scratch_n target_n scratch_tables_count=0
+    while IFS= read -r scratch_table; do
+      [[ -n "$scratch_table" ]] || continue
+      scratch_tables_count=$((scratch_tables_count + 1))
+      scratch_n=$(docker exec "$PANEL_POSTGRES_CONTAINER" psql -U "$postgres_user" -d "$scratch_db" -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM \"$scratch_table\";" 2>/dev/null | tr -d '[:space:]' || true)
+      if [[ -z "$scratch_n" ]]; then
+        reconcile_scratch_drop || true
+        return 2
+      fi
+      target_n=$(docker exec "$PANEL_POSTGRES_CONTAINER" psql -U "$postgres_user" -d "$postgres_db" -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM \"$scratch_table\";" 2>/dev/null | tr -d '[:space:]' || true)
+      if [[ -z "$target_n" ]]; then
+        mismatches="${mismatches}  - 表 ${scratch_table}：复核库 ${scratch_n} 行，目标缺失或不可数"$'\n'
+      elif [[ "$target_n" != "$scratch_n" ]]; then
+        mismatches="${mismatches}  - 表 ${scratch_table}：复核库 ${scratch_n} 行，目标 ${target_n} 行"$'\n'
+      fi
+    done <<< "$all_tables"
+    if ! reconcile_scratch_drop; then
+      echo "⚠️ 复核库 $scratch_db 清理未成，可人工执行 DROP DATABASE $scratch_db 清理（不影响迁移结果）" >&2
+    fi
+    if [[ -n "$mismatches" ]]; then
+      echo "❌ 迁移数据对账不一致（通道二：pgloader 复核库与目标库行数对不上，切换将留下残缺库）："
+      printf '%s' "$mismatches"
+      return 1
+    fi
+    echo "✅ 迁移数据对账通过（通道二：pgloader 复核库复算）：${scratch_tables_count} 张表复核库/目标行数一致"
     return 0
   }
 
@@ -3642,7 +3906,7 @@ EOF
     return 1
   fi
   if [[ $reconcile_rc -eq 2 ]]; then
-    echo "⚠️ 迁移数据对账未能执行（源库计数通道不可用），本次迁移未经行数核对即切换；如需严格校验，请确认容器环境可安装 sqlite 后重试迁移"
+    echo "⚠️ 迁移数据对账未能执行（源库计数双通道均不可用：通道一容器内 sqlite 计数、通道二 pgloader 复核库复算），本次迁移未经行数核对即切换；如需严格校验，请确认容器环境可安装 sqlite 或 pgloader 镜像可用后重试迁移"
   fi
 
   database_url="postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}?sslmode=disable"
