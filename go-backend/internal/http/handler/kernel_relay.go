@@ -894,7 +894,13 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/open_api/sub/"), "/")
-	if len(token) != 32 {
+	// R1-02-L1：不得按长度前置过滤——迁移面保留长度 >32 的旧默认
+	// token、旧 SubUser token 更是逐字复制（repository_subscription
+	// 迁移），恰 32 位的硬门会让这批存量链接在查库前就永久 404，
+	// 与「升级链接不变」的承诺冲突。现行生成面恒发 32 位；拉取面
+	// 只按实存 token 精确查验（下方查库＋常时比较即完备凭据校验，
+	// 长度不是安全边界）。
+	if token == "" {
 		http.NotFound(w, r)
 		return
 	}
