@@ -12,14 +12,14 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261104.04"
+SCRIPT_VERSION="20261104.05"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
 # 覆写自身以 root 重执行，无任何完整性校验，绕过同文件 download_verified
 # 的 fail-closed 标准与 PINNED_VERSION 定版语义。现改为只走 Release 资产：
-#   目标版本由 resolve_version() 解析（VERSION > FLUX_VERSION >
-#   PINNED_VERSION > 最新 Release）。Release 副本带 PINNED_VERSION 时目标
+#   目标版本由 resolve_version() 解析（VERSION > FLMX_VERSION >
+#   FLUX_VERSION > PINNED_VERSION > 最新 Release）。Release 副本带 PINNED_VERSION 时目标
 #   恒为其自身版本，定版脚本不会被自更新带跑偏到更新的版本。
 #   新脚本经 download_verified 拉取同版本资产的 .sha256 校验，通过才覆写。
 # 缓存与校验如何兼得：旧实现用 cache-buster 是因为 main 分支 raw 内容
@@ -127,11 +127,19 @@ PINNED_VERSION=""
 # 手动覆盖，固定单条代理前缀路线。
 PROXY_ENABLED="${PROXY_ENABLED:-}"
 PROXY_URL="${PROXY_URL:-}"
-DEFAULT_PANEL_BACKEND_CONTAINER="flux-panel-backend"
-DEFAULT_PANEL_POSTGRES_CONTAINER="flux-panel-postgres"
+# 现行缺省容器名：与 compose 模板的回退默认逐字一致
+# （${PANEL_*_CONTAINER:-flmx-panel-*}），新装与升级改名后的部署同名。
+DEFAULT_PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+DEFAULT_PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
+# 旧名识别集（改名过渡期保留，只加不删、最后退场）：改名前的缺省名，
+# 仅用于探测/归属判定/存量同代推导与升级改名的触发判定，绝不再作
+# 为新装或新状态的赋值来源。存量部署在升级流内默认改名为现行名
+# （见 apply_panel_identity_rename），改名只动容器名、不动卷/网络/数据。
+LEGACY_PANEL_BACKEND_CONTAINER="flux-panel-backend"
+LEGACY_PANEL_POSTGRES_CONTAINER="flux-panel-postgres"
+LEGACY_PANEL_FRONTEND_CONTAINER="vite-frontend"
 # 共存身份（C2-01/C2-06）：新装使用本面板专属资源名，不再与同机其他
-# 面板的缺省名相撞；存量部署仍用上面的旧名（缺省回退，见 compose 的
-# ${PANEL_*_CONTAINER:-旧名} 与 resolve 的归属判定），升级不改名、不动卷。
+# 面板的缺省名相撞；专属名同时是实例派生名的基名（-<实例 id>）。
 NEW_PANEL_BACKEND_CONTAINER="flmx-panel-backend"
 NEW_PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
 NEW_PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
@@ -393,6 +401,10 @@ resolve_latest_release_tag() {
 resolve_version() {
   if [[ -n "${VERSION:-}" ]]; then
     echo "$VERSION"
+    return 0
+  fi
+  if [[ -n "${FLMX_VERSION:-}" ]]; then
+    echo "$FLMX_VERSION"
     return 0
   fi
   if [[ -n "${FLUX_VERSION:-}" ]]; then
@@ -1457,13 +1469,14 @@ panel_compose_references_only_foreign_images() {
 }
 
 # 本面板后端容器名的已知全集：现行专属名、实例派生名（专属名-<实
-# 例 id>）、旧缺省名。注意旧缺省名与同机他方旧装的回退值同值：它
-# 只能说明「不据此判他人」，单独出现不足以证明归属（AI-01）。
-# 实例派生名的后缀必须过 panel_instance_id_is_valid：空后缀、非法
-# 字符、超 32 的名字任何安装都不可能产生，不计入已知全集（B2-03）。
+# 例 id>）、旧缺省名（识别集）。注意旧缺省名与同机他方旧装的回退
+# 值同值：它只能说明「不据此判他人」，单独出现不足以证明归属
+# （AI-01）。实例派生名的后缀必须过 panel_instance_id_is_valid：
+# 空后缀、非法字符、超 32 的名字任何安装都不可能产生，不计入已
+# 知全集（B2-03）。
 panel_backend_name_is_known_ours() {
   case "$1" in
-    "$NEW_PANEL_BACKEND_CONTAINER"|"$DEFAULT_PANEL_BACKEND_CONTAINER") return 0 ;;
+    "$NEW_PANEL_BACKEND_CONTAINER"|"$DEFAULT_PANEL_BACKEND_CONTAINER"|"$LEGACY_PANEL_BACKEND_CONTAINER") return 0 ;;
     "$NEW_PANEL_BACKEND_CONTAINER"-*) panel_instance_id_is_valid "${1#"$NEW_PANEL_BACKEND_CONTAINER"-}" ;;
     *) return 1 ;;
   esac
@@ -1588,8 +1601,8 @@ detect_panel_backend_container() {
   if docker inspect "$new_name" >/dev/null 2>&1; then
     has_new=1
   fi
-  if docker inspect "$DEFAULT_PANEL_BACKEND_CONTAINER" >/dev/null 2>&1 \
-    && is_own_panel_container "$DEFAULT_PANEL_BACKEND_CONTAINER"; then
+  if docker inspect "$LEGACY_PANEL_BACKEND_CONTAINER" >/dev/null 2>&1 \
+    && is_own_panel_container "$LEGACY_PANEL_BACKEND_CONTAINER"; then
     has_legacy=1
   fi
   # 多实例歧义（B2-04）：无实例上下文时探到默认实例容器、但同机
@@ -1606,12 +1619,12 @@ detect_panel_backend_container() {
     fi
   fi
   if [[ -n "$has_new" && -n "$has_legacy" ]]; then
-    echo "❌ 同时发现两套面板后端容器（$new_name 与 $DEFAULT_PANEL_BACKEND_CONTAINER），无法自动判定要管理哪一套" >&2
+    echo "❌ 同时发现两套面板后端容器（$new_name 与 $LEGACY_PANEL_BACKEND_CONTAINER），无法自动判定要管理哪一套" >&2
     echo "   请通过环境变量 PANEL_BACKEND_CONTAINER 指定要管理的实例后重试" >&2
     return 1
   fi
   if [[ -n "$has_legacy" ]]; then
-    printf '%s' "$DEFAULT_PANEL_BACKEND_CONTAINER"
+    printf '%s' "$LEGACY_PANEL_BACKEND_CONTAINER"
     return 0
   fi
   printf '%s' "$new_name"
@@ -1662,7 +1675,7 @@ write_new_panel_identity() {
   local backend frontend postgres sqlite_volume postgres_volume network project_name=""
   if [[ -f docker-compose.yml ]] && ! grep -Fq 'FLMX_SQLITE_VOLUME' docker-compose.yml; then
     legacy_template=1
-    backend="$DEFAULT_PANEL_BACKEND_CONTAINER" frontend="vite-frontend" postgres="$DEFAULT_PANEL_POSTGRES_CONTAINER"
+    backend="$LEGACY_PANEL_BACKEND_CONTAINER" frontend="$LEGACY_PANEL_FRONTEND_CONTAINER" postgres="$LEGACY_PANEL_POSTGRES_CONTAINER"
     sqlite_volume="sqlite_data" postgres_volume="postgres_data" network="gost-network"
   else
     backend="${NEW_PANEL_BACKEND_CONTAINER}${suffix}" frontend="${NEW_PANEL_FRONTEND_CONTAINER}${suffix}" postgres="${NEW_PANEL_POSTGRES_CONTAINER}${suffix}"
@@ -1712,6 +1725,161 @@ panel_network_name() {
   local v
   v=$(get_env_var FLMX_NETWORK || true)
   printf '%s' "${v:-gost-network}"
+}
+
+# 同代缺省推导：.env 缺 PG/前端身份键时，其实际容器名与后端同代
+# ——后端已定为旧缺省名（存量旧装）则同取旧缺省，否则取现行缺省。
+# 后端名由 detect/显式/.env 先行定谳（resolve 与迁移的填充序均如
+# 此），同代推导据此成立；按名取容器的等待/停止面据此不会对存量
+# 误用新名空等（F7-01 同族口径的延续）。
+panel_sibling_default() {
+  if [[ "${PANEL_BACKEND_CONTAINER:-}" == "$LEGACY_PANEL_BACKEND_CONTAINER" ]]; then
+    printf '%s' "$1"
+  else
+    printf '%s' "$2"
+  fi
+}
+
+# ---- 存量身份改名（升级流内默认执行，PANEL_IDENTITY_RENAME=0 可关）----
+# 触发面：部署 .env 的三个容器身份键任一缺失、或仍为旧缺省名
+# （flux-panel-backend / flux-panel-postgres / vite-frontend）。定制
+# 名（非旧非新）与实例派生名不触发；已是现行名的部署零动作。
+# 动作序：按 resolve 已定的实际名停并删将被改名的旧容器 → 把身份
+# 键写为现行名（实例部署带后缀）→ 进程全局同步新名，交回更新流
+# 按新名重建＋健康检查；失败走既有 rollback_panel_update（恢复旧
+# .env＋旧 compose），其先行步按本函数记下的新旧名删新名容器、复
+# 位全局，再按旧名拉起。卷/网络/项目只把缺失键钉为现行有效值
+# （容器挂载/网络实读，读不到按旧缺省），已有值逐字不动——改名
+# 绝不换卷、换网、动数据。改名状态经 PANEL_IDENTITY_* 全局传递。
+PANEL_IDENTITY_RENAMED=""
+PANEL_IDENTITY_OLD_BACKEND=""
+PANEL_IDENTITY_OLD_FRONTEND=""
+PANEL_IDENTITY_OLD_POSTGRES=""
+PANEL_IDENTITY_NEW_BACKEND=""
+PANEL_IDENTITY_NEW_FRONTEND=""
+PANEL_IDENTITY_NEW_POSTGRES=""
+
+# 停并删单个容器（改名/回滚共用）：新旧同名或容器不存在即跳过；
+# 删除未成只告警——后续重建的健康检查与回滚会兜底暴露冲突。
+panel_stop_remove_container() {
+  local target="$1" counterpart="$2"
+  [[ -n "$target" && "$target" != "$counterpart" ]] || return 0
+  docker inspect "$target" >/dev/null 2>&1 || return 0
+  docker stop -t 30 "$target" >/dev/null 2>&1 || true
+  docker rm "$target" >/dev/null 2>&1 || true
+  if docker inspect "$target" >/dev/null 2>&1; then
+    echo "⚠️ 容器 $target 删除未成，后续重建可能与之冲突；更新失败将自动回滚" >&2
+  fi
+}
+
+# 改名时把缺失的卷/网络/项目键钉为现行有效值：模板回退默认已翻
+# 为新名，无键存量若不钉值，重建时将按新回退挂空卷/建新网（数据
+# 还在旧卷、只是不可见）。有效值优先从真实容器实读（后端挂载的
+# 数据卷名、所在网络名，F7-01「名字从真实容器推导」同口径），读
+# 不到按该部署唯一可能的旧缺省；PG 卷无容器时查卷本身是否存在。
+# 已有键一律不碰。
+panel_pin_missing_resource_keys() {
+  local backend_container="$1" postgres_container="$2"
+  if [[ -z "$(get_env_var FLMX_SQLITE_VOLUME || true)" ]]; then
+    local sqlite_volume=""
+    sqlite_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$backend_container" 2>/dev/null || true)
+    upsert_env_var .env FLMX_SQLITE_VOLUME "${sqlite_volume:-sqlite_data}" || return 1
+  fi
+  if [[ -z "$(get_env_var FLMX_POSTGRES_VOLUME || true)" ]]; then
+    local postgres_volume=""
+    postgres_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$postgres_container" 2>/dev/null || true)
+    if [[ -z "$postgres_volume" ]] && docker volume inspect postgres_data >/dev/null 2>&1; then
+      postgres_volume="postgres_data"
+    fi
+    if [[ -n "$postgres_volume" ]]; then
+      upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume" || return 1
+    fi
+  fi
+  if [[ -z "$(get_env_var FLMX_NETWORK || true)" ]]; then
+    local network_name=""
+    network_name=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$backend_container" 2>/dev/null || true)
+    upsert_env_var .env FLMX_NETWORK "${network_name:-gost-network}" || return 1
+  fi
+  if [[ -z "$(get_env_var COMPOSE_PROJECT_NAME || true)" ]]; then
+    local project_name="${PANEL_COMPOSE_PROJECT:-}"
+    if [[ -z "$project_name" ]]; then
+      project_name="flmx-panel$(panel_instance_suffix)"
+    fi
+    upsert_env_var .env COMPOSE_PROJECT_NAME "$project_name" || return 1
+  fi
+}
+
+apply_panel_identity_rename() {
+  if [[ "${PANEL_IDENTITY_RENAME:-1}" == "0" ]]; then
+    return 0
+  fi
+  [[ -f .env ]] || return 0
+  local suffix
+  suffix=$(panel_instance_suffix)
+  local new_backend="${NEW_PANEL_BACKEND_CONTAINER}${suffix}"
+  local new_frontend="${NEW_PANEL_FRONTEND_CONTAINER}${suffix}"
+  local new_postgres="${NEW_PANEL_POSTGRES_CONTAINER}${suffix}"
+  local key_backend key_frontend key_postgres
+  key_backend=$(get_env_var PANEL_BACKEND_CONTAINER || true)
+  key_frontend=$(get_env_var PANEL_FRONTEND_CONTAINER || true)
+  key_postgres=$(get_env_var PANEL_POSTGRES_CONTAINER || true)
+  local rename_backend="" rename_frontend="" rename_postgres=""
+  if [[ -z "$key_backend" || "$key_backend" == "$LEGACY_PANEL_BACKEND_CONTAINER" ]]; then
+    rename_backend=1
+  fi
+  if [[ -z "$key_frontend" || "$key_frontend" == "$LEGACY_PANEL_FRONTEND_CONTAINER" ]]; then
+    rename_frontend=1
+  fi
+  if [[ -z "$key_postgres" || "$key_postgres" == "$LEGACY_PANEL_POSTGRES_CONTAINER" ]]; then
+    rename_postgres=1
+  fi
+  if [[ -z "$rename_backend" && -z "$rename_frontend" && -z "$rename_postgres" ]]; then
+    return 0
+  fi
+  # 旧实际名取 resolve 已定的进程全局（显式/.env/探测/同代推导的
+  # 结果），不取 .env 字面值：缺键时字面为空、实际名靠推导。
+  PANEL_IDENTITY_OLD_BACKEND="${PANEL_BACKEND_CONTAINER:-$key_backend}"
+  PANEL_IDENTITY_OLD_FRONTEND="${PANEL_FRONTEND_CONTAINER:-$key_frontend}"
+  PANEL_IDENTITY_OLD_POSTGRES="${PANEL_POSTGRES_CONTAINER:-$key_postgres}"
+  PANEL_IDENTITY_NEW_BACKEND="$new_backend"
+  PANEL_IDENTITY_NEW_FRONTEND="$new_frontend"
+  PANEL_IDENTITY_NEW_POSTGRES="$new_postgres"
+  echo "🏷️ 存量部署身份改名：容器名由旧缺省（$LEGACY_PANEL_BACKEND_CONTAINER / $LEGACY_PANEL_POSTGRES_CONTAINER / $LEGACY_PANEL_FRONTEND_CONTAINER）切换为现行名（$new_backend / $new_postgres / $new_frontend）"
+  echo "   只改容器名：数据卷、网络与数据库一律不动；重建后健康检查不过将自动回滚为旧名。"
+  # 1) 停并删将被改名的旧容器（先于重建腾空端口与卷挂载）。
+  if [[ -n "$rename_backend" ]]; then
+    panel_stop_remove_container "$PANEL_IDENTITY_OLD_BACKEND" "$new_backend"
+  fi
+  if [[ -n "$rename_frontend" ]]; then
+    panel_stop_remove_container "$PANEL_IDENTITY_OLD_FRONTEND" "$new_frontend"
+  fi
+  if [[ -n "$rename_postgres" ]]; then
+    panel_stop_remove_container "$PANEL_IDENTITY_OLD_POSTGRES" "$new_postgres"
+  fi
+  # 2) 身份键写入现行名；卷/网络/项目缺失键钉现行有效值。
+  if [[ -n "$rename_backend" ]]; then
+    upsert_env_var .env PANEL_BACKEND_CONTAINER "$new_backend" || return 1
+  fi
+  if [[ -n "$rename_frontend" ]]; then
+    upsert_env_var .env PANEL_FRONTEND_CONTAINER "$new_frontend" || return 1
+  fi
+  if [[ -n "$rename_postgres" ]]; then
+    upsert_env_var .env PANEL_POSTGRES_CONTAINER "$new_postgres" || return 1
+  fi
+  panel_pin_missing_resource_keys "$PANEL_IDENTITY_OLD_BACKEND" "$PANEL_IDENTITY_OLD_POSTGRES" || return 1
+  # 3) 进程全局同步新名，后续重建与健康等待按新名取容器。
+  if [[ -n "$rename_backend" ]]; then
+    PANEL_BACKEND_CONTAINER="$new_backend"
+  fi
+  if [[ -n "$rename_frontend" ]]; then
+    PANEL_FRONTEND_CONTAINER="$new_frontend"
+  fi
+  if [[ -n "$rename_postgres" ]]; then
+    PANEL_POSTGRES_CONTAINER="$new_postgres"
+  fi
+  export PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER
+  PANEL_IDENTITY_RENAMED=1
+  echo "✅ 身份改名已写入 .env（回滚点为更新前备份，健康检查不过自动恢复旧名）"
 }
 
 resolve_panel_deployment() {
@@ -1771,9 +1939,9 @@ resolve_panel_deployment() {
   PANEL_DEPLOY_DIR="$deploy_dir"
   PANEL_BACKEND_CONTAINER="$backend_container"
   PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$(get_env_var PANEL_POSTGRES_CONTAINER "$deploy_dir/.env" || true)}"
-  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
+  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$(panel_sibling_default "$LEGACY_PANEL_POSTGRES_CONTAINER" "$DEFAULT_PANEL_POSTGRES_CONTAINER")}"
   PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-$(get_env_var PANEL_FRONTEND_CONTAINER "$deploy_dir/.env" || true)}"
-  PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-vite-frontend}"
+  PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-$(panel_sibling_default "$LEGACY_PANEL_FRONTEND_CONTAINER" "$NEW_PANEL_FRONTEND_CONTAINER")}"
   PANEL_COMPOSE_PROJECT="$project_name"
   export PANEL_DEPLOY_DIR PANEL_BACKEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_COMPOSE_PROJECT
   if [[ -n "$project_name" ]]; then
@@ -2054,10 +2222,10 @@ validate_panel_compose_content() {
   local file="$1"
   local version="$2"
   local services
-  if ! FLUX_VERSION="$version" run_panel_compose -f "$file" config -q; then
+  if ! FLMX_VERSION="$version" FLUX_VERSION="$version" run_panel_compose -f "$file" config -q; then
     return 1
   fi
-  if ! services=$(FLUX_VERSION="$version" run_panel_compose -f "$file" config --services 2>/dev/null); then
+  if ! services=$(FLMX_VERSION="$version" FLUX_VERSION="$version" run_panel_compose -f "$file" config --services 2>/dev/null); then
     return 1
   fi
   if ! printf '%s\n' "$services" | grep -qx "backend"; then
@@ -2207,9 +2375,9 @@ pull_panel_update_images() {
   local db_type="$1"
 
   if [[ "$db_type" == "postgres" ]]; then
-    FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend postgres
+    FLMX_VERSION="$LATEST_VERSION" FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend postgres
   else
-    FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend
+    FLMX_VERSION="$LATEST_VERSION" FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend
   fi
 }
 
@@ -2423,6 +2591,14 @@ activate_panel_update_files() {
     return 1
   fi
   UPDATE_COMPOSE_CANDIDATE=""
+  if ! upsert_env_var ".env" "FLMX_VERSION" "$LATEST_VERSION"; then
+    echo "❌ 更新版本配置失败"
+    return 1
+  fi
+  # 过渡期双写：旧键 FLUX_VERSION 同步同值——尚未切换读面的消费
+  # 者（旧版面板的 .env 版本改写、旧脚本）按旧口径读到的与新键同
+  # 一版本，不会因只剩新键而读空或读到陈旧值；一切读面以
+  # FLMX_VERSION 优先（resolve_version / update_panel 同口径）。
   if ! upsert_env_var ".env" "FLUX_VERSION" "$LATEST_VERSION"; then
     echo "❌ 更新版本配置失败"
     return 1
@@ -2442,6 +2618,20 @@ start_panel_after_update() {
 
 rollback_panel_update() {
   local db_type="$1"
+
+  # 身份改名回滚先行：本次更新已改名时，先删可能已按新名拉起的
+  # 容器（占着端口/卷挂载，不删则旧名重建必冲突）、进程全局复位
+  # 旧名；下方恢复旧 .env＋旧 compose 后即按旧名拉起并等待健康。
+  if [[ -n "${PANEL_IDENTITY_RENAMED:-}" ]]; then
+    echo "↩️ 身份改名回滚：删除新名容器、恢复旧容器名..."
+    panel_stop_remove_container "${PANEL_IDENTITY_NEW_BACKEND:-}" "${PANEL_IDENTITY_OLD_BACKEND:-}"
+    panel_stop_remove_container "${PANEL_IDENTITY_NEW_FRONTEND:-}" "${PANEL_IDENTITY_OLD_FRONTEND:-}"
+    panel_stop_remove_container "${PANEL_IDENTITY_NEW_POSTGRES:-}" "${PANEL_IDENTITY_OLD_POSTGRES:-}"
+    PANEL_BACKEND_CONTAINER="${PANEL_IDENTITY_OLD_BACKEND:-$PANEL_BACKEND_CONTAINER}"
+    PANEL_FRONTEND_CONTAINER="${PANEL_IDENTITY_OLD_FRONTEND:-$PANEL_FRONTEND_CONTAINER}"
+    PANEL_POSTGRES_CONTAINER="${PANEL_IDENTITY_OLD_POSTGRES:-$PANEL_POSTGRES_CONTAINER}"
+    export PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER
+  fi
 
   echo "↩️ 正在恢复更新前配置..."
   if ! cp -p "$UPDATE_BACKUP_DIR/.env" .env || ! cp -p "$UPDATE_BACKUP_DIR/docker-compose.yml" docker-compose.yml; then
@@ -2606,8 +2796,8 @@ get_config_params() {
       ;;
   esac
 
-  POSTGRES_DB="flux_panel"
-  POSTGRES_USER="flux_panel"
+  POSTGRES_DB="flmx_panel"
+  POSTGRES_USER="flmx_panel"
   POSTGRES_PASSWORD=$(generate_random)
 
   if [[ "$DB_TYPE" == "postgres" ]]; then
@@ -2750,7 +2940,7 @@ install_panel() {
 JWT_SECRET=$JWT_SECRET
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
-FLUX_VERSION=$RESOLVED_VERSION
+FLMX_VERSION=$RESOLVED_VERSION
 
 DB_TYPE=$DB_TYPE
 DATABASE_URL=$DATABASE_URL
@@ -2814,7 +3004,7 @@ EOF
 
 # 更新功能
 # FIX2-C #9（V6 P3）：读取实际运行中的后端容器镜像 tag 作为部署
-# 版本。.env 的 FLUX_VERSION 是「打算跑的版本」，可能与正在跑的
+# 版本。.env 的版本键（FLMX_VERSION，旧键 FLUX_VERSION 回退）是「打算跑的版本」，可能与正在跑的
 # 镜像不一致（手改 .env、升级中途失败）；防降级判定若只信 .env
 # 会被这种不一致绕过。取不到（容器不在、无 tag 等）时返回非 0，
 # 调用方回退 .env 口径。
@@ -2850,10 +3040,14 @@ update_panel() {
   # A11-132-03: 目标版本感知 + 防降级。旧实现恒取 latest 且不看当前版本：
   # ① 定版意图被静默忽略、直升 latest；② 本机版本高于 latest 时
   # 构成静默降级覆写。现与面板内升级（system_upgrade）口径对齐：
-  # 目标版本走下方优先级链；写入前与 .env 的 FLUX_VERSION 比较，
-  # 两侧都可解析且目标更低时拒绝；同版本按重装继续（与面板口径一致）。
+  # 目标版本走下方优先级链；写入前与 .env 的版本键（FLMX_VERSION
+  # 优先、FLUX_VERSION 回退）比较，两侧都可解析且目标更低时拒绝；
+  # 同版本按重装继续（与面板口径一致）。
   local current_version cmp_result
-  current_version=$(get_env_var "FLUX_VERSION" || true)
+  current_version=$(get_env_var "FLMX_VERSION" || true)
+  if [[ -z "$current_version" ]]; then
+    current_version=$(get_env_var "FLUX_VERSION" || true)
+  fi
   # FIX2-C #9：与实际运行版本交叉核对——两者不一致时告警并以实际
   # 运行版本为准做防降级判定（.env 可能被手改或停留在失败的升级
   # 目标上，只信它会放过真实降级）。取不到实际版本时保持 .env 口径。
@@ -2864,9 +3058,9 @@ update_panel() {
     current_version="$deployed_version"
   fi
   # L2-12（R5-FD）：目标版本走 resolve_version 同一优先级链
-  # VERSION > FLUX_VERSION > PINNED_VERSION > latest。旧实现只认
-  # VERSION、其余情形直取 latest：以 FLUX_VERSION 定版更新时被静默
-  # 升到 latest（且自更新腿先按 FLUX_VERSION 换上定版脚本再 re-exec，
+  # VERSION > FLMX_VERSION > FLUX_VERSION > PINNED_VERSION > latest。
+  # 旧实现只认 VERSION、其余情形直取 latest：以版本键定版更新时被
+  # 静默升到 latest（且自更新腿先按版本键换上定版脚本再 re-exec，
   # 菜单 2 却跳 latest，意图自相矛盾）；定版 install.sh 更新 agent
   # 时 honors PINNED、本脚本却恒升 latest，两侧不对齐。定版来源在
   # 输出中点名，不静默吞掉。
@@ -2874,6 +3068,9 @@ update_panel() {
   if [[ -n "${VERSION:-}" ]]; then
     LATEST_VERSION="$VERSION"
     target_source="VERSION"
+  elif [[ -n "${FLMX_VERSION:-}" ]]; then
+    LATEST_VERSION="$FLMX_VERSION"
+    target_source="FLMX_VERSION"
   elif [[ -n "${FLUX_VERSION:-}" ]]; then
     LATEST_VERSION="$FLUX_VERSION"
     target_source="FLUX_VERSION"
@@ -2946,6 +3143,16 @@ update_panel() {
   fi
 
   if ! activate_panel_update_files; then
+    rollback_panel_update "$CURRENT_DB_TYPE" || true
+    return 1
+  fi
+
+  # 存量身份改名（默认执行）：新版 .env 已落盘，此处把仍为旧缺省
+  # 名/缺键的容器身份切换为现行名（只动容器名），随后按新名重建
+  # 并健康检查；写入失败与启动失败共用同一回滚口（恢复更新前
+  # .env＋compose 并按旧名拉起）。
+  if ! apply_panel_identity_rename; then
+    echo "❌ 身份改名写入失败，更新已中止"
     rollback_panel_update "$CURRENT_DB_TYPE" || true
     return 1
   fi
@@ -3035,21 +3242,30 @@ migrate_to_postgres() {
   # compose 也由这一处覆盖，不再单独调用。
   ensure_compose_trusted_proxy_hops docker-compose.yml || true
 
-  # 资源名：新装身份写在 .env 里，缺省回退旧名，存量部署行为不变。
+  # 资源名：身份写在 .env 里（五身份键），名字一律从身份键推导。
   # R3-F7-01：健康等待函数（wait_for_postgres_healthy /
   # wait_for_backend_healthy）从全局 PANEL_*_CONTAINER 取名，而迁移
   # 路径不经 resolve_panel_deployment 填充全局——旧实现只把后端/
-  # 前端名读进 local、PG 名从未自 .env 读过，两等待恒落 DEFAULT
-  # 旧名（flux-panel-*），flmx 命名部署（含实例派生名）的迁移必
-  # 在 PG 健康等待处超时回滚、后端等待同理误判。现与 resolve 同
-  # 口径收口：三名一律按「显式全局 → 部署 .env → 缺省旧名」补齐
-  # 到全局，local 与两等待函数自此同源。
+  # 前端名读进 local、PG 名从未自 .env 读过，两等待恒落缺省名，
+  # 与部署实际身份不一致的命名部署在 PG 健康等待处超时回滚、后
+  # 端等待同理误判。现与 resolve 同口径收口：三名一律按「显式全
+  # 局 → 部署 .env → 同代缺省」补齐到全局，local 与两等待函数自
+  # 此同源。同代缺省：后端缺键时按在册容器判代（旧缺省名在册取
+  # 旧代、无在册取现行缺省），PG/前端随后端同代（panel_sibling_
+  # default）——无键存量（旧装）的实际名只能是旧缺省，升级改名
+  # 后的部署身份键齐全、直读 .env，两头都不误判。
   PANEL_BACKEND_CONTAINER="${PANEL_BACKEND_CONTAINER:-$(get_env_var PANEL_BACKEND_CONTAINER || true)}"
-  PANEL_BACKEND_CONTAINER="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  if [[ -z "$PANEL_BACKEND_CONTAINER" ]]; then
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Fxq "$LEGACY_PANEL_BACKEND_CONTAINER"; then
+      PANEL_BACKEND_CONTAINER="$LEGACY_PANEL_BACKEND_CONTAINER"
+    else
+      PANEL_BACKEND_CONTAINER="$DEFAULT_PANEL_BACKEND_CONTAINER"
+    fi
+  fi
   PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-$(get_env_var PANEL_FRONTEND_CONTAINER || true)}"
-  PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-vite-frontend}"
+  PANEL_FRONTEND_CONTAINER="${PANEL_FRONTEND_CONTAINER:-$(panel_sibling_default "$LEGACY_PANEL_FRONTEND_CONTAINER" "$NEW_PANEL_FRONTEND_CONTAINER")}"
   PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$(get_env_var PANEL_POSTGRES_CONTAINER || true)}"
-  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
+  PANEL_POSTGRES_CONTAINER="${PANEL_POSTGRES_CONTAINER:-$(panel_sibling_default "$LEGACY_PANEL_POSTGRES_CONTAINER" "$DEFAULT_PANEL_POSTGRES_CONTAINER")}"
   local backend_container="$PANEL_BACKEND_CONTAINER"
   local frontend_container="$PANEL_FRONTEND_CONTAINER"
   local sqlite_volume postgres_volume network_name
@@ -3075,7 +3291,10 @@ migrate_to_postgres() {
   # 旧实现把默认口令原样保留并一路写进 .env，pgloader 成功后面板却
   # 起不来且配置已切到 PG（见下方的失败回滚）。这里在停服务之前处理：
   # 口令为空或仍是已知默认值/弱口令时，当场生成随机口令并写回 .env。
-  if [[ -z "$postgres_password" || "$postgres_password" == "flux_panel_change_me" || "$postgres_password" == "postgres" ]]; then
+  # 默认口令哨兵现行字面量为 flmx_panel_change_me（compose 模板默
+  # 认值）；旧字面量 flux_panel_change_me 是 legacy 哨兵、继续命中
+  # ——存量 .env 可能仍带旧值，其强制重生成保护不能随改名丢失。
+  if [[ -z "$postgres_password" || "$postgres_password" == "flmx_panel_change_me" || "$postgres_password" == "flux_panel_change_me" || "$postgres_password" == "postgres" ]]; then
     postgres_password=$(generate_random)
     echo "⚠️ POSTGRES_PASSWORD 为空或仍是默认值，1.2.0 起后端会拒绝启动；已生成随机口令并写入 .env，迁移后请勿改回默认值"
   fi

@@ -1,7 +1,7 @@
 services:
   backend:
-    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:${FLUX_VERSION:-latest}
-    container_name: ${PANEL_BACKEND_CONTAINER:-flux-panel-backend}
+    image: ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:${FLMX_VERSION:-${FLUX_VERSION:-latest}}
+    container_name: ${PANEL_BACKEND_CONTAINER:-flmx-panel-backend}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -22,9 +22,10 @@ services:
       # 端口、单跳）在 .env 里显式设置 FLMX_TRUSTED_PROXY_HOPS 覆盖。
       FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
       TZ: Asia/Shanghai
-      FLUX_VERSION: ${FLUX_VERSION:-dev}
+      FLMX_VERSION: ${FLMX_VERSION:-${FLUX_VERSION:-dev}}
+      FLUX_VERSION: ${FLMX_VERSION:-${FLUX_VERSION:-dev}}
       PANEL_DEPLOY_DIR: /opt/flmx-panel
-      PANEL_BACKEND_CONTAINER: ${PANEL_BACKEND_CONTAINER:-flux-panel-backend}
+      PANEL_BACKEND_CONTAINER: ${PANEL_BACKEND_CONTAINER:-flmx-panel-backend}
       # AI-03：实例 id 须透传进后端进程，后端据此派生本实例的节点
       # 容器名/数据目录；默认实例 .env 无此键、替换为空，不影响存量。
       FLMX_INSTANCE: ${FLMX_INSTANCE:-}
@@ -47,31 +48,31 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: ${PANEL_POSTGRES_CONTAINER:-flux-panel-postgres}
+    container_name: ${PANEL_POSTGRES_CONTAINER:-flmx-panel-postgres}
     restart: unless-stopped
     logging:
       driver: json-file
       options:
         max-size: "20m"
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-flux_panel}
-      POSTGRES_USER: ${POSTGRES_USER:-flux_panel}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flux_panel_change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-flmx_panel}
+      POSTGRES_USER: ${POSTGRES_USER:-flmx_panel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flmx_panel_change_me}
       TZ: Asia/Shanghai
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - gost-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flux_panel} -d ${POSTGRES_DB:-flux_panel}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flmx_panel} -d ${POSTGRES_DB:-flmx_panel}"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
 
   frontend:
-    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:${FLUX_VERSION:-latest}
-    container_name: ${PANEL_FRONTEND_CONTAINER:-vite-frontend}
+    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:${FLMX_VERSION:-${FLUX_VERSION:-latest}}
+    container_name: ${PANEL_FRONTEND_CONTAINER:-flmx-panel-frontend}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -100,16 +101,16 @@ services:
 
 volumes:
   sqlite_data:
-    name: ${FLMX_SQLITE_VOLUME:-sqlite_data}
+    name: ${FLMX_SQLITE_VOLUME:-flmx-sqlite-data}
     driver: local
   postgres_data:
-    name: ${FLMX_POSTGRES_VOLUME:-postgres_data}
+    name: ${FLMX_POSTGRES_VOLUME:-flmx-postgres-data}
     driver: local
 
 
 networks:
   gost-network:
-    name: ${FLMX_NETWORK:-gost-network}
+    name: ${FLMX_NETWORK:-flmx-network}
     driver: bridge
     ipam:
       config:
