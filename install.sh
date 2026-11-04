@@ -886,6 +886,19 @@ agent_config_addr() {
   json_unescape "$addr"
 }
 
+# 从既有 config.json 里取协议计数字段（http/tls/socks）的数值
+# （无文件/无字段/非纯数字时回空）。这三字段由面板经 SetProtocol
+# 下发、agent 握手时上报，脚本写面本身没有它们的值——整覆重写
+# config.json 时若不回读保全，计数会被静默清零（R-3），与 agent
+# 侧 updateLocalConfigJSON 的 map 合并保全口径对齐后，脚本侧同
+# 样只认纯数字形态，手工键与异常值不回写。
+agent_config_protocol_count() {
+  local config="$1" field="$2" value=""
+  [[ -f "$config" ]] || return 0
+  value=$(grep -o "\"$field\"[[:space:]]*:[[:space:]]*[0-9][0-9]*" "$config" | head -n 1 | grep -o '[0-9][0-9]*$' || true)
+  printf '%s' "$value"
+}
+
 # 足迹判定：某目录是否住着一个 agent——连接配置或任一世代的二进
 # 制（现行 flmx_agent／存量 flux_agent）在位即认。归属守卫、布局
 # 迁移与卸载的存量识别共用这一口径，不另造第二套。
@@ -983,10 +996,24 @@ write_flmx_agent_config() {
     proxy=$(normalize_proxy_prefix "$PROXY_URL")
     proxy_json=$(printf ',\n  "proxy": "%s"' "$(json_escape "$proxy")")
   fi
-  printf '{\n  "addr": "%s",\n  "secret": "%s"%s\n}\n' \
+  # R-3：整覆前回读保全存量协议计数（http/tls/socks）——本次写
+  # 面无这三字段的值，存量有就逐字（数值形态）带回，存量无则
+  # 不发明（首次安装输出与旧实现逐字一致）。身份仍由本次参数
+  # 决定，保全的只是与身份无关的计数状态。
+  local counts_json="" count_field count_value
+  if [[ -f "$path" ]]; then
+    for count_field in http tls socks; do
+      count_value=$(agent_config_protocol_count "$path" "$count_field")
+      if [[ -n "$count_value" ]]; then
+        counts_json=$(printf '%s,\n  "%s": %s' "$counts_json" "$count_field" "$count_value")
+      fi
+    done
+  fi
+  printf '{\n  "addr": "%s",\n  "secret": "%s"%s%s\n}\n' \
     "$(json_escape "$SERVER_ADDR")" \
     "$(json_escape "$SECRET")" \
-    "$proxy_json" > "$path"
+    "$proxy_json" \
+    "$counts_json" > "$path"
 }
 
 ensure_service_manager() {
@@ -1301,6 +1328,146 @@ remove_legacy_flux_agent_service() {
   esac
 }
 
+# ---- 存量服务恢复组（仅供布局迁移失败时回滚旧布局，与上方现行
+# 组同形态、对象是旧服务名 flux_agent）----
+
+legacy_flux_agent_service_file_path() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd) printf '%s' "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" ;;
+    openrc) printf '%s' "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE" ;;
+  esac
+}
+
+# 旧 unit 文件的同形态重写：迁移回滚时旧 unit 已被摘除且无快照
+# 可还原（旧服务只在服务管理器里在册、无落盘文件）才用——内容
+# 与现行 write_flmx_agent_service 同模板、仅名与路径换回旧代，
+# 保证回滚拉起的旧服务与迁移前等价运行。
+write_legacy_flux_agent_service() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      mkdir -p "$(dirname "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE")"
+      cat > "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" <<EOF
+[Unit]
+Description=Flux_agent Proxy Service
+After=network.target
+
+[Service]
+WorkingDirectory=$LEGACY_INSTALL_DIR
+ExecStart=$LEGACY_INSTALL_DIR/flux_agent
+Environment=GODEBUG=disablethp=1
+Restart=on-failure
+LimitCORE=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=flux_agent
+
+[Install]
+WantedBy=multi-user.target
+EOF
+      ;;
+    openrc)
+      mkdir -p "$(dirname "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE")"
+      cat > "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE" <<EOF
+#!/sbin/openrc-run
+
+name="flux_agent"
+description="Flux_agent Proxy Service"
+command="$LEGACY_INSTALL_DIR/flux_agent"
+directory="$LEGACY_INSTALL_DIR"
+command_background="yes"
+pidfile="/run/\${RC_SVCNAME}.pid"
+output_log="/var/log/flux_agent.log"
+error_log="/var/log/flux_agent.err.log"
+
+depend() {
+  need net
+}
+EOF
+      chmod +x "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE"
+      ;;
+  esac
+}
+
+enable_and_start_legacy_flux_agent_service() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl daemon-reload
+      systemctl enable flux_agent
+      # 与现行组同口径：start 前清 failed 态，防启动限速拒绝。
+      systemctl reset-failed flux_agent 2>/dev/null || true
+      systemctl start flux_agent
+      ;;
+    openrc)
+      rc-update add flux_agent default
+      rc-service flux_agent start
+      ;;
+  esac
+}
+
+legacy_flux_agent_service_is_active() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl is-active --quiet flux_agent
+      ;;
+    openrc)
+      rc-service flux_agent status >/dev/null 2>&1
+      ;;
+  esac
+}
+
+legacy_flux_agent_main_pid() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      systemctl show -p MainPID --value flux_agent 2>/dev/null
+      ;;
+    openrc)
+      cat "${LEGACY_FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}" 2>/dev/null
+      ;;
+  esac
+}
+
+# 与现行 flmx_agent_health_ok 同规则的双采样判活（旧服务名面）。
+legacy_flux_agent_health_ok() {
+  ensure_service_manager || return 1
+
+  local p1 p2
+  p1=$(legacy_flux_agent_main_pid) || p1=""
+  p1=$(printf '%s' "$p1" | tr -d '[:space:]')
+  if ! legacy_flux_agent_service_is_active; then
+    return 1
+  fi
+  sleep 2
+  p2=$(legacy_flux_agent_main_pid) || p2=""
+  p2=$(printf '%s' "$p2" | tr -d '[:space:]')
+  if ! legacy_flux_agent_service_is_active; then
+    return 1
+  fi
+  [[ -n "$p1" && "$p1" != "0" && "$p1" == "$p2" ]]
+}
+
+legacy_flux_agent_service_status_hint() {
+  ensure_service_manager || return 1
+
+  case "$SERVICE_MANAGER" in
+    systemd)
+      echo "systemctl status flux_agent --no-pager"
+      ;;
+    openrc)
+      echo "rc-service flux_agent status"
+      ;;
+  esac
+}
+
 # 存量布局迁移（改名）：把改名前的安装（$LEGACY_INSTALL_DIR＋
 # flux_agent 服务）整体迁到现行布局（$INSTALL_DIR＋flmx_agent
 # 服务）。调用前提：归属守卫已对存量目录通过、新目录尚无 agent
@@ -1309,24 +1476,87 @@ remove_legacy_flux_agent_service() {
 # 序号状态等内容逐字随目录走，零丢失）→ 二进制与回滚工件改新名
 # （.old/.old.meta/.bak 是回滚源与配对记录，随之改名保持代际对
 # 应；升级暂存半成品是未完成操作的残留，清掉不迁）→ 写新服务、
-# 启用并启动 → 与安装/更新同口径双采样判活。判活失败返回 1 并点
-# 名排查命令；此时目录已迁、旧服务已摘，人工重跑安装（以本次参
-# 数重写配置并换新二进制）或检查日志即可续上，不假装回滚。
+# 启用并启动 → 与安装/更新同口径双采样判活。
+# R-1（事故专项审计路 5）：旧实现中途失败无自动回滚——摘旧
+# unit 后 mv 失败、或迁后判活失败，节点都停在「旧服务已摘、新
+# 服务未起」的离线态靠人工续。现全程可回滚：动手前先快照旧
+# unit 文件内容（回滚时逐字还原；旧服务只在册无落盘文件时按
+# 同模板重写），任一步失败即经 rollback_legacy_agent_migration
+# 把目录搬回原位、文件名改回旧名、恢复旧 unit 并拉起旧服务，
+# 终态点名回滚结果（已自动回滚／回滚亦失败需人工）。
 migrate_legacy_agent_install() {
   ensure_service_manager || return 1
 
   echo "🔀 检测到改名前的存量安装（$LEGACY_INSTALL_DIR），正在迁移到新布局 $INSTALL_DIR ..."
 
+  local legacy_unit_file="" legacy_unit_snapshot="" had_legacy_service=""
+  legacy_unit_file=$(legacy_flux_agent_service_file_path || true)
   if legacy_flux_agent_service_exists; then
+    had_legacy_service=1
+  fi
+  if [[ -n "$legacy_unit_file" && -f "$legacy_unit_file" ]]; then
+    legacy_unit_snapshot=$(mktemp) || legacy_unit_snapshot=""
+    if [[ -n "$legacy_unit_snapshot" ]] && ! cp -p "$legacy_unit_file" "$legacy_unit_snapshot"; then
+      rm -f "$legacy_unit_snapshot"
+      legacy_unit_snapshot=""
+    fi
+  fi
+  local dir_moved="" created_install_dir=""
+
+  # 回滚体：摘新服务 → 已搬目录改回旧名搬回原位 → 还原旧 unit
+  # （快照优先，无快照且旧服务此前在册时同模板重写）→ 启用并
+  # 启动旧服务 → 双采样判活。旧服务此前不在册（只有文件、无
+  # 服务）时，目录归位即状态还原、无服务可拉，直接判成。
+  rollback_legacy_agent_migration() {
+    stop_flmx_agent_service || true
+    disable_flmx_agent_service || true
+    remove_flmx_agent_service || true
+    if [[ -n "$dir_moved" ]]; then
+      [[ -f "$INSTALL_DIR/flmx_agent" ]] && mv -f "$INSTALL_DIR/flmx_agent" "$INSTALL_DIR/flux_agent"
+      [[ -f "$INSTALL_DIR/flmx_agent.old" ]] && mv -f "$INSTALL_DIR/flmx_agent.old" "$INSTALL_DIR/flux_agent.old"
+      [[ -f "$INSTALL_DIR/flmx_agent.old.meta" ]] && mv -f "$INSTALL_DIR/flmx_agent.old.meta" "$INSTALL_DIR/flux_agent.old.meta"
+      [[ -f "$INSTALL_DIR/flmx_agent.bak" ]] && mv -f "$INSTALL_DIR/flmx_agent.bak" "$INSTALL_DIR/flux_agent.bak"
+      mv "$INSTALL_DIR" "$LEGACY_INSTALL_DIR" || return 1
+    elif [[ -n "$created_install_dir" ]]; then
+      rmdir "$INSTALL_DIR" 2>/dev/null || true
+    fi
+    if [[ -z "$had_legacy_service" ]]; then
+      return 0
+    fi
+    if [[ -n "$legacy_unit_snapshot" && -f "$legacy_unit_snapshot" ]]; then
+      mkdir -p "$(dirname "$legacy_unit_file")"
+      cp -p "$legacy_unit_snapshot" "$legacy_unit_file" || return 1
+      if [[ "$SERVICE_MANAGER" == "openrc" ]]; then
+        chmod +x "$legacy_unit_file" || true
+      fi
+    elif [[ ! -f "$legacy_unit_file" ]]; then
+      write_legacy_flux_agent_service || return 1
+    fi
+    enable_and_start_legacy_flux_agent_service || return 1
+    sleep 3
+    legacy_flux_agent_health_ok
+  }
+
+  if [[ -n "$had_legacy_service" ]]; then
     stop_legacy_flux_agent_service
     disable_legacy_flux_agent_service
   fi
   remove_legacy_flux_agent_service
 
   if [[ -d "$LEGACY_INSTALL_DIR" ]]; then
-    mv "$LEGACY_INSTALL_DIR" "$INSTALL_DIR" || { echo "❌ 迁移安装目录失败：$LEGACY_INSTALL_DIR → $INSTALL_DIR（存量目录未改动，请检查后重试）"; return 1; }
+    if ! mv "$LEGACY_INSTALL_DIR" "$INSTALL_DIR"; then
+      echo "❌ 迁移安装目录失败：$LEGACY_INSTALL_DIR → $INSTALL_DIR，正在自动回滚（恢复旧服务）..."
+      if rollback_legacy_agent_migration; then
+        echo "↩️ 已自动回滚：存量目录未迁移，旧服务（flux_agent）已恢复运行"
+      else
+        echo "❌ 自动回滚亦失败：存量目录仍在 $LEGACY_INSTALL_DIR 未迁移，但旧服务未能恢复，请人工执行 $(legacy_flux_agent_service_status_hint) 排查"
+      fi
+      [[ -n "$legacy_unit_snapshot" ]] && rm -f "$legacy_unit_snapshot"
+      return 1
+    fi
+    dir_moved=1
   else
-    mkdir -p "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR" && created_install_dir=1
   fi
 
   [[ -f "$INSTALL_DIR/flux_agent" ]] && mv -f "$INSTALL_DIR/flux_agent" "$INSTALL_DIR/flmx_agent"
@@ -1335,17 +1565,30 @@ migrate_legacy_agent_install() {
   [[ -f "$INSTALL_DIR/flux_agent.bak" ]] && mv -f "$INSTALL_DIR/flux_agent.bak" "$INSTALL_DIR/flmx_agent.bak"
   rm -f "$INSTALL_DIR"/.flux_agent.upgrade-* "$INSTALL_DIR"/.flux_agent.rollback-* "$INSTALL_DIR"/.flux_agent.upgrade-rollback-* "$INSTALL_DIR/flux_agent.new"
 
-  write_flmx_agent_service
-  enable_and_start_flmx_agent_service
-
-  echo "🔄 检查迁移后服务状态..."
-  sleep 3
-  if flmx_agent_health_ok; then
-    echo "✅ 存量安装已迁移到新布局：$INSTALL_DIR（服务名 flmx_agent，配置与状态原样保留）"
-    return 0
+  local migrate_failed=""
+  write_flmx_agent_service || migrate_failed=1
+  if [[ -z "$migrate_failed" ]]; then
+    enable_and_start_flmx_agent_service || migrate_failed=1
   fi
-  echo "❌ 迁移后服务启动失败，请执行以下命令查看状态："
-  flmx_agent_service_status_hint
+  if [[ -z "$migrate_failed" ]]; then
+    echo "🔄 检查迁移后服务状态..."
+    sleep 3
+    if flmx_agent_health_ok; then
+      [[ -n "$legacy_unit_snapshot" ]] && rm -f "$legacy_unit_snapshot"
+      echo "✅ 存量安装已迁移到新布局：$INSTALL_DIR（服务名 flmx_agent，配置与状态原样保留）"
+      return 0
+    fi
+    migrate_failed=1
+  fi
+
+  echo "❌ 迁移未成（新布局服务未能正常运行），正在自动回滚到旧布局..."
+  if rollback_legacy_agent_migration; then
+    [[ -n "$legacy_unit_snapshot" ]] && rm -f "$legacy_unit_snapshot"
+    echo "↩️ 已自动回滚：旧布局与旧服务（flux_agent）已恢复运行，迁移可稍后重试"
+  else
+    [[ -n "$legacy_unit_snapshot" ]] && rm -f "$legacy_unit_snapshot"
+    echo "❌ 自动回滚亦失败：节点当前离线，请人工处理（旧服务状态：$(legacy_flux_agent_service_status_hint)；新服务状态：$(flmx_agent_service_status_hint)）"
+  fi
   return 1
 }
 
