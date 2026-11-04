@@ -714,13 +714,28 @@ func seedData(db *gorm.DB) {
 				}
 				if err := db.Create(&adminUser).Error; err != nil {
 					log.Printf("seed admin failed: %v", mapUniqueViolation(err, "username"))
+				} else {
+					// INV-2（事故专项审计路 3）：播种成功必须可观测——旧
+					// 实现补建成功零日志，已初始化部署被指向空库（卷漂
+					// 移等）时在空库上静默播种、日志面无迹可循。此处只
+					// 加日志、不改播种语义：点名触发谓词（当前打开的库
+					// 中 id=1 的 user 计数为 0），事故定位时据此可知本
+					// 进程面对的库里当时没有管理员。
+					log.Printf("INFO: seeded default admin user %q (id=1): trigger predicate was user count for id=1 == 0 in the opened database; if this deployment was already initialized, the opened database is probably not the original one (check the mounted data volume)", adminUser.User)
 				}
 			}
 		}
 	}
 
+	// INV-2：配置播种同口径可观测——FirstOrCreate 实际新建时打
+	// INFO 日志（存在性先查，与管理员补建的谓词形态一致）。
+	var appNameCount int64
+	appNameMissing := db.Model(&model.ViteConfig{}).Where("id = ?", 1).Count(&appNameCount).Error == nil && appNameCount == 0
 	appNameConfig := model.ViteConfig{ID: 1, Name: "app_name", Value: "FLMX", Time: 1755147963000}
 	db.Where("id = ?", 1).FirstOrCreate(&appNameConfig)
+	if appNameMissing {
+		log.Printf("INFO: seeded initial config app_name (id=1): trigger predicate was vite_config count for id=1 == 0 in the opened database")
+	}
 	// "flux" was the seeded name, hidden behind the old commercial license
 	// (it could not be changed without one); show the product name instead.
 	// "FLVX"/"FLVX-MAX" were the seeded names before the FLMX rename; same treatment.
@@ -729,8 +744,13 @@ func seedData(db *gorm.DB) {
 	for name, value := range map[string]string{
 		"hide_footer_brand": "false",
 	} {
+		var cfgCount int64
+		cfgMissing := db.Model(&model.ViteConfig{}).Where("name = ?", name).Count(&cfgCount).Error == nil && cfgCount == 0
 		cfg := model.ViteConfig{Name: name, Value: value, Time: now}
 		db.Where("name = ?", name).FirstOrCreate(&cfg)
+		if cfgMissing {
+			log.Printf("INFO: seeded initial config %s: trigger predicate was vite_config count for name=%s == 0 in the opened database", name, name)
+		}
 	}
 }
 
