@@ -365,7 +365,10 @@ func TestR7H01ValidRestoresPassUntouched(t *testing.T) {
 	createRow(t, dest, &model.User{ID: 11, User: "r7h01-user", Pwd: "x", RoleID: 1, Status: 1, CreatedTime: now})
 	createRow(t, dest, &model.UserTunnel{ID: 41, UserID: 11, TunnelID: 21, Num: 1, Flow: 0, Status: 1})
 	intPtr := func(v int) *int { return &v }
-	fwPorts := []model.ForwardPortBackup{{NodeID: 71, Port: 23001}}
+	// R1-03-M2 后恢复面镜像写面节点端口范围门：合法恢复的端口须
+	// 落在节点规格 1000-2000 内（旧值 23001 在规格外，现会被恢复
+	// 复检点名跳过，与本测试「零跳过」断言冲突），改用 1500。
+	fwPorts := []model.ForwardPortBackup{{NodeID: 71, Port: 1500}}
 
 	backup := &model.BackupData{
 		Version: "1.0",
@@ -410,7 +413,7 @@ func TestR7H01ValidRestoresPassUntouched(t *testing.T) {
 		{"tunnel probe port 443", `SELECT COUNT(1) FROM tunnel WHERE id = 21 AND probe_target_port = 443`, nil},
 		{"chain port 0", `SELECT COUNT(1) FROM chain_tunnel WHERE id = 51 AND port = 0`, nil},
 		{"chain port 23456", `SELECT COUNT(1) FROM chain_tunnel WHERE id = 52 AND port = 23456`, nil},
-		{"forward port 23001", `SELECT COUNT(1) FROM forward_port WHERE forward_id = 31 AND node_id = 71 AND port = 23001`, nil},
+		{"forward port 1500", `SELECT COUNT(1) FROM forward_port WHERE forward_id = 31 AND node_id = 71 AND port = 1500`, nil},
 	}
 	for _, ch := range checks {
 		if n := r7h01Count(t, dest, ch.query, ch.args...); n != 1 {

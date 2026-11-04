@@ -24,7 +24,7 @@ func TestR3H01ForwardPortInIPStrippedAtRestore(t *testing.T) {
 	dest := openBackupRepo(t, "r3h01-fwdinip.db")
 	createRow(t, dest, &model.User{ID: 7, User: "u1", Pwd: r5b5Bcrypt, Status: 1, CreatedTime: now})
 	createRow(t, dest, &model.Tunnel{ID: 1, Name: "t1", Type: 1, TrafficRatio: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
-	createRow(t, dest, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "26000-26100", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	createRow(t, dest, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "8080-8090,26000-26100", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
 
 	ports := []model.ForwardPortBackup{
 		{NodeID: 1, Port: 8080, InIP: "10.0.0.1:9999"},      // 单端口嵌入 → 剥离为 10.0.0.1

@@ -39,7 +39,7 @@ func TestR4F01RestoreSummaryWarningAttributesSkipsByCause(t *testing.T) {
 	dest := openBackupRepo(t, "r4f01-summary.db")
 	createRow(t, dest, &model.User{ID: 7, User: "u1", Pwd: r5b5Bcrypt, Status: 1, CreatedTime: now})
 	createRow(t, dest, &model.Tunnel{ID: 1, Name: "t1", Type: 1, TrafficRatio: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
-	createRow(t, dest, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "26000-26100", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	createRow(t, dest, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "8080-8090,26000-26100", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
 	// 目标库预存转发 #80 及其端口 8079 行（preDeletedPorts=1，触发 R5X-017）。
 	createRow(t, dest, &model.Forward{ID: 80, UserID: 7, UserName: "u1", Name: "r4f-fwd", TunnelID: 1, RemoteAddr: "1.1.1.1:443", Status: 1, CreatedTime: now, UpdatedTime: now})
 	createRow(t, dest, &model.ForwardPort{ForwardID: 80, NodeID: 1, Port: 8079})
@@ -118,7 +118,7 @@ func TestR4F01RestoreSummaryWarningAbsentWithoutPredeletedPorts(t *testing.T) {
 	dest := openBackupRepo(t, "r4f01-no-predeleted.db")
 	createRow(t, dest, &model.User{ID: 7, User: "u1", Pwd: r5b5Bcrypt, Status: 1, CreatedTime: now})
 	createRow(t, dest, &model.Tunnel{ID: 1, Name: "t1", Type: 1, TrafficRatio: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
-	createRow(t, dest, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "26000-26100", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	createRow(t, dest, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "8080-8090,26000-26100", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
 
 	ports := []model.ForwardPortBackup{
 		{NodeID: 1, Port: 8080, InIP: "10.0.0.1"},
@@ -156,7 +156,7 @@ func TestR4F01RestoreSummaryWarningMissingNodeOnly(t *testing.T) {
 	dest := openBackupRepo(t, "r4f01-missing-node.db")
 	createRow(t, dest, &model.User{ID: 7, User: "u1", Pwd: r5b5Bcrypt, Status: 1, CreatedTime: now})
 	createRow(t, dest, &model.Tunnel{ID: 1, Name: "t1", Type: 1, TrafficRatio: 1, Status: 1, CreatedTime: now, UpdatedTime: now})
-	createRow(t, dest, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "26000-26100", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	createRow(t, dest, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "8080-8090,26000-26100", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
 	createRow(t, dest, &model.Forward{ID: 80, UserID: 7, UserName: "u1", Name: "r4f-fwd", TunnelID: 1, RemoteAddr: "1.1.1.1:443", Status: 1, CreatedTime: now, UpdatedTime: now})
 	createRow(t, dest, &model.ForwardPort{ForwardID: 80, NodeID: 1, Port: 8079})
 

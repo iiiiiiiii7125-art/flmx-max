@@ -153,7 +153,11 @@ func TestR13BRBackupImportForwardsRepushesOnlineNode(t *testing.T) {
 		if data.Forwards[i].ID == s.forwardID && data.Forwards[i].ForwardPorts != nil {
 			for j := range *data.Forwards[i].ForwardPorts {
 				if (*data.Forwards[i].ForwardPorts)[j].NodeID == s.frontID {
-					(*data.Forwards[i].ForwardPorts)[j].Port = 20001
+					// R1-03-M2 后恢复面镜像写面节点端口范围门：
+					// 改口目标必须落在 front 节点规格 30000-30010
+					// 内（旧值 20001 在规格外，现会被恢复复检点名
+					// 跳过）；30005 规格内且未占用，改口语义不变。
+					(*data.Forwards[i].ForwardPorts)[j].Port = 30005
 					mutated = true
 				}
 			}
@@ -166,7 +170,7 @@ func TestR13BRBackupImportForwardsRepushesOnlineNode(t *testing.T) {
 	if !strings.Contains(body, `"forwardsImported":1`) {
 		t.Fatalf("forwards segment must report 1 imported row, body=%s", body)
 	}
-	s.waitFrontUpdateWith(t, baseline, "20001")
+	s.waitFrontUpdateWith(t, baseline, "30005")
 	// 回执披露：在线入口节点在重推清单内、失败清单为空（失败不静默）。
 	var env struct {
 		Data model.ImportResult `json:"data"`

@@ -1,0 +1,102 @@
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+)
+
+// R1-03-M1 回归钉：链路策略写面门（normalizeChainStrategy）——
+// 合法集单点 kernel.ChainStrategyLegal 的分段口径：跳行无 best、
+// 入口/出口含 best、大小写敏感、空白先 TrimSpace、空串归一 round。
+func TestNormalizeChainStrategy(t *testing.T) {
+	cases := []struct {
+		chainType int
+		raw       string
+		want      string
+		wantErr   bool
+	}{
+		{1, "fifo", "fifo", false},
+		{1, "best", "best", false},
+		{3, "best", "best", false},
+		{2, "best", "", true},
+		{2, "rand", "rand", false},
+		{1, "banana", "", true},
+		{1, "FIFO", "", true},
+		{3, "hash", "", true},
+		{1, "", "round", false},
+		{2, " round ", "round", false},
+		{99, "round", "round", false},
+		{99, "best", "", true},
+	}
+	for _, c := range cases {
+		got, err := normalizeChainStrategy(c.chainType, c.raw)
+		if c.wantErr {
+			if err == nil {
+				t.Fatalf("normalizeChainStrategy(%d, %q) = %q, want error", c.chainType, c.raw, got)
+			}
+			if !strings.Contains(err.Error(), "合法值") {
+				t.Fatalf("error must name the legal set, got %v", err)
+			}
+			continue
+		}
+		if err != nil || got != c.want {
+			t.Fatalf("normalizeChainStrategy(%d, %q) = %q, %v; want %q", c.chainType, c.raw, got, err, c.want)
+		}
+	}
+}
+
+// R1-FED-01 回归钉：消费方错误码映射按提供方实际文案分家——过期/
+// 超额/IP/域名各自成码，401 族归删除，其余 403 归停用（含旧版提
+// 供方合并文案的既定降级），不可分类返回 ""。
+func TestFederationSyncErrorCode(t *testing.T) {
+	cases := map[string]string{
+		`remote error 401: {"code":401,"msg":"Invalid token"}`:      "provider_share_deleted",
+		`remote error 403: {"msg":"Share has expired"}`:             "provider_share_expired",
+		`remote error 403: {"msg":"Share traffic limit exceeded"}`:  "provider_share_over_quota",
+		`remote error 403: {"msg":"IP not allowed"}`:                "provider_share_ip_denied",
+		`remote error 403: {"msg":"Unable to determine client IP"}`: "provider_share_ip_denied",
+		`remote error 403: {"msg":"Domain not allowed"}`:            "provider_share_domain_denied",
+		`remote error 403: {"msg":"Domain verification required"}`:  "provider_share_domain_denied",
+		`remote error 403: {"msg":"Share is inactive"}`:             "provider_share_disabled",
+		// 旧版提供方合并文案：三因不可分，按停用降级（既定口径）。
+		`remote error 403: {"msg":"Share is inactive, expired, or over quota"}`: "provider_share_disabled",
+		`remote error 500: {"msg":"boom"}`:                                      "",
+		`dial tcp: connection refused`:                                          "",
+	}
+	for in, want := range cases {
+		if got := federationSyncErrorCode(in); got != want {
+			t.Fatalf("federationSyncErrorCode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// R1-07-F4 回归钉：本地导入未知字段点名提取 + Gist 恢复未知顶层段
+// 机械普查（已知集由 BackupData 结构体反射推导）。
+func TestUnknownFieldNaming(t *testing.T) {
+	var dst struct {
+		Name string `json:"name"`
+	}
+	dec := json.NewDecoder(strings.NewReader(`{"name":"x","bogusKey":1}`))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&dst)
+	if err == nil {
+		t.Fatal("expected unknown field error")
+	}
+	if got := unknownJSONFieldName(err); got != "bogusKey" {
+		t.Fatalf("unknownJSONFieldName = %q, want bogusKey", got)
+	}
+	if got := unknownJSONFieldName(errors.New("some other error")); got != "" {
+		t.Fatalf("unknownJSONFieldName(other) = %q, want empty", got)
+	}
+
+	plain := []byte(`{"exportedAt":1,"version":"1.0","bogusSegment":[],"anotherNew":{}}`)
+	unknown := unknownBackupTopLevelKeys(plain)
+	if len(unknown) != 2 || unknown[0] != "anotherNew" || unknown[1] != "bogusSegment" {
+		t.Fatalf("unknownBackupTopLevelKeys = %v, want [anotherNew bogusSegment]", unknown)
+	}
+	if got := unknownBackupTopLevelKeys([]byte(`{"exportedAt":1,"forwards":[]}`)); len(got) != 0 {
+		t.Fatalf("clean backup must have no unknown keys, got %v", got)
+	}
+}
