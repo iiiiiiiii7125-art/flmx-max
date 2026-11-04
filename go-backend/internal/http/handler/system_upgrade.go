@@ -2237,7 +2237,7 @@ func (h *Handler) resolveSystemUpgradeLatestReleaseByChannel(channel string) (st
 		if tag == "" {
 			continue
 		}
-		if releaseChannelFromTag(tag) == normalizedChannel {
+		if releaseMatchesChannel(r, normalizedChannel) {
 			return tag, nil
 		}
 	}
@@ -2528,15 +2528,15 @@ func releasesForChannel(releases []githubRelease, channel string) []systemUpgrad
 		if tag == "" {
 			continue
 		}
-		itemChannel := releaseChannelFromTag(tag)
-		if itemChannel != channel {
+		if !releaseMatchesChannel(r, channel) {
 			continue
 		}
+		itemChannel := releaseChannelFromTag(tag)
 		items = append(items, systemUpgradeReleaseData{
 			Version:     tag,
 			Name:        r.Name,
 			PublishedAt: r.PublishedAt,
-			Prerelease:  itemChannel == releaseChannelDev,
+			Prerelease:  r.Prerelease || itemChannel == releaseChannelDev,
 			Channel:     itemChannel,
 		})
 	}

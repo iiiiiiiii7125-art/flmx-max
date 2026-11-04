@@ -209,6 +209,24 @@ func releaseChannelFromTag(tag string) string {
 	return releaseChannelDev
 }
 
+// releaseMatchesChannel 是「一条 GitHub Release 是否属于某渠道」的
+// 单点谓词（R1-11-03）：tag 形态（releaseChannelFromTag）之外还须
+// 看 Prerelease 标志——纯数字 tag 被标 prerelease 时不属于稳定
+// 渠道，与稳定渠道兜底走的 /releases/latest（按定义排除
+// prerelease/draft）同口径。此前各列表分类路径只看 tag 形态、
+// 丢弃 Prerelease 字段，API 路径会把这类版本当正式版最新版呈现
+// 并可供升级，与兜底路径结论不一致。全部列表分类面（面板侧
+// resolveSystemUpgradeLatestReleaseByChannel / releasesForChannel、
+// 节点侧 resolveLatestReleaseByChannel / listReleases）共用此
+// 谓词；重定向兜底不经此谓词（其 tag 来自 /releases/latest 本身，
+// 已由 GitHub 排除 prerelease）。channel 入参须已归一。
+func releaseMatchesChannel(r githubRelease, channel string) bool {
+	if releaseChannelFromTag(strings.TrimSpace(r.TagName)) != channel {
+		return false
+	}
+	return channel != releaseChannelStable || !r.Prerelease
+}
+
 func releaseChannelLabel(channel string) string {
 	if normalizeReleaseChannel(channel) == releaseChannelDev {
 		return "测试版"
@@ -491,7 +509,7 @@ func resolveLatestReleaseByChannel(channel string) (string, error) {
 		if tag == "" {
 			continue
 		}
-		if releaseChannelFromTag(tag) == normalizedChannel {
+		if releaseMatchesChannel(r, normalizedChannel) {
 			return tag, nil
 		}
 	}
@@ -817,15 +835,15 @@ func (h *Handler) listReleases(w http.ResponseWriter, r *http.Request) {
 		if tag == "" {
 			continue
 		}
-		itemChannel := releaseChannelFromTag(tag)
-		if itemChannel != channel {
+		if !releaseMatchesChannel(r, channel) {
 			continue
 		}
+		itemChannel := releaseChannelFromTag(tag)
 		items = append(items, releaseItem{
 			Version:     tag,
 			Name:        r.Name,
 			PublishedAt: r.PublishedAt,
-			Prerelease:  itemChannel == releaseChannelDev,
+			Prerelease:  r.Prerelease || itemChannel == releaseChannelDev,
 			Channel:     itemChannel,
 		})
 	}
