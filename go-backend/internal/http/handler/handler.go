@@ -1976,9 +1976,13 @@ func (h *Handler) userPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R4-C1-I01：本面是普通用户可达面，仓储错误不得原文直出（与
+	// 未鉴权面 respondInternalError 同口径：原文只进服务端日志、
+	// 回通用文案），此前 4 处 err.Error() 直出会在 DB 故障时把
+	// SQLite/GORM 的表名与约束细节漏给任意已登录用户。
 	user, err := h.repo.GetUserByID(userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userPackage: GetUserByID failed", err)
 		return
 	}
 	if user == nil {
@@ -1988,19 +1992,19 @@ func (h *Handler) userPackage(w http.ResponseWriter, r *http.Request) {
 
 	tunnels, err := h.repo.GetUserPackageTunnels(userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userPackage: GetUserPackageTunnels failed", err)
 		return
 	}
 
 	forwards, err := h.repo.GetUserPackageForwards(userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userPackage: GetUserPackageForwards failed", err)
 		return
 	}
 
 	stats, err := h.repo.GetStatisticsFlows(userID, 24)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userPackage: GetStatisticsFlows failed", err)
 		return
 	}
 
