@@ -3297,7 +3297,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.TunnelsImported = count
 		}
 		if typeSet["forwards"] && len(backup.Forwards) > 0 {
-			count, err := importForwards(tx, backup.Forwards, now, rep)
+			count, err := r.importForwards(tx, backup.Forwards, now, rep)
 			if err != nil {
 				return fmt.Errorf("import forwards failed: %w", err)
 			}
@@ -4119,6 +4119,15 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 			rep.warnf("备份恢复：隧道 #%d（%q）的探测目标端口 %d 不在 1-65535 之间，已跳过该行未恢复", t.ID, t.Name, t.ProbeTargetPort)
 			continue
 		}
+		// 写面门×恢复面镜像普查（R1-03 修复批）：隧道名长门镜像
+		// 写面（create/update 同判 ≤100 rune，B03-001 同族口径）——
+		// 此前恢复面无此门，超长名在 SQLite 静默落库、PG 下可能
+		// 使整单导入失败（限速面 B09-001 同型故障）。
+		if len([]rune(t.Name)) > 100 {
+			rep.skip("tunnels")
+			rep.warnf("备份恢复：隧道 #%d 的名称长度超过 100 个字符，已跳过该行未恢复", t.ID)
+			continue
+		}
 		validTunnels = append(validTunnels, t)
 	}
 	tunnels = validTunnels
@@ -4223,6 +4232,37 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 				rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的连接地址 %q 含空标签主机名，已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.ConnectIP)
 				continue
 			}
+			// 镜像普查续：ConnectIP 格式门补齐到恢复面节点地址
+			// 镜像口径（validImportNodeAddress，F-07(ii) 既定恢复
+			// 面标准）——写面 validateTunnelConnectIPConstraints
+			// 以 IsValidNodeAddress 全量判，此前恢复面只有上方的
+			// 空标签半判，结构非法值（如双端口、含空白）可逐字
+			// 落库、到消费面拨号期才暴露。
+			if ct.ConnectIP != nil && !validImportNodeAddress(*ct.ConnectIP) {
+				rep.skip("chainTunnels")
+				rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的连接地址格式非法，已跳过该链路行未恢复", t.ID, t.Name, ct.ID)
+				continue
+			}
+			// R1-03-M1：链路策略恢复面镜像写面合法集——合法集本
+			// 体是 kernel.ChainStrategyLegal 单点（分段口径与写面
+			// 同：跳行 {fifo,round,rand}、出口/入口行另含 best）。
+			// 集外值逐行跳过 + warning，不原文落库（落库后 agent
+			// 解析一律 default 轮询，声明与生效静默不一致；同函
+			// 数 forwards 段的 ForwardStrategyLegal 门同型）。空串
+			// 是备份的未设形态（读回按 round），不在门内；非空值
+			// 先 TrimSpace 再判、落库归一值（与写面同口径）。
+			chainStrategy := ""
+			if ct.Strategy != nil {
+				chainStrategy = strings.TrimSpace(*ct.Strategy)
+				if chainStrategy != "" {
+					chainTypeNum, convErr := strconv.Atoi(strings.TrimSpace(ct.ChainType))
+					if convErr != nil || !kernel.ChainStrategyLegal(chainTypeNum, chainStrategy) {
+						rep.skip("chainTunnels")
+						rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的负载策略 %q 不在该段合法集内，已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.Strategy)
+						continue
+					}
+				}
+			}
 			// R7-H-01：链路显式端口过恢复面端口门——NULL/0 是
 			// 既有「未定端口」语义（CLOSED-LIST R-02/A3-S1），
 			// 不在门内；负值与 >65535 无此语义，链路行跳过 +
@@ -4246,6 +4286,11 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 				Inx:       ptrToNullInt64(ct.Inx),
 				Protocol:  ptrToNullString(ct.Protocol),
 				ConnectIP: ptrToNullString(ct.ConnectIP),
+			}
+			// R1-03-M1：strategy 落库归一值（TrimSpace 后形态，
+			// 与写面同口径）；NULL 形态保持 NULL。
+			if ct.Strategy != nil {
+				chainItem.Strategy = ptrToNullString(&chainStrategy)
 			}
 			if err := tx.Clauses(clause.OnConflict{
 				Columns: []clause.Column{{Name: "id"}},
@@ -4445,7 +4490,7 @@ func sweepDanglingSpeedRefsTx(tx *gorm.DB, forwards []model.ForwardBackup, userT
 	return nil
 }
 
-func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep *importReport) (int, error) {
+func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	// R7X-002：本批恢复行在目标库取消掉的待删记账身份，循环后汇总
 	// 披露（见循环内侧表收口与循环后 warning）。
@@ -4457,14 +4502,43 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 	if rep != nil {
 		portsSkippedBefore = rep.skipped["forwardPorts"]
 	}
-	// R4-F-01：三类端口行跳过分别计数——(a) 引用节点不存在、
-	// (b) InIP 格式非法、(c) 端口超出 1-65535（R7-H-01）；汇总
-	// warning 按类披露条数与原因。三类仍共用
+	// R4-F-01：端口行跳过分类计数——(a) 引用节点不存在、
+	// (b) InIP 格式非法、(c) 端口超出 1-65535（R7-H-01）、
+	// (d) 端口已被占用、(e) 端口不在节点允许范围（R1-03-M2）；
+	// 汇总 warning 按类披露条数与原因。各类仍共用
 	// rep.skipped["forwardPorts"] 合计数（回执 SkippedRows 口径
 	// 不变），分计数仅用于汇总文案归因。本函数内全部
-	// rep.skip("forwardPorts") 调用点（仅以下三处）都须同步累
-	// 计对应分计数，否则汇总条数与合计数对不上。
+	// rep.skip("forwardPorts") 调用点都须同步累计对应分计数，
+	// 否则汇总条数与合计数对不上。
 	var portsSkippedMissingNode, portsSkippedBadInIP, portsSkippedBadPort int
+	// R1-03-M2：端口行落库前四源占用＋节点端口范围复检的状态。
+	// 恢复前预检（precheckBackupPortConflicts）按整单排除集判重，
+	// 存在盲区：被本单跳过的转发（策略/零目标等门）与 ForwardPorts
+	// 为 nil 的转发，其存量端口行被预检排除、却在导入后原样存
+	// 活——另一条转发的端口行可与之同节点同口并存落库。故在此
+	// 逐行复检：排除集只含「尚未处理」的备份转发（其存量行将被
+	// 其备份行整体替换、且备份内声明已由预检互检）；已处理转发
+	// （已落库新行或被跳过而存量行存活）一律按占用计。冲突行逐
+	// 行跳过 + 分计数披露，不整单失败（与本函数既有跳过口径一
+	// 致）；本单内已落库的端口行另以 claimed 集防同批自撞。
+	var portsSkippedOccupied, portsSkippedOutOfRange int
+	pendingForwardIDs := make(map[int64]bool, len(forwards))
+	for _, f := range forwards {
+		pendingForwardIDs[f.ID] = true
+	}
+	claimedPorts := make(map[[2]int64]bool)
+	nodeByIDCache := make(map[int64]*model.Node)
+	nodeByID := func(nodeID int64) (*model.Node, error) {
+		if node, ok := nodeByIDCache[nodeID]; ok {
+			return node, nil
+		}
+		var node model.Node
+		if err := tx.Where("id = ?", nodeID).First(&node).Error; err != nil {
+			return nil, err
+		}
+		nodeByIDCache[nodeID] = &node
+		return &node, nil
+	}
 	// R4-F3-01：realm 策略门需要隧道引擎——隧道段先于转发段在同一
 	// 事务内恢复、目标库既有隧道同 tx 可见，按 ID 缓存查一次。
 	tunnelEngines := make(map[int64]string)
@@ -4480,6 +4554,9 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 		return tun.Engine, nil
 	}
 	for _, f := range forwards {
+		// R1-03-M2：本行起进入处理——其存量端口行此后按最终形态
+		// （被替换或存活）参与后续行的占用复检，移出待处理排除集。
+		delete(pendingForwardIDs, f.ID)
 		// R6X-007：status 分格门。合法值域 {0,1,2} 之外逐行跳过 +
 		// warning（R5X-009 同型口径）；status=2（删除待处理）的重试
 		// 记账在 nft_pending_delete 侧表、不随备份迁移（BackupData
@@ -4514,6 +4591,28 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 		if remoteAddrHasNoTargets(f.RemoteAddr) {
 			rep.skip("forwards")
 			rep.warnf("备份恢复：转发 #%d（%q）的目标地址 %q 切分后无任何有效目标，已跳过该行未恢复", f.ID, f.Name, f.RemoteAddr)
+			continue
+		}
+		// 写面门×恢复面镜像普查（R1-03-L3）：补齐写面已有而恢复
+		// 面独缺的三门——转发名 ≤100 rune（create/update 同判，
+		// 超长名在 PG 下可使整单失败）、目标段数帽 100、目标端口
+		// 在场格式门。此前坏行可落库：消费侧逐段全量展开下发，
+		// 且经正常编辑面改目标时被合并值门冻结（与 R8-07 已修的
+		// 零目标冻结同族）。判定走 repo 镜像谓词（与写面双边对
+		// 齐口径，见 validateImportRemoteAddrPorts 等定义处）。
+		if len([]rune(f.Name)) > 100 {
+			rep.skip("forwards")
+			rep.warnf("备份恢复：转发 #%d 的名称长度超过 100 个字符，已跳过该行未恢复", f.ID)
+			continue
+		}
+		if n := importRemoteAddrSegmentCount(f.RemoteAddr); n > maxImportRemoteAddrSegments {
+			rep.skip("forwards")
+			rep.warnf("备份恢复：转发 #%d（%q）的目标地址段数 %d 超过上限 %d，已跳过该行未恢复", f.ID, f.Name, n, maxImportRemoteAddrSegments)
+			continue
+		}
+		if err := validateImportRemoteAddrPorts(f.RemoteAddr); err != nil {
+			rep.skip("forwards")
+			rep.warnf("备份恢复：转发 #%d（%q）：%s，已跳过该行未恢复", f.ID, f.Name, err)
 			continue
 		}
 		// D4-03：引用（用户/隧道）不存在时整行跳过并计数，不写悬空行。
@@ -4606,6 +4705,11 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			cancelledPending = append(cancelledPending, fmt.Sprintf("#%d（%q）", f.ID, f.Name))
 		}
 		if f.ForwardPorts != nil {
+			// R1-03-M2：本条转发的待处理排除集快照（处理期间不变）。
+			pendingForwardIDList := make([]int64, 0, len(pendingForwardIDs))
+			for id := range pendingForwardIDs {
+				pendingForwardIDList = append(pendingForwardIDList, id)
+			}
 			var existingPorts int64
 			if err := tx.Model(&model.ForwardPort{}).Where("forward_id = ?", f.ID).Count(&existingPorts).Error; err != nil {
 				return count, err
@@ -4654,6 +4758,39 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 					}
 					inIP = stripped
 				}
+				// R1-03-M2：落库前四源占用＋节点端口范围复检（预
+				// 检盲区收口，状态定义见函数前段）。占用走统一谓
+				// 词 NodePortOccupantTx、排除集仅含尚未处理的备
+				// 份转发；范围内判走节点 Port 规格集合语义（与写
+				// 面 validateLocalNodePort 同口径：规格空=不限；
+				// 远端节点的 Port 由分享段回填、同口径适用）。
+				claimKey := [2]int64{fp.NodeID, int64(fp.Port)}
+				if claimedPorts[claimKey] {
+					rep.skip("forwardPorts")
+					portsSkippedOccupied++
+					rep.warnf("备份恢复：转发 #%d（%q）的端口行（节点 #%d，端口 %d）与本批已恢复的端口行冲突，已跳过该端口行未恢复", f.ID, f.Name, fp.NodeID, fp.Port)
+					continue
+				}
+				source, occErr := r.NodePortOccupantTx(tx, fp.NodeID, fp.Port, PortExclusions{ForwardIDs: pendingForwardIDList})
+				if occErr != nil {
+					return count, occErr
+				}
+				if source != "" {
+					rep.skip("forwardPorts")
+					portsSkippedOccupied++
+					rep.warnf("备份恢复：转发 #%d（%q）的端口行（节点 #%d，端口 %d）已被占用（来源：%s），已跳过该端口行未恢复，请核对转发端口配置", f.ID, f.Name, fp.NodeID, fp.Port, backupPortSourceLabel(source))
+					continue
+				}
+				node, nodeErr := nodeByID(fp.NodeID)
+				if nodeErr != nil {
+					return count, nodeErr
+				}
+				if !importPortInNodeSpec(node, fp.Port) {
+					rep.skip("forwardPorts")
+					portsSkippedOutOfRange++
+					rep.warnf("备份恢复：转发 #%d（%q）的端口行（节点 #%d，端口 %d）不在节点允许端口范围 %q 内，已跳过该端口行未恢复，请核对转发端口配置", f.ID, f.Name, fp.NodeID, fp.Port, node.Port)
+					continue
+				}
 				// O7-005：恢复 ForwardPort 的 InIP（sql.NullString）
 				if err := tx.Create(&model.ForwardPort{
 					ForwardID: f.ID, NodeID: fp.NodeID, Port: fp.Port,
@@ -4661,6 +4798,7 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 				}).Error; err != nil {
 					return count, err
 				}
+				claimedPorts[claimKey] = true
 			}
 		}
 		count++
@@ -4685,6 +4823,12 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			}
 			if portsSkippedBadPort > 0 {
 				reasons = append(reasons, fmt.Sprintf("端口超出 1-65535 范围 %d 条", portsSkippedBadPort))
+			}
+			if portsSkippedOccupied > 0 {
+				reasons = append(reasons, fmt.Sprintf("端口已被占用 %d 条", portsSkippedOccupied))
+			}
+			if portsSkippedOutOfRange > 0 {
+				reasons = append(reasons, fmt.Sprintf("端口不在节点允许范围 %d 条", portsSkippedOutOfRange))
 			}
 			rep.warnf("备份恢复：转发端口（forwardPorts）重建时目标库原有 %d 条端口行已被移除，其中 %d 条备份端口行被跳过未恢复（%s），请核对转发端口配置", preDeletedPorts, skipped, strings.Join(reasons, "、"))
 		}
@@ -6450,6 +6594,165 @@ func validateImportedRealmForwardStrategy(engine, remoteAddr, strategy string) e
 		return nil
 	}
 	return fmt.Errorf("realm 引擎仅支持轮询（round）与 IP 哈希（hash）负载策略，多目标转发不能使用 %s 策略", strings.TrimSpace(strategy))
+}
+
+// ─── 写面门×恢复面镜像普查补门（R1-03-M2/L3）────────────────
+// repo 不能 import handler，段数帽/目标端口格式/节点规格三判在此
+// 以镜像谓词与写面双边对齐（同 remoteAddrHasNoTargets 的镜像
+// 纪律）：判定口径逐格同写面，错误文案同形。
+
+// maxImportRemoteAddrSegments 镜像 handler 侧段数帽
+// maxRemoteAddrSegments（security_utils.go）：切分＋去空段后计数。
+const maxImportRemoteAddrSegments = 100
+
+// importRemoteAddrSegmentCount 镜像 handler splitRemoteParts 的
+// 计数口径：逗号/换行切分、TrimSpace、去空段。
+func importRemoteAddrSegmentCount(addr string) int {
+	n := 0
+	for _, part := range strings.FieldsFunc(addr, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	}) {
+		if strings.TrimSpace(part) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// validateImportRemoteAddrPorts 逐行镜像 handler 侧
+// validateRemoteAddrPorts（F2-F1-02）：逐段按 repoNormalize-
+// RemoteAddrInput 归一后取 SplitHostPort 端口段，在场时须为
+// 1-65535 的数字端口；裸主机与不可切分形态不在此判（与写面同
+// 职责边界）。
+func validateImportRemoteAddrPorts(addr string) error {
+	for _, part := range strings.FieldsFunc(addr, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	}) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		normalized := repoNormalizeRemoteAddrInput(part)
+		if normalized == "" {
+			continue
+		}
+		_, port, err := net.SplitHostPort(normalized)
+		if err != nil {
+			continue
+		}
+		if !importIsDecimalPort(port) {
+			return fmt.Errorf("目标地址 %q 的端口 %q 无效（须为 1-65535 的数字端口）", part, port)
+		}
+	}
+	return nil
+}
+
+// importIsDecimalPort 镜像 handler 侧 isDecimalPort：纯数字且
+// 1-65535。
+func importIsDecimalPort(s string) bool {
+	if s == "" || len(s) > 5 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	return err == nil && n >= 1 && n <= 65535
+}
+
+// importPortInNodeSpec 是恢复面的节点端口范围判（R1-03-M2）：
+// 与写面 validateLocalNodePort/validateRemoteNodePort 同口径——
+// 本地节点按 node.Port 规格的集合语义（逗号多段、段间空隙不放
+// 行；规格空=不限；规格不可解析时宽松放行；可解析但钳制后为空
+// 集且含数字时全拒，E-01 口径）；远端节点按 RemoteConfig 的
+// portRangeStart/End（未配置=不限）。不做全量展开、逐段区间
+// 成员判。
+func importPortInNodeSpec(node *model.Node, port int) bool {
+	if node == nil || port <= 0 {
+		return true
+	}
+	if node.IsRemote == 1 {
+		if !node.RemoteConfig.Valid {
+			return true
+		}
+		var cfg struct {
+			PortRangeStart int `json:"portRangeStart"`
+			PortRangeEnd   int `json:"portRangeEnd"`
+		}
+		if err := json.Unmarshal([]byte(node.RemoteConfig.String), &cfg); err != nil {
+			return true
+		}
+		if cfg.PortRangeStart <= 0 || cfg.PortRangeEnd <= 0 {
+			return true
+		}
+		return port >= cfg.PortRangeStart && port <= cfg.PortRangeEnd
+	}
+	spec := strings.TrimSpace(node.Port)
+	if spec == "" {
+		return true
+	}
+	contains, malformed := importPortSpecContains(spec, port)
+	if malformed {
+		return true
+	}
+	return contains
+}
+
+// importPortSpecContains 是 node.Port 规格的成员判（不展开）：
+// 解析口径与 handler parsePorts 逐格一致（段格式非法→
+// malformed；越界段丢弃、区间钳到 1-65535）。钳制后无任何有效
+// 段时：含数字按 E-01 口径全拒（contains=false）、无数字的垃
+// 圾规格宽松放行（contains=true）。
+func importPortSpecContains(spec string, port int) (contains bool, malformed bool) {
+	anyValid := false
+	for _, part := range strings.Split(spec, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "-") {
+			rangeParts := strings.Split(part, "-")
+			if len(rangeParts) != 2 {
+				return false, true
+			}
+			start, err1 := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
+			end, err2 := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
+			if err1 != nil || err2 != nil || start > end {
+				return false, true
+			}
+			if start > 65535 || end < 1 {
+				continue
+			}
+			if start < 1 {
+				start = 1
+			}
+			if end > 65535 {
+				end = 65535
+			}
+			anyValid = true
+			if port >= start && port <= end {
+				contains = true
+			}
+			continue
+		}
+		p, err := strconv.Atoi(part)
+		if err != nil {
+			return false, true
+		}
+		if p < 1 || p > 65535 {
+			continue
+		}
+		anyValid = true
+		if p == port {
+			contains = true
+		}
+	}
+	if !anyValid {
+		return !strings.ContainsAny(spec, "0123456789"), false
+	}
+	return contains, false
 }
 
 // repoNormalizeRemoteAddrInput 逐行镜像 handler 侧
