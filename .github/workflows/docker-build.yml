@@ -36,6 +36,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # R4-F7-01: SCRIPT_VERSION bump linkage gate. The tree-state
+      # gates only check the stamp's format and repo==asset equality;
+      # nothing required the stamp to move when the script body
+      # changed, which is exactly how RR-F7-01 shipped unbumped.
+      # This checkout has full history + tags (fetch-depth: 0), so
+      # the diff-side check runs here: body changed vs the previous
+      # release tag without a strictly greater stamp fails the
+      # release before any build starts.
+      - name: Check panel_install.sh version stamp bump
+        run: bash scripts/check-script-version-bump.sh
+
       - name: Determine version and build strategy
         id: version
         run: |
