@@ -33,18 +33,22 @@ git rev-parse --verify --quiet "$head_ref^{commit}" >/dev/null || {
 if [ -z "$base_ref" ]; then
   cur_tag="$(git describe --tags --exact-match "$head_ref" 2>/dev/null || true)"
   best=""
+  best_any=""
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     [ "$t" = "$cur_tag" ] && continue
+    best_any="$t" # sort -V 升序迭代，最后一个候选即版本序最大者
     if git merge-base --is-ancestor "$t" "$head_ref" 2>/dev/null; then
-      best="$t" # sort -V 升序迭代，最后一个祖先即版本序最大祖先
-    elif [ -z "$best" ]; then
-      best="$t"
+      best="$t" # 最后一个祖先即版本序最大祖先
     fi
   done <<EOF
 $(git tag --list '[0-9]*' | sort -V)
 EOF
-  base_ref="$best"
+  # RR4-C4-01/C6-05：旧实现以 elif 在 best 为空时存入第一个（最小）
+  # tag，无祖先时最终保留最小者、与门头自述相反，对着最旧印记
+  # 比较近乎恒真。现分开追踪：有祖先取最大祖先，无祖先回退取
+  # 版本序最大者（best_any），与自述一致。
+  base_ref="${best:-$best_any}"
 fi
 
 if [ -z "$base_ref" ]; then
@@ -54,7 +58,10 @@ if [ -z "$base_ref" ]; then
 fi
 
 stamp_at() {
-  git show "$1:$SCRIPT_FILE" 2>/dev/null | grep -m1 '^SCRIPT_VERSION=' | cut -d'"' -f2
+  # 提取口径与 check-doc-consistency.sh §11 统一（RR4-C6-I01）：
+  # 认 ^SCRIPT_VERSION= 前缀行、值剥可选双引号——无引号形态不再
+  # 一门当印记行、另一门视而不见。
+  git show "$1:$SCRIPT_FILE" 2>/dev/null | grep -m1 '^SCRIPT_VERSION=' | sed 's/^SCRIPT_VERSION=//; s/^"//; s/"$//'
 }
 body_hash() {
   git show "$1:$SCRIPT_FILE" 2>/dev/null | grep -v '^SCRIPT_VERSION=' | git hash-object --stdin
