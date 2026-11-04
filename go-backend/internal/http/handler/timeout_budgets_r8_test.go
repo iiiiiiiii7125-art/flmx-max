@@ -99,6 +99,10 @@ func TestR8TimeoutBudgetRegistryPinsGoConstants(t *testing.T) {
 		"tunnelUpdateWriteDeadline":     tunnelUpdateWriteDeadline,
 		"tunnelCreateWriteDeadline":     tunnelCreateWriteDeadline,
 		"backupWriteDeadline":           backupWriteDeadline,
+		// nodeInstall 放宽（C059 的 sv）：RR4-C6-01 前不在本钉表内，
+		// 壳门词法提取被原始字符串伪行遮蔽时全系统无人兜底——补钉后
+		// 编译值与登记 180s 任一漂移即在此红。
+		"nodeInstallWriteDeadline": nodeInstallWriteDeadline,
 		// gh-mirror 服务放宽
 		"ghMirrorServeFor": ghMirrorServeFor,
 		// 后端界常量
@@ -108,6 +112,9 @@ func TestR8TimeoutBudgetRegistryPinsGoConstants(t *testing.T) {
 		"defaultNodeCommandTimeout": defaultNodeCommandTimeout,
 		"idemWaitTimeout":           idemWaitTimeout,
 		"nodeTuneProbeTimeout":      nodeTuneProbeTimeout,
+		// nodeTune 后端界（T019 的 be）：RR4-C6-01 同面未钉符号，
+		// 与 nodeTuneProbeTimeout 同文件同批补钉（登记 30s）。
+		"nodeTuneTimeout": nodeTuneTimeout,
 		// 联邦余量与运行时面
 		"federationClientMargin":         federationClientMargin,
 		"federationRuntimeClientTimeout": federationRuntimeClientTimeout,

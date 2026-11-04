@@ -52,15 +52,23 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Timeout/WithTimeout 值锚、extendWriteDeadline 武装点计数、路由
 # 与函数体普查）旧实现直接读原文：注释里的同形文本可满足取值型
 # 断言——把期望值写进块注释、真身改值，首命中仍取注释值而全绿
-# （第六轮审计观察项 go_const_s 即此形态）。逐个 grep 点改造成
-# 本高，本轮按机制统一处置：开工先建影子树——全树以符号链接镜
+# （第六轮审计观察项 go_const_s 即此形态）。RR4-C6-01 同族第二
+# 形态：原始字符串内容跨行保留时，其中的声明形文本同样能冒充
+# ——go_strip 现一并置空原始字符串内容（见 GO_STRIP_AWK 注）。
+# 逐个 grep 点改造成本高，本轮按机制统一处置：开工先建影子树
+# ——全树以符号链接镜
 # 像（跳过 .git 与 vite-frontend/node_modules），go-backend 与
 # go-gost 下每个 .go 文件替换为 go_strip 词法剥注释后的实文件；
 # 此后本脚本的全部判定只对影子代码面进行。前端 TS、登记表与其
 # 他文件经符号链接读原文，口径不变；影子在退出时清除。
-# GO_STRIP_AWK：Go 词法剥注释状态机（注释整体丢弃，字符串/原始
-# 字符串/符文字面量内容原样保留）。batch=1 时逐文件重置状态并把
-# 结果写到 <文件>.stripped；否则写标准输出。
+# GO_STRIP_AWK：Go 词法剥注释状态机（注释整体丢弃，解释型字符
+# 串/符文字面量内容原样保留——路由与字面量锚点提取需要；原始字
+# 符串内容置空，仅保留首尾反引号）。原始字符串可跨行，其内容里
+# 的声明形文本能以行首形态冒充真声明、遮蔽 go_const_s 的首命中
+# 取值（RR4-C6-01：真常量前置一行原始字符串内的「SYM = 登记值」
+# 即可让漂移全绿）——置空后行首锚定的取值型提取只可能命中真实
+# 代码行。batch=1 时逐文件重置状态并把结果写到 <文件>.stripped；
+# 否则写标准输出。
 GO_STRIP_AWK='
   BEGIN { st = 0; q = sprintf("%c", 39); dest = "/dev/stdout" }
   FNR == 1 && batch { st = 0; dest = FILENAME ".stripped" }
@@ -84,8 +92,7 @@ GO_STRIP_AWK='
         if (c == "\\") { out = out nx; i++ }
         else if (c == "\"") st = 0
       } else if (st == 4) {
-        out = out c
-        if (c == "`") st = 0
+        if (c == "`") { st = 0; out = out c }
       } else if (st == 5) {
         out = out c
         if (c == "\\") { out = out nx; i++ }

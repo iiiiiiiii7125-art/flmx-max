@@ -11,6 +11,12 @@
 # （20s→500s）必须 FAIL 且点名 T061——守 literal/const 提取的
 # fail-closed 口径与 T061–T063 锚点 case 不被删改。
 #
+# 另含 RR4-C6-01 回归变体两条：原始字符串伪行遮蔽＋实值漂移
+# （180→999）必须 FAIL 点名 C059、nodeTuneTimeout 实值漂移
+# （30→99）必须 FAIL 点名 T019——守影子树原始字符串置空与两符
+# 号的对账面不被删改（两符号的 Go 编译值钉在
+# timeout_budgets_r8_test.go 的钉表内）。
+#
 # 用法：check-timeout-budgets-selftest.sh（无参数，作用于本仓库）。
 # 退出码：0 = 基线 PASS 且变体被抓；1 = 任一断言不成立。
 set -u
@@ -208,4 +214,55 @@ grep -q 'T061' "$TMP/var6.log" || { echo "FAIL: gate failed but did not name T06
 grep -q '提取为空' "$TMP/var6.log" || { echo "FAIL: gate failure is not the fail-closed empty-extraction verdict:"; cat "$TMP/var6.log"; exit 1; }
 echo "OK: variant caught, T061 named with fail-closed empty-extraction verdict"
 cp "$ROOT/go-backend/internal/http/handler/kernel_external.go" "$MIR/go-backend/internal/http/handler/kernel_external.go"
+
+# ── RR4-C6-01 回归变体（一）：原始字符串伪行遮蔽＋实值漂移必须
+# FAIL 点名 C059。旧口径下影子树保留原始字符串内容、go_const_s
+# 词法首命中：在 write_deadline.go 顶部原始字符串里写一行
+# 「nodeInstallWriteDeadline = 180 * time.Second」、真身改 999，
+# 首命中取伪值而全绿，且该符号当时不在 Go 值钉表内、无兜底。
+# 修复后影子树置空原始字符串内容，提取只可能命中真身 999；
+# Go 侧钉表亦已补入该符号，双层任一漂移必红。
+echo "== variant RR4-C6-01a: raw-string shadow line + true drift 180->999 must FAIL, naming C059 =="
+WD_GO="$MIR/go-backend/internal/http/handler/write_deadline.go"
+python3 - "$WD_GO" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = '\tnodeInstallWriteDeadline = 180 * time.Second'
+assert old in s, 'nodeInstallWriteDeadline anchor not found'
+s = s.replace(old, '\tnodeInstallWriteDeadline = 999 * time.Second', 1)
+pkg_end = s.index('\n', s.index('package handler')) + 1
+shadow = '\nvar _ = `\nnodeInstallWriteDeadline = 180 * time.Second\n`\n'
+s = s[:pkg_end] + shadow + s[pkg_end:]
+open(p, 'w', encoding='utf-8').write(s)
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/var7.log" 2>&1; then
+  echo "FAIL: gate PASSED on the raw-string shadow variant — lexical first-hit extraction still in effect"
+  exit 1
+fi
+grep -q 'C059' "$TMP/var7.log" || { echo "FAIL: gate failed but did not name C059:"; cat "$TMP/var7.log"; exit 1; }
+grep -q '999' "$TMP/var7.log" || { echo "FAIL: gate failure does not show the true value 999 (shadow line still masking):"; cat "$TMP/var7.log"; exit 1; }
+echo "OK: variant caught, C059 named with true value"
+cp "$ROOT/go-backend/internal/http/handler/write_deadline.go" "$WD_GO"
+
+# ── RR4-C6-01 回归变体（二）：T019 后端界 nodeTuneTimeout 实值
+# 漂移必须 FAIL 点名 T019（同面未钉符号已补 Go 值钉，此处验壳门
+# 提取面本身对该符号的对账不缺位）。
+echo "== variant RR4-C6-01b: nodeTuneTimeout drift 30->99 must FAIL, naming T019 =="
+NT_GO="$MIR/go-backend/internal/http/handler/node_tune.go"
+python3 - "$NT_GO" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+old = 'const nodeTuneTimeout = 30 * time.Second'
+assert old in s, 'nodeTuneTimeout anchor not found'
+open(p, 'w', encoding='utf-8').write(s.replace(old, 'const nodeTuneTimeout = 99 * time.Second', 1))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/var8.log" 2>&1; then
+  echo "FAIL: gate PASSED on the nodeTuneTimeout drift variant — T019 backend bound invisible"
+  exit 1
+fi
+grep -q 'T019' "$TMP/var8.log" || { echo "FAIL: gate failed but did not name T019:"; cat "$TMP/var8.log"; exit 1; }
+echo "OK: variant caught, T019 named"
+cp "$ROOT/go-backend/internal/http/handler/node_tune.go" "$NT_GO"
 echo "SELFTEST: PASS"
