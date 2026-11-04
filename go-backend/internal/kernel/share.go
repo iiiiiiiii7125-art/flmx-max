@@ -781,7 +781,7 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 	}
 	if slot := templateFor(format); slot != "" && strings.TrimSpace(opts.Templates[slot]) != "" {
 		tpl, kind := opts.Templates[slot], TemplateKindOf(slot)
-		endpoints = uniqueNamesExcept(withNotices(ApplySubOptions(endpoints, opts), opts), templateGroupNames(kind, tpl))
+		endpoints = uniqueNamesExcept(withNotices(ApplySubOptions(endpoints, opts), opts), templateTakenNames(kind, tpl))
 		body, err := templateProfile(slot, tpl, endpoints, opts)
 		if err != nil {
 			return "", "", fmt.Errorf("订阅模板出错：%v", err)
@@ -1072,6 +1072,8 @@ func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (st
 			groups = append(groups, map[string]interface{}{"type": "selector", "tag": g.name, "outbounds": members})
 		}
 	}
+	allOutbounds := append(append(groups, outbounds...), map[string]interface{}{"type": "direct", "tag": "direct"})
+	dedupeSingboxCompanionTags(allOutbounds, nil)
 	cfg := map[string]interface{}{
 		"log": map[string]interface{}{"level": "warn"},
 		"inbounds": []interface{}{
@@ -1079,7 +1081,7 @@ func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (st
 				"auto_route": true, "strict_route": true},
 			map[string]interface{}{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080},
 		},
-		"outbounds": append(append(groups, outbounds...), map[string]interface{}{"type": "direct", "tag": "direct"}),
+		"outbounds": allOutbounds,
 		"route": map[string]interface{}{
 			"auto_detect_interface": true,
 			"final":                 "节点选择",
@@ -1105,6 +1107,53 @@ func singboxProfile(endpoints []Endpoint, withRegions bool, opts SubOptions) (st
 		return "", err
 	}
 	return string(b) + "\n", nil
+}
+
+// dedupeSingboxCompanionTags repairs ShadowTLS companion tags that
+// collide in an assembled sing-box profile (RR4-C2-02). The companion
+// tag is derived from the node's name at render time ("X (shadowtls)"),
+// outside every name dedupe, so a node literally named "X (shadowtls)"
+// — or a template tag of that name — puts two outbounds under one tag
+// and sing-box rejects the whole profile. Only the derived companion
+// moves, with the same " #N" suffix algorithm as uniqueNamesExcept
+// (the doctrine of dedupeExpandedProxyNames: pre-existing names never
+// move), and the inner outbound's detour follows the rename. taken
+// holds names occupied outside outbounds (a template's endpoint
+// tags), which a companion must not take either.
+func dedupeSingboxCompanionTags(outbounds []interface{}, taken map[string]bool) {
+	count := map[string]int{}
+	for _, o := range outbounds {
+		if m, ok := o.(map[string]interface{}); ok {
+			if tag, _ := m["tag"].(string); tag != "" {
+				count[tag]++
+			}
+		}
+	}
+	for tag := range taken {
+		count[tag]++
+	}
+	for _, o := range outbounds {
+		m, ok := o.(map[string]interface{})
+		if !ok || m["type"] != "shadowtls" {
+			continue
+		}
+		tag, _ := m["tag"].(string)
+		if tag == "" || count[tag] <= 1 {
+			continue
+		}
+		name := tag
+		for k := 2; count[name] > 0; k++ {
+			name = fmt.Sprintf("%s #%d", tag, k)
+		}
+		for _, o2 := range outbounds {
+			if m2, ok := o2.(map[string]interface{}); ok && m2["detour"] == tag {
+				m2["detour"] = name
+			}
+		}
+		m["tag"] = name
+		count[tag]--
+		count[name] = 1
+	}
 }
 
 // uniqueNames suffixes duplicate endpoint names; Clash proxy names and

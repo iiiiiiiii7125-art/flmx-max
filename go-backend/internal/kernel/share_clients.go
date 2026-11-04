@@ -77,7 +77,7 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 			expanded = append(expanded, multi)
 		}
 	}
-	dedupeExpandedProxyNames(out, expanded)
+	dedupeExpandedProxyNames(out, expanded, nil)
 	proxies := make([]interface{}, len(out))
 	for i, n := range out {
 		proxies[i] = n
@@ -93,6 +93,13 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 // 目标，删之整链悬空，与 Clash 把中转保留在 proxies 同口径）；names
 // （进普通策略组的那份）按 listed() 过滤，隐藏的中转不进任何组。
 func shadowrocketProxies(endpoints []Endpoint, opts SubOptions) ([]interface{}, []string) {
+	return shadowrocketProxiesTaken(endpoints, opts, nil)
+}
+
+// shadowrocketProxiesTaken is shadowrocketProxies with the names a
+// template already occupies in the output namespace, so the expanded
+// copies' post-expansion recheck keeps off them too.
+func shadowrocketProxiesTaken(endpoints []Endpoint, opts SubOptions, taken []string) ([]interface{}, []string) {
 	var rendered []Endpoint
 	var nodes []yamlNode
 	for _, e := range endpoints {
@@ -122,7 +129,7 @@ func shadowrocketProxies(endpoints []Endpoint, opts SubOptions) ([]interface{}, 
 			inGroups = append(inGroups, true)
 		}
 	}
-	finalNames := dedupeExpandedProxyNames(out, expanded)
+	finalNames := dedupeExpandedProxyNames(out, expanded, taken)
 	proxies := make([]interface{}, len(out))
 	names := []string{}
 	for i, n := range out {
@@ -180,10 +187,16 @@ func setProxyName(n yamlNode, name string) {
 // algorithm as uniqueNamesExcept: pre-existing names are registered
 // first and never move, because dialer-proxy fields point at relay
 // names — renaming a relay would silently retarget every copy dialed
-// through it. Returns the final names in emission order.
-func dedupeExpandedProxyNames(nodes []yamlNode, expanded []bool) []string {
+// through it. taken adds names occupied outside the proxy list —
+// a template's group names, when the copies render into a template
+// (RR4-C2-01: the derived-name family shares the one output
+// namespace). Returns the final names in emission order.
+func dedupeExpandedProxyNames(nodes []yamlNode, expanded []bool, taken []string) []string {
 	seen := map[string]bool{"direct": true, "DIRECT": true, "REJECT": true,
 		ChainLandingGroup: true, ChainRelayGroup: true}
+	for _, n := range taken {
+		seen[n] = true
+	}
 	names := make([]string, len(nodes))
 	for i, n := range nodes {
 		names[i] = proxyName(n)

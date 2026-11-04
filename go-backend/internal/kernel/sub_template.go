@@ -161,6 +161,51 @@ func autoHint(kind string) string {
 	return "include-all"
 }
 
+// dupNameWarnings returns one warning per name defined more than
+// once in a template (RR4-C2-03). The builder face refuses duplicate
+// group names outright; a handwritten template is the author's own
+// full config, so the check face names the collision as a warning —
+// the client would reject the profile or silently keep only one.
+func dupNameWarnings(names []string, what string) []string {
+	seen, warned := map[string]bool{}, map[string]bool{}
+	var out []string
+	for _, n := range names {
+		if seen[n] && !warned[n] {
+			warned[n] = true
+			out = append(out, fmt.Sprintf("模板里有多个同名的%s「%s」，客户端会整份拒绝或只认其中一个，请改名", what, n))
+		}
+		seen[n] = true
+	}
+	return out
+}
+
+// danglingWarnings flags references that resolve to nothing in the
+// rendered output: not a template-defined name, not a subscription
+// node name, not a client builtin (RR4-C2-03). owner phrases the
+// referencing side ("策略组「X」").
+func danglingWarnings(owner string, refs []string, universe map[string]bool) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range refs {
+		if r == "" || universe[r] || seen[r] {
+			continue
+		}
+		seen[r] = true
+		out = append(out, fmt.Sprintf("%s引用了「%s」，但模板里没有这个定义、订阅节点里也没有，导入后会指向不存在的目标", owner, r))
+	}
+	return out
+}
+
+func nameSet(lists ...[]string) map[string]bool {
+	out := map[string]bool{}
+	for _, l := range lists {
+		for _, n := range l {
+			out[n] = true
+		}
+	}
+	return out
+}
+
 // chainNamesFor resolves the names the appended chain groups take in a
 // template render. The chain group names are reserved on the node side
 // (uniqueNamesExcept keeps node names off them), but a template may
@@ -172,6 +217,12 @@ func autoHint(kind string) string {
 // template service groups — and the dialer references (dialer-proxy /
 // detour / underlying-proxy) follow the renamed relay group
 // (R4-C2C-01).
+//
+// existing must be the kind's full output namespace — the template's
+// own names (templateTakenNames) plus the final node names — because
+// the renamed form is itself a name in that namespace: a node already
+// named "落地节点 · 链式 1" must push the pick to "· 链式 2", not be
+// collided with (RR4-C2-01).
 func chainNamesFor(existing []string) (landing, relay string) {
 	taken := make(map[string]bool, len(existing))
 	for _, n := range existing {
@@ -184,19 +235,67 @@ func chainNamesFor(existing []string) (landing, relay string) {
 		}
 		return name
 	}
-	return pick(ChainLandingGroup), pick(ChainRelayGroup)
+	landing = pick(ChainLandingGroup)
+	taken[landing] = true
+	relay = pick(ChainRelayGroup)
+	return landing, relay
 }
 
-// templateGroupNames lists a template's group names; node names must not
-// take them.
-func templateGroupNames(kind, content string) []string {
-	s, err := CheckTemplate(kind, content, nil)
-	if err != nil {
-		return nil
+// templateTakenNames lists the names a template itself occupies in the
+// rendered output namespace of its kind — the names node names (via
+// uniqueNamesExcept) and the appended chain groups (via chainNamesFor)
+// must not take. The universe is the kind's complete output namespace,
+// not just its groups (RR4-C2-01): sing-box keeps one tag namespace
+// across outbounds and endpoints alike, and a Surge template's own
+// [Proxy] entries stay in the render next to the inserted nodes. A
+// Mihomo template's proxies are replaced by the rendered nodes, so
+// only its groups occupy names there.
+func templateTakenNames(kind, content string) []string {
+	switch kind {
+	case TemplateClash:
+		doc, err := parseClashTemplate(content)
+		if err != nil {
+			return nil
+		}
+		groups, _ := tplMapGet(doc.Content[0], "proxy-groups")
+		return clashGroupNames(groups)
+	case TemplateSingbox:
+		cfg, err := parseSingboxTemplate(content)
+		if err != nil {
+			return nil
+		}
+		return singboxTags(cfg)
+	case TemplateSurge:
+		return append(surgeGroupNames(content), surgeProxyNames(content)...)
 	}
-	out := make([]string, len(s.Groups))
-	for i, g := range s.Groups {
-		out[i] = g.Name
+	return nil
+}
+
+// singboxEntryTags lists the tags of one sing-box entry list
+// (outbounds or endpoints).
+func singboxEntryTags(list []interface{}) []string {
+	var out []string
+	for _, o := range list {
+		if m, ok := o.(map[string]interface{}); ok {
+			if tag, _ := m["tag"].(string); tag != "" {
+				out = append(out, tag)
+			}
+		}
+	}
+	return out
+}
+
+// singboxTags lists every tag a sing-box template defines, in
+// outbounds and endpoints alike (one shared tag namespace).
+func singboxTags(cfg map[string]interface{}) []string {
+	return append(singboxEntryTags(asSlice(cfg["outbounds"])), singboxEntryTags(asSlice(cfg["endpoints"]))...)
+}
+
+// endpointNameList lists the endpoints' (final) names.
+func endpointNameList(endpoints []Endpoint) []string {
+	out := make([]string, len(endpoints))
+	for i, e := range endpoints {
+		out[i] = e.Name
 	}
 	return out
 }
@@ -413,6 +512,25 @@ func checkClashTemplate(content string, names []string) (TemplateSummary, error)
 		}
 		s.Groups = append(s.Groups, tg)
 	}
+	// Internal uniqueness and reference integrity (RR4-C2-03): the
+	// builder face refuses duplicate group names; a handwritten
+	// template gets them named here. Member references can only be
+	// judged when the node names are known (the preview face) — a
+	// member may legitimately name a subscription node.
+	var groupNames []string
+	for _, g := range s.Groups {
+		groupNames = append(groupNames, g.Name)
+	}
+	s.Warnings = append(s.Warnings, dupNameWarnings(groupNames, "策略组")...)
+	if len(names) > 0 {
+		universe := nameSet(groupNames, names)
+		for _, b := range []string{"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL"} {
+			universe[b] = true
+		}
+		for _, g := range s.Groups {
+			s.Warnings = append(s.Warnings, danglingWarnings(fmt.Sprintf("策略组「%s」", g.Name), g.Proxies, universe)...)
+		}
+	}
 	if rules, _ := tplMapGet(root, "rules"); rules != nil && rules.Kind == yaml.SequenceNode {
 		s.Rules = len(rules.Content)
 	}
@@ -600,13 +718,13 @@ func clashTemplateProfile(content string, endpoints []Endpoint, slot string, opt
 	}
 	root := doc.Content[0]
 	groups, gi := tplMapGet(root, "proxy-groups")
-	landingName, relayName := chainNamesFor(clashGroupNames(groups))
+	landingName, relayName := chainNamesFor(append(clashGroupNames(groups), endpointNameList(endpoints)...))
 	var proxies []interface{}
 	var names []string
 	var chainGroupNodes []interface{}
 	hidden := false
 	if slot == TemplateShadowrocket {
-		proxies, names = shadowrocketProxies(endpoints, opts)
+		proxies, names = shadowrocketProxiesTaken(endpoints, opts, clashGroupNames(groups))
 	} else {
 		proxies, names, chainGroupNodes, hidden = clashTemplateProxies(endpoints, hideRelays, slot == TemplateClash, landingName, relayName)
 	}
@@ -888,11 +1006,67 @@ func checkSingboxTemplate(content string, names []string) (TemplateSummary, erro
 		}
 		s.Groups = append(s.Groups, tg)
 	}
+	// Internal uniqueness and reference integrity (RR4-C2-03), over
+	// the one tag namespace sing-box keeps across outbounds and
+	// endpoints: duplicate tags make the client reject the profile.
+	allTags := singboxTags(cfg)
+	s.Warnings = append(s.Warnings, dupNameWarnings(allTags, "标签")...)
+	// Non-group tags with a chain group name get no warning from the
+	// group loop in CheckTemplate, though the render renames the
+	// appended chain group for them all the same (RR4-C2-I01).
+	groupTags := map[string]bool{}
+	for _, g := range singboxGroups(cfg) {
+		if tag, _ := g["tag"].(string); tag != "" {
+			groupTags[tag] = true
+		}
+	}
+	warned := map[string]bool{}
+	for _, tag := range allTags {
+		if groupTags[tag] || warned[tag] {
+			continue
+		}
+		if tag == ChainLandingGroup || tag == ChainRelayGroup {
+			warned[tag] = true
+			s.Warnings = append(s.Warnings, fmt.Sprintf("出站「%s」与链式分组保留名同名：订阅开启链式时，追加的链式组将以「%s · 链式 N」的形式改名以免同名冲突", tag, tag))
+		}
+	}
+	if len(names) > 0 {
+		universe := nameSet(allTags, names)
+		for _, g := range s.Groups {
+			s.Warnings = append(s.Warnings, danglingWarnings(fmt.Sprintf("策略组「%s」", g.Name), g.Proxies, universe)...)
+		}
+		if route, ok := cfg["route"].(map[string]interface{}); ok {
+			if final, _ := route["final"].(string); final != "" && !universe[final] {
+				s.Warnings = append(s.Warnings, fmt.Sprintf("route.final 指向「%s」，但模板里没有这个出站、订阅节点里也没有，sing-box 导入时会报 outbound not found", final))
+			}
+			var ruleRefs []string
+			singboxRuleOutbounds(route["rules"], &ruleRefs)
+			s.Warnings = append(s.Warnings, danglingWarnings("路由规则", ruleRefs, universe)...)
+		}
+	}
 	if route, ok := cfg["route"].(map[string]interface{}); ok {
 		s.Rules = len(asSlice(route["rules"]))
 		s.Providers = len(asSlice(route["rule_set"]))
 	}
 	return s, nil
+}
+
+// singboxRuleOutbounds collects the "outbound" references of route
+// rules, descending into nested (logical) rules.
+func singboxRuleOutbounds(v interface{}, out *[]string) {
+	switch t := v.(type) {
+	case []interface{}:
+		for _, x := range t {
+			singboxRuleOutbounds(x, out)
+		}
+	case map[string]interface{}:
+		if ob, ok := t["outbound"].(string); ok && ob != "" {
+			*out = append(*out, ob)
+		}
+		if sub, ok := t["rules"]; ok {
+			singboxRuleOutbounds(sub, out)
+		}
+	}
 }
 
 func asSlice(v interface{}) []interface{} {
@@ -915,14 +1089,9 @@ func singboxTemplateProfile(content string, endpoints []Endpoint, opts SubOption
 		}
 	}
 	landing, relay, chain := chainGroups(rendered)
-	var existingTags []string
-	for _, o := range cfg["outbounds"].([]interface{}) {
-		if m, ok := o.(map[string]interface{}); ok {
-			if tag, _ := m["tag"].(string); tag != "" {
-				existingTags = append(existingTags, tag)
-			}
-		}
-	}
+	// The pick must avoid the template's whole tag namespace (outbounds
+	// and endpoints) and the final node names alike (RR4-C2-01).
+	existingTags := append(singboxTags(cfg), endpointNameList(rendered)...)
 	landingName, relayName := chainNamesFor(existingTags)
 	var nodeOutbounds, wgEndpoints []interface{}
 	names := make([]string, 0, len(rendered))
@@ -992,6 +1161,14 @@ func singboxTemplateProfile(content string, endpoints []Endpoint, opts SubOption
 	if len(wgEndpoints) > 0 {
 		cfg["endpoints"] = append(asSlice(cfg["endpoints"]), wgEndpoints...)
 	}
+	// A ShadowTLS companion tag derived from a node name can collide
+	// with a template tag or endpoint tag; repair before marshaling
+	// (RR4-C2-02).
+	endpointTags := map[string]bool{}
+	for _, tag := range singboxEntryTags(asSlice(cfg["endpoints"])) {
+		endpointTags[tag] = true
+	}
+	dedupeSingboxCompanionTags(cfg["outbounds"].([]interface{}), endpointTags)
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return "", err
@@ -1003,11 +1180,11 @@ func singboxTemplateProfile(content string, endpoints []Endpoint, opts SubOption
 
 var surgeSection = regexp.MustCompile(`^\s*\[([^\]]+)\]\s*$`)
 
-// surgeGroupNames lists the group names a surge template defines in
-// its [Proxy Group] section.
-func surgeGroupNames(content string) []string {
+// surgeSectionNames lists the entry names a surge template defines
+// in one section (the text before the first "=" of each entry line).
+func surgeSectionNames(content, section string) []string {
 	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-	gi, ok := surgeSections(lines)["proxy group"]
+	gi, ok := surgeSections(lines)[section]
 	if !ok {
 		return nil
 	}
@@ -1022,6 +1199,19 @@ func surgeGroupNames(content string) []string {
 		}
 	}
 	return out
+}
+
+// surgeGroupNames lists the group names a surge template defines in
+// its [Proxy Group] section.
+func surgeGroupNames(content string) []string {
+	return surgeSectionNames(content, "proxy group")
+}
+
+// surgeProxyNames lists the entry names a surge template defines in
+// its [Proxy] section; the rendered nodes are inserted into the same
+// section, so those names stay occupied.
+func surgeProxyNames(content string) []string {
+	return surgeSectionNames(content, "proxy")
 }
 
 // surgeSections splits a profile into lines and finds each section's
@@ -1102,11 +1292,43 @@ func checkSurgeTemplate(content string, names []string) (TemplateSummary, error)
 		}
 		s.Groups = append(s.Groups, tg)
 	}
+	// Internal uniqueness and reference integrity (RR4-C2-03): the
+	// [Proxy] entries stay in the render next to the groups, so both
+	// sections share one definition namespace.
+	proxyNames := surgeProxyNames(content)
+	var groupNames []string
+	for _, g := range s.Groups {
+		groupNames = append(groupNames, g.Name)
+	}
+	s.Warnings = append(s.Warnings, dupNameWarnings(groupNames, "策略组")...)
+	s.Warnings = append(s.Warnings, dupNameWarnings(proxyNames, "代理")...)
+	for _, n := range proxyNames {
+		if n == ChainLandingGroup || n == ChainRelayGroup {
+			s.Warnings = append(s.Warnings, fmt.Sprintf("代理「%s」与链式分组保留名同名：订阅开启链式时，追加的链式组将以「%s · 链式 N」的形式改名以免同名冲突", n, n))
+		}
+	}
+	var finalTarget string
 	if r, ok := secs["rule"]; ok {
 		for _, l := range lines[r+1 : surgeSectionEnd(lines, r)] {
-			if !surgeComment(l) {
-				s.Rules++
+			if surgeComment(l) {
+				continue
 			}
+			s.Rules++
+			if fields := strings.Split(l, ","); len(fields) >= 2 && strings.TrimSpace(fields[0]) == "FINAL" {
+				finalTarget = strings.TrimSpace(fields[1])
+			}
+		}
+	}
+	if len(names) > 0 {
+		universe := nameSet(groupNames, proxyNames, names)
+		for _, b := range []string{"DIRECT", "REJECT", "REJECT-DROP", "REJECT-TINYGIF"} {
+			universe[b] = true
+		}
+		for _, g := range s.Groups {
+			s.Warnings = append(s.Warnings, danglingWarnings(fmt.Sprintf("策略组「%s」", g.Name), g.Proxies, universe)...)
+		}
+		if finalTarget != "" && !universe[finalTarget] {
+			s.Warnings = append(s.Warnings, fmt.Sprintf("规则 FINAL 指向「%s」，但模板里没有这个策略、订阅节点里也没有，导入后会指向不存在的目标", finalTarget))
 		}
 	}
 	return s, nil
@@ -1178,7 +1400,9 @@ func surgeTemplateProfile(content string, endpoints []Endpoint, hideRelays bool)
 		}
 	}
 	landing, relay, chain := chainGroups(rendered)
-	landingName, relayName := chainNamesFor(surgeGroupNames(content))
+	// The pick must avoid the template's groups, its own [Proxy]
+	// entries and the final node names alike (RR4-C2-01).
+	landingName, relayName := chainNamesFor(append(append(surgeGroupNames(content), surgeProxyNames(content)...), endpointNameList(rendered)...))
 	var listedNames []string
 	hidden := false
 	for i := range proxyLines {
