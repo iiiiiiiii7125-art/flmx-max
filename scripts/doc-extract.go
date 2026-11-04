@@ -42,6 +42,12 @@
 //	                                   面量位于 append(...) 实参子
 //	                                   树内」（即渲染发射点形态）时
 //	                                   退出 0
+//	doc-extract configkeys <file>      config_policy.go 全部分类表
+//	                                   （包级 map[string]… 字面量）
+//	                                   的键并集，排序逐行输出
+//	doc-extract routemethods <dir>     handler 包内全部 /api/v1 注
+//	                                   册路径 → handler 接受方法集
+//	                                   （`路径\t方法集|ANY` 逐行）
 //
 // 退出码：0 成功（strlit/keyemit 为「找到」）；1 未找到；
 // 2 用法/IO/解析错误；3 events 前提异常——集中存在 notifyEvent*
@@ -455,9 +461,312 @@ func cmdKeyEmit(file, typeName, want string) int {
 	return 1
 }
 
+// cmdConfigKeys 输出 config_policy.go 中全部分类表的键并集（包级
+// map[string]… 复合字面量的键集）：public / authenticated / sensitive /
+// required / system-managed / backup-runtime-excluded 六表即
+// PolicyForConfig 的全部分类面，文档示例里出现的配置键必须落在此
+// 并集内（R1-11-01 常设门 §16 的代码侧真值）。
+func cmdConfigKeys(file string) int {
+	f, err := parseFile(file)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	keys := map[string]bool{}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, v := range vs.Values {
+				lit, ok := v.(*ast.CompositeLit)
+				if !ok {
+					continue
+				}
+				mt, ok := lit.Type.(*ast.MapType)
+				if !ok {
+					continue
+				}
+				if id, ok := mt.Key.(*ast.Ident); !ok || id.Name != "string" {
+					continue
+				}
+				for _, elt := range lit.Elts {
+					kv, ok := elt.(*ast.KeyValueExpr)
+					if !ok {
+						continue
+					}
+					if bl, ok := kv.Key.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+						if val, err := strconv.Unquote(bl.Value); err == nil {
+							keys[val] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	if len(keys) == 0 {
+		fmt.Fprintln(os.Stderr, "configkeys: no map keys extracted from", file)
+		return 2
+	}
+	out := make([]string, 0, len(keys))
+	for k := range keys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	for _, k := range out {
+		fmt.Println(k)
+	}
+	return 0
+}
+
+// httpMethodName 把 http.MethodPost 形态的选择器映射为方法名
+// （"POST"）；非该形态返回 ""。
+func httpMethodName(e ast.Expr) string {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "http" {
+		return ""
+	}
+	if !strings.HasPrefix(sel.Sel.Name, "Method") {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimPrefix(sel.Sel.Name, "Method"))
+}
+
+// isMethodSelector 判断表达式是否为 <recv>.Method 形态。
+func isMethodSelector(e ast.Expr) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "Method"
+}
+
+// methodGuardSet 解析 `r.Method != http.MethodX [&& …]` 守卫条件，
+// 返回被放行的方法集；条件不是纯该形态合取时 ok=false。
+func methodGuardSet(e ast.Expr) (map[string]bool, bool) {
+	be, ok := e.(*ast.BinaryExpr)
+	if !ok {
+		return nil, false
+	}
+	if be.Op == token.LAND {
+		ls, lok := methodGuardSet(be.X)
+		rs, rok := methodGuardSet(be.Y)
+		if !lok || !rok {
+			return nil, false
+		}
+		for m := range rs {
+			ls[m] = true
+		}
+		return ls, true
+	}
+	if be.Op != token.NEQ {
+		return nil, false
+	}
+	if isMethodSelector(be.X) {
+		if m := httpMethodName(be.Y); m != "" {
+			return map[string]bool{m: true}, true
+		}
+	}
+	if isMethodSelector(be.Y) {
+		if m := httpMethodName(be.X); m != "" {
+			return map[string]bool{m: true}, true
+		}
+	}
+	return nil, false
+}
+
+// handlerNameOf 从注册实参表达式中取最内层 h.<fn> 的 fn（穿透
+// h.authPeer(h.fn) 等包装器）；找不到返回 ""。
+func handlerNameOf(e ast.Expr) string {
+	name := ""
+	depth := -1
+	var walk func(x ast.Expr, d int)
+	walk = func(x ast.Expr, d int) {
+		if x == nil {
+			return
+		}
+		if sel, ok := x.(*ast.SelectorExpr); ok {
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "h" && d > depth {
+				name = sel.Sel.Name
+				depth = d
+			}
+		}
+		switch node := x.(type) {
+		case *ast.SelectorExpr:
+			walk(node.X, d+1)
+		case *ast.CallExpr:
+			walk(node.Fun, d+1)
+			for _, a := range node.Args {
+				walk(a, d+1)
+			}
+		case *ast.ParenExpr:
+			walk(node.X, d+1)
+		}
+	}
+	walk(e, 0)
+	return name
+}
+
+// cmdRouteMethods 枚举 handler 包目录内全部 /api/v1 注册路径及其
+// handler 接受的方法集，逐行输出 `路径\t方法集`（方法集为逗号分隔
+// 或 ANY）。注册面与 §2 同源：mux.HandleFunc/Handle 字面量、路由
+// 表行（表行另派生 /api/v1 双前缀别名）、以常量（ghMirrorPath）注
+// 册的前缀路径。方法集由 handler 函数体机械推导：`r.Method != X`
+// 守卫（合取多条即多方法）、`switch r.Method` 的 case 集；无任何
+// 方法语句即 ANY（R1-11-01 常设门 §16 的代码侧真值）。
+func cmdRouteMethods(dir string) int {
+	files, err := buildFiles(dir, false, false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	parsed := map[string]*ast.File{}
+	for _, path := range files {
+		f, err := parseFile(path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		parsed[path] = f
+	}
+	// 常量解析（ghMirrorPath 等以标识符注册的路径）。
+	consts := map[string]string{}
+	// handler 名 → 方法集（"" 表示 ANY 的占位在输出层处理）。
+	methods := map[string]map[string]bool{}
+	hasGuard := map[string]bool{}
+	for _, f := range parsed {
+		for _, decl := range f.Decls {
+			if gd, ok := decl.(*ast.GenDecl); ok && gd.Tok == token.CONST {
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for i, v := range vs.Values {
+						if bl, ok := v.(*ast.BasicLit); ok && bl.Kind == token.STRING && i < len(vs.Names) {
+							if val, err := strconv.Unquote(bl.Value); err == nil {
+								consts[vs.Names[i].Name] = val
+							}
+						}
+					}
+				}
+			}
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			set := map[string]bool{}
+			found := false
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch node := n.(type) {
+				case *ast.SwitchStmt:
+					if isMethodSelector(node.Tag) {
+						for _, stmt := range node.Body.List {
+							cc, ok := stmt.(*ast.CaseClause)
+							if !ok {
+								continue
+							}
+							for _, e := range cc.List {
+								if m := httpMethodName(e); m != "" {
+									set[m] = true
+									found = true
+								}
+							}
+						}
+					}
+				case *ast.IfStmt:
+					if gs, ok := methodGuardSet(node.Cond); ok {
+						for m := range gs {
+							set[m] = true
+						}
+						found = true
+					}
+				}
+				return true
+			})
+			methods[fn.Name.Name] = set
+			hasGuard[fn.Name.Name] = found
+		}
+	}
+	// 注册面枚举：path → handler 名。
+	routes := map[string]string{}
+	addRoute := func(path, handler string) {
+		if handler != "" && strings.HasPrefix(path, "/api/v1/") {
+			routes[path] = handler
+		}
+	}
+	for _, f := range parsed {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.CallExpr:
+				sel, ok := node.Fun.(*ast.SelectorExpr)
+				if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") {
+					return true
+				}
+				if len(node.Args) < 2 {
+					return true
+				}
+				var path string
+				switch a0 := node.Args[0].(type) {
+				case *ast.BasicLit:
+					if a0.Kind == token.STRING {
+						path, _ = strconv.Unquote(a0.Value)
+					}
+				case *ast.Ident:
+					path = consts[a0.Name]
+				}
+				if path != "" {
+					addRoute(path, handlerNameOf(node.Args[1]))
+				}
+			case *ast.CompositeLit:
+				// 路由表行 {"/api/v1/...", h.<fn>}（位置字段形态）。
+				if len(node.Elts) == 2 {
+					if bl, ok := node.Elts[0].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+						if p, err := strconv.Unquote(bl.Value); err == nil {
+							if h := handlerNameOf(node.Elts[1]); h != "" {
+								addRoute(p, h)
+								addRoute("/api/v1"+p, h)
+							}
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	if len(routes) == 0 {
+		fmt.Fprintln(os.Stderr, "routemethods: no routes extracted from", dir)
+		return 2
+	}
+	paths := make([]string, 0, len(routes))
+	for p := range routes {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		h := routes[p]
+		if !hasGuard[h] {
+			fmt.Printf("%s\tANY\n", p)
+			continue
+		}
+		ms := make([]string, 0, len(methods[h]))
+		for m := range methods[h] {
+			ms = append(ms, m)
+		}
+		sort.Strings(ms)
+		fmt.Printf("%s\t%s\n", p, strings.Join(ms, ","))
+	}
+	return 0
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: doc-extract <events|testfns|strlit|keyemit> ...")
+		fmt.Fprintln(os.Stderr, "usage: doc-extract <events|testfns|strlit|keyemit|configkeys|routemethods> ...")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -485,6 +794,18 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(cmdKeyEmit(os.Args[2], os.Args[3], os.Args[4]))
+	case "configkeys":
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: doc-extract configkeys <file>")
+			os.Exit(2)
+		}
+		os.Exit(cmdConfigKeys(os.Args[2]))
+	case "routemethods":
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "usage: doc-extract routemethods <dir>")
+			os.Exit(2)
+		}
+		os.Exit(cmdRouteMethods(os.Args[2]))
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand:", os.Args[1])
 		os.Exit(2)

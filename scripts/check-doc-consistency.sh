@@ -63,6 +63,17 @@
 #      usernameFoldIndexName / migrationK10V5Version 逐字一致——任
 #      一侧改名而另一侧未跟，预处理会删错/漏删：漏删索引 pgloader
 #      仍 KABOOM、漏删版本记录则 PG 侧函数索引静默缺失。
+#   16. 技能包示例面对账门（R1-11-01 常设门）：§2 只核端点路径存
+#      在性，示例里写错方法/虚构配置键时旧门全绿。本项两面：
+#      (a) 技能包文档中的方法声明（标题行、`**Method:**` 行、
+#      内联代码 `METHOD /api/v1/…`、curl `-X` 行）必须落入该路由
+#      handler 的接受方法集——方法集由 doc-extract routemethods
+#      按 AST 机械推导（守卫/switch/无语句=ANY），不许手抄清单；
+#      参数化文档路径按最长已注册尾斜杠前缀路由归属。(b)
+#      references/config.md 中呈现的配置键（反引号蛇形标识 + JSON
+#      示例键）除信封白名单外必须全部 ∈ doc-extract configkeys
+#      给出的 config_policy 分类键并集——虚构键（如旧文档的
+#      site_name）即红。无 go 时两面同 §10 口径 PENDING 显式未核。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -466,6 +477,102 @@ elif [ "$mig_sh_version" != "$mig_go_version" ]; then
   note_fail "迁移预处理字面量门：panel_install.sh 预处理删除的 schema_migration 版本字面量「$mig_sh_version」与后端 migrationK10V5Version「$mig_go_version」不一致"
 else
   note_ok "迁移预处理字面量门：panel_install.sh 删除目标与后端 v5 常量逐字一致（$mig_go_index / $mig_go_version）"
+fi
+
+# ── 16. 技能包示例面对账（R1-11-01 常设门）：方法声明 vs 路由方法集
+#    ＋ config.md 示例键 vs config_policy 键集。
+if [ -n "$DOC_EXTRACT" ]; then
+  route_methods=$("$DOC_EXTRACT" routemethods go-backend/internal/http/handler 2>/dev/null)
+  if [ -z "$route_methods" ]; then
+    note_fail "技能包示例面门：doc-extract routemethods 提取为空（前提失效）"
+  else
+    # 文档方法声明提取（四形态）：标题行、`**Method:**` 行（归属
+    # 于同文件最近标题路径）、内联代码 `METHOD /api/v1/…`、curl
+    # `-X METHOD` 同行 URL。
+    method_claims=$(for f in $(find skills/flmx-api -name '*.md' | sort); do
+      awk -v file="$f" '
+        /^#{2,4} / {
+          cur = ""
+          if (match($0, /(GET|POST|PUT|DELETE|HEAD)[[:space:]]+\/api\/v1\/[A-Za-z0-9\/._<>{}-]+/)) {
+            s = substr($0, RSTART, RLENGTH); split(s, a, /[[:space:]]+/); cur = a[2]
+            print file "\t" a[1] "\t" a[2]
+          }
+          next
+        }
+        /\*\*Method:\*\*/ {
+          if (cur != "" && match($0, /(GET|POST|PUT|DELETE|HEAD)/))
+            print file "\t" substr($0, RSTART, RLENGTH) "\t" cur
+          next
+        }
+        /`(GET|POST|PUT|DELETE|HEAD) \/api\/v1\// {
+          if (match($0, /(GET|POST|PUT|DELETE|HEAD)[[:space:]]+\/api\/v1\/[A-Za-z0-9\/._<>{}-]+/)) {
+            s = substr($0, RSTART, RLENGTH); split(s, a, /[[:space:]]+/)
+            print file "\t" a[1] "\t" a[2]
+          }
+          next
+        }
+        /-X (GET|POST|PUT|DELETE|HEAD)/ {
+          m = $0; sub(/.*-X /, "", m); sub(/[^A-Z].*/, "", m)
+          if (match($0, /\/api\/v1\/[A-Za-z0-9\/._<>{}-]+/))
+            print file "\t" m "\t" substr($0, RSTART, RLENGTH)
+        }
+      ' "$f"
+    done | sort -u)
+    method_bad=0
+    while IFS="$(printf '\t')" read -r cfile cmethod cpath; do
+      [ -n "$cpath" ] || continue
+      # 归属解析：精确命中优先；否则按最长已注册前缀（尾斜杠前
+      # 缀路由承接 <param> 段）逐级回退。
+      probe="$cpath"; set_found=""
+      while [ -n "$probe" ]; do
+        set_found=$(printf '%s\n' "$route_methods" | awk -F '\t' -v p="$probe" '$1 == p {print $2; exit}')
+        [ -n "$set_found" ] && break
+        case "$probe" in */*) probe="${probe%/*}" ;; *) probe="" ;; esac
+        # 回退一层后只接受以 / 结尾的已注册前缀路由
+        if [ -n "$probe" ]; then
+          cand=$(printf '%s\n' "$route_methods" | awk -F '\t' -v p="$probe/" '$1 == p {print $2; exit}')
+          if [ -n "$cand" ]; then set_found="$cand"; break; fi
+        fi
+      done
+      if [ -z "$set_found" ]; then
+        note_fail "技能包示例面门：$cfile 声明 $cmethod $cpath，但该路径无从归属任何注册路由"
+        method_bad=1
+      elif [ "$set_found" != "ANY" ] && ! printf '%s' "$set_found" | tr ',' '\n' | grep -Fxq "$cmethod"; then
+        note_fail "技能包示例面门：$cfile 声明 $cmethod $cpath，但 handler 接受方法集为 $set_found"
+        method_bad=1
+      fi
+    done <<EOF_CLAIMS
+$method_claims
+EOF_CLAIMS
+    if [ "$method_bad" -eq 0 ]; then
+      note_ok "技能包示例面门：$(printf '%s\n' "$method_claims" | grep -c .) 条方法声明全部落入路由方法集"
+    fi
+  fi
+
+  config_keys_truth=$("$DOC_EXTRACT" configkeys go-backend/internal/store/repo/config_policy.go 2>/dev/null)
+  if [ -z "$config_keys_truth" ]; then
+    note_fail "技能包示例面门：doc-extract configkeys 提取为空（前提失效）"
+  else
+    # config.md 呈现键：反引号蛇形标识全集 + JSON 示例中行首
+    # "key": 形态；信封/通用字段白名单不计（update_time 是同文件
+    # announcement/get 的响应字段名，非配置键，同列豁免）。
+    doc_config_keys=$( { grep -oP '`[a-z][a-z0-9_]+`' skills/flmx-api/references/config.md | tr -d '`';
+                         grep -oP '^\s*"\K[a-z][a-z0-9_]+(?="\s*:)' skills/flmx-api/references/config.md; } | sort -u )
+    key_allow="code data enabled id msg name time ts value content update_time"
+    key_bad=0
+    for k in $doc_config_keys; do
+      case " $key_allow " in *" $k "*) continue ;; esac
+      if ! printf '%s\n' "$config_keys_truth" | grep -Fxq "$k"; then
+        note_fail "技能包示例面门：config.md 呈现了产品不存在的配置键「$k」（不在 config_policy 分类键集内）"
+        key_bad=1
+      fi
+    done
+    if [ "$key_bad" -eq 0 ]; then
+      note_ok "技能包示例面门：config.md 呈现的 $(printf '%s\n' "$doc_config_keys" | grep -c .) 个键全部 ∈ config_policy 键集（$(printf '%s\n' "$config_keys_truth" | grep -c .) 键）"
+    fi
+  fi
+else
+  echo "PENDING: 技能包示例面门未核（当前环境无 go 工具链，routemethods/configkeys 无法提取）；请在装有 go 的环境复跑本门"
 fi
 
 echo "----"
