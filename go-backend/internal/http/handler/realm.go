@@ -104,6 +104,18 @@ func validateRealmForwardStrategy(tunnel *tunnelRecord, remoteAddr, strategy str
 	return fmt.Errorf("realm 引擎仅支持轮询（round）与 IP 哈希（hash）负载策略，多目标转发不能使用 %s 策略", strings.TrimSpace(strategy))
 }
 
+// validateForwardStrategy（R4-F4-02）：转发负载策略的写面合法集
+// 校验——合法集本体是 kernel.ForwardStrategyLegal 单点（恢复面 repo
+// 共用同一判）。create/update 对最终落库值（含合并回填值）无条件
+// 校验：集外值落库后 agent 解析一律 roundrobin，声明与生效静默不
+// 一致；存量坏策略行同零目标/段数帽口径，任何编辑须先补正策略。
+func validateForwardStrategy(strategy string) error {
+	if kernel.ForwardStrategyLegal(strategy) {
+		return nil
+	}
+	return fmt.Errorf("不支持的负载策略 %q，合法值为 fifo、round、rand、hash", strings.TrimSpace(strategy))
+}
+
 // validateRealmEngineSwitchForwards（R2-F4-01）：引擎切换 gost→realm
 // 此前是 A4-004 策略门的第四写面漏网——switchTunnelEngine 径直删除
 // gost 服务并以 realm 重渲染，多目标 fifo/rand 被静默改写为轮询、备

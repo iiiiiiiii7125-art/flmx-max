@@ -4469,8 +4469,16 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	strategy := strings.TrimSpace(defaultString(asString(req["strategy"]), "fifo"))
+	// R4-F4-02：策略合法集校验（合法集为 kernel 单点判，update/恢复
+	// 面共用）；校验对修剪后的最终落库值做，存 " fifo " 一类带空白
+	// 值在此归一，避免声明与 agent 解析口径错位。
+	if err := validateForwardStrategy(strategy); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 	// A4-004（BC-26）：realm 不支持的负载策略明确拒绝，不再静默改写。
-	if err := validateRealmForwardStrategy(tunnel, remoteAddr, defaultString(asString(req["strategy"]), "fifo")); err != nil {
+	if err := validateRealmForwardStrategy(tunnel, remoteAddr, strategy); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -4496,7 +4504,7 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	proxyProtocolReceive := asInt(req["proxyProtocolReceive"], 0)
 	proxyProtocolSend := asInt(req["proxyProtocolSend"], proxyProtocol)
 
-	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnelID, remoteAddr, defaultString(asString(req["strategy"]), "fifo"), now, inx, entryNodes, port, inIp, nullableInt(speedID), maxConn, ipMaxConn, nullableInt(ipSpeedID), proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
+	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnelID, remoteAddr, strategy, now, inx, entryNodes, port, inIp, nullableInt(speedID), maxConn, ipMaxConn, nullableInt(ipSpeedID), proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -4639,7 +4647,13 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	strategy := strings.TrimSpace(asString(req["strategy"]))
 	if strategy == "" {
-		strategy = forward.Strategy
+		strategy = strings.TrimSpace(forward.Strategy)
+	}
+	// R4-F4-02：策略合法集校验，对回填后的合并值无条件判定（与零
+	// 目标/段数帽同口径：存量坏策略行任何编辑须先补正）。
+	if err := validateForwardStrategy(strategy); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
 	}
 	// A4-004（BC-26）：编辑路径同建——合并后的策略/目标对 realm 隧道校验。
 	if err := validateRealmForwardStrategy(tunnel, remoteAddr, strategy); err != nil {

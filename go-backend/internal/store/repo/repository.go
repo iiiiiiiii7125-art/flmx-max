@@ -4395,6 +4395,20 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 	// rep.skip("forwardPorts") 调用点（仅以下三处）都须同步累
 	// 计对应分计数，否则汇总条数与合计数对不上。
 	var portsSkippedMissingNode, portsSkippedBadInIP, portsSkippedBadPort int
+	// R4-F3-01：realm 策略门需要隧道引擎——隧道段先于转发段在同一
+	// 事务内恢复、目标库既有隧道同 tx 可见，按 ID 缓存查一次。
+	tunnelEngines := make(map[int64]string)
+	tunnelEngineOf := func(tunnelID int64) (string, error) {
+		if engine, ok := tunnelEngines[tunnelID]; ok {
+			return engine, nil
+		}
+		var tun model.Tunnel
+		if err := tx.Select("engine").Where("id = ?", tunnelID).First(&tun).Error; err != nil {
+			return "", err
+		}
+		tunnelEngines[tunnelID] = tun.Engine
+		return tun.Engine, nil
+	}
 	for _, f := range forwards {
 		// R6X-007：status 分格门。合法值域 {0,1,2} 之外逐行跳过 +
 		// warning（R5X-009 同型口径）；status=2（删除待处理）的重试
@@ -4445,6 +4459,35 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			rep.skip("forwards")
 			continue
 		}
+		// R4-F4-02：策略合法集与写面共用 kernel.ForwardStrategyLegal
+		// 单点判（不得在此另立字面集）。空串是备份的未设形态，按
+		// create 面缺省口径补 fifo 落库；非空集外值逐行跳过 +
+		// warning——原文落库后 agent 解析一律 roundrobin，声明与
+		// 生效静默不一致且无从察觉。
+		strategy := strings.TrimSpace(f.Strategy)
+		if strategy == "" {
+			strategy = "fifo"
+		}
+		if !kernel.ForwardStrategyLegal(strategy) {
+			rep.skip("forwards")
+			rep.warnf("备份恢复：转发 #%d（%q）的负载策略 %q 不在合法集 {fifo, round, rand, hash} 内，已跳过该行未恢复", f.ID, f.Name, f.Strategy)
+			continue
+		}
+		// R4-F3-01（F4-01）：realm 策略门镜像写面——realm 隧道＋多
+		// 目标非 {round, hash} 逐行跳过 + warning（R8-07 同口径，
+		// 不整批中止）；本地导入与 Gist 恢复共用本路径，一处修两
+		// 面通。此前唯独本面无门，恢复落库后渲染层静默改写轮询、
+		// 且经正常编辑面又会被合并值判定拒绝（恢复得进、改不动、
+		// 跑不对）。
+		engine, err := tunnelEngineOf(f.TunnelID)
+		if err != nil {
+			return count, err
+		}
+		if err := validateImportedRealmForwardStrategy(engine, f.RemoteAddr, strategy); err != nil {
+			rep.skip("forwards")
+			rep.warnf("备份恢复：转发 #%d（%q）：%s，已跳过该行未恢复", f.ID, f.Name, err)
+			continue
+		}
 		item := model.Forward{
 			ID:                   f.ID,
 			UserID:               f.UserID,
@@ -4452,7 +4495,7 @@ func importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep 
 			Name:                 f.Name,
 			TunnelID:             f.TunnelID,
 			RemoteAddr:           f.RemoteAddr,
-			Strategy:             f.Strategy,
+			Strategy:             strategy,
 			InFlow:               f.InFlow,
 			OutFlow:              f.OutFlow,
 			CreatedTime:          f.CreatedTime,
@@ -6304,6 +6347,39 @@ func repoRemotePartHasEffectiveTarget(part string) bool {
 		return true
 	}
 	return false
+}
+
+// validateImportedRealmForwardStrategy 镜像 handler 侧 realm 策略
+// 门（validateRealmForwardStrategy，A4-004/BC-26）：realm 隧道＋
+// 有效目标 ≥2＋策略 ∉ {round, hash} 时该行不得落库——realm 渲染对
+// 非 hash 多目标一律 roundrobin，落库即 BC-26 明禁的静默改写。
+// repo 不能 import handler，故以同谓词本地镜像：有效目标计数走
+// repoRemotePartHasEffectiveTarget（与写面 remotePartHasEffective-
+// Target 双边钉格对齐，见 remoteAddrHasNoTargets 注）；错误文案与
+// 写面逐字一致。空标签半句不在此重复：importForwards 已对全部行
+// 以 addrsHaveEmptyLabel 先行逐行跳过（覆盖面严于写面仅 realm 判）。
+// 策略合法集本身不镜像——写面与恢复面共用 kernel.ForwardStrategyLegal
+// 单点判。
+func validateImportedRealmForwardStrategy(engine, remoteAddr, strategy string) error {
+	if engine != kernel.TypeRealm {
+		return nil
+	}
+	switch strings.TrimSpace(strategy) {
+	case "", "round", "hash":
+		return nil
+	}
+	effectiveTargets := 0
+	for _, part := range strings.FieldsFunc(remoteAddr, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	}) {
+		if repoRemotePartHasEffectiveTarget(part) {
+			effectiveTargets++
+		}
+	}
+	if effectiveTargets < 2 {
+		return nil
+	}
+	return fmt.Errorf("realm 引擎仅支持轮询（round）与 IP 哈希（hash）负载策略，多目标转发不能使用 %s 策略", strings.TrimSpace(strategy))
 }
 
 // repoNormalizeRemoteAddrInput 逐行镜像 handler 侧
