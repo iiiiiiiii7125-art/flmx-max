@@ -165,7 +165,53 @@ const INTERACTIONS = {
   // is idempotent, so the poll may re-run this step until the
   // button enables; the click itself happens exactly once (the
   // step returns true only on the evaluating pass that clicks).
-  "admin config": `(() => { const scope = document.querySelector("main") ?? document; const setVal = (el, v) => { const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; setter.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }; const token = scope.querySelector('input[aria-label="GitHub 令牌"]'); const password = scope.querySelector('input[aria-label="加密密码"]'); if (!token || !password) return false; if (!token.value) setVal(token, "ghp_demo_patrol_token"); if (!password.value) setVal(password, "demo-patrol-password"); const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "立即上传"); if (!b || b.disabled) return false; b.click(); return true; })()`,
+  // R4-C5-01/02/03: the same step continues through the config
+  // page's other data-carrying actions, in window-flagged phases
+  // (each click exactly once; later passes only observe):
+  // phase 2 exports a backup (选择并导出 → 全选 → 确认导出; the
+  // selector modal closing is the success marker — a failed export
+  // keeps it open behind an error toast, and before the adapter
+  // synthesized an attachment response the click threw a TypeError
+  // page error); phase 3+4 imports one (选择并导入 → 全选 →
+  // 下一步选择文件, then the CDP hook in interact() sets the
+  // patrol backup file on the hidden input, then 确认导入; the
+  // settle marker is the receipt panel's 共导入 line — the patrol
+  // file carries a legacy tunnelGroups row, so the panel must also
+  // name it as ignored); phase 5 restores from Gist (刷新版本列表
+  // → 恢复此版本 → password → 恢复; success reloads the page and
+  // the receipt survives via sessionStorage, so the final marker
+  // is checked before phase 1 — a reloaded step sees it at once).
+  "admin config": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const setVal = (el, v) => { const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; setter.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }; const btn = (root, t) => [...root.querySelectorAll("button")].find((x) => x.textContent.trim() === t); const dlgByTitle = (t) => { const h = [...document.querySelectorAll("h2")].find((x) => x.textContent.trim() === t); return h?.closest('[role="dialog"]') ?? h?.closest("section") ?? null; }; if (document.body.textContent.includes("最近一次 Gist 恢复结果")) return true; if (!w.__cg1) { const token = scope.querySelector('input[aria-label="GitHub 令牌"]'); const password = scope.querySelector('input[aria-label="加密密码"]'); if (!token || !password) return false; if (!token.value) setVal(token, "ghp_demo_patrol_token"); if (!password.value) setVal(password, "demo-patrol-password"); const b = btn(scope, "立即上传"); if (!b || b.disabled) return false; w.__cg1 = true; b.click(); return false; } if (!w.__cg2) { const b = btn(scope, "选择并导出"); if (!b) return false; w.__cg2 = true; b.click(); return false; } if (!w.__cg3) { const d = dlgByTitle("选择导出内容"); if (!d) return false; const all = btn(d, "全选"); if (all) all.click(); const b = btn(d, "确认导出"); if (!b || b.disabled) return false; w.__cg3 = true; b.click(); return false; } if (dlgByTitle("选择导出内容")) return false; if (!w.__cg4) { const b = btn(scope, "选择并导入"); if (!b) return false; w.__cg4 = true; b.click(); return false; } if (!w.__cg5) { const d = dlgByTitle("选择导入内容"); if (!d) return false; const all = btn(d, "全选"); if (all) all.click(); const b = btn(d, "下一步选择文件"); if (!b || b.disabled) return false; w.__cg5 = true; w.__impPick = true; b.click(); return false; } if (!w.__impDone) return false; if (!w.__cg6) { const d = dlgByTitle("确认导入备份"); if (!d) return false; const b = btn(d, "确认导入"); if (!b || b.disabled) return false; w.__cg6 = true; b.click(); return false; } if (!document.body.textContent.includes("共导入")) return false; if (!w.__cg7) { const b = btn(scope, "刷新版本列表"); if (!b) return false; w.__cg7 = true; b.click(); return false; } if (!w.__cg8) { const b = btn(scope, "恢复此版本"); if (!b) return false; w.__cg8 = true; b.click(); return false; } if (!w.__cg9) { const d = dlgByTitle("从 Gist 恢复"); if (!d) return false; const pw = d.querySelector('input[aria-label="加密密码"]'); if (!pw) return false; if (!pw.value) setVal(pw, "demo-patrol-password"); const b = btn(d, "恢复"); if (!b || b.disabled) return false; w.__cg9 = true; b.click(); return false; } return false; })()`,
+  // R4-C5-01: the node row's action sheet is the only path to
+  // node/install; its answer used to be data:null and the modal
+  // error-toasted the write answer's own msg ("操作成功"). Open
+  // the sheet from the first node row, click 安装命令, and settle
+  // on the synthesized command text itself — only a data-carrying
+  // answer renders it. (The same sheet's 监控 entry and the
+  // service-monitor 立即检查 chain behind it stay registered
+  // blind spots, see README: the run answer is covered by the
+  // adapter's shape, the chain is a multi-level menu the walk
+  // does not drive.)
+  "admin node": `(() => { const w = window; const scope = document.querySelector("main") ?? document; if (!w.__ni1) { const row = scope.querySelector('[role="button"].glass-card'); if (!row) return false; w.__ni1 = true; row.click(); return false; } if (!w.__ni2) { const sheet = [...document.querySelectorAll('[role="dialog"]')].find((d) => d.textContent.includes("安装命令")); if (!sheet) return false; const b = [...sheet.querySelectorAll("button")].find((x) => x.textContent.trim() === "安装命令"); if (!b) return false; w.__ni2 = true; b.click(); return false; } const dlg = [...document.querySelectorAll('[role="dialog"]')].find((d) => d.textContent.includes("演示站合成的示例命令")); if (!dlg) return false; const c = [...dlg.querySelectorAll("button")].find((x) => ["关闭", "取消", "完成"].includes(x.textContent.trim())); if (c) c.click(); return true; })()`,
+  // R4-C5-I01: importing a remote node used to drop the receipt's
+  // panelVersion/versionWarning disclosure (data:null, generic
+  // success). Fill the dialog, import, and settle on the dialog
+  // closing — it only closes on a code-0 answer.
+  "admin panel-sharing": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const setVal = (el, v) => { const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; setter.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }; const dlg = () => { const h = [...document.querySelectorAll("h2")].find((x) => x.textContent.trim() === "导入远程节点"); return h?.closest('[role="dialog"]') ?? null; }; if (!w.__pf1) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "导入远程节点"); if (!b) return false; w.__pf1 = true; b.click(); return false; } if (!w.__pf2) { const d = dlg(); if (!d) return false; const url = d.querySelector('input[placeholder^="http://panel"]'); const tok = d.querySelector('input[placeholder^="Bearer"]'); if (!url || !tok) return false; if (!url.value) setVal(url, "http://panel.example.com:8088"); if (!tok.value) setVal(tok, "demo-token"); const b = [...d.querySelectorAll("button")].find((x) => x.textContent.trim() === "导入"); if (!b || b.disabled) return false; w.__pf2 = true; b.click(); return false; } return !dlg(); })()`,
+  // R4-C5-02: the external-node import dialog's receipt (created
+  // ids + per-line errors) used to be unreachable (data:null →
+  // "已导入 0 个节点"). Paste one share link, submit, and settle
+  // on the dialog closing — success with no errors closes it, a
+  // null receipt kept it open or reported zero.
+  "admin inbound": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const setVal = (el, v) => { const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set; setter.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }; const dlg = () => { const h = [...document.querySelectorAll("h2")].find((x) => x.textContent.trim() === "导入节点"); return h?.closest('[role="dialog"]') ?? null; }; if (!w.__ib1) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "导入"); if (!b) return false; w.__ib1 = true; b.click(); return false; } if (!w.__ib2) { const d = dlg(); if (!d) return false; const ta = d.querySelector("textarea"); if (!ta) return false; if (!ta.value) setVal(ta, "ss://YWVzLTI1Ni1nY206ZGVtbw==@203.0.113.11:8388#patrol-demo"); const b = [...d.querySelectorAll("button")].find((x) => x.textContent.trim() === "导入" && !x.disabled); if (!b) return false; w.__ib2 = true; b.click(); return false; } return !dlg(); })()`,
+  // R4-C5-01 (partial): opening the template manager proves the
+  // recorded list renders; the per-template 刷新 button exists
+  // only on URL-sourced templates and the recording's one
+  // template is source-type, so the refresh click itself stays a
+  // registered blind spot (README) — its synthesized answer is
+  // covered by the adapter's shape (refresh returns the recorded
+  // row with the fetch error cleared).
+  "admin subscription": `(() => { const w = window; const scope = document.querySelector("main") ?? document; if (!w.__st1) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "模板"); if (!b) return false; w.__st1 = true; b.click(); return false; } const dlg = [...document.querySelectorAll('[role="dialog"]')].find((d) => d.textContent.includes("Mihomo 基础模板")); if (!dlg) return false; const c = [...dlg.querySelectorAll("button")].find((x) => ["关闭", "取消", "完成"].includes(x.textContent.trim())); if (c) c.click(); return true; })()`,
   // RR-C5-05: opening a tunnel's delete dialog fires tunnel/delete-
   // preview (and 批量删除 fires tunnel/batch-delete-preview) —
   // data-carrying POSTs the demo wordlist used to judge writes
@@ -190,8 +236,69 @@ const INTERACTIONS = {
   "admin tunnel": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const dlgByTitle = (title) => { const h = [...document.querySelectorAll("h2")].find((x) => x.textContent.trim() === title); return h?.closest('[role="dialog"]') ?? h?.closest("section") ?? null; }; const cancelOf = (dlg) => [...dlg.querySelectorAll("button")].find((x) => x.textContent.trim() === "取消"); if (!w.__dt1) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt1 = true; b.click(); return false; } if (!w.__dt1Done) { const dlg = dlgByTitle("删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("发现关联规则") || !t.includes("关联规则预览")) return false; const c = cancelOf(dlg); if (c) c.click(); w.__dt1Done = true; return false; } if (!w.__dt2) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "批量" && !x.disabled); if (!b) return false; w.__dt2 = true; b.click(); return false; } if (!w.__dt2Picked) { const box = scope.querySelector('[role="checkbox"]'); if (!box) return false; box.click(); w.__dt2Picked = true; return false; } if (!w.__dt2Clicked) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt2Clicked = true; b.click(); return false; } const dlg = dlgByTitle("批量删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("条仍被规则使用")) return false; const c = cancelOf(dlg); if (c) c.click(); return true; })()`,
 };
 
+// Multi-phase steps (R4-C5: the config step chains gist upload,
+// backup export, backup import and gist restore, the last of which
+// reloads the page) get a longer poll ceiling than the page settle;
+// the minimum settle is unchanged, so no step is judged earlier
+// than under the old fixed wait.
+const STEP_BUDGET_MS = {
+  "admin config": 120000,
+  "admin node": 45000,
+  "admin inbound": 45000,
+  "admin panel-sharing": 45000,
+  "admin subscription": 45000,
+};
+
+// The patrol backup file the config step imports: two users, one
+// node, and one legacy tunnelGroups row — the import receipt must
+// count the three real rows and name the removed segment as
+// ignored (R4-C5-02). Written fresh each run; never a real backup.
+const patrolBackupPath = path.join(os.tmpdir(), "demo-patrol-backup.json");
+fs.writeFileSync(
+  patrolBackupPath,
+  JSON.stringify({
+    version: "1.0",
+    exportedAt: Date.now(),
+    users: [
+      { id: 1, username: "patrol-a" },
+      { id: 2, username: "patrol-b" },
+    ],
+    nodes: [{ id: 1, name: "patrol-node" }],
+    tunnelGroups: [{ id: 1, name: "patrol-legacy-group" }],
+  }),
+);
+
+// CDP hook for the config step's import phase: the step clicks
+// 下一步选择文件 (which opens the hidden file input) and flags
+// __impPick; file choosers are native UI the evaluate-only steps
+// cannot drive, so set the patrol file on the input here. Setting
+// files fires the input's change event, which opens the page's
+// 确认导入备份 dialog for the step's next phase.
+async function maybeSetImportFile(key) {
+  if (key !== "admin config") return;
+  const want = await evaluate(
+    `window.__impPick === true && !window.__impDone`,
+  );
+
+  if (!want) return;
+  await page("DOM.enable");
+  const { root } = await page("DOM.getDocument", { depth: 1 });
+  const { nodeId } = await page("DOM.querySelector", {
+    nodeId: root.nodeId,
+    selector: 'input[type="file"][accept=".json"]',
+  });
+
+  if (!nodeId) return;
+  await page("DOM.setFileInputFiles", {
+    nodeId,
+    files: [patrolBackupPath],
+  });
+  await evaluate(`window.__impDone = true; true`);
+}
+
 async function interact(role, route) {
-  const step = INTERACTIONS[`${role} ${route}`];
+  const key = `${role} ${route}`;
+  const step = INTERACTIONS[key];
 
   if (!step) return;
   current = `${role} #/${route} (interaction)`;
@@ -199,10 +306,12 @@ async function interact(role, route) {
   // not mounted yet, so re-evaluating it until it clicks is safe:
   // poll it under the same ceiling as the page settle instead of
   // judging "control not found" after one fixed wait.
+  const budget = STEP_BUDGET_MS[key] ?? SETTLE_MAX_MS;
   let clicked = await evaluate(step);
-  const deadline = Date.now() + (SETTLE_MAX_MS - SETTLE_MS);
+  const deadline = Date.now() + (budget - SETTLE_MS);
   while (!clicked && Date.now() <= deadline) {
     await sleep(SETTLE_POLL_MS);
+    await maybeSetImportFile(key);
     clicked = await evaluate(step);
   }
 
