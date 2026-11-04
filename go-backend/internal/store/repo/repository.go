@@ -3248,9 +3248,22 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		subRemap := make(map[int64]int64)
 
 		if typeSet["users"] && len(backup.Users) > 0 {
+			// R1-06-L1：users 段导入后管理员不变式的前置快照（段后
+			// 校验见 validateImportAdminInvariant）：构造/异源备份的
+			// id=1 行 role_id≠0（或全段无 role_id=0 行）经 upsert 可
+			// 把现行管理员整行降权覆盖，而 seedData 只在 id=1 行不
+			// 存在时补建——导入后无管理员可登录且永不自愈。故落库
+			// 前记下现行 id=1 管理员的存在性，段末整单裁定。
+			_, preAdminRow1, err := importAdminState(tx)
+			if err != nil {
+				return fmt.Errorf("import users admin precheck failed: %w", err)
+			}
 			count, err := importUsers(tx, backup.Users, now, rep)
 			if err != nil {
 				return fmt.Errorf("import users failed: %w", err)
+			}
+			if err := validateImportAdminInvariant(tx, preAdminRow1); err != nil {
+				return err
 			}
 			result.UsersImported = count
 		}
@@ -3548,6 +3561,41 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 		count++
 	}
 	return count, nil
+}
+
+// importAdminState 返回导入后管理员不变式所需的两个计数：全库
+// role_id=0 行数、以及 id=1 行中 role_id=0 的行数（0 或 1）。
+func importAdminState(tx *gorm.DB) (admins int64, adminRow1 int64, err error) {
+	if err := tx.Model(&model.User{}).Where("role_id = ?", 0).Count(&admins).Error; err != nil {
+		return 0, 0, err
+	}
+	if err := tx.Model(&model.User{}).Where("id = ? AND role_id = ?", 1, 0).Count(&adminRow1).Error; err != nil {
+		return 0, 0, err
+	}
+	return admins, adminRow1, nil
+}
+
+// validateImportAdminInvariant 是 R1-06-L1 的导入后不变式：users 段
+// 落库后（仍在导入事务内）校验管理员面未被导入消灭，任一臂命中即
+// 返回点名错误、整单回滚——
+//   臂① 导入后全库 role_id=0 计数为 0（备份全段无管理员行、且现行
+//       管理员行被其同 id 非管理员行覆盖，或目标库本就无管理员）；
+//   臂② 导入前 id=1 为管理员、导入后 id=1 不再是管理员（id=1 行被
+//       备份降权覆盖，即便备份另带其他管理员行亦拒绝：id=1 是
+//       seedData 的播种锚点，静默换锚会让运维以为管理员未变）。
+// 正常备份（自家导出恒含其 id=1 管理员行）两臂均不命中。
+func validateImportAdminInvariant(tx *gorm.DB, preAdminRow1 int64) error {
+	admins, adminRow1, err := importAdminState(tx)
+	if err != nil {
+		return fmt.Errorf("import users admin invariant check failed: %w", err)
+	}
+	if admins == 0 {
+		return fmt.Errorf("备份恢复被拒绝：该备份的用户段不含任何管理员（role_id=0），导入后将没有任何管理员可登录，已整单取消")
+	}
+	if preAdminRow1 > 0 && adminRow1 == 0 {
+		return fmt.Errorf("备份恢复被拒绝：该备份的 id=1 用户不是管理员（role_id≠0），导入会把现行 id=1 管理员降权覆盖，已整单取消")
+	}
+	return nil
 }
 
 // importUserPasswordNeedsHash 报告备份用户行在导入时是否需要新
