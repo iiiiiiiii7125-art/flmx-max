@@ -13,7 +13,6 @@ services:
       DB_PATH: /app/data/gost.db
       DATABASE_URL: ${DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET}
-      FLMX_WEBAUTHN_ORIGIN: ${FLMX_WEBAUTHN_ORIGIN:-}
       # R1-12-01: optional operator-chosen initial admin password,
       # consumed only when the admin account is first seeded.
       FLMX_ADMIN_PASSWORD: ${FLMX_ADMIN_PASSWORD:-}
