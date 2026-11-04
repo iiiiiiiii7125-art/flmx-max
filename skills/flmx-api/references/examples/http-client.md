@@ -46,10 +46,10 @@ echo "=== My Package Info ==="
 api_call "/api/v1/user/package" | jq '.'
 
 echo -e "\n=== Node List ==="
-api_call "/api/v1/node/list" '{}' | jq '.data.list[] | {name, status: (.status == 1)}'
+api_call "/api/v1/node/list" '{}' | jq '.data[] | {name, status: (.status == 1)}'
 
 echo -e "\n=== Forward List ==="
-api_call "/api/v1/forward/list" '{}' | jq '.data.list[] | {name, tunnel: .tunnel_name, port: .in_port, target: .remote_addr}'
+api_call "/api/v1/forward/list" '{}' | jq '.data[] | {name, tunnel: .tunnelName, port: .inPort, target: .remoteAddr}'
 ```
 
 ### Create Forward Script
@@ -168,14 +168,12 @@ class FlmxClient:
         return self.request("/api/v1/user/package", {})
     
     def list_nodes(self) -> List[Dict]:
-        """List all nodes"""
-        data = self.request("/api/v1/node/list", {})
-        return data.get("list", [])
+        """List all nodes (data is a bare array)"""
+        return self.request("/api/v1/node/list", {})
     
-    def list_forwards(self, keyword: str = "") -> List[Dict]:
-        """List forwards"""
-        data = self.request("/api/v1/forward/list", {"keyword": keyword})
-        return data.get("list", [])
+    def list_forwards(self) -> List[Dict]:
+        """List forwards (data is a bare array)"""
+        return self.request("/api/v1/forward/list", {})
     
     def create_forward(
         self, 
@@ -211,16 +209,17 @@ class FlmxClient:
 if __name__ == "__main__":
     client = FlmxClient()
     
-    # Get package info
+    # Get package info (account fields live under userInfo)
     pkg = client.get_package()
-    print(f"Traffic: {pkg['inFlow'] / 1e9:.2f}GB ↑ / {pkg['outFlow'] / 1e9:.2f}GB ↓")
-    print(f"Quota: {pkg['flow']}GB")
+    info = pkg["userInfo"]
+    print(f"Traffic: {info['inFlow'] / 1e9:.2f}GB ↑ / {info['outFlow'] / 1e9:.2f}GB ↓")
+    print(f"Quota: {info['flow']}GB")
     
     # List forwards with traffic
     print("\nForwards:")
     for fwd in client.list_forwards():
-        print(f"  {fwd['name']}: {fwd['in_port']} → {fwd['remote_addr']}")
-        print(f"    Traffic: {fwd['in_flow'] / 1e9:.2f}GB ↑ / {fwd['out_flow'] / 1e9:.2f}GB ↓")
+        print(f"  {fwd['name']}: {fwd['inPort']} → {fwd['remoteAddr']}")
+        print(f"    Traffic: {fwd['inFlow'] / 1e9:.2f}GB ↑ / {fwd['outFlow'] / 1e9:.2f}GB ↓")
 ```
 
 ---
@@ -246,31 +245,34 @@ class FlmxError extends Error {
 }
 
 interface UserPackage {
-  flow: number;
-  inFlow: number;
-  outFlow: number;
-  tunnels: number;
-  forwards: number;
-  expTime: number;
+  userInfo: {
+    flow: number;
+    inFlow: number;
+    outFlow: number;
+    expTime: number;
+  };
+  tunnelPermissions: unknown[];
+  forwards: Forward[];
+  statisticsFlows: unknown[];
 }
 
 interface Node {
   id: number;
   name: string;
   status: number;
-  server_ip: string;
+  serverIp: string;
 }
 
 interface Forward {
   id: number;
   name: string;
-  tunnel_id: number;
-  tunnel_name: string;
-  in_port: number;
-  remote_addr: string;
+  tunnelId: number;
+  tunnelName: string;
+  inPort: number;
+  remoteAddr: string;
   status: number;
-  in_flow: number;
-  out_flow: number;
+  inFlow: number;
+  outFlow: number;
 }
 
 class FlmxClient {
@@ -347,25 +349,22 @@ class FlmxClient {
   }
 
   async listNodes(): Promise<Node[]> {
-    const data = await this.request<{ list: Node[] }>("/api/v1/node/list", {});
-    return data.list ?? [];
+    // List endpoints return bare arrays in `data`
+    return this.request<Node[]>("/api/v1/node/list", {});
   }
 
-  async listForwards(keyword = ""): Promise<Forward[]> {
-    const data = await this.request<{ list: Forward[] }>("/api/v1/forward/list", {
-      keyword,
-    });
-    return data.list ?? [];
+  async listForwards(): Promise<Forward[]> {
+    return this.request<Forward[]>("/api/v1/forward/list", {});
   }
 
   async createForward(options: {
     name: string;
     tunnelId: number;
     remoteAddr: string;
-    strategy?: "fifo" | "round";
+    strategy?: "fifo" | "round" | "rand" | "hash";
     speedId?: number;
-  }): Promise<Forward> {
-    return this.request("/api/v1/forward/create", {
+  }): Promise<void> {
+    await this.request("/api/v1/forward/create", {
       name: options.name,
       tunnelId: options.tunnelId,
       remoteAddr: options.remoteAddr,
@@ -393,10 +392,10 @@ export { FlmxClient, FlmxError };
 async function main() {
   const client = new FlmxClient();
 
-  // Get package info
+  // Get package info (account fields live under userInfo)
   const pkg = await client.getPackage();
-  console.log(`Traffic: ${(pkg.inFlow / 1e9).toFixed(2)}GB ↑ / ${(pkg.outFlow / 1e9).toFixed(2)}GB ↓`);
-  console.log(`Quota: ${pkg.flow}GB`);
+  console.log(`Traffic: ${(pkg.userInfo.inFlow / 1e9).toFixed(2)}GB ↑ / ${(pkg.userInfo.outFlow / 1e9).toFixed(2)}GB ↓`);
+  console.log(`Quota: ${pkg.userInfo.flow}GB`);
 
   // List nodes
   console.log("\nNodes:");
@@ -409,7 +408,7 @@ async function main() {
   console.log("\nForwards:");
   const forwards = await client.listForwards();
   for (const fwd of forwards) {
-    console.log(`  ${fwd.name}: ${fwd.in_port} → ${fwd.remote_addr}`);
+    console.log(`  ${fwd.name}: ${fwd.inPort} → ${fwd.remoteAddr}`);
   }
 }
 
@@ -535,11 +534,10 @@ func (c *Client) request(endpoint string, data interface{}, result interface{}) 
 // Convenience methods
 
 func (c *Client) ListNodes() ([]map[string]interface{}, error) {
+	// List endpoints return a bare array in `data`.
 	var result struct {
-		Code int `json:"code"`
-		Data struct {
-			List []map[string]interface{} `json:"list"`
-		} `json:"data"`
+		Code int                      `json:"code"`
+		Data []map[string]interface{} `json:"data"`
 	}
 	
 	if err := c.Request("/api/v1/node/list", map[string]interface{}{}, &result); err != nil {
@@ -550,10 +548,10 @@ func (c *Client) ListNodes() ([]map[string]interface{}, error) {
 		return nil, &FlmxError{Code: result.Code, Message: "failed to list nodes"}
 	}
 	
-	return result.Data.List, nil
+	return result.Data, nil
 }
 
-func (c *Client) CreateForward(name string, tunnelID int, remoteAddr string) (map[string]interface{}, error) {
+func (c *Client) CreateForward(name string, tunnelID int, remoteAddr string) error {
 	payload := map[string]interface{}{
 		"name":       name,
 		"tunnelId":   tunnelID,
@@ -561,21 +559,21 @@ func (c *Client) CreateForward(name string, tunnelID int, remoteAddr string) (ma
 		"strategy":   "fifo",
 	}
 	
+	// Create responses carry no data payload.
 	var result struct {
-		Code int                    `json:"code"`
-		Msg  string                 `json:"msg"`
-		Data map[string]interface{} `json:"data"`
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
 	}
 	
 	if err := c.Request("/api/v1/forward/create", payload, &result); err != nil {
-		return nil, err
+		return err
 	}
 	
 	if result.Code != 0 {
-		return nil, &FlmxError{Code: result.Code, Message: result.Msg}
+		return &FlmxError{Code: result.Code, Message: result.Msg}
 	}
 	
-	return result.Data, nil
+	return nil
 }
 
 // Usage example
@@ -592,12 +590,11 @@ func Example() {
 		fmt.Printf("Node: %v (status: %v)\n", node["name"], node["status"])
 	}
 	
-	fwd, err := client.CreateForward("my-forward", 1, "192.168.1.100:80")
-	if err != nil {
+	if err := client.CreateForward("my-forward", 1, "192.168.1.100:80"); err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 	
-	fmt.Printf("Created forward: %v\n", fwd)
+	fmt.Println("Created forward: my-forward")
 }
 ```

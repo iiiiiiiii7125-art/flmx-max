@@ -1,8 +1,13 @@
 # Monitoring API
 
-Monitoring endpoints are NOT admin-only at the middleware layer: each handler
-checks access itself — the caller must be an admin (role_id 0) or hold a monitor
-permission grant (see the permission endpoints below, which are admin-only).
+Access differs per face (each handler checks access itself):
+
+- **Node and service monitoring are admin-only.** A monitor permission
+  grant does NOT open them.
+- **Tunnel monitoring** is open to admins and to users holding a monitor
+  permission grant; non-admin callers only ever see tunnels they can
+  access.
+- `GET /api/v1/monitor/access` reports the current caller's access.
 
 ## GET /api/v1/monitor/access
 
@@ -11,7 +16,7 @@ Whether the current user may access monitoring data.
 ## GET /api/v1/monitor/nodes
 
 Node metric summaries for all nodes (CPU / memory / disk / network / load /
-connection counts).
+connection counts). Admin only.
 
 ## GET /api/v1/monitor/nodes/<id>
 
@@ -31,7 +36,8 @@ Metric history for one tunnel.
 
 ## GET /api/v1/monitor/services
 
-List service monitors (HTTP / TCP / ICMP probes run from nodes).
+List service monitors (HTTP / TCP / ICMP probes run from nodes). All
+service-monitor endpoints below are admin only.
 
 ## POST /api/v1/monitor/services/create
 

@@ -4,40 +4,45 @@ All user management endpoints require admin privileges (role_id: 0).
 
 ## POST /api/v1/user/list
 
-List all users with pagination and filtering.
+List non-admin users (admin accounts are not included), with optional
+keyword filtering and pagination.
 
 **Request:**
 ```json
 {
-  "page": 1,
-  "pageSize": 20,
+  "current": 1,
+  "size": 20,
   "keyword": "search-term"
 }
 ```
 
-**Response:**
+`keyword` matches against username. Pagination applies only when both
+`current` and `size` are positive; omit them to get the full list.
+
+**Response:** `data` is a bare array of user objects (no wrapper):
+
 ```json
 {
   "code": 0,
-  "data": {
-    "list": [
-      {
-        "id": 1,
-        "user": "admin",
-        "name": "Administrator",
-        "role_id": 0,
-        "status": 1,
-        "flow": 1000,
-        "in_flow": 10737418240,
-        "out_flow": 21474836480,
-        "exp_time": 1767225600000,
-        "flow_reset_time": 1,
-        "created_at": 1706659200000,
-        "updated_at": 1706659200000
-      }
-    ],
-    "total": 1
-  }
+  "data": [
+    {
+      "id": 2,
+      "user": "alice",
+      "name": "alice",
+      "roleId": 1,
+      "status": 1,
+      "flow": 1000,
+      "flowMiB": 0,
+      "num": 10,
+      "inFlow": 10737418240,
+      "outFlow": 21474836480,
+      "expTime": 1767225600000,
+      "flowResetTime": 1,
+      "maxConn": 0,
+      "createdTime": 1706659200000,
+      "updatedTime": 1706659200000
+    }
+  ]
 }
 ```
 
@@ -50,12 +55,11 @@ Create a new user.
 {
   "user": "username",
   "pwd": "password",
-  "name": "Display Name",
   "status": 1,
   "flow": 100,
   "num": 10,
   "expTime": 1767225600000,
-  "flowResetTime": 1,
+  "flowResetTime": 1
 }
 ```
 
@@ -63,18 +67,21 @@ Create a new user.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| user | string | Yes | Username (unique) |
-| pwd | string | Yes | Password |
-| name | string | No | Display name |
+| user | string | Yes | Username, 1–100 chars (unique, case-insensitive) |
+| pwd | string | Yes | Password, at least 6 characters |
 | status | number | No | 1=active, 0=disabled (default: 1) |
-| flow | number | No | Traffic quota in GB (default: 0; 0 = unlimited) |
-| num | number | No | Max forwards allowed (default: 0 = unlimited) |
-| expTime | number | No | Expiry timestamp in ms (0 = never) |
-| flowResetTime | number | No | Monthly reset day 1-28 (0 = no reset) |
+| flow | number | No | Traffic quota in GB (default: 100; 0 = unlimited) |
+| num | number | No | Max forwards allowed (default: 10) |
+| expTime | number | No | Expiry timestamp in ms (default: now + 365 days) |
+| flowResetTime | number | No | Monthly reset day: 0 = no reset, 1–31 = day of month (default: 1) |
+| maxConn | number | No | Connection limit (0 = unlimited) |
+| dailyQuotaGB / monthlyQuotaGB | number | No | Daily / monthly quota in GB (0 = none) |
 
-**Response:**
+Created users always get role_id 1 — this endpoint cannot create admins.
+
+**Response:** success envelope with no `data`:
 ```json
-{"code": 0, "msg": "success", "data": {"id": 2}}
+{"code": 0, "msg": "操作成功"}
 ```
 
 ## POST /api/v1/user/update
@@ -87,12 +94,11 @@ Update user details.
   "id": 2,
   "user": "new-username",
   "pwd": "new-password",
-  "name": "New Name",
   "status": 1,
   "flow": 200,
   "num": 20,
   "expTime": 1767225600000,
-  "flowResetTime": 15,
+  "flowResetTime": 15
 }
 ```
 
@@ -109,33 +115,34 @@ Delete a user (cascades to forwards and tunnel assignments).
 
 **Response:**
 ```json
-{"code": 0, "msg": "success"}
+{"code": 0, "msg": "操作成功"}
 ```
 
 ## POST /api/v1/user/reset
 
-Reset user traffic at user or tunnel level.
+Reset a user's total traffic counters. `type` is a **number**:
+`1` = user level (`id` is the user ID), `2` = assignment level
+(`id` is the user-tunnel assignment row ID, not the tunnel ID).
 
 **Request (User level):**
 ```json
 {
   "id": 2,
-  "type": "user"
+  "type": 1
 }
 ```
 
-**Request (Tunnel level):**
+**Request (Assignment level):**
 ```json
 {
-  "id": 2,
-  "type": "tunnel",
-  "tunnelId": 1
+  "id": 7,
+  "type": 2
 }
 ```
 
 **Response:**
 ```json
-{"code": 0, "msg": "success"}
+{"code": 0, "msg": "操作成功"}
 ```
 
 ## Traffic Units
@@ -143,8 +150,8 @@ Reset user traffic at user or tunnel level.
 | Field | Unit | Conversion |
 |-------|------|------------|
 | flow | GB | Gigabytes |
-| in_flow | Bytes | Divide by 1,073,741,824 for GB |
-| out_flow | Bytes | Divide by 1,073,741,824 for GB |
+| inFlow | Bytes | Divide by 1,073,741,824 for GB |
+| outFlow | Bytes | Divide by 1,073,741,824 for GB |
 
 ## Example: Create User with 50GB Quota
 
@@ -155,7 +162,6 @@ curl -X POST "${FLMX_BASE_URL}/api/v1/user/create" \
   -d '{
     "user": "alice",
     "pwd": "SecurePass123!",
-    "name": "Alice",
     "status": 1,
     "flow": 50,
     "num": 5,
@@ -173,3 +179,6 @@ Change the current user's own password. A token flagged `PwdChangeRequired`
 
 Reset a user's quota usage counters (daily / monthly) without touching the
 account's total flow counters — see `/api/v1/user/reset` for the latter.
+
+**Request:** `{"userId": 2, "scope": "daily"}` — `scope` is one of
+`"daily"`, `"monthly"`, `"all"` (empty = `"all"`).

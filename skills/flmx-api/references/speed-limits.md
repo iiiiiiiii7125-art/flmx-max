@@ -18,14 +18,16 @@ List all speed limit rules.
       "name": "10Mbps",
       "speed": 10,
       "status": 1,
-      "created_at": 1706659200000
+      "createdTime": 1706659200000,
+      "updatedTime": 1706659200000
     },
     {
       "id": 2,
       "name": "100Mbps",
       "speed": 100,
       "status": 1,
-      "created_at": 1706659200000
+      "createdTime": 1706659200000,
+      "updatedTime": 1706659200000
     }
   ]
 }
@@ -52,9 +54,9 @@ Create a speed limit rule.
 | speed | number | Yes | Speed limit in Mbps |
 | status | number | No | 1=active, 0=disabled (default: 1) |
 
-**Response:**
+**Response:** success envelope with no `data`:
 ```json
-{"code": 0, "msg": "success", "data": {"id": 3}}
+{"code": 0, "msg": "操作成功"}
 ```
 
 ## POST /api/v1/speed-limit/update

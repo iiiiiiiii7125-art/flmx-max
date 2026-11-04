@@ -12,7 +12,7 @@ metadata:
 
 # FLMX API Operations
 
-Operate FLMX panel through REST API. All endpoints use POST method and return JSON with `{code, msg, data, ts}` envelope.
+Operate FLMX panel through REST API. Almost all endpoints use POST and return JSON with the `{code, msg, data, ts}` envelope; the exceptions are a few GET reads (monitoring, `announcement/get`, the pre-import snapshot download/status, the public subscription fetch) and the backup export/download endpoints, which return the raw backup JSON instead of an envelope.
 
 > **Versioning:** this skill's version follows the FLMX product release line
 > (the skill version always equals the panel version). Releases use plain
@@ -84,10 +84,10 @@ curl -X POST "${FLMX_BASE_URL}/api/v1/user/login" \
 ```json
 {
   "code": 0,
-  "msg": "success",
+  "msg": "操作成功",
   "data": {
     "token": "eyJhbGciOiJIUzI1NiIs...",
-    "name": "Administrator",
+    "name": "admin",
     "role_id": 0,
     "requirePasswordChange": false
   },
@@ -245,12 +245,12 @@ console.log(await res.json());
 
 **Success:**
 ```json
-{"code": 0, "msg": "success", "data": {...}, "ts": 1706659200000}
+{"code": 0, "msg": "操作成功", "data": {...}, "ts": 1706659200000}
 ```
 
 **Error:**
 ```json
-{"code": -1, "msg": "用户名或密码错误", "ts": 1706659200000}
+{"code": -1, "msg": "账号或密码错误", "ts": 1706659200000}
 ```
 
 **Pattern:**
@@ -297,9 +297,9 @@ Non-admin users can only see/modify their own resources.
 ## Critical Rules
 
 1. ⚠️ **NO "Bearer" prefix** - `Authorization: <token>`, NOT `Authorization: Bearer <token>`
-2. **All endpoints use POST** - Including list/get operations
+2. **POST by default** - List/get operations included; only the documented reads (monitoring, announcement/get, import-auto-backup, subscription fetch) use GET
 3. **code === 0 means success** - Any other value is an error
-4. **Traffic units**: User.flow is GB, in_flow/out_flow are bytes
+4. **Traffic units**: User.flow is GB, inFlow/outFlow are bytes
 5. **Timestamps**: All timestamps are milliseconds since epoch
 6. **Token is session-scoped**: Cache in memory only, not on disk
 

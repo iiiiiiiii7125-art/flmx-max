@@ -19,17 +19,16 @@
 
 | msg | Cause | Solution |
 |-----|-------|----------|
-| 用户名或密码错误 | Wrong credentials | Check username/password |
-| Token已过期 | Token expired | Re-login |
+| 账号或密码错误 | Wrong credentials | Check username/password |
+| 无效的token或token已过期 | Token expired/invalid | Re-login |
 | 权限不足 | Need admin | Use admin account (role_id: 0) |
 | 端口已被占用 | Port in use | Choose different port or delete conflicting forward |
-| 流量不足 | Out of traffic | Contact admin or upgrade plan |
+| 流量已超额，禁止开启转发 | Out of traffic | Contact admin or upgrade plan |
 | 节点离线 | Node offline | Check node status, run install command |
-| 隧道不可用 | Tunnel disabled | Enable tunnel first |
-| 用户已存在 | Username taken | Choose different username |
-| 参数错误 | Invalid request | Check request body format |
+| 用户名已存在 | Username taken | Choose different username |
+| 请求参数错误 | Invalid request | Check request body format |
 | 转发数量已达上限 | Forward limit reached | Delete unused forwards or contact admin |
-| 该隧道未分配给当前用户 | No tunnel access | Contact admin to get tunnel assigned |
+| 无权限 | No access to the resource | Contact admin to get access assigned |
 
 ## Error Handling Pattern
 
@@ -165,9 +164,6 @@ When request validation fails, the API returns code -1 with specific messages:
 
 | Scenario | Error Message |
 |----------|--------------|
-| Missing required field | `参数错误` or field-specific message |
-| Invalid port range | `端口范围无效` |
-| Invalid IP format | `IP地址格式错误` |
-| Invalid date | `时间格式错误` |
-| Username too short | `用户名长度不能少于3个字符` |
-| Password too weak | `密码长度不能少于6个字符` |
+| Missing required field | `请求参数错误` or field-specific message |
+| Username length out of range | `用户名长度必须为 1-100 个字符` |
+| Password too short | `密码至少6位` |

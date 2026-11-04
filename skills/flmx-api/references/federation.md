@@ -10,7 +10,10 @@ List all peer shares.
 
 **Request:** `{}`
 
-**Response:**
+**Response:** `data` is a bare array. Each item is the share record
+(with its `token` — this list is the only place the token is returned)
+merged with runtime usage fields:
+
 ```json
 {
   "code": 0,
@@ -18,21 +21,28 @@ List all peer shares.
     {
       "id": 1,
       "name": "Share-to-Partner",
-      "node_id": 1,
-      "node_name": "HK-Node-1",
+      "nodeId": 1,
       "token": "share-token-abc123",
-      "max_bandwidth": 107374182400,
-      "expiry_time": 1767225600000,
-      "port_range_start": 10000,
-      "port_range_end": 20000,
-      "allowed_domains": "example.com,api.example.com",
-      "allowed_ips": "10.0.0.0/8,192.168.0.0/16",
-      "status": 1,
-      "created_at": 1706659200000
+      "maxBandwidth": 107374182400,
+      "expiryTime": 1767225600000,
+      "portRangeStart": 10000,
+      "portRangeEnd": 20000,
+      "allowedDomains": "example.com,api.example.com",
+      "allowedIps": "10.0.0.0/8,192.168.0.0/16",
+      "currentFlow": 0,
+      "isActive": true,
+      "createdTime": 1706659200000,
+      "updatedTime": 1706659200000,
+      "usedPorts": [10001],
+      "usedPortDetails": [],
+      "activeRuntimeNum": 1
     }
   ]
 }
 ```
+
+(`relayUsername` / `relayPassword` are present in the shape but always
+returned blank on this admin face.)
 
 ### POST /api/v1/federation/share/create
 
@@ -65,18 +75,14 @@ Create a peer share (share a node with another panel).
 | allowedDomains | string | No | Comma-separated domains |
 | allowedIps | string | No | Comma-separated IPs/CIDRs |
 
-**Response:**
-```json
-{
-  "code": 0,
-  "data": {
-    "id": 1,
-    "token": "share-token-abc123"
-  }
-}
-```
+**Response:** success envelope with **no `data`** — the generated
+`token` is NOT returned here. Read it back from
+`/api/v1/federation/share/list` (match by name), then give it to the
+remote panel.
 
-The `token` is what the remote panel uses to connect.
+```json
+{"code": 0, "msg": "操作成功"}
+```
 
 ### POST /api/v1/federation/share/update
 
@@ -123,17 +129,27 @@ Connect to a remote panel and get share info.
 Authorization: Bearer <share-token>
 ```
 
-**Request:** `{}`
+**Request:** no body.
 
-**Response:**
+**Response:** `data` is the remote node descriptor:
+
 ```json
 {
   "code": 0,
   "data": {
+    "shareId": 1,
+    "shareName": "Share-to-Partner",
+    "nodeId": 1,
     "nodeName": "HK-Node-1",
-    "allowedPorts": [10000, 20000],
-    "allowedDomains": ["example.com"],
-    "allowedIps": ["10.0.0.0/8"]
+    "serverIp": "1.2.3.4",
+    "status": 1,
+    "maxBandwidth": 107374182400,
+    "currentFlow": 0,
+    "expiryTime": 1767225600000,
+    "portRangeStart": 10000,
+    "portRangeEnd": 20000,
+    "relayUsername": "",
+    "relayPassword": ""
   }
 }
 ```
@@ -150,10 +166,13 @@ Authorization: Bearer <share-token>
 **Request:**
 ```json
 {
-  "tunnelId": 1,
-  "role": "entry"
+  "protocol": "tcp",
+  "remotePort": 15000,
+  "target": "10.0.0.1:80"
 }
 ```
+
+**Response:** `data` = `{"tunnelId": 42}`.
 
 ### POST /api/v1/federation/runtime/reserve-port
 
@@ -162,10 +181,13 @@ Reserve a port on the remote node.
 **Request:**
 ```json
 {
-  "port": 15000,
-  "tunnelId": 1
+  "resourceKey": "tunnel:1:entry",
+  "protocol": "tcp",
+  "requestedPort": 15000
 }
 ```
+
+**Response:** `data` = `{"reservationId": "...", "bindingId": 0, "allocatedPort": 15000}`.
 
 ### POST /api/v1/federation/runtime/apply-role
 
@@ -174,10 +196,16 @@ Apply for a role (entry/chain/exit) on the remote node.
 **Request:**
 ```json
 {
-  "tunnelId": 1,
-  "role": "exit"
+  "reservationId": "...",
+  "resourceKey": "tunnel:1:entry",
+  "role": "exit",
+  "protocol": "tcp",
+  "strategy": "round",
+  "targets": [{"host": "10.0.0.1", "port": 80, "protocol": "tcp"}]
 }
 ```
+
+**Response:** `data` = `{"bindingId": 7, "reservationId": "...", "allocatedPort": 15000}`.
 
 ### POST /api/v1/federation/runtime/release-role
 
@@ -186,7 +214,9 @@ Release a role on the remote node.
 **Request:**
 ```json
 {
-  "tunnelId": 1
+  "bindingId": 7,
+  "reservationId": "...",
+  "resourceKey": "tunnel:1:entry"
 }
 ```
 
@@ -197,7 +227,11 @@ TCP ping diagnostics from remote node to target.
 **Request:**
 ```json
 {
-  "target": "10.0.0.1:80"
+  "ip": "10.0.0.1",
+  "port": 80,
+  "count": 4,
+  "timeout": 5,
+  "protocol": "tcp"
 }
 ```
 
@@ -208,9 +242,12 @@ Execute a command on the remote node.
 **Request:**
 ```json
 {
-  "command": "status"
+  "commandType": "status",
+  "data": {}
 }
 ```
+
+**Response:** `data` = `{"type": "...", "success": true, "message": "...", "data": {...}}`.
 
 ---
 
@@ -223,13 +260,13 @@ Import a remote node from another panel.
 **Request:**
 ```json
 {
-  "name": "Remote-HK-Node",
   "remoteUrl": "https://other-panel.example.com",
-  "remoteToken": "share-token-abc123"
+  "token": "share-token-abc123"
 }
 ```
 
-This creates a node with `is_remote: 1`.
+Only `remoteUrl` and `token` are consumed (the node name comes from the
+remote panel). This creates a node with `isRemote: 1`.
 
 ---
 
@@ -238,8 +275,8 @@ This creates a node with `is_remote: 1`.
 **On the sharing panel (Panel A):**
 
 ```bash
-# 1. Create a share
-SHARE_RESP=$(curl -s -X POST "${FLMX_BASE_URL}/api/v1/federation/share/create" \
+# 1. Create a share (response carries no data)
+curl -s -X POST "${FLMX_BASE_URL}/api/v1/federation/share/create" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -248,9 +285,13 @@ SHARE_RESP=$(curl -s -X POST "${FLMX_BASE_URL}/api/v1/federation/share/create" \
     "portRangeStart": 10000,
     "portRangeEnd": 20000,
     "allowedIps": "0.0.0.0/0"
-  }')
+  }' > /dev/null
 
-SHARE_TOKEN=$(echo "$SHARE_RESP" | jq -r '.data.token')
+# 2. Read the generated token back from the share list
+SHARE_TOKEN=$(curl -s -X POST "${FLMX_BASE_URL}/api/v1/federation/share/list" \
+  -H "Authorization: ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{}' | jq -r '.data[] | select(.name == "Share-HK-Node") | .token')
 echo "Share Token: $SHARE_TOKEN"
 echo "Panel URL: ${FLMX_BASE_URL}"
 ```
@@ -258,17 +299,16 @@ echo "Panel URL: ${FLMX_BASE_URL}"
 **On the receiving panel (Panel B):**
 
 ```bash
-# 2. Import the remote node
+# 3. Import the remote node
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/federation/node/import" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Remote-HK-Node",
     "remoteUrl": "https://panel-a.example.com",
-    "remoteToken": "share-token-abc123"
+    "token": "share-token-abc123"
   }'
 
-# 3. Use the remote node in tunnels like a local node
+# 4. Use the remote node in tunnels like a local node
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/tunnel/create" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \

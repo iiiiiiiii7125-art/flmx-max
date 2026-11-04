@@ -32,7 +32,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/user/package" \
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/user/list" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"page":1,"pageSize":20}' | jq '.'
+  -d '{"current":1,"size":20}' | jq '.'
 
 # Create user (admin)
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/user/create" \
@@ -41,17 +41,16 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/user/create" \
   -d '{
     "user": "alice",
     "pwd": "SecurePass123!",
-    "name": "Alice",
     "flow": 50,
     "num": 10,
     "expTime": 1767225600000
   }' | jq '.'
 
-# Reset user traffic
+# Reset user traffic (type is numeric: 1 = user level, 2 = assignment level)
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/user/reset" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"id":2,"type":"user"}' | jq '.'
+  -d '{"id":2,"type":1}' | jq '.'
 
 # Delete user
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/user/delete" \
@@ -67,7 +66,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/user/delete" \
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/list" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{}' | jq '.data.list[] | {name, status: (.status == 1), ip: .server_ip}'
+  -d '{}' | jq '.data[] | {name, status: (.status == 1), ip: .serverIp}'
 
 # Create node
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/create" \
@@ -75,11 +74,11 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/create" \
   -H "Content-Type: application/json" \
   -d '{"name":"US-Node-1","serverIp":"203.0.113.10"}' | jq '.'
 
-# Get install command
+# Get install command (data is the command string itself)
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/install" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"id":2}' | jq -r '.data.command'
+  -d '{"id":2}' | jq -r '.data'
 
 # Check node status
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/check-status" \
@@ -91,7 +90,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/check-status" \
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/upgrade" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"id":2,"version":"2.1.5"}' | jq '.'
+  -d '{"id":2,"version":"1.9.9"}' | jq '.'
 
 # Delete node
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/delete" \
@@ -107,7 +106,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/node/delete" \
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/tunnel/list" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{}' | jq '.data.list[] | {id, name, status}'
+  -d '{}' | jq '.data[] | {id, name, status}'
 
 # Create tunnel
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/tunnel/create" \
@@ -140,14 +139,14 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/tunnel/user/tunnel" \
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/forward/list" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{}' | jq '.data.list[] | {
+  -d '{}' | jq '.data[] | {
     name,
-    tunnel: .tunnel_name,
-    port: .in_port,
-    target: .remote_addr,
+    tunnel: .tunnelName,
+    port: .inPort,
+    target: .remoteAddr,
     status: (if .status == 1 then "running" else "paused" end),
-    upload_gb: ((.in_flow / 1073741824) | floor),
-    download_gb: ((.out_flow / 1073741824) | floor)
+    upload_gb: ((.inFlow / 1073741824) | floor),
+    download_gb: ((.outFlow / 1073741824) | floor)
   }'
 
 # Create forward
@@ -218,11 +217,13 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/backup/export" \
   -H "Content-Type: application/json" \
   -d '{"types":["users","tunnels"]}' > partial-backup.json
 
-# Import backup
+# Import backup (the import body must carry a "types" field — see backup.md)
+jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","announcements","monitorPermissions","userSubscriptions","serviceMonitors"]}' \
+  backup-20260226.json > import-body.json
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/backup/import" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d @backup-20260226.json | jq '.'
+  -d @import-body.json | jq '.'
 ```
 
 ## Helper Functions
@@ -252,5 +253,5 @@ flmx-api() {
 # Usage:
 # flmx-login
 # flmx-api /api/v1/node/list
-# flmx-api /api/v1/forward/list '{"keyword":"web"}'
+# flmx-api /api/v1/user/list '{"keyword":"web"}'
 ```

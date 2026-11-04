@@ -6,6 +6,8 @@ Current panel version.
 
 ## POST /api/v1/system/storage
 
+(Accepts GET as well as POST.)
+
 Panel storage usage breakdown.
 
 ## POST /api/v1/system/check-updates
@@ -18,6 +20,8 @@ Start an in-panel self-upgrade (admin only). Progress and outcome are polled via
 the status endpoint.
 
 ## GET /api/v1/system/upgrade/status
+
+(Accepts POST as well as GET.)
 
 Self-upgrade status.
 

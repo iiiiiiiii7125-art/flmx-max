@@ -1,95 +1,107 @@
 # TypeScript Type Definitions
 
+All field names below are the API's actual camelCase wire names.
+
 ## API Response Envelope
 
 ```typescript
 interface APIResponse<T = unknown> {
   code: number;      // 0 = success
-  msg: string;       // Message (usually Chinese)
+  msg: string;       // Message (usually Chinese; "操作成功" on success)
   ts: number;        // Unix timestamp in milliseconds
-  data?: T;          // Response payload
+  data?: T;          // Response payload (absent on many success responses)
 }
 ```
 
-## Pagination
+## Lists & Pagination
+
+List endpoints return a **bare array** in `data` — there is no
+`{list, total}` wrapper anywhere in the API. Only `user/list` consumes
+pagination parameters (`current`, `size`, `keyword`); other list
+endpoints ignore the body.
 
 ```typescript
-interface PaginatedRequest {
-  page?: number;
-  pageSize?: number;
-  keyword?: string;
-}
-
-interface PaginatedResponse<T> {
-  list: T[];
-  total: number;
+interface UserListRequest {
+  current?: number;  // 1-based page
+  size?: number;     // page size
+  keyword?: string;  // username substring filter
 }
 ```
 
 ## User
 
 ```typescript
+// user/list item (admin accounts are excluded from the list)
 interface User {
   id: number;
   user: string;           // Username
-  pwd?: string;           // Password (only on create/update)
-  name?: string;          // Display name
-  role_id: number;        // 0 = admin, 1 = regular
+  name: string;           // Same value as `user`
+  roleId: number;         // 0 = admin, 1 = regular
   status: number;         // 1 = active, 0 = disabled
   flow: number;           // Traffic quota in GB, 0 = unlimited
-  in_flow: number;        // Used upload in bytes
-  out_flow: number;       // Used download in bytes
-  exp_time: number;       // Expiry timestamp (ms), 0 = never
-  flow_reset_time: number;// Monthly reset day (1-28), 0 = no reset
-  created_at?: number;
-  updated_at?: number;
+  flowMiB: number;        // Quota in MiB when set (0 = GB value rules)
+  num: number;            // Max forwards allowed
+  inFlow: number;         // Used upload in bytes
+  outFlow: number;        // Used download in bytes
+  expTime: number;        // Expiry timestamp (ms)
+  flowResetTime: number;  // Monthly reset day (1-31), 0 = no reset
+  maxConn: number;        // Connection limit, 0 = unlimited
+  createdTime?: number;
+  updatedTime?: number;
 }
 
 interface UserCreateRequest {
   user: string;
   pwd: string;
-  name?: string;
   status?: number;
   flow?: number;
   num?: number;
   expTime?: number;
   flowResetTime?: number;
+  maxConn?: number;
+  dailyQuotaGB?: number;
+  monthlyQuotaGB?: number;
 }
 
+// user/package payload
 interface UserPackage {
-  flow: number;           // Total quota in GB
-  inFlow: number;         // Used upload in bytes
-  outFlow: number;        // Used download in bytes
-  tunnels: number;        // Assigned tunnel count
-  forwards: number;       // Created forward count
-  expTime: number;        // Expiry timestamp (ms)
+  userInfo: User;
+  tunnelPermissions: UserTunnel[];
+  forwards: Forward[];
+  statisticsFlows: unknown[];
 }
 ```
 
 ## Node
 
 ```typescript
+// node/list item — the secret and federation credentials are NOT exposed here
 interface Node {
   id: number;
+  inx: number;
   name: string;
-  secret: string;
-  server_ip: string;
-  server_ip_v4?: string;
-  server_ip_v6?: string;
+  remark?: string;
+  expiryTime?: number | null;
+  renewalCycle?: string;
+  ip: string;
+  serverIp: string;
+  serverIpV4?: string;
+  serverIpV6?: string;
+  extraIPs?: string;
   port: string;           // "1000-65535"
-  interface_name?: string;
+  interfaceName?: string;
   http: number;           // 1 = enabled
   tls: number;
   socks: number;
-  tcp_listen_addr: string;// "[::]"
-  udp_listen_addr: string;
+  tcpListenAddr: string;  // "[::]"
+  udpListenAddr: string;
   status: number;         // 1 = online, 0 = offline
-  is_remote: number;      // 0 = local, 1 = federation
-  remote_url?: string;
-  remote_token?: string;
+  isRemote: number;       // 0 = local, 1 = federation
+  forwardMode?: string;   // "agent" | "nftables"
+  remoteUrl?: string;
   version?: string;
-  created_at?: number;
-  updated_at?: number;
+  expiryReminderDismissed?: number;
+  sshConfig?: unknown;
 }
 
 interface NodeCreateRequest {
@@ -97,13 +109,18 @@ interface NodeCreateRequest {
   serverIp: string;
   serverIpV4?: string;
   serverIpV6?: string;
+  extraIPs?: string;
   port?: string;
   interfaceName?: string;
+  remark?: string;
+  expiryTime?: number;
+  renewalCycle?: string;
   http?: number;
   tls?: number;
   socks?: number;
   tcpListenAddr?: string;
   udpListenAddr?: string;
+  forwardMode?: string;
   isRemote?: number;
   remoteUrl?: string;
   remoteToken?: string;
@@ -113,20 +130,30 @@ interface NodeCreateRequest {
 ## Tunnel
 
 ```typescript
-interface Tunnel {
+interface NodeRef {
   id: number;
   name: string;
+  // ... further node fields as returned by the list DTO
+}
+
+// tunnel/list item — node fields are arrays of node reference objects
+interface Tunnel {
+  id: number;
+  inx: number;
+  name: string;
   type: number;           // 1 = port forward, 2 = tunnel forward
-  protocol?: string;
   flow: number;           // Traffic multiplier
-  traffic_ratio: number;
+  trafficRatio: number;
   status: number;         // 1 = active, 0 = disabled
-  ip_preference?: string; // "ipv4", "ipv6", ""
-  in_ip?: string;
-  in_node_id?: number[];
-  chain_node_id?: number[];
-  out_node_id?: number[];
-  created_at?: number;
+  ipPreference?: string;  // "ipv4", "ipv6", ""
+  engine?: string;        // "" / "gost" | "realm"
+  inIp?: string;
+  probeTargetHost?: string;
+  probeTargetPort?: number;
+  inNodeId: NodeRef[];
+  chainNodes: NodeRef[][];
+  outNodeId: NodeRef[];
+  createdTime?: number;
 }
 
 interface TunnelCreateRequest {
@@ -148,20 +175,23 @@ interface TunnelCreateRequest {
 ```typescript
 interface Forward {
   id: number;
-  user_id: number;
-  tunnel_id: number;
-  tunnel_name?: string;
+  inx: number;
+  userId: number;
+  userName?: string;
+  tunnelId: number;
+  tunnelName?: string;
+  tunnelTrafficRatio?: number;
   name: string;
-  in_port: number;
-  remote_addr: string;
-  strategy: string;       // "fifo" | "round"
+  inIp?: string;
+  inPort: number;
+  remoteAddr: string;
+  strategy: string;       // "fifo" | "round" | "rand" | "hash"
   status: number;         // 1 = running, 0 = paused
-  speed_id: number;
-  speed_name?: string;
-  in_flow: number;        // Upload bytes
-  out_flow: number;       // Download bytes
-  created_at?: number;
-  updated_at?: number;
+  inFlow: number;         // Upload bytes
+  outFlow: number;        // Download bytes
+  maxConn: number;
+  ipMaxConn: number;
+  createdTime?: number;
 }
 
 interface ForwardCreateRequest {
@@ -182,7 +212,8 @@ interface SpeedLimit {
   name: string;
   speed: number;          // Mbps
   status: number;
-  created_at?: number;
+  createdTime?: number;
+  updatedTime?: number;
 }
 ```
 
@@ -190,51 +221,62 @@ interface SpeedLimit {
 
 ```typescript
 interface UserTunnel {
-  id: number;
-  user_id: number;
-  tunnel_id: number;
-  tunnel_name?: string;
+  id: number;             // Assignment row ID
+  userId: number;
+  tunnelId: number;
+  tunnelName?: string;
+  status: number;
   flow: number;           // Quota for this tunnel in GB, 0 = unlimited
-  in_flow: number;
-  out_flow: number;
-  exp_time: number;
-  speed_id: number;
+  flowMiB: number;
+  num: number;
+  inFlow: number;
+  outFlow: number;
+  expTime: number;
+  flowResetTime: number;
+  speedId?: number | null;
+  speedLimitName?: string | null;
 }
 ```
 
 ## Federation
 
 ```typescript
+// federation/share/list item (create returns no data — read the token here)
 interface PeerShare {
   id: number;
   name: string;
-  node_id: number;
-  node_name?: string;
+  nodeId: number;
   token: string;
-  max_bandwidth: number;
-  expiry_time: number;
-  port_range_start: number;
-  port_range_end: number;
-  allowed_domains: string;
-  allowed_ips: string;
-  status: number;
-  created_at?: number;
+  maxBandwidth: number;
+  expiryTime: number;
+  portRangeStart: number;
+  portRangeEnd: number;
+  currentFlow: number;
+  isActive: boolean;
+  allowedDomains: string;
+  allowedIps: string;
+  createdTime?: number;
+  updatedTime?: number;
+  usedPorts?: number[];
+  activeRuntimeNum?: number;
 }
 ```
 
 ## Backup
 
 ```typescript
+// The export response body itself (no envelope, no `types` field).
+// The import request is this shape PLUS a required `types: string[]`.
 interface BackupExport {
-  version: string;
+  version: string;        // "1.0"
   exportedAt: number;
-  types: string[];
   users?: User[];
   nodes?: Node[];
   tunnels?: Tunnel[];
   forwards?: Forward[];
   speedLimits?: SpeedLimit[];
   configs?: Record<string, string>;
+  // ... plus the remaining segment keys (see backup.md)
 }
 ```
 
@@ -291,19 +333,17 @@ class FlmxClient {
     return result.data!;
   }
 
-  // Convenience methods
+  // Convenience methods — list endpoints return bare arrays
   async listNodes(): Promise<Node[]> {
-    const data = await this.request<{ list: Node[] }>("/api/v1/node/list", {});
-    return data.list ?? [];
+    return this.request<Node[]>("/api/v1/node/list", {});
   }
 
   async listForwards(): Promise<Forward[]> {
-    const data = await this.request<{ list: Forward[] }>("/api/v1/forward/list", {});
-    return data.list ?? [];
+    return this.request<Forward[]>("/api/v1/forward/list", {});
   }
 
-  async createForward(req: ForwardCreateRequest): Promise<Forward> {
-    return this.request("/api/v1/forward/create", req);
+  async createForward(req: ForwardCreateRequest): Promise<void> {
+    await this.request("/api/v1/forward/create", req);
   }
 
   async getUserPackage(): Promise<UserPackage> {
