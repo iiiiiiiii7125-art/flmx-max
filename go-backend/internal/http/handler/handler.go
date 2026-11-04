@@ -1860,6 +1860,20 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		return monitoring.NormalizeMonitoringRetentionDays(value)
 	case monitoring.ConfigTunnelQualityProbeIntervalSec:
 		return monitoring.NormalizeTunnelQualityProbeIntervalSeconds(value)
+	case monitoring.ConfigServiceMonitorCheckerScanIntervalSec,
+		monitoring.ConfigServiceMonitorWorkerLimit,
+		monitoring.ConfigServiceMonitorMinIntervalSec,
+		monitoring.ConfigServiceMonitorDefaultIntervalSec,
+		monitoring.ConfigServiceMonitorMinTimeoutSec,
+		monitoring.ConfigServiceMonitorDefaultTimeoutSec,
+		monitoring.ConfigServiceMonitorMaxTimeoutSec:
+		// RR-F5-01：服务监控内部限值 7 键此前落 default 直通、无
+		// 保存期值域校验（max_timeout 写 >60 即推翻 monitoring.md
+		// 「超时最大 60 秒」），与同族监控键（保留天数/质量间隔
+		// 保存期拒绝）口径不齐。校验单点在
+		// monitoring.NormalizeServiceMonitorLimitValue，恢复面
+		// normalizeImportedMonitoringConfigValue 同源共用。
+		return monitoring.NormalizeServiceMonitorLimitValue(key, value)
 	case "panel_domain":
 		// 终审 L1-F-07：裸域名，语法层空标签判（只判语法、不做 DNS）；
 		// 空值走调用方的可清空语义，不在此拒。

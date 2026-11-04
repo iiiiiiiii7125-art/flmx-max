@@ -63,7 +63,11 @@ var sensitiveConfigKeys = map[string]struct{}{
 // whose absence would silently fall back to a different signing key.
 // Monitor key literals mirror internal/monitoring constants
 // (ConfigMonitorRetentionDays / ConfigTunnelQualityProbeIntervalSec) and
-// the handler's monitorTunnelQualityEnabledConfigKey.
+// the handler's monitorTunnelQualityEnabledConfigKey. The service_monitor_*
+// limits family (RR-F5-01) is domain-validated at save time too but is
+// deliberately NOT listed here: those keys are clearable — an empty
+// submission clears back to the built-in defaults, which are always in
+// domain (same posture as notify_daily_hour).
 var requiredConfigKeys = map[string]struct{}{
 	"jwt_secret":                          {},
 	"monitor_tunnel_quality_enabled":      {},

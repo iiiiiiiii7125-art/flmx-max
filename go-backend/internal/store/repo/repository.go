@@ -4960,6 +4960,18 @@ func normalizeImportedMonitoringConfigValue(name, value string) (string, error) 
 		return monitoring.NormalizeMonitoringRetentionDays(value)
 	case monitoring.ConfigTunnelQualityProbeIntervalSec:
 		return monitoring.NormalizeTunnelQualityProbeIntervalSeconds(value)
+	case monitoring.ConfigServiceMonitorCheckerScanIntervalSec,
+		monitoring.ConfigServiceMonitorWorkerLimit,
+		monitoring.ConfigServiceMonitorMinIntervalSec,
+		monitoring.ConfigServiceMonitorDefaultIntervalSec,
+		monitoring.ConfigServiceMonitorMinTimeoutSec,
+		monitoring.ConfigServiceMonitorDefaultTimeoutSec,
+		monitoring.ConfigServiceMonitorMaxTimeoutSec:
+		// RR-F5-01：服务监控内部限值 7 键与保存面同源共用
+		// monitoring.NormalizeServiceMonitorLimitValue——旧备份里
+		// 经未校验写面落库的越界值（如 max_timeout>60）恢复时
+		// 同样跳过 + warning，不许从恢复面绕回。
+		return monitoring.NormalizeServiceMonitorLimitValue(name, value)
 	case NotifyDailyHourConfigKey:
 		return NormalizeNotifyDailyHour(value)
 	}
@@ -5036,6 +5048,7 @@ func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *impor
 		// R3 B14-002：监控三键（开关枚举/保留天数/探测间隔）走保存面
 		// 等价校验（normalizeImportedMonitoringConfigValue），坏值跳过
 		// + warning——此前差集 3 键无校验、坏值直接落库，与保存面分裂。
+		// RR-F5-01 起服务监控限值 7 键同经此面（见函数内注）。
 		normalizedValue, err := normalizeImportedMonitoringConfigValue(name, value)
 		if err != nil {
 			rep.skip("configs")

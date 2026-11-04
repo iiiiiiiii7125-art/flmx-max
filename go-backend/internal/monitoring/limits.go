@@ -1,6 +1,7 @@
 package monitoring
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -99,6 +100,77 @@ func normalizeServiceMonitorLimits(limits ServiceMonitorLimits) ServiceMonitorLi
 	}
 
 	return limits
+}
+
+// 服务监控内部限值 7 键的保存期值域（RR-F5-01）：这 7 键此前经通用
+// 配置写面 default 直通、无保存期校验，与同族监控键（保留天数
+// NormalizeMonitoringRetentionDays、质量间隔
+// NormalizeTunnelQualityProbeIntervalSeconds，均为保存期拒绝）口径
+// 不一致——尤其 max_timeout 可被写成 >60，且读面归一化的排序抬升
+// （max<default 时抬 max、default<min 时抬 default）会把上限继续
+// 抬高，使 doc/guide/monitoring.md「探测超时最大 60 秒」仅在默认
+// 配置下成立。逐键值域依据（代码常量／读面归一化／文档三面取交集）：
+//   - 7 键均须为正整数：读面 parseConfigInt 对非整数回落默认、
+//     normalizeServiceMonitorLimits 对 <=0 一律替换，<=0 与非整数
+//     在存储层没有合法语义，保存期按同族口径拒绝；
+//   - worker_limit 上限 50：读面归一化既有的硬钳（>50 钳到 50），
+//     保存面同界拒绝，不与读面打架；
+//   - 三个 timeout 键上限同守 60：文档 60 秒口径＋读面排序抬升
+//     决定三键必须同界，归一化后的 MaxTimeoutSec 才恒 <=60；
+//   - checker 扫描间隔与两个 interval 键无上限：代码常量、前端
+//     （限值经 limits 接口下发、无独立上限）与文档均未给上限，
+//     读面亦不钳，不自创口径；跨键排序（min>=checker、
+//     default>=min）继续由读面归一化负责，与保存期逐键值域不冲突。
+const (
+	MinServiceMonitorLimitValue  = 1
+	MaxServiceMonitorWorkerLimit = 50
+	MaxServiceMonitorTimeoutSec  = 60
+)
+
+// serviceMonitorLimitDomain 描述单个限值键的保存期值域
+// （max<=0 表示无上限）。
+type serviceMonitorLimitDomain struct {
+	label string
+	max   int
+}
+
+var serviceMonitorLimitDomains = map[string]serviceMonitorLimitDomain{
+	ConfigServiceMonitorCheckerScanIntervalSec: {label: "服务监控扫描间隔"},
+	ConfigServiceMonitorWorkerLimit:            {label: "服务监控并发上限", max: MaxServiceMonitorWorkerLimit},
+	ConfigServiceMonitorMinIntervalSec:         {label: "服务监控最小检查间隔"},
+	ConfigServiceMonitorDefaultIntervalSec:     {label: "服务监控默认检查间隔"},
+	ConfigServiceMonitorMinTimeoutSec:          {label: "服务监控最小超时", max: MaxServiceMonitorTimeoutSec},
+	ConfigServiceMonitorDefaultTimeoutSec:      {label: "服务监控默认超时", max: MaxServiceMonitorTimeoutSec},
+	ConfigServiceMonitorMaxTimeoutSec:          {label: "服务监控最大超时", max: MaxServiceMonitorTimeoutSec},
+}
+
+// NormalizeServiceMonitorLimitValue 是 service_monitor_* 7 键的保存期
+// 值域校验，保存面（handler.normalizeAndValidateConfigValue）与恢复
+// 面（repo.normalizeImportedMonitoringConfigValue）共用，与
+// NormalizeMonitoringRetentionDays 同形。这 7 键非必填、可清空：
+// 空串返回 "" 表示清空回落默认，与调用方的可清空语义兼容；非空
+// 必须为落在值域内的整数，合法值归一为规范整数串（去空白/前导
+// 零）。未知键原样返回（调用方只对本族 7 键调用，此分支仅防御）。
+func NormalizeServiceMonitorLimitValue(key, value string) (string, error) {
+	domain, ok := serviceMonitorLimitDomains[key]
+	if !ok {
+		return value, nil
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	n, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("%s必须是整数", domain.label)
+	}
+	if n < MinServiceMonitorLimitValue {
+		return "", fmt.Errorf("%s必须不小于 %d", domain.label, MinServiceMonitorLimitValue)
+	}
+	if domain.max > 0 && n > domain.max {
+		return "", fmt.Errorf("%s必须在 %d 到 %d 之间", domain.label, MinServiceMonitorLimitValue, domain.max)
+	}
+	return strconv.Itoa(n), nil
 }
 
 func parseConfigInt(cfg map[string]string, key string, fallback int) int {
