@@ -217,9 +217,9 @@ func TestConfigGetNeverReturnsThirdPartyCredentials(t *testing.T) {
 
 // R6-L8-F-05：jwt_secret 与 Gist 凭据同口径——管理员经 config/get
 // 亦不得读回本体（跨用户凭据：泄露后可离线伪造任意用户令牌，
-// 且改密不影响该秘密），config/list 侧同步缺席。写路径不变
-// （TestConfigUpdateAllowsSensitiveKeysForAdmin 仍以 jwt_secret
-// 验证管理员可写）。
+// 且改密不影响该秘密），config/list 侧同步缺席。写路径后由
+// R1-11-02 单独收紧为点名拒绝（DB 行零消费、假成功误导轮换），
+// 见 TestConfigUpdateRejectsJWTSecretWrite。
 func TestConfigGetNeverReturnsJWTSecret(t *testing.T) {
 	router, r := setupConfigAccessTestRouter(t)
 	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
@@ -338,8 +338,12 @@ func TestConfigListNeverReturnsLicenseCredentials(t *testing.T) {
 	}
 }
 
-func TestConfigUpdateAllowsSensitiveKeysForAdmin(t *testing.T) {
-	router, _ := setupConfigAccessTestRouter(t)
+// R1-11-02 契约变更：jwt_secret 的 DB 行零消费，此前两条用例断言
+// 管理员写 jwt_secret 成功——那正是审计指出的「假成功」缺陷。现
+// 写面点名拒绝（真源为 env/文件），改按拒绝契约断言；其余敏感键
+// （cloudflare_secret_key 等）的管理员可写由相邻用例继续覆盖。
+func TestConfigUpdateRejectsJWTSecretWrite(t *testing.T) {
+	router, r := setupConfigAccessTestRouter(t)
 	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/update", bytes.NewBufferString(`{"jwt_secret":"rotated-secret"}`))
@@ -349,11 +353,14 @@ func TestConfigUpdateAllowsSensitiveKeysForAdmin(t *testing.T) {
 
 	router.ServeHTTP(resp, req)
 
-	assertHandlerCode(t, resp, 0)
+	assertHandlerCodeMsgContains(t, resp, "jwt_secret")
+	if cfg, err := r.GetConfigByName("jwt_secret"); err != nil || cfg != nil {
+		t.Fatalf("jwt_secret should not be written, got %#v err=%v", cfg, err)
+	}
 }
 
-func TestConfigUpdateSingleAllowsSensitiveKeysForAdmin(t *testing.T) {
-	router, _ := setupConfigAccessTestRouter(t)
+func TestConfigUpdateSingleRejectsJWTSecretWrite(t *testing.T) {
+	router, r := setupConfigAccessTestRouter(t)
 	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/update-single", bytes.NewBufferString(`{"name":"jwt_secret","value":"rotated-secret"}`))
@@ -363,7 +370,10 @@ func TestConfigUpdateSingleAllowsSensitiveKeysForAdmin(t *testing.T) {
 
 	router.ServeHTTP(resp, req)
 
-	assertHandlerCode(t, resp, 0)
+	assertHandlerCodeMsgContains(t, resp, "jwt_secret")
+	if cfg, err := r.GetConfigByName("jwt_secret"); err != nil || cfg != nil {
+		t.Fatalf("jwt_secret should not be written, got %#v err=%v", cfg, err)
+	}
 }
 
 func TestConfigUpdateAllowsCloudflareSecretKeyWrite(t *testing.T) {
