@@ -1679,7 +1679,10 @@ rollback_flux_agent() {
 # 名前的自有旧名（现行 agent 自身仍以 flvx_kernel 计数），也可能
 # 由同机另一套旧谱系 agent 持有；机器上仍有旧式 gost 形态 agent
 # 足迹时无从区分归属，一律跳过并披露（C4-F02），无足迹时才按本
-# 产品旧装遗留删除（与面板路径的删除集逐字一致）。
+# 产品旧装遗留删除。flvx_kernel 一格与面板路径并不逐字一致：面
+# 板驱动的 agent 自卸载对 nft 三表无条件删除（无足迹守卫），本
+# 脚本则在有足迹时跳过该表并点名——两路删除集仅在无足迹时相同
+# （99-flvx-tuning.conf 两路同有足迹守卫，不在此列）。
 uninstall_flux_agent_host_cleanup() {
   local failures=0
   local engine_dir="$INSTALL_DIR/tcpfit"
