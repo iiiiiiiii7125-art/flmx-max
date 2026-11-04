@@ -41,8 +41,8 @@ import (
 //   - T-4（用户钉死，比上游收紧）：未设加密密码时上传一律拒绝，
 //     不得明文离境；见 gistUploadLocked 开头的门禁。前端警示文案
 //     的改动归 G-前端批，本批只改后端语义 + 单测。
-//   - 加密信封解密侧双认 flyx/flmx 标记（写侧仍写 flyx，与上游
-//     线格式互通；见 gistOpen）。
+//   - 加密信封写侧标记键为 "flmx"（2026-11-04 全量改名裁定），
+//     解密侧双认 flmx/flyx，存量旧信封仍可读（见 gistOpen）。
 //
 // 与上游的偏差（均有意，见报告）：
 //   - versions/restore 为后续批次补接（本批只做上传侧）：从 Gist
@@ -120,12 +120,15 @@ func gistInt64(cfg map[string]string, key string) int64 {
 
 // --- encryption ---
 //
-// 信封格式与上游逐字节一致（scrypt N=32768/r=8/p=1 + AES-256-GCM），
-// 以便上游面板产出的加密 Gist 与本实现互通。注意 JSON 键名 "flyx"
-// 是上游的原始写法（字段名 Format 的 tag），属线格式、不得「修正」。
+// 信封加密参数与上游逐字节一致（scrypt N=32768/r=8/p=1 +
+// AES-256-GCM），上游面板产出的加密 Gist 仍可被本实现解密。
+// 标记键名（字段名 Format 的 tag）：2026-11-04 全量改名裁定起写侧
+// 写 "flmx"，不再写 "flyx"；读侧双认两键（见 gistOpen），故存量
+// "flyx" 信封照常解密。代价（裁定已知悉）：本实现新写的备份不再
+// 被上游面板及本产品老版本识别。
 
 type gistEnvelope struct {
-	Format string `json:"flyx"`
+	Format string `json:"flmx"`
 	V      int    `json:"v"`
 	KDF    string `json:"kdf"`
 	N      int    `json:"n"`
@@ -170,9 +173,9 @@ func gistEncrypt(plain []byte, password string) ([]byte, error) {
 }
 
 // gistOpen 还原 Gist 文件内容：加密信封需密码解密，明文原样返回。
-// 信封标记双认：上游写法 "flyx" 与我方品牌写法 "flmx" 均认作加密
-// 信封（写侧仍写 "flyx"，与上游线格式互通；其余信封字段两写法
-// 相同，故可共用同一解析）。本轮上传侧不调用它（仅单测验证加密
+// 信封标记双认：旧写法 "flyx" 与现行写法 "flmx" 均认作加密
+// 信封（写侧写 "flmx"；其余信封字段两写法相同，故可共用同一
+// 解析，struct 解码不依赖标记键本身）。本轮上传侧不调用它（仅单测验证加密
 // 往返与未来恢复侧复用）。
 func gistOpen(content []byte, password string) ([]byte, bool, error) {
 	var env gistEnvelope

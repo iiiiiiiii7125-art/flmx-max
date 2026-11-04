@@ -71,13 +71,17 @@ func TestGistEncryptRoundTrip(t *testing.T) {
 	if bytes.Equal(enc, plain) {
 		t.Fatal("encrypted output must differ from plaintext")
 	}
-	// 信封键名 "flyx" 是上游线格式，见 gist_backup.go 注释。
+	// 写侧信封键名必须是现行 "flmx"，且不得再出现旧键 "flyx"
+	// （2026-11-04 全量改名裁定，见 gist_backup.go 注释）。
 	var raw map[string]interface{}
 	if err := json.Unmarshal(enc, &raw); err != nil {
 		t.Fatalf("envelope is not JSON: %v", err)
 	}
-	if raw["flyx"] != "encrypted-backup" || raw["kdf"] != "scrypt" {
+	if raw["flmx"] != "encrypted-backup" || raw["kdf"] != "scrypt" {
 		t.Fatalf("unexpected envelope header: %v", raw)
+	}
+	if _, legacy := raw["flyx"]; legacy {
+		t.Fatalf("write side must no longer emit the legacy flyx key: %v", raw)
 	}
 	got, encrypted, err := gistOpen(enc, "pw-123")
 	if err != nil || !encrypted {
@@ -737,15 +741,17 @@ func TestGistOpenDualEnvelopeMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gistEncrypt: %v", err)
 	}
-	flmx := strings.Replace(string(enc), `"flyx": "encrypted-backup"`, `"flmx": "encrypted-backup"`, 1)
-	if flmx == string(enc) {
+	// 读侧双认：把现行 "flmx" 写键换回旧键 "flyx"，模拟改名前的
+	// 存量信封（及上游面板产出的信封），必须照常解密。
+	flyx := strings.Replace(string(enc), `"flmx": "encrypted-backup"`, `"flyx": "encrypted-backup"`, 1)
+	if flyx == string(enc) {
 		t.Fatal("test setup: envelope marker replacement did not apply")
 	}
-	got, encrypted, err := gistOpen([]byte(flmx), "pw-123")
+	got, encrypted, err := gistOpen([]byte(flyx), "pw-123")
 	if err != nil || !encrypted || !bytes.Equal(got, plain) {
-		t.Fatalf("flmx envelope: got=%q encrypted=%v err=%v", got, encrypted, err)
+		t.Fatalf("legacy flyx envelope: got=%q encrypted=%v err=%v", got, encrypted, err)
 	}
-	if _, _, err := gistOpen([]byte(flmx), "wrong"); err == nil {
-		t.Fatal("flmx envelope wrong password must fail")
+	if _, _, err := gistOpen([]byte(flyx), "wrong"); err == nil {
+		t.Fatal("legacy flyx envelope wrong password must fail")
 	}
 }
