@@ -83,6 +83,11 @@ export function switchDemoRole(role: DemoRole) {
  * subscription/source/refresh、monitor/services/run、
  * federation/node/import 与 backup/gist/save（echo 形状不符）的回执
  * 均由 receiptAnswer 先于词表按真实形状合成（见该函数头注）。
+ * RR4-C5-02/I03 续：user/login（登录表单实读 data，词表 data:null 与
+ * 之相撞）与 backup/import-auto-backup 两端点（导入/恢复后的有状态
+ * 快照面）同入 receiptAnswer 合成；config/get 按键合成（录制优先、
+ * 未录制键查 config/list 录制）由 configGetAnswer 在 answer() 内于
+ * 录制回放之前单独一步处理（RR4-C5-03）。
  */
 const WRITE_WORDS = new Set(
   "create save update delete remove assign reset toggle import install control regenerate pause resume redeploy batch force run refresh split rollback test dismiss restore export reconcile clear login register finish begin verify set upgrade tune".split(
@@ -539,8 +544,70 @@ function importReceipt(
   return { code: 0, msg: "操作成功", data, ts: Date.now() };
 }
 
-function backupImportAnswer(bare: string, body: unknown) {
+/**
+ * RR4-C5-I03：导入前自动备份在真实面是服务端状态——本地导入与 Gist
+ * 恢复都先把导入前状态落服务端快照（留存 24h，仅管理员经 status /
+ * download 两端点取用）。演示无服务端：导入/恢复合成时把「导入前」
+ * 的录制状态按 export 形状留一份在页面会话内，使状态面与下载入口在
+ * 演示里同样可达；整页刷新后模块状态重置、回落录制的 exists:false
+ * （保真边界见 scripts/demo/README.md 盲区登记 RR4 续行）。
+ */
+let importAutoBackup: { at: number; content: string } | null = null;
+
+const rememberImportAutoBackup = (book: Record<string, Entry[]>) => {
+  const snapshot = exportAnswer("backup/export", {}, book) as {
+    __demoDownload?: { content: string };
+  } | null;
+
+  if (snapshot?.__demoDownload)
+    importAutoBackup = {
+      at: Date.now(),
+      content: snapshot.__demoDownload.content,
+    };
+};
+
+function importAutoBackupStatusAnswer(bare: string) {
+  if (bare !== "backup/import-auto-backup/status") return null;
+  // 本会话尚未导入/恢复过：回落录制（exists:false），不冒充有快照。
+  if (!importAutoBackup) return null;
+
+  return {
+    code: 0,
+    msg: "操作成功",
+    data: {
+      exists: true,
+      // 真实面 expiresAt 为 unix 秒（快照生成时刻 + 24h）。
+      expiresAt: Math.floor(importAutoBackup.at / 1000) + 24 * 3600,
+    },
+    ts: Date.now(),
+  };
+}
+
+function importAutoBackupDownloadAnswer(bare: string) {
+  if (bare !== "backup/import-auto-backup") return null;
+  // 与真实面无快照口径一致：错误信封、无 attachment，消费端据此抛
+  // 出该文案而不是把信封存成文件（演示传输层恒 200，code 用 -2 对齐）。
+  if (!importAutoBackup)
+    return { code: -2, msg: "暂无可下载的导入前自动备份", ts: Date.now() };
+  const d = new Date(importAutoBackup.at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+
+  return {
+    __demoDownload: {
+      filename: `auto_backup_${stamp}.json`,
+      content: importAutoBackup.content,
+    },
+  };
+}
+
+function backupImportAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
   if (bare !== "backup/import") return null;
+  rememberImportAutoBackup(book);
   const req = parseBody(body);
   const types = Array.isArray(req.types) ? req.types.map(String) : [];
   const on = (t: string) => types.length === 0 || types.includes(t);
@@ -618,6 +685,8 @@ function backupImportAnswer(bare: string, body: unknown) {
 
 function gistRestoreAnswer(bare: string, book: Record<string, Entry[]>) {
   if (bare !== "backup/gist/restore") return null;
+  // 真实面 Gist 恢复与本地导入同口径：恢复前先落导入前快照（I03）。
+  rememberImportAutoBackup(book);
   const n = (k: string) => listOf(book, k).length;
 
   return importReceipt(
@@ -639,18 +708,75 @@ function gistRestoreAnswer(bare: string, book: Record<string, Entry[]>) {
   );
 }
 
+// RR4-C5-I02：真实面逐行解析（kernel.ParseImport 的 parseLines）、失败
+// 行入 errors 点名、零创建回 code:-1「没有导入任何节点」。演示不做真
+// 解析，但按同一口径做最低限度形态校验：注释/分节行跳过不计、支持的
+// 分享链接协议与 Surge 行（name = type, …）计 created、其余行按真实
+// 文案计 errors，不得再对无效输入报假成功。
+const IMPORT_LINK_SCHEMES = new Set(
+  "ss vmess vless trojan hysteria2 hy2 tuic anytls naive naive+https socks socks5".split(
+    " ",
+  ),
+);
+
 function inboundImportAnswer(bare: string, body: unknown) {
   if (bare !== "inbound/import") return null;
   const req = parseBody(body);
-  const lines = String(req.links ?? "")
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const rawLines = String(req.links ?? "").split(/\r?\n/);
+  const created: number[] = [];
+  const errors: string[] = [];
+
+  rawLines.forEach((raw, i) => {
+    const line = raw.trim();
+
+    if (
+      !line ||
+      line.startsWith("#") ||
+      line.startsWith("//") ||
+      line.startsWith(";") ||
+      (line.startsWith("[") && line.endsWith("]"))
+    )
+      return;
+    const schemeEnd = line.indexOf("://");
+
+    if (schemeEnd > 0) {
+      const scheme = line.slice(0, schemeEnd).toLowerCase();
+
+      if (IMPORT_LINK_SCHEMES.has(scheme)) {
+        created.push(9001 + created.length);
+      } else if (scheme === "http" || scheme === "https") {
+        // 与真实面逐字同文案；整框只粘一条订阅地址时真实面会去拉取
+        // 内容导入（演示无网络），该行按已受理计、不入 errors。
+        if (rawLines.filter((l) => l.trim()).length === 1) {
+          created.push(9001 + created.length);
+        } else {
+          errors.push(
+            `第 ${i + 1} 行：http(s):// 是订阅地址，请单独粘贴在输入框里`,
+          );
+        }
+      } else {
+        errors.push(`第 ${i + 1} 行：暂不支持 ${scheme}:// 链接`);
+      }
+    } else if (line.includes("=")) {
+      created.push(9001 + created.length);
+    } else {
+      errors.push(`第 ${i + 1} 行：无法识别的格式`);
+    }
+  });
+
+  if (created.length === 0) {
+    return {
+      code: -1,
+      msg: `没有导入任何节点${errors.length ? `：${errors[0]}` : ""}`,
+      data: { created, errors },
+      ts: Date.now(),
+    };
+  }
 
   return {
     code: 0,
     msg: "操作成功",
-    data: { created: lines.map((_, i) => 9001 + i), errors: [] },
+    data: { created, errors },
     ts: Date.now(),
   };
 }
@@ -754,6 +880,10 @@ function gistSaveAnswer(
     status.configured = false;
     status.tokenHint = "";
     status.gistUrl = "";
+    // RR4-C5-I01：与后端 R3-F6-O2 同口径——清令牌必须联动间隔归零，
+    // 且下方按请求值写 intervalHours 时不得把 0 又覆回残存间隔（防日后
+    // 填回令牌时自动上传按残存间隔静默复活）。
+    status.intervalHours = 0;
   } else if (typeof req.token === "string" && req.token) {
     const t = req.token;
 
@@ -766,7 +896,7 @@ function gistSaveAnswer(
   if (req.clearPassword === true) status.encrypted = false;
   else if (typeof req.password === "string" && req.password)
     status.encrypted = true;
-  if (typeof req.intervalHours === "number")
+  if (req.clearToken !== true && typeof req.intervalHours === "number")
     status.intervalHours = req.intervalHours;
 
   return { code: 0, msg: "操作成功", data: status, ts: Date.now() };
@@ -836,24 +966,89 @@ function gistVersionsAnswer(bare: string) {
   };
 }
 
+/**
+ * RR4-C5-02：user/login 在词表里是写，但登录表单是它 data 的真实消费
+ * 端——performLogin 无守卫读 requirePasswordChange 并把 token/name 交
+ * writeLoginSession 落会话，词表的 data:null 回答会让演示站登出后的
+ * 登录提交崩进 catch、误报「网络错误」。按真实 LoginResponse 形状合
+ * 成：演示用户名登入为演示普通用户，其余登入为演示管理员，会话 token
+ * 即 installDemo 自签的那套演示 token。
+ */
+function loginAnswer(bare: string, body: unknown) {
+  if (bare !== "user/login") return null;
+  const req = parseBody(body);
+  const role: DemoRole = req.username === SESSIONS.user.name ? "user" : "admin";
+
+  return {
+    code: 0,
+    msg: "操作成功",
+    data: {
+      token: SESSIONS[role].token,
+      role_id: role === "admin" ? 0 : 1,
+      name: SESSIONS[role].name,
+      requirePasswordChange: false,
+    },
+    ts: Date.now(),
+  };
+}
+
 function receiptAnswer(
   bare: string,
   body: unknown,
   book: Record<string, Entry[]>,
 ) {
   return (
+    loginAnswer(bare, body) ??
     gistVersionsAnswer(bare) ??
     installAnswer(bare, body) ??
     templateRefreshAnswer(bare, body, book) ??
-    backupImportAnswer(bare, body) ??
+    backupImportAnswer(bare, body, book) ??
     gistRestoreAnswer(bare, book) ??
     inboundImportAnswer(bare, body) ??
     sourceRefreshAnswer(bare, body, book) ??
     serviceRunAnswer(bare, body, book) ??
     federationImportAnswer(bare, book) ??
     gistSaveAnswer(bare, body, book) ??
+    importAutoBackupStatusAnswer(bare) ??
+    importAutoBackupDownloadAnswer(bare) ??
     exportAnswer(bare, body, book)
   );
+}
+
+/**
+ * RR4-C5-03：config/get 是按键查询，录制册只录了被问过的键——旧回退
+ * 在未命中时回放册中第一条，使任何未录制键名都吃到无关的「配置不存
+ * 在」（延迟测试点弹窗因此在演示站恒报加载失败，而演示自己的
+ * config/list 录制里该键明明已配置）。口径：录制逐字优先（真实命中
+ * 行与真实「配置不存在」都不被合成覆盖）；未录制的键按 config/list
+ * 录制值合成命中行；list 里也没有的键才按真实面回「配置不存在」。
+ */
+function configGetAnswer(
+  bare: string,
+  body: unknown,
+  key: string,
+  book: Record<string, Entry[]>,
+) {
+  if (bare !== "config/get") return null;
+  const recorded = (book["config/get"] ?? []).find((e) => e.key === key);
+
+  if (recorded) return structuredClone(recorded.res);
+  const name = parseBody(body).name;
+  const list = (book["config/list"]?.[0]?.res.data ?? {}) as Record<
+    string,
+    unknown
+  >;
+
+  if (typeof name === "string" && typeof list[name] === "string") {
+    return {
+      code: 0,
+      msg: "操作成功",
+      data: { name, value: list[name] },
+      ts: Date.now(),
+    };
+  }
+
+  return { code: -1, msg: "配置不存在", ts: Date.now() };
 }
 
 const canon = (body: unknown) => {
@@ -941,6 +1136,9 @@ async function answer(config: InternalAxiosRequestConfig) {
   const receipt = receiptAnswer(bare, config.data, book);
 
   if (receipt) return receipt;
+  const cfgGet = configGetAnswer(bare, config.data, key, book);
+
+  if (cfgGet) return shiftTimes(cfgGet, fixtures.recordedAt, delta);
   if (PROBES[bare]) {
     const [list, field] = PROBES[bare];
     const ids: number[] = JSON.parse(String(config.data || "{}")).ids ?? [];
