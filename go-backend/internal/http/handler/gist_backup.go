@@ -35,8 +35,9 @@ import (
 // PORT-3342/B1：备份上传 GitHub Gist（仅上传链）。
 // PORT-3342/G-backend（本批，在 B1 基础上）：
 //   - 新增 versions 端点（列 Gist history 最近 10 版本）；restore 端点
-//     本批不接（归 G-恢复链批），但恢复侧复用的取版本内容 helper
-//     gistVersionContent 与解密 gistOpen 已落到位，不触导入链。
+//     其后由 G-恢复链批接入（见下方 restore 段 gistBackupRestore），
+//     恢复侧复用的取版本内容 helper gistVersionContent 与解密
+//     gistOpen 在本批已落到位。
 //   - T-4（用户钉死，比上游收紧）：未设加密密码时上传一律拒绝，
 //     不得明文离境；见 gistUploadLocked 开头的门禁。前端警示文案
 //     的改动归 G-前端批，本批只改后端语义 + 单测。
@@ -44,9 +45,10 @@ import (
 //     线格式互通；见 gistOpen）。
 //
 // 与上游的偏差（均有意，见报告）：
-//   - 不含 versions/restore：从 Gist 恢复会走备份导入链（含导入重推
-//     谓词），本轮红线禁止触碰导入代码，故只移植上传侧；恢复仍走
-//     现有手动导入流程。
+//   - versions/restore 为后续批次补接（本批只做上传侧）：从 Gist
+//     恢复走 gistBackupRestore，解密后经与本地导入同一条尾链
+//     （ImportContext + runBackupImportTailHooks，含导入重推谓词），
+//     不是手动导入流程。
 //   - 导出用 ExportAllContext（绑定 ctx，X-P3-25 口径），而非上游的
 //     ExportAll()；内容与手动全量导出一致（空 types = 全量）。
 //   - 文件名与描述用 FLMX 品牌（flmx-backup.json / FLMX 面板备份）。
@@ -978,7 +980,7 @@ func (h *Handler) gistBackupUpload(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(map[string]interface{}{"result": result, "status": gistStatus(h.gistConfig())}))
 }
 
-// --- versions（G-backend 新增；restore 本批不接）---
+// --- versions（G-backend 新增；restore 见下方 restore 段）---
 
 type gistVersionView struct {
 	Version     string `json:"version"`
