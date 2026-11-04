@@ -59,7 +59,10 @@ func GetGlobalTrafficManager() *GlobalTrafficManager {
 	return globalManager
 }
 
-// AddTraffic 添加流量到指定服务（由各服务调用）
+// AddTraffic 添加流量到指定服务。本函数当前未接线：生产采样两点
+// 直调 addServiceTraffic，因为监听注销后仍在排空的连接也要入账
+// （N-01 口径），而本函数的注册表门会把这批尾采样静默丢弃——
+// 勿按「入口函数」的直觉把采样改接本函数，否则漏计复活。
 func (m *GlobalTrafficManager) AddTraffic(serviceName string, upBytes, downBytes int64) {
 	if !registry.ServiceRegistry().IsRegistered(serviceName) {
 		return

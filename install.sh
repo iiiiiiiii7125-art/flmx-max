@@ -1825,7 +1825,8 @@ rollback_flmx_agent() {
 # 归属圈定：只处理带 flmx 标识的自有产物，不触碰同机其他程序的
 # 文件。其中两件 legacy 同名资源（99-flvx-tuning.conf、nft 表
 # flvx_kernel）与旧谱系面板的 agent 同名共用——它们既是本产品改
-# 名前的自有旧名（现行 agent 自身仍以 flvx_kernel 计数），也可能
+# 名前的自有旧名（仅存量未升级的旧构建 agent 仍以 flvx_kernel
+# 计数，现行构建计数只认 flmx_kernel），也可能
 # 由同机另一套旧谱系 agent 持有；机器上仍有旧式 gost 形态 agent
 # 足迹时无从区分归属，一律跳过并披露（C4-F02），无足迹时才按本
 # 产品旧装遗留删除。flvx_kernel 一格与面板路径并不逐字一致：面

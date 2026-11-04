@@ -381,8 +381,10 @@ type nftState struct {
 	Content string `json:"content,omitempty"`
 }
 
-// nftCounters owns the flvx_kernel table. The epoch changes whenever the
-// table is rebuilt so the panel knows the counters restarted from zero.
+// nftCounters owns the flmx_kernel table (flvx_kernel is only ever
+// recognised and deleted, never counted). The epoch changes whenever
+// the table is rebuilt so the panel knows the counters restarted
+// from zero.
 type nftCounters struct {
 	mu        sync.Mutex
 	statePath string
