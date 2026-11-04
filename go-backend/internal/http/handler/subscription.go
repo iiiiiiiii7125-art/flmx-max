@@ -1179,6 +1179,40 @@ func (req *subscriptionRequest) validateDetailed(rows []model.NodeInbound) ([]in
 	return ids, excluded, nil
 }
 
+// checkSubscriptionSourceRefs（R4-F1-01）：订阅对订阅源的引用在保存
+// 时验存在——SourceIDs 与 Options 的链式按源（ChainLandingSources/
+// ChainRelaySources）此前仅过滤正数/去零去重，未验的幽灵 ID 被计入
+// 「至少选一个」的非空判定后落库、渲染为空且无人知晓。与入站
+// （B10-002「入站不存在」）同口径：未知源 ID 硬拒并点名。删除面
+// 的对称处置（删源时清理引用并回执点名）见 remoteSourceDelete。
+func (h *Handler) checkSubscriptionSourceRefs(req *subscriptionRequest) error {
+	if len(req.SourceIDs) == 0 && len(req.Options.ChainLandingSources) == 0 && len(req.Options.ChainRelaySources) == 0 {
+		return nil
+	}
+	sources, err := h.repo.ListRemoteSources()
+	if err != nil {
+		return err
+	}
+	known := make(map[int64]bool, len(sources))
+	for _, s := range sources {
+		known[s.ID] = true
+	}
+	var unknown []int64
+	seen := make(map[int64]bool)
+	for _, group := range [][]int64{req.SourceIDs, req.Options.ChainLandingSources, req.Options.ChainRelaySources} {
+		for _, id := range group {
+			if id > 0 && !known[id] && !seen[id] {
+				seen[id] = true
+				unknown = append(unknown, id)
+			}
+		}
+	}
+	if len(unknown) > 0 {
+		return errText(fmt.Sprintf("订阅源不存在: %v", unknown))
+	}
+	return nil
+}
+
 func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	// R2-K2 family closure (B11-001): the response awaits
 	// applyKernelsForInbounds for the saved subscription's kernels,
@@ -1201,6 +1235,10 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, excludedCompanions, err := req.validateDetailed(rows)
 	if err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if err := h.checkSubscriptionSourceRefs(&req); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}

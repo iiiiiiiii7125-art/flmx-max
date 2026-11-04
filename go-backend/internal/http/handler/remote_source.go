@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -808,6 +809,18 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// R4-F1-01：删源同步清理订阅引用并在回执点名受影响订阅——此前
+	// 订阅的 SourceIDs/链式按源留死 ID、渲染静默变空，管理员选
+	// 「保留节点」时更以为节点仍在订阅内。与屏蔽清理同序（删源行
+	// 之前、失败中止），语义取「清理＋点名」：死引用在渲染面本就
+	// 按无此源处理，清理只是把存储与既定行为对齐；点名保证受影
+	// 响订阅不静默减少（keepNodes 与连节点删两路同口径，源行删
+	// 除这一事实不因节点去向而变）。
+	affectedSubs, err := h.stripRemoteSourceFromSubscriptions(req.ID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
 	// R10-04：删除屏蔽随源删除而清（keepNodes 与连节点删两路同口径）；
 	// 在删源行之前清、失败中止——屏蔽不得比源本身活得久。
 	if err := h.repo.DeleteRemoteSourceShields(req.ID); err != nil {
@@ -818,5 +831,89 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	if len(affectedSubs) > 0 {
+		quoted := make([]string, 0, len(affectedSubs))
+		for _, name := range affectedSubs {
+			quoted = append(quoted, "「"+name+"」")
+		}
+		response.WriteJSON(w, response.OKWithWarning(nil, fmt.Sprintf("该订阅源还被订阅 %s 引用，已从这些订阅中移除该源引用，相关订阅内容已减少", strings.Join(quoted, "、"))))
+		return
+	}
 	response.WriteJSON(w, response.OKEmpty())
+}
+
+// stripRemoteSourceFromSubscriptions 把已删除订阅源的 ID 从全部订阅
+// 的源引用中摘除（SourceIDs、Options.ChainLandingSources/
+// ChainRelaySources 及对应的 ChainSourceFilters 条目），返回受影响
+// 的订阅名（订阅 ID 序）。Options 解码失败的行只处理 SourceIDs 面
+// （与读面容错口径一致，不因坏 Options 中止删源）。
+func (h *Handler) stripRemoteSourceFromSubscriptions(sourceID int64) ([]string, error) {
+	subs, err := h.repo.ListSubscriptions()
+	if err != nil {
+		return nil, err
+	}
+	var affected []string
+	for i := range subs {
+		s := &subs[i]
+		changed := false
+		if ids := parseIDList(s.SourceIDs); int64SliceContains(ids, sourceID) {
+			s.SourceIDs = formatIDList(int64SliceRemove(ids, sourceID))
+			changed = true
+		}
+		if strings.TrimSpace(s.Options) != "" {
+			var p subPipeline
+			if json.Unmarshal([]byte(s.Options), &p) == nil {
+				optsChanged := false
+				if int64SliceContains(p.ChainLandingSources, sourceID) {
+					p.ChainLandingSources = int64SliceRemove(p.ChainLandingSources, sourceID)
+					optsChanged = true
+				}
+				if int64SliceContains(p.ChainRelaySources, sourceID) {
+					p.ChainRelaySources = int64SliceRemove(p.ChainRelaySources, sourceID)
+					optsChanged = true
+				}
+				if p.ChainSourceFilters != nil {
+					if _, ok := p.ChainSourceFilters[sourceID]; ok {
+						delete(p.ChainSourceFilters, sourceID)
+						optsChanged = true
+					}
+				}
+				if optsChanged {
+					raw, mErr := json.Marshal(p)
+					if mErr != nil {
+						return affected, mErr
+					}
+					s.Options = string(raw)
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			continue
+		}
+		if err := h.repo.SaveSubscription(s); err != nil {
+			return affected, err
+		}
+		affected = append(affected, s.Name)
+	}
+	return affected, nil
+}
+
+func int64SliceContains(ids []int64, target int64) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
+}
+
+func int64SliceRemove(ids []int64, target int64) []int64 {
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id != target {
+			out = append(out, id)
+		}
+	}
+	return out
 }
