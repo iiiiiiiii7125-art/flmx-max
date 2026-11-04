@@ -30,20 +30,22 @@ FLMX 默认使用 SQLite 作为数据库，同时支持 PostgreSQL：表结构�
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
 | `DB_TYPE` | 数据库类型：`sqlite` 或 `postgres`（另接受别名 `postgresql`，留空等同 `sqlite`；填其他值启动时报错） | `sqlite` | `postgres` |
-| `DATABASE_URL` | PostgreSQL 连接字符串（仅 `DB_TYPE=postgres` 时必填） | 空 | `postgres://flux_panel:密码@postgres:5432/flux_panel?sslmode=disable` |
+| `DATABASE_URL` | PostgreSQL 连接字符串（仅 `DB_TYPE=postgres` 时必填） | 空 | `postgres://flmx_panel:密码@postgres:5432/flmx_panel?sslmode=disable` |
 | `DB_PATH` | SQLite 数据库文件路径（仅 `DB_TYPE=sqlite` 时使用） | `/app/data/gost.db` | `/app/data/gost.db` |
 
 ### PostgreSQL 容器使用
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| `POSTGRES_DB` | 数据库名称 | `flux_panel` |
-| `POSTGRES_USER` | 数据库用户名 | `flux_panel` |
+| `POSTGRES_DB` | 数据库名称 | `flmx_panel` |
+| `POSTGRES_USER` | 数据库用户名 | `flmx_panel` |
 | `POSTGRES_PASSWORD` | 数据库密码 | `flux_panel_change_me` |
 
 > ⚠️ **安全提示**：生产环境中请务必修改 `POSTGRES_PASSWORD` 为强密码，不要使用默认值！
 
 > ⛔ **拒绝启动（1.2.0 起）**：后端启动时校验的是 **`DATABASE_URL` 里内嵌的口令**——该口令为空、等于默认值 `flux_panel_change_me` 或等于 `postgres` 时，后端**直接拒绝启动**并在日志里报错。后端从不读取 `POSTGRES_PASSWORD` 环境变量本身：只改 `POSTGRES_PASSWORD`、不改 `DATABASE_URL` 里的口令，照样会被拒绝启动，排障时请先核对 `DATABASE_URL`。上表「默认值」只是 compose 模板里的占位值，不能原样用于实际部署。另外，后端不会替你比对两者是否一致，`DATABASE_URL` 与 `POSTGRES_PASSWORD` 不一致时表现为数据库连接认证失败（28P01）。脚本一键迁移时若发现 `.env` 里的口令为空或仍是默认值，会自动生成随机口令并写回 `.env`（同时写入 `DATABASE_URL`）。
+
+> 📌 **改名兼容**：改名前部署的存量 PostgreSQL，库名/用户名在数据卷初始化时已固化为 `flux_panel`，不随本次改名迁移、仍按原名连接；本文各命令中的 `flmx_panel` 对存量部署请按 `.env` 与 `DATABASE_URL` 的实际值（`flux_panel`）替换，新部署用 `flmx_panel`。
 
 ---
 
@@ -63,10 +65,10 @@ FRONTEND_PORT=6366
 
 # PostgreSQL 配置
 DB_TYPE=postgres
-DATABASE_URL=postgres://flux_panel:替换为强密码@postgres:5432/flux_panel?sslmode=disable
+DATABASE_URL=postgres://flmx_panel:替换为强密码@postgres:5432/flmx_panel?sslmode=disable
 
-POSTGRES_DB=flux_panel
-POSTGRES_USER=flux_panel
+POSTGRES_DB=flmx_panel
+POSTGRES_USER=flmx_panel
 POSTGRES_PASSWORD=替换为强密码
 ```
 
@@ -85,10 +87,10 @@ docker compose up -d
 docker ps
 
 # 查看后端日志，确认连接 PostgreSQL 成功
-docker logs flux-panel-backend
+docker logs flmx-panel-backend
 
 # 查看 PostgreSQL 容器状态
-docker logs flux-panel-postgres
+docker logs flmx-panel-postgres
 ```
 
 ---
@@ -118,7 +120,7 @@ cd <你的面板部署目录>
 
 ### 手动方式：按步骤迁移
 
-> 📌 **本节（及 §六、§七）命令里的容器名、卷名、网络名一律以部署目录 `.env` 的实际值为准**，不要照抄模板回退名。涉及的键共五个：`PANEL_BACKEND_CONTAINER`、`PANEL_POSTGRES_CONTAINER`、`FLMX_SQLITE_VOLUME`、`FLMX_POSTGRES_VOLUME`、`FLMX_NETWORK`。安装脚本部署的默认值依次是 `flmx-panel-backend`、`flmx-panel-postgres`、`flmx-sqlite-data`、`flmx-postgres-data`、`flmx-network`（多实例部署各名再带 `-<实例 id>` 后缀）。模板回退名（`flux-panel-backend`、`flux-panel-postgres`、`sqlite_data`、`postgres_data`、`gost-network`）只在 `.env` 没有写这些键的部署上成立——即按 §三手工自备 `.env` 且未补这些键的情形；脚本安装的部署 `.env` 必然写有这五键，照抄回退名只会得到 `No such container/volume/network`。自检：在部署目录执行 `grep -E '^(PANEL_BACKEND_CONTAINER|PANEL_POSTGRES_CONTAINER|FLMX_SQLITE_VOLUME|FLMX_POSTGRES_VOLUME|FLMX_NETWORK)=' .env`，五行齐全即以下各步先 `source .env` 再用变量的写法可直接用。
+> 📌 **本节（及 §六、§七）命令里的容器名、卷名、网络名一律以部署目录 `.env` 的实际值为准**，不要照抄模板回退名。涉及的键共五个：`PANEL_BACKEND_CONTAINER`、`PANEL_POSTGRES_CONTAINER`、`FLMX_SQLITE_VOLUME`、`FLMX_POSTGRES_VOLUME`、`FLMX_NETWORK`。安装脚本部署的默认值依次是 `flmx-panel-backend`、`flmx-panel-postgres`、`flmx-sqlite-data`、`flmx-postgres-data`、`flmx-network`（多实例部署各名再带 `-<实例 id>` 后缀）。现行模板的回退名已与脚本默认同为 flmx 名；旧模板回退名（`flux-panel-backend`、`flux-panel-postgres`、`sqlite_data`、`postgres_data`、`gost-network`）只在用旧模板且 `.env` 没有写这些键的部署上成立——即改名前按 §三手工自备 `.env` 且未补这些键的情形；脚本安装的部署 `.env` 必然写有这五键，对这类部署照抄任何回退名只会得到 `No such container/volume/network`。自检：在部署目录执行 `grep -E '^(PANEL_BACKEND_CONTAINER|PANEL_POSTGRES_CONTAINER|FLMX_SQLITE_VOLUME|FLMX_POSTGRES_VOLUME|FLMX_NETWORK)=' .env`，五行齐全即以下各步先 `source .env` 再用变量的写法可直接用。
 
 ### 1. 备份 SQLite 数据
 
@@ -232,8 +234,8 @@ docker compose up -d
 在目标 PostgreSQL 服务器上创建数据库和用户：
 
 ```sql
-CREATE USER flux_panel WITH PASSWORD '你的强密码';
-CREATE DATABASE flux_panel OWNER flux_panel;
+CREATE USER flmx_panel WITH PASSWORD '你的强密码';
+CREATE DATABASE flmx_panel OWNER flmx_panel;
 ```
 
 ### 2. 配置连接
@@ -242,7 +244,7 @@ CREATE DATABASE flux_panel OWNER flux_panel;
 
 ```bash
 DB_TYPE=postgres
-DATABASE_URL=postgres://flux_panel:你的强密码@数据库地址:5432/flux_panel?sslmode=disable
+DATABASE_URL=postgres://flmx_panel:你的强密码@数据库地址:5432/flmx_panel?sslmode=disable
 ```
 
 > 📌 如果 PostgreSQL 在远程服务器且启用了 SSL，请将 `sslmode=disable` 改为 `sslmode=require` 或 `sslmode=verify-full`。
@@ -266,10 +268,10 @@ docker compose up -d backend frontend
 ```bash
 source .env
 # 备份（在 Docker 环境下）
-docker exec "$PANEL_POSTGRES_CONTAINER" pg_dump -U flux_panel flux_panel > backup_$(date +%Y%m%d_%H%M%S).sql
+docker exec "$PANEL_POSTGRES_CONTAINER" pg_dump -U flmx_panel flmx_panel > backup_$(date +%Y%m%d_%H%M%S).sql
 
 # 恢复
-docker exec -i "$PANEL_POSTGRES_CONTAINER" psql -U flux_panel flux_panel < backup_20260101_120000.sql
+docker exec -i "$PANEL_POSTGRES_CONTAINER" psql -U flmx_panel flmx_panel < backup_20260101_120000.sql
 ```
 
 ### 定时备份（cron）
@@ -282,7 +284,7 @@ BACKUP_DIR="$(cd "$(dirname "$0")" && pwd)/backups"
 mkdir -p "$BACKUP_DIR"
 # 容器名以脚本同目录（部署目录）.env 的 PANEL_POSTGRES_CONTAINER 为准，缺该键时回退模板名
 PG_CONTAINER=$(sed -n 's/^PANEL_POSTGRES_CONTAINER=//p' "$(dirname "$0")/.env" | tail -n 1)
-docker exec "${PG_CONTAINER:-flux-panel-postgres}" pg_dump -U flux_panel flux_panel | gzip > "$BACKUP_DIR/flmx_$(date +%Y%m%d_%H%M%S).sql.gz"
+docker exec "${PG_CONTAINER:-flmx-panel-postgres}" pg_dump -U flmx_panel flmx_panel | gzip > "$BACKUP_DIR/flmx_$(date +%Y%m%d_%H%M%S).sql.gz"
 # 清理 30 天前的备份
 find "$BACKUP_DIR" -name "flmx_*.sql.gz" -mtime +30 -delete
 ```

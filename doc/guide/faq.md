@@ -14,8 +14,8 @@
 ### 节点显示离线？
 1. 检查节点服务器与面板服务器之间的网络连通性。
 2. 确认在节点端安装时输入的 **面板地址** 和 **密钥** 是否正确。
-3. 检查节点端服务状态：systemd 节点执行 `systemctl status flux_agent`；Alpine / OpenRC 节点没有 systemd，执行 `rc-service flux_agent status`。
-4. 查看节点端日志：systemd 节点执行 `journalctl -u flux_agent -f`；Alpine / OpenRC 节点没有 journald，日志在文件 `/var/log/flux_agent.log`（错误日志 `/var/log/flux_agent.err.log`），用 `tail -f /var/log/flux_agent.log` 查看。
+3. 检查节点端服务状态：systemd 节点执行 `systemctl status flmx_agent`；Alpine / OpenRC 节点没有 systemd，执行 `rc-service flmx_agent status`。
+4. 查看节点端日志：systemd 节点执行 `journalctl -u flmx_agent -f`；Alpine / OpenRC 节点没有 journald，日志在文件 `/var/log/flmx_agent.log`（错误日志 `/var/log/flmx_agent.err.log`），用 `tail -f /var/log/flmx_agent.log` 查看。改名前安装的节点在经面板升级迁移前仍用旧名（服务 `flux_agent`、日志 `/var/log/flux_agent.log`），把命令里的名字换成旧名即可。
 5. 如果是升级到 1.3.4 后才离线、且面板没有 TLS：多半是节点 `config.json` 的 `addr` 为裸地址（无 `ws://` 前缀）——新版本不再自动降级到明文连接，把 `addr` 改为显式 `ws://<面板地址>` 后重启 agent 即可，详见 [节点连不上：地址写法与时钟](./install.md#节点连不上-地址写法与时钟-1-3-4-起)。同时检查节点与面板的时钟偏差是否超过 5 分钟（先校时）。
 
 ### 只有 TCP 能通，UDP 不通？
