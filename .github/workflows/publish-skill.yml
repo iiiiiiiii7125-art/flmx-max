@@ -97,7 +97,28 @@ jobs:
 
       - name: Publish to npm
         working-directory: skills/flmx-api
-        run: npm publish --provenance --access public
+        run: |
+          # RR-C4-01: npm's default dist-tag is "latest", and a bare
+          # `npm publish` of a prerelease version (e.g. 1.9.7-beta)
+          # would move "latest" onto the beta — the npm face of the
+          # R3-C4-04 family (GHCR :latest and the GitHub Release
+          # prerelease flag are already guarded). Apply the exact
+          # test docker-build's check-version uses for push_latest
+          # (same regex as create-release's J-02 guard): only a
+          # plain dotted-numeric version may take "latest"; anything
+          # prerelease-shaped publishes under the "beta" dist-tag
+          # instead, so the beta stays installable for testing
+          # (npm i <pkg>@beta) without ever reaching default
+          # installs. Skipping the publish entirely was the other
+          # option; publishing under beta is chosen so prerelease
+          # skills remain testable, mirroring how GHCR still pushes
+          # the versioned image tag for prereleases.
+          VERSION="${{ steps.version.outputs.version }}"
+          if [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            npm publish --provenance --access public
+          else
+            npm publish --provenance --access public --tag beta
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
