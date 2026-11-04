@@ -109,11 +109,13 @@ jobs:
   # The private-ranges script needs only bash + python3, but the
   # timeout-budgets gate extracts frontend values with the TypeScript
   # compiler API (scripts/timeout-fe-extract.mjs) and fails closed
-  # (exit 2) when typescript is unresolvable. Its resolution chain is
-  # audited-root -> gate-repo -> local main checkout, and on a bare CI
-  # checkout only the gate-repo tier can hit, so this job installs the
-  # vite-frontend dependencies (typescript lands in this checkout's
-  # vite-frontend/node_modules) before running the selftests.
+  # (exit 2) when typescript is unresolvable. Resolution is confined
+  # to the current worktree (the audited root's or this checkout's
+  # vite-frontend/node_modules); an external copy counts only when
+  # FLMX_CHECK_TYPESCRIPT names it explicitly (with a NOTE). This
+  # job therefore installs the vite-frontend dependencies (typescript
+  # lands in this checkout's vite-frontend/node_modules) before
+  # running the selftests.
   gate-selftests:
     name: Gate Mutation Selftests (timeout budgets + private ranges)
     runs-on: ubuntu-latest
