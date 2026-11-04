@@ -210,17 +210,21 @@ func gistOpen(content []byte, password string) ([]byte, bool, error) {
 	if errors.Join(err1, err2, err3) != nil || len(nonce) != 12 {
 		return nil, true, errText("加密数据已损坏")
 	}
+	// RR4-F4-02：以下三处失败均为信封参数/形态不被接受（scrypt 自身
+	// 的合法性约束如「N 须为 2 的幂」不在上方数值帽内），与帽外参数
+	// 同归文档四分法的「不认识的加密格式」，不得把英文库错误原文
+	// 透传给管理员。解密面错误出口至此全集为中文 errText。
 	key, err := gistKey(password, salt, env.N, env.R, env.P)
 	if err != nil {
-		return nil, true, err
+		return nil, true, errText("不认识的加密格式")
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, true, err
+		return nil, true, errText("不认识的加密格式")
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, true, err
+		return nil, true, errText("不认识的加密格式")
 	}
 	plain, err := gcm.Open(nil, nonce, data, nil)
 	if err != nil {
