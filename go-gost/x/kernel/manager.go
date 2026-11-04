@@ -16,7 +16,21 @@ import (
 	"time"
 )
 
-const defaultBaseDir = "/etc/flux_agent/kernels"
+// defaultBaseDir is the script form's kernel root under the current
+// install layout. Legacy (pre-rename) installs keep their root via
+// the working-directory recognition in ResolveBaseDir instead of
+// this constant.
+const defaultBaseDir = "/etc/flmx_agent/kernels"
+
+// Install-layout directory names recognized by ResolveBaseDir's
+// script-form branch: the current generation and the legacy
+// pre-rename one (kept recognized until every legacy install has
+// been migrated by install.sh). x/kernel cannot import x/socket,
+// so the pair is spelled here too and both sides must agree.
+const (
+	scriptLayoutDirName       = "flmx_agent"
+	legacyScriptLayoutDirName = "flux_agent"
+)
 
 type instance struct {
 	req     ApplyRequest
@@ -94,8 +108,15 @@ func probeKernelContainer() bool {
 //     directory that also holds config.json, so kernel binaries,
 //     state.json and geodata persist across container rebuilds
 //     instead of dying with the container's writable layer.
-//  3. The script form's defaultBaseDir — its data directory,
-//     unchanged.
+//  3. In the script form, <working directory>/kernels when the
+//     working directory is a recognized install layout: the unit's
+//     WorkingDirectory is the install directory in both layout
+//     generations, so current installs root under /etc/flmx_agent
+//     and not-yet-migrated legacy installs keep their existing
+//     /etc/flux_agent root (kernel state stays continuous across a
+//     panel-driven in-place upgrade; install.sh's migration moves
+//     the whole directory, root included).
+//  4. defaultBaseDir — the current layout's root.
 func ResolveBaseDir() string {
 	dir := strings.TrimSpace(os.Getenv("FLMX_KERNEL_DIR"))
 	if dir == "" {
@@ -106,6 +127,11 @@ func ResolveBaseDir() string {
 	}
 	if detectKernelContainer() {
 		if wd, err := kernelWorkDir(); err == nil && filepath.IsAbs(wd) {
+			return filepath.Join(wd, "kernels")
+		}
+	} else if wd, err := kernelWorkDir(); err == nil && filepath.IsAbs(wd) {
+		switch filepath.Base(wd) {
+		case scriptLayoutDirName, legacyScriptLayoutDirName:
 			return filepath.Join(wd, "kernels")
 		}
 	}

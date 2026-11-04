@@ -17,11 +17,10 @@ import (
 // (batch 2); the two files do not overlap.
 //
 // FLMX notes vs upstream (flyx): the systemd unit is
-// flmx-tuning-qdisc.service (fork rename rule); the backup path stays
-// /etc/flux_agent/tuning-backup.json (legacy name, unchanged by
-// decision; in the container form the state root is the data
-// directory instead — see tuningStateDir); shape files live under
-// the engine directory next to it.
+// flmx-tuning-qdisc.service (fork rename rule); the backup path is
+// tuning-backup.json under the tuning state root (the install data
+// directory in both forms — see tuningStateDir); shape files live
+// under the engine directory next to it.
 
 func restoreTuneQueues(name string) error {
 	// D2S (PORT-REVIEW-L1-D2S): a replay script written by a pre-D2

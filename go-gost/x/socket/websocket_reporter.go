@@ -1806,29 +1806,85 @@ func detectServiceManagerWith(p serviceManagerProbe) (serviceManager, error) {
 	return "", fmt.Errorf("未检测到受支持的服务管理器（systemd 或 OpenRC），面板内升级不可用，请使用 install.sh 更新节点")
 }
 
-// serviceManagerCommands returns the stop/start/is-active shell commands
-// for the manager, spelled exactly as install.sh spells them.
+// agentServiceNameFor derives the init service name of an install
+// layout from its binary path: install.sh names the unit (and the
+// OpenRC init script) after the binary it installs, in both layout
+// generations — flmx_agent for current installs, flux_agent for
+// not-yet-migrated legacy installs. Commands for a layout must
+// address that layout's own service: a legacy node upgraded in
+// place by the panel still runs under the flux_agent unit until
+// install.sh migrates it. Paths outside a recognized layout fall
+// back to the current generation's name.
+func agentServiceNameFor(binaryPath string) string {
+	if name := filepath.Base(binaryPath); isAgentInstallName(name) {
+		return name
+	}
+	return agentInstallName
+}
+
+// resolveAgentBinaryPath locates the script-form install layout
+// this process belongs to, for the panel-driven upgrade/rollback
+// paths (they replace the binary in place and never move layouts):
+//
+//  1. The running executable itself, when it sits in a recognized
+//     layout (<name>/<name> with a current or legacy install
+//     name) — exact for both generations, migrated or not.
+//  2. The first recognized layout present on disk, current name
+//     first — covers launches through a copied/symlinked binary.
+//  3. The current generation's path as the default: new installs
+//     are flmx-only, and a missing binary there degrades to the
+//     same "nothing to back up" behavior the fixed path had.
+func resolveAgentBinaryPath() string {
+	if exe, err := uninstallBinaryPath(); err == nil {
+		if name := filepath.Base(exe); isAgentInstallName(name) && filepath.Base(filepath.Dir(exe)) == name {
+			return exe
+		}
+	}
+	for _, name := range []string{agentInstallName, legacyAgentInstallName} {
+		p := filepath.Join("/etc", name, name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return filepath.Join("/etc", agentInstallName, agentInstallName)
+}
+
+// serviceManagerCommands returns the stop/start/is-active shell
+// commands for the manager and the current-generation service,
+// spelled exactly as install.sh spells them.
 func serviceManagerCommands(manager serviceManager) (stop, start, active string, err error) {
+	return serviceManagerCommandsFor(manager, agentInstallName)
+}
+
+// serviceManagerCommandsFor is serviceManagerCommands for one
+// install layout's service name (see agentServiceNameFor).
+func serviceManagerCommandsFor(manager serviceManager, serviceName string) (stop, start, active string, err error) {
 	switch manager {
 	case serviceManagerSystemd:
-		return "systemctl stop flux_agent", "systemctl start flux_agent", "systemctl is-active --quiet flux_agent", nil
+		return "systemctl stop " + serviceName, "systemctl start " + serviceName, "systemctl is-active --quiet " + serviceName, nil
 	case serviceManagerOpenRC:
-		return "rc-service flux_agent stop", "rc-service flux_agent start", "rc-service flux_agent status >/dev/null 2>&1", nil
+		return "rc-service " + serviceName + " stop", "rc-service " + serviceName + " start", "rc-service " + serviceName + " status >/dev/null 2>&1", nil
 	default:
 		return "", "", "", fmt.Errorf("不支持的服务管理器: %q", string(manager))
 	}
 }
 
 // serviceManagerPIDCommand returns the shell command printing the
-// service's main PID (empty output or 0 when not running). The OpenRC
-// path follows install.sh's init script, which pins
-// pidfile="/run/${RC_SVCNAME}.pid".
+// current-generation service's main PID (empty output or 0 when not
+// running). The OpenRC path follows install.sh's init script, which
+// pins pidfile="/run/${RC_SVCNAME}.pid".
 func serviceManagerPIDCommand(manager serviceManager) (string, error) {
+	return serviceManagerPIDCommandFor(manager, agentInstallName)
+}
+
+// serviceManagerPIDCommandFor is serviceManagerPIDCommand for one
+// install layout's service name (see agentServiceNameFor).
+func serviceManagerPIDCommandFor(manager serviceManager, serviceName string) (string, error) {
 	switch manager {
 	case serviceManagerSystemd:
-		return "systemctl show -p MainPID --value flux_agent", nil
+		return "systemctl show -p MainPID --value " + serviceName, nil
 	case serviceManagerOpenRC:
-		return "cat /run/flux_agent.pid 2>/dev/null", nil
+		return "cat /run/" + serviceName + ".pid 2>/dev/null", nil
 	default:
 		return "", fmt.Errorf("不支持的服务管理器: %q", string(manager))
 	}
@@ -1848,14 +1904,14 @@ func agentHealthCheckFunctionFor(activeCmd, pidCmd string, sampleGapSec int) str
 		pidCmd, activeCmd, sampleGapSec, pidCmd, activeCmd)
 }
 
-// agentHealthCheckFunction resolves the manager's commands and renders
-// flmx_agent_health_ok with the production sampling gap.
-func agentHealthCheckFunction(manager serviceManager) (string, error) {
-	_, _, active, err := serviceManagerCommands(manager)
+// agentHealthCheckFunction resolves one install layout's commands
+// and renders flmx_agent_health_ok with the production sampling gap.
+func agentHealthCheckFunction(manager serviceManager, serviceName string) (string, error) {
+	_, _, active, err := serviceManagerCommandsFor(manager, serviceName)
 	if err != nil {
 		return "", err
 	}
-	pidCmd, err := serviceManagerPIDCommand(manager)
+	pidCmd, err := serviceManagerPIDCommandFor(manager, serviceName)
 	if err != nil {
 		return "", err
 	}
@@ -1864,8 +1920,9 @@ func agentHealthCheckFunction(manager serviceManager) (string, error) {
 
 // agentControlScriptCommand returns the detached launcher for a control
 // script. systemd runs it in a transient unit (systemd-run) so that
-// stopping flux_agent cannot kill the script via its own cgroup; OpenRC
-// has no cgroups, so a new session (setsid) provides the same escape.
+// stopping the agent service cannot kill the script via its own cgroup;
+// OpenRC has no cgroups, so a new session (setsid) provides the same
+// escape.
 func agentControlScriptCommand(manager serviceManager, script string) (string, []string, error) {
 	switch manager {
 	case serviceManagerSystemd:
@@ -1894,9 +1951,9 @@ func launchAgentControlScript(manager serviceManager, script string) error {
 // the service back (release-gate re-verification of R4-N2). Clear the
 // failed state before every scripted start. OpenRC has no equivalent
 // limiter, so its start command is used as-is.
-func scriptStartCommand(manager serviceManager, start string) string {
+func scriptStartCommand(manager serviceManager, serviceName, start string) string {
 	if manager == serviceManagerSystemd {
-		return "systemctl reset-failed flux_agent 2>/dev/null; " + start
+		return "systemctl reset-failed " + serviceName + " 2>/dev/null; " + start
 	}
 	return start
 }
@@ -1988,12 +2045,13 @@ func legacyGostCleanupSegment(ownAddr, legacyAddr string) string {
 // (A11-132-02). Progress is appended to agent-upgrade.log next to the
 // binary for post-mortem diagnosis.
 func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, backupPath string) (string, error) {
-	stop, start, _, err := serviceManagerCommands(manager)
+	serviceName := agentServiceNameFor(binaryPath)
+	stop, start, _, err := serviceManagerCommandsFor(manager, serviceName)
 	if err != nil {
 		return "", err
 	}
-	start = scriptStartCommand(manager, start)
-	healthFn, err := agentHealthCheckFunction(manager)
+	start = scriptStartCommand(manager, serviceName, start)
+	healthFn, err := agentHealthCheckFunction(manager, serviceName)
 	if err != nil {
 		return "", err
 	}
@@ -2033,7 +2091,7 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	// any failure before the mv leaves the new binary untouched,
 	// is logged by name, and 'rollback succeeded' stays reachable
 	// only past the staged swap.
-	rollbackTmpTemplate := filepath.Join(filepath.Dir(binaryPath), ".flux_agent.upgrade-rollback-XXXXXX")
+	rollbackTmpTemplate := filepath.Join(filepath.Dir(binaryPath), "."+serviceName+".upgrade-rollback-XXXXXX")
 	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then %s; sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
 		tmpPath, binaryPath, start, backupPath, stop, rollbackTmpTemplate, backupPath, backupPath, binaryPath, start, start, tmpPath, start)
 	return b.String(), nil
@@ -2042,17 +2100,18 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 // buildAgentRollbackScriptFor builds the manual rollback script with the
 // same init abstraction as the upgrade path.
 func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath string) (string, error) {
-	stop, start, _, err := serviceManagerCommands(manager)
+	serviceName := agentServiceNameFor(binaryPath)
+	stop, start, _, err := serviceManagerCommandsFor(manager, serviceName)
 	if err != nil {
 		return "", err
 	}
-	start = scriptStartCommand(manager, start)
-	healthFn, err := agentHealthCheckFunction(manager)
+	start = scriptStartCommand(manager, serviceName, start)
+	healthFn, err := agentHealthCheckFunction(manager, serviceName)
 	if err != nil {
 		return "", err
 	}
 	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
-	tmpTemplate := filepath.Join(filepath.Dir(binaryPath), ".flux_agent.rollback-XXXXXX")
+	tmpTemplate := filepath.Join(filepath.Dir(binaryPath), "."+serviceName+".rollback-XXXXXX")
 	// 判活与升级路径同口径（R4-N2 两次采样），避免 'rollback restart ok'
 	// 在 flap 窗口内误报。
 	// FRM3: the copy itself is guarded, same caliber as the F-RM-01
@@ -2122,7 +2181,7 @@ func backupCurrentAgentBinary(binaryPath, backupPath string) error {
 //
 // The panel upgrade path and the install.sh script update path both
 // replace the agent binary, but only the panel path maintains the
-// rollback backup (flux_agent.old): a script update replaces the
+// rollback backup (<binary>.old): a script update replaces the
 // binary and deletes its own .bak on success, so .old silently
 // becomes one generation staler than the rollback handler assumes
 // (panel upgrade A->B, script update B->C, panel rollback lands on
@@ -2814,7 +2873,14 @@ type upgradeStaging struct {
 // partial download across versions; uniqueness keeps any resume
 // inside the single operation that created the file).
 func newUpgradeStaging(dir string) (*upgradeStaging, error) {
-	tmpFile, err := os.CreateTemp(dir, ".flux_agent.upgrade-*")
+	// The staging prefix follows the layout generation of the
+	// directory it lands in (legacy installs keep the legacy
+	// prefix); anything unrecognized uses the current name.
+	name := filepath.Base(dir)
+	if !isAgentInstallName(name) {
+		name = agentInstallName
+	}
+	tmpFile, err := os.CreateTemp(dir, "."+name+".upgrade-*")
 	if err != nil {
 		return nil, err
 	}
@@ -2915,8 +2981,12 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	w.sendUpgradeProgress("downloading", 0, "开始下载升级包...")
 	fmt.Printf("📦 开始下载升级包: %s\n", sanitizeWebSocketURL(downloadURL))
 
-	// 下载新版本二进制
-	const binaryPath = "/etc/flux_agent/flux_agent"
+	// 下载新版本二进制。落点是本进程所属的脚本安装布局（现行
+	// /etc/flmx_agent/flmx_agent 或存量 /etc/flux_agent/flux_agent）：
+	// 面板升级只换二进制、不动布局，存量节点在 install.sh 迁移
+	// 前必须仍能被面板升级/回退，故按实际布局双认（见
+	// resolveAgentBinaryPath）。
+	binaryPath := resolveAgentBinaryPath()
 	// L2-05: 暂存路径必须每次升级唯一。此前固定为 binaryPath +
 	// ".new"，进程被杀/断电绕过清理后，下一次升级（不同版本资产）
 	// 会被 FileTransfer.init 无条件收养旧断点：旧前缀＋新后缀跨
@@ -3125,7 +3195,7 @@ func (w *WebSocketReporter) handleRollbackAgent(data interface{}) (map[string]in
 	if upgradeInContainer() {
 		return nil, fmt.Errorf("容器形态节点无法通过面板回退：请在面板的节点安装弹窗重新获取目标版本的 Docker/Compose 安装命令并在节点上重跑")
 	}
-	const binaryPath = "/etc/flux_agent/flux_agent"
+	binaryPath := resolveAgentBinaryPath()
 	backupPath := binaryPath + ".old"
 
 	// R6-05: the pre-flight decides whether the backup may be used

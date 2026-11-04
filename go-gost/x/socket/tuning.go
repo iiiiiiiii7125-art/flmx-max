@@ -190,21 +190,27 @@ func tuneGroupsFor(s tuneSizes) []tuneGroup {
 // applied params, tcpfit engine state — everything under
 // tuneStatePath derives from it). It anchors to the agent data
 // directory in both install forms, with the same rule as the kernel
-// root (R2-003/R2-020): the script form's data directory is
-// /etc/flux_agent; in the container form the working directory is
-// the mounted data directory (the entrypoint pins it there, next to
-// config.json). Before this, the container form wrote the whole
-// state tree into /etc/flux_agent inside the ephemeral container
-// layer, so a container rebuild silently dropped it. The resolution
-// runs once at package init; the working directory is fixed by then
-// (entrypoint cd / unit WorkingDirectory) and nothing chdirs later.
+// root (R2-003/R2-020): in the container form the working directory
+// is the mounted data directory (the entrypoint pins it there, next
+// to config.json); in the script form the unit's WorkingDirectory
+// is the install directory itself, so a working directory named
+// after either layout generation (flmx_agent, or flux_agent for
+// not-yet-migrated legacy installs) anchors the state there — the
+// legacy anchor keeps a panel-upgraded-in-place node's tuning
+// state continuous until install.sh migrates the directory. Before
+// this, the container form wrote the whole state tree into the
+// install path inside the ephemeral container layer, so a container
+// rebuild silently dropped it. The resolution runs once at package
+// init; the working directory is fixed by then (entrypoint cd /
+// unit WorkingDirectory) and nothing chdirs later. Anything
+// unrecognized falls back to the current install path.
 func tuningStateDir() string {
-	if InContainer() {
-		if wd, err := os.Getwd(); err == nil && filepath.IsAbs(wd) {
+	if wd, err := os.Getwd(); err == nil && filepath.IsAbs(wd) {
+		if InContainer() || isAgentInstallName(filepath.Base(wd)) {
 			return wd
 		}
 	}
-	return "/etc/flux_agent"
+	return "/etc/flmx_agent"
 }
 
 // Paths are variables so tests can use a temporary tree.

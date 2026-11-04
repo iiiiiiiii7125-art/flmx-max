@@ -20,8 +20,19 @@ import (
 // 绝不误删同机其他程序的文件。
 
 // agentInstallName 是 install.sh 落盘的二进制名与安装目录名
-// （/etc/flux_agent/flux_agent），是自卸载圈定范围的身份指纹。
-const agentInstallName = "flux_agent"
+// （/etc/flmx_agent/flmx_agent），是自卸载圈定范围的身份指纹。
+const agentInstallName = "flmx_agent"
+
+// legacyAgentInstallName 是改名前的二进制名与安装目录名
+// （/etc/flux_agent/flux_agent）。存量节点在经 install.sh 更新迁
+// 移到新名之前一直是这套布局，面板下发/宿主状态识别面必须双认：
+// 新名优先、旧名回退，识别集本轮只加不删。
+const legacyAgentInstallName = "flux_agent"
+
+// isAgentInstallName 报告 name 是否任一世代的 agent 安装名。
+func isAgentInstallName(name string) bool {
+	return name == agentInstallName || name == legacyAgentInstallName
+}
 
 // agentDataDirName 是容器镜像形态的数据目录名（Dockerfile 的
 // WORKDIR /etc/flmx_agent，entrypoint cd 于此、config.json 在此）。
@@ -46,7 +57,7 @@ var (
 	uninstallDetectManager = detectServiceManager
 	uninstallLaunchScript  = launchAgentControlScript
 	// 宿主调优文件清理与回执预检（R2F2-D01）：清理集与 install.sh
-	// 的 uninstall_flux_agent_host_cleanup 同文件集、同口径。
+	// 的 uninstall_flmx_agent_host_cleanup 同文件集、同口径。
 	uninstallHostTuningCleanup = cleanupHostTuningFiles
 	uninstallTuningPreflight   = assessUninstallTuning
 	uninstallLegacyFootprint   = legacyGostFootprintPresent
@@ -221,7 +232,7 @@ func hostTuningFileSet() []string {
 }
 
 // cleanupHostTuningFiles 删除宿主调优文件集，与 install.sh 的
-// uninstall_flux_agent_host_cleanup 同口径：qdisc unit 先
+// uninstall_flmx_agent_host_cleanup 同口径：qdisc unit 先
 // disable --now 再删文件并 daemon-reload（否则悬空启用项在下次
 // 开机仍会执行已删的 shape.sh）；legacy conf 在检测到旧式 gost
 // 足迹时跳过并点名披露（可能由同机另一安装持有，C4-F02 归属口
@@ -370,19 +381,21 @@ func (a uninstallTuningAssessment) warnings() []string {
 // 脚本经 launchAgentControlScript 脱离 agent 自身进程组/单元启动，
 // 停服务不会连脚本一起杀掉。
 //
-// 圈定校验（防误删）：二进制名必须是 flux_agent，且安装目录必须
-// 是与二进制同目录、目录名同为 flux_agent 的绝对路径（如
-// /etc/flux_agent）。/usr/local/bin 这类共享目录一律拒绝。
+// 圈定校验（防误删）：二进制名必须是任一世代的安装名（现行
+// flmx_agent 或存量 flux_agent），且安装目录必须是与二进制同目
+// 录、目录名与二进制名相同的绝对路径（如 /etc/flmx_agent、存量
+// /etc/flux_agent）。/usr/local/bin 这类共享目录一律拒绝。服务命
+// 令按该布局自己的服务名生成，存量未迁节点删的仍是它自己的服务。
 func buildAgentUninstallScript(manager serviceManager, binaryPath string) (string, error) {
 	name := filepath.Base(binaryPath)
-	if name != agentInstallName {
+	if !isAgentInstallName(name) {
 		return "", fmt.Errorf("无法识别的 agent 安装：%s", binaryPath)
 	}
 	dir := filepath.Dir(binaryPath)
-	if !filepath.IsAbs(dir) || filepath.Base(dir) != agentInstallName {
+	if !filepath.IsAbs(dir) || filepath.Base(dir) != name {
 		return "", fmt.Errorf("拒绝删除无法识别的目录：%s", dir)
 	}
-	stop, _, _, err := serviceManagerCommands(manager)
+	stop, _, _, err := serviceManagerCommandsFor(manager, name)
 	if err != nil {
 		return "", err
 	}
@@ -420,18 +433,18 @@ func wipeContainerDataDir(binaryPath string) error {
 // 含 secret、gost 配置、内核目录、状态文件）。
 //
 // 圈定校验：目标必须是绝对路径，且目录名为 flmx_agent（镜像布局
-// 的数据目录）或 flux_agent（脚本血统的同名数据目录）——两认的是
-// 数据目录的布局指纹。二进制目录与二进制名不作圈定条件：镜像布
-// 局下二进制在 /usr/local/bin 这类共享目录里，以它为锚必然误判
-// （且共享目录名不在认可集内，天然被拒）；数据目录才是容器删不
-// 掉自己时唯一能安全圈定的自有领地。
+// 的数据目录与现行脚本布局同名）或 flux_agent（改名前脚本血统的
+// 同名数据目录）——两认的是数据目录的布局指纹。二进制目录与二
+// 进制名不作圈定条件：镜像布局下二进制在 /usr/local/bin 这类共
+// 享目录里，以它为锚必然误判（且共享目录名不在认可集内，天然
+// 被拒）；数据目录才是容器删不掉自己时唯一能安全圈定的自有领地。
 func wipeDirForUninstall(dir, binaryPath string) error {
 	if !filepath.IsAbs(dir) {
 		return fmt.Errorf("拒绝清理无法识别的目录：%s", dir)
 	}
-	switch filepath.Base(dir) {
-	case agentDataDirName, agentInstallName:
-	default:
+	// agentDataDirName 与现行 agentInstallName 同为 flmx_agent，
+	// 连同存量 flux_agent 构成数据目录名的认可集。
+	if base := filepath.Base(dir); base != agentDataDirName && !isAgentInstallName(base) {
 		return fmt.Errorf("拒绝清理无法识别的目录：%s", dir)
 	}
 	if err := os.WriteFile(filepath.Join(dir, uninstallMarker), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600); err != nil {
