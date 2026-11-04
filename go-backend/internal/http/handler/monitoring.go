@@ -3,6 +3,7 @@ package handler
 import (
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -909,36 +910,76 @@ func (h *Handler) monitorServiceLatestResultsHandler(w http.ResponseWriter, r *h
 		return enabledSet == nil || enabledSet[monitorID]
 	}
 
-	// Try in-memory cache first (updated every 1s)
+	// RR4-F5-01：内存缓存只含「本进程已跑过」的监控——面板重启后
+	// 长间隔的启用监控长时间只有 DB 里有最新结果，旧实现只要缓存
+	// 非空就整体短路、这些项在总览里消失。改为：缓存覆盖全部启用
+	// 项时才纯走缓存（保持原性能意图）；有缺项时并入 DB 最新结果
+	// 按 monitorId 合并，同项取 Timestamp 更新者（同刻缓存优先）。
+	var cached []*model.ServiceMonitorResult
 	if h.healthCheck != nil {
-		cached := h.healthCheck.GetLatestCached()
-		if len(cached) > 0 {
-			filtered := make([]*model.ServiceMonitorResult, 0, len(cached))
-			for _, res := range cached {
-				if res != nil && resultVisible(res.MonitorID) {
-					filtered = append(filtered, res)
-				}
+		for _, res := range h.healthCheck.GetLatestCached() {
+			if res != nil && resultVisible(res.MonitorID) {
+				cached = append(cached, res)
 			}
-			if len(filtered) > 0 {
-				response.WriteJSON(w, response.OK(filtered))
-				return
+		}
+	}
+	if len(cached) > 0 && enabledSet != nil {
+		seen := make(map[int64]bool, len(cached))
+		for _, res := range cached {
+			seen[res.MonitorID] = true
+		}
+		complete := true
+		for id := range enabledSet {
+			if !seen[id] {
+				complete = false
+				break
 			}
+		}
+		if complete {
+			response.WriteJSON(w, response.OK(cached))
+			return
 		}
 	}
 
-	// Fallback to database
+	// Fallback to database（缓存为空、或缓存有缺项时补齐）
 	results, err := h.repo.GetLatestServiceMonitorResults()
 	if err != nil {
+		if len(cached) > 0 {
+			response.WriteJSON(w, response.OK(cached))
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	filteredResults := make([]model.ServiceMonitorResult, 0, len(results))
-	for _, res := range results {
-		if resultVisible(res.MonitorID) {
-			filteredResults = append(filteredResults, res)
+	if len(cached) == 0 {
+		filteredResults := make([]model.ServiceMonitorResult, 0, len(results))
+		for _, res := range results {
+			if resultVisible(res.MonitorID) {
+				filteredResults = append(filteredResults, res)
+			}
+		}
+		response.WriteJSON(w, response.OK(filteredResults))
+		return
+	}
+	merged := make(map[int64]*model.ServiceMonitorResult, len(cached))
+	for _, res := range cached {
+		merged[res.MonitorID] = res
+	}
+	for i := range results {
+		res := results[i]
+		if !resultVisible(res.MonitorID) {
+			continue
+		}
+		if cur, ok := merged[res.MonitorID]; !ok || res.Timestamp > cur.Timestamp {
+			merged[res.MonitorID] = &res
 		}
 	}
-	response.WriteJSON(w, response.OK(filteredResults))
+	out := make([]*model.ServiceMonitorResult, 0, len(merged))
+	for _, res := range merged {
+		out = append(out, res)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].MonitorID < out[j].MonitorID })
+	response.WriteJSON(w, response.OK(out))
 }
 
 func (h *Handler) monitorServiceLimitsHandler(w http.ResponseWriter, r *http.Request) {

@@ -50,6 +50,17 @@ func NewChecker(repo *repo.Repository, commander nodeCommander) *Checker {
 	}
 }
 
+// SeedLatestCachedForTesting 仅供测试：把一条最新结果直接写入内存
+// 缓存，复刻调度器已跑过该监控后的状态（生产路径由 runChecks 写）。
+func (c *Checker) SeedLatestCachedForTesting(result *model.ServiceMonitorResult) {
+	if c == nil || result == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.latestResults[result.MonitorID] = result
+}
+
 // GetLatestCached returns the in-memory latest results (updated every 1s).
 // Returns nil if no results are cached.
 func (c *Checker) GetLatestCached() []*model.ServiceMonitorResult {
