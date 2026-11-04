@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261104.05"
+SCRIPT_VERSION="20261104.06"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -925,7 +925,7 @@ setup_domain_proxy() {
   echo "🔍 检查域名解析..."
   local resolved_ip resolved_ips
   resolved_ips=$(getent hosts "$DOMAIN" | awk '{print $1}' || true)
-  resolved_ip=$(printf '%s\n' "$resolved_ips" | head -1)
+  resolved_ip=${resolved_ips%%$'\n'*}
   if [ -z "$resolved_ip" ]; then
     echo "⚠️  域名 $DOMAIN 未解析到任何 IP，请先配置 DNS 解析后再继续"
     read -p "仍要继续吗? (y/N): " _cont
@@ -942,7 +942,7 @@ setup_domain_proxy() {
     _public_ip=$(get_public_ip)
     if [[ "$_public_ip" == "服务器IP" ]]; then
       echo "ℹ️ 域名解析到: $resolved_ip（未能获取本机公网 IP，未能核对该解析是否指向本机，请自行确认）"
-    elif printf '%s\n' "$resolved_ips" | grep -qx "$_public_ip"; then
+    elif grep -qx "$_public_ip" <<< "$resolved_ips"; then
       echo "✅ 域名解析到: $resolved_ip（已核对：解析指向本机）"
     else
       echo "⚠️  域名 $DOMAIN 解析到 $resolved_ip，与本机公网 IP $_public_ip 不一致——解析未指向本机"
@@ -1275,7 +1275,17 @@ show_menu() {
 generate_random() {
   # F-120: 16 字符（约 95 bit）对 JWT_SECRET/PG 口令余量偏薄，提升到 32
   # 字符（约 190 bit）。字符集不变（URL 安全，进 DATABASE_URL 无需转义）。
-  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c32
+  # INT-01: 不再写 `tr -dc … </dev/urandom | head -c32`——head 收满 32
+  # 字节先退、tr 向已关闭的管道继续写吃 SIGPIPE，pipefail 上下文里命令
+  # 替换赋值返回 141 被 set -e 带走（套件 #162 确定性复现）。改为定量
+  # 取字节：head 只当生产者、tr 读到 EOF 才退出，全程无早退读者；过滤
+  # 后不足 32 字符则循环补取。
+  local out="" chunk
+  while [ "${#out}" -lt 32 ]; do
+    chunk=$(head -c 64 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')
+    out="${out}${chunk}"
+  done
+  printf '%s' "${out:0:32}"
 }
 
 upsert_env_var() {
@@ -2228,10 +2238,13 @@ validate_panel_compose_content() {
   if ! services=$(FLMX_VERSION="$version" FLUX_VERSION="$version" run_panel_compose -f "$file" config --services 2>/dev/null); then
     return 1
   fi
-  if ! printf '%s\n' "$services" | grep -qx "backend"; then
+  # INT-01: 服务名比对走 herestring，不用管道 grep——pipefail 下
+  # grep -qx 匹配即退会让 printf 吃 SIGPIPE 把命中翻成未命中（同
+  # panel_compose_references_own_image 的纪律，套件 #155 实证）。
+  if ! grep -qx "backend" <<< "$services"; then
     return 1
   fi
-  if ! printf '%s\n' "$services" | grep -qx "frontend"; then
+  if ! grep -qx "frontend" <<< "$services"; then
     return 1
   fi
 }
