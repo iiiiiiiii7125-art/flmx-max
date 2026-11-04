@@ -8,18 +8,21 @@ import (
 	"sync"
 )
 
-// R5-B6 E-001/D1-010: agent 侧 seq 与先发送后清零。
+// 遗留（v1 上报 seq 面，已被 spool v2 取代，勿接新逻辑）：本文件是
+// 早期「先发送后清零」上报的持久化序号机制。生产防漏计现由 spool
+// v2 承担（traffic_spool.go：先落盘、回执核对后才确认未报流量），
+// seq 状态在生产中无消费者——nextSeq/loadSeq/TrafficReportBatch 仅
+// 测试引用，seq 文件生产中从不被写入或读取。主程序 SetSeqFilePath
+// 接线仍在（go-gost/main.go 每启动调用），死的是状态消费端；本族
+// 整体删除前保留此登记，注释按现状叙述、勿再按活机制引用。
 //
-// E-001: 每次上报携带持久化单调递增 seq（重启不回退，落盘）。
-// D1-010: 上报成功后再清零本地计数器；失败则保留并重试。
-//
-// F-005: seq 文件必须落在 agent 配置目录（与 config.json 同级的持久
+// 历史口径（R5-B6 E-001/D1-010/F-005，当时定案）：每次上报携带持久
+// 化单调递增 seq（重启不回退，落盘），上报成功后再清零本地计数器；
+// F-005 要求 seq 文件落在 agent 配置目录（与 config.json 同级的持久
 // 目录），不能放 os.TempDir()——节点 /tmp 常为 tmpfs 或被 tmpfiles
-// 清理，整机重启后 seq 归零，面板按 seq<=last_seq 判重放丢弃却仍回
-// ok，agent 收到成功后清零计数，流量被静默漏计（最坏数周）。
-// 主程序启动时经 SetSeqFilePath 注入持久路径；未注入时回退 TempDir
-// 并打警告。读取走多文件双读（持久文件 → TempDir 新名 → TempDir
-// 改名前旧名）取最大值：存量节点平滑迁移，且 seq 绝不回退。
+// 清理，整机重启后 seq 归零会被面板按重放静默丢弃、流量漏计。读取
+// 走多文件双读（持久文件 → TempDir 新名 → TempDir 改名前旧名）取
+// 最大值。
 
 var (
 	seqMu sync.Mutex

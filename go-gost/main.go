@@ -186,9 +186,10 @@ func main() {
 	distro := socket.DetectDistro()
 	fullVersion := fmt.Sprintf("%s (%s/%s)", version, distro, runtime.GOARCH)
 	service.SetHTTPReportURL(config.Addr, config.Secret)
-	// F-005: 流量上报 seq 落盘到 config.json 同目录（与 gost.json、
-	// 内核 state.json 同级的持久目录），不再放 os.TempDir()——/tmp
-	// 被清空后 seq 归零会被面板按重放静默丢弃、流量漏计。
+	// 遗留接线（F-005 历史口径）：seq 路径仍按 config.json 同目录注入，
+	// 但 seq 状态的生产消费端已死——生产防漏计由下方 spool v2 承担，
+	// seq 文件生产中从不被写入或读取；保留接线仅因该族尚未整体删除
+	// （见 x/service/traffic_seq.go 文件头登记）。
 	if abs, err := filepath.Abs("config.json"); err == nil {
 		dir := filepath.Dir(abs)
 		service.SetSeqFilePath(filepath.Join(dir, "flmx_agent_seq.json"))
