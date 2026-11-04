@@ -336,9 +336,6 @@ func Normalize(kernelType string, in *Inbound) error {
 	if in.AcceptProxyProtocol && kernelType != TypeXray {
 		return errors.New("获取真实 IP（PROXY protocol）目前只支持 Xray 内核")
 	}
-	if in.ConnIdleSeconds < UnlimitedConnIdleSentinel || in.ConnIdleSeconds > MaxConnIdleSeconds {
-		return fmt.Errorf("空闲超时须为 -1（不限）或 0（默认 %d 秒）或 1-%d 秒的整数", DefaultConnIdleSeconds, MaxConnIdleSeconds)
-	}
 	if err := checkConnIdleKernel(kernelType, in.ConnIdleSeconds); err != nil {
 		return err
 	}
@@ -375,9 +372,17 @@ func Normalize(kernelType string, in *Inbound) error {
 
 // --- Settings 级条件谓词：创建面 Normalize 与下发复检共用单一真源 ---
 
-// checkConnIdleKernel 是空闲超时的内核条件：非 0 值仅 Xray 支持，其他
-// 内核没有 Xray 式的空闲超时（文案按中性表述，不以某一内核的机理为主语）。
+// checkConnIdleKernel 是空闲超时的合法性谓词：取值范围（-1 不限 /
+// 0 默认 / 1-86400）与内核归属（非 0 值仅 Xray 支持，其他内核没有
+// Xray 式的空闲超时；文案按中性表述，不以某一内核的机理为主语）
+// 同点判定。范围格必须住在本谓词内、不得只留在 Normalize 本体——
+// 创建面 Normalize 与下发复检 CheckSettingsConditions 共用本谓词，
+// 范围格缺位时直写 DB 的越界存量值（999999、-5）会在下发面逐字
+// 渲染进 Xray policy（RR4-F2-02）。
 func checkConnIdleKernel(kernelType string, seconds int) error {
+	if seconds < UnlimitedConnIdleSentinel || seconds > MaxConnIdleSeconds {
+		return fmt.Errorf("空闲超时须为 -1（不限）或 0（默认 %d 秒）或 1-%d 秒的整数", DefaultConnIdleSeconds, MaxConnIdleSeconds)
+	}
 	if seconds != 0 && kernelType != TypeXray {
 		return errors.New("空闲超时（connIdle）仅支持 Xray 内核：其他内核没有 Xray 式的空闲超时，请先切到 Xray 内核")
 	}
