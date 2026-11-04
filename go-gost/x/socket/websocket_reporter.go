@@ -3673,6 +3673,11 @@ func effectivePingIP(a netip.Addr) (netip.Addr, bool) {
 // 翻译内嵌同判）。这是全仓一切出站面的最低底线：私网/回环/CGNAT/
 // 保留/组播/链路本地均不在此集——需要更严口径的面用
 // tcpPingLiteralTargetDenied（HardDenyOrLoopback 等价整集）。
+// 服务监控执行端的硬拒复检（R4X-008）即由本谓词承担：
+// handleServiceMonitorCheck（TCP 腿）与 icmpPing 对字面量目标与主机名
+// 解析落点统一走 resolvedAddrDenied(ip, hardDeniedIP)，没有独立的
+// 字面量专用助手——勿按「只判字面量」的窄口径另行接线，会漏掉主机名
+// 解析落点复检。
 func hardDeniedIP(a netip.Addr) bool {
 	if !a.IsValid() {
 		return true
@@ -3687,18 +3692,6 @@ func hardDeniedIP(a netip.Addr) bool {
 		}
 	}
 	return tcpPingLinkLocalV4.Contains(eff) || eff.IsUnspecified()
-}
-
-// serviceMonitorTargetHardDenied 是服务监控执行端的字面量硬拒复检
-// （R4X-008）：host 为字面 IP 且命中硬拒层时返回 true；主机名返回
-// false（解析落点的硬拒复检在拨号/发包路径对解析结果另行执行，
-// 见 handleServiceMonitorCheck 与 icmpPing 的调用点）。
-func serviceMonitorTargetHardDenied(host string) bool {
-	a, err := netip.ParseAddr(strings.TrimSpace(host))
-	if err != nil {
-		return false
-	}
-	return hardDeniedIP(a)
 }
 
 // resolvedAddrDenied 是主机名解析落点的复检谓词（R4X-020）：解析

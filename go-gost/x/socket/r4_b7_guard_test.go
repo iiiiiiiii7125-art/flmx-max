@@ -3,6 +3,7 @@ package socket
 import (
 	"context"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -15,11 +16,13 @@ import (
 //   - Traceroute 发送前字面量复检（与 TcpPing 同口径整集）。
 //   - 主机名目标在 agent 解析后以同口径复检解析落点（TcpPing 家族）。
 //
-// 红态（修复前）：serviceMonitorTargetHardDenied 不存在（编译红）；
+// 红态（修复前）：硬拒复检未接线（编译红）；
 // handleServiceMonitorCheck 对元数据目标返回底层 dial 错误而非政策
 // 拒绝；handleTraceroute 对 127.0.0.1 真实追踪成功；handleTcpPing
 // 对 localhost（解析到回环）真实拨号成功。
 
+// 直钉两腿的实际判定谓词 hardDeniedIP（字面量与解析落点均经
+// resolvedAddrDenied(ip, hardDeniedIP) 过检，无独立的字面量助手）。
 func TestR4B7ServiceMonitorHardDenySet(t *testing.T) {
 	deny := []string{
 		"169.254.169.254", // 云元数据
@@ -33,8 +36,12 @@ func TestR4B7ServiceMonitorHardDenySet(t *testing.T) {
 		"::ffff:169.254.169.254", // mapped 元数据
 	}
 	for _, h := range deny {
-		if !serviceMonitorTargetHardDenied(h) {
-			t.Errorf("serviceMonitorTargetHardDenied(%q) = false, want true", h)
+		a, err := netip.ParseAddr(h)
+		if err != nil {
+			t.Fatalf("ParseAddr(%q): %v", h, err)
+		}
+		if !hardDeniedIP(a) {
+			t.Errorf("hardDeniedIP(%q) = false, want true", h)
 		}
 	}
 	allow := []string{
@@ -46,12 +53,22 @@ func TestR4B7ServiceMonitorHardDenySet(t *testing.T) {
 		"224.0.0.1",                                    // 组播（同上）
 		"240.0.0.1",                                    // 保留（同上）
 		"8.8.8.8", "1.1.1.1", "fd00::1", "2001:db8::1", // 公网/ULA
-		"example.com", // 主机名不在字面量复检范围
-		"",            // 空由调用方格式校验负责
 	}
 	for _, h := range allow {
-		if serviceMonitorTargetHardDenied(h) {
-			t.Errorf("serviceMonitorTargetHardDenied(%q) = true, want false (防过修)", h)
+		a, err := netip.ParseAddr(h)
+		if err != nil {
+			t.Fatalf("ParseAddr(%q): %v", h, err)
+		}
+		if hardDeniedIP(a) {
+			t.Errorf("hardDeniedIP(%q) = true, want false (防过修)", h)
+		}
+	}
+	// 主机名与空串不是字面 IP：不进字面量过检（空由调用方格式校验
+	// 负责；主机名的解析落点由 resolvedAddrDenied 逐 IP 复检，行为
+	// 覆盖见 TestR4B7HandleServiceMonitorCheckHardDeny 与 LAN 用例）。
+	for _, h := range []string{"example.com", ""} {
+		if _, err := netip.ParseAddr(h); err == nil {
+			t.Errorf("ParseAddr(%q) unexpectedly succeeded; literal-check scope changed", h)
 		}
 	}
 }
