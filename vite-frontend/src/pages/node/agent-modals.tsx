@@ -39,7 +39,7 @@ const INSTALL_MODE_OPTIONS: { key: NodeInstallMode; label: string }[] = [
 
 const INSTALL_MODE_DESCRIPTIONS: Record<NodeInstallMode, string> = {
   script:
-    "在节点服务器上下载安装脚本并以系统服务（systemd / OpenRC）方式安装 agent，配置与数据位于 /etc/flux_agent。",
+    "在节点服务器上下载安装脚本并以系统服务（systemd / OpenRC）方式安装 agent，配置与数据位于 /etc/flmx_agent。",
   docker:
     "节点服务器需已安装 Docker。命令把节点配置写入宿主机数据目录下的 config.json（默认 /etc/flmx_agent/config.json，多面板共存实例为 /etc/flmx_agent-<实例键>/config.json，权限 600），并以 host 网络 + NET_ADMIN 能力启动容器（默认名 flmx-agent，实例为 flmx-agent-<实例键>）；重复执行会重建该容器（升级/重装同理）。容器日志用 docker logs <容器名> 查看（容器名以命令本身为准）。",
   "docker-compose":
@@ -158,7 +158,7 @@ export function InstallCommandModal({
               已启动，不代表已连上面板。请回到节点列表确认该节点显示为
               <b>在线</b>；若未上线，在节点服务器执行{" "}
               {installMode === "script" ? (
-                <span className="font-mono">journalctl -u flux_agent -n 100</span>
+                <span className="font-mono">journalctl -u flmx_agent -n 100</span>
               ) : (
                 <span className="font-mono">
                   docker logs flmx-agent（多面板共存实例为 flmx-agent-&lt;实例键&gt;）

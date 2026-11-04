@@ -76,7 +76,6 @@ for (const cand of [
     dirname(fileURLToPath(import.meta.url)),
     "../vite-frontend/node_modules/typescript",
   ),
-  "/home/hatch/workspace/flvx-max/vite-frontend/node_modules/typescript",
 ]) {
   try {
     ts = require(cand);
@@ -85,8 +84,20 @@ for (const cand of [
     // try next candidate
   }
 }
+// R4-C6-04 同族残差（集成复扫发现）：本脚本与 timeout-fe-extract.mjs
+// 不在 FX-D 原 10 文件集内，此前仍带写死的主检出回退路径——工作树
+// 未装依赖时会静默绑定主检出的 TS 版本。现与同族同口径：只许自当
+// 前工作树解析；外部副本须 FLMX_CHECK_TYPESCRIPT 显式指向并点名。
+if (!ts && process.env.FLMX_CHECK_TYPESCRIPT) {
+  ts = require(process.env.FLMX_CHECK_TYPESCRIPT);
+  console.log(
+    `NOTE  typescript 由 FLMX_CHECK_TYPESCRIPT 显式指向工作树外副本：${process.env.FLMX_CHECK_TYPESCRIPT}（v${ts.version}）`,
+  );
+}
 if (!ts) {
-  console.error("FAIL: typescript 不可解析，C3/C4 的 AST 提取无法执行");
+  console.error(
+    "FAIL: typescript 不可自当前工作树解析，C3/C4 的 AST 提取无法执行——先在 vite-frontend 装依赖，或以 FLMX_CHECK_TYPESCRIPT=<typescript 路径> 显式指向外部副本",
+  );
   process.exit(2);
 }
 

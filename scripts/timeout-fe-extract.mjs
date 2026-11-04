@@ -98,7 +98,6 @@ let ts = null;
 for (const cand of [
   join(root, "vite-frontend/node_modules/typescript"),
   join(here, "../vite-frontend/node_modules/typescript"),
-  "/home/hatch/workspace/flvx-max/vite-frontend/node_modules/typescript",
 ]) {
   try {
     ts = require(cand);
@@ -107,8 +106,19 @@ for (const cand of [
     // try next candidate
   }
 }
+// R4-C6-04 同族残差（集成复扫发现）：与 check-contract-fields.mjs
+// 同口径——只许自当前工作树解析，外部副本须 FLMX_CHECK_TYPESCRIPT
+// 显式指向并点名，不再静默回退写死的主检出路径。
+if (!ts && process.env.FLMX_CHECK_TYPESCRIPT) {
+  ts = require(process.env.FLMX_CHECK_TYPESCRIPT);
+  console.log(
+    `NOTE  typescript 由 FLMX_CHECK_TYPESCRIPT 显式指向工作树外副本：${process.env.FLMX_CHECK_TYPESCRIPT}（v${ts.version}）`,
+  );
+}
 if (!ts) {
-  console.error("typescript not resolvable from any known location");
+  console.error(
+    "FAIL: typescript not resolvable from the current worktree — install vite-frontend dependencies, or point FLMX_CHECK_TYPESCRIPT=<typescript path> at an external copy",
+  );
   process.exit(2);
 }
 
