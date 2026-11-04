@@ -241,7 +241,7 @@ interface BackupExport {
 ## Client Helper Class
 
 ```typescript
-class FlvxClient {
+class FlmxClient {
   private baseUrl: string;
   private username: string;
   private password: string;

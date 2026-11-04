@@ -93,14 +93,14 @@ import os
 import requests
 from typing import Optional, Any, Dict, List
 
-class FlvxError(Exception):
+class FlmxError(Exception):
     """FLMX API Error"""
     def __init__(self, code: int, message: str):
         self.code = code
         self.message = message
         super().__init__(message)
 
-class FlvxClient:
+class FlmxClient:
     """FLMX API Client with auto-login"""
     
     def __init__(
@@ -128,7 +128,7 @@ class FlvxClient:
         result = resp.json()
         
         if result["code"] != 0:
-            raise FlvxError(result["code"], result["msg"])
+            raise FlmxError(result["code"], result["msg"])
         
         self.token = result["data"]["token"]
     
@@ -159,7 +159,7 @@ class FlvxClient:
             self.token = None
             return self.request(endpoint, data)
         
-        raise FlvxError(result["code"], result["msg"])
+        raise FlmxError(result["code"], result["msg"])
     
     # Convenience methods
     
@@ -209,7 +209,7 @@ class FlvxClient:
 
 # Usage example
 if __name__ == "__main__":
-    client = FlvxClient()
+    client = FlmxClient()
     
     # Get package info
     pkg = client.get_package()
@@ -238,10 +238,10 @@ interface APIResponse<T = unknown> {
   ts: number;
 }
 
-class FlvxError extends Error {
+class FlmxError extends Error {
   constructor(public code: number, message: string) {
     super(message);
-    this.name = "FlvxError";
+    this.name = "FlmxError";
   }
 }
 
@@ -273,7 +273,7 @@ interface Forward {
   out_flow: number;
 }
 
-class FlvxClient {
+class FlmxClient {
   private baseUrl: string;
   private username: string;
   private password: string;
@@ -305,7 +305,7 @@ class FlvxClient {
 
     const result: APIResponse<{ token: string }> = await res.json();
     if (result.code !== 0) {
-      throw new FlvxError(result.code, result.msg);
+      throw new FlmxError(result.code, result.msg);
     }
 
     this.token = result.data!.token;
@@ -337,7 +337,7 @@ class FlvxClient {
       return this.request<T>(endpoint, data);
     }
 
-    throw new FlvxError(result.code, result.msg);
+    throw new FlmxError(result.code, result.msg);
   }
 
   // Convenience methods
@@ -387,11 +387,11 @@ class FlvxClient {
   }
 }
 
-export { FlvxClient, FlvxError };
+export { FlmxClient, FlmxError };
 
 // Usage
 async function main() {
-  const client = new FlvxClient();
+  const client = new FlmxClient();
 
   // Get package info
   const pkg = await client.getPackage();
@@ -449,12 +449,12 @@ type Response struct {
 	TS   int64           `json:"ts"`
 }
 
-type FlvxError struct {
+type FlmxError struct {
 	Code    int
 	Message string
 }
 
-func (e *FlvxError) Error() string {
+func (e *FlmxError) Error() string {
 	return fmt.Sprintf("FLMX error %d: %s", e.Code, e.Message)
 }
 
@@ -485,7 +485,7 @@ func (c *Client) Login() error {
 	}
 	
 	if result.Code != 0 {
-		return &FlvxError{Code: result.Code, Message: result.Msg}
+		return &FlmxError{Code: result.Code, Message: result.Msg}
 	}
 	
 	c.Token = result.Data.Token
@@ -547,7 +547,7 @@ func (c *Client) ListNodes() ([]map[string]interface{}, error) {
 	}
 	
 	if result.Code != 0 {
-		return nil, &FlvxError{Code: result.Code, Message: "failed to list nodes"}
+		return nil, &FlmxError{Code: result.Code, Message: "failed to list nodes"}
 	}
 	
 	return result.Data.List, nil
@@ -572,7 +572,7 @@ func (c *Client) CreateForward(name string, tunnelID int, remoteAddr string) (ma
 	}
 	
 	if result.Code != 0 {
-		return nil, &FlvxError{Code: result.Code, Message: result.Msg}
+		return nil, &FlmxError{Code: result.Code, Message: result.Msg}
 	}
 	
 	return result.Data, nil
