@@ -1517,11 +1517,13 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 // 与脚本形态并列的可选安装方式：agent 镜像由发版流水线随面板镜像
 // 一同构建发布（flmx-agent），安装命令把与脚本形态同格式的
 // config.json 写到我方自有数据目录后，以 host 网络 + NET_ADMIN
-// 拉起容器。全部资源走自有命名（容器 flmx-agent、数据目录
-// /etc/flmx_agent、Compose 落位 /opt/docker/flmx-agent），与脚本
-// 形态的 legacy 落位（/etc/flux_agent、flux_agent 服务）零共用：
-// 同一台机器可同时跑脚本装的 agent、其他面板的 agent 与容器装的
-// agent，互不接管、互不误删。
+// 拉起容器。资源命名：容器 flmx-agent、数据目录 /etc/flmx_agent、
+// Compose 落位 /opt/docker/flmx-agent。与脚本形态的关系分两代：
+// 对其 legacy 落位（/etc/flux_agent、flux_agent 服务）零共用；其
+// 现行落位自全量改名后同以 /etc/flmx_agent 为安装目录基名（服务
+// 名 flmx_agent），数据目录基名与本形态重合，两形态靠容器与系统
+// 服务的运行面区分（脚本形态的存量迁移与双识别口径见 install.sh）。
+// 其他面板的 agent 与本面板各形态仍互不接管、互不误删。
 //
 // 多面板同机时再进一步：本面板的实例键（环境变量 FLMX_INSTANCE，
 // 由面板安装脚本写入后端运行环境）非空时，容器名、数据目录与
@@ -1627,7 +1629,7 @@ func agentImageRef(version string) string {
 }
 
 // agentConfigWriteStep 生成把 config.json 写入宿主机数据目录的命令
-// 段：格式与 install.sh write_flux_agent_config 的默认形态一致
+// 段：格式与 install.sh write_flmx_agent_config 的默认形态一致
 // （addr/secret 两字段），umask 077 + chmod 600 保证 secret 不经
 // 宽松权限落盘。addr 在 handler 侧已过格式校验、secret 为库内
 // 取值，与脚本形态同一插值口径。
