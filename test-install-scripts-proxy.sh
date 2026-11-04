@@ -7111,6 +7111,12 @@ EOF
       inspect)
         if [[ "$2" == "-f" ]]; then
           local fmt="$3" name="$4"
+          # RR4-F7-01 夹具硬化：真实 docker inspect 对已删/不存在容
+          # 器必失败——旧夹具不校验存在性、删后仍返回 Mounts/
+          # Networks，正好掩盖改名流「先删后钉」的顺序缺陷。现与
+          # 无 -f 分支同口径：容器不在册即失败。资源名经 FIXTURE_*
+          # 参数化（缺省＝旧缺省名），供自定义资源名用例改值。
+          [[ -e "$FIXTURE_EXIST/$name" ]] || return 1
           case "$fmt" in
             *Health.Status*)
               if [[ "$name" == "flmx-panel-backend" && -n "${FIXTURE_BACKEND_UNHEALTHY:-}" ]]; then
@@ -7121,12 +7127,12 @@ EOF
               ;;
             *Mounts*)
               case "$fmt" in
-                *"/app/data"*) printf 'sqlite_data' ;;
-                *"/var/lib/postgresql/data"*) printf 'postgres_data' ;;
+                *"/app/data"*) printf '%s' "${FIXTURE_SQLITE_VOLUME:-sqlite_data}" ;;
+                *"/var/lib/postgresql/data"*) printf '%s' "${FIXTURE_POSTGRES_VOLUME:-postgres_data}" ;;
               esac
               ;;
             *NetworkSettings.Networks*)
-              printf 'gost-network'
+              printf '%s' "${FIXTURE_NETWORK:-gost-network}"
               ;;
             *)
               printf '\n'
@@ -7212,6 +7218,30 @@ test_panel_update_renames_legacy_identity() (
   VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
   update_panel >"$dir2/update.log" 2>&1 || fail "RN-1: update of a keyless legacy deployment must succeed"
   assert_renamed_env "$dir2"
+)
+
+# RR4-F7-01: 自定义卷/网络名的无键存量改名——缺失的卷/网络键必须
+# 钉为从尚存旧容器实读到的真实名（mydata_vol/mypg_vol/mynet），而
+# 不是模板/回退名。缺陷形态（钉键排在停删之后＋夹具 inspect 不校
+# 验存在性）下 inspect 恒失败：SQLite 卷与网络被钉回退名、PG 卷键
+# 根本不钉，本例必红；顺序修复＋夹具硬化后全绿。
+test_panel_update_rename_pins_custom_resource_names() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir
+  dir=$(mktemp -d)
+  setup_rename_update_fixture "$dir" keyless
+  FIXTURE_SQLITE_VOLUME="mydata_vol"
+  FIXTURE_POSTGRES_VOLUME="mypg_vol"
+  FIXTURE_NETWORK="mynet"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir/update.log" 2>&1 || fail "RR4-F7-01: update of a keyless deployment with custom resource names must succeed"
+  grep -q '^PANEL_BACKEND_CONTAINER=flmx-panel-backend$' "$dir/.env" || fail "RR4-F7-01: backend identity key must still be renamed in .env"
+  grep -q '^FLMX_SQLITE_VOLUME=mydata_vol$' "$dir/.env" || fail "RR4-F7-01: a missing sqlite volume key must be pinned to the volume read from the live legacy container, not the fallback"
+  grep -q '^FLMX_POSTGRES_VOLUME=mypg_vol$' "$dir/.env" || fail "RR4-F7-01: a missing postgres volume key must be pinned to the volume read from the live legacy container, not left unpinned"
+  grep -q '^FLMX_NETWORK=mynet$' "$dir/.env" || fail "RR4-F7-01: a missing network key must be pinned to the network read from the live legacy container, not the fallback"
+  grep -Fxq 'flux-panel-backend' "$dir/rm.log" || fail "RR4-F7-01: the legacy backend container must still be removed during the rename"
 )
 
 # RN-1: 改名后健康检查失败的回滚路径——新名后端恒 unhealthy 时更
@@ -7301,6 +7331,175 @@ EOF
   run_password_scenario "flmx_panel_change_me" 1
   run_password_scenario "flux_panel_change_me" 1
   run_password_scenario "a-real-password-123" 0
+)
+
+# RR4-F7-03/F7-04: 迁移缺键命名分流＋失败回滚清理。有状态 docker
+# 桩以存在性目录承接容器/卷的生灭（compose up 建容器与 PG 卷、
+# down 只删容器、volume inspect/rm 按在册与否作答）：
+# 第一幕（全新迁移）：.env 缺 POSTGRES_DB/USER 键、无任何 PG 卷、
+# 哨兵口令触发重生成；pgloader 失败回滚必须清掉本次新建的 PG 容
+# 器与卷、.env 逐字恢复——不清则卷里固化本次随机口令、.env 回到
+# 哨兵，重试必吃 28P01。清旗重试必须成功且新库名走 flmx_panel
+# （F7-03 全新分流，不把新库生为旧名）。
+# 第二幕（半迁移存量）：PG 卷运行前已存在（已按旧名初始化），回
+# 滚只清本次新建的 PG 容器、卷必须保留且不得过 docker volume rm；
+# 重试成功且库名保持 flux_panel 与既有卷对齐（F7-03 存量分流）。
+test_panel_migrate_volume_split_and_rollback_cleanup() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  unset PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_DEPLOY_DIR FLMX_INSTANCE
+  check_docker() { DOCKER_CMD="fixture_migrate_compose"; return 0; }
+  sleep() { :; }
+
+  fixture_migrate_compose() {
+    local svc name
+    case "$1" in
+      down)
+        rm -f "$FIXTURE_STATE/containers"/* 2>/dev/null || true
+        return 0
+        ;;
+      up)
+        shift
+        for svc in "$@"; do
+          case "$svc" in
+            -d) ;;
+            postgres)
+              name=$(get_env_var PANEL_POSTGRES_CONTAINER || true)
+              touch "$FIXTURE_STATE/containers/${name:-flmx-panel-postgres}"
+              name=$(get_env_var FLMX_POSTGRES_VOLUME || true)
+              touch "$FIXTURE_STATE/volumes/${name:-flmx-postgres-data}"
+              ;;
+            backend)
+              name=$(get_env_var PANEL_BACKEND_CONTAINER || true)
+              touch "$FIXTURE_STATE/containers/${name:-flmx-panel-backend}"
+              ;;
+            frontend)
+              name=$(get_env_var PANEL_FRONTEND_CONTAINER || true)
+              touch "$FIXTURE_STATE/containers/${name:-flmx-panel-frontend}"
+              ;;
+          esac
+        done
+        return 0
+        ;;
+    esac
+    return 0
+  }
+  docker() {
+    case "$1" in
+      ps)
+        ls "$FIXTURE_STATE/containers" 2>/dev/null || true
+        return 0
+        ;;
+      inspect)
+        if [[ "$2" == "-f" ]]; then
+          case "$3" in
+            *Health.Status*) printf 'healthy\n' ;;
+            *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:v-test" ;;
+          esac
+          return 0
+        fi
+        [[ -e "$FIXTURE_STATE/containers/$2" ]]
+        return
+        ;;
+      stop)
+        return 0
+        ;;
+      rm)
+        printf '%s\n' "$2" >> "$FIXTURE_STATE/rm.log"
+        rm -f "$FIXTURE_STATE/containers/$2"
+        return 0
+        ;;
+      volume)
+        case "$2" in
+          inspect) [[ -e "$FIXTURE_STATE/volumes/$3" ]]; return ;;
+          rm)
+            printf '%s\n' "$3" >> "$FIXTURE_STATE/volrm.log"
+            rm -f "$FIXTURE_STATE/volumes/$3"
+            return 0
+            ;;
+        esac
+        return 0
+        ;;
+      run)
+        case "$*" in
+          *pgloader*)
+            if [[ -f "$FIXTURE_STATE/pgloader-fail" ]]; then
+              return 1
+            fi
+            return 0
+            ;;
+          *) return 0 ;;
+        esac
+        ;;
+    esac
+    return 0
+  }
+
+  setup_migrate_scenario() {
+    local work="$1" password="$2" prevolume="$3"
+    FIXTURE_STATE="$work/state"
+    mkdir -p "$FIXTURE_STATE/containers" "$FIXTURE_STATE/volumes"
+    : > "$FIXTURE_STATE/rm.log"
+    : > "$FIXTURE_STATE/volrm.log"
+    touch "$FIXTURE_STATE/containers/flmx-panel-backend" "$FIXTURE_STATE/containers/flmx-panel-frontend"
+    if [[ "$prevolume" == "1" ]]; then
+      touch "$FIXTURE_STATE/volumes/flmx-postgres-data"
+    fi
+    cat > "$work/.env" <<EOF
+JWT_SECRET=<redacted>
+DB_TYPE=sqlite
+POSTGRES_PASSWORD=$password
+FLMX_POSTGRES_VOLUME=flmx-postgres-data
+PANEL_BACKEND_CONTAINER=flmx-panel-backend
+PANEL_FRONTEND_CONTAINER=flmx-panel-frontend
+PANEL_POSTGRES_CONTAINER=flmx-panel-postgres
+EOF
+    printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > "$work/docker-compose.yml"
+    cp "$work/.env" "$work/env-original"
+  }
+
+  local work1 work2 rc
+  work1=$(mktemp -d)
+  setup_migrate_scenario "$work1" "flmx_panel_change_me" 0
+  : > "$work1/state/pgloader-fail"
+  rc="0"
+  ( cd "$work1" && migrate_to_postgres >"$work1/act1.log" 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "RR4-F7-04: a failed first migration must still fail"
+  diff -q "$work1/env-original" "$work1/.env" >/dev/null || fail "RR4-F7-04: rollback must restore the pre-migration .env verbatim (sentinel password included)"
+  [[ ! -e "$work1/state/containers/flmx-panel-postgres" ]] || fail "RR4-F7-04: rollback must remove the postgres container created by this run"
+  [[ ! -e "$work1/state/volumes/flmx-postgres-data" ]] || fail "RR4-F7-04: rollback must remove the postgres volume created by this run (it holds this run's regenerated password while .env is back to the sentinel)"
+  grep -Fxq 'flmx-postgres-data' "$work1/state/volrm.log" || fail "RR4-F7-04: the created volume must be removed through docker volume rm"
+  grep -q '已清理本次迁移新建的 PostgreSQL 数据卷' "$work1/act1.log" || fail "RR4-F7-04: the rollback cleanup must be named in the migration output"
+  [[ ! -e "$work1/.env.pre-postgres-migration" ]] || fail "RR4-F7-04: rollback must still delete the env snapshot"
+
+  rm -f "$work1/state/pgloader-fail"
+  rc="0"
+  ( cd "$work1" && migrate_to_postgres >"$work1/act2.log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "RR4-F7-04: retry after rollback cleanup must succeed (no 28P01 trap state left behind)"
+  grep -q '^POSTGRES_DB=flmx_panel$' "$work1/.env" || fail "RR4-F7-03: a fresh migration without POSTGRES_DB must create the database under the flmx name, not the legacy name"
+  grep -q '^POSTGRES_USER=flmx_panel$' "$work1/.env" || fail "RR4-F7-03: a fresh migration without POSTGRES_USER must create the user under the flmx name, not the legacy name"
+  grep -q '^DB_TYPE=postgres' "$work1/.env" || fail "RR4-F7-03: the retried migration must switch .env to postgres"
+  [[ -e "$work1/state/volumes/flmx-postgres-data" ]] || fail "RR4-F7-04: a successful migration must keep its postgres volume"
+
+  work2=$(mktemp -d)
+  setup_migrate_scenario "$work2" "a-real-password-123" 1
+  : > "$work2/state/pgloader-fail"
+  rc="0"
+  ( cd "$work2" && migrate_to_postgres >"$work2/act1.log" 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "RR4-F7-04: a failed migration on a half-migrated deployment must still fail"
+  [[ -e "$work2/state/volumes/flmx-postgres-data" ]] || fail "RR4-F7-04: rollback must never remove a postgres volume that existed before this run"
+  if grep -Fxq 'flmx-postgres-data' "$work2/state/volrm.log"; then
+    fail "RR4-F7-04: a pre-existing postgres volume must not be passed to docker volume rm"
+  fi
+  [[ ! -e "$work2/state/containers/flmx-panel-postgres" ]] || fail "RR4-F7-04: rollback must remove the postgres container created by this run even when the volume pre-exists"
+
+  rm -f "$work2/state/pgloader-fail"
+  rc="0"
+  ( cd "$work2" && migrate_to_postgres >"$work2/act2.log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "RR4-F7-03: retry on a half-migrated deployment must succeed"
+  grep -q '^POSTGRES_DB=flux_panel$' "$work2/.env" || fail "RR4-F7-03: with a pre-existing postgres volume, a missing POSTGRES_DB must fall back to the legacy name the volume was initialized with"
+  grep -q '^POSTGRES_USER=flux_panel$' "$work2/.env" || fail "RR4-F7-03: with a pre-existing postgres volume, a missing POSTGRES_USER must fall back to the legacy name the volume was initialized with"
 )
 
 # RN-2 接缝：存量旧布局（LEGACY_INSTALL_DIR＋旧二进制名＋旧服务
@@ -7531,8 +7730,10 @@ test_tcpkill_missing_warns_instead_of_silent
 test_panel_rename_new_install_defaults_are_flmx
 test_panel_legacy_identity_recognition_intact
 test_panel_update_renames_legacy_identity
+test_panel_update_rename_pins_custom_resource_names
 test_panel_update_rename_health_failure_rolls_back
 test_panel_migrate_placeholder_password_sentinels
+test_panel_migrate_volume_split_and_rollback_cleanup
 test_update_flmx_agent_migrates_legacy_layout
 
 echo "install script tests passed"
