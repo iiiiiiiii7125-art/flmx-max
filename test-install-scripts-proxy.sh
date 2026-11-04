@@ -2094,12 +2094,20 @@ test_update_panel_downloads_without_prompt() (
     calls+=" pull"
   }
 
+  panel_pin_missing_resource_keys() {
+    calls+=" pin"
+  }
+
   activate_panel_update_files() {
     calls+=" activate"
   }
 
   start_panel_after_update() {
     calls+=" start"
+  }
+
+  verify_panel_update_sqlite_volume() {
+    calls+=" verify"
   }
 
   check_ipv6_support() { return 1; }
@@ -2111,9 +2119,9 @@ test_update_panel_downloads_without_prompt() (
     "$DOCKER_COMPOSEV4_URL" \
     "update_panel should build the canonical compose URL"
   assert_equals \
-    " resolve validate-current download validate-new backup pull activate start" \
+    " resolve validate-current download validate-new backup pull pin activate start verify" \
     "$calls" \
-    "update_panel should validate, back up, and pull before activating the update"
+    "update_panel should validate, back up, pull, and pin resource keys before activating the update, then verify the mounted volume after starting"
 )
 
 # R9-03（菜单 2 面）: 更新前备份失败时回执必须点名中止；且仅当后
@@ -6502,8 +6510,10 @@ test_panel_update_honors_version_priority_chain() (
   validate_panel_update_compose() { return 0; }
   create_panel_update_backup() { UPDATE_BACKUP_DIR="backup"; return 0; }
   pull_panel_update_images() { return 0; }
+  panel_pin_missing_resource_keys() { return 0; }
   activate_panel_update_files() { return 0; }
   start_panel_after_update() { return 0; }
+  verify_panel_update_sqlite_volume() { return 0; }
   check_ipv6_support() { return 1; }
 
   local log
@@ -7054,7 +7064,7 @@ test_panel_legacy_identity_recognition_intact() (
 )
 
 # RN-1 升级改名夹具：在 $1 构造存量部署（$2=legacy 带旧名键 /
-# keyless 无身份键），docker/compose 以存在性文件与日志桩承接；
+# keyless 无身份键 / current 身份键已是现行名），docker/compose 以存在性文件与日志桩承接；
 # resolve 桩按真实口径给出旧名全局（keyless 经探测亦落旧名）。
 setup_rename_update_fixture() {
   FIXTURE_DIR="$1"
@@ -7062,7 +7072,19 @@ setup_rename_update_fixture() {
   FIXTURE_RMLOG="$1/rm.log"
   mkdir -p "$FIXTURE_EXIST"
   : > "$FIXTURE_RMLOG"
-  touch "$FIXTURE_EXIST/flux-panel-backend" "$FIXTURE_EXIST/vite-frontend" "$FIXTURE_EXIST/flux-panel-postgres"
+  # 第三种部署形态 current：身份键已是现行名（不触发改名），供升
+  # 级后卷名自检的「已有键路径」用例使用；resolve 桩按形态给名。
+  FIXTURE_RESOLVE_BACKEND="flux-panel-backend"
+  FIXTURE_RESOLVE_FRONTEND="vite-frontend"
+  FIXTURE_RESOLVE_POSTGRES="flux-panel-postgres"
+  if [[ "$2" == "current" ]]; then
+    FIXTURE_RESOLVE_BACKEND="flmx-panel-backend"
+    FIXTURE_RESOLVE_FRONTEND="flmx-panel-frontend"
+    FIXTURE_RESOLVE_POSTGRES="flmx-panel-postgres"
+    touch "$FIXTURE_EXIST/flmx-panel-backend" "$FIXTURE_EXIST/flmx-panel-frontend" "$FIXTURE_EXIST/flmx-panel-postgres"
+  else
+    touch "$FIXTURE_EXIST/flux-panel-backend" "$FIXTURE_EXIST/vite-frontend" "$FIXTURE_EXIST/flux-panel-postgres"
+  fi
   cat > "$1/.env" <<'EOF'
 JWT_SECRET=<redacted>
 FRONTEND_PORT=6366
@@ -7078,14 +7100,43 @@ PANEL_POSTGRES_CONTAINER=flux-panel-postgres
 COMPOSE_PROJECT_NAME=flvx-panel
 EOF
   fi
+  if [[ "$2" == "current" ]]; then
+    cat >> "$1/.env" <<'EOF'
+PANEL_BACKEND_CONTAINER=flmx-panel-backend
+PANEL_FRONTEND_CONTAINER=flmx-panel-frontend
+PANEL_POSTGRES_CONTAINER=flmx-panel-postgres
+COMPOSE_PROJECT_NAME=flvx-panel
+EOF
+    # 卷键仅在用例显式给定 FIXTURE_ENV_SQLITE_VOLUME 时才写入，
+    # 缺省即「容器键齐全非旧名但缺卷键」的待钉形状。
+    if [[ -n "${FIXTURE_ENV_SQLITE_VOLUME:-}" ]]; then
+      echo "FLMX_SQLITE_VOLUME=$FIXTURE_ENV_SQLITE_VOLUME" >> "$1/.env"
+    fi
+  fi
   printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:1.9.7\n' > "$1/docker-compose.yml"
 
   check_docker() { DOCKER_CMD="fixture_rename_compose"; }
   fixture_rename_compose() {
     if [[ "$1" == "up" ]]; then
-      local k v
+      local k v def_backend def_frontend def_postgres
+      # 键缺失时的容器名按当前 compose 文件的代际缺省（与真实模
+      # 板同口径：旧 compose 缺省旧名、新 compose 缺省现行名）；
+      # 否则无键存量的回滚重建在夹具里造不出旧名容器、健康等待
+      # 恒失败，与真实 compose 行为不符。
+      if grep -q 'flmx-flux-panel-backend' "$FIXTURE_DIR/docker-compose.yml" 2>/dev/null; then
+        def_backend="flux-panel-backend" def_frontend="vite-frontend" def_postgres="flux-panel-postgres"
+      else
+        def_backend="flmx-panel-backend" def_frontend="flmx-panel-frontend" def_postgres="flmx-panel-postgres"
+      fi
       for k in PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER; do
         v=$(get_env_var "$k" "$FIXTURE_DIR/.env" || true)
+        if [[ -z "$v" ]]; then
+          case "$k" in
+            PANEL_BACKEND_CONTAINER) v="$def_backend" ;;
+            PANEL_FRONTEND_CONTAINER) v="$def_frontend" ;;
+            PANEL_POSTGRES_CONTAINER) v="$def_postgres" ;;
+          esac
+        fi
         [[ -n "$v" ]] && touch "$FIXTURE_EXIST/$v"
       done
     fi
@@ -7127,7 +7178,17 @@ EOF
               ;;
             *Mounts*)
               case "$fmt" in
-                *"/app/data"*) printf '%s' "${FIXTURE_SQLITE_VOLUME:-sqlite_data}" ;;
+                *"/app/data"*)
+                  # FIX199-B：重建后的新名后端可经 FIXTURE_REBUILT_
+                  # SQLITE_VOLUME 单独改答挂载卷，模拟「漏钉后按模
+                  # 板回退名挂空卷」的事故形态，供升级后卷名自检
+                  # 用例制造挂载不符；未设时与其它容器同答。
+                  if [[ "$name" == "flmx-panel-backend" && -n "${FIXTURE_REBUILT_SQLITE_VOLUME:-}" ]]; then
+                    printf '%s' "$FIXTURE_REBUILT_SQLITE_VOLUME"
+                  else
+                    printf '%s' "${FIXTURE_SQLITE_VOLUME:-sqlite_data}"
+                  fi
+                  ;;
                 *"/var/lib/postgresql/data"*) printf '%s' "${FIXTURE_POSTGRES_VOLUME:-postgres_data}" ;;
               esac
               ;;
@@ -7150,9 +7211,9 @@ EOF
 
   resolve_panel_deployment() {
     PANEL_DEPLOY_DIR="$FIXTURE_DIR"
-    PANEL_BACKEND_CONTAINER="flux-panel-backend"
-    PANEL_FRONTEND_CONTAINER="vite-frontend"
-    PANEL_POSTGRES_CONTAINER="flux-panel-postgres"
+    PANEL_BACKEND_CONTAINER="${FIXTURE_RESOLVE_BACKEND:-flux-panel-backend}"
+    PANEL_FRONTEND_CONTAINER="${FIXTURE_RESOLVE_FRONTEND:-vite-frontend}"
+    PANEL_POSTGRES_CONTAINER="${FIXTURE_RESOLVE_POSTGRES:-flux-panel-postgres}"
     PANEL_COMPOSE_PROJECT="flvx-panel"
     cd "$FIXTURE_DIR"
   }
@@ -7267,6 +7328,102 @@ test_panel_update_rename_health_failure_rolls_back() (
   diff -q "$dir/env.pristine" "$dir/.env" >/dev/null || fail "RN-1: rollback must restore the pre-update .env verbatim (legacy names and version)"
   assert_equals "flux-panel-backend" "$PANEL_BACKEND_CONTAINER" "RN-1: process globals must be restored to the old backend name after rollback"
   assert_equals "flux-panel-postgres" "$PANEL_POSTGRES_CONTAINER" "RN-1: process globals must be restored to the old postgres name after rollback"
+)
+
+# FIX199-B: 升级后卷名自检·改名路径不符必回滚——无键存量改名钉
+# 键无误（期望 sqlite_data），但重建后的新后端被夹具改答挂
+# flmx-sqlite-data（模拟漏钉/模板回退挂空卷的 1.9.8 事故形态）：
+# 健康检查照样通过，自检必须把关——更新判失败、回执点名期望卷
+# 与实际卷、走既有回滚恢复更新前 .env 并报已恢复。
+test_panel_update_volume_check_rolls_back_on_mismatch() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir
+  dir=$(mktemp -d)
+  setup_rename_update_fixture "$dir" keyless
+  cp -p "$dir/.env" "$dir/env.pristine"
+  FIXTURE_REBUILT_SQLITE_VOLUME="flmx-sqlite-data"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  local rc="0"
+  update_panel >"$dir/update.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "FIX199-B: update must fail when the rebuilt backend mounts a different data volume than recorded"
+  grep -q '升级后卷名自检失败' "$dir/update.log" || fail "FIX199-B: the volume self-check failure must be named in the update output"
+  grep -q 'flmx-sqlite-data' "$dir/update.log" || fail "FIX199-B: the self-check failure must name the actually mounted volume"
+  grep -q 'sqlite_data' "$dir/update.log" || fail "FIX199-B: the self-check failure must name the expected recorded volume"
+  grep -q '已恢复更新前版本' "$dir/update.log" || fail "FIX199-B: a self-check failure must roll back to the pre-update version"
+  diff -q "$dir/env.pristine" "$dir/.env" >/dev/null || fail "FIX199-B: rollback after a self-check failure must restore the pre-update .env verbatim"
+)
+
+# FIX199-B: 升级后卷名自检·已有键路径两幕——身份键已是现行名、
+# 不触发改名时自检同样生效：第一幕重建挂载与 .env 既有卷名
+# （kept_vol）相符，更新成功、自检通过被点名、卷键逐字不动；
+# 第二幕重建被改答挂 flmx-sqlite-data，更新判失败并回滚、.env
+# 逐字恢复。
+test_panel_update_volume_check_existing_key_path() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir1 dir2
+  dir1=$(mktemp -d)
+  FIXTURE_ENV_SQLITE_VOLUME="kept_vol"
+  setup_rename_update_fixture "$dir1" current
+  FIXTURE_SQLITE_VOLUME="kept_vol"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir1/update.log" 2>&1 || fail "FIX199-B: update with pre-existing identity/volume keys and a matching mount must succeed"
+  grep -q '升级后卷名自检通过' "$dir1/update.log" || fail "FIX199-B: the volume self-check pass must be named in the update output"
+  if grep -q '身份改名' "$dir1/update.log"; then
+    fail "FIX199-B: a deployment already on current names must not enter the rename path"
+  fi
+  grep -q '^FLMX_SQLITE_VOLUME=kept_vol$' "$dir1/.env" || fail "FIX199-B: a pre-existing sqlite volume key must stay verbatim"
+
+  dir2=$(mktemp -d)
+  FIXTURE_ENV_SQLITE_VOLUME="kept_vol"
+  setup_rename_update_fixture "$dir2" current
+  cp -p "$dir2/.env" "$dir2/env.pristine"
+  FIXTURE_SQLITE_VOLUME="kept_vol"
+  FIXTURE_REBUILT_SQLITE_VOLUME="flmx-sqlite-data"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  local rc="0"
+  update_panel >"$dir2/update.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "FIX199-B: the existing-key path must also fail the update when the rebuilt mount differs"
+  grep -q '升级后卷名自检失败' "$dir2/update.log" || fail "FIX199-B: the existing-key path self-check failure must be named"
+  grep -q '已恢复更新前版本' "$dir2/update.log" || fail "FIX199-B: the existing-key path self-check failure must roll back"
+  diff -q "$dir2/env.pristine" "$dir2/.env" >/dev/null || fail "FIX199-B: rollback on the existing-key path must restore the pre-update .env verbatim"
+)
+
+# FIX199-B: 钉键与改名解耦——容器键齐全非旧名（不触发改名）但
+# 缺卷键的存量，走 update_panel 必须经无条件前置钉键把卷键钉为
+# fake inspect 实读值，而不是落模板缺省挂空卷。两幕：常态与
+# PANEL_IDENTITY_RENAME=0（改名被关）同验。旧实现下钉键只挂在
+# 改名函数早退之后，两幕的卷键都不会被写入，本例必红。
+test_panel_update_pins_keys_without_rename() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  assert_pinned_without_rename() {
+    local dir="$1"
+    grep -q '^FLMX_SQLITE_VOLUME=real_vol$' "$dir/.env" || fail "FIX199-B: a missing sqlite volume key must be pinned to the live container's mounted volume even when no rename triggers"
+    grep -q '^PANEL_BACKEND_CONTAINER=flmx-panel-backend$' "$dir/.env" || fail "FIX199-B: existing current container keys must stay verbatim"
+    if grep -q '身份改名' "$dir/update.log"; then
+      fail "FIX199-B: pinning without a rename trigger must not enter the rename path"
+    fi
+  }
+
+  local dir1 dir2
+  dir1=$(mktemp -d)
+  setup_rename_update_fixture "$dir1" current
+  FIXTURE_SQLITE_VOLUME="real_vol"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir1/update.log" 2>&1 || fail "FIX199-B: update of a current-named keyless-volume deployment must succeed"
+  assert_pinned_without_rename "$dir1"
+
+  dir2=$(mktemp -d)
+  setup_rename_update_fixture "$dir2" current
+  FIXTURE_SQLITE_VOLUME="real_vol"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  PANEL_IDENTITY_RENAME=0 update_panel >"$dir2/update.log" 2>&1 || fail "FIX199-B: update with the rename disabled must still pin missing resource keys"
+  assert_pinned_without_rename "$dir2"
 )
 
 # RN-1: 默认口令哨兵改名后的迁移判定——现行字面量
@@ -7732,6 +7889,9 @@ test_panel_legacy_identity_recognition_intact
 test_panel_update_renames_legacy_identity
 test_panel_update_rename_pins_custom_resource_names
 test_panel_update_rename_health_failure_rolls_back
+test_panel_update_volume_check_rolls_back_on_mismatch
+test_panel_update_volume_check_existing_key_path
+test_panel_update_pins_keys_without_rename
 test_panel_migrate_placeholder_password_sentinels
 test_panel_migrate_volume_split_and_rollback_cleanup
 test_update_flmx_agent_migrates_legacy_layout

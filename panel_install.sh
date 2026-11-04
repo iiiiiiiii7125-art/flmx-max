@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261104.07"
+SCRIPT_VERSION="20261104.08"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -2667,6 +2667,26 @@ rollback_panel_update() {
   wait_for_backend_healthy
 }
 
+# 升级后卷名自检：重建后的后端容器在 /app/data 实际挂载的卷名必
+# 须与重建前定格的有效卷名一致。健康检查只证明新进程活着，不证
+# 明挂的是原来的卷——模板回退名已翻新（flmx-sqlite-data），无键
+# 存量一旦在某条路径上漏钉，重建即挂空卷、面板如新装而更新仍报
+# 成功（1.9.8 生产事故形态；脚本面钉键齐备，此自检为第二道防
+# 线）。比对按真实容器挂载实读；实读为空（容器不在册/挂载非命
+# 名卷）同样判不一致——自检读不到时不得放行。
+verify_panel_update_sqlite_volume() {
+  local expected="$1"
+  local backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  local actual=""
+  actual=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$backend_container" 2>/dev/null || true)
+  if [[ "$actual" != "$expected" ]]; then
+    echo "❌ 升级后卷名自检失败：后端容器 $backend_container 在 /app/data 实际挂载卷「${actual:-（未读到）}」，与升级前记录的卷「$expected」不一致——新后端可能挂在空卷上，本次更新判失败并回滚" >&2
+    return 1
+  fi
+  echo "🔎 升级后卷名自检通过：后端 /app/data 挂载卷为 $actual（与升级前记录一致）"
+  return 0
+}
+
 wait_for_postgres_healthy() {
   local pg_health
   local postgres_container="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
@@ -3163,6 +3183,22 @@ update_panel() {
     return 1
   fi
 
+  # 钉键与改名解耦（FIX199-B）：卷/网络/项目键的钉值此前只挂在
+  # apply_panel_identity_rename 内、且排在其「不触发改名即早退」
+  # 之后——容器键齐全非旧名（不触发改名）或运维以
+  # PANEL_IDENTITY_RENAME=0 关掉改名时，缺卷键的存量走脚本更新
+  # 同样跳过钉键、重建落模板新缺省挂空卷（与 1.9.8 面板内升级
+  # 事故同族）。故在换 compose/重建之前，以 resolve 已定格的现
+  # 行容器名无条件先钉一遍，与改名开关、是否触发改名完全解耦；
+  # 改名函数内的原有钉键保留（其停删前序语义不变，此处已钉则
+  # 为无操作）。本步位于更新备份之后：回滚恢复的 .env 保持钉键
+  # 前原样。钉键失败即中止——此时 compose 未换、容器未动，钉入
+  # 的每个值都是自真实容器实读的有效值，留存无害，不走回滚。
+  if ! panel_pin_missing_resource_keys "${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}" "${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"; then
+    echo "❌ 资源键钉值失败，更新已中止（未改动现有部署与运行中的服务）"
+    return 1
+  fi
+
   if ! activate_panel_update_files; then
     rollback_panel_update "$CURRENT_DB_TYPE" || true
     return 1
@@ -3178,9 +3214,27 @@ update_panel() {
     return 1
   fi
 
+  # 升级后卷名自检的期望值在此定格（verify_panel_update_sqlite_
+  # volume）：改名钉键已毕、重建未启，此刻 panel_sqlite_volume_
+  # name 的取值即重建将用的有效卷名——已有键路径是原键值、改名
+  # 路径是钉键后值（实读旧容器或旧缺省）。必须在重建前取：重建
+  # 后 .env 与容器都已是新态，事后追认无从分辨挂错没挂错。
+  local update_expected_sqlite_volume
+  update_expected_sqlite_volume=$(panel_sqlite_volume_name)
+
   echo "🚀 原地重建更新后的服务..."
   if ! start_panel_after_update "$CURRENT_DB_TYPE"; then
     echo "🛑 新版本启动失败"
+    if rollback_panel_update "$CURRENT_DB_TYPE"; then
+      echo "✅ 已恢复更新前版本"
+    else
+      echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
+    fi
+    return 1
+  fi
+
+  if ! verify_panel_update_sqlite_volume "$update_expected_sqlite_volume"; then
+    echo "🛑 升级后卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
       echo "✅ 已恢复更新前版本"
     else
