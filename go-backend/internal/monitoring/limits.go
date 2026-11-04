@@ -98,6 +98,22 @@ func normalizeServiceMonitorLimits(limits ServiceMonitorLimits) ServiceMonitorLi
 	if limits.MaxTimeoutSec < limits.DefaultTimeoutSec {
 		limits.MaxTimeoutSec = limits.DefaultTimeoutSec
 	}
+	// R4-F5-01：排序抬升之后对 timeout 三键补 60 硬钳（与 worker_limit
+	// 读面钳 50 同形）。保存面（RR-F5-01）只拦新写与恢复，≤1.9.6 合法
+	// 写入的存量越界值（如 max=120、min/default=90）随升级原样保留，
+	// 此前读面只有抬升没有封顶，抬升还会把 90 一路传导到三键——
+	// monitoring.md「超时最大 60 秒」对存量部署不成立。硬钳放在抬升
+	// 之后：三键先按相对序抬齐、再同界截断，min<=default<=max 的序
+	// 关系与三键 <=60 同时成立。
+	if limits.MinTimeoutSec > MaxServiceMonitorTimeoutSec {
+		limits.MinTimeoutSec = MaxServiceMonitorTimeoutSec
+	}
+	if limits.DefaultTimeoutSec > MaxServiceMonitorTimeoutSec {
+		limits.DefaultTimeoutSec = MaxServiceMonitorTimeoutSec
+	}
+	if limits.MaxTimeoutSec > MaxServiceMonitorTimeoutSec {
+		limits.MaxTimeoutSec = MaxServiceMonitorTimeoutSec
+	}
 
 	return limits
 }

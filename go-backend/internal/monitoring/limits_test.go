@@ -116,3 +116,47 @@ func TestServiceMonitorLimitsTimeoutCeilingInvariant(t *testing.T) {
 		t.Fatalf("worker_limit 50 normalized to %d, want %d", limits.WorkerLimit, MaxServiceMonitorWorkerLimit)
 	}
 }
+
+// R4-F5-01：存量越界 timeout 值（≤1.9.6 时可合法写入、保存期校验
+// 拦不到的已落库值）经读面归一化后三键必须同被 60 硬钳封顶，且
+// min<=default<=max 的序关系不得被硬钳打乱。网格直接喂原始 config
+// 值（绕过保存期校验，模拟存量行），含审计探针实证的 90/120 形态。
+func TestServiceMonitorLimitsTimeoutCeilingStoredOverflow(t *testing.T) {
+	stored := []string{"1", "5", "30", "60", "90", "120"}
+	for _, min := range stored {
+		for _, def := range stored {
+			for _, max := range stored {
+				cfg := map[string]string{
+					ConfigServiceMonitorMinTimeoutSec:     min,
+					ConfigServiceMonitorDefaultTimeoutSec: def,
+					ConfigServiceMonitorMaxTimeoutSec:     max,
+				}
+				limits := ServiceMonitorLimitsFromConfigMap(cfg)
+				if limits.MinTimeoutSec > MaxServiceMonitorTimeoutSec ||
+					limits.DefaultTimeoutSec > MaxServiceMonitorTimeoutSec ||
+					limits.MaxTimeoutSec > MaxServiceMonitorTimeoutSec {
+					t.Fatalf("stored triple min=%s def=%s max=%s normalized to (%d, %d, %d), want all <= %d",
+						min, def, max, limits.MinTimeoutSec, limits.DefaultTimeoutSec, limits.MaxTimeoutSec, MaxServiceMonitorTimeoutSec)
+				}
+				if limits.MinTimeoutSec > limits.DefaultTimeoutSec || limits.DefaultTimeoutSec > limits.MaxTimeoutSec {
+					t.Fatalf("stored triple min=%s def=%s max=%s normalized to (%d, %d, %d), ordering min<=default<=max broken",
+						min, def, max, limits.MinTimeoutSec, limits.DefaultTimeoutSec, limits.MaxTimeoutSec)
+				}
+			}
+		}
+	}
+	// 探针原形态逐条点名：单键越界不得经抬升传导到其余键之上。
+	if limits := ServiceMonitorLimitsFromConfigMap(map[string]string{
+		ConfigServiceMonitorMaxTimeoutSec: "120",
+	}); limits.MaxTimeoutSec != MaxServiceMonitorTimeoutSec {
+		t.Fatalf("stored max=120 normalized to %d, want %d", limits.MaxTimeoutSec, MaxServiceMonitorTimeoutSec)
+	}
+	if limits := ServiceMonitorLimitsFromConfigMap(map[string]string{
+		ConfigServiceMonitorMinTimeoutSec: "90",
+	}); limits.MinTimeoutSec != MaxServiceMonitorTimeoutSec ||
+		limits.DefaultTimeoutSec != MaxServiceMonitorTimeoutSec ||
+		limits.MaxTimeoutSec != MaxServiceMonitorTimeoutSec {
+		t.Fatalf("stored min=90 normalized to (%d, %d, %d), want all == %d",
+			limits.MinTimeoutSec, limits.DefaultTimeoutSec, limits.MaxTimeoutSec, MaxServiceMonitorTimeoutSec)
+	}
+}
