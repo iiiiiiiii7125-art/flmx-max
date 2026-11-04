@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261104.06"
+SCRIPT_VERSION="20261104.07"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1754,8 +1754,10 @@ panel_sibling_default() {
 # 触发面：部署 .env 的三个容器身份键任一缺失、或仍为旧缺省名
 # （flux-panel-backend / flux-panel-postgres / vite-frontend）。定制
 # 名（非旧非新）与实例派生名不触发；已是现行名的部署零动作。
-# 动作序：按 resolve 已定的实际名停并删将被改名的旧容器 → 把身份
-# 键写为现行名（实例部署带后缀）→ 进程全局同步新名，交回更新流
+# 动作序：先从尚存的旧容器实读、把卷/网络/项目缺失键钉为现行有
+# 效值（实读依赖容器在册，必须在停删之前，RR4-F7-01）→ 按
+# resolve 已定的实际名停并删将被改名的旧容器 → 把身份键写为现
+# 行名（实例部署带后缀）→ 进程全局同步新名，交回更新流
 # 按新名重建＋健康检查；失败走既有 rollback_panel_update（恢复旧
 # .env＋旧 compose），其先行步按本函数记下的新旧名删新名容器、复
 # 位全局，再按旧名拉起。卷/网络/项目只把缺失键钉为现行有效值
@@ -1787,7 +1789,8 @@ panel_stop_remove_container() {
 # 还在旧卷、只是不可见）。有效值优先从真实容器实读（后端挂载的
 # 数据卷名、所在网络名，F7-01「名字从真实容器推导」同口径），读
 # 不到按该部署唯一可能的旧缺省；PG 卷无容器时查卷本身是否存在。
-# 已有键一律不碰。
+# 已有键一律不碰。调用方须保证旧容器尚在册时调用：实读分支以容
+# 器存在为前提，容器删后再调用只剩回退名（RR4-F7-01）。
 panel_pin_missing_resource_keys() {
   local backend_container="$1" postgres_container="$2"
   if [[ -z "$(get_env_var FLMX_SQLITE_VOLUME || true)" ]]; then
@@ -1856,7 +1859,13 @@ apply_panel_identity_rename() {
   PANEL_IDENTITY_NEW_POSTGRES="$new_postgres"
   echo "🏷️ 存量部署身份改名：容器名由旧缺省（$LEGACY_PANEL_BACKEND_CONTAINER / $LEGACY_PANEL_POSTGRES_CONTAINER / $LEGACY_PANEL_FRONTEND_CONTAINER）切换为现行名（$new_backend / $new_postgres / $new_frontend）"
   echo "   只改容器名：数据卷、网络与数据库一律不动；重建后健康检查不过将自动回滚为旧名。"
-  # 1) 停并删将被改名的旧容器（先于重建腾空端口与卷挂载）。
+  # 1) 卷/网络/项目缺失键先钉现行有效值——有效值优先从真实旧容器
+  #    实读，必须赶在停删之前：旧实现先删容器后钉键，inspect 对已
+  #    删容器恒失败、实读分支在改名主路径上成死代码，钉值恒落回
+  #    退名，自定义卷/网络名的无键存量升级后挂空卷却报成功
+  #    （RR4-F7-01）。钉键失败也须在删容器之前中止，不留半改名态。
+  panel_pin_missing_resource_keys "$PANEL_IDENTITY_OLD_BACKEND" "$PANEL_IDENTITY_OLD_POSTGRES" || return 1
+  # 2) 停并删将被改名的旧容器（先于重建腾空端口与卷挂载）。
   if [[ -n "$rename_backend" ]]; then
     panel_stop_remove_container "$PANEL_IDENTITY_OLD_BACKEND" "$new_backend"
   fi
@@ -1866,7 +1875,7 @@ apply_panel_identity_rename() {
   if [[ -n "$rename_postgres" ]]; then
     panel_stop_remove_container "$PANEL_IDENTITY_OLD_POSTGRES" "$new_postgres"
   fi
-  # 2) 身份键写入现行名；卷/网络/项目缺失键钉现行有效值。
+  # 3) 身份键写入现行名。
   if [[ -n "$rename_backend" ]]; then
     upsert_env_var .env PANEL_BACKEND_CONTAINER "$new_backend" || return 1
   fi
@@ -1876,8 +1885,7 @@ apply_panel_identity_rename() {
   if [[ -n "$rename_postgres" ]]; then
     upsert_env_var .env PANEL_POSTGRES_CONTAINER "$new_postgres" || return 1
   fi
-  panel_pin_missing_resource_keys "$PANEL_IDENTITY_OLD_BACKEND" "$PANEL_IDENTITY_OLD_POSTGRES" || return 1
-  # 3) 进程全局同步新名，后续重建与健康等待按新名取容器。
+  # 4) 进程全局同步新名，后续重建与健康等待按新名取容器。
   if [[ -n "$rename_backend" ]]; then
     PANEL_BACKEND_CONTAINER="$new_backend"
   fi
@@ -3292,12 +3300,44 @@ migrate_to_postgres() {
     return 0
   fi
 
+  # RR4-F7-03/F7-04 共同前置：登记本次运行开始前已存在的 PG 容器
+  # 与 PG 卷（卷候选名＝解析名＋旧模板字面名 postgres_data＋现行
+  # 模板缺省名 flmx-postgres-data）。F7-03 据此判「半迁移存量」；
+  # F7-04 回滚据此区分本次新建与存量既有、只清本次新建者。
+  local migrate_pg_volumes_before=""
+  local migrate_pg_candidate
+  for migrate_pg_candidate in "$postgres_volume" postgres_data flmx-postgres-data; do
+    case " $migrate_pg_volumes_before " in
+      *" $migrate_pg_candidate "*) continue ;;
+    esac
+    if docker volume inspect "$migrate_pg_candidate" >/dev/null 2>&1; then
+      migrate_pg_volumes_before="$migrate_pg_volumes_before $migrate_pg_candidate"
+    fi
+  done
+  local migrate_pg_container_before=""
+  if docker inspect "$PANEL_POSTGRES_CONTAINER" >/dev/null 2>&1; then
+    migrate_pg_container_before=1
+  fi
+  local migrate_pg_up_attempted=""
+
   postgres_db=$(get_env_var "POSTGRES_DB")
   postgres_user=$(get_env_var "POSTGRES_USER")
   postgres_password=$(get_env_var "POSTGRES_PASSWORD")
 
-  postgres_db=${postgres_db:-flux_panel}
-  postgres_user=${postgres_user:-flux_panel}
+  # RR4-F7-03：POSTGRES_DB/USER 缺键时的回退按 PG 卷是否已存在分
+  # 流——卷已存在＝半迁移存量（卷内库/用户已按旧名 flux_panel 初
+  # 始化、PG 名一经初始化终身固化），回退旧名才能对上既有卷；
+  # 卷不存在＝全新迁移，按「新装全量 flmx 化」新生 flmx_panel、
+  # 不再把新库直接生为旧名。两键齐全时逐字不动。
+  if [[ -z "$postgres_db" || -z "$postgres_user" ]]; then
+    if [[ -n "$migrate_pg_volumes_before" ]]; then
+      postgres_db=${postgres_db:-flux_panel}
+      postgres_user=${postgres_user:-flux_panel}
+    else
+      postgres_db=${postgres_db:-flmx_panel}
+      postgres_user=${postgres_user:-flmx_panel}
+    fi
+  fi
   postgres_password=${postgres_password:-$(generate_random)}
 
   # A11-132-04: 口令前置校验。后端对空/默认口令拒绝启动（1.2.0 起），
@@ -3328,6 +3368,32 @@ migrate_to_postgres() {
     cp "$env_snapshot" ".env"
     $DOCKER_CMD up -d backend frontend || true
     rm -f "$env_snapshot"
+    # RR4-F7-04：本次迁移已尝试拉起过 PG 时，把本次新建的 PG 容器
+    # 与 PG 卷一并清掉——不清则本次生成的随机口令已固化进新建卷、
+    # .env 却随回滚恢复为哨兵值，重试时 PG 对已初始化卷忽略
+    # POSTGRES_PASSWORD 环境变量、新口令连库必吃 28P01，只能手工
+    # 删卷。运行前已存在的容器/卷一律不动（半迁移存量的既有数据
+    # 与其重试口径不变），本次新建的容器先删、再删卷。
+    if [[ -n "$migrate_pg_up_attempted" ]]; then
+      if [[ -z "$migrate_pg_container_before" ]] && docker inspect "$PANEL_POSTGRES_CONTAINER" >/dev/null 2>&1; then
+        docker stop -t 10 "$PANEL_POSTGRES_CONTAINER" >/dev/null 2>&1 || true
+        docker rm "$PANEL_POSTGRES_CONTAINER" >/dev/null 2>&1 || true
+        echo "🧹 已清理本次迁移新建的 PostgreSQL 容器 $PANEL_POSTGRES_CONTAINER"
+      fi
+      local cleanup_candidate
+      for cleanup_candidate in "$postgres_volume" postgres_data flmx-postgres-data; do
+        case " $migrate_pg_volumes_before " in
+          *" $cleanup_candidate "*) continue ;;
+        esac
+        if docker volume inspect "$cleanup_candidate" >/dev/null 2>&1; then
+          if docker volume rm "$cleanup_candidate" >/dev/null 2>&1; then
+            echo "🧹 已清理本次迁移新建的 PostgreSQL 数据卷 $cleanup_candidate"
+          else
+            echo "⚠️ 本次迁移新建的 PostgreSQL 数据卷 $cleanup_candidate 清理未成，重试迁移前请先执行：docker volume rm $cleanup_candidate" >&2
+          fi
+        fi
+      done
+    fi
   }
 
   upsert_env_var ".env" "POSTGRES_DB" "$postgres_db"
@@ -3353,6 +3419,8 @@ migrate_to_postgres() {
   fi
 
   echo "🚀 启动 PostgreSQL..."
+  # RR4-F7-04：自此 PG 容器/卷可能由本次运行新建，回滚清理登记。
+  migrate_pg_up_attempted=1
   if ! $DOCKER_CMD up -d postgres; then
     echo "❌ PostgreSQL 容器启动失败，迁移终止，正在恢复迁移前状态..."
     migrate_restore_snapshot
@@ -3470,9 +3538,9 @@ EOF
     # 不把面板留在「配置已切 PG、服务起不来」的坏状态。
     # L2-02（R5-FD）：回滚后删除快照，不留含密钥的陈旧副本。
     echo "🛑 迁移后服务启动失败，正在回滚 .env 并恢复迁移前的服务..."
-    cp "$env_snapshot" ".env"
-    rm -f "$env_snapshot"
-    $DOCKER_CMD up -d backend frontend || true
+    # L2-02＋RR4-F7-04：与统一回滚口同形态（恢复 .env、拉起迁移前
+    # 服务、删快照、本次新建 PG 容器/卷清理），不再内联复制三步。
+    migrate_restore_snapshot
     if wait_for_backend_healthy; then
       echo "✅ 已回滚：面板恢复为迁移前的 SQLite 部署（数据未动）。请排查 PostgreSQL 侧问题后重试迁移"
     else
