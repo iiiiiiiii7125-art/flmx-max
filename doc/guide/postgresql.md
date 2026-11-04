@@ -201,6 +201,8 @@ docker run --rm -v "$FLMX_SQLITE_VOLUME":/sqlite alpine sh -c '
 
 适用范围：1.3.2 及更早版本创建的 SQLite 库。后续版本模型侧修复后该列默认值不再是 `false`，上述预处理替换不命中、可跳过；对已修复的库执行也无害（生成一份等价副本而已）。（在 pgloader 的 load 文件里给该列写 CAST 规则是等价的另一种变通，二选一即可。）
 
+同一份副本预处理还处理另一处 pgloader 毒源（与上面的默认值替换无关、所有带该索引的库都适用）：`user` 表的函数唯一索引 `idx_user_username_fold_unique`（表达式 `(LOWER("user"))`，1.7.5 起）会让 pgloader 解析目录时 KABOOM（`TYPE-ERROR: NIL is not of type PGLOADER.CATALOG:COLUMN`）。脚本一键迁移会在副本上删掉该索引，并连带删除 `schema_migration` 中版本为 `k10_v5_username_casefold_unique` 的记录——迁移后首次启动时后端会重跑该迁移、在 PostgreSQL 侧补建同名索引并补记版本；手动迁移时须在副本上执行同样两步（`DROP INDEX IF EXISTS idx_user_username_fold_unique;` 与 `DELETE FROM schema_migration WHERE version='k10_v5_username_casefold_unique';`），只删索引不删记录会让 PostgreSQL 侧永久缺失该索引。
+
 ### 5. 启动全部服务
 
 ```bash

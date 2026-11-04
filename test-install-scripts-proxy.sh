@@ -5136,6 +5136,87 @@ test_pgloader_command_file_terminated() (
   rm -rf "$work"
 )
 
+# RR-LIVE-01: 迁移预处理副本必须删掉毒死 pgloader 的 user 表函数唯
+# 一索引 idx_user_username_fold_unique（表达式列 name 为 NULL、
+# pgloader 解析得 NIL 即 KABOOM），且连带删除 schema_migration 里
+# 的 v5 版本记录 k10_v5_username_casefold_unique——否则 PG 首启时
+# 后端 migrateV5UsernameCasefoldUnique 命中记录短路、被删的函数索
+# 引无人重建。本用例从出厂 panel_install.sh 抽出预处理 docker 载荷
+# 原文（路径改写到夹具目录、apk 行以宿主 sqlite3 代替）在样本库上
+# 实际执行，断言副本双删生效且其余内容无损、源库未动。摘掉脚本里
+# 删索引行或删记录行任一行，本用例必红。
+test_panel_migrate_preprocess_drops_fold_index_and_v5_record() (
+  set -euo pipefail
+  command -v sqlite3 >/dev/null 2>&1 || \
+    fail "RR-LIVE-01: sqlite3 is required to execute the migration preprocessing payload"
+
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/sqlite"
+
+  sqlite3 "$work/sqlite/gost.db" <<'EOF'
+CREATE TABLE "user" (id INTEGER PRIMARY KEY, "user" TEXT, pwd TEXT);
+CREATE UNIQUE INDEX idx_user_username_unique ON "user"("user");
+CREATE UNIQUE INDEX idx_user_username_fold_unique ON "user"(LOWER("user"));
+INSERT INTO "user" VALUES (1, 'Admin', 'x'), (2, 'bob', 'y');
+CREATE TABLE schema_migration (version VARCHAR(64) PRIMARY KEY, applied_at INTEGER NOT NULL);
+INSERT INTO schema_migration VALUES ('r5b4_v1_port_user_unique', 111);
+INSERT INTO schema_migration VALUES ('k10_v5_username_casefold_unique', 222);
+INSERT INTO schema_migration VALUES ('c12_v4_forward_lookup', 333);
+CREATE TABLE peer_share_resource (id INTEGER PRIMARY KEY, release_legacy_family numeric DEFAULT false);
+EOF
+
+  local payload="$work/payload.sh" runner="$work/runner.sh"
+  awk '/alpine sh -c '"'"'$/{f=1; next} /^  '"'"'; then$/{f=0} f' \
+    "$ROOT_DIR/panel_install.sh" > "$payload"
+  grep -q 'DROP INDEX IF EXISTS idx_user_username_fold_unique' "$payload" || \
+    fail "RR-LIVE-01: could not extract the preprocessing payload (fold index drop) from panel_install.sh"
+  grep -q 'DELETE FROM schema_migration' "$payload" || \
+    fail "RR-LIVE-01: could not extract the preprocessing payload (v5 record delete) from panel_install.sh"
+  grep -v 'apk add' "$payload" | \
+    sed -e "s|/sqlite/|$work/sqlite/|g" -e "s|/tmp/dump|$work/dump|g" > "$work/payload-local.sh"
+  # 载荷按出厂形态仍以 sh -c 单引号包裹执行：载荷内的 '"'"' 转义只
+  # 有在单引号上下文里才还原成 SQL 的引号，拆开直跑会拼错语句。
+  { printf '%s\n' "sh -c '"; cat "$work/payload-local.sh"; printf '%s\n' "'"; } > "$runner"
+  bash "$runner" || fail "RR-LIVE-01: preprocessing payload must succeed on the fixture database"
+
+  local copy="$work/sqlite/gost-migrate.db"
+  [[ -f "$copy" ]] || fail "RR-LIVE-01: preprocessing must produce the migration copy"
+
+  assert_equals "" \
+    "$(sqlite3 "$copy" "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_user_username_fold_unique';")" \
+    "RR-LIVE-01: the migration copy must not carry the fold index that crashes pgloader"
+  assert_equals "0" \
+    "$(sqlite3 "$copy" "SELECT COUNT(*) FROM schema_migration WHERE version='k10_v5_username_casefold_unique';")" \
+    "RR-LIVE-01: the migration copy must not carry the v5 migration record (PG first start must re-run v5 and rebuild the fold index)"
+  assert_equals "2" \
+    "$(sqlite3 "$copy" "SELECT COUNT(*) FROM schema_migration;")" \
+    "RR-LIVE-01: other schema_migration records must survive preprocessing"
+  assert_equals "1" \
+    "$(sqlite3 "$copy" "SELECT COUNT(*) FROM schema_migration WHERE version='r5b4_v1_port_user_unique';")" \
+    "RR-LIVE-01: the v1 migration record must survive preprocessing"
+  assert_equals "2" \
+    "$(sqlite3 "$copy" "SELECT COUNT(*) FROM \"user\";")" \
+    "RR-LIVE-01: user rows must survive preprocessing"
+  assert_equals "Admin" \
+    "$(sqlite3 "$copy" "SELECT \"user\" FROM \"user\" WHERE id=1;")" \
+    "RR-LIVE-01: user row contents must survive preprocessing"
+  assert_equals "idx_user_username_unique" \
+    "$(sqlite3 "$copy" "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_user_username_unique';")" \
+    "RR-LIVE-01: the plain unique username index must survive preprocessing"
+  case "$(sqlite3 "$copy" ".schema peer_share_resource")" in
+    *"DEFAULT false"*|*"default false"*) fail "RR-LIVE-01: the legacy release_legacy_family default rewrite must still apply" ;;
+  esac
+
+  assert_equals "idx_user_username_fold_unique" \
+    "$(sqlite3 "$work/sqlite/gost.db" "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_user_username_fold_unique';")" \
+    "RR-LIVE-01: preprocessing must not touch the source database (fold index)"
+  assert_equals "1" \
+    "$(sqlite3 "$work/sqlite/gost.db" "SELECT COUNT(*) FROM schema_migration WHERE version='k10_v5_username_casefold_unique';")" \
+    "RR-LIVE-01: preprocessing must not touch the source database (v5 record)"
+  rm -rf "$work"
+)
+
 # R4B11-007: tcpkill 安装失败不得静默——check_and_install_tcpkill 在
 # 尝试后复检，缺失时必须给出点名受影响能力的告警（旧实现全部输出
 # 吞 /dev/null 且恒 return 0、无任何复检，本用例对旧代码必红）。
@@ -6989,6 +7070,7 @@ test_validate_panel_compose_content_rejects_bad_files
 test_validate_panel_update_compose_uses_content_validation
 test_activate_panel_update_files_keeps_hops_line
 test_pgloader_command_file_terminated
+test_panel_migrate_preprocess_drops_fold_index_and_v5_record
 test_tcpkill_missing_warns_instead_of_silent
 
 echo "install script tests passed"

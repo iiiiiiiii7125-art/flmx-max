@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261104.03"
+SCRIPT_VERSION="20261104.04"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -3137,8 +3137,26 @@ migrate_to_postgres() {
   # 默认值翻成 'false' 文本，PG 拒绝建表，迁移在建表阶段整体 FATAL。
   # 先复制一份库、把该列的模式默认值改成 0 再迁移（与模型侧修复互为
   # 双保险；模型已修复的版本里该文本不存在，替换不命中、照常迁移）。
+  #
+  # RR-LIVE-01：user 表的函数唯一索引 idx_user_username_fold_unique
+  # （B02-003 大小写判重兜底，表达式 (LOWER("user"))）会毒死 pgloader：
+  # 表达式列在 SQLite 的 PRAGMA index_info 里 name 为 NULL，pgloader
+  # 解析目录时得 NIL 即 KABOOM（TYPE-ERROR: NIL is not of type
+  # PGLOADER.CATALOG:COLUMN），全量迁移在拷表阶段整体崩溃。故副本上
+  # 再删该索引——但只删索引不够：其余索引靠 pgloader 自行重建，函数
+  # 索引被删后 PG 侧无人重建、DB 层判重兜底静默缺失。建索引的后端
+  # 迁移 migrateV5UsernameCasefoldUnique（go-backend/internal/store/
+  # repo/migration_k10_v5.go）先查 schema_migration 的版本记录、命中
+  # 即短路跳过，而 pgloader 会把该表数据一并搬走、记录必命中。故副
+  # 本上连带删除版本记录 k10_v5_username_casefold_unique，PG 首启时
+  # 后端重跑 v5 迁移补建索引并补记版本（v5 全函数已核幂等：除建表
+  # 兜底、建索引与补记版本外无数据副作用，预检与存在性检查皆只
+  # 读）。下方字面量与后端常量 migrationK10V5Version /
+  # usernameFoldIndexName 逐字对应，由 scripts/check-doc-consistency.sh
+  # 第 15 项对账门防漂移。两项删除只落重建后的副本，源库不动；删后
+  # 自检不通过即整段预处理失败、走下方回退原始库分支。
   pgloader_source="/sqlite/gost.db"
-  echo "🧹 预处理 SQLite 副本（release_legacy_family 默认值兼容）..."
+  echo "🧹 预处理 SQLite 副本（release_legacy_family 默认值兼容 + 删除毒死 pgloader 的函数索引）..."
   if docker run --rm -v "$sqlite_volume":/sqlite alpine sh -c '
     set -e
     apk add --no-cache sqlite >/dev/null 2>&1
@@ -3149,11 +3167,25 @@ migrate_to_postgres() {
     case "$(sqlite3 /sqlite/gost-migrate.db ".schema peer_share_resource")" in
       *"DEFAULT false"*|*"default false"*) exit 4 ;;
     esac
+    sqlite3 /sqlite/gost-migrate.db "DROP INDEX IF EXISTS idx_user_username_fold_unique;"
+    case "$(sqlite3 /sqlite/gost-migrate.db ".schema schema_migration")" in
+      "") : ;;
+      *) sqlite3 /sqlite/gost-migrate.db "DELETE FROM schema_migration WHERE version='"'"'k10_v5_username_casefold_unique'"'"';" ;;
+    esac
+    case "$(sqlite3 /sqlite/gost-migrate.db ".schema user")" in
+      *idx_user_username_fold_unique*) exit 5 ;;
+    esac
+    case "$(sqlite3 /sqlite/gost-migrate.db ".schema schema_migration")" in
+      "") : ;;
+      *) case "$(sqlite3 /sqlite/gost-migrate.db "SELECT version FROM schema_migration;")" in
+           *k10_v5_username_casefold_unique*) exit 6 ;;
+         esac ;;
+    esac
   '; then
     pgloader_source="/sqlite/gost-migrate.db"
     echo "✅ 迁移副本已生成：$pgloader_source"
   else
-    echo "⚠️ 副本预处理未完成（例如容器内无法安装 sqlite），改用原始库迁移；若 pgloader 报 numeric \"false\" 错误，请按 doc/guide/postgresql.md「迁移被 release_legacy_family 堵住」一节手动处理"
+    echo "⚠️ 副本预处理未完成（例如容器内无法安装 sqlite），改用原始库迁移；若 pgloader 报 numeric \"false\" 错误或因 user 表函数索引 KABOOM（TYPE-ERROR: NIL is not of type PGLOADER.CATALOG:COLUMN），请按 doc/guide/postgresql.md「迁移被 release_legacy_family 堵住」一节手动处理"
   fi
 
   echo "🔄 执行 pgloader 迁移..."

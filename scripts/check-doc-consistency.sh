@@ -55,6 +55,12 @@
 #      check 需 vite-frontend 的 node_modules（typescript）：CI 前
 #      端 job 先 pnpm install 再跑本门，本地未装依赖时子脚本会以
 #      非零码失败并点名，按其输出先装依赖再复跑。
+#   15. 迁移预处理字面量对账门（RR-LIVE-01 常设门）：panel_install.sh
+#      迁移预处理在副本上删的函数索引名与 schema_migration 版本字
+#      面量，必须与后端 migration_k10_v5.go 的常量
+#      usernameFoldIndexName / migrationK10V5Version 逐字一致——任
+#      一侧改名而另一侧未跟，预处理会删错/漏删：漏删索引 pgloader
+#      仍 KABOOM、漏删版本记录则 PG 侧函数索引静默缺失。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -429,6 +435,24 @@ if command -v node >/dev/null 2>&1; then
   fi
 else
   echo "PENDING: 前端 check 全集门未核（当前环境无 node 运行时）；请在装有 node 的环境复跑本门"
+fi
+
+# ── 15. 迁移预处理字面量对账（RR-LIVE-01 常设门）：脚本侧删除目标
+#    vs 后端 v5 迁移常量（索引名 + 版本字面量逐字一致）。
+mig_go_file="go-backend/internal/store/repo/migration_k10_v5.go"
+mig_go_index=$(grep -o 'usernameFoldIndexName = "[^"]*"' "$mig_go_file" | head -n1 | cut -d'"' -f2)
+mig_go_version=$(grep -o 'migrationK10V5Version = "[^"]*"' "$mig_go_file" | head -n1 | cut -d'"' -f2)
+# 脚本侧 DELETE 语句嵌在单引号 docker 载荷里，SQL 引号以 '"'"' 转
+# 义形态出现，先剥掉转义序列再按普通形态提取版本字面量。
+mig_sh_version=$(grep -m1 'DELETE FROM schema_migration' panel_install.sh | sed "s/'\"'\"'/'/g" | grep -o "version='[^']*'" | sed "s/.*version='//; s/'$//")
+if [ -z "$mig_go_index" ] || [ -z "$mig_go_version" ]; then
+  note_fail "迁移预处理字面量门：后端 $mig_go_file 中 usernameFoldIndexName / migrationK10V5Version 常量提取失败"
+elif ! grep -o 'DROP INDEX IF EXISTS [A-Za-z0-9_]*' panel_install.sh | awk '{print $NF}' | grep -Fxq "$mig_go_index"; then
+  note_fail "迁移预处理字面量门：panel_install.sh 预处理未删后端函数索引 $mig_go_index（与 usernameFoldIndexName 不一致或缺失）"
+elif [ "$mig_sh_version" != "$mig_go_version" ]; then
+  note_fail "迁移预处理字面量门：panel_install.sh 预处理删除的 schema_migration 版本字面量「$mig_sh_version」与后端 migrationK10V5Version「$mig_go_version」不一致"
+else
+  note_ok "迁移预处理字面量门：panel_install.sh 删除目标与后端 v5 常量逐字一致（$mig_go_index / $mig_go_version）"
 fi
 
 echo "----"
