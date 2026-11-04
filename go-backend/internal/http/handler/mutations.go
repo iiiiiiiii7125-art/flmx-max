@@ -1300,6 +1300,10 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, guardErr.Error()))
 		return
 	}
+	// R4-F2-02：守卫已占用的在途登记在本入口兜底释放——正常路径由
+	// 级联段先行释放并清标、本 defer no-op；连带卸载步 panic 时级联
+	// 段从未进入，靠本 defer 在展开期释放，避免登记泄漏至进程重启。
+	defer guard.releaseUpgradeOp(h, id)
 	// 连带卸载必须赶在删记录之前：记录删除后 secret 与在线会话都不
 	// 复存在，既下发不了命令也登记不了待卸载。卸载步的失败只进
 	// uninstallWarnings，不中止删除（见 node_delete_uninstall.go）。
@@ -1931,6 +1935,10 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailure(failures, id, nodeName, guardErr)
 			continue
 		}
+		// R4-F2-02：同单删入口的兜底释放（循环内 defer 安全：正常
+		// 路径级联段已释放并清标、defer 恒 no-op；仅连带步 panic
+		// 展开时对未清标的本节点生效）。
+		defer guard.releaseUpgradeOp(h, id)
 		// 连带卸载步（同单删：赶在删记录前下发/登记，失败只进
 		// warnings 不中止删除）。三态先暂存，删除成功后才计入聚合
 		// 计数（见级联成功后的 switch）。
@@ -8264,6 +8272,7 @@ func (h *Handler) deleteNodeByID(id int64) ([]nodeCrossReferrer, []string, error
 	if err != nil {
 		return nil, nil, err
 	}
+	defer guard.releaseUpgradeOp(h, id)
 	return h.deleteNodeByIDAfterGuards(id, guard)
 }
 
@@ -8276,6 +8285,24 @@ type nodeDeleteGuard struct {
 	soleRoleWarnings   []string
 	affectedInboundIDs []int64
 	holdsUpgradeOp     bool
+}
+
+// releaseUpgradeOp 释放守卫段占用的在途登记（R4-F2-02）。释放权
+// 归一：级联段入口即以 defer 调用本方法收尾，三个漏斗入口在守卫
+// 成功后亦各自 defer 本方法兜底——此前释放只在级联段内 defer，
+// 守卫与级联段之间的连带卸载步（prepareNodeAgentUninstall）若
+// panic，HTTP recover 只救请求、级联段的 defer 从未注册，登记无
+// TTL 永不释放，该节点升级/回退/再删恒被误拒至面板重启。
+// 本方法以 holdsUpgradeOp 为唯一所有权标记：先到者释放并清标，
+// 后到者 no-op——故入口的兜底 defer 不会误放级联段释放之后由
+// 其他操作新占用的同节点登记（releaseNodeUpgradeOp 本身按节点
+// 无条件删除、没有身份校验，所有权必须在本层收口）。
+func (g *nodeDeleteGuard) releaseUpgradeOp(h *Handler, id int64) {
+	if g == nil || !g.holdsUpgradeOp {
+		return
+	}
+	g.holdsUpgradeOp = false
+	h.releaseNodeUpgradeOp(id)
 }
 
 // checkNodeDeleteGuards 是漏斗的守卫校验段：任一守卫查询失败即
@@ -8374,10 +8401,11 @@ func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([
 		guard = &nodeDeleteGuard{}
 	}
 	// R9-06：守卫段以「删除」占用的在途登记在本段收尾释放——单删/
-	// 批删/创建补偿三入口都必经本段，无一遗漏。
-	if guard.holdsUpgradeOp {
-		defer h.releaseNodeUpgradeOp(id)
-	}
+	// 批删/创建补偿三入口都必经本段，无一遗漏。经 guard 的所有权
+	// 标记释放（R4-F2-02）：本 defer 先行释放并清标，入口处兜底
+	// defer 随后 no-op；仅当本段根本没被进入（连带步 panic）时才
+	// 由入口兜底释放。
+	defer guard.releaseUpgradeOp(h, id)
 	if h != nil && h.repo != nil {
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
 			for _, forwardID := range forwardIDs {
