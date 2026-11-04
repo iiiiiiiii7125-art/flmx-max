@@ -232,10 +232,7 @@ function App() {
       if (isLoginPage && siteConfig.login_bg_image) {
         customBg = siteConfig.login_bg_image;
       } else {
-        customBg =
-          (effectiveMode === "dark"
-            ? siteConfig.app_bg_image_dark
-            : siteConfig.app_bg_image_light) || siteConfig.app_bg_image;
+        customBg = siteConfig.app_bg_image_light || siteConfig.app_bg_image;
       }
 
       const root = document.documentElement;

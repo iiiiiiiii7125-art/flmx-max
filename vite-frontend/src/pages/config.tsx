@@ -1325,7 +1325,7 @@ export default function ConfigPage() {
       case "bg_image":
         // 登录页壁纸：单个上传器；主界面壁纸：默认+单独壁纸两个上传器。
         // 暗色模式已下线（2026-11-02），不再提供暗色壁纸上传器；
-        // app_bg_image_dark 配置键仅保留数据兼容，界面不再读写展示。
+        // app_bg_image_dark 配置键仅保留数据兼容搬运（仍随配置拉取/回写往返，界面不展示）。
         if (item.key === "login_bg_image") {
           return renderBgImageUploader("login_bg_image", item.label);
         }
