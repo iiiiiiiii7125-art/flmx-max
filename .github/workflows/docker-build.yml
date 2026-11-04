@@ -31,6 +31,7 @@ jobs:
       is_tag: ${{ steps.version.outputs.is_tag }}
       image_owner: ${{ steps.version.outputs.image_owner }}
       push_latest: ${{ steps.version.outputs.push_latest }}
+      dual_push_legacy: ${{ steps.version.outputs.dual_push_legacy }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -84,6 +85,26 @@ jobs:
           else
             echo "push_latest=false" >> $GITHUB_OUTPUT
           fi
+          # 改名过渡双推的机械止点：旧仓 flmx-flux-panel-backend 随
+          # 1.9.8 起双推、至 1.9.10 止（含），1.9.11 起停推。此处把
+          # 待发版本与止点 1.9.10 按数字核心比较（忽略 -beta 等后缀），
+          # 结论经 dual_push_legacy 输出给 build-go-backend 决定是否
+          # 给旧仓打 tag——止点由判定执行，不再靠发版人记得删段。
+          DUAL_PUSH_LEGACY=false
+          _ver_core="${VERSION%%-*}"
+          IFS='.' read -r -a _vp <<< "$_ver_core"
+          _lp=(1 9 10)
+          _cmp=0
+          for _i in 0 1 2; do
+            _n="${_vp[$_i]:-0}"
+            _n="${_n//[!0-9]/}"
+            _n="${_n:-0}"
+            if [ "$_n" -gt "${_lp[$_i]}" ]; then _cmp=1; break; fi
+            if [ "$_n" -lt "${_lp[$_i]}" ]; then _cmp=-1; break; fi
+          done
+          if [ "$_cmp" -le 0 ]; then DUAL_PUSH_LEGACY=true; fi
+          echo "dual_push_legacy=$DUAL_PUSH_LEGACY" >> $GITHUB_OUTPUT
+          echo "🚚 Legacy repo dual-push (flmx-flux-panel-backend): $DUAL_PUSH_LEGACY (version $VERSION vs cutoff 1.9.10)"
 
   # C4-02（第三轮再审计）：发版路径门禁前置校验。本 workflow 的触发
   # （tag push + workflow_dispatch）与 ci-build（分支 push + PR）不相交，
@@ -289,10 +310,14 @@ jobs:
 
           # 改名过渡双推：后端镜像已迁至 flmx-panel-backend 新仓，旧仓
           # flmx-flux-panel-backend 以同构建同 tag 并行推送，供改名前
-          # 的 compose 继续拉取。双推自 1.9.8 起、至 1.9.10 止，之后删此段。
-          TAGS+=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:${VERSION}")
-          if [ "${{ needs.check-version.outputs.push_latest }}" = "true" ]; then
-            TAGS+=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:latest")
+          # 的 compose 继续拉取。窗口由 check-version 的 dual_push_legacy
+          # 输出机械执行：版本 ≤1.9.10 时为 true（本段生效），1.9.11 起
+          # 为 false、本段自动跳过，旧仓就此停推，无需人工删段。
+          if [ "${{ needs.check-version.outputs.dual_push_legacy }}" = "true" ]; then
+            TAGS+=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:${VERSION}")
+            if [ "${{ needs.check-version.outputs.push_latest }}" = "true" ]; then
+              TAGS+=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:latest")
+            fi
           fi
 
           docker buildx build \
