@@ -104,10 +104,23 @@ let ts;
 try {
   ts = require("typescript");
 } catch {
-  // worktree 尚未 pnpm install 时，退回主仓的 node_modules。
-  ts = require(
-    "/home/hatch/workspace/flvx-max/vite-frontend/node_modules/typescript",
-  );
+  // R4-C6-04：typescript 只许自当前工作树解析。未装依赖时不再静默
+  // 回退到写死的其它检出路径——门结果会随那份检出的 TS 版本漂移
+  // 且无点名。确需外部副本时以 FLMX_CHECK_TYPESCRIPT 显式指向，
+  // 并在此点名（输出 NOTE 行）。
+  const envTs = process.env.FLMX_CHECK_TYPESCRIPT;
+
+  if (envTs) {
+    ts = require(envTs);
+    console.log(
+      `NOTE  typescript 由 FLMX_CHECK_TYPESCRIPT 显式指向工作树外副本：${envTs}（v${ts.version}）`,
+    );
+  } else {
+    console.log(
+      "FAIL  typescript 无法自当前工作树解析（vite-frontend/node_modules 缺失）——先 pnpm install，或以 FLMX_CHECK_TYPESCRIPT=<typescript 路径> 显式指向外部副本",
+    );
+    process.exit(1);
+  }
 }
 
 // ── ① src 内 classList.add / toggle 不得带 'dark'（AST 发现） ──────

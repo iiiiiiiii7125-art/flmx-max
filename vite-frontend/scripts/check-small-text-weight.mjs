@@ -44,14 +44,18 @@ let ts;
 try {
   ts = require("typescript");
 } catch {
-  try {
-    // worktree 尚未 pnpm install 时，退回主仓的 node_modules。
-    ts = require(
-      "/home/hatch/workspace/flvx-max/vite-frontend/node_modules/typescript",
-    );
-  } catch {
+  // R4-C6-04：同其它 TS 类门——只许当前工作树解析；外部副本须经
+  // FLMX_CHECK_TYPESCRIPT 显式指向并点名，不再静默回退写死路径。
+  const envTs = process.env.FLMX_CHECK_TYPESCRIPT;
+
+  if (envTs) {
+    ts = require(envTs);
     console.log(
-      "FAIL  typescript 不可解析——G5 归属判定依赖真解析器，fail-closed",
+      `NOTE  typescript 由 FLMX_CHECK_TYPESCRIPT 显式指向工作树外副本：${envTs}（v${ts.version}）`,
+    );
+  } else {
+    console.log(
+      "FAIL  typescript 无法自当前工作树解析——G5 归属判定依赖真解析器，fail-closed（先 pnpm install，或以 FLMX_CHECK_TYPESCRIPT=<typescript 路径> 显式指向外部副本）",
     );
     process.exit(2);
   }

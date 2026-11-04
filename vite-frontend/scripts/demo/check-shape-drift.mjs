@@ -58,23 +58,27 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 let ts;
-for (const cand of [
-  path.join(frontendRoot, "node_modules/typescript"),
-  path.join(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../node_modules/typescript",
-  ),
-  "/home/hatch/workspace/flvx-max/vite-frontend/node_modules/typescript",
-]) {
-  try {
-    ts = require(cand);
-    break;
-  } catch {
-    // try next candidate
+try {
+  ts = require("typescript");
+} catch {
+  // R4-C6-04: typescript resolves from the current worktree only.
+  // The former hard-coded fallback into another checkout is gone:
+  // gate results must not silently depend on a different tree's
+  // dependency state. Point FLMX_CHECK_TYPESCRIPT at an external
+  // copy explicitly if one is intended; it is named in the output.
+  const envTs = process.env.FLMX_CHECK_TYPESCRIPT;
+
+  if (envTs) {
+    ts = require(envTs);
+    console.log(
+      `NOTE  typescript via FLMX_CHECK_TYPESCRIPT (outside this worktree): ${envTs} (v${ts.version})`,
+    );
   }
 }
 if (!ts) {
-  console.log("FAIL  typescript not resolvable; AST extraction unavailable");
+  console.log(
+    "FAIL  typescript not resolvable from this worktree; run pnpm install first, or set FLMX_CHECK_TYPESCRIPT=<path to typescript>",
+  );
   process.exit(1);
 }
 
