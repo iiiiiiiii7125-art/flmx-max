@@ -830,7 +830,13 @@ export default function PanelSharingPage() {
                                 ? "提供方已禁用该分享"
                                 : node.syncError === "provider_share_expired"
                                   ? "提供方分享已过期"
-                                  : `远程同步失败: ${node.syncError}`}
+                                  : node.syncError === "provider_share_over_quota"
+                                    ? "提供方分享流量已超额"
+                                    : node.syncError === "provider_share_ip_denied"
+                                      ? "提供方未允许本面板的来源 IP"
+                                      : node.syncError === "provider_share_domain_denied"
+                                        ? "提供方未允许本面板的域名"
+                                        : `远程同步失败: ${node.syncError}`}
                           </div>
                         )}
                         {node.versionWarning && (

@@ -914,7 +914,13 @@ func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Reque
 			defer func() { <-sem }()
 			info, connectErr := fc.Connect(url, token, localDomain)
 			if connectErr != nil {
-				syncs[idx].syncError = connectErr.Error()
+				// R1-FED-01：与状态同步面同映射成码（此前存原文，
+				// 用量视图的专设文案分支同样永不可达）。
+				if code := federationSyncErrorCode(connectErr.Error()); code != "" {
+					syncs[idx].syncError = code
+				} else {
+					syncs[idx].syncError = connectErr.Error()
+				}
 				return
 			}
 			if info == nil {
@@ -1453,9 +1459,21 @@ func (h *Handler) authPeer(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		if share.IsActive != 1 || (share.ExpiryTime > 0 && share.ExpiryTime <= time.Now().UnixMilli()) || isPeerShareFlowExceeded(share) {
-			if !isFederationCleanupRequest(r) {
-				response.WriteJSON(w, response.Err(403, "Share is inactive, expired, or over quota"))
+		// R1-FED-01：停用/到期/超额三因分开点名——此前合并为一句
+		// "Share is inactive, expired, or over quota"，消费方无从
+		// 区分、只能一律映射「已禁用」（其为过期备的专设文案永不
+		// 可达）。消费方映射见 federationSyncErrorCode，与本处三
+		// 文案逐字对齐；超额文案与 apply-role 面既有文案一致。
+		if !isFederationCleanupRequest(r) {
+			switch {
+			case share.IsActive != 1:
+				response.WriteJSON(w, response.Err(403, "Share is inactive"))
+				return
+			case share.ExpiryTime > 0 && share.ExpiryTime <= time.Now().UnixMilli():
+				response.WriteJSON(w, response.Err(403, "Share has expired"))
+				return
+			case isPeerShareFlowExceeded(share):
+				response.WriteJSON(w, response.Err(403, "Share traffic limit exceeded"))
 				return
 			}
 		}
@@ -2059,6 +2077,18 @@ func (h *Handler) federationRuntimeApplyRole(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		req.Protocol = normalizeTunnelProtocol(req.Protocol)
+	}
+	// R1-03-L1：strategy 同口径立门——合法集本体是
+	// kernel.PeerRuntimeStrategyLegal 单点。此前原文落库，集外值
+	// 经联邦链渲染直达 agent 后被 default 为轮询（声明≠生效、无
+	// 回执）。空值沿既有缺省语义（下方 defaultString 落 round），
+	// 非空先 TrimSpace 再判、落库归一值。
+	if strings.TrimSpace(req.Strategy) != "" {
+		req.Strategy = strings.TrimSpace(req.Strategy)
+		if !kernel.PeerRuntimeStrategyLegal(req.Strategy) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("不支持的负载策略 %q，合法值为 fifo、round、rand、hash、best", req.Strategy)))
+			return
+		}
 	}
 	for i := range req.Targets {
 		if strings.TrimSpace(req.Targets[i].Protocol) != "" {
@@ -2950,6 +2980,34 @@ func isPeerIPAllowed(clientIP net.IP, whitelist string) bool {
 	return false
 }
 
+// federationSyncErrorCode 把提供方 Connect 错误（client 形态
+// "remote error <status>: <body>"）映射为消费方节点状态码
+// （R1-FED-01）：按 authPeer 的实际回执文案逐类区分——IP 拒绝、
+// 域名拒绝、已过期、已超额、已停用各自成码，使前端专设文案可
+// 达。此前全部 403 一律映射 provider_share_disabled，且映射表
+// 里的 "Share is disabled"/"Share expired" 字面量在提供方根本
+// 不存在、分支永不可达。无法分类时返回 ""（调用方回退原文）。
+// 旧版提供方的合并文案（"Share is inactive, expired, or over
+// quota"）三因不可分，命中 "Share is inactive" 前缀按停用计，
+// 是该形态下的既定降级。
+func federationSyncErrorCode(errMsg string) string {
+	switch {
+	case strings.Contains(errMsg, "401") || strings.Contains(errMsg, "Invalid token") || strings.Contains(errMsg, "Unauthorized"):
+		return "provider_share_deleted"
+	case strings.Contains(errMsg, "IP not allowed") || strings.Contains(errMsg, "Unable to determine client IP"):
+		return "provider_share_ip_denied"
+	case strings.Contains(errMsg, "Domain not allowed") || strings.Contains(errMsg, "Domain verification required"):
+		return "provider_share_domain_denied"
+	case strings.Contains(errMsg, "Share has expired"):
+		return "provider_share_expired"
+	case strings.Contains(errMsg, "Share traffic limit exceeded"):
+		return "provider_share_over_quota"
+	case strings.Contains(errMsg, "403") || strings.Contains(errMsg, "Share is inactive"):
+		return "provider_share_disabled"
+	}
+	return ""
+}
+
 func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 	type remoteEntry struct {
 		index        int
@@ -3022,15 +3080,11 @@ func (h *Handler) syncRemoteNodeStatuses(items []map[string]interface{}) {
 			info, err := fc.Connect(e.remoteURL, e.remoteToken, localDomain)
 			if err != nil {
 				errMsg := err.Error()
-				if strings.Contains(errMsg, "401") || strings.Contains(errMsg, "Invalid token") || strings.Contains(errMsg, "Unauthorized") {
-					results[idx] = syncResult{index: e.index, status: 0, syncError: "provider_share_deleted"}
-				} else if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "Share is disabled") {
-					results[idx] = syncResult{index: e.index, status: 0, syncError: "provider_share_disabled"}
-				} else if strings.Contains(errMsg, "Share expired") {
-					results[idx] = syncResult{index: e.index, status: 0, syncError: "provider_share_expired"}
-				} else {
-					results[idx] = syncResult{index: e.index, status: 0, syncError: errMsg}
+				code := federationSyncErrorCode(errMsg)
+				if code == "" {
+					code = errMsg
 				}
+				results[idx] = syncResult{index: e.index, status: 0, syncError: code}
 			} else {
 				logFederationVersionWarning(info)
 				// R2-F3-01：状态同步同样是凭据自愈面（relay.md「下次

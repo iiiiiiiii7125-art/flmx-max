@@ -21,5 +21,17 @@ export const getRemoteSyncErrorMessage = (syncError: string): string => {
     return "提供方分享已过期";
   }
 
+  if (syncError === "provider_share_over_quota") {
+    return "提供方分享流量已超额";
+  }
+
+  if (syncError === "provider_share_ip_denied") {
+    return "提供方未允许本面板的来源 IP";
+  }
+
+  if (syncError === "provider_share_domain_denied") {
+    return "提供方未允许本面板的域名";
+  }
+
   return `远程同步失败: ${syncError}`;
 };

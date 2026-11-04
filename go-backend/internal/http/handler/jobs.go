@@ -79,6 +79,7 @@ func (h *Handler) runFederationCleanupRetryLoop(ctx context.Context) {
 			log.Printf("federation cleanup remains pending: %v", err)
 		}
 		h.retryPendingPeerShareOperations()
+		h.reclaimExpiredPeerShares()
 		select {
 		case <-ctx.Done():
 			return
@@ -103,6 +104,36 @@ func (h *Handler) retryPendingPeerShareOperations() {
 		}
 		if err := h.retryPendingPeerShareRoleRuntimesOnNode(nodeID); err != nil {
 			log.Printf("peer share role retry failed node_id=%d err=%v", nodeID, err)
+		}
+	}
+}
+
+// reclaimExpiredPeerShares 是共享到期的主动回收触发（R1-FED-02）：
+// 与维护 tick 同频普查「已到期且仍有存量 runtime/resource 未拆」
+// 的 share，逐个走与超额即时 cleanup、删 share 相同的拆除路径
+// （cleanupPeerShareRuntimes）。此前到期只有控制面拒新分配，存
+// 量监听要等节点重连对账才拆，在线节点上可无限期越界存活。
+// 节点离线时跳过本轮：拆除命令无从送达，等重连对账的既有路径
+// 收口，不逐 tick 空转。回收完成后普查条件自然不再命中（运行
+// 时进入 release_pending 或落定、resource 删除落定），不重复拆。
+func (h *Handler) reclaimExpiredPeerShares() {
+	shareIDs, err := h.repo.ListExpiredPeerShareIDs(time.Now().UnixMilli())
+	if err != nil {
+		log.Printf("peer share expiry reclaim lookup failed: %v", err)
+		return
+	}
+	for _, shareID := range shareIDs {
+		share, err := h.repo.GetPeerShare(shareID)
+		if err != nil || share == nil {
+			continue
+		}
+		node, err := h.repo.GetNodeByID(share.NodeID)
+		if err != nil || node == nil || node.Status != 1 {
+			continue
+		}
+		log.Printf("federation: share %d expired, reclaiming active runtimes/resources", shareID)
+		if err := h.cleanupPeerShareRuntimes(shareID); err != nil {
+			log.Printf("federation: expiry reclaim for share %d incomplete: %v", shareID, err)
 		}
 	}
 }
