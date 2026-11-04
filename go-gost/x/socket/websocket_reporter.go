@@ -1849,15 +1849,12 @@ func resolveAgentBinaryPath() string {
 	return filepath.Join("/etc", agentInstallName, agentInstallName)
 }
 
-// serviceManagerCommands returns the stop/start/is-active shell
-// commands for the manager and the current-generation service,
-// spelled exactly as install.sh spells them.
-func serviceManagerCommands(manager serviceManager) (stop, start, active string, err error) {
-	return serviceManagerCommandsFor(manager, agentInstallName)
-}
-
-// serviceManagerCommandsFor is serviceManagerCommands for one
-// install layout's service name (see agentServiceNameFor).
+// serviceManagerCommandsFor returns the stop/start/is-active shell
+// commands for the manager and one install layout's service name
+// (see agentServiceNameFor), spelled exactly as install.sh spells
+// them. Callers must pass the service name of the layout they act
+// on: layouts that were never migrated still run the legacy service
+// name, and commands against the wrong name silently do nothing.
 func serviceManagerCommandsFor(manager serviceManager, serviceName string) (stop, start, active string, err error) {
 	switch manager {
 	case serviceManagerSystemd:
@@ -1869,16 +1866,11 @@ func serviceManagerCommandsFor(manager serviceManager, serviceName string) (stop
 	}
 }
 
-// serviceManagerPIDCommand returns the shell command printing the
-// current-generation service's main PID (empty output or 0 when not
-// running). The OpenRC path follows install.sh's init script, which
-// pins pidfile="/run/${RC_SVCNAME}.pid".
-func serviceManagerPIDCommand(manager serviceManager) (string, error) {
-	return serviceManagerPIDCommandFor(manager, agentInstallName)
-}
-
-// serviceManagerPIDCommandFor is serviceManagerPIDCommand for one
-// install layout's service name (see agentServiceNameFor).
+// serviceManagerPIDCommandFor returns the shell command printing
+// one install layout's service main PID (empty output or 0 when not
+// running; see agentServiceNameFor). The OpenRC path follows
+// install.sh's init script, which pins
+// pidfile="/run/${RC_SVCNAME}.pid".
 func serviceManagerPIDCommandFor(manager serviceManager, serviceName string) (string, error) {
 	switch manager {
 	case serviceManagerSystemd:
