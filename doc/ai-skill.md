@@ -211,11 +211,11 @@ cat ~/.agents/skills/flmx-api/SKILL.md >> ~/.claude/CLAUDE.md
 
 ## 发布
 
-技能包随 FLMX 产品版本一起发布，不单独打 tag：推送**纯数字 tag**（与产品版本相同，如 `1.9.7`）会同时触发产品构建与技能包发布流水线。版本号不由流水线改写：发版提交须先把三处字面量（`skills/flmx-api/SKILL.md`、`skills/flmx-api/package.json` 与本文示例）人工 bump 到待发版本；技能包发布流水线在发布前断言 package.json 的版本与 tag 一致，不一致即中止发布——漏 bump 不会再静默发出 SKILL.md 与包版本错位的包。
+技能包随 FLMX 产品版本一起发布，不单独打 tag：推送**纯数字 tag**（与产品版本相同，如 `1.9.8`）会同时触发产品构建与技能包发布流水线。版本号不由流水线改写：发版提交须先把三处字面量（`skills/flmx-api/SKILL.md`、`skills/flmx-api/package.json` 与本文示例）人工 bump 到待发版本；技能包发布流水线在发布前断言 package.json 的版本与 tag 一致，不一致即中止发布——漏 bump 不会再静默发出 SKILL.md 与包版本错位的包。
 
 ```bash
 # 随产品版本发布（示例）
-git tag 1.9.7
+git tag 1.9.8
 git push --tags
 ```
 
