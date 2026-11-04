@@ -29,7 +29,12 @@ jobs:
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      # R4-C4-02: contents: write was idle — no step writes repo
+      # content (checkout reads; npm publish uses NPM_TOKEN +
+      # id-token provenance; this workflow creates no Release).
+      # Converged to read, matching docker-build's per-job F-125
+      # least-privilege posture.
+      contents: read
       id-token: write
     steps:
       - name: Checkout
@@ -60,11 +65,12 @@ jobs:
             # tag-push release build chained above, head_branch is
             # the version tag itself (e.g. 1.9.6).
             VERSION="${{ github.event.workflow_run.head_branch }}"
-          else
-            # AUDIT-R1 (SCR-001): 纯数字 tag（如 1.0.2）没有 v 前缀，
-            # 原 "${GITHUB_REF#refs/tags/v}" 剥不掉前缀，会得到完整 ref。
-            VERSION="${GITHUB_REF#refs/tags/}"
           fi
+          # R4-C4-03: the former else branch (strip the version from
+          # GITHUB_REF, AUDIT-R1 SCR-001) served the tag-push trigger
+          # that R3-C4-03 removed; the current trigger set is only
+          # workflow_run and workflow_dispatch, both covered above,
+          # so the else was unreachable and has been deleted.
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing skill version: $VERSION"
 
