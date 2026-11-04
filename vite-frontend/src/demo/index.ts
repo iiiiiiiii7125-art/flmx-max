@@ -78,6 +78,11 @@ export function switchDemoRole(role: DemoRole) {
  * 动作都回带状态对象、由 tuneAnswer 先于词表合成回答，词表仅兜底；
  * 同理 tunnel/delete-preview 与 tunnel/batch-delete-preview 是带
  * 数据的预览读、由 deletePreviewAnswer 先于词表合成（见下两函数）。
+ * R4-C5-01/02/03 同族：node/install、subscription/template/refresh、
+ * backup/import、backup/gist/restore、inbound/import、backup/export、
+ * subscription/source/refresh、monitor/services/run、
+ * federation/node/import 与 backup/gist/save（echo 形状不符）的回执
+ * 均由 receiptAnswer 先于词表按真实形状合成（见该函数头注）。
  */
 const WRITE_WORDS = new Set(
   "create save update delete remove assign reset toggle import install control regenerate pause resume redeploy batch force run refresh split rollback test dismiss restore export reconcile clear login register finish begin verify set upgrade tune".split(
@@ -402,6 +407,436 @@ function tuneAnswer(bare: string) {
   return { code: 0, msg: "操作成功", data, ts: Date.now() };
 }
 
+const parseBody = (body: unknown): Record<string, unknown> => {
+  try {
+    return (typeof body === "string" ? JSON.parse(body) : body) ?? {};
+  } catch {
+    return {};
+  }
+};
+
+const listOf = (book: Record<string, Entry[]>, k: string) =>
+  (book[k]?.[0]?.res.data ?? []) as Array<Record<string, unknown>>;
+
+/**
+ * Data-carrying action POSTs (R4-C5-01/02/03 + I01/I02): the wordlist
+ * judges these writes and answers data:null (or, for save, an echo of
+ * the request body), but their pages consume a real receipt — a null
+ * receipt makes node/install and template/refresh error-toast the
+ * write answer's own msg ("操作成功"), leaves the import receipt
+ * panels permanently empty, and breaks the backup export blob path.
+ * Synthesize each receipt in the backend's exact shape:
+ *  - node/install: one sample command per mode (a real panel embeds
+ *    the node's secret and the panel address; the demo shows the
+ *    shape with placeholder values, labelled as synthesized);
+ *  - subscription/template/refresh: the recorded template row, with
+ *    the fetch error cleared and lastFetch re-stamped;
+ *  - backup/import: counts derived from the submitted file itself
+ *    (the visitor picks a real backup file; its segment arrays are
+ *    in the request body), with the removed group segments counted
+ *    as *Ignored and named in importWarnings in the backend's own
+ *    wording — a zero-skip receipt for current-format files;
+ *  - backup/gist/restore: the same receipt shape, counted from the
+ *    recorded lists (the demo's own data set is what a restore of
+ *    the demo backup would bring back);
+ *  - inbound/import: one created id per non-empty pasted line;
+ *  - subscription/source/refresh: a zero-change sync result;
+ *  - monitor/services/run: one successful result row (the demo has
+ *    no agents, but "ran and failed" would be a false claim — the
+ *    recorded definitions/results make a success row the honest
+ *    sample);
+ *  - federation/node/import: a fresh import whose peer version is
+ *    the recorded book's latest version, with no version warning;
+ *  - backup/gist/save: a GistBackupStatus built from the recorded
+ *    status plus the submitted token/password/interval semantics
+ *    (the save echo previously returned the raw request body, which
+ *    the page applied as an unconfigured status).
+ * backup/export is not an envelope at all: it returns a download
+ * marker the adapter turns into an attachment response (see
+ * demoAdapter), carrying a backup file assembled from the recorded
+ * lists in the real BackupData envelope (version "1.0"). The
+ * configs segment is deliberately not synthesized — the recorded
+ * config rows are real panel configuration and a demo download
+ * must not carry them out.
+ */
+function installAnswer(bare: string, body: unknown) {
+  if (bare !== "node/install") return null;
+  const req = parseBody(body);
+  const mode = String(req.mode ?? "script");
+  const head =
+    "# 演示站合成的示例命令：真实面板会生成带该节点密钥与面板地址的一次性命令";
+  const data =
+    mode === "docker"
+      ? `${head}\ndocker run -d --name flmx-agent --network host --cap-add NET_ADMIN${req.privileged === true ? " --privileged" : ""} --restart unless-stopped ghcr.io/example/flmx-agent:latest`
+      : mode === "docker-compose"
+        ? `${head}\n# 面板生成 docker-compose.yaml（服务 flmx-agent，network_mode: host）后执行\ndocker compose up -d`
+        : `${head}\ncurl -fsSL https://example.com/flmx/install.sh | bash -s -- --addr https://panel.example.com --secret <节点密钥>`;
+
+  return { code: 0, msg: "操作成功", data, ts: Date.now() };
+}
+
+function templateRefreshAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  if (bare !== "subscription/template/refresh") return null;
+  const req = parseBody(body);
+  const items = listOf(book, "subscription/template/list");
+  const item = items.find((i) => Number(i.id) === Number(req.id)) ?? items[0];
+
+  if (!item) return null;
+
+  return {
+    code: 0,
+    msg: "操作成功",
+    data: { ...structuredClone(item), lastError: "", lastFetch: Date.now() },
+    ts: Date.now(),
+  };
+}
+
+const IMPORT_COUNT_KEYS = [
+  "usersImported",
+  "nodesImported",
+  "tunnelsImported",
+  "forwardsImported",
+  "userTunnelsImported",
+  "speedLimitsImported",
+  "tunnelGroupsIgnored",
+  "userGroupsIgnored",
+  "permissionsIgnored",
+  "configsImported",
+  "inboundsImported",
+  "userInboundsImported",
+  "inboundKernelsImported",
+  "inboundRelaysImported",
+  "inboundCountersImported",
+  "inboundSubscriptionsImported",
+  "inboundSubscriptionCountersImported",
+  "inboundSourcesImported",
+  "inboundShieldsImported",
+  "inboundNodeGroupsIgnored",
+  "inboundTemplatesImported",
+  "inboundLegacyUsersImported",
+  "announcementsImported",
+  "monitorPermissionsImported",
+  "userSubscriptionsImported",
+  "serviceMonitorsImported",
+  "nodeSSHConfigsImported",
+  "peerSharesImported",
+];
+
+function importReceipt(
+  counts: Record<string, number>,
+  warnings: string[],
+) {
+  const data: Record<string, unknown> = {};
+
+  for (const k of IMPORT_COUNT_KEYS) data[k] = counts[k] ?? 0;
+  data.userSubscriptionsSkipped = 0;
+  if (warnings.length) data.importWarnings = warnings;
+
+  return { code: 0, msg: "操作成功", data, ts: Date.now() };
+}
+
+function backupImportAnswer(bare: string, body: unknown) {
+  if (bare !== "backup/import") return null;
+  const req = parseBody(body);
+  const types = Array.isArray(req.types) ? req.types.map(String) : [];
+  const on = (t: string) => types.length === 0 || types.includes(t);
+  const len = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+  const counts: Record<string, number> = {};
+
+  if (on("users")) counts.usersImported = len(req.users);
+  if (on("nodes")) {
+    counts.nodesImported = len(req.nodes);
+    counts.nodeSSHConfigsImported = len(req.nodeSSHConfigs);
+    counts.peerSharesImported = len(req.peerShares);
+  }
+  if (on("tunnels")) counts.tunnelsImported = len(req.tunnels);
+  if (on("forwards")) counts.forwardsImported = len(req.forwards);
+  if (on("userTunnels")) counts.userTunnelsImported = len(req.userTunnels);
+  if (on("speedLimits")) counts.speedLimitsImported = len(req.speedLimits);
+  if (on("configs"))
+    counts.configsImported =
+      req.configs && typeof req.configs === "object"
+        ? Object.keys(req.configs).length
+        : 0;
+  if (on("userInbounds")) counts.userInboundsImported = len(req.userInbounds);
+  if (on("announcements"))
+    counts.announcementsImported = len(req.announcements);
+  if (on("monitorPermissions"))
+    counts.monitorPermissionsImported = len(req.monitorPermissions);
+  if (on("userSubscriptions"))
+    counts.userSubscriptionsImported = len(req.userSubscriptions);
+  if (on("serviceMonitors"))
+    counts.serviceMonitorsImported = len(req.serviceMonitors);
+  if (on("inbounds")) {
+    const inb = (req.inbounds ?? {}) as Record<string, unknown>;
+
+    counts.inboundKernelsImported = len(inb.kernels);
+    counts.inboundsImported = len(inb.inbounds);
+    counts.inboundRelaysImported = len(inb.relays);
+    counts.inboundCountersImported = len(inb.counters);
+    counts.inboundSubscriptionsImported = len(inb.subscriptions);
+    counts.inboundSubscriptionCountersImported = len(
+      inb.subscriptionCounters,
+    );
+    counts.inboundSourcesImported = len(inb.sources);
+    counts.inboundShieldsImported = len(inb.shields);
+    counts.inboundTemplatesImported = len(inb.templates);
+    counts.inboundLegacyUsersImported = len(inb.users);
+    counts.inboundNodeGroupsIgnored = len(inb.nodeGroups);
+  }
+  // The removed group segments are noted on every import that
+  // carries them, whatever segment set was selected (the backend's
+  // noteRemovedGroupSegments口径), in its own warning wording.
+  counts.tunnelGroupsIgnored = len(req.tunnelGroups);
+  counts.userGroupsIgnored = len(req.userGroups);
+  counts.permissionsIgnored = len(req.permissions);
+  const warnings: string[] = [];
+
+  if (counts.tunnelGroupsIgnored)
+    warnings.push(
+      `备份恢复：隧道分组功能已移除，备份中的 tunnelGroups 段（${counts.tunnelGroupsIgnored} 条）已忽略未恢复`,
+    );
+  if (counts.userGroupsIgnored)
+    warnings.push(
+      `备份恢复：用户分组功能已移除，备份中的 userGroups 段（${counts.userGroupsIgnored} 条）已忽略未恢复`,
+    );
+  if (counts.permissionsIgnored)
+    warnings.push(
+      `备份恢复：分组权限功能已移除，备份中的 permissions 段（${counts.permissionsIgnored} 条）已忽略未恢复`,
+    );
+  if (counts.inboundNodeGroupsIgnored)
+    warnings.push(
+      `备份恢复：节点组功能已移除，备份中的 nodeGroups 段（${counts.inboundNodeGroupsIgnored} 条）已忽略未恢复`,
+    );
+
+  return importReceipt(counts, warnings);
+}
+
+function gistRestoreAnswer(bare: string, book: Record<string, Entry[]>) {
+  if (bare !== "backup/gist/restore") return null;
+  const n = (k: string) => listOf(book, k).length;
+
+  return importReceipt(
+    {
+      usersImported: n("user/list"),
+      nodesImported: n("node/list"),
+      tunnelsImported: n("tunnel/list"),
+      forwardsImported: n("forward/list"),
+      speedLimitsImported: n("speed-limit/list"),
+      userSubscriptionsImported: n("user-subscription/list"),
+      serviceMonitorsImported: n("monitor/services"),
+      inboundKernelsImported: n("kernel/list"),
+      inboundsImported: n("inbound/list"),
+      inboundRelaysImported: n("inbound/relay/list"),
+      inboundSourcesImported: n("subscription/source/list"),
+      inboundTemplatesImported: n("subscription/template/list"),
+    },
+    [],
+  );
+}
+
+function inboundImportAnswer(bare: string, body: unknown) {
+  if (bare !== "inbound/import") return null;
+  const req = parseBody(body);
+  const lines = String(req.links ?? "")
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return {
+    code: 0,
+    msg: "操作成功",
+    data: { created: lines.map((_, i) => 9001 + i), errors: [] },
+    ts: Date.now(),
+  };
+}
+
+function sourceRefreshAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  if (bare !== "subscription/source/refresh") return null;
+  const req = parseBody(body);
+  const source =
+    listOf(book, "subscription/source/list").find(
+      (s) => Number(s.id) === Number(req.id),
+    ) ?? { id: Number(req.id) || 0 };
+  const result = {
+    added: 0,
+    updated: 0,
+    removed: 0,
+    kept: 0,
+    keptUnknown: 0,
+    keptStale: 0,
+    shielded: 0,
+    status: "ok",
+    truncated: 0,
+    errors: [],
+  };
+
+  return { code: 0, msg: "操作成功", data: { source, result }, ts: Date.now() };
+}
+
+function serviceRunAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  if (bare !== "monitor/services/run") return null;
+  const req = parseBody(body);
+  const id = Number(req.id);
+  const def = listOf(book, "monitor/services").find(
+    (m) => Number(m.id) === id,
+  );
+
+  return {
+    code: 0,
+    msg: "操作成功",
+    data: {
+      id: Date.now() % 100000,
+      monitorId: id,
+      nodeId: Number(def?.nodeId ?? 0),
+      timestamp: Date.now(),
+      success: 1,
+      latencyMs: 26,
+      statusCode: 0,
+      errorMessage: "",
+    },
+    ts: Date.now(),
+  };
+}
+
+function federationImportAnswer(bare: string, book: Record<string, Entry[]>) {
+  if (bare !== "federation/node/import") return null;
+  const version = book["system/version"]?.[0]?.res.data as
+    | { latestVersion?: string; currentVersion?: string }
+    | undefined;
+  const panelVersion = version?.latestVersion || version?.currentVersion || "";
+  const data: Record<string, unknown> = { refreshed: false, versionWarning: "" };
+
+  if (panelVersion) data.panelVersion = panelVersion;
+
+  return { code: 0, msg: "操作成功", data, ts: Date.now() };
+}
+
+function gistSaveAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  if (bare !== "backup/gist/save") return null;
+  const req = parseBody(body);
+  const prev = (book["backup/gist/status"]?.[0]?.res.data ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const uploaded = book["backup/gist/upload"]?.[0]?.res.data as
+    | { status?: Record<string, unknown> }
+    | undefined;
+  const status: Record<string, unknown> = {
+    configured: false,
+    tokenHint: "",
+    encrypted: false,
+    intervalHours: 0,
+    gistUrl: "",
+    lastAt: 0,
+    lastUpload: 0,
+    lastError: "",
+    ...prev,
+  };
+
+  if (req.clearToken === true) {
+    status.configured = false;
+    status.tokenHint = "";
+    status.gistUrl = "";
+  } else if (typeof req.token === "string" && req.token) {
+    const t = req.token;
+
+    status.configured = true;
+    status.tokenHint =
+      t.length >= 8 ? `${t.slice(0, 4)}••••••••${t.slice(-4)}` : "••••••••";
+    if (!status.gistUrl && uploaded?.status?.gistUrl)
+      status.gistUrl = uploaded.status.gistUrl;
+  }
+  if (req.clearPassword === true) status.encrypted = false;
+  else if (typeof req.password === "string" && req.password)
+    status.encrypted = true;
+  if (typeof req.intervalHours === "number")
+    status.intervalHours = req.intervalHours;
+
+  return { code: 0, msg: "操作成功", data: status, ts: Date.now() };
+}
+
+function exportAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  if (bare !== "backup/export") return null;
+  const req = parseBody(body);
+  const types = Array.isArray(req.types) ? req.types.map(String) : [];
+  const on = (t: string) => types.length === 0 || types.includes(t);
+  const data: Record<string, unknown> = {
+    version: "1.0",
+    exportedAt: Date.now(),
+  };
+  const put = (type: string, key: string, fixture: string) => {
+    if (!on(type)) return;
+    const rows = book[fixture]?.[0]?.res.data;
+
+    if (Array.isArray(rows) && rows.length) data[key] = structuredClone(rows);
+  };
+
+  put("users", "users", "user/list");
+  put("nodes", "nodes", "node/list");
+  put("tunnels", "tunnels", "tunnel/list");
+  put("forwards", "forwards", "forward/list");
+  put("userTunnels", "userTunnels", "tunnel/user/list");
+  put("speedLimits", "speedLimits", "speed-limit/list");
+  put("userSubscriptions", "userSubscriptions", "user-subscription/list");
+  put("serviceMonitors", "serviceMonitors", "monitor/services");
+  if (on("inbounds")) {
+    data.inbounds = {
+      kernels: structuredClone(listOf(book, "kernel/list")),
+      inbounds: structuredClone(listOf(book, "inbound/list")),
+      relays: structuredClone(listOf(book, "inbound/relay/list")),
+      sources: structuredClone(listOf(book, "subscription/source/list")),
+      templates: structuredClone(listOf(book, "subscription/template/list")),
+    };
+  }
+
+  return {
+    __demoDownload: {
+      filename: "backup.json",
+      content: JSON.stringify(data, null, 2),
+    },
+  };
+}
+
+function receiptAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  return (
+    installAnswer(bare, body) ??
+    templateRefreshAnswer(bare, body, book) ??
+    backupImportAnswer(bare, body) ??
+    gistRestoreAnswer(bare, book) ??
+    inboundImportAnswer(bare, body) ??
+    sourceRefreshAnswer(bare, body, book) ??
+    serviceRunAnswer(bare, body, book) ??
+    federationImportAnswer(bare, book) ??
+    gistSaveAnswer(bare, body, book) ??
+    exportAnswer(bare, body, book)
+  );
+}
+
 const canon = (body: unknown) => {
   if (body === undefined || body === null || body === "") return "";
   try {
@@ -484,6 +919,9 @@ async function answer(config: InternalAxiosRequestConfig) {
   const tune = tuneAnswer(bare);
 
   if (tune) return tune;
+  const receipt = receiptAnswer(bare, config.data, book);
+
+  if (receipt) return receipt;
   if (PROBES[bare]) {
     const [list, field] = PROBES[bare];
     const ids: number[] = JSON.parse(String(config.data || "{}")).ids ?? [];
@@ -544,6 +982,27 @@ async function answer(config: InternalAxiosRequestConfig) {
 
 const demoAdapter: AxiosAdapter = async (config) => {
   const data = await answer(config);
+  // backup/export answers with a download marker, not an envelope:
+  // the export path keys on Content-Disposition: attachment and
+  // saves the blob (api/index.ts exportBackup, D5-01口径) — mirror
+  // the real response's status, headers and filename exactly.
+  const download = (
+    data as { __demoDownload?: { filename: string; content: string } }
+  )?.__demoDownload;
+
+  if (download) {
+    return {
+      data: new Blob([download.content], { type: "application/json" }),
+      status: 200,
+      statusText: "OK",
+      headers: {
+        "content-disposition": `attachment; filename=${download.filename}`,
+        "content-type": "application/json",
+      },
+      config,
+      request: {},
+    } as AxiosResponse;
+  }
 
   return {
     data,
