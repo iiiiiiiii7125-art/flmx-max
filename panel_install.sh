@@ -886,7 +886,9 @@ resolve_caddy_frontend_port() {
     # 现在此剥掉引号，引号包裹的 "7366" 被菜单面静默正常化采纳、
     # 却被更新面判「不是有效端口」终止更新，两面分歧。现两面同
     # 口径：引号包裹同为无效（菜单面点名后忽略该候选、更新面终止）。
-    _port=$(get_env_var "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t' || true)
+    # 实现经 get_env_var_raw（R1-01-L2 后 get_env_var 已对齐
+    # Compose 语义会剥引号，本严格面靠 raw 读面保住 I-F1-05 口径）。
+    _port=$(get_env_var_raw "FRONTEND_PORT" "$_env_file" 2>/dev/null | tr -d ' \r\n\t' || true)
     if [[ "$_port" =~ ^[0-9]+$ ]] && (( 10#$_port >= 1 && 10#$_port <= 65535 )); then
       FRONTEND_PORT="$_port"
       echo "📁 从 $_env_file 读取前端端口：$FRONTEND_PORT"
@@ -1309,6 +1311,66 @@ upsert_env_var() {
   mv "$tmp_file" "$file"
 }
 
+# .env 单值解析（与 Go 面 parseEnvFileValue 逐字同口径，R1-01-L2
+# 对齐）：先 TrimSpace；带引号时取闭合引号内内容（双引号展开
+# \n \r \t \\ \" \$ 转义、未知转义保留两字符，单引号不展开），
+# 引号未闭合宽容回退原文；未引号时在「# 位于首位或前为空白」处
+# 截断注释再 TrimSpace（abc#def 的 # 保留）。两点有意不跟
+# Compose：不做 $ 变量展开（与 Go 面同口径）。
+parse_env_file_value() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  if [[ "$v" == \"* || "$v" == \'* ]]; then
+    local quote="${v:0:1}" rest="${v:1}" out="" i ch next
+    for (( i=0; i<${#rest}; i++ )); do
+      ch="${rest:i:1}"
+      if [[ "$quote" == '"' && "$ch" == '\' ]]; then
+        i=$((i+1))
+        if (( i >= ${#rest} )); then
+          break
+        fi
+        next="${rest:i:1}"
+        case "$next" in
+          n) out+=$'\n' ;;
+          r) out+=$'\r' ;;
+          t) out+=$'\t' ;;
+          '\') out+='\' ;;
+          '"') out+='"' ;;
+          '$') out+='$' ;;
+          *) out+="\\$next" ;;
+        esac
+        continue
+      fi
+      if [[ "$ch" == "$quote" ]]; then
+        printf '%s' "$out"
+        return 0
+      fi
+      out+="$ch"
+    done
+    printf '%s' "$v"
+    return 0
+  fi
+  local i ch prev=""
+  for (( i=0; i<${#v}; i++ )); do
+    ch="${v:i:1}"
+    if [[ "$ch" == '#' ]] && { (( i == 0 )) || [[ "$prev" == ' ' || "$prev" == $'\t' ]]; }; then
+      v="${v:0:i}"
+      v="${v%"${v##*[![:space:]]}"}"
+      break
+    fi
+    prev="$ch"
+  done
+  printf '%s' "$v"
+}
+
+# .env 读取（R1-01-L2 起与 Go 面 parseEnvFileValues 同语义）：
+# 逐行扫描、重复键后现胜出、键名两侧空白裁剪、注释/空行跳过、
+# 值经 parse_env_file_value 解析。旧实现 grep -m1 首现胜出且不
+# 剥引号/注释/空白——手写 .env 的带引号卷键被读成含引号的真值
+# （升级后自检恒不等、健康升级恒回滚）、PANEL_IDENTITY_RENAME
+# 带引号时与 Go 面判定分家，皆为 RA-1 L-4 在 Go 面修过的同一形
+# 态的脚本面镜像残留，本次对齐后两面同一 .env 必得同一读数。
 get_env_var() {
   local key="$1"
   local file="${2:-.env}"
@@ -1317,7 +1379,72 @@ get_env_var() {
     return 0
   fi
 
-  grep -m1 "^${key}=" "$file" | cut -d= -f2-
+  local line trimmed k result="" found=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    if [[ -z "$trimmed" || "$trimmed" == '#'* ]]; then
+      continue
+    fi
+    if [[ "$line" != *"="* ]]; then
+      continue
+    fi
+    k="${line%%=*}"
+    k="${k#"${k%%[![:space:]]*}"}"
+    k="${k%"${k##*[![:space:]]}"}"
+    if [[ "$k" != "$key" ]]; then
+      continue
+    fi
+    result=$(parse_env_file_value "${line#*=}")
+    found=1
+  done < "$file"
+
+  if [[ "$found" == "1" ]]; then
+    printf '%s' "$result"
+  fi
+}
+
+# .env 原始读值（严格面专用）：行选择与 get_env_var 同口径（逐
+# 行扫描、重复键后现胜出、键名裁剪、注释/空行跳过），但值只剥
+# 两端空白，不剥引号、不截行尾注释——供已裁定「引号包裹即无
+# 效」的两个端口判读面（I-F1-05：resolve_caddy_frontend_port 与
+# validate_panel_update_environment 的端口校验）看原始形态：端
+# 口在 .env 里就该是裸数字，引号形是笔误，两面统一点名拒绝而
+# 不是静默正常化。其余一切读面走 get_env_var 的 Compose 对齐口
+# 径（R1-01-L2），两读面不许混用。
+get_env_var_raw() {
+  local key="$1"
+  local file="${2:-.env}"
+
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+
+  local line trimmed k result="" found=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    if [[ -z "$trimmed" || "$trimmed" == '#'* ]]; then
+      continue
+    fi
+    if [[ "$line" != *"="* ]]; then
+      continue
+    fi
+    k="${line%%=*}"
+    k="${k#"${k%%[![:space:]]*}"}"
+    k="${k%"${k##*[![:space:]]}"}"
+    if [[ "$k" != "$key" ]]; then
+      continue
+    fi
+    result="${line#*=}"
+    result="${result#"${result%%[![:space:]]*}"}"
+    result="${result%"${result##*[![:space:]]}"}"
+    found=1
+  done < "$file"
+
+  if [[ "$found" == "1" ]]; then
+    printf '%s' "$result"
+  fi
 }
 
 # DB_TYPE 归一：与后端接受口径逐字对齐——后端 New 与
@@ -1760,9 +1887,11 @@ panel_sibling_default() {
 # 行名（实例部署带后缀）→ 进程全局同步新名，交回更新流
 # 按新名重建＋健康检查；失败走既有 rollback_panel_update（恢复旧
 # .env＋旧 compose），其先行步按本函数记下的新旧名删新名容器、复
-# 位全局，再按旧名拉起。卷/网络/项目只把缺失键钉为现行有效值
-# （容器挂载/网络实读，读不到按旧缺省），已有值逐字不动——改名
-# 绝不换卷、换网、动数据。改名状态经 PANEL_IDENTITY_* 全局传递。
+# 位全局，再按旧名拉起。钉键口径：卷/网络/项目缺失键钉为现行
+# 有效值（容器挂载/网络实读，读不到按旧缺省）；两卷键已有值与
+# 实读冲突时点名并以实读为准改写（批 D，见 panel_pin_missing_
+# resource_keys 头注），网络/项目键仍只补缺——改名绝不主动换
+# 卷、换网、动数据。改名状态经 PANEL_IDENTITY_* 全局传递。
 PANEL_IDENTITY_RENAMED=""
 PANEL_IDENTITY_OLD_BACKEND=""
 PANEL_IDENTITY_OLD_FRONTEND=""
@@ -1813,6 +1942,18 @@ panel_volume_file_exists() {
 # 卷上、真库还在旧卷，只可能是 1.9.8 式事故后未救援的部署；此
 # 时钉键会把事故态正式化、后续自检也以错卷为期望。故 fail-
 # closed 中止并点名两卷与人工钉键方法，由人确认数据所在再钉。
+# PG 格（R1-01-M1 补齐）：同谓词镜像到 PG 卷——无键＋PG 容器实
+# 挂 flmx-postgres-data、且旧名卷 postgres_data 存在并含
+# PG_VERSION（真实 PG 数据目录标记）→ 同标准中止点名。面×卷
+# 四格至此全有门（本函数两格＋Go 面 planLegacyResourcePins 两
+# 格，谓词同义、证据文件同构）。
+# PG bind 中止（R1-01-L5，仅缺省 scope＋PG 模式）：PG 卷键已有
+# 值、PG 容器在场但其数据挂载实读为空（bind 挂载）——键无从与
+# 实读核对：旧行为逐字信键、重建落错键空卷还报成功（Go 面同形
+# 是事后恒回滚）。统一为钉键前 fail-closed 中止并点名，与 Go
+# 面 planLegacyResourcePins 同谓词同处置；缺键维持 postgres_
+# data 回退认领的既有口径，scope=live（迁移）不设此中止（迁移
+# 的 PG 容器是待建目标面、模式判定亦未切换）。
 # 第三参 scope=live（迁移路径专用，RA2-S-02）：只钉两个数据卷
 # 键、且只凭实读挂载写值（PG 的 postgres_data 卷存在性回退在
 # 此 scope 下亦不写——卷在不等于卷属于本部署），不写回退缺省、
@@ -1850,12 +1991,32 @@ panel_pin_missing_resource_keys() {
   local postgres_key postgres_volume=""
   postgres_key=$(get_env_var FLMX_POSTGRES_VOLUME || true)
   postgres_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$postgres_container" 2>/dev/null || true)
+  # R1-01-L5：PG bind 中止（谓词与处置见函数头注）。docker
+  # inspect 本体成功即容器在场；挂载模板读空＝该 destination 无
+  # 命名卷（bind 或无挂载），与「容器不在场」分开。
+  if [[ -n "$postgres_key" && "$pin_scope" != "live" ]] \
+    && [[ "$(get_current_db_type)" == "postgres" ]] \
+    && docker inspect "$postgres_container" >/dev/null 2>&1 \
+    && [[ -z "$postgres_volume" ]]; then
+    echo "❌ 资源键钉值中止：部署为 PostgreSQL 模式且 .env 已有 FLMX_POSTGRES_VOLUME=$postgres_key，但 PostgreSQL 容器 $postgres_container 的 /var/lib/postgresql/data 挂载不是命名卷（实读卷名为空，疑似 bind 挂载），键值无从与实际挂载核对；bind 挂载不在随版模板形态内。"
+    echo "   请先把 PG 数据改为命名卷挂载，或人工核对 .env 的 FLMX_POSTGRES_VOLUME 确为现行数据卷后，再重跑更新。"
+    return 1
+  fi
   if [[ -n "$postgres_key" ]]; then
     if [[ -n "$postgres_volume" && "$postgres_volume" != "$postgres_key" ]]; then
       echo "⚠️ 资源键冲突：.env 的 FLMX_POSTGRES_VOLUME=$postgres_key 与在跑 PostgreSQL 容器 $postgres_container 实际挂载的数据卷 $postgres_volume 不一致；以实读为准改写为 $postgres_volume（数据以实读为准，旧值不保留）"
       upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume" || return 1
     fi
   else
+    # R1-01-M1 事故态门 PG 格（谓词见函数头注）：与 SQLite 格同
+    # 形——无键＋实挂新缺省卷＋旧名卷含真实 PG 数据 → 中止。
+    if [[ "$postgres_volume" == "flmx-postgres-data$(panel_instance_suffix)" ]] \
+      && docker volume inspect postgres_data >/dev/null 2>&1 \
+      && panel_volume_file_exists postgres_data PG_VERSION; then
+      echo "❌ 资源键钉值中止：在跑 PostgreSQL 容器实际挂载的数据卷是新模板缺省名 $postgres_volume，但部署 .env 没有 FLMX_POSTGRES_VOLUME 键、且旧名卷 postgres_data 存在并含有 PG_VERSION（真实 PostgreSQL 数据目录）——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
+      echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_POSTGRES_VOLUME=postgres_data；数据确在现行卷 → FLMX_POSTGRES_VOLUME=$postgres_volume。"
+      return 1
+    fi
     # scope=live 时不走卷存在性回退：postgres_data 存在只证明该卷
     # 在，不证明它就是本部署 PG 的卷，写进迁移快照会污染逐字恢
     # 复契约；迁移的 PG 卷候选由 F7-03/F7-04 的登记口径处理。
@@ -1868,8 +2029,19 @@ panel_pin_missing_resource_keys() {
   fi
   if [[ "$pin_scope" != "live" ]]; then
     if [[ -z "$(get_env_var FLMX_NETWORK || true)" ]]; then
-      local network_name=""
-      network_name=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$backend_container" 2>/dev/null || true)
+      local network_name="" network_count=0
+      network_name=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$backend_container" 2>/dev/null || true)
+      # R1-01-L1：逐行实读后恰一个网络才钉实读值。旧模板无分隔
+      # 拼接——后端挂 ≥2 个网络时钉入的是全部网络名的拼接废串，
+      # 重建后部署落到废名新网络、旧网络上的外挂容器与面板断
+      # 联。Go 面 inspectLegacyResourceNames 已按「恰一个才钉」
+      # 规避并点名此形态，本面现对齐：零个或多个都按「读不到」
+      # 走旧缺省回退（网络无数据面，缺省名是该部署唯一可能的旧
+      # 网络，与本函数「读不到按旧缺省」的既有契约一致）。
+      network_count=$(printf '%s' "$network_name" | grep -c . || true)
+      if [[ "$network_count" != "1" ]]; then
+        network_name=""
+      fi
       upsert_env_var .env FLMX_NETWORK "${network_name:-gost-network}" || return 1
     fi
     if [[ -z "$(get_env_var COMPOSE_PROJECT_NAME || true)" ]]; then
@@ -2088,8 +2260,10 @@ validate_panel_update_environment() {
     fi
   done
 
-  backend_port=$(get_env_var "BACKEND_PORT" || true)
-  frontend_port=$(get_env_var "FRONTEND_PORT" || true)
+  # 端口判读走 get_env_var_raw：I-F1-05 裁定引号包裹同为无效，
+  # 与菜单面 resolve_caddy_frontend_port 同口径（见该处注）。
+  backend_port=$(get_env_var_raw "BACKEND_PORT" || true)
+  frontend_port=$(get_env_var_raw "FRONTEND_PORT" || true)
   if [[ ! "$backend_port" =~ ^[0-9]+$ ]] || (( 10#$backend_port < 1 || 10#$backend_port > 65535 )); then
     echo "❌ BACKEND_PORT 不是有效端口：$backend_port"
     return 1

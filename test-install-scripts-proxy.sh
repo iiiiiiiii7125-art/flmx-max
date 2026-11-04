@@ -6492,6 +6492,71 @@ test_panel_db_type_aliases_match_backend() (
   assert_equals "1" "$(validate_with_db_type mysql)" "B2-05: update validation must still reject unsupported DB_TYPE values"
 )
 
+# R1-01-L2：脚本面 .env 读值与 Go 面 parseEnvFileValues 同语义
+# （Compose 口径）——重复键后现胜出、剥引号、剥行尾注释（# 前为
+# 空白才算注释）、键名两侧空白裁剪、注释行不命中。旧实现 grep
+# -m1 首现＋原文：带引号卷键被读成含引号真值（自检恒不等）、
+# PANEL_IDENTITY_RENAME="0" 与 Go 面判定分家。raw 读面则相反：
+# 只剥空白、引号保留，供 I-F1-05 的端口严格面判读原始形态。
+# 末幕钉值级复核：带引号卷键与实挂同名时不得触发冲突改写、
+# .env 逐字不动（旧实现必触发改写、本幕必红）。
+test_env_var_reading_matches_compose_semantics() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir
+  dir=$(mktemp -d)
+  cd "$dir"
+  printf '%s\n' \
+    'FLMX_SQLITE_VOLUME="quoted_vol"' \
+    'DUP=first' \
+    'DUP=second' \
+    'TRAIL=value # comment' \
+    'HASHY=abc#def' \
+    "SINGLE='single quoted'" \
+    'SPACED = spaced_v ' \
+    '#COMMENTED=nope' \
+    'EMPTYQ=""' > .env
+  assert_equals "quoted_vol" "$(get_env_var FLMX_SQLITE_VOLUME)" "R1-01-L2: a double-quoted value must be read without the quotes"
+  assert_equals "second" "$(get_env_var DUP)" "R1-01-L2: a duplicate key must resolve to the last occurrence"
+  assert_equals "value" "$(get_env_var TRAIL)" "R1-01-L2: a trailing comment after whitespace must be stripped"
+  assert_equals "abc#def" "$(get_env_var HASHY)" "R1-01-L2: a # not preceded by whitespace is part of the value"
+  assert_equals "single quoted" "$(get_env_var SINGLE)" "R1-01-L2: a single-quoted value must be read without the quotes"
+  assert_equals "spaced_v" "$(get_env_var SPACED)" "R1-01-L2: key and value whitespace must be trimmed"
+  assert_equals "" "$(get_env_var COMMENTED)" "R1-01-L2: a commented-out key must not be read"
+  assert_equals "" "$(get_env_var EMPTYQ)" "R1-01-L2: an empty quoted value must read as empty"
+  assert_equals '"quoted_vol"' "$(get_env_var_raw FLMX_SQLITE_VOLUME)" "R1-01-L2: the raw reader must keep the quotes for the strict faces"
+  printf 'PANEL_IDENTITY_RENAME="0"\n' > .env
+  assert_equals "0" "$(get_env_var PANEL_IDENTITY_RENAME)" "R1-01-L2: a quoted rename switch must parse like the Go face"
+
+  local pdir
+  pdir=$(mktemp -d)
+  cat > "$pdir/.env" <<'EOF'
+FLMX_SQLITE_VOLUME="real_vol"
+FLMX_POSTGRES_VOLUME=kept_pg
+FLMX_NETWORK=kept_net
+COMPOSE_PROJECT_NAME=kept_project
+DB_TYPE=sqlite
+EOF
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *"/app/data"*) printf 'real_vol' ;;
+        *"/var/lib/postgresql/data"*) printf 'kept_pg' ;;
+        *) printf '' ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R1-01-L2: pinning must succeed when the quoted key parses to the live mount"
+  if grep -q '资源键冲突' "$pdir/pin.log"; then
+    fail "R1-01-L2: a quoted key equal to the live mount after parsing must not be treated as a conflict"
+  fi
+  grep -q '^FLMX_SQLITE_VOLUME="real_vol"$' "$pdir/.env" || fail "R1-01-L2: a parsed-equal volume key must stay verbatim (no rewrite)"
+)
+
 # L2-12（R5-FD）：update_panel 必须走 VERSION > FLUX_VERSION >
 # PINNED_VERSION > latest 优先级链——旧实现只认 VERSION，FLUX_VERSION
 # /PINNED 定版被静默吞掉直升 latest（桩 latest=9.9.9 不得被选中），
@@ -8292,6 +8357,177 @@ test_panel_update_aborts_on_accident_state_volume() (
   grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir2/.env" || fail "FIX199-D1: without database evidence the live volume must be pinned as usual"
 )
 
+# R1-01-M1 事故态门 PG 格（批 D 只关了脚本面×SQLite 一格，本例
+# 补 PG 格）：无键存量、PG 容器却坐在新模板缺省卷 flmx-
+# postgres-data 上、旧名卷 postgres_data 存在且含 PG_VERSION
+# （真实 PG 数据目录）——钉键照常会把 flmx-postgres-data 钉入、
+# 或按卷存在性回退把 postgres_data 钉入冒充现行卷，两者都把事
+# 故态正式化。必须 fail-closed：更新中止、点名两卷与人工钉键
+# 方法、.env 未写入 PG 卷键。反面一幕：postgres_data 无
+# PG_VERSION（无真库证据）时门不触发，实读卷名照常钉入。
+test_panel_update_aborts_on_pg_accident_state_volume() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  wrap_volume_docker() {
+    eval "$(declare -f docker | sed '1s/^docker /fixture_docker_base /')"
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        if [[ "$3" == "-f" ]]; then
+          [[ -e "$FIXTURE_VOLROOT/$5" ]] || return 1
+          printf '%s' "$FIXTURE_VOLROOT/$5"
+          return 0
+        fi
+        [[ -e "$FIXTURE_VOLROOT/$3" ]]
+        return
+      fi
+      fixture_docker_base "$@"
+    }
+  }
+
+  local dir1
+  dir1=$(mktemp -d)
+  setup_rename_update_fixture "$dir1" keyless
+  FIXTURE_VOLROOT="$dir1/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/postgres_data"
+  : > "$FIXTURE_VOLROOT/postgres_data/PG_VERSION"
+  wrap_volume_docker
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  local rc="0"
+  update_panel >"$dir1/update.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R1-01-M1: update must abort when a keyless PG container sits on the template-default volume while the legacy volume holds a real PG data directory"
+  grep -q '资源键钉值中止' "$dir1/update.log" || fail "R1-01-M1: the PG accident-state gate must be named in the update output"
+  grep -q 'FLMX_POSTGRES_VOLUME=postgres_data' "$dir1/update.log" || fail "R1-01-M1: the gate notice must name the manual pin remedy for the legacy PG volume"
+  grep -q 'flmx-postgres-data' "$dir1/update.log" || fail "R1-01-M1: the gate notice must name the template-default PG volume"
+  if grep -q '^FLMX_POSTGRES_VOLUME=' "$dir1/.env"; then
+    fail "R1-01-M1: the gate must abort before any PG volume key is written"
+  fi
+
+  local dir2
+  dir2=$(mktemp -d)
+  setup_rename_update_fixture "$dir2" keyless
+  FIXTURE_VOLROOT="$dir2/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/postgres_data"
+  wrap_volume_docker
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir2/update.log" 2>&1 || fail "R1-01-M1: update must proceed when the legacy PG volume carries no PG_VERSION evidence"
+  grep -q '^FLMX_POSTGRES_VOLUME=flmx-postgres-data$' "$dir2/.env" || fail "R1-01-M1: without PG data evidence the live PG volume must be pinned as usual"
+)
+
+# R1-01-L5 PG bind 收敛（钉值级）：PG 模式＋PG 卷键已有值＋PG
+# 容器在场但数据挂载实读为空（bind）——旧行为逐字信键、重建落
+# 错键空卷还报成功；现与 Go 面统一为钉键前中止点名。反面两幕：
+# SQLite 模式下 PG 容器惰性不拦、键保留；PG 模式但挂载实读与
+# 键一致时照常通过。
+test_panel_pin_pg_bind_declared_key_aborts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local pdir
+  pdir=$(mktemp -d)
+  cat > "$pdir/.env" <<'EOF'
+DB_TYPE=postgres
+FLMX_SQLITE_VOLUME=kept_sqlite
+FLMX_POSTGRES_VOLUME=declared_pg
+FLMX_NETWORK=kept_net
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *"/app/data"*) printf 'kept_sqlite' ;;
+        *) printf '' ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+  local rc="0"
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R1-01-L5: pinning must abort when a declared PG volume key cannot be verified against a bind-mounted PG container"
+  grep -q '资源键钉值中止' "$pdir/pin.log" || fail "R1-01-L5: the bind abort must be named in the pin output"
+  grep -q 'declared_pg' "$pdir/pin.log" || fail "R1-01-L5: the bind abort must name the declared key value"
+  grep -q '^FLMX_POSTGRES_VOLUME=declared_pg$' "$pdir/.env" || fail "R1-01-L5: the abort must leave the declared key untouched"
+
+  # SQLite 模式：PG 容器惰性，同形态不拦、键逐字保留
+  printf 'DB_TYPE=sqlite\n' | cat - <(grep -v '^DB_TYPE=' "$pdir/.env") > "$pdir/.env.new" && mv "$pdir/.env.new" "$pdir/.env"
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c >> pin.log 2>&1 ) || \
+    fail "R1-01-L5: pinning must not gate on the PG container in sqlite mode"
+  grep -q '^FLMX_POSTGRES_VOLUME=declared_pg$' "$pdir/.env" || fail "R1-01-L5: the declared PG key must stay verbatim in sqlite mode"
+
+  # PG 模式但实读与键一致：照常通过（docker 桩改答实挂 declared_pg）
+  printf 'DB_TYPE=postgres\n' | cat - <(grep -v '^DB_TYPE=' "$pdir/.env") > "$pdir/.env.new" && mv "$pdir/.env.new" "$pdir/.env"
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *"/app/data"*) printf 'kept_sqlite' ;;
+        *"/var/lib/postgresql/data"*) printf 'declared_pg' ;;
+        *) printf '' ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c >> pin.log 2>&1 ) || \
+    fail "R1-01-L5: pinning must pass when the live PG mount matches the declared key"
+)
+
+# R1-01-L1 网络钉键多网络废名：后端挂 ≥2 个网络时，旧模板无分
+# 隔拼接全部网络名钉入 FLMX_NETWORK（废串）。现逐行计数、恰一
+# 个才钉实读值；多个按读不到走旧缺省回退 gost-network。两幕在
+# 钉值级验：多网络 → 钉 gost-network 而非拼接串；单网络 → 钉实
+# 读名。
+test_panel_pin_network_multi_network_not_concatenated() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local pdir
+  pdir=$(mktemp -d)
+  cat > "$pdir/.env" <<'EOF'
+FLMX_SQLITE_VOLUME=kept_sqlite
+FLMX_POSTGRES_VOLUME=kept_pg
+COMPOSE_PROJECT_NAME=kept_project
+DB_TYPE=sqlite
+EOF
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *"/app/data"*) printf 'kept_sqlite' ;;
+        *"/var/lib/postgresql/data"*) printf 'kept_pg' ;;
+        *"NetworkSettings.Networks"*) printf 'net_a\nnet_b\n' ;;
+        *) printf '' ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R1-01-L1: pinning must succeed in the multi-network scenario"
+  grep -q '^FLMX_NETWORK=gost-network$' "$pdir/.env" || fail "R1-01-L1: a multi-network read must fall back to the legacy default network, not a concatenated name"
+  if grep -q 'net_anet_b\|net_a net_b' "$pdir/.env"; then
+    fail "R1-01-L1: the pinned network must never be a concatenation of network names"
+  fi
+
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *"/app/data"*) printf 'kept_sqlite' ;;
+        *"/var/lib/postgresql/data"*) printf 'kept_pg' ;;
+        *"NetworkSettings.Networks"*) printf 'mynet\n' ;;
+        *) printf '' ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+  printf 'FLMX_SQLITE_VOLUME=kept_sqlite\nFLMX_POSTGRES_VOLUME=kept_pg\nCOMPOSE_PROJECT_NAME=kept_project\nDB_TYPE=sqlite\n' > "$pdir/.env"
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c >> pin.log 2>&1 ) || \
+    fail "R1-01-L1: pinning must succeed in the single-network scenario"
+  grep -q '^FLMX_NETWORK=mynet$' "$pdir/.env" || fail "R1-01-L1: exactly one network must be pinned by its live-read name"
+)
+
 # FIX199-D5（RA-1 L-3）：改名开关双面口径——脚本只认进程环境时
 # .env 里的 PANEL_IDENTITY_RENAME=0 形同虚设，同一部署在脚本面
 # 改名、面板内面不改。现与 Go 面同序（.env 键在即赢、缺键回退
@@ -8966,6 +9202,7 @@ test_panel_instance_contract_matches_backend_whitelist
 test_panel_instance_id_read_path_validates
 test_panel_detect_refuses_multi_instance_ambiguity
 test_panel_db_type_aliases_match_backend
+test_env_var_reading_matches_compose_semantics
 test_panel_update_honors_version_priority_chain
 test_panel_uninstall_locates_deployment_and_cleans_artifacts
 test_panel_download_verified_uses_timeouts
@@ -9101,6 +9338,9 @@ test_update_flmx_agent_migrates_legacy_layout
 test_migrate_legacy_agent_rolls_back_on_failure
 test_panel_update_volume_key_conflict_live_read_wins
 test_panel_update_aborts_on_accident_state_volume
+test_panel_update_aborts_on_pg_accident_state_volume
+test_panel_pin_pg_bind_declared_key_aborts
+test_panel_pin_network_multi_network_not_concatenated
 test_panel_identity_rename_switch_reads_env_file
 test_panel_migrate_pins_keys_before_any_up
 test_panel_migrate_reconcile_second_channel
