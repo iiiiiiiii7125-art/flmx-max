@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"go-backend/internal/kernel"
 	"go-backend/internal/store/repo"
 )
 
@@ -32,6 +33,13 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 	// （如 sshd）绕过入口校验直达生成。
 	if err := validateTunnelProtocol(runtime.Protocol); err != nil {
 		return err
+	}
+	// R1-03-L1：strategy 同口径补判（protocol 门的同族漏格）——
+	// 存量非法 strategy（如 banana）在此点名失败，不再经联邦链
+	// 渲染静默落 agent default 轮询。空值是缺省形态（消费面按
+	// round 语义），不在此判。
+	if strings.TrimSpace(runtime.Strategy) != "" && !kernel.PeerRuntimeStrategyLegal(runtime.Strategy) {
+		return fmt.Errorf("unsupported peer runtime strategy %q", strings.TrimSpace(runtime.Strategy))
 	}
 	node, err := h.getNodeRecord(runtime.NodeID)
 	if err != nil {

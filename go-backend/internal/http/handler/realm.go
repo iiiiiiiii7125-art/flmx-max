@@ -116,6 +116,24 @@ func validateForwardStrategy(strategy string) error {
 	return fmt.Errorf("不支持的负载策略 %q，合法值为 fifo、round、rand、hash", strings.TrimSpace(strategy))
 }
 
+// normalizeChainStrategy（R1-03-M1）：隧道链路策略写面归一＋合法
+// 集校验——合法集本体是 kernel.ChainStrategyLegal 单点（恢复面
+// repo、联邦 ApplyRole 面共用同一判，分段口径：跳行不含 best）。
+// 空串是「未提供」形态，按链路统一缺省 round 解析；非空值先
+// TrimSpace 再判、落库归一值。集外值在此点名拒绝、不得原文落
+// 库：agent selector 对未知策略一律 default 轮询，声明与生效静
+// 默不一致（与 validateForwardStrategy 的 R4-F4-02 同族口径）。
+func normalizeChainStrategy(chainType int, raw string) (string, error) {
+	strategy := strings.TrimSpace(raw)
+	if strategy == "" {
+		strategy = "round"
+	}
+	if !kernel.ChainStrategyLegal(chainType, strategy) {
+		return "", fmt.Errorf("不支持的链路负载策略 %q，合法值为 %s", strategy, kernel.ChainStrategyLegalValues(chainType))
+	}
+	return strategy, nil
+}
+
 // validateRealmEngineSwitchForwards（R2-F4-01）：引擎切换 gost→realm
 // 此前是 A4-004 策略门的第四写面漏网——switchTunnelEngine 径直删除
 // gost 服务并以 realm 重渲染，多目标 fifo/rand 被静默改写为轮询、备

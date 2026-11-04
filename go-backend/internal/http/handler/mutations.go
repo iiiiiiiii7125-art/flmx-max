@@ -6522,6 +6522,12 @@ func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interf
 		if nodeID <= 0 {
 			return nil
 		}
+		// R1-03-M1：游离段行的 strategy 不经 state 定型、由
+		// replaceTunnelChainsTx 从 req 原文落库——在此与 type-2
+		// 段同口径过链路策略合法集门（该函数落库前另有同判兜底）。
+		if _, err := normalizeChainStrategy(chainType, asString(item["strategy"])); err != nil {
+			return err
+		}
 		if _, ok := state.Nodes[nodeID]; !ok {
 			if node, nErr := h.repo.GetNodeRecordTx(tx, nodeID); nErr == nil && node != nil {
 				state.Nodes[nodeID] = node
@@ -6600,11 +6606,15 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		if nodeID <= 0 {
 			continue
 		}
+		strategy, err := normalizeChainStrategy(1, asString(item["strategy"]))
+		if err != nil {
+			return nil, err
+		}
 		nodeIDs = append(nodeIDs, nodeID)
 		state.InNodes = append(state.InNodes, tunnelRuntimeNode{
 			NodeID:    nodeID,
 			Protocol:  defaultString(asString(item["protocol"]), "tls"),
-			Strategy:  defaultString(asString(item["strategy"]), "round"),
+			Strategy:  strategy,
 			ChainType: 1,
 		})
 	}
@@ -6637,6 +6647,10 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 				continue
 			}
 			nodeIDs = append(nodeIDs, nodeID)
+			strategy, err := normalizeChainStrategy(3, asString(item["strategy"]))
+			if err != nil {
+				return nil, err
+			}
 			port := asInt(item["port"], 0)
 			if port <= 0 {
 				isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
@@ -6657,7 +6671,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			state.OutNodes = append(state.OutNodes, tunnelRuntimeNode{
 				NodeID:    nodeID,
 				Protocol:  defaultString(asString(item["protocol"]), "tls"),
-				Strategy:  defaultString(asString(item["strategy"]), "round"),
+				Strategy:  strategy,
 				ChainType: 3,
 				Port:      port,
 				ConnectIP: asString(item["connectIp"]),
@@ -6675,6 +6689,10 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 					continue
 				}
 				nodeIDs = append(nodeIDs, nodeID)
+				strategy, err := normalizeChainStrategy(2, asString(item["strategy"]))
+				if err != nil {
+					return nil, err
+				}
 				port := asInt(item["port"], 0)
 				if port <= 0 {
 					isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
@@ -6695,7 +6713,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 				hop = append(hop, tunnelRuntimeNode{
 					NodeID:    nodeID,
 					Protocol:  defaultString(asString(item["protocol"]), "tls"),
-					Strategy:  defaultString(asString(item["strategy"]), "round"),
+					Strategy:  strategy,
 					Inx:       hopIdx + 1,
 					ChainType: 2,
 					Port:      port,
@@ -8243,13 +8261,20 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 		if nodeID <= 0 {
 			continue
 		}
+		// R1-03-M1：落库前同判兜底——prepare 已对 state 定型值
+		// 过门，本函数对 req 原文（游离段行不经 state）再过一遍
+		// 链路策略合法集，集外值不得原文落库。
+		strategy, err := normalizeChainStrategy(1, asString(n["strategy"]))
+		if err != nil {
+			return err
+		}
 		if err := h.repo.CreateChainTunnelTx(
 			tx,
 			tunnelID,
 			"1",
 			nodeID,
 			sql.NullInt64{},
-			defaultString(asString(n["strategy"]), "round"),
+			strategy,
 			i+1,
 			defaultString(asString(n["protocol"]), "tls"),
 			"",
@@ -8285,13 +8310,17 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 			}
 		}
 		connectIp := asString(n["connectIp"])
+		strategy, serr := normalizeChainStrategy(3, asString(n["strategy"]))
+		if serr != nil {
+			return serr
+		}
 		if err := h.repo.CreateChainTunnelTx(
 			tx,
 			tunnelID,
 			"3",
 			nodeID,
 			portVal,
-			defaultString(asString(n["strategy"]), "round"),
+			strategy,
 			i+1,
 			defaultString(asString(n["protocol"]), "tls"),
 			connectIp,
@@ -8327,13 +8356,17 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 				}
 			}
 			connectIp := asString(n["connectIp"])
+			strategy, serr := normalizeChainStrategy(2, asString(n["strategy"]))
+			if serr != nil {
+				return serr
+			}
 			if err := h.repo.CreateChainTunnelTx(
 				tx,
 				tunnelID,
 				"2",
 				nodeID,
 				portVal,
-				defaultString(asString(n["strategy"]), "round"),
+				strategy,
 				i+1,
 				defaultString(asString(n["protocol"]), "tls"),
 				connectIp,
