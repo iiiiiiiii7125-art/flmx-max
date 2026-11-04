@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"go-backend/internal/config"
 	"go-backend/internal/http/response"
 	"go-backend/internal/store/repo"
 
@@ -1028,6 +1029,15 @@ const (
 	// legacyPostgresDataVolume 是脚本面同口径的历史缺省 PG 卷名：
 	// PG 容器不在场但该卷存在时钉它（脚本面板迁移/存量识别同名）。
 	legacyPostgresDataVolume = "postgres_data"
+	// legacySQLiteDataVolume 是历史缺省 SQLite 卷名（脚本面同口
+	// 径）：事故态门以「该卷存在且含 gost.db」为真库证据。
+	legacySQLiteDataVolume = "sqlite_data"
+	// newSQLiteDataVolume / newPostgresDataVolume 是现行模板的缺
+	// 省卷名（模板表达式 ${FLMX_SQLITE_VOLUME:-flmx-sqlite-data}
+	// 等的回退值，未计实例后缀；事故态门比对时经
+	// panelInstanceSuffix 补后缀，与脚本面同式）。
+	newSQLiteDataVolume   = "flmx-sqlite-data"
+	newPostgresDataVolume = "flmx-postgres-data"
 )
 
 // errDataVolumeUndetermined 是 fail-closed 哨兵：旧后端在场但其实
@@ -1040,6 +1050,16 @@ var errDataVolumeUndetermined = fmt.Errorf("无法确定现有数据卷名")
 // 级且不做任何更改（否则新模板缺省 flmx-postgres-data 会接管成
 // 空卷，是 1.9.8 事故在 PG 面的同构复现）。
 var errPGVolumeUndetermined = fmt.Errorf("无法确定现有 PostgreSQL 数据卷名")
+
+// errAccidentStateVolume 是事故态门哨兵（R1-01-M1）：.env 缺卷
+// 键、在跑容器实读恰为模板新缺省卷名、而旧名卷仍含真实数据
+// ——该部署是 1.9.8 式事故后未救援的形态，此时按实读钉键会把
+// 空卷名钉进 .env、把事故态正式化（此后自检亦以错卷为期望）。
+// 故中止升级并点名两卷与人工钉法，由人确认数据所在再钉。与脚
+// 本面 panel_pin_missing_resource_keys 的事故态门同谓词；批 D
+// 只在脚本面×SQLite 一格立门，本哨兵补齐其余三格中的 Go 面两格
+// （脚本面 PG 格在脚本侧同批补齐）。
+var errAccidentStateVolume = fmt.Errorf("疑似事故态：实读卷为模板新缺省卷而旧名卷仍含真实数据")
 
 // dockerResourceNamePattern 是 Docker 卷/网络名的合法形态（名称必
 // 以字母数字开头，其后为字母数字与 _ . -）：inspect 实读值不合此
@@ -1255,6 +1275,21 @@ type resourceNameInspect struct {
 	pgVolume string
 	// postgresDataVolumeExists 为历史缺省名 PG 卷是否存在。
 	postgresDataVolumeExists bool
+	// sqliteLegacyVolumeHasDB 为旧名卷 sqlite_data 存在且含
+	// gost.db（事故态门的真库证据；探测不到按无证据）。
+	sqliteLegacyVolumeHasDB bool
+	// postgresLegacyVolumeHasData 为旧名卷 postgres_data 存在且
+	// 含 PG_VERSION（事故态门 PG 格的真库证据；同上）。
+	postgresLegacyVolumeHasData bool
+	// pgContainerFound 为旧 PG 容器已定位成功：卷实读为空时据此
+	// 区分「容器不在场」与「在场但挂载读空（bind 等）」，供
+	// R1-01-L5 的 PG bind 中止判定。
+	pgContainerFound bool
+	// pgMountInspectOK 为旧 PG 容器的挂载 inspect 命令本身成功
+	// 执行：与 pgContainerFound 合用，把「在场且确无命名卷挂载
+	// （bind）」与「inspect 失败读不到」分开——后者不进 L5 中止
+	// 格，维持键保留的既有口径。
+	pgMountInspectOK bool
 	// network 是旧后端所连的唯一网络名；未连或多网络时为空。
 	network string
 	// composeProject 是旧后端的 Compose 项目标签；读不到为空。
@@ -1303,6 +1338,19 @@ type resourcePinPlan struct {
 // （errPGVolumeUndetermined）——此子形下不钉不拦，重建 PG 会落
 // 模板缺省空卷播种，事故在 PG 面同构复现；SQLite 模式下 PG 卷
 // 键惰性，维持不钉不拦。
+// 事故态门（R1-01-M1）：两卷共同谓词——缺键＋实读恰为模板新缺
+// 省卷名（带实例后缀）＋旧名卷含真实数据证据（SQLite 卷含
+// gost.db / PG 卷含 PG_VERSION）→ 返回 errAccidentStateVolume
+// 中止：该部署是事故后未救援形态，钉实读值会把事故态正式化。
+// 实读为空时的键信任（R1-01-L5，仅 PG 格）：PG 模式、PG 卷键
+// 已有值、旧 PG 容器已定位且其挂载 inspect 成功但卷名为空
+// （bind 挂载）时，键值无从核对——此形态下脚本面逐字信键、重
+// 建落错键空卷还报成功，本面 helper 以键为期望比对未重建的旧
+// PG 容器恒回滚；统一为动文件前 fail-closed 中止并点名（脚本
+// 面同谓词同处置）。缺键时维持 postgres_data 回退认领的既有
+// 口径；SQLite 卷键在实读为空时逐字保留的口径亦维持既有裁定
+// （TestPlanLegacyResourcePinsFailClosedOnUnreadableVolume 钉
+// 住），不在本格翻动。
 // 旧后端不存在（全新安装形态）时不钉卷、不报错、期望值为空。
 func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) (resourcePinPlan, error) {
 	plan := resourcePinPlan{pins: make([]envKeyValue, 0, 4)}
@@ -1314,6 +1362,14 @@ func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) (re
 			return plan, fmt.Errorf("%w：部署 .env 缺少 %s，旧后端容器 %s 的 /app/data 挂载实读为空（可能是 bind 挂载、无此挂载或 inspect 失败）",
 				errDataVolumeUndetermined, envKeySQLiteVolume, insp.backendName)
 		case insp.backendExists:
+			// 事故态门（R1-01-M1，脚本面同谓词）：无键＋实读恰
+			// 为模板新缺省卷＋旧名卷含 gost.db → 钉键会把事故
+			// 态正式化，中止并点名人工钉法。
+			if insp.sqliteVolume == newSQLiteDataVolume+panelInstanceSuffix(env) && insp.sqliteLegacyVolumeHasDB {
+				return plan, fmt.Errorf("%w：部署 .env 缺少 %s，在跑后端实际挂载的数据卷是模板新缺省卷 %s，但旧名卷 %s 存在且含有 gost.db——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重试升级：数据在旧卷 → %s=%s；数据确在现行卷 → %s=%s",
+					errAccidentStateVolume, envKeySQLiteVolume, insp.sqliteVolume, legacySQLiteDataVolume,
+					envKeySQLiteVolume, legacySQLiteDataVolume, envKeySQLiteVolume, insp.sqliteVolume)
+			}
 			plan.pins = append(plan.pins, envKeyValue{envKeySQLiteVolume, insp.sqliteVolume})
 			expected = insp.sqliteVolume
 		}
@@ -1324,8 +1380,30 @@ func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) (re
 	plan.expectedSQLiteVolume = expected
 
 	pgExpected := env[envKeyPostgresVolume]
+
+	// R1-01-L5（PG bind 两面收敛）：PG 模式、PG 卷键已有值、旧
+	// PG 容器已定位且其挂载 inspect 成功但卷名为空（bind 挂载）
+	// ——键值无从与实读核对。此形态下脚本面旧行为是逐字信键、
+	// 重建落错键命名的空卷、后端播种而更新报成功；本面旧行为是
+	// helper 以错键为期望比对未重建的旧 PG 容器（实读为空）恒
+	// 判不一致回滚。统一为动任何文件之前 fail-closed 中止并点
+	// 名（脚本面 panel_pin_missing_resource_keys 同谓词同处
+	// 置）。inspect 本身失败（读不到）不在此格：键无从证伪、按
+	// 既有口径保留，升级后校验门兜底。SQLite 模式下 PG 容器惰
+	// 性、数据不在 PG 卷，不拦。
+	if isPostgresMode(env) && pgExpected != "" && insp.pgContainerFound && insp.pgMountInspectOK && insp.pgVolume == "" {
+		return plan, fmt.Errorf("%w：部署为 PostgreSQL 模式且 .env 已有 %s=%s，但旧 PG 容器的 /var/lib/postgresql/data 挂载不是命名卷（实读卷名为空，疑似 bind 挂载），键值无从与实际挂载核对；bind 挂载不在随版模板形态内，请先把 PG 数据改为命名卷挂载或人工核对该键后再重试升级",
+			errPGVolumeUndetermined, envKeyPostgresVolume, pgExpected)
+	}
 	switch {
 	case pgExpected == "":
+		// 事故态门（R1-01-M1，脚本面同谓词）：无键＋实读恰为模
+		// 板新缺省卷＋旧名卷含 PG_VERSION → 中止并点名人工钉法。
+		if insp.pgVolume == newPostgresDataVolume+panelInstanceSuffix(env) && insp.postgresLegacyVolumeHasData {
+			return plan, fmt.Errorf("%w：部署 .env 缺少 %s，在跑 PostgreSQL 容器实际挂载的数据卷是模板新缺省卷 %s，但旧名卷 %s 存在且含有 PG_VERSION（真实 PostgreSQL 数据目录）——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重试升级：数据在旧卷 → %s=%s；数据确在现行卷 → %s=%s",
+				errAccidentStateVolume, envKeyPostgresVolume, insp.pgVolume, legacyPostgresDataVolume,
+				envKeyPostgresVolume, legacyPostgresDataVolume, envKeyPostgresVolume, insp.pgVolume)
+		}
 		pgVolume := insp.pgVolume
 		if pgVolume == "" && insp.postgresDataVolumeExists {
 			pgVolume = legacyPostgresDataVolume
@@ -1363,16 +1441,25 @@ func upgradeDataVolumeMismatch(expected, actual string) bool {
 // 名（与脚本面 panel_pin_missing_resource_keys 的 inspect 模板同
 // 式）：bind 挂载该字段为空、inspect 失败返回空串。
 func (e *systemUpgradeExecutor) dockerInspectMountVolumeName(ctx context.Context, container, destination string) string {
+	name, _ := e.dockerInspectMountVolumeNameOK(ctx, container, destination)
+	return name
+}
+
+// dockerInspectMountVolumeNameOK 同上，但额外报告 inspect 命令本
+// 身是否成功执行：ok=false 表示读不到（容器不在场/inspect 失
+// 败），ok=true 且名为空表示容器在场但该 destination 确无命名
+// 卷挂载（bind 等）——R1-01-L5 的 bind 中止格只认后者。
+func (e *systemUpgradeExecutor) dockerInspectMountVolumeNameOK(ctx context.Context, container, destination string) (string, bool) {
 	tmpl := fmt.Sprintf(`{{range .Mounts}}{{if eq .Destination %q}}{{.Name}}{{end}}{{end}}`, destination)
 	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", tmpl, container).Output()
 	if err != nil {
-		return ""
+		return "", false
 	}
 	name := strings.TrimSpace(string(out))
 	if !dockerResourceNamePattern.MatchString(name) {
-		return ""
+		return "", true
 	}
-	return name
+	return name, true
 }
 
 // dockerContainerExists 报告容器是否存在且可 inspect。
@@ -1415,13 +1502,46 @@ func (e *systemUpgradeExecutor) inspectLegacyResourceNames(ctx context.Context, 
 
 	// 旧 PG 容器定位与卷实读（定位口径见 locatePostgresContainer）。
 	if pgContainer := e.locatePostgresContainer(ctx, env, insp.composeProject); pgContainer != "" {
-		insp.pgVolume = e.dockerInspectMountVolumeName(ctx, pgContainer, "/var/lib/postgresql/data")
+		insp.pgContainerFound = true
+		insp.pgVolume, insp.pgMountInspectOK = e.dockerInspectMountVolumeNameOK(ctx, pgContainer, "/var/lib/postgresql/data")
 	}
 	if insp.pgVolume == "" {
 		insp.postgresDataVolumeExists =
 			exec.CommandContext(ctx, "docker", "volume", "inspect", legacyPostgresDataVolume).Run() == nil
 	}
+
+	// 事故态门的真库证据探测：仅在门的前件（缺键＋实读恰为模板
+	// 新缺省名）成立时才花一次性探针容器，常态升级零额外开销。
+	suffix := panelInstanceSuffix(env)
+	if env[envKeySQLiteVolume] == "" && insp.backendExists && insp.sqliteVolume == newSQLiteDataVolume+suffix {
+		insp.sqliteLegacyVolumeHasDB = e.dockerVolumeFileExists(ctx, legacySQLiteDataVolume, "gost.db")
+	}
+	if env[envKeyPostgresVolume] == "" && insp.pgVolume == newPostgresDataVolume+suffix {
+		insp.postgresLegacyVolumeHasData = e.dockerVolumeFileExists(ctx, legacyPostgresDataVolume, "PG_VERSION")
+	}
 	return insp
+}
+
+// dockerVolumeFileExists 探测命名卷内是否存在指定文件（事故态门
+// 的真库证据，与脚本面 panel_volume_file_exists 同语义：探测不
+// 到一律按「无证据」返回 false，不臆断卷内有数据）。面板进程自
+// 身没有宿主机卷挂载点视图，故借后端镜像起一次性只读探针容
+// 器挂卷查看；卷不存在、镜像读不到或探针运行失败均返回 false
+// ——探针是证据通道而非裁决面，其失败只使门退回未立门时的行
+// 为，绝不反向误拦正常升级。relPath 只由内部常量传入
+// （gost.db / PG_VERSION），不接受外部输入。
+func (e *systemUpgradeExecutor) dockerVolumeFileExists(ctx context.Context, volume, relPath string) bool {
+	if exec.CommandContext(ctx, "docker", "volume", "inspect", volume).Run() != nil {
+		return false
+	}
+	imageID, err := e.currentBackendImage(ctx)
+	if err != nil || imageID == "" {
+		return false
+	}
+	return exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
+		"-v", volume+":/flmx-volume-probe:ro",
+		"--entrypoint", "/bin/sh", imageID,
+		"-c", "test -f /flmx-volume-probe/"+relPath).Run() == nil
 }
 
 // pinLegacyResourceNames 在升级动任何文件之前执行钉键：读部署
@@ -1605,14 +1725,10 @@ func panelInstanceSuffix(env map[string]string) string {
 }
 
 // identityRenameEnabled 读改名开关：部署 .env 的
-// PANEL_IDENTITY_RENAME 优先、进程环境兜底（脚本面由操作者以
-// 进程环境传入；面板内升级面的操作面是 .env，故此序）；仅值
-// "0" 关闭，其余（含缺失与空值）开启——「什么值算关闭」的判定
-// 与脚本 ${PANEL_IDENTITY_RENAME:-1} == "0" 同口径，但开关的
-// 取值来源与脚本面并不等价：脚本只认进程环境，.env 里写的
-// PANEL_IDENTITY_RENAME=0 对脚本面无效（RA-1 L-3）。本面维持
-// .env 优先（面板进程的操作面就是 .env），来源对齐由脚本侧补
-// 齐，不在本面改。
+// PANEL_IDENTITY_RENAME 优先、进程环境兜底；仅值 "0" 关闭，其
+// 余（含缺失与空值）开启。取值来源与判定口径与脚本面
+// panel_identity_rename_enabled 逐字同序（批 D 已对齐：脚本面同
+// 读 .env、键在即赢、缺键才回退进程环境）。
 func identityRenameEnabled(env map[string]string) bool {
 	flag, ok := env[envKeyIdentityRename]
 	if !ok {
@@ -1621,10 +1737,14 @@ func identityRenameEnabled(env map[string]string) bool {
 	return flag != "0"
 }
 
-// isPostgresMode 按部署 .env 的 DB_TYPE 判部署模式（config 的
-// DB_TYPE 缺省为 sqlite、大小写不敏感，此处同口径）。
+// isPostgresMode 按部署 .env 的 DB_TYPE 判部署模式：走 config 的
+// 单点归一（R1-01-M2），别名 postgresql 与 postgres 等价。旧实现
+// 只认 postgres 字面量——后端与脚本都接受别名，唯独执行器不认，
+// 该拼写的 PG 部署在此整格失去 PG 保护（helper PG 卷校验永不启
+// 用、PG fail-closed 不触发、改名误置 removeLegacyPGContainer 删
+// 在跑 PG 容器、快照按 SQLite 安排）。
 func isPostgresMode(env map[string]string) bool {
-	return strings.EqualFold(strings.TrimSpace(env[envKeyDBType]), "postgres")
+	return config.DBTypeIsPostgres(env[envKeyDBType])
 }
 
 // identityRenameOutcome 是改名规划结果（纯数据）。
