@@ -87,6 +87,25 @@ type systemUpgradeExecutor struct {
 	// 不一致即回滚。为空表示升级前无从记录（无旧后端等），helper
 	// 跳过校验。
 	expectedSQLiteVolume string
+	// removeLegacyPGContainer 是改名后待 helper 在成功前删除的旧
+	// 名 PG 容器（仅 SQLite 模式且 PG 键被改名时非空，见
+	// applyIdentityRename 的模式分流裁定）。
+	removeLegacyPGContainer string
+	// recreatePostgres 表示本次升级改名了 PG 容器键且部署为 PG
+	// 模式：helper 的 pull/up 服务集须含 postgres，使被改名容器
+	// 随本次升级按新名重建（脚本面 start_panel_after_update 在
+	// PG 型先 up postgres 同形态）。
+	recreatePostgres bool
+	// snapshotPath 是升级前 DB 快照的部署内相对路径
+	// （backups/panel-update-<版本>-<时间戳>，仅 SQLite 模式）：
+	// 透传 helper 在停旧后端后、重建前落盘，状态文件与发起回执
+	// 据此点名。为空表示本次无快照（PG 模式切出，见
+	// pgSnapshotDeferred）。
+	snapshotPath string
+	// pgSnapshotDeferred 表示 PG 模式的 DB 快照切出未落（见
+	// prepareUpgradeSnapshot 的切出登记）：helper 仅在日志中点
+	// 名跳过，状态/回执不报快照路径。
+	pgSnapshotDeferred bool
 	// composeProject is the Compose project the running containers belong
 	// to. It need not match the deploy directory's name (e.g. installed
 	// from /root, deployed in /opt/flvx-panel); without it Compose would
@@ -186,6 +205,9 @@ type systemUpgradeRunData struct {
 	HelperContainer string `json:"helperContainer"`
 	BackendImageID  string `json:"backendImageId"`
 	Message         string `json:"message"`
+	// SnapshotPath 点名本次升级的 DB 快照相对路径（SQLite 模式；
+	// helper 在重建前落盘于此）。PG 模式快照切出时为空。
+	SnapshotPath string `json:"snapshotPath,omitempty"`
 }
 
 // systemUpgradeStatusData 是落盘于部署目录的升级状态（U1-003/U1-007）。
@@ -200,6 +222,10 @@ type systemUpgradeStatusData struct {
 	// R8-003：发起本次升级时的第二锚降级点名（单锚降级时非空）；由发起
 	// 路径写入、helper 终态回写时原样保留，状态端点据此透出。
 	AnchorNote string `json:"anchorNote,omitempty"`
+	// SnapshotPath 点名本次升级的 DB 快照相对路径（SQLite 模式）；
+	// 由发起路径写入、helper 终态回写时原样保留（与 AnchorNote
+	// 同形态）。无快照（PG 模式切出）时为空。
+	SnapshotPath string `json:"snapshotPath,omitempty"`
 }
 
 func (e *systemUpgradeExecutor) statusPath() string {
@@ -587,6 +613,12 @@ STATUS_FILE="$PANEL_DEPLOY_DIR/.flmx_upgrade_status.json"
 HEARTBEAT_FILE="$PANEL_DEPLOY_DIR/.flmx_upgrade_heartbeat"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOGFILE"; }
 
+# 本次升级的服务集（词拆分是有意的，勿加引号）：缺省 backend
+# frontend；PG 模式且本次改名了 PG 容器键时，面板侧透传含
+# postgres 的服务集，被改名容器随本次升级按新名重建；回滚重建
+# 用同一服务集，恢复旧 .env 后按旧名重建。
+UPGRADE_SERVICES="${FLMX_UPGRADE_SERVICES:-backend frontend}"
+
 # U1-003：回写升级状态文件（与后端 systemUpgradeStatusData 结构体对应）。
 # $1=inProgress(true/false)，$2=result。version/startedAt 由环境变量传入。
 write_status() {
@@ -598,8 +630,17 @@ write_status() {
   if [ -n "${FLMX_UPGRADE_ANCHOR_NOTE:-}" ]; then
     anchor_field=", \"anchorNote\": \"${FLMX_UPGRADE_ANCHOR_NOTE}\""
   fi
-  printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"%s}\n' \
-    "$1" "${FLMX_UPGRADE_VERSION:-}" "${FLMX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$anchor_field" > "$STATUS_FILE.tmp"
+  # DB 快照相对路径同形态保留进终态，但仅在快照真正落盘后
+  # （SNAPSHOT_TAKEN 由快照段成功后置位）才写：pull 失败等快照
+  # 前的回滚终态若虚报路径，运维会去找一份不存在的备份。路径
+  # 由面板侧以版本＋时间戳派生，字符集受限（字母数字/.-/），
+  # 无 JSON 转义需求。
+  snapshot_field=""
+  if [ -n "${SNAPSHOT_TAKEN:-}" ]; then
+    snapshot_field=", \"snapshotPath\": \"${FLMX_UPGRADE_SNAPSHOT_DIR}\""
+  fi
+  printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"%s%s}\n' \
+    "$1" "${FLMX_UPGRADE_VERSION:-}" "${FLMX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$anchor_field" "$snapshot_field" > "$STATUS_FILE.tmp"
   chmod 600 "$STATUS_FILE.tmp" 2>/dev/null || true
   mv -f "$STATUS_FILE.tmp" "$STATUS_FILE"
 }
@@ -628,7 +669,7 @@ rollback() {
     return 0
   fi
   log "用恢复后的配置重建旧容器..."
-  if docker compose up -d --force-recreate --remove-orphans backend frontend >> "$LOGFILE" 2>&1 && wait_backend_healthy; then
+  if docker compose up -d --force-recreate --remove-orphans $UPGRADE_SERVICES >> "$LOGFILE" 2>&1 && wait_backend_healthy; then
     write_status "false" "rolled_back"
     log "回滚完成：旧容器已按恢复后的配置重建并通过健康检查（.bak 保留）"
   else
@@ -715,7 +756,7 @@ log "拉取新镜像..."
 # B05-005：pull 单段上限 1200s（与面板 systemUpgradePullTimeoutSeconds
 # 同值，回归测试钉住）；无界 pull 在慢链路上可无限拖长本 helper，
 # 超时按拉取失败走回滚终态（files 恢复，容器未动）。
-if ! timeout 1200 docker compose pull backend frontend >> "$LOGFILE" 2>&1; then
+if ! timeout 1200 docker compose pull $UPGRADE_SERVICES >> "$LOGFILE" 2>&1; then
   log "错误: 拉取镜像失败"
   rollback files
   exit 1
@@ -724,8 +765,58 @@ fi
 log "等待旧容器释放资源..."
 sleep 3
 
+# DB 快照（1.9.9，SQLite 模式，面板侧以 FLMX_UPGRADE_SNAPSHOT_DIR
+# 透传部署内相对路径时启用）：停旧后端后、重建前，把数据卷整目
+# 录复制到部署目录的快照目录 sqlite/ 子目录（整目录口径与脚本
+# 面 backup_sqlite_for_update 一致：含 gost.db 与 -wal/-shm、剔
+# 除可弃的 github-cache），随后按 mtime 保留最近 3 份
+# panel-update-*（脚本面 BACKUP_RETENTION_KEEP=3 同口径，两面
+# 备份同目录同 glob 一并轮换）。任一步失败＝中止升级：此时新容
+# 器尚未创建，rollback 按旧文件重建被停的旧后端收口（快照失败
+# 不得静默跳过后照常升级）。快照只备不自动恢复，恢复由人工按
+# 状态文件点名的路径执行。源目录经 --volumes-from 与后端同挂
+# 载、恒为 /app/data（FLMX_UPGRADE_DATA_DIR 仅供测试覆盖）。
+if [ -n "${FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED:-}" ]; then
+  log "PostgreSQL 模式：DB 快照未随面板内升级落地（切出登记项），本次升级不创建 DB 快照"
+fi
+if [ -n "${FLMX_UPGRADE_SNAPSHOT_DIR:-}" ]; then
+  SNAPSHOT_DIR="$PANEL_DEPLOY_DIR/$FLMX_UPGRADE_SNAPSHOT_DIR"
+  DATA_DIR="${FLMX_UPGRADE_DATA_DIR:-/app/data}"
+  log "创建升级前 DB 快照: $FLMX_UPGRADE_SNAPSHOT_DIR"
+  if ! docker compose stop backend >> "$LOGFILE" 2>&1; then
+    log "错误: 停止旧后端以创建 DB 快照失败，中止升级"
+    rollback
+    exit 1
+  fi
+  snapshot_ok=1
+  mkdir -p "$SNAPSHOT_DIR/sqlite" || snapshot_ok=0
+  if [ "$snapshot_ok" -eq 1 ] && ! cp -a "$DATA_DIR/." "$SNAPSHOT_DIR/sqlite/" >> "$LOGFILE" 2>&1; then
+    # cp -a 在属主保留受限的环境（卷内文件属主为奇异 uid 映射
+    # 等）会因 chown 失败报错，而文件内容其实已复制到位。快照
+    # 以内容完整为准：降级为仅内容复制重试一次（恢复时由操作
+    # 者以 root 拷回数据卷，与脚本面 docker cp 的差异仅在属主
+    # 一维，降级在日志中点名）；两次都失败才判快照失败。
+    log "警告: cp -a 快照复制失败，降级为仅内容复制重试（cp 输出见 upgrade.log）"
+    rm -rf "$SNAPSHOT_DIR/sqlite"
+    mkdir -p "$SNAPSHOT_DIR/sqlite" && cp -r "$DATA_DIR/." "$SNAPSHOT_DIR/sqlite/" >> "$LOGFILE" 2>&1 || snapshot_ok=0
+  fi
+  if [ "$snapshot_ok" -eq 1 ]; then
+    rm -rf "$SNAPSHOT_DIR/sqlite/github-cache" || snapshot_ok=0
+  fi
+  if [ "$snapshot_ok" -ne 1 ]; then
+    log "错误: DB 快照复制失败，中止升级"
+    rollback
+    exit 1
+  fi
+  ls -dt "$PANEL_DEPLOY_DIR"/backups/panel-update-* 2>/dev/null | tail -n +4 | while IFS= read -r old_backup; do
+    rm -rf "$old_backup" 2>/dev/null || true
+  done
+  SNAPSHOT_TAKEN=1
+  log "DB 快照完成: $FLMX_UPGRADE_SNAPSHOT_DIR/sqlite"
+fi
+
 log "重启服务（force-recreate）..."
-if ! docker compose up -d --force-recreate --remove-orphans backend frontend >> "$LOGFILE" 2>&1; then
+if ! docker compose up -d --force-recreate --remove-orphans $UPGRADE_SERVICES >> "$LOGFILE" 2>&1; then
   log "错误: 重启服务失败"
   rollback
   exit 1
@@ -756,6 +847,24 @@ if [ -n "${FLMX_EXPECTED_SQLITE_VOLUME:-}" ]; then
     exit 1
   fi
   log "数据卷校验通过: /app/data 挂载卷与升级前一致（$actual_volume）"
+fi
+
+# 改名收尾（1.9.9，SQLite 模式，面板侧透传旧 PG 容器名时启用）：
+# PG 键已在同步段改写为现行名，旧 PG 容器随本次升级删除——脚本
+# 面改名流在 SQLite 模式下停删 PG 容器且不重建（菜单 4 迁移按
+# 需拉起，RR4-F7-02 已注记无流程依赖），终态须一致。删除点置
+# 于健康＋卷名校验全过之后：此前任一步失败走 rollback 时，旧
+# 容器与恢复的旧 .env 仍成对在场、不留半改名态；删除本身失败
+# 同样走 rollback。容器已不在场视为已达成目标状态，不报错。
+if [ -n "${FLMX_UPGRADE_REMOVE_PG_CONTAINER:-}" ]; then
+  if docker inspect "$FLMX_UPGRADE_REMOVE_PG_CONTAINER" >/dev/null 2>&1; then
+    log "删除改名前的旧 PG 容器: $FLMX_UPGRADE_REMOVE_PG_CONTAINER"
+    if ! docker rm -f "$FLMX_UPGRADE_REMOVE_PG_CONTAINER" >> "$LOGFILE" 2>&1; then
+      log "错误: 删除旧 PG 容器失败"
+      rollback
+      exit 1
+    fi
+  fi
 fi
 
 log "升级完成"
@@ -805,6 +914,25 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 	if e.expectedSQLiteVolume != "" {
 		args = append(args,
 			"-e", expectedSQLiteVolumeEnvKey+"="+e.expectedSQLiteVolume)
+	}
+	// 改名/快照安排（见 applyIdentityRename / prepareUpgradeSnapshot）：
+	// 均仅在非缺省时透传，helper 侧缺失即按缺省行为（服务集
+	// backend frontend、不删旧 PG 容器、无 DB 快照）。
+	if e.recreatePostgres {
+		args = append(args,
+			"-e", upgradeServicesEnvKey+"=backend frontend postgres")
+	}
+	if e.removeLegacyPGContainer != "" {
+		args = append(args,
+			"-e", removePGContainerEnvKey+"="+e.removeLegacyPGContainer)
+	}
+	if e.snapshotPath != "" {
+		args = append(args,
+			"-e", snapshotDirEnvKey+"="+e.snapshotPath)
+	}
+	if e.pgSnapshotDeferred {
+		args = append(args,
+			"-e", pgSnapshotDeferredEnvKey+"=1")
 	}
 	return append(args,
 		"--entrypoint", "/bin/sh", imageID,
@@ -1130,30 +1258,8 @@ func (e *systemUpgradeExecutor) inspectLegacyResourceNames(ctx context.Context, 
 		}
 	}
 
-	// 旧 PG 容器定位：优先部署 .env 自带的容器名声明（本部署自
-	// 述，不探他人部署）；其次按 Compose 项目 + 服务标签在本项
-	// 目内查找。两者都落空时只剩 postgres_data 卷存在性回退。
-	pgContainer := strings.TrimSpace(env[envKeyPanelPostgresContainer])
-	if validateBackendContainerName(pgContainer) != nil {
-		pgContainer = ""
-	}
-	if pgContainer == "" && insp.composeProject != "" {
-		out, err := exec.CommandContext(ctx, "docker", "ps", "-a",
-			"--filter", "label=com.docker.compose.project="+insp.composeProject,
-			"--filter", "label=com.docker.compose.service=postgres",
-			"--format", "{{.Names}}").Output()
-		if err == nil {
-			for _, line := range strings.Split(string(out), "\n") {
-				if name := strings.TrimSpace(line); name != "" {
-					if validateBackendContainerName(name) == nil {
-						pgContainer = name
-					}
-					break
-				}
-			}
-		}
-	}
-	if pgContainer != "" && e.dockerContainerExists(ctx, pgContainer) {
+	// 旧 PG 容器定位与卷实读（定位口径见 locatePostgresContainer）。
+	if pgContainer := e.locatePostgresContainer(ctx, env, insp.composeProject); pgContainer != "" {
 		insp.pgVolume = e.dockerInspectMountVolumeName(ctx, pgContainer, "/var/lib/postgresql/data")
 	}
 	if insp.pgVolume == "" {
@@ -1194,6 +1300,252 @@ func (e *systemUpgradeExecutor) pinLegacyResourceNames(ctx context.Context) (str
 	}
 	log.Printf("systemUpgrade: 已将存量资源名钉入 .env（升级前实读旧容器）: %s", strings.Join(pairs, ", "))
 	return expected, nil
+}
+
+// locatePostgresContainer 定位本部署的旧 PG 容器名（钉键采集与
+// 容器改名共用）：优先部署 .env 自带的 PANEL_POSTGRES_CONTAINER
+// 声明（本部署自述，不探他人部署）；其次按 Compose 项目 +
+// service=postgres 标签在本项目内查找（首个非空名定格，形态不
+// 合法即弃）。定位到的容器还须真实存在，不存在返回空串。
+func (e *systemUpgradeExecutor) locatePostgresContainer(ctx context.Context, env map[string]string, composeProject string) string {
+	pgContainer := strings.TrimSpace(env[envKeyPanelPostgresContainer])
+	if validateBackendContainerName(pgContainer) != nil {
+		pgContainer = ""
+	}
+	if pgContainer == "" && composeProject != "" {
+		out, err := exec.CommandContext(ctx, "docker", "ps", "-a",
+			"--filter", "label=com.docker.compose.project="+composeProject,
+			"--filter", "label=com.docker.compose.service=postgres",
+			"--format", "{{.Names}}").Output()
+		if err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if name := strings.TrimSpace(line); name != "" {
+					if validateBackendContainerName(name) == nil {
+						pgContainer = name
+					}
+					break
+				}
+			}
+		}
+	}
+	if pgContainer == "" || !e.dockerContainerExists(ctx, pgContainer) {
+		return ""
+	}
+	return pgContainer
+}
+
+// —— 存量容器改名（1.9.9，补齐面板内升级面与脚本面
+// apply_panel_identity_rename 的对齐，parity 矩阵 D1）——
+//
+// 基线形态：Go 面无改名逻辑，.env 容器键为旧缺省名的存量经面板
+// 内升级后键与容器名永不改名，与改名裁定「存量部署在升级流内
+// 默认执行容器改名（PANEL_IDENTITY_RENAME=0 可退出）」未齐。本
+// 段在钉卷之后、备份 .env 之后、换 compose 之前把键改写到位：
+// 后端/前端容器由 helper 按新 compose 的 container_name 随
+// force-recreate 换名（compose 按服务标签认容器，改名是重建的
+// 自然结果，无需显式停删）；PG 容器不在 helper 缺省重建集内，
+// 其处置按 DB 模式分流，见 applyIdentityRename 注。
+const (
+	envKeyPanelBackendContainer  = "PANEL_BACKEND_CONTAINER"
+	envKeyPanelFrontendContainer = "PANEL_FRONTEND_CONTAINER"
+	envKeyIdentityRename         = "PANEL_IDENTITY_RENAME"
+	envKeyInstance               = "FLMX_INSTANCE"
+	envKeyDBType                 = "DB_TYPE"
+
+	// 旧/新缺省容器名与脚本面 LEGACY_/NEW_PANEL_*_CONTAINER 常
+	// 量逐字同值（前端旧名是 vite-frontend，非 flux- 谱系）。
+	legacyPanelBackendContainer  = "flux-panel-backend"
+	legacyPanelPostgresContainer = "flux-panel-postgres"
+	legacyPanelFrontendContainer = "vite-frontend"
+	newPanelBackendContainer     = "flmx-panel-backend"
+	newPanelPostgresContainer    = "flmx-panel-postgres"
+	newPanelFrontendContainer    = "flmx-panel-frontend"
+
+	// 透传 helper 的改名/快照环境键（仅非缺省时透传，helper 侧
+	// 缺失即按缺省行为，与 expectedSQLiteVolumeEnvKey 同形态）。
+	removePGContainerEnvKey  = "FLMX_UPGRADE_REMOVE_PG_CONTAINER"
+	upgradeServicesEnvKey    = "FLMX_UPGRADE_SERVICES"
+	snapshotDirEnvKey        = "FLMX_UPGRADE_SNAPSHOT_DIR"
+	pgSnapshotDeferredEnvKey = "FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED"
+	// upgradeDataDirEnvKey 仅供测试覆盖快照源目录；生产恒不设、
+	// helper 缺省 /app/data。
+	upgradeDataDirEnvKey = "FLMX_UPGRADE_DATA_DIR"
+)
+
+// panelInstanceIDPattern 是实例 id 白名单（与脚本
+// panel_instance_id_is_valid 逐字同契约：小写字母或数字开头、
+// 仅含小写字母/数字/-/_、全长不超过 32）。
+var panelInstanceIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+// panelInstanceSuffix 派生容器/卷名派生的实例后缀（与脚本
+// panel_instance_suffix 同源）：实例 id 取进程环境 FLMX_INSTANCE
+// 优先、部署 .env 次之（脚本 panel_instance_id 同序），过白名单
+// 后拼为 "-<id>"；缺失或不合法时按默认实例处理、返回空串。
+func panelInstanceSuffix(env map[string]string) string {
+	id := strings.TrimSpace(os.Getenv(envKeyInstance))
+	if id == "" {
+		id = strings.TrimSpace(env[envKeyInstance])
+	}
+	if id == "" || !panelInstanceIDPattern.MatchString(id) {
+		return ""
+	}
+	return "-" + id
+}
+
+// identityRenameEnabled 读改名开关：部署 .env 的
+// PANEL_IDENTITY_RENAME 优先、进程环境兜底（脚本面由操作者以
+// 进程环境传入；面板内升级面的操作面是 .env，故此序）；仅值
+// "0" 关闭，其余（含缺失与空值）开启——与脚本
+// ${PANEL_IDENTITY_RENAME:-1} == "0" 的判定同口径。
+func identityRenameEnabled(env map[string]string) bool {
+	flag, ok := env[envKeyIdentityRename]
+	if !ok {
+		flag = os.Getenv(envKeyIdentityRename)
+	}
+	return flag != "0"
+}
+
+// isPostgresMode 按部署 .env 的 DB_TYPE 判部署模式（config 的
+// DB_TYPE 缺省为 sqlite、大小写不敏感，此处同口径）。
+func isPostgresMode(env map[string]string) bool {
+	return strings.EqualFold(strings.TrimSpace(env[envKeyDBType]), "postgres")
+}
+
+// identityRenameOutcome 是改名规划结果（纯数据）。
+type identityRenameOutcome struct {
+	// writes 是待 upsert 的容器键（固定序：后端、前端、PG）。
+	writes []envKeyValue
+	// pgRenamed 表示 PG 键被改名，helper 侧须处置旧 PG 容器。
+	pgRenamed bool
+	// oldPGContainer 是改名前 PG 容器的实际名（定位到才非空）。
+	oldPGContainer string
+}
+
+// planIdentityRename 是改名的纯规划段（触发谓词与脚本
+// apply_panel_identity_rename 逐字同口径）：每个容器键在「缺失
+// 或为空」或「等于旧缺省名」时改写为现行名＋实例后缀；自定义
+// 名与已是现行名的键逐字保留、不进 writes。
+func planIdentityRename(env map[string]string, suffix, oldPGContainer string) identityRenameOutcome {
+	out := identityRenameOutcome{}
+	rules := []struct{ key, legacy, current string }{
+		{envKeyPanelBackendContainer, legacyPanelBackendContainer, newPanelBackendContainer + suffix},
+		{envKeyPanelFrontendContainer, legacyPanelFrontendContainer, newPanelFrontendContainer + suffix},
+		{envKeyPanelPostgresContainer, legacyPanelPostgresContainer, newPanelPostgresContainer + suffix},
+	}
+	for _, r := range rules {
+		if v := env[r.key]; v != "" && v != r.legacy {
+			continue
+		}
+		out.writes = append(out.writes, envKeyValue{r.key, r.current})
+		if r.key == envKeyPanelPostgresContainer {
+			out.pgRenamed = true
+			out.oldPGContainer = oldPGContainer
+		}
+	}
+	return out
+}
+
+// applyIdentityRename 执行存量容器改名的 .env 键改写，并定格
+// helper 侧的 PG 处置（recreatePostgres / removeLegacyPGContainer）。
+// 调用点在 handler 同步段：钉卷之后、.env 备份之后、换 compose
+// 之前。排在备份之后是有意的：helper 回滚恢复的 .env.upgrade.bak
+// 含改名前的身份键，改名后健康/卷名校验失败时 .env 键随文件一
+// 并回到旧值、旧名容器按旧定义重建（钉卷键在备份之前写入，不
+// 在回滚之列——钉入的都是存量资源的现行事实，回滚保留无害且
+// 必要）。
+//
+// PG 容器处置的模式分流（选与脚本面最终状态一致者）：
+//   - PG 模式取「重建」：脚本面 start_panel_after_update 在 PG
+//     型部署先 up postgres 再重建后端/前端，改名后的 PG 容器随
+//     升级按新名重建。Go 面置 recreatePostgres，helper 的 pull/up
+//     服务集含 postgres，达同一终态。
+//   - SQLite 模式取 (a)「改键＋删旧容器」：脚本面改名流在
+//     SQLite 模式下停删旧 PG 容器且不重建（RR4-F7-02 已注记：
+//     无流程依赖，菜单 4 迁移按需拉起），终态为「键是新名、旧
+//     PG 容器不在场」。若只改键不删容器（备选 (b) 的反面形态），
+//     旧 PG 容器以旧名长存、与 .env 声明分家，且与脚本面终态不
+//     一致；若连键也不改 (b)，则 D1 在 SQLite 模式留一格不对
+//     齐。故置 removeLegacyPGContainer，helper 在健康＋卷名校
+//     验全过后、写 success 前删除之（删除点晚于脚本面，是有意
+//     偏差：此前任一步失败走回滚时，旧容器与恢复后的旧键仍成
+//     对在场，不留半改名态；成功终态与脚本面一致）。旧 PG 容
+//     器定位不到（无从证明其存在）时只改键并记录日志。
+func (e *systemUpgradeExecutor) applyIdentityRename(ctx context.Context) error {
+	data, err := os.ReadFile(e.envPath())
+	if err != nil {
+		return fmt.Errorf("读取部署 .env 失败: %v", err)
+	}
+	env := parseEnvFileValues(data)
+	if !identityRenameEnabled(env) {
+		return nil
+	}
+	suffix := panelInstanceSuffix(env)
+	oldPG := ""
+	if v := env[envKeyPanelPostgresContainer]; v == "" || v == legacyPanelPostgresContainer {
+		oldPG = e.locatePostgresContainer(ctx, env, e.detectComposeProject(ctx))
+	}
+	outcome := planIdentityRename(env, suffix, oldPG)
+	if len(outcome.writes) == 0 {
+		return nil
+	}
+	mode, err := fileModeOrDefault(e.envPath(), 0o600)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomicWithMode(e.envPath(), applyEnvKeyUpdates(data, outcome.writes), capEnvFileMode(mode)); err != nil {
+		return fmt.Errorf("写入改名后的容器身份键失败: %v", err)
+	}
+	pairs := make([]string, 0, len(outcome.writes))
+	for _, w := range outcome.writes {
+		pairs = append(pairs, w.key+"="+w.value)
+	}
+	log.Printf("systemUpgrade: 存量容器改名键已写入 .env: %s", strings.Join(pairs, ", "))
+	if outcome.pgRenamed {
+		switch {
+		case isPostgresMode(env):
+			e.recreatePostgres = true
+		case outcome.oldPGContainer != "":
+			e.removeLegacyPGContainer = outcome.oldPGContainer
+		default:
+			log.Printf("systemUpgrade: PG 容器键已改名，但旧 PG 容器未能定位（SQLite 模式），如其仍在运行请手动删除旧名容器")
+		}
+	}
+	return nil
+}
+
+// prepareUpgradeSnapshot 在启动 helper 前定格本次升级的 DB 快照
+// 安排（仅 SQLite 模式，路 3 INV-7 对 Go 面的补齐）：快照目录
+// 名由目标版本与当前 UTC 时刻派生（backups/panel-update-<版本>-
+// <时间戳>，与脚本面 create_panel_update_backup 的
+// panel-update-<时间戳> 同族命名；K=3 按 mtime 轮换亦同口径，
+// 由 helper 落盘时执行），经环境变量透传 helper 在停旧后端后、
+// 重建前整目录复制数据卷；状态文件与发起回执以相对路径点名。
+// 快照只备不自动恢复（恢复由人工按点名路径执行，与脚本面回滚
+// 不恢复 DB 备份的口径一致）。
+//
+// PG 模式切出登记（本批不落，只落 SQLite 子项）：脚本面 PG 快
+// 照是宿主机上对在跑 PG 容器直接 pg_dump；面板内 helper 若同
+// 做，须在 shell 内再解析 PG 容器定位与 POSTGRES_* 凭据/
+// DATABASE_URL 形态并处理转储一致性，工具链与失败面显著大于
+// SQLite 的整目录复制；且 PG 模式下数据卷不被本次升级触碰
+// （helper 至多重建 PG 容器、卷名已由钉键保障），风险敞口与
+// SQLite 面不对等。故 PG 子项以 pgSnapshotDeferred 标记＋
+// helper 日志点名切出，待后续批次按同一 backups/ 口径补齐。
+func (e *systemUpgradeExecutor) prepareUpgradeSnapshot(version string) {
+	data, err := os.ReadFile(e.envPath())
+	if err != nil {
+		// .env 此刻已由前序步骤反复读写成功，读失败极罕见；按
+		// SQLite 缺省处理（config 的 DB_TYPE 缺省同为 sqlite）：
+		// 安排照常下发，快照真失败时在 helper 内以回滚终态暴
+		// 露，不会静默跳过。
+		data = nil
+	}
+	if isPostgresMode(parseEnvFileValues(data)) {
+		e.pgSnapshotDeferred = true
+		return
+	}
+	name := "panel-update-" + version + "-" + time.Now().UTC().Format("20060102-150405")
+	e.snapshotPath = "backups/" + name
 }
 
 func (e *systemUpgradeExecutor) backupFile(path string) (string, error) {
@@ -2234,6 +2586,18 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "备份.env失败: "+err.Error()))
 		return
 	}
+	// 存量容器改名（1.9.9，parity 矩阵 D1）：钉卷之后、.env 备份
+	// 之后、换 compose 之前把旧缺省容器键改写为现行名（细节与
+	// PG 模式分流裁定见 applyIdentityRename）。备份在改名之前是
+	// 有意的：升级失败回滚恢复的 .env 含改名前的身份键。写失败
+	// 按同步段既有口径恢复备份并中止（容器未动）。
+	if err := exec.applyIdentityRename(r.Context()); err != nil {
+		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
+			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
+		}
+		response.WriteJSON(w, response.Err(-2, "存量容器改名失败: "+err.Error()))
+		return
+	}
 	if err := exec.replaceCompose(composePath, newCompose); err != nil {
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
@@ -2255,11 +2619,15 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	exec.upgradeStartedAt = time.Now().UTC().Format(time.RFC3339)
 	// R8-003：降级点名随状态落盘并透传 helper，状态轮询面同步透出。
 	exec.upgradeAnchorNote = anchorNote
+	// DB 快照安排定格（SQLite 模式点名快照相对路径，状态与回执
+	// 据此透出；PG 模式切出标记，见 prepareUpgradeSnapshot）。
+	exec.prepareUpgradeSnapshot(version)
 	if err := exec.writeUpgradeStatus(systemUpgradeStatusData{
-		InProgress: true,
-		Version:    version,
-		StartedAt:  exec.upgradeStartedAt,
-		AnchorNote: anchorNote,
+		InProgress:   true,
+		Version:      version,
+		StartedAt:    exec.upgradeStartedAt,
+		AnchorNote:   anchorNote,
+		SnapshotPath: exec.snapshotPath,
 	}); err != nil {
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
@@ -2274,12 +2642,13 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// U1-003：helper 未启动成功，立即解除落盘的「升级中」状态，避免永久拦截后续升级。
 		_ = exec.writeUpgradeStatus(systemUpgradeStatusData{
-			InProgress: false,
-			Version:    version,
-			StartedAt:  exec.upgradeStartedAt,
-			Result:     "helper_start_failed",
-			FinishedAt: time.Now().UTC().Format(time.RFC3339),
-			AnchorNote: anchorNote,
+			InProgress:   false,
+			Version:      version,
+			StartedAt:    exec.upgradeStartedAt,
+			Result:       "helper_start_failed",
+			FinishedAt:   time.Now().UTC().Format(time.RFC3339),
+			AnchorNote:   anchorNote,
+			SnapshotPath: exec.snapshotPath,
 		})
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
@@ -2299,6 +2668,7 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		HelperContainer: helperContainer,
 		BackendImageID:  imageID,
 		Message:         message,
+		SnapshotPath:    exec.snapshotPath,
 	}))
 }
 
