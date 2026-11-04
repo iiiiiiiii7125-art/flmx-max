@@ -181,7 +181,7 @@ func (r *Repository) updateUserWithRenameGuard(id int64, username string, update
 func (r *Repository) UpdateUserWithPassword(id int64, username, pwdHash string, flow int64, num int, expTime, flowResetTime int64, status, maxConn int, now int64, flowMiB ...int64) error {
 	// R3 B02-002：改名经 updateUserWithRenameGuard 事务内折叠复检
 	// （降级态同样执法），不再只靠事务外预检 + 唯一冲突映射。
-	return r.updateUserWithRenameGuard(id, username, map[string]interface{}{
+	err := r.updateUserWithRenameGuard(id, username, map[string]interface{}{
 		"user":                username,
 		"pwd":                 pwdHash,
 		"flow":                flow,
@@ -194,6 +194,12 @@ func (r *Repository) UpdateUserWithPassword(id int64, username, pwdHash string, 
 		"password_changed_at": now,
 		"updated_time":        sql.NullInt64{Int64: now, Valid: true},
 	})
+	// R1-12-01：同 UpdateUserNameAndPassword——id=1 真实改密后
+	// 初始口令候选与一次性文件失效。
+	if err == nil && id == 1 {
+		clearInitialAdminPassword()
+	}
+	return err
 }
 
 func (r *Repository) UpdateUserWithoutPassword(id int64, username string, flow int64, num int, expTime, flowResetTime int64, status, maxConn int, now int64, flowMiB ...int64) error {
@@ -219,13 +225,19 @@ func (r *Repository) UpdateUserPassword(userID int64, pwdHash string, now int64)
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Model(&model.User{}).
+	err := r.db.Model(&model.User{}).
 		Where("id = ?", userID).
 		Updates(map[string]interface{}{
 			"pwd":                 pwdHash,
 			"password_changed_at": now,
 			"updated_time":        sql.NullInt64{Int64: now, Valid: true},
 		}).Error
+	// R1-12-01：同 UpdateUserNameAndPassword——id=1 真实改密后
+	// 初始口令候选与一次性文件失效。
+	if err == nil && userID == 1 {
+		clearInitialAdminPassword()
+	}
+	return err
 }
 
 // MigrateUserPasswordHash 只替换存储哈希，不推进 password_changed_at

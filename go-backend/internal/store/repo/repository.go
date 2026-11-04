@@ -332,6 +332,8 @@ func Open(path string) (*Repository, error) {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
 
+	// R1-12-01：初始管理员口令一次性文件落 SQLite 库同级目录。
+	setInitialAdminDataDir(filepath.Dir(path))
 	seedData(db)
 
 	if err := migrateSchema(db); err != nil {
@@ -385,6 +387,9 @@ func OpenPostgres(dsn string) (*Repository, error) {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
 
+	// R1-12-01：PG 模式无本地库文件，一次性初始口令文件落
+	// DB_PATH 同级目录（两种模式下后端均挂载 /app/data）。
+	setInitialAdminDataDir(defaultInitialAdminDataDir())
 	seedData(db)
 
 	if err := migrateSchema(db); err != nil {
@@ -698,34 +703,13 @@ func seedData(db *gorm.DB) {
 			log.Printf("ERROR: seed skipped: id=1 missing and username admin@user already taken. " +
 				"面板缺少管理员账号，需人工处理（不得自动提权）。")
 		} else {
-			adminPwd, err := security.HashPassword("admin@user")
-			if err != nil {
-				// 与上方占用分支同标准：不得静默跳过。ERROR 日志 + API 状态可见。
-				adminBootstrapRequired = true
-				log.Printf("ERROR: seed admin password hash failed: %v. 面板缺少管理员账号，需人工处理。", err)
-			} else {
-				adminUser := model.User{
-					ID: 1, User: "admin@user", Pwd: adminPwd,
-					RoleID: 0, ExpTime: 2727251700000, Flow: 99999, InFlow: 0, OutFlow: 0,
-					FlowResetTime: 1, FlowLastResetTime: 1748914865000, Num: 99999, CreatedTime: 1748914865000,
-					UpdatedTime:       sql.NullInt64{Int64: 1754011744252, Valid: true},
-					Status:            1,
-					PasswordChangedAt: 1748914865000,
-				}
-				if err := db.Create(&adminUser).Error; err != nil {
-					log.Printf("seed admin failed: %v", mapUniqueViolation(err, "username"))
-				} else {
-					// INV-2（事故专项审计路 3）：播种成功必须可观测——旧
-					// 实现补建成功零日志，已初始化部署被指向空库（卷漂
-					// 移等）时在空库上静默播种、日志面无迹可循。此处只
-					// 加日志、不改播种语义：点名触发谓词（当前打开的库
-					// 中 id=1 的 user 计数为 0），事故定位时据此可知本
-					// 进程面对的库里当时没有管理员。
-					log.Printf("INFO: seeded default admin user %q (id=1): trigger predicate was user count for id=1 == 0 in the opened database; if this deployment was already initialized, the opened database is probably not the original one (check the mounted data volume)", adminUser.User)
-				}
-			}
+			seedInitialAdmin(db)
 		}
 	}
+
+	// R1-12-01：管理员已存在时恢复初始口令候选登记（跨重启保持
+	// 强制改密）；刚播种完成时候选已登记，探针自动跳过。
+	probeInitialAdminPassword(db)
 
 	// INV-2：配置播种同口径可观测——FirstOrCreate 实际新建时打
 	// INFO 日志（存在性先查，与管理员补建的谓词形态一致）。
@@ -826,12 +810,18 @@ func (r *Repository) UpdateUserNameAndPassword(userID int64, username, passwordM
 	// （排除自身），降级态（v5 索引缺席）下并发改名交错同样被拒，
 	// 不再只靠事务外预检 + 唯一冲突映射兜底；唯一冲突映射由封装内
 	// mapUniqueViolation 保留，DB 原文不回吐。
-	return r.updateUserWithRenameGuard(userID, username, map[string]interface{}{
+	err := r.updateUserWithRenameGuard(userID, username, map[string]interface{}{
 		"user":                username,
 		"pwd":                 passwordMD5,
 		"password_changed_at": now,
 		"updated_time":        now,
 	})
+	// R1-12-01：id=1 管理员真实改密成功 → 初始口令候选与一次性
+	// 文件就此失效（初始口令使命完成）。
+	if err == nil && userID == 1 {
+		clearInitialAdminPassword()
+	}
+	return err
 }
 
 // ─── Config Queries ──────────────────────────────────────────────────
