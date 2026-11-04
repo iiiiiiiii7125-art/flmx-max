@@ -14,9 +14,9 @@ TEST_DIR=$(mktemp -d)
 export TEST_DIR
 
 cleanup() {
-  rc-service flux_agent stop >/dev/null 2>&1 || true
-  rc-update del flux_agent default >/dev/null 2>&1 || true
-  rm -f /etc/init.d/flux_agent
+  rc-service flmx_agent stop >/dev/null 2>&1 || true
+  rc-update del flmx_agent default >/dev/null 2>&1 || true
+  rm -f /etc/init.d/flmx_agent
   rm -f /etc/systemd/system/gost.service
   rm -rf /etc/gost
   rm -rf "$TEST_DIR"
@@ -56,7 +56,7 @@ sha256sum "$TEST_DIR/agent" | awk '{print $1"  agent"}' > "$TEST_DIR/agent.sha25
 # Substitute only the network download and optional tcpkill dependency.
 sed '/^# 执行主函数$/,$d' "$INSTALL_SCRIPT" > "$TEST_DIR/install.sh"
 cat >> "$TEST_DIR/install.sh" <<'EOF'
-INSTALL_DIR="$TEST_DIR/flux_agent"
+INSTALL_DIR="$TEST_DIR/flmx_agent"
 ensure_download_url_initialized() {
   ensure_alpine_runtime_dependencies || return 1
   DOWNLOAD_URL="file://$TEST_DIR/agent"
@@ -68,22 +68,22 @@ chmod +x "$TEST_DIR/install.sh"
 cp "$TEST_DIR/install.sh" "$TEST_DIR/manage.sh"
 PROXY_ENABLED=false "$TEST_DIR/install.sh" -a http://127.0.0.1:9 -s alpine-test
 
-rc-service flux_agent status
-test -L /etc/runlevels/default/flux_agent
-test "$(cat "$TEST_DIR/working-directory")" = "$TEST_DIR/flux_agent"
-test -s "$TEST_DIR/flux_agent/config.json"
-rc-service flux_agent restart
-rc-service flux_agent status
+rc-service flmx_agent status
+test -L /etc/runlevels/default/flmx_agent
+test "$(cat "$TEST_DIR/working-directory")" = "$TEST_DIR/flmx_agent"
+test -s "$TEST_DIR/flmx_agent/config.json"
+rc-service flmx_agent restart
+rc-service flmx_agent status
 
 # Update must retain config and restart through OpenRC.
-cp "$TEST_DIR/flux_agent/config.json" "$TEST_DIR/config-before-update.json"
+cp "$TEST_DIR/flmx_agent/config.json" "$TEST_DIR/config-before-update.json"
 cp "$TEST_DIR/manage.sh" "$TEST_DIR/update.sh"
 # AI-06: menu update runs the agent-dir ownership guard; the fixture
 # operator asserts ownership via TAKEOVER (same form as the proxy
 # suite), so this step exercises the update mechanism itself.
 printf '2\n' | PROXY_ENABLED=false FLMX_AGENT_TAKEOVER=1 "$TEST_DIR/update.sh"
-cmp "$TEST_DIR/config-before-update.json" "$TEST_DIR/flux_agent/config.json"
-rc-service flux_agent status
+cmp "$TEST_DIR/config-before-update.json" "$TEST_DIR/flmx_agent/config.json"
+rc-service flmx_agent status
 
 # C4-F01: the legacy gost cleanup must skip a legacy install whose
 # config addr belongs to another panel — service file and binary
@@ -128,8 +128,8 @@ rm -rf /etc/gost
 # AI-06: menu uninstall runs the same ownership guard — TAKEOVER form
 # as the update step above; the trailing 'y' is the uninstall confirm.
 printf '3\ny\n' | FLMX_AGENT_TAKEOVER=1 "$TEST_DIR/manage.sh"
-test ! -e /etc/init.d/flux_agent
-test ! -e /etc/runlevels/default/flux_agent
-test ! -e "$TEST_DIR/flux_agent"
+test ! -e /etc/init.d/flmx_agent
+test ! -e /etc/runlevels/default/flmx_agent
+test ! -e "$TEST_DIR/flmx_agent"
 test ! -e "$TEST_DIR/systemctl-called"
 echo "Alpine installer lifecycle tests passed"
