@@ -41,7 +41,10 @@ func validatePostgresPassword(dbType, dsn string) error {
 		return nil
 	}
 	password := postgresDSNPassword(dsn)
-	if password == "" || password == "flux_panel_change_me" || password == "postgres" {
+	// 占位符拒绝集只加不删：flux_panel_change_me 是改名前 compose
+	// 模板的占位值（存量 .env 可能仍在用），flmx_panel_change_me 是
+	// 改名后模板的占位值，两者都不得作为真实口令启动。
+	if password == "" || password == "flux_panel_change_me" || password == "flmx_panel_change_me" || password == "postgres" {
 		return fmt.Errorf("PostgreSQL 密码未设置或仍为默认值，拒绝启动。请在 .env 中设置强密码 POSTGRES_PASSWORD，并确保 DATABASE_URL 中的密码与之一致。")
 	}
 	return nil

@@ -17,6 +17,7 @@ func TestValidatePostgresPassword(t *testing.T) {
 	}{
 		// Rejections: password empty or a shipped default.
 		{"default password rejected", "postgres", "postgres://flux_panel:flux_panel_change_me@db:5432/flux_panel", true},
+		{"renamed default password rejected", "postgres", "postgres://flmx_panel:flmx_panel_change_me@db:5432/flmx_panel", true},
 		{"empty password rejected", "postgres", "postgres://u@h/db", true},
 		{"literal postgres password rejected", "postgres", "postgres://u:postgres@h/db", true},
 		{"postgresql alias normalized", "PostgreSQL", "postgres://u:flux_panel_change_me@h/db", true},
