@@ -132,11 +132,11 @@ wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest
 - systemd 查看状态: `systemctl status flmx_agent`
 - Alpine/OpenRC 查看状态: `rc-service flmx_agent status`
 - 若面板未显示在线，看 agent 的 WebSocket 连接日志（地址 scheme 是否与面板对外方式一致、是否被 308/握手拒绝等都会写在日志里），再对照下一节排查：systemd 节点执行 `journalctl -u flmx_agent -n 100`；Alpine/OpenRC 节点没有 journald，日志在文件 `/var/log/flmx_agent.log`（错误日志 `/var/log/flmx_agent.err.log`），用 `tail -n 100 /var/log/flmx_agent.log` 查看。
-- 改名前安装的节点在经面板升级迁移前，服务名、安装目录与日志文件仍是旧名（`flux_agent`、`/etc/flux_agent`、`/var/log/flux_agent.log`），上述命令把名字换成旧名即可；迁移由面板侧的节点升级完成，完成后统一为新名，旧名在过渡期内仍被脚本与面板识别。
+- 改名前安装的节点在迁移前，服务名、安装目录与日志文件仍是旧名（`flux_agent`、`/etc/flux_agent`、`/var/log/flux_agent.log`），上述命令把名字换成旧名即可；迁移只在节点机上重新执行安装命令（或脚本更新）时发生，完成后统一为新名——面板内的节点升级只换二进制、不迁布局，不做迁移也不影响使用，旧名在过渡期内仍被脚本与面板识别。
 
 ### 节点机上已有其他面板的 agent 时（归属守卫）
 
-脚本形态 agent 与旧版/同类面板的 agent 共用同一个安装槽：现行槽为目录 `/etc/flmx_agent`、服务 `flmx_agent`；改名前的旧槽（目录 `/etc/flux_agent`、服务 `flux_agent`）在过渡期内仍被脚本识别——机器上已有旧槽 agent 时同样先做**归属判定**，判定为本面板的经面板升级迁移到新槽，他人面板的照样不改动。往一台已经装有其他面板 agent 的节点机上执行本面板的安装命令时，脚本先做归属判定，判定不过不会改动现有 agent 的任何文件：
+脚本形态 agent 与旧版/同类面板的 agent 共用同一个安装槽：现行槽为目录 `/etc/flmx_agent`、服务 `flmx_agent`；改名前的旧槽（目录 `/etc/flux_agent`、服务 `flux_agent`）在过渡期内仍被脚本识别——机器上已有旧槽 agent 时同样先做**归属判定**，判定为本面板的在本面板安装命令（或脚本更新）执行时迁移到新槽，他人面板的照样不改动。往一台已经装有其他面板 agent 的节点机上执行本面板的安装命令时，脚本先做归属判定，判定不过不会改动现有 agent 的任何文件：
 
 - **守卫键**：现有 agent 配置文件里的 `addr` 字段（该 agent 当前连接的面板地址；新槽看 `/etc/flmx_agent/config.json`，旧槽看 `/etc/flux_agent/config.json`，两槽都会被检查）。脚本读取后先做 JSON 转义归一化（`\/`、`\uXXXX` 等写法差异不会造成误判），再与本次安装命令的面板地址**逐字比对**：相等才认定是本面板的旧 agent、允许就地覆盖安装（面板迁移、存量升级走的正是这条路）；不相等、或根本读不到 `addr`，一律按「他人面板的 agent」处理。守卫只比地址不比密钥：地址是面板的连接端点，同机端口唯一、异机地址不同，两套不同面板不可能撞同一串地址，同串即同一端点。
 - **触发面**：安装（面板生成的一键命令与手动 `./install.sh -a … -s …` 都一样）；维护菜单的**更新**与**卸载**（菜单上下文没有「本次面板地址」可比对，口径更严：非交互一律拒绝，交互时先明示现存 `addr` 再要求确认）。
