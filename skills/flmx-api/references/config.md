@@ -1,14 +1,38 @@
 # System Configuration API
 
-Manage system-wide settings and configurations.
+Manage system-wide settings. All configuration values are strings.
+
+Access to each key is classified in the backend (`config_policy.go`) into
+three tiers, enforced identically on every read/write path:
+
+- **public** — readable anonymously.
+- **authenticated** — readable by any logged-in user.
+- **sensitive** — readable/writable by admins only. **Unclassified keys
+  default to sensitive.**
+
+Some keys are never returned by the config API at all, even to admins:
+`license_key`, `license_machine_id`, `machine_fingerprint`, `gist_token`,
+`gist_password`, `jwt_secret`, `cloudflare_secret_key`,
+`notify_telegram_bot_token`, `notify_telegram_api_base`,
+`notify_webhook_url`. Reading them yields 403 and `config/list` omits
+them; they are written only through their dedicated surfaces (Gist
+endpoints, deployment files) or write-only form fields.
+
+> Only use keys that exist in the product (see the table below). The
+> write endpoints accept unclassified keys and store them, but an
+> unconsumed key changes nothing — the operation silently has no effect.
 
 ## POST /api/v1/config/get
 
-Get a single configuration by name. This endpoint is public (no auth required).
+Get a single configuration by name. **Not public**: this endpoint is
+optional-auth — public-tier keys may be read anonymously,
+authenticated-tier keys require a login, sensitive-tier keys require an
+admin. (The only anonymous config endpoint is
+`POST /api/v1/public/config/get`, which serves whitelisted public keys.)
 
 **Request:**
 ```json
-{"name": "site_name"}
+{"name": "app_name"}
 ```
 
 **Response:**
@@ -16,7 +40,8 @@ Get a single configuration by name. This endpoint is public (no auth required).
 {
   "code": 0,
   "data": {
-    "name": "site_name",
+    "id": 1,
+    "name": "app_name",
     "value": "My FLMX Panel",
     "time": 1706659200000
   }
@@ -25,55 +50,66 @@ Get a single configuration by name. This endpoint is public (no auth required).
 
 ## POST /api/v1/config/list
 
-List all configurations (requires authentication).
+List all configurations. Login required; for non-admin callers the
+sensitive-tier keys are filtered out, and the never-returned keys above
+are omitted for everyone.
 
 **Request:** `{}`
 
-**Response:**
+**Response:** `data` is a flat name → value map:
 ```json
 {
   "code": 0,
   "data": {
-    "site_name": "My FLMX Panel",
-    "site_logo": "https://example.com/logo.png",
-    "site_announcement": "System maintenance scheduled",
+    "app_name": "My FLMX Panel",
+    "app_logo": "data:image/png;base64,...",
     "captcha_enabled": "true",
-    "captcha_type": "turnstile",
-    "turnstile_site_key": "...",
-    "default_user_flow": "100",
-    "default_user_exp_days": "30"
+    "cloudflare_site_key": "0x4...",
+    "monitor_retention_days": "7"
   }
 }
 ```
 
 ## POST /api/v1/config/update
 
-Batch update multiple configurations (admin only).
+Batch update multiple configurations (admin only). The request body is
+the flat key → value map itself:
 
 **Request:**
 ```json
 {
-  "site_name": "New Panel Name",
-  "site_announcement": "Welcome to the new panel!",
-  "default_user_flow": "50"
+  "app_name": "New Panel Name",
+  "captcha_enabled": "true"
 }
 ```
 
 Only include the keys you want to update.
 
+Rules enforced on write:
+
+- System-managed keys are rejected (`gist_*`, `license_*`,
+  `is_commercial`, `node_sub_token`, `machine_fingerprint`, …) — they
+  have dedicated writers.
+- Required keys (`jwt_secret`, `monitor_tunnel_quality_enabled`,
+  `monitor_tunnel_quality_interval_sec`, `monitor_retention_days`)
+  cannot be cleared.
+- For clearable keys, an empty string deletes the key (reads then fall
+  back to the default).
+
 **Response:**
 ```json
-{"code": 0, "msg": "success"}
+{"code": 0, "msg": "操作成功"}
 ```
 
 ## POST /api/v1/config/update-single
 
-Update a single configuration (admin only).
+Update a single configuration (same write rules as `config/update`;
+sensitive keys require admin).
 
 **Request:**
 ```json
 {
-  "name": "site_name",
+  "name": "app_name",
   "value": "My Awesome Panel"
 }
 ```
@@ -89,7 +125,9 @@ Get the site announcement (login required).
 {
   "code": 0,
   "data": {
-    "content": "System maintenance scheduled for tonight"
+    "content": "System maintenance scheduled for tonight",
+    "enabled": 1,
+    "update_time": 1706659200000
   }
 }
 ```
@@ -100,37 +138,46 @@ Update the site announcement (admin only).
 
 **Request:**
 ```json
-{"content": "New announcement message"}
+{"content": "New announcement message", "enabled": 1}
 ```
 
 ---
 
 ## Common Configuration Keys
 
-| Key | Description | Example |
-|-----|-------------|---------|
-| `site_name` | Panel display name | `"My FLMX Panel"` |
-| `site_logo` | Logo URL | `"https://example.com/logo.png"` |
-| `site_announcement` | Announcement HTML | `"<p>Notice...</p>"` |
-| `captcha_enabled` | Enable captcha | `"true"` or `"false"` |
-| `captcha_type` | Captcha provider | `"turnstile"` or `"local"` |
-| `turnstile_site_key` | Cloudflare Turnstile site key | `"0x4..."` |
-| `turnstile_secret_key` | Cloudflare Turnstile secret | `"0x4..."` |
-| `default_user_flow` | Default user traffic (GB) | `"100"` |
-| `default_user_exp_days` | Default user expiry days | `"30"` |
-| `default_user_num` | Default max forwards | `"10"` |
+| Key | Tier | Description |
+|-----|------|-------------|
+| `app_name` | public | Panel display name (default `FLMX`) |
+| `app_logo` | public | Logo (PNG data URL) |
+| `app_favicon` | public | Favicon (PNG data URL) |
+| `app_bg_image` | public | Default wallpaper (data URL) |
+| `app_bg_image_light` | public | Light-mode wallpaper override |
+| `login_bg_image` | public | Login page wallpaper (empty = follow main) |
+| `hide_footer_brand` | public | `"true"` hides the footer brand |
+| `cloudflare_site_key` | public | Cloudflare Turnstile site key |
+| `cloudflare_secret_key` | sensitive, write-only | Turnstile secret key (never readable via this API) |
+| `captcha_enabled` | authenticated | `"true"` enables login captcha |
+| `panel_domain` | authenticated | Panel domain used when composing links |
+| `subscription_front_urls` | authenticated | JSON array of subscription front origins |
+| `monitor_tunnel_quality_enabled` | authenticated | `"true"`/`"false"` tunnel quality probing |
+| `monitor_tunnel_quality_interval_sec` | authenticated | Probe interval, 1–3600 |
+| `monitor_retention_days` | authenticated | Monitoring data retention, 1–3650 (default 7) |
+| `notify_enabled` | authenticated | `"true"` enables notifications |
+
+There are **no global default-user keys**: per-user quota / expiry /
+forward-count values are set per account on `user/create` (see
+[users](users.md)).
 
 ---
 
-## Example: Update Panel Name and Announcement
+## Example: Update Panel Name
 
 ```bash
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/config/update" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
-    "site_name": "Awesome Traffic Panel",
-    "site_announcement": "<strong>Welcome!</strong> New nodes added."
+    "app_name": "Awesome Traffic Panel"
   }'
 ```
 
@@ -142,8 +189,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/config/update" \
   -H "Content-Type: application/json" \
   -d '{
     "captcha_enabled": "true",
-    "captcha_type": "turnstile",
-    "turnstile_site_key": "0x4AAAAAAAAjq0JN9YQg",
-    "turnstile_secret_key": "0x4AAAAAAAAjq0JN9YQg_secret"
+    "cloudflare_site_key": "0x4AAAAAAAAjq0JN9YQg",
+    "cloudflare_secret_key": "0x4AAAAAAAAjq0JN9YQg_secret"
   }'
 ```
