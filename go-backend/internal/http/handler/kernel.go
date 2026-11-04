@@ -2097,6 +2097,12 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		if !kernel.ComboSupported(k.KernelType, in.Protocol, in.Transport.Type, in.Security.Type) {
 			return nil, "", fmt.Errorf("入站「%s」的协议组合（%s / %s / %s）与内核 %s 不匹配，已拒绝下发，请修正或删除该入站", row.Name, in.Protocol, in.Transport.Type, in.Security.Type, k.KernelType)
 		}
+		// 下发前复检（Settings 级条件字段）：ENC×内核、空闲超时×内核、
+		// Vision×组合不在三元组与版本门内，存量毒行不得经渲染面静默
+		// 降级或带病下发（R4-C2C-02）；谓词与创建面 Normalize 同源。
+		if err := kernel.CheckSettingsConditions(k.KernelType, &in); err != nil {
+			return nil, "", fmt.Errorf("入站「%s」的设置与内核 %s 不匹配：%v，已拒绝下发，请修正或删除该入站", row.Name, k.KernelType, err)
+		}
 		if msg := kernelVersionGate(k.KernelType, k.Version, &in); msg != "" {
 			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
@@ -2564,7 +2570,7 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolSnell && versionBelowStrict(version, 1, 14) {
 		return fmt.Sprintf("sing-box 内置 Snell 需要 1.14 及以上，节点安装的是 %s", version)
 	}
-	if in.Settings.EncryptionEnabled() && versionBelow3Strict(version, 25, 9, 5) {
+	if kernelType == kernel.TypeXray && in.Settings.EncryptionEnabled() && versionBelow3Strict(version, 25, 9, 5) {
 		return fmt.Sprintf("VLESS 加密需要 Xray 25.9.5 及以上，节点安装的是 %s", version)
 	}
 	// 出站 IP 策略版本门（S4）：策略字段随入站一同进入 gate，保存/复检/

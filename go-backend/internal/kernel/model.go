@@ -339,8 +339,8 @@ func Normalize(kernelType string, in *Inbound) error {
 	if in.ConnIdleSeconds < UnlimitedConnIdleSentinel || in.ConnIdleSeconds > MaxConnIdleSeconds {
 		return fmt.Errorf("空闲超时须为 -1（不限）或 0（默认 %d 秒）或 1-%d 秒的整数", DefaultConnIdleSeconds, MaxConnIdleSeconds)
 	}
-	if in.ConnIdleSeconds != 0 && kernelType != TypeXray {
-		return errors.New("空闲超时（connIdle）只支持 Xray 内核：sing-box 没有 Xray 式的空闲超时（TCP 靠 keepalive 保活、UDP 会话默认 5 分钟清理、仅 TUN 有 udp_timeout），请先切到 Xray 内核")
+	if err := checkConnIdleKernel(kernelType, in.ConnIdleSeconds); err != nil {
+		return err
 	}
 
 	if err := normalizeExtra(kernelType, in); err != nil {
@@ -362,13 +362,68 @@ func Normalize(kernelType string, in *Inbound) error {
 	if in.Security.CertMode == CertModeACME && kernelType != TypeSingbox {
 		return errors.New("自动申请证书（ACME）目前只支持 sing-box 内核")
 	}
-	if in.Settings.EncryptionEnabled() && (kernelType != TypeXray || in.Protocol != ProtocolVLESS) {
-		return errors.New("VLESS 加密仅支持 Xray 内核的 VLESS 入站")
+	if err := checkEncryptionKernel(kernelType, in); err != nil {
+		return err
 	}
 	if in.Protocol == ProtocolNaive && in.Security.CertMode == CertModeSelf {
 		// Naive clients verify certificates and self-signed ones are
 		// trivially fingerprinted, which defeats NaïveProxy.
 		return errors.New("NaïveProxy 需要真实证书：请选择自动申请证书或节点上的证书文件")
+	}
+	return nil
+}
+
+// --- Settings 级条件谓词：创建面 Normalize 与下发复检共用单一真源 ---
+
+// checkConnIdleKernel 是空闲超时的内核条件：非 0 值仅 Xray 支持，其他
+// 内核没有 Xray 式的空闲超时（文案按中性表述，不以某一内核的机理为主语）。
+func checkConnIdleKernel(kernelType string, seconds int) error {
+	if seconds != 0 && kernelType != TypeXray {
+		return errors.New("空闲超时（connIdle）仅支持 Xray 内核：其他内核没有 Xray 式的空闲超时，请先切到 Xray 内核")
+	}
+	return nil
+}
+
+// checkEncryptionKernel 是 VLESS 加密（ENC）的内核/协议条件：仅 Xray + VLESS。
+func checkEncryptionKernel(kernelType string, in *Inbound) error {
+	if in.Settings.EncryptionEnabled() && (kernelType != TypeXray || in.Protocol != ProtocolVLESS) {
+		return errors.New("VLESS 加密仅支持 Xray 内核的 VLESS 入站")
+	}
+	return nil
+}
+
+// flowConditionError 是 flow（Vision）的组合条件。调用方保证协议为
+// VLESS/VMess 且 Flow 非空（其余协议的 flow 由 normalizeSettings 各分支
+// 清零、不进入本谓词）。
+func flowConditionError(in *Inbound) error {
+	s := &in.Settings
+	if in.Protocol == ProtocolVMess {
+		return errors.New("VMess 不支持 flow（xtls-rprx-vision 仅 VLESS 可用），请清空 flow")
+	}
+	if s.Flow != FlowVision {
+		return fmt.Errorf("不支持的 VLESS flow %s（仅 xtls-rprx-vision 或留空）", s.Flow)
+	}
+	visionOK := in.Transport.Type == TransportTCP && (in.Security.Type != SecurityNone || s.EncryptionEnabled())
+	if !visionOK {
+		return fmt.Errorf("xtls-rprx-vision（Vision 流控）仅支持 VLESS + TCP 传输 + TLS/Reality 安全层（或开启 VLESS 加密），当前为 %s 传输 + %s 安全层且未开启 VLESS 加密：请改用 TCP + TLS/Reality、开启 VLESS 加密，或关闭 Vision 流控", in.Transport.Type, in.Security.Type)
+	}
+	return nil
+}
+
+// CheckSettingsConditions 只读复检入站的 Settings 级条件字段（ENC×内核、
+// ConnIdle×内核、Vision×组合），谓词即上方三个 helper、与创建面
+// Normalize 同源单点。下发面逐入站调用：创建面与备份恢复面均经
+// Normalize 封口，存量毒行不得再经渲染面静默降级或带病下发
+// （R4-C2C-02）。返回首个不成立条件的拒绝原因。
+func CheckSettingsConditions(kernelType string, in *Inbound) error {
+	if err := checkConnIdleKernel(kernelType, in.ConnIdleSeconds); err != nil {
+		return err
+	}
+	if err := checkEncryptionKernel(kernelType, in); err != nil {
+		return err
+	}
+	if (in.Protocol == ProtocolVLESS || in.Protocol == ProtocolVMess) && in.Settings.Flow != "" {
+		return flowConditionError(in)
 	}
 	return nil
 }
@@ -502,16 +557,11 @@ func normalizeSettings(in *Inbound) error {
 			// 改为三种情形全部显式拒绝：VMess 携带 flow、flow 取值
 			// 非法、VLESS Vision 组合不成立（非 TCP，或安全无且未开
 			// ENC——Vision 需 TLS/Reality 或真实加密层，与导入面
-			// proxy_parse.go、凭据面 credentials.go 同口径）。
-			if in.Protocol == ProtocolVMess {
-				return errors.New("VMess 不支持 flow（xtls-rprx-vision 仅 VLESS 可用），请清空 flow")
-			}
-			if s.Flow != FlowVision {
-				return fmt.Errorf("不支持的 VLESS flow %s（仅 xtls-rprx-vision 或留空）", s.Flow)
-			}
-			visionOK := in.Transport.Type == TransportTCP && (in.Security.Type != SecurityNone || s.EncryptionEnabled())
-			if !visionOK {
-				return fmt.Errorf("xtls-rprx-vision（Vision 流控）仅支持 VLESS + TCP 传输 + TLS/Reality 安全层（或开启 VLESS 加密），当前为 %s 传输 + %s 安全层且未开启 VLESS 加密：请改用 TCP + TLS/Reality、开启 VLESS 加密，或关闭 Vision 流控", in.Transport.Type, in.Security.Type)
+			// proxy_parse.go、凭据面 credentials.go 同口径）。判定本体
+			// 在 flowConditionError，与下发复检 CheckSettingsConditions
+			// 同源单点。
+			if err := flowConditionError(in); err != nil {
+				return err
 			}
 		}
 	case ProtocolTrojan:
