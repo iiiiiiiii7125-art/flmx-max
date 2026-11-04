@@ -2390,6 +2390,26 @@ func decodeJSON(body io.ReadCloser, out interface{}) error {
 	return decodeJSONWithLimit(body, out, 10<<20)
 }
 
+// unknownJSONFieldName 从 DisallowUnknownFields 的解码错误中提取
+// 未知字段名（错误形态 `json: unknown field "xxx"`）；非该类错误
+// 返回 ""。
+func unknownJSONFieldName(err error) string {
+	if err == nil {
+		return ""
+	}
+	const marker = "unknown field "
+	msg := err.Error()
+	idx := strings.Index(msg, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(msg[idx+len(marker):])
+	if name, uerr := strconv.Unquote(rest); uerr == nil {
+		return name
+	}
+	return strings.Trim(rest, "\"")
+}
+
 // decodeJSONWithLimit 与 decodeJSON 相同，但允许调用方指定 body 上限。
 // 备份导入需要更大的上限（面板备份可达数十 MB），而普通 API 保持 10MB 防 DoS。
 func decodeJSONWithLimit(body io.ReadCloser, out interface{}, limit int64) error {
@@ -2653,6 +2673,13 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 		// J-008：导入面其余失败统一为 -2；唯请求体解码失败的文案
 		// 「请求参数错误」按全局同文案口径用 ErrDefault（-1），与
 		// decodeJSON 全部调用点同码（R9-14）。
+		// R1-07 F-4：未知字段拒绝时点名字段——此前解码器错误（含
+		// 字段名）被整体丢弃、只回固定文案，管理员无从定位是哪
+		// 一键触发整单拒绝。
+		if field := unknownJSONFieldName(err); field != "" {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("请求参数错误：备份包含未知字段 %q", field)))
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}

@@ -18,6 +18,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1217,6 +1219,14 @@ func (h *Handler) gistBackupRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.runBackupImportTailHooks(result, &backup, gistRestoreTypes)
+	// R1-07 F-4：未知顶层段点名披露——Gist 恢复的 json.Unmarshal
+	// 对未知段静默忽略（本地导入面是 DisallowUnknownFields 整单
+	// 拒绝，两面不对称）；同为 "1.0" 的跨版本未知段（如新版面
+	// 板上传、旧版面板恢复的新增段）此前无声丢失。恢复照常进
+	// 行，但段名进回执 ImportWarnings 点名，不静默吞。
+	if unknown := unknownBackupTopLevelKeys(plain); len(unknown) > 0 {
+		result.ImportWarnings = append(result.ImportWarnings, fmt.Sprintf("备份含当前版本未知的顶层段（%s），已忽略这些段未恢复", strings.Join(unknown, "、")))
+	}
 	// O7-010：快照生成失败只警告、不中断恢复（见上）；警告随
 	// 回执披露，文案与本地导入回执同形态。
 	if snapshotErr != nil {
@@ -1226,4 +1236,35 @@ func (h *Handler) gistBackupRestore(w http.ResponseWriter, r *http.Request) {
 	// 刚写入新鲜快照时为 no-op；懒清理在恢复入口的落点）。
 	h.purgeExpiredImportAutoBackup()
 	response.WriteJSON(w, response.OK(result))
+}
+
+// unknownBackupTopLevelKeys 返回备份 JSON 中不属于 model.BackupData
+// 结构体 json 标签集的顶层键名（排序后）。已知集由结构体反射机
+// 械推导、不手抄清单，防 BackupData 增段后名单漂移。解析失败返
+// 回 nil（调用方已先行解码成功，此处仅为披露用途）。
+func unknownBackupTopLevelKeys(plain []byte) []string {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(plain, &raw); err != nil {
+		return nil
+	}
+	known := make(map[string]bool)
+	t := reflect.TypeOf(model.BackupData{})
+	for i := 0; i < t.NumField(); i++ {
+		name := strings.Split(t.Field(i).Tag.Get("json"), ",")[0]
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			name = t.Field(i).Name
+		}
+		known[name] = true
+	}
+	var unknown []string
+	for k := range raw {
+		if !known[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
 }
