@@ -352,9 +352,15 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // validateImportedInboundObjects 对备份入站的四整对象
 // （settings/transport/security/extra）跑保存面等价校验（R5X-024）：
 // 把备份原值解入 kernel.Inbound 副本后调用保存面共用的
-// kernel.Normalize——只读副本做校验，落库仍用备份原值逐字恢复，
-// 不以归一化结果覆写。kernel_id=0 的导入型入站没有内核上下文、
-// 不经 Normalize，但其凭据与地址全在 Extra 承载的代理对象里，须经
+// kernel.Normalize。kernel_id>0 的自建入站落库用 Normalize 愈合后
+// 的三对象（settings/transport/security 的序列化形态）而非备份原文
+// ——验什么存什么（RR4-F2-01）：Normalize 对凭据类字段是生成而非
+// 拒绝（ENC secret、UUID、Reality 钥、密码缺失即补，auth/flow 仅
+// TrimSpace，SnellVersion 0 补默认），只取 error 做校验时这类靠愈合
+// 才合法的行会以未愈合形态落库（ENC 空 secret 行下发复检无感、
+// 订阅派生直接报错）。合法行经 Normalize 不变，愈合形态与其原文
+// 语义等价。kernel_id=0 的导入型入站没有内核上下文、不经
+// Normalize，但其凭据与地址全在 Extra 承载的代理对象里，须经
 // 与 ParseImport 共用的同一谓词 kernel.ValidateImportedProxy 校验
 // （凭据列 R6X-008、地址列 R7X-003；只读校验副本，落库仍逐字恢复）。
 //
@@ -380,7 +386,26 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // 的行字段两检口径恒校验（Port 1–65535 + Listen 为 IP 字面量，
 // listen 已由调用方完成空→"::" 归一）。不要求行内 Listen/Port 与
 // Extra 的 server/port 相等（只设合法性门，防过修）。
-func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, strategy string) error {
+// marshalRestoredInboundObject serializes one object of the validated
+// copy back into stored form (RR4-F2-01). An originally content-less
+// object whose healed form is still the empty object keeps its
+// original spelling, so "" is not gratuitously rewritten to "{}".
+func marshalRestoredInboundObject(obj interface{}, orig string) (string, error) {
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(orig) == "" && string(raw) == "{}" {
+		return orig, nil
+	}
+	return string(raw), nil
+}
+
+func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, strategy string) (settings, transport, security string, err error) {
+	// RR4-F2-01：返回值是落库形态。自建入站（kernel_id>0）在
+	// Normalize 通过后改为愈合形态（见函数头注）；其余路径（内容
+	// 豁免、导入型、内核缺失兜底）恒为备份原文。
+	settings, transport, security = i.Settings, i.Transport, i.Security
 	// hasContent is computed up front only so the R6-H-01 carve-out below
 	// can tell whether the Extra-carrier check is guaranteed to run; the
 	// row-carrier gate itself is NOT content-gated (R8X-004) and still
@@ -418,21 +443,21 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 			// port too; retain the port gate here, mirroring the
 			// self-built branch below.
 			if i.Port < 1 || i.Port > 65535 {
-				return errors.New("端口必须在 1-65535 之间")
+				return settings, transport, security, errors.New("端口必须在 1-65535 之间")
 			}
 		} else if err := kernel.ValidateImportedProxyRowAddress(listen, i.Port); err != nil {
-			return err
+			return settings, transport, security, err
 		}
 	} else {
 		if i.Port < 1 || i.Port > 65535 {
-			return errors.New("端口必须在 1-65535 之间")
+			return settings, transport, security, errors.New("端口必须在 1-65535 之间")
 		}
 		if net.ParseIP(listen) == nil {
-			return errors.New("监听地址必须是 IP")
+			return settings, transport, security, errors.New("监听地址必须是 IP")
 		}
 	}
 	if !hasContent {
-		return nil
+		return settings, transport, security, nil
 	}
 	vin := kernel.Inbound{ID: i.ID, Protocol: i.Protocol, Listen: listen, Port: i.Port,
 		AcceptProxyProtocol: i.AcceptProxyProtocol == 1, OutboundIPStrategy: strategy,
@@ -449,13 +474,13 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 			continue
 		}
 		if err := json.Unmarshal([]byte(f.raw), f.out); err != nil {
-			return err
+			return settings, transport, security, err
 		}
 	}
 	if strings.TrimSpace(i.Extra) != "" {
 		var probe interface{}
 		if err := json.Unmarshal([]byte(i.Extra), &probe); err != nil {
-			return err
+			return settings, transport, security, err
 		}
 		vin.Extra = json.RawMessage(i.Extra)
 	}
@@ -469,23 +494,38 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 		if extra := strings.TrimSpace(i.Extra); extra != "" && extra != "null" {
 			var p kernel.Proxy
 			if err := json.Unmarshal([]byte(extra), &p); err != nil {
-				return err
+				return settings, transport, security, err
 			}
 			if err := kernel.ValidateImportedProxy(p); err != nil {
-				return err
+				return settings, transport, security, err
 			}
 		}
-		return nil
+		return settings, transport, security, nil
 	}
 	var krow model.NodeKernel
 	res := tx.Where("id = ?", i.KernelID).Limit(1).Find(&krow)
 	if res.Error != nil {
-		return res.Error
+		return settings, transport, security, res.Error
 	}
 	if res.RowsAffected == 0 {
-		return nil // 存在性校验已在调用方跳过该行，此处 unreachable 兜底
+		return settings, transport, security, nil // 存在性校验已在调用方跳过该行，此处 unreachable 兜底
 	}
-	return kernel.Normalize(krow.KernelType, &vin)
+	if err := kernel.Normalize(krow.KernelType, &vin); err != nil {
+		return settings, transport, security, err
+	}
+	// RR4-F2-01：验什么存什么——三对象改以 Normalize 愈合后的副本
+	// 序列化形态落库（生成型凭据、TrimSpace、SnellVersion 默认均在
+	// 三对象内）。逐字原文只在上述未跑 Normalize 的路径保留。
+	if settings, err = marshalRestoredInboundObject(vin.Settings, i.Settings); err != nil {
+		return i.Settings, i.Transport, i.Security, err
+	}
+	if transport, err = marshalRestoredInboundObject(vin.Transport, i.Transport); err != nil {
+		return i.Settings, i.Transport, i.Security, err
+	}
+	if security, err = marshalRestoredInboundObject(vin.Security, i.Security); err != nil {
+		return i.Settings, i.Transport, i.Security, err
+	}
+	return settings, transport, security, nil
 }
 
 // inboundImportCounts carries the per-subsection landed-row counts of
@@ -750,7 +790,11 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		// R5X-024：四整对象落库前跑 Normalize 等价校验（校验副本，
 		// 见 validateImportedInboundObjects）——坏行整行跳过 + 计数，
 		// 汇总 warning 在入站循环后统一发（同 ShareHost 披露口径）。
-		if err := validateImportedInboundObjects(tx, i, listen, strategy); err != nil {
+		// RR4-F2-01：自建入站落库用校验返回的愈合形态三对象（验什么
+		// 存什么），不再逐字落备份原文。
+		healedSettings, healedTransport, healedSecurity, validateErr := validateImportedInboundObjects(tx, i, listen, strategy)
+		if validateErr != nil {
+			err := validateErr
 			rep.skip("inbounds")
 			invalidInboundObjects++
 			invalidInboundIdentities = append(invalidInboundIdentities,
@@ -833,8 +877,8 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		item := model.NodeInbound{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: protocol,
-			Listen: listen, Port: i.Port, Transport: i.Transport, Security: i.Security,
-			Settings: i.Settings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: shareMode, Remark: i.Remark,
+			Listen: listen, Port: i.Port, Transport: healedTransport, Security: healedSecurity,
+			Settings: healedSettings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: shareMode, Remark: i.Remark,
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: whitelistExtra, Enabled: i.Enabled,
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
