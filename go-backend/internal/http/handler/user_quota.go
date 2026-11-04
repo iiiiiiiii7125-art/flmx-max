@@ -36,7 +36,7 @@ func (h *Handler) userQuotaBlockReason(userID int64, now int64) (string, error) 
 	}
 	quota, err := h.repo.GetUserQuotaView(userID, time.UnixMilli(now))
 	if err != nil || quota == nil {
-		return "", err
+		return "", markRepoError(err)
 	}
 	if quota.DisabledByQuota == 1 || isUserQuotaExceeded(quota) {
 		return "该用户流量配额已超额，禁止开启转发", nil

@@ -258,7 +258,7 @@ func (h *Handler) ensureUserTunnelForwardAllowedWithReserved(userID int64, tunne
 
 	user, err := h.repo.GetUserByID(userID)
 	if err != nil {
-		return err
+		return markRepoError(err)
 	}
 	if user == nil {
 		return errors.New("用户不存在")
@@ -286,7 +286,7 @@ func (h *Handler) ensureUserTunnelForwardAllowedWithReserved(userID int64, tunne
 	if user.Num > 0 {
 		currentForwardCount, err := h.repo.CountActiveForwardsByUser(userID)
 		if err != nil {
-			return err
+			return markRepoError(err)
 		}
 		if currentForwardCount+reservedUser >= int64(user.Num) {
 			return errors.New("转发数量已达上限")
@@ -326,7 +326,7 @@ func (h *Handler) ensureUserTunnelForwardAllowedWithReserved(userID int64, tunne
 	if policy.Num > 0 {
 		currentTunnelForwardCount, err := h.repo.CountActiveForwardsByUserTunnel(userID, tunnelID)
 		if err != nil {
-			return err
+			return markRepoError(err)
 		}
 		if currentTunnelForwardCount+reservedUserTunnel >= int64(policy.Num) {
 			return errors.New("该隧道转发数量已达上限")
@@ -378,7 +378,7 @@ func (h *Handler) getUserTunnelPolicy(userTunnelID int64) (*userTunnelPolicy, er
 	}
 	ut, err := h.repo.GetUserTunnelByID(userTunnelID)
 	if err != nil {
-		return nil, err
+		return nil, markRepoError(err)
 	}
 	if ut == nil {
 		return nil, nil

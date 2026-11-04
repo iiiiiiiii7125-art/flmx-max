@@ -545,6 +545,56 @@ func respondInternalError(w http.ResponseWriter, op string, err error) {
 	response.WriteJSON(w, response.Err(-2, "Internal error"))
 }
 
+// repoError 标记一个源自仓储层的原始错误（RR4-C1-01）。Error() 与
+// 原文逐字一致、Unwrap 保留链——既有展示点（管理员面、批量回执）
+// 行为不变；双受众面的混合助手（权限/配额/占用校验等：业务文案与
+// 仓储错误同出一口）靠它区分来源：业务文案原样回、仓储错误经
+// respondInternalIfRepoError 改走 respondInternalError。标记只加在
+// 助手的仓储直通点（h.repo.* 的 return err），助手自著的业务错误
+// 不经此标记。
+type repoError struct{ err error }
+
+func (e *repoError) Error() string { return e.err.Error() }
+func (e *repoError) Unwrap() error { return e.err }
+
+func markRepoError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var re *repoError
+	if errors.As(err, &re) {
+		return err
+	}
+	return &repoError{err: err}
+}
+
+// respondInternalIfRepoError 是混合错误出口的收口判：err 携带
+// repoError 标记（源自仓储层）时按 respondInternalError 回通用
+// 文案并返回 true；否则返回 false、由调用方按原有业务口径回执。
+func respondInternalIfRepoError(w http.ResponseWriter, op string, err error) bool {
+	var re *repoError
+	if errors.As(err, &re) {
+		respondInternalError(w, op, re.err)
+		return true
+	}
+	return false
+}
+
+// batchFailureErr 是批量回执逐条失败原因的同口径净化（C1-01）：回执
+// 的 Reason 字段同样是回面通道，仓储错误（repoError 标记）替换为通用
+// 文案，业务/数据面原因逐字保留。直接的仓储调用点先以 markRepoError
+// 标明来源再传入。
+func batchFailureErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var re *repoError
+	if errors.As(err, &re) {
+		return errors.New("内部错误，请稍后重试")
+	}
+	return err
+}
+
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -791,7 +841,10 @@ func (h *Handler) getConfigs(w http.ResponseWriter, r *http.Request) {
 
 	cfgMap, err := h.repo.ListConfigs()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RR4-C1-01：/config/list 非管理员可达，仓储错误不得原文
+		// 直出（与 userPackage 的 R4-C1-I01 同口径，本轮按机制全集
+		// 补齐同族各面）。
+		respondInternalError(w, "getConfigs: ListConfigs failed", err)
 		return
 	}
 	ctxClaims := r.Context().Value(middleware.ClaimsContextKey)
@@ -927,7 +980,7 @@ func (h *Handler) forwardList(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.repo.ListForwards()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardList: ListForwards failed", err)
 		return
 	}
 	if roleID != 0 {
@@ -1200,7 +1253,7 @@ func (h *Handler) userTunnelVisibleList(w http.ResponseWriter, r *http.Request) 
 		items, err = h.repo.ListUserAccessibleTunnels(userID)
 	}
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userTunnelVisibleList: list visible tunnels failed", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(items))
@@ -2155,7 +2208,7 @@ func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.repo.GetUserByID(userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "updatePassword: GetUserByID failed", err)
 		return
 	}
 	if user == nil {
@@ -2180,7 +2233,7 @@ func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 
 	exists, err := h.repo.UsernameExistsExceptID(newUsername, userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "updatePassword: UsernameExistsExceptID failed", err)
 		return
 	}
 	if exists {
@@ -2190,11 +2243,17 @@ func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 
 	hashedPassword, err := security.HashPassword(req.NewPassword)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "updatePassword: HashPassword failed", err)
 		return
 	}
 	if err := h.repo.UpdateUserNameAndPassword(userID, newUsername, hashedPassword, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// 提交段复检命中同名（与锁外预检的竞态）仍回友好文案，
+		// 与 userCreate 的 R2X-049 口径一致；其余仓储错误收口。
+		if errors.Is(err, repo.ErrUsernameExists) {
+			response.WriteJSON(w, response.ErrDefault("用户名已存在"))
+			return
+		}
+		respondInternalError(w, "updatePassword: UpdateUserNameAndPassword failed", err)
 		return
 	}
 
@@ -2766,7 +2825,7 @@ func (h *Handler) getAnnouncement(w http.ResponseWriter, r *http.Request) {
 
 	ann, err := h.repo.GetAnnouncement()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-1, fmt.Sprintf("获取公告失败: %v", err)))
+		respondInternalError(w, "getAnnouncement: GetAnnouncement failed", err)
 		return
 	}
 

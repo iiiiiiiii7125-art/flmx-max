@@ -176,6 +176,9 @@ func (h *Handler) forwardDiagnoseStream(w http.ResponseWriter, r *http.Request) 
 			response.WriteJSON(w, response.ErrDefault("转发不存在"))
 			return
 		}
+		if respondInternalIfRepoError(w, "forwardDiagnoseStream: resolveForwardAccess failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -188,6 +191,9 @@ func (h *Handler) forwardDiagnoseStream(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		if strings.Contains(err.Error(), "不存在") || strings.Contains(err.Error(), "不能为空") || strings.Contains(err.Error(), "错误") {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		if respondInternalIfRepoError(w, "forwardDiagnoseStream: prepareForwardDiagnosisPlan failed", err) {
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))

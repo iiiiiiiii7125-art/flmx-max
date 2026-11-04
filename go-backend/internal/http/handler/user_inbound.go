@@ -240,7 +240,7 @@ func (h *Handler) getMyInbounds(w http.ResponseWriter, r *http.Request) {
 	}
 	assignments, err := h.repo.ListUserInboundAssignments(userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "getMyInbounds: ListUserInboundAssignments failed", err)
 		return
 	}
 	// Fetch inbound details for the assigned IDs

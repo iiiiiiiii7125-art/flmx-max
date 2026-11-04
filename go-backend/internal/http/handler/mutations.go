@@ -4339,6 +4339,12 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.ensureTunnelPermission(userID, roleID, tunnelID); err != nil {
+		// RR4-C1-01：forward 族为双受众面——助手业务文案（权限/
+		// 配额/校验）原样回，仓储错误（repoError 标记）收口为通用
+		// 文案；本函数同族各点同口径，下文不再逐点注。
+		if respondInternalIfRepoError(w, "forwardCreate: ensureTunnelPermission failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -4352,6 +4358,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.ensureUserTunnelForwardAllowed(userID, tunnelID, time.Now().UnixMilli()); err != nil {
+		if respondInternalIfRepoError(w, "forwardCreate: ensureUserTunnelForwardAllowed failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -4407,6 +4416,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	speedID := asAnyToInt64Ptr(req["speedId"])
 	speedID, err = h.normalizeSpeedLimitReference(speedID)
 	if err != nil {
+		if respondInternalIfRepoError(w, "forwardCreate: normalizeSpeedLimitReference failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -4419,6 +4431,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	ipSpeedID := asAnyToInt64Ptr(req["ipSpeedId"])
 	ipSpeedID, err = h.normalizeSpeedLimitReference(ipSpeedID)
 	if err != nil {
+		if respondInternalIfRepoError(w, "forwardCreate: normalizeSpeedLimitReference failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -4426,6 +4441,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	if port <= 0 {
 		picked, pickErr := h.pickTunnelPort(tunnelID)
 		if pickErr != nil {
+			if respondInternalIfRepoError(w, "forwardCreate: pickTunnelPort failed", pickErr) {
+				return
+			}
 			response.WriteJSON(w, response.ErrDefault(pickErr.Error()))
 			return
 		}
@@ -4439,7 +4457,7 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	entryNodes, _ := h.tunnelEntryNodeIDs(tunnelID)
 	isNftTunnel, _, err := h.tunnelUsesNftables(tunnelID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardCreate: tunnelUsesNftables failed", err)
 		return
 	}
 	if isNftTunnel {
@@ -4455,6 +4473,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		// 能力校验仍由落库后的同步阶段承担，口径与 tunnelCreate 的
 		// validateNftablesTunnelState 前置校验一致。
 		if _, err := h.collectNftablesSSHConfigsTx(nil, entryNodes); err != nil {
+			if respondInternalIfRepoError(w, "forwardCreate: collectNftablesSSHConfigsTx failed", err) {
+				return
+			}
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
@@ -4476,6 +4497,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.validateForwardEntryNodes(entryNodes, port, 0); err != nil {
+		if respondInternalIfRepoError(w, "forwardCreate: validateForwardEntryNodes failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -4516,7 +4540,13 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 
 	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnelID, remoteAddr, strategy, now, inx, entryNodes, port, inIp, nullableInt(speedID), maxConn, ipMaxConn, nullableInt(ipSpeedID), proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// 端口占用冲突是仓储层已映射的友好错误（repo.ErrPortInUse），
+		// 原样回；其余事务错误（含 DB 约束原文）收口。
+		if errors.Is(err, repo.ErrPortInUse) {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		respondInternalError(w, "forwardCreate: CreateForwardTx failed", err)
 		return
 	}
 	createdForward, err := h.getForwardRecord(forwardID)
@@ -4525,7 +4555,7 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		// createRelayForward 的取行失败分支同形——补一行补偿删除，
 		// 避免「创建失败」回执下新建行残留。
 		_ = h.deleteForwardByID(forwardID)
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardCreate: getForwardRecord failed", err)
 		return
 	}
 	// A4-002：与 forwardUpdate 同形——同步告警（realm 限速/连接数不生效、
@@ -4564,12 +4594,15 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("转发不存在"))
 			return
 		}
+		if respondInternalIfRepoError(w, "forwardUpdate: resolveForwardAccess failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	oldPorts, err := h.listForwardPorts(id)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardUpdate: listForwardPorts failed", err)
 		return
 	}
 
@@ -4579,6 +4612,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.ensureTunnelPermission(actorUserID, actorRole, tunnelID); err != nil {
+		if respondInternalIfRepoError(w, "forwardUpdate: ensureTunnelPermission failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -4634,7 +4670,7 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	isNftTunnel, entryNodes, err := h.tunnelUsesNftables(tunnelID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardUpdate: tunnelUsesNftables failed", err)
 		return
 	}
 	if isNftTunnel {
@@ -4679,6 +4715,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	speedID := requestedSpeedID
 	speedID, err = h.normalizeSpeedLimitReference(speedID)
 	if err != nil {
+		if respondInternalIfRepoError(w, "forwardUpdate: normalizeSpeedLimitReference failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -4700,6 +4739,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		ipSpeedID := requestedIPSpeedID
 		ipSpeedID, err = h.normalizeSpeedLimitReference(ipSpeedID)
 		if err != nil {
+			if respondInternalIfRepoError(w, "forwardUpdate: normalizeSpeedLimitReference failed", err) {
+				return
+			}
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -4719,6 +4761,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		if port <= 0 {
 			picked, pickErr := h.pickTunnelPort(tunnelID)
 			if pickErr != nil {
+				if respondInternalIfRepoError(w, "forwardUpdate: pickTunnelPort failed", pickErr) {
+					return
+				}
 				response.WriteJSON(w, response.ErrDefault(pickErr.Error()))
 				return
 			}
@@ -4811,6 +4856,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.validateForwardEntryNodesWithPortFunc(fwdEntryNodes, func(nodeID int64) int {
 		return forwardEntryPort(oldPortByNode, nodeID, port)
 	}, id); err != nil {
+		if respondInternalIfRepoError(w, "forwardUpdate: validateForwardEntryNodes failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -4845,7 +4893,7 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.repo.UpdateForward(id, name, tunnelID, remoteAddr, strategy, now, newSpeedID, maxConn, ipMaxConn, newIPSpeedID, proxyProtocol, proxyProtocolReceive, proxyProtocolSend); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardUpdate: UpdateForward failed", err)
 		return
 	}
 	if hasInIP {
@@ -4857,13 +4905,19 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		rollbackAndRefreshWhitelist()
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// 与 CreateForwardTx 同口径：端口占用冲突回友好原文，
+		// 其余仓储错误收口。
+		if errors.Is(err, repo.ErrPortInUse) {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		respondInternalError(w, "forwardUpdate: replaceForwardPorts failed", err)
 		return
 	}
 	updatedForward, err := h.getForwardRecord(id)
 	if err != nil {
 		rollbackAndRefreshWhitelist()
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardUpdate: getForwardRecord failed", err)
 		return
 	}
 	warnings := make([]string, 0)
@@ -4932,6 +4986,9 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
+		if respondInternalIfRepoError(w, "forwardDelete: resolveForwardAccess failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -4941,7 +4998,7 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 	affectedInboundIDs := h.inboundIDsForForwards([]int64{id})
 	var nftNodeID int64
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
-		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
+		respondInternalError(w, "forwardDelete: tunnelUsesNftables failed", modeErr)
 		return
 	} else if nftMode {
 		if len(entryNodeIDs) == 0 {
@@ -4951,6 +5008,9 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 		// R35-FIX-F01：遗留/竞态混合态下拒绝删除而不是报成功删库
 		// （gost/realm 服务会残留监听）。
 		if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+			if respondInternalIfRepoError(w, "forwardDelete: rejectMixedNftForwardState failed", err) {
+				return
+			}
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
@@ -4965,7 +5025,7 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 		// 留在 pending，由后台 job 退避重试（D7），不删库、不硬失败。
 		now := time.Now()
 		if err := h.repo.MarkForwardPendingDelete(id, nftNodeID, now); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "forwardDelete: MarkForwardPendingDelete failed", err)
 			return
 		}
 		if err := h.reconcileNftablesNodeByRequest(nftNodeID); err != nil {
@@ -4976,7 +5036,7 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 			// D6: DB 写失败但数据面已变更（规则已下线）。记日志，靠下一次
 			// reconcile 收敛；方向是“可用”而非“静默计费”，可接受。
 			log.Printf("nftables forward delete failed op=db_delete_after_reconcile forward_id=%d err=%v", id, err)
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "forwardDelete: deleteForwardByID failed", err)
 			return
 		}
 		h.refreshInboundWhitelists(affectedInboundIDs)
@@ -4985,7 +5045,7 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// gost 路径：数据面已先行（controlForwardServices），再删库；检查 DB 错误。
 	if err := h.deleteForwardByID(id); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardDelete: deleteForwardByID failed", err)
 		return
 	}
 	h.refreshInboundWhitelists(affectedInboundIDs)
@@ -5112,6 +5172,9 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("转发不存在"))
 			return
 		}
+		if respondInternalIfRepoError(w, "forwardPause: resolveForwardAccess failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -5119,7 +5182,7 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 	// R5-B3 D1-012 + D6: 数据面优先。按“已暂停”意图生成 plan（不含该转发）
 	// 先 reconcile，成功后再写 status=0；失败则 DB 保持 active。
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
-		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
+		respondInternalError(w, "forwardPause: tunnelUsesNftables failed", modeErr)
 		return
 	} else if nftMode {
 		if len(entryNodeIDs) == 0 {
@@ -5129,6 +5192,9 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 		// R35-FIX-F01：遗留/竞态混合态下拒绝暂停而不是报成功（gost/
 		// realm 服务会继续监听、继续计费）。
 		if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+			if respondInternalIfRepoError(w, "forwardPause: rejectMixedNftForwardState failed", err) {
+				return
+			}
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
@@ -5140,7 +5206,7 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 			// D6: DB 写失败但数据面已变更（规则已下线）。记日志，靠下一次
 			// reconcile 收敛；方向是“可用”而非“静默计费”，可接受。
 			log.Printf("nftables forward pause failed op=db_write_after_reconcile forward_id=%d err=%v", id, err)
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "forwardPause: UpdateForwardStatus failed", err)
 			return
 		}
 	} else {
@@ -5150,7 +5216,7 @@ func (h *Handler) forwardPause(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusPaused, time.Now().UnixMilli()); err != nil {
 			log.Printf("forward pause failed op=db_write_after_dplane forward_id=%d err=%v", id, err)
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "forwardPause: UpdateForwardStatus failed", err)
 			return
 		}
 	}
@@ -5167,11 +5233,14 @@ func (h *Handler) forwardResetFlow(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("转发不存在"))
 			return
 		}
+		if respondInternalIfRepoError(w, "forwardResetFlow: resolveForwardAccess failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	if err := h.repo.ResetForwardFlow(id, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardResetFlow: ResetForwardFlow failed", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -5206,6 +5275,9 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("转发不存在"))
 			return
 		}
+		if respondInternalIfRepoError(w, "forwardResume: resolveForwardAccess failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -5215,6 +5287,9 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UnixMilli()
 	if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
+		if respondInternalIfRepoError(w, "forwardResume: ensureUserTunnelForwardAllowed failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -5222,7 +5297,7 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 	// R5-B3 D1-012 + D6: 数据面优先。按“已恢复”意图生成 plan（含该转发）
 	// 先 reconcile，成功后再写 status=1；失败则 DB 保持 paused，无黑洞。
 	if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
-		response.WriteJSON(w, response.Err(-2, modeErr.Error()))
+		respondInternalError(w, "forwardResume: tunnelUsesNftables failed", modeErr)
 		return
 	} else if nftMode {
 		if len(entryNodeIDs) == 0 {
@@ -5232,6 +5307,9 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 		// R35-FIX-F01：遗留/竞态混合态下拒绝恢复而不是报成功（nft
 		// 规则与 gost/realm 服务会双份下发）。
 		if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
+			if respondInternalIfRepoError(w, "forwardResume: rejectMixedNftForwardState failed", err) {
+				return
+			}
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
@@ -5241,6 +5319,9 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.ActivateForwardIfNotPending(id, now); err != nil {
 			log.Printf("nftables forward resume failed op=db_write_after_reconcile forward_id=%d err=%v", id, err)
+			if respondInternalIfRepoError(w, "forwardResume: ActivateForwardIfNotPending failed", err) {
+				return
+			}
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -5251,6 +5332,9 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.ActivateForwardIfNotPending(id, now); err != nil {
 			log.Printf("forward resume failed op=db_write_after_dplane forward_id=%d err=%v", id, err)
+			if respondInternalIfRepoError(w, "forwardResume: ActivateForwardIfNotPending failed", err) {
+				return
+			}
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
@@ -5271,6 +5355,9 @@ func (h *Handler) forwardDiagnose(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("转发不存在"))
 			return
 		}
+		if respondInternalIfRepoError(w, "forwardDiagnose: resolveForwardAccess failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
@@ -5280,6 +5367,9 @@ func (h *Handler) forwardDiagnose(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if strings.Contains(err.Error(), "不存在") || strings.Contains(err.Error(), "不能为空") || strings.Contains(err.Error(), "错误") {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		if respondInternalIfRepoError(w, "forwardDiagnose: diagnoseForwardRuntime failed", err) {
 			return
 		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -5325,6 +5415,8 @@ func (h *Handler) forwardUpdateOrder(w http.ResponseWriter, r *http.Request) {
 		if _, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, f.ID); accessErr != nil {
 			if errors.Is(accessErr, errForwardNotFound) {
 				response.WriteJSON(w, response.ErrDefault("转发不存在"))
+			} else if respondInternalIfRepoError(w, "forwardUpdateOrder: ensureForwardAccessByActor failed", accessErr) {
+				// 已按通用文案回执。
 			} else {
 				response.WriteJSON(w, response.Err(-2, accessErr.Error()))
 			}
@@ -5334,7 +5426,7 @@ func (h *Handler) forwardUpdateOrder(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UnixMilli()
 	for _, f := range req.Forwards {
 		if err := h.repo.UpdateForwardOrder(f.ID, f.Inx, now); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "forwardUpdateOrder: UpdateForwardOrder failed", err)
 			return
 		}
 	}
@@ -5407,12 +5499,12 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
 		if accessErr != nil {
 			f++
-			failures = appendBatchFailure(failures, id, "", accessErr)
+			failures = appendBatchFailure(failures, id, "", batchFailureErr(accessErr))
 			continue
 		}
 		if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
 			f++
-			failures = appendBatchFailure(failures, id, forward.Name, modeErr)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(markRepoError(modeErr)))
 			continue
 		} else if nftMode {
 			if len(entryNodeIDs) == 0 {
@@ -5424,13 +5516,13 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 			// 再报成功（gost/realm 服务会残留监听）。
 			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
 				f++
-				failures = appendBatchFailure(failures, id, forward.Name, err)
+				failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(err))
 				continue
 			}
 			// D6: 先标记 pending，再按节点聚合 reconcile。
 			if err := h.repo.MarkForwardPendingDelete(id, entryNodeIDs[0], time.Now()); err != nil {
 				f++
-				failures = appendBatchFailure(failures, id, forward.Name, err)
+				failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(markRepoError(err)))
 				continue
 			}
 			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], id)
@@ -5441,7 +5533,13 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 			continue
 		} else if err := h.deleteForwardByID(id); err != nil {
 			f++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
+			// C1-01：删除链的仓储/基础设施失败不进回执原文；仅
+			// 「删除处理中」哨兵是用户可见的业务原因。
+			reasonErr := err
+			if !errors.Is(err, errForwardPendingDelete) {
+				reasonErr = errors.New("内部错误，请稍后重试")
+			}
+			failures = appendBatchFailure(failures, id, forward.Name, reasonErr)
 			continue
 		} else {
 			s++
@@ -5529,7 +5627,7 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
 		if accessErr != nil {
 			f++
-			failures = appendBatchFailure(failures, id, "", accessErr)
+			failures = appendBatchFailure(failures, id, "", batchFailureErr(accessErr))
 			continue
 		}
 		resKey := numReservationKey{userID: forward.UserID, tunnelID: forward.TunnelID}
@@ -5542,14 +5640,14 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 			}
 			if err := h.ensureUserTunnelForwardAllowedWithReserved(forward.UserID, forward.TunnelID, now, reservedByUser[forward.UserID], reservedByUserTunnel[resKey]); err != nil {
 				f++
-				failures = appendBatchFailure(failures, id, forward.Name, err)
+				failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(err))
 				continue
 			}
 		}
 		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
 		if modeErr != nil {
 			f++
-			failures = appendBatchFailure(failures, id, forward.Name, modeErr)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(markRepoError(modeErr)))
 			continue
 		}
 		if nftMode {
@@ -5562,7 +5660,7 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 			// 后报成功（另一引擎的服务不会被暂停/恢复）。
 			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
 				f++
-				failures = appendBatchFailure(failures, id, forward.Name, err)
+				failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(err))
 				continue
 			}
 			intent, ok := nftGroups[entryNodeIDs[0]]
@@ -5591,12 +5689,12 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 		if targetStatus == model.ForwardStatusActive {
 			statusErr = h.ActivateForwardIfNotPending(id, now)
 		} else {
-			statusErr = h.repo.UpdateForwardStatus(id, targetStatus, now)
+			statusErr = markRepoError(h.repo.UpdateForwardStatus(id, targetStatus, now))
 		}
 		if statusErr != nil {
 			log.Printf("forward batch %s failed op=db_write_after_dplane forward_id=%d err=%v", action, id, statusErr)
 			f++
-			failures = appendBatchFailure(failures, id, forward.Name, statusErr)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(statusErr))
 		} else {
 			s++
 		}
@@ -5615,12 +5713,12 @@ func (h *Handler) batchForwardPauseResume(w http.ResponseWriter, r *http.Request
 			if targetStatus == model.ForwardStatusActive {
 				statusErr = h.ActivateForwardIfNotPending(id, now)
 			} else {
-				statusErr = h.repo.UpdateForwardStatus(id, targetStatus, now)
+				statusErr = markRepoError(h.repo.UpdateForwardStatus(id, targetStatus, now))
 			}
 			if statusErr != nil {
 				log.Printf("nftables forward batch %s failed op=db_write_after_reconcile forward_id=%d err=%v", action, id, statusErr)
 				f++
-				failures = appendBatchFailure(failures, id, name, statusErr)
+				failures = appendBatchFailure(failures, id, name, batchFailureErr(statusErr))
 				continue
 			}
 			s++
@@ -5652,7 +5750,7 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
 		if accessErr != nil {
 			f++
-			failures = appendBatchFailure(failures, id, "", accessErr)
+			failures = appendBatchFailure(failures, id, "", batchFailureErr(accessErr))
 			continue
 		}
 		// R3 B08-001：重部署会把转发服务重新下发到节点，与恢复同属
@@ -5664,7 +5762,7 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 		}
 		if nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr != nil {
 			f++
-			failures = appendBatchFailure(failures, id, forward.Name, modeErr)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(markRepoError(modeErr)))
 			continue
 		} else if nftMode {
 			if len(entryNodeIDs) == 0 {
@@ -5676,7 +5774,7 @@ func (h *Handler) forwardBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 			// 首节点后报成功（其余入口的服务不会被重推）。
 			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
 				f++
-				failures = appendBatchFailure(failures, id, forward.Name, err)
+				failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(err))
 				continue
 			}
 			if err := h.reconcileNftablesNodeByRequest(entryNodeIDs[0]); err != nil {
@@ -5727,6 +5825,9 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := h.ensureTunnelPermission(actorUserID, actorRole, req.TargetTunnelID); err != nil {
+		if respondInternalIfRepoError(w, "forwardBatchChangeTunnel: ensureTunnelPermission failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -5761,7 +5862,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		forward, accessErr := h.ensureForwardAccessByActor(actorUserID, actorRole, id)
 		if accessErr != nil {
 			fail++
-			failures = appendBatchFailure(failures, id, "", accessErr)
+			failures = appendBatchFailure(failures, id, "", batchFailureErr(accessErr))
 			continue
 		}
 		fwdInboundIDs := h.inboundIDsForForward(id)
@@ -5773,7 +5874,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		oldPorts, listPortsErr := h.listForwardPorts(id)
 		if listPortsErr != nil {
 			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, listPortsErr)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(markRepoError(listPortsErr)))
 			continue
 		}
 		if len(oldPorts) == 0 {
@@ -5795,7 +5896,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			picked, pickErr := h.pickTunnelPort(req.TargetTunnelID)
 			if pickErr != nil {
 				fail++
-				failures = appendBatchFailureReason(failures, id, forward.Name, pickErr.Error())
+				failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(pickErr))
 				continue
 			}
 			p = picked
@@ -5820,7 +5921,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		bctEntryNodes, bctErr := h.tunnelEntryNodeIDs(req.TargetTunnelID)
 		if bctErr != nil {
 			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, bctErr)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(markRepoError(bctErr)))
 			continue
 		}
 		if len(bctEntryNodes) == 0 {
@@ -5863,7 +5964,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		}
 		if !portRangeOk {
 			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, portRangeErr)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(portRangeErr))
 			continue
 		}
 		// X-P2-4 ②：托管中转转发按目标隧道出口集重算 RemoteAddr，不再
@@ -5872,7 +5973,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		newRemoteAddr, remoteAddrChanged, retargetErr := h.recomputedRelayRemoteAddr(forward, targetTunnel)
 		if retargetErr != nil {
 			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, retargetErr)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(retargetErr))
 			continue
 		}
 		effectiveRemoteAddr := forward.RemoteAddr
@@ -5894,7 +5995,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 		}
 		if err := h.repo.ChangeForwardTunnelAndPorts(id, req.TargetTunnelID, effectiveRemoteAddr, bctEntries, time.Now().UnixMilli()); err != nil {
 			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, err)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(markRepoError(err)))
 			continue
 		}
 		updatedForward, fetchErr := h.getForwardRecord(id)
@@ -5902,7 +6003,7 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 			h.rollbackForwardMutation(forward, oldPorts)
 			failedInboundIDs = append(failedInboundIDs, fwdInboundIDs...)
 			fail++
-			failures = appendBatchFailure(failures, id, forward.Name, fetchErr)
+			failures = appendBatchFailure(failures, id, forward.Name, batchFailureErr(fetchErr))
 			continue
 		}
 		if len(keptNodeIDs) > 0 {
@@ -8557,7 +8658,9 @@ func (h *Handler) tunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {
 func (h *Handler) pickTunnelPort(tunnelID int64) (int, error) {
 	entryNodes, err := h.tunnelEntryNodeIDs(tunnelID)
 	if err != nil {
-		return 0, err
+		// C1-01：本函数的其余失败均为自著业务文案或记日志跳过，唯
+		// 此处是仓储直通，标记后由各调用面按内部错误收口。
+		return 0, markRepoError(err)
 	}
 	if len(entryNodes) == 0 {
 		return 0, errors.New("隧道没有入口节点")
@@ -9210,7 +9313,7 @@ func (h *Handler) normalizeSpeedLimitReference(speedID *int64) (*int64, error) {
 	}
 	exists, err := h.repo.SpeedLimitExists(*speedID)
 	if err != nil {
-		return nil, err
+		return nil, markRepoError(err)
 	}
 	if exists {
 		return speedID, nil
@@ -9240,7 +9343,7 @@ func (h *Handler) normalizeSpeedLimitReferenceTx(tx *gorm.DB, speedID *int64) (*
 func (h *Handler) speedLimitReferenceError(id int64) error {
 	row, err := h.repo.GetSpeedLimit(id)
 	if err != nil {
-		return err
+		return markRepoError(err)
 	}
 	return speedLimitReferenceErrorForRow(id, row)
 }
@@ -9811,7 +9914,7 @@ func (h *Handler) validateForwardPortAvailability(node *nodeRecord, port int, cu
 	// 调用（预校验），用非 tx 版本安全。tx 内调用方必须用 Tx 版本。
 	conflict, err := h.repo.FindOtherForwardOnNodePort(node.ID, port, currentForwardID)
 	if err != nil {
-		return err
+		return markRepoError(err)
 	}
 	if conflict == nil {
 		return nil

@@ -207,7 +207,7 @@ func (h *Handler) collectNftablesSSHConfigsTx(tx *gorm.DB, entryNodeIDs []int64)
 	for _, nodeID := range entryNodeIDs {
 		isNft, err := h.nodeUsesNftablesTx(tx, nodeID)
 		if err != nil {
-			return nil, err
+			return nil, markRepoError(err)
 		}
 		if !isNft {
 			continue
@@ -222,7 +222,7 @@ func (h *Handler) collectNftablesSSHConfigsTx(tx *gorm.DB, entryNodeIDs []int64)
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, errors.New("nftables 节点缺少 SSH 配置")
 			}
-			return nil, err
+			return nil, markRepoError(err)
 		}
 		sshCfg, err := sshConfigFromModel(cfg)
 		if err != nil {

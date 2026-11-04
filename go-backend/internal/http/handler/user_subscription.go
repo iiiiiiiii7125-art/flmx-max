@@ -139,12 +139,12 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 	_ = decodeJSON(r.Body, &mineReq)
 	subs, err := h.repo.ListUserSubscriptions(userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userSubscriptionMine: ListUserSubscriptions failed", err)
 		return
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userSubscriptionMine: ListNodeInbounds failed", err)
 		return
 	}
 	// B10-001（R1-C08）：mine 返回的每条订阅在「我的订阅」页都以

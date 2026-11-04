@@ -171,7 +171,9 @@ func (h *Handler) monitorTunnelListHandler(w http.ResponseWriter, r *http.Reques
 
 	tunnels, err := h.repo.ListMonitorTunnels()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RR4-C1-01：监控用户面（管理员或已授监控权限的普通用户
+		// 可达）仓储错误不得原文直出，本文件同族各面同口径收口。
+		respondInternalError(w, "monitorTunnels: ListMonitorTunnels failed", err)
 		return
 	}
 
@@ -299,7 +301,7 @@ func (h *Handler) monitorTunnelQualityHandler(w http.ResponseWriter, r *http.Req
 	// Fallback to database (latest per tunnel)
 	qualities, err := h.repo.GetLatestTunnelQualities()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorTunnelQuality: GetLatestTunnelQualities failed", err)
 		return
 	}
 
@@ -372,7 +374,7 @@ func (h *Handler) monitorTunnelQualityHistory(w http.ResponseWriter, r *http.Req
 
 	results, err := h.repo.GetTunnelQualityHistory(tunnelID, startMs, endMs)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorTunnelQualityHistory: GetTunnelQualityHistory failed", err)
 		return
 	}
 
@@ -423,7 +425,7 @@ func (h *Handler) monitorTunnelMetrics(w http.ResponseWriter, r *http.Request) {
 
 	metrics, err := h.repo.GetTunnelMetricsAggregated(tunnelID, startMs, endMs)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorTunnelMetrics: GetTunnelMetricsAggregated failed", err)
 		return
 	}
 
@@ -990,7 +992,7 @@ func (h *Handler) monitorAccessHandler(w http.ResponseWriter, r *http.Request) {
 
 	allowed, err := h.repo.HasMonitorPermission(userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorAccess: HasMonitorPermission failed", err)
 		return
 	}
 	data := monitorAccessData{Allowed: allowed, Admin: false}
@@ -1024,7 +1026,7 @@ func (h *Handler) ensureMonitoringAccess(w http.ResponseWriter, r *http.Request)
 	}
 	allowed, err := h.repo.HasMonitorPermission(userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "ensureMonitoringAccess: HasMonitorPermission failed", err)
 		return false
 	}
 	if !allowed {
@@ -1066,7 +1068,7 @@ func (h *Handler) monitorTunnelScope(w http.ResponseWriter, r *http.Request) (se
 	}
 	set, err = h.accessibleTunnelIDSet(userID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "monitorTunnelScope: accessibleTunnelIDSet failed", err)
 		return nil, false, false
 	}
 	return set, false, true

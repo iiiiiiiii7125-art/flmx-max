@@ -241,7 +241,7 @@ func (h *Handler) ActivateForwardIfNotPending(forwardID int64, now int64) error 
 	// 消除先读后写的 TOCTOU：并发删除已置 pending 的行不再被复活。
 	updated, err := h.repo.UpdateForwardStatusIfNotPending(forwardID, model.ForwardStatusActive, now)
 	if err != nil {
-		return err
+		return markRepoError(err)
 	}
 	if updated {
 		return nil
@@ -264,8 +264,7 @@ func (h *Handler) ensureForwardAccessByActor(actorUserID int64, actorRole int, f
 	if err != nil {
 		return nil, err
 	}
-	// R5-B3 D1-001 矩阵 #10: pending-delete 行对用户/管理员详情隐藏，
-	// 视为不存在（编辑/查看/再次删除都不可达）。
+	// R5-B3 D1-001 矩阵 #10: pending-delete 行对用户/管理员详情隐藏，视为不存在（编辑/查看/再次删除都不可达）。
 	if isForwardPendingDelete(forward) {
 		return nil, errForwardNotFound
 	}
@@ -281,7 +280,7 @@ func (h *Handler) ensureTunnelPermission(userID int64, roleID int, tunnelID int6
 	}
 	ok, err := h.repo.UserTunnelExistsByUserAndTunnel(userID, tunnelID)
 	if err != nil {
-		return err
+		return markRepoError(err)
 	}
 	if !ok {
 		return errors.New("你没有该隧道的权限")
@@ -292,7 +291,7 @@ func (h *Handler) ensureTunnelPermission(userID int64, roleID int, tunnelID int6
 func (h *Handler) getForwardRecord(forwardID int64) (*forwardRecord, error) {
 	fr, err := h.repo.GetForwardRecord(forwardID)
 	if err != nil {
-		return nil, err
+		return nil, markRepoError(err)
 	}
 	if fr == nil {
 		return nil, errForwardNotFound
@@ -303,7 +302,7 @@ func (h *Handler) getForwardRecord(forwardID int64) (*forwardRecord, error) {
 func (h *Handler) getTunnelRecord(tunnelID int64) (*tunnelRecord, error) {
 	tr, err := h.repo.GetTunnelRecord(tunnelID)
 	if err != nil {
-		return nil, err
+		return nil, markRepoError(err)
 	}
 	if tr == nil {
 		return nil, errors.New("隧道不存在")
@@ -317,7 +316,7 @@ func (h *Handler) getTunnelRecord(tunnelID int64) (*tunnelRecord, error) {
 func (h *Handler) getTunnelRecordRaw(tunnelID int64) (*tunnelRecord, error) {
 	tr, err := h.repo.GetTunnelRecordRaw(tunnelID)
 	if err != nil {
-		return nil, err
+		return nil, markRepoError(err)
 	}
 	if tr == nil {
 		return nil, errors.New("隧道不存在")
@@ -336,7 +335,7 @@ func (h *Handler) listForwardPorts(forwardID int64) ([]forwardPortRecord, error)
 func (h *Handler) getNodeRecord(nodeID int64) (*nodeRecord, error) {
 	n, err := h.repo.GetNodeRecord(nodeID)
 	if err != nil {
-		return nil, err
+		return nil, markRepoError(err)
 	}
 	if n == nil {
 		return nil, errors.New("节点不存在")
@@ -347,7 +346,7 @@ func (h *Handler) getNodeRecord(nodeID int64) (*nodeRecord, error) {
 func (h *Handler) resolveUserTunnelAndLimiter(userID, tunnelID int64) (int64, *int64, *int, error) {
 	info, err := h.repo.ResolveUserTunnelAndLimiter(userID, tunnelID)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, markRepoError(err)
 	}
 	if info == nil {
 		return 0, nil, nil, nil

@@ -169,7 +169,9 @@ func (h *Handler) respondSubTraffic(w http.ResponseWriter, s *model.Subscription
 	// first bucket in non-whole-hour zones and part of it belongs here.
 	hours, err := h.repo.ListSubscriptionTraffic(s.ID, starts[0].UnixMilli()-int64(time.Hour/time.Millisecond))
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RR4-C1-01：本出口用户面与管理员面共用，普通用户可达，
+		// 仓储错误不得原文直出。
+		respondInternalError(w, "respondSubTraffic: ListSubscriptionTraffic failed", err)
 		return
 	}
 	view := subTraffic(hours, req.Range, now)
@@ -219,7 +221,7 @@ func (h *Handler) userSubscriptionTraffic(w http.ResponseWriter, r *http.Request
 	if roleID != 0 {
 		ids, err := h.repo.ListUserSubscriptionIDs(uid)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "userSubscriptionTraffic: ListUserSubscriptionIDs failed", err)
 			return
 		}
 		assigned := false

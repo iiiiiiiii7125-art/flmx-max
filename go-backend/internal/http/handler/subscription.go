@@ -1638,7 +1638,7 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 	_ = decodeJSON(r.Body, &req)
 	s, err := h.repo.DefaultSubscription(time.Now().UnixMilli())
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundSubInfo: DefaultSubscription failed", err)
 		return
 	}
 	userID, roleID, authErr := userRoleFromRequest(r)
@@ -1686,7 +1686,7 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 		if roleID != 0 {
 			allowed, err := h.canReadDefaultSubscription(userID, s)
 			if err != nil {
-				response.WriteJSON(w, response.Err(-2, err.Error()))
+				respondInternalError(w, "inboundSubInfo: canReadDefaultSubscription failed", err)
 				return
 			}
 			if !allowed {

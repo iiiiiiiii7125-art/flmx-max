@@ -16,6 +16,12 @@ var (
 // 预检一致的友好响应（R2X-049）。
 var ErrUsernameExists = errUsernameExists
 
+// ErrPortInUse 是 errPortInUse 的导出别名：handler 层用 errors.Is
+// 识别端口占用冲突这一已映射的友好错误，在仓储错误收口面（普通
+// 用户可达面改走 respondInternalError）保留其原文回执，其余仓储
+// 错误才走通用文案（RR4-C1-01）。
+var ErrPortInUse = errPortInUse
+
 // ErrTunnelNameDuplicate 是 tunnel 提交段同名复检命中的哨兵错误
 // （R2X-049）：tunnel 表无唯一索引，复检拒绝靠它回传 handler。
 var ErrTunnelNameDuplicate = errors.New("隧道名称重复")
