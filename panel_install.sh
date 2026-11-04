@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261104.08"
+SCRIPT_VERSION="20261104.09"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -3348,6 +3348,23 @@ migrate_to_postgres() {
   postgres_volume=$(panel_postgres_volume_name)
   network_name=$(panel_network_name)
 
+  # E4 窄子形（事故专项审计路 1/路 3）：上方卷名解析只有「.env
+  # 键 → 字面旧名」两级、不实读——键值与真实挂载漂移时（例如键
+  # 里是上一代模板留下的缺省名、真库在自定义名卷里），下方备
+  # 份/pgloader 会按错卷读数据：轻则响亮失败，重则同名错卷里恰
+  # 有另一个 gost.db 时静默迁错库切 PG。与钉卷同口径收口：源后
+  # 端容器在场时以其实读的 /app/data 挂载卷名为准；实读与解析
+  # 值冲突时点名两名、按实读走。实读为空（bind 挂载/容器不在）
+  # 时维持原解析，不另发明名字。
+  if docker inspect "$backend_container" >/dev/null 2>&1; then
+    local live_sqlite_volume=""
+    live_sqlite_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$backend_container" 2>/dev/null || true)
+    if [[ -n "$live_sqlite_volume" && "$live_sqlite_volume" != "$sqlite_volume" ]]; then
+      echo "⚠️ 迁移源卷名冲突：配置解析为 $sqlite_volume，但在跑后端 $backend_container 实际挂载的数据卷是 $live_sqlite_volume；按实读卷名迁移（数据以实读为准）"
+      sqlite_volume="$live_sqlite_volume"
+    fi
+  fi
+
   current_db_type=$(get_current_db_type)
   if [[ "$current_db_type" == "postgres" ]]; then
     echo "ℹ️ 当前已使用 PostgreSQL，无需迁移"
@@ -3542,6 +3559,54 @@ migrate_to_postgres() {
     echo "⚠️ 副本预处理未完成（例如容器内无法安装 sqlite），改用原始库迁移；若 pgloader 报 numeric \"false\" 错误或因 user 表函数索引 KABOOM（TYPE-ERROR: NIL is not of type PGLOADER.CATALOG:COLUMN），请按 doc/guide/postgresql.md「迁移被 release_legacy_family 堵住」一节手动处理"
   fi
 
+  # INV-9（事故专项审计路 3，P-3）：迁移成败的判据此前只有
+  # pgloader 退出码——退出 0 也可能只搬走一部分表，残缺库切换
+  # 后同样健康、还会对缺失的 id=1 静默播种默认管理员，与挂错
+  # 卷事故无从区分。本对账在切换 .env 之前执行：表集以 pgloader
+  # 实际搬运的对象为准，即它读入的那份 SQLite 文件（预处理副
+  # 本或原库）中的全部用户表，逐表比源/目标行数；任一表不一
+  # 致（含目标缺表）即点名差异表与两侧计数、由调用方经快照回
+  # 滚判失败。源计数通道不可用（容器内装不上 sqlite 等）时返
+  # 回 2 分开处置：响亮告警未经核对、按既有口径继续——与副本
+  # 预处理的降级哲学一致（工具缺席是环境事实，已数出的不一
+  # 致是数据事实，后者绝不放行）。
+  migrate_reconcile_row_counts() {
+    # 载荷经变量传递而非行内字面量：脚本套件以「行尾 alpine
+    # sh -c '」为锚提取预处理载荷，全文件该形态只许预处理一处，
+    # 本处若同形会污染提取（RR-LIVE-01 用例口径）。
+    local reconcile_payload='
+      apk add --no-cache sqlite >/dev/null 2>&1 || exit 9
+      db="$1"
+      for t in $(sqlite3 "$db" "SELECT name FROM sqlite_master WHERE type='"'"'table'"'"' AND name NOT LIKE '"'"'sqlite_%'"'"' ORDER BY name;"); do
+        c=$(sqlite3 "$db" "SELECT COUNT(*) FROM \"$t\";") || exit 8
+        printf "%s|%s\n" "$t" "$c"
+      done
+    '
+    local src_counts=""
+    src_counts=$(docker run --rm -v "$sqlite_volume":/sqlite alpine sh -c "$reconcile_payload" flmx-migrate-reconcile "$pgloader_source" 2>/dev/null) || src_counts=""
+    if [[ -z "$src_counts" ]]; then
+      return 2
+    fi
+    local mismatches="" reconcile_table reconcile_src_n reconcile_pg_n reconcile_tables=0
+    while IFS='|' read -r reconcile_table reconcile_src_n; do
+      [[ -n "$reconcile_table" ]] || continue
+      reconcile_tables=$((reconcile_tables + 1))
+      reconcile_pg_n=$(docker exec "$PANEL_POSTGRES_CONTAINER" psql -U "$postgres_user" -d "$postgres_db" -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM \"$reconcile_table\";" 2>/dev/null | tr -d '[:space:]' || true)
+      if [[ -z "$reconcile_pg_n" ]]; then
+        mismatches="${mismatches}  - 表 ${reconcile_table}：源 ${reconcile_src_n} 行，目标缺失或不可数"$'\n'
+      elif [[ "$reconcile_pg_n" != "$reconcile_src_n" ]]; then
+        mismatches="${mismatches}  - 表 ${reconcile_table}：源 ${reconcile_src_n} 行，目标 ${reconcile_pg_n} 行"$'\n'
+      fi
+    done <<< "$src_counts"
+    if [[ -n "$mismatches" ]]; then
+      echo "❌ 迁移数据对账不一致（pgloader 已退出 0，但下列数据表行数对不上，切换将留下残缺库）："
+      printf '%s' "$mismatches"
+      return 1
+    fi
+    echo "✅ 迁移数据对账通过：${reconcile_tables} 张表源/目标行数一致"
+    return 0
+  }
+
   echo "🔄 执行 pgloader 迁移..."
   # R4B11-006: 目标连接串含 PG 口令，旧实现直接拼进 docker run 的进程
   # 参数，迁移持续的数分钟内可被本机 ps / docker inspect 读到明文。
@@ -3565,6 +3630,19 @@ EOF
     echo "↩️ 正在恢复迁移前的 .env 与 SQLite 服务..."
     migrate_restore_snapshot
     return 1
+  fi
+
+  # INV-9 对账门：切换 .env 之前核对行数（函数定义与口径见上方
+  # pgloader 执行前的 migrate_reconcile_row_counts 头注）。
+  local reconcile_rc=0
+  migrate_reconcile_row_counts || reconcile_rc=$?
+  if [[ $reconcile_rc -eq 1 ]]; then
+    echo "↩️ 数据对账未过，正在恢复迁移前的 .env 与 SQLite 服务（源库未动，排查后可重试）..."
+    migrate_restore_snapshot
+    return 1
+  fi
+  if [[ $reconcile_rc -eq 2 ]]; then
+    echo "⚠️ 迁移数据对账未能执行（源库计数通道不可用），本次迁移未经行数核对即切换；如需严格校验，请确认容器环境可安装 sqlite 后重试迁移"
   fi
 
   database_url="postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}?sslmode=disable"
