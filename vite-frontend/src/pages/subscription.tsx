@@ -446,6 +446,7 @@ function Editor({
     total: number;
     dropped: number;
     scriptError?: string;
+    excludedCompanionIds?: number[];
   } | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [templates, setTemplates] = useState<SubTemplateItem[]>([]);
@@ -1197,6 +1198,15 @@ function Editor({
                 共 {preview.items.length} 个节点
                 {preview.dropped > 0 && `，过滤掉 ${preview.dropped} 个`}
               </p>
+              {preview.excludedCompanionIds &&
+                preview.excludedCompanionIds.length > 0 && (
+                  <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-xs font-semibold text-warning-700">
+                    另有 {preview.excludedCompanionIds.length}
+                    个伴生入站被排除（ID：
+                    {preview.excludedCompanionIds.join("、")}
+                    ）：伴生入站不能作为订阅源，不会出现在订阅中。此排除不计入上面的过滤数。
+                  </p>
+                )}
               <div className="max-h-64 overflow-y-auto rounded-xl border border-divider">
                 {preview.items.length === 0 ? (
                   <p className="p-3 text-xs font-semibold text-foreground">没有节点</p>
@@ -1372,6 +1382,17 @@ export default function SubscriptionPage() {
         res.msg,
         draft.id ? "已保存" : "已创建，复制链接导入客户端即可",
       );
+      // RR-C5-03（B10-002）：保存校验排除的伴生入站在回执中点名，
+      // 保存当刻必须可见——不能等重开编辑器才发现源缺失且无原因。
+      // （启用/停用切换不经此路，避免对同一批既存排除反复告警。）
+      const excluded = res.data?.excludedCompanionIds ?? [];
+
+      if (excluded.length > 0) {
+        toast(
+          `有 ${excluded.length} 个伴生入站被排除（ID：${excluded.join("、")}）：伴生入站不能作为订阅源，未纳入此订阅`,
+          { icon: "⚠️", duration: 8000 },
+        );
+      }
       setDraft(null);
       await load();
     } finally {
@@ -1466,6 +1487,11 @@ export default function SubscriptionPage() {
           {s.isDefault && (
             <Chip color="primary" size="sm" variant="flat">
               默认 · 个人链接
+            </Chip>
+          )}
+          {s.meteringUnsupported && (
+            <Chip color="warning" size="sm" variant="flat">
+              流量永不计量
             </Chip>
           )}
           {s.pendingDelete ? (
@@ -1630,6 +1656,12 @@ export default function SubscriptionPage() {
                   {detail.pendingDelete && (
                     <p className="text-small font-semibold text-warning">
                       删除中：凭据撤销下发尚未完成，完成后此订阅将自动消失
+                    </p>
+                  )}
+                  {detail.meteringUnsupported && (
+                    <p className="text-small font-semibold text-warning">
+                      此订阅 ID
+                      超出流量计量编码上限：其流量永不计量，流量限额也不会触发
                     </p>
                   )}
                   <p className="text-small font-normal text-foreground">

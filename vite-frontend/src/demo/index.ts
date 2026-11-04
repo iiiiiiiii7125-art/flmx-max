@@ -74,7 +74,10 @@ export function switchDemoRole(role: DemoRole) {
  * last path segment tells them apart ("latest-results" is a read).
  * 词表按我方接口复核过：上游词表之外补 set（user-subscription/set、
  * user-inbound/set）、upgrade（node/upgrade、system/upgrade）、
- * tune（node/tune），均为纯写操作。
+ * tune（node/tune）。node/tune 例外（RR-C5-05）：其 status 读与各
+ * 动作都回带状态对象、由 tuneAnswer 先于词表合成回答，词表仅兜底；
+ * 同理 tunnel/delete-preview 与 tunnel/batch-delete-preview 是带
+ * 数据的预览读、由 deletePreviewAnswer 先于词表合成（见下两函数）。
  */
 const WRITE_WORDS = new Set(
   "create save update delete remove assign reset toggle import install control regenerate pause resume redeploy batch force run refresh split rollback test dismiss restore export reconcile clear login register finish begin verify set upgrade tune".split(
@@ -204,6 +207,201 @@ function diagnoseAnswer(
   return { code: 0, msg: "操作成功", data, ts: Date.now() };
 }
 
+/**
+ * Tunnel delete previews (RR-C5-05): data-carrying POSTs whose last
+ * segment starts with "delete", so the wordlist judges them writes
+ * and answers data:null — but both pages fail closed on a null
+ * preview, and the write answer's msg is "操作成功", so the demo
+ * showed an error toast reading 操作成功 and the delete dialogs
+ * never opened. Synthesize the previews from the recorded lists
+ * instead, in the backend's exact shapes
+ * (tunnel_delete_resolution.go): single {tunnelId, tunnelName,
+ * forwardCount, sampleForwards}, batch {tunnelCount,
+ * totalForwardCount, items, failures?}; the sample is capped at 5,
+ * the backend's tunnelDeletePreviewSampleLimit.
+ */
+function deletePreviewAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  const single = bare === "tunnel/delete-preview";
+  const batch = bare === "tunnel/batch-delete-preview";
+
+  if (!single && !batch) return null;
+  let req: Record<string, unknown> = {};
+
+  try {
+    req = (typeof body === "string" ? JSON.parse(body) : body) ?? {};
+  } catch {
+    req = {};
+  }
+  const listOf = (k: string) =>
+    (book[k]?.[0]?.res.data ?? []) as Array<Record<string, unknown>>;
+  const tunnels = listOf("tunnel/list");
+  const forwards = listOf("forward/list");
+  const previewOf = (t: Record<string, unknown>) => {
+    const own = forwards.filter((f) => Number(f.tunnelId) === Number(t.id));
+
+    return {
+      tunnelId: Number(t.id),
+      tunnelName: String(t.name ?? ""),
+      forwardCount: own.length,
+      sampleForwards: own.slice(0, 5).map((f) => ({
+        id: Number(f.id),
+        name: String(f.name ?? ""),
+        userId: Number(f.userId ?? 0),
+        userName: String(f.userName ?? ""),
+        inPort: Number(f.inPort ?? 0),
+      })),
+    };
+  };
+
+  if (single) {
+    const t = tunnels.find((x) => Number(x.id) === Number(req.id));
+
+    if (!t) return null;
+
+    return { code: 0, msg: "操作成功", data: previewOf(t), ts: Date.now() };
+  }
+  const ids = Array.isArray(req.ids) ? req.ids.map(Number) : [];
+  const items: ReturnType<typeof previewOf>[] = [];
+  const failures: Array<{ id: number; reason: string }> = [];
+
+  for (const id of ids) {
+    const t = tunnels.find((x) => Number(x.id) === id);
+
+    if (t) items.push(previewOf(t));
+    else failures.push({ id, reason: "隧道不存在" });
+  }
+  const data: Record<string, unknown> = {
+    tunnelCount: items.length,
+    totalForwardCount: items.reduce((n, i) => n + i.forwardCount, 0),
+    items,
+  };
+
+  if (failures.length) data.failures = failures;
+
+  return { code: 0, msg: "操作成功", data, ts: Date.now() };
+}
+
+/**
+ * Node tune (RR-C5-05): every call to node/tune — the "status" read
+ * included — returns the agent's tune status object, but the
+ * wordlist only sees the segment "tune" and answers data:null, so
+ * the dialog waited on its spinner forever. A seeded panel has no
+ * agents, so synthesize one status in the agent's exact shape
+ * (go-gost/x/socket tuneStatus, plus the panel's derived
+ * lineSupported flag): an agent that supports automatic tuning,
+ * fully applied at the default line (1000 Mbps × 150 ms, the
+ * agent's own defaultTuneParams), with no measurement or job yet —
+ * the modal then renders its normal "not measured yet" state.
+ */
+function tuneAnswer(bare: string) {
+  if (bare !== "node/tune") return null;
+  const setting = (key: string, current: string) => ({
+    key,
+    current,
+    target: current,
+    supported: true,
+    ok: true,
+  });
+  const group = (
+    id: string,
+    name: string,
+    desc: string,
+    settings: ReturnType<typeof setting>[],
+  ) => ({ id, name, desc, applied: true, settings });
+  const data = {
+    params: { bandwidthMbps: 1000, rttMs: 150 },
+    sizes: {
+      ramMb: 4096,
+      bdp: 18750000,
+      bufMax: 37500000,
+      bufDefault: 131072,
+      bufReason: "2×BDP",
+      tcpMem: "187500 250000 375000",
+    },
+    lineSupported: true,
+    kernel: "6.8.0-31-generic",
+    congestion: "bbr",
+    available: "reno cubic bbr",
+    hasBackup: true,
+    automatic: true,
+    groups: [
+      group(
+        "bbr",
+        "BBR 拥塞控制",
+        "高延迟、有丢包的线路上明显提速（需要内核 4.9+）",
+        [
+          setting("net.core.default_qdisc", "fq"),
+          setting("net.ipv4.tcp_congestion_control", "bbr"),
+        ],
+      ),
+      group(
+        "buffer",
+        "按带宽和延迟设缓冲区",
+        "单连接跑满线路；按内存限定上限，小内存机器不会被连接占满",
+        [
+          setting("net.core.rmem_max", "37500000"),
+          setting("net.core.wmem_max", "37500000"),
+          setting("net.core.rmem_default", "131072"),
+          setting("net.core.wmem_default", "131072"),
+          setting("net.ipv4.tcp_rmem", "4096 131072 37500000"),
+          setting("net.ipv4.tcp_wmem", "4096 131072 37500000"),
+          setting("net.ipv4.tcp_mem", "187500 250000 375000"),
+          setting("net.ipv4.tcp_window_scaling", "1"),
+          setting("net.ipv4.tcp_moderate_rcvbuf", "1"),
+          setting("net.ipv4.tcp_adv_win_scale", "1"),
+          setting("net.ipv4.udp_rmem_min", "16384"),
+          setting("net.ipv4.udp_wmem_min", "16384"),
+        ],
+      ),
+      group(
+        "tcp",
+        "TCP 连接优化",
+        "Fast Open、空闲后不降速、自动探测 MTU、更快回收连接",
+        [
+          setting("net.ipv4.tcp_fastopen", "3"),
+          setting("net.ipv4.tcp_slow_start_after_idle", "0"),
+          setting("net.ipv4.tcp_mtu_probing", "1"),
+          setting("net.ipv4.tcp_fin_timeout", "15"),
+          setting("net.ipv4.tcp_tw_reuse", "1"),
+          setting("net.ipv4.tcp_keepalive_time", "600"),
+          setting("net.ipv4.tcp_syncookies", "1"),
+          setting("net.ipv4.tcp_no_metrics_save", "0"),
+          setting("net.ipv4.tcp_sack", "1"),
+          setting("net.ipv4.tcp_dsack", "1"),
+          setting("net.ipv4.tcp_timestamps", "1"),
+        ],
+      ),
+      group(
+        "backlog",
+        "高并发",
+        "连接多时不丢新连接，中转出站可用的端口更多",
+        [
+          setting("net.core.somaxconn", "32768"),
+          setting("net.core.netdev_max_backlog", "16384"),
+          setting("net.core.netdev_budget", "600"),
+          setting("net.core.optmem_max", "65536"),
+          setting("net.ipv4.tcp_max_syn_backlog", "16384"),
+          setting("net.netfilter.nf_conntrack_max", "262144"),
+          setting("net.ipv4.ip_local_port_range", "10000 65535"),
+        ],
+      ),
+      group("forward", "IPv4 转发", "内核转发（nftables 端口转发）需要", [
+        setting("net.ipv4.ip_forward", "1"),
+      ]),
+      group("files", "文件句柄上限", "系统允许打开更多连接和文件", [
+        setting("fs.file-max", "1048576"),
+        setting("fs.nr_open", "1048576"),
+      ]),
+    ],
+  };
+
+  return { code: 0, msg: "操作成功", data, ts: Date.now() };
+}
+
 const canon = (body: unknown) => {
   if (body === undefined || body === null || body === "") return "";
   try {
@@ -280,6 +478,12 @@ async function answer(config: InternalAxiosRequestConfig) {
   const diagnosis = diagnoseAnswer(bare, config.data, book);
 
   if (diagnosis) return diagnosis;
+  const delPreview = deletePreviewAnswer(bare, config.data, book);
+
+  if (delPreview) return delPreview;
+  const tune = tuneAnswer(bare);
+
+  if (tune) return tune;
   if (PROBES[bare]) {
     const [list, field] = PROBES[bare];
     const ids: number[] = JSON.parse(String(config.data || "{}")).ids ?? [];

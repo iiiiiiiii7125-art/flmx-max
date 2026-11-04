@@ -375,6 +375,17 @@ export default function PanelSharingPage() {
 
       if (res.code === 0) {
         toast.success("删除成功");
+        // RR-C5-01（R2-F3-02）：个别联邦隧道清理失败时共享照常删除，
+        // 未清隧道在回执中点名——必须当场告知管理员去隧道列表手工
+        // 清理，不能被无条件「删除成功」掩盖成孤儿残留。
+        const uncleaned = res.data?.uncleanedTunnelIds ?? [];
+
+        if (uncleaned.length > 0) {
+          toast(
+            `共享已删除，但隧道 ${uncleaned.join("、")} 未能自动清理，请在隧道列表中手工清理`,
+            { icon: "⚠️", duration: 8000 },
+          );
+        }
         loadShares();
       } else {
         toast.error(res.msg || "删除失败");
@@ -472,7 +483,21 @@ export default function PanelSharingPage() {
       });
 
       if (res.code === 0) {
-        toast.success("编辑成功");
+        // RR-C5-02（B13-001）：端口段缩小后，段外存量运行时的释放
+        // 结果在回执中点名——已释放端口是事实、随成功提示附带；
+        // 释放失败的整句告警单列透传（段外监听在对账重试成功前会
+        // 越界存活，管理员必须当场知情）。
+        const released = res.data?.releasedPorts ?? [];
+
+        toast.success(
+          "编辑成功" +
+            (released.length > 0
+              ? `，已释放段外端口 ${released.join("、")}`
+              : ""),
+        );
+        if (res.data?.warning) {
+          toast(res.data.warning, { icon: "⚠️", duration: 8000 });
+        }
         setEditShareOpen(false);
         loadShares();
       } else {

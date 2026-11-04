@@ -166,6 +166,28 @@ const INTERACTIONS = {
   // button enables; the click itself happens exactly once (the
   // step returns true only on the evaluating pass that clicks).
   "admin config": `(() => { const scope = document.querySelector("main") ?? document; const setVal = (el, v) => { const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; setter.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }; const token = scope.querySelector('input[aria-label="GitHub 令牌"]'); const password = scope.querySelector('input[aria-label="加密密码"]'); if (!token || !password) return false; if (!token.value) setVal(token, "ghp_demo_patrol_token"); if (!password.value) setVal(password, "demo-patrol-password"); const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "立即上传"); if (!b || b.disabled) return false; b.click(); return true; })()`,
+  // RR-C5-05: opening a tunnel's delete dialog fires tunnel/delete-
+  // preview (and 批量删除 fires tunnel/batch-delete-preview) —
+  // data-carrying POSTs the demo wordlist used to judge writes
+  // (data:null). The pages fail closed on a null preview and
+  // error-toast the write answer's own msg ("操作成功"), so tunnel
+  // deletion was unreachable in the demo. The adapter now synthesizes
+  // both previews from the recorded lists. Phase 1: click the first
+  // enabled 删除 (the batch button carries the same label but stays
+  // disabled with nothing selected) and wait for the dialog to show
+  // the dependency branch. Only that branch proves preview data
+  // arrived: the no-dependency text ("可以直接删除") is also the
+  // modal's transient default while a null preview resolves, so it
+  // must NOT be accepted as settled. Every recorded tunnel has
+  // forwards, so the dependency branch is the only correct settle.
+  // Phase 2: enter 批量 select mode, tick one checkbox, open the
+  // batch dialog from the toolbar (first enabled 删除 in DOM order
+  // is the toolbar's once select mode is on) and wait for its
+  // data-only summary ("条仍被规则使用"). If a preview regresses to
+  // null the page closes the dialog itself, the step never settles,
+  // and the walk fails. Clicks happen exactly once (window flags);
+  // later passes only observe.
+  "admin tunnel": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const dlgByTitle = (title) => { const h = [...document.querySelectorAll("h2")].find((x) => x.textContent.trim() === title); return h?.closest('[role="dialog"]') ?? h?.closest("section") ?? null; }; const cancelOf = (dlg) => [...dlg.querySelectorAll("button")].find((x) => x.textContent.trim() === "取消"); if (!w.__dt1) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt1 = true; b.click(); return false; } if (!w.__dt1Done) { const dlg = dlgByTitle("删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("发现关联规则") || !t.includes("关联规则预览")) return false; const c = cancelOf(dlg); if (c) c.click(); w.__dt1Done = true; return false; } if (!w.__dt2) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "批量" && !x.disabled); if (!b) return false; w.__dt2 = true; b.click(); return false; } if (!w.__dt2Picked) { const box = scope.querySelector('[role="checkbox"]'); if (!box) return false; box.click(); w.__dt2Picked = true; return false; } if (!w.__dt2Clicked) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt2Clicked = true; b.click(); return false; } const dlg = dlgByTitle("批量删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("条仍被规则使用")) return false; const c = cancelOf(dlg); if (c) c.click(); return true; })()`,
 };
 
 async function interact(role, route) {

@@ -519,6 +519,13 @@ export const createPeerShare = (data: {
   allowedIps?: string;
 }, idemKey?: string) =>
   Network.post("/federation/share/create", data, { idemKey });
+/** 共享更新回执（B13-001）：端口段缩小后段外存量运行时的释放结果。
+ * 释放失败者另带整句 warning，须原样透传给管理员。 */
+export interface PeerShareUpdateResult {
+  releasedPorts?: number[];
+  releaseFailedPorts?: number[];
+  warning?: string;
+}
 export const updatePeerShare = (data: {
   id: number;
   name: string;
@@ -528,9 +535,14 @@ export const updatePeerShare = (data: {
   portRangeEnd: number;
   allowedDomains: string;
   allowedIps: string;
-}) => Network.post("/federation/share/update", data);
+}) => Network.post<PeerShareUpdateResult>("/federation/share/update", data);
+/** 共享删除回执（R2-F3-02）：个别联邦隧道清理失败时共享照常删除，
+ * 未清隧道在此点名，管理员据 ID 在隧道列表手工清理。 */
+export interface PeerShareDeleteResult {
+  uncleanedTunnelIds?: number[];
+}
 export const deletePeerShare = (id: number) =>
-  Network.post("/federation/share/delete", { id });
+  Network.post<PeerShareDeleteResult>("/federation/share/delete", { id });
 export const resetPeerShareFlow = (id: number) =>
   Network.post("/federation/share/reset-flow", { id });
 export const getPeerRemoteUsageList = () =>
@@ -1138,6 +1150,12 @@ export interface SubscriptionItem {
   isDefault: boolean;
   /** 中转范围（与 options.relayIds 同步下发）：空 = 全部端点。 */
   relayIds: number[];
+  /** 仅保存响应回填（B10-002）：本次保存校验时被排除的伴生入站 ID
+   * （伴生入站不能作订阅源）；列表等其他视图恒缺省。 */
+  excludedCompanionIds?: number[];
+  /** L4-08：订阅 ID 超出 socket mark 计量编码上限时为 true——该订阅
+   * 的流量永不计量、流量限额永不触发，须显式提示管理员。 */
+  meteringUnsupported?: boolean;
 }
 export interface SubscriptionDraft {
   id?: number;
@@ -1357,6 +1375,8 @@ export const previewSubscription = (data: SubscriptionDraft) =>
     // F-024：脚本步骤出错时后端保留其余步骤的节点并在此回告错误，
     // 预览区必须展示，避免用户以为节点被脚本吞掉。
     scriptError?: string;
+    // B10-002：与 save 同口径，预览也回告被排除的伴生入站（非空才出现）。
+    excludedCompanionIds?: number[];
   }>("/subscription/preview", data);
 
 export const testNotify = (data: {
