@@ -96,7 +96,6 @@ func w2GistMockServer(t *testing.T, content []byte, served chan<- struct{}) {
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("FLMX_GIST_API_BASE", srv.URL)
-	t.Setenv("FLMX_GIST_API_BASE", "")
 }
 
 // 写入相位断连：整单跑完、全量落库、回执 code=0。
@@ -183,7 +182,6 @@ func TestW2GistRestoreAbortDuringDownloadCancels(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(release) })
 	t.Setenv("FLMX_GIST_API_BASE", srv.URL)
-	t.Setenv("FLMX_GIST_API_BASE", "")
 
 	req, cancel := w2GistRestoreRequest(t, "ver-1")
 	rec := httptest.NewRecorder()

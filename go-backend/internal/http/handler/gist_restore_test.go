@@ -34,7 +34,6 @@ func gistRestoreMockServer(t *testing.T, content []byte) {
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("FLMX_GIST_API_BASE", srv.URL)
-	t.Setenv("FLMX_GIST_API_BASE", "")
 }
 
 func callGistRestore(t *testing.T, h *Handler, version, password string) *httptest.ResponseRecorder {
