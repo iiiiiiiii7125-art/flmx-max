@@ -1380,11 +1380,22 @@ for (const fam of [
 // 透明后缀只在 -700 玻璃渲染面（深档 token）按 alpha 合成复算
 // ——以深档色在玻璃 36 格载体上逐格合成后取最低格，>= 4.5 才
 // 算覆盖，其余档位的透明后缀不在任何已建模面内、点名红。
+// R4-C6-02：方括号 alpha（/[0.12]）此前永不捕获——正则尾部的
+// \b 位于 alpha 组之后，而 ] 是非单词字符、其后（引号/空格/类
+// 名分隔）不构成单词边界，整组回退为不透明命中、按 -700 放行，
+// parseFloat 解析分支成死代码。现把 \b 移到档位数字之后、alpha
+// 组随后，数字与方括号两形态同等可达。
+// R4-C6-01：任意值形态 text-[#hex] / text-[rgb(...)] /
+// text-[hsl(...)] / text-[var(--x)] 此前完全不入普查（字面量正
+// 则只认 族-档 形态）——另行收集（censusArbitrary），字面色即渲
+// 染色、无语义覆盖块可借，按实值在玻璃格合成复算，见下方任意
+// 值段。
 const SEMANTIC_TEXT_FAMS = new Set([
   ...GLASS_TEXT_TOKEN_FAMS,
   ...Object.keys(GLASS_TEXT_ALIAS),
 ]);
 const censusHits = [];
+const censusArbitrary = [];
 const censusWalk = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
@@ -1394,7 +1405,7 @@ const censusWalk = (dir) => {
     } else if (/\.tsx?$/.test(entry.name)) {
       const text = readFileSync(path, "utf8");
       const re =
-        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-([a-z]+)-([1-9]00)(\/(?:\d+|\[[\d.]+\]))?\b/g;
+        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-([a-z]+)-([1-9]00)\b(\/(?:\d+|\[[\d.]+\]))?/g;
       let m;
 
       while ((m = re.exec(text)) !== null) {
@@ -1418,6 +1429,8 @@ const censusWalk = (dir) => {
       // 放行，裸类遂逃逸全门——裸 token 不在 globals.css 玻璃覆盖块
       // 的带档位枚举内，任何载体上都低于 4.5（见 censusCoverReason
       // 的 base 判罚）。按 SEMANTIC_TEXT_FAMS 全集机械枚举，差集 ∅。
+      // （集成注：C6-01 原带的 text-warning 单族硬编码探针已被本全族
+      // 扫描完全覆盖，合并时去除以免同格重复入册。）
       const bareRe = new RegExp(
         `(?:(hover|focus|focus-visible|group-hover|dark):)?text-(${[...SEMANTIC_TEXT_FAMS].join("|")})(?![-\\w])`,
         "g",
@@ -1426,6 +1439,24 @@ const censusWalk = (dir) => {
 
       while ((bm = bareRe.exec(text)) !== null) {
         censusHits.push({ variant: bm[1] ?? "", fam: bm[2], shade: "base", alpha: null, path });
+      }
+      // 任意值文字色（R4-C6-01）：只收颜色形态——以 # / rgb( /
+      // hsl( / var( 开头、color: 类型提示、或纯颜色关键词；长度
+      // 形态（text-[14px]、text-[length:...]）是字号、不入册。
+      const arbRe =
+        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-\[([^\]]+)\]/g;
+      let am;
+
+      while ((am = arbRe.exec(text)) !== null) {
+        const raw = am[2].trim();
+        const value = raw.startsWith("color:") ? raw.slice(6).trim() : raw;
+
+        if (
+          /^(#|rgba?\(|hsla?\(|var\()/.test(value) ||
+          /^[a-zA-Z]+$/.test(value)
+        ) {
+          censusArbitrary.push({ variant: am[1] ?? "", raw, value, path });
+        }
       }
     }
   }
@@ -1462,6 +1493,133 @@ const alphaGlassMin = (hex, alpha) => {
 
   return min;
 };
+
+// ── 任意值文字色求值（R4-C6-01）──────────────────────────────
+// 任意值的字面色就是渲染色（无玻璃覆盖块改写），按 CSS 实值解
+// 析：#hex（3/4/6/8 位）、rgb()/rgba()、hsl()/hsla()（逗号或空
+// 格分隔、/alpha 后缀）、var(--x)（经 :root 已解析 token 求值，
+// 带回退则用回退）、基础颜色关键词。解析后以其 alpha 在玻璃
+// 36 格载体上合成取最低格（与透明后缀同模型）。无法静态求值
+// （未定义且无回退的 var、currentColor 等）即点名红——声称覆
+// 盖的形态不许静默放行。
+const CSS_COLOR_KEYWORDS = {
+  black: { rgb: [0, 0, 0], alpha: 1 },
+  white: { rgb: [255, 255, 255], alpha: 1 },
+  red: { rgb: [255, 0, 0], alpha: 1 },
+  green: { rgb: [0, 128, 0], alpha: 1 },
+  blue: { rgb: [0, 0, 255], alpha: 1 },
+  yellow: { rgb: [255, 255, 0], alpha: 1 },
+  gray: { rgb: [128, 128, 128], alpha: 1 },
+  grey: { rgb: [128, 128, 128], alpha: 1 },
+  transparent: { rgb: [0, 0, 0], alpha: 0 },
+};
+const hslToRgb = (h, s, l) => {
+  const sn = s / 100;
+  const ln = l / 100;
+  const k = (n) => (n + h / 30) % 12;
+  const a = sn * Math.min(ln, 1 - ln);
+  const f = (n) =>
+    ln - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+
+  return [f(0), f(8), f(4)].map((v) => v * 255);
+};
+const parseAlphaPart = (aRaw) => {
+  if (aRaw === null || aRaw === undefined) return 1;
+  const t = String(aRaw).trim();
+  const a = t.endsWith("%") ? parseFloat(t) / 100 : parseFloat(t);
+
+  return Number.isNaN(a) ? null : a;
+};
+const parseCssColorValue = (rawValue, depth = 0) => {
+  if (depth > 4) return null;
+  const v = String(rawValue).replace(/_/g, " ").trim();
+  let m = v.match(
+    /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/,
+  );
+
+  if (m) {
+    const h = m[1];
+
+    if (h.length <= 4) {
+      return {
+        rgb: [0, 1, 2].map((i) => parseInt(h[i] + h[i], 16)),
+        alpha: h.length === 4 ? parseInt(h[3] + h[3], 16) / 255 : 1,
+      };
+    }
+
+    return {
+      rgb: [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)),
+      alpha: h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1,
+    };
+  }
+  m = v.match(/^rgba?\(([\s\S]+)\)$/);
+  if (m) {
+    const [body, slashAlpha] = m[1].split("/");
+    const comps = body.split(/[,\s]+/).filter(Boolean);
+
+    if (comps.length < 3) return null;
+    const chan = (p) =>
+      p.endsWith("%") ? (parseFloat(p) / 100) * 255 : parseFloat(p);
+    const rgb = comps.slice(0, 3).map(chan);
+
+    if (rgb.some(Number.isNaN)) return null;
+    const alpha = parseAlphaPart(
+      slashAlpha !== undefined ? slashAlpha : comps.length > 3 ? comps[3] : null,
+    );
+
+    return alpha === null ? null : { rgb, alpha };
+  }
+  m = v.match(/^hsla?\(([\s\S]+)\)$/);
+  if (m) {
+    const [body, slashAlpha] = m[1].split("/");
+    const parts = body.split(/[,\s]+/).filter(Boolean);
+
+    if (parts.length < 3) return null;
+    const [hDeg, sPct, lPct] = parts.map((p) => parseFloat(p));
+
+    if ([hDeg, sPct, lPct].some(Number.isNaN)) return null;
+    const alpha = parseAlphaPart(
+      slashAlpha !== undefined ? slashAlpha : parts.length > 3 ? parts[3] : null,
+    );
+
+    return alpha === null
+      ? null
+      : {
+          rgb: hslToRgb(((hDeg % 360) + 360) % 360, sPct, lPct),
+          alpha,
+        };
+  }
+  m = v.match(/^var\(\s*(--[\w-]+)\s*(?:,([\s\S]*))?\)$/);
+  if (m) {
+    const resolved = resolvedTokens[m[1]];
+
+    if (resolved !== undefined) return parseCssColorValue(resolved, depth + 1);
+    if (m[2] !== undefined) return parseCssColorValue(m[2], depth + 1);
+
+    return null;
+  }
+
+  return CSS_COLOR_KEYWORDS[v.toLowerCase()] ?? null;
+};
+const arbitraryCoverReason = (h) => {
+  if (!["", "hover", "focus"].includes(h.variant)) return "集外变体";
+  const parsed = parseCssColorValue(h.value);
+
+  if (!parsed) return "任意值无法静态求值";
+  if (glassSurfaces.length === 0) return "玻璃格缺失";
+  let min = Infinity;
+
+  for (const s of glassSurfaces) {
+    const eff = parsed.rgb.map((c, i) => parsed.alpha * c + (1 - parsed.alpha) * s[i]);
+
+    min = Math.min(min, contrastRgb(eff, s));
+  }
+
+  return min >= 4.5 ? null : `任意值实值合成最低格 ${min.toFixed(2)} < 4.5`;
+};
+const arbitraryUncovered = censusArbitrary
+  .map((h) => ({ h, reason: arbitraryCoverReason(h) }))
+  .filter((x) => x.reason !== null);
 
 // 覆盖判定：返回 null = 已覆盖，否则为点名原因。
 const censusCoverReason = (h) => {
@@ -1511,6 +1669,17 @@ check(
     .map(
       ({ h, reason }) =>
         `${h.variant ? `${h.variant}:` : ""}text-${h.fam}-${h.shade}${h.alpha !== null ? `/${Math.round(h.alpha * 100)}` : ""}（${reason}）@ ${h.path}`,
+    )
+    .join("；"),
+);
+check(
+  `任意值文字色普查差集 ∅（实扫 ${censusArbitrary.length} 处：#/rgb/hsl/var/关键词形态按实值在玻璃格合成复算，< 4.5 或无法静态求值即红）`,
+  arbitraryUncovered.length === 0,
+  arbitraryUncovered
+    .slice(0, 5)
+    .map(
+      ({ h, reason }) =>
+        `${h.variant ? `${h.variant}:` : ""}text-[${h.raw}]（${reason}）@ ${h.path}`,
     )
     .join("；"),
 );
