@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"log"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -38,6 +39,26 @@ func FromEnv() Config {
 	}
 
 	return cfg
+}
+
+// NormalizeDBType 是 DB_TYPE 字面值的单点归一（R1-01-M2）：
+// TrimSpace＋ToLower 后把别名 postgresql 折为 postgres，接受集
+// {""、sqlite、postgres} 与后端启动判定、脚本面 normalize_db_type
+// 逐字同集。一切 DB_TYPE 模式判定面必须先过本归一，不许各自再
+// 写字面量比较——面板内升级执行器曾只认 postgres、对
+// DB_TYPE=postgresql 的 PG 部署整格失去 PG 保护（卷门不启用、
+// 改名误删在跑 PG 容器、快照错排），根源即判定面各写各的。
+func NormalizeDBType(v string) string {
+	n := strings.ToLower(strings.TrimSpace(v))
+	if n == "postgresql" {
+		n = "postgres"
+	}
+	return n
+}
+
+// DBTypeIsPostgres 判 DB_TYPE 是否选择 PostgreSQL（含别名拼写）。
+func DBTypeIsPostgres(v string) bool {
+	return NormalizeDBType(v) == "postgres"
 }
 
 func getEnv(key, fallback string) string {

@@ -32,9 +32,7 @@ type App struct {
 // also returns nil — repo.OpenPostgres already reports "empty postgres dsn"
 // for it, and that error must not be masked or duplicated here.
 func validatePostgresPassword(dbType, dsn string) error {
-	switch strings.ToLower(strings.TrimSpace(dbType)) {
-	case "postgres", "postgresql":
-	default:
+	if !config.DBTypeIsPostgres(dbType) {
 		return nil
 	}
 	if strings.TrimSpace(dsn) == "" {
@@ -80,13 +78,13 @@ func New(cfg config.Config) (*App, error) {
 		err error
 	)
 
-	switch strings.ToLower(strings.TrimSpace(cfg.DBType)) {
+	switch config.NormalizeDBType(cfg.DBType) {
 	case "", "sqlite":
 		r, err = repo.Open(cfg.DBPath)
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite: %w", err)
 		}
-	case "postgres", "postgresql":
+	case "postgres":
 		if err := validatePostgresPassword(cfg.DBType, cfg.DatabaseURL); err != nil {
 			return nil, err
 		}
