@@ -1858,6 +1858,16 @@ func isAdminRequest(r *http.Request) bool {
 
 func normalizeAndValidateConfigValue(key, value string) (string, error) {
 	switch strings.TrimSpace(key) {
+	case "jwt_secret":
+		// R1-11-02：DB 配置行 jwt_secret 零消费——签名密钥真源只有
+		// 环境变量 JWT_SECRET 与 DB 同级 jwt_secret 文件（internal/
+		// config 的 EnsureJWTSecret，app 装配以 cfg.JWTSecret 注入）。
+		// 此前该键走 default 直通：管理员经 config/update 写任意非空
+		// 值返回成功、落库却永不生效，会误以为签名密钥已轮换。写面
+		// 点名拒绝并指引部署面轮换（空值另由 required 校验先行点名
+		// 拒绝，见 config_policy.requiredConfigKeys）。读面维持关闭
+		// （getConfigByName 403、config/list 删除，见 :804/:869 一带）。
+		return "", fmt.Errorf("jwt_secret 不能通过面板设置修改：签名密钥来源为环境变量 JWT_SECRET 或数据库同级 jwt_secret 文件，请在部署面轮换")
 	case "app_logo", "app_favicon":
 		normalized := strings.TrimSpace(value)
 		if normalized == "" {

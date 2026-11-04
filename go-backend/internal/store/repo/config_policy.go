@@ -59,8 +59,15 @@ var sensitiveConfigKeys = map[string]struct{}{
 // requiredConfigKeys carry a mandatory value domain: submitting an empty
 // value is rejected (with the key named in the error) instead of clearing
 // the key. These are the domain-validated keys from
-// normalizeAndValidateConfigValue (enum/numeric monitors) plus jwt_secret,
-// whose absence would silently fall back to a different signing key.
+// normalizeAndValidateConfigValue (enum/numeric monitors) plus jwt_secret.
+// jwt_secret is listed as defense-in-depth only: its DB row has no
+// consumer — the signing key comes solely from the JWT_SECRET env var or
+// the DB-sibling jwt_secret file (internal/config EnsureJWTSecret) — and
+// the handler write face rejects every value with a named error
+// (R1-11-02); this entry keeps an empty submission named-rejected even
+// if that gate were bypassed. (An earlier comment here described a
+// fallback to a different signing key on absence; that path no longer
+// exists.)
 // Monitor key literals mirror internal/monitoring constants
 // (ConfigMonitorRetentionDays / ConfigTunnelQualityProbeIntervalSec) and
 // the handler's monitorTunnelQualityEnabledConfigKey. The service_monitor_*
