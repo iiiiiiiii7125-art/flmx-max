@@ -129,7 +129,8 @@ func TestUpdateEnvVersionReplacesExistingValue(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 
-	want := "FLMX_VERSION=2.1.9\nJWT_SECRET=test\n"
+	// 双写口径：旧键就地更新为同值、新键缺失补写（不再删行收敛）。
+	want := "FLUX_VERSION=2.1.9\nJWT_SECRET=test\nFLMX_VERSION=2.1.9\n"
 	if string(data) != want {
 		t.Fatalf("env content = %q, want %q", string(data), want)
 	}
@@ -152,7 +153,9 @@ func TestUpdateEnvVersionAppendsMissingValue(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 
-	want := "JWT_SECRET=test\nFLMX_VERSION=2.1.9\n"
+	// 双写口径：两键均缺失时按 FLMX、FLUX 序一并补写（脚本面
+	// activate_panel_update_files 同序）。
+	want := "JWT_SECRET=test\nFLMX_VERSION=2.1.9\nFLUX_VERSION=2.1.9\n"
 	if string(data) != want {
 		t.Fatalf("env content = %q, want %q", string(data), want)
 	}
@@ -423,7 +426,7 @@ func TestUpdateEnvVersionCapsLooseModeAt0600(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if want := "FLMX_VERSION=2.1.9\nJWT_SECRET=test\n"; string(data) != want {
+	if want := "FLUX_VERSION=2.1.9\nJWT_SECRET=test\nFLMX_VERSION=2.1.9\n"; string(data) != want {
 		t.Fatalf("env content = %q, want %q (content bytes must be unchanged by the mode cap)", string(data), want)
 	}
 }
@@ -743,14 +746,15 @@ func TestUpdateEnvVersionDoesNotTouchExtraKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	want := "FLUX_VERSION_EXTRA=9.9.9\nFLMX_VERSION=1.0.10\n"
+	want := "FLUX_VERSION_EXTRA=9.9.9\nFLUX_VERSION=1.0.10\nFLMX_VERSION=1.0.10\n"
 	if string(data) != want {
 		t.Fatalf("env content = %q, want %q", string(data), want)
 	}
 }
 
-// 改名迁移：新旧两键并存的存量 .env 改写后只剩一行 FLMX_VERSION。
-func TestUpdateEnvVersionMigratesDualKeysToSingleFLMX(t *testing.T) {
+// 双写口径（1.9.9，D5）：新旧两键并存的存量 .env 改写后两键同值、
+// 各自就地保留原行位，不再删除 FLUX_VERSION 行收敛为单键。
+func TestUpdateEnvVersionDualWritesBothKeys(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
 	original := "FLUX_VERSION=1.0.0\nJWT_SECRET=test\nFLMX_VERSION=1.0.0\n"
@@ -765,7 +769,7 @@ func TestUpdateEnvVersionMigratesDualKeysToSingleFLMX(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	want := "FLMX_VERSION=2.0.0\nJWT_SECRET=test\n"
+	want := "FLUX_VERSION=2.0.0\nJWT_SECRET=test\nFLMX_VERSION=2.0.0\n"
 	if string(data) != want {
 		t.Fatalf("env content = %q, want %q", string(data), want)
 	}

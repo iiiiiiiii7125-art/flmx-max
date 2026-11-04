@@ -365,8 +365,9 @@ func newSystemUpgradeExecutor() *systemUpgradeExecutor {
 }
 
 func currentPanelVersion() string {
-	// 改名过渡：新键 FLMX_VERSION 优先、旧键 FLUX_VERSION 回退
-	// （存量 .env 在下一次升级改写时迁到新键，见 updateEnvVersion）。
+	// 改名过渡：新键 FLMX_VERSION 优先、旧键 FLUX_VERSION 回退。
+	// 升级写面双写两键同值（见 updateEnvVersion），两键长期并存，
+	// 读面恒以新键优先、旧键只作存量回退。
 	version := strings.TrimSpace(os.Getenv("FLMX_VERSION"))
 	if version == "" {
 		version = strings.TrimSpace(os.Getenv("FLUX_VERSION"))
@@ -824,39 +825,19 @@ func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error 
 	if err != nil {
 		return err
 	}
-	rawLines := strings.Split(string(data), "\n")
-	lines := make([]string, 0, len(rawLines))
-	replaced := false
-	for _, line := range rawLines {
-		// U1-009：按键名精确匹配（旧逻辑 HasPrefix 会误伤 FLUX_VERSION_EXTRA= 等同前缀变量）。
-		key := line
-		if idx := strings.Index(line, "="); idx >= 0 {
-			key = line[:idx]
-		}
-		// 改名迁移：新键 FLMX_VERSION 与旧键 FLUX_VERSION 都算版本
-		// 行；首个版本行改写为新键（存量 .env 升级一次即完成键迁
-		// 移），后续版本行（两键并存的存量）整行删去，保证迁移后
-		// 有且只有一行 FLMX_VERSION。
-		if k := strings.TrimSpace(key); k == "FLMX_VERSION" || k == "FLUX_VERSION" {
-			if !replaced {
-				lines = append(lines, "FLMX_VERSION="+version)
-				replaced = true
-			}
-			continue
-		}
-		lines = append(lines, line)
-	}
-	if !replaced {
-		trimmed := strings.TrimRight(strings.Join(lines, "\n"), "\n")
-		if trimmed == "" {
-			trimmed = "FLMX_VERSION=" + version
-		} else {
-			trimmed += "\nFLMX_VERSION=" + version
-		}
-		return writeFileAtomicWithMode(envPath, []byte(trimmed+"\n"), mode)
-	}
-	content := strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
-	return writeFileAtomicWithMode(envPath, []byte(content), mode)
+	// 版本键双写（1.9.9 起，与脚本面 activate_panel_update_files 同
+	// 口径，兑现改名裁定的「双写两版过渡」）：FLMX_VERSION 与
+	// FLUX_VERSION 同值、各自就地更新、缺失补写，不再删行收敛为
+	// 单键——旧实现把 .env 收敛为只有 FLMX_VERSION，只认
+	// FLUX_VERSION 的带外旧消费者（旧脚本/旧面板的版本读面）在经
+	// 面板内升级后会读空（parity 矩阵 D5）。按键名精确匹配
+	// （U1-009：HasPrefix 会误伤 FLUX_VERSION_EXTRA= 等同前缀键），
+	// 细节见 applyEnvKeyUpdates。
+	content := applyEnvKeyUpdates(data, []envKeyValue{
+		{envKeyFLMXVersion, version},
+		{envKeyFLUXVersion, version},
+	})
+	return writeFileAtomicWithMode(envPath, content, mode)
 }
 
 // —— 存量资源名钉键（1.9.9，与 panel_install.sh 的
@@ -872,6 +853,8 @@ func (e *systemUpgradeExecutor) updateEnvVersion(envPath, version string) error 
 // 文件之前，把缺失的资源名键按旧容器的现行有效值钉进 .env，已有
 // 键逐字保留、绝不覆盖。
 const (
+	envKeyFLMXVersion    = "FLMX_VERSION"
+	envKeyFLUXVersion    = "FLUX_VERSION"
 	envKeySQLiteVolume   = "FLMX_SQLITE_VOLUME"
 	envKeyPostgresVolume = "FLMX_POSTGRES_VOLUME"
 	envKeyNetwork        = "FLMX_NETWORK"
@@ -971,6 +954,50 @@ func applyEnvPins(data []byte, pins []envKeyValue) []byte {
 		}
 		out += pin.key + "=" + pin.value
 		seen[pin.key] = true
+	}
+	return []byte(out + "\n")
+}
+
+// applyEnvKeyUpdates 把 updates 逐键 upsert 进 .env 内容并返回新
+// 内容（纯函数，与脚本 upsert_env_var 的 awk 语义一致）：同名键
+// 的既有行全部就地改写为新值（键名按首个 = 前的原文精确匹配、
+// 键侧空白容忍并归一），缺失键按 updates 序追加到文件尾；其余
+// 一切行（注释、顺序、其他键值）逐字保留，输出恒以单个换行结
+// 尾。与 applyEnvPins 的分工：pins 只补缺/补空、绝不覆盖非空
+// 值；updates 是真改写（版本键双写、容器改名键共用）。
+func applyEnvKeyUpdates(data []byte, updates []envKeyValue) []byte {
+	if len(updates) == 0 {
+		return data
+	}
+	want := make(map[string]string, len(updates))
+	for _, u := range updates {
+		want[u.key] = u.value
+	}
+	seen := make(map[string]bool, len(updates))
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		key, _, ok := strings.Cut(strings.TrimSuffix(line, "\r"), "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value, wanted := want[key]
+		if !wanted {
+			continue
+		}
+		seen[key] = true
+		lines[i] = key + "=" + value
+	}
+	out := strings.TrimRight(strings.Join(lines, "\n"), "\n")
+	for _, u := range updates {
+		if seen[u.key] {
+			continue
+		}
+		if out != "" {
+			out += "\n"
+		}
+		out += u.key + "=" + u.value
+		seen[u.key] = true
 	}
 	return []byte(out + "\n")
 }
