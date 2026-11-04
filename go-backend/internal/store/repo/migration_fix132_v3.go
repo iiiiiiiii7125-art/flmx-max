@@ -116,10 +116,14 @@ func migrateV3PeerShareRuntimeCompositeUnique(db *gorm.DB) error {
 	}
 
 	if !db.Migrator().HasTable(peerShareRuntimeTableName) {
-		// 表尚不存在（AutoMigrate 异常路径）：无存量可迁，复合索引将由
-		// 后续建表后的下一次启动补建——但正常启动顺序里表已由
-		// AutoMigrate 建好，此分支仅作防御。
-		return recordMigrationV3(db)
+		// 表尚不存在（AutoMigrate 异常路径）：不记录版本、下一次
+		// 正常启动（表已建好）再执行——与 v4/v5 同口径（R4-S2-01）。
+		// 此前此处直接记版本：复合唯一索引刻意不进 model tag
+		// （D3-05、由本迁移维护），表随后经 AutoMigrate 建出时不带
+		// 复合索引，v3 又因版本记录短路永不重跑，索引将永久缺失
+		// 且无任何提示。
+		log.Printf("migration %s: peer_share_runtime table missing, deferring to next startup", migrationV3Version)
+		return nil
 	}
 
 	legacyExists, err := peerShareRuntimeIndexExists(db, legacyResourceKeyIndexName)

@@ -105,6 +105,42 @@ func TestMigrateV3PeerShareRuntimeCompositeUnique(t *testing.T) {
 	}
 }
 
+// R4-S2-01：表不存在分支不得记版本——与 v4/v5 同口径延后到下次
+// 启动。此前记版本后，表经 AutoMigrate 建出（无复合索引，D3-05
+// 不进 model tag）时 v3 因版本记录短路永不重跑，复合唯一索引永久
+// 缺失。本用例两段验证：无表跑迁移 → 无版本记录；建表后再跑 →
+// 迁移真正执行（复合索引建成、版本此时才记录）。
+func TestMigrateV3DefersWhenTableMissing(t *testing.T) {
+	db := openB4FileDB(t)
+
+	if err := migrateV3PeerShareRuntimeCompositeUnique(db); err != nil {
+		t.Fatalf("v3 migration without table: %v", err)
+	}
+	var recorded int64
+	if err := db.Model(&schemaMigration{}).Where("version = ?", migrationV3Version).Count(&recorded).Error; err != nil {
+		t.Fatalf("count v3 version records: %v", err)
+	}
+	if recorded != 0 {
+		t.Fatal("v3 recorded its version while peer_share_runtime is missing; the composite index would never be built")
+	}
+
+	if err := db.Exec(legacyPeerShareRuntimeDDL).Error; err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if err := migrateV3PeerShareRuntimeCompositeUnique(db); err != nil {
+		t.Fatalf("v3 migration after table appears: %v", err)
+	}
+	if _, ok := sqliteIndexSQL(t, &Repository{db: db}, compositeResourceIndexName); !ok {
+		t.Fatal("composite index missing after deferred v3 migration ran")
+	}
+	if err := db.Model(&schemaMigration{}).Where("version = ?", migrationV3Version).Count(&recorded).Error; err != nil {
+		t.Fatalf("count v3 version records after run: %v", err)
+	}
+	if recorded != 1 {
+		t.Fatalf("v3 version records after run = %d, want 1", recorded)
+	}
+}
+
 // D3-04: 存量 share 的 relay 凭据启动回填——空凭据被补发、已有凭据
 // 不被覆盖轮换、二次回填幂等。
 func TestBackfillPeerShareRelayCredentials(t *testing.T) {
