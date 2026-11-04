@@ -8,7 +8,9 @@
 #   4. install.md 维护菜单 vs panel_install.sh show_menu 实际菜单
 #   5. install.md Caddy 示例反代目标 vs 脚本刻意使用的 127.0.0.1
 #   6. [known-pending] 默认账号字面量：guide vs seed/脚本——F-064 属 §十一.4
-#      待产品决策，本项只报告、不计入失败（决策落地后应改为硬检查）。
+#      待产品决策，本项只报告、不计入失败（决策落地后应改为硬检查）；
+#      但任一侧提取为空属前提失效、点名硬红，不得伪装一致
+#      （RR4-C6-I03）。
 #   7. notify.md Webhook `event` 取值枚举 vs handler notifyEvent* 常量全集
 #      （R7-M-01 常设门：文档自称列全的枚举与代码常量集 diff 必须为 ∅）。
 #   8. 超时预算登记表 vs 产品代码（R8 T-GATE 常设门：转跑
@@ -246,7 +248,13 @@ fi
 # ── 6. [known-pending] 默认账号字面量（F-064，§十一.4 待决策，只报告）
 seed_user=$(grep -oP '"\Kadmin@[^"]+' go-backend/internal/store/repo/repository.go | head -1)
 guide_user=$(grep -oP '默认账号 `\K[^`]+' doc/guide/getting-started.md | head -1 | awk '{print $1}')
-if [ -n "$seed_user" ] && [ -n "$guide_user" ] && [ "$seed_user" != "$guide_user" ]; then
+if [ -z "$seed_user" ] || [ -z "$guide_user" ]; then
+  # RR4-C6-I03：提取为空属前提失效——旧实现落入 else 分支打印
+  # 「OK: 默认账号字面量一致：（空）」，提取失效伪装成一致。
+  # 本项的不一致处置仍是 known-pending 只报告，但前提失效必须
+  # 点名硬红（与 §7/§15 提取失败同口径），不得伪装 OK。
+  note_fail "默认账号字面量检查前提失效：提取为空（seed=${seed_user:-（空）}、guide=${guide_user:-（空）}），请人工复核"
+elif [ "$seed_user" != "$guide_user" ]; then
   note_pend "guide 默认账号为 $guide_user，seed 为 $seed_user（改文档还是改 seed 待用户决策）"
 else
   echo "OK:   默认账号字面量一致：$guide_user"
@@ -384,8 +392,13 @@ else
 fi
 
 # ── 11. panel_install.sh SCRIPT_VERSION 字面量门（L2-30）
-sv_count=$(grep -c '^SCRIPT_VERSION="' panel_install.sh)
-sv_value=$(grep -o '^SCRIPT_VERSION="[^"]*"' panel_install.sh | head -n1 | sed 's/^SCRIPT_VERSION="//; s/"$//')
+# 提取口径与 check-script-version-bump.sh 的 stamp_at 统一
+# （RR4-C6-I01）：认 ^SCRIPT_VERSION= 前缀行、值剥可选双引号。
+# 旧口径本项只数带引号行、无引号的第二行不入计数，而 bump 门
+# 把它当印记行处理——两门盲区互补，第二定义可双双逃逸；统一
+# 后任何第二行 SCRIPT_VERSION= 定义（带不带引号）都使计数为 2。
+sv_count=$(grep -c '^SCRIPT_VERSION=' panel_install.sh)
+sv_value=$(grep -m1 '^SCRIPT_VERSION=' panel_install.sh | sed 's/^SCRIPT_VERSION=//; s/^"//; s/"$//')
 if [ "$sv_count" != "1" ]; then
   note_fail "SCRIPT_VERSION 门：panel_install.sh 中定义应恰一处，实数 $sv_count"
 elif ! printf '%s' "$sv_value" | grep -qE '^[0-9]{8}\.[0-9]{2}$'; then
