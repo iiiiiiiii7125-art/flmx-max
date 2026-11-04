@@ -296,6 +296,12 @@ export function RemoteSourcesSection({
       toast.success(
         keepNodes ? "已删除订阅源，节点保留" : "已删除订阅源和它的节点",
       );
+      // RR4-C5-01：删源命中订阅引用时，后端在信封 warning 里点名受影响
+      // 订阅（network.ts 合同：must be surfaced, never silently dropped）。
+      // 与 kernel-panel 安装面同口径长时透出，不得只报固定成功文案。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
       setDraft(null);
       await onChanged();
     } finally {
