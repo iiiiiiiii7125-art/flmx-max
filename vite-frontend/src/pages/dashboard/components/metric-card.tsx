@@ -21,7 +21,7 @@ export const MetricCard = ({
   bottomContent,
 }: MetricCardProps) => {
   return (
-    <div className="flex flex-col justify-between gap-3 bg-content1 p-4 lg:p-5">
+    <div className="flex flex-col justify-between gap-3 glass-card p-4 lg:p-5">
       <div className="flex items-center justify-between">
         <p className="truncate text-sm font-medium text-foreground">
           {title}

@@ -1959,6 +1959,89 @@ check(
       "#111111",
 );
 
+// ── 实色面登记（R4-S1-02）────────────────────────────────
+// 机制谓词：静止态不透明浅实色填充充当页面/弹窗内面板。globals.css
+// 自述口径钉死：--content1 只作小型表单控件的填充（输入框、原生
+// select、选择触发器），永不作表面；弹窗内板走 glass-inset、卡片
+// 走 glass-card/glass-surface。此前 content1 准入名单无仓库内门禁，
+// 仪表盘指标条（metric-card 的 bg-content1 白板面）与节点卸载确认
+// 内板（confirm-modals 的 bg-default-50）自诞生起无门可拦——本轮
+// 两面均已按玻璃口径整改（glass-card / glass-inset），不登记为
+// 实色豁免。本段把剩余全集钉册：bg-content1 逐文件计数与下表恰
+// 等（新增文件、计数漂移即红，登记时须逐处分类为控件填充；表面
+// 用途不得登记、必须改玻璃层）；bg-default-50 登记集为空（该
+// token 的任何出现都须先登记分类；bg-default-500/10 是另一
+// token 的已批准洗色，不在本段口径内）。
+const SOLID_FILL_PINS = {
+  // 控件填充：输入框/文本域本体
+  "components/ui/input.tsx": 1,
+  "components/ui/textarea.tsx": 1,
+  // 控件填充：选择触发器（桥接 Select 的触发面与内嵌输入）
+  "shadcn-bridge/heroui/select.tsx": 2,
+  // 控件填充：次级按钮面（ui 按钮变体）
+  "components/ui/button.tsx": 1,
+  // 控件填充：搜索框 inputWrapper 与页面搜索标签
+  "components/search-bar.tsx": 1,
+  "components/page-kit.tsx": 1,
+  "pages/user.tsx": 1,
+  // 控件填充：原生 select / 输入（页面级小控件）
+  "pages/inbound.tsx": 1,
+  "pages/inbound/target-picker.tsx": 1,
+  "pages/subscription.tsx": 4,
+  "pages/subscription/rename-rules.tsx": 1,
+  "pages/config/gist-backup.tsx": 1,
+  "pages/node/tune-modal.tsx": 1,
+  // 控件填充：模板页两处原生 select（templates 与 builder 的
+  // selectCls）——R4-S1-02 点名一并登记，属控件口径、非表面。
+  "pages/subscription/templates.tsx": 1,
+  "pages/subscription/template-builder.tsx": 1,
+};
+{
+  const solidFound = { "bg-content1": {}, "bg-default-50": {} };
+  const solidWalk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        solidWalk(path);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        const text = readFileSync(path, "utf8");
+        const rel = path
+          .slice(join(here, "..", "src").length + 1)
+          .split("\\")
+          .join("/");
+
+        for (const token of Object.keys(solidFound)) {
+          const n = [...text.matchAll(new RegExp(`${token}(?!\\d)`, "g"))].length;
+
+          if (n > 0) solidFound[token][rel] = n;
+        }
+      }
+    }
+  };
+
+  solidWalk(join(here, "..", "src"));
+  const solidDrift = [];
+
+  for (const [file, pin] of Object.entries(SOLID_FILL_PINS)) {
+    const got = solidFound["bg-content1"][file] ?? 0;
+
+    if (got !== pin) solidDrift.push(`bg-content1 ${file} 实扫 ${got} 处（钉数 ${pin}）`);
+  }
+  for (const [file, got] of Object.entries(solidFound["bg-content1"])) {
+    if (!(file in SOLID_FILL_PINS))
+      solidDrift.push(`bg-content1 ${file} 实扫 ${got} 处（无登记——须分类为控件填充后登记，表面用途改玻璃层）`);
+  }
+  for (const [file, got] of Object.entries(solidFound["bg-default-50"])) {
+    solidDrift.push(`bg-default-50 ${file} 实扫 ${got} 处（登记集为空——静止实色内板须改 glass-inset 或先登记分类）`);
+  }
+  check(
+    `实色面登记差集 ∅（bg-content1 钉册 ${Object.values(SOLID_FILL_PINS).reduce((a, b) => a + b, 0)} 处控件填充、bg-default-50 登记 0 处）`,
+    solidDrift.length === 0,
+    solidDrift.slice(0, 5).join("；"),
+  );
+}
+
 if (failures.length > 0) {
   console.log(`\n${failures.length} 项断言失败`);
   process.exit(1);

@@ -38,7 +38,7 @@ function UninstallAgentOption({
   onValueChange: (value: boolean) => void;
 }) {
   return (
-    <div className="space-y-1 rounded-xl border border-default-200 bg-default-50 px-3 py-2.5">
+    <div className="space-y-1 rounded-xl border border-default-200 glass-inset px-3 py-2.5">
       <Checkbox
         isSelected={isSelected}
         size="sm"
