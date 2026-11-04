@@ -459,6 +459,18 @@ EOF
     pin)
       case "$cell" in
         P001) [ "$(go_const_s idemWaitTimeout "$HANDLER_DIR")" = "$be_s" ] || fail "$tag idemWaitTimeout 漂移（登记 ${be_s}s）" ;;
+        P003)
+          [ "$(go_const_s nodeTuneProbeTimeout "$HANDLER_DIR")" = "$be_s" ] || fail "$tag 面板 probe 界 nodeTuneProbeTimeout 漂移（登记 ${be_s}s）"
+          # R4-C2-D-01：probe 链序对账。登记链序 agent(~25s) < FE < panel：
+          # FE 的 nodeTune 导出对全部动作恒用同一字面值（T019 提取面），
+          # 该值必须严格小于本格面板 probe 界，否则前端先于面板截断、
+          # 链序与登记相反。FE 值经提取面机械取，不硬编码；提取非
+          # 字面量即 fail-closed（链序无从对账）。
+          read -r _p3k _p3x <<EOF
+$(fe_extract nodeTune)
+EOF
+          [ "$_p3k" = "literal" ] || fail "$tag FE nodeTune 提取非字面量（${_p3k}），probe 链序无法对账，fail-closed"
+          [ "$(gt_ok "$be_s" "$_p3x")" = 1 ] || fail "$tag probe 链序反转：FE nodeTune ${_p3x}s 不小于面板 probe 界 ${be_s}s（登记链序 agent < FE < panel）" ;;
         P002)
           j="$(go_const_s addServiceGuardJoinTimeout "$HANDLER_DIR")"; d="$(go_const_s defaultNodeCommandTimeout "$HANDLER_DIR")"
           [ "$(awk -v a="$j" -v b="$d" 'BEGIN{ print a+b }')" = "$be_s" ] || fail "$tag guard join 界漂移：${j}+${d} ≠ 登记 ${be_s}s" ;;

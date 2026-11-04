@@ -84,12 +84,19 @@ func validateReferenceHostDispatch(ref string) error {
 const nodeTuneTimeout = 30 * time.Second
 
 // nodeTuneProbeTimeout is the panel->agent timeout for probe only.
-// Frontend allows 120s for the probe call; the agent's own caps bound
-// a real probe to ~25s worst case (10s speed test + 3x2s reference
-// dials + 5s sock_diag read timeout + overhead), so 90s is headroom
-// for loaded nodes / WS queueing, not the binding constraint, and it
-// stays below the frontend 120s so the frontend never cuts first:
-// agent caps (~25s) < panel probe (90s) < frontend (120s).
+// The agent's own caps bound a real probe to ~25s worst case (10s
+// speed test + 3x2s reference dials + 5s sock_diag read timeout +
+// overhead). The frontend nodeTune export uses a single 40s literal
+// for every action and the current tune dialog sends no probe call
+// at all, so no frontend leg bounds this action today; if a probe
+// call is ever re-wired through that export, the frontend would cut
+// at 40s, still above the agent cap. The 90s here is therefore
+// panel-side headroom for loaded nodes / WS queueing, not the
+// binding constraint: agent caps (~25s) < frontend (40s) < panel
+// probe (90s). scripts/check-timeout-budgets.sh (P003 pin branch)
+// reconciles the extracted FE 40s against this constant, so the
+// ordering cannot silently invert. (R4-C2-D-01: an earlier version
+// of this comment claimed a frontend 120s that never existed.)
 // Status/apply/restore keep the 30s B2 timeout.
 const nodeTuneProbeTimeout = 90 * time.Second
 
