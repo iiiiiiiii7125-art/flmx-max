@@ -85,7 +85,10 @@ func TestR2B8ImportFullRestoreKeepsSpeedRefs(t *testing.T) {
 	backup := &model.BackupData{
 		Version: "1.0",
 		Users: []model.UserBackup{
-			{ID: 1, User: "u1", Pwd: "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012", RoleID: 1, Status: 1, CreatedTime: now},
+			// R1-06-L1：id=1 行须为管理员（RoleID 0）——与自家导出
+			// 备份的恒定形状一致；写成普通用户会触发导入管理员守卫
+			// 整单拒绝（id=1 降权覆盖），与本例主题（限速引用）无关。
+			{ID: 1, User: "u1", Pwd: "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012", RoleID: 0, Status: 1, CreatedTime: now},
 		},
 		Tunnels: []model.TunnelBackup{
 			{ID: 1, Name: "t1", TrafficRatio: 1, Flow: 1, Status: 1, CreatedTime: now},
