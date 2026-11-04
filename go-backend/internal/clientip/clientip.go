@@ -50,7 +50,7 @@ const UnresolvedKey = "unresolved"
 // 部署亦可在 .env 显式覆盖。非标准拓扑（直连、单跳反代）按实际
 // 跳数设置，见部署文档（doc/guide/install.md 登录限流一节）。
 func TrustedProxyHops() int {
-	raw := strings.TrimSpace(config.GetEnvAny("FLMX_TRUSTED_PROXY_HOPS", "FLVX_TRUSTED_PROXY_HOPS"))
+	raw := strings.TrimSpace(config.Getenv("FLMX_TRUSTED_PROXY_HOPS"))
 	if raw == "" {
 		return 1
 	}

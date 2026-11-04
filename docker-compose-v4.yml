@@ -13,8 +13,7 @@ services:
       DB_PATH: /app/data/gost.db
       DATABASE_URL: ${DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET}
-      FLMX_WEBAUTHN_ORIGIN: ${FLMX_WEBAUTHN_ORIGIN:-${FLVX_WEBAUTHN_ORIGIN:-}}
-      FLVX_WEBAUTHN_ORIGIN: ${FLVX_WEBAUTHN_ORIGIN:-}
+      FLMX_WEBAUTHN_ORIGIN: ${FLMX_WEBAUTHN_ORIGIN:-}
       SERVER_ADDR: :6365
       # R6-L8-F-01: 本模板的默认拓扑是 Caddy → 前端 nginx → 后端，
       # 链上共两跳，可信代理跳数默认即 2（否则登录限流键会收敛到

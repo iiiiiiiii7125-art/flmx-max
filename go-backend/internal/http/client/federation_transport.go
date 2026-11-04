@@ -74,7 +74,7 @@ func federationIsPrivateIP(ip net.IP) bool {
 // federationPrivateAllowlist 解析与 SecureFetch 相同的放行配置
 // （FLMX_FETCH_PRIVATE_ALLOWLIST，逗号分隔 CIDR 或单 IP）。
 func federationPrivateAllowlist() []*net.IPNet {
-	raw := config.GetEnvAny("FLMX_FETCH_PRIVATE_ALLOWLIST", "FLVX_FETCH_PRIVATE_ALLOWLIST")
+	raw := config.Getenv("FLMX_FETCH_PRIVATE_ALLOWLIST")
 	if raw == "" {
 		return nil
 	}
@@ -103,7 +103,7 @@ func federationPrivateAllowlist() []*net.IPNet {
 }
 
 func federationPrivateAllowed(ip net.IP) bool {
-	if config.GetEnvAny("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "FLVX_FETCH_ALLOW_PRIVATE_NETWORKS") == "true" {
+	if config.Getenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS") == "true" {
 		return true
 	}
 	if ip4 := ip.To4(); ip4 != nil {

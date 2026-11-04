@@ -45,7 +45,7 @@ func TestR7C01GistRawURLDoesNotCarryToken(t *testing.T) {
 	}))
 	defer apiSrv.Close()
 	t.Setenv("FLMX_GIST_API_BASE", apiSrv.URL)
-	t.Setenv("FLVX_GIST_API_BASE", "")
+	t.Setenv("FLMX_GIST_API_BASE", "")
 
 	got, _, err := gistVersionContent(context.Background(), r7GistToken, "g1", "v1", "")
 	if err != nil {
@@ -92,7 +92,7 @@ func TestR7C01GistRawURLHardDenyAndUserinfo(t *testing.T) {
 	}))
 	defer apiSrv.Close()
 	t.Setenv("FLMX_GIST_API_BASE", apiSrv.URL)
-	t.Setenv("FLVX_GIST_API_BASE", "")
+	t.Setenv("FLMX_GIST_API_BASE", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -149,7 +149,7 @@ func TestR7C01GistRedirectToHardDenyBlocked(t *testing.T) {
 	}))
 	defer apiSrv.Close()
 	t.Setenv("FLMX_GIST_API_BASE", apiSrv.URL)
-	t.Setenv("FLVX_GIST_API_BASE", "")
+	t.Setenv("FLMX_GIST_API_BASE", "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

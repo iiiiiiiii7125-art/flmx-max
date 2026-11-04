@@ -2233,9 +2233,9 @@ uninstall_flmx_agent_host_cleanup() {
   return 0
 }
 
-# R2-F7-I02: 解析 agent 服务定义中配置的内核目录覆盖（FLMX_KERNEL_DIR，
-# 旧名前缀 FLVX_KERNEL_DIR 兜底；与 agent 侧 ResolveBaseDir 的优先级
-# 一致：FLMX_ 优先、同名以最后赋值为准）。来源只限本服务自己的
+# R2-F7-I02: 解析 agent 服务定义中配置的内核目录覆盖（FLMX_KERNEL_DIR；
+# 旧名前缀 FLVX_KERNEL_DIR 的双读已随 agent 侧 ResolveBaseDir 于
+# 1.9.10 一并退场，本函数只认新名、同名以最后赋值为准）。来源只限本服务自己的
 # systemd 单元文件与 systemctl edit 落盘的 drop-in 覆盖文件
 # （<单元>.d/*.conf）——脚本形态下该变量只经这两处进入 agent 进程
 # 环境（见 doc/guide/install.md「内核目录覆盖」节）。无配置输出空。
@@ -2249,9 +2249,6 @@ configured_kernel_dir_for() {
   local dir=""
   # files 是本函数拼的服务定义文件清单，须词分割成多个 grep 参数。
   dir=$(grep -hoE 'FLMX_KERNEL_DIR=[^[:space:]]+' $files 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d "\"'")
-  if [[ -z "$dir" ]]; then
-    dir=$(grep -hoE 'FLVX_KERNEL_DIR=[^[:space:]]+' $files 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d "\"'")
-  fi
   printf '%s' "${dir%/}"
 }
 

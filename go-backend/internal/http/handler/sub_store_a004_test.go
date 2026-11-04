@@ -43,7 +43,7 @@ func decodeEnvelopeCode(t *testing.T, body []byte) int {
 
 // 无认证连续请求被限流（11 次后 429），且限流桶独立于 login。
 func TestA004_SubStoreRateLimitedIndependently(t *testing.T) {
-	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
+	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "1")
 	resetSubStoreLimiterForTest()
 	resetLoginLimitersForTest()
 	h := newSubStoreTestHandler(t)

@@ -76,12 +76,12 @@ func TestValidateMonitorTCPTarget(t *testing.T) {
 
 // AUDIT-R2 (F1X-001): allowlist 放行通道回归测试。
 func TestValidateMonitorTCPTargetAllowlist(t *testing.T) {
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "10.9.0.0/16")
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "10.9.0.0/16")
 	if err := ValidateMonitorTCPTarget("10.9.1.2:80"); err != nil {
 		t.Fatalf("allowlisted IP 被拒绝: %v", err)
 	}
 	if err := ValidateMonitorTCPTarget("10.10.1.2:80"); err == nil {
 		t.Fatal("非 allowlist 私网 IP 被放行")
 	}
-	os.Unsetenv("FLVX_FETCH_PRIVATE_ALLOWLIST")
+	os.Unsetenv("FLMX_FETCH_PRIVATE_ALLOWLIST")
 }

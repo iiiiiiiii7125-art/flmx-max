@@ -30,14 +30,12 @@ func Path(p string) string {
 
 // exemptPrefixEnv 是 path 段掩码的豁免配置：逗号分隔的路径前缀，
 // 命中前缀的 URL 不做段掩码（例如确知某 CDN 路径段是公开资源 ID
-// 且排障需要原文时）。双读新旧名与全仓改名约定一致。
+// 且排障需要原文时）。只读新名 FLMX_ 前缀：旧名 FLVX_ 双读已于
+// 1.9.10 退场。
 const exemptPrefixEnv = "LOG_REDACT_EXEMPT_PREFIXES"
 
 func exemptPathPrefixes() []string {
 	raw := os.Getenv("FLMX_" + exemptPrefixEnv)
-	if raw == "" {
-		raw = os.Getenv("FLVX_" + exemptPrefixEnv)
-	}
 	if raw == "" {
 		return nil
 	}

@@ -8,9 +8,7 @@ import "testing"
 
 func TestR2B1MonitorHardDenyBeforeAllowlist(t *testing.T) {
 	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
-	t.Setenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS", "")
 	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "0.0.0.0/0")
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "")
 	for _, target := range []string{
 		"169.254.169.254:80", "169.254.0.23:80", "0.0.0.0:80", "100.100.100.200:80", "[fd00:ec2::254]:80",
 	} {
@@ -26,9 +24,7 @@ func TestR2B1MonitorHardDenyBeforeAllowlist(t *testing.T) {
 
 func TestR2B1MonitorNAT64Forms(t *testing.T) {
 	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "")
-	t.Setenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS", "")
 	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "")
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "")
 	for _, target := range []string{
 		"[64:ff9b::a9fe:a9fe]:80", // NAT64 内嵌元数据
 		"[64:ff9b::a00:1]:80",     // NAT64 内嵌 10.0.0.1

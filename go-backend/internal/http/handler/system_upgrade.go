@@ -2905,7 +2905,7 @@ func wrapUpgradeDownloadError(err error) error {
 		return nil
 	}
 	if strings.Contains(err.Error(), "private network not allowlisted") {
-		return fmt.Errorf("%v（提示：GitHub 代理地址解析为内网/回环地址，被安全下载策略拒绝；如确为可信自建代理，请在面板部署环境设置 FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true 或 FLMX_FETCH_PRIVATE_ALLOWLIST（旧名 FLVX_* 亦可）后重试）", err)
+		return fmt.Errorf("%v（提示：GitHub 代理地址解析为内网/回环地址，被安全下载策略拒绝；如确为可信自建代理，请在面板部署环境设置 FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true 或 FLMX_FETCH_PRIVATE_ALLOWLIST 后重试）", err)
 	}
 	return err
 }

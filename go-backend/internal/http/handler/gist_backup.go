@@ -52,8 +52,8 @@ import (
 //   - 导出用 ExportAllContext（绑定 ctx，X-P3-25 口径），而非上游的
 //     ExportAll()；内容与手动全量导出一致（空 types = 全量）。
 //   - 文件名与描述用 FLMX 品牌（flmx-backup.json / FLMX 面板备份）。
-//   - API 基址环境变量为 FLMX_GIST_API_BASE（FLVX_GIST_API_BASE 仅
-//     作兼容回落），默认 https://api.github.com。
+//   - API 基址环境变量为 FLMX_GIST_API_BASE（旧名 FLVX_GIST_API_BASE
+//     的双读已于 1.9.10 退场），默认 https://api.github.com。
 //   - 三个端点仅管理员可用（isAdminRequest）：配置页对任意已登录用户
 //     开放，而 Gist 令牌是管理员凭据；上游未设此限。
 //   - 令牌/密码绝不进日志、不进响应：status 只给 tokenHint；
@@ -97,9 +97,6 @@ var (
 // gistAPIBase 返回 GitHub API 基址；测试用环境变量指向 mock 服务。
 func gistAPIBase() string {
 	if v := strings.TrimRight(strings.TrimSpace(os.Getenv("FLMX_GIST_API_BASE")), "/"); v != "" {
-		return v
-	}
-	if v := strings.TrimRight(strings.TrimSpace(os.Getenv("FLVX_GIST_API_BASE")), "/"); v != "" {
 		return v
 	}
 	return "https://api.github.com"

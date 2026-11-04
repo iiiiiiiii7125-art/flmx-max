@@ -71,7 +71,7 @@ func isMetadataAddress(ip net.IP) bool {
 
 // getPrivateAllowlist 解析 FLMX_FETCH_PRIVATE_ALLOWLIST（逗号分隔的 CIDR）。
 func getPrivateAllowlist() []*net.IPNet {
-	raw := config.GetEnvAny("FLMX_FETCH_PRIVATE_ALLOWLIST", "FLVX_FETCH_PRIVATE_ALLOWLIST")
+	raw := config.Getenv("FLMX_FETCH_PRIVATE_ALLOWLIST")
 	if raw == "" {
 		return nil
 	}
@@ -104,7 +104,7 @@ func getPrivateAllowlist() []*net.IPNet {
 // isPrivateAllowed 检查 IP 是否被 allowlist 放行。
 func isPrivateAllowed(ip net.IP) bool {
 	// 全局开关。
-	if config.GetEnvAny("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "FLVX_FETCH_ALLOW_PRIVATE_NETWORKS") == "true" {
+	if config.Getenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS") == "true" {
 		return true
 	}
 	// CIDR allowlist。

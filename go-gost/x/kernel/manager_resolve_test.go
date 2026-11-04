@@ -30,15 +30,16 @@ func TestResolveBaseDirEnvOverrideWins(t *testing.T) {
 	if got := ResolveBaseDir(); got != "/pinned/kernels" {
 		t.Fatalf("FLMX_KERNEL_DIR must win over the container fallback, got %q", got)
 	}
+	// 1.9.10 起旧名 FLVX_KERNEL_DIR 双读退场：只设旧名必须被忽略，
+	// 回落容器形态的工作目录根。
 	t.Setenv("FLMX_KERNEL_DIR", "")
-	if got := ResolveBaseDir(); got != "/legacy/kernels" {
-		t.Fatalf("legacy FLVX_KERNEL_DIR must still be honored, got %q", got)
+	if got := ResolveBaseDir(); got != filepath.Join("/data", "kernels") {
+		t.Fatalf("retired FLVX_KERNEL_DIR must be ignored, got %q", got)
 	}
 }
 
 func TestResolveBaseDirContainerFallsBackToWorkDir(t *testing.T) {
 	t.Setenv("FLMX_KERNEL_DIR", "")
-	t.Setenv("FLVX_KERNEL_DIR", "")
 	stubKernelResolution(t, true, "/etc/flmx_agent", nil)
 	want := filepath.Join("/etc/flmx_agent", "kernels")
 	if got := ResolveBaseDir(); got != want {
@@ -48,7 +49,6 @@ func TestResolveBaseDirContainerFallsBackToWorkDir(t *testing.T) {
 
 func TestResolveBaseDirScriptFormDefaultUnchanged(t *testing.T) {
 	t.Setenv("FLMX_KERNEL_DIR", "")
-	t.Setenv("FLVX_KERNEL_DIR", "")
 	stubKernelResolution(t, false, "/anywhere", nil)
 	if got := ResolveBaseDir(); got != defaultBaseDir {
 		t.Fatalf("script form root changed: got %q want %q", got, defaultBaseDir)
@@ -64,7 +64,6 @@ func TestResolveBaseDirScriptFormDefaultUnchanged(t *testing.T) {
 // install.sh 迁移整目录后新根随目录一并到达。
 func TestResolveBaseDirScriptFormLayoutWorkDir(t *testing.T) {
 	t.Setenv("FLMX_KERNEL_DIR", "")
-	t.Setenv("FLVX_KERNEL_DIR", "")
 	for _, wd := range []string{"/etc/flmx_agent", "/etc/flux_agent"} {
 		stubKernelResolution(t, false, wd, nil)
 		want := filepath.Join(wd, "kernels")
@@ -76,7 +75,6 @@ func TestResolveBaseDirScriptFormLayoutWorkDir(t *testing.T) {
 
 func TestResolveBaseDirContainerBadWorkDirFallsBackToDefault(t *testing.T) {
 	t.Setenv("FLMX_KERNEL_DIR", "")
-	t.Setenv("FLVX_KERNEL_DIR", "")
 	stubKernelResolution(t, true, "", errors.New("no cwd"))
 	if got := ResolveBaseDir(); got != defaultBaseDir {
 		t.Fatalf("unusable working directory must fall back to the default root, got %q", got)

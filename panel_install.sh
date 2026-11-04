@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261104.10"
+SCRIPT_VERSION="20261105.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -54,7 +54,7 @@ self_update_check() {
   if [ "${FLMX_SELF_UPDATE_HOPS:-0}" != "0" ]; then
     return 0
   fi
-  if [ "${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}" != "1" ]; then
+  if [ "${FLMX_VERIFY_DOWNLOADS:-1}" != "1" ]; then
     echo "⚠️ 下载校验未开启，跳过脚本自更新（不执行未校验的新脚本）"
     return 0
   fi
@@ -2122,14 +2122,14 @@ validate_panel_update_environment() {
 }
 
 # R5-B5B D19: 安全下载（带 .sha256 校验，缺失即拒）。
-# FLMX_VERIFY_DOWNLOADS=0 可跳过（过渡期），默认开启；旧名 FLVX_VERIFY_DOWNLOADS 仍兼容。
+# FLMX_VERIFY_DOWNLOADS=0 可跳过，默认开启；旧名 FLVX_VERIFY_DOWNLOADS 的双读已于 1.9.10 退场。
 # F-138: 边角组合收紧为 fail-closed——仅显式 "0" 可关闭校验（误填
 # true/yes 等不再静默跳过）；缺少 sha256sum 时拒绝（否则空 .sha256 与
 # 空 actual 会 ""=="" 误判通过）；.sha256 内容必须是 64 位十六进制。
 download_verified() {
   local url="$1"
   local dest="$2"
-  local verify="${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}"
+  local verify="${FLMX_VERIFY_DOWNLOADS:-1}"
 
   # R8-J-A: 本体与下方 .sha256 均加有界重试——旧实现单次尝试，
   # 镜像瞬时故障即整次操作终止（校验腿失败还会删掉已下好的本体）。
@@ -2209,7 +2209,7 @@ download_verified() {
 # 锚一并跳过（显式逃生口，不是静默降级）。
 corroborate_download_anchor() {
   local url="$1" dest="$2" winner="$3"
-  local verify="${FLMX_VERIFY_DOWNLOADS:-${FLVX_VERIFY_DOWNLOADS:-1}}"
+  local verify="${FLMX_VERIFY_DOWNLOADS:-1}"
   if [ "$verify" = "0" ]; then
     return 0
   fi

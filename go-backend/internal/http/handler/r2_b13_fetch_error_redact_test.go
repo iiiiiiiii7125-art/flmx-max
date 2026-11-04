@@ -30,13 +30,9 @@ const (
 // r2b13AllowPrivate 打开抓取私网放行（本机回环拨号用），测试后还原。
 func r2b13AllowPrivate(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "FLVX_FETCH_ALLOW_PRIVATE_NETWORKS"} {
-		os.Setenv(k, "true")
-		t.Cleanup(func() { os.Unsetenv(k) })
-	}
-	for _, k := range []string{"FLMX_FETCH_PRIVATE_ALLOWLIST", "FLVX_FETCH_PRIVATE_ALLOWLIST"} {
-		os.Unsetenv(k)
-	}
+	os.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
+	t.Cleanup(func() { os.Unsetenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS") })
+	os.Unsetenv("FLMX_FETCH_PRIVATE_ALLOWLIST")
 }
 
 // r2b13ClosedPort 返回一个刚释放的本机端口：拨号必然连接拒绝，
@@ -116,8 +112,8 @@ func TestR2B13_FetchErrorStripsTokenConnRefused(t *testing.T) {
 // "public http not allowed" 分类文案（IMP-007 的中文翻译靠它匹配）。
 func TestR2B13_FetchErrorStripsTokenPublicHTTP(t *testing.T) {
 	for _, k := range []string{
-		"FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "FLVX_FETCH_ALLOW_PRIVATE_NETWORKS",
-		"FLMX_FETCH_PRIVATE_ALLOWLIST", "FLVX_FETCH_PRIVATE_ALLOWLIST",
+		"FLMX_FETCH_ALLOW_PRIVATE_NETWORKS",
+		"FLMX_FETCH_PRIVATE_ALLOWLIST",
 	} {
 		os.Unsetenv(k)
 	}

@@ -74,7 +74,6 @@ func TestCoreSweepDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("FLMX_KERNEL_DIR", base)
-	t.Setenv("FLVX_KERNEL_DIR", "")
 
 	dirs := coreSweepDirs()
 	set := map[string]bool{}

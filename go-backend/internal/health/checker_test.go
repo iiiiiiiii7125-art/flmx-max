@@ -51,7 +51,7 @@ func (f *fakeCommander) SendCommand(nodeID int64, cmdType string, data interface
 func TestTCPHealthCheckViaMonitor(t *testing.T) {
 	// AUDIT-R2 (F1X-001): 本测试验证拨号机制，需实际连接 127.0.0.1。
 	// 显式通过 allowlist 放行 loopback（安全策略的默认拒绝由 TestValidateMonitorTCPTarget 覆盖）。
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -109,7 +109,7 @@ func TestTCPHealthCheckViaMonitor(t *testing.T) {
 func TestCheckerRunChecks(t *testing.T) {
 	// AUDIT-R2 (F1X-001): 本测试验证拨号机制，需实际连接 127.0.0.1。
 	// 显式通过 allowlist 放行 loopback（安全策略的默认拒绝由 TestValidateMonitorTCPTarget 覆盖）。
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	r, err := repo.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open repo: %v", err)
@@ -254,7 +254,7 @@ func TestCheckerUnsupportedType(t *testing.T) {
 func TestCheckerDefaultTimeout(t *testing.T) {
 	// AUDIT-R2 (F1X-001): 本测试验证拨号机制，需实际连接 127.0.0.1。
 	// 显式通过 allowlist 放行 loopback（安全策略的默认拒绝由 TestValidateMonitorTCPTarget 覆盖）。
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)

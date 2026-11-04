@@ -31,7 +31,7 @@ func loginReqWithXFF(remoteAddr, xff string) *http.Request {
 // 场景 1+4：伪造最左 XFF 不得产生新桶；直连时忽略 XFF。
 // pre-fix（旧取最左实现）：第 11 次仍放行（红）。
 func TestA001_SpoofedLeftmostXFFDoesNotEvadeIPLimit(t *testing.T) {
-	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
+	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "1")
 	resetLoginLimitersForTest()
 	h := &Handler{}
 
@@ -55,7 +55,7 @@ func TestA001_SpoofedLeftmostXFFDoesNotEvadeIPLimit(t *testing.T) {
 
 // 场景 4：公网直连时 XFF 必须被忽略。
 func TestA001_DirectConnectionIgnoresXFF(t *testing.T) {
-	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
+	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "1")
 	got := loginClientIP(loginReqWithXFF("203.0.113.5:1234", "1.2.3.4"))
 	if got == nil || got.String() != "203.0.113.5" {
 		t.Fatalf("direct connection: got %v, want 203.0.113.5 (XFF must be ignored)", got)
@@ -70,13 +70,13 @@ func TestA001_TrustedProxyHops(t *testing.T) {
 	// run==0 fail-closed 改严、误伤默认单跳拓扑，现按对端类型判别
 	// 恢复原期望；自填轮换的封堵只针对公网直连对端（见
 	// TestA001_DirectConnectionIgnoresXFF 与 C02 验收 1）。
-	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
+	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "1")
 	got := loginClientIP(loginReqWithXFF("127.0.0.1:1", "198.51.100.9"))
 	if got.String() != "198.51.100.9" {
 		t.Fatalf("hops=1: got %v, want 198.51.100.9", got)
 	}
 
-	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "2")
+	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "2")
 	// Caddy→nginx→backend：XFF="client, caddy"，取最左
 	// R24-X-01 夹具修正：代理条目须落在可信范围（本例用私网 IP），
 	// 否则链长估计无法将其确认为代理追加（见 trustedXFFChainLen）；
@@ -92,7 +92,7 @@ func TestA001_TrustedProxyHops(t *testing.T) {
 // （单条形态在当时一律 fail-closed）；收窄后单跳单条即合法形态，
 // 恢复原始单条用例行使同一批 parseIPLiteral 路径，断言强度不变。
 func TestA001_XFFParsingRobustness(t *testing.T) {
-	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
+	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "1")
 	cases := []struct {
 		name string
 		xff  string

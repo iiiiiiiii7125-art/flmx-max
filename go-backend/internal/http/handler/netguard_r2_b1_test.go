@@ -14,17 +14,13 @@ import (
 func clearFetchEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "")
-	t.Setenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS", "")
 	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "")
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "")
 }
 
 func allowFetchEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
-	t.Setenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS", "")
 	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "")
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "")
 }
 
 // R2X-001：普通转发策略——非公网全拒、硬拒先行。

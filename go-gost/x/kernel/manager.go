@@ -100,9 +100,10 @@ func probeKernelContainer() bool {
 
 // ResolveBaseDir resolves the kernel state root:
 //
-//  1. FLMX_KERNEL_DIR, then legacy FLVX_KERNEL_DIR, when set —
-//     explicit configuration always wins. The container image pins
-//     FLMX_KERNEL_DIR to the data volume for exactly this reason.
+//  1. FLMX_KERNEL_DIR, when set — explicit configuration always
+//     wins. The container image pins FLMX_KERNEL_DIR to the data
+//     volume for exactly this reason. (The legacy FLVX_KERNEL_DIR
+//     fallback read retired in 1.9.10.)
 //  2. In the container form, <working directory>/kernels: the
 //     entrypoint pins the working directory to the mounted data
 //     directory that also holds config.json, so kernel binaries,
@@ -119,9 +120,6 @@ func probeKernelContainer() bool {
 //  4. defaultBaseDir — the current layout's root.
 func ResolveBaseDir() string {
 	dir := strings.TrimSpace(os.Getenv("FLMX_KERNEL_DIR"))
-	if dir == "" {
-		dir = strings.TrimSpace(os.Getenv("FLVX_KERNEL_DIR"))
-	}
 	if dir != "" {
 		return dir
 	}

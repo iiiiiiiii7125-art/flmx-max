@@ -11,9 +11,7 @@ import (
 
 func TestR2B1FederationNAT64AndMetadataHardDeny(t *testing.T) {
 	t.Setenv("FLMX_FETCH_ALLOW_PRIVATE_NETWORKS", "")
-	t.Setenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS", "")
 	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "")
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "")
 	deny := []string{
 		"64:ff9b::a9fe:a9fe",   // NAT64 内嵌 169.254.169.254
 		"64:ff9b::a00:1",       // NAT64 内嵌 10.0.0.1
@@ -37,7 +35,6 @@ func TestR2B1FederationNAT64AndMetadataHardDeny(t *testing.T) {
 
 func TestR2B1FederationAliyunMetadataHardBeforeAllowlist(t *testing.T) {
 	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "100.64.0.0/10")
-	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "")
 	if err := validateFederationIPs("t.test", []net.IP{net.ParseIP("100.100.100.200")}); err == nil {
 		t.Fatal("100.100.100.200 must be hard-denied even when CGNAT is allowlisted")
 	}

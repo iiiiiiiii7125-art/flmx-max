@@ -5,31 +5,41 @@ import (
 	"testing"
 )
 
-// FLMX 改名兼容：存量部署的 FLVX_* 环境变量必须继续生效（新名优先）。
-func TestRenameCompatLegacyEnvFallback(t *testing.T) {
+// FLMX 改名过渡退场（1.9.10）：FLVX_* 旧名双读已经摘除——只设旧名
+// 时各消费面必须回落缺省行为，新名 FLMX_* 是唯一生效来源。存量部署
+// 须在升级前把 FLVX_* 键改名为 FLMX_*（见 doc/guide/upgrade.md）。
+func TestRenameCompatLegacyEnvRetired(t *testing.T) {
 	t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "3")
-	if got := TrustedProxyHops(); got != 3 {
-		t.Fatalf("legacy FLVX_TRUSTED_PROXY_HOPS ignored: got %d", got)
+	if got := TrustedProxyHops(); got == 3 {
+		t.Fatalf("retired FLVX_TRUSTED_PROXY_HOPS must be ignored: got %d", got)
 	}
 	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "2")
 	if got := TrustedProxyHops(); got != 2 {
-		t.Fatalf("FLMX_TRUSTED_PROXY_HOPS must win over legacy: got %d", got)
+		t.Fatalf("FLMX_TRUSTED_PROXY_HOPS must be honored: got %d", got)
 	}
 
 	t.Setenv("FLVX_FETCH_PRIVATE_ALLOWLIST", "10.0.0.0/8")
-	if !isPrivateAllowed(net.ParseIP("10.1.2.3")) {
-		t.Fatal("legacy FLVX_FETCH_PRIVATE_ALLOWLIST ignored")
+	if isPrivateAllowed(net.ParseIP("10.1.2.3")) {
+		t.Fatal("retired FLVX_FETCH_PRIVATE_ALLOWLIST must be ignored")
 	}
 	t.Setenv("FLVX_FETCH_ALLOW_PRIVATE_NETWORKS", "true")
-	if !isPrivateAllowed(net.ParseIP("192.168.1.1")) {
-		t.Fatal("legacy FLVX_FETCH_ALLOW_PRIVATE_NETWORKS ignored")
+	if isPrivateAllowed(net.ParseIP("192.168.1.1")) {
+		t.Fatal("retired FLVX_FETCH_ALLOW_PRIVATE_NETWORKS must be ignored")
+	}
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "10.0.0.0/8")
+	if !isPrivateAllowed(net.ParseIP("10.1.2.3")) {
+		t.Fatal("FLMX_FETCH_PRIVATE_ALLOWLIST must be honored")
 	}
 
-	// Passkey Origin：存量 .env 里的 FLVX_WEBAUTHN_ORIGIN 必须继续被读到，
-	// 否则升级后 Passkey 入口整体消失（1.0.9 踩过的同类坑）。
+	// Passkey Origin：只设旧名 FLVX_WEBAUTHN_ORIGIN 时必须读不到，
+	// 只设新名时必须读到。
 	t.Setenv("FLVX_WEBAUTHN_ORIGIN", "https://panel.example.test")
+	if _, origin := passkeyConfig(); origin == "https://panel.example.test" {
+		t.Fatalf("retired FLVX_WEBAUTHN_ORIGIN must be ignored: origin=%q", origin)
+	}
+	t.Setenv("FLMX_WEBAUTHN_ORIGIN", "https://panel.example.test")
 	if _, origin := passkeyConfig(); origin != "https://panel.example.test" {
-		t.Fatalf("legacy FLVX_WEBAUTHN_ORIGIN ignored: origin=%q", origin)
+		t.Fatalf("FLMX_WEBAUTHN_ORIGIN must be honored: origin=%q", origin)
 	}
 }
 

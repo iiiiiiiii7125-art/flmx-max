@@ -1144,8 +1144,8 @@ func TestAuthPeerAllowedIPs(t *testing.T) {
 
 	for idx, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("FLVX_FEDERATION_TRUSTED_PROXIES", tt.trustedProxiesEnv)
-			t.Setenv("FLVX_TRUSTED_PROXY_HOPS", "1")
+			t.Setenv("FLMX_FEDERATION_TRUSTED_PROXIES", tt.trustedProxiesEnv)
+			t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "1")
 			token := fmt.Sprintf("share-token-%d", idx)
 			if err := r.CreatePeerShare(&repo.PeerShare{
 				Name:           "share-" + tt.name,

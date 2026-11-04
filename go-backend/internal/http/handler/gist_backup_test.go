@@ -171,7 +171,7 @@ func newMockGistServer(t *testing.T, handler func(w http.ResponseWriter, r *http
 	}))
 	t.Cleanup(m.server.Close)
 	t.Setenv("FLMX_GIST_API_BASE", m.server.URL)
-	t.Setenv("FLVX_GIST_API_BASE", "")
+	t.Setenv("FLMX_GIST_API_BASE", "")
 	return m
 }
 
@@ -709,7 +709,7 @@ func TestGistVersionContentForRestoreReuse(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("FLMX_GIST_API_BASE", srv.URL)
-	t.Setenv("FLVX_GIST_API_BASE", "")
+	t.Setenv("FLMX_GIST_API_BASE", "")
 	ctx := context.Background()
 
 	got, encrypted, err := gistVersionContent(ctx, "test-token-1234567890", "gist-v-id", "ver-plain", "")

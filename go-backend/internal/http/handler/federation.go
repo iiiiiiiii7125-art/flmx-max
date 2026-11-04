@@ -2847,7 +2847,7 @@ func federationClientIP(r *http.Request) net.IP {
 // federationTrustedProxyCIDRs 解析 FLMX_FEDERATION_TRUSTED_PROXIES。
 // 未配置或解析失败时返回空（= 默认只用 RemoteAddr）。
 func federationTrustedProxyCIDRs() []*net.IPNet {
-	raw := strings.TrimSpace(config.GetEnvAny("FLMX_FEDERATION_TRUSTED_PROXIES", "FLVX_FEDERATION_TRUSTED_PROXIES"))
+	raw := strings.TrimSpace(config.Getenv("FLMX_FEDERATION_TRUSTED_PROXIES"))
 	if raw == "" {
 		return nil
 	}
