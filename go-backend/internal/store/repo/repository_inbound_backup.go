@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sort"
+	"strconv"
 	"strings"
 
 	"go-backend/internal/kernel"
@@ -596,6 +598,144 @@ func findReusableSeedDefaultTx(tx *gorm.DB) (int64, error) {
 	return seed.ID, nil
 }
 
+// parseBackupRefIDList parses a comma-separated subscription reference
+// list (inbound_ids / source_ids) with the save surface's parseIDList
+// acceptance: positive ids only, deduplicated, first-seen order; junk
+// tokens are ignored.
+func parseBackupRefIDList(s string) []int64 {
+	var out []int64
+	seen := map[int64]bool{}
+	for _, part := range strings.Split(s, ",") {
+		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err == nil && id > 0 && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// formatBackupRefIDList renders ids in the save surface's stored form
+// (ascending, comma-joined — formatIDList's shape).
+func formatBackupRefIDList(ids []int64) string {
+	sorted := append([]int64(nil), ids...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	parts := make([]string, len(sorted))
+	for i, id := range sorted {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	return strings.Join(parts, ",")
+}
+
+// filterBackupRefIDList reconciles one subscription reference list
+// against the ids that actually exist at restore time (RR4-F1-01 /
+// RR4-F4-01): dangling ids are dropped and returned for the receipt;
+// a list with nothing dangling restores verbatim.
+func filterBackupRefIDList(raw string, valid map[int64]bool) (kept string, dropped []int64) {
+	ids := parseBackupRefIDList(raw)
+	if len(ids) == 0 {
+		return raw, nil
+	}
+	surviving := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if valid[id] {
+			surviving = append(surviving, id)
+		} else {
+			dropped = append(dropped, id)
+		}
+	}
+	if len(dropped) == 0 {
+		return raw, nil
+	}
+	return formatBackupRefIDList(surviving), dropped
+}
+
+// backupOptionsChainSourceIDs collects every source id a subscription
+// Options blob references through its chain slots (landing/relay lists
+// and the per-source filter keys).
+func backupOptionsChainSourceIDs(raw string) []int64 {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &top); err != nil {
+		return nil
+	}
+	var out []int64
+	for _, key := range []string{"chainLandingSources", "chainRelaySources"} {
+		rawList, ok := top[key]
+		if !ok {
+			continue
+		}
+		var ids []int64
+		if err := json.Unmarshal(rawList, &ids); err == nil {
+			out = append(out, ids...)
+		}
+	}
+	if rawFilters, ok := top["chainSourceFilters"]; ok {
+		var filters map[int64]string
+		if err := json.Unmarshal(rawFilters, &filters); err == nil {
+			for id := range filters {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
+// existingIDSetTx batch-checks which candidate ids exist in one table
+// inside the import transaction.
+func existingIDSetTx(tx *gorm.DB, modelPtr interface{}, candidates map[int64]bool) (map[int64]bool, error) {
+	out := make(map[int64]bool, len(candidates))
+	if len(candidates) == 0 {
+		return out, nil
+	}
+	ids := make([]int64, 0, len(candidates))
+	for id := range candidates {
+		ids = append(ids, id)
+	}
+	for _, chunk := range chunkInt64IDs(ids) {
+		var found []int64
+		if err := tx.Model(modelPtr).Where("id IN ?", chunk).Pluck("id", &found).Error; err != nil {
+			return nil, err
+		}
+		for _, id := range found {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+
+// subscriptionRefUniverseTx resolves the source/inbound existence sets
+// subscription references are reconciled against (RR4-F1-01 /
+// RR4-F4-01): judged on the transaction's state at subscription
+// landing time, so rows restored earlier in this same import and
+// pre-existing target rows both count as existing (the save surface's
+// existence semantics), while rows skipped by this import and ids
+// that never existed do not.
+func subscriptionRefUniverseTx(tx *gorm.DB, subs []model.SubscriptionBackup) (sources, inbounds map[int64]bool, err error) {
+	srcCandidates := map[int64]bool{}
+	inbCandidates := map[int64]bool{}
+	for _, sb := range subs {
+		for _, id := range parseBackupRefIDList(sb.SourceIDs) {
+			srcCandidates[id] = true
+		}
+		for _, id := range parseBackupRefIDList(sb.InboundIDs) {
+			inbCandidates[id] = true
+		}
+		for _, id := range backupOptionsChainSourceIDs(sb.Options) {
+			srcCandidates[id] = true
+		}
+	}
+	if sources, err = existingIDSetTx(tx, &model.RemoteSource{}, srcCandidates); err != nil {
+		return nil, nil, err
+	}
+	if inbounds, err = existingIDSetTx(tx, &model.NodeInbound{}, inbCandidates); err != nil {
+		return nil, nil, err
+	}
+	return sources, inbounds, nil
+}
+
 func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (inboundImportCounts, error) {
 	kernelRepointed := int64(0)
 	invalidShareHosts := 0
@@ -1143,6 +1283,93 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			CreatedTime: u.CreatedTime,
 		})
 	}
+	// RR4-F1-01 / RR4-F4-01：订阅行自身的引用对账。源与入站都可被
+	// 同批跳过（源 URL 空标签、入站内核/节点缺失）、备份也可携从未
+	// 存在的幽灵 id——此前订阅行逐字落库，悬空引用渲染时静默丢
+	// 节点、且该订阅下次 UI 保存被保存面硬拒直至手动摘引用。存在
+	// 集以本事务此刻表状态为准（subscriptionRefUniverseTx），剔除
+	// 与披露口径同模板槽位（remapTemplateRefs）。
+	validSourceIDs, validInboundIDs, err := subscriptionRefUniverseTx(tx, subs)
+	if err != nil {
+		return inboundImportCounts{}, err
+	}
+	// remapChainSourceRefs processes only the Options chain-by-source
+	// slots, mirroring remapTemplateRefs: entries naming a source that
+	// does not exist after this import are removed, and the removed
+	// source ids are returned for the receipt.
+	remapChainSourceRefs := func(raw string) (string, []int64) {
+		if strings.TrimSpace(raw) == "" {
+			return raw, nil
+		}
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &top); err != nil {
+			return raw, nil
+		}
+		var dropped []int64
+		changed := false
+		for _, key := range []string{"chainLandingSources", "chainRelaySources"} {
+			rawList, ok := top[key]
+			if !ok {
+				continue
+			}
+			var ids []int64
+			if err := json.Unmarshal(rawList, &ids); err != nil {
+				continue
+			}
+			kept := make([]int64, 0, len(ids))
+			keyChanged := false
+			for _, id := range ids {
+				if id > 0 && !validSourceIDs[id] {
+					dropped = append(dropped, id)
+					keyChanged = true
+					continue
+				}
+				kept = append(kept, id)
+			}
+			if !keyChanged {
+				continue
+			}
+			encoded, err := json.Marshal(kept)
+			if err != nil {
+				return raw, nil
+			}
+			top[key] = encoded
+			changed = true
+		}
+		if rawFilters, ok := top["chainSourceFilters"]; ok {
+			var filters map[int64]string
+			if err := json.Unmarshal(rawFilters, &filters); err == nil {
+				filtersChanged := false
+				for id := range filters {
+					if id > 0 && !validSourceIDs[id] {
+						delete(filters, id)
+						dropped = append(dropped, id)
+						filtersChanged = true
+					}
+				}
+				if filtersChanged {
+					encoded, err := json.Marshal(filters)
+					if err != nil {
+						return raw, nil
+					}
+					top["chainSourceFilters"] = encoded
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			return raw, nil
+		}
+		out, err := json.Marshal(top)
+		if err != nil {
+			return raw, nil
+		}
+		return string(out), dropped
+	}
+	danglingSubRefSubs := 0
+	danglingSourceRefCount := 0
+	danglingInboundRefCount := 0
+	var danglingSubRefDetails []string
 	for subIdx, sb := range subs {
 		if sb.Token == "" {
 			// R1 H-O2（随 X-P2-7 同批，V-23）：空 token 订阅跳过
@@ -1158,9 +1385,44 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if strings.TrimSpace(sb.GroupIDs) != "" {
 			subsWithGroupIDs++
 		}
+		// RR4-F1-01 / RR4-F4-01：落库前对账本行引用——剔除指向未
+		// 恢复源/入站的 SourceIDs、InboundIDs 与 Options 链式按源
+		// 引用（含 chainSourceFilters 键），受影响订阅循环后点名。
+		keptInboundIDs, droppedInboundRefs := filterBackupRefIDList(sb.InboundIDs, validInboundIDs)
+		keptSourceIDs, droppedSourceRefs := filterBackupRefIDList(sb.SourceIDs, validSourceIDs)
+		cleanOptions, droppedChainRefs := remapChainSourceRefs(remapTemplateRefs(sb.Options))
+		if len(droppedChainRefs) > 0 {
+			seenDropped := make(map[int64]bool, len(droppedSourceRefs))
+			for _, id := range droppedSourceRefs {
+				seenDropped[id] = true
+			}
+			for _, id := range droppedChainRefs {
+				if !seenDropped[id] {
+					seenDropped[id] = true
+					droppedSourceRefs = append(droppedSourceRefs, id)
+				}
+			}
+		}
+		if len(droppedSourceRefs) > 0 || len(droppedInboundRefs) > 0 {
+			danglingSubRefSubs++
+			danglingSourceRefCount += len(droppedSourceRefs)
+			danglingInboundRefCount += len(droppedInboundRefs)
+			label := sb.Name
+			if label == "" {
+				label = sb.Token
+			}
+			detail := fmt.Sprintf("「%s」", label)
+			if len(droppedSourceRefs) > 0 {
+				detail += fmt.Sprintf(" 源引用 %v", droppedSourceRefs)
+			}
+			if len(droppedInboundRefs) > 0 {
+				detail += fmt.Sprintf(" 入站引用 %v", droppedInboundRefs)
+			}
+			danglingSubRefDetails = append(danglingSubRefDetails, detail)
+		}
 		item := model.Subscription{
 			Name: sb.Name, Kind: sb.Kind, Token: sb.Token, UUID: sb.UUID, Password: sb.Password,
-			SourceAll: sb.SourceAll, InboundIDs: sb.InboundIDs, SourceIDs: sb.SourceIDs, Options: remapTemplateRefs(sb.Options), ExpireTime: sb.ExpireTime, Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
+			SourceAll: sb.SourceAll, InboundIDs: keptInboundIDs, SourceIDs: keptSourceIDs, Options: cleanOptions, ExpireTime: sb.ExpireTime, Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
 			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
 			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime, TrafficSince: sb.TrafficSince, PendingDelete: sb.PendingDelete,
 		}
@@ -1206,6 +1468,22 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 
 	if danglingTemplateRefs > 0 {
 		rep.warnf("备份恢复：%d 处订阅的模板引用指向不存在的模板，已剔除对应槽位（订阅改走内置渲染），请在订阅编辑中重新选择模板", danglingTemplateRefs)
+	}
+
+	if danglingSubRefSubs > 0 {
+		// RR4-F1-01 / RR4-F4-01：汇总 warning 点名受影响订阅与被剔除
+		// 的引用 id（前 10 条，超出以总数收尾，同 invalidInboundObjects
+		// 的截断口径）；计数与文本同源真计数。
+		details := danglingSubRefDetails
+		suffix := ""
+		if len(details) > 10 {
+			suffix = fmt.Sprintf(" 等共 %d 条订阅", len(details))
+			details = details[:10]
+		}
+		rep.warnf("备份恢复：%d 条订阅引用了未恢复的订阅源/入站，已剔除悬空引用 %d 处（源 %d、入站 %d）：%s%s，请在订阅编辑中按需重新选择",
+			danglingSubRefSubs, danglingSourceRefCount+danglingInboundRefCount,
+			danglingSourceRefCount, danglingInboundRefCount,
+			strings.Join(details, "、"), suffix)
 	}
 
 	// A3-04：订阅计数基线随恢复落位。订阅 id 先经 subRemap 按 token
