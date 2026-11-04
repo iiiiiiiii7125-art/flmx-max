@@ -1481,7 +1481,7 @@ legacy_flux_agent_service_status_hint() {
 # unit 后 mv 失败、或迁后判活失败，节点都停在「旧服务已摘、新
 # 服务未起」的离线态靠人工续。现全程可回滚：动手前先快照旧
 # unit 文件内容（回滚时逐字还原；旧服务只在册无落盘文件时按
-# 同模板重写），任一步失败即经 rollback_legacy_agent_migration
+# 同模板重写；快照本身失败则动手前中止，RA2-S-06），任一步失败即经 rollback_legacy_agent_migration
 # 把目录搬回原位、文件名改回旧名、恢复旧 unit 并拉起旧服务，
 # 终态点名回滚结果（已自动回滚／回滚亦失败需人工）。
 migrate_legacy_agent_install() {
@@ -1494,11 +1494,18 @@ migrate_legacy_agent_install() {
   if legacy_flux_agent_service_exists; then
     had_legacy_service=1
   fi
+  # RA2-S-06：unit 快照改 fail-closed——旧实现 mktemp/cp 失败只把
+  # 快照置空、迁移照常继续，此后回滚落到 write_legacy_flux_agent_
+  # service 的模板重写，人工改过的旧 unit 无法逐字还原且全程无
+  # 点名。旧 unit 文件在场（快照本可取）而取不到时，迁移必须在
+  # 动手前（停/摘旧服务之前）响亮中止。旧服务只在册、无落盘文
+  # 件的形态不在此列：那是同模板重写的既定口径，不属快照失败。
   if [[ -n "$legacy_unit_file" && -f "$legacy_unit_file" ]]; then
     legacy_unit_snapshot=$(mktemp) || legacy_unit_snapshot=""
-    if [[ -n "$legacy_unit_snapshot" ]] && ! cp -p "$legacy_unit_file" "$legacy_unit_snapshot"; then
-      rm -f "$legacy_unit_snapshot"
-      legacy_unit_snapshot=""
+    if [[ -z "$legacy_unit_snapshot" ]] || ! cp -p "$legacy_unit_file" "$legacy_unit_snapshot"; then
+      [[ -n "$legacy_unit_snapshot" ]] && rm -f "$legacy_unit_snapshot"
+      echo "❌ 旧服务单元文件快照失败（$legacy_unit_file），迁移已在动手前中止：无逐字快照时迁移一旦失败只能按模板重写旧 unit，人工改过的单元文件将无法还原。请检查临时目录空间与权限后重试"
+      return 1
     fi
   fi
   local dir_moved="" created_install_dir=""
