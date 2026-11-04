@@ -969,9 +969,15 @@ type ImportResult struct {
 	ForwardsImported     int `json:"forwardsImported"`
 	UserTunnelsImported  int `json:"userTunnelsImported"`
 	SpeedLimitsImported  int `json:"speedLimitsImported"`
-	TunnelGroupsImported int `json:"tunnelGroupsImported"`
-	UserGroupsImported   int `json:"userGroupsImported"`
-	PermissionsImported  int `json:"permissionsImported"`
+	// RR-S2-01：分组三件套（隧道分组/用户分组/分组权限）已于
+	// 1.9.6 整套移除，旧备份这三段永不落库——原字段名
+	// TunnelGroupsImported/UserGroupsImported/PermissionsImported
+	// 名实相反且计数器从未累加、恒为 0，与 InboundNodeGroupsIgnored
+	// （R3-S2-01）同病，现整族改名据实计数（与 ImportWarnings 的
+	// 文本披露同数）。前端未消费这三个字段。
+	TunnelGroupsIgnored int `json:"tunnelGroupsIgnored"`
+	UserGroupsIgnored   int `json:"userGroupsIgnored"`
+	PermissionsIgnored  int `json:"permissionsIgnored"`
 	ConfigsImported      int `json:"configsImported"`
 	InboundsImported     int `json:"inboundsImported"`
 	UserInboundsImported int `json:"userInboundsImported"`

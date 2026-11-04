@@ -197,9 +197,12 @@ func TestR5B5NestedPreDeleteSkipWarnings(t *testing.T) {
 			t.Fatalf("removed segment %s must be named in import warnings, got %v", seg, resultC.ImportWarnings)
 		}
 	}
-	if resultC.TunnelGroupsImported != 0 || resultC.UserGroupsImported != 0 || resultC.PermissionsImported != 0 {
-		t.Fatalf("removed segments must import zero rows, got %d/%d/%d",
-			resultC.TunnelGroupsImported, resultC.UserGroupsImported, resultC.PermissionsImported)
+	// RR-S2-01：三段不落库的条数改以 *Ignored 结构化字段据实回执
+	// （各 1 条，与上方 ImportWarnings 的文本披露同数）；旧
+	// *Imported 字段名实相反且恒为 0，已整族改名删除。
+	if resultC.TunnelGroupsIgnored != 1 || resultC.UserGroupsIgnored != 1 || resultC.PermissionsIgnored != 1 {
+		t.Fatalf("removed segments must be receipted as ignored counts 1/1/1, got %d/%d/%d",
+			resultC.TunnelGroupsIgnored, resultC.UserGroupsIgnored, resultC.PermissionsIgnored)
 	}
 
 	// 防过修对照：存量 chain 被备份 chain 完整重建（跳过=0）时不得

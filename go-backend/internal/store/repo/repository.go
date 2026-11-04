@@ -3136,17 +3136,23 @@ func rowExistsTx(tx *gorm.DB, model interface{}, id int64) (bool, error) {
 // BackupData fields survive only as decode shells, so the rows are
 // counted and named in the import warnings instead of being silently
 // dropped. Runs for every import that carries the segments, whatever
-// segment set the caller selected.
-func noteRemovedGroupSegments(backup *model.BackupData, rep *importReport) {
+// segment set the caller selected. Returns the per-segment row counts
+// so the caller can fill the receipt's *Ignored fields with the same
+// numbers the warnings disclose (RR-S2-01).
+func noteRemovedGroupSegments(backup *model.BackupData, rep *importReport) (tunnelGroups, userGroups, permissions int) {
 	if n := len(backup.TunnelGroups); n > 0 {
+		tunnelGroups = n
 		rep.warnf("备份恢复：隧道分组功能已移除，备份中的 tunnelGroups 段（%d 条）已忽略未恢复", n)
 	}
 	if n := len(backup.UserGroups); n > 0 {
+		userGroups = n
 		rep.warnf("备份恢复：用户分组功能已移除，备份中的 userGroups 段（%d 条）已忽略未恢复", n)
 	}
 	if n := len(backup.Permissions); n > 0 {
+		permissions = n
 		rep.warnf("备份恢复：分组权限功能已移除，备份中的 permissions 段（%d 条）已忽略未恢复", n)
 	}
+	return tunnelGroups, userGroups, permissions
 }
 
 func (r *Repository) Import(backup *model.BackupData, types []string) (*model.ImportResult, error) {
@@ -3190,8 +3196,9 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		// 分组三件套段披露：旧备份的 tunnelGroups/userGroups/
 		// permissions 段随功能移除不再落库，在回执中点名计数，
 		// 不静默丢（inbounds 段内的 nodeGroups/groupIds 同口径在
-		// importInbounds 内披露）。
-		noteRemovedGroupSegments(backup, rep)
+		// importInbounds 内披露）。计数同时写入回执的 *Ignored
+		// 结构化字段，与文本披露同数（RR-S2-01）。
+		result.TunnelGroupsIgnored, result.UserGroupsIgnored, result.PermissionsIgnored = noteRemovedGroupSegments(backup, rep)
 		// R4X-006：事务尾转发授权收口只裁定本次导入新落的行——先
 		// 快照 forwards 备份 id 在目标库的存量存在性，尾部清扫据此
 		// 区分「本次新落」与「存量行被刷新」（后者是目标库现行
