@@ -2825,6 +2825,84 @@ test_install_panel_waits_for_backend_health() (
     fail "R8-J-C: success block should be printed after the health gate passes"
 )
 
+# FX-D（R1-12-01）: 新装完成输出必须打印后端播种的一次性初始
+# 管理员口令（经后端容器实读数据卷→卷挂载点读
+# initial-admin-password.txt），且绝不再打印旧公开字面量口令；
+# 文件读不到时只给文件位置与 FLMX_ADMIN_PASSWORD 查法。
+test_install_panel_prints_generated_initial_admin_password() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work volmount
+  work=$(mktemp -d)
+  volmount=$(mktemp -d)
+  printf 'Xk9TestInitialPw123456\n' > "$volmount/initial-admin-password.txt"
+
+  ask_proxy_config() { :; }
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker compose"; return 0; }
+  get_config_params() {
+    FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+    DB_TYPE="sqlite"; DATABASE_URL=""; POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+    POSTGRES_PASSWORD="test-postgres-password"
+  }
+  get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
+  download_verified() {
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    return 0
+  }
+  wait_for_backend_healthy() { return 0; }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() {
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+      *" volume inspect "*) printf '%s' "$FXD_TEST_VOLMOUNT" ;;
+      *" inspect "*) printf 'flmx-sqlite-data' ;;
+    esac
+    return 0
+  }
+
+  # 第一相：一次性文件可读——完成输出必须含随机口令本体、点名
+  # 文件位置，且不得出现旧字面量口令对。
+  export FXD_TEST_VOLMOUNT="$volmount"
+  local rc="0" out_log
+  out_log="$work/with-file.log"
+  ( cd "$work" && install_panel >"$out_log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "FX-D: install_panel should succeed with a readable initial password file"
+  grep -q "Xk9TestInitialPw123456" "$out_log" || \
+    fail "FX-D: completion output must print the generated initial admin password read from the data volume"
+  grep -q "initial-admin-password.txt" "$out_log" || \
+    fail "FX-D: completion output must name the one-time initial password file location"
+  if grep -q "admin@user / admin@user" "$out_log"; then
+    fail "FX-D: completion output must never print the old public literal password"
+  fi
+
+  # 第二相：一次性文件缺失（环境指定路径）——只给查法指引，
+  # 仍不得出现旧字面量口令对。
+  local work2 volmount2
+  work2=$(mktemp -d)
+  volmount2=$(mktemp -d)
+  export FXD_TEST_VOLMOUNT="$volmount2"
+  rc="0"
+  out_log="$work2/no-file.log"
+  ( cd "$work2" && install_panel >"$out_log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "FX-D: install_panel should succeed when no initial password file exists"
+  grep -q "FLMX_ADMIN_PASSWORD" "$out_log" || \
+    fail "FX-D: without the one-time file the completion output must point at the FLMX_ADMIN_PASSWORD route"
+  grep -q "initial-admin-password.txt" "$out_log" || \
+    fail "FX-D: without the one-time file the completion output must still name the file location"
+  if grep -q "admin@user / admin@user" "$out_log"; then
+    fail "FX-D: fallback guidance must never print the old public literal password"
+  fi
+)
+
 # R9-03（菜单 1 面）: F-049 守卫的拒绝回执除提及变量外，必须写明
 # 强制重装的具体用法（终端命令形态＋选菜单 1），且点明首装半成
 # 品状态只能走此出口。旧回执只有「设置 … 后重试」的泛述、无命
@@ -4537,6 +4615,7 @@ test_update_panel_crosschecks_deployed_image_version
 test_install_flmx_agent_keeps_service_when_download_fails
 test_install_panel_refuses_existing_deployment
 test_install_panel_waits_for_backend_health
+test_install_panel_prints_generated_initial_admin_password
 test_install_docker_rejects_unverified_script
 test_install_docker_fallback_succeeds_with_working_package_managers
 test_install_docker_fallback_package_names_exist_in_repos

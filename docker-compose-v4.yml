@@ -14,6 +14,10 @@ services:
       DATABASE_URL: ${DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET}
       FLMX_WEBAUTHN_ORIGIN: ${FLMX_WEBAUTHN_ORIGIN:-}
+      # R1-12-01: optional operator-chosen initial admin password,
+      # consumed only when the admin account is first seeded.
+      FLMX_ADMIN_PASSWORD: ${FLMX_ADMIN_PASSWORD:-}
+      FLMX_WEBAUTHN_ORIGIN: ${FLMX_WEBAUTHN_ORIGIN:-}
       SERVER_ADDR: :6365
       # R6-L8-F-01: 本模板的默认拓扑是 Caddy → 前端 nginx → 后端，
       # 链上共两跳，可信代理跳数默认即 2（否则登录限流键会收敛到

@@ -1923,6 +1923,41 @@ panel_volume_file_exists() {
   [[ -f "$mountpoint/$relpath" ]]
 }
 
+# 卷内小文件读取：与 panel_volume_file_exists 同通道（卷挂载点、
+# 宿主机侧只读），读不到时输出空串、不报错。
+panel_volume_file_read() {
+  local volume="$1" relpath="$2" mountpoint=""
+  mountpoint=$(docker volume inspect -f '{{.Mountpoint}}' "$volume" 2>/dev/null || true)
+  [[ -n "$mountpoint" ]] || return 0
+  [[ -f "$mountpoint/$relpath" ]] || return 0
+  cat "$mountpoint/$relpath" 2>/dev/null || true
+}
+
+# FX-D（R1-12-01）：新装播种的管理员初始口令不再是公开字面量——
+# 后端播种时随机生成并写入数据卷内一次性文件
+# /app/data/initial-admin-password.txt（0600，容器内路径）。这里
+# 经后端容器实读其 /app/data 数据卷名、再经卷挂载点读出该文件，
+# 在安装完成输出中打印一次；读不到（装机时经环境变量
+# FLMX_ADMIN_PASSWORD 指定口令——该路径不落文件，或卷读面不可
+# 用）时只给文件位置与查法，绝不回退打印旧字面量口令。
+print_initial_admin_credentials() {
+  local backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  local volume="" initial_password=""
+  volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$backend_container" 2>/dev/null || true)
+  if [[ -n "$volume" ]]; then
+    initial_password=$(panel_volume_file_read "$volume" "initial-admin-password.txt")
+    initial_password=$(printf '%s' "$initial_password" | tr -d '[:space:]')
+  fi
+  echo "💡 默认管理员账号: admin@user"
+  if [[ -n "$initial_password" ]]; then
+    echo "🔑 初始管理员密码（随机生成、仅在本次安装输出中明文显示）: $initial_password"
+    echo "📄 该密码同时保存在后端数据卷的一次性文件 initial-admin-password.txt（容器内路径 /app/data/initial-admin-password.txt），首次登录修改密码后该文件自动删除、初始密码失效。"
+  else
+    echo "🔑 初始管理员密码未在此读出：若安装时设置了环境变量 FLMX_ADMIN_PASSWORD，初始密码即为该值；否则保存在后端数据卷的一次性文件 initial-admin-password.txt（容器内路径 /app/data/initial-admin-password.txt，后端启动日志会点名该路径，可用 docker logs $backend_container 查看）。"
+  fi
+  echo "⚠️  首次登录必须修改初始密码（改密完成前账号仅能访问改密页）！"
+}
+
 # 改名时把缺失的卷/网络/项目键钉为现行有效值：模板回退默认已翻
 # 为新名，无键存量若不钉值，重建时将按新回退挂空卷/建新网（数据
 # 还在旧卷、只是不可见）。有效值优先从真实容器实读（后端挂载的
@@ -3363,8 +3398,7 @@ EOF
   echo "🌐 访问地址: http://${_pub_ip}:$FRONTEND_PORT"
   echo "📖 部署完成后请阅读下使用文档，求求了啊，不要上去就是一顿操作"
   echo "📚 文档地址: https://iiiiiiiii7125-art.github.io/flmx-max/"
-  echo "💡 默认管理员账号: admin@user / admin@user"
-  echo "⚠️  登录后请立即修改默认密码！"
+  print_initial_admin_credentials
 
 
 }
