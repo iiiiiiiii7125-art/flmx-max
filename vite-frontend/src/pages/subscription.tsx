@@ -1654,12 +1654,12 @@ export default function SubscriptionPage() {
                 <ModalHeader className="flex flex-col gap-1">
                   <h2 className="text-lg font-bold break-all">{detail.name}</h2>
                   {detail.pendingDelete && (
-                    <p className="text-small font-semibold text-warning">
+                    <p className="text-small font-semibold text-warning-700">
                       删除中：凭据撤销下发尚未完成，完成后此订阅将自动消失
                     </p>
                   )}
                   {detail.meteringUnsupported && (
-                    <p className="text-small font-semibold text-warning">
+                    <p className="text-small font-semibold text-warning-700">
                       此订阅 ID
                       超出流量计量编码上限：其流量永不计量，流量限额也不会触发
                     </p>

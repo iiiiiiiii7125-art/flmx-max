@@ -1413,8 +1413,19 @@ const censusWalk = (dir) => {
           path,
         });
       }
-      if (/(?<![\w-])text-warning(?![-\w])/.test(text)) {
-        censusHits.push({ variant: "", fam: "warning", shade: "base", alpha: null, path });
+      // 裸语义文字类（无档位，如 text-warning）全族扫描（R4-S1-01）：
+      // 此前只硬编码探 text-warning 一族且 base 档在覆盖判定里无条件
+      // 放行，裸类遂逃逸全门——裸 token 不在 globals.css 玻璃覆盖块
+      // 的带档位枚举内，任何载体上都低于 4.5（见 censusCoverReason
+      // 的 base 判罚）。按 SEMANTIC_TEXT_FAMS 全集机械枚举，差集 ∅。
+      const bareRe = new RegExp(
+        `(?:(hover|focus|focus-visible|group-hover|dark):)?text-(${[...SEMANTIC_TEXT_FAMS].join("|")})(?![-\\w])`,
+        "g",
+      );
+      let bm;
+
+      while ((bm = bareRe.exec(text)) !== null) {
+        censusHits.push({ variant: bm[1] ?? "", fam: bm[2], shade: "base", alpha: null, path });
       }
     }
   }
@@ -1456,7 +1467,11 @@ const alphaGlassMin = (hex, alpha) => {
 const censusCoverReason = (h) => {
   if (!SEMANTIC_TEXT_FAMS.has(h.fam)) return "集外色族";
   if (!["", "hover", "focus"].includes(h.variant)) return "集外变体";
-  if (h.shade === "base") return null;
+  // 裸类（无档位）恒不覆盖（R4-S1-01）：globals.css 玻璃语境覆盖块
+  // 只枚举带档位类 .text-<fam>-500..900，裸类保留原始 token 色
+  // （如 --warning #d97706），在玻璃三停点×三底的每一格都 < 4.5、
+  // 在不透明面上也只有约 3.3——写法必须带档位，无登记豁免。
+  if (h.shade === "base") return "裸语义文字类（无档位）：不在玻璃覆盖块枚举内、任何载体均不达 4.5，须带档位";
   if (Number(h.shade) <= 500) return "浅档无玻璃覆盖块（-500 及以下）";
   if (h.alpha !== null) {
     if (h.shade !== "700") return "透明后缀仅 -700 玻璃渲染面已建模";
@@ -1489,7 +1504,7 @@ check(
   `仅扫到 ${censusSemantic.length} 处，扫描面疑似失效`,
 );
 check(
-  "语义文字类普查差集 ∅（集外色族/变体、浅档、未建模或合成不达标的透明后缀即红）",
+  "语义文字类普查差集 ∅（集外色族/变体、浅档、裸类无档位、未建模或合成不达标的透明后缀即红）",
   censusUncovered.length === 0,
   censusUncovered
     .slice(0, 5)
