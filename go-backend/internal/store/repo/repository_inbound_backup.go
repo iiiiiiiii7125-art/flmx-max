@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -354,14 +355,16 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // validateImportedInboundObjects 对备份入站的四整对象
 // （settings/transport/security/extra）跑保存面等价校验（R5X-024）：
 // 把备份原值解入 kernel.Inbound 副本后调用保存面共用的
-// kernel.Normalize。kernel_id>0 的自建入站落库用 Normalize 愈合后
-// 的三对象（settings/transport/security 的序列化形态）而非备份原文
-// ——验什么存什么（RR4-F2-01）：Normalize 对凭据类字段是生成而非
-// 拒绝（ENC secret、UUID、Reality 钥、密码缺失即补，auth/flow 仅
-// TrimSpace，SnellVersion 0 补默认），只取 error 做校验时这类靠愈合
-// 才合法的行会以未愈合形态落库（ENC 空 secret 行下发复检无感、
-// 订阅派生直接报错）。合法行经 Normalize 不变，愈合形态与其原文
-// 语义等价。kernel_id=0 的导入型入站没有内核上下文、不经
+// kernel.Normalize。kernel_id>0 的自建入站落库形态按对象裁定
+// （RR4-F2-01 与 R5X-024/R11X-001 护栏的收口形态）：Normalize 对
+// 凭据类字段是生成而非拒绝（ENC secret、UUID、Reality 钥、密码
+// 缺失即补，auth/flow 仅 TrimSpace，SnellVersion 0 补默认），只取
+// error 做校验时这类靠愈合才合法的行会以未愈合形态落库（ENC 空
+// secret 行下发复检无感、订阅派生直接报错）——被愈合改变的对象
+// 改落愈合后的序列化形态（验什么存什么）；Normalize 未触碰的对
+// 象逐字恢复备份原文（R5X-024 防过修护栏，含键序等字节形态），
+// Transport 仅 XHTTP mode 大小写差亦逐字（渲染侧自带归一，
+// R11X-001 护栏）。kernel_id=0 的导入型入站没有内核上下文、不经
 // Normalize，但其凭据与地址全在 Extra 承载的代理对象里，须经
 // 与 ParseImport 共用的同一谓词 kernel.ValidateImportedProxy 校验
 // （凭据列 R6X-008、地址列 R7X-003；只读校验副本，落库仍逐字恢复）。
@@ -512,22 +515,54 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 	if res.RowsAffected == 0 {
 		return settings, transport, security, nil // 存在性校验已在调用方跳过该行，此处 unreachable 兜底
 	}
+	// Snapshot the parsed objects so the healed copy can be diffed
+	// against them object by object below (Security's slices are
+	// cloned; Normalize only ever reassigns them, but the clone keeps
+	// the diff honest regardless).
+	beforeSettings, beforeTransport, beforeSecurity := vin.Settings, vin.Transport, vin.Security
+	beforeSecurity.ALPN = append([]string(nil), vin.Security.ALPN...)
+	beforeSecurity.RealityShortIDs = append([]string(nil), vin.Security.RealityShortIDs...)
 	if err := kernel.Normalize(krow.KernelType, &vin); err != nil {
 		return settings, transport, security, err
 	}
-	// RR4-F2-01：验什么存什么——三对象改以 Normalize 愈合后的副本
-	// 序列化形态落库（生成型凭据、TrimSpace、SnellVersion 默认均在
-	// 三对象内）。逐字原文只在上述未跑 Normalize 的路径保留。
-	if settings, err = marshalRestoredInboundObject(vin.Settings, i.Settings); err != nil {
-		return i.Settings, i.Transport, i.Security, err
+	// RR4-F2-01：验什么存什么——被愈合改变的对象改落其序列化形态
+	// （生成型凭据、TrimSpace、SnellVersion 默认均体现在差分里）；
+	// 未被触碰的对象与仅 XHTTP mode 大小写差的 Transport 逐字恢复
+	// （R5X-024 / R11X-001 护栏，见函数头注）。
+	if !reflect.DeepEqual(beforeSettings, vin.Settings) {
+		if settings, err = marshalRestoredInboundObject(vin.Settings, i.Settings); err != nil {
+			return i.Settings, i.Transport, i.Security, err
+		}
 	}
-	if transport, err = marshalRestoredInboundObject(vin.Transport, i.Transport); err != nil {
-		return i.Settings, i.Transport, i.Security, err
+	if transportHealedBeyondModeCase(beforeTransport, vin.Transport) {
+		if transport, err = marshalRestoredInboundObject(vin.Transport, i.Transport); err != nil {
+			return i.Settings, i.Transport, i.Security, err
+		}
 	}
-	if security, err = marshalRestoredInboundObject(vin.Security, i.Security); err != nil {
-		return i.Settings, i.Transport, i.Security, err
+	if !reflect.DeepEqual(beforeSecurity, vin.Security) {
+		if security, err = marshalRestoredInboundObject(vin.Security, i.Security); err != nil {
+			return i.Settings, i.Transport, i.Security, err
+		}
 	}
 	return settings, transport, security, nil
+}
+
+// transportHealedBeyondModeCase reports whether Normalize changed a
+// Transport in any way beyond the XHTTP mode's letter case. The mode
+// case is canonicalized by the render face itself
+// (canonicalXHTTPMode), so a case-only difference does not make the
+// row depend on healing and the backup spelling restores verbatim
+// (R11X-001 guardrail).
+func transportHealedBeyondModeCase(before, after kernel.Transport) bool {
+	if reflect.DeepEqual(before, after) {
+		return false
+	}
+	if before.Type == kernel.TransportXHTTP && after.Type == kernel.TransportXHTTP &&
+		after.Mode == strings.ToLower(before.Mode) {
+		before.Mode = after.Mode
+		return !reflect.DeepEqual(before, after)
+	}
+	return true
 }
 
 // inboundImportCounts carries the per-subsection landed-row counts of
@@ -930,8 +965,8 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		// R5X-024：四整对象落库前跑 Normalize 等价校验（校验副本，
 		// 见 validateImportedInboundObjects）——坏行整行跳过 + 计数，
 		// 汇总 warning 在入站循环后统一发（同 ShareHost 披露口径）。
-		// RR4-F2-01：自建入站落库用校验返回的愈合形态三对象（验什么
-		// 存什么），不再逐字落备份原文。
+		// RR4-F2-01：自建入站落库用校验返回的三对象形态——被愈合
+		// 改变的落愈合形态、未触碰的逐字（见 validateImportedInboundObjects）。
 		healedSettings, healedTransport, healedSecurity, validateErr := validateImportedInboundObjects(tx, i, listen, strategy)
 		if validateErr != nil {
 			err := validateErr
