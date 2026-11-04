@@ -691,6 +691,21 @@ func (h *Handler) planSingleTunnelDeleteForwardMigration(forward *forwardRecord,
 		return tunnelForwardMigrationPlan{}, retargetErr
 	}
 
+	// RR4-F3-01（BC-26 写面全集第六面）：迁移落库走 UpdateForwardTunnel
+	// （＋托管中转的 UpdateForward），不经 forwardUpdate 的策略门——
+	// 多目标 fifo/rand 迁入 realm 隧道后被 RenderRealm 静默改写为
+	// roundrobin，且迁入后经更新面改任何字段都会被门拦下、形成只进
+	// 不改的死角。与批量换隧道面同口径：plan 层以重算后的有效
+	// RemoteAddr 过 validateRealmForwardStrategy，命中即该条迁移
+	// 失败点名（单删/批删共用本 plan 链，两入口同覆）。
+	effectiveRemoteAddr := forward.RemoteAddr
+	if remoteAddrChanged {
+		effectiveRemoteAddr = newRemoteAddr
+	}
+	if err := validateRealmForwardStrategy(targetTunnel, effectiveRemoteAddr, forward.Strategy); err != nil {
+		return tunnelForwardMigrationPlan{}, err
+	}
+
 	return tunnelForwardMigrationPlan{
 		forward:           forward,
 		oldPorts:          oldPorts,
