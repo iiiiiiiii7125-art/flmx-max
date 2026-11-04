@@ -32,6 +32,10 @@
 // 同形。本轮改行为断言：以 TS AST 定位 updateBg 箭头函数、取其
 // 真实源码转译执行，条件恒假类变异必然翻红（已变异验活）。
 // ④环同批由 includes 存在钉改 AST 结构断言（求值数据结构本身）。
+// RR4-C6-04：②环原为规则块内文本 includes——绘制声明被整行注
+// 释、url 字符串留在规则体内时仍全绿（CSS 死以注释形态复
+// 现）。现改为剥注释后的声明级断言：目标消费必须以真实声明
+// （属性＋值）存在于规则体内，注释内的文本不构成满足点。
 //
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-wallpaper-chain.mjs
@@ -246,13 +250,85 @@ if (updateBgFactory) {
   }
 }
 
-// ② CSS 绘制环（globals.css）：按规则块提取后逐块断言消费面。
-const css = read("src/styles/globals.css");
+// ② CSS 绘制环（globals.css）：剥注释后按规则块提取、逐块做声
+// 明级断言（RR4-C6-04）。旧实现对规则块原文做 includes 文本判
+// 定——把绘制声明整行注释掉、url 字符串留在规则体内即全绿，
+// 「JS 活、CSS 死」以注释形态在 CSS 侧复现。现先词法剥除 CSS
+// 注释（字符串内容保留、注释逐字替空格，与 check-contrast 的
+// stripCssComments 同口径），再把规则体解析为声明列，断言目
+// 标消费以真实声明（属性名＋值）存在：注释掉的声明在剥离后不
+// 复存在、仅存于注释的值不构成满足点。
+const stripCssComments = (src) => {
+  const out = [];
+  const n = src.length;
+  let i = 0;
+  let quote = null;
+
+  while (i < n) {
+    const c = src[i];
+
+    if (quote) {
+      out.push(c);
+      if (c === "\\") {
+        out.push(src[i + 1] ?? "");
+        i += 2;
+        continue;
+      }
+      if (c === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      out.push("  ");
+      i += 2;
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
+        out.push(src[i] === "\n" ? "\n" : " ");
+        i++;
+      }
+      if (i < n) {
+        out.push("  ");
+        i += 2;
+      }
+      continue;
+    }
+    out.push(c);
+    i++;
+  }
+
+  return out.join("");
+};
+const css = stripCssComments(read("src/styles/globals.css"));
 const ruleBody = (selectorRe) => {
   const m = css.match(selectorRe);
 
   return m ? m[1] : "";
 };
+// 规则体 → 声明列 [{prop, value}]：按 ; 切分后逐条取首个冒号
+// 前的属性名与余下值（值内的冒号如 url(http:) 不影响属性判定）。
+const declarationsOf = (body) =>
+  body
+    .split(";")
+    .map((d) => {
+      const idx = d.indexOf(":");
+
+      if (idx < 0) return null;
+
+      return {
+        prop: d.slice(0, idx).trim().toLowerCase(),
+        value: d.slice(idx + 1).trim(),
+      };
+    })
+    .filter(Boolean);
+const hasDecl = (body, props, needle) =>
+  declarationsOf(body).some(
+    (d) => props.includes(d.prop) && d.value.includes(needle),
+  );
 const wallpaperRule = ruleBody(
   /:root\.has-wallpaper-bg\s+\.bg-mesh-gradient::before\s*\{([^}]*)\}/,
 );
@@ -264,19 +340,19 @@ const customBaseRule = ruleBody(
 );
 
 check(
-  "壁纸链②：globals.css has-wallpaper-bg 绘制规则引用 bg-light.jpg",
-  wallpaperRule.includes("url('/images/bg-light.jpg')"),
-  wallpaperRule ? "规则在但未引用内置壁纸图" : "规则缺失",
+  "壁纸链②：globals.css has-wallpaper-bg 绘制规则以 background 声明引用 bg-light.jpg（剥注释后声明级判定）",
+  hasDecl(wallpaperRule, ["background", "background-image"], "/images/bg-light.jpg"),
+  wallpaperRule ? "规则在但无生效的 background 声明引用内置壁纸图" : "规则缺失",
 );
 check(
-  "壁纸链②：globals.css has-custom-bg 绘制规则消费 --custom-bg-image",
-  customRule.includes("var(--custom-bg-image"),
-  customRule ? "规则在但未消费变量" : "规则缺失",
+  "壁纸链②：globals.css has-custom-bg 绘制规则以 background 声明消费 --custom-bg-image（剥注释后声明级判定）",
+  hasDecl(customRule, ["background", "background-image"], "var(--custom-bg-image"),
+  customRule ? "规则在但无生效的 background 声明消费变量" : "规则缺失",
 );
 check(
-  "壁纸链②：globals.css has-custom-bg 基座消费 --custom-bg-color",
-  customBaseRule.includes("var(--custom-bg-color"),
-  customBaseRule ? "规则在但未消费变量" : "规则缺失",
+  "壁纸链②：globals.css has-custom-bg 基座以 background 声明消费 --custom-bg-color（剥注释后声明级判定）",
+  hasDecl(customBaseRule, ["background", "background-color"], "var(--custom-bg-color"),
+  customBaseRule ? "规则在但无生效的 background 声明消费变量" : "规则缺失",
 );
 
 // ③ 资源环
