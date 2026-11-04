@@ -45,6 +45,8 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 
 脚本更新按版本感知执行：默认更新到最新正式版（测试版不参与默认更新）；需要定版时用 `VERSION=<版本号> ./panel_install.sh` 运行并选 `2`，会按指定版本更新。想跟进测试版时，用 `FLMX_RELEASE_CHANNEL=dev`（或 `beta`）再跑脚本，或显式 `VERSION=<测试版号>`。目标版本低于当前版本时会被**拒绝**（防降级，与面板内升级口径一致），同版本则按重装继续。当前版本以**后端容器实际运行的镜像版本**为准交叉核对：`.env` 记录与实际运行版本不一致时脚本会打印告警并按实际版本判定（取不到实际版本时才回退 `.env` 口径），防止 `.env` 被手改或停留在失败升级的目标版本时把降级误放行。
 
+**存量部署的容器改名（脚本升级流内默认执行）**：改名前部署的面板，容器名仍是旧名（后端 `flux-panel-backend`、PostgreSQL `flux-panel-postgres`、前端 `vite-frontend`），或部署 `.env` 里缺 `PANEL_BACKEND_CONTAINER` / `PANEL_FRONTEND_CONTAINER` / `PANEL_POSTGRES_CONTAINER` 任一身份键时，脚本升级会**默认**把容器改名为现行名（`flmx-panel-backend` / `flmx-panel-postgres` / `flmx-panel-frontend`，多实例部署带实例后缀）：停删将被改名的旧容器 → 把身份键写为现行名 → 按新名重建并做健康检查；健康检查不过时按既有升级回滚恢复旧 `.env` 与旧容器名。改名**只动容器名**：数据卷、网络与 Compose 项目名只有在 `.env` 缺键时才按实际在用值补写，已有值逐字不动，数据不迁移。容器名是手工自定义名（非旧缺省名、非现行名）的部署不触发改名，现行名部署零动作。不想改名时，运行脚本前设置环境变量 `PANEL_IDENTITY_RENAME=0`（如 `PANEL_IDENTITY_RENAME=0 ./panel_install.sh`）再走升级，该次升级保留旧容器名。**自检**：升级后在部署目录执行 `docker ps --format '{{.Names}}'` 应看到三个现行名容器在运行；`grep -E '^PANEL_(BACKEND|FRONTEND|POSTGRES)_CONTAINER=' .env` 三键应均为现行名。
+
 ## 指定版本
 
 到 [Releases](https://github.com/iiiiiiiii7125-art/flmx-max/releases) 找到目标版本，把下面命令里的 `<目标版本号>` 换成该版本号再执行（不要带着占位符原样执行）：

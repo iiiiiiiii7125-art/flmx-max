@@ -39,11 +39,11 @@ FLMX 默认使用 SQLite 作为数据库，同时支持 PostgreSQL：表结构�
 |--------|------|--------|
 | `POSTGRES_DB` | 数据库名称 | `flmx_panel` |
 | `POSTGRES_USER` | 数据库用户名 | `flmx_panel` |
-| `POSTGRES_PASSWORD` | 数据库密码 | `flux_panel_change_me` |
+| `POSTGRES_PASSWORD` | 数据库密码 | `flmx_panel_change_me` |
 
 > ⚠️ **安全提示**：生产环境中请务必修改 `POSTGRES_PASSWORD` 为强密码，不要使用默认值！
 
-> ⛔ **拒绝启动（1.2.0 起）**：后端启动时校验的是 **`DATABASE_URL` 里内嵌的口令**——该口令为空、等于默认值 `flux_panel_change_me` 或等于 `postgres` 时，后端**直接拒绝启动**并在日志里报错。后端从不读取 `POSTGRES_PASSWORD` 环境变量本身：只改 `POSTGRES_PASSWORD`、不改 `DATABASE_URL` 里的口令，照样会被拒绝启动，排障时请先核对 `DATABASE_URL`。上表「默认值」只是 compose 模板里的占位值，不能原样用于实际部署。另外，后端不会替你比对两者是否一致，`DATABASE_URL` 与 `POSTGRES_PASSWORD` 不一致时表现为数据库连接认证失败（28P01）。脚本一键迁移时若发现 `.env` 里的口令为空或仍是默认值，会自动生成随机口令并写回 `.env`（同时写入 `DATABASE_URL`）。
+> ⛔ **拒绝启动（1.2.0 起）**：后端启动时校验的是 **`DATABASE_URL` 里内嵌的口令**——该口令为空、等于占位默认值 `flmx_panel_change_me`（改名前的旧占位值 `flux_panel_change_me` 同样被拒）或等于 `postgres` 时，后端**直接拒绝启动**并在日志里报错。后端从不读取 `POSTGRES_PASSWORD` 环境变量本身：只改 `POSTGRES_PASSWORD`、不改 `DATABASE_URL` 里的口令，照样会被拒绝启动，排障时请先核对 `DATABASE_URL`。上表「默认值」只是 compose 模板里的占位值，不能原样用于实际部署。另外，后端不会替你比对两者是否一致，`DATABASE_URL` 与 `POSTGRES_PASSWORD` 不一致时表现为数据库连接认证失败（28P01）。脚本一键迁移时若发现 `.env` 里的口令为空或仍是默认值，会自动生成随机口令并写回 `.env`（同时写入 `DATABASE_URL`）。
 
 > 📌 **改名兼容**：改名前部署的存量 PostgreSQL，库名/用户名在数据卷初始化时已固化为 `flux_panel`，不随本次改名迁移、仍按原名连接；本文各命令中的 `flmx_panel` 对存量部署请按 `.env` 与 `DATABASE_URL` 的实际值（`flux_panel`）替换，新部署用 `flmx_panel`。
 

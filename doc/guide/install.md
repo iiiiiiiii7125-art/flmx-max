@@ -56,6 +56,8 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
   - **手工拼 Compose 部署必须在 `.env` 写全身份五键**：随版模板里容器/卷/网络名都是 `${PANEL_BACKEND_CONTAINER:-flmx-panel-backend}` 这类带回退值的引用，回退值与脚本安装写入的身份同为 flmx 名；脚本安装时会自动把身份（多实例时含实例后缀）写入部署 `.env`，手工部署漏写则起出来的全是无后缀的回退名资源，两套手工部署同机会直接撞名、不具隔离性。五键清单与各自取值见 postgresql.md §四注记（`PANEL_BACKEND_CONTAINER`、`PANEL_POSTGRES_CONTAINER`、`FLMX_SQLITE_VOLUME`、`FLMX_POSTGRES_VOLUME`、`FLMX_NETWORK`）。自检：在部署目录执行 `grep -cE '^(PANEL_BACKEND_CONTAINER|PANEL_POSTGRES_CONTAINER|FLMX_SQLITE_VOLUME|FLMX_POSTGRES_VOLUME|FLMX_NETWORK)=' .env`，结果应为 `5`。
 - **自检**：安装后在部署目录执行 `grep FLMX_INSTANCE .env` 应能看到实例键；`docker ps` 里该套面板的容器名都应带 `-<实例键>` 后缀；再到该面板的节点页生成一条 Docker 形态安装命令，命令里的容器名应为 `flmx-agent-<实例键>`、数据目录应为 `/etc/flmx_agent-<实例键>`。
 
+**改名前存量部署的容器名**：全新安装的容器名即为现行名（`flmx-panel-backend`、`flmx-panel-postgres`、`flmx-panel-frontend`）。改名前已部署的实例（旧名为 `flux-panel-backend`、`flux-panel-postgres`、`vite-frontend`）会在**脚本升级时被默认改名**为现行名——只改容器名，不动数据卷、网络与数据；不想改名可在升级前设 `PANEL_IDENTITY_RENAME=0` 关闭。触发条件、动作顺序与自检方法见 [升级 - 脚本升级](./upgrade.md#脚本升级)。
+
 ### 访问面板
 
 安装完成后，访问：
