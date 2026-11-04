@@ -35,6 +35,10 @@ func mustStoredHash(t *testing.T, r *repo.Repository, username string) string {
 // 修复前：handler.go 用「用户名或密码任一命中默认值字符串」现算标志，
 // 已改密但保留默认用户名的管理员每次登录被误报 → 本测试 FAIL。
 func TestLoginRequirePasswordChangeThreeWayConsistency(t *testing.T) {
+	// R1-12-01：播种口令不再是公开字面量（随机生成或环境指定）；
+	// 本例经 FLMX_ADMIN_PASSWORD 把夹具的种子口令声明为 admin@user，
+	// 继续钉「存储口令仍为种子初始口令 ⇔ 受限 token」三方一致性。
+	t.Setenv(repo.InitialAdminPasswordEnv, "admin@user")
 	r, err := repo.Open(filepath.Join(t.TempDir(), "panel.db"))
 	if err != nil {
 		t.Fatalf("open repo: %v", err)

@@ -25,6 +25,9 @@ var c15ReqSeq atomic.Uint32
 // 正向对照：换成真正的新密码仍可成功，且随后可用新密码登录。
 func TestR1C15UpdatePasswordSameValueRejected(t *testing.T) {
 	const secret = "c15-jwt-secret"
+	// R1-12-01：播种口令不再是公开字面量；本例经 FLMX_ADMIN_PASSWORD
+	// 把夹具的种子口令声明为 admin@user，继续钉同值改密拒绝口径。
+	t.Setenv("FLMX_ADMIN_PASSWORD", "admin@user")
 	router, r := setupContractRouter(t, secret)
 
 	post := func(path, token string, payload interface{}) response.R {

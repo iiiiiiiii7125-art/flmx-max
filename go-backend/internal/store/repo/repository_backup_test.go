@@ -10,6 +10,10 @@ import (
 )
 
 func TestSeedDataDefaultAdminUsesBcrypt(t *testing.T) {
+	// R1-12-01：播种口令不再是公开字面量；本例经 FLMX_ADMIN_PASSWORD
+	// 显式声明夹具口令值，继续钉「播种口令以 bcrypt（非 legacy MD5）
+	// 落库且可验」的原始意图。
+	t.Setenv(InitialAdminPasswordEnv, "admin@user")
 	r, err := Open(filepath.Join(t.TempDir(), "seed.db"))
 	if err != nil {
 		t.Fatalf("open repo: %v", err)

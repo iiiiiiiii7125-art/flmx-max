@@ -25,6 +25,9 @@ import (
 
 func TestCaptchaVerifyLoginContract(t *testing.T) {
 	secret := "contract-jwt-secret"
+	// R1-12-01：播种口令不再是公开字面量；经 FLMX_ADMIN_PASSWORD
+	// 把夹具的种子口令声明为 admin@user，本例的登录断言不变。
+	t.Setenv(repo.InitialAdminPasswordEnv, "admin@user")
 	router, r := setupContractRouter(t, secret)
 	verifiedToken := ""
 
