@@ -98,7 +98,7 @@ test_install_script_builds_canonical_download_url() (
     "install.sh should keep the canonical download URL (route prefixes apply at download time)"
 )
 
-test_update_flux_agent_downloads_without_prompt() (
+test_update_flmx_agent_downloads_without_prompt() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -108,11 +108,11 @@ test_update_flux_agent_downloads_without_prompt() (
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+  cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 echo "old version"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
 
   local cleanup_called="0"
 
@@ -162,29 +162,29 @@ EOF
     chmod +x "$output"
   }
 
-  update_flux_agent >/dev/null
+  update_flmx_agent >/dev/null
 
-  assert_equals "1" "$cleanup_called" "update_flux_agent should clean up legacy gost before restarting the agent"
-  assert_equals "$(build_download_url)" "$DOWNLOAD_URL" "update_flux_agent should build the canonical download URL"
+  assert_equals "1" "$cleanup_called" "update_flmx_agent should clean up legacy gost before restarting the agent"
+  assert_equals "$(build_download_url)" "$DOWNLOAD_URL" "update_flmx_agent should build the canonical download URL"
 )
 
-test_update_flux_agent_skips_proxy_prompt_when_not_installed() (
+test_update_flmx_agent_skips_proxy_prompt_when_not_installed() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
   INSTALL_DIR=$(mktemp -u)
 
   local rc="0"
-  update_flux_agent >/dev/null || rc="$?"
+  update_flmx_agent >/dev/null || rc="$?"
 
-  assert_equals "1" "$rc" "update_flux_agent should fail when the agent is not installed"
+  assert_equals "1" "$rc" "update_flmx_agent should fail when the agent is not installed"
 )
 
 # R8-J-B: 更新成功后必须打印与安装路径同口径的上线确认指引
 # （回面板确认节点在线 + journalctl 日志指针）——服务重启只证明
 # 进程已启动，不代表已连上面板。旧实现仅一行「更新完成」断言，
 # 本测试对旧代码为红。
-test_update_flux_agent_prints_online_confirmation_guidance() (
+test_update_flmx_agent_prints_online_confirmation_guidance() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -194,11 +194,11 @@ test_update_flux_agent_prints_online_confirmation_guidance() (
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+  cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 echo "old version"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
 
   ask_proxy_config() {
     PROXY_ENABLED="false"
@@ -243,12 +243,12 @@ EOF
 
   local out_log
   out_log=$(mktemp)
-  update_flux_agent >"$out_log" 2>&1
+  update_flmx_agent >"$out_log" 2>&1
 
   grep -q "更新完成" "$out_log" || fail "R8-J-B: update should still print its completion line"
   grep -q "节点管理" "$out_log" && grep -q "在线" "$out_log" || \
     fail "R8-J-B: update completion must tell the operator to confirm the node is online in the panel"
-  grep -q "journalctl -u flux_agent" "$out_log" || \
+  grep -q "journalctl -u flmx_agent" "$out_log" || \
     fail "R8-J-B: update completion must include the journalctl log pointer"
 )
 
@@ -256,7 +256,7 @@ EOF
 # fix3_health_test 同口径）：PID 稳定才活、第二次采样已死不活、
 # 两次 PID 不一致不活、PID 为 0/空不活。采样间隔 sleep 桩为空转，
 # 结果由桩的调用计数决定。
-test_flux_agent_health_ok_requires_stable_pid() (
+test_flmx_agent_health_ok_requires_stable_pid() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -272,12 +272,12 @@ test_flux_agent_health_ok_requires_stable_pid() (
   echo 99 > "$MAXOK_FILE"
 
   sleep() { :; }
-  flux_agent_main_pid() {
+  flmx_agent_main_pid() {
     local n
     n=$(cat "$STATE_DIR/pid_idx"); n=$((n+1)); echo "$n" > "$STATE_DIR/pid_idx"
     sed -n "${n}p" "$STATE_DIR/pids"
   }
-  flux_agent_service_is_active() {
+  flmx_agent_service_is_active() {
     local n maxok
     n=$(cat "$STATE_DIR/active_cnt"); n=$((n+1)); echo "$n" > "$STATE_DIR/active_cnt"
     maxok=$(cat "$MAXOK_FILE")
@@ -289,30 +289,30 @@ test_flux_agent_health_ok_requires_stable_pid() (
   }
 
   reset_health_state; echo 99 > "$MAXOK_FILE"
-  flux_agent_health_ok || fail "X-P2-11: stable PID + always active should be healthy"
+  flmx_agent_health_ok || fail "X-P2-11: stable PID + always active should be healthy"
 
   # 第二次采样时已死（flap 形态）
   reset_health_state; echo 1 > "$MAXOK_FILE"
-  if flux_agent_health_ok; then
+  if flmx_agent_health_ok; then
     fail "X-P2-11: service dead at second sample must not be healthy"
   fi
 
   # 两次 PID 不一致（期间已重启）
   reset_health_state; echo 99 > "$MAXOK_FILE"
   printf '1111\n2222\n' > "$STATE_DIR/pids"
-  if flux_agent_health_ok; then
+  if flmx_agent_health_ok; then
     fail "X-P2-11: PID changing between samples must not be healthy"
   fi
 
   # PID 为 0 / 空
   printf '0\n0\n' > "$STATE_DIR/pids"
   reset_health_state
-  if flux_agent_health_ok; then
+  if flmx_agent_health_ok; then
     fail "X-P2-11: PID 0 must not be healthy"
   fi
   : > "$STATE_DIR/pids"
   reset_health_state
-  if flux_agent_health_ok; then
+  if flmx_agent_health_ok; then
     fail "X-P2-11: empty PID must not be healthy"
   fi
 )
@@ -321,8 +321,8 @@ test_flux_agent_health_ok_requires_stable_pid() (
 # 此处以第二次 is-active 采样转失败模拟）走更新路径：必须判死、
 # 回滚到旧二进制且回滚后服务 active；.bak 已被回滚消费。
 # 正常二进制更新成功为防过修对照（见
-# test_update_flux_agent_asks_for_proxy_config 的成功路径）。
-test_update_flux_agent_rolls_back_flapping_binary() (
+# test_update_flmx_agent_asks_for_proxy_config 的成功路径）。
+test_update_flmx_agent_rolls_back_flapping_binary() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -332,14 +332,14 @@ test_update_flux_agent_rolls_back_flapping_binary() (
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
-  : > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
-  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
+  : > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+  cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
 echo "old good"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
 
   local state_dir
   state_dir=$(mktemp -d)
@@ -359,7 +359,7 @@ EOF
     case "$1" in
       start)
         echo 0 > "$STATE_DIR/active_cnt"
-        if grep -q FLAP_MARKER "$INSTALL_DIR/flux_agent"; then
+        if grep -q FLAP_MARKER "$INSTALL_DIR/flmx_agent"; then
           echo flap > "$STATE_DIR/mode"
         else
           echo good > "$STATE_DIR/mode"
@@ -376,7 +376,7 @@ EOF
         fi
         return 0 ;;
       list-units)
-        echo "flux_agent.service loaded active running"; return 0 ;;
+        echo "flmx_agent.service loaded active running"; return 0 ;;
       *) return 0 ;;
     esac
   }
@@ -399,13 +399,13 @@ sleep 4; exit 1'
   }
 
   local rc="0"
-  update_flux_agent >/dev/null 2>&1 || rc="$?"
+  update_flmx_agent >/dev/null 2>&1 || rc="$?"
   assert_equals "1" "$rc" "X-P2-11: flapping binary update should fail and roll back"
-  grep -q "old good" "$INSTALL_DIR/flux_agent" || \
+  grep -q "old good" "$INSTALL_DIR/flmx_agent" || \
     fail "X-P2-11: rollback should restore the old binary"
-  [[ ! -f "$INSTALL_DIR/flux_agent.bak" ]] || \
+  [[ ! -f "$INSTALL_DIR/flmx_agent.bak" ]] || \
     fail "X-P2-11: rollback should consume the .bak backup"
-  flux_agent_service_is_active || \
+  flmx_agent_service_is_active || \
     fail "X-P2-11: service should be active after rollback"
 )
 
@@ -424,21 +424,21 @@ agent_update_backup_fail_fixture() {
   FIXTURE_DIR=$(mktemp -d)
   INSTALL_DIR="$FIXTURE_DIR/agent"
   mkdir -p "$INSTALL_DIR"
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
-  : > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
-  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
+  : > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+  cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
 echo "old good"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
   if [[ "$mode" == "stale" ]]; then
-    cat > "$INSTALL_DIR/flux_agent.bak" <<'EOF'
+    cat > "$INSTALL_DIR/flmx_agent.bak" <<'EOF'
 #!/bin/bash
 if [[ "${1:-}" == "-V" ]]; then echo "gost 0.9.0 (go1.25 linux/amd64)"; exit 0; fi
 echo "stale good"
 EOF
-    chmod +x "$INSTALL_DIR/flux_agent.bak"
+    chmod +x "$INSTALL_DIR/flmx_agent.bak"
   fi
   STATE_DIR="$FIXTURE_DIR/state"
   mkdir -p "$STATE_DIR"
@@ -457,7 +457,7 @@ EOF
     case "$1" in
       start)
         echo 0 > "$STATE_DIR/active_cnt"
-        if grep -q FLAP_MARKER "$INSTALL_DIR/flux_agent"; then
+        if grep -q FLAP_MARKER "$INSTALL_DIR/flmx_agent"; then
           echo flap > "$STATE_DIR/mode"
         else
           echo good > "$STATE_DIR/mode"
@@ -474,7 +474,7 @@ EOF
         fi
         return 0 ;;
       list-units)
-        echo "flux_agent.service loaded active running"; return 0 ;;
+        echo "flmx_agent.service loaded active running"; return 0 ;;
       *) return 0 ;;
     esac
   }
@@ -505,18 +505,18 @@ sleep 4; exit 1'
   }
 
   local rc="0"
-  update_flux_agent > "$FIXTURE_DIR/out.log" 2>&1 || rc="$?"
+  update_flmx_agent > "$FIXTURE_DIR/out.log" 2>&1 || rc="$?"
   echo "$rc" > "$FIXTURE_DIR/rc"
   echo "$FIXTURE_DIR"
 }
 
-test_update_flux_agent_aborts_when_backup_fails() (
+test_update_flmx_agent_aborts_when_backup_fails() (
   set -euo pipefail
   local dir rc
   dir=$(agent_update_backup_fail_fixture nostale)
   rc=$(cat "$dir/rc")
   assert_equals "1" "$rc" "R9-02: update must abort when the backup copy fails"
-  grep -q "old good" "$dir/agent/flux_agent" || \
+  grep -q "old good" "$dir/agent/flmx_agent" || \
     fail "R9-02: current binary must remain the pre-update version when the backup fails (no stale .bak existed)"
   grep -q "备份当前版本失败" "$dir/out.log" || \
     fail "R9-02: receipt must name the backup failure"
@@ -528,19 +528,19 @@ test_update_flux_agent_aborts_when_backup_fails() (
   if grep -q "更新完成" "$dir/out.log"; then
     fail "R9-02: receipt must not claim update success after an aborted backup"
   fi
-  [[ ! -f "$dir/agent/flux_agent.bak" ]] || \
+  [[ ! -f "$dir/agent/flmx_agent.bak" ]] || \
     fail "R9-02: no .bak may remain after an aborted backup"
 )
 
-test_update_flux_agent_aborts_when_backup_fails_with_stale_bak() (
+test_update_flmx_agent_aborts_when_backup_fails_with_stale_bak() (
   set -euo pipefail
   local dir rc
   dir=$(agent_update_backup_fail_fixture stale)
   rc=$(cat "$dir/rc")
   assert_equals "1" "$rc" "R9-02: update must abort when the backup copy fails even with a stale .bak present"
-  grep -q "old good" "$dir/agent/flux_agent" || \
+  grep -q "old good" "$dir/agent/flmx_agent" || \
     fail "R9-02: current binary must remain the pre-update version; the stale .bak must not be rolled back across generations"
-  if grep -q "stale good" "$dir/agent/flux_agent"; then
+  if grep -q "stale good" "$dir/agent/flmx_agent"; then
     fail "R9-02: stale .bak content must never become the running binary after a failed backup"
   fi
   grep -q "备份当前版本失败" "$dir/out.log" || \
@@ -548,7 +548,7 @@ test_update_flux_agent_aborts_when_backup_fails_with_stale_bak() (
   if grep -q "已回滚到旧版本并重启成功" "$dir/out.log"; then
     fail "R9-02: receipt must not report a cross-generation rollback as success"
   fi
-  [[ ! -f "$dir/agent/flux_agent.bak" ]] || \
+  [[ ! -f "$dir/agent/flmx_agent.bak" ]] || \
     fail "R9-02: the untrusted .bak must be removed after an aborted backup"
 )
 
@@ -580,7 +580,7 @@ test_extract_leading_semver_matches_go_rules() (
 
 # X-P2-12 (J-02, BC-09): 现装 1.3.4、目标 1.3.2 的脚本更新必须在
 # 下载前被拒，现装二进制不变、curl 零调用。
-test_update_flux_agent_rejects_downgrade() (
+test_update_flmx_agent_rejects_downgrade() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -590,12 +590,12 @@ test_update_flux_agent_rejects_downgrade() (
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+  cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 if [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi
 echo "old good"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
 
   local state_dir
   state_dir=$(mktemp -d)
@@ -612,17 +612,17 @@ EOF
   curl() { echo called >> "$STATE_DIR/curl-called"; return 0; }
 
   local rc="0"
-  update_flux_agent >/dev/null 2>&1 || rc="$?"
+  update_flmx_agent >/dev/null 2>&1 || rc="$?"
   assert_equals "1" "$rc" "X-P2-12: downgrade update should be rejected"
   [[ ! -f "$STATE_DIR/curl-called" ]] || \
     fail "X-P2-12: downgrade must be rejected before any download"
-  grep -q "1.3.4" "$INSTALL_DIR/flux_agent" || \
+  grep -q "1.3.4" "$INSTALL_DIR/flmx_agent" || \
     fail "X-P2-12: installed binary must be unchanged after a rejected downgrade"
 )
 
 # X-P2-12 防过修：目标更高时正常更新；现装版本不可比时按
 # panel_version_cmp 既有口径放行（V-19）。
-test_update_flux_agent_allows_higher_and_incomparable() (
+test_update_flmx_agent_allows_higher_and_incomparable() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -635,10 +635,10 @@ test_update_flux_agent_allows_higher_and_incomparable() (
   run_update_case() {
     local installed_body="$1" target="$2"
     INSTALL_DIR=$(mktemp -d)
-    FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
-    : > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
-    printf '%s\n' "$installed_body" > "$INSTALL_DIR/flux_agent"
-    chmod +x "$INSTALL_DIR/flux_agent"
+    FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
+    : > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+    printf '%s\n' "$installed_body" > "$INSTALL_DIR/flmx_agent"
+    chmod +x "$INSTALL_DIR/flmx_agent"
     TARGET_VERSION="$target"
 
     ask_proxy_config() { PROXY_ENABLED="false"; DOWNLOAD_URL=""; }
@@ -671,11 +671,11 @@ echo new"
     }
 
     local rc="0"
-    update_flux_agent >/dev/null 2>&1 || rc="$?"
+    update_flmx_agent >/dev/null 2>&1 || rc="$?"
     assert_equals "0" "$rc" "X-P2-12: update to $target should succeed"
-    grep -q "$target" "$INSTALL_DIR/flux_agent" || \
+    grep -q "$target" "$INSTALL_DIR/flmx_agent" || \
       fail "X-P2-12: binary should be at $target after update"
-    [[ ! -f "$INSTALL_DIR/flux_agent.bak" ]] || \
+    [[ ! -f "$INSTALL_DIR/flmx_agent.bak" ]] || \
       fail "X-P2-12: .bak should be removed after a successful update"
   }
 
@@ -714,47 +714,47 @@ STUBEOF
   local rc="0" file
 
   # 菜单 2 更新失败 → 非 0
-  file=$(build_case menu-update-fail 'update_flux_agent() { return 1; }')
+  file=$(build_case menu-update-fail 'update_flmx_agent() { return 1; }')
   rc="0"; printf '2\n' | bash "$file" >/dev/null 2>&1 || rc="$?"
   assert_equals "1" "$rc" "X-P3-6: menu update failure should exit non-zero"
 
   # 菜单 2 更新成功 → 0
-  file=$(build_case menu-update-ok 'update_flux_agent() { return 0; }')
+  file=$(build_case menu-update-ok 'update_flmx_agent() { return 0; }')
   rc="0"; printf '2\n' | bash "$file" >/dev/null 2>&1 || rc="$?"
   assert_equals "0" "$rc" "X-P3-6: menu update success should exit 0"
 
   # 菜单 1 安装失败 → 非 0
-  file=$(build_case menu-install-fail 'install_flux_agent() { return 1; }')
+  file=$(build_case menu-install-fail 'install_flmx_agent() { return 1; }')
   rc="0"; printf '1\n' | bash "$file" >/dev/null 2>&1 || rc="$?"
   assert_equals "1" "$rc" "X-P3-6: menu install failure should exit non-zero"
 
   # 菜单 3 卸载失败 → 非 0
-  file=$(build_case menu-uninstall-fail 'uninstall_flux_agent() { return 1; }')
+  file=$(build_case menu-uninstall-fail 'uninstall_flmx_agent() { return 1; }')
   rc="0"; printf '3\n' | bash "$file" >/dev/null 2>&1 || rc="$?"
   assert_equals "1" "$rc" "X-P3-6: menu uninstall failure should exit non-zero"
 
   # 直装（-a/-s）失败 → 非 0
-  file=$(build_case direct-fail 'install_flux_agent() { return 1; }')
+  file=$(build_case direct-fail 'install_flmx_agent() { return 1; }')
   rc="0"; bash "$file" -a "panel.example.com:443" -s "test-secret" >/dev/null 2>&1 || rc="$?"
   assert_equals "1" "$rc" "X-P3-6: direct install failure should exit non-zero"
 
   # 直装（-a/-s）成功 → 0
-  file=$(build_case direct-ok 'install_flux_agent() { return 0; }')
+  file=$(build_case direct-ok 'install_flmx_agent() { return 0; }')
   rc="0"; bash "$file" -a "panel.example.com:443" -s "test-secret" >/dev/null 2>&1 || rc="$?"
   assert_equals "0" "$rc" "X-P3-6: direct install success should exit 0"
 )
 
-test_install_flux_agent_preserves_legacy_gost_when_download_fails() (
+test_install_flmx_agent_preserves_legacy_gost_when_download_fails() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+  cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 echo "old version"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
   SERVER_ADDR="panel.example.com:443"
   SECRET="secret"
   DOWNLOAD_URL="https://example.com/gost"
@@ -766,7 +766,7 @@ EOF
   # 赋值必然丢失，断言结构性不可红。现夹具补自家 config.json
   # （addr 与 SERVER_ADDR 相同，守卫正当放行——与 update 孪生用
   # 例的 TAKEOVER 声明同为「操作者已确认归属」口径），桩一律写
-  # 标记文件、断言读文件。install_flux_agent 的失败路径用 exit
+  # 标记文件、断言读文件。install_flmx_agent 的失败路径用 exit
   # 而非 return，调用仍须留在子 shell 内，标记文件是唯一能穿出
   # 子 shell 的观测面；curl 标记兼作「名义路径确已到达下载步」
   # 的正向证据（守卫拒绝时 curl 调用恒为 0 次）。
@@ -786,15 +786,15 @@ EOF
   systemctl() { return 0; }
   curl() { echo call >> "$INSTALL_DIR/.curl_calls"; return 0; }
 
-  ( install_flux_agent >/dev/null ) || rc="$?"
+  ( install_flmx_agent >/dev/null ) || rc="$?"
 
-  assert_equals "1" "$rc" "install_flux_agent should fail when the download artifact is missing"
-  [[ -f "$INSTALL_DIR/.curl_calls" ]] || fail "install_flux_agent should reach the download step with its own config (guard pass), not exit at the ownership guard"
-  [[ ! -e "$INSTALL_DIR/.cleanup_called" ]] || fail "install_flux_agent should preserve legacy gost when download fails"
-  [[ -f "$INSTALL_DIR/flux_agent" ]] || fail "install_flux_agent should keep the existing flux_agent binary when download fails"
+  assert_equals "1" "$rc" "install_flmx_agent should fail when the download artifact is missing"
+  [[ -f "$INSTALL_DIR/.curl_calls" ]] || fail "install_flmx_agent should reach the download step with its own config (guard pass), not exit at the ownership guard"
+  [[ ! -e "$INSTALL_DIR/.cleanup_called" ]] || fail "install_flmx_agent should preserve legacy gost when download fails"
+  [[ -f "$INSTALL_DIR/flmx_agent" ]] || fail "install_flmx_agent should keep the existing flmx_agent binary when download fails"
 )
 
-test_update_flux_agent_preserves_legacy_gost_when_download_fails() (
+test_update_flmx_agent_preserves_legacy_gost_when_download_fails() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -804,16 +804,16 @@ test_update_flux_agent_preserves_legacy_gost_when_download_fails() (
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+  cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 echo "old version"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent"
-  cat > "$INSTALL_DIR/flux_agent.new" <<'EOF'
+  chmod +x "$INSTALL_DIR/flmx_agent"
+  cat > "$INSTALL_DIR/flmx_agent.new" <<'EOF'
 #!/bin/bash
 echo "stale version"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent.new"
+  chmod +x "$INSTALL_DIR/flmx_agent.new"
 
   local cleanup_called="0"
   local rc="0"
@@ -829,11 +829,11 @@ EOF
   systemctl() { return 0; }
   curl() { return 0; }
 
-  update_flux_agent >/dev/null || rc="$?"
+  update_flmx_agent >/dev/null || rc="$?"
 
-  assert_equals "1" "$rc" "update_flux_agent should fail when the download artifact is missing"
-  assert_equals "0" "$cleanup_called" "update_flux_agent should preserve legacy gost when download fails"
-  [[ ! -f "$INSTALL_DIR/flux_agent.new" ]] || fail "update_flux_agent should remove stale download artifacts before retrying"
+  assert_equals "1" "$rc" "update_flmx_agent should fail when the download artifact is missing"
+  assert_equals "0" "$cleanup_called" "update_flmx_agent should preserve legacy gost when download fails"
+  [[ ! -f "$INSTALL_DIR/flmx_agent.new" ]] || fail "update_flmx_agent should remove stale download artifacts before retrying"
 )
 
 # AI-10：agent_config_addr 必须把 JSON 转义写法归一化为原始地址，
@@ -883,7 +883,7 @@ test_guard_agent_dir_ownership_matrix() (
     out=$(guard_agent_dir_ownership </dev/null 2>&1) || rc="$?"
   }
   set_config() { printf '%s' "$1" > "$INSTALL_DIR/config.json"; }
-  set_binary() { printf 'binary-bytes' > "$INSTALL_DIR/flux_agent"; }
+  set_binary() { printf 'binary-bytes' > "$INSTALL_DIR/flmx_agent"; }
 
   # 空目录 → 放行
   run_guard
@@ -907,10 +907,10 @@ test_guard_agent_dir_ownership_matrix() (
 
   # 他人·原文 → 拒绝且文件逐字不动
   set_config '{"addr": "https://other.example.com:443", "secret": "x"}'
-  before=$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")
+  before=$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flmx_agent")
   run_guard
   assert_equals "1" "$rc" "AI-07: guard should refuse a foreign addr"
-  assert_equals "$before" "$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")" \
+  assert_equals "$before" "$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flmx_agent")" \
     "AI-07: guard refusal must not touch existing files"
 
   # 他人·转义写法 → 归一化后仍是他人，拒绝
@@ -958,7 +958,7 @@ STUBEOF
 # AI-06：菜单更新入口归属守卫——他人 agent 非交互拒绝（守卫在
 # 下载之前：下载标记不得出现、既有文件逐字不动、输出明示当前连
 # 接地址）；不可判定同样拒绝。
-test_update_flux_agent_refuses_unowned_agent() (
+test_update_flmx_agent_refuses_unowned_agent() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -969,11 +969,11 @@ test_update_flux_agent_refuses_unowned_agent() (
   local state_dir
   state_dir=$(mktemp -d)
 
-  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+  cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 echo "old version"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
 
   curl() { echo called >> "$state_dir/curl-called"; return 0; }
   check_and_install_tcpkill() { :; }
@@ -985,13 +985,13 @@ EOF
   # 他人 agent（config addr 为其他面板）
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
   local before
-  before=$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")
+  before=$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flmx_agent")
   rc="0"
-  update_flux_agent </dev/null >"$out" 2>&1 || rc="$?"
+  update_flmx_agent </dev/null >"$out" 2>&1 || rc="$?"
   assert_equals "1" "$rc" "AI-06: menu update should refuse a foreign agent"
   [[ ! -f "$state_dir/curl-called" ]] || \
     fail "AI-06: menu update refusal must happen before any download"
-  assert_equals "$before" "$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")" \
+  assert_equals "$before" "$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flmx_agent")" \
     "AI-06: menu update refusal must not touch existing files"
   grep -q "other.example.com:443" "$out" || \
     fail "AI-06: menu update refusal should disclose the current panel address"
@@ -999,7 +999,7 @@ EOF
   # 不可判定（config 无 addr）
   printf '%s' '{"secret": "x"}' > "$INSTALL_DIR/config.json"
   rc="0"
-  update_flux_agent </dev/null >"$out" 2>&1 || rc="$?"
+  update_flmx_agent </dev/null >"$out" 2>&1 || rc="$?"
   assert_equals "1" "$rc" "AI-06: menu update should refuse when ownership is undecidable"
   [[ ! -f "$state_dir/curl-called" ]] || \
     fail "AI-06: menu update refusal must happen before any download"
@@ -1007,7 +1007,7 @@ EOF
 
 # AI-06：菜单更新守卫的放行形态——TAKEOVER 显式确认放行、调用方
 # 带有与现存 addr 相同的面板地址时静默放行，两者都走完整更新。
-test_update_flux_agent_menu_guard_pass_forms() (
+test_update_flmx_agent_menu_guard_pass_forms() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -1015,13 +1015,13 @@ test_update_flux_agent_menu_guard_pass_forms() (
 
   run_confirmed_update() {
     INSTALL_DIR=$(mktemp -d)
-    FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
-    : > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
-    cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+    FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
+    : > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+    cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 echo "old version"
 EOF
-    chmod +x "$INSTALL_DIR/flux_agent"
+    chmod +x "$INSTALL_DIR/flmx_agent"
     printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
 
     ask_proxy_config() { PROXY_ENABLED="false"; DOWNLOAD_URL=""; }
@@ -1053,9 +1053,9 @@ echo "new version"'
     }
 
     local rc="0"
-    update_flux_agent </dev/null >/dev/null 2>&1 || rc="$?"
+    update_flmx_agent </dev/null >/dev/null 2>&1 || rc="$?"
     assert_equals "0" "$rc" "AI-06: update should proceed in an ownership-confirmed form"
-    grep -q "new version" "$INSTALL_DIR/flux_agent" || \
+    grep -q "new version" "$INSTALL_DIR/flmx_agent" || \
       fail "AI-06: binary should be replaced after a confirmed update"
   }
 
@@ -1070,18 +1070,18 @@ echo "new version"'
 
 # AI-06：菜单更新守卫的交互形态（pty）——明示地址后 y 放行走完
 # 更新、n 拒绝且下载不得发生、二进制逐字不动。
-test_update_flux_agent_menu_guard_interactive() (
+test_update_flmx_agent_menu_guard_interactive() (
   set -euo pipefail
 
   local work
   work=$(mktemp -d)
   local agent_dir="$work/agent"
   mkdir -p "$agent_dir"
-  cat > "$agent_dir/flux_agent" <<'EOF'
+  cat > "$agent_dir/flmx_agent" <<'EOF'
 #!/bin/bash
 echo "old version"
 EOF
-  chmod +x "$agent_dir/flux_agent"
+  chmod +x "$agent_dir/flmx_agent"
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$agent_dir/config.json"
 
   export GUARD_TEST_DIR="$agent_dir"
@@ -1101,11 +1101,11 @@ download_agent_binary() {
 }
 check_and_install_tcpkill() { :; }
 cleanup_legacy_gost_installation() { :; }
-flux_agent_service_exists() { return 1; }
-start_flux_agent_service() { :; }
-flux_agent_health_ok() { return 0; }
+flmx_agent_service_exists() { return 1; }
+start_flmx_agent_service() { :; }
+flmx_agent_health_ok() { return 0; }
 sleep() { :; }
-update_flux_agent
+update_flmx_agent
 STUBEOF
   } > "$harness"
 
@@ -1114,43 +1114,43 @@ STUBEOF
   assert_equals "0" "$rc" "AI-06: interactive y should let menu update proceed"
   [[ -f "$work/download-called" ]] || \
     fail "AI-06: update should reach the download step after interactive y"
-  grep -q "new version" "$agent_dir/flux_agent" || \
+  grep -q "new version" "$agent_dir/flmx_agent" || \
     fail "AI-06: binary should be replaced after interactive y"
 
   # 复位为他人 agent 初始状态，n 必须拒绝且零改动
-  cat > "$agent_dir/flux_agent" <<'EOF'
+  cat > "$agent_dir/flmx_agent" <<'EOF'
 #!/bin/bash
 echo "old version"
 EOF
-  chmod +x "$agent_dir/flux_agent"
+  chmod +x "$agent_dir/flmx_agent"
   rm -f "$work/download-called"
   local before
-  before=$(sha256sum "$agent_dir/config.json" "$agent_dir/flux_agent")
+  before=$(sha256sum "$agent_dir/config.json" "$agent_dir/flmx_agent")
   rc="0"
   pty_run $'n\n' "$harness" || rc="$?"
   assert_equals "1" "$rc" "AI-06: interactive n should refuse menu update"
   [[ ! -f "$work/download-called" ]] || \
     fail "AI-06: update must not download after interactive n"
-  assert_equals "$before" "$(sha256sum "$agent_dir/config.json" "$agent_dir/flux_agent")" \
+  assert_equals "$before" "$(sha256sum "$agent_dir/config.json" "$agent_dir/flmx_agent")" \
     "AI-06: interactive n must not touch existing files"
 )
 
 # AI-06：菜单卸载入口归属守卫——他人/不可判定 agent 非交互拒绝
 # （目录与文件逐字不动、输出明示当前连接地址）。
-test_uninstall_flux_agent_refuses_unowned_agent() (
+test_uninstall_flmx_agent_refuses_unowned_agent() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
   SERVER_ADDR=""
 
-  cat > "$INSTALL_DIR/flux_agent" <<'EOF'
+  cat > "$INSTALL_DIR/flmx_agent" <<'EOF'
 #!/bin/bash
 echo "old version"
 EOF
-  chmod +x "$INSTALL_DIR/flux_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
 
   systemctl() { return 0; }
 
@@ -1159,18 +1159,18 @@ EOF
 
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
   local before
-  before=$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")
+  before=$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flmx_agent")
   rc="0"
-  uninstall_flux_agent </dev/null >"$out" 2>&1 || rc="$?"
+  uninstall_flmx_agent </dev/null >"$out" 2>&1 || rc="$?"
   assert_equals "1" "$rc" "AI-06: menu uninstall should refuse a foreign agent"
-  assert_equals "$before" "$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flux_agent")" \
+  assert_equals "$before" "$(sha256sum "$INSTALL_DIR/config.json" "$INSTALL_DIR/flmx_agent")" \
     "AI-06: menu uninstall refusal must not touch existing files"
   grep -q "other.example.com:443" "$out" || \
     fail "AI-06: menu uninstall refusal should disclose the current panel address"
 
   printf '%s' '{"secret": "x"}' > "$INSTALL_DIR/config.json"
   rc="0"
-  uninstall_flux_agent </dev/null >"$out" 2>&1 || rc="$?"
+  uninstall_flmx_agent </dev/null >"$out" 2>&1 || rc="$?"
   assert_equals "1" "$rc" "AI-06: menu uninstall should refuse when ownership is undecidable"
   [[ -f "$INSTALL_DIR/config.json" ]] || \
     fail "AI-06: menu uninstall refusal must keep the install dir intact"
@@ -1179,7 +1179,7 @@ EOF
 # AI-06：菜单卸载守卫的放行形态——TAKEOVER 留痕放行（其后仍有常
 # 规确认）；交互（pty）先过守卫确认、再过常规确认才执行卸载，
 # 守卫处答 n 即终止且目录不动。
-test_uninstall_flux_agent_menu_guard_pass_forms() (
+test_uninstall_flmx_agent_menu_guard_pass_forms() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -1190,14 +1190,14 @@ test_uninstall_flux_agent_menu_guard_pass_forms() (
 
   # TAKEOVER + 常规确认 y → 卸载执行、目录删除、输出含留痕
   INSTALL_DIR=$(mktemp -d)
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
-  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  printf 'binary' > "$INSTALL_DIR/flmx_agent"
 
   local rc="0" out
   out=$(mktemp)
   rc="0"
-  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
   assert_equals "0" "$rc" "AI-06: uninstall should proceed with TAKEOVER plus confirm"
   [[ ! -d "$INSTALL_DIR" ]] || \
     fail "AI-06: install dir should be removed after a confirmed uninstall"
@@ -1210,7 +1210,7 @@ test_uninstall_flux_agent_menu_guard_pass_forms() (
   local agent_dir="$work/agent"
   mkdir -p "$agent_dir"
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$agent_dir/config.json"
-  printf 'binary' > "$agent_dir/flux_agent"
+  printf 'binary' > "$agent_dir/flmx_agent"
 
   export GUARD_TEST_DIR="$agent_dir"
   local harness="$work/uninstall-harness.sh"
@@ -1218,11 +1218,11 @@ test_uninstall_flux_agent_menu_guard_pass_forms() (
     sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh"
     cat <<'STUBEOF'
 INSTALL_DIR="$GUARD_TEST_DIR"
-FLUX_AGENT_SYSTEMD_SERVICE_FILE="$GUARD_TEST_DIR/flux_agent.service"
+FLMX_AGENT_SYSTEMD_SERVICE_FILE="$GUARD_TEST_DIR/flmx_agent.service"
 SERVICE_MANAGER="systemd"
 SERVER_ADDR=""
-flux_agent_service_exists() { return 1; }
-uninstall_flux_agent
+flmx_agent_service_exists() { return 1; }
+uninstall_flmx_agent
 STUBEOF
   } > "$harness"
 
@@ -1235,7 +1235,7 @@ STUBEOF
   # pty：守卫确认 n → 终止，目录不动（常规确认不会被问到）
   mkdir -p "$agent_dir"
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$agent_dir/config.json"
-  printf 'binary' > "$agent_dir/flux_agent"
+  printf 'binary' > "$agent_dir/flmx_agent"
   rc="0"
   pty_run $'n\n' "$harness" || rc="$?"
   assert_equals "1" "$rc" "AI-06: interactive n should refuse menu uninstall"
@@ -1247,7 +1247,7 @@ STUBEOF
 # tuning-backup.json 恢复 sysctl 原值、回放整形前队列、删调优宿
 # 主三件套与改名前 legacy conf、disable 并删队列整形 unit、删
 # agent 自建 nft 三表，且全部赶在删安装目录之前（备份在目录里）。
-test_uninstall_flux_agent_cleans_host_tuning_residue() (
+test_uninstall_flmx_agent_cleans_host_tuning_residue() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -1257,7 +1257,7 @@ test_uninstall_flux_agent_cleans_host_tuning_residue() (
   local work
   work=$(mktemp -d)
   INSTALL_DIR="$work/agent"
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
   FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
   FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
   FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
@@ -1281,13 +1281,13 @@ echo restored >> "$work/qdisc-replayed"
 EOF
   chmod +x "$INSTALL_DIR/tcpfit/original-qdisc.sh"
   echo '#!/bin/bash' > "$INSTALL_DIR/tcpfit/shape.sh"
-  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  printf 'binary' > "$INSTALL_DIR/flmx_agent"
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
   echo 'net.core.rmem_max = 999999' > "$FLMX_TUNING_SYSCTL_CONF"
   echo 'legacy' > "$FLMX_TUNING_SYSCTL_CONF_LEGACY"
   echo 'tcp_bbr' > "$FLMX_TUNING_BBR_MODULE_FILE"
   echo '[Unit]' > "$FLMX_TUNING_QDISC_UNIT_FILE"
-  echo '[Unit]' > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  echo '[Unit]' > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
 
   local systemctl_calls="$work/systemctl-calls" nft_input="$work/nft-input"
   : > "$systemctl_calls"
@@ -1296,7 +1296,7 @@ EOF
 
   local rc="0" out
   out=$(mktemp)
-  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
   assert_equals "0" "$rc" "R6-02: uninstall with host residue should succeed"
   [[ ! -d "$INSTALL_DIR" ]] || fail "R6-02: install dir should be removed"
   assert_equals "cubic" "$(cat "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control")" \
@@ -1319,7 +1319,7 @@ EOF
 
 # R6-02：宿主清理逐项尽力而为——nft 删除失败只告警并逐项列明，
 # 不中断其余卸载步骤；清理函数对已清状态重复执行幂等无失败。
-test_uninstall_flux_agent_host_cleanup_partial_failure_and_idempotent() (
+test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -1329,24 +1329,24 @@ test_uninstall_flux_agent_host_cleanup_partial_failure_and_idempotent() (
   local work
   work=$(mktemp -d)
   INSTALL_DIR="$work/agent"
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
   FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
   FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
   FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
   FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
   FLMX_PROC_SYS_DIR="$work/proc/sys"
   mkdir -p "$INSTALL_DIR" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")"
-  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  printf 'binary' > "$INSTALL_DIR/flmx_agent"
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
   echo 'tuned' > "$FLMX_TUNING_SYSCTL_CONF"
-  echo '[Unit]' > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  echo '[Unit]' > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
 
   systemctl() { return 0; }
   nft() { cat >/dev/null; return 1; }
 
   local rc="0" out
   out=$(mktemp)
-  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
   assert_equals "0" "$rc" "R6-02: nft failure must not fail the whole uninstall"
   [[ ! -d "$INSTALL_DIR" ]] || fail "R6-02: install dir should still be removed when nft cleanup fails"
   [[ ! -e "$FLMX_TUNING_SYSCTL_CONF" ]] || fail "R6-02: other cleanup items should still run when nft fails"
@@ -1355,7 +1355,7 @@ test_uninstall_flux_agent_host_cleanup_partial_failure_and_idempotent() (
   # 幂等：对已清状态再次执行清理函数，无失败行、返回 0。
   nft() { cat >/dev/null; return 0; }
   rc="0"
-  uninstall_flux_agent_host_cleanup >"$out" 2>&1 || rc="$?"
+  uninstall_flmx_agent_host_cleanup >"$out" 2>&1 || rc="$?"
   assert_equals "0" "$rc" "R6-02: repeated host cleanup should succeed"
   if grep -q '⚠️' "$out"; then
     fail "R6-02: repeated host cleanup on a clean state should report no failures"
@@ -1367,7 +1367,7 @@ test_uninstall_flux_agent_host_cleanup_partial_failure_and_idempotent() (
 # 复（不假装已恢复），但 sysctl 原值仍按 tuning-backup.json 写
 # 回、宿主调优文件集仍删净、卸载整体成功。与面板连带自卸载的
 # agent 侧同场景同口径（go-gost/x/socket 的 cleanup/preflight）。
-test_uninstall_flux_agent_host_cleanup_queue_backup_lost() (
+test_uninstall_flmx_agent_host_cleanup_queue_backup_lost() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -1377,7 +1377,7 @@ test_uninstall_flux_agent_host_cleanup_queue_backup_lost() (
   local work
   work=$(mktemp -d)
   INSTALL_DIR="$work/agent"
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
   FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
   FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
   FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
@@ -1397,13 +1397,13 @@ test_uninstall_flux_agent_host_cleanup_queue_backup_lost() (
 JSON
   # 只有整形脚本、没有整形前队列备份——本用例的场景。
   echo '#!/bin/bash' > "$INSTALL_DIR/tcpfit/shape.sh"
-  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  printf 'binary' > "$INSTALL_DIR/flmx_agent"
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
   echo 'net.core.rmem_max = 999999' > "$FLMX_TUNING_SYSCTL_CONF"
   echo 'legacy' > "$FLMX_TUNING_SYSCTL_CONF_LEGACY"
   echo 'tcp_bbr' > "$FLMX_TUNING_BBR_MODULE_FILE"
   echo '[Unit]' > "$FLMX_TUNING_QDISC_UNIT_FILE"
-  echo '[Unit]' > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  echo '[Unit]' > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
 
   local systemctl_calls="$work/systemctl-calls" nft_input="$work/nft-input"
   : > "$systemctl_calls"
@@ -1412,7 +1412,7 @@ JSON
 
   local rc="0" out
   out=$(mktemp)
-  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
   assert_equals "0" "$rc" "R2F2-D01: uninstall with a lost queue backup should still succeed"
   grep -q '找不到整形前的队列备份' "$out" || \
     fail "R2F2-D01: the unrestorable queue shaping must be named in the receipt"
@@ -1429,13 +1429,13 @@ JSON
     fail "R2F2-D01: qdisc unit should be disabled before removal"
 )
 
-test_install_flux_agent_writes_json_safe_config() (
+test_install_flmx_agent_writes_json_safe_config() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
   SERVER_ADDR='panel"addr'
   SECRET='sec\ret"1'
   DOWNLOAD_URL="https://example.com/gost"
@@ -1445,7 +1445,7 @@ test_install_flux_agent_writes_json_safe_config() (
   get_config_params() { :; }
   check_and_install_tcpkill() { :; }
   cleanup_legacy_gost_installation() { :; }
-  # R4B11-003: 安装路径判活改走 flux_agent_health_ok 双采样后，
+  # R4B11-003: 安装路径判活改走 flmx_agent_health_ok 双采样后，
   # systemctl 桩须能答 MainPID（恒定非 0），sleep 桩空转避免真实等待。
   sleep() { :; }
   systemctl() {
@@ -1483,14 +1483,14 @@ EOF
     chmod +x "$output"
   }
 
-  ( install_flux_agent >/dev/null 2>/dev/null ) || true
+  ( install_flmx_agent >/dev/null 2>/dev/null ) || true
 
   local actual
   actual=$(<"$INSTALL_DIR/config.json")
   local expected=$'{\n  "addr": "panel\\"addr",\n  "secret": "sec\\\\ret\\"1"\n}'
 
-  assert_equals "$expected" "$actual" "install_flux_agent should JSON-escape config values"
-  grep -Fqx 'Environment=GODEBUG=disablethp=1' "$FLUX_AGENT_SYSTEMD_SERVICE_FILE" || \
+  assert_equals "$expected" "$actual" "install_flmx_agent should JSON-escape config values"
+  grep -Fqx 'Environment=GODEBUG=disablethp=1' "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" || \
     fail "systemd service should disable transparent huge pages for the Go heap"
 )
 
@@ -1505,18 +1505,18 @@ test_install_script_bootstraps_bash_for_alpine() (
     fail "install.sh should bootstrap Bash through apk on Alpine"
 )
 
-test_install_flux_agent_uses_openrc() (
+test_install_flmx_agent_uses_openrc() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
   local temp_root
   temp_root=$(mktemp -d)
-  INSTALL_DIR="$temp_root/flux_agent"
-  FLUX_AGENT_OPENRC_SERVICE_FILE="$temp_root/init.d/flux_agent"
+  INSTALL_DIR="$temp_root/flmx_agent"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$temp_root/init.d/flmx_agent"
   # R4B11-003: 安装判活改双采样后，OpenRC 侧主 PID 取自 pidfile，
   # 须预置恒定 PID 供两次采样比对。
-  FLUX_AGENT_OPENRC_PIDFILE="$temp_root/flux_agent.pid"
-  echo 4242 > "$FLUX_AGENT_OPENRC_PIDFILE"
+  FLMX_AGENT_OPENRC_PIDFILE="$temp_root/flmx_agent.pid"
+  echo 4242 > "$FLMX_AGENT_OPENRC_PIDFILE"
   SERVICE_MANAGER="openrc"
   SERVER_ADDR="panel.example.com:443"
   SECRET="secret"
@@ -1571,34 +1571,34 @@ EOF
   }
   sleep() { :; }
 
-  install_flux_agent >/dev/null
+  install_flmx_agent >/dev/null
 
-  [[ -x "$FLUX_AGENT_OPENRC_SERVICE_FILE" ]] || fail "OpenRC service file should be executable"
-  grep -Fq '#!/sbin/openrc-run' "$FLUX_AGENT_OPENRC_SERVICE_FILE" || \
+  [[ -x "$FLMX_AGENT_OPENRC_SERVICE_FILE" ]] || fail "OpenRC service file should be executable"
+  grep -Fq '#!/sbin/openrc-run' "$FLMX_AGENT_OPENRC_SERVICE_FILE" || \
     fail "OpenRC service should use openrc-run"
-  grep -Fq "command=\"$INSTALL_DIR/flux_agent\"" "$FLUX_AGENT_OPENRC_SERVICE_FILE" || \
-    fail "OpenRC service should launch the installed flux_agent binary"
-  grep -Fq 'command_background="yes"' "$FLUX_AGENT_OPENRC_SERVICE_FILE" || \
-    fail "OpenRC service should run flux_agent in the background"
+  grep -Fq "command=\"$INSTALL_DIR/flmx_agent\"" "$FLMX_AGENT_OPENRC_SERVICE_FILE" || \
+    fail "OpenRC service should launch the installed flmx_agent binary"
+  grep -Fq 'command_background="yes"' "$FLMX_AGENT_OPENRC_SERVICE_FILE" || \
+    fail "OpenRC service should run flmx_agent in the background"
   if command -v openrc-run >/dev/null 2>&1; then
-    "$FLUX_AGENT_OPENRC_SERVICE_FILE" describe >/dev/null 2>&1
+    "$FLMX_AGENT_OPENRC_SERVICE_FILE" describe >/dev/null 2>&1
   fi
-  [[ "$rc_update_calls" == *"add flux_agent default"* ]] || \
-    fail "OpenRC install should enable flux_agent in the default runlevel"
-  [[ "$rc_service_calls" == *"start"* ]] || fail "OpenRC install should start flux_agent"
-  [[ "$rc_service_calls" == *"status"* ]] || fail "OpenRC install should verify flux_agent status"
+  [[ "$rc_update_calls" == *"add flmx_agent default"* ]] || \
+    fail "OpenRC install should enable flmx_agent in the default runlevel"
+  [[ "$rc_service_calls" == *"start"* ]] || fail "OpenRC install should start flmx_agent"
+  [[ "$rc_service_calls" == *"status"* ]] || fail "OpenRC install should verify flmx_agent status"
 )
 
-test_remove_flux_agent_service_uses_openrc() (
+test_remove_flmx_agent_service_uses_openrc() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
   local temp_root
   temp_root=$(mktemp -d)
   SERVICE_MANAGER="openrc"
-  FLUX_AGENT_OPENRC_SERVICE_FILE="$temp_root/init.d/flux_agent"
-  mkdir -p "$(dirname "$FLUX_AGENT_OPENRC_SERVICE_FILE")"
-  : > "$FLUX_AGENT_OPENRC_SERVICE_FILE"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$temp_root/init.d/flmx_agent"
+  mkdir -p "$(dirname "$FLMX_AGENT_OPENRC_SERVICE_FILE")"
+  : > "$FLMX_AGENT_OPENRC_SERVICE_FILE"
 
   local rc_service_calls=""
   local rc_update_calls=""
@@ -1611,14 +1611,14 @@ test_remove_flux_agent_service_uses_openrc() (
     return 0
   }
 
-  stop_flux_agent_service
-  disable_flux_agent_service
-  remove_flux_agent_service
+  stop_flmx_agent_service
+  disable_flmx_agent_service
+  remove_flmx_agent_service
 
-  [[ "$rc_service_calls" == *"stop"* ]] || fail "OpenRC uninstall should stop flux_agent"
-  [[ "$rc_update_calls" == *"del flux_agent default"* ]] || \
-    fail "OpenRC uninstall should remove flux_agent from the default runlevel"
-  [[ ! -e "$FLUX_AGENT_OPENRC_SERVICE_FILE" ]] || fail "OpenRC uninstall should remove its service file"
+  [[ "$rc_service_calls" == *"stop"* ]] || fail "OpenRC uninstall should stop flmx_agent"
+  [[ "$rc_update_calls" == *"del flmx_agent default"* ]] || \
+    fail "OpenRC uninstall should remove flmx_agent from the default runlevel"
+  [[ ! -e "$FLMX_AGENT_OPENRC_SERVICE_FILE" ]] || fail "OpenRC uninstall should remove its service file"
 )
 
 test_cleanup_legacy_gost_installation_removes_service_and_binary() (
@@ -1932,7 +1932,7 @@ STUBEOF
 # C4-F02：卸载宿主清理的 legacy 同名共享资源（99-flvx-tuning.conf、
 # nft 表 flvx_kernel）在机器上仍有旧式 gost agent 足迹时跳过并披
 # 露；足迹消失后按本产品旧装遗留照常清理。flmx 专名资源不受影响。
-test_uninstall_flux_agent_host_cleanup_preserves_foreign_legacy_resources() (
+test_uninstall_flmx_agent_host_cleanup_preserves_foreign_legacy_resources() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
@@ -1953,7 +1953,7 @@ test_uninstall_flux_agent_host_cleanup_preserves_foreign_legacy_resources() (
   LEGACY_GOST_SERVICE_FILE_LIB="$work/no-lib-service"
   LEGACY_GOST_SERVICE_FILE_USR_LIB="$work/no-usr-lib-service"
   mkdir -p "$INSTALL_DIR" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")" "$LEGACY_GOST_CONFIG_DIR" "$(dirname "$LEGACY_GOST_SERVICE_FILE_ETC")"
-  printf 'binary' > "$INSTALL_DIR/flux_agent"
+  printf 'binary' > "$INSTALL_DIR/flmx_agent"
   printf '%s' '{"addr": "https://mine.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
   echo 'tuned' > "$FLMX_TUNING_SYSCTL_CONF"
   echo 'tuned-legacy' > "$FLMX_TUNING_SYSCTL_CONF_LEGACY"
@@ -1970,7 +1970,7 @@ EOF
   nft() { cat > "$work/nft-input"; return 0; }
 
   local out
-  out=$(uninstall_flux_agent_host_cleanup 2>&1)
+  out=$(uninstall_flmx_agent_host_cleanup 2>&1)
 
   [[ ! -e "$FLMX_TUNING_SYSCTL_CONF" ]] || fail "C4-F02: own tuning conf should still be removed"
   [[ -e "$FLMX_TUNING_SYSCTL_CONF_LEGACY" ]] || fail "C4-F02: legacy tuning conf must be preserved while a foreign legacy agent footprint exists"
@@ -1984,7 +1984,7 @@ EOF
   # 足迹消失（旧式 agent 已被其所属面板卸载）后重跑：legacy 资源
   # 按本产品旧装遗留照常清理。
   rm -f "$LEGACY_GOST_SERVICE_FILE_ETC" "$LEGACY_GOST_CONFIG_DIR/config.json" "$LEGACY_GOST_CONFIG_DIR/gost"
-  out=$(uninstall_flux_agent_host_cleanup 2>&1)
+  out=$(uninstall_flmx_agent_host_cleanup 2>&1)
 
   [[ ! -e "$FLMX_TUNING_SYSCTL_CONF_LEGACY" ]] || fail "C4-F02: legacy tuning conf should be removed once no legacy footprint remains"
   grep -q 'flvx_kernel' "$work/nft-input" || fail "C4-F02: flvx_kernel should be deleted once no legacy footprint remains"
@@ -2651,19 +2651,19 @@ test_panel_install_self_update_overwrite_failure_keeps_script() {
 test_panel_install_self_update_overwrite_failure_keeps_script
 
 # F-048: install 路径下载失败时不得先停/禁用已有服务（与 update 路径同序）。
-test_install_flux_agent_keeps_service_when_download_fails() (
+test_install_flmx_agent_keeps_service_when_download_fails() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  printf '#!/bin/bash\necho "old version"\n' > "$INSTALL_DIR/flux_agent"
-  chmod +x "$INSTALL_DIR/flux_agent"
+  printf '#!/bin/bash\necho "old version"\n' > "$INSTALL_DIR/flmx_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
   SERVER_ADDR="panel.example.com:443"
   SECRET="<redacted>"
   DOWNLOAD_URL="https://example.com/gost"
 
-  # 调用记录走文件：install_flux_agent 在子 shell 里跑，变量赋值传不回来
+  # 调用记录走文件：install_flmx_agent 在子 shell 里跑，变量赋值传不回来
   local calls_log
   calls_log=$(mktemp)
   ask_proxy_config() { :; }
@@ -2672,13 +2672,13 @@ test_install_flux_agent_keeps_service_when_download_fails() (
   check_and_install_tcpkill() { :; }
   ensure_service_manager() { return 0; }
   cleanup_legacy_gost_installation() { :; }
-  flux_agent_service_exists() { return 0; }
-  stop_flux_agent_service() { echo stop >> "$calls_log"; }
-  disable_flux_agent_service() { echo disable >> "$calls_log"; }
+  flmx_agent_service_exists() { return 0; }
+  stop_flmx_agent_service() { echo stop >> "$calls_log"; }
+  disable_flmx_agent_service() { echo disable >> "$calls_log"; }
   curl() { return 0; }
 
   local rc="0"
-  ( install_flux_agent >/dev/null ) || rc="$?"
+  ( install_flmx_agent >/dev/null ) || rc="$?"
 
   assert_equals "1" "$rc" "F-048: install should fail when the download artifact is missing"
   if grep -q '^stop$' "$calls_log"; then
@@ -4104,18 +4104,18 @@ test_update_panel_crosschecks_deployed_image_version() (
     "FIX2-C#9: a downgrade against the deployed version must be rejected before downloading"
 )
 
-# R2X-019 (R2-J-01): 真实函数级回归——install_flux_agent 本体实跑
+# R2X-019 (R2-J-01): 真实函数级回归——install_flmx_agent 本体实跑
 # （下载/校验/写服务/启服务全走真实代码，curl/systemctl 为命令级桩），
-# 仅桩 flux_agent_service_is_active 决定判活结果：为假时函数必须
+# 仅桩 flmx_agent_service_is_active 决定判活结果：为假时函数必须
 # return 1 且屏显失败；为真时必须 return 0。禁止再以整函数桩代替
 # 被测对象（J 报告 §3：X-P3-6 的整函数桩正是本缺陷的漏网原因）。
-test_install_flux_agent_returns_nonzero_when_service_not_active() (
+test_install_flmx_agent_returns_nonzero_when_service_not_active() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
   SERVER_ADDR="panel.example.com:443"
   SECRET="secret"
   DOWNLOAD_URL="https://example.com/gost"
@@ -4155,10 +4155,10 @@ EOF
   }
 
   # 判活失败：下载与启动命令均成功、服务就是没活起来
-  flux_agent_service_is_active() { return 1; }
+  flmx_agent_service_is_active() { return 1; }
 
   local rc="0"
-  ( install_flux_agent >"$INSTALL_DIR/fail.log" 2>&1 ) || rc="$?"
+  ( install_flmx_agent >"$INSTALL_DIR/fail.log" 2>&1 ) || rc="$?"
   assert_equals "1" "$rc" "R2X-019: install must return 1 when the service fails to start"
   grep -q "服务启动失败" "$INSTALL_DIR/fail.log" || \
     fail "R2X-019: install should still print the startup failure hint"
@@ -4166,11 +4166,11 @@ EOF
   # 判活成功（防过修）：同路径必须 return 0。
   # R4B11-003: 判活改双采样后还须主 PID 恒定非 0，一并覆写采样源
   # （本例 systemctl 桩不答 MainPID）。
-  flux_agent_service_is_active() { return 0; }
-  flux_agent_main_pid() { echo 4242; }
+  flmx_agent_service_is_active() { return 0; }
+  flmx_agent_main_pid() { echo 4242; }
 
   rc="0"
-  ( install_flux_agent >"$INSTALL_DIR/ok.log" 2>&1 ) || rc="$?"
+  ( install_flmx_agent >"$INSTALL_DIR/ok.log" 2>&1 ) || rc="$?"
   assert_equals "0" "$rc" "R2X-019: install must return 0 when the service is active"
 )
 
@@ -4191,17 +4191,17 @@ test_systemd_starts_reset_failed_before_start() (
   SERVICE_MANAGER="systemd"
   systemctl() { echo "$*" >> "$CALLS_LOG"; return 0; }
 
-  start_flux_agent_service
-  assert_equals "reset-failed flux_agent" "$(sed -n '1p' "$CALLS_LOG")" \
-    "R2X-020: start_flux_agent_service should reset-failed before start"
-  assert_equals "start flux_agent" "$(sed -n '2p' "$CALLS_LOG")" \
-    "R2X-020: start_flux_agent_service should start after reset-failed"
+  start_flmx_agent_service
+  assert_equals "reset-failed flmx_agent" "$(sed -n '1p' "$CALLS_LOG")" \
+    "R2X-020: start_flmx_agent_service should reset-failed before start"
+  assert_equals "start flmx_agent" "$(sed -n '2p' "$CALLS_LOG")" \
+    "R2X-020: start_flmx_agent_service should start after reset-failed"
 
   : > "$CALLS_LOG"
-  enable_and_start_flux_agent_service
+  enable_and_start_flmx_agent_service
   local reset_line start_line
-  reset_line=$(awk '$0=="reset-failed flux_agent"{print NR; exit}' "$CALLS_LOG")
-  start_line=$(awk '$0=="start flux_agent"{print NR; exit}' "$CALLS_LOG")
+  reset_line=$(awk '$0=="reset-failed flmx_agent"{print NR; exit}' "$CALLS_LOG")
+  start_line=$(awk '$0=="start flmx_agent"{print NR; exit}' "$CALLS_LOG")
   [[ -n "$reset_line" && -n "$start_line" && "$reset_line" -lt "$start_line" ]] || \
     fail "R2X-020: enable_and_start should reset-failed before start (calls: $(cat "$CALLS_LOG"))"
 
@@ -4210,11 +4210,11 @@ test_systemd_starts_reset_failed_before_start() (
   : > "$CALLS_LOG"
   rc-service() { echo "$*" >> "$RC_CALLS_LOG"; return 0; }
   rc-update() { echo "$*" >> "$RC_CALLS_LOG"; return 0; }
-  start_flux_agent_service
-  enable_and_start_flux_agent_service
+  start_flmx_agent_service
+  enable_and_start_flmx_agent_service
   [[ ! -s "$CALLS_LOG" ]] || \
     fail "R2X-020: OpenRC starts must not call systemctl/reset-failed"
-  grep -q "flux_agent start" "$RC_CALLS_LOG" || \
+  grep -q "flmx_agent start" "$RC_CALLS_LOG" || \
     fail "R2X-020: OpenRC starts should still go through rc-service"
 )
 
@@ -4227,9 +4227,9 @@ test_rollback_restarts_service_from_failed_state() (
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  printf '#!/bin/bash\necho "bad flap"\n' > "$INSTALL_DIR/flux_agent"
-  printf '#!/bin/bash\necho "old good"\n' > "$INSTALL_DIR/flux_agent.bak"
-  chmod +x "$INSTALL_DIR/flux_agent" "$INSTALL_DIR/flux_agent.bak"
+  printf '#!/bin/bash\necho "bad flap"\n' > "$INSTALL_DIR/flmx_agent"
+  printf '#!/bin/bash\necho "old good"\n' > "$INSTALL_DIR/flmx_agent.bak"
+  chmod +x "$INSTALL_DIR/flmx_agent" "$INSTALL_DIR/flmx_agent.bak"
 
   local work
   work=$(mktemp -d)
@@ -4261,13 +4261,13 @@ test_rollback_restarts_service_from_failed_state() (
 
   # || true：install.sh 本体无 set -e，start 失败应由后续判活断言
   # 定性，不得让套件子 shell 的 set -e 在回滚函数内静默中止。
-  rollback_flux_agent >"$work/rollback.log" 2>&1 || true
+  rollback_flmx_agent >"$work/rollback.log" 2>&1 || true
 
-  flux_agent_service_is_active || \
+  flmx_agent_service_is_active || \
     fail "R2X-020: rollback should bring the service back active from the failed state"
   grep -q "已回滚到旧版本并重启成功" "$work/rollback.log" || \
     fail "R2X-020: rollback should report a successful restart (log: $(cat "$work/rollback.log"))"
-  grep -q "old good" "$INSTALL_DIR/flux_agent" || \
+  grep -q "old good" "$INSTALL_DIR/flmx_agent" || \
     fail "R2X-020: rollback should restore the old binary"
 )
 
@@ -4526,7 +4526,7 @@ test_preserve_compose_networks_no_subnet_existing
 test_activate_panel_update_files_preserves_subnet
 test_get_deployed_panel_version_parses_image_tag
 test_update_panel_crosschecks_deployed_image_version
-test_install_flux_agent_keeps_service_when_download_fails
+test_install_flmx_agent_keeps_service_when_download_fails
 test_install_panel_refuses_existing_deployment
 test_install_panel_waits_for_backend_health
 test_install_docker_rejects_unverified_script
@@ -4765,13 +4765,13 @@ test_panel_menu5_caddy_list_removed_when_install_fails() (
 # R4B11-003: 安装路径判活改双采样后，flap 服务（第一次采样活、第二
 # 次已死）必须判安装失败且不印「安装完成」（旧实现单次采样必红）；
 # 恒活对照仍成功。
-test_install_flux_agent_rejects_flapping_service() (
+test_install_flmx_agent_rejects_flapping_service() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
   SERVICE_MANAGER="systemd"
   INSTALL_DIR=$(mktemp -d)
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flux_agent.service"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
   SERVER_ADDR="panel.example.com:443"
   SECRET="secret"
   DOWNLOAD_URL="https://example.com/gost"
@@ -4820,22 +4820,22 @@ EOF
   state_dir=$(mktemp -d)
   echo 0 > "$state_dir/active_cnt"
   STATE_DIR="$state_dir"
-  flux_agent_service_is_active() {
+  flmx_agent_service_is_active() {
     local n
     n=$(cat "$STATE_DIR/active_cnt"); n=$((n+1)); echo "$n" > "$STATE_DIR/active_cnt"
     [[ "$n" -le 1 ]]
   }
 
   local rc="0" log="$INSTALL_DIR/install.log"
-  ( install_flux_agent >"$log" 2>&1 ) || rc="$?"
+  ( install_flmx_agent >"$log" 2>&1 ) || rc="$?"
   assert_equals "1" "$rc" "R4B11-003: install must fail when the service flaps after start"
   if grep -q "安装完成" "$log"; then
     fail "R4B11-003: install must not print completion for a flapping service"
   fi
 
-  flux_agent_service_is_active() { return 0; }
+  flmx_agent_service_is_active() { return 0; }
   rc="0"
-  ( install_flux_agent >"$log" 2>&1 ) || rc="$?"
+  ( install_flmx_agent >"$log" 2>&1 ) || rc="$?"
   assert_equals "0" "$rc" "R4B11-003: install should succeed when the service stays healthy"
   grep -q "安装完成" "$log" || \
     fail "R4B11-003: healthy install should print completion"
@@ -4864,7 +4864,7 @@ STUBEOF
 
   local rc="0" file out
 
-  file=$(build_case del-fail 'install_flux_agent() { return 1; }')
+  file=$(build_case del-fail 'install_flmx_agent() { return 1; }')
   rc="0"; out=$(printf '1\n' | bash "$file" 2>&1) || rc="$?"
   assert_equals "1" "$rc" "R4B11-005: failed install should exit non-zero"
   [[ -f "$file" ]] || fail "R4B11-005: script must be kept after a failed operation"
@@ -4874,7 +4874,7 @@ STUBEOF
   [[ "$out" == *"已保留"* ]] || \
     fail "R4B11-005: failure path should say the script was kept for retry"
 
-  file=$(build_case del-ok 'install_flux_agent() { return 0; }')
+  file=$(build_case del-ok 'install_flmx_agent() { return 0; }')
   rc="0"; out=$(printf '1\n' | bash "$file" 2>&1) || rc="$?"
   assert_equals "0" "$rc" "R4B11-005: successful install should exit 0"
   [[ ! -f "$file" ]] || fail "R4B11-005: script should delete itself after success"
@@ -4939,7 +4939,7 @@ STUBEOF
 )
 
 # R2-F7-01（R2-F7-B01）: install.sh 卸载取消路径以真实
-# uninstall_flux_agent 钉格——不覆写被测函数本体，只桩其前置
+# uninstall_flmx_agent 钉格——不覆写被测函数本体，只桩其前置
 # （root 检查、归属守卫、服务管理器探测）。菜单选 3、确认答 N：
 # 退出 0、脚本文件保留、无「操作已完成」、输出含取消说明，与
 # panel 侧 C4-F04 取消口径一致。此前 install.sh 侧只有覆写操作函
@@ -4983,8 +4983,8 @@ test_uninstall_removes_custom_kernel_dir() (
   systemctl() { return 0; }
   guard_agent_dir_ownership_menu() { return 0; }
   ensure_service_manager() { return 0; }
-  flux_agent_service_exists() { return 1; }
-  uninstall_flux_agent_host_cleanup() { :; }
+  flmx_agent_service_exists() { return 1; }
+  uninstall_flmx_agent_host_cleanup() { :; }
   SERVICE_MANAGER="systemd"
   SERVER_ADDR=""
 
@@ -4994,19 +4994,19 @@ test_uninstall_removes_custom_kernel_dir() (
   # 正例：drop-in 配置自定义目录且内含 state.json → 随卸载删除
   INSTALL_DIR="$work/agent"
   mkdir -p "$INSTALL_DIR"
-  printf 'binary' > "$INSTALL_DIR/flux_agent"
-  FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
-  printf '[Service]\nExecStart=%s/flux_agent\n' "$INSTALL_DIR" > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
-  mkdir -p "${FLUX_AGENT_SYSTEMD_SERVICE_FILE}.d"
+  printf 'binary' > "$INSTALL_DIR/flmx_agent"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
+  printf '[Service]\nExecStart=%s/flmx_agent\n' "$INSTALL_DIR" > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+  mkdir -p "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d"
   local kdir="$work/custom-kernels"
   mkdir -p "$kdir"
   printf '{}' > "$kdir/state.json"
-  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$kdir" > "${FLUX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$kdir" > "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
 
   local rc="0" out
   out=$(mktemp)
   rc="0"
-  printf 'y\n' | uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  printf 'y\n' | uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
   assert_equals "0" "$rc" "R2-F7-I02: uninstall with a custom kernel dir should succeed"
   [[ ! -d "$INSTALL_DIR" ]] || fail "R2-F7-I02: install dir should be removed"
   [[ ! -d "$kdir" ]] || fail "R2-F7-I02: custom kernel dir should be removed on uninstall"
@@ -5016,11 +5016,11 @@ test_uninstall_removes_custom_kernel_dir() (
   # 拒绝形态：单元内指向系统目录 → 不删、点名披露、卸载仍成功
   INSTALL_DIR="$work/agent2"
   mkdir -p "$INSTALL_DIR"
-  printf 'binary' > "$INSTALL_DIR/flux_agent"
-  rm -rf "${FLUX_AGENT_SYSTEMD_SERVICE_FILE}.d"
-  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=/etc\n' > "$FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  printf 'binary' > "$INSTALL_DIR/flmx_agent"
+  rm -rf "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d"
+  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=/etc\n' > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
   rc="0"
-  printf 'y\n' | uninstall_flux_agent >"$out" 2>&1 || rc="$?"
+  printf 'y\n' | uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
   assert_equals "0" "$rc" "R2-F7-I02: uninstall should still succeed when the kernel dir value is refused"
   grep -q "不自动清理" "$out" || \
     fail "R2-F7-I02: refused kernel dir value should be disclosed, not silently skipped"
@@ -6935,6 +6935,461 @@ test_panel_menu5_dns_pointing_elsewhere_warns() (
     fail "R6-04: menu 5 must write the site block after explicit confirmation"
 )
 
+# RN-1: 改名后的新装缺省全集——脚本常量（现行缺省为 flmx 名、旧名
+# 只留在识别集）、两份 compose 模板的回退默认（容器/PG 库用户/卷/
+# 网络/后端镜像/默认口令哨兵）、版本键优先级（FLMX_VERSION 优先、
+# FLUX_VERSION 回退）与新装 PG 库/用户缺省。
+test_panel_rename_new_install_defaults_are_flmx() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  assert_equals "flmx-panel-backend" "$DEFAULT_PANEL_BACKEND_CONTAINER" "RN-1: script default backend container must be the flmx name"
+  assert_equals "flmx-panel-postgres" "$DEFAULT_PANEL_POSTGRES_CONTAINER" "RN-1: script default postgres container must be the flmx name"
+  assert_equals "flux-panel-backend" "$LEGACY_PANEL_BACKEND_CONTAINER" "RN-1: the legacy recognition set must keep the old backend name"
+  assert_equals "flux-panel-postgres" "$LEGACY_PANEL_POSTGRES_CONTAINER" "RN-1: the legacy recognition set must keep the old postgres name"
+  assert_equals "vite-frontend" "$LEGACY_PANEL_FRONTEND_CONTAINER" "RN-1: the legacy recognition set must keep the old frontend name"
+
+  local f lit
+  for f in docker-compose-v4.yml docker-compose-v6.yml; do
+    for lit in \
+      'flmx-panel-backend:${FLMX_VERSION:-${FLUX_VERSION:-latest}}' \
+      'container_name: ${PANEL_BACKEND_CONTAINER:-flmx-panel-backend}' \
+      'container_name: ${PANEL_POSTGRES_CONTAINER:-flmx-panel-postgres}' \
+      'container_name: ${PANEL_FRONTEND_CONTAINER:-flmx-panel-frontend}' \
+      'POSTGRES_DB: ${POSTGRES_DB:-flmx_panel}' \
+      'POSTGRES_USER: ${POSTGRES_USER:-flmx_panel}' \
+      'POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flmx_panel_change_me}' \
+      'flmx-vite-frontend:${FLMX_VERSION:-${FLUX_VERSION:-latest}}' \
+      'name: ${FLMX_SQLITE_VOLUME:-flmx-sqlite-data}' \
+      'name: ${FLMX_POSTGRES_VOLUME:-flmx-postgres-data}' \
+      'name: ${FLMX_NETWORK:-flmx-network}'; do
+      grep -Fq "$lit" "$ROOT_DIR/$f" || fail "RN-1: $f must carry the new-install default: $lit"
+    done
+    if grep -Fq ':-flux-panel-' "$ROOT_DIR/$f"; then
+      fail "RN-1: $f must not keep a legacy container-name fallback"
+    fi
+    if grep -Fq 'flmx-flux-panel-backend' "$ROOT_DIR/$f"; then
+      fail "RN-1: $f must not keep the old backend image name"
+    fi
+    if grep -Fq ':-flux_panel}' "$ROOT_DIR/$f"; then
+      fail "RN-1: $f must not keep the legacy PG db/user fallback"
+    fi
+    if grep -Fq ':-vite-frontend}' "$ROOT_DIR/$f"; then
+      fail "RN-1: $f must not keep the legacy frontend fallback"
+    fi
+  done
+
+  # 版本键环境链：FLMX_VERSION 优先、FLUX_VERSION 回退。
+  VERSION="" FLMX_VERSION="2.0.0" FLUX_VERSION="1.0.0" PINNED_VERSION=""
+  assert_equals "2.0.0" "$(resolve_version)" "RN-1: FLMX_VERSION must win over FLUX_VERSION"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="1.0.0" PINNED_VERSION=""
+  assert_equals "1.0.0" "$(resolve_version)" "RN-1: FLUX_VERSION must remain readable as the fallback key"
+
+  # 新装选 PostgreSQL 时库/用户缺省为 flmx_panel。
+  get_config_params <<< $'\n\n2' >/dev/null
+  assert_equals "flmx_panel" "$POSTGRES_DB" "RN-1: fresh installs must default POSTGRES_DB to flmx_panel"
+  assert_equals "flmx_panel" "$POSTGRES_USER" "RN-1: fresh installs must default POSTGRES_USER to flmx_panel"
+)
+
+# RN-1: 旧名识别集不回归——已知名全集仍含旧缺省名、旧名不作专属
+# 证据、detect 在只有旧名/只有新名/两代同现三态下分别沿用旧名/
+# 取新名/拒绝判定。
+test_panel_legacy_identity_recognition_intact() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  if ! panel_backend_name_is_known_ours "flux-panel-backend"; then
+    fail "RN-1: the legacy backend name must stay in the known-ours set"
+  fi
+  if ! panel_backend_name_is_known_ours "flmx-panel-backend"; then
+    fail "RN-1: the flmx backend name must be in the known-ours set"
+  fi
+  if panel_backend_name_is_known_ours "other-panel-backend"; then
+    fail "RN-1: a foreign backend name must not enter the known-ours set"
+  fi
+  if panel_backend_name_is_exclusive_ours "flux-panel-backend"; then
+    fail "RN-1: the legacy backend name must not count as exclusive ownership evidence"
+  fi
+  if ! panel_backend_name_is_exclusive_ours "flmx-panel-backend"; then
+    fail "RN-1: the flmx backend name must count as exclusive ownership evidence"
+  fi
+
+  unset PANEL_BACKEND_CONTAINER FLMX_INSTANCE
+  local dir
+  dir=$(mktemp -d)
+  PANEL_DEPLOY_DIR="$dir"
+  EXIST_CASE=""
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:v-test"
+      return 0
+    fi
+    if [[ "$1" == "inspect" ]]; then
+      case "$EXIST_CASE" in
+        legacy) [[ "$2" == "flux-panel-backend" ]] ;;
+        new) [[ "$2" == "flmx-panel-backend" ]] ;;
+        both) [[ "$2" == "flux-panel-backend" || "$2" == "flmx-panel-backend" ]] ;;
+      esac
+      return
+    fi
+    if [[ "$1" == "ps" ]]; then
+      case "$EXIST_CASE" in
+        legacy) printf '%s\n' "flux-panel-backend" ;;
+        new) printf '%s\n' "flmx-panel-backend" ;;
+        both) printf '%s\n' "flux-panel-backend" "flmx-panel-backend" ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+
+  EXIST_CASE="legacy"
+  assert_equals "flux-panel-backend" "$(detect_panel_backend_container)" "RN-1: detect must still resolve a legacy-only deployment to the legacy name"
+  EXIST_CASE="new"
+  assert_equals "flmx-panel-backend" "$(detect_panel_backend_container)" "RN-1: detect must resolve a new-only deployment to the flmx name"
+  EXIST_CASE="both"
+  local rc="0"
+  detect_panel_backend_container >/dev/null 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "RN-1: detect must still refuse when both generations are present"
+)
+
+# RN-1 升级改名夹具：在 $1 构造存量部署（$2=legacy 带旧名键 /
+# keyless 无身份键），docker/compose 以存在性文件与日志桩承接；
+# resolve 桩按真实口径给出旧名全局（keyless 经探测亦落旧名）。
+setup_rename_update_fixture() {
+  FIXTURE_DIR="$1"
+  FIXTURE_EXIST="$1/exist"
+  FIXTURE_RMLOG="$1/rm.log"
+  mkdir -p "$FIXTURE_EXIST"
+  : > "$FIXTURE_RMLOG"
+  touch "$FIXTURE_EXIST/flux-panel-backend" "$FIXTURE_EXIST/vite-frontend" "$FIXTURE_EXIST/flux-panel-postgres"
+  cat > "$1/.env" <<'EOF'
+JWT_SECRET=<redacted>
+FRONTEND_PORT=6366
+BACKEND_PORT=6365
+FLUX_VERSION=1.9.7
+DB_TYPE=sqlite
+EOF
+  if [[ "$2" == "legacy" ]]; then
+    cat >> "$1/.env" <<'EOF'
+PANEL_BACKEND_CONTAINER=flux-panel-backend
+PANEL_FRONTEND_CONTAINER=vite-frontend
+PANEL_POSTGRES_CONTAINER=flux-panel-postgres
+COMPOSE_PROJECT_NAME=flvx-panel
+EOF
+  fi
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:1.9.7\n' > "$1/docker-compose.yml"
+
+  check_docker() { DOCKER_CMD="fixture_rename_compose"; }
+  fixture_rename_compose() {
+    if [[ "$1" == "up" ]]; then
+      local k v
+      for k in PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER; do
+        v=$(get_env_var "$k" "$FIXTURE_DIR/.env" || true)
+        [[ -n "$v" ]] && touch "$FIXTURE_EXIST/$v"
+      done
+    fi
+    return 0
+  }
+  docker() {
+    case "$1" in
+      ps)
+        ls "$FIXTURE_EXIST" 2>/dev/null || true
+        return 0
+        ;;
+      stop)
+        return 0
+        ;;
+      rm)
+        printf '%s\n' "$2" >> "$FIXTURE_RMLOG"
+        rm -f "$FIXTURE_EXIST/$2"
+        return 0
+        ;;
+      volume)
+        return 1
+        ;;
+      inspect)
+        if [[ "$2" == "-f" ]]; then
+          local fmt="$3" name="$4"
+          case "$fmt" in
+            *Health.Status*)
+              if [[ "$name" == "flmx-panel-backend" && -n "${FIXTURE_BACKEND_UNHEALTHY:-}" ]]; then
+                printf 'unhealthy\n'
+              else
+                printf 'healthy\n'
+              fi
+              ;;
+            *Mounts*)
+              case "$fmt" in
+                *"/app/data"*) printf 'sqlite_data' ;;
+                *"/var/lib/postgresql/data"*) printf 'postgres_data' ;;
+              esac
+              ;;
+            *NetworkSettings.Networks*)
+              printf 'gost-network'
+              ;;
+            *)
+              printf '\n'
+              ;;
+          esac
+          return 0
+        fi
+        [[ -e "$FIXTURE_EXIST/$2" ]]
+        return
+        ;;
+    esac
+    return 0
+  }
+  sleep() { :; }
+
+  resolve_panel_deployment() {
+    PANEL_DEPLOY_DIR="$FIXTURE_DIR"
+    PANEL_BACKEND_CONTAINER="flux-panel-backend"
+    PANEL_FRONTEND_CONTAINER="vite-frontend"
+    PANEL_POSTGRES_CONTAINER="flux-panel-postgres"
+    PANEL_COMPOSE_PROJECT="flvx-panel"
+    cd "$FIXTURE_DIR"
+  }
+  validate_panel_update_environment() { :; }
+  get_current_db_type() { echo "sqlite"; }
+  get_deployed_panel_version() { return 1; }
+  resolve_latest_release_tag() { echo "1.9.8"; }
+  download_panel_update_compose() {
+    UPDATE_COMPOSE_CANDIDATE="$FIXTURE_DIR/candidate.yml"
+    cat > "$UPDATE_COMPOSE_CANDIDATE" <<'YAML'
+services:
+  backend:
+    image: ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:1.9.8
+    environment:
+      FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
+YAML
+  }
+  validate_panel_update_compose() { return 0; }
+  create_panel_update_backup() {
+    UPDATE_BACKUP_DIR="$FIXTURE_DIR/backup"
+    mkdir -p "$UPDATE_BACKUP_DIR"
+    cp -p "$FIXTURE_DIR/.env" "$FIXTURE_DIR/docker-compose.yml" "$UPDATE_BACKUP_DIR/"
+  }
+  pull_panel_update_images() { return 0; }
+}
+
+# RN-1: 存量升级改名成功路径——.env 带旧名键与完全无身份键两幕：
+# 更新走通、三身份键写为现行名、旧容器被删、卷/网络缺失键钉为现
+# 行有效值（旧名、不随改名翻新）、既有项目名逐字保留、版本键双写
+# 到目标版本、进程全局同步新名。
+test_panel_update_renames_legacy_identity() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  assert_renamed_env() {
+    local dir="$1"
+    grep -q '^PANEL_BACKEND_CONTAINER=flmx-panel-backend$' "$dir/.env" || fail "RN-1: backend identity key must be renamed in .env"
+    grep -q '^PANEL_FRONTEND_CONTAINER=flmx-panel-frontend$' "$dir/.env" || fail "RN-1: frontend identity key must be renamed in .env"
+    grep -q '^PANEL_POSTGRES_CONTAINER=flmx-panel-postgres$' "$dir/.env" || fail "RN-1: postgres identity key must be renamed in .env"
+    grep -q '^FLMX_VERSION=1.9.8$' "$dir/.env" || fail "RN-1: update must write FLMX_VERSION"
+    grep -q '^FLUX_VERSION=1.9.8$' "$dir/.env" || fail "RN-1: update must keep the FLUX_VERSION fallback key in sync during the transition"
+    grep -q '^FLMX_SQLITE_VOLUME=sqlite_data$' "$dir/.env" || fail "RN-1: a missing sqlite volume key must be pinned to the effective volume, not renamed"
+    grep -q '^FLMX_POSTGRES_VOLUME=postgres_data$' "$dir/.env" || fail "RN-1: a missing postgres volume key must be pinned to the effective volume, not renamed"
+    grep -q '^FLMX_NETWORK=gost-network$' "$dir/.env" || fail "RN-1: a missing network key must be pinned to the effective network, not renamed"
+    grep -q '^COMPOSE_PROJECT_NAME=flvx-panel$' "$dir/.env" || fail "RN-1: the effective compose project must be preserved/pinned verbatim"
+    grep -Fxq 'flux-panel-backend' "$dir/rm.log" || fail "RN-1: the legacy backend container must be removed during the rename"
+    grep -Fxq 'vite-frontend' "$dir/rm.log" || fail "RN-1: the legacy frontend container must be removed during the rename"
+    grep -Fxq 'flux-panel-postgres' "$dir/rm.log" || fail "RN-1: the legacy postgres container must be removed during the rename"
+  }
+
+  local dir1 dir2
+  dir1=$(mktemp -d)
+  setup_rename_update_fixture "$dir1" legacy
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir1/update.log" 2>&1 || fail "RN-1: update of a legacy-named deployment must succeed"
+  grep -q '身份改名' "$dir1/update.log" || fail "RN-1: the rename must be named in the update output"
+  assert_renamed_env "$dir1"
+  assert_equals "flmx-panel-backend" "$PANEL_BACKEND_CONTAINER" "RN-1: process globals must switch to the new backend name after the rename"
+  assert_equals "flmx-panel-postgres" "$PANEL_POSTGRES_CONTAINER" "RN-1: process globals must switch to the new postgres name after the rename"
+
+  dir2=$(mktemp -d)
+  setup_rename_update_fixture "$dir2" keyless
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir2/update.log" 2>&1 || fail "RN-1: update of a keyless legacy deployment must succeed"
+  assert_renamed_env "$dir2"
+)
+
+# RN-1: 改名后健康检查失败的回滚路径——新名后端恒 unhealthy 时更
+# 新必须失败并走既有回滚：先删新名容器、.env 逐字恢复为更新前
+# （旧名与旧版本键）、进程全局复位旧名、回执点名已恢复。
+test_panel_update_rename_health_failure_rolls_back() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir
+  dir=$(mktemp -d)
+  setup_rename_update_fixture "$dir" legacy
+  cp -p "$dir/.env" "$dir/env.pristine"
+  FIXTURE_BACKEND_UNHEALTHY="1"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  local rc="0"
+  update_panel >"$dir/update.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "RN-1: update must fail when the renamed backend never becomes healthy"
+  grep -q '已恢复更新前版本' "$dir/update.log" || fail "RN-1: the rollback completion must be reported"
+  grep -q '身份改名回滚' "$dir/update.log" || fail "RN-1: the rollback must name the identity-rename rollback step"
+  grep -Fxq 'flmx-panel-backend' "$dir/rm.log" || fail "RN-1: rollback must remove the new-name backend container before relaunching under the old name"
+  grep -Fxq 'flux-panel-backend' "$dir/rm.log" || fail "RN-1: the rename step must have removed the legacy backend container"
+  diff -q "$dir/env.pristine" "$dir/.env" >/dev/null || fail "RN-1: rollback must restore the pre-update .env verbatim (legacy names and version)"
+  assert_equals "flux-panel-backend" "$PANEL_BACKEND_CONTAINER" "RN-1: process globals must be restored to the old backend name after rollback"
+  assert_equals "flux-panel-postgres" "$PANEL_POSTGRES_CONTAINER" "RN-1: process globals must be restored to the old postgres name after rollback"
+)
+
+# RN-1: 默认口令哨兵改名后的迁移判定——现行字面量
+# flmx_panel_change_me 与 legacy 字面量 flux_panel_change_me 都必
+# 须继续触发强制重生成（存量 .env 的旧值保护不丢），真实口令不
+# 得被动。
+test_panel_migrate_placeholder_password_sentinels() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  unset PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_DEPLOY_DIR FLMX_INSTANCE
+  check_docker() { DOCKER_CMD="fixture_compose"; return 0; }
+  fixture_compose() { return 0; }
+  sleep() { :; }
+  docker() {
+    case "$1" in
+      ps)
+        printf '%s\n' "flmx-panel-postgres" "flmx-panel-backend" "flmx-panel-frontend"
+        return 0
+        ;;
+      inspect)
+        case "$*" in
+          *Health.Status*) printf 'healthy\n' ;;
+          *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:v-test" ;;
+        esac
+        return 0
+        ;;
+    esac
+    return 0
+  }
+
+  run_password_scenario() {
+    local password="$1" expect_regen="$2"
+    local work
+    work=$(mktemp -d)
+    cat > "$work/.env" <<EOF
+JWT_SECRET=<redacted>
+DB_TYPE=sqlite
+POSTGRES_DB=flmx_panel
+POSTGRES_USER=flmx_panel
+POSTGRES_PASSWORD=$password
+PANEL_BACKEND_CONTAINER=flmx-panel-backend
+PANEL_FRONTEND_CONTAINER=flmx-panel-frontend
+PANEL_POSTGRES_CONTAINER=flmx-panel-postgres
+EOF
+    printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$work/docker-compose.yml"
+    local rc="0"
+    ( cd "$work" && migrate_to_postgres >"$work/migrate.log" 2>&1 ) || rc="$?"
+    assert_equals "0" "$rc" "RN-1: migration must succeed in the password scenario"
+    local final_password
+    final_password=$(get_env_var POSTGRES_PASSWORD "$work/.env" || true)
+    if [[ "$expect_regen" == "1" ]]; then
+      if [[ -z "$final_password" || "$final_password" == "$password" ]]; then
+        fail "RN-1: placeholder password ($password) must be regenerated during migration"
+      fi
+      grep -q '已生成随机口令' "$work/migrate.log" || fail "RN-1: password regeneration must be named in the migration output"
+    else
+      assert_equals "$password" "$final_password" "RN-1: a real password must survive migration unchanged"
+    fi
+  }
+
+  run_password_scenario "flmx_panel_change_me" 1
+  run_password_scenario "flux_panel_change_me" 1
+  run_password_scenario "a-real-password-123" 0
+)
+
+# RN-2 接缝：存量旧布局（LEGACY_INSTALL_DIR＋旧二进制名＋旧服务
+# 文件）在位时，菜单更新入口必须先整体迁移到新布局再走完更新：
+# 目录搬移、二进制改新名、配置逐字不变、新 unit 只写新名、旧
+# unit 摘除。归属以 TAKEOVER 显式确认（专测迁移机制本身）。
+test_update_flmx_agent_migrates_legacy_layout() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  FLMX_AGENT_TAKEOVER="1"
+  SERVICE_MANAGER="systemd"
+
+  local root
+  root=$(mktemp -d)
+  INSTALL_DIR="$root/flmx_agent"
+  LEGACY_INSTALL_DIR="$root/flux_agent"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$root/flmx_agent.service"
+  LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE="$root/flux_agent.service"
+
+  mkdir -p "$LEGACY_INSTALL_DIR"
+  cat > "$LEGACY_INSTALL_DIR/flux_agent" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "-V" ]]; then echo "1.9.0"; else echo "legacy agent"; fi
+EOF
+  chmod +x "$LEGACY_INSTALL_DIR/flux_agent"
+  printf '{\n  "addr": "wss://panel.example.com",\n  "secret": "s3cret"\n}\n' > "$LEGACY_INSTALL_DIR/config.json"
+  printf 'node-state' > "$LEGACY_INSTALL_DIR/node-state.txt"
+  printf '[Unit]\nDescription=legacy agent\n[Service]\nExecStart=%s/flux_agent\n' "$LEGACY_INSTALL_DIR" > "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  cp -p "$LEGACY_INSTALL_DIR/config.json" "$root/config.before"
+
+  cleanup_legacy_gost_installation() { :; }
+  check_and_install_tcpkill() { :; }
+  sleep() { :; }
+  systemctl() {
+    if [[ "$*" == *MainPID* ]]; then
+      echo 4242
+    fi
+    return 0
+  }
+  curl() {
+    local output=""
+    local url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      printf '#!/bin/bash\necho "new version"\n' | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+    cat > "$output" <<'EOF'
+#!/bin/bash
+echo "new version"
+EOF
+    chmod +x "$output"
+  }
+
+  update_flmx_agent >"$root/update.log" 2>&1 || \
+    fail "RN-2 migration: the update entry must migrate the legacy layout and complete the update"
+
+  grep -q '迁移到新布局' "$root/update.log" || \
+    fail "RN-2 migration: the migration must be named in the update output"
+  [[ -d "$INSTALL_DIR" ]] || fail "RN-2 migration: the new install dir must exist after migration"
+  [[ ! -e "$LEGACY_INSTALL_DIR" ]] || fail "RN-2 migration: the legacy install dir must be gone after migration"
+  [[ -f "$INSTALL_DIR/flmx_agent" ]] || fail "RN-2 migration: the binary must carry the new name in the new layout"
+  [[ ! -e "$INSTALL_DIR/flux_agent" ]] || fail "RN-2 migration: the old binary name must not remain in the new layout"
+  grep -q "new version" "$INSTALL_DIR/flmx_agent" || \
+    fail "RN-2 migration: the update must still replace the binary after migrating the layout"
+  diff -q "$root/config.before" "$INSTALL_DIR/config.json" >/dev/null || \
+    fail "RN-2 migration: config.json must survive the migration byte-identical"
+  [[ -f "$INSTALL_DIR/node-state.txt" ]] || fail "RN-2 migration: other state files must move with the directory"
+  [[ -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" ]] || fail "RN-2 migration: the new service file must be written"
+  if grep -q 'flux_agent' "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"; then
+    fail "RN-2 migration: the new service file must not reference the legacy name"
+  fi
+  grep -q 'flmx_agent' "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" || \
+    fail "RN-2 migration: the new service file must reference flmx_agent"
+  [[ ! -e "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" ]] || fail "RN-2 migration: the legacy service file must be removed"
+)
+
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -6984,33 +7439,33 @@ test_panel_anchor_corroboration_degrades
 test_install_script_binary_anchor_passes
 test_install_script_binary_anchor_mismatch_rejects
 test_install_script_binary_anchor_degrades
-test_update_flux_agent_downloads_without_prompt
-test_update_flux_agent_skips_proxy_prompt_when_not_installed
-test_update_flux_agent_prints_online_confirmation_guidance
-test_flux_agent_health_ok_requires_stable_pid
-test_update_flux_agent_rolls_back_flapping_binary
-test_update_flux_agent_aborts_when_backup_fails
-test_update_flux_agent_aborts_when_backup_fails_with_stale_bak
+test_update_flmx_agent_downloads_without_prompt
+test_update_flmx_agent_skips_proxy_prompt_when_not_installed
+test_update_flmx_agent_prints_online_confirmation_guidance
+test_flmx_agent_health_ok_requires_stable_pid
+test_update_flmx_agent_rolls_back_flapping_binary
+test_update_flmx_agent_aborts_when_backup_fails
+test_update_flmx_agent_aborts_when_backup_fails_with_stale_bak
 test_extract_leading_semver_matches_go_rules
-test_update_flux_agent_rejects_downgrade
-test_update_flux_agent_allows_higher_and_incomparable
+test_update_flmx_agent_rejects_downgrade
+test_update_flmx_agent_allows_higher_and_incomparable
 test_main_propagates_operation_exit_codes
-test_install_flux_agent_preserves_legacy_gost_when_download_fails
-test_update_flux_agent_preserves_legacy_gost_when_download_fails
+test_install_flmx_agent_preserves_legacy_gost_when_download_fails
+test_update_flmx_agent_preserves_legacy_gost_when_download_fails
 test_agent_config_addr_normalizes_json_escapes
 test_guard_agent_dir_ownership_matrix
-test_update_flux_agent_refuses_unowned_agent
-test_update_flux_agent_menu_guard_pass_forms
-test_update_flux_agent_menu_guard_interactive
-test_uninstall_flux_agent_refuses_unowned_agent
-test_uninstall_flux_agent_menu_guard_pass_forms
-test_uninstall_flux_agent_cleans_host_tuning_residue
-test_uninstall_flux_agent_host_cleanup_partial_failure_and_idempotent
-test_uninstall_flux_agent_host_cleanup_queue_backup_lost
-test_install_flux_agent_writes_json_safe_config
+test_update_flmx_agent_refuses_unowned_agent
+test_update_flmx_agent_menu_guard_pass_forms
+test_update_flmx_agent_menu_guard_interactive
+test_uninstall_flmx_agent_refuses_unowned_agent
+test_uninstall_flmx_agent_menu_guard_pass_forms
+test_uninstall_flmx_agent_cleans_host_tuning_residue
+test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent
+test_uninstall_flmx_agent_host_cleanup_queue_backup_lost
+test_install_flmx_agent_writes_json_safe_config
 test_install_script_bootstraps_bash_for_alpine
-test_install_flux_agent_uses_openrc
-test_remove_flux_agent_service_uses_openrc
+test_install_flmx_agent_uses_openrc
+test_remove_flmx_agent_service_uses_openrc
 test_cleanup_legacy_gost_installation_removes_service_and_binary
 test_cleanup_legacy_gost_installation_preserves_unrelated_gost
 test_cleanup_legacy_gost_installation_skips_systemd_on_openrc
@@ -7019,7 +7474,7 @@ test_cleanup_legacy_gost_installation_skips_unreadable_addr
 test_cleanup_legacy_gost_installation_takeover_cleans_foreign_agent
 test_cleanup_legacy_gost_installation_matches_installed_agent_addr
 test_cleanup_legacy_gost_installation_interactive_confirm
-test_uninstall_flux_agent_host_cleanup_preserves_foreign_legacy_resources
+test_uninstall_flmx_agent_host_cleanup_preserves_foreign_legacy_resources
 test_install_script_accepts_proxy_url_env_without_prompt
 test_panel_install_script_can_disable_proxy
 test_panel_install_script_builds_canonical_compose_urls
@@ -7039,7 +7494,7 @@ test_install_panel_postgres_health_failure_has_guidance
 test_panel_install_script_uses_builtin_routes_by_default
 test_panel_install_script_accepts_proxy_url_env_without_prompt
 test_panel_install_script_ignores_eof_without_prompt
-test_install_flux_agent_returns_nonzero_when_service_not_active
+test_install_flmx_agent_returns_nonzero_when_service_not_active
 test_systemd_starts_reset_failed_before_start
 test_rollback_restarts_service_from_failed_state
 test_panel_menu5_preserves_front_block_after_menu6
@@ -7048,7 +7503,7 @@ test_panel_menu5_restart_failure_rolls_back_with_guidance
 test_panel_menu6_restart_failure_rolls_back_with_guidance
 test_panel_menu5_caddy_list_truncated_not_landed
 test_panel_menu5_caddy_list_removed_when_install_fails
-test_install_flux_agent_rejects_flapping_service
+test_install_flmx_agent_rejects_flapping_service
 test_main_delete_self_only_on_success
 test_panel_main_delete_self_only_on_success
 test_install_uninstall_cancel_keeps_script
@@ -7072,5 +7527,12 @@ test_activate_panel_update_files_keeps_hops_line
 test_pgloader_command_file_terminated
 test_panel_migrate_preprocess_drops_fold_index_and_v5_record
 test_tcpkill_missing_warns_instead_of_silent
+
+test_panel_rename_new_install_defaults_are_flmx
+test_panel_legacy_identity_recognition_intact
+test_panel_update_renames_legacy_identity
+test_panel_update_rename_health_failure_rolls_back
+test_panel_migrate_placeholder_password_sentinels
+test_update_flmx_agent_migrates_legacy_layout
 
 echo "install script tests passed"
