@@ -1390,6 +1390,17 @@ for (const fam of [
 // 则只认 族-档 形态）——另行收集（censusArbitrary），字面色即渲
 // 染色、无语义覆盖块可借，按实值在玻璃格合成复算，见下方任意
 // 值段。
+// RR4-C6-02：同族四形态补全——① 主普查档位组原为 ([1-9]00)，
+// -50 档（主题六族真定义、--warning-50 近白）不入册、text-warning
+// -50 探针计数纹丝不动全绿，现档位组扩为 (50|[1-9]00)，-50 与其
+// 他浅档同按「浅档无覆盖块」点名；② 任意值准入原只认 #/rgb/hsl
+// /var 开头，Tailwind v4 的 oklch() 不入册，现准入 oklch( 并在
+// parseCssColorValue 按 OKLCH→sRGB 实值求解；③ 任意值的 /alpha
+// 后缀（text-[#0f172a]/10）原在方括号外不被捕获、按不透明求值
+// 放行，现捕获后缀并与任意值段同法做 alpha 合成（值内 alpha 与
+// 后缀 alpha 相乘）；④ Tailwind v4 变量简写 text-(--x)（等价
+// text-[var(--x)]）三条普查正则均不匹配，现专形收集、按 var 实
+// 值求值。
 const SEMANTIC_TEXT_FAMS = new Set([
   ...GLASS_TEXT_TOKEN_FAMS,
   ...Object.keys(GLASS_TEXT_ALIAS),
@@ -1405,7 +1416,7 @@ const censusWalk = (dir) => {
     } else if (/\.tsx?$/.test(entry.name)) {
       const text = readFileSync(path, "utf8");
       const re =
-        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-([a-z]+)-([1-9]00)\b(\/(?:\d+|\[[\d.]+\]))?/g;
+        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-([a-z]+)-(50|[1-9]00)\b(\/(?:\d+|\[[\d.]+\]))?/g;
       let m;
 
       while ((m = re.exec(text)) !== null) {
@@ -1441,10 +1452,19 @@ const censusWalk = (dir) => {
         censusHits.push({ variant: bm[1] ?? "", fam: bm[2], shade: "base", alpha: null, path });
       }
       // 任意值文字色（R4-C6-01）：只收颜色形态——以 # / rgb( /
-      // hsl( / var( 开头、color: 类型提示、或纯颜色关键词；长度
-      // 形态（text-[14px]、text-[length:...]）是字号、不入册。
+      // hsl( / oklch( / var( 开头、color: 类型提示、或纯颜色关键
+      // 词；长度形态（text-[14px]、text-[length:...]）是字号、不
+      // 入册。RR4-C6-02③：方括号后的 /alpha 后缀一并捕获
+      // （text-[#0f172a]/10 的 /10 在括号外、旧捕获不可见，按不
+      // 透明放行）——后缀 alpha 与值内 alpha 在求值时相乘合成。
+      const suffixAlphaOf = (s) =>
+        s === undefined
+          ? null
+          : s.startsWith("/[")
+            ? parseFloat(s.slice(2, -1))
+            : parseInt(s.slice(1), 10) / 100;
       const arbRe =
-        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-\[([^\]]+)\]/g;
+        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-\[([^\]]+)\](\/(?:\d+|\[[\d.]+\]))?/g;
       let am;
 
       while ((am = arbRe.exec(text)) !== null) {
@@ -1452,11 +1472,35 @@ const censusWalk = (dir) => {
         const value = raw.startsWith("color:") ? raw.slice(6).trim() : raw;
 
         if (
-          /^(#|rgba?\(|hsla?\(|var\()/.test(value) ||
+          /^(#|rgba?\(|hsla?\(|oklch\(|var\()/.test(value) ||
           /^[a-zA-Z]+$/.test(value)
         ) {
-          censusArbitrary.push({ variant: am[1] ?? "", raw, value, path });
+          censusArbitrary.push({
+            variant: am[1] ?? "",
+            raw,
+            value,
+            suffix: am[3] ?? "",
+            suffixAlpha: suffixAlphaOf(am[3]),
+            path,
+          });
         }
+      }
+      // Tailwind v4 变量简写（RR4-C6-02④）：text-(--x) 等价于
+      // text-[var(--x)]——按 var 形态入册、求值同任意值段；后缀
+      // /alpha 同样捕获合成。
+      const shortRe =
+        /(?:(hover|focus|focus-visible|group-hover|dark):)?text-\((--[\w-]+)\)(\/(?:\d+|\[[\d.]+\]))?/g;
+      let sm;
+
+      while ((sm = shortRe.exec(text)) !== null) {
+        censusArbitrary.push({
+          variant: sm[1] ?? "",
+          raw: `(${sm[2]})`,
+          value: `var(${sm[2]})`,
+          suffix: sm[3] ?? "",
+          suffixAlpha: suffixAlphaOf(sm[3]),
+          path,
+        });
       }
     }
   }
@@ -1497,8 +1541,9 @@ const alphaGlassMin = (hex, alpha) => {
 // ── 任意值文字色求值（R4-C6-01）──────────────────────────────
 // 任意值的字面色就是渲染色（无玻璃覆盖块改写），按 CSS 实值解
 // 析：#hex（3/4/6/8 位）、rgb()/rgba()、hsl()/hsla()（逗号或空
-// 格分隔、/alpha 后缀）、var(--x)（经 :root 已解析 token 求值，
-// 带回退则用回退）、基础颜色关键词。解析后以其 alpha 在玻璃
+// 格分隔、/alpha 后缀）、oklch()（RR4-C6-02②，OKLCH→sRGB 换
+// 算）、var(--x)（经 :root 已解析 token 求值，带回退则用回
+// 退）、基础颜色关键词。解析后以其 alpha 在玻璃
 // 36 格载体上合成取最低格（与透明后缀同模型）。无法静态求值
 // （未定义且无回退的 var、currentColor 等）即点名红——声称覆
 // 盖的形态不许静默放行。
@@ -1522,6 +1567,31 @@ const hslToRgb = (h, s, l) => {
     ln - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
 
   return [f(0), f(8), f(4)].map((v) => v * 255);
+};
+// OKLCH → sRGB（RR4-C6-02②）：经 OKLab 与线性 sRGB 矩阵换算后
+// 做 gamma 编码并按渲染口径钳到 [0,255]（超色域分量浏览器同样
+// 钳制/降级，本门按钳后实值算对比度）。
+const oklchToRgb = (L, C, Hdeg) => {
+  const hRad = (Hdeg * Math.PI) / 180;
+  const a = C * Math.cos(hRad);
+  const b = C * Math.sin(hRad);
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = L - 0.0894841775 * a - 1.291485548 * b;
+  const l = l_ ** 3;
+  const m = m_ ** 3;
+  const s = s_ ** 3;
+  const lin = [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ];
+
+  return lin.map((v) => {
+    const g = v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055;
+
+    return Math.min(255, Math.max(0, g * 255));
+  });
 };
 const parseAlphaPart = (aRaw) => {
   if (aRaw === null || aRaw === undefined) return 1;
@@ -1589,6 +1659,31 @@ const parseCssColorValue = (rawValue, depth = 0) => {
           alpha,
         };
   }
+  m = v.match(/^oklch\(([\s\S]+)\)$/);
+  if (m) {
+    const [body, slashAlpha] = m[1].split("/");
+    const parts = body.split(/[,\s]+/).filter(Boolean);
+
+    if (parts.length < 3) return null;
+    // L：百分数按 /100、无单位数即 0..1 本值；C：百分数按 CSS
+    // 口径 100% = 0.4；H：deg 本值、turn ×360、rad 换算弧度制。
+    const L = parts[0].endsWith("%")
+      ? parseFloat(parts[0]) / 100
+      : parseFloat(parts[0]);
+    const C = parts[1].endsWith("%")
+      ? (parseFloat(parts[1]) / 100) * 0.4
+      : parseFloat(parts[1]);
+    let H = parseFloat(parts[2]);
+
+    if (/turn$/i.test(parts[2])) H = parseFloat(parts[2]) * 360;
+    else if (/rad$/i.test(parts[2])) H = (parseFloat(parts[2]) * 180) / Math.PI;
+    if ([L, C, H].some(Number.isNaN)) return null;
+    const alpha = parseAlphaPart(
+      slashAlpha !== undefined ? slashAlpha : parts.length > 3 ? parts[3] : null,
+    );
+
+    return alpha === null ? null : { rgb: oklchToRgb(L, C, H), alpha };
+  }
   m = v.match(/^var\(\s*(--[\w-]+)\s*(?:,([\s\S]*))?\)$/);
   if (m) {
     const resolved = resolvedTokens[m[1]];
@@ -1607,10 +1702,14 @@ const arbitraryCoverReason = (h) => {
 
   if (!parsed) return "任意值无法静态求值";
   if (glassSurfaces.length === 0) return "玻璃格缺失";
+  // RR4-C6-02③：/alpha 后缀与值内 alpha 相乘才是渲染 alpha——
+  // text-[#0f172a]/10 的实渲染是 10% 合成，旧求值按不透明全色
+  // 判过（浅底上实为 ≈1.x）。
+  const effAlpha = parsed.alpha * (h.suffixAlpha ?? 1);
   let min = Infinity;
 
   for (const s of glassSurfaces) {
-    const eff = parsed.rgb.map((c, i) => parsed.alpha * c + (1 - parsed.alpha) * s[i]);
+    const eff = parsed.rgb.map((c, i) => effAlpha * c + (1 - effAlpha) * s[i]);
 
     min = Math.min(min, contrastRgb(eff, s));
   }
@@ -1673,13 +1772,13 @@ check(
     .join("；"),
 );
 check(
-  `任意值文字色普查差集 ∅（实扫 ${censusArbitrary.length} 处：#/rgb/hsl/var/关键词形态按实值在玻璃格合成复算，< 4.5 或无法静态求值即红）`,
+  `任意值文字色普查差集 ∅（实扫 ${censusArbitrary.length} 处：#/rgb/hsl/oklch/var/关键词形态与 v4 变量简写按实值在玻璃格合成复算、/alpha 后缀相乘合成，< 4.5 或无法静态求值即红）`,
   arbitraryUncovered.length === 0,
   arbitraryUncovered
     .slice(0, 5)
     .map(
       ({ h, reason }) =>
-        `${h.variant ? `${h.variant}:` : ""}text-[${h.raw}]（${reason}）@ ${h.path}`,
+        `${h.variant ? `${h.variant}:` : ""}text-${h.raw.startsWith("(") ? h.raw : `[${h.raw}]`}${h.suffix ?? ""}（${reason}）@ ${h.path}`,
     )
     .join("；"),
 );
@@ -2128,7 +2227,7 @@ check(
       "#111111",
 );
 
-// ── 实色面登记（R4-S1-02）────────────────────────────────
+// ── 实色面登记（R4-S1-02；RR4-C6-03 补全同机制全集）────────
 // 机制谓词：静止态不透明浅实色填充充当页面/弹窗内面板。globals.css
 // 自述口径钉死：--content1 只作小型表单控件的填充（输入框、原生
 // select、选择触发器），永不作表面；弹窗内板走 glass-inset、卡片
@@ -2141,6 +2240,18 @@ check(
 // 用途不得登记、必须改玻璃层）；bg-default-50 登记集为空（该
 // token 的任何出现都须先登记分类；bg-default-500/10 是另一
 // token 的已批准洗色，不在本段口径内）。
+// RR4-C6-03：原登记只钉 bg-content1 与 bg-default-50 两个
+// token，同机制的浅实色兄弟 token（bg-default-100/200/300、
+// bg-content2/3/4）不在普查内——探针以其作面板面全绿逃逸。本
+// 轮按机制机械收全：普查面为 content 色阶全档（bg-content<N>
+// 任意 N）与 default 色阶的浅档全集；浅档边界由 token 实值机
+// 械判定（相对亮度 ≥ 0.5），门内另断言主题实测浅档集恰为
+// {50,100,200,300} 且 -400 在界外（主题改值跨界即点名重登
+// 记）。处置口径：content1 与 default-100/200/300 的现行用法
+// 全是组件填充（控件／进度条轨道／状态点／开关与进度构件／
+// 小徽标），逐文件钉册，新文件出现或计数漂移即红，登记时须
+// 分类为组件填充、表面用途不得登记；content2 起与 default-50
+// 登记集为空，任何出现即红、先登记分类。
 const SOLID_FILL_PINS = {
   // 控件填充：输入框/文本域本体
   "components/ui/input.tsx": 1,
@@ -2165,8 +2276,74 @@ const SOLID_FILL_PINS = {
   "pages/subscription/templates.tsx": 1,
   "pages/subscription/template-builder.tsx": 1,
 };
+// 组件填充：进度条轨道（default-100 全数用途）
+const SOLID_FILL_PINS_DEFAULT_100 = {
+  "pages/dashboard/admin-overview.tsx": 2,
+  "pages/inbound/inbound-form-modal.tsx": 1, // hover 态轨道填充
+  "pages/node/monitor-view.tsx": 5,
+  "pages/node/node-live-stats.tsx": 1,
+  "pages/node/tune-modal.tsx": 1,
+  "pages/subscription/traffic-stats.tsx": 1,
+  "pages/subscription.tsx": 1,
+  "pages/user.tsx": 1,
+};
+// 组件填充：进度条轨道／细条／图标小片
+const SOLID_FILL_PINS_DEFAULT_200 = {
+  "pages/config.tsx": 1, // h-7 w-7 图标小片
+  "pages/dashboard.tsx": 1, // 进度条轨道
+  "pages/node/quality-history-bar.ts": 1,
+  "pages/node/tunnel-monitor-view.tsx": 2,
+};
+// 组件填充：状态点／开关与进度构件／小徽标／代码片底
+const SOLID_FILL_PINS_DEFAULT_300 = {
+  "components/page-kit.tsx": 1,
+  "components/ui/progress.tsx": 1,
+  "components/ui/switch.tsx": 1,
+  "pages/config.tsx": 1,
+  "pages/inbound/kernel-panel.tsx": 1,
+  "pages/inbound/sources.tsx": 1,
+  "pages/inbound.tsx": 2,
+  "pages/limit.tsx": 1,
+  "pages/node/monitor-view.tsx": 3,
+  "pages/node/node-row.tsx": 1,
+  "pages/subscription/controls.tsx": 1, // 实色徽标（default-700 登记段已引此面）
+  "pages/subscription.tsx": 1,
+};
 {
-  const solidFound = { "bg-content1": {}, "bg-default-50": {} };
+  // 浅档边界自证：default 色阶各档相对亮度按 :root 实值复算——
+  // 普查浅档集（亮度 ≥ 0.5）必须恰为登记的四档、-400 必须在界
+  // 外；主题改值使任一档跨界时本断言先红，要求同步重登记。
+  const LIGHT_DEFAULT_SHADES = ["50", "100", "200", "300"];
+  const lumProblems = [];
+
+  for (const shade of [...LIGHT_DEFAULT_SHADES, "400"]) {
+    const hex = tokens[`--default-${shade}`];
+
+    if (!hex) {
+      lumProblems.push(`--default-${shade} token 缺失`);
+      continue;
+    }
+    const L = luminance(hex);
+
+    if (LIGHT_DEFAULT_SHADES.includes(shade) && L < 0.5)
+      lumProblems.push(`--default-${shade} 实测亮度 ${L.toFixed(2)} < 0.5 已不属浅档，须重登记普查面`);
+    if (!LIGHT_DEFAULT_SHADES.includes(shade) && L >= 0.5)
+      lumProblems.push(`--default-${shade} 实测亮度 ${L.toFixed(2)} ≥ 0.5 已入浅档，须纳入普查登记`);
+  }
+  check(
+    "实色面浅档边界自证（default 色阶实值亮度 ≥0.5 恰为 50/100/200/300、-400 在界外）",
+    lumProblems.length === 0,
+    lumProblems.join("；"),
+  );
+
+  const solidPinTables = {
+    "bg-content1": SOLID_FILL_PINS,
+    "bg-default-100": SOLID_FILL_PINS_DEFAULT_100,
+    "bg-default-200": SOLID_FILL_PINS_DEFAULT_200,
+    "bg-default-300": SOLID_FILL_PINS_DEFAULT_300,
+  };
+  const solidFound = {};
+  const solidEmptyHits = [];
   const solidWalk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
@@ -2180,32 +2357,55 @@ const SOLID_FILL_PINS = {
           .split("\\")
           .join("/");
 
-        for (const token of Object.keys(solidFound)) {
-          const n = [...text.matchAll(new RegExp(`${token}(?!\\d)`, "g"))].length;
+        for (const m of text.matchAll(/bg-content(\d+)(?!\d)/g)) {
+          const token = `bg-content${m[1]}`;
 
-          if (n > 0) solidFound[token][rel] = n;
+          if (token === "bg-content1") {
+            (solidFound[token] ??= {})[rel] =
+              (solidFound[token]?.[rel] ?? 0) + 1;
+          } else {
+            solidEmptyHits.push(
+              `${token} ${rel}（content 色阶仅 content1 有登记且仅限控件填充，其余档登记集为空——须先登记分类）`,
+            );
+          }
+        }
+        for (const m of text.matchAll(/bg-default-(\d+)(?!\d)/g)) {
+          const token = `bg-default-${m[1]}`;
+
+          if (token in solidPinTables) {
+            (solidFound[token] ??= {})[rel] =
+              (solidFound[token]?.[rel] ?? 0) + 1;
+          } else if (token === "bg-default-50") {
+            solidEmptyHits.push(
+              `${token} ${rel}（登记集为空——静止实色内板须改 glass-inset 或先登记分类）`,
+            );
+          }
+          // -400 起非浅档（边界由上方亮度自证钉住），不在本段口径内。
         }
       }
     }
   };
 
   solidWalk(join(here, "..", "src"));
-  const solidDrift = [];
+  const solidDrift = [...solidEmptyHits];
 
-  for (const [file, pin] of Object.entries(SOLID_FILL_PINS)) {
-    const got = solidFound["bg-content1"][file] ?? 0;
+  for (const [token, pins] of Object.entries(solidPinTables)) {
+    for (const [file, pin] of Object.entries(pins)) {
+      const got = solidFound[token]?.[file] ?? 0;
 
-    if (got !== pin) solidDrift.push(`bg-content1 ${file} 实扫 ${got} 处（钉数 ${pin}）`);
+      if (got !== pin) solidDrift.push(`${token} ${file} 实扫 ${got} 处（钉数 ${pin}）`);
+    }
+    for (const [file, got] of Object.entries(solidFound[token] ?? {})) {
+      if (!(file in pins))
+        solidDrift.push(`${token} ${file} 实扫 ${got} 处（无登记——须分类为组件填充后登记，表面用途改玻璃层）`);
+    }
   }
-  for (const [file, got] of Object.entries(solidFound["bg-content1"])) {
-    if (!(file in SOLID_FILL_PINS))
-      solidDrift.push(`bg-content1 ${file} 实扫 ${got} 处（无登记——须分类为控件填充后登记，表面用途改玻璃层）`);
-  }
-  for (const [file, got] of Object.entries(solidFound["bg-default-50"])) {
-    solidDrift.push(`bg-default-50 ${file} 实扫 ${got} 处（登记集为空——静止实色内板须改 glass-inset 或先登记分类）`);
-  }
+  const solidPinTotal = Object.values(solidPinTables)
+    .flatMap((t) => Object.values(t))
+    .reduce((a, b) => a + b, 0);
+
   check(
-    `实色面登记差集 ∅（bg-content1 钉册 ${Object.values(SOLID_FILL_PINS).reduce((a, b) => a + b, 0)} 处控件填充、bg-default-50 登记 0 处）`,
+    `实色面登记差集 ∅（浅实色全集钉册 ${solidPinTotal} 处组件填充：bg-content1 ${Object.values(SOLID_FILL_PINS).reduce((a, b) => a + b, 0)}＋bg-default-100/200/300，bg-content2+/bg-default-50 登记 0 处）`,
     solidDrift.length === 0,
     solidDrift.slice(0, 5).join("；"),
   );
