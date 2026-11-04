@@ -7118,6 +7118,16 @@ EOF
   check_docker() { DOCKER_CMD="fixture_rename_compose"; }
   fixture_rename_compose() {
     if [[ "$1" == "up" ]]; then
+      # 重建状态标记：新模板 compose 下的 up 视作容器已被新版重
+      # 建，此后 inspect 的 /app/data 改答 FIXTURE_REBUILT_SQLITE_
+      # VOLUME（见下方 Mounts 分支）。旧实现无条件改答——同名容
+      # 器在重建前（钉键实读时点）也被答成重建后挂载，与真实
+      # docker 语义不符（旧容器在被重建前恒答自身真实挂载），
+      # FIX199-D1 的钉键交叉核对落地后该失真会把自检用例的形
+      # 态顶掉，故按状态建模。
+      if ! grep -q 'flmx-flux-panel-backend' "$FIXTURE_DIR/docker-compose.yml" 2>/dev/null; then
+        touch "$FIXTURE_DIR/.rebuilt"
+      fi
       local k v def_backend def_frontend def_postgres
       # 键缺失时的容器名按当前 compose 文件的代际缺省（与真实模
       # 板同口径：旧 compose 缺省旧名、新 compose 缺省现行名）；
@@ -7183,7 +7193,12 @@ EOF
                   # SQLITE_VOLUME 单独改答挂载卷，模拟「漏钉后按模
                   # 板回退名挂空卷」的事故形态，供升级后卷名自检
                   # 用例制造挂载不符；未设时与其它容器同答。
-                  if [[ "$name" == "flmx-panel-backend" && -n "${FIXTURE_REBUILT_SQLITE_VOLUME:-}" ]]; then
+                  # FIX199-D1 状态化：改答只在容器已被新模板 compose
+                  # 的 up 重建后（.rebuilt 标记）生效——重建前的实读
+                  # （钉键交叉核对）必须答旧容器真实挂载，否则同名
+                  # 新旧容器在夹具里不可分辨、钉键会把重建后形态
+                  # 误当现行真值改写键。
+                  if [[ "$name" == "flmx-panel-backend" && -n "${FIXTURE_REBUILT_SQLITE_VOLUME:-}" && -e "$FIXTURE_DIR/.rebuilt" ]]; then
                     printf '%s' "$FIXTURE_REBUILT_SQLITE_VOLUME"
                   else
                     printf '%s' "${FIXTURE_SQLITE_VOLUME:-sqlite_data}"
@@ -8157,6 +8172,780 @@ test_install_flmx_agent_config_preserves_protocol_counts() (
   assert_equals "$expected" "$actual" "R-3: non-numeric stored counts must not be preserved"
 )
 
+
+# FIX199-D1（RA2-S-01／RA-1 L-2）：update 路径的卷键交叉核对——
+# .env 已有卷键但与在跑容器实读挂载不一致时，旧实现逐字信任错
+# 键（钉键只补缺、自检期望同源于键），挂错卷还报成功。本例两
+# 幕：① update 全程——.env 写陈旧卷名 stale_vol、在跑后端实挂
+# real_vol，更新必须点名冲突、以实读为准改写键并成功（旧实现
+# 下自检期望 stale_vol 而重建挂 real_vol，自检必失败回滚）；
+# ② pin 函数直测——PG 卷键同形冲突同样改写、实读不到时既有键
+# 逐字保留、无冲突的网络键不被触碰。
+test_panel_update_volume_key_conflict_live_read_wins() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir
+  dir=$(mktemp -d)
+  FIXTURE_ENV_SQLITE_VOLUME="stale_vol"
+  setup_rename_update_fixture "$dir" current
+  FIXTURE_SQLITE_VOLUME="real_vol"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir/update.log" 2>&1 || fail "FIX199-D1: update with a stale volume key contradicted by the live mount must succeed after live-read correction"
+  grep -q '资源键冲突' "$dir/update.log" || fail "FIX199-D1: the key/live conflict must be named in the update output"
+  grep -q 'stale_vol' "$dir/update.log" || fail "FIX199-D1: the conflict notice must name the stale key value"
+  grep -q 'real_vol' "$dir/update.log" || fail "FIX199-D1: the conflict notice must name the live-read volume"
+  grep -q '^FLMX_SQLITE_VOLUME=real_vol$' "$dir/.env" || fail "FIX199-D1: the volume key must be rewritten to the live-read value"
+  grep -q '升级后卷名自检通过' "$dir/update.log" || fail "FIX199-D1: the post-update volume self-check must pass against the corrected key"
+
+  local pdir
+  pdir=$(mktemp -d)
+  cat > "$pdir/.env" <<'EOF'
+FLMX_SQLITE_VOLUME=kept_sqlite
+FLMX_POSTGRES_VOLUME=stale_pg
+FLMX_NETWORK=kept_net
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *"/app/data"*) printf 'kept_sqlite' ;;
+        *"/var/lib/postgresql/data"*) printf 'live_pg' ;;
+        *) printf '' ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "FIX199-D1: pinning must succeed in the PG-conflict scenario"
+  grep -q '^FLMX_POSTGRES_VOLUME=live_pg$' "$pdir/.env" || fail "FIX199-D1: a stale postgres volume key must be rewritten to the live-read value"
+  grep -q 'stale_pg' "$pdir/pin.log" || fail "FIX199-D1: the PG conflict notice must name the stale key value"
+  grep -q 'live_pg' "$pdir/pin.log" || fail "FIX199-D1: the PG conflict notice must name the live-read volume"
+  grep -q '^FLMX_SQLITE_VOLUME=kept_sqlite$' "$pdir/.env" || fail "FIX199-D1: a volume key matching the live mount must stay verbatim"
+  grep -q '^FLMX_NETWORK=kept_net$' "$pdir/.env" || fail "FIX199-D1: the network key has no live-read-wins semantics and must stay verbatim"
+
+  # 实读不到（inspect 全失败）→ 既有键逐字保留，不臆断改写
+  printf 'FLMX_SQLITE_VOLUME=stale2\n' > "$pdir/.env"
+  docker() { return 1; }
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c >> pin.log 2>&1 ) || \
+    fail "FIX199-D1: pinning must not fail when the live mount is unreadable"
+  grep -q '^FLMX_SQLITE_VOLUME=stale2$' "$pdir/.env" || fail "FIX199-D1: an existing key must be kept verbatim when the live mount cannot be read"
+)
+
+# FIX199-D1 事故态门（RA2-S-01 变体）：无键存量、后端却坐在新模
+# 板缺省卷 flmx-sqlite-data 上、旧名卷 sqlite_data 存在且含
+# gost.db——正是 1.9.8 事故后未救援的形态。钉键若照常把
+# flmx-sqlite-data 钉入，事故态即被正式化、自检也以错卷为期望。
+# 必须 fail-closed：更新中止、点名两卷与人工钉键方法、容器未
+# 动、.env 未写入卷键。反面一幕：sqlite_data 无 gost.db（无真库
+# 证据）时门不触发，更新照常走通并钉现行卷名。
+test_panel_update_aborts_on_accident_state_volume() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  wrap_volume_docker() {
+    eval "$(declare -f docker | sed '1s/^docker /fixture_docker_base /')"
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        if [[ "$3" == "-f" ]]; then
+          [[ -e "$FIXTURE_VOLROOT/$5" ]] || return 1
+          printf '%s' "$FIXTURE_VOLROOT/$5"
+          return 0
+        fi
+        [[ -e "$FIXTURE_VOLROOT/$3" ]]
+        return
+      fi
+      fixture_docker_base "$@"
+    }
+  }
+
+  local dir1
+  dir1=$(mktemp -d)
+  setup_rename_update_fixture "$dir1" keyless
+  FIXTURE_VOLROOT="$dir1/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data"
+  : > "$FIXTURE_VOLROOT/sqlite_data/gost.db"
+  wrap_volume_docker
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  local rc="0"
+  update_panel >"$dir1/update.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "FIX199-D1: update must abort when a keyless backend sits on the template-default volume while the legacy volume holds the database"
+  grep -q '资源键钉值中止' "$dir1/update.log" || fail "FIX199-D1: the accident-state gate must be named in the update output"
+  grep -q 'FLMX_SQLITE_VOLUME=sqlite_data' "$dir1/update.log" || fail "FIX199-D1: the gate notice must name the manual pin remedy for the legacy volume"
+  grep -q 'flmx-sqlite-data' "$dir1/update.log" || fail "FIX199-D1: the gate notice must name the template-default volume"
+  if grep -q '^FLMX_SQLITE_VOLUME=' "$dir1/.env"; then
+    fail "FIX199-D1: the gate must abort before any volume key is written"
+  fi
+  [[ ! -s "$dir1/rm.log" ]] || fail "FIX199-D1: the gate must abort before any container is removed"
+
+  local dir2
+  dir2=$(mktemp -d)
+  setup_rename_update_fixture "$dir2" keyless
+  FIXTURE_VOLROOT="$dir2/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data"
+  wrap_volume_docker
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir2/update.log" 2>&1 || fail "FIX199-D1: update must proceed when the legacy volume carries no database file"
+  grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir2/.env" || fail "FIX199-D1: without database evidence the live volume must be pinned as usual"
+)
+
+# FIX199-D5（RA-1 L-3）：改名开关双面口径——脚本只认进程环境时
+# .env 里的 PANEL_IDENTITY_RENAME=0 形同虚设，同一部署在脚本面
+# 改名、面板内面不改。现与 Go 面同序（.env 键在即赢、缺键回退
+# 进程环境）。三幕：① .env 写 0、进程未设 → 不改名（旧实现必
+# 改、本幕必红）；② .env 无键、进程设 0 → 不改名（既有口径回
+# 归）；③ .env 写 1、进程设 0 → 以 .env 为准照常改名（钉死优
+# 先序，与 Go 面 env 映射优先逐字一致）。
+test_panel_identity_rename_switch_reads_env_file() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  assert_not_renamed() {
+    local dir="$1"
+    grep -q '^PANEL_BACKEND_CONTAINER=flux-panel-backend$' "$dir/.env" || fail "FIX199-D5: the backend key must stay legacy when the rename switch is off"
+    if grep -q '身份改名' "$dir/update.log"; then
+      fail "FIX199-D5: the rename path must not be entered when the switch is off"
+    fi
+    if grep -Fxq 'flux-panel-backend' "$dir/rm.log"; then
+      fail "FIX199-D5: the legacy backend must not be removed when the switch is off"
+    fi
+  }
+
+  local dir1 dir2 dir3
+  dir1=$(mktemp -d)
+  setup_rename_update_fixture "$dir1" legacy
+  printf 'PANEL_IDENTITY_RENAME=0\n' >> "$dir1/.env"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  ( unset PANEL_IDENTITY_RENAME; update_panel ) >"$dir1/update.log" 2>&1 || fail "FIX199-D5: update must succeed with the rename disabled via .env"
+  assert_not_renamed "$dir1"
+
+  dir2=$(mktemp -d)
+  setup_rename_update_fixture "$dir2" legacy
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  PANEL_IDENTITY_RENAME=0 update_panel >"$dir2/update.log" 2>&1 || fail "FIX199-D5: update must succeed with the rename disabled via process env"
+  assert_not_renamed "$dir2"
+
+  dir3=$(mktemp -d)
+  setup_rename_update_fixture "$dir3" legacy
+  printf 'PANEL_IDENTITY_RENAME=1\n' >> "$dir3/.env"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  PANEL_IDENTITY_RENAME=0 update_panel >"$dir3/update.log" 2>&1 || fail "FIX199-D5: update must succeed when .env re-enables the rename"
+  grep -q '^PANEL_BACKEND_CONTAINER=flmx-panel-backend$' "$dir3/.env" || fail "FIX199-D5: a .env value of 1 must win over a process-env 0, matching the Go face"
+  grep -q '身份改名' "$dir3/update.log" || fail "FIX199-D5: the rename must be named when .env re-enables it"
+)
+
+# FIX199-D2（RA2-S-02）：迁移起步钉键——无键存量＋后端实挂自定
+# 义名卷 legacy_sqlite_vol 时，迁移在任何 down/up 之前以实读把
+# 卷键钉入 .env（随迁移快照走），使迁移失败回滚的 up 按实读卷
+# 名解析、不落新模板缺省空卷。夹具 compose 记录每次 up 时 .env
+# 的卷键值；pgloader 恒失败以强制回滚。旧实现迁移全程不钉键：
+# 快照与回滚后 .env 都无卷键、回滚 up 记录 key=<missing>，本
+# 例必红。
+test_panel_migrate_pins_keys_before_any_up() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  unset PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_DEPLOY_DIR FLMX_INSTANCE
+  check_docker() { DOCKER_CMD="fixture_pinmig_compose"; return 0; }
+  sleep() { :; }
+
+  fixture_pinmig_compose() {
+    local svc v
+    case "$1" in
+      down)
+        rm -f "$FIXTURE_STATE/containers"/* 2>/dev/null || true
+        return 0
+        ;;
+      up)
+        v=$(get_env_var FLMX_SQLITE_VOLUME || true)
+        printf 'up key=%s\n' "${v:-<missing>}" >> "$FIXTURE_STATE/up.log"
+        shift
+        for svc in "$@"; do
+          case "$svc" in
+            -d) ;;
+            postgres) touch "$FIXTURE_STATE/containers/flmx-panel-postgres" ;;
+            backend) touch "$FIXTURE_STATE/containers/flmx-panel-backend" ;;
+            frontend) touch "$FIXTURE_STATE/containers/flmx-panel-frontend" ;;
+          esac
+        done
+        return 0
+        ;;
+    esac
+    return 0
+  }
+  docker() {
+    case "$1" in
+      ps)
+        ls "$FIXTURE_STATE/containers" 2>/dev/null || true
+        return 0
+        ;;
+      inspect)
+        if [[ "$2" == "-f" ]]; then
+          [[ -e "$FIXTURE_STATE/containers/$4" ]] || return 1
+          case "$3" in
+            *Health.Status*) printf 'healthy\n' ;;
+            *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:v-test" ;;
+            *Mounts*)
+              case "$3" in
+                *"/app/data"*) printf 'legacy_sqlite_vol' ;;
+                *) printf '' ;;
+              esac
+              ;;
+          esac
+          return 0
+        fi
+        [[ -e "$FIXTURE_STATE/containers/$2" ]]
+        return
+        ;;
+      stop)
+        return 0
+        ;;
+      volume)
+        case "$2" in
+          inspect) [[ "$3" == "legacy_sqlite_vol" ]]; return ;;
+        esac
+        return 0
+        ;;
+      run)
+        case "$*" in
+          *pgloader*) return 1 ;;
+          *) return 0 ;;
+        esac
+        ;;
+    esac
+    return 0
+  }
+
+  local work rc
+  work=$(mktemp -d)
+  FIXTURE_STATE="$work/state"
+  mkdir -p "$FIXTURE_STATE/containers"
+  touch "$FIXTURE_STATE/containers/flmx-panel-backend" "$FIXTURE_STATE/containers/flmx-panel-frontend"
+  : > "$FIXTURE_STATE/up.log"
+  cat > "$work/.env" <<'EOF'
+JWT_SECRET=<redacted>
+DB_TYPE=sqlite
+POSTGRES_DB=flmx_panel
+POSTGRES_USER=flmx_panel
+POSTGRES_PASSWORD=<redacted>
+PANEL_BACKEND_CONTAINER=flmx-panel-backend
+PANEL_FRONTEND_CONTAINER=flmx-panel-frontend
+PANEL_POSTGRES_CONTAINER=flmx-panel-postgres
+EOF
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > "$work/docker-compose.yml"
+
+  rc="0"
+  ( cd "$work" && migrate_to_postgres >"$work/migrate.log" 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "FIX199-D2: the migration must fail when pgloader fails"
+  grep -q 'key=legacy_sqlite_vol' "$FIXTURE_STATE/up.log" || fail "FIX199-D2: every compose up (including the rollback up) must resolve the live-read volume via the pinned key"
+  if grep -q 'key=<missing>' "$FIXTURE_STATE/up.log"; then
+    fail "FIX199-D2: no compose up may run with the volume key missing (template default would mount an empty volume)"
+  fi
+  grep -q '^FLMX_SQLITE_VOLUME=legacy_sqlite_vol$' "$work/.env" || fail "FIX199-D2: rollback must restore an .env that carries the pinned live-read volume key"
+  [[ ! -e "$work/.env.pre-postgres-migration" ]] || fail "FIX199-D2: rollback must delete the env snapshot"
+)
+
+# FIX199-D3（RA2-S-05＋S-04）：迁移对账双通道——通道一（容器内
+# apk 装 sqlite）失败时必须走通道二（迁移已拉取的 pgloader 镜
+# 像把同一源文件重装进一次性复核库、psql 逐表比复核库/目标行
+# 数），仅双通道皆失败才降级。三幕共用 INV-9 式夹具（真 SQLite
+# 文件、载荷本机真执行）：① 通道一死、通道二成 → 对账通过且
+# 点名通道二、复核库被清理；② 双通道皆死 → 降级告警注明双通
+# 道、迁移照常切换（旧实现告警只提单一通道，本幕文案断言必
+# 红）；③ 通道一死、主搬运少搬 node 一行、通道二复算得出真
+# 数 → 不一致必须判失败回滚（证明通道二是真门不是橡皮章）。
+test_panel_migrate_reconcile_second_channel() (
+  set -euo pipefail
+  command -v sqlite3 >/dev/null 2>&1 || \
+    fail "FIX199-D3: sqlite3 is required to execute the reconcile fixture"
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  unset PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER PANEL_DEPLOY_DIR FLMX_INSTANCE
+  check_docker() { DOCKER_CMD="fixture_reconcile2_compose"; return 0; }
+  sleep() { :; }
+
+  fixture_reconcile2_compose() {
+    local svc
+    case "$1" in
+      down)
+        rm -f "$FIXTURE_STATE/containers"/* 2>/dev/null || true
+        return 0
+        ;;
+      up)
+        shift
+        for svc in "$@"; do
+          case "$svc" in
+            -d) ;;
+            postgres)
+              touch "$FIXTURE_STATE/containers/flmx-panel-postgres"
+              touch "$FIXTURE_STATE/volumes/flmx-postgres-data"
+              ;;
+            backend) touch "$FIXTURE_STATE/containers/flmx-panel-backend" ;;
+            frontend) touch "$FIXTURE_STATE/containers/flmx-panel-frontend" ;;
+          esac
+        done
+        return 0
+        ;;
+    esac
+    return 0
+  }
+
+  sh_payload_of() {
+    local prev="" arg
+    for arg in "$@"; do
+      if [[ "$prev" == "-c" ]]; then
+        printf '%s' "$arg"
+        return 0
+      fi
+      prev="$arg"
+    done
+    return 1
+  }
+
+  run_payload_locally() {
+    local payload="$1" dbpath="$2" script_file rc
+    script_file=$(mktemp)
+    printf '%s' "$payload" | grep -v 'apk add' > "$script_file"
+    bash -c "$(cat "$script_file")" flmx-fixture "$FIXTURE_VOL/${dbpath##*/}"
+    rc=$?
+    rm -f "$script_file"
+    return $rc
+  }
+
+  run_preprocess_locally() {
+    local payload="$1" script_file rc
+    script_file=$(mktemp)
+    printf '%s' "$payload" | grep -v 'apk add' | \
+      sed -e "s|/sqlite/|$FIXTURE_VOL/|g" -e "s|/tmp/dump|$FIXTURE_WORK/dump|g" > "$script_file"
+    bash "$script_file"
+    rc=$?
+    rm -f "$script_file"
+    return $rc
+  }
+
+  fixture_pgloader_apply() {
+    local out_file="$1" drop_flag="$2" src="$FIXTURE_VOL/gost.db" t c
+    if [[ -f "$FIXTURE_VOL/gost-migrate.db" ]]; then
+      src="$FIXTURE_VOL/gost-migrate.db"
+    fi
+    : > "$out_file"
+    for t in $(sqlite3 "$src" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"); do
+      c=$(sqlite3 "$src" "SELECT COUNT(*) FROM \"$t\";")
+      if [[ -n "$drop_flag" && -f "$drop_flag" && "$t" == "node" ]]; then
+        c=$((c - 1))
+      fi
+      printf '%s|%s\n' "$t" "$c" >> "$out_file"
+    done
+    return 0
+  }
+
+  docker() {
+    case "$1" in
+      ps)
+        ls "$FIXTURE_STATE/containers" 2>/dev/null || true
+        return 0
+        ;;
+      inspect)
+        if [[ "$2" == "-f" ]]; then
+          case "$3" in
+            *Health.Status*) printf 'healthy\n' ;;
+            *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:v-test" ;;
+          esac
+          return 0
+        fi
+        [[ -e "$FIXTURE_STATE/containers/$2" ]]
+        return
+        ;;
+      stop)
+        return 0
+        ;;
+      exec)
+        printf '%s\n' "$*" >> "$FIXTURE_STATE/exec.log"
+        local db="" prev="" arg sql=""
+        for arg in "$@"; do
+          if [[ "$prev" == "-d" ]]; then db="$arg"; fi
+          if [[ "$prev" == "-c" ]]; then sql="$arg"; fi
+          prev="$arg"
+        done
+        case "$sql" in
+          *"DATABASE"*)
+            return 0
+            ;;
+          *pg_tables*)
+            local counts_file="$FIXTURE_STATE/pg-counts.txt" line
+            if [[ "$db" == "flmx_reconcile_scratch" ]]; then
+              counts_file="$FIXTURE_STATE/scratch-counts.txt"
+            fi
+            while IFS='|' read -r line _; do
+              printf '%s\n' "$line"
+            done < "$counts_file"
+            return 0
+            ;;
+        esac
+        if [[ "$sql" =~ FROM\ \"([^\"]+)\" ]]; then
+          local tbl="${BASH_REMATCH[1]}" counts_file2="$FIXTURE_STATE/pg-counts.txt" found=""
+          if [[ "$db" == "flmx_reconcile_scratch" ]]; then
+            counts_file2="$FIXTURE_STATE/scratch-counts.txt"
+          fi
+          found=$(grep "^${tbl}|" "$counts_file2" 2>/dev/null | head -n 1 || true)
+          if [[ -n "$found" ]]; then
+            printf '%s\n' "${found##*|}"
+            return 0
+          fi
+        fi
+        return 1
+        ;;
+      volume)
+        case "$2" in
+          inspect) [[ -e "$FIXTURE_STATE/volumes/$3" ]]; return ;;
+          rm)
+            rm -f "$FIXTURE_STATE/volumes/$3"
+            return 0
+            ;;
+        esac
+        return 0
+        ;;
+      run)
+        local payload=""
+        payload=$(sh_payload_of "$@") || payload=""
+        case "$*" in
+          *flmx-migrate-reconcile*)
+            if [[ -f "$FIXTURE_STATE/ch1-fail" ]]; then
+              return 1
+            fi
+            run_payload_locally "$payload" "${!#}"
+            return
+            ;;
+          *flmx-reconcile.load*)
+            if [[ -f "$FIXTURE_STATE/ch2-fail" ]]; then
+              return 1
+            fi
+            fixture_pgloader_apply "$FIXTURE_STATE/scratch-counts.txt" ""
+            return
+            ;;
+          *pgloader*)
+            fixture_pgloader_apply "$FIXTURE_STATE/pg-counts.txt" "$FIXTURE_STATE/pg-drop-node"
+            return
+            ;;
+          *"DROP INDEX IF EXISTS"*)
+            run_preprocess_locally "$payload"
+            return
+            ;;
+          *) return 0 ;;
+        esac
+        ;;
+    esac
+    return 0
+  }
+
+  setup_reconcile2_scenario() {
+    local work="$1"
+    FIXTURE_STATE="$work/state"
+    FIXTURE_VOL="$work/vol"
+    FIXTURE_WORK="$work"
+    mkdir -p "$FIXTURE_STATE/containers" "$FIXTURE_STATE/volumes" "$FIXTURE_VOL"
+    touch "$FIXTURE_STATE/containers/flmx-panel-backend" "$FIXTURE_STATE/containers/flmx-panel-frontend"
+    : > "$FIXTURE_STATE/exec.log"
+    sqlite3 "$FIXTURE_VOL/gost.db" <<'EOF'
+CREATE TABLE "user" (id INTEGER PRIMARY KEY, "user" TEXT);
+INSERT INTO "user" VALUES (1, 'admin@user'), (2, 'alice'), (3, 'bob');
+CREATE UNIQUE INDEX idx_user_username_fold_unique ON "user"(LOWER("user"));
+CREATE TABLE node (id INTEGER PRIMARY KEY, name TEXT);
+INSERT INTO node VALUES (1, 'n1'), (2, 'n2');
+CREATE TABLE tunnel (id INTEGER PRIMARY KEY, name TEXT);
+INSERT INTO tunnel VALUES (1, 't1');
+CREATE TABLE user_subscription (id INTEGER PRIMARY KEY);
+INSERT INTO user_subscription VALUES (1), (2), (3), (4);
+CREATE TABLE peer_share_resource (id INTEGER PRIMARY KEY, release_legacy_family numeric DEFAULT 0);
+CREATE TABLE schema_migration (version VARCHAR(64) PRIMARY KEY, applied_at INTEGER NOT NULL);
+INSERT INTO schema_migration VALUES ('r5b4_v1_port_user_unique', 111);
+INSERT INTO schema_migration VALUES ('k10_v5_username_casefold_unique', 222);
+INSERT INTO schema_migration VALUES ('c12_v4_forward_lookup', 333);
+EOF
+    cat > "$work/.env" <<'EOF'
+JWT_SECRET=<redacted>
+DB_TYPE=sqlite
+POSTGRES_DB=flmx_panel
+POSTGRES_USER=flmx_panel
+POSTGRES_PASSWORD=<redacted>
+PANEL_BACKEND_CONTAINER=flmx-panel-backend
+PANEL_FRONTEND_CONTAINER=flmx-panel-frontend
+PANEL_POSTGRES_CONTAINER=flmx-panel-postgres
+FLMX_SQLITE_VOLUME=sqlite_data
+EOF
+    printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > "$work/docker-compose.yml"
+    cp "$work/.env" "$work/env-original"
+  }
+
+  local work1 work2 work3 rc
+  work1=$(mktemp -d)
+  setup_reconcile2_scenario "$work1"
+  : > "$work1/state/ch1-fail"
+  rc="0"
+  ( cd "$work1" && migrate_to_postgres >"$work1/migrate.log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "FIX199-D3: migration must succeed when channel one is down but channel two verifies the counts"
+  grep -q '对账通过（通道二' "$work1/migrate.log" || fail "FIX199-D3: a channel-two pass must be named in the migration output"
+  grep -q 'DROP DATABASE IF EXISTS flmx_reconcile_scratch' "$work1/state/exec.log" || fail "FIX199-D3: the scratch database must be dropped after the recount"
+  grep -q '^DB_TYPE=postgres' "$work1/.env" || fail "FIX199-D3: a channel-two verified migration must switch .env to postgres"
+
+  work2=$(mktemp -d)
+  setup_reconcile2_scenario "$work2"
+  : > "$work2/state/ch1-fail"
+  : > "$work2/state/ch2-fail"
+  rc="0"
+  ( cd "$work2" && migrate_to_postgres >"$work2/migrate.log" 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "FIX199-D3: migration must still proceed on the loud downgrade when both channels are unavailable"
+  grep -q '双通道均不可用' "$work2/migrate.log" || fail "FIX199-D3: the downgrade warning must name that both channels were unavailable"
+  grep -q '^DB_TYPE=postgres' "$work2/.env" || fail "FIX199-D3: the downgraded migration must still switch .env to postgres"
+
+  work3=$(mktemp -d)
+  setup_reconcile2_scenario "$work3"
+  : > "$work3/state/ch1-fail"
+  : > "$work3/state/pg-drop-node"
+  rc="0"
+  ( cd "$work3" && migrate_to_postgres >"$work3/migrate.log" 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "FIX199-D3: a channel-two mismatch must fail the migration"
+  grep -q '表 node：复核库 2 行，目标 1 行' "$work3/migrate.log" || fail "FIX199-D3: the channel-two mismatch must name the differing table with both counts"
+  grep -q '数据对账未过' "$work3/migrate.log" || fail "FIX199-D3: the channel-two failure must go through the snapshot rollback path"
+  diff -q "$work3/env-original" "$work3/.env" >/dev/null || fail "FIX199-D3: rollback must restore the pre-migration .env verbatim"
+)
+
+# FIX199-D4（RA2-S-06）：install.sh 布局迁移的旧 unit 快照改
+# fail-closed——快照失败（mktemp/cp 失败）旧实现只置空快照、迁
+# 移照常继续，此后回滚只能按模板重写旧 unit，人工改过的 unit
+# 无法逐字还原且无点名。本例令快照 cp 恒失败：迁移必须在动
+# 手前中止（旧服务不被停、目录未动、unit 逐字未变、新目录未
+# 建），回执点名快照失败与中止。
+test_migrate_legacy_agent_snapshot_failure_aborts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  sleep() { :; }
+  systemctl() {
+    printf '%s\n' "$*" >> "$FIXTURE_CALLS"
+    case "$*" in
+      *MainPID*flmx_agent*) echo 0 ;;
+      *MainPID*flux_agent*) echo 4242 ;;
+      *"is-active --quiet flmx_agent") return 1 ;;
+      *"is-active --quiet flux_agent") return 0 ;;
+    esac
+    return 0
+  }
+  cp() {
+    if [[ -n "${CP_FAIL_SNAPSHOT:-}" && "${1:-}" == "-p" && "${2:-}" == "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" ]]; then
+      return 1
+    fi
+    command cp "$@"
+  }
+
+  local root rc
+  root=$(mktemp -d)
+  FIXTURE_CALLS="$root/systemctl.log"
+  : > "$FIXTURE_CALLS"
+  INSTALL_DIR="$root/flmx_agent"
+  LEGACY_INSTALL_DIR="$root/flux_agent"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$root/flmx_agent.service"
+  LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE="$root/flux_agent.service"
+  mkdir -p "$LEGACY_INSTALL_DIR"
+  printf '#!/bin/bash\necho legacy agent\n' > "$LEGACY_INSTALL_DIR/flux_agent"
+  chmod +x "$LEGACY_INSTALL_DIR/flux_agent"
+  printf '{\n  "addr": "wss://panel.example.com",\n  "secret": "s3cret"\n}\n' > "$LEGACY_INSTALL_DIR/config.json"
+  printf '[Unit]\nDescription=legacy agent (hand-edited)\n[Service]\nExecStart=%s/flux_agent\n' "$LEGACY_INSTALL_DIR" > "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+  command cp -p "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" "$root/unit.before"
+
+  CP_FAIL_SNAPSHOT="1"
+  rc="0"
+  migrate_legacy_agent_install >"$root/migrate.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "FIX199-D4: a failed unit snapshot must abort the migration"
+  grep -q '快照失败' "$root/migrate.log" || fail "FIX199-D4: the snapshot failure must be named in the migration output"
+  grep -q '动手前中止' "$root/migrate.log" || fail "FIX199-D4: the receipt must state the migration aborted before any change"
+  [[ -d "$LEGACY_INSTALL_DIR" ]] || fail "FIX199-D4: the legacy install dir must stay in place"
+  [[ ! -e "$INSTALL_DIR" ]] || fail "FIX199-D4: the new install dir must not be created"
+  diff -q "$root/unit.before" "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" >/dev/null || fail "FIX199-D4: the legacy unit file must stay byte-identical"
+  if grep -q 'stop' "$FIXTURE_CALLS"; then
+    fail "FIX199-D4: the legacy service must not be stopped when the snapshot fails"
+  fi
+  CP_FAIL_SNAPSHOT=""
+)
+
+# FIX199-D6（RA-3 #5）：强制重装的数据点名＋有数据确认——旧门
+# 只证明「文件意图」，覆写前不再点名数据后果，且失败指引把容
+# 器不存在一律断言为半成品，能把有数据的部署漏斗进强制重装。
+# 三幕：① 卷内存 gost.db＋非 TTY → 中止、点名数据卷与非交互原
+# 因、.env/compose 未被覆写（备份已生成）；② 卷存在但无数据
+# → 无摩擦放行走完重装（R9-03 出口不堵）；③ 卷内有数据＋
+# pty 交互：输入部署目录名 → 放行；输错 → 中止。
+test_install_panel_force_reinstall_data_gate() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  gate_docker() {
+    case "$1" in
+      volume)
+        case "$2" in
+          inspect)
+            if [[ "$3" == "-f" ]]; then
+              [[ -e "$FIXTURE_VOLROOT/$5" ]] || return 1
+              printf '%s' "$FIXTURE_VOLROOT/$5"
+              return 0
+            fi
+            [[ -e "$FIXTURE_VOLROOT/$3" ]]
+            return
+            ;;
+        esac
+        return 0
+        ;;
+    esac
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+    esac
+    return 0
+  }
+
+  setup_gate_stubs() {
+    ensure_compose_urls_initialized() {
+      DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+      DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+      return 0
+    }
+    check_docker() { DOCKER_CMD="docker"; return 0; }
+    get_config_params() {
+      FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+      DB_TYPE="sqlite"; DATABASE_URL="file:/data/panel.db"
+      POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+      POSTGRES_PASSWORD="brandnew"; JWT_SECRET="brandnewsecret"
+    }
+    get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
+    download_verified() {
+      printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+      return 0
+    }
+    wait_for_backend_healthy() { return 0; }
+    check_ipv6_support() { return 1; }
+    configure_docker_ipv6() { return 0; }
+    docker_ipv6_usable() { return 1; }
+    get_public_ip() { echo "203.0.113.1"; }
+    docker() { gate_docker "$@"; }
+  }
+  setup_gate_stubs
+
+  # 第一幕：有数据＋非 TTY → 中止、点名、文件未覆写
+  local work1 rc
+  work1=$(mktemp -d)
+  FIXTURE_VOLROOT="$work1/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data"
+  : > "$FIXTURE_VOLROOT/sqlite_data/gost.db"
+  printf 'JWT_SECRET=%s\n' keep-this-env > "$work1/.env"
+  printf 'services: {}\n' > "$work1/docker-compose.yml"
+  rc="0"
+  ( cd "$work1" && PANEL_FORCE_REINSTALL=1 install_panel </dev/null > install.log 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "FIX199-D6: forced reinstall with data in a volume must abort on a non-TTY"
+  grep -q '数据点名' "$work1/install.log" || fail "FIX199-D6: existing data volumes must be named before any overwrite"
+  grep -q 'sqlite_data' "$work1/install.log" || fail "FIX199-D6: the data-bearing volume must be named"
+  grep -q '非交互终端' "$work1/install.log" || fail "FIX199-D6: the non-TTY abort reason must be named"
+  grep -q 'keep-this-env' "$work1/.env" || fail "FIX199-D6: .env must not be overwritten when the gate aborts"
+  if grep -q 'brandnewsecret' "$work1/.env"; then
+    fail "FIX199-D6: .env must not carry the new install secrets when the gate aborts"
+  fi
+  ls "$work1"/.env.bak.* >/dev/null 2>&1 || fail "FIX199-D6: the pre-gate backup must exist so the recovery path is real"
+
+  # 第二幕：卷存在但无数据 → 无摩擦放行
+  local work2
+  work2=$(mktemp -d)
+  FIXTURE_VOLROOT="$work2/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/postgres_data"
+  printf 'JWT_SECRET=%s\n' keep-this-env > "$work2/.env"
+  printf 'services: {}\n' > "$work2/docker-compose.yml"
+  rc="0"
+  ( cd "$work2" && PANEL_FORCE_REINSTALL=1 install_panel </dev/null > install.log 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "FIX199-D6: forced reinstall must proceed without friction when volumes carry no data"
+  grep -q 'brandnewsecret' "$work2/.env" || fail "FIX199-D6: a no-data forced reinstall must complete the install"
+  if grep -q '非交互终端' "$work2/install.log"; then
+    fail "FIX199-D6: the non-TTY abort must not fire when no volume carries data"
+  fi
+
+  # 第三幕：有数据＋pty 交互确认（对/错两输）
+  local base3 work3 harness
+  base3=$(mktemp -d)
+  work3="$base3/deploydir"
+  mkdir -p "$work3"
+  FIXTURE_VOLROOT="$work3/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data"
+  : > "$FIXTURE_VOLROOT/sqlite_data/gost.db"
+  printf 'JWT_SECRET=%s\n' keep-this-env > "$work3/.env"
+  printf 'services: {}\n' > "$work3/docker-compose.yml"
+  export E3_WORK="$work3" E3_VOLROOT="$FIXTURE_VOLROOT"
+  harness="$base3/gate-harness.sh"
+  {
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/panel_install.sh"
+    cat <<'STUBEOF'
+FIXTURE_VOLROOT="$E3_VOLROOT"
+ensure_compose_urls_initialized() {
+  DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+  DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+  return 0
+}
+check_docker() { DOCKER_CMD="docker"; return 0; }
+get_config_params() {
+  FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+  DB_TYPE="sqlite"; DATABASE_URL="file:/data/panel.db"
+  POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+  POSTGRES_PASSWORD="brandnew"; JWT_SECRET="brandnewsecret"
+}
+get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
+download_verified() {
+  printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+  return 0
+}
+wait_for_backend_healthy() { return 0; }
+check_ipv6_support() { return 1; }
+configure_docker_ipv6() { return 0; }
+docker_ipv6_usable() { return 1; }
+get_public_ip() { echo "203.0.113.1"; }
+docker() {
+  case "$1" in
+    volume)
+      case "$2" in
+        inspect)
+          if [[ "$3" == "-f" ]]; then
+            [[ -e "$FIXTURE_VOLROOT/$5" ]] || return 1
+            printf '%s' "$FIXTURE_VOLROOT/$5"
+            return 0
+          fi
+          [[ -e "$FIXTURE_VOLROOT/$3" ]]
+          return
+          ;;
+      esac
+      return 0
+      ;;
+  esac
+  case " $* " in
+    *" --services "*) printf 'backend\nfrontend\n' ;;
+  esac
+  return 0
+}
+cd "$E3_WORK" || exit 99
+gate_rc="0"
+PANEL_FORCE_REINSTALL=1 install_panel >/dev/null 2>&1 || gate_rc="$?"
+printf '%s' "$gate_rc" > "$E3_WORK/gate-rc"
+STUBEOF
+  } > "$harness"
+  rc="0"; pty_run $'deploydir\n' "$harness" || rc="$?"
+  assert_equals "deploydir" "$(basename "$work3")" "FIX199-D6: fixture sanity (deploy dir name)"
+  grep -q '^0$' "$work3/gate-rc" || fail "FIX199-D6: typing the deployment directory name must let the forced reinstall proceed"
+  grep -q 'brandnewsecret' "$work3/.env" || fail "FIX199-D6: a confirmed forced reinstall must complete the install"
+
+  printf 'JWT_SECRET=%s\n' keep-this-env > "$work3/.env"
+  printf 'services: {}\n' > "$work3/docker-compose.yml"
+  rm -f "$work3/gate-rc"
+  rc="0"; pty_run $'wrongname\n' "$harness" || rc="$?"
+  grep -q '^1$' "$work3/gate-rc" || fail "FIX199-D6: a mismatched confirmation must abort the forced reinstall"
+  grep -q 'keep-this-env' "$work3/.env" || fail "FIX199-D6: .env must stay untouched after a mismatched confirmation"
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -8310,5 +9099,12 @@ test_panel_migrate_reconciles_row_counts
 test_panel_migrate_source_volume_live_read_wins
 test_update_flmx_agent_migrates_legacy_layout
 test_migrate_legacy_agent_rolls_back_on_failure
+test_panel_update_volume_key_conflict_live_read_wins
+test_panel_update_aborts_on_accident_state_volume
+test_panel_identity_rename_switch_reads_env_file
+test_panel_migrate_pins_keys_before_any_up
+test_panel_migrate_reconcile_second_channel
+test_migrate_legacy_agent_snapshot_failure_aborts
+test_install_panel_force_reinstall_data_gate
 
 echo "install script tests passed"
