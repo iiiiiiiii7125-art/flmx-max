@@ -123,7 +123,7 @@ func TestPinLegacyResourceNamesRewritesConflictingVolumeKey(t *testing.T) {
 	writeFakeDocker(t, fakeDockerFullInspect)
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
-	original := "JWT_SECRET=keepme\nFLMX_SQLITE_VOLUME=stale_data\n"
+	original := "JWT_SECRET=test\nFLMX_SQLITE_VOLUME=stale_data\n"
 	if err := os.WriteFile(envPath, []byte(original), 0o600); err != nil {
 		t.Fatalf("WriteFile(.env) error = %v", err)
 	}

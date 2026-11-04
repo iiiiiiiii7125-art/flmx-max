@@ -141,7 +141,7 @@ func TestApplyIdentityRenameSQLiteEndToEnd(t *testing.T) {
 	t.Setenv(envKeyIdentityRename, "")
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
-	original := "JWT_SECRET=keepme\nPANEL_BACKEND_CONTAINER=flux-panel-backend\nPANEL_FRONTEND_CONTAINER=vite-frontend\nFLMX_VERSION=1.9.8\n"
+	original := "JWT_SECRET=test\nPANEL_BACKEND_CONTAINER=flux-panel-backend\nPANEL_FRONTEND_CONTAINER=vite-frontend\nFLMX_VERSION=1.9.8\n"
 	if err := os.WriteFile(envPath, []byte(original), 0o600); err != nil {
 		t.Fatalf("WriteFile(.env) error = %v", err)
 	}
@@ -158,7 +158,7 @@ func TestApplyIdentityRenameSQLiteEndToEnd(t *testing.T) {
 		"PANEL_BACKEND_CONTAINER=flmx-panel-backend\n",
 		"PANEL_FRONTEND_CONTAINER=flmx-panel-frontend\n",
 		"PANEL_POSTGRES_CONTAINER=flmx-panel-postgres\n",
-		"JWT_SECRET=keepme\n",
+		"JWT_SECRET=test\n",
 	} {
 		if !strings.Contains(content, line) {
 			t.Fatalf(".env missing %q after rename:\n%s", line, content)

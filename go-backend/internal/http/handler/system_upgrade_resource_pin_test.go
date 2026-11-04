@@ -35,7 +35,7 @@ func TestParseEnvFileValues(t *testing.T) {
 }
 
 func TestApplyEnvPinsAppendsAndFillsEmpty(t *testing.T) {
-	data := []byte("JWT_SECRET=x\nFLMX_SQLITE_VOLUME=\n# 保留注释\nFLMX_VERSION=1.9.8\n")
+	data := []byte("JWT_SECRET=test\nFLMX_SQLITE_VOLUME=\n# 保留注释\nFLMX_VERSION=1.9.8\n")
 	out := string(applyEnvPins(data, []envKeyValue{
 		{envKeySQLiteVolume, "sqlite_data"},
 		{envKeyNetwork, "gost-network"},
@@ -49,7 +49,7 @@ func TestApplyEnvPinsAppendsAndFillsEmpty(t *testing.T) {
 	if !strings.HasSuffix(out, "FLMX_NETWORK=gost-network\n") {
 		t.Fatalf("missing key must be appended at the end:\n%s", out)
 	}
-	for _, kept := range []string{"JWT_SECRET=x\n", "# 保留注释\n", "FLMX_VERSION=1.9.8\n"} {
+	for _, kept := range []string{"JWT_SECRET=test\n", "# 保留注释\n", "FLMX_VERSION=1.9.8\n"} {
 		if !strings.Contains(out, kept) {
 			t.Fatalf("existing line %q must be preserved verbatim:\n%s", kept, out)
 		}
@@ -271,7 +271,7 @@ func TestPinLegacyResourceNamesKeylessEndToEnd(t *testing.T) {
 	writeFakeDocker(t, fakeDockerFullInspect)
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
-	original := "JWT_SECRET=keepme\nFLMX_VERSION=1.9.7\n"
+	original := "JWT_SECRET=test\nFLMX_VERSION=1.9.7\n"
 	if err := os.WriteFile(envPath, []byte(original), 0o600); err != nil {
 		t.Fatalf("WriteFile(.env) error = %v", err)
 	}
@@ -292,7 +292,7 @@ func TestPinLegacyResourceNamesKeylessEndToEnd(t *testing.T) {
 	}
 	content := string(data)
 	for _, line := range []string{
-		"JWT_SECRET=keepme\n",
+		"JWT_SECRET=test\n",
 		"FLMX_VERSION=1.9.7\n",
 		"FLMX_SQLITE_VOLUME=sqlite_data\n",
 		"FLMX_POSTGRES_VOLUME=postgres_data\n",
