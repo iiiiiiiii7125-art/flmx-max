@@ -343,7 +343,7 @@ sudo systemctl restart caddy
 - 必填字段：`id`（kebab-case，与文件夹名一致）、`name`、`author`、`version`；可选：`description`、`tokens`、`css`（原始 CSS 注入）、`components` / `layouts` / `pages` 覆盖、`onActivate` / `onDeactivate` 钩子。
 - **light 集必填（硬性口径）**：只要提供 `tokens`，就必须提供 `tokens.light`——亮色 token 集，键为 CSS 变量名（如 `--primary`、`--background`、`--primary-500`），只给想改的变量即可，其余沿用默认值。全站只读 light 集，没有暗色集可回退。
 - **被拒表现**：只有 dark 集，或 `light` 集给不出哪怕一个**有效 token** 的主题包，会在注册时被**拒绝**。有效 token 须四条同时成立：①键名是 `types.ts` 的 `ThemeTokens` 词表内的已知 token（键名拼错、大小写不符、漏 `--` 前缀、带尾空格，或只给词表外的自定义变量，都不计数）；②值是非空字符串（只含空白、或只含零宽空格等不可见格式字符的值不算）；③`light` 本身是一个键值对象（给成字符串、数组等非对象形态，整体不算）；④值在计算上有效——整值不是 CSS 全域关键字（`initial`、`inherit`、`unset`、`revert`、`revert-layer`，这类值在浏览器里计算结果恒为无效），也不构成 `var()` 自引用或环引用（变量引用自己、或几个变量互相引用成环，计算值同样恒无效）。被拒形态与代码的拒绝文案同步枚举为：`light` 缺失、为空集、值全为 `undefined`、值全为空白/纯格式字符、值全为非字符串（`null`／数字／布尔／对象）、键全为词表外键名、值全为 CSS 全域关键字（`initial`／`inherit`／`unset`／`revert`／`revert-layer`，整值命中时计算值恒无效）、值全为 var() 自引用或环引用（集内互相引用成环、计算值恒无效）、`light` 非对象。届时浏览器控制台以 `[flmx-theme] registerTheme rejected` 报错并点名主题 `id` 与上述要求，该主题不会出现在主题设置列表中、无法被激活；且同 `id` 已注册的合法主题包不会被坏包顶掉，仍保留原注册。反之，集里只要有一个有效 token 即算合法部分集（其余无效条目会被跳过、未给出的 token 沿用默认值）；完全不提供 `tokens` 的主题包（只覆盖组件 / 布局 / 页面）不受此限，可以正常注册。
-- 旧主题包若还带着暗色集，请把配色迁入 `light` 集并删除暗色集后再注册，否则会被拒、无法使用。
+- 旧主题包若还带着暗色集，不必处理：只要 `light` 集有效即可正常注册，暗色集会被静默忽略（全站只读 light 集）；只有「只有 dark 集、没有可用 light 集」的主题包才会被拒。
 
 > 与源码内文档的关系：主题包的完整开发说明在前端源码 `vite-frontend/src/themes/README.md`（随仓库源码走，不在本文档站内）。**行为口径以本节（产品文档）为准**——light 集必填与被拒表现按本节执行；README 是源码内的开发示例与字段参考，字段与类型的最终定义以 `vite-frontend/src/themes/types.ts` 的 `ThemePackage` / `ThemeTokens` 类型为准。
 
