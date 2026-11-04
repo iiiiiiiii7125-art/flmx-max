@@ -50,6 +50,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_user_quota.go:ListUserQuotaViewsByUserIDs":  {"chunkInt64IDs", "整表用户集，已分块"},
 	"repository_user_subscription.go:ListUserSubscriptions": {"chunkInt64IDs", "K8/B6：单用户订阅分配集无上界，已分块+内存重排"},
 	"repository_in_list.go:deleteByIDSliceInChunksTx":       {"chunkInt64IDs", "K8：级联物化集分块删除助手本体"},
+	"repository_inbound_backup.go:existingIDSetTx":          {"chunkInt64IDs", "RR4-F1-01/F4-01：订阅恢复引用对账的候选 id 集（备份载荷引用全集），已分块"},
 	"repository_kernel.go:pluckInboundRelayIDsByColumnTx":   {"chunkInt64IDs", "K8：relay 物化分块收口点"},
 	"repository_kernel.go:deleteInboundRowsByIDsTx":         {"chunkInt64IDs", "K8/B1+B2：删内核/删节点入站附属行分块清理"},
 
