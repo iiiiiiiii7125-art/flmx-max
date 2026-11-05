@@ -76,7 +76,9 @@ func TestJWTMiddlewareContracts(t *testing.T) {
 
 func TestLoginTokenValidatesThroughRouter(t *testing.T) {
 	router, r := setupContractRouter(t, "contract-jwt-secret")
-	seedLegacyUser(t, r, 9110, "router-login-user", "router-login-pass")
+	// 播种改 bcrypt（R-MD5 sunset）：本例主题是路由级登录，与
+	// legacy 形态无关；legacy 登录行为由下方 sunset 合同专钉。
+	seedBcryptUser(t, r, 9110, "router-login-user", "router-login-pass")
 
 	body := bytes.NewBufferString(`{"username":"router-login-user","password":"router-login-pass","captchaId":""}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/login", body)
@@ -107,24 +109,59 @@ func TestLoginTokenValidatesThroughRouter(t *testing.T) {
 	assertCode(t, checkResp, 0)
 }
 
-func TestLegacyPasswordMigratesOnLogin(t *testing.T) {
+// R-MD5 sunset 取代原「login 透明迁移」合同：legacy 存储携正确
+// 口令登录返回与错密相同的通用错误，账户收口为导入面终态；随后
+// 经既有管理员通道（user/update 设新口令＋恢复启用）重置后，新
+// 口令可正常登录——重置腿即最终用户实际走的路。
+func TestLegacyPasswordSunsetOnLogin(t *testing.T) {
 	router, r := setupContractRouter(t, "contract-jwt-secret")
 	legacyChangedAt := seedLegacyUser(t, r, 9101, "legacy-login-user", "legacy-login-pass")
 
-	body := bytes.NewBufferString(`{"username":"legacy-login-user","password":"legacy-login-pass","captchaId":""}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/login", body)
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
-	assertCode(t, resp, 0)
-	assertUserPasswordIsBcrypt(t, r, "legacy-login-user", "legacy-login-pass")
-	// R4B01-002: transparent legacy-hash migration must not advance
-	// password_changed_at — the password itself did not change, and
-	// advancing it would revoke every existing panel session of that user.
-	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "legacy-login-user"); changedAt != legacyChangedAt {
-		t.Fatalf("expected password_changed_at to remain unchanged on login migration, got %d want %d", changedAt, legacyChangedAt)
+	login := func(password string) *httptest.ResponseRecorder {
+		body := bytes.NewBufferString(`{"username":"legacy-login-user","password":"` + password + `","captchaId":""}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/user/login", body)
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		return resp
 	}
+
+	assertCodeMsg(t, login("legacy-login-pass"), -1, "账号或密码错误")
+
+	user, err := r.GetUserByUsername("legacy-login-user")
+	if err != nil || user == nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if security.IsLegacyPasswordHash(user.Pwd) {
+		t.Fatalf("sunset must replace the legacy hash, got %q", user.Pwd)
+	}
+	if ok, legacy := security.VerifyPassword(user.Pwd, "legacy-login-pass"); ok || legacy {
+		t.Fatalf("sunset replacement must not verify the old password, got (%v,%v)", ok, legacy)
+	}
+	if user.Status != 0 {
+		t.Fatalf("sunset must disable the account pending admin reset, status=%d", user.Status)
+	}
+	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "legacy-login-user"); changedAt <= legacyChangedAt {
+		t.Fatalf("expected password_changed_at to advance on sunset, got %d want > %d", changedAt, legacyChangedAt)
+	}
+
+	// 管理员重置腿：设新口令并恢复启用（与导入 legacy 账户同一通道）。
+	adminToken, err := auth.GenerateToken(1, "admin@user", 0, "contract-jwt-secret")
+	if err != nil {
+		t.Fatalf("generate admin token: %v", err)
+	}
+	updateBody := bytes.NewBufferString(`{"id":9101,"user":"legacy-login-user","pwd":"reset-pass-1","flow":99999,"num":99999,"expTime":2727251700000,"flowResetTime":1,"status":1,"maxConn":0}`)
+	updateReq := httptest.NewRequest(http.MethodPost, "/api/v1/user/update", updateBody)
+	updateReq.Header.Set("Authorization", adminToken)
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateResp := httptest.NewRecorder()
+	router.ServeHTTP(updateResp, updateReq)
+	assertCode(t, updateResp, 0)
+	assertUserPasswordIsBcrypt(t, r, "legacy-login-user", "reset-pass-1")
+
+	// 重置后：新口令可登、旧口令仍不可登。
+	assertCode(t, login("reset-pass-1"), 0)
+	assertCodeMsg(t, login("legacy-login-pass"), -1, "账号或密码错误")
 }
 
 func TestDisabledLegacyPasswordIsRejectedWithoutMigration(t *testing.T) {
@@ -146,8 +183,10 @@ func TestDisabledLegacyPasswordIsRejectedWithoutMigration(t *testing.T) {
 	if user == nil {
 		t.Fatal("expected disabled user to exist")
 	}
-	if ok, migrated := security.VerifyPassword(user.Pwd, "disabled-legacy-pass"); !ok || !migrated {
-		t.Fatalf("expected disabled user to remain legacy MD5, got (%v,%v) with hash %q", ok, migrated, user.Pwd)
+	// 停用判定先于 sunset 处置：原 legacy 哈希须逐字保留（原探针
+	// 经 VerifyPassword 验行，sunset 后该原语已不存在，改逐字比对）。
+	if user.Pwd != legacyMD5HexForTest("disabled-legacy-pass") {
+		t.Fatalf("expected disabled user to keep the original legacy MD5 hash, got %q", user.Pwd)
 	}
 	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "disabled-legacy-user"); changedAt != legacyChangedAt {
 		t.Fatalf("expected password_changed_at to remain unchanged, got %d want %d", changedAt, legacyChangedAt)

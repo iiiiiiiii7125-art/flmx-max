@@ -680,32 +680,35 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	passwordMatched, passwordWasLegacy := security.VerifyPassword(user.Pwd, req.Password)
-	if !passwordMatched {
+	if !passwordMatched && !passwordWasLegacy {
 		response.WriteJSON(w, response.ErrDefault("账号或密码错误"))
 		return
 	}
 	// R6X-014：停用判据与全族 fail-closed 口径对齐（Status != 1 即拒绝），
-	// 存量 status∉{0,1} 的僵尸行不得再取得 token。
+	// 存量 status∉{0,1} 的僵尸行不得再取得 token。停用判定先于下方
+	// R-MD5 处置：已停用账户（含导入面收口的 legacy 账户）本次尝试
+	// 不触发任何存储变更，原哈希与 password_changed_at 保持不变。
 	if user.Status != 1 {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
 		return
 	}
-	issueAt := tokenIssueTime(user.PasswordChangedAt)
 	if passwordWasLegacy {
-		// R4B01-002：rehash 是透明存储迁移、密码未变更，必须走
-		// MigrateUserPasswordHash——不得推进 password_changed_at
-		// 吊销既有会话。下方 issueAt=updatedAt+1 是旧写面下的签发
-		// 补偿，新写面下已冗余，保留以维持签发行为逐字等价。
-		updatedAt := time.Now().UnixMilli()
-		hashedPassword, err := security.HashPassword(req.Password)
-		if err != nil {
-			log.Printf("legacy password rehash skipped user_id=%d path=login err=%v", user.ID, err)
-		} else if err := h.repo.MigrateUserPasswordHash(user.ID, hashedPassword, updatedAt); err != nil {
-			log.Printf("legacy password rehash update skipped user_id=%d path=login err=%v", user.ID, err)
-		} else {
-			issueAt = time.UnixMilli(updatedAt + 1)
+		// R-MD5 sunset：legacy MD5 存储不再验密放行（VerifyPassword
+		// 对 legacy 恒不命中），透明 rehash 就此退役。把账户收口为
+		// 与导入面 normalizeImportedUserPassword 相同的终态——凭据
+		// 作废、停用、既有会话吊销，密码经既有管理员通道重置。对外
+		// 与错密同文案，不泄露「该账户仍持 legacy 哈希」；处置只
+		// 依赖存储形态、不依赖候选口令对错（错密尝试同触发：该凭据
+		// 在本版已不可用，终态与本人首登一致，登录限流另有节制）。
+		if applied, serr := h.repo.SunsetLegacyUserPassword(user.ID, user.Pwd, time.Now().UnixMilli()); serr != nil {
+			log.Printf("legacy password sunset failed user_id=%d path=login err=%v", user.ID, serr)
+		} else if applied {
+			log.Printf("legacy password sunset applied user_id=%d path=login: credential invalidated and account disabled pending admin password reset", user.ID)
 		}
+		response.WriteJSON(w, response.ErrDefault("账号或密码错误"))
+		return
 	}
+	issueAt := tokenIssueTime(user.PasswordChangedAt)
 
 	// M-05: 管理员用种子默认口令登录时签发受限 token（仅允许改密），
 	// 服务端强制改密。A1-D2：判定口径与 passkey 路径（R-002）统一为
@@ -1146,14 +1149,29 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	passwordMatched, passwordWasLegacy := security.VerifyPassword(user.Pwd, password)
-	if !passwordMatched {
+	if !passwordMatched && !passwordWasLegacy {
 		response.WriteJSON(w, response.ErrDefault("鉴权失败"))
 		return
 	}
 	// R6X-014：同 login——停用判据改 Status != 1 fail-closed，
-	// 存量 status∉{0,1} 的僵尸行不得再取得本人用量。
+	// 存量 status∉{0,1} 的僵尸行不得再取得本人用量。停用判定
+	// 先于下方 R-MD5 处置（与 login 同序）：已停用账户本次尝试
+	// 不触发任何存储变更。
 	if user.Status != 1 {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
+		return
+	}
+	if passwordWasLegacy {
+		// R-MD5 sunset：同 login——legacy MD5 存储不再验密放行，
+		// 账户经 SunsetLegacyUserPassword 收口为导入面终态（凭据
+		// 作废＋停用＋会话吊销，管理员通道重置）；对外与鉴权失败
+		// 同文案，处置细节只进服务端日志。
+		if applied, serr := h.repo.SunsetLegacyUserPassword(user.ID, user.Pwd, time.Now().UnixMilli()); serr != nil {
+			log.Printf("legacy password sunset failed user_id=%d path=sub_store err=%v", user.ID, serr)
+		} else if applied {
+			log.Printf("legacy password sunset applied user_id=%d path=sub_store: credential invalidated and account disabled pending admin password reset", user.ID)
+		}
+		response.WriteJSON(w, response.ErrDefault("鉴权失败"))
 		return
 	}
 	// L8-F-01（Round 5）：补种子默认口令门，与 login / passkey 登录
@@ -1168,18 +1186,6 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		log.Printf("sub_store rejected: stored default password still in use user=%q ip=%s", username, ipStr)
 		response.WriteJSON(w, response.ErrDefault("账号仍在使用默认密码，请先登录面板修改密码"))
 		return
-	}
-	if passwordWasLegacy {
-		// R4B01-002：同 login 路径——透明 rehash 走
-		// MigrateUserPasswordHash，不推进 password_changed_at。
-		// 本路径不签发 token、无签发补偿可言，旧写面下一次只读
-		// 拉取即吊销该用户全部既有面板会话。
-		hashedPassword, err := security.HashPassword(password)
-		if err != nil {
-			log.Printf("legacy password rehash skipped user_id=%d path=sub_store err=%v", user.ID, err)
-		} else if err := h.repo.MigrateUserPasswordHash(user.ID, hashedPassword, time.Now().UnixMilli()); err != nil {
-			log.Printf("legacy password rehash update skipped user_id=%d path=sub_store err=%v", user.ID, err)
-		}
 	}
 	authOK = true
 	// C1-03：与 login 同口径——鉴权成功清除该用户名的限流状态，

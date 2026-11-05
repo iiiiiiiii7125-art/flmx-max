@@ -2,7 +2,9 @@ package contract_test
 
 import (
 	"bytes"
+	"crypto/md5"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -279,7 +281,10 @@ func TestOpenAPISubStoreContracts(t *testing.T) {
 	})
 }
 
-func TestLegacyPasswordMigratesOnSubStore(t *testing.T) {
+// R-MD5 sunset 取代原「sub_store 透明迁移」合同：legacy 存储携
+// 正确口令拉取订阅亦鉴权失败，账户收口为导入面终态（随机 bcrypt
+// 替换、旧口令不可验、status=0、password_changed_at 推进吊销会话）。
+func TestLegacyPasswordSunsetOnSubStore(t *testing.T) {
 	router, r := setupContractRouter(t, "contract-jwt-secret")
 	legacyChangedAt := seedLegacyUser(t, r, 9102, "legacy-substore-user", "legacy-substore-pass")
 
@@ -287,21 +292,23 @@ func TestLegacyPasswordMigratesOnSubStore(t *testing.T) {
 	resp := httptest.NewRecorder()
 
 	router.ServeHTTP(resp, req)
+	assertCodeMsg(t, resp, -1, "鉴权失败")
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
+	user, err := r.GetUserByUsername("legacy-substore-user")
+	if err != nil || user == nil {
+		t.Fatalf("get user: %v", err)
 	}
-	expected := "upload=0; download=0; total=107373108658176; expire=2727251700"
-	if string(body) != expected {
-		t.Fatalf("expected body %q, got %q", expected, string(body))
+	if security.IsLegacyPasswordHash(user.Pwd) {
+		t.Fatalf("sunset must replace the legacy hash, got %q", user.Pwd)
 	}
-	assertUserPasswordIsBcrypt(t, r, "legacy-substore-user", "legacy-substore-pass")
-	// R4B01-002: transparent legacy-hash migration must not advance
-	// password_changed_at — the password itself did not change, and
-	// advancing it would revoke every existing panel session of that user.
-	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "legacy-substore-user"); changedAt != legacyChangedAt {
-		t.Fatalf("expected password_changed_at to remain unchanged on sub-store migration, got %d want %d", changedAt, legacyChangedAt)
+	if ok, legacy := security.VerifyPassword(user.Pwd, "legacy-substore-pass"); ok || legacy {
+		t.Fatalf("sunset replacement must not verify the old password, got (%v,%v)", ok, legacy)
+	}
+	if user.Status != 0 {
+		t.Fatalf("sunset must disable the account pending admin reset, status=%d", user.Status)
+	}
+	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "legacy-substore-user"); changedAt <= legacyChangedAt {
+		t.Fatalf("expected password_changed_at to advance on sunset, got %d want > %d", changedAt, legacyChangedAt)
 	}
 }
 
@@ -322,8 +329,11 @@ func TestDisabledLegacyPasswordIsRejectedOnSubStoreWithoutMigration(t *testing.T
 	if user == nil {
 		t.Fatal("expected disabled user to exist")
 	}
-	if ok, migrated := security.VerifyPassword(user.Pwd, "disabled-substore-pass"); !ok || !migrated {
-		t.Fatalf("expected disabled user to remain legacy MD5, got (%v,%v) with hash %q", ok, migrated, user.Pwd)
+	// 停用判定先于 sunset 处置：原 legacy 哈希须逐字保留（原探针
+	// 经 VerifyPassword 验行，sunset 后该原语已不存在，改逐字比对
+	// ——强度只增不减）。
+	if user.Pwd != legacyMD5HexForTest("disabled-substore-pass") {
+		t.Fatalf("expected disabled user to keep the original legacy MD5 hash, got %q", user.Pwd)
 	}
 	if changedAt := mustQueryPasswordChangedAtByUsername(t, r, "disabled-substore-user"); changedAt != legacyChangedAt {
 		t.Fatalf("expected password_changed_at to remain unchanged, got %d want %d", changedAt, legacyChangedAt)
@@ -354,6 +364,9 @@ func TestUserCreateStoresStrongHash(t *testing.T) {
 
 func TestUserUpdateStoresStrongHash(t *testing.T) {
 	router, r := setupContractRouter(t, "contract-jwt-secret")
+	// 保持 legacy 播种：本例正是 R-MD5 sunset 的重置通道证明——
+	// 管理员 update 对 legacy 账户设新口令即完成重置（存储转
+	// bcrypt、账户按请求体 status 恢复启用）。
 	seedLegacyUser(t, r, 9103, "legacy-update-user", "legacy-update-pass")
 	startedAt := time.Now().UnixMilli()
 	adminToken, err := auth.GenerateToken(1, "admin@user", 0, "contract-jwt-secret")
@@ -377,14 +390,17 @@ func TestUserUpdateStoresStrongHash(t *testing.T) {
 
 func TestUpdatePasswordStoresStrongHash(t *testing.T) {
 	router, r := setupContractRouter(t, "contract-jwt-secret")
-	seedLegacyUser(t, r, 9104, "legacy-self-user", "legacy-self-pass")
+	// 播种改 bcrypt（R-MD5 sunset）：本例主题是「自助改密落强哈希」，
+	// 非 legacy 行为；legacy 存储的自助改密已 fail-closed，另由
+	// handler 层 TestRMd5UpdatePasswordLegacyFailsClosed 钉住。
+	seedBcryptUser(t, r, 9104, "self-user", "self-current-pass")
 	startedAt := time.Now().UnixMilli()
-	token, err := auth.GenerateToken(9104, "legacy-self-user", 1, "contract-jwt-secret")
+	token, err := auth.GenerateToken(9104, "self-user", 1, "contract-jwt-secret")
 	if err != nil {
 		t.Fatalf("generate token: %v", err)
 	}
 
-	body := bytes.NewBufferString(`{"newUsername":"self-updated-user","currentPassword":"legacy-self-pass","newPassword":"self-updated-pass","confirmPassword":"self-updated-pass"}`)
+	body := bytes.NewBufferString(`{"newUsername":"self-updated-user","currentPassword":"self-current-pass","newPassword":"self-updated-pass","confirmPassword":"self-updated-pass"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/user/updatePassword", body)
 	req.Header.Set("Authorization", token)
 	req.Header.Set("Content-Type", "application/json")
@@ -918,18 +934,50 @@ func assertConfigValue(t *testing.T, r *repo.Repository, name, want string) {
 	}
 }
 
+// legacyMD5HexForTest 仅供测试构造 legacy MD5 存储夹具（生产侧
+// security.MD5 已随 R-MD5 sunset 整删，验密接受面不存在）。
+func legacyMD5HexForTest(plain string) string {
+	sum := md5.Sum([]byte(plain))
+	return hex.EncodeToString(sum[:])
+}
+
 func seedLegacyUser(t *testing.T, r *repo.Repository, id int64, username, password string) int64 {
 	return seedLegacyUserWithStatus(t, r, id, username, password, 1)
+}
+
+// seedBcryptUser 与 seedLegacyUserWithStatus 同形播种、存储为
+// bcrypt：供主题与 legacy 无关、只需可登录用户的夹具使用。
+func seedBcryptUser(t *testing.T, r *repo.Repository, id int64, username, password string) int64 {
+	t.Helper()
+	now := time.Now().UnixMilli()
+	changedAt := now - 10_000
+	hash, err := security.HashPassword(password)
+	if err != nil {
+		t.Fatalf("hash password for %s: %v", username, err)
+	}
+	if err := r.DB().Exec(`
+		INSERT INTO user(id, user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, max_conn, created_time, updated_time, status, password_changed_at)
+		VALUES(?, ?, ?, 1, 2727251700000, 99999, 0, 0, 1, 99999, 0, ?, ?, 1, ?)
+	`, id, username, hash, now, now, changedAt).Error; err != nil {
+		t.Fatalf("seed bcrypt user %s: %v", username, err)
+	}
+	return changedAt
 }
 
 func seedContractUser(t *testing.T, r *repo.Repository, id int64, username string, roleID, status int) int64 {
 	t.Helper()
 	now := time.Now().UnixMilli()
 	passwordChangedAt := now - 10_000
+	// 通用夹具现代化（R-MD5 sunset）：本助手只要求「可登录用户」，
+	// 存储改 bcrypt；legacy 形态由 seedLegacyUser* 专门构造。
+	contractHash, err := security.HashPassword("contract-pass")
+	if err != nil {
+		t.Fatalf("hash contract password: %v", err)
+	}
 	if err := r.DB().Exec(`
 		INSERT INTO user(id, user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, max_conn, created_time, updated_time, status, password_changed_at)
 		VALUES(?, ?, ?, ?, 2727251700000, 99999, 0, 0, 1, 99999, 0, ?, ?, ?, ?)
-	`, id, username, security.MD5("contract-pass"), roleID, now, now, status, passwordChangedAt).Error; err != nil {
+	`, id, username, contractHash, roleID, now, now, status, passwordChangedAt).Error; err != nil {
 		t.Fatalf("seed contract user %s: %v", username, err)
 	}
 	return passwordChangedAt
@@ -942,7 +990,7 @@ func seedLegacyUserWithStatus(t *testing.T, r *repo.Repository, id int64, userna
 	if err := r.DB().Exec(`
 		INSERT INTO user(id, user, pwd, role_id, exp_time, flow, in_flow, out_flow, flow_reset_time, num, max_conn, created_time, updated_time, status, password_changed_at)
 		VALUES(?, ?, ?, 1, 2727251700000, 99999, 0, 0, 1, 99999, 0, ?, ?, ?, ?)
-	`, id, username, security.MD5(password), now, now, status, legacyChangedAt).Error; err != nil {
+	`, id, username, legacyMD5HexForTest(password), now, now, status, legacyChangedAt).Error; err != nil {
 		t.Fatalf("seed legacy user %s: %v", username, err)
 	}
 	return legacyChangedAt

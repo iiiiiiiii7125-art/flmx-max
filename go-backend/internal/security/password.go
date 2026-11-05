@@ -34,31 +34,34 @@ func HashPassword(plain string) (string, error) {
 // 与 bcrypt 账号错密同量级。
 const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 
-// VerifyPassword 返回 (是否命中， 存储哈希是否为 legacy MD5)。
-// R3 B01-003：legacy 分支原为 MD5 快速比较——错密在微秒级返回，
-// 与「用户不存在（dummy bcrypt）/bcrypt 账号错密（~100ms）」形成
-// 可区分的三档时序，可枚举仍用 MD5 存量口令的账号。现把成本补齐
-// 下沉到本函数：legacy 错密在返回前补跑一次 dummy bcrypt，全部
-// 调用方（login、sub_store 及未来校验面）自动同口径；legacy 命中
-// 保持快速路径（成功后调用方立即 rehash，时序差不可用于枚举）。
+// VerifyPassword 返回 (是否命中， 存储哈希是否为 legacy MD5 格式)。
+// R-MD5 sunset：legacy MD5 此前在下方「验证通过即命中」、调用方
+// 随后透明 rehash 为 bcrypt——只有登录过的账户才自愈，休眠账户的
+// 无盐 MD5 无限期留在库中（库/备份泄露即口令明文）。现 legacy
+// 存储恒不命中：第二返回值如实报告存储形态，登录面（login、
+// sub_store）据此把账户收口为与导入面 normalizeImportedUserPassword
+// 相同的终态（凭据作废＋停用、经既有管理员通道重置），其余校验面
+// （updatePassword、passkey step-up）自然 fail-closed。
+// 时序口径（R3 B01-003）保留并收紧：legacy 存储的任何候选（含
+// 「正确」口令）都先补跑一次 dummy bcrypt 再返回，与 bcrypt 错密、
+// 用户不存在三类失败同量级，不给「该账户仍持 legacy 哈希且口令
+// 正确」留可区分信号。
 func VerifyPassword(storedHash, plain string) (bool, bool) {
 	if strings.HasPrefix(storedHash, "$2") {
 		// B1-02：超 72 字节的候选口令不得靠 bcrypt 截断与存储口令
 		// 的前 72 字节「等价命中」——校验面同拒（补跑 dummy bcrypt
-		// 拉平时序，与下方 legacy 错密路径同口径）。legacy MD5 分支
-		// 不受此限（MD5 无截断语义，存量长口令仍可登录并在改密面
-		// 被引导缩短）。
+		// 拉平时序，与下方 legacy 路径同口径）。
 		if len(plain) > MaxPasswordBytes {
 			_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(plain))
 			return false, false
 		}
 		return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(plain)) == nil, false
 	}
-	if MD5(plain) == storedHash {
-		return true, true
-	}
 	_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(plain))
-	return false, true
+	if IsLegacyPasswordHash(storedHash) {
+		return false, true
+	}
+	return false, false
 }
 
 func IsLegacyPasswordHash(storedHash string) bool {
