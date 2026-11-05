@@ -56,9 +56,15 @@ get_architecture() {
 INSTALL_DIR="/etc/flmx_agent"
 FLMX_AGENT_SYSTEMD_SERVICE_FILE="/etc/systemd/system/flmx_agent.service"
 FLMX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flmx_agent"
-# OpenRC 服务文件里 pidfile="/run/${RC_SVCNAME}.pid"，服务名恒为 flmx_agent。
-# pidfile 覆盖变量改名后以 FLMX_ 为准，旧 FLUX_ 变量仅回退读。
+# OpenRC pidfile 单一来源（A3-08）：服务文件里写的 pidfile 与脚本
+# 判活（flmx_agent_main_pid）读的 pidfile 是同一个变量值——模板生
+# 成时把变量现值写进服务文件，不再写死 /run/${RC_SVCNAME}.pid。
+# 旧实现三处分家（模板写死、脚本读覆盖值、存量侧读第三个从未赋
+# 值的名字），覆盖一旦设置判活恒失败。改名后以 FLMX_ 为准，旧
+# FLUX_ 变量仅回退读；存量服务同理走 LEGACY_ 变量（回退同名
+# FLUX_ 链），两个模板与两个读面各自同源。
 FLMX_AGENT_OPENRC_PIDFILE="${FLMX_AGENT_OPENRC_PIDFILE:-${FLUX_AGENT_OPENRC_PIDFILE:-/run/flmx_agent.pid}}"
+LEGACY_FLUX_AGENT_OPENRC_PIDFILE="${LEGACY_FLUX_AGENT_OPENRC_PIDFILE:-${FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}}"
 # 改名前的存量布局（识别集，本轮只加不删）：存量节点经脚本更新
 # 迁移到新布局之前一直是这套目录/服务名。更新路据此定位并整体
 # 迁移；卸载与足迹判定对未迁存量仍须认它，故下列旧名常量只用于
@@ -1311,7 +1317,7 @@ description="Flmx_agent Proxy Service"
 command="$INSTALL_DIR/flmx_agent"
 directory="$INSTALL_DIR"
 command_background="yes"
-pidfile="/run/\${RC_SVCNAME}.pid"
+pidfile="$FLMX_AGENT_OPENRC_PIDFILE"
 # R17-C (R17-X-01): same rationale as the systemd unit — /dev/null
 # discarded startup logs; keep them in files for post-mortem diagnosis.
 output_log="/var/log/flmx_agent.log"
@@ -1560,7 +1566,7 @@ description="Flux_agent Proxy Service"
 command="$LEGACY_INSTALL_DIR/flux_agent"
 directory="$LEGACY_INSTALL_DIR"
 command_background="yes"
-pidfile="/run/\${RC_SVCNAME}.pid"
+pidfile="$LEGACY_FLUX_AGENT_OPENRC_PIDFILE"
 output_log="/var/log/flux_agent.log"
 error_log="/var/log/flux_agent.err.log"
 
@@ -1612,7 +1618,9 @@ legacy_flux_agent_main_pid() {
       systemctl show -p MainPID --value flux_agent 2>/dev/null
       ;;
     openrc)
-      cat "${LEGACY_FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}" 2>/dev/null
+      # A3-08: 与存量模板同一变量（见文件头常量区），不再读第三
+      # 个从未赋值的名字。
+      cat "${LEGACY_FLUX_AGENT_OPENRC_PIDFILE}" 2>/dev/null
       ;;
   esac
 }

@@ -9725,6 +9725,53 @@ test_install_script_accepts_secret_from_env() (
   assert_equals "got=${want_argv}" "$out" \
     "A3-07: -s must keep precedence over FLMX_NODE_SECRET"
 )
+
+# A3-08: OpenRC pidfile 必须单一来源——服务文件里写的 pidfile 与
+# 脚本判活读的 pidfile 是同一个变量值。旧实现三处分家：模板写死
+# /run/${RC_SVCNAME}.pid、脚本读 FLMX_AGENT_OPENRC_PIDFILE 覆盖
+# 值、存量侧又读从未赋值的第三个名字——覆盖一旦设置，守护进程
+# 仍写默认路径、脚本去自定义路径读 PID，判活恒失败。
+test_openrc_pidfile_uses_configured_value() (
+  set -euo pipefail
+  local work
+  work=$(mktemp -d)
+  SERVICE_MANAGER="openrc"
+
+  # 缺省臂：模板落缺省值、判活从同一路径读。
+  load_script_without_main "$ROOT_DIR/install.sh"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$work/flmx.initd"
+  write_flmx_agent_service
+  grep -Fxq 'pidfile="/run/flmx_agent.pid"' "$work/flmx.initd" || \
+    fail "A3-08: default OpenRC pidfile must be written from the single source variable"
+
+  # 覆盖臂：FLMX_AGENT_OPENRC_PIDFILE 改指后，模板与读面同值。
+  # （用普通赋值而非函数前缀赋值：前缀赋值在函数返回后会被
+  # bash 恢复，测不到真实的 source 时取值。）
+  FLMX_AGENT_OPENRC_PIDFILE="$work/custom.pid"
+  load_script_without_main "$ROOT_DIR/install.sh"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$work/flmx-custom.initd"
+  write_flmx_agent_service
+  grep -Fxq "pidfile=\"$work/custom.pid\"" "$work/flmx-custom.initd" || \
+    fail "A3-08: configured OpenRC pidfile must be written into the service file"
+  printf '777\n' > "$work/custom.pid"
+  assert_equals "777" "$(flmx_agent_main_pid)" \
+    "A3-08: health check must read the pid from the configured pidfile"
+
+  # 存量臂：旧名前缀回退链（FLUX_AGENT_OPENRC_PIDFILE）同样进模板
+  # 与读面，不再是第三个从未赋值的名字。
+  FLUX_AGENT_OPENRC_PIDFILE="$work/legacy.pid"
+  # 同壳多次 source 时派生变量已被前一轮赋过值，须先清空才测得
+  # 到回退链（生产每进程只 source 一次、直接读环境，无此问题）。
+  LEGACY_FLUX_AGENT_OPENRC_PIDFILE=""
+  load_script_without_main "$ROOT_DIR/install.sh"
+  LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE="$work/flux.initd"
+  write_legacy_flux_agent_service
+  grep -Fxq "pidfile=\"$work/legacy.pid\"" "$work/flux.initd" || \
+    fail "A3-08: legacy OpenRC pidfile must be written from the same fallback chain"
+  printf '888\n' > "$work/legacy.pid"
+  assert_equals "888" "$(legacy_flux_agent_main_pid)" \
+    "A3-08: legacy health check must read the pid from the legacy pidfile variable"
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -9783,6 +9830,7 @@ test_suite_stub_layer_catches_legacy_leak
 test_delete_self_pipe_form_preserves_cwd_namesake
 test_install_lock_rejects_concurrent_run
 test_install_script_accepts_secret_from_env
+test_openrc_pidfile_uses_configured_value
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance
