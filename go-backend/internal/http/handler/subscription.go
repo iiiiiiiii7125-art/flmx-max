@@ -427,15 +427,89 @@ func subDueReset(s *model.Subscription, now time.Time) bool {
 // applyUserCounters adds a node's per-user traffic to the subscriptions
 // and cuts off the ones that reached their limit right away.
 func (h *Handler) applyUserCounters(nodeID int64, epoch string, counters []agentUserCounter, now int64) {
-	samples := make([]repo.SubscriptionCounterSample, 0, len(counters))
-	for _, c := range counters {
-		samples = append(samples, repo.SubscriptionCounterSample{SubscriptionID: c.ID, Direction: c.Dir, Bytes: c.Bytes})
-	}
-	if err := h.repo.ApplySubscriptionCounterSamples(nodeID, epoch, samples, now); err != nil {
-		log.Printf("subscription traffic apply failed node_id=%d err=%v", nodeID, err)
-		return
+	samples := h.scopedSubscriptionSamples(nodeID, counters)
+	if len(samples) > 0 {
+		if err := h.repo.ApplySubscriptionCounterSamples(nodeID, epoch, samples, now); err != nil {
+			log.Printf("subscription traffic apply failed node_id=%d err=%v", nodeID, err)
+			return
+		}
 	}
 	h.syncSubscriptions(time.UnixMilli(now))
+}
+
+// scopedSubscriptionSamples F2-01: a node's per-user samples book only
+// against subscriptions that node actually serves. The serving set is
+// derived mechanically from the same source the pull/mount faces use —
+// subInboundIDs (SourceAll / explicit list / source-derived) resolved
+// to node_inbound.node_id — plus the nodes hosting metering companions
+// of those inbounds (the companion's kernel carries the users and is
+// the one reporting). Foreign or unknown subscription IDs are dropped
+// with an aggregated warn (mirroring the unaccounted-inbound pattern
+// in applyInboundCounterChunk): baselines are keyed per reporting
+// node, so an unchecked foreign sample would mint a baseline and book
+// every later delta against a subscription the node never served,
+// forcing its quota cutoff at the sync that follows. A lookup failure
+// drops the whole poll cycle fail-closed — counters are cumulative,
+// so the next successful poll books the full delta against the old
+// baseline and nothing is lost.
+func (h *Handler) scopedSubscriptionSamples(nodeID int64, counters []agentUserCounter) []repo.SubscriptionCounterSample {
+	if len(counters) == 0 {
+		return nil
+	}
+	subs, err := h.repo.ListSubscriptions()
+	if err != nil {
+		log.Printf("subscription traffic scope lookup failed op=list_subscriptions node_id=%d err=%v action=dropped_all", nodeID, err)
+		return nil
+	}
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		log.Printf("subscription traffic scope lookup failed op=list_inbounds node_id=%d err=%v action=dropped_all", nodeID, err)
+		return nil
+	}
+	byID := make(map[int64]*model.Subscription, len(subs))
+	for i := range subs {
+		byID[subs[i].ID] = &subs[i]
+	}
+	nodeOfInbound := make(map[int64]int64, len(rows))
+	for _, r := range rows {
+		nodeOfInbound[r.ID] = r.NodeID
+	}
+	serving := make(map[int64]map[int64]bool, len(counters))
+	resolve := func(s *model.Subscription) map[int64]bool {
+		if set, ok := serving[s.ID]; ok {
+			return set
+		}
+		set := map[int64]bool{}
+		ids := subInboundIDs(s, rows)
+		idSet := make(map[int64]bool, len(ids))
+		for _, id := range ids {
+			idSet[id] = true
+			if n, ok := nodeOfInbound[id]; ok {
+				set[n] = true
+			}
+		}
+		for _, r := range rows {
+			if r.CompanionOf != 0 && idSet[r.CompanionOf] {
+				set[r.NodeID] = true
+			}
+		}
+		serving[s.ID] = set
+		return set
+	}
+	out := make([]repo.SubscriptionCounterSample, 0, len(counters))
+	dropped := make(map[int64]int)
+	for _, c := range counters {
+		s, ok := byID[c.ID]
+		if !ok || !resolve(s)[nodeID] {
+			dropped[c.ID]++
+			continue
+		}
+		out = append(out, repo.SubscriptionCounterSample{SubscriptionID: c.ID, Direction: c.Dir, Bytes: c.Bytes})
+	}
+	for id, n := range dropped {
+		log.Printf("subscription traffic sample foreign op=foreign_subscription node_id=%d subscription_id=%d samples=%d action=dropped", nodeID, id, n)
+	}
+	return out
 }
 
 func isShare(s *model.Subscription) bool { return s.Kind == model.SubscriptionShare }
