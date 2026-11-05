@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
+
+	"go-backend/internal/store/model"
 )
 
 // B6-01 同族补全：B6-01 的路径面普查只收了证书路径（tls 三字段与
@@ -16,6 +19,10 @@ import (
 // 引用，agent parsing 层以 GetFromPath 打开任意路径并 Set 后在该
 // 命名空间内建监听/出站（与文件族同机制：对端配置命名提供方主机
 // 资源、root agent 消费；面板自身从不下发 netns，后端全仓零命中）。
+// FIX-R2-7（§14 按来源收口）续收第七族 interface：peer 载荷裸键名
+// 非空即拒；面板以节点记录 InterfaceName 经 federation 生命周期
+// 物化下发的合法流与本面按来源分离（校验器只见 peer 来源的
+// PeerShareResource.Config），生命周期回归同组钉住不断。
 // 本文件钉补全后的全集：可达族
 // 走真实命令面红→绿，类型面暂挡住的族以合法信封嵌入证路径面本身
 // 在命令面生效、再以校验器直测钉键形变体；合法 KCP 配置（内联
@@ -147,6 +154,9 @@ func TestB601FamilyValidatorKeyShapes(t *testing.T) {
 		{"netns.out dotted", map[string]interface{}{"metadata": map[string]interface{}{"netns.out": "/x"}}},
 		{"NetNS case variant", map[string]interface{}{"NetNS": "/x"}},
 		{"node field netns", map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"netns": "/x"}}}},
+		{"service metadata interface", map[string]interface{}{"metadata": map[string]interface{}{"interface": "eth0"}}},
+		{"Interface case variant", map[string]interface{}{"Interface": "eth0"}},
+		{"node field interface", map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"interface": "eth0"}}}},
 	}
 	for _, tc := range reject {
 		t.Run("reject/"+tc.name, func(t *testing.T) {
@@ -166,6 +176,7 @@ func TestB601FamilyValidatorKeyShapes(t *testing.T) {
 		{"empty configFile placeholder", map[string]interface{}{"metadata": map[string]interface{}{"kcp.configFile": ""}}},
 		{"empty netns placeholder", map[string]interface{}{"metadata": map[string]interface{}{"netns": ""}}},
 		{"empty netns.out placeholder", map[string]interface{}{"metadata": map[string]interface{}{"netns.out": ""}}},
+		{"empty interface placeholder", map[string]interface{}{"metadata": map[string]interface{}{"interface": ""}}},
 		{"inline kcp config", map[string]interface{}{"metadata": map[string]interface{}{"config": map[string]interface{}{"mode": "fast"}}}},
 	}
 	for _, tc := range accept {
@@ -307,5 +318,138 @@ func TestB601FamilyStoredNetnsPaused(t *testing.T) {
 
 	if got := b606DesiredState(t, a.h, share, "service", "storednetns"); got != "paused" {
 		t.Fatalf("stored service with netns desired_state = %q, want paused", got)
+	}
+}
+
+// FIX-R2-7（§14 按来源收口）：interface 族四入形（service metadata、
+// service 结构体字段、hop metadata、node 结构体字段）在命令面全数
+// 被拒且不落库。对端任意携带 interface 即以 InterfaceByName 做存
+// 在性预言机并选择绑定位置；面板自有合法流（节点记录
+// InterfaceName 经生命周期物化）不经本面，见生命周期回归例。
+func TestB601FamilyInterfaceRejected(t *testing.T) {
+	a := newCleanupAgent(t)
+	share := resourceTestShare(t, a.h, "b601fam-iface-share")
+
+	cases := []struct {
+		name  string
+		cmd   string
+		data  interface{}
+		check string
+		kind  string
+	}{
+		{
+			name: "service metadata interface",
+			cmd:  "AddService",
+			data: []interface{}{b601FamilyService("ifacesvc", 31071, func(s map[string]interface{}) {
+				s["metadata"] = map[string]interface{}{"interface": "eth0"}
+			})},
+			check: "ifacesvc", kind: "service",
+		},
+		{
+			name: "service field interface",
+			cmd:  "AddService",
+			data: []interface{}{b601FamilyService("ifacefield", 31072, func(s map[string]interface{}) {
+				s["interface"] = "eth0"
+			})},
+			check: "ifacefield", kind: "service",
+		},
+		{
+			name:  "chain hop metadata interface",
+			cmd:   "AddChains",
+			data:  map[string]interface{}{"name": "ifacehop", "hops": []interface{}{map[string]interface{}{"name": "h1", "metadata": map[string]interface{}{"interface": "eth0"}, "nodes": []interface{}{map[string]interface{}{"name": "n1", "addr": "127.0.0.1:8080", "connector": map[string]interface{}{"type": "relay"}, "dialer": map[string]interface{}{"type": "tcp"}}}}}},
+			check: "ifacehop", kind: "chain",
+		},
+		{
+			name:  "chain node field interface",
+			cmd:   "AddChains",
+			data:  map[string]interface{}{"name": "ifacenode", "hops": []interface{}{map[string]interface{}{"name": "h1", "nodes": []interface{}{map[string]interface{}{"name": "n1", "addr": "127.0.0.1:8080", "interface": "eth0", "connector": map[string]interface{}{"type": "relay"}, "dialer": map[string]interface{}{"type": "tcp"}}}}}},
+			check: "ifacenode", kind: "chain",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := resourceTestCommand(t, a.h, share, tc.cmd, tc.data)
+			if result.Code == 0 {
+				t.Fatalf("command carrying a node-local interface binding was accepted: %+v", result)
+			}
+			stored, err := a.h.repo.GetPeerShareResource(share.ID, tc.kind, tc.check)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored != nil {
+				t.Fatalf("rejected resource was persisted anyway: %+v", stored)
+			}
+		})
+	}
+}
+
+// 存量面：植入 interface 的存量服务经启动复检必须被置 paused
+// （同一校验全集的本族验证，与 netns 存量例同形）。
+func TestB601FamilyStoredInterfacePaused(t *testing.T) {
+	a := newCleanupAgent(t)
+	share := resourceTestShare(t, a.h, "b601fam-iface-stored-share")
+
+	b606SeedResource(t, a.h, share, "service", "storediface", "active", map[string]interface{}{
+		"handler":  map[string]interface{}{"type": "tcp"},
+		"listener": map[string]interface{}{"type": "tcp"},
+		"metadata": map[string]interface{}{"interface": "eth0"},
+	})
+
+	restarted := &Handler{repo: a.h.repo}
+	restarted.revalidateStoredPeerShareResources()
+
+	if got := b606DesiredState(t, a.h, share, "service", "storediface"); got != "paused" {
+		t.Fatalf("stored service with interface desired_state = %q, want paused", got)
+	}
+}
+
+// §14 来源分离的回归锚：面板以提供方节点记录的 InterfaceName 经
+// 联邦生命周期物化下发 interface（exit 服务 metadata、middle 链
+// hop 字段）不经 peer 资源校验器——本面收口后合法流必须照常。
+// 经真实 applyPeerShareRoleRuntime 下发并断言捕获到的命令载荷。
+func TestB601FamilyInterfaceLifecycleIntact(t *testing.T) {
+	for _, role := range []string{"exit", "middle"} {
+		t.Run(role, func(t *testing.T) {
+			agent := newCleanupAgent(t)
+			if err := agent.h.repo.DB().Model(&model.Node{}).Where("id = ?", 1).Update("interface_name", "ens224").Error; err != nil {
+				t.Fatal(err)
+			}
+			runtime := roleRuntimeFixture(t, agent, role)
+			if err := agent.h.applyPeerShareRoleRuntime(runtime); err != nil {
+				t.Fatalf("applyPeerShareRoleRuntime: %v", err)
+			}
+			if role == "exit" {
+				cmds := agent.commandsOfType("UpdateService")
+				if len(cmds) == 0 {
+					t.Fatal("no UpdateService command captured")
+				}
+				var services []map[string]interface{}
+				if err := json.Unmarshal(cmds[len(cmds)-1].Data, &services); err != nil || len(services) == 0 {
+					t.Fatalf("decode UpdateService data %s: %v", string(cmds[len(cmds)-1].Data), err)
+				}
+				md, _ := services[0]["metadata"].(map[string]interface{})
+				if got, _ := md["interface"].(string); got != "ens224" {
+					t.Fatalf("exit service metadata interface = %q, want provider node InterfaceName %q", got, "ens224")
+				}
+				return
+			}
+			cmds := agent.commandsOfType("UpdateChains")
+			if len(cmds) == 0 {
+				t.Fatal("no UpdateChains command captured")
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(cmds[len(cmds)-1].Data, &payload); err != nil {
+				t.Fatalf("decode UpdateChains data %s: %v", string(cmds[len(cmds)-1].Data), err)
+			}
+			data, _ := payload["data"].(map[string]interface{})
+			hops, _ := data["hops"].([]interface{})
+			if len(hops) == 0 {
+				t.Fatalf("chain payload has no hops: %s", string(cmds[len(cmds)-1].Data))
+			}
+			hop0, _ := hops[0].(map[string]interface{})
+			if got, _ := hop0["interface"].(string); got != "ens224" {
+				t.Fatalf("middle chain hop interface = %q, want provider node InterfaceName %q", got, "ens224")
+			}
+		})
 	}
 }

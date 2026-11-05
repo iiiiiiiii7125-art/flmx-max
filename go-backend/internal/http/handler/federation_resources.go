@@ -957,12 +957,21 @@ func validatePeerResourceConfig(value interface{}, kind string) error {
 //     node 字段）同根，裸键名任意位置非空即拒。面板自身从不下发
 //     netns（后端全仓零命中），无合法面可误伤。
 //
-// R2-07-01 续普查（换谓词：以 x parsing/metadata 层实际读取的键全集
-// 与主机资源消费点反推全集）：interface（主机网卡名，parsing/service
-// 与 parsing/hop 读取）有意不在本面——它是节点记录上的运营配置字段
-// （InterfaceName），面板 federation 生命周期以提供方节点自身配置
-// 合法下发，与对端任意携带的 netns 性质不同，其 peer 面口径另案待
-// 主控裁定，不得在此顺手一律拒（会打断 exit 接口绑定功能）。
+//   - 主机网卡名 interface（R2-07-01 续普查成员，主控 §14 裁定
+//     按来源收口）：parsing/service 与 parsing/hop 以 metadata
+//     的 interface 及 Service/Hop/Node 结构体字段消费，经
+//     net.InterfaceByName 解析后绑定该网卡地址——对端任意携带
+//     即成存在性预言机＋绑定位置选择。它同时是节点记录上的
+//     运营字段 InterfaceName，面板 federation 生命周期以提供
+//     方节点自身配置合法物化下发（exit 接口绑定为既定功能），
+//     但物化面与本面按来源分离：本校验器的三个调用面（写入、
+//     存量复检、resume）只以 PeerShareResource.Config 为对象，
+//     该字段全仓唯一写入者是对端命令面（校验后落库）；生命
+//     周期 builders（peer_share_runtime_lifecycle.go）以节点
+//     记录现构建、经 sendNodeCommand 直发，从不经本校验器、
+//     从不写 PeerShareResource.Config。故本面只拒对端载荷：
+//     裸键名 interface 非空字符串即拒，面板物化流不受影响
+//     （生命周期回归在 federation_b601_family_test.go 钉住）。
 //
 // limiter 顶层 file 加载器与 hop loader 已由引用面校验拒绝，不在
 // 本面重复登记。URL 路径键（*.path/pathPrefix 等）不落本机文件，
@@ -985,6 +994,8 @@ func walkPeerResourceLocalPaths(value interface{}, inMetadata bool) error {
 					return fmt.Errorf("shared resources must not reference node-local config files: %s", key)
 				case lower == "netns" || lower == "netns.out":
 					return fmt.Errorf("shared resources must not reference node-local network namespaces: %s", key)
+				case lower == "interface":
+					return fmt.Errorf("shared resources must not bind node-local network interfaces: %s", key)
 				case lower == "privatekeyfile":
 					return fmt.Errorf("shared resources must not reference node-local private key files: %s", key)
 				case lower == "authorizedkeys":
