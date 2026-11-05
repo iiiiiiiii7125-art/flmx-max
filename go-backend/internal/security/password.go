@@ -1,12 +1,27 @@
 package security
 
 import (
+	"errors"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
+// MaxPasswordBytes 是 bcrypt 的有效输入上限（字节数，按 UTF-8
+// 编码后计）：超出部分被 bcrypt 静默忽略，两条只差 72 字节之后
+// 内容的口令在校验时完全等价（B1-02）。此前全仓设密面只有最小
+// 长度、无上限，使用长口令的用户（往往是最在意安全者，含被强制
+// 改密的管理员）得到的熵远低于其认知且永不报错。
+const MaxPasswordBytes = 72
+
+// ErrPasswordTooLong 是设密面拒绝超长口令的具名错误，各设密面
+// 经既有错误通道原样回给调用方点名。
+var ErrPasswordTooLong = errors.New("密码超过 72 字节上限（bcrypt 限制），请使用更短的密码")
+
 func HashPassword(plain string) (string, error) {
+	if len(plain) > MaxPasswordBytes {
+		return "", ErrPasswordTooLong
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
 	if err != nil {
 		return "", err
@@ -28,6 +43,15 @@ const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL1
 // 保持快速路径（成功后调用方立即 rehash，时序差不可用于枚举）。
 func VerifyPassword(storedHash, plain string) (bool, bool) {
 	if strings.HasPrefix(storedHash, "$2") {
+		// B1-02：超 72 字节的候选口令不得靠 bcrypt 截断与存储口令
+		// 的前 72 字节「等价命中」——校验面同拒（补跑 dummy bcrypt
+		// 拉平时序，与下方 legacy 错密路径同口径）。legacy MD5 分支
+		// 不受此限（MD5 无截断语义，存量长口令仍可登录并在改密面
+		// 被引导缩短）。
+		if len(plain) > MaxPasswordBytes {
+			_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(plain))
+			return false, false
+		}
 		return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(plain)) == nil, false
 	}
 	if MD5(plain) == storedHash {

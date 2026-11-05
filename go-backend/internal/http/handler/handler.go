@@ -2224,6 +2224,12 @@ func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("新密码至少6位"))
 		return
 	}
+	// B1-02：上限按字节计（bcrypt 72 字节截断面），与最小长度的
+	// rune 口径刻意不同——多字节字符正是会在字节面先触顶的形态。
+	if len(req.NewPassword) > security.MaxPasswordBytes {
+		response.WriteJSON(w, response.ErrDefault("新密码超过72字节上限（bcrypt限制），请使用更短的密码"))
+		return
+	}
 
 	user, err := h.repo.GetUserByID(userID)
 	if err != nil {
