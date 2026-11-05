@@ -5075,9 +5075,80 @@ func importUserSubscriptions(tx *gorm.DB, rows []model.UserSubscriptionBackup, s
 }
 
 // B4/F-030：导入 service_monitor 表（监控定义）
+// importServiceMonitorLimits 读导入事务内的服务监控限值（7 个
+// service_monitor_* 配置键），归一口径与写面
+// handler.resolveServiceMonitorLimits 完全同源
+// （monitoring.ServiceMonitorLimitsFromConfigMap）。configs 段在
+// serviceMonitors 段之前已同事务落库，恢复进来的限值即时生效，
+// 与写面此刻读到的口径一致。
+func importServiceMonitorLimits(tx *gorm.DB) (monitoring.ServiceMonitorLimits, error) {
+	names := []string{
+		monitoring.ConfigServiceMonitorCheckerScanIntervalSec,
+		monitoring.ConfigServiceMonitorWorkerLimit,
+		monitoring.ConfigServiceMonitorMinIntervalSec,
+		monitoring.ConfigServiceMonitorDefaultIntervalSec,
+		monitoring.ConfigServiceMonitorMinTimeoutSec,
+		monitoring.ConfigServiceMonitorDefaultTimeoutSec,
+		monitoring.ConfigServiceMonitorMaxTimeoutSec,
+	}
+	var configs []model.ViteConfig
+	if err := tx.Select("name", "value").Where("name IN ?", names).Find(&configs).Error; err != nil {
+		return monitoring.ServiceMonitorLimits{}, err
+	}
+	cfg := make(map[string]string, len(configs))
+	for _, c := range configs {
+		cfg[c.Name] = c.Value
+	}
+	return monitoring.ServiceMonitorLimitsFromConfigMap(cfg), nil
+}
+
 func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now int64, rep *importReport) (int, error) {
+	// B8-02：恢复面镜像写面（monitorServiceCreate，更新面同口径）
+	// 全套门。此前仅镜像了目标格式一门（F-08），type/名/间隔/
+	// 超时/enabled/负 NodeID/ICMP 无节点全部原样落库——写面已封
+	// 死的脏行经恢复面重入：调度按脏 interval/timeout 运行（热
+	// 循环或永不执行）、ICMP 无节点行在 checker 恒失败
+	// （「ICMP 监控必须指定执行节点」）、负 NodeID 被消费面按
+	// ≤0 当面板本地监控。处置与恢复面惯例一致：硬门逐行跳过 +
+	// warning（NodeID<0、名空/超长、type 集外、enabled 域外、
+	// ICMP 无节点、绑定节点不存在）；软门（interval/timeout）
+	// 按写面同源限值默认 + 钳制 + warning。SSRF 硬拒层
+	// （ValidateMonitorTCPTarget/ValidateNodeMonitorTarget 的
+	// DNS/netguard 判定）仍属创建/更新面，恢复侧不做 DNS 解析，
+	// 只镜格式层（与 F-08 既定口径一致）。
+	limits, err := importServiceMonitorLimits(tx)
+	if err != nil {
+		return 0, err
+	}
 	count := 0
 	for _, r := range rows {
+		if r.NodeID < 0 {
+			rep.skip("serviceMonitors")
+			rep.warnf("备份恢复：监控 #%d（%q）的 nodeId=%d 为负值，已跳过该行未恢复", r.ID, r.Name, r.NodeID)
+			continue
+		}
+		name := strings.TrimSpace(r.Name)
+		if name == "" || len([]rune(name)) > 100 {
+			rep.skip("serviceMonitors")
+			rep.warnf("备份恢复：监控 #%d 的名称为空或超过 100 个字符，已跳过该行未恢复", r.ID)
+			continue
+		}
+		monitorType := strings.ToLower(strings.TrimSpace(r.Type))
+		if monitorType != "tcp" && monitorType != "icmp" {
+			rep.skip("serviceMonitors")
+			rep.warnf("备份恢复：监控 #%d（%q）的类型 %q 不在合法集 {tcp, icmp} 内，已跳过该行未恢复", r.ID, name, r.Type)
+			continue
+		}
+		if r.Enabled != 0 && r.Enabled != 1 {
+			rep.skip("serviceMonitors")
+			rep.warnf("备份恢复：监控 #%d（%q）的 enabled=%d 不在 {0, 1} 内，已跳过该行未恢复", r.ID, name, r.Enabled)
+			continue
+		}
+		if monitorType == "icmp" && r.NodeID <= 0 {
+			rep.skip("serviceMonitors")
+			rep.warnf("备份恢复：监控 #%d（%q）是 ICMP 监控但未绑定执行节点，已跳过该行未恢复（ICMP 监控必须选择执行节点）", r.ID, name)
+			continue
+		}
 		// D4-03：绑定了节点而节点不存在时整行跳过并计数
 		//（NodeID=0 的面板本地监控不受影响）。
 		if r.NodeID > 0 {
@@ -5099,18 +5170,41 @@ func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now i
 		// icmp 同 PC-09 口径：含 ":" 且非合法 IP 字面量即拒），
 		// 非法值清空 + 回执披露。SSRF 硬拒层（LookupIP/netguard）
 		// 仍属创建/更新面，恢复侧不做 DNS 解析。
-		target := r.Target
-		if target != "" && !validImportMonitorTarget(r.Type, target) {
-			rep.warnf("备份恢复：监控 #%d（%q）的目标地址 %q 格式非法，已清空，恢复后请在监控设置中重新填写", r.ID, r.Name, r.Target)
+		target := strings.TrimSpace(r.Target)
+		if target != "" && !validImportMonitorTarget(monitorType, target) {
+			rep.warnf("备份恢复：监控 #%d（%q）的目标地址 %q 格式非法，已清空，恢复后请在监控设置中重新填写", r.ID, name, r.Target)
 			target = ""
+		}
+		// 软门：interval/timeout 按写面同源限值默认 + 钳制
+		//（create 面同序：≤0 取默认、interval 下限钳、timeout
+		// 上下限钳），调整逐行 warning 披露调整前后值。
+		intervalSec := r.IntervalSec
+		if intervalSec <= 0 {
+			intervalSec = limits.DefaultIntervalSec
+		}
+		if intervalSec < limits.MinIntervalSec {
+			intervalSec = limits.MinIntervalSec
+		}
+		timeoutSec := r.TimeoutSec
+		if timeoutSec <= 0 {
+			timeoutSec = limits.DefaultTimeoutSec
+		}
+		if timeoutSec < limits.MinTimeoutSec {
+			timeoutSec = limits.MinTimeoutSec
+		}
+		if timeoutSec > limits.MaxTimeoutSec {
+			timeoutSec = limits.MaxTimeoutSec
+		}
+		if intervalSec != r.IntervalSec || timeoutSec != r.TimeoutSec {
+			rep.warnf("备份恢复：监控 #%d（%q）的检查间隔/超时 %d/%d 不在服务监控限值内，已调整为 %d/%d", r.ID, name, r.IntervalSec, r.TimeoutSec, intervalSec, timeoutSec)
 		}
 		item := model.ServiceMonitor{
 			ID:          r.ID,
-			Name:        r.Name,
-			Type:        r.Type,
+			Name:        name,
+			Type:        monitorType,
 			Target:      target,
-			IntervalSec: r.IntervalSec,
-			TimeoutSec:  r.TimeoutSec,
+			IntervalSec: intervalSec,
+			TimeoutSec:  timeoutSec,
 			NodeID:      r.NodeID,
 			Enabled:     r.Enabled,
 			CreatedTime: r.CreatedTime,
