@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -420,11 +419,17 @@ func (s *defaultService) execCmds(phase string, cmds []string) {
 		if cmd == "" {
 			continue
 		}
-		s.options.logger.Info(cmd)
-
-		if err := exec.Command("/bin/sh", "-c", cmd).Run(); err != nil {
-			s.options.logger.Warnf("[%s] %s: %v", phase, cmd, err)
-		}
+		// D2-02 (defence in depth, §9.10 ruling): this fork is
+		// the managed agent build. The panel never sends service
+		// hooks and the config parse layer already rejects them
+		// fail-closed (S-01) — but the executor itself used to be
+		// a live, timeout-less root /bin/sh -c sitting behind
+		// that single check, so any future construction path
+		// that reached it would have been instant root RCE, and
+		// even a benign hook could wedge NewService/Close
+		// forever. Refuse at the executor as well; nothing here
+		// may turn a hook string into a shell command.
+		s.options.logger.Warnf("[%s] service hook refused in managed agent build: %s", phase, cmd)
 	}
 }
 
