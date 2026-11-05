@@ -2363,6 +2363,35 @@ func (r *Repository) withContext(ctx context.Context) *Repository {
 	return &clone
 }
 
+// withDB 返回绑定指定 gorm 句柄的浅克隆（withContext 的同型
+// 做法，供事务内复用全部段查询）。
+func (r *Repository) withDB(db *gorm.DB) *Repository {
+	if r == nil || db == nil {
+		return r
+	}
+	clone := *r
+	clone.db = db
+	return &clone
+}
+
+// runExportInSnapshot 在单个只读快照事务里执行 fn（C1-05）：
+// 此前 ExportAll/ExportPartial 的约 15 段查询逐段自动提交，并
+// 发编辑可让备份跨段不一致（forward 在、其 tunnel 已改名/已
+// 删，恢复时才爆）。PG 用 REPEATABLE READ 只读事务取真快照；
+// SQLite（WAL＋单连接）用缺省事务，第一条读起即钉住快照。段
+// 查询全部走克隆的 Repository 方法、句柄即事务本身，不改各段
+// 实现。
+func (r *Repository) runExportInSnapshot(fn func(txRepo *Repository) error) error {
+	if r.db.Dialector != nil && r.db.Dialector.Name() == "postgres" {
+		return r.db.Transaction(func(tx *gorm.DB) error {
+			return fn(r.withDB(tx))
+		}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return fn(r.withDB(tx))
+	})
+}
+
 // ExportAllContext 同 ExportAll，但全部查询绑定 ctx。
 func (r *Repository) ExportAllContext(ctx context.Context) (*model.BackupData, error) {
 	return r.withContext(ctx).ExportAll()
@@ -2380,6 +2409,22 @@ func (r *Repository) ImportContext(ctx context.Context, backup *model.BackupData
 }
 
 func (r *Repository) ExportAll() (*model.BackupData, error) {
+	var backup *model.BackupData
+	err := r.runExportInSnapshot(func(txRepo *Repository) error {
+		b, err := txRepo.exportAll()
+		if err != nil {
+			return err
+		}
+		backup = b
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return backup, nil
+}
+
+func (r *Repository) exportAll() (*model.BackupData, error) {
 	backup := &model.BackupData{Version: "1.0", ExportedAt: unixMilliNow()}
 
 	users, err := r.exportUsers()
@@ -2519,6 +2564,22 @@ func (r *Repository) ExportPartial(types []string) (*model.BackupData, error) {
 	if err := validateBackupTypes(types); err != nil {
 		return nil, err
 	}
+	var backup *model.BackupData
+	err := r.runExportInSnapshot(func(txRepo *Repository) error {
+		b, err := txRepo.exportPartial(types)
+		if err != nil {
+			return err
+		}
+		backup = b
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return backup, nil
+}
+
+func (r *Repository) exportPartial(types []string) (*model.BackupData, error) {
 	backup := &model.BackupData{Version: "1.0", ExportedAt: unixMilliNow()}
 	typeSet := make(map[string]bool)
 	for _, t := range types {
