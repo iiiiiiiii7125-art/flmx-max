@@ -136,6 +136,11 @@ test_update_flmx_agent_downloads_without_prompt() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
+  # A3-02 后显式版本须过格式校验：夹具预设的 v-test 不再合法，
+  # 本例走真实 ensure 路径，须先给合法版本（只测更新机制本身，
+  # 不测版本解析）。
+  VERSION="1.3.5"
+
   # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
   # 确认归属，专测更新机制本身。
   FLMX_AGENT_TAKEOVER="1"
