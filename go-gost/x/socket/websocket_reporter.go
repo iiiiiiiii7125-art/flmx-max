@@ -3086,6 +3086,13 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	if strings.TrimSpace(req.DownloadURL) != "" {
 		return fmt.Errorf("S-02: 不再接受面板指定的下载地址，请升级面板到修复版本")
 	}
+	// D1-05: checksumUrl 与 downloadUrl 同律硬拒。此前该字段只解析不
+	// 消费、静默忽略，守卫面不对称：URL 正是 S-02 禁止信任的载体——
+	// 从发送方指定地址拉来的校验值与二进制同源、证明不了任何事。
+	// 可信载体只能是哈希值本身，走 expectedSha256（在场时强制比对）。
+	if strings.TrimSpace(req.ChecksumURL) != "" {
+		return fmt.Errorf("S-02: 不再接受面板指定的校验地址(checksumUrl)，校验值只能以 expectedSha256 哈希形式下发，请升级面板到修复版本")
+	}
 	version := strings.TrimSpace(req.Version)
 	if version == "" {
 		return fmt.Errorf("版本号不能为空")
