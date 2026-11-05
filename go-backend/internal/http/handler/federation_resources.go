@@ -924,30 +924,81 @@ func validatePeerResourceConfig(value interface{}, kind string) error {
 // 与引用/hook 校验的空值放行口径一致。键名大小写不敏感（对端 JSON
 // 的 "CertFile" 形态经 gost 解码同样落到同一字段）。mitm.alpn/
 // mitm.bypass 非路径键，不在此面。
+//
+// B6-01 同族补全（同机制再普查，凡有 agent 侧文件消费证据的键全收）：
+//   - kcp 配置文件：metadata 的 kcp.configFile/configFile/c 三别名
+//     （x/listener/kcp、x/dialer/kcp 的 metadata.go）经
+//     kcp.ParseFromFile 以 os.Open 读取；kcp 在对端合法类型集内，
+//     此族在写入面即为活洞。单字母别名 c 只在 metadata 上下文内
+//     才是路径键（其余同名键不归本面）。
+//   - SSH 密钥材料：metadata 的 privateKeyFile（x/dialer/ssh、
+//     x/dialer/sshd、x/listener/ssh、x/listener/sshd 的 metadata.go
+//     经 os.ReadFile 后 ParsePrivateKey）与 authorizedKeys
+//     （x/listener/ssh、x/listener/sshd 经 ParseAuthorizedKeysFile
+//     读取）。ssh/sshd 类型当前不在对端合法集内，此族按路径面独立
+//     于类型面的口径一并收：白名单日后放宽不得随之敞开。
+//   - file handler 服务目录：metadata 的 file.dir/dir
+//     （x/handler/file 的 metadata.go）直达 http.FileServer 的根
+//     目录；裸 dir 只在 metadata 上下文内判。handler 类型 file
+//     当前不在合法集内，同上纵深。
+//   - http 诱饵文件：metadata 的 probeResist/probe_resist/
+//     probeResistance（x/handler/http、http2 的 metadata.go 解析，
+//     http3 仅解析未消费）在值形为 file:<path> 时经 os.Open 读取
+//     并把内容当诱饵响应回给未认证探测者（x/handler/http、
+//     http2 的 handler.go）；web:/host: 值是网络目标、不在本面。
+//
+// limiter 顶层 file 加载器与 hop loader 已由引用面校验拒绝，不在
+// 本面重复登记。URL 路径键（*.path/pathPrefix 等）不落本机文件，
+// 不在本面。
 func validatePeerResourceLocalPaths(value interface{}) error {
+	return walkPeerResourceLocalPaths(value, false)
+}
+
+func walkPeerResourceLocalPaths(value interface{}, inMetadata bool) error {
 	switch v := value.(type) {
 	case map[string]interface{}:
 		for key, child := range v {
 			lower := strings.ToLower(key)
-			isPathKey := lower == "certfile" || lower == "keyfile" || lower == "cafile" ||
-				(strings.HasPrefix(lower, "mitm.") && strings.Contains(lower, "file"))
-			if isPathKey {
-				if s, ok := child.(string); ok && strings.TrimSpace(s) != "" {
+			if s, ok := child.(string); ok && strings.TrimSpace(s) != "" {
+				switch {
+				case lower == "certfile" || lower == "keyfile" || lower == "cafile" ||
+					(strings.HasPrefix(lower, "mitm.") && strings.Contains(lower, "file")):
 					return fmt.Errorf("shared resources must not reference node-local certificate files: %s", key)
+				case lower == "configfile" || lower == "kcp.configfile":
+					return fmt.Errorf("shared resources must not reference node-local config files: %s", key)
+				case lower == "privatekeyfile":
+					return fmt.Errorf("shared resources must not reference node-local private key files: %s", key)
+				case lower == "authorizedkeys":
+					return fmt.Errorf("shared resources must not reference node-local authorized keys files: %s", key)
+				case lower == "file.dir" || (inMetadata && lower == "dir"):
+					return fmt.Errorf("shared resources must not reference node-local directories: %s", key)
+				case inMetadata && lower == "c":
+					return fmt.Errorf("shared resources must not reference node-local config files: %s", key)
+				case (lower == "proberesist" || lower == "probe_resist" || lower == "proberesistance") &&
+					probeResistanceFileValue(s):
+					return fmt.Errorf("shared resources must not reference node-local files: %s", key)
 				}
 			}
-			if err := validatePeerResourceLocalPaths(child); err != nil {
+			if err := walkPeerResourceLocalPaths(child, inMetadata || lower == "metadata"); err != nil {
 				return err
 			}
 		}
 	case []interface{}:
 		for _, child := range v {
-			if err := validatePeerResourceLocalPaths(child); err != nil {
+			if err := walkPeerResourceLocalPaths(child, inMetadata); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// probeResistanceFileValue 判 metadata 诱饵值是否为 file: 形态（类型
+// 段在首个冒号前、大小写不敏感）：x/handler/http 与 http2 按
+// "file:<path>" 以 os.Open 打开该文件并把内容回给探测者。
+func probeResistanceFileValue(s string) bool {
+	head, _, found := strings.Cut(s, ":")
+	return found && strings.EqualFold(strings.TrimSpace(head), "file")
 }
 
 // Registry kinds without an owned command API cannot be referenced by peers.
