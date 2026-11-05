@@ -14,6 +14,12 @@ import (
 // 回退链（登录限流、login 用户名信号 IP、sub_store、captcha
 // verify）统一改走 rateLimitKeyForRequest，本文件钉死其形态与
 // 两条消费路径的落桶键。
+//
+// C4-01 口径修正：原「trusted proxy anchors xff」行把 172.30.0.1
+// 的私网身份当作可信来源；现行模型下可信只来自回环或
+// FLMX_TRUSTED_PROXIES 显式登记。该行改以登记 172.30.0.0/16
+// 行使采信路径（断言不变），并新增同形态未登记行钉死
+// fail-closed 回对端。
 
 func TestR6L8F04RateLimitKeyForRequest(t *testing.T) {
 	cases := []struct {
@@ -21,17 +27,20 @@ func TestR6L8F04RateLimitKeyForRequest(t *testing.T) {
 		remoteAddr string
 		xff        string
 		hopsEnv    string
+		proxiesEnv string
 		want       string
 	}{
 		{name: "public direct strips port", remoteAddr: "203.0.113.7:5555", want: "203.0.113.7"},
 		{name: "private peer without xff", remoteAddr: "10.0.0.9:8080", want: "10.0.0.9"},
 		{name: "ipv6 direct strips port", remoteAddr: "[2001:db8::5]:443", want: "2001:db8::5"},
-		{name: "trusted proxy anchors xff", remoteAddr: "172.30.0.1:8080", xff: "203.0.113.7", hopsEnv: "1", want: "203.0.113.7"},
+		{name: "trusted proxy anchors xff", remoteAddr: "172.30.0.1:8080", xff: "203.0.113.7", hopsEnv: "1", proxiesEnv: "172.30.0.0/16", want: "203.0.113.7"},
+		{name: "unregistered private peer ignores xff", remoteAddr: "172.30.0.1:8080", xff: "203.0.113.7", hopsEnv: "1", want: "172.30.0.1"},
 		{name: "unparseable falls to shared bucket", remoteAddr: "bogus-remote-addr", want: clientip.UnresolvedKey},
 		{name: "empty falls to shared bucket", remoteAddr: "", want: clientip.UnresolvedKey},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("FLMX_TRUSTED_PROXIES", tc.proxiesEnv)
 			if tc.hopsEnv != "" {
 				t.Setenv("FLMX_TRUSTED_PROXY_HOPS", tc.hopsEnv)
 			}
