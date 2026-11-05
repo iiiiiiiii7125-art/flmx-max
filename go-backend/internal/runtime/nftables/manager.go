@@ -37,6 +37,10 @@ func (m *Manager) Reconcile(ctx context.Context, cfg SSHConfig, plan NodePlan) (
 	if err := m.ensureInitialized(); err != nil {
 		return ApplyResult{}, err
 	}
+	// C3-01：渲染层单点校验——非法 TargetHost 整单拒绝，脚本不下发。
+	if err := ValidatePlan(plan); err != nil {
+		return ApplyResult{}, err
+	}
 	result := ApplyResult{
 		NodeID: plan.NodeID,
 		Script: RenderTable(plan),
