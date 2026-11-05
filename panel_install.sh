@@ -189,11 +189,16 @@ route_mode() {
 
 normalize_proxy_prefix() {
   local proxy="$1"
-  if [[ "$proxy" == https://* || "$proxy" == http://* ]]; then
-    proxy="${proxy%/}"
-  else
-    proxy="https://${proxy%/}"
+  if [[ "$proxy" != https://* && "$proxy" != http://* ]]; then
+    proxy="https://$proxy"
   fi
+  # A1-05：去掉全部尾斜杠——旧实现 ${proxy%/} 只去一个，
+  # https://host// 归一后仍带一个尾斜杠，route_url 拼接后成
+  # 双斜杠路径。循环下限守住 scheme 本身（https:// 不得被吃
+  # 成 https:）。
+  while [[ "$proxy" == */ && "$proxy" != *:// ]]; do
+    proxy="${proxy%/}"
+  done
   echo "$proxy"
 }
 

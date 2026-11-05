@@ -606,6 +606,21 @@ test_panel_probe_route_uses_channel_tag_grammar() (
   [[ "$rc" != "0" ]] || fail "A1-04: a junk tag must fail the probe on the stable channel"
 )
 
+# A1-05（audit-max）：normalize_proxy_prefix 须去掉全部尾斜杠
+# ——旧实现 ${proxy%/} 只去一个，https://host// 归一后仍带尾斜
+# 杠，后续 route_url 拼接成双斜杠路径。含 scheme 与裸主机两形
+# 态、路径段多斜杠、无尾斜杠不变四类断言。
+test_panel_normalize_proxy_prefix_strips_all_trailing_slashes() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  assert_equals "https://proxy.example.com" "$(normalize_proxy_prefix 'https://proxy.example.com//')" "A1-05: all trailing slashes must be stripped (scheme form)"
+  assert_equals "https://proxy.example.com" "$(normalize_proxy_prefix 'proxy.example.com///')" "A1-05: all trailing slashes must be stripped (bare host form)"
+  assert_equals "http://proxy.example.com" "$(normalize_proxy_prefix 'http://proxy.example.com/')" "A1-05: a single trailing slash must still be stripped"
+  assert_equals "https://proxy.example.com/path" "$(normalize_proxy_prefix 'https://proxy.example.com/path//')" "A1-05: trailing slashes after a path segment must be stripped"
+  assert_equals "https://proxy.example.com" "$(normalize_proxy_prefix 'https://proxy.example.com')" "A1-05: a prefix without trailing slash must pass through unchanged"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -10025,5 +10040,6 @@ test_panel_caddyfile_without_site_keeps_shared_addresses
 test_panel_uninstall_without_docker_cleans_full_residual_set
 test_panel_explicit_version_format_validated
 test_panel_probe_route_uses_channel_tag_grammar
+test_panel_normalize_proxy_prefix_strips_all_trailing_slashes
 
 echo "install script tests passed"
