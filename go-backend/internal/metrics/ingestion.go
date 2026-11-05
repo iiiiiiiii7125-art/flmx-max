@@ -3,7 +3,9 @@ package metrics
 import (
 	"context"
 	"log"
+	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go-backend/internal/monitoring"
@@ -114,22 +116,72 @@ func (s *IngestionService) Start(ctx context.Context) {
 	}
 }
 
+// lastInvalidMetricLogNano 是 C3-05 无效样本日志的限速点
+// （全进程至多每分钟一条——伪造 agent 可高频上报，日志不得
+// 随之放大）。
+var lastInvalidMetricLogNano atomic.Int64
+
+func logInvalidMetricThrottled(nodeID int64, reason string) {
+	now := time.Now().UnixNano()
+	last := lastInvalidMetricLogNano.Load()
+	if now-last < int64(time.Minute) || !lastInvalidMetricLogNano.CompareAndSwap(last, now) {
+		return
+	}
+	log.Printf("monitoring ingest rejected node_id=%d reason=%s", nodeID, reason)
+}
+
+// clampPercent 把百分比量钳到 [0,100]；NaN 归 0（agent 上报的
+// float 不可信，NaN 落库后在展示/聚合面还会污染同批统计）。
+func clampPercent(v float64) float64 {
+	if math.IsNaN(v) || v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
+func clampNonNegativeF(v float64) float64 {
+	if math.IsNaN(v) || v < 0 {
+		return 0
+	}
+	return v
+}
+
+func clampNonNegativeI(v int64) int64 {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
 func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
+	// C3-05：agent 上报值先消毒再落库。此前 uint64→int64 在
+	// ≥2⁶³ 处直接回绕为负、百分比/速度/连接数原样存储——伪造
+	// 仅限本节点，但回绕值会进 NodeMetric 行与 lastBytes 基线，
+	// 污染展示与后续差分。字节计数器/uptime 超 int64 的样本整条
+	// 拒记（不存回绕值、不推进基线，下一样本自恢复）；其余量做
+	// 钳制。
+	if info.BytesReceived > math.MaxInt64 || info.BytesTransmitted > math.MaxInt64 || info.Uptime > math.MaxInt64 {
+		logInvalidMetricThrottled(nodeID, "counter exceeds int64 range")
+		return
+	}
 	m := &model.NodeMetric{
 		NodeID:      nodeID,
 		Timestamp:   time.Now().UnixMilli(),
-		CPUUsage:    info.CPUUsage,
-		MemUsage:    info.MemoryUsage,
-		DiskUsage:   info.DiskUsage,
+		CPUUsage:    clampPercent(info.CPUUsage),
+		MemUsage:    clampPercent(info.MemoryUsage),
+		DiskUsage:   clampPercent(info.DiskUsage),
 		NetInBytes:  int64(info.BytesReceived),
 		NetOutBytes: int64(info.BytesTransmitted),
-		NetInSpeed:  info.NetInSpeed,
-		NetOutSpeed: info.NetOutSpeed,
-		Load1:       info.Load1,
-		Load5:       info.Load5,
-		Load15:      info.Load15,
-		TCPConns:    info.TCPConns,
-		UDPConns:    info.UDPConns,
+		NetInSpeed:  clampNonNegativeI(info.NetInSpeed),
+		NetOutSpeed: clampNonNegativeI(info.NetOutSpeed),
+		Load1:       clampNonNegativeF(info.Load1),
+		Load5:       clampNonNegativeF(info.Load5),
+		Load15:      clampNonNegativeF(info.Load15),
+		TCPConns:    clampNonNegativeI(info.TCPConns),
+		UDPConns:    clampNonNegativeI(info.UDPConns),
 		Uptime:      int64(info.Uptime),
 	}
 
