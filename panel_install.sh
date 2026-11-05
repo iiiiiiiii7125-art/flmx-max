@@ -189,11 +189,16 @@ route_mode() {
 
 normalize_proxy_prefix() {
   local proxy="$1"
-  if [[ "$proxy" == https://* || "$proxy" == http://* ]]; then
-    proxy="${proxy%/}"
-  else
-    proxy="https://${proxy%/}"
+  if [[ "$proxy" != https://* && "$proxy" != http://* ]]; then
+    proxy="https://$proxy"
   fi
+  # A1-05：去掉全部尾斜杠——旧实现 ${proxy%/} 只去一个，
+  # https://host// 归一后仍带一个尾斜杠，route_url 拼接后成
+  # 双斜杠路径。循环下限守住 scheme 本身（https:// 不得被吃
+  # 成 https:）。
+  while [[ "$proxy" == */ && "$proxy" != *:// ]]; do
+    proxy="${proxy%/}"
+  done
   echo "$proxy"
 }
 
@@ -207,13 +212,27 @@ route_url() {
 }
 
 # probe_route <前缀>：探测单条路线，活则回显耗时秒数、死则失败。
+# 渠道 tag 文法的唯一出处（J-02）：稳定渠道只接受纯数字点分
+# tag；FLMX_RELEASE_CHANNEL=dev|beta 时接受任意数字开头 tag。
+# resolve_latest_release_tag 与 probe_route 共用——A1-04 前探测
+# 侧写死宽文法，稳定渠道下会把重定向落到预发布 tag 的路线判
+# 活，与解析器随后按渠道文法拒绝该 tag 的口径漂移；对齐后两
+# 处同松同紧、永不各自演化。
+release_tag_pattern() {
+  case "${FLMX_RELEASE_CHANNEL:-stable}" in
+    dev|beta) printf '%s' '^[0-9][0-9A-Za-z.\-]*$' ;;
+    *) printf '%s' '^[0-9]+(\.[0-9]+)+$' ;;
+  esac
+}
+
 probe_route() {
   local prefix="$1"
-  local out effective tag
+  local out effective tag tag_pattern
   out=$(curl -fsSL -o /dev/null --connect-timeout 3 --max-time 5 -w '%{time_total} %{url_effective}' "$(route_url "$prefix" "https://github.com/${REPO}/releases/latest")" 2>/dev/null) || return 1
   effective="${out#* }"
   tag="${effective##*/}"
-  [[ "$tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]] || return 1
+  tag_pattern=$(release_tag_pattern)
+  [[ "$tag" =~ $tag_pattern ]] || return 1
   printf '%s' "${out%% *}"
 }
 
@@ -341,13 +360,10 @@ resolve_latest_release_tag() {
   local effective_url tag api_tag latest_url api_url tag_pattern
 
   # J-02: 渠道分流（与 Go 侧 releaseChannelFromTag / stableVersionPattern
-  # 同口径）。稳定渠道只接受纯数字 tag；FLMX_RELEASE_CHANNEL=dev|beta
-  # 时接受任意数字开头 tag（beta 渠道）。默认稳定渠道，永不解析出 beta；
-  # beta 须显式 VERSION 指定或切 dev/beta 渠道安装。
-  case "${FLMX_RELEASE_CHANNEL:-stable}" in
-    dev|beta) tag_pattern='^[0-9][0-9A-Za-z.\-]*$' ;;
-    *) tag_pattern='^[0-9]+(\.[0-9]+)+$' ;;
-  esac
+  # 同口径），文法取自 release_tag_pattern（与 probe_route 共用同
+  # 一出处，A1-04）。默认稳定渠道，永不解析出 beta；beta 须显式
+  # VERSION 指定或切 dev/beta 渠道安装。
+  tag_pattern=$(release_tag_pattern)
 
   latest_url="https://github.com/${REPO}/releases/latest"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"
@@ -398,21 +414,40 @@ resolve_latest_release_tag() {
   return 1
 }
 
+# A1-03：显式版本格式校验——版本值随后被拼进下载 URL、镜像
+# tag 与 compose 插值，未校验的 env 值可携路径穿越、空白或
+# shell 片段进入全部拼接面。本校验守的是注入面，不是版本语
+# 义：首字符须为字母或数字，其余仅含字母/数字/点/连字符——
+# 穿越（../）、空白、;、$()、引号等形态一律拒绝；稳定版、显
+# 式预发布（-rc/-beta，J-02 既定支持面）、带 v 前缀与开发哨
+# 兵值（套件定版夹具的 v-test 为既定输入）都放行，版本是否
+# 存在由下载/拉取环节 fail-closed 回答。API 解析出的 tag 由
+# 解析侧的渠道文法把关（release_tag_pattern），不在此列。
+panel_validate_explicit_version() {
+  [[ "$1" =~ ^[0-9A-Za-z][0-9A-Za-z.-]*$ ]]
+}
+
 resolve_version() {
+  local explicit="" explicit_source=""
   if [[ -n "${VERSION:-}" ]]; then
-    echo "$VERSION"
-    return 0
+    explicit="$VERSION"
+    explicit_source="VERSION"
+  elif [[ -n "${FLMX_VERSION:-}" ]]; then
+    explicit="$FLMX_VERSION"
+    explicit_source="FLMX_VERSION"
+  elif [[ -n "${FLUX_VERSION:-}" ]]; then
+    explicit="$FLUX_VERSION"
+    explicit_source="FLUX_VERSION"
+  elif [[ -n "${PINNED_VERSION:-}" ]]; then
+    explicit="$PINNED_VERSION"
+    explicit_source="PINNED_VERSION"
   fi
-  if [[ -n "${FLMX_VERSION:-}" ]]; then
-    echo "$FLMX_VERSION"
-    return 0
-  fi
-  if [[ -n "${FLUX_VERSION:-}" ]]; then
-    echo "$FLUX_VERSION"
-    return 0
-  fi
-  if [[ -n "${PINNED_VERSION:-}" ]]; then
-    echo "$PINNED_VERSION"
+  if [[ -n "$explicit_source" ]]; then
+    if ! panel_validate_explicit_version "$explicit"; then
+      echo "❌ 环境变量 $explicit_source 指定的版本号格式非法：$explicit（须以字母或数字开头、仅含字母/数字/点/连字符，如 1.9.9 或 1.9.9-rc.1）" >&2
+      return 1
+    fi
+    echo "$explicit"
     return 0
   fi
 
@@ -561,7 +596,11 @@ run_verified_installer_script() {
   fi
   local tmp actual rc
   tmp=$(mktemp) || return 1
-  if ! curl -fsSL "$url" -o "$tmp"; then
+  # A1-02：与 download_verified 同套看门狗（L2-11 口径）——旧实
+  # 现裸 curl 无超时/重试，get.docker.com 连通后停滞（TCP 开、
+  # 零/涓流字节）时本函数永不返回，install_docker 的包管理器
+  # 兜底永不触发、首装无限挂死。脚本体积小，总界取 120s。
+  if ! curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 120 "$url" -o "$tmp"; then
     rm -f "$tmp"
     echo "⚠️ 安装脚本下载失败: $url"
     return 1
@@ -704,7 +743,23 @@ configure_docker_ipv6() {
 
       # 使用 jq 或 sed 添加 IPv6 配置
       if command -v jq &> /dev/null; then
-        $SUDO_CMD jq '. + {"ipv6": true, "fixed-cidr-v6": "fd00::/80"}' "$DOCKER_CONFIG" > /tmp/daemon.json && $SUDO_CMD mv /tmp/daemon.json "$DOCKER_CONFIG"
+        # A1-06：临时文件用 mktemp 落在目标同目录 /etc/docker——
+        # 旧实现写死 /tmp/daemon.json：共享 /tmp 的可预测路径可
+        # 被预植符号链接/抢占（mv 以 root 跟随写入任意文件），
+        # 且重定向与 mv 的权限面不一致。同目录 mktemp 兼得不可
+        # 预测与 rename 原子替换；落盘后先以 jq -e 复验完整
+        # JSON 再替换（管道中途失败只会留下截断文件，复验不过
+        # 即放弃、原配置不动），失败清临时文件。
+        local daemon_tmp=""
+        daemon_tmp=$($SUDO_CMD mktemp /etc/docker/.daemon.json.XXXXXX) || return 1
+        if $SUDO_CMD jq '. + {"ipv6": true, "fixed-cidr-v6": "fd00::/80"}' "$DOCKER_CONFIG" | $SUDO_CMD tee "$daemon_tmp" > /dev/null \
+          && $SUDO_CMD jq -e . "$daemon_tmp" > /dev/null 2>&1 \
+          && $SUDO_CMD chmod 644 "$daemon_tmp"; then
+          $SUDO_CMD mv "$daemon_tmp" "$DOCKER_CONFIG" || { $SUDO_CMD rm -f "$daemon_tmp"; return 1; }
+        else
+          $SUDO_CMD rm -f "$daemon_tmp"
+          return 1
+        fi
       else
         # 如果没有 jq，使用 sed
         $SUDO_CMD sed -i 's/^{$/{\n  "ipv6": true,\n  "fixed-cidr-v6": "fd00::\/80",/' "$DOCKER_CONFIG"
@@ -765,28 +820,48 @@ docker_ipv6_usable() {
 
 # R4B11-001: 抽出 Caddyfile 中「指定域名站点块之外」的全部内容，供菜单 5
 # 保留式重写：其他站点块（含菜单 6 追加的订阅前置块）、全局选项块与块外
-# 行（注释/import 等）逐字保留，仅剔除地址命中 domain 的站点块（支持与
-# 菜单 6 幂等检查相同的多地址行与 scheme/端口写法）。按花括号深度切块，
+# 行（注释/import 等）逐字保留，剔除地址命中 domain 的站点块（支持与
+# 菜单 6 幂等检查相同的多地址行与 scheme/端口写法）；命中块若与其它地
+# 址共享块头，只剔该地址、其余整块保留（A2-05）。按花括号深度切块，
 # 结构不完整的尾部内容按保留处理，宁可多留不可误删。
 caddyfile_without_site() {
   local file="$1" domain="$2"
   awk -v d="$domain" '
     BEGIN { dl = tolower(d) }
-    function flush_block(   line, n, parts, i, tok, keep) {
+    function flush_block(   line, n, parts, i, cmp, keep, kept, keptn, newheader, bracepos, tail, body) {
       if (buf == "") return
       keep = 1
       if (first != "{") {
         line = first
         sub(/\{[[:space:]]*$/, "", line)
         n = split(line, parts, /[[:space:],]+/)
+        keptn = 0
         for (i = 1; i <= n; i++) {
-          tok = parts[i]
-          sub(/^https?:\/\//, "", tok)
-          sub(/:[0-9]+$/, "", tok)
+          if (parts[i] == "") continue
+          cmp = parts[i]
+          sub(/^https?:\/\//, "", cmp)
+          sub(/:[0-9]+$/, "", cmp)
           # L2-31（R5-FD）：域名比较大小写不敏感（DNS 本就不分大小
           # 写）——旧实现字节比较，已存小写时输入大写会漏判、把同
           # 一站点块再写一份。
-          if (tolower(tok) == dl) { keep = 0; break }
+          if (tolower(cmp) == dl) keep = 0; else { keptn++; kept[keptn] = parts[i] }
+        }
+        if (!keep && keptn > 0) {
+          # A2-05：共享块只剔目标地址、其余整块保留——旧实现任一
+          # 地址命中即丢整块，共享块头里其他域名（如用户手动与面
+          # 板域名同块的 sub 子域）的站点被静默删除、回执却称其
+          # 他站点已保留。现以剩余地址重建块头（`{` 起的同行尾部
+          # 逐字保留，兼容一行块），块体不动，并向 stderr 点名
+          # （stdout 是纯内容流，不得混入通告）。
+          newheader = kept[1]
+          for (i = 2; i <= keptn; i++) newheader = newheader ", " kept[i]
+          bracepos = index(first, "{")
+          tail = (bracepos > 0) ? substr(first, bracepos) : "{"
+          body = substr(buf, length(first) + 2)
+          printf "%s %s\n%s", newheader, tail, body
+          printf "ℹ️ 站点块与下列地址共享同一块头，已仅剔除 %s 并保留其余地址（%s）的整块配置\n", d, newheader > "/dev/stderr"
+          buf = ""
+          return
         }
       }
       if (keep) printf "%s", buf
@@ -1039,7 +1114,9 @@ setup_domain_proxy() {
   # 备份已有配置（保留备份路径供下方 validate/restart 失败回滚使用）
   local caddyfile_bak=""
   if [ -f "$caddyfile" ]; then
-    caddyfile_bak="${caddyfile}.bak.$(date +%s)"
+    # A2-07：备份名带进程号唯一后缀——原秒级时间戳同秒再跑即覆
+    # 盖前一份回滚源（菜单 6 同型一并改）。
+    caddyfile_bak="${caddyfile}.bak.$(date +%s).$$"
     cp "$caddyfile" "$caddyfile_bak"
     echo "🗄️  已备份现有配置到 $caddyfile_bak"
   fi
@@ -1059,6 +1136,23 @@ setup_domain_proxy() {
   cat > "$caddyfile" <<EOF
 $DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
+    # §9.6 缓解（audit-max 裁定）：面板 WS 握手把 token 放在
+    # ?secret= 查询串里，Caddy 访问日志原样落盘即长效凭据落
+    # 盘。站点块内启用过滤型访问日志，把 secret 查询参数从日
+    # 志中删除（filter 编码器自 Caddy 2.5 起可用；老版本 Caddy
+    # 会在下方 validate 环节明确失败并回滚，不会静默带病生
+    # 效）。注：log 指令同时启用该站点的访问日志（JSON 输出
+    # 到 Caddy 默认日志目标），这是本缓解的既定形态。
+    log {
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    delete secret
+                }
+            }
+        }
+    }
 }
 EOF
   if [ -n "$preserved_blocks" ]; then
@@ -1176,7 +1270,7 @@ setup_subscription_front_domain() {
   # 写前备份（命名沿用菜单 5），追加站点块而非整文件覆盖，原有站点
   # 块（面板域名等）逐字保留。
   echo "📝 配置 Caddy..."
-  local caddyfile_bak="${caddyfile}.bak.$(date +%s)"
+  local caddyfile_bak="${caddyfile}.bak.$(date +%s).$$"
   cp "$caddyfile" "$caddyfile_bak"
   echo "🗄️  已备份现有配置到 $caddyfile_bak"
   cat >> "$caddyfile" <<EOF
@@ -1667,6 +1761,28 @@ panel_instance_id_is_valid() {
   [[ ${#1} -le 32 && "$1" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
 }
 
+# 变更性入口的实例 id 硬守卫（A2-08）：原始取值（环境变量优先、
+# 否则 $1 目录 .env）非法即点名拒绝。读路径 panel_instance_id
+# 对非法值回落默认实例的口径（B2-03）只对纯读成立——update/
+# uninstall/migrate 若沿回落口径继续，会按默认实例的派生名去
+# 操作一套 .env 里写着非法 id 的部署（目标错位且全程无硬错
+# 误）；install 此前也只查环境变量形态、.env 形态漏查。现各变
+# 更性入口动手前同律硬拒，文案与 install 既有口径一致。
+panel_assert_instance_id_valid() {
+  local dir="${1:-${PANEL_DEPLOY_DIR:-.}}"
+  local raw=""
+  if [[ -n "${FLMX_INSTANCE:-}" ]]; then
+    raw="$FLMX_INSTANCE"
+  else
+    raw=$(get_env_var FLMX_INSTANCE "$dir/.env" || true)
+  fi
+  if [[ -n "$raw" ]] && ! panel_instance_id_is_valid "$raw"; then
+    echo "❌ FLMX_INSTANCE 不合法：$raw（须以小写字母或数字开头，仅含小写字母、数字、- 与 _，全长不超过 32 个字符），操作终止（未做任何修改）；请修正环境变量或部署 .env 后重试"
+    return 1
+  fi
+  return 0
+}
+
 # 部署目录的 Compose（只看 image: 行的值）引用本面板镜像，才认这
 # 个目录在文件证据上属于本面板。.env 不作合取条件：只有单文件的
 # 残缺部署同样要进入归属判定（AI-05）。
@@ -1923,6 +2039,20 @@ panel_volume_file_exists() {
   [[ -f "$mountpoint/$relpath" ]]
 }
 
+# 卷内文件三态探测（A2-01 残面）：在上面的二值口径之外区分「确
+# 定不在」与「未知」——挂载点取不到（inspect 无 Mountpoint、或挂
+# 载点不是目录）时返回 2（未知），不把读不到说成没有。事故态门
+# 这类 fail-closed 判定面用本函数：未知与「在」同处置（中止）；
+# 其余只问在不在的消费面继续用二值版。返回：0=在，1=确定不在，
+# 2=未知。
+panel_volume_file_state() {
+  local volume="$1" relpath="$2" mountpoint=""
+  mountpoint=$(docker volume inspect -f '{{.Mountpoint}}' "$volume" 2>/dev/null || true)
+  [[ -n "$mountpoint" && -d "$mountpoint" ]] || return 2
+  [[ -f "$mountpoint/$relpath" ]] && return 0
+  return 1
+}
+
 # 卷内小文件读取：与 panel_volume_file_exists 同通道（卷挂载点、
 # 宿主机侧只读），读不到时输出空串、不报错。
 panel_volume_file_read() {
@@ -1995,8 +2125,9 @@ print_initial_admin_credentials() {
 # 不碰网络/项目键。缘由：迁移的 .env 快照兼作回滚源、逐字恢复
 # 是既有契约，无实证的写入会污染快照且对迁移的数据面毫无增
 # 益；迁移真正需要的是把后端实挂的卷钉进快照，使最终/回滚
-# up 不再落模板缺省空卷。更新/改名路径用缺省 scope（全量＋
-# 回退写＋PG 卷存在性回退）。
+# up 不再落模板缺省空卷。更新/改名路径用缺省 scope（全量钉
+# 键，含网络/项目键）；卷键在两 scope 下同口径——只凭实读挂
+# 载写值，无实读不写（A2-03），缺省 scope 另加点名提示。
 panel_pin_missing_resource_keys() {
   local backend_container="$1" postgres_container="$2" pin_scope="${3:-}"
   local sqlite_key sqlite_volume=""
@@ -2009,18 +2140,34 @@ panel_pin_missing_resource_keys() {
     fi
   else
     if [[ "$sqlite_volume" == "flmx-sqlite-data$(panel_instance_suffix)" ]] \
-      && docker volume inspect sqlite_data >/dev/null 2>&1 \
-      && panel_volume_file_exists sqlite_data gost.db; then
-      echo "❌ 资源键钉值中止：在跑后端实际挂载的数据卷是新模板缺省名 $sqlite_volume，但部署 .env 没有 FLMX_SQLITE_VOLUME 键、且旧名卷 sqlite_data 存在并含有 gost.db——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
-      echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_SQLITE_VOLUME=sqlite_data；数据确在现行卷 → FLMX_SQLITE_VOLUME=$sqlite_volume。"
-      return 1
-    fi
-    if [[ "$pin_scope" == "live" ]]; then
-      if [[ -n "$sqlite_volume" ]]; then
-        upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume" || return 1
+      && docker volume inspect sqlite_data >/dev/null 2>&1; then
+      # A2-01 残面：旧卷内容探测走三态——挂载点不可读是「未知」，
+      # 不是「无数据」：未知与确认有数据同处置（中止），不得按
+      # 二值探测的 fail-open 越过事故态门把可能的事故态钉键正式化。
+      local sqlite_old_state=0
+      panel_volume_file_state sqlite_data gost.db || sqlite_old_state=$?
+      if [[ "$sqlite_old_state" == "0" ]]; then
+        echo "❌ 资源键钉值中止：在跑后端实际挂载的数据卷是新模板缺省名 $sqlite_volume，但部署 .env 没有 FLMX_SQLITE_VOLUME 键、且旧名卷 sqlite_data 存在并含有 gost.db——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
+        echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_SQLITE_VOLUME=sqlite_data；数据确在现行卷 → FLMX_SQLITE_VOLUME=$sqlite_volume。"
+        return 1
       fi
-    else
-      upsert_env_var .env FLMX_SQLITE_VOLUME "${sqlite_volume:-sqlite_data}" || return 1
+      if [[ "$sqlite_old_state" == "2" ]]; then
+        echo "❌ 资源键钉值中止：在跑后端实际挂载的数据卷是新模板缺省名 $sqlite_volume、部署 .env 又没有 FLMX_SQLITE_VOLUME 键，而旧名卷 sqlite_data 虽存在、其挂载点不可读，无法确认其中是否存有真库 gost.db——按未知处理，不冒「无数据」之名钉键正式化可能的事故态。"
+        echo "   请先恢复 Docker 卷读面（docker volume inspect sqlite_data 应能给出可读的挂载点），或人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_SQLITE_VOLUME=sqlite_data；数据确在现行卷 → FLMX_SQLITE_VOLUME=$sqlite_volume。"
+        return 1
+      fi
+    fi
+    if [[ -n "$sqlite_volume" ]]; then
+      upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume" || return 1
+    elif [[ "$pin_scope" != "live" ]]; then
+      # A2-03：缺省 scope 与 live scope 同口径——实读为空不写卷
+      # 键。旧实现写死回退名 sqlite_data：后端以 bind 挂载
+      # /app/data 时卷名实读恒空，钉键会把 bind 部署改钉到同名
+      # 命名卷（可能为空/陈旧），真数据被晾置，且升级后自检的
+      # 期望同源于刚钉的值、必然通过。现点名不钉，留待人工钉
+      # 值或后续实读成功时再钉（live scope 维持静默不写，与迁
+      # 移快照的逐字恢复契约一致）。
+      echo "⚠️ 未能实读后端 $backend_container 在 /app/data 的挂载卷名（容器不在册或为 bind 挂载），本次不钉 FLMX_SQLITE_VOLUME 键；重建将按模板缺省选卷——如部署使用命名卷，请先在 .env 中显式钉入实际卷名再重跑"
     fi
   fi
   local postgres_key postgres_volume=""
@@ -2046,20 +2193,34 @@ panel_pin_missing_resource_keys() {
     # R1-01-M1 事故态门 PG 格（谓词见函数头注）：与 SQLite 格同
     # 形——无键＋实挂新缺省卷＋旧名卷含真实 PG 数据 → 中止。
     if [[ "$postgres_volume" == "flmx-postgres-data$(panel_instance_suffix)" ]] \
-      && docker volume inspect postgres_data >/dev/null 2>&1 \
-      && panel_volume_file_exists postgres_data PG_VERSION; then
-      echo "❌ 资源键钉值中止：在跑 PostgreSQL 容器实际挂载的数据卷是新模板缺省名 $postgres_volume，但部署 .env 没有 FLMX_POSTGRES_VOLUME 键、且旧名卷 postgres_data 存在并含有 PG_VERSION（真实 PostgreSQL 数据目录）——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
-      echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_POSTGRES_VOLUME=postgres_data；数据确在现行卷 → FLMX_POSTGRES_VOLUME=$postgres_volume。"
-      return 1
+      && docker volume inspect postgres_data >/dev/null 2>&1; then
+      # A2-01 残面：与 SQLite 格同律走三态探测——挂载点不可读＝
+      # 未知，按未知中止，不按无数据放行。
+      local postgres_old_state=0
+      panel_volume_file_state postgres_data PG_VERSION || postgres_old_state=$?
+      if [[ "$postgres_old_state" == "0" ]]; then
+        echo "❌ 资源键钉值中止：在跑 PostgreSQL 容器实际挂载的数据卷是新模板缺省名 $postgres_volume，但部署 .env 没有 FLMX_POSTGRES_VOLUME 键、且旧名卷 postgres_data 存在并含有 PG_VERSION（真实 PostgreSQL 数据目录）——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
+        echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_POSTGRES_VOLUME=postgres_data；数据确在现行卷 → FLMX_POSTGRES_VOLUME=$postgres_volume。"
+        return 1
+      fi
+      if [[ "$postgres_old_state" == "2" ]]; then
+        echo "❌ 资源键钉值中止：在跑 PostgreSQL 容器实际挂载的数据卷是新模板缺省名 $postgres_volume、部署 .env 又没有 FLMX_POSTGRES_VOLUME 键，而旧名卷 postgres_data 虽存在、其挂载点不可读，无法确认其中是否存有 PG_VERSION（真实 PostgreSQL 数据目录）——按未知处理，不冒「无数据」之名钉键正式化可能的事故态。"
+        echo "   请先恢复 Docker 卷读面（docker volume inspect postgres_data 应能给出可读的挂载点），或人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_POSTGRES_VOLUME=postgres_data；数据确在现行卷 → FLMX_POSTGRES_VOLUME=$postgres_volume。"
+        return 1
+      fi
     fi
-    # scope=live 时不走卷存在性回退：postgres_data 存在只证明该卷
-    # 在，不证明它就是本部署 PG 的卷，写进迁移快照会污染逐字恢
-    # 复契约；迁移的 PG 卷候选由 F7-03/F7-04 的登记口径处理。
-    if [[ -z "$postgres_volume" && "$pin_scope" != "live" ]] && docker volume inspect postgres_data >/dev/null 2>&1; then
-      postgres_volume="postgres_data"
-    fi
+    # A2-03：缺省 scope 删除卷存在性回退，与 live scope 同口
+    # 径——postgres_data 存在只证明该卷在，不证明它就是本部署
+    # PG 的卷；旧实现凭存在性认领，会把无关卷（共存旧面板/
+    # 废弃 PG）写进本部署 .env，后续迁移还会把 pgloader 目标
+    # 指向异属卷。实读为空一律不写；仅在 PG 模式、或该卷存在
+    # （即旧实现会认领的形态）时点名不钉，纯 SQLite 部署无此
+    # 形态时保持静默。迁移的 PG 卷候选由 F7-03/F7-04 的登记口
+    # 径处理，与此处无关。
     if [[ -n "$postgres_volume" ]]; then
       upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume" || return 1
+    elif [[ "$pin_scope" != "live" ]] && { [[ "$(get_current_db_type)" == "postgres" ]] || docker volume inspect postgres_data >/dev/null 2>&1; }; then
+      echo "⚠️ 未能实读 PostgreSQL 容器 $postgres_container 在 /var/lib/postgresql/data 的挂载卷名，本次不钉 FLMX_POSTGRES_VOLUME 键（不凭 postgres_data 卷的存在性认领——卷在不等于卷属于本部署）；如本部署确为 PostgreSQL，请在 .env 中显式钉入实际 PG 卷名后再重跑"
     fi
   fi
   if [[ "$pin_scope" != "live" ]]; then
@@ -2070,14 +2231,21 @@ panel_pin_missing_resource_keys() {
       # 拼接——后端挂 ≥2 个网络时钉入的是全部网络名的拼接废串，
       # 重建后部署落到废名新网络、旧网络上的外挂容器与面板断
       # 联。Go 面 inspectLegacyResourceNames 已按「恰一个才钉」
-      # 规避并点名此形态，本面现对齐：零个或多个都按「读不到」
-      # 走旧缺省回退（网络无数据面，缺省名是该部署唯一可能的旧
-      # 网络，与本函数「读不到按旧缺省」的既有契约一致）。
+      # 规避并点名此形态。
+      # A2-09 残面：多个网络时与 Go 面同口径——选不出唯一部署网
+      # 络就不钉键，并点名告警；旧行为静默钉旧缺省 gost-network，
+      # 真实网络为自定义名且另挂第二网络的部署会被改钉失联且无
+      # 回执。零个（实读为空）仍按本函数「读不到按旧缺省」的既
+      # 有契约回退，但同样点名、不静默。
       network_count=$(printf '%s' "$network_name" | grep -c . || true)
-      if [[ "$network_count" != "1" ]]; then
-        network_name=""
+      if [[ "$network_count" == "1" ]]; then
+        upsert_env_var .env FLMX_NETWORK "$network_name" || return 1
+      elif [[ "$network_count" -gt 1 ]]; then
+        echo "⚠️ 后端 $backend_container 同时挂在多个网络（$(printf '%s' "$network_name" | tr '\n' ' '))，无法唯一判定部署网络，本次不钉 FLMX_NETWORK 键；重建将按 Compose 文件的缺省网络处理——如部署使用自定义网络名，请在 .env 中显式钉入 FLMX_NETWORK 后再重跑"
+      else
+        echo "⚠️ 未能实读后端 $backend_container 的网络，本次按旧缺省钉 FLMX_NETWORK=gost-network；如部署使用自定义网络名，请改 .env 后再重跑"
+        upsert_env_var .env FLMX_NETWORK "gost-network" || return 1
       fi
-      upsert_env_var .env FLMX_NETWORK "${network_name:-gost-network}" || return 1
     fi
     if [[ -z "$(get_env_var COMPOSE_PROJECT_NAME || true)" ]]; then
       local project_name="${PANEL_COMPOSE_PROJECT:-}"
@@ -2330,14 +2498,59 @@ validate_panel_update_environment() {
   fi
 }
 
+# A1-01：单腿时间帽——回显「单次 --max-time 总重试 --retry-max-time」
+# 两个值。无总预算截止（deadline=0）时沿用单腿口径（600s、重试总
+# 时长不限＝--retry-max-time 0）；有截止时按剩余量收紧（单次帽不
+# 超过 600s、重试总时长不超过剩余量——--max-time 只管单次尝试，
+# 重试会逐次重新计时，不加总帽则一腿仍可数倍于剩余预算）。预
+# 算耗尽返回 1。
+panel_download_leg_cap() {
+  local deadline="${1:-0}"
+  if (( deadline <= 0 )); then
+    printf '600 0'
+    return 0
+  fi
+  local remain=$(( deadline - $(date +%s) ))
+  if (( remain <= 0 )); then
+    return 1
+  fi
+  local cap=600
+  if (( remain < cap )); then
+    cap=$remain
+  fi
+  printf '%s %s' "$cap" "$remain"
+}
+
+# --retry-max-time 的参数组（一行一个参数，无则无输出）：
+# --retry-max-time 在 curl 7.66（2019）后才有，老 curl 上探明不
+# 支持就返回空组（单次 --max-time 与地板看门狗仍在），不让一
+# 个约束参数反噬全部下载。探测走 type -P 找到的真实 curl 二
+# 进制加一次带该选项的 --version 调用（未知选项退出码非 0），
+# 不用 --help 文本匹配，也避免被调用方打桩的 curl 函数污染。
+panel_retry_max_args() {
+  local leg_retry_max="$1"
+  if (( leg_retry_max > 0 )); then
+    local real_curl
+    real_curl=$(type -P curl || true)
+    if [[ -n "$real_curl" ]] && "$real_curl" --retry-max-time 0 --version >/dev/null 2>&1; then
+      printf '%s\n%s\n' "--retry-max-time" "$leg_retry_max"
+    fi
+  fi
+}
+
 # R5-B5B D19: 安全下载（带 .sha256 校验，缺失即拒）。
 # FLMX_VERIFY_DOWNLOADS=0 可跳过，默认开启；旧名 FLVX_VERIFY_DOWNLOADS 的双读已于 1.9.10 退场。
 # F-138: 边角组合收紧为 fail-closed——仅显式 "0" 可关闭校验（误填
 # true/yes 等不再静默跳过）；缺少 sha256sum 时拒绝（否则空 .sha256 与
 # 空 actual 会 ""=="" 误判通过）；.sha256 内容必须是 64 位十六进制。
+# A1-01: 第三参 deadline 为整轮下载的绝对截止（epoch 秒，0/缺省
+# ＝无总预算）；由 download_verified_routed 按
+# FLMX_DOWNLOAD_BUDGET_SECONDS 定格后逐路传入，两腿各按剩余量
+# 收紧，耗尽即整腿失败、不再换路重试。
 download_verified() {
   local url="$1"
   local dest="$2"
+  local deadline="${3:-0}"
   local verify="${FLMX_VERIFY_DOWNLOADS:-1}"
 
   # R8-J-A: 本体与下方 .sha256 均加有界重试——旧实现单次尝试，
@@ -2346,8 +2559,18 @@ download_verified() {
   # 发生的错误重试），TCP 已连通但零字节/涓流的假活慢死路线永不让
   # curl 返回，install/update/migrate/uninstall 的 compose 下载与
   # 脚本自更新（同一函数）全部无限挂死。与 install.sh 本体腿同口
-  # 径：连接 10s、1KB/s 地板 30s 无进展判死，另加单次 600s 总界。
-  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 600 -o "$dest" "$url"; then
+  # 径：连接 10s、1KB/s 地板 30s 无进展判死，另加单次 600s 总界
+  # （A1-01 后：整轮另有总预算截止时以剩余量为准，见上）。
+  local caps leg_cap leg_retry_max
+  if ! caps=$(panel_download_leg_cap "$deadline"); then
+    echo "❌ 下载总预算（${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}s）已耗尽，整轮下载失败" >&2
+    return 1
+  fi
+  leg_cap="${caps%% *}"
+  leg_retry_max="${caps##* }"
+  local -a retry_max_args=()
+  mapfile -t retry_max_args < <(panel_retry_max_args "$leg_retry_max")
+  if ! curl -fL --retry 3 --retry-delay 2 "${retry_max_args[@]}" --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time "$leg_cap" -o "$dest" "$url"; then
     echo "❌ 下载失败: $url" >&2
     return 1
   fi
@@ -2365,10 +2588,20 @@ download_verified() {
     return 1
   fi
 
-  # 下载 .sha256 并校验。
+  # 下载 .sha256 并校验。A1-01：校验腿按本体腿之后的剩余预算
+  # 重新收紧（本体腿可能已吃掉大半预算），耗尽同样整腿失败。
   local sha_url="${url}.sha256"
   local sha_file="${dest}.sha256"
-  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 600 -o "$sha_file" "$sha_url"; then
+  if ! caps=$(panel_download_leg_cap "$deadline"); then
+    rm -f "$dest"
+    echo "❌ 下载总预算（${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}s）已耗尽，整轮下载失败" >&2
+    return 1
+  fi
+  leg_cap="${caps%% *}"
+  leg_retry_max="${caps##* }"
+  retry_max_args=()
+  mapfile -t retry_max_args < <(panel_retry_max_args "$leg_retry_max")
+  if ! curl -fL --retry 3 --retry-delay 2 "${retry_max_args[@]}" --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time "$leg_cap" -o "$sha_file" "$sha_url"; then
     rm -f "$dest" "$sha_file"
     echo "❌ 校验文件缺失，拒绝安装: $sha_url" >&2
     echo "   （设置 FLMX_VERIFY_DOWNLOADS=0 可跳过，仅用于过渡期）" >&2
@@ -2478,14 +2711,26 @@ corroborate_download_anchor() {
 # 口径不变），首个成功即用；阶段 1 路线全败时补测代理排名续切。
 # 获胜后另经 corroborate_download_anchor 异路复核第二锚
 # （L8-F-02）：不一致删档整单中止，降级仅点名不拦截。
+# A1-01：整轮总预算（缺省 240s，FLMX_DOWNLOAD_BUDGET_SECONDS 可
+# 调，与 install.sh 的 download_agent_binary 同名同值同口径）——
+# 旧实现只有单腿界（600s×重试×本体/校验双腿×约 10 路线），高于
+# 1KB/s 地板的涓流路线能把一次下载拖到小时级且永不中止。现入
+# 口定格截止、逐路逐腿按剩余量收紧，耗尽即整轮点名失败。第二
+# 锚复核自有 20s 总界（见 corroborate_download_anchor），不在
+# 本预算内重复计扣。
 download_verified_routed() {
   local url="$1"
   local dest="$2"
   ensure_download_routes
+  local deadline=$(( $(date +%s) + ${FLMX_DOWNLOAD_BUDGET_SECONDS:-240} ))
   local prefix
   while :; do
     for prefix in "${DOWNLOAD_ROUTES[@]}"; do
-      if download_verified "$(route_url "$prefix" "$url")" "$dest"; then
+      if (( $(date +%s) >= deadline )); then
+        echo "❌ 下载总预算（${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}s）已耗尽，整轮下载失败" >&2
+        return 1
+      fi
+      if download_verified "$(route_url "$prefix" "$url")" "$dest" "$deadline"; then
         if ! corroborate_download_anchor "$url" "$dest" "$prefix"; then
           rm -f "$dest"
           return 1
@@ -2974,6 +3219,30 @@ verify_panel_update_sqlite_volume() {
   return 0
 }
 
+# A2-02：PG 面的同型自检——此前只有 SQLite 面，PG 部署重建后挂
+# 到模板缺省空卷时，健康检查（新进程对空库播种后照样健康）与
+# SQLite 自检（比的是无关卷）双过、照报「更新完成」，真库被晾
+# 置而无任何回执。现与 SQLite 自检并列：重建后 PG 容器在
+# /var/lib/postgresql/data 实际挂载的卷名必须与重建前定格的期
+# 望一致，且卷内须见 PG_VERSION（真实 PG 数据目录标记，排除挂
+# 到同名非数据卷的形态）；实读为空同样判不一致。
+verify_panel_update_postgres_volume() {
+  local expected="$1"
+  local postgres_container="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
+  local actual=""
+  actual=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$postgres_container" 2>/dev/null || true)
+  if [[ "$actual" != "$expected" ]]; then
+    echo "❌ 升级后 PG 卷名自检失败：PostgreSQL 容器 $postgres_container 在 /var/lib/postgresql/data 实际挂载卷「${actual:-（未读到）}」，与升级前记录的卷「$expected」不一致——新 PostgreSQL 可能挂在空卷上，本次更新判失败并回滚" >&2
+    return 1
+  fi
+  if ! panel_volume_file_exists "$actual" PG_VERSION; then
+    echo "❌ 升级后 PG 卷名自检失败：卷 $actual 内未见 PG_VERSION（不像真实 PostgreSQL 数据目录，可能挂到了同名的空卷/异属卷），本次更新判失败并回滚" >&2
+    return 1
+  fi
+  echo "🔎 升级后 PG 卷名自检通过：PostgreSQL /var/lib/postgresql/data 挂载卷为 $actual（与升级前记录一致）"
+  return 0
+}
+
 wait_for_postgres_healthy() {
   local pg_health
   local postgres_container="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
@@ -3223,12 +3492,11 @@ panel_force_reinstall_data_gate() {
 install_panel() {
   echo "🚀 开始安装面板..."
 
-  # 实例 id 合法性前置校验（AI-03）：id 会进入容器/卷/网络/项目名，
-  # 非法字符让 Compose 命名直接失败，先于一切动作拒绝。
-  if [[ -n "${FLMX_INSTANCE:-}" ]] && ! panel_instance_id_is_valid "$FLMX_INSTANCE"; then
-    echo "❌ FLMX_INSTANCE 不合法：$FLMX_INSTANCE（须以小写字母或数字开头，仅含小写字母、数字、- 与 _，全长不超过 32 个字符）"
-    return 1
-  fi
+  # 实例 id 合法性前置校验（AI-03＋A2-08）：id 会进入容器/卷/
+  # 网络/项目名，非法字符让 Compose 命名直接失败，先于一切动
+  # 作拒绝；守卫统一走 panel_assert_instance_id_valid——除环境
+  # 变量形态外，当前目录 .env 的形态一并查（旧实现只查前者）。
+  panel_assert_instance_id_valid . || return 1
 
   # 共存守卫（C2-01）：当前目录已有部署文件且明确属于他人（Compose
   # 的 image 行无一引用本面板镜像，或 .env 声明的后端名不属于本面
@@ -3343,6 +3611,31 @@ JWT_SECRET=$JWT_SECRET
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
 FLMX_VERSION=$RESOLVED_VERSION
+# 可信代理名单 FLMX_TRUSTED_PROXIES（逗号分隔的 CIDR 名单）：
+# 后端据此决定是否采信反代传来的 X-Forwarded-For 以取得真实
+# 客户端 IP（登录限流、按 IP 的审计都以这个 IP 分桶）。默认
+# 空＝只信回环来源、不采信任何转发头。
+# 何时填：标准部署里后端经前端容器转发，不填时后端只看得到
+# 前端容器 IP——所有访客共用一个限流桶：一人狂刷登录会连累
+# 全体被限流，审计记录里的来源 IP 也全是同一个容器地址。凡
+# 经前端容器或其他反代访问后端的部署，都应把转发者所在子网
+# 填进来；后端直连暴露、无任何反代时才留空。
+# 填什么：转发者所在子网的 CIDR。新装模板的缺省子网为
+# 172.30.0.0/16（见随版 docker-compose-v4.yml / -v6.yml 的
+# networks 段），照缺省部署即填 172.30.0.0/16；改过子网的按
+# 实际填（docker network inspect 查该网络的 Subnet）。前面
+# 还隔着其他反代时，把那一跳的子网一并加进来、逗号分隔。
+# 填错的后果：范围过宽会让被信任子网内的任何机器都能伪造
+# X-Forwarded-For 冒充任意 IP——绝不要填 0.0.0.0/0（等于向
+# 任意来源开放伪造，限流与 IP 审计全部失效）；填了无关子网
+# 则等于没填（仍不采信、仍是共享桶），且不报错、只能靠自检
+# 发现。
+# 生效方式：改完重启后端（docker compose up -d backend，或
+# 用菜单「2. 更新面板」）。
+# 自检：换一个网络（如手机流量）登录一次面板，再看登录记
+# 录或后端日志中这条登录的客户端 IP：是新网络的公网 IP 即
+# 已生效；若仍是 172.30.x 的容器地址，就是子网没填对。
+FLMX_TRUSTED_PROXIES=
 
 DB_TYPE=$DB_TYPE
 DATABASE_URL=$DATABASE_URL
@@ -3430,6 +3723,9 @@ update_panel() {
     return 1
   }
   resolve_panel_deployment || return 1
+  # A2-08：实例 id 硬守卫——部署 .env/环境变量的非法 id 不得沿
+  # 读路径回落口径静默按默认实例继续更新。
+  panel_assert_instance_id_valid || return 1
   # 更新无确认环节，动手前把目标点名（实例身份体现在后端容器名
   # 后缀上），与卸载确认同口径（B2-04）。
   echo "🎯 本次更新目标：部署目录：$PANEL_DEPLOY_DIR，后端容器：${PANEL_BACKEND_CONTAINER:-未知}"
@@ -3488,6 +3784,14 @@ update_panel() {
       return 1
     }
     echo "🆕 最新版本：$LATEST_VERSION（当前版本：${current_version:-未知}）"
+  fi
+  # A1-03：显式目标版本在拼 URL/镜像 tag 前先过格式校验，与
+  # resolve_version 同律（update 的版本链是其之外的第二入口，
+  # 两处同守）。latest 解析值由解析侧渠道文法把关，不在此重
+  # 复校验。
+  if [[ -n "$target_source" ]] && ! panel_validate_explicit_version "$LATEST_VERSION"; then
+    echo "❌ 环境变量 $target_source 指定的版本号格式非法：$LATEST_VERSION（须以字母或数字开头、仅含字母/数字/点/连字符，如 1.9.9 或 1.9.9-rc.1），更新终止"
+    return 1
   fi
   cmp_result=$(panel_version_cmp "$LATEST_VERSION" "$current_version" || true)
   if [[ "$cmp_result" == "-1" ]]; then
@@ -3582,6 +3886,12 @@ update_panel() {
   # 后 .env 与容器都已是新态，事后追认无从分辨挂错没挂错。
   local update_expected_sqlite_volume
   update_expected_sqlite_volume=$(panel_sqlite_volume_name)
+  # A2-02：PG 部署同点定格 PG 卷期望（口径同上：重建前取，事后
+  # 追认无从分辨），自检在 SQLite 自检之后并列执行。
+  local update_expected_postgres_volume=""
+  if [[ "$CURRENT_DB_TYPE" == "postgres" ]]; then
+    update_expected_postgres_volume=$(panel_postgres_volume_name)
+  fi
 
   echo "🚀 原地重建更新后的服务..."
   if ! start_panel_after_update "$CURRENT_DB_TYPE"; then
@@ -3604,6 +3914,18 @@ update_panel() {
     return 1
   fi
 
+  # A2-02：PG 部署并列验 PG 卷（SQLite 自检比的是后端 /app/data，
+  # 对 PG 数据卷毫无覆盖；两面都过才算更新完成）。
+  if [[ "$CURRENT_DB_TYPE" == "postgres" ]] && ! verify_panel_update_postgres_volume "$update_expected_postgres_volume"; then
+    echo "🛑 升级后 PG 卷名自检未通过"
+    if rollback_panel_update "$CURRENT_DB_TYPE"; then
+      echo "✅ 已恢复更新前版本"
+    else
+      echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
+    fi
+    return 1
+  fi
+
   echo "✅ 更新完成"
 }
 
@@ -3617,6 +3939,8 @@ migrate_to_postgres() {
     echo "❌ 未检测到 Docker，本机没有面板部署，无法迁移"
     return 1
   }
+  # A2-08：实例 id 硬守卫（迁移按 cwd .env 工作，与 update 同律）。
+  panel_assert_instance_id_valid . || return 1
 
   if [[ ! -f ".env" ]]; then
     echo "❌ 未找到 .env 文件，请先安装面板"
@@ -4172,18 +4496,39 @@ uninstall_panel() {
     # 明确属于他人的一律不删；归属已证（Compose 的 image 行引用本
     # 面板镜像或 .env 专属名声明）才直接删；归属未证须显式确认，
     # 无输入（非交互）时不删。
+    # A2-08：实例 id 硬守卫（cwd .env 形态）——非法 id 不删任何文件。
+    panel_assert_instance_id_valid . || return 1
     echo "未检测到 Docker，本机没有容器化的面板部署，无需卸载。"
-    if [[ ! -f docker-compose.yml && ! -f .env ]]; then
+    # A2-06：清理集与 Docker 分支对齐（L2-14 已在该分支闭合、
+    # 本分支漏补）——旧实现只认/只删 docker-compose.yml 与 .env
+    # 两文件，backups/（含完整 DB 备份与 .env 密钥副本）、.env
+    # 历史备份、强制重装的 compose 备份、PG 迁移快照、SQLite
+    # 备份与更新临时文件全部残留，且仅剩这些残留时还谎称「无
+    # 需清理」。现按同一集合先建清单逐项点名，再走下方归属门
+    # （AI-09 口径不变），确认后整集删除、回执复述已删清单。
+    local -a nodocker_residuals=()
+    local nodocker_item nodocker_match
+    for nodocker_item in docker-compose.yml .env .env.pre-postgres-migration gost.db.bak; do
+      if [[ -e "$nodocker_item" ]]; then
+        nodocker_residuals+=("$nodocker_item")
+      fi
+    done
+    if [[ -d backups ]]; then
+      nodocker_residuals+=("backups/")
+    fi
+    shopt -s nullglob
+    for nodocker_match in .env.bak.* docker-compose.yml.bak.* .docker-compose.yml.update.* .docker-compose.yml.install.*; do
+      nodocker_residuals+=("$nodocker_match")
+    done
+    shopt -u nullglob
+    if (( ${#nodocker_residuals[@]} == 0 )); then
       echo "当前目录没有残留的部署配置文件，无需清理。"
       return 0
     fi
     echo "当前目录残留部署配置文件："
-    if [[ -f docker-compose.yml ]]; then
-      echo "  - docker-compose.yml"
-    fi
-    if [[ -f .env ]]; then
-      echo "  - .env"
-    fi
+    for nodocker_item in "${nodocker_residuals[@]}"; do
+      echo "  - $nodocker_item"
+    done
     if is_foreign_panel_deploy_dir .; then
       echo "❌ 上述文件明确属于另一套面板的部署（Compose 的 image 行未引用本面板镜像，或 .env 声明的后端名不属于本面板），本脚本不删除他人文件，未做任何修改。"
       return 1
@@ -4200,8 +4545,8 @@ uninstall_panel() {
       fi
     fi
     echo "🧹 清理残留配置文件..."
-    rm -f docker-compose.yml .env
-    echo "✅ 清理完成"
+    rm -rf "${nodocker_residuals[@]}"
+    echo "✅ 清理完成（已删除：${nodocker_residuals[*]}）"
     return 0
   fi
 
@@ -4213,6 +4558,8 @@ uninstall_panel() {
     echo "❌ 未能定位面板部署目录，卸载终止（未删除任何内容）。请 cd 到部署目录后重试，或用 PANEL_DEPLOY_DIR=<目录> 指定"
     return 1
   fi
+  # A2-08：实例 id 硬守卫（与 update 同律，位于部署目录 .env）。
+  panel_assert_instance_id_valid || return 1
   if [[ ! -f "docker-compose.yml" ]]; then
     echo "❌ 部署目录 $PANEL_DEPLOY_DIR 缺少 docker-compose.yml，卸载终止（未删除任何内容）"
     return 1
@@ -4254,6 +4601,32 @@ uninstall_panel() {
   echo "✅ 卸载完成"
 }
 
+# A2-07：进程锁——装/升/卸/迁移共用同一部署目录与 .env，两个
+# panel_install.sh 进程并发（双终端、面板运维与自更新 re-exec
+# 叠加等）会交错写同一批文件（钉键、compose 替换、迁移快照）。
+# 入口以 flock 互斥：锁被占用即点名退出（返回 1）；flock 不存
+# 在或锁文件不可打开时只告警继续，不因锁机制本身挡住全部运维
+# （降级须点名，不静默）。锁路径可经 PANEL_INSTALL_LOCK_FILE
+# 覆盖；锁随进程退出由内核自动释放，不留陈旧锁。注：迁移快照
+# .env.pre-postgres-migration 是回滚契约的固定名，不在此改名，
+# 其并发覆盖面由本锁闭合。
+panel_acquire_run_lock() {
+  local lock_file="${PANEL_INSTALL_LOCK_FILE:-/run/flmx-panel-install.lock}"
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "⚠️ 未找到 flock，进程锁不可用（并发运行防护缺失），继续执行——请勿同时运行两个面板脚本进程"
+    return 0
+  fi
+  if ! ( exec 9>>"$lock_file" ) 2>/dev/null; then
+    echo "⚠️ 无法打开进程锁文件 $lock_file（目录不可写？），并发运行防护缺失，继续执行——请勿同时运行两个面板脚本进程"
+    return 0
+  fi
+  exec 9>>"$lock_file"
+  if ! flock -n 9; then
+    echo "❌ 已有另一个 panel_install.sh 进程正在运行（锁：$lock_file），本次退出；请等其完成后再运行"
+    return 1
+  fi
+}
+
 # 主逻辑
 main() {
   # F-006: 自更新检查放在 main 入口（自更新依赖 resolve_version /
@@ -4270,6 +4643,12 @@ main() {
   if [[ $EUID -ne 0 ]]; then
     echo "❌ panel_install.sh 需要 root 权限运行（涉及 Docker 与系统配置写入）"
     echo "   请使用 root 用户或 sudo 重新执行"
+    exit 1
+  fi
+
+  # A2-07：进程锁——在任何落盘动作之前取得（自更新已先行完
+  # 成，其 re-exec 回到 main 时同样在此受锁），取不到即退出。
+  if ! panel_acquire_run_lock; then
     exit 1
   fi
 

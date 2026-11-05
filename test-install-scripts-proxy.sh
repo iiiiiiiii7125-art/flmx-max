@@ -41,6 +41,826 @@ pty_run() {
   printf '%s' "$input" | script -qec "bash \"$harness\"" /dev/null >/dev/null 2>&1
 }
 
+# A2-01 残面（audit-max）：事故态门的旧卷内容探测须三态——挂载点
+# 不可读是「未知」而非「无数据」。旧实现 panel_volume_file_exists
+# 二值 fail-open：inspect 给不出挂载点即按卷内无文件处理，无键＋
+# 实挂新缺省卷＋旧卷存在（内容未知）时两格门都被越过、钉键把可
+# 能的事故态正式化。三幕：① SQLite 格未知 → 中止、不写卷键、点
+# 名未知；② PG 格未知（SQLite 侧非事故形态）→ 中止、不写 PG 卷
+# 键；③ 挂载点可读且旧卷确定无数据文件 → 门放行、照常钉实读值
+# （既有口径回归）。
+test_panel_pin_accident_gate_unknown_mount_aborts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  # docker 桩：卷存在性恒真；挂载点仅 FIXTURE_MOUNT_OK=1 时可读
+  # （回显 $FIXTURE_VOLROOT/<卷名>），否则 inspect -f 取不到挂载点。
+  # 容器挂载实读由 FIXTURE_SQLITE_VOLUME/FIXTURE_POSTGRES_VOLUME 给定。
+  pin_unknown_docker() {
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        if [[ "$3" == "-f" ]]; then
+          [[ "${FIXTURE_MOUNT_OK:-}" == "1" ]] || return 1
+          printf '%s' "$FIXTURE_VOLROOT/$5"
+          return 0
+        fi
+        return 0
+      fi
+      if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+        case "$3" in
+          *"/app/data"*) printf '%s' "${FIXTURE_SQLITE_VOLUME:-}" ;;
+          *"/var/lib/postgresql/data"*) printf '%s' "${FIXTURE_POSTGRES_VOLUME:-}" ;;
+          *) printf '' ;;
+        esac
+        return 0
+      fi
+      return 0
+    }
+  }
+
+  # ① SQLite 格未知
+  local dir1
+  dir1=$(mktemp -d)
+  cat > "$dir1/.env" <<'EOF'
+DB_TYPE=sqlite
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_unknown_docker
+  FIXTURE_MOUNT_OK=""
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  local rc="0"
+  ( cd "$dir1" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "A2-01R: pinning must abort when the legacy sqlite volume exists but its mountpoint is unreadable (unknown must not read as empty)"
+  grep -q '资源键钉值中止' "$dir1/pin.log" || fail "A2-01R: the unknown-state abort must be named in the pin output"
+  grep -q '无法确认' "$dir1/pin.log" || fail "A2-01R: the abort must name that the legacy volume content could not be determined"
+  if grep -q '^FLMX_SQLITE_VOLUME=' "$dir1/.env"; then
+    fail "A2-01R: no sqlite volume key may be written when the accident gate aborts on unknown state"
+  fi
+
+  # ② PG 格未知（SQLite 侧答自定义卷名、不构成事故形态）
+  local dir2
+  dir2=$(mktemp -d)
+  cat > "$dir2/.env" <<'EOF'
+DB_TYPE=postgres
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_unknown_docker
+  FIXTURE_MOUNT_OK=""
+  FIXTURE_SQLITE_VOLUME="custom_sqlite"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  rc="0"
+  ( cd "$dir2" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "A2-01R: pinning must abort when the legacy postgres volume exists but its mountpoint is unreadable"
+  grep -q 'postgres_data' "$dir2/pin.log" || fail "A2-01R: the PG unknown-state abort must name the legacy postgres volume"
+  if grep -q '^FLMX_POSTGRES_VOLUME=' "$dir2/.env"; then
+    fail "A2-01R: no postgres volume key may be written when the PG accident gate aborts on unknown state"
+  fi
+
+  # ③ 挂载点可读、旧卷确定无数据文件 → 放行并钉实读值
+  local dir3
+  dir3=$(mktemp -d)
+  cat > "$dir3/.env" <<'EOF'
+DB_TYPE=sqlite
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  FIXTURE_VOLROOT="$dir3/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/postgres_data"
+  pin_unknown_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  ( cd "$dir3" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "A2-01R: pinning must proceed when both legacy volumes are readable and provably hold no data files"
+  grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir3/.env" || fail "A2-01R: the live-read sqlite volume must be pinned once the gate clears"
+  grep -q '^FLMX_POSTGRES_VOLUME=flmx-postgres-data$' "$dir3/.env" || fail "A2-01R: the live-read postgres volume must be pinned once the gate clears"
+)
+
+# A2-02（audit-max）：升级后卷自检补 PG 面——旧实现只有
+# verify_panel_update_sqlite_volume，PG 部署重建后挂到模板缺省空
+# 卷（flmx-postgres-data）时健康检查与 SQLite 自检双过、照报更新
+# 完成。两幕（均 PG 模式、卷键预钉 real_pg）：① 重建后 PG 实挂
+# flmx-postgres-data → PG 自检判失败、更新回滚、.env 逐字恢复；
+# ② 重建后仍挂 real_pg 且卷内有 PG_VERSION → 自检点名通过、更
+# 新成功。
+test_panel_update_pg_volume_check_rolls_back_on_mismatch() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  wrap_pg_volume_docker() {
+    eval "$(declare -f docker | sed '1s/^docker /fixture_docker_base /')"
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        if [[ "$3" == "-f" ]]; then
+          printf '%s' "$FIXTURE_VOLROOT/$5"
+          return 0
+        fi
+        return 0
+      fi
+      if [[ "$1" == "inspect" && "$2" == "-f" && "$3" == *"/var/lib/postgresql/data"* ]]; then
+        if [[ -n "${FIXTURE_REBUILT_POSTGRES_VOLUME:-}" && -e "$FIXTURE_DIR/.rebuilt" ]]; then
+          printf '%s' "$FIXTURE_REBUILT_POSTGRES_VOLUME"
+          return 0
+        fi
+        printf '%s' "${FIXTURE_POSTGRES_VOLUME:-postgres_data}"
+        return 0
+      fi
+      fixture_docker_base "$@"
+    }
+  }
+
+  # ① 不符必回滚
+  local dir1
+  dir1=$(mktemp -d)
+  setup_rename_update_fixture "$dir1" current
+  printf 'FLMX_POSTGRES_VOLUME=real_pg\n' >> "$dir1/.env"
+  cp -p "$dir1/.env" "$dir1/env.pristine"
+  FIXTURE_VOLROOT="$dir1/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/real_pg"
+  : > "$FIXTURE_VOLROOT/real_pg/PG_VERSION"
+  wrap_pg_volume_docker
+  get_current_db_type() { echo "postgres"; }
+  FIXTURE_POSTGRES_VOLUME="real_pg"
+  FIXTURE_REBUILT_POSTGRES_VOLUME="flmx-postgres-data"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  local rc="0"
+  update_panel >"$dir1/update.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "A2-02: update must fail when the rebuilt postgres container mounts a different data volume than recorded"
+  grep -q '升级后 PG 卷名自检失败' "$dir1/update.log" || fail "A2-02: the PG volume self-check failure must be named in the update output"
+  grep -q 'flmx-postgres-data' "$dir1/update.log" || fail "A2-02: the PG self-check failure must name the actually mounted volume"
+  grep -q 'real_pg' "$dir1/update.log" || fail "A2-02: the PG self-check failure must name the expected recorded volume"
+  grep -q '已恢复更新前版本' "$dir1/update.log" || fail "A2-02: a PG self-check failure must roll back to the pre-update version"
+  diff -q "$dir1/env.pristine" "$dir1/.env" >/dev/null || fail "A2-02: rollback after a PG self-check failure must restore the pre-update .env verbatim"
+
+  # ② 相符通过
+  local dir2
+  dir2=$(mktemp -d)
+  setup_rename_update_fixture "$dir2" current
+  printf 'FLMX_POSTGRES_VOLUME=real_pg\n' >> "$dir2/.env"
+  FIXTURE_VOLROOT="$dir2/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/real_pg"
+  : > "$FIXTURE_VOLROOT/real_pg/PG_VERSION"
+  wrap_pg_volume_docker
+  get_current_db_type() { echo "postgres"; }
+  FIXTURE_POSTGRES_VOLUME="real_pg"
+  FIXTURE_REBUILT_POSTGRES_VOLUME=""
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir2/update.log" 2>&1 || fail "A2-02: update must succeed when the rebuilt postgres container still mounts the recorded volume"
+  grep -q '升级后 PG 卷名自检通过' "$dir2/update.log" || fail "A2-02: the PG volume self-check pass must be named in the update output"
+)
+
+# A2-03（audit-max）：缺省 scope 钉键与 live scope 同口径——无实
+# 读证据不写卷键。旧实现两处反着来：SQLite 实读为空（bind 挂载
+# 等）照样写死 sqlite_data；PG 实读为空时只要 postgres_data 卷
+# 存在就认领为本部署 PG 卷（SQLite 部署主机上一个无关的
+# postgres_data 卷即被写进 .env）。三幕：① SQLite 实读为空 →
+# 不写 FLMX_SQLITE_VOLUME＋点名；② SQLite 部署＋无关
+# postgres_data 卷存在、PG 实读为空 → 不写 FLMX_POSTGRES_VOLUME
+# ＋点名不认领；③ 实读有值 → 照常钉实读值（既有口径回归）。
+test_panel_pin_no_live_read_no_volume_key() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  pin_noread_docker() {
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        return 0
+      fi
+      if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+        case "$3" in
+          *"/app/data"*) printf '%s' "${FIXTURE_SQLITE_VOLUME:-}" ;;
+          *"/var/lib/postgresql/data"*) printf '%s' "${FIXTURE_POSTGRES_VOLUME:-}" ;;
+          *) printf '' ;;
+        esac
+        return 0
+      fi
+      return 0
+    }
+  }
+
+  # ① SQLite 实读为空
+  local dir1
+  dir1=$(mktemp -d)
+  cat > "$dir1/.env" <<'EOF'
+DB_TYPE=sqlite
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_noread_docker
+  FIXTURE_SQLITE_VOLUME=""
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir1" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "A2-03: pinning must not fail when the sqlite mount cannot be read"
+  if grep -q '^FLMX_SQLITE_VOLUME=' "$dir1/.env"; then
+    fail "A2-03: no sqlite volume key may be written without a live-read value (bind mounts must not be pinned to the template fallback)"
+  fi
+  grep -q '不钉 FLMX_SQLITE_VOLUME' "$dir1/pin.log" || fail "A2-03: the skipped sqlite pin must be named in the pin output"
+
+  # ② 无关 postgres_data 卷不得被认领
+  local dir2
+  dir2=$(mktemp -d)
+  cat > "$dir2/.env" <<'EOF'
+DB_TYPE=sqlite
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_noread_docker
+  FIXTURE_SQLITE_VOLUME="my_sqlite"
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir2" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "A2-03: pinning must not fail in the foreign-postgres-volume scenario"
+  grep -q '^FLMX_SQLITE_VOLUME=my_sqlite$' "$dir2/.env" || fail "A2-03: the live-read sqlite volume must still be pinned"
+  if grep -q '^FLMX_POSTGRES_VOLUME=' "$dir2/.env"; then
+    fail "A2-03: an unrelated postgres_data volume must not be claimed as this deployment's PG volume by existence alone"
+  fi
+  grep -q '不钉 FLMX_POSTGRES_VOLUME' "$dir2/pin.log" || fail "A2-03: the skipped postgres pin must be named in the pin output"
+
+  # ③ 实读有值照常钉
+  local dir3
+  dir3=$(mktemp -d)
+  cat > "$dir3/.env" <<'EOF'
+DB_TYPE=postgres
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_noread_docker
+  FIXTURE_SQLITE_VOLUME="my_sqlite"
+  FIXTURE_POSTGRES_VOLUME="my_pg"
+  ( cd "$dir3" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "A2-03: pinning must succeed when both mounts are readable"
+  grep -q '^FLMX_SQLITE_VOLUME=my_sqlite$' "$dir3/.env" || fail "A2-03: the live-read sqlite volume must be pinned"
+  grep -q '^FLMX_POSTGRES_VOLUME=my_pg$' "$dir3/.env" || fail "A2-03: the live-read postgres volume must be pinned"
+)
+
+# A1-01（audit-max）：路由下载加跨腿总预算——旧实现只有单腿
+# 600s×重试×双腿×约 10 路线，涓流路线（高于 1KB/s 地板看门狗）
+# 可把一次下载拖到小时级；install.sh 同面已有 240s 总预算
+# （FLMX_DOWNLOAD_BUDGET_SECONDS），面板侧缺失。三幕：① 预算=0
+# → routed 在发出任何下载请求前即以总预算点名失败；② 给
+# download_verified 传 30s 后截止 → 两腿 --max-time 均收紧到
+# 30（不再是 600）且带 --retry-max-time；③ 预算充足时 routed
+# 照常成功（既有口径回归）。
+test_panel_download_routed_total_budget() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local log dest out
+  log=$(mktemp)
+  dest=$(mktemp -u)
+  out=$(mktemp)
+  CURL_ARGS_LOG="$log"
+
+  curl() {
+    echo "$*" >> "$CURL_ARGS_LOG"
+    local output="" url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      printf 'fixture-body' | sha256sum | awk '{print $1"  asset.sha256"}' > "$output"
+    else
+      printf 'fixture-body' > "$output"
+    fi
+    return 0
+  }
+
+  # ① 预算耗尽：不发任何请求、点名失败
+  PROXY_ENABLED="false"
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+  FLMX_DOWNLOAD_BUDGET_SECONDS=0
+  local rc="0"
+  download_verified_routed "https://example.com/asset.yml" "$dest" >"$out" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "A1-01: an exhausted download budget must fail the routed download"
+  grep -q '下载总预算' "$out" || fail "A1-01: the budget failure must be named in the output"
+  assert_equals "0" "$(grep -c . "$log" || true)" "A1-01: no download request may be issued once the budget is exhausted"
+
+  # ② 截止收紧两腿（两腿各自在调用时点算剩余量，跨秒后可差 1-2s，
+  # 故断言区间：两腿帽都落在 [25,30]、无一为 600）
+  : > "$log"
+  local deadline=$(( $(date +%s) + 30 ))
+  download_verified "https://example.com/asset.yml" "$dest" "$deadline" >/dev/null || \
+    fail "A1-01: download_verified with a live deadline should succeed with the stub"
+  local leg_caps leg_cap_value
+  leg_caps=$(grep -o -- '--max-time [0-9]*' "$log" | awk '{print $2}')
+  assert_equals "2" "$(printf '%s' "$leg_caps" | grep -c .)" "A1-01: both legs must carry a budget-derived --max-time"
+  while IFS= read -r leg_cap_value; do
+    if (( leg_cap_value < 25 || leg_cap_value > 30 )); then
+      fail "A1-01: each leg cap must be the remaining budget (~30s), got $leg_cap_value"
+    fi
+  done <<< "$leg_caps"
+  if grep -q -- '--max-time 600' "$log"; then
+    fail "A1-01: no leg may keep the 600s cap while a tighter budget deadline is in force"
+  fi
+  assert_equals "2" "$(grep -c -- '--retry-max-time' "$log")" "A1-01: both legs must bound total retry time by the remaining budget"
+
+  # ③ 预算充足：routed 照常成功
+  : > "$log"
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+  FLMX_DOWNLOAD_BUDGET_SECONDS=240
+  download_verified_routed "https://example.com/asset.yml" "$dest" >/dev/null || \
+    fail "A1-01: routed download must succeed when the budget is ample"
+  assert_equals "fixture-body" "$(cat "$dest")" "A1-01: the downloaded body must land verbatim"
+)
+
+# A1-02（audit-max）：run_verified_installer_script 的 curl 此前是
+# 裸 -fsSL——无连接超时、无总界、无地板看门狗、无重试，
+# get.docker.com 连通后停滞（TCP 开、零字节）时 install_docker
+# 永不返回、包管理器兜底永不触发。与 L2-11 对 download_verified
+# 的钉格同型：断言该函数的 curl 参数集带齐看门狗，且校验通过
+# 后脚本被执行（夹具脚本仅 exit 0）。
+test_panel_installer_script_curl_uses_timeouts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local log
+  log=$(mktemp)
+  CURL_ARGS_LOG="$log"
+
+  curl() {
+    echo "$*" >> "$CURL_ARGS_LOG"
+    local output=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      shift
+    done
+    printf 'exit 0\n' > "$output"
+    return 0
+  }
+
+  local expected
+  expected=$(printf 'exit 0\n' | sha256sum | awk '{print $1}')
+  run_verified_installer_script "https://get.docker.com" "$expected" >/dev/null || \
+    fail "A1-02: the verified installer script should run with the stub"
+  grep -q -- '--connect-timeout' "$log" || fail "A1-02: the installer-script curl must carry --connect-timeout"
+  grep -q -- '--max-time' "$log" || fail "A1-02: the installer-script curl must carry --max-time"
+  grep -q -- '--speed-limit' "$log" || fail "A1-02: the installer-script curl must carry the stall watchdog (--speed-limit/--speed-time)"
+  grep -q -- '--retry' "$log" || fail "A1-02: the installer-script curl must carry --retry"
+)
+
+# A2-05（audit-max）：菜单 5 保留式写入不得整块删除共享站点——
+# 旧实现 caddyfile_without_site 任一地址 token 命中目标域名即丢
+# 整块，`panel.example.com, sub.example.com { ... }` 共享块里的
+# sub 站点被静默删掉、回执却称已保留。现改为命中共享块时只剔
+# 目标地址、其余地址与块体整块保留并点名。对照幕：仅含目标地
+# 址的块仍整块剔除（既有口径）。
+test_panel_caddyfile_without_site_keeps_shared_addresses() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir cf out err
+  dir=$(mktemp -d)
+  cf="$dir/Caddyfile"
+  cat > "$cf" <<'EOF'
+panel.example.com, sub.example.com {
+    reverse_proxy 127.0.0.1:6366
+}
+other.example.com {
+    respond "hi"
+}
+panel.example.com {
+    reverse_proxy 127.0.0.1:6366
+}
+EOF
+  out=$(mktemp)
+  err=$(mktemp)
+  caddyfile_without_site "$cf" "panel.example.com" >"$out" 2>"$err" || \
+    fail "A2-05: caddyfile_without_site should succeed on the shared-block fixture"
+  grep -q '^sub.example.com {' "$out" || fail "A2-05: the shared block must survive with the remaining address as its header"
+  grep -q 'reverse_proxy 127.0.0.1:6366' "$out" || fail "A2-05: the shared block body must be preserved"
+  if grep -q 'panel.example.com' "$out"; then
+    fail "A2-05: the target address must be gone from the output (both its solo block and its share of the shared block)"
+  fi
+  grep -q '^other.example.com {' "$out" || fail "A2-05: unrelated blocks must be preserved verbatim"
+  grep -q 'sub.example.com' "$err" || fail "A2-05: the shared-block rewrite must be named on stderr"
+)
+
+# A2-06（audit-max）：无 Docker 卸载的清理集与 Docker 分支对齐
+# ——旧实现只删 docker-compose.yml/.env 两文件，backups/（含完整
+# DB 备份与 .env 密钥副本）、.env 历史备份、PG 迁移快照、
+# gost.db.bak 与更新临时文件全部残留，而 Docker 分支回执口径
+# 是「删除所有数据」（L2-14 已在该分支闭合、本分支漏补）。两
+# 幕：① 自家部署＋全量残留集 → 逐项点名且全部删除；② 仅剩残
+# 留产物（无 compose/.env）时不再谎称「无需清理」——走归属确
+# 认，确认后删除、拒绝则保留。
+test_panel_uninstall_without_docker_cleans_full_residual_set() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  check_docker() { return 1; }
+
+  make_residuals() {
+    local d="$1"
+    mkdir -p "$d/backups"
+    printf 'db-backup\n' > "$d/backups/backup.tar"
+    printf 'x\n' > "$d/.env.bak.1"
+    printf 'x\n' > "$d/docker-compose.yml.bak.1"
+    printf 'x\n' > "$d/.env.pre-postgres-migration"
+    printf 'x\n' > "$d/gost.db.bak"
+    printf 'x\n' > "$d/.docker-compose.yml.update.1"
+    printf 'x\n' > "$d/.docker-compose.yml.install.1"
+  }
+  assert_residuals_gone() {
+    local d="$1" item
+    for item in backups .env.bak.1 docker-compose.yml.bak.1 .env.pre-postgres-migration gost.db.bak .docker-compose.yml.update.1 .docker-compose.yml.install.1; do
+      [[ ! -e "$d/$item" ]] || fail "A2-06: residual $item must be deleted by the no-docker uninstall"
+    done
+  }
+
+  # ① 自家部署＋全量残留
+  local d out rc="0"
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  make_residuals "$d"
+  out=$( ( cd "$d" && uninstall_panel </dev/null 2>&1 ) ) || rc="$?"
+  assert_equals "0" "$rc" "A2-06: own no-docker uninstall should succeed"
+  [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "A2-06: compose/.env must be removed"
+  assert_residuals_gone "$d"
+  grep -q 'backups/' <<< "$out" || fail "A2-06: the residual listing must name backups/ before deletion"
+
+  # ② 仅残留产物：拒绝保留、确认删除
+  d=$(mktemp -d)
+  make_residuals "$d"
+  rc="0"
+  ( cd "$d" && uninstall_panel <<< "n" >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "A2-06: declining the confirmation should be a clean no-op"
+  [[ -d "$d/backups" ]] || fail "A2-06: residuals must stay when confirmation is declined"
+  rc="0"
+  ( cd "$d" && uninstall_panel <<< "y" >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "A2-06: confirming should clean residuals-only directories"
+  assert_residuals_gone "$d"
+)
+
+# A1-03（audit-max）：显式版本 env 在拼 URL/镜像 tag 前须过格式
+# 校验——旧实现 resolve_version 与 update_panel 的版本链对
+# VERSION/FLMX_VERSION/FLUX_VERSION/PINNED_VERSION 零校验原样
+# 透传，路径穿越/空白/命令片段可进入全部拼接面。文法取并集
+# （数字开头、仅含数字/字母/点/连字符）：稳定版与显式预发布
+# （J-02 既定支持面）放行，穿越/注入形态全拒；update 链为第二
+# 入口、同律把守（全打桩下坏版本必须在拉镜像前终止）。
+test_panel_explicit_version_format_validated() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local out rc bad
+  for bad in '../../etc/passwd' '1.9.9;id' '1.9.9 rc1' ' 1.9.9' '-1.0' '1.9.9$(id)' '.9.9' '1.9.9/x' "1.9.9'x"; do
+    VERSION="$bad" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+    rc="0"
+    out=$(resolve_version 2>&1) || rc="$?"
+    [[ "$rc" != "0" ]] || fail "A1-03: resolve_version must reject the malformed explicit version: $bad"
+    grep -q '格式非法' <<< "$out" || fail "A1-03: the rejection must name the format problem for: $bad"
+  done
+
+  VERSION="" FLMX_VERSION='1.9.9-rc.1' FLUX_VERSION="" PINNED_VERSION=""
+  out=$(resolve_version) || fail "A1-03: an explicit prerelease version must stay installable (J-02)"
+  assert_equals "1.9.9-rc.1" "$out" "A1-03: the explicit prerelease version must pass through verbatim"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION='2.0.0-beta.3'
+  out=$(resolve_version) || fail "A1-03: an explicit beta PINNED_VERSION must stay installable"
+  assert_equals "2.0.0-beta.3" "$out" "A1-03: the explicit beta version must pass through verbatim"
+  VERSION='1.9.9' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  out=$(resolve_version) || fail "A1-03: a plain stable version must pass"
+  assert_equals "1.9.9" "$out" "A1-03: the stable version must pass through verbatim"
+  # v 前缀与开发哨兵值放行（panel_version_cmp 剥 v 比较；套件
+  # 定版夹具以 v-test 为既定输入、多个既有更新/装机用例依赖其
+  # 流过版本链）：逐字透传，不在此改写。本校验守注入面（穿
+  # 越/空白/元字符），不守版本语义。
+  VERSION='v1.9.9' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  out=$(resolve_version) || fail "A1-03: a v-prefixed version must pass (the prefix is cosmetic to the version grammar)"
+  assert_equals "v1.9.9" "$out" "A1-03: the v-prefixed version must pass through verbatim"
+  VERSION='v-test' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  out=$(resolve_version) || fail "A1-03: the suite's pinned-version sentinel v-test must pass (standing fixture contract)"
+  assert_equals "v-test" "$out" "A1-03: the sentinel version must pass through verbatim"
+
+  # update 链同守（与 L2-12 同款全打桩）
+  check_docker() { DOCKER_CMD="true"; }
+  resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
+  validate_panel_update_environment() { :; }
+  get_current_db_type() { echo "sqlite"; }
+  get_deployed_panel_version() { return 1; }
+  resolve_latest_release_tag() { echo "9.9.9"; }
+  download_panel_update_compose() { UPDATE_COMPOSE_CANDIDATE="candidate"; }
+  validate_panel_update_compose() { return 0; }
+  create_panel_update_backup() { UPDATE_BACKUP_DIR="backup"; return 0; }
+  pull_panel_update_images() { echo pulled >> "$PULL_MARKER"; return 0; }
+  panel_pin_missing_resource_keys() { return 0; }
+  activate_panel_update_files() { return 0; }
+  start_panel_after_update() { return 0; }
+  verify_panel_update_sqlite_volume() { return 0; }
+  check_ipv6_support() { return 1; }
+
+  PULL_MARKER=$(mktemp)
+  local log
+  log=$(mktemp)
+  VERSION='1.9.9;id' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  rc="0"
+  update_panel >"$log" 2>&1 || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A1-03: update_panel must reject a malformed explicit version"
+  grep -q '格式非法' "$log" || fail "A1-03: the update rejection must name the format problem"
+  [[ ! -s "$PULL_MARKER" ]] || fail "A1-03: no image pull may happen with a malformed version"
+)
+
+# A1-04（audit-max）：路线探测的 tag 文法与版本解析器对齐——旧
+# 实现 probe_route 用宽文法（任意数字开头 tag），而
+# resolve_latest_release_tag 是渠道文法（稳定渠道只认纯数字点
+# 分）：稳定渠道下探测会把「重定向落到预发布 tag」的路线判活，
+# 与解析器随后拒绝该 tag 的口径漂移。两处现共用
+# release_tag_pattern 一个出处：稳定渠道探测拒绝预发布 tag、
+# beta 渠道两处同放行、垃圾 tag 两渠道同拒。
+test_panel_probe_route_uses_channel_tag_grammar() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  curl() {
+    printf '0.123 https://github.com/some-owner/some-repo/releases/tag/%s' "$FAKE_TAG"
+    return 0
+  }
+
+  local rc
+  # 稳定渠道（缺省）：纯数字 tag 判活、预发布 tag 判死
+  unset FLMX_RELEASE_CHANNEL
+  FAKE_TAG='1.9.10'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "A1-04: a stable tag must pass the probe on the stable channel"
+  FAKE_TAG='1.9.10-beta.1'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A1-04: on the stable channel the probe must reject a prerelease tag, matching the parser grammar"
+
+  # beta 渠道：预发布与稳定 tag 同放行
+  FLMX_RELEASE_CHANNEL='beta'
+  FAKE_TAG='1.9.10-beta.1'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "A1-04: a prerelease tag must pass the probe on the beta channel"
+  FAKE_TAG='1.9.10'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "A1-04: a stable tag must pass the probe on the beta channel"
+
+  # 垃圾 tag 两渠道同拒（H-24 的 /releases 索引页形态）
+  FAKE_TAG='releases'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A1-04: a junk tag must fail the probe on the beta channel"
+  unset FLMX_RELEASE_CHANNEL
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A1-04: a junk tag must fail the probe on the stable channel"
+)
+
+# A1-05（audit-max）：normalize_proxy_prefix 须去掉全部尾斜杠
+# ——旧实现 ${proxy%/} 只去一个，https://host// 归一后仍带尾斜
+# 杠，后续 route_url 拼接成双斜杠路径。含 scheme 与裸主机两形
+# 态、路径段多斜杠、无尾斜杠不变四类断言。
+test_panel_normalize_proxy_prefix_strips_all_trailing_slashes() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  assert_equals "https://proxy.example.com" "$(normalize_proxy_prefix 'https://proxy.example.com//')" "A1-05: all trailing slashes must be stripped (scheme form)"
+  assert_equals "https://proxy.example.com" "$(normalize_proxy_prefix 'proxy.example.com///')" "A1-05: all trailing slashes must be stripped (bare host form)"
+  assert_equals "http://proxy.example.com" "$(normalize_proxy_prefix 'http://proxy.example.com/')" "A1-05: a single trailing slash must still be stripped"
+  assert_equals "https://proxy.example.com/path" "$(normalize_proxy_prefix 'https://proxy.example.com/path//')" "A1-05: trailing slashes after a path segment must be stripped"
+  assert_equals "https://proxy.example.com" "$(normalize_proxy_prefix 'https://proxy.example.com')" "A1-05: a prefix without trailing slash must pass through unchanged"
+)
+
+# A1-06（audit-max）：configure_docker_ipv6 的 jq 分支不得再写
+# 可预测的 /tmp/daemon.json——须以 mktemp 在目标同目录
+# /etc/docker 落不可预测临时名（兼原子 rename）。静态钉格（与
+# test_install_docker_daemon_start_wiring_static 同型）：该函数
+# 的目标路径写死 /etc/docker，行为级驱动会真写运行宿主机的
+# Docker 配置，套件内不可行，故以形态断言把守。
+test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp() (
+  set -euo pipefail
+  local body
+  body=$(sed -n '/^configure_docker_ipv6()/,/^}/p' "$ROOT_DIR/panel_install.sh")
+  if grep -Eq '(>|[[:space:]]mv[[:space:]]+)["]?/tmp/daemon\.json' <<< "$body"; then
+    fail "A1-06: configure_docker_ipv6 must not write or rename over the predictable /tmp/daemon.json path"
+  fi
+  grep -q 'mktemp /etc/docker/.daemon.json.XXXXXX' <<< "$body" || fail "A1-06: the daemon.json rewrite must stage through mktemp in /etc/docker"
+  grep -q 'jq -e' <<< "$body" || fail "A1-06: the staged file must be re-parsed as valid JSON before it replaces daemon.json"
+)
+
+# A2-07（audit-max）：入口进程锁＋备份名唯一后缀——① 锁被另一
+# 进程持有时 panel_acquire_run_lock 必须点名拒绝（返回非 0）；
+# 锁空闲时取得成功；main() 必须接线调用（静态断言）。② 菜单
+# 5/6 的 Caddyfile 备份名此前只有秒级时间戳，同秒再跑即覆盖前
+# 一份回滚源：两处命名都必须带进程号唯一后缀（静态钉格，与
+# A1-06 同因：菜单全流程夹具不产出同秒双跑场景）。
+test_panel_run_lock_and_unique_caddy_backup_names() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local lock_file holder_rc lock_out
+  lock_file=$(mktemp -u)
+  lock_out=$(mktemp)
+  PANEL_INSTALL_LOCK_FILE="$lock_file"
+  ( exec 9>>"$lock_file"; flock 9; sleep 5 ) &
+  local holder_pid=$!
+  sleep 0.5
+  holder_rc="0"
+  panel_acquire_run_lock > "$lock_out" 2>&1 || holder_rc="$?"
+  [[ "$holder_rc" != "0" ]] || fail "A2-07: acquiring the run lock must fail while another process holds it"
+  grep -q 'panel_install.sh 进程正在运行' "$lock_out" || fail "A2-07: the lock refusal must be named in the output"
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+  panel_acquire_run_lock >/dev/null 2>&1 || fail "A2-07: acquiring the run lock must succeed once it is free"
+
+  local main_body
+  main_body=$(sed -n '/^main()/,/^}/p' "$ROOT_DIR/panel_install.sh")
+  grep -q 'panel_acquire_run_lock' <<< "$main_body" || fail "A2-07: main() must acquire the run lock before any operation"
+
+  local bak_count
+  bak_count=$(grep -Fc 'caddyfile}.bak.$(date +%s).$$' "$ROOT_DIR/panel_install.sh" || true)
+  assert_equals "2" "$bak_count" "A2-07: both Caddy backup names must carry the PID suffix"
+)
+
+# A2-08（audit-max）：非法 FLMX_INSTANCE 在管理路径须与装机路径
+# 同律硬拒——旧实现只有 install_panel 对环境变量形态硬拒；读路
+# 径 panel_instance_id 对非法值（env/.env 两形态）静默回落默认
+# 实例（B2-03 口径，对纯读成立），于是 update/uninstall/migrate
+# 带着 .env 里的非法实例 id 一路操作到默认实例的资源上（或派
+# 生名错位）。现各变更性入口先过 panel_assert_instance_id_valid
+# （读路径回退口径本身不改，B2-03 用例继续把守）。四幕：
+# helper 单元、update 链、uninstall 无 Docker 分支、install 的
+# .env 形态（旧实现只查环境变量、.env 非法值不拒）。
+test_panel_invalid_instance_id_hard_fails_on_manage_paths() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local d rc out
+  # helper 单元：env 非法拒、.env 非法拒、合法/缺省放行
+  d=$(mktemp -d)
+  rc="0"; out=$( ( FLMX_INSTANCE='Bad Id!' panel_assert_instance_id_valid "$d" ) 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: an invalid FLMX_INSTANCE from the environment must hard-fail"
+  grep -q 'FLMX_INSTANCE 不合法' <<< "$out" || fail "A2-08: the hard-fail must name the invalid instance id"
+  printf 'FLMX_INSTANCE=Bad Id!\n' > "$d/.env"
+  rc="0"; ( unset FLMX_INSTANCE; panel_assert_instance_id_valid "$d" >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: an invalid FLMX_INSTANCE from .env must hard-fail"
+  printf 'FLMX_INSTANCE=east\n' > "$d/.env"
+  ( unset FLMX_INSTANCE; panel_assert_instance_id_valid "$d" >/dev/null 2>&1 ) || fail "A2-08: a valid instance id must pass"
+  rm -f "$d/.env"
+  ( unset FLMX_INSTANCE; panel_assert_instance_id_valid "$d" >/dev/null 2>&1 ) || fail "A2-08: an absent instance id must pass (default instance)"
+
+  # update 链：resolve 到的部署 .env 含非法实例 id → 拉镜像前终止
+  check_docker() { DOCKER_CMD="true"; }
+  resolve_panel_deployment() {
+    PANEL_DEPLOY_DIR="$INSTANCE_FIXTURE_DIR"
+    PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  }
+  validate_panel_update_environment() { :; }
+  get_current_db_type() { echo "sqlite"; }
+  get_deployed_panel_version() { return 1; }
+  resolve_latest_release_tag() { echo "9.9.9"; }
+  download_panel_update_compose() { UPDATE_COMPOSE_CANDIDATE="candidate"; }
+  validate_panel_update_compose() { return 0; }
+  create_panel_update_backup() { UPDATE_BACKUP_DIR="backup"; return 0; }
+  pull_panel_update_images() { echo pulled >> "$PULL_MARKER"; return 0; }
+  panel_pin_missing_resource_keys() { return 0; }
+  activate_panel_update_files() { return 0; }
+  start_panel_after_update() { return 0; }
+  verify_panel_update_sqlite_volume() { return 0; }
+  check_ipv6_support() { return 1; }
+
+  INSTANCE_FIXTURE_DIR=$(mktemp -d)
+  printf 'FLMX_INSTANCE=Bad Id!\nDB_TYPE=sqlite\n' > "$INSTANCE_FIXTURE_DIR/.env"
+  PULL_MARKER=$(mktemp)
+  local log
+  log=$(mktemp)
+  rc="0"
+  ( unset FLMX_INSTANCE; VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION="" update_panel >"$log" 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: update_panel must hard-fail on an invalid instance id in the deployment .env"
+  grep -q 'FLMX_INSTANCE 不合法' "$log" || fail "A2-08: the update hard-fail must name the invalid instance id"
+  [[ ! -s "$PULL_MARKER" ]] || fail "A2-08: no image pull may happen with an invalid instance id"
+
+  # uninstall 无 Docker 分支：cwd .env 非法实例 id → 不删任何文件
+  check_docker() { return 1; }
+  d=$(mktemp -d)
+  printf 'FLMX_INSTANCE=Bad Id!\nJWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  rc="0"
+  ( cd "$d" && unset FLMX_INSTANCE && uninstall_panel </dev/null >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: the no-docker uninstall must hard-fail on an invalid instance id"
+  [[ -e "$d/.env" && -e "$d/docker-compose.yml" ]] || fail "A2-08: no file may be deleted with an invalid instance id"
+
+  # install 的 .env 形态：环境变量未设、cwd .env 非法 → 拒绝
+  d=$(mktemp -d)
+  printf 'FLMX_INSTANCE=Bad Id!\n' > "$d/.env"
+  rc="0"
+  out=$( ( cd "$d" && unset FLMX_INSTANCE && install_panel 2>&1 ) ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: install_panel must hard-fail on an invalid instance id from .env"
+  grep -q 'FLMX_INSTANCE 不合法' <<< "$out" || fail "A2-08: the install hard-fail must name the invalid instance id"
+)
+
+# §9.6 缓解（audit-max 裁定）：WS token 面的非协议缓解——菜单 5
+# 生成的面板站点块须带访问日志过滤，把 ?secret= 查询参数从
+# Caddy 访问日志里删掉（WS 握手把 token 放在 secret 查询串，
+# 落日志即长效凭据落盘）。过滤器写在站点块内（菜单 5 保留式
+# 重写时随块再生、不累积）；菜单 6 的订阅前置块不在此列（订
+# 阅 token 走路径段而非 secret 查询串，口径不同，单独断言其
+# 不被误加）。
+test_panel_menu5_site_block_filters_secret_query_from_access_log() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "§9.6: the menu 5 run should succeed"
+  grep -q 'format filter' "$CADDYFILE_PATH" || fail "§9.6: the generated panel site block must carry the log filter encoder"
+  grep -q 'request>uri query' "$CADDYFILE_PATH" || fail "§9.6: the filter must target the request URI query string"
+  grep -q 'delete secret' "$CADDYFILE_PATH" || fail "§9.6: the filter must delete the secret query parameter from the access log"
+
+  # 菜单 6 随后追加订阅前置块：不得被误加（其 token 在路径段），
+  # 全文件 delete secret 仍只出现一次（面板块内）。
+  setup_subscription_front_domain <<< "sub.example.com" >/dev/null || \
+    fail "§9.6: the menu 6 run should succeed"
+  assert_equals "1" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "§9.6: only the panel block may carry the secret filter; the menu 6 block must not gain one"
+)
+
+# A2-04 附带钉格（XC-1 指出）：A2-04 本体（.env 读取与 Compose
+# 语义一致）已在他路修好，但 CRLF 形态此前无套件断言——Windows
+# 编辑过的 .env 若把 \r 带进取值，实例 id/DB 类型等比较会整体
+# 错位。钉死：CRLF 文件里普通值、引号值、空值的读数都不得带
+# \r，引号语义与空值语义与 LF 形态一致。
+test_env_var_reading_crlf_shape() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local d
+  d=$(mktemp -d)
+  printf 'FLMX_INSTANCE=east\r\nDB_TYPE=postgres\r\nQUOTED="va l"\r\nEMPTY=\r\n' > "$d/.env"
+  assert_equals "east" "$(get_env_var FLMX_INSTANCE "$d/.env")" "A2-04/CRLF: a CRLF value must be read without the carriage return"
+  assert_equals "postgres" "$(get_env_var DB_TYPE "$d/.env")" "A2-04/CRLF: the DB type must be read without the carriage return"
+  assert_equals "va l" "$(get_env_var QUOTED "$d/.env")" "A2-04/CRLF: a quoted CRLF value must be unquoted and CR-free"
+  assert_equals "" "$(get_env_var EMPTY "$d/.env")" "A2-04/CRLF: an empty CRLF value must read as empty"
+)
+
+# C4-01 跟进（FIX-B7 已落码）：clientip 信任面改为「回环默认可
+# 信＋FLMX_TRUSTED_PROXIES 显式 CIDR 名单」后，新装生成的 .env
+# 必须带该条目（默认空）与字段级指引注释——标准拓扑下后端经前
+# 端容器转发，模板不给这个旋钮，运维无从知道要把前端容器子网
+# 填进去，限流键会一直坍缩到前端容器 IP 的共享桶。与 FX-D 装
+# 机用例同款全打桩驱动 install_panel，断言真实落盘的 .env。
+test_panel_install_env_carries_trusted_proxies_entry() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work volmount
+  work=$(mktemp -d)
+  volmount=$(mktemp -d)
+
+  ask_proxy_config() { :; }
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker compose"; return 0; }
+  get_config_params() {
+    FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+    DB_TYPE="sqlite"; DATABASE_URL=""; POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+    POSTGRES_PASSWORD="test-password"
+    JWT_SECRET="test-secret"
+  }
+  get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
+  download_verified() {
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    return 0
+  }
+  wait_for_backend_healthy() { return 0; }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() {
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+      *" volume inspect "*) printf '%s' "$FXD_TEST_VOLMOUNT" ;;
+      *" inspect "*) printf 'flmx-sqlite-data' ;;
+    esac
+    return 0
+  }
+
+  export FXD_TEST_VOLMOUNT="$volmount"
+  local rc="0"
+  ( cd "$work" && install_panel >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "C4-01 follow-up: install_panel should succeed in the fixture"
+  [[ -f "$work/.env" ]] || fail "C4-01 follow-up: install must generate .env"
+  grep -q '^FLMX_TRUSTED_PROXIES=$' "$work/.env" || fail "C4-01 follow-up: the generated .env must carry FLMX_TRUSTED_PROXIES, empty by default (loopback-only trust)"
+  grep -q '前端容器子网' "$work/.env" || fail "C4-01 follow-up: the guidance must name what to fill (the frontend container subnet CIDR)"
+  grep -q '172.30.0.0/16' "$work/.env" || fail "C4-01 follow-up: the guidance must give the shipped template subnet as the concrete example"
+  grep -q '共享' "$work/.env" || fail "C4-01 follow-up: the guidance must state the shared-bucket consequence of leaving it empty"
+  grep -q '0.0.0.0/0' "$work/.env" || fail "C4-01 follow-up: the guidance must warn against an over-broad trust range"
+  grep -q '自检' "$work/.env" || fail "C4-01 follow-up: the guidance must include a self-check method"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -8555,9 +9375,13 @@ EOF
 
 # R1-01-L1 网络钉键多网络废名：后端挂 ≥2 个网络时，旧模板无分
 # 隔拼接全部网络名钉入 FLMX_NETWORK（废串）。现逐行计数、恰一
-# 个才钉实读值；多个按读不到走旧缺省回退 gost-network。两幕在
-# 钉值级验：多网络 → 钉 gost-network 而非拼接串；单网络 → 钉实
-# 读名。
+# 个才钉实读值。A2-09 残面（audit-max）续收口：多个时不再静默
+# 钉旧缺省 gost-network——与 Go 面 inspectLegacyResourceNames
+# 同口径钉无名并点名告警（真实网络为自定义名时静默改钉会与旧
+# 网络上的外部组件失联）；零个（实读为空）保留旧缺省回退但同
+# 样点名、不静默。三幕在钉值级验：多网络 → 不写 FLMX_NETWORK
+# 键＋告警点名各网络；单网络 → 钉实读名；零网络 → 钉旧缺省＋
+# 告警。
 test_panel_pin_network_multi_network_not_concatenated() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -8584,10 +9408,32 @@ EOF
   }
   ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
     fail "R1-01-L1: pinning must succeed in the multi-network scenario"
-  grep -q '^FLMX_NETWORK=gost-network$' "$pdir/.env" || fail "R1-01-L1: a multi-network read must fall back to the legacy default network, not a concatenated name"
-  if grep -q 'net_anet_b\|net_a net_b' "$pdir/.env"; then
+  if grep -q '^FLMX_NETWORK=' "$pdir/.env"; then
+    fail "A2-09R: a multi-network read must pin no network key at all (matching the Go face), never a fallback or concatenated name"
+  fi
+  grep -q '不钉 FLMX_NETWORK' "$pdir/pin.log" || fail "A2-09R: the multi-network skip must be named in the pin output, not silent"
+  grep -q 'net_a' "$pdir/pin.log" || fail "A2-09R: the multi-network warning must name the networks that were read"
+  if grep -q 'net_anet_b' "$pdir/.env"; then
     fail "R1-01-L1: the pinned network must never be a concatenation of network names"
   fi
+
+  # 零网络（实读为空）：保留旧缺省回退，但必须点名、不静默
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *"/app/data"*) printf 'kept_sqlite' ;;
+        *"/var/lib/postgresql/data"*) printf 'kept_pg' ;;
+        *) printf '' ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+  printf 'FLMX_SQLITE_VOLUME=kept_sqlite\nFLMX_POSTGRES_VOLUME=kept_pg\nCOMPOSE_PROJECT_NAME=kept_project\nDB_TYPE=sqlite\n' > "$pdir/.env"
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c >> pin.log 2>&1 ) || \
+    fail "A2-09R: pinning must succeed in the zero-network scenario"
+  grep -q '^FLMX_NETWORK=gost-network$' "$pdir/.env" || fail "A2-09R: an unreadable network read still falls back to the legacy default network"
+  grep -q '未能实读' "$pdir/pin.log" || fail "A2-09R: the zero-network fallback must be named in the pin output, not silent"
 
   docker() {
     if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
@@ -9425,5 +10271,21 @@ test_panel_migrate_pins_keys_before_any_up
 test_panel_migrate_reconcile_second_channel
 test_migrate_legacy_agent_snapshot_failure_aborts
 test_install_panel_force_reinstall_data_gate
+test_panel_pin_accident_gate_unknown_mount_aborts
+test_panel_update_pg_volume_check_rolls_back_on_mismatch
+test_panel_pin_no_live_read_no_volume_key
+test_panel_download_routed_total_budget
+test_panel_installer_script_curl_uses_timeouts
+test_panel_caddyfile_without_site_keeps_shared_addresses
+test_panel_uninstall_without_docker_cleans_full_residual_set
+test_panel_explicit_version_format_validated
+test_panel_probe_route_uses_channel_tag_grammar
+test_panel_normalize_proxy_prefix_strips_all_trailing_slashes
+test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp
+test_panel_run_lock_and_unique_caddy_backup_names
+test_panel_invalid_instance_id_hard_fails_on_manage_paths
+test_panel_menu5_site_block_filters_secret_query_from_access_log
+test_env_var_reading_crlf_shape
+test_panel_install_env_carries_trusted_proxies_entry
 
 echo "install script tests passed"
