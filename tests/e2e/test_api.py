@@ -5,7 +5,7 @@ Tests API responses directly without browser.
 
 import pytest
 
-from utils.api_client import APIClient
+from utils.api_client import APIClient, TestUser
 
 
 @pytest.mark.api
@@ -30,7 +30,7 @@ class TestAPIAuthentication:
 
     def test_login_success(self, api_client: APIClient):
         """Test successful login."""
-        response = api_client.login("admin@user", "admin@user")
+        response = api_client.login(*TestUser.DEFAULT_ADMIN)
         assert response["code"] == 0
         assert "token" in response["data"]
         assert api_client.token is not None

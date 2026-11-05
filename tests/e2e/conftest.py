@@ -12,16 +12,19 @@ from typing import Any, Callable, Generator, Optional
 import pytest
 from playwright.sync_api import APIRequestContext, BrowserContext, Page, Playwright
 
-from utils.api_client import APIClient, TestUser
+from utils.api_client import ADMIN_SEED_PASSWORD, ADMIN_USER, APIClient, TestUser
 
 DEFAULT_BACKEND_PORT = 6365
 DEFAULT_FRONTEND_PORT = 3000
 DEFAULT_JWT_SECRET = "test-secret-e2e-key-do-not-use-in-production"
-# Must match the backend seed (go-backend repository.go seedData). The old
-# value "admin_user" is only a default-*password candidate* in the backend,
-# never a username — every login with it failed by construction (X02-002).
-DEFAULT_ADMIN_USER = "admin@user"
-DEFAULT_ADMIN_PASSWORD = "admin@user"
+# Must match the backend seed (go-backend repository.go seedData). Since
+# 2.0.0 the seed password is random unless the operator injects one via
+# the FLMX_ADMIN_PASSWORD env var; the harness (CI job / with_server.py)
+# always injects it, and the fixtures read the same variable through
+# utils.api_client (FIX-CI-1). The old literal value was retired with
+# the public default password — logging in with it fails by design.
+DEFAULT_ADMIN_USER = ADMIN_USER
+DEFAULT_ADMIN_PASSWORD = ADMIN_SEED_PASSWORD
 # The seed admin's token is restricted to /user/updatePassword until the
 # default password is changed (backend M-05), so authenticated fixtures
 # change it once per server lifetime and use this password afterwards.
@@ -56,7 +59,15 @@ def bootstrap_admin_client(api_client: APIClient) -> APIClient:
     if response.get("code") != 0:
         response = _login_wait_rate_limit(api_client, DEFAULT_ADMIN_USER, E2E_ADMIN_PASSWORD)
         if response.get("code") != 0:
-            raise RuntimeError(f"E2E admin login failed: {response}")
+            hint = ""
+            if not DEFAULT_ADMIN_PASSWORD:
+                hint = (
+                    " (FLMX_ADMIN_PASSWORD is not set in the test environment:"
+                    " start the backend with it — see the CI e2e-api job or"
+                    " with_server.py — or read the one-time initial password"
+                    " file named in the backend startup log)"
+                )
+            raise RuntimeError(f"E2E admin login failed: {response}{hint}")
         return api_client
 
     if response.get("data", {}).get("requirePasswordChange"):
