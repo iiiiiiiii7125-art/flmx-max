@@ -371,6 +371,45 @@ test_panel_download_routed_total_budget() (
   assert_equals "fixture-body" "$(cat "$dest")" "A1-01: the downloaded body must land verbatim"
 )
 
+# A1-02（audit-max）：run_verified_installer_script 的 curl 此前是
+# 裸 -fsSL——无连接超时、无总界、无地板看门狗、无重试，
+# get.docker.com 连通后停滞（TCP 开、零字节）时 install_docker
+# 永不返回、包管理器兜底永不触发。与 L2-11 对 download_verified
+# 的钉格同型：断言该函数的 curl 参数集带齐看门狗，且校验通过
+# 后脚本被执行（夹具脚本仅 exit 0）。
+test_panel_installer_script_curl_uses_timeouts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local log
+  log=$(mktemp)
+  CURL_ARGS_LOG="$log"
+
+  curl() {
+    echo "$*" >> "$CURL_ARGS_LOG"
+    local output=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      shift
+    done
+    printf 'exit 0\n' > "$output"
+    return 0
+  }
+
+  local expected
+  expected=$(printf 'exit 0\n' | sha256sum | awk '{print $1}')
+  run_verified_installer_script "https://get.docker.com" "$expected" >/dev/null || \
+    fail "A1-02: the verified installer script should run with the stub"
+  grep -q -- '--connect-timeout' "$log" || fail "A1-02: the installer-script curl must carry --connect-timeout"
+  grep -q -- '--max-time' "$log" || fail "A1-02: the installer-script curl must carry --max-time"
+  grep -q -- '--speed-limit' "$log" || fail "A1-02: the installer-script curl must carry the stall watchdog (--speed-limit/--speed-time)"
+  grep -q -- '--retry' "$log" || fail "A1-02: the installer-script curl must carry --retry"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -9785,5 +9824,6 @@ test_panel_pin_accident_gate_unknown_mount_aborts
 test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key
 test_panel_download_routed_total_budget
+test_panel_installer_script_curl_uses_timeouts
 
 echo "install script tests passed"

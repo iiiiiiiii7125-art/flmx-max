@@ -561,7 +561,11 @@ run_verified_installer_script() {
   fi
   local tmp actual rc
   tmp=$(mktemp) || return 1
-  if ! curl -fsSL "$url" -o "$tmp"; then
+  # A1-02：与 download_verified 同套看门狗（L2-11 口径）——旧实
+  # 现裸 curl 无超时/重试，get.docker.com 连通后停滞（TCP 开、
+  # 零/涓流字节）时本函数永不返回，install_docker 的包管理器
+  # 兜底永不触发、首装无限挂死。脚本体积小，总界取 120s。
+  if ! curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 120 "$url" -o "$tmp"; then
     rm -f "$tmp"
     echo "⚠️ 安装脚本下载失败: $url"
     return 1
