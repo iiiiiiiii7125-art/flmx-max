@@ -287,9 +287,17 @@ func TestResolveDownload(t *testing.T) {
 	if d["url"] != "https://mirror.example/https://github.com/XTLS/Xray-core/releases/download/v25.1.1/Xray-linux-{ARCH}.zip" {
 		t.Fatalf("url: %v", d["url"])
 	}
+	// C2-02: the anchor is the GitHub API asset digest (tag pinned),
+	// never the co-located .dgst checksum file.
+	if d["github"].(map[string]interface{})["repo"] != "XTLS/Xray-core" || d["github"].(map[string]interface{})["tag"] != "v25.1.1" {
+		t.Fatalf("xray github anchor: %v", d["github"])
+	}
+	if _, weak := d["checksumUrl"]; weak {
+		t.Fatalf("xray must not carry a checksumUrl anchor: %v", d)
+	}
 	latest, _ := ResolveDownload(xray, "latest", "")
-	if !strings.Contains(latest["url"].(string), "/releases/latest/download/") || latest["checksumUrl"] == "" {
-		t.Fatalf("latest: %v", latest)
+	if !strings.Contains(latest["url"].(string), "{VERSION}") || latest["github"].(map[string]interface{})["repo"] != "XTLS/Xray-core" {
+		t.Fatalf("xray latest must defer to the agent like sing-box: %v", latest)
 	}
 
 	snell, _ := Lookup(TypeSnell)

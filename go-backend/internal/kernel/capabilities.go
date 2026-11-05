@@ -95,14 +95,20 @@ type Info struct {
 	Relay bool `json:"relay,omitempty"`
 }
 
+// Xray gets the sing-box treatment (C2-02): the integrity anchor is the
+// GitHub release API's asset digest, not the .dgst checksum file served
+// from the same release as the binary. A co-located checksum file is a
+// single self-consistent anchor — one route serving a fake (binary,
+// .dgst) pair installs whenever the agent's cross-route corroboration
+// degrades to that route. The API digest is corroborated cross-route
+// by the agent and a release without a digest fails closed.
 var xrayDownload = &Download{
 	URL:         "https://github.com/XTLS/Xray-core/releases/download/v{VERSION}/Xray-linux-{ARCH}.zip",
-	LatestURL:   "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-{ARCH}.zip",
-	ChecksumURL: "https://github.com/XTLS/Xray-core/releases/download/v{VERSION}/Xray-linux-{ARCH}.zip.dgst",
-	LatestSum:   "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-{ARCH}.zip.dgst",
 	Archive:     "zip",
 	BinName:     "xray",
 	ArchMap:     map[string]string{"amd64": "64", "arm64": "arm64-v8a", "386": "32", "arm": "arm32-v7a"},
+	GitHubRepo:  "XTLS/Xray-core",
+	GitHubAsset: "Xray-linux-{ARCH}.zip",
 	Mirrorable:  true,
 }
 

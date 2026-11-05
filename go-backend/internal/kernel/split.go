@@ -420,6 +420,13 @@ type GeoFile struct {
 // v2fly releases Xray bundles; the agent refreshes them daily so the
 // categories stay current between kernel upgrades. mirror is the panel's
 // GitHub proxy ("" for none).
+//
+// C2-02 residual (accepted, unlike the Xray binary above): GeoData keeps
+// the co-located .sha256sum as its anchor — the agent verifies it and
+// corroborates cross-route, degrading to the single anchor when no
+// other route answers. These are daily-refreshed data files, not code;
+// a digest-anchored path would need a GeoFile digest field consumed by
+// the agent's geodata fetcher, which does not exist today.
 func XrayGeoData(mirror string) []GeoFile {
 	file := func(name, repo, asset string) GeoFile {
 		u := "https://github.com/v2fly/" + repo + "/releases/latest/download/" + asset
