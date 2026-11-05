@@ -909,7 +909,7 @@ func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Reque
 		}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(idx int, nodeID int64, url, token string) {
+		go func(idx int, nodeID int64, url, token, rawConfig string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			info, connectErr := fc.Connect(url, token, localDomain)
@@ -938,21 +938,10 @@ func (h *Handler) federationRemoteUsageList(w http.ResponseWriter, r *http.Reque
 			syncs[idx].versionWarning = info.VersionWarning
 			logFederationVersionWarning(info)
 
-			configData, _ := json.Marshal(map[string]interface{}{
-				"shareId":        info.ShareID,
-				"maxBandwidth":   info.MaxBandwidth,
-				"currentFlow":    info.CurrentFlow,
-				"expiryTime":     info.ExpiryTime,
-				"portRangeStart": info.PortRangeStart,
-				"portRangeEnd":   info.PortRangeEnd,
-				// D3-04: 同步刷新 relay 凭据（存量 RemoteConfig 的
-				// 凭据自愈路径之一，另一处见 applyFederationRuntime）。
-				"relayUsername": info.RelayUsername,
-				"relayPassword": info.RelayPassword,
-				"panelVersion":  info.PanelVersion,
-			})
-			_ = h.repo.UpdateNodeRemoteConfig(nodeID, string(configData))
-		}(i, node.ID, url, token)
+			// B6-05: 经 mergeRemoteUsageSyncConfig 合并落盘（回执
+			// 未携带凭据时保留存量凭据），不再整表覆写。
+			_ = h.repo.UpdateNodeRemoteConfig(nodeID, mergeRemoteUsageSyncConfig(rawConfig, info))
+		}(i, node.ID, url, token, node.RemoteConfig.String)
 	}
 	wg.Wait()
 
@@ -1091,6 +1080,41 @@ func parseRemoteShareUsageConfig(raw string) (int64, int64, int64, int64, int, i
 	portRangeStart := int(asInt64(cfg["portRangeStart"], 0))
 	portRangeEnd := int(asInt64(cfg["portRangeEnd"], 0))
 	return shareID, maxBandwidth, currentFlow, expiryTime, portRangeStart, portRangeEnd
+}
+
+// mergeRemoteUsageSyncConfig 把一次用量同步的 Connect 回执合并进
+// 存量 RemoteConfig（B6-05）：用量字段（shareId/带宽/已用/到期/
+// 端口范围）照常以回执为准刷新，其余存量键保留；relay 凭据与
+// panelVersion 仅在回执非空时覆写——与 mergeRemoteConnectCredentials
+// 的「回执未携带凭据时保留存量值」同口径。此前用量同步把固定键集
+// 整体 Marshal 后无条件覆写，回执不带凭据（旧提供方，或提供方
+// ensurePeerShareRelayCredentials 补发失败记日志后继续发空值）时
+// 本地凭据被抹成空串，建链断裂直至下一次带凭据的同步才自愈。
+func mergeRemoteUsageSyncConfig(rawConfig string, info *client.RemoteNodeInfo) string {
+	cfg := map[string]interface{}{}
+	if trimmed := strings.TrimSpace(rawConfig); trimmed != "" {
+		_ = json.Unmarshal([]byte(trimmed), &cfg)
+	}
+	cfg["shareId"] = info.ShareID
+	cfg["maxBandwidth"] = info.MaxBandwidth
+	cfg["currentFlow"] = info.CurrentFlow
+	cfg["expiryTime"] = info.ExpiryTime
+	cfg["portRangeStart"] = info.PortRangeStart
+	cfg["portRangeEnd"] = info.PortRangeEnd
+	if strings.TrimSpace(info.RelayUsername) != "" {
+		cfg["relayUsername"] = info.RelayUsername
+	}
+	if strings.TrimSpace(info.RelayPassword) != "" {
+		cfg["relayPassword"] = info.RelayPassword
+	}
+	if strings.TrimSpace(info.PanelVersion) != "" {
+		cfg["panelVersion"] = info.PanelVersion
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return rawConfig
+	}
+	return string(data)
 }
 
 // mergeRemoteConnectCredentials 把一次 Connect 回执中的 relay 凭据与
