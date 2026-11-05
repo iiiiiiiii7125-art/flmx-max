@@ -9302,6 +9302,73 @@ test_install_script_rejects_malformed_explicit_versions() (
     "$(build_download_url)" \
     "A3-02: canonical download URL for a valid version"
 )
+
+# A3-01: latest 版本解析不得单路线采信——首个给出 tag 的线路若是
+# 第三方代理，其 tag 必须经另一条不同线路复核一致才可采信：异路
+# 异值硬失败、异路全部无应答 fail-closed（旧实现首个合格 tag 即
+# 用，任一线路回一个形态合法的旧 tag 就静默装旧版，LIVE-A S3 实
+# 证）。直连（github.com 本体）当选时属规范源：异路异值同样硬失
+# 败，无应答时点名后单源采信。桩 curl 按 URL 中的线路前缀供数，
+# API 法一律失败、只走重定向法。
+test_install_script_latest_resolution_requires_corroboration() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  ROUTES_STAGE=2
+  LATEST_B_MODE="same"
+
+  curl() {
+    local all="$*"
+    case "$all" in
+      *api.github.com*) return 22 ;;
+      *url_effective*)
+        case "$all" in
+          *b.example*)
+            case "$LATEST_B_MODE" in
+              different) printf 'https://github.com/%s/releases/tag/1.9.0' "$REPO" ;;
+              silent) return 22 ;;
+              *) printf 'https://github.com/%s/releases/tag/1.9.9' "$REPO" ;;
+            esac
+            ;;
+          *) printf 'https://github.com/%s/releases/tag/1.9.9' "$REPO" ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  # 代理当选 + 异路同值 → 采信。
+  DOWNLOAD_ROUTES=("https://a.example" "https://b.example")
+  LATEST_B_MODE="same"
+  assert_equals "1.9.9" "$(resolve_latest_release_tag 2>/dev/null)" \
+    "A3-01: corroborated latest tag should be accepted"
+
+  # 代理当选 + 异路异值 → 硬失败（旧 tag 不得被采信）。
+  LATEST_B_MODE="different"
+  if resolve_latest_release_tag >/dev/null 2>&1; then
+    fail "A3-01: latest tag from a proxy must be rejected when another route disagrees"
+  fi
+
+  # 代理当选 + 异路全无应答 → fail-closed。
+  LATEST_B_MODE="silent"
+  if resolve_latest_release_tag >/dev/null 2>&1; then
+    fail "A3-01: latest tag from a proxy must fail closed when no other route answers"
+  fi
+
+  # 直连当选 + 异路无应答 → 规范源点名后采信。
+  DOWNLOAD_ROUTES=("" "https://b.example")
+  LATEST_B_MODE="silent"
+  assert_equals "1.9.9" "$(resolve_latest_release_tag 2>/dev/null)" \
+    "A3-01: direct-sourced latest tag should be accepted when proxies are silent"
+
+  # 直连当选 + 异路异值 → 同样硬失败。
+  LATEST_B_MODE="different"
+  if resolve_latest_release_tag >/dev/null 2>&1; then
+    fail "A3-01: latest tag must be rejected when another route reports a different tag"
+  fi
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -9353,6 +9420,7 @@ test_install_script_binary_anchor_passes
 test_install_script_binary_anchor_mismatch_rejects
 test_install_script_binary_anchor_degrades
 test_install_script_rejects_malformed_explicit_versions
+test_install_script_latest_resolution_requires_corroboration
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance

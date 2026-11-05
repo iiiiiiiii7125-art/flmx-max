@@ -393,23 +393,129 @@ extend_download_routes() {
   return 1
 }
 
+# latest_tag_pattern：渠道 tag 形态（J-02，与 Go 侧
+# releaseChannelFromTag / stableVersionPattern 同口径）。稳定渠道只
+# 接受纯数字 tag；FLMX_RELEASE_CHANNEL=dev|beta 时接受任意数字开
+# 头 tag（beta 渠道）。默认稳定渠道，永不解析出 beta。主解析与
+# A3-01 异路复核取数共用此定义，避免两处形态漂移。
+latest_tag_pattern() {
+  case "${FLMX_RELEASE_CHANNEL:-stable}" in
+    dev|beta) echo '^[0-9][0-9A-Za-z.\-]*$' ;;
+    *) echo '^[0-9]+(\.[0-9]+)+$' ;;
+  esac
+}
+
+# fetch_latest_tag_from_route <前缀> <max-time>：从单条路线取
+# latest tag（先重定向法、后 API 法，与主解析同法），取到合格
+# tag 回显并返回 0，否则返回 1。供 corroborate_latest_tag 异路
+# 复核使用——复核必须走与主解析相同的取数方法。
+fetch_latest_tag_from_route() {
+  local prefix="$1" max_time="$2"
+  local tag_pattern effective_url tag api_tag
+  tag_pattern=$(latest_tag_pattern)
+  effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "https://github.com/${REPO}/releases/latest")" 2>/dev/null || true)
+  tag="${effective_url##*/}"
+  if [[ "$tag" =~ $tag_pattern ]]; then
+    echo "$tag"
+    return 0
+  fi
+  api_tag=$(curl -fsSL --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "https://api.github.com/repos/${REPO}/releases/latest")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
+  if [[ "$api_tag" =~ $tag_pattern ]]; then
+    echo "$api_tag"
+    return 0
+  fi
+  return 1
+}
+
+# latest_source_is_trusted <获胜前缀>：A3-01/A3-03 共用的下载源
+# 信任分级。直连（前缀为空）取的是 github.com 本体、面板源前缀
+# 是运维自有面板——这两类是规范/自有源，与第三方代理的风险模
+# 型不同（见 corroborate_latest_tag）。第三方代理前缀不在此列。
+latest_source_is_trusted() {
+  local winner="$1"
+  [[ -z "$winner" ]] && return 0
+  local panel_prefix=""
+  panel_prefix=$(derive_panel_prefix 2>/dev/null || true)
+  [[ -n "$panel_prefix" && "$winner" == "$panel_prefix" ]]
+}
+
+# corroborate_latest_tag <获胜前缀> <tag>：A3-01 版本面第二锚。
+# 旧实现逐路线串行、首个解析出合格 tag 的路线即被采信：任一第
+# 三方代理只要回一个形态合法的旧 tag，新装节点就静默装上旧版
+# 正版 agent（本体与其 .sha256 都从该 tag 取、校验自洽），无任
+# 何下限与告警（LIVE-A S3 实证）。现口径：
+#   - 任一异路给出不同 tag → 硬失败（有线路在说谎，不采信）；
+#   - 异路给出相同 tag → 复核通过；
+#   - 异路全部无应答：获胜源是第三方代理 → fail-closed（拒绝
+#     单源采信，并提示可显式 VERSION= 兜底）；获胜源是直连/
+#     面板源（规范/自有源）或运维显式指定的单路（PROXY_URL 覆
+#     盖、PROXY_ENABLED=false）→ 点名后单源采信——这两类形态
+#     里不存在「被陌生代理喂值」的威胁，fail-closed 只会打死
+#     面板源分发与直连独占两种既定部署形态。
+# 整轮复核共用 20s 总界（与二进制第二锚同值），逐路 --max-time
+# 取剩余量与 10s 的较小者。路线表只有一条时先 extend 补测一次
+# （与 corroborate_binary_anchor 同机制）。
+corroborate_latest_tag() {
+  local winner="$1" tag="$2"
+  local -a candidates=()
+  local prefix
+  for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+    [[ "$prefix" == "$winner" ]] && continue
+    candidates+=("$prefix")
+  done
+  if [[ ${#candidates[@]} -eq 0 ]] && extend_download_routes; then
+    for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+      [[ "$prefix" == "$winner" ]] && continue
+      candidates+=("$prefix")
+    done
+  fi
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    if latest_source_is_trusted "$winner" || [[ "$(route_mode)" != "builtin" ]]; then
+      echo "⚠️ 最新版本 $tag 由单条路线解析、无异路可复核，按该源采信（A3-01）" >&2
+      return 0
+    fi
+    echo "❌ 最新版本解析失败：路线表无第二条路线可复核，拒绝单源采信（A3-01）。可显式指定 VERSION=<版本号> 后重试" >&2
+    return 1
+  fi
+  local deadline=$(( $(date +%s) + 20 ))
+  local other remain max_time
+  for prefix in "${candidates[@]}"; do
+    remain=$(( deadline - $(date +%s) ))
+    if (( remain <= 0 )); then
+      break
+    fi
+    max_time=10
+    if (( remain < max_time )); then max_time=$remain; fi
+    other=$(fetch_latest_tag_from_route "$prefix" "$max_time") || continue
+    if [[ "$other" != "$tag" ]]; then
+      echo "❌ 最新版本解析跨线路复核不一致，拒绝采信：线路（${winner:-直连}）给出 $tag、线路（${prefix:-直连}）给出 $other（A3-01）" >&2
+      return 1
+    fi
+    # 通过文案走 stderr：本函数的调用方以 $(...) 捕获解析结果，
+    # stdout 只许回显 tag 本身。
+    echo "✅ 最新版本 $tag 已由第二线路（${prefix:-直连}）复核一致" >&2
+    return 0
+  done
+  if latest_source_is_trusted "$winner"; then
+    echo "⚠️ 最新版本 $tag 的异路复核无应答；获胜源为直连/面板源，按单源采信（A3-01）" >&2
+    return 0
+  fi
+  echo "❌ 最新版本解析无法复核：获胜线路（${winner:-直连}）为第三方代理、其他线路均未给出版本号，拒绝单源采信 $tag（A3-01）。可显式指定 VERSION=<版本号> 后重试" >&2
+  return 1
+}
+
 resolve_latest_release_tag() {
   local effective_url tag api_tag latest_url api_url tag_pattern
 
-  # J-02: 渠道分流（与 Go 侧 releaseChannelFromTag / stableVersionPattern
-  # 同口径）。稳定渠道只接受纯数字 tag；FLMX_RELEASE_CHANNEL=dev|beta
-  # 时接受任意数字开头 tag（beta 渠道）。默认稳定渠道，永不解析出 beta；
-  # beta 须显式 VERSION 指定或切 dev/beta 渠道安装。
-  case "${FLMX_RELEASE_CHANNEL:-stable}" in
-    dev|beta) tag_pattern='^[0-9][0-9A-Za-z.\-]*$' ;;
-    *) tag_pattern='^[0-9]+(\.[0-9]+)+$' ;;
-  esac
+  # J-02: 渠道分流口径见 latest_tag_pattern（与主解析外复核共用）。
+  tag_pattern=$(latest_tag_pattern)
 
   latest_url="https://github.com/${REPO}/releases/latest"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"
 
   # 1.7.7：逐路线尝试（每条路线内先重定向法、后 API 法），首个解析
-  # 出合格 tag 的路线即用；路线全败时按直选口径补测/续切一次。
+  # 出合格 tag 的路线成为候选，须经 A3-01 异路复核才采信（见
+  # corroborate_latest_tag）；路线全败时按直选口径补测/续切一次。
   # L2-06③（R5-FD）：整轮总量上限（默认 120s，FLMX_RESOLVE_BUDGET_SECONDS
   # 可调）——旧实现每路线重定向法 30s＋API 法 30s 串行，11 线路＋
   # extend 一轮可达 11 分钟以上且无上限。逐次尝试按剩余预算收紧
@@ -430,7 +536,13 @@ resolve_latest_release_tag() {
       tag="${effective_url##*/}"
       # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
       # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
+      # A3-01: 合格也只是候选——须经 corroborate_latest_tag 异路复核
+      # 才可采信，复核不过整轮失败（不换线重试：有线路在给出不一
+      # 致的版本事实，继续采信任何单源都不安全）。
       if [[ "$tag" =~ $tag_pattern ]]; then
+        if ! corroborate_latest_tag "$prefix" "$tag"; then
+          return 1
+        fi
         echo "$tag"
         return 0
       fi
@@ -444,6 +556,10 @@ resolve_latest_release_tag() {
       if (( remain < max_time )); then max_time=$remain; fi
       api_tag=$(curl -fsSL --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
       if [[ "$api_tag" =~ $tag_pattern ]]; then
+        # A3-01: 同重定向法，采信前须过异路复核。
+        if ! corroborate_latest_tag "$prefix" "$api_tag"; then
+          return 1
+        fi
         echo "$api_tag"
         return 0
       fi
