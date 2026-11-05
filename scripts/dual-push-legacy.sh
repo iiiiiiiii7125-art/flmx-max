@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # dual-push-legacy.sh — 改名过渡双推的机械止点判定（A4-05 / XC4-B2）。
 #
-# 旧仓 flmx-flux-panel-backend 随 1.9.8 起与新仓双推、至 1.9.10 止
-# （含），1.9.11 起停推。判定原本只是 docker-build.yml check-version
+# 旧仓 flmx-flux-panel-backend 随 1.9.8 起与新仓双推、至 2.0.0 止
+# （含），2.0.1 起停推。止点原定 1.9.10，因本版改号 2.0.0 随移：
+# 双推窗口恒为改名过渡的 2 个版本（1.9.9、2.0.0）。判定原本只是
+# docker-build.yml check-version
 # 作业里的一段内联 bash：改坏（比较方向、止点数字、剥后缀规则）无
 # 任何本地可跑的门会红，只能等真发版暴露（XC-4 差集 B-2）。现抽到
 # 本脚本成为唯一判定源：workflow 只负责调用并把结论写进
@@ -17,9 +19,9 @@
 # （fail-closed：调用方不得在判定失败时默认双推或默认停推）。
 set -u
 
-CUTOFF_MAJOR=1
-CUTOFF_MINOR=9
-CUTOFF_PATCH=10
+CUTOFF_MAJOR=2
+CUTOFF_MINOR=0
+CUTOFF_PATCH=0
 
 version="${1:-}"
 if [ -z "$version" ]; then

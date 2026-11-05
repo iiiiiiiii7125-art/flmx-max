@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dual-push-legacy-selftest.sh — 双推止点判定的边界自检（XC4-B2）。
 #
-# 背景：双推截止（≤1.9.10）原本只是 docker-build.yml 内联 bash，
+# 背景：双推截止（≤2.0.0）原本只是 docker-build.yml 内联 bash，
 # 无自测覆盖，判定改坏要等真发版才暴露。判定抽成
 # scripts/dual-push-legacy.sh 后，本自检钉住边界格，并核 workflow
 # 确实调用该脚本（删掉调用/改回内联，本自检先红）。
@@ -26,13 +26,16 @@ expect() { # $1=version $2=expected
 
 echo "== boundary grid =="
 expect "1.9.8"        true   # 双推窗口起点一带
-expect "1.9.9"        true
-expect "1.9.10"       true   # 止点本身（含）
-expect "1.9.10-beta"  true   # 后缀剥除后等于止点
-expect "1.9.11"       false  # 止点+1：停推
-expect "1.9.11-rc1"   false
-expect "1.10.0"       false  # 次版本进位
-expect "2.0.0"        false  # 大版本跳变
+expect "1.9.9"        true   # 双推第 1 个版本
+expect "1.9.10"       true   # 原止点（改号后落入窗口内）
+expect "1.9.11"       true   # 原停推点（随止点后移入窗）
+expect "1.10.0"       true   # 窗口内（≤2.0.0 一律双推）
+expect "2.0.0"        true   # 止点本身（含）：双推第 2 个版本
+expect "2.0.0-beta"   true   # 后缀剥除后等于止点
+expect "2.0.1"        false  # 止点+1：停推
+expect "2.0.1-rc1"    false
+expect "2.1.0"        false  # 次版本进位
+expect "3.0.0"        false  # 大版本跳变
 expect "1.9"          true   # 缺段补 0 → 1.9.0 ≤ 止点
 
 echo "== fail-closed on empty version =="

@@ -2543,7 +2543,7 @@ panel_retry_max_args() {
 }
 
 # R5-B5B D19: 安全下载（带 .sha256 校验，缺失即拒）。
-# FLMX_VERIFY_DOWNLOADS=0 可跳过，默认开启；旧名 FLVX_VERIFY_DOWNLOADS 的双读已于 1.9.10 退场。
+# FLMX_VERIFY_DOWNLOADS=0 可跳过，默认开启；旧名 FLVX_VERIFY_DOWNLOADS 的双读已于 2.0.0 退场。
 # F-138: 边角组合收紧为 fail-closed——仅显式 "0" 可关闭校验（误填
 # true/yes 等不再静默跳过）；缺少 sha256sum 时拒绝（否则空 .sha256 与
 # 空 actual 会 ""=="" 误判通过）；.sha256 内容必须是 64 位十六进制。

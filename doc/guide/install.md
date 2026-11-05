@@ -170,7 +170,7 @@ wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest
 
 ### 内核目录覆盖（FLMX_KERNEL_DIR）
 
-agent 把各内核的二进制、`state.json` 等状态文件与 geodata 都放在一个**内核状态根目录**下。默认不用设置：脚本形态是 `/etc/flmx_agent/kernels`（改名前装的节点迁移前为 `/etc/flux_agent/kernels`），容器形态由镜像把该目录钉在数据卷上（容器重建不丢内核状态）。要改到别的目录，用 agent 进程的环境变量 `FLMX_KERNEL_DIR=<绝对路径>` 覆盖（旧名 `FLVX_KERNEL_DIR` 的双读已于 1.9.10 退场，不再识别）。
+agent 把各内核的二进制、`state.json` 等状态文件与 geodata 都放在一个**内核状态根目录**下。默认不用设置：脚本形态是 `/etc/flmx_agent/kernels`（改名前装的节点迁移前为 `/etc/flux_agent/kernels`），容器形态由镜像把该目录钉在数据卷上（容器重建不丢内核状态）。要改到别的目录，用 agent 进程的环境变量 `FLMX_KERNEL_DIR=<绝对路径>` 覆盖（旧名 `FLVX_KERNEL_DIR` 的双读已于 2.0.0 退场，不再识别）。
 
 - **设置方法（脚本形态）**：执行 `systemctl edit flmx_agent`，在覆盖文件里写 `[Service]` 段加一行 `Environment=FLMX_KERNEL_DIR=<绝对路径>`，保存后 `systemctl daemon-reload && systemctl restart flmx_agent` 生效。容器形态下此变量由镜像与面板生成的安装命令管理，**不要手工改**——改了会与数据卷锚点口径冲突，容器重建后内核状态对不上。
 - **防错**：目录必须落在**持久化存储**上（放进容器可写层或内存盘，重启 / 重建即丢全部内核状态）；换目录等于换一整套内核状态根，旧目录的内核与状态**不会自动迁移**，切换后按全新根由面板重新下发，切换前先确认能接受节点内核短暂重建。
@@ -326,7 +326,7 @@ sudo systemctl restart caddy
 
 ### 日志脱敏豁免前缀（FLMX_LOG_REDACT_EXEMPT_PREFIXES）
 
-面板写日志时会对 URL 脱敏：query 整体丢弃，路径里疑似 token 的随机段掩码成 `***`（字母与数字混合的段长度 ≥ 8 即掩；纯字母或纯数字、无分隔符的整段长度 ≥ 16 才掩）——订阅源拉取等外发 URL 的日志走的也是这条规则，机场订阅链接里的 path 型 token 因此不会明文落盘。只有在排障确实需要看原文路径、且该路径段确知是**公开资源 ID 而不是凭据**时，才用这个变量豁免：`FLMX_LOG_REDACT_EXEMPT_PREFIXES` 是**后端进程的环境变量**，取值为逗号分隔的 URL 路径前缀（每项以 `/` 开头），路径命中任一前缀的 URL 在日志里**整条路径原文落盘**、不再做段掩码；旧名 `FLVX_LOG_REDACT_EXEMPT_PREFIXES` 的双读已于 1.9.10 退场、不再识别；不设（默认）即无豁免。
+面板写日志时会对 URL 脱敏：query 整体丢弃，路径里疑似 token 的随机段掩码成 `***`（字母与数字混合的段长度 ≥ 8 即掩；纯字母或纯数字、无分隔符的整段长度 ≥ 16 才掩）——订阅源拉取等外发 URL 的日志走的也是这条规则，机场订阅链接里的 path 型 token 因此不会明文落盘。只有在排障确实需要看原文路径、且该路径段确知是**公开资源 ID 而不是凭据**时，才用这个变量豁免：`FLMX_LOG_REDACT_EXEMPT_PREFIXES` 是**后端进程的环境变量**，取值为逗号分隔的 URL 路径前缀（每项以 `/` 开头），路径命中任一前缀的 URL 在日志里**整条路径原文落盘**、不再做段掩码；旧名 `FLVX_LOG_REDACT_EXEMPT_PREFIXES` 的双读已于 2.0.0 退场、不再识别；不设（默认）即无豁免。
 
 > **风险警告（这是放松脱敏的开关）**：命中豁免前缀的路径若实际含凭据（典型如机场订阅链接 `https://机场/link/<token>`），token 会**明文写进面板日志文件**，日志一旦外发排障就等于凭据外泄。只豁免确知段内容为公开 ID 的前缀，排障完及时撤下。另注意：豁免只作用于上述「疑似 token 段」的启发式掩码，面板自身订阅路径 `/api/v1/open_api/sub/<token>` 的硬掩码不受豁免影响、永远掩码。
 

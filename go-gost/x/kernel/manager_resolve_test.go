@@ -30,7 +30,7 @@ func TestResolveBaseDirEnvOverrideWins(t *testing.T) {
 	if got := ResolveBaseDir(); got != "/pinned/kernels" {
 		t.Fatalf("FLMX_KERNEL_DIR must win over the container fallback, got %q", got)
 	}
-	// 1.9.10 起旧名 FLVX_KERNEL_DIR 双读退场：只设旧名必须被忽略，
+	// 2.0.0 起旧名 FLVX_KERNEL_DIR 双读退场：只设旧名必须被忽略，
 	// 回落容器形态的工作目录根。
 	t.Setenv("FLMX_KERNEL_DIR", "")
 	if got := ResolveBaseDir(); got != filepath.Join("/data", "kernels") {

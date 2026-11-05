@@ -513,7 +513,7 @@ const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL1
 
 // isStoredDefaultPassword 判断存储的口令哈希是否为种子默认口令（M-05）。
 // 仅用于管理员账号；登录已做过一次 bcrypt，这里是通行密钥等无密码登录路径的补充检查。
-// R1-12-01：1.9.10 起新播种的初始口令是随机值（或 FLMX_ADMIN_PASSWORD
+// R1-12-01：2.0.0 起新播种的初始口令是随机值（或 FLMX_ADMIN_PASSWORD
 // 指定值），不再是公开字面量；repo 在播种/启动探针时登记的初始口令
 // 候选与字面量同口径参与裁决——初始口令未改前同样只发受限 token。
 // 字面量集保持不动：存量未认领部署的存储哈希仍是字面量，依赖它执法。

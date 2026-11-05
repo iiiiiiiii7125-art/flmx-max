@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// FLMX 改名过渡退场（1.9.10）：FLVX_* 旧名双读已经摘除——只设旧名
+// FLMX 改名过渡退场（2.0.0）：FLVX_* 旧名双读已经摘除——只设旧名
 // 时各消费面必须回落缺省行为，新名 FLMX_* 是唯一生效来源。存量部署
 // 须在升级前把 FLVX_* 键改名为 FLMX_*（见 doc/guide/upgrade.md）。
 func TestRenameCompatLegacyEnvRetired(t *testing.T) {

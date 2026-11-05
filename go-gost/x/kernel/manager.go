@@ -103,7 +103,7 @@ func probeKernelContainer() bool {
 //  1. FLMX_KERNEL_DIR, when set — explicit configuration always
 //     wins. The container image pins FLMX_KERNEL_DIR to the data
 //     volume for exactly this reason. (The legacy FLVX_KERNEL_DIR
-//     fallback read retired in 1.9.10.)
+//     fallback read retired in 2.0.0.)
 //  2. In the container form, <working directory>/kernels: the
 //     entrypoint pins the working directory to the mounted data
 //     directory that also holds config.json, so kernel binaries,

@@ -86,7 +86,7 @@ jobs:
             echo "push_latest=false" >> $GITHUB_OUTPUT
           fi
           # 改名过渡双推的机械止点：旧仓 flmx-flux-panel-backend 随
-          # 1.9.8 起双推、至 1.9.10 止（含），1.9.11 起停推。判定本
+          # 1.9.8 起双推、至 2.0.0 止（含），2.0.1 起停推。判定本
           # 体在 scripts/dual-push-legacy.sh（唯一判定源，边界格由
           # scripts/dual-push-legacy-selftest.sh 钉住，XC4-B2）——
           # 此前判定只以内联 bash 存在于本文件，改坏无任何本地门
@@ -94,7 +94,7 @@ jobs:
           # 给 build-go-backend，止点由判定执行、不靠发版人记得。
           DUAL_PUSH_LEGACY="$(bash scripts/dual-push-legacy.sh "$VERSION")"
           echo "dual_push_legacy=$DUAL_PUSH_LEGACY" >> $GITHUB_OUTPUT
-          echo "🚚 Legacy repo dual-push (flmx-flux-panel-backend): $DUAL_PUSH_LEGACY (version $VERSION vs cutoff 1.9.10)"
+          echo "🚚 Legacy repo dual-push (flmx-flux-panel-backend): $DUAL_PUSH_LEGACY (version $VERSION vs cutoff 2.0.0)"
 
   # C4-02（第三轮再审计）：发版路径门禁前置校验。本 workflow 的触发
   # （tag push + workflow_dispatch）与 ci-build（分支 push + PR）不相交，
@@ -301,7 +301,7 @@ jobs:
           # 改名过渡双推：后端镜像已迁至 flmx-panel-backend 新仓，旧仓
           # flmx-flux-panel-backend 以同构建同 tag 并行推送，供改名前
           # 的 compose 继续拉取。窗口由 check-version 的 dual_push_legacy
-          # 输出机械执行：版本 ≤1.9.10 时为 true（本段生效），1.9.11 起
+          # 输出机械执行：版本 ≤2.0.0 时为 true（本段生效），2.0.1 起
           # 为 false、本段自动跳过，旧仓就此停推，无需人工删段。
           if [ "${{ needs.check-version.outputs.dual_push_legacy }}" = "true" ]; then
             TAGS+=(-t "${{ env.REGISTRY }}/${OWNER}/flmx-flux-panel-backend:${VERSION}")
