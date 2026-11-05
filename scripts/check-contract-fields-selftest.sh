@@ -5,7 +5,10 @@
 # 目录：未变异镜像必须 PASS；把 types.ts 里已登记 nullable 字段的
 # `| null` 摘掉必须 FAIL 并点名该字段（C1 本体回归）；repository.go
 # 新增未登记且经 nullable 下发的 List* 出口必须 FAIL 点名（A4-04
-# 普查推导回归，变体 2）。
+# 普查推导回归，变体 2）；在册字段经 nullableInIPString 下发者
+# （TunnelApiItem.inIp）的 `| null` 摘掉同样必须 FAIL 点名
+# （R2-01-04 发射集推导回归，变体 3——旧手写名单下此变体静默
+# 通过）。
 #
 # typescript 解析与门禁本体同口径：优先镜像内 vite-frontend/
 # node_modules，其次脚本所在真实树的 node_modules，再次
@@ -55,6 +58,15 @@ if run_gate "$TMP/v1.log"; then
 fi
 grep -q "NodeApiItem.remark" "$TMP/v1.log" && echo "OK: variant 1 caught and named" || {
   echo "FAIL: variant 1 caught but the field was not named"; sed 's/^/    /' "$TMP/v1.log"; exit 1; }
+cp "$ROOT/$FE/api/types.ts" "$MIR/$FE/api/types.ts"
+
+echo "== variant 3: drop | null from TunnelApiItem.inIp (emitted via nullableInIPString) must FAIL and name it (R2-01-04) =="
+sed -i '0,/inIp?: string | null;/s//inIp?: string;/' "$MIR/$FE/api/types.ts"
+if run_gate "$TMP/v3.log"; then
+  echo "FAIL: variant 3 was not caught (inIp null-drop passed)"; exit 1
+fi
+grep -q "TunnelApiItem.inIp" "$TMP/v3.log" && echo "OK: variant 3 caught and named" || {
+  echo "FAIL: variant 3 caught but the field was not named"; sed 's/^/    /' "$TMP/v3.log"; exit 1; }
 cp "$ROOT/$FE/api/types.ts" "$MIR/$FE/api/types.ts"
 
 echo "== variant 2: new unregistered List* exit emitting a nullable field must FAIL and name it (A4-04) =="

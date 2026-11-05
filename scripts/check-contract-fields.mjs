@@ -5,9 +5,12 @@
  * 目的：把 X2 逐字段比对的结论固化成可重复执行的集合 diff，防止 types.ts
  * 与后端实际响应再次漂移。检查分七组：
  *
- *   C1  nullable 贯彻：后端 repository.go 的 List* 出口凡经 nullableString /
- *       nullableInt64 / nullableForwardIngress 下发的字段（JSON null），
- *       前端对应 interface 必须显式声明 `| null`（声明缺失同样算失败）。
+ *   C1  nullable 贯彻：后端 repository.go 的 List* 出口凡经 nullable*
+ *       辅助函数下发的字段（JSON null），前端对应 interface 必须显式
+ *       声明 `| null`（声明缺失同样算失败）。辅助函数集自 R2-01-04 起
+ *       机械推导：repository.go 中凡 func nullable…(…) interface{} 者
+ *       全入集（含手写名单曾漏列的 nullableInIPString，ListTunnels 的
+ *       inIp 在用）；推导集为空即前提失效 exit 2，不许空集静默放行。
  *       候选集自 A4-04 起机械推导：枚举全部 List* 方法，未登记者只要
  *       经 nullable* 下发即点名红（登记表＋明示排除表之外的出口不得
  *       静默绕过），不再只遍历手工登记的 5 个。
@@ -247,6 +250,29 @@ const configSf = ts.createSourceFile(
   ts.ScriptKind.TSX,
 );
 const repositoryGo = readCode("go-backend/internal/store/repo/repository.go", true);
+
+// R2-01-04：nullable 发射集机械推导——repository.go 中一切返回
+// interface{} 的 nullable* 辅助函数全入集，下方两处字段提取共用
+// NULLABLE_FIELD_RE。此前两处用手写名单（String|Int64|
+// ForwardIngress），漏了 nullableInIPString（ListTunnels 的
+// "inIp" 在册配对字段正经它下发）——该字段的可空契约此前只靠
+// C3 按名硬登记兜底，发射侧改形无门。文件读到却推出空集 =
+// 推导面前提失效，按本门惯例 exit 2。
+const NULLABLE_HELPERS = [
+  ...new Set(
+    [...repositoryGo.matchAll(/func (nullable\w+)\([^)]*\) interface\{\}/g)].map((m) => m[1]),
+  ),
+];
+if (repositoryGo !== "" && NULLABLE_HELPERS.length === 0) {
+  console.error(
+    "PREMISE FAILURE (exit 2): derived zero nullable* interface{} helpers from repository.go - derivation surface broken (R2-01-04)",
+  );
+  process.exit(2);
+}
+const NULLABLE_FIELD_RE = new RegExp(
+  `"(\\w+)":\\s*(?:${NULLABLE_HELPERS.join("|")})\\(`,
+  "g",
+);
 const handlerGo = readCode("go-backend/internal/http/handler/handler.go", true);
 const proberGo = readCode(
   "go-backend/internal/http/handler/tunnel_quality_prober.go",
@@ -355,9 +381,7 @@ const allListFns = [
     const span = goFuncSpan(repositoryGo, `func (r *Repository) ${fn}(`);
     const keys = span
       ? [
-          ...span.matchAll(
-            /"(\w+)":\s*nullable(?:String|Int64|ForwardIngress)\(/g,
-          ),
+          ...span.matchAll(NULLABLE_FIELD_RE),
         ].map((m) => m[1])
       : [];
     if (keys.length > 0) {
@@ -390,7 +414,7 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
     continue;
   }
   const nullableKeys = [
-    ...span.matchAll(/"(\w+)":\s*nullable(?:String|Int64|ForwardIngress)\(/g),
+    ...span.matchAll(NULLABLE_FIELD_RE),
   ].map((m) => m[1]);
   const block = tsInterfaceBlock(typesTs, iface);
   if (!block) {
