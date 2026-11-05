@@ -1106,21 +1106,21 @@ func detectVersion(bin string, args []string) string {
 	if len(args) == 0 {
 		return ""
 	}
-	cmd := exec.Command(bin, args...)
-	done := make(chan struct{})
-	var out []byte
-	go func() {
-		out, _ = cmd.CombinedOutput()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		<-done
-	}
+	// D2-04: the previous hand-rolled timeout ran CombinedOutput
+	// on a child goroutine and read cmd.Process from the caller on
+	// the timeout path — a data race — and if Start itself was
+	// delayed past 5s the kill was skipped and the caller (Apply,
+	// holding applyMu) blocked for the process's full natural
+	// life. CommandContext owns the whole lifecycle: the deadline
+	// kills the process and CombinedOutput returns.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	// A killed probe's children can inherit the output pipes and
+	// hold CombinedOutput open past the kill; WaitDelay bounds
+	// that wait so the 5s budget is real.
+	cmd.WaitDelay = 2 * time.Second
+	out, _ := cmd.CombinedOutput()
 	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 	if len(line) > 100 {
 		line = line[:100]
