@@ -75,7 +75,13 @@ func TestKU4ResolveGitHubAPIThroughAdmittedProxy(t *testing.T) {
 	}))
 	defer direct.Close()
 	proxy := f061ForwardingProxy(t, backend)
-	setKernelMirrorCandidates(t, proxy.URL)
+	// FIX-R2-10: a second admitted proxy gives the anchor
+	// corroboration a live different route that agrees on the
+	// digest. A lone proxy winner with no route able to
+	// corroborate now refuses instead of degrading (see
+	// TestResolveGitHubProxyWinnerNoCorroborationRefusedFixR210).
+	proxy2 := f061ForwardingProxy(t, backend)
+	setKernelMirrorCandidates(t, proxy.URL, proxy2.URL)
 
 	old := githubAPIBase
 	githubAPIBase = direct.URL

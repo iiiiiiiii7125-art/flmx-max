@@ -151,6 +151,17 @@ func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.
 	if !ok {
 		return false, errors.New("校验文件中没有 SHA256")
 	}
+	// FIX-R2-10 consumer landing: the anchor gates ADOPTING new
+	// content. When the fetched digest equals the installed
+	// file's, this round adopts nothing and makes no trust
+	// decision on the anchor, so it stays a silent no-op (the
+	// unchanged-round caliber: nothing downloaded, nothing
+	// logged); the corroboration below — with its layered
+	// verdicts — runs whenever new content is on the table.
+	path := filepath.Join(binDir, f.Name)
+	if have, err := fileSHA256(path); err == nil && have == want {
+		return false, nil
+	}
 	if err := corroborateAnchorDigest(ctx, winner, directForm(f.ChecksumURL), func(actx context.Context, alt *download.Plan) (string, error) {
 		var altBody strings.Builder
 		if _, err := fetchRanked(actx, alt, directForm(f.ChecksumURL), 64<<10, validateChecksumContent, &altBody); err != nil {
@@ -163,10 +174,6 @@ func stageGeoFile(ctx context.Context, binDir string, f GeoFile, plan *download.
 		return altWant, nil
 	}, want, note); err != nil {
 		return false, err
-	}
-	path := filepath.Join(binDir, f.Name)
-	if have, err := fileSHA256(path); err == nil && have == want {
-		return false, nil
 	}
 
 	// F-139 口径、KU4 形态 + 1.7.12 续传：数据文件（大文件流式）

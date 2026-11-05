@@ -113,7 +113,14 @@ func TestFetchRuleSetSlowRouteCompletes(t *testing.T) {
 // the degradation named; a differing second opinion still hard
 // fails; an agreeing one stays silent.
 func TestCorroborateAnchorDigestDegradeNote(t *testing.T) {
-	winner := download.Route{Prefix: "https://winner.invalid"}
+	// FIX-R2-10 pin migration: the degradation semantics pinned
+	// here now belong to the first-party class, so the winner is
+	// the direct route; one mirror candidate is registered so the
+	// corroboration plan is non-empty and the fetchOne stubs below
+	// are genuinely consulted. Mirror-winner layering is pinned by
+	// TestCorroborateAnchorDigestWinnerLayersFixR210.
+	setKernelMirrorCandidates(t, "https://other.invalid")
+	winner := download.Route{}
 	target := "https://example.invalid/release.sha256"
 
 	var notes []string

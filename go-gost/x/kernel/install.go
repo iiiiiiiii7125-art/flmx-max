@@ -506,34 +506,72 @@ func corroborateAnchorPlan(winner download.Route) *download.Plan {
 	return download.NewStaticPlan(routes)
 }
 
+// anchorWinnerFirstParty reports whether the winning route is in
+// the first-party class for anchor-corroboration layering
+// (FIX-R2-10, the same law the panel upgrade anchor, the agent
+// self-upgrade anchor and the generated install command have
+// followed since FIX-R2-9): the direct route, or the registered
+// panel-source route — its prefix is derived locally from the
+// agent's own configured panel address, the same trust domain as
+// the control channel that delivered the download descriptor (see
+// panel_route.go). Any other non-empty prefix is one of the
+// compile-time public mirrors: a third party.
+func anchorWinnerFirstParty(winner download.Route) bool {
+	if winner.Prefix == "" {
+		return true
+	}
+	for _, r := range panelExtraRoutes() {
+		if r.Prefix == winner.Prefix {
+			return true
+		}
+	}
+	return false
+}
+
 // corroborateAnchorDigest re-fetches the anchor behind directURL
 // through a route different from winner and requires the SAME
 // digest. fetchOne runs one anchor fetch over a given plan and
 // extracts the digest. Verdicts: a second route answering with a
 // DIFFERENT digest is a hard failure (the caller must refuse the
-// install); a second route not answering at all (every other
-// route dead) degrades to the single anchor — single-route
-// environments keep today's trust level instead of losing
-// installs, and the residual risk is exactly that case. The
+// install). When no second route can answer, the verdict is
+// layered by the winning route's identity (FIX-R2-10): a direct
+// or panel-source winner degrades to the single anchor — the
 // degradation is announced through note, the caller's
 // panel-visible log surface (RV2-03: a security control silently
-// weakening must not exist only in the agent's stdout); a nil
-// note falls back to stdout for callers without a surface.
+// weakening must not exist only in the agent's stdout), and a nil
+// note falls back to stdout for callers without a surface. A
+// third-party mirror winner fails closed instead: a single mirror
+// that wins the anchor leg while every corroborating route is
+// dead could otherwise serve a self-consistent fake (file,
+// digest) pair, the exact shape the corroboration exists to
+// defeat. An empty corroboration set is never a silent pass
+// either: first-party winners degrade with the same named notice,
+// mirror winners fail closed.
 func corroborateAnchorDigest(ctx context.Context, winner download.Route, directURL string, fetchOne func(context.Context, *download.Plan) (string, error), want string, note func(string)) error {
+	announce := func(msg string) {
+		if note != nil {
+			note(msg)
+		} else {
+			fmt.Printf("⚠️ %s\n", msg)
+		}
+	}
+	firstParty := anchorWinnerFirstParty(winner)
 	alt := corroborateAnchorPlan(winner)
 	if alt == nil {
+		if !firstParty {
+			return fmt.Errorf("跨线路锚复核失败：获胜线路为代理（%s）且无其他线路可供复核，无法复核校验锚，拒绝安装（FIX-R2-10 第二锚）", winner.Name())
+		}
+		announce(fmt.Sprintf("跨线路锚复核已降级：无其他线路可供复核，按单锚继续（获胜线路 %s）", winner.Name()))
 		return nil
 	}
 	actx, cancel := context.WithTimeout(ctx, anchorCorroborateTimeout)
 	defer cancel()
 	got, err := fetchOne(actx, alt)
 	if err != nil {
-		msg := fmt.Sprintf("跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（%v）", err)
-		if note != nil {
-			note(msg)
-		} else {
-			fmt.Printf("⚠️ %s\n", msg)
+		if !firstParty {
+			return fmt.Errorf("跨线路锚复核失败：获胜线路为代理（%s）且其他线路均未给出合法校验值，无法复核校验锚，拒绝安装（FIX-R2-10 第二锚）: %v", winner.Name(), err)
 		}
+		announce(fmt.Sprintf("跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（%v）", err))
 		return nil
 	}
 	if got != want {
