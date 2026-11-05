@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 	"go-backend/internal/http/client"
 	"go-backend/internal/http/response"
+	"go-backend/internal/kernel"
 	"go-backend/internal/security"
 	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
@@ -509,7 +511,12 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("用户不存在"))
 			return
 		}
-		h.repo.ResetUserFlowByUser(id, time.Now().UnixMilli())
+		// B2-02：重置落库失败必须如实报错，不再恒回成功
+		// （与上方存在性检查的 -2 口径一致）。
+		if err := h.repo.ResetUserFlowByUser(id, time.Now().UnixMilli()); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	} else {
 		if _, _, err := h.repo.GetUserTunnelUserAndTunnel(id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -519,7 +526,10 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		h.repo.ResetUserFlowByUserTunnel(id)
+		if err := h.repo.ResetUserFlowByUserTunnel(id); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -1480,6 +1490,30 @@ func panelMirrorPrefixFromAgentAddr(agentAddr string) string {
 // 路；全部异路都给不出合法校验值则降级单锚继续，并在命令输出
 // 中点名「跨线路锚复核已降级」。复核整轮共用 20s 总界、逐路
 // --max-time 取剩余量与 10s 的较小者（与四面总界口径一致）。
+// nodeSecretCharset 是节点 secret 的生成契约字符集（randomToken
+// (16) 的 32 位小写 hex）。B3-01：备份恢复等旁路曾把任意字符串
+// 写进 node.secret，而安装命令构造此前把 secret 无引号插值进
+// 以 root 执行的 shell 命令——含空格/引号/命令替换的存量 secret
+// 一键变命令注入。生成面双堵：nodeInstall 先以本字符集校验存
+// 量 secret（非法点名拒绝，见 validateNodeSecretForInstall），
+// 构造器再对全部插值走 shellQuoteForInstall 安全引用（纵深：
+// 即便某值绕过校验，引用形态也保证它只是一个参数）。
+var nodeSecretCharset = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func validateNodeSecretForInstall(secret string) error {
+	if !nodeSecretCharset.MatchString(secret) {
+		return fmt.Errorf("节点 secret 格式异常（应为 32 位小写十六进制），拒绝生成安装命令：该值可能经备份恢复等旁路写入，请先重置节点 secret")
+	}
+	return nil
+}
+
+// shellQuoteForInstall 把一个值安全地包成 POSIX sh 单引号参数：
+// 内嵌单引号以 POSIX 标准序列转义，值中的空格/$/反引号/分号
+// 在单引号内全部惰性化。
+func shellQuoteForInstall(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func buildNodeInstallCommand(version, agentAddr, secret string) string {
 	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
 	routes := make([]string, 0, len(githubFetchProxyCandidates)+2)
@@ -1508,7 +1542,7 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 		`if curl -fsSL --connect-timeout 5 --max-time 30 "$u/install.sh.sha256" -o ./install.sh.sha256 && grep -Eq '^[0-9a-f]{64}' ./install.sh.sha256 && curl -fsSL --connect-timeout 5 --max-time 60 "$u/install.sh" -o ./install.sh; then ok=1; w="$p"; break; fi; done; test "$ok" = 1` +
 		verifyStep +
 		corroborateStep +
-		` && chmod +x ./install.sh && VERSION=` + version + ` ./install.sh -a ` + agentAddr + ` -s ` + secret
+		` && chmod +x ./install.sh && VERSION=` + version + ` ./install.sh -a ` + shellQuoteForInstall(agentAddr) + ` -s ` + shellQuoteForInstall(secret)
 }
 
 // ---------------------------------------------------------------------
@@ -1643,7 +1677,7 @@ func agentImageRef(version string) string {
 func agentConfigWriteStep(agentAddr, secret string) string {
 	dataDir := agentDataDir()
 	return `mkdir -p ` + dataDir +
-		` && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' '` + agentAddr + `' '` + secret + `' > ` + dataDir + `/config.json)` +
+		` && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' ` + shellQuoteForInstall(agentAddr) + ` ` + shellQuoteForInstall(secret) + ` > ` + dataDir + `/config.json)` +
 		` && chmod 600 ` + dataDir + `/config.json` +
 		` && { [ -f ` + dataDir + `/gost.json ] || (umask 077; printf '{}\n' > ` + dataDir + `/gost.json); }`
 }
@@ -1757,6 +1791,12 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	secret, err := h.repo.GetNodeSecret(req.ID)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault("节点不存在"))
+		return
+	}
+	// B3-01：存量 secret 先过字符集门再进命令构造（非法点名拒
+	// 绝，不让旁路写进的任意字符串抵达 root shell）。
+	if err := validateNodeSecretForInstall(secret); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	panelAddr, err := h.repo.GetViteConfigValue("ip")
@@ -3071,9 +3111,14 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// 其他后置失败同口径进回执 warnings，不静默。此闭包只在同步
 	// 执行之后被调用，读取的是届时值。
 	var entryPortSyncWarnings []string
+	// B4-03：被移除入口节点的转发服务清理失败同口径进 warnings，
+	// 闭包在同步执行之后调用、读取届时值（与 entryPortSyncWarnings
+	// 同形态）。
+	var entryCleanupWarnings []string
 	respondTunnelUpdateOK := func() {
 		warnings := append(append([]string{}, portChangeWarnings...), relayResyncWarnings...)
 		warnings = append(warnings, entryPortSyncWarnings...)
+		warnings = append(warnings, entryCleanupWarnings...)
 		if len(warnings) > 0 {
 			response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"warnings": warnings}})
 			return
@@ -3083,7 +3128,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 
 	newEntryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
 	if !sameInt64Set(oldEntryNodeIDs, newEntryNodeIDs) {
-		h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
+		entryCleanupWarnings = h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
 		entryPortSyncWarnings = h.syncTunnelForwardsEntryPorts(id, newEntryNodeIDs)
 	}
 
@@ -3308,24 +3353,38 @@ func diffInt64s(base, subtract []int64) []int64 {
 	return uniqueInt64s(out)
 }
 
-func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64, oldEntryNodeIDs, newEntryNodeIDs []int64) {
+// cleanupTunnelForwardRuntimesOnRemovedEntryNodes 清理入口集变更
+// 后被移除节点上的转发运行时。B4-03：此前返回 void 且逐层吞错
+// ——listForwardsByTunnel 失败、nft reconcile 失败、gost 批量删
+// 除失败全部静默，而 tunnelUpdate 回执恒成功，残留转发服务在
+// 旧入口节点上继续监听旧端口（转发已改走新入口、无人再对账该
+// 节点）。现失败逐项汇成 warnings 由调用方随回执带出（与
+// syncTunnelForwardsEntryPorts 同口径）；当时清不掉的由重连对
+// 账的成员判定补扫（deleteOrphanedForwardService 的 B4-03 扩
+// 展：转发仍存在但节点已不在其隧道入口集时同样删除），不永久
+// 残留。
+func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64, oldEntryNodeIDs, newEntryNodeIDs []int64) []string {
 	if h == nil || h.repo == nil || tunnelID <= 0 {
-		return
+		return nil
 	}
 
 	removedNodeIDs := diffInt64s(oldEntryNodeIDs, newEntryNodeIDs)
 	if len(removedNodeIDs) == 0 {
-		return
+		return nil
 	}
 
 	forwards, err := h.listForwardsByTunnel(tunnelID)
-	if err != nil || len(forwards) == 0 {
-		return
+	if err != nil {
+		return []string{fmt.Sprintf("入口节点变更后清理旧节点转发服务失败：读取隧道转发列表出错（%v），残留服务将在节点重连对账时清除", err)}
+	}
+	if len(forwards) == 0 {
+		return nil
 	}
 
 	// S-06: 检查是否为 nftables 模式
 	nftMode, _, _ := h.tunnelUsesNftables(tunnelID)
 
+	var warnings []string
 	for i := range forwards {
 		f := &forwards[i]
 		if f == nil {
@@ -3334,19 +3393,23 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 		for _, nodeID := range removedNodeIDs {
 			if nftMode {
 				// S-06: nftables 模式下，对旧节点做 reconcile（声明式同步会移除多余规则）
-				// 若节点离线，reconcile 会返回错误，调用方应记录而非静默
+				// 若节点离线，reconcile 会返回错误：点名进回执
+				// warnings（B4-03），重连后由对账补扫，不静默。
 				if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
-					// 记录但不中断：离线节点的清理将在重连后通过对账完成
-					// （S-04 的 nodeOfflineError 机制）
+					warnings = append(warnings, fmt.Sprintf("节点 %d 的 nftables 规则清理失败（%v），将在节点重连对账时补扫", nodeID, err))
 					continue
 				}
 			} else {
-				// gost 模式：删除 service（离线错误会向上传播，由 S-04 机制处理）；
-				// realm 隧道走 Batch 变体的重渲染清理。
-				_ = h.deleteForwardServicesOnNodeBatch(f, nodeID)
+				// gost 模式：删除 service（离线错误由 S-04 机制在
+				// 命令面处理）；realm 隧道走 Batch 变体的重渲染
+				// 清理。失败点名进 warnings（B4-03）。
+				if err := h.deleteForwardServicesOnNodeBatch(f, nodeID); err != nil {
+					warnings = append(warnings, fmt.Sprintf("节点 %d 上转发 %d 的旧服务清理失败（%v），将在节点重连对账时补扫", nodeID, f.ID, err))
+				}
 			}
 		}
 	}
+	return warnings
 }
 
 // forwardPortConflictMessage 按统一四源谓词给出的占用来源措辞
@@ -6893,6 +6956,23 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 func validateTunnelRuntimeBeforeApply(state *tunnelCreateState) error {
 	if state.Type != 2 {
 		return nil
+	}
+	// B4-01 残面：存量状态重放面补门。请求写面（create/update）
+	// 的 strategy 都过 normalizeChainStrategy，但 redeploy 类路径
+	// 经 reconstructTunnelState 把 chain_tunnel 存量策略原文装入
+	// state、此前在本验证点零判——恢复导入等旁路写进的非法策略
+	// （banana/大小写异形/跳行 best）会被原样重放下发，agent 侧
+	// 静默降级轮询。现与写面同判据 fail-closed 点名：存量非法
+	// 策略须先经编辑面修正， redeploy 不放行。
+	strategyGroups := [][]tunnelRuntimeNode{state.InNodes, state.OutNodes}
+	strategyGroups = append(strategyGroups, state.ChainHops...)
+	for _, group := range strategyGroups {
+		for _, n := range group {
+			if !kernel.ChainStrategyLegal(n.ChainType, defaultString(strings.TrimSpace(n.Strategy), "round")) {
+				return fmt.Errorf("节点 %d 的存量链路策略 %q 不合法（合法值为 %s），请先修正隧道配置后再部署",
+					n.NodeID, strings.TrimSpace(n.Strategy), kernel.ChainStrategyLegalValues(n.ChainType))
+			}
+		}
 	}
 	for _, node := range state.Nodes {
 		if node.IsRemote == 1 && (strings.TrimSpace(node.RemoteURL) == "" || strings.TrimSpace(node.RemoteToken) == "") {

@@ -185,6 +185,17 @@ type githubRelease struct {
 	Draft       bool   `json:"draft"`
 }
 
+// errDevChannelNotSupported（B7-05）：dev（测试版）通道在面板内
+// 路径「列得出、走不通」的收口。此前列表/解析面照常列出并解析
+// dev 版本，执行面却必拒——版本格式校验（validateUpgradeVersion
+// / isValidAgentVersion）与版本比较都只认正式版三段号，dev tag
+// 最终以误导性的「版本号不合法/格式无效」收场。口径定为：面板
+// 内升级与节点升级仅支持正式版通道，dev 在解析点与执行面点名
+// 拒绝并指引脚本通道；列表面不再列 dev 版本。测试版需求走
+// panel_install.sh（FLMX_RELEASE_CHANNEL=dev，见
+// doc/guide/upgrade.md 脚本升级节）。
+var errDevChannelNotSupported = fmt.Errorf("测试版（dev）通道不支持面板内升级与节点升级，请改用安装脚本升级（设置 FLMX_RELEASE_CHANNEL=dev）")
+
 func normalizeReleaseChannel(channel string) string {
 	switch strings.ToLower(strings.TrimSpace(channel)) {
 	case releaseChannelDev:
@@ -487,6 +498,9 @@ func validateRedirectLocationHost(loc string) error {
 // 段均走内置候选测速直选（1.7.7 KU5；F-029 的代理感知后继）。
 func resolveLatestReleaseByChannel(channel string) (string, error) {
 	normalizedChannel := normalizeReleaseChannel(channel)
+	if normalizedChannel == releaseChannelDev {
+		return "", errDevChannelNotSupported
+	}
 	releases, err := fetchGitHubReleases(50)
 	if err != nil {
 		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
@@ -541,6 +555,12 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channel := normalizeReleaseChannel(req.Channel)
+	if channel == releaseChannelDev {
+		// B7-05：执行面兜底，与解析面同口径点名（见
+		// errDevChannelNotSupported）。
+		response.WriteJSON(w, response.ErrDefault(errDevChannelNotSupported.Error()))
+		return
+	}
 	version := strings.TrimSpace(req.Version)
 	if version == "" {
 		var err error
@@ -673,6 +693,12 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	req.IDs = uniqueInt64s(req.IDs)
 
 	channel := normalizeReleaseChannel(req.Channel)
+	if channel == releaseChannelDev {
+		// B7-05：执行面兜底，与解析面同口径点名（见
+		// errDevChannelNotSupported）。
+		response.WriteJSON(w, response.ErrDefault(errDevChannelNotSupported.Error()))
+		return
+	}
 	version := strings.TrimSpace(req.Version)
 	if version == "" {
 		var err error
@@ -811,6 +837,14 @@ func (h *Handler) listReleases(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channel := normalizeReleaseChannel(req.Channel)
+
+	// B7-05：dev 通道不在面板内列表面列出（列出也走不通，见
+	// errDevChannelNotSupported）；返回空列表而非报错，通道切换
+	// 的前端形态保持稳定。
+	if channel == releaseChannelDev {
+		response.WriteJSON(w, response.OK([]interface{}{}))
+		return
+	}
 
 	releases, err := fetchGitHubReleases(50)
 	if err != nil {

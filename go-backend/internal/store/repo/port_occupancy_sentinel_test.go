@@ -170,11 +170,11 @@ func k9DecisionShaped(fd *ast.FuncDecl) bool {
 				// 端口条件须是条件形态（port 后跟比较/集合运算符）；
 				// 裸列名（Pluck("port")、列清单里的
 				// "port_range_start"）不算条件，避免误伤。
-				for _, cond := range []string{"port =", "port >", "port <", "port IN", "port BETWEEN", "port !="} {
-					if strings.Contains(node.Value, cond) {
-						portCond = true
-						break
-					}
+				// B4-05 残面：紧凑写法（port=?、port>=?、port<>?）
+				// 此前因条件表只收带空格形态而整体逃逸本哨兵，现
+				// 由 portConditionShaped 按边界＋前瞻运算符判形。
+				if portConditionShaped(node.Value) {
+					portCond = true
 				}
 			}
 		case *ast.CallExpr:
@@ -185,6 +185,40 @@ func k9DecisionShaped(fd *ast.FuncDecl) bool {
 		return true
 	})
 	return modelHit && nodeCond && portCond && verbHit
+}
+
+// portConditionShaped 判条件字面量是否含 port 条件形态：在标
+// 识符边界处（前一字符非 [a-z0-9_]，排除 airport/transport 等
+// 长标识符内部与 _port 后缀列）出现 "port"，其后跳过空白紧跟
+// 比较运算符（=、>、<、!）或集合关键字（IN、BETWEEN）。带空格
+// 与紧凑写法同判；裸列名与 port_range_* 长列名不判形（运算符
+// 不紧贴 port 本体）。
+// 已知不可覆盖形态（列遗留，勿当已锁）：条件串由变量/拼接构
+// 成（非字面量）、结构体/映射形态的 Where（无条件字面量）、
+// Raw/Exec 拼 SQL——这些需靠评审与正向清单兜底。
+func portConditionShaped(lit string) bool {
+	for i := 0; i+4 <= len(lit); i++ {
+		if lit[i:i+4] != "port" {
+			continue
+		}
+		if i > 0 {
+			if c := lit[i-1]; c == '_' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' {
+				continue
+			}
+		}
+		rest := strings.TrimLeft(lit[i+4:], " \t\r\n")
+		if rest == "" {
+			continue
+		}
+		switch rest[0] {
+		case '=', '>', '<', '!':
+			return true
+		}
+		if strings.HasPrefix(rest, "IN") || strings.HasPrefix(rest, "BETWEEN") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestK9PortOccupancySentinel(t *testing.T) {

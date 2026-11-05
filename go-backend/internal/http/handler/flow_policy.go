@@ -734,8 +734,36 @@ func (h *Handler) deleteOrphanedForwardService(nodeID int64, serviceName string,
 	// Batch metadata can be missing after a read failure, or stale by the time
 	// cleanup runs. Confirm absence before issuing a destructive command.
 	exists, err := h.repo.ForwardExists(forwardID)
-	if err != nil || exists {
+	if err != nil {
 		return
+	}
+	if exists {
+		// B4-03 补扫：转发仍存在不等于本节点仍应承载它——隧道入
+		// 口集变更后，被移除节点上的同名服务此前永远不会被对账
+		// 删除（本函数旧形态只认转发整行消失），旧入口继续监听
+		// 旧端口分流。以隧道当前入口集判成员：节点已不在入口集
+		// 才删；任一查证失败（转发/入口集读不到）按存疑保留，
+		// 不误删在役服务（与本函数 fail-closed 删除口径一致）。
+		forward, ferr := h.getForwardRecord(forwardID)
+		if ferr != nil || forward == nil {
+			return
+		}
+		entryNodeIDs, eerr := h.tunnelEntryNodeIDs(forward.TunnelID)
+		if eerr != nil || len(entryNodeIDs) == 0 {
+			// 入口集读不到或为空（存量隧道无链行等）时无法证明
+			// 服务过期，存疑保留。
+			return
+		}
+		stillEntry := false
+		for _, entryNodeID := range entryNodeIDs {
+			if entryNodeID == nodeID {
+				stillEntry = true
+				break
+			}
+		}
+		if stillEntry {
+			return
+		}
 	}
 	_, _ = h.sendNodeCommand(nodeID, "DeleteService", map[string]interface{}{
 		"services": buildForwardServiceDeleteNames([]string{base}),

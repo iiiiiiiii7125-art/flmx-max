@@ -1,5 +1,7 @@
 package repo
 
+import "strconv"
+
 // R5-B4C: 查询待执行的迁移（用于健康检查可观测性）。
 
 // DuplicateDetail 重复详情。
@@ -14,6 +16,11 @@ type PendingMigrationStatus struct {
 	Required bool              `json:"required"`
 	Tables   []DuplicateDetail `json:"tables,omitempty"`
 	Guide    string            `json:"guide,omitempty"`
+
+	// pendingVersions 是本次判定实际待处理（被预检/存量形态挡下）
+	// 的版本名，供 PendingMigrations() 如实回报——C1-01 前该兼容
+	// 接口恒回 v1 名，v2/v3/v4/v5 单独待处理时属误标。
+	pendingVersions []string
 }
 
 // GetPendingMigrationStatus 返回结构化的待迁移状态。
@@ -46,6 +53,7 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 			return status // 无重复，下次启动会自动建（SQLite/PG 均已接线）
 		}
 		status.Required = true
+		status.pendingVersions = append(status.pendingVersions, migrationV1Version)
 		status.Guide = "doc/guide/upgrade.md#从旧版本升级-含-r5-b4-并发修复"
 		if precheck.ForwardPortDups > 0 {
 			var sample string
@@ -68,10 +76,54 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 	if !applied(migrationV2Version) {
 		if def, exists, err := nodeInboundIndexDefinition(r.db); err == nil && exists && !nodeInboundIndexIsPartial(def) {
 			status.Required = true
+			status.pendingVersions = append(status.pendingVersions, migrationV2Version)
 			status.Guide = "doc/guide/upgrade.md#从旧版本升级-含-r5-b4-并发修复"
 			status.Tables = append(status.Tables, DuplicateDetail{
 				Table:  "node_inbound",
 				Sample: "索引 " + nodeInboundIndexName + " 仍为全量唯一定义，v2 部分索引迁移待处理（通常是 kernel 入站存在同节点同端口重复，需先清理）",
+			})
+		}
+	}
+
+	// C1-01：v3（peer_share_runtime 复合唯一索引）此前从不查——
+	// v3 被预检挡下时不记版本，复合索引可长期缺失而状态面恒报
+	// 无待迁移，联邦第二消费方 reserve-port 撞旧单列唯一键的形
+	// 态完全不可见。判据与迁移本体同形：版本未记且（复合索引
+	// 不在 或 旧单列索引仍在）即待处理。
+	if !applied(migrationV3Version) && r.db.Migrator().HasTable(peerShareRuntimeTableName) {
+		composite, compErr := peerShareRuntimeIndexExists(r.db, compositeResourceIndexName)
+		legacy, legErr := peerShareRuntimeIndexExists(r.db, legacyResourceKeyIndexName)
+		if compErr == nil && legErr == nil && (!composite || legacy) {
+			status.Required = true
+			status.pendingVersions = append(status.pendingVersions, migrationV3Version)
+			status.Guide = "doc/guide/upgrade.md#从旧版本升级-含-r5-b4-并发修复"
+			sample := "复合唯一索引 " + compositeResourceIndexName + " 缺失，v3 迁移待处理（通常是同 share 下 resource_key 重复，需先清理）"
+			if legacy {
+				sample = "旧单列唯一索引 " + legacyResourceKeyIndexName + " 仍在、复合唯一索引未落地，v3 迁移待处理（通常是同 share 下 resource_key 重复，需先清理）"
+			}
+			status.Tables = append(status.Tables, DuplicateDetail{
+				Table:  peerShareRuntimeTableName,
+				Sample: sample,
+			})
+		}
+	}
+
+	// C1-01：v4（转发查询普通索引）同查——版本未记且任一索引
+	// 缺失即待处理（仅性能面，但状态面不得假阴性）。
+	if !applied(migrationC12V4Version) && r.db.Migrator().HasTable("forward_port") && r.db.Migrator().HasTable("forward") {
+		var missing []string
+		for _, idx := range c12V4Indexes {
+			if exists, err := c12IndexExists(r.db, idx.name); err == nil && !exists {
+				missing = append(missing, idx.name)
+			}
+		}
+		if len(missing) > 0 {
+			status.Required = true
+			status.pendingVersions = append(status.pendingVersions, migrationC12V4Version)
+			status.Guide = "doc/guide/upgrade.md#从旧版本升级-含-r5-b4-并发修复"
+			status.Tables = append(status.Tables, DuplicateDetail{
+				Table:  "forward_port",
+				Sample: "转发查询索引缺失（" + missing[0] + " 等 " + strconv.Itoa(len(missing)) + " 个），v4 迁移待处理",
 			})
 		}
 	}
@@ -81,6 +133,7 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 	if !applied(migrationK10V5Version) {
 		if groups, err := listUsernameFoldDupGroups(r.db); err == nil && len(groups) > 0 {
 			status.Required = true
+			status.pendingVersions = append(status.pendingVersions, migrationK10V5Version)
 			status.Guide = "doc/guide/upgrade.md#从旧版本升级-含-r5-b4-并发修复"
 			sample := "大小写变体同名: folded=" + groups[0].Fold + " ids=[" + groups[0].IDs + "] stored=[" + groups[0].Forms + "]"
 			status.Tables = append(status.Tables, DuplicateDetail{
@@ -94,9 +147,10 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 }
 
 // PendingMigrations 保留兼容（返回版本列表）。
+// C1-01：返回实际待处理的版本名（可多个），不再恒回 v1 名误标。
 func (r *Repository) PendingMigrations() []string {
-	if s := r.GetPendingMigrationStatus(); s.Required {
-		return []string{migrationV1Version}
+	if s := r.GetPendingMigrationStatus(); s.Required && len(s.pendingVersions) > 0 {
+		return append([]string(nil), s.pendingVersions...)
 	}
 	return nil
 }

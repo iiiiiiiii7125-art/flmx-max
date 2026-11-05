@@ -5,12 +5,16 @@
 // 裸键意味着全站共用一桶（一人刷满、全体 429；批量升级走面板源时
 // 节点群还会自触发 429）。
 //
-// 信任模型与历史登录实现逐字一致（R5-B2 A-001 / B01-001 收窄口径 /
-// R24-X-01 超配 fail-closed）：只有直接对端落在回环/私网/链路本地
-// （本机或内网反向代理）时才采信 XFF，并按 FLMX_TRUSTED_PROXY_HOPS
-// 从右锚定客户端条目；公网直连忽略 XFF；跳数超过实际可信链长时
-// fail-closed 回 RemoteAddr，信任边界不可由攻击者预置的左侧条目
-// 移动。
+// 信任模型（R5-B2 A-001 / B01-001 收窄口径 / R24-X-01 超配
+// fail-closed；C4-01 再收窄）：只有直接对端是回环地址，或落在
+// 显式配置 FLMX_TRUSTED_PROXIES（逗号分隔 CIDR/裸 IP，与联邦面
+// FLMX_FEDERATION_TRUSTED_PROXIES 同型）的对端，才采信 XFF 并按
+// FLMX_TRUSTED_PROXY_HOPS 从右锚定客户端条目。此前的「私网/链
+// 路本地一律可信」使任何能路由到后端端口的内网主机（被攻陷的
+// 容器、同网段租户）都能伪造 XFF 轮换限流键、逐 IP 绕过登录/
+// WS/gh 三面限流；私网身份本身不再构成信任，信任只来自显式配
+// 置。公网直连同样忽略 XFF；跳数超过实际可信链长时 fail-closed
+// 回 RemoteAddr，信任边界不可由攻击者预置的左侧条目移动。
 //
 // 联邦侧（federation AllowedIPs）是另一种信任模型（显式 CIDR
 // 配置背书），按既有设计不共用本包，解析逻辑留在 handler 包内。
@@ -82,8 +86,9 @@ func FromRequest(r *http.Request) net.IP {
 	if hops <= 0 {
 		return remoteIP
 	}
-	// 至此直接对端已判别为回环/私网代理对端（公网对端在首行已
-	// 忽略 XFF 返回，见 B01-001 收窄口径），以下按索引解析。
+	// 至此直接对端已判别为可信代理对端（回环或显式配置，见
+	// isTrustedProxyIP；不可信对端在首行已忽略 XFF 返回），以
+	// 下按索引解析。
 	run := TrustedXFFRun(entries, isTrustedProxyIP)
 	// R24-X-01：hops 超配（大于实际可信代理链长）时，idx = len-hops
 	// 会落在攻击者可控的左侧预置条目上。先夹紧：超配即 fail-closed。
@@ -150,13 +155,60 @@ func normalizeIPAddress(ip net.IP) net.IP {
 	return ip.To16()
 }
 
-// isTrustedProxyIP 报告对端是否落在可信代理范围（回环/私网/
-// 链路本地，即本机或内网的反向代理）。
+// trustedProxyCIDRs 解析 FLMX_TRUSTED_PROXIES（逗号分隔 CIDR，
+// 裸 IP 视为 /32 或 /128），与联邦面 federationTrustedProxyCIDRs
+// 同型同口径：未配置或条目非法时该条目不产生信任（非法条目记
+// 日志跳过），不回退到任何默认私网信任。
+func trustedProxyCIDRs() []*net.IPNet {
+	raw := strings.TrimSpace(config.Getenv("FLMX_TRUSTED_PROXIES"))
+	if raw == "" {
+		return nil
+	}
+	var out []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !strings.Contains(part, "/") {
+			if ip := net.ParseIP(part); ip != nil {
+				bits := 32
+				if ip.To4() == nil {
+					bits = 128
+				}
+				out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+				continue
+			}
+			log.Printf("warning: invalid FLMX_TRUSTED_PROXIES entry %q, skipped", part)
+			continue
+		}
+		_, cidr, err := net.ParseCIDR(part)
+		if err != nil {
+			log.Printf("warning: invalid FLMX_TRUSTED_PROXIES entry %q, skipped", part)
+			continue
+		}
+		out = append(out, cidr)
+	}
+	return out
+}
+
+// isTrustedProxyIP 报告对端是否是可信代理：回环恒可信（本机反
+// 代），其余只认 FLMX_TRUSTED_PROXIES 显式配置（C4-01）。CGNAT
+// 100.64/10 此前经 stdlib IsPrivate 本就不在信任内（§11 收窄口
+// 径），现随私网整体退出默认信任、口径不变。
 func isTrustedProxyIP(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	if ip.IsLoopback() {
+		return true
+	}
+	for _, cidr := range trustedProxyCIDRs() {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // SplitXFFEntries 健壮切分 XFF：去空白/引号，跳过空条目，
