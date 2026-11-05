@@ -2,6 +2,7 @@ package repo
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -641,6 +642,64 @@ func TestImportConfigsDroppedKeysNamedInReceipt(t *testing.T) {
 	}
 	if kept.Value != "kept-value" {
 		t.Fatalf("plain_key value = %q, want kept-value", kept.Value)
+	}
+}
+
+// B8-14：导入 per-section 行数预算——超限段在进事务前整单拒绝
+// 并点名段名/实际行数/上限；未选中的段不计预算。
+func TestImportSectionRowBudgets(t *testing.T) {
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	// (a) users 段超限：整单拒绝、点名三要素。
+	overUsers := &model.BackupData{Version: "1.0", Users: make([]model.UserBackup, maxImportSectionRows+1)}
+	for i := range overUsers.Users {
+		// 合法备份恒携 $2 哈希（ValidateBackupImportUserHashBudget
+		// 的谓词只看 $2 前缀）：夹具口令须已哈希，否则哈希预算
+		// （上限 1000）先行触发、本段预算无从被测到。
+		overUsers.Users[i].Pwd = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+	}
+	if _, err := dst.Import(overUsers, []string{"users"}); err == nil ||
+		!strings.Contains(err.Error(), "users") || !strings.Contains(err.Error(), "10001") || !strings.Contains(err.Error(), "10000") {
+		t.Fatalf("over-cap users must be rejected naming section/count/cap, err=%v", err)
+	}
+
+	// (b) 嵌套集合 forwardPorts 按全备份合计超限：点名嵌套段。
+	manyPorts := make([]model.ForwardPortBackup, maxImportNestedRowsLarge+1)
+	overPorts := &model.BackupData{Version: "1.0", Forwards: []model.ForwardBackup{
+		{ID: 1, ForwardPorts: &manyPorts},
+	}}
+	if _, err := dst.Import(overPorts, []string{"forwards"}); err == nil ||
+		!strings.Contains(err.Error(), "forwardPorts") || !strings.Contains(err.Error(), "50001") {
+		t.Fatalf("over-cap forwardPorts must be rejected naming the nested section, err=%v", err)
+	}
+
+	// (c) configs 按键数超限。
+	overConfigs := &model.BackupData{Version: "1.0", Configs: make(map[string]string, maxImportConfigKeys+1)}
+	for i := 0; i <= maxImportConfigKeys; i++ {
+		overConfigs.Configs["k"+strconv.Itoa(i)] = "v"
+	}
+	if _, err := dst.Import(overConfigs, []string{"configs"}); err == nil ||
+		!strings.Contains(err.Error(), "configs") || !strings.Contains(err.Error(), "10001") {
+		t.Fatalf("over-cap configs must be rejected naming the section, err=%v", err)
+	}
+
+	// (d) 未选中的超限段不计预算：同 (a) 的用户集不选 users，
+	// 只导 nodes 应成功。
+	mixed := &model.BackupData{
+		Version: "1.0",
+		Users:   make([]model.UserBackup, maxImportSectionRows+1),
+		Nodes:   []model.NodeBackup{{ID: 61, Name: "n61", Secret: "s", ServerIP: "192.0.2.61", Status: 1}},
+	}
+	result, err := dst.Import(mixed, []string{"nodes"})
+	if err != nil {
+		t.Fatalf("unselected over-cap section must not block import: %v", err)
+	}
+	if result.NodesImported != 1 {
+		t.Fatalf("NodesImported = %d, want 1", result.NodesImported)
 	}
 }
 

@@ -244,6 +244,153 @@ func predictImportedForwardPortReplacements(tx *gorm.DB, backup *model.BackupDat
 	return out, nil
 }
 
+// B8-14：导入 per-section 行数预算。此前只有 users 段的 bcrypt
+// 哈希预算（R10-10，上限 1000 条需哈希行）一顶帽，其余段行数无
+// 帽——构造备份可用百万级行数在单飞锁 + 长事务内逐行 upsert 放
+// 大 CPU/IO/锁持有时间。预算按段行数计（upsert 是廉价操作，量
+// 级取哈希预算的 10–50 倍）：常规段 10000 行；高基数行段
+// （转发及其端口行、授权、入站及其订阅/中继/屏蔽/计数、链路
+// 行）50000 行；configs 按键数 10000。只对本次导入选中的段判
+// （与哈希预算同口径），超限在进事务与端口预检之前整单拒绝并
+// 点名段名 + 实际行数 + 上限（fail-closed）。嵌套集合
+// （chainTunnels/forwardPorts）按全备份合计计。已移除功能的
+// 兼容壳段（tunnelGroups/userGroups/permissions/nodeGroups）
+// 不落库、不计预算（其行数只在回执中披露）。
+const (
+	maxImportSectionRows      = 10000
+	maxImportSectionRowsLarge = 50000
+	maxImportConfigKeys       = 10000
+	maxImportNestedRowsLarge  = 50000
+)
+
+func validateBackupSectionBudgets(backup *model.BackupData, typeSet map[string]bool) error {
+	if backup == nil {
+		return nil
+	}
+	check := func(name string, rows, limit int) error {
+		if rows > limit {
+			return fmt.Errorf("备份段 %s 行数 %d 超过导入预算上限 %d，整单拒绝导入", name, rows, limit)
+		}
+		return nil
+	}
+	if typeSet["users"] {
+		if err := check("users", len(backup.Users), maxImportSectionRows); err != nil {
+			return err
+		}
+	}
+	if typeSet["nodes"] {
+		if err := check("nodes", len(backup.Nodes), maxImportSectionRows); err != nil {
+			return err
+		}
+		if err := check("nodeSSHConfigs", len(backup.NodeSSHConfigs), maxImportSectionRows); err != nil {
+			return err
+		}
+		if err := check("peerShares", len(backup.PeerShares), maxImportSectionRows); err != nil {
+			return err
+		}
+	}
+	if typeSet["tunnels"] {
+		if err := check("tunnels", len(backup.Tunnels), maxImportSectionRows); err != nil {
+			return err
+		}
+		chainRows := 0
+		for _, t := range backup.Tunnels {
+			chainRows += len(t.ChainTunnels)
+		}
+		if err := check("chainTunnels", chainRows, maxImportNestedRowsLarge); err != nil {
+			return err
+		}
+	}
+	if typeSet["forwards"] {
+		if err := check("forwards", len(backup.Forwards), maxImportSectionRowsLarge); err != nil {
+			return err
+		}
+		portRows := 0
+		for _, f := range backup.Forwards {
+			if f.ForwardPorts != nil {
+				portRows += len(*f.ForwardPorts)
+			}
+		}
+		if err := check("forwardPorts", portRows, maxImportNestedRowsLarge); err != nil {
+			return err
+		}
+	}
+	if typeSet["userTunnels"] {
+		if err := check("userTunnels", len(backup.UserTunnels), maxImportSectionRowsLarge); err != nil {
+			return err
+		}
+	}
+	if typeSet["speedLimits"] {
+		if err := check("speedLimits", len(backup.SpeedLimits), maxImportSectionRows); err != nil {
+			return err
+		}
+	}
+	if typeSet["configs"] {
+		if err := check("configs", len(backup.Configs), maxImportConfigKeys); err != nil {
+			return err
+		}
+	}
+	if typeSet["userInbounds"] {
+		if err := check("userInbounds", len(backup.UserInbounds), maxImportSectionRowsLarge); err != nil {
+			return err
+		}
+	}
+	if typeSet["announcements"] {
+		if err := check("announcements", len(backup.Announcements), maxImportSectionRows); err != nil {
+			return err
+		}
+	}
+	if typeSet["monitorPermissions"] {
+		if err := check("monitorPermissions", len(backup.MonitorPermissions), maxImportSectionRows); err != nil {
+			return err
+		}
+	}
+	if typeSet["userSubscriptions"] {
+		if err := check("userSubscriptions", len(backup.UserSubscriptions), maxImportSectionRows); err != nil {
+			return err
+		}
+	}
+	if typeSet["serviceMonitors"] {
+		if err := check("serviceMonitors", len(backup.ServiceMonitors), maxImportSectionRows); err != nil {
+			return err
+		}
+	}
+	if typeSet["inbounds"] && backup.Inbounds != nil {
+		ib := backup.Inbounds
+		if err := check("kernels", len(ib.Kernels), maxImportSectionRows); err != nil {
+			return err
+		}
+		if err := check("inbounds", len(ib.Inbounds), maxImportSectionRowsLarge); err != nil {
+			return err
+		}
+		if err := check("relays", len(ib.Relays), maxImportSectionRowsLarge); err != nil {
+			return err
+		}
+		if err := check("counters", len(ib.Counters), maxImportSectionRowsLarge); err != nil {
+			return err
+		}
+		if err := check("subscriptions", len(ib.Subscriptions), maxImportSectionRowsLarge); err != nil {
+			return err
+		}
+		if err := check("subscriptionCounters", len(ib.SubscriptionCounters), maxImportSectionRowsLarge); err != nil {
+			return err
+		}
+		if err := check("sources", len(ib.Sources), maxImportSectionRows); err != nil {
+			return err
+		}
+		if err := check("shields", len(ib.Shields), maxImportSectionRowsLarge); err != nil {
+			return err
+		}
+		if err := check("templates", len(ib.Templates), maxImportSectionRows); err != nil {
+			return err
+		}
+		if err := check("inboundUsers", len(ib.Users), maxImportSectionRows); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Repository) precheckBackupPortConflicts(backup *model.BackupData, typeSet map[string]bool, claims []backupPortClaim) error {
 	if len(claims) == 0 {
 		return nil

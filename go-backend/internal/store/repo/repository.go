@@ -3192,6 +3192,12 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		return nil, err
 	}
 
+	// B8-14：per-section 行数预算——与哈希预算同收口位（进事务
+	// 与端口预检之前整单拒绝，见 validateBackupSectionBudgets）。
+	if err := validateBackupSectionBudgets(backup, typeSet); err != nil {
+		return nil, err
+	}
+
 	// B4/F-055: 端口预检 + per-node 锁（见 repository_backup_precheck.go）。
 	claims := backupClaims(backup, typeSet)
 	releasePortLocks := lockBackupPortNodes(claims)
