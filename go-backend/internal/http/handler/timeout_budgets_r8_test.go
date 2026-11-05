@@ -186,32 +186,43 @@ func TestR7SystemUpgradeAnchorTimeoutPinnedAcrossCopies(t *testing.T) {
 		}
 	}
 
-	// 脚本侧三份字面量拷贝（R7-002/R7-005 全集收口，登记于 tsv 表
+	// 脚本侧字面量拷贝（R7-002/R7-005 全集收口，登记于 tsv 表
 	// 头段）：panel_install.sh 与 install.sh 的 corroborate 轮截止
 	// `local deadline=$(( $(date +%s) + N ))`、生成安装命令内的
-	// `dl=$(( $(date +%s) + N ))`。每文件必须恰好一处且与 Go 三份
-	// 拷贝同值——脚本侧单独改值或新增第七份拷贝，本门即红。
+	// `dl=$(( $(date +%s) + N ))`。每文件登记份数固定、逐份与 Go
+	// 三份拷贝同值——脚本侧单独改值或新增未登记拷贝，本门即红。
+	// GATE-FIX D 登记：install.sh 有两份——corroborate_binary_anchor
+	// （R7-002）与 corroborate_latest_tag（A3-03 新增的标签复核
+	// 轮，同语义同值），后者落地时漏登记、本批补入；install.sh
+	// 结构上去重（抽共用变量）会让两处同时脱离字面量提取面、
+	// 反而缩小普查覆盖，故按登记路径处置而非去重。全集共七份。
 	shellDecl := regexp.MustCompile(`(?:local deadline|dl)=\$\(\( \$\(date \+%s\) \+ (\d+) \)`)
-	shellCopies := map[string]string{
-		"panel_install.sh corroborate_download_anchor": filepath.Join("..", "..", "..", "..", "panel_install.sh"),
-		"install.sh corroborate_binary_anchor":         filepath.Join("..", "..", "..", "..", "install.sh"),
-		"mutations.go generated install command":       "mutations.go",
+	type shellCopySpec struct {
+		path string
+		want int
 	}
-	for name, path := range shellCopies {
-		raw, err := os.ReadFile(path)
+	shellCopies := map[string]shellCopySpec{
+		"panel_install.sh corroborate_download_anchor": {filepath.Join("..", "..", "..", "..", "panel_install.sh"), 1},
+		"install.sh corroborate_latest_tag+corroborate_binary_anchor": {filepath.Join("..", "..", "..", "..", "install.sh"), 2},
+		"mutations.go generated install command": {"mutations.go", 1},
+	}
+	for name, spec := range shellCopies {
+		raw, err := os.ReadFile(spec.path)
 		if err != nil {
 			t.Fatalf("read shell anchor copy %s: %v", name, err)
 		}
 		ms := shellDecl.FindAllSubmatch(raw, -1)
-		if len(ms) != 1 {
-			t.Fatalf("%s: found %d anchor deadline literals, want exactly 1 — a new copy must be registered and pinned here first", name, len(ms))
+		if len(ms) != spec.want {
+			t.Fatalf("%s: found %d anchor deadline literals, want exactly %d — a new copy must be registered and pinned here first", name, len(ms), spec.want)
 		}
-		v, err := strconv.ParseInt(string(ms[0][1]), 10, 64)
-		if err != nil {
-			t.Fatalf("parse %s anchor deadline: %v", name, err)
-		}
-		if v != int64(systemUpgradeAnchorTimeout/time.Second) {
-			t.Fatalf("anchor timeout copies drifted: panel systemUpgradeAnchorTimeout = %v, %s = %ds — all six copies must stay equal", systemUpgradeAnchorTimeout, name, v)
+		for _, m := range ms {
+			v, err := strconv.ParseInt(string(m[1]), 10, 64)
+			if err != nil {
+				t.Fatalf("parse %s anchor deadline: %v", name, err)
+			}
+			if v != int64(systemUpgradeAnchorTimeout/time.Second) {
+				t.Fatalf("anchor timeout copies drifted: panel systemUpgradeAnchorTimeout = %v, %s = %ds — all seven copies must stay equal", systemUpgradeAnchorTimeout, name, v)
+			}
 		}
 	}
 }

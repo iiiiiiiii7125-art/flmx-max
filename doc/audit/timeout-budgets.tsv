@@ -56,10 +56,12 @@
 # and pinned against them by the handler gate test (R7-005, round-7). The
 # same 20s corroboration bound also lives as shell literals in
 # panel_install.sh (corroborate_download_anchor), install.sh
-# (corroborate_binary_anchor, R7-002) and the generated node install
+# (corroborate_binary_anchor, R7-002, plus corroborate_latest_tag,
+# A3-03 — a second install.sh copy registered by GATE-FIX D after it
+# landed unregistered) and the generated node install
 # command (buildNodeInstallCommand in mutations.go, R7-002); the handler
-# gate test parses and pins all three literals equal to the Go copies, so
-# the family has six pinned copies in total and no seventh may appear
+# gate test parses and pins all four literals equal to the Go copies, so
+# the family has seven pinned copies in total and no eighth may appear
 # without registration.
 cell	call	surface	endpoint	fe_s	fe_kind	fe_src	fe_floor_s	fe_cap_s	sv_s	sv_src	be_s	be_kind	be_src	check	exception	item	note
 T001	installKernel	fe	/kernel/install	330	literal	literal			360	kernelApplyWriteDeadline	300	const	kernelApplyTimeout	strict		R8-T-01	
