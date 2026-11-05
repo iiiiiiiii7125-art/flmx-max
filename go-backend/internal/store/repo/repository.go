@@ -3627,6 +3627,16 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 		if err := ensureUsernameAvailable(tx, username, u.ID); err != nil {
 			return count, fmt.Errorf("import user %q: %w", username, err)
 		}
+		// R2-03-01: 管理员集合变化须按导入前状态判定——同 id 行
+		// 已存在且已是管理员时 upsert 不扩大集合；行不存在（新
+		// id）或既有行 role_id 非 0 时，落库为 role_id=0 即构成
+		// 新建/提权，须在下方落库成功后经 ImportWarnings 点名。
+		var existingUser model.User
+		existingUserErr := tx.Select("role_id").Where("id = ?", u.ID).First(&existingUser).Error
+		existingUserFound := existingUserErr == nil
+		if existingUserErr != nil && !errors.Is(existingUserErr, gorm.ErrRecordNotFound) {
+			return count, existingUserErr
+		}
 		err = tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
@@ -3637,6 +3647,13 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 		if err != nil {
 			// R5-B4C: 并发兜底，映射为友好错误。
 			return count, mapUniqueViolation(err, "username")
+		}
+		if u.RoleID == 0 {
+			if !existingUserFound {
+				rep.warnf("备份恢复：用户 #%d（%q）以新 id 导入并成为管理员（role_id=0），请确认该新增管理员为预期账户", u.ID, username)
+			} else if existingUser.RoleID != 0 {
+				rep.warnf("备份恢复：用户 #%d（%q）由非管理员提升为管理员（role_id=0），请确认该提权为预期操作", u.ID, username)
+			}
 		}
 		if u.DailyQuotaGB > 0 || u.MonthlyQuotaGB > 0 || u.DisabledByQuota != 0 || u.QuotaDisabledAt > 0 ||
 			u.PausedForwardIDs != "" || u.DailyUsedBytes != 0 || u.MonthlyUsedBytes != 0 {
