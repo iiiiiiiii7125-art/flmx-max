@@ -4,6 +4,7 @@ import {
   purgeSensitiveConfigCache,
 } from "@/config/sensitive-keys";
 import { isLoggedIn } from "@/utils/auth";
+import { SESSION_CLEARED_EVENT } from "@/utils/session";
 
 export { purgeSensitiveConfigCache };
 
@@ -255,6 +256,23 @@ const markConfigVerified = (key: string): void => {
   configVerifiedAt.set(key.trim().toLowerCase(), Date.now());
 };
 
+// E1-05：登出（含换账号）必须让复验状态失效——旧实现下 clearSession
+// 不触碰这两张表，同标签页 60 秒内换账号登录会直接命中上一会话的
+// 缓存值而不回源（全局配置串号）。clearSession 广播
+// SESSION_CLEARED_EVENT，本模块监听后整表复位；generation 计数防
+// 在途请求在复位后把旧会话的值回写缓存/复验表。
+let configVerificationGeneration = 0;
+
+export const resetConfigVerification = (): void => {
+  configVerificationGeneration += 1;
+  configVerifiedAt.clear();
+  configFetchInFlight.clear();
+};
+
+if (typeof window !== "undefined") {
+  window.addEventListener(SESSION_CLEARED_EVENT, resetConfigVerification);
+}
+
 const fetchConfigByName = (key: string): Promise<string | null> => {
   const normalizedKey = key.trim().toLowerCase();
   const inFlight = configFetchInFlight.get(normalizedKey);
@@ -264,6 +282,10 @@ const fetchConfigByName = (key: string): Promise<string | null> => {
   }
 
   const request = (async (): Promise<string | null> => {
+    // E1-05：在途期间发生登出复位（generation 变化）时，返回值仍交
+    // 调用方，但不得把旧会话的值回写缓存或刷新复验计时。
+    const generation = configVerificationGeneration;
+
     try {
       const response = await getConfigByName(key);
 
@@ -274,10 +296,12 @@ const fetchConfigByName = (key: string): Promise<string | null> => {
       ) {
         const value = response.data.value;
 
-        if (shouldPersistConfigKey(key)) {
-          configCache.set(key, value);
+        if (generation === configVerificationGeneration) {
+          if (shouldPersistConfigKey(key)) {
+            configCache.set(key, value);
+          }
+          markConfigVerified(normalizedKey);
         }
-        markConfigVerified(normalizedKey);
 
         return value;
       }
@@ -344,28 +368,33 @@ export const getCachedConfigs = async (): Promise<Record<string, string>> => {
 
   // 从API获取最新配置
   try {
+    // E1-05：在途期间发生登出复位时，结果仍交调用方，但不回写
+    // 缓存/复验表（与 fetchConfigByName 同律）。
+    const generation = configVerificationGeneration;
     const response = await getConfigs();
 
     if (response.code === 0 && response.data) {
       const configs = response.data;
 
-      // 仅将安全配置存入缓存，敏感项会从 localStorage 中移除
-      Object.entries(configs).forEach(([key, value]) => {
-        const normalizedKey = key.trim().toLowerCase();
+      if (generation === configVerificationGeneration) {
+        // 仅将安全配置存入缓存，敏感项会从 localStorage 中移除
+        Object.entries(configs).forEach(([key, value]) => {
+          const normalizedKey = key.trim().toLowerCase();
 
-        if (SENSITIVE_CONFIG_KEYS.has(normalizedKey)) {
-          configCache.remove(normalizedKey);
+          if (SENSITIVE_CONFIG_KEYS.has(normalizedKey)) {
+            configCache.remove(normalizedKey);
 
-          return;
-        }
+            return;
+          }
 
-        if (shouldPersistConfigKey(normalizedKey)) {
-          configCache.set(normalizedKey, value as string);
-        }
-      });
+          if (shouldPersistConfigKey(normalizedKey)) {
+            configCache.set(normalizedKey, value as string);
+          }
+        });
 
-      // 全量拉取成功：本批 key 均为新鲜值，刷新复验计时。
-      Object.keys(configs).forEach((key) => markConfigVerified(key));
+        // 全量拉取成功：本批 key 均为新鲜值，刷新复验计时。
+        Object.keys(configs).forEach((key) => markConfigVerified(key));
+      }
 
       return configs;
     }

@@ -33,6 +33,17 @@ export interface LoginSessionPayload {
 
 const SESSION_EVENT_NAME = "sessionUpdated";
 
+// E1-05：登出专用事件——config/site.ts 监听它复位配置复验状态
+// （configVerifiedAt/configFetchInFlight），避免同标签页换账号后
+// 60 秒内吃上一会话的全局配置缓存。事件名由本模块导出，site.ts
+// 只反向引用常量（其依赖均为叶子模块，不成环）。
+export const SESSION_CLEARED_EVENT = "sessionCleared";
+
+// 与 pages/config/gist-backup.tsx 的 GIST_RESTORE_RECEIPT_KEY 同值：
+// Gist 恢复回执暂存 sessionStorage，登出时须一并清除，不留给下一
+// 个登录本标签页的账号（gist-backup.tsx 侧有同指注释）。
+const GIST_RESTORE_RECEIPT_KEY = "flmx-gist-restore-receipt";
+
 export const getToken = (): string | null => {
   return localStorage.getItem(SESSION_STORAGE_KEYS.token);
 };
@@ -101,6 +112,15 @@ export const clearSession = (): void => {
   // F-047：登出（含 401 强制登出）时一并清掉敏感配置的本地缓存，
   // 避免 jwt_secret / 通知令牌等在共享浏览器上残留到下次登录前。
   purgeSensitiveConfigCache();
+  // E1-05：会话级残留一并清——Gist 恢复回执（sessionStorage）删除，
+  // 并广播 SESSION_CLEARED_EVENT 让 site.ts 复位配置复验状态，
+  // 换账号后不再命中上一会话的 60 秒缓存窗口。
+  try {
+    sessionStorage.removeItem(GIST_RESTORE_RECEIPT_KEY);
+  } catch {
+    // sessionStorage 不可用时静默：回执清除让位于登出可用性。
+  }
+  window.dispatchEvent(new Event(SESSION_CLEARED_EVENT));
   window.dispatchEvent(new Event(SESSION_EVENT_NAME));
 };
 
