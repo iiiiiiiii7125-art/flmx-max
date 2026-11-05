@@ -2382,14 +2382,59 @@ validate_panel_update_environment() {
   fi
 }
 
+# A1-01：单腿时间帽——回显「单次 --max-time 总重试 --retry-max-time」
+# 两个值。无总预算截止（deadline=0）时沿用单腿口径（600s、重试总
+# 时长不限＝--retry-max-time 0）；有截止时按剩余量收紧（单次帽不
+# 超过 600s、重试总时长不超过剩余量——--max-time 只管单次尝试，
+# 重试会逐次重新计时，不加总帽则一腿仍可数倍于剩余预算）。预
+# 算耗尽返回 1。
+panel_download_leg_cap() {
+  local deadline="${1:-0}"
+  if (( deadline <= 0 )); then
+    printf '600 0'
+    return 0
+  fi
+  local remain=$(( deadline - $(date +%s) ))
+  if (( remain <= 0 )); then
+    return 1
+  fi
+  local cap=600
+  if (( remain < cap )); then
+    cap=$remain
+  fi
+  printf '%s %s' "$cap" "$remain"
+}
+
+# --retry-max-time 的参数组（一行一个参数，无则无输出）：
+# --retry-max-time 在 curl 7.66（2019）后才有，老 curl 上探明不
+# 支持就返回空组（单次 --max-time 与地板看门狗仍在），不让一
+# 个约束参数反噬全部下载。探测走 type -P 找到的真实 curl 二
+# 进制加一次带该选项的 --version 调用（未知选项退出码非 0），
+# 不用 --help 文本匹配，也避免被调用方打桩的 curl 函数污染。
+panel_retry_max_args() {
+  local leg_retry_max="$1"
+  if (( leg_retry_max > 0 )); then
+    local real_curl
+    real_curl=$(type -P curl || true)
+    if [[ -n "$real_curl" ]] && "$real_curl" --retry-max-time 0 --version >/dev/null 2>&1; then
+      printf '%s\n%s\n' "--retry-max-time" "$leg_retry_max"
+    fi
+  fi
+}
+
 # R5-B5B D19: 安全下载（带 .sha256 校验，缺失即拒）。
 # FLMX_VERIFY_DOWNLOADS=0 可跳过，默认开启；旧名 FLVX_VERIFY_DOWNLOADS 的双读已于 1.9.10 退场。
 # F-138: 边角组合收紧为 fail-closed——仅显式 "0" 可关闭校验（误填
 # true/yes 等不再静默跳过）；缺少 sha256sum 时拒绝（否则空 .sha256 与
 # 空 actual 会 ""=="" 误判通过）；.sha256 内容必须是 64 位十六进制。
+# A1-01: 第三参 deadline 为整轮下载的绝对截止（epoch 秒，0/缺省
+# ＝无总预算）；由 download_verified_routed 按
+# FLMX_DOWNLOAD_BUDGET_SECONDS 定格后逐路传入，两腿各按剩余量
+# 收紧，耗尽即整腿失败、不再换路重试。
 download_verified() {
   local url="$1"
   local dest="$2"
+  local deadline="${3:-0}"
   local verify="${FLMX_VERIFY_DOWNLOADS:-1}"
 
   # R8-J-A: 本体与下方 .sha256 均加有界重试——旧实现单次尝试，
@@ -2398,8 +2443,18 @@ download_verified() {
   # 发生的错误重试），TCP 已连通但零字节/涓流的假活慢死路线永不让
   # curl 返回，install/update/migrate/uninstall 的 compose 下载与
   # 脚本自更新（同一函数）全部无限挂死。与 install.sh 本体腿同口
-  # 径：连接 10s、1KB/s 地板 30s 无进展判死，另加单次 600s 总界。
-  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 600 -o "$dest" "$url"; then
+  # 径：连接 10s、1KB/s 地板 30s 无进展判死，另加单次 600s 总界
+  # （A1-01 后：整轮另有总预算截止时以剩余量为准，见上）。
+  local caps leg_cap leg_retry_max
+  if ! caps=$(panel_download_leg_cap "$deadline"); then
+    echo "❌ 下载总预算（${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}s）已耗尽，整轮下载失败" >&2
+    return 1
+  fi
+  leg_cap="${caps%% *}"
+  leg_retry_max="${caps##* }"
+  local -a retry_max_args=()
+  mapfile -t retry_max_args < <(panel_retry_max_args "$leg_retry_max")
+  if ! curl -fL --retry 3 --retry-delay 2 "${retry_max_args[@]}" --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time "$leg_cap" -o "$dest" "$url"; then
     echo "❌ 下载失败: $url" >&2
     return 1
   fi
@@ -2417,10 +2472,20 @@ download_verified() {
     return 1
   fi
 
-  # 下载 .sha256 并校验。
+  # 下载 .sha256 并校验。A1-01：校验腿按本体腿之后的剩余预算
+  # 重新收紧（本体腿可能已吃掉大半预算），耗尽同样整腿失败。
   local sha_url="${url}.sha256"
   local sha_file="${dest}.sha256"
-  if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 600 -o "$sha_file" "$sha_url"; then
+  if ! caps=$(panel_download_leg_cap "$deadline"); then
+    rm -f "$dest"
+    echo "❌ 下载总预算（${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}s）已耗尽，整轮下载失败" >&2
+    return 1
+  fi
+  leg_cap="${caps%% *}"
+  leg_retry_max="${caps##* }"
+  retry_max_args=()
+  mapfile -t retry_max_args < <(panel_retry_max_args "$leg_retry_max")
+  if ! curl -fL --retry 3 --retry-delay 2 "${retry_max_args[@]}" --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time "$leg_cap" -o "$sha_file" "$sha_url"; then
     rm -f "$dest" "$sha_file"
     echo "❌ 校验文件缺失，拒绝安装: $sha_url" >&2
     echo "   （设置 FLMX_VERIFY_DOWNLOADS=0 可跳过，仅用于过渡期）" >&2
@@ -2530,14 +2595,26 @@ corroborate_download_anchor() {
 # 口径不变），首个成功即用；阶段 1 路线全败时补测代理排名续切。
 # 获胜后另经 corroborate_download_anchor 异路复核第二锚
 # （L8-F-02）：不一致删档整单中止，降级仅点名不拦截。
+# A1-01：整轮总预算（缺省 240s，FLMX_DOWNLOAD_BUDGET_SECONDS 可
+# 调，与 install.sh 的 download_agent_binary 同名同值同口径）——
+# 旧实现只有单腿界（600s×重试×本体/校验双腿×约 10 路线），高于
+# 1KB/s 地板的涓流路线能把一次下载拖到小时级且永不中止。现入
+# 口定格截止、逐路逐腿按剩余量收紧，耗尽即整轮点名失败。第二
+# 锚复核自有 20s 总界（见 corroborate_download_anchor），不在
+# 本预算内重复计扣。
 download_verified_routed() {
   local url="$1"
   local dest="$2"
   ensure_download_routes
+  local deadline=$(( $(date +%s) + ${FLMX_DOWNLOAD_BUDGET_SECONDS:-240} ))
   local prefix
   while :; do
     for prefix in "${DOWNLOAD_ROUTES[@]}"; do
-      if download_verified "$(route_url "$prefix" "$url")" "$dest"; then
+      if (( $(date +%s) >= deadline )); then
+        echo "❌ 下载总预算（${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}s）已耗尽，整轮下载失败" >&2
+        return 1
+      fi
+      if download_verified "$(route_url "$prefix" "$url")" "$dest" "$deadline"; then
         if ! corroborate_download_anchor "$url" "$dest" "$prefix"; then
           rm -f "$dest"
           return 1

@@ -289,6 +289,88 @@ EOF
   grep -q '^FLMX_POSTGRES_VOLUME=my_pg$' "$dir3/.env" || fail "A2-03: the live-read postgres volume must be pinned"
 )
 
+# A1-01（audit-max）：路由下载加跨腿总预算——旧实现只有单腿
+# 600s×重试×双腿×约 10 路线，涓流路线（高于 1KB/s 地板看门狗）
+# 可把一次下载拖到小时级；install.sh 同面已有 240s 总预算
+# （FLMX_DOWNLOAD_BUDGET_SECONDS），面板侧缺失。三幕：① 预算=0
+# → routed 在发出任何下载请求前即以总预算点名失败；② 给
+# download_verified 传 30s 后截止 → 两腿 --max-time 均收紧到
+# 30（不再是 600）且带 --retry-max-time；③ 预算充足时 routed
+# 照常成功（既有口径回归）。
+test_panel_download_routed_total_budget() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local log dest out
+  log=$(mktemp)
+  dest=$(mktemp -u)
+  out=$(mktemp)
+  CURL_ARGS_LOG="$log"
+
+  curl() {
+    echo "$*" >> "$CURL_ARGS_LOG"
+    local output="" url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      printf 'fixture-body' | sha256sum | awk '{print $1"  asset.sha256"}' > "$output"
+    else
+      printf 'fixture-body' > "$output"
+    fi
+    return 0
+  }
+
+  # ① 预算耗尽：不发任何请求、点名失败
+  PROXY_ENABLED="false"
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+  FLMX_DOWNLOAD_BUDGET_SECONDS=0
+  local rc="0"
+  download_verified_routed "https://example.com/asset.yml" "$dest" >"$out" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "A1-01: an exhausted download budget must fail the routed download"
+  grep -q '下载总预算' "$out" || fail "A1-01: the budget failure must be named in the output"
+  assert_equals "0" "$(grep -c . "$log" || true)" "A1-01: no download request may be issued once the budget is exhausted"
+
+  # ② 截止收紧两腿（两腿各自在调用时点算剩余量，跨秒后可差 1-2s，
+  # 故断言区间：两腿帽都落在 [25,30]、无一为 600）
+  : > "$log"
+  local deadline=$(( $(date +%s) + 30 ))
+  download_verified "https://example.com/asset.yml" "$dest" "$deadline" >/dev/null || \
+    fail "A1-01: download_verified with a live deadline should succeed with the stub"
+  local leg_caps leg_cap_value
+  leg_caps=$(grep -o -- '--max-time [0-9]*' "$log" | awk '{print $2}')
+  assert_equals "2" "$(printf '%s' "$leg_caps" | grep -c .)" "A1-01: both legs must carry a budget-derived --max-time"
+  while IFS= read -r leg_cap_value; do
+    if (( leg_cap_value < 25 || leg_cap_value > 30 )); then
+      fail "A1-01: each leg cap must be the remaining budget (~30s), got $leg_cap_value"
+    fi
+  done <<< "$leg_caps"
+  if grep -q -- '--max-time 600' "$log"; then
+    fail "A1-01: no leg may keep the 600s cap while a tighter budget deadline is in force"
+  fi
+  assert_equals "2" "$(grep -c -- '--retry-max-time' "$log")" "A1-01: both legs must bound total retry time by the remaining budget"
+
+  # ③ 预算充足：routed 照常成功
+  : > "$log"
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+  FLMX_DOWNLOAD_BUDGET_SECONDS=240
+  download_verified_routed "https://example.com/asset.yml" "$dest" >/dev/null || \
+    fail "A1-01: routed download must succeed when the budget is ample"
+  assert_equals "fixture-body" "$(cat "$dest")" "A1-01: the downloaded body must land verbatim"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -9702,5 +9784,6 @@ test_install_panel_force_reinstall_data_gate
 test_panel_pin_accident_gate_unknown_mount_aborts
 test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key
+test_panel_download_routed_total_budget
 
 echo "install script tests passed"
