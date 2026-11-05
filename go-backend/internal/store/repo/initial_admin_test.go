@@ -213,6 +213,154 @@ func TestSeedCreateFailureSetsAdminBootstrapRequired(t *testing.T) {
 	}
 }
 
+// FIX-CI-1：一次性文件落点不可写时不得中止播种。CI 的 PG 契约
+// 形态正是落点推导出不可写的 /app 且管理员从未建成（自签 JWT 被
+// 中间件复核 401）；真部署里 PG 裸二进制未设 DB_PATH、或数据卷
+// 只读时同因永久无管理员。本用例以「路径穿过普通文件」构造任何
+// 权限下都失败的落点（MkdirAll 恒 ENOTDIR），断言管理员仍建成。
+func TestSeedAdminCreatedWhenPasswordFileUnwritable(t *testing.T) {
+	resetInitialAdminState(t)
+	t.Setenv(InitialAdminPasswordEnv, "")
+	r, _ := openInitialAdminRepo(t)
+
+	if err := r.db.Exec(`DELETE FROM "user" WHERE id = 1`).Error; err != nil {
+		t.Fatalf("delete seeded admin: %v", err)
+	}
+	initialAdminCandidate, initialAdminCandidateFile = "", ""
+	oldFlag := adminBootstrapRequired
+	t.Cleanup(func() { adminBootstrapRequired = oldFlag })
+	adminBootstrapRequired = false
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	initialAdminDataDir = filepath.Join(blocker, "data")
+	seedData(r.db)
+
+	var count int64
+	if err := r.db.Model(&model.User{}).Where("id = ?", 1).Count(&count).Error; err != nil {
+		t.Fatalf("count admin rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("seed must create the admin even when the one-time password file cannot be written, got %d admin rows", count)
+	}
+	if got := InitialAdminPasswordCandidate(); got == "" {
+		t.Fatal("candidate must be registered even when the password file cannot be written")
+	}
+	if initialAdminCandidateFile != "" {
+		written := initialAdminCandidateFile
+		t.Cleanup(func() { _ = os.Remove(written) })
+	}
+}
+
+// stubInitialAdminFallbacks 把落点链的后备落点换成受控目录，
+// 避免用例污染真实的可执行文件目录/系统临时目录。
+func stubInitialAdminFallbacks(t *testing.T, dirs ...string) {
+	t.Helper()
+	old := initialAdminFallbackDirs
+	initialAdminFallbackDirs = func() []string { return dirs }
+	t.Cleanup(func() { initialAdminFallbackDirs = old })
+	oldPending := initialAdminPendingWrite
+	initialAdminPendingWrite = false
+	t.Cleanup(func() { initialAdminPendingWrite = oldPending })
+}
+
+// FIX-CI-1：数据目录落点不可写时，落点链应落到可写的后备落点
+// （0600、哈希可验），且跨重启探针能从后备落点恢复候选登记
+// （强制改密不因落点降级失效）。
+func TestSeedFallsBackToWritableLanding(t *testing.T) {
+	resetInitialAdminState(t)
+	t.Setenv(InitialAdminPasswordEnv, "")
+	r, _ := openInitialAdminRepo(t)
+	if err := r.db.Exec(`DELETE FROM "user" WHERE id = 1`).Error; err != nil {
+		t.Fatalf("delete seeded admin: %v", err)
+	}
+	initialAdminCandidate, initialAdminCandidateFile = "", ""
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	initialAdminDataDir = filepath.Join(blocker, "data")
+	fallback := t.TempDir()
+	stubInitialAdminFallbacks(t, fallback)
+	seedData(r.db)
+
+	wantFile := filepath.Join(fallback, initialAdminPasswordFileName)
+	if initialAdminCandidateFile != wantFile {
+		t.Fatalf("candidate file = %q, want fallback landing %q", initialAdminCandidateFile, wantFile)
+	}
+	info, err := os.Stat(wantFile)
+	if err != nil {
+		t.Fatalf("fallback one-time file must exist: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("fallback one-time file mode = %o, want 0600", perm)
+	}
+	if initialAdminPendingWrite {
+		t.Fatal("pending write must be clear after a successful fallback landing")
+	}
+	pwd := InitialAdminPasswordCandidate()
+	hash, _ := seededAdmin(t, r)
+	if ok, _ := security.VerifyPassword(hash, pwd); !ok {
+		t.Fatal("stored admin hash must verify against the fallback-landed initial password")
+	}
+	initialAdminCandidate, initialAdminCandidateFile = "", ""
+	seedData(r.db)
+	if got := InitialAdminPasswordCandidate(); got != pwd {
+		t.Fatalf("probe must restore candidate from the fallback landing: got %q, want %q", got, pwd)
+	}
+}
+
+// FIX-CI-1：落点链全败时管理员仍建成、候选只在内存登记并置
+// 待重试标；落点恢复可写后，下一次 seedData 的探针补落盘清标。
+func TestSeedPendingWriteRetriedByProbe(t *testing.T) {
+	resetInitialAdminState(t)
+	t.Setenv(InitialAdminPasswordEnv, "")
+	r, _ := openInitialAdminRepo(t)
+	if err := r.db.Exec(`DELETE FROM "user" WHERE id = 1`).Error; err != nil {
+		t.Fatalf("delete seeded admin: %v", err)
+	}
+	initialAdminCandidate, initialAdminCandidateFile = "", ""
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	initialAdminDataDir = filepath.Join(blocker, "data")
+	stubInitialAdminFallbacks(t, filepath.Join(blocker, "fallback"))
+	seedData(r.db)
+
+	var count int64
+	if err := r.db.Model(&model.User{}).Where("id = ?", 1).Count(&count).Error; err != nil {
+		t.Fatalf("count admin rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("admin must be created even when every landing fails, got %d rows", count)
+	}
+	if InitialAdminPasswordCandidate() == "" {
+		t.Fatal("candidate must be registered in memory when every landing fails")
+	}
+	if !initialAdminPendingWrite {
+		t.Fatal("pending write must be set when every landing fails")
+	}
+	if initialAdminCandidateFile != "" {
+		t.Fatalf("no candidate file may be registered when every landing fails, got %q", initialAdminCandidateFile)
+	}
+
+	writable := t.TempDir()
+	initialAdminFallbackDirs = func() []string { return []string{writable} }
+	seedData(r.db)
+	if initialAdminPendingWrite {
+		t.Fatal("pending write must clear after the probe retry succeeds")
+	}
+	wantFile := filepath.Join(writable, initialAdminPasswordFileName)
+	if initialAdminCandidateFile != wantFile {
+		t.Fatalf("candidate file after retry = %q, want %q", initialAdminCandidateFile, wantFile)
+	}
+	if _, err := os.Stat(wantFile); err != nil {
+		t.Fatalf("retried one-time file must exist: %v", err)
+	}
+}
+
 // 陈旧文件清理：口令已由带外路径变更（哈希不再吻合）时，
 // 启动探针删除残留的一次性文件且不登记候选。
 func TestInitialAdminProbeRemovesStaleFile(t *testing.T) {
