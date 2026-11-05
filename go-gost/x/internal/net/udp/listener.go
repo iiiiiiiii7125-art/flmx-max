@@ -107,6 +107,12 @@ func (ln *listener) listenLoop() {
 		}
 
 		if err := c.WriteQueue(b[:n]); err != nil {
+			// The datagram is dropped, so ownership of the pooled
+			// buffer stays with listenLoop: return it (D3-08).
+			// Without this, the queue-full path — exactly the
+			// overload condition — allocates a fresh buffer per
+			// dropped packet instead of reusing the pool.
+			bufpool.Put(b)
 			ln.config.Logger.Warn("data discarded: ", err)
 		}
 	}
