@@ -59,11 +59,14 @@ func TestImportServiceMonitorsMirrorWriteGates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ServiceMonitorsImported != 4 {
-		t.Fatalf("ServiceMonitorsImported = %d, want 4 (ids 8,9,10,11), warnings=%v", result.ServiceMonitorsImported, result.ImportWarnings)
+	// GATE-FIX C 裁定：id=1 的 http 行是存量旧类型，按原样恢复
+	// （见 repository.go importServiceMonitors 的裁定注释），故
+	// 导入数 5（ids 1,8,9,10,11）、跳过数 6；其余硬门不变。
+	if result.ServiceMonitorsImported != 5 {
+		t.Fatalf("ServiceMonitorsImported = %d, want 5 (ids 1,8,9,10,11), warnings=%v", result.ServiceMonitorsImported, result.ImportWarnings)
 	}
-	if got := result.SkippedRows["serviceMonitors"]; got != 7 {
-		t.Fatalf("SkippedRows[serviceMonitors] = %d, want 7, skipped=%v", got, result.SkippedRows)
+	if got := result.SkippedRows["serviceMonitors"]; got != 6 {
+		t.Fatalf("SkippedRows[serviceMonitors] = %d, want 6, skipped=%v", got, result.SkippedRows)
 	}
 	warnText := strings.Join(result.ImportWarnings, "\n")
 	for _, want := range []string{"\"http\"", "enabled=7", "nodeId=-3", "ICMP", "已调整为"} {
@@ -82,6 +85,10 @@ func TestImportServiceMonitorsMirrorWriteGates(t *testing.T) {
 	if m := readMonitor(8); m.Type != "tcp" || m.Name != "upper-type" {
 		t.Fatalf("monitor 8 = %+v, want type tcp / trimmed name", m)
 	}
+	// 存量 http 行原样恢复：类型与 target 保真（GATE-FIX C）。
+	if m := readMonitor(1); m.Type != "http" || m.Target != "203.0.113.7:80" {
+		t.Fatalf("monitor 1 = %+v, want legacy http row restored verbatim", m)
+	}
 	// 缺省限值：DefaultIntervalSec=1、DefaultTimeoutSec=5、MaxTimeoutSec=60。
 	if m := readMonitor(9); m.IntervalSec != 1 || m.TimeoutSec != 60 {
 		t.Fatalf("monitor 9 interval/timeout = %d/%d, want 1/60 (default+clamp)", m.IntervalSec, m.TimeoutSec)
@@ -94,7 +101,7 @@ func TestImportServiceMonitorsMirrorWriteGates(t *testing.T) {
 	}
 }
 
-// B8-05：隧道 Type/Status 恢复面枚举门镜像写面 {1,2}/{0,1}，
+// B8-05：隧道 Type/Status 恢复面枚举门镜像写面 {0,1,2}/{0,1}（0 为立门前缺省存量、保真恢复，GATE-FIX C 裁定），
 // 集外逐行跳过 + warning 点名，集内（含 status=0）对照落库。
 func TestImportTunnelTypeStatusGate(t *testing.T) {
 	now := time.Now().UnixMilli()
@@ -117,14 +124,18 @@ func TestImportTunnelTypeStatusGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.TunnelsImported != 1 {
-		t.Fatalf("TunnelsImported = %d, want 1 (only id 4), warnings=%v", result.TunnelsImported, result.ImportWarnings)
+	// GATE-FIX C 裁定：id=3 的 type=0 是立门前缺省存量形态，
+	// 原样保真恢复（见 repository.go validateImportedTunnelType
+	// 的裁定注释），故导入数 2（ids 3,4）、跳过数 2（type=9 与
+	// status=7 仍硬跳）。
+	if result.TunnelsImported != 2 {
+		t.Fatalf("TunnelsImported = %d, want 2 (ids 3,4), warnings=%v", result.TunnelsImported, result.ImportWarnings)
 	}
-	if got := result.SkippedRows["tunnels"]; got != 3 {
-		t.Fatalf("SkippedRows[tunnels] = %d, want 3, skipped=%v", got, result.SkippedRows)
+	if got := result.SkippedRows["tunnels"]; got != 2 {
+		t.Fatalf("SkippedRows[tunnels] = %d, want 2, skipped=%v", got, result.SkippedRows)
 	}
 	warnText := strings.Join(result.ImportWarnings, "\n")
-	for _, want := range []string{"type=9", "status=7", "type=0"} {
+	for _, want := range []string{"type=9", "status=7"} {
 		if !strings.Contains(warnText, want) {
 			t.Fatalf("receipt must name %q, warnings=%v", want, result.ImportWarnings)
 		}
@@ -135,6 +146,13 @@ func TestImportTunnelTypeStatusGate(t *testing.T) {
 	}
 	if tun.Type != 2 || tun.Status != 0 {
 		t.Fatalf("tunnel 4 type/status = %d/%d, want 2/0", tun.Type, tun.Status)
+	}
+	var tunZero model.Tunnel
+	if err := dst.db.Where("id = ?", 3).First(&tunZero).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tunZero.Type != 0 {
+		t.Fatalf("tunnel 3 type = %d, want 0 (legacy default restored verbatim)", tunZero.Type)
 	}
 }
 

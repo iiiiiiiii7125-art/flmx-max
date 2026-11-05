@@ -63,6 +63,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository.go:seedData":                                                  {"", "字面量 3 元品牌名清单"},
 	"repository.go:ensurePostgresIDDefaults":                                  {"", "字面量 2 元类型名清单"},
 	"repository.go:ListEnabledServiceMonitors":                                {"", "字面量 2 元协议清单"},
+	"repository.go:importServiceMonitorLimits":                                {"", "字面量 7 元服务监控限值配置键清单"},
 	"repository_federation_cleanup.go:ListFederationTunnelBindingsForCleanup": {"", "字面量 2 元状态清单"},
 	"repository_federation_reconcile.go:ListPendingPeerShareNodeIDs":          {"", "字面量 2 元角色清单"},
 	"repository_subscription.go:migrateSubscriptions":                         {"", "字面量 5 元旧配置键清单"},
