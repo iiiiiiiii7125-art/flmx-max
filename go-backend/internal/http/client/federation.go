@@ -17,6 +17,14 @@ import (
 // 方法的错误路径统一经此上限截断。
 const federationErrorBodyLimit = 512
 
+// federationSuccessBodyLimit 是对端返回 200 时读取成功体的上限
+// （B9-03）。成功回执的最大合法形态（Connect 全量节点信息、
+// Diagnose 诊断明细）远小于 1 MiB；无界解码会让异常/恶意对端以超
+// 大成功体线性放大本机内存，与错误体无界读入是同一放大面。七个
+// 方法的成功体统一经此上限截断，超限时 Decode 报错并按远端协议
+// 错误处理。
+const federationSuccessBodyLimit = 1 << 20
+
 type FederationClient struct {
 	client *http.Client
 }
@@ -169,7 +177,7 @@ func (c *FederationClient) Connect(url, token, localDomain string) (*RemoteNodeI
 		Msg  string         `json:"msg"`
 		Data RemoteNodeInfo `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, federationSuccessBodyLimit)).Decode(&res); err != nil {
 		return nil, err
 	}
 	if res.Code != 0 {
@@ -213,7 +221,7 @@ func (c *FederationClient) CreateTunnel(url, token, localDomain, protocol string
 		Msg  string               `json:"msg"`
 		Data RemoteTunnelResponse `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, federationSuccessBodyLimit)).Decode(&res); err != nil {
 		return nil, err
 	}
 	if res.Code != 0 {
@@ -252,7 +260,7 @@ func (c *FederationClient) ReservePort(url, token, localDomain string, reqData R
 		Msg  string                     `json:"msg"`
 		Data RuntimeReservePortResponse `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, federationSuccessBodyLimit)).Decode(&res); err != nil {
 		return nil, err
 	}
 	if res.Code != 0 {
@@ -291,7 +299,7 @@ func (c *FederationClient) ApplyRole(url, token, localDomain string, reqData Run
 		Msg  string                   `json:"msg"`
 		Data RuntimeApplyRoleResponse `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, federationSuccessBodyLimit)).Decode(&res); err != nil {
 		return nil, err
 	}
 	if res.Code != 0 {
@@ -329,7 +337,7 @@ func (c *FederationClient) ReleaseRole(url, token, localDomain string, reqData R
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, federationSuccessBodyLimit)).Decode(&res); err != nil {
 		return err
 	}
 	if res.Code != 0 {
@@ -368,7 +376,7 @@ func (c *FederationClient) Diagnose(url, token, localDomain string, reqData Runt
 		Msg  string                 `json:"msg"`
 		Data map[string]interface{} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, federationSuccessBodyLimit)).Decode(&res); err != nil {
 		return nil, err
 	}
 	if res.Code != 0 {
@@ -411,7 +419,7 @@ func (c *FederationClient) Command(url, token, localDomain string, reqData Runti
 		Msg  string                     `json:"msg"`
 		Data RuntimeNodeCommandResponse `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, federationSuccessBodyLimit)).Decode(&res); err != nil {
 		return nil, err
 	}
 	if res.Code != 0 {

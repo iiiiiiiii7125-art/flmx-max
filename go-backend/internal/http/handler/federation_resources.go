@@ -208,10 +208,7 @@ func (h *Handler) preparePeerResourceCommand(share *repo.PeerShare, cmd string, 
 				}
 			}
 			config := configs[i]
-			if err := validatePeerResourceReferences(config, kind); err != nil {
-				return nil, err
-			}
-			if err := validatePeerResourceTypes(config, kind); err != nil {
+			if err := validatePeerResourceConfig(config, kind); err != nil {
 				return nil, err
 			}
 			scopePeerResourceReferences(config, share.ID)
@@ -260,6 +257,18 @@ func (h *Handler) preparePeerResourceCommand(share *repo.PeerShare, cmd string, 
 			case "resume":
 				if item.Config == "" {
 					return nil, fmt.Errorf("resource has no saved configuration")
+				}
+				// B6-06: resume 直接把存量配置重新置 active 并物化，
+				// 必须与写入面同律重跑校验全集——否则启动复检刚置
+				// paused 的植入配置可被对端一条 ResumeService 原样
+				// 复活，复检形同虚设。存量配置 JSON 不可解析同按
+				// fail-closed 拒绝。
+				var storedConfig interface{}
+				if err := json.Unmarshal([]byte(item.Config), &storedConfig); err != nil {
+					return nil, fmt.Errorf("resource has no valid saved configuration")
+				}
+				if err := validatePeerResourceConfig(storedConfig, kind); err != nil {
+					return nil, err
 				}
 				item.DesiredState = "active"
 			default:
@@ -443,14 +452,18 @@ func orderPeerShareResources(items []repo.PeerShareResource) {
 }
 
 // revalidateStoredPeerShareResources 是 FIX2-B（V5-3 残余风险）的启动
-// 复检：D3-03 类型白名单只在 preparePeerResourceCommand 写入时校验，
-// 升级前已落库的 peer_share_resource 期望状态不经复检——若提供方在
-// 升级前已被恶意对端植入 file/sshd 等危险配置，升级后节点重连对账
-// 会原样物化。本函数在后台对账循环启动前把全部存量 active 的
-// service/chain 期望状态补跑一遍白名单：不过者置 paused（对账按
-// paused 语义下发删除、监听不拉起，配置保留待管理员处置）并逐条
-// 告警，绝不静默沿用；配置 JSON 不可解析同按 fail-closed 置 paused
-// （对账侧解不出同样无法物化）。deleted 墓碑与 limiter 不在复检面。
+// 复检：写入面校验只在 preparePeerResourceCommand 写入时执行，升级前
+// 已落库的 peer_share_resource 期望状态不经复检——若提供方在升级前
+// 已被恶意对端植入 file/sshd 等危险配置，升级后节点重连对账会原样
+// 物化。本函数在后台对账循环启动前把全部存量 active 的期望状态补跑
+// 一遍与写入面相同的校验全集（validatePeerResourceConfig：引用＋
+// 类型＋本机路径，limiter/climiter 的 loader 检查同在全集内——B6-06，
+// 此前本函数只重跑类型白名单且整体跳过 limiter，引用面违规与证书
+// 路径植入都能存活）：不过者置 paused（对账按 paused 语义下发删除、
+// 监听不拉起，配置保留待管理员处置）并逐条告警，绝不静默沿用；配置
+// JSON 不可解析同按 fail-closed 置 paused（对账侧解不出同样无法物
+// 化）。deleted 墓碑不在复检面。paused 的存量配置要复活必须过
+// preparePeerResourceCommand 里 resume 的同一全集复检（B6-06）。
 func (h *Handler) revalidateStoredPeerShareResources() {
 	if h == nil || h.repo == nil {
 		return
@@ -463,7 +476,12 @@ func (h *Handler) revalidateStoredPeerShareResources() {
 	var changed []repo.PeerShareResource
 	for i := range items {
 		item := items[i]
-		if item.DesiredState != "active" || (item.Kind != "service" && item.Kind != "chain") {
+		if item.DesiredState != "active" {
+			continue
+		}
+		switch item.Kind {
+		case "service", "chain", "limiter", "climiter":
+		default:
 			continue
 		}
 		if strings.TrimSpace(item.Config) == "" {
@@ -476,7 +494,7 @@ func (h *Handler) revalidateStoredPeerShareResources() {
 			changed = append(changed, item)
 			continue
 		}
-		if err := validatePeerResourceTypes(config, item.Kind); err != nil {
+		if err := validatePeerResourceConfig(config, item.Kind); err != nil {
 			log.Printf("federation startup revalidation: pausing share_id=%d %s %q: %v", item.ShareID, item.Kind, item.OriginalName, err)
 			item.DesiredState = "paused"
 			changed = append(changed, item)
@@ -489,7 +507,7 @@ func (h *Handler) revalidateStoredPeerShareResources() {
 		log.Printf("federation startup revalidation: persist paused states failed: %v", err)
 		return
 	}
-	log.Printf("federation startup revalidation: paused %d stored peer resource(s) failing the D3-03 type whitelist; review before resuming", len(changed))
+	log.Printf("federation startup revalidation: paused %d stored peer resource(s) failing write-time validation; review before resuming", len(changed))
 }
 
 func (h *Handler) reconcilePeerShareResourcesOnNode(nodeID int64) error {
@@ -878,6 +896,109 @@ func walkPeerResourceTypes(value interface{}) error {
 		}
 	}
 	return nil
+}
+
+// validatePeerResourceConfig 是对端资源配置的校验全集单点：引用面、
+// 类型白名单与本机路径面三校验同律。写入面
+// （preparePeerResourceCommand）、存量启动复检与 resume 复活门共用
+// 本函数，任何一面加严自动覆盖其余两面（B6-06）。
+func validatePeerResourceConfig(value interface{}, kind string) error {
+	if err := validatePeerResourceReferences(value, kind); err != nil {
+		return err
+	}
+	if err := validatePeerResourceTypes(value, kind); err != nil {
+		return err
+	}
+	return validatePeerResourceLocalPaths(value)
+}
+
+// validatePeerResourceLocalPaths 是 B6-01 的路径面校验：对端资源配置
+// 不得携带提供方节点本机文件路径。普查全集（go-gost/x 机械导出）：
+// TLSConfig（x/config/config.go，listener/handler/connector/dialer
+// 四段共用）的 certFile/keyFile/caFile 三字段是唯一的证书路径字段；
+// handler metadata 的 mitm.certFile/mitm.caCertFile/mitm.keyFile/
+// mitm.caKeyFile（x/handler/relay 等十处 metadata.go）经
+// LoadX509KeyPair 以 agent 的 root 身份加载。面板自身构建的联邦/
+// 转发/隧道服务从不下发 tls 段或 mitm.* metadata，此面纯为对端可加。
+// 命中非空字符串值即 fail-closed 拒绝；空值在 gost 侧不构成加载，
+// 与引用/hook 校验的空值放行口径一致。键名大小写不敏感（对端 JSON
+// 的 "CertFile" 形态经 gost 解码同样落到同一字段）。mitm.alpn/
+// mitm.bypass 非路径键，不在此面。
+//
+// B6-01 同族补全（同机制再普查，凡有 agent 侧文件消费证据的键全收）：
+//   - kcp 配置文件：metadata 的 kcp.configFile/configFile/c 三别名
+//     （x/listener/kcp、x/dialer/kcp 的 metadata.go）经
+//     kcp.ParseFromFile 以 os.Open 读取；kcp 在对端合法类型集内，
+//     此族在写入面即为活洞。单字母别名 c 只在 metadata 上下文内
+//     才是路径键（其余同名键不归本面）。
+//   - SSH 密钥材料：metadata 的 privateKeyFile（x/dialer/ssh、
+//     x/dialer/sshd、x/listener/ssh、x/listener/sshd 的 metadata.go
+//     经 os.ReadFile 后 ParsePrivateKey）与 authorizedKeys
+//     （x/listener/ssh、x/listener/sshd 经 ParseAuthorizedKeysFile
+//     读取）。ssh/sshd 类型当前不在对端合法集内，此族按路径面独立
+//     于类型面的口径一并收：白名单日后放宽不得随之敞开。
+//   - file handler 服务目录：metadata 的 file.dir/dir
+//     （x/handler/file 的 metadata.go）直达 http.FileServer 的根
+//     目录；裸 dir 只在 metadata 上下文内判。handler 类型 file
+//     当前不在合法集内，同上纵深。
+//   - http 诱饵文件：metadata 的 probeResist/probe_resist/
+//     probeResistance（x/handler/http、http2 的 metadata.go 解析，
+//     http3 仅解析未消费）在值形为 file:<path> 时经 os.Open 读取
+//     并把内容当诱饵响应回给未认证探测者（x/handler/http、
+//     http2 的 handler.go）；web:/host: 值是网络目标、不在本面。
+//
+// limiter 顶层 file 加载器与 hop loader 已由引用面校验拒绝，不在
+// 本面重复登记。URL 路径键（*.path/pathPrefix 等）不落本机文件，
+// 不在本面。
+func validatePeerResourceLocalPaths(value interface{}) error {
+	return walkPeerResourceLocalPaths(value, false)
+}
+
+func walkPeerResourceLocalPaths(value interface{}, inMetadata bool) error {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, child := range v {
+			lower := strings.ToLower(key)
+			if s, ok := child.(string); ok && strings.TrimSpace(s) != "" {
+				switch {
+				case lower == "certfile" || lower == "keyfile" || lower == "cafile" ||
+					(strings.HasPrefix(lower, "mitm.") && strings.Contains(lower, "file")):
+					return fmt.Errorf("shared resources must not reference node-local certificate files: %s", key)
+				case lower == "configfile" || lower == "kcp.configfile":
+					return fmt.Errorf("shared resources must not reference node-local config files: %s", key)
+				case lower == "privatekeyfile":
+					return fmt.Errorf("shared resources must not reference node-local private key files: %s", key)
+				case lower == "authorizedkeys":
+					return fmt.Errorf("shared resources must not reference node-local authorized keys files: %s", key)
+				case lower == "file.dir" || (inMetadata && lower == "dir"):
+					return fmt.Errorf("shared resources must not reference node-local directories: %s", key)
+				case inMetadata && lower == "c":
+					return fmt.Errorf("shared resources must not reference node-local config files: %s", key)
+				case (lower == "proberesist" || lower == "probe_resist" || lower == "proberesistance") &&
+					probeResistanceFileValue(s):
+					return fmt.Errorf("shared resources must not reference node-local files: %s", key)
+				}
+			}
+			if err := walkPeerResourceLocalPaths(child, inMetadata || lower == "metadata"); err != nil {
+				return err
+			}
+		}
+	case []interface{}:
+		for _, child := range v {
+			if err := walkPeerResourceLocalPaths(child, inMetadata); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// probeResistanceFileValue 判 metadata 诱饵值是否为 file: 形态（类型
+// 段在首个冒号前、大小写不敏感）：x/handler/http 与 http2 按
+// "file:<path>" 以 os.Open 打开该文件并把内容回给探测者。
+func probeResistanceFileValue(s string) bool {
+	head, _, found := strings.Cut(s, ":")
+	return found && strings.EqualFold(strings.TrimSpace(head), "file")
 }
 
 // Registry kinds without an owned command API cannot be referenced by peers.
