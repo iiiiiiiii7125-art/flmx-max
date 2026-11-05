@@ -885,7 +885,7 @@ test_panel_install_env_carries_trusted_proxies_entry() (
   assert_equals "0" "$rc" "C4-01 follow-up: install_panel should succeed in the fixture"
   [[ -f "$work/.env" ]] || fail "C4-01 follow-up: install must generate .env"
   grep -q '^FLMX_TRUSTED_PROXIES=$' "$work/.env" || fail "C4-01 follow-up: the generated .env must carry FLMX_TRUSTED_PROXIES, empty by default (loopback-only trust)"
-  grep -q '前端容器子网' "$work/.env" || fail "C4-01 follow-up: the guidance must name what to fill (the frontend container subnet CIDR)"
+  grep -q '转发者所在子网' "$work/.env" || fail "C4-01 follow-up: the guidance must name what to fill (the frontend container subnet CIDR)"
   grep -q '172.30.0.0/16' "$work/.env" || fail "C4-01 follow-up: the guidance must give the shipped template subnet as the concrete example"
   grep -q '共享' "$work/.env" || fail "C4-01 follow-up: the guidance must state the shared-bucket consequence of leaving it empty"
   grep -q '0.0.0.0/0' "$work/.env" || fail "C4-01 follow-up: the guidance must warn against an over-broad trust range"
