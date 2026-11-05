@@ -40,6 +40,29 @@ func (d *dtlsDialer) Init(md md.Metadata) (err error) {
 	return d.parseMetadata(md)
 }
 
+// effectiveTLSConfig resolves the TLS settings for a dial to addr. An
+// explicitly configured TLS config is used as-is; with no config the
+// default verifies the peer (F1-01) — non-verification remains
+// available only through an explicit InsecureSkipVerify opt-in. The
+// expected server name falls back to the dialled host when the config
+// does not carry one.
+func effectiveTLSConfig(cfg *tls.Config, addr string) (tlsCfg *tls.Config, serverName string) {
+	if cfg == nil {
+		cfg = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+	}
+	serverName = cfg.ServerName
+	if serverName == "" {
+		if host, _, err := net.SplitHostPort(addr); err == nil {
+			serverName = host
+		} else {
+			serverName = addr
+		}
+	}
+	return cfg, serverName
+}
+
 func (d *dtlsDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialOption) (net.Conn, error) {
 	var options dialer.DialOptions
 	for _, opt := range opts {
@@ -51,17 +74,12 @@ func (d *dtlsDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialO
 		return nil, err
 	}
 
-	tlsCfg := d.options.TLSConfig
-	if tlsCfg == nil {
-		tlsCfg = &tls.Config{
-			InsecureSkipVerify: true,
-		}
-	}
+	tlsCfg, serverName := effectiveTLSConfig(d.options.TLSConfig, addr)
 	config := dtls.Config{
 		Certificates:         tlsCfg.Certificates,
 		InsecureSkipVerify:   tlsCfg.InsecureSkipVerify,
 		ExtendedMasterSecret: dtls.RequireExtendedMasterSecret,
-		ServerName:           tlsCfg.ServerName,
+		ServerName:           serverName,
 		RootCAs:              tlsCfg.RootCAs,
 		FlightInterval:       d.md.flightInterval,
 		MTU:                  d.md.mtu,

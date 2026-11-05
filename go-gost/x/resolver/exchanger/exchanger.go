@@ -56,6 +56,19 @@ func TimeoutOption(timeout time.Duration) Option {
 	}
 }
 
+// defaultTLSConfig builds the TLS config used when a DoT/DoH resolver
+// was configured by address only, with no explicit TLS options: the
+// upstream's certificate is verified against the configured host
+// (F1-01). Non-verification remains available only when the operator
+// supplies an explicit TLS config with the insecure flag set, the same
+// opt-in shape as the rest of the codebase.
+func defaultTLSConfig(host string) *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: host,
+	}
+}
+
 // Exchanger is an interface for DNS synchronous query.
 type Exchanger interface {
 	Exchange(ctx context.Context, msg []byte) ([]byte, error)
@@ -110,17 +123,17 @@ func NewExchanger(addr string, opts ...Option) (Exchanger, error) {
 	case "tcp":
 	case "dot", "tls":
 		if ex.options.tlsConfig == nil {
-			ex.options.tlsConfig = &tls.Config{
-				InsecureSkipVerify: true,
+			host, _, _ := net.SplitHostPort(ex.addr)
+			if host == "" {
+				host = ex.addr
 			}
+			ex.options.tlsConfig = defaultTLSConfig(host)
 		}
 		ex.network = "tcp"
 	case "https":
 		ex.addr = addr
 		if ex.options.tlsConfig == nil {
-			ex.options.tlsConfig = &tls.Config{
-				InsecureSkipVerify: true,
-			}
+			ex.options.tlsConfig = defaultTLSConfig(u.Hostname())
 		}
 		ex.client = &http.Client{
 			Timeout: options.timeout,

@@ -30,6 +30,27 @@ func (s *clientSelector) Select(methods ...uint8) (method uint8) {
 	return
 }
 
+// tlsConfigFor returns the TLS config to handshake conn with. When
+// verification is on but the config carries no ServerName, the
+// expected name is taken from the address of the SOCKS server being
+// connected to (on a clone, so the shared config is never mutated);
+// without it crypto/tls would refuse the handshake outright. An
+// explicitly configured ServerName or an explicit InsecureSkipVerify
+// opt-in is honoured as-is.
+func (s *clientSelector) tlsConfigFor(conn net.Conn) *tls.Config {
+	cfg := s.TLSConfig
+	if cfg == nil || cfg.InsecureSkipVerify || cfg.ServerName != "" {
+		return cfg
+	}
+	cfg = cfg.Clone()
+	if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+		cfg.ServerName = host
+	} else {
+		cfg.ServerName = conn.RemoteAddr().String()
+	}
+	return cfg
+}
+
 func (s *clientSelector) OnSelected(method uint8, conn net.Conn) (string, net.Conn, error) {
 	s.logger.Debug("method selected: ", method)
 
@@ -37,11 +58,11 @@ func (s *clientSelector) OnSelected(method uint8, conn net.Conn) (string, net.Co
 	case gosocks5.MethodNoAuth:
 
 	case socks.MethodTLS:
-		conn = tls.Client(conn, s.TLSConfig)
+		conn = tls.Client(conn, s.tlsConfigFor(conn))
 
 	case gosocks5.MethodUserPass, socks.MethodTLSAuth:
 		if method == socks.MethodTLSAuth {
-			conn = tls.Client(conn, s.TLSConfig)
+			conn = tls.Client(conn, s.tlsConfigFor(conn))
 		}
 
 		var username, password string
