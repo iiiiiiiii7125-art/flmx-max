@@ -41,6 +41,101 @@ pty_run() {
   printf '%s' "$input" | script -qec "bash \"$harness\"" /dev/null >/dev/null 2>&1
 }
 
+# A2-01 残面（audit-max）：事故态门的旧卷内容探测须三态——挂载点
+# 不可读是「未知」而非「无数据」。旧实现 panel_volume_file_exists
+# 二值 fail-open：inspect 给不出挂载点即按卷内无文件处理，无键＋
+# 实挂新缺省卷＋旧卷存在（内容未知）时两格门都被越过、钉键把可
+# 能的事故态正式化。三幕：① SQLite 格未知 → 中止、不写卷键、点
+# 名未知；② PG 格未知（SQLite 侧非事故形态）→ 中止、不写 PG 卷
+# 键；③ 挂载点可读且旧卷确定无数据文件 → 门放行、照常钉实读值
+# （既有口径回归）。
+test_panel_pin_accident_gate_unknown_mount_aborts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  # docker 桩：卷存在性恒真；挂载点仅 FIXTURE_MOUNT_OK=1 时可读
+  # （回显 $FIXTURE_VOLROOT/<卷名>），否则 inspect -f 取不到挂载点。
+  # 容器挂载实读由 FIXTURE_SQLITE_VOLUME/FIXTURE_POSTGRES_VOLUME 给定。
+  pin_unknown_docker() {
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        if [[ "$3" == "-f" ]]; then
+          [[ "${FIXTURE_MOUNT_OK:-}" == "1" ]] || return 1
+          printf '%s' "$FIXTURE_VOLROOT/$5"
+          return 0
+        fi
+        return 0
+      fi
+      if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+        case "$3" in
+          *"/app/data"*) printf '%s' "${FIXTURE_SQLITE_VOLUME:-}" ;;
+          *"/var/lib/postgresql/data"*) printf '%s' "${FIXTURE_POSTGRES_VOLUME:-}" ;;
+          *) printf '' ;;
+        esac
+        return 0
+      fi
+      return 0
+    }
+  }
+
+  # ① SQLite 格未知
+  local dir1
+  dir1=$(mktemp -d)
+  cat > "$dir1/.env" <<'EOF'
+DB_TYPE=sqlite
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_unknown_docker
+  FIXTURE_MOUNT_OK=""
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  local rc="0"
+  ( cd "$dir1" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "A2-01R: pinning must abort when the legacy sqlite volume exists but its mountpoint is unreadable (unknown must not read as empty)"
+  grep -q '资源键钉值中止' "$dir1/pin.log" || fail "A2-01R: the unknown-state abort must be named in the pin output"
+  grep -q '无法确认' "$dir1/pin.log" || fail "A2-01R: the abort must name that the legacy volume content could not be determined"
+  if grep -q '^FLMX_SQLITE_VOLUME=' "$dir1/.env"; then
+    fail "A2-01R: no sqlite volume key may be written when the accident gate aborts on unknown state"
+  fi
+
+  # ② PG 格未知（SQLite 侧答自定义卷名、不构成事故形态）
+  local dir2
+  dir2=$(mktemp -d)
+  cat > "$dir2/.env" <<'EOF'
+DB_TYPE=postgres
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_unknown_docker
+  FIXTURE_MOUNT_OK=""
+  FIXTURE_SQLITE_VOLUME="custom_sqlite"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  rc="0"
+  ( cd "$dir2" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "A2-01R: pinning must abort when the legacy postgres volume exists but its mountpoint is unreadable"
+  grep -q 'postgres_data' "$dir2/pin.log" || fail "A2-01R: the PG unknown-state abort must name the legacy postgres volume"
+  if grep -q '^FLMX_POSTGRES_VOLUME=' "$dir2/.env"; then
+    fail "A2-01R: no postgres volume key may be written when the PG accident gate aborts on unknown state"
+  fi
+
+  # ③ 挂载点可读、旧卷确定无数据文件 → 放行并钉实读值
+  local dir3
+  dir3=$(mktemp -d)
+  cat > "$dir3/.env" <<'EOF'
+DB_TYPE=sqlite
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  FIXTURE_VOLROOT="$dir3/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/postgres_data"
+  pin_unknown_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  ( cd "$dir3" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "A2-01R: pinning must proceed when both legacy volumes are readable and provably hold no data files"
+  grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir3/.env" || fail "A2-01R: the live-read sqlite volume must be pinned once the gate clears"
+  grep -q '^FLMX_POSTGRES_VOLUME=flmx-postgres-data$' "$dir3/.env" || fail "A2-01R: the live-read postgres volume must be pinned once the gate clears"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -9425,5 +9520,6 @@ test_panel_migrate_pins_keys_before_any_up
 test_panel_migrate_reconcile_second_channel
 test_migrate_legacy_agent_snapshot_failure_aborts
 test_install_panel_force_reinstall_data_gate
+test_panel_pin_accident_gate_unknown_mount_aborts
 
 echo "install script tests passed"

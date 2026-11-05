@@ -1923,6 +1923,20 @@ panel_volume_file_exists() {
   [[ -f "$mountpoint/$relpath" ]]
 }
 
+# 卷内文件三态探测（A2-01 残面）：在上面的二值口径之外区分「确
+# 定不在」与「未知」——挂载点取不到（inspect 无 Mountpoint、或挂
+# 载点不是目录）时返回 2（未知），不把读不到说成没有。事故态门
+# 这类 fail-closed 判定面用本函数：未知与「在」同处置（中止）；
+# 其余只问在不在的消费面继续用二值版。返回：0=在，1=确定不在，
+# 2=未知。
+panel_volume_file_state() {
+  local volume="$1" relpath="$2" mountpoint=""
+  mountpoint=$(docker volume inspect -f '{{.Mountpoint}}' "$volume" 2>/dev/null || true)
+  [[ -n "$mountpoint" && -d "$mountpoint" ]] || return 2
+  [[ -f "$mountpoint/$relpath" ]] && return 0
+  return 1
+}
+
 # 卷内小文件读取：与 panel_volume_file_exists 同通道（卷挂载点、
 # 宿主机侧只读），读不到时输出空串、不报错。
 panel_volume_file_read() {
@@ -2009,11 +2023,22 @@ panel_pin_missing_resource_keys() {
     fi
   else
     if [[ "$sqlite_volume" == "flmx-sqlite-data$(panel_instance_suffix)" ]] \
-      && docker volume inspect sqlite_data >/dev/null 2>&1 \
-      && panel_volume_file_exists sqlite_data gost.db; then
-      echo "❌ 资源键钉值中止：在跑后端实际挂载的数据卷是新模板缺省名 $sqlite_volume，但部署 .env 没有 FLMX_SQLITE_VOLUME 键、且旧名卷 sqlite_data 存在并含有 gost.db——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
-      echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_SQLITE_VOLUME=sqlite_data；数据确在现行卷 → FLMX_SQLITE_VOLUME=$sqlite_volume。"
-      return 1
+      && docker volume inspect sqlite_data >/dev/null 2>&1; then
+      # A2-01 残面：旧卷内容探测走三态——挂载点不可读是「未知」，
+      # 不是「无数据」：未知与确认有数据同处置（中止），不得按
+      # 二值探测的 fail-open 越过事故态门把可能的事故态钉键正式化。
+      local sqlite_old_state=0
+      panel_volume_file_state sqlite_data gost.db || sqlite_old_state=$?
+      if [[ "$sqlite_old_state" == "0" ]]; then
+        echo "❌ 资源键钉值中止：在跑后端实际挂载的数据卷是新模板缺省名 $sqlite_volume，但部署 .env 没有 FLMX_SQLITE_VOLUME 键、且旧名卷 sqlite_data 存在并含有 gost.db——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
+        echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_SQLITE_VOLUME=sqlite_data；数据确在现行卷 → FLMX_SQLITE_VOLUME=$sqlite_volume。"
+        return 1
+      fi
+      if [[ "$sqlite_old_state" == "2" ]]; then
+        echo "❌ 资源键钉值中止：在跑后端实际挂载的数据卷是新模板缺省名 $sqlite_volume、部署 .env 又没有 FLMX_SQLITE_VOLUME 键，而旧名卷 sqlite_data 虽存在、其挂载点不可读，无法确认其中是否存有真库 gost.db——按未知处理，不冒「无数据」之名钉键正式化可能的事故态。"
+        echo "   请先恢复 Docker 卷读面（docker volume inspect sqlite_data 应能给出可读的挂载点），或人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_SQLITE_VOLUME=sqlite_data；数据确在现行卷 → FLMX_SQLITE_VOLUME=$sqlite_volume。"
+        return 1
+      fi
     fi
     if [[ "$pin_scope" == "live" ]]; then
       if [[ -n "$sqlite_volume" ]]; then
@@ -2046,11 +2071,21 @@ panel_pin_missing_resource_keys() {
     # R1-01-M1 事故态门 PG 格（谓词见函数头注）：与 SQLite 格同
     # 形——无键＋实挂新缺省卷＋旧名卷含真实 PG 数据 → 中止。
     if [[ "$postgres_volume" == "flmx-postgres-data$(panel_instance_suffix)" ]] \
-      && docker volume inspect postgres_data >/dev/null 2>&1 \
-      && panel_volume_file_exists postgres_data PG_VERSION; then
-      echo "❌ 资源键钉值中止：在跑 PostgreSQL 容器实际挂载的数据卷是新模板缺省名 $postgres_volume，但部署 .env 没有 FLMX_POSTGRES_VOLUME 键、且旧名卷 postgres_data 存在并含有 PG_VERSION（真实 PostgreSQL 数据目录）——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
-      echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_POSTGRES_VOLUME=postgres_data；数据确在现行卷 → FLMX_POSTGRES_VOLUME=$postgres_volume。"
-      return 1
+      && docker volume inspect postgres_data >/dev/null 2>&1; then
+      # A2-01 残面：与 SQLite 格同律走三态探测——挂载点不可读＝
+      # 未知，按未知中止，不按无数据放行。
+      local postgres_old_state=0
+      panel_volume_file_state postgres_data PG_VERSION || postgres_old_state=$?
+      if [[ "$postgres_old_state" == "0" ]]; then
+        echo "❌ 资源键钉值中止：在跑 PostgreSQL 容器实际挂载的数据卷是新模板缺省名 $postgres_volume，但部署 .env 没有 FLMX_POSTGRES_VOLUME 键、且旧名卷 postgres_data 存在并含有 PG_VERSION（真实 PostgreSQL 数据目录）——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。"
+        echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_POSTGRES_VOLUME=postgres_data；数据确在现行卷 → FLMX_POSTGRES_VOLUME=$postgres_volume。"
+        return 1
+      fi
+      if [[ "$postgres_old_state" == "2" ]]; then
+        echo "❌ 资源键钉值中止：在跑 PostgreSQL 容器实际挂载的数据卷是新模板缺省名 $postgres_volume、部署 .env 又没有 FLMX_POSTGRES_VOLUME 键，而旧名卷 postgres_data 虽存在、其挂载点不可读，无法确认其中是否存有 PG_VERSION（真实 PostgreSQL 数据目录）——按未知处理，不冒「无数据」之名钉键正式化可能的事故态。"
+        echo "   请先恢复 Docker 卷读面（docker volume inspect postgres_data 应能给出可读的挂载点），或人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在旧卷 → FLMX_POSTGRES_VOLUME=postgres_data；数据确在现行卷 → FLMX_POSTGRES_VOLUME=$postgres_volume。"
+        return 1
+      fi
     fi
     # scope=live 时不走卷存在性回退：postgres_data 存在只证明该卷
     # 在，不证明它就是本部署 PG 的卷，写进迁移快照会污染逐字恢
