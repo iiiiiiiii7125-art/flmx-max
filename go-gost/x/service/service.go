@@ -55,14 +55,20 @@ var isHttp atomic.Int32
 
 var isSocks atomic.Int32
 
-var needWrap = false
+// needWrap caches "any protocol block is on" for the per-connection
+// wrap decision. It was the one switch the R3-A01 atomisation
+// missed: SetProtocolBlock writes it from the command path while
+// every accepted connection reads it, a plain-bool data race (D2-01)
+// that could also leave a just-toggled block silently unapplied to
+// racing connections.
+var needWrap atomic.Bool
 
 // SetProtocolBlock sets protocol blocking switches and recomputes wrapper need
 func SetProtocolBlock(httpOn int, tlsOn int, socksOn int) {
 	isHttp.Store(int32(httpOn))
 	isTls.Store(int32(tlsOn))
 	isSocks.Store(int32(socksOn))
-	needWrap = isTls.Load()+isSocks.Load()+isHttp.Load() > 0
+	needWrap.Store(isTls.Load()+isSocks.Load()+isHttp.Load() > 0)
 }
 
 // GetProtocolBlock returns the current protocol blocking switches.
@@ -79,7 +85,7 @@ func init() {
 	// NOTE: This package can be imported by tests/tools that don't have a local
 	// config.json. Missing config should not crash the process.
 	_, _ = LoadConfig("config.json")
-	needWrap = isTls.Load()+isSocks.Load()+isHttp.Load() > 0
+	needWrap.Store(isTls.Load()+isSocks.Load()+isHttp.Load() > 0)
 }
 
 func AdmissionOption(admission admission.Admission) Option {
@@ -363,7 +369,7 @@ func (s *defaultService) Serve() error {
 				}()
 			}
 
-			if needWrap {
+			if needWrap.Load() {
 				conn = wrapConnPDetection(conn)
 			}
 
