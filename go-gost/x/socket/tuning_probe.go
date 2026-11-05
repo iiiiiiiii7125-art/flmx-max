@@ -225,6 +225,13 @@ func probeReferenceConnectRTT(host string) (int, error) {
 // probeTune is the read-only probe body. It never writes: see the
 // package comment at the top of this file.
 func probeTune(req tuneProbeRequest) (tuneProbeResult, error) {
+	return probeTuneContext(context.Background(), req)
+}
+
+// probeTuneContext is probeTune under the caller's command budget
+// (D1-06): the speedtest leg stops when the budget does instead of
+// running on for a panel that already timed out.
+func probeTuneContext(ctx context.Context, req tuneProbeRequest) (tuneProbeResult, error) {
 	res := tuneProbeResult{
 		Suggested:    defaultTuneParams,
 		RTTSource:    "unavailable",
@@ -277,7 +284,7 @@ func probeTune(req tuneProbeRequest) (tuneProbeResult, error) {
 		case !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://"):
 			return tuneProbeResult{}, fmt.Errorf("测速地址须为 http(s) 链接")
 		default:
-			n, elapsed, err := tuneProbeSpeedtest(context.Background(), url)
+			n, elapsed, err := tuneProbeSpeedtest(ctx, url)
 			if err != nil {
 				res.BandwidthSrc = "unavailable"
 				res.Warnings = append(res.Warnings, fmt.Sprintf("测速失败（%v），带宽回落默认值 1000Mbps", err))

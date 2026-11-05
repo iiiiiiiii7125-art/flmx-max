@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -202,6 +203,7 @@ type WebSocketReporter struct {
 	connecting        bool               // 正在连接状态
 	connMutex         sync.Mutex         // 连接状态锁
 	aesCrypto         *crypto.AESCrypto  // AES加密器
+	seenCommands      *seenCommandIDs    // D1-02: 已处理 requestId 集合（防信封重放）
 	tcpPingQueue      chan queuedTCPPing // TcpPing 专用队列 + worker 池（tcp_ping_queue.go）
 	readCommandSem    chan struct{}      // 限制只读命令并发，避免诊断请求耗尽资源
 	mutationQueue     chan CommandMessage
@@ -238,6 +240,7 @@ func NewWebSocketReporter(serverURL string, secret string) *WebSocketReporter {
 		connected:      false,
 		connecting:     false,
 		aesCrypto:      aesCrypto,
+		seenCommands:   newSeenCommandIDs(),
 		tcpPingQueue:   make(chan queuedTCPPing, maxQueuedTCPPings),
 		readCommandSem: make(chan struct{}, maxConcurrentReadCommands),
 		mutationQueue:  make(chan CommandMessage, maxQueuedMutationCommands),
@@ -378,6 +381,8 @@ func (w *WebSocketReporter) connect() error {
 	if scheme := detectWebSocketScheme(usedURL); scheme != "" {
 		w.preferredWSScheme = scheme
 	}
+	// D1-03: cap inbound frame size (see maxInboundCommandFrameSize).
+	conn.SetReadLimit(maxInboundCommandFrameSize)
 	_ = conn.SetReadDeadline(time.Now().Add(reporterReadWait))
 	conn.SetPingHandler(func(appData string) error {
 		_ = conn.SetReadDeadline(time.Now().Add(reporterReadWait))
@@ -919,6 +924,15 @@ const maxEncryptedCommandSkew = 5 * time.Minute
 // compressed blob must not be able to inflate unboundedly into memory.
 const maxDecompressedCommandSize = 10 << 20
 
+// maxInboundCommandFrameSize caps a single inbound WebSocket frame on
+// the command channel (D1-03). It matches the panel's SetReadLimit
+// (10<<20) and maxDecompressedCommandSize: no legitimate command — even
+// a large service batch — comes near it, while an unbounded frame from
+// a compromised or broken sender must not be able to OOM the agent.
+// Gorilla semantics apply: an over-limit frame fails the read and the
+// connection drops (the reconnect loop re-establishes it).
+const maxInboundCommandFrameSize = 10 << 20
+
 // validateEncryptedTimestamp checks an encrypted envelope's timestamp
 // against the acceptance window. The panel sends Unix milliseconds; plain
 // Unix seconds are also accepted for robustness.
@@ -959,12 +973,140 @@ func decompressCommandPayload(data []byte) ([]byte, error) {
 
 // warnPlaintextCommandOnce loudly notes, once per process, that commands
 // are being accepted over an unencrypted channel (D1-02). Plaintext
-// commands remain accepted for intentionally plain deployments (explicit
-// ws:// addr), but never silently.
+// commands remain accepted only when no node secret is configured (the
+// local no-secret form); with a secret configured they are rejected
+// outright (D1-01, see dispatchReceivedCommand).
 func (w *WebSocketReporter) warnPlaintextCommandOnce() {
 	if w.plaintextCommandWarned.CompareAndSwap(false, true) {
 		fmt.Println("⚠️ 安全警告: 正在通过未加密的明文 WebSocket 通道接收面板命令。明文通道可被链路中间人窃听节点 secret 并注入任意命令（含升级指令）；如非有意部署，请为面板配置 TLS 并使用 wss 地址。")
 	}
+}
+
+// commandChannelSecretConfigured reports whether this reporter was built
+// with a usable node secret. The agent's config loader refuses an empty
+// secret, so every real deployment qualifies.
+func (w *WebSocketReporter) commandChannelSecretConfigured() bool {
+	return w.aesCrypto != nil || w.secret != ""
+}
+
+const (
+	// commandReplayWindow is how long a claimed requestId stays claimed.
+	// An encrypted envelope's timestamp may sit up to
+	// maxEncryptedCommandSkew in the future and stays acceptable until
+	// maxEncryptedCommandSkew after it, so a claim must live twice the
+	// skew to cover the envelope's whole acceptance span.
+	commandReplayWindow = 2 * maxEncryptedCommandSkew
+	// maxSeenCommandIDs bounds the claim set. Panel command rates are
+	// low (mutations serialize, reads cap at maxConcurrentReadCommands),
+	// so this only trips under a replay flood; expired claims are pruned
+	// first and the oldest claims evicted after that.
+	maxSeenCommandIDs = 8192
+)
+
+// seenCommandIDs is the bounded claim set behind D1-02 replay rejection.
+type seenCommandIDs struct {
+	mu     sync.Mutex
+	claims map[string]time.Time // requestId -> claim expiry
+}
+
+func newSeenCommandIDs() *seenCommandIDs {
+	return &seenCommandIDs{claims: make(map[string]time.Time)}
+}
+
+// claim records id as seen at now and reports whether it was fresh.
+// A duplicate inside the window returns false. Empty ids are always
+// fresh: they cannot be told apart, and no supported sender omits the
+// requestId.
+func (s *seenCommandIDs) claim(id string, now time.Time) bool {
+	if id == "" {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if expiry, ok := s.claims[id]; ok && now.Before(expiry) {
+		return false
+	}
+	s.claims[id] = now.Add(commandReplayWindow)
+	if len(s.claims) > maxSeenCommandIDs {
+		for k, expiry := range s.claims {
+			if !now.Before(expiry) {
+				delete(s.claims, k)
+			}
+		}
+		if overflow := len(s.claims) - maxSeenCommandIDs*7/8; overflow > 0 {
+			// Evict the oldest claims in one batch so a sustained
+			// flood does not pay a full scan per claim.
+			type claimEntry struct {
+				id     string
+				expiry time.Time
+			}
+			entries := make([]claimEntry, 0, len(s.claims))
+			for k, expiry := range s.claims {
+				entries = append(entries, claimEntry{k, expiry})
+			}
+			sort.Slice(entries, func(i, j int) bool { return entries[i].expiry.Before(entries[j].expiry) })
+			for _, e := range entries[:overflow] {
+				delete(s.claims, e.id)
+			}
+		}
+	}
+	return true
+}
+
+func (s *seenCommandIDs) size() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.claims)
+}
+
+// claimCommandRequestID claims a received command's requestId (D1-02).
+// The claim set lives on the reporter, so it survives reconnects within
+// the process.
+func (w *WebSocketReporter) claimCommandRequestID(id string, now time.Time) bool {
+	if w.seenCommands == nil {
+		// Zero-value reporters (tests, ad-hoc construction) lazily
+		// acquire a claim set; the double-check race is benign because
+		// NewWebSocketReporter is the production constructor.
+		w.seenCommands = newSeenCommandIDs()
+	}
+	return w.seenCommands.claim(id, now)
+}
+
+// dispatchReceivedCommand is the single gate every parsed inbound command
+// passes through before dispatch (D1-01). Compatibility basis: every
+// panel of this product line encrypts commands whenever the node secret
+// is non-empty — the AES envelope exists on both ends since v1.0.0 and
+// the panel's encryptor only fails on an empty secret, in which case the
+// connection could never have been registered. A plaintext command frame
+// reaching a secret-configured agent therefore cannot come from a real
+// panel of any supported version: it is an in-path injection or a
+// misconfiguration, and is rejected fail-closed with an explicit failure
+// receipt (the sender learns immediately instead of timing out). Only
+// the no-secret local form keeps accepting plaintext, with the standing
+// one-time warning.
+func (w *WebSocketReporter) dispatchReceivedCommand(cmd CommandMessage, wasEncrypted bool) {
+	if cmd.Type == "call" {
+		// Dead legacy frame type, silently dropped (unchanged behavior).
+		return
+	}
+	if !wasEncrypted {
+		if w.commandChannelSecretConfigured() {
+			fmt.Printf("❌ 拒绝明文命令: type=%s requestId=%s（本节点已配置 secret，命令必须走加密信封）\n", cmd.Type, cmd.RequestId)
+			w.sendCommandFailure(cmd, "本节点已配置 secret，面板命令必须使用加密信封，明文命令已拒绝执行")
+			return
+		}
+		w.warnPlaintextCommandOnce()
+	}
+	// D1-02: the timestamp window alone does not stop a verbatim replay
+	// of a captured envelope inside the window. Each requestId executes
+	// at most once per claim window; a repeat is rejected with an
+	// explicit receipt instead of executing again.
+	if !w.claimCommandRequestID(cmd.RequestId, time.Now()) {
+		fmt.Printf("❌ 拒绝重放命令: type=%s requestId=%s\n", cmd.Type, cmd.RequestId)
+		w.sendCommandFailure(cmd, "重复的命令 requestId，疑似信封重放，已拒绝再次执行")
+		return
+	}
+	w.dispatchCommand(cmd)
 }
 
 // handleReceivedMessage 处理接收到的消息
@@ -1003,9 +1145,6 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 				return
 			}
 		}
-		if !wasEncrypted {
-			w.warnPlaintextCommandOnce()
-		}
 		// 先尝试解析是否是压缩消息
 		var compressedMsg struct {
 			Type       string          `json:"type"`
@@ -1041,9 +1180,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 				return
 			}
 
-			if cmdMsg.Type != "call" {
-				w.dispatchCommand(cmdMsg)
-			}
+			w.dispatchReceivedCommand(cmdMsg, wasEncrypted)
 		} else {
 			// 处理普通消息
 			var cmdMsg CommandMessage
@@ -1052,9 +1189,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 				w.sendErrorResponse("ParseError", fmt.Sprintf("解析命令失败: %v", err))
 				return
 			}
-			if cmdMsg.Type != "call" {
-				w.dispatchCommand(cmdMsg)
-			}
+			w.dispatchReceivedCommand(cmdMsg, wasEncrypted)
 		}
 
 	default:
@@ -1088,13 +1223,54 @@ func (w *WebSocketReporter) dispatchCommand(cmd CommandMessage) {
 	case w.readCommandSem <- struct{}{}:
 		go func() {
 			defer func() { <-w.readCommandSem }()
-			w.routeCommandSafely(w.ctx, cmd)
+			// D1-06: every read-path command runs under its own budget
+			// context instead of the process context, so a command the
+			// panel has already given up on does not start (or keep)
+			// executing agent-side and get duplicated by a retry.
+			ctx, cancel := context.WithTimeout(w.ctx, readCommandBudget(cmd.TimeoutMS))
+			defer cancel()
+			w.routeCommandSafely(ctx, cmd)
 		}()
 	case <-w.ctx.Done():
 		w.sendCommandFailure(cmd, "Agent is shutting down")
 	default:
 		w.sendCommandFailure(cmd, "只读命令并发过多，请稍后重试")
 	}
+}
+
+const (
+	// readCommandReplyMargin mirrors tcpPingReplyMargin: stop a little
+	// before the panel's own deadline so the refusal (or result) can
+	// still reach it.
+	readCommandReplyMargin = 500 * time.Millisecond
+	minReadCommandBudget   = 500 * time.Millisecond
+	// maxReadCommandBudget caps a panel-supplied TimeoutMS for read
+	// commands (longer than any panel-side wait; purely a bound
+	// against absurd values).
+	maxReadCommandBudget = 10 * time.Minute
+	// defaultReadCommandBudget applies when the panel transmits no
+	// budget — today timeoutMs only rides along with TcpPing. It is
+	// deliberately above every panel-side command wait, so no
+	// legitimate execution is cut short; it exists so a read command
+	// can never run unbounded (e.g. a KernelApply whose caller left
+	// minutes ago — see the entry check in routeCommand).
+	defaultReadCommandBudget = 5 * time.Minute
+)
+
+// readCommandBudget derives one read-path command's budget from the
+// panel-supplied TimeoutMS, mirroring tcpPingBudget's clamping shape.
+func readCommandBudget(timeoutMS int64) time.Duration {
+	if timeoutMS <= 0 {
+		return defaultReadCommandBudget
+	}
+	timeout := time.Duration(timeoutMS)*time.Millisecond - readCommandReplyMargin
+	if timeout < minReadCommandBudget {
+		return minReadCommandBudget
+	}
+	if timeout > maxReadCommandBudget {
+		return maxReadCommandBudget
+	}
+	return timeout
 }
 
 func (w *WebSocketReporter) runMutationCommands() {
@@ -1195,6 +1371,15 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 			w.sendCommandFailure(cmd, "Agent is shutting down")
 			return
 		}
+	} else if err := ctx.Err(); err != nil {
+		// D1-06: a read-path command whose per-command budget already
+		// expired (queued behind the read semaphore, or delivered with
+		// a spent panel budget) must not start executing now: the
+		// caller has given up, and running it anyway is what makes a
+		// later retry double-execute Kernel/Tune side effects.
+		fmt.Printf("❌ 拒绝执行预算已耗尽的命令: type=%s requestId=%s err=%v\n", cmd.Type, cmd.RequestId, err)
+		w.sendCommandFailure(cmd, fmt.Sprintf("命令执行预算已耗尽，拒绝执行: %v", err))
+		return
 	}
 	// D1-01（FIX-A 与 FIX-H 两路同修，集成取并集）：先按 FIX-A 口径只记
 	// type + requestId，再按 FIX-H 口径补一行脱敏渲染供排障辨识结构；
@@ -1289,7 +1474,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 				}
 			}
 		}
-		response.Data, err = handleTuneCommand(cmd.Type, cmd.Data)
+		response.Data, err = handleTuneCommandContext(ctx, cmd.Type, cmd.Data)
 
 	// UDP Ping 诊断命令（只读，不需要保存配置）
 	case "UdpPing":
@@ -1340,7 +1525,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 	// 代理内核（Xray / sing-box / Snell）相关命令，由 kernel.Manager 自行串行化
 	case "KernelApply", "KernelControl", "KernelStatus":
 		response.Type = cmd.Type + "Response"
-		response.Data, err = handleKernelCommand(cmd.Type, cmd.Data)
+		response.Data, err = handleKernelCommandContext(ctx, cmd.Type, cmd.Data)
 
 	default:
 		err = fmt.Errorf("未知命令类型: %s", cmd.Type)
@@ -2950,6 +3135,13 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// S-02: 拒绝面板传入的任意 URL（旧面板兼容性检查）
 	if strings.TrimSpace(req.DownloadURL) != "" {
 		return fmt.Errorf("S-02: 不再接受面板指定的下载地址，请升级面板到修复版本")
+	}
+	// D1-05: checksumUrl 与 downloadUrl 同律硬拒。此前该字段只解析不
+	// 消费、静默忽略，守卫面不对称：URL 正是 S-02 禁止信任的载体——
+	// 从发送方指定地址拉来的校验值与二进制同源、证明不了任何事。
+	// 可信载体只能是哈希值本身，走 expectedSha256（在场时强制比对）。
+	if strings.TrimSpace(req.ChecksumURL) != "" {
+		return fmt.Errorf("S-02: 不再接受面板指定的校验地址(checksumUrl)，校验值只能以 expectedSha256 哈希形式下发，请升级面板到修复版本")
 	}
 	version := strings.TrimSpace(req.Version)
 	if version == "" {

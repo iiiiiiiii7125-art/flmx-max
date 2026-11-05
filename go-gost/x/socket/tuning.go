@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -326,6 +327,17 @@ type tuneStatus struct {
 // reverse, an older panel's groups-only request still works on this
 // agent).
 func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
+	return handleTuneCommandContext(context.Background(), cmdType, data)
+}
+
+// handleTuneCommandContext is handleTuneCommand under a per-command
+// budget (D1-06): an already-spent budget refuses the command instead
+// of executing it for a caller that has given up, and the budget is
+// threaded into the probe's network legs so they stop with it.
+func handleTuneCommandContext(ctx context.Context, cmdType string, data interface{}) (interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("命令执行预算已耗尽，拒绝执行: %w", err)
+	}
 	// TuneStart / TuneCancel are the automatic-job commands: they
 	// take a mode, not a line, so they are dispatched before the
 	// Status/Apply line handling below.
@@ -369,7 +381,7 @@ func handleTuneCommand(cmdType string, data interface{}) (interface{}, error) {
 				return nil, fmt.Errorf("解析探测参数失败: %v", err)
 			}
 		}
-		return probeTune(preq)
+		return probeTuneContext(ctx, preq)
 	}
 	var req struct {
 		Groups  []string `json:"groups"`

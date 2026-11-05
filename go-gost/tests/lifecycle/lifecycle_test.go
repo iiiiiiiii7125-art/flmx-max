@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -57,7 +58,7 @@ func TestAgentStartupAndFailedReloadPreservePanelRules(t *testing.T) {
 		defer c.Close()
 		ready.Do(func() { close(wsReady) })
 		panelConnections <- c
-		if err := c.WriteJSON(map[string]any{"type": "AddService", "requestId": "early-rule", "data": []any{service("70_1_0", early)}}); err != nil {
+		if err := c.WriteJSON(encryptCommand(t, map[string]any{"type": "AddService", "requestId": "early-rule", "data": []any{service("70_1_0", early)}})); err != nil {
 			return
 		}
 		for {
@@ -177,7 +178,7 @@ func TestAgentStartupAndFailedReloadPreservePanelRules(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 	panelConn := <-panelConnections
-	if err := panelConn.WriteJSON(map[string]any{"type": "DeleteService", "requestId": "slow-body-check", "data": map[string]any{"services": []string{"70_1_0"}}}); err != nil {
+	if err := panelConn.WriteJSON(encryptCommand(t, map[string]any{"type": "DeleteService", "requestId": "slow-body-check", "data": map[string]any{"services": []string{"70_1_0"}}})); err != nil {
 		t.Fatal(err)
 	}
 	await(t, "WS mutation despite slow API upload", func() bool { return !listening(early) })
@@ -276,6 +277,38 @@ func writeFIFO(t *testing.T, path string, value any) {
 		t.Fatal("agent did not read config FIFO")
 	}
 }
+// encryptCommand wraps a command the way the real panel does (D1-01):
+// an AES-GCM envelope keyed by sha256(secret) with a millisecond
+// timestamp. The agent rejects plaintext command frames whenever a
+// secret is configured, so this fake panel must speak the envelope.
+func encryptCommand(t *testing.T, value map[string]any) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256([]byte("audit-secret"))
+	block, err := aes.NewCipher(hash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatal(err)
+	}
+	sealed := gcm.Seal(nil, nonce, raw, nil)
+	data := append(nonce, sealed...)
+	return map[string]any{
+		"encrypted": true,
+		"data":      base64.StdEncoding.EncodeToString(data),
+		"timestamp": time.Now().UnixMilli(),
+	}
+}
+
 func decodeResponse(t *testing.T, payload []byte) map[string]any {
 	t.Helper()
 	env := map[string]any{}

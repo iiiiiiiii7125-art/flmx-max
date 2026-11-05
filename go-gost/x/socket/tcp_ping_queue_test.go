@@ -46,6 +46,34 @@ func readPanelResponse(t *testing.T, panel *websocket.Conn, out any) {
 	}
 }
 
+// encryptAsPanel wraps a command the way the real panel does (D1-01):
+// commands to a secret-configured agent travel in an AES envelope with
+// a millisecond timestamp; plaintext frames are rejected at the gate.
+func encryptAsPanel(t *testing.T, cmd CommandMessage) []byte {
+	t.Helper()
+	raw, err := json.Marshal(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aes, err := crypto.NewAESCrypto(tcpPingTestSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := aes.Encrypt(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := json.Marshal(map[string]interface{}{
+		"encrypted": true,
+		"data":      encrypted,
+		"timestamp": time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return envelope
+}
+
 func newTCPPingTestReporter(t *testing.T) (*WebSocketReporter, *websocket.Conn) {
 	t.Helper()
 	connections := make(chan *websocket.Conn, 1)
@@ -154,13 +182,10 @@ func TestTCPPingQueueCompletesMoreThanEightTargets(t *testing.T) {
 				reporter.readCommandSem <- struct{}{}
 			}
 			for i := 0; i < total; i++ {
-				raw, err := json.Marshal(CommandMessage{
+				raw := encryptAsPanel(t, CommandMessage{
 					Type: "TcpPing", RequestId: fmt.Sprintf("target-%d", i), TimeoutMS: 5000,
 					Data: TcpPingRequest{IP: host, Port: port, Count: 4, Timeout: 2000},
 				})
-				if err != nil {
-					t.Fatal(err)
-				}
 				reporter.handleReceivedMessage(websocket.TextMessage, raw)
 			}
 			reporter.startTCPPingWorkers()
