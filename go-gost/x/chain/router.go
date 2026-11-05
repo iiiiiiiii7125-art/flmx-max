@@ -3,6 +3,7 @@ package chain
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -112,10 +113,17 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 
 	for i := 0; i < count; i++ {
 		ctx := ctx
+		// The per-attempt timeout context is managed explicitly, not
+		// with defer (D3-07): a failed attempt's context is released
+		// at the end of the iteration, while a successful attempt's
+		// context must outlive this function for exactly as long as
+		// the returned conn — context-retaining transports built
+		// over the conn observe its cancellation. Ownership of the
+		// cancel func therefore transfers to the conn (see
+		// cancelOnCloseConn).
+		var cancel context.CancelFunc
 		if r.options.Timeout > 0 {
-			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, r.options.Timeout)
-			defer cancel()
 		}
 
 		buf := ctxvalue.BufferFromContext(ctx)
@@ -127,6 +135,9 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		ipAddr, err = xnet.Resolve(ctx, "ip", address, r.options.Resolver, r.options.HostMapper, log)
 		if err != nil {
 			log.Error(err)
+			if cancel != nil {
+				cancel()
+			}
 			break
 		}
 
@@ -140,6 +151,9 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 			ipAddr, err = r.dialTargetGuard(ctx, network, ipAddr)
 			if err != nil {
 				log.Error(err)
+				if cancel != nil {
+					cancel()
+				}
 				return nil, err
 			}
 		}
@@ -155,6 +169,9 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 				// Fail closed (D1-H4): a configured chain that yields no
 				// route must not fall back to a direct dial. Mirrors Bind.
 				err = emptyRouteError(r.options.Chain)
+				if cancel != nil {
+					cancel()
+				}
 				return
 			}
 		}
@@ -178,7 +195,13 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 			chain.LoggerDialOption(log),
 		)
 		if err == nil {
+			if cancel != nil {
+				conn = cancelOnCloseConn(conn, cancel)
+			}
 			break
+		}
+		if cancel != nil {
+			cancel()
 		}
 		log.Errorf("route(retry=%d) %s", i, err)
 	}
@@ -200,10 +223,13 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 
 	for i := 0; i < count; i++ {
 		ctx := ctx
+		// Explicit per-attempt context management, same contract as
+		// dial (D3-07): failed attempts release their context at the
+		// end of the iteration; a successful attempt's context lives
+		// exactly as long as the returned listener.
+		var cancel context.CancelFunc
 		if r.options.Timeout > 0 {
-			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, r.options.Timeout)
-			defer cancel()
 		}
 
 		var route chain.Route
@@ -211,6 +237,9 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 			route = r.options.Chain.Route(ctx, network, address)
 			if route == nil || len(route.Nodes()) == 0 {
 				err = emptyRouteError(r.options.Chain)
+				if cancel != nil {
+					cancel()
+				}
 				return
 			}
 		}
@@ -229,7 +258,13 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 		}
 		ln, err = route.Bind(ctx, network, address, opts...)
 		if err == nil {
+			if cancel != nil {
+				ln = &cancelOnCloseListener{Listener: ln, cancel: cancel}
+			}
 			break
+		}
+		if cancel != nil {
+			cancel()
 		}
 		log.Errorf("route(retry=%d) %s", i, err)
 	}
@@ -248,6 +283,82 @@ func routePath(route chain.Route) (path []*chain.Node) {
 		path = append(path, node)
 	}
 	return
+}
+
+var errHalfCloseNotSupported = errors.New("half-close not supported by the underlying connection")
+
+// cancelOnCloseConn transfers ownership of a successful dial
+// attempt's timeout-context cancel func to the returned conn: the
+// context lives exactly as long as the conn instead of being
+// cancelled when Dial returns (D3-07). Packet conns keep their
+// net.PacketConn face.
+func cancelOnCloseConn(conn net.Conn, cancel context.CancelFunc) net.Conn {
+	if pc, ok := conn.(net.PacketConn); ok {
+		return &cancelPacketConn{Conn: conn, pc: pc, cancel: cancel}
+	}
+	return &cancelConn{Conn: conn, cancel: cancel}
+}
+
+type cancelConn struct {
+	net.Conn
+	cancel context.CancelFunc
+}
+
+func (c *cancelConn) Close() error {
+	err := c.Conn.Close()
+	c.cancel()
+	return err
+}
+
+// CloseWrite forwards the half-close to the underlying conn when it
+// supports it, so wrapping does not hide the capability from
+// relay code (e.g. xnet.Transport).
+func (c *cancelConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errHalfCloseNotSupported
+}
+
+func (c *cancelConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return errHalfCloseNotSupported
+}
+
+type cancelPacketConn struct {
+	net.Conn
+	pc     net.PacketConn
+	cancel context.CancelFunc
+}
+
+func (c *cancelPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	return c.pc.ReadFrom(b)
+}
+
+func (c *cancelPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return c.pc.WriteTo(b, addr)
+}
+
+func (c *cancelPacketConn) Close() error {
+	err := c.Conn.Close()
+	c.cancel()
+	return err
+}
+
+// cancelOnCloseListener is the Bind counterpart of cancelOnCloseConn:
+// the successful attempt's context is released when the listener is
+// closed (D3-07).
+type cancelOnCloseListener struct {
+	net.Listener
+	cancel context.CancelFunc
+}
+
+func (l *cancelOnCloseListener) Close() error {
+	err := l.Listener.Close()
+	l.cancel()
+	return err
 }
 
 type packetConn struct {
