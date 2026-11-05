@@ -749,6 +749,31 @@ test_panel_invalid_instance_id_hard_fails_on_manage_paths() (
   grep -q 'FLMX_INSTANCE 不合法' <<< "$out" || fail "A2-08: the install hard-fail must name the invalid instance id"
 )
 
+# §9.6 缓解（audit-max 裁定）：WS token 面的非协议缓解——菜单 5
+# 生成的面板站点块须带访问日志过滤，把 ?secret= 查询参数从
+# Caddy 访问日志里删掉（WS 握手把 token 放在 secret 查询串，
+# 落日志即长效凭据落盘）。过滤器写在站点块内（菜单 5 保留式
+# 重写时随块再生、不累积）；菜单 6 的订阅前置块不在此列（订
+# 阅 token 走路径段而非 secret 查询串，口径不同，单独断言其
+# 不被误加）。
+test_panel_menu5_site_block_filters_secret_query_from_access_log() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  panel_caddyfile_fixture_env
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "§9.6: the menu 5 run should succeed"
+  grep -q 'format filter' "$CADDYFILE_PATH" || fail "§9.6: the generated panel site block must carry the log filter encoder"
+  grep -q 'request>uri query' "$CADDYFILE_PATH" || fail "§9.6: the filter must target the request URI query string"
+  grep -q 'delete secret' "$CADDYFILE_PATH" || fail "§9.6: the filter must delete the secret query parameter from the access log"
+
+  # 菜单 6 随后追加订阅前置块：不得被误加（其 token 在路径段），
+  # 全文件 delete secret 仍只出现一次（面板块内）。
+  setup_subscription_front_domain <<< "sub.example.com" >/dev/null || \
+    fail "§9.6: the menu 6 run should succeed"
+  assert_equals "1" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "§9.6: only the panel block may carry the secret filter; the menu 6 block must not gain one"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -10172,5 +10197,6 @@ test_panel_normalize_proxy_prefix_strips_all_trailing_slashes
 test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp
 test_panel_run_lock_and_unique_caddy_backup_names
 test_panel_invalid_instance_id_hard_fails_on_manage_paths
+test_panel_menu5_site_block_filters_secret_query_from_access_log
 
 echo "install script tests passed"

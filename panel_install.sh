@@ -1134,6 +1134,23 @@ setup_domain_proxy() {
   cat > "$caddyfile" <<EOF
 $DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
+    # §9.6 缓解（audit-max 裁定）：面板 WS 握手把 token 放在
+    # ?secret= 查询串里，Caddy 访问日志原样落盘即长效凭据落
+    # 盘。站点块内启用过滤型访问日志，把 secret 查询参数从日
+    # 志中删除（filter 编码器自 Caddy 2.5 起可用；老版本 Caddy
+    # 会在下方 validate 环节明确失败并回滚，不会静默带病生
+    # 效）。注：log 指令同时启用该站点的访问日志（JSON 输出
+    # 到 Caddy 默认日志目标），这是本缓解的既定形态。
+    log {
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    delete secret
+                }
+            }
+        }
+    }
 }
 EOF
   if [ -n "$preserved_blocks" ]; then
