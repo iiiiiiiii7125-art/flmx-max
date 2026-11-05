@@ -381,6 +381,8 @@ func (w *WebSocketReporter) connect() error {
 	if scheme := detectWebSocketScheme(usedURL); scheme != "" {
 		w.preferredWSScheme = scheme
 	}
+	// D1-03: cap inbound frame size (see maxInboundCommandFrameSize).
+	conn.SetReadLimit(maxInboundCommandFrameSize)
 	_ = conn.SetReadDeadline(time.Now().Add(reporterReadWait))
 	conn.SetPingHandler(func(appData string) error {
 		_ = conn.SetReadDeadline(time.Now().Add(reporterReadWait))
@@ -921,6 +923,15 @@ const maxEncryptedCommandSkew = 5 * time.Minute
 // aligned with the 10MB large-message threshold in sendResponse. A small
 // compressed blob must not be able to inflate unboundedly into memory.
 const maxDecompressedCommandSize = 10 << 20
+
+// maxInboundCommandFrameSize caps a single inbound WebSocket frame on
+// the command channel (D1-03). It matches the panel's SetReadLimit
+// (10<<20) and maxDecompressedCommandSize: no legitimate command — even
+// a large service batch — comes near it, while an unbounded frame from
+// a compromised or broken sender must not be able to OOM the agent.
+// Gorilla semantics apply: an over-limit frame fails the read and the
+// connection drops (the reconnect loop re-establishes it).
+const maxInboundCommandFrameSize = 10 << 20
 
 // validateEncryptedTimestamp checks an encrypted envelope's timestamp
 // against the acceptance window. The panel sends Unix milliseconds; plain
