@@ -217,6 +217,14 @@ func host(tree *matchersTree, hosts ...string) error {
 
 	host = strings.ToLower(strings.TrimSpace(host))
 
+	if host == "" {
+		// A whitespace-only value passes the rule parser's
+		// non-empty check but trims to nothing; the matcher
+		// closure below indexed host[0] and panicked on the
+		// first matched request (D3-02).
+		return fmt.Errorf("invalid empty value for Host matcher")
+	}
+
 	if strings.HasPrefix(host, "*") {
 		host = host[1:]
 		if !strings.HasPrefix(host, ".") {
@@ -235,7 +243,7 @@ func host(tree *matchersTree, hosts ...string) error {
 			return true
 		}
 
-		if host[0] == '.' && strings.HasSuffix(reqHost, host[1:]) {
+		if len(host) > 0 && host[0] == '.' && strings.HasSuffix(reqHost, host[1:]) {
 			return true
 		}
 

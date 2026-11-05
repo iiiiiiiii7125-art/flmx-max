@@ -38,7 +38,19 @@ func (h *socks5Handler) handleUDP(ctx context.Context, conn net.Conn, ro *xrecor
 	lc := xnet.ListenConfig{
 		Netns: h.options.Netns,
 	}
-	laddr := &net.UDPAddr{IP: conn.LocalAddr().(*net.TCPAddr).IP, Port: 0} // use out-going interface's IP
+	// The local address is normally TCP, but a wrapped/UDP/TUN
+	// connection can present another type; the unchecked assertion
+	// here used to panic and kill the whole agent (D3-02).
+	tcpAddr, ok := conn.LocalAddr().(*net.TCPAddr)
+	if !ok {
+		err := fmt.Errorf("socks5: unexpected local address type %T", conn.LocalAddr())
+		log.Error(err)
+		reply := gosocks5.NewReply(gosocks5.Failure, nil)
+		log.Trace(reply)
+		reply.Write(conn)
+		return err
+	}
+	laddr := &net.UDPAddr{IP: tcpAddr.IP, Port: 0} // use out-going interface's IP
 	cc, err := lc.ListenPacket(ctx, "udp", laddr.String())
 	if err != nil {
 		log.Error(err)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -235,6 +236,28 @@ func prioritizeURLs(urls []string, preferred string) []string {
 	return ordered
 }
 
+// maxReportResponseBytes bounds how much of a report endpoint's
+// response body is read (D2-03). The expected body is the literal
+// "ok"; the v2 path in this package already caps reads at 4096 via
+// io.LimitReader, while the two v1/config paths below used an
+// unbounded ReadFrom — a misbehaving or hostile endpoint could
+// stream an unbounded body into the root agent's memory.
+const maxReportResponseBytes = 4096
+
+// readReportResponseBody reads a report response body up to the
+// cap; a longer body is an error (failed attempt), never a silent
+// truncation that could masquerade as a panel reply.
+func readReportResponseBody(body io.Reader) (string, error) {
+	b, err := io.ReadAll(io.LimitReader(body, maxReportResponseBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(b) > maxReportResponseBytes {
+		return "", fmt.Errorf("响应体超出上限 %d 字节", maxReportResponseBytes)
+	}
+	return string(b), nil
+}
+
 func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte, userAgent string, timeout time.Duration, preferred *string) (bool, error) {
 	if len(urls) == 0 {
 		return false, fmt.Errorf("上报URL未设置")
@@ -266,8 +289,7 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 			continue
 		}
 
-		var responseBytes bytes.Buffer
-		_, readErr := responseBytes.ReadFrom(resp.Body)
+		responseText, readErr := readReportResponseBody(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
 			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", displayURL, redactReportError(readErr, targetURL, displayURL)))
@@ -285,7 +307,7 @@ func postJSONWithFallback(ctx context.Context, urls []string, requestBody []byte
 			continue
 		}
 
-		responseText := strings.TrimSpace(responseBytes.String())
+		responseText = strings.TrimSpace(responseText)
 		if responseText == "ok" {
 			if i > 0 {
 				fmt.Printf("↪️ HTTP上报已自动回退到: %s\n", displayURL)
@@ -535,8 +557,7 @@ func postJSONWithFallbackAndHeaders(ctx context.Context, urls []string, requestB
 			continue
 		}
 
-		var responseBytes bytes.Buffer
-		_, readErr := responseBytes.ReadFrom(resp.Body)
+		responseText, readErr := readReportResponseBody(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
 			errs = append(errs, fmt.Sprintf("%s => 读取响应失败: %v", displayURL, redactReportError(readErr, targetURL, displayURL)))
@@ -548,7 +569,7 @@ func postJSONWithFallbackAndHeaders(ctx context.Context, urls []string, requestB
 			continue
 		}
 
-		responseText := strings.TrimSpace(responseBytes.String())
+		responseText = strings.TrimSpace(responseText)
 		if responseText == "ok" {
 			if i > 0 {
 				fmt.Printf("↪️ HTTP上报已自动回退到: %s\n", displayURL)

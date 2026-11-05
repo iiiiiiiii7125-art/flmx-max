@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,14 +54,20 @@ var isHttp atomic.Int32
 
 var isSocks atomic.Int32
 
-var needWrap = false
+// needWrap caches "any protocol block is on" for the per-connection
+// wrap decision. It was the one switch the R3-A01 atomisation
+// missed: SetProtocolBlock writes it from the command path while
+// every accepted connection reads it, a plain-bool data race (D2-01)
+// that could also leave a just-toggled block silently unapplied to
+// racing connections.
+var needWrap atomic.Bool
 
 // SetProtocolBlock sets protocol blocking switches and recomputes wrapper need
 func SetProtocolBlock(httpOn int, tlsOn int, socksOn int) {
 	isHttp.Store(int32(httpOn))
 	isTls.Store(int32(tlsOn))
 	isSocks.Store(int32(socksOn))
-	needWrap = isTls.Load()+isSocks.Load()+isHttp.Load() > 0
+	needWrap.Store(isTls.Load()+isSocks.Load()+isHttp.Load() > 0)
 }
 
 // GetProtocolBlock returns the current protocol blocking switches.
@@ -79,7 +84,7 @@ func init() {
 	// NOTE: This package can be imported by tests/tools that don't have a local
 	// config.json. Missing config should not crash the process.
 	_, _ = LoadConfig("config.json")
-	needWrap = isTls.Load()+isSocks.Load()+isHttp.Load() > 0
+	needWrap.Store(isTls.Load()+isSocks.Load()+isHttp.Load() > 0)
 }
 
 func AdmissionOption(admission admission.Admission) Option {
@@ -324,6 +329,26 @@ func (s *defaultService) Serve() error {
 		go func() {
 			defer wg.Done()
 
+			// D3-02: a panic anywhere in a connection handler
+			// must kill only this connection, never the agent
+			// process. Before this boundary, the dispatch had
+			// no recover at all and one bad connection (e.g. an
+			// unchecked type assertion in a protocol handler)
+			// took down every service on the node.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Errorf("handler panic, connection dropped (service %s, client %s): %v", s.name, clientAddr, r)
+					conn.Close()
+					if v := xmetrics.GetCounter(xmetrics.MetricServiceHandlerErrorsCounter,
+						metrics.Labels{"service": s.name, "client": clientIP}); v != nil {
+						v.Inc()
+					}
+					if sts := s.status.stats; sts != nil {
+						sts.Add(stats.KindTotalErrs, 1)
+					}
+				}
+			}()
+
 			if v := xmetrics.GetCounter(xmetrics.MetricServiceRequestsCounter,
 				metrics.Labels{"service": s.name, "client": clientIP}); v != nil {
 				v.Inc()
@@ -343,7 +368,7 @@ func (s *defaultService) Serve() error {
 				}()
 			}
 
-			if needWrap {
+			if needWrap.Load() {
 				conn = wrapConnPDetection(conn)
 			}
 
@@ -394,11 +419,17 @@ func (s *defaultService) execCmds(phase string, cmds []string) {
 		if cmd == "" {
 			continue
 		}
-		s.options.logger.Info(cmd)
-
-		if err := exec.Command("/bin/sh", "-c", cmd).Run(); err != nil {
-			s.options.logger.Warnf("[%s] %s: %v", phase, cmd, err)
-		}
+		// D2-02 (defence in depth, §9.10 ruling): this fork is
+		// the managed agent build. The panel never sends service
+		// hooks and the config parse layer already rejects them
+		// fail-closed (S-01) — but the executor itself used to be
+		// a live, timeout-less root /bin/sh -c sitting behind
+		// that single check, so any future construction path
+		// that reached it would have been instant root RCE, and
+		// even a benign hook could wedge NewService/Close
+		// forever. Refuse at the executor as well; nothing here
+		// may turn a hook string into a shell command.
+		s.options.logger.Warnf("[%s] service hook refused in managed agent build: %s", phase, cmd)
 	}
 }
 

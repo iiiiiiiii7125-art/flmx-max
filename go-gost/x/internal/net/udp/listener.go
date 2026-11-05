@@ -34,6 +34,12 @@ func NewListener(conn net.PacketConn, cfg *ListenConfig) net.Listener {
 	if cfg == nil {
 		cfg = &ListenConfig{}
 	}
+	if cfg.TTL <= 0 {
+		// Several Bind paths hand UDPConnTTL through un-defaulted;
+		// a non-positive TTL must never reach the conn pool's
+		// ticker (D3-01).
+		cfg.TTL = DefaultTTL
+	}
 
 	ln := &listener{
 		conn:    conn,
