@@ -8,6 +8,37 @@ fail() {
   exit 1
 }
 
+# T-INC-01 宿主机安全门：本套件会 source install.sh/panel_install.sh
+# 并以 root 形态调用其服务/文件操作（桩接管绝大多数路径，但
+# INC-01 事故证明桩层有漏：基线套件在装有真实旧布局 agent 的测
+# 试机宿主机上裸跑时，旧布局 stop/disable/删 unit/rm -rf 序列突
+# 破隔离、销毁了在跑 agent）。开跑前先判宿主：真实 agent 布局
+# （任一布局的安装目录或服务文件）在位且未声明隔离环境
+# （FLMX_SUITE_ISOLATED=1，只许在专用容器/VM 内设置）→
+# fail-closed 中止并点名，一条用例都不许跑。FLMX_SUITE_HOST_ROOT
+# 仅供本门的单测夹具改指假宿主根，正常运行恒为空（查真实 /etc）。
+suite_host_safety_gate() {
+  if [[ "${FLMX_SUITE_ISOLATED:-}" == "1" ]]; then
+    return 0
+  fi
+  local root="${FLMX_SUITE_HOST_ROOT:-}"
+  local hits=""
+  [[ -d "$root/etc/flux_agent" ]] && hits="$hits $root/etc/flux_agent"
+  [[ -d "$root/etc/flmx_agent" ]] && hits="$hits $root/etc/flmx_agent"
+  [[ -f "$root/etc/systemd/system/flux_agent.service" ]] && hits="$hits $root/etc/systemd/system/flux_agent.service"
+  [[ -f "$root/etc/systemd/system/flmx_agent.service" ]] && hits="$hits $root/etc/systemd/system/flmx_agent.service"
+  [[ -f "$root/etc/init.d/flux_agent" ]] && hits="$hits $root/etc/init.d/flux_agent"
+  [[ -f "$root/etc/init.d/flmx_agent" ]] && hits="$hits $root/etc/init.d/flmx_agent"
+  if [[ -n "$hits" ]]; then
+    echo "FAIL: T-INC-01 host safety gate: real agent layout detected on this host:$hits" >&2
+    echo "  本套件曾在装有真实 agent 的宿主机上裸跑时销毁在跑 agent（INC-01）。只许在专用容器/VM 内运行；确认环境隔离后设置 FLMX_SUITE_ISOLATED=1 再跑。" >&2
+    return 1
+  fi
+  return 0
+}
+
+suite_host_safety_gate || exit 1
+
 assert_equals() {
   local expected="$1"
   local actual="$2"
@@ -906,6 +937,9 @@ test_install_script_builds_canonical_download_url() (
   PROXY_ENABLED=""
   PROXY_URL=""
   DOWNLOAD_URL=""
+  # A3-02 后显式版本须过格式校验：夹具预设的 v-test 不再合法，
+  # 本例改用合法版本（只验 URL 规范化本身，不验版本解析）。
+  VERSION="1.2.3"
 
   ensure_download_url_initialized
 
@@ -921,6 +955,11 @@ test_install_script_builds_canonical_download_url() (
 test_update_flmx_agent_downloads_without_prompt() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
+
+  # A3-02 后显式版本须过格式校验：夹具预设的 v-test 不再合法，
+  # 本例走真实 ensure 路径，须先给合法版本（只测更新机制本身，
+  # 不测版本解析）。
+  VERSION="1.3.5"
 
   # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
   # 确认归属，专测更新机制本身。
@@ -4462,12 +4501,39 @@ test_install_script_binary_anchor_degrades() (
   set -euo pipefail
   bin_anchor_fixture_setup
   BIN_ANCHOR_B_MODE="fail"
-  local dest errlog
+  local dest errlog rc=0
+  dest=$(mktemp -u)
+  errlog=$(mktemp)
+  # A3-03: 第二锚改 fail-closed（S-02 口径：无降级跳过）。获胜线
+  # 路是第三方代理、异路全部给不出合法校验值时必须拒绝安装且二
+  # 进制不得落地——旧实现在此降级单锚放行，本用例旧预期（仍落
+  # 地）随修复翻转为拒绝。
+  download_agent_binary "$dest" 2>"$errlog" || rc=$?
+  assert_equals "1" "$rc" "A3-03: download must fail when a proxy-served binary cannot be corroborated"
+  [[ ! -f "$dest" ]] || fail "A3-03: binary must not land when the second anchor cannot corroborate"
+  grep -q "第二锚 fail-closed" "$errlog" || fail "A3-03: the fail-closed refusal must be named on stderr"
+
+  # 保留点名降级的两类形态：① 直连（规范源）当选、代理无应答 →
+  # 点名单锚落地；② 运维显式单路（PROXY_URL 覆盖）无异路可复核
+  # → 点名单锚落地。
+  bin_anchor_fixture_setup
+  BIN_ANCHOR_B_MODE="fail"
+  DOWNLOAD_ROUTES=("" "https://b.example")
   dest=$(mktemp)
   errlog=$(mktemp)
   download_agent_binary "$dest" 2>"$errlog"
-  assert_equals "$BIN_ANCHOR_BODY" "$(cat "$dest")" "binary anchor degrade: binary should still land when no second route answers"
-  grep -q "跨线路锚复核已降级" "$errlog" || fail "binary anchor degrade: degradation must be named on stderr"
+  assert_equals "$BIN_ANCHOR_BODY" "$(cat "$dest")" "A3-03: direct-sourced binary should still land with a named single-anchor degradation"
+  grep -q "跨线路锚复核已降级" "$errlog" || fail "A3-03: direct-source degradation must be named on stderr"
+
+  bin_anchor_fixture_setup
+  BIN_ANCHOR_B_MODE="fail"
+  PROXY_URL="https://a.example"
+  DOWNLOAD_ROUTES=("https://a.example")
+  dest=$(mktemp)
+  errlog=$(mktemp)
+  download_agent_binary "$dest" 2>"$errlog"
+  assert_equals "$BIN_ANCHOR_BODY" "$(cat "$dest")" "A3-03: operator-pinned single route should still land with a named single-anchor degradation"
+  grep -q "跨线路锚复核已降级" "$errlog" || fail "A3-03: single-route degradation must be named on stderr"
 )
 
 test_preserve_compose_networks_keeps_existing_subnet() (
@@ -10107,6 +10173,456 @@ STUBEOF
   grep -q '^1$' "$work3/gate-rc" || fail "FIX199-D6: a mismatched confirmation must abort the forced reinstall"
   grep -q 'keep-this-env' "$work3/.env" || fail "FIX199-D6: .env must stay untouched after a mismatched confirmation"
 )
+
+# A3-02: 显式版本四入口（VERSION/FLMX_VERSION/FLUX_VERSION/
+# PINNED_VERSION）拼下载 URL 前必须过严格格式校验——含 /、..、?、#
+# 等能改变 URL 指向的畸形值一律拒绝（旧实现原样直通，../ 可逃出
+# 钉死仓库且同源派生的 .sha256 使校验失效，LIVE-A S5 已实证）。
+# build_download_url 内插前再断言一次（双点收口）。
+test_install_script_rejects_malformed_explicit_versions() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local var value
+  for var in VERSION FLMX_VERSION FLUX_VERSION PINNED_VERSION; do
+    for value in '../../../evil/repo/releases/download/9.9.9' '1.9.9/extra' '1.9.9?x=1' '1.9.9#x' '1.9.9 2.0.0' '..' 'v' '1.' 'a.b.c' '1.9.9%2e'; do
+      VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+      printf -v "$var" '%s' "$value"
+      if resolve_version >/dev/null 2>&1; then
+        fail "A3-02: $var='$value' must be rejected by resolve_version"
+      fi
+    done
+  done
+
+  # 合法值放行（稳定渠道：可选 v 前缀的纯点分数字）。
+  VERSION="1.9.9" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  assert_equals "1.9.9" "$(resolve_version)" "A3-02: plain version must pass validation"
+  VERSION="v1.9.9" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  assert_equals "v1.9.9" "$(resolve_version)" "A3-02: v-prefixed version must pass validation"
+
+  # build_download_url 双点断言：RESOLVED_VERSION 被污染时不得拼 URL。
+  RESOLVED_VERSION='../../../evil'
+  if build_download_url >/dev/null 2>&1; then
+    fail "A3-02: build_download_url must refuse a traversal RESOLVED_VERSION"
+  fi
+  RESOLVED_VERSION="1.9.9"
+  assert_equals \
+    "https://github.com/${REPO}/releases/download/1.9.9/gost-$(get_architecture)" \
+    "$(build_download_url)" \
+    "A3-02: canonical download URL for a valid version"
+)
+
+# A3-01: latest 版本解析不得单路线采信——首个给出 tag 的线路若是
+# 第三方代理，其 tag 必须经另一条不同线路复核一致才可采信：异路
+# 异值硬失败、异路全部无应答 fail-closed（旧实现首个合格 tag 即
+# 用，任一线路回一个形态合法的旧 tag 就静默装旧版，LIVE-A S3 实
+# 证）。直连（github.com 本体）当选时属规范源：异路异值同样硬失
+# 败，无应答时点名后单源采信。桩 curl 按 URL 中的线路前缀供数，
+# API 法一律失败、只走重定向法。
+test_install_script_latest_resolution_requires_corroboration() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  ROUTES_STAGE=2
+  LATEST_B_MODE="same"
+
+  curl() {
+    local all="$*"
+    case "$all" in
+      *api.github.com*) return 22 ;;
+      *url_effective*)
+        case "$all" in
+          *b.example*)
+            case "$LATEST_B_MODE" in
+              different) printf 'https://github.com/%s/releases/tag/1.9.0' "$REPO" ;;
+              silent) return 22 ;;
+              *) printf 'https://github.com/%s/releases/tag/1.9.9' "$REPO" ;;
+            esac
+            ;;
+          *) printf 'https://github.com/%s/releases/tag/1.9.9' "$REPO" ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  # 代理当选 + 异路同值 → 采信。
+  DOWNLOAD_ROUTES=("https://a.example" "https://b.example")
+  LATEST_B_MODE="same"
+  assert_equals "1.9.9" "$(resolve_latest_release_tag 2>/dev/null)" \
+    "A3-01: corroborated latest tag should be accepted"
+
+  # 代理当选 + 异路异值 → 硬失败（旧 tag 不得被采信）。
+  LATEST_B_MODE="different"
+  if resolve_latest_release_tag >/dev/null 2>&1; then
+    fail "A3-01: latest tag from a proxy must be rejected when another route disagrees"
+  fi
+
+  # 代理当选 + 异路全无应答 → fail-closed。
+  LATEST_B_MODE="silent"
+  if resolve_latest_release_tag >/dev/null 2>&1; then
+    fail "A3-01: latest tag from a proxy must fail closed when no other route answers"
+  fi
+
+  # 直连当选 + 异路无应答 → 规范源点名后采信。
+  DOWNLOAD_ROUTES=("" "https://b.example")
+  LATEST_B_MODE="silent"
+  assert_equals "1.9.9" "$(resolve_latest_release_tag 2>/dev/null)" \
+    "A3-01: direct-sourced latest tag should be accepted when proxies are silent"
+
+  # 直连当选 + 异路异值 → 同样硬失败。
+  LATEST_B_MODE="different"
+  if resolve_latest_release_tag >/dev/null 2>&1; then
+    fail "A3-01: latest tag must be rejected when another route reports a different tag"
+  fi
+)
+
+# A3-04: install 覆盖存量 agent 必须与 update 同保护集——防降级、
+# 替换前 .bak 备份、替换后 -V 烟雾、判活失败自动回滚。旧实现四项
+# 全无：mv 直覆盖、-V 只打印不判、判活失败仅提示，旧版字节永久
+# 丢失（update 侧对应格齐全，本用例对旧代码必红）。
+test_install_flmx_agent_rolls_back_over_existing() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
+  SERVER_ADDR="panel.example.com:443"
+  SECRET="fixture-secret"
+  DOWNLOAD_URL="https://example.com/gost"
+  DOWNLOAD_ROUTES=("https://a.example" "https://b.example")
+  ROUTES_STAGE=2
+
+  get_config_params() { :; }
+  check_and_install_tcpkill() { :; }
+  cleanup_legacy_gost_installation() { :; }
+  sleep() { :; }
+  systemctl() { return 0; }
+  flmx_agent_main_pid() { echo 4242; }
+
+  local old_body new_body
+  old_body=$(printf '#!/bin/bash\nif [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi\necho old-agent\n')
+  printf '%s\n' "$old_body" > "$INSTALL_DIR/flmx_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
+  # 存量配置（addr 与本次 -a 一致，归属守卫放行——本用例测的是
+  # 覆盖保护，不是守卫）。
+  printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' "$SERVER_ADDR" "$SECRET" > "$INSTALL_DIR/config.json"
+
+  # 下载桩：本体与 .sha256 都按 NEW_BODY 供数（两条路线同值，
+  # 第二锚可复核通过）。
+  NEW_BODY=""
+  curl() {
+    local output="" url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      printf '%s' "$NEW_BODY" | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+    printf '%s' "$NEW_BODY" > "$output"
+    chmod +x "$output"
+  }
+
+  local rc log
+  log="$INSTALL_DIR/install.log"
+
+  # 臂 1：新二进制 -V 即崩（烟雾失败）→ 自动回滚，旧二进制逐字恢复。
+  ensure_download_url_initialized() { RESOLVED_VERSION="1.3.5"; }
+  flmx_agent_service_is_active() { return 0; }
+  NEW_BODY=$(printf '#!/bin/bash\nexit 1\n')
+  rc="0"; ( install_flmx_agent >"$log" 2>&1 </dev/null ) || rc="$?"
+  assert_equals "1" "$rc" "A3-04: install over existing must fail when the new binary cannot run"
+  assert_equals "$old_body" "$(cat "$INSTALL_DIR/flmx_agent")" "A3-04: smoke failure must roll back to the previous binary"
+  grep -q "回滚" "$log" || fail "A3-04: smoke-failure rollback must be named in the output"
+
+  # 臂 2：新二进制能跑但服务判活失败 → 自动回滚。
+  NEW_BODY=$(printf '#!/bin/bash\necho "gost 1.3.5 (go1.25 linux/amd64)"\n')
+  flmx_agent_service_is_active() { return 1; }
+  rc="0"; ( install_flmx_agent >"$log" 2>&1 </dev/null ) || rc="$?"
+  assert_equals "1" "$rc" "A3-04: install over existing must fail when the new service stays down"
+  assert_equals "$old_body" "$(cat "$INSTALL_DIR/flmx_agent")" "A3-04: health failure must roll back to the previous binary"
+
+  # 臂 3：显式降级（1.3.0 < 现装 1.3.4）、非交互 → 拒绝且现装不动。
+  ensure_download_url_initialized() { RESOLVED_VERSION="1.3.0"; }
+  flmx_agent_service_is_active() { return 0; }
+  rc="0"; ( install_flmx_agent >"$log" 2>&1 </dev/null ) || rc="$?"
+  assert_equals "1" "$rc" "A3-04: non-interactive downgrade over existing must be refused"
+  assert_equals "$old_body" "$(cat "$INSTALL_DIR/flmx_agent")" "A3-04: refused downgrade must leave the installed binary untouched"
+  grep -q "拒绝降级" "$log" || fail "A3-04: downgrade refusal must be named in the output"
+
+  # 臂 4：正常升级（能跑且判活通过）→ 新二进制在位、.bak 已清。
+  ensure_download_url_initialized() { RESOLVED_VERSION="1.3.5"; }
+  NEW_BODY=$(printf '#!/bin/bash\necho "gost 1.3.5 (go1.25 linux/amd64)"\n')
+  rc="0"; ( install_flmx_agent >"$log" 2>&1 </dev/null ) || rc="$?"
+  assert_equals "0" "$rc" "A3-04: healthy install over existing should succeed"
+  assert_equals "$NEW_BODY" "$(cat "$INSTALL_DIR/flmx_agent")" "A3-04: healthy install must leave the new binary in place"
+  [[ ! -f "$INSTALL_DIR/flmx_agent.bak" ]] || fail "A3-04: backup must be removed after a healthy install over existing"
+)
+
+# T-INC-01: 套件宿主机安全门的判定格——无真实 agent 布局放行；
+# 任一布局（旧目录/新服务文件）在位拒绝；隔离标记（专用容器/VM
+# 的显式声明）放行。门本体定义在套件头部、开跑前已执行一次。
+test_suite_host_safety_gate_blocks_real_agent_hosts() (
+  set -euo pipefail
+  local root
+  root=$(mktemp -d)
+
+  FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate
+
+  mkdir -p "$root/etc/flux_agent"
+  if FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate 2>/dev/null; then
+    fail "T-INC-01: host gate must refuse when a legacy agent layout is present"
+  fi
+
+  rm -rf "$root/etc/flux_agent"
+  mkdir -p "$root/etc/systemd/system"
+  : > "$root/etc/systemd/system/flmx_agent.service"
+  if FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate 2>/dev/null; then
+    fail "T-INC-01: host gate must refuse when a current agent unit is present"
+  fi
+
+  FLMX_SUITE_ISOLATED="1" FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate
+)
+
+# T-INC-01: 桩层泄漏哨兵。INC-01 的泄漏形态是「某个旧布局路径没
+# 被夹具接管、仍指向真实宿主位置」——本用例在夹具内复刻该形态：
+# 故意把存量 systemd unit 路径指向夹具根之外的 canary（模拟真实
+# 宿主文件），systemctl 与 rm 都经记录桩，rm 桩对夹具根之外的目
+# 标只记录不执行（LEAK-BLOCKED）。断言：旧布局停/禁/删序列全部
+# 被桩层截获、canary 存活。变异臂：关掉 rm 桩拦截后同一序列必
+# 须真的删掉 canary——证明破坏调用真实存在、哨兵不是空转（桩
+# 覆盖被摘即变红）。
+test_suite_stub_layer_catches_legacy_leak() (
+  set -euo pipefail
+  local work fixture canary
+  work=$(mktemp -d)
+  fixture="$work/fixture"
+  canary="$work/host"
+  mkdir -p "$fixture" "$canary"
+
+  build_harness() {
+    local guard_mode="$1"
+    local harness="$work/harness-$guard_mode.sh"
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$harness"
+    cat >> "$harness" <<EOF
+INSTALL_DIR="$fixture/flmx_agent"
+LEGACY_INSTALL_DIR="$fixture/flux_agent"
+FLMX_AGENT_SYSTEMD_SERVICE_FILE="$fixture/flmx_agent.service"
+LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE="$canary/flux_agent.service"
+SERVICE_MANAGER="systemd"
+CALLS_LOG="$work/calls-$guard_mode.log"
+: > "\$CALLS_LOG"
+systemctl() { echo "systemctl \$*" >> "\$CALLS_LOG"; return 0; }
+rm() {
+  echo "rm \$*" >> "\$CALLS_LOG"
+  if [[ "$guard_mode" == "on" ]]; then
+    local a
+    for a in "\$@"; do
+      case "\$a" in
+        -*) ;;
+        "$fixture"*) ;;
+        *) echo "LEAK-BLOCKED \$a" >> "\$CALLS_LOG"; return 0 ;;
+      esac
+    done
+  fi
+  command rm "\$@"
+}
+stop_legacy_flux_agent_service
+disable_legacy_flux_agent_service
+remove_legacy_flux_agent_service
+EOF
+    printf '%s' "$harness"
+  }
+
+  printf 'real unit\n' > "$canary/flux_agent.service"
+  local harness_on
+  harness_on=$(build_harness on)
+  bash "$harness_on"
+  [[ -f "$canary/flux_agent.service" ]] || fail "T-INC-01: stub layer must prevent deletion of the out-of-fixture legacy unit"
+  grep -q "systemctl stop flux_agent" "$work/calls-on.log" || fail "T-INC-01: legacy stop must be intercepted by the systemctl stub"
+  grep -q "systemctl disable flux_agent" "$work/calls-on.log" || fail "T-INC-01: legacy disable must be intercepted by the systemctl stub"
+  grep -q "LEAK-BLOCKED $canary/flux_agent.service" "$work/calls-on.log" || fail "T-INC-01: out-of-fixture rm target must be recorded as a blocked leak"
+
+  printf 'real unit\n' > "$canary/flux_agent.service"
+  local harness_off
+  harness_off=$(build_harness off)
+  bash "$harness_off"
+  [[ ! -f "$canary/flux_agent.service" ]] || fail "T-INC-01 mutation arm: with the rm guard off, the legacy removal must actually delete the canary (the destructive call is real)"
+)
+
+# A3-05: delete_self 的删除目标必须是脚本本体。管道执行
+# （curl … | bash）时 $0 是裸命令名 bash，旧实现以 readlink -f
+# 按当前目录解析成 $CWD/bash 并真的删掉同名无关文件、还误报
+# 「已删除」（沙箱已实证）。菜单选「4. 退出」（未做任何操作）
+# 旧实现也自删并印完成文案，与 R4B11-005 口径不符。本用例三
+# 臂：管道形态哨兵存活且无已删文案；任意文件名的文件形态仍可
+# 自删（防过修）；菜单退出不自删。
+test_delete_self_pipe_form_preserves_cwd_namesake() (
+  set -euo pipefail
+  local work cwd
+  work=$(mktemp -d)
+  cwd="$work/cwd"
+  mkdir -p "$cwd"
+  printf 'sentinel\n' > "$cwd/bash"
+
+  # 管道臂：stdin 喂脚本全文，$0=bash，CWD 放同名哨兵文件。
+  local pipe_script="$work/pipe.sh" out
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$pipe_script"
+  echo 'delete_self 0' >> "$pipe_script"
+  out=$(cd "$cwd" && cat "$pipe_script" | bash 2>&1) || fail "A3-05: pipe-form delete_self should exit cleanly"
+  [[ -f "$cwd/bash" ]] || fail "A3-05: pipe-form execution must not delete the unrelated CWD file named bash"
+  if [[ "$out" == *"脚本文件已删除"* ]]; then
+    fail "A3-05: pipe-form execution must not claim the script file was deleted"
+  fi
+
+  # 文件形态臂（防过修）：改名副本以路径调用仍须自删。
+  local renamed="$work/renamed-copy.sh"
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$renamed"
+  echo 'delete_self 0' >> "$renamed"
+  ( cd "$work" && bash "$renamed" >/dev/null 2>&1 ) || fail "A3-05: file-form delete_self should exit cleanly"
+  [[ ! -f "$renamed" ]] || fail "A3-05: file-form execution should still delete the script itself"
+
+  # 菜单退出臂：选 4 不自删、无完成文案、退出 0。
+  local menu_file="$work/menu.sh" menu_out rc="0"
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$menu_file"
+  cat >> "$menu_file" <<'EOF'
+require_root_privileges() { return 0; }
+main
+EOF
+  menu_out=$(printf '4\n' | bash "$menu_file" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "A3-05: menu exit should exit 0"
+  [[ -f "$menu_file" ]] || fail "A3-05: choosing exit in the menu must not delete the script"
+  if [[ "$menu_out" == *"操作已完成"* ]]; then
+    fail "A3-05: menu exit must not print the completion line"
+  fi
+)
+
+# A3-06: install/update/uninstall 全程必须持有进程级互斥锁——旧
+# 实现无锁，两个实例共用 .new/.part/.bak/config.json 固定工件可
+# 互相删/续对方的半成品、config 后写覆盖先写。本用例以外部持锁
+# 模拟先行实例：锁被占时 acquire 必须点名拒绝，释放后必须可占。
+test_install_lock_rejects_concurrent_run() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local work lock_file errlog
+  work=$(mktemp -d)
+  lock_file="$work/install.lock"
+  errlog="$work/acquire.err"
+  export FLMX_INSTALL_LOCK_FILE="$lock_file"
+
+  # 先行实例持锁（本 shell 的 fd 9）→ 后到者被拒且点名。
+  exec 9>>"$lock_file"
+  flock -n 9 || fail "A3-06: fixture could not take the lock"
+  if ( acquire_install_lock ) 2>"$errlog"; then
+    fail "A3-06: a second instance must be refused while the lock is held"
+  fi
+  grep -q "已有另一个 install.sh 实例正在运行" "$errlog" || \
+    fail "A3-06: the concurrent-run refusal must be named on stderr"
+
+  # 释放后可占（锁随进程退出自动释放，无陈旧锁残留）。
+  flock -u 9
+  exec 9>&-
+  ( acquire_install_lock ) 2>/dev/null || \
+    fail "A3-06: the lock must be acquirable after the first instance exits"
+  unset FLMX_INSTALL_LOCK_FILE
+)
+
+# A3-07: 节点密钥的非 argv 入口。-s 让密钥在整个安装期间驻留进
+# 程 argv（ps//proc/<pid>/cmdline 对本机所有本地用户可读），与
+# 交互路径 read -s 的防窥口径分家。脚本须提供 FLMX_NODE_SECRET
+# 环境入口：env 在场且未给 -s 时用 env 值、读入后立即从环境移
+# 除（不随子进程扩散）；-s 在场时仍优先（兼容回退不变）。
+test_install_script_accepts_secret_from_env() (
+  set -euo pipefail
+
+  # env 入口臂：在干净子 shell 里 source 截断脚本（getopts 段与
+  # env 接入段都在截断保留范围内），断言 SECRET 与环境清理。
+  # 期望值用变量拼（避免把密钥形态的字面值写进断言）。
+  local out want_env="env-secret-value" want_argv="argv-secret-value"
+  out=$(
+    FLMX_NODE_SECRET="$want_env" bash -c '
+      sed "/^# 执行主函数$/,\$d" "$1" > "$2"
+      source "$2"
+      printf "got=%s env=%s" "${SECRET:-}" "${FLMX_NODE_SECRET:-unset}"
+    ' _ "$ROOT_DIR/install.sh" "$(mktemp)"
+  )
+  assert_equals "got=${want_env} env=unset" "$out" \
+    "A3-07: FLMX_NODE_SECRET must feed SECRET and be removed from the environment"
+
+  # -s 优先臂：argv 与 env 同时在场时 argv 胜（兼容回退口径）。
+  out=$(
+    FLMX_NODE_SECRET="$want_env" ARG_SECRET="$want_argv" bash -c '
+      tmpf="$2"
+      sed "/^# 执行主函数$/,\$d" "$1" > "$tmpf"
+      set -- -a "wss://panel.example:443" -s "$ARG_SECRET"
+      source "$tmpf"
+      printf "got=%s" "${SECRET:-}"
+    ' _ "$ROOT_DIR/install.sh" "$(mktemp)"
+  )
+  assert_equals "got=${want_argv}" "$out" \
+    "A3-07: -s must keep precedence over FLMX_NODE_SECRET"
+)
+
+# A3-08: OpenRC pidfile 必须单一来源——服务文件里写的 pidfile 与
+# 脚本判活读的 pidfile 是同一个变量值。旧实现三处分家：模板写死
+# /run/${RC_SVCNAME}.pid、脚本读 FLMX_AGENT_OPENRC_PIDFILE 覆盖
+# 值、存量侧又读从未赋值的第三个名字——覆盖一旦设置，守护进程
+# 仍写默认路径、脚本去自定义路径读 PID，判活恒失败。
+test_openrc_pidfile_uses_configured_value() (
+  set -euo pipefail
+  local work
+  work=$(mktemp -d)
+  SERVICE_MANAGER="openrc"
+
+  # 缺省臂：模板落缺省值、判活从同一路径读。
+  load_script_without_main "$ROOT_DIR/install.sh"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$work/flmx.initd"
+  write_flmx_agent_service
+  grep -Fxq 'pidfile="/run/flmx_agent.pid"' "$work/flmx.initd" || \
+    fail "A3-08: default OpenRC pidfile must be written from the single source variable"
+
+  # 覆盖臂：FLMX_AGENT_OPENRC_PIDFILE 改指后，模板与读面同值。
+  # （用普通赋值而非函数前缀赋值：前缀赋值在函数返回后会被
+  # bash 恢复，测不到真实的 source 时取值。）
+  FLMX_AGENT_OPENRC_PIDFILE="$work/custom.pid"
+  load_script_without_main "$ROOT_DIR/install.sh"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$work/flmx-custom.initd"
+  write_flmx_agent_service
+  grep -Fxq "pidfile=\"$work/custom.pid\"" "$work/flmx-custom.initd" || \
+    fail "A3-08: configured OpenRC pidfile must be written into the service file"
+  printf '777\n' > "$work/custom.pid"
+  assert_equals "777" "$(flmx_agent_main_pid)" \
+    "A3-08: health check must read the pid from the configured pidfile"
+
+  # 存量臂：旧名前缀回退链（FLUX_AGENT_OPENRC_PIDFILE）同样进模板
+  # 与读面，不再是第三个从未赋值的名字。
+  FLUX_AGENT_OPENRC_PIDFILE="$work/legacy.pid"
+  # 同壳多次 source 时派生变量已被前一轮赋过值，须先清空才测得
+  # 到回退链（生产每进程只 source 一次、直接读环境，无此问题）。
+  LEGACY_FLUX_AGENT_OPENRC_PIDFILE=""
+  load_script_without_main "$ROOT_DIR/install.sh"
+  LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE="$work/flux.initd"
+  write_legacy_flux_agent_service
+  grep -Fxq "pidfile=\"$work/legacy.pid\"" "$work/flux.initd" || \
+    fail "A3-08: legacy OpenRC pidfile must be written from the same fallback chain"
+  printf '888\n' > "$work/legacy.pid"
+  assert_equals "888" "$(legacy_flux_agent_main_pid)" \
+    "A3-08: legacy health check must read the pid from the legacy pidfile variable"
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -10157,6 +10673,15 @@ test_panel_anchor_corroboration_degrades
 test_install_script_binary_anchor_passes
 test_install_script_binary_anchor_mismatch_rejects
 test_install_script_binary_anchor_degrades
+test_install_script_rejects_malformed_explicit_versions
+test_install_script_latest_resolution_requires_corroboration
+test_install_flmx_agent_rolls_back_over_existing
+test_suite_host_safety_gate_blocks_real_agent_hosts
+test_suite_stub_layer_catches_legacy_leak
+test_delete_self_pipe_form_preserves_cwd_namesake
+test_install_lock_rejects_concurrent_run
+test_install_script_accepts_secret_from_env
+test_openrc_pidfile_uses_configured_value
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance

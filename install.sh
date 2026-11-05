@@ -56,9 +56,15 @@ get_architecture() {
 INSTALL_DIR="/etc/flmx_agent"
 FLMX_AGENT_SYSTEMD_SERVICE_FILE="/etc/systemd/system/flmx_agent.service"
 FLMX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flmx_agent"
-# OpenRC 服务文件里 pidfile="/run/${RC_SVCNAME}.pid"，服务名恒为 flmx_agent。
-# pidfile 覆盖变量改名后以 FLMX_ 为准，旧 FLUX_ 变量仅回退读。
+# OpenRC pidfile 单一来源（A3-08）：服务文件里写的 pidfile 与脚本
+# 判活（flmx_agent_main_pid）读的 pidfile 是同一个变量值——模板生
+# 成时把变量现值写进服务文件，不再写死 /run/${RC_SVCNAME}.pid。
+# 旧实现三处分家（模板写死、脚本读覆盖值、存量侧读第三个从未赋
+# 值的名字），覆盖一旦设置判活恒失败。改名后以 FLMX_ 为准，旧
+# FLUX_ 变量仅回退读；存量服务同理走 LEGACY_ 变量（回退同名
+# FLUX_ 链），两个模板与两个读面各自同源。
 FLMX_AGENT_OPENRC_PIDFILE="${FLMX_AGENT_OPENRC_PIDFILE:-${FLUX_AGENT_OPENRC_PIDFILE:-/run/flmx_agent.pid}}"
+LEGACY_FLUX_AGENT_OPENRC_PIDFILE="${LEGACY_FLUX_AGENT_OPENRC_PIDFILE:-${FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}}"
 # 改名前的存量布局（识别集，本轮只加不删）：存量节点经脚本更新
 # 迁移到新布局之前一直是这套目录/服务名。更新路据此定位并整体
 # 迁移；卸载与足迹判定对未迁存量仍须认它，故下列旧名常量只用于
@@ -393,23 +399,129 @@ extend_download_routes() {
   return 1
 }
 
+# latest_tag_pattern：渠道 tag 形态（J-02，与 Go 侧
+# releaseChannelFromTag / stableVersionPattern 同口径）。稳定渠道只
+# 接受纯数字 tag；FLMX_RELEASE_CHANNEL=dev|beta 时接受任意数字开
+# 头 tag（beta 渠道）。默认稳定渠道，永不解析出 beta。主解析与
+# A3-01 异路复核取数共用此定义，避免两处形态漂移。
+latest_tag_pattern() {
+  case "${FLMX_RELEASE_CHANNEL:-stable}" in
+    dev|beta) echo '^[0-9][0-9A-Za-z.\-]*$' ;;
+    *) echo '^[0-9]+(\.[0-9]+)+$' ;;
+  esac
+}
+
+# fetch_latest_tag_from_route <前缀> <max-time>：从单条路线取
+# latest tag（先重定向法、后 API 法，与主解析同法），取到合格
+# tag 回显并返回 0，否则返回 1。供 corroborate_latest_tag 异路
+# 复核使用——复核必须走与主解析相同的取数方法。
+fetch_latest_tag_from_route() {
+  local prefix="$1" max_time="$2"
+  local tag_pattern effective_url tag api_tag
+  tag_pattern=$(latest_tag_pattern)
+  effective_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' -L --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "https://github.com/${REPO}/releases/latest")" 2>/dev/null || true)
+  tag="${effective_url##*/}"
+  if [[ "$tag" =~ $tag_pattern ]]; then
+    echo "$tag"
+    return 0
+  fi
+  api_tag=$(curl -fsSL --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "https://api.github.com/repos/${REPO}/releases/latest")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
+  if [[ "$api_tag" =~ $tag_pattern ]]; then
+    echo "$api_tag"
+    return 0
+  fi
+  return 1
+}
+
+# latest_source_is_trusted <获胜前缀>：A3-01/A3-03 共用的下载源
+# 信任分级。直连（前缀为空）取的是 github.com 本体、面板源前缀
+# 是运维自有面板——这两类是规范/自有源，与第三方代理的风险模
+# 型不同（见 corroborate_latest_tag）。第三方代理前缀不在此列。
+latest_source_is_trusted() {
+  local winner="$1"
+  [[ -z "$winner" ]] && return 0
+  local panel_prefix=""
+  panel_prefix=$(derive_panel_prefix 2>/dev/null || true)
+  [[ -n "$panel_prefix" && "$winner" == "$panel_prefix" ]]
+}
+
+# corroborate_latest_tag <获胜前缀> <tag>：A3-01 版本面第二锚。
+# 旧实现逐路线串行、首个解析出合格 tag 的路线即被采信：任一第
+# 三方代理只要回一个形态合法的旧 tag，新装节点就静默装上旧版
+# 正版 agent（本体与其 .sha256 都从该 tag 取、校验自洽），无任
+# 何下限与告警（LIVE-A S3 实证）。现口径：
+#   - 任一异路给出不同 tag → 硬失败（有线路在说谎，不采信）；
+#   - 异路给出相同 tag → 复核通过；
+#   - 异路全部无应答：获胜源是第三方代理 → fail-closed（拒绝
+#     单源采信，并提示可显式 VERSION= 兜底）；获胜源是直连/
+#     面板源（规范/自有源）或运维显式指定的单路（PROXY_URL 覆
+#     盖、PROXY_ENABLED=false）→ 点名后单源采信——这两类形态
+#     里不存在「被陌生代理喂值」的威胁，fail-closed 只会打死
+#     面板源分发与直连独占两种既定部署形态。
+# 整轮复核共用 20s 总界（与二进制第二锚同值），逐路 --max-time
+# 取剩余量与 10s 的较小者。路线表只有一条时先 extend 补测一次
+# （与 corroborate_binary_anchor 同机制）。
+corroborate_latest_tag() {
+  local winner="$1" tag="$2"
+  local -a candidates=()
+  local prefix
+  for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+    [[ "$prefix" == "$winner" ]] && continue
+    candidates+=("$prefix")
+  done
+  if [[ ${#candidates[@]} -eq 0 ]] && extend_download_routes; then
+    for prefix in "${DOWNLOAD_ROUTES[@]}"; do
+      [[ "$prefix" == "$winner" ]] && continue
+      candidates+=("$prefix")
+    done
+  fi
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    if latest_source_is_trusted "$winner" || [[ "$(route_mode)" != "builtin" ]]; then
+      echo "⚠️ 最新版本 $tag 由单条路线解析、无异路可复核，按该源采信（A3-01）" >&2
+      return 0
+    fi
+    echo "❌ 最新版本解析失败：路线表无第二条路线可复核，拒绝单源采信（A3-01）。可显式指定 VERSION=<版本号> 后重试" >&2
+    return 1
+  fi
+  local deadline=$(( $(date +%s) + 20 ))
+  local other remain max_time
+  for prefix in "${candidates[@]}"; do
+    remain=$(( deadline - $(date +%s) ))
+    if (( remain <= 0 )); then
+      break
+    fi
+    max_time=10
+    if (( remain < max_time )); then max_time=$remain; fi
+    other=$(fetch_latest_tag_from_route "$prefix" "$max_time") || continue
+    if [[ "$other" != "$tag" ]]; then
+      echo "❌ 最新版本解析跨线路复核不一致，拒绝采信：线路（${winner:-直连}）给出 $tag、线路（${prefix:-直连}）给出 $other（A3-01）" >&2
+      return 1
+    fi
+    # 通过文案走 stderr：本函数的调用方以 $(...) 捕获解析结果，
+    # stdout 只许回显 tag 本身。
+    echo "✅ 最新版本 $tag 已由第二线路（${prefix:-直连}）复核一致" >&2
+    return 0
+  done
+  if latest_source_is_trusted "$winner"; then
+    echo "⚠️ 最新版本 $tag 的异路复核无应答；获胜源为直连/面板源，按单源采信（A3-01）" >&2
+    return 0
+  fi
+  echo "❌ 最新版本解析无法复核：获胜线路（${winner:-直连}）为第三方代理、其他线路均未给出版本号，拒绝单源采信 $tag（A3-01）。可显式指定 VERSION=<版本号> 后重试" >&2
+  return 1
+}
+
 resolve_latest_release_tag() {
   local effective_url tag api_tag latest_url api_url tag_pattern
 
-  # J-02: 渠道分流（与 Go 侧 releaseChannelFromTag / stableVersionPattern
-  # 同口径）。稳定渠道只接受纯数字 tag；FLMX_RELEASE_CHANNEL=dev|beta
-  # 时接受任意数字开头 tag（beta 渠道）。默认稳定渠道，永不解析出 beta；
-  # beta 须显式 VERSION 指定或切 dev/beta 渠道安装。
-  case "${FLMX_RELEASE_CHANNEL:-stable}" in
-    dev|beta) tag_pattern='^[0-9][0-9A-Za-z.\-]*$' ;;
-    *) tag_pattern='^[0-9]+(\.[0-9]+)+$' ;;
-  esac
+  # J-02: 渠道分流口径见 latest_tag_pattern（与主解析外复核共用）。
+  tag_pattern=$(latest_tag_pattern)
 
   latest_url="https://github.com/${REPO}/releases/latest"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"
 
   # 1.7.7：逐路线尝试（每条路线内先重定向法、后 API 法），首个解析
-  # 出合格 tag 的路线即用；路线全败时按直选口径补测/续切一次。
+  # 出合格 tag 的路线成为候选，须经 A3-01 异路复核才采信（见
+  # corroborate_latest_tag）；路线全败时按直选口径补测/续切一次。
   # L2-06③（R5-FD）：整轮总量上限（默认 120s，FLMX_RESOLVE_BUDGET_SECONDS
   # 可调）——旧实现每路线重定向法 30s＋API 法 30s 串行，11 线路＋
   # extend 一轮可达 11 分钟以上且无上限。逐次尝试按剩余预算收紧
@@ -430,7 +542,13 @@ resolve_latest_release_tag() {
       tag="${effective_url##*/}"
       # H-24: 无 Release 时 /releases/latest 会 302 到 /releases 索引页，
       # 此时解析出的是垃圾值 "releases" 而非版本号，必须按版本格式校验。
+      # A3-01: 合格也只是候选——须经 corroborate_latest_tag 异路复核
+      # 才可采信，复核不过整轮失败（不换线重试：有线路在给出不一
+      # 致的版本事实，继续采信任何单源都不安全）。
       if [[ "$tag" =~ $tag_pattern ]]; then
+        if ! corroborate_latest_tag "$prefix" "$tag"; then
+          return 1
+        fi
         echo "$tag"
         return 0
       fi
@@ -444,6 +562,10 @@ resolve_latest_release_tag() {
       if (( remain < max_time )); then max_time=$remain; fi
       api_tag=$(curl -fsSL --connect-timeout 5 --max-time "$max_time" "$(route_url "$prefix" "$api_url")" 2>/dev/null | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
       if [[ "$api_tag" =~ $tag_pattern ]]; then
+        # A3-01: 同重定向法，采信前须过异路复核。
+        if ! corroborate_latest_tag "$prefix" "$api_tag"; then
+          return 1
+        fi
         echo "$api_tag"
         return 0
       fi
@@ -454,21 +576,46 @@ resolve_latest_release_tag() {
   return 1
 }
 
+# A3-02: 显式版本值的格式校验（与 S-02 在 agent 升级面确立的口径
+# 同族）。VERSION/FLMX_VERSION/FLUX_VERSION/PINNED_VERSION 此前原样
+# 回显、直接内插进下载 URL：含 ../ 的值经 curl 点段压缩可逃出钉死
+# 的 ${REPO} 指向任意 GitHub 仓库的 Release，且 .sha256 由同一拼出
+# URL 派生、校验自洽不构成防线（LIVE-A S5 实证）。现统一校验：
+# 稳定渠道只接受可选 v 前缀的纯点分数字（集合不超出 latest 稳定
+# 渠道正则）；dev/beta 渠道接受与 latest 同集的数字开头 tag；两渠
+# 道共同硬拒 /、?、#、%、反斜杠、空白与 ".." 子串——凡能改变 URL
+# 指向或逃出版本路径段的字符一律不许进入拼接。
+version_value_format_ok() {
+  local value="$1"
+  [[ -n "$value" ]] || return 1
+  case "$value" in
+    */*|*\?*|*\#*|*%*|*\\*|*[[:space:]]*|*..*) return 1 ;;
+  esac
+  case "${FLMX_RELEASE_CHANNEL:-stable}" in
+    dev|beta) [[ "$value" =~ ^v?[0-9][0-9A-Za-z.\-]*$ ]] ;;
+    *) [[ "$value" =~ ^v?[0-9]+(\.[0-9]+)+$ ]] ;;
+  esac
+}
+
 resolve_version() {
+  # 四个显式入口统一过 version_value_format_ok，不合即点名来源中止
+  # （A3-02）。优先级顺序不变（RN-1）。
+  local explicit="" explicit_source=""
   if [[ -n "${VERSION:-}" ]]; then
-    echo "$VERSION"
-    return 0
+    explicit="$VERSION"; explicit_source="VERSION"
+  elif [[ -n "${FLMX_VERSION:-}" ]]; then
+    explicit="$FLMX_VERSION"; explicit_source="FLMX_VERSION"
+  elif [[ -n "${FLUX_VERSION:-}" ]]; then
+    explicit="$FLUX_VERSION"; explicit_source="FLUX_VERSION"
+  elif [[ -n "${PINNED_VERSION:-}" ]]; then
+    explicit="$PINNED_VERSION"; explicit_source="PINNED_VERSION"
   fi
-  if [[ -n "${FLMX_VERSION:-}" ]]; then
-    echo "$FLMX_VERSION"
-    return 0
-  fi
-  if [[ -n "${FLUX_VERSION:-}" ]]; then
-    echo "$FLUX_VERSION"
-    return 0
-  fi
-  if [[ -n "${PINNED_VERSION:-}" ]]; then
-    echo "$PINNED_VERSION"
+  if [[ -n "$explicit_source" ]]; then
+    if ! version_value_format_ok "$explicit"; then
+      echo "❌ 版本号格式不合法（来自 $explicit_source）：\"$explicit\"。只接受形如 1.9.9 / v1.9.9 的纯点分数字版本（dev/beta 渠道可带 -dev 等后缀）；含 /、..、?、# 等能改变下载地址的字符一律拒绝（A3-02）" >&2
+      return 1
+    fi
+    echo "$explicit"
     return 0
   fi
 
@@ -482,6 +629,12 @@ resolve_version() {
 
 # 构建下载地址
 build_download_url() {
+    # A3-02 双点收口：内插前对 RESOLVED_VERSION 再断言一次格式，
+    # 防止未来新调用方绕过 resolve_version 的校验直接赋值。
+    if ! version_value_format_ok "${RESOLVED_VERSION:-}"; then
+        echo "❌ 版本号格式不合法，拒绝拼接下载地址：\"${RESOLVED_VERSION:-}\"（A3-02）" >&2
+        return 1
+    fi
     # AUDIT-R1 (SCR-007): 分开声明与赋值，避免 local 吞掉 get_architecture 的
     # 非零退出码（SC2155）；未知架构直接向上传播失败。
     local ARCH
@@ -499,12 +652,17 @@ build_download_url() {
 #   - 异路给出不同的合法哈希 → 硬失败（返回 1），调用方丢弃 .part
 #     整轮切线/失败，不拿该二进制落地；
 #   - 异路内容不是合法 64 位 SHA256 → 只废该路，继续问下一路；
-#   - 全部异路都给不出合法校验值 → 降级单锚继续（返回 0），并在
-#     stderr 点名「跨线路锚复核已降级」。
+#   - 全部异路都给不出合法校验值 → A3-03 起 fail-closed（返回 1，
+#     S-02「禁止降级跳过」口径）：获胜线路是第三方代理时，单个作
+#     恶代理给自洽（假二进制，假 .sha256）对正是第二锚要防的形
+#     态，降级等于没防。仅两类形态保留点名降级（返回 0）：路线
+#     表只有一条运维显式指定路线（无候选）、或获胜源是直连/面
+#     板源（latest_source_is_trusted）——规范/自有源在异路无应
+#     答时点名单锚继续，避免打死面板源分发与直连独占。
 # 边界（如实写明）：① 路线表只有一条时先按下载主流程同款机制
 # extend 补测一次（面板源独占/直连短路形态扩得动；PROXY_URL 覆盖与
 # PROXY_ENABLED=false 是运维显式单路，extend 不动、无候选可扩，
-# 直接降级点名）；② 整轮复核共用 20s 总界（与 Go 两侧及
+# 走点名降级）；② 整轮复核共用 20s 总界（与 Go 两侧及
 # panel_install.sh 同值），逐路 --max-time 取剩余量与 10s 的较小
 # 者；③ 本函数只依赖脚本内置路线表（DOWNLOAD_ROUTES /
 # DOWNLOAD_URL），手动裸跑 install.sh 同样生效，不依赖面板注入。
@@ -549,8 +707,17 @@ corroborate_binary_anchor() {
       rm -f "$tmp"
     fi
   done
-  echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（R7-002 第二锚）" >&2
-  return 0
+  # A3-03: 异路全部给不出合法校验值时的收口（口径见函数头注）。
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    echo "⚠️ 跨线路锚复核已降级：路线表只有一条运维指定路线、无异路可复核，按单锚继续（R7-002 第二锚）" >&2
+    return 0
+  fi
+  if latest_source_is_trusted "$winner"; then
+    echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值；获胜源为直连/面板源，按单锚继续（R7-002 第二锚）" >&2
+    return 0
+  fi
+  echo "❌ 跨线路锚复核失败：获胜线路（${winner:-直连}）为第三方代理、其他线路均未给出合法校验值，拒绝安装（A3-03：第二锚 fail-closed，不降级单锚）" >&2
+  return 1
 }
 
 # H-01: Release 与二进制同目录发布 .sha256，下载后必须强校验。
@@ -620,7 +787,8 @@ verify_downloaded_binary() {
     echo "✅ SHA256 校验通过"
     # R7-002 第二锚：第一锚的期望值与本体同路同源，定版后须异路
     # 重取 .sha256 复核同一期望值；异值拒绝（调用方丢弃 .part），
-    # 无异路应答降级点名后继续。
+    # 无异路应答按 A3-03 口径 fail-closed（仅直连/面板源与运维显
+    # 式单路点名降级，见 corroborate_binary_anchor 头注）。
     if ! corroborate_binary_anchor "$winner_prefix" "$expected"; then
         return 1
     fi
@@ -723,8 +891,27 @@ delete_self() {
     echo "⚠️ 操作未成功（退出码 $rc），脚本文件已保留，可直接重新运行重试"
     return 0
   fi
+  # A3-05: 删除目标必须是脚本本体。管道执行（curl … | bash）时
+  # $0 是裸命令名 bash/sh，readlink -f 会按当前目录把它解析成
+  # $CWD/bash——与脚本无关的同名文件，删之是数据事故、印「已
+  # 删除」是假文案（管道形态本无文件可删）。判定两层：① $0 不
+  # 含 / 时，只认 CWD 下同名文件且其内容含 REPO 钉死行（脚本本
+  # 体标记）才继续（bash install.sh 的相对调用 $0 无斜杠但确是
+  # 本体，不受影响）；② 解析出的目标须真实存在且同样含该标记
+  # 才删。任一层不过 → 静默跳过。
+  case "$0" in
+    */*) ;;
+    *)
+      if [[ ! -f "$0" ]] || ! grep -qF 'REPO="iiiiiiiii7125-art/flmx-max"' "$0" 2>/dev/null; then
+        return 0
+      fi
+      ;;
+  esac
   SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
   if [[ "$SCRIPT_PATH" == /dev/fd/* ]]; then
+    return 0
+  fi
+  if [[ ! -f "$SCRIPT_PATH" ]] || ! grep -qF 'REPO="iiiiiiiii7125-art/flmx-max"' "$SCRIPT_PATH" 2>/dev/null; then
     return 0
   fi
   echo ""
@@ -1130,7 +1317,7 @@ description="Flmx_agent Proxy Service"
 command="$INSTALL_DIR/flmx_agent"
 directory="$INSTALL_DIR"
 command_background="yes"
-pidfile="/run/\${RC_SVCNAME}.pid"
+pidfile="$FLMX_AGENT_OPENRC_PIDFILE"
 # R17-C (R17-X-01): same rationale as the systemd unit — /dev/null
 # discarded startup logs; keep them in files for post-mortem diagnosis.
 output_log="/var/log/flmx_agent.log"
@@ -1379,7 +1566,7 @@ description="Flux_agent Proxy Service"
 command="$LEGACY_INSTALL_DIR/flux_agent"
 directory="$LEGACY_INSTALL_DIR"
 command_background="yes"
-pidfile="/run/\${RC_SVCNAME}.pid"
+pidfile="$LEGACY_FLUX_AGENT_OPENRC_PIDFILE"
 output_log="/var/log/flux_agent.log"
 error_log="/var/log/flux_agent.err.log"
 
@@ -1431,7 +1618,9 @@ legacy_flux_agent_main_pid() {
       systemctl show -p MainPID --value flux_agent 2>/dev/null
       ;;
     openrc)
-      cat "${LEGACY_FLUX_AGENT_OPENRC_PIDFILE:-/run/flux_agent.pid}" 2>/dev/null
+      # A3-08: 与存量模板同一变量（见文件头常量区），不再读第三
+      # 个从未赋值的名字。
+      cat "${LEGACY_FLUX_AGENT_OPENRC_PIDFILE}" 2>/dev/null
       ;;
   esac
 }
@@ -1745,6 +1934,40 @@ while getopts "a:s:" opt; do
   esac
 done
 
+# A3-07: 节点密钥的非 argv 入口。-s 让密钥在整个安装期间驻留进
+# 程 argv（版本解析+下载+判活可达数分钟，ps 与 /proc/<pid>/cmdline
+# 对本机所有本地用户可读），与交互路径 read -s 的防窥口径分家。
+# 自动化/面板一键场景应改用 FLMX_NODE_SECRET 环境变量传入（进
+# 程环境仅属主与 root 可读）；-s 保留为兼容回退且优先。env 值
+# 读入后立即 unset，不随后续子进程（curl 等）的环境扩散。
+if [[ -z "${SECRET:-}" && -n "${FLMX_NODE_SECRET:-}" ]]; then
+  SECRET="$FLMX_NODE_SECRET"
+fi
+unset FLMX_NODE_SECRET
+
+# A3-04: install 覆盖存量后失败的回滚体——与 update 的
+# rollback_flmx_agent 同形态（恢复 .bak、重启、双采样判活），
+# 差别只在 install 路径替换前执行过 disable，回滚须连自启一并
+# 恢复（enable_and_start_flmx_agent_service）；服务文件此时可能
+# 已按新版重写，但模板同内容、不影响旧二进制运行。
+rollback_install_replaced_agent() {
+  if [[ -f "$INSTALL_DIR/flmx_agent.bak" ]]; then
+    mv -f "$INSTALL_DIR/flmx_agent.bak" "$INSTALL_DIR/flmx_agent"
+    chmod +x "$INSTALL_DIR/flmx_agent"
+    enable_and_start_flmx_agent_service
+    # 与更新/回滚路径同口径：先沉降 3 秒让 flap 越过存活窗口，
+    # 再走 flmx_agent_health_ok 双采样判活。
+    sleep 3
+    if flmx_agent_health_ok; then
+      echo "✅ 已自动回滚到安装前的版本并重新启动。"
+    else
+      echo "❌ 回滚后服务仍未启动，请手动检查：$INSTALL_DIR"
+    fi
+  else
+    echo "⚠️ 无备份可回滚，请手动检查：$INSTALL_DIR"
+  fi
+}
+
 # 安装功能
 install_flmx_agent() {
   echo "🚀 开始安装 flmx_agent..."
@@ -1780,6 +2003,31 @@ install_flmx_agent() {
   download_agent_binary "$tmp_binary" || { rm -f "$tmp_binary"; echo "❌ 下载失败，请检查网络或下载链接。"; exit 1; }
   cleanup_legacy_gost_installation
 
+  # A3-04 ①: 覆盖存量 agent 时先过防降级门（与 update 的 X-P2-12
+  # 同口径）。此刻下载已完成、服务未停、现装二进制未动，拒绝不
+  # 留任何改动。update 侧对降级是无条件拒绝；install 是一键重装
+  # 的主用路径，只保留一个逃生口：交互终端点名确认（非交互直
+  # 接拒绝）。全新安装（无存量二进制）不进此门。
+  local replacing_existing=""
+  if [[ -x "$INSTALL_DIR/flmx_agent" ]]; then
+    replacing_existing="1"
+    local current_version cmp_result
+    current_version=$(flmx_agent_installed_version || true)
+    cmp_result=$(panel_version_cmp "${RESOLVED_VERSION:-}" "$current_version" || true)
+    if [[ "$cmp_result" == "-1" ]]; then
+      local confirm_downgrade=""
+      if [[ -t 0 ]]; then
+        read -p "⚠️ 目标版本 ${RESOLVED_VERSION:-} 低于现装版本 $current_version，确认要降级安装吗？(y/N): " confirm_downgrade || confirm_downgrade=""
+      fi
+      if [[ "$confirm_downgrade" != "y" && "$confirm_downgrade" != "Y" ]]; then
+        echo "❌ 拒绝降级安装：目标版本 ${RESOLVED_VERSION:-} 低于现装版本 $current_version，现装版本未被改动（A3-04）。如确需降级，请在交互终端重跑并点名确认，或先卸载后重装。"
+        rm -f "$tmp_binary"
+        return 1
+      fi
+      echo "⚠️ 已按交互确认继续降级安装（$current_version → ${RESOLVED_VERSION:-}）"
+    fi
+  fi
+
   # F-048: 停止并禁用已有服务移到下载+校验成功之后（与 update_flmx_agent
   # 同序）。旧顺序先 stop+disable 再下载，下载/校验失败即 exit 1，节点
   # agent 停摆且开机不自启、必须人工干预；现在失败时旧服务保持运行、
@@ -1791,8 +2039,34 @@ install_flmx_agent() {
     disable_flmx_agent_service
     echo "🚫 禁用自启"
   fi
+
+  # A3-04 ②: 覆盖前备份现装二进制（与 update 的 R9-02 同口径：
+  # 备份失败即中止——无回滚源时绝不替换）。此点服务已停，备份
+  # 失败须把服务恢复到安装前状态（重新启用并启动）。
+  if [[ -n "$replacing_existing" ]]; then
+    echo "💾 备份当前版本..."
+    if ! cp -f "$INSTALL_DIR/flmx_agent" "$INSTALL_DIR/flmx_agent.bak"; then
+      echo "❌ 备份当前版本失败（磁盘空间不足或拷贝出错），已中止安装：现装版本未被替换。"
+      rm -f "$INSTALL_DIR/flmx_agent.bak" "$tmp_binary"
+      if flmx_agent_service_exists; then
+        echo "🔄 正在恢复安装前已停止的服务..."
+        enable_and_start_flmx_agent_service || true
+      fi
+      return 1
+    fi
+  fi
+
   mv "$tmp_binary" "$INSTALL_DIR/flmx_agent"
   chmod +x "$INSTALL_DIR/flmx_agent"
+
+  # A3-04 ③: 覆盖后先烟雾测试（与 update 同口径：-V 必须可执行），
+  # 失败立即回滚——不等服务文件与配置按新版重写后才发现二进制
+  # 根本跑不起来。
+  if [[ -n "$replacing_existing" ]] && ! "$INSTALL_DIR/flmx_agent" -V >/dev/null 2>&1; then
+    echo "❌ 新版本二进制无法执行，正在回滚到安装前的版本..."
+    rollback_install_replaced_agent
+    return 1
+  fi
   echo "✅ 下载完成"
 
   # 打印版本
@@ -1844,10 +2118,21 @@ EOF
     echo "📍 节点连接地址: $SERVER_ADDR"
     echo "✔️ 请回面板「节点管理」页确认该节点显示为在线——安装完成只表示服务已启动，不代表已连上面板。"
     echo "   若面板未显示在线，请在节点机执行 journalctl -u flmx_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flmx_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
+    # A3-04: 覆盖安装成功后清备份（与 update 同口径）。
+    if [[ -n "$replacing_existing" ]]; then
+      rm -f "$INSTALL_DIR/flmx_agent.bak"
+    fi
     return 0
   else
-    echo "❌ flmx_agent服务启动失败，请执行以下命令查看状态："
-    flmx_agent_service_status_hint
+    # A3-04 ④: 覆盖存量的判活失败自动回滚（与 update 同口径）；
+    # 全新安装无回滚源，维持原提示路径。
+    if [[ -n "$replacing_existing" && -f "$INSTALL_DIR/flmx_agent.bak" ]]; then
+      echo "❌ 新版本服务启动失败，正在回滚到安装前的版本..."
+      rollback_install_replaced_agent
+    else
+      echo "❌ flmx_agent服务启动失败，请执行以下命令查看状态："
+      flmx_agent_service_status_hint
+    fi
     return 1
   fi
 }
@@ -2419,8 +2704,68 @@ require_root_privileges() {
   return 0
 }
 
+# A3-06: 进程级互斥锁。install/update/uninstall 共用一组固定路
+# 径工件（$INSTALL_DIR/flmx_agent.new、.part、.bak、config.json
+# 与服务文件），旧实现全程无锁：两实例并发时互相删/续对方的下
+# 载半成品、config 后写覆盖先写、二进制与配置可来自不同进程。
+# main 入口非阻塞占锁，已有实例运行时点名退出；锁随进程退出
+# 自动释放（flock fd 关闭 / mkdir 锁由 EXIT trap 清），不留陈旧
+# 锁。锁路径可用 FLMX_INSTALL_LOCK_FILE 覆盖（测试夹具用），缺
+# 省 /run（不可写时退 ${TMPDIR:-/tmp}）。无 flock 的系统（极简
+# Alpine 镜像）退化为原子 mkdir 锁：锁目录内记 PID，持有者已
+# 死时下任可接管。
+INSTALL_LOCK_DIR=""
+acquire_install_lock() {
+  local lock_file="${FLMX_INSTALL_LOCK_FILE:-}"
+  if [[ -z "$lock_file" ]]; then
+    if [[ -w /run ]]; then
+      lock_file="/run/flmx-install.lock"
+    else
+      lock_file="${TMPDIR:-/tmp}/flmx-install.lock"
+    fi
+  fi
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>>"$lock_file" || return 1
+    if ! flock -n 9; then
+      echo "❌ 已有另一个 install.sh 实例正在运行（锁: $lock_file），请等它结束后再运行；并发实例会共用下载与配置工件、互相覆盖（A3-06）" >&2
+      return 1
+    fi
+    return 0
+  fi
+  local lock_dir="${lock_file}.d"
+  if mkdir "$lock_dir" 2>/dev/null; then
+    echo "$$" > "$lock_dir/pid"
+    INSTALL_LOCK_DIR="$lock_dir"
+    return 0
+  fi
+  local holder=""
+  holder=$(cat "$lock_dir/pid" 2>/dev/null || true)
+  if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
+    rm -rf "$lock_dir"
+    if mkdir "$lock_dir" 2>/dev/null; then
+      echo "$$" > "$lock_dir/pid"
+      INSTALL_LOCK_DIR="$lock_dir"
+      return 0
+    fi
+  fi
+  echo "❌ 已有另一个 install.sh 实例正在运行（锁: $lock_dir），请等它结束后再运行；并发实例会共用下载与配置工件、互相覆盖（A3-06）" >&2
+  return 1
+}
+
+release_install_lock() {
+  if [[ -n "${INSTALL_LOCK_DIR:-}" ]]; then
+    rm -rf "$INSTALL_LOCK_DIR"
+    INSTALL_LOCK_DIR=""
+  fi
+}
+
 # 主逻辑
 main() {
+  # A3-06: 先占锁再做任何落盘/联网动作（占锁本身不写业务工件）。
+  acquire_install_lock || exit 1
+  if [[ -n "${INSTALL_LOCK_DIR:-}" ]]; then
+    trap release_install_lock EXIT
+  fi
   require_root_privileges || exit 1
 
   # X-P3-6 (J-03, BC-12): 各分支捕获操作函数返回码并以其退出。
@@ -2475,7 +2820,8 @@ main() {
         ;;
       4)
         echo "👋 退出脚本"
-        delete_self
+        # A3-05: 未执行任何操作，不走 delete_self——「退出」不是
+        # 「操作已完成」，自删只属于成功的操作路径（R4B11-005）。
         exit 0
         ;;
       *)
