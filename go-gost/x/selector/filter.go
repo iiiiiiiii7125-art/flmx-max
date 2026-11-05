@@ -2,10 +2,10 @@ package selector
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/go-gost/core/chain"
+	"github.com/go-gost/core/logger"
 	"github.com/go-gost/core/metadata"
 	"github.com/go-gost/core/selector"
 	mdutil "github.com/go-gost/x/metadata/util"
@@ -59,15 +59,24 @@ func (f *failFilter[T]) Filter(ctx context.Context, vs ...T) []T {
 				timeSince := time.Since(marker.Time())
 				passed := count < int64(maxFails) || timeSince >= failTimeout
 
-				// Debug logging for failover analysis
+				// Debug logging for failover analysis. This must go
+				// through the structured logger at Debug level: this
+				// filter runs for every node of every selection (the
+				// per-connection hot path), and an unconditional
+				// fmt.Printf to stdout bypassed level control and
+				// redaction and amplified journal writes (D3-06).
 				nodeName := "unknown"
 				nodeAddr := "unknown"
 				if node, ok := any(v).(*chain.Node); ok {
 					nodeName = node.Name
 					nodeAddr = node.Addr
 				}
-				fmt.Printf("[FailFilter] node=%s addr=%s count=%d maxFails=%d timeSince=%v failTimeout=%v passed=%v\n",
-					nodeName, nodeAddr, count, maxFails, timeSince, failTimeout, passed)
+				// logger.Default() is nil until the host process
+				// installs one, so guard before use.
+				if log := logger.Default(); log != nil {
+					log.Debugf("[FailFilter] node=%s addr=%s count=%d maxFails=%d timeSince=%v failTimeout=%v passed=%v",
+						nodeName, nodeAddr, count, maxFails, timeSince, failTimeout, passed)
+				}
 
 				if passed {
 					l = append(l, v)
