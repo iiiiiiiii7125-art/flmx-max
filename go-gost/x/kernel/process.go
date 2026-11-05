@@ -16,6 +16,7 @@ const (
 	logRingSize    = 200
 	maxLogLineLen  = 500
 	stopGrace      = 5 * time.Second
+	stopHardLimit  = 30 * time.Second
 	maxBackoff     = 60 * time.Second
 	stableAfter    = 60 * time.Second
 	startupProbeIn = 1500 * time.Millisecond
@@ -107,6 +108,14 @@ func (p *process) supervise() {
 	backoff := time.Second
 	launched := false
 	for {
+		// D2-05: honour a stop requested before the first
+		// launch (and between rounds) instead of running one
+		// more process first.
+		select {
+		case <-p.stopCh:
+			return
+		default:
+		}
 		if launched && p.relaunchGuard != nil {
 			if err := p.relaunchGuard(); err != nil {
 				p.logs.add(p.prefix + "[flmx] 守卫规则未就绪，本轮不重启: " + err.Error())
@@ -173,6 +182,15 @@ func (p *process) runOnce() error {
 	p.startedAt = time.Now().UnixMilli()
 	p.mu.Unlock()
 
+	// D2-05: a stop requested while Start was in flight fired
+	// its signals into a nil cmd and missed. Re-check now that
+	// the process exists and kill it immediately in that case.
+	select {
+	case <-p.stopCh:
+		signalGroup(cmd.Process.Pid, syscall.SIGKILL)
+	default:
+	}
+
 	scanDone := make(chan struct{})
 	go func() {
 		defer close(scanDone)
@@ -204,13 +222,38 @@ func (p *process) stop() {
 	p.stopOnce.Do(func() {
 		close(p.stopCh)
 		p.signal(syscall.SIGTERM)
-		select {
-		case <-p.done:
-			return
-		case <-time.After(stopGrace):
+		// D2-05: exactly two signal shots are not enough — a
+		// shot fired while cmd is still unassigned (slow exec
+		// start) is a no-op, after which the old code blocked
+		// on done forever. Keep signalling (TERM during the
+		// grace window, KILL after it) until the supervisor
+		// exits, bounded by a hard limit so stop itself can
+		// never wedge the caller.
+		grace := time.NewTimer(stopGrace)
+		defer grace.Stop()
+		hard := time.NewTimer(stopHardLimit)
+		defer hard.Stop()
+		poll := time.NewTicker(500 * time.Millisecond)
+		defer poll.Stop()
+		killing := false
+		for {
+			select {
+			case <-p.done:
+				return
+			case <-grace.C:
+				killing = true
+				p.signal(syscall.SIGKILL)
+			case <-poll.C:
+				if killing {
+					p.signal(syscall.SIGKILL)
+				} else {
+					p.signal(syscall.SIGTERM)
+				}
+			case <-hard.C:
+				p.logs.add(p.prefix + "[flmx] stop 等待进程退出超时，放弃等待")
+				return
+			}
 		}
-		p.signal(syscall.SIGKILL)
-		<-p.done
 	})
 }
 
