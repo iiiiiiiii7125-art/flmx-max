@@ -1926,6 +1926,17 @@ while getopts "a:s:" opt; do
   esac
 done
 
+# A3-07: 节点密钥的非 argv 入口。-s 让密钥在整个安装期间驻留进
+# 程 argv（版本解析+下载+判活可达数分钟，ps 与 /proc/<pid>/cmdline
+# 对本机所有本地用户可读），与交互路径 read -s 的防窥口径分家。
+# 自动化/面板一键场景应改用 FLMX_NODE_SECRET 环境变量传入（进
+# 程环境仅属主与 root 可读）；-s 保留为兼容回退且优先。env 值
+# 读入后立即 unset，不随后续子进程（curl 等）的环境扩散。
+if [[ -z "${SECRET:-}" && -n "${FLMX_NODE_SECRET:-}" ]]; then
+  SECRET="$FLMX_NODE_SECRET"
+fi
+unset FLMX_NODE_SECRET
+
 # A3-04: install 覆盖存量后失败的回滚体——与 update 的
 # rollback_flmx_agent 同形态（恢复 .bak、重启、双采样判活），
 # 差别只在 install 路径替换前执行过 disable，回滚须连自启一并

@@ -9689,6 +9689,42 @@ test_install_lock_rejects_concurrent_run() (
     fail "A3-06: the lock must be acquirable after the first instance exits"
   unset FLMX_INSTALL_LOCK_FILE
 )
+
+# A3-07: 节点密钥的非 argv 入口。-s 让密钥在整个安装期间驻留进
+# 程 argv（ps//proc/<pid>/cmdline 对本机所有本地用户可读），与
+# 交互路径 read -s 的防窥口径分家。脚本须提供 FLMX_NODE_SECRET
+# 环境入口：env 在场且未给 -s 时用 env 值、读入后立即从环境移
+# 除（不随子进程扩散）；-s 在场时仍优先（兼容回退不变）。
+test_install_script_accepts_secret_from_env() (
+  set -euo pipefail
+
+  # env 入口臂：在干净子 shell 里 source 截断脚本（getopts 段与
+  # env 接入段都在截断保留范围内），断言 SECRET 与环境清理。
+  # 期望值用变量拼（避免把密钥形态的字面值写进断言）。
+  local out want_env="env-secret-value" want_argv="argv-secret-value"
+  out=$(
+    FLMX_NODE_SECRET="$want_env" bash -c '
+      sed "/^# 执行主函数$/,\$d" "$1" > "$2"
+      source "$2"
+      printf "got=%s env=%s" "${SECRET:-}" "${FLMX_NODE_SECRET:-unset}"
+    ' _ "$ROOT_DIR/install.sh" "$(mktemp)"
+  )
+  assert_equals "got=${want_env} env=unset" "$out" \
+    "A3-07: FLMX_NODE_SECRET must feed SECRET and be removed from the environment"
+
+  # -s 优先臂：argv 与 env 同时在场时 argv 胜（兼容回退口径）。
+  out=$(
+    FLMX_NODE_SECRET="$want_env" ARG_SECRET="$want_argv" bash -c '
+      tmpf="$2"
+      sed "/^# 执行主函数$/,\$d" "$1" > "$tmpf"
+      set -- -a "wss://panel.example:443" -s "$ARG_SECRET"
+      source "$tmpf"
+      printf "got=%s" "${SECRET:-}"
+    ' _ "$ROOT_DIR/install.sh" "$(mktemp)"
+  )
+  assert_equals "got=${want_argv}" "$out" \
+    "A3-07: -s must keep precedence over FLMX_NODE_SECRET"
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -9746,6 +9782,7 @@ test_suite_host_safety_gate_blocks_real_agent_hosts
 test_suite_stub_layer_catches_legacy_leak
 test_delete_self_pipe_form_preserves_cwd_namesake
 test_install_lock_rejects_concurrent_run
+test_install_script_accepts_secret_from_env
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance
