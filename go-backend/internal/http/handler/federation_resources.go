@@ -972,19 +972,34 @@ func validatePeerResourceConfig(value interface{}, kind string) error {
 //     从不写 PeerShareResource.Config。故本面只拒对端载荷：
 //     裸键名 interface 非空字符串即拒，面板物化流不受影响
 //     （生命周期回归在 federation_b601_family_test.go 钉住）。
+//   - 出站套接字标记 so_mark / sockopts.mark（FIX-R2-7）：
+//     parsing/service 以 metadata 的 so_mark（mdutil.GetInt，
+//     v>0 才生效）及 Service/Hop/Node 的 SockOpts.Mark 经
+//     SO_MARK setsockopt 影响提供方节点出站的策略路由标记，
+//     属数值型策略值。对端无合法需要替提供方设标记，面板自
+//     有合法流亦从不设 Mark（后端 so_mark/SockOpts 全仓零命
+//     中），故不按来源区分、peer 载荷直接拒：裸键名 so_mark
+//     与 sockopts 上下文内的 mark，值按消费面同语义判有效
+//     （mdutil.GetInt 折算为正：正数、数字字符串、bool
+//     true）；0/负/不可解析在消费面惰性，放行。sockopts 之
+//     外的 mark 不是 gost 配置键（x/config 中 json:"mark"
+//     仅 SockOptsConfig.Mark 一处），不在本面。
 //
 // limiter 顶层 file 加载器与 hop loader 已由引用面校验拒绝，不在
 // 本面重复登记。URL 路径键（*.path/pathPrefix 等）不落本机文件，
 // 不在本面。
 func validatePeerResourceLocalPaths(value interface{}) error {
-	return walkPeerResourceLocalPaths(value, false)
+	return walkPeerResourceLocalPaths(value, false, false)
 }
 
-func walkPeerResourceLocalPaths(value interface{}, inMetadata bool) error {
+func walkPeerResourceLocalPaths(value interface{}, inMetadata bool, inSockOpts bool) error {
 	switch v := value.(type) {
 	case map[string]interface{}:
 		for key, child := range v {
 			lower := strings.ToLower(key)
+			if (lower == "so_mark" || (inSockOpts && lower == "mark")) && peerResourcePositiveMark(child) {
+				return fmt.Errorf("shared resources must not set node-local socket marks: %s", key)
+			}
 			if s, ok := child.(string); ok && strings.TrimSpace(s) != "" {
 				switch {
 				case lower == "certfile" || lower == "keyfile" || lower == "cafile" ||
@@ -1009,13 +1024,13 @@ func walkPeerResourceLocalPaths(value interface{}, inMetadata bool) error {
 					return fmt.Errorf("shared resources must not reference node-local files: %s", key)
 				}
 			}
-			if err := walkPeerResourceLocalPaths(child, inMetadata || lower == "metadata"); err != nil {
+			if err := walkPeerResourceLocalPaths(child, inMetadata || lower == "metadata", lower == "sockopts"); err != nil {
 				return err
 			}
 		}
 	case []interface{}:
 		for _, child := range v {
-			if err := walkPeerResourceLocalPaths(child, inMetadata); err != nil {
+			if err := walkPeerResourceLocalPaths(child, inMetadata, inSockOpts); err != nil {
 				return err
 			}
 		}
@@ -1029,6 +1044,30 @@ func walkPeerResourceLocalPaths(value interface{}, inMetadata bool) error {
 func probeResistanceFileValue(s string) bool {
 	head, _, found := strings.Cut(s, ":")
 	return found && strings.EqualFold(strings.TrimSpace(head), "file")
+}
+
+// peerResourcePositiveMark 按消费面语义判 so_mark/mark 值是否构成
+// 有效标记：与 mdutil.GetInt 的折算一致（bool true 折 1、浮点截
+// 断、字符串走 Atoi 不去空白），且 parsing 侧 v>0 才真正
+// setsockopt——0、负数与不可解析值在消费面惰性，不归本面。
+func peerResourcePositiveMark(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case float64:
+		return int(v) > 0
+	case int:
+		return v > 0
+	case int64:
+		return v > 0
+	case json.Number:
+		f, err := v.Float64()
+		return err == nil && int(f) > 0
+	case string:
+		n, err := strconv.Atoi(v)
+		return err == nil && n > 0
+	}
+	return false
 }
 
 // Registry kinds without an owned command API cannot be referenced by peers.

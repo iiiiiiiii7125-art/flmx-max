@@ -22,7 +22,9 @@ import (
 // FIX-R2-7（§14 按来源收口）续收第七族 interface：peer 载荷裸键名
 // 非空即拒；面板以节点记录 InterfaceName 经 federation 生命周期
 // 物化下发的合法流与本面按来源分离（校验器只见 peer 来源的
-// PeerShareResource.Config），生命周期回归同组钉住不断。
+// PeerShareResource.Config），生命周期回归同组钉住不断。同批续
+// 收第八族 so_mark/sockopts.mark（数值型策略值：对端替提供方设
+// 出站 SO_MARK 路由标记；面板自有流零命中，按有效值直接拒）。
 // 本文件钉补全后的全集：可达族
 // 走真实命令面红→绿，类型面暂挡住的族以合法信封嵌入证路径面本身
 // 在命令面生效、再以校验器直测钉键形变体；合法 KCP 配置（内联
@@ -157,6 +159,12 @@ func TestB601FamilyValidatorKeyShapes(t *testing.T) {
 		{"service metadata interface", map[string]interface{}{"metadata": map[string]interface{}{"interface": "eth0"}}},
 		{"Interface case variant", map[string]interface{}{"Interface": "eth0"}},
 		{"node field interface", map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"interface": "eth0"}}}},
+		{"metadata so_mark number", map[string]interface{}{"metadata": map[string]interface{}{"so_mark": float64(42)}}},
+		{"metadata so_mark string", map[string]interface{}{"metadata": map[string]interface{}{"so_mark": "42"}}},
+		{"So_Mark case variant", map[string]interface{}{"metadata": map[string]interface{}{"So_Mark": 1}}},
+		{"metadata so_mark bool", map[string]interface{}{"metadata": map[string]interface{}{"so_mark": true}}},
+		{"sockopts mark", map[string]interface{}{"sockopts": map[string]interface{}{"mark": 3}}},
+		{"node sockopts Mark case variant", map[string]interface{}{"hops": []interface{}{map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"sockopts": map[string]interface{}{"Mark": 3}}}}}}},
 	}
 	for _, tc := range reject {
 		t.Run("reject/"+tc.name, func(t *testing.T) {
@@ -177,6 +185,12 @@ func TestB601FamilyValidatorKeyShapes(t *testing.T) {
 		{"empty netns placeholder", map[string]interface{}{"metadata": map[string]interface{}{"netns": ""}}},
 		{"empty netns.out placeholder", map[string]interface{}{"metadata": map[string]interface{}{"netns.out": ""}}},
 		{"empty interface placeholder", map[string]interface{}{"metadata": map[string]interface{}{"interface": ""}}},
+		{"so_mark zero placeholder", map[string]interface{}{"metadata": map[string]interface{}{"so_mark": 0}}},
+		{"so_mark zero string placeholder", map[string]interface{}{"metadata": map[string]interface{}{"so_mark": "0"}}},
+		{"so_mark negative inert", map[string]interface{}{"metadata": map[string]interface{}{"so_mark": float64(-1)}}},
+		{"sockopts mark zero placeholder", map[string]interface{}{"sockopts": map[string]interface{}{"mark": 0}}},
+		{"mark outside sockopts", map[string]interface{}{"mark": 9}},
+		{"metadata bare mark inert", map[string]interface{}{"metadata": map[string]interface{}{"mark": 9}}},
 		{"inline kcp config", map[string]interface{}{"metadata": map[string]interface{}{"config": map[string]interface{}{"mode": "fast"}}}},
 	}
 	for _, tc := range accept {
@@ -451,5 +465,102 @@ func TestB601FamilyInterfaceLifecycleIntact(t *testing.T) {
 				t.Fatalf("middle chain hop interface = %q, want provider node InterfaceName %q", got, "ens224")
 			}
 		})
+	}
+}
+
+// FIX-R2-7：so_mark / sockopts.mark 两入形（service metadata 的
+// so_mark 数值与数字字符串形、结构体 sockopts 的 mark）在命令面
+// 全数被拒且不落库——对端借此替提供方节点出站连接打 SO_MARK
+// 策略路由标记，面板自有流从不设 Mark。0 值在消费面惰性
+// （parsing 门 v>0），作对照必须照常受理落库。
+func TestB601FamilySoMarkRejected(t *testing.T) {
+	a := newCleanupAgent(t)
+	share := resourceTestShare(t, a.h, "b601fam-mark-share")
+
+	cases := []struct {
+		name  string
+		cmd   string
+		data  interface{}
+		check string
+		kind  string
+	}{
+		{
+			name: "service metadata so_mark number",
+			cmd:  "AddService",
+			data: []interface{}{b601FamilyService("marksoc", 31081, func(s map[string]interface{}) {
+				s["metadata"] = map[string]interface{}{"so_mark": 123}
+			})},
+			check: "marksoc", kind: "service",
+		},
+		{
+			name: "service metadata so_mark string",
+			cmd:  "AddService",
+			data: []interface{}{b601FamilyService("markstr", 31082, func(s map[string]interface{}) {
+				s["metadata"] = map[string]interface{}{"so_mark": "123"}
+			})},
+			check: "markstr", kind: "service",
+		},
+		{
+			name: "service sockopts mark",
+			cmd:  "AddService",
+			data: []interface{}{b601FamilyService("markfield", 31083, func(s map[string]interface{}) {
+				s["sockopts"] = map[string]interface{}{"mark": 7}
+			})},
+			check: "markfield", kind: "service",
+		},
+		{
+			name:  "chain node sockopts mark",
+			cmd:   "AddChains",
+			data:  map[string]interface{}{"name": "marknode", "hops": []interface{}{map[string]interface{}{"name": "h1", "nodes": []interface{}{map[string]interface{}{"name": "n1", "addr": "127.0.0.1:8080", "sockopts": map[string]interface{}{"mark": 7}, "connector": map[string]interface{}{"type": "relay"}, "dialer": map[string]interface{}{"type": "tcp"}}}}}},
+			check: "marknode", kind: "chain",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := resourceTestCommand(t, a.h, share, tc.cmd, tc.data)
+			if result.Code == 0 {
+				t.Fatalf("command carrying a socket mark for the provider node was accepted: %+v", result)
+			}
+			stored, err := a.h.repo.GetPeerShareResource(share.ID, tc.kind, tc.check)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored != nil {
+				t.Fatalf("rejected resource was persisted anyway: %+v", stored)
+			}
+		})
+	}
+
+	zeroMeta := resourceTestCommand(t, a.h, share, "AddService", []interface{}{b601FamilyService("markzero", 31084, func(s map[string]interface{}) {
+		s["metadata"] = map[string]interface{}{"so_mark": 0}
+	})})
+	if zeroMeta.Code != 0 {
+		t.Fatalf("zero so_mark placeholder rejected: %s", zeroMeta.Msg)
+	}
+	zeroField := resourceTestCommand(t, a.h, share, "AddService", []interface{}{b601FamilyService("markzerofield", 31085, func(s map[string]interface{}) {
+		s["sockopts"] = map[string]interface{}{"mark": 0}
+	})})
+	if zeroField.Code != 0 {
+		t.Fatalf("zero sockopts mark placeholder rejected: %s", zeroField.Msg)
+	}
+}
+
+// 存量面：植入 so_mark 的存量服务经启动复检必须被置 paused
+// （同一校验全集的本族验证，与 interface 存量例同形）。
+func TestB601FamilyStoredSoMarkPaused(t *testing.T) {
+	a := newCleanupAgent(t)
+	share := resourceTestShare(t, a.h, "b601fam-mark-stored-share")
+
+	b606SeedResource(t, a.h, share, "service", "storedmark", "active", map[string]interface{}{
+		"handler":  map[string]interface{}{"type": "tcp"},
+		"listener": map[string]interface{}{"type": "tcp"},
+		"metadata": map[string]interface{}{"so_mark": 99},
+	})
+
+	restarted := &Handler{repo: a.h.repo}
+	restarted.revalidateStoredPeerShareResources()
+
+	if got := b606DesiredState(t, a.h, share, "service", "storedmark"); got != "paused" {
+		t.Fatalf("stored service with so_mark desired_state = %q, want paused", got)
 	}
 }
