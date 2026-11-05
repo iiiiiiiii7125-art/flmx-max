@@ -143,6 +143,23 @@ test ! -e /etc/runlevels/default/flmx_agent
 test ! -e "$TEST_DIR/flmx_agent"
 test ! -e "$TEST_DIR/systemctl-called"
 
+# ALP-RED-1: install.sh succeeds by deleting $0 (its own delete-self
+# step), so the first install removed $TEST_DIR/install.sh and the
+# uninstall above removed $TEST_DIR/manage.sh. The A3-08 section
+# reuses both harness copies, so rebuild them exactly as above first.
+sed '/^# 执行主函数$/,$d' "$INSTALL_SCRIPT" > "$TEST_DIR/install.sh"
+cat >> "$TEST_DIR/install.sh" <<'EOF'
+INSTALL_DIR="$TEST_DIR/flmx_agent"
+ensure_download_url_initialized() {
+  ensure_alpine_runtime_dependencies || return 1
+  DOWNLOAD_URL="file://$TEST_DIR/agent"
+}
+check_and_install_tcpkill() { :; }
+main
+EOF
+chmod +x "$TEST_DIR/install.sh"
+cp "$TEST_DIR/install.sh" "$TEST_DIR/manage.sh"
+
 # A3-08: the OpenRC pidfile is a single source — reinstall with a
 # custom pidfile location and assert the generated service file
 # carries the configured value and the daemon's pid actually lands
