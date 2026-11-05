@@ -324,6 +324,26 @@ func (s *defaultService) Serve() error {
 		go func() {
 			defer wg.Done()
 
+			// D3-02: a panic anywhere in a connection handler
+			// must kill only this connection, never the agent
+			// process. Before this boundary, the dispatch had
+			// no recover at all and one bad connection (e.g. an
+			// unchecked type assertion in a protocol handler)
+			// took down every service on the node.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Errorf("handler panic, connection dropped (service %s, client %s): %v", s.name, clientAddr, r)
+					conn.Close()
+					if v := xmetrics.GetCounter(xmetrics.MetricServiceHandlerErrorsCounter,
+						metrics.Labels{"service": s.name, "client": clientIP}); v != nil {
+						v.Inc()
+					}
+					if sts := s.status.stats; sts != nil {
+						sts.Add(stats.KindTotalErrs, 1)
+					}
+				}
+			}()
+
 			if v := xmetrics.GetCounter(xmetrics.MetricServiceRequestsCounter,
 				metrics.Labels{"service": s.name, "client": clientIP}); v != nil {
 				v.Inc()
