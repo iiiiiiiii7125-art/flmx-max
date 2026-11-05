@@ -7,9 +7,9 @@ import (
 
 	"github.com/go-gost/core/chain"
 	corehop "github.com/go-gost/core/hop"
+	xlogger "github.com/go-gost/x/logger"
 	"github.com/go-gost/x/routing"
 	xs "github.com/go-gost/x/selector"
-	xlogger "github.com/go-gost/x/logger"
 )
 
 // D3-04 regression: hop.Select's priority early-return bypassed the

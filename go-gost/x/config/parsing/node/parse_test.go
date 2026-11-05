@@ -3,8 +3,8 @@ package node
 import (
 	"testing"
 
-	_ "github.com/go-gost/x/connector/http"
 	"github.com/go-gost/x/config"
+	_ "github.com/go-gost/x/connector/http"
 	_ "github.com/go-gost/x/dialer/tcp"
 	xlogger "github.com/go-gost/x/logger"
 )
