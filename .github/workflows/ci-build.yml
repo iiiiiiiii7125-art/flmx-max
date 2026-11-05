@@ -193,7 +193,13 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        # A4-07: the contract suite must validate the PostgreSQL
+        # major users actually deploy — the shipped compose files
+        # (docker-compose-v4/v6.yml) pin postgres:16-alpine, while
+        # this service floated on postgres:17, so PG16-only failures
+        # (and PG17-only features silently relied on) passed CI.
+        # Digest-pinned per A4-03, same digest as the compose files.
+        image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
         env:
           POSTGRES_USER: flux_test
           POSTGRES_PASSWORD: flux_test_pass
