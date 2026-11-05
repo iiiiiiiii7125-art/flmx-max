@@ -365,7 +365,21 @@ export interface NodeSshConfigApiItem {
   privateKey?: string;
   passphrase?: string;
   sudoMode?: "none" | "sudo" | "sudo_su";
+  /** C3-02：已钉入的 SSH 主机密钥指纹（SHA256:…）；空/缺失＝未钉入。 */
+  hostKeyFingerprint?: string;
   [key: string]: unknown;
+}
+
+/**
+ * POST /node/nftables/test 的回执 data（C3-02）：仅当本次测连通发生
+ * 钉入（未钉入首次测，或带 resetHostKey 重钉）时后端才带指纹字段
+ * 与核对 warning；已钉入且未重置时 data 为空（OKEmpty）。
+ */
+export interface NftablesTestResult {
+  hostKeyFingerprint?: string;
+  hostKeyPinned?: boolean;
+  hostKeyRepinned?: boolean;
+  warning?: string;
 }
 
 export interface NodeSshConfigMutationPayload {

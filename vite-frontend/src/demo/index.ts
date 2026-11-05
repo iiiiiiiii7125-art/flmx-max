@@ -992,6 +992,82 @@ function loginAnswer(bare: string, body: unknown) {
   };
 }
 
+/**
+ * Batch-operation receipts (E2-03): every batch endpoint returns a typed
+ * BatchOperationResult receipt from the real backend, but the generic
+ * write branch below answers data:null for all of them (their last
+ * segments match no save|create|update echo word) — tunnel
+ * batch-redeploy then throws on null.failCount (false failure), tunnel /
+ * forward / inbound batch deletes toast "成功删除 0 项", and node
+ * batch-upgrade fabricates success from the selection count. Synthesize
+ * the receipt in the backend's exact shape from the submitted ids: all
+ * requested items succeed (the demo has no agents that could fail them).
+ * node/batch-upgrade has its own shape (data.results[] of
+ * {id, success, message}), synthesized per id.
+ */
+const BATCH_RESULT_ENDPOINTS = new Set([
+  "forward/batch-delete",
+  "forward/batch-pause",
+  "forward/batch-resume",
+  "forward/batch-redeploy",
+  "forward/batch-change-tunnel",
+  "node/batch-delete",
+  "tunnel/batch-redeploy",
+  "tunnel/batch-delete-with-forwards",
+  "inbound/batch-delete",
+  "inbound/batch-toggle",
+]);
+
+function batchAnswer(bare: string, body: unknown) {
+  if (bare === "node/batch-upgrade") {
+    const req = parseBody(body);
+    const ids = Array.isArray(req.ids) ? req.ids : [];
+
+    return {
+      code: 0,
+      msg: "操作成功",
+      data: {
+        results: ids.map((id) => ({
+          id: Number(id),
+          success: true,
+          message: "升级命令已下发",
+        })),
+      },
+      ts: Date.now(),
+    };
+  }
+
+  if (!BATCH_RESULT_ENDPOINTS.has(bare)) return null;
+
+  const req = parseBody(body);
+  const rawIds =
+    bare === "forward/batch-change-tunnel" ? req.forwardIds : req.ids;
+  const count = Array.isArray(rawIds) ? rawIds.length : 0;
+  const data: Record<string, unknown> = {
+    successCount: count,
+    failCount: 0,
+    failures: [],
+    pendingCount: 0,
+    pending: [],
+    warnings: [],
+  };
+
+  if (bare === "tunnel/batch-delete-with-forwards") {
+    data.deletedForwardCount = 0;
+    data.migratedCount = 0;
+    data.portAdjustedCount = 0;
+  }
+
+  if (bare === "node/batch-delete" && req.uninstall) {
+    data.uninstalledCount = count;
+    data.uninstallPendingCount = 0;
+    data.uninstallUnsupportedCount = 0;
+    data.uninstallWarnings = [];
+  }
+
+  return { code: 0, msg: "操作成功", data, ts: Date.now() };
+}
+
 function receiptAnswer(
   bare: string,
   body: unknown,
@@ -1007,6 +1083,7 @@ function receiptAnswer(
     inboundImportAnswer(bare, body) ??
     sourceRefreshAnswer(bare, body, book) ??
     serviceRunAnswer(bare, body, book) ??
+    batchAnswer(bare, body) ??
     federationImportAnswer(bare, book) ??
     gistSaveAnswer(bare, body, book) ??
     importAutoBackupStatusAnswer(bare) ??

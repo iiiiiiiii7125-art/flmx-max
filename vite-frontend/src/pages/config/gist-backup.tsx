@@ -39,6 +39,8 @@ const RESTORE_WIRING_PENDING = false;
 // R2-C5-01＝R2-F6-01：Gist 恢复成功后页面会整页刷新（恢复可能使用户
 // 掉线），回执先暂存 sessionStorage，刷新后由本组件读出呈现并清除，
 // 保证被删段点名等披露不随刷新丢失。
+// E1-05：utils/session.ts 的 clearSession 以同值常量在登出时删除
+// 本键（两处同值，改名须同改），避免回执留给下一登录账号。
 const GIST_RESTORE_RECEIPT_KEY = "flmx-gist-restore-receipt";
 
 const INTERVALS: Array<[number, string]> = [

@@ -239,6 +239,10 @@ export default function NodePage({
     useLocalStorageState<NodeFilterMode>("node-expiry-filter-mode", "all");
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [dialogVisible, setDialogVisible] = useState(false);
+  // C3-02：正在编辑节点的已钉入 SSH 主机密钥指纹（表单指纹区展示用；
+  // 不进 NodeForm——指纹是服务端托管状态，不得随节点提交体回写）。
+  const [editingHostKeyFingerprint, setEditingHostKeyFingerprint] =
+    useState("");
   const [dialogTitle, setDialogTitle] = useState("");
   const [isEdit, setIsEdit] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
@@ -939,6 +943,7 @@ export default function NodePage({
       tls: typeof node.tls === "number" ? node.tls : 1,
       socks: typeof node.socks === "number" ? node.socks : 1,
     });
+    setEditingHostKeyFingerprint(node.sshConfig?.hostKeyFingerprint || "");
     const offline = node.connectionStatus !== "online";
 
     setProtocolDisabled(offline || node.forwardMode === "nftables");
@@ -1519,6 +1524,7 @@ export default function NodePage({
 
   // 重置表单
   const resetForm = () => {
+    setEditingHostKeyFingerprint("");
     setForm({
       id: null,
       name: "",
@@ -1618,12 +1624,37 @@ export default function NodePage({
 
     saveOrder(nodeOrderLocalKey(), newOrder);
 
-    // 持久化到数据库
+    // 持久化到数据库。E2-04：后端按 batchOperationResult 逐项回执
+    // （code:0 仍可含 failCount>0），且本页在请求前已乐观改序并写
+    // localStorage——任一失败都不得呈现为已保存：整单失败回滚状态
+    // 与本地副本，部分失败按服务器 inx 重同步（loadNodes 以 DB 序
+    // 重建），与 DB 真值对齐。
+    const rollbackOrder = () => {
+      setNodeOrder(nodeOrder);
+      saveOrder(nodeOrderLocalKey(), nodeOrder);
+    };
+
     try {
       const nodesToUpdate = newOrder.map((id, index) => ({ id, inx: index }));
       const response = await updateNodeOrder({ nodes: nodesToUpdate });
 
       if (response.code === 0) {
+        const receipt = response.data as BatchOperationResult | undefined;
+        const failCount = receipt?.failCount ?? 0;
+
+        if (failCount > 0) {
+          const failures = extractBatchFailures(response.data);
+          const firstReason = failures[0]?.reason || failures[0]?.name || "";
+
+          toast.error(
+            `保存排序部分失败：成功 ${receipt?.successCount ?? 0} 项，失败 ${failCount} 项${firstReason ? `（${firstReason}）` : ""}，已按服务器顺序刷新`,
+          );
+          saveOrder(nodeOrderLocalKey(), nodeOrder);
+          await loadNodes({ silent: true });
+
+          return;
+        }
+
         setNodeList((prev) =>
           prev.map((node) => {
             const updated = nodesToUpdate.find((n) => n.id === node.id);
@@ -1632,9 +1663,11 @@ export default function NodePage({
           }),
         );
       } else {
+        rollbackOrder();
         toast.error("保存排序失败：" + (response.msg || "未知错误"));
       }
     } catch {
+      rollbackOrder();
       toast.error("保存排序失败，请重试");
     }
   };
@@ -2388,6 +2421,7 @@ export default function NodePage({
         handleSubmit={handleSubmit}
         protocolControlsDisabled={protocolControlsDisabled}
         protocolControlsReason={protocolControlsReason}
+        sshHostKeyFingerprint={editingHostKeyFingerprint}
         setDialogVisible={setDialogVisible}
         setForm={setForm}
         submitLoading={submitLoading}

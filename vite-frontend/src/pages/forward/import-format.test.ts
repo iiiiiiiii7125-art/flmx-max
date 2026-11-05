@@ -73,6 +73,37 @@ test("parseNyFormatData supports ny alias fields", () => {
   assert.equal(result[1].parsed?.name, "Alias B");
 });
 
+test("parseNyFormatData reports trailing non-JSON lines as failures instead of dropping them", () => {
+  const input =
+    '{"dest":["1.1.1.1:1000"],"listen_port":3000,"name":"A"}\nNOT-JSON-GARBAGE';
+
+  const result = parseNyFormatData(input);
+
+  assert.equal(result.length, 2);
+  assert.equal(result[0].error, undefined);
+  assert.equal(result[0].parsed?.name, "A");
+  assert.equal(result[1].line, "NOT-JSON-GARBAGE");
+  assert.match(result[1].error || "", /无法解析/);
+});
+
+test("parseNyFormatData reports leading and interleaved non-JSON lines in input order", () => {
+  const input = [
+    "# exported from another panel",
+    '{"dest":["1.1.1.1:1000"],"listen_port":3000,"name":"A"}',
+    "BROKEN-LINE",
+    '{"dest":["2.2.2.2:2000"],"listen_port":4000,"name":"B"}',
+  ].join("\n");
+
+  const result = parseNyFormatData(input);
+
+  assert.equal(result.length, 4);
+  assert.match(result[0].error || "", /无法解析/);
+  assert.equal(result[1].parsed?.name, "A");
+  assert.equal(result[2].line, "BROKEN-LINE");
+  assert.match(result[2].error || "", /无法解析/);
+  assert.equal(result[3].parsed?.name, "B");
+});
+
 test("convertNyItemToForwardInput maps ny fields correctly", () => {
   const mapped = convertNyItemToForwardInput({
     dest: ["1.1.1.1:1111", "2.2.2.2:2222"],

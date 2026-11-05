@@ -585,10 +585,21 @@ export default function InboundPage() {
 
         return;
       }
-      const results = Object.values(res.data ?? {}).filter((p) => !p.skipped);
+      const allResults = Object.values(res.data ?? {});
+      const results = allResults.filter((p) => !p.skipped);
       const down = results.filter((p) => !p.ok).length;
 
-      if (down > 0) {
+      // E2-05：全部结果被 skipped（UDP-only 协议不支持面板侧探测）
+      // 时旧分支落进成功文案，报出「0 个导入节点都能连接」的虚假
+      // 成功——未实测任何节点不得报可达，先按实测数分流。
+      if (results.length === 0) {
+        toast(
+          allResults.length === 0
+            ? "没有可检测的导入节点"
+            : `全部 ${allResults.length} 个导入节点均不支持面板侧探测（UDP 协议），未实际检测`,
+          { icon: "⚠️" },
+        );
+      } else if (down > 0) {
         toast(`${results.length - down} 个可连接，${down} 个连不上`, {
           icon: "⚠️",
         });

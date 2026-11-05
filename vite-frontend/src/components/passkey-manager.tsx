@@ -12,7 +12,7 @@ import {
   listPasskeys,
   type PasskeyItem,
 } from "@/api";
-import { createPasskey } from "@/utils/passkey";
+import { createPasskey, PasskeyDataError } from "@/utils/passkey";
 
 export function PasskeyManager() {
   const [enabled, setEnabled] = useState(false);
@@ -110,8 +110,13 @@ export function PasskeyManager() {
       setPassword("");
       setName("");
       await refresh();
-    } catch {
-      toast.error("绑定已取消或失败");
+    } catch (error) {
+      // E1-06：解码失败与用户取消分开呈现（同登录侧口径）。
+      if (error instanceof PasskeyDataError) {
+        toast.error(error.message);
+      } else {
+        toast.error("绑定已取消或失败");
+      }
     } finally {
       setBusy(false);
     }
