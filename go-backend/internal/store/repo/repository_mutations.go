@@ -351,27 +351,32 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 	})
 }
 
-func (r *Repository) ResetUserFlowByUser(userID int64, now int64) {
+// ResetUserFlowByUser 清零用户及其全部 user_tunnel 的流量计数。
+// B2-02：此前两处更新的错误被就地吞掉、签名无返回值，handler
+// 只能恒报成功——重置实际未落库时管理员无从知晓。现回传合并
+// 错误，与同文件 ResetForwardFlow/ResetUserQuotaUsage 同口径。
+func (r *Repository) ResetUserFlowByUser(userID int64, now int64) error {
 	if r == nil || r.db == nil {
-		return
+		return errors.New("repository not initialized")
 	}
-	_ = r.db.Model(&model.User{}).
+	errUser := r.db.Model(&model.User{}).
 		Where("id = ?", userID).
 		Updates(map[string]interface{}{
 			"in_flow":      0,
 			"out_flow":     0,
 			"updated_time": sql.NullInt64{Int64: now, Valid: true},
 		}).Error
-	_ = r.db.Model(&model.UserTunnel{}).
+	errTunnels := r.db.Model(&model.UserTunnel{}).
 		Where("user_id = ?", userID).
 		Updates(map[string]interface{}{"in_flow": 0, "out_flow": 0}).Error
+	return errors.Join(errUser, errTunnels)
 }
 
-func (r *Repository) ResetUserFlowByUserTunnel(userTunnelID int64) {
+func (r *Repository) ResetUserFlowByUserTunnel(userTunnelID int64) error {
 	if r == nil || r.db == nil {
-		return
+		return errors.New("repository not initialized")
 	}
-	_ = r.db.Model(&model.UserTunnel{}).
+	return r.db.Model(&model.UserTunnel{}).
 		Where("id = ?", userTunnelID).
 		Updates(map[string]interface{}{"in_flow": 0, "out_flow": 0}).Error
 }

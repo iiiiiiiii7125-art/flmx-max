@@ -509,7 +509,12 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("用户不存在"))
 			return
 		}
-		h.repo.ResetUserFlowByUser(id, time.Now().UnixMilli())
+		// B2-02：重置落库失败必须如实报错，不再恒回成功
+		// （与上方存在性检查的 -2 口径一致）。
+		if err := h.repo.ResetUserFlowByUser(id, time.Now().UnixMilli()); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	} else {
 		if _, _, err := h.repo.GetUserTunnelUserAndTunnel(id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -519,7 +524,10 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		h.repo.ResetUserFlowByUserTunnel(id)
+		if err := h.repo.ResetUserFlowByUserTunnel(id); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
