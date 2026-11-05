@@ -21,16 +21,33 @@ const STANDARD_RECONNECT_DELAY_MS = 3000;
 const MAX_STANDARD_RECONNECT_DELAY_MS = 15000;
 const FALLBACK_RECONNECT_DELAY_MS = 30000;
 
-const getRealtimeWsUrl = (): string => {
+// R-WS-TICKET：连接前先以登录态 JWT（Authorization 头）向后端换取
+// 短期单次票据，WS 握手只带票据——长效 JWT 不再进 WS 查询参数。
+// 票据单次使用，每次（重）连都重新取票。
+const fetchRealtimeWsUrl = async (): Promise<string> => {
   const baseUrl =
     axios.defaults.baseURL ||
     (import.meta.env.VITE_API_BASE
       ? `${import.meta.env.VITE_API_BASE}/api/v1/`
       : "/api/v1/");
 
+  const token = getToken();
+  const res = await axios.post("system-info/ticket", null, {
+    headers: token ? { Authorization: token } : undefined,
+    timeout: 5000,
+  });
+  const envelope = res.data as
+    | { data?: { ticket?: unknown }; ticket?: unknown }
+    | undefined;
+  const ticket = envelope?.data?.ticket ?? envelope?.ticket;
+
+  if (typeof ticket !== "string" || ticket === "") {
+    throw new Error("ws ticket missing from issue response");
+  }
+
   return (
     baseUrl.replace(/^http/, "ws").replace(/\/api\/v1\/$/, "") +
-    `/system-info?type=0&secret=${getToken() || ""}`
+    `/system-info?type=0&ticket=${encodeURIComponent(ticket)}`
   );
 };
 
@@ -99,6 +116,10 @@ const scheduleSharedReconnect = () => {
   }, reconnectDelay);
 };
 
+// 取票是异步的：防重入标志避免多个订阅者/重连定时器同时发起取票+
+// 拨号（票据单次使用，并发拨号还会互相烧毁对方的票）。
+let sharedConnectInFlight = false;
+
 const connectShared = () => {
   if (sharedSubscribers.size === 0) {
     return;
@@ -131,6 +152,10 @@ const connectShared = () => {
     return;
   }
 
+  if (sharedConnectInFlight) {
+    return;
+  }
+
   if (sharedSocket) {
     sharedSocket.onopen = null;
     sharedSocket.onmessage = null;
@@ -139,46 +164,60 @@ const connectShared = () => {
     sharedSocket = null;
   }
 
-  try {
-    setSharedState({ connecting: true });
-    sharedSocket = new WebSocket(getRealtimeWsUrl());
+  sharedConnectInFlight = true;
+  setSharedState({ connecting: true });
 
-    sharedSocket.onopen = () => {
-      sharedReconnectAttempts = 0;
-      setSharedState({
-        connected: true,
-        connecting: false,
-        usingPollingFallback: false,
-      });
-    };
+  void (async () => {
+    try {
+      const url = await fetchRealtimeWsUrl();
 
-    sharedSocket.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data);
+      // 取票期间订阅者可能已全部退订（disconnectShared 已跑）：
+      // 放弃建连，避免无人订阅的孤儿连接。
+      if (sharedSubscribers.size === 0) {
+        return;
+      }
 
-        if (parsed && typeof parsed === "object") {
-          sharedSubscribers.forEach((subscriber) => {
-            subscriber.onMessage(parsed as NodeRealtimeMessage);
-          });
-        }
-      } catch {}
-    };
+      sharedSocket = new WebSocket(url);
 
-    sharedSocket.onerror = () => {};
+      sharedSocket.onopen = () => {
+        sharedReconnectAttempts = 0;
+        setSharedState({
+          connected: true,
+          connecting: false,
+          usingPollingFallback: false,
+        });
+      };
 
-    sharedSocket.onclose = () => {
+      sharedSocket.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+
+          if (parsed && typeof parsed === "object") {
+            sharedSubscribers.forEach((subscriber) => {
+              subscriber.onMessage(parsed as NodeRealtimeMessage);
+            });
+          }
+        } catch {}
+      };
+
+      sharedSocket.onerror = () => {};
+
+      sharedSocket.onclose = () => {
+        sharedSocket = null;
+        setSharedState({ connected: false, connecting: false });
+        scheduleSharedReconnect();
+      };
+    } catch {
+      // 取票失败（未登录/票据端点异常）与构造抛错同路径处理：
+      // 排重连并在标准重试耗尽后置 usingPollingFallback，
+      // 避免实时通道整会话静默死亡、页面停在首屏静态数据
       sharedSocket = null;
       setSharedState({ connected: false, connecting: false });
       scheduleSharedReconnect();
-    };
-  } catch {
-    // 构造同步抛错（URL 非法等）与 onclose 同路径处理：
-    // 排重连并在标准重试耗尽后置 usingPollingFallback，
-    // 避免实时通道整会话静默死亡、页面停在首屏静态数据
-    sharedSocket = null;
-    setSharedState({ connected: false, connecting: false });
-    scheduleSharedReconnect();
-  }
+    } finally {
+      sharedConnectInFlight = false;
+    }
+  })();
 };
 
 const disconnectShared = () => {

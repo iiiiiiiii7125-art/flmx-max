@@ -248,6 +248,7 @@ var routeClassification = []routeEntry{
 	usr("/api/v1/user/package"),
 	usr("/api/v1/user/subscription/traffic"), usr("/api/v1/user/updatePassword"),
 	usr("/api/v1/user/logout"),
+	usr("/api/v1/system-info/ticket"),
 	usr("/api/v1/user/passkey/list"), usr("/api/v1/user/passkey/delete"),
 	usr("/api/v1/user/passkey/register/begin"), usr("/api/v1/user/passkey/register/finish"),
 	usr("/api/v1/user-inbound/mine"),

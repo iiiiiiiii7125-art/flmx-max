@@ -26,7 +26,16 @@ func TestServeHTTPRejectsDisabledAdminToken(t *testing.T) {
 		return &auth.UserAuthState{ID: userID, RoleID: 0, Status: 0, PasswordChangedAt: 0}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/system-info?type=0&secret="+url.QueryEscape(token), nil)
+	// R-WS-TICKET：握手改走票据；停用管理员的票据在消费复核处被拒。
+	claims, err := auth.ParseClaims(token, secret)
+	if err != nil {
+		t.Fatalf("parse claims: %v", err)
+	}
+	ticket, err := server.IssueWSTicket(1, claims.RoleID, claims.User, claims.IatMs, claims.Exp, 0)
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/system-info?type=0&ticket="+url.QueryEscape(ticket), nil)
 	rec := httptest.NewRecorder()
 
 	server.ServeHTTP(rec, req)
@@ -48,7 +57,17 @@ func TestServeHTTPRejectsNonAdminToken(t *testing.T) {
 		return &auth.UserAuthState{ID: userID, RoleID: 1, Status: 1, PasswordChangedAt: 0}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/system-info?type=0&secret="+url.QueryEscape(token), nil)
+	// R-WS-TICKET：普通用户票据消费后进入 monitor 分发，按范围收窄
+	// 口径（2026-11-01）一律拒绝。
+	claims, err := auth.ParseClaims(token, secret)
+	if err != nil {
+		t.Fatalf("parse claims: %v", err)
+	}
+	ticket, err := server.IssueWSTicket(2, claims.RoleID, claims.User, claims.IatMs, claims.Exp, 0)
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/system-info?type=0&ticket="+url.QueryEscape(ticket), nil)
 	rec := httptest.NewRecorder()
 
 	server.ServeHTTP(rec, req)
@@ -141,8 +160,16 @@ func TestServeHTTPRejectsMonitorTokenWithPermission(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
+	claims, err := auth.ParseClaims(token, secret)
+	if err != nil {
+		t.Fatalf("parse claims: %v", err)
+	}
+	ticket, err := server.IssueWSTicket(2, claims.RoleID, claims.User, claims.IatMs, claims.Exp, 0)
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
 	conn, resp, err := websocket.DefaultDialer.Dial(
-		"ws"+strings.TrimPrefix(ts.URL, "http")+"/system-info?type=0&secret="+url.QueryEscape(token),
+		"ws"+strings.TrimPrefix(ts.URL, "http")+"/system-info?type=0&ticket="+url.QueryEscape(ticket),
 		nil,
 	)
 	if err == nil {

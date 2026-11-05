@@ -343,6 +343,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/user/subscription/traffic", h.userSubscriptionTraffic)
 	mux.HandleFunc("/api/v1/user/updatePassword", h.updatePassword)
 	mux.HandleFunc("/api/v1/user/logout", h.userLogout)
+	mux.HandleFunc("/api/v1/system-info/ticket", h.issueWSTicket)
 	mux.HandleFunc("/api/v1/node/list", h.nodeList)
 	mux.HandleFunc("/api/v1/node/create", h.nodeCreate)
 	mux.HandleFunc("/api/v1/node/update", h.nodeUpdate)
@@ -2199,6 +2200,43 @@ func (h *Handler) userLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
+}
+
+// issueWSTicket 为浏览器实时通道签发短期单次票据（R-WS-TICKET）：
+// 调用者以登录态 JWT 经 Authorization 头鉴权（本路由在 /api/v1/
+// 下，经 JWT 中间件全量复核；此处再以同一口径复核状态并读取吊销
+// 纪元）。票据绑定用户与当前吊销纪元、30 秒内单次有效；浏览器 WS
+// 握手只认票据，改密/登出后未消费票据随纪元推进作废。agent 节点
+// 通道走节点密钥，不经此端点。
+func (h *Handler) issueWSTicket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.Err(405, "请求方法不允许"))
+		return
+	}
+	claims, ok := r.Context().Value(middleware.ClaimsContextKey).(auth.Claims)
+	if !ok {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	userID, err := parseUserID(claims.Sub)
+	if err != nil {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	state, err := h.GetUserAuthState(userID)
+	if err != nil || state == nil || state.Status != 1 || state.RoleID != claims.RoleID || state.TokenStale(claims.IatMs) {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	ticket, err := h.wsServer.IssueWSTicket(userID, claims.RoleID, claims.User, claims.IatMs, claims.Exp, state.RevocationWatermark())
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault("签发实时通道票据时发生错误"))
+		return
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"ticket":    ticket,
+		"expiresIn": int(ws.WSTicketTTL / time.Second),
+	}))
 }
 
 func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {

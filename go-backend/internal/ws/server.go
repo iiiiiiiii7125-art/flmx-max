@@ -120,6 +120,9 @@ type Server struct {
 	wsReserved map[wsSessionReservationKey]int
 
 	authFail *wsAuthFailLimiter
+
+	// R-WS-TICKET：浏览器通道的短期单次票据表（进程内，不落库）。
+	tickets *wsTicketStore
 }
 
 // wsAuthFailLimiter 记录 /system-info 的未认证失败尝试（按 IP 固定窗口）。
@@ -299,6 +302,7 @@ func NewServer(repo *repo.Repository, jwtSecret string) *Server {
 		pending:    make(map[string]pendingRequest),
 		wsReserved: make(map[wsSessionReservationKey]int),
 		authFail:   newWSAuthFailLimiter(),
+		tickets:    newWSTicketStore(),
 	}
 }
 
@@ -358,7 +362,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if typeVal == "0" {
-		claims, ok := auth.ValidateToken(secret, s.jwtSecret)
+		// R-WS-TICKET：浏览器通道只认短期单次票据（登录态 JWT 经
+		// Authorization 头向 POST /api/v1/system-info/ticket 换取）。
+		// 查询参数里的裸 JWT 不再被接受——本分支不读 secret 参数；
+		// secret 仅保留给 type=1 的 agent 节点通道（节点密钥）。
+		claims, ok := s.consumeWSTicketClaims(query.Get("ticket"))
 		if !ok {
 			forbidden()
 			return
