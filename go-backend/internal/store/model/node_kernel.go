@@ -145,11 +145,19 @@ const (
 // NodeInboundCounter remembers the last cumulative nft counter value seen for
 // an inbound so traffic can be accumulated as deltas. Epoch changes whenever
 // the agent rebuilds its counter table, which resets the counters.
+// F2-02: baselines are keyed per reporting node — a baseline only has
+// meaning for the node that owns the inbound, and keying it globally
+// let any node forge or suppress another node's inbound totals. The
+// pre-F2-02 unique index (idx_node_inbound_counter_key, no node_id) is
+// dropped by finishInboundCounterNodeScope at startup; rows written
+// before the column existed carry node_id = 0 and are cleared there
+// (the next sample re-establishes the baseline with delta = 0).
 type NodeInboundCounter struct {
 	ID          int64  `gorm:"primaryKey;autoIncrement"`
-	InboundID   int64  `gorm:"column:inbound_id;not null;uniqueIndex:idx_node_inbound_counter_key"`
-	Protocol    string `gorm:"type:varchar(10);not null;uniqueIndex:idx_node_inbound_counter_key"`
-	Direction   string `gorm:"type:varchar(10);not null;uniqueIndex:idx_node_inbound_counter_key"`
+	NodeID      int64  `gorm:"column:node_id;not null;default:0;uniqueIndex:idx_node_inbound_counter_node_key"`
+	InboundID   int64  `gorm:"column:inbound_id;not null;uniqueIndex:idx_node_inbound_counter_node_key"`
+	Protocol    string `gorm:"type:varchar(10);not null;uniqueIndex:idx_node_inbound_counter_node_key"`
+	Direction   string `gorm:"type:varchar(10);not null;uniqueIndex:idx_node_inbound_counter_node_key"`
 	Epoch       string `gorm:"type:varchar(64);not null;default:''"`
 	Bytes       int64  `gorm:"not null;default:0"`
 	UpdatedTime int64  `gorm:"column:updated_time;not null"`

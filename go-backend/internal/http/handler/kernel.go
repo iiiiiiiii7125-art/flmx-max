@@ -3062,7 +3062,7 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 			Bytes:     c.Bytes,
 		})
 	}
-	if err := h.repo.ApplyInboundCounterSamples(samples, now); err != nil {
+	if err := h.repo.ApplyInboundCounterSamples(nodeID, samples, now); err != nil {
 		log.Printf("kernel traffic apply failed node_id=%d err=%v", nodeID, err)
 	}
 	if len(realmCounters) > 0 {

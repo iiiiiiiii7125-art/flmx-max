@@ -488,7 +488,11 @@ func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInbo
 // 或内核重启换代后会把历史累计重复计入一遍）；同 epoch 前进取
 // 差分；同 epoch 回退（计数器同代重置）当前值全量计，保持既有
 // 语义。
-func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, now int64) error {
+// F2-02：样本按上报节点归属校验——入站 node_id ≠ 上报节点的样本
+// 丢弃并聚合 warn（foreign），基线按 (node_id, inbound_id, protocol,
+// direction) 键控。此前函数连 nodeID 参数都没有，全局基线可被任意
+// 节点伪造、且可压制受害入站的真实 delta。
+func (r *Repository) ApplyInboundCounterSamples(nodeID int64, samples []InboundCounterSample, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
@@ -537,7 +541,7 @@ func (r *Repository) ApplyInboundCounterSamples(samples []InboundCounterSample, 
 		}
 		chunk := ordered[start:end]
 		if err := r.db.Transaction(func(tx *gorm.DB) error {
-			return applyInboundCounterChunk(tx, chunk, now)
+			return applyInboundCounterChunk(tx, nodeID, chunk, now)
 		}); err != nil {
 			return err
 		}
@@ -553,19 +557,24 @@ type inboundCounterKey struct {
 
 // applyInboundCounterChunk settles one chunk of merged samples in a
 // single transaction: baseline upserts and inbound totals move together.
-func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now int64) error {
+func applyInboundCounterChunk(tx *gorm.DB, nodeID int64, ordered []InboundCounterSample, now int64) error {
 	{
 		ids := make([]int64, 0, len(ordered))
 		for _, s := range ordered {
 			ids = append(ids, s.InboundID)
 		}
-		var existing []int64
-		if err := tx.Model(&model.NodeInbound{}).Where("id IN ?", ids).Pluck("id", &existing).Error; err != nil {
+		// F2-02: existence is no longer enough — the chunk also needs
+		// each inbound's owning node to scope the samples.
+		var owners []struct {
+			ID     int64
+			NodeID int64
+		}
+		if err := tx.Model(&model.NodeInbound{}).Select("id, node_id").Where("id IN ?", ids).Scan(&owners).Error; err != nil {
 			return err
 		}
-		known := make(map[int64]struct{}, len(existing))
-		for _, id := range existing {
-			known[id] = struct{}{}
+		known := make(map[int64]int64, len(owners))
+		for _, o := range owners {
+			known[o.ID] = o.NodeID
 		}
 
 		// F-S01（R4 发版门项 11 升 P3）：基线行以 FOR UPDATE 读，
@@ -576,7 +585,7 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 		// 句，行为不变（MaxOpenConns(1) 本就串行）。
 		var states []model.NodeInboundCounter
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("inbound_id IN ?", ids).
+			Where("node_id = ? AND inbound_id IN ?", nodeID, ids).
 			Order("inbound_id ASC, protocol ASC, direction ASC").
 			Find(&states).Error; err != nil {
 			return err
@@ -589,12 +598,22 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 		upload := make(map[int64]int64)
 		download := make(map[int64]int64)
 		unaccounted := make(map[int64]int64)
+		foreign := make(map[int64]int64)
 		for _, s := range ordered {
-			if _, ok := known[s.InboundID]; !ok {
+			owner, ok := known[s.InboundID]
+			if !ok {
 				// 未归属样本：计数 ID 不属于任何现存入站。此前在这里
 				// 静默丢弃（与 Type 1 转发计费恒 0 同型的故障面），
 				// 现在按 ID 聚合打 warn，绝不静默。
 				unaccounted[s.InboundID]++
+				continue
+			}
+			if owner != nodeID {
+				// F2-02: 入站存在但不属于上报节点——外节点样本绝不
+				// 落基线、绝不入账（否则可伪造他人入站总量，或以
+				// 乱序 epoch/字节压制受害入站的真实 delta），按 ID
+				// 聚合 warn，与未归属同口径不静默。
+				foreign[s.InboundID]++
 				continue
 			}
 			if s.Bytes < 0 {
@@ -628,6 +647,7 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 				}
 			}
 			row := model.NodeInboundCounter{
+				NodeID:      nodeID,
 				InboundID:   s.InboundID,
 				Protocol:    s.Protocol,
 				Direction:   s.Direction,
@@ -636,7 +656,7 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 				UpdatedTime: now,
 			}
 			if err := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "inbound_id"}, {Name: "protocol"}, {Name: "direction"}},
+				Columns:   []clause.Column{{Name: "node_id"}, {Name: "inbound_id"}, {Name: "protocol"}, {Name: "direction"}},
 				DoUpdates: clause.AssignmentColumns([]string{"epoch", "bytes", "updated_time"}),
 			}).Create(&row).Error; err != nil {
 				return err
@@ -644,6 +664,9 @@ func applyInboundCounterChunk(tx *gorm.DB, ordered []InboundCounterSample, now i
 		}
 		for id, n := range unaccounted {
 			log.Printf("kernel traffic sample unaccounted op=unknown_inbound inbound_id=%d samples=%d action=dropped", id, n)
+		}
+		for id, n := range foreign {
+			log.Printf("kernel traffic sample foreign op=foreign_inbound node_id=%d inbound_id=%d samples=%d action=dropped", nodeID, id, n)
 		}
 		for id := range known {
 			up, down := upload[id], download[id]

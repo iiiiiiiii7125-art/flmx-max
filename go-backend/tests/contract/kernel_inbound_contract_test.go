@@ -208,7 +208,7 @@ func TestKernelInboundLifecycleContract(t *testing.T) {
 		now := time.Now().UnixMilli()
 		apply := func(epoch string, in, out int64) {
 			t.Helper()
-			if err := r.ApplyInboundCounterSamples([]repo.InboundCounterSample{
+			if err := r.ApplyInboundCounterSamples(nodeID, []repo.InboundCounterSample{
 				{InboundID: inboundID, Protocol: "tcp", Direction: "in", Epoch: epoch, Bytes: in},
 				{InboundID: inboundID, Protocol: "tcp", Direction: "out", Epoch: epoch, Bytes: out},
 				{InboundID: 424242, Protocol: "tcp", Direction: "in", Epoch: epoch, Bytes: 5},

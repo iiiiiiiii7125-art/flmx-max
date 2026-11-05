@@ -32,7 +32,7 @@ func TestR2B3_InboundBaselineSemantics(t *testing.T) {
 	}
 	apply := func(epoch string, bytes int64, now int64) {
 		t.Helper()
-		if err := r.ApplyInboundCounterSamples([]InboundCounterSample{
+		if err := r.ApplyInboundCounterSamples(0, []InboundCounterSample{
 			{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: epoch, Bytes: bytes},
 		}, now); err != nil {
 			t.Fatalf("apply epoch=%s bytes=%d: %v", epoch, bytes, err)

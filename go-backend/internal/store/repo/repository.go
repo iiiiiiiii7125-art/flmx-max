@@ -425,6 +425,36 @@ func (r *Repository) Close() error {
 	return sqlDB.Close()
 }
 
+// finishInboundCounterNodeScope F2-02: completes the per-node keying
+// of node_inbound_counter baselines after AutoMigrate has run. GORM
+// AutoMigrate never drops indexes, so the pre-F2-02 global unique
+// index (idx_node_inbound_counter_key over inbound/protocol/direction
+// only) is removed explicitly — while it exists, a second node's
+// baseline row for the same inbound cannot be inserted at all. Rows
+// carrying node_id = 0 are pre-column legacy baselines with no owner;
+// they are cleared rather than attributed by guesswork, and the next
+// sample from the owning node re-establishes the baseline under the
+// standing "missing baseline counts delta = 0" semantics, so the
+// migration can neither double-count nor lose booked totals. Both
+// steps are idempotent and run on every startup (subsequent runs find
+// neither the old index nor ownerless rows).
+func finishInboundCounterNodeScope(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.NodeInboundCounter{}) {
+		return nil
+	}
+	if db.Migrator().HasIndex(&model.NodeInboundCounter{}, "idx_node_inbound_counter_key") {
+		if err := db.Migrator().DropIndex(&model.NodeInboundCounter{}, "idx_node_inbound_counter_key"); err != nil {
+			return err
+		}
+	}
+	if db.Migrator().HasColumn(&model.NodeInboundCounter{}, "node_id") {
+		if err := db.Where("node_id = ?", 0).Delete(&model.NodeInboundCounter{}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func autoMigrateAll(db *gorm.DB) error {
 	if db.Dialector.Name() == "sqlite" {
 		if err := prepareSQLiteNftablesColumns(db); err != nil {
@@ -497,6 +527,9 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := db.AutoMigrate(models...); err != nil {
 			return err
 		}
+		if err := finishInboundCounterNodeScope(db); err != nil {
+			return err
+		}
 		// B4/F-009: PG 此前在此提前 return，R5-B4 版本化迁移从未在 PG 上
 		// 执行——四个唯一索引在 PG 永远建不上，migration_status 却按
 		// "下次启动会自动建"汇报。迁移函数本身是双言写的（索引存在性
@@ -529,6 +562,10 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := db.AutoMigrate(item); err != nil {
 			return err
 		}
+	}
+
+	if err := finishInboundCounterNodeScope(db); err != nil {
+		return err
 	}
 
 	// 显式补列兜底：防止未来新增字段时 AutoMigrate 未生效（历史教训：latency_targets 事件）

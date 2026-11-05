@@ -72,14 +72,14 @@ func TestApplyInboundCounterSamplesSaturates_SAT(t *testing.T) {
 		t.Fatalf("create inbound: %v", err)
 	}
 	// 第一批：只建基线（in 100 / out 200），增量为 0。
-	if err := r.ApplyInboundCounterSamples([]InboundCounterSample{
+	if err := r.ApplyInboundCounterSamples(0, []InboundCounterSample{
 		{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: "e1", Bytes: 100},
 		{InboundID: inbound.ID, Protocol: "vless", Direction: "out", Epoch: "e1", Bytes: 200},
 	}, 1700000000000); err != nil {
 		t.Fatalf("apply baseline: %v", err)
 	}
 	// 第二批：增量 1000/1000，余额 MaxInt64-10 吸收后必须饱和而非回绕。
-	if err := r.ApplyInboundCounterSamples([]InboundCounterSample{
+	if err := r.ApplyInboundCounterSamples(0, []InboundCounterSample{
 		{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: "e1", Bytes: 1100},
 		{InboundID: inbound.ID, Protocol: "vless", Direction: "out", Epoch: "e1", Bytes: 1200},
 	}, 1700000060000); err != nil {

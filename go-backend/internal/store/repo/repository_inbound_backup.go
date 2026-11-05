@@ -1210,20 +1210,24 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	// twice when the restored panel talks to the same nodes.
 	for _, c := range b.Counters {
 		// D4-03：引用的入站不存在时跳过该基线并计数。
-		counterInboundExists, err := rowExistsTx(tx, &model.NodeInbound{}, c.InboundID)
-		if err != nil {
-			return inboundImportCounts{}, err
-		}
-		if !counterInboundExists {
+		// F2-02：基线按节点键控，恢复行须归属到入站所属节点（备份
+		// 格式不带 node_id，以恢复后入站行的 node_id 为准），否则
+		// 与新唯一键冲突目标不符、且会被启动迁移按无主基线清掉。
+		var counterInbound struct{ NodeID int64 }
+		err := tx.Model(&model.NodeInbound{}).Select("node_id").Where("id = ?", c.InboundID).First(&counterInbound).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			rep.skip("inboundCounters")
 			continue
 		}
+		if err != nil {
+			return inboundImportCounts{}, err
+		}
 		item := model.NodeInboundCounter{
-			InboundID: c.InboundID, Protocol: c.Protocol, Direction: c.Direction,
+			NodeID: counterInbound.NodeID, InboundID: c.InboundID, Protocol: c.Protocol, Direction: c.Direction,
 			Epoch: c.Epoch, Bytes: c.Bytes, UpdatedTime: now,
 		}
 		if err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "inbound_id"}, {Name: "protocol"}, {Name: "direction"}},
+			Columns:   []clause.Column{{Name: "node_id"}, {Name: "inbound_id"}, {Name: "protocol"}, {Name: "direction"}},
 			DoUpdates: clause.AssignmentColumns([]string{"epoch", "bytes", "updated_time"}),
 		}).Create(&item).Error; err != nil {
 			return inboundImportCounts{}, err
