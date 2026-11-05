@@ -17,7 +17,7 @@ Authenticate and obtain JWT token.
 ```json
 {
   "code": 0,
-  "msg": "success",
+  "msg": "操作成功",
   "data": {
     "token": "eyJhbGciOiJIUzI1NiIs...",
     "name": "admin",
@@ -132,7 +132,7 @@ Change current user's password.
 
 **Response:**
 ```json
-{"code": 0, "msg": "success"}
+{"code": 0, "msg": "操作成功"}
 ```
 
 ## POST /api/v1/user/package
