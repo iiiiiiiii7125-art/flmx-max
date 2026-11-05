@@ -51,6 +51,7 @@ import { SubFrontSettings } from "@/pages/config/sub-front-card";
 import { ThemeSettings } from "@/components/theme-settings";
 import { isAdmin } from "@/utils/auth";
 import { getCachedConfigs, configCache, updateSiteConfig } from "@/config/site";
+import { SENSITIVE_CONFIG_KEYS } from "@/config/sensitive-keys";
 import {
   DEFAULT_TUNNEL_QUALITY_INTERVAL_SEC,
   MAX_TUNNEL_QUALITY_INTERVAL_SEC,
@@ -271,11 +272,14 @@ const BACKUP_TYPE_VALUES = BACKUP_TYPE_OPTIONS.map((option) => option.value);
 const getInitialConfigs = (): Record<string, string> => {
   if (typeof window === "undefined") return {};
 
+  // E1-04：敏感键（如 cloudflare_secret_key）不得进初始缓存读取清单
+  // ——敏感值只能经 API 响应进入页面状态，绝不从 localStorage 回读；
+  // 下方读取时再按 SENSITIVE_CONFIG_KEYS 整表过滤，将来清单新增
+  // 敏感键被误加进这里时自动失效，不靠人工逐键对账。
   const configKeys = [
     "app_name",
     "captcha_enabled",
     "cloudflare_site_key",
-    "cloudflare_secret_key",
     "forward_compact_mode",
     TUNNEL_QUALITY_ENABLED_CONFIG_KEY,
     TUNNEL_QUALITY_INTERVAL_CONFIG_KEY,
@@ -295,13 +299,17 @@ const getInitialConfigs = (): Record<string, string> => {
   const initialConfigs: Record<string, string> = {};
 
   try {
-    configKeys.forEach((key) => {
-      const cachedValue = localStorage.getItem("vite_config_" + key);
+    configKeys
+      .filter((key) => !SENSITIVE_CONFIG_KEYS.has(key))
+      .forEach((key) => {
+        // 经 site.ts 的统一缓存层读取，不再直拼 vite_config_ 前缀
+        // 裸读 localStorage（check-sensitive-keys 门钉住此面）。
+        const cachedValue = configCache.get(key);
 
-      if (cachedValue) {
-        initialConfigs[key] = cachedValue;
-      }
-    });
+        if (cachedValue) {
+          initialConfigs[key] = cachedValue;
+        }
+      });
   } catch {}
 
   return initialConfigs;

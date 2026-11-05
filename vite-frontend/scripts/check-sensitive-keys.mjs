@@ -12,7 +12,7 @@
 // 自语言词法剥注释（后端 Go：//、/* */、"…"、原始字符串、符文
 // 字面量；前端 TS：//、/* */、字符串/模板保留），被注释的键行整
 // 体消失、集合对账随之点名。
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -183,3 +183,39 @@ if (onlyBackend.length || onlyFrontend.length) {
 console.log(
   `敏感配置键清单一致：共 ${backendKeys.size} 键（${[...backendKeys].join(", ")}）`,
 );
+
+// E1-04 拓宽：敏感键「不落盘/不回读」的不变量此前只靠写侧守卫
+// （configCache.set 拒写＋登出 purge），读侧裸读可绕过整表——
+// pages/config.tsx 的 getInitialConfigs 曾以 localStorage.getItem(
+// "vite_config_" + key) 直读且清单含 cloudflare_secret_key。现钉读
+// 面：src 内除缓存层本体（config/site.ts、config/sensitive-keys.ts）
+// 外，任何文件不得出现以字面量 vite_config_ 前缀直读 localStorage
+// 的形态；配置初始值一律经 configCache / getCachedConfigs 读取，
+// 且读取清单须按 SENSITIVE_CONFIG_KEYS 过滤（页面侧已落）。
+const directReadPattern = /localStorage\s*\.\s*getItem\s*\(\s*["'`]vite_config_/;
+const cacheLayerFiles = new Set([
+  resolve(frontendRoot, "src/config/site.ts"),
+  resolve(frontendRoot, "src/config/sensitive-keys.ts"),
+]);
+const walkSources = (dir) =>
+  readdirSync(dir).flatMap((name) => {
+    const full = resolve(dir, name);
+
+    if (statSync(full).isDirectory()) return walkSources(full);
+
+    return /\.tsx?$/.test(name) ? [full] : [];
+  });
+const directReadOffenders = walkSources(resolve(frontendRoot, "src"))
+  .filter((file) => !cacheLayerFiles.has(file))
+  .filter((file) =>
+    directReadPattern.test(stripComments(readFileSync(file, "utf8"), false)),
+  );
+
+if (directReadOffenders.length) {
+  console.error(
+    `直读配置缓存绕过敏感键守卫（须经 configCache 读取并过滤敏感键）：${directReadOffenders.join(", ")}`,
+  );
+  process.exit(1);
+}
+
+console.log("配置缓存读面无裸读：直读 vite_config_ 前缀仅存于缓存层本体");
