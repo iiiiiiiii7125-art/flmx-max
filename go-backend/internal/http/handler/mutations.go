@@ -1498,8 +1498,11 @@ func panelMirrorPrefixFromAgentAddr(agentAddr string) string {
 // 同语义：定版后从候选表内另一候选重取 install.sh.sha256，与落
 // 盘本体的实际哈希比对——异路给出不同的合法哈希即硬中止（不
 // 执行、不换路重试）；异路内容非合法哈希只废该路、继续问下一
-// 路；全部异路都给不出合法校验值则降级单锚继续，并在命令输出
-// 中点名「跨线路锚复核已降级」。复核整轮共用 20s 总界、逐路
+// 路；全部异路都给不出合法校验值时按获胜候选分层（FIX-R2-9，
+// 与脚本侧 R2-01-01 同律）：获胜者为直连或面板源（第一方）才
+// 降级单锚继续、并在命令输出中点名「跨线路锚复核已降级」；第
+// 三方代理获胜则 fail-closed——点名中止、删除已下载脚本、整
+// 条命令失败（单个代理自给的自洽对不构成验证）。复核整轮共用 20s 总界、逐路
 // --max-time 取剩余量与 10s 的较小者（与四面总界口径一致）。
 // nodeSecretCharset 是节点 secret 的生成契约字符集（randomToken
 // (16) 的 32 位小写 hex）。B3-01：备份恢复等旁路曾把任意字符串
@@ -1528,7 +1531,8 @@ func shellQuoteForInstall(s string) string {
 func buildNodeInstallCommand(version, agentAddr, secret string) string {
 	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
 	routes := make([]string, 0, len(githubFetchProxyCandidates)+2)
-	if panelPrefix := panelMirrorPrefixFromAgentAddr(agentAddr); panelPrefix != "" {
+	panelPrefix := panelMirrorPrefixFromAgentAddr(agentAddr)
+	if panelPrefix != "" {
 		routes = append(routes, panelPrefix)
 	}
 	routes = append(routes, "")
@@ -1543,13 +1547,16 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 	// 哈希（第一锚已证其等于获胜候选的校验值）；anchor 三态——
 	// 0=尚无异路给出合法校验值、1=异路同值复核通过、2=异路异值。
 	// 组末以 [ "$anchor" != 2 ] 收口：异值令整条 && 链中止。
+	// FIX-R2-9：anchor 停在 0 时按获胜候选 $w 分层——$w 为空（直
+	// 连）或等于 $pp（面板源，第一方）才点名降级继续；第三方代
+	// 理获胜则点名中止、删已下载脚本并置 anchor=2 断链。
 	corroborateStep := ` && { a=$(sha256sum ./install.sh | awk '{print $1}'); anchor=0; dl=$(( $(date +%s) + 20 )); ` +
 		`for q in ` + routeList + `; do [ "$q" = "$w" ] && continue; r=$(( dl - $(date +%s) )); [ "$r" -gt 0 ] || break; m=10; [ "$r" -lt 10 ] && m=$r; ` +
 		`curl -fsSL --connect-timeout 5 --max-time "$m" "${q:+$q/}` + base + `/install.sh.sha256" -o ./install.sh.sha256.alt 2>/dev/null || continue; ` +
 		`g=$(awk '{print $1}' ./install.sh.sha256.alt | tr 'A-F' 'a-f'); case "$g" in ''|*[!0-9a-f]*) continue;; esac; [ "${#g}" = 64 ] || continue; ` +
 		`if [ "$g" != "$a" ]; then echo "❌ 跨线路锚复核失败：install.sh 的校验值经两条不同线路获取的结果不一致，已中止安装（R7-002 第二锚）" >&2; anchor=2; else echo "✅ 跨线路锚复核通过（第二线路: ${q:-直连}）"; anchor=1; fi; break; done; ` +
-		`rm -f ./install.sh.sha256.alt; if [ "$anchor" = 0 ]; then echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（R7-002 第二锚）"; fi; [ "$anchor" != 2 ]; }`
-	return `ok=0; w=""; for p in ` + routeList + `; do u="${p:+$p/}` + base + `"; ` +
+		`rm -f ./install.sh.sha256.alt; if [ "$anchor" = 0 ]; then if [ -z "$w" ] || [ "$w" = "$pp" ]; then echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（R7-002 第二锚）"; else echo "❌ 跨线路锚复核失败：获胜线路为代理（$w）且其他线路均未给出校验值，无法复核校验锚，已中止安装并删除已下载脚本（R7-002 第二锚，FIX-R2-9 分层）" >&2; rm -f ./install.sh ./install.sh.sha256; anchor=2; fi; fi; [ "$anchor" != 2 ]; }`
+	return `ok=0; w=""; pp="` + panelPrefix + `"; for p in ` + routeList + `; do u="${p:+$p/}` + base + `"; ` +
 		`if curl -fsSL --connect-timeout 5 --max-time 30 "$u/install.sh.sha256" -o ./install.sh.sha256 && grep -Eq '^[0-9a-f]{64}' ./install.sh.sha256 && curl -fsSL --connect-timeout 5 --max-time 60 "$u/install.sh" -o ./install.sh; then ok=1; w="$p"; break; fi; done; test "$ok" = 1` +
 		verifyStep +
 		corroborateStep +
