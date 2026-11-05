@@ -1062,6 +1062,11 @@ test_update_flmx_agent_prints_online_confirmation_guidance() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
 
+  # A3-02 后显式版本须过格式校验：夹具预设的 v-test 不再合法，
+  # 本例走真实 ensure 路径，须先给合法版本（只测更新机制本身，
+  # 不测版本解析；SCRIPT-RED-A）。
+  VERSION="v1.9.9"
+
   # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
   # 确认归属，专测更新机制本身。
   FLMX_AGENT_TAKEOVER="1"
@@ -1671,6 +1676,11 @@ EOF
 test_update_flmx_agent_preserves_legacy_gost_when_download_fails() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
+
+  # A3-02 后显式版本须过格式校验：夹具预设的 v-test 不再合法，
+  # 本例走真实 ensure 路径，须先给合法版本（只测更新机制本身，
+  # 不测版本解析；SCRIPT-RED-A）。
+  VERSION="v1.9.9"
 
   # AI-06：菜单更新已加归属守卫；本夹具的操作者以 TAKEOVER 显式
   # 确认归属，专测更新机制本身。
@@ -8726,6 +8736,11 @@ EOF
 test_update_flmx_agent_migrates_legacy_layout() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
+
+  # A3-02 后显式版本须过格式校验：夹具预设的 v-test 不再合法，
+  # 本例走真实 ensure 路径，须先给合法版本（只测更新机制本身，
+  # 不测版本解析；SCRIPT-RED-A）。
+  VERSION="v1.9.9"
 
   FLMX_AGENT_TAKEOVER="1"
   SERVICE_MANAGER="systemd"
