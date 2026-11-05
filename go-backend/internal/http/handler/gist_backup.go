@@ -560,6 +560,13 @@ func (h *Handler) gistUploadLocked(ctx context.Context, cfg map[string]string, t
 		} else if err != nil {
 			return gistUploadResult{}, err
 		}
+		// B8-13：PATCH 成功但响应未带 Gist 编号时不得继续落库
+		// ——下方 UpsertConfigs 会以空 doc.ID 覆盖已存的 gist_id，
+		// 并把 hash/上传时间记成成功态，后续上传失去锚点且状态
+		// 误报成功。与新建分支同口径报错（两分支处置一致）。
+		if id != "" && doc.ID == "" {
+			return gistUploadResult{}, errText("GitHub 没有返回 Gist 编号")
+		}
 	}
 	if id == "" {
 		body := map[string]interface{}{"description": "FLMX 面板备份", "public": false, "files": files}
