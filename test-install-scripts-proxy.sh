@@ -5422,6 +5422,19 @@ test_panel_download_verified_routed_failover() (
           *) return 22 ;;
         esac
         ;;
+      *.sha256*)
+        # R2-01-01：第二锚已 fail-closed——获胜线路是代理时异路
+        # 必须真给出合法校验值，直连候选在此供出空本体（桩
+        # download_verified 不写盘，dest 为空文件）的哈希供复核
+        # 通过；否则复核按新口径拒绝、本用例的 failover 断言无
+        # 从谈起。-o 目标从参数中提取。
+        local _out="" _prev=""
+        for _a in "$@"; do
+          [[ "$_prev" == "-o" ]] && _out="$_a"
+          _prev="$_a"
+        done
+        printf '%s  asset.yml.sha256\n' "$(printf '' | sha256sum | awk '{print $1}')" > "$_out"
+        ;;
       *) return 22 ;;
     esac
   }
