@@ -416,13 +416,15 @@ resolve_latest_release_tag() {
 
 # A1-03：显式版本格式校验——版本值随后被拼进下载 URL、镜像
 # tag 与 compose 插值，未校验的 env 值可携路径穿越、空白或
-# shell 片段进入全部拼接面。文法取各渠道的并集（数字开头、
-# 仅含数字/字母/点/连字符）：稳定版与 J-02 既录的显式预发布
-# 版本（VERSION=…-rc/-beta 是既定支持面，不受当前渠道限制）
-# 都放行，穿越/注入形态一律拒绝。API 解析出的 tag 由解析侧
-# 的渠道文法把关（release_tag_pattern），不在此列。
+# shell 片段进入全部拼接面。文法取各渠道的并集并容一个可选
+# 的 v 前缀（panel_version_cmp 本就把前缀 v 当装饰剥离，套件
+# 定版夹具亦以 v- 形态为既定输入）：主体须数字开头、仅含数
+# 字/字母/点/连字符——稳定版与 J-02 既录的显式预发布版本
+# （VERSION=…-rc/-beta 是既定支持面，不受当前渠道限制）都
+# 放行，穿越/注入/空白形态一律拒绝。API 解析出的 tag 由解
+# 析侧的渠道文法把关（release_tag_pattern），不在此列。
 panel_validate_explicit_version() {
-  [[ "$1" =~ ^[0-9][0-9A-Za-z.-]*$ ]]
+  [[ "$1" =~ ^v?[0-9][0-9A-Za-z.-]*$ ]]
 }
 
 resolve_version() {
@@ -442,7 +444,7 @@ resolve_version() {
   fi
   if [[ -n "$explicit_source" ]]; then
     if ! panel_validate_explicit_version "$explicit"; then
-      echo "❌ 环境变量 $explicit_source 指定的版本号格式非法：$explicit（须数字开头、仅含数字/字母/点/连字符，如 1.9.9 或 1.9.9-rc.1）" >&2
+      echo "❌ 环境变量 $explicit_source 指定的版本号格式非法：$explicit（须数字开头、可带一个 v 前缀、仅含数字/字母/点/连字符，如 1.9.9 或 1.9.9-rc.1）" >&2
       return 1
     fi
     echo "$explicit"
@@ -3763,7 +3765,7 @@ update_panel() {
   # 两处同守）。latest 解析值由解析侧渠道文法把关，不在此重
   # 复校验。
   if [[ -n "$target_source" ]] && ! panel_validate_explicit_version "$LATEST_VERSION"; then
-    echo "❌ 环境变量 $target_source 指定的版本号格式非法：$LATEST_VERSION（须数字开头、仅含数字/字母/点/连字符，如 1.9.9 或 1.9.9-rc.1），更新终止"
+    echo "❌ 环境变量 $target_source 指定的版本号格式非法：$LATEST_VERSION（须数字开头、可带一个 v 前缀、仅含数字/字母/点/连字符，如 1.9.9 或 1.9.9-rc.1），更新终止"
     return 1
   fi
   cmp_result=$(panel_version_cmp "$LATEST_VERSION" "$current_version" || true)

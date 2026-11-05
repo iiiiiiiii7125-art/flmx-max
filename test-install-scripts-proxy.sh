@@ -516,7 +516,7 @@ test_panel_explicit_version_format_validated() (
   load_script_without_main "$ROOT_DIR/panel_install.sh"
 
   local out rc bad
-  for bad in '../../etc/passwd' '1.9.9;id' '1.9.9 rc1' ' 1.9.9' 'v1.9.9' '-1.0' '1.9.9$(id)'; do
+  for bad in '../../etc/passwd' '1.9.9;id' '1.9.9 rc1' ' 1.9.9' '-1.0' '1.9.9$(id)' 'v' 'vv1.0' 'v-x'; do
     VERSION="$bad" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
     rc="0"
     out=$(resolve_version 2>&1) || rc="$?"
@@ -533,6 +533,11 @@ test_panel_explicit_version_format_validated() (
   VERSION='1.9.9' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
   out=$(resolve_version) || fail "A1-03: a plain stable version must pass"
   assert_equals "1.9.9" "$out" "A1-03: the stable version must pass through verbatim"
+  # 可选 v 前缀放行（panel_version_cmp 剥 v 比较、套件定版夹具
+  # 以 v-test 为既定输入）：逐字透传，不在此改写。
+  VERSION='v1.9.9' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  out=$(resolve_version) || fail "A1-03: a v-prefixed version must pass (the prefix is cosmetic to the version grammar)"
+  assert_equals "v1.9.9" "$out" "A1-03: the v-prefixed version must pass through verbatim"
 
   # update 链同守（与 L2-12 同款全打桩）
   check_docker() { DOCKER_CMD="true"; }
