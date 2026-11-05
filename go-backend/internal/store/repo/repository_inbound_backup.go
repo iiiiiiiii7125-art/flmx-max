@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"reflect"
 	"sort"
 	"strconv"
@@ -771,7 +772,19 @@ func subscriptionRefUniverseTx(tx *gorm.DB, subs []model.SubscriptionBackup) (so
 	return sources, inbounds, nil
 }
 
-func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (inboundImportCounts, error) {
+// importedTemplateSourceURLLegal 是写面 isSubscriptionURL 的
+// repo 侧镜像（handler 包不可反向导入，本地同集实现）：无空白、
+// url.Parse 成功、scheme ∈ {http, https}、host 非空。仅形态校
+// 验——恢复面不联网抓取模板内容。
+func importedTemplateSourceURLLegal(text string) bool {
+	if strings.ContainsAny(text, " \n\t") {
+		return false
+	}
+	u, err := url.Parse(text)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (inboundImportCounts, error) {
 	kernelRepointed := int64(0)
 	invalidShareHosts := 0
 	invalidShareModes := 0
@@ -795,6 +808,10 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	// 不重复计数）；R5X-024 的校验跳过同样不计。
 	var counts inboundImportCounts
 	invalidInboundObjects := 0
+	// B4-02 残面：声明口四源复检跳过的行数与身份清单（汇总
+	// warning 在入站循环后统一发，形态同 invalidInboundObjects）。
+	portConflictInbounds := 0
+	var portConflictInboundIdentities []string
 	// R6X-009：内容校验跳过的行在恢复结果中完全消失，计数-only 的
 	// 汇总 warning 无从定位——收集被跳过行身份（#{id} {name}）与
 	// 逐行错误摘要，随汇总 warning 一并披露（清单截断见循环后）。
@@ -865,16 +882,48 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		if kind != model.RemoteSourceFile {
 			kind = model.RemoteSourceURL // backups from before file sources
 		}
+		// B8-08：名/间隔/角色镜像写面（remote_source.go 保存面）。
+		// 此前仅 URL 空标签一门（R-06），其余原样落库：间隔集外
+		// 值使消费面 remoteSourceDue 永不到期（999999 小时约 114
+		// 年、负值同理）且回执无提示，订阅内容静默陈旧；任意
+		// role 字符串绕过写面归一。处置镜像写面：名 trim 后空/
+		// 超长跳行、间隔不在 0-168 跳行（写面同为拒收）、role
+		// 集外归一 "" 并在原值非空时 warning。文件源先按写面口
+		// 径强制 URL=""/间隔=0 再过门（写面保存时即如此强制，
+		// 合法备份恒为清零形态）。
+		url := src.URL
+		intervalHours := src.IntervalHours
+		if kind == model.RemoteSourceFile {
+			url, intervalHours = "", 0
+		}
+		name := strings.TrimSpace(src.Name)
+		if name == "" || len([]rune(name)) > 100 {
+			rep.skip("sources")
+			rep.warnf("备份恢复：订阅源 #%d 的名称为空或超过 100 个字符，已跳过该源未恢复", src.ID)
+			continue
+		}
+		if intervalHours < 0 || intervalHours > 168 {
+			rep.skip("sources")
+			rep.warnf("备份恢复：订阅源 #%d（%q）的更新间隔 %d 小时不在 0-168 内，已跳过该源未恢复", src.ID, name, src.IntervalHours)
+			continue
+		}
+		role := src.Role
+		if role != "relay" && role != "landing" {
+			if role != "" {
+				rep.warnf("备份恢复：订阅源 #%d（%q）的角色 %q 不在合法集 {relay, landing} 内，已按普通源（无角色）恢复", src.ID, name, src.Role)
+			}
+			role = ""
+		}
 		// 复扫 R-06：恢复面与保存面同口径——空标签订阅源 URL 行跳过 +
 		// warning（文件源无 URL，不判）。
-		if kind == model.RemoteSourceURL && urlHostHasEmptyLabel(src.URL) {
+		if kind == model.RemoteSourceURL && urlHostHasEmptyLabel(url) {
 			rep.skip("sources")
-			rep.warnf("备份恢复：订阅源 #%d（%q）的地址 %q 含空标签主机名，已跳过该源未恢复", src.ID, src.Name, src.URL)
+			rep.warnf("备份恢复：订阅源 #%d（%q）的地址 %q 含空标签主机名，已跳过该源未恢复", src.ID, name, url)
 			continue
 		}
 		item := model.RemoteSource{
-			ID: src.ID, Name: src.Name, URL: src.URL, IntervalHours: src.IntervalHours,
-			RelayOnly: src.RelayOnly, Kind: kind, Role: src.Role, Enabled: src.Enabled, CreatedTime: src.CreatedTime, UpdatedTime: now,
+			ID: src.ID, Name: name, URL: url, IntervalHours: intervalHours,
+			RelayOnly: src.RelayOnly, Kind: kind, Role: role, Enabled: src.Enabled, CreatedTime: src.CreatedTime, UpdatedTime: now,
 			Userinfo: src.Userinfo,
 		}
 		if err := tx.Clauses(clause.OnConflict{
@@ -1050,6 +1099,30 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 				}
 			}
 		}
+		// B4-02 残面：入站声明口落库前四源占用复检（与转发面
+		// R1-03-M2、链路面同型）——预检排除集按备份 ID 全集组
+		// 装，被行门跳过的转发其存量端口行在导入后存活，入站声
+		// 明与之同节点同口时预检放行、此前落库无门，可跨表双
+		// 落。入站段在 forwards 段之后执行，转发/链路终态已落
+		// 库，排除集只需含本行自身（将被按 ID 替换的存量行）；
+		// 同批后序入站的存量行若处于漂移态（声明口与存量口不
+		// 同），按占用计保守跳过 + 点名，重导即可自愈。冲突整
+		// 行跳过 + 计数，身份随汇总 warning 披露。
+		// node_id=0 的 external 入站端口在远端主机上，不参与本
+		// 地节点端口空间（与预检同口径），不判。
+		if i.NodeID > 0 && i.Port > 0 {
+			source, occErr := r.NodePortOccupantTx(tx, i.NodeID, i.Port, PortExclusions{InboundIDs: []int64{i.ID}})
+			if occErr != nil {
+				return inboundImportCounts{}, occErr
+			}
+			if source != "" {
+				rep.skip("inbounds")
+				portConflictInbounds++
+				portConflictInboundIdentities = append(portConflictInboundIdentities,
+					fmt.Sprintf("#%d %s（节点 #%d 端口 %d 已被%s占用）", i.ID, i.Name, i.NodeID, i.Port, backupPortSourceLabel(source)))
+				continue
+			}
+		}
 		item := model.NodeInbound{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: protocol,
 			Listen: listen, Port: i.Port, Transport: healedTransport, Security: healedSecurity,
@@ -1100,6 +1173,17 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		rep.warnf("备份恢复：%d 条入站的 settings/transport/security/extra 未通过保存面同口径校验（Normalize），已整行跳过未恢复：%s%s，请修正备份内容后重试",
 			invalidInboundObjects, strings.Join(identities, "、"), suffix)
+	}
+	if portConflictInbounds > 0 {
+		// B4-02 残面：声明口复检跳过的汇总披露（截断口径同上）。
+		identities := portConflictInboundIdentities
+		suffix := ""
+		if len(identities) > 10 {
+			suffix = fmt.Sprintf(" 等共 %d 条", len(identities))
+			identities = identities[:10]
+		}
+		rep.warnf("备份恢复：%d 条入站声明的端口已被占用，已整行跳过未恢复：%s%s，请核对端口占用后重试",
+			portConflictInbounds, strings.Join(identities, "、"), suffix)
 	}
 	if invalidWhitelistRows > 0 {
 		// R9X-008：汇总披露受影响行数 + 被剔除非法条目数 + 逐行身份
@@ -1240,9 +1324,78 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	// discipline as the inbound refs pass — the slot is dropped, the
 	// subscription itself restores and renders built-in).
 	for _, tp := range b.Templates {
+		// B8-09：模板恢复面镜像写面（subscription_template.go
+		// 保存面 content()/CheckTemplate 门）。此前逐字 upsert、
+		// 无一门：kind 集外、内容不合 kind 语法、builder 与
+		// sourceUrl 同设、坏 URL 形态均可落库，消费面渲染时才
+		// 失败且回执无提示。处置镜像写面，逐行跳过 + warning：
+		// 名 trim 后空/超 100 跳；kind ∉ kernel.TemplateFormats
+		// {clash, singbox, surge} 跳；builderConfig 非空时按写面
+		// content() 同路生成内容（builder 与 sourceUrl 同设跳、
+		// 生成文本取代 content 字段——写面保存的就是生成文本）；
+		// sourceUrl 非空时仅校验 http(s) 形态（镜像
+		// isSubscriptionURL）——恢复面不联网抓取，内容取备份自
+		// 带 content；最终内容过 kernel.CheckTemplate，失败跳行
+		// 并在回执点名校验错误。被跳模板的订阅引用由下方既有
+		// remapTemplateRefs 摘除（悬空引用纪律不变）。
+		name := strings.TrimSpace(tp.Name)
+		if name == "" || len([]rune(name)) > 100 {
+			rep.skip("templates")
+			rep.warnf("备份恢复：订阅模板 #%d 的名称为空或超过 100 个字符，已跳过该模板未恢复", tp.ID)
+			continue
+		}
+		kindOK := false
+		for _, k := range kernel.TemplateFormats {
+			if k == tp.Kind {
+				kindOK = true
+				break
+			}
+		}
+		if !kindOK {
+			rep.skip("templates")
+			rep.warnf("备份恢复：订阅模板 #%d（%q）的格式 %q 不在合法集 {clash, singbox, surge} 内，已跳过该模板未恢复", tp.ID, name, tp.Kind)
+			continue
+		}
+		content := strings.ReplaceAll(tp.Content, "\r\n", "\n")
+		sourceURL := strings.TrimSpace(tp.SourceURL)
+		if strings.TrimSpace(tp.BuilderConfig) != "" {
+			if sourceURL != "" {
+				rep.skip("templates")
+				rep.warnf("备份恢复：订阅模板 #%d（%q）同时带有规则配置与网址模板，与保存面同口径不可同设，已跳过该模板未恢复", tp.ID, name)
+				continue
+			}
+			var builder kernel.TemplateBuilder
+			if err := json.Unmarshal([]byte(tp.BuilderConfig), &builder); err != nil {
+				rep.skip("templates")
+				rep.warnf("备份恢复：订阅模板 #%d（%q）的规则配置无法解析（%v），已跳过该模板未恢复", tp.ID, name, err)
+				continue
+			}
+			if builder.Groups == nil {
+				builder.Groups = []kernel.TemplateBuilderGroup{}
+			}
+			if builder.Rules == nil {
+				builder.Rules = []kernel.TemplateBuilderRule{}
+			}
+			built, err := kernel.BuildSubscriptionTemplate(tp.Kind, builder)
+			if err != nil {
+				rep.skip("templates")
+				rep.warnf("备份恢复：订阅模板 #%d（%q）的规则配置生成失败（%v），已跳过该模板未恢复", tp.ID, name, err)
+				continue
+			}
+			content = built
+		} else if sourceURL != "" && !importedTemplateSourceURLLegal(sourceURL) {
+			rep.skip("templates")
+			rep.warnf("备份恢复：订阅模板 #%d（%q）的网址模板地址不是合法 http(s) 地址，已跳过该模板未恢复", tp.ID, name)
+			continue
+		}
+		if _, err := kernel.CheckTemplate(tp.Kind, content, nil); err != nil {
+			rep.skip("templates")
+			rep.warnf("备份恢复：订阅模板 #%d（%q）的内容未通过保存面同口径校验（%v），已跳过该模板未恢复", tp.ID, name, err)
+			continue
+		}
 		item := model.SubscriptionTemplate{
-			ID: tp.ID, Name: tp.Name, Kind: tp.Kind, Content: tp.Content,
-			BuilderConfig: tp.BuilderConfig, SourceURL: tp.SourceURL,
+			ID: tp.ID, Name: name, Kind: tp.Kind, Content: content,
+			BuilderConfig: tp.BuilderConfig, SourceURL: sourceURL,
 			LastFetch: tp.LastFetch, LastError: tp.LastError,
 			CreatedTime: tp.CreatedTime, UpdatedTime: now,
 		}

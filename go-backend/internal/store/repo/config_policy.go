@@ -1,6 +1,9 @@
 package repo
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 type ConfigAccessPolicy string
 
@@ -329,6 +332,24 @@ func FilterBackupConfigs(in map[string]string) map[string]string {
 // 暴露。若与导出面共用默认敏感口径，旧备份迁移会静默丢设置。
 func filterRestoreConfigs(in map[string]string) map[string]string {
 	return filterBackupConfigSet(in, false)
+}
+
+// restoreDroppedConfigKeys 返回导入面过滤（filterRestoreConfigs）
+// 将剔除的键名清单（字典序）：判据与 filterBackupConfigSet(in,
+// false) 的骨架恒同集——IsSensitiveConfigKey ||
+// IsSystemManagedConfigKey || isBackupRuntimeExcludedConfigKey，
+// 两处必须同步增删。B8-12：importConfigs 在过滤前取此清单进回
+// 执点名——此前被剔键静默消失，管理员无从知道备份里的哪些设
+// 置没回来（只有键名，绝不带值）。
+func restoreDroppedConfigKeys(in map[string]string) []string {
+	dropped := make([]string, 0)
+	for name := range in {
+		if IsSensitiveConfigKey(name) || IsSystemManagedConfigKey(name) || isBackupRuntimeExcludedConfigKey(name) {
+			dropped = append(dropped, name)
+		}
+	}
+	sort.Strings(dropped)
+	return dropped
 }
 
 func normalizeConfigKey(name string) string {

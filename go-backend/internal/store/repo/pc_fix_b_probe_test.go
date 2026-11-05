@@ -185,17 +185,23 @@ func TestPortClosureBPC08RestoreMonitorTargetCleared(t *testing.T) {
 	dest := openBackupRepo(t, "pc-b-pc08.db")
 	backup := &model.BackupData{
 		Version: "1.0",
+		// B8-02 起恢复面镜像写面 ICMP 门：ICMP 监控必须绑定执行
+		// 节点，无节点的 icmp 行整行跳过——本测试的 icmp 单元格的
+		// 断言对象是 Target 格式门，故统一绑定节点 41。
+		Nodes: []model.NodeBackup{
+			{ID: 41, Name: "pc08-n41", Secret: "s", ServerIP: "192.0.2.41", Status: 1, CreatedTime: now},
+		},
 		ServiceMonitors: []model.ServiceMonitorBackup{
 			{ID: 1, Name: "pc08-m1", Type: "tcp", Target: "203.0.113.7:80:90", IntervalSec: 60, TimeoutSec: 10, NodeID: 0, Enabled: 1, CreatedTime: now},
 			{ID: 2, Name: "pc08-m2", Type: "tcp", Target: "203.0.113.7:80", IntervalSec: 60, TimeoutSec: 10, NodeID: 0, Enabled: 1, CreatedTime: now},
-			{ID: 3, Name: "pc08-m3", Type: "icmp", Target: "203.0.113.7:80", IntervalSec: 60, TimeoutSec: 10, NodeID: 0, Enabled: 1, CreatedTime: now},
-			{ID: 4, Name: "pc08-m4", Type: "icmp", Target: "203.0.113.7", IntervalSec: 60, TimeoutSec: 10, NodeID: 0, Enabled: 1, CreatedTime: now},
-			{ID: 5, Name: "pc08-m5", Type: "icmp", Target: "[2001:db8::1]", IntervalSec: 60, TimeoutSec: 10, NodeID: 0, Enabled: 1, CreatedTime: now},
-			{ID: 6, Name: "pc08-m6", Type: "icmp", Target: "2001:db8::1", IntervalSec: 60, TimeoutSec: 10, NodeID: 0, Enabled: 1, CreatedTime: now},
+			{ID: 3, Name: "pc08-m3", Type: "icmp", Target: "203.0.113.7:80", IntervalSec: 60, TimeoutSec: 10, NodeID: 41, Enabled: 1, CreatedTime: now},
+			{ID: 4, Name: "pc08-m4", Type: "icmp", Target: "203.0.113.7", IntervalSec: 60, TimeoutSec: 10, NodeID: 41, Enabled: 1, CreatedTime: now},
+			{ID: 5, Name: "pc08-m5", Type: "icmp", Target: "[2001:db8::1]", IntervalSec: 60, TimeoutSec: 10, NodeID: 41, Enabled: 1, CreatedTime: now},
+			{ID: 6, Name: "pc08-m6", Type: "icmp", Target: "2001:db8::1", IntervalSec: 60, TimeoutSec: 10, NodeID: 41, Enabled: 1, CreatedTime: now},
 			{ID: 7, Name: "pc08-m7", Type: "tcp", Target: "203.0.113.7", IntervalSec: 60, TimeoutSec: 10, NodeID: 0, Enabled: 1, CreatedTime: now},
 		},
 	}
-	result, err := dest.Import(backup, []string{"serviceMonitors"})
+	result, err := dest.Import(backup, []string{"nodes", "serviceMonitors"})
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
