@@ -621,6 +621,23 @@ test_panel_normalize_proxy_prefix_strips_all_trailing_slashes() (
   assert_equals "https://proxy.example.com" "$(normalize_proxy_prefix 'https://proxy.example.com')" "A1-05: a prefix without trailing slash must pass through unchanged"
 )
 
+# A1-06（audit-max）：configure_docker_ipv6 的 jq 分支不得再写
+# 可预测的 /tmp/daemon.json——须以 mktemp 在目标同目录
+# /etc/docker 落不可预测临时名（兼原子 rename）。静态钉格（与
+# test_install_docker_daemon_start_wiring_static 同型）：该函数
+# 的目标路径写死 /etc/docker，行为级驱动会真写运行宿主机的
+# Docker 配置，套件内不可行，故以形态断言把守。
+test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp() (
+  set -euo pipefail
+  local body
+  body=$(sed -n '/^configure_docker_ipv6()/,/^}/p' "$ROOT_DIR/panel_install.sh")
+  if grep -Eq '(>|[[:space:]]mv[[:space:]]+)["]?/tmp/daemon\.json' <<< "$body"; then
+    fail "A1-06: configure_docker_ipv6 must not write or rename over the predictable /tmp/daemon.json path"
+  fi
+  grep -q 'mktemp /etc/docker/.daemon.json.XXXXXX' <<< "$body" || fail "A1-06: the daemon.json rewrite must stage through mktemp in /etc/docker"
+  grep -q 'jq -e' <<< "$body" || fail "A1-06: the staged file must be re-parsed as valid JSON before it replaces daemon.json"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -10041,5 +10058,6 @@ test_panel_uninstall_without_docker_cleans_full_residual_set
 test_panel_explicit_version_format_validated
 test_panel_probe_route_uses_channel_tag_grammar
 test_panel_normalize_proxy_prefix_strips_all_trailing_slashes
+test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp
 
 echo "install script tests passed"

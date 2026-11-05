@@ -741,7 +741,23 @@ configure_docker_ipv6() {
 
       # 使用 jq 或 sed 添加 IPv6 配置
       if command -v jq &> /dev/null; then
-        $SUDO_CMD jq '. + {"ipv6": true, "fixed-cidr-v6": "fd00::/80"}' "$DOCKER_CONFIG" > /tmp/daemon.json && $SUDO_CMD mv /tmp/daemon.json "$DOCKER_CONFIG"
+        # A1-06：临时文件用 mktemp 落在目标同目录 /etc/docker——
+        # 旧实现写死 /tmp/daemon.json：共享 /tmp 的可预测路径可
+        # 被预植符号链接/抢占（mv 以 root 跟随写入任意文件），
+        # 且重定向与 mv 的权限面不一致。同目录 mktemp 兼得不可
+        # 预测与 rename 原子替换；落盘后先以 jq -e 复验完整
+        # JSON 再替换（管道中途失败只会留下截断文件，复验不过
+        # 即放弃、原配置不动），失败清临时文件。
+        local daemon_tmp=""
+        daemon_tmp=$($SUDO_CMD mktemp /etc/docker/.daemon.json.XXXXXX) || return 1
+        if $SUDO_CMD jq '. + {"ipv6": true, "fixed-cidr-v6": "fd00::/80"}' "$DOCKER_CONFIG" | $SUDO_CMD tee "$daemon_tmp" > /dev/null \
+          && $SUDO_CMD jq -e . "$daemon_tmp" > /dev/null 2>&1 \
+          && $SUDO_CMD chmod 644 "$daemon_tmp"; then
+          $SUDO_CMD mv "$daemon_tmp" "$DOCKER_CONFIG" || { $SUDO_CMD rm -f "$daemon_tmp"; return 1; }
+        else
+          $SUDO_CMD rm -f "$daemon_tmp"
+          return 1
+        fi
       else
         # 如果没有 jq，使用 sed
         $SUDO_CMD sed -i 's/^{$/{\n  "ipv6": true,\n  "fixed-cidr-v6": "fd00::\/80",/' "$DOCKER_CONFIG"
