@@ -1,6 +1,10 @@
 import type { Dispatch, SetStateAction } from "react";
 
+import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
+
 import { Button } from "@/shadcn-bridge/heroui/button";
+import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import { Textarea } from "@/shadcn-bridge/heroui/input";
 import {
@@ -16,6 +20,7 @@ import { Accordion, AccordionItem } from "@/shadcn-bridge/heroui/accordion";
 import { Select, SelectItem } from "@/shadcn-bridge/heroui/select";
 import { type NodeRenewalCycle } from "@/pages/node/renewal";
 import { NodeForm } from "@/pages/node/types";
+import { testNodeNftables } from "@/api";
 
 export interface NodeFormModalProps {
   dialogTitle: string;
@@ -25,6 +30,8 @@ export interface NodeFormModalProps {
   handleSubmit: () => Promise<void>;
   protocolControlsDisabled: boolean;
   protocolControlsReason: string;
+  /** C3-02：该节点已钉入的 SSH 主机密钥指纹（""＝未钉入/新节点）。 */
+  sshHostKeyFingerprint?: string;
   setDialogVisible: Dispatch<SetStateAction<boolean>>;
   setForm: Dispatch<SetStateAction<NodeForm>>;
   submitLoading: boolean;
@@ -39,10 +46,61 @@ export function NodeFormModal({
   handleSubmit,
   protocolControlsDisabled,
   protocolControlsReason,
+  sshHostKeyFingerprint,
   setDialogVisible,
   setForm,
   submitLoading,
 }: NodeFormModalProps) {
+  // C3-02 主机密钥指纹区本地状态：展示值以打开弹窗时的已钉入指纹为
+  // 初值，本次测连通钉入/重钉后按回执即时更新；重置勾选只作用于
+  // 下一次测连通请求（resetHostKey），不随节点表单提交。
+  const [pinnedFingerprint, setPinnedFingerprint] = useState("");
+  const [resetHostKey, setResetHostKey] = useState(false);
+  const [sshTesting, setSshTesting] = useState(false);
+
+  useEffect(() => {
+    if (dialogVisible) {
+      setPinnedFingerprint(sshHostKeyFingerprint || "");
+      setResetHostKey(false);
+    }
+  }, [dialogVisible, form.id, sshHostKeyFingerprint]);
+
+  const handleTestSsh = async () => {
+    if (!form.id) return;
+    setSshTesting(true);
+    try {
+      const res = await testNodeNftables(form.id, resetHostKey);
+
+      if (res.code !== 0) {
+        toast.error(res.msg || "测试连接失败");
+
+        return;
+      }
+      const data = res.data;
+
+      if (data?.hostKeyFingerprint) {
+        setPinnedFingerprint(data.hostKeyFingerprint);
+        setResetHostKey(false);
+        toast.success(
+          data.hostKeyRepinned
+            ? "测试连接成功，SSH 主机密钥指纹已重新钉入"
+            : "测试连接成功，SSH 主机密钥指纹已钉入",
+        );
+        // 后端钉入回执带核对 warning（须与节点本机 ssh-keygen 输出
+        // 人工核对），原样长时间呈现，不许吞掉。
+        if (data.warning) {
+          toast(data.warning, { duration: 12000, icon: "⚠️" });
+        }
+      } else {
+        toast.success("测试连接成功（SSH 主机密钥指纹校验通过）");
+      }
+    } catch {
+      toast.error("网络错误，请重试");
+    } finally {
+      setSshTesting(false);
+    }
+  };
+
   return (
     <Modal
       backdrop="blur"
@@ -408,6 +466,60 @@ export function NodeFormModal({
                           sudo su
                         </SelectItem>
                       </Select>
+
+                      <div className="space-y-3 rounded-xl border border-default-200 p-3">
+                        <div className="text-sm font-medium text-foreground">
+                          SSH 主机密钥指纹
+                        </div>
+                        {pinnedFingerprint ? (
+                          <div className="space-y-1">
+                            <div className="text-xs font-semibold text-foreground">
+                              已钉入指纹（连接时按此校验，不符将被拒绝）
+                            </div>
+                            <code className="block break-all rounded-lg glass-inset px-2 py-1.5 font-mono text-xs font-semibold text-foreground">
+                              {pinnedFingerprint}
+                            </code>
+                            <p className="text-xs font-semibold text-foreground">
+                              请与在节点本机执行 ssh-keygen -lf
+                              /etc/ssh/ssh_host_ed25519_key.pub
+                              的输出核对一致；节点重装或更换主机密钥后，勾选下方「重置主机密钥」再测试连接重新钉入。
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-xs font-semibold text-foreground">
+                            尚未钉入指纹：首次测试连接成功后，面板会把节点当前呈现的
+                            SSH
+                            主机密钥指纹钉入（首次信任），此后指纹不符的连接将被拒绝。
+                          </p>
+                        )}
+                        {form.id ? (
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                            <Button
+                              isLoading={sshTesting}
+                              size="sm"
+                              variant="bordered"
+                              onPress={handleTestSsh}
+                            >
+                              测试连接
+                            </Button>
+                            <Checkbox
+                              isSelected={resetHostKey}
+                              size="sm"
+                              onValueChange={setResetHostKey}
+                            >
+                              重置主机密钥
+                            </Checkbox>
+                          </div>
+                        ) : (
+                          <p className="text-xs font-semibold text-foreground">
+                            保存节点后，可在此测试连接并钉入指纹。
+                          </p>
+                        )}
+                        <p className="text-xs font-semibold text-foreground">
+                          测试连接使用已保存的 SSH
+                          配置执行；修改上方主机/端口/凭据后请先保存节点，再回来测试。
+                        </p>
+                      </div>
                     </div>
                   ) : (
                     <Alert

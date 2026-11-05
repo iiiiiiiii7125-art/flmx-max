@@ -40,6 +40,8 @@ export interface Node {
     privateKey?: string;
     passphrase?: string;
     sudoMode?: "none" | "sudo" | "sudo_su";
+    /** C3-02：已钉入的 SSH 主机密钥指纹（SHA256:…）；缺失＝未钉入。 */
+    hostKeyFingerprint?: string;
   } | null;
   remoteUrl?: string | null;
   interfaceName?: string | null;

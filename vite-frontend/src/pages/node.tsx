@@ -239,6 +239,10 @@ export default function NodePage({
     useLocalStorageState<NodeFilterMode>("node-expiry-filter-mode", "all");
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [dialogVisible, setDialogVisible] = useState(false);
+  // C3-02：正在编辑节点的已钉入 SSH 主机密钥指纹（表单指纹区展示用；
+  // 不进 NodeForm——指纹是服务端托管状态，不得随节点提交体回写）。
+  const [editingHostKeyFingerprint, setEditingHostKeyFingerprint] =
+    useState("");
   const [dialogTitle, setDialogTitle] = useState("");
   const [isEdit, setIsEdit] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
@@ -939,6 +943,7 @@ export default function NodePage({
       tls: typeof node.tls === "number" ? node.tls : 1,
       socks: typeof node.socks === "number" ? node.socks : 1,
     });
+    setEditingHostKeyFingerprint(node.sshConfig?.hostKeyFingerprint || "");
     const offline = node.connectionStatus !== "online";
 
     setProtocolDisabled(offline || node.forwardMode === "nftables");
@@ -1519,6 +1524,7 @@ export default function NodePage({
 
   // 重置表单
   const resetForm = () => {
+    setEditingHostKeyFingerprint("");
     setForm({
       id: null,
       name: "",
@@ -2415,6 +2421,7 @@ export default function NodePage({
         handleSubmit={handleSubmit}
         protocolControlsDisabled={protocolControlsDisabled}
         protocolControlsReason={protocolControlsReason}
+        sshHostKeyFingerprint={editingHostKeyFingerprint}
         setDialogVisible={setDialogVisible}
         setForm={setForm}
         submitLoading={submitLoading}

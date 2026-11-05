@@ -1,6 +1,7 @@
 import type {
   BatchOperationResult,
   ForwardDiagnosisApiData,
+  NftablesTestResult,
   ForwardApiItem,
   NodeReleaseApiItem,
   NodeApiItem,
@@ -289,6 +290,15 @@ export const getNodeReleases = (channel: ReleaseChannel = "stable") =>
 export const rollbackNode = (id: number) =>
   // R8-T-04：后端界 30s，须破恰等。
   Network.post("/node/rollback", { id }, { timeout: 45_000 });
+export const testNodeNftables = (nodeId: number, resetHostKey = false) =>
+  // C3-02：测连通走已保存的 SSH 配置；未钉入时本次测连通 TOFU 钉入
+  // 指纹并在回执带 hostKeyFingerprint/warning，resetHostKey=true 时
+  // 强制重钉。nginx 该端点界 300s（T051–T053），前端同界。
+  Network.post<NftablesTestResult>(
+    "/node/nftables/test",
+    { nodeId, resetHostKey },
+    { timeout: 300_000 },
+  );
 // 隧道CRUD操作 - 全部使用POST请求
 export const createTunnel = (data: TunnelMutationPayload, idemKey?: string) =>
   // R8-T-07：与 update 共用同等重腿，前端预算与 update 对齐 120s。
