@@ -453,7 +453,7 @@ func gistDo(ctx context.Context, method, rawURL, token string, attachToken bool,
 		// 而调用方默认把本错误落盘/回显，离开本层前须经
 		// redactFetchError 脱敏（与 secure_fetch 出口同口径，
 		// R2X-028）。
-		return fmt.Errorf("连接 GitHub 失败：%v", err)
+		return fmt.Errorf("连接 GitHub 失败：%v", redactFetchError(err))
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, gistMaxBackupBytes*2))
