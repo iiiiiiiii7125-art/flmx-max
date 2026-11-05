@@ -869,16 +869,48 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 		if kind != model.RemoteSourceFile {
 			kind = model.RemoteSourceURL // backups from before file sources
 		}
+		// B8-08：名/间隔/角色镜像写面（remote_source.go 保存面）。
+		// 此前仅 URL 空标签一门（R-06），其余原样落库：间隔集外
+		// 值使消费面 remoteSourceDue 永不到期（999999 小时约 114
+		// 年、负值同理）且回执无提示，订阅内容静默陈旧；任意
+		// role 字符串绕过写面归一。处置镜像写面：名 trim 后空/
+		// 超长跳行、间隔不在 0-168 跳行（写面同为拒收）、role
+		// 集外归一 "" 并在原值非空时 warning。文件源先按写面口
+		// 径强制 URL=""/间隔=0 再过门（写面保存时即如此强制，
+		// 合法备份恒为清零形态）。
+		url := src.URL
+		intervalHours := src.IntervalHours
+		if kind == model.RemoteSourceFile {
+			url, intervalHours = "", 0
+		}
+		name := strings.TrimSpace(src.Name)
+		if name == "" || len([]rune(name)) > 100 {
+			rep.skip("sources")
+			rep.warnf("备份恢复：订阅源 #%d 的名称为空或超过 100 个字符，已跳过该源未恢复", src.ID)
+			continue
+		}
+		if intervalHours < 0 || intervalHours > 168 {
+			rep.skip("sources")
+			rep.warnf("备份恢复：订阅源 #%d（%q）的更新间隔 %d 小时不在 0-168 内，已跳过该源未恢复", src.ID, name, src.IntervalHours)
+			continue
+		}
+		role := src.Role
+		if role != "relay" && role != "landing" {
+			if role != "" {
+				rep.warnf("备份恢复：订阅源 #%d（%q）的角色 %q 不在合法集 {relay, landing} 内，已按普通源（无角色）恢复", src.ID, name, src.Role)
+			}
+			role = ""
+		}
 		// 复扫 R-06：恢复面与保存面同口径——空标签订阅源 URL 行跳过 +
 		// warning（文件源无 URL，不判）。
-		if kind == model.RemoteSourceURL && urlHostHasEmptyLabel(src.URL) {
+		if kind == model.RemoteSourceURL && urlHostHasEmptyLabel(url) {
 			rep.skip("sources")
-			rep.warnf("备份恢复：订阅源 #%d（%q）的地址 %q 含空标签主机名，已跳过该源未恢复", src.ID, src.Name, src.URL)
+			rep.warnf("备份恢复：订阅源 #%d（%q）的地址 %q 含空标签主机名，已跳过该源未恢复", src.ID, name, url)
 			continue
 		}
 		item := model.RemoteSource{
-			ID: src.ID, Name: src.Name, URL: src.URL, IntervalHours: src.IntervalHours,
-			RelayOnly: src.RelayOnly, Kind: kind, Role: src.Role, Enabled: src.Enabled, CreatedTime: src.CreatedTime, UpdatedTime: now,
+			ID: src.ID, Name: name, URL: url, IntervalHours: intervalHours,
+			RelayOnly: src.RelayOnly, Kind: kind, Role: role, Enabled: src.Enabled, CreatedTime: src.CreatedTime, UpdatedTime: now,
 			Userinfo: src.Userinfo,
 		}
 		if err := tx.Clauses(clause.OnConflict{

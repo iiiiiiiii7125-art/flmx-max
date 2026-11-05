@@ -366,6 +366,65 @@ func TestImportForwardMaxConnClamp(t *testing.T) {
 	}
 }
 
+// B8-08：订阅源恢复面镜像写面 名/间隔/角色 门——名空/超长跳行、
+// 间隔集外跳行、role 集外归一、文件源 URL/间隔强制清零。
+func TestImportRemoteSourceMirrorGates(t *testing.T) {
+	now := time.Now().UnixMilli()
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Inbounds: &model.InboundsBackup{
+			Sources: []model.RemoteSourceBackup{
+				{ID: 1, Name: "  ", URL: "https://a.example/sub", IntervalHours: 24, Enabled: 1, CreatedTime: now},
+				{ID: 2, Name: strings.Repeat("长", 101), URL: "https://a.example/sub", IntervalHours: 24, Enabled: 1, CreatedTime: now},
+				{ID: 3, Name: "neg-interval", URL: "https://a.example/sub", IntervalHours: -1, Enabled: 1, CreatedTime: now},
+				{ID: 4, Name: "huge-interval", URL: "https://a.example/sub", IntervalHours: 999999, Enabled: 1, CreatedTime: now},
+				{ID: 5, Name: "bad-role", URL: "https://a.example/sub", IntervalHours: 24, Role: "bogus", Enabled: 1, CreatedTime: now},
+				{ID: 6, Name: "relay-role", URL: "https://a.example/sub", IntervalHours: 24, Role: "relay", Enabled: 1, CreatedTime: now},
+				{ID: 7, Name: "file-src", Kind: "file", URL: "https://x.example/ignored", IntervalHours: 55, Enabled: 1, CreatedTime: now},
+			},
+		},
+	}
+	result, err := dst.Import(backup, []string{"inbounds"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.InboundSourcesImported != 3 {
+		t.Fatalf("InboundSourcesImported = %d, want 3 (ids 5, 6, 7), warnings=%v", result.InboundSourcesImported, result.ImportWarnings)
+	}
+	if got := result.SkippedRows["sources"]; got != 4 {
+		t.Fatalf("SkippedRows[sources] = %d, want 4, skipped=%v", got, result.SkippedRows)
+	}
+	warnText := strings.Join(result.ImportWarnings, "\n")
+	for _, want := range []string{"订阅源 #4", "999999 小时", "bogus"} {
+		if !strings.Contains(warnText, want) {
+			t.Fatalf("receipt must name %q, warnings=%v", want, result.ImportWarnings)
+		}
+	}
+	readSource := func(id int64) model.RemoteSource {
+		t.Helper()
+		var s model.RemoteSource
+		if err := dst.db.Where("id = ?", id).First(&s).Error; err != nil {
+			t.Fatalf("read source #%d: %v", id, err)
+		}
+		return s
+	}
+	if s := readSource(5); s.Role != "" {
+		t.Fatalf("source 5 role = %q, want \"\" (normalized)", s.Role)
+	}
+	if s := readSource(6); s.Role != "relay" {
+		t.Fatalf("source 6 role = %q, want relay (verbatim)", s.Role)
+	}
+	if s := readSource(7); s.URL != "" || s.IntervalHours != 0 {
+		t.Fatalf("file source 7 url/interval = %q/%d, want \"\"/0 (write-face clearing)", s.URL, s.IntervalHours)
+	}
+}
+
 // B8-02（限值同源）：限值经 service_monitor_* 配置键调整后，恢复面
 // 钳制跟随配置口径，与写面 resolveServiceMonitorLimits 同源。
 func TestImportServiceMonitorsLimitsFromConfig(t *testing.T) {
