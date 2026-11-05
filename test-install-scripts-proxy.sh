@@ -774,6 +774,24 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log() (
   assert_equals "1" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "§9.6: only the panel block may carry the secret filter; the menu 6 block must not gain one"
 )
 
+# A2-04 附带钉格（XC-1 指出）：A2-04 本体（.env 读取与 Compose
+# 语义一致）已在他路修好，但 CRLF 形态此前无套件断言——Windows
+# 编辑过的 .env 若把 \r 带进取值，实例 id/DB 类型等比较会整体
+# 错位。钉死：CRLF 文件里普通值、引号值、空值的读数都不得带
+# \r，引号语义与空值语义与 LF 形态一致。
+test_env_var_reading_crlf_shape() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local d
+  d=$(mktemp -d)
+  printf 'FLMX_INSTANCE=east\r\nDB_TYPE=postgres\r\nQUOTED="va l"\r\nEMPTY=\r\n' > "$d/.env"
+  assert_equals "east" "$(get_env_var FLMX_INSTANCE "$d/.env")" "A2-04/CRLF: a CRLF value must be read without the carriage return"
+  assert_equals "postgres" "$(get_env_var DB_TYPE "$d/.env")" "A2-04/CRLF: the DB type must be read without the carriage return"
+  assert_equals "va l" "$(get_env_var QUOTED "$d/.env")" "A2-04/CRLF: a quoted CRLF value must be unquoted and CR-free"
+  assert_equals "" "$(get_env_var EMPTY "$d/.env")" "A2-04/CRLF: an empty CRLF value must read as empty"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -10198,5 +10216,6 @@ test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp
 test_panel_run_lock_and_unique_caddy_backup_names
 test_panel_invalid_instance_id_hard_fails_on_manage_paths
 test_panel_menu5_site_block_filters_secret_query_from_access_log
+test_env_var_reading_crlf_shape
 
 echo "install script tests passed"
