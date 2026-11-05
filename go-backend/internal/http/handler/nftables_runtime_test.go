@@ -245,7 +245,13 @@ func TestNodeNftablesTestEndpointRunsCapabilityCheck(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	seedNftablesSSHConfig(t, fixture.handler, fixture.nodeID)
 	manager := &fakeNftablesManager{}
-	fixture.handler.nftablesManager = newSerializedNftManager(manager)
+	// C3-02：种子配置未钉入主机密钥指纹，测连通先走 TOFU 探针钉入；
+	// 注入探针桩避免真实网络探测。
+	sm := newSerializedNftManager(manager)
+	sm.probeHostKey = func(context.Context, runtimenft.SSHConfig) (string, error) {
+		return "SHA256:capability-check-pin", nil
+	}
+	fixture.handler.nftablesManager = sm
 
 	res := postJSONToHandler(t, fixture.handler.nodeNftablesTest, map[string]int64{"nodeId": fixture.nodeID})
 	assertNftablesSuccess(t, res)

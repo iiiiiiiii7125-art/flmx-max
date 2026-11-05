@@ -3,6 +3,7 @@ package nftables
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -10,6 +11,93 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+// ErrHostKeyUnpinned 表示节点尚未钉入 SSH 主机密钥指纹（C3-02）：
+// 任何特权操作（apply/测连通/计数采集/封禁）在钉入前一律 fail-closed，
+// 不得静默放行。钉入路径是节点页「测连通」（TOFU，见 nftables 运行时
+// handler 的 nodeNftablesTest），老节点升级后首次测连通即钉入。
+var ErrHostKeyUnpinned = errors.New("SSH 主机密钥指纹未钉入：请先在节点页执行测连通钉入指纹后再操作")
+
+// HostKeyMismatchError 表示节点实际呈现的主机密钥指纹与已钉入值不符。
+// 这正是中间人/冒名节点的信号，必须硬失败且在任何认证发生之前——
+// 密码认证下继续握手等于把节点 SSH 密码送给冒名者。
+type HostKeyMismatchError struct {
+	Expected string
+	Actual   string
+}
+
+func (e *HostKeyMismatchError) Error() string {
+	return fmt.Sprintf("SSH 主机密钥指纹不匹配（已钉入 %s，节点实际呈现 %s）：已在认证前拒绝连接；如确属节点重装或更换了 SSH 主机密钥，请在节点页测连通时勾选重置主机密钥重新钉入", e.Expected, e.Actual)
+}
+
+// hostKeyCallback 按已钉入指纹校验对端呈现的主机密钥：未钉入、
+// 不匹配都 fail-closed，绝不退化为不校验。
+func hostKeyCallback(pinned string) ssh.HostKeyCallback {
+	pinned = strings.TrimSpace(pinned)
+	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		actual := ssh.FingerprintSHA256(key)
+		if pinned == "" {
+			return ErrHostKeyUnpinned
+		}
+		if actual != pinned {
+			return &HostKeyMismatchError{Expected: pinned, Actual: actual}
+		}
+		return nil
+	}
+}
+
+func isHostKeyError(err error) bool {
+	if errors.Is(err, ErrHostKeyUnpinned) {
+		return true
+	}
+	var mismatch *HostKeyMismatchError
+	return errors.As(err, &mismatch)
+}
+
+var errHostKeyProbeCaptured = errors.New("host key probe captured")
+
+// ProbeHostKeyFingerprint 只完成 SSH 传输层握手并取回对端呈现的主机
+// 密钥指纹（TOFU 钉入专用）：回调记录指纹后立即中止握手，认证阶段
+// 永远不会开始，因此探针不会把任何凭据（尤其密码）发给未经验证的
+// 主机。返回 ssh.FingerprintSHA256 形态的指纹串。
+func ProbeHostKeyFingerprint(ctx context.Context, cfg SSHConfig) (string, error) {
+	host := strings.TrimSpace(cfg.Host)
+	if host == "" {
+		return "", fmt.Errorf("SSH 主机不能为空")
+	}
+	timeout := 15 * time.Second
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", normalizedSSHPort(cfg.Port)))
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(dialCtx, "tcp", addr)
+	if err != nil {
+		return "", fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	defer conn.Close()
+
+	captured := ""
+	probeConfig := &ssh.ClientConfig{
+		User: "flmx-hostkey-probe",
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			captured = ssh.FingerprintSHA256(key)
+			return errHostKeyProbeCaptured
+		},
+		Timeout: timeout,
+	}
+	sshConn, _, _, handshakeErr := ssh.NewClientConn(conn, addr, probeConfig)
+	if sshConn != nil {
+		_ = sshConn.Close()
+	}
+	if captured != "" {
+		return captured, nil
+	}
+	if handshakeErr != nil {
+		return "", fmt.Errorf("SSH 主机密钥探测失败: %w", handshakeErr)
+	}
+	return "", fmt.Errorf("SSH 主机密钥探测失败: 对端未呈现主机密钥")
+}
 
 type Runner interface {
 	ApplyScript(ctx context.Context, cfg SSHConfig, script string) error
@@ -117,6 +205,11 @@ func (r *SSHRunner) runOutput(ctx context.Context, cfg SSHConfig, command string
 
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientConfig)
 	if err != nil {
+		// 主机密钥类失败（未钉入/指纹不符）自带完整人话与处置路径，
+		// 原样回出，不套「认证失败」外壳误导排障方向（C3-02）。
+		if isHostKeyError(err) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("SSH 认证失败: %w", err)
 	}
 	client := ssh.NewClient(sshConn, chans, reqs)
@@ -173,7 +266,7 @@ func buildSSHClientConfig(cfg SSHConfig) (*ssh.ClientConfig, error) {
 	return &ssh.ClientConfig{
 		User:            strings.TrimSpace(cfg.Username),
 		Auth:            auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback(cfg.HostKeyFingerprint),
 		Timeout:         15 * time.Second,
 	}, nil
 }

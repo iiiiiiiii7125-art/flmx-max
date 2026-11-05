@@ -93,6 +93,63 @@ func RenderTable(plan NodePlan) string {
 	return b.String()
 }
 
+// ValidateTargetHost 是 TargetHost 落入 nft 规则文本前的渲染层校验
+// （C3-01）：TargetHost 是 RenderTable 唯一原样插值的自由文本字段，
+// 含空白/换行/nft 标点的值一旦进入脚本即是 nft 语法注入。生产构造点
+// 今天有 IP 门把关，但校验必须落在渲染/应用单点上，任何构造路径
+// （含未来与恢复面）都绕不过。接受集合与渲染归一口径一致：先按
+// formatDNATTarget 同法 Trim 空白与方括号，归一后须为 IP 字面量或
+// 严格主机名（标签 1–63 字符、字母数字与连字符、首尾为字母数字、
+// 无空标签、总长 ≤253），其余一律拒绝。
+func ValidateTargetHost(host string) error {
+	trimmed := strings.Trim(strings.TrimSpace(host), "[]")
+	if trimmed == "" {
+		return fmt.Errorf("nftables 目标地址为空")
+	}
+	if net.ParseIP(trimmed) != nil {
+		return nil
+	}
+	if len(trimmed) > 253 {
+		return fmt.Errorf("nftables 目标主机名过长: %q", host)
+	}
+	for _, label := range strings.Split(trimmed, ".") {
+		if !isStrictHostnameLabel(label) {
+			return fmt.Errorf("nftables 目标地址不是合法 IP 或主机名: %q", host)
+		}
+	}
+	return nil
+}
+
+func isStrictHostnameLabel(label string) bool {
+	if len(label) == 0 || len(label) > 63 {
+		return false
+	}
+	for i := 0; i < len(label); i++ {
+		c := label[i]
+		isAlnum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if isAlnum {
+			continue
+		}
+		if c == '-' && i > 0 && i < len(label)-1 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// ValidatePlan 校验计划内每条规则的 TargetHost（C3-01），错误点名
+// 出错的转发 ID。Manager.Reconcile 在渲染与下发之前调用，非法计划
+// 整单拒绝、脚本不下发节点。
+func ValidatePlan(plan NodePlan) error {
+	for _, rule := range plan.Rules {
+		if err := ValidateTargetHost(rule.TargetHost); err != nil {
+			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
+		}
+	}
+	return nil
+}
+
 func counterComment(forwardID int64, direction, protocol string) string {
 	return fmt.Sprintf("%s forward:%d %s %s", tableName, forwardID, direction, protocol)
 }

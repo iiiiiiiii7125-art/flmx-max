@@ -183,6 +183,9 @@ func sshConfigFromModel(cfg *model.NodeSSHConfig) (runtimenft.SSHConfig, error) 
 		PrivateKey: cfg.PrivateKey.String,
 		Passphrase: cfg.Passphrase.String,
 		SudoMode:   strings.TrimSpace(cfg.SudoMode),
+		// C3-02：已钉入指纹随配置进入 runner，未钉入为空（runner
+		// fail-closed），钉入动作只发生在 nodeNftablesTest。
+		HostKeyFingerprint: strings.TrimSpace(cfg.HostKeyFingerprint),
 	}, nil
 }
 
@@ -606,10 +609,23 @@ func (h *Handler) reconcileNftablesNodeByRequest(nodeID int64) error {
 }
 
 func (h *Handler) nodeNftablesTest(w http.ResponseWriter, r *http.Request) {
-	nodeID, ok := h.nftablesNodeIDFromRequest(r, w)
-	if !ok {
+	// 本入口除 nodeId 外还读 resetHostKey（C3-02 显式重钉），故自行
+	// 一次性解析请求体；错误回执口径与 nftablesNodeIDFromRequest 一致。
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
+	var req map[string]interface{}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
+		return
+	}
+	nodeID := asInt64(req["nodeId"], 0)
+	if nodeID <= 0 {
+		response.WriteJSON(w, response.ErrDefault("参数错误"))
+		return
+	}
+	resetHostKey := asBool(req["resetHostKey"], false)
 	usesNft, err := h.nodeUsesNftables(nodeID)
 	if err != nil {
 		if errors.Is(err, errNftablesNodeNotFound) {
@@ -623,7 +639,16 @@ func (h *Handler) nodeNftablesTest(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("节点未启用 nftables 转发模式"))
 		return
 	}
-	sshCfg, err := h.loadNftablesSSHConfig(nodeID)
+	cfgModel, err := h.repo.GetNodeSSHConfig(nodeID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			response.WriteJSON(w, response.ErrDefault("nftables 节点缺少 SSH 配置"))
+			return
+		}
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	sshCfg, err := sshConfigFromModel(cfgModel)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -632,8 +657,38 @@ func (h *Handler) nodeNftablesTest(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "nftables manager not initialized"))
 		return
 	}
-	if err := h.nftablesManager.Test(context.Background(), nodeID, sshCfg); err != nil {
+	ctx := context.Background()
+	// C3-02 主机密钥钉入（TOFU）：未钉入、或运维显式 resetHostKey 时，
+	// 先探对端呈现的指纹（探针只握手不认证，不发凭据），内存钉入后
+	// 跑完整能力校验——runner 按探到的指纹校验，探针与校验之间密钥
+	// 被替换必然 fail-closed；全过才落库。已钉入且未要求重置时绝不
+	// 重探，杜绝静默重钉（冒名者无法借测连通洗白自己的密钥）。
+	pinned := strings.TrimSpace(cfgModel.HostKeyFingerprint)
+	pinning := pinned == "" || resetHostKey
+	probed := ""
+	if pinning {
+		probed, err = h.nftablesManager.ProbeHostKey(ctx, nodeID, sshCfg)
+		if err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		sshCfg.HostKeyFingerprint = probed
+	}
+	if err := h.nftablesManager.Test(ctx, nodeID, sshCfg); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	if pinning {
+		if err := h.repo.UpdateNodeSSHHostKeyFingerprint(nodeID, probed, time.Now().UnixMilli()); err != nil {
+			response.WriteJSON(w, response.Err(-2, "SSH 主机密钥指纹钉入失败: "+err.Error()))
+			return
+		}
+		response.WriteJSON(w, response.OK(map[string]interface{}{
+			"hostKeyFingerprint": probed,
+			"hostKeyPinned":      true,
+			"hostKeyRepinned":    resetHostKey && pinned != "",
+			"warning":            "已钉入该节点当前呈现的 SSH 主机密钥指纹（首次信任）：请与在节点本机执行 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub 的输出核对一致；此后指纹不符的连接将被拒绝，节点重装/换密钥后需勾选重置主机密钥重新测连通",
+		}))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
