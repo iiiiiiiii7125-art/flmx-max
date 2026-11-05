@@ -111,8 +111,18 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 
 	log.Debugf("dial %s/%s", address, network)
 
+	// Nodes that fail an attempt join the exclude list for the next
+	// one (D3-04): without this, every retry re-selected the node
+	// that had just failed. The hop layer honours the list via
+	// ctxvalue.ExcludeNodesFromContext; any list the caller already
+	// supplied is kept and extended.
+	exclude := ctxvalue.ExcludeNodesFromContext(ctx)
+
 	for i := 0; i < count; i++ {
 		ctx := ctx
+		if len(exclude) > 0 {
+			ctx = ctxvalue.ContextWithExcludeNodes(ctx, exclude)
+		}
 		// The per-attempt timeout context is managed explicitly, not
 		// with defer (D3-07): a failed attempt's context is released
 		// at the end of the iteration, while a successful attempt's
@@ -203,6 +213,9 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		if cancel != nil {
 			cancel()
 		}
+		for _, node := range routePath(route) {
+			exclude = append(exclude, node.Name, node.Addr)
+		}
 		log.Errorf("route(retry=%d) %s", i, err)
 	}
 
@@ -221,8 +234,14 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 
 	log.Debugf("bind on %s/%s", address, network)
 
+	// Same retry-exclusion contract as dial (D3-04).
+	exclude := ctxvalue.ExcludeNodesFromContext(ctx)
+
 	for i := 0; i < count; i++ {
 		ctx := ctx
+		if len(exclude) > 0 {
+			ctx = ctxvalue.ContextWithExcludeNodes(ctx, exclude)
+		}
 		// Explicit per-attempt context management, same contract as
 		// dial (D3-07): failed attempts release their context at the
 		// end of the iteration; a successful attempt's context lives
@@ -265,6 +284,9 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 		}
 		if cancel != nil {
 			cancel()
+		}
+		for _, node := range routePath(route) {
+			exclude = append(exclude, node.Name, node.Addr)
 		}
 		log.Errorf("route(retry=%d) %s", i, err)
 	}

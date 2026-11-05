@@ -21,6 +21,7 @@ import (
 	node_parser "github.com/go-gost/x/config/parsing/node"
 	ctxvalue "github.com/go-gost/x/ctx"
 	"github.com/go-gost/x/internal/loader"
+	xs "github.com/go-gost/x/selector"
 )
 
 type options struct {
@@ -198,20 +199,38 @@ func (p *chainHop) Select(ctx context.Context, opts ...hop.SelectOption) *chain.
 		return nil
 	}
 
-	sort.Slice(nodes, func(i, j int) bool {
+	sort.SliceStable(nodes, func(i, j int) bool {
 		return nodes[i].Options().Priority > nodes[j].Options().Priority
 	})
 
-	if nodes[0].Options().Priority > 0 {
-		return nodes[0]
-	}
-
-	// Use selector with FailFilter for proper failover.
-	// FailFilter will exclude recently-failed nodes, allowing traffic to
-	// be routed to healthy alternatives.
-	// Note: FailFilter has a safety guard (len <= 1 returns as-is) to ensure
-	// the last remaining node is never permanently blocked.
 	if s := p.options.selector; s != nil {
+		if nodes[0].Options().Priority > 0 {
+			// Priority path (D3-04): priority is an ordering, not an
+			// exemption from failure filtering. Previously the
+			// highest-priority node was returned unconditionally,
+			// bypassing FailFilter/BackupFilter, so a dead matcher
+			// exit was dialled first on every connection. Filter the
+			// candidates first, then take the highest-priority
+			// survivor. The pre-filter uses the standard thresholds;
+			// per-node maxFails/failTimeout metadata overrides are
+			// honoured by the filters themselves.
+			survivors := xs.FailFilter[*chain.Node](xs.DefaultMaxFails, xs.DefaultFailTimeout).Filter(ctx, nodes...)
+			survivors = xs.BackupFilter[*chain.Node]().Filter(ctx, survivors...)
+			if len(survivors) > 0 {
+				log.Debugf("[hop.Select] selected node=%s addr=%s (priority %d)", survivors[0].Name, survivors[0].Addr, survivors[0].Options().Priority)
+				return survivors[0]
+			}
+			// Every candidate filtered out: fall through to the
+			// configured selector over the full list, which owns the
+			// all-failed verdict (including FailFilter's single-node
+			// availability guard when the hop has exactly one node).
+		}
+
+		// Use selector with FailFilter for proper failover.
+		// FailFilter will exclude recently-failed nodes, allowing traffic to
+		// be routed to healthy alternatives.
+		// Note: FailFilter has a safety guard (len <= 1 returns as-is) to ensure
+		// the last remaining node is never permanently blocked.
 		log.Debugf("[hop.Select] calling selector.Select with %d nodes", len(nodes))
 		if node := s.Select(ctx, nodes...); node != nil {
 			log.Debugf("[hop.Select] selected node=%s addr=%s", node.Name, node.Addr)
