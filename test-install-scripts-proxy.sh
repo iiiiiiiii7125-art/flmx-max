@@ -9658,6 +9658,37 @@ EOF
     fail "A3-05: menu exit must not print the completion line"
   fi
 )
+
+# A3-06: install/update/uninstall 全程必须持有进程级互斥锁——旧
+# 实现无锁，两个实例共用 .new/.part/.bak/config.json 固定工件可
+# 互相删/续对方的半成品、config 后写覆盖先写。本用例以外部持锁
+# 模拟先行实例：锁被占时 acquire 必须点名拒绝，释放后必须可占。
+test_install_lock_rejects_concurrent_run() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local work lock_file errlog
+  work=$(mktemp -d)
+  lock_file="$work/install.lock"
+  errlog="$work/acquire.err"
+  export FLMX_INSTALL_LOCK_FILE="$lock_file"
+
+  # 先行实例持锁（本 shell 的 fd 9）→ 后到者被拒且点名。
+  exec 9>>"$lock_file"
+  flock -n 9 || fail "A3-06: fixture could not take the lock"
+  if ( acquire_install_lock ) 2>"$errlog"; then
+    fail "A3-06: a second instance must be refused while the lock is held"
+  fi
+  grep -q "已有另一个 install.sh 实例正在运行" "$errlog" || \
+    fail "A3-06: the concurrent-run refusal must be named on stderr"
+
+  # 释放后可占（锁随进程退出自动释放，无陈旧锁残留）。
+  flock -u 9
+  exec 9>&-
+  ( acquire_install_lock ) 2>/dev/null || \
+    fail "A3-06: the lock must be acquirable after the first instance exits"
+  unset FLMX_INSTALL_LOCK_FILE
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -9714,6 +9745,7 @@ test_install_flmx_agent_rolls_back_over_existing
 test_suite_host_safety_gate_blocks_real_agent_hosts
 test_suite_stub_layer_catches_legacy_leak
 test_delete_self_pipe_form_preserves_cwd_namesake
+test_install_lock_rejects_concurrent_run
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance

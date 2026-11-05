@@ -2685,8 +2685,68 @@ require_root_privileges() {
   return 0
 }
 
+# A3-06: 进程级互斥锁。install/update/uninstall 共用一组固定路
+# 径工件（$INSTALL_DIR/flmx_agent.new、.part、.bak、config.json
+# 与服务文件），旧实现全程无锁：两实例并发时互相删/续对方的下
+# 载半成品、config 后写覆盖先写、二进制与配置可来自不同进程。
+# main 入口非阻塞占锁，已有实例运行时点名退出；锁随进程退出
+# 自动释放（flock fd 关闭 / mkdir 锁由 EXIT trap 清），不留陈旧
+# 锁。锁路径可用 FLMX_INSTALL_LOCK_FILE 覆盖（测试夹具用），缺
+# 省 /run（不可写时退 ${TMPDIR:-/tmp}）。无 flock 的系统（极简
+# Alpine 镜像）退化为原子 mkdir 锁：锁目录内记 PID，持有者已
+# 死时下任可接管。
+INSTALL_LOCK_DIR=""
+acquire_install_lock() {
+  local lock_file="${FLMX_INSTALL_LOCK_FILE:-}"
+  if [[ -z "$lock_file" ]]; then
+    if [[ -w /run ]]; then
+      lock_file="/run/flmx-install.lock"
+    else
+      lock_file="${TMPDIR:-/tmp}/flmx-install.lock"
+    fi
+  fi
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>>"$lock_file" || return 1
+    if ! flock -n 9; then
+      echo "❌ 已有另一个 install.sh 实例正在运行（锁: $lock_file），请等它结束后再运行；并发实例会共用下载与配置工件、互相覆盖（A3-06）" >&2
+      return 1
+    fi
+    return 0
+  fi
+  local lock_dir="${lock_file}.d"
+  if mkdir "$lock_dir" 2>/dev/null; then
+    echo "$$" > "$lock_dir/pid"
+    INSTALL_LOCK_DIR="$lock_dir"
+    return 0
+  fi
+  local holder=""
+  holder=$(cat "$lock_dir/pid" 2>/dev/null || true)
+  if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
+    rm -rf "$lock_dir"
+    if mkdir "$lock_dir" 2>/dev/null; then
+      echo "$$" > "$lock_dir/pid"
+      INSTALL_LOCK_DIR="$lock_dir"
+      return 0
+    fi
+  fi
+  echo "❌ 已有另一个 install.sh 实例正在运行（锁: $lock_dir），请等它结束后再运行；并发实例会共用下载与配置工件、互相覆盖（A3-06）" >&2
+  return 1
+}
+
+release_install_lock() {
+  if [[ -n "${INSTALL_LOCK_DIR:-}" ]]; then
+    rm -rf "$INSTALL_LOCK_DIR"
+    INSTALL_LOCK_DIR=""
+  fi
+}
+
 # 主逻辑
 main() {
+  # A3-06: 先占锁再做任何落盘/联网动作（占锁本身不写业务工件）。
+  acquire_install_lock || exit 1
+  if [[ -n "${INSTALL_LOCK_DIR:-}" ]]; then
+    trap release_install_lock EXIT
+  fi
   require_root_privileges || exit 1
 
   # X-P3-6 (J-03, BC-12): 各分支捕获操作函数返回码并以其退出。
