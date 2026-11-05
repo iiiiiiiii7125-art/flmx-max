@@ -11,7 +11,12 @@ import (
 // （kcp.configFile/configFile/c，kcp 在对端合法类型集内、为活洞）、
 // SSH 私钥文件 privateKeyFile 与授权文件 authorizedKeys、file
 // handler 的服务目录 file.dir/dir、http 诱饵 probeResist 的 file:
-// 值（文件内容直接回给未认证探测者）。本文件钉补全后的全集：可达族
+// 值（文件内容直接回给未认证探测者）。R2-07-01 补登第六族 netns/
+// netns.out：对端经 service/hop metadata 或 node 字段携带命名空间
+// 引用，agent parsing 层以 GetFromPath 打开任意路径并 Set 后在该
+// 命名空间内建监听/出站（与文件族同机制：对端配置命名提供方主机
+// 资源、root agent 消费；面板自身从不下发 netns，后端全仓零命中）。
+// 本文件钉补全后的全集：可达族
 // 走真实命令面红→绿，类型面暂挡住的族以合法信封嵌入证路径面本身
 // 在命令面生效、再以校验器直测钉键形变体；合法 KCP 配置（内联
 // kcp.config）与空值占位不得误伤。
@@ -137,6 +142,11 @@ func TestB601FamilyValidatorKeyShapes(t *testing.T) {
 		{"probeResistance FILE case", map[string]interface{}{"probeResistance": "FILE:/x"}},
 		{"privateKeyFile", map[string]interface{}{"privateKeyFile": "/x"}},
 		{"authorizedKeys", map[string]interface{}{"authorizedKeys": "/x"}},
+		{"service metadata netns path", map[string]interface{}{"metadata": map[string]interface{}{"netns": "/proc/1/ns/net"}}},
+		{"netns name form", map[string]interface{}{"netns": "blue"}},
+		{"netns.out dotted", map[string]interface{}{"metadata": map[string]interface{}{"netns.out": "/x"}}},
+		{"NetNS case variant", map[string]interface{}{"NetNS": "/x"}},
+		{"node field netns", map[string]interface{}{"nodes": []interface{}{map[string]interface{}{"netns": "/x"}}}},
 	}
 	for _, tc := range reject {
 		t.Run("reject/"+tc.name, func(t *testing.T) {
@@ -154,6 +164,8 @@ func TestB601FamilyValidatorKeyShapes(t *testing.T) {
 		{"probeResist web value", map[string]interface{}{"probeResist": "web:https://example.com/"}},
 		{"probeResist host value", map[string]interface{}{"probeResist": "host:example.com:443"}},
 		{"empty configFile placeholder", map[string]interface{}{"metadata": map[string]interface{}{"kcp.configFile": ""}}},
+		{"empty netns placeholder", map[string]interface{}{"metadata": map[string]interface{}{"netns": ""}}},
+		{"empty netns.out placeholder", map[string]interface{}{"metadata": map[string]interface{}{"netns.out": ""}}},
 		{"inline kcp config", map[string]interface{}{"metadata": map[string]interface{}{"config": map[string]interface{}{"mode": "fast"}}}},
 	}
 	for _, tc := range accept {
@@ -214,5 +226,86 @@ func TestB601FamilyStoredKcpConfigFilePaused(t *testing.T) {
 
 	if got := b606DesiredState(t, a.h, share, "service", "storedkcp"); got != "paused" {
 		t.Fatalf("stored service with kcp.configFile desired_state = %q, want paused", got)
+	}
+}
+
+// R2-07-01：netns 族四入形（service metadata 的 netns 与 netns.out、
+// hop metadata 的 netns、node 字段 netns）在命令面全数被拒且不落库。
+// 值形覆盖路径形（/proc/1/ns/net）与命名形（GetFromName 拼
+// /var/run/netns/<名>）——两形都命名提供方主机的网络命名空间。
+func TestB601FamilyNetnsRejected(t *testing.T) {
+	a := newCleanupAgent(t)
+	share := resourceTestShare(t, a.h, "b601fam-netns-share")
+
+	cases := []struct {
+		name  string
+		cmd   string
+		data  interface{}
+		check string
+		kind  string
+	}{
+		{
+			name: "service metadata netns path",
+			cmd:  "AddService",
+			data: []interface{}{b601FamilyService("netnssvc", 31061, func(s map[string]interface{}) {
+				s["metadata"] = map[string]interface{}{"netns": "/proc/1/ns/net"}
+			})},
+			check: "netnssvc", kind: "service",
+		},
+		{
+			name: "service metadata netns.out name",
+			cmd:  "AddService",
+			data: []interface{}{b601FamilyService("netnsout", 31062, func(s map[string]interface{}) {
+				s["metadata"] = map[string]interface{}{"netns.out": "blue"}
+			})},
+			check: "netnsout", kind: "service",
+		},
+		{
+			name:  "chain hop metadata netns",
+			cmd:   "AddChains",
+			data:  map[string]interface{}{"name": "netnshop", "hops": []interface{}{map[string]interface{}{"name": "h1", "metadata": map[string]interface{}{"netns": "/var/run/netns/tenant"}, "nodes": []interface{}{map[string]interface{}{"name": "n1", "addr": "127.0.0.1:8080", "connector": map[string]interface{}{"type": "relay"}, "dialer": map[string]interface{}{"type": "tcp"}}}}}},
+			check: "netnshop", kind: "chain",
+		},
+		{
+			name:  "chain node field netns",
+			cmd:   "AddChains",
+			data:  map[string]interface{}{"name": "netnsnode", "hops": []interface{}{map[string]interface{}{"name": "h1", "nodes": []interface{}{map[string]interface{}{"name": "n1", "addr": "127.0.0.1:8080", "netns": "/proc/1/ns/net", "connector": map[string]interface{}{"type": "relay"}, "dialer": map[string]interface{}{"type": "tcp"}}}}}},
+			check: "netnsnode", kind: "chain",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := resourceTestCommand(t, a.h, share, tc.cmd, tc.data)
+			if result.Code == 0 {
+				t.Fatalf("command carrying a node-local netns reference was accepted: %+v", result)
+			}
+			stored, err := a.h.repo.GetPeerShareResource(share.ID, tc.kind, tc.check)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored != nil {
+				t.Fatalf("rejected resource was persisted anyway: %+v", stored)
+			}
+		})
+	}
+}
+
+// 存量面：植入 netns 的存量服务经启动复检必须被置 paused（同一校验
+// 全集的本族验证，与 kcp 存量例同形）。
+func TestB601FamilyStoredNetnsPaused(t *testing.T) {
+	a := newCleanupAgent(t)
+	share := resourceTestShare(t, a.h, "b601fam-netns-stored-share")
+
+	b606SeedResource(t, a.h, share, "service", "storednetns", "active", map[string]interface{}{
+		"handler":  map[string]interface{}{"type": "tcp"},
+		"listener": map[string]interface{}{"type": "tcp"},
+		"metadata": map[string]interface{}{"netns": "/proc/1/ns/net"},
+	})
+
+	restarted := &Handler{repo: a.h.repo}
+	restarted.revalidateStoredPeerShareResources()
+
+	if got := b606DesiredState(t, a.h, share, "service", "storednetns"); got != "paused" {
+		t.Fatalf("stored service with netns desired_state = %q, want paused", got)
 	}
 }

@@ -947,6 +947,23 @@ func validatePeerResourceConfig(value interface{}, kind string) error {
 //     并把内容当诱饵响应回给未认证探测者（x/handler/http、
 //     http2 的 handler.go）；web:/host: 值是网络目标、不在本面。
 //
+//   - 网络命名空间（R2-07-01）：metadata 的 netns/netns.out
+//     （x/config/parsing 的 MDKeyNetns/MDKeyNetnsOut）经
+//     parsing/service 以 netns.GetFromPath（"/" 前缀即任意路径打开）
+//     /GetFromName 打开、netns.Set 后在该命名空间内建监听，出站经
+//     netns.out 同理；hop metadata 的 netns 被 parsing/hop 强制写到
+//     每个 node，NodeConfig.Netns 字段经 NetnsTransportOption 在连接
+//     路径同样消费。四入形（service metadata 两键、hop metadata、
+//     node 字段）同根，裸键名任意位置非空即拒。面板自身从不下发
+//     netns（后端全仓零命中），无合法面可误伤。
+//
+// R2-07-01 续普查（换谓词：以 x parsing/metadata 层实际读取的键全集
+// 与主机资源消费点反推全集）：interface（主机网卡名，parsing/service
+// 与 parsing/hop 读取）有意不在本面——它是节点记录上的运营配置字段
+// （InterfaceName），面板 federation 生命周期以提供方节点自身配置
+// 合法下发，与对端任意携带的 netns 性质不同，其 peer 面口径另案待
+// 主控裁定，不得在此顺手一律拒（会打断 exit 接口绑定功能）。
+//
 // limiter 顶层 file 加载器与 hop loader 已由引用面校验拒绝，不在
 // 本面重复登记。URL 路径键（*.path/pathPrefix 等）不落本机文件，
 // 不在本面。
@@ -966,6 +983,8 @@ func walkPeerResourceLocalPaths(value interface{}, inMetadata bool) error {
 					return fmt.Errorf("shared resources must not reference node-local certificate files: %s", key)
 				case lower == "configfile" || lower == "kcp.configfile":
 					return fmt.Errorf("shared resources must not reference node-local config files: %s", key)
+				case lower == "netns" || lower == "netns.out":
+					return fmt.Errorf("shared resources must not reference node-local network namespaces: %s", key)
 				case lower == "privatekeyfile":
 					return fmt.Errorf("shared resources must not reference node-local private key files: %s", key)
 				case lower == "authorizedkeys":
