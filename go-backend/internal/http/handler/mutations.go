@@ -3111,9 +3111,14 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// 其他后置失败同口径进回执 warnings，不静默。此闭包只在同步
 	// 执行之后被调用，读取的是届时值。
 	var entryPortSyncWarnings []string
+	// B4-03：被移除入口节点的转发服务清理失败同口径进 warnings，
+	// 闭包在同步执行之后调用、读取届时值（与 entryPortSyncWarnings
+	// 同形态）。
+	var entryCleanupWarnings []string
 	respondTunnelUpdateOK := func() {
 		warnings := append(append([]string{}, portChangeWarnings...), relayResyncWarnings...)
 		warnings = append(warnings, entryPortSyncWarnings...)
+		warnings = append(warnings, entryCleanupWarnings...)
 		if len(warnings) > 0 {
 			response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"warnings": warnings}})
 			return
@@ -3123,7 +3128,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 
 	newEntryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
 	if !sameInt64Set(oldEntryNodeIDs, newEntryNodeIDs) {
-		h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
+		entryCleanupWarnings = h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
 		entryPortSyncWarnings = h.syncTunnelForwardsEntryPorts(id, newEntryNodeIDs)
 	}
 
@@ -3348,24 +3353,38 @@ func diffInt64s(base, subtract []int64) []int64 {
 	return uniqueInt64s(out)
 }
 
-func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64, oldEntryNodeIDs, newEntryNodeIDs []int64) {
+// cleanupTunnelForwardRuntimesOnRemovedEntryNodes 清理入口集变更
+// 后被移除节点上的转发运行时。B4-03：此前返回 void 且逐层吞错
+// ——listForwardsByTunnel 失败、nft reconcile 失败、gost 批量删
+// 除失败全部静默，而 tunnelUpdate 回执恒成功，残留转发服务在
+// 旧入口节点上继续监听旧端口（转发已改走新入口、无人再对账该
+// 节点）。现失败逐项汇成 warnings 由调用方随回执带出（与
+// syncTunnelForwardsEntryPorts 同口径）；当时清不掉的由重连对
+// 账的成员判定补扫（deleteOrphanedForwardService 的 B4-03 扩
+// 展：转发仍存在但节点已不在其隧道入口集时同样删除），不永久
+// 残留。
+func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64, oldEntryNodeIDs, newEntryNodeIDs []int64) []string {
 	if h == nil || h.repo == nil || tunnelID <= 0 {
-		return
+		return nil
 	}
 
 	removedNodeIDs := diffInt64s(oldEntryNodeIDs, newEntryNodeIDs)
 	if len(removedNodeIDs) == 0 {
-		return
+		return nil
 	}
 
 	forwards, err := h.listForwardsByTunnel(tunnelID)
-	if err != nil || len(forwards) == 0 {
-		return
+	if err != nil {
+		return []string{fmt.Sprintf("入口节点变更后清理旧节点转发服务失败：读取隧道转发列表出错（%v），残留服务将在节点重连对账时清除", err)}
+	}
+	if len(forwards) == 0 {
+		return nil
 	}
 
 	// S-06: 检查是否为 nftables 模式
 	nftMode, _, _ := h.tunnelUsesNftables(tunnelID)
 
+	var warnings []string
 	for i := range forwards {
 		f := &forwards[i]
 		if f == nil {
@@ -3374,19 +3393,23 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 		for _, nodeID := range removedNodeIDs {
 			if nftMode {
 				// S-06: nftables 模式下，对旧节点做 reconcile（声明式同步会移除多余规则）
-				// 若节点离线，reconcile 会返回错误，调用方应记录而非静默
+				// 若节点离线，reconcile 会返回错误：点名进回执
+				// warnings（B4-03），重连后由对账补扫，不静默。
 				if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
-					// 记录但不中断：离线节点的清理将在重连后通过对账完成
-					// （S-04 的 nodeOfflineError 机制）
+					warnings = append(warnings, fmt.Sprintf("节点 %d 的 nftables 规则清理失败（%v），将在节点重连对账时补扫", nodeID, err))
 					continue
 				}
 			} else {
-				// gost 模式：删除 service（离线错误会向上传播，由 S-04 机制处理）；
-				// realm 隧道走 Batch 变体的重渲染清理。
-				_ = h.deleteForwardServicesOnNodeBatch(f, nodeID)
+				// gost 模式：删除 service（离线错误由 S-04 机制在
+				// 命令面处理）；realm 隧道走 Batch 变体的重渲染
+				// 清理。失败点名进 warnings（B4-03）。
+				if err := h.deleteForwardServicesOnNodeBatch(f, nodeID); err != nil {
+					warnings = append(warnings, fmt.Sprintf("节点 %d 上转发 %d 的旧服务清理失败（%v），将在节点重连对账时补扫", nodeID, f.ID, err))
+				}
 			}
 		}
 	}
+	return warnings
 }
 
 // forwardPortConflictMessage 按统一四源谓词给出的占用来源措辞
