@@ -178,7 +178,8 @@ func federationDialContext(ctx context.Context, network, addr string) (net.Conn,
 	return nil, fmt.Errorf("federation dial %s: all validated addresses failed: %w", addr, lastErr)
 }
 
-// checkFederationRedirect 逐跳复检重定向目标并跨主机剥离凭据头。
+// checkFederationRedirect 逐跳复检重定向目标并剥离凭据头（跨主机
+// 或 https→http 降级时）。
 func checkFederationRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= federationMaxRedirects {
 		return fmt.Errorf("too many redirects")
@@ -195,7 +196,13 @@ func checkFederationRedirect(req *http.Request, via []*http.Request) error {
 			return fmt.Errorf("redirect blocked: %w", err)
 		}
 	}
-	if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+	// 凭据剥离两条判据（C4-02 补第二条）：跨主机必剥；同主机但
+	// scheme 由 https 降级为 http 同样必剥——只比 Host 不看 scheme
+	// 时，对端一个 302 就能让 Bearer share token 与 X-Panel-Domain
+	// 明文过线（标准库的敏感头剥离不覆盖 scheme 降级、且
+	// X-Panel-Domain 根本不在其名单内）。
+	if len(via) > 0 && (req.URL.Host != via[0].URL.Host ||
+		(via[0].URL.Scheme == "https" && req.URL.Scheme == "http")) {
 		req.Header.Del("Authorization")
 		req.Header.Del("X-Panel-Domain")
 	}
