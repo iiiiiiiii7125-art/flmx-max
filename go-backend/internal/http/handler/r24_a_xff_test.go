@@ -15,10 +15,12 @@ import (
 // 修复：实际可信代理链长由右侧连续可信代理条目数 + 直接对端推导；
 // hops 超过该链长即 fail-closed 回 RemoteAddr，不得取预置条目。
 // 后续变更（B01-001 收窄口径）：判别点改为直接对端类型——公网直连
-// 对端的 XFF 完全忽略（轮换自填在该面被杀）；回环/私网代理对端
-// 沿用本文件的索引解析与超配 fail-closed，本文件的超配红 repro
-// 语义不变。v1 的 run==0 一律 fail-closed 已被取代（误伤默认单跳
-// 反代拓扑），hops=1 单条条目的采信期望已恢复，见
+// 对端的 XFF 完全忽略（轮换自填在该面被杀）；回环对端与登记进
+// FLMX_TRUSTED_PROXIES 的代理对端（C4-01：私网身份不再自动
+// 可信；联邦面用其自有名单）沿用本文件的索引解析与超配
+// fail-closed，本文件的超配红 repro 语义不变。v1 的 run==0
+// 一律 fail-closed 已被取代（误伤默认单跳反代拓扑），hops=1
+// 单条条目的采信期望已恢复，见
 // TestR24A_XFFCorrectHopsUnaffected 的复查说明。
 
 // 红 repro 1（L3 探针名）：超配 hops + 预置 XFF，不得取到被骗条目。
@@ -68,7 +70,17 @@ func TestR24A_FederationClientIPSpoofedBySeededXFF(t *testing.T) {
 func TestR24A_XFFCorrectTwoHopChainUnaffected(t *testing.T) {
 	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "2")
 	// Caddy(127.0.0.1)→nginx(172.30.0.x)→backend：XFF="client, nginx"
+	// C4-01 口径：nginx 条目 172.30.0.5 须显式登记
+	// FLMX_TRUSTED_PROXIES 才算可信跳（私网身份不再自动可信）；
+	// 未登记时 hops 超过实际可信链长（仅回环对端 1 跳），
+	// fail-closed 回对端——先钉此形态，再登记后验原断言。
+	t.Setenv("FLMX_TRUSTED_PROXIES", "")
 	got := loginClientIP(loginReqWithXFF("127.0.0.1:1", "203.0.113.7, 172.30.0.5"))
+	if got == nil || got.String() != "127.0.0.1" {
+		t.Fatalf("correct 2-hop chain unregistered: loginClientIP = %v, want 127.0.0.1 (fail-closed to RemoteAddr)", got)
+	}
+	t.Setenv("FLMX_TRUSTED_PROXIES", "172.30.0.0/16")
+	got = loginClientIP(loginReqWithXFF("127.0.0.1:1", "203.0.113.7, 172.30.0.5"))
 	if got == nil || got.String() != "203.0.113.7" {
 		t.Fatalf("correct 2-hop chain: loginClientIP = %v, want 203.0.113.7", got)
 	}
