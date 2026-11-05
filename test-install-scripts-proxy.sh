@@ -892,6 +892,21 @@ test_panel_install_env_carries_trusted_proxies_entry() (
   grep -q '自检' "$work/.env" || fail "C4-01 follow-up: the guidance must include a self-check method"
 )
 
+test_shipped_compose_templates_carry_trusted_proxies_passthrough() (
+  set -euo pipefail
+
+  # C4-01/PV-11: 随版 compose 模板的 backend environment 段必须带
+  # FLMX_TRUSTED_PROXIES 传递行——.env 写了该键而模板不透传时，后端
+  # 容器读不到它，clientip 的显式 CIDR 可信名单在标准部署下形同虚设。
+  local tpl
+  for tpl in docker-compose-v4.yml docker-compose-v6.yml; do
+    grep -qF 'FLMX_TRUSTED_PROXIES: ${FLMX_TRUSTED_PROXIES:-}' "$ROOT_DIR/$tpl" \
+      || fail "C4-01: $tpl backend environment must carry the FLMX_TRUSTED_PROXIES passthrough line"
+    assert_equals "1" "$(grep -cF 'FLMX_TRUSTED_PROXIES: ${FLMX_TRUSTED_PROXIES:-}' "$ROOT_DIR/$tpl")" \
+      "C4-01: $tpl must carry the passthrough line exactly once"
+  done
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -10812,5 +10827,6 @@ test_panel_invalid_instance_id_hard_fails_on_manage_paths
 test_panel_menu5_site_block_filters_secret_query_from_access_log
 test_env_var_reading_crlf_shape
 test_panel_install_env_carries_trusted_proxies_entry
+test_shipped_compose_templates_carry_trusted_proxies_passthrough
 
 echo "install script tests passed"

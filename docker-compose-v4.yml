@@ -23,6 +23,10 @@ services:
       # 前端网关条目、全站共用一桶）。非标准拓扑（如反代直达后端
       # 端口、单跳）在 .env 里显式设置 FLMX_TRUSTED_PROXY_HOPS 覆盖。
       FLMX_TRUSTED_PROXY_HOPS: ${FLMX_TRUSTED_PROXY_HOPS:-2}
+      # C4-01: 显式可信代理 CIDR 名单透传（clientip 默认只信回环，
+      # 名单内的对端才可信）；缺省空＝名单为空，按 .env 中该键的
+      # 字段级指引填写（标准拓扑填前端容器子网）。
+      FLMX_TRUSTED_PROXIES: ${FLMX_TRUSTED_PROXIES:-}
       TZ: Asia/Shanghai
       FLMX_VERSION: ${FLMX_VERSION:-${FLUX_VERSION:-dev}}
       FLUX_VERSION: ${FLMX_VERSION:-${FLUX_VERSION:-dev}}
