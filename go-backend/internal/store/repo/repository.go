@@ -1250,11 +1250,12 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 		}
 		for _, cfg := range configs {
 			sshConfigByNodeID[cfg.NodeID] = map[string]interface{}{
-				"host":     cfg.Host,
-				"port":     cfg.Port,
-				"username": cfg.Username,
-				"authType": cfg.AuthType,
-				"sudoMode": cfg.SudoMode,
+				"host":               cfg.Host,
+				"port":               cfg.Port,
+				"username":           cfg.Username,
+				"authType":           cfg.AuthType,
+				"sudoMode":           cfg.SudoMode,
+				"hostKeyFingerprint": cfg.HostKeyFingerprint,
 			}
 		}
 	}
