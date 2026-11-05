@@ -44,6 +44,21 @@ func init() {
 	registry.HandlerRegistry().Register("http2", NewHandler)
 }
 
+// probeDecoyClient fetches the probe-resistance "web" decoy page. It
+// is deliberately not http.DefaultClient: the fetch is triggered by
+// unauthenticated requests, so it must be time-bounded (the client
+// Timeout also bounds reading the decoy body afterwards) and its
+// redirect chain capped (F1-02).
+var probeDecoyClient = &http.Client{
+	Timeout: 5 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("probe decoy fetch: stopped after %d redirects", len(via))
+		}
+		return nil
+	},
+}
+
 type http2Handler struct {
 	md       metadata
 	options  handler.Options
@@ -379,7 +394,7 @@ func (h *http2Handler) authenticate(ctx context.Context, w http.ResponseWriter, 
 			if !strings.HasPrefix(url, "http") {
 				url = "http://" + url
 			}
-			r, err := http.Get(url)
+			r, err := probeDecoyClient.Get(url)
 			if err != nil {
 				log.Error(err)
 				break

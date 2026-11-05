@@ -180,16 +180,19 @@ func ParseNode(hop string, cfg *config.NodeConfig, log logger.Logger) (*chain.No
 		priority := cfg.Matcher.Priority
 
 		if rule := strings.TrimSpace(cfg.Matcher.Rule); rule != "" {
-			if matcher, err := routing.NewMatcher(rule); err == nil {
-				log.Debugf("new matcher for node %s with rule %s", cfg.Name, cfg.Matcher.Rule)
-				if priority == 0 {
-					priority = len(cfg.Matcher.Rule)
-				}
-				opts = append(opts, chain.MatcherNodeOption(matcher))
-			} else {
-				log.Error(err)
-				priority = -1
+			matcher, err := routing.NewMatcher(rule)
+			if err != nil {
+				// Fail closed (D3-05): an invalid matcher rule must
+				// abort the node parse. Keeping the node without its
+				// matcher would silently widen it to serve every
+				// host/path in its hop.
+				return nil, fmt.Errorf("node %s: invalid matcher rule: %w", cfg.Name, err)
 			}
+			log.Debugf("new matcher for node %s with rule %s", cfg.Name, cfg.Matcher.Rule)
+			if priority == 0 {
+				priority = len(cfg.Matcher.Rule)
+			}
+			opts = append(opts, chain.MatcherNodeOption(matcher))
 		}
 
 		opts = append(opts, chain.PriorityNodeOption(priority))

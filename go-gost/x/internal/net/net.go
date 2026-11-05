@@ -30,8 +30,20 @@ type SetDSCP interface {
 	SetDSCP(int) error
 }
 
+// IsIPv4 reports whether the host part of a listen address is a
+// literal IPv4 address. Callers use it to choose tcp4/udp4 over the
+// unspecified tcp/udp network. Only a literal IPv4 host qualifies: a
+// hostname must stay on the unspecified network so the resolver picks
+// the family — classifying hostnames as IPv4 (the previous first-byte
+// heuristic) forced tcp4/udp4 and silently dropped the IPv6 face of
+// hostname binds such as localhost (D3-09).
 func IsIPv4(address string) bool {
-	return address != "" && address[0] != ':' && address[0] != '['
+	host := address
+	if h, _, err := net.SplitHostPort(address); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() != nil
 }
 
 type ListenConfig struct {
@@ -118,4 +130,21 @@ func (c *readWriteConn) Read(p []byte) (int, error) {
 
 func (c *readWriteConn) Write(p []byte) (int, error) {
 	return c.w.Write(p)
+}
+
+// CloseWrite forwards a half-close to the wrapped conn when it
+// supports one, so relay code (Transport) can propagate end-of-stream
+// through this wrapper instead of silently dropping the signal.
+func (c *readWriteConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errHalfCloseNotSupported
+}
+
+func (c *readWriteConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return errHalfCloseNotSupported
 }

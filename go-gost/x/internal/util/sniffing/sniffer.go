@@ -638,6 +638,23 @@ func (h *Sniffer) HandleTLS(ctx context.Context, conn net.Conn, opts ...HandleOp
 	return err
 }
 
+// targetVerifyName returns the name the upstream certificate is
+// verified against when the client sent no SNI: the requested host
+// when known, otherwise the address that was actually dialled.
+func targetVerifyName(ro *xrecorder.HandlerRecorderObject, cc net.Conn) string {
+	name := ro.Host
+	if h, _, err := net.SplitHostPort(name); err == nil {
+		name = h
+	}
+	if name == "" && cc != nil && cc.RemoteAddr() != nil {
+		name = cc.RemoteAddr().String()
+		if h, _, err := net.SplitHostPort(name); err == nil {
+			name = h
+		}
+	}
+	return name
+}
+
 func (h *Sniffer) terminateTLS(ctx context.Context, conn, cc net.Conn, clientHello *dissector.ClientHelloInfo, ho *HandleOptions) error {
 	ro := ho.RecorderObject
 	log := ho.Log
@@ -653,7 +670,13 @@ func (h *Sniffer) terminateTLS(ctx context.Context, conn, cc net.Conn, clientHel
 		CipherSuites: clientHello.CipherSuites,
 	}
 	if cfg.ServerName == "" {
-		cfg.InsecureSkipVerify = true
+		// No SNI from the client: verify the upstream certificate
+		// against the target that was actually dialled (F1-03)
+		// instead of disabling verification wholesale as before.
+		// Naming the dialled target also lets crypto/tls run its
+		// standard chain+name verification (an IP literal target is
+		// matched against IP SANs).
+		cfg.ServerName = targetVerifyName(ro, cc)
 	}
 	clientConn := tls.Client(cc, cfg)
 	if err := clientConn.HandshakeContext(ctx); err != nil {

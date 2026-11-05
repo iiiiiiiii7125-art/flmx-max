@@ -58,8 +58,13 @@ func (c *socks5Connector) Init(md md.Metadata) (err error) {
 	if !c.md.noTLS {
 		selector.methods = append(selector.methods, socks.MethodTLS)
 		if selector.TLSConfig == nil {
+			// Default to a verifying config (F1-01). Non-verification
+			// remains available only through an explicitly supplied
+			// TLS config. The expected server name is filled in from
+			// the dialled server address at handshake time (see
+			// clientSelector.tlsConfigFor).
 			selector.TLSConfig = &tls.Config{
-				InsecureSkipVerify: true,
+				MinVersion: tls.VersionTLS12,
 			}
 		}
 		if selector.User != nil {
