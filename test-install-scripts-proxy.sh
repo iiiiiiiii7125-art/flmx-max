@@ -209,6 +209,86 @@ test_panel_update_pg_volume_check_rolls_back_on_mismatch() (
   grep -q '升级后 PG 卷名自检通过' "$dir2/update.log" || fail "A2-02: the PG volume self-check pass must be named in the update output"
 )
 
+# A2-03（audit-max）：缺省 scope 钉键与 live scope 同口径——无实
+# 读证据不写卷键。旧实现两处反着来：SQLite 实读为空（bind 挂载
+# 等）照样写死 sqlite_data；PG 实读为空时只要 postgres_data 卷
+# 存在就认领为本部署 PG 卷（SQLite 部署主机上一个无关的
+# postgres_data 卷即被写进 .env）。三幕：① SQLite 实读为空 →
+# 不写 FLMX_SQLITE_VOLUME＋点名；② SQLite 部署＋无关
+# postgres_data 卷存在、PG 实读为空 → 不写 FLMX_POSTGRES_VOLUME
+# ＋点名不认领；③ 实读有值 → 照常钉实读值（既有口径回归）。
+test_panel_pin_no_live_read_no_volume_key() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  pin_noread_docker() {
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        return 0
+      fi
+      if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+        case "$3" in
+          *"/app/data"*) printf '%s' "${FIXTURE_SQLITE_VOLUME:-}" ;;
+          *"/var/lib/postgresql/data"*) printf '%s' "${FIXTURE_POSTGRES_VOLUME:-}" ;;
+          *) printf '' ;;
+        esac
+        return 0
+      fi
+      return 0
+    }
+  }
+
+  # ① SQLite 实读为空
+  local dir1
+  dir1=$(mktemp -d)
+  cat > "$dir1/.env" <<'EOF'
+DB_TYPE=sqlite
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_noread_docker
+  FIXTURE_SQLITE_VOLUME=""
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir1" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "A2-03: pinning must not fail when the sqlite mount cannot be read"
+  if grep -q '^FLMX_SQLITE_VOLUME=' "$dir1/.env"; then
+    fail "A2-03: no sqlite volume key may be written without a live-read value (bind mounts must not be pinned to the template fallback)"
+  fi
+  grep -q '不钉 FLMX_SQLITE_VOLUME' "$dir1/pin.log" || fail "A2-03: the skipped sqlite pin must be named in the pin output"
+
+  # ② 无关 postgres_data 卷不得被认领
+  local dir2
+  dir2=$(mktemp -d)
+  cat > "$dir2/.env" <<'EOF'
+DB_TYPE=sqlite
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_noread_docker
+  FIXTURE_SQLITE_VOLUME="my_sqlite"
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir2" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "A2-03: pinning must not fail in the foreign-postgres-volume scenario"
+  grep -q '^FLMX_SQLITE_VOLUME=my_sqlite$' "$dir2/.env" || fail "A2-03: the live-read sqlite volume must still be pinned"
+  if grep -q '^FLMX_POSTGRES_VOLUME=' "$dir2/.env"; then
+    fail "A2-03: an unrelated postgres_data volume must not be claimed as this deployment's PG volume by existence alone"
+  fi
+  grep -q '不钉 FLMX_POSTGRES_VOLUME' "$dir2/pin.log" || fail "A2-03: the skipped postgres pin must be named in the pin output"
+
+  # ③ 实读有值照常钉
+  local dir3
+  dir3=$(mktemp -d)
+  cat > "$dir3/.env" <<'EOF'
+DB_TYPE=postgres
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  pin_noread_docker
+  FIXTURE_SQLITE_VOLUME="my_sqlite"
+  FIXTURE_POSTGRES_VOLUME="my_pg"
+  ( cd "$dir3" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "A2-03: pinning must succeed when both mounts are readable"
+  grep -q '^FLMX_SQLITE_VOLUME=my_sqlite$' "$dir3/.env" || fail "A2-03: the live-read sqlite volume must be pinned"
+  grep -q '^FLMX_POSTGRES_VOLUME=my_pg$' "$dir3/.env" || fail "A2-03: the live-read postgres volume must be pinned"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -9621,5 +9701,6 @@ test_migrate_legacy_agent_snapshot_failure_aborts
 test_install_panel_force_reinstall_data_gate
 test_panel_pin_accident_gate_unknown_mount_aborts
 test_panel_update_pg_volume_check_rolls_back_on_mismatch
+test_panel_pin_no_live_read_no_volume_key
 
 echo "install script tests passed"

@@ -2009,8 +2009,9 @@ print_initial_admin_credentials() {
 # 不碰网络/项目键。缘由：迁移的 .env 快照兼作回滚源、逐字恢复
 # 是既有契约，无实证的写入会污染快照且对迁移的数据面毫无增
 # 益；迁移真正需要的是把后端实挂的卷钉进快照，使最终/回滚
-# up 不再落模板缺省空卷。更新/改名路径用缺省 scope（全量＋
-# 回退写＋PG 卷存在性回退）。
+# up 不再落模板缺省空卷。更新/改名路径用缺省 scope（全量钉
+# 键，含网络/项目键）；卷键在两 scope 下同口径——只凭实读挂
+# 载写值，无实读不写（A2-03），缺省 scope 另加点名提示。
 panel_pin_missing_resource_keys() {
   local backend_container="$1" postgres_container="$2" pin_scope="${3:-}"
   local sqlite_key sqlite_volume=""
@@ -2040,12 +2041,17 @@ panel_pin_missing_resource_keys() {
         return 1
       fi
     fi
-    if [[ "$pin_scope" == "live" ]]; then
-      if [[ -n "$sqlite_volume" ]]; then
-        upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume" || return 1
-      fi
-    else
-      upsert_env_var .env FLMX_SQLITE_VOLUME "${sqlite_volume:-sqlite_data}" || return 1
+    if [[ -n "$sqlite_volume" ]]; then
+      upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume" || return 1
+    elif [[ "$pin_scope" != "live" ]]; then
+      # A2-03：缺省 scope 与 live scope 同口径——实读为空不写卷
+      # 键。旧实现写死回退名 sqlite_data：后端以 bind 挂载
+      # /app/data 时卷名实读恒空，钉键会把 bind 部署改钉到同名
+      # 命名卷（可能为空/陈旧），真数据被晾置，且升级后自检的
+      # 期望同源于刚钉的值、必然通过。现点名不钉，留待人工钉
+      # 值或后续实读成功时再钉（live scope 维持静默不写，与迁
+      # 移快照的逐字恢复契约一致）。
+      echo "⚠️ 未能实读后端 $backend_container 在 /app/data 的挂载卷名（容器不在册或为 bind 挂载），本次不钉 FLMX_SQLITE_VOLUME 键；重建将按模板缺省选卷——如部署使用命名卷，请先在 .env 中显式钉入实际卷名再重跑"
     fi
   fi
   local postgres_key postgres_volume=""
@@ -2087,14 +2093,18 @@ panel_pin_missing_resource_keys() {
         return 1
       fi
     fi
-    # scope=live 时不走卷存在性回退：postgres_data 存在只证明该卷
-    # 在，不证明它就是本部署 PG 的卷，写进迁移快照会污染逐字恢
-    # 复契约；迁移的 PG 卷候选由 F7-03/F7-04 的登记口径处理。
-    if [[ -z "$postgres_volume" && "$pin_scope" != "live" ]] && docker volume inspect postgres_data >/dev/null 2>&1; then
-      postgres_volume="postgres_data"
-    fi
+    # A2-03：缺省 scope 删除卷存在性回退，与 live scope 同口
+    # 径——postgres_data 存在只证明该卷在，不证明它就是本部署
+    # PG 的卷；旧实现凭存在性认领，会把无关卷（共存旧面板/
+    # 废弃 PG）写进本部署 .env，后续迁移还会把 pgloader 目标
+    # 指向异属卷。实读为空一律不写；仅在 PG 模式、或该卷存在
+    # （即旧实现会认领的形态）时点名不钉，纯 SQLite 部署无此
+    # 形态时保持静默。迁移的 PG 卷候选由 F7-03/F7-04 的登记口
+    # 径处理，与此处无关。
     if [[ -n "$postgres_volume" ]]; then
       upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume" || return 1
+    elif [[ "$pin_scope" != "live" ]] && { [[ "$(get_current_db_type)" == "postgres" ]] || docker volume inspect postgres_data >/dev/null 2>&1; }; then
+      echo "⚠️ 未能实读 PostgreSQL 容器 $postgres_container 在 /var/lib/postgresql/data 的挂载卷名，本次不钉 FLMX_POSTGRES_VOLUME 键（不凭 postgres_data 卷的存在性认领——卷在不等于卷属于本部署）；如本部署确为 PostgreSQL，请在 .env 中显式钉入实际 PG 卷名后再重跑"
     fi
   fi
   if [[ "$pin_scope" != "live" ]]; then
