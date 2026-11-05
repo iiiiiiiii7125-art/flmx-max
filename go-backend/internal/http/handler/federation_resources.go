@@ -214,6 +214,9 @@ func (h *Handler) preparePeerResourceCommand(share *repo.PeerShare, cmd string, 
 			if err := validatePeerResourceTypes(config, kind); err != nil {
 				return nil, err
 			}
+			if err := validatePeerResourceLocalPaths(config); err != nil {
+				return nil, err
+			}
 			scopePeerResourceReferences(config, share.ID)
 			config["name"] = item.RuntimeName
 			encoded, err := json.Marshal(config)
@@ -873,6 +876,44 @@ func walkPeerResourceTypes(value interface{}) error {
 	case []interface{}:
 		for _, child := range v {
 			if err := walkPeerResourceTypes(child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validatePeerResourceLocalPaths 是 B6-01 的路径面校验：对端资源配置
+// 不得携带提供方节点本机文件路径。普查全集（go-gost/x 机械导出）：
+// TLSConfig（x/config/config.go，listener/handler/connector/dialer
+// 四段共用）的 certFile/keyFile/caFile 三字段是唯一的证书路径字段；
+// handler metadata 的 mitm.certFile/mitm.caCertFile/mitm.keyFile/
+// mitm.caKeyFile（x/handler/relay 等十处 metadata.go）经
+// LoadX509KeyPair 以 agent 的 root 身份加载。面板自身构建的联邦/
+// 转发/隧道服务从不下发 tls 段或 mitm.* metadata，此面纯为对端可加。
+// 命中非空字符串值即 fail-closed 拒绝；空值在 gost 侧不构成加载，
+// 与引用/hook 校验的空值放行口径一致。键名大小写不敏感（对端 JSON
+// 的 "CertFile" 形态经 gost 解码同样落到同一字段）。mitm.alpn/
+// mitm.bypass 非路径键，不在此面。
+func validatePeerResourceLocalPaths(value interface{}) error {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, child := range v {
+			lower := strings.ToLower(key)
+			isPathKey := lower == "certfile" || lower == "keyfile" || lower == "cafile" ||
+				(strings.HasPrefix(lower, "mitm.") && strings.Contains(lower, "file"))
+			if isPathKey {
+				if s, ok := child.(string); ok && strings.TrimSpace(s) != "" {
+					return fmt.Errorf("shared resources must not reference node-local certificate files: %s", key)
+				}
+			}
+			if err := validatePeerResourceLocalPaths(child); err != nil {
+				return err
+			}
+		}
+	case []interface{}:
+		for _, child := range v {
+			if err := validatePeerResourceLocalPaths(child); err != nil {
 				return err
 			}
 		}
