@@ -454,21 +454,46 @@ resolve_latest_release_tag() {
   return 1
 }
 
+# A3-02: 显式版本值的格式校验（与 S-02 在 agent 升级面确立的口径
+# 同族）。VERSION/FLMX_VERSION/FLUX_VERSION/PINNED_VERSION 此前原样
+# 回显、直接内插进下载 URL：含 ../ 的值经 curl 点段压缩可逃出钉死
+# 的 ${REPO} 指向任意 GitHub 仓库的 Release，且 .sha256 由同一拼出
+# URL 派生、校验自洽不构成防线（LIVE-A S5 实证）。现统一校验：
+# 稳定渠道只接受可选 v 前缀的纯点分数字（集合不超出 latest 稳定
+# 渠道正则）；dev/beta 渠道接受与 latest 同集的数字开头 tag；两渠
+# 道共同硬拒 /、?、#、%、反斜杠、空白与 ".." 子串——凡能改变 URL
+# 指向或逃出版本路径段的字符一律不许进入拼接。
+version_value_format_ok() {
+  local value="$1"
+  [[ -n "$value" ]] || return 1
+  case "$value" in
+    */*|*\?*|*\#*|*%*|*\\*|*[[:space:]]*|*..*) return 1 ;;
+  esac
+  case "${FLMX_RELEASE_CHANNEL:-stable}" in
+    dev|beta) [[ "$value" =~ ^v?[0-9][0-9A-Za-z.\-]*$ ]] ;;
+    *) [[ "$value" =~ ^v?[0-9]+(\.[0-9]+)+$ ]] ;;
+  esac
+}
+
 resolve_version() {
+  # 四个显式入口统一过 version_value_format_ok，不合即点名来源中止
+  # （A3-02）。优先级顺序不变（RN-1）。
+  local explicit="" explicit_source=""
   if [[ -n "${VERSION:-}" ]]; then
-    echo "$VERSION"
-    return 0
+    explicit="$VERSION"; explicit_source="VERSION"
+  elif [[ -n "${FLMX_VERSION:-}" ]]; then
+    explicit="$FLMX_VERSION"; explicit_source="FLMX_VERSION"
+  elif [[ -n "${FLUX_VERSION:-}" ]]; then
+    explicit="$FLUX_VERSION"; explicit_source="FLUX_VERSION"
+  elif [[ -n "${PINNED_VERSION:-}" ]]; then
+    explicit="$PINNED_VERSION"; explicit_source="PINNED_VERSION"
   fi
-  if [[ -n "${FLMX_VERSION:-}" ]]; then
-    echo "$FLMX_VERSION"
-    return 0
-  fi
-  if [[ -n "${FLUX_VERSION:-}" ]]; then
-    echo "$FLUX_VERSION"
-    return 0
-  fi
-  if [[ -n "${PINNED_VERSION:-}" ]]; then
-    echo "$PINNED_VERSION"
+  if [[ -n "$explicit_source" ]]; then
+    if ! version_value_format_ok "$explicit"; then
+      echo "❌ 版本号格式不合法（来自 $explicit_source）：\"$explicit\"。只接受形如 1.9.9 / v1.9.9 的纯点分数字版本（dev/beta 渠道可带 -dev 等后缀）；含 /、..、?、# 等能改变下载地址的字符一律拒绝（A3-02）" >&2
+      return 1
+    fi
+    echo "$explicit"
     return 0
   fi
 
@@ -482,6 +507,12 @@ resolve_version() {
 
 # 构建下载地址
 build_download_url() {
+    # A3-02 双点收口：内插前对 RESOLVED_VERSION 再断言一次格式，
+    # 防止未来新调用方绕过 resolve_version 的校验直接赋值。
+    if ! version_value_format_ok "${RESOLVED_VERSION:-}"; then
+        echo "❌ 版本号格式不合法，拒绝拼接下载地址：\"${RESOLVED_VERSION:-}\"（A3-02）" >&2
+        return 1
+    fi
     # AUDIT-R1 (SCR-007): 分开声明与赋值，避免 local 吞掉 get_architecture 的
     # 非零退出码（SC2155）；未知架构直接向上传播失败。
     local ARCH

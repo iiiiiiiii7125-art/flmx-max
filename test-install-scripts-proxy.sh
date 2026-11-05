@@ -86,6 +86,9 @@ test_install_script_builds_canonical_download_url() (
   PROXY_ENABLED=""
   PROXY_URL=""
   DOWNLOAD_URL=""
+  # A3-02 后显式版本须过格式校验：夹具预设的 v-test 不再合法，
+  # 本例改用合法版本（只验 URL 规范化本身，不验版本解析）。
+  VERSION="1.2.3"
 
   ensure_download_url_initialized
 
@@ -9261,6 +9264,44 @@ STUBEOF
   grep -q '^1$' "$work3/gate-rc" || fail "FIX199-D6: a mismatched confirmation must abort the forced reinstall"
   grep -q 'keep-this-env' "$work3/.env" || fail "FIX199-D6: .env must stay untouched after a mismatched confirmation"
 )
+
+# A3-02: 显式版本四入口（VERSION/FLMX_VERSION/FLUX_VERSION/
+# PINNED_VERSION）拼下载 URL 前必须过严格格式校验——含 /、..、?、#
+# 等能改变 URL 指向的畸形值一律拒绝（旧实现原样直通，../ 可逃出
+# 钉死仓库且同源派生的 .sha256 使校验失效，LIVE-A S5 已实证）。
+# build_download_url 内插前再断言一次（双点收口）。
+test_install_script_rejects_malformed_explicit_versions() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local var value
+  for var in VERSION FLMX_VERSION FLUX_VERSION PINNED_VERSION; do
+    for value in '../../../evil/repo/releases/download/9.9.9' '1.9.9/extra' '1.9.9?x=1' '1.9.9#x' '1.9.9 2.0.0' '..' 'v' '1.' 'a.b.c' '1.9.9%2e'; do
+      VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+      printf -v "$var" '%s' "$value"
+      if resolve_version >/dev/null 2>&1; then
+        fail "A3-02: $var='$value' must be rejected by resolve_version"
+      fi
+    done
+  done
+
+  # 合法值放行（稳定渠道：可选 v 前缀的纯点分数字）。
+  VERSION="1.9.9" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  assert_equals "1.9.9" "$(resolve_version)" "A3-02: plain version must pass validation"
+  VERSION="v1.9.9" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  assert_equals "v1.9.9" "$(resolve_version)" "A3-02: v-prefixed version must pass validation"
+
+  # build_download_url 双点断言：RESOLVED_VERSION 被污染时不得拼 URL。
+  RESOLVED_VERSION='../../../evil'
+  if build_download_url >/dev/null 2>&1; then
+    fail "A3-02: build_download_url must refuse a traversal RESOLVED_VERSION"
+  fi
+  RESOLVED_VERSION="1.9.9"
+  assert_equals \
+    "https://github.com/${REPO}/releases/download/1.9.9/gost-$(get_architecture)" \
+    "$(build_download_url)" \
+    "A3-02: canonical download URL for a valid version"
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -9311,6 +9352,7 @@ test_panel_anchor_corroboration_degrades
 test_install_script_binary_anchor_passes
 test_install_script_binary_anchor_mismatch_rejects
 test_install_script_binary_anchor_degrades
+test_install_script_rejects_malformed_explicit_versions
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance
