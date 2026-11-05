@@ -112,18 +112,22 @@ type Node struct {
 func (Node) TableName() string { return "node" }
 
 type NodeSSHConfig struct {
-	ID          int64          `gorm:"primaryKey;autoIncrement"`
-	NodeID      int64          `gorm:"column:node_id;not null;uniqueIndex"`
-	Host        string         `gorm:"type:varchar(255);not null"`
-	Port        int            `gorm:"not null;default:22"`
-	Username    string         `gorm:"type:varchar(100);not null"`
-	AuthType    string         `gorm:"column:auth_type;type:varchar(20);not null"`
-	Password    sql.NullString `gorm:"type:text"`
-	PrivateKey  sql.NullString `gorm:"column:private_key;type:text"`
-	Passphrase  sql.NullString `gorm:"type:text"`
-	SudoMode    string         `gorm:"column:sudo_mode;type:varchar(20);not null;default:'none'"`
-	CreatedTime int64          `gorm:"column:created_time;not null"`
-	UpdatedTime int64          `gorm:"column:updated_time;not null"`
+	ID         int64          `gorm:"primaryKey;autoIncrement"`
+	NodeID     int64          `gorm:"column:node_id;not null;uniqueIndex"`
+	Host       string         `gorm:"type:varchar(255);not null"`
+	Port       int            `gorm:"not null;default:22"`
+	Username   string         `gorm:"type:varchar(100);not null"`
+	AuthType   string         `gorm:"column:auth_type;type:varchar(20);not null"`
+	Password   sql.NullString `gorm:"type:text"`
+	PrivateKey sql.NullString `gorm:"column:private_key;type:text"`
+	Passphrase sql.NullString `gorm:"type:text"`
+	SudoMode   string         `gorm:"column:sudo_mode;type:varchar(20);not null;default:'none'"`
+	// HostKeyFingerprint 是已钉入的 SSH 主机密钥指纹（SHA256:…，C3-02）。
+	// 空 = 未钉入：runner 对该节点的一切特权操作 fail-closed，须先经
+	// 节点页测连通 TOFU 钉入（或在端点变更后重新钉入）。
+	HostKeyFingerprint string `gorm:"column:host_key_fingerprint;type:varchar(100);not null;default:''"`
+	CreatedTime        int64  `gorm:"column:created_time;not null"`
+	UpdatedTime        int64  `gorm:"column:updated_time;not null"`
 }
 
 func (NodeSSHConfig) TableName() string { return "node_ssh_config" }

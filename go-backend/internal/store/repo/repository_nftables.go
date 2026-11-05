@@ -66,20 +66,55 @@ func (r *Repository) UpsertNodeSSHConfig(nodeID int64, cfg NftSSHConfigInput, no
 		CreatedTime: now,
 		UpdatedTime: now,
 	}
+	assignments := map[string]interface{}{
+		"host":         row.Host,
+		"port":         row.Port,
+		"username":     row.Username,
+		"auth_type":    row.AuthType,
+		"password":     row.Password,
+		"private_key":  row.PrivateKey,
+		"passphrase":   row.Passphrase,
+		"sudo_mode":    row.SudoMode,
+		"updated_time": row.UpdatedTime,
+	}
+	// C3-02：已钉入的主机密钥指纹不随配置保存被覆盖——端点身份
+	// （host/port/username）不变时保留钉入值；端点变更时钉入失效，
+	// 新端点必须重新走测连通 TOFU，绝不把旧端点的信任带过去。
+	var existing model.NodeSSHConfig
+	if err := r.db.Where("node_id = ?", nodeID).First(&existing).Error; err == nil {
+		if existing.Host != row.Host || existing.Port != row.Port || existing.Username != row.Username {
+			assignments["host_key_fingerprint"] = ""
+		}
+	}
 	return r.db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "node_id"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"host":         row.Host,
-			"port":         row.Port,
-			"username":     row.Username,
-			"auth_type":    row.AuthType,
-			"password":     row.Password,
-			"private_key":  row.PrivateKey,
-			"passphrase":   row.Passphrase,
-			"sudo_mode":    row.SudoMode,
-			"updated_time": row.UpdatedTime,
-		}),
+		Columns:   []clause.Column{{Name: "node_id"}},
+		DoUpdates: clause.Assignments(assignments),
 	}).Create(&row).Error
+}
+
+// UpdateNodeSSHHostKeyFingerprint 钉入（或以空串清除）节点 SSH 配置的
+// 主机密钥指纹（C3-02）。配置行不存在时返回 sql.ErrNoRows，禁止对
+// 不存在的配置「钉入成功」。
+func (r *Repository) UpdateNodeSSHHostKeyFingerprint(nodeID int64, fingerprint string, now int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	if nodeID <= 0 {
+		return errors.New("node id is required")
+	}
+	res := r.db.Model(&model.NodeSSHConfig{}).
+		Where("node_id = ?", nodeID).
+		Updates(map[string]interface{}{
+			"host_key_fingerprint": strings.TrimSpace(fingerprint),
+			"updated_time":         now,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (r *Repository) GetNodeSSHConfig(nodeID int64) (*model.NodeSSHConfig, error) {

@@ -23,6 +23,16 @@ func (m *Manager) Test(ctx context.Context, cfg SSHConfig) error {
 	return m.runner.Test(ctx, cfg)
 }
 
+// ProbeHostKeyFingerprint 取回对端呈现的 SSH 主机密钥指纹（TOFU 钉入
+// 用，见包级同名函数：不发送任何凭据）。探针不执行远程命令，故不经
+// runner，直接走包级实现。
+func (m *Manager) ProbeHostKeyFingerprint(ctx context.Context, cfg SSHConfig) (string, error) {
+	if err := m.ensureInitialized(); err != nil {
+		return "", err
+	}
+	return ProbeHostKeyFingerprint(ctx, cfg)
+}
+
 func (m *Manager) Reconcile(ctx context.Context, cfg SSHConfig, plan NodePlan) (ApplyResult, error) {
 	if err := m.ensureInitialized(); err != nil {
 		return ApplyResult{}, err

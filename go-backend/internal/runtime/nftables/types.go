@@ -41,6 +41,11 @@ type SSHConfig struct {
 	PrivateKey string
 	Passphrase string
 	SudoMode   string
+	// HostKeyFingerprint is the pinned SSH host key fingerprint in
+	// ssh.FingerprintSHA256 form ("SHA256:..."). Empty means unpinned:
+	// every operation fails closed (C3-02) until the node's 测连通 flow
+	// pins the presented key via ProbeHostKeyFingerprint (TOFU).
+	HostKeyFingerprint string
 }
 
 type ApplyResult struct {

@@ -24,6 +24,10 @@ type serializedNftManager struct {
 	inner nftablesRuntimeManager
 	mu    sync.Mutex
 	locks map[int64]*sync.Mutex
+	// probeHostKey 取对端呈现的 SSH 主机密钥指纹（C3-02 TOFU 钉入）；
+	// 字段化以便 handler 测试注入，nil 时用
+	// runtimenft.ProbeHostKeyFingerprint（真探针：只握手不认证）。
+	probeHostKey func(ctx context.Context, cfg runtimenft.SSHConfig) (string, error)
 	// X-P3-20（L-08-2）：锁表引用计数（与 repo 端口锁同型）。ReleaseNode
 	// 在引用未归零时只打 zombie 标记，条目待最后一次 unlockFor 后删除，
 	// 避免持锁 Reconcile/Clear 期间新 lockFor 生成第二把锁并发进入。
@@ -200,4 +204,18 @@ func (m *serializedNftManager) Test(ctx context.Context, nodeID int64, cfg runti
 	mu.Lock()
 	defer m.unlockFor(nodeID, mu)
 	return m.inner.Test(ctx, cfg)
+}
+
+// ProbeHostKey 在 per-node 锁内探对端呈现的 SSH 主机密钥指纹
+// （C3-02）：钉入探测与随后的 Test/Reconcile 必须同节点串行，避免
+// 探到的指纹与实际 apply 的连接落在不同时序窗口被替换。
+func (m *serializedNftManager) ProbeHostKey(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig) (string, error) {
+	mu := m.lockFor(nodeID)
+	mu.Lock()
+	defer m.unlockFor(nodeID, mu)
+	probe := m.probeHostKey
+	if probe == nil {
+		probe = runtimenft.ProbeHostKeyFingerprint
+	}
+	return probe(ctx, cfg)
 }
