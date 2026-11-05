@@ -226,6 +226,7 @@ func TestBackupTableCoverage(t *testing.T) {
 		"peer_share_resource":        "联邦运行时状态",
 		"federation_tunnel_binding":  "联邦运行时绑定，跨实例恢复无语义",
 		"federation_pending_release": "联邦运行时状态",
+		"flow_legacy_batch_dedupe": "旧版无序号流量批次去重台账，24 小时保留的运行时簿记（F2-03）",
 		"schema_version":             "迁移簿记",
 		"schema_migration":           "迁移簿记",
 	}
