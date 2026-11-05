@@ -71,7 +71,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 
 1. **脚本安装的完成输出**：安装成功块会直接打印一行「🔑 初始管理员密码（随机生成…）」——那就是首登密码。
 2. **后端启动日志**：日志只点名文件路径、不记录密码本身。查看命令：`docker logs flmx-panel-backend 2>&1 | grep "initial admin password"`（容器名按实际部署替换），输出会给出一次性文件的完整路径。
-3. **数据卷里的一次性文件**：文件名为 `initial-admin-password.txt`，容器内路径 `/app/data/initial-admin-password.txt`（权限 0600）。在宿主机上先查后端容器实际挂载的数据卷名：`docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' flmx-panel-backend`；再查该卷的宿主机挂载点：`docker volume inspect -f '{{.Mountpoint}}' <上一步的卷名>`；最后读 `<挂载点>/initial-admin-password.txt` 即为首登密码。
+3. **数据卷里的一次性文件**：文件名为 `initial-admin-password.txt`，容器内路径 `/app/data/initial-admin-password.txt`（权限 0600）。在宿主机上先查后端容器实际挂载的数据卷名：<span v-pre>`docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' flmx-panel-backend`</span>；再查该卷的宿主机挂载点：<span v-pre>`docker volume inspect -f '{{.Mountpoint}}' <上一步的卷名>`</span>；最后读 `<挂载点>/initial-admin-password.txt` 即为首登密码。
 
 **用环境变量指定初始密码（可选）**：在部署目录 `.env` 里设置 `FLMX_ADMIN_PASSWORD=<自选值>` 后再安装（随版 Compose 模板已透传该变量），播种即采用该值、不再生成随机密码也不落一次性文件。该值同样只用于首次登录；已完成播种的部署再改这个变量不会改变现有管理员密码，可在首登改密后把该行从 `.env` 删除。
 
