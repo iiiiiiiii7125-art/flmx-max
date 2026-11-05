@@ -2979,13 +2979,32 @@ func downloadUpgradeChecksumRouted(ctx context.Context, client *http.Client, pla
 // hash (round-5 L2-08). It runs only when the panel sent no
 // expectedSha256 — with a panel anchor the .sha256 is already a
 // mere cross-check against an out-of-band value. A second route
-// answering with a DIFFERENT hash aborts the upgrade; no second
-// route answering degrades to the single anchor (single-route
-// environments keep today's trust level), announced through
-// note — the caller's panel-visible surface (RV2-03: the upgrade
-// progress channel), not only the agent's stdout; a nil note
-// falls back to stdout.
+// answering with a DIFFERENT hash aborts the upgrade. When no
+// second route answers, the verdict is layered by the winning
+// route (FIX-R2-9, same rule as the script side R2-01-01): a
+// direct winner — or the first-party panel-source route —
+// degrades to the single anchor, announced through note (the
+// caller's panel-visible surface, RV2-03: the upgrade progress
+// channel, not only the agent's stdout; a nil note falls back
+// to stdout); a winning third-party mirror instead fails
+// closed — uncorroborated, the (binary, .sha256) pair it served
+// is its own self-consistent attestation, not verification.
 func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner download.Route, checksumURL, want string, note func(string)) error {
+	// FIX-R2-9 分层判定：获胜线路是否为第三方公共镜像。直连的
+	// Prefix 为空；面板源线路的 Prefix 恒为面板 origin（仅
+	// scheme://host、derivePanelOrigin 不带路径）+ panelMirrorPath
+	// ——第一方：命令下发者的自有镜像端点、与控制通道同信任域，
+	// 且正是为够不到 GitHub/公共镜像的节点所设的首选路，归降级
+	// 类；其余非空 Prefix 只能是编译期内置公共镜像表成员（无一
+	// 以 panelMirrorPath 结尾），归 fail-closed 类。
+	proxyWin := winner.Prefix != "" && !strings.HasSuffix(winner.Prefix, panelMirrorPath)
+	announce := func(msg string) {
+		if note != nil {
+			note(msg)
+		} else {
+			fmt.Printf("⚠️ %s\n", msg)
+		}
+	}
 	var routes []download.Route
 	for _, r := range download.AllRoutes() {
 		if r.Prefix != winner.Prefix {
@@ -2993,18 +3012,20 @@ func corroborateUpgradeChecksum(ctx context.Context, client *http.Client, winner
 		}
 	}
 	if len(routes) == 0 {
+		if proxyWin {
+			return fmt.Errorf("S-02: 跨线路锚复核不可用且获胜线路为代理（%s），无其他线路可复核，已中止升级（FIX-R2-9 第二锚）", winner.Name())
+		}
+		announce("跨线路锚复核已降级：升级校验锚复核不可用（无其他线路可复核），按单锚继续")
 		return nil
 	}
 	actx, cancel := context.WithTimeout(ctx, anchorCorroborateTimeout)
 	defer cancel()
 	got, err := downloadUpgradeChecksum(actx, client, download.NewStaticPlan(routes), checksumURL)
 	if err != nil {
-		msg := fmt.Sprintf("跨线路锚复核已降级：升级校验锚复核不可用（其他线路均未给出校验值），按单锚继续（%v）", err)
-		if note != nil {
-			note(msg)
-		} else {
-			fmt.Printf("⚠️ %s\n", msg)
+		if proxyWin {
+			return fmt.Errorf("S-02: 跨线路锚复核不可用且获胜线路为代理（%s），已中止升级（FIX-R2-9 第二锚）: %v", winner.Name(), err)
 		}
+		announce(fmt.Sprintf("跨线路锚复核已降级：升级校验锚复核不可用（其他线路均未给出校验值），按单锚继续（%v）", err))
 		return nil
 	}
 	if !strings.EqualFold(got, want) {
