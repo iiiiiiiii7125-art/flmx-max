@@ -5510,12 +5510,38 @@ test_panel_anchor_corroboration_degrades() (
   set -euo pipefail
   anchor_fixture_setup
   ANCHOR_SHA_B_FAIL="1"
-  local dest errlog
+  local dest errlog rc=0
+  dest=$(mktemp)
+  errlog=$(mktemp)
+  # R2-01-01: 第二锚与 install.sh 的 A3-03 同口径分层收口——获胜
+  # 线路是第三方代理、异路全部给不出合法校验值时必须拒绝下载且
+  # 文件不得落地：单个代理喂自洽（资产，.sha256）对正是第二锚
+  # 要防的形态，旧实现在此无条件降级单锚放行，本用例旧预期
+  # （仍落地）随修复翻转为拒绝。
+  download_verified_routed "https://github.com/example/asset.yml" "$dest" 2>"$errlog" || rc=$?
+  assert_equals "1" "$rc" "R2-01-01: routed download must fail when a proxy-served asset cannot be corroborated"
+  [[ ! -f "$dest" ]] || fail "R2-01-01: file must not land when the second anchor cannot corroborate"
+  grep -q "第二锚 fail-closed" "$errlog" || fail "R2-01-01: the fail-closed refusal must be named on stderr"
+
+  # 保留点名降级的两类形态：① 直连（规范源）当选、异路无应答
+  # → 点名单锚落地；② 路线表只有一条运维指定路线、无异路可复
+  # 核 → 点名单锚落地。
+  anchor_fixture_setup
+  ANCHOR_SHA_B_FAIL="1"
+  DOWNLOAD_ROUTES=("" "https://b.example")
   dest=$(mktemp)
   errlog=$(mktemp)
   download_verified_routed "https://github.com/example/asset.yml" "$dest" 2>"$errlog"
-  assert_equals "$ANCHOR_BODY" "$(cat "$dest")" "anchor degrade: body should still land when no second route answers"
-  grep -q "跨线路锚复核已降级" "$errlog" || fail "anchor degrade: degradation must be named on stderr"
+  assert_equals "$ANCHOR_BODY" "$(cat "$dest")" "R2-01-01: direct-sourced asset should still land with a named single-anchor degradation"
+  grep -q "跨线路锚复核已降级" "$errlog" || fail "R2-01-01: direct-source degradation must be named on stderr"
+
+  anchor_fixture_setup
+  DOWNLOAD_ROUTES=("https://a.example")
+  dest=$(mktemp)
+  errlog=$(mktemp)
+  download_verified_routed "https://github.com/example/asset.yml" "$dest" 2>"$errlog"
+  assert_equals "$ANCHOR_BODY" "$(cat "$dest")" "R2-01-01: operator-pinned single route should still land with a named single-anchor degradation"
+  grep -q "跨线路锚复核已降级" "$errlog" || fail "R2-01-01: single-route degradation must be named on stderr"
 )
 
 test_preserve_compose_networks_keeps_existing_subnet
