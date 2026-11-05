@@ -350,7 +350,16 @@ jobs:
           python-version: '3.11'
 
       - name: Install e2e dependencies
-        run: pip install "./tests/e2e[dev]"
+        # A4-08: install from the committed lock (exact pins for the
+        # full dependency set incl. transitives, resolved for Python
+        # 3.11), then the project itself with --no-deps — the previous
+        # bare `pip install "./tests/e2e[dev]"` resolved unbounded
+        # >= ranges fresh on every run. Direct deps are also ==-pinned
+        # in tests/e2e/pyproject.toml; keep both in sync per the
+        # header of tests/e2e/requirements.lock.
+        run: |
+          pip install -r tests/e2e/requirements.lock
+          pip install --no-deps "./tests/e2e[dev]"
 
       - name: Run API e2e subset
         working-directory: tests/e2e
