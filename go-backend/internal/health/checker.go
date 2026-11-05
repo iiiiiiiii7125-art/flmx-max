@@ -39,6 +39,12 @@ type Checker struct {
 	checking int32 // atomic flag: 1 = runChecks running, 0 = idle
 }
 
+// tcpDialContext 是本地 TCP 健康检查的拨号面（C3-04 的总截止期
+// 经它生效）；抽为包级变量与 monitorLookupIP 同式，供测试替换
+// 为确定性桩（真实黑洞 IP 的拨号耗时随运行环境网络形态漂移，
+// 不适合做时长断言的真值源）。
+var tcpDialContext = (&net.Dialer{}).DialContext
+
 func NewChecker(repo *repo.Repository, commander nodeCommander) *Checker {
 	return &Checker{
 		repo:          repo,
@@ -461,10 +467,19 @@ func (c *Checker) checkTCP(target string, timeout time.Duration, result *model.S
 		fail(err.Error())
 		return
 	}
+	// C3-04：全部 IP 共用一个总截止期。此前每 IP 用满 timeout，
+	// N 个解析 IP 的最坏总时长是 N×timeout，违反 monitoring.md
+	// 的单检 60s 帽（一个多 A/AAAA 的黑洞目标可串行饿死 worker
+	// 池）。现以剩余预算逐个拨号，预算耗尽即停。
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	var conn net.Conn
 	for _, ip := range ips {
-		conn, err = net.DialTimeout("tcp", net.JoinHostPort(ip.String(), port), timeout)
+		conn, err = tcpDialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
 		if err == nil {
+			break
+		}
+		if ctx.Err() != nil {
 			break
 		}
 	}
