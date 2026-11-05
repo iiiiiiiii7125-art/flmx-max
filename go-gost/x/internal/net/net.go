@@ -131,3 +131,20 @@ func (c *readWriteConn) Read(p []byte) (int, error) {
 func (c *readWriteConn) Write(p []byte) (int, error) {
 	return c.w.Write(p)
 }
+
+// CloseWrite forwards a half-close to the wrapped conn when it
+// supports one, so relay code (Transport) can propagate end-of-stream
+// through this wrapper instead of silently dropping the signal.
+func (c *readWriteConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errHalfCloseNotSupported
+}
+
+func (c *readWriteConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return errHalfCloseNotSupported
+}
