@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -202,6 +203,7 @@ type WebSocketReporter struct {
 	connecting        bool               // 正在连接状态
 	connMutex         sync.Mutex         // 连接状态锁
 	aesCrypto         *crypto.AESCrypto  // AES加密器
+	seenCommands      *seenCommandIDs    // D1-02: 已处理 requestId 集合（防信封重放）
 	tcpPingQueue      chan queuedTCPPing // TcpPing 专用队列 + worker 池（tcp_ping_queue.go）
 	readCommandSem    chan struct{}      // 限制只读命令并发，避免诊断请求耗尽资源
 	mutationQueue     chan CommandMessage
@@ -238,6 +240,7 @@ func NewWebSocketReporter(serverURL string, secret string) *WebSocketReporter {
 		connected:      false,
 		connecting:     false,
 		aesCrypto:      aesCrypto,
+		seenCommands:   newSeenCommandIDs(),
 		tcpPingQueue:   make(chan queuedTCPPing, maxQueuedTCPPings),
 		readCommandSem: make(chan struct{}, maxConcurrentReadCommands),
 		mutationQueue:  make(chan CommandMessage, maxQueuedMutationCommands),
@@ -975,6 +978,89 @@ func (w *WebSocketReporter) commandChannelSecretConfigured() bool {
 	return w.aesCrypto != nil || w.secret != ""
 }
 
+const (
+	// commandReplayWindow is how long a claimed requestId stays claimed.
+	// An encrypted envelope's timestamp may sit up to
+	// maxEncryptedCommandSkew in the future and stays acceptable until
+	// maxEncryptedCommandSkew after it, so a claim must live twice the
+	// skew to cover the envelope's whole acceptance span.
+	commandReplayWindow = 2 * maxEncryptedCommandSkew
+	// maxSeenCommandIDs bounds the claim set. Panel command rates are
+	// low (mutations serialize, reads cap at maxConcurrentReadCommands),
+	// so this only trips under a replay flood; expired claims are pruned
+	// first and the oldest claims evicted after that.
+	maxSeenCommandIDs = 8192
+)
+
+// seenCommandIDs is the bounded claim set behind D1-02 replay rejection.
+type seenCommandIDs struct {
+	mu     sync.Mutex
+	claims map[string]time.Time // requestId -> claim expiry
+}
+
+func newSeenCommandIDs() *seenCommandIDs {
+	return &seenCommandIDs{claims: make(map[string]time.Time)}
+}
+
+// claim records id as seen at now and reports whether it was fresh.
+// A duplicate inside the window returns false. Empty ids are always
+// fresh: they cannot be told apart, and no supported sender omits the
+// requestId.
+func (s *seenCommandIDs) claim(id string, now time.Time) bool {
+	if id == "" {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if expiry, ok := s.claims[id]; ok && now.Before(expiry) {
+		return false
+	}
+	s.claims[id] = now.Add(commandReplayWindow)
+	if len(s.claims) > maxSeenCommandIDs {
+		for k, expiry := range s.claims {
+			if !now.Before(expiry) {
+				delete(s.claims, k)
+			}
+		}
+		if overflow := len(s.claims) - maxSeenCommandIDs*7/8; overflow > 0 {
+			// Evict the oldest claims in one batch so a sustained
+			// flood does not pay a full scan per claim.
+			type claimEntry struct {
+				id     string
+				expiry time.Time
+			}
+			entries := make([]claimEntry, 0, len(s.claims))
+			for k, expiry := range s.claims {
+				entries = append(entries, claimEntry{k, expiry})
+			}
+			sort.Slice(entries, func(i, j int) bool { return entries[i].expiry.Before(entries[j].expiry) })
+			for _, e := range entries[:overflow] {
+				delete(s.claims, e.id)
+			}
+		}
+	}
+	return true
+}
+
+func (s *seenCommandIDs) size() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.claims)
+}
+
+// claimCommandRequestID claims a received command's requestId (D1-02).
+// The claim set lives on the reporter, so it survives reconnects within
+// the process.
+func (w *WebSocketReporter) claimCommandRequestID(id string, now time.Time) bool {
+	if w.seenCommands == nil {
+		// Zero-value reporters (tests, ad-hoc construction) lazily
+		// acquire a claim set; the double-check race is benign because
+		// NewWebSocketReporter is the production constructor.
+		w.seenCommands = newSeenCommandIDs()
+	}
+	return w.seenCommands.claim(id, now)
+}
+
 // dispatchReceivedCommand is the single gate every parsed inbound command
 // passes through before dispatch (D1-01). Compatibility basis: every
 // panel of this product line encrypts commands whenever the node secret
@@ -999,6 +1085,15 @@ func (w *WebSocketReporter) dispatchReceivedCommand(cmd CommandMessage, wasEncry
 			return
 		}
 		w.warnPlaintextCommandOnce()
+	}
+	// D1-02: the timestamp window alone does not stop a verbatim replay
+	// of a captured envelope inside the window. Each requestId executes
+	// at most once per claim window; a repeat is rejected with an
+	// explicit receipt instead of executing again.
+	if !w.claimCommandRequestID(cmd.RequestId, time.Now()) {
+		fmt.Printf("❌ 拒绝重放命令: type=%s requestId=%s\n", cmd.Type, cmd.RequestId)
+		w.sendCommandFailure(cmd, "重复的命令 requestId，疑似信封重放，已拒绝再次执行")
+		return
 	}
 	w.dispatchCommand(cmd)
 }
