@@ -61,12 +61,12 @@ func TestApplyInboundCounterSamplesDuplicateInBatchF075(t *testing.T) {
 	if err := r.DB().Create(&inbound).Error; err != nil {
 		t.Fatalf("create inbound: %v", err)
 	}
-	if err := r.ApplyInboundCounterSamples([]InboundCounterSample{
+	if err := r.ApplyInboundCounterSamples(0, []InboundCounterSample{
 		{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: "e1", Bytes: 500},
 	}, 1000); err != nil {
 		t.Fatalf("apply baseline: %v", err)
 	}
-	if err := r.ApplyInboundCounterSamples([]InboundCounterSample{
+	if err := r.ApplyInboundCounterSamples(0, []InboundCounterSample{
 		{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: "e1", Bytes: 700},
 		{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: "e1", Bytes: 900},
 	}, 2000); err != nil {

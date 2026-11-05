@@ -11,10 +11,22 @@ import (
 	"time"
 
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 )
 
 const bytesPerGB int64 = 1024 * 1024 * 1024
 const bytesPerMiB int64 = 1024 * 1024
+
+// saturatingFlowSum is the F2-04 quota-sum guard for this file:
+// a forward/user-tunnel usage total must saturate at MaxInt64
+// instead of wrapping negative, because a wrapped sum reads as
+// "no usage" and the quota decision below would never fire (the
+// restore path can legitimately produce near-MaxInt64 counters).
+//
+//go:noinline
+func saturatingFlowSum(inFlow, outFlow int64) int64 {
+	return repo.SaturatingAddInt64(inFlow, outFlow)
+}
 
 func flowLimitBytes(flowGB, flowMiB int64) int64 {
 	if flowMiB > 0 {
@@ -272,7 +284,7 @@ func (h *Handler) ensureUserTunnelForwardAllowedWithReserved(userID int64, tunne
 	}
 
 	flowLimit := flowLimitBytes(user.Flow, user.FlowMiB)
-	current := user.InFlow + user.OutFlow
+	current := saturatingFlowSum(user.InFlow, user.OutFlow)
 	// O2-006：配额边界统一为 fail-closed：等于上限也拦截，与隧道级 utCurrent >= utFlowLimit 一致
 	// 旧逻辑 flowLimit < current 允许"刚好用满"时开启新转发
 	// R9X-001：flowLimit == 0 表示不限额（与 Num/ExpTime 的 >0 守卫同形），不得判超额
@@ -317,7 +329,7 @@ func (h *Handler) ensureUserTunnelForwardAllowedWithReserved(userID int64, tunne
 	}
 
 	utFlowLimit := flowLimitBytes(policy.Flow, policy.FlowMiB)
-	utCurrent := policy.InFlow + policy.OutFlow
+	utCurrent := saturatingFlowSum(policy.InFlow, policy.OutFlow)
 	// R9X-001：utFlowLimit == 0 表示不限额，不得判超额
 	if utFlowLimit > 0 && utCurrent >= utFlowLimit {
 		return errors.New("该隧道流量已超额，禁止开启转发")
@@ -343,7 +355,7 @@ func (h *Handler) shouldPauseUser(userID int64, now int64) bool {
 	}
 
 	flowLimit := flowLimitBytes(user.Flow, user.FlowMiB)
-	current := user.InFlow + user.OutFlow
+	current := saturatingFlowSum(user.InFlow, user.OutFlow)
 	// O2-006：与创建检查一致，等于上限也暂停（fail-closed）
 	// R9X-001：flowLimit == 0 表示不限额，不得暂停
 	if flowLimit > 0 && flowLimit <= current {
@@ -361,7 +373,7 @@ func shouldPauseUserTunnel(policy *userTunnelPolicy, now int64) bool {
 	}
 
 	flowLimit := flowLimitBytes(policy.Flow, policy.FlowMiB)
-	current := policy.InFlow + policy.OutFlow
+	current := saturatingFlowSum(policy.InFlow, policy.OutFlow)
 	// R9X-001：flowLimit == 0 表示不限额，不得暂停
 	if flowLimit > 0 && current >= flowLimit {
 		return true

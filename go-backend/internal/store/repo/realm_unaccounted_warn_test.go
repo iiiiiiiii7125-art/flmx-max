@@ -30,7 +30,7 @@ func TestApplyInboundCounterSamplesUnaccountedWarn(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(old)
 
-	if err := r.ApplyInboundCounterSamples([]InboundCounterSample{
+	if err := r.ApplyInboundCounterSamples(0, []InboundCounterSample{
 		{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: "e1", Bytes: 100},
 		{InboundID: 1 << 40, Protocol: "tcp", Direction: "in", Epoch: "e1", Bytes: 555},
 	}, 1000); err != nil {

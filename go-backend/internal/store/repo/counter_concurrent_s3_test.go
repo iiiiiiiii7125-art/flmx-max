@@ -79,13 +79,13 @@ func TestApplyInboundCounterSamplesConcurrentSameSampleCountsOnce(t *testing.T) 
 	if err := r.DB().Create(&inbound).Error; err != nil {
 		t.Fatalf("create inbound: %v", err)
 	}
-	if err := r.ApplyInboundCounterSamples([]InboundCounterSample{
+	if err := r.ApplyInboundCounterSamples(0, []InboundCounterSample{
 		{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: "e1", Bytes: 1000},
 	}, 1000); err != nil {
 		t.Fatalf("apply baseline: %v", err)
 	}
 	fireConcurrentApplies(t, 8, func() error {
-		return r.ApplyInboundCounterSamples([]InboundCounterSample{
+		return r.ApplyInboundCounterSamples(0, []InboundCounterSample{
 			{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: "e1", Bytes: 1500},
 		}, 2000)
 	})

@@ -3,8 +3,10 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1601,6 +1603,10 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte("error"))
 			return
 		}
+		// F2-03：无 seq 批次的内容哈希（解密后明文的 SHA-256），
+		// 入账事务内落盘领取防逐字重放；带 seq 批次为空（seq 本身
+		// 即重放防护）。窗口与窗口外口径见 repo/flow_legacy_dedupe.go。
+		legacyBatchHash := ""
 		if seq == nil {
 			// C1-01：无 seq 的 legacy 形态没有任何重放防护，纳入
 			// 落日收紧（flowV1LegacySunset）：落日后整批拒收返非
@@ -1614,6 +1620,8 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			w.Header().Set("Deprecation", "true")
 			w.Header().Set("Sunset", flowV1LegacySunsetHTTPDate)
+			sum := sha256.Sum256([]byte(raw))
+			legacyBatchHash = hex.EncodeToString(sum[:])
 		}
 		if items != nil {
 			now := time.Now()
@@ -1656,9 +1664,14 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 					_, _ = w.Write([]byte("error"))
 					return
 				}
-				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq}
+				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq, LegacyBatchHash: legacyBatchHash}
 				if applyErr := h.applyFlowUploadBatch(node.ID, batch, now); applyErr != nil {
-					if errors.Is(applyErr, repo.ErrSeqReplay) {
+					if errors.Is(applyErr, repo.ErrLegacyBatchReplay) {
+						// F2-03：同节点同内容 legacy 批次已入账——
+						// 整 tx 回滚未重复入账，按重放分支回 ok
+						// 终止 agent 重试。
+						log.Printf("flow upload legacy batch replay rejected node_id=%d", node.ID)
+					} else if errors.Is(applyErr, repo.ErrSeqReplay) {
 						// R2X-011：并发同 seq 已由另一入账消费——
 						// 本批整 tx 回滚未入账，按既有重放分支回
 						// ok 终止 agent 重试，不重复入账。
@@ -2850,6 +2863,27 @@ func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *m
 	// 不留「授权已撤、转发仍跑」的静默残留。
 	for _, pair := range result.RevokedUserTunnels {
 		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
+	}
+
+	// F2-04：转发重推之前先做一轮配额重估。恢复出的计数已过负值
+	// 门，但仍可为合法的超限值（乃至 MaxInt64）：若不重估，
+	// repush 会把超限用户/订阅/共享的 status=1 转发与凭据按
+	// 「可用」终态直接下发上线。此处与运行时入账后的执法面同
+	// 口径：用户日/月配额全量扫、订阅同步（超限摘凭据）、备份
+	// 内用户隧道对逐对跑流量策略、联邦共享超限清理。全部幂等，
+	// 未超限者无副作用。
+	h.reconcileUserQuotaEnforcement(time.Now())
+	h.syncSubscriptions(time.Now())
+	if backup != nil {
+		for _, ut := range backup.UserTunnels {
+			h.enforceFlowPolicies(ut.UserID, ut.ID)
+		}
+		for _, sb := range backup.PeerShares {
+			share, err := h.repo.GetPeerShare(sb.ID)
+			if err == nil && share != nil && isPeerShareFlowExceeded(share) {
+				h.enforcePeerShareFlowLimit(sb.ID)
+			}
+		}
 	}
 
 	// R13X-001（P2）：导入成功后对受影响节点集补一次转发重布（见

@@ -425,6 +425,36 @@ func (r *Repository) Close() error {
 	return sqlDB.Close()
 }
 
+// finishInboundCounterNodeScope F2-02: completes the per-node keying
+// of node_inbound_counter baselines after AutoMigrate has run. GORM
+// AutoMigrate never drops indexes, so the pre-F2-02 global unique
+// index (idx_node_inbound_counter_key over inbound/protocol/direction
+// only) is removed explicitly — while it exists, a second node's
+// baseline row for the same inbound cannot be inserted at all. Rows
+// carrying node_id = 0 are pre-column legacy baselines with no owner;
+// they are cleared rather than attributed by guesswork, and the next
+// sample from the owning node re-establishes the baseline under the
+// standing "missing baseline counts delta = 0" semantics, so the
+// migration can neither double-count nor lose booked totals. Both
+// steps are idempotent and run on every startup (subsequent runs find
+// neither the old index nor ownerless rows).
+func finishInboundCounterNodeScope(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.NodeInboundCounter{}) {
+		return nil
+	}
+	if db.Migrator().HasIndex(&model.NodeInboundCounter{}, "idx_node_inbound_counter_key") {
+		if err := db.Migrator().DropIndex(&model.NodeInboundCounter{}, "idx_node_inbound_counter_key"); err != nil {
+			return err
+		}
+	}
+	if db.Migrator().HasColumn(&model.NodeInboundCounter{}, "node_id") {
+		if err := db.Where("node_id = ?", 0).Delete(&model.NodeInboundCounter{}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func autoMigrateAll(db *gorm.DB) error {
 	if db.Dialector.Name() == "sqlite" {
 		if err := prepareSQLiteNftablesColumns(db); err != nil {
@@ -456,6 +486,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NftCounterState{},
 		&model.NftPendingDelete{},
 		&NodeSeq{},
+		&FlowLegacyBatchDedupe{},
 		&TrafficStreamCursor{},
 		&model.SpeedLimit{},
 		&model.StatisticsFlow{},
@@ -497,6 +528,9 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := db.AutoMigrate(models...); err != nil {
 			return err
 		}
+		if err := finishInboundCounterNodeScope(db); err != nil {
+			return err
+		}
 		// B4/F-009: PG 此前在此提前 return，R5-B4 版本化迁移从未在 PG 上
 		// 执行——四个唯一索引在 PG 永远建不上，migration_status 却按
 		// "下次启动会自动建"汇报。迁移函数本身是双言写的（索引存在性
@@ -529,6 +563,10 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := db.AutoMigrate(item); err != nil {
 			return err
 		}
+	}
+
+	if err := finishInboundCounterNodeScope(db); err != nil {
+		return err
 	}
 
 	// 显式补列兜底：防止未来新增字段时 AutoMigrate 未生效（历史教训：latency_targets 事件）
@@ -3094,6 +3132,21 @@ type importReport struct {
 	revoked []RevokedUserTunnelPair
 }
 
+// clampImportedCounter 是 F2-04 的恢复面计数器门：流量计数器在任
+// 何正常写面都只能由饱和累加产生（恒 ≥ 0），负值不在合法集内——
+// 恢复若原样落库，负基会让此后全部配额判定（used ≥ limit）在积
+// 累等量真实流量前恒假，形成持久静默绕过。故负值一律钳为 0 并经
+// rep.warnf 在回执中点名（段行、字段、原值），与本文件既有恢复门
+// 「逐行处置 + 回执点名」同形。正数（含合法的大额计数）不设上限
+// 钳制——超限处置由导入尾的配额重估负责，求和面另有饱和守卫。
+func clampImportedCounter(rep *importReport, label, field string, v int64) int64 {
+	if v >= 0 {
+		return v
+	}
+	rep.warnf("备份恢复：%s 的计数器 %s=%d 为负值，已按 0 恢复", label, field, v)
+	return 0
+}
+
 func (rep *importReport) addRevoked(pairs []RevokedUserTunnelPair) {
 	if rep == nil {
 		return
@@ -3467,6 +3520,7 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 		if security.IsLegacyPasswordHash(u.Pwd) || u.Pwd == "" {
 			passwordChangedAt = now
 		}
+		userLabel := fmt.Sprintf("用户 #%d（%q）", u.ID, username)
 		item := model.User{
 			ID:            u.ID,
 			User:          username,
@@ -3475,8 +3529,8 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 			ExpTime:       u.ExpTime,
 			Flow:          u.Flow,
 			FlowMiB:       u.FlowMiB,
-			InFlow:        u.InFlow,
-			OutFlow:       u.OutFlow,
+			InFlow:        clampImportedCounter(rep, userLabel, "inFlow", u.InFlow),
+			OutFlow:       clampImportedCounter(rep, userLabel, "outFlow", u.OutFlow),
 			FlowResetTime: u.FlowResetTime,
 			// R11X-005: restored counters count from the import
 			// moment (backup format carries no reset marker).
@@ -3517,6 +3571,10 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 				monthKey = int64(current.Year()*100 + int(current.Month()))
 				dailyUsed, monthlyUsed, pausedForwardIDs = 0, 0, ""
 			}
+			// F2-04：带窗口键保真恢复的已用量同样过计数器门（负已
+			// 用量会让日/月配额判定在积累等量真实流量前恒假）。
+			dailyUsed = clampImportedCounter(rep, userLabel, "dailyUsedBytes", dailyUsed)
+			monthlyUsed = clampImportedCounter(rep, userLabel, "monthlyUsedBytes", monthlyUsed)
 			quotaItem := model.UserQuota{
 				UserID:           u.ID,
 				DailyLimitGB:     u.DailyQuotaGB,
@@ -3932,7 +3990,7 @@ func importPeerShares(tx *gorm.DB, rows []model.PeerShareBackup, now int64, rep 
 			ID: s.ID, Name: s.Name, NodeID: s.NodeID, Token: s.Token,
 			MaxBandwidth: s.MaxBandwidth, ExpiryTime: s.ExpiryTime,
 			PortRangeStart: s.PortRangeStart, PortRangeEnd: s.PortRangeEnd,
-			CurrentFlow: s.CurrentFlow, IsActive: s.IsActive,
+			CurrentFlow: clampImportedCounter(rep, fmt.Sprintf("面板共享 #%d（%q）", s.ID, s.Name), "currentFlow", s.CurrentFlow), IsActive: s.IsActive,
 			CreatedTime: s.CreatedTime, UpdatedTime: updated,
 			AllowedDomains: allowedDomains, AllowedIPs: s.AllowedIPs,
 			RelayUsername: s.RelayUsername, RelayPassword: s.RelayPassword,
@@ -4656,8 +4714,8 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 			TunnelID:             f.TunnelID,
 			RemoteAddr:           f.RemoteAddr,
 			Strategy:             strategy,
-			InFlow:               f.InFlow,
-			OutFlow:              f.OutFlow,
+			InFlow:               clampImportedCounter(rep, fmt.Sprintf("转发 #%d（%q）", f.ID, f.Name), "inFlow", f.InFlow),
+			OutFlow:              clampImportedCounter(rep, fmt.Sprintf("转发 #%d（%q）", f.ID, f.Name), "outFlow", f.OutFlow),
 			CreatedTime:          f.CreatedTime,
 			UpdatedTime:          now,
 			Status:               status,
@@ -4864,8 +4922,8 @@ func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, now in
 			Num:           ut.Num,
 			Flow:          ut.Flow,
 			FlowMiB:       ut.FlowMiB,
-			InFlow:        ut.InFlow,
-			OutFlow:       ut.OutFlow,
+			InFlow:        clampImportedCounter(rep, fmt.Sprintf("用户隧道授权 #%d", ut.ID), "inFlow", ut.InFlow),
+			OutFlow:       clampImportedCounter(rep, fmt.Sprintf("用户隧道授权 #%d", ut.ID), "outFlow", ut.OutFlow),
 			FlowResetTime: ut.FlowResetTime,
 			// R11X-005: see importUsers (marker = import moment).
 			FlowLastResetTime: now,

@@ -41,7 +41,7 @@ func TestApplyInboundCounterSamplesChunkedPartialProgressAndRetry(t *testing.T) 
 		t.Fatalf("create trigger: %v", err)
 	}
 
-	if err := r.ApplyInboundCounterSamples(samples, 1000); err == nil {
+	if err := r.ApplyInboundCounterSamples(0, samples, 1000); err == nil {
 		t.Fatalf("expected apply to fail on sentinel sample")
 	}
 	// 第一片（200 条）应已提交：基线与总量同步前进。
@@ -69,7 +69,7 @@ func TestApplyInboundCounterSamplesChunkedPartialProgressAndRetry(t *testing.T) 
 	if err := r.DB().Exec(`DROP TRIGGER d603_fail`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := r.ApplyInboundCounterSamples(samples, 2000); err != nil {
+	if err := r.ApplyInboundCounterSamples(0, samples, 2000); err != nil {
 		t.Fatalf("retry apply: %v", err)
 	}
 	for i, id := range ids {

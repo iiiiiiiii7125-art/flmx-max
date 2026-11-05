@@ -131,7 +131,7 @@ func TestPostgresApplyInboundCounterSamplesConcurrentDoubleApplyContract(t *test
 	}
 	apply := func(bytes int64) func() error {
 		return func() error {
-			return r.ApplyInboundCounterSamples([]repo.InboundCounterSample{
+			return r.ApplyInboundCounterSamples(0, []repo.InboundCounterSample{
 				{InboundID: inbound.ID, Protocol: "vless", Direction: "in", Epoch: "e1", Bytes: bytes},
 			}, time.Now().UnixMilli())
 		}

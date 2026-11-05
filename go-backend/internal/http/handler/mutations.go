@@ -4357,6 +4357,20 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("隧道已禁用，无法创建转发"))
 		return
 	}
+	// F2-05：预检→提交全程持 per-user 配额执法锁（与用户配额执
+	// 法面共用同一把锁），串行化同用户的创建/恢复/执法交错；提
+	// 交段另有 CreateForwardTx 事务内复检兜底（权威面）。锁在
+	// CreateForwardTx 返回后立即释放（其后是数据面同步，不再
+	// 涉及条数判定），defer 仅作早退兜底。
+	unlockQuota := h.lockUserQuotaEnforcement(userID)
+	quotaReleased := false
+	releaseQuota := func() {
+		if !quotaReleased {
+			quotaReleased = true
+			unlockQuota()
+		}
+	}
+	defer releaseQuota()
 	if err := h.ensureUserTunnelForwardAllowed(userID, tunnelID, time.Now().UnixMilli()); err != nil {
 		if respondInternalIfRepoError(w, "forwardCreate: ensureUserTunnelForwardAllowed failed", err) {
 			return
@@ -4539,7 +4553,13 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	proxyProtocolSend := asInt(req["proxyProtocolSend"], proxyProtocol)
 
 	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnelID, remoteAddr, strategy, now, inx, entryNodes, port, inIp, nullableInt(speedID), maxConn, ipMaxConn, nullableInt(ipSpeedID), proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
+	releaseQuota()
 	if err != nil {
+		// F2-05：事务内条数复检命中——与锁外预检同文案回执。
+		if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 		// 端口占用冲突是仓储层已映射的友好错误（repo.ErrPortInUse），
 		// 原样回；其余事务错误（含 DB 约束原文）收口。
 		if errors.Is(err, repo.ErrPortInUse) {
@@ -5286,6 +5306,11 @@ func (h *Handler) forwardResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UnixMilli()
+	// F2-05：恢复与创建共用条数竞态面——预检与状态激活之间持
+	// per-user 配额执法锁串行化（defer 至函数尾，覆盖
+	// ActivateForwardIfNotPending 的落库点）。
+	unlockQuota := h.lockUserQuotaEnforcement(forward.UserID)
+	defer unlockQuota()
 	if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
 		if respondInternalIfRepoError(w, "forwardResume: ensureUserTunnelForwardAllowed failed", err) {
 			return

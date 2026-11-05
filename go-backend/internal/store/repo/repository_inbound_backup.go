@@ -1056,7 +1056,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 			Settings: healedSettings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: shareMode, Remark: i.Remark,
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
 			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: whitelistExtra, Enabled: i.Enabled,
-			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
+			UploadBytes: clampImportedCounter(rep, fmt.Sprintf("入站 #%d（%q）", i.ID, i.Name), "uploadBytes", i.UploadBytes), DownloadBytes: clampImportedCounter(rep, fmt.Sprintf("入站 #%d（%q）", i.ID, i.Name), "downloadBytes", i.DownloadBytes), Inx: i.Inx,
 			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
 			SplitRules: splitRules, OutboundIPStrategy: strategy, MeteringEnabled: i.MeteringEnabled,
 			ConnIdleSeconds: i.ConnIdleSeconds,
@@ -1210,20 +1210,24 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	// twice when the restored panel talks to the same nodes.
 	for _, c := range b.Counters {
 		// D4-03：引用的入站不存在时跳过该基线并计数。
-		counterInboundExists, err := rowExistsTx(tx, &model.NodeInbound{}, c.InboundID)
-		if err != nil {
-			return inboundImportCounts{}, err
-		}
-		if !counterInboundExists {
+		// F2-02：基线按节点键控，恢复行须归属到入站所属节点（备份
+		// 格式不带 node_id，以恢复后入站行的 node_id 为准），否则
+		// 与新唯一键冲突目标不符、且会被启动迁移按无主基线清掉。
+		var counterInbound struct{ NodeID int64 }
+		err := tx.Model(&model.NodeInbound{}).Select("node_id").Where("id = ?", c.InboundID).First(&counterInbound).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			rep.skip("inboundCounters")
 			continue
 		}
+		if err != nil {
+			return inboundImportCounts{}, err
+		}
 		item := model.NodeInboundCounter{
-			InboundID: c.InboundID, Protocol: c.Protocol, Direction: c.Direction,
-			Epoch: c.Epoch, Bytes: c.Bytes, UpdatedTime: now,
+			NodeID: counterInbound.NodeID, InboundID: c.InboundID, Protocol: c.Protocol, Direction: c.Direction,
+			Epoch: c.Epoch, Bytes: clampImportedCounter(rep, fmt.Sprintf("入站计数基线（入站 #%d）", c.InboundID), "bytes", c.Bytes), UpdatedTime: now,
 		}
 		if err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "inbound_id"}, {Name: "protocol"}, {Name: "direction"}},
+			Columns:   []clause.Column{{Name: "node_id"}, {Name: "inbound_id"}, {Name: "protocol"}, {Name: "direction"}},
 			DoUpdates: clause.AssignmentColumns([]string{"epoch", "bytes", "updated_time"}),
 		}).Create(&item).Error; err != nil {
 			return inboundImportCounts{}, err
@@ -1458,7 +1462,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		item := model.Subscription{
 			Name: sb.Name, Kind: sb.Kind, Token: sb.Token, UUID: sb.UUID, Password: sb.Password,
 			SourceAll: sb.SourceAll, InboundIDs: keptInboundIDs, SourceIDs: keptSourceIDs, Options: cleanOptions, ExpireTime: sb.ExpireTime, Enabled: sb.Enabled, Remark: sb.Remark, Inx: sb.Inx, CreatedTime: sb.CreatedTime, UpdatedTime: now,
-			UploadBytes: sb.UploadBytes, DownloadBytes: sb.DownloadBytes, TrafficLimit: sb.TrafficLimit,
+			UploadBytes: clampImportedCounter(rep, fmt.Sprintf("订阅 #%d（%q）", sb.ID, sb.Name), "uploadBytes", sb.UploadBytes), DownloadBytes: clampImportedCounter(rep, fmt.Sprintf("订阅 #%d（%q）", sb.ID, sb.Name), "downloadBytes", sb.DownloadBytes), TrafficLimit: sb.TrafficLimit,
 			ResetDay: sb.ResetDay, TrafficResetTime: sb.TrafficResetTime, TrafficSince: sb.TrafficSince, PendingDelete: sb.PendingDelete,
 		}
 		// Every subscription has its own credentials (older backups may
@@ -1544,7 +1548,7 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		item := model.SubscriptionCounter{
 			NodeID: c.NodeID, SubscriptionID: subID, Direction: c.Direction,
-			Epoch: c.Epoch, Bytes: c.Bytes, UpdatedTime: now,
+			Epoch: c.Epoch, Bytes: clampImportedCounter(rep, fmt.Sprintf("订阅计数基线（订阅 #%d）", subID), "bytes", c.Bytes), UpdatedTime: now,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "node_id"}, {Name: "subscription_id"}, {Name: "direction"}},

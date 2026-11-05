@@ -619,6 +619,11 @@ func (r *Repository) GetSpeedLimitSpeed(id int64) (int, error) {
 type FlowSeqAdvance struct {
 	NodeID int64
 	Seq    *int64
+	// LegacyBatchHash F2-03：无 seq（legacy）批次的内容哈希
+	// （解密后明文的 SHA-256）。非空且 Seq 为 nil 时，入账事务
+	// 内先领取该哈希（flow_legacy_batch_dedupe），同节点同哈希
+	// 已登记则整 tx 以 ErrLegacyBatchReplay 回滚、不重复入账。
+	LegacyBatchHash string
 }
 
 // ApplyFlowUploadAccounting X-P3-31（V-08）：gost 入账单事务——
@@ -632,6 +637,14 @@ func (r *Repository) ApplyFlowUploadAccounting(deltas []FlowUploadCounterDelta, 
 	}
 	quotaViews := map[int64]*model.UserQuotaView{}
 	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// F2-03：legacy 内容领取是本 tx 的第一道门（先于 seq 推进
+		// 与全部入账）——领取未命中（ErrLegacyBatchReplay）时整 tx
+		// 在写入任何账目前回滚，与 seq 重放同口径。
+		if seqAdv != nil && seqAdv.NodeID > 0 && seqAdv.Seq == nil && seqAdv.LegacyBatchHash != "" {
+			if err := claimLegacyBatchTx(tx, seqAdv.NodeID, seqAdv.LegacyBatchHash, now.UnixMilli()); err != nil {
+				return err
+			}
+		}
 		// R2X-011：seq 推进提到 deltas 之前——推进失败（ErrSeqReplay）
 		// 时整 tx 在写入任何账目前即回滚，重放判定不依赖写入顺序的
 		// 副作用残留；且推进本身是本 tx 的第一道门。
