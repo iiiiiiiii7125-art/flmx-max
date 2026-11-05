@@ -24,7 +24,7 @@ func b606SeedResource(t *testing.T, h *Handler, share *repo.PeerShare, kind, nam
 	item := repo.PeerShareResource{
 		ShareID: share.ID, NodeID: share.NodeID, Kind: kind, OriginalName: name,
 		RuntimeName: peerShareResourceName(share.ID, kind, name),
-		Config: string(raw), DesiredState: desired, Applied: 1,
+		Config:      string(raw), DesiredState: desired, Applied: 1,
 	}
 	if err := h.repo.SavePeerShareResources([]repo.PeerShareResource{item}); err != nil {
 		t.Fatal(err)

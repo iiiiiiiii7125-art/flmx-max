@@ -62,9 +62,9 @@ func TestB601PeerResourceCertFilePathsRejected(t *testing.T) {
 			check: "casefile", kind: "service",
 		},
 		{
-			name: "chain dialer tls caFile",
-			cmd:  "AddChains",
-			data: map[string]interface{}{"name": "chainfile", "hops": []interface{}{map[string]interface{}{"name": "h1", "nodes": []interface{}{map[string]interface{}{"name": "n1", "addr": "127.0.0.1:8080", "connector": map[string]interface{}{"type": "relay"}, "dialer": map[string]interface{}{"type": "tls", "tls": map[string]interface{}{"caFile": "/etc/ssl/certs/ca.pem"}}}}}}},
+			name:  "chain dialer tls caFile",
+			cmd:   "AddChains",
+			data:  map[string]interface{}{"name": "chainfile", "hops": []interface{}{map[string]interface{}{"name": "h1", "nodes": []interface{}{map[string]interface{}{"name": "n1", "addr": "127.0.0.1:8080", "connector": map[string]interface{}{"type": "relay"}, "dialer": map[string]interface{}{"type": "tls", "tls": map[string]interface{}{"caFile": "/etc/ssl/certs/ca.pem"}}}}}}},
 			check: "chainfile", kind: "chain",
 		},
 	}
