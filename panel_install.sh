@@ -207,13 +207,27 @@ route_url() {
 }
 
 # probe_route <前缀>：探测单条路线，活则回显耗时秒数、死则失败。
+# 渠道 tag 文法的唯一出处（J-02）：稳定渠道只接受纯数字点分
+# tag；FLMX_RELEASE_CHANNEL=dev|beta 时接受任意数字开头 tag。
+# resolve_latest_release_tag 与 probe_route 共用——A1-04 前探测
+# 侧写死宽文法，稳定渠道下会把重定向落到预发布 tag 的路线判
+# 活，与解析器随后按渠道文法拒绝该 tag 的口径漂移；对齐后两
+# 处同松同紧、永不各自演化。
+release_tag_pattern() {
+  case "${FLMX_RELEASE_CHANNEL:-stable}" in
+    dev|beta) printf '%s' '^[0-9][0-9A-Za-z.\-]*$' ;;
+    *) printf '%s' '^[0-9]+(\.[0-9]+)+$' ;;
+  esac
+}
+
 probe_route() {
   local prefix="$1"
-  local out effective tag
+  local out effective tag tag_pattern
   out=$(curl -fsSL -o /dev/null --connect-timeout 3 --max-time 5 -w '%{time_total} %{url_effective}' "$(route_url "$prefix" "https://github.com/${REPO}/releases/latest")" 2>/dev/null) || return 1
   effective="${out#* }"
   tag="${effective##*/}"
-  [[ "$tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]] || return 1
+  tag_pattern=$(release_tag_pattern)
+  [[ "$tag" =~ $tag_pattern ]] || return 1
   printf '%s' "${out%% *}"
 }
 
@@ -341,13 +355,10 @@ resolve_latest_release_tag() {
   local effective_url tag api_tag latest_url api_url tag_pattern
 
   # J-02: 渠道分流（与 Go 侧 releaseChannelFromTag / stableVersionPattern
-  # 同口径）。稳定渠道只接受纯数字 tag；FLMX_RELEASE_CHANNEL=dev|beta
-  # 时接受任意数字开头 tag（beta 渠道）。默认稳定渠道，永不解析出 beta；
-  # beta 须显式 VERSION 指定或切 dev/beta 渠道安装。
-  case "${FLMX_RELEASE_CHANNEL:-stable}" in
-    dev|beta) tag_pattern='^[0-9][0-9A-Za-z.\-]*$' ;;
-    *) tag_pattern='^[0-9]+(\.[0-9]+)+$' ;;
-  esac
+  # 同口径），文法取自 release_tag_pattern（与 probe_route 共用同
+  # 一出处，A1-04）。默认稳定渠道，永不解析出 beta；beta 须显式
+  # VERSION 指定或切 dev/beta 渠道安装。
+  tag_pattern=$(release_tag_pattern)
 
   latest_url="https://github.com/${REPO}/releases/latest"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"

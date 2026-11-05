@@ -562,6 +562,50 @@ test_panel_explicit_version_format_validated() (
   [[ ! -s "$PULL_MARKER" ]] || fail "A1-03: no image pull may happen with a malformed version"
 )
 
+# A1-04（audit-max）：路线探测的 tag 文法与版本解析器对齐——旧
+# 实现 probe_route 用宽文法（任意数字开头 tag），而
+# resolve_latest_release_tag 是渠道文法（稳定渠道只认纯数字点
+# 分）：稳定渠道下探测会把「重定向落到预发布 tag」的路线判活，
+# 与解析器随后拒绝该 tag 的口径漂移。两处现共用
+# release_tag_pattern 一个出处：稳定渠道探测拒绝预发布 tag、
+# beta 渠道两处同放行、垃圾 tag 两渠道同拒。
+test_panel_probe_route_uses_channel_tag_grammar() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  curl() {
+    printf '0.123 https://github.com/some-owner/some-repo/releases/tag/%s' "$FAKE_TAG"
+    return 0
+  }
+
+  local rc
+  # 稳定渠道（缺省）：纯数字 tag 判活、预发布 tag 判死
+  unset FLMX_RELEASE_CHANNEL
+  FAKE_TAG='1.9.10'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "A1-04: a stable tag must pass the probe on the stable channel"
+  FAKE_TAG='1.9.10-beta.1'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A1-04: on the stable channel the probe must reject a prerelease tag, matching the parser grammar"
+
+  # beta 渠道：预发布与稳定 tag 同放行
+  FLMX_RELEASE_CHANNEL='beta'
+  FAKE_TAG='1.9.10-beta.1'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "A1-04: a prerelease tag must pass the probe on the beta channel"
+  FAKE_TAG='1.9.10'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "A1-04: a stable tag must pass the probe on the beta channel"
+
+  # 垃圾 tag 两渠道同拒（H-24 的 /releases 索引页形态）
+  FAKE_TAG='releases'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A1-04: a junk tag must fail the probe on the beta channel"
+  unset FLMX_RELEASE_CHANNEL
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A1-04: a junk tag must fail the probe on the stable channel"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -9980,5 +10024,6 @@ test_panel_installer_script_curl_uses_timeouts
 test_panel_caddyfile_without_site_keeps_shared_addresses
 test_panel_uninstall_without_docker_cleans_full_residual_set
 test_panel_explicit_version_format_validated
+test_panel_probe_route_uses_channel_tag_grammar
 
 echo "install script tests passed"
