@@ -4220,15 +4220,22 @@ func validateImportedTunnelTrafficRatio(ratio float64) error {
 	return nil
 }
 
-// B8-05：恢复面隧道 Type/Status 枚举门，与保存面同合法集——
-// Type ∈ {1,2}、Status ∈ {0,1}（handler 包 validateTunnelType /
+// B8-05：恢复面隧道 Type/Status 枚举门，基线镜像保存面合法集
+// ——Type ∈ {1,2}、Status ∈ {0,1}（handler 包 validateTunnelType /
 // validateTunnelStatus，B06-001）。此前 importTunnels 对 flow/
 // ratio/probe/名长都有门，唯独这两字段原样落库：备份 type=9、
 // status=7 可恢复出 UI 映射与未来闭集消费面都不认的行。镜像
 // 纪律同 validateImportedTunnelFlow（包循环故本地同集实现）。
+// GATE-FIX C 裁定（B8-05 过修一格）：恢复面 Type 合法集放宽为
+// {0,1,2}——type=0 是 B06-001 立门前写面自身的缺省落库值，
+// 在野存量全是此形态，且全部消费面对 0 有定义行为（==1/==2
+// 正向判定兜底，B06-001 注释自证）；它与 9/-1 等无语义垃圾
+// 值不同族。硬跳过 0 会让旧备份的隧道在恢复时整批静默丢失
+// （与恢复保真口径冲突），故 0 原样保真恢复、不归一不
+// warning；真正集外值仍逐行跳过 + warning。
 func validateImportedTunnelType(typeVal int) error {
-	if typeVal != 1 && typeVal != 2 {
-		return fmt.Errorf("隧道类型超出范围 {1,2}: %d", typeVal)
+	if typeVal != 0 && typeVal != 1 && typeVal != 2 {
+		return fmt.Errorf("隧道类型超出范围 {0,1,2}: %d", typeVal)
 	}
 	return nil
 }
@@ -4364,7 +4371,7 @@ func (r *Repository) importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, no
 		// 与 flow 门同形：集外逐行跳过 + warning。
 		if err := validateImportedTunnelType(t.Type); err != nil {
 			rep.skip("tunnels")
-			rep.warnf("备份恢复：隧道 #%d（%q）的 type=%d 不在合法枚举 {1,2} 内，已跳过该行未恢复", t.ID, t.Name, t.Type)
+			rep.warnf("备份恢复：隧道 #%d（%q）的 type=%d 不在合法枚举 {0,1,2} 内，已跳过该行未恢复", t.ID, t.Name, t.Type)
 			continue
 		}
 		if err := validateImportedTunnelStatus(t.Status); err != nil {
@@ -5433,10 +5440,20 @@ func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now i
 			continue
 		}
 		monitorType := strings.ToLower(strings.TrimSpace(r.Type))
-		if monitorType != "tcp" && monitorType != "icmp" {
+		if monitorType != "tcp" && monitorType != "icmp" && monitorType != "http" {
 			rep.skip("serviceMonitors")
 			rep.warnf("备份恢复：监控 #%d（%q）的类型 %q 不在合法集 {tcp, icmp} 内，已跳过该行未恢复", r.ID, name, r.Type)
 			continue
+		}
+		// GATE-FIX C 裁定（B8-02 过修一格）：http 是存量旧类型——
+		// 写面更新路径对它专门留了容忍口径（传 http 返回成功、不
+		// 改类型），checker 对它只是报「不支持的检查类型」、行本
+		// 身一直被系统携带；恢复面硬跳过等于恢复即删数据。故
+		// http 原样恢复 + warning 披露（target 格式按
+		// validImportMonitorTarget 的 default 口径保真），真正
+		// 集外类型仍逐行跳过。
+		if monitorType == "http" {
+			rep.warnf("备份恢复：监控 #%d（%q）的类型 \"http\" 是存量旧类型（写面已不新建、检查器不支持），已按原样恢复，恢复后请改建为 tcp/icmp 监控", r.ID, name)
 		}
 		if r.Enabled != 0 && r.Enabled != 1 {
 			rep.skip("serviceMonitors")
