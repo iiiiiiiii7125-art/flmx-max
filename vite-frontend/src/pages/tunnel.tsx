@@ -1,5 +1,6 @@
 import type {
   BatchOperationFailure,
+  BatchOperationResult,
   TunnelBatchDeletePreviewApiData,
   TunnelDeletePreviewApiData,
   TunnelMutationPayload,
@@ -1331,6 +1332,26 @@ export default function TunnelPage() {
       const response = await updateTunnelOrder({ tunnels: tunnelsToUpdate });
 
       if (response.code === 0) {
+        // E2-04：code:0 仍可含逐项失败（batchOperationResult 回执），
+        // 不得无条件把全部 inx 当作已保存——部分失败时点名计数/原因，
+        // 本地副本回滚并按服务器 inx 重同步（refreshTunnelList 以 DB
+        // 序重建），与 DB 真值对齐。
+        const receipt = response.data as BatchOperationResult | undefined;
+        const failCount = receipt?.failCount ?? 0;
+
+        if (failCount > 0) {
+          const failures = extractBatchFailures(response.data);
+          const firstReason = failures[0]?.reason || failures[0]?.name || "";
+
+          toast.error(
+            `保存排序部分失败：成功 ${receipt?.successCount ?? 0} 项，失败 ${failCount} 项${firstReason ? `（${firstReason}）` : ""}，已按服务器顺序刷新`,
+          );
+          saveOrder(tunnelOrderLocalKey(), tunnelOrder);
+          await refreshTunnelList(false);
+
+          return;
+        }
+
         setTunnels((prev) =>
           prev.map((tunnel) => {
             const updated = tunnelsToUpdate.find((t) => t.id === tunnel.id);
