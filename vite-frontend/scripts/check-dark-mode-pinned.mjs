@@ -78,6 +78,14 @@
 // 知取舍不变——但 Unicode 转义写出的字面量因 AST 取已求值文本
 // 自本轮起落网，属该族内的局部收紧。
 //
+// E1-03 拓宽（全量审计修复轮）：新增断言④——深色壁纸键不得回到
+// site.ts 的公开品牌配置管线（拉取/缓存/回写），App.tsx 不得再有
+// 该键的读取或 effectiveMode === "dark" 选择支。①②③的既有钉死
+// 形态只防「加 .dark 类」复活，防不住「数据管线先行复活、选择支
+// 后接」的半步形态，本断言补该面；口径为两文件字面量钉（键名与
+// 选择支均为普通字面形态，非字面量构造不在本门面内，与 D-C4-01
+// 的已知取舍一致）。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-dark-mode-pinned.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
@@ -319,8 +327,45 @@ if (indexHtml) {
   );
 }
 
+// ── ④ 深色壁纸键不得回公开配置管线（E1-03） ────────────────────────
+// 深色已删，但 site.ts 曾把深色壁纸键留在 PUBLIC_BRAND_CONFIG_KEYS 里
+// 对每位访客公开拉取/缓存，并回写进 siteConfig，App.tsx 亦有
+// effectiveMode === "dark" 的选择死支——模式 pin 一旦放松即静默复活。
+// 本断言按字面量钉两文件：site.ts 全文不得出现该键名（连注释也不许，
+// 防「先写进注释/常量再接线」的半步复活），App.tsx 不得出现该键名、
+// 不得出现 effectiveMode === "dark" 选择支。配置页（pages/config.tsx）
+// 对该键的数据兼容搬运不在本断言面内（后端键保留、保存为 diff 式，
+// 搬运不构成公开拉取或选择）。
+let siteTs = "";
+try {
+  siteTs = readFileSync(join(frontendDir, "src/config/site.ts"), "utf8");
+} catch {
+  check("④ src/config/site.ts 可读", false, "文件不存在");
+}
+if (siteTs) {
+  check(
+    "④ site.ts 全文无深色壁纸键（公开拉取/缓存/回写管线已拆）",
+    !siteTs.includes("app_bg_image_dark"),
+    "site.ts 重新出现 app_bg_image_dark",
+  );
+}
+let appTsx = "";
+try {
+  appTsx = readFileSync(join(frontendDir, "src/App.tsx"), "utf8");
+} catch {
+  check("④ src/App.tsx 可读", false, "文件不存在");
+}
+if (appTsx) {
+  check(
+    "④ App.tsx 无深色壁纸键、无 effectiveMode === \"dark\" 选择支",
+    !appTsx.includes("app_bg_image_dark") &&
+      !/effectiveMode\s*===\s*["']dark["']/.test(appTsx),
+    "App.tsx 重新出现深色壁纸选择支",
+  );
+}
+
 if (failures.length > 0) {
   console.log(`\n失败 ${failures.length} 项：${failures.join("；")}`);
   process.exit(1);
 }
-console.log("\n深色模式防复活门：三项断言全过");
+console.log("\n深色模式防复活门：四项断言全过");

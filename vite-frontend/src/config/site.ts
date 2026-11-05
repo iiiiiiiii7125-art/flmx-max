@@ -18,13 +18,17 @@ const VERSION = import.meta.env.VITE_APP_VERSION || "dev";
 const APP_VERSION = import.meta.env.VITE_APP_VERSION || "dev";
 const DEFAULT_FAVICON = "/favicon.ico";
 const FAVICON_LINK_ID = "app-favicon";
+// E1-03：深色模式已裁定整删，深色壁纸键（dark 变体）不再进公开品牌
+// 配置清单——不再对每位访客公开拉取/缓存/回写该键（后端配置键本身
+// 保留数据兼容，配置页仍按原样搬运）。防复活由
+// check-dark-mode-pinned 断言④钉住（该门按字面量扫描本文件，注释里
+// 亦不得出现该键名）。
 const PUBLIC_BRAND_CONFIG_KEYS = [
   "app_name",
   "app_logo",
   "app_favicon",
   "app_bg_image",
   "app_bg_image_light",
-  "app_bg_image_dark",
   "login_bg_image",
   "hide_footer_brand",
 ] as const;
@@ -118,7 +122,6 @@ const getInitialConfig = () => {
       app_favicon: "",
       app_bg_image: "",
       app_bg_image_light: "",
-      app_bg_image_dark: "",
       login_bg_image: "",
       hide_footer_brand: false,
     };
@@ -134,8 +137,6 @@ const getInitialConfig = () => {
     localStorage.getItem(CACHE_PREFIX + "app_bg_image") || "";
   const cachedAppBgImageLight =
     localStorage.getItem(CACHE_PREFIX + "app_bg_image_light") || "";
-  const cachedAppBgImageDark =
-    localStorage.getItem(CACHE_PREFIX + "app_bg_image_dark") || "";
   const cachedLoginBgImage =
     localStorage.getItem(CACHE_PREFIX + "login_bg_image") || "";
   const hideFooterBrand =
@@ -151,7 +152,6 @@ const getInitialConfig = () => {
       app_favicon: cachedAppFavicon,
       app_bg_image: cachedAppBgImage,
       app_bg_image_light: cachedAppBgImageLight,
-      app_bg_image_dark: cachedAppBgImageDark,
       login_bg_image: cachedLoginBgImage,
       hide_footer_brand: hideFooterBrand,
     };
@@ -166,7 +166,6 @@ const getInitialConfig = () => {
     app_favicon: cachedAppFavicon,
     app_bg_image: cachedAppBgImage,
     app_bg_image_light: cachedAppBgImageLight,
-    app_bg_image_dark: cachedAppBgImageDark,
     login_bg_image: cachedLoginBgImage,
     hide_footer_brand: hideFooterBrand,
   };
@@ -482,10 +481,6 @@ export const updateSiteConfig = async (configMap?: Record<string, string>) => {
     resolvedConfigMap,
     "app_bg_image_light",
   );
-  const hasAppBgImageDark = Object.prototype.hasOwnProperty.call(
-    resolvedConfigMap,
-    "app_bg_image_dark",
-  );
   const hasLoginBgImage = Object.prototype.hasOwnProperty.call(
     resolvedConfigMap,
     "login_bg_image",
@@ -506,9 +501,6 @@ export const updateSiteConfig = async (configMap?: Record<string, string>) => {
   const appBgImageLight = hasAppBgImageLight
     ? String(resolvedConfigMap.app_bg_image_light || "").trim()
     : (siteConfig.app_bg_image_light || "").trim();
-  const appBgImageDark = hasAppBgImageDark
-    ? String(resolvedConfigMap.app_bg_image_dark || "").trim()
-    : (siteConfig.app_bg_image_dark || "").trim();
   const loginBgImage = hasLoginBgImage
     ? String(resolvedConfigMap.login_bg_image || "").trim()
     : (siteConfig.login_bg_image || "").trim();
@@ -518,7 +510,6 @@ export const updateSiteConfig = async (configMap?: Record<string, string>) => {
   siteConfig.app_favicon = appFavicon;
   siteConfig.app_bg_image = appBgImage;
   siteConfig.app_bg_image_light = appBgImageLight;
-  siteConfig.app_bg_image_dark = appBgImageDark;
   siteConfig.login_bg_image = loginBgImage;
   // 新壁纸地址回来后立即预加载，不等 CSS 变量生效
   preloadWallpaper(loginBgImage || appBgImage);
