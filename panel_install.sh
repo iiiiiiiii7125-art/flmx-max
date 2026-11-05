@@ -3009,6 +3009,30 @@ verify_panel_update_sqlite_volume() {
   return 0
 }
 
+# A2-02：PG 面的同型自检——此前只有 SQLite 面，PG 部署重建后挂
+# 到模板缺省空卷时，健康检查（新进程对空库播种后照样健康）与
+# SQLite 自检（比的是无关卷）双过、照报「更新完成」，真库被晾
+# 置而无任何回执。现与 SQLite 自检并列：重建后 PG 容器在
+# /var/lib/postgresql/data 实际挂载的卷名必须与重建前定格的期
+# 望一致，且卷内须见 PG_VERSION（真实 PG 数据目录标记，排除挂
+# 到同名非数据卷的形态）；实读为空同样判不一致。
+verify_panel_update_postgres_volume() {
+  local expected="$1"
+  local postgres_container="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
+  local actual=""
+  actual=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$postgres_container" 2>/dev/null || true)
+  if [[ "$actual" != "$expected" ]]; then
+    echo "❌ 升级后 PG 卷名自检失败：PostgreSQL 容器 $postgres_container 在 /var/lib/postgresql/data 实际挂载卷「${actual:-（未读到）}」，与升级前记录的卷「$expected」不一致——新 PostgreSQL 可能挂在空卷上，本次更新判失败并回滚" >&2
+    return 1
+  fi
+  if ! panel_volume_file_exists "$actual" PG_VERSION; then
+    echo "❌ 升级后 PG 卷名自检失败：卷 $actual 内未见 PG_VERSION（不像真实 PostgreSQL 数据目录，可能挂到了同名的空卷/异属卷），本次更新判失败并回滚" >&2
+    return 1
+  fi
+  echo "🔎 升级后 PG 卷名自检通过：PostgreSQL /var/lib/postgresql/data 挂载卷为 $actual（与升级前记录一致）"
+  return 0
+}
+
 wait_for_postgres_healthy() {
   local pg_health
   local postgres_container="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
@@ -3617,6 +3641,12 @@ update_panel() {
   # 后 .env 与容器都已是新态，事后追认无从分辨挂错没挂错。
   local update_expected_sqlite_volume
   update_expected_sqlite_volume=$(panel_sqlite_volume_name)
+  # A2-02：PG 部署同点定格 PG 卷期望（口径同上：重建前取，事后
+  # 追认无从分辨），自检在 SQLite 自检之后并列执行。
+  local update_expected_postgres_volume=""
+  if [[ "$CURRENT_DB_TYPE" == "postgres" ]]; then
+    update_expected_postgres_volume=$(panel_postgres_volume_name)
+  fi
 
   echo "🚀 原地重建更新后的服务..."
   if ! start_panel_after_update "$CURRENT_DB_TYPE"; then
@@ -3631,6 +3661,18 @@ update_panel() {
 
   if ! verify_panel_update_sqlite_volume "$update_expected_sqlite_volume"; then
     echo "🛑 升级后卷名自检未通过"
+    if rollback_panel_update "$CURRENT_DB_TYPE"; then
+      echo "✅ 已恢复更新前版本"
+    else
+      echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
+    fi
+    return 1
+  fi
+
+  # A2-02：PG 部署并列验 PG 卷（SQLite 自检比的是后端 /app/data，
+  # 对 PG 数据卷毫无覆盖；两面都过才算更新完成）。
+  if [[ "$CURRENT_DB_TYPE" == "postgres" ]] && ! verify_panel_update_postgres_volume "$update_expected_postgres_volume"; then
+    echo "🛑 升级后 PG 卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
       echo "✅ 已恢复更新前版本"
     else

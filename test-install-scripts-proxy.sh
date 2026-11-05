@@ -136,6 +136,79 @@ EOF
   grep -q '^FLMX_POSTGRES_VOLUME=flmx-postgres-data$' "$dir3/.env" || fail "A2-01R: the live-read postgres volume must be pinned once the gate clears"
 )
 
+# A2-02（audit-max）：升级后卷自检补 PG 面——旧实现只有
+# verify_panel_update_sqlite_volume，PG 部署重建后挂到模板缺省空
+# 卷（flmx-postgres-data）时健康检查与 SQLite 自检双过、照报更新
+# 完成。两幕（均 PG 模式、卷键预钉 real_pg）：① 重建后 PG 实挂
+# flmx-postgres-data → PG 自检判失败、更新回滚、.env 逐字恢复；
+# ② 重建后仍挂 real_pg 且卷内有 PG_VERSION → 自检点名通过、更
+# 新成功。
+test_panel_update_pg_volume_check_rolls_back_on_mismatch() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  wrap_pg_volume_docker() {
+    eval "$(declare -f docker | sed '1s/^docker /fixture_docker_base /')"
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        if [[ "$3" == "-f" ]]; then
+          printf '%s' "$FIXTURE_VOLROOT/$5"
+          return 0
+        fi
+        return 0
+      fi
+      if [[ "$1" == "inspect" && "$2" == "-f" && "$3" == *"/var/lib/postgresql/data"* ]]; then
+        if [[ -n "${FIXTURE_REBUILT_POSTGRES_VOLUME:-}" && -e "$FIXTURE_DIR/.rebuilt" ]]; then
+          printf '%s' "$FIXTURE_REBUILT_POSTGRES_VOLUME"
+          return 0
+        fi
+        printf '%s' "${FIXTURE_POSTGRES_VOLUME:-postgres_data}"
+        return 0
+      fi
+      fixture_docker_base "$@"
+    }
+  }
+
+  # ① 不符必回滚
+  local dir1
+  dir1=$(mktemp -d)
+  setup_rename_update_fixture "$dir1" current
+  printf 'FLMX_POSTGRES_VOLUME=real_pg\n' >> "$dir1/.env"
+  cp -p "$dir1/.env" "$dir1/env.pristine"
+  FIXTURE_VOLROOT="$dir1/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/real_pg"
+  : > "$FIXTURE_VOLROOT/real_pg/PG_VERSION"
+  wrap_pg_volume_docker
+  get_current_db_type() { echo "postgres"; }
+  FIXTURE_POSTGRES_VOLUME="real_pg"
+  FIXTURE_REBUILT_POSTGRES_VOLUME="flmx-postgres-data"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  local rc="0"
+  update_panel >"$dir1/update.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "A2-02: update must fail when the rebuilt postgres container mounts a different data volume than recorded"
+  grep -q '升级后 PG 卷名自检失败' "$dir1/update.log" || fail "A2-02: the PG volume self-check failure must be named in the update output"
+  grep -q 'flmx-postgres-data' "$dir1/update.log" || fail "A2-02: the PG self-check failure must name the actually mounted volume"
+  grep -q 'real_pg' "$dir1/update.log" || fail "A2-02: the PG self-check failure must name the expected recorded volume"
+  grep -q '已恢复更新前版本' "$dir1/update.log" || fail "A2-02: a PG self-check failure must roll back to the pre-update version"
+  diff -q "$dir1/env.pristine" "$dir1/.env" >/dev/null || fail "A2-02: rollback after a PG self-check failure must restore the pre-update .env verbatim"
+
+  # ② 相符通过
+  local dir2
+  dir2=$(mktemp -d)
+  setup_rename_update_fixture "$dir2" current
+  printf 'FLMX_POSTGRES_VOLUME=real_pg\n' >> "$dir2/.env"
+  FIXTURE_VOLROOT="$dir2/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/real_pg"
+  : > "$FIXTURE_VOLROOT/real_pg/PG_VERSION"
+  wrap_pg_volume_docker
+  get_current_db_type() { echo "postgres"; }
+  FIXTURE_POSTGRES_VOLUME="real_pg"
+  FIXTURE_REBUILT_POSTGRES_VOLUME=""
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  update_panel >"$dir2/update.log" 2>&1 || fail "A2-02: update must succeed when the rebuilt postgres container still mounts the recorded volume"
+  grep -q '升级后 PG 卷名自检通过' "$dir2/update.log" || fail "A2-02: the PG volume self-check pass must be named in the update output"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -9521,5 +9594,6 @@ test_panel_migrate_reconcile_second_channel
 test_migrate_legacy_agent_snapshot_failure_aborts
 test_install_panel_force_reinstall_data_gate
 test_panel_pin_accident_gate_unknown_mount_aborts
+test_panel_update_pg_volume_check_rolls_back_on_mismatch
 
 echo "install script tests passed"
