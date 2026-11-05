@@ -135,6 +135,28 @@ Change current user's password.
 {"code": 0, "msg": "操作成功"}
 ```
 
+## POST /api/v1/user/logout
+
+Server-side logout: advances the current user's token revocation
+watermark to now, so every JWT issued before this call is rejected
+from this point on — the token used for this call, any copied token,
+and already-established browser realtime (WebSocket) sessions (closed
+on their next keepalive re-check against the same watermark). Only the
+watermark moves: the password and `password_changed_at` are untouched,
+other users are unaffected, and logging in again issues a fresh valid
+token.
+
+**Request:** `{}` (no body fields; the JWT in the `Authorization`
+header identifies the user)
+
+**Response:**
+```json
+{"code": 0, "msg": "操作成功"}
+```
+
+A missing or invalid token returns envelope `code` 401; non-POST
+methods return `code` 405.
+
 ## POST /api/v1/user/package
 
 Get current user's package info (tunnels, forwards, traffic stats).
