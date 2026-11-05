@@ -562,3 +562,17 @@ c80c3294 Gate legacy backend repo dual-push behind a mechanical 1.9.10 cutoff
 - bundle 经 tssh 通道拉回沙箱：`~/workspace/audit-max/flmx-max-fix.bundle`；
 - 沙箱 git 可写性已探（/tmp 临时仓 init＋commit 成功），遂在 `~/workspace/flvx-max` 内 `git fetch` 该 bundle 新增本地分支 `fix/full-audit-20261105` 并 rev-parse 对账（不 force 任何既有分支；沙箱仓原分支 feat-latency-hint 未动）。
 - 精确哈希与对账结果见提交后主控回收清单（本节为方法登记，避免报告内自引未定哈希）。
+
+---
+
+## 9. 增补（2026-11-05，发版实施批）
+
+### 9.1 C2-03 书面豁免（sing-box 远程 rule-set 无完整性值）
+
+本节是 §3-3 对 C2-03 决策登记的正式豁免文本，不改变既有章节的结论（C2-03 仍为 P3、处置为接受残余）。
+
+- **豁免对象**：C2-03（P3）——面板为 sing-box 渲染的远程 rule-set 仅携带 URL、无完整性值（`go-backend/internal/kernel/render_singbox.go:483-497`、`go-backend/internal/kernel/split.go:302-310` 的 `RuleSetURL()`）。
+- **豁免理由**：① 格式限制——所钉 sing-box 版本的 remote rule-set 形态内根本不存在可填的哈希/摘要字段，无「修」的落点；② URL 面已收敛——地址为固定模板 `raw.githubusercontent.com/SagerNet/sing-{geosite,geoip}`，tag 只能出自闭合的 `SplitCategories` 键集并经 `NormalizeSplitRules` 校验，无任何用户字符串进入 URL，不存在注入或改址面；③ 内容性质——rule-set 承载路由分流决策而非可执行代码，agent 侧下载经探测计划拉取并做 SRS 解析校验（FN34 本地化），畸形内容会被拒绝。备选方案（把在用的 `.srs` 捆绑进 geo-data 的已验证下载链）为产品级变更，本轮不实施。
+- **残余风险边界**：规则集真实性仅系于到 GitHub 的 TLS 通道与上游 SagerNet 模板仓本身。若上游仓被攻陷或 TLS 被击穿，攻击者可投放格式合法但内容恶意的规则集；影响面限于经该 sing-box 入站的分流走向（流量被导向错误出口或直连），不产生代码执行、不触及面板数据与凭据。面板管理员只选分流类别、不选内容，无面板侧触发点。
+- **复议条件**（任一满足即重开本条）：① 所钉 sing-box 版本之后为 remote rule-set 提供完整性字段；② 发生上游规则集供应链事件，或本产品改用自托管/镜像分发规则集；③ 分流类别或模板仓变更（新增类别、换仓、换域名）；④ 下一轮全量审计复核本条时。
+- **授权与落笔**：本豁免按主控建议定案，用户 2026-11-05 授权按主控建议执行；本增补于 2026-11-05 由发版实施批（REL-C2）落笔。
