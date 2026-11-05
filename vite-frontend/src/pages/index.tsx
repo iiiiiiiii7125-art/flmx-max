@@ -20,7 +20,7 @@ import {
   finishPasskeyLogin,
 } from "@/api";
 import { writeLoginSession } from "@/utils/session";
-import { getPasskey } from "@/utils/passkey";
+import { getPasskey, PasskeyDataError } from "@/utils/passkey";
 import { useWebViewMode } from "@/hooks/useWebViewMode";
 
 interface LoginForm {
@@ -88,8 +88,13 @@ export default function IndexPage() {
       navigate(
         result.data.requirePasswordChange ? "/change-password" : "/dashboard",
       );
-    } catch {
-      toast.error("通行证密钥登录已取消或失败");
+    } catch (error) {
+      // E1-06：解码失败是数据/兼容问题，不得与用户取消同文案掩盖。
+      if (error instanceof PasskeyDataError) {
+        toast.error(error.message);
+      } else {
+        toast.error("通行证密钥登录已取消或失败");
+      }
     } finally {
       setLoading(false);
     }
