@@ -5,6 +5,7 @@ package kernel
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -328,6 +329,23 @@ func containsString(list []string, v string) bool {
 	return false
 }
 
+// kernelVersionPattern mirrors the agent's safeVersionPattern
+// (go-gost/x/kernel): a concrete version is a single URL path segment —
+// alphanumeric start, then alphanumerics, dots and dashes, at most 40
+// chars. validKernelVersion additionally rejects "..", which the bare
+// charset admits ("1..2") but a path segment must never contain.
+//
+// C2-01: this validation lives in the kernel package as the single
+// point. Before, ResolveVersion/downloadSpec substituted the version
+// into download URL templates unchecked, and the only guards were the
+// handler's normaliser and the agent's pattern — any future caller
+// bypassing the normaliser silently reopened template injection.
+var kernelVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,39}$`)
+
+func validKernelVersion(version string) bool {
+	return kernelVersionPattern.MatchString(version) && !strings.Contains(version, "..")
+}
+
 // ResolveVersion maps a requested version to the one that will be installed:
 // kernels with a closed version list use their default for "latest" and
 // reject anything else they cannot verify.
@@ -336,6 +354,12 @@ func ResolveVersion(info Info, version string) (string, error) {
 	if len(info.Versions) == 0 {
 		if version == "" {
 			return "latest", nil
+		}
+		if strings.EqualFold(version, "latest") {
+			return version, nil
+		}
+		if !validKernelVersion(version) {
+			return "", fmt.Errorf("版本号 %s 格式不正确", version)
 		}
 		return version, nil
 	}
@@ -370,6 +394,13 @@ func ExtraDownload(d *Download, version, proxy string) (map[string]interface{}, 
 }
 
 func downloadSpec(d *Download, version, proxy string) (map[string]interface{}, error) {
+	// C2-01: downloadSpec is the funnel every spec build passes through
+	// (ResolveDownload and ExtraDownload alike), so the version is
+	// validated here as well — a caller that skips ResolveVersion
+	// still cannot inject into the URL template.
+	if version != "" && !strings.EqualFold(version, "latest") && !validKernelVersion(version) {
+		return nil, fmt.Errorf("版本号 %s 格式不正确", version)
+	}
 	proxy = strings.TrimSuffix(strings.TrimSpace(proxy), "/")
 	if !d.Mirrorable {
 		proxy = ""
