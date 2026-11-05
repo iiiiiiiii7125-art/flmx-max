@@ -2966,6 +2966,14 @@ func normalizeIPAddress(ip net.IP) net.IP {
 	return ip.To16()
 }
 
+// isTrustedProxyIP 是「本机代理链」谓词（回环/私网/链路
+// 本地），唯一生产调用点是 mutations.go 的 panelRequestScheme
+// （节点安装命令的 scheme 推断；R2-02-01 已逐点定性：该消费
+// 不参与任何安全决策）。它不是 C4-01 的客户端 IP 信任模型：
+// 登录限流与一切 XFF 采信走 internal/clientip（仅回环＋
+// FLMX_TRUSTED_PROXIES 名单），联邦入站客户端 IP 走
+// FLMX_FEDERATION_TRUSTED_PROXIES 的独立解析。新代码不得把
+// 本谓词用于鉴权、限流或信任判定。
 func isTrustedProxyIP(ip net.IP) bool {
 	if ip == nil {
 		return false

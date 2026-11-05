@@ -76,13 +76,16 @@ func splitXFFEntries(raw string) []string {
 // loginClientIP 浏览器侧客户端 IP 解析（登录限流用）。
 //
 // 信任模型与实现正本在 internal/clientip（R5-FC 收口：登录 /
-// gh 镜像 / WS 鉴权失败三面共用同一解析）：只有当直接对端
-// （RemoteAddr）落在可信代理范围（回环/私网/链路本地，即本机或
-// 内网的反向代理）时才采信 XFF；公网直连时忽略 XFF（此时 XFF
-// 完全可能是伪造的）。XFF 从右按可信跳数解析，链长不足或跳数
-// 超配（R24-X-01）时 fail-closed 回 RemoteAddr——B01-001 收窄
-// 口径与残余取舍（同机/内网直达与单跳代理链协议层不可区分）
-// 见 clientip.FromRequest 的包内说明与本文件头注。
+// gh 镜像 / WS 鉴权失败三面共用同一解析）：C4-01 起只有两类
+// 直接对端（RemoteAddr）的 XFF 被采信——回环对端，或落在
+// FLMX_TRUSTED_PROXIES 显式登记 CIDR 名单内的对端；RFC1918
+// 私网对端不再默认可信（旧口径「回环/私网/链路本地」已收窄，
+// 勿按旧注释理解——本机代理链的宽谓词只剩 panelRequestScheme
+// 的 scheme 推断一处独立面，见 mutations.go 该函数注释）。
+// 对端不可信时 XFF 整体忽略（此时 XFF 完全可能是伪造的）。
+// XFF 从右按可信跳数解析，链长不足或跳数超配（R24-X-01）时
+// fail-closed 回 RemoteAddr——收窄口径与取舍见
+// clientip.FromRequest 的包内说明与本文件头注。
 func loginClientIP(r *http.Request) net.IP {
 	return clientip.FromRequest(r)
 }

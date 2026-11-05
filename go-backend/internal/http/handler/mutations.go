@@ -1360,8 +1360,19 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // panelRequestScheme 推断本次管理请求所见的面板实际服务方式
-// （"http"/"https"）：可信代理（回环/私网/链路本地，与登录限流
-// XFF 同一信任口径）的 X-Forwarded-Proto 优先，其次连接自身 TLS。
+// （"http"/"https"）：直接对端命中本机代理链谓词（回环/私网/
+// 链路本地，见 federation.go 的 isTrustedProxyIP）时采信
+// X-Forwarded-Proto，其次连接自身 TLS。
+//
+// 信任口径明示（R2-02-01）：本面与 C4-01 起的登录限流口径
+// （internal/clientip：仅回环＋FLMX_TRUSTED_PROXIES 显式名单）
+// 不是同一口径，是刻意保留的独立面。本谓词的唯一生产消费是
+// 生成节点安装命令时为裸面板地址补 ws/wss（见本文件
+// normalizeNodeInstallAddr 的调用点）并据此附明文警告——消费
+// 点经管理员鉴权、产物只是链接 scheme，不参与鉴权/限流/
+// Cookie 属性/联邦信任等任何安全决策；且默认 Caddy→nginx
+// 拓扑下后端对端即私网前端容器，若按登录口径收窄，XFP 恒不
+// 被采信、HTTPS 面板的新装命令会被误补成 ws://。
 // 配套：vite-frontend/nginx.conf 已改为透传上游 X-Forwarded-Proto
 // （此前被覆写为 nginx 自身 $scheme，Caddy 终止 TLS 的部署里后端
 // 永远只能看到 http）。
