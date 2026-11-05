@@ -5600,6 +5600,40 @@ panel_caddyfile_fixture_env() {
 # R4B11-001: 先菜单 6 追加订阅前置块、再重跑菜单 5 时，前置块必须被
 # 保留（旧实现整文件覆盖、无声抹除）；无关站点块同样保留，面板块在
 # 同域名重配后恰一份且有保留提示。旧代码对本用例必红（sub 块消失）。
+# R2-01-02（audit-max 复审）：setup_domain_proxy 的 Caddy 官方源两
+# 抓取（gpg.key / debian.deb.txt）此前是裸 curl -1sLf——无连接超
+# 时、无总界、无速度看门狗：dl.cloudsmith.io 连接被黑洞（TCP 已
+# 开、零字节）时菜单 5/6 无限挂死，函数内设计好的 Debian 仓库回
+# 退只在「失败」时触发、「停滞」永不达（A1-02 同族漏网——A1-02
+# 的行为钉只守 run_verified_installer_script 一条腿）。静态钉格
+# （与 A1-06 同因：菜单全流程夹具须驱动 apt/gpg/systemd 全面，
+# 不可行）：① 全仓 panel_install.sh 内 cloudsmith 抓取行（恰两
+# 条）各自带齐看门狗四件；② 字面 URL 抓取普查——两脚本中非注
+# 释、非回显的 curl 字面 URL 行必须同行带 --max-time，防同族再
+# 从别的抓取点漏网。
+test_panel_caddy_source_fetches_use_timeouts() (
+  set -euo pipefail
+  local line bad script
+  local fetch_lines
+  fetch_lines=$(grep 'curl' "$ROOT_DIR/panel_install.sh" | grep -c 'dl\.cloudsmith\.io' || true)
+  [[ "$fetch_lines" -eq 2 ]] || fail "R2-01-02: panel_install.sh must contain exactly the two cloudsmith fetches (found $fetch_lines)"
+  while IFS= read -r line; do
+    grep -q -- '--connect-timeout' <<< "$line" || fail "R2-01-02: cloudsmith fetch lacks --connect-timeout: $line"
+    grep -q -- '--max-time' <<< "$line" || fail "R2-01-02: cloudsmith fetch lacks --max-time: $line"
+    grep -q -- '--speed-limit' <<< "$line" || fail "R2-01-02: cloudsmith fetch lacks the stall watchdog (--speed-limit): $line"
+    grep -q -- '--speed-time' <<< "$line" || fail "R2-01-02: cloudsmith fetch lacks the stall watchdog (--speed-time): $line"
+  done < <(grep 'curl' "$ROOT_DIR/panel_install.sh" | grep 'dl\.cloudsmith\.io')
+
+  for script in panel_install.sh install.sh; do
+    bad=$(grep -nE '(^|[[:space:]])curl[[:space:]]' "$ROOT_DIR/$script" \
+      | grep -E 'https?://' \
+      | grep -vE '^[0-9]+:[[:space:]]*#' \
+      | grep -vE '^[0-9]+:[[:space:]]*echo[[:space:]]' \
+      | grep -v -- '--max-time' || true)
+    [[ -z "$bad" ]] || fail "R2-01-02: literal-URL curl fetch without --max-time in $script: $bad"
+  done
+)
+
 test_panel_menu5_preserves_front_block_after_menu6() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -10860,6 +10894,7 @@ test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key
 test_panel_download_routed_total_budget
 test_panel_installer_script_curl_uses_timeouts
+test_panel_caddy_source_fetches_use_timeouts
 test_panel_caddyfile_without_site_keeps_shared_addresses
 test_panel_uninstall_without_docker_cleans_full_residual_set
 test_panel_explicit_version_format_validated

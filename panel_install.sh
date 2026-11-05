@@ -1042,7 +1042,11 @@ setup_domain_proxy() {
     # 避免用未核对的 key 当后续 apt 验签的信任锚。
     local caddy_key_tmp caddy_key_fp=""
     caddy_key_tmp=$(mktemp)
-    if curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' -o "$caddy_key_tmp" 2>/dev/null; then
+    # R2-01-02：官方源两抓取（本处 key 与下方源列表）此前无任何
+    # 超时——连接停滞（TCP 已开、零字节）时菜单 5/6 无限挂死，
+    # 设计好的 Debian 仓库回退只在「失败」时触发、停滞永不达。
+    # 与 A1-02 同口径补看门狗四件，失败即走既有回退。
+    if curl -1sLf --connect-timeout 10 --max-time 60 --speed-limit 1024 --speed-time 30 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' -o "$caddy_key_tmp" 2>/dev/null; then
       caddy_key_fp=$(gpg --show-keys --with-colons "$caddy_key_tmp" 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')
     fi
     if [[ "$caddy_key_fp" == "65760C51EDEA2017CEA2CA15155B6D79CA56EA34" ]] \
@@ -1074,7 +1078,7 @@ setup_domain_proxy() {
       # 染宿主。现要求至少含一行完整的 deb 条目（deb [可选项]
       # <uri> <suite> <组件>），不合形态与下载失败同口径：不落盘、
       # 走现有软件源兜底。
-      if curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o "$caddy_list_tmp" 2>/dev/null && [[ -s "$caddy_list_tmp" ]] \
+      if curl -1sLf --connect-timeout 10 --max-time 60 --speed-limit 1024 --speed-time 30 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o "$caddy_list_tmp" 2>/dev/null && [[ -s "$caddy_list_tmp" ]] \
         && grep -Eq '^[[:space:]]*deb[[:space:]]+(\[[^]]*\][[:space:]]+)?[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+' "$caddy_list_tmp"; then
         if mv -f "$caddy_list_tmp" "$caddy_list_path" && chmod 644 "$caddy_list_path"; then
           caddy_list_written="$caddy_list_path"
