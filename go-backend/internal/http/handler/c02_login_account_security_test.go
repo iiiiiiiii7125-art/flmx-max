@@ -120,9 +120,18 @@ func TestC02_SingleHopProxyPeerResolvesRealClient(t *testing.T) {
 // B01-001 非回归：链内确有可信代理条目时（追加型多跳链），预置的
 // 左侧轮换条目仍不得移动限流键——真实客户端条目恒定、第 11 次 429；
 // 且 loginClientIP 仍解析出真实客户端（既有多跳行为不回退）。
+// C4-01 口径：链内条目 172.30.0.5 的可信来自 FLMX_TRUSTED_PROXIES
+// 显式登记（随版拓扑的前端容器子网），不再来自其私网身份；未登记
+// 时同一链 fail-closed 回直接对端，两形态在本用例内一并钉死。
 func TestC02_AppendedChainStillResolvesAndLimits(t *testing.T) {
 	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "2")
+	t.Setenv("FLMX_TRUSTED_PROXIES", "")
 	got := loginClientIP(loginReqWithXFF("127.0.0.1:1", "9.9.9.9, 203.0.113.7, 172.30.0.5"))
+	if got == nil || got.String() != "127.0.0.1" {
+		t.Fatalf("appended chain unregistered: loginClientIP = %v, want 127.0.0.1 (fail-closed to RemoteAddr)", got)
+	}
+	t.Setenv("FLMX_TRUSTED_PROXIES", "172.30.0.0/16")
+	got = loginClientIP(loginReqWithXFF("127.0.0.1:1", "9.9.9.9, 203.0.113.7, 172.30.0.5"))
 	if got == nil || got.String() != "203.0.113.7" {
 		t.Fatalf("appended chain: loginClientIP = %v, want 203.0.113.7", got)
 	}
