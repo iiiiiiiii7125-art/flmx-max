@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -11,6 +12,18 @@ import (
 // not mutation commands: an install may download for minutes and must not
 // block forwarding changes behind the shared mutation queue.
 func handleKernelCommand(cmdType string, data interface{}) (interface{}, error) {
+	return handleKernelCommandContext(context.Background(), cmdType, data)
+}
+
+// handleKernelCommandContext is handleKernelCommand under a per-command
+// budget (D1-06). The kernel Manager API takes no context, so the
+// socket layer can only refuse to *start* work whose budget is already
+// spent — an Apply that begins inside its budget runs under the
+// manager's own download/install budgets as before.
+func handleKernelCommandContext(ctx context.Context, cmdType string, data interface{}) (interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("命令执行预算已耗尽，拒绝执行: %w", err)
+	}
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("序列化数据失败: %v", err)

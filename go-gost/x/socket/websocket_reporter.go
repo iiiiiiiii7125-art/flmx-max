@@ -1223,13 +1223,54 @@ func (w *WebSocketReporter) dispatchCommand(cmd CommandMessage) {
 	case w.readCommandSem <- struct{}{}:
 		go func() {
 			defer func() { <-w.readCommandSem }()
-			w.routeCommandSafely(w.ctx, cmd)
+			// D1-06: every read-path command runs under its own budget
+			// context instead of the process context, so a command the
+			// panel has already given up on does not start (or keep)
+			// executing agent-side and get duplicated by a retry.
+			ctx, cancel := context.WithTimeout(w.ctx, readCommandBudget(cmd.TimeoutMS))
+			defer cancel()
+			w.routeCommandSafely(ctx, cmd)
 		}()
 	case <-w.ctx.Done():
 		w.sendCommandFailure(cmd, "Agent is shutting down")
 	default:
 		w.sendCommandFailure(cmd, "只读命令并发过多，请稍后重试")
 	}
+}
+
+const (
+	// readCommandReplyMargin mirrors tcpPingReplyMargin: stop a little
+	// before the panel's own deadline so the refusal (or result) can
+	// still reach it.
+	readCommandReplyMargin = 500 * time.Millisecond
+	minReadCommandBudget   = 500 * time.Millisecond
+	// maxReadCommandBudget caps a panel-supplied TimeoutMS for read
+	// commands (longer than any panel-side wait; purely a bound
+	// against absurd values).
+	maxReadCommandBudget = 10 * time.Minute
+	// defaultReadCommandBudget applies when the panel transmits no
+	// budget — today timeoutMs only rides along with TcpPing. It is
+	// deliberately above every panel-side command wait, so no
+	// legitimate execution is cut short; it exists so a read command
+	// can never run unbounded (e.g. a KernelApply whose caller left
+	// minutes ago — see the entry check in routeCommand).
+	defaultReadCommandBudget = 5 * time.Minute
+)
+
+// readCommandBudget derives one read-path command's budget from the
+// panel-supplied TimeoutMS, mirroring tcpPingBudget's clamping shape.
+func readCommandBudget(timeoutMS int64) time.Duration {
+	if timeoutMS <= 0 {
+		return defaultReadCommandBudget
+	}
+	timeout := time.Duration(timeoutMS)*time.Millisecond - readCommandReplyMargin
+	if timeout < minReadCommandBudget {
+		return minReadCommandBudget
+	}
+	if timeout > maxReadCommandBudget {
+		return maxReadCommandBudget
+	}
+	return timeout
 }
 
 func (w *WebSocketReporter) runMutationCommands() {
@@ -1330,6 +1371,15 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 			w.sendCommandFailure(cmd, "Agent is shutting down")
 			return
 		}
+	} else if err := ctx.Err(); err != nil {
+		// D1-06: a read-path command whose per-command budget already
+		// expired (queued behind the read semaphore, or delivered with
+		// a spent panel budget) must not start executing now: the
+		// caller has given up, and running it anyway is what makes a
+		// later retry double-execute Kernel/Tune side effects.
+		fmt.Printf("❌ 拒绝执行预算已耗尽的命令: type=%s requestId=%s err=%v\n", cmd.Type, cmd.RequestId, err)
+		w.sendCommandFailure(cmd, fmt.Sprintf("命令执行预算已耗尽，拒绝执行: %v", err))
+		return
 	}
 	// D1-01（FIX-A 与 FIX-H 两路同修，集成取并集）：先按 FIX-A 口径只记
 	// type + requestId，再按 FIX-H 口径补一行脱敏渲染供排障辨识结构；
@@ -1424,7 +1474,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 				}
 			}
 		}
-		response.Data, err = handleTuneCommand(cmd.Type, cmd.Data)
+		response.Data, err = handleTuneCommandContext(ctx, cmd.Type, cmd.Data)
 
 	// UDP Ping 诊断命令（只读，不需要保存配置）
 	case "UdpPing":
@@ -1475,7 +1525,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 	// 代理内核（Xray / sing-box / Snell）相关命令，由 kernel.Manager 自行串行化
 	case "KernelApply", "KernelControl", "KernelStatus":
 		response.Type = cmd.Type + "Response"
-		response.Data, err = handleKernelCommand(cmd.Type, cmd.Data)
+		response.Data, err = handleKernelCommandContext(ctx, cmd.Type, cmd.Data)
 
 	default:
 		err = fmt.Errorf("未知命令类型: %s", cmd.Type)
