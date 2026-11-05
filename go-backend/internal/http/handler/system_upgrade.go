@@ -2351,6 +2351,9 @@ func (h *Handler) fetchSystemUpgradeReleasePage(client *http.Client, url string)
 
 func (h *Handler) resolveSystemUpgradeLatestReleaseByChannel(channel string) (string, error) {
 	normalizedChannel := normalizeReleaseChannel(channel)
+	if normalizedChannel == releaseChannelDev {
+		return "", errDevChannelNotSupported
+	}
 	releases, err := h.fetchSystemUpgradeReleases(50)
 	if err != nil {
 		// API 不可用（限流等）时稳定版回退到重定向解析，不依赖 API 配额。
@@ -2673,6 +2676,11 @@ func (h *Handler) downloadReleaseAssetAttempt(ctx context.Context, url, filename
 
 func releasesForChannel(releases []githubRelease, channel string) []systemUpgradeReleaseData {
 	channel = normalizeReleaseChannel(channel)
+	// B7-05：dev 通道不在面板内列表面列出（执行面必拒，见
+	// errDevChannelNotSupported），避免「列得出、走不通」。
+	if channel == releaseChannelDev {
+		return []systemUpgradeReleaseData{}
+	}
 	items := make([]systemUpgradeReleaseData, 0, len(releases))
 	for _, r := range releases {
 		if r.Draft {
@@ -2873,6 +2881,12 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	channel := normalizeReleaseChannel(req.Channel)
+	if channel == releaseChannelDev {
+		// B7-05：执行面兜底——带显式版本号绕过解析面直调时同样
+		// 点名拒绝，不让 dev 版本死在误导性的格式校验上。
+		response.WriteJSON(w, response.ErrDefault(errDevChannelNotSupported.Error()))
+		return
+	}
 	capability := exec.capability(r.Context())
 	if !capability.Capable {
 		response.WriteJSON(w, response.ErrDefault("当前环境不支持面板自升级: "+strings.Join(capability.Reasons, "; ")))
