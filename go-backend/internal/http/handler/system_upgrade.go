@@ -204,6 +204,11 @@ type systemUpgradeRunData struct {
 	// SnapshotPath 点名本次升级的 DB 快照相对路径（SQLite 模式；
 	// helper 在重建前落盘于此）。PG 模式快照切出时为空。
 	SnapshotPath string `json:"snapshotPath,omitempty"`
+	// PgSnapshotDeferred（B7-03 披露半）：PG 模式下升级前 DB 快
+	// 照未落盘（切出待后续批次），回执必须显式点名，不得以
+	// snapshotPath 为空让运维误以为已有快照兜底。与状态面的同
+	// 名字段同口径；SQLite 模式恒 false 不出现。
+	PgSnapshotDeferred bool `json:"pgSnapshotDeferred,omitempty"`
 }
 
 // systemUpgradeStatusData 是落盘于部署目录的升级状态（U1-003/U1-007）。
@@ -222,6 +227,10 @@ type systemUpgradeStatusData struct {
 	// 由发起路径写入、helper 终态回写时原样保留（与 AnchorNote
 	// 同形态）。无快照（PG 模式切出）时为空。
 	SnapshotPath string `json:"snapshotPath,omitempty"`
+	// PgSnapshotDeferred（B7-03 披露半）：PG 模式快照切出的显式
+	// 标记，与回执面同名字段同口径；helper 终态回写时经
+	// FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED 环境变量原样保留。
+	PgSnapshotDeferred bool `json:"pgSnapshotDeferred,omitempty"`
 }
 
 func (e *systemUpgradeExecutor) statusPath() string {
@@ -635,8 +644,15 @@ write_status() {
   if [ -n "${SNAPSHOT_TAKEN:-}" ]; then
     snapshot_field=", \"snapshotPath\": \"${FLMX_UPGRADE_SNAPSHOT_DIR}\""
   fi
-  printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"%s%s}\n' \
-    "$1" "${FLMX_UPGRADE_VERSION:-}" "${FLMX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$anchor_field" "$snapshot_field" > "$STATUS_FILE.tmp"
+  # B7-03：PG 快照切出标记同形态保留进终态（面板侧透传 env 为
+  # 1 时写 pgSnapshotDeferred: true），否则终态会把发起态的披
+  # 露冲掉、运维在结果面又看不到「本次无升级前快照」。
+  deferred_field=""
+  if [ "${FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED:-}" = "1" ]; then
+    deferred_field=", \"pgSnapshotDeferred\": true"
+  fi
+  printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"%s%s%s}\n' \
+    "$1" "${FLMX_UPGRADE_VERSION:-}" "${FLMX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$anchor_field" "$snapshot_field" "$deferred_field" > "$STATUS_FILE.tmp"
   chmod 600 "$STATUS_FILE.tmp" 2>/dev/null || true
   mv -f "$STATUS_FILE.tmp" "$STATUS_FILE"
 }
@@ -2968,11 +2984,12 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 据此透出；PG 模式切出标记，见 prepareUpgradeSnapshot）。
 	exec.prepareUpgradeSnapshot(version)
 	if err := exec.writeUpgradeStatus(systemUpgradeStatusData{
-		InProgress:   true,
-		Version:      version,
-		StartedAt:    exec.upgradeStartedAt,
-		AnchorNote:   anchorNote,
-		SnapshotPath: exec.snapshotPath,
+		InProgress:         true,
+		Version:            version,
+		StartedAt:          exec.upgradeStartedAt,
+		AnchorNote:         anchorNote,
+		SnapshotPath:       exec.snapshotPath,
+		PgSnapshotDeferred: exec.pgSnapshotDeferred,
 	}); err != nil {
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
@@ -2987,13 +3004,14 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// U1-003：helper 未启动成功，立即解除落盘的「升级中」状态，避免永久拦截后续升级。
 		_ = exec.writeUpgradeStatus(systemUpgradeStatusData{
-			InProgress:   false,
-			Version:      version,
-			StartedAt:    exec.upgradeStartedAt,
-			Result:       "helper_start_failed",
-			FinishedAt:   time.Now().UTC().Format(time.RFC3339),
-			AnchorNote:   anchorNote,
-			SnapshotPath: exec.snapshotPath,
+			InProgress:         false,
+			Version:            version,
+			StartedAt:          exec.upgradeStartedAt,
+			Result:             "helper_start_failed",
+			FinishedAt:         time.Now().UTC().Format(time.RFC3339),
+			AnchorNote:         anchorNote,
+			SnapshotPath:       exec.snapshotPath,
+			PgSnapshotDeferred: exec.pgSnapshotDeferred,
 		})
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
@@ -3007,13 +3025,14 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		message += "（" + anchorNote + "）"
 	}
 	response.WriteJSON(w, response.OK(systemUpgradeRunData{
-		Version:         version,
-		Channel:         channel,
-		ComposeAsset:    composeAsset,
-		HelperContainer: helperContainer,
-		BackendImageID:  imageID,
-		Message:         message,
-		SnapshotPath:    exec.snapshotPath,
+		Version:            version,
+		Channel:            channel,
+		ComposeAsset:       composeAsset,
+		HelperContainer:    helperContainer,
+		BackendImageID:     imageID,
+		Message:            message,
+		SnapshotPath:       exec.snapshotPath,
+		PgSnapshotDeferred: exec.pgSnapshotDeferred,
 	}))
 }
 
