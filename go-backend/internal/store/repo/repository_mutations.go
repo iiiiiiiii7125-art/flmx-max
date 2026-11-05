@@ -1662,9 +1662,24 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
 	}
+	// B4-04：入口节点先去重再加锁/落库。恢复面可导入同节点重复
+	// 的入口行（importTunnels 不去重、TunnelEntryNodeIDs 无
+	// DISTINCT），未去重的列表逐节点取不可重入的端口锁会自死锁
+	// （同 goroutine 第二次取同一把锁永等），且会写出重复的
+	// forward_port 行。去重保首现序，事务内的占口复检与端口行
+	// 插入同样走去重后的列表。
+	seenNodes := make(map[int64]struct{}, len(entryNodeIDs))
+	uniqueEntryNodeIDs := make([]int64, 0, len(entryNodeIDs))
+	for _, nodeID := range entryNodeIDs {
+		if _, dup := seenNodes[nodeID]; dup {
+			continue
+		}
+		seenNodes[nodeID] = struct{}{}
+		uniqueEntryNodeIDs = append(uniqueEntryNodeIDs, nodeID)
+	}
 	// R5-B4: per-node 端口分配锁（事务之前获取，排序后加锁防死锁）。
 	// 锁内禁止网络调用。
-	sortedNodes := append([]int64(nil), entryNodeIDs...)
+	sortedNodes := append([]int64(nil), uniqueEntryNodeIDs...)
 	sort.Slice(sortedNodes, func(i, j int) bool { return sortedNodes[i] < sortedNodes[j] })
 	locks := make([]*sync.Mutex, 0, len(sortedNodes))
 	for _, nodeID := range sortedNodes {
@@ -1680,7 +1695,7 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		// B4/F-013: 锁内四源复检（同 ReplaceForwardPorts）。handler 预检
 		// 在锁外，跨表并发（入站/隧道创建）可穿透窗口双占用落库。
-		for _, nodeID := range entryNodeIDs {
+		for _, nodeID := range uniqueEntryNodeIDs {
 			occupied, err := r.HasOtherForwardOnNodePortTx(tx, nodeID, port, 0)
 			if err != nil {
 				return err
@@ -1714,7 +1729,7 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 			return err
 		}
 		forwardID = fwd.ID
-		for _, nodeID := range entryNodeIDs {
+		for _, nodeID := range uniqueEntryNodeIDs {
 			fp := model.ForwardPort{
 				ForwardID: forwardID,
 				NodeID:    nodeID,
