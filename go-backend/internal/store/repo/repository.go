@@ -4727,6 +4727,24 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 			rep.warnf("备份恢复：转发 #%d（%q）：%s，已跳过该行未恢复", f.ID, f.Name, err)
 			continue
 		}
+		// B8-06 残面：MaxConn/IPMaxConn 负值钳制——写面
+		// （B09-002）MaxConn 负值拒收、IPMaxConn 负值钳 0，恢复
+		// 面此前原样落库，负值在消费面 MaxConn>0 门控下静默等
+		// 价无限制。恢复面按自身逐行惯例取钳 0 + warning（不丢
+		// 整行）：0 在消费面同为无限制，与负值的实际生效形态
+		// 等价，只把存储值拉回合法域；与写面 MaxConn 拒收口径
+		// 的差异在此注明（恢复面不因单个字段丢弃整条转发）。
+		maxConn := f.MaxConn
+		ipMaxConn := f.IPMaxConn
+		if maxConn < 0 || ipMaxConn < 0 {
+			rep.warnf("备份恢复：转发 #%d（%q）的连接数限制 maxConn/ipMaxConn（%d/%d）含负值，已按 0（无限制）恢复", f.ID, f.Name, f.MaxConn, f.IPMaxConn)
+			if maxConn < 0 {
+				maxConn = 0
+			}
+			if ipMaxConn < 0 {
+				ipMaxConn = 0
+			}
+		}
 		item := model.Forward{
 			ID:                   f.ID,
 			UserID:               f.UserID,
@@ -4742,8 +4760,8 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 			Status:               status,
 			Inx:                  f.Inx,
 			SpeedID:              sql.NullInt64{Int64: nullableBackupInt64(f.SpeedID), Valid: f.SpeedID != nil && *f.SpeedID > 0},
-			MaxConn:              f.MaxConn,
-			IPMaxConn:            f.IPMaxConn,
+			MaxConn:              maxConn,
+			IPMaxConn:            ipMaxConn,
 			IPSpeedID:            sql.NullInt64{Int64: nullableBackupInt64(f.IPSpeedID), Valid: f.IPSpeedID != nil && *f.IPSpeedID > 0},
 			ProxyProtocol:        f.ProxyProtocol,
 			ProxyProtocolReceive: f.ProxyProtocolReceive,

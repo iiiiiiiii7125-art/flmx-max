@@ -313,6 +313,59 @@ func TestImportInboundPortRecheckAgainstSkippedForward(t *testing.T) {
 	}
 }
 
+// B8-06 残面：MaxConn/IPMaxConn 负值恢复时钳 0 + warning，正值
+// 对照逐字落库。
+func TestImportForwardMaxConnClamp(t *testing.T) {
+	now := time.Now().UnixMilli()
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Nodes: []model.NodeBackup{
+			{ID: 31, Name: "n31", Secret: "s", ServerIP: "192.0.2.31", Status: 1},
+		},
+		Tunnels: []model.TunnelBackup{
+			{ID: 71, Name: "t71", TrafficRatio: 1, Type: 1, Flow: 1, Status: 1, CreatedTime: now},
+		},
+		Forwards: []model.ForwardBackup{
+			{ID: 61, UserID: 1, TunnelID: 71, Name: "neg-conn", RemoteAddr: "203.0.113.10:80", Strategy: "fifo", Status: 1, CreatedTime: now, MaxConn: -5, IPMaxConn: -2},
+			{ID: 62, UserID: 1, TunnelID: 71, Name: "pos-conn", RemoteAddr: "203.0.113.10:80", Strategy: "fifo", Status: 1, CreatedTime: now, MaxConn: 10, IPMaxConn: 3},
+		},
+	}
+	backup.UserTunnels = []model.UserTunnelBackup{
+		{ID: 1, UserID: 1, TunnelID: 71, Num: 99999, Flow: 99999, FlowResetTime: 1, ExpTime: 2727251700000, Status: 1},
+	}
+	result, err := dst.Import(backup, []string{"nodes", "tunnels", "forwards", "userTunnels"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ForwardsImported != 2 {
+		t.Fatalf("ForwardsImported = %d, want 2, warnings=%v", result.ForwardsImported, result.ImportWarnings)
+	}
+	warnText := strings.Join(result.ImportWarnings, "\n")
+	if !strings.Contains(warnText, "neg-conn") || !strings.Contains(warnText, "-5/-2") {
+		t.Fatalf("receipt must name the clamped row and values, warnings=%v", result.ImportWarnings)
+	}
+	readForward := func(id int64) model.Forward {
+		t.Helper()
+		var f model.Forward
+		if err := dst.db.Where("id = ?", id).First(&f).Error; err != nil {
+			t.Fatalf("read forward #%d: %v", id, err)
+		}
+		return f
+	}
+	if f := readForward(61); f.MaxConn != 0 || f.IPMaxConn != 0 {
+		t.Fatalf("forward 61 maxConn/ipMaxConn = %d/%d, want 0/0 (clamped)", f.MaxConn, f.IPMaxConn)
+	}
+	if f := readForward(62); f.MaxConn != 10 || f.IPMaxConn != 3 {
+		t.Fatalf("forward 62 maxConn/ipMaxConn = %d/%d, want 10/3 (verbatim)", f.MaxConn, f.IPMaxConn)
+	}
+}
+
 // B8-02（限值同源）：限值经 service_monitor_* 配置键调整后，恢复面
 // 钳制跟随配置口径，与写面 resolveServiceMonitorLimits 同源。
 func TestImportServiceMonitorsLimitsFromConfig(t *testing.T) {
