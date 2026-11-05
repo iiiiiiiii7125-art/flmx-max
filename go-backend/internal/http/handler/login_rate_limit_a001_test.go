@@ -78,9 +78,19 @@ func TestA001_TrustedProxyHops(t *testing.T) {
 
 	t.Setenv("FLMX_TRUSTED_PROXY_HOPS", "2")
 	// Caddy→nginx→backend：XFF="client, caddy"，取最左
-	// R24-X-01 夹具修正：代理条目须落在可信范围（本例用私网 IP），
-	// 否则链长估计无法将其确认为代理追加（见 trustedXFFChainLen）；
-	// 断言一字不动——正确 2 跳链仍取客户端。
+	// R24-X-01 夹具修正：代理条目须落在可信范围，否则链长估计无法
+	// 将其确认为代理追加（见 trustedXFFChainLen）；断言一字不动——
+	// 正确 2 跳链仍取客户端。
+	// C4-01 口径修正：可信范围不再是「私网即算」——直接对端
+	// 10.0.0.5 与链内代理 192.168.1.1 须显式登记进
+	// FLMX_TRUSTED_PROXIES 才构成信任。先钉未登记形态：同一请求
+	// fail-closed 回直接对端；再登记后验原断言。
+	t.Setenv("FLMX_TRUSTED_PROXIES", "")
+	got = loginClientIP(loginReqWithXFF("10.0.0.5:1", "198.51.100.9, 192.168.1.1"))
+	if got.String() != "10.0.0.5" {
+		t.Fatalf("hops=2 unregistered: got %v, want 10.0.0.5 (fail-closed to RemoteAddr)", got)
+	}
+	t.Setenv("FLMX_TRUSTED_PROXIES", "10.0.0.0/8,192.168.0.0/16")
 	got = loginClientIP(loginReqWithXFF("10.0.0.5:1", "198.51.100.9, 192.168.1.1"))
 	if got.String() != "198.51.100.9" {
 		t.Fatalf("hops=2: got %v, want 198.51.100.9", got)
