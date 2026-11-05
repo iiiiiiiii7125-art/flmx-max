@@ -93,6 +93,50 @@ func TestImportServiceMonitorsMirrorWriteGates(t *testing.T) {
 	}
 }
 
+// B8-05：隧道 Type/Status 恢复面枚举门镜像写面 {1,2}/{0,1}，
+// 集外逐行跳过 + warning 点名，集内（含 status=0）对照落库。
+func TestImportTunnelTypeStatusGate(t *testing.T) {
+	now := time.Now().UnixMilli()
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Tunnels: []model.TunnelBackup{
+			{ID: 1, Name: "bad-type", TrafficRatio: 1, Type: 9, Flow: 1, Status: 1, CreatedTime: now},
+			{ID: 2, Name: "bad-status", TrafficRatio: 1, Type: 1, Flow: 1, Status: 7, CreatedTime: now},
+			{ID: 3, Name: "type-zero", TrafficRatio: 1, Type: 0, Flow: 1, Status: 1, CreatedTime: now},
+			{ID: 4, Name: "ok-tunnel", TrafficRatio: 1, Type: 2, Flow: 1, Status: 0, CreatedTime: now},
+		},
+	}
+	result, err := dst.Import(backup, []string{"tunnels"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TunnelsImported != 1 {
+		t.Fatalf("TunnelsImported = %d, want 1 (only id 4), warnings=%v", result.TunnelsImported, result.ImportWarnings)
+	}
+	if got := result.SkippedRows["tunnels"]; got != 3 {
+		t.Fatalf("SkippedRows[tunnels] = %d, want 3, skipped=%v", got, result.SkippedRows)
+	}
+	warnText := strings.Join(result.ImportWarnings, "\n")
+	for _, want := range []string{"type=9", "status=7", "type=0"} {
+		if !strings.Contains(warnText, want) {
+			t.Fatalf("receipt must name %q, warnings=%v", want, result.ImportWarnings)
+		}
+	}
+	var tun model.Tunnel
+	if err := dst.db.Where("id = ?", 4).First(&tun).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tun.Type != 2 || tun.Status != 0 {
+		t.Fatalf("tunnel 4 type/status = %d/%d, want 2/0", tun.Type, tun.Status)
+	}
+}
+
 // B8-02（限值同源）：限值经 service_monitor_* 配置键调整后，恢复面
 // 钳制跟随配置口径，与写面 resolveServiceMonitorLimits 同源。
 func TestImportServiceMonitorsLimitsFromConfig(t *testing.T) {

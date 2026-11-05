@@ -4006,6 +4006,26 @@ func validateImportedTunnelTrafficRatio(ratio float64) error {
 	return nil
 }
 
+// B8-05：恢复面隧道 Type/Status 枚举门，与保存面同合法集——
+// Type ∈ {1,2}、Status ∈ {0,1}（handler 包 validateTunnelType /
+// validateTunnelStatus，B06-001）。此前 importTunnels 对 flow/
+// ratio/probe/名长都有门，唯独这两字段原样落库：备份 type=9、
+// status=7 可恢复出 UI 映射与未来闭集消费面都不认的行。镜像
+// 纪律同 validateImportedTunnelFlow（包循环故本地同集实现）。
+func validateImportedTunnelType(typeVal int) error {
+	if typeVal != 1 && typeVal != 2 {
+		return fmt.Errorf("隧道类型超出范围 {1,2}: %d", typeVal)
+	}
+	return nil
+}
+
+func validateImportedTunnelStatus(status int) error {
+	if status != 0 && status != 1 {
+		return fmt.Errorf("隧道状态超出范围 {0,1}: %d", status)
+	}
+	return nil
+}
+
 // R7-H-01: the restore-face port gate. Before this batch the 1-65535
 // gate had exactly two restore landings (inbound rows and service
 // monitor targets); every other port carrier in a backup restored
@@ -4116,6 +4136,20 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 		if len([]rune(t.Name)) > 100 {
 			rep.skip("tunnels")
 			rep.warnf("备份恢复：隧道 #%d 的名称长度超过 100 个字符，已跳过该行未恢复", t.ID)
+			continue
+		}
+		// B8-05：Type/Status 枚举门镜像写面（validateTunnelType/
+		// validateTunnelStatus，合法集 {1,2}/{0,1}）——此前两字段
+		// 原样落库，集外值恢复出的行与 UI 映射及闭集消费面脱节。
+		// 与 flow 门同形：集外逐行跳过 + warning。
+		if err := validateImportedTunnelType(t.Type); err != nil {
+			rep.skip("tunnels")
+			rep.warnf("备份恢复：隧道 #%d（%q）的 type=%d 不在合法枚举 {1,2} 内，已跳过该行未恢复", t.ID, t.Name, t.Type)
+			continue
+		}
+		if err := validateImportedTunnelStatus(t.Status); err != nil {
+			rep.skip("tunnels")
+			rep.warnf("备份恢复：隧道 #%d（%q）的 status=%d 不在合法枚举 {0,1} 内，已跳过该行未恢复", t.ID, t.Name, t.Status)
 			continue
 		}
 		validTunnels = append(validTunnels, t)
