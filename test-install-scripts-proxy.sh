@@ -447,6 +447,63 @@ EOF
   grep -q 'sub.example.com' "$err" || fail "A2-05: the shared-block rewrite must be named on stderr"
 )
 
+# A2-06（audit-max）：无 Docker 卸载的清理集与 Docker 分支对齐
+# ——旧实现只删 docker-compose.yml/.env 两文件，backups/（含完整
+# DB 备份与 .env 密钥副本）、.env 历史备份、PG 迁移快照、
+# gost.db.bak 与更新临时文件全部残留，而 Docker 分支回执口径
+# 是「删除所有数据」（L2-14 已在该分支闭合、本分支漏补）。两
+# 幕：① 自家部署＋全量残留集 → 逐项点名且全部删除；② 仅剩残
+# 留产物（无 compose/.env）时不再谎称「无需清理」——走归属确
+# 认，确认后删除、拒绝则保留。
+test_panel_uninstall_without_docker_cleans_full_residual_set() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  check_docker() { return 1; }
+
+  make_residuals() {
+    local d="$1"
+    mkdir -p "$d/backups"
+    printf 'db-backup\n' > "$d/backups/backup.tar"
+    printf 'x\n' > "$d/.env.bak.1"
+    printf 'x\n' > "$d/docker-compose.yml.bak.1"
+    printf 'x\n' > "$d/.env.pre-postgres-migration"
+    printf 'x\n' > "$d/gost.db.bak"
+    printf 'x\n' > "$d/.docker-compose.yml.update.1"
+    printf 'x\n' > "$d/.docker-compose.yml.install.1"
+  }
+  assert_residuals_gone() {
+    local d="$1" item
+    for item in backups .env.bak.1 docker-compose.yml.bak.1 .env.pre-postgres-migration gost.db.bak .docker-compose.yml.update.1 .docker-compose.yml.install.1; do
+      [[ ! -e "$d/$item" ]] || fail "A2-06: residual $item must be deleted by the no-docker uninstall"
+    done
+  }
+
+  # ① 自家部署＋全量残留
+  local d out rc="0"
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  make_residuals "$d"
+  out=$( ( cd "$d" && uninstall_panel </dev/null 2>&1 ) ) || rc="$?"
+  assert_equals "0" "$rc" "A2-06: own no-docker uninstall should succeed"
+  [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "A2-06: compose/.env must be removed"
+  assert_residuals_gone "$d"
+  grep -q 'backups/' <<< "$out" || fail "A2-06: the residual listing must name backups/ before deletion"
+
+  # ② 仅残留产物：拒绝保留、确认删除
+  d=$(mktemp -d)
+  make_residuals "$d"
+  rc="0"
+  ( cd "$d" && uninstall_panel <<< "n" >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "A2-06: declining the confirmation should be a clean no-op"
+  [[ -d "$d/backups" ]] || fail "A2-06: residuals must stay when confirmation is declined"
+  rc="0"
+  ( cd "$d" && uninstall_panel <<< "y" >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "A2-06: confirming should clean residuals-only directories"
+  assert_residuals_gone "$d"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -9863,5 +9920,6 @@ test_panel_pin_no_live_read_no_volume_key
 test_panel_download_routed_total_budget
 test_panel_installer_script_curl_uses_timeouts
 test_panel_caddyfile_without_site_keeps_shared_addresses
+test_panel_uninstall_without_docker_cleans_full_residual_set
 
 echo "install script tests passed"

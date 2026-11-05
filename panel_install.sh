@@ -4368,17 +4368,36 @@ uninstall_panel() {
     # 面板镜像或 .env 专属名声明）才直接删；归属未证须显式确认，
     # 无输入（非交互）时不删。
     echo "未检测到 Docker，本机没有容器化的面板部署，无需卸载。"
-    if [[ ! -f docker-compose.yml && ! -f .env ]]; then
+    # A2-06：清理集与 Docker 分支对齐（L2-14 已在该分支闭合、
+    # 本分支漏补）——旧实现只认/只删 docker-compose.yml 与 .env
+    # 两文件，backups/（含完整 DB 备份与 .env 密钥副本）、.env
+    # 历史备份、强制重装的 compose 备份、PG 迁移快照、SQLite
+    # 备份与更新临时文件全部残留，且仅剩这些残留时还谎称「无
+    # 需清理」。现按同一集合先建清单逐项点名，再走下方归属门
+    # （AI-09 口径不变），确认后整集删除、回执复述已删清单。
+    local -a nodocker_residuals=()
+    local nodocker_item nodocker_match
+    for nodocker_item in docker-compose.yml .env .env.pre-postgres-migration gost.db.bak; do
+      if [[ -e "$nodocker_item" ]]; then
+        nodocker_residuals+=("$nodocker_item")
+      fi
+    done
+    if [[ -d backups ]]; then
+      nodocker_residuals+=("backups/")
+    fi
+    shopt -s nullglob
+    for nodocker_match in .env.bak.* docker-compose.yml.bak.* .docker-compose.yml.update.* .docker-compose.yml.install.*; do
+      nodocker_residuals+=("$nodocker_match")
+    done
+    shopt -u nullglob
+    if (( ${#nodocker_residuals[@]} == 0 )); then
       echo "当前目录没有残留的部署配置文件，无需清理。"
       return 0
     fi
     echo "当前目录残留部署配置文件："
-    if [[ -f docker-compose.yml ]]; then
-      echo "  - docker-compose.yml"
-    fi
-    if [[ -f .env ]]; then
-      echo "  - .env"
-    fi
+    for nodocker_item in "${nodocker_residuals[@]}"; do
+      echo "  - $nodocker_item"
+    done
     if is_foreign_panel_deploy_dir .; then
       echo "❌ 上述文件明确属于另一套面板的部署（Compose 的 image 行未引用本面板镜像，或 .env 声明的后端名不属于本面板），本脚本不删除他人文件，未做任何修改。"
       return 1
@@ -4395,8 +4414,8 @@ uninstall_panel() {
       fi
     fi
     echo "🧹 清理残留配置文件..."
-    rm -f docker-compose.yml .env
-    echo "✅ 清理完成"
+    rm -rf "${nodocker_residuals[@]}"
+    echo "✅ 清理完成（已删除：${nodocker_residuals[*]}）"
     return 0
   fi
 
