@@ -5475,6 +5475,12 @@ func normalizeImportedMonitoringConfigValue(name, value string) (string, error) 
 }
 
 func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *importReport) (int, error) {
+	// B8-12：被导入面过滤剔除的键在过滤前先取名单进回执点名
+	// （只报键名与条数、绝不带值）——此前静默消失，管理员无从
+	// 知道备份中哪些设置未恢复。
+	if dropped := restoreDroppedConfigKeys(configs); len(dropped) > 0 {
+		rep.warnf("备份恢复：%d 个配置键属于凭据/系统托管/运行时排除集，未随恢复落库：%s", len(dropped), strings.Join(dropped, "、"))
+	}
 	// RB4-01：导入面走 filterRestoreConfigs（只排凭据/系统态/台账，
 	// 不叠加导出面的默认敏感口径），未知键按 R3 K5 口径原样恢复。
 	configs = filterRestoreConfigs(configs)

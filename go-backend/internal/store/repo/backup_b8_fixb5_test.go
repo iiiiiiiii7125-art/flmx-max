@@ -594,6 +594,56 @@ func TestImportNodeRenewalForwardModeNormalization(t *testing.T) {
 	}
 }
 
+// B8-12：configs 导入过滤剔除的键必须在回执点名（键名 + 条数），
+// 值绝不进回执；未被过滤的键照常落库。
+func TestImportConfigsDroppedKeysNamedInReceipt(t *testing.T) {
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Configs: map[string]string{
+			"jwt_secret":        "should-not-land-or-leak",
+			"gist_id":           "gist-xyz",
+			"notify_daily_last": "123",
+			"plain_key":         "kept-value",
+		},
+	}
+	result, err := dst.Import(backup, []string{"configs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ConfigsImported != 1 {
+		t.Fatalf("ConfigsImported = %d, want 1 (only plain_key), warnings=%v", result.ConfigsImported, result.ImportWarnings)
+	}
+	warnText := strings.Join(result.ImportWarnings, "\n")
+	for _, want := range []string{"3 个配置键", "jwt_secret", "gist_id", "notify_daily_last"} {
+		if !strings.Contains(warnText, want) {
+			t.Fatalf("receipt must name %q, warnings=%v", want, result.ImportWarnings)
+		}
+	}
+	if strings.Contains(warnText, "should-not-land-or-leak") {
+		t.Fatalf("receipt must never carry config values, warnings=%v", result.ImportWarnings)
+	}
+	var leaked int64
+	if err := dst.db.Model(&model.ViteConfig{}).Where("value = ?", "should-not-land-or-leak").Count(&leaked).Error; err != nil {
+		t.Fatal(err)
+	}
+	if leaked != 0 {
+		t.Fatalf("dropped key value must not land, found %d rows", leaked)
+	}
+	var kept model.ViteConfig
+	if err := dst.db.Where("name = ?", "plain_key").First(&kept).Error; err != nil {
+		t.Fatalf("plain_key must land: %v", err)
+	}
+	if kept.Value != "kept-value" {
+		t.Fatalf("plain_key value = %q, want kept-value", kept.Value)
+	}
+}
+
 // B8-02（限值同源）：限值经 service_monitor_* 配置键调整后，恢复面
 // 钳制跟随配置口径，与写面 resolveServiceMonitorLimits 同源。
 func TestImportServiceMonitorsLimitsFromConfig(t *testing.T) {
