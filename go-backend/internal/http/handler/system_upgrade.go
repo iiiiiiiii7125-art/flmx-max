@@ -1077,6 +1077,16 @@ var errPGVolumeUndetermined = fmt.Errorf("无法确定现有 PostgreSQL 数据�
 // （脚本面 PG 格在脚本侧同批补齐）。
 var errAccidentStateVolume = fmt.Errorf("疑似事故态：实读卷为模板新缺省卷而旧名卷仍含真实数据")
 
+// errAccidentProbeFailed 是事故态门证据探针失败的 fail-closed
+// 哨兵（A-AN1）：门的前件（缺键＋实读恰为模板新缺省卷名）成
+// 立时，若探针通道本身失败（docker 查询报错、后端镜像读不
+// 到、探针容器运行失败），证据状态是「未知」而非「无证据」
+// ——把未知按无证据放行等于让门在证据最要紧的时刻静默失
+// 效、把空卷钉键正式化。故与脚本面 panel_volume_file_state
+// 的三态口径对齐：未知与「在」同处置（中止并点名探针失
+// 败），只有探针实证「确定不在」才按无证据照常钉键。
+var errAccidentProbeFailed = fmt.Errorf("事故态门证据探针失败，无法排除旧名卷含有真实数据")
+
 // dockerResourceNamePattern 是 Docker 卷/网络名的合法形态（名称必
 // 以字母数字开头，其后为字母数字与 _ . -）：inspect 实读值不合此
 // 式视为未读到，不钉入 .env。
@@ -1292,11 +1302,20 @@ type resourceNameInspect struct {
 	// postgresDataVolumeExists 为历史缺省名 PG 卷是否存在。
 	postgresDataVolumeExists bool
 	// sqliteLegacyVolumeHasDB 为旧名卷 sqlite_data 存在且含
-	// gost.db（事故态门的真库证据；探测不到按无证据）。
+	// gost.db（事故态门的真库证据；确定不在才按无证据，探针
+	// 通道失败见 sqliteLegacyVolumeProbeErr）。
 	sqliteLegacyVolumeHasDB bool
 	// postgresLegacyVolumeHasData 为旧名卷 postgres_data 存在且
 	// 含 PG_VERSION（事故态门 PG 格的真库证据；同上）。
 	postgresLegacyVolumeHasData bool
+	// sqliteLegacyVolumeProbeErr / postgresLegacyVolumeProbeErr
+	// 为对应格证据探针的通道失败（A-AN1）：非空表示证据状态未
+	// 知（不是「确定不在」）——规划段在门前件成立时据此以
+	// errAccidentProbeFailed fail-closed 中止，不把未知按无证
+	// 据放行。探针跑通时两字段为空（文件在则 HasDB/HasData
+	// 为真、确定不在则为假）。
+	sqliteLegacyVolumeProbeErr   error
+	postgresLegacyVolumeProbeErr error
 	// pgContainerFound 为旧 PG 容器已定位成功：卷实读为空时据此
 	// 区分「容器不在场」与「在场但挂载读空（bind 等）」，供
 	// R1-01-L5 的 PG bind 中止判定。
@@ -1358,6 +1377,10 @@ type resourcePinPlan struct {
 // 省卷名（带实例后缀）＋旧名卷含真实数据证据（SQLite 卷含
 // gost.db / PG 卷含 PG_VERSION）→ 返回 errAccidentStateVolume
 // 中止：该部署是事故后未救援形态，钉实读值会把事故态正式化。
+// 探针失败同门中止（A-AN1）：前件（缺键＋实读恰为新缺省名）
+// 成立但证据探针通道失败时证据状态为未知——按
+// errAccidentProbeFailed 中止并点名探针失败，不把未知当无证
+// 据放行（与脚本面 panel_volume_file_state 未知态同处置）。
 // 实读为空时的键信任（R1-01-L5，仅 PG 格）：PG 模式、PG 卷键
 // 已有值、旧 PG 容器已定位且其挂载 inspect 成功但卷名为空
 // （bind 挂载）时，键值无从核对——此形态下脚本面逐字信键、重
@@ -1385,6 +1408,10 @@ func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) (re
 				return plan, fmt.Errorf("%w：部署 .env 缺少 %s，在跑后端实际挂载的数据卷是模板新缺省卷 %s，但旧名卷 %s 存在且含有 gost.db——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重试升级：数据在旧卷 → %s=%s；数据确在现行卷 → %s=%s",
 					errAccidentStateVolume, envKeySQLiteVolume, insp.sqliteVolume, legacySQLiteDataVolume,
 					envKeySQLiteVolume, legacySQLiteDataVolume, envKeySQLiteVolume, insp.sqliteVolume)
+			}
+			if insp.sqliteVolume == newSQLiteDataVolume+panelInstanceSuffix(env) && insp.sqliteLegacyVolumeProbeErr != nil {
+				return plan, fmt.Errorf("%w：部署 .env 缺少 %s，在跑后端实际挂载的数据卷是模板新缺省卷 %s，事故态门需确认旧名卷 %s 是否含有 gost.db，但证据探针执行失败（%v），无法排除「真库在旧卷」的事故形态，此时钉键可能把事故态正式化。请先修复探针通道（docker 可用、后端镜像可读）后重试，或人工确认数据所在卷后在 .env 中显式钉入正确卷名再重试",
+					errAccidentProbeFailed, envKeySQLiteVolume, insp.sqliteVolume, legacySQLiteDataVolume, insp.sqliteLegacyVolumeProbeErr)
 			}
 			plan.pins = append(plan.pins, envKeyValue{envKeySQLiteVolume, insp.sqliteVolume})
 			expected = insp.sqliteVolume
@@ -1419,6 +1446,10 @@ func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) (re
 			return plan, fmt.Errorf("%w：部署 .env 缺少 %s，在跑 PostgreSQL 容器实际挂载的数据卷是模板新缺省卷 %s，但旧名卷 %s 存在且含有 PG_VERSION（真实 PostgreSQL 数据目录）——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时钉键会把事故态正式化。请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重试升级：数据在旧卷 → %s=%s；数据确在现行卷 → %s=%s",
 				errAccidentStateVolume, envKeyPostgresVolume, insp.pgVolume, legacyPostgresDataVolume,
 				envKeyPostgresVolume, legacyPostgresDataVolume, envKeyPostgresVolume, insp.pgVolume)
+		}
+		if insp.pgVolume == newPostgresDataVolume+panelInstanceSuffix(env) && insp.postgresLegacyVolumeProbeErr != nil {
+			return plan, fmt.Errorf("%w：部署 .env 缺少 %s，在跑 PostgreSQL 容器实际挂载的数据卷是模板新缺省卷 %s，事故态门需确认旧名卷 %s 是否含有 PG_VERSION，但证据探针执行失败（%v），无法排除「真库在旧卷」的事故形态，此时钉键可能把事故态正式化。请先修复探针通道（docker 可用、后端镜像可读）后重试，或人工确认数据所在卷后在 .env 中显式钉入正确卷名再重试",
+				errAccidentProbeFailed, envKeyPostgresVolume, insp.pgVolume, legacyPostgresDataVolume, insp.postgresLegacyVolumeProbeErr)
 		}
 		pgVolume := insp.pgVolume
 		if pgVolume == "" && insp.postgresDataVolumeExists {
@@ -1528,36 +1559,61 @@ func (e *systemUpgradeExecutor) inspectLegacyResourceNames(ctx context.Context, 
 
 	// 事故态门的真库证据探测：仅在门的前件（缺键＋实读恰为模板
 	// 新缺省名）成立时才花一次性探针容器，常态升级零额外开销。
+	// 探针通道失败记入 ProbeErr、由规划段 fail-closed（A-AN1）。
 	suffix := panelInstanceSuffix(env)
 	if env[envKeySQLiteVolume] == "" && insp.backendExists && insp.sqliteVolume == newSQLiteDataVolume+suffix {
-		insp.sqliteLegacyVolumeHasDB = e.dockerVolumeFileExists(ctx, legacySQLiteDataVolume, "gost.db")
+		insp.sqliteLegacyVolumeHasDB, insp.sqliteLegacyVolumeProbeErr = e.dockerVolumeFileExists(ctx, legacySQLiteDataVolume, "gost.db")
 	}
 	if env[envKeyPostgresVolume] == "" && insp.pgVolume == newPostgresDataVolume+suffix {
-		insp.postgresLegacyVolumeHasData = e.dockerVolumeFileExists(ctx, legacyPostgresDataVolume, "PG_VERSION")
+		insp.postgresLegacyVolumeHasData, insp.postgresLegacyVolumeProbeErr = e.dockerVolumeFileExists(ctx, legacyPostgresDataVolume, "PG_VERSION")
 	}
 	return insp
 }
 
 // dockerVolumeFileExists 探测命名卷内是否存在指定文件（事故态门
-// 的真库证据，与脚本面 panel_volume_file_exists 同语义：探测不
-// 到一律按「无证据」返回 false，不臆断卷内有数据）。面板进程自
-// 身没有宿主机卷挂载点视图，故借后端镜像起一次性只读探针容
-// 器挂卷查看；卷不存在、镜像读不到或探针运行失败均返回 false
-// ——探针是证据通道而非裁决面，其失败只使门退回未立门时的行
-// 为，绝不反向误拦正常升级。relPath 只由内部常量传入
-// （gost.db / PG_VERSION），不接受外部输入。
-func (e *systemUpgradeExecutor) dockerVolumeFileExists(ctx context.Context, volume, relPath string) bool {
-	if exec.CommandContext(ctx, "docker", "volume", "inspect", volume).Run() != nil {
-		return false
+// 的真库证据，与脚本面 panel_volume_file_state 三态同语义）：
+// 返回 (true, nil)＝探针实证文件在；(false, nil)＝确定不在
+// （卷本身不存在，或探针容器成功运行且 test -f 给出否定裁
+// 决）；(false, err)＝探针通道失败、证据状态未知（卷查询报
+// 错、后端镜像读不到、探针容器运行失败）。消费面是事故态门
+// 的判定：未知绝不能按「无证据」消费（A-AN1——旧实现把三
+// 态一律压成 false，探针越坏门越瞎、空卷照常钉键），规划段
+// 对未知 fail-closed 中止。面板进程自身没有宿主机卷挂载点
+// 视图，故借后端镜像起一次性只读探针容器挂卷查看。relPath
+// 只由内部常量传入（gost.db / PG_VERSION），不接受外部输入。
+func (e *systemUpgradeExecutor) dockerVolumeFileExists(ctx context.Context, volume, relPath string) (bool, error) {
+	// 卷存在性：inspect 失败时只有其 stderr 明示卷不存在才算
+	// 「确定不在」；其余失败（守护进程不可达、权限、CLI 故障）
+	// 一律是探针通道失败（未知），不冒充无证据。
+	if _, err := exec.CommandContext(ctx, "docker", "volume", "inspect", volume).Output(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && strings.Contains(strings.ToLower(string(exitErr.Stderr)), "no such volume") {
+			return false, nil
+		}
+		return false, fmt.Errorf("查询卷 %s 是否存在失败: %v", volume, err)
 	}
 	imageID, err := e.currentBackendImage(ctx)
-	if err != nil || imageID == "" {
-		return false
+	if err != nil {
+		return false, err
 	}
-	return exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
+	if imageID == "" {
+		return false, fmt.Errorf("后端镜像 ID 为空，无法起探针容器")
+	}
+	runErr := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
 		"-v", volume+":/flmx-volume-probe:ro",
 		"--entrypoint", "/bin/sh", imageID,
-		"-c", "test -f /flmx-volume-probe/"+relPath).Run() == nil
+		"-c", "test -f /flmx-volume-probe/"+relPath).Run()
+	if runErr == nil {
+		return true, nil
+	}
+	// test -f 的否定裁决恒为退出码 1（文件不在）；docker run
+	// 的通道故障是 125（守护进程侧拒绝）/126/127 等其它码，
+	// 只有 1 算证据，其余按探针失败（未知）上报。
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("探针容器查看卷 %s 内文件失败: %v", volume, runErr)
 }
 
 // pinLegacyResourceNames 在升级动任何文件之前执行钉键：读部署
