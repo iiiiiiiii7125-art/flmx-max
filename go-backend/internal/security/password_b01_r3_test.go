@@ -15,7 +15,7 @@ func TestVerifyPasswordLegacyMismatchBurnsBcryptCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyHash := MD5("correct-horse")
+	legacyHash := legacyMD5Hex("correct-horse")
 
 	measure := func(hash string) time.Duration {
 		start := time.Now()
@@ -41,12 +41,13 @@ func TestVerifyPasswordLegacyMismatchBurnsBcryptCost(t *testing.T) {
 	}
 }
 
-// legacy 语义保持：命中仍报 legacy 标记（登录后迁移依赖它），
-// 错密现也如实报告存储为 legacy；bcrypt 两态不变。
+// legacy 语义（R-MD5 sunset 后）：存储形态恒如实报告 legacy，
+// 但正确口令也不再命中——原「命中 (true,true)」断言已被 sunset
+// 取代；错密同为 (false,true)；bcrypt 两态不变。
 func TestVerifyPasswordLegacyFlags(t *testing.T) {
-	legacyHash := MD5("s3cret")
-	if ok, legacy := VerifyPassword(legacyHash, "s3cret"); !ok || !legacy {
-		t.Fatalf("legacy hit = (%v,%v), want (true,true)", ok, legacy)
+	legacyHash := legacyMD5Hex("s3cret")
+	if ok, legacy := VerifyPassword(legacyHash, "s3cret"); ok || !legacy {
+		t.Fatalf("legacy correct password = (%v,%v), want (false,true)", ok, legacy)
 	}
 	if ok, legacy := VerifyPassword(legacyHash, "nope"); ok || !legacy {
 		t.Fatalf("legacy miss = (%v,%v), want (false,true)", ok, legacy)

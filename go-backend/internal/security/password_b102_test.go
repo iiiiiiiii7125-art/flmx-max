@@ -9,7 +9,8 @@ import (
 // B1-02: bcrypt 静默截断 72 字节之外的输入——此前设密面无最大
 // 长度，两条仅在 72 字节后不同的口令完全等价。本组用例钉住：
 // 设密面（HashPassword 单点）拒超长、校验面不靠截断命中、恰
-// 72 字节仍可用、legacy MD5 长口令不被误伤（MD5 无截断语义）。
+// 72 字节仍可用。legacy MD5 长口令原有「不被 72 字节门误伤」
+// 的豁免已随 R-MD5 sunset 落空：legacy 存储整体不再验行。
 
 func TestHashPasswordRejectsOver72Bytes(t *testing.T) {
 	if _, err := HashPassword(strings.Repeat("a", 72)); err != nil {
@@ -45,10 +46,12 @@ func TestVerifyPasswordNoTruncationEquivalence(t *testing.T) {
 	}
 }
 
-func TestVerifyPasswordLegacyMD5LongPasswordUnaffected(t *testing.T) {
+// R-MD5 sunset 取代 B1-02 的 legacy 豁免：超长 legacy 口令与其余
+// legacy 口令同命——存储只报 legacy 形态、永不命中。
+func TestVerifyPasswordLegacyMD5LongPasswordRejectedBySunset(t *testing.T) {
 	long := strings.Repeat("z", 100)
-	stored := MD5(long)
-	if ok, legacy := VerifyPassword(stored, long); !ok || !legacy {
-		t.Fatalf("legacy MD5 long password must still verify (ok=%v legacy=%v)", ok, legacy)
+	stored := legacyMD5Hex(long)
+	if ok, legacy := VerifyPassword(stored, long); ok || !legacy {
+		t.Fatalf("legacy MD5 must never verify after sunset (ok=%v legacy=%v)", ok, legacy)
 	}
 }

@@ -13,6 +13,37 @@ import (
 
 const jwtSecretFileName = "jwt_secret"
 
+// jwtSecretMinLength 是 B1-04 告警口径的长度下限（字符数）。
+const jwtSecretMinLength = 32
+
+// jwtSecretWeakness 返回密钥为何过弱（"" = 达标）。判据两档：
+// 长度 < 32 字符；或长度达标但不同字节数 < 8（明显低熵，如长串
+// 重复同一字符）。密钥本体不出现在返回值中。
+func jwtSecretWeakness(secret string) string {
+	if len(secret) < jwtSecretMinLength {
+		return fmt.Sprintf("长度仅 %d 字符（低于 %d 字符下限）", len(secret), jwtSecretMinLength)
+	}
+	distinct := make(map[byte]struct{}, 16)
+	for i := 0; i < len(secret); i++ {
+		distinct[secret[i]] = struct{}{}
+	}
+	if len(distinct) < 8 {
+		return fmt.Sprintf("仅含 %d 种不同字符（熵过低）", len(distinct))
+	}
+	return ""
+}
+
+// warnOnWeakJWTSecret 在密钥过弱时打具名 WARN（B1-04）：写清风险
+// 与改法，但只告警、不拒启——存量部署可能正以弱密钥运行，硬拒会
+// 把可修复的配置问题升级为停机。日志绝不包含密钥本体或片段。
+func warnOnWeakJWTSecret(source, secret string) {
+	reason := jwtSecretWeakness(secret)
+	if reason == "" {
+		return
+	}
+	log.Printf("WARN JWT_SECRET_WEAK: %s 的 JWT 密钥过弱（%s）。弱密钥可被离线猜解，猜中即可伪造任意用户（含管理员）的登录令牌。请改用至少 32 字符的随机密钥（如 openssl rand -hex 32）后重启服务；注意更换密钥会使既有登录令牌全部失效。", source, reason)
+}
+
 // EnsureJWTSecret 在 JWT_SECRET 未设置时，从文件加载或生成持久化密钥。
 // 语义：优先环境变量（JWTEphemeral=false 时直接返回）→ 读 <DBPath 同级>/jwt_secret 文件
 // → 都没有则生成 32 字节随机值并以 0600 权限写入文件。
@@ -28,7 +59,9 @@ const jwtSecretFileName = "jwt_secret"
 // 而非检查 JWTSecret 是否为空（我们的 FromEnv 总会生成临时密钥）。
 func EnsureJWTSecret(cfg *Config) (generated bool, err error) {
 	// 环境变量已配置，或已经是持久化密钥，无需处理。
+	// B1-04：环境配置的密钥在此过一遍弱密钥告警（单点）。
 	if !cfg.JWTEphemeral {
+		warnOnWeakJWTSecret("环境变量 JWT_SECRET", cfg.JWTSecret)
 		return false, nil
 	}
 
@@ -40,6 +73,8 @@ func EnsureJWTSecret(cfg *Config) (generated bool, err error) {
 			cfg.JWTEphemeral = false
 			// R7-19 来源日志：读到既有密钥（日志只记路径）。
 			log.Printf("jwt_secret 来源: 读到既有密钥（文件 %s）", path)
+			// B1-04：文件来源的存量密钥同样过弱密钥告警。
+			warnOnWeakJWTSecret("密钥文件 "+path, secret)
 			return false, nil
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {

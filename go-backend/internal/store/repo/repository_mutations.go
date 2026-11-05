@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"go-backend/internal/security"
 	"go-backend/internal/store/model"
 
 	"gorm.io/gorm"
@@ -260,6 +261,39 @@ func (r *Repository) MigrateUserPasswordHash(userID int64, pwdHash string, now i
 			"pwd":          pwdHash,
 			"updated_time": sql.NullInt64{Int64: now, Valid: true},
 		}).Error
+}
+
+// SunsetLegacyUserPassword 把仍持 legacy MD5 哈希的存量账户收口
+// 为与导入面 normalizeImportedUserPassword 相同的终态（R-MD5
+// sunset）：随机 bcrypt 替换原哈希（原口令即刻不可用）、status=0、
+// password_changed_at=now（吊销既有会话）；密码重置走既有管理员
+// 通道，与导入的 legacy 账户同路，不另造重置语义。更新以「id＋
+// 当前存储哈希」为守卫：并发下存储已被管理员重置（不再是原
+// legacy 哈希）时不覆盖、返回 applied=false；存储不是 legacy
+// 形态时同样不动作。
+func (r *Repository) SunsetLegacyUserPassword(userID int64, currentHash string, now int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("repository not initialized")
+	}
+	if !security.IsLegacyPasswordHash(currentHash) {
+		return false, nil
+	}
+	replacement, err := randomPasswordHash()
+	if err != nil {
+		return false, err
+	}
+	res := r.db.Model(&model.User{}).
+		Where("id = ? AND pwd = ?", userID, currentHash).
+		Updates(map[string]interface{}{
+			"pwd":                 replacement,
+			"status":              0,
+			"password_changed_at": now,
+			"updated_time":        sql.NullInt64{Int64: now, Valid: true},
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *Repository) PropagateUserFlowToTunnels(userID int64, flow int64, num int, expTime, flowResetTime int64, flowMiB ...int64) error {

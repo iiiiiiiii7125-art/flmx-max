@@ -1,7 +1,8 @@
 package handler
 
 import (
-	"encoding/json"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,13 @@ import (
 	"go-backend/internal/store/repo"
 )
 
+// kr4LegacyMD5Hex 仅供测试构造 legacy MD5 存储夹具（生产侧
+// security.MD5 已随 R-MD5 sunset 整删）。
+func kr4LegacyMD5Hex(plain string) string {
+	sum := md5.Sum([]byte(plain))
+	return hex.EncodeToString(sum[:])
+}
+
 // R4B01 KR4 回归门（Round 4 认证面）：
 //   - R4B01-001：tightenedLoginIPs 无容量上限、无过期批量清扫，是未认证
 //     可写内存表全集唯一漏网（其余六表均「上限+淘汰」）。修复后达上限
@@ -25,6 +33,11 @@ import (
 //     补偿，一次只读拉取即吊销该用户全部既有面板会话。修复后两条
 //     rehash 路径统一走 MigrateUserPasswordHash（只换哈希不动
 //     password_changed_at）；真实改密仍须推进并踢掉旧会话。
+//     【R-MD5 sunset 取代（2026-11-05 发版批）：透明 rehash 整体退役
+//     ——legacy 存储不再验密放行，登录面把账户收口为与导入面相同的
+//     终态（凭据作废＋停用＋推进 password_changed_at 吊销会话）。
+//     下方两条 002 用例已按 sunset 语义改写并更名，断言强度不降；
+//     「真实改密仍推进并踢旧会话」一条不受影响、原样保留。】
 //
 // 红绿判据：001 的两条在修复前 tightenedLoginMaxEntries 与淘汰逻辑不
 // 存在（编译期即红）；002 的两条在修复前 PasswordChangedAt 断言必红
@@ -60,7 +73,7 @@ func kr4SessionProbe(t *testing.T, r *repo.Repository) func(token string) string
 func kr4LegacyUser(t *testing.T, r *repo.Repository, username, password string) (int64, int64) {
 	t.Helper()
 	now := time.Now().UnixMilli()
-	legacyHash := security.MD5(password)
+	legacyHash := kr4LegacyMD5Hex(password)
 	uid, err := r.CreateUser(username, legacyHash, 1, now+86400000, 100, 1, 10, 1, 0, now)
 	if err != nil {
 		t.Fatalf("create legacy user: %v", err)
@@ -211,11 +224,12 @@ func TestR4B01_TightenedJudgementUnchanged(t *testing.T) {
 	}
 }
 
-// ---- R4B01-002 ----
+// ---- R4B01-002 → R-MD5 sunset（改写，见文件头取代注记） ----
 
-// sub_store 透明 rehash：鉴权成功、哈希升级为 bcrypt，且
-// password_changed_at 纹丝不动——rehash 之前签发的面板会话仍有效。
-func TestR4B01_SubStoreRehashKeepsExistingSession(t *testing.T) {
+// sub_store 面 sunset：legacy 存储携正确口令拉取也鉴权失败，且账户
+// 被收口为导入面终态——存储换成不验旧口令的随机 bcrypt、status=0、
+// password_changed_at 推进、既有面板会话被吊销。
+func TestR4B01_SubStoreLegacySunsetAppliesImportEndState(t *testing.T) {
 	h, r := setupD11LoginHandler(t)
 	resetD11ForTest()
 	subStoreLimiter = &loginRateLimiter{buckets: make(map[string]*loginAttemptBucket)}
@@ -236,10 +250,10 @@ func TestR4B01_SubStoreRehashKeepsExistingSession(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "198.51.100.77:4000"
 	h.openAPISubStore(w, req)
-	// 成功口径：响应头/body 为纯文本 subscription-userinfo（鉴权失败
-	// 则是 JSON 信封错误），以此断言鉴权确已通过、流程走到用量下发。
-	if hdr := w.Header().Get("subscription-userinfo"); !strings.HasPrefix(hdr, "upload=") {
-		t.Fatalf("sub_store auth must succeed and emit subscription-userinfo, got header %q body %s", hdr, w.Body.String())
+	// sunset 口径：鉴权不得通过（成功才有 subscription-userinfo 头，
+	// 失败为 JSON 信封错误）。
+	if hdr := w.Header().Get("subscription-userinfo"); hdr != "" {
+		t.Fatalf("legacy sub_store auth must not pass after sunset, got userinfo header %q body %s", hdr, w.Body.String())
 	}
 
 	after, err := r.GetUserByID(uid)
@@ -247,20 +261,26 @@ func TestR4B01_SubStoreRehashKeepsExistingSession(t *testing.T) {
 		t.Fatalf("reload user after sub_store: %v", err)
 	}
 	if !strings.HasPrefix(after.Pwd, "$2") {
-		t.Fatalf("rehash must have upgraded stored hash to bcrypt, got prefix %.2s", after.Pwd)
+		t.Fatalf("sunset must replace stored hash with bcrypt, got prefix %.2s", after.Pwd)
 	}
-	if after.PasswordChangedAt != pca {
-		t.Fatalf("transparent rehash must not advance password_changed_at: before=%d after=%d (修复前 FAIL)", pca, after.PasswordChangedAt)
+	if ok, legacy := security.VerifyPassword(after.Pwd, "legacy-password"); ok || legacy {
+		t.Fatalf("sunset replacement must not verify the old password, got (%v,%v)", ok, legacy)
 	}
-	if body := probe(oldToken); body != "reached" {
-		t.Fatalf("pre-existing panel session must survive sub_store rehash, got %s (修复前 FAIL)", body)
+	if after.Status != 0 {
+		t.Fatalf("sunset must disable the account pending admin reset, status=%d", after.Status)
+	}
+	if after.PasswordChangedAt <= pca {
+		t.Fatalf("sunset is a credential invalidation and must advance password_changed_at: before=%d after=%d", pca, after.PasswordChangedAt)
+	}
+	if body := probe(oldToken); !strings.Contains(body, `"code":401`) {
+		t.Fatalf("pre-existing panel session must be revoked by sunset, got %s", body)
 	}
 }
 
-// login 透明 rehash：登录成功、token 口径不变（IatMs 严格大于
-// password_changed_at、中间件放行），且 password_changed_at 不被
-// 推进——rehash 前签发的既有会话同样不被附带吊销。
-func TestR4B01_LoginRehashKeepsPasswordChangedAt(t *testing.T) {
+// login 面 sunset：legacy 存储携正确口令登录返回与错密相同的通用
+// 错误、不签发 token，账户同被收口为导入面终态；错密尝试对另一个
+// legacy 账户触发同一处置（处置只依赖存储形态）。
+func TestR4B01_LoginLegacySunsetAppliesImportEndState(t *testing.T) {
 	h, r := setupD11LoginHandler(t)
 	resetD11ForTest()
 	uid, pca := kr4LegacyUser(t, r, "kr4loginuser", "legacy-password")
@@ -270,32 +290,23 @@ func TestR4B01_LoginRehashKeepsPasswordChangedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate pre-existing session token: %v", err)
 	}
+	if body := probe(oldToken); body != "reached" {
+		t.Fatalf("pre-existing session must be valid before login, got %s", body)
+	}
 
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/login",
-		strings.NewReader(`{"username":"kr4loginuser","password":"legacy-password"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = "198.51.100.78:4000"
-	h.login(w, req)
-	env := decodeEnvelope(t, w)
-	if env.Code != 0 {
-		t.Fatalf("legacy login must succeed, got code=%d msg=%q", env.Code, env.Msg)
+	login := func(username, password, remoteAddr string) envelope {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/login",
+			strings.NewReader(fmt.Sprintf(`{"username":%q,"password":%q}`, username, password)))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = remoteAddr
+		h.login(w, req)
+		return decodeEnvelope(t, w)
 	}
-	var loginData struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(env.Data, &loginData); err != nil || loginData.Token == "" {
-		t.Fatalf("login token missing: err=%v data=%s", err, env.Data)
-	}
-	claims, err := auth.ParseClaims(loginData.Token, "test-secret")
-	if err != nil {
-		t.Fatalf("parse login token: %v", err)
-	}
-	if claims.IatMs <= pca {
-		t.Fatalf("login token session shape changed: IatMs=%d must exceed PasswordChangedAt=%d", claims.IatMs, pca)
-	}
-	if body := probe(loginData.Token); body != "reached" {
-		t.Fatalf("fresh login token must pass middleware, got %s", body)
+
+	env := login("kr4loginuser", "legacy-password", "198.51.100.78:4000")
+	if env.Code == 0 || env.Msg != "账号或密码错误" {
+		t.Fatalf("legacy login must fail with the generic credential error, got code=%d msg=%q", env.Code, env.Msg)
 	}
 
 	after, err := r.GetUserByID(uid)
@@ -303,13 +314,33 @@ func TestR4B01_LoginRehashKeepsPasswordChangedAt(t *testing.T) {
 		t.Fatalf("reload user after login: %v", err)
 	}
 	if !strings.HasPrefix(after.Pwd, "$2") {
-		t.Fatalf("rehash must have upgraded stored hash to bcrypt, got prefix %.2s", after.Pwd)
+		t.Fatalf("sunset must replace stored hash with bcrypt, got prefix %.2s", after.Pwd)
 	}
-	if after.PasswordChangedAt != pca {
-		t.Fatalf("transparent rehash must not advance password_changed_at: before=%d after=%d (修复前 FAIL)", pca, after.PasswordChangedAt)
+	if ok, legacy := security.VerifyPassword(after.Pwd, "legacy-password"); ok || legacy {
+		t.Fatalf("sunset replacement must not verify the old password, got (%v,%v)", ok, legacy)
 	}
-	if body := probe(oldToken); body != "reached" {
-		t.Fatalf("pre-existing panel session must survive login rehash, got %s (修复前 FAIL)", body)
+	if after.Status != 0 {
+		t.Fatalf("sunset must disable the account pending admin reset, status=%d", after.Status)
+	}
+	if after.PasswordChangedAt <= pca {
+		t.Fatalf("sunset is a credential invalidation and must advance password_changed_at: before=%d after=%d", pca, after.PasswordChangedAt)
+	}
+	if body := probe(oldToken); !strings.Contains(body, `"code":401`) {
+		t.Fatalf("pre-existing panel session must be revoked by sunset, got %s", body)
+	}
+
+	// 错密尝试同样触发处置：终态与本人首登一致、不可区分。
+	uid2, _ := kr4LegacyUser(t, r, "kr4loginuser2", "legacy-password-2")
+	env = login("kr4loginuser2", "definitely-wrong", "198.51.100.79:4000")
+	if env.Code == 0 || env.Msg != "账号或密码错误" {
+		t.Fatalf("wrong-password legacy login must fail generically, got code=%d msg=%q", env.Code, env.Msg)
+	}
+	after2, err := r.GetUserByID(uid2)
+	if err != nil || after2 == nil {
+		t.Fatalf("reload second user: %v", err)
+	}
+	if after2.Status != 0 || security.IsLegacyPasswordHash(after2.Pwd) {
+		t.Fatalf("wrong-password attempt must sunset the legacy account too: status=%d legacy=%v", after2.Status, security.IsLegacyPasswordHash(after2.Pwd))
 	}
 }
 
