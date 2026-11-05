@@ -378,7 +378,13 @@ func subInactiveReason(s *model.Subscription, now time.Time) string {
 	return "⚠️ 订阅已过期，请联系管理员"
 }
 
-func subUsed(s *model.Subscription) int64 { return s.UploadBytes + s.DownloadBytes }
+// subUsed F2-04: the sum must saturate — two restored near-MaxInt64
+// counters summed with a plain add wrap negative, which read as
+// "no usage" and kept subOverQuota false forever (live-d scenario 3:
+// MaxInt64 + MaxInt64 wrapped to -2).
+func subUsed(s *model.Subscription) int64 {
+	return repo.SaturatingAddInt64(s.UploadBytes, s.DownloadBytes)
+}
 
 func subOverQuota(s *model.Subscription) bool {
 	return s.TrafficLimit > 0 && subUsed(s) >= s.TrafficLimit

@@ -2865,6 +2865,27 @@ func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *m
 		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
 	}
 
+	// F2-04：转发重推之前先做一轮配额重估。恢复出的计数已过负值
+	// 门，但仍可为合法的超限值（乃至 MaxInt64）：若不重估，
+	// repush 会把超限用户/订阅/共享的 status=1 转发与凭据按
+	// 「可用」终态直接下发上线。此处与运行时入账后的执法面同
+	// 口径：用户日/月配额全量扫、订阅同步（超限摘凭据）、备份
+	// 内用户隧道对逐对跑流量策略、联邦共享超限清理。全部幂等，
+	// 未超限者无副作用。
+	h.reconcileUserQuotaEnforcement(time.Now())
+	h.syncSubscriptions(time.Now())
+	if backup != nil {
+		for _, ut := range backup.UserTunnels {
+			h.enforceFlowPolicies(ut.UserID, ut.ID)
+		}
+		for _, sb := range backup.PeerShares {
+			share, err := h.repo.GetPeerShare(sb.ID)
+			if err == nil && share != nil && isPeerShareFlowExceeded(share) {
+				h.enforcePeerShareFlowLimit(sb.ID)
+			}
+		}
+	}
+
 	// R13X-001（P2）：导入成功后对受影响节点集补一次转发重布（见
 	// backup_import_repush.go）。放在撤销清理之后，使重推下发的是
 	// 导入终态；离线节点不在此列（重连路径行为不变）。重推失败只

@@ -3131,6 +3131,21 @@ type importReport struct {
 	revoked []RevokedUserTunnelPair
 }
 
+// clampImportedCounter 是 F2-04 的恢复面计数器门：流量计数器在任
+// 何正常写面都只能由饱和累加产生（恒 ≥ 0），负值不在合法集内——
+// 恢复若原样落库，负基会让此后全部配额判定（used ≥ limit）在积
+// 累等量真实流量前恒假，形成持久静默绕过。故负值一律钳为 0 并经
+// rep.warnf 在回执中点名（段行、字段、原值），与本文件既有恢复门
+// 「逐行处置 + 回执点名」同形。正数（含合法的大额计数）不设上限
+// 钳制——超限处置由导入尾的配额重估负责，求和面另有饱和守卫。
+func clampImportedCounter(rep *importReport, label, field string, v int64) int64 {
+	if v >= 0 {
+		return v
+	}
+	rep.warnf("备份恢复：%s 的计数器 %s=%d 为负值，已按 0 恢复", label, field, v)
+	return 0
+}
+
 func (rep *importReport) addRevoked(pairs []RevokedUserTunnelPair) {
 	if rep == nil {
 		return
@@ -3504,6 +3519,7 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 		if security.IsLegacyPasswordHash(u.Pwd) || u.Pwd == "" {
 			passwordChangedAt = now
 		}
+		userLabel := fmt.Sprintf("用户 #%d（%q）", u.ID, username)
 		item := model.User{
 			ID:            u.ID,
 			User:          username,
@@ -3512,8 +3528,8 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 			ExpTime:       u.ExpTime,
 			Flow:          u.Flow,
 			FlowMiB:       u.FlowMiB,
-			InFlow:        u.InFlow,
-			OutFlow:       u.OutFlow,
+			InFlow:        clampImportedCounter(rep, userLabel, "inFlow", u.InFlow),
+			OutFlow:       clampImportedCounter(rep, userLabel, "outFlow", u.OutFlow),
 			FlowResetTime: u.FlowResetTime,
 			// R11X-005: restored counters count from the import
 			// moment (backup format carries no reset marker).
@@ -3554,6 +3570,10 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 				monthKey = int64(current.Year()*100 + int(current.Month()))
 				dailyUsed, monthlyUsed, pausedForwardIDs = 0, 0, ""
 			}
+			// F2-04：带窗口键保真恢复的已用量同样过计数器门（负已
+			// 用量会让日/月配额判定在积累等量真实流量前恒假）。
+			dailyUsed = clampImportedCounter(rep, userLabel, "dailyUsedBytes", dailyUsed)
+			monthlyUsed = clampImportedCounter(rep, userLabel, "monthlyUsedBytes", monthlyUsed)
 			quotaItem := model.UserQuota{
 				UserID:           u.ID,
 				DailyLimitGB:     u.DailyQuotaGB,
@@ -3969,7 +3989,7 @@ func importPeerShares(tx *gorm.DB, rows []model.PeerShareBackup, now int64, rep 
 			ID: s.ID, Name: s.Name, NodeID: s.NodeID, Token: s.Token,
 			MaxBandwidth: s.MaxBandwidth, ExpiryTime: s.ExpiryTime,
 			PortRangeStart: s.PortRangeStart, PortRangeEnd: s.PortRangeEnd,
-			CurrentFlow: s.CurrentFlow, IsActive: s.IsActive,
+			CurrentFlow: clampImportedCounter(rep, fmt.Sprintf("面板共享 #%d（%q）", s.ID, s.Name), "currentFlow", s.CurrentFlow), IsActive: s.IsActive,
 			CreatedTime: s.CreatedTime, UpdatedTime: updated,
 			AllowedDomains: allowedDomains, AllowedIPs: s.AllowedIPs,
 			RelayUsername: s.RelayUsername, RelayPassword: s.RelayPassword,
@@ -4693,8 +4713,8 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 			TunnelID:             f.TunnelID,
 			RemoteAddr:           f.RemoteAddr,
 			Strategy:             strategy,
-			InFlow:               f.InFlow,
-			OutFlow:              f.OutFlow,
+			InFlow:               clampImportedCounter(rep, fmt.Sprintf("转发 #%d（%q）", f.ID, f.Name), "inFlow", f.InFlow),
+			OutFlow:              clampImportedCounter(rep, fmt.Sprintf("转发 #%d（%q）", f.ID, f.Name), "outFlow", f.OutFlow),
 			CreatedTime:          f.CreatedTime,
 			UpdatedTime:          now,
 			Status:               status,
@@ -4901,8 +4921,8 @@ func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, now in
 			Num:           ut.Num,
 			Flow:          ut.Flow,
 			FlowMiB:       ut.FlowMiB,
-			InFlow:        ut.InFlow,
-			OutFlow:       ut.OutFlow,
+			InFlow:        clampImportedCounter(rep, fmt.Sprintf("用户隧道授权 #%d", ut.ID), "inFlow", ut.InFlow),
+			OutFlow:       clampImportedCounter(rep, fmt.Sprintf("用户隧道授权 #%d", ut.ID), "outFlow", ut.OutFlow),
 			FlowResetTime: ut.FlowResetTime,
 			// R11X-005: see importUsers (marker = import moment).
 			FlowLastResetTime: now,
