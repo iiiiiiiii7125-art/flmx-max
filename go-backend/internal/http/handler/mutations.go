@@ -21,6 +21,7 @@ import (
 
 	"go-backend/internal/http/client"
 	"go-backend/internal/http/response"
+	"go-backend/internal/kernel"
 	"go-backend/internal/security"
 	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
@@ -6876,6 +6877,23 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 func validateTunnelRuntimeBeforeApply(state *tunnelCreateState) error {
 	if state.Type != 2 {
 		return nil
+	}
+	// B4-01 残面：存量状态重放面补门。请求写面（create/update）
+	// 的 strategy 都过 normalizeChainStrategy，但 redeploy 类路径
+	// 经 reconstructTunnelState 把 chain_tunnel 存量策略原文装入
+	// state、此前在本验证点零判——恢复导入等旁路写进的非法策略
+	// （banana/大小写异形/跳行 best）会被原样重放下发，agent 侧
+	// 静默降级轮询。现与写面同判据 fail-closed 点名：存量非法
+	// 策略须先经编辑面修正， redeploy 不放行。
+	strategyGroups := [][]tunnelRuntimeNode{state.InNodes, state.OutNodes}
+	strategyGroups = append(strategyGroups, state.ChainHops...)
+	for _, group := range strategyGroups {
+		for _, n := range group {
+			if !kernel.ChainStrategyLegal(n.ChainType, defaultString(strings.TrimSpace(n.Strategy), "round")) {
+				return fmt.Errorf("节点 %d 的存量链路策略 %q 不合法（合法值为 %s），请先修正隧道配置后再部署",
+					n.NodeID, strings.TrimSpace(n.Strategy), kernel.ChainStrategyLegalValues(n.ChainType))
+			}
+		}
 	}
 	for _, node := range state.Nodes {
 		if node.IsRemote == 1 && (strings.TrimSpace(node.RemoteURL) == "" || strings.TrimSpace(node.RemoteToken) == "") {
