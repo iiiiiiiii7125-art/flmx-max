@@ -769,28 +769,48 @@ docker_ipv6_usable() {
 
 # R4B11-001: 抽出 Caddyfile 中「指定域名站点块之外」的全部内容，供菜单 5
 # 保留式重写：其他站点块（含菜单 6 追加的订阅前置块）、全局选项块与块外
-# 行（注释/import 等）逐字保留，仅剔除地址命中 domain 的站点块（支持与
-# 菜单 6 幂等检查相同的多地址行与 scheme/端口写法）。按花括号深度切块，
+# 行（注释/import 等）逐字保留，剔除地址命中 domain 的站点块（支持与
+# 菜单 6 幂等检查相同的多地址行与 scheme/端口写法）；命中块若与其它地
+# 址共享块头，只剔该地址、其余整块保留（A2-05）。按花括号深度切块，
 # 结构不完整的尾部内容按保留处理，宁可多留不可误删。
 caddyfile_without_site() {
   local file="$1" domain="$2"
   awk -v d="$domain" '
     BEGIN { dl = tolower(d) }
-    function flush_block(   line, n, parts, i, tok, keep) {
+    function flush_block(   line, n, parts, i, cmp, keep, kept, keptn, newheader, bracepos, tail, body) {
       if (buf == "") return
       keep = 1
       if (first != "{") {
         line = first
         sub(/\{[[:space:]]*$/, "", line)
         n = split(line, parts, /[[:space:],]+/)
+        keptn = 0
         for (i = 1; i <= n; i++) {
-          tok = parts[i]
-          sub(/^https?:\/\//, "", tok)
-          sub(/:[0-9]+$/, "", tok)
+          if (parts[i] == "") continue
+          cmp = parts[i]
+          sub(/^https?:\/\//, "", cmp)
+          sub(/:[0-9]+$/, "", cmp)
           # L2-31（R5-FD）：域名比较大小写不敏感（DNS 本就不分大小
           # 写）——旧实现字节比较，已存小写时输入大写会漏判、把同
           # 一站点块再写一份。
-          if (tolower(tok) == dl) { keep = 0; break }
+          if (tolower(cmp) == dl) keep = 0; else { keptn++; kept[keptn] = parts[i] }
+        }
+        if (!keep && keptn > 0) {
+          # A2-05：共享块只剔目标地址、其余整块保留——旧实现任一
+          # 地址命中即丢整块，共享块头里其他域名（如用户手动与面
+          # 板域名同块的 sub 子域）的站点被静默删除、回执却称其
+          # 他站点已保留。现以剩余地址重建块头（`{` 起的同行尾部
+          # 逐字保留，兼容一行块），块体不动，并向 stderr 点名
+          # （stdout 是纯内容流，不得混入通告）。
+          newheader = kept[1]
+          for (i = 2; i <= keptn; i++) newheader = newheader ", " kept[i]
+          bracepos = index(first, "{")
+          tail = (bracepos > 0) ? substr(first, bracepos) : "{"
+          body = substr(buf, length(first) + 2)
+          printf "%s %s\n%s", newheader, tail, body
+          printf "ℹ️ 站点块与下列地址共享同一块头，已仅剔除 %s 并保留其余地址（%s）的整块配置\n", d, newheader > "/dev/stderr"
+          buf = ""
+          return
         }
       }
       if (keep) printf "%s", buf

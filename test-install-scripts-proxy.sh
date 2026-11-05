@@ -410,6 +410,43 @@ test_panel_installer_script_curl_uses_timeouts() (
   grep -q -- '--retry' "$log" || fail "A1-02: the installer-script curl must carry --retry"
 )
 
+# A2-05（audit-max）：菜单 5 保留式写入不得整块删除共享站点——
+# 旧实现 caddyfile_without_site 任一地址 token 命中目标域名即丢
+# 整块，`panel.example.com, sub.example.com { ... }` 共享块里的
+# sub 站点被静默删掉、回执却称已保留。现改为命中共享块时只剔
+# 目标地址、其余地址与块体整块保留并点名。对照幕：仅含目标地
+# 址的块仍整块剔除（既有口径）。
+test_panel_caddyfile_without_site_keeps_shared_addresses() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local dir cf out err
+  dir=$(mktemp -d)
+  cf="$dir/Caddyfile"
+  cat > "$cf" <<'EOF'
+panel.example.com, sub.example.com {
+    reverse_proxy 127.0.0.1:6366
+}
+other.example.com {
+    respond "hi"
+}
+panel.example.com {
+    reverse_proxy 127.0.0.1:6366
+}
+EOF
+  out=$(mktemp)
+  err=$(mktemp)
+  caddyfile_without_site "$cf" "panel.example.com" >"$out" 2>"$err" || \
+    fail "A2-05: caddyfile_without_site should succeed on the shared-block fixture"
+  grep -q '^sub.example.com {' "$out" || fail "A2-05: the shared block must survive with the remaining address as its header"
+  grep -q 'reverse_proxy 127.0.0.1:6366' "$out" || fail "A2-05: the shared block body must be preserved"
+  if grep -q 'panel.example.com' "$out"; then
+    fail "A2-05: the target address must be gone from the output (both its solo block and its share of the shared block)"
+  fi
+  grep -q '^other.example.com {' "$out" || fail "A2-05: unrelated blocks must be preserved verbatim"
+  grep -q 'sub.example.com' "$err" || fail "A2-05: the shared-block rewrite must be named on stderr"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -9825,5 +9862,6 @@ test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key
 test_panel_download_routed_total_budget
 test_panel_installer_script_curl_uses_timeouts
+test_panel_caddyfile_without_site_keeps_shared_addresses
 
 echo "install script tests passed"
