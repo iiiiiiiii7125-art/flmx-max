@@ -655,7 +655,7 @@ func TestImportSectionRowBudgets(t *testing.T) {
 	defer func() { _ = dst.Close() }()
 
 	// (a) users 段超限：整单拒绝、点名三要素。
-	overUsers := &model.BackupData{Version: "1.0", Users: make([]model.UserBackup, maxImportSectionRows+1)}
+	overUsers := &model.BackupData{Version: "1.0", Users: make([]model.UserBackup, maxImportSectionRowsLarge+1)}
 	for i := range overUsers.Users {
 		// 合法备份恒携 $2 哈希（ValidateBackupImportUserHashBudget
 		// 的谓词只看 $2 前缀）：夹具口令须已哈希，否则哈希预算
@@ -663,7 +663,7 @@ func TestImportSectionRowBudgets(t *testing.T) {
 		overUsers.Users[i].Pwd = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 	}
 	if _, err := dst.Import(overUsers, []string{"users"}); err == nil ||
-		!strings.Contains(err.Error(), "users") || !strings.Contains(err.Error(), "10001") || !strings.Contains(err.Error(), "10000") {
+		!strings.Contains(err.Error(), "users") || !strings.Contains(err.Error(), "50001") || !strings.Contains(err.Error(), "50000") {
 		t.Fatalf("over-cap users must be rejected naming section/count/cap, err=%v", err)
 	}
 

@@ -249,8 +249,11 @@ func predictImportedForwardPortReplacements(tx *gorm.DB, backup *model.BackupDat
 // 帽——构造备份可用百万级行数在单飞锁 + 长事务内逐行 upsert 放
 // 大 CPU/IO/锁持有时间。预算按段行数计（upsert 是廉价操作，量
 // 级取哈希预算的 10–50 倍）：常规段 10000 行；高基数行段
-// （转发及其端口行、授权、入站及其订阅/中继/屏蔽/计数、链路
-// 行）50000 行；configs 按键数 10000。只对本次导入选中的段判
+// （用户、转发及其端口行、授权、入站及其订阅/中继/屏蔽/计
+// 数、链路行）50000 行；configs 按键数 10000。用户归大档：
+// 仓内 handler 夹具（CB14/W2 写相位负载）以 30000 用户备份
+// 为合法规模，且用户行的昂贵维度（bcrypt 哈希）已由哈希预
+// 算单独设帽，行数帽只防逐行 upsert 的锁持有放大。只对本次导入选中的段判
 // （与哈希预算同口径），超限在进事务与端口预检之前整单拒绝并
 // 点名段名 + 实际行数 + 上限（fail-closed）。嵌套集合
 // （chainTunnels/forwardPorts）按全备份合计计。已移除功能的
@@ -274,7 +277,7 @@ func validateBackupSectionBudgets(backup *model.BackupData, typeSet map[string]b
 		return nil
 	}
 	if typeSet["users"] {
-		if err := check("users", len(backup.Users), maxImportSectionRows); err != nil {
+		if err := check("users", len(backup.Users), maxImportSectionRowsLarge); err != nil {
 			return err
 		}
 	}
