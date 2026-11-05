@@ -2323,6 +2323,13 @@ func cloneYAMLNode(n *yaml.Node) *yaml.Node {
 	return &c
 }
 
+// systemUpgradeAssetBaseURL 是资产的直连（无代理前缀）URL。
+// FIX-R2-9：第二锚按获胜线路分层时，downloadReleaseAsset 以它
+// 判定获胜候选是否为直连。
+func systemUpgradeAssetBaseURL(version, filename string) string {
+	return fmt.Sprintf("%s/%s/releases/download/%s/%s", strings.TrimRight(systemUpgradeReleaseBaseURL, "/"), githubRepo, version, filename)
+}
+
 // systemUpgradeDownloadURLs 是面板自升级资产的候选 URL 全表
 // （1.7.7 KU5）：按面板侧测速直选的当前路线序（gitHubRouteOrder：
 // 直连判活居首、代理排名殿后、直连判死殿后兜底）对同一资产拼全
@@ -2330,7 +2337,7 @@ func cloneYAMLNode(n *yaml.Node) *yaml.Node {
 // DownloadURL 只产出面板配置代理（或直连）一条 URL——设置移除后
 // 不再有单点配置，F-139 的「代理坏了无路可走」由全候选根除。
 func (h *Handler) systemUpgradeDownloadURLs(version, filename string) []string {
-	base := fmt.Sprintf("%s/%s/releases/download/%s/%s", strings.TrimRight(systemUpgradeReleaseBaseURL, "/"), githubRepo, version, filename)
+	base := systemUpgradeAssetBaseURL(version, filename)
 	order := gitHubRouteOrder()
 	urls := make([]string, 0, len(order))
 	for _, prefix := range order {
@@ -2603,18 +2610,20 @@ func (h *Handler) downloadReleaseAsset(version, filename string) ([]byte, string
 	// 预算，单候选沿 SecureFetch 的 60s 腿界（取两者较小者）。
 	// L8-F-02：同源校验只是第一锚——获胜候选定版后必须再经
 	// corroborateReleaseAssetChecksum 从异路复核同一校验值，不一
-	// 致硬失败中止（不换路重试），无异路可复核时降级单锚并把降
-	// 级说明交回调用方点名。
+	// 致硬失败中止（不换路重试）；无异路可复核时按获胜线路分层
+	// （FIX-R2-9）：直连获胜才降级单锚并把降级说明交回调用方点
+	// 名，代理获胜 fail-closed 中止（与脚本侧 R2-01-01 同律）。
 	ctx, cancel := context.WithTimeout(context.Background(), githubAssetDownloadBudget)
 	defer cancel()
 	urls := h.systemUpgradeDownloadURLs(version, filename)
+	directURL := systemUpgradeAssetBaseURL(version, filename)
 	var lastErr error
 	for i, url := range urls {
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, secureFetchTotalTimeout)
 		body, want, err := h.downloadReleaseAssetAttempt(attemptCtx, url, filename)
 		attemptCancel()
 		if err == nil {
-			note, cerr := h.corroborateReleaseAssetChecksum(ctx, urls, i, filename, want)
+			note, cerr := h.corroborateReleaseAssetChecksum(ctx, urls, i, url == directURL, filename, want)
 			if cerr != nil {
 				return nil, "", cerr
 			}
@@ -2642,9 +2651,12 @@ var systemUpgradeAnchorTimeout = 20 * time.Second
 // 一条线路重取同一资产的 .sha256 比对：任一异路给出不同哈希即
 // 硬失败中止；异路给出的内容不是合法 SHA256 时只废该路、继续
 // 问下一路（与 agent 腿内口径一致）；全部异路都给不出合法校验
-// 值（或候选集只有一条线路）时降级为单锚继续，并返回必须点名
-// 进升级回执/日志的降级说明。返回空串表示复核通过。
-func (h *Handler) corroborateReleaseAssetChecksum(ctx context.Context, urls []string, winner int, filename, want string) (string, error) {
+// 值（或候选集只有一条线路）时按获胜线路分层（FIX-R2-9，与脚本
+// 侧 R2-01-01 同律）：直连获胜（winnerDirect）才降级为单锚继续，
+// 并返回必须点名进升级回执/日志的降级说明；代理获胜时定版依据
+// 只剩获胜代理自给的（资产，校验）自洽对、等于接受代理自证，
+// fail-closed 硬中止并在错误里点名。返回空串表示复核通过。
+func (h *Handler) corroborateReleaseAssetChecksum(ctx context.Context, urls []string, winner int, winnerDirect bool, filename, want string) (string, error) {
 	actx, cancel := context.WithTimeout(ctx, systemUpgradeAnchorTimeout)
 	defer cancel()
 	var lastErr error
@@ -2666,6 +2678,13 @@ func (h *Handler) corroborateReleaseAssetChecksum(ctx context.Context, urls []st
 			return "", fmt.Errorf("校验文件经两条不同线路获取的结果不一致，已中止升级（L8-F-02 第二锚）: %s != %s", got, want)
 		}
 		return "", nil
+	}
+	if !winnerDirect {
+		msg := "跨线路锚复核失败：获胜线路为代理且其他线路均未给出合法校验值，无法复核校验锚，已中止升级（FIX-R2-9 第二锚）"
+		if lastErr != nil {
+			msg = fmt.Sprintf("%s（%v）", msg, lastErr)
+		}
+		return "", fmt.Errorf("%s", msg)
 	}
 	note := "跨线路锚复核已降级：升级校验锚复核不可用（其他线路均未给出校验值），按单锚继续"
 	if lastErr != nil {
