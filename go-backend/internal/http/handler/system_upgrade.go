@@ -2598,8 +2598,8 @@ func (h *Handler) corroborateReleaseAssetChecksum(ctx context.Context, urls []st
 			lastErr = err
 			continue
 		}
-		got := strings.TrimSpace(strings.Split(string(shaBody), " ")[0])
-		if !ghMirrorSHA256Hex.MatchString(got) {
+		got := parseReleaseChecksum(shaBody)
+		if got == "" {
 			lastErr = fmt.Errorf("%s 的校验文件内容不是合法 SHA256", filename)
 			continue
 		}
@@ -2626,6 +2626,21 @@ func (h *Handler) downloadReleaseAssetFromCtx(ctx context.Context, url, filename
 	return body, err
 }
 
+// parseReleaseChecksum 解析 .sha256 校验文件的期望哈希（B7-04）：
+// 首字段为空白（含制表）分隔的哈希本体，大小写与 sha256sum 的
+// "*" 二进制标记都容忍——这些都是校验文件的合法书写形态，此
+// 前单腿用 Split(" ")[0]＋大小写敏感比对，制表分隔或大写哈希
+// 会把格式问题误报成「校验失败」中止升级。内容不是合法
+// SHA256 时返回 ""，调用方 fail-closed；格式放宽不放宽真值：
+// 比对仍是完整 64 位十六进制的相等判定。
+func parseReleaseChecksum(shaBody []byte) string {
+	fields := strings.Fields(string(shaBody))
+	if len(fields) == 0 || !ghMirrorSHA256Hex.MatchString(fields[0]) {
+		return ""
+	}
+	return strings.ToLower(fields[0])
+}
+
 // downloadReleaseAssetAttempt 是单候选下载腿：资产与 .sha256
 // 同源同次取得并比对（R5-B5 D16 口径不变），额外回传该腿采信
 // 的期望哈希，供 downloadReleaseAsset 做跨线路第二锚复核
@@ -2645,7 +2660,10 @@ func (h *Handler) downloadReleaseAssetAttempt(ctx context.Context, url, filename
 	if err != nil {
 		return nil, "", fmt.Errorf("下载%s的校验文件失败（fail-closed）: %v", filename, err)
 	}
-	expected := strings.TrimSpace(strings.Split(string(shaBody), " ")[0])
+	expected := parseReleaseChecksum(shaBody)
+	if expected == "" {
+		return nil, "", fmt.Errorf("%s的校验文件内容不是合法 SHA256（fail-closed）", filename)
+	}
 	actual := fmt.Sprintf("%x", sha256.Sum256(body))
 	if !hmac.Equal([]byte(expected), []byte(actual)) {
 		return nil, "", fmt.Errorf("%s校验失败：期望 %s，实际 %s", filename, expected, actual)
