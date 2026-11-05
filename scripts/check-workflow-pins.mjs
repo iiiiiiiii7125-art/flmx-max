@@ -44,6 +44,13 @@ const root =
   process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), "..");
 const wfDir = join(root, ".github", "workflows");
 
+// A4-02 普查下限：实测基线 48 处（2026-11-05：SHA 钉版 47＋仓内
+// 本地 1）。旧实现只看 failures 是否为空——提取面整体失效（目录
+// 为空、正则将来被改坏、uses 换新写法）时 total=0 也照样 PASS，
+// 是谓真空过。本下限与 K11-COUNT 同口径：合法增减 uses: 时同步
+// 调整此数并在提交信息里写明；低于下限按前提失效 exit 2。
+const USES_FLOOR = 48;
+
 const failures = [];
 const premiseFailures = [];
 let total = 0;
@@ -114,7 +121,18 @@ function judge(name, lineNo, ref, rest) {
   );
 }
 
-for (const name of readdirSync(wfDir).sort()) {
+let wfFiles;
+try {
+  wfFiles = readdirSync(wfDir).sort();
+} catch (e) {
+  console.log(
+    `PREMISE FAIL  工作流目录 ${wfDir} 不可读（${e.code || e.message}）——普查对象缺失，禁止真空 PASS（A4-02）`,
+  );
+  console.log("RESULT: FAIL (premise)");
+  process.exit(2);
+}
+
+for (const name of wfFiles) {
   if (!/\.ya?ml$/.test(name)) continue;
   const lines = readFileSync(join(wfDir, name), "utf8").split("\n");
   let extractedHere = 0;
@@ -160,6 +178,16 @@ for (const name of readdirSync(wfDir).sort()) {
       `${name}: 原始 uses: 键出现 ${raw} 处、门提取 ${extractedHere} 处——存在未识别的 uses 写法，提取面与原文对不上（A4-01 前提）`,
     );
   }
+}
+
+if (total === 0) {
+  premiseFailures.push(
+    "workflow-pins: uses 普查为 0 处——工作流目录为空或提取面整体失效，禁止真空 PASS（A4-02）",
+  );
+} else if (total < USES_FLOOR) {
+  premiseFailures.push(
+    `workflow-pins: uses 普查 ${total} 处低于登记下限 ${USES_FLOOR} 处——提取面失效或 uses 被整体删改（A4-02）；若为合法增减，同步更新 USES_FLOOR 并在提交信息写明`,
+  );
 }
 
 for (const f of premiseFailures) console.log(`PREMISE FAIL  ${f}`);

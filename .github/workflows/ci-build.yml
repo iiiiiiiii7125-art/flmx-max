@@ -139,6 +139,24 @@ jobs:
           bash scripts/check-private-ranges-selftest.sh
           bash scripts/check-timeout-budgets-selftest.sh
 
+      # A4-02: the remaining five root gates (workflow-pins,
+      # contract-fields, doc-consistency, script-version-bump,
+      # doc-anchors) had no mutation selftest at all — a gate that
+      # lost its teeth (extraction drift, vacuous PASS) was itself
+      # undetectable. Each selftest mirrors its gate's read surface,
+      # requires an unmutated PASS, then requires named FAILs on
+      # planted drift. contract-fields/doc-consistency resolve
+      # typescript from this checkout's vite-frontend/node_modules
+      # (installed above); doc-consistency's go-dependent items use
+      # the runner image's preinstalled Go.
+      - name: Run remaining gate mutation selftests (A4-02)
+        run: |
+          bash scripts/check-workflow-pins-selftest.sh
+          bash scripts/check-contract-fields-selftest.sh
+          bash scripts/check-doc-consistency-selftest.sh
+          bash scripts/check-script-version-bump-selftest.sh
+          bash scripts/check-doc-anchors-selftest.sh
+
   backend:
     name: Build Go Backend
     runs-on: ubuntu-latest
