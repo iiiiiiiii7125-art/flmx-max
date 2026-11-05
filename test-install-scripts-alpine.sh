@@ -2,11 +2,21 @@
 set -eu
 
 # Run only in a disposable Alpine container: this exercises real OpenRC services.
-# docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 sh /workspace/test-install-scripts-alpine.sh
+# docker run --rm -e FLMX_SUITE_ISOLATED=1 -v "$PWD:/workspace:ro" alpine:3.22 sh /workspace/test-install-scripts-alpine.sh
 [ -f /etc/alpine-release ] && [ "$(id -u)" = 0 ] || {
   echo "Run this test as root in a disposable Alpine container." >&2
   exit 1
 }
+
+# T-INC-01 host safety gate (same rule as the proxy suite): never run
+# where a real agent layout exists unless the operator explicitly
+# declares an isolated environment. The suite lifecycle below stops,
+# removes and reinstalls a real OpenRC service; on a non-disposable
+# host that would destroy the running agent (INC-01).
+if [ "${FLMX_SUITE_ISOLATED:-}" != "1" ] && { [ -d /etc/flux_agent ] || [ -d /etc/flmx_agent ] || [ -f /etc/systemd/system/flux_agent.service ] || [ -f /etc/systemd/system/flmx_agent.service ] || [ -f /etc/init.d/flux_agent ] || [ -f /etc/init.d/flmx_agent ]; }; then
+  echo "FAIL: T-INC-01 host safety gate: real agent layout detected on this host; run only in a disposable container/VM, or set FLMX_SUITE_ISOLATED=1 if this host is dedicated to the suite." >&2
+  exit 1
+fi
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INSTALL_SCRIPT=${1:-"$ROOT_DIR/install.sh"}

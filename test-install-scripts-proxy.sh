@@ -8,6 +8,37 @@ fail() {
   exit 1
 }
 
+# T-INC-01 宿主机安全门：本套件会 source install.sh/panel_install.sh
+# 并以 root 形态调用其服务/文件操作（桩接管绝大多数路径，但
+# INC-01 事故证明桩层有漏：基线套件在装有真实旧布局 agent 的测
+# 试机宿主机上裸跑时，旧布局 stop/disable/删 unit/rm -rf 序列突
+# 破隔离、销毁了在跑 agent）。开跑前先判宿主：真实 agent 布局
+# （任一布局的安装目录或服务文件）在位且未声明隔离环境
+# （FLMX_SUITE_ISOLATED=1，只许在专用容器/VM 内设置）→
+# fail-closed 中止并点名，一条用例都不许跑。FLMX_SUITE_HOST_ROOT
+# 仅供本门的单测夹具改指假宿主根，正常运行恒为空（查真实 /etc）。
+suite_host_safety_gate() {
+  if [[ "${FLMX_SUITE_ISOLATED:-}" == "1" ]]; then
+    return 0
+  fi
+  local root="${FLMX_SUITE_HOST_ROOT:-}"
+  local hits=""
+  [[ -d "$root/etc/flux_agent" ]] && hits="$hits $root/etc/flux_agent"
+  [[ -d "$root/etc/flmx_agent" ]] && hits="$hits $root/etc/flmx_agent"
+  [[ -f "$root/etc/systemd/system/flux_agent.service" ]] && hits="$hits $root/etc/systemd/system/flux_agent.service"
+  [[ -f "$root/etc/systemd/system/flmx_agent.service" ]] && hits="$hits $root/etc/systemd/system/flmx_agent.service"
+  [[ -f "$root/etc/init.d/flux_agent" ]] && hits="$hits $root/etc/init.d/flux_agent"
+  [[ -f "$root/etc/init.d/flmx_agent" ]] && hits="$hits $root/etc/init.d/flmx_agent"
+  if [[ -n "$hits" ]]; then
+    echo "FAIL: T-INC-01 host safety gate: real agent layout detected on this host:$hits" >&2
+    echo "  本套件曾在装有真实 agent 的宿主机上裸跑时销毁在跑 agent（INC-01）。只许在专用容器/VM 内运行；确认环境隔离后设置 FLMX_SUITE_ISOLATED=1 再跑。" >&2
+    return 1
+  fi
+  return 0
+}
+
+suite_host_safety_gate || exit 1
+
 assert_equals() {
   local expected="$1"
   local actual="$2"
@@ -9489,6 +9520,97 @@ test_install_flmx_agent_rolls_back_over_existing() (
   assert_equals "$NEW_BODY" "$(cat "$INSTALL_DIR/flmx_agent")" "A3-04: healthy install must leave the new binary in place"
   [[ ! -f "$INSTALL_DIR/flmx_agent.bak" ]] || fail "A3-04: backup must be removed after a healthy install over existing"
 )
+
+# T-INC-01: 套件宿主机安全门的判定格——无真实 agent 布局放行；
+# 任一布局（旧目录/新服务文件）在位拒绝；隔离标记（专用容器/VM
+# 的显式声明）放行。门本体定义在套件头部、开跑前已执行一次。
+test_suite_host_safety_gate_blocks_real_agent_hosts() (
+  set -euo pipefail
+  local root
+  root=$(mktemp -d)
+
+  FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate
+
+  mkdir -p "$root/etc/flux_agent"
+  if FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate 2>/dev/null; then
+    fail "T-INC-01: host gate must refuse when a legacy agent layout is present"
+  fi
+
+  rm -rf "$root/etc/flux_agent"
+  mkdir -p "$root/etc/systemd/system"
+  : > "$root/etc/systemd/system/flmx_agent.service"
+  if FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate 2>/dev/null; then
+    fail "T-INC-01: host gate must refuse when a current agent unit is present"
+  fi
+
+  FLMX_SUITE_ISOLATED="1" FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate
+)
+
+# T-INC-01: 桩层泄漏哨兵。INC-01 的泄漏形态是「某个旧布局路径没
+# 被夹具接管、仍指向真实宿主位置」——本用例在夹具内复刻该形态：
+# 故意把存量 systemd unit 路径指向夹具根之外的 canary（模拟真实
+# 宿主文件），systemctl 与 rm 都经记录桩，rm 桩对夹具根之外的目
+# 标只记录不执行（LEAK-BLOCKED）。断言：旧布局停/禁/删序列全部
+# 被桩层截获、canary 存活。变异臂：关掉 rm 桩拦截后同一序列必
+# 须真的删掉 canary——证明破坏调用真实存在、哨兵不是空转（桩
+# 覆盖被摘即变红）。
+test_suite_stub_layer_catches_legacy_leak() (
+  set -euo pipefail
+  local work fixture canary
+  work=$(mktemp -d)
+  fixture="$work/fixture"
+  canary="$work/host"
+  mkdir -p "$fixture" "$canary"
+
+  build_harness() {
+    local guard_mode="$1"
+    local harness="$work/harness-$guard_mode.sh"
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$harness"
+    cat >> "$harness" <<EOF
+INSTALL_DIR="$fixture/flmx_agent"
+LEGACY_INSTALL_DIR="$fixture/flux_agent"
+FLMX_AGENT_SYSTEMD_SERVICE_FILE="$fixture/flmx_agent.service"
+LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE="$canary/flux_agent.service"
+SERVICE_MANAGER="systemd"
+CALLS_LOG="$work/calls-$guard_mode.log"
+: > "\$CALLS_LOG"
+systemctl() { echo "systemctl \$*" >> "\$CALLS_LOG"; return 0; }
+rm() {
+  echo "rm \$*" >> "\$CALLS_LOG"
+  if [[ "$guard_mode" == "on" ]]; then
+    local a
+    for a in "\$@"; do
+      case "\$a" in
+        -*) ;;
+        "$fixture"*) ;;
+        *) echo "LEAK-BLOCKED \$a" >> "\$CALLS_LOG"; return 0 ;;
+      esac
+    done
+  fi
+  command rm "\$@"
+}
+stop_legacy_flux_agent_service
+disable_legacy_flux_agent_service
+remove_legacy_flux_agent_service
+EOF
+    printf '%s' "$harness"
+  }
+
+  printf 'real unit\n' > "$canary/flux_agent.service"
+  local harness_on
+  harness_on=$(build_harness on)
+  bash "$harness_on"
+  [[ -f "$canary/flux_agent.service" ]] || fail "T-INC-01: stub layer must prevent deletion of the out-of-fixture legacy unit"
+  grep -q "systemctl stop flux_agent" "$work/calls-on.log" || fail "T-INC-01: legacy stop must be intercepted by the systemctl stub"
+  grep -q "systemctl disable flux_agent" "$work/calls-on.log" || fail "T-INC-01: legacy disable must be intercepted by the systemctl stub"
+  grep -q "LEAK-BLOCKED $canary/flux_agent.service" "$work/calls-on.log" || fail "T-INC-01: out-of-fixture rm target must be recorded as a blocked leak"
+
+  printf 'real unit\n' > "$canary/flux_agent.service"
+  local harness_off
+  harness_off=$(build_harness off)
+  bash "$harness_off"
+  [[ ! -f "$canary/flux_agent.service" ]] || fail "T-INC-01 mutation arm: with the rm guard off, the legacy removal must actually delete the canary (the destructive call is real)"
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -9542,6 +9664,8 @@ test_install_script_binary_anchor_degrades
 test_install_script_rejects_malformed_explicit_versions
 test_install_script_latest_resolution_requires_corroboration
 test_install_flmx_agent_rolls_back_over_existing
+test_suite_host_safety_gate_blocks_real_agent_hosts
+test_suite_stub_layer_catches_legacy_leak
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance
