@@ -37,6 +37,9 @@
 // A4-03：普查面扩到容器镜像——Dockerfile 的 FROM、compose 的
 // image:、workflow 的 docker run 镜像同守不可变引用纪律（一律
 // @sha256: digest 钉版），下限 CONTAINER_FLOOR，细则见文末专节。
+// R2-01-03：普查再扩一面——workflow 的 image: 键（job 的
+// container: 与 services:），此前唯一在位实例（ci-build 的 PG
+// 服务镜像）已钉 digest 却不在任何普查内、注释却声称受守护。
 //
 // 运行方法（仓库根目录）：
 //   node scripts/check-workflow-pins.mjs [repoRoot]
@@ -208,11 +211,16 @@ if (total === 0) {
  *     仓自产镜像（版本由部署参数决定，非上游基础镜像），跳过并
  *     计数公示；
  *   - workflow 中 docker run 的镜像参数（跳 flag 及其取值后首个
- *     位置参数）。
+ *     位置参数）；
+ *   - workflow 的 image: 键（job 的 container: 与 services: 下的
+ *     镜像，R2-01-03 补面）；值带 ${…} 参数化者同自产口径跳过
+ *     并计数公示。行首锚定提取：run 脚本串内的 image: 字样（如
+ *     sed 改写 compose 的命令）不是 YAML 键、不入普查。
  * 全部须以 @sha256:<64 位 digest> 钉版。普查下限 CONTAINER_FLOOR
- * 与 USES_FLOOR 同口径：实测基线 11（FROM 7＋compose 2＋docker
- * run 2，2026-11-05），合法增减时同步调整并在提交信息写明。 */
-const CONTAINER_FLOOR = 11;
+ * 与 USES_FLOOR 同口径：实测基线 12（FROM 7＋compose 2＋docker
+ * run 2＋workflow image: 1，2026-11-05），合法增减时同步调整并
+ * 在提交信息写明。 */
+const CONTAINER_FLOOR = 12;
 let containerTotal = 0;
 let containerPinned = 0;
 let stageSkipped = 0;
@@ -307,6 +315,32 @@ for (const name of wfFiles) {
       premiseFailures.push(
         `${name}:${i + 1} 含 docker run 但提取不到镜像参数——容器普查提取面失效（A4-03）`,
       );
+  });
+}
+
+// R2-01-03：workflow 的 image: 键（container:/services:）普查。
+// 此前容器普查只扫 Dockerfile FROM、根 compose image:、workflow
+// docker run 三面，job container 与 services 的 image: 整面漏在
+// 门外——ci-build.yml 的 PG 服务镜像虽已 digest 钉版，改回浮动
+// tag 时无任何门会红。
+for (const name of wfFiles) {
+  if (!/\.ya?ml$/.test(name)) continue;
+  const lines = readFileSync(join(wfDir, name), "utf8").split("\n");
+  lines.forEach((line, i) => {
+    if (!/^\s*image:/.test(line)) return;
+    const m = line.match(/^\s*image:\s*(\S+)\s*$/);
+    if (!m) {
+      premiseFailures.push(
+        `${name}:${i + 1} 含 image: 但提取不到镜像参数——容器普查提取面失效（A4-03/R2-01-03）`,
+      );
+      return;
+    }
+    const ref = m[1].replace(/^["']|["']$/g, "");
+    if (ref.includes("${")) {
+      paramSkipped += 1; // 参数化自产镜像，版本由表达式决定
+      return;
+    }
+    judgeImage(`${name}:${i + 1} (workflow image:)`, ref);
   });
 }
 

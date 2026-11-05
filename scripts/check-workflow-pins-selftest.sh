@@ -91,6 +91,15 @@ grep -q "debian:bookworm-slim" "$TMP/v7.log" && echo "OK: variant 7 caught and n
   echo "FAIL: variant 7 caught but the image was not named"; sed 's/^/    /' "$TMP/v7.log"; exit 1; }
 cp "$ROOT/go-backend/Dockerfile" "$MIR/go-backend/Dockerfile"
 
+echo "== variant 8: floating workflow services image must FAIL and name it (R2-01-03) =="
+sed -i 's|image: postgres:16-alpine@sha256:[0-9a-f]*|image: postgres:16-alpine|' "$WF/ci-build.yml"
+if run_gate "$TMP/v8.log"; then
+  echo "FAIL: variant 8 was not caught (floating workflow image: passed)"; exit 1
+fi
+grep -q "postgres:16-alpine" "$TMP/v8.log" && echo "OK: variant 8 caught and named" || {
+  echo "FAIL: variant 8 caught but the image was not named"; sed 's/^/    /' "$TMP/v8.log"; exit 1; }
+cp "$ROOT/.github/workflows/ci-build.yml" "$WF/ci-build.yml"
+
 echo "== variant 6: empty workflows dir must exit 2 (no vacuous PASS, A4-02) =="
 mkdir -p "$TMP/empty/.github/workflows"
 node "$GATE" "$TMP/empty" > "$TMP/v6.log" 2>&1

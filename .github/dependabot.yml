@@ -2,9 +2,10 @@
 # 保留）。pin 的代价是升级不再自动跟随——由 Dependabot 每周检查
 # github-actions 生态并开 PR 把 SHA 与注释版本一并更新。
 # A4-03: 容器基础镜像同样已全部以 digest 钉版（Dockerfile FROM /
-# compose image: / CI docker run 与服务镜像），由 docker 与
-# docker-compose 生态每周检查并开 PR 更新 digest；钉版纪律本身由
-# scripts/check-workflow-pins.mjs 的容器镜像普查守护。
+# compose image: / CI docker run / workflow 的 image: 服务与容器
+# 镜像——后一面自 R2-01-03 起入普查，此前不在门内），由 docker
+# 与 docker-compose 生态每周检查并开 PR 更新 digest；钉版纪律本
+# 身由 scripts/check-workflow-pins.mjs 的容器镜像普查守护。
 version: 2
 updates:
   - package-ecosystem: "github-actions"
