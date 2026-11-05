@@ -8723,9 +8723,13 @@ EOF
 
 # R1-01-L1 网络钉键多网络废名：后端挂 ≥2 个网络时，旧模板无分
 # 隔拼接全部网络名钉入 FLMX_NETWORK（废串）。现逐行计数、恰一
-# 个才钉实读值；多个按读不到走旧缺省回退 gost-network。两幕在
-# 钉值级验：多网络 → 钉 gost-network 而非拼接串；单网络 → 钉实
-# 读名。
+# 个才钉实读值。A2-09 残面（audit-max）续收口：多个时不再静默
+# 钉旧缺省 gost-network——与 Go 面 inspectLegacyResourceNames
+# 同口径钉无名并点名告警（真实网络为自定义名时静默改钉会与旧
+# 网络上的外部组件失联）；零个（实读为空）保留旧缺省回退但同
+# 样点名、不静默。三幕在钉值级验：多网络 → 不写 FLMX_NETWORK
+# 键＋告警点名各网络；单网络 → 钉实读名；零网络 → 钉旧缺省＋
+# 告警。
 test_panel_pin_network_multi_network_not_concatenated() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -8752,10 +8756,32 @@ EOF
   }
   ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
     fail "R1-01-L1: pinning must succeed in the multi-network scenario"
-  grep -q '^FLMX_NETWORK=gost-network$' "$pdir/.env" || fail "R1-01-L1: a multi-network read must fall back to the legacy default network, not a concatenated name"
-  if grep -q 'net_anet_b\|net_a net_b' "$pdir/.env"; then
+  if grep -q '^FLMX_NETWORK=' "$pdir/.env"; then
+    fail "A2-09R: a multi-network read must pin no network key at all (matching the Go face), never a fallback or concatenated name"
+  fi
+  grep -q '不钉 FLMX_NETWORK' "$pdir/pin.log" || fail "A2-09R: the multi-network skip must be named in the pin output, not silent"
+  grep -q 'net_a' "$pdir/pin.log" || fail "A2-09R: the multi-network warning must name the networks that were read"
+  if grep -q 'net_anet_b' "$pdir/.env"; then
     fail "R1-01-L1: the pinned network must never be a concatenation of network names"
   fi
+
+  # 零网络（实读为空）：保留旧缺省回退，但必须点名、不静默
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *"/app/data"*) printf 'kept_sqlite' ;;
+        *"/var/lib/postgresql/data"*) printf 'kept_pg' ;;
+        *) printf '' ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+  printf 'FLMX_SQLITE_VOLUME=kept_sqlite\nFLMX_POSTGRES_VOLUME=kept_pg\nCOMPOSE_PROJECT_NAME=kept_project\nDB_TYPE=sqlite\n' > "$pdir/.env"
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c >> pin.log 2>&1 ) || \
+    fail "A2-09R: pinning must succeed in the zero-network scenario"
+  grep -q '^FLMX_NETWORK=gost-network$' "$pdir/.env" || fail "A2-09R: an unreadable network read still falls back to the legacy default network"
+  grep -q '未能实读' "$pdir/pin.log" || fail "A2-09R: the zero-network fallback must be named in the pin output, not silent"
 
   docker() {
     if [[ "$1" == "inspect" && "$2" == "-f" ]]; then

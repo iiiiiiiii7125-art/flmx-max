@@ -2105,14 +2105,21 @@ panel_pin_missing_resource_keys() {
       # 拼接——后端挂 ≥2 个网络时钉入的是全部网络名的拼接废串，
       # 重建后部署落到废名新网络、旧网络上的外挂容器与面板断
       # 联。Go 面 inspectLegacyResourceNames 已按「恰一个才钉」
-      # 规避并点名此形态，本面现对齐：零个或多个都按「读不到」
-      # 走旧缺省回退（网络无数据面，缺省名是该部署唯一可能的旧
-      # 网络，与本函数「读不到按旧缺省」的既有契约一致）。
+      # 规避并点名此形态。
+      # A2-09 残面：多个网络时与 Go 面同口径——选不出唯一部署网
+      # 络就不钉键，并点名告警；旧行为静默钉旧缺省 gost-network，
+      # 真实网络为自定义名且另挂第二网络的部署会被改钉失联且无
+      # 回执。零个（实读为空）仍按本函数「读不到按旧缺省」的既
+      # 有契约回退，但同样点名、不静默。
       network_count=$(printf '%s' "$network_name" | grep -c . || true)
-      if [[ "$network_count" != "1" ]]; then
-        network_name=""
+      if [[ "$network_count" == "1" ]]; then
+        upsert_env_var .env FLMX_NETWORK "$network_name" || return 1
+      elif [[ "$network_count" -gt 1 ]]; then
+        echo "⚠️ 后端 $backend_container 同时挂在多个网络（$(printf '%s' "$network_name" | tr '\n' ' '))，无法唯一判定部署网络，本次不钉 FLMX_NETWORK 键；重建将按 Compose 文件的缺省网络处理——如部署使用自定义网络名，请在 .env 中显式钉入 FLMX_NETWORK 后再重跑"
+      else
+        echo "⚠️ 未能实读后端 $backend_container 的网络，本次按旧缺省钉 FLMX_NETWORK=gost-network；如部署使用自定义网络名，请改 .env 后再重跑"
+        upsert_env_var .env FLMX_NETWORK "gost-network" || return 1
       fi
-      upsert_env_var .env FLMX_NETWORK "${network_name:-gost-network}" || return 1
     fi
     if [[ -z "$(get_env_var COMPOSE_PROJECT_NAME || true)" ]]; then
       local project_name="${PANEL_COMPOSE_PROJECT:-}"
