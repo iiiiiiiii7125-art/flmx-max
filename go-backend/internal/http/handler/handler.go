@@ -3,8 +3,10 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1601,6 +1603,10 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte("error"))
 			return
 		}
+		// F2-03：无 seq 批次的内容哈希（解密后明文的 SHA-256），
+		// 入账事务内落盘领取防逐字重放；带 seq 批次为空（seq 本身
+		// 即重放防护）。窗口与窗口外口径见 repo/flow_legacy_dedupe.go。
+		legacyBatchHash := ""
 		if seq == nil {
 			// C1-01：无 seq 的 legacy 形态没有任何重放防护，纳入
 			// 落日收紧（flowV1LegacySunset）：落日后整批拒收返非
@@ -1614,6 +1620,8 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			w.Header().Set("Deprecation", "true")
 			w.Header().Set("Sunset", flowV1LegacySunsetHTTPDate)
+			sum := sha256.Sum256([]byte(raw))
+			legacyBatchHash = hex.EncodeToString(sum[:])
 		}
 		if items != nil {
 			now := time.Now()
@@ -1656,9 +1664,14 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 					_, _ = w.Write([]byte("error"))
 					return
 				}
-				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq}
+				batch.seqAdvance = &repo.FlowSeqAdvance{NodeID: node.ID, Seq: seq, LegacyBatchHash: legacyBatchHash}
 				if applyErr := h.applyFlowUploadBatch(node.ID, batch, now); applyErr != nil {
-					if errors.Is(applyErr, repo.ErrSeqReplay) {
+					if errors.Is(applyErr, repo.ErrLegacyBatchReplay) {
+						// F2-03：同节点同内容 legacy 批次已入账——
+						// 整 tx 回滚未重复入账，按重放分支回 ok
+						// 终止 agent 重试。
+						log.Printf("flow upload legacy batch replay rejected node_id=%d", node.ID)
+					} else if errors.Is(applyErr, repo.ErrSeqReplay) {
 						// R2X-011：并发同 seq 已由另一入账消费——
 						// 本批整 tx 回滚未入账，按既有重放分支回
 						// ok 终止 agent 重试，不重复入账。

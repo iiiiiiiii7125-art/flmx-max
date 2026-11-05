@@ -486,6 +486,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NftCounterState{},
 		&model.NftPendingDelete{},
 		&NodeSeq{},
+		&FlowLegacyBatchDedupe{},
 		&TrafficStreamCursor{},
 		&model.SpeedLimit{},
 		&model.StatisticsFlow{},
