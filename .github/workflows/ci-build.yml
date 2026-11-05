@@ -167,6 +167,13 @@ jobs:
           bash scripts/check-script-version-bump-selftest.sh
           bash scripts/check-doc-anchors-selftest.sh
 
+      # XC4-B2: the legacy-repo dual-push cutoff decision now lives
+      # in scripts/dual-push-legacy.sh (extracted from docker-build.yml
+      # inline bash, where no local check could catch it breaking);
+      # its selftest pins the boundary grid and the workflow wiring.
+      - name: Run dual-push decision selftest (XC4-B2)
+        run: bash scripts/dual-push-legacy-selftest.sh
+
   backend:
     name: Build Go Backend
     runs-on: ubuntu-latest
