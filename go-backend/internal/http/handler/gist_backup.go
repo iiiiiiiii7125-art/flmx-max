@@ -373,20 +373,31 @@ func gistHTTPClient() *http.Client {
 	tr.Proxy = nil
 	tr.DialContext = gistDialContext
 	return &http.Client{
-		Transport: tr,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return errors.New("Gist 地址重定向次数过多，已拒绝")
-			}
-			if err := validateGistURL(req.URL.String()); err != nil {
-				return err
-			}
-			if !gistTokenAllowedForURL(req.URL) {
-				req.Header.Del("Authorization")
-			}
-			return nil
-		},
+		Transport:     tr,
+		CheckRedirect: checkGistRedirect,
 	}
+}
+
+// checkGistRedirect 逐跳复检 Gist 重定向目标（上限 5 跳，每跳重过
+// validateGistURL 的 scheme/主机/硬拒层判定）并按凭据判据剥离
+// Authorization（R2-02-02，与联邦腿 checkFederationRedirect
+// 同律）：
+//   - 跳转目标不许带令牌（gistTokenAllowedForURL 为假）必剥；
+//   - 同主机但 scheme 由 https 降级为 http 同样必剥——只按主机
+//     判时 token-allowed 对同主机恒真，对端一个 302 就能让
+//     Bearer 明文过线（C4-02 联邦腿已修，gist 孪生面此前漏此条）。
+func checkGistRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return errors.New("Gist 地址重定向次数过多，已拒绝")
+	}
+	if err := validateGistURL(req.URL.String()); err != nil {
+		return err
+	}
+	downgrade := len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme == "http"
+	if downgrade || !gistTokenAllowedForURL(req.URL) {
+		req.Header.Del("Authorization")
+	}
+	return nil
 }
 
 func gistRequest(ctx context.Context, method, url, token string, body interface{}, out interface{}) error {
@@ -438,6 +449,10 @@ func gistDo(ctx context.Context, method, rawURL, token string, attachToken bool,
 	}
 	resp, err := gistHTTPClient().Do(req)
 	if err != nil {
+		// R2-02-03：*url.Error 内嵌完整请求 URL（可含 userinfo），
+		// 而调用方默认把本错误落盘/回显，离开本层前须经
+		// redactFetchError 脱敏（与 secure_fetch 出口同口径，
+		// R2X-028）。
 		return fmt.Errorf("连接 GitHub 失败：%v", err)
 	}
 	defer resp.Body.Close()
