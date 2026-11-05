@@ -5,7 +5,7 @@ FLMX 默认使用 SQLite 作为数据库，同时支持 PostgreSQL：表结构�
 已知限制（与 SQLite 部署相同或特有）：
 
 - 面板当前按**单实例**部署设计：端口分配等进程内锁不跨实例协调，PostgreSQL 部署同样不要多实例并行运行面板。
-- PostgreSQL 侧的自动化回归覆盖小于 SQLite（CI 的 PostgreSQL 契约测试为 `TestPostgres*` 一组，共 10 个，见 `.github/workflows/ci-build.yml`），升级前建议先在测试环境验证备份恢复与订阅下发。<!-- [K11-COUNT:testpostgres=10] 本计数由 scripts/check-doc-consistency.sh 第 10 项与代码机械对账，增删 TestPostgres* 用例须同步更新数字与标记 -->
+- PostgreSQL 侧的自动化回归覆盖小于 SQLite（CI 的 PostgreSQL 契约测试为 `TestPostgres*` 一组，共 10 个，见 `.github/workflows/ci-build.yml`；契约测试所用的 PostgreSQL 主版本与随版 compose 部署一致，均为 16），升级前建议先在测试环境验证备份恢复与订阅下发。<!-- [K11-COUNT:testpostgres=10] 本计数由 scripts/check-doc-consistency.sh 第 10 项与代码机械对账，增删 TestPostgres* 用例须同步更新数字与标记 -->
 
 ## 一、SQLite 与 PostgreSQL 对比
 

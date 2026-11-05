@@ -1,7 +1,7 @@
 # Agent (node) image: the container install form of the node agent.
 # Built and pushed by the docker-build workflow as flmx-agent alongside
 # the panel images; the script install form does not use this image.
-FROM golang:1.25-bookworm AS builder
+FROM golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -19,7 +19,7 @@ ARG TARGETARCH
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} env ${TARGETARCH:+GOARCH=${TARGETARCH}} go build -ldflags="-s -w -X main.version=${VERSION}" -o /out/flmx-agent .
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 # Runtime tools the agent shells out to:
 #   nft (nftables)     kernel nftables rules
 #   modprobe (kmod)    tuning module loads

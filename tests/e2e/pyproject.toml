@@ -3,20 +3,24 @@ name = "flmx-e2e-tests"
 version = "0.1.0"
 description = "E2E tests for FLMX Panel"
 requires-python = ">=3.11"
+# A4-08: 直接依赖以 == 钉版、全集（含传递依赖）锁在
+# requirements.lock，CI 按 lock 安装——此前全是无界 >= 且无
+# lockfile，Python 是本仓唯一浮动安装的生态。两处版本须一致，
+# 升级时按 requirements.lock 文件头流程同步重解析。
 dependencies = [
-    "pytest>=8.0.0",
-    "pytest-playwright>=0.5.0",
-    "playwright>=1.40.0",
+    "pytest==9.2.0",
+    "pytest-playwright==0.10.0",
+    "playwright==1.64.1",
     # utils/api_client.py is built on requests; it was previously only
     # present transitively, which broke clean installs of this suite.
-    "requests>=2.31.0",
+    "requests==2.34.2",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest-asyncio>=0.23.0",
-    "pytest-timeout>=2.3.0",
-    "pytest-html>=4.1.0",
+    "pytest-asyncio==1.4.1.post1",
+    "pytest-timeout==2.4.0",
+    "pytest-html==4.2.0",
 ]
 
 [tool.pytest.ini_options]
@@ -44,7 +48,8 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 [build-system]
-requires = ["setuptools>=61"]
+# A4-08: 构建后端同样钉版，避免隔离构建环境浮动拉取。
+requires = ["setuptools==84.2.1"]
 build-backend = "setuptools.build_meta"
 
 # Test-only project: pip installs must not try to package the test tree

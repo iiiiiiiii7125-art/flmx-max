@@ -86,23 +86,13 @@ jobs:
             echo "push_latest=false" >> $GITHUB_OUTPUT
           fi
           # 改名过渡双推的机械止点：旧仓 flmx-flux-panel-backend 随
-          # 1.9.8 起双推、至 1.9.10 止（含），1.9.11 起停推。此处把
-          # 待发版本与止点 1.9.10 按数字核心比较（忽略 -beta 等后缀），
-          # 结论经 dual_push_legacy 输出给 build-go-backend 决定是否
-          # 给旧仓打 tag——止点由判定执行，不再靠发版人记得删段。
-          DUAL_PUSH_LEGACY=false
-          _ver_core="${VERSION%%-*}"
-          IFS='.' read -r -a _vp <<< "$_ver_core"
-          _lp=(1 9 10)
-          _cmp=0
-          for _i in 0 1 2; do
-            _n="${_vp[$_i]:-0}"
-            _n="${_n//[!0-9]/}"
-            _n="${_n:-0}"
-            if [ "$_n" -gt "${_lp[$_i]}" ]; then _cmp=1; break; fi
-            if [ "$_n" -lt "${_lp[$_i]}" ]; then _cmp=-1; break; fi
-          done
-          if [ "$_cmp" -le 0 ]; then DUAL_PUSH_LEGACY=true; fi
+          # 1.9.8 起双推、至 1.9.10 止（含），1.9.11 起停推。判定本
+          # 体在 scripts/dual-push-legacy.sh（唯一判定源，边界格由
+          # scripts/dual-push-legacy-selftest.sh 钉住，XC4-B2）——
+          # 此前判定只以内联 bash 存在于本文件，改坏无任何本地门
+          # 会红；此处只负责调用并把结论经 dual_push_legacy 输出
+          # 给 build-go-backend，止点由判定执行、不靠发版人记得。
+          DUAL_PUSH_LEGACY="$(bash scripts/dual-push-legacy.sh "$VERSION")"
           echo "dual_push_legacy=$DUAL_PUSH_LEGACY" >> $GITHUB_OUTPUT
           echo "🚚 Legacy repo dual-push (flmx-flux-panel-backend): $DUAL_PUSH_LEGACY (version $VERSION vs cutoff 1.9.10)"
 
@@ -473,7 +463,7 @@ jobs:
           cd -
 
       - name: Verify release installer on Alpine OpenRC
-        run: docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 sh /workspace/test-install-scripts-alpine.sh /workspace/artifacts/install.sh
+        run: docker run --rm -v "$PWD:/workspace:ro" alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f sh /workspace/test-install-scripts-alpine.sh /workspace/artifacts/install.sh
 
       - name: Create Release
         env:

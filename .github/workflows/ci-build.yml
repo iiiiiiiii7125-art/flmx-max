@@ -12,6 +12,16 @@ on:
   # branch tips. Adding workflow_call does not change push/PR runs.
   workflow_call:
 
+# A4-06: every other workflow in this repo converged on explicit
+# least-privilege token permissions; ci-build was the exception and
+# it is the workflow that most executes repo content (pnpm install
+# lifecycle scripts, go test, pip install, repo check scripts) on
+# push and pull_request. No job here writes repo content (all steps
+# are checkout/build/test/check only), so the top-level grant is
+# read-only; a future job that needs more must declare it per-job.
+permissions:
+  contents: read
+
 jobs:
   install-scripts:
     name: Test Installer Scripts (systemd and Alpine OpenRC)
@@ -23,7 +33,7 @@ jobs:
         run: bash test-install-scripts-proxy.sh
 
       - name: Test Alpine bootstrap and OpenRC lifecycle
-        run: docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 sh /workspace/test-install-scripts-alpine.sh
+        run: docker run --rm -v "$PWD:/workspace:ro" alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f sh /workspace/test-install-scripts-alpine.sh
 
   frontend:
     name: Build Frontend
@@ -139,6 +149,31 @@ jobs:
           bash scripts/check-private-ranges-selftest.sh
           bash scripts/check-timeout-budgets-selftest.sh
 
+      # A4-02: the remaining five root gates (workflow-pins,
+      # contract-fields, doc-consistency, script-version-bump,
+      # doc-anchors) had no mutation selftest at all — a gate that
+      # lost its teeth (extraction drift, vacuous PASS) was itself
+      # undetectable. Each selftest mirrors its gate's read surface,
+      # requires an unmutated PASS, then requires named FAILs on
+      # planted drift. contract-fields/doc-consistency resolve
+      # typescript from this checkout's vite-frontend/node_modules
+      # (installed above); doc-consistency's go-dependent items use
+      # the runner image's preinstalled Go.
+      - name: Run remaining gate mutation selftests (A4-02)
+        run: |
+          bash scripts/check-workflow-pins-selftest.sh
+          bash scripts/check-contract-fields-selftest.sh
+          bash scripts/check-doc-consistency-selftest.sh
+          bash scripts/check-script-version-bump-selftest.sh
+          bash scripts/check-doc-anchors-selftest.sh
+
+      # XC4-B2: the legacy-repo dual-push cutoff decision now lives
+      # in scripts/dual-push-legacy.sh (extracted from docker-build.yml
+      # inline bash, where no local check could catch it breaking);
+      # its selftest pins the boundary grid and the workflow wiring.
+      - name: Run dual-push decision selftest (XC4-B2)
+        run: bash scripts/dual-push-legacy-selftest.sh
+
   backend:
     name: Build Go Backend
     runs-on: ubuntu-latest
@@ -165,7 +200,13 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        # A4-07: the contract suite must validate the PostgreSQL
+        # major users actually deploy — the shipped compose files
+        # (docker-compose-v4/v6.yml) pin postgres:16-alpine, while
+        # this service floated on postgres:17, so PG16-only failures
+        # (and PG17-only features silently relied on) passed CI.
+        # Digest-pinned per A4-03, same digest as the compose files.
+        image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
         env:
           POSTGRES_USER: flux_test
           POSTGRES_PASSWORD: flux_test_pass
@@ -316,7 +357,16 @@ jobs:
           python-version: '3.11'
 
       - name: Install e2e dependencies
-        run: pip install "./tests/e2e[dev]"
+        # A4-08: install from the committed lock (exact pins for the
+        # full dependency set incl. transitives, resolved for Python
+        # 3.11), then the project itself with --no-deps — the previous
+        # bare `pip install "./tests/e2e[dev]"` resolved unbounded
+        # >= ranges fresh on every run. Direct deps are also ==-pinned
+        # in tests/e2e/pyproject.toml; keep both in sync per the
+        # header of tests/e2e/requirements.lock.
+        run: |
+          pip install -r tests/e2e/requirements.lock
+          pip install --no-deps "./tests/e2e[dev]"
 
       - name: Run API e2e subset
         working-directory: tests/e2e
