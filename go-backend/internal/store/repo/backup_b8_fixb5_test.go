@@ -69,7 +69,7 @@ func TestImportServiceMonitorsMirrorWriteGates(t *testing.T) {
 		t.Fatalf("SkippedRows[serviceMonitors] = %d, want 6, skipped=%v", got, result.SkippedRows)
 	}
 	warnText := strings.Join(result.ImportWarnings, "\n")
-	for _, want := range []string{"\"http\"", "enabled=7", "nodeId=-3", "ICMP", "已调整为"} {
+	for _, want := range []string{"\"http\"", "enabled=7", "nodeId=-3", "ICMP", "已调整为", "ghost-node"} {
 		if !strings.Contains(warnText, want) {
 			t.Fatalf("receipt must name %q, warnings=%v", want, result.ImportWarnings)
 		}

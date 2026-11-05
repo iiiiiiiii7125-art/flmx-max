@@ -5478,8 +5478,10 @@ func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now i
 			rep.warnf("备份恢复：监控 #%d（%q）是 ICMP 监控但未绑定执行节点，已跳过该行未恢复（ICMP 监控必须选择执行节点）", r.ID, name)
 			continue
 		}
-		// D4-03：绑定了节点而节点不存在时整行跳过并计数
-		//（NodeID=0 的面板本地监控不受影响）。
+		// D4-03：绑定了节点而节点不存在时整行跳过并计数＋点名
+		//（NodeID=0 的面板本地监控不受影响）。R2-08-02：此跳行
+		// 此前是本函数内唯一只计数不点名的跳行，恢复后无从定位
+		// 是哪条监控、缺哪个节点，现按其余跳行同形补 warnf。
 		if r.NodeID > 0 {
 			nodeExists, err := rowExistsTx(tx, &model.Node{}, r.NodeID)
 			if err != nil {
@@ -5487,6 +5489,7 @@ func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now i
 			}
 			if !nodeExists {
 				rep.skip("serviceMonitors")
+				rep.warnf("备份恢复：监控 #%d（%q）绑定的节点 #%d 不存在，已跳过该行未恢复", r.ID, name, r.NodeID)
 				continue
 			}
 		}
