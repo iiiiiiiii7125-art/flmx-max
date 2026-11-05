@@ -885,8 +885,27 @@ delete_self() {
     echo "⚠️ 操作未成功（退出码 $rc），脚本文件已保留，可直接重新运行重试"
     return 0
   fi
+  # A3-05: 删除目标必须是脚本本体。管道执行（curl … | bash）时
+  # $0 是裸命令名 bash/sh，readlink -f 会按当前目录把它解析成
+  # $CWD/bash——与脚本无关的同名文件，删之是数据事故、印「已
+  # 删除」是假文案（管道形态本无文件可删）。判定两层：① $0 不
+  # 含 / 时，只认 CWD 下同名文件且其内容含 REPO 钉死行（脚本本
+  # 体标记）才继续（bash install.sh 的相对调用 $0 无斜杠但确是
+  # 本体，不受影响）；② 解析出的目标须真实存在且同样含该标记
+  # 才删。任一层不过 → 静默跳过。
+  case "$0" in
+    */*) ;;
+    *)
+      if [[ ! -f "$0" ]] || ! grep -qF 'REPO="iiiiiiiii7125-art/flmx-max"' "$0" 2>/dev/null; then
+        return 0
+      fi
+      ;;
+  esac
   SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
   if [[ "$SCRIPT_PATH" == /dev/fd/* ]]; then
+    return 0
+  fi
+  if [[ ! -f "$SCRIPT_PATH" ]] || ! grep -qF 'REPO="iiiiiiiii7125-art/flmx-max"' "$SCRIPT_PATH" 2>/dev/null; then
     return 0
   fi
   echo ""
@@ -2722,7 +2741,8 @@ main() {
         ;;
       4)
         echo "👋 退出脚本"
-        delete_self
+        # A3-05: 未执行任何操作，不走 delete_self——「退出」不是
+        # 「操作已完成」，自删只属于成功的操作路径（R4B11-005）。
         exit 0
         ;;
       *)

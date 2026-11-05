@@ -9611,6 +9611,53 @@ EOF
   bash "$harness_off"
   [[ ! -f "$canary/flux_agent.service" ]] || fail "T-INC-01 mutation arm: with the rm guard off, the legacy removal must actually delete the canary (the destructive call is real)"
 )
+
+# A3-05: delete_self 的删除目标必须是脚本本体。管道执行
+# （curl … | bash）时 $0 是裸命令名 bash，旧实现以 readlink -f
+# 按当前目录解析成 $CWD/bash 并真的删掉同名无关文件、还误报
+# 「已删除」（沙箱已实证）。菜单选「4. 退出」（未做任何操作）
+# 旧实现也自删并印完成文案，与 R4B11-005 口径不符。本用例三
+# 臂：管道形态哨兵存活且无已删文案；任意文件名的文件形态仍可
+# 自删（防过修）；菜单退出不自删。
+test_delete_self_pipe_form_preserves_cwd_namesake() (
+  set -euo pipefail
+  local work cwd
+  work=$(mktemp -d)
+  cwd="$work/cwd"
+  mkdir -p "$cwd"
+  printf 'sentinel\n' > "$cwd/bash"
+
+  # 管道臂：stdin 喂脚本全文，$0=bash，CWD 放同名哨兵文件。
+  local pipe_script="$work/pipe.sh" out
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$pipe_script"
+  echo 'delete_self 0' >> "$pipe_script"
+  out=$(cd "$cwd" && cat "$pipe_script" | bash 2>&1) || fail "A3-05: pipe-form delete_self should exit cleanly"
+  [[ -f "$cwd/bash" ]] || fail "A3-05: pipe-form execution must not delete the unrelated CWD file named bash"
+  if [[ "$out" == *"脚本文件已删除"* ]]; then
+    fail "A3-05: pipe-form execution must not claim the script file was deleted"
+  fi
+
+  # 文件形态臂（防过修）：改名副本以路径调用仍须自删。
+  local renamed="$work/renamed-copy.sh"
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$renamed"
+  echo 'delete_self 0' >> "$renamed"
+  ( cd "$work" && bash "$renamed" >/dev/null 2>&1 ) || fail "A3-05: file-form delete_self should exit cleanly"
+  [[ ! -f "$renamed" ]] || fail "A3-05: file-form execution should still delete the script itself"
+
+  # 菜单退出臂：选 4 不自删、无完成文案、退出 0。
+  local menu_file="$work/menu.sh" menu_out rc="0"
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/install.sh" > "$menu_file"
+  cat >> "$menu_file" <<'EOF'
+require_root_privileges() { return 0; }
+main
+EOF
+  menu_out=$(printf '4\n' | bash "$menu_file" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "A3-05: menu exit should exit 0"
+  [[ -f "$menu_file" ]] || fail "A3-05: choosing exit in the menu must not delete the script"
+  if [[ "$menu_out" == *"操作已完成"* ]]; then
+    fail "A3-05: menu exit must not print the completion line"
+  fi
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -9666,6 +9713,7 @@ test_install_script_latest_resolution_requires_corroboration
 test_install_flmx_agent_rolls_back_over_existing
 test_suite_host_safety_gate_blocks_real_agent_hosts
 test_suite_stub_layer_catches_legacy_leak
+test_delete_self_pipe_form_preserves_cwd_namesake
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance
