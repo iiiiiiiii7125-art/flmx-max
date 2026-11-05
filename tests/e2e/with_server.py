@@ -21,6 +21,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
+# Seed password injected into the default test backend via the
+# product env var FLMX_ADMIN_PASSWORD (since 2.0.0 the backend
+# otherwise seeds a random one). Matches the CI e2e-api job value;
+# an operator-provided FLMX_ADMIN_PASSWORD takes precedence.
+DEFAULT_SEED_PASSWORD = "E2eSeed!2026x"
+
 
 def find_free_port(start: int = 3000, max_tries: int = 100) -> int:
     """Find an available port starting from `start`."""
@@ -283,6 +289,13 @@ def build_servers(args) -> list[ServerProcess]:
             "SERVER_ADDR": f":{args.backend_port}",
             "JWT_SECRET": args.jwt_secret,
             "DB_PATH": args.db_path,
+            # FIX-CI-1: since 2.0.0 the seed password is random unless
+            # injected; inject the harness value through the product
+            # env var so the fixtures can log in (they read the same
+            # variable, exported in main()).
+            "FLMX_ADMIN_PASSWORD": os.environ.get(
+                "FLMX_ADMIN_PASSWORD", DEFAULT_SEED_PASSWORD
+            ),
         }
 
         servers.append(
@@ -350,6 +363,19 @@ def main():
     os.environ["E2E_BACKEND_PORT"] = str(server_info["backend_port"])
     os.environ["E2E_FRONTEND_PORT"] = str(server_info["frontend_port"])
     os.environ["E2E_JWT_SECRET"] = server_info["jwt_secret"]
+    # The fixtures read the seed password from FLMX_ADMIN_PASSWORD;
+    # export the same value the default backend was started with.
+    os.environ.setdefault(
+        "FLMX_ADMIN_PASSWORD",
+        next(
+            (
+                s.env.get("FLMX_ADMIN_PASSWORD", DEFAULT_SEED_PASSWORD)
+                for s in servers
+                if s.name == "backend"
+            ),
+            DEFAULT_SEED_PASSWORD,
+        ),
+    )
 
     exit_code = 1
     try:

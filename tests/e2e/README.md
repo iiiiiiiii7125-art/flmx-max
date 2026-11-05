@@ -47,10 +47,14 @@ playwright install chromium
 
 Notes (X02-002):
 
-- The seed admin is `admin@user` / `admin@user`. Its first login returns a
-  restricted token, so `authenticated_api` changes the password once per
-  session (to `E2E_ADMIN_PASSWORD`) and restores the seed password at
-  session teardown.
+- The seed admin user is `admin@user`. Since 2.0.0 the backend seeds a
+  random initial password unless one is injected, so the harness starts
+  the backend with the product env var `FLMX_ADMIN_PASSWORD` set (CI job
+  and `with_server.py` both do, value `E2eSeed!2026x` by default) and the
+  fixtures read the same variable. Its first login returns a restricted
+  token, so `authenticated_api` changes the password once per session
+  (to `E2E_ADMIN_PASSWORD`) and restores the seed password at session
+  teardown.
 - Run against a fresh backend (as `with_server.py` and CI do). The backend
   rate-limits logins per IP (10/min); back-to-back runs against a
   long-lived server can hit that bucket.

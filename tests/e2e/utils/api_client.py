@@ -3,9 +3,21 @@ API client for FLMX backend testing.
 """
 
 import json
+import os
 from typing import Any, Optional
 
 import requests
+
+# Seed-admin credentials for a freshly booted test backend. Since
+# 2.0.0 the backend seeds a random initial password (or the value of
+# the FLMX_ADMIN_PASSWORD environment variable) — there is no fixed
+# default. The harness therefore injects the seed password through
+# the product-supported FLMX_ADMIN_PASSWORD env var: whoever starts
+# the backend (CI job, with_server.py) sets it, and the fixtures
+# read the same variable here. Single source for both conftest.py
+# and the test modules.
+ADMIN_USER = "admin@user"
+ADMIN_SEED_PASSWORD = os.getenv("FLMX_ADMIN_PASSWORD", "")
 
 
 class APIClient:
@@ -241,10 +253,11 @@ class APIClient:
 class TestUser:
     """Test user helper for E2E tests."""
 
-    # Must match the backend seed (go-backend repository.go seedData):
-    # admin@user / admin@user. The seed login returns a restricted token
-    # until the password is changed — see conftest.bootstrap_admin_client.
-    DEFAULT_ADMIN = ("admin@user", "admin@user")
+    # Seed-admin login (see ADMIN_SEED_PASSWORD above): the harness
+    # injects the seed password via FLMX_ADMIN_PASSWORD. The seed
+    # login returns a restricted token until the password is changed
+    # — see conftest.bootstrap_admin_client.
+    DEFAULT_ADMIN = (ADMIN_USER, ADMIN_SEED_PASSWORD)
 
     def __init__(self, api: APIClient, username: str, password: str):
         self.api = api

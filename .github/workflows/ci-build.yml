@@ -340,7 +340,7 @@ jobs:
 
       - name: Start backend
         run: |
-          SERVER_ADDR=:6365 JWT_SECRET=test-secret-e2e-key-do-not-use-in-production DB_PATH=/tmp/e2e-panel.db /tmp/paneld > /tmp/paneld.log 2>&1 &
+          SERVER_ADDR=:6365 JWT_SECRET=test-secret-e2e-key-do-not-use-in-production FLMX_ADMIN_PASSWORD=E2eSeed!2026x DB_PATH=/tmp/e2e-panel.db /tmp/paneld > /tmp/paneld.log 2>&1 &
           for i in $(seq 1 30); do
             if curl -s -o /dev/null http://localhost:6365/; then
               echo "backend up after ${i}s"
@@ -374,4 +374,8 @@ jobs:
         working-directory: tests/e2e
         env:
           E2E_BACKEND_PORT: '6365'
+          # FIX-CI-1: the seed password is random since 2.0.0; the
+          # harness injects it through the product env var (same
+          # value as the Start backend step) and the fixtures read it.
+          FLMX_ADMIN_PASSWORD: 'E2eSeed!2026x'
         run: python -m pytest -m api
