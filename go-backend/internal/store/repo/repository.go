@@ -3680,6 +3680,29 @@ func randomPasswordHash() (string, error) {
 	return security.HashPassword(hex.EncodeToString(buf))
 }
 
+// normalizeImportedNodeRenewalCycle 镜像 handler 的
+// normalizeNodeRenewalCycle（repo 不可反向导入 handler，本地同
+// 集实现）：lower+trim 后 ∈ {month, quarter, year} 取归一值，
+// 否则 ""。
+func normalizeImportedNodeRenewalCycle(v string) string {
+	switch lv := strings.ToLower(strings.TrimSpace(v)); lv {
+	case "month", "quarter", "year":
+		return lv
+	default:
+		return ""
+	}
+}
+
+// defaultImportedNodeForwardMode 镜像 handler 的
+// defaultNodeForwardMode："nftables"（大小写/空白不敏感）取
+// "nftables"，其余（含空）归 "agent"。
+func defaultImportedNodeForwardMode(mode string) string {
+	if strings.TrimSpace(strings.ToLower(mode)) == "nftables" {
+		return "nftables"
+	}
+	return "agent"
+}
+
 func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importReport) (int, error) {
 	count := 0
 	for _, n := range nodes {
@@ -3765,12 +3788,26 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 #%d 的远端节点地址 %q 含空标签主机名，已清空，恢复后请在节点设置中重新填写", n.ID, n.RemoteURL)
 			remoteURL = ""
 		}
+		// B8-11：RenewalCycle/ForwardMode 归一镜像写面——此前原
+		// 样落库：周期集外值使到期提醒计算落默认分支，转发模式
+		// 集外值与写面产出不同字面（消费面按字面分支）。归一后
+		// 与原值不同者在回执点名原值；空 ForwardMode 按写面默
+		// 认静默归 "agent"（写面保存时同此默认、无回执先例）。
+		// 写面产出的合法备份恒已归一，不触发回执。
+		renewalCycle := normalizeImportedNodeRenewalCycle(n.RenewalCycle)
+		if renewalCycle != n.RenewalCycle {
+			rep.warnf("备份恢复：节点 #%d（%q）的续费周期 %q 不在合法集 {month, quarter, year} 内，已按无周期恢复", n.ID, n.Name, n.RenewalCycle)
+		}
+		forwardMode := defaultImportedNodeForwardMode(n.ForwardMode)
+		if forwardMode != n.ForwardMode && n.ForwardMode != "" {
+			rep.warnf("备份恢复：节点 #%d（%q）的转发模式 %q 不在合法集 {agent, nftables} 内，已按保存面同口径归一为 %q", n.ID, n.Name, n.ForwardMode, forwardMode)
+		}
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
 			Remark:       sql.NullString{String: n.Remark, Valid: n.Remark != ""},
 			ExpiryTime:   sql.NullInt64{Int64: n.ExpiryTime, Valid: n.ExpiryTime > 0},
-			RenewalCycle: sql.NullString{String: n.RenewalCycle, Valid: n.RenewalCycle != ""},
+			RenewalCycle: sql.NullString{String: renewalCycle, Valid: renewalCycle != ""},
 			Secret:       n.Secret,
 			ServerIP:     serverIP,
 			ServerIPV4:   sql.NullString{String: serverIPv4, Valid: serverIPv4 != ""},
@@ -3797,7 +3834,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			RemoteToken:    sql.NullString{String: n.RemoteToken, Valid: n.RemoteToken != ""},
 			RemoteConfig:   sql.NullString{String: n.RemoteConfig, Valid: n.RemoteConfig != ""},
 			LatencyTargets: n.LatencyTargets,
-			ForwardMode:    n.ForwardMode,
+			ForwardMode:    forwardMode,
 			// O7-006：恢复后保留已忽略的到期提醒状态
 			ExpiryReminderDismissed: n.ExpiryReminderDismissed,
 		}

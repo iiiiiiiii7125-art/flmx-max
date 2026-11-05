@@ -545,6 +545,55 @@ func TestImportPeerShareAllowedIPsNormalization(t *testing.T) {
 	}
 }
 
+// B8-11：节点 RenewalCycle/ForwardMode 恢复面归一镜像写面——
+// 集外值归一 + 点名原值，大小写/空白形态归一，合法值逐字落库。
+func TestImportNodeRenewalForwardModeNormalization(t *testing.T) {
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Nodes: []model.NodeBackup{
+			{ID: 51, Name: "bad-cycle", Secret: "s", ServerIP: "192.0.2.51", Status: 1, RenewalCycle: "weekly", ForwardMode: "iptables"},
+			{ID: 52, Name: "casey", Secret: "s", ServerIP: "192.0.2.52", Status: 1, RenewalCycle: " Year ", ForwardMode: " NFTABLES "},
+			{ID: 53, Name: "clean", Secret: "s", ServerIP: "192.0.2.53", Status: 1, RenewalCycle: "month", ForwardMode: "agent"},
+		},
+	}
+	result, err := dst.Import(backup, []string{"nodes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NodesImported != 3 {
+		t.Fatalf("NodesImported = %d, want 3, warnings=%v", result.NodesImported, result.ImportWarnings)
+	}
+	readNode := func(id int64) model.Node {
+		t.Helper()
+		var n model.Node
+		if err := dst.db.Where("id = ?", id).First(&n).Error; err != nil {
+			t.Fatalf("read node #%d: %v", id, err)
+		}
+		return n
+	}
+	if n := readNode(51); n.RenewalCycle.Valid || n.ForwardMode != "agent" {
+		t.Fatalf("node 51 cycle/mode = %v/%q, want NULL/agent (normalized)", n.RenewalCycle, n.ForwardMode)
+	}
+	if n := readNode(52); !n.RenewalCycle.Valid || n.RenewalCycle.String != "year" || n.ForwardMode != "nftables" {
+		t.Fatalf("node 52 cycle/mode = %v/%q, want year/nftables (normalized)", n.RenewalCycle, n.ForwardMode)
+	}
+	if n := readNode(53); !n.RenewalCycle.Valid || n.RenewalCycle.String != "month" || n.ForwardMode != "agent" {
+		t.Fatalf("node 53 cycle/mode = %v/%q, want month/agent (verbatim)", n.RenewalCycle, n.ForwardMode)
+	}
+	warnText := strings.Join(result.ImportWarnings, "\n")
+	for _, want := range []string{"weekly", "iptables"} {
+		if !strings.Contains(warnText, want) {
+			t.Fatalf("receipt must name original value %q, warnings=%v", want, result.ImportWarnings)
+		}
+	}
+}
+
 // B8-02（限值同源）：限值经 service_monitor_* 配置键调整后，恢复面
 // 钳制跟随配置口径，与写面 resolveServiceMonitorLimits 同源。
 func TestImportServiceMonitorsLimitsFromConfig(t *testing.T) {
