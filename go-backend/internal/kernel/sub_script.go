@@ -29,6 +29,12 @@ import (
 const (
 	scriptTimeout   = time.Second
 	MaxScriptLength = 20000
+	// maxScriptNameRunes caps a script-adopted node name, mirroring the
+	// 200-rune bound the panel enforces on node names elsewhere
+	// (normalizeNames in the subscription handler). A longer name is a
+	// script error, never a truncation: silently shortening it could
+	// collide two distinct nodes into one rendered name.
+	maxScriptNameRunes = 200
 )
 
 // scriptNode 是脚本看到的节点对象；id 用于把返回的节点映射回 endpoint。
@@ -126,9 +132,24 @@ func ApplySubScript(endpoints []Endpoint, script string) ([]Endpoint, error) {
 	if err != nil {
 		return nil, scriptError(err)
 	}
+	// B5-03：vm.Interrupt 只停 JavaScript；下面 Export() 的 Go 侧物化
+	// 不可中断，成本由脚本返回的数组决定。脚本合法上只能返回输入的
+	// 子集/重排（重复项随后会被 seen 去重丢弃），所以先在 JS 侧读
+	// length 封顶、再 Export，Export 后复核一次兜底——超限结果一概
+	// 不物化，按脚本错误走既有 fail-soft（保留脚本前节点集）。
+	if !goja.IsUndefined(result) && !goja.IsNull(result) {
+		if lv := result.ToObject(vm).Get("length"); lv != nil && !goja.IsUndefined(lv) && !goja.IsNull(lv) {
+			if n := lv.ToInteger(); n < 0 || n > int64(len(endpoints)) {
+				return nil, errors.New("operator 返回的节点数不能超过输入节点数")
+			}
+		}
+	}
 	list, ok := result.Export().([]interface{})
 	if !ok {
 		return nil, errors.New("operator 需要返回节点数组")
+	}
+	if len(list) > len(endpoints) {
+		return nil, errors.New("operator 返回的节点数不能超过输入节点数")
 	}
 	out := make([]Endpoint, 0, len(list))
 	seen := map[int]bool{}
@@ -144,7 +165,14 @@ func ApplySubScript(endpoints []Endpoint, script string) ([]Endpoint, error) {
 		seen[i] = true
 		e := endpoints[i]
 		if name, ok := node["name"].(string); ok && strings.TrimSpace(name) != "" {
-			e.Name = strings.TrimSpace(name)
+			name = strings.TrimSpace(name)
+			// B5-03：采纳名无长度帽时，一个脚本能给每个节点挂上百 MB
+			// 的名字，后续每个渲染器都会反复拷贝。超限按脚本错误
+			// 处理（fail-soft 保留原名），不截断、不采纳。
+			if utf8.RuneCountInString(name) > maxScriptNameRunes {
+				return nil, fmt.Errorf("脚本给节点起的名字超过 %d 个字符", maxScriptNameRunes)
+			}
+			e.Name = name
 		}
 		out = append(out, e)
 	}
