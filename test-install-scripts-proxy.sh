@@ -638,6 +638,40 @@ test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp() (
   grep -q 'jq -e' <<< "$body" || fail "A1-06: the staged file must be re-parsed as valid JSON before it replaces daemon.json"
 )
 
+# A2-07（audit-max）：入口进程锁＋备份名唯一后缀——① 锁被另一
+# 进程持有时 panel_acquire_run_lock 必须点名拒绝（返回非 0）；
+# 锁空闲时取得成功；main() 必须接线调用（静态断言）。② 菜单
+# 5/6 的 Caddyfile 备份名此前只有秒级时间戳，同秒再跑即覆盖前
+# 一份回滚源：两处命名都必须带进程号唯一后缀（静态钉格，与
+# A1-06 同因：菜单全流程夹具不产出同秒双跑场景）。
+test_panel_run_lock_and_unique_caddy_backup_names() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local lock_file holder_rc lock_out
+  lock_file=$(mktemp -u)
+  lock_out=$(mktemp)
+  PANEL_INSTALL_LOCK_FILE="$lock_file"
+  ( exec 9>>"$lock_file"; flock 9; sleep 5 ) &
+  local holder_pid=$!
+  sleep 0.5
+  holder_rc="0"
+  panel_acquire_run_lock > "$lock_out" 2>&1 || holder_rc="$?"
+  [[ "$holder_rc" != "0" ]] || fail "A2-07: acquiring the run lock must fail while another process holds it"
+  grep -q 'panel_install.sh 进程正在运行' "$lock_out" || fail "A2-07: the lock refusal must be named in the output"
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+  panel_acquire_run_lock >/dev/null 2>&1 || fail "A2-07: acquiring the run lock must succeed once it is free"
+
+  local main_body
+  main_body=$(sed -n '/^main()/,/^}/p' "$ROOT_DIR/panel_install.sh")
+  grep -q 'panel_acquire_run_lock' <<< "$main_body" || fail "A2-07: main() must acquire the run lock before any operation"
+
+  local bak_count
+  bak_count=$(grep -Fc 'caddyfile}.bak.$(date +%s).$$' "$ROOT_DIR/panel_install.sh" || true)
+  assert_equals "2" "$bak_count" "A2-07: both Caddy backup names must carry the PID suffix"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -10059,5 +10093,6 @@ test_panel_explicit_version_format_validated
 test_panel_probe_route_uses_channel_tag_grammar
 test_panel_normalize_proxy_prefix_strips_all_trailing_slashes
 test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp
+test_panel_run_lock_and_unique_caddy_backup_names
 
 echo "install script tests passed"

@@ -1112,7 +1112,9 @@ setup_domain_proxy() {
   # 备份已有配置（保留备份路径供下方 validate/restart 失败回滚使用）
   local caddyfile_bak=""
   if [ -f "$caddyfile" ]; then
-    caddyfile_bak="${caddyfile}.bak.$(date +%s)"
+    # A2-07：备份名带进程号唯一后缀——原秒级时间戳同秒再跑即覆
+    # 盖前一份回滚源（菜单 6 同型一并改）。
+    caddyfile_bak="${caddyfile}.bak.$(date +%s).$$"
     cp "$caddyfile" "$caddyfile_bak"
     echo "🗄️  已备份现有配置到 $caddyfile_bak"
   fi
@@ -1249,7 +1251,7 @@ setup_subscription_front_domain() {
   # 写前备份（命名沿用菜单 5），追加站点块而非整文件覆盖，原有站点
   # 块（面板域名等）逐字保留。
   echo "📝 配置 Caddy..."
-  local caddyfile_bak="${caddyfile}.bak.$(date +%s)"
+  local caddyfile_bak="${caddyfile}.bak.$(date +%s).$$"
   cp "$caddyfile" "$caddyfile_bak"
   echo "🗄️  已备份现有配置到 $caddyfile_bak"
   cat >> "$caddyfile" <<EOF
@@ -4525,6 +4527,32 @@ uninstall_panel() {
   echo "✅ 卸载完成"
 }
 
+# A2-07：进程锁——装/升/卸/迁移共用同一部署目录与 .env，两个
+# panel_install.sh 进程并发（双终端、面板运维与自更新 re-exec
+# 叠加等）会交错写同一批文件（钉键、compose 替换、迁移快照）。
+# 入口以 flock 互斥：锁被占用即点名退出（返回 1）；flock 不存
+# 在或锁文件不可打开时只告警继续，不因锁机制本身挡住全部运维
+# （降级须点名，不静默）。锁路径可经 PANEL_INSTALL_LOCK_FILE
+# 覆盖；锁随进程退出由内核自动释放，不留陈旧锁。注：迁移快照
+# .env.pre-postgres-migration 是回滚契约的固定名，不在此改名，
+# 其并发覆盖面由本锁闭合。
+panel_acquire_run_lock() {
+  local lock_file="${PANEL_INSTALL_LOCK_FILE:-/run/flmx-panel-install.lock}"
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "⚠️ 未找到 flock，进程锁不可用（并发运行防护缺失），继续执行——请勿同时运行两个面板脚本进程"
+    return 0
+  fi
+  if ! ( exec 9>>"$lock_file" ) 2>/dev/null; then
+    echo "⚠️ 无法打开进程锁文件 $lock_file（目录不可写？），并发运行防护缺失，继续执行——请勿同时运行两个面板脚本进程"
+    return 0
+  fi
+  exec 9>>"$lock_file"
+  if ! flock -n 9; then
+    echo "❌ 已有另一个 panel_install.sh 进程正在运行（锁：$lock_file），本次退出；请等其完成后再运行"
+    return 1
+  fi
+}
+
 # 主逻辑
 main() {
   # F-006: 自更新检查放在 main 入口（自更新依赖 resolve_version /
@@ -4541,6 +4569,12 @@ main() {
   if [[ $EUID -ne 0 ]]; then
     echo "❌ panel_install.sh 需要 root 权限运行（涉及 Docker 与系统配置写入）"
     echo "   请使用 root 用户或 sudo 重新执行"
+    exit 1
+  fi
+
+  # A2-07：进程锁——在任何落盘动作之前取得（自更新已先行完
+  # 成，其 re-exec 回到 main 时同样在此受锁），取不到即退出。
+  if ! panel_acquire_run_lock; then
     exit 1
   fi
 
