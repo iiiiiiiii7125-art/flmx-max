@@ -342,6 +342,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/user/package", h.userPackage)
 	mux.HandleFunc("/api/v1/user/subscription/traffic", h.userSubscriptionTraffic)
 	mux.HandleFunc("/api/v1/user/updatePassword", h.updatePassword)
+	mux.HandleFunc("/api/v1/user/logout", h.userLogout)
+	mux.HandleFunc("/api/v1/system-info/ticket", h.issueWSTicket)
 	mux.HandleFunc("/api/v1/node/list", h.nodeList)
 	mux.HandleFunc("/api/v1/node/create", h.nodeCreate)
 	mux.HandleFunc("/api/v1/node/update", h.nodeUpdate)
@@ -532,15 +534,16 @@ func isStoredDefaultPassword(roleID int, pwdHash string) bool {
 	return false
 }
 
-// tokenIssueTime 计算 token 签发时刻，保证 IatMs 严格大于
-// PasswordChangedAt（F-068）。中间件/WS 以 IatMs <= PasswordChangedAt
-// 判 token 失效（M-05 有意口径，不得放宽）：改密/吊销与重新登录落在
-// 同一毫秒时，按 time.Now() 签发的新 token 会出生即失效。签发侧把
-// 时刻单调推到 PasswordChangedAt+1，与 legacy rehash 的既有做法一致。
-func tokenIssueTime(passwordChangedAt int64) time.Time {
+// tokenIssueTime 计算 token 签发时刻，保证 IatMs 严格大于吊销水位
+// （F-068；水位 = max(PasswordChangedAt, TokensRevokedBefore)，
+// E1-02 起含登出吊销）。中间件/WS 以 IatMs <= 水位判 token 失效
+// （M-05 有意口径，不得放宽）：改密/吊销与重新登录落在同一毫秒时，
+// 按 time.Now() 签发的新 token 会出生即失效。签发侧把时刻单调推到
+// 水位+1，与 legacy rehash 的既有做法一致。
+func tokenIssueTime(watermark int64) time.Time {
 	now := time.Now()
-	if passwordChangedAt >= now.UnixMilli() {
-		return time.UnixMilli(passwordChangedAt + 1)
+	if watermark >= now.UnixMilli() {
+		return time.UnixMilli(watermark + 1)
 	}
 	return now
 }
@@ -708,7 +711,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("账号或密码错误"))
 		return
 	}
-	issueAt := tokenIssueTime(user.PasswordChangedAt)
+	issueAt := tokenIssueTime(max(user.PasswordChangedAt, user.TokensRevokedBefore))
 
 	// M-05: 管理员用种子默认口令登录时签发受限 token（仅允许改密），
 	// 服务端强制改密。A1-D2：判定口径与 passkey 路径（R-002）统一为
@@ -2175,6 +2178,71 @@ func (h *Handler) userPackage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.WriteJSON(w, response.OK(payload))
+}
+
+// userLogout 服务端登出（E1-02）：推进当前用户的登出吊销水位
+// （tokens_revoked_before = now），此前签发的全部 JWT 随即失效——
+// 含本请求所用 token、被复制走的 token，以及已建立的浏览器 WS
+// 会话（keepalive 复检同一水位时被关闭）。只推进吊销水位，不改
+// 密码与 PasswordChangedAt；重新登录签发的新 token 不受影响。
+// 前端 safeLogout 在清本地态前 fire-and-forget 调用本端点。
+func (h *Handler) userLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.Err(405, "请求方法不允许"))
+		return
+	}
+	claims, ok := r.Context().Value(middleware.ClaimsContextKey).(auth.Claims)
+	if !ok {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	userID, err := parseUserID(claims.Sub)
+	if err != nil {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	if err := h.repo.RevokeUserTokens(userID, time.Now().UnixMilli()); err != nil {
+		response.WriteJSON(w, response.ErrDefault("退出登录时发生错误"))
+		return
+	}
+	response.WriteJSON(w, response.OKEmpty())
+}
+
+// issueWSTicket 为浏览器实时通道签发短期单次票据（R-WS-TICKET）：
+// 调用者以登录态 JWT 经 Authorization 头鉴权（本路由在 /api/v1/
+// 下，经 JWT 中间件全量复核；此处再以同一口径复核状态并读取吊销
+// 纪元）。票据绑定用户与当前吊销纪元、30 秒内单次有效；浏览器 WS
+// 握手只认票据，改密/登出后未消费票据随纪元推进作废。agent 节点
+// 通道走节点密钥，不经此端点。
+func (h *Handler) issueWSTicket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.Err(405, "请求方法不允许"))
+		return
+	}
+	claims, ok := r.Context().Value(middleware.ClaimsContextKey).(auth.Claims)
+	if !ok {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	userID, err := parseUserID(claims.Sub)
+	if err != nil {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	state, err := h.GetUserAuthState(userID)
+	if err != nil || state == nil || state.Status != 1 || state.RoleID != claims.RoleID || state.TokenStale(claims.IatMs) {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	ticket, err := h.wsServer.IssueWSTicket(userID, claims.RoleID, claims.User, claims.IatMs, claims.Exp, state.RevocationWatermark())
+	if err != nil {
+		response.WriteJSON(w, response.ErrDefault("签发实时通道票据时发生错误"))
+		return
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"ticket":    ticket,
+		"expiresIn": int(ws.WSTicketTTL / time.Second),
+	}))
 }
 
 func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {

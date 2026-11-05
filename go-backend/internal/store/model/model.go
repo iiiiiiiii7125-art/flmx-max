@@ -25,7 +25,12 @@ type User struct {
 	UpdatedTime       sql.NullInt64 `gorm:"column:updated_time"`
 	Status            int           `gorm:"not null"`
 	PasswordChangedAt int64         `gorm:"column:password_changed_at;not null;default:0"`
-	MaxConn           int           `gorm:"column:max_conn;not null;default:0"`
+	// TokensRevokedBefore 是服务端登出的吊销水位（unix 毫秒，E1-02）：
+	// 登出时推进到当前时刻，此前签发的全部 JWT 随即失效（复核侧以
+	// RevocationWatermark = max(PasswordChangedAt, TokensRevokedBefore)
+	// 判定）。与改密分开记账：登出不动密码语义，重新登录不受影响。
+	TokensRevokedBefore int64 `gorm:"column:tokens_revoked_before;not null;default:0"`
+	MaxConn             int   `gorm:"column:max_conn;not null;default:0"`
 	// FlowLastResetTime is the unix-ms moment of the last monthly flow
 	// reset actually performed by the daily job (R11X-005 due-type
 	// catch-up marker). 0 = never recorded (stock/pre-column rows and

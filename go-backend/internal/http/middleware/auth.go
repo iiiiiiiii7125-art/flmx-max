@@ -63,7 +63,7 @@ func JWT(opts AuthOptions) func(http.Handler) http.Handler {
 					return
 				}
 				state, err := opts.GetUserAuthState(userID)
-				if err != nil || state == nil || state.Status != 1 || state.RoleID != claims.RoleID || claims.IatMs <= state.PasswordChangedAt {
+				if err != nil || state == nil || state.Status != 1 || state.RoleID != claims.RoleID || state.TokenStale(claims.IatMs) {
 					if allowsOptionalAuth(r.URL.Path) {
 						next.ServeHTTP(w, r)
 						return

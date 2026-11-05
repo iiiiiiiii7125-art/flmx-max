@@ -399,7 +399,7 @@ func (h *Handler) passkeyLoginFinish(w http.ResponseWriter, r *http.Request) {
 	var token string
 	requirePwdChange := isStoredDefaultPassword(user.RoleID, user.Pwd)
 	// F-068：签发时刻须严格晚于 PasswordChangedAt，防同毫秒出生即失效。
-	issueAt := tokenIssueTime(user.PasswordChangedAt)
+	issueAt := tokenIssueTime(max(user.PasswordChangedAt, user.TokensRevokedBefore))
 	if requirePwdChange {
 		token, err = auth.GenerateTokenAtWithPwdChangeRequired(user.ID, user.User, user.RoleID, h.jwtSecret, issueAt)
 	} else {

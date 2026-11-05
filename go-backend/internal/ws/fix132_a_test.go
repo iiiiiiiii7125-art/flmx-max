@@ -50,15 +50,44 @@ func fix132AdminToken(t *testing.T, userID int64) string {
 	return token
 }
 
+// fix132TicketQuery 为一次 type=0 拨号组装票据查询串（R-WS-TICKET
+// 后浏览器通道只认票据）。无 t 依赖，可在并发拨号的 goroutine 内用；
+// 纪元取 0，与本包各 stub 状态的水位（PasswordChangedAt=0、无登出
+// 水位）一致。
+func fix132TicketQuery(server *Server, userID int64) (string, error) {
+	token, err := auth.GenerateToken(userID, "admin", 0, fix132Secret)
+	if err != nil {
+		return "", err
+	}
+	claims, err := auth.ParseClaims(token, fix132Secret)
+	if err != nil {
+		return "", err
+	}
+	ticket, err := server.IssueWSTicket(userID, claims.RoleID, claims.User, claims.IatMs, claims.Exp, 0)
+	if err != nil {
+		return "", err
+	}
+	return "type=0&ticket=" + url.QueryEscape(ticket), nil
+}
+
+func fix132AdminTicket(t *testing.T, server *Server, userID int64) string {
+	t.Helper()
+	query, err := fix132TicketQuery(server, userID)
+	if err != nil {
+		t.Fatalf("issue ws ticket query: %v", err)
+	}
+	return strings.TrimPrefix(query, "type=0&ticket=")
+}
+
 func dialWS(t *testing.T, ts *httptest.Server, query string) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
 	u := "ws" + strings.TrimPrefix(ts.URL, "http") + "/system-info?" + query
 	return websocket.DefaultDialer.Dial(u, nil)
 }
 
-func dialAdmin(t *testing.T, ts *httptest.Server, userID int64) *websocket.Conn {
+func dialAdmin(t *testing.T, server *Server, ts *httptest.Server, userID int64) *websocket.Conn {
 	t.Helper()
-	conn, _, err := dialWS(t, ts, "type=0&secret="+url.QueryEscape(fix132AdminToken(t, userID)))
+	conn, _, err := dialWS(t, ts, "type=0&ticket="+url.QueryEscape(fix132AdminTicket(t, server, userID)))
 	if err != nil {
 		t.Fatalf("dial admin ws: %v", err)
 	}
@@ -125,7 +154,7 @@ func TestCommandResponseNotBroadcast(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	admin := dialAdmin(t, ts, 7)
+	admin := dialAdmin(t, server, ts, 7)
 	// 后台收集 admin 收到的全部消息（gorilla 连接读超时后不可复用，
 	// 负断言必须走 channel 而非 SetReadDeadline）。
 	adminMsgs := collectMessages(admin)
@@ -247,8 +276,8 @@ func TestBroadcastNotBlockedBySlowConsumer(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	_ = dialAdmin(t, ts, 8)     // 慢消费者：连上后永不读
-	fast := dialAdmin(t, ts, 9) // 正常消费者
+	_ = dialAdmin(t, server, ts, 8)     // 慢消费者：连上后永不读
+	fast := dialAdmin(t, server, ts, 9) // 正常消费者
 	// R1-B10 deflake：先等两个 admin 会话登记落点再灌 metric——
 	// 广播只投已登记会话，正常消费者登记滞后于灌注时收不到任何
 	// 一条，会被误判成队头阻塞（与 TestCommandResponseNotBroadcast
@@ -290,7 +319,7 @@ func TestPerUserSessionLimit(t *testing.T) {
 	server, ts := fix132AdminServer(t)
 	var conns []*websocket.Conn
 	for i := 0; i < wsMaxSessionsPerUser; i++ {
-		conns = append(conns, dialAdmin(t, ts, 11))
+		conns = append(conns, dialAdmin(t, server, ts, 11))
 	}
 	// R1-B10 deflake：客户端 Dial 返回只证明握手响应已发出，不证明
 	// 服务端 handler 已把会话登记进 s.admins——handleAdmin 在 Upgrade
@@ -309,7 +338,11 @@ func TestPerUserSessionLimit(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	conn, resp, err := dialWS(t, ts, "type=0&secret="+url.QueryEscape(fix132AdminToken(t, 11)))
+	ticketQuery, err := fix132TicketQuery(server, 11)
+	if err != nil {
+		t.Fatalf("issue ticket query: %v", err)
+	}
+	conn, resp, err := dialWS(t, ts, ticketQuery)
 	if err == nil {
 		_ = conn.Close()
 		t.Fatalf("session %d for same user accepted; per-user cap missing", wsMaxSessionsPerUser+1)
@@ -322,7 +355,7 @@ func TestPerUserSessionLimit(t *testing.T) {
 		t.Fatalf("over-limit dial: status=%d err=%v, want 429", code, err)
 	}
 	// 其他用户不受影响。
-	_ = dialAdmin(t, ts, 12)
+	_ = dialAdmin(t, server, ts, 12)
 	for _, c := range conns {
 		_ = c.Close()
 	}
