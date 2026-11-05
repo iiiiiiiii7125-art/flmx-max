@@ -7,6 +7,16 @@ import (
 	"github.com/go-gost/core/logger"
 )
 
+// DefaultTTL is the session idle TTL applied whenever a caller
+// supplies a non-positive value. It matches the default the UDP
+// listener metadata parsers (listener/udp, listener/rudp) have
+// always used; the Bind paths (chain, relay and socks connectors)
+// pass BindOptions.UDPConnTTL through with no defaulting of their
+// own, so the convergence has to happen here and in NewListener
+// (D3-01): a TTL of zero used to reach time.NewTicker in the
+// idleCheck goroutine, whose panic killed the whole agent.
+const DefaultTTL = 30 * time.Second
+
 type connPool struct {
 	m      sync.Map
 	ttl    time.Duration
@@ -15,6 +25,9 @@ type connPool struct {
 }
 
 func newConnPool(ttl time.Duration) *connPool {
+	if ttl <= 0 {
+		ttl = DefaultTTL
+	}
 	p := &connPool{
 		ttl:    ttl,
 		closed: make(chan struct{}),
