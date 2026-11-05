@@ -26,10 +26,16 @@ func TestReleaseChannelHonorsPrereleaseFlag(t *testing.T) {
 		t.Fatalf("stable releases = %+v, want only 1.9.9 non-prerelease", out)
 	}
 
-	// dev 渠道形态不变：带后缀的 prerelease 仍归类 dev 并呈报标志。
+	// dev 渠道形态（B7-05 后）：带后缀的 prerelease 按形态仍归类
+	// dev（releaseMatchesChannel 不变），但面板内列表面不再列出
+	// dev 版本——列出也走不通（解析/执行面点名拒绝），故
+	// releasesForChannel 对 dev 返回空集。
 	dev := githubRelease{TagName: "2.0.0-beta1", Prerelease: true}
+	if !releaseMatchesChannel(dev, releaseChannelDev) {
+		t.Fatal("suffixed prerelease tag must still classify as the dev channel by shape")
+	}
 	outDev := releasesForChannel([]githubRelease{dev}, releaseChannelDev)
-	if len(outDev) != 1 || outDev[0].Version != "2.0.0-beta1" || !outDev[0].Prerelease {
-		t.Fatalf("dev releases = %+v, want 2.0.0-beta1 flagged prerelease", outDev)
+	if len(outDev) != 0 {
+		t.Fatalf("dev releases = %+v, want empty listing under B7-05", outDev)
 	}
 }

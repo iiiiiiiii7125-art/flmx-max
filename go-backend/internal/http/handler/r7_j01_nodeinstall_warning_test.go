@@ -24,6 +24,9 @@ import (
 // ws:// command for a TLS panel, now with an explicit plaintext
 // warning at generation time — is user-accepted, so the last test in
 // this file LOCKS the current normalizeNodeInstallAddr behaviour.
+// 后续批次注记（GATE-FIX）：B3-01 起安装命令的地址/secret 参数经
+// shellQuoteForInstall 单引号引用（裁定本体），下文地址断言已按
+// 引号形态更新；明文 warning 口径不变。
 
 type r7J01Envelope struct {
 	Code    int    `json:"code"`
@@ -45,7 +48,7 @@ func r7J01CallNodeInstall(t *testing.T, panelAddr string) r7J01Envelope {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx, is_remote, remote_url, remote_token, remote_config)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "r7j01-node", "r7j01-secret", "10.90.80.72", "10.90.80.72", "", "31000-31099", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0, 0, "", "", "").Error; err != nil {
+	`, "r7j01-node", "0123456789abcdef0123456789abcdef", "10.90.80.72", "10.90.80.72", "", "31000-31099", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0, 0, "", "", "").Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "r7j01-node")
@@ -87,7 +90,7 @@ func TestR7J01PlaintextInstallCarriesWarning(t *testing.T) {
 	// request -> ws:// command (behaviour unchanged in this batch) AND
 	// an explicit plaintext warning in the response envelope.
 	env := r7J01CallNodeInstall(t, "z.0v0.dog")
-	if !strings.Contains(env.Data, "-a ws://z.0v0.dog ") {
+	if !strings.Contains(env.Data, "-a 'ws://z.0v0.dog'") {
 		t.Fatalf("command must keep the ws:// agent address in this batch, got %q", env.Data)
 	}
 	if env.Warning == "" {
@@ -104,7 +107,7 @@ func TestR7J01PlaintextInstallCarriesWarning(t *testing.T) {
 func TestR7J01ExplicitPlaintextInstallCarriesWarning(t *testing.T) {
 	// Incident cell B: explicit ws:// stored value -> warning as well.
 	env := r7J01CallNodeInstall(t, "ws://z.0v0.dog")
-	if !strings.Contains(env.Data, "-a ws://z.0v0.dog ") {
+	if !strings.Contains(env.Data, "-a 'ws://z.0v0.dog'") {
 		t.Fatalf("command must keep the ws:// agent address, got %q", env.Data)
 	}
 	if env.Warning == "" {
@@ -114,7 +117,7 @@ func TestR7J01ExplicitPlaintextInstallCarriesWarning(t *testing.T) {
 
 func TestR7J01TLSInstallHasNoWarning(t *testing.T) {
 	env := r7J01CallNodeInstall(t, "https://z.0v0.dog")
-	if !strings.Contains(env.Data, "-a wss://z.0v0.dog ") {
+	if !strings.Contains(env.Data, "-a 'wss://z.0v0.dog'") {
 		t.Fatalf("https stored address must generate wss://, got %q", env.Data)
 	}
 	if env.Warning != "" {

@@ -70,6 +70,10 @@ func TestC01RedirectTagAcceptsValidTags(t *testing.T) {
 // TestC01NodeInstallRejectsInvalidVersion：第二道纵深——即使 tag 绕过
 // 生产处校验进入 nodeInstall，也必须在拼入 shell 命令前被
 // isValidAgentVersion 拦下（与 nodeUpgrade/nodeBatchUpgrade 同口径）。
+// B7-05 后 dev 渠道在解析点点名拒绝（含元字符的 beta tag 连解析都
+// 过不了），故 dev 面改断点名拒绝；纵深本体改经稳定面驱动：渠道
+// 分类只认 ^\d+(\.\d+)+$ 形态，两段号 tag 会被解析面当正式版
+// 返回，拼命令前的严格三段号校验必须拦下并点名格式。
 func TestC01NodeInstallRejectsInvalidVersion(t *testing.T) {
 	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	clearReleasesCacheForTest(t)
@@ -82,7 +86,7 @@ func TestC01NodeInstallRejectsInvalidVersion(t *testing.T) {
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx, is_remote, remote_url, remote_token, remote_config)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "c01-node", "c01-secret", "10.90.80.71", "10.90.80.71", "", "31000-31099", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0, 0, "", "", "").Error; err != nil {
+	`, "c01-node", "0123456789abcdef0123456789abcdef", "10.90.80.71", "10.90.80.71", "", "31000-31099", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0, 0, "", "", "").Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "c01-node")
@@ -92,8 +96,9 @@ func TestC01NodeInstallRejectsInvalidVersion(t *testing.T) {
 	// 1.7.7：github_proxy_enabled 设置已整体移除，无需再写配置关代理；
 	// 路线由 swapGitHubBasesForTest 钉为直连-only。
 
-	// API 返回一个含 shell 元字符的 dev tag：dev 渠道按 releaseChannelFromTag
-	// 命中（beta 关键字），resolve 层原样返回；nodeInstall 必须拒。
+	// API 返回一个含 shell 元字符的 dev tag：B7-05 后 dev 渠道在
+	// 解析点点名拒绝，该 tag 连解析都过不了；nodeInstall 必须以
+	// 「通道不支持」收场、命令不得生成。
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `[{"tag_name":"1.7.2-beta1;id>/tmp/c01-pwn","name":"x","draft":false,"prerelease":true}]`)
@@ -119,7 +124,22 @@ func TestC01NodeInstallRejectsInvalidVersion(t *testing.T) {
 	}
 
 	if code, msg, cmd := call("dev"); code == 0 {
-		t.Fatalf("nodeInstall must reject shell metacharacters in version, got code 0 cmd=%q", cmd)
+		t.Fatalf("nodeInstall must reject the dev channel, got code 0 cmd=%q", cmd)
+	} else if !strings.Contains(msg, "通道不支持") {
+		t.Fatalf("nodeInstall dev rejection must name the unsupported channel, got msg=%q", msg)
+	}
+
+	// 稳定面纵深：两段号 tag "1.7" 过渠道分类被解析面当正式版
+	// 返回，nodeInstall 拼命令前的 isValidAgentVersion 必须拦下。
+	apiBad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[{"tag_name":"1.7","name":"x","draft":false,"prerelease":false}]`)
+	}))
+	defer apiBad.Close()
+	clearReleasesCacheForTest(t)
+	swapGitHubBasesForTest(t, apiBad.URL, apiBad.URL)
+	if code, msg, cmd := call("stable"); code == 0 {
+		t.Fatalf("nodeInstall must reject a two-segment version, got code 0 cmd=%q", cmd)
 	} else if !strings.Contains(msg, "版本号格式无效") {
 		t.Fatalf("nodeInstall rejection must name the version format, got msg=%q", msg)
 	}

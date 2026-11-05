@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -72,8 +73,9 @@ func TestJ03RedirectFallbackStillResolvesStable(t *testing.T) {
 	}
 }
 
-func TestJ03DevChannelUnaffected(t *testing.T) {
-	// dev 渠道不受影响：API 路径返回 beta tag 仍可解析。
+func TestJ03DevChannelRejectedByName(t *testing.T) {
+	// B7-05 后：dev 渠道在解析点点名拒绝（不再解析 beta tag）——
+	// 面板内仅支持正式版通道，dev 需求走安装脚本通道。
 	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
 	clearReleasesCacheForTest(t)
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,11 +86,8 @@ func TestJ03DevChannelUnaffected(t *testing.T) {
 	swapGitHubBasesForTest(t, api.URL, api.URL)
 
 	tag, err := resolveLatestReleaseByChannel("dev")
-	if err != nil {
-		t.Fatalf("dev channel must still resolve a beta tag: %v", err)
-	}
-	if tag != "1.7.2-beta1" {
-		t.Fatalf("dev channel resolved %q, want 1.7.2-beta1", tag)
+	if !errors.Is(err, errDevChannelNotSupported) {
+		t.Fatalf("dev channel must be rejected by name at the resolver, got tag=%q err=%v", tag, err)
 	}
 }
 
