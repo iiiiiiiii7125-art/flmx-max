@@ -8,6 +8,9 @@
  *   C1  nullable 贯彻：后端 repository.go 的 List* 出口凡经 nullableString /
  *       nullableInt64 / nullableForwardIngress 下发的字段（JSON null），
  *       前端对应 interface 必须显式声明 `| null`（声明缺失同样算失败）。
+ *       候选集自 A4-04 起机械推导：枚举全部 List* 方法，未登记者只要
+ *       经 nullable* 下发即点名红（登记表＋明示排除表之外的出口不得
+ *       静默绕过），不再只遍历手工登记的 5 个。
  *   C2  userPackage.userInfo：updatedTime 可空、expTime 为 number、无 maxConn。
  *   C3  TunnelQuality 双形态：后端快照 success=bool、历史 success=int 的既成
  *       事实下，前端必须有 TunnelQualityHistoryApiItem（success: number），
@@ -313,8 +316,8 @@ function goFuncSpan(source, signature) {
 
 /* ---------------- C1: nullable 贯彻 ---------------- */
 // 登记表随功能移除同步（R2-C6-01）：分组三件套移除后 ListGroupPermissions
-// 已删，本表对应行与 C7 的 group.tsx 副本校验一并摘除；新增 List* 出口
-// 时在此登记，删功能时同步删行——残行会令本门在当前树上恒红。
+// 已删，本表对应行与 C7 的 group.tsx 副本校验一并摘除；删功能时同步
+// 删行——残行会令本门在当前树上恒红（登记行在下方对位循环点名）。
 const listToInterface = {
   ListNodes: "NodeApiItem",
   ListUsers: "UserApiItem",
@@ -322,6 +325,63 @@ const listToInterface = {
   ListForwards: "ForwardApiItem",
   ListTunnels: "TunnelApiItem",
 };
+
+// A4-04 普查推导：候选集不再只靠这张手工登记表——旧实现只遍历登记
+// 的 5 个出口，repository.go 实有 22 个 List* 方法，新增 List* 出口
+// 若经 nullable* 下发字段而无人登记，前端 interface 的 | null 漂移
+// 无门可红（登记集＝修复集、非机制集的典型失效）。现机械枚举全部
+// List* 并逐个归类：登记表内→下方对位核；明示排除表内→跳过并公
+// 示理由；其余→span 内出现 nullable* 下发即点名红，无 nullable 下
+// 发者自动归类并计入普查输出。排除表登记纪律与登记表同：代码里
+// 已不存在的排除行同样点名红。
+const listExclusions = {
+  // 当前无条目：其余 17 个 List* 经机械核对均不经 nullable* 下发
+  // （模型切片 / 标量 / map[string]string 出口），自动归类即可。
+  // 将来某 List* 经 nullable* 下发但消费面不在 types.ts（如纯内部
+  // 出口）时，在此登记并写明理由。
+};
+const allListFns = [
+  ...new Set(
+    [...repositoryGo.matchAll(/func \(r \*Repository\) (List\w+)\(/g)].map(
+      (m) => m[1],
+    ),
+  ),
+];
+{
+  const failuresBefore = failures;
+  let autoClassified = 0;
+  for (const fn of allListFns) {
+    if (fn in listToInterface || fn in listExclusions) continue;
+    const span = goFuncSpan(repositoryGo, `func (r *Repository) ${fn}(`);
+    const keys = span
+      ? [
+          ...span.matchAll(
+            /"(\w+)":\s*nullable(?:String|Int64|ForwardIngress)\(/g,
+          ),
+        ].map((m) => m[1])
+      : [];
+    if (keys.length > 0) {
+      fail(
+        "C1",
+        `${fn}：未登记的 List* 出口经 nullable 下发字段（${keys.join(", ")}），前端 interface 无从对位——请在 listToInterface 登记对应 interface，或在 listExclusions 写明排除理由（A4-04）`,
+      );
+    } else {
+      autoClassified += 1;
+    }
+  }
+  for (const fn of Object.keys(listExclusions)) {
+    if (!allListFns.includes(fn))
+      fail(
+        "C1",
+        `listExclusions 登记的 ${fn} 在 repository.go 中已不存在，残行须删（A4-04）`,
+      );
+  }
+  if (failures === failuresBefore)
+    pass(
+      "C1",
+      `List* 出口普查共 ${allListFns.length} 个：登记对位 ${Object.keys(listToInterface).length}、明示排除 ${Object.keys(listExclusions).length}、无 nullable 下发自动归类 ${autoClassified}`,
+    );
+}
 
 for (const [fn, iface] of Object.entries(listToInterface)) {
   const span = goFuncSpan(repositoryGo, `func (r *Repository) ${fn}(`);
