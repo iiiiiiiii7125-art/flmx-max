@@ -12,6 +12,16 @@ on:
   # branch tips. Adding workflow_call does not change push/PR runs.
   workflow_call:
 
+# A4-06: every other workflow in this repo converged on explicit
+# least-privilege token permissions; ci-build was the exception and
+# it is the workflow that most executes repo content (pnpm install
+# lifecycle scripts, go test, pip install, repo check scripts) on
+# push and pull_request. No job here writes repo content (all steps
+# are checkout/build/test/check only), so the top-level grant is
+# read-only; a future job that needs more must declare it per-job.
+permissions:
+  contents: read
+
 jobs:
   install-scripts:
     name: Test Installer Scripts (systemd and Alpine OpenRC)
