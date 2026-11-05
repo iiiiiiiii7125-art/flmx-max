@@ -1742,6 +1742,28 @@ panel_instance_id_is_valid() {
   [[ ${#1} -le 32 && "$1" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
 }
 
+# 变更性入口的实例 id 硬守卫（A2-08）：原始取值（环境变量优先、
+# 否则 $1 目录 .env）非法即点名拒绝。读路径 panel_instance_id
+# 对非法值回落默认实例的口径（B2-03）只对纯读成立——update/
+# uninstall/migrate 若沿回落口径继续，会按默认实例的派生名去
+# 操作一套 .env 里写着非法 id 的部署（目标错位且全程无硬错
+# 误）；install 此前也只查环境变量形态、.env 形态漏查。现各变
+# 更性入口动手前同律硬拒，文案与 install 既有口径一致。
+panel_assert_instance_id_valid() {
+  local dir="${1:-${PANEL_DEPLOY_DIR:-.}}"
+  local raw=""
+  if [[ -n "${FLMX_INSTANCE:-}" ]]; then
+    raw="$FLMX_INSTANCE"
+  else
+    raw=$(get_env_var FLMX_INSTANCE "$dir/.env" || true)
+  fi
+  if [[ -n "$raw" ]] && ! panel_instance_id_is_valid "$raw"; then
+    echo "❌ FLMX_INSTANCE 不合法：$raw（须以小写字母或数字开头，仅含小写字母、数字、- 与 _，全长不超过 32 个字符），操作终止（未做任何修改）；请修正环境变量或部署 .env 后重试"
+    return 1
+  fi
+  return 0
+}
+
 # 部署目录的 Compose（只看 image: 行的值）引用本面板镜像，才认这
 # 个目录在文件证据上属于本面板。.env 不作合取条件：只有单文件的
 # 残缺部署同样要进入归属判定（AI-05）。
@@ -3451,12 +3473,11 @@ panel_force_reinstall_data_gate() {
 install_panel() {
   echo "🚀 开始安装面板..."
 
-  # 实例 id 合法性前置校验（AI-03）：id 会进入容器/卷/网络/项目名，
-  # 非法字符让 Compose 命名直接失败，先于一切动作拒绝。
-  if [[ -n "${FLMX_INSTANCE:-}" ]] && ! panel_instance_id_is_valid "$FLMX_INSTANCE"; then
-    echo "❌ FLMX_INSTANCE 不合法：$FLMX_INSTANCE（须以小写字母或数字开头，仅含小写字母、数字、- 与 _，全长不超过 32 个字符）"
-    return 1
-  fi
+  # 实例 id 合法性前置校验（AI-03＋A2-08）：id 会进入容器/卷/
+  # 网络/项目名，非法字符让 Compose 命名直接失败，先于一切动
+  # 作拒绝；守卫统一走 panel_assert_instance_id_valid——除环境
+  # 变量形态外，当前目录 .env 的形态一并查（旧实现只查前者）。
+  panel_assert_instance_id_valid . || return 1
 
   # 共存守卫（C2-01）：当前目录已有部署文件且明确属于他人（Compose
   # 的 image 行无一引用本面板镜像，或 .env 声明的后端名不属于本面
@@ -3658,6 +3679,9 @@ update_panel() {
     return 1
   }
   resolve_panel_deployment || return 1
+  # A2-08：实例 id 硬守卫——部署 .env/环境变量的非法 id 不得沿
+  # 读路径回落口径静默按默认实例继续更新。
+  panel_assert_instance_id_valid || return 1
   # 更新无确认环节，动手前把目标点名（实例身份体现在后端容器名
   # 后缀上），与卸载确认同口径（B2-04）。
   echo "🎯 本次更新目标：部署目录：$PANEL_DEPLOY_DIR，后端容器：${PANEL_BACKEND_CONTAINER:-未知}"
@@ -3871,6 +3895,8 @@ migrate_to_postgres() {
     echo "❌ 未检测到 Docker，本机没有面板部署，无法迁移"
     return 1
   }
+  # A2-08：实例 id 硬守卫（迁移按 cwd .env 工作，与 update 同律）。
+  panel_assert_instance_id_valid . || return 1
 
   if [[ ! -f ".env" ]]; then
     echo "❌ 未找到 .env 文件，请先安装面板"
@@ -4426,6 +4452,8 @@ uninstall_panel() {
     # 明确属于他人的一律不删；归属已证（Compose 的 image 行引用本
     # 面板镜像或 .env 专属名声明）才直接删；归属未证须显式确认，
     # 无输入（非交互）时不删。
+    # A2-08：实例 id 硬守卫（cwd .env 形态）——非法 id 不删任何文件。
+    panel_assert_instance_id_valid . || return 1
     echo "未检测到 Docker，本机没有容器化的面板部署，无需卸载。"
     # A2-06：清理集与 Docker 分支对齐（L2-14 已在该分支闭合、
     # 本分支漏补）——旧实现只认/只删 docker-compose.yml 与 .env
@@ -4486,6 +4514,8 @@ uninstall_panel() {
     echo "❌ 未能定位面板部署目录，卸载终止（未删除任何内容）。请 cd 到部署目录后重试，或用 PANEL_DEPLOY_DIR=<目录> 指定"
     return 1
   fi
+  # A2-08：实例 id 硬守卫（与 update 同律，位于部署目录 .env）。
+  panel_assert_instance_id_valid || return 1
   if [[ ! -f "docker-compose.yml" ]]; then
     echo "❌ 部署目录 $PANEL_DEPLOY_DIR 缺少 docker-compose.yml，卸载终止（未删除任何内容）"
     return 1

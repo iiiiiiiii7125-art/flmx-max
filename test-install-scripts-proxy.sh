@@ -672,6 +672,83 @@ test_panel_run_lock_and_unique_caddy_backup_names() (
   assert_equals "2" "$bak_count" "A2-07: both Caddy backup names must carry the PID suffix"
 )
 
+# A2-08（audit-max）：非法 FLMX_INSTANCE 在管理路径须与装机路径
+# 同律硬拒——旧实现只有 install_panel 对环境变量形态硬拒；读路
+# 径 panel_instance_id 对非法值（env/.env 两形态）静默回落默认
+# 实例（B2-03 口径，对纯读成立），于是 update/uninstall/migrate
+# 带着 .env 里的非法实例 id 一路操作到默认实例的资源上（或派
+# 生名错位）。现各变更性入口先过 panel_assert_instance_id_valid
+# （读路径回退口径本身不改，B2-03 用例继续把守）。四幕：
+# helper 单元、update 链、uninstall 无 Docker 分支、install 的
+# .env 形态（旧实现只查环境变量、.env 非法值不拒）。
+test_panel_invalid_instance_id_hard_fails_on_manage_paths() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local d rc out
+  # helper 单元：env 非法拒、.env 非法拒、合法/缺省放行
+  d=$(mktemp -d)
+  rc="0"; out=$( ( FLMX_INSTANCE='Bad Id!' panel_assert_instance_id_valid "$d" ) 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: an invalid FLMX_INSTANCE from the environment must hard-fail"
+  grep -q 'FLMX_INSTANCE 不合法' <<< "$out" || fail "A2-08: the hard-fail must name the invalid instance id"
+  printf 'FLMX_INSTANCE=Bad Id!\n' > "$d/.env"
+  rc="0"; ( unset FLMX_INSTANCE; panel_assert_instance_id_valid "$d" >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: an invalid FLMX_INSTANCE from .env must hard-fail"
+  printf 'FLMX_INSTANCE=east\n' > "$d/.env"
+  ( unset FLMX_INSTANCE; panel_assert_instance_id_valid "$d" >/dev/null 2>&1 ) || fail "A2-08: a valid instance id must pass"
+  rm -f "$d/.env"
+  ( unset FLMX_INSTANCE; panel_assert_instance_id_valid "$d" >/dev/null 2>&1 ) || fail "A2-08: an absent instance id must pass (default instance)"
+
+  # update 链：resolve 到的部署 .env 含非法实例 id → 拉镜像前终止
+  check_docker() { DOCKER_CMD="true"; }
+  resolve_panel_deployment() {
+    PANEL_DEPLOY_DIR="$INSTANCE_FIXTURE_DIR"
+    PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  }
+  validate_panel_update_environment() { :; }
+  get_current_db_type() { echo "sqlite"; }
+  get_deployed_panel_version() { return 1; }
+  resolve_latest_release_tag() { echo "9.9.9"; }
+  download_panel_update_compose() { UPDATE_COMPOSE_CANDIDATE="candidate"; }
+  validate_panel_update_compose() { return 0; }
+  create_panel_update_backup() { UPDATE_BACKUP_DIR="backup"; return 0; }
+  pull_panel_update_images() { echo pulled >> "$PULL_MARKER"; return 0; }
+  panel_pin_missing_resource_keys() { return 0; }
+  activate_panel_update_files() { return 0; }
+  start_panel_after_update() { return 0; }
+  verify_panel_update_sqlite_volume() { return 0; }
+  check_ipv6_support() { return 1; }
+
+  INSTANCE_FIXTURE_DIR=$(mktemp -d)
+  printf 'FLMX_INSTANCE=Bad Id!\nDB_TYPE=sqlite\n' > "$INSTANCE_FIXTURE_DIR/.env"
+  PULL_MARKER=$(mktemp)
+  local log
+  log=$(mktemp)
+  rc="0"
+  ( unset FLMX_INSTANCE; VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION="" update_panel >"$log" 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: update_panel must hard-fail on an invalid instance id in the deployment .env"
+  grep -q 'FLMX_INSTANCE 不合法' "$log" || fail "A2-08: the update hard-fail must name the invalid instance id"
+  [[ ! -s "$PULL_MARKER" ]] || fail "A2-08: no image pull may happen with an invalid instance id"
+
+  # uninstall 无 Docker 分支：cwd .env 非法实例 id → 不删任何文件
+  check_docker() { return 1; }
+  d=$(mktemp -d)
+  printf 'FLMX_INSTANCE=Bad Id!\nJWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  rc="0"
+  ( cd "$d" && unset FLMX_INSTANCE && uninstall_panel </dev/null >/dev/null 2>&1 ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: the no-docker uninstall must hard-fail on an invalid instance id"
+  [[ -e "$d/.env" && -e "$d/docker-compose.yml" ]] || fail "A2-08: no file may be deleted with an invalid instance id"
+
+  # install 的 .env 形态：环境变量未设、cwd .env 非法 → 拒绝
+  d=$(mktemp -d)
+  printf 'FLMX_INSTANCE=Bad Id!\n' > "$d/.env"
+  rc="0"
+  out=$( ( cd "$d" && unset FLMX_INSTANCE && install_panel 2>&1 ) ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A2-08: install_panel must hard-fail on an invalid instance id from .env"
+  grep -q 'FLMX_INSTANCE 不合法' <<< "$out" || fail "A2-08: the install hard-fail must name the invalid instance id"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -10094,5 +10171,6 @@ test_panel_probe_route_uses_channel_tag_grammar
 test_panel_normalize_proxy_prefix_strips_all_trailing_slashes
 test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp
 test_panel_run_lock_and_unique_caddy_backup_names
+test_panel_invalid_instance_id_hard_fails_on_manage_paths
 
 echo "install script tests passed"
