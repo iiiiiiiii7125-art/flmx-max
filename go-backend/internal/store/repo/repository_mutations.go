@@ -1410,6 +1410,27 @@ func (r *Repository) replaceForwardPortsTx(tx *gorm.DB, forwardID int64, entries
 	Port   int
 	InIP   string
 }) error {
+	// R2-05-01: 入口按节点去重（保首现序）。存量重复 chain_type=1
+	// 行使 TunnelEntryNodeIDs 返回重复节点、三处消费点据此逐行建
+	// 条目时，下方占用复检排除转发自身，同一调用内的重复条目互
+	// 不可见，会为同一转发写出重复 forward_port 行（模型无唯一
+	// 索引兜底）。与 CreateForwardTx 的 B4-04 去重同形态，但收口
+	// 在本事务核心一处，三消费点（ReplaceForwardPorts /
+	// ChangeForwardTunnelAndPorts / handler 替换面）共用。
+	seenNodes := make(map[int64]struct{}, len(entries))
+	uniqueEntries := make([]struct {
+		NodeID int64
+		Port   int
+		InIP   string
+	}, 0, len(entries))
+	for _, e := range entries {
+		if _, dup := seenNodes[e.NodeID]; dup {
+			continue
+		}
+		seenNodes[e.NodeID] = struct{}{}
+		uniqueEntries = append(uniqueEntries, e)
+	}
+	entries = uniqueEntries
 	if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
 		return err
 	}
