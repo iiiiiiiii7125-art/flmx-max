@@ -1341,13 +1341,41 @@ func boolToInt(b bool) int {
 }
 
 func (h *Handler) pickFreeInboundPort(nodeID, excludeInboundID int64) (int, error) {
-	for i := 0; i < 64; i++ {
-		port := 20000 + rand.Intn(40000)
+	return pickFreePortWithFallback(20000, 60000, func(port int) (bool, error) {
 		msg, err := h.inboundPortConflict(nodeID, kernel.Inbound{Port: port}, excludeInboundID)
+		return msg != "", err
+	})
+}
+
+// pickFreePortWithFallback 在 [lo, hi) 内选一个无冲突端口。
+// B3-02：此前只有 64 次纯随机试探，高占用时（97.5%）约 20% 概率
+// 假报「未找到可用端口」且每次试探都跑全套冲突查询。现随机试探
+// （摊开并发选口的落点）用尽后转确定性全范围线性扫描（随机起
+// 点、逐个复检同一冲突谓词）：只要范围内还有空口必然找到，
+// 全满才报错。
+func pickFreePortWithFallback(lo, hi int, conflict func(port int) (bool, error)) (int, error) {
+	span := hi - lo
+	if span <= 0 {
+		return 0, errors.New("未找到可用端口，请手动指定")
+	}
+	for i := 0; i < 64; i++ {
+		port := lo + rand.Intn(span)
+		taken, err := conflict(port)
 		if err != nil {
 			return 0, err
 		}
-		if msg == "" {
+		if !taken {
+			return port, nil
+		}
+	}
+	start := rand.Intn(span)
+	for i := 0; i < span; i++ {
+		port := lo + (start+i)%span
+		taken, err := conflict(port)
+		if err != nil {
+			return 0, err
+		}
+		if !taken {
 			return port, nil
 		}
 	}
