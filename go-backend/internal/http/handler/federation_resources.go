@@ -208,13 +208,7 @@ func (h *Handler) preparePeerResourceCommand(share *repo.PeerShare, cmd string, 
 				}
 			}
 			config := configs[i]
-			if err := validatePeerResourceReferences(config, kind); err != nil {
-				return nil, err
-			}
-			if err := validatePeerResourceTypes(config, kind); err != nil {
-				return nil, err
-			}
-			if err := validatePeerResourceLocalPaths(config); err != nil {
+			if err := validatePeerResourceConfig(config, kind); err != nil {
 				return nil, err
 			}
 			scopePeerResourceReferences(config, share.ID)
@@ -263,6 +257,18 @@ func (h *Handler) preparePeerResourceCommand(share *repo.PeerShare, cmd string, 
 			case "resume":
 				if item.Config == "" {
 					return nil, fmt.Errorf("resource has no saved configuration")
+				}
+				// B6-06: resume 直接把存量配置重新置 active 并物化，
+				// 必须与写入面同律重跑校验全集——否则启动复检刚置
+				// paused 的植入配置可被对端一条 ResumeService 原样
+				// 复活，复检形同虚设。存量配置 JSON 不可解析同按
+				// fail-closed 拒绝。
+				var storedConfig interface{}
+				if err := json.Unmarshal([]byte(item.Config), &storedConfig); err != nil {
+					return nil, fmt.Errorf("resource has no valid saved configuration")
+				}
+				if err := validatePeerResourceConfig(storedConfig, kind); err != nil {
+					return nil, err
 				}
 				item.DesiredState = "active"
 			default:
@@ -446,14 +452,18 @@ func orderPeerShareResources(items []repo.PeerShareResource) {
 }
 
 // revalidateStoredPeerShareResources 是 FIX2-B（V5-3 残余风险）的启动
-// 复检：D3-03 类型白名单只在 preparePeerResourceCommand 写入时校验，
-// 升级前已落库的 peer_share_resource 期望状态不经复检——若提供方在
-// 升级前已被恶意对端植入 file/sshd 等危险配置，升级后节点重连对账
-// 会原样物化。本函数在后台对账循环启动前把全部存量 active 的
-// service/chain 期望状态补跑一遍白名单：不过者置 paused（对账按
-// paused 语义下发删除、监听不拉起，配置保留待管理员处置）并逐条
-// 告警，绝不静默沿用；配置 JSON 不可解析同按 fail-closed 置 paused
-// （对账侧解不出同样无法物化）。deleted 墓碑与 limiter 不在复检面。
+// 复检：写入面校验只在 preparePeerResourceCommand 写入时执行，升级前
+// 已落库的 peer_share_resource 期望状态不经复检——若提供方在升级前
+// 已被恶意对端植入 file/sshd 等危险配置，升级后节点重连对账会原样
+// 物化。本函数在后台对账循环启动前把全部存量 active 的期望状态补跑
+// 一遍与写入面相同的校验全集（validatePeerResourceConfig：引用＋
+// 类型＋本机路径，limiter/climiter 的 loader 检查同在全集内——B6-06，
+// 此前本函数只重跑类型白名单且整体跳过 limiter，引用面违规与证书
+// 路径植入都能存活）：不过者置 paused（对账按 paused 语义下发删除、
+// 监听不拉起，配置保留待管理员处置）并逐条告警，绝不静默沿用；配置
+// JSON 不可解析同按 fail-closed 置 paused（对账侧解不出同样无法物
+// 化）。deleted 墓碑不在复检面。paused 的存量配置要复活必须过
+// preparePeerResourceCommand 里 resume 的同一全集复检（B6-06）。
 func (h *Handler) revalidateStoredPeerShareResources() {
 	if h == nil || h.repo == nil {
 		return
@@ -466,7 +476,12 @@ func (h *Handler) revalidateStoredPeerShareResources() {
 	var changed []repo.PeerShareResource
 	for i := range items {
 		item := items[i]
-		if item.DesiredState != "active" || (item.Kind != "service" && item.Kind != "chain") {
+		if item.DesiredState != "active" {
+			continue
+		}
+		switch item.Kind {
+		case "service", "chain", "limiter", "climiter":
+		default:
 			continue
 		}
 		if strings.TrimSpace(item.Config) == "" {
@@ -479,7 +494,7 @@ func (h *Handler) revalidateStoredPeerShareResources() {
 			changed = append(changed, item)
 			continue
 		}
-		if err := validatePeerResourceTypes(config, item.Kind); err != nil {
+		if err := validatePeerResourceConfig(config, item.Kind); err != nil {
 			log.Printf("federation startup revalidation: pausing share_id=%d %s %q: %v", item.ShareID, item.Kind, item.OriginalName, err)
 			item.DesiredState = "paused"
 			changed = append(changed, item)
@@ -492,7 +507,7 @@ func (h *Handler) revalidateStoredPeerShareResources() {
 		log.Printf("federation startup revalidation: persist paused states failed: %v", err)
 		return
 	}
-	log.Printf("federation startup revalidation: paused %d stored peer resource(s) failing the D3-03 type whitelist; review before resuming", len(changed))
+	log.Printf("federation startup revalidation: paused %d stored peer resource(s) failing write-time validation; review before resuming", len(changed))
 }
 
 func (h *Handler) reconcilePeerShareResourcesOnNode(nodeID int64) error {
@@ -881,6 +896,20 @@ func walkPeerResourceTypes(value interface{}) error {
 		}
 	}
 	return nil
+}
+
+// validatePeerResourceConfig 是对端资源配置的校验全集单点：引用面、
+// 类型白名单与本机路径面三校验同律。写入面
+// （preparePeerResourceCommand）、存量启动复检与 resume 复活门共用
+// 本函数，任何一面加严自动覆盖其余两面（B6-06）。
+func validatePeerResourceConfig(value interface{}, kind string) error {
+	if err := validatePeerResourceReferences(value, kind); err != nil {
+		return err
+	}
+	if err := validatePeerResourceTypes(value, kind); err != nil {
+		return err
+	}
+	return validatePeerResourceLocalPaths(value)
 }
 
 // validatePeerResourceLocalPaths 是 B6-01 的路径面校验：对端资源配置
