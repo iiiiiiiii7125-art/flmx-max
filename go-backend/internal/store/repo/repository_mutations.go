@@ -15,6 +15,7 @@ import (
 	"go-backend/internal/store/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // UserExists 用户名占用检查。B02-003：大小写不敏感（经
@@ -1673,6 +1674,45 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 	_, proxyProtocolSend = normalizeForwardProxyProtocol(proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
 	var forwardID int64
 	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// F2-05: 条数配额的权威复检在事务内。先以 FOR UPDATE 锁
+		// 用户行串行化同用户的并发创建（SQLite 方言自动忽略 FOR
+		// 子句、MaxOpenConns(1) 本就串行，与 F-S01 同口径；PG
+		// Read Committed 下后到事务阻塞至先行提交、重读已提交计
+		// 数），再按 handler 预检（ensureUserTunnelForwardAllowed）
+		// 同口径复检用户级 Num 与 (用户,隧道) 级 Num。预检保留作
+		// 快速失败，但并发正确性只由这里保证：基线预检在事务外，
+		// Num=1 并发 10 发可成 9（live-c 实测）。
+		var userRow model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", userID).First(&userRow).Error; err != nil {
+			return err
+		}
+		if userRow.Num > 0 {
+			var cnt int64
+			if err := tx.Model(&model.Forward{}).
+				Where("user_id = ? AND status = 1", userID).Count(&cnt).Error; err != nil {
+				return err
+			}
+			if cnt >= int64(userRow.Num) {
+				return ErrForwardNumExceeded
+			}
+		}
+		var utRow model.UserTunnel
+		utErr := tx.Where("user_id = ? AND tunnel_id = ?", userID, tunnelID).
+			Order("id ASC").First(&utRow).Error
+		if utErr != nil && !errors.Is(utErr, gorm.ErrRecordNotFound) {
+			return utErr
+		}
+		if utErr == nil && utRow.Num > 0 {
+			var cnt int64
+			if err := tx.Model(&model.Forward{}).
+				Where("user_id = ? AND tunnel_id = ? AND status = 1", userID, tunnelID).Count(&cnt).Error; err != nil {
+				return err
+			}
+			if cnt >= int64(utRow.Num) {
+				return ErrUserTunnelForwardNumExceeded
+			}
+		}
 		// B4/F-013: 锁内四源复检（同 ReplaceForwardPorts）。handler 预检
 		// 在锁外，跨表并发（入站/隧道创建）可穿透窗口双占用落库。
 		for _, nodeID := range entryNodeIDs {

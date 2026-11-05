@@ -26,6 +26,14 @@ var ErrPortInUse = errPortInUse
 // （R2X-049）：tunnel 表无唯一索引，复检拒绝靠它回传 handler。
 var ErrTunnelNameDuplicate = errors.New("隧道名称重复")
 
+// ErrForwardNumExceeded / ErrUserTunnelForwardNumExceeded 是
+// F2-05 的条数配额哨兵：CreateForwardTx 在事务内（用户行锁下）
+// 复检命中上限时返回，handler 映射回与锁外预检一致的友好文案。
+// 预检（ensureUserTunnelForwardAllowed）在事务外，并发下可被穿
+// 透（基线 live-c：Num=1 并发 10 发成 9），事务内复检是权威面。
+var ErrForwardNumExceeded = errors.New("转发数量已达上限")
+var ErrUserTunnelForwardNumExceeded = errors.New("该隧道转发数量已达上限")
+
 // R5-B4: 唯一约束冲突检测。
 //
 // 将 DB 层的唯一约束冲突映射为友好错误，避免暴露 SQL 原文。
