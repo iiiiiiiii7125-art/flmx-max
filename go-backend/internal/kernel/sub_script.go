@@ -60,21 +60,58 @@ func scriptNode(i int, e Endpoint) map[string]interface{} {
 // every request; the VM itself is still created per request (a goja
 // Runtime is not thread-safe and must not be shared). Compile failures
 // are not cached.
-var subScriptPrograms sync.Map // map[string]*goja.Program, key = sha256 hex of the script
+//
+// B5-04：缓存必须有界——每个脚本版本（含已删订阅的、编辑中的中间版）
+// 都按内容哈希占一条，无淘汰时驻留到进程重启、随日常编辑单调涨。
+// 上限 128 条，满了整表清空重来：重编译便宜且罕见，不值得上 LRU；
+// 驻留条目的指针复用语义（R2X-024 测试）不变。
+const maxCachedSubScriptPrograms = 128
+
+type subScriptProgramCache struct {
+	mu sync.Mutex
+	m  map[string]*goja.Program
+}
+
+func (c *subScriptProgramCache) load(key string) (*goja.Program, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prog, ok := c.m[key]
+	return prog, ok
+}
+
+func (c *subScriptProgramCache) store(key string, prog *goja.Program) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.m[key]; !ok && len(c.m) >= maxCachedSubScriptPrograms {
+		c.m = make(map[string]*goja.Program, maxCachedSubScriptPrograms)
+	}
+	c.m[key] = prog
+}
+
+func (c *subScriptProgramCache) size() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.m)
+}
+
+var subScriptPrograms = &subScriptProgramCache{m: make(map[string]*goja.Program)}
+
+// subScriptProgramCount reports the live cache size (regression tests).
+func subScriptProgramCount() int { return subScriptPrograms.size() }
 
 // compileSubScript returns the cached program for script, compiling and
 // caching it on first use. ValidateSubScript and ApplySubScript share it.
 func compileSubScript(script string) (*goja.Program, error) {
 	sum := sha256.Sum256([]byte(script))
 	key := hex.EncodeToString(sum[:])
-	if v, ok := subScriptPrograms.Load(key); ok {
-		return v.(*goja.Program), nil
+	if prog, ok := subScriptPrograms.load(key); ok {
+		return prog, nil
 	}
 	prog, err := goja.Compile("script.js", script, false)
 	if err != nil {
 		return nil, err
 	}
-	subScriptPrograms.Store(key, prog)
+	subScriptPrograms.store(key, prog)
 	return prog, nil
 }
 
