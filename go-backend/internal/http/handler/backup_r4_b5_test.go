@@ -256,7 +256,19 @@ func TestR4B5BackupImportFullImportTriggersReconcileOnce(t *testing.T) {
 // 触发面按输入集全集表逐段定，不得退化为无条件触发。
 func TestR4B5BackupImportUsersOnlyDoesNotTriggerReconcile(t *testing.T) {
 	s := setupR1B3Whitelist(t, 2)
+	// GATE-FIX B 裁定（F2-04 × R4X-009）：夹具直插的 share 订阅
+	// AppliedActive=0 而 computed active=1，背离在导入前即存在，
+	// 与本次导入无关——生产中订阅同步循环会在一个周期内收敛它
+	// 并下发一次 applyKernelsForInbounds。F2-04 在导入尾无条件跑
+	// 的正是同一个 syncSubscriptions（恢复出的超限计数必须在重推
+	// 前按运行时同口径重估），其收敛下发是正确终态、不是按导入
+	// 段触发的 reconcile 轮（无 KernelStatus 轮询）。本钉的原意
+	// 是「users-only 导入不得触发内核 reconcile」，故先把夹具
+	// 收敛到生产稳态再取基线，零新 allow 的断言强度不变；另加
+	// 轮次计数（KernelStatus，本文件测轮次的正典口径）不变断言。
+	s.h.syncSubscriptions(time.Now())
 	baseline := settleR4B5Baseline(t, s)
+	statusBaseline := r4b5KernelStatusCount(s)
 
 	data, err := s.repo.ExportPartial([]string{"users"})
 	if err != nil {
@@ -273,5 +285,8 @@ func TestR4B5BackupImportUsersOnlyDoesNotTriggerReconcile(t *testing.T) {
 	time.Sleep(1200 * time.Millisecond)
 	if fresh := s.newAllowsSince(baseline); len(fresh) != 0 {
 		t.Fatalf("anti-overfix: users-only import must not trigger kernel reconcile, got %v", fresh)
+	}
+	if n := r4b5KernelStatusCount(s); n != statusBaseline {
+		t.Fatalf("anti-overfix: users-only import must not start a reconcile round, kernel status polls %d -> %d", statusBaseline, n)
 	}
 }
