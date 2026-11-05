@@ -3940,13 +3940,26 @@ func importPeerShares(tx *gorm.DB, rows []model.PeerShareBackup, now int64, rep 
 			rep.warnf("备份恢复：面板共享 #%d（%q）的域名白名单含空标签条目 %q，已剔除", s.ID, s.Name, s.AllowedDomains)
 			allowedDomains = cleaned
 		}
+		// B8-10：AllowedIPs 与域名同律——镜像写面规范化（见
+		// normalizeImportedPeerShareAllowedIPs）。写面产出的备
+		// 份恒为规范形，不触发回执；仅外部/手工备份的非规范形
+		// 与非法条目在此归一/剔除并点名。
+		allowedIPs := s.AllowedIPs
+		if normalized, dropped := normalizeImportedPeerShareAllowedIPs(s.AllowedIPs); normalized != s.AllowedIPs {
+			if dropped > 0 {
+				rep.warnf("备份恢复：面板共享 #%d（%q）的 IP 白名单含 %d 条非法条目，已剔除，其余条目已按保存面同口径规范化", s.ID, s.Name, dropped)
+			} else {
+				rep.warnf("备份恢复：面板共享 #%d（%q）的 IP 白名单已按保存面同口径规范化（非规范形态/重复条目已归一）", s.ID, s.Name)
+			}
+			allowedIPs = normalized
+		}
 		item := model.PeerShare{
 			ID: s.ID, Name: s.Name, NodeID: s.NodeID, Token: s.Token,
 			MaxBandwidth: s.MaxBandwidth, ExpiryTime: s.ExpiryTime,
 			PortRangeStart: s.PortRangeStart, PortRangeEnd: s.PortRangeEnd,
 			CurrentFlow: s.CurrentFlow, IsActive: s.IsActive,
 			CreatedTime: s.CreatedTime, UpdatedTime: updated,
-			AllowedDomains: allowedDomains, AllowedIPs: s.AllowedIPs,
+			AllowedDomains: allowedDomains, AllowedIPs: allowedIPs,
 			RelayUsername: s.RelayUsername, RelayPassword: s.RelayPassword,
 		}
 		if item.CreatedTime == 0 {
@@ -7314,6 +7327,87 @@ func latencyTargetIsASCIILetter(r rune) bool {
 
 func latencyTargetIsASCIIDigit(r rune) bool {
 	return r >= '0' && r <= '9'
+}
+
+// normalizeImportedPeerShareAllowedIPs 是写面
+// normalizePeerShareAllowedIPs（handler/federation.go）的恢复面
+// 镜像，与下方 filterPeerShareAllowedDomains 同律：逐条规范化
+// （含 "/" 条目走 net.ParseCIDR 取网络规范形、裸 IP 走
+// parseIPLiteral 镜像、按规范形去重），使联邦运行时的精确字符
+// 串匹配与写面产出同字面——此前 AllowedIPs 原样落库，CIDR 主
+// 机位、IPv4-mapped、host:port、重复等非规范形态与消费面匹配
+// 字面脱节，白名单可静默失效。非法条目的处置与写面不同：写面
+// 整单拒收，恢复面按域名先例逐条剔除并回计数（fail-closed 方
+// 向：被剔条目永不命中，收紧不放宽）；回执只报条数、不回显原
+// 值。返回规范化结果与剔除条数。
+func normalizeImportedPeerShareAllowedIPs(raw string) (string, int) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", 0
+	}
+	parts := strings.Split(raw, ",")
+	normalized := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	dropped := 0
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			_, network, err := net.ParseCIDR(item)
+			if err != nil {
+				dropped++
+				continue
+			}
+			item = network.String()
+		} else {
+			ip := parseImportedIPLiteral(item)
+			if ip == nil {
+				dropped++
+				continue
+			}
+			item = ip.String()
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		normalized = append(normalized, item)
+	}
+	return strings.Join(normalized, ","), dropped
+}
+
+// parseImportedIPLiteral 镜像 handler.parseIPLiteral：trim 空白与
+// 引号后 net.ParseIP，失败再按 host:port 拆主机段，命中后统一
+// normalizeImportedIPAddress 规范形。
+func parseImportedIPLiteral(raw string) net.IP {
+	value := strings.Trim(strings.TrimSpace(raw), "\"")
+	if value == "" {
+		return nil
+	}
+	if ip := net.ParseIP(value); ip != nil {
+		return normalizeImportedIPAddress(ip)
+	}
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		return nil
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return nil
+	}
+	return normalizeImportedIPAddress(net.ParseIP(host))
+}
+
+func normalizeImportedIPAddress(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4
+	}
+	return ip.To16()
 }
 
 // filterPeerShareAllowedDomains 剔除分享域名白名单中的空标签条目，
