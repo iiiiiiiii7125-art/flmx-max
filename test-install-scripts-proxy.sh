@@ -3645,12 +3645,39 @@ test_install_script_binary_anchor_degrades() (
   set -euo pipefail
   bin_anchor_fixture_setup
   BIN_ANCHOR_B_MODE="fail"
-  local dest errlog
+  local dest errlog rc=0
+  dest=$(mktemp -u)
+  errlog=$(mktemp)
+  # A3-03: 第二锚改 fail-closed（S-02 口径：无降级跳过）。获胜线
+  # 路是第三方代理、异路全部给不出合法校验值时必须拒绝安装且二
+  # 进制不得落地——旧实现在此降级单锚放行，本用例旧预期（仍落
+  # 地）随修复翻转为拒绝。
+  download_agent_binary "$dest" 2>"$errlog" || rc=$?
+  assert_equals "1" "$rc" "A3-03: download must fail when a proxy-served binary cannot be corroborated"
+  [[ ! -f "$dest" ]] || fail "A3-03: binary must not land when the second anchor cannot corroborate"
+  grep -q "第二锚 fail-closed" "$errlog" || fail "A3-03: the fail-closed refusal must be named on stderr"
+
+  # 保留点名降级的两类形态：① 直连（规范源）当选、代理无应答 →
+  # 点名单锚落地；② 运维显式单路（PROXY_URL 覆盖）无异路可复核
+  # → 点名单锚落地。
+  bin_anchor_fixture_setup
+  BIN_ANCHOR_B_MODE="fail"
+  DOWNLOAD_ROUTES=("" "https://b.example")
   dest=$(mktemp)
   errlog=$(mktemp)
   download_agent_binary "$dest" 2>"$errlog"
-  assert_equals "$BIN_ANCHOR_BODY" "$(cat "$dest")" "binary anchor degrade: binary should still land when no second route answers"
-  grep -q "跨线路锚复核已降级" "$errlog" || fail "binary anchor degrade: degradation must be named on stderr"
+  assert_equals "$BIN_ANCHOR_BODY" "$(cat "$dest")" "A3-03: direct-sourced binary should still land with a named single-anchor degradation"
+  grep -q "跨线路锚复核已降级" "$errlog" || fail "A3-03: direct-source degradation must be named on stderr"
+
+  bin_anchor_fixture_setup
+  BIN_ANCHOR_B_MODE="fail"
+  PROXY_URL="https://a.example"
+  DOWNLOAD_ROUTES=("https://a.example")
+  dest=$(mktemp)
+  errlog=$(mktemp)
+  download_agent_binary "$dest" 2>"$errlog"
+  assert_equals "$BIN_ANCHOR_BODY" "$(cat "$dest")" "A3-03: operator-pinned single route should still land with a named single-anchor degradation"
+  grep -q "跨线路锚复核已降级" "$errlog" || fail "A3-03: single-route degradation must be named on stderr"
 )
 
 test_preserve_compose_networks_keeps_existing_subnet() (

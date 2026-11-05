@@ -646,12 +646,17 @@ build_download_url() {
 #   - 异路给出不同的合法哈希 → 硬失败（返回 1），调用方丢弃 .part
 #     整轮切线/失败，不拿该二进制落地；
 #   - 异路内容不是合法 64 位 SHA256 → 只废该路，继续问下一路；
-#   - 全部异路都给不出合法校验值 → 降级单锚继续（返回 0），并在
-#     stderr 点名「跨线路锚复核已降级」。
+#   - 全部异路都给不出合法校验值 → A3-03 起 fail-closed（返回 1，
+#     S-02「禁止降级跳过」口径）：获胜线路是第三方代理时，单个作
+#     恶代理给自洽（假二进制，假 .sha256）对正是第二锚要防的形
+#     态，降级等于没防。仅两类形态保留点名降级（返回 0）：路线
+#     表只有一条运维显式指定路线（无候选）、或获胜源是直连/面
+#     板源（latest_source_is_trusted）——规范/自有源在异路无应
+#     答时点名单锚继续，避免打死面板源分发与直连独占。
 # 边界（如实写明）：① 路线表只有一条时先按下载主流程同款机制
 # extend 补测一次（面板源独占/直连短路形态扩得动；PROXY_URL 覆盖与
 # PROXY_ENABLED=false 是运维显式单路，extend 不动、无候选可扩，
-# 直接降级点名）；② 整轮复核共用 20s 总界（与 Go 两侧及
+# 走点名降级）；② 整轮复核共用 20s 总界（与 Go 两侧及
 # panel_install.sh 同值），逐路 --max-time 取剩余量与 10s 的较小
 # 者；③ 本函数只依赖脚本内置路线表（DOWNLOAD_ROUTES /
 # DOWNLOAD_URL），手动裸跑 install.sh 同样生效，不依赖面板注入。
@@ -696,8 +701,17 @@ corroborate_binary_anchor() {
       rm -f "$tmp"
     fi
   done
-  echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（R7-002 第二锚）" >&2
-  return 0
+  # A3-03: 异路全部给不出合法校验值时的收口（口径见函数头注）。
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    echo "⚠️ 跨线路锚复核已降级：路线表只有一条运维指定路线、无异路可复核，按单锚继续（R7-002 第二锚）" >&2
+    return 0
+  fi
+  if latest_source_is_trusted "$winner"; then
+    echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值；获胜源为直连/面板源，按单锚继续（R7-002 第二锚）" >&2
+    return 0
+  fi
+  echo "❌ 跨线路锚复核失败：获胜线路（${winner:-直连}）为第三方代理、其他线路均未给出合法校验值，拒绝安装（A3-03：第二锚 fail-closed，不降级单锚）" >&2
+  return 1
 }
 
 # H-01: Release 与二进制同目录发布 .sha256，下载后必须强校验。
@@ -767,7 +781,8 @@ verify_downloaded_binary() {
     echo "✅ SHA256 校验通过"
     # R7-002 第二锚：第一锚的期望值与本体同路同源，定版后须异路
     # 重取 .sha256 复核同一期望值；异值拒绝（调用方丢弃 .part），
-    # 无异路应答降级点名后继续。
+    # 无异路应答按 A3-03 口径 fail-closed（仅直连/面板源与运维显
+    # 式单路点名降级，见 corroborate_binary_anchor 头注）。
     if ! corroborate_binary_anchor "$winner_prefix" "$expected"; then
         return 1
     fi
