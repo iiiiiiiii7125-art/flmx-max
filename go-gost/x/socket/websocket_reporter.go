@@ -959,12 +959,48 @@ func decompressCommandPayload(data []byte) ([]byte, error) {
 
 // warnPlaintextCommandOnce loudly notes, once per process, that commands
 // are being accepted over an unencrypted channel (D1-02). Plaintext
-// commands remain accepted for intentionally plain deployments (explicit
-// ws:// addr), but never silently.
+// commands remain accepted only when no node secret is configured (the
+// local no-secret form); with a secret configured they are rejected
+// outright (D1-01, see dispatchReceivedCommand).
 func (w *WebSocketReporter) warnPlaintextCommandOnce() {
 	if w.plaintextCommandWarned.CompareAndSwap(false, true) {
 		fmt.Println("⚠️ 安全警告: 正在通过未加密的明文 WebSocket 通道接收面板命令。明文通道可被链路中间人窃听节点 secret 并注入任意命令（含升级指令）；如非有意部署，请为面板配置 TLS 并使用 wss 地址。")
 	}
+}
+
+// commandChannelSecretConfigured reports whether this reporter was built
+// with a usable node secret. The agent's config loader refuses an empty
+// secret, so every real deployment qualifies.
+func (w *WebSocketReporter) commandChannelSecretConfigured() bool {
+	return w.aesCrypto != nil || w.secret != ""
+}
+
+// dispatchReceivedCommand is the single gate every parsed inbound command
+// passes through before dispatch (D1-01). Compatibility basis: every
+// panel of this product line encrypts commands whenever the node secret
+// is non-empty — the AES envelope exists on both ends since v1.0.0 and
+// the panel's encryptor only fails on an empty secret, in which case the
+// connection could never have been registered. A plaintext command frame
+// reaching a secret-configured agent therefore cannot come from a real
+// panel of any supported version: it is an in-path injection or a
+// misconfiguration, and is rejected fail-closed with an explicit failure
+// receipt (the sender learns immediately instead of timing out). Only
+// the no-secret local form keeps accepting plaintext, with the standing
+// one-time warning.
+func (w *WebSocketReporter) dispatchReceivedCommand(cmd CommandMessage, wasEncrypted bool) {
+	if cmd.Type == "call" {
+		// Dead legacy frame type, silently dropped (unchanged behavior).
+		return
+	}
+	if !wasEncrypted {
+		if w.commandChannelSecretConfigured() {
+			fmt.Printf("❌ 拒绝明文命令: type=%s requestId=%s（本节点已配置 secret，命令必须走加密信封）\n", cmd.Type, cmd.RequestId)
+			w.sendCommandFailure(cmd, "本节点已配置 secret，面板命令必须使用加密信封，明文命令已拒绝执行")
+			return
+		}
+		w.warnPlaintextCommandOnce()
+	}
+	w.dispatchCommand(cmd)
 }
 
 // handleReceivedMessage 处理接收到的消息
@@ -1003,9 +1039,6 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 				return
 			}
 		}
-		if !wasEncrypted {
-			w.warnPlaintextCommandOnce()
-		}
 		// 先尝试解析是否是压缩消息
 		var compressedMsg struct {
 			Type       string          `json:"type"`
@@ -1041,9 +1074,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 				return
 			}
 
-			if cmdMsg.Type != "call" {
-				w.dispatchCommand(cmdMsg)
-			}
+			w.dispatchReceivedCommand(cmdMsg, wasEncrypted)
 		} else {
 			// 处理普通消息
 			var cmdMsg CommandMessage
@@ -1052,9 +1083,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 				w.sendErrorResponse("ParseError", fmt.Sprintf("解析命令失败: %v", err))
 				return
 			}
-			if cmdMsg.Type != "call" {
-				w.dispatchCommand(cmdMsg)
-			}
+			w.dispatchReceivedCommand(cmdMsg, wasEncrypted)
 		}
 
 	default:
