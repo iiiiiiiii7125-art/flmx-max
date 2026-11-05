@@ -193,8 +193,14 @@ const validateNyItem = (line: string, value: unknown): ParsedNyImportLine => {
   };
 };
 
-const splitConcatenatedJsonObjects = (input: string): string[] => {
-  const result: string[] = [];
+interface JsonObjectSpan {
+  chunk: string;
+  start: number;
+  end: number;
+}
+
+const splitConcatenatedJsonObjectSpans = (input: string): JsonObjectSpan[] => {
+  const result: JsonObjectSpan[] = [];
   let depth = 0;
   let start = -1;
   let inString = false;
@@ -233,7 +239,7 @@ const splitConcatenatedJsonObjects = (input: string): string[] => {
     if (char === "}") {
       depth -= 1;
       if (depth === 0 && start >= 0) {
-        result.push(input.slice(start, i + 1));
+        result.push({ chunk: input.slice(start, i + 1), start, end: i + 1 });
         start = -1;
       }
     }
@@ -250,18 +256,38 @@ export const parseNyFormatData = (input: string): ParsedNyImportLine[] => {
   }
 
   const parsedResults: ParsedNyImportLine[] = [];
-  const objectChunks = splitConcatenatedJsonObjects(trimmed);
+  const objectSpans = splitConcatenatedJsonObjectSpans(trimmed);
 
-  if (objectChunks.length > 0) {
-    objectChunks.forEach((chunk) => {
+  if (objectSpans.length > 0) {
+    // E2-02：只要有任一 JSON 对象块，旧实现就只返回对象块结果，块外
+    // 的残余文本（导出文件常见的注释/表头行、粘贴损坏行）被静默丢弃，
+    // 消费端按返回条目计数，收尾会报「成功 N 条」的纯成功。现按对象
+    // 块跨度切出残余段，非空行逐行计为失败条目并按输入顺序交错返回，
+    // 使成功/失败计数与结果清单如实覆盖全部输入。
+    const pushLeftoverLines = (segment: string) => {
+      segment
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== "")
+        .forEach((line) => {
+          parsedResults.push({ line, error: "无法解析（非 JSON 内容）" });
+        });
+    };
+
+    let cursor = 0;
+
+    objectSpans.forEach((span) => {
+      pushLeftoverLines(trimmed.slice(cursor, span.start));
       try {
-        const parsed = JSON.parse(chunk);
+        const parsed = JSON.parse(span.chunk);
 
-        parsedResults.push(validateNyItem(chunk, parsed));
+        parsedResults.push(validateNyItem(span.chunk, parsed));
       } catch {
-        parsedResults.push({ line: chunk, error: "JSON解析失败" });
+        parsedResults.push({ line: span.chunk, error: "JSON解析失败" });
       }
+      cursor = span.end;
     });
+    pushLeftoverLines(trimmed.slice(cursor));
 
     return parsedResults;
   }
