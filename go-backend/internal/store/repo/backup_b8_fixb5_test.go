@@ -137,6 +137,182 @@ func TestImportTunnelTypeStatusGate(t *testing.T) {
 	}
 }
 
+func intPtr(v int) *int { return &v }
+
+// B4-02 残 A：转发面顺序无关——声明行 B 排在被跳行 A **之前**时，
+// A 的存量端口行仍须计占用（旧实现按「尚未处理」排除，B 先落库、
+// A 后跳过 → 同节点同口双行）。与 backup_r1_fxb_gates_test.go 的
+// TestImportForwardPortOccupancyHoleShape（A 在前）成对。
+func TestImportForwardPortOccupancyReversedOrder(t *testing.T) {
+	now := time.Now().UnixMilli()
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	if err := dst.db.Create(&model.Forward{ID: 9101, UserID: 1, UserName: "admin@user", Name: "stale-a", RemoteAddr: "203.0.113.10:80", Strategy: "fifo", Status: 1, CreatedTime: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.db.Create(&model.ForwardPort{ForwardID: 9101, NodeID: 41, Port: 2000}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Nodes: []model.NodeBackup{
+			{ID: 41, Name: "n41", Secret: "s", ServerIP: "192.0.2.41", Status: 1},
+		},
+		Tunnels: []model.TunnelBackup{
+			{ID: 72, Name: "t72", TrafficRatio: 1, Type: 1, Flow: 1, Status: 1, CreatedTime: now},
+		},
+		Forwards: []model.ForwardBackup{
+			// B 在前：合法转发，声明同一 (节点, 端口)。
+			{ID: 9202, UserID: 1, TunnelID: 72, Name: "claimer-b", RemoteAddr: "203.0.113.11:80", Strategy: "fifo", Status: 1, CreatedTime: now, ForwardPorts: fpSlice(
+				model.ForwardPortBackup{NodeID: 41, Port: 2000},
+			)},
+			// A 在后：策略非法被跳过，ForwardPorts 为 nil，存量行存活。
+			{ID: 9101, UserID: 1, TunnelID: 72, Name: "stale-a", RemoteAddr: "203.0.113.10:80", Strategy: "banana", Status: 1, CreatedTime: now},
+		},
+	}
+	backup.UserTunnels = []model.UserTunnelBackup{
+		{ID: 1, UserID: 1, TunnelID: 72, Num: 99999, Flow: 99999, FlowResetTime: 1, ExpTime: 2727251700000, Status: 1},
+	}
+	result, err := dst.Import(backup, []string{"nodes", "tunnels", "forwards", "userTunnels"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ForwardsImported != 1 {
+		t.Fatalf("ForwardsImported = %d, want 1 (only B), warnings=%v", result.ForwardsImported, result.ImportWarnings)
+	}
+	warnText := strings.Join(result.ImportWarnings, "\n")
+	if !strings.Contains(warnText, "claimer-b") || !strings.Contains(warnText, "已被占用") {
+		t.Fatalf("receipt must name B's occupied port row skip, warnings=%v", result.ImportWarnings)
+	}
+	var rows []model.ForwardPort
+	if err := dst.db.Where("node_id = ? AND port = ?", 41, 2000).Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ForwardID != 9101 {
+		t.Fatalf("(node 41, port 2000) rows = %v, want exactly the surviving stale row of forward 9101", rows)
+	}
+}
+
+// B4-02 残 B（链路面）：被跳转发的存量端口行存活时，链路声明同
+// 节点同口不得落库——链路面此前无行内复检，预检排除集又按备份
+// ID 全集组装而放行。
+func TestImportChainPortRecheckAgainstSkippedForward(t *testing.T) {
+	now := time.Now().UnixMilli()
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	if err := dst.db.Create(&model.Forward{ID: 9101, UserID: 1, UserName: "admin@user", Name: "stale-a", RemoteAddr: "203.0.113.10:80", Strategy: "fifo", Status: 1, CreatedTime: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.db.Create(&model.ForwardPort{ForwardID: 9101, NodeID: 41, Port: 2002}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Nodes: []model.NodeBackup{
+			{ID: 41, Name: "n41", Secret: "s", ServerIP: "192.0.2.41", Status: 1},
+		},
+		Tunnels: []model.TunnelBackup{
+			{ID: 21, Name: "chain-t", TrafficRatio: 1, Type: 1, Flow: 1, Status: 1, CreatedTime: now, ChainTunnels: []model.ChainTunnelBackup{
+				{ID: 1, TunnelID: 21, ChainType: "1", NodeID: 41, Port: intPtr(2002), Strategy: strPtr("fifo")},
+				{ID: 2, TunnelID: 21, ChainType: "3", NodeID: 41, Port: intPtr(2003), Strategy: strPtr("round")},
+			}},
+		},
+		Forwards: []model.ForwardBackup{
+			{ID: 9101, UserID: 1, TunnelID: 21, Name: "stale-a", RemoteAddr: "203.0.113.10:80", Strategy: "banana", Status: 1, CreatedTime: now},
+		},
+	}
+	result, err := dst.Import(backup, []string{"nodes", "tunnels", "forwards"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TunnelsImported != 1 {
+		t.Fatalf("TunnelsImported = %d, want 1, warnings=%v", result.TunnelsImported, result.ImportWarnings)
+	}
+	if got := result.SkippedRows["chainTunnels"]; got != 1 {
+		t.Fatalf("SkippedRows[chainTunnels] = %d, want 1, skipped=%v", got, result.SkippedRows)
+	}
+	warnText := strings.Join(result.ImportWarnings, "\n")
+	if !strings.Contains(warnText, "2002") || !strings.Contains(warnText, "已被占用") {
+		t.Fatalf("receipt must name the occupied chain port skip, warnings=%v", result.ImportWarnings)
+	}
+	var chains []model.ChainTunnel
+	if err := dst.db.Where("tunnel_id = ?", 21).Find(&chains).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(chains) != 1 || chains[0].ID != 2 {
+		t.Fatalf("restored chains = %v, want exactly chain #2 (port 2003)", chains)
+	}
+}
+
+// B4-02 残 B（入站面）：被跳转发的存量端口行存活时，入站声明同
+// 节点同口不得落库——入站面此前无行内复检。
+func TestImportInboundPortRecheckAgainstSkippedForward(t *testing.T) {
+	now := time.Now().UnixMilli()
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	if err := dst.db.Create(&model.Forward{ID: 9101, UserID: 1, UserName: "admin@user", Name: "stale-a", RemoteAddr: "203.0.113.10:80", Strategy: "fifo", Status: 1, CreatedTime: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.db.Create(&model.ForwardPort{ForwardID: 9101, NodeID: 41, Port: 2004}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Nodes: []model.NodeBackup{
+			{ID: 41, Name: "n41", Secret: "s", ServerIP: "192.0.2.41", Status: 1, CreatedTime: now},
+		},
+		Tunnels: []model.TunnelBackup{
+			{ID: 72, Name: "t72", TrafficRatio: 1, Type: 1, Flow: 1, Status: 1, CreatedTime: now},
+		},
+		Forwards: []model.ForwardBackup{
+			{ID: 9101, UserID: 1, TunnelID: 72, Name: "stale-a", RemoteAddr: "203.0.113.10:80", Strategy: "banana", Status: 1, CreatedTime: now},
+		},
+		Inbounds: &model.InboundsBackup{
+			Kernels: []model.KernelBackup{
+				{ID: 1, NodeID: 41, KernelType: "xray", Version: "latest", Enabled: 1, CreatedTime: now},
+			},
+			Inbounds: []model.InboundBackup{
+				{ID: 30, KernelID: 1, NodeID: 41, Name: "collide", Protocol: "vless", Port: 2004, Enabled: 1, CreatedTime: now,
+					Settings: `{"uuid":"11111111-2222-3333-4444-555555555555"}`, Security: `{"type":"none"}`},
+				{ID: 31, KernelID: 1, NodeID: 41, Name: "free-port", Protocol: "vless", Port: 2005, Enabled: 1, CreatedTime: now,
+					Settings: `{"uuid":"11111111-2222-3333-4444-555555555555"}`, Security: `{"type":"none"}`},
+			},
+		},
+	}
+	result, err := dst.Import(backup, []string{"nodes", "tunnels", "forwards", "inbounds"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.InboundsImported != 1 {
+		t.Fatalf("InboundsImported = %d, want 1 (only the free-port row), warnings=%v", result.InboundsImported, result.ImportWarnings)
+	}
+	if got := result.SkippedRows["inbounds"]; got != 1 {
+		t.Fatalf("SkippedRows[inbounds] = %d, want 1, skipped=%v", got, result.SkippedRows)
+	}
+	warnText := strings.Join(result.ImportWarnings, "\n")
+	if !strings.Contains(warnText, "collide") || !strings.Contains(warnText, "已被已有转发占用") {
+		t.Fatalf("receipt must name the colliding inbound and its occupant, warnings=%v", result.ImportWarnings)
+	}
+	if n := countWhere(t, dst, "node_inbound", "node_id = ? AND port = ?", 41, 2004); n != 0 {
+		t.Fatalf("colliding inbound must not land, got %d rows on (41, 2004)", n)
+	}
+}
+
 // B8-02（限值同源）：限值经 service_monitor_* 配置键调整后，恢复面
 // 钳制跟随配置口径，与写面 resolveServiceMonitorLimits 同源。
 func TestImportServiceMonitorsLimitsFromConfig(t *testing.T) {

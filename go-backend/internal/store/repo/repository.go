@@ -3279,15 +3279,28 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			}
 			result.PeerSharesImported = count
 		}
+		// B4-02 残面：转发端口替换集全集预判（见
+		// predictImportedForwardPortReplacements）——在 tunnels
+		// 段之前算定（链路面复检要用），供 tunnels/forwards 两段
+		// 的行内四源复检作转发排除集；成员资格与备份内声明顺序
+		// 无关。users 段已在本点之前落库，用户存在性是终态。
+		forwardReplaceIDs := map[int64]bool{}
+		if typeSet["forwards"] && len(backup.Forwards) > 0 {
+			var perr error
+			forwardReplaceIDs, perr = predictImportedForwardPortReplacements(tx, backup, typeSet)
+			if perr != nil {
+				return fmt.Errorf("import forwards replacement prediction failed: %w", perr)
+			}
+		}
 		if typeSet["tunnels"] && len(backup.Tunnels) > 0 {
-			count, err := importTunnels(tx, backup.Tunnels, now, rep)
+			count, err := r.importTunnels(tx, backup.Tunnels, now, rep, forwardReplaceIDs)
 			if err != nil {
 				return fmt.Errorf("import tunnels failed: %w", err)
 			}
 			result.TunnelsImported = count
 		}
 		if typeSet["forwards"] && len(backup.Forwards) > 0 {
-			count, err := r.importForwards(tx, backup.Forwards, now, rep)
+			count, err := r.importForwards(tx, backup.Forwards, now, rep, forwardReplaceIDs)
 			if err != nil {
 				return fmt.Errorf("import forwards failed: %w", err)
 			}
@@ -3315,7 +3328,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.ConfigsImported = count
 		}
 		if typeSet["inbounds"] && backup.Inbounds != nil {
-			counts, err := importInbounds(tx, backup.Inbounds, now, subRemap, rep)
+			counts, err := r.importInbounds(tx, backup.Inbounds, now, subRemap, rep)
 			if err != nil {
 				return fmt.Errorf("import inbounds failed: %w", err)
 			}
@@ -4093,7 +4106,13 @@ func validRestoreNodePortSpec(spec string) bool {
 	return true
 }
 
-func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *importReport) (int, error) {
+func (r *Repository) importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *importReport, forwardReplaceIDs map[int64]bool) (int, error) {
+	// B4-02 残面：链路声明口的行内复检排除集（将被整表替换端口
+	// 行的转发 ID 全集，事务前段预判算定，与声明顺序无关）。
+	forwardExclIDs := make([]int64, 0, len(forwardReplaceIDs))
+	for id := range forwardReplaceIDs {
+		forwardExclIDs = append(forwardExclIDs, id)
+	}
 	// R13X-007：先过门、再预删——被跳过的行不得触发其存量链路
 	// 预删（预删在门后只覆盖通过门的行），跳过 + 逐行点名（与
 	// forwards status 门同形）；钳制 + warning 备选不采。
@@ -4297,6 +4316,26 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 				rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的端口 %d 不在 1-65535 之间，已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.Port)
 				continue
 			}
+			// B4-02 残面：链路声明口落库前四源占用复检（与转发面
+			// R1-03-M2 同型）——预检排除集按备份 ID 全集组装，
+			// 被行门跳过的转发其存量端口行在导入后存活，链路声明
+			// 与之同节点同口时预检放行、此前落库无门，可跨表双
+			// 落。此处以统一谓词复检：排除集只含预判将整表替换
+			// 端口行的转发（forwardExclIDs）；本批隧道的存量链路
+			// 行已在段首整批预删，不在占用集内；被跳隧道的存量
+			// 链路行与一切其他存量行照常计占用。冲突逐行跳过 +
+			// warning（与本函数既有跳过口径一致）。
+			if ct.Port != nil && *ct.Port > 0 {
+				source, occErr := r.NodePortOccupantTx(tx, ct.NodeID, *ct.Port, PortExclusions{ForwardIDs: forwardExclIDs})
+				if occErr != nil {
+					return count, occErr
+				}
+				if source != "" {
+					rep.skip("chainTunnels")
+					rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 声明的端口 %d（节点 #%d）已被占用（来源：%s），已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.Port, ct.NodeID, backupPortSourceLabel(source))
+					continue
+				}
+			}
 			// BUG-A2-3：可空列按指针还原 NULL（旧实现一律 Valid:true，
 			// NULL port 被写成 0，两条同节点 NULL 链路即撞唯一索引
 			// 整单回滚）。chain 行已在上方整批删除，这里直接插入。
@@ -4331,7 +4370,7 @@ func importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, now int64, rep *im
 	// 已被移除而备份链路未恢复，不得只剩一个无上下文的跳过数字。
 	if rep != nil && preDeletedChains > 0 {
 		if skipped := rep.skipped["chainTunnels"] - chainSkippedBefore; skipped > 0 {
-			rep.warnf("备份恢复：隧道链路（chainTunnels）重建时目标库原有 %d 条链路行已被移除，其中 %d 条备份链路行被跳过未恢复（引用节点不存在、连接地址含空标签主机名或链路端口超出 1-65535 范围），请核对链路配置", preDeletedChains, skipped)
+			rep.warnf("备份恢复：隧道链路（chainTunnels）重建时目标库原有 %d 条链路行已被移除，其中 %d 条备份链路行被跳过未恢复（引用节点不存在、连接地址含空标签主机名、链路端口超出 1-65535 范围或声明端口已被占用），请核对链路配置", preDeletedChains, skipped)
 		}
 	}
 	return count, nil
@@ -4514,7 +4553,7 @@ func sweepDanglingSpeedRefsTx(tx *gorm.DB, forwards []model.ForwardBackup, userT
 	return nil
 }
 
-func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep *importReport) (int, error) {
+func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup, now int64, rep *importReport, portReplaceIDs map[int64]bool) (int, error) {
 	count := 0
 	// R7X-002：本批恢复行在目标库取消掉的待删记账身份，循环后汇总
 	// 披露（见循环内侧表收口与循环后 warning）。
@@ -4540,15 +4579,22 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 	// 存在盲区：被本单跳过的转发（策略/零目标等门）与 ForwardPorts
 	// 为 nil 的转发，其存量端口行被预检排除、却在导入后原样存
 	// 活——另一条转发的端口行可与之同节点同口并存落库。故在此
-	// 逐行复检：排除集只含「尚未处理」的备份转发（其存量行将被
-	// 其备份行整体替换、且备份内声明已由预检互检）；已处理转发
-	// （已落库新行或被跳过而存量行存活）一律按占用计。冲突行逐
-	// 行跳过 + 分计数披露，不整单失败（与本函数既有跳过口径一
-	// 致）；本单内已落库的端口行另以 claimed 集防同批自撞。
+	// 逐行复检；冲突行逐行跳过 + 分计数披露，不整单失败（与本
+	// 函数既有跳过口径一致）；本单内已落库的端口行另以 claimed
+	// 集防同批自撞。
+	//
+	// B4-02 残面：排除集的成员资格改由全集预判决定（参数
+	// portReplaceIDs，见 predictImportedForwardPortReplacements：
+	// 会通过全部行门落库且 ForwardPorts != nil、即存量端口行将
+	// 被整表替换的转发）。旧形态按「尚未处理」逐行收缩——被跳
+	// 转发的存量行只有在声明行排在其后时才计占用，声明行排在
+	// 前面时仍被排除、双落成立。现成员资格在处理开始前已算定，
+	// 处理到某行时将其移出（其新行已由 claimed 集与谓词的现存
+	// 行共同覆盖），复检结果与备份内声明顺序无关。
 	var portsSkippedOccupied, portsSkippedOutOfRange int
-	pendingForwardIDs := make(map[int64]bool, len(forwards))
-	for _, f := range forwards {
-		pendingForwardIDs[f.ID] = true
+	pendingForwardIDs := make(map[int64]bool, len(portReplaceIDs))
+	for id := range portReplaceIDs {
+		pendingForwardIDs[id] = true
 	}
 	claimedPorts := make(map[[2]int64]bool)
 	nodeByIDCache := make(map[int64]*model.Node)

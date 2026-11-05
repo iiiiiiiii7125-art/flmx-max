@@ -771,7 +771,7 @@ func subscriptionRefUniverseTx(tx *gorm.DB, subs []model.SubscriptionBackup) (so
 	return sources, inbounds, nil
 }
 
-func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (inboundImportCounts, error) {
+func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (inboundImportCounts, error) {
 	kernelRepointed := int64(0)
 	invalidShareHosts := 0
 	invalidShareModes := 0
@@ -795,6 +795,10 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 	// 不重复计数）；R5X-024 的校验跳过同样不计。
 	var counts inboundImportCounts
 	invalidInboundObjects := 0
+	// B4-02 残面：声明口四源复检跳过的行数与身份清单（汇总
+	// warning 在入站循环后统一发，形态同 invalidInboundObjects）。
+	portConflictInbounds := 0
+	var portConflictInboundIdentities []string
 	// R6X-009：内容校验跳过的行在恢复结果中完全消失，计数-only 的
 	// 汇总 warning 无从定位——收集被跳过行身份（#{id} {name}）与
 	// 逐行错误摘要，随汇总 warning 一并披露（清单截断见循环后）。
@@ -1050,6 +1054,30 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 				}
 			}
 		}
+		// B4-02 残面：入站声明口落库前四源占用复检（与转发面
+		// R1-03-M2、链路面同型）——预检排除集按备份 ID 全集组
+		// 装，被行门跳过的转发其存量端口行在导入后存活，入站声
+		// 明与之同节点同口时预检放行、此前落库无门，可跨表双
+		// 落。入站段在 forwards 段之后执行，转发/链路终态已落
+		// 库，排除集只需含本行自身（将被按 ID 替换的存量行）；
+		// 同批后序入站的存量行若处于漂移态（声明口与存量口不
+		// 同），按占用计保守跳过 + 点名，重导即可自愈。冲突整
+		// 行跳过 + 计数，身份随汇总 warning 披露。
+		// node_id=0 的 external 入站端口在远端主机上，不参与本
+		// 地节点端口空间（与预检同口径），不判。
+		if i.NodeID > 0 && i.Port > 0 {
+			source, occErr := r.NodePortOccupantTx(tx, i.NodeID, i.Port, PortExclusions{InboundIDs: []int64{i.ID}})
+			if occErr != nil {
+				return inboundImportCounts{}, occErr
+			}
+			if source != "" {
+				rep.skip("inbounds")
+				portConflictInbounds++
+				portConflictInboundIdentities = append(portConflictInboundIdentities,
+					fmt.Sprintf("#%d %s（节点 #%d 端口 %d 已被%s占用）", i.ID, i.Name, i.NodeID, i.Port, backupPortSourceLabel(source)))
+				continue
+			}
+		}
 		item := model.NodeInbound{
 			ID: i.ID, KernelID: i.KernelID, NodeID: i.NodeID, Name: i.Name, Protocol: protocol,
 			Listen: listen, Port: i.Port, Transport: healedTransport, Security: healedSecurity,
@@ -1100,6 +1128,17 @@ func importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap ma
 		}
 		rep.warnf("备份恢复：%d 条入站的 settings/transport/security/extra 未通过保存面同口径校验（Normalize），已整行跳过未恢复：%s%s，请修正备份内容后重试",
 			invalidInboundObjects, strings.Join(identities, "、"), suffix)
+	}
+	if portConflictInbounds > 0 {
+		// B4-02 残面：声明口复检跳过的汇总披露（截断口径同上）。
+		identities := portConflictInboundIdentities
+		suffix := ""
+		if len(identities) > 10 {
+			suffix = fmt.Sprintf(" 等共 %d 条", len(identities))
+			identities = identities[:10]
+		}
+		rep.warnf("备份恢复：%d 条入站声明的端口已被占用，已整行跳过未恢复：%s%s，请核对端口占用后重试",
+			portConflictInbounds, strings.Join(identities, "、"), suffix)
 	}
 	if invalidWhitelistRows > 0 {
 		// R9X-008：汇总披露受影响行数 + 被剔除非法条目数 + 逐行身份
