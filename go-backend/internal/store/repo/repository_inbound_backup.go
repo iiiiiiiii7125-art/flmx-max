@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"reflect"
 	"sort"
 	"strconv"
@@ -771,6 +772,18 @@ func subscriptionRefUniverseTx(tx *gorm.DB, subs []model.SubscriptionBackup) (so
 	return sources, inbounds, nil
 }
 
+// importedTemplateSourceURLLegal 是写面 isSubscriptionURL 的
+// repo 侧镜像（handler 包不可反向导入，本地同集实现）：无空白、
+// url.Parse 成功、scheme ∈ {http, https}、host 非空。仅形态校
+// 验——恢复面不联网抓取模板内容。
+func importedTemplateSourceURLLegal(text string) bool {
+	if strings.ContainsAny(text, " \n\t") {
+		return false
+	}
+	u, err := url.Parse(text)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now int64, subRemap map[int64]int64, rep *importReport) (inboundImportCounts, error) {
 	kernelRepointed := int64(0)
 	invalidShareHosts := 0
@@ -1307,9 +1320,78 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 	// discipline as the inbound refs pass — the slot is dropped, the
 	// subscription itself restores and renders built-in).
 	for _, tp := range b.Templates {
+		// B8-09：模板恢复面镜像写面（subscription_template.go
+		// 保存面 content()/CheckTemplate 门）。此前逐字 upsert、
+		// 无一门：kind 集外、内容不合 kind 语法、builder 与
+		// sourceUrl 同设、坏 URL 形态均可落库，消费面渲染时才
+		// 失败且回执无提示。处置镜像写面，逐行跳过 + warning：
+		// 名 trim 后空/超 100 跳；kind ∉ kernel.TemplateFormats
+		// {clash, singbox, surge} 跳；builderConfig 非空时按写面
+		// content() 同路生成内容（builder 与 sourceUrl 同设跳、
+		// 生成文本取代 content 字段——写面保存的就是生成文本）；
+		// sourceUrl 非空时仅校验 http(s) 形态（镜像
+		// isSubscriptionURL）——恢复面不联网抓取，内容取备份自
+		// 带 content；最终内容过 kernel.CheckTemplate，失败跳行
+		// 并在回执点名校验错误。被跳模板的订阅引用由下方既有
+		// remapTemplateRefs 摘除（悬空引用纪律不变）。
+		name := strings.TrimSpace(tp.Name)
+		if name == "" || len([]rune(name)) > 100 {
+			rep.skip("templates")
+			rep.warnf("备份恢复：订阅模板 #%d 的名称为空或超过 100 个字符，已跳过该模板未恢复", tp.ID)
+			continue
+		}
+		kindOK := false
+		for _, k := range kernel.TemplateFormats {
+			if k == tp.Kind {
+				kindOK = true
+				break
+			}
+		}
+		if !kindOK {
+			rep.skip("templates")
+			rep.warnf("备份恢复：订阅模板 #%d（%q）的格式 %q 不在合法集 {clash, singbox, surge} 内，已跳过该模板未恢复", tp.ID, name, tp.Kind)
+			continue
+		}
+		content := strings.ReplaceAll(tp.Content, "\r\n", "\n")
+		sourceURL := strings.TrimSpace(tp.SourceURL)
+		if strings.TrimSpace(tp.BuilderConfig) != "" {
+			if sourceURL != "" {
+				rep.skip("templates")
+				rep.warnf("备份恢复：订阅模板 #%d（%q）同时带有规则配置与网址模板，与保存面同口径不可同设，已跳过该模板未恢复", tp.ID, name)
+				continue
+			}
+			var builder kernel.TemplateBuilder
+			if err := json.Unmarshal([]byte(tp.BuilderConfig), &builder); err != nil {
+				rep.skip("templates")
+				rep.warnf("备份恢复：订阅模板 #%d（%q）的规则配置无法解析（%v），已跳过该模板未恢复", tp.ID, name, err)
+				continue
+			}
+			if builder.Groups == nil {
+				builder.Groups = []kernel.TemplateBuilderGroup{}
+			}
+			if builder.Rules == nil {
+				builder.Rules = []kernel.TemplateBuilderRule{}
+			}
+			built, err := kernel.BuildSubscriptionTemplate(tp.Kind, builder)
+			if err != nil {
+				rep.skip("templates")
+				rep.warnf("备份恢复：订阅模板 #%d（%q）的规则配置生成失败（%v），已跳过该模板未恢复", tp.ID, name, err)
+				continue
+			}
+			content = built
+		} else if sourceURL != "" && !importedTemplateSourceURLLegal(sourceURL) {
+			rep.skip("templates")
+			rep.warnf("备份恢复：订阅模板 #%d（%q）的网址模板地址不是合法 http(s) 地址，已跳过该模板未恢复", tp.ID, name)
+			continue
+		}
+		if _, err := kernel.CheckTemplate(tp.Kind, content, nil); err != nil {
+			rep.skip("templates")
+			rep.warnf("备份恢复：订阅模板 #%d（%q）的内容未通过保存面同口径校验（%v），已跳过该模板未恢复", tp.ID, name, err)
+			continue
+		}
 		item := model.SubscriptionTemplate{
-			ID: tp.ID, Name: tp.Name, Kind: tp.Kind, Content: tp.Content,
-			BuilderConfig: tp.BuilderConfig, SourceURL: tp.SourceURL,
+			ID: tp.ID, Name: name, Kind: tp.Kind, Content: content,
+			BuilderConfig: tp.BuilderConfig, SourceURL: sourceURL,
 			LastFetch: tp.LastFetch, LastError: tp.LastError,
 			CreatedTime: tp.CreatedTime, UpdatedTime: now,
 		}
