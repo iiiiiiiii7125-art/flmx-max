@@ -111,3 +111,65 @@ func TestImportAdminGuardAcceptsNormalBackups(t *testing.T) {
 		t.Fatalf("id=1 role = %d (ok=%v), want 0", role, ok)
 	}
 }
+
+// R2-08-01 形状 (a)：唯一管理员行 role_id 不动、status 置 0 的构造
+// 备份——只数 role 的旧谓词全盲，导入成功后启用中管理员归零。
+func TestImportAdminGuardRejectsSoleAdminDisabledByBackup(t *testing.T) {
+	r := r1GuardRepo(t)
+	r1GuardInsertUser(t, r, 1, "admin", 0)
+	now := time.Now().UnixMilli()
+	backup := &model.BackupData{Version: "1.0", Users: []model.UserBackup{
+		{ID: 1, User: "admin", Pwd: k4Bcrypt, RoleID: 0, Status: 0, CreatedTime: now},
+	}}
+	if _, err := r.Import(backup, []string{"users"}); err == nil || !strings.Contains(err.Error(), "管理员") {
+		t.Fatalf("import disabling sole admin via status=0: err=%v, want named rejection", err)
+	}
+	// 整单回滚：id=1 仍是启用中管理员。
+	var u model.User
+	if err := r.DB().Where("id = ?", 1).First(&u).Error; err != nil {
+		t.Fatal(err)
+	}
+	if u.RoleID != 0 || u.Status != 1 {
+		t.Fatalf("id=1 after rejected import = role %d status %d, want 0/1", u.RoleID, u.Status)
+	}
+}
+
+// R2-08-01 形状 (b)：不依赖构造——合法旧备份里唯一管理员行携
+// legacy MD5 口令（备份内 status=1），normalizeImportedUserPassword
+// 按 O7-003 策略强制 status=0；不变量须按归一化后的有效状态判定。
+func TestImportAdminGuardRejectsLegacyPasswordSoleAdmin(t *testing.T) {
+	r := r1GuardRepo(t)
+	r1GuardInsertUser(t, r, 1, "admin", 0)
+	now := time.Now().UnixMilli()
+	backup := &model.BackupData{Version: "1.0", Users: []model.UserBackup{
+		{ID: 1, User: "admin", Pwd: "3c85cdebade1c51cf64ca9f3c09d182d", RoleID: 0, Status: 1, CreatedTime: now},
+	}}
+	if _, err := r.Import(backup, []string{"users"}); err == nil || !strings.Contains(err.Error(), "管理员") {
+		t.Fatalf("import legacy-password sole admin: err=%v, want named rejection", err)
+	}
+	var u model.User
+	if err := r.DB().Where("id = ?", 1).First(&u).Error; err != nil {
+		t.Fatal(err)
+	}
+	if u.RoleID != 0 || u.Status != 1 {
+		t.Fatalf("id=1 after rejected import = role %d status %d, want 0/1", u.RoleID, u.Status)
+	}
+}
+
+// R2-08-01 对照：现行启用中管理员不受触碰时，备份另带一名停用的
+// 管理员行（role_id=0、status=0）不得误报——不变量看的是合并后
+// 启用中管理员计数，不是备份里出现过停用行。
+func TestImportAdminGuardAcceptsDisabledSecondAdmin(t *testing.T) {
+	r := r1GuardRepo(t)
+	r1GuardInsertUser(t, r, 1, "admin", 0)
+	now := time.Now().UnixMilli()
+	res, err := r.Import(&model.BackupData{Version: "1.0", Users: []model.UserBackup{
+		{ID: 8, User: "retired-admin", Pwd: k4Bcrypt, RoleID: 0, Status: 0, CreatedTime: now},
+	}}, []string{"users"})
+	if err != nil {
+		t.Fatalf("import adding a disabled second admin beside a live one: %v", err)
+	}
+	if res == nil || res.UsersImported != 1 {
+		t.Fatalf("UsersImported = %v, want 1", res)
+	}
+}

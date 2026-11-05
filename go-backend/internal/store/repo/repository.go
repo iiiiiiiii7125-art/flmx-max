@@ -3362,8 +3362,8 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		if typeSet["users"] && len(backup.Users) > 0 {
 			// R1-06-L1：users 段导入后管理员不变式的前置快照（段后
 			// 校验见 validateImportAdminInvariant）：构造/异源备份的
-			// id=1 行 role_id≠0（或全段无 role_id=0 行）经 upsert 可
-			// 把现行管理员整行降权覆盖，而 seedData 只在 id=1 行不
+			// id=1 行 role_id≠0 或 status≠1（或全段无启用中管理员
+			// 行）经 upsert 可把现行管理员整行降权/停用覆盖，而 seedData 只在 id=1 行不
 			// 存在时补建——导入后无管理员可登录且永不自愈。故落库
 			// 前记下现行 id=1 管理员的存在性，段末整单裁定。
 			_, preAdminRow1, err := importAdminState(tx)
@@ -3694,12 +3694,18 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 }
 
 // importAdminState 返回导入后管理员不变式所需的两个计数：全库
-// role_id=0 行数、以及 id=1 行中 role_id=0 的行数（0 或 1）。
+// 启用中管理员（role_id=0 AND status=1）行数、以及 id=1 行中启用
+// 中管理员的行数（0 或 1）。R2-08-01：计数必须带 status——登录与
+// 逐请求鉴权均以 Status!=1 拒绝，只数 role 的旧谓词对「管理员行
+// 还在、但已被停用」的备份全盲：构造备份把唯一管理员行置
+// status=0、或合法旧备份的管理员行携 legacy MD5/空口令被
+// normalizeImportedUserPassword 按策略强制置 status=0，两种形状
+// 都能让导入后启用中管理员归零而不触发任何一臂。
 func importAdminState(tx *gorm.DB) (admins int64, adminRow1 int64, err error) {
-	if err := tx.Model(&model.User{}).Where("role_id = ?", 0).Count(&admins).Error; err != nil {
+	if err := tx.Model(&model.User{}).Where("role_id = ? AND status = ?", 0, 1).Count(&admins).Error; err != nil {
 		return 0, 0, err
 	}
-	if err := tx.Model(&model.User{}).Where("id = ? AND role_id = ?", 1, 0).Count(&adminRow1).Error; err != nil {
+	if err := tx.Model(&model.User{}).Where("id = ? AND role_id = ? AND status = ?", 1, 0, 1).Count(&adminRow1).Error; err != nil {
 		return 0, 0, err
 	}
 	return admins, adminRow1, nil
@@ -3709,23 +3715,30 @@ func importAdminState(tx *gorm.DB) (admins int64, adminRow1 int64, err error) {
 // 落库后（仍在导入事务内）校验管理员面未被导入消灭，任一臂命中即
 // 返回点名错误、整单回滚——
 //
-//	臂① 导入后全库 role_id=0 计数为 0（备份全段无管理员行、且现行
-//	    管理员行被其同 id 非管理员行覆盖，或目标库本就无管理员）；
-//	臂② 导入前 id=1 为管理员、导入后 id=1 不再是管理员（id=1 行被
-//	    备份降权覆盖，即便备份另带其他管理员行亦拒绝：id=1 是
-//	    seedData 的播种锚点，静默换锚会让运维以为管理员未变）。
+//	臂① 导入后全库启用中管理员（role_id=0 AND status=1）计数为 0
+//	    （备份全段无启用中管理员行、且现行管理员行被其同 id 行降
+//	    权或停用覆盖，或目标库本就无启用中管理员）；
+//	臂② 导入前 id=1 为启用中管理员、导入后 id=1 不再是启用中管理
+//	    员（id=1 行被备份降权或停用覆盖，即便备份另带其他管理员
+//	    行亦拒绝：id=1 是 seedData 的播种锚点，静默换锚会让运维
+//	    以为管理员未变）。
 //
-// 正常备份（自家导出恒含其 id=1 管理员行）两臂均不命中。
+// 不变式在落库后评估，看到的是归一化后的有效状态：
+// normalizeImportedUserPassword 对 legacy MD5/空口令行强制置
+// status=0 的结果已经落库、包含在计数内（R2-08-01 形状 b 无需在
+// 归一处特判；普通用户行的该策略不受本不变式影响）。
+//
+// 正常备份（自家导出恒含其 id=1 启用中管理员行）两臂均不命中。
 func validateImportAdminInvariant(tx *gorm.DB, preAdminRow1 int64) error {
 	admins, adminRow1, err := importAdminState(tx)
 	if err != nil {
 		return fmt.Errorf("import users admin invariant check failed: %w", err)
 	}
 	if admins == 0 {
-		return fmt.Errorf("备份恢复被拒绝：该备份的用户段不含任何管理员（role_id=0），导入后将没有任何管理员可登录，已整单取消")
+		return fmt.Errorf("备份恢复被拒绝：该备份的用户段不含任何启用中管理员（role_id=0 且 status=1），导入后将没有任何管理员可登录，已整单取消")
 	}
 	if preAdminRow1 > 0 && adminRow1 == 0 {
-		return fmt.Errorf("备份恢复被拒绝：该备份的 id=1 用户不是管理员（role_id≠0），导入会把现行 id=1 管理员降权覆盖，已整单取消")
+		return fmt.Errorf("备份恢复被拒绝：该备份的 id=1 用户不是启用中管理员（role_id≠0 或 status≠1），导入会把现行 id=1 管理员降权或停用覆盖，已整单取消")
 	}
 	return nil
 }
