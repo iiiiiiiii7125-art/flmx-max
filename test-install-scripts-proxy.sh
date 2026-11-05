@@ -10412,15 +10412,18 @@ test_suite_host_safety_gate_blocks_real_agent_hosts() (
 
   FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate
 
+  # OBS-1: 拒绝臂必须显式清掉 FLMX_SUITE_ISOLATED——调用方环境里
+  # 若恰好导出该变量，门会直接放行、拒绝臂假红。本用例验的是
+  # 「未声明隔离时门按真实布局拒绝」，须与 ambient 环境无关。
   mkdir -p "$root/etc/flux_agent"
-  if FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate 2>/dev/null; then
+  if FLMX_SUITE_ISOLATED="" FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate 2>/dev/null; then
     fail "T-INC-01: host gate must refuse when a legacy agent layout is present"
   fi
 
   rm -rf "$root/etc/flux_agent"
   mkdir -p "$root/etc/systemd/system"
   : > "$root/etc/systemd/system/flmx_agent.service"
-  if FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate 2>/dev/null; then
+  if FLMX_SUITE_ISOLATED="" FLMX_SUITE_HOST_ROOT="$root" suite_host_safety_gate 2>/dev/null; then
     fail "T-INC-01: host gate must refuse when a current agent unit is present"
   fi
 
