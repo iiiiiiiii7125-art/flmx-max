@@ -236,7 +236,14 @@ const INTERACTIONS = {
   // null the page closes the dialog itself, the step never settles,
   // and the walk fails. Clicks happen exactly once (window flags);
   // later passes only observe.
-  "admin tunnel": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const dlgByTitle = (title) => { const h = [...document.querySelectorAll("h2")].find((x) => x.textContent.trim() === title); return h?.closest('[role="dialog"]') ?? h?.closest("section") ?? null; }; const cancelOf = (dlg) => [...dlg.querySelectorAll("button")].find((x) => x.textContent.trim() === "取消"); if (!w.__dt1) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt1 = true; b.click(); return false; } if (!w.__dt1Done) { const dlg = dlgByTitle("删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("发现关联规则") || !t.includes("关联规则预览")) return false; const c = cancelOf(dlg); if (c) c.click(); w.__dt1Done = true; return false; } if (!w.__dt2) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "批量" && !x.disabled); if (!b) return false; w.__dt2 = true; b.click(); return false; } if (!w.__dt2Picked) { const box = scope.querySelector('[role="checkbox"]'); if (!box) return false; box.click(); w.__dt2Picked = true; return false; } if (!w.__dt2Clicked) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt2Clicked = true; b.click(); return false; } const dlg = dlgByTitle("批量删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("条仍被规则使用")) return false; const c = cancelOf(dlg); if (c) c.click(); return true; })()`,
+  // Phase 3 (E2-03): with the phase-2 selection still active, click
+  // the toolbar's 下发 (tunnel/batch-redeploy) and settle on the
+  // success wording that only a well-formed BatchOperationResult
+  // receipt produces ("成功重新下发 N 项" toast / "重新下发完成：成功"
+  // progress label). When the demo adapter answered data:null for
+  // batch endpoints, the handler threw on the null receipt and the
+  // page error-toasted instead, so this phase never settled.
+  "admin tunnel": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const dlgByTitle = (title) => { const h = [...document.querySelectorAll("h2")].find((x) => x.textContent.trim() === title); return h?.closest('[role="dialog"]') ?? h?.closest("section") ?? null; }; const cancelOf = (dlg) => [...dlg.querySelectorAll("button")].find((x) => x.textContent.trim() === "取消"); if (!w.__dt1) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt1 = true; b.click(); return false; } if (!w.__dt1Done) { const dlg = dlgByTitle("删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("发现关联规则") || !t.includes("关联规则预览")) return false; const c = cancelOf(dlg); if (c) c.click(); w.__dt1Done = true; return false; } if (!w.__dt2) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "批量" && !x.disabled); if (!b) return false; w.__dt2 = true; b.click(); return false; } if (!w.__dt2Picked) { const box = scope.querySelector('[role="checkbox"]'); if (!box) return false; box.click(); w.__dt2Picked = true; return false; } if (!w.__dt2Clicked) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt2Clicked = true; b.click(); return false; } if (!w.__dt2Done) { const dlg = dlgByTitle("批量删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("条仍被规则使用")) return false; const c = cancelOf(dlg); if (c) c.click(); w.__dt2Done = true; return false; } if (!w.__dt3) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "下发" && !x.disabled); if (!b) { if (!w.__dt3Picked) { const box = scope.querySelector('[role="checkbox"]'); if (box) { box.click(); w.__dt3Picked = true; } } return false; } w.__dt3 = true; b.click(); return false; } const t = document.body.textContent ?? ""; return t.includes("成功重新下发") || t.includes("重新下发完成：成功"); })()`,
 };
 
 // Multi-phase steps (R4-C5: the config step chains gist upload,
@@ -246,6 +253,7 @@ const INTERACTIONS = {
 // than under the old fixed wait.
 const STEP_BUDGET_MS = {
   "admin config": 120000,
+  "admin tunnel": 45000,
   "admin node": 45000,
   "admin inbound": 45000,
   "admin panel-sharing": 45000,
