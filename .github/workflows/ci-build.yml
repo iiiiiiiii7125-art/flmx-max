@@ -23,7 +23,7 @@ jobs:
         run: bash test-install-scripts-proxy.sh
 
       - name: Test Alpine bootstrap and OpenRC lifecycle
-        run: docker run --rm -v "$PWD:/workspace:ro" alpine:3.22 sh /workspace/test-install-scripts-alpine.sh
+        run: docker run --rm -v "$PWD:/workspace:ro" alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f sh /workspace/test-install-scripts-alpine.sh
 
   frontend:
     name: Build Frontend

@@ -32,6 +32,12 @@
 // 否则 PREMISE FAIL（exit 2）点名文件——将来出现第四种写法时本门
 // 先红在前提上，而不是静默漏计。
 //
+// A4-02：uses 普查加登记下限 USES_FLOOR（见常量处），0 命中与低于
+// 下限一律前提失效 exit 2，杜绝真空 PASS。
+// A4-03：普查面扩到容器镜像——Dockerfile 的 FROM、compose 的
+// image:、workflow 的 docker run 镜像同守不可变引用纪律（一律
+// @sha256: digest 钉版），下限 CONTAINER_FLOOR，细则见文末专节。
+//
 // 运行方法（仓库根目录）：
 //   node scripts/check-workflow-pins.mjs [repoRoot]
 // 退出码 0 = 全部钉版；1 = 有未钉版 uses:（逐行点名）；
@@ -189,6 +195,133 @@ if (total === 0) {
     `workflow-pins: uses 普查 ${total} 处低于登记下限 ${USES_FLOOR} 处——提取面失效或 uses 被整体删改（A4-02）；若为合法增减，同步更新 USES_FLOOR 并在提交信息写明`,
   );
 }
+
+/* ---------------- 容器镜像普查（A4-03） ----------------
+ * 此前全仓唯一的供应链普查只看 workflow 的 uses:——Dockerfile 的
+ * FROM、compose 的 image:、workflow 里的 docker run 镜像全是浮动
+ * tag，无 digest 钉、无普查门、无 Dependabot 覆盖（dependabot.yml
+ * 现已补 docker/docker-compose 生态负责更新 digest）。本节把同
+ * 一「不可变引用」纪律扩到容器镜像三面：
+ *   - 全部 Dockerfile（递归枚举，跳 .git/node_modules）的 FROM；
+ *     阶段名引用（同文件 AS 定义）与 scratch 不计、只计数公示；
+ *   - 仓库根 docker-compose*.yml 的 image:；带 ${…} 参数化者是本
+ *     仓自产镜像（版本由部署参数决定，非上游基础镜像），跳过并
+ *     计数公示；
+ *   - workflow 中 docker run 的镜像参数（跳 flag 及其取值后首个
+ *     位置参数）。
+ * 全部须以 @sha256:<64 位 digest> 钉版。普查下限 CONTAINER_FLOOR
+ * 与 USES_FLOOR 同口径：实测基线 11（FROM 7＋compose 2＋docker
+ * run 2，2026-11-05），合法增减时同步调整并在提交信息写明。 */
+const CONTAINER_FLOOR = 11;
+let containerTotal = 0;
+let containerPinned = 0;
+let stageSkipped = 0;
+let paramSkipped = 0;
+
+function judgeImage(where, ref) {
+  containerTotal += 1;
+  if (/@sha256:[0-9a-f]{64}$/.test(ref)) {
+    containerPinned += 1;
+    return;
+  }
+  failures.push(
+    `${where} 容器镜像 ${ref} 未以 @sha256:<64 位 digest> 钉版（A4-03）`,
+  );
+}
+
+function walkDockerfiles(dir, out) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    if (e.name === ".git" || e.name === "node_modules") continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) walkDockerfiles(p, out);
+    else if (e.name === "Dockerfile" || e.name.startsWith("Dockerfile."))
+      out.push(p);
+  }
+  return out;
+}
+
+for (const path of walkDockerfiles(root, [])) {
+  const rel = path.slice(root.length + 1);
+  const lines = readFileSync(path, "utf8").split("\n");
+  const stages = new Set();
+  for (const line of lines) {
+    const m = line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?\S+\s+AS\s+(\S+)/i);
+    if (m) stages.add(m[1].toLowerCase());
+  }
+  lines.forEach((line, i) => {
+    const m = line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)/i);
+    if (!m) return;
+    const ref = m[1];
+    if (ref === "scratch" || stages.has(ref.toLowerCase())) {
+      stageSkipped += 1;
+      return;
+    }
+    judgeImage(`${rel}:${i + 1}`, ref);
+  });
+}
+
+for (const name of readdirSync(root).sort()) {
+  if (!/^docker-compose.*\.ya?ml$/.test(name)) continue;
+  const lines = readFileSync(join(root, name), "utf8").split("\n");
+  lines.forEach((line, i) => {
+    const m = line.match(/^\s*image:\s*(\S+)\s*$/);
+    if (!m) return;
+    if (m[1].includes("${")) {
+      paramSkipped += 1; // 本仓自产镜像，版本由部署参数决定
+      return;
+    }
+    judgeImage(`${name}:${i + 1}`, m[1]);
+  });
+}
+
+const DOCKER_RUN_VALUE_FLAGS = new Set([
+  "-v", "--volume", "-e", "--env", "-w", "--workdir", "-u", "--user",
+  "--name", "--network", "--net", "-p", "--publish", "--entrypoint",
+  "--hostname", "--platform", "--pull", "-m", "--memory", "--cpus",
+]);
+for (const name of wfFiles) {
+  if (!/\.ya?ml$/.test(name)) continue;
+  const lines = readFileSync(join(wfDir, name), "utf8").split("\n");
+  lines.forEach((line, i) => {
+    const at = line.indexOf("docker run");
+    if (at < 0 || line.trimStart().startsWith("#")) return;
+    const toks = line.slice(at + "docker run".length).trim().split(/\s+/);
+    let image = null;
+    for (let k = 0; k < toks.length; k += 1) {
+      const t = toks[k];
+      if (t.startsWith("-")) {
+        if (!t.includes("=") && DOCKER_RUN_VALUE_FLAGS.has(t)) k += 1;
+        continue;
+      }
+      image = t.replace(/^["']|["']$/g, "");
+      break;
+    }
+    if (image) judgeImage(`${name}:${i + 1} (docker run)`, image);
+    else
+      premiseFailures.push(
+        `${name}:${i + 1} 含 docker run 但提取不到镜像参数——容器普查提取面失效（A4-03）`,
+      );
+  });
+}
+
+if (containerTotal === 0) {
+  premiseFailures.push(
+    "workflow-pins: 容器镜像普查为 0 处——Dockerfile/compose 缺失或提取面整体失效，禁止真空 PASS（A4-03）",
+  );
+} else if (containerTotal < CONTAINER_FLOOR) {
+  premiseFailures.push(
+    `workflow-pins: 容器镜像普查 ${containerTotal} 处低于登记下限 ${CONTAINER_FLOOR} 处——提取面失效或镜像引用被整体删改（A4-03）；若为合法增减，同步更新 CONTAINER_FLOOR 并在提交信息写明`,
+  );
+}
+console.log(
+  `workflow-pins: 容器镜像普查 ${containerTotal} 处（digest 钉版 ${containerPinned}、未钉版 ${containerTotal - containerPinned}、阶段引用跳过 ${stageSkipped}、参数化自产镜像跳过 ${paramSkipped}）`,
+);
 
 for (const f of premiseFailures) console.log(`PREMISE FAIL  ${f}`);
 for (const f of failures) console.log(`FAIL  ${f}`);

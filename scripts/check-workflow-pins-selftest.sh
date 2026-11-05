@@ -4,8 +4,9 @@
 # 背景：本门此前无任何变异自测——提取正则漏形态（A4-01：flow 形
 # - {uses: …} 与块标量形 uses: >- 不进普查）与 0 命中真空 PASS
 # （A4-02：failures 为空即绿）都无从被发现。本自检把 .github/
-# workflows 镜像到临时目录：未变异镜像必须 PASS；逐个变体必须
-# FAIL 并点名。若哪天判定面被改坏，本自检先红。
+# workflows（及 A4-03 容器普查所需的 Dockerfile/compose）镜像到
+# 临时目录：未变异镜像必须 PASS；逐个变体必须 FAIL 并点名。若
+# 哪天判定面被改坏，本自检先红。
 #
 # 用法：check-workflow-pins-selftest.sh（无参数，作用于本仓库）。
 # 退出码：0 = 基线 PASS 且全部变体均被抓；1 = 任一断言不成立。
@@ -19,8 +20,13 @@ MIR="$TMP/repo"
 WF="$MIR/.github/workflows"
 SHA="11d5960a326750d5838078e36cf38b85af677262" # actions/checkout v4 的钉版 SHA
 
-mkdir -p "$WF"
+mkdir -p "$WF" "$MIR/go-backend" "$MIR/go-gost" "$MIR/vite-frontend"
 cp "$ROOT"/.github/workflows/*.yml "$WF/"
+# A4-03 起本门还普查容器镜像：镜像须带上三份 Dockerfile 与 compose。
+cp "$ROOT/go-backend/Dockerfile" "$MIR/go-backend/"
+cp "$ROOT/go-gost/Dockerfile" "$MIR/go-gost/"
+cp "$ROOT/vite-frontend/Dockerfile" "$MIR/vite-frontend/"
+cp "$ROOT/docker-compose-v4.yml" "$ROOT/docker-compose-v6.yml" "$MIR/"
 
 run_gate() { node "$GATE" "$MIR" > "$1" 2>&1; }
 
@@ -75,6 +81,15 @@ fi
 grep -q "docker://" "$TMP/v5.log" && echo "OK: variant 5 caught and named" || {
   echo "FAIL: variant 5 caught but the ref was not named"; sed 's/^/    /' "$TMP/v5.log"; exit 1; }
 cp "$ROOT/.github/workflows/ci-build.yml" "$WF/ci-build.yml"
+
+echo "== variant 7: Dockerfile FROM without digest must FAIL and name it (A4-03) =="
+sed -i 's|^FROM debian:bookworm-slim@sha256:[0-9a-f]*|FROM debian:bookworm-slim|' "$MIR/go-backend/Dockerfile"
+if run_gate "$TMP/v7.log"; then
+  echo "FAIL: variant 7 was not caught (floating FROM passed)"; exit 1
+fi
+grep -q "debian:bookworm-slim" "$TMP/v7.log" && echo "OK: variant 7 caught and named" || {
+  echo "FAIL: variant 7 caught but the image was not named"; sed 's/^/    /' "$TMP/v7.log"; exit 1; }
+cp "$ROOT/go-backend/Dockerfile" "$MIR/go-backend/Dockerfile"
 
 echo "== variant 6: empty workflows dir must exit 2 (no vacuous PASS, A4-02) =="
 mkdir -p "$TMP/empty/.github/workflows"

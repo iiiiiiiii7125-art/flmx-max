@@ -1,9 +1,29 @@
 # F-051: workflow 的 uses: 已全部 pin 到 commit SHA（版本以行尾注释
 # 保留）。pin 的代价是升级不再自动跟随——由 Dependabot 每周检查
 # github-actions 生态并开 PR 把 SHA 与注释版本一并更新。
+# A4-03: 容器基础镜像同样已全部以 digest 钉版（Dockerfile FROM /
+# compose image: / CI docker run 与服务镜像），由 docker 与
+# docker-compose 生态每周检查并开 PR 更新 digest；钉版纪律本身由
+# scripts/check-workflow-pins.mjs 的容器镜像普查守护。
 version: 2
 updates:
   - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/go-backend"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/go-gost"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/vite-frontend"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker-compose"
     directory: "/"
     schedule:
       interval: "weekly"
