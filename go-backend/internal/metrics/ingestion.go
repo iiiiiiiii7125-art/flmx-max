@@ -209,6 +209,10 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	}
 }
 
+// maxRequeuedMetrics 是 flush 失败回填的缓冲上限：DB 长时间不可
+// 用时不得无限积压内存，超出部分丢最旧并计数点名（C3-06）。
+const maxRequeuedMetrics = 5000
+
 func (s *IngestionService) flushNodeMetrics() {
 	s.nodeBufferMu.Lock()
 	if len(s.nodeBuffer) == 0 {
@@ -224,8 +228,23 @@ func (s *IngestionService) flushNodeMetrics() {
 	if s.repo == nil {
 		return
 	}
+	// C3-06：先写成功才算消费。此前 swap 后写失败仅记日志，
+	// buffer 与 traffic 一并丢弃——一次瞬时 DB 失败（如隧道写
+	// 入突发期的 SQLite busy）即永久丢失该窗口的节点指标与 NIC
+	// 流量增量（lastBytes 基线已推进，丢失的差分永不重算）。现
+	// 写失败把未落库部分回填缓冲（指标回填保序并设上限，流量
+	// 按键饱和合并），下一轮 flush 重报。
 	if err := s.repo.InsertNodeMetricBatch(buffer); err != nil {
-		log.Printf("monitoring write failed op=node_metric.flush count=%d err=%v", len(buffer), err)
+		log.Printf("monitoring write failed op=node_metric.flush count=%d err=%v (requeued)", len(buffer), err)
+		s.nodeBufferMu.Lock()
+		merged := append(buffer, s.nodeBuffer...)
+		if len(merged) > maxRequeuedMetrics {
+			dropped := len(merged) - maxRequeuedMetrics
+			merged = merged[dropped:]
+			log.Printf("monitoring requeue overflow op=node_metric.flush dropped_oldest=%d cap=%d", dropped, maxRequeuedMetrics)
+		}
+		s.nodeBuffer = merged
+		s.nodeBufferMu.Unlock()
 	}
 	rows := make([]model.NodeTraffic, 0, len(traffic))
 	for k, v := range traffic {
@@ -234,7 +253,15 @@ func (s *IngestionService) flushNodeMetrics() {
 		}
 	}
 	if err := s.repo.AddNodeTraffic(rows); err != nil {
-		log.Printf("monitoring write failed op=node_traffic.flush count=%d err=%v", len(rows), err)
+		log.Printf("monitoring write failed op=node_traffic.flush count=%d err=%v (requeued)", len(rows), err)
+		s.nodeBufferMu.Lock()
+		for k, v := range traffic {
+			cur := s.traffic[k]
+			cur[0] = repo.SaturatingAddInt64(cur[0], v[0])
+			cur[1] = repo.SaturatingAddInt64(cur[1], v[1])
+			s.traffic[k] = cur
+		}
+		s.nodeBufferMu.Unlock()
 	}
 }
 
