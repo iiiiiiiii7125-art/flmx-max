@@ -9396,6 +9396,99 @@ test_install_script_latest_resolution_requires_corroboration() (
     fail "A3-01: latest tag must be rejected when another route reports a different tag"
   fi
 )
+
+# A3-04: install 覆盖存量 agent 必须与 update 同保护集——防降级、
+# 替换前 .bak 备份、替换后 -V 烟雾、判活失败自动回滚。旧实现四项
+# 全无：mv 直覆盖、-V 只打印不判、判活失败仅提示，旧版字节永久
+# 丢失（update 侧对应格齐全，本用例对旧代码必红）。
+test_install_flmx_agent_rolls_back_over_existing() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  INSTALL_DIR=$(mktemp -d)
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$INSTALL_DIR/flmx_agent.service"
+  SERVER_ADDR="panel.example.com:443"
+  SECRET="fixture-secret"
+  DOWNLOAD_URL="https://example.com/gost"
+  DOWNLOAD_ROUTES=("https://a.example" "https://b.example")
+  ROUTES_STAGE=2
+
+  get_config_params() { :; }
+  check_and_install_tcpkill() { :; }
+  cleanup_legacy_gost_installation() { :; }
+  sleep() { :; }
+  systemctl() { return 0; }
+  flmx_agent_main_pid() { echo 4242; }
+
+  local old_body new_body
+  old_body=$(printf '#!/bin/bash\nif [[ "${1:-}" == "-V" ]]; then echo "gost 1.3.4 (go1.25 linux/amd64)"; exit 0; fi\necho old-agent\n')
+  printf '%s\n' "$old_body" > "$INSTALL_DIR/flmx_agent"
+  chmod +x "$INSTALL_DIR/flmx_agent"
+  # 存量配置（addr 与本次 -a 一致，归属守卫放行——本用例测的是
+  # 覆盖保护，不是守卫）。
+  printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' "$SERVER_ADDR" "$SECRET" > "$INSTALL_DIR/config.json"
+
+  # 下载桩：本体与 .sha256 都按 NEW_BODY 供数（两条路线同值，
+  # 第二锚可复核通过）。
+  NEW_BODY=""
+  curl() {
+    local output="" url=""
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "-o" ]]; then
+        output="$2"
+        shift 2
+        continue
+      fi
+      case "$1" in
+        -*) ;;
+        *) url="$1" ;;
+      esac
+      shift
+    done
+    if [[ "$url" == *.sha256 ]]; then
+      printf '%s' "$NEW_BODY" | sha256sum | awk '{print $1"  gost-amd64.sha256"}' > "$output"
+      return 0
+    fi
+    printf '%s' "$NEW_BODY" > "$output"
+    chmod +x "$output"
+  }
+
+  local rc log
+  log="$INSTALL_DIR/install.log"
+
+  # 臂 1：新二进制 -V 即崩（烟雾失败）→ 自动回滚，旧二进制逐字恢复。
+  ensure_download_url_initialized() { RESOLVED_VERSION="1.3.5"; }
+  flmx_agent_service_is_active() { return 0; }
+  NEW_BODY=$(printf '#!/bin/bash\nexit 1\n')
+  rc="0"; ( install_flmx_agent >"$log" 2>&1 </dev/null ) || rc="$?"
+  assert_equals "1" "$rc" "A3-04: install over existing must fail when the new binary cannot run"
+  assert_equals "$old_body" "$(cat "$INSTALL_DIR/flmx_agent")" "A3-04: smoke failure must roll back to the previous binary"
+  grep -q "回滚" "$log" || fail "A3-04: smoke-failure rollback must be named in the output"
+
+  # 臂 2：新二进制能跑但服务判活失败 → 自动回滚。
+  NEW_BODY=$(printf '#!/bin/bash\necho "gost 1.3.5 (go1.25 linux/amd64)"\n')
+  flmx_agent_service_is_active() { return 1; }
+  rc="0"; ( install_flmx_agent >"$log" 2>&1 </dev/null ) || rc="$?"
+  assert_equals "1" "$rc" "A3-04: install over existing must fail when the new service stays down"
+  assert_equals "$old_body" "$(cat "$INSTALL_DIR/flmx_agent")" "A3-04: health failure must roll back to the previous binary"
+
+  # 臂 3：显式降级（1.3.0 < 现装 1.3.4）、非交互 → 拒绝且现装不动。
+  ensure_download_url_initialized() { RESOLVED_VERSION="1.3.0"; }
+  flmx_agent_service_is_active() { return 0; }
+  rc="0"; ( install_flmx_agent >"$log" 2>&1 </dev/null ) || rc="$?"
+  assert_equals "1" "$rc" "A3-04: non-interactive downgrade over existing must be refused"
+  assert_equals "$old_body" "$(cat "$INSTALL_DIR/flmx_agent")" "A3-04: refused downgrade must leave the installed binary untouched"
+  grep -q "拒绝降级" "$log" || fail "A3-04: downgrade refusal must be named in the output"
+
+  # 臂 4：正常升级（能跑且判活通过）→ 新二进制在位、.bak 已清。
+  ensure_download_url_initialized() { RESOLVED_VERSION="1.3.5"; }
+  NEW_BODY=$(printf '#!/bin/bash\necho "gost 1.3.5 (go1.25 linux/amd64)"\n')
+  rc="0"; ( install_flmx_agent >"$log" 2>&1 </dev/null ) || rc="$?"
+  assert_equals "0" "$rc" "A3-04: healthy install over existing should succeed"
+  assert_equals "$NEW_BODY" "$(cat "$INSTALL_DIR/flmx_agent")" "A3-04: healthy install must leave the new binary in place"
+  [[ ! -f "$INSTALL_DIR/flmx_agent.bak" ]] || fail "A3-04: backup must be removed after a healthy install over existing"
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -9448,6 +9541,7 @@ test_install_script_binary_anchor_mismatch_rejects
 test_install_script_binary_anchor_degrades
 test_install_script_rejects_malformed_explicit_versions
 test_install_script_latest_resolution_requires_corroboration
+test_install_flmx_agent_rolls_back_over_existing
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance

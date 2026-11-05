@@ -1907,6 +1907,29 @@ while getopts "a:s:" opt; do
   esac
 done
 
+# A3-04: install 覆盖存量后失败的回滚体——与 update 的
+# rollback_flmx_agent 同形态（恢复 .bak、重启、双采样判活），
+# 差别只在 install 路径替换前执行过 disable，回滚须连自启一并
+# 恢复（enable_and_start_flmx_agent_service）；服务文件此时可能
+# 已按新版重写，但模板同内容、不影响旧二进制运行。
+rollback_install_replaced_agent() {
+  if [[ -f "$INSTALL_DIR/flmx_agent.bak" ]]; then
+    mv -f "$INSTALL_DIR/flmx_agent.bak" "$INSTALL_DIR/flmx_agent"
+    chmod +x "$INSTALL_DIR/flmx_agent"
+    enable_and_start_flmx_agent_service
+    # 与更新/回滚路径同口径：先沉降 3 秒让 flap 越过存活窗口，
+    # 再走 flmx_agent_health_ok 双采样判活。
+    sleep 3
+    if flmx_agent_health_ok; then
+      echo "✅ 已自动回滚到安装前的版本并重新启动。"
+    else
+      echo "❌ 回滚后服务仍未启动，请手动检查：$INSTALL_DIR"
+    fi
+  else
+    echo "⚠️ 无备份可回滚，请手动检查：$INSTALL_DIR"
+  fi
+}
+
 # 安装功能
 install_flmx_agent() {
   echo "🚀 开始安装 flmx_agent..."
@@ -1942,6 +1965,31 @@ install_flmx_agent() {
   download_agent_binary "$tmp_binary" || { rm -f "$tmp_binary"; echo "❌ 下载失败，请检查网络或下载链接。"; exit 1; }
   cleanup_legacy_gost_installation
 
+  # A3-04 ①: 覆盖存量 agent 时先过防降级门（与 update 的 X-P2-12
+  # 同口径）。此刻下载已完成、服务未停、现装二进制未动，拒绝不
+  # 留任何改动。update 侧对降级是无条件拒绝；install 是一键重装
+  # 的主用路径，只保留一个逃生口：交互终端点名确认（非交互直
+  # 接拒绝）。全新安装（无存量二进制）不进此门。
+  local replacing_existing=""
+  if [[ -x "$INSTALL_DIR/flmx_agent" ]]; then
+    replacing_existing="1"
+    local current_version cmp_result
+    current_version=$(flmx_agent_installed_version || true)
+    cmp_result=$(panel_version_cmp "${RESOLVED_VERSION:-}" "$current_version" || true)
+    if [[ "$cmp_result" == "-1" ]]; then
+      local confirm_downgrade=""
+      if [[ -t 0 ]]; then
+        read -p "⚠️ 目标版本 ${RESOLVED_VERSION:-} 低于现装版本 $current_version，确认要降级安装吗？(y/N): " confirm_downgrade || confirm_downgrade=""
+      fi
+      if [[ "$confirm_downgrade" != "y" && "$confirm_downgrade" != "Y" ]]; then
+        echo "❌ 拒绝降级安装：目标版本 ${RESOLVED_VERSION:-} 低于现装版本 $current_version，现装版本未被改动（A3-04）。如确需降级，请在交互终端重跑并点名确认，或先卸载后重装。"
+        rm -f "$tmp_binary"
+        return 1
+      fi
+      echo "⚠️ 已按交互确认继续降级安装（$current_version → ${RESOLVED_VERSION:-}）"
+    fi
+  fi
+
   # F-048: 停止并禁用已有服务移到下载+校验成功之后（与 update_flmx_agent
   # 同序）。旧顺序先 stop+disable 再下载，下载/校验失败即 exit 1，节点
   # agent 停摆且开机不自启、必须人工干预；现在失败时旧服务保持运行、
@@ -1953,8 +2001,34 @@ install_flmx_agent() {
     disable_flmx_agent_service
     echo "🚫 禁用自启"
   fi
+
+  # A3-04 ②: 覆盖前备份现装二进制（与 update 的 R9-02 同口径：
+  # 备份失败即中止——无回滚源时绝不替换）。此点服务已停，备份
+  # 失败须把服务恢复到安装前状态（重新启用并启动）。
+  if [[ -n "$replacing_existing" ]]; then
+    echo "💾 备份当前版本..."
+    if ! cp -f "$INSTALL_DIR/flmx_agent" "$INSTALL_DIR/flmx_agent.bak"; then
+      echo "❌ 备份当前版本失败（磁盘空间不足或拷贝出错），已中止安装：现装版本未被替换。"
+      rm -f "$INSTALL_DIR/flmx_agent.bak" "$tmp_binary"
+      if flmx_agent_service_exists; then
+        echo "🔄 正在恢复安装前已停止的服务..."
+        enable_and_start_flmx_agent_service || true
+      fi
+      return 1
+    fi
+  fi
+
   mv "$tmp_binary" "$INSTALL_DIR/flmx_agent"
   chmod +x "$INSTALL_DIR/flmx_agent"
+
+  # A3-04 ③: 覆盖后先烟雾测试（与 update 同口径：-V 必须可执行），
+  # 失败立即回滚——不等服务文件与配置按新版重写后才发现二进制
+  # 根本跑不起来。
+  if [[ -n "$replacing_existing" ]] && ! "$INSTALL_DIR/flmx_agent" -V >/dev/null 2>&1; then
+    echo "❌ 新版本二进制无法执行，正在回滚到安装前的版本..."
+    rollback_install_replaced_agent
+    return 1
+  fi
   echo "✅ 下载完成"
 
   # 打印版本
@@ -2006,10 +2080,21 @@ EOF
     echo "📍 节点连接地址: $SERVER_ADDR"
     echo "✔️ 请回面板「节点管理」页确认该节点显示为在线——安装完成只表示服务已启动，不代表已连上面板。"
     echo "   若面板未显示在线，请在节点机执行 journalctl -u flmx_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flmx_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
+    # A3-04: 覆盖安装成功后清备份（与 update 同口径）。
+    if [[ -n "$replacing_existing" ]]; then
+      rm -f "$INSTALL_DIR/flmx_agent.bak"
+    fi
     return 0
   else
-    echo "❌ flmx_agent服务启动失败，请执行以下命令查看状态："
-    flmx_agent_service_status_hint
+    # A3-04 ④: 覆盖存量的判活失败自动回滚（与 update 同口径）；
+    # 全新安装无回滚源，维持原提示路径。
+    if [[ -n "$replacing_existing" && -f "$INSTALL_DIR/flmx_agent.bak" ]]; then
+      echo "❌ 新版本服务启动失败，正在回滚到安装前的版本..."
+      rollback_install_replaced_agent
+    else
+      echo "❌ flmx_agent服务启动失败，请执行以下命令查看状态："
+      flmx_agent_service_status_hint
+    fi
     return 1
   fi
 }
