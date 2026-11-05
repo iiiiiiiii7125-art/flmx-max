@@ -18,14 +18,23 @@ var sensitivePathPrefixes = []string{
 	"/api/v1/open_api/sub/",
 }
 
-// Path 脱敏请求路径中的凭据段；普通路径原样返回。
-func Path(p string) string {
+// applySensitivePrefixes 只走已知前缀规则（凭据路由整段掩码）。
+func applySensitivePrefixes(p string) string {
 	for _, prefix := range sensitivePathPrefixes {
 		if strings.HasPrefix(p, prefix) {
 			return prefix + "***"
 		}
 	}
 	return p
+}
+
+// Path 脱敏请求路径中的凭据段；普通路径原样返回。
+// C4-03：前缀规则之外再走通用段掩码——此前 Path 无通用掩码，
+// 凭据-in-path 只靠唯一一条前缀规则兜底（当前路由普查下无第二
+// 面，属潜伏差集）；与 URL 同谓词同口径后，新出现的 path 型
+// 凭据路由不再默认原文落盘。
+func Path(p string) string {
+	return maskTokenSegments(applySensitivePrefixes(p))
 }
 
 // exemptPrefixEnv 是 path 段掩码的豁免配置：逗号分隔的路径前缀，
@@ -48,15 +57,20 @@ func exemptPathPrefixes() []string {
 	return out
 }
 
-// looksLikeTokenSegment 判断一个 path 段是否疑似凭据 token：
-// 长度 ≥16、仅由 token 字符集（字母/数字/-/_/./~）组成、且字母
-// 数字混合。纯单词 slug（含连字符但无数字）与短段（版本号、资源
-// 名）不掩——误掩只损失排障信息，故阈值从严；漏掩才是事故。
+// looksLikeTokenSegment 判断一个 path 段是否疑似凭据 token。
+// 字符集必须是 token 字符集（字母/数字/-/_/./~），在此前提下：
+//   - 字母+数字混合：长度 ≥8 即掩（C4-03：短 token 如 abc12345
+//     此前因 <16 漏掩；普通路径段极少在 8 字符内字母数字混合）；
+//   - 纯字母或纯数字、且无分隔符的整段：长度 ≥16 才掩（C4-03：
+//     纯字母/纯数字长 token 此前漏掩）。带分隔符的纯字母 slug
+//     （getting-started-guide 形态）与短段（版本号、资源名）不
+//     掩——误掩只损失排障信息，漏掩才是事故，区分点在分隔符与
+//     长度，不无条件全掩。
 func looksLikeTokenSegment(seg string) bool {
-	if len(seg) < 16 {
+	if len(seg) < 8 {
 		return false
 	}
-	hasLetter, hasDigit := false, false
+	hasLetter, hasDigit, hasSep := false, false, false
 	for _, r := range seg {
 		switch {
 		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z':
@@ -64,11 +78,19 @@ func looksLikeTokenSegment(seg string) bool {
 		case r >= '0' && r <= '9':
 			hasDigit = true
 		case r == '-' || r == '_' || r == '.' || r == '~':
+			hasSep = true
 		default:
 			return false
 		}
 	}
-	return hasLetter && hasDigit
+	if hasLetter && hasDigit {
+		return true
+	}
+	if hasSep {
+		return false
+	}
+	// 无分隔符的纯字母/纯数字整段：长串才疑似 token。
+	return len(seg) >= 16
 }
 
 // maskTokenSegments 把路径中疑似 token 的段逐段掩码。
@@ -98,7 +120,9 @@ func URL(raw string) string {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return "<invalid-url>"
 	}
-	p := Path(u.Path)
+	// 豁免判定必须在通用段掩码之前：先只走前缀规则，命中豁免
+	// 前缀的路径整段保留（Path() 的通用掩码不适用于本函数）。
+	p := applySensitivePrefixes(u.Path)
 	for _, prefix := range exemptPathPrefixes() {
 		if strings.HasPrefix(p, prefix) {
 			return u.Scheme + "://" + u.Host + p
