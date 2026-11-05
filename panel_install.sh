@@ -398,21 +398,38 @@ resolve_latest_release_tag() {
   return 1
 }
 
+# A1-03：显式版本格式校验——版本值随后被拼进下载 URL、镜像
+# tag 与 compose 插值，未校验的 env 值可携路径穿越、空白或
+# shell 片段进入全部拼接面。文法取各渠道的并集（数字开头、
+# 仅含数字/字母/点/连字符）：稳定版与 J-02 既录的显式预发布
+# 版本（VERSION=…-rc/-beta 是既定支持面，不受当前渠道限制）
+# 都放行，穿越/注入形态一律拒绝。API 解析出的 tag 由解析侧
+# 的渠道文法把关（release_tag_pattern），不在此列。
+panel_validate_explicit_version() {
+  [[ "$1" =~ ^[0-9][0-9A-Za-z.-]*$ ]]
+}
+
 resolve_version() {
+  local explicit="" explicit_source=""
   if [[ -n "${VERSION:-}" ]]; then
-    echo "$VERSION"
-    return 0
+    explicit="$VERSION"
+    explicit_source="VERSION"
+  elif [[ -n "${FLMX_VERSION:-}" ]]; then
+    explicit="$FLMX_VERSION"
+    explicit_source="FLMX_VERSION"
+  elif [[ -n "${FLUX_VERSION:-}" ]]; then
+    explicit="$FLUX_VERSION"
+    explicit_source="FLUX_VERSION"
+  elif [[ -n "${PINNED_VERSION:-}" ]]; then
+    explicit="$PINNED_VERSION"
+    explicit_source="PINNED_VERSION"
   fi
-  if [[ -n "${FLMX_VERSION:-}" ]]; then
-    echo "$FLMX_VERSION"
-    return 0
-  fi
-  if [[ -n "${FLUX_VERSION:-}" ]]; then
-    echo "$FLUX_VERSION"
-    return 0
-  fi
-  if [[ -n "${PINNED_VERSION:-}" ]]; then
-    echo "$PINNED_VERSION"
+  if [[ -n "$explicit_source" ]]; then
+    if ! panel_validate_explicit_version "$explicit"; then
+      echo "❌ 环境变量 $explicit_source 指定的版本号格式非法：$explicit（须数字开头、仅含数字/字母/点/连字符，如 1.9.9 或 1.9.9-rc.1）" >&2
+      return 1
+    fi
+    echo "$explicit"
     return 0
   fi
 
@@ -3665,6 +3682,14 @@ update_panel() {
       return 1
     }
     echo "🆕 最新版本：$LATEST_VERSION（当前版本：${current_version:-未知}）"
+  fi
+  # A1-03：显式目标版本在拼 URL/镜像 tag 前先过格式校验，与
+  # resolve_version 同律（update 的版本链是其之外的第二入口，
+  # 两处同守）。latest 解析值由解析侧渠道文法把关，不在此重
+  # 复校验。
+  if [[ -n "$target_source" ]] && ! panel_validate_explicit_version "$LATEST_VERSION"; then
+    echo "❌ 环境变量 $target_source 指定的版本号格式非法：$LATEST_VERSION（须数字开头、仅含数字/字母/点/连字符，如 1.9.9 或 1.9.9-rc.1），更新终止"
+    return 1
   fi
   cmp_result=$(panel_version_cmp "$LATEST_VERSION" "$current_version" || true)
   if [[ "$cmp_result" == "-1" ]]; then

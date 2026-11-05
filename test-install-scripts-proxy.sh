@@ -504,6 +504,64 @@ test_panel_uninstall_without_docker_cleans_full_residual_set() (
   assert_residuals_gone "$d"
 )
 
+# A1-03（audit-max）：显式版本 env 在拼 URL/镜像 tag 前须过格式
+# 校验——旧实现 resolve_version 与 update_panel 的版本链对
+# VERSION/FLMX_VERSION/FLUX_VERSION/PINNED_VERSION 零校验原样
+# 透传，路径穿越/空白/命令片段可进入全部拼接面。文法取并集
+# （数字开头、仅含数字/字母/点/连字符）：稳定版与显式预发布
+# （J-02 既定支持面）放行，穿越/注入形态全拒；update 链为第二
+# 入口、同律把守（全打桩下坏版本必须在拉镜像前终止）。
+test_panel_explicit_version_format_validated() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local out rc bad
+  for bad in '../../etc/passwd' '1.9.9;id' '1.9.9 rc1' ' 1.9.9' 'v1.9.9' '-1.0' '1.9.9$(id)'; do
+    VERSION="$bad" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+    rc="0"
+    out=$(resolve_version 2>&1) || rc="$?"
+    [[ "$rc" != "0" ]] || fail "A1-03: resolve_version must reject the malformed explicit version: $bad"
+    grep -q '格式非法' <<< "$out" || fail "A1-03: the rejection must name the format problem for: $bad"
+  done
+
+  VERSION="" FLMX_VERSION='1.9.9-rc.1' FLUX_VERSION="" PINNED_VERSION=""
+  out=$(resolve_version) || fail "A1-03: an explicit prerelease version must stay installable (J-02)"
+  assert_equals "1.9.9-rc.1" "$out" "A1-03: the explicit prerelease version must pass through verbatim"
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION='2.0.0-beta.3'
+  out=$(resolve_version) || fail "A1-03: an explicit beta PINNED_VERSION must stay installable"
+  assert_equals "2.0.0-beta.3" "$out" "A1-03: the explicit beta version must pass through verbatim"
+  VERSION='1.9.9' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  out=$(resolve_version) || fail "A1-03: a plain stable version must pass"
+  assert_equals "1.9.9" "$out" "A1-03: the stable version must pass through verbatim"
+
+  # update 链同守（与 L2-12 同款全打桩）
+  check_docker() { DOCKER_CMD="true"; }
+  resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
+  validate_panel_update_environment() { :; }
+  get_current_db_type() { echo "sqlite"; }
+  get_deployed_panel_version() { return 1; }
+  resolve_latest_release_tag() { echo "9.9.9"; }
+  download_panel_update_compose() { UPDATE_COMPOSE_CANDIDATE="candidate"; }
+  validate_panel_update_compose() { return 0; }
+  create_panel_update_backup() { UPDATE_BACKUP_DIR="backup"; return 0; }
+  pull_panel_update_images() { echo pulled >> "$PULL_MARKER"; return 0; }
+  panel_pin_missing_resource_keys() { return 0; }
+  activate_panel_update_files() { return 0; }
+  start_panel_after_update() { return 0; }
+  verify_panel_update_sqlite_volume() { return 0; }
+  check_ipv6_support() { return 1; }
+
+  PULL_MARKER=$(mktemp)
+  local log
+  log=$(mktemp)
+  VERSION='1.9.9;id' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  rc="0"
+  update_panel >"$log" 2>&1 || rc="$?"
+  [[ "$rc" != "0" ]] || fail "A1-03: update_panel must reject a malformed explicit version"
+  grep -q '格式非法' "$log" || fail "A1-03: the update rejection must name the format problem"
+  [[ ! -s "$PULL_MARKER" ]] || fail "A1-03: no image pull may happen with a malformed version"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -9921,5 +9979,6 @@ test_panel_download_routed_total_budget
 test_panel_installer_script_curl_uses_timeouts
 test_panel_caddyfile_without_site_keeps_shared_addresses
 test_panel_uninstall_without_docker_cleans_full_residual_set
+test_panel_explicit_version_format_validated
 
 echo "install script tests passed"
