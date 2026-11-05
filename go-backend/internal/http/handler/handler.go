@@ -342,6 +342,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/user/package", h.userPackage)
 	mux.HandleFunc("/api/v1/user/subscription/traffic", h.userSubscriptionTraffic)
 	mux.HandleFunc("/api/v1/user/updatePassword", h.updatePassword)
+	mux.HandleFunc("/api/v1/user/logout", h.userLogout)
 	mux.HandleFunc("/api/v1/node/list", h.nodeList)
 	mux.HandleFunc("/api/v1/node/create", h.nodeCreate)
 	mux.HandleFunc("/api/v1/node/update", h.nodeUpdate)
@@ -532,15 +533,16 @@ func isStoredDefaultPassword(roleID int, pwdHash string) bool {
 	return false
 }
 
-// tokenIssueTime 计算 token 签发时刻，保证 IatMs 严格大于
-// PasswordChangedAt（F-068）。中间件/WS 以 IatMs <= PasswordChangedAt
-// 判 token 失效（M-05 有意口径，不得放宽）：改密/吊销与重新登录落在
-// 同一毫秒时，按 time.Now() 签发的新 token 会出生即失效。签发侧把
-// 时刻单调推到 PasswordChangedAt+1，与 legacy rehash 的既有做法一致。
-func tokenIssueTime(passwordChangedAt int64) time.Time {
+// tokenIssueTime 计算 token 签发时刻，保证 IatMs 严格大于吊销水位
+// （F-068；水位 = max(PasswordChangedAt, TokensRevokedBefore)，
+// E1-02 起含登出吊销）。中间件/WS 以 IatMs <= 水位判 token 失效
+// （M-05 有意口径，不得放宽）：改密/吊销与重新登录落在同一毫秒时，
+// 按 time.Now() 签发的新 token 会出生即失效。签发侧把时刻单调推到
+// 水位+1，与 legacy rehash 的既有做法一致。
+func tokenIssueTime(watermark int64) time.Time {
 	now := time.Now()
-	if passwordChangedAt >= now.UnixMilli() {
-		return time.UnixMilli(passwordChangedAt + 1)
+	if watermark >= now.UnixMilli() {
+		return time.UnixMilli(watermark + 1)
 	}
 	return now
 }
@@ -690,7 +692,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("账号被停用"))
 		return
 	}
-	issueAt := tokenIssueTime(user.PasswordChangedAt)
+	issueAt := tokenIssueTime(max(user.PasswordChangedAt, user.TokensRevokedBefore))
 	if passwordWasLegacy {
 		// R4B01-002：rehash 是透明存储迁移、密码未变更，必须走
 		// MigrateUserPasswordHash——不得推进 password_changed_at
@@ -2169,6 +2171,34 @@ func (h *Handler) userPackage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.WriteJSON(w, response.OK(payload))
+}
+
+// userLogout 服务端登出（E1-02）：推进当前用户的登出吊销水位
+// （tokens_revoked_before = now），此前签发的全部 JWT 随即失效——
+// 含本请求所用 token、被复制走的 token，以及已建立的浏览器 WS
+// 会话（keepalive 复检同一水位时被关闭）。只推进吊销水位，不改
+// 密码与 PasswordChangedAt；重新登录签发的新 token 不受影响。
+// 前端 safeLogout 在清本地态前 fire-and-forget 调用本端点。
+func (h *Handler) userLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.Err(405, "请求方法不允许"))
+		return
+	}
+	claims, ok := r.Context().Value(middleware.ClaimsContextKey).(auth.Claims)
+	if !ok {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	userID, err := parseUserID(claims.Sub)
+	if err != nil {
+		response.WriteJSON(w, response.Err(401, "无效的token或token已过期"))
+		return
+	}
+	if err := h.repo.RevokeUserTokens(userID, time.Now().UnixMilli()); err != nil {
+		response.WriteJSON(w, response.ErrDefault("退出登录时发生错误"))
+		return
+	}
+	response.WriteJSON(w, response.OKEmpty())
 }
 
 func (h *Handler) updatePassword(w http.ResponseWriter, r *http.Request) {

@@ -1091,7 +1091,7 @@ func (s *Server) validateAdminSession(userID int64, claims auth.Claims) bool {
 		return true
 	}
 	state, err := s.getUserAuthState(userID)
-	if err != nil || state == nil || state.Status != 1 || state.RoleID != claims.RoleID || claims.IatMs <= state.PasswordChangedAt {
+	if err != nil || state == nil || state.Status != 1 || state.RoleID != claims.RoleID || state.TokenStale(claims.IatMs) {
 		return false
 	}
 	return true
@@ -1110,7 +1110,7 @@ func (s *Server) validateMonitorSession(userID int64, claims auth.Claims) bool {
 	}
 	if s.getUserAuthState != nil {
 		state, err := s.getUserAuthState(userID)
-		if err != nil || state == nil || state.Status != 1 || state.RoleID != claims.RoleID || claims.IatMs <= state.PasswordChangedAt {
+		if err != nil || state == nil || state.Status != 1 || state.RoleID != claims.RoleID || state.TokenStale(claims.IatMs) {
 			return false
 		}
 	}
