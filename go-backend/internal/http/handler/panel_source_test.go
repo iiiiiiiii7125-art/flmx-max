@@ -45,7 +45,7 @@ func TestBuildNodeInstallCommandPanelCandidateFirst(t *testing.T) {
 		t.Fatalf("候选顺序应为 面板源 > 直连 > 镜像, got %q", cmd)
 	}
 	// F-060 同源校验步与执行步保持原样。
-	if !strings.Contains(cmd, "sha256sum ./install.sh") || !strings.Contains(cmd, "VERSION=1.8.0 ./install.sh -a wss://panel.example.com:8443 -s secret-x") {
+	if !strings.Contains(cmd, "sha256sum ./install.sh") || !strings.Contains(cmd, "VERSION=1.8.0 ./install.sh -a 'wss://panel.example.com:8443' -s 'secret-x'") {
 		t.Fatalf("安装命令的校验/执行段不应被改动, got %q", cmd)
 	}
 

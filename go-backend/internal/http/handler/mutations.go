@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1489,6 +1490,30 @@ func panelMirrorPrefixFromAgentAddr(agentAddr string) string {
 // 路；全部异路都给不出合法校验值则降级单锚继续，并在命令输出
 // 中点名「跨线路锚复核已降级」。复核整轮共用 20s 总界、逐路
 // --max-time 取剩余量与 10s 的较小者（与四面总界口径一致）。
+// nodeSecretCharset 是节点 secret 的生成契约字符集（randomToken
+// (16) 的 32 位小写 hex）。B3-01：备份恢复等旁路曾把任意字符串
+// 写进 node.secret，而安装命令构造此前把 secret 无引号插值进
+// 以 root 执行的 shell 命令——含空格/引号/命令替换的存量 secret
+// 一键变命令注入。生成面双堵：nodeInstall 先以本字符集校验存
+// 量 secret（非法点名拒绝，见 validateNodeSecretForInstall），
+// 构造器再对全部插值走 shellQuoteForInstall 安全引用（纵深：
+// 即便某值绕过校验，引用形态也保证它只是一个参数）。
+var nodeSecretCharset = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func validateNodeSecretForInstall(secret string) error {
+	if !nodeSecretCharset.MatchString(secret) {
+		return fmt.Errorf("节点 secret 格式异常（应为 32 位小写十六进制），拒绝生成安装命令：该值可能经备份恢复等旁路写入，请先重置节点 secret")
+	}
+	return nil
+}
+
+// shellQuoteForInstall 把一个值安全地包成 POSIX sh 单引号参数：
+// 内嵌单引号以 POSIX 标准序列转义，值中的空格/$/反引号/分号
+// 在单引号内全部惰性化。
+func shellQuoteForInstall(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func buildNodeInstallCommand(version, agentAddr, secret string) string {
 	const verifyStep = ` && test "$(awk '{print $1}' ./install.sh.sha256)" = "$(sha256sum ./install.sh | awk '{print $1}')"`
 	routes := make([]string, 0, len(githubFetchProxyCandidates)+2)
@@ -1517,7 +1542,7 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 		`if curl -fsSL --connect-timeout 5 --max-time 30 "$u/install.sh.sha256" -o ./install.sh.sha256 && grep -Eq '^[0-9a-f]{64}' ./install.sh.sha256 && curl -fsSL --connect-timeout 5 --max-time 60 "$u/install.sh" -o ./install.sh; then ok=1; w="$p"; break; fi; done; test "$ok" = 1` +
 		verifyStep +
 		corroborateStep +
-		` && chmod +x ./install.sh && VERSION=` + version + ` ./install.sh -a ` + agentAddr + ` -s ` + secret
+		` && chmod +x ./install.sh && VERSION=` + version + ` ./install.sh -a ` + shellQuoteForInstall(agentAddr) + ` -s ` + shellQuoteForInstall(secret)
 }
 
 // ---------------------------------------------------------------------
@@ -1652,7 +1677,7 @@ func agentImageRef(version string) string {
 func agentConfigWriteStep(agentAddr, secret string) string {
 	dataDir := agentDataDir()
 	return `mkdir -p ` + dataDir +
-		` && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' '` + agentAddr + `' '` + secret + `' > ` + dataDir + `/config.json)` +
+		` && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' ` + shellQuoteForInstall(agentAddr) + ` ` + shellQuoteForInstall(secret) + ` > ` + dataDir + `/config.json)` +
 		` && chmod 600 ` + dataDir + `/config.json` +
 		` && { [ -f ` + dataDir + `/gost.json ] || (umask 077; printf '{}\n' > ` + dataDir + `/gost.json); }`
 }
@@ -1766,6 +1791,12 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	secret, err := h.repo.GetNodeSecret(req.ID)
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault("节点不存在"))
+		return
+	}
+	// B3-01：存量 secret 先过字符集门再进命令构造（非法点名拒
+	// 绝，不让旁路写进的任意字符串抵达 root shell）。
+	if err := validateNodeSecretForInstall(secret); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	panelAddr, err := h.repo.GetViteConfigValue("ip")
