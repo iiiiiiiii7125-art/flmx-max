@@ -216,7 +216,11 @@ func seedInitialAdmin(db *gorm.DB) {
 		PasswordChangedAt: 1748914865000,
 	}
 	if err := db.Create(&adminUser).Error; err != nil {
-		log.Printf("seed admin failed: %v", mapUniqueViolation(err, "username"))
+		// C1-02：与生成/落盘/哈希三失败支同标准——落库失败同样
+		// 意味着面板无管理员，必须置位可观测标志，不得只记一行
+		// 普通日志静默返回（否则状态面恒报无事可做）。
+		adminBootstrapRequired = true
+		log.Printf("ERROR: seed admin failed: %v. 面板缺少管理员账号，需人工处理。", mapUniqueViolation(err, "username"))
 		if initialFile != "" {
 			_ = os.Remove(initialFile)
 		}

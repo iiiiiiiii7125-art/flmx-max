@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go-backend/internal/security"
+	"go-backend/internal/store/model"
 )
 
 // R1-12-01：新播种的管理员初始口令不得再是公开字面量。本组用例
@@ -176,6 +177,39 @@ func TestInitialAdminClearedOnPasswordChange(t *testing.T) {
 	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
 		t.Fatalf("one-time file must be deleted after password change, stat err = %v", err)
+	}
+}
+
+// C1-02：落库（db.Create）失败支必须与生成/落盘/哈希失败支同
+// 标准置 adminBootstrapRequired——否则面板无管理员而状态面恒报
+// 无事可做。用 BEFORE INSERT 触发器确定性制造非唯一约束的落库
+// 失败（模拟只读/满盘类退化态）。
+func TestSeedCreateFailureSetsAdminBootstrapRequired(t *testing.T) {
+	resetInitialAdminState(t)
+	t.Setenv(InitialAdminPasswordEnv, "env-chosen-initial-1")
+	oldFlag := adminBootstrapRequired
+	t.Cleanup(func() { adminBootstrapRequired = oldFlag })
+	r, _ := openInitialAdminRepo(t)
+
+	if err := r.db.Exec(`DELETE FROM "user" WHERE id = 1`).Error; err != nil {
+		t.Fatalf("delete seeded admin: %v", err)
+	}
+	if err := r.db.Exec(`CREATE TRIGGER fail_admin_insert BEFORE INSERT ON "user" BEGIN SELECT RAISE(ABORT, 'forced create failure'); END`).Error; err != nil {
+		t.Fatalf("create sabotage trigger: %v", err)
+	}
+	adminBootstrapRequired = false
+	seedInitialAdmin(r.db)
+	if !IsAdminBootstrapRequired() {
+		t.Fatal("db.Create failure in seedInitialAdmin must set adminBootstrapRequired (panel has no admin; status face must say so)")
+	}
+	var count int64
+	if err := r.db.Exec(`DROP TRIGGER fail_admin_insert`).Error; err != nil {
+		t.Fatalf("drop trigger: %v", err)
+	}
+	if err := r.db.Model(&model.User{}).Where("id = ?", 1).Count(&count).Error; err != nil {
+		t.Fatalf("count admin rows: %v", err)
+	} else if count != 0 {
+		t.Fatalf("no admin row may exist after failed create, got %d", count)
 	}
 }
 
