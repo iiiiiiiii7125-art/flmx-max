@@ -802,6 +802,65 @@ test_env_var_reading_crlf_shape() (
   assert_equals "" "$(get_env_var EMPTY "$d/.env")" "A2-04/CRLF: an empty CRLF value must read as empty"
 )
 
+# C4-01 跟进（FIX-B7 已落码）：clientip 信任面改为「回环默认可
+# 信＋FLMX_TRUSTED_PROXIES 显式 CIDR 名单」后，新装生成的 .env
+# 必须带该条目（默认空）与字段级指引注释——标准拓扑下后端经前
+# 端容器转发，模板不给这个旋钮，运维无从知道要把前端容器子网
+# 填进去，限流键会一直坍缩到前端容器 IP 的共享桶。与 FX-D 装
+# 机用例同款全打桩驱动 install_panel，断言真实落盘的 .env。
+test_panel_install_env_carries_trusted_proxies_entry() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work volmount
+  work=$(mktemp -d)
+  volmount=$(mktemp -d)
+
+  ask_proxy_config() { :; }
+  ensure_compose_urls_initialized() {
+    DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
+    DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
+    return 0
+  }
+  check_docker() { DOCKER_CMD="docker compose"; return 0; }
+  get_config_params() {
+    FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
+    DB_TYPE="sqlite"; DATABASE_URL=""; POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
+    POSTGRES_PASSWORD="test-password"
+    JWT_SECRET="test-secret"
+  }
+  get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
+  download_verified() {
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    return 0
+  }
+  wait_for_backend_healthy() { return 0; }
+  check_ipv6_support() { return 1; }
+  configure_docker_ipv6() { return 0; }
+  docker_ipv6_usable() { return 1; }
+  get_public_ip() { echo "203.0.113.1"; }
+  docker() {
+    case " $* " in
+      *" --services "*) printf 'backend\nfrontend\n' ;;
+      *" volume inspect "*) printf '%s' "$FXD_TEST_VOLMOUNT" ;;
+      *" inspect "*) printf 'flmx-sqlite-data' ;;
+    esac
+    return 0
+  }
+
+  export FXD_TEST_VOLMOUNT="$volmount"
+  local rc="0"
+  ( cd "$work" && install_panel >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "C4-01 follow-up: install_panel should succeed in the fixture"
+  [[ -f "$work/.env" ]] || fail "C4-01 follow-up: install must generate .env"
+  grep -q '^FLMX_TRUSTED_PROXIES=$' "$work/.env" || fail "C4-01 follow-up: the generated .env must carry FLMX_TRUSTED_PROXIES, empty by default (loopback-only trust)"
+  grep -q '前端容器子网' "$work/.env" || fail "C4-01 follow-up: the guidance must name what to fill (the frontend container subnet CIDR)"
+  grep -q '172.30.0.0/16' "$work/.env" || fail "C4-01 follow-up: the guidance must give the shipped template subnet as the concrete example"
+  grep -q '共享' "$work/.env" || fail "C4-01 follow-up: the guidance must state the shared-bucket consequence of leaving it empty"
+  grep -q '0.0.0.0/0' "$work/.env" || fail "C4-01 follow-up: the guidance must warn against an over-broad trust range"
+  grep -q '自检' "$work/.env" || fail "C4-01 follow-up: the guidance must include a self-check method"
+)
+
 test_install_script_respects_disabled_proxy() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -10227,5 +10286,6 @@ test_panel_run_lock_and_unique_caddy_backup_names
 test_panel_invalid_instance_id_hard_fails_on_manage_paths
 test_panel_menu5_site_block_filters_secret_query_from_access_log
 test_env_var_reading_crlf_shape
+test_panel_install_env_carries_trusted_proxies_entry
 
 echo "install script tests passed"

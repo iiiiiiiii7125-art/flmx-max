@@ -3611,6 +3611,31 @@ JWT_SECRET=$JWT_SECRET
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
 FLMX_VERSION=$RESOLVED_VERSION
+# 可信代理名单 FLMX_TRUSTED_PROXIES（逗号分隔的 CIDR 名单）：
+# 后端据此决定是否采信反代传来的 X-Forwarded-For 以取得真实
+# 客户端 IP（登录限流、按 IP 的审计都以这个 IP 分桶）。默认
+# 空＝只信回环来源、不采信任何转发头。
+# 何时填：标准部署里后端经前端容器转发，不填时后端只看得到
+# 前端容器 IP——所有访客共用一个限流桶：一人狂刷登录会连累
+# 全体被限流，审计记录里的来源 IP 也全是同一个容器地址。凡
+# 经前端容器或其他反代访问后端的部署，都应把转发者所在子网
+# 填进来；后端直连暴露、无任何反代时才留空。
+# 填什么：转发者所在子网的 CIDR。新装模板的缺省子网为
+# 172.30.0.0/16（见随版 docker-compose-v4.yml / -v6.yml 的
+# networks 段），照缺省部署即填 172.30.0.0/16；改过子网的按
+# 实际填（docker network inspect 查该网络的 Subnet）。前面
+# 还隔着其他反代时，把那一跳的子网一并加进来、逗号分隔。
+# 填错的后果：范围过宽会让被信任子网内的任何机器都能伪造
+# X-Forwarded-For 冒充任意 IP——绝不要填 0.0.0.0/0（等于向
+# 任意来源开放伪造，限流与 IP 审计全部失效）；填了无关子网
+# 则等于没填（仍不采信、仍是共享桶），且不报错、只能靠自检
+# 发现。
+# 生效方式：改完重启后端（docker compose up -d backend，或
+# 用菜单「2. 更新面板」）。
+# 自检：换一个网络（如手机流量）登录一次面板，再看登录记
+# 录或后端日志中这条登录的客户端 IP：是新网络的公网 IP 即
+# 已生效；若仍是 172.30.x 的容器地址，就是子网没填对。
+FLMX_TRUSTED_PROXIES=
 
 DB_TYPE=$DB_TYPE
 DATABASE_URL=$DATABASE_URL
