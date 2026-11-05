@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -3686,6 +3687,13 @@ func randomPasswordHash() (string, error) {
 	return security.HashPassword(hex.EncodeToString(buf))
 }
 
+// importedNodeSecretCharset 是节点 secret 生成契约字符集的
+// repo 侧镜像（handler 的 nodeSecretCharset，B3-01）：
+// randomToken(16) 的 32 位小写 hex。生成面
+// validateNodeSecretForInstall 对集外存量 secret 点名拒绝生成
+// 安装命令；恢复面是该值此前的唯一无校验写入口，须同集收口。
+var importedNodeSecretCharset = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
 // normalizeImportedNodeRenewalCycle 镜像 handler 的
 // normalizeNodeRenewalCycle（repo 不可反向导入 handler，本地同
 // 集实现）：lower+trim 后 ∈ {month, quarter, year} 取归一值，
@@ -3794,6 +3802,23 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 #%d 的远端节点地址 %q 含空标签主机名，已清空，恢复后请在节点设置中重新填写", n.ID, n.RemoteURL)
 			remoteURL = ""
 		}
+		// B3-01（导入面）：节点 secret 字符集门，镜像生成面
+		// nodeSecretCharset（^[0-9a-f]{32}$，randomToken(16) 契
+		// 约）。安装命令构造把 secret 插值进以 root 执行的
+		// shell 命令，恢复面此前原样落库任意字符串——含空格/
+		// 引号/命令替换的 secret 即命令注入（生成面已以
+		// validateNodeSecretForInstall 点名拒收该值 + 构造器引
+		// 用纵深）。恢复面同口径拒收该值：不落库、清空 +
+		// warning 点名节点与处置（绝不回显 secret 原文），节点
+		// 行本身保留（整行跳过会连带误伤同批隧道/转发段，与本
+		// 函数 ServerIP/RemoteURL 清空先例同理）；恢复后管理员
+		// 重置 secret 即可，与生成面拒绝文案的指引一致。空
+		// secret 与清空后状态等价，不重复回执。
+		secret := n.Secret
+		if secret != "" && !importedNodeSecretCharset.MatchString(secret) {
+			rep.warnf("备份恢复：节点 #%d（%q）的 secret 不符合生成契约字符集（32 位小写十六进制），已清空未恢复，恢复后请在节点设置中重置 secret", n.ID, n.Name)
+			secret = ""
+		}
 		// B8-11：RenewalCycle/ForwardMode 归一镜像写面——此前原
 		// 样落库：周期集外值使到期提醒计算落默认分支，转发模式
 		// 集外值与写面产出不同字面（消费面按字面分支）。归一后
@@ -3814,7 +3839,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			Remark:       sql.NullString{String: n.Remark, Valid: n.Remark != ""},
 			ExpiryTime:   sql.NullInt64{Int64: n.ExpiryTime, Valid: n.ExpiryTime > 0},
 			RenewalCycle: sql.NullString{String: renewalCycle, Valid: renewalCycle != ""},
-			Secret:       n.Secret,
+			Secret:       secret,
 			ServerIP:     serverIP,
 			ServerIPV4:   sql.NullString{String: serverIPv4, Valid: serverIPv4 != ""},
 			ServerIPV6:   sql.NullString{String: serverIPv6, Valid: serverIPv6 != ""},

