@@ -533,7 +533,13 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
     span
       ? [...new Set([...span.matchAll(/typeSet\["(\w+)"\]/g)].map((m) => m[1]))].sort()
       : [];
-  const exportKeys = typeSetKeys(goFuncSpan(repositoryGo, "func (r *Repository) ExportPartial("));
+  // GATE-FIX G 提取面迁移登记：C1-05 把 ExportPartial 改为快照
+  // 事务包装、分发本体移入小写 exportPartial 后，本行原锚点只剩
+  // 包装体、提取为空集而 C4 恒红（产品集合经人工三方核对无漂
+  // 移）。提取面随分发本体迁到 exportPartial，口径不变（仍取
+  // 该函数 span 内的 typeSet["..."] 键集）；此后分发再迁须同步
+  // 迁锚，变异自证（改 exportPartial 一类名）门必红。
+  const exportKeys = typeSetKeys(goFuncSpan(repositoryGo, "func (r *Repository) exportPartial("));
   const importKeys = typeSetKeys(goFuncSpan(repositoryGo, "func (r *Repository) Import("));
   // 前端两面改 AST 提取（修复轮 7 普查处置，同 C3 注）：接口成
   // 员名与选项字面量值只认声明节点，注释/字符串拷贝不入集。
