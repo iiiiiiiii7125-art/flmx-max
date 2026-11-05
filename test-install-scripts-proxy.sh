@@ -842,6 +842,14 @@ test_env_var_reading_crlf_shape() (
 test_panel_install_env_carries_trusted_proxies_entry() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
+  # FIX-CI-2: 本例只验安装守卫/流程，不验选路与第二锚：下载单腿
+  # 以 download_verified 桩替换，但选路（真实探针排名）与异路锚
+  # 复核（真实 curl）仍是活的——宿主直连在实测排名落败、代理路
+  # 线胜出时，第二锚对夹具假资产（example.com）给不出合法校验
+  # 值，R2-01-01 fail-closed 会把安装判死，用例结果随宿主网络
+  # 漂移（CI 实测 F-049 单红）。按套件既有口径以 PROXY_ENABLED=
+  # false 钉死直连单路线，使结果与宿主网络无关。
+  PROXY_ENABLED="false"
 
   local work volmount
   work=$(mktemp -d)
@@ -3585,6 +3593,14 @@ test_install_flmx_agent_keeps_service_when_download_fails() (
 test_install_panel_refuses_existing_deployment() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
+  # FIX-CI-2: 本例只验安装守卫/流程，不验选路与第二锚：下载单腿
+  # 以 download_verified 桩替换，但选路（真实探针排名）与异路锚
+  # 复核（真实 curl）仍是活的——宿主直连在实测排名落败、代理路
+  # 线胜出时，第二锚对夹具假资产（example.com）给不出合法校验
+  # 值，R2-01-01 fail-closed 会把安装判死，用例结果随宿主网络
+  # 漂移（CI 实测 F-049 单红）。按套件既有口径以 PROXY_ENABLED=
+  # false 钉死直连单路线，使结果与宿主网络无关。
+  PROXY_ENABLED="false"
 
   local work
   work=$(mktemp -d)
@@ -3645,6 +3661,14 @@ test_install_panel_refuses_existing_deployment() (
 test_install_panel_waits_for_backend_health() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
+  # FIX-CI-2: 本例只验安装守卫/流程，不验选路与第二锚：下载单腿
+  # 以 download_verified 桩替换，但选路（真实探针排名）与异路锚
+  # 复核（真实 curl）仍是活的——宿主直连在实测排名落败、代理路
+  # 线胜出时，第二锚对夹具假资产（example.com）给不出合法校验
+  # 值，R2-01-01 fail-closed 会把安装判死，用例结果随宿主网络
+  # 漂移（CI 实测 F-049 单红）。按套件既有口径以 PROXY_ENABLED=
+  # false 钉死直连单路线，使结果与宿主网络无关。
+  PROXY_ENABLED="false"
 
   local work
   work=$(mktemp -d)
@@ -3716,6 +3740,14 @@ test_install_panel_waits_for_backend_health() (
 test_install_panel_prints_generated_initial_admin_password() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
+  # FIX-CI-2: 本例只验安装守卫/流程，不验选路与第二锚：下载单腿
+  # 以 download_verified 桩替换，但选路（真实探针排名）与异路锚
+  # 复核（真实 curl）仍是活的——宿主直连在实测排名落败、代理路
+  # 线胜出时，第二锚对夹具假资产（example.com）给不出合法校验
+  # 值，R2-01-01 fail-closed 会把安装判死，用例结果随宿主网络
+  # 漂移（CI 实测 F-049 单红）。按套件既有口径以 PROXY_ENABLED=
+  # false 钉死直连单路线，使结果与宿主网络无关。
+  PROXY_ENABLED="false"
 
   local work volmount
   work=$(mktemp -d)
@@ -3815,6 +3847,14 @@ test_install_panel_refusal_names_force_reinstall_usage() (
 test_install_panel_up_failure_names_force_reinstall() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
+  # FIX-CI-2: 本例只验安装守卫/流程，不验选路与第二锚：下载单腿
+  # 以 download_verified 桩替换，但选路（真实探针排名）与异路锚
+  # 复核（真实 curl）仍是活的——宿主直连在实测排名落败、代理路
+  # 线胜出时，第二锚对夹具假资产（example.com）给不出合法校验
+  # 值，R2-01-01 fail-closed 会把安装判死，用例结果随宿主网络
+  # 漂移（CI 实测 F-049 单红）。按套件既有口径以 PROXY_ENABLED=
+  # false 钉死直连单路线，使结果与宿主网络无关。
+  PROXY_ENABLED="false"
 
   local work rc="0"
   work=$(mktemp -d)
@@ -3865,6 +3905,14 @@ test_install_panel_up_failure_names_force_reinstall() (
 test_install_panel_postgres_health_failure_has_guidance() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
+  # FIX-CI-2: 本例只验安装守卫/流程，不验选路与第二锚：下载单腿
+  # 以 download_verified 桩替换，但选路（真实探针排名）与异路锚
+  # 复核（真实 curl）仍是活的——宿主直连在实测排名落败、代理路
+  # 线胜出时，第二锚对夹具假资产（example.com）给不出合法校验
+  # 值，R2-01-01 fail-closed 会把安装判死，用例结果随宿主网络
+  # 漂移（CI 实测 F-049 单红）。按套件既有口径以 PROXY_ENABLED=
+  # false 钉死直连单路线，使结果与宿主网络无关。
+  PROXY_ENABLED="false"
 
   local work rc="0"
   work=$(mktemp -d)
@@ -7192,6 +7240,14 @@ test_panel_migrate_guard_precedes_download() (
 test_panel_install_guards_single_file_and_backups() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
+  # FIX-CI-2: 本例只验安装守卫/流程，不验选路与第二锚：下载单腿
+  # 以 download_verified 桩替换，但选路（真实探针排名）与异路锚
+  # 复核（真实 curl）仍是活的——宿主直连在实测排名落败、代理路
+  # 线胜出时，第二锚对夹具假资产（example.com）给不出合法校验
+  # 值，R2-01-01 fail-closed 会把安装判死，用例结果随宿主网络
+  # 漂移（CI 实测 F-049 单红）。按套件既有口径以 PROXY_ENABLED=
+  # false 钉死直连单路线，使结果与宿主网络无关。
+  PROXY_ENABLED="false"
 
   ensure_compose_urls_initialized() {
     DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
@@ -10112,6 +10168,14 @@ test_migrate_legacy_agent_snapshot_failure_aborts() (
 test_install_panel_force_reinstall_data_gate() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
+  # FIX-CI-2: 本例只验安装守卫/流程，不验选路与第二锚：下载单腿
+  # 以 download_verified 桩替换，但选路（真实探针排名）与异路锚
+  # 复核（真实 curl）仍是活的——宿主直连在实测排名落败、代理路
+  # 线胜出时，第二锚对夹具假资产（example.com）给不出合法校验
+  # 值，R2-01-01 fail-closed 会把安装判死，用例结果随宿主网络
+  # 漂移（CI 实测 F-049 单红）。按套件既有口径以 PROXY_ENABLED=
+  # false 钉死直连单路线，使结果与宿主网络无关。
+  PROXY_ENABLED="false"
 
   gate_docker() {
     case "$1" in
@@ -10214,6 +10278,10 @@ test_install_panel_force_reinstall_data_gate() (
     sed '/^# 执行主函数$/,$d' "$ROOT_DIR/panel_install.sh"
     cat <<'STUBEOF'
 FIXTURE_VOLROOT="$E3_VOLROOT"
+# FIX-CI-2: 子进程 harness 不继承父用例的 shell 变量，选路钉死须
+# 在本块内自带（理由同父用例 FIX-CI-2 注：防实测选路漂移把第二
+# 锚 fail-closed 误带进数据门用例）。
+PROXY_ENABLED="false"
 ensure_compose_urls_initialized() {
   DOCKER_COMPOSEV4_URL="https://example.com/docker-compose-v4.yml"
   DOCKER_COMPOSEV6_URL="https://example.com/docker-compose-v6.yml"
