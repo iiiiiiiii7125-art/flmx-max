@@ -12,7 +12,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261105.01"
+SCRIPT_VERSION="20261106.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -2793,10 +2793,23 @@ validate_panel_compose_content() {
   local file="$1"
   local version="$2"
   local services
-  if ! FLMX_VERSION="$version" FLUX_VERSION="$version" run_panel_compose -f "$file" config -q; then
+  # HF-200-01：随版模板中 BACKEND_PORT/FRONTEND_PORT/JWT_SECRET 三键无
+  # 默认值，而本校验发生在 .env 落盘之前（新装路径）——仅传版本号会让
+  # compose 把 "${BACKEND_PORT}:6365" 等端口映射展开为空主机端口，把
+  # 合法模板误判为 ports 类型非法、新装在校验步终止（2.0.0 实机报障）。
+  # 取值优先级：当前 shell 已收集值（新装问答）＞ 部署目录 .env 现值
+  # （更新/迁移路径）＞ 安装缺省端口；JWT 缺省用占位值，仅供结构校验。
+  local backend_port="${BACKEND_PORT:-}" frontend_port="${FRONTEND_PORT:-}" jwt_secret="${JWT_SECRET:-}"
+  if [[ -z "$backend_port" ]]; then backend_port=$(get_env_var "BACKEND_PORT" || true); fi
+  if [[ -z "$frontend_port" ]]; then frontend_port=$(get_env_var "FRONTEND_PORT" || true); fi
+  if [[ -z "$jwt_secret" ]]; then jwt_secret=$(get_env_var "JWT_SECRET" || true); fi
+  backend_port="${backend_port:-6365}"
+  frontend_port="${frontend_port:-6366}"
+  jwt_secret="${jwt_secret:-flmx-compose-validate-placeholder}"
+  if ! FLMX_VERSION="$version" FLUX_VERSION="$version" BACKEND_PORT="$backend_port" FRONTEND_PORT="$frontend_port" JWT_SECRET="$jwt_secret" run_panel_compose -f "$file" config -q; then
     return 1
   fi
-  if ! services=$(FLMX_VERSION="$version" FLUX_VERSION="$version" run_panel_compose -f "$file" config --services 2>/dev/null); then
+  if ! services=$(FLMX_VERSION="$version" FLUX_VERSION="$version" BACKEND_PORT="$backend_port" FRONTEND_PORT="$frontend_port" JWT_SECRET="$jwt_secret" run_panel_compose -f "$file" config --services 2>/dev/null); then
     return 1
   fi
   # INT-01: 服务名比对走 herestring，不用管道 grep——pipefail 下

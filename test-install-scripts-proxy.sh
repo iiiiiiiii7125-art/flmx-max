@@ -4963,6 +4963,15 @@ r8_011_stub_compose() {
   done
   case "$mode" in
     quiet)
+      # HF-200-01：模拟真实 compose 对无默认值变量的插值——文件中引用
+      # ${BACKEND_PORT}/${FRONTEND_PORT} 且环境值为空时 config 必失败
+      #（真实 compose 会把端口映射展开为空主机端口并判类型非法）。
+      if grep -q '\${BACKEND_PORT}' "$file" && [[ -z "${BACKEND_PORT:-}" ]]; then
+        return 1
+      fi
+      if grep -q '\${FRONTEND_PORT}' "$file" && [[ -z "${FRONTEND_PORT:-}" ]]; then
+        return 1
+      fi
       ! grep -q 'INVALID-YAML' "$file" && grep -q '^services:' "$file"
       ;;
     services)
@@ -4976,6 +4985,13 @@ test_validate_panel_compose_content_accepts_shipped_templates() (
   load_script_without_main "$ROOT_DIR/panel_install.sh"
 
   run_panel_compose() { r8_011_stub_compose "$@"; }
+
+  # HF-200-01：模拟新装现场——端口/密钥变量未导出、目录内尚无 .env，
+  # 随版模板仍必须通过校验（2.0.0 曾在此形状下误判 ports 类型非法）。
+  unset BACKEND_PORT FRONTEND_PORT JWT_SECRET || true
+  local work
+  work=$(mktemp -d)
+  cd "$work"
 
   local tpl
   for tpl in "$ROOT_DIR/docker-compose-v4.yml" "$ROOT_DIR/docker-compose-v6.yml"; do
