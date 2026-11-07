@@ -149,8 +149,11 @@ ensure_alpine_runtime_dependencies() {
 # panel_install.sh 同表同序，改一处须同步其余）：9 个代理前缀 +
 # 直连（""）。路线选择口径（与面板侧一致）：
 #   0) 面板源分发：先单探由 -a 面板地址派生的面板线路（见
-#      derive_panel_prefix），通 → 独占使用，不测其余候选；下载
-#      全败时经 extend_download_routes 补测代理排名 + 直连兜底；
+#      derive_panel_prefix）——判活后须再过两道门才可独占：重定
+#      向延迟 ≤800ms（与直连同门）＋ 256KB 短测速 ≥256KB/s（吞吐
+#      门，见 probe_panel_throughput）；任一不过 → 不独占，把面板
+#      源按实测延迟并入代理排名（与慢直连同法），下载全败时经
+#      extend_download_routes 补测代理排名 + 直连兜底；
 #   1) 先单独探测直连（真实目标、~3-5s）：通且延迟 ≤800ms → 只用
 #      直连，不测代理（与 Go 侧 routes.go 的短路门同口径）；通但
 #      慢 → 按实测延迟并入第 2) 步的排名，不丢弃也不短路独占；
@@ -244,13 +247,28 @@ route_url() {
 }
 
 # probe_route <前缀>：探测单条路线，活则回显耗时秒数、死则失败。
+# 渠道 tag 文法的唯一出处（J-02）：稳定渠道只接受纯数字点分
+# tag；FLMX_RELEASE_CHANNEL=dev|beta 时接受任意数字开头 tag。
+# resolve_latest_release_tag 与 probe_route 共用——FIX2/D-05 前探
+# 测侧写死宽文法，稳定渠道下会把重定向落到预发布 tag 的路线判
+# 活，与解析器随后按渠道文法拒绝该 tag 的口径漂移（A1-04 已在
+# panel_install.sh 以 release_tag_pattern 收敛为同一形态）；对齐
+# 后两处同松同紧、永不各自演化。
+release_tag_pattern() {
+  case "${FLMX_RELEASE_CHANNEL:-stable}" in
+    dev|beta) printf '%s' '^[0-9][0-9A-Za-z.\-]*$' ;;
+    *) printf '%s' '^[0-9]+(\.[0-9]+)+$' ;;
+  esac
+}
+
 probe_route() {
   local prefix="$1"
-  local out effective tag
+  local out effective tag tag_pattern
   out=$(curl -fsSL -o /dev/null --connect-timeout 3 --max-time 5 -w '%{time_total} %{url_effective}' "$(route_url "$prefix" "https://github.com/${REPO}/releases/latest")" 2>/dev/null) || return 1
   effective="${out#* }"
   tag="${effective##*/}"
-  [[ "$tag" =~ ^[0-9][0-9A-Za-z.\-]*$ ]] || return 1
+  tag_pattern=$(release_tag_pattern)
+  [[ "$tag" =~ $tag_pattern ]] || return 1
   printf '%s' "${out%% *}"
 }
 
@@ -290,32 +308,83 @@ rank_proxy_routes() {
 }
 
 # direct_latency_within_gate <秒>：与 Go 侧 routes.go 同口径——直连
-# 探测延迟 ≤800ms 才配短路独占；shell 浮点比较走 awk。
+# 探测延迟 ≤800ms 才配短路独占；shell 浮点比较走 awk。面板源独占
+# 的延迟门与本门同值同口径（FIX2/D-03：旧实现面板分支丢弃
+# probe_route 耗时、延迟再高也独占）。
 direct_latency_within_gate() {
   awk -v t="$1" 'BEGIN { exit !(t + 0 <= 0.8) }'
 }
 
-# routes_insert_slow_direct <直连实测延迟秒>：须在 rank_proxy_routes
-# 之后调用。把慢直连按实测延迟插入已排名路线表（与 Go 侧口径一
-# 致：慢直连不丢弃、按延迟参与排序；未判活代理无延迟值，直连排在
-# 已判活段末尾、未判活段之前）。结果写入 DOWNLOAD_ROUTES，
-# ROUTES_STAGE 置 2。
-routes_insert_slow_direct() {
-  local direct_latency="$1"
+# probe_panel_throughput <面板源前缀>：面板源独占前的吞吐短测速
+# （FIX2/D-01）。经面板源对 probe_route 刚判活的 releases/latest
+# 重定向 URL 拉前 256KB（Range bytes=0-262143），--max-time 10
+# 硬顶、计时求实际字节速率（KB/s）；达门槛 256KB/s 返回 0，
+# 否则（测速失败 / 样本不足 / 速率不达标）返回 1，调用方不独
+# 占、并入排名——fail-safe 方向：测不出来就不许独占。样本取
+# latest URL 而非已决议本体：路线表构建恒发生在版本决议之前
+# （resolve_version 内部即先建表后决议），门不能依赖决议结果；
+# latest 样本经一次重定向落到与本体同一 tag 的资产前段，与
+# 面板镜像端点的实际转发路径一致。
+# 门槛依据：9.2MB gost 本体在整轮 240s 总预算内下完须 ≥约
+# 39KB/s 均速；256KB/s 留约 6 倍余量覆盖慢启动与波动，且 256KB
+# 样本在门槛速率下约 1s 拉满；10s 硬顶内拉不满 256KB 即速率
+# <25.6KB/s、连可完工线都不达，直接不合格。
+# 端点忽略 Range 回 200 全体时以实际落盘字节为准（>256KB 时
+# curl 达样本量即止）；回 416（本体小于样本量）按失败处理——
+# release 本体恒为 MB 级，416 视为异常、不独占。
+probe_panel_throughput() {
+  local prefix="$1"
+  local sample_file metrics code size_download time_total rate
+  sample_file=$(mktemp) || return 1
+  metrics=$(curl -fsL -o "$sample_file" -w '%{http_code} %{size_download} %{time_total}' \
+    --connect-timeout 5 --max-time 10 \
+    -H 'Range: bytes=0-262143' \
+    "$(route_url "$prefix" "https://github.com/${REPO}/releases/latest")" 2>/dev/null) || { rm -f "$sample_file"; return 1; }
+  rm -f "$sample_file"
+  code="${metrics%% *}"
+  metrics="${metrics#* }"
+  size_download="${metrics%% *}"
+  time_total="${metrics##* }"
+  [[ "$code" == "200" || "$code" == "206" ]] || return 1
+  rate=$(awk -v s="$size_download" -v t="$time_total" 'BEGIN { if (t + 0 <= 0) exit 1; printf "%.1f", s / t / 1024 }') || return 1
+  awk -v r="$rate" 'BEGIN { exit !(r + 0 >= 256) }'
+}
+
+# routes_insert_ranked_member <成员前缀> <成员实测延迟秒>：须在
+# rank_proxy_routes 之后调用。把一个「已判活但不配独占」的成员
+# （慢直连 = 前缀 ""，或吞吐/延迟门未过的面板源 = 派生前缀）按实
+# 测延迟插入已排名路线表（与 Go 侧口径一致：慢者不丢弃、按延迟
+# 参与排序；未判活代理无延迟值，成员排在已判活段末尾、未判活段
+# 之前）。成员不是直连时，直连 "" 追加为末位兜底——并表后的表
+# 已是排名全集、ROUTES_STAGE=2 使 extend_download_routes 不再生
+# 效（其阶段 3 分支只对独占表追加「排名＋直连」），不预置直连则
+# 整轮全败时无直连可试、丢失旧独占形态的兜底语义。结果写入
+# DOWNLOAD_ROUTES，ROUTES_STAGE 置 2。
+routes_insert_ranked_member() {
+  local member="$1" member_latency="$2"
   DOWNLOAD_ROUTES=()
   local i lat inserted=0
   for i in "${!PROXY_RANKED[@]}"; do
     lat="${PROXY_RANKED_LATENCY[$i]:-}"
-    if [[ "$inserted" == "0" ]] && { [[ -z "$lat" ]] || awk -v a="$direct_latency" -v b="$lat" 'BEGIN { exit !(a + 0 <= b + 0) }'; }; then
-      DOWNLOAD_ROUTES+=("")
+    if [[ "$inserted" == "0" ]] && { [[ -z "$lat" ]] || awk -v a="$member_latency" -v b="$lat" 'BEGIN { exit !(a + 0 <= b + 0) }'; }; then
+      DOWNLOAD_ROUTES+=("$member")
       inserted=1
     fi
     DOWNLOAD_ROUTES+=("${PROXY_RANKED[$i]}")
   done
   if [[ "$inserted" == "0" ]]; then
+    DOWNLOAD_ROUTES+=("$member")
+  fi
+  if [[ -n "$member" ]]; then
     DOWNLOAD_ROUTES+=("")
   fi
   ROUTES_STAGE=2
+}
+
+# routes_insert_slow_direct <直连实测延迟秒>：慢直连是
+# routes_insert_ranked_member 的成员="" 特例（既有调用面不变）。
+routes_insert_slow_direct() {
+  routes_insert_ranked_member "" "$1"
 }
 
 DOWNLOAD_ROUTES=()
@@ -339,18 +408,36 @@ ensure_download_routes() {
     *)
       # 面板源分发一期②：先单探面板线路（由 -a 的面板地址派生，
       # 见 derive_panel_prefix）。新节点此刻唯一已证可达的目的地
-      # 就是面板本身，通则独占、不再测速其余候选；不通或派生不
-      # 出，则原样走下方直连短路 → 代理排名的既有流程。PROXY_URL
-      # 显式覆盖与 PROXY_ENABLED=false 在 route_mode 层已先行处
-      # 理，不受本步影响（运维逃生口语义不变）。
+      # 就是面板本身。FIX2 收紧独占条件（D-01/D-03）：判活之后
+      # 须再过两道门——① 延迟门：重定向往返延迟 ≤800ms，与直连
+      # 独占同门（旧实现 >/dev/null 丢弃耗时、4.9s 也独占）；
+      # ② 吞吐门：probe_panel_throughput 的 256KB 短测速
+      # ≥256KB/s（重定向快、本体 10KB/s 的线路旧实现照样独占、
+      # 240s 预算耗尽才改道，D-01/D-02 实证）。两门全过才独占
+      # （阶段 3）；任一不过 → 面板源按实测延迟并入代理排名
+      # （routes_insert_ranked_member，与慢直连同法、不另造排
+      # 名），并设 ROUTES_STAGE=2——extend 的阶段 3 分支只对独
+      # 占表生效，并表后的表已含排名全集，整轮失败自然收口。
+      # 不通或派生不出，则原样走下方直连短路 → 代理排名的既有
+      # 流程。PROXY_URL 显式覆盖与 PROXY_ENABLED=false 在
+      # route_mode 层已先行处理，不受本步影响（运维逃生口语义
+      # 不变）。
       local panel_prefix=""
       panel_prefix=$(derive_panel_prefix 2>/dev/null || true)
-      local direct_latency=""
-      if [[ -n "$panel_prefix" ]] && probe_route "$panel_prefix" >/dev/null; then
-        DOWNLOAD_ROUTES=("$panel_prefix")
-        ROUTES_STAGE=3
-        echo "🌐 GitHub 下载路线: 面板源（经本机面板镜像）" >&2
-      elif direct_latency=$(probe_route ""); then
+      local direct_latency="" panel_latency=""
+      if [[ -n "$panel_prefix" ]] && panel_latency=$(probe_route "$panel_prefix"); then
+        if direct_latency_within_gate "$panel_latency" && probe_panel_throughput "$panel_prefix"; then
+          DOWNLOAD_ROUTES=("$panel_prefix")
+          ROUTES_STAGE=3
+          echo "🌐 GitHub 下载路线: 面板源（经本机面板镜像，延迟 ${panel_latency}s、短测速 ≥256KB/s）" >&2
+          return 0
+        fi
+        rank_proxy_routes
+        routes_insert_ranked_member "$panel_prefix" "$panel_latency"
+        echo "🌐 面板源延迟或吞吐未过独占门（延迟 ${panel_latency}s），已按实测延迟并入测速排名（首选: ${DOWNLOAD_ROUTES[0]:-直连}）" >&2
+        return 0
+      fi
+      if direct_latency=$(probe_route ""); then
         if direct_latency_within_gate "$direct_latency"; then
           DOWNLOAD_ROUTES=("")
           ROUTES_STAGE=1
@@ -806,6 +893,11 @@ verify_downloaded_binary() {
 # ① 整轮总预算（默认 240s，与 Go 侧总预算同值，FLMX_DOWNLOAD_BUDGET_SECONDS
 # 可调）：逐路线按剩余时间收紧 --max-time，耗尽即整轮失败；旧实现
 # 只有 1KB/s 地板，一条 2KB/s 的线路下 10MB 需约 80 分钟且永不切线。
+# FIX2/D-02：低速看门狗与 Go 侧对齐为 --speed-limit 40960
+# --speed-time 15（40KB/s 连续 15s）——40KB/s 是 9.2MB÷240s 的
+# 可完工线取整、15s 窗与 Go 侧 TrickleGrace 同值；10–16KB/s 的
+# 塌方线路在首个 15s 窗内判死切线，不再白耗满 240s。总预算维持
+# 240s 不动。
 # ② 跨线路续传：本体先落 <dest>.part，后续路线以 curl -C - 接着已
 # 落盘字节继续（Range），不再每条路线 rm 后从零重下；校验通过才
 # mv 为正式文件。校验失败说明字节本身不对/不完整，丢弃 .part 防
@@ -829,7 +921,7 @@ download_agent_binary() {
         rm -f "$part"
         return 1
       fi
-      if curl -fL -C - --connect-timeout 10 --max-time "$remain" --speed-limit 1024 --speed-time 30 "$url" -o "$part" && [[ -s "$part" ]]; then
+      if curl -fL -C - --connect-timeout 10 --max-time "$remain" --speed-limit 40960 --speed-time 15 "$url" -o "$part" && [[ -s "$part" ]]; then
         if verify_downloaded_binary "$part" "$url" "$prefix"; then
           mv -f "$part" "$dest"
           echo "✅ 下载完成（路线: ${prefix:-直连}）"
