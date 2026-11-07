@@ -249,9 +249,9 @@ func NewWebSocketReporter(serverURL string, secret string) *WebSocketReporter {
 
 // Start 启动WebSocket报告器
 func (w *WebSocketReporter) Start() {
-	// 上游 3.3.43 自动调优：启动时先恢复未完成扫描前的队列与整形
-	// （tuning-transaction.json），再重下发容器内已提交的整形。
-	recoverAutomaticTuningOnStart()
+	// 第二代调优靠 sysctl.d 配置与 RPS systemd unit 在开机时自
+	// 行重放，agent 启动不需要做调优恢复（第一代的未完成扫描事
+	// 务恢复与容器整形重下发已随自动调优一并退役）。
 	w.startTCPPingWorkers()
 	w.workers.Add(2)
 	go func() {
@@ -1458,8 +1458,12 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Data = tcpPingResult
 		// needSaveConfig = false (默认值)
 
-	// 节点调优：读取 / 应用 sysctl 网络参数
-	case "TuneStatus", "TuneApply", "TuneProbe", "TuneStart", "TuneCancel":
+	// 节点调优（第二代模型）：TuneStatus 读四面状态，Tune 带动作
+	// 应用/回退，TuneProbe 是保留的线路探针（只读）。第一代命令
+	// （TuneApply / TuneStart / TuneCancel）已退役，仍在此应答——
+	// 由 handleTuneCommandContext 回明确的不支持错误，不落到未知
+	// 命令兜底。
+	case "Tune", "TuneStatus", "TuneProbe", "TuneApply", "TuneStart", "TuneCancel":
 		response.Type = cmd.Type + "Response"
 		if cmd.Type == "TuneProbe" {
 			// panelRttMs 的取数口径（契约对齐）：前端契约不带面板
