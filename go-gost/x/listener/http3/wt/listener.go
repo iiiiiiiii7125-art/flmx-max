@@ -11,6 +11,7 @@ import (
 	md "github.com/go-gost/core/metadata"
 	admission "github.com/go-gost/x/admission/wrapper"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/util/eventlog"
 	wt_util "github.com/go-gost/x/internal/util/wt"
 	traffic_limiter "github.com/go-gost/x/limiter/traffic"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
@@ -34,6 +35,12 @@ type wtListener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the per-session upgrade-failure and
+	// queue-full discard logging (P1-03 family).
+	events      *eventlog.Aggregator
+	queueFull   *eventlog.Counter
+	upgradeErrs *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -41,9 +48,15 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &wtListener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		queueFull: events.Counter(
+			"wt listener: %d stream(s) discarded (connection queue is full), %d total"),
+		upgradeErrs: events.DetailCounter(
+			"wt listener: %d upgrade failure(s), last: %s, %d total"),
 	}
 }
 
@@ -149,6 +162,7 @@ func (l *wtListener) Addr() net.Addr {
 }
 
 func (l *wtListener) Close() (err error) {
+	l.events.Flush()
 	return l.srv.Close()
 }
 
@@ -164,7 +178,7 @@ func (l *wtListener) upgrade(w http.ResponseWriter, r *http.Request) {
 
 	s, err := l.srv.Upgrade(w, r)
 	if err != nil {
-		l.logger.Error(err)
+		l.upgradeErrs.NoteErr(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -193,7 +207,7 @@ func (l *wtListener) mux(s *wt.Session, log logger.Logger) (err error) {
 		case l.cqueue <- wt_util.Conn(s, stream):
 		default:
 			stream.Close()
-			l.logger.Warn("connection queue is full, stream discarded")
+			l.queueFull.Note()
 		}
 	}
 }

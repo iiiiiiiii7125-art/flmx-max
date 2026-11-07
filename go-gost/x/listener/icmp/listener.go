@@ -9,6 +9,7 @@ import (
 	"github.com/go-gost/core/logger"
 	md "github.com/go-gost/core/metadata"
 	admission "github.com/go-gost/x/admission/wrapper"
+	"github.com/go-gost/x/internal/util/eventlog"
 	icmp_pkg "github.com/go-gost/x/internal/util/icmp"
 	traffic_limiter "github.com/go-gost/x/limiter/traffic"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
@@ -32,6 +33,24 @@ type icmpListener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the per-session queue-full discard
+	// logging (P1-03 family).
+	events    *eventlog.Aggregator
+	queueFull *eventlog.Counter
+}
+
+// newICMPListener builds the listener for both constructors.
+func newICMPListener(ip6 bool, options listener.Options) *icmpListener {
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
+	return &icmpListener{
+		ip6:     ip6,
+		logger:  options.Logger,
+		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"icmp listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
+	}
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -39,10 +58,7 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return &icmpListener{
-		logger:  options.Logger,
-		options: options,
-	}
+	return newICMPListener(false, options)
 }
 
 func NewListener6(opts ...listener.Option) listener.Listener {
@@ -50,11 +66,7 @@ func NewListener6(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return &icmpListener{
-		ip6:     true,
-		logger:  options.Logger,
-		options: options,
-	}
+	return newICMPListener(true, options)
 }
 
 func (l *icmpListener) Init(md md.Metadata) (err error) {
@@ -138,6 +150,7 @@ func (l *icmpListener) Accept() (conn net.Conn, err error) {
 }
 
 func (l *icmpListener) Close() error {
+	l.events.Flush()
 	return l.ln.Close()
 }
 
@@ -181,7 +194,7 @@ func (l *icmpListener) mux(ctx context.Context, session *quic.Conn) {
 			stream.Close()
 		default:
 			stream.Close()
-			l.logger.Warnf("connection queue is full, client %s discarded", session.RemoteAddr())
+			l.queueFull.NoteDetail(session.RemoteAddr().String())
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/go-gost/core/logger"
 	md "github.com/go-gost/core/metadata"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/util/eventlog"
 	mdx "github.com/go-gost/x/metadata"
 	"github.com/go-gost/x/registry"
 	"github.com/quic-go/quic-go"
@@ -28,6 +29,11 @@ type http3Listener struct {
 	md      metadata
 	options listener.Options
 	mu      sync.Mutex
+
+	// events aggregates the per-request queue-full discard
+	// logging (P1-03 family).
+	events    *eventlog.Aggregator
+	queueFull *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -35,9 +41,13 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &http3Listener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"http3 listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
 	}
 }
 
@@ -110,6 +120,7 @@ func (l *http3Listener) Addr() net.Addr {
 }
 
 func (l *http3Listener) Close() (err error) {
+	l.events.Flush()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -137,7 +148,7 @@ func (l *http3Listener) handleFunc(w http.ResponseWriter, r *http.Request) {
 	select {
 	case l.cqueue <- conn:
 	default:
-		l.logger.Warnf("connection queue is full, client %s discarded", r.RemoteAddr)
+		l.queueFull.NoteDetail(r.RemoteAddr)
 		return
 	}
 

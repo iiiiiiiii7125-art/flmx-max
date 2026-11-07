@@ -17,6 +17,7 @@ import (
 	md "github.com/go-gost/core/metadata"
 	admission "github.com/go-gost/x/admission/wrapper"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/util/eventlog"
 	traffic_limiter "github.com/go-gost/x/limiter/traffic"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
 	metrics "github.com/go-gost/x/metrics/wrapper"
@@ -37,6 +38,12 @@ type dnsListener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the per-request error and queue-full
+	// discard logging (P1-03 family): both fire at query rate.
+	events    *eventlog.Aggregator
+	queueFull *eventlog.Counter
+	reqErrs   *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -44,9 +51,15 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &dnsListener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"dns listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
+		reqErrs: events.DetailCounter(
+			"dns listener: %d request error(s), last: %s, %d total"),
 	}
 }
 
@@ -254,6 +267,7 @@ func (l *dnsListener) Accept() (conn net.Conn, err error) {
 }
 
 func (l *dnsListener) Close() error {
+	l.events.Flush()
 	return l.server.Shutdown()
 }
 
@@ -264,11 +278,11 @@ func (l *dnsListener) Addr() net.Addr {
 func (l *dnsListener) ServeDNS(w dns.ResponseWriter, m *dns.Msg) {
 	b, err := m.Pack()
 	if err != nil {
-		l.logger.Error(err)
+		l.reqErrs.NoteErr(err)
 		return
 	}
 	if err := l.serve(w, b); err != nil {
-		l.logger.Error(err)
+		l.reqErrs.NoteErr(err)
 	}
 }
 
@@ -285,26 +299,26 @@ func (l *dnsListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case http.MethodPost:
 		if ct := r.Header.Get("Content-Type"); ct != "application/dns-message" {
-			l.logger.Errorf("unsupported media type: %s", ct)
+			l.reqErrs.NoteDetail("unsupported media type: " + ct)
 			http.Error(w, http.StatusText(http.StatusUnsupportedMediaType), http.StatusUnsupportedMediaType)
 			return
 		}
 
 		buf, err = io.ReadAll(r.Body)
 		if err != nil {
-			l.logger.Error(err)
+			l.reqErrs.NoteErr(err)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 	default:
-		l.logger.Errorf("method not allowd: %s", r.Method)
+		l.reqErrs.NoteDetail("method not allowd: " + r.Method)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
 	mq := &dns.Msg{}
 	if err := mq.Unpack(buf); err != nil {
-		l.logger.Error(err)
+		l.reqErrs.NoteErr(err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
@@ -317,7 +331,7 @@ func (l *dnsListener) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		raddr = &net.TCPAddr{}
 	}
 	if err := l.serve(&dohResponseWriter{raddr: raddr, ResponseWriter: w}, buf); err != nil {
-		l.logger.Error(err)
+		l.reqErrs.NoteErr(err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
 }
@@ -333,7 +347,7 @@ func (l *dnsListener) serve(w ResponseWriter, msg []byte) (err error) {
 	select {
 	case l.cqueue <- conn:
 	default:
-		l.logger.Warnf("connection queue is full, client %s discarded", w.RemoteAddr())
+		l.queueFull.NoteDetail(w.RemoteAddr().String())
 		return errors.New("connection queue is full")
 	}
 

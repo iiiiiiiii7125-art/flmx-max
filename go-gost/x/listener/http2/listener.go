@@ -14,6 +14,7 @@ import (
 	admission "github.com/go-gost/x/admission/wrapper"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/net/proxyproto"
+	"github.com/go-gost/x/internal/util/eventlog"
 	climiter "github.com/go-gost/x/limiter/conn/wrapper"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
 	mdx "github.com/go-gost/x/metadata"
@@ -35,6 +36,11 @@ type http2Listener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the per-request queue-full discard
+	// logging (P1-03 family).
+	events    *eventlog.Aggregator
+	queueFull *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -42,9 +48,13 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &http2Listener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"http2 listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
 	}
 }
 
@@ -127,6 +137,7 @@ func (l *http2Listener) Addr() net.Addr {
 }
 
 func (l *http2Listener) Close() (err error) {
+	l.events.Flush()
 	select {
 	case <-l.errChan:
 	default:
@@ -151,7 +162,7 @@ func (l *http2Listener) handleFunc(w http.ResponseWriter, r *http.Request) {
 	select {
 	case l.cqueue <- conn:
 	default:
-		l.logger.Warnf("connection queue is full, client %s discarded", r.RemoteAddr)
+		l.queueFull.NoteDetail(r.RemoteAddr)
 		return
 	}
 

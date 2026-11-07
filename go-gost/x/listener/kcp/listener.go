@@ -10,6 +10,7 @@ import (
 	md "github.com/go-gost/core/metadata"
 	admission "github.com/go-gost/x/admission/wrapper"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/util/eventlog"
 	kcp_util "github.com/go-gost/x/internal/util/kcp"
 	traffic_limiter "github.com/go-gost/x/limiter/traffic"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
@@ -34,6 +35,12 @@ type kcpListener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the per-connection session-setup failure
+	// and queue-full discard logging (P1-03 family).
+	events    *eventlog.Aggregator
+	queueFull *eventlog.Counter
+	setupErrs *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -41,9 +48,15 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &kcpListener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"kcp listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
+		setupErrs: events.DetailCounter(
+			"kcp listener: %d session setup failure(s), last: %s, %d total"),
 	}
 }
 
@@ -144,6 +157,7 @@ func (l *kcpListener) Accept() (conn net.Conn, err error) {
 }
 
 func (l *kcpListener) Close() error {
+	l.events.Flush()
 	l.conn.Close()
 	return l.ln.Close()
 }
@@ -194,7 +208,7 @@ func (l *kcpListener) mux(conn net.Conn) {
 
 	mux, err := smux.Server(conn, smuxConfig)
 	if err != nil {
-		l.logger.Error(err)
+		l.setupErrs.NoteErr(err)
 		return
 	}
 	defer mux.Close()
@@ -212,7 +226,7 @@ func (l *kcpListener) mux(conn net.Conn) {
 			stream.Close()
 		default:
 			stream.Close()
-			l.logger.Warnf("connection queue is full, client %s discarded", stream.RemoteAddr())
+			l.queueFull.NoteDetail(stream.RemoteAddr().String())
 		}
 	}
 }

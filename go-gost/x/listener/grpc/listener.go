@@ -12,6 +12,7 @@ import (
 	admission "github.com/go-gost/x/admission/wrapper"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/net/proxyproto"
+	"github.com/go-gost/x/internal/util/eventlog"
 	pb "github.com/go-gost/x/internal/util/grpc/proto"
 	climiter "github.com/go-gost/x/limiter/conn/wrapper"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
@@ -35,6 +36,11 @@ type grpcListener struct {
 	md      metadata
 	logger  logger.Logger
 	options listener.Options
+
+	// events aggregates the tunnel server's queue-full discard
+	// logging (P1-03 family); the counter is handed to the
+	// server in Init.
+	events *eventlog.Aggregator
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -97,10 +103,13 @@ func (l *grpcListener) Init(md md.Metadata) (err error) {
 	l.cqueue = make(chan net.Conn, l.md.backlog)
 	l.errChan = make(chan error, 1)
 
+	l.events = eventlog.New(l.options.Logger, eventlog.DefaultInterval)
 	pb.RegisterGostTunelServerX(l.server, &server{
 		cqueue:    l.cqueue,
 		localAddr: l.addr,
 		logger:    l.options.Logger,
+		queueFull: l.events.DetailCounter(
+			"grpc listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
 	}, l.md.path)
 
 	go func() {
@@ -137,6 +146,7 @@ func (l *grpcListener) Accept() (conn net.Conn, err error) {
 }
 
 func (l *grpcListener) Close() error {
+	l.events.Flush()
 	l.server.Stop()
 	return nil
 }

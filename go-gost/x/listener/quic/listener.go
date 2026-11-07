@@ -11,6 +11,7 @@ import (
 	md "github.com/go-gost/core/metadata"
 	admission "github.com/go-gost/x/admission/wrapper"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/util/eventlog"
 	quic_util "github.com/go-gost/x/internal/util/quic"
 	traffic_limiter "github.com/go-gost/x/limiter/traffic"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
@@ -31,6 +32,11 @@ type quicListener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the per-session queue-full discard
+	// logging (P1-03 family).
+	events    *eventlog.Aggregator
+	queueFull *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -38,9 +44,13 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &quicListener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"quic listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
 	}
 }
 
@@ -135,6 +145,7 @@ func (l *quicListener) Accept() (conn net.Conn, err error) {
 }
 
 func (l *quicListener) Close() error {
+	l.events.Flush()
 	return l.ln.Close()
 }
 
@@ -177,7 +188,7 @@ func (l *quicListener) mux(ctx context.Context, session *quic.Conn) {
 			stream.Close()
 		default:
 			stream.Close()
-			l.logger.Warnf("connection queue is full, client %s discarded", session.RemoteAddr())
+			l.queueFull.NoteDetail(session.RemoteAddr().String())
 		}
 	}
 }

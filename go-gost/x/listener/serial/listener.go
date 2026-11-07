@@ -9,6 +9,7 @@ import (
 	"github.com/go-gost/core/listener"
 	"github.com/go-gost/core/logger"
 	md "github.com/go-gost/core/metadata"
+	"github.com/go-gost/x/internal/util/eventlog"
 	serial "github.com/go-gost/x/internal/util/serial"
 	traffic_limiter "github.com/go-gost/x/limiter/traffic"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
@@ -28,6 +29,12 @@ type serialListener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the reopen-loop failure logging, which
+	// retries with no pacing when the device is absent (P1-03
+	// family; rate is loop-bound, not error-bound).
+	events  *eventlog.Aggregator
+	openErr *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -40,9 +47,13 @@ func NewListener(opts ...listener.Option) listener.Listener {
 		options.Addr = serial.DefaultPort
 	}
 
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &serialListener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		openErr: events.DetailCounter(
+			"serial listener: %d device reopen failure(s), last: %s, %d total"),
 	}
 }
 
@@ -76,6 +87,7 @@ func (l *serialListener) Addr() net.Addr {
 }
 
 func (l *serialListener) Close() error {
+	l.events.Flush()
 	select {
 	case <-l.closed:
 		return net.ErrClosed
@@ -113,7 +125,7 @@ func (l *serialListener) listenLoop() {
 			return nil
 		}()
 		if err != nil {
-			l.logger.Error(err)
+			l.openErr.NoteErr(err)
 			cancel()
 		}
 

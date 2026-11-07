@@ -12,6 +12,7 @@ import (
 	admission "github.com/go-gost/x/admission/wrapper"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/net/proxyproto"
+	"github.com/go-gost/x/internal/util/eventlog"
 	"github.com/go-gost/x/internal/util/mux"
 	climiter "github.com/go-gost/x/limiter/conn/wrapper"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
@@ -31,6 +32,12 @@ type mtcpListener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the per-connection session-setup failure
+	// and queue-full discard logging (P1-03 family).
+	events    *eventlog.Aggregator
+	queueFull *eventlog.Counter
+	setupErrs *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -38,9 +45,15 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &mtcpListener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"mtcp listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
+		setupErrs: events.DetailCounter(
+			"mtcp listener: %d session setup failure(s), last: %s, %d total"),
 	}
 }
 
@@ -87,6 +100,7 @@ func (l *mtcpListener) Addr() net.Addr {
 }
 
 func (l *mtcpListener) Close() error {
+	l.events.Flush()
 	return l.ln.Close()
 }
 
@@ -128,7 +142,7 @@ func (l *mtcpListener) mux(conn net.Conn) {
 
 	session, err := mux.ServerSession(conn, l.md.muxCfg)
 	if err != nil {
-		l.logger.Error(err)
+		l.setupErrs.NoteErr(err)
 		return
 	}
 	defer session.Close()
@@ -144,7 +158,7 @@ func (l *mtcpListener) mux(conn net.Conn) {
 		case l.cqueue <- stream:
 		default:
 			stream.Close()
-			l.logger.Warnf("connection queue is full, client %s discarded", stream.RemoteAddr())
+			l.queueFull.NoteDetail(stream.RemoteAddr().String())
 		}
 	}
 }

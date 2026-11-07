@@ -25,6 +25,7 @@ import (
 	"github.com/go-gost/core/service"
 	ctxvalue "github.com/go-gost/x/ctx"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/util/eventlog"
 	xmetrics "github.com/go-gost/x/metrics"
 	xstats "github.com/go-gost/x/observer/stats"
 	"github.com/rs/xid"
@@ -153,6 +154,14 @@ type defaultService struct {
 	handler  handler.Handler
 	status   *Status
 	options  options
+
+	// events aggregates the per-connection handler-failure and
+	// recorder-failure logging (P1-03 family): both fire at
+	// connection rate under a failing upstream or a hostile
+	// client. Flushed when Serve returns and on Close.
+	events      *eventlog.Aggregator
+	handlerErrs *eventlog.Counter
+	recordErrs  *eventlog.Counter
 }
 
 func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Option) service.Service {
@@ -160,6 +169,7 @@ func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Op
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.logger, eventlog.DefaultInterval)
 	s := &defaultService{
 		name:     name,
 		listener: ln,
@@ -170,6 +180,11 @@ func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Op
 			events:     make([]Event, 0, MaxEventSize),
 			stats:      options.stats,
 		},
+		events: events,
+		handlerErrs: events.DetailCounter(
+			"service " + name + ": %d connection handler error(s), last: %s, %d total"),
+		recordErrs: events.DetailCounter(
+			"service " + name + ": %d recorder error(s), last: %s, %d total"),
 	}
 	s.setState(StateRunning)
 
@@ -228,6 +243,7 @@ func FlushServicesTrafficTwice(services map[string]service.Service, settle time.
 }
 
 func (s *defaultService) Serve() error {
+	defer s.events.Flush()
 
 	s.execCmds("post-up", s.options.postUp)
 	s.setState(StateReady)
@@ -312,7 +328,7 @@ func (s *defaultService) Serve() error {
 		for _, rec := range s.options.recorders {
 			if rec.Record == recorder.RecorderServiceClientAddress {
 				if err := rec.Recorder.Record(ctx, []byte(clientIP)); err != nil {
-					log.Errorf("record %s: %v", rec.Record, err)
+					s.recordErrs.NoteDetail(fmt.Sprintf("record %s: %v", rec.Record, err))
 				}
 				break
 			}
@@ -374,7 +390,7 @@ func (s *defaultService) Serve() error {
 
 			if err := s.handler.Handle(ctx, conn); err != nil {
 				if !errors.Is(err, net.ErrClosed) {
-					log.Error(err)
+					s.handlerErrs.NoteErr(err)
 				}
 				if v := xmetrics.GetCounter(xmetrics.MetricServiceHandlerErrorsCounter,
 					metrics.Labels{"service": s.name, "client": clientIP}); v != nil {
@@ -402,6 +418,7 @@ func (s *defaultService) Close() error {
 	// loader 卸载点已另行补齐；此处收口到关闭动作本身，使全部服
 	// 务卸载路径差集归零）。重复 Close 时 TakeTraffic 恒为零，
 	// 无副作用。
+	s.events.Flush()
 	s.FlushTraffic()
 
 	s.execCmds("pre-down", s.options.preDown)

@@ -16,6 +16,7 @@ import (
 	admission "github.com/go-gost/x/admission/wrapper"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/net/proxyproto"
+	"github.com/go-gost/x/internal/util/eventlog"
 	climiter "github.com/go-gost/x/limiter/conn/wrapper"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
 	metrics "github.com/go-gost/x/metrics/wrapper"
@@ -39,6 +40,28 @@ type h2Listener struct {
 	md      metadata
 	h2c     bool
 	options listener.Options
+
+	// events aggregates the per-request upgrade-failure and
+	// queue-full discard logging (P1-03 family).
+	events      *eventlog.Aggregator
+	queueFull   *eventlog.Counter
+	upgradeErrs *eventlog.Counter
+}
+
+// newH2Listener builds the listener for both constructors.
+func newH2Listener(h2c bool, options listener.Options) *h2Listener {
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
+	l := &h2Listener{
+		h2c:     h2c,
+		logger:  options.Logger,
+		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"h2 listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
+		upgradeErrs: events.DetailCounter(
+			"h2 listener: %d upgrade failure(s), last: %s, %d total"),
+	}
+	return l
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -46,11 +69,7 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return &h2Listener{
-		h2c:     true,
-		logger:  options.Logger,
-		options: options,
-	}
+	return newH2Listener(true, options)
 }
 
 func NewTLSListener(opts ...listener.Option) listener.Listener {
@@ -58,10 +77,7 @@ func NewTLSListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return &h2Listener{
-		logger:  options.Logger,
-		options: options,
-	}
+	return newH2Listener(false, options)
 }
 
 func (l *h2Listener) Init(md md.Metadata) (err error) {
@@ -145,6 +161,7 @@ func (l *h2Listener) Addr() net.Addr {
 }
 
 func (l *h2Listener) Close() (err error) {
+	l.events.Flush()
 	select {
 	case <-l.errChan:
 	default:
@@ -162,14 +179,14 @@ func (l *h2Listener) handleFunc(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := l.upgrade(w, r)
 	if err != nil {
-		l.logger.Error(err)
+		l.upgradeErrs.NoteErr(err)
 		return
 	}
 	select {
 	case l.cqueue <- conn:
 	default:
 		conn.Close()
-		l.logger.Warnf("connection queue is full, client %s discarded", r.RemoteAddr)
+		l.queueFull.NoteDetail(r.RemoteAddr)
 	}
 
 	<-conn.closed // NOTE: we need to wait for streaming end, or the connection will be closed

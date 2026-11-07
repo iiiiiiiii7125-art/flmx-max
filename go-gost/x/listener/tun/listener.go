@@ -11,6 +11,7 @@ import (
 	mdata "github.com/go-gost/core/metadata"
 	"github.com/go-gost/core/router"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/util/eventlog"
 	traffic_limiter "github.com/go-gost/x/limiter/traffic"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
 	mdx "github.com/go-gost/x/metadata"
@@ -31,6 +32,12 @@ type tunListener struct {
 	md      metadata
 	options listener.Options
 	routes  []*router.Route
+
+	// events aggregates the reopen-loop failure logging, which
+	// retries with no pacing when the device is absent (P1-03
+	// family; rate is loop-bound, not error-bound).
+	events  *eventlog.Aggregator
+	openErr *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -38,9 +45,13 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &tunListener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		openErr: events.DetailCounter(
+			"tun listener: %d device reopen failure(s), last: %s, %d total"),
 	}
 }
 
@@ -112,7 +123,7 @@ func (l *tunListener) listenLoop() {
 			return nil
 		}()
 		if err != nil {
-			l.logger.Error(err)
+			l.openErr.NoteErr(err)
 			cancel()
 		}
 
@@ -141,6 +152,7 @@ func (l *tunListener) Addr() net.Addr {
 }
 
 func (l *tunListener) Close() error {
+	l.events.Flush()
 	select {
 	case <-l.closed:
 		return net.ErrClosed
