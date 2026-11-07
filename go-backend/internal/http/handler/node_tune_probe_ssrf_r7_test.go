@@ -1,10 +1,18 @@
 package handler
 
-// R7-C-02 (panel side): the one-click probe branch must judge the
-// speedtest URL and the reference host with netguard before anything
-// is dispatched to a node — hard-deny layer always, private ranges
-// rejected by default. Tests use IP literals only, so they do not
-// depend on DNS behaviour.
+// R7-C-02 (panel side): the retained probe branch must judge the
+// reference host with netguard before anything is dispatched to a
+// node — hard-deny layer always, private ranges rejected by
+// default. Tests use IP literals only, so they do not depend on
+// DNS behaviour.
+//
+// The speedtest-URL leg of this test file retired with the leg
+// itself (2026-11, four-face tuning model): its only consumer was
+// the retired BDP sizing derivation, the panel no longer accepts
+// speedtestURL at all (strict decode rejects the field — see
+// node_tune_faces_test.go), and validateSpeedtestURLDispatch was
+// removed with it. The referenceHost leg keeps the full R7-C-02
+// treatment.
 
 import (
 	"encoding/json"
@@ -41,26 +49,6 @@ func r7ProbeCall(t *testing.T) func(map[string]interface{}) (int, string) {
 	}
 }
 
-func TestR7C02PanelProbeRejectsNonPublicSpeedtestURL(t *testing.T) {
-	call := r7ProbeCall(t)
-	for _, u := range []string{
-		"http://169.254.169.254/latest",        // metadata literal (hard deny)
-		"http://127.0.0.1:8080/file.bin",       // loopback
-		"http://10.0.0.5/file.bin",             // RFC1918
-		"http://192.168.1.10/file.bin",         // RFC1918
-		"http://example.com@169.254.169.254/f", // userinfo masking, real host = metadata
-		"http://[64:ff9b::a9fe:a9fe]/f",        // NAT64-embedded metadata
-		"http://[2002:a9fe:a9fe::]/f",          // 6to4-embedded metadata
-		"http://[64:ff9b:1::1]/f",              // local NAT64 segment
-		"https://0.0.0.0/f",                    // unspecified
-	} {
-		code, msg := call(map[string]interface{}{"speedtestURL": u})
-		if code == 0 || !strings.Contains(msg, "已拒绝") {
-			t.Errorf("speedtestURL %s: code=%d msg=%q, want netguard rejection before dispatch", u, code, msg)
-		}
-	}
-}
-
 func TestR7C02PanelProbeRejectsNonPublicReferenceHost(t *testing.T) {
 	call := r7ProbeCall(t)
 	for _, ref := range []string{
@@ -80,11 +68,10 @@ func TestR7C02PanelProbeRejectsNonPublicReferenceHost(t *testing.T) {
 
 func TestR7C02PanelProbeAllowsPublicTargets(t *testing.T) {
 	call := r7ProbeCall(t)
-	// Public literals must pass the policy gate; with no node socket
-	// connected the call then fails at dispatch ("调优失败"), which
-	// is exactly how we know validation let it through.
+	// A public literal must pass the policy gate; with no node
+	// socket connected the call then fails at dispatch ("调优失败"),
+	// which is exactly how we know validation let it through.
 	for _, payload := range []map[string]interface{}{
-		{"speedtestURL": "https://8.8.8.8/file.bin"},
 		{"referenceHost": "8.8.8.8:443"},
 	} {
 		_, msg := call(payload)
