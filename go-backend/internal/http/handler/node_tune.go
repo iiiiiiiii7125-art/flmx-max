@@ -138,12 +138,18 @@ const nodeTuneProbeTimeout = 90 * time.Second
 // jitter and the RTT distribution — presented in the frontend's
 // standalone 线路探针 panel next to (not inside) the four faces:
 //
-//   - referenceHost: TCP-connect RTT to a caller-supplied host:port
-//     (the agent auto-fills the panel address from its WS
-//     connection when absent). Judged by R7-C-02 above before
-//     dispatch; the agent re-judges before dialing.
+//   - referenceHost: a probe series of sequential TCP connects to
+//     a caller-supplied host:port (the agent auto-fills the panel
+//     address from its WS connection when absent). This is the leg
+//     that measures loss (sent/received), jitter (mean absolute
+//     consecutive difference) and the RTT distribution. Judged by
+//     R7-C-02 above before dispatch; the agent re-judges before
+//     dialing.
 //   - the agent-internal sock_diag RTT sampling over the node's
-//     established TCP connections.
+//     established TCP connections: median plus min / p95 / max
+//     distribution over the per-connection kernel RTTs. A snapshot
+//     has no send counter and no sample ordering, so this leg
+//     carries no loss / jitter fields.
 //
 // Retired with the old model: the withSpeed / speedtestURL
 // download speed-test leg. Its only consumer was the retired BDP
