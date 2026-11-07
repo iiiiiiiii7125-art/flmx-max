@@ -3,67 +3,58 @@ package socket
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net"
-	"net/http"
 	"sort"
 	"strings"
 	"time"
 )
 
 // One-click line probe (TuneProbe), added for the 3.3.42 tuning port.
-// Upstream 3.3.42 has no auto-detection: bandwidth and RTT are manual
-// inputs. This probe only produces SUGGESTED values for the tuning
-// inputs; it never applies anything.
+// Upstream 3.3.42 has no auto-detection: RTT is a manual input. This
+// probe only produces a SUGGESTED RTT for the tuning inputs; it never
+// applies anything.
 //
 // Read-only guard: probeTune must not call applyTuning, tuneWrite,
 // writeFileAtomic, or touch tuneConfPath / tuneBackupPath /
 // tuneParamsPath / tuneBBRModule. It only reads kernel socket state
-// (sock_diag) and, when explicitly asked, downloads from a caller
-// supplied URL. A value only becomes effective when the user later
+// (sock_diag). A value only becomes effective when the user later
 // confirms it with an explicit TuneApply, which runs the existing
 // Apply chain unchanged. The regression test TestTuneProbeDoesNotWrite
 // snapshots all four write surfaces before/after a probe.
+//
+// The download speed-test leg (withSpeed / speedtestURL) was removed
+// with the retired BDP sizing model: the panel no longer dispatches
+// those fields and strict request decoding on the panel side rejects
+// them, so the agent no longer accepts them either.
 
 type tuneProbeRequest struct {
-	// WithSpeed is the contract field (frontend: {action:"probe",
-	// withSpeed}): explicitly opt into the short speed test. Off by
-	// default. MeasureBandwidth is the same switch under its earlier
-	// name, kept as an alias so older callers keep working; either
-	// being true enables the test.
-	WithSpeed        bool   `json:"withSpeed"`
-	MeasureBandwidth bool   `json:"measureBandwidth"`
-	SpeedtestURL     string `json:"speedtestURL"`
-	ReferenceHost    string `json:"referenceHost"`
+	ReferenceHost string `json:"referenceHost"`
 }
 
 type tuneProbeResult struct {
-	// Suggested is what the tuning inputs should be filled with. Each
-	// leg falls back independently to the standing default
-	// (1000 Mbps / 150 ms, T-5) when its own measurement is
-	// unavailable; the fallback is always explained in Warnings and
-	// in the per-leg Source fields, never silently substituted.
+	// Suggested is what the tuning inputs should be filled with. The
+	// RTT leg falls back to the standing default (150 ms, T-5) when
+	// its measurement is unavailable; the fallback is always
+	// explained in Warnings and in the per-leg Source fields, never
+	// silently substituted.
 	Suggested tuneParams `json:"suggested"`
 	// RTTMedianMs is the measured median RTT in ms (clamped to the
 	// valid tune range), or nil when unavailable. This is the
 	// contract field name (frontend reads rttMedianMs); the earlier
 	// rttMs name was renamed to match, not kept as a duplicate.
-	RTTMedianMs    *int   `json:"rttMedianMs,omitempty"`
-	RTTSamples     int    `json:"rttSamples"`
-	RTTAvailable   bool   `json:"rttAvailable"`
-	RTTSource      string `json:"rttSource"` // "tcp_info_median" | "unavailable"
-	BandwidthMbps  *int   `json:"bandwidthMbps,omitempty"`
-	BandwidthAvail bool   `json:"bandwidthAvailable"`
-	BandwidthSrc   string `json:"bandwidthSource"` // "speedtest" | "not_requested" | "unavailable"
+	RTTMedianMs  *int   `json:"rttMedianMs,omitempty"`
+	RTTSamples   int    `json:"rttSamples"`
+	RTTAvailable bool   `json:"rttAvailable"`
+	RTTSource    string `json:"rttSource"` // "tcp_info_median" | "unavailable"
 	// PanelRTTMs is a REFERENCE value only: the TCP-connect RTT
 	// median to the panel. The agent fills ReferenceHost from its
 	// live WebSocket connection to the panel (see routeCommand) when
 	// the caller did not supply one, so the frontend contract
-	// ({id, action:"probe", withSpeed}, no host field) still gets a
-	// panelRttMs while connected; an explicit ReferenceHost wins.
-	// Absent when neither is available — never fabricated from the
-	// probe call's own duration.
+	// ({id, action:"probe"}, no host field) still gets a panelRttMs
+	// while connected; an explicit ReferenceHost wins. Absent when
+	// neither is available — never fabricated from the probe call's
+	// own duration.
 	PanelRTTMs    *int     `json:"panelRttMs,omitempty"`
 	PanelRTTAvail bool     `json:"panelRttAvailable"`
 	Warnings      []string `json:"warnings,omitempty"`
@@ -86,15 +77,12 @@ var sockDiagFamilyNames = [2]string{"IPv4", "IPv6"}
 // sampler reports unavailable instead of failing the probe).
 var (
 	tuneProbeTCPRTTs     = sockDiagTCPRTTs
-	tuneProbeSpeedtest   = probeSpeedtestDownload
 	tuneProbeReferenceRT = probeReferenceConnectRTT
 )
 
 const (
-	probeSpeedtestTimeout  = 10 * time.Second
-	probeSpeedtestMaxBytes = 64 << 20
-	probeReferenceTimeout  = 2 * time.Second
-	probeReferenceTries    = 3
+	probeReferenceTimeout = 2 * time.Second
+	probeReferenceTries   = 3
 )
 
 // tuneProbeMedianRTTMs reduces raw kernel RTT samples (µs, from
@@ -134,44 +122,6 @@ func clampProbeValue(v, lo, hi int) (int, bool) {
 		return hi, true
 	}
 	return v, false
-}
-
-// probeSpeedtestDownload measures download throughput against url for
-// at most probeSpeedtestTimeout / probeSpeedtestMaxBytes, whichever
-// comes first. It runs synchronously inside the TuneProbe command (no
-// background job, no resident worker) and is only invoked when the
-// caller explicitly set withSpeed with a URL.
-func probeSpeedtestDownload(ctx context.Context, url string) (bytes int64, elapsed time.Duration, err error) {
-	ctx, cancel := context.WithTimeout(ctx, probeSpeedtestTimeout)
-	defer cancel()
-	// R7-C-02: judge the target before any dial (hard-deny always,
-	// non-public rejected by default); the client re-judges every
-	// redirect hop and pins the dial — see outbound_guard.go.
-	if err := validateProbeSpeedtestURL(ctx, url); err != nil {
-		return 0, 0, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return 0, 0, err
-	}
-	start := time.Now()
-	resp, err := probeSpeedtestClient().Do(req)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, 0, fmt.Errorf("测速地址返回 HTTP %d", resp.StatusCode)
-	}
-	n, err := io.Copy(io.Discard, io.LimitReader(resp.Body, probeSpeedtestMaxBytes))
-	elapsed = time.Since(start)
-	if err != nil {
-		return 0, 0, err
-	}
-	if n == 0 || elapsed <= 0 {
-		return 0, 0, fmt.Errorf("测速无有效数据")
-	}
-	return n, elapsed, nil
 }
 
 // probeReferenceConnectRTT measures TCP-connect RTT to host
@@ -229,13 +179,12 @@ func probeTune(req tuneProbeRequest) (tuneProbeResult, error) {
 }
 
 // probeTuneContext is probeTune under the caller's command budget
-// (D1-06): the speedtest leg stops when the budget does instead of
-// running on for a panel that already timed out.
+// (D1-06): the probe stops when the budget does instead of running
+// on for a panel that already timed out.
 func probeTuneContext(ctx context.Context, req tuneProbeRequest) (tuneProbeResult, error) {
 	res := tuneProbeResult{
-		Suggested:    defaultTuneParams,
-		RTTSource:    "unavailable",
-		BandwidthSrc: "not_requested",
+		Suggested: defaultTuneParams,
+		RTTSource: "unavailable",
 	}
 
 	// Leg 1: RTT = median TCP_INFO rtt over the node's established
@@ -271,38 +220,7 @@ func probeTuneContext(ctx context.Context, req tuneProbeRequest) (tuneProbeResul
 		}
 	}
 
-	// Leg 2: bandwidth = optional short speed test. Default is NOT
-	// to run it; only an explicit withSpeed request (contract field;
-	// measureBandwidth is the same switch under its earlier name)
-	// runs it, and only against a caller-supplied http(s) URL.
-	if req.WithSpeed || req.MeasureBandwidth {
-		url := strings.TrimSpace(req.SpeedtestURL)
-		switch {
-		case url == "":
-			res.BandwidthSrc = "unavailable"
-			res.Warnings = append(res.Warnings, "已请求测速但未提供测速地址，带宽回落默认值 1000Mbps")
-		case !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://"):
-			return tuneProbeResult{}, fmt.Errorf("测速地址须为 http(s) 链接")
-		default:
-			n, elapsed, err := tuneProbeSpeedtest(ctx, url)
-			if err != nil {
-				res.BandwidthSrc = "unavailable"
-				res.Warnings = append(res.Warnings, fmt.Sprintf("测速失败（%v），带宽回落默认值 1000Mbps", err))
-			} else {
-				mbps := int(float64(n) * 8 / elapsed.Seconds() / 1e6)
-				clamped, wasClamped := clampProbeValue(mbps, 1, 100000)
-				if wasClamped {
-					res.Warnings = append(res.Warnings, fmt.Sprintf("实测带宽 %dMbps 超出调优范围，已钳制到 %dMbps", mbps, clamped))
-				}
-				res.BandwidthMbps = &clamped
-				res.BandwidthAvail = true
-				res.BandwidthSrc = "speedtest"
-				res.Suggested.BandwidthMbps = clamped
-			}
-		}
-	}
-
-	// Leg 3 (optional reference): TCP-connect RTT to the reference
+	// Leg 2 (optional reference): TCP-connect RTT to the reference
 	// host. The caller may supply one explicitly; otherwise the
 	// agent's command router fills it from the live WebSocket
 	// connection to the panel (see routeCommand), so the frontend

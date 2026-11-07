@@ -1,47 +1,14 @@
 package socket
 
-// R7-C-02 (agent side): probeSpeedtestDownload and
-// probeReferenceConnectRTT must judge their targets before any dial —
-// hard-deny always, private ranges rejected by default, redirect
-// hops re-judged per hop. A node must not become a blind SSRF /
+// R7-C-02 (agent side): probeReferenceConnectRTT must judge its
+// target before any dial — hard-deny always, private ranges
+// rejected by default. A node must not become a blind SSRF /
 // port-scan primitive for the panel-side caller.
 
 import (
-	"context"
 	"net"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 )
-
-func TestR7C02SpeedtestLoopbackRejected(t *testing.T) {
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		_, _ = w.Write([]byte("speedtest-payload"))
-	}))
-	defer srv.Close()
-	if _, _, err := probeSpeedtestDownload(context.Background(), srv.URL+"/file.bin"); err == nil {
-		t.Fatal("loopback speedtest URL must be rejected")
-	}
-	if hits.Load() != 0 {
-		t.Fatalf("loopback target was contacted %d times, want 0", hits.Load())
-	}
-}
-
-func TestR7C02SpeedtestMetadataRejected(t *testing.T) {
-	for _, u := range []string{
-		"http://169.254.169.254/latest",
-		"http://[64:ff9b::a9fe:a9fe]/latest",
-		"http://example.com@169.254.169.254/f",
-		"http://10.0.0.5/file.bin",
-	} {
-		if _, _, err := probeSpeedtestDownload(context.Background(), u); err == nil {
-			t.Errorf("%s: must be rejected", u)
-		}
-	}
-}
 
 func TestR7C02ReferenceDialNonPublicRejected(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

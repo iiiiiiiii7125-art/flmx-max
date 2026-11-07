@@ -1,27 +1,21 @@
 package socket
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 )
 
 // Probe seams are restored after each test so later tests (and the
 // real sampler) are unaffected.
 func stubProbeSeams(t *testing.T, rtts []uint32, rttErr error) {
 	t.Helper()
-	oldRTT, oldSpeed, oldRef := tuneProbeTCPRTTs, tuneProbeSpeedtest, tuneProbeReferenceRT
+	oldRTT, oldRef := tuneProbeTCPRTTs, tuneProbeReferenceRT
 	tuneProbeTCPRTTs = func() (tcpRTTSamples, error) { return tcpRTTSamples{RTTs: rtts}, rttErr }
-	tuneProbeSpeedtest = func(context.Context, string) (int64, time.Duration, error) {
-		return 0, 0, errors.New("speedtest must be stubbed per test")
-	}
 	tuneProbeReferenceRT = func(string) (int, error) { return 0, errors.New("no reference") }
 	t.Cleanup(func() {
-		tuneProbeTCPRTTs, tuneProbeSpeedtest, tuneProbeReferenceRT = oldRTT, oldSpeed, oldRef
+		tuneProbeTCPRTTs, tuneProbeReferenceRT = oldRTT, oldRef
 	})
 }
 
@@ -91,9 +85,6 @@ func TestTuneProbeDoesNotWrite(t *testing.T) {
 	if !res.RTTAvailable || res.RTTSource != "tcp_info_median" || res.RTTSamples != 3 {
 		t.Fatalf("rtt leg: %+v", res)
 	}
-	if res.BandwidthSrc != "not_requested" || res.BandwidthAvail {
-		t.Fatalf("bandwidth must default to not-run: %+v", res)
-	}
 	afterConf, _ := snapshotFile(t, tuneKernelConfPath)
 	afterBBR, bbrNow := snapshotFile(t, tuneBBRConfPath)
 	afterLimits, _ := snapshotFile(t, tuneLimitsConfPath)
@@ -119,9 +110,7 @@ func TestTuneProbeDoesNotWrite(t *testing.T) {
 func TestTuneProbeFallbackOnFailure(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	stubProbeSeams(t, nil, errors.New("netlink denied"))
-	// Speed test requested but no URL: bandwidth leg must degrade,
-	// not error the whole probe.
-	out, err := handleTuneCommand("TuneProbe", map[string]interface{}{"measureBandwidth": true})
+	out, err := handleTuneCommand("TuneProbe", map[string]interface{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,63 +118,46 @@ func TestTuneProbeFallbackOnFailure(t *testing.T) {
 	if res.Suggested != defaultTuneParams {
 		t.Fatalf("fallback suggested: %+v", res.Suggested)
 	}
-	if res.RTTAvailable || res.BandwidthAvail || len(res.Warnings) < 2 {
+	if res.RTTAvailable || len(res.Warnings) < 1 {
 		t.Fatalf("fallback legs: %+v", res)
 	}
 }
 
-func TestTuneProbeSpeedtestOptionalAndReference(t *testing.T) {
+func TestTuneProbeReferenceLeg(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	stubProbeSeams(t, []uint32{80000}, nil)
-	speedCalls := 0
-	tuneProbeSpeedtest = func(context.Context, string) (int64, time.Duration, error) {
-		speedCalls++
-		return 12500000, time.Second, nil // 12.5 MB in 1s = 100 Mbps
-	}
 	tuneProbeReferenceRT = func(string) (int, error) { return 42, nil }
 
-	// Not requested: speed test must not run even if a URL is present.
-	out, err := handleTuneCommand("TuneProbe", map[string]interface{}{"speedtestURL": "https://example.invalid/10mb"})
+	// No reference host: the leg stays absent.
+	out, err := handleTuneCommand("TuneProbe", map[string]interface{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res := out.(tuneProbeResult)
-	if speedCalls != 0 || res.BandwidthSrc != "not_requested" || res.Suggested.BandwidthMbps != 1000 {
-		t.Fatalf("speed test ran unrequested: calls=%d %+v", speedCalls, res)
-	}
 	if res.PanelRTTMs != nil || res.PanelRTTAvail {
 		t.Fatalf("reference must be absent when not requested: %+v", res)
 	}
+	if res.Suggested != (tuneParams{BandwidthMbps: 1000, RTTMs: 80}) {
+		t.Fatalf("suggested: %+v", res.Suggested)
+	}
 
-	// Explicitly requested (contract field withSpeed): speed test runs, reference runs.
+	// Explicit reference host: the leg runs and the RTT contract
+	// field is populated.
 	out, err = handleTuneCommand("TuneProbe", map[string]interface{}{
-		"withSpeed": true, "speedtestURL": "https://example.invalid/10mb", "referenceHost": "panel.example:443",
+		"referenceHost": "panel.example:443",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res = out.(tuneProbeResult)
-	if speedCalls != 1 || res.BandwidthSrc != "speedtest" || res.BandwidthMbps == nil || *res.BandwidthMbps != 100 {
-		t.Fatalf("speed leg: calls=%d %+v", speedCalls, res)
-	}
 	if res.RTTMedianMs == nil || *res.RTTMedianMs != 80 {
 		t.Fatalf("contract rttMedianMs: %+v", res)
 	}
 	if res.PanelRTTMs == nil || *res.PanelRTTMs != 42 || !res.PanelRTTAvail {
 		t.Fatalf("reference leg: %+v", res)
 	}
-	if res.Suggested != (tuneParams{BandwidthMbps: 100, RTTMs: 80}) {
+	if res.Suggested != (tuneParams{BandwidthMbps: 1000, RTTMs: 80}) {
 		t.Fatalf("suggested: %+v", res.Suggested)
-	}
-}
-
-func TestTuneProbeRejectsBadSpeedtestURL(t *testing.T) {
-	fakeProcSys(t, "reno cubic bbr")
-	stubProbeSeams(t, []uint32{80000}, nil)
-	if _, err := handleTuneCommand("TuneProbe", map[string]interface{}{
-		"withSpeed": true, "speedtestURL": "ftp://example.invalid/f",
-	}); err == nil || !strings.Contains(err.Error(), "http(s)") {
-		t.Fatalf("expected http(s) error, got %v", err)
 	}
 }
 
