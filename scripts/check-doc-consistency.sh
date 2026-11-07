@@ -11,6 +11,12 @@
 #      待产品决策，本项只报告、不计入失败（决策落地后应改为硬检查）；
 #      但任一侧提取为空属前提失效、点名硬红，不得伪装一致
 #      （RR4-C6-I03）。
+#   17. 初始口令口径门（FIX-DOC 常设门）：用户面（getting-started.md、
+#      install.md、README.md）不得再宣称固定默认口令形态
+#      「admin@user / admin@user」；三处必须各含「没有固定默认值」
+#      口径字面（与 initial_admin.go 的随机播种实现对齐）。提取/
+#      命中为空属前提失效、点名硬红。§6 只对账用户名字面量，
+#      本项对账口令口径，两门互补。
 #   7. notify.md Webhook `event` 取值枚举 vs handler notifyEvent* 常量全集
 #      （R7-M-01 常设门：文档自称列全的枚举与代码常量集 diff 必须为 ∅）。
 #   8. 超时预算登记表 vs 产品代码（R8 T-GATE 常设门：转跑
@@ -574,6 +580,17 @@ EOF_CLAIMS
 else
   echo "PENDING: 技能包示例面门未核（当前环境无 go 工具链，routemethods/configkeys 无法提取）；请在装有 go 的环境复跑本门"
 fi
+
+# ── 17. 初始口令口径门（FIX-DOC）：用户面不得宣称固定默认口令，三处必含「没有固定默认值」
+for doc_file in doc/guide/getting-started.md doc/guide/install.md README.md; do
+  if grep -Fq 'admin@user` / `admin@user' "$doc_file"; then
+    note_fail "初始口令口径门：$doc_file 仍宣称固定默认口令「admin@user / admin@user」（实现为随机初始口令，见 initial_admin.go）"
+  elif ! grep -Fq '没有固定默认值' "$doc_file"; then
+    note_fail "初始口令口径门：$doc_file 缺「没有固定默认值」口径字面（提取为空/口径漂移，请人工复核）"
+  else
+    note_ok "初始口令口径门：$doc_file 与随机播种口径一致"
+  fi
+done
 
 echo "----"
 if [ "$FAIL" -eq 0 ]; then

@@ -947,7 +947,7 @@ function Editor({
             onChange={(e) => setOpts({ prefix: e.target.value })}
           />
           <ToggleRow
-            hint="地址、端口、协议都相同的只保留第一个"
+            hint="地址、端口、协议与凭据都相同的只保留第一个"
             id="sub-dedupe"
             label="去重"
             value={o.dedupe}

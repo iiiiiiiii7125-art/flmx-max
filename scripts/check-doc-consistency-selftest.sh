@@ -62,5 +62,14 @@ if run_gate "$TMP/v2.log"; then
 fi
 grep -q "zzz-ghost-route" "$TMP/v2.log" && echo "OK: variant 2 caught and named" || {
   echo "FAIL: variant 2 caught but the ghost route was not named"; sed 's/^/    /' "$TMP/v2.log"; exit 1; }
+cp "$ROOT/skills/flmx-api/SKILL.md" "$MIR/skills/flmx-api/SKILL.md"
+
+echo "== variant 3: guide claims a fixed default password again must FAIL and name it (§17) =="
+sed -i 's/默认账号 `admin@user`，密码没有固定默认值/默认账号 `admin@user` \/ `admin@user`/' "$MIR/doc/guide/getting-started.md"
+if run_gate "$TMP/v3.log"; then
+  echo "FAIL: variant 3 was not caught"; exit 1
+fi
+grep -q "初始口令口径门" "$TMP/v3.log" && echo "OK: variant 3 caught and named" || {
+  echo "FAIL: variant 3 caught but the drift was not named"; sed 's/^/    /' "$TMP/v3.log"; exit 1; }
 
 echo "SELFTEST PASS"
