@@ -2,6 +2,8 @@ package socket
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,12 +22,13 @@ func fakeProcSys(t *testing.T, available string, skip ...string) string {
 	dir := t.TempDir()
 	old := struct {
 		procRoot, meminfo, gai, gaiBak, bbr, kernel, limits string
-		rpsUnit, rpsScript, netDir                          string
+		rpsUnit, rpsScript, netDir, snapshot                string
 		oldConf, legacyConf, bbrMod, shapeUnit              string
 		numCPU                                              func() int
 	}{
 		tuneProcRoot, tuneMeminfoPath, tuneGaiConfPath, tuneGaiBackupPath, tuneBBRConfPath,
 		tuneKernelConfPath, tuneLimitsConfPath, tuneRPSUnitPath, tuneRPSScriptPath, tuneNetDir,
+		tuneKernelSnapshotPath,
 		oldTuneConfPath, legacyTuneConfPath, oldTuneBBRModulePath, oldTuneShapeUnitPath, tuneNumCPU,
 	}
 	tuneProcRoot = filepath.Join(dir, "proc")
@@ -38,6 +41,7 @@ func fakeProcSys(t *testing.T, available string, skip ...string) string {
 	tuneRPSUnitPath = filepath.Join(dir, "systemd", "flmx-tuning-rps.service")
 	tuneRPSScriptPath = filepath.Join(dir, "bin", "flmx-tuning-rps.sh")
 	tuneNetDir = filepath.Join(dir, "net")
+	tuneKernelSnapshotPath = filepath.Join(dir, "security", "flmx-tuning-kernel-sysctls.json")
 	oldTuneConfPath = filepath.Join(dir, "sysctl.d", "99-flmx-tuning.conf")
 	legacyTuneConfPath = filepath.Join(dir, "sysctl.d", "99-flvx-tuning.conf")
 	oldTuneBBRModulePath = filepath.Join(dir, "modules-load.d", "flmx-bbr.conf")
@@ -46,6 +50,7 @@ func fakeProcSys(t *testing.T, available string, skip ...string) string {
 	t.Cleanup(func() {
 		tuneProcRoot, tuneMeminfoPath, tuneGaiConfPath, tuneGaiBackupPath, tuneBBRConfPath = old.procRoot, old.meminfo, old.gai, old.gaiBak, old.bbr
 		tuneKernelConfPath, tuneLimitsConfPath, tuneRPSUnitPath, tuneRPSScriptPath, tuneNetDir = old.kernel, old.limits, old.rpsUnit, old.rpsScript, old.netDir
+		tuneKernelSnapshotPath = old.snapshot
 		oldTuneConfPath, legacyTuneConfPath, oldTuneBBRModulePath, oldTuneShapeUnitPath, tuneNumCPU = old.oldConf, old.legacyConf, old.bbrMod, old.shapeUnit, old.numCPU
 	})
 	// 2 GiB of memory.
@@ -73,7 +78,7 @@ func fakeProcSys(t *testing.T, available string, skip ...string) string {
 		write(s.key, "0")
 	}
 	write("net.ipv4.tcp_congestion_control", "cubic")
-	write("net.core.default_qdisc", "pfifo_fast")
+	write("net.core.default_qdisc", "fq_codel")
 	write("net.core.rps_sock_flow_entries", "0")
 	write("net.ipv4.tcp_available_congestion_control", available)
 	write("net.ipv4.tcp_rmem", "4096\t131072\t6291456")
@@ -299,20 +304,38 @@ func TestApplyBBRAndKernel(t *testing.T) {
 	_ = calls
 }
 
+// TestApplyKernelMSSClampOrder is the TL-01 regression gate: every
+// iptables argv for the MSS clamp rule must be exactly
+// [-t mangle <-A|-D> POSTROUTING <match…>] — the verb immediately
+// after "-t mangle", before the chain name. The pre-fix shape
+// ([-A -t mangle POSTROUTING …]) is rejected by iptables with
+// exit 2 on every machine. The rollback delete path is gated too.
 func TestApplyKernelMSSClampOrder(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	calls := stubTuneCommands(t, map[string]bool{"iptables": true})
 	if _, err := applyKernelTuning(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	var ops []string
+	tuneMSSClampRemove(context.Background())
+	var got [][]string
 	for _, c := range *calls {
 		if c[0] == "iptables" {
-			ops = append(ops, c[1])
+			got = append(got, c[1:])
 		}
 	}
-	if len(ops) != 2 || ops[0] != "-D" || ops[1] != "-A" {
-		t.Fatalf("MSS ops = %v, want -D then -A", ops)
+	match := []string{"-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"}
+	want := [][]string{
+		append([]string{"-t", "mangle", "-D", "POSTROUTING"}, match...),
+		append([]string{"-t", "mangle", "-A", "POSTROUTING"}, match...),
+		append([]string{"-t", "mangle", "-D", "POSTROUTING"}, match...),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("MSS calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if strings.Join(got[i], " ") != strings.Join(want[i], " ") {
+			t.Fatalf("MSS call %d = %v, want %v", i, got[i], want[i])
+		}
 	}
 }
 
@@ -387,14 +410,20 @@ func TestRollbackRemovesWholeFootprint(t *testing.T) {
 	q := filepath.Join(tuneNetDir, "eth0", "queues", "rx-0")
 	_ = os.MkdirAll(q, 0o755)
 	_ = os.WriteFile(filepath.Join(q, "rps_cpus"), []byte("f\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(q, "rps_flow_cnt"), []byte("4096\n"), 0o644)
 	// Live tuned values.
 	_ = writeSysctl("net.ipv4.tcp_congestion_control", "bbr")
 	_ = writeSysctl("net.core.default_qdisc", "fq")
 	_ = writeSysctl("net.core.rps_sock_flow_entries", "32768")
 
 	warnings := rollbackTuning(context.Background())
-	if len(warnings) != 0 {
-		t.Fatalf("rollback warnings: %v", warnings)
+	// No snapshot was captured in this scenario (footprint planted
+	// by hand), so exactly one fail-safe warning must name the
+	// unrestored keys (TL-02) — silence here would be the defect.
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "未能回退") ||
+		!strings.Contains(warnings[0], "net.core.somaxconn") ||
+		!strings.Contains(warnings[0], "net.ipv4.tcp_fastopen") {
+		t.Fatalf("rollback warnings = %v, want one fail-safe naming unrestored keys", warnings)
 	}
 	for _, f := range files {
 		if _, err := os.Stat(f); !os.IsNotExist(err) {
@@ -405,13 +434,269 @@ func TestRollbackRemovesWholeFootprint(t *testing.T) {
 		t.Fatalf("cc after rollback = %q", v)
 	}
 	if v, _ := readSysctl("net.core.default_qdisc"); v != "pfifo_fast" {
-		t.Fatalf("qdisc after rollback = %q", v)
+		t.Fatalf("qdisc after rollback = %q, want the scripted default when no snapshot exists", v)
 	}
 	if v, _ := readSysctl("net.core.rps_sock_flow_entries"); v != "0" {
 		t.Fatalf("rps entries after rollback = %q", v)
 	}
 	if b, _ := os.ReadFile(filepath.Join(q, "rps_cpus")); strings.TrimSpace(string(b)) != "0" {
 		t.Fatalf("rps_cpus after rollback = %q", b)
+	}
+	// TL-03: the flow count is cleared together with the cpu mask.
+	if b, _ := os.ReadFile(filepath.Join(q, "rps_flow_cnt")); strings.TrimSpace(string(b)) != "0" {
+		t.Fatalf("rps_flow_cnt after rollback = %q, want 0 (TL-03)", b)
+	}
+}
+
+// TestKernelSnapshotRollbackRestoresExact is the TL-02 regression
+// gate: apply-kernel snapshots the pre-apply values, and rollback
+// restores every face-③ key to exactly the snapshot (an operator
+// value set before tuning survives the round trip — the scripted
+// factory defaults would clobber it). Presence of the conf file is
+// NOT the oracle; the live values are.
+func TestKernelSnapshotRollbackRestoresExact(t *testing.T) {
+	fakeProcSys(t, "reno cubic bbr")
+	stubTuneCommands(t, map[string]bool{})
+	// Operator state that differs from both the tuned values and
+	// the scripted defaults rollback used to write.
+	operator := map[string]string{
+		"net.core.somaxconn":                        "8192",
+		"net.ipv4.tcp_fin_timeout":                  "30",
+		"net.ipv4.tcp_ecn":                          "2",
+		"net.core.rmem_max":                         "4194304",
+		"net.ipv4.ip_local_port_range":              "10000 60000",
+		"net.ipv4.tcp_congestion_control":           "cubic",
+		"net.core.default_qdisc":                    "fq_codel",
+		"net.ipv4.tcp_rmem":                         "4096 131072 6291456",
+		"net.ipv4.tcp_available_congestion_control": "reno cubic bbr",
+	}
+	for k, v := range operator {
+		if err := writeSysctl(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	warnings, err := applyKernelTuning(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range warnings {
+		if !strings.Contains(w, "iptables 不存在") {
+			t.Fatalf("apply warnings = %v, want only the known no-iptables note", warnings)
+		}
+	}
+	// The snapshot carries exactly the operator state for the
+	// kernelTuneSettings key set — no more, no less.
+	raw, err := os.ReadFile(tuneKernelSnapshotPath)
+	if err != nil {
+		t.Fatalf("snapshot not written: %v", err)
+	}
+	var snap tuneKernelSnapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Values) != len(kernelTuneSettings(0)) {
+		t.Fatalf("snapshot keys = %d, want %d (the kernelTuneSettings set)", len(snap.Values), len(kernelTuneSettings(0)))
+	}
+	for k, v := range operator {
+		if k == "net.ipv4.tcp_available_congestion_control" {
+			continue // not a tuned key; must not be captured
+		}
+		if snap.Values[k] != v {
+			t.Fatalf("snapshot[%s] = %q, want operator value %q", k, snap.Values[k], v)
+		}
+	}
+	// Tuned values are live now.
+	if v, _ := readSysctl("net.core.somaxconn"); v != "65535" {
+		t.Fatalf("somaxconn after apply = %q", v)
+	}
+	// A repeat apply must not overwrite the snapshot with tuned
+	// values (first snapshot wins).
+	if _, err := applyKernelTuning(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	raw2, _ := os.ReadFile(tuneKernelSnapshotPath)
+	if string(raw2) != string(raw) {
+		t.Fatal("second apply overwrote the pre-apply snapshot")
+	}
+	// Rollback restores every key to the snapshot, byte for byte.
+	if warnings := rollbackTuning(context.Background()); len(warnings) != 0 {
+		t.Fatalf("rollback warnings = %v, want none", warnings)
+	}
+	for _, s := range kernelTuneSettings(0) {
+		want, ok := snap.Values[s.key]
+		if !ok {
+			continue
+		}
+		if got, _ := readSysctl(s.key); got != want {
+			t.Fatalf("%s after rollback = %q, want snapshot %q", s.key, got, want)
+		}
+	}
+	if _, err := os.Stat(tuneKernelSnapshotPath); !os.IsNotExist(err) {
+		t.Fatal("snapshot must be consumed by rollback")
+	}
+}
+
+// TestKernelSnapshotFailSafe covers the TL-02 fail-safe contract:
+// a damaged or missing snapshot never fails silently — rollback
+// restores the scripted headline defaults, names every unrestored
+// key, and still consumes the footprint.
+func TestKernelSnapshotFailSafe(t *testing.T) {
+	plant := func(t *testing.T) {
+		t.Helper()
+		_ = os.MkdirAll(filepath.Dir(tuneKernelConfPath), 0o755)
+		_ = os.WriteFile(tuneKernelConfPath, []byte("x"), 0o644)
+		_ = writeSysctl("net.ipv4.tcp_congestion_control", "bbr")
+		_ = writeSysctl("net.core.default_qdisc", "fq")
+		_ = writeSysctl("net.core.somaxconn", "65535")
+	}
+	assertFailSafe := func(t *testing.T, marker string) {
+		t.Helper()
+		warnings := rollbackTuning(context.Background())
+		joined := strings.Join(warnings, "\n")
+		if !strings.Contains(joined, marker) || !strings.Contains(joined, "未能回退") {
+			t.Fatalf("warnings = %v, want a fail-safe naming unrestored keys (%s)", warnings, marker)
+		}
+		for _, key := range []string{"net.core.somaxconn", "net.ipv4.tcp_fastopen", "net.ipv4.tcp_fin_timeout"} {
+			if !strings.Contains(joined, key) {
+				t.Fatalf("fail-safe must name %s: %v", key, warnings)
+			}
+		}
+		// The headline defaults are still restored.
+		if v, _ := readSysctl("net.ipv4.tcp_congestion_control"); v != "cubic" {
+			t.Fatalf("cc = %q, want scripted default cubic", v)
+		}
+		if _, err := os.Stat(tuneKernelSnapshotPath); !os.IsNotExist(err) {
+			t.Fatal("snapshot footprint must be consumed even when unusable")
+		}
+		if _, err := os.Stat(tuneKernelConfPath); !os.IsNotExist(err) {
+			t.Fatal("kernel conf must be removed")
+		}
+	}
+
+	t.Run("corrupt", func(t *testing.T) {
+		fakeProcSys(t, "reno cubic bbr")
+		stubTuneCommands(t, map[string]bool{})
+		plant(t)
+		_ = os.MkdirAll(filepath.Dir(tuneKernelSnapshotPath), 0o755)
+		_ = os.WriteFile(tuneKernelSnapshotPath, []byte("{not json"), 0o644)
+		assertFailSafe(t, "损坏")
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		fakeProcSys(t, "reno cubic bbr")
+		stubTuneCommands(t, map[string]bool{})
+		plant(t)
+		assertFailSafe(t, "缺失")
+	})
+
+	t.Run("clean no-op", func(t *testing.T) {
+		fakeProcSys(t, "reno cubic bbr")
+		stubTuneCommands(t, map[string]bool{})
+		// Nothing applied, nothing planted: rollback stays silent.
+		if warnings := rollbackTuning(context.Background()); len(warnings) != 0 {
+			t.Fatalf("clean rollback warnings = %v, want none", warnings)
+		}
+	})
+}
+
+// TestKernelSnapshotCaptureAbort: a key that exists but cannot be
+// read at apply time (its node stat fails with a real error, not
+// ENOENT) aborts the capture with a loud warning and leaves no
+// snapshot behind — a partial snapshot would strand the unread key
+// at rollback. A key that does not exist at all is not an abort: it
+// lands in the snapshot's Absent list.
+func TestKernelSnapshotCaptureAbort(t *testing.T) {
+	fakeProcSys(t, "reno cubic bbr")
+	oldRead, oldStat := tuneRead, tuneStat
+	tuneRead = func(key string) (string, bool) {
+		if key == "net.ipv4.tcp_fastopen" {
+			return "", false
+		}
+		return oldRead(key)
+	}
+	tuneStat = func(name string) (os.FileInfo, error) {
+		if strings.HasSuffix(name, "tcp_fastopen") {
+			return nil, errors.New("permission denied")
+		}
+		return oldStat(name)
+	}
+	t.Cleanup(func() { tuneRead, tuneStat = oldRead, oldStat })
+	warnings := captureKernelSysctlSnapshot(kernelTuneSettings(0))
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "tcp_fastopen") {
+		t.Fatalf("warnings = %v, want one naming the unreadable key", warnings)
+	}
+	if _, err := os.Stat(tuneKernelSnapshotPath); !os.IsNotExist(err) {
+		t.Fatal("aborted capture must leave no snapshot file")
+	}
+}
+
+// TestKernelSnapshotWriteFailure: when the snapshot cannot be
+// persisted, apply reports it loudly (the apply itself proceeds —
+// tuning is not blocked by its own bookkeeping).
+func TestKernelSnapshotWriteFailure(t *testing.T) {
+	dir := fakeProcSys(t, "reno cubic bbr")
+	stubTuneCommands(t, map[string]bool{})
+	// Point the snapshot at a path whose parent is a regular file.
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tuneKernelSnapshotPath = filepath.Join(blocker, "snap.json")
+	warnings, err := applyKernelTuning(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(warnings, "\n"), "快照失败") {
+		t.Fatalf("warnings = %v, want the snapshot failure named", warnings)
+	}
+}
+
+// TestKernelSnapshotRestoreWriteFailure: individual keys that
+// refuse the restore write are named; the rest still restore.
+func TestKernelSnapshotRestoreWriteFailure(t *testing.T) {
+	fakeProcSys(t, "reno cubic bbr")
+	stubTuneCommands(t, map[string]bool{})
+	if _, err := applyKernelTuning(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	oldWrite := tuneWrite
+	tuneWrite = func(key, value string) error {
+		if key == "net.ipv4.tcp_ecn" {
+			return errors.New("boom")
+		}
+		return oldWrite(key, value)
+	}
+	t.Cleanup(func() { tuneWrite = oldWrite })
+	warnings := rollbackTuning(context.Background())
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "tcp_ecn") {
+		t.Fatalf("warnings = %v, want one naming the failed key", warnings)
+	}
+	if v, _ := readSysctl("net.core.somaxconn"); v == "65535" {
+		t.Fatal("other keys must still restore when one write fails")
+	}
+}
+
+// TestKernelSnapshotAbsentKeys: a key recorded as absent at
+// capture (it did not exist then) is reported by name at rollback
+// via the snapshot's Absent list instead of being silently dropped.
+func TestKernelSnapshotAbsentKeys(t *testing.T) {
+	fakeProcSys(t, "reno cubic bbr")
+	stubTuneCommands(t, map[string]bool{})
+	snap := tuneKernelSnapshot{
+		Values: map[string]string{"net.core.somaxconn": "4096"},
+		Absent: []string{"net.ipv4.tcp_mtu_probing"},
+	}
+	raw, _ := json.Marshal(snap)
+	_ = os.MkdirAll(filepath.Dir(tuneKernelSnapshotPath), 0o755)
+	_ = os.WriteFile(tuneKernelSnapshotPath, raw, 0o644)
+	_ = os.MkdirAll(filepath.Dir(tuneKernelConfPath), 0o755)
+	_ = os.WriteFile(tuneKernelConfPath, []byte("x"), 0o644)
+	warnings := rollbackTuning(context.Background())
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "tcp_mtu_probing") {
+		t.Fatalf("warnings = %v, want the absent key named", warnings)
+	}
+	if v, _ := readSysctl("net.core.somaxconn"); v != "4096" {
+		t.Fatalf("somaxconn = %q, want snapshot value 4096", v)
 	}
 }
 

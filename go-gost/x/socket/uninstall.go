@@ -207,6 +207,8 @@ type hostTuningCleanupReport struct {
 //     体是系统文件，只还原不删除）；
 //   - tuneRPSUnitPath / tuneRPSScriptPath：网卡多队列持久化 unit
 //     与其脚本，安装目录删除后 unit 悬空指向脚本，必须一并删；
+//   - tuneKernelSnapshotPath：面③调优前 sysctl 快照（TL-02），
+//     恢复步消费；漏删会把已卸载节点的快照留成孤儿文件；
 //   - oldTuneConfPath / oldTuneBBRModulePath / oldTuneShapeUnitPath：
 //     第一代残留（sysctl conf、tcp_bbr 开机加载、qdisc 整形 unit）；
 //   - legacyTuneConfPath：改名前同作用的 sysctl conf。
@@ -222,6 +224,7 @@ func hostTuningFileSet() []string {
 		tuneGaiBackupPath,
 		tuneRPSUnitPath,
 		tuneRPSScriptPath,
+		tuneKernelSnapshotPath,
 		oldTuneConfPath,
 		oldTuneBBRModulePath,
 		oldTuneShapeUnitPath,
@@ -303,6 +306,7 @@ func cleanupHostTuningFiles() hostTuningCleanupReport {
 	remove(tuneBBRConfPath)
 	remove(tuneGaiBackupPath)
 	remove(tuneRPSScriptPath)
+	remove(tuneKernelSnapshotPath)
 	remove(oldTuneConfPath)
 	remove(oldTuneBBRModulePath)
 	if legacyTuneConfPath != tuneKernelConfPath && exists(legacyTuneConfPath) {

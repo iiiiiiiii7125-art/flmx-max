@@ -50,6 +50,12 @@ import (
 //     99-flmx-tuning.conf, the tcp_bbr modules-load file and the
 //     qdisc unit): leaving them would silently resurrect the retired
 //     tuning at the next boot, which contradicts a rollback.
+//   - Rollback restores the distribution state, not scripted
+//     guesses: apply-kernel snapshots the pre-apply sysctl values
+//     first (TL-02), and rollback writes those back. (The reference
+//     script's rollback writes its own factory defaults instead;
+//     that approach silently clobbers values the operator had set
+//     before tuning, so it is not followed here.)
 
 const (
 	tuneActionApplyIPv4   = "apply-ipv4"
@@ -101,6 +107,13 @@ var (
 	tuneRPSUnitPath    = "/etc/systemd/system/flmx-tuning-rps.service"
 	tuneRPSScriptPath  = "/usr/local/bin/flmx-tuning-rps.sh"
 	tuneNetDir         = "/sys/class/net"
+	// Pre-apply snapshot of the face-③ sysctl values, written by the
+	// first apply-kernel and consumed by rollback (TL-02). It lives
+	// with the limits footprint under /etc/security: a generic state
+	// directory (/var/lib/…) could be wiped by container/image
+	// hygiene while the sysctl confs survive, which would strand the
+	// node in the tuned state with no way back.
+	tuneKernelSnapshotPath = "/etc/security/flmx-tuning-kernel-sysctls.json"
 
 	// First-generation footprints (retired model): still cleaned up
 	// so an upgraded node does not keep replaying them at boot.
@@ -118,6 +131,8 @@ const (
 // Test seams: production values, replaced by unit tests.
 var (
 	tuneWrite    = writeSysctl
+	tuneRead     = readSysctl
+	tuneStat     = os.Stat
 	tuneCommand  = runTuneCommand
 	tuneLookPath = exec.LookPath
 	tuneNumCPU   = runtime.NumCPU
@@ -389,8 +404,21 @@ func sysctlConfBody(settings []tuneKV) string {
 	return b.String()
 }
 
-var tuneMSSRuleArgs = []string{"-t", "mangle", "POSTROUTING", "-p", "tcp",
+// tuneMSSRuleMatch is the rule-spec part of the MSS clamp rule
+// (everything after the chain name). tuneMSSRuleArgs is the single
+// construction point for every iptables invocation on this rule:
+// the action verb (-A/-D/-C) always comes immediately after
+// "-t mangle" and before the chain name. TL-01: the rule spec used
+// to lead the argv (chain first), so prepending the verb produced
+// `iptables -A -t mangle …`, which iptables rejects with exit 2.
+var tuneMSSRuleMatch = []string{"-p", "tcp",
 	"--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"}
+
+func tuneMSSRuleArgs(action string) []string {
+	args := make([]string, 0, len(tuneMSSRuleMatch)+4)
+	args = append(args, "-t", "mangle", action, "POSTROUTING")
+	return append(args, tuneMSSRuleMatch...)
+}
 
 // tuneMSSClampAdd deploys the MSS clamp rule (delete-then-add, so a
 // repeat apply never stacks duplicates). It returns a note when the
@@ -399,10 +427,8 @@ func tuneMSSClampAdd(ctx context.Context) string {
 	if _, err := tuneLookPath("iptables"); err != nil {
 		return "iptables 不存在，已跳过 MSS 钳制"
 	}
-	delArgs := append([]string{"-D"}, tuneMSSRuleArgs...)
-	_, _ = tuneCommand(ctx, "iptables", delArgs...)
-	addArgs := append([]string{"-A"}, tuneMSSRuleArgs...)
-	if _, err := tuneCommand(ctx, "iptables", addArgs...); err != nil {
+	_, _ = tuneCommand(ctx, "iptables", tuneMSSRuleArgs("-D")...)
+	if _, err := tuneCommand(ctx, "iptables", tuneMSSRuleArgs("-A")...); err != nil {
 		return fmt.Sprintf("MSS 钳制规则部署失败: %v", err)
 	}
 	return ""
@@ -413,8 +439,7 @@ func tuneMSSClampRemove(ctx context.Context) {
 	if _, err := tuneLookPath("iptables"); err != nil {
 		return
 	}
-	delArgs := append([]string{"-D"}, tuneMSSRuleArgs...)
-	_, _ = tuneCommand(ctx, "iptables", delArgs...)
+	_, _ = tuneCommand(ctx, "iptables", tuneMSSRuleArgs("-D")...)
 }
 
 func applyKernelTuning(ctx context.Context) ([]string, error) {
@@ -435,7 +460,10 @@ func applyKernelTuning(ctx context.Context) ([]string, error) {
 	if err := writeFileAtomic(tuneLimitsConfPath, []byte(tuneLimitsConfBody), 0o644); err != nil {
 		return nil, fmt.Errorf("写入 %s 失败: %w", tuneLimitsConfPath, err)
 	}
-	warnings := applySysctlSettings(settings)
+	// Snapshot the pre-apply values before the first write (TL-02):
+	// rollback restores them verbatim.
+	warnings := captureKernelSysctlSnapshot(settings)
+	warnings = append(warnings, applySysctlSettings(settings)...)
 	if note := tuneMSSClampAdd(ctx); note != "" {
 		warnings = append(warnings, note)
 	}
@@ -603,6 +631,134 @@ func applyNICTuning(ctx context.Context) ([]string, error) {
 	return warnings, nil
 }
 
+// --- face-③ pre-apply snapshot (TL-02) -------------------------------------
+
+// tuneKernelSnapshot is the on-disk record of the face-③ sysctl
+// values as they were immediately before the first apply-kernel
+// overwrote them. Rollback restores exactly these values; nothing
+// else can reconstruct them (the distribution defaults are not
+// knowable once overwritten, and `sysctl --system` does not reset
+// keys no remaining conf covers).
+type tuneKernelSnapshot struct {
+	Values map[string]string `json:"values"`
+	// Absent lists keys that did not exist at capture time. They
+	// cannot be un-created at rollback; they are reported instead.
+	Absent []string `json:"absent,omitempty"`
+}
+
+// captureKernelSysctlSnapshot records the current values of every
+// key in settings (the kernelTuneSettings output — never a hand
+// list). The first snapshot wins, mirroring the gai.conf backup: a
+// repeat apply must not overwrite the true originals with tuned
+// values. A key that cannot be read is fatal rather than recorded
+// as a guess: an incomplete snapshot would silently strand that key
+// at rollback.
+func captureKernelSysctlSnapshot(settings []tuneKV) []string {
+	if _, err := os.Stat(tuneKernelSnapshotPath); err == nil {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return []string{fmt.Sprintf("检查调优前快照失败，本次未留快照: %v", err)}
+	}
+	snap := tuneKernelSnapshot{Values: map[string]string{}}
+	for _, s := range settings {
+		v, ok := tuneRead(s.key)
+		if !ok {
+			// A stat error other than "not there" means the key
+			// exists but cannot be read — abort rather than
+			// guess. A missing node is how a key this kernel
+			// does not have surfaces through /proc/sys; it lands
+			// in Absent instead. (The write side's ENOENT/EINVAL
+			// tolerance in applySysctlSettings is the same
+			// judgment for the same kernel variance.)
+			if _, serr := tuneStat(sysctlPath(s.key)); serr != nil && !os.IsNotExist(serr) {
+				return []string{fmt.Sprintf("读取 %s 现值失败，已中止留存调优前快照（回滚将无法完整回退）: %v", s.key, serr)}
+			}
+			snap.Absent = append(snap.Absent, s.key)
+			continue
+		}
+		snap.Values[s.key] = v
+	}
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		return []string{fmt.Sprintf("序列化调优前快照失败: %v", err)}
+	}
+	if err := os.MkdirAll(filepath.Dir(tuneKernelSnapshotPath), 0o755); err != nil {
+		return []string{fmt.Sprintf("保存调优前快照失败（回滚将无法完整回退）: %v", err)}
+	}
+	if err := writeFileAtomic(tuneKernelSnapshotPath, raw, 0o644); err != nil {
+		return []string{fmt.Sprintf("保存调优前快照失败（回滚将无法完整回退）: %v", err)}
+	}
+	return nil
+}
+
+// restoreKernelSysctls is the rollback counterpart. With a snapshot,
+// every recorded value is written back and every absent key is
+// reported (it did not exist pre-apply and cannot be un-created).
+// Without one — the kernel conf exists but no snapshot, e.g. the
+// face was applied by an older agent — the historical three
+// headline keys still go back to their scripted defaults and the
+// remaining face-③ keys are named as unrestorable (fail-safe: a
+// loud warning, never silence). A snapshot that exists but does not
+// parse is treated the same way, with the parse failure named. The
+// snapshot file is consumed here, in every case.
+func restoreKernelSysctls(kernelConfPresent bool) []string {
+	defer func() { _ = os.Remove(tuneKernelSnapshotPath) }()
+	// The memory-dependent buffer keys vary per machine; the set
+	// itself does not, so any buffer size yields the full key set.
+	settings := kernelTuneSettings(0)
+	writeDefaults := func() {
+		_ = tuneWrite("net.ipv4.tcp_congestion_control", "cubic")
+		_ = tuneWrite("net.core.default_qdisc", "pfifo_fast")
+		_ = tuneWrite("net.core.rps_sock_flow_entries", "0")
+	}
+	restoredByDefault := map[string]bool{
+		"net.ipv4.tcp_congestion_control": true,
+		"net.core.default_qdisc":          true,
+		"net.core.rps_sock_flow_entries":  true,
+	}
+	unrestored := func() []string {
+		var keys []string
+		for _, s := range settings {
+			if !restoredByDefault[s.key] {
+				keys = append(keys, s.key)
+			}
+		}
+		return keys
+	}
+	raw, err := os.ReadFile(tuneKernelSnapshotPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			writeDefaults()
+			return []string{fmt.Sprintf("读取调优前快照失败: %v；以下 sysctl 键未能回退: %s", err, strings.Join(unrestored(), ", "))}
+		}
+		writeDefaults()
+		if kernelConfPresent {
+			return []string{fmt.Sprintf("调优前快照缺失，以下 sysctl 键未能回退（仍为调优值）: %s", strings.Join(unrestored(), ", "))}
+		}
+		return nil
+	}
+	var snap tuneKernelSnapshot
+	if jerr := json.Unmarshal(raw, &snap); jerr != nil || snap.Values == nil {
+		writeDefaults()
+		return []string{fmt.Sprintf("调优前快照损坏（%v），以下 sysctl 键未能回退（仍为调优值）: %s", jerr, strings.Join(unrestored(), ", "))}
+	}
+	var warnings []string
+	for _, s := range settings {
+		v, ok := snap.Values[s.key]
+		if !ok {
+			continue
+		}
+		if err := tuneWrite(s.key, v); err != nil {
+			warnings = append(warnings, fmt.Sprintf("回退 %s 失败: %v", s.key, err))
+		}
+	}
+	if len(snap.Absent) > 0 {
+		warnings = append(warnings, fmt.Sprintf("以下 sysctl 键在调优前不存在、无法回退删除: %s", strings.Join(snap.Absent, ", ")))
+	}
+	_ = tuneWrite("net.core.rps_sock_flow_entries", "0")
+	return warnings
+}
+
 // --- rollback --------------------------------------------------------------
 
 // removeTuneFile deletes one footprint file, recording real failures
@@ -637,7 +793,14 @@ func disableTuneUnit(ctx context.Context, unitPath, unitName string, warnings *[
 // self-uninstall restore.
 func rollbackTuning(ctx context.Context) []string {
 	var warnings []string
-	// 1. Files: new model + first-generation leftovers.
+	// Whether the face-③ conf is on disk before the footprint files
+	// go: restoreKernelSysctls needs it to tell "nothing was ever
+	// applied" apart from "applied without a snapshot" (TL-02).
+	_, statErr := os.Stat(tuneKernelConfPath)
+	kernelConfPresent := statErr == nil
+	// 1. Files: new model + first-generation leftovers. The
+	// snapshot is consumed by restoreKernelSysctls below, not
+	// here: it must survive until step 3 has read it.
 	removeTuneFile(tuneKernelConfPath, &warnings)
 	removeTuneFile(tuneLimitsConfPath, &warnings)
 	removeTuneFile(tuneBBRConfPath, &warnings)
@@ -664,18 +827,21 @@ func rollbackTuning(ctx context.Context) []string {
 	}
 	// 2. gai.conf back to its pre-tune content.
 	warnings = append(warnings, restoreGaiConf()...)
-	// 3. In-memory defaults (reference script order).
-	_ = tuneWrite("net.ipv4.tcp_congestion_control", "cubic")
-	_ = tuneWrite("net.core.default_qdisc", "pfifo_fast")
-	_ = tuneWrite("net.core.rps_sock_flow_entries", "0")
+	// 3. In-memory sysctl values back to the pre-apply snapshot
+	// (TL-02); without one, the scripted headline defaults plus a
+	// fail-safe warning for the keys that cannot be restored.
+	warnings = append(warnings, restoreKernelSysctls(kernelConfPresent)...)
 	// 4. MSS clamp rule.
 	tuneMSSClampRemove(ctx)
-	// 5. Per-queue steering off.
+	// 5. Per-queue steering off: rps_cpus and rps_flow_cnt are a
+	// pair — apply sets both, rollback clears both (TL-03).
 	if ifaces, err := listTuneInterfaces(); err == nil {
 		for _, iface := range ifaces {
-			files, _ := filepath.Glob(filepath.Join(tuneNetDir, iface, "queues", "rx-*", "rps_cpus"))
-			for _, f := range files {
-				_ = tuneWriteSysFile(f, "0")
+			for _, name := range []string{"rps_cpus", "rps_flow_cnt"} {
+				files, _ := filepath.Glob(filepath.Join(tuneNetDir, iface, "queues", "rx-*", name))
+				for _, f := range files {
+					_ = tuneWriteSysFile(f, "0")
+				}
 			}
 		}
 	}

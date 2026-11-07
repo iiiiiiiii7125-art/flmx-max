@@ -19,6 +19,7 @@ type hostCleanupTree struct {
 	gaiBackup  string
 	rpsUnit    string
 	rpsScript  string
+	snapshot   string
 	oldConf    string
 	bbrModule  string
 	qdiscUnit  string
@@ -28,7 +29,7 @@ type hostCleanupTree struct {
 func (tree *hostCleanupTree) files() []string {
 	return []string{
 		tree.kernelConf, tree.limitsConf, tree.bbrConf, tree.gaiBackup,
-		tree.rpsUnit, tree.rpsScript, tree.oldConf, tree.bbrModule,
+		tree.rpsUnit, tree.rpsScript, tree.snapshot, tree.oldConf, tree.bbrModule,
 		tree.qdiscUnit, tree.legacyConf,
 	}
 }
@@ -44,6 +45,7 @@ func stubHostCleanupTree(t *testing.T) *hostCleanupTree {
 		gaiBackup:  filepath.Join(root, "gai.conf.bak"),
 		rpsUnit:    filepath.Join(root, "systemd", "flmx-tuning-rps.service"),
 		rpsScript:  filepath.Join(root, "bin", "flmx-tuning-rps.sh"),
+		snapshot:   filepath.Join(root, "security", "flmx-tuning-kernel-sysctls.json"),
 		oldConf:    filepath.Join(root, "sysctl.d", "99-flmx-tuning.conf"),
 		bbrModule:  filepath.Join(root, "modules-load.d", "flmx-bbr.conf"),
 		qdiscUnit:  filepath.Join(root, "systemd", "flmx-tuning-qdisc.service"),
@@ -51,14 +53,17 @@ func stubHostCleanupTree(t *testing.T) *hostCleanupTree {
 	}
 	old := struct {
 		kernel, limits, bbr, gai, gaiBak, rpsUnit, rpsScript string
+		snapshot                                             string
 		oldConf, legacy, bbrMod, shapeUnit                   string
 	}{
 		tuneKernelConfPath, tuneLimitsConfPath, tuneBBRConfPath, tuneGaiConfPath, tuneGaiBackupPath,
-		tuneRPSUnitPath, tuneRPSScriptPath, oldTuneConfPath, legacyTuneConfPath, oldTuneBBRModulePath, oldTuneShapeUnitPath,
+		tuneRPSUnitPath, tuneRPSScriptPath, tuneKernelSnapshotPath,
+		oldTuneConfPath, legacyTuneConfPath, oldTuneBBRModulePath, oldTuneShapeUnitPath,
 	}
 	tuneKernelConfPath, tuneLimitsConfPath, tuneBBRConfPath = tree.kernelConf, tree.limitsConf, tree.bbrConf
 	tuneGaiConfPath, tuneGaiBackupPath = tree.gai, tree.gaiBackup
 	tuneRPSUnitPath, tuneRPSScriptPath = tree.rpsUnit, tree.rpsScript
+	tuneKernelSnapshotPath = tree.snapshot
 	oldTuneConfPath, legacyTuneConfPath = tree.oldConf, tree.legacyConf
 	oldTuneBBRModulePath, oldTuneShapeUnitPath = tree.bbrModule, tree.qdiscUnit
 	oldContainer := uninstallInContainer
@@ -69,6 +74,7 @@ func stubHostCleanupTree(t *testing.T) *hostCleanupTree {
 		tuneKernelConfPath, tuneLimitsConfPath, tuneBBRConfPath = old.kernel, old.limits, old.bbr
 		tuneGaiConfPath, tuneGaiBackupPath = old.gai, old.gaiBak
 		tuneRPSUnitPath, tuneRPSScriptPath = old.rpsUnit, old.rpsScript
+		tuneKernelSnapshotPath = old.snapshot
 		oldTuneConfPath, legacyTuneConfPath = old.oldConf, old.legacy
 		oldTuneBBRModulePath, oldTuneShapeUnitPath = old.bbrMod, old.shapeUnit
 		uninstallInContainer = oldContainer
