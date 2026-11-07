@@ -158,6 +158,12 @@ func main() {
 	// crashes before doing anything else.
 	sweepCoreDumps()
 
+	// 运行时内存软帽（memlimit.go，P1-06）：在任何业务分配之前按
+	// 机器总内存档位设 GOMEMLIMIT，让累积面涨起时先触发 GC 收紧
+	// 而不是直接撞内核 OOM killer；unit 的 MemoryHigh/MemoryMax
+	// 是同档位表的部署层兜底。
+	applyMemoryLimit()
+
 	// 已被面板卸载（容器形态留有标记）：配置已清除，先于配置加载
 	// 拦截，空转等待人工删除容器。
 	if socket.AgentUninstalled() {

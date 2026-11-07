@@ -1382,11 +1382,50 @@ disable_flmx_agent_service() {
   esac
 }
 
+# agent_memory_limits echoes "<MemoryHigh MiB> <MemoryMax MiB>" for
+# the agent's systemd unit, computed from this machine's MemTotal via
+# the shared memory tier table (P1-06): the soft cap itself is the
+# in-process GOMEMLIMIT the agent sets at startup (go-gost/memlimit.go
+# memoryTierFor — ≤512MiB machines: 70% of total; larger: half of
+# total, capped at 2048MiB); the unit's cgroup rungs step above it
+# (High = soft×5/4, Max = soft×3/2, Max never above total memory) so
+# the soft cap always binds first and the unit is only the hard
+# fallback. Both copies of the table are pinned to identical numbers
+# by their tests (memlimit_test.go and test-install-scripts-proxy.sh);
+# change them together. When MemTotal cannot be read, fall back to
+# the 512MiB tier rather than writing no limits at all.
+# AGENT_MEMINFO_PATH exists so the script test suite can feed
+# fixtures; production always reads /proc/meminfo.
+agent_memory_limits() {
+  local meminfo_path="${AGENT_MEMINFO_PATH:-/proc/meminfo}"
+  local total_kb total_mib soft high max
+  total_kb=$(awk '/^MemTotal:/ {print $2; exit}' "$meminfo_path" 2>/dev/null || true)
+  case "$total_kb" in
+    ''|*[!0-9]*) total_kb=524288 ;;
+  esac
+  total_mib=$((total_kb / 1024))
+  if [ "$total_mib" -le 512 ]; then
+    soft=$((total_mib * 7 / 10))
+  else
+    soft=$((total_mib / 2))
+    if [ "$soft" -gt 2048 ]; then soft=2048; fi
+  fi
+  high=$((soft * 5 / 4))
+  max=$((soft * 3 / 2))
+  if [ "$max" -gt "$total_mib" ]; then max=$total_mib; fi
+  if [ "$high" -gt "$max" ]; then high=$max; fi
+  printf '%s %s\n' "$high" "$max"
+}
+
 write_flmx_agent_service() {
   ensure_service_manager || return 1
 
   case "$SERVICE_MANAGER" in
     systemd)
+      local agent_mem_limits agent_mem_high agent_mem_max
+      agent_mem_limits=$(agent_memory_limits)
+      agent_mem_high=${agent_mem_limits%% *}
+      agent_mem_max=${agent_mem_limits##* }
       mkdir -p "$(dirname "$FLMX_AGENT_SYSTEMD_SERVICE_FILE")"
       cat > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" <<EOF
 [Unit]
@@ -1407,6 +1446,13 @@ LimitCORE=0
 # 样需要句柄上限，直接写进 unit 本体。limits.d 与 unit 两路并
 # 存、互不替代（TuneStatus 的 nofile 概要报进程真实 rlimit）。
 LimitNOFILE=1048576
+# 内存天花板（P1-06，部署层兜底）：数值由 agent_memory_limits 按
+# 本机 MemTotal 从共享档位表算出，与 agent 进程内 GOMEMLIMIT 软帽
+# （go-gost/memlimit.go）同表——High＝软帽×5/4、Max＝软帽×3/2，
+# 软帽先行收紧 GC，cgroup 两档只作硬兜底。OpenRC 无 cgroup 对应
+# 面，只靠进程内软帽。
+MemoryHigh=${agent_mem_high}M
+MemoryMax=${agent_mem_max}M
 # R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
 # discarded the agent's startup logs, so a poisoned gost.json left no
 # diagnosable failure reason. Journal keeps them queryable via
