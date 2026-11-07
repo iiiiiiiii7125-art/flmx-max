@@ -195,18 +195,22 @@ func isTimeoutError(err error) bool {
 // direction within the window, the copy re-arms and resumes; if
 // the whole session stalled, both endpoints are closed and
 // ErrNoProgress is returned. Resuming is byte-exact by
-// construction: the tracked wrappers convert a deadline expiry
-// into errReadTimeout only when the underlying call moved no
-// bytes (see trackedRW), so nothing is ever re-sent or skipped,
-// and bytes the kernel already accepted stay accepted.
+// construction: a deadline expiry on a plain Read/Write moved no
+// bytes (the net package's deadline abort is all-or-nothing), and
+// a splice segment that moved bytes before its wake reports them
+// and refreshes the progress stamp before the wrapper converts
+// the wake into errReadTimeout (see trackedRW) — so nothing is
+// ever re-sent or skipped, and bytes the kernel already accepted
+// stay accepted.
 //
 // Hot-path cost: raw TCP hops still run through io.CopyBuffer with
 // the same 64KB pooled buffer, and raw TCP source/destination
-// pairs keep their WriterTo/ReaderFrom sendfile splice — the
-// wrappers forward both interfaces when the wrapped connection is
-// a *net.TCPConn. Progress is recorded by the wrappers, one atomic
-// store per chunk moved, the same shape as any byte-counting
-// wrapper. Deadlines are armed once before the copy blocks and
+// pairs keep their kernel sendfile splice — the wrappers forward
+// WriterTo/ReaderFrom to the raw connections when both wrapped
+// endpoints are *net.TCPConn. Progress is recorded by the
+// wrappers, one atomic store per chunk moved on the buffered path
+// and one per segment on the splice path. Deadlines are armed
+// once before the copy blocks and
 // re-armed only at deadline-wake event points, never per chunk.
 func copyDirection(dst, src, rw1, rw2 io.ReadWriter, act *sessionActivity) error {
 	ts, srcTCP := src.(*net.TCPConn)
@@ -261,9 +265,13 @@ var errReadTimeout = errors.New("transport: read deadline exceeded")
 // internal deadline abort is all-or-nothing), so a timed-out call
 // contributes nothing and the copy can resume as if the wake had
 // never happened — while any call that moved bytes reports them
-// with a nil or non-timeout error. For
-// raw TCP endpoints it also forwards the WriterTo/ReaderFrom fast
-// paths, so io.CopyBuffer keeps its sendfile splice.
+// with a nil or non-timeout error. A splice segment (below) is
+// the one call shape that can report bytes and a timeout
+// together; its wrapper touches the progress stamp before
+// converting, so the copy loop's stalled check already accounts
+// for those bytes when it decides to resume. For raw TCP
+// endpoints it also forwards the WriterTo/ReaderFrom fast paths,
+// so io.CopyBuffer keeps its kernel splice.
 type trackedRW struct {
 	rw  io.ReadWriter
 	act *sessionActivity
@@ -311,10 +319,24 @@ func (t *trackedRW) WriteTo(w io.Writer) (int64, error) {
 			if ok1 && ok2 {
 				// Arm the same deadlines the buffered path would
 				// carry, so a stalled splice wakes on the session
-				// deadline too.
-				t.armRead()
+				// deadline too — with the read side capped per
+				// segment (see armReadSegment).
+				t.armReadSegment()
 				dst.armWrite()
-				n, err := src.WriteTo(teeWriter{dstc, dst.act})
+				// The kernel splice entry point is
+				// (*net.TCPConn).ReadFrom with the raw source
+				// connection: any intervening wrapper (the tee
+				// wrappers an earlier version used to observe
+				// progress) defeats the net package's *TCPConn
+				// type switch and silently degrades the transfer
+				// to a generic buffered copy, ~30% slower on
+				// loopback. Progress is therefore recorded per
+				// splice segment instead: the call returns on
+				// EOF, on error, or when an armed deadline wakes
+				// it, and the touch below credits the bytes it
+				// moved before copyDirection decides whether the
+				// session stalled.
+				n, err := dstc.ReadFrom(src)
 				if n > 0 {
 					t.act.touch()
 				}
@@ -344,9 +366,11 @@ func (t *trackedRW) ReadFrom(r io.Reader) (int64, error) {
 			srcc, ok1 := src.rw.(*net.TCPConn)
 			dst, ok2 := t.rw.(*net.TCPConn)
 			if ok1 && ok2 {
-				src.armRead()
+				src.armReadSegment()
 				t.armWrite()
-				n, err := dst.ReadFrom(teeReader{srcc, src.act})
+				// Raw source connection, as in WriteTo: wrapping
+				// it would defeat the splice type switch.
+				n, err := dst.ReadFrom(srcc)
 				if n > 0 {
 					t.act.touch()
 				}
@@ -372,33 +396,11 @@ type readerOnly struct{ io.Reader }
 
 type writerOnly struct{ io.Writer }
 
-// teeReader/teeWriter record destination progress for splice
-// transfers, whose byte counts bypass the tracked Read/Write.
-type teeReader struct {
-	r   io.Reader
-	act *sessionActivity
-}
-
-func (t teeReader) Read(p []byte) (int, error) {
-	n, err := t.r.Read(p)
-	if n > 0 {
-		t.act.touch()
-	}
-	return n, err
-}
-
-type teeWriter struct {
-	w   io.Writer
-	act *sessionActivity
-}
-
-func (t teeWriter) Write(p []byte) (int, error) {
-	n, err := t.w.Write(p)
-	if n > 0 {
-		t.act.touch()
-	}
-	return n, err
-}
+// Splice transfers record progress per segment in WriteTo/
+// ReadFrom above, not per chunk: the kernel moves the bytes, the
+// segment's return value counts them, and a deadline wake ends a
+// segment the same way it ends a blocked Read — so the copy loop
+// sees the same event shape on both paths.
 
 // armRead arms src's rolling read deadline at last-progress +
 // timeout. Called before the copy blocks and after a resumable
@@ -407,6 +409,32 @@ func (t *trackedRW) armRead() {
 	if t.act.timeout > 0 {
 		if d, ok := t.rw.(readDeadliner); ok {
 			_ = d.SetReadDeadline(t.act.deadline())
+		}
+	}
+}
+
+// armReadSegment arms the read deadline for one kernel splice
+// segment: the earlier of the session stall deadline and
+// now + timeout/3. A splice moves bytes invisibly to userspace
+// until the call returns, so an uncapped segment would batch a
+// whole window of progress credit into its return instant —
+// which is exactly when the sibling direction's own deadline,
+// armed from the same progress stamp, also expires — and the
+// sibling could judge the session stalled in the gap between
+// its wake and the segment's credit landing. (The buffered path
+// has no such gap: every chunk returns through Read and credits
+// immediately.) Capping the segment makes a flowing direction
+// land its credit at least three times per window, while the
+// min() with the stall deadline keeps a truly stalled session's
+// teardown at the same instant as the uncapped shape.
+func (t *trackedRW) armReadSegment() {
+	if t.act.timeout > 0 {
+		if d, ok := t.rw.(readDeadliner); ok {
+			dl := t.act.deadline()
+			if cap := time.Now().Add(t.act.timeout / 3); cap.Before(dl) {
+				dl = cap
+			}
+			_ = d.SetReadDeadline(dl)
 		}
 	}
 }
