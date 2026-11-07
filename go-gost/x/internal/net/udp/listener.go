@@ -28,20 +28,155 @@ import (
 // 1024 matches the deepest existing metadata default (rudp, ftcp)
 // and absorbs the zero-gap burst class seen live (200 packets from
 // one source dropped ~4% at depth 128, K2) with 5x headroom, plus
-// the 1000-packet burst used as the live acceptance bar. The queue
-// stays bounded: a slot holds one pooled read buffer, so the worst
-// case per session is 1024 x ReadBufferSize (<= 64MiB at the
-// 65535-byte buffer class), reached only while a consumer is
-// stalled and a sender floods maximum-size datagrams; an idle
-// session holds no buffers at all, and the channel itself costs
-// 1024 pointers (~8KiB) per session.
+// the 1000-packet burst used as the live acceptance bar. A slot
+// holds one pooled read buffer; an idle session holds no buffers
+// at all, and the channel itself costs 1024 pointers (~8KiB) per
+// session. The packet-count depth alone is NOT the memory bound:
+// see DefaultReadQueueBytes for the byte cap that backstops it
+// (P1-02).
 const DefaultReadQueueSize = 1024
+
+// DefaultReadQueueBytes is the per-session byte cap on the receive
+// queue: a datagram is admitted only while the queued byte total
+// plus its own size stays within this budget. Before this cap the
+// queue was metered by packet count only, so a stalled consumer
+// plus a sender flooding maximum-size (64KiB) datagrams could pin
+// 1024 x 65535B ≈ 64MiB in a single session — on a 464MB node a
+// handful of such sessions could exhaust memory on their own
+// (P1-02).
+//
+// 4MiB is chosen as follows: at the typical MTU-sized datagram
+// (<=1500B) the 1024-packet depth caps the queue at ~1.5MiB, so
+// the byte cap never binds for real traffic and burst absorption
+// is unchanged; the cap only engages against oversized-datagram
+// floods, where it cuts the worst case 16x (64MiB -> 4MiB). 4MiB
+// still admits 64 maximum-size datagrams back to back, far beyond
+// any legitimate in-flight window for a single UDP association,
+// while keeping the per-session worst case small against the
+// session counts a small node carries. The packet count remains
+// as a second, independent cap; whichever is hit first drops.
+const DefaultReadQueueBytes = 4 << 20
 
 // DefaultBacklog is the new-session queue depth NewListener falls
 // back to when a caller supplies a non-positive Backlog. It matches
 // the metadata-layer default (listener/udp, rudp and ftcp all use
 // 128).
 const DefaultBacklog = 128
+
+// dropLogInterval is the aggregation window for the overload-path
+// log summaries produced by eventLog (P1-03).
+const dropLogInterval = 30 * time.Second
+
+// eventLog rate-limits the listener's overload-path logging. The
+// drop paths (receive queue full, session queue full, temporary
+// read errors) used to emit one Warn per event inside the hot read
+// loop, so under a UDP flood the log rate equalled the drop rate —
+// up to tens of thousands of lines per second through journald,
+// competing with forwarding for CPU and disk on small nodes
+// (P1-03). There is no rate-limiting precedent for log output in
+// this codebase, so this is the minimal aggregator: each event
+// kind is a pair of atomic counters (total, and pending since the
+// last summary); a single flushLocked summary line per kind is
+// emitted at most once per dropLogInterval, and the final pending
+// counts are flushed when the listener closes so a flood that ends
+// with the listener is not silently lost. The hot path cost is one
+// atomic increment per event.
+type eventLog struct {
+	logger logger.Logger
+
+	mu        sync.Mutex // guards lastFlush
+	lastFlush time.Time
+
+	dropped      atomic.Uint64 // datagrams dropped: session receive queue full
+	droppedPend  atomic.Uint64
+	sessDropped  atomic.Uint64 // new sessions dropped: session queue full
+	sessPend     atomic.Uint64
+	readErrs     atomic.Uint64 // temporary read errors
+	readErrsPend atomic.Uint64
+	readErrLast  atomic.Value // string: most recent temporary read error
+}
+
+func newEventLog(l logger.Logger) *eventLog {
+	return &eventLog{logger: l, lastFlush: time.Now()}
+}
+
+// flushLocked emits one summary Warn per event kind that has
+// pending events, provided the aggregation window has elapsed
+// (unless force is set), and resets the pending counters. The
+// caller must hold e.mu.
+func (e *eventLog) flushLocked(now time.Time, force bool) {
+	if e.logger == nil {
+		e.droppedPend.Store(0)
+		e.sessPend.Store(0)
+		e.readErrsPend.Store(0)
+		return
+	}
+	if !force && now.Sub(e.lastFlush) < dropLogInterval {
+		return
+	}
+	flushed := false
+	if n := e.droppedPend.Swap(0); n > 0 {
+		e.logger.Warnf("udp listener: %d datagram(s) discarded (session recv queue full), %d total", n, e.dropped.Load())
+		flushed = true
+	}
+	if n := e.sessPend.Swap(0); n > 0 {
+		e.logger.Warnf("udp listener: %d new session(s) discarded (connection queue full), %d total", n, e.sessDropped.Load())
+		flushed = true
+	}
+	if n := e.readErrsPend.Swap(0); n > 0 {
+		last, _ := e.readErrLast.Load().(string)
+		e.logger.Warnf("udp listener: %d temporary read error(s), last: %s, %d total", n, last, e.readErrs.Load())
+		flushed = true
+	}
+	if flushed || force {
+		e.lastFlush = now
+	}
+}
+
+// noteDropped records one datagram dropped on a full session
+// receive queue, flushing the aggregated summary if the window
+// has elapsed.
+func (e *eventLog) noteDropped() {
+	e.dropped.Add(1)
+	e.droppedPend.Add(1)
+	e.mu.Lock()
+	e.flushLocked(time.Now(), false)
+	e.mu.Unlock()
+}
+
+// noteSessionDropped records one new session discarded on a full
+// connection queue.
+func (e *eventLog) noteSessionDropped() {
+	e.sessDropped.Add(1)
+	e.sessPend.Add(1)
+	e.mu.Lock()
+	e.flushLocked(time.Now(), false)
+	e.mu.Unlock()
+}
+
+// noteReadError records one temporary read error, keeping the most
+// recent error text for the summary line.
+func (e *eventLog) noteReadError(err error) {
+	e.readErrs.Add(1)
+	e.readErrsPend.Add(1)
+	e.readErrLast.Store(err.Error())
+	e.mu.Lock()
+	e.flushLocked(time.Now(), false)
+	e.mu.Unlock()
+}
+
+// close flushes any pending counts one final time.
+func (e *eventLog) close() {
+	e.mu.Lock()
+	e.flushLocked(time.Now(), true)
+	e.mu.Unlock()
+}
+
+// totals returns the cumulative event counts (receive-queue drops,
+// session-queue drops, temporary read errors).
+func (e *eventLog) totals() (dropped, sessDropped, readErrs uint64) {
+	return e.dropped.Load(), e.sessDropped.Load(), e.readErrs.Load()
+}
 
 type ListenConfig struct {
 	Addr           net.Addr
@@ -59,6 +194,7 @@ type listener struct {
 	closed   chan struct{}
 	errChan  chan error
 	config   *ListenConfig
+	events   *eventLog
 }
 
 func NewListener(conn net.PacketConn, cfg *ListenConfig) net.Listener {
@@ -88,6 +224,7 @@ func NewListener(conn net.PacketConn, cfg *ListenConfig) net.Listener {
 		closed:  make(chan struct{}),
 		errChan: make(chan error, 1),
 		config:  cfg,
+		events:  newEventLog(cfg.Logger),
 	}
 	ln.connPool = newConnPool(cfg.TTL).WithLogger(cfg.Logger)
 	go ln.listenLoop()
@@ -130,9 +267,11 @@ func (ln *listener) listenLoop() {
 			// still open and later datagrams are still expected.
 			// Only fatal errors are reported to Accept (F-UDP-3).
 			if isTemporaryReadError(err) {
-				if ln.config.Logger != nil {
-					ln.config.Logger.Warnf("udp listener: temporary read error: %v", err)
-				}
+				// Aggregated, not per-event: a repeating
+				// transient error must not become a log flood
+				// (P1-03). Note the logger may be nil; the
+				// counters still advance.
+				ln.events.noteReadError(err)
 				if !isTimeoutError(err) {
 					// Non-timeout transient errors can repeat
 					// immediately; avoid a hot spin. Timeout
@@ -160,7 +299,15 @@ func (ln *listener) listenLoop() {
 			// overload condition — allocates a fresh buffer per
 			// dropped packet instead of reusing the pool.
 			bufpool.Put(b)
-			ln.config.Logger.Warn("data discarded: ", err)
+			if errors.Is(err, errQueueFull) {
+				// Counted and logged in aggregated summaries,
+				// never per packet (P1-03).
+				ln.events.noteDropped()
+			} else if ln.config.Logger != nil {
+				// Session closed mid-delivery: rare, not a flood
+				// vector; keep the immediate log.
+				ln.config.Logger.Warn("data discarded: ", err)
+			}
 		}
 	}
 }
@@ -210,6 +357,7 @@ func (ln *listener) Close() error {
 		close(ln.closed)
 		ln.conn.Close()
 		ln.connPool.Close()
+		ln.events.close()
 	}
 
 	return nil
@@ -228,7 +376,9 @@ func (ln *listener) getConn(raddr net.Addr) *conn {
 		return c
 	default:
 		c.Close()
-		ln.config.Logger.Warnf("connection queue is full, client %s discarded", raddr)
+		// Aggregated with the other overload drops (P1-03):
+		// under a new-session flood this fired once per client.
+		ln.events.noteSessionDropped()
 		return nil
 	}
 }
@@ -258,6 +408,11 @@ func (ln *listener) getConn(raddr net.Addr) *conn {
 // (F-UDP-3). The deadline methods below therefore never touch the
 // shared socket; a session read deadline is enforced by readDatagram
 // against this session's own queue only.
+// errQueueFull is returned by WriteQueue when a datagram is
+// dropped: the session receive queue is at its packet-count depth
+// or its byte budget (P1-02).
+var errQueueFull = errors.New("recv queue is full")
+
 type conn struct {
 	net.PacketConn
 	localAddr  net.Addr
@@ -267,6 +422,12 @@ type conn struct {
 	closed     chan struct{}
 	closeMutex sync.Mutex
 	keepalive  bool
+
+	// qmu guards qBytes. A dedicated mutex (not c.mu, which guards
+	// the read-face state) keeps the enqueue hot path free of any
+	// interaction with stream reads and deadline changes.
+	qmu    sync.Mutex
+	qBytes int // bytes currently held in rc
 
 	mu        sync.Mutex    // guards rbuf and the deadline state
 	rbuf      []byte        // unread remainder of the current datagram (stream face)
@@ -313,6 +474,14 @@ func (c *conn) readDatagram() ([]byte, error) {
 			if timer != nil {
 				timer.Stop()
 			}
+			// Release the datagram's bytes from the queue byte
+			// budget at dequeue time (P1-02); the buffer itself
+			// stays alive with the reader until returned to the
+			// pool, but the admission budget frees up here so a
+			// draining consumer immediately makes room.
+			c.qmu.Lock()
+			c.qBytes -= len(bb)
+			c.qmu.Unlock()
 			c.SetIdle(false)
 			return bb, nil
 		case <-c.closed:
@@ -480,16 +649,31 @@ func (c *conn) SetIdle(idle bool) {
 	atomic.StoreInt32(&c.idle, v)
 }
 
+// WriteQueue enqueues one datagram for the session's consumer.
+// Admission is capped twice (P1-02): by the channel's packet-count
+// depth and by the DefaultReadQueueBytes byte budget, metered on
+// the datagram's actual size — whichever cap is hit first drops
+// the datagram with errQueueFull. The session-closed check rides
+// in the same critical section so a closed session can never
+// strand accounted bytes nobody will dequeue.
 func (c *conn) WriteQueue(b []byte) error {
+	c.qmu.Lock()
+	if c.isClosed() {
+		c.qmu.Unlock()
+		return net.ErrClosed
+	}
+	if c.qBytes+len(b) > DefaultReadQueueBytes {
+		c.qmu.Unlock()
+		return errQueueFull
+	}
 	select {
 	case c.rc <- b:
+		c.qBytes += len(b)
+		c.qmu.Unlock()
 		c.SetIdle(false)
 		return nil
-
-	case <-c.closed:
-		return net.ErrClosed
-
 	default:
-		return errors.New("recv queue is full")
+		c.qmu.Unlock()
+		return errQueueFull
 	}
 }
