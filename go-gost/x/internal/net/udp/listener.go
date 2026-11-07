@@ -12,6 +12,37 @@ import (
 	"github.com/go-gost/core/logger"
 )
 
+// DefaultReadQueueSize is the per-session datagram receive queue
+// depth NewListener falls back to when a caller supplies a
+// non-positive ReadQueueSize, and DefaultBacklog is the matching
+// fallback for the new-session queue.
+//
+// The convergence has to happen here (same pattern as DefaultTTL,
+// D3-01): the Bind paths (chain, relay and socks connectors) hand
+// core's BindOptions.Backlog / UDPDataQueueSize through with no
+// defaulting of their own — both are plain int fields in
+// go-gost/core — so a zero used to reach newConn verbatim and build
+// an unbuffered channel, where the first burst overflowed instantly
+// and every excess datagram was discarded ("recv queue is full").
+//
+// 1024 matches the deepest existing metadata default (rudp, ftcp)
+// and absorbs the zero-gap burst class seen live (200 packets from
+// one source dropped ~4% at depth 128, K2) with 5x headroom, plus
+// the 1000-packet burst used as the live acceptance bar. The queue
+// stays bounded: a slot holds one pooled read buffer, so the worst
+// case per session is 1024 x ReadBufferSize (<= 64MiB at the
+// 65535-byte buffer class), reached only while a consumer is
+// stalled and a sender floods maximum-size datagrams; an idle
+// session holds no buffers at all, and the channel itself costs
+// 1024 pointers (~8KiB) per session.
+const DefaultReadQueueSize = 1024
+
+// DefaultBacklog is the new-session queue depth NewListener falls
+// back to when a caller supplies a non-positive Backlog. It matches
+// the metadata-layer default (listener/udp, rudp and ftcp all use
+// 128).
+const DefaultBacklog = 128
+
 type ListenConfig struct {
 	Addr           net.Addr
 	Backlog        int
@@ -39,6 +70,16 @@ func NewListener(conn net.PacketConn, cfg *ListenConfig) net.Listener {
 		// a non-positive TTL must never reach the conn pool's
 		// ticker (D3-01).
 		cfg.TTL = DefaultTTL
+	}
+	if cfg.ReadQueueSize <= 0 {
+		// The same Bind paths hand UDPDataQueueSize through
+		// un-defaulted; a non-positive size must never reach
+		// newConn, where it would build an unbuffered channel
+		// that discards every burst datagram (FIX-U).
+		cfg.ReadQueueSize = DefaultReadQueueSize
+	}
+	if cfg.Backlog <= 0 {
+		cfg.Backlog = DefaultBacklog
 	}
 
 	ln := &listener{
