@@ -58,7 +58,7 @@ func TestNodeTuneRejectsRetiredActionsAndFields(t *testing.T) {
 // local validation and reach dispatch: with a seeded node but no
 // agent socket connected, the call fails at dispatch ("调优失败"),
 // which is exactly how we know the action was accepted. (The wire
-// payload itself — "TuneFaces" + {"faceAction": action}, "TuneProbe"
+// payload itself — "Tune" + {"action": action}, "TuneProbe"
 // + optional {"referenceHost"} — is the T1 contract; what is
 // asserted at this boundary is that exactly the contracted actions
 // get this far and nothing else does, see the rejection test.)

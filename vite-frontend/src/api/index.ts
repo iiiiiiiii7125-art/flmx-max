@@ -1575,7 +1575,7 @@ export interface NodeTuneFaces {
   kernel: boolean;
   nic: boolean;
 }
-/** 调优状态（agent TuneStatus / TuneFaces 回包，面板原样透传）：
+/** 调优状态（agent TuneStatus / Tune 回包，面板原样透传）：
  * 四面布尔 + 当前拥塞算法 / 默认队列算法概要。 */
 export interface NodeTuneStatus {
   faces: NodeTuneFaces;
@@ -1603,7 +1603,7 @@ export interface NodeTuneProbeResult {
   warnings?: string[];
 }
 /** 调优动作：status 读四面状态；apply-* / rollback 经面板映射为
- * agent 的 TuneFaces 命令（payload {faceAction}）；probe 为线路探针
+ * agent 的 Tune 命令（payload {action}）；probe 为线路探针
  * （面板映射 TuneProbe）。旧模型的 apply（分组勾选 + 带宽/延迟手填）、
  * auto/deep/cancel 任务与 restore/restoreAuto 已全部退役。 */
 export type NodeTuneAction =

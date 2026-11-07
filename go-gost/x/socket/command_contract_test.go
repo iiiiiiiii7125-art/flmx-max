@@ -26,6 +26,14 @@ import (
 //     (non-test files) matching the command shapes, plus the dynamic
 //     "Add"/"Update"+suffix expansions used by federation_resources.go.
 //
+// The golden set additionally contains agentHandledNotRouted
+// (below): the retired first-generation tuning commands. The agent
+// still answers them — with an explicit retirement error — and the
+// golden list pins that answer surface: removing an agent-side
+// answer requires a same-change golden update. They appear in the
+// agent set only via that list, not via the routeCommand census,
+// because the panel no longer sends them at all.
+//
 // Adding or renaming a command now requires touching the golden list
 // and both ends in the same change, or this test goes red. The panel
 // half skips when the agent module is built outside the monorepo
@@ -43,6 +51,18 @@ var goldenCommandSet = []string{
 	"UpdateCLimiters", "UpdateChains", "UpdateLimiters", "UpdateService",
 	"UpgradeAgent",
 }
+
+// agentHandledNotRouted lists the command types the agent answers
+// without routing them through routeCommand: the retired
+// first-generation tuning commands. handleTuneCommandContext
+// (tuning.go) rejects them with an explicit unsupported error.
+// They never appear as string literals in non-test panel sources
+// (only as unquoted words inside comments), so the panel census
+// never collects them; the panel comparisons in
+// TestD1CommandSetContract therefore run against the golden set
+// minus exactly these names — the panel must not send commands
+// the agent only rejects.
+var agentHandledNotRouted = []string{"TuneApply", "TuneCancel", "TuneStart"}
 
 func sortedSet(in map[string]bool) []string {
 	out := make([]string, 0, len(in))
@@ -189,6 +209,9 @@ func panelCommandSet(t *testing.T) (map[string]bool, bool) {
 
 func TestD1CommandSetContract(t *testing.T) {
 	agent := agentCommandSet(t)
+	for _, handled := range agentHandledNotRouted {
+		agent[handled] = true
+	}
 	if msg := diffSets("agent routeCommand set", agent, goldenCommandSet); msg != "" {
 		t.Fatal(msg)
 	}
@@ -197,10 +220,30 @@ func TestD1CommandSetContract(t *testing.T) {
 		t.Log("go-backend not found next to the agent module; panel half of the contract skipped (agent half still enforced)")
 		return
 	}
-	if msg := diffSets("panel send set", panel, goldenCommandSet); msg != "" {
+	// The retired commands in agentHandledNotRouted are answered by
+	// the agent only to be rejected; the panel must never send them.
+	// Panel-side expectations are therefore the golden set (and the
+	// agent set) minus exactly those names.
+	retired := make(map[string]bool, len(agentHandledNotRouted))
+	for _, name := range agentHandledNotRouted {
+		retired[name] = true
+	}
+	panelWant := make([]string, 0, len(goldenCommandSet))
+	for _, name := range goldenCommandSet {
+		if !retired[name] {
+			panelWant = append(panelWant, name)
+		}
+	}
+	agentSendable := make(map[string]bool, len(agent))
+	for name := range agent {
+		if !retired[name] {
+			agentSendable[name] = true
+		}
+	}
+	if msg := diffSets("panel send set", panel, panelWant); msg != "" {
 		t.Fatal(msg)
 	}
-	if msg := diffSets("panel send set vs agent set", panel, sortedSet(agent)); msg != "" {
+	if msg := diffSets("panel send set vs agent set", panel, sortedSet(agentSendable)); msg != "" {
 		t.Fatal(msg)
 	}
 }

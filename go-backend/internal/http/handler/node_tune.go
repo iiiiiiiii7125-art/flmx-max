@@ -113,8 +113,8 @@ const nodeTuneProbeTimeout = 90 * time.Second
 //     booleans plus the live congestion-control / default-qdisc
 //     summary. The panel passes the reply through untouched.
 //   - actions "apply-ipv4" / "apply-bbr" / "apply-kernel" /
-//     "apply-nic" / "rollback" -> command "TuneFaces" with payload
-//     {"faceAction": <action>}. The agent executes the one face
+//     "apply-nic" / "rollback" -> command "Tune" with payload
+//     {"action": <action>}. The agent executes the one face
 //     (or the full rollback) and replies with the fresh status
 //     shape. Every action id is a closed enum judged here before
 //     any node traffic; the agent re-validates the same enum, so
@@ -155,8 +155,8 @@ const nodeTuneProbeTimeout = 90 * time.Second
 // x/socket; the panel contract no longer carries it.)
 
 // nodeTuneFaceActions is the closed set of mutating actions of the
-// four-face model, mapped 1:1 onto the agent's "TuneFaces"
-// faceAction enum (T1 wire contract — do not rename).
+// four-face model, mapped 1:1 onto the agent's "Tune" action enum
+// (T1 wire contract — do not rename).
 var nodeTuneFaceActions = map[string]bool{
 	"apply-ipv4":   true, // IPv4 优先解析
 	"apply-bbr":    true, // BBR + FQ
@@ -200,7 +200,7 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("未知操作"))
 			return
 		}
-		command, data = "TuneFaces", map[string]interface{}{"faceAction": req.Action}
+		command, data = "Tune", map[string]interface{}{"action": req.Action}
 	case "probe":
 		if req.ReferenceHost != "" {
 			if _, _, err := net.SplitHostPort(req.ReferenceHost); err != nil {
@@ -245,7 +245,7 @@ func (h *Handler) nodeTune(w http.ResponseWriter, r *http.Request) {
 				// 不拦调优本身。
 				msg = "节点 agent 较旧，不支持线路探针，请先升级节点 Agent"
 			} else if nodeTuneFaceActions[req.Action] {
-				// "TuneFaces" is the new command: an old agent does
+				// "Tune" is the new command: an old agent does
 				// not know it.
 				msg = "节点 agent 版本过旧，不支持新版调优，请先升级节点 Agent"
 			} else {
