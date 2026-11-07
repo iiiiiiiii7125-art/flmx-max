@@ -17,8 +17,12 @@ const (
 	// cost is one pooled 64K buffer per in-flight datagram, recycled
 	// on consumption.
 	defaultReadBufferSize = udp.MaxDatagramSize
-	defaultReadQueueSize  = 128
-	defaultBacklog        = 128
+	// 1024 aligns with the rudp/ftcp listener defaults and with
+	// udp.DefaultReadQueueSize: at 128 a 200-packet zero-gap burst
+	// from one source lost ~4% of its datagrams to a full receive
+	// queue at this listener (K2 live evidence, FIX-U).
+	defaultReadQueueSize = 1024
+	defaultBacklog       = 128
 )
 
 type metadata struct {
