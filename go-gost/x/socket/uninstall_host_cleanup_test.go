@@ -8,44 +8,69 @@ import (
 	"testing"
 )
 
-// R2F2-D01 钉格：面板连带自卸载的宿主调优文件清理、归属守卫、
-// 回执预检。全部指向临时树，绝不触碰真实 /etc。
+// 自卸载的宿主调优文件清理、归属守卫、回执预检（第二代调优模型
+// 足迹集）。全部指向临时树，绝不触碰真实 /etc。
 
 type hostCleanupTree struct {
-	conf       string
-	legacyConf string
+	kernelConf string
+	limitsConf string
+	bbrConf    string
+	gai        string
+	gaiBackup  string
+	rpsUnit    string
+	rpsScript  string
+	oldConf    string
 	bbrModule  string
-	unit       string
-	engineDir  string
-	backupPath string
+	qdiscUnit  string
+	legacyConf string
+}
+
+func (tree *hostCleanupTree) files() []string {
+	return []string{
+		tree.kernelConf, tree.limitsConf, tree.bbrConf, tree.gaiBackup,
+		tree.rpsUnit, tree.rpsScript, tree.oldConf, tree.bbrModule,
+		tree.qdiscUnit, tree.legacyConf,
+	}
 }
 
 func stubHostCleanupTree(t *testing.T) *hostCleanupTree {
 	t.Helper()
 	root := t.TempDir()
 	tree := &hostCleanupTree{
-		conf:       filepath.Join(root, "sysctl.d", "99-flmx-tuning.conf"),
-		legacyConf: filepath.Join(root, "sysctl.d", "99-flvx-tuning.conf"),
+		kernelConf: filepath.Join(root, "sysctl.d", "99-network-performance.conf"),
+		limitsConf: filepath.Join(root, "limits.d", "99-network-performance.conf"),
+		bbrConf:    filepath.Join(root, "sysctl.d", "10-bbr.conf"),
+		gai:        filepath.Join(root, "gai.conf"),
+		gaiBackup:  filepath.Join(root, "gai.conf.bak"),
+		rpsUnit:    filepath.Join(root, "systemd", "flmx-tuning-rps.service"),
+		rpsScript:  filepath.Join(root, "bin", "flmx-tuning-rps.sh"),
+		oldConf:    filepath.Join(root, "sysctl.d", "99-flmx-tuning.conf"),
 		bbrModule:  filepath.Join(root, "modules-load.d", "flmx-bbr.conf"),
-		unit:       filepath.Join(root, "systemd", "flmx-tuning-qdisc.service"),
-		engineDir:  filepath.Join(root, "agent", "tcpfit"),
-		backupPath: filepath.Join(root, "agent", "tuning-backup.json"),
+		qdiscUnit:  filepath.Join(root, "systemd", "flmx-tuning-qdisc.service"),
+		legacyConf: filepath.Join(root, "sysctl.d", "99-flvx-tuning.conf"),
 	}
-	oldConf, oldLegacy, oldBBR := tuneConfPath, legacyTuneConfPath, tuneBBRModule
-	oldUnit, oldBackup := tuneShapeUnitPath, tuneBackupPath
+	old := struct {
+		kernel, limits, bbr, gai, gaiBak, rpsUnit, rpsScript string
+		oldConf, legacy, bbrMod, shapeUnit                   string
+	}{
+		tuneKernelConfPath, tuneLimitsConfPath, tuneBBRConfPath, tuneGaiConfPath, tuneGaiBackupPath,
+		tuneRPSUnitPath, tuneRPSScriptPath, oldTuneConfPath, legacyTuneConfPath, oldTuneBBRModulePath, oldTuneShapeUnitPath,
+	}
+	tuneKernelConfPath, tuneLimitsConfPath, tuneBBRConfPath = tree.kernelConf, tree.limitsConf, tree.bbrConf
+	tuneGaiConfPath, tuneGaiBackupPath = tree.gai, tree.gaiBackup
+	tuneRPSUnitPath, tuneRPSScriptPath = tree.rpsUnit, tree.rpsScript
+	oldTuneConfPath, legacyTuneConfPath = tree.oldConf, tree.legacyConf
+	oldTuneBBRModulePath, oldTuneShapeUnitPath = tree.bbrModule, tree.qdiscUnit
 	oldContainer := uninstallInContainer
-	tuneConfPath = tree.conf
-	legacyTuneConfPath = tree.legacyConf
-	tuneBBRModule = tree.bbrModule
-	tuneShapeUnitPath = func() string { return tree.unit }
-	tuneBackupPath = tree.backupPath
 	// 容器形态桩：清理里的 systemctl 步被短路，单测不依赖宿主
-	// 是否装有 systemctl（disable/daemon-reload 的脚本形态口径
-	// 由 test-install-scripts-proxy.sh 的 R6-02 用例覆盖）。
+	// 是否装有 systemctl。
 	uninstallInContainer = func() bool { return true }
 	t.Cleanup(func() {
-		tuneConfPath, legacyTuneConfPath, tuneBBRModule = oldConf, oldLegacy, oldBBR
-		tuneShapeUnitPath, tuneBackupPath = oldUnit, oldBackup
+		tuneKernelConfPath, tuneLimitsConfPath, tuneBBRConfPath = old.kernel, old.limits, old.bbr
+		tuneGaiConfPath, tuneGaiBackupPath = old.gai, old.gaiBak
+		tuneRPSUnitPath, tuneRPSScriptPath = old.rpsUnit, old.rpsScript
+		oldTuneConfPath, legacyTuneConfPath = old.oldConf, old.legacy
+		oldTuneBBRModulePath, oldTuneShapeUnitPath = old.bbrMod, old.shapeUnit
 		uninstallInContainer = oldContainer
 	})
 	return tree
@@ -68,13 +93,12 @@ func stubLegacyFootprint(t *testing.T, present bool) {
 	t.Cleanup(func() { uninstallLegacyFootprint = orig })
 }
 
-// 核心场景：调优恢复失败（队列备份丢失）后自卸载继续执行，宿主
-// 调优文件集必须被删净——否则 sysctl conf 开机重放、qdisc unit
-// 在安装目录删除后悬空。
+// 核心场景：自卸载时宿主调优文件集必须删净——否则 sysctl conf
+// 开机重放、RPS unit 在脚本删除后悬空。
 func TestCleanupHostTuningFilesRemovesWholeSet(t *testing.T) {
 	tree := stubHostCleanupTree(t)
 	stubLegacyFootprint(t, false)
-	for _, path := range []string{tree.conf, tree.legacyConf, tree.bbrModule, tree.unit} {
+	for _, path := range tree.files() {
 		writeHostFile(t, path)
 	}
 
@@ -82,10 +106,10 @@ func TestCleanupHostTuningFilesRemovesWholeSet(t *testing.T) {
 	if len(rep.Failed) != 0 || len(rep.Skipped) != 0 {
 		t.Fatalf("report = %+v, want clean removal", rep)
 	}
-	if len(rep.Removed) != 4 {
-		t.Fatalf("removed = %v, want the whole 4-file set", rep.Removed)
+	if len(rep.Removed) != len(tree.files()) {
+		t.Fatalf("removed = %v, want the whole %d-file set", rep.Removed, len(tree.files()))
 	}
-	for _, path := range []string{tree.conf, tree.legacyConf, tree.bbrModule, tree.unit} {
+	for _, path := range tree.files() {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("host tuning file %s must be removed", path)
 		}
@@ -93,12 +117,11 @@ func TestCleanupHostTuningFilesRemovesWholeSet(t *testing.T) {
 }
 
 // 归属守卫：检测到旧式 gost 足迹时，legacy conf 可能由同机另一
-// 安装持有——跳过并点名，其余三件照删（与 install.sh 3b 步同口
-// 径）。
+// 安装持有——跳过并点名，其余照删。
 func TestCleanupHostTuningFilesSkipsLegacyWithFootprint(t *testing.T) {
 	tree := stubHostCleanupTree(t)
 	stubLegacyFootprint(t, true)
-	for _, path := range []string{tree.conf, tree.legacyConf, tree.bbrModule, tree.unit} {
+	for _, path := range tree.files() {
 		writeHostFile(t, path)
 	}
 
@@ -109,8 +132,8 @@ func TestCleanupHostTuningFilesSkipsLegacyWithFootprint(t *testing.T) {
 	if len(rep.Skipped) != 1 || !strings.Contains(rep.Skipped[0], tree.legacyConf) {
 		t.Fatalf("skipped = %v, want the legacy conf named", rep.Skipped)
 	}
-	if len(rep.Removed) != 3 || len(rep.Failed) != 0 {
-		t.Fatalf("report = %+v, want the other three removed", rep)
+	if len(rep.Removed) != len(tree.files())-1 || len(rep.Failed) != 0 {
+		t.Fatalf("report = %+v, want the rest removed", rep)
 	}
 }
 
@@ -122,6 +145,31 @@ func TestCleanupHostTuningFilesIdempotentOnCleanState(t *testing.T) {
 	rep := cleanupHostTuningFiles()
 	if len(rep.Removed) != 0 || len(rep.Skipped) != 0 || len(rep.Failed) != 0 {
 		t.Fatalf("report = %+v, want empty on a clean host", rep)
+	}
+}
+
+// gai 兜底还原：恢复步未消费的备份＋调优行仍在位时，清理先按备
+// 份还原 gai.conf 再删备份（本体不删）。
+func TestCleanupHostTuningFilesRestoresGaiFromBackup(t *testing.T) {
+	tree := stubHostCleanupTree(t)
+	stubLegacyFootprint(t, false)
+	orig := "label ::/0          1\n"
+	writeHostFile(t, tree.gaiBackup)
+	if err := os.WriteFile(tree.gaiBackup, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeHostFile(t, tree.gai)
+	if err := os.WriteFile(tree.gai, []byte(orig+gaiPrecedenceLine+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupHostTuningFiles()
+	content, err := os.ReadFile(tree.gai)
+	if err != nil || string(content) != orig {
+		t.Fatalf("gai.conf = %q, %v; want restored original", content, err)
+	}
+	if _, err := os.Stat(tree.gaiBackup); !os.IsNotExist(err) {
+		t.Fatal("gai backup must be removed after restore")
 	}
 }
 
@@ -167,28 +215,32 @@ func TestLegacyGostFootprintPresent(t *testing.T) {
 	}
 }
 
-// 预检：队列备份丢失＋整形仍在 → 恢复必然 fail-closed 早退，回
-// 执 warnings 必须点名失败与待删宿主文件；备份在位时不预告。
-func TestAssessUninstallTuningRestoreBlocked(t *testing.T) {
+// 预检：有调优足迹在位时回执 warnings 预告回退与待删文件；干净
+// 盘面不预告。
+func TestAssessUninstallTuningAnnouncesFootprint(t *testing.T) {
 	tree := stubHostCleanupTree(t)
-	writeHostFile(t, filepath.Join(tree.engineDir, "shape.sh"))
-	writeHostFile(t, tree.conf)
+	if a := assessUninstallTuning(); len(a.warnings()) != 0 {
+		t.Fatalf("clean tree must produce no warnings: %+v", a)
+	}
 
+	writeHostFile(t, tree.kernelConf)
+	writeHostFile(t, tree.rpsUnit)
 	a := assessUninstallTuning()
-	if !a.RestoreBlocked {
-		t.Fatal("missing queue backup with a persisted shape must be assessed as blocked")
-	}
 	warnings := a.warnings()
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "调优恢复将失败") ||
-		!strings.Contains(warnings[0], tree.conf) {
-		t.Fatalf("warnings = %v, want the failure and the host file named", warnings)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "回退系统调优") ||
+		!strings.Contains(warnings[0], tree.kernelConf) || !strings.Contains(warnings[0], tree.rpsUnit) {
+		t.Fatalf("warnings = %v, want the rollback notice naming the files", warnings)
 	}
 
-	// 队列备份补回后同盘面不再阻断（恢复可正常走完）。
-	writeHostFile(t, filepath.Join(tree.engineDir, "original-qdisc.sh"))
+	// 只有 gai 调优行在位（无文件足迹）时同样预告。
+	tree2 := stubHostCleanupTree(t)
+	writeHostFile(t, tree2.gai)
+	if err := os.WriteFile(tree2.gai, []byte(gaiPrecedenceLine+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	a = assessUninstallTuning()
-	if a.RestoreBlocked || len(a.warnings()) != 0 {
-		t.Fatalf("assessment = %+v, want unblocked with no warnings", a)
+	if !a.IPv4Tuned || len(a.warnings()) != 1 {
+		t.Fatalf("assessment = %+v, want IPv4Tuned with one warning", a)
 	}
 }
 
@@ -200,7 +252,7 @@ func TestRunAgentUninstallContinuesPastRestoreFailure(t *testing.T) {
 	origRestore := uninstallRestoreTuning
 	uninstallRestoreTuning = func() error {
 		s.order = append(s.order, "restore")
-		return errors.New("找不到整形前的队列备份")
+		return errors.New("部分调优回退失败")
 	}
 	t.Cleanup(func() { uninstallRestoreTuning = origRestore })
 

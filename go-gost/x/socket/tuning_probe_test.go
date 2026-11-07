@@ -58,22 +58,26 @@ func snapshotFile(t *testing.T, path string) (data []byte, exists bool) {
 	return b, true
 }
 
-// The no-write guard: a probe must leave every surface Apply writes
-// byte-identical (sysctl file, backup file, params file, plus a live
-// sysctl value), and must not create files that did not exist.
+// The no-write guard: a probe must leave every surface the tuning
+// apply writes byte-identical (kernel conf, BBR conf, limits conf,
+// plus a live sysctl value), and must not create files that did not
+// exist (the gai.conf backup). Adapted to the second-generation
+// tuning model: the seeded surfaces are the new model's files; the
+// assertion is unchanged.
 func TestTuneProbeDoesNotWrite(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	stubProbeSeams(t, []uint32{120000, 130000, 110000}, nil)
-	// Seed all three write surfaces, as an already-tuned node has.
-	_ = os.MkdirAll(filepath.Dir(tuneConfPath), 0o755)
-	_ = os.WriteFile(tuneConfPath, []byte("net.core.rmem_max = 39597152\n"), 0o644)
-	_ = os.MkdirAll(filepath.Dir(tuneBackupPath), 0o755)
-	_ = os.WriteFile(tuneBackupPath, []byte(`{"net.core.rmem_max":"0"}`), 0o600)
-	_ = os.WriteFile(tuneParamsPath, []byte(`{"bandwidthMbps":100,"rttMs":50}`), 0o644)
-	beforeConf, confExists := snapshotFile(t, tuneConfPath)
-	beforeBackup, _ := snapshotFile(t, tuneBackupPath)
-	beforeParams, _ := snapshotFile(t, tuneParamsPath)
-	beforeBBR, bbrExists := snapshotFile(t, tuneBBRModule)
+	// Seed the write surfaces, as an already-tuned node has.
+	_ = os.MkdirAll(filepath.Dir(tuneKernelConfPath), 0o755)
+	_ = os.WriteFile(tuneKernelConfPath, []byte("net.core.rmem_max = 39597152\n"), 0o644)
+	_ = os.MkdirAll(filepath.Dir(tuneBBRConfPath), 0o755)
+	_ = os.WriteFile(tuneBBRConfPath, []byte(tuneBBRConfBody), 0o644)
+	_ = os.MkdirAll(filepath.Dir(tuneLimitsConfPath), 0o755)
+	_ = os.WriteFile(tuneLimitsConfPath, []byte(tuneLimitsConfBody), 0o644)
+	beforeConf, confExists := snapshotFile(t, tuneKernelConfPath)
+	beforeBBR, bbrExists := snapshotFile(t, tuneBBRConfPath)
+	beforeLimits, _ := snapshotFile(t, tuneLimitsConfPath)
+	_, gaiBakExists := snapshotFile(t, tuneGaiBackupPath)
 	beforeRmem, _ := readSysctl("net.core.rmem_max")
 
 	out, err := handleTuneCommand("TuneProbe", map[string]interface{}{})
@@ -90,19 +94,22 @@ func TestTuneProbeDoesNotWrite(t *testing.T) {
 	if res.BandwidthSrc != "not_requested" || res.BandwidthAvail {
 		t.Fatalf("bandwidth must default to not-run: %+v", res)
 	}
-	afterConf, _ := snapshotFile(t, tuneConfPath)
-	afterBackup, _ := snapshotFile(t, tuneBackupPath)
-	afterParams, _ := snapshotFile(t, tuneParamsPath)
-	afterBBR, bbrNow := snapshotFile(t, tuneBBRModule)
+	afterConf, _ := snapshotFile(t, tuneKernelConfPath)
+	afterBBR, bbrNow := snapshotFile(t, tuneBBRConfPath)
+	afterLimits, _ := snapshotFile(t, tuneLimitsConfPath)
+	_, gaiBakNow := snapshotFile(t, tuneGaiBackupPath)
 	afterRmem, _ := readSysctl("net.core.rmem_max")
 	if !confExists || string(afterConf) != string(beforeConf) {
 		t.Fatalf("conf changed: %q -> %q", beforeConf, afterConf)
 	}
-	if string(afterBackup) != string(beforeBackup) || string(afterParams) != string(beforeParams) {
-		t.Fatalf("backup/params changed")
-	}
 	if bbrExists != bbrNow || string(afterBBR) != string(beforeBBR) {
-		t.Fatalf("bbr module file changed")
+		t.Fatalf("bbr conf changed")
+	}
+	if string(afterLimits) != string(beforeLimits) {
+		t.Fatalf("limits conf changed")
+	}
+	if gaiBakExists != gaiBakNow {
+		t.Fatalf("gai backup existence changed: %v -> %v", gaiBakExists, gaiBakNow)
 	}
 	if afterRmem != beforeRmem {
 		t.Fatalf("live sysctl changed: %q -> %q", beforeRmem, afterRmem)
