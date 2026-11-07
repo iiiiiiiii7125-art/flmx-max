@@ -27,10 +27,12 @@ import {
  * 内核面参数由 Agent 按机器总内存定尺寸，不再有带宽/延迟手填、
  * BDP 计算、自动/深度优化任务等旧模型入口。
  *
- * 线路探针与四面并列、互不混杂：只保留参考主机 TCP 连接 RTT 与
- * Agent 内 sock_diag 采样两条腿，结果呈现延迟 / 丢包 / 抖动 /
- * RTT 分布；withSpeed/speedtestURL 下载测速腿已退役（其唯一消费
- * 者是已弃用的 BDP 尺寸推导）。
+ * 线路探针与四面并列、互不混杂：参考主机一轮 10 次 TCP 连接探针
+ * 序列（丢包率 / 抖动 / RTT 分布都出自这一腿的逐次样本）与 Agent
+ * 内 sock_diag 采样（已建立连接的内核 RTT 中位数与分布；快照无
+ * 发送计数与样本时序，不产丢包 / 抖动）两条腿；withSpeed/
+ * speedtestURL 下载测速腿已退役（其唯一消费者是已弃用的 BDP
+ * 尺寸推导）。
  */
 
 interface FaceDef {
@@ -67,21 +69,23 @@ const FACES: FaceDef[] = [
   },
 ];
 
-/** RTT 分布：由中位数与样本数派生分桶示意（探针回包只有中位数与
- * 样本数两个聚合量，不虚构逐样本分布；样本即节点当前已建立连接
- * 的内核 RTT 采样）。 */
-function rttBuckets(median: number): Array<{ label: string; pct: number }> {
-  const edges: Array<[string, number]> = [
-    ["< 50 ms", 50],
-    ["50–100 ms", 100],
-    ["100–200 ms", 200],
-    ["200–400 ms", 400],
-    ["> 400 ms", Infinity],
+/** RTT 分布条：sock_diag 逐样本分布的 min / 中位 / p95 / max 四个
+ * 实测标记点，按最大值定标画在一条带上（样本即节点当前已建立
+ * 连接的内核 RTT 采样；不虚构逐样本直方图）。 */
+function rttRangeMarks(
+  min: number,
+  median: number,
+  p95: number,
+  max: number,
+): Array<{ label: string; pct: number }> {
+  const scale = Math.max(max, 1);
+  const at = (v: number) => Math.min(100, Math.max(0, (v / scale) * 100));
+  return [
+    { label: `最小 ${min}`, pct: at(min) },
+    { label: `中位 ${median}`, pct: at(median) },
+    { label: `p95 ${p95}`, pct: at(p95) },
+    { label: `最大 ${max}`, pct: at(max) },
   ];
-  return edges.map(([label, edge]) => ({
-    label,
-    pct: median <= edge ? 100 : 0,
-  }));
 }
 
 export function NodeTuneModal({
@@ -300,9 +304,11 @@ export function NodeTuneModal({
                       </Button>
                     </div>
                     <p className="text-xs font-semibold text-foreground">
-                      测回程方向的延迟与抖动：参考主机 TCP 连接 RTT +
-                      节点当前连接的内核 RTT 采样。参考主机留空时自动用
-                      面板地址；只读测量，不改任何参数。
+                      测回程方向的延迟 / 丢包 / 抖动 / RTT
+                      分布：参考主机一轮 10 次 TCP
+                      连接探针给出丢包率、抖动与分布，节点已建立连接的
+                      内核 RTT 采样给出延迟中位数与分布。参考主机留空时
+                      自动用面板地址；只读测量，不改任何参数。
                     </p>
                     <div className="flex flex-wrap items-center gap-2">
                       <input
@@ -322,40 +328,48 @@ export function NodeTuneModal({
                           <>
                             <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs font-semibold text-foreground">
                               <span>
-                                延迟（中位数） {probe.rttMedianMs} ms
-                              </span>
-                              <span>
-                                抖动 ±
-                                {Math.max(
-                                  1,
-                                  Math.round(probe.rttMedianMs * 0.1),
-                                )}{" "}
+                                内核采样延迟（中位数） {probe.rttMedianMs}{" "}
                                 ms
                               </span>
-                              <span>丢包 —（TCP 采样不可测）</span>
-                              <span>样本 {probe.rttSamples} 条连接</span>
-                            </div>
-                            <div className="space-y-0.5">
-                              {rttBuckets(probe.rttMedianMs).map((b) => (
-                                <div
-                                  key={b.label}
-                                  className="flex items-center gap-2"
-                                >
-                                  <span className="w-20 shrink-0 text-[11px] font-semibold text-foreground">
-                                    {b.label}
+                              {probe.rttMinMs != null &&
+                                probe.rttP95Ms != null &&
+                                probe.rttMaxMs != null && (
+                                  <span>
+                                    分布 最小 {probe.rttMinMs} · p95{" "}
+                                    {probe.rttP95Ms} · 最大 {probe.rttMaxMs}{" "}
+                                    ms
                                   </span>
-                                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-default-100">
-                                    <div
-                                      className="h-full rounded-full bg-primary"
-                                      style={{ width: `${b.pct}%` }}
-                                    />
-                                  </div>
-                                </div>
-                              ))}
+                                )}
+                              <span>样本 {probe.rttSamples} 条连接</span>
+                              <span>
+                                丢包 / 抖动见参考腿（内核快照无发送计数与
+                                样本时序，不可测）
+                              </span>
                             </div>
+                            {probe.rttMinMs != null &&
+                              probe.rttP95Ms != null &&
+                              probe.rttMaxMs != null && (
+                                <div className="relative h-5">
+                                  <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-default-100" />
+                                  {rttRangeMarks(
+                                    probe.rttMinMs,
+                                    probe.rttMedianMs,
+                                    probe.rttP95Ms,
+                                    probe.rttMaxMs,
+                                  ).map((m) => (
+                                    <span
+                                      key={m.label}
+                                      className="absolute top-1/2 h-3 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded bg-primary"
+                                      style={{ left: `${m.pct}%` }}
+                                      title={`${m.label} ms`}
+                                    />
+                                  ))}
+                                </div>
+                              )}
                             <p className="text-[11px] font-semibold text-foreground">
-                              分布按中位数落桶示意：探针回包只含中位数与
-                              样本数聚合量，不含逐样本明细。
+                              分布条标记为最小 / 中位 / p95 /
+                              最大四个实测点（按最大值定标），均为
+                              sock_diag 逐样本计算，不含虚构直方图。
                             </p>
                           </>
                         ) : (
@@ -364,13 +378,46 @@ export function NodeTuneModal({
                             连接，延迟不可用。
                           </p>
                         )}
-                        {probe.panelRttAvailable &&
-                          probe.panelRttMs != null && (
-                            <p className="text-xs font-semibold text-foreground">
-                              参考主机连接 RTT {probe.panelRttMs}{" "}
-                              ms（TCP 握手耗时，仅作参考）
+                        {probe.panelRttSent != null &&
+                          probe.panelRttSent > 0 &&
+                          (probe.panelRttReceived === 0 ? (
+                            <p className="text-xs font-semibold text-warning-700">
+                              参考腿：发送 {probe.panelRttSent} · 收到 0 ·
+                              丢包 100%（整轮无响应，延迟 / 抖动不可测）
                             </p>
-                          )}
+                          ) : (
+                            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs font-semibold text-foreground">
+                              <span>
+                                参考腿延迟（中位数） {probe.panelRttMs} ms
+                              </span>
+                              {probe.panelRttLossRate != null && (
+                                <span>
+                                  丢包{" "}
+                                  {Math.round(probe.panelRttLossRate * 100)}
+                                  %（发送 {probe.panelRttSent} · 收到{" "}
+                                  {probe.panelRttReceived}）
+                                </span>
+                              )}
+                              {probe.panelRttJitterMs != null ? (
+                                <span>
+                                  抖动（相邻差均值）{" "}
+                                  {probe.panelRttJitterMs.toFixed(1)} ms
+                                </span>
+                              ) : (
+                                <span>抖动不可测（成功样本不足）</span>
+                              )}
+                              {probe.panelRttMinMs != null &&
+                                probe.panelRttMaxMs != null && (
+                                  <span>
+                                    分布 最小 {probe.panelRttMinMs} ·{" "}
+                                    {probe.panelRttP95Ms != null
+                                      ? `p95 ${probe.panelRttP95Ms} · `
+                                      : ""}
+                                    最大 {probe.panelRttMaxMs} ms
+                                  </span>
+                                )}
+                            </div>
+                          ))}
                         {(probe.warnings || []).map((w, i) => (
                           <p
                             key={i}

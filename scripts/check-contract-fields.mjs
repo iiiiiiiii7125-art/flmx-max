@@ -3,7 +3,7 @@
  * check-contract-fields.mjs — 前后端契约门禁（FLMX 审计 B2 批落地）
  *
  * 目的：把 X2 逐字段比对的结论固化成可重复执行的集合 diff，防止 types.ts
- * 与后端实际响应再次漂移。检查分七组：
+ * 与后端实际响应再次漂移。检查分八组：
  *
  *   C1  nullable 贯彻：后端 repository.go 的 List* 出口凡经 nullable*
  *       辅助函数下发的字段（JSON null），前端对应 interface 必须显式
@@ -28,6 +28,10 @@
  *   C7  页面本地类型副本同步：limit.tsx /
  *       dashboard/use-dashboard-data.ts / forward.tsx / node.tsx /
  *       src/types/index.ts 中与线缆类型同形的本地声明不得保留旧错误。
+ *   C8  TuneProbe 回包字段：agent tuneProbeResult（go-gost/x/socket/
+ *       tuning_probe.go）的 json tag 集与前端 NodeTuneProbeResult
+ *       ——前端声明字段不得越出 agent tag 集，且 C2-01 裁定的新
+ *       字段集（sock_diag 分布三件＋参考腿序列七件）两侧齐在。
  *
  * 已登记的设计性差异见 scripts/contract-whitelist.json（只登记、不拦截）。
  *
@@ -732,6 +736,73 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
 
   if (problems.length) problems.forEach((p) => fail("C7", p));
   else pass("C7", "页面本地类型副本与线缆契约同步");
+}
+
+/* ---------------- C8: TuneProbe 回包字段 ---------------- */
+// 线路探针回包结构 tuneProbeResult（agent，go-gost/x/socket/
+// tuning_probe.go）与前端消费类型 NodeTuneProbeResult（api/index.ts）：
+//   (a) 前端声明字段 ⊆ agent json tag 集——前端查不存在的字段恒
+//       为 undefined，渲染恒空，属静默漂移；
+//   (b) C2-01 裁定的新字段集两侧齐在（sock_diag 分布三件＋参考
+//       腿序列七件）。agent 另有 suggested/bandwidth* 等前端不声
+//       明的字段，故只单向断言，不反向要求 agent ⊆ 前端。
+{
+  const problems = [];
+  const agentProbeGo = readCode("go-gost/x/socket/tuning_probe.go", true);
+  const structStart = agentProbeGo.search(/type tuneProbeResult struct \{/);
+  let agentTags = null;
+  if (structStart >= 0) {
+    const open = agentProbeGo.indexOf("{", structStart);
+    const end = scanBlockEnd(agentProbeGo, open);
+    const body = end < 0 ? agentProbeGo.slice(open) : agentProbeGo.slice(open, end + 1);
+    agentTags = new Set(
+      [...body.matchAll(/json:"([A-Za-z0-9_]+)/g)].map((m) => m[1]),
+    );
+  }
+  if (agentTags === null) {
+    problems.push("go-gost/x/socket/tuning_probe.go 未找到 tuneProbeResult 结构");
+  } else if (agentTags.size < 20) {
+    problems.push(`tuneProbeResult json tag 提取异常（仅 ${agentTags.size} 条，疑似定位失效）`);
+  }
+  const feBlock = tsInterfaceBlock(
+    readCode(`${FE}/api/index.ts`, false),
+    "NodeTuneProbeResult",
+  );
+  const feFields = new Set();
+  if (feBlock) {
+    for (const m of feBlock.matchAll(/^\s+([A-Za-z0-9_]+)\??:/gm))
+      feFields.add(m[1]);
+  }
+  if (!feBlock) {
+    problems.push("api/index.ts 未找到 NodeTuneProbeResult interface");
+  } else if (feFields.size < 10) {
+    problems.push(`NodeTuneProbeResult 字段提取异常（仅 ${feFields.size} 条，疑似定位失效）`);
+  }
+  if (agentTags && feBlock) {
+    for (const f of feFields)
+      if (!agentTags.has(f))
+        problems.push(`NodeTuneProbeResult.${f} 在 agent tuneProbeResult 无对应 json tag（前端恒 undefined）`);
+    const probeNewFields = [
+      "rttMinMs",
+      "rttP95Ms",
+      "rttMaxMs",
+      "panelRttSent",
+      "panelRttReceived",
+      "panelRttLossRate",
+      "panelRttMinMs",
+      "panelRttP95Ms",
+      "panelRttMaxMs",
+      "panelRttJitterMs",
+    ];
+    for (const f of probeNewFields) {
+      if (!agentTags.has(f))
+        problems.push(`C2-01 新探针字段 ${f} 在 agent tuneProbeResult 缺失`);
+      if (!feFields.has(f))
+        problems.push(`C2-01 新探针字段 ${f} 在前端 NodeTuneProbeResult 未声明`);
+    }
+  }
+  if (problems.length) problems.forEach((p) => fail("C8", p));
+  else pass("C8", "TuneProbe 回包字段与前端消费类型零漂移（C2-01 新字段双向齐）");
 }
 
 /* ---------------- 白名单（已登记设计差异，仅公示） ---------------- */

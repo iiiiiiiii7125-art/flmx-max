@@ -1597,9 +1597,28 @@ export interface NodeTuneProbeResult {
   rttAvailable: boolean;
   /** "tcp_info_median" | "unavailable"。 */
   rttSource: string;
-  /** 参考腿：到参考主机的 TCP 连接 RTT（毫秒），仅作参考值。 */
+  /** sock_diag 采样 RTT 分布（毫秒）：最小 / p95 / 最大，与中位数
+   * 同源逐样本计算；不可用时缺失。本腿是连接快照，无丢包/抖动。 */
+  rttMinMs?: number;
+  rttP95Ms?: number;
+  rttMaxMs?: number;
+  /** 参考腿：探针序列成功样本的 TCP 连接 RTT 中位数（毫秒），仅作参考值。 */
   panelRttMs?: number;
   panelRttAvailable: boolean;
+  /** 参考腿一轮探针的发送 / 收到计数；参考腿未跑（或旧 agent）时缺失。 */
+  panelRttSent?: number;
+  panelRttReceived?: number;
+  /** 参考腿丢包率（0–1，由发送/收到推导）；整轮全丢包时为 1，
+   * 参考腿未跑时缺失。 */
+  panelRttLossRate?: number;
+  /** 参考腿成功样本的 RTT 分布（毫秒）：最小 / 最大；成功样本 ≥ 2
+   * 时另有 p95。不可测时缺失。 */
+  panelRttMinMs?: number;
+  panelRttP95Ms?: number;
+  panelRttMaxMs?: number;
+  /** 参考腿抖动（毫秒）：相邻成功样本 RTT 差的平均绝对值；
+   * 成功样本 < 2 时缺失（不可测）。 */
+  panelRttJitterMs?: number;
   warnings?: string[];
 }
 /** 调优动作：status 读四面状态；apply-* / rollback 经面板映射为
