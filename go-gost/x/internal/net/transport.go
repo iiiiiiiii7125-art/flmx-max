@@ -292,63 +292,85 @@ func (t *trackedRW) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// WriteTo implements io.WriterTo for raw TCP sources, forwarding
-// io.CopyBuffer's splice to the underlying connection.
+// WriteTo implements io.WriterTo. For a raw TCP source/destination
+// pair it forwards io.CopyBuffer's splice to the underlying
+// connection. Every other shape falls back to a buffered copy
+// through the tracked Read path: io.CopyBuffer dispatches to
+// WriterTo unconditionally and treats any error it returns as
+// fatal (there is no fallback in io.CopyBuffer itself), so this
+// method must never decline the copy — an earlier version returned
+// errFastPathUnavailable for non-TCP endpoints, which killed every
+// Transport session whose endpoints were wrapped (stats/traffic
+// wrappers, readWriteConn, UDP session conns) the moment it
+// started; the connector/relay UDP tests caught it.
 func (t *trackedRW) WriteTo(w io.Writer) (int64, error) {
-	if !t.tcp {
-		return 0, errFastPathUnavailable
+	if t.tcp {
+		if dst, ok := w.(*trackedRW); ok && dst.tcp {
+			src, ok1 := t.rw.(*net.TCPConn)
+			dstc, ok2 := dst.rw.(*net.TCPConn)
+			if ok1 && ok2 {
+				// Arm the same deadlines the buffered path would
+				// carry, so a stalled splice wakes on the session
+				// deadline too.
+				t.armRead()
+				dst.armWrite()
+				n, err := src.WriteTo(teeWriter{dstc, dst.act})
+				if n > 0 {
+					t.act.touch()
+				}
+				if err != nil && isTimeoutError(err) {
+					return n, errReadTimeout
+				}
+				return n, err
+			}
+		}
 	}
-	dst, ok := w.(*trackedRW)
-	if !ok || !dst.tcp {
-		return 0, errFastPathUnavailable
-	}
-	src, ok1 := t.rw.(*net.TCPConn)
-	dstc, ok2 := dst.rw.(*net.TCPConn)
-	if !ok1 || !ok2 {
-		return 0, errFastPathUnavailable
-	}
-	// Arm the same deadlines the buffered path would carry, so a
-	// stalled splice wakes on the session deadline too.
-	t.armRead()
-	dst.armWrite()
-	n, err := src.WriteTo(teeWriter{dstc, dst.act})
-	if n > 0 {
-		t.act.touch()
-	}
-	if err != nil && isTimeoutError(err) {
-		return n, errReadTimeout
-	}
-	return n, err
+	buf := bufpool.Get(bufferSize)
+	defer bufpool.Put(buf)
+	// readerOnly hides this method from io.CopyBuffer so the
+	// fallback cannot dispatch back into WriteTo.
+	return io.CopyBuffer(w, readerOnly{t}, buf)
 }
 
-// ReadFrom implements io.ReaderFrom for raw TCP destinations,
-// forwarding io.CopyBuffer's splice to the underlying connection.
+// ReadFrom implements io.ReaderFrom. For a raw TCP source/
+// destination pair it forwards io.CopyBuffer's splice to the
+// underlying connection; every other shape falls back to a
+// buffered copy through the tracked Write path, for the same
+// reason as WriteTo: io.CopyBuffer treats a ReaderFrom error as
+// fatal, so this method must never decline the copy.
 func (t *trackedRW) ReadFrom(r io.Reader) (int64, error) {
-	if !t.tcp {
-		return 0, errFastPathUnavailable
+	if t.tcp {
+		if src, ok := r.(*trackedRW); ok && src.tcp {
+			srcc, ok1 := src.rw.(*net.TCPConn)
+			dst, ok2 := t.rw.(*net.TCPConn)
+			if ok1 && ok2 {
+				src.armRead()
+				t.armWrite()
+				n, err := dst.ReadFrom(teeReader{srcc, src.act})
+				if n > 0 {
+					t.act.touch()
+				}
+				if err != nil && isTimeoutError(err) {
+					return n, errReadTimeout
+				}
+				return n, err
+			}
+		}
 	}
-	src, ok := r.(*trackedRW)
-	if !ok || !src.tcp {
-		return 0, errFastPathUnavailable
-	}
-	srcc, ok1 := src.rw.(*net.TCPConn)
-	dst, ok2 := t.rw.(*net.TCPConn)
-	if !ok1 || !ok2 {
-		return 0, errFastPathUnavailable
-	}
-	src.armRead()
-	t.armWrite()
-	n, err := dst.ReadFrom(teeReader{srcc, src.act})
-	if n > 0 {
-		t.act.touch()
-	}
-	if err != nil && isTimeoutError(err) {
-		return n, errReadTimeout
-	}
-	return n, err
+	buf := bufpool.Get(bufferSize)
+	defer bufpool.Put(buf)
+	// writerOnly hides this method from io.CopyBuffer so the
+	// fallback cannot dispatch back into ReadFrom.
+	return io.CopyBuffer(writerOnly{t}, r, buf)
 }
 
-var errFastPathUnavailable = errors.New("transport: fast path unavailable")
+// readerOnly exposes only io.Reader of the wrapped value, and
+// writerOnly only io.Writer; they keep io.CopyBuffer's interface
+// dispatch from recursing into trackedRW's WriterTo/ReaderFrom on
+// the generic fallback path.
+type readerOnly struct{ io.Reader }
+
+type writerOnly struct{ io.Writer }
 
 // teeReader/teeWriter record destination progress for splice
 // transfers, whose byte counts bypass the tracked Read/Write.
