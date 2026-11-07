@@ -27,6 +27,7 @@ func init() {
 type h2Dialer struct {
 	clients     map[string]*http.Client
 	clientMutex sync.Mutex
+	retired     bool
 	h2c         bool
 	logger      logger.Logger
 	md          metadata
@@ -74,6 +75,13 @@ func (d *h2Dialer) Multiplex() bool {
 }
 
 func (d *h2Dialer) Dial(ctx context.Context, address string, opts ...dialer.DialOption) (net.Conn, error) {
+	d.clientMutex.Lock()
+	retired := d.retired
+	d.clientMutex.Unlock()
+	if retired {
+		return nil, net.ErrClosed
+	}
+
 	raddr, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
 		d.logger.Error(err)
@@ -167,4 +175,39 @@ func (d *h2Dialer) Dial(ctx context.Context, address string, opts ...dialer.Dial
 		localAddr:  &net.TCPAddr{IP: net.IPv4zero, Port: 0},
 	}
 	return conn, nil
+}
+
+// Retire closes idle connections of every cached client of a dialer
+// whose chain has been replaced, so the clients do not outlive the
+// generation that created them (P1-08 family: this table had no
+// eviction path at all).
+func (d *h2Dialer) Retire() {
+	for _, client := range d.detachClients() {
+		client.CloseIdleConnections()
+	}
+}
+
+// Close immediately releases all cached clients.
+func (d *h2Dialer) Close() error {
+	for _, client := range d.detachClients() {
+		client.CloseIdleConnections()
+	}
+	return nil
+}
+
+func (d *h2Dialer) detachClients() []*http.Client {
+	if d == nil {
+		return nil
+	}
+	d.clientMutex.Lock()
+	d.retired = true
+	clients := make([]*http.Client, 0, len(d.clients))
+	for _, client := range d.clients {
+		if client != nil {
+			clients = append(clients, client)
+		}
+	}
+	d.clients = make(map[string]*http.Client)
+	d.clientMutex.Unlock()
+	return clients
 }

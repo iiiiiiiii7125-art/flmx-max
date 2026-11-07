@@ -57,9 +57,18 @@ func NewHandler(opts ...handler.Option) handler.Handler {
 	}
 
 	return &routerHandler{
-		options:    options,
-		sdCache:    cache.NewCache(time.Minute),
-		routeCache: cache.NewCache(time.Minute),
+		options: options,
+		// P1-07: both caches sit on the util/cache base, which now
+		// sweeps expired entries; the hard caps bound what a sweep
+		// interval can accumulate. routeCache keys are arbitrary
+		// client-supplied destination addresses (traffic-driven,
+		// P1 estimated 10k+ distinct targets on a busy router), so
+		// 16384 entries (~200B each, ≈3MB worst case) covers the
+		// legitimate working set while capping externally driven
+		// growth; eviction only forces a re-resolve, same as expiry.
+		// sdCache keys are provisioned client identities, far fewer.
+		sdCache:    cache.NewCacheWithMaxItems(time.Minute, 8192),
+		routeCache: cache.NewCacheWithMaxItems(time.Minute, 16384),
 	}
 }
 

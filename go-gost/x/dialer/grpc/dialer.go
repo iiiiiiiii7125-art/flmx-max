@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/go-gost/x/registry"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -20,9 +22,20 @@ func init() {
 	registry.DialerRegistry().Register("grpc", NewDialer)
 }
 
+// grpcClient pairs the generated stub with its ClientConn so the
+// connection can actually be closed when the client is evicted or the
+// dialer is retired (P1-08: previously only the stub was cached, so
+// the ClientConn — its TCP connection and goroutines — leaked across
+// chain generations).
+type grpcClient struct {
+	client pb.GostTunelClientX
+	conn   *grpc.ClientConn
+}
+
 type grpcDialer struct {
-	clients     map[string]pb.GostTunelClientX
+	clients     map[string]*grpcClient
 	clientMutex sync.Mutex
+	retired     bool
 	md          metadata
 	options     dialer.Options
 }
@@ -34,7 +47,7 @@ func NewDialer(opts ...dialer.Option) dialer.Dialer {
 	}
 
 	return &grpcDialer{
-		clients: make(map[string]pb.GostTunelClientX),
+		clients: make(map[string]*grpcClient),
 		options: options,
 	}
 }
@@ -52,7 +65,18 @@ func (d *grpcDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialO
 	d.clientMutex.Lock()
 	defer d.clientMutex.Unlock()
 
-	client, ok := d.clients[addr]
+	if d.retired {
+		return nil, net.ErrClosed
+	}
+
+	entry, ok := d.clients[addr]
+	if ok && entry.conn.GetState() == connectivity.Shutdown {
+		// delete-on-dead: the cached connection is gone for good,
+		// drop it and fall through to create a fresh one.
+		entry.conn.Close()
+		delete(d.clients, addr)
+		entry, ok = nil, false
+	}
 	if !ok {
 		var options dialer.DialOptions
 		for _, opt := range opts {
@@ -98,12 +122,15 @@ func (d *grpcDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialO
 			d.options.Logger.Error(err)
 			return nil, err
 		}
-		client = pb.NewGostTunelClientX(cc)
-		d.clients[addr] = client
+		entry = &grpcClient{
+			client: pb.NewGostTunelClientX(cc),
+			conn:   cc,
+		}
+		d.clients[addr] = entry
 	}
 
 	ctx2, cancel := context.WithCancel(context.Background())
-	cli, err := client.TunnelX(ctx2, d.md.path)
+	cli, err := entry.client.TunnelX(ctx2, d.md.path)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -115,4 +142,40 @@ func (d *grpcDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialO
 		remoteAddr: &net.TCPAddr{},
 		cancelFunc: cancel,
 	}, nil
+}
+
+// Retire releases every cached client of a dialer whose chain has
+// been replaced. grpc offers no graceful drain for a ClientConn, so
+// retiring closes the connections outright; Chain.Retire can now
+// reach them instead of leaking them across generations (P1-08).
+func (d *grpcDialer) Retire() {
+	for _, entry := range d.detachClients() {
+		entry.conn.Close()
+	}
+}
+
+// Close immediately releases all cached ClientConns.
+func (d *grpcDialer) Close() error {
+	var errs []error
+	for _, entry := range d.detachClients() {
+		errs = append(errs, entry.conn.Close())
+	}
+	return errors.Join(errs...)
+}
+
+func (d *grpcDialer) detachClients() []*grpcClient {
+	if d == nil {
+		return nil
+	}
+	d.clientMutex.Lock()
+	d.retired = true
+	clients := make([]*grpcClient, 0, len(d.clients))
+	for _, entry := range d.clients {
+		if entry != nil {
+			clients = append(clients, entry)
+		}
+	}
+	d.clients = make(map[string]*grpcClient)
+	d.clientMutex.Unlock()
+	return clients
 }

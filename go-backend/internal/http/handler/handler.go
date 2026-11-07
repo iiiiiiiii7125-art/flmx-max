@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go-backend/internal/auth"
@@ -2557,7 +2558,17 @@ func nullableNullInt64(v sql.NullInt64) interface{} {
 }
 
 // flowCryptoCache caches AES crypto instances by secret to avoid per-request SHA256+GCM init.
+//
+// P1-07: the map previously only ever grew (one entry per distinct
+// secret ever seen, e.g. across node secret rotations). Legitimate
+// cardinality is the live node count (tens), so a generous hard cap
+// acts purely as a safety valve: past flowCryptoCacheMaxEntries the
+// table is swept wholesale — instances are cheap to recreate from the
+// secret and cache hits/misses are externally indistinguishable.
 var flowCryptoCache sync.Map
+var flowCryptoCacheSize atomic.Int64
+
+const flowCryptoCacheMaxEntries = 1024
 
 func getOrCreateFlowCrypto(secret string) *security.AESCrypto {
 	if v, ok := flowCryptoCache.Load(secret); ok {
@@ -2567,8 +2578,27 @@ func getOrCreateFlowCrypto(secret string) *security.AESCrypto {
 	if err != nil {
 		return nil
 	}
-	flowCryptoCache.Store(secret, c)
+	if _, loaded := flowCryptoCache.LoadOrStore(secret, c); loaded {
+		return flowCryptoCacheLoad(secret)
+	}
+	if flowCryptoCacheSize.Add(1) > flowCryptoCacheMaxEntries {
+		flowCryptoCache.Range(func(k, _ interface{}) bool {
+			flowCryptoCache.Delete(k)
+			return true
+		})
+		flowCryptoCacheSize.Store(0)
+		flowCryptoCache.Store(secret, c)
+		flowCryptoCacheSize.Store(1)
+	}
 	return c
+}
+
+func flowCryptoCacheLoad(secret string) *security.AESCrypto {
+	v, ok := flowCryptoCache.Load(secret)
+	if !ok {
+		return nil
+	}
+	return v.(*security.AESCrypto)
 }
 
 // checkFlowEnvelopeTimestamp 校验 flow 加密信封外层 timestamp 的

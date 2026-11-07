@@ -2,6 +2,7 @@ package pht
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -21,6 +22,7 @@ func init() {
 type phtDialer struct {
 	clients     map[string]*pht_util.Client
 	clientMutex sync.Mutex
+	retired     bool
 	tlsEnabled  bool
 	md          metadata
 	options     dialer.Options
@@ -69,6 +71,10 @@ func (d *phtDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialOp
 	d.clientMutex.Lock()
 	defer d.clientMutex.Unlock()
 
+	if d.retired {
+		return nil, net.ErrClosed
+	}
+
 	client, ok := d.clients[addr]
 	if !ok {
 		var options dialer.DialOptions
@@ -115,4 +121,39 @@ func (d *phtDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialOp
 	}
 
 	return client.Dial(ctx, addr)
+}
+
+// Retire closes every cached client of a dialer whose chain has been
+// replaced, so their transports do not outlive the generation that
+// created them (P1-08).
+func (d *phtDialer) Retire() {
+	for _, client := range d.detachClients() {
+		client.Close()
+	}
+}
+
+// Close immediately releases all cached clients.
+func (d *phtDialer) Close() error {
+	var errs []error
+	for _, client := range d.detachClients() {
+		errs = append(errs, client.Close())
+	}
+	return errors.Join(errs...)
+}
+
+func (d *phtDialer) detachClients() []*pht_util.Client {
+	if d == nil {
+		return nil
+	}
+	d.clientMutex.Lock()
+	d.retired = true
+	clients := make([]*pht_util.Client, 0, len(d.clients))
+	for _, client := range d.clients {
+		if client != nil {
+			clients = append(clients, client)
+		}
+	}
+	d.clients = make(map[string]*pht_util.Client)
+	d.clientMutex.Unlock()
+	return clients
 }

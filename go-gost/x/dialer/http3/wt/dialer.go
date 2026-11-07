@@ -3,6 +3,7 @@ package wt
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"sync"
 
@@ -20,6 +21,7 @@ func init() {
 type wtDialer struct {
 	clients     map[string]*Client
 	clientMutex sync.Mutex
+	retired     bool
 	md          metadata
 	options     dialer.Options
 }
@@ -51,6 +53,10 @@ func (d *wtDialer) Multiplex() bool {
 func (d *wtDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialOption) (conn net.Conn, err error) {
 	d.clientMutex.Lock()
 	defer d.clientMutex.Unlock()
+
+	if d.retired {
+		return nil, net.ErrClosed
+	}
 
 	client := d.clients[addr]
 	if client == nil {
@@ -107,4 +113,39 @@ func (d *wtDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialOpt
 	}
 
 	return client.Dial(ctx, addr)
+}
+
+// Retire closes every cached client of a dialer whose chain has been
+// replaced, so their WebTransport sessions do not outlive the
+// generation that created them (P1-08).
+func (d *wtDialer) Retire() {
+	for _, client := range d.detachClients() {
+		client.Close()
+	}
+}
+
+// Close immediately releases all cached clients.
+func (d *wtDialer) Close() error {
+	var errs []error
+	for _, client := range d.detachClients() {
+		errs = append(errs, client.Close())
+	}
+	return errors.Join(errs...)
+}
+
+func (d *wtDialer) detachClients() []*Client {
+	if d == nil {
+		return nil
+	}
+	d.clientMutex.Lock()
+	d.retired = true
+	clients := make([]*Client, 0, len(d.clients))
+	for _, client := range d.clients {
+		if client != nil {
+			clients = append(clients, client)
+		}
+	}
+	d.clients = make(map[string]*Client)
+	d.clientMutex.Unlock()
+	return clients
 }
