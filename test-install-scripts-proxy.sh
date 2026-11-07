@@ -10907,6 +10907,32 @@ test_agent_service_unit_carries_limit_nofile() (
     fail "T1b: agent systemd unit must carry LimitNOFILE=1048576"
   grep -Fxq 'LimitCORE=0' "$work/flmx_agent.service" || \
     fail "T1b: agent systemd unit must keep LimitCORE=0"
+  # P1-06：unit 还须带内存天花板两档，数值按本机 MemTotal 从共享
+  # 档位表算出（install.sh agent_memory_limits，与 go-gost/
+  # memlimit.go 的 memoryTierFor 同表同数，两侧测试互钉）：
+  # High＝进程内软帽×5/4、Max＝软帽×3/2、Max 不超过总内存。
+  # 464448 kB（≈453MiB，ECS1686 同档）→ 软帽 317MiB。
+  printf 'MemTotal:       464448 kB\nMemFree:         1024 kB\n' > "$work/meminfo"
+  AGENT_MEMINFO_PATH="$work/meminfo"
+  write_flmx_agent_service
+  grep -Fxq 'MemoryHigh=396M' "$work/flmx_agent.service" || \
+    fail "P1-06: agent systemd unit must carry MemoryHigh=396M on a 453MiB machine"
+  grep -Fxq 'MemoryMax=453M' "$work/flmx_agent.service" || \
+    fail "P1-06: agent systemd unit must carry MemoryMax=453M on a 453MiB machine"
+  # 8GiB 档 → 软帽封顶 2048MiB、High 2560M、Max 3072M。
+  printf 'MemTotal:       8388608 kB\n' > "$work/meminfo"
+  write_flmx_agent_service
+  grep -Fxq 'MemoryHigh=2560M' "$work/flmx_agent.service" || \
+    fail "P1-06: agent systemd unit must carry MemoryHigh=2560M on an 8GiB machine"
+  grep -Fxq 'MemoryMax=3072M' "$work/flmx_agent.service" || \
+    fail "P1-06: agent systemd unit must carry MemoryMax=3072M on an 8GiB machine"
+  # MemTotal 读不到时按 512MiB 档兜底（软帽 358MiB），不许无帽。
+  printf 'MemFree:         1024 kB\n' > "$work/meminfo"
+  write_flmx_agent_service
+  grep -Fxq 'MemoryHigh=447M' "$work/flmx_agent.service" || \
+    fail "P1-06: agent systemd unit must fall back to the 512MiB tier when MemTotal is unreadable"
+  grep -Fxq 'MemoryMax=512M' "$work/flmx_agent.service" || \
+    fail "P1-06: agent systemd unit must fall back to the 512MiB tier when MemTotal is unreadable"
 )
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
