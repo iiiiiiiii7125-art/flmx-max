@@ -284,6 +284,7 @@ func (h *http2Handler) roundTrip(ctx context.Context, w http.ResponseWriter, req
 		}
 
 		rw := xio.NewReadWriter(req.Body, flushWriter{w})
+		hijacked := false
 
 		// compatible with HTTP1.x
 		if hj, ok := w.(http.Hijacker); ok && req.ProtoMajor == 1 {
@@ -298,6 +299,7 @@ func (h *http2Handler) roundTrip(ctx context.Context, w http.ResponseWriter, req
 			defer conn.Close()
 
 			rw = conn
+			hijacked = true
 		}
 
 		rw = traffic_wrapper.WrapReadWriter(
@@ -317,6 +319,13 @@ func (h *http2Handler) roundTrip(ctx context.Context, w http.ResponseWriter, req
 			pstats.Add(stats.KindCurrentConns, 1)
 			defer pstats.Add(stats.KindCurrentConns, -1)
 			rw = stats_wrapper.WrapReadWriter(rw, pstats)
+		}
+		if !hijacked {
+			// Re-expose the request body's Close as the endpoint's
+			// own (see streamReadWriter in conn.go): Transport's
+			// no-progress teardown must be able to unblock the copy
+			// parked on the request body (P1-01).
+			rw = &streamReadWriter{ReadWriter: rw, body: req.Body}
 		}
 
 		start := time.Now()

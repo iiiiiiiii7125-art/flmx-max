@@ -17,7 +17,6 @@ import (
 	"github.com/go-gost/core/observer/stats"
 	"github.com/go-gost/core/recorder"
 	ctxvalue "github.com/go-gost/x/ctx"
-	xio "github.com/go-gost/x/internal/io"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/util/sniffing"
 	tls_util "github.com/go-gost/x/internal/util/tls"
@@ -229,7 +228,10 @@ func (h *unixHandler) forwardUnix(ctx context.Context, conn net.Conn, target *ch
 			conn.SetReadDeadline(time.Time{})
 		}
 
-		rw = xio.NewReadWriter(br, conn)
+		// NewReadWriteConn (not xio.NewReadWriter): the adapter must
+		// not shadow the conn — Transport needs its deadlines and
+		// Close reachable to bound the session (P1-01).
+		rw = xnet.NewReadWriteConn(br, conn, conn)
 		switch proto {
 		case sniffing.ProtoHTTP:
 			ro2 := &xrecorder.HandlerRecorderObject{}
