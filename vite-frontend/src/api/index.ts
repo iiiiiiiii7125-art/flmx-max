@@ -1566,127 +1566,68 @@ export const setNodeLatencyTargets = (data: {
 /** 节点到各测试点最近 hours 小时的延迟趋势。 */
 export const getNodeLatencyHistory = (id: number, hours: number) =>
   Network.post<LatencyTrend>("/node/latency/history", { id, hours });
-/** 节点调优的单个 sysctl 参数。 */
-export interface NodeTuneSetting {
-  key: string;
-  current: string;
-  target: string;
-  supported: boolean;
-  /** 已达到推荐值（AtLeast 只升不降）。 */
-  ok: boolean;
+/** 节点调优四面（vpsing tcp.sh 模型）：每面独立应用、独立报告状态。 */
+export type NodeTuneFaceId = "ipv4" | "bbr" | "kernel" | "nic";
+/** 四面状态：键与 agent 状态回包的 faces 对象同名（线协议，不改名）。 */
+export interface NodeTuneFaces {
+  ipv4: boolean;
+  bbr: boolean;
+  kernel: boolean;
+  nic: boolean;
 }
-export interface NodeTuneGroup {
-  id: string;
-  name: string;
-  desc: string;
-  applied: boolean;
-  settings: NodeTuneSetting[];
-}
-/** 调优所针对的线路（手动输入，非实测）。 */
-export interface NodeTuneLine {
-  bandwidthMbps: number;
-  rttMs: number;
-}
-export interface NodeTuneSizes {
-  ramMb: number;
-  bdp: number;
-  bufMax: number;
-  bufDefault: number;
-  /** 缓冲区上限取该值的原因（2×BDP、内存封顶或 4MB 下限）。 */
-  bufReason: string;
-  tcpMem: string;
-}
+/** 调优状态（agent TuneStatus / TuneFaces 回包，面板原样透传）：
+ * 四面布尔 + 当前拥塞算法 / 默认队列算法概要。 */
 export interface NodeTuneStatus {
-  /** 旧 agent 不返回此字段：即按固定值调优的信号（能力探测主门）。
-   *  是否支持按带宽/延迟计算，只以 params 有无判定，不比较 agent
-   *  版本号；按带宽/延迟计算自 1.4.7 起提供（文档门号，仅提示用）。 */
-  params?: NodeTuneLine;
-  sizes?: NodeTuneSizes;
-  /** 面板据 status 回包 params 有无打的派生标注，与 Boolean(status?.params) 同义。 */
-  lineSupported?: boolean;
-  kernel: string;
+  faces: NodeTuneFaces;
+  /** 当前拥塞控制算法（如 "bbr" / "cubic"）。 */
   congestion: string;
-  available: string;
-  hasBackup: boolean;
-  groups: NodeTuneGroup[];
+  /** 当前默认队列算法（如 "fq" / "pfifo_fast"）。 */
+  qdisc: string;
   warnings?: string[];
-  /** 新 agent 回包带 automatic=true；旧 agent 无此字段：即不支持
-   * 自动调优的信号（上游 3.3.43 能力探测，不比较 agent 版本号）。 */
-  automatic?: boolean;
-  detection?: NodeTuneDetection;
-  job?: NodeTuneJob;
 }
-/** 自动调优的一次 iperf3 测速样本（agent 侧 tuneSample）。 */
-export interface NodeTuneSample {
-  mbps: number;
-  retransmits: number;
-  lossPercent: number;
-}
-/** 自动调优的测速结果（agent 侧 tuneDetection，落 tuning-result.json）。 */
-export interface NodeTuneDetection {
-  warnings?: string[];
-  bandwidthMbps: number;
-  bandwidthSource: string;
+/** 线路探针结果（agent TuneProbe 回包）：保留两条腿——参考主机
+ * TCP 连接 RTT + agent 内 sock_diag 对已建立连接的 RTT 采样。
+ * withSpeed/speedtestURL 下载测速腿已退役（其唯一消费者是已弃用的
+ * BDP 尺寸推导），回包中的 suggested/bandwidth 字段不再消费。 */
+export interface NodeTuneProbeResult {
+  /** sock_diag 采样的 RTT 中位数（毫秒），不可用时缺失。 */
+  rttMedianMs?: number;
+  /** 参与中位数计算的样本数。 */
+  rttSamples: number;
+  rttAvailable: boolean;
+  /** "tcp_info_median" | "unavailable"。 */
   rttSource: string;
-  interface: string;
-  peer: string;
-  port: number;
-  family: string;
-  measuredAt: number;
-  before?: NodeTuneSample;
-  single?: NodeTuneSample;
-  parallel?: NodeTuneSample;
-  applied: boolean;
-  shapeMbps: number;
-  deepSummary?: string;
-  estimatedGB: number;
+  /** 参考腿：到参考主机的 TCP 连接 RTT（毫秒），仅作参考值。 */
+  panelRttMs?: number;
+  panelRttAvailable: boolean;
+  warnings?: string[];
 }
-/** 自动调优的后台任务（agent 侧 tuneJob，落 tuning-job.json）。 */
-export interface NodeTuneJob {
-  id: string;
-  mode: string;
-  state: string;
-  stage: string;
-  percent: number;
-  message: string;
-  startedAt: number;
-  finishedAt?: number;
-  logs?: string;
-}
-/** 调优动作：status/apply 走老路；auto/deep/cancel/restoreAuto
- * 是上游 3.3.43 的自动任务路（面板分别映射为 TuneStart/TuneCancel）。
- * 旧 restore（只恢复内核参数、保留整形）已随 D4U2 下线，恢复一律走
- * restoreAuto；deep 须带 maxTrafficGB（本次流量预算，0 < maxGB <= 1000）。
- * deep 可带 manualShapeMbps（手动整形速率 Mbps，F-05：> 0 时 agent
- * 跳过拐点扫描、直接应用该值并验证吞吐；0/缺省为扫描拐点）。 */
+/** 调优动作：status 读四面状态；apply-* / rollback 经面板映射为
+ * agent 的 TuneFaces 命令（payload {faceAction}）；probe 为线路探针
+ * （面板映射 TuneProbe）。旧模型的 apply（分组勾选 + 带宽/延迟手填）、
+ * auto/deep/cancel 任务与 restore/restoreAuto 已全部退役。 */
 export type NodeTuneAction =
   | "status"
-  | "apply"
-  | "auto"
-  | "deep"
-  | "cancel"
-  | "restoreAuto";
-/** 节点网络调优（sysctl）：读取状态、应用所选分组、恢复默认。
- * line 原样透传给 agent；旧 agent 忽略未知字段走固定值，是否支持以
- * status 回包有无 params 判定（lineSupported = Boolean(status?.params)，
- * 与上游同款），不比较 agent 版本号。旧调优弹窗不传 line，行为与之前一致。 */
-export const nodeTune = (
+  | "apply-ipv4"
+  | "apply-bbr"
+  | "apply-kernel"
+  | "apply-nic"
+  | "rollback"
+  | "probe";
+/** 节点网络调优：四面状态读取/逐面应用/一键回退与线路探针。
+ * 全部动作共用同一 40s 前端界（登记 T019：面板 30s < FE 40s；
+ * probe 的面板界为 90s，见后端 nodeTuneProbeTimeout）。 */
+export const nodeTune = <T = NodeTuneStatus>(
   id: number,
   action: NodeTuneAction,
-  groups: string[] = [],
-  line?: NodeTuneLine,
-  maxTrafficGB?: number,
-  manualShapeMbps?: number,
+  referenceHost?: string,
 ) =>
-  Network.post<NodeTuneStatus>(
+  Network.post<T>(
     "/node/tune",
     {
       id,
       action,
-      groups,
-      ...line,
-      ...(maxTrafficGB != null ? { maxTrafficGB } : {}),
-      ...(manualShapeMbps != null ? { manualShapeMbps } : {}),
+      ...(referenceHost ? { referenceHost } : {}),
     },
     { timeout: 40 * 1000 },
   );

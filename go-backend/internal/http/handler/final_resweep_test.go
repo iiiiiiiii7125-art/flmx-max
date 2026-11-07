@@ -83,12 +83,6 @@ func TestResweepTuneProbeRejectsEmptyLabelInputs(t *testing.T) {
 	if code == 0 || !strings.Contains(msg, "空标签") {
 		t.Fatalf("R-02: probe referenceHost=a..b:443 must be rejected naming empty label, got code=%d msg=%s", code, msg)
 	}
-	code, msg = call(map[string]interface{}{
-		"id": nodeID, "action": "probe", "speedtestURL": "https://a..b/file.bin",
-	})
-	if code == 0 || !strings.Contains(msg, "空标签") {
-		t.Fatalf("R-02: probe speedtestURL=https://a..b/file.bin must be rejected naming empty label, got code=%d msg=%s", code, msg)
-	}
 	// 合法对照：须越过校验期（走到节点命令下发失败，而非空标签拒）。
 	// 无 wsServer 时下发失败文案为“调优失败”，不含“空标签”。
 	code, msg = call(map[string]interface{}{
@@ -97,12 +91,11 @@ func TestResweepTuneProbeRejectsEmptyLabelInputs(t *testing.T) {
 	if strings.Contains(msg, "空标签") {
 		t.Fatalf("R-02: probe referenceHost=example.com:443 must pass validation, got code=%d msg=%s", code, msg)
 	}
-	code, msg = call(map[string]interface{}{
-		"id": nodeID, "action": "probe", "speedtestURL": "https://example.com/file.bin",
-	})
-	if strings.Contains(msg, "空标签") {
-		t.Fatalf("R-02: probe speedtestURL=https://example.com/file.bin must pass validation, got code=%d msg=%s", code, msg)
-	}
+	// The speedtestURL cases that used to sit here are gone with the
+	// speed leg: the field no longer parses at all (strict decode
+	// rejects it as an unknown field — covered in
+	// node_tune_faces_test.go), so there is no validation path left
+	// for it to exercise.
 }
 
 // R-04（写面）：nftables 节点 SSH 配置 host `a..b` 被接受并落库。
