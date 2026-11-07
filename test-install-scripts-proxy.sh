@@ -2136,9 +2136,11 @@ STUBEOF
 )
 
 # R6-02：脚本菜单卸载须与面板自卸载路径对齐清理宿主残留——按
-# tuning-backup.json 恢复 sysctl 原值、回放整形前队列、删调优宿
-# 主三件套与改名前 legacy conf、disable 并删队列整形 unit、删
-# agent 自建 nft 三表，且全部赶在删安装目录之前（备份在目录里）。
+# tuning-backup.json 恢复 sysctl 原值、回放整形前队列、删第二代
+# 四面调优足迹全集（内核/limits/BBR conf、gai 备份还原、MSS 钳
+# 制规则、RPS unit 与助手脚本）与第一代残留（99-flmx conf、改名
+# 前 legacy conf、BBR 模块、qdisc unit）、删 agent 自建 nft 三
+# 表，且全部赶在删安装目录之前（备份在目录里）。
 test_uninstall_flmx_agent_cleans_host_tuning_residue() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -2154,9 +2156,17 @@ test_uninstall_flmx_agent_cleans_host_tuning_residue() (
   FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
   FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
   FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$work/sysctl.d/99-network-performance.conf"
+  FLMX_TUNING_LIMITS_CONF="$work/security/limits.d/99-network-performance.conf"
+  FLMX_TUNING_BBR_CONF="$work/sysctl.d/10-bbr.conf"
+  FLMX_TUNING_GAI_CONF="$work/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$work/gai.conf.bak"
+  FLMX_TUNING_RPS_UNIT_FILE="$work/systemd/flmx-tuning-rps.service"
+  FLMX_TUNING_RPS_SCRIPT="$work/bin/flmx-tuning-rps.sh"
   FLMX_PROC_SYS_DIR="$work/proc/sys"
   mkdir -p "$INSTALL_DIR/tcpfit" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")" \
     "$(dirname "$FLMX_TUNING_BBR_MODULE_FILE")" "$(dirname "$FLMX_TUNING_QDISC_UNIT_FILE")" \
+    "$(dirname "$FLMX_TUNING_LIMITS_CONF")" "$(dirname "$FLMX_TUNING_RPS_SCRIPT")" \
     "$FLMX_PROC_SYS_DIR/net/ipv4" "$FLMX_PROC_SYS_DIR/net/core"
 
   printf 'bbr\n' > "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control"
@@ -2180,11 +2190,22 @@ EOF
   echo 'tcp_bbr' > "$FLMX_TUNING_BBR_MODULE_FILE"
   echo '[Unit]' > "$FLMX_TUNING_QDISC_UNIT_FILE"
   echo '[Unit]' > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+  # 第二代四面足迹：内核/limits/BBR conf、RPS unit 与助手脚本、
+  # gai.conf（IPv4 优先行在位）＋其备份（调优前原文）。
+  echo 'net.core.somaxconn = 65535' > "$FLMX_TUNING_KERNEL_CONF"
+  echo '* soft nofile 1048576' > "$FLMX_TUNING_LIMITS_CONF"
+  echo 'net.ipv4.tcp_congestion_control = bbr' > "$FLMX_TUNING_BBR_CONF"
+  echo '[Unit]' > "$FLMX_TUNING_RPS_UNIT_FILE"
+  echo '#!/bin/sh' > "$FLMX_TUNING_RPS_SCRIPT"
+  printf 'label ::/0 1\nprecedence ::ffff:0:0/96  100\n' > "$FLMX_TUNING_GAI_CONF"
+  printf 'original-gai-content\n' > "$FLMX_TUNING_GAI_BACKUP"
 
-  local systemctl_calls="$work/systemctl-calls" nft_input="$work/nft-input"
+  local systemctl_calls="$work/systemctl-calls" nft_input="$work/nft-input" iptables_calls="$work/iptables-calls"
   : > "$systemctl_calls"
+  : > "$iptables_calls"
   systemctl() { echo "$*" >> "$systemctl_calls"; return 0; }
   nft() { cat > "$nft_input"; return 0; }
+  iptables() { echo "$*" >> "$iptables_calls"; return 0; }
 
   local rc="0" out
   out=$(mktemp)
@@ -2202,6 +2223,23 @@ EOF
   [[ ! -e "$FLMX_TUNING_QDISC_UNIT_FILE" ]] || fail "R6-02: flmx-tuning-qdisc.service should be removed"
   grep -q 'disable --now flmx-tuning-qdisc.service' "$systemctl_calls" || \
     fail "R6-02: qdisc unit should be disabled before removal"
+  # 第二代四面足迹：三件 conf 与 RPS 助手脚本删净、RPS unit 先
+  # disable 再删、gai.conf 按备份还原且备份删除、MSS 钳制规则
+  # 先 -C 探在位再 -D 删除。
+  [[ ! -e "$FLMX_TUNING_KERNEL_CONF" ]] || fail "R6-02: 99-network-performance.conf should be removed"
+  [[ ! -e "$FLMX_TUNING_LIMITS_CONF" ]] || fail "R6-02: limits 99-network-performance.conf should be removed"
+  [[ ! -e "$FLMX_TUNING_BBR_CONF" ]] || fail "R6-02: 10-bbr.conf should be removed"
+  [[ ! -e "$FLMX_TUNING_RPS_SCRIPT" ]] || fail "R6-02: flmx-tuning-rps.sh should be removed"
+  [[ ! -e "$FLMX_TUNING_RPS_UNIT_FILE" ]] || fail "R6-02: flmx-tuning-rps.service should be removed"
+  grep -q 'disable --now flmx-tuning-rps.service' "$systemctl_calls" || \
+    fail "R6-02: rps unit should be disabled before removal"
+  assert_equals "original-gai-content" "$(cat "$FLMX_TUNING_GAI_CONF")" \
+    "R6-02: gai.conf should be restored from the tuning backup"
+  [[ ! -e "$FLMX_TUNING_GAI_BACKUP" ]] || fail "R6-02: gai.conf.bak should be removed after restore"
+  grep -q -- '-t mangle -C POSTROUTING.*TCPMSS' "$iptables_calls" || \
+    fail "R6-02: MSS clamp rule should be probed with iptables -C"
+  grep -q -- '-t mangle -D POSTROUTING.*TCPMSS' "$iptables_calls" || \
+    fail "R6-02: MSS clamp rule should be deleted with iptables -D"
   local table
   for table in flmx_kernel flvx_kernel flmx_hop_probe; do
     grep -q "delete table inet $table" "$nft_input" || \
@@ -2226,15 +2264,23 @@ test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent() (
   FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
   FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
   FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$work/sysctl.d/99-network-performance.conf"
+  FLMX_TUNING_GAI_CONF="$work/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$work/gai.conf.bak"
   FLMX_PROC_SYS_DIR="$work/proc/sys"
   mkdir -p "$INSTALL_DIR" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")"
   printf 'binary' > "$INSTALL_DIR/flmx_agent"
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
   echo 'tuned' > "$FLMX_TUNING_SYSCTL_CONF"
+  echo 'tuned-v2' > "$FLMX_TUNING_KERNEL_CONF"
+  # gai 备份在位但优先行不在位：备份仍须删除、gai 本体不动。
+  printf 'plain-gai\n' > "$FLMX_TUNING_GAI_CONF"
+  printf 'stale-backup\n' > "$FLMX_TUNING_GAI_BACKUP"
   echo '[Unit]' > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
 
   systemctl() { return 0; }
   nft() { cat >/dev/null; return 1; }
+  iptables() { return 1; }
 
   local rc="0" out
   out=$(mktemp)
@@ -2242,6 +2288,10 @@ test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent() (
   assert_equals "0" "$rc" "R6-02: nft failure must not fail the whole uninstall"
   [[ ! -d "$INSTALL_DIR" ]] || fail "R6-02: install dir should still be removed when nft cleanup fails"
   [[ ! -e "$FLMX_TUNING_SYSCTL_CONF" ]] || fail "R6-02: other cleanup items should still run when nft fails"
+  [[ ! -e "$FLMX_TUNING_KERNEL_CONF" ]] || fail "R6-02: gen-2 kernel conf should still be removed when nft fails"
+  [[ ! -e "$FLMX_TUNING_GAI_BACKUP" ]] || fail "R6-02: gai backup should be removed even when the precedence line is inactive"
+  assert_equals "plain-gai" "$(cat "$FLMX_TUNING_GAI_CONF")" \
+    "R6-02: gai.conf must stay untouched when the precedence line is inactive"
   grep -q 'nft 表删除失败' "$out" || fail "R6-02: nft failure should be disclosed per item in the receipt"
 
   # 幂等：对已清状态再次执行清理函数，无失败行、返回 0。
@@ -2274,6 +2324,13 @@ test_uninstall_flmx_agent_host_cleanup_queue_backup_lost() (
   FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
   FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
   FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$work/sysctl.d/99-network-performance.conf"
+  FLMX_TUNING_LIMITS_CONF="$work/security/limits.d/99-network-performance.conf"
+  FLMX_TUNING_BBR_CONF="$work/sysctl.d/10-bbr.conf"
+  FLMX_TUNING_GAI_CONF="$work/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$work/gai.conf.bak"
+  FLMX_TUNING_RPS_UNIT_FILE="$work/systemd/flmx-tuning-rps.service"
+  FLMX_TUNING_RPS_SCRIPT="$work/bin/flmx-tuning-rps.sh"
   FLMX_PROC_SYS_DIR="$work/proc/sys"
   mkdir -p "$INSTALL_DIR/tcpfit" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")" \
     "$(dirname "$FLMX_TUNING_BBR_MODULE_FILE")" "$(dirname "$FLMX_TUNING_QDISC_UNIT_FILE")" \
@@ -2838,6 +2895,13 @@ test_uninstall_flmx_agent_host_cleanup_preserves_foreign_legacy_resources() (
   FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
   FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
   FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$work/sysctl.d/99-network-performance.conf"
+  FLMX_TUNING_LIMITS_CONF="$work/security/limits.d/99-network-performance.conf"
+  FLMX_TUNING_BBR_CONF="$work/sysctl.d/10-bbr.conf"
+  FLMX_TUNING_GAI_CONF="$work/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$work/gai.conf.bak"
+  FLMX_TUNING_RPS_UNIT_FILE="$work/systemd/flmx-tuning-rps.service"
+  FLMX_TUNING_RPS_SCRIPT="$work/bin/flmx-tuning-rps.sh"
   FLMX_PROC_SYS_DIR="$work/proc/sys"
   LEGACY_GOST_CONFIG_DIR="$work/gost"
   LEGACY_GOST_BINARY="$work/bin/gost"
@@ -10813,6 +10877,27 @@ test_openrc_pidfile_uses_configured_value() (
   assert_equals "888" "$(legacy_flux_agent_main_pid)" \
     "A3-08: legacy health check must read the pid from the legacy pidfile variable"
 )
+
+# T1b：agent systemd unit 必须自带 LimitNOFILE=1048576——调优面③
+# 写的 /etc/security/limits.d 只作用于 PAM 登录会话，对已注册的
+# 服务无效；没有 unit 这一行，存量与新装节点的 agent 进程句柄
+# 上限都停在系统默认。存量侧的 unit 只在安装/重装（与改名迁移）
+# 重写 unit 时才刷新，面板/脚本的二进制更新路径不重写 unit——
+# 该生效条件由报告点名，本用例只钉模板本身。
+test_agent_service_unit_carries_limit_nofile() (
+  set -euo pipefail
+  local work
+  work=$(mktemp -d)
+  SERVICE_MANAGER="systemd"
+
+  load_script_without_main "$ROOT_DIR/install.sh"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
+  write_flmx_agent_service
+  grep -Fxq 'LimitNOFILE=1048576' "$work/flmx_agent.service" || \
+    fail "T1b: agent systemd unit must carry LimitNOFILE=1048576"
+  grep -Fxq 'LimitCORE=0' "$work/flmx_agent.service" || \
+    fail "T1b: agent systemd unit must keep LimitCORE=0"
+)
 test_proxy_enabled_case_insensitive
 test_install_script_slow_direct_joins_ranking
 test_panel_slow_direct_joins_ranking
@@ -10872,6 +10957,7 @@ test_delete_self_pipe_form_preserves_cwd_namesake
 test_install_lock_rejects_concurrent_run
 test_install_script_accepts_secret_from_env
 test_openrc_pidfile_uses_configured_value
+test_agent_service_unit_carries_limit_nofile
 test_update_flmx_agent_downloads_without_prompt
 test_update_flmx_agent_skips_proxy_prompt_when_not_installed
 test_update_flmx_agent_prints_online_confirmation_guidance

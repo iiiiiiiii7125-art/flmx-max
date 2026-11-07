@@ -88,11 +88,27 @@ LEGACY_GOST_SERVICE_FILE_USR_LIB="/usr/lib/systemd/system/gost.service"
 SERVICE_MANAGER="${SERVICE_MANAGER:-}"
 
 # 宿主级调优残留路径：agent 运行时写在安装目录之外的文件，与 agent
-# 侧 go-gost/x/socket/tuning.go 的路径常量一一对应（tuneConfPath /
-# legacyTuneConfPath / tuneBBRModule / tuneShapeUnitPath）。脚本卸载
-# 必须与面板自卸载路径（runAgentUninstall）对齐清理这些文件，见
+# 侧 go-gost/x/socket/tuning.go 的路径常量一一对应——第二代四面
+# 模型：tuneKernelConfPath / tuneLimitsConfPath / tuneBBRConfPath /
+# tuneGaiConfPath / tuneGaiBackupPath / tuneRPSUnitPath /
+# tuneRPSScriptPath；第一代残留：oldTuneConfPath /
+# oldTuneBBRModulePath / oldTuneShapeUnitPath / legacyTuneConfPath
+# （全集见 agent 侧 uninstall.go 的 hostTuningFileSet）。脚本卸载
+# 必须与面板自卸载路径（runAgentUninstall →
+# cleanupHostTuningFiles）对齐清理这些文件，见
 # uninstall_flmx_agent_host_cleanup。做成变量以便测试夹具改指临时
 # 目录。
+# 第二代（四面模型）：
+FLMX_TUNING_KERNEL_CONF="/etc/sysctl.d/99-network-performance.conf"
+FLMX_TUNING_LIMITS_CONF="/etc/security/limits.d/99-network-performance.conf"
+FLMX_TUNING_BBR_CONF="/etc/sysctl.d/10-bbr.conf"
+FLMX_TUNING_GAI_CONF="/etc/gai.conf"
+FLMX_TUNING_GAI_BACKUP="/etc/gai.conf.bak"
+FLMX_TUNING_GAI_PRECEDENCE_LINE="precedence ::ffff:0:0/96  100"
+FLMX_TUNING_RPS_UNIT_FILE="/etc/systemd/system/flmx-tuning-rps.service"
+FLMX_TUNING_RPS_UNIT="flmx-tuning-rps.service"
+FLMX_TUNING_RPS_SCRIPT="/usr/local/bin/flmx-tuning-rps.sh"
+# 第一代残留（兼容清理）：
 FLMX_TUNING_SYSCTL_CONF="/etc/sysctl.d/99-flmx-tuning.conf"
 FLMX_TUNING_SYSCTL_CONF_LEGACY="/etc/sysctl.d/99-flvx-tuning.conf"
 FLMX_TUNING_BBR_MODULE_FILE="/etc/modules-load.d/flmx-bbr.conf"
@@ -1294,6 +1310,11 @@ Restart=on-failure
 # data directory (the binary also zeroes RLIMIT_CORE itself at
 # startup and sweeps stockpiled core files, see go-gost/coredump.go).
 LimitCORE=0
+# 调优面③ 写的 /etc/security/limits.d（nofile 1048576）只作用于
+# PAM 登录会话、对已注册的 systemd 服务无效；agent 的连接负载同
+# 样需要句柄上限，直接写进 unit 本体。limits.d 与 unit 两路并
+# 存、互不替代（TuneStatus 的 nofile 概要报进程真实 rlimit）。
+LimitNOFILE=1048576
 # R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
 # discarded the agent's startup logs, so a poisoned gost.json left no
 # diagnosable failure reason. Journal keeps them queryable via
@@ -1530,7 +1551,9 @@ legacy_flux_agent_service_file_path() {
 # 旧 unit 文件的同形态重写：迁移回滚时旧 unit 已被摘除且无快照
 # 可还原（旧服务只在服务管理器里在册、无落盘文件）才用——内容
 # 与现行 write_flmx_agent_service 同模板、仅名与路径换回旧代，
-# 保证回滚拉起的旧服务与迁移前等价运行。
+# 保证回滚拉起的旧服务与迁移前等价运行。一处有意例外：现行模
+# 板的 LimitNOFILE 不带入——回滚的目标是复原迁移前 unit 的原
+# 貌，旧 unit 本无此项。
 write_legacy_flux_agent_service() {
   ensure_service_manager || return 1
 
@@ -2347,9 +2370,15 @@ rollback_flmx_agent() {
 
 # R6-02：脚本卸载与面板自卸载路径（go-gost/x/socket/uninstall.go
 # 的 runAgentUninstall）对齐的宿主清理。面板路径在删安装目录之前
-# 依次：恢复调优（回放整形前队列 original-qdisc.sh、按
-# tuning-backup.json 逐键写回 sysctl 原值、删宿主文件）→ 停内核
-# 并删 agent 自建 nft 三表 → 才停服务删目录。旧脚本卸载只有停服
+# 依次：回退调优（restoreTuningForUninstall 走第二代 rollback：
+# 删四面与第一代全部足迹文件、gai.conf 按备份还原、删 MSS 钳制
+# 规则、内存值复位，再由 cleanupHostTuningFiles 兜底删漏）→ 停
+# 内核并删 agent 自建 nft 三表 → 才停服务删目录。本函数第 3)～
+# 7) 步与 cleanupHostTuningFiles 的清理全集逐项对齐；第 1)、2)
+# 步是第一代兼容恢复（整形前队列回放、tuning-backup.json 逐键
+# 写回 sysctl 原值）——第二代面板路径已不再执行，但备份与整形
+# 脚本都在即将删除的安装目录里，脚本卸载是它们最后的恢复机
+# 会，故保留（产物不存在时两步都是空转）。旧脚本卸载只有停服
 # 删目录，残留后果：调优 sysctl conf 与 qdisc unit 开机自动重放、
 # nft 白名单 DROP 规则比所有者长寿（R2-001 危害形态）、
 # tuning-backup.json 随目录删除后原值永久不可恢复、同机重装还会
@@ -2426,11 +2455,77 @@ uninstall_flmx_agent_host_cleanup() {
     fi
   fi
 
-  # 3) 宿主调优文件：sysctl conf（现行名）、BBR 开机加载 conf。删
-  # 掉后调优值不再开机重放；运行时值已在第 2 步恢复（无备份时运
-  # 行时值保留至重启，与面板路径无备份时同口径）。
+  # 3) 调优 systemd unit（第二代 RPS 与第一代 qdisc 两件）：先
+  # disable --now 再删文件、两件都处理完再统一 daemon-reload 一
+  # 次（与 agent 侧 cleanupHostTuningFiles 同序），否则悬空启用
+  # 项在下次开机仍会去执行已被删除的脚本（RPS unit 执行
+  # /usr/local/bin 下的助手脚本、qdisc unit 执行安装目录内的整
+  # 形脚本）。OpenRC 形态没有这些 unit，文件不存在即跳过。
+  local unit_removed=0
+  local unit_pair="" unit_file="" unit_name=""
+  for unit_pair in "$FLMX_TUNING_RPS_UNIT_FILE|$FLMX_TUNING_RPS_UNIT" "$FLMX_TUNING_QDISC_UNIT_FILE|$FLMX_TUNING_QDISC_UNIT"; do
+    unit_file="${unit_pair%%|*}"
+    unit_name="${unit_pair##*|}"
+    if [[ -e "$unit_file" ]]; then
+      if [[ "${SERVICE_MANAGER:-}" == "systemd" ]] && command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now "$unit_name" 2>/dev/null || true
+      fi
+      if rm -f "$unit_file"; then
+        echo "🧹 删除调优服务: $unit_file"
+        unit_removed=1
+      else
+        failures=$((failures + 1))
+        echo "⚠️ 删除调优服务失败: $unit_file"
+      fi
+    fi
+  done
+  if [[ "$unit_removed" -eq 1 && "${SERVICE_MANAGER:-}" == "systemd" ]] && command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+
+  # 4) MSS 钳制规则（第二代面③ 部署）：不是文件、单独删除。先
+  # -C 探在位才 -D 并回执；iptables 不在或规则不在都无动作，与
+  # agent 侧 tuneMSSClampRemove 同为尽力而为——删除失败只点名、
+  # 不计 failures（规则会残留至宿主机重启或人工清理）。
+  if command -v iptables >/dev/null 2>&1; then
+    if iptables -t mangle -C POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; then
+      if iptables -t mangle -D POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; then
+        echo "🧹 已删除 MSS 钳制规则（iptables mangle POSTROUTING TCPMSS）"
+      else
+        echo "⚠️ MSS 钳制规则删除失败，请人工执行: iptables -t mangle -D POSTROUTING -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu"
+      fi
+    fi
+  fi
+
+  # 5) gai.conf 兜底还原（第二代面①）：备份还在且 IPv4 优先行仍
+  # 在位时，先按备份逐字还原 gai.conf 本体、再删备份——否则卸载
+  # 后 IPv4 优先残留且原文永久丢失。备份无论还原与否都在本步删
+  # 除（与 agent 侧 cleanupHostTuningFiles 同口径：备份是调优产
+  # 物、不留给系统）。gai.conf 本体是系统文件，只还原不删除。
+  if [[ -e "$FLMX_TUNING_GAI_BACKUP" ]]; then
+    if [[ -f "$FLMX_TUNING_GAI_CONF" ]] && grep -qE "^${FLMX_TUNING_GAI_PRECEDENCE_LINE}[[:space:]]*$" "$FLMX_TUNING_GAI_CONF"; then
+      if cp -f "$FLMX_TUNING_GAI_BACKUP" "$FLMX_TUNING_GAI_CONF" 2>/dev/null; then
+        echo "🧹 已按调优备份还原 gai.conf: $FLMX_TUNING_GAI_CONF"
+      else
+        failures=$((failures + 1))
+        echo "⚠️ 按调优备份还原 gai.conf 失败: $FLMX_TUNING_GAI_CONF"
+      fi
+    fi
+    if rm -f "$FLMX_TUNING_GAI_BACKUP"; then
+      echo "🧹 删除调优宿主文件: $FLMX_TUNING_GAI_BACKUP"
+    else
+      failures=$((failures + 1))
+      echo "⚠️ 删除调优宿主文件失败: $FLMX_TUNING_GAI_BACKUP"
+    fi
+  fi
+
+  # 6) 宿主调优文件：第二代三件 conf（内核调优、limits、BBR）与
+  # RPS 助手脚本、第一代两件（sysctl conf、BBR 开机加载 conf）。
+  # 删掉后调优值不再开机重放；运行时值已在第 2 步按一代备份尽
+  # 力恢复（第二代无原值备份概念，未恢复的运行时值保留至重
+  # 启，与面板路径同口径）。
   local host_file=""
-  for host_file in "$FLMX_TUNING_SYSCTL_CONF" "$FLMX_TUNING_BBR_MODULE_FILE"; do
+  for host_file in "$FLMX_TUNING_KERNEL_CONF" "$FLMX_TUNING_LIMITS_CONF" "$FLMX_TUNING_BBR_CONF" "$FLMX_TUNING_RPS_SCRIPT" "$FLMX_TUNING_SYSCTL_CONF" "$FLMX_TUNING_BBR_MODULE_FILE"; do
     if [[ -e "$host_file" ]]; then
       if rm -f "$host_file"; then
         echo "🧹 删除调优宿主文件: $host_file"
@@ -2441,7 +2536,7 @@ uninstall_flmx_agent_host_cleanup() {
     fi
   done
 
-  # 3b) 改名前 legacy 名的 sysctl conf（99-flvx-tuning.conf）：与
+  # 7) 改名前 legacy 名的 sysctl conf（99-flvx-tuning.conf）：与
   # 旧谱系 agent 同名共用，归属判定见函数头注（C4-F02）——仍有旧
   # 式 gost 足迹时跳过并披露，无足迹时按本产品旧装遗留删除。
   if [[ -e "$FLMX_TUNING_SYSCTL_CONF_LEGACY" ]]; then
@@ -2455,25 +2550,7 @@ uninstall_flmx_agent_host_cleanup() {
     fi
   fi
 
-  # 4) 队列整形 systemd unit：先 disable --now 再删文件，否则它
-  # 在下次开机仍会去执行安装目录里已被删除的整形脚本（悬空启用
-  # 项）。OpenRC 形态没有这个 unit，文件不存在即跳过。
-  if [[ -e "$FLMX_TUNING_QDISC_UNIT_FILE" ]]; then
-    if [[ "${SERVICE_MANAGER:-}" == "systemd" ]] && command -v systemctl >/dev/null 2>&1; then
-      systemctl disable --now "$FLMX_TUNING_QDISC_UNIT" 2>/dev/null || true
-    fi
-    if rm -f "$FLMX_TUNING_QDISC_UNIT_FILE"; then
-      echo "🧹 删除队列整形服务: $FLMX_TUNING_QDISC_UNIT_FILE"
-      if [[ "${SERVICE_MANAGER:-}" == "systemd" ]] && command -v systemctl >/dev/null 2>&1; then
-        systemctl daemon-reload 2>/dev/null || true
-      fi
-    else
-      failures=$((failures + 1))
-      echo "⚠️ 删除队列整形服务失败: $FLMX_TUNING_QDISC_UNIT_FILE"
-    fi
-  fi
-
-  # 5) agent 自建 nft 三表：沿用 agent 侧 removeTables 的「先建空
+  # 8) agent 自建 nft 三表：沿用 agent 侧 removeTables 的「先建空
   # 表再删」惯例，表不存在时整条脚本也成功（幂等）。没有 nft 命
   # 令时删不了表，明确提示残留与人工清理法，不假装已清理。其中
   # flvx_kernel 与旧谱系 agent 同名共用：仍有旧式 gost 足迹时只
