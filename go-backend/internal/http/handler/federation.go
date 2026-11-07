@@ -132,7 +132,7 @@ func federationKCPKey(secret string, shareID int64, protocols ...string) (string
 	return key, nil
 }
 
-func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protocol, strategy string, targets []federationRuntimeTarget, interfaceName string, kcpSecret string, kcpShareID int64) (map[string]interface{}, error) {
+func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protocol, strategy string, targets []federationRuntimeTarget, interfaceName string, kcpSecret string, kcpShareID int64, fecOff bool) (map[string]interface{}, error) {
 	chainName = strings.TrimSpace(chainName)
 	if chainName == "" {
 		return nil, fmt.Errorf("chain name is required")
@@ -174,7 +174,11 @@ func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protoco
 			"name":      fmt.Sprintf("node_%d", i+1),
 			"addr":      processServerAddress(fmt.Sprintf("%s:%d", host, target.Port)),
 			"connector": connector,
-			"dialer":    buildTunnelDialerConfig(targetProtocol, kcpKey),
+			// FIX-KCPMEM（P1-04）：联邦中继链的拨号方是本面板的
+			// 中段节点，但 builder 无节点上下文，恒走 small 保守
+			// 缺省档（声明面覆盖不到此纯函数路径，同 listener 面
+			// 口径）；fecOff 由调用方按本面板设置传入。
+			"dialer": buildTunnelDialerConfig(targetProtocol, kcpKey, kcpTierSmall, fecOff),
 		})
 	}
 
@@ -370,7 +374,14 @@ func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName s
 		"handler": map[string]interface{}{
 			"type": "relay",
 		},
-		"listener": buildTunnelListenerConfig(protocol, kcpKey),
+		// FIX-KCPMEM（P1-04）：联邦提供方面板不知远端节点内存，
+		// 恒走 small 保守缺省档（声明面只覆盖本面板自有节点）。
+		// FEC 档此处恒 default（fecOff=false）：本纯函数无
+		// Handler 上下文读不到面板设置，且服务监听面是接收方——
+		// FEC 参数由发送方携带于分片头、接收方自适应，监听面
+		// 的本地 FEC 配置不决定链路冗余比；发送侧（消费方面板
+		// 的中继链拨号面）才是 kcp_fec_mode 的生效面。
+		"listener": buildTunnelListenerConfig(protocol, kcpKey, kcpTierSmall, false),
 	}
 	// F-UDP-7: 与本地链 builder 共用 tunnelRelayMetadata。
 	handlerMetadata := tunnelRelayMetadata(protocol)

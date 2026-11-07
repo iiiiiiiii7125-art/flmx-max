@@ -128,7 +128,7 @@ func TestKU9NonRelaySurfacesHaveNoBind(t *testing.T) {
 		ku9AssertNoBindKey(t, "local chain config", localChain)
 
 		fedChain, err := buildFederationMiddleChainConfig("fed_chain_1", 7, protocol, "round",
-			[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: protocol}}, "", "", 0)
+			[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: protocol}}, "", "", 0, false)
 		if err != nil {
 			t.Fatalf("protocol %s: build federation middle chain: %v", protocol, err)
 		}

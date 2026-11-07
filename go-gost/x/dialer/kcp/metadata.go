@@ -94,6 +94,18 @@ func (d *kcpDialer) parseMetadata(md mdata.Metadata) (err error) {
 		if md.IsExists("kcp.parityshard") {
 			d.md.config.ParityShard = mdutil.GetInt(md, "kcp.parityshard")
 		}
+		// FIX-KCPMEM (P1-05): panel FEC off marker. The config
+		// defaults carry 10/3, so an absent datashard/parityshard
+		// key alone cannot mean "off"; the panel sets
+		// kcp.fec_off=true instead, and the shards are zeroed
+		// here — kcp-go then builds its FEC encoder with 0/0
+		// (redundancy ratio zero). When both explicit shard keys
+		// and the marker are present, the marker wins: it is the
+		// newer, explicit intent.
+		if mdutil.GetBool(md, "kcp.fec_off") {
+			d.md.config.DataShard = 0
+			d.md.config.ParityShard = 0
+		}
 	}
 
 	d.md.handshakeTimeout = mdutil.GetDuration(md, handshakeTimeout)

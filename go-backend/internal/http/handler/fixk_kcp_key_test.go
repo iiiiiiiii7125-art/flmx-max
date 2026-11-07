@@ -52,8 +52,8 @@ func TestFixKKCPBuildersCarryDerivedKey(t *testing.T) {
 	if err != nil || key == "" {
 		t.Fatalf("tunnelKCPKey: key=%q err=%v", key, err)
 	}
-	dialerMD := fixkKCPMetadata(t, buildTunnelDialerConfig("kcp", key))
-	listenerMD := fixkKCPMetadata(t, buildTunnelListenerConfig("kcp", key))
+	dialerMD := fixkKCPMetadata(t, buildTunnelDialerConfig("kcp", key, kcpTierSmall, false))
+	listenerMD := fixkKCPMetadata(t, buildTunnelListenerConfig("kcp", key, kcpTierSmall, false))
 	// 两端逐字同源（整份 metadata 相等，含 key/crypt）。
 	if !reflect.DeepEqual(dialerMD, listenerMD) {
 		t.Fatalf("dialer/listener metadata drift:\n dialer=%v\n listener=%v", dialerMD, listenerMD)
@@ -67,9 +67,12 @@ func TestFixKKCPBuildersCarryDerivedKey(t *testing.T) {
 	if dialerMD["kcp.crypt"] != "aes-256" {
 		t.Fatalf("kcp.crypt must be aes-256, got %v", dialerMD["kcp.crypt"])
 	}
-	// K1-02 参数面维持现行缺省（单一真源、值不变）。
+	// K1-02 参数面单一真源；窗口/缓冲值口径已由 FIX-KCPMEM
+	// （P1-04）接管：无内存声明的 Handler 恒走 small 保守缺省
+	// 档（512/1MiB/1MiB/512KiB），large 档与旧恒定值逐字相同
+	// 的断言在 fixkcpmem 测试中；FEC 缺省仍 10/3 不变（P1-05）。
 	for k, want := range map[string]interface{}{
-		"kcp.mode": "fast3", "kcp.sndwnd": 4096, "kcp.rcvwnd": 4096,
+		"kcp.mode": "fast3", "kcp.sndwnd": 512, "kcp.rcvwnd": 512,
 		"kcp.mtu": 1350, "kcp.datashard": 10, "kcp.parityshard": 3,
 	} {
 		if dialerMD[k] != want {
@@ -112,7 +115,7 @@ func TestFixKFederationKCPSameSource(t *testing.T) {
 	// 消费方中继链 builder 与提供方角色服务 builder 用同一
 	// (secret, shareID) 派生——两面 metadata 必须逐字同源。
 	chain, err := buildFederationMiddleChainConfig("fed_chain_1", 7, "tls", "round",
-		[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: "kcp"}}, "", fixkTestSecret, 7)
+		[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: "kcp"}}, "", fixkTestSecret, 7, false)
 	if err != nil {
 		t.Fatalf("build federation middle chain: %v", err)
 	}
@@ -134,7 +137,7 @@ func TestFixKFederationKCPSameSource(t *testing.T) {
 	}
 	// 中继链含 KCP 目标而密钥作用域缺失 → 整条链拒绝生成。
 	if _, err := buildFederationMiddleChainConfig("fed_chain_1", 7, "tls", "round",
-		[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: "kcp"}}, "", "", 0); err == nil {
+		[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: "kcp"}}, "", "", 0, false); err == nil {
 		t.Fatal("KCP federation chain without key scope must be rejected")
 	}
 }

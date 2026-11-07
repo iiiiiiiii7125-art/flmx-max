@@ -16,13 +16,24 @@ var (
 
 var (
 	// DefaultKCPConfig is the default KCP config.
+	//
+	// FIX-KCPMEM (P1-04): the window/buffer defaults are aligned
+	// with the panel's small memory tier cap (the conservative
+	// default tier the panel issues when a node's memory is
+	// unknown): SndWnd/RcvWnd 512, SockBuf/SmuxBuf 1MiB,
+	// StreamBuf 512KiB. A KCP endpoint built without panel-issued
+	// metadata (config file, hand-written service config) must
+	// never exceed that cap — otherwise the panel-side tiering
+	// could be bypassed by simply omitting the metadata. Panel
+	// metadata always overrides these values per key, so nodes
+	// the panel places in the medium/large tiers are unaffected.
 	DefaultConfig = &Config{
 		Key:          "it's a secrect",
 		Crypt:        "aes",
 		Mode:         "fast",
 		MTU:          1350,
-		SndWnd:       1024,
-		RcvWnd:       1024,
+		SndWnd:       512,
+		RcvWnd:       512,
 		DataShard:    10,
 		ParityShard:  3,
 		DSCP:         0,
@@ -32,10 +43,10 @@ var (
 		Interval:     50,
 		Resend:       0,
 		NoCongestion: 0,
-		SockBuf:      4194304,
+		SockBuf:      1048576,
 		SmuxVer:      1,
-		SmuxBuf:      4194304,
-		StreamBuf:    2097152,
+		SmuxBuf:      1048576,
+		StreamBuf:    524288,
 		KeepAlive:    10,
 		SnmpLog:      "",
 		SnmpPeriod:   60,

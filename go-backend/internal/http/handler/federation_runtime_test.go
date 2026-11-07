@@ -304,7 +304,7 @@ func TestBuildFederationMiddleChainConfigUsesExistingChainNameAndBestStrategy(t 
 	chainData, err := buildFederationMiddleChainConfig("fed_chain_12", 12, "tls", tunnelStrategyBest, []federationRuntimeTarget{
 		{Host: "10.0.0.31", Port: 30031, Protocol: "tls"},
 		{Host: "10.0.0.30", Port: 30030, Protocol: "tls"},
-	}, "", "", 0)
+	}, "", "", 0, false)
 	if err != nil {
 		t.Fatalf("build chain: %v", err)
 	}

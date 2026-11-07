@@ -93,7 +93,7 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 	if runtime.Role == "middle" {
 		// KCP 目标腿的拨号钥在 builder 内按同一 (secret, shareID)
 		// 派生，派生失败由 builder 返回错误、整条 runtime 拒绝。
-		chain, err = buildFederationMiddleChainConfig(runtime.ChainName, runtime.ID, runtime.Protocol, runtime.Strategy, targets, node.InterfaceName, h.jwtSecret, runtime.ShareID)
+		chain, err = buildFederationMiddleChainConfig(runtime.ChainName, runtime.ID, runtime.Protocol, runtime.Strategy, targets, node.InterfaceName, h.jwtSecret, runtime.ShareID, kcpFecOff(h.kcpFecMode()))
 		if err != nil {
 			return err
 		}

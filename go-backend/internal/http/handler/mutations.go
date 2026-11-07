@@ -6408,11 +6408,11 @@ type tunnelCreateState struct {
 	// 同源。"" = 未装配（非 apply 路径的零值 state），段回落退化
 	// 为段行自身协议。
 	TunnelProtocol string
-	InNodes      []tunnelRuntimeNode
-	ChainHops    [][]tunnelRuntimeNode
-	OutNodes     []tunnelRuntimeNode
-	Nodes        map[int64]*nodeRecord
-	NodeIDList   []int64
+	InNodes        []tunnelRuntimeNode
+	ChainHops      [][]tunnelRuntimeNode
+	OutNodes       []tunnelRuntimeNode
+	Nodes          map[int64]*nodeRecord
+	NodeIDList     []int64
 	// PortChanges records non-entry port re-picks made during an update
 	// prepare (P01-002), so tunnelUpdate can surface them in the
 	// receipt's warnings instead of drifting ports silently.
@@ -8099,6 +8099,12 @@ func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targe
 	if err != nil {
 		return nil, err
 	}
+	// FIX-KCPMEM（P1-04）：逐节点内存档位——拨号面按发起方
+	// （fromNode）档位、每个目标的监听面按目标节点档位，构造在
+	// buildTunnelChainServiceConfig 侧（同 nodeID 查同一档位表）。
+	kcpTiers := h.kcpTiersForNodes(fromNodeID)
+	fromTier := kcpTierOrDefault(kcpTiers, fromNodeID)
+	fecOff := kcpFecOff(h.kcpFecMode())
 	nodeItems := make([]map[string]interface{}, 0, len(targets))
 	for idx, target := range targets {
 		targetNode := nodes[target.NodeID]
@@ -8131,7 +8137,7 @@ func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targe
 			"name":      fmt.Sprintf("node_%d", idx+1),
 			"addr":      processServerAddress(fmt.Sprintf("%s:%d", host, port)),
 			"connector": connector,
-			"dialer":    buildTunnelDialerConfig(protocol, kcpKey),
+			"dialer":    buildTunnelDialerConfig(protocol, kcpKey, fromTier, fecOff),
 		})
 	}
 
@@ -8220,9 +8226,10 @@ func (h *Handler) buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnel
 		// R32-FIX-F01：监听地址先剥离 :port 再与链端口拼接（须用
 		// JoinHostPort：裸 IPv6 直拼会被 processServerAddress 误读，
 		// 见 realm.go 同注释）。
-		"addr":     processServerAddress(net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, protocol)), "[]"), strconv.Itoa(chainNode.Port))),
-		"handler":  handlerCfg,
-		"listener": buildTunnelListenerConfig(protocol, kcpKey),
+		"addr":    processServerAddress(net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, protocol)), "[]"), strconv.Itoa(chainNode.Port))),
+		"handler": handlerCfg,
+		// FIX-KCPMEM（P1-04）：监听面按本节点（node.ID）内存档位。
+		"listener": buildTunnelListenerConfig(protocol, kcpKey, kcpTierOrDefault(h.kcpTiersForNodes(node.ID), node.ID), kcpFecOff(h.kcpFecMode())),
 	}
 	if chainNode.ChainType == 2 {
 		service["handler"].(map[string]interface{})["chain"] = fmt.Sprintf("chains_%d", tunnelID)
@@ -8366,27 +8373,37 @@ func KCPKeyFor(secret string, scopeID int64) string {
 }
 
 // tunnelKCPMetadata 是 KCP 段 metadata 的单一真源（K1-02 收敛）：
-// 此前 dialer/listener 两份逐字重复的 13 键字面量合并于此，两面
-// 共用同一构造，改参只改一处。参数值维持现行缺省（fast3 / wnd
-// 4096 / FEC 10+3），本批只收敛真源不改默认——FEC 等参数的产品
-// 可配面尚无既有配置口径可挂，待产品定版时在此函数接入。
+// 此前 dialer/listener 两份逐字重复的字面量合并于此，两面共用同
+// 一构造，改参只改一处。参数口径（FIX-KCPMEM，P1-04/P1-05）：
+// 窗口/缓冲五值取本端节点的内存档位帽（tier，档位表与核算见
+// kcp_tuning.go——large 档与本修复前逐字相同，未知内存回 small
+// 保守缺省档）；FEC 两键按 fecOff 分档：default 下发 10/3（存量
+// 行为不变），off 不下发两键、改下发布尔标记 kcp.fec_off=true
+// 由 agent 在 metadata 解析末尾显式归零（x 的缺省 clone 带
+// 10/3、不下发≠关闭，必须有标记）。两端异档/异 FEC 档均可互
+// 通：窗口是逐端通告值、缓冲纯本地、FEC 编码器参数由发送方携
+// 带于分片头、接收方自适应。
 // kcpKey 为空时不写 kcp.key/kcp.crypt 两键（非 KCP 作用域的防御
 // 分支）；KCP 作用域的调用方须先经 KCPKeyFor 校验非空再传入。
-func tunnelKCPMetadata(kcpKey string) map[string]interface{} {
+func tunnelKCPMetadata(kcpKey string, tier kcpMemTier, fecOff bool) map[string]interface{} {
 	metadata := map[string]interface{}{
-		"kcp.keepalive":   10,
-		"kcp.tcp":         false,
-		"kcp.mode":        "fast3",
-		"kcp.sndwnd":      4096,
-		"kcp.rcvwnd":      4096,
-		"kcp.mtu":         1350,
-		"kcp.sockbuf":     4194304,
-		"kcp.smuxbuf":     4194304,
-		"kcp.streambuf":   2097152,
-		"kcp.datashard":   10,
-		"kcp.parityshard": 3,
-		"kcp.nocomp":      true,
-		"kcp.nc":          1,
+		"kcp.keepalive": 10,
+		"kcp.tcp":       false,
+		"kcp.mode":      "fast3",
+		"kcp.sndwnd":    tier.sndWnd,
+		"kcp.rcvwnd":    tier.rcvWnd,
+		"kcp.mtu":       1350,
+		"kcp.sockbuf":   tier.sockBuf,
+		"kcp.smuxbuf":   tier.smuxBuf,
+		"kcp.streambuf": tier.streamBuf,
+		"kcp.nocomp":    true,
+		"kcp.nc":        1,
+	}
+	if fecOff {
+		metadata["kcp.fec_off"] = true
+	} else {
+		metadata["kcp.datashard"] = 10
+		metadata["kcp.parityshard"] = 3
 	}
 	if strings.TrimSpace(kcpKey) != "" {
 		metadata["kcp.key"] = kcpKey
@@ -8395,17 +8412,17 @@ func tunnelKCPMetadata(kcpKey string) map[string]interface{} {
 	return metadata
 }
 
-func buildTunnelDialerConfig(protocol, kcpKey string) map[string]interface{} {
+func buildTunnelDialerConfig(protocol, kcpKey string, tier kcpMemTier, fecOff bool) map[string]interface{} {
 	dialer := map[string]interface{}{
 		"type": protocol,
 	}
 	if isKCPTunnelProtocol(protocol) {
-		dialer["metadata"] = tunnelKCPMetadata(kcpKey)
+		dialer["metadata"] = tunnelKCPMetadata(kcpKey, tier, fecOff)
 	}
 	return dialer
 }
 
-func buildTunnelListenerConfig(protocol, kcpKey string) map[string]interface{} {
+func buildTunnelListenerConfig(protocol, kcpKey string, tier kcpMemTier, fecOff bool) map[string]interface{} {
 	listener := map[string]interface{}{
 		"type": protocol,
 	}
@@ -8423,7 +8440,7 @@ func buildTunnelListenerConfig(protocol, kcpKey string) map[string]interface{} {
 		}
 	}
 	if isKCPTunnelProtocol(protocol) {
-		listener["metadata"] = tunnelKCPMetadata(kcpKey)
+		listener["metadata"] = tunnelKCPMetadata(kcpKey, tier, fecOff)
 	}
 	return listener
 }

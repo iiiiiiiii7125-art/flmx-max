@@ -1936,6 +1936,16 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		// normalizeSubscriptionFrontURLs 内返回 ""，走调用方的可
 		// 清空语义（本键非必填、非系统管理，天然可清空）。
 		return normalizeSubscriptionFrontURLs(value)
+	case kcpFecModeConfigKey:
+		// KCP FEC 档位（FIX-KCPMEM，P1-05）：仅 default/off 两
+		// 档，校验单点在 normalizeKCPFecMode；空串返回 "" 走
+		// 可清空语义（删键回未配置＝default）。
+		return normalizeKCPFecMode(value)
+	case repo.KCPNodeMemConfigKey:
+		// 节点内存声明（FIX-KCPMEM，P1-04）：校验/归一单点在
+		// repo.NormalizeKCPNodeMemMB（读面共用同口径），非法
+		// 整批拒绝；空串返回 "" 走可清空语义。
+		return repo.NormalizeKCPNodeMemMB(value)
 	case monitorTunnelQualityEnabledConfigKey:
 		normalized := strings.TrimSpace(strings.ToLower(value))
 		switch normalized {
