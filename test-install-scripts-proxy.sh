@@ -6468,8 +6468,11 @@ test_derive_panel_prefix_table() (
   fi
 )
 
-# 面板源分发（install.sh）：面板线路探活 -> 独占路线表（阶段 3），
-# 直连与代理根本不被探测（桩对非面板探测一律判死也不影响）。
+# 面板源分发（install.sh）：面板线路判活后须再过 FIX2 两道门
+# （延迟 ≤800ms + 256KB 短测速 ≥256KB/s）才独占路线表（阶段 3）；
+# 本用例桩把两门都备成快面，且按真实契约预置 DOWNLOAD_URL 已
+# 决议（install/update 恒先决议后下载）。直连与代理不被探测
+# （桩对非面板探测一律判死也不影响）。
 test_install_script_routes_panel_first_when_panel_alive() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -6479,9 +6482,16 @@ test_install_script_routes_panel_first_when_panel_alive() (
   SERVER_ADDR="wss://panel.example.com:8443"
   DOWNLOAD_ROUTES=()
   ROUTES_STAGE=0
+  DOWNLOAD_URL="https://github.com/${REPO}/releases/download/9.9.9/gost-amd64"
 
   curl() {
     case "$*" in
+      *'%{http_code} %{size_download} %{time_total}'*)
+        case "$*" in
+          *panel.example.com*) printf '206 262144 0.500000' ;;
+          *) return 22 ;;
+        esac
+        ;;
       *url_effective*)
         case "$*" in
           *panel.example.com*) printf '0.050 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
@@ -11071,6 +11081,220 @@ test_panel_identity_rename_switch_reads_env_file
 test_panel_migrate_pins_keys_before_any_up
 test_panel_migrate_reconcile_second_channel
 test_migrate_legacy_agent_snapshot_failure_aborts
+
+
+# FIX2/D-05（节点审计 D 路）：install.sh 的 probe_route 与版本解析
+# 器共用渠道 tag 文法——与 panel_install.sh 的 A1-04 同型。旧实现
+# 探测侧写死宽文法，稳定渠道下会把重定向落到预发布 tag 的路线
+# 判活、解析器随后按稳定文法拒绝，自相矛盾。断言：稳定渠道探
+# 测拒绝预发布 tag、beta 渠道两处同放行、垃圾 tag 两渠道同拒。
+test_install_probe_route_uses_channel_tag_grammar() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  curl() {
+    printf '0.123 https://github.com/some-owner/some-repo/releases/tag/%s' "$FAKE_TAG"
+    return 0
+  }
+
+  local rc
+  unset FLMX_RELEASE_CHANNEL
+  FAKE_TAG='1.9.10'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "FIX2/D-05: a stable tag must pass the probe on the stable channel"
+  FAKE_TAG='1.9.10-beta.1'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "FIX2/D-05: on the stable channel the probe must reject a prerelease tag, matching the parser grammar"
+
+  FLMX_RELEASE_CHANNEL='beta'
+  FAKE_TAG='1.9.10-beta.1'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "FIX2/D-05: a prerelease tag must pass the probe on the beta channel"
+  FAKE_TAG='1.9.10'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "FIX2/D-05: a stable tag must pass the probe on the beta channel"
+
+  FAKE_TAG='releases'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "FIX2/D-05: a junk tag must fail the probe on the beta channel"
+  unset FLMX_RELEASE_CHANNEL
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "FIX2/D-05: a junk tag must fail the probe on the stable channel"
+)
+
+# FIX2（节点审计 D-01/D-02/D-03）：面板源独占双门 + 下载看门狗
+# 对齐。全桩 curl 按 URL 子串分流：面板源宿主 127.0.0.1:18099
+# （SERVER_ADDR 派生），代理候选被桩成可控延迟，直连可控成败；
+# RESOLVED_VERSION 预置免版本解析联网，⑥ 的 DOWNLOAD_URL 按真实契约在路线表就绪后经 ensure_download_url_initialized 决议。
+#   ① 面板源慢速（测速样本 286720B/10s ≈ 28KB/s < 256KB/s 门
+#      槛、重定向延迟快）：不得独占（ROUTES_STAGE != 3），面板
+#      源须按实测延迟落入排名表，且测速只拉 256KB 样本（整包不
+#      经测速腿下载）；
+#   ② 面板源快速（样本 256KB/0.5s）：独占（阶段 3、表仅一条）；
+#   ③ 面板源延迟 1.2s > 800ms 门（测速快）：不得独占、落入排名；
+#   ④ PROXY_URL 逃生口：路线先于面板源——表单条 = 覆盖前缀，
+#      且桩日志不得出现面板源主机；
+#   ⑤ PROXY_ENABLED=false：直连单条、桩日志零请求；
+#   ⑥ 看门狗：经真实 download_agent_binary 下载须带
+#      --speed-limit 40960 --speed-time 15 与 -C -，旧值 1024
+#      不得再现。
+test_install_panel_route_gates_and_watchdog() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local log metrics_log
+  log=$(mktemp)
+  metrics_log=$(mktemp)
+  CURL_LOG="$log"
+  CURL_METRICS_LOG="$metrics_log"
+  PANEL_MODE="slow"
+  PANEL_LAT="0.100"
+  DIRECT_MODE="dead"
+  BODY_SHA=""
+
+  curl() {
+    echo "$*" >> "$CURL_LOG"
+    local all=" $* "
+    if [[ "$all" == *'%{http_code} %{size_download} %{time_total}'* ]]; then
+      if [[ "$PANEL_MODE" == "slow" ]]; then
+        printf '206 286720 10.000000'
+      else
+        printf '206 262144 0.500000'
+      fi
+      return 0
+    fi
+    if [[ "$all" == *'%{time_total}'* ]]; then
+      case "$all" in
+        *127.0.0.1:18099*)
+          printf '%s https://github.com/%s/releases/tag/2.0.0' "$PANEL_LAT" "$REPO" ;;
+        *ghfast.top*)
+          printf '0.900 https://github.com/%s/releases/tag/2.0.0' "$REPO" ;;
+        *gcode.hostcentral.cc*)
+          printf '0.050 https://github.com/%s/releases/tag/2.0.0' "$REPO" ;;
+        *github.com*)
+          if [[ "$DIRECT_MODE" == "dead" ]]; then return 22; fi
+          printf '0.300 https://github.com/%s/releases/tag/2.0.0' "$REPO" ;;
+        *) return 22 ;;
+      esac
+      return 0
+    fi
+    if [[ "$all" == *'%{time_total}'* ]]; then
+      return 22
+    fi
+    case "$all" in
+      *api.github.com*) return 22 ;;
+      *.sha256\ *)
+        local out="" prev=""
+        for a in "$@"; do
+          [[ "$prev" == "-o" ]] && out="$a"
+          prev="$a"
+        done
+        printf '%s  gost-test' "$BODY_SHA" > "$out"
+        BODY_SHA=""
+        return 0 ;;
+      *releases/download*.sha256\ *)
+        local out="" prev=""
+        for a in "$@"; do
+          [[ "$prev" == "-o" ]] && out="$a"
+          prev="$a"
+        done
+        printf '%s  gost-test' "$BODY_SHA" > "$out"
+        return 0 ;;
+      *releases/download*)
+        local out="" prev=""
+        for a in "$@"; do
+          [[ "$prev" == "-o" ]] && out="$a"
+          [[ "$prev" == "--max-time" ]] && echo "max-time $a" >> "$CURL_METRICS_LOG"
+          prev="$a"
+        done
+        printf 'fixture-gost-body' > "$out"
+        return 0 ;;
+      *) return 22 ;;
+    esac
+  }
+
+  SERVER_ADDR="wss://127.0.0.1:18099"
+  RESOLVED_VERSION="2.0.0"
+  unset FLMX_RELEASE_CHANNEL
+  PROXY_ENABLED=""
+  PROXY_URL=""
+
+  # ① 慢速面板源：不独占、落排名、排名首位为最快代理。
+  PANEL_MODE="slow"; PANEL_LAT="0.100"; DIRECT_MODE="dead"
+  DOWNLOAD_ROUTES=(); ROUTES_STAGE=0; DOWNLOAD_URL=""
+  : > "$CURL_LOG"
+  ensure_download_routes 2>/dev/null
+  [[ "$ROUTES_STAGE" != "3" ]] || fail "FIX2/D-01: a slow panel source must not monopolize the route table"
+  assert_equals "2" "$ROUTES_STAGE" "FIX2/D-01: the demoted panel source must join the stage-2 ranking"
+  local found_panel="0" r
+  for r in "${DOWNLOAD_ROUTES[@]}"; do
+    [[ "$r" == "https://127.0.0.1:18099/api/v1/open_api/gh" ]] && found_panel="1"
+  done
+  assert_equals "1" "$found_panel" "FIX2/D-01: the panel source must remain in the ranked route table"
+  assert_equals "https://gcode.hostcentral.cc" "${DOWNLOAD_ROUTES[0]}" "FIX2/D-01: the fastest ranked proxy must lead the table"
+
+  # ② 快速面板源：正常独占。
+  PANEL_MODE="fast"
+  DOWNLOAD_ROUTES=(); ROUTES_STAGE=0; DOWNLOAD_URL=""
+  ensure_download_routes 2>/dev/null
+  assert_equals "3" "$ROUTES_STAGE" "FIX2/D-01: a fast panel source must monopolize (stage 3)"
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "FIX2/D-01: stage 3 must hold exactly the panel route"
+  assert_equals "https://127.0.0.1:18099/api/v1/open_api/gh" "${DOWNLOAD_ROUTES[0]}" "FIX2/D-01: stage 3 route must be the panel source"
+
+  # ③ 延迟超门：测速再快也不独占。
+  PANEL_LAT="1.200"
+  DOWNLOAD_ROUTES=(); ROUTES_STAGE=0; DOWNLOAD_URL=""
+  ensure_download_routes 2>/dev/null
+  [[ "$ROUTES_STAGE" != "3" ]] || fail "FIX2/D-03: a panel source slower than the 800ms latency gate must not monopolize"
+  assert_equals "2" "$ROUTES_STAGE" "FIX2/D-03: the latency-gated panel source must join the ranking"
+
+  # ④ PROXY_URL 逃生口优先于面板源。
+  PANEL_LAT="0.100"
+  PROXY_URL="https://override.example/"
+  DOWNLOAD_ROUTES=(); ROUTES_STAGE=0; DOWNLOAD_URL=""
+  : > "$CURL_LOG"
+  ensure_download_routes 2>/dev/null
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "FIX2: PROXY_URL override must yield exactly one route"
+  assert_equals "https://override.example" "${DOWNLOAD_ROUTES[0]}" "FIX2: PROXY_URL override route must be the override prefix"
+  if grep -q '127.0.0.1:18099' "$CURL_LOG"; then
+    fail "FIX2: with PROXY_URL set, the panel source must never be probed"
+  fi
+  PROXY_URL=""
+
+  # ⑤ PROXY_ENABLED=false：直连单条、零请求。
+  PROXY_ENABLED="false"
+  DOWNLOAD_ROUTES=(); ROUTES_STAGE=0; DOWNLOAD_URL=""
+  : > "$CURL_LOG"
+  ensure_download_routes 2>/dev/null
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "FIX2: PROXY_ENABLED=false must yield exactly the direct route"
+  assert_equals "" "${DOWNLOAD_ROUTES[0]}" "FIX2: PROXY_ENABLED=false route must be direct"
+  assert_equals "0" "$(grep -c . "$CURL_LOG" || true)" "FIX2: PROXY_ENABLED=false must not issue any probe"
+  PROXY_ENABLED=""
+
+  # ⑥ 看门狗新阈值 + 续传保留（真实 download_agent_binary）。
+  # 按真实调用契约：路线表先行（② 的 ensure 已建阶段 3 表并
+  # 复用），下载前调用 ensure_download_url_initialized 决议
+  # DOWNLOAD_URL（install/update 两路同序）。覆写该函数为桩决
+  # 议（套件内同法多见），决议值指向桩本体。
+  PANEL_MODE="fast"; PANEL_LAT="0.100"
+  ensure_download_url_initialized() { DOWNLOAD_URL="https://github.com/${REPO}/releases/download/2.0.0/gost-test"; }
+  ensure_download_url_initialized
+  BODY_SHA=$(printf 'fixture-gost-body' | sha256sum | awk '{print $1}')
+  local dest_dir dest
+  dest_dir=$(mktemp -d)
+  dest="$dest_dir/gost-test"
+  download_agent_binary "$dest" >/dev/null 2>&1 || fail "FIX2/D-02: download via the fast panel route must succeed"
+  assert_equals "fixture-gost-body" "$(cat "$dest")" "FIX2/D-02: the downloaded body must land verbatim"
+  grep -q -- '--speed-limit 40960' "$CURL_LOG" || fail "FIX2/D-02: the download watchdog must use --speed-limit 40960"
+  grep -q -- '--speed-time 15' "$CURL_LOG" || fail "FIX2/D-02: the download watchdog must use --speed-time 15"
+  if grep -q -- '--speed-limit 1024' "$CURL_LOG"; then
+    fail "FIX2/D-02: the old 1KB/s watchdog floor must be gone"
+  fi
+  grep -q -- '-C -' "$CURL_LOG" || fail "FIX2/D-02: cross-route resume (-C -) must be preserved"
+)
+
+test_install_probe_route_uses_channel_tag_grammar
+test_install_panel_route_gates_and_watchdog
 test_install_panel_force_reinstall_data_gate
 test_panel_pin_accident_gate_unknown_mount_aborts
 test_panel_update_pg_volume_check_rolls_back_on_mismatch
@@ -11090,5 +11314,46 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log
 test_env_var_reading_crlf_shape
 test_panel_install_env_carries_trusted_proxies_entry
 test_shipped_compose_templates_carry_trusted_proxies_passthrough
+
+
+# FIX2/D-05（节点审计 D 路）：install.sh 的 probe_route 与
+# resolve_latest_release_tag 共用渠道 tag 文法——与 panel_install.sh
+# 的 A1-04 同型。旧实现探测侧写死宽文法，稳定渠道下会把重定向
+# 落到预发布 tag 的路线判活、解析器随后按稳定文法拒绝，自相矛
+# 盾。断言：稳定渠道探测拒绝预发布 tag、beta 渠道两处同放行、
+# 垃圾 tag 两渠道同拒。
+test_install_probe_route_uses_channel_tag_grammar() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  curl() {
+    printf '0.123 https://github.com/some-owner/some-repo/releases/tag/%s' "$FAKE_TAG"
+    return 0
+  }
+
+  local rc
+  unset FLMX_RELEASE_CHANNEL
+  FAKE_TAG='1.9.10'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "FIX2/D-05: a stable tag must pass the probe on the stable channel"
+  FAKE_TAG='1.9.10-beta.1'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "FIX2/D-05: on the stable channel the probe must reject a prerelease tag, matching the parser grammar"
+
+  FLMX_RELEASE_CHANNEL='beta'
+  FAKE_TAG='1.9.10-beta.1'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "FIX2/D-05: a prerelease tag must pass the probe on the beta channel"
+  FAKE_TAG='1.9.10'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  assert_equals "0" "$rc" "FIX2/D-05: a stable tag must pass the probe on the beta channel"
+
+  FAKE_TAG='releases'
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "FIX2/D-05: a junk tag must fail the probe on the beta channel"
+  unset FLMX_RELEASE_CHANNEL
+  rc="0"; probe_route "" >/dev/null || rc="$?"
+  [[ "$rc" != "0" ]] || fail "FIX2/D-05: a junk tag must fail the probe on the stable channel"
+)
 
 echo "install script tests passed"
