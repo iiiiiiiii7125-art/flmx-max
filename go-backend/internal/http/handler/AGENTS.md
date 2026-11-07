@@ -1,24 +1,34 @@
 # BACKEND HTTP HANDLER KNOWLEDGE BASE
 
-**Generated:** Fri Mar 20 2026
-**Commit:** f45f960
-**Branch:** main
-**Tag:** 2.1.9-beta6
+**Generated:** 2026-11-08
+**Commit:** 557322be (int-wave-20261107 tip)
+**Branch:** int-wave-20261107
+**Version:** 2.0.0 released; next release in preparation is 2.1.0 (no tag yet)
 
 ## OVERVIEW
 HTTP request handlers for FLMX Admin API. Core business logic layer.
-**Stack:** Go 1.24, net/http, GORM via Repository pattern.
+**Stack:** Go 1.25, net/http, GORM via Repository pattern.
 
 ## STRUCTURE
+The package holds 73 non-test Go files (plus the test files alongside
+them), split by functional area. The largest hubs:
+
 ```
 handler/
-├── handler.go        # Main Handler struct, login/captcha, job scheduling
-├── control_plane.go  # Node control plane API (add/delete/list)
-├── federation.go     # Federation/cluster sync API
-├── flow_policy.go    # Traffic policy API
-├── jobs.go           # Background job management (sync, cleanup)
-├── mutations.go      # CRUD for users, tunnels, forwards (~3700 LOC)
-└── upgrade.go        # System upgrade API
+├── handler.go              # Main Handler struct, route registration, login/captcha, job scheduling
+├── mutations.go            # CRUD for users, tunnels, forwards (~10258 LOC — the central mutation hub)
+├── control_plane.go        # Node control plane API, diagnosis assembly
+├── kernel*.go              # Inbound/kernel config generation (kernel, chain, egress, external, relay, probe, protect, share address)
+├── monitoring.go           # Monitoring: node/service/tunnel-quality access control and queries
+├── federation.go           # Federation/cluster sync API (+ federation_resources.go)
+├── flow_policy.go          # Traffic policy API (+ flow_upload*.go upload/ingest surfaces)
+├── jobs.go                 # Background job management (sync, cleanup)
+├── node_*.go               # Node surfaces: install/uninstall, latency, route, traffic, tune, status reconcile
+├── subscription*.go        # Subscription delivery, front URLs, metering, templates, traffic
+├── system_upgrade.go       # Panel self-upgrade API (+ upgrade.go node upgrade)
+├── gist_backup.go          # Gist backup/restore
+├── passkey.go              # Passkey (WebAuthn) login
+└── ...                     # Remaining single-area files (notify, realm, storage, user_*, tunnel_*, nftables_*, …)
 ```
 
 ## WHERE TO LOOK
@@ -26,6 +36,7 @@ handler/
 |------|----------|-------|
 | **User/Tunnel CRUD** | `mutations.go` | Largest file; all create/update/delete ops |
 | **Login/Captcha** | `handler.go` | Login flow, captcha verification |
+| **Route registration** | `handler.go`, `../../router.go` | All `/api/v1` routes are registered here |
 | **Federation Sync** | `federation.go` | Panel-to-panel sync |
 | **Traffic Policies** | `flow_policy.go` | Flow limiting, quota management |
 | **Background Jobs** | `jobs.go` | Scheduled sync/cleanup tasks |
@@ -33,7 +44,7 @@ handler/
 
 ## CONVENTIONS
 - Inherits from parent: GORM via Repository pattern, JWT in Authorization header.
-- Large files expected (`mutations.go` ~3700 LOC - central mutation hub).
+- Large files expected (`mutations.go` ~10258 LOC - central mutation hub).
 - Uses `repo.Repository` for DB access via `h.repo.XXX()` methods.
 - Handlers never call `repo.DB()` directly — all queries go through Repository methods.
 - Domain-driven file split: one file per functional area (federation, jobs, etc.).
