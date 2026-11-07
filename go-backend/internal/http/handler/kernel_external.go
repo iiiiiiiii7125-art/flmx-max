@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,23 +120,28 @@ func (h *Handler) inboundImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seen := make(map[string]bool)
+	usedNames := make(map[string]bool)
 	for _, row := range existing {
 		if isExternalInbound(&row) {
-			seen[externalKey(row.Listen, row.Port)] = true
+			seen[externalRowKey(&row)] = true
+			usedNames[strings.ToLower(row.Name)] = true
 		}
 	}
 
 	res := externalImportResult{Created: []int64{}, Errors: append([]string{}, parseErrs...)}
 	now := time.Now().UnixMilli()
 	for _, node := range nodes {
-		key := externalKey(node.Host, node.Port)
+		key := externalIdentityKey(node.Host, node.Port, node.Proxy)
 		if seen[key] {
-			res.Errors = append(res.Errors, fmt.Sprintf("%s：%s 已经导入过", node.Name, key))
+			res.Errors = append(res.Errors, fmt.Sprintf("%s：%s 已经导入过", node.Name, externalKey(node.Host, node.Port)))
 			continue
 		}
 		seen[key] = true
 		row, err := externalRow(node, req.RelayOnly, now)
 		if err == nil {
+			// 身份不同但名称相同（如同网关不同凭据的无名节点默认名都是
+			// host:port）：追加序号后缀消解，避免同名行无法区分。
+			row.Name = disambiguateExternalName(row.Name, usedNames)
 			err = h.repo.CreateNodeInbound(&row)
 		}
 		if err != nil {
@@ -330,7 +337,9 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 	row.UpdatedTime = time.Now().UnixMilli()
 	// IMP-004：修改地址后做去重校验。地址变更不经过导入的 seen 去重表，
 	// 之前可以直接改出与另一个导入节点相同的 host:port，违背"同一地址和
-	// 端口不会重复导入"的约束。
+	// 端口不会重复导入"的约束。去重口径为身份键（地址+协议+凭据，
+	// externalIdentityKey）：同址同端口但凭据不同（如住宅代理按用户名
+	// 分会话）是不同节点，允许并存。
 	// B4/F-132: 去重检查与保存须与导入路径共用 0 号锁串行，此前无锁：
 	// 并发导入可在检查后、保存前建出同 (host,port) 行。
 	externalMu := repo.AcquirePortAllocLock(0)
@@ -344,15 +353,15 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	key := externalKey(row.Listen, row.Port)
+	key := externalRowKey(row)
 	for i := range rows {
 		other := &rows[i]
 		if other.ID == row.ID || !isExternalInbound(other) {
 			continue
 		}
-		if externalKey(other.Listen, other.Port) == key {
+		if externalRowKey(other) == key {
 			repo.ReleasePortAllocLock(externalMu)
-			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("已存在相同地址和端口的导入节点（%s），不能重复", key)))
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("已存在地址、端口与凭据完全相同的导入节点（%s），不能重复", externalKey(row.Listen, row.Port))))
 			return
 		}
 	}
@@ -377,6 +386,83 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 
 func externalKey(host string, port int) string {
 	return net.JoinHostPort(strings.ToLower(host), strconv.Itoa(port))
+}
+
+// externalIdentityKey is the dedupe identity of an imported node:
+// address + protocol + credentials. Gateways that multiplex exits by
+// credential (residential proxies: same host:port, the username's
+// session id picks the exit IP) must import as distinct nodes, so the
+// bare host:port key is not enough. The credential material is hashed
+// so the key never carries secrets; user-facing messages keep using
+// externalKey as the display key.
+func externalIdentityKey(host string, port int, p kernel.Proxy) string {
+	base := externalKey(host, port)
+	if p == nil {
+		return base
+	}
+	proto := kernel.ProxyProtocol(p)
+	var creds []string
+	for _, field := range []string{"cipher", "method", "username", "password", "uuid", "key", "psk", "auth"} {
+		if s := proxyCredentialValue(p[field]); s != "" {
+			creds = append(creds, s)
+		}
+	}
+	if len(creds) == 0 {
+		return base + "|" + proto
+	}
+	sum := sha256.Sum256([]byte(strings.Join(creds, "\x00")))
+	return base + "|" + proto + "|" + hex.EncodeToString(sum[:])[:16]
+}
+
+func proxyCredentialValue(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(t)
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	default:
+		return strings.TrimSpace(fmt.Sprint(t))
+	}
+}
+
+// externalRowKey is externalIdentityKey for a stored imported row. Rows
+// in the proxy format carry their proxy in Extra; pre-format rows are
+// plain Shadowsocks inbounds whose method/password live in Settings.
+func externalRowKey(row *model.NodeInbound) string {
+	if row == nil {
+		return ""
+	}
+	if p := importedProxy(row); p != nil {
+		return externalIdentityKey(row.Listen, row.Port, p)
+	}
+	if in, err := inboundFromModel(*row); err == nil {
+		p := kernel.Proxy{"type": "ss", "cipher": in.Settings.Method, "password": in.Settings.Password}
+		return externalIdentityKey(row.Listen, row.Port, p)
+	}
+	return externalKey(row.Listen, row.Port)
+}
+
+// disambiguateExternalName returns name, or name with a " (2)", " (3)"
+// suffix when another imported row already uses it (case-insensitive),
+// registering the result in used. The suffix stays inside the 100-rune
+// name limit.
+func disambiguateExternalName(name string, used map[string]bool) string {
+	if !used[strings.ToLower(name)] {
+		used[strings.ToLower(name)] = true
+		return name
+	}
+	for i := 2; ; i++ {
+		suffix := fmt.Sprintf(" (%d)", i)
+		candidate := truncateRunes(name, 100-len([]rune(suffix))) + suffix
+		if !used[strings.ToLower(candidate)] {
+			used[strings.ToLower(candidate)] = true
+			return candidate
+		}
+	}
 }
 
 func containsMethod(method string) bool {

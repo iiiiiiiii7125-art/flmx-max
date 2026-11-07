@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sort"
@@ -10,7 +12,9 @@ import (
 // SubOptions is a subscription's processing pipeline. The steps run in a
 // fixed order: filter → rename → flag → dedupe → prefix → sort; region
 // groups are added when the profile is rendered. Dedupe runs before the
-// prefix is applied and its key is host|port|protocol only (no name).
+// prefix is applied and its key is host|port|protocol plus a credential
+// fingerprint when the endpoint carries credentials (no name), so nodes
+// behind one gateway that differ only by credential stay distinct.
 type SubOptions struct {
 	// Lines keeps "relay" or "direct" endpoints only; "" keeps both.
 	Lines string
@@ -29,7 +33,7 @@ type SubOptions struct {
 	AddFlag bool
 	Prefix  string
 	// Dedupe drops endpoints pointing at the same address, port and
-	// protocol as an earlier one.
+	// protocol with the same credentials as an earlier one.
 	Dedupe bool
 	// Sort is "" (panel order) or "name".
 	Sort string
@@ -323,6 +327,9 @@ func applySubOptions(endpoints []Endpoint, opts SubOptions) ([]Endpoint, error) 
 		}
 		if opts.Dedupe {
 			key := strings.ToLower(strings.Trim(e.Host, "[]")) + "|" + fmt.Sprint(e.Port) + "|" + EndpointProtocol(e)
+			if fp := endpointCredentialFingerprint(e); fp != "" {
+				key += "|" + fp
+			}
 			if seen[key] {
 				continue
 			}
@@ -342,6 +349,34 @@ func applySubOptions(endpoints []Endpoint, opts SubOptions) ([]Endpoint, error) 
 	}
 	out = markChain(out, opts)
 	return out, scriptErr
+}
+
+// endpointCredentialFingerprint hashes an endpoint's credential material
+// (the same field set and digest as the import path's identity key) so
+// dedupe can tell apart endpoints that share an address but not a
+// credential — residential gateways multiplex exits by username. It
+// returns "" when the endpoint carries no credential material; the
+// dedupe key then stays host|port|protocol.
+func endpointCredentialFingerprint(e Endpoint) string {
+	var creds []string
+	if e.Proxy != nil {
+		for _, field := range []string{"cipher", "method", "username", "password", "uuid", "key", "psk", "auth"} {
+			if s := e.Proxy.str(field); s != "" {
+				creds = append(creds, s)
+			}
+		}
+	} else {
+		for _, s := range []string{e.Inbound.Settings.Method, e.Inbound.Settings.Username, e.Inbound.Settings.Password, e.Inbound.Settings.UUID} {
+			if s = strings.TrimSpace(s); s != "" {
+				creds = append(creds, s)
+			}
+		}
+	}
+	if len(creds) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join(creds, "\x00")))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // SubScriptError 返回订阅脚本在这些节点上执行时的错误（如果有）。

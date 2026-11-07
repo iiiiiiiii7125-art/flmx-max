@@ -264,7 +264,7 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	guardIx := chainRefIndexFromRows(rows)
 	var mine []*model.NodeInbound
 	byName := map[string][]*model.NodeInbound{}
-	byAddr := map[string][]*model.NodeInbound{}
+	byKey := map[string][]*model.NodeInbound{}
 	for i := range rows {
 		row := &rows[i]
 		if row.SourceID != src.ID || !isExternalInbound(row) {
@@ -273,7 +273,10 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		mine = append(mine, row)
 		// IMP-009：按名称匹配时大小写不敏感（providers 会抖动名称大小写）。
 		byName[strings.ToLower(row.Name)] = append(byName[strings.ToLower(row.Name)], row)
-		byAddr[externalKey(row.Listen, row.Port)] = append(byAddr[externalKey(row.Listen, row.Port)], row)
+		// 地址侧索引用身份键（地址+协议+凭据）：同网关同端口、靠凭据
+		// 区分的节点（住宅代理按用户名分会话）是不同节点，不得只按
+		// host:port 互相顶替。
+		byKey[externalRowKey(row)] = append(byKey[externalRowKey(row)], row)
 	}
 	used := map[int64]bool{}
 	take := func(list []*model.NodeInbound) *model.NodeInbound {
@@ -286,11 +289,11 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		return nil
 	}
 
-	// F-025: 批内去重（与手动导入的 seen 同口径并扩到名称键）。byName/byAddr
+	// F-025: 批内去重（与手动导入的 seen 同口径并扩到名称键）。byName/byKey
 	// 只是同步开始时的快照，本轮新建的行不回填映射——源内重复条目（同名或
-	// 同址）会第二条再走新建分支：重复建行（external 行 kernel_id=0，
+	// 同身份）会第二条再走新建分支：重复建行（external 行 kernel_id=0，
 	// 部分唯一索引不兜底），后续轮次还在两行间漂移匹配。命中批内已处理
-	// 的名称/地址即跳过并在结果里提示，不再重复建行。
+	// 的名称/身份即跳过并在结果里提示，不再重复建行。
 	seen := map[string]bool{}
 
 	for _, node := range nodes {
@@ -301,7 +304,7 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		}
 		fresh.SourceID = src.ID
 		nameKey := importedNameKey(fresh.Name)
-		addrKey := importedAddrKey(node.Host, node.Port)
+		addrKey := "id:" + externalIdentityKey(node.Host, node.Port, node.Proxy)
 		if seen[nameKey] || seen[addrKey] {
 			noticeErr(fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
 			continue
@@ -310,7 +313,7 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		seen[addrKey] = true
 		row := take(byName[strings.ToLower(fresh.Name)])
 		if row == nil {
-			row = take(byAddr[externalKey(node.Host, node.Port)])
+			row = take(byKey[externalIdentityKey(node.Host, node.Port, node.Proxy)])
 		}
 		if row == nil {
 			// R10-04：命中删除屏蔽的条目不新建——管理员手工删过的
@@ -359,11 +362,11 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			if err != nil {
 				return err
 			}
-			key := externalKey(row.Listen, row.Port)
+			key := externalRowKey(row)
 			for i := range rowsNow {
 				other := &rowsNow[i]
-				if other.ID != row.ID && isExternalInbound(other) && externalKey(other.Listen, other.Port) == key {
-					return fmt.Errorf("已存在相同地址和端口的导入节点（%s）", key)
+				if other.ID != row.ID && isExternalInbound(other) && externalRowKey(other) == key {
+					return fmt.Errorf("已存在地址、端口与凭据完全相同的导入节点（%s）", externalKey(row.Listen, row.Port))
 				}
 			}
 			return h.repo.SaveNodeInbound(row)
