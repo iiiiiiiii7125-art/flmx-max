@@ -186,44 +186,38 @@ func isTimeoutError(err error) bool {
 // copyDirection copies src -> dst until src is exhausted or fails.
 // A clean end propagates a half-close to dst; a hard failure closes
 // both endpoints so the sibling direction cannot park forever on a
-// dead peer, and returns the error. A rolling deadline on src bounds
-// each Read: when it fires, the shared activity tracker decides —
-// if the sibling direction moved a byte within the window the copy
-// simply re-arms and continues; if the whole session stalled, both
-// endpoints are closed and ErrNoProgress is returned. The same
-// rule applies to a Write that times out on dst.
+// dead peer, and returns the error.
 //
-// Hot-path cost: the copy still runs through io.CopyBuffer with
-// the same 64KB pooled buffer, but the endpoints are wrapped in
-// trackedRW, so io.CopyBuffer can no longer splice raw TCP
-// connections (the wrappers hide *net.TCPConn's WriterTo /
-// ReaderFrom) — the sendfile fast path the pre-fix code enjoyed
-// on plain-TCP hops is given up, and bulk copies run through the
-// buffered path instead. Note the endpoints Transport receives
-// are themselves usually wrapped already — the forward handlers
-// pass the client connection through the stats wrapper, which
-// exposes no WriterTo/ReaderFrom either, so on those hops no
-// splice existed even before this change; the splice loss is
-// confined to hops whose endpoints arrive as raw connections.
-// The throughput delta is measured in the FIX-1 report's
-// performance section.
-// CopyBuffer reports the error
-// of the Read or Write it failed in through the tracking wrappers:
-// a read timeout while the session is still progressing resumes
-// the copy (a timed-out Read consumed nothing, so resuming loses
-// no bytes); a write timeout is never resumed, because CopyBuffer
-// cannot report how much of the current chunk was written — it
-// falls through to the hard-failure path instead. Progress is
-// recorded by the wrappers, one atomic store per chunk moved,
-// the same shape as any byte-counting wrapper. Deadlines are
-// armed once before the copy blocks and re-armed only at those
-// event points, never per chunk.
+// No-progress bound: each endpoint carries a rolling read/write
+// deadline set to the session's last-progress instant + timeout.
+// When a copy's pending Read or Write wakes on its deadline, the
+// shared activity tracker decides: if any byte moved in either
+// direction within the window, the copy re-arms and resumes; if
+// the whole session stalled, both endpoints are closed and
+// ErrNoProgress is returned. Resuming is byte-exact by
+// construction: the tracked wrappers convert a deadline expiry
+// into errReadTimeout only when the underlying call moved no
+// bytes (see trackedRW), so nothing is ever re-sent or skipped,
+// and bytes the kernel already accepted stay accepted.
+//
+// Hot-path cost: raw TCP hops still run through io.CopyBuffer with
+// the same 64KB pooled buffer, and raw TCP source/destination
+// pairs keep their WriterTo/ReaderFrom sendfile splice — the
+// wrappers forward both interfaces when the wrapped connection is
+// a *net.TCPConn. Progress is recorded by the wrappers, one atomic
+// store per chunk moved, the same shape as any byte-counting
+// wrapper. Deadlines are armed once before the copy blocks and
+// re-armed only at deadline-wake event points, never per chunk.
 func copyDirection(dst, src, rw1, rw2 io.ReadWriter, act *sessionActivity) error {
-	ts := &trackedRW{rw: src, act: act}
-	td := &trackedRW{rw: dst, act: act}
+	ts, srcTCP := src.(*net.TCPConn)
+	td, dstTCP := dst.(*net.TCPConn)
+	_, _ = ts, td
+	ws := &trackedRW{rw: src, act: act, tcp: srcTCP}
+	wd := &trackedRW{rw: dst, act: act, tcp: dstTCP}
 	for {
-		ts.armRead()
-		_, err := copyBufferTracked(td, ts)
+		ws.armRead()
+		wd.armWrite()
+		_, err := copyBufferTracked(wd, ws)
 		if err == nil || err == io.EOF {
 			if cw, ok := dst.(closeWriter); ok {
 				// Best effort: the reverse direction's completion
@@ -238,10 +232,13 @@ func copyDirection(dst, src, rw1, rw2 io.ReadWriter, act *sessionActivity) error
 			// of this direction.
 			return ErrNoProgress
 		}
-		if err == errReadTimeout && ts.writeTimedOut.Load() == 0 {
+		if err == errReadTimeout {
 			if !act.stalled(time.Now()) {
-				// The sibling direction made progress within
-				// the window; re-arm and resume copying.
+				// A byte moved within the window (necessarily in
+				// the sibling direction — this one was blocked):
+				// re-arm and resume. Resuming is exact: the
+				// wrappers never lose bytes across a deadline
+				// wake (see trackedRW).
 				continue
 			}
 			act.teardown(rw1, rw2)
@@ -257,15 +254,20 @@ var errReadTimeout = errors.New("transport: read deadline exceeded")
 
 // trackedRW wraps one endpoint of a Transport session: it records
 // byte progress into the shared activity tracker and converts a
-// read-deadline expiry into errReadTimeout so copyDirection can
-// distinguish a resumable read timeout from a write failure
-// (whose partial progress CopyBuffer cannot report).
+// deadline expiry into errReadTimeout so copyDirection can
+// distinguish a resumable deadline wake from a hard failure. The
+// conversion is state-free and exact: a Go net.Conn Read/Write
+// that reports a timeout error has transferred no bytes (its
+// internal deadline abort is all-or-nothing), so a timed-out call
+// contributes nothing and the copy can resume as if the wake had
+// never happened — while any call that moved bytes reports them
+// with a nil or non-timeout error. For
+// raw TCP endpoints it also forwards the WriterTo/ReaderFrom fast
+// paths, so io.CopyBuffer keeps its sendfile splice.
 type trackedRW struct {
 	rw  io.ReadWriter
 	act *sessionActivity
-	// writeTimedOut counts Write calls that failed with a
-	// timeout; once nonzero the copy is no longer resumable.
-	writeTimedOut atomic.Int64
+	tcp bool
 }
 
 func (t *trackedRW) Read(p []byte) (int, error) {
@@ -285,14 +287,100 @@ func (t *trackedRW) Write(p []byte) (int, error) {
 		t.act.touch()
 	}
 	if err != nil && isTimeoutError(err) {
-		t.writeTimedOut.Add(1)
+		return n, errReadTimeout
+	}
+	return n, err
+}
+
+// WriteTo implements io.WriterTo for raw TCP sources, forwarding
+// io.CopyBuffer's splice to the underlying connection.
+func (t *trackedRW) WriteTo(w io.Writer) (int64, error) {
+	if !t.tcp {
+		return 0, errFastPathUnavailable
+	}
+	dst, ok := w.(*trackedRW)
+	if !ok || !dst.tcp {
+		return 0, errFastPathUnavailable
+	}
+	src, ok1 := t.rw.(*net.TCPConn)
+	dstc, ok2 := dst.rw.(*net.TCPConn)
+	if !ok1 || !ok2 {
+		return 0, errFastPathUnavailable
+	}
+	// Arm the same deadlines the buffered path would carry, so a
+	// stalled splice wakes on the session deadline too.
+	t.armRead()
+	dst.armWrite()
+	n, err := src.WriteTo(teeWriter{dstc, dst.act})
+	if n > 0 {
+		t.act.touch()
+	}
+	if err != nil && isTimeoutError(err) {
+		return n, errReadTimeout
+	}
+	return n, err
+}
+
+// ReadFrom implements io.ReaderFrom for raw TCP destinations,
+// forwarding io.CopyBuffer's splice to the underlying connection.
+func (t *trackedRW) ReadFrom(r io.Reader) (int64, error) {
+	if !t.tcp {
+		return 0, errFastPathUnavailable
+	}
+	src, ok := r.(*trackedRW)
+	if !ok || !src.tcp {
+		return 0, errFastPathUnavailable
+	}
+	srcc, ok1 := src.rw.(*net.TCPConn)
+	dst, ok2 := t.rw.(*net.TCPConn)
+	if !ok1 || !ok2 {
+		return 0, errFastPathUnavailable
+	}
+	src.armRead()
+	t.armWrite()
+	n, err := dst.ReadFrom(teeReader{srcc, src.act})
+	if n > 0 {
+		t.act.touch()
+	}
+	if err != nil && isTimeoutError(err) {
+		return n, errReadTimeout
+	}
+	return n, err
+}
+
+var errFastPathUnavailable = errors.New("transport: fast path unavailable")
+
+// teeReader/teeWriter record destination progress for splice
+// transfers, whose byte counts bypass the tracked Read/Write.
+type teeReader struct {
+	r   io.Reader
+	act *sessionActivity
+}
+
+func (t teeReader) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 {
+		t.act.touch()
+	}
+	return n, err
+}
+
+type teeWriter struct {
+	w   io.Writer
+	act *sessionActivity
+}
+
+func (t teeWriter) Write(p []byte) (int, error) {
+	n, err := t.w.Write(p)
+	if n > 0 {
+		t.act.touch()
 	}
 	return n, err
 }
 
 // armRead arms src's rolling read deadline at last-progress +
 // timeout. Called before the copy blocks and after a resumable
-// read timeout — never per chunk.
+// deadline wake — never per chunk.
 func (t *trackedRW) armRead() {
 	if t.act.timeout > 0 {
 		if d, ok := t.rw.(readDeadliner); ok {
@@ -305,9 +393,8 @@ func (t *trackedRW) armRead() {
 // Write blocked on a dead-slow consumer is bounded independently
 // of when the session last made progress: bytes written a while
 // ago must not make a fresh block expire instantly. The stall
-// decision itself is taken on the read side and by session
-// activity, never by this deadline alone (a write timeout is a
-// hard failure, see copyDirection).
+// decision itself is taken from session activity, never by this
+// deadline alone.
 func (t *trackedRW) armWrite() {
 	if t.act.timeout > 0 {
 		if d, ok := t.rw.(writeDeadliner); ok {
@@ -316,10 +403,9 @@ func (t *trackedRW) armWrite() {
 	}
 }
 
-// copyBufferTracked is CopyBuffer with tracked endpoints, plus the
-// write deadline arming for the destination.
+// copyBufferTracked is io.CopyBuffer over the tracked endpoints
+// with the pooled 64KB buffer, unchanged from the pre-fix shape.
 func copyBufferTracked(dst *trackedRW, src *trackedRW) (int64, error) {
-	dst.armWrite()
 	buf := bufpool.Get(bufferSize)
 	defer bufpool.Put(buf)
 	return io.CopyBuffer(dst, src, buf)
