@@ -41,18 +41,18 @@ func TestKU10AllChainRoleRelayHandlersCarryBind(t *testing.T) {
 		faces := map[string]map[string]interface{}{}
 
 		faces["federation exit"] = buildFederationServiceConfig(
-			"fed_svc_1", "192.0.2.2:24002", protocol, "exit", "", 1, "")
+			"fed_svc_1", "192.0.2.2:24002", protocol, "exit", "", 1, "", "")
 		faces["federation middle"] = buildFederationServiceConfig(
-			"fed_svc_1", "192.0.2.2:24002", protocol, "middle", "fed_chain_1", 1, "")
+			"fed_svc_1", "192.0.2.2:24002", protocol, "middle", "fed_chain_1", 1, "", "")
 
-		localMiddle := buildTunnelChainServiceConfig(99,
+		localMiddle := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
 			tunnelRuntimeNode{NodeID: 5, Protocol: protocol, Port: 24001, ChainType: 2}, node, 1)
 		if len(localMiddle) != 1 {
 			t.Fatalf("protocol %s: expected 1 local middle service, got %d", protocol, len(localMiddle))
 		}
 		faces["local middle (ChainType 2)"] = localMiddle[0]
 
-		localExit := buildTunnelChainServiceConfig(99,
+		localExit := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
 			tunnelRuntimeNode{NodeID: 6, Protocol: protocol, Port: 24003, ChainType: 3}, node, 1)
 		if len(localExit) != 1 {
 			t.Fatalf("protocol %s: expected 1 local exit service, got %d", protocol, len(localExit))
@@ -94,7 +94,7 @@ func TestKU10LocalMultiHopChainHandlersCarryBind(t *testing.T) {
 			{"exit", tunnelRuntimeNode{NodeID: 13, Protocol: protocol, Port: 24103, ChainType: 3}, 1, false},
 		}
 		for _, hop := range hops {
-			services := buildTunnelChainServiceConfig(99, hop.chainNode, node, hop.nextCount)
+			services := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99, hop.chainNode, node, hop.nextCount)
 			if len(services) != 1 {
 				t.Fatalf("protocol %s hop %s: expected 1 service, got %d", protocol, hop.name, len(services))
 			}
@@ -112,12 +112,12 @@ func TestKU10LocalMultiHopChainHandlersCarryBind(t *testing.T) {
 
 	// udp 中段：tunnelRelayMetadata 本为空集，metadata 必须恰为
 	// {bind:true}（新建而非合并残缺，与出口同形态）。
-	udpMiddle := buildTunnelChainServiceConfig(99,
+	udpMiddle := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
 		tunnelRuntimeNode{NodeID: 11, Protocol: "udp", Port: 24101, ChainType: 2}, node, 1)
 	if got, want := ku9HandlerMetadata(t, udpMiddle[0]), map[string]interface{}{"bind": true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("local udp middle metadata = %v, want %v", got, want)
 	}
-	fedMiddle := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", "middle", "fed_chain_1", 1, "")
+	fedMiddle := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", "middle", "fed_chain_1", 1, "", "")
 	if got, want := ku9HandlerMetadata(t, fedMiddle), map[string]interface{}{"bind": true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("federation udp middle metadata = %v, want %v", got, want)
 	}
@@ -126,7 +126,7 @@ func TestKU10LocalMultiHopChainHandlersCarryBind(t *testing.T) {
 // tls 联邦中段：bind 必须与既有 mux metadata 合并共存，不得
 // 覆盖（KU9 的出口同名断言的中段对应面）。
 func TestKU10FederationMiddleBindMergesWithMuxMetadata(t *testing.T) {
-	fedMiddle := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "tls", "middle", "fed_chain_1", 1, "")
+	fedMiddle := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "tls", "middle", "fed_chain_1", 1, "", "")
 	metadata := ku9HandlerMetadata(t, fedMiddle)
 	if metadata["bind"] != true {
 		t.Fatalf("tls federation middle must carry bind=true, got %v", metadata)

@@ -82,9 +82,18 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 			}
 		}
 	}
+	// K1-01：KCP 角色服务的监听钥按 share 派生（与消费方面板为
+	// 同一中继链生成的拨号钥同源：同 jwtSecret＋同 share ID）；
+	// 派生失败整条 runtime 拒绝下发，不产出无钥 KCP 服务。
+	serviceKCPKey, err := federationKCPKey(h.jwtSecret, runtime.ShareID, runtime.Protocol)
+	if err != nil {
+		return err
+	}
 	var chain map[string]interface{}
 	if runtime.Role == "middle" {
-		chain, err = buildFederationMiddleChainConfig(runtime.ChainName, runtime.ID, runtime.Protocol, runtime.Strategy, targets, node.InterfaceName)
+		// KCP 目标腿的拨号钥在 builder 内按同一 (secret, shareID)
+		// 派生，派生失败由 builder 返回错误、整条 runtime 拒绝。
+		chain, err = buildFederationMiddleChainConfig(runtime.ChainName, runtime.ID, runtime.Protocol, runtime.Strategy, targets, node.InterfaceName, h.jwtSecret, runtime.ShareID)
 		if err != nil {
 			return err
 		}
@@ -96,7 +105,7 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 	// 包了也修不了本处。
 	// F-UDP-6：监听地址按协议分取（nodeListenAddrForProtocol）——
 	// udp/kcp 角色服务绑 UDPListenAddr，与转发面/本地链面同口径。
-	service := buildFederationServiceConfig(runtime.ServiceName, net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, runtime.Protocol)), "[]"), strconv.Itoa(runtime.Port)), runtime.Protocol, runtime.Role, runtime.ChainName, len(targets), node.InterfaceName)
+	service := buildFederationServiceConfig(runtime.ServiceName, net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, runtime.Protocol)), "[]"), strconv.Itoa(runtime.Port)), runtime.Protocol, runtime.Role, runtime.ChainName, len(targets), node.InterfaceName, serviceKCPKey)
 	if auth := relayAuthConfig(share.RelayUsername, share.RelayPassword); auth != nil {
 		service["handler"].(map[string]interface{})["auth"] = auth
 	}

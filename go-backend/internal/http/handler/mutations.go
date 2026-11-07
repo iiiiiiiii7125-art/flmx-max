@@ -2,8 +2,11 @@ package handler
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -6399,6 +6402,12 @@ type tunnelCreateState struct {
 	TunnelID     int64
 	Type         int
 	IPPreference string // "" = auto, "v4" = prefer IPv4, "v6" = prefer IPv6
+	// TunnelProtocol 是隧道行自身协议（归一化小写），由
+	// applyTunnelRuntimeWithMode 在下发前统一装配（K1-05）：段
+	// 协议为空时生成面回落到它，与探针面 chainSegmentProtocol
+	// 同源。"" = 未装配（非 apply 路径的零值 state），段回落退化
+	// 为段行自身协议。
+	TunnelProtocol string
 	InNodes      []tunnelRuntimeNode
 	ChainHops    [][]tunnelRuntimeNode
 	OutNodes     []tunnelRuntimeNode
@@ -7291,7 +7300,7 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 		resourceKey := federationRuntimeResourceKey(state.TunnelID, outNode.NodeID, 3, 0)
 		reserveReq := client.RuntimeReservePortRequest{
 			ResourceKey:   resourceKey,
-			Protocol:      defaultString(outNode.Protocol, "tls"),
+			Protocol:      effectiveSegmentProtocol(outNode.Protocol, state.TunnelProtocol),
 			RequestedPort: outNode.Port,
 		}
 		reserveRes, err := fc.ReservePort(remoteURL, remoteToken, localDomain, reserveReq)
@@ -7315,7 +7324,7 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 			ReservationID: reserveRes.ReservationID,
 			ResourceKey:   resourceKey,
 			Role:          "exit",
-			Protocol:      defaultString(outNode.Protocol, "tls"),
+			Protocol:      effectiveSegmentProtocol(outNode.Protocol, state.TunnelProtocol),
 			Strategy:      defaultString(outNode.Strategy, "round"),
 		}
 		applyRes, err := fc.ApplyRole(remoteURL, remoteToken, localDomain, applyReq)
@@ -7359,7 +7368,7 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 			resourceKey := federationRuntimeResourceKey(state.TunnelID, chainNode.NodeID, 2, hopIdx+1)
 			reserveReq := client.RuntimeReservePortRequest{
 				ResourceKey:   resourceKey,
-				Protocol:      defaultString(chainNode.Protocol, "tls"),
+				Protocol:      effectiveSegmentProtocol(chainNode.Protocol, state.TunnelProtocol),
 				RequestedPort: chainNode.Port,
 			}
 			reserveRes, err := fc.ReservePort(remoteURL, remoteToken, localDomain, reserveReq)
@@ -7401,7 +7410,7 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 				rt := client.RuntimeTarget{
 					Host:     host,
 					Port:     target.Port,
-					Protocol: defaultString(target.Protocol, "tls"),
+					Protocol: effectiveSegmentProtocol(target.Protocol, state.TunnelProtocol),
 				}
 				// D3-04: 目标是远端节点时附上其 share 凭据，供提供方
 				// 为 middle 的 chain connector 写 auth。
@@ -7415,7 +7424,7 @@ func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain s
 				ReservationID: reserveRes.ReservationID,
 				ResourceKey:   resourceKey,
 				Role:          "middle",
-				Protocol:      defaultString(chainNode.Protocol, "tls"),
+				Protocol:      effectiveSegmentProtocol(chainNode.Protocol, state.TunnelProtocol),
 				Strategy:      runtimeStrategyForTargets(chainNode, nextTargets),
 				Targets:       applyTargets,
 			}
@@ -7619,6 +7628,13 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 	if h == nil || state == nil {
 		return nil, nil, errors.New("invalid tunnel runtime state")
 	}
+	// K1-05：把隧道行协议写入 state，段协议回落（生成面）与探针
+	// 面自此同源——state 各装配点（创建/更新/reconstruct）不再各
+	// 自查库。隧道行协议是创建/更新面的权威字段（tunnel.protocol
+	// 有 default 'tls' 且过 normalize），此处以库中现值为准。
+	if tr, terr := h.getTunnelRecord(state.TunnelID); terr == nil && tr != nil {
+		state.TunnelProtocol = normalizeTunnelProtocol(tr.Protocol)
+	}
 	createdChains := make([]int64, 0)
 	createdServices := make([]int64, 0)
 	if state.Type != 2 {
@@ -7632,7 +7648,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 		} else {
 			targets = h.orderBestExitTargets(state.TunnelID, inNode.NodeID, targets)
 		}
-		chainData, err := buildTunnelChainConfig(state.TunnelID, inNode.NodeID, targets, state.Nodes, state.IPPreference)
+		chainData, err := h.buildTunnelChainConfig(state.TunnelID, inNode.NodeID, targets, state.Nodes, state.IPPreference, state.TunnelProtocol)
 		if err != nil {
 			return createdChains, createdServices, err
 		}
@@ -7657,7 +7673,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 			if node != nil && (node.IsRemote == 1 || node.Status != 1) {
 				continue
 			}
-			chainData, err := buildTunnelChainConfig(state.TunnelID, chainNode.NodeID, nextTargets, state.Nodes, state.IPPreference)
+			chainData, err := h.buildTunnelChainConfig(state.TunnelID, chainNode.NodeID, nextTargets, state.Nodes, state.IPPreference, state.TunnelProtocol)
 			if err != nil {
 				return createdChains, createdServices, err
 			}
@@ -7669,7 +7685,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 			}
 			createdChains = append(createdChains, chainNode.NodeID)
 
-			serviceData := buildTunnelChainServiceConfig(state.TunnelID, chainNode, state.Nodes[chainNode.NodeID], len(nextTargets))
+			serviceData := h.buildTunnelChainServiceConfig(state.TunnelID, chainNode, state.Nodes[chainNode.NodeID], len(nextTargets), state.TunnelProtocol)
 			if err := h.addTunnelServiceOnNodeWithMode(chainNode.NodeID, state.TunnelID, serviceData, upsert); err != nil {
 				if shouldDeferTunnelRuntimeApplyError(err) {
 					continue
@@ -7685,7 +7701,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 		if node != nil && (node.IsRemote == 1 || node.Status != 1) {
 			continue
 		}
-		serviceData := buildTunnelChainServiceConfig(state.TunnelID, outNode, state.Nodes[outNode.NodeID], 1)
+		serviceData := h.buildTunnelChainServiceConfig(state.TunnelID, outNode, state.Nodes[outNode.NodeID], 1, state.TunnelProtocol)
 		if err := h.addTunnelServiceOnNodeWithMode(outNode.NodeID, state.TunnelID, serviceData, upsert); err != nil {
 			if shouldDeferTunnelRuntimeApplyError(err) {
 				continue
@@ -7741,7 +7757,7 @@ func (h *Handler) applyBestExitChainOrder(tunnelID, ownerNodeID int64, outNodes 
 		log.Printf("best_exit: updated remote federation chain tunnel=%d owner=%d best_exit=%d", tunnelID, ownerNodeID, targets[0].NodeID)
 		return nil
 	}
-	chainData, err := buildTunnelChainConfig(tunnelID, ownerNodeID, targets, nodes, ipPreference)
+	chainData, err := h.buildTunnelChainConfig(tunnelID, ownerNodeID, targets, nodes, ipPreference)
 	if err != nil {
 		log.Printf("best_exit: build chain failed tunnel=%d owner=%d err=%v", tunnelID, ownerNodeID, err)
 		return err
@@ -7798,7 +7814,7 @@ func (h *Handler) applyRemoteBestExitChainOrder(tunnelID, ownerNodeID int64, own
 		rt := client.RuntimeTarget{
 			Host:     host,
 			Port:     target.Port,
-			Protocol: defaultString(target.Protocol, "tls"),
+			Protocol: effectiveSegmentProtocol(target.Protocol, h.tunnelProtocolOf(tunnelID)),
 		}
 		// D3-04: 与 applyFederationRuntime 同口径附目标 share 凭据。
 		if targetNode.IsRemote == 1 {
@@ -7807,7 +7823,7 @@ func (h *Handler) applyRemoteBestExitChainOrder(tunnelID, ownerNodeID int64, own
 		applyTargets = append(applyTargets, rt)
 	}
 
-	ownerRuntimeNode := tunnelRuntimeNode{NodeID: ownerNodeID, Protocol: "tls", Strategy: "round", ChainType: 2}
+	ownerRuntimeNode := tunnelRuntimeNode{NodeID: ownerNodeID, Protocol: "", Strategy: "round", ChainType: 2}
 	if chainRows, listErr := h.repo.ListChainNodesForTunnel(tunnelID); listErr == nil {
 		for _, row := range chainRows {
 			if row.NodeID == ownerNodeID && row.ChainType == 2 {
@@ -7830,7 +7846,7 @@ func (h *Handler) applyRemoteBestExitChainOrder(tunnelID, ownerNodeID int64, own
 	_, err = client.NewFederationClientWithTimeout(federationRuntimeClientTimeout).ApplyRole(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeApplyRoleRequest{
 		ResourceKey: strings.TrimSpace(binding.ResourceKey),
 		Role:        "middle",
-		Protocol:    defaultString(ownerRuntimeNode.Protocol, "tls"),
+		Protocol:    effectiveSegmentProtocol(ownerRuntimeNode.Protocol, h.tunnelProtocolOf(tunnelID)),
 		Strategy:    runtimeStrategyForTargets(ownerRuntimeNode, targets),
 		Targets:     applyTargets,
 	})
@@ -8011,13 +8027,77 @@ func tunnelRelayMetadata(protocol string) map[string]interface{} {
 	return metadata
 }
 
-func buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string) (map[string]interface{}, error) {
+// effectiveSegmentProtocol 是段协议的生成面统一口径（K1-05 收口）：
+// 段行 protocol 优先、空回落隧道协议——与质量探针面
+// chainSegmentProtocol（control_plane.go，自述为统一准绳）逐字
+// 同义。此前 runtime 生成面与诊断组装面多处把空段回落字面量
+// "tls"，与探针面分歧：存量空 protocol 行在隧道协议为 kcp 时会
+// 生成 TLS 腿、探针面却按 UDP 段记「未测」。所有生成/组装面的
+// 段协议回落一律经此函数（tunnelProtocol 由调用方按隧道解析，
+// 见 tunnelKCPKey 与 applyTunnelRuntime/applyFederationRuntime
+// 的 state 装配）。
+func effectiveSegmentProtocol(segmentProtocol, tunnelProtocol string) string {
+	return chainSegmentProtocol(segmentProtocol, tunnelProtocol)
+}
+
+// tunnelProtocolOf 返回隧道行自身的协议（归一化小写）。优先用
+// state 在 apply 入口装配的 TunnelProtocol（调用方经 state 形参
+// 传入当前 state 的值），未装配时回落查库；无 Handler、无 repo
+// 或读失败时返回 ""，段回落随之退化为段行自身协议——存量段行
+// protocol 恒非空（F-UDP-4 后创建/更新面强制必填），只有隧道与
+// 段双空的极端存量行才退化到 builder 的非 KCP 分支。
+func (h *Handler) tunnelProtocolOf(tunnelID int64, stateProtocol ...string) string {
+	if len(stateProtocol) > 0 && strings.TrimSpace(stateProtocol[0]) != "" {
+		return normalizeTunnelProtocol(stateProtocol[0])
+	}
+	if h == nil || h.repo == nil || tunnelID <= 0 {
+		return ""
+	}
+	tr, err := h.repo.GetTunnelRecord(tunnelID)
+	if err != nil || tr == nil {
+		return ""
+	}
+	return normalizeTunnelProtocol(tr.Protocol)
+}
+
+// tunnelKCPKey 派生一条本地链隧道的 KCP 段密钥（K1-01）：仅当
+// 隧道协议或任一段协议为 kcp 时才需要；非 KCP 隧道返回 "" 且不
+// 报错。KCP 隧道而密钥派生失败（jwtSecret 缺失等）返回错误——
+// 宁可整条隧道下发失败，也不生成回落公开默认密钥的 KCP 配置。
+func (h *Handler) tunnelKCPKey(tunnelID int64, tunnelProtocol string, segmentProtocols ...string) (string, error) {
+	needs := isKCPTunnelProtocol(tunnelProtocol)
+	for _, p := range segmentProtocols {
+		if isKCPTunnelProtocol(effectiveSegmentProtocol(p, tunnelProtocol)) {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return "", nil
+	}
+	key := KCPKeyFor(h.jwtSecret, tunnelID)
+	if key == "" {
+		return "", errors.New("KCP 段密钥派生失败：面板密钥不可用")
+	}
+	return key, nil
+}
+
+func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string, stateProtocol ...string) (map[string]interface{}, error) {
 	fromNode := nodes[fromNodeID]
 	if fromNode == nil {
 		return nil, errors.New("节点不存在")
 	}
 	if len(targets) == 0 {
 		return nil, errors.New("转发链目标不能为空")
+	}
+	tunnelProtocol := h.tunnelProtocolOf(tunnelID, stateProtocol...)
+	protocols := make([]string, 0, len(targets))
+	for _, target := range targets {
+		protocols = append(protocols, target.Protocol)
+	}
+	kcpKey, err := h.tunnelKCPKey(tunnelID, tunnelProtocol, protocols...)
+	if err != nil {
+		return nil, err
 	}
 	nodeItems := make([]map[string]interface{}, 0, len(targets))
 	for idx, target := range targets {
@@ -8033,7 +8113,7 @@ func buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRu
 		if port <= 0 {
 			return nil, errors.New("节点端口不能为空")
 		}
-		protocol := defaultString(target.Protocol, "tls")
+		protocol := effectiveSegmentProtocol(target.Protocol, tunnelProtocol)
 		connector := map[string]interface{}{
 			"type": "relay",
 		}
@@ -8051,7 +8131,7 @@ func buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRu
 			"name":      fmt.Sprintf("node_%d", idx+1),
 			"addr":      processServerAddress(fmt.Sprintf("%s:%d", host, port)),
 			"connector": connector,
-			"dialer":    buildTunnelDialerConfig(protocol),
+			"dialer":    buildTunnelDialerConfig(protocol, kcpKey),
 		})
 	}
 
@@ -8093,11 +8173,21 @@ func runtimeStrategyForTargets(owner tunnelRuntimeNode, targets []tunnelRuntimeN
 	return runtimeTunnelStrategy(strategy)
 }
 
-func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, node *nodeRecord, nextHopCandidateCount int) []map[string]interface{} {
+func (h *Handler) buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, node *nodeRecord, nextHopCandidateCount int, stateProtocol ...string) []map[string]interface{} {
 	if node == nil {
 		return nil
 	}
-	protocol := defaultString(chainNode.Protocol, "tls")
+	// K1-05：段协议回落与生成/探针面统一（空→隧道协议），不再
+	// 回落字面量 "tls"；K1-01：KCP 段密钥按隧道派生、与拨号面
+	// 同源。密钥派生失败时产出空配置（整条服务缺席），由上层
+	// apply 的服务数校验报错——绝不下发无钥 KCP 配置。
+	tunnelProtocol := h.tunnelProtocolOf(tunnelID, stateProtocol...)
+	protocol := effectiveSegmentProtocol(chainNode.Protocol, tunnelProtocol)
+	kcpKey, err := h.tunnelKCPKey(tunnelID, tunnelProtocol, chainNode.Protocol)
+	if err != nil {
+		log.Printf("tunnel %d chain service config skipped: %v", tunnelID, err)
+		return nil
+	}
 	handlerCfg := map[string]interface{}{
 		"type": "relay",
 	}
@@ -8132,7 +8222,7 @@ func buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, 
 		// 见 realm.go 同注释）。
 		"addr":     processServerAddress(net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, protocol)), "[]"), strconv.Itoa(chainNode.Port))),
 		"handler":  handlerCfg,
-		"listener": buildTunnelListenerConfig(protocol),
+		"listener": buildTunnelListenerConfig(protocol, kcpKey),
 	}
 	if chainNode.ChainType == 2 {
 		service["handler"].(map[string]interface{})["chain"] = fmt.Sprintf("chains_%d", tunnelID)
@@ -8249,31 +8339,73 @@ func isTLSTunnelProtocol(protocol string) bool {
 	return strings.EqualFold(strings.TrimSpace(defaultString(protocol, "tls")), "tls")
 }
 
-func buildTunnelDialerConfig(protocol string) map[string]interface{} {
+// kcpCryptAlgorithm 是 KCP 段下发的加密算法（K1-01 修复）：
+// kcp-go 的 BlockCrypt 支持集里 aes-256 是最稳妥的强档——其
+// pbkdf2(key, salt) 派生恰好输出 32 字节，aes/aes-128/aes-192
+// 会把派生结果截断到 16/24 字节，aes-256 全量使用。
+const kcpCryptAlgorithm = "aes-256"
+
+// KCPKeyFor 按作用域派生 KCP 段的加密密钥（K1-01 修复）：与
+// SSUserPSK 同构的免存储确定性派生——HMAC-SHA256(面板 jwtSecret,
+// 域分隔串 + scopeID)，两端（本地链的拨号/监听两侧、联邦的消费
+// 方与提供方）用同一 (secret, scopeID) 必然算出同一把钥匙，无需
+// 任何新增存储或跨面板协议字段。scopeID 在本地链为隧道 ID、在
+// 联邦角色面为 share ID（PeerShareRuntime 行自带 ShareID，提供
+// 方本地可达；消费方面板用自己库里的同一 share 行 ID）。密钥对
+// 同一作用域恒定：隧道/份额重下发不换钥；jwtSecret 轮换（或面板
+// 数据整体迁移）才会换钥，那时全网 KCP 腿须同批重下发。空 secret
+// 或非法 scopeID 返回 ""，调用方必须拒绝生成 KCP 配置——绝不回
+// 落到 kcp-go 的公开默认密钥（回落即漏洞保留）。
+func KCPKeyFor(secret string, scopeID int64) string {
+	if strings.TrimSpace(secret) == "" || scopeID <= 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprintf(mac, "flmx-kcp-key|%d", scopeID)
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// tunnelKCPMetadata 是 KCP 段 metadata 的单一真源（K1-02 收敛）：
+// 此前 dialer/listener 两份逐字重复的 13 键字面量合并于此，两面
+// 共用同一构造，改参只改一处。参数值维持现行缺省（fast3 / wnd
+// 4096 / FEC 10+3），本批只收敛真源不改默认——FEC 等参数的产品
+// 可配面尚无既有配置口径可挂，待产品定版时在此函数接入。
+// kcpKey 为空时不写 kcp.key/kcp.crypt 两键（非 KCP 作用域的防御
+// 分支）；KCP 作用域的调用方须先经 KCPKeyFor 校验非空再传入。
+func tunnelKCPMetadata(kcpKey string) map[string]interface{} {
+	metadata := map[string]interface{}{
+		"kcp.keepalive":   10,
+		"kcp.tcp":         false,
+		"kcp.mode":        "fast3",
+		"kcp.sndwnd":      4096,
+		"kcp.rcvwnd":      4096,
+		"kcp.mtu":         1350,
+		"kcp.sockbuf":     4194304,
+		"kcp.smuxbuf":     4194304,
+		"kcp.streambuf":   2097152,
+		"kcp.datashard":   10,
+		"kcp.parityshard": 3,
+		"kcp.nocomp":      true,
+		"kcp.nc":          1,
+	}
+	if strings.TrimSpace(kcpKey) != "" {
+		metadata["kcp.key"] = kcpKey
+		metadata["kcp.crypt"] = kcpCryptAlgorithm
+	}
+	return metadata
+}
+
+func buildTunnelDialerConfig(protocol, kcpKey string) map[string]interface{} {
 	dialer := map[string]interface{}{
 		"type": protocol,
 	}
 	if isKCPTunnelProtocol(protocol) {
-		dialer["metadata"] = map[string]interface{}{
-			"kcp.keepalive":   10,
-			"kcp.tcp":         false,
-			"kcp.mode":        "fast3",
-			"kcp.sndwnd":      4096,
-			"kcp.rcvwnd":      4096,
-			"kcp.mtu":         1350,
-			"kcp.sockbuf":     4194304,
-			"kcp.smuxbuf":     4194304,
-			"kcp.streambuf":   2097152,
-			"kcp.datashard":   10,
-			"kcp.parityshard": 3,
-			"kcp.nocomp":      true,
-			"kcp.nc":          1,
-		}
+		dialer["metadata"] = tunnelKCPMetadata(kcpKey)
 	}
 	return dialer
 }
 
-func buildTunnelListenerConfig(protocol string) map[string]interface{} {
+func buildTunnelListenerConfig(protocol, kcpKey string) map[string]interface{} {
 	listener := map[string]interface{}{
 		"type": protocol,
 	}
@@ -8291,21 +8423,7 @@ func buildTunnelListenerConfig(protocol string) map[string]interface{} {
 		}
 	}
 	if isKCPTunnelProtocol(protocol) {
-		listener["metadata"] = map[string]interface{}{
-			"kcp.keepalive":   10,
-			"kcp.tcp":         false,
-			"kcp.mode":        "fast3",
-			"kcp.sndwnd":      4096,
-			"kcp.rcvwnd":      4096,
-			"kcp.mtu":         1350,
-			"kcp.sockbuf":     4194304,
-			"kcp.smuxbuf":     4194304,
-			"kcp.streambuf":   2097152,
-			"kcp.datashard":   10,
-			"kcp.parityshard": 3,
-			"kcp.nocomp":      true,
-			"kcp.nc":          1,
-		}
+		listener["metadata"] = tunnelKCPMetadata(kcpKey)
 	}
 	return listener
 }

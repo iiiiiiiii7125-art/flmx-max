@@ -299,7 +299,7 @@ func TestBuildTunnelChainConfigMapsBestStrategyToFIFO(t *testing.T) {
 		{NodeID: 31, Port: 30031, Protocol: "tls", Strategy: tunnelStrategyBest, ChainType: 3},
 	}
 
-	chainData, err := buildTunnelChainConfig(77, 10, targets, nodes, "")
+	chainData, err := (&Handler{}).buildTunnelChainConfig(77, 10, targets, nodes, "")
 	if err != nil {
 		t.Fatalf("build chain: %v", err)
 	}

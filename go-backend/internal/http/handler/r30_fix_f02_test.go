@@ -52,7 +52,7 @@ func TestR30FixF02BuildTunnelChainConfigStripsPortedConnectIP(t *testing.T) {
 		2: {ID: 2, ServerIP: "198.51.100.77", ServerIPv4: "198.51.100.77"},
 	}
 	targets := []tunnelRuntimeNode{{NodeID: 2, Protocol: "tls", Strategy: "round", Port: 30001, ConnectIP: "198.51.100.77:8443"}}
-	cfg, err := buildTunnelChainConfig(7, 1, targets, nodes, "")
+	cfg, err := (&Handler{}).buildTunnelChainConfig(7, 1, targets, nodes, "")
 	if err != nil {
 		t.Fatalf("buildTunnelChainConfig: %v", err)
 	}
