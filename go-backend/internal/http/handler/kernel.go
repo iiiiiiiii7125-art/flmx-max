@@ -34,13 +34,41 @@ var kernelStatusInterval = 60 * time.Second
 
 // kernelApplyLocks serializes renders and dispatches per kernel so two edits
 // in quick succession cannot reach the agent out of order.
+//
+// P1-07: entries are reference-counted and deleted when the last
+// holder/waiter releases, so the map does not grow by one mutex per
+// kernel ever touched for the life of the process. kernelApplyLocksMu
+// only guards the refcount (never held across the per-kernel lock),
+// and the returned release func is idempotent because existing call
+// sites invoke it manually on several exit paths.
 var kernelApplyLocks sync.Map
+var kernelApplyLocksMu sync.Mutex
+
+type kernelApplyLock struct {
+	mu   sync.Mutex
+	refs int
+}
 
 func lockKernelApply(kernelID int64) func() {
-	v, _ := kernelApplyLocks.LoadOrStore(kernelID, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	kernelApplyLocksMu.Lock()
+	v, _ := kernelApplyLocks.LoadOrStore(kernelID, &kernelApplyLock{})
+	l := v.(*kernelApplyLock)
+	l.refs++
+	kernelApplyLocksMu.Unlock()
+
+	l.mu.Lock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			l.mu.Unlock()
+			kernelApplyLocksMu.Lock()
+			l.refs--
+			if l.refs == 0 {
+				kernelApplyLocks.Delete(kernelID)
+			}
+			kernelApplyLocksMu.Unlock()
+		})
+	}
 }
 
 type kernelView struct {

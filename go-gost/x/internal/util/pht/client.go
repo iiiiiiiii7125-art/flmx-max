@@ -24,6 +24,22 @@ type Client struct {
 	Logger        logger.Logger
 }
 
+// Close releases the underlying HTTP transport: a full close when the
+// transport supports it (e.g. *http3.Transport, which owns QUIC
+// connections), otherwise idle connections are closed (e.g.
+// *http.Transport). Used by dialers when a chain generation is retired
+// so cached clients do not outlive their configuration (P1-08).
+func (c *Client) Close() error {
+	if c == nil || c.Client == nil {
+		return nil
+	}
+	if closer, ok := c.Client.Transport.(io.Closer); ok {
+		return closer.Close()
+	}
+	c.Client.CloseIdleConnections()
+	return nil
+}
+
 func (c *Client) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	raddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {

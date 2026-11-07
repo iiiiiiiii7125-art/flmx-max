@@ -3,6 +3,7 @@ package http3
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -23,6 +24,7 @@ func init() {
 type http3Dialer struct {
 	clients     map[string]*pht_util.Client
 	clientMutex sync.Mutex
+	retired     bool
 	md          metadata
 	options     dialer.Options
 }
@@ -50,6 +52,10 @@ func (d *http3Dialer) Init(md md.Metadata) (err error) {
 func (d *http3Dialer) Dial(ctx context.Context, addr string, opts ...dialer.DialOption) (net.Conn, error) {
 	d.clientMutex.Lock()
 	defer d.clientMutex.Unlock()
+
+	if d.retired {
+		return nil, net.ErrClosed
+	}
 
 	client, ok := d.clients[addr]
 	if !ok {
@@ -113,4 +119,39 @@ func (d *http3Dialer) Dial(ctx context.Context, addr string, opts ...dialer.Dial
 // Multiplex implements dialer.Multiplexer interface.
 func (d *http3Dialer) Multiplex() bool {
 	return true
+}
+
+// Retire closes every cached client of a dialer whose chain has been
+// replaced, so their QUIC connections do not outlive the generation
+// that created them (P1-08).
+func (d *http3Dialer) Retire() {
+	for _, client := range d.detachClients() {
+		client.Close()
+	}
+}
+
+// Close immediately releases all cached clients.
+func (d *http3Dialer) Close() error {
+	var errs []error
+	for _, client := range d.detachClients() {
+		errs = append(errs, client.Close())
+	}
+	return errors.Join(errs...)
+}
+
+func (d *http3Dialer) detachClients() []*pht_util.Client {
+	if d == nil {
+		return nil
+	}
+	d.clientMutex.Lock()
+	d.retired = true
+	clients := make([]*pht_util.Client, 0, len(d.clients))
+	for _, client := range d.clients {
+		if client != nil {
+			clients = append(clients, client)
+		}
+	}
+	d.clients = make(map[string]*pht_util.Client)
+	d.clientMutex.Unlock()
+	return clients
 }

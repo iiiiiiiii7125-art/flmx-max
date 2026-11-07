@@ -21,6 +21,18 @@ type Client struct {
 	log     logger.Logger
 }
 
+// Close terminates the underlying WebTransport session, if one has
+// been established, releasing its QUIC connection. Used when the
+// owning dialer is retired (P1-08).
+func (c *Client) Close() error {
+	if c == nil || c.session == nil {
+		return nil
+	}
+	err := c.session.CloseWithError(0, "")
+	c.session = nil
+	return err
+}
+
 func (c *Client) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	ok := false
 	if c.session != nil {

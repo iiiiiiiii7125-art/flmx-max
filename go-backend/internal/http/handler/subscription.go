@@ -1493,7 +1493,14 @@ func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error
 	if err := h.applyKernelsForInbounds(push); err != nil {
 		return err
 	}
-	return h.repo.DeleteSubscriptionWithAssignments(s.ID)
+	if err := h.repo.DeleteSubscriptionWithAssignments(s.ID); err != nil {
+		return err
+	}
+	// P1-07: the row is gone, so its one-shot warning dedupe entry can
+	// be reclaimed (a future subscription reusing the id must warn
+	// again rather than inherit the silence).
+	uncountableSubWarned.Delete(s.ID)
+	return nil
 }
 
 // rotateSubscriptionCredentials is the one full reset rotation: new
