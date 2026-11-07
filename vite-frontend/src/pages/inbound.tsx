@@ -760,18 +760,34 @@ export default function InboundPage() {
                 {item.relayCount} 条中转
               </Chip>
             )}
-            {item.outboundId > 0 && (
-              <Chip
-                className="max-w-full"
-                color={item.outboundMissing ? "danger" : "warning"}
-                size="sm"
-                variant="flat"
-              >
-                {item.outboundMissing
-                  ? "出站节点已删除"
-                  : `经 ${item.outboundName} 出站`}
-              </Chip>
-            )}
+            {item.outboundId > 0 &&
+              (item.outboundMissing ? (
+                <Chip
+                  className="max-w-full"
+                  color="danger"
+                  size="sm"
+                  variant="flat"
+                >
+                  出站节点已删除
+                </Chip>
+              ) : (
+                <>
+                  <Chip color="success" size="sm" variant="flat">
+                    链式
+                  </Chip>
+                  {item.outboundName && (
+                    <Chip
+                      className="max-w-full"
+                      color="success"
+                      size="sm"
+                      title={item.outboundName}
+                      variant="light"
+                    >
+                      <span className="truncate">{item.outboundName}</span>
+                    </Chip>
+                  )}
+                </>
+              ))}
             {item.splitRules?.length > 0 && (
               <Chip color="primary" size="sm" variant="flat">
                 分流 {item.splitRules.length} 条
@@ -938,21 +954,41 @@ export default function InboundPage() {
                 {item.relayCount} 中转
               </Chip>
             )}
-            {item.outboundId > 0 && (
-              <Chip
-                className="shrink-0 whitespace-nowrap"
-                color={item.outboundMissing ? "danger" : "warning"}
-                size="sm"
-                title={
-                  item.outboundMissing
-                    ? "出站节点已删除"
-                    : `经 ${item.outboundName} 出站`
-                }
-                variant="flat"
-              >
-                {item.outboundMissing ? "出站已删除" : "链式"}
-              </Chip>
-            )}
+            {item.outboundId > 0 &&
+              (item.outboundMissing ? (
+                <Chip
+                  className="shrink-0 whitespace-nowrap"
+                  color="danger"
+                  size="sm"
+                  title="出站节点已删除"
+                  variant="flat"
+                >
+                  出站已删除
+                </Chip>
+              ) : (
+                <>
+                  <Chip
+                    className="shrink-0 whitespace-nowrap"
+                    color="success"
+                    size="sm"
+                    title={`经 ${item.outboundName} 出站`}
+                    variant="flat"
+                  >
+                    链式
+                  </Chip>
+                  {item.outboundName && (
+                    <Chip
+                      className="max-w-40 shrink-0 whitespace-nowrap"
+                      color="success"
+                      size="sm"
+                      title={item.outboundName}
+                      variant="light"
+                    >
+                      <span className="truncate">{item.outboundName}</span>
+                    </Chip>
+                  )}
+                </>
+              ))}
             {item.splitRules?.length > 0 && (
               <Chip
                 className="shrink-0 whitespace-nowrap"
@@ -1511,18 +1547,36 @@ export default function InboundPage() {
                   {sheetItem.relayCount} 条中转
                 </Chip>
               )}
-              {sheetItem.outboundId > 0 && (
-                <Chip
-                  className="max-w-full"
-                  color={sheetItem.outboundMissing ? "danger" : "warning"}
-                  size="sm"
-                  variant="flat"
-                >
-                  {sheetItem.outboundMissing
-                    ? "出站节点已删除"
-                    : `经 ${sheetItem.outboundName} 出站`}
-                </Chip>
-              )}
+              {sheetItem.outboundId > 0 &&
+                (sheetItem.outboundMissing ? (
+                  <Chip
+                    className="max-w-full"
+                    color="danger"
+                    size="sm"
+                    variant="flat"
+                  >
+                    出站节点已删除
+                  </Chip>
+                ) : (
+                  <>
+                    <Chip color="success" size="sm" variant="flat">
+                      链式
+                    </Chip>
+                    {sheetItem.outboundName && (
+                      <Chip
+                        className="max-w-full"
+                        color="success"
+                        size="sm"
+                        title={sheetItem.outboundName}
+                        variant="light"
+                      >
+                        <span className="truncate">
+                          {sheetItem.outboundName}
+                        </span>
+                      </Chip>
+                    )}
+                  </>
+                ))}
               {sheetItem.splitRules?.length > 0 && (
                 <Chip color="primary" size="sm" variant="flat">
                   分流 {sheetItem.splitRules.length} 条
