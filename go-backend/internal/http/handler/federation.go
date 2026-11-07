@@ -105,7 +105,34 @@ func federationRuntimeChainName(bindingID string) string {
 	return "fed_chain_" + bindingID
 }
 
-func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protocol, strategy string, targets []federationRuntimeTarget, interfaceName string) (map[string]interface{}, error) {
+// federationKCPKey 派生一条联邦中继腿的 KCP 段密钥（K1-01 联邦
+// 面）：作用域是发起方面板本地的 share ID——中继链由消费方面板
+// 生成、写进 ApplyRole 请求的 targets，提供方面板按同一 share
+// 在自己库中的 runtime 行（PeerShareRuntime.ShareID）派生角色
+// 服务的监听钥，两侧 (jwtSecret, shareID) 同源即同钥。注意联邦
+// 两侧是两个面板安装、jwtSecret 各自独立：钥匙同源的前提是两
+// 个面板共用同一 jwtSecret（联邦配对的既有信任根与此同源），
+// 否则 KCP 联邦腿握手失败——不回落默认密钥，失败即暴露配置
+// 不一致。secret/scopeID 缺失时返回错误，整条链拒绝生成。
+func federationKCPKey(secret string, shareID int64, protocols ...string) (string, error) {
+	needs := false
+	for _, p := range protocols {
+		if isKCPTunnelProtocol(p) {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return "", nil
+	}
+	key := KCPKeyFor(secret, shareID)
+	if key == "" {
+		return "", fmt.Errorf("KCP 段密钥派生失败：share %d 的密钥作用域不可用", shareID)
+	}
+	return key, nil
+}
+
+func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protocol, strategy string, targets []federationRuntimeTarget, interfaceName string, kcpSecret string, kcpShareID int64) (map[string]interface{}, error) {
 	chainName = strings.TrimSpace(chainName)
 	if chainName == "" {
 		return nil, fmt.Errorf("chain name is required")
@@ -114,6 +141,15 @@ func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protoco
 		return nil, fmt.Errorf("targets are required for middle role")
 	}
 	protocol = defaultString(protocol, "tls")
+	targetProtocols := make([]string, 0, len(targets)+1)
+	targetProtocols = append(targetProtocols, protocol)
+	for _, target := range targets {
+		targetProtocols = append(targetProtocols, target.Protocol)
+	}
+	kcpKey, err := federationKCPKey(kcpSecret, kcpShareID, targetProtocols...)
+	if err != nil {
+		return nil, err
+	}
 	nodeItems := make([]map[string]interface{}, 0, len(targets))
 	for i, target := range targets {
 		host := strings.TrimSpace(target.Host)
@@ -138,7 +174,7 @@ func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protoco
 			"name":      fmt.Sprintf("node_%d", i+1),
 			"addr":      processServerAddress(fmt.Sprintf("%s:%d", host, target.Port)),
 			"connector": connector,
-			"dialer":    buildTunnelDialerConfig(targetProtocol),
+			"dialer":    buildTunnelDialerConfig(targetProtocol, kcpKey),
 		})
 	}
 
@@ -327,14 +363,14 @@ func applyFederationExitPrivateGuard(service map[string]interface{}, role, agent
 	}
 }
 
-func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName string, targetCount int, interfaceName string) map[string]interface{} {
+func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName string, targetCount int, interfaceName, kcpKey string) map[string]interface{} {
 	service := map[string]interface{}{
 		"name": serviceName,
 		"addr": addr,
 		"handler": map[string]interface{}{
 			"type": "relay",
 		},
-		"listener": buildTunnelListenerConfig(protocol),
+		"listener": buildTunnelListenerConfig(protocol, kcpKey),
 	}
 	// F-UDP-7: 与本地链 builder 共用 tunnelRelayMetadata。
 	handlerMetadata := tunnelRelayMetadata(protocol)

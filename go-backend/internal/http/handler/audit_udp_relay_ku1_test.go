@@ -47,17 +47,17 @@ func ku1AssertUDPListenerKeepAlive(t *testing.T, surface string, service map[str
 
 func TestKU1TunnelListenerConfigUDPKeepAlive(t *testing.T) {
 	ku1AssertUDPListenerKeepAlive(t, "buildTunnelListenerConfig(udp)",
-		map[string]interface{}{"listener": buildTunnelListenerConfig("udp")})
+		map[string]interface{}{"listener": buildTunnelListenerConfig("udp", "")})
 	ku1AssertUDPListenerKeepAlive(t, "buildTunnelListenerConfig(UDP)",
-		map[string]interface{}{"listener": buildTunnelListenerConfig("UDP")})
+		map[string]interface{}{"listener": buildTunnelListenerConfig("UDP", "")})
 
 	for _, protocol := range []string{"tcp", "tls", "mtls", "mtcp", "ws", "wss", "mws", "mwss"} {
-		listener := buildTunnelListenerConfig(protocol)
+		listener := buildTunnelListenerConfig(protocol, "")
 		if _, hasMetadata := listener["metadata"]; hasMetadata {
 			t.Fatalf("protocol %s must not gain listener metadata, got %v", protocol, listener)
 		}
 	}
-	kcp := buildTunnelListenerConfig("kcp")
+	kcp := buildTunnelListenerConfig("kcp", "")
 	kcpMetadata, _ := kcp["metadata"].(map[string]interface{})
 	if kcpMetadata == nil || kcpMetadata["kcp.mode"] != "fast3" {
 		t.Fatalf("kcp listener metadata must be preserved, got %v", kcp)
@@ -78,7 +78,7 @@ func TestKU1UDPGenerationSurfaceEnumeration(t *testing.T) {
 		chainType := chainType
 		surfaces[map[int]string{2: "本地链中段服务", 3: "本地链出口服务"}[chainType]] = func() map[string]interface{} {
 			chain := tunnelRuntimeNode{NodeID: 5, Protocol: "udp", Port: 24001, ChainType: chainType}
-			services := buildTunnelChainServiceConfig(99, chain, node, 1)
+			services := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99, chain, node, 1)
 			if len(services) != 1 {
 				t.Fatalf("chain type %d: expected 1 service, got %d", chainType, len(services))
 			}
@@ -88,7 +88,7 @@ func TestKU1UDPGenerationSurfaceEnumeration(t *testing.T) {
 	for _, role := range []string{"middle", "exit"} {
 		role := role
 		surfaces["联邦 "+role+" runtime 服务"] = func() map[string]interface{} {
-			return buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", role, "fed_chain_1", 1, "")
+			return buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", role, "fed_chain_1", 1, "", "")
 		}
 	}
 	surfaces["本地转发 _udp 服务（既有合规面，防回退）"] = func() map[string]interface{} {
@@ -124,7 +124,7 @@ func TestKU1ChainServiceListenAddrByProtocol(t *testing.T) {
 	}
 	for _, tc := range cases {
 		chain := tunnelRuntimeNode{NodeID: 5, Protocol: tc.protocol, Port: 24001, ChainType: 3}
-		services := buildTunnelChainServiceConfig(99, chain, node, 1)
+		services := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99, chain, node, 1)
 		if len(services) != 1 {
 			t.Fatalf("protocol %s: expected 1 service, got %d", tc.protocol, len(services))
 		}
@@ -160,9 +160,9 @@ func TestKU1MuxMetadataAlignedBetweenBuilders(t *testing.T) {
 
 	for _, protocol := range []string{"tcp", "tls", "mtls", "mtcp", "kcp", "ws"} {
 		// handler 面：联邦服务 vs 本地链服务。
-		fedService := buildFederationServiceConfig("fed_svc_1", "[::]:24002", protocol, "exit", "", 1, "")
+		fedService := buildFederationServiceConfig("fed_svc_1", "[::]:24002", protocol, "exit", "", 1, "", "")
 		fedHandler, _ := fedService["handler"].(map[string]interface{})
-		localServices := buildTunnelChainServiceConfig(99, tunnelRuntimeNode{NodeID: 2, Protocol: protocol, Port: 24001, ChainType: 3}, node, 1)
+		localServices := (&Handler{jwtSecret: "ku1-align-secret"}).buildTunnelChainServiceConfig(99, tunnelRuntimeNode{NodeID: 2, Protocol: protocol, Port: 24001, ChainType: 3}, node, 1)
 		localHandler, _ := localServices[0]["handler"].(map[string]interface{})
 		if !reflect.DeepEqual(fedHandler["metadata"], localHandler["metadata"]) {
 			t.Fatalf("protocol %s: handler metadata drift, federation %v vs local %v",
@@ -171,11 +171,11 @@ func TestKU1MuxMetadataAlignedBetweenBuilders(t *testing.T) {
 
 		// connector 面：联邦 middle 链 vs 本地链。
 		fedChain, err := buildFederationMiddleChainConfig("fed_chain_1", 7, protocol, "round",
-			[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: protocol}}, "")
+			[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: protocol}}, "", "ku1-align-secret", 99)
 		if err != nil {
 			t.Fatalf("protocol %s: build federation middle chain: %v", protocol, err)
 		}
-		localChain, err := buildTunnelChainConfig(99, 1,
+		localChain, err := (&Handler{jwtSecret: "ku1-align-secret"}).buildTunnelChainConfig(99, 1,
 			[]tunnelRuntimeNode{{NodeID: 2, Protocol: protocol, Port: 24001, ConnectIP: "10.0.0.2"}},
 			map[int64]*nodeRecord{1: fromNode, 2: targetNode}, "")
 		if err != nil {

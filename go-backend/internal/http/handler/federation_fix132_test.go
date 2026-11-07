@@ -305,7 +305,7 @@ func TestBuildTunnelChainConfigCarriesRemoteRelayAuth(t *testing.T) {
 	nodes := map[int64]*nodeRecord{1: from, 2: remote, 3: localTarget}
 
 	connectorOf := func(targets []tunnelRuntimeNode) map[string]interface{} {
-		chain, err := buildTunnelChainConfig(77, 1, targets, nodes, "")
+		chain, err := (&Handler{}).buildTunnelChainConfig(77, 1, targets, nodes, "")
 		if err != nil {
 			t.Fatal(err)
 		}

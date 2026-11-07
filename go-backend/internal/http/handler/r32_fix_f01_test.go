@@ -86,7 +86,7 @@ func TestR32L4BareListenAddrControl(t *testing.T) {
 
 func TestR32FixF01ChainServiceStripsPortedListenAddr(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "203.0.113.7:9999"}
-	services := buildTunnelChainServiceConfig(1, tunnelRuntimeNode{Port: 22001, Protocol: "tls"}, node, 1)
+	services := (&Handler{}).buildTunnelChainServiceConfig(1, tunnelRuntimeNode{Port: 22001, Protocol: "tls"}, node, 1)
 	if len(services) != 1 {
 		t.Fatalf("CELL-C expected 1 chain service, got %d", len(services))
 	}
