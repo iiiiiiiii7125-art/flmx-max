@@ -444,6 +444,33 @@ direct_latency_within_gate() {
   awk -v t="$1" 'BEGIN { exit !(t + 0 <= 0.8) }'
 }
 
+# probe_route_throughput <路线前缀>：独占前的吞吐短测速（F1-01，
+# 与 install.sh 面板源独占的 probe_panel_throughput 逐项同口径）。
+# 经该路线对 releases/latest 重定向 URL 拉前 256KB（Range
+# bytes=0-262143），--max-time 10 硬顶、计时求实际字节速率
+# （KB/s）；达门槛 256KB/s 返回 0，否则（测速失败 / 样本不足 /
+# 速率不达标）返回 1，调用方不独占、并入排名——fail-safe 方向：
+# 测不出来就不许独占。端点忽略 Range 回 200 全体时以实际落盘
+# 字节为准（>256KB 时 curl 达样本量即止）；回 416（本体小于样
+# 本量）按失败处理——release 本体恒为 MB 级，416 视为异常。
+probe_route_throughput() {
+  local prefix="$1"
+  local sample_file metrics code size_download time_total rate
+  sample_file=$(mktemp) || return 1
+  metrics=$(curl -fsL -o "$sample_file" -w '%{http_code} %{size_download} %{time_total}' \
+    --connect-timeout 5 --max-time 10 \
+    -H 'Range: bytes=0-262143' \
+    "$(route_url "$prefix" "https://github.com/${REPO}/releases/latest")" 2>/dev/null) || { rm -f "$sample_file"; return 1; }
+  rm -f "$sample_file"
+  code="${metrics%% *}"
+  metrics="${metrics#* }"
+  size_download="${metrics%% *}"
+  time_total="${metrics##* }"
+  [[ "$code" == "200" || "$code" == "206" ]] || return 1
+  rate=$(awk -v s="$size_download" -v t="$time_total" 'BEGIN { if (t + 0 <= 0) exit 1; printf "%.1f", s / t / 1024 }') || return 1
+  awk -v r="$rate" 'BEGIN { exit !(r + 0 >= 256) }'
+}
+
 # routes_insert_slow_direct <直连实测延迟秒>：须在 rank_proxy_routes
 # 之后调用。把慢直连按实测延迟插入已排名路线表（与 Go 侧口径一
 # 致：慢直连不丢弃、按延迟参与排序；未判活代理无延迟值，直连排在
@@ -488,11 +515,7 @@ ensure_download_routes() {
     *)
       local direct_latency=""
       if direct_latency=$(probe_route ""); then
-        if direct_latency_within_gate "$direct_latency"; then
-          DOWNLOAD_ROUTES=("")
-          ROUTES_STAGE=1
-          echo "🌐 GitHub 下载路线: 直连" >&2
-        else
+        if ! direct_latency_within_gate "$direct_latency"; then
           # L2-35（R5-FD，与 install.sh 的 L2-06 同族）：慢直连不得
           # 短路独占——按实测延迟并入代理排名，与 Go 侧 routes.go
           # 的 800ms 门同口径。旧实现对面板侧直连只判成败，一条
@@ -500,6 +523,19 @@ ensure_download_routes() {
           rank_proxy_routes
           routes_insert_slow_direct "$direct_latency"
           echo "🌐 GitHub 直连较慢（${direct_latency}s 超过 0.8s 门限），按测速排名选路（首选: ${DOWNLOAD_ROUTES[0]:-直连}）" >&2
+        elif probe_route_throughput ""; then
+          DOWNLOAD_ROUTES=("")
+          ROUTES_STAGE=1
+          echo "🌐 GitHub 下载路线: 直连" >&2
+        else
+          # F1-01：吞吐门（与 install.sh 面板源独占的 FIX2/D-01 同
+          # 口径）——重定向延迟达标但本体吞吐 <256KB/s 的慢直连同
+          # 样不得短路独占：面板资产在总预算内会被 10KB/s 级线路
+          # 耗尽预算才改道。按实测延迟并入代理排名（与慢直连同
+          # 法、不丢弃）。
+          rank_proxy_routes
+          routes_insert_slow_direct "$direct_latency"
+          echo "🌐 GitHub 直连吞吐未达 256KB/s 独占门（延迟 ${direct_latency}s），按测速排名选路（首选: ${DOWNLOAD_ROUTES[0]:-直连}）" >&2
         fi
       else
         rank_proxy_routes
@@ -4150,7 +4186,7 @@ update_panel() {
   if ! start_panel_after_update "$CURRENT_DB_TYPE"; then
     echo "🛑 新版本启动失败"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本"
+      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -4160,7 +4196,7 @@ update_panel() {
   if ! verify_panel_update_sqlite_volume "$update_expected_sqlite_volume"; then
     echo "🛑 升级后卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本"
+      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -4172,7 +4208,7 @@ update_panel() {
   if [[ "$CURRENT_DB_TYPE" == "postgres" ]] && ! verify_panel_update_postgres_volume "$update_expected_postgres_volume"; then
     echo "🛑 升级后 PG 卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本"
+      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi

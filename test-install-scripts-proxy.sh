@@ -2794,6 +2794,175 @@ JSON
     fail "R2F2-D01: qdisc unit should be disabled before removal"
 )
 
+# J9-01：脚本卸载须处置第二代面③ 的 TL-02 快照——与面板路径
+# restoreKernelSysctls 同口径：按快照逐键写回原值、absent 键点
+# 名、rps_sock_flow_entries 复位 0、快照消费删除不留孤儿。全部
+# 路径变量改指临时目录（scratch 纪律），不触真实宿主路径。
+test_uninstall_flmx_agent_host_cleanup_restores_kernel_snapshot() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$work/sysctl.d/99-network-performance.conf"
+  FLMX_TUNING_LIMITS_CONF="$work/security/limits.d/99-network-performance.conf"
+  FLMX_TUNING_BBR_CONF="$work/sysctl.d/10-bbr.conf"
+  FLMX_TUNING_GAI_CONF="$work/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$work/gai.conf.bak"
+  FLMX_TUNING_RPS_UNIT_FILE="$work/systemd/flmx-tuning-rps.service"
+  FLMX_TUNING_RPS_SCRIPT="$work/bin/flmx-tuning-rps.sh"
+  FLMX_TUNING_KERNEL_SNAPSHOT="$work/security/flmx-tuning-kernel-sysctls.json"
+  FLMX_PROC_SYS_DIR="$work/proc/sys"
+  mkdir -p "$INSTALL_DIR" "$(dirname "$FLMX_TUNING_KERNEL_CONF")" \
+    "$(dirname "$FLMX_TUNING_LIMITS_CONF")" "$(dirname "$FLMX_TUNING_KERNEL_SNAPSHOT")" \
+    "$FLMX_PROC_SYS_DIR/net/ipv4" "$FLMX_PROC_SYS_DIR/net/core"
+
+  printf 'bbr\n' > "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control"
+  printf '999999\n' > "$FLMX_PROC_SYS_DIR/net/core/rmem_max"
+  printf '15\n' > "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_fin_timeout"
+  printf 'fq\n' > "$FLMX_PROC_SYS_DIR/net/core/default_qdisc"
+  printf '32768\n' > "$FLMX_PROC_SYS_DIR/net/core/rps_sock_flow_entries"
+  echo 'net.core.somaxconn = 65535' > "$FLMX_TUNING_KERNEL_CONF"
+  printf '%s' '{"values":{"net.core.rmem_max":"212992","net.ipv4.tcp_congestion_control":"cubic","net.ipv4.tcp_fin_timeout":"30"},"absent":["net.ipv4.tcp_ecn"]}' \
+    > "$FLMX_TUNING_KERNEL_SNAPSHOT"
+
+  systemctl() { return 0; }
+  nft() { cat >/dev/null; return 0; }
+  iptables() { return 1; }
+
+  local rc="0" out
+  out=$(uninstall_flmx_agent_host_cleanup 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "J9-01: host cleanup with a kernel snapshot should succeed"
+  assert_equals "cubic" "$(cat "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control")" \
+    "J9-01: congestion control should be restored from the snapshot"
+  assert_equals "212992" "$(cat "$FLMX_PROC_SYS_DIR/net/core/rmem_max")" \
+    "J9-01: rmem_max should be restored from the snapshot"
+  assert_equals "30" "$(cat "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_fin_timeout")" \
+    "J9-01: tcp_fin_timeout should be restored from the snapshot"
+  assert_equals "0" "$(cat "$FLMX_PROC_SYS_DIR/net/core/rps_sock_flow_entries")" \
+    "J9-01: rps_sock_flow_entries should be reset to 0 like the agent restore path"
+  assert_equals "fq" "$(cat "$FLMX_PROC_SYS_DIR/net/core/default_qdisc")" \
+    "J9-01: keys absent from the snapshot must not be forced to defaults on the snapshot path"
+  [[ ! -e "$FLMX_TUNING_KERNEL_SNAPSHOT" ]] || fail "J9-01: snapshot file should be consumed and deleted"
+  [[ "$out" == *"已按调优前快照恢复 sysctl 原值"* ]] || \
+    fail "J9-01: snapshot restore should be receipted: $out"
+  [[ "$out" == *"net.ipv4.tcp_ecn"* && "$out" == *"不存在、无法回退删除"* ]] || \
+    fail "J9-01: absent keys should be named as unrestorable: $out"
+)
+
+# J9-01（无快照分支）：面③ 内核 conf 在位但 TL-02 快照缺失（旧
+# agent 部署）时，与面板路径同口径回退三项标题默认值并点名其
+# 余不可恢复键。
+test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_missing() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$work/sysctl.d/99-network-performance.conf"
+  FLMX_TUNING_LIMITS_CONF="$work/security/limits.d/99-network-performance.conf"
+  FLMX_TUNING_BBR_CONF="$work/sysctl.d/10-bbr.conf"
+  FLMX_TUNING_GAI_CONF="$work/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$work/gai.conf.bak"
+  FLMX_TUNING_RPS_UNIT_FILE="$work/systemd/flmx-tuning-rps.service"
+  FLMX_TUNING_RPS_SCRIPT="$work/bin/flmx-tuning-rps.sh"
+  FLMX_TUNING_KERNEL_SNAPSHOT="$work/security/flmx-tuning-kernel-sysctls.json"
+  FLMX_PROC_SYS_DIR="$work/proc/sys"
+  mkdir -p "$INSTALL_DIR" "$(dirname "$FLMX_TUNING_KERNEL_CONF")" \
+    "$(dirname "$FLMX_TUNING_LIMITS_CONF")" \
+    "$FLMX_PROC_SYS_DIR/net/ipv4" "$FLMX_PROC_SYS_DIR/net/core"
+
+  printf 'bbr\n' > "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control"
+  printf 'fq\n' > "$FLMX_PROC_SYS_DIR/net/core/default_qdisc"
+  printf '32768\n' > "$FLMX_PROC_SYS_DIR/net/core/rps_sock_flow_entries"
+  echo 'net.core.somaxconn = 65535' > "$FLMX_TUNING_KERNEL_CONF"
+
+  systemctl() { return 0; }
+  nft() { cat >/dev/null; return 0; }
+  iptables() { return 1; }
+
+  local rc="0" out
+  out=$(uninstall_flmx_agent_host_cleanup 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "J9-01: host cleanup without a snapshot should succeed"
+  assert_equals "cubic" "$(cat "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control")" \
+    "J9-01: missing snapshot should fall back to the cubic headline default"
+  assert_equals "pfifo_fast" "$(cat "$FLMX_PROC_SYS_DIR/net/core/default_qdisc")" \
+    "J9-01: missing snapshot should fall back to the pfifo_fast headline default"
+  assert_equals "0" "$(cat "$FLMX_PROC_SYS_DIR/net/core/rps_sock_flow_entries")" \
+    "J9-01: missing snapshot should reset rps_sock_flow_entries to 0"
+  [[ "$out" == *"调优前快照缺失"* && "$out" == *"net.core.somaxconn"* ]] || \
+    fail "J9-01: missing snapshot should name the unrestorable keys: $out"
+)
+
+# J9-01（损坏分支）：快照文件在位但内容不可解析时，按 agent 侧
+# 同向处理——回退三项标题默认值、点名不可恢复键、快照仍删除。
+test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_corrupt() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$work/sysctl.d/99-network-performance.conf"
+  FLMX_TUNING_LIMITS_CONF="$work/security/limits.d/99-network-performance.conf"
+  FLMX_TUNING_BBR_CONF="$work/sysctl.d/10-bbr.conf"
+  FLMX_TUNING_GAI_CONF="$work/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$work/gai.conf.bak"
+  FLMX_TUNING_RPS_UNIT_FILE="$work/systemd/flmx-tuning-rps.service"
+  FLMX_TUNING_RPS_SCRIPT="$work/bin/flmx-tuning-rps.sh"
+  FLMX_TUNING_KERNEL_SNAPSHOT="$work/security/flmx-tuning-kernel-sysctls.json"
+  FLMX_PROC_SYS_DIR="$work/proc/sys"
+  mkdir -p "$INSTALL_DIR" "$(dirname "$FLMX_TUNING_KERNEL_CONF")" \
+    "$(dirname "$FLMX_TUNING_LIMITS_CONF")" "$(dirname "$FLMX_TUNING_KERNEL_SNAPSHOT")" \
+    "$FLMX_PROC_SYS_DIR/net/ipv4" "$FLMX_PROC_SYS_DIR/net/core"
+
+  printf 'bbr\n' > "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control"
+  printf 'fq\n' > "$FLMX_PROC_SYS_DIR/net/core/default_qdisc"
+  printf '32768\n' > "$FLMX_PROC_SYS_DIR/net/core/rps_sock_flow_entries"
+  echo 'net.core.somaxconn = 65535' > "$FLMX_TUNING_KERNEL_CONF"
+  printf '%s' 'not-a-json{{{' > "$FLMX_TUNING_KERNEL_SNAPSHOT"
+
+  systemctl() { return 0; }
+  nft() { cat >/dev/null; return 0; }
+  iptables() { return 1; }
+
+  local rc="0" out
+  out=$(uninstall_flmx_agent_host_cleanup 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "J9-01: host cleanup with a corrupt snapshot should still succeed"
+  assert_equals "cubic" "$(cat "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control")" \
+    "J9-01: corrupt snapshot should fall back to the cubic headline default"
+  assert_equals "pfifo_fast" "$(cat "$FLMX_PROC_SYS_DIR/net/core/default_qdisc")" \
+    "J9-01: corrupt snapshot should fall back to the pfifo_fast headline default"
+  assert_equals "0" "$(cat "$FLMX_PROC_SYS_DIR/net/core/rps_sock_flow_entries")" \
+    "J9-01: corrupt snapshot should reset rps_sock_flow_entries to 0"
+  [[ ! -e "$FLMX_TUNING_KERNEL_SNAPSHOT" ]] || fail "J9-01: corrupt snapshot should still be deleted"
+  [[ "$out" == *"调优前快照损坏"* && "$out" == *"net.core.somaxconn"* ]] || \
+    fail "J9-01: corrupt snapshot should be named with the unrestorable keys: $out"
+)
+
 test_install_flmx_agent_writes_json_safe_config() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -7074,6 +7243,63 @@ test_install_script_routes_panel_dead_falls_back() (
     *panel.example.com*) fail "panel-dead: a dead panel route must not enter the route table" ;;
   esac
   assert_equals "2" "$ROUTES_STAGE" "panel-dead/direct-dead: stage should be 2"
+)
+
+# F1-01（panel_install.sh）：直连独占须延迟门与吞吐门双过——与
+# install.sh 面板源独占同口径（256KB Range 样本、≥256KB/s）。
+# 第一幕：延迟 0.100s＋吞吐样本 262144B/0.5s（512KB/s）→ 直连
+# 短路独占（阶段 1、路线仅直连、代理不被探测）。
+# 第二幕：延迟达标但吞吐样本 262144B/30s（约 8.5KB/s）→ 不独
+# 占，按实测延迟并入代理排名（ghps 0.050 在前、直连次之、阶段
+# 2），慢直连不丢弃。
+test_panel_install_routes_direct_needs_throughput_gate() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  # 第一幕：双门全过 → 直连独占。
+  curl() {
+    case "$*" in
+      *'%{http_code} %{size_download} %{time_total}'*)
+        printf '206 262144 0.500000' ;;
+      *url_effective*)
+        printf '0.100 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+      *) return 22 ;;
+    esac
+  }
+
+  ensure_download_routes
+
+  assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "F1-01 fast direct: routes should be direct only"
+  assert_equals "" "${DOWNLOAD_ROUTES[0]}" "F1-01 fast direct: the only route should be direct"
+  assert_equals "1" "$ROUTES_STAGE" "F1-01 fast direct: stage should be 1"
+
+  # 第二幕：吞吐不过门 → 并入排名。
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+  curl() {
+    case "$*" in
+      *'%{http_code} %{size_download} %{time_total}'*)
+        printf '206 262144 30.000000' ;;
+      *url_effective*)
+        case "$*" in
+          *ghps.cc*) printf '0.050 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+          *) printf '0.100 https://github.com/%s/releases/tag/9.9.9' "$REPO" ;;
+        esac
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  ensure_download_routes
+
+  assert_equals "2" "$ROUTES_STAGE" "F1-01 slow-throughput direct: stage should be 2 (ranked)"
+  assert_equals "https://ghps.cc" "${DOWNLOAD_ROUTES[0]}" "F1-01 slow-throughput direct: fastest proxy should rank first"
+  assert_equals "" "${DOWNLOAD_ROUTES[1]}" "F1-01 slow-throughput direct: direct should be inserted by its measured latency, not dropped"
 )
 
 # 面板源分发（install.sh）：面板独占（阶段 3）后二进制下载失败 ->
@@ -11486,6 +11712,7 @@ test_install_script_download_failover_extends_routes
 test_derive_panel_prefix_table
 test_install_script_routes_panel_first_when_panel_alive
 test_install_script_routes_panel_dead_falls_back
+test_panel_install_routes_direct_needs_throughput_gate
 test_install_script_panel_route_extends_on_download_failure
 test_panel_download_verified_routed_failover
 test_panel_anchor_corroboration_passes
@@ -11541,6 +11768,9 @@ test_panel_small_host_swap_boundary_exactly_512mib
 test_panel_small_host_swap_rolls_back_on_build_failure
 test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent
 test_uninstall_flmx_agent_host_cleanup_queue_backup_lost
+test_uninstall_flmx_agent_host_cleanup_restores_kernel_snapshot
+test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_missing
+test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_corrupt
 test_install_flmx_agent_writes_json_safe_config
 test_install_flmx_agent_config_preserves_protocol_counts
 test_install_script_bootstraps_bash_for_alpine
