@@ -1,10 +1,8 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,38 +111,5 @@ func TestRemoteSyncResultSummaryThreeKeptReasons(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Fatalf("summary missing %q in %q", want, s)
 		}
-	}
-}
-
-// R2-033（B-sub-05）：federationConsumerVersionWarning 的两处吞错点
-// （提取失败/比较失败）落警告日志，判定与返回值一字不变（仍维持
-// 「不可解析不臆断、不警告」的 R4-N1 口径）。
-func TestFederationConsumerVersionWarningLogsSwallowedFailures(t *testing.T) {
-	var buf bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&buf)
-	got := federationConsumerVersionWarning("not-a-version!!")
-	log.SetOutput(old)
-	if got != "" {
-		t.Fatalf("unparseable consumer version must still not warn, got %q", got)
-	}
-	if !strings.Contains(buf.String(), "version warning skipped") {
-		t.Fatalf("extraction failure must be logged, log=%q", buf.String())
-	}
-	// 判定不变对照组。
-	if got := federationConsumerVersionWarning("1.3.3"); got == "" {
-		t.Error("below-baseline consumer version must warn")
-	}
-	if got := federationConsumerVersionWarning("1.3.3 (debian/amd64)"); got == "" {
-		t.Error("below-baseline consumer version with suffix must warn")
-	}
-	if got := federationConsumerVersionWarning("1.3.4"); got != "" {
-		t.Errorf("baseline consumer version must not warn, got %q", got)
-	}
-	if got := federationConsumerVersionWarning("dev"); got != "" {
-		t.Errorf("dev consumer version must not warn, got %q", got)
-	}
-	if got := federationConsumerVersionWarning(""); got == "" {
-		t.Error("unreported consumer version must warn")
 	}
 }

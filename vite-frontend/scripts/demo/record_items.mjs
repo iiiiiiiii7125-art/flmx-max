@@ -171,8 +171,6 @@ for (const s of mySubs)
 await ucall(utok, "POST", "user/passkey/list");
 await ucall(utok, "POST", "config/get", { name: "forward_group_order_map" });
 await ucall(utok, "POST", "config/get", { name: "forward_group_collapsed_map" });
-await ucall(utok, "POST", "federation/share/list", {});
-await ucall(utok, "POST", "federation/share/remote-usage/list", {});
 rec.recordedAt = now;
 fs.writeFileSync(file, JSON.stringify(rec));
 console.log(Object.keys(rec.admin).length, "admin paths,", Object.keys(rec.user).length, "user paths");

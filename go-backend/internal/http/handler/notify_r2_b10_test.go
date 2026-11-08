@@ -473,7 +473,7 @@ func TestR2B10RouteBaselineCheckedAtResetOnFailure(t *testing.T) {
 		`[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`, time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	nodeID := mustCreateLatencyNode(t, r, "b10-route-node", 1, 0)
+	nodeID := mustCreateLatencyNode(t, r, "b10-route-node", 1)
 	freshAt := time.Now().UnixMilli()
 	h.nodeRoutes.set(nodeID, nodeRoute{
 		CheckedAt: freshAt,

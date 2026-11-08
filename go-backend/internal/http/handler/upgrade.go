@@ -1070,9 +1070,7 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	}
 	defer h.finishNodeOnlineRedeploy(nodeID)
 
-	// A fresh agent needs a full restore. Shared failures remain persisted and
-	// are retried by maintenance without restarting acknowledged services.
-	h.reconcileSharedNodeRuntime(nodeID)
+	// A fresh agent needs a full restore.
 	if !h.redeployLocalNodeRuntime(nodeID) {
 		h.scheduleNodeLocalRuntimeRetry(nodeID)
 	} else {
@@ -1081,7 +1079,7 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 }
 
 // Local retries are separate from reconnect reconciliation: a failed local
-// forward must not cause every shared listener to be replayed every 30 seconds.
+// forward must not cause every listener to be replayed every 30 seconds.
 func (h *Handler) scheduleNodeLocalRuntimeRetry(nodeID int64) {
 	h.upgradeMu.Lock()
 	defer h.upgradeMu.Unlock()
@@ -1229,22 +1227,7 @@ func (h *Handler) finishNodeOnlineRedeploy(nodeID int64) {
 }
 
 func (h *Handler) redeployNodeRuntimeAfterUpgrade(nodeID int64) bool {
-	sharedOK := h.reconcileSharedNodeRuntime(nodeID)
-	localOK := h.redeployLocalNodeRuntime(nodeID)
-	return sharedOK && localOK
-}
-
-func (h *Handler) reconcileSharedNodeRuntime(nodeID int64) bool {
-	succeeded := true
-	if err := h.reconcilePeerShareResourcesOnNode(nodeID); err != nil {
-		fmt.Printf("reconnect shared resource reconciliation failed on node %d: %v\n", nodeID, err)
-		succeeded = false
-	}
-	if err := h.reconcilePeerShareRoleRuntimesOnNode(nodeID); err != nil {
-		fmt.Printf("reconnect shared role reconciliation failed on node %d: %v\n", nodeID, err)
-		succeeded = false
-	}
-	return succeeded
+	return h.redeployLocalNodeRuntime(nodeID)
 }
 
 func (h *Handler) redeployLocalNodeRuntime(nodeID int64) bool {

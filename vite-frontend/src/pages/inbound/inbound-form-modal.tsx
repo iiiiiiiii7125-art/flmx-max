@@ -61,9 +61,7 @@ interface Props {
 const XHTTP_MODES = ["auto", "packet-up", "stream-up", "stream-one"];
 
 export function eligibleNodes(nodes: NodeApiItem[]): NodeApiItem[] {
-  return nodes.filter(
-    (n) => Number(n.isRemote ?? 0) !== 1 && n.forwardMode !== "nftables",
-  );
+  return nodes.filter((n) => n.forwardMode !== "nftables");
 }
 
 /** Strip a trailing :port from a stored node address — mirrors backend

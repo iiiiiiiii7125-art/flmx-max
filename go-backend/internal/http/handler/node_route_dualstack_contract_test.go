@@ -13,7 +13,7 @@ import (
 // 腿：不挂 IPv6 子结构、不产出 route_change、不置 failed。
 func TestTraceNodeRoutesOldAgentDegradesWithoutIPv6(t *testing.T) {
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
-	node := mustCreateLatencyNode(t, r, "old-agent", 1, 0)
+	node := mustCreateLatencyNode(t, r, "old-agent", 1)
 	old := nodeTraceroute
 	t.Cleanup(func() { nodeTraceroute = old })
 	// 旧 agent：无视 family，一律回 IPv4 结果。
@@ -53,7 +53,7 @@ func TestTraceNodeRoutesOldAgentDegradesWithoutIPv6(t *testing.T) {
 // 档判定（7h 时仍新鲜；用失败档 6h 判定则应为陈旧）。
 func TestTraceNodeRoutesIPv6LegFailureKeepsFreshness(t *testing.T) {
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
-	node := mustCreateLatencyNode(t, r, "v4-only", 1, 0)
+	node := mustCreateLatencyNode(t, r, "v4-only", 1)
 	old := nodeTraceroute
 	t.Cleanup(func() { nodeTraceroute = old })
 	nodeTraceroute = func(_ *Handler, _ int64, _ string, family int) (map[string]interface{}, error) {

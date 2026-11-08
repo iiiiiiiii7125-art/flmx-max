@@ -52,7 +52,6 @@ export function BackupImportReceiptPanel({
     skippedEntries.reduce((sum, [, v]) => sum + v, 0);
   const shieldsImported = asNumber(data.inboundShieldsImported);
   const sshConfigsImported = asNumber(data.nodeSSHConfigsImported);
-  const peerSharesImported = asNumber(data.peerSharesImported);
   const restoredSSHNodeIds = asNumberList(data.restoredSSHNodeIds);
   const repushFailedNodeIds = asNumberList(data.repushFailedNodeIds);
 
@@ -65,9 +64,6 @@ export function BackupImportReceiptPanel({
   }
   if (sshConfigsImported > 0) {
     notes.push(`已恢复 ${sshConfigsImported} 个节点的 SSH 配置`);
-  }
-  if (peerSharesImported > 0) {
-    notes.push(`已恢复面板共享定义 ${peerSharesImported} 条`);
   }
 
   return (

@@ -57,8 +57,8 @@ func TestNodeOfflineNotifyIsDebounced(t *testing.T) {
 	// 因此用真实存在的节点 7；生产路径的 ws 离线钩子本来也只对真实节点触发。
 	now := time.Now().UnixMilli()
 	if err := r.DB().Exec(`
-		INSERT INTO node(id, name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx, is_remote, remote_url, remote_token)
-		VALUES(7, 'test-node-7', 'secret-7', '10.0.0.7', '10.0.0.7', '', '40000-40010', '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0, 0, '', '')
+		INSERT INTO node(id, name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
+		VALUES(7, 'test-node-7', 'secret-7', '10.0.0.7', '10.0.0.7', '', '40000-40010', '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0)
 	`, now, now).Error; err != nil {
 		t.Fatalf("insert node 7: %v", err)
 	}

@@ -138,7 +138,7 @@ func TestR5FEL4NftDiagnosisMissingBindingAndMultiEntry(t *testing.T) {
 	now := time.Now().UnixMilli()
 
 	// 第二个入口节点（同为 nftables 模式）。
-	if _, err := r.CreateNode("nft-node-2", "secret", "198.51.100.11", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "nftables"); err != nil {
+	if _, err := r.CreateNode("nft-node-2", "secret", "198.51.100.11", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, nil, "nftables"); err != nil {
 		t.Fatalf("create node2: %v", err)
 	}
 	node2, err := r.GetNodeRecord(2)
@@ -293,7 +293,7 @@ func TestR5FEL4ResolveChainProbeTargetRejectsFabricatedPorts(t *testing.T) {
 	// 的结果冒充该腿健康结论（L4-07 本体）。
 	h := &Handler{repo: openHandlerRepo(t)}
 	now := time.Now().UnixMilli()
-	nodeID, err := h.repo.CreateNode("diag-hop-node", "secret", "203.0.113.5", nil, nil, "20000-29999", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "")
+	nodeID, err := h.repo.CreateNode("diag-hop-node", "secret", "203.0.113.5", nil, nil, "20000-29999", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, nil, "")
 	if err != nil {
 		t.Fatalf("create node: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestR5FEL9ConflictMessageBySource(t *testing.T) {
 		t.Fatalf("L9 obs2: inbound occupancy must be attributed to the inbound, got %q", err.Error())
 	}
 
-	// 纯函数面：四源措辞逐一核对。
+	// 纯函数面：三源措辞逐一核对。
 	cases := []struct {
 		source string
 		want   string
@@ -336,7 +336,6 @@ func TestR5FEL9ConflictMessageBySource(t *testing.T) {
 		{repo.PortSourceForward, "已被其他转发占用"},
 		{repo.PortSourceInbound, "已被入站"},
 		{repo.PortSourceChain, "链路段占用"},
-		{repo.PortSourcePeer, "联邦共享预留占用"},
 	}
 	for _, c := range cases {
 		msg := forwardPortConflictMessage(node, 1000, &repo.ForwardPortConflict{Source: c.source, Name: "x"})
@@ -353,7 +352,7 @@ func TestR5FEL4DeleteNodeNamesSoleEntryExit(t *testing.T) {
 	h := New(r, "test-secret")
 	now := time.Now().UnixMilli()
 	mkNode := func(name, ip string) int64 {
-		id, err := r.CreateNode(name, "secret", ip, nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "")
+		id, err := r.CreateNode(name, "secret", ip, nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, nil, "")
 		if err != nil {
 			t.Fatalf("create node %s: %v", name, err)
 		}
@@ -428,7 +427,7 @@ func TestR5FEL9Type1DetachedExitPortLifecycle(t *testing.T) {
 	r := openHandlerRepo(t)
 	h := New(r, "test-secret")
 	now := time.Now().UnixMilli()
-	nodeID, err := r.CreateNode("t1-node", "secret", "198.51.100.31", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "")
+	nodeID, err := r.CreateNode("t1-node", "secret", "198.51.100.31", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, nil, "")
 	if err != nil {
 		t.Fatalf("create node: %v", err)
 	}

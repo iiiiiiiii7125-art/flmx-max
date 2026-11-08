@@ -75,8 +75,8 @@ func nodeChoice(t *testing.T, h *Handler, id int64) string {
 
 func TestNodeLatencyTargetsSet(t *testing.T) {
 	h, r := setupLatencyHandler(t, testLatencyPool)
-	a := mustCreateLatencyNode(t, r, "a", 1, 0)
-	b := mustCreateLatencyNode(t, r, "b", 1, 0)
+	a := mustCreateLatencyNode(t, r, "a", 1)
+	b := mustCreateLatencyNode(t, r, "b", 1)
 	calls := stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) {
 		return map[string]interface{}{"success": true, "averageTime": 20.0}, nil
 	})
@@ -128,15 +128,15 @@ func TestNodeLatencyTargetsSet(t *testing.T) {
 
 func TestSyncNodeTargetChoicesFollowsRenames(t *testing.T) {
 	h, r := setupLatencyHandler(t, testLatencyPool)
-	a := mustCreateLatencyNode(t, r, "a", 1, 0)
-	b := mustCreateLatencyNode(t, r, "b", 1, 0)
+	a := mustCreateLatencyNode(t, r, "a", 1)
+	b := mustCreateLatencyNode(t, r, "b", 1)
 	if err := r.SetNodesLatencyTargets([]int64{a}, `{"points":["电信","移动"],"pinned":["电信"]}`); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.SetNodesLatencyTargets([]int64{b}, `{"points":["移动"],"pinned":[]}`); err != nil {
 		t.Fatal(err)
 	}
-	none := mustCreateLatencyNode(t, r, "none", 1, 0)
+	none := mustCreateLatencyNode(t, r, "none", 1)
 	if err := r.SetNodesLatencyTargets([]int64{none}, `{"points":[],"pinned":[]}`); err != nil {
 		t.Fatal(err)
 	}
@@ -165,8 +165,8 @@ func TestSyncNodeTargetChoicesFollowsRenames(t *testing.T) {
 
 func TestProbeNodeLatencyUsesEachNodesPoints(t *testing.T) {
 	h, r := setupLatencyHandler(t, testLatencyPool)
-	own := mustCreateLatencyNode(t, r, "own", 1, 0)
-	def := mustCreateLatencyNode(t, r, "default", 1, 0)
+	own := mustCreateLatencyNode(t, r, "own", 1)
+	def := mustCreateLatencyNode(t, r, "default", 1)
 	if err := r.SetNodesLatencyTargets([]int64{own}, `{"points":["移动"],"pinned":["移动"]}`); err != nil {
 		t.Fatal(err)
 	}

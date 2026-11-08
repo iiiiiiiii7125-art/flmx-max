@@ -19,7 +19,7 @@ type PendingMigrationStatus struct {
 
 	// pendingVersions 是本次判定实际待处理（被预检/存量形态挡下）
 	// 的版本名，供 PendingMigrations() 如实回报——C1-01 前该兼容
-	// 接口恒回 v1 名，v2/v3/v4/v5 单独待处理时属误标。
+	// 接口恒回 v1 名，v2/v4/v5 单独待处理时属误标。
 	pendingVersions []string
 }
 
@@ -81,29 +81,6 @@ func (r *Repository) GetPendingMigrationStatus() *PendingMigrationStatus {
 			status.Tables = append(status.Tables, DuplicateDetail{
 				Table:  "node_inbound",
 				Sample: "索引 " + nodeInboundIndexName + " 仍为全量唯一定义，v2 部分索引迁移待处理（通常是 kernel 入站存在同节点同端口重复，需先清理）",
-			})
-		}
-	}
-
-	// C1-01：v3（peer_share_runtime 复合唯一索引）此前从不查——
-	// v3 被预检挡下时不记版本，复合索引可长期缺失而状态面恒报
-	// 无待迁移，联邦第二消费方 reserve-port 撞旧单列唯一键的形
-	// 态完全不可见。判据与迁移本体同形：版本未记且（复合索引
-	// 不在 或 旧单列索引仍在）即待处理。
-	if !applied(migrationV3Version) && r.db.Migrator().HasTable(peerShareRuntimeTableName) {
-		composite, compErr := peerShareRuntimeIndexExists(r.db, compositeResourceIndexName)
-		legacy, legErr := peerShareRuntimeIndexExists(r.db, legacyResourceKeyIndexName)
-		if compErr == nil && legErr == nil && (!composite || legacy) {
-			status.Required = true
-			status.pendingVersions = append(status.pendingVersions, migrationV3Version)
-			status.Guide = "doc/guide/upgrade.md#从旧版本升级-含-r5-b4-并发修复"
-			sample := "复合唯一索引 " + compositeResourceIndexName + " 缺失，v3 迁移待处理（通常是同 share 下 resource_key 重复，需先清理）"
-			if legacy {
-				sample = "旧单列唯一索引 " + legacyResourceKeyIndexName + " 仍在、复合唯一索引未落地，v3 迁移待处理（通常是同 share 下 resource_key 重复，需先清理）"
-			}
-			status.Tables = append(status.Tables, DuplicateDetail{
-				Table:  peerShareRuntimeTableName,
-				Sample: sample,
 			})
 		}
 	}

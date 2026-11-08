@@ -360,8 +360,6 @@ func (h *Handler) probeRelayLatency(ctx context.Context, ids []int64, fullReplac
 			}
 			if n, err := h.cachedNode(cache, l.fromID); err != nil {
 				l.err = err.Error()
-			} else if n.IsRemote == 1 {
-				l.err = "共享节点不检测"
 			} else if n.Status != 1 {
 				l.err = "节点离线"
 			}

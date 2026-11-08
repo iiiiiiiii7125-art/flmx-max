@@ -62,7 +62,7 @@ func nodeShareIP(node *model.Node, ipv6 bool) string {
 // stripShareHostPort. A genuine bare IPv6 ending in a decimal group
 // is indistinguishable from host:port here; callers must only use
 // this where the value is known to possibly carry a port and a port
-// will be appended (federation target construction), never for
+// will be appended (target construction), never for
 // bare-host display or dial-host selection.
 func stripHostPortOnce(value string) string {
 	value = strings.TrimSpace(value)

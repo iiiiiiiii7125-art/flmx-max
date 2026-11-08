@@ -26,10 +26,10 @@ func TestNodeListAttachesLatency(t *testing.T) {
 	targets := `[{"name":"广东电信","host":"gd-ct-v4.ip.zstaticcdn.com","port":80,"enabled":true,"pinned":true},{"name":"广东联通","host":"gd-cu-v4.ip.zstaticcdn.com","port":80,"enabled":true},{"name":"广东移动","host":"gd-cm-v4.ip.zstaticcdn.com","port":80,"enabled":true}]`
 	h, r := setupLatencyHandler(t, targets)
 
-	idA := mustCreateLatencyNode(t, r, "node-a", 1, 0)
-	idB := mustCreateLatencyNode(t, r, "node-b", 1, 0)
-	idC := mustCreateLatencyNode(t, r, "node-c", 1, 0)
-	idD := mustCreateLatencyNode(t, r, "node-d", 0, 0)
+	idA := mustCreateLatencyNode(t, r, "node-a", 1)
+	idB := mustCreateLatencyNode(t, r, "node-b", 1)
+	idC := mustCreateLatencyNode(t, r, "node-c", 1)
+	idD := mustCreateLatencyNode(t, r, "node-d", 0)
 
 	if err := r.SetNodesLatencyTargets([]int64{idB}, `{"points":["广东电信"],"pinned":["广东电信"]}`); err != nil {
 		t.Fatalf("set choice B: %v", err)

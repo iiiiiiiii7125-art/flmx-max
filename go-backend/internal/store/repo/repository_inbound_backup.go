@@ -808,7 +808,7 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 	// 不重复计数）；R5X-024 的校验跳过同样不计。
 	var counts inboundImportCounts
 	invalidInboundObjects := 0
-	// B4-02 残面：声明口四源复检跳过的行数与身份清单（汇总
+	// B4-02 残面：声明口三源复检跳过的行数与身份清单（汇总
 	// warning 在入站循环后统一发，形态同 invalidInboundObjects）。
 	portConflictInbounds := 0
 	var portConflictInboundIdentities []string
@@ -1099,7 +1099,7 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 				}
 			}
 		}
-		// B4-02 残面：入站声明口落库前四源占用复检（与转发面
+		// B4-02 残面：入站声明口落库前三源占用复检（与转发面
 		// R1-03-M2、链路面同型）——预检排除集按备份 ID 全集组
 		// 装，被行门跳过的转发其存量端口行在导入后存活，入站声
 		// 明与之同节点同口时预检放行、此前落库无门，可跨表双

@@ -492,11 +492,9 @@ func buildNftCounterDeltas(nodeID int64, samples []runtimenft.CounterSample, old
 
 func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.FlowUploadForwardMeta) flowUploadBatch {
 	batch := flowUploadBatch{
-		quotaUsage:            make(map[int64]int64),
-		forwardTraffic:        make(map[int64]tunnelTrafficDelta),
-		orphanServices:        make(map[string]struct{}),
-		peerShareForwardItems: make(map[string]flowItem),
-		peerShareRuntimeItems: make(map[int64]flowItem),
+		quotaUsage:     make(map[int64]int64),
+		forwardTraffic: make(map[int64]tunnelTrafficDelta),
+		orphanServices: make(map[string]struct{}),
 	}
 	policySeen := map[flowPolicyTarget]struct{}{}
 	flowSeen := map[int64]int{}

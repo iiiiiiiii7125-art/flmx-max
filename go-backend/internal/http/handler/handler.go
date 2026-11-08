@@ -68,9 +68,8 @@ type Handler struct {
 	nftApplyFailedMu sync.Mutex
 	nftApplyFailed   map[int64]bool
 
-	peerResourceMu sync.Mutex
-	captchaMu      sync.Mutex
-	captchaTokens  map[string]int64
+	captchaMu     sync.Mutex
+	captchaTokens map[string]int64
 	// R10X-008（A-01）：captcha verify 端点独立 IP 限流桶（与登录
 	// 桶分开计量，形态对齐 loginRateLimiter：窗口计数 + 上限淘汰）。
 	captchaVerifyMu      sync.Mutex
@@ -79,11 +78,6 @@ type Handler struct {
 	// 面同口径，见 flow_auth_fail_limit.go）；惰性初始化。
 	flowAuthFailMu sync.Mutex
 	flowAuthFail   *flowAuthFailLimiter
-	// R3-C1-01：/api/v1/federation/* 对端令牌鉴权失败限流（与 flow
-	// 面同口径同限流器类型、独立实例，见 federation.go 的
-	// authPeer）；惰性初始化。
-	peerAuthFailMu sync.Mutex
-	peerAuthFail   *flowAuthFailLimiter
 	passkeyMu      sync.Mutex
 	passkeyPending map[string]passkeyCeremony
 
@@ -456,20 +450,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/tunnel/user/tunnel", h.userTunnelVisibleList)
 	mux.HandleFunc("/api/v1/tunnel/user/list", h.userTunnelList)
 	mux.HandleFunc("/api/v1/open_api/sub_store", h.openAPISubStore)
-	mux.HandleFunc("/api/v1/federation/share/list", h.federationShareList)
-	mux.HandleFunc("/api/v1/federation/share/create", h.federationShareCreate)
-	mux.HandleFunc("/api/v1/federation/share/update", h.federationShareUpdate)
-	mux.HandleFunc("/api/v1/federation/share/delete", h.federationShareDelete)
-	mux.HandleFunc("/api/v1/federation/share/reset-flow", h.federationShareResetFlow)
-	mux.HandleFunc("/api/v1/federation/share/remote-usage/list", h.federationRemoteUsageList)
-	mux.HandleFunc("/api/v1/federation/connect", h.authPeer(h.federationConnect))
-	mux.HandleFunc("/api/v1/federation/tunnel/create", h.authPeer(h.federationTunnelCreate))
-	mux.HandleFunc("/api/v1/federation/runtime/reserve-port", h.authPeer(h.federationRuntimeReservePort))
-	mux.HandleFunc("/api/v1/federation/runtime/apply-role", h.authPeer(h.federationRuntimeApplyRole))
-	mux.HandleFunc("/api/v1/federation/runtime/release-role", h.authPeer(h.federationRuntimeReleaseRole))
-	mux.HandleFunc("/api/v1/federation/runtime/diagnose", h.authPeer(h.federationRuntimeDiagnose))
-	mux.HandleFunc("/api/v1/federation/runtime/command", h.authPeer(h.federationRuntimeCommand))
-	mux.HandleFunc("/api/v1/federation/node/import", h.nodeImport)
 	mux.HandleFunc("/api/v1/announcement/get", h.getAnnouncement)
 	mux.HandleFunc("/api/v1/announcement/update", h.updateAnnouncement)
 
@@ -941,7 +921,6 @@ func (h *Handler) nodeList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.syncRemoteNodeStatuses(items)
 	h.attachNodeLatency(items)
 
 	response.WriteJSON(w, response.OK(items))
@@ -2965,22 +2944,16 @@ func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *m
 
 	// F2-04：转发重推之前先做一轮配额重估。恢复出的计数已过负值
 	// 门，但仍可为合法的超限值（乃至 MaxInt64）：若不重估，
-	// repush 会把超限用户/订阅/共享的 status=1 转发与凭据按
+	// repush 会把超限用户/订阅的 status=1 转发与凭据按
 	// 「可用」终态直接下发上线。此处与运行时入账后的执法面同
 	// 口径：用户日/月配额全量扫、订阅同步（超限摘凭据）、备份
-	// 内用户隧道对逐对跑流量策略、联邦共享超限清理。全部幂等，
+	// 内用户隧道对逐对跑流量策略。全部幂等，
 	// 未超限者无副作用。
 	h.reconcileUserQuotaEnforcement(time.Now())
 	h.syncSubscriptions(time.Now())
 	if backup != nil {
 		for _, ut := range backup.UserTunnels {
 			h.enforceFlowPolicies(ut.UserID, ut.ID)
-		}
-		for _, sb := range backup.PeerShares {
-			share, err := h.repo.GetPeerShare(sb.ID)
-			if err == nil && share != nil && isPeerShareFlowExceeded(share) {
-				h.enforcePeerShareFlowLimit(sb.ID)
-			}
 		}
 	}
 

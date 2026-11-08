@@ -197,7 +197,7 @@ func (r *Repository) HasOtherForwardOnNodePort(nodeID int64, port int, currentFo
 }
 
 func (r *Repository) HasOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port int, currentForwardID int64) (bool, error) {
-	// P01-001：四源占用知识收敛到统一谓词 NodePortOccupiedTx
+	// P01-001：三源占用知识收敛到统一谓词 NodePortOccupiedTx
 	// （repository_port_occupancy.go）。本函数只做 forward 视角的
 	// 排除适配：排除自己这条转发，其余三源（入站/链路/联邦有效
 	// 预留）全部计入——O2-003 与 X-P2-13 的纳入结论由统一谓词承载。
@@ -216,9 +216,7 @@ func (r *Repository) HasOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port
 // P01-001: the source set is the unified four-source predicate
 // (NodePortOccupiedTx) — this wrapper only adapts the exclusion to
 // "chain rows of a DIFFERENT tunnel" (excludeTunnelID is the tunnel
-// being created/updated; 0 excludes nothing). Before the convergence
-// this hand-written copy checked only three sources and missed active
-// federation share reservations (peer_share_runtime).
+// being created/updated; 0 excludes nothing).
 func (r *Repository) NodePortOccupiedForTunnelTx(tx *gorm.DB, nodeID int64, port int, excludeTunnelID int64) (bool, error) {
 	var excl PortExclusions
 	if excludeTunnelID > 0 {
@@ -289,7 +287,6 @@ func nodeRecordFromModel(n *model.Node) *model.NodeRecord {
 		Status:        n.Status,
 		PortRange:     n.Port,
 		TCPListenAddr: n.TCPListenAddr, UDPListenAddr: n.UDPListenAddr,
-		IsRemote:    n.IsRemote,
 		ForwardMode: defaultNodeForwardMode(n.ForwardMode),
 	}
 	if n.ServerIPV4.Valid {
@@ -303,15 +300,6 @@ func nodeRecordFromModel(n *model.Node) *model.NodeRecord {
 	}
 	if n.InterfaceName.Valid {
 		rec.InterfaceName = strings.TrimSpace(n.InterfaceName.String)
-	}
-	if n.RemoteURL.Valid {
-		rec.RemoteURL = strings.TrimSpace(n.RemoteURL.String)
-	}
-	if n.RemoteToken.Valid {
-		rec.RemoteToken = strings.TrimSpace(n.RemoteToken.String)
-	}
-	if n.RemoteConfig.Valid {
-		rec.RemoteConfig = strings.TrimSpace(n.RemoteConfig.String)
 	}
 	if rec.TCPListenAddr == "" {
 		rec.TCPListenAddr = "[::]"

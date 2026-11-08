@@ -58,27 +58,6 @@ func TestLoginRateLimiterBlocksAfterBurst(t *testing.T) {
 	}
 }
 
-// S-03: 联邦 peer 下发的 config 含 shell hook 时必须被拒绝。
-func TestValidatePeerResourceReferencesRejectsShellHooks(t *testing.T) {
-	for _, key := range []string{"preUp", "postUp", "preDown", "postDown"} {
-		bad := map[string]interface{}{
-			"name":     "svc",
-			"metadata": map[string]interface{}{key: []interface{}{"id >/tmp/pwned"}},
-		}
-		if err := validatePeerResourceReferences(bad, "service"); err == nil {
-			t.Fatalf("shell hook %q in peer config accepted", key)
-		}
-	}
-	// 空 hook 列表无害，应放行
-	okCfg := map[string]interface{}{
-		"name":     "svc",
-		"metadata": map[string]interface{}{"postUp": []interface{}{}},
-	}
-	if err := validatePeerResourceReferences(okCfg, "service"); err != nil {
-		t.Fatalf("empty hook list rejected: %v", err)
-	}
-}
-
 // M-05: isStoredDefaultPassword 精确识别种子默认口令哈希。
 func TestIsStoredDefaultPassword(t *testing.T) {
 	hash, err := security.HashPassword("admin@user")

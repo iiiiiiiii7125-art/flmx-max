@@ -130,37 +130,6 @@ func TestResweepImportRemoteSourceSkipsEmptyLabelURL(t *testing.T) {
 	}
 }
 
-// R-08（恢复面）：联邦分享 AllowedDomains 含 `a..b` 条目随备份逐字恢复。
-func TestResweepImportPeerShareDropsEmptyLabelDomains(t *testing.T) {
-	now := time.Now().UnixMilli()
-	source := openBackupRepo(t, "share-restore-src.db")
-	createRow(t, source, &model.Node{ID: 3, Name: "n3", Secret: "s", ServerIP: "10.0.0.3", Port: "10000-10100",
-		CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
-	createRow(t, source, &model.PeerShare{ID: 9, Name: "share-a", NodeID: 3, Token: "share-token-a",
-		MaxBandwidth: 1000, PortRangeStart: 20000, PortRangeEnd: 20010, IsActive: 1,
-		CreatedTime: now, UpdatedTime: now, AllowedDomains: "example.com,a..b"})
-
-	dest := openBackupRepo(t, "share-restore-dst.db")
-	result := roundTripBackup(t, source, dest)
-
-	var share model.PeerShare
-	if err := dest.DB().Where("id = ?", 9).First(&share).Error; err != nil {
-		t.Fatalf("R-08: peer share must be restored: %v", err)
-	}
-	if share.AllowedDomains != "example.com" {
-		t.Fatalf("R-08: restored allowed_domains = %q, want %q (bad item dropped)", share.AllowedDomains, "example.com")
-	}
-	found := false
-	for _, w := range result.ImportWarnings {
-		if strings.Contains(w, "a..b") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("R-08: import warnings must disclose dropped domain, got %v", result.ImportWarnings)
-	}
-}
-
 // R-09：配置恢复面主机名键（panel_domain / ip / github_proxy_url /
 // notify_webhook_url）原值恢复，绕过全部保存门。
 func TestResweepImportConfigsSkipsEmptyLabelHostKeys(t *testing.T) {
@@ -301,55 +270,6 @@ func TestResweepImportTunnelsSkipsEmptyLabelProbeTargetHost(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("D-02: import warnings must disclose skipped tunnel, got %v", result.ImportWarnings)
-	}
-}
-
-// X-03（本轮重推新发现）：备份恢复面 importNodes 逐字恢复远端节点 URL
-// `https://a..b:8443`（写面 C-35 validateRemoteNodeURL 明明拒收——
-// IsSafeRemoteAddr 做 DNS，`a..b` 解析失败即拒）。恢复面与写面同口径：
-// 空标签 URL 清空 + warning（与同函数 C-17 节点地址面同型，不整行跳过，
-// 否则依赖该节点的隧道/转发段同批恢复会被连带误伤）。
-func TestResweepImportNodesClearsEmptyLabelRemoteURL(t *testing.T) {
-	now := time.Now().UnixMilli()
-	dest := openBackupRepo(t, "node-remoteurl-restore-dst.db")
-	backup := &model.BackupData{
-		Version: "1.0",
-		Nodes: []model.NodeBackup{
-			{ID: 3, Name: "bad-remote", Secret: "s", ServerIP: "10.0.0.3", Port: "10000-10100",
-				IsRemote: 1, RemoteURL: "https://a..b:8443", CreatedTime: now},
-			{ID: 4, Name: "good-remote", Secret: "s", ServerIP: "10.0.0.4", Port: "10000-10100",
-				IsRemote: 1, RemoteURL: "https://example.com:8443", CreatedTime: now},
-		},
-	}
-	result, err := dest.Import(backup, []string{"nodes"})
-	if err != nil {
-		t.Fatalf("import: %v", err)
-	}
-
-	var node3 model.Node
-	if err := dest.DB().Where("id = ?", 3).First(&node3).Error; err != nil {
-		t.Fatalf("X-03: node row must be restored (only the bad URL is cleared): %v", err)
-	}
-	if node3.RemoteURL.Valid && node3.RemoteURL.String != "" {
-		t.Fatalf("X-03: restored remote_url = %q, want empty (cleared) for https://a..b:8443", node3.RemoteURL.String)
-	}
-	// 注意：不得复用 node3 做第二次 First——GORM 会把结构体主键
-	// 作为附加条件，导致 id=4 的查询恒为空。
-	var node4 model.Node
-	if err := dest.DB().Where("id = ?", 4).First(&node4).Error; err != nil {
-		t.Fatalf("X-03: node with RemoteURL=https://example.com:8443 must be restored (control): %v", err)
-	}
-	if !node4.RemoteURL.Valid || node4.RemoteURL.String != "https://example.com:8443" {
-		t.Fatalf("X-03: restored remote_url = %q, want %q", node4.RemoteURL.String, "https://example.com:8443")
-	}
-	found := false
-	for _, w := range result.ImportWarnings {
-		if strings.Contains(w, "a..b") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("X-03: import warnings must disclose cleared remote URL, got %v", result.ImportWarnings)
 	}
 }
 

@@ -1117,13 +1117,21 @@ func TestOpenMigratesVeryLegacyNodeAndTunnelColumns(t *testing.T) {
 		"tcp_listen_addr",
 		"udp_listen_addr",
 		"inx",
+	} {
+		if !columns[required] {
+			t.Fatalf("expected node column %q to exist after migration", required)
+		}
+	}
+	// 2.1.0 联邦/共享整删：v6 迁移必须把 node 的四列联邦字段删净
+	// （本测试播种的正是带这四列的旧行，迁移后须不存在）。
+	for _, removed := range []string{
 		"is_remote",
 		"remote_url",
 		"remote_token",
 		"remote_config",
 	} {
-		if !columns[required] {
-			t.Fatalf("expected node column %q to exist after migration", required)
+		if columns[removed] {
+			t.Fatalf("expected node column %q to be dropped by the federation-removal migration", removed)
 		}
 	}
 

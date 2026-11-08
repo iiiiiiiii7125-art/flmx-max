@@ -241,10 +241,6 @@ CODE_WHITELIST = [
     ("user", "tunnel/list", "{}", 403, "权限不足，仅管理员可操作"),
     # user probe of the admin-only node list.
     ("user", "node/list", "{}", 403, "权限不足，仅管理员可操作"),
-    # user probe of the admin-only federation share list.
-    ("user", "federation/share/list", "{}", 403, "权限不足，仅管理员可操作"),
-    # user probe of the admin-only federation remote-usage list.
-    ("user", "federation/share/remote-usage/list", "{}", 403, "权限不足，仅管理员可操作"),
 ]
 CODE_WHITELIST_SET = set(CODE_WHITELIST)
 code_violations = []

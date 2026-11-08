@@ -35,8 +35,8 @@ func TestTraceNodeRoutes(t *testing.T) {
 	h, r := setupLatencyHandler(t, `[
 		{"name":"电信","host":"ct.example.com","port":80,"enabled":true},
 		{"name":"联通","host":"cu.example.com","port":80,"enabled":true}]`)
-	node := mustCreateLatencyNode(t, r, "online", 1, 0)
-	mustCreateLatencyNode(t, r, "offline", 0, 0)
+	node := mustCreateLatencyNode(t, r, "online", 1)
+	mustCreateLatencyNode(t, r, "offline", 0)
 
 	old := nodeTraceroute
 	t.Cleanup(func() { nodeTraceroute = old })
@@ -153,7 +153,7 @@ func TestRefineHopNetSplitsCMIN2(t *testing.T) {
 
 func TestTraceNodeRoutesAgainAfterAgentUpgrade(t *testing.T) {
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
-	node := mustCreateLatencyNode(t, r, "online", 1, 0)
+	node := mustCreateLatencyNode(t, r, "online", 1)
 	if err := r.UpdateNodeOnline(node, 1, "3.3.15", 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestIPv6RouteByOriginAS(t *testing.T) {
 
 func TestTraceNodeRoutesDualStack(t *testing.T) {
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
-	node := mustCreateLatencyNode(t, r, "dual", 1, 0)
+	node := mustCreateLatencyNode(t, r, "dual", 1)
 	old, oldLookup := nodeTraceroute, hopASNLookup
 	t.Cleanup(func() { nodeTraceroute, hopASNLookup = old, oldLookup })
 	hopASNLookup = func(name string) ([]string, error) {

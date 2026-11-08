@@ -98,8 +98,6 @@ const CODE_WHITELIST = [
   ["user", "speed-limit/list", "{}", 403, "权限不足，仅管理员可操作"],
   ["user", "tunnel/list", "{}", 403, "权限不足，仅管理员可操作"],
   ["user", "node/list", "{}", 403, "权限不足，仅管理员可操作"],
-  ["user", "federation/share/list", "{}", 403, "权限不足，仅管理员可操作"],
-  ["user", "federation/share/remote-usage/list", "{}", 403, "权限不足，仅管理员可操作"],
 ];
 const CODE_WHITELIST_SET = new Set(CODE_WHITELIST.map((c) => JSON.stringify(c)));
 

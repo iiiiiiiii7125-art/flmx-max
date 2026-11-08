@@ -28,17 +28,14 @@ func (h *Handler) StartBackgroundJobs() {
 	// scheduleNodeReconnectProbe 在锁内读它。
 	h.reconnectProbes = newNodeReconnectProbeQueue()
 	// 计数必须与下方 go h.run* 循环全集逐一对应（增删循环同步改）：
-	// 2.1.0 删 Gist 定时循环后 18 → 17（DEV-RM-GIST）。
-	h.jobsWG.Add(17)
+	// 2.1.0 删 Gist 定时循环（DEV-RM-GIST）与联邦清理重试循环
+	// （DEV-RM-SHARE）后 18 → 16。
+	h.jobsWG.Add(16)
 	h.jobsMu.Unlock()
 
 	// R4B03-001 启动清扫腿：同步复位上个进程周期残留的僵尸在线
 	// 标记（本地非 nftables 节点），赶在任何消费 status 的路径之前。
 	h.resetLocalNodeStatusesAtStartup()
-
-	// FIX2-B（V5-3）：存量联邦期望状态启动复检——同步执行、赶在任何
-	// 对账循环之前，危险存量先置 paused 再谈物化。
-	h.revalidateStoredPeerShareResources()
 
 	// FIX-D（D6-07）：通知派发 worker 绑定 jobs ctx，随 jobs 一起停。
 	h.ensureNotifyDispatcher()
@@ -52,7 +49,6 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runNftablesTrafficCollectLoop(ctx)
 	go h.runNftPendingDeleteRetryLoop(ctx)
 	go h.runNftAutoReconcileWorker(ctx)
-	go h.runFederationCleanupRetryLoop(ctx)
 	go h.runKernelStatusLoop(ctx)
 	go h.runExternalProbeLoop(ctx)
 	go h.runNodeReconnectProbes(ctx, h.reconnectProbes, 5*time.Second)
@@ -62,79 +58,6 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runNotifyLoop(ctx)
 	go h.runSubscriptionLoop(ctx)
 	go h.runRemoteSourceLoop(ctx)
-}
-
-func (h *Handler) runFederationCleanupRetryLoop(ctx context.Context) {
-	defer h.jobsWG.Done()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		if err := h.retryPendingFederationRuntimeCleanup(); err != nil {
-			log.Printf("federation cleanup remains pending: %v", err)
-		}
-		h.retryPendingPeerShareOperations()
-		h.reclaimExpiredPeerShares()
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-func (h *Handler) retryPendingPeerShareOperations() {
-	nodeIDs, err := h.repo.ListPendingPeerShareNodeIDs()
-	if err != nil {
-		log.Printf("peer share pending operation lookup failed: %v", err)
-		return
-	}
-	for _, nodeID := range nodeIDs {
-		node, err := h.repo.GetNodeByID(nodeID)
-		if err != nil || node == nil || node.Status != 1 {
-			continue
-		}
-		if err := h.retryPendingPeerShareResourcesOnNode(nodeID); err != nil {
-			log.Printf("peer share resource retry failed node_id=%d err=%v", nodeID, err)
-		}
-		if err := h.retryPendingPeerShareRoleRuntimesOnNode(nodeID); err != nil {
-			log.Printf("peer share role retry failed node_id=%d err=%v", nodeID, err)
-		}
-	}
-}
-
-// reclaimExpiredPeerShares 是共享到期的主动回收触发（R1-FED-02）：
-// 与维护 tick 同频普查「已到期且仍有存量 runtime/resource 未拆」
-// 的 share，逐个走与超额即时 cleanup、删 share 相同的拆除路径
-// （cleanupPeerShareRuntimes）。此前到期只有控制面拒新分配，存
-// 量监听要等节点重连对账才拆，在线节点上可无限期越界存活。
-// 节点离线时跳过本轮：拆除命令无从送达，等重连对账的既有路径
-// 收口，不逐 tick 空转。回收完成后普查条件自然不再命中（运行
-// 时进入 release_pending 或落定、resource 删除落定），不重复拆。
-func (h *Handler) reclaimExpiredPeerShares() {
-	shareIDs, err := h.repo.ListExpiredPeerShareIDs(time.Now().UnixMilli())
-	if err != nil {
-		log.Printf("peer share expiry reclaim lookup failed: %v", err)
-		return
-	}
-	for _, shareID := range shareIDs {
-		share, err := h.repo.GetPeerShare(shareID)
-		if err != nil || share == nil {
-			continue
-		}
-		node, err := h.repo.GetNodeByID(share.NodeID)
-		if err != nil || node == nil || node.Status != 1 {
-			continue
-		}
-		log.Printf("federation: share %d expired, reclaiming active runtimes/resources", shareID)
-		if err := h.cleanupPeerShareRuntimes(shareID); err != nil {
-			log.Printf("federation: expiry reclaim for share %d incomplete: %v", shareID, err)
-		}
-	}
 }
 
 func (h *Handler) StopBackgroundJobs() {

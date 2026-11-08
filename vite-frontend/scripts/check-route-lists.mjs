@@ -161,7 +161,6 @@ const EXPECTED_PATHS = [
   "/relay",
   "/subscription",
   "/config",
-  "/panel-sharing",
   "*",
 ];
 

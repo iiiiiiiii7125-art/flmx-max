@@ -15,9 +15,6 @@ import (
 //     （中段）与 ChainType 3（出口）服务；ChainType 1（入口）
 //     不经本 builder 产服务（只下发 chain 配置），无 relay
 //     handler 面。
-//   - 联邦：buildFederationServiceConfig 产出的 middle 与 exit
-//     服务；applyPeerShareRoleRuntime 硬校验角色只此两种，无
-//     entry relay handler 生成面。
 // connector/dialer 链配置与 forward 服务不产 relay handler、
 // 不读 bind 键，其无 bind 断言在 audit_udp_relay_ku9_test.go
 // （TestKU9NonRelaySurfacesHaveNoBind）。
@@ -31,19 +28,14 @@ func ku10Handler(t *testing.T, service map[string]interface{}) map[string]interf
 	return handler
 }
 
-// 全角色枚举：全部隧道协议下，本地 ChainType 2/3 与联邦
-// middle/exit 四个面的 relay handler 都必须带 bind:true，且
-// 四面 handler metadata 逐字一致（F-UDP-7 对齐门扩展到全部
-// 链上角色）。
+// 全角色枚举：全部隧道协议下，本地 ChainType 2/3 两个面的
+// relay handler 都必须带 bind:true，且两面 handler metadata
+// 逐字一致（F-UDP-7 对齐门扩展到全部链上角色）。
+// （联邦 middle/exit 两面已随 DEV-RM-SHARE 删除。）
 func TestKU10AllChainRoleRelayHandlersCarryBind(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	for _, protocol := range []string{"tcp", "tls", "mtls", "mtcp", "kcp", "udp", "ws", "wss"} {
 		faces := map[string]map[string]interface{}{}
-
-		faces["federation exit"] = buildFederationServiceConfig(
-			"fed_svc_1", "192.0.2.2:24002", protocol, "exit", "", 1, "", "", false)
-		faces["federation middle"] = buildFederationServiceConfig(
-			"fed_svc_1", "192.0.2.2:24002", protocol, "middle", "fed_chain_1", 1, "", "", false)
 
 		localMiddle := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
 			tunnelRuntimeNode{NodeID: 5, Protocol: protocol, Port: 24001, ChainType: 2}, node, 1)
@@ -117,21 +109,23 @@ func TestKU10LocalMultiHopChainHandlersCarryBind(t *testing.T) {
 	if got, want := ku9HandlerMetadata(t, udpMiddle[0]), map[string]interface{}{"bind": true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("local udp middle metadata = %v, want %v", got, want)
 	}
-	fedMiddle := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", "middle", "fed_chain_1", 1, "", "", false)
-	if got, want := ku9HandlerMetadata(t, fedMiddle), map[string]interface{}{"bind": true}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("federation udp middle metadata = %v, want %v", got, want)
-	}
 }
 
-// tls 联邦中段：bind 必须与既有 mux metadata 合并共存，不得
-// 覆盖（KU9 的出口同名断言的中段对应面）。
-func TestKU10FederationMiddleBindMergesWithMuxMetadata(t *testing.T) {
-	fedMiddle := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "tls", "middle", "fed_chain_1", 1, "", "", false)
-	metadata := ku9HandlerMetadata(t, fedMiddle)
+// tls 本地中段：bind 必须与既有 mux metadata 合并共存，不得
+// 覆盖（KU9 的出口同名断言的中段对应面；原联邦中段面已随
+// DEV-RM-SHARE 删除，断言迁至本地中段面）。
+func TestKU10LocalMiddleBindMergesWithMuxMetadata(t *testing.T) {
+	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
+	localMiddle := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
+		tunnelRuntimeNode{NodeID: 5, Protocol: "tls", Port: 24001, ChainType: 2}, node, 1)
+	if len(localMiddle) != 1 {
+		t.Fatalf("expected 1 local middle service, got %d", len(localMiddle))
+	}
+	metadata := ku9HandlerMetadata(t, localMiddle[0])
 	if metadata["bind"] != true {
-		t.Fatalf("tls federation middle must carry bind=true, got %v", metadata)
+		t.Fatalf("tls local middle must carry bind=true, got %v", metadata)
 	}
 	if metadata["mux.maxStreamBuffer"] != 2097152 {
-		t.Fatalf("tls federation middle mux metadata must be preserved alongside bind, got %v", metadata)
+		t.Fatalf("tls local middle mux metadata must be preserved alongside bind, got %v", metadata)
 	}
 }

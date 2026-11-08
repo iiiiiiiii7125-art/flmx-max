@@ -17,10 +17,11 @@ import (
 
 // R2 批 2 · 幂等族收口回归（R2X-004 覆盖面 + R2X-032 scope 键）。
 //
-// - R2X-004：新接入 7 面（monitorServiceCreate、inboundRelayCreate、
-//   federationShareCreate、remoteSourceSave 新建分支、tunnelCreate、
-//   userCreate）每面一条「同键重发只建一行」。（groupCreate 面已随
-//   分组三件套于 1.9.6 整套移除。）
+// - R2X-004：新接入面（monitorServiceCreate、inboundRelayCreate、
+//   remoteSourceSave 新建分支、tunnelCreate、userCreate）每面一条
+//   「同键重发只建一行」。（groupCreate 面已随分组三件套于 1.9.6
+//   整套移除；federationShareCreate 面已随联邦/共享板块于 2.1.0
+//   整套移除，其幂等格随删。）
 // - R2X-032：同键异端点各建一条——请求必须用真实注册路径构造
 //   （现行 xp327 测试用 "/" 假路径正是缺陷掩盖者，本批已改掉）；
 //   同键 subscription create 后同键 update（ID>0）正常执行不被回放。
@@ -99,23 +100,18 @@ func TestR2B2_UserCreateIdempotent(t *testing.T) {
 
 func TestR2B2_TunnelCreateIdempotent(t *testing.T) {
 	r, h := r2b2Open(t)
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{}}`))
-	}))
-	defer remote.Close()
 	now := time.Now().UnixMilli()
 	if err := r.DB().Exec(
-		`INSERT INTO node(name, secret, server_ip, port, status, is_remote, remote_url, remote_token, forward_mode, created_time)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"b2-remote-1", "s1", "10.0.0.1", "10000-20000", 1, 1, remote.URL, "tok", "agent", now,
+		`INSERT INTO node(name, secret, server_ip, port, status, forward_mode, created_time)
+		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		"b2-node-1", "s1", "10.0.0.1", "10000-20000", 1, "agent", now,
 	).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := r.DB().Exec(
-		`INSERT INTO node(name, secret, server_ip, port, status, is_remote, forward_mode, created_time)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		"b2-local-1", "s2", "10.0.0.2", "10000-20000", 1, 0, "agent", now,
+		`INSERT INTO node(name, secret, server_ip, port, status, forward_mode, created_time)
+		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		"b2-local-1", "s2", "10.0.0.2", "10000-20000", 1, "agent", now,
 	).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -160,24 +156,6 @@ func TestR2B2_MonitorServiceCreateIdempotent(t *testing.T) {
 	monitors, err := r.ListServiceMonitors()
 	if err != nil || len(monitors) != 1 {
 		t.Fatalf("monitorServiceCreate 同键建出 %d 行, want 1 (err=%v)", len(monitors), err)
-	}
-}
-
-func TestR2B2_FederationShareCreateIdempotent(t *testing.T) {
-	r, h := r2b2Open(t)
-	nodeID := seedRelayTargetNode(t, r, "b2-share-node", "10.0.2.5")
-	payload := map[string]interface{}{
-		"name": "idem-share-b2", "nodeId": nodeID,
-		"portRangeStart": 20000, "portRangeEnd": 20010,
-	}
-	b1 := r2b2Post(t, h.federationShareCreate, "/api/v1/federation/share/create", payload, "b2-share-key")
-	r2b2AssertCode0(t, "federationShareCreate first", b1)
-	b2 := r2b2Post(t, h.federationShareCreate, "/api/v1/federation/share/create", payload, "b2-share-key")
-	if b2 != b1 {
-		t.Fatalf("federationShareCreate 同键应回放:\n%s\n%s", b1, b2)
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM peer_share WHERE name = 'idem-share-b2'`); n != 1 {
-		t.Fatalf("federationShareCreate 同键建出 %d 行, want 1", n)
 	}
 }
 

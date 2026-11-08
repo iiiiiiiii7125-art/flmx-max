@@ -127,20 +127,6 @@ func shouldSkip(path string) bool {
 		return true
 	case path == "/api/v1/public/config/get":
 		return true
-	case path == "/api/v1/federation/connect":
-		return true
-	case path == "/api/v1/federation/tunnel/create":
-		return true
-	case path == "/api/v1/federation/runtime/reserve-port":
-		return true
-	case path == "/api/v1/federation/runtime/apply-role":
-		return true
-	case path == "/api/v1/federation/runtime/release-role":
-		return true
-	case path == "/api/v1/federation/runtime/diagnose":
-		return true
-	case path == "/api/v1/federation/runtime/command":
-		return true
 	default:
 		return false
 	}
@@ -152,10 +138,6 @@ func requiresAdmin(path string) bool {
 	}
 
 	if strings.HasPrefix(path, "/api/v1/system/") {
-		return true
-	}
-
-	if strings.HasPrefix(path, "/api/v1/federation/share/") || strings.HasPrefix(path, "/api/v1/federation/node/") {
 		return true
 	}
 

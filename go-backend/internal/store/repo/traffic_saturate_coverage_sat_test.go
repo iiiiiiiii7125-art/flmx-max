@@ -10,52 +10,13 @@ import (
 )
 
 // SAT（T2 返修附带发现，B08-001 同族补修）：C06 的饱和守卫只覆盖了
-// flow/upload 三面 + AddFlow + 配额用量，全仓另有三处流量字节累加器
-// 仍用裸 `col + ?`——AddPeerShareCurrentFlow、入站计数样本落账
-// （NodeInbound upload/download_bytes）、订阅计数样本落账
-// （Subscription upload/download_bytes 及其小时桶的 OnConflict 累加）。
+// flow/upload 三面 + AddFlow + 配额用量，全仓另有两处流量字节累加器
+// 仍用裸 `col + ?`——入站计数样本落账（NodeInbound
+// upload/download_bytes）、订阅计数样本落账（Subscription
+// upload/download_bytes 及其小时桶的 OnConflict 累加）。
 // 裸加在 SQLite 上溢出回绕/宽化为 REAL 落库、在 PG 上 int8 溢出报错
 // 回滚整批。本文件在 SQLite 真库上逐面断言饱和语义。
-
-func TestAddPeerShareCurrentFlowSaturates_SAT(t *testing.T) {
-	r, err := Open(filepath.Join(t.TempDir(), "sat-peer-share.db"))
-	if err != nil {
-		t.Fatalf("open repo: %v", err)
-	}
-	defer r.Close()
-
-	share := model.PeerShare{
-		Name: "sat-share", NodeID: 1, Token: "sat-token",
-		CurrentFlow: math.MaxInt64 - 10,
-		CreatedTime: 1700000000000, UpdatedTime: 1700000000000,
-	}
-	if err := r.DB().Create(&share).Error; err != nil {
-		t.Fatalf("create peer share: %v", err)
-	}
-	if err := r.AddPeerShareCurrentFlow(share.ID, 1000); err != nil {
-		t.Fatalf("add current flow: %v", err)
-	}
-	var got model.PeerShare
-	if err := r.DB().First(&got, share.ID).Error; err != nil {
-		t.Fatalf("reload peer share: %v", err)
-	}
-	if got.CurrentFlow != math.MaxInt64 {
-		t.Fatalf("current_flow = %d, want saturation at MaxInt64 (%d)", got.CurrentFlow, int64(math.MaxInt64))
-	}
-	if typ := mustColumnType(t, r, fmt.Sprintf("SELECT typeof(current_flow) FROM peer_share WHERE id = %d", share.ID)); typ != "integer" {
-		t.Fatalf("typeof(current_flow) = %s, want integer (overflow widened the stored value)", typ)
-	}
-	// 既有跳过语义保持：delta<=0 不动计数。
-	if err := r.AddPeerShareCurrentFlow(share.ID, 0); err != nil {
-		t.Fatalf("add zero delta: %v", err)
-	}
-	if err := r.DB().First(&got, share.ID).Error; err != nil {
-		t.Fatalf("reload peer share after zero delta: %v", err)
-	}
-	if got.CurrentFlow != math.MaxInt64 {
-		t.Fatalf("current_flow after zero delta = %d, want unchanged MaxInt64", got.CurrentFlow)
-	}
-}
+// （原第三面 AddPeerShareCurrentFlow 已随 DEV-RM-SHARE 删除。）
 
 func TestApplyInboundCounterSamplesSaturates_SAT(t *testing.T) {
 	r, err := Open(filepath.Join(t.TempDir(), "sat-inbound.db"))

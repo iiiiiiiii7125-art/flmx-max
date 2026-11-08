@@ -23,7 +23,7 @@ import (
 // always; every non-public range rejected by default), and the
 // agent re-judges before executing (see x/socket
 // outbound_guard.go), the same panel-checks + agent-backstops
-// shape as the federation face. Hosts are judged on their
+// shape as the other dispatch faces. Hosts are judged on their
 // resolved IPs (fail-closed on resolution failure); url.Parse
 // Hostname() is the real host, so userinfo masking cannot smuggle
 // a target past.

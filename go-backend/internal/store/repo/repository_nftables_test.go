@@ -35,10 +35,6 @@ func TestNftablesNodeModeSSHConfigAndBindingPersistence(t *testing.T) {
 		"[::]",
 		"[::]",
 		1,
-		0,
-		nil,
-		nil,
-		nil,
 		nil,
 		"nftables",
 	); err != nil {
@@ -184,10 +180,6 @@ func TestNftablesNodeSSHConfigSurvivesRepositoryReopen(t *testing.T) {
 				"[::]",
 				"[::]",
 				1,
-				0,
-				nil,
-				nil,
-				nil,
 				nil,
 				"nftables",
 			); err != nil {
@@ -260,10 +252,6 @@ func TestUpdateNodeWithoutForwardModePreservesExistingMode(t *testing.T) {
 		"[::]",
 		"[::]",
 		1,
-		0,
-		nil,
-		nil,
-		nil,
 		nil,
 		"nftables",
 	); err != nil {

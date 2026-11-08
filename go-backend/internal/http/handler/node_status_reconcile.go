@@ -108,7 +108,7 @@ func (h *Handler) reconcileNodeOnlineStatuses(now time.Time, offlineSince map[in
 }
 
 // nodeStatusReconcileCandidate 判定节点是否在对账范围内：本地
-// （is_remote=0，repo 查询已限定）且非 nftables 模式。nftables
+// 且非 nftables 模式。nftables
 // 节点 status=1 是创建时的既定口径、无会话语义，永不复位。
 func nodeStatusReconcileCandidate(node model.Node) bool {
 	return defaultNodeForwardMode(node.ForwardMode) != "nftables"

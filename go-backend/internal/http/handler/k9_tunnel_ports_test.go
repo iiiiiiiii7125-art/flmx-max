@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"go-backend/internal/kernel"
+	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
 
@@ -19,8 +19,9 @@ import (
 //   - P01-002：非入口段（链路段+出口段）更新缺省口改为「现口仍合法
 //     则沿用」——改名等无关编辑不再静默漂移口；现口被占/越界才按
 //     创建的随机口径重挑，并经回执 warnings 提示。
-//   - P01-001 联邦撞口三面：本地自动选口、显式指定、入站创建都必须
-//     看见 peer_share_runtime 有效预留口并避开/拒绝。
+//   - P01-001 撞口面：本地自动选口、显式指定、入站创建都必须看见
+//     统一占用集并避开/拒绝（联邦预留源已随共享板块于 2.1.0 整删，
+//     占用集收敛为转发/链路段/入站三源，repo 层 K9 格同口径）。
 
 func seedK9Node(t *testing.T, r *repo.Repository, id int64, name, ip, portSpec string) {
 	t.Helper()
@@ -44,18 +45,20 @@ func setupK9Handler(t *testing.T) *Handler {
 	seedK9Node(t, r, 10, "entry-a", "10.0.0.1", "30000-30010")
 	seedK9Node(t, r, 11, "exit-a", "10.0.0.2", "35000-35010")
 	seedK9Node(t, r, 12, "chain-a", "10.0.0.3", "36000-36010")
-	seedK9Node(t, r, 13, "fed-a", "10.0.0.4", "37000-37001")
 	return h
 }
 
-func seedK9PeerReservation(t *testing.T, h *Handler, nodeID int64, port int) {
+// seedK9InboundOccupant 在节点上落一条入站占用指定端口（统一占用
+// 集的入站源）——链路段源有 (node_id, port) 唯一索引、两隧道同口
+// 结构上不可能，故存量撞口态以入站源复证。
+func seedK9InboundOccupant(t *testing.T, h *Handler, nodeID int64, port int) {
 	t.Helper()
 	now := time.Now().UnixMilli()
-	if err := h.repo.DB().Exec(`
-		INSERT INTO peer_share_runtime(share_id, node_id, reservation_id, resource_key, binding_id, role, chain_name, service_name, protocol, strategy, port, target, applied, release_pending, status, created_time, updated_time)
-		VALUES(5, ?, ?, ?, '', 'exit', '', '', 'tls', 'round', ?, '', 1, 0, 1, ?, ?)
-	`, nodeID, "resv-k9", "rk-k9", port, now, now).Error; err != nil {
-		t.Fatalf("insert peer reservation: %v", err)
+	if err := h.repo.CreateNodeInbound(&model.NodeInbound{
+		KernelID: 1, NodeID: nodeID, Name: "k9-occupant-in", Protocol: "vless",
+		Port: port, CreatedTime: now, UpdatedTime: now,
+	}); err != nil {
+		t.Fatalf("seed inbound occupant: %v", err)
 	}
 }
 
@@ -269,13 +272,14 @@ func TestK9TunnelRenameKeepsNonEntryPorts(t *testing.T) {
 	}
 }
 
-// P01-002 重挑场景：现口被联邦有效预留抢占（存量撞口态）时，更新
-// 必须把该段换到未占用口，并经 warnings 点名新旧口；未撞口的链路
-// 段保持不动。
-func TestK9TunnelUpdateRepicksPortTakenByPeerReservation(t *testing.T) {
+// P01-002 重挑场景：现口被另一隧道的链路段占用抢占（存量撞口态）
+// 时，更新必须把该段换到未占用口，并经 warnings 点名新旧口；未撞
+// 口的链路段保持不动。（原格以联邦预留为占用源，联邦源已随共享
+// 板块整删，改以入站源同形复证重挑机制本身。）
+func TestK9TunnelUpdateRepicksPortTakenByInbound(t *testing.T) {
 	h := setupK9Handler(t)
 	seedK9Type2Tunnel(t, h, 89, "k9-repick", 36008, 35009)
-	seedK9PeerReservation(t, h, 11, 35009)
+	seedK9InboundOccupant(t, h, 11, 35009)
 
 	env := k9Post(t, h, h.tunnelUpdate, "/api/v1/tunnel/update", map[string]interface{}{
 		"id": 89, "name": "k9-repick-renamed", "type": 2, "status": 1, "flow": 1, "trafficRatio": 1,
@@ -302,62 +306,5 @@ func TestK9TunnelUpdateRepicksPortTakenByPeerReservation(t *testing.T) {
 	}
 	if !strings.Contains(joined, "35009") || !strings.Contains(joined, "变更为") {
 		t.Fatalf("P01-002: port change must surface in receipt warnings naming old/new ports, got %q", joined)
-	}
-}
-
-// P01-001 联邦撞口三面（本地侧）：
-//  1. 自动选口：节点 13 规格仅 37000-37001，37000 被有效预留占 →
-//     创建 type=2 隧道出口必须落 37001。
-//  2. 显式指定：显式 port=37000 创建必须被拒（已被占用）。
-//  3. 入站面：inboundPortConflict 对仅被预留占用的口必须报告冲突。
-func TestK9TunnelCreateAvoidsPeerReservation(t *testing.T) {
-	h := setupK9Handler(t)
-	seedK9PeerReservation(t, h, 13, 37000)
-
-	env := k9Post(t, h, h.tunnelCreate, "/api/v1/tunnel/create", map[string]interface{}{
-		"name": "k9-fed-auto", "type": 2, "status": 1,
-		"inNodeId":  []map[string]interface{}{{"nodeId": 10, "protocol": "tls"}},
-		"outNodeId": []map[string]interface{}{{"nodeId": 13, "protocol": "tls"}},
-	})
-	if env.Code != 0 {
-		t.Fatalf("create must succeed on the free port, code=%d msg=%s", env.Code, env.Msg)
-	}
-	var tunnelID int64
-	if err := h.repo.DB().Raw(`SELECT id FROM tunnel WHERE name = ?`, "k9-fed-auto").Scan(&tunnelID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if got := k9ChainPort(t, h, tunnelID, "3"); got != 37001 {
-		t.Fatalf("P01-001: auto-pick must avoid the peer-reserved 37000, got exit port %d", got)
-	}
-
-	env = k9Post(t, h, h.tunnelCreate, "/api/v1/tunnel/create", map[string]interface{}{
-		"name": "k9-fed-explicit", "type": 2, "status": 1,
-		"inNodeId":  []map[string]interface{}{{"nodeId": 10, "protocol": "tls"}},
-		"outNodeId": []map[string]interface{}{{"nodeId": 13, "protocol": "tls", "port": 37000}},
-	})
-	if env.Code == 0 || !strings.Contains(env.Msg, "已被占用") {
-		t.Fatalf("P01-001: explicit port on a peer reservation must be rejected as occupied, got code=%d msg=%q", env.Code, env.Msg)
-	}
-	if _, _, count := k9TunnelRow(t, h, "k9-fed-explicit"); count != 0 {
-		t.Fatal("rejected create must not persist")
-	}
-}
-
-func TestK9InboundConflictSeesPeerReservation(t *testing.T) {
-	h := setupK9Handler(t)
-	seedK9PeerReservation(t, h, 13, 37000)
-	msg, err := h.inboundPortConflict(13, kernel.Inbound{Port: 37000}, 0)
-	if err != nil {
-		t.Fatalf("inboundPortConflict: %v", err)
-	}
-	if !strings.Contains(msg, "联邦分享预留") {
-		t.Fatalf("P01-001: inbound create must see the peer reservation on 37000, got conflict %q", msg)
-	}
-	msg, err = h.inboundPortConflict(13, kernel.Inbound{Port: 37001}, 0)
-	if err != nil {
-		t.Fatalf("inboundPortConflict free port: %v", err)
-	}
-	if msg != "" {
-		t.Fatalf("free port 37001 must not conflict, got %q", msg)
 	}
 }

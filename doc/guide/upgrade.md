@@ -102,7 +102,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/$VERSION
 
 1.3.4 起面板内升级与 init 系统无关：systemd 与 OpenRC（Alpine）节点都走各自的服务管理器，不再硬编码 systemd 命令；升级会先给新二进制做 `-V` 冒烟、备份现二进制（备份写失败直接中止、不裸替换），重启后本地健康检查不过会自动回滚到备份，回滚在节点本地闭环、不依赖与面板的连接，结果记在节点上的 `agent-upgrade.log`。
 
-> 无 TLS 面板 + 节点 `addr` 为裸地址的部署，agent 升级重启后可能连不上（不再自动降级明文），升级前先看 [节点连不上：地址写法与时钟](./install.md#节点连不上-地址写法与时钟-1-3-4-起)。联邦双方还要注意 [升级顺序](./relay.md#联邦-面板共享-升级顺序-先消费方-后提供方)。
+> 无 TLS 面板 + 节点 `addr` 为裸地址的部署，agent 升级重启后可能连不上（不再自动降级明文），升级前先看 [节点连不上：地址写法与时钟](./install.md#节点连不上-地址写法与时钟-1-3-4-起)。
 
 ## 修复面板内升级
 
@@ -268,9 +268,8 @@ docker start <backend容器>
 | 旧名（2.0.0 起不再读取） | 改名为 | 消费面与不改名的后果 |
 |---|---|---|
 | `FLVX_TRUSTED_PROXY_HOPS` | `FLMX_TRUSTED_PROXY_HOPS` | 后端：可信代理跳数（登录限流与客户端 IP 解析）。不改名 → 回落默认 1 跳 |
-| `FLVX_FETCH_ALLOW_PRIVATE_NETWORKS` | `FLMX_FETCH_ALLOW_PRIVATE_NETWORKS` | 后端：出站抓取（订阅源、版本发现、联邦、监控探测）放行全部私网。不改名 → 私网目标恢复默认拒绝 |
+| `FLVX_FETCH_ALLOW_PRIVATE_NETWORKS` | `FLMX_FETCH_ALLOW_PRIVATE_NETWORKS` | 后端：出站抓取（订阅源、版本发现、监控探测）放行全部私网。不改名 → 私网目标恢复默认拒绝 |
 | `FLVX_FETCH_PRIVATE_ALLOWLIST` | `FLMX_FETCH_PRIVATE_ALLOWLIST` | 后端：出站抓取按 CIDR 放行私网。不改名 → 放行名单失效 |
-| `FLVX_FEDERATION_TRUSTED_PROXIES` | `FLMX_FEDERATION_TRUSTED_PROXIES` | 后端：联邦对端 IP 白名单解析的可信代理。不改名 → 只认连接对端地址、不解析转发头 |
 | `FLVX_WEBAUTHN_ORIGIN` | `FLMX_WEBAUTHN_ORIGIN` | 后端：Passkey Origin。不改名 → 通行证密钥按未配置处理、入口整体消失；随版 docker-compose 模板里旧名的透传行同步移除 |
 | `FLVX_LOG_REDACT_EXEMPT_PREFIXES` | `FLMX_LOG_REDACT_EXEMPT_PREFIXES` | 后端：日志 URL 路径段脱敏的豁免前缀。不改名 → 豁免失效、恢复全量掩码 |
 | `FLVX_KERNEL_DIR` | `FLMX_KERNEL_DIR` | 节点 agent：内核状态根目录覆盖（写在 agent 的 systemd unit 或 drop-in 里）。不改名 → agent 回落缺省根目录、内核状态换根（旧目录文件不删） |

@@ -109,9 +109,9 @@ func TestB04R3InstallCommandIgnoresStoredGithubProxy(t *testing.T) {
 	h := New(r, "test-secret")
 	now := time.Now().UnixMilli()
 	if err := r.DB().Exec(`
-		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx, is_remote, remote_url, remote_token, remote_config)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, "b04-node", "0123456789abcdef0123456789abcdef", "10.90.80.73", "10.90.80.73", "", "31000-31099", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0, 0, "", "", "").Error; err != nil {
+		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "b04-node", "0123456789abcdef0123456789abcdef", "10.90.80.73", "10.90.80.73", "", "31000-31099", "", "v1", 1, 1, 1, now, now, 1, "[::]", "[::]", 0).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
 	nodeID := mustLastInsertID(t, r, "b04-node")

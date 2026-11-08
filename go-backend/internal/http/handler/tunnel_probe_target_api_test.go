@@ -173,42 +173,6 @@ func TestTunnelCreateRejectsInvalidProbeTarget(t *testing.T) {
 	}
 }
 
-func TestTunnelUpdateInvalidProbeTargetDoesNotCleanFederationBindings(t *testing.T) {
-	h := setupProbeTargetTunnelHandler(t)
-	seedProbeTargetTunnel(t, h, 88, "existing", "old.example.com", 9443)
-	seedProbeTargetFederationBinding(t, h, 88)
-	body := bytes.NewReader([]byte(`{
-		"id":88,
-		"name":"existing",
-		"type":1,
-		"flow":1,
-		"trafficRatio":1,
-		"status":1,
-		"inNodeId":[{"nodeId":10,"protocol":"tls"}],
-		"probeTargetHost":"https://example.com",
-		"probeTargetPort":443
-	}`))
-
-	res := httptest.NewRecorder()
-	h.tunnelUpdate(res, httptest.NewRequest(http.MethodPost, "/api/v1/tunnel/update", body))
-	var payload struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-	}
-	decodeProbeTargetResponse(t, res, &payload)
-	if payload.Code == 0 || payload.Msg == "" {
-		t.Fatalf("expected validation failure, got %+v", payload)
-	}
-
-	bindings, err := h.repo.ListActiveFederationTunnelBindingsByTunnel(88)
-	if err != nil {
-		t.Fatalf("list federation bindings: %v", err)
-	}
-	if len(bindings) != 1 {
-		t.Fatalf("expected federation binding to remain after invalid update, got %d", len(bindings))
-	}
-}
-
 func TestTunnelDiagnosisUsesConfiguredProbeTarget(t *testing.T) {
 	h := setupProbeTargetTunnelHandler(t)
 	seedProbeTargetTunnel(t, h, 90, "diagnosis-target", "speed.example.com", 8443)
@@ -257,17 +221,6 @@ func seedProbeTargetTunnel(t *testing.T, h *Handler, id int64, name string, host
 		VALUES(?, '1', 10, 30001, 'round', 1, 'tls')
 	`, id).Error; err != nil {
 		t.Fatalf("insert chain: %v", err)
-	}
-}
-
-func seedProbeTargetFederationBinding(t *testing.T, h *Handler, tunnelID int64) {
-	t.Helper()
-	now := time.Now().UnixMilli()
-	if err := h.repo.DB().Exec(`
-		INSERT INTO federation_tunnel_binding(tunnel_id, node_id, chain_type, hop_inx, remote_url, resource_key, remote_binding_id, allocated_port, status, created_time, updated_time)
-		VALUES(?, 10, 1, 0, 'http://peer.example', ?, 'remote-binding', 30001, 1, ?, ?)
-	`, tunnelID, "probe-target-test-binding", now, now).Error; err != nil {
-		t.Fatalf("insert federation binding: %v", err)
 	}
 }
 

@@ -428,9 +428,9 @@ func (r *Repository) ListNodeInboundsByNode(nodeID int64) ([]model.NodeInbound, 
 }
 
 // NodePortRangeOccupant reports what listens on any port in [lo, hi] of a
-// node: an inbound, a forward, a tunnel or a federation share reservation
+// node: an inbound, a forward or a tunnel
 // ("" when free). P01-001: the occupancy knowledge lives in the unified
-// four-source predicate (NodePortRangeOccupancyTx); this function only
+// three-source predicate (NodePortRangeOccupancyTx); this function only
 // maps sources to display names, keeping the historical precedence
 // (inbound → forward → tunnel, with the companion special case).
 func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInboundID int64) (string, error) {
@@ -461,8 +461,6 @@ func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInbo
 		return "转发", nil
 	case occ.Sources[PortSourceChain]:
 		return "隧道", nil
-	case occ.Sources[PortSourcePeer]:
-		return "联邦分享预留", nil
 	}
 	return "", nil
 }

@@ -7,17 +7,14 @@
 //
 // 信任模型（R5-B2 A-001 / B01-001 收窄口径 / R24-X-01 超配
 // fail-closed；C4-01 再收窄）：只有直接对端是回环地址，或落在
-// 显式配置 FLMX_TRUSTED_PROXIES（逗号分隔 CIDR/裸 IP，与联邦面
-// FLMX_FEDERATION_TRUSTED_PROXIES 同型）的对端，才采信 XFF 并按
+// 显式配置 FLMX_TRUSTED_PROXIES（逗号分隔 CIDR/裸 IP）的对端，
+// 才采信 XFF 并按
 // FLMX_TRUSTED_PROXY_HOPS 从右锚定客户端条目。此前的「私网/链
 // 路本地一律可信」使任何能路由到后端端口的内网主机（被攻陷的
 // 容器、同网段租户）都能伪造 XFF 轮换限流键、逐 IP 绕过登录/
 // WS/gh 三面限流；私网身份本身不再构成信任，信任只来自显式配
 // 置。公网直连同样忽略 XFF；跳数超过实际可信链长时 fail-closed
 // 回 RemoteAddr，信任边界不可由攻击者预置的左侧条目移动。
-//
-// 联邦侧（federation AllowedIPs）是另一种信任模型（显式 CIDR
-// 配置背书），按既有设计不共用本包，解析逻辑留在 handler 包内。
 package clientip
 
 import (
@@ -156,9 +153,8 @@ func normalizeIPAddress(ip net.IP) net.IP {
 }
 
 // trustedProxyCIDRs 解析 FLMX_TRUSTED_PROXIES（逗号分隔 CIDR，
-// 裸 IP 视为 /32 或 /128），与联邦面 federationTrustedProxyCIDRs
-// 同型同口径：未配置或条目非法时该条目不产生信任（非法条目记
-// 日志跳过），不回退到任何默认私网信任。
+// 裸 IP 视为 /32 或 /128）：未配置或条目非法时该条目不产生信任
+// （非法条目记日志跳过），不回退到任何默认私网信任。
 func trustedProxyCIDRs() []*net.IPNet {
 	raw := strings.TrimSpace(config.Getenv("FLMX_TRUSTED_PROXIES"))
 	if raw == "" {

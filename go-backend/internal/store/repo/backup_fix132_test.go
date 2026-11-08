@@ -47,9 +47,10 @@ func TestFix132BackupRoundTripsUserQuotaFidelity(t *testing.T) {
 	}
 }
 
-// A3-05：node_ssh_config 与 peer_share 进备份；恢复回执带计数、
+// A3-05：node_ssh_config 进备份；恢复回执带计数、
 // 受影响节点清单与「需重新下发」提示（BC-28）。
-func TestFix132BackupRoundTripsNodeSSHConfigAndPeerShare(t *testing.T) {
+// （peer_share 半已随 DEV-RM-SHARE 删除。）
+func TestFix132BackupRoundTripsNodeSSHConfig(t *testing.T) {
 	now := time.Now().UnixMilli()
 	source := openBackupRepo(t, "ssh-share-src.db")
 	createRow(t, source, &model.Node{ID: 3, Name: "nft-node", Secret: "node-secret", ServerIP: "10.0.0.3", Port: "10000-10100",
@@ -57,9 +58,6 @@ func TestFix132BackupRoundTripsNodeSSHConfigAndPeerShare(t *testing.T) {
 	createRow(t, source, &model.NodeSSHConfig{NodeID: 3, Host: "10.0.0.3", Port: 2222, Username: "root",
 		AuthType: "password", Password: sql.NullString{String: "ssh-pw", Valid: true}, SudoMode: "sudo",
 		CreatedTime: now, UpdatedTime: now})
-	createRow(t, source, &model.PeerShare{ID: 9, Name: "share-a", NodeID: 3, Token: "share-token-a",
-		MaxBandwidth: 1000, PortRangeStart: 20000, PortRangeEnd: 20010, IsActive: 1,
-		CreatedTime: now, UpdatedTime: now, AllowedDomains: "example.com"})
 
 	dest := openBackupRepo(t, "ssh-share-dst.db")
 	result := roundTripBackup(t, source, dest)
@@ -71,15 +69,8 @@ func TestFix132BackupRoundTripsNodeSSHConfigAndPeerShare(t *testing.T) {
 	if cfg.Host != "10.0.0.3" || cfg.Port != 2222 || !cfg.Password.Valid || cfg.Password.String != "ssh-pw" || cfg.SudoMode != "sudo" {
 		t.Fatalf("A3-05: ssh config mismatch: %+v", cfg)
 	}
-	var share model.PeerShare
-	if err := dest.DB().Where("id = ?", 9).First(&share).Error; err != nil {
-		t.Fatalf("A3-05: peer share must be restored: %v", err)
-	}
-	if share.Token != "share-token-a" || share.PortRangeStart != 20000 || share.PortRangeEnd != 20010 {
-		t.Fatalf("A3-05: peer share mismatch: %+v", share)
-	}
-	if result.NodeSSHConfigsImported != 1 || result.PeerSharesImported != 1 {
-		t.Fatalf("receipt counts: ssh=%d shares=%d, want 1/1", result.NodeSSHConfigsImported, result.PeerSharesImported)
+	if result.NodeSSHConfigsImported != 1 {
+		t.Fatalf("receipt counts: ssh=%d, want 1", result.NodeSSHConfigsImported)
 	}
 	foundNode := false
 	for _, id := range result.RestoredSSHNodeIDs {

@@ -9,7 +9,7 @@ import (
 
 // ─── R4B03-001 节点在线状态启动清扫（Round 4 KR1）───
 
-func seedR4Node(t *testing.T, r *Repository, name string, status, isRemote int, forwardMode string) model.Node {
+func seedR4Node(t *testing.T, r *Repository, name string, status int, forwardMode string) model.Node {
 	t.Helper()
 	n := model.Node{
 		Name:        name,
@@ -17,7 +17,6 @@ func seedR4Node(t *testing.T, r *Repository, name string, status, isRemote int, 
 		ServerIP:    "198.51.100.99",
 		Port:        "1000-65535",
 		Status:      status,
-		IsRemote:    isRemote,
 		ForwardMode: forwardMode,
 		CreatedTime: 1700000000000,
 	}
@@ -36,9 +35,9 @@ func r4NodeStatus(t *testing.T, r *Repository, id int64) int {
 	return node.Status
 }
 
-// TestResetLocalNodeStatusesAtStartup 钉启动清扫的范围：只有本地
+// TestResetLocalNodeStatusesAtStartup 钉启动清扫的范围：只有
 // 非 nftables 的僵尸在线被复位；nftables（创建即 status=1 的既定
-// 口径）、远程节点、本就离线的节点一律不动。复位后 agent 重连经
+// 口径）、本就离线的节点一律不动。复位后 agent 重连经
 // UpdateNodeOnline 置回 1 的路径不受影响（重连节点不被误清）。
 func TestResetLocalNodeStatusesAtStartup(t *testing.T) {
 	r, err := Open(filepath.Join(t.TempDir(), "r4-node-status.db"))
@@ -47,11 +46,10 @@ func TestResetLocalNodeStatusesAtStartup(t *testing.T) {
 	}
 	defer r.Close()
 
-	staleAgent := seedR4Node(t, r, "r4-stale-agent", 1, 0, "agent")
-	staleDefaultMode := seedR4Node(t, r, "r4-stale-default", 1, 0, "")
-	nft := seedR4Node(t, r, "r4-nftables", 1, 0, "nftables")
-	remote := seedR4Node(t, r, "r4-remote", 1, 1, "agent")
-	offline := seedR4Node(t, r, "r4-offline", 0, 0, "agent")
+	staleAgent := seedR4Node(t, r, "r4-stale-agent", 1, "agent")
+	staleDefaultMode := seedR4Node(t, r, "r4-stale-default", 1, "")
+	nft := seedR4Node(t, r, "r4-nftables", 1, "nftables")
+	offline := seedR4Node(t, r, "r4-offline", 0, "agent")
 
 	reset, err := r.ResetLocalNodeStatusesAtStartup()
 	if err != nil {
@@ -69,9 +67,6 @@ func TestResetLocalNodeStatusesAtStartup(t *testing.T) {
 	if got := r4NodeStatus(t, r, nft.ID); got != 1 {
 		t.Fatalf("nftables 节点 status = %d, want 1（既定口径不误伤）", got)
 	}
-	if got := r4NodeStatus(t, r, remote.ID); got != 1 {
-		t.Fatalf("远程节点 status = %d, want 1（不在复位范围）", got)
-	}
 	if got := r4NodeStatus(t, r, offline.ID); got != 0 {
 		t.Fatalf("离线节点 status = %d, want 0", got)
 	}
@@ -87,7 +82,7 @@ func TestResetLocalNodeStatusesAtStartup(t *testing.T) {
 		t.Fatalf("重连后 status = %d, want 1", got)
 	}
 
-	// 候选列表口径：is_remote=0 且 status=1。
+	// 候选列表口径：status=1。
 	candidates, err := r.ListOnlineLocalNodes()
 	if err != nil {
 		t.Fatalf("list candidates: %v", err)
@@ -99,7 +94,7 @@ func TestResetLocalNodeStatusesAtStartup(t *testing.T) {
 	if !ids[staleAgent.ID] || !ids[nft.ID] {
 		t.Fatalf("候选应含重连的本地节点与 nftables 节点: %v", ids)
 	}
-	if ids[remote.ID] || ids[staleDefaultMode.ID] || ids[offline.ID] {
-		t.Fatalf("候选不得含远程/已复位/离线节点: %v", ids)
+	if ids[staleDefaultMode.ID] || ids[offline.ID] {
+		t.Fatalf("候选不得含已复位/离线节点: %v", ids)
 	}
 }

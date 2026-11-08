@@ -17,7 +17,7 @@ import (
 // 跨表同口（入站 vs 转发 vs 链路）在无唯一索引兜底时静默恢复出坏
 // 配置，有索引时整单事务裸冲突失败且报错不指名。现在 Import 在写
 // 入前先做预检，并在预检+事务全程持有相关节点的 per-node 端口锁：
-//   - 占用判重走统一四源谓词 NodePortOccupantTx（P01-001 收敛；
+//   - 占用判重走统一三源谓词 NodePortOccupantTx（P01-001 收敛；
 //     此前本文件自拼三表全景，漏联邦有效预留——恢复落口撞现行预留
 //     会放行、落库后跨表重复），排除将被本次恢复按 ID 替换的行；
 //   - 备份内的声明逐条与 DB 占用及彼此核对，冲突即以「节点+端口+
@@ -28,7 +28,7 @@ import (
 // 故预检只是 fail-fast 粗筛（备份内自撞 + 明显占用先行中止）；
 // 与顺序无关的最终收口在事务内三面行内复检——转发面
 // （importForwards）、链路面（importTunnels）、入站面
-// （importInbounds）落库前各自以四源谓词复检，排除集来自
+// （importInbounds）落库前各自以三源谓词复检，排除集来自
 // predictImportedForwardPortReplacements 的全集预判。预检放行
 // 不再等价于落库无冲突，冲突在行内复检处逐行跳过 + 点名。
 // external 入站（node_id=0）的端口在远端主机上，不参与本地节点
@@ -97,7 +97,7 @@ func lockBackupPortNodes(claims []backupPortClaim) func() {
 }
 
 // backupPortSourceLabel 把统一谓词的来源标识译成预检报错里的占用方
-// 文案（与收敛前的三表全景文案保持一致，联邦预留为新增第四源）。
+// 文案（与收敛前的三表全景文案保持一致）。
 func backupPortSourceLabel(source string) string {
 	switch source {
 	case PortSourceForward:
@@ -106,8 +106,6 @@ func backupPortSourceLabel(source string) string {
 		return "已有隧道链路"
 	case PortSourceInbound:
 		return "已有入站"
-	case PortSourcePeer:
-		return "联邦分享预留"
 	}
 	return "其他服务"
 }
@@ -286,9 +284,6 @@ func validateBackupSectionBudgets(backup *model.BackupData, typeSet map[string]b
 			return err
 		}
 		if err := check("nodeSSHConfigs", len(backup.NodeSSHConfigs), maxImportSectionRows); err != nil {
-			return err
-		}
-		if err := check("peerShares", len(backup.PeerShares), maxImportSectionRows); err != nil {
 			return err
 		}
 	}

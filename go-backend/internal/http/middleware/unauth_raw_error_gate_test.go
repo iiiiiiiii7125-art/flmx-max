@@ -272,7 +272,6 @@ func publicRouteEntryFns(t *testing.T, backendRoot string) map[string]string {
 		"/api/v1/captcha/verify":     "captchaVerify",
 		"/api/v1/config/get":         "getConfigByName",
 		"/api/v1/public/config/get":  "getPublicConfigByName",
-		"/api/v1/federation/connect": "authPeer",
 		"/api/v1/open_api/sub/":      "openSubscription",
 		"/flow/config":               "flowConfig",
 	}

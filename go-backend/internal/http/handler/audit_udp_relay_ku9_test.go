@@ -17,6 +17,8 @@ import (
 // bind:true；非 relay 面（connector 链配置、forward 服务）仍
 // 不得出现 bind 键。本文件的终端断言继续有效，全角色断言见
 // audit_udp_relay_ku10_test.go。
+// （联邦 middle/exit 生成面已随 DEV-RM-SHARE 删除，本文件的联邦
+// 半断言一并摘除；本地面断言不变。）
 
 func ku9HandlerMetadata(t *testing.T, service map[string]interface{}) map[string]interface{} {
 	t.Helper()
@@ -49,18 +51,10 @@ func ku9AssertNoBindKey(t *testing.T, surface string, value interface{}) {
 	}
 }
 
-// 终端面枚举：本地出口与联邦 exit 在全部隧道协议下都必须带
-// bind:true，且两面 handler metadata 逐字一致（F-UDP-7 对齐门
-// 扩展到 bind 键）。
+// 终端面枚举：本地出口在全部隧道协议下都必须带 bind:true。
 func TestKU9TerminalRelayHandlersCarryBindOptIn(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	for _, protocol := range []string{"tcp", "tls", "mtls", "mtcp", "kcp", "udp", "ws", "wss"} {
-		fedService := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", protocol, "exit", "", 1, "", "", false)
-		fedMetadata := ku9HandlerMetadata(t, fedService)
-		if fedMetadata["bind"] != true {
-			t.Fatalf("protocol %s: federation exit handler must carry bind=true, got %v", protocol, fedMetadata)
-		}
-
 		localServices := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
 			tunnelRuntimeNode{NodeID: 5, Protocol: protocol, Port: 24001, ChainType: 3}, node, 1)
 		if len(localServices) != 1 {
@@ -69,10 +63,6 @@ func TestKU9TerminalRelayHandlersCarryBindOptIn(t *testing.T) {
 		localMetadata := ku9HandlerMetadata(t, localServices[0])
 		if localMetadata["bind"] != true {
 			t.Fatalf("protocol %s: local exit handler must carry bind=true, got %v", protocol, localMetadata)
-		}
-		if !reflect.DeepEqual(fedMetadata, localMetadata) {
-			t.Fatalf("protocol %s: terminal handler metadata drift, federation %v vs local %v",
-				protocol, fedMetadata, localMetadata)
 		}
 	}
 }
@@ -83,10 +73,6 @@ func TestKU9UDPExitMetadataIsExactlyBind(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	want := map[string]interface{}{"bind": true}
 
-	fedService := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", "exit", "", 1, "", "", false)
-	if got := ku9HandlerMetadata(t, fedService); !reflect.DeepEqual(got, want) {
-		t.Fatalf("federation udp exit metadata = %v, want %v", got, want)
-	}
 	localServices := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
 		tunnelRuntimeNode{NodeID: 5, Protocol: "udp", Port: 24001, ChainType: 3}, node, 1)
 	if got := ku9HandlerMetadata(t, localServices[0]); !reflect.DeepEqual(got, want) {
@@ -126,13 +112,6 @@ func TestKU9NonRelaySurfacesHaveNoBind(t *testing.T) {
 			t.Fatalf("protocol %s: build local chain: %v", protocol, err)
 		}
 		ku9AssertNoBindKey(t, "local chain config", localChain)
-
-		fedChain, err := buildFederationMiddleChainConfig("fed_chain_1", 7, protocol, "round",
-			[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: protocol}}, "", "", 0, false)
-		if err != nil {
-			t.Fatalf("protocol %s: build federation middle chain: %v", protocol, err)
-		}
-		ku9AssertNoBindKey(t, "federation middle chain config", fedChain)
 	}
 
 	// forward 服务（链的消费端，handler 为 tcp/udp 非 relay）：

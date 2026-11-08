@@ -20,17 +20,13 @@ func TestValidateLocalNodePortMultiSegmentSpec(t *testing.T) {
 		}
 	}
 
-	// 单段规格行为不变；远程节点与空规格保持放行（既有语义）。
+	// 单段规格行为不变；空规格保持放行（既有语义）。
 	single := &nodeRecord{Name: "single", PortRange: "30000-30010"}
 	if err := validateLocalNodePort(single, 30005); err != nil {
 		t.Fatalf("single-segment in-range port must pass: %v", err)
 	}
 	if err := validateLocalNodePort(single, 30011); err == nil {
 		t.Fatal("single-segment out-of-range port must fail")
-	}
-	remote := &nodeRecord{Name: "remote", PortRange: "10000-10010,20000-20010", IsRemote: 1}
-	if err := validateLocalNodePort(remote, 15000); err != nil {
-		t.Fatalf("remote nodes are validated by the peer, must stay permissive: %v", err)
 	}
 	empty := &nodeRecord{Name: "empty", PortRange: ""}
 	if err := validateLocalNodePort(empty, 15000); err != nil {

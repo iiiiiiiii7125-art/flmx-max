@@ -41,7 +41,6 @@ import {
   batchUpgradeNodes,
   getNodeReleases,
   rollbackNode,
-  getPeerRemoteUsageList,
   dismissNodeExpiryReminder,
   probeNodeLatency,
   type NodeInstallMode,
@@ -56,13 +55,11 @@ import {
   EmptyHint,
   PageHeader,
   PageShell,
-  PageTabs,
   PageToolbar,
   SelectionBar,
 } from "@/components/page-kit";
 import { CARD_GRID } from "@/components/info-card";
 import { ViewModeToggle, useViewMode } from "@/components/view-mode";
-import { getRemoteSyncErrorMessage } from "@/pages/node/display";
 import { NodeTuneModal } from "@/pages/node/tune-modal";
 import { copyWithToast } from "@/utils/clipboard";
 import {
@@ -86,13 +83,10 @@ import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
 import {
   Node,
   NodeForm,
-  NodeTab,
-  RemoteUsageNode,
   NodeFilterMode,
 } from "@/pages/node/types";
 import {
   formatFlow,
-  formatSpeed,
   formatUptime,
   getNodeReminderEnabled,
   getNodeExpiryMeta,
@@ -217,24 +211,6 @@ export default function NodePage({
     "node-search-keyword-local",
     "",
   );
-  const [remoteSearchKeyword, setRemoteSearchKeyword] = useLocalStorageState(
-    "node-search-keyword-remote",
-    "",
-  );
-  const [activeTab, setActiveTab] = useLocalStorageState<NodeTab>(
-    "node-active-tab",
-    "local",
-  );
-
-  // Backward-compat: older versions stored extra tab values.
-  useEffect(() => {
-    if (activeTab !== "local" && activeTab !== "remote") {
-      setActiveTab("local");
-    }
-  }, [activeTab, setActiveTab]);
-  const [remoteUsageMap, setRemoteUsageMap] = useState<
-    Record<number, RemoteUsageNode>
-  >({});
   const [nodeFilterMode, setNodeFilterMode, resetNodeFilterMode] =
     useLocalStorageState<NodeFilterMode>("node-expiry-filter-mode", "all");
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
@@ -405,25 +381,6 @@ export default function NodePage({
     onNodeOffline: handleNodeOffline,
   });
 
-  const loadRemoteUsage = useCallback(async () => {
-    try {
-      const res = await getPeerRemoteUsageList();
-
-      if (res.code === 0 && Array.isArray(res.data)) {
-        const nextMap: Record<number, RemoteUsageNode> = {};
-
-        (res.data as unknown as RemoteUsageNode[]).forEach((item) => {
-          if (!item || typeof item.nodeId !== "number") return;
-          nextMap[item.nodeId] = item;
-        });
-
-        setRemoteUsageMap(nextMap);
-      }
-    } catch {
-      // ignore remote usage errors in node page
-    }
-  }, []);
-
   // loadNodes 序号（X-P3-8/K-02，照 monitor-view loadMetrics 既有写法）：
   // 手动刷新与轮询可在途并发，只有最新一轮可落 state，旧响应不得覆盖。
   const loadNodesSeqRef = useRef(0);
@@ -462,12 +419,7 @@ export default function NodePage({
         const nodesData: Node[] = (res.data || []).map((node: any) => ({
           ...node,
           inx: node.inx ?? 0,
-          connectionStatus: node.syncError
-            ? "offline"
-            : node.status === 1
-              ? "online"
-              : "offline",
-          syncError: node.syncError || undefined,
+          connectionStatus: node.status === 1 ? "online" : "offline",
           systemInfo: null,
           copyLoading: false,
         }));
@@ -664,8 +616,7 @@ export default function NodePage({
 
   useEffect(() => {
     loadNodes();
-    loadRemoteUsage();
-  }, [loadNodes, loadRemoteUsage]);
+  }, [loadNodes]);
 
   // 零测试点提示：只读一次池状态，复用设置页延迟卡同一 getConfigs
   // 接口（/config/list），不新增接口。仅管理员读取（提示的落点设置
@@ -687,10 +638,6 @@ export default function NodePage({
       alive = false;
     };
   }, []);
-
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [activeTab]);
 
   // DB-3：指标走 WebSocket 实时推送，
   // 但节点延迟缓存只在 node/list 里——无论 WS 是否连通都按 15 秒
@@ -1257,11 +1204,9 @@ export default function NodePage({
         );
       }
     } else if (upgradeTarget === "batch") {
-      const selectedLocalIds = Array.from(selectedIds).filter((id) => {
-        const matchedNode = nodeList.find((node) => node.id === id);
-
-        return matchedNode?.isRemote !== 1;
-      });
+      const selectedLocalIds = Array.from(selectedIds).filter((id) =>
+        nodeList.some((node) => node.id === id),
+      );
 
       if (selectedLocalIds.length === 0) {
         toast.error("请选择本地节点进行升级");
@@ -1844,10 +1789,6 @@ export default function NodePage({
   const nodeExpiryStats = useMemo(() => {
     return nodeList.reduce(
       (acc, node) => {
-        if (node.isRemote === 1) {
-          return acc;
-        }
-
         const meta = getNodeExpiryMeta(node.expiryTime, node.renewalCycle);
 
         if (meta.state === "expired") acc.expired += 1;
@@ -1921,15 +1862,7 @@ export default function NodePage({
     );
   }, []);
 
-  const localNodes = useMemo(
-    () => sortedNodes.filter((node) => node.isRemote !== 1),
-    [sortedNodes],
-  );
-
-  const remoteNodes = useMemo(
-    () => sortedNodes.filter((node) => node.isRemote === 1),
-    [sortedNodes],
-  );
+  const localNodes = sortedNodes;
 
   const filteredLocalNodes = useMemo(() => {
     const keywordFiltered = filterNodesByKeyword(
@@ -1957,16 +1890,8 @@ export default function NodePage({
     });
   }, [filterNodesByKeyword, localNodes, localSearchKeyword, nodeFilterMode]);
 
-  const filteredRemoteNodes = useMemo(
-    () => filterNodesByKeyword(remoteNodes, remoteSearchKeyword),
-    [filterNodesByKeyword, remoteNodes, remoteSearchKeyword],
-  );
-
-  const currentSearchKeyword =
-    activeTab === "remote" ? remoteSearchKeyword : localSearchKeyword;
-
-  const setCurrentSearchKeyword =
-    activeTab === "remote" ? setRemoteSearchKeyword : setLocalSearchKeyword;
+  const currentSearchKeyword = localSearchKeyword;
+  const setCurrentSearchKeyword = setLocalSearchKeyword;
 
   // Row callbacks bundled for the memoized row components: the actions
   // object itself never changes identity (it delegates through a ref to
@@ -2021,17 +1946,10 @@ export default function NodePage({
     };
   }, []);
 
-  const displayNodes = useMemo(
-    () => (activeTab === "remote" ? filteredRemoteNodes : filteredLocalNodes),
-    [activeTab, filteredLocalNodes, filteredRemoteNodes],
-  );
-
-  const canBatchUpgrade = activeTab === "local";
-  const canUseExpiryFilter = activeTab === "local";
+  const displayNodes = filteredLocalNodes;
   const hasKeywordSearch = currentSearchKeyword.trim().length > 0;
   const hasActiveFilters = nodeFilterMode !== "all";
-  const isDisplayFiltered =
-    hasKeywordSearch || (canUseExpiryFilter && hasActiveFilters);
+  const isDisplayFiltered = hasKeywordSearch || hasActiveFilters;
 
   const sortableNodeIds = useMemo(
     () => displayNodes.map((n) => n.id),
@@ -2047,37 +1965,22 @@ export default function NodePage({
           title="节点"
         />
       )}
-      {remoteNodes.length > 0 && (
-        <PageTabs
-          tabs={[
-            { key: "local", label: "本地节点", badge: localNodes.length },
-            { key: "remote", label: "远程节点", badge: remoteNodes.length },
-          ]}
-          value={activeTab}
-          onChange={setActiveTab}
-        />
-      )}
-
       {selectMode ? (
         <SelectionBar
           actions={[
             {
               key: "upgrade",
               label: "升级",
-              disabled: !canBatchUpgrade || batchUpgradeLoading,
+              disabled: batchUpgradeLoading,
               onPress: () => openUpgradeModal("batch"),
             },
             {
               key: "targets",
               label: "测试点",
-              disabled: !displayNodes.some(
-                (n) => selectedIds.has(n.id) && n.isRemote !== 1,
-              ),
+              disabled: !displayNodes.some((n) => selectedIds.has(n.id)),
               onPress: () =>
                 setTargetNodes(
-                  displayNodes.filter(
-                    (n) => selectedIds.has(n.id) && n.isRemote !== 1,
-                  ),
+                  displayNodes.filter((n) => selectedIds.has(n.id)),
                 ),
             },
             {
@@ -2109,23 +2012,19 @@ export default function NodePage({
               onPress: toggleSelectMode,
             },
           ]}
-          placeholder={
-            activeTab === "remote" ? "搜索远程节点名称或 IP" : "搜索名称或 IP"
-          }
+          placeholder="搜索名称或 IP"
           search={currentSearchKeyword}
           onSearch={setCurrentSearchKeyword}
         >
-          {canUseExpiryFilter && (
-            <Button
-              className="shrink-0"
-              color={nodeFilterMode !== "all" ? "primary" : "default"}
-              size="sm"
-              variant="flat"
-              onPress={() => setIsFilterModalOpen(true)}
-            >
-              {nodeFilterMode !== "all" ? "已筛选" : "筛选"}
-            </Button>
-          )}
+          <Button
+            className="shrink-0"
+            color={nodeFilterMode !== "all" ? "primary" : "default"}
+            size="sm"
+            variant="flat"
+            onPress={() => setIsFilterModalOpen(true)}
+          >
+            {nodeFilterMode !== "all" ? "已筛选" : "筛选"}
+          </Button>
           <ViewModeToggle value={viewMode} onChange={setViewMode} />
         </PageToolbar>
       )}
@@ -2154,13 +2053,7 @@ export default function NodePage({
         />
       ) : displayNodes.length === 0 ? (
         <EmptyHint
-          text={
-            isDisplayFiltered
-              ? "没有匹配的节点"
-              : activeTab === "remote"
-                ? "暂无远程节点"
-                : "暂无本地节点"
-          }
+          text={isDisplayFiltered ? "没有匹配的节点" : "暂无本地节点"}
         />
       ) : (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
@@ -2187,9 +2080,6 @@ export default function NodePage({
                     monthOut={month?.[1]}
                     node={node}
                     probing={probingIds.has(node.id)}
-                    remoteUsage={
-                      node.isRemote === 1 ? remoteUsageMap[node.id] : null
-                    }
                     selectMode={selectMode}
                     selected={selectedIds.has(node.id)}
                     showMonitor={!!onOpenMonitor}
@@ -2218,39 +2108,14 @@ export default function NodePage({
 
       {(() => {
         const node = nodeList.find((n) => n.id === sheetNodeId) ?? null;
-        const isRemoteNode = node?.isRemote === 1;
         const online = node?.connectionStatus === "online";
-        const usage = node ? remoteUsageMap[node.id] : undefined;
         const progress = node ? upgradeProgress[node.id] : undefined;
         const expiryMeta = node
           ? getNodeExpiryMeta(node.expiryTime, node.renewalCycle)
           : null;
         const close = () => setSheetNodeId(null);
         const rows: Array<[string, React.ReactNode]> = node
-          ? isRemoteNode
-            ? [
-                ["地址", usage?.remoteUrl || node.remoteUrl || "-"],
-                ...(usage
-                  ? ([
-                      ["流量", formatFlow(usage.currentFlow)],
-                      [
-                        "带宽上限",
-                        usage.maxBandwidth > 0
-                          ? formatSpeed(usage.maxBandwidth)
-                          : "不限",
-                      ],
-                      [
-                        "占用端口",
-                        `${usage.usedPorts.length} / ${Math.max(
-                          usage.portRangeEnd - usage.portRangeStart + 1,
-                          0,
-                        )}`,
-                      ],
-                      ["绑定", `${usage.activeBindingNum} 条`],
-                    ] as Array<[string, React.ReactNode]>)
-                  : []),
-              ]
-            : [
+          ? [
                 [
                   "IP",
                   [node.serverIpV4?.trim(), node.serverIpV6?.trim()]
@@ -2286,16 +2151,7 @@ export default function NodePage({
             actions={
               !node
                 ? []
-                : isRemoteNode
-                  ? [
-                      {
-                        key: "delete",
-                        label: "删除",
-                        color: "danger" as const,
-                        onPress: () => handleDelete(node),
-                      },
-                    ]
-                  : [
+                : [
                       {
                         key: "install",
                         label: "安装命令",
@@ -2367,23 +2223,13 @@ export default function NodePage({
             }
             isOpen={Boolean(node)}
             subtitle={
-              node &&
-              (isRemoteNode
-                ? "远程节点"
-                : online
-                  ? "在线"
-                  : "离线 · agent 没有连上面板")
+              node && (online ? "在线" : "离线 · agent 没有连上面板")
             }
             title={node?.name ?? ""}
             onClose={close}
           >
             {node && (
               <div className="space-y-2 text-sm">
-                {isRemoteNode && node.syncError && (
-                  <p className="rounded-lg bg-warning-500/10 px-2 py-1.5 text-xs font-semibold text-warning-700">
-                    {getRemoteSyncErrorMessage(node.syncError)}
-                  </p>
-                )}
                 {rows.map(([k, v]) => (
                   <div key={k} className="flex justify-between gap-3">
                     <span className="shrink-0 text-foreground">{k}</span>
@@ -2465,8 +2311,8 @@ export default function NodePage({
       {/* 版本选择升级模态框 */}
       <UpgradeNodeModal
         batchLocalCount={
-          Array.from(selectedIds).filter(
-            (id) => nodeList.find((n) => n.id === id)?.isRemote !== 1,
+          Array.from(selectedIds).filter((id) =>
+            nodeList.some((n) => n.id === id),
           ).length
         }
         handleConfirmUpgrade={handleConfirmUpgrade}

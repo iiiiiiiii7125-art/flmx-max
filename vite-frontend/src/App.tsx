@@ -32,7 +32,6 @@ const loadInboundPage = () => import("@/pages/inbound");
 const loadRelayPage = () => import("@/pages/relay");
 const loadSubscriptionPage = () => import("@/pages/subscription");
 const loadConfigPage = () => import("@/pages/config");
-const loadPanelSharingPage = () => import("@/pages/panel-sharing");
 
 const ChangePasswordPage = lazy(loadChangePasswordPage);
 const DashboardPage = lazy(loadDashboardPage);
@@ -47,7 +46,6 @@ const InboundPage = lazy(loadInboundPage);
 const RelayPage = lazy(loadRelayPage);
 const SubscriptionPage = lazy(loadSubscriptionPage);
 const ConfigPage = lazy(loadConfigPage);
-const PanelSharingPage = lazy(loadPanelSharingPage);
 
 // After login, warm the remaining route chunks while the browser is idle
 // so the first navigation to each page does not wait on a download. The
@@ -69,7 +67,6 @@ const ADMIN_ROUTE_LOADERS = [
   loadRelayPage,
   loadSubscriptionPage,
   loadConfigPage,
-  loadPanelSharingPage,
 ];
 
 let commonRoutePreloadScheduled = false;
@@ -405,14 +402,6 @@ function App() {
             </ProtectedRoute>
           }
           path="/config"
-        />
-        <Route
-          element={
-            <ProtectedRoute adminOnly={true} useSimpleLayout={true}>
-              <PanelSharingPage />
-            </ProtectedRoute>
-          }
-          path="/panel-sharing"
         />
         {/* 兜底：未知路径回仪表盘，避免落进受保护布局里渲染空白内容区 */}
         <Route element={<Navigate replace to="/dashboard" />} path="*" />

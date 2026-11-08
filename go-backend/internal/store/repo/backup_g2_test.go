@@ -257,7 +257,7 @@ func TestBackupRoundTripsNodeNullableFieldsStayNull(t *testing.T) {
 	roundTripBackup(t, source, dest)
 	if n := countRaw(t, dest, `SELECT COUNT(1) FROM node WHERE id = 3
 		AND server_ip_v4 IS NULL AND server_ip_v6 IS NULL AND interface_name IS NULL
-		AND version IS NULL AND remote_url IS NULL AND remote_token IS NULL AND remote_config IS NULL`); n != 1 {
+		AND version IS NULL`); n != 1 {
 		t.Fatalf("node nullable columns must stay NULL after restore, got %d matching rows", n)
 	}
 }

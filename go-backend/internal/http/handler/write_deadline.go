@@ -80,7 +80,7 @@ const (
 	// still deliver its final response / stream done event.
 	diagnosisWriteDeadline = 150 * time.Second
 	// tunnelUpdate: its composite legs (per-entry-node SSH capability
-	// tests, federation applies, runtime cleanup) made the global
+	// tests, runtime applies, runtime cleanup) made the global
 	// 120s cap an exact-equality bound; the relief breaks the
 	// equality. The work itself remains uncapped.
 	tunnelUpdateWriteDeadline = 300 * time.Second
