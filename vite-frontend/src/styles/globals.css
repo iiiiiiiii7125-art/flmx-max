@@ -6,7 +6,8 @@
    light mode only). This class-gated variant is kept DELIBERATELY as a
    permanent inert gate: dark: utilities can only engage under a .dark
    ancestor, and no code path can put .dark on the root any more (the
-   boot script and the theme registry both pin light, and all .dark
+   boot script pins light, the theme system was removed entirely in
+   2.1.0 leaving a single built-in light theme, and all .dark
    token blocks are gone). Deleting the variant would restore
    Tailwind's default media-query variant and re-arm every dark: class
    on dark-OS devices — do not remove it. */

@@ -48,7 +48,6 @@ import { GistBackup } from "@/pages/config/gist-backup";
 import { BackupImportReceiptPanel } from "@/pages/config/import-receipt";
 import { LatencySettings } from "@/pages/config/latency-card";
 import { SubFrontSettings } from "@/pages/config/sub-front-card";
-import { ThemeSettings } from "@/components/theme-settings";
 import { isAdmin } from "@/utils/auth";
 import { getCachedConfigs, configCache, updateSiteConfig } from "@/config/site";
 import { SENSITIVE_CONFIG_KEYS } from "@/config/sensitive-keys";
@@ -2179,11 +2178,6 @@ export default function ConfigPage() {
           </CardBody>
         </Card>
       )}
-
-      {/* 主题设置 */}
-      <div className="mt-6">
-        <ThemeSettings />
-      </div>
 
       {hasChanges && (
         <Card className="mt-4 border-warning-200 shadow-sm overflow-hidden [&>div]:bg-warning-500/10">

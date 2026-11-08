@@ -16,7 +16,6 @@ import { isAdmin, isLoggedIn } from "@/utils/auth";
 import { siteConfig, updateSiteConfig } from "@/config/site";
 import { useH5Mode } from "@/hooks/useH5Mode";
 import { SESSION_UPDATED_EVENT } from "@/utils/session";
-import { useThemeContext } from "@/themes/context";
 import { PageLoadingState } from "@/components/page-state";
 
 // Pages load on first visit so the login screen does not wait for all of them.
@@ -180,8 +179,6 @@ const LoginRoute = () => {
 function App() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { effectiveMode } = useThemeContext();
-
   // 全局登录状态监听，当检测到未登录且不在首页时，跳转到首页
   useEffect(() => {
     const handleSessionUpdate = () => {
@@ -274,7 +271,7 @@ function App() {
     return () => {
       window.removeEventListener("site-config-updated", updateBg);
     };
-  }, [effectiveMode, location.pathname]);
+  }, [location.pathname]);
 
   // 立即设置页面标题（使用已从缓存读取的配置）
   useEffect(() => {

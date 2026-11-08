@@ -20,7 +20,7 @@ import { Segmented } from "@/pages/subscription/controls";
 const DOWN = "#3b82f6";
 const UP = "#ea580c";
 // Fixed text colors for the up/down numbers: a series color must not be
-// the theme's primary (which recolors with the user's theme pick).
+// the palette primary — the two series keep fixed, distinct hues.
 const DOWN_TEXT = "text-blue-700";
 const UP_TEXT = "text-orange-700";
 

@@ -7,8 +7,10 @@
 // 包 tokens.dark 回退——任何一处重新引入「给根元素加 .dark」的路径
 // 都会静默把它们全部重新武装。本门把惰性证据链里最关键的三环钉死：
 //   ① src 内任何 classList.add(...) 的参数不得含 'dark' 类名 token；
-//   ② themes/registry.ts 的 getEffectiveMode / resolveSystemMode
-//      恒返回 "light"（行为断言：转译执行、三种环境变体实测）；
+//   ② 主题/模式运行时面已整体删除（2.1.0 改钉）：src/themes/ 不
+//      存在且主题/模式 API 标识符在 src 内零命中（原为转译执行
+//      registry 两函数恒 "light" 的行为断言，被测模块已随主题系
+//      统删除，改钉细节见下方「主题系统删除改钉」注）；
 //   ③ index.html 引导脚本必须含 classList.remove('dark')。
 // 断言范围只此三项：dark: 工具类与 html.dark CSS 的存量清理是另一条
 // 线（R2-027），本门不据此判红。
@@ -86,11 +88,22 @@
 // 选择支均为普通字面形态，非字面量构造不在本门面内，与 D-C4-01
 // 的已知取舍一致）。
 //
+// 主题系统删除改钉（2.1.0，2026-11-08）：主题包/多主题机制整体删
+// 除，themes/registry.ts 随之不复存在，断言②原先的「转译 registry
+// 行为实测两函数恒 light」失去被测对象。本轮改钉对象为「运行时面
+// 不存在」：src/themes/ 目录已删，且 src 内主题/模式 API 标识符
+// （registerTheme / activateTheme / getEffectiveMode /
+// resolveSystemMode / useThemeContext / ThemeProvider 等）零命中
+// ——任一标识符回流即意味着模式解析面被重建、必须红，与①（不得
+// 加 .dark 类）③（引导脚本恒 remove('dark')）④（深色壁纸键不得
+// 回公开管线）共同维持防复活链。原②的三种环境变体行为断言随被
+// 测模块一并退役，不再执行。
+//
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-dark-mode-pinned.mjs
 // 退出码 0 = 通过，非 0 = 失败（打印具体不一致的断言）。
 // 本脚本由 run-checks.mjs 按目录自动枚举接线，无需另行登记。
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -172,7 +185,8 @@ const collectLiterals = (node, out) => {
 const darkOffenders = [];
 let addCallCount = 0;
 let toggleCallCount = 0;
-for (const file of walk(srcDir)) {
+const srcFiles = walk(srcDir);
+for (const file of srcFiles) {
   const text = readFileSync(file, "utf8");
   const sf = ts.createSourceFile(
     file,
@@ -220,90 +234,48 @@ check(
   darkOffenders.join("; "),
 );
 
-// ── ② registry 两函数恒返回 "light"（行为断言，R7-24） ────────────
-const registryPath = join(srcDir, "themes/registry.ts");
-let registrySrc = "";
-try {
-  registrySrc = readFileSync(registryPath, "utf8");
-} catch {
-  check("② themes/registry.ts 可读", false, "文件不存在");
-}
-if (registrySrc) {
-  const { outputText } = ts.transpileModule(registrySrc, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-    },
-  });
-  const runtimeRequires = [
-    ...outputText.matchAll(/require\(["']([^"']+)["']\)/g),
-  ].map((m) => m[1]);
-  check(
-    "② registry 转译产物无运行时 require",
-    runtimeRequires.length === 0,
-    `发现 require: ${runtimeRequires.join(", ")}`,
-  );
-  if (runtimeRequires.length === 0) {
-    // 环境变体：存储为空 / 存储遗留 "dark" / 存储 "system" 且系统
-    // 偏好深色——三种环境下两函数都必须实测返回 "light"（存量
-    // dark 偏好强制亮色是定案口径）。每变体以全新模块实例执行，
-    // 模块级缓存不跨变体。
-    const variants = [
-      ["存储为空", () => null, false],
-      ["存储为 dark", () => "dark", false],
-      ["存储为 system 且系统偏好深色", () => "system", true],
-    ];
-    const results = { resolveSystemMode: [], getEffectiveMode: [] };
-    let execError = "";
-    for (const [, getItem, prefersDark] of variants) {
-      globalThis.localStorage = {
-        getItem,
-        setItem: () => {},
-        removeItem: () => {},
-      };
-      globalThis.document = {
-        documentElement: {
-          classList: { add: () => {}, remove: () => {} },
-          style: { setProperty: () => {}, removeProperty: () => {} },
-        },
-        head: { appendChild: () => {} },
-        createElement: () => ({ setAttribute: () => {}, remove: () => {} }),
-      };
-      const matchMedia = () => ({ matches: prefersDark });
-      globalThis.window = {
-        matchMedia,
-        localStorage: globalThis.localStorage,
-      };
-      globalThis.matchMedia = matchMedia;
-      const mod = { exports: {} };
-      try {
-        new Function("module", "exports", "require", outputText)(
-          mod,
-          mod.exports,
-          require,
-        );
-        for (const fn of Object.keys(results)) {
-          results[fn].push(
-            typeof mod.exports[fn] === "function"
-              ? mod.exports[fn]()
-              : "<导出缺失>",
-          );
-        }
-      } catch (e) {
-        execError = String(e);
-        break;
-      }
-    }
-    for (const fn of ["resolveSystemMode", "getEffectiveMode"]) {
-      const vals = results[fn];
-      check(
-        `② ${fn} 行为实测恒为 "light"（3 种环境变体）`,
-        !execError && vals.length === 3 && vals.every((v) => v === "light"),
-        execError || `返回值: ${vals.join(", ") || "（无）"}`,
-      );
+// ── ② 主题/模式运行时面已整体删除（2.1.0 改钉，原行为断言退役） ──
+// 原断言②转译执行 themes/registry.ts、实测 getEffectiveMode /
+// resolveSystemMode 三种环境变体恒 "light"；主题系统于 2.1.0 整体
+// 删除后该模块不复存在，改钉「面不存在」：themes/ 目录已删，且
+// src 内主题/模式 API 标识符零命中——任一回流即意味着模式解析面
+// 被重建、深色复活链的第二环被重新接上，必须红。
+check(
+  "② src/themes/ 目录已随主题系统删除",
+  !existsSync(join(srcDir, "themes")),
+  "src/themes/ 重新出现",
+);
+const themeSurfaceIdents = [
+  "registerTheme",
+  "activateTheme",
+  "deactivateTheme",
+  "initThemeSystem",
+  "getEffectiveMode",
+  "resolveSystemMode",
+  "useThemeContext",
+  "useThemedComponent",
+  "useThemedLayout",
+  "useThemedPage",
+  "ThemeProvider",
+  "flmx:active-theme",
+  "flvx:active-theme",
+];
+const themeSurfaceHits = [];
+for (const file of srcFiles) {
+  const text = readFileSync(file, "utf8");
+
+  for (const ident of themeSurfaceIdents) {
+    if (text.includes(ident)) {
+      themeSurfaceHits.push(`${file.slice(frontendDir.length + 1)}: ${ident}`);
     }
   }
 }
+check(
+  `② src 内主题/模式运行时面零残留（扫描 ${srcFiles.length} 个源文件 × ${themeSurfaceIdents.length} 个标识符）`,
+  themeSurfaceHits.length === 0,
+  themeSurfaceHits.join("; "),
+);
+
 
 // 剥 HTML 注释（换行保留），注释内的脚本拷贝不再构成满足点。
 const stripHtmlComments = (src) =>
