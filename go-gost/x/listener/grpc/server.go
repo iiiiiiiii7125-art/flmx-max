@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-gost/core/logger"
+	"github.com/go-gost/x/internal/util/eventlog"
 	pb "github.com/go-gost/x/internal/util/grpc/proto"
 	"google.golang.org/grpc/peer"
 )
@@ -16,6 +17,9 @@ type server struct {
 	localAddr net.Addr
 	pb.UnimplementedGostTunelServer
 	logger logger.Logger
+	// queueFull aggregates the connection-queue-full discard
+	// log (P1-03 family); owned by the listener's aggregator.
+	queueFull *eventlog.Counter
 }
 
 func (s *server) Tunnel(srv pb.GostTunel_TunnelServer) error {
@@ -33,7 +37,7 @@ func (s *server) Tunnel(srv pb.GostTunel_TunnelServer) error {
 	case s.cqueue <- c:
 	default:
 		c.Close()
-		s.logger.Warnf("connection queue is full, client discarded")
+		s.queueFull.NoteDetail(c.remoteAddr.String())
 	}
 
 	<-c.closed

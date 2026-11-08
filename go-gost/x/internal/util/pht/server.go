@@ -19,6 +19,7 @@ import (
 	"github.com/go-gost/core/common/bufpool"
 	"github.com/go-gost/core/logger"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/util/eventlog"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/rs/xid"
@@ -105,6 +106,13 @@ type Server struct {
 	closed      chan struct{}
 
 	options serverOptions
+
+	// events aggregates the per-request queue-full discard and
+	// push-error logging (P1-03 family): both fire at client-
+	// controlled rate.
+	events    *eventlog.Aggregator
+	queueFull *eventlog.Counter
+	reqErrs   *eventlog.Counter
 }
 
 func NewServer(addr string, opts ...ServerOption) *Server {
@@ -122,6 +130,7 @@ func NewServer(addr string, opts ...ServerOption) *Server {
 		options.readTimeout = defaultReadTimeout
 	}
 
+	events := eventlog.New(options.logger, eventlog.DefaultInterval)
 	s := &Server{
 		httpServer: &http.Server{
 			Addr:              addr,
@@ -130,6 +139,11 @@ func NewServer(addr string, opts ...ServerOption) *Server {
 		cqueue:  make(chan net.Conn, options.backlog),
 		closed:  make(chan struct{}),
 		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"pht server: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
+		reqErrs: events.DetailCounter(
+			"pht server: %d request error(s), last: %s, %d total"),
 	}
 
 	mux := http.NewServeMux()
@@ -156,6 +170,7 @@ func NewHTTP3Server(addr string, quicConfig *quic.Config, opts ...ServerOption) 
 		options.readTimeout = defaultReadTimeout
 	}
 
+	events := eventlog.New(options.logger, eventlog.DefaultInterval)
 	s := &Server{
 		http3Server: &http3.Server{
 			Addr:       addr,
@@ -165,6 +180,11 @@ func NewHTTP3Server(addr string, quicConfig *quic.Config, opts ...ServerOption) 
 		cqueue:  make(chan net.Conn, options.backlog),
 		closed:  make(chan struct{}),
 		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"pht server: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
+		reqErrs: events.DetailCounter(
+			"pht server: %d request error(s), last: %s, %d total"),
 	}
 
 	mux := http.NewServeMux()
@@ -226,6 +246,7 @@ func (s *Server) Accept() (conn net.Conn, err error) {
 }
 
 func (s *Server) Close() error {
+	s.events.Flush()
 	select {
 	case <-s.closed:
 		return http.ErrServerClosed
@@ -266,7 +287,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	case s.cqueue <- c:
 	default:
 		c.Close()
-		s.options.logger.Warnf("connection queue is full, client %s discarded", r.RemoteAddr)
+		s.queueFull.NoteDetail(r.RemoteAddr)
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
@@ -305,7 +326,7 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	data, err := br.ReadString('\n')
 	if err != nil {
 		if err != io.EOF {
-			s.options.logger.Error(err)
+			s.reqErrs.NoteErr(err)
 			w.WriteHeader(http.StatusPartialContent)
 		}
 		conn.Close()
@@ -320,7 +341,7 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 
 	b, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
-		s.options.logger.Error(err)
+		s.reqErrs.NoteErr(err)
 		s.conns.Delete(cid)
 		conn.Close()
 		w.WriteHeader(http.StatusBadRequest)
@@ -331,7 +352,7 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	defer conn.SetWriteDeadline(time.Time{})
 
 	if _, err := conn.Write(b); err != nil {
-		s.options.logger.Error(err)
+		s.reqErrs.NoteErr(err)
 		s.conns.Delete(cid)
 		conn.Close()
 		w.WriteHeader(http.StatusGone)

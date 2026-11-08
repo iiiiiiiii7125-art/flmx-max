@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-gost/core/bypass"
 	"github.com/go-gost/core/logger"
+	"github.com/go-gost/x/internal/util/eventlog"
 )
 
 const (
@@ -65,6 +66,13 @@ type Relay struct {
 	// per UDP association (socks/http/relay handlers), so the memo's
 	// lifetime is exactly the association's — see PinMemo's scope rule.
 	pins PinMemo
+
+	// events aggregates the per-packet bypass-drop and pin-failure
+	// logging (P1-03 family): both fire at packet rate. Built in
+	// Run from the relay logger and flushed when Run returns.
+	events     *eventlog.Aggregator
+	bypassHits *eventlog.Counter
+	pinErrs    *eventlog.Counter
 }
 
 func NewRelay(pc1, pc2 net.PacketConn) *Relay {
@@ -132,6 +140,13 @@ func (r *Relay) WithLogger(logger logger.Logger) *Relay {
 }
 
 func (r *Relay) Run(ctx context.Context) (err error) {
+	r.events = eventlog.New(r.logger, eventlog.DefaultInterval)
+	r.bypassHits = r.events.DetailCounter(
+		"udp relay: %d packet(s) dropped by bypass, last peer %s, %d total")
+	r.pinErrs = r.events.DetailCounter(
+		"udp relay: %d bypass pin failure(s), last: %s, %d total")
+	defer r.events.Flush()
+
 	errc := make(chan error, 2)
 
 	go func() {
@@ -145,7 +160,7 @@ func (r *Relay) Run(ctx context.Context) (err error) {
 
 				if r.bypass != nil && r.bypass.Contains(ctx, "udp", raddr.String()) {
 					if r.logger != nil {
-						r.logger.Warn("bypass: ", raddr)
+						r.bypassHits.NoteDetail(raddr.String())
 					}
 					return nil
 				}
@@ -153,7 +168,7 @@ func (r *Relay) Run(ctx context.Context) (err error) {
 				target, err := r.pinTarget(ctx, raddr)
 				if err != nil {
 					if r.logger != nil {
-						r.logger.Warn("bypass pin: ", err)
+						r.pinErrs.NoteErr(err)
 					}
 					return nil
 				}
@@ -189,7 +204,7 @@ func (r *Relay) Run(ctx context.Context) (err error) {
 
 				if r.bypass != nil && r.bypass.Contains(ctx, "udp", raddr.String()) {
 					if r.logger != nil {
-						r.logger.Warn("bypass: ", raddr)
+						r.bypassHits.NoteDetail(raddr.String())
 					}
 					return nil
 				}
@@ -197,7 +212,7 @@ func (r *Relay) Run(ctx context.Context) (err error) {
 				target, err := r.pinTarget(ctx, raddr)
 				if err != nil {
 					if r.logger != nil {
-						r.logger.Warn("bypass pin: ", err)
+						r.pinErrs.NoteErr(err)
 					}
 					return nil
 				}

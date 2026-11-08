@@ -16,6 +16,7 @@ import (
 	xnet "github.com/go-gost/x/internal/net"
 	xhttp "github.com/go-gost/x/internal/net/http"
 	"github.com/go-gost/x/internal/net/proxyproto"
+	"github.com/go-gost/x/internal/util/eventlog"
 	ws_util "github.com/go-gost/x/internal/util/ws"
 	climiter "github.com/go-gost/x/limiter/conn/wrapper"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
@@ -40,6 +41,23 @@ type wsListener struct {
 	logger     logger.Logger
 	md         metadata
 	options    listener.Options
+
+	// events aggregates the per-connection upgrade-failure and
+	// queue-full discard logging (P1-03 family).
+	events      *eventlog.Aggregator
+	queueFull   *eventlog.Counter
+	upgradeErrs *eventlog.Counter
+}
+
+// newEvents builds the listener's shared event aggregator and its
+// counters (used by both constructors).
+func newEvents(l logger.Logger) (*eventlog.Aggregator, *eventlog.Counter, *eventlog.Counter) {
+	events := eventlog.New(l, eventlog.DefaultInterval)
+	return events,
+		events.DetailCounter(
+			"ws listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
+		events.DetailCounter(
+			"ws listener: %d upgrade failure(s), last: %s, %d total")
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -47,9 +65,13 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events, queueFull, upgradeErrs := newEvents(options.Logger)
 	return &wsListener{
-		logger:  options.Logger,
-		options: options,
+		logger:      options.Logger,
+		options:     options,
+		events:      events,
+		queueFull:   queueFull,
+		upgradeErrs: upgradeErrs,
 	}
 }
 
@@ -58,10 +80,14 @@ func NewTLSListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events, queueFull, upgradeErrs := newEvents(options.Logger)
 	return &wsListener{
-		tlsEnabled: true,
-		logger:     options.Logger,
-		options:    options,
+		tlsEnabled:  true,
+		logger:      options.Logger,
+		options:     options,
+		events:      events,
+		queueFull:   queueFull,
+		upgradeErrs: upgradeErrs,
 	}
 }
 
@@ -150,6 +176,7 @@ func (l *wsListener) Accept() (conn net.Conn, err error) {
 }
 
 func (l *wsListener) Close() error {
+	l.events.Flush()
 	return l.srv.Close()
 }
 
@@ -169,7 +196,7 @@ func (l *wsListener) upgrade(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := l.upgrader.Upgrade(w, r, l.md.header)
 	if err != nil {
-		l.logger.Error(err)
+		l.upgradeErrs.NoteErr(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -183,6 +210,6 @@ func (l *wsListener) upgrade(w http.ResponseWriter, r *http.Request) {
 	case l.cqueue <- ws_util.ConnWithClientAddr(conn, clientAddr):
 	default:
 		conn.Close()
-		l.logger.Warnf("connection queue is full, client %s discarded", conn.RemoteAddr())
+		l.queueFull.NoteDetail(conn.RemoteAddr().String())
 	}
 }

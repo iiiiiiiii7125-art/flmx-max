@@ -14,6 +14,7 @@ import (
 	admission "github.com/go-gost/x/admission/wrapper"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/net/proxyproto"
+	"github.com/go-gost/x/internal/util/eventlog"
 	ssh_util "github.com/go-gost/x/internal/util/ssh"
 	sshd_util "github.com/go-gost/x/internal/util/sshd"
 	climiter "github.com/go-gost/x/limiter/conn/wrapper"
@@ -42,6 +43,14 @@ type sshdListener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the per-connection handshake-failure,
+	// channel/request-fault and queue-full discard logging
+	// (P1-03 family): all fire at client-controlled rate.
+	events     *eventlog.Aggregator
+	queueFull  *eventlog.Counter
+	handshakes *eventlog.Counter
+	chanFaults *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -49,10 +58,25 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &sshdListener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		queueFull: events.DetailCounter(
+			"sshd listener: %d connection(s) discarded (connection queue is full), last client %s, %d total"),
+		handshakes: events.DetailCounter(
+			"sshd listener: %d handshake failure(s), last: %s, %d total"),
+		chanFaults: events.DetailCounter(
+			"sshd listener: %d channel/request fault(s), last: %s, %d total"),
 	}
+}
+
+// Close flushes pending aggregated log summaries before closing
+// the embedded listener (previously promoted from net.Listener).
+func (l *sshdListener) Close() error {
+	l.events.Flush()
+	return l.Listener.Close()
 }
 
 func (l *sshdListener) Init(md md.Metadata) (err error) {
@@ -147,7 +171,7 @@ func (l *sshdListener) serveConn(conn net.Conn) {
 
 	sc, chans, reqs, err := ssh.NewServerConn(conn, l.config)
 	if err != nil {
-		l.logger.Error(err)
+		l.handshakes.NoteErr(err)
 		conn.Close()
 		return
 	}
@@ -161,7 +185,7 @@ func (l *sshdListener) serveConn(conn net.Conn) {
 			case DirectForwardRequest:
 				channel, requests, err := newChannel.Accept()
 				if err != nil {
-					l.logger.Warnf("could not accept channel: %s", err.Error())
+					l.chanFaults.NoteDetail("could not accept channel: " + err.Error())
 					continue
 				}
 				p := directForward{}
@@ -179,13 +203,13 @@ func (l *sshdListener) serveConn(conn net.Conn) {
 				select {
 				case l.cqueue <- cc:
 				default:
-					l.logger.Warnf("connection queue is full, client %s discarded", conn.RemoteAddr())
+					l.queueFull.NoteDetail(conn.RemoteAddr().String())
 					newChannel.Reject(ssh.ResourceShortage, "connection queue is full")
 					cc.Close()
 				}
 
 			default:
-				l.logger.Warnf("unsupported channel type: %s", t)
+				l.chanFaults.NoteDetail("unsupported channel type: " + t)
 				newChannel.Reject(ssh.UnknownChannelType, fmt.Sprintf("unsupported channel type: %s", t))
 			}
 		}
@@ -203,14 +227,14 @@ func (l *sshdListener) serveConn(conn net.Conn) {
 				select {
 				case l.cqueue <- cc:
 				default:
-					l.logger.Warnf("connection queue is full, client %s discarded", conn.RemoteAddr())
+					l.queueFull.NoteDetail(conn.RemoteAddr().String())
 					req.Reply(false, []byte("connection queue is full"))
 					cc.Close()
 				}
 			case "ping":
 				req.Reply(true, []byte("pong"))
 			default:
-				l.logger.Warnf("unsupported request type: %s, want reply: %v", req.Type, req.WantReply)
+				l.chanFaults.NoteDetail(fmt.Sprintf("unsupported request type: %s, want reply: %v", req.Type, req.WantReply))
 				req.Reply(false, nil)
 			}
 		}

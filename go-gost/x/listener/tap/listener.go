@@ -10,6 +10,7 @@ import (
 	"github.com/go-gost/core/logger"
 	mdata "github.com/go-gost/core/metadata"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/util/eventlog"
 	traffic_limiter "github.com/go-gost/x/limiter/traffic"
 	limiter_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
 	mdx "github.com/go-gost/x/metadata"
@@ -29,6 +30,12 @@ type tapListener struct {
 	logger  logger.Logger
 	md      metadata
 	options listener.Options
+
+	// events aggregates the reopen-loop failure logging, which
+	// retries with no pacing when the device is absent (P1-03
+	// family; rate is loop-bound, not error-bound).
+	events  *eventlog.Aggregator
+	openErr *eventlog.Counter
 }
 
 func NewListener(opts ...listener.Option) listener.Listener {
@@ -36,9 +43,13 @@ func NewListener(opts ...listener.Option) listener.Listener {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	events := eventlog.New(options.Logger, eventlog.DefaultInterval)
 	return &tapListener{
 		logger:  options.Logger,
 		options: options,
+		events:  events,
+		openErr: events.DetailCounter(
+			"tap listener: %d device reopen failure(s), last: %s, %d total"),
 	}
 }
 
@@ -111,7 +122,7 @@ func (l *tapListener) listenLoop() {
 			return nil
 		}()
 		if err != nil {
-			l.logger.Error(err)
+			l.openErr.NoteErr(err)
 			cancel()
 		}
 
@@ -140,6 +151,7 @@ func (l *tapListener) Addr() net.Addr {
 }
 
 func (l *tapListener) Close() error {
+	l.events.Flush()
 	select {
 	case <-l.closed:
 		return net.ErrClosed
