@@ -3,6 +3,8 @@ package handler
 import (
 	"log"
 	"time"
+
+	"go-backend/internal/store/repo"
 )
 
 // R2-038（B-traffic B-T-03 实例①② ＋ BD-02）：事件型状态只挂在
@@ -11,7 +13,11 @@ import (
 //   ① traffic_stream_cursor 孤儿行按 updated_time 保留期删除
 //      （repo.DeleteStaleTrafficStreamCursors）；
 //   ② flmx_quota 封禁集中已删转发的残留端口，按节点当前转发
-//      全集对账移除（nft_blocked_sweep.go）。
+//      全集对账移除（nft_blocked_sweep.go）；
+//   ③ flow_legacy_batch_dedupe 过期登记按 24h 保留窗全局删除
+//      （repo.DeleteStaleFlowLegacyBatchDedupe；FIX-CASCADE /
+//      R2-E3-F01——删节点级联已补按 node_id 删除，本项覆盖节点
+//      升级为带 seq 上报后 legacy 领取永不再触发的残留）。
 //
 // 与 R2-019 的口径区别（同为错误处理、方向相反且都正确）：入账
 // 面的 fail-soft 会把 DB 错误转成「已确认的空入账」、静默丢数，
@@ -44,6 +50,7 @@ func (h *Handler) sweepEventStates(now time.Time) {
 	h.stateSweepMu.Unlock()
 
 	h.sweepStaleTrafficStreamCursors(now)
+	h.sweepStaleFlowLegacyBatchDedupe(now)
 	h.sweepOrphanedBlockedPorts()
 }
 
@@ -56,5 +63,20 @@ func (h *Handler) sweepStaleTrafficStreamCursors(now time.Time) {
 	}
 	if deleted > 0 {
 		log.Printf("traffic stream cursor sweep deleted=%d cutoff_ms=%d", deleted, cutoffMs)
+	}
+}
+
+// sweepStaleFlowLegacyBatchDedupe 全局清扫 24h 保留窗外的 legacy
+// 批次去重登记（FIX-CASCADE / R2-E3-F01）：判据与领取路径的顺带
+// 清理同一常量（repo.FlowLegacyBatchDedupeRetention）。
+func (h *Handler) sweepStaleFlowLegacyBatchDedupe(now time.Time) {
+	cutoffMs := now.UnixMilli() - repo.FlowLegacyBatchDedupeRetention
+	deleted, err := h.repo.DeleteStaleFlowLegacyBatchDedupe(cutoffMs)
+	if err != nil {
+		log.Printf("flow legacy batch dedupe sweep failed err=%v", err)
+		return
+	}
+	if deleted > 0 {
+		log.Printf("flow legacy batch dedupe sweep deleted=%d cutoff_ms=%d", deleted, cutoffMs)
 	}
 }

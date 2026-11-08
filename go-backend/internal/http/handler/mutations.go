@@ -1310,7 +1310,7 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
 	// 清单随响应回传，不再静默。
-	brokenEntries, soleRoleWarnings, err := h.deleteNodeByIDAfterGuards(id, guard)
+	brokenEntries, soleRoleWarnings, nodeOutcome, err := h.deleteNodeByIDAfterGuardsOutcome(id, guard)
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -1334,6 +1334,13 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 		"brokenReferrerCount": len(brokenReferrers),
 		// L4-03：唯一入口/出口点名（新增字段，向后兼容）。
 		"soleRoleWarnings": soleRoleWarnings,
+	}
+	// FIX-CASCADE（E1-11）：因失去最后一个入口端口而随级联整行
+	// 删除的 Forward 点名（新增字段，向后兼容；无此类转发时不
+	// 出现，与既有可选字段同口径）。
+	if nodeOutcome != nil && len(nodeOutcome.deletedForwardIDs) > 0 {
+		deleteResp["deletedForwards"] = nodeOutcome.deletedForwardIDs
+		deleteResp["deletedForwardCount"] = len(nodeOutcome.deletedForwardIDs)
 	}
 	// 连带卸载三态回执（新增字段，仅请求带 uninstall 时出现，向后兼容）。
 	if uninstallState != "" {
@@ -2046,6 +2053,8 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// 连带卸载三态聚合（仅请求带 uninstall 时填充）。
 	uninstalledCount, uninstallPendingCount, uninstallUnsupportedCount := 0, 0, 0
 	var uninstallWarnings []string
+	// FIX-CASCADE（E1-11）：零端口 Forward 整行删除聚合计数。
+	deletedForwardTotal := 0
 	for _, id := range ids {
 		nodeName := ""
 		if n, nErr := h.getNodeRecord(id); nErr == nil && n != nil {
@@ -2078,7 +2087,7 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			uninstallState = state
 			uninstallWarnings = append(uninstallWarnings, warns...)
 		}
-		nodeReferrers, nodeSoleWarnings, delErr := h.deleteNodeByIDAfterGuards(id, guard)
+		nodeReferrers, nodeSoleWarnings, nodeOutcome, delErr := h.deleteNodeByIDAfterGuardsOutcome(id, guard)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
 		// nftablesManager.ReleaseNode 都不调，manager map 条目泄漏。
 		if h.nftablesManager != nil {
@@ -2113,9 +2122,14 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			seenSoleRole[warning] = struct{}{}
 			soleRoleWarnings = append(soleRoleWarnings, warning)
 		}
+		// FIX-CASCADE（E1-11）：零端口整行删除的 Forward 计数在
+		// 删除成功后累加（与卸载计数同口径，失败节点不计）。
+		if nodeOutcome != nil {
+			deletedForwardTotal += len(nodeOutcome.deletedForwardIDs)
+		}
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings, UninstalledCount: uninstalledCount, UninstallPendingCount: uninstallPendingCount, UninstallUnsupportedCount: uninstallUnsupportedCount, UninstallWarnings: uninstallWarnings}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings, UninstalledCount: uninstalledCount, UninstallPendingCount: uninstallPendingCount, UninstallUnsupportedCount: uninstallUnsupportedCount, UninstallWarnings: uninstallWarnings, DeletedForwardCount: deletedForwardTotal}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -3658,7 +3672,8 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.cleanupTunnelRuntime(id)
-	if err := h.deleteTunnelByID(id); err != nil {
+	outcome, err := h.deleteTunnelByIDWithOutcome(id)
+	if err != nil {
 		// R5X-004(a)：转发已全删、删隧道行失败时同理补刷。
 		// R19-X-01：注释自认「转发已全删」却只补刷白名单、不披露——
 		// 此处补披露已删转发数与标识（deleted 清单为准），已删项
@@ -3671,6 +3686,17 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	// O3-001：删除后刷新受影响入站的白名单。
 	for _, inboundID := range affectedInboundIDs {
 		h.refreshInboundWhitelist(inboundID)
+	}
+	// FIX-CASCADE（E1-01）：墓碑转发有终局/保留分流时回执点名
+	//（加法字段）；无墓碑时维持既有空回执形态不变。
+	if outcome != nil && (len(outcome.FinalizedPendingForwardIDs) > 0 || len(outcome.RetainedPendingForwardIDs) > 0) {
+		response.WriteJSON(w, response.OK(map[string]interface{}{
+			"pendingDeleteFinalizedCount": len(outcome.FinalizedPendingForwardIDs),
+			"pendingDeleteFinalizedIds":   outcome.FinalizedPendingForwardIDs,
+			"pendingDeleteRetainedCount":  len(outcome.RetainedPendingForwardIDs),
+			"pendingDeleteRetainedIds":    outcome.RetainedPendingForwardIDs,
+		}))
+		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -3763,6 +3789,8 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 	success := 0
 	fail := 0
 	failures := make([]batchFailureDetail, 0)
+	// FIX-CASCADE（E1-01）：墓碑终局/保留计数随批量回执聚合点名。
+	pendingFinalizedTotal, pendingRetainedTotal := 0, 0
 	for _, id := range ids {
 		tunnelName, _ := h.repo.GetTunnelName(id)
 		if _, err := h.getTunnelRecord(id); err != nil {
@@ -3778,7 +3806,8 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		h.cleanupTunnelRuntime(id)
-		if err := h.deleteTunnelByID(id); err != nil {
+		outcome, err := h.deleteTunnelByIDWithOutcome(id)
+		if err != nil {
 			// R19-X-01：与单删同型——转发已删、删隧道行失败时失败
 			// 明细须披露已删转发数与标识（deleted 清单为准），
 			// 已删项不回滚。
@@ -3786,13 +3815,17 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailure(failures, id, tunnelName, fmt.Errorf("隧道删除失败：%w；%s；隧道记录仍保留", err, h.formatTunnelDeleteFailureSummary(id, deletedForwards)))
 		} else {
 			success++
+			if outcome != nil {
+				pendingFinalizedTotal += len(outcome.FinalizedPendingForwardIDs)
+				pendingRetainedTotal += len(outcome.RetainedPendingForwardIDs)
+			}
 		}
 	}
 	// O3-003：删除后刷新所有受影响入站的白名单。
 	for inboundID := range seenInbound {
 		h.refreshInboundWhitelist(inboundID)
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, PendingDeleteFinalizedCount: pendingFinalizedTotal, PendingDeleteRetainedCount: pendingRetainedTotal}))
 }
 
 func (h *Handler) reconstructTunnelState(tunnelID int64) (*tunnelCreateState, error) {
@@ -3939,6 +3972,15 @@ type batchOperationResult struct {
 	UninstallPendingCount     int      `json:"uninstallPendingCount,omitempty"`
 	UninstallUnsupportedCount int      `json:"uninstallUnsupportedCount,omitempty"`
 	UninstallWarnings         []string `json:"uninstallWarnings,omitempty"`
+	// FIX-CASCADE（E1-11）：批量删节点时因失去最后一个入口端口而
+	// 整行删除的 Forward 总数（与单删的 deletedForwardCount 同口
+	// 径）；仅删节点批量入口填充。
+	DeletedForwardCount int `json:"deletedForwardCount,omitempty"`
+	// FIX-CASCADE（E1-01）：批量删隧道时墓碑转发的终局/保留聚合
+	// 计数（与单删的 pendingDeleteFinalizedCount 同口径）；仅删
+	// 隧道批量入口填充。
+	PendingDeleteFinalizedCount int `json:"pendingDeleteFinalizedCount,omitempty"`
+	PendingDeleteRetainedCount  int `json:"pendingDeleteRetainedCount,omitempty"`
 }
 
 func appendBatchFailure(failures []batchFailureDetail, id int64, name string, err error) []batchFailureDetail {
@@ -8107,11 +8149,23 @@ func (h *Handler) collectNodeDeleteGuard(id int64) (*nodeDeleteGuard, error) {
 	return guard, nil
 }
 
+// nodeDeleteOutcome 是删节点漏斗的结果增量（FIX-CASCADE）：
+// 级联内因失去最后一个入口端口而整行删除的 Forward id 集，供
+// 单删/批删回执点名（E1-11）。
+type nodeDeleteOutcome struct {
+	deletedForwardIDs []int64
+}
+
 // deleteNodeByIDAfterGuards 是漏斗后段：数据面尽力清理 + DB 级联
 // + 收尾（端口锁表、WS 会话、白名单刷新）。guard 须来自
 // checkNodeDeleteGuards 且校验已全过；传 nil 时按空守卫处理（仅
 // 内部兜底，正常入口不走）。
 func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([]nodeCrossReferrer, []string, error) {
+	refs, warnings, _, err := h.deleteNodeByIDAfterGuardsOutcome(id, guard)
+	return refs, warnings, err
+}
+
+func (h *Handler) deleteNodeByIDAfterGuardsOutcome(id int64, guard *nodeDeleteGuard) ([]nodeCrossReferrer, []string, *nodeDeleteOutcome, error) {
 	if guard == nil {
 		guard = &nodeDeleteGuard{}
 	}
@@ -8122,6 +8176,14 @@ func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([
 	// 由入口兜底释放。
 	defer guard.releaseUpgradeOp(h, id)
 	if h != nil && h.repo != nil {
+		// FIX-CASCADE（E1-09 子形态 a）：级联前尽力下发本节点全部
+		// 内核的移除——此前删在线节点（不带 uninstall）从不下发内
+		// 核移除，agent 侧内核/监听无人收敛（secret 随行删除、连重
+		// 连对账机会都没有）。与本漏斗其余数据面清理同语义：逐个
+		// 尽力、失败只记日志不中止（死节点必须能删）；下发未确认
+		// 的残留以日志点名（节点记录已删、无后续收敛面，这就是
+		// 该形态的终局披露）。
+		h.removeNodeKernelsFromAgent(id)
 		if forwardIDs, err := h.repo.ListForwardIDsByNode(id); err == nil {
 			for _, forwardID := range forwardIDs {
 				fwd, err := h.repo.GetForwardRecord(forwardID)
@@ -8156,8 +8218,13 @@ func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([
 			log.Printf("node delete: referrer recheck failed node_id=%d err=%v (continuing with guard-time snapshot)", id, ferr)
 		}
 	}
-	if err := h.repo.DeleteNodeCascade(id); err != nil {
-		return nil, nil, err
+	cascadeOutcome, err := h.repo.DeleteNodeCascadeWithOutcome(id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	outcome := &nodeDeleteOutcome{}
+	if cascadeOutcome != nil {
+		outcome.deletedForwardIDs = cascadeOutcome.DeletedForwardIDs
 	}
 	// port_alloc_lock 设计要求节点删除时清理锁表条目，此前无调用方。
 	repo.CleanupPortAllocLock(id)
@@ -8168,7 +8235,7 @@ func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([
 	}
 	// R3X-017：级联删后统一刷新（漏斗收尾，见守卫段收集）。
 	h.refreshInboundWhitelists(guard.affectedInboundIDs)
-	return guard.brokenReferrers, guard.soleRoleWarnings, nil
+	return guard.brokenReferrers, guard.soleRoleWarnings, outcome, nil
 }
 
 // mergeNodeDeleteGuard 把落库前复检（R9-08）的新鲜守卫并入守卫时
@@ -8215,20 +8282,34 @@ func mergeNodeDeleteGuard(dst, fresh *nodeDeleteGuard) {
 }
 
 func (h *Handler) deleteTunnelByID(id int64) error {
+	_, err := h.deleteTunnelByIDWithOutcome(id)
+	return err
+}
+
+// deleteTunnelByIDWithOutcome 是 deleteTunnelByID 的结果变体：把
+// 级联的墓碑终局/保留分流带回供删隧道回执点名（FIX-CASCADE /
+// E1-01）。删除成功后的收尾两件与旧实现同位：best-exit 决策条目
+// 清除（E1-02，此前删除路径无任何清除调用、条目驻留至进程重
+// 启）与 realm 入口收敛。
+func (h *Handler) deleteTunnelByIDWithOutcome(id int64) (*repo.TunnelCascadeOutcome, error) {
 	if h == nil || h.repo == nil {
-		return errors.New("repository not initialized")
+		return nil, errors.New("repository not initialized")
 	}
 
 	tunnel, _ := h.repo.GetTunnelRecord(id)
 	entryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
-	if err := h.repo.DeleteTunnelCascade(id); err != nil {
-		return err
+	outcome, err := h.repo.DeleteTunnelCascadeWithOutcome(id)
+	if err != nil {
+		return nil, err
+	}
+	if h.bestExit != nil {
+		h.bestExit.forgetTunnel(id)
 	}
 	if tunnelIsRealm(tunnel) {
 		// 级联删除后 realm 渲染源已无此隧道：让入口节点收敛到无端点。
 		_, _ = h.syncRealmNodes(entryNodeIDs, nil)
 	}
-	return nil
+	return outcome, nil
 }
 
 func (h *Handler) deleteForwardByID(id int64) error {

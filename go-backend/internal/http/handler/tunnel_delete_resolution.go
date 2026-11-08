@@ -10,6 +10,7 @@ import (
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 )
 
 const tunnelDeletePreviewSampleLimit = 5
@@ -65,6 +66,9 @@ type tunnelDeleteWithForwardsResult struct {
 	DeletedForwardCount int      `json:"deletedForwardCount"`
 	PortAdjustedCount   int      `json:"portAdjustedCount"`
 	Warnings            []string `json:"warnings,omitempty"`
+	// FIX-CASCADE（E1-01）：墓碑转发的终局/保留计数（加法字段）。
+	PendingDeleteFinalizedCount int `json:"pendingDeleteFinalizedCount,omitempty"`
+	PendingDeleteRetainedCount  int `json:"pendingDeleteRetainedCount,omitempty"`
 }
 
 type tunnelBatchDeleteWithForwardsResult struct {
@@ -75,6 +79,19 @@ type tunnelBatchDeleteWithForwardsResult struct {
 	MigratedCount       int                  `json:"migratedCount"`
 	PortAdjustedCount   int                  `json:"portAdjustedCount"`
 	Warnings            []string             `json:"warnings,omitempty"`
+	// FIX-CASCADE（E1-01）：墓碑转发的终局/保留聚合计数。
+	PendingDeleteFinalizedCount int `json:"pendingDeleteFinalizedCount,omitempty"`
+	PendingDeleteRetainedCount  int `json:"pendingDeleteRetainedCount,omitempty"`
+}
+
+// applyPendingOutcome 把一次级联的墓碑终局/保留分流计入复合
+// 删除回执（FIX-CASCADE / E1-01）。
+func (r *tunnelDeleteWithForwardsResult) applyPendingOutcome(outcome *repo.TunnelCascadeOutcome) {
+	if r == nil || outcome == nil {
+		return
+	}
+	r.PendingDeleteFinalizedCount += len(outcome.FinalizedPendingForwardIDs)
+	r.PendingDeleteRetainedCount += len(outcome.RetainedPendingForwardIDs)
 }
 
 type tunnelForwardMigrationPlan struct {
@@ -278,6 +295,8 @@ func (h *Handler) tunnelBatchDeleteWithForwards(w http.ResponseWriter, r *http.R
 		result.DeletedForwardCount += singleResult.DeletedForwardCount
 		result.MigratedCount += singleResult.MigratedCount
 		result.PortAdjustedCount += singleResult.PortAdjustedCount
+		result.PendingDeleteFinalizedCount += singleResult.PendingDeleteFinalizedCount
+		result.PendingDeleteRetainedCount += singleResult.PendingDeleteRetainedCount
 		if len(singleResult.Warnings) > 0 {
 			result.Warnings = append(result.Warnings, singleResult.Warnings...)
 		}
@@ -430,7 +449,8 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 		}
 	}
 	if preview.ForwardCount == 0 {
-		if err := h.deleteTunnelAndCleanup(tunnelID); err != nil {
+		outcome, err := h.deleteTunnelAndCleanupWithOutcome(tunnelID)
+		if err != nil {
 			// R5X-004(c)：无转发分支收集集恒空、补刷为空转，仍保留
 			// 调用使「本函数内 deleteTunnelAndCleanup 的失败返回必
 			// 补刷」成为可机械核查的不变量（与 delete 分支同形）。
@@ -438,12 +458,14 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
 		h.refreshInboundWhitelists(affectedInboundIDs)
+		result.applyPendingOutcome(outcome)
 		return result, nil, nil
 	}
 
 	if action == tunnelDeleteActionDeleteForwards {
 		result.DeletedForwardCount = preview.ForwardCount
-		if err := h.deleteTunnelAndCleanup(tunnelID); err != nil {
+		outcome, err := h.deleteTunnelAndCleanupWithOutcome(tunnelID)
+		if err != nil {
 			// R5X-004(c)：deleteTunnelAndCleanup 内部清理逐条落库，
 			// 中止时已有转发/relay 实际删除——失败返回前以删前收集
 			// 集按现行 DB 补刷（与成功路径同集、幂等）。同文件
@@ -453,6 +475,7 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
 		h.refreshInboundWhitelists(affectedInboundIDs)
+		result.applyPendingOutcome(outcome)
 		return result, nil, nil
 	}
 
@@ -531,7 +554,8 @@ func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int6
 		return tunnelDeleteWithForwardsResult{}, failures, nil
 	}
 
-	if err := h.deleteTunnelAndCleanup(tunnelID); err != nil {
+	outcome, err := h.deleteTunnelAndCleanupWithOutcome(tunnelID)
+	if err != nil {
 		h.rollbackTunnelForwardMigrationPlans(plans)
 		_ = h.redeployTunnelAndForwards(tunnelID)
 		// R4X-003(b)：删源隧道失败回滚同理——迁移已把转发搬到目标
@@ -542,6 +566,7 @@ func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int6
 		return tunnelDeleteWithForwardsResult{}, nil, err
 	}
 	h.refreshInboundWhitelists(affectedInboundIDs)
+	result.applyPendingOutcome(outcome)
 
 	result.MigratedCount = len(plans)
 	result.PortAdjustedCount = portAdjustedCount
@@ -985,19 +1010,28 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 }
 
 func (h *Handler) deleteTunnelAndCleanup(tunnelID int64) error {
+	_, err := h.deleteTunnelAndCleanupWithOutcome(tunnelID)
+	return err
+}
+
+// deleteTunnelAndCleanupWithOutcome 是 deleteTunnelAndCleanup 的
+// 结果变体：把级联的墓碑终局/保留分流带回供复合删除回执点名
+// （FIX-CASCADE / E1-01）。
+func (h *Handler) deleteTunnelAndCleanupWithOutcome(tunnelID int64) (*repo.TunnelCascadeOutcome, error) {
 	deleted, err := h.cleanupTunnelForwardsDataPlane(tunnelID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	h.cleanupTunnelRuntime(tunnelID)
-	if err := h.deleteTunnelByID(tunnelID); err != nil {
+	outcome, err := h.deleteTunnelByIDWithOutcome(tunnelID)
+	if err != nil {
 		// R19-X-01：清理已返回 nil，名下转发已删（deleted 清单为准；
 		// nft 离线待清理形的残留转发库行仍保留，由
 		// formatTunnelDeleteFailureSummary 另行注明）。删隧道行失败
 		// 须披露已删转发数与标识，已删项不回滚。
-		return fmt.Errorf("隧道删除失败：%w；%s；隧道记录仍保留", err, h.formatTunnelDeleteFailureSummary(tunnelID, deleted))
+		return nil, fmt.Errorf("隧道删除失败：%w；%s；隧道记录仍保留", err, h.formatTunnelDeleteFailureSummary(tunnelID, deleted))
 	}
-	return nil
+	return outcome, nil
 }
 
 func minInt(a, b int) int {

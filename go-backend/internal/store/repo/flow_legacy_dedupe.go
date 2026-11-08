@@ -40,6 +40,24 @@ func (FlowLegacyBatchDedupe) TableName() string { return "flow_legacy_batch_dedu
 // 对该哨兵按重放分支回 ok 不入账（与 ErrSeqReplay 同口径）。
 var ErrLegacyBatchReplay = errors.New("flow upload legacy batch replay")
 
+// DeleteStaleFlowLegacyBatchDedupe 删除 first_seen 早于 cutoffMs
+// 的全部登记行（FIX-CASCADE / R2-E3-F01）：保留期此前只在同节点
+// 下一次 legacy 领取时懒执行——节点被删（级联已补按 node_id 删
+// 除）或节点升级为带 seq 上报后，登记行永不触发清理、无上限残
+// 留。本方法是 state_sweep 的全局过期清扫点，判据与 claim 的
+// 保留窗口同一（24h）；窗口内行不动（仍是重放判据）。返回删除
+// 行数。
+func (r *Repository) DeleteStaleFlowLegacyBatchDedupe(cutoffMs int64) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	res := r.db.Where("first_seen < ?", cutoffMs).Delete(&FlowLegacyBatchDedupe{})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
+
 // claimLegacyBatchTx 在入账事务内领取一批 legacy 批次：先清本节点
 // 过期登记，再以冲突安全插入登记本批哈希——未插入说明保留窗口内
 // 已入账过同内容批次，返回 ErrLegacyBatchReplay 使整 tx 回滚。
