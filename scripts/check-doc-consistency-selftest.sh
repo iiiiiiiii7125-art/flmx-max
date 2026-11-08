@@ -25,7 +25,11 @@
 # 实数）。标记在 int-wave 尖端 e5a83bf1 按实数重标定为 55/153
 # （基线 557322be 实数 45/162——INT-3 合入波次给 9 个既有包新增
 # 首个测试文件、FIX-LOGS 新增 internal/util/eventlog 包且自带
-# 测试，净增 1 包，逐项对账见重标定提交说明）。变体 8 把镜像内
+# 测试，净增 1 包，逐项对账见重标定提交说明）；INT-3 第三轮合入
+# 又给 4 个既有包新增首个测试文件（internal/util/kcp、
+# internal/util/resolver、limiter/rate、listener/kcp），总数仍
+# 208，标记随之重标定为 59/149（逐包差集见重标定提交说明）。
+# 变体 8 把镜像内
 # 标记的 x-tested 数字改坏，必须被 §10(b) 抓红并点名（FAIL 行含
 # 「声称 tested=」且给出实数）。无 go 时 §10(b) 按门自身口径
 # PENDING 未核、变体不可判定，本自检在无 go 环境直接 FAIL 点名
@@ -130,11 +134,11 @@ echo "== variant 8: ci-build.yml x-count marker drifts from go list reality must
 if ! command -v go >/dev/null 2>&1; then
   echo "FAIL: variant 8 undecidable — go toolchain missing, §10(b) is PENDING in this environment (see header)"; exit 1
 fi
-sed -i 's/\[K11-COUNT:x-tested=55\]/[K11-COUNT:x-tested=54]/' "$MIR/.github/workflows/ci-build.yml"
+sed -i 's/\[K11-COUNT:x-tested=59\]/[K11-COUNT:x-tested=58]/' "$MIR/.github/workflows/ci-build.yml"
 if run_gate "$TMP/v8.log"; then
   echo "FAIL: variant 8 was not caught"; exit 1
 fi
-grep -q "声称 tested=54 untested=153 ≠ 实数 tested=55 untested=153" "$TMP/v8.log" && echo "OK: variant 8 caught and named" || {
+grep -q "声称 tested=58 untested=149 ≠ 实数 tested=59 untested=149" "$TMP/v8.log" && echo "OK: variant 8 caught and named" || {
   echo "FAIL: variant 8 caught but the drift was not named"; sed 's/^/    /' "$TMP/v8.log"; exit 1; }
 cp "$ROOT/.github/workflows/ci-build.yml" "$MIR/.github/workflows/ci-build.yml"
 
