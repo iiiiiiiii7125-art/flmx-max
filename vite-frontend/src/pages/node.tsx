@@ -2190,10 +2190,9 @@ export default function NodePage({
                         label: "测试点",
                         onPress: () => setTargetNodes([node]),
                       },
-                      // 定时重启只对本面板直管的 agent 节点开放：
-                      // 远程节点归所属面板、nftables 无 agent 服务。
-                      ...(node.isRemote !== 1 &&
-                      node.forwardMode !== "nftables"
+                      // 定时重启只对 agent 节点开放：nftables 无 agent
+                      // 服务。（原远程节点排除随联邦功能移除一并下线。）
+                      ...(node.forwardMode !== "nftables"
                         ? [
                             {
                               key: "restart",
