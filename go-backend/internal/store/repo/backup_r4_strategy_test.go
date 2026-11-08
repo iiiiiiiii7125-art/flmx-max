@@ -9,8 +9,8 @@ import (
 	"go-backend/internal/store/model"
 )
 
-// R4-F3-01 / R4-F4-01 / R4-F4-02 回归钉：备份恢复面（本地导入与
-// Gist 恢复共用 repo.Import）的策略双门——
+// R4-F3-01 / R4-F4-01 / R4-F4-02 回归钉：备份恢复面（本地导入
+// repo.Import）的策略双门——
 //   - realm 隧道＋多目标非 {round, hash} 转发逐行跳过 + warning
 //     点名（写面 BC-26 门的恢复面镜像；修复前原文落库、渲染静默
 //     改写轮询且回执无声）；

@@ -132,7 +132,7 @@ func TestConfigGetAllowsSensitiveKeysForAdmin(t *testing.T) {
 
 // R7-L8-03：第三方凭据读面关闭——cloudflare_secret_key、
 // notify_telegram_bot_token、notify_webhook_url、
-// notify_telegram_api_base 与 jwt/gist/license 六键同口径：
+// notify_telegram_api_base 与 jwt/license 同口径：
 // config/get 对管理员亦 403、config/list 对管理员亦删除，本体
 // 绝不出现在任何响应中。非管理员/匿名维持既有 sensitive 守卫
 // 403。写路径不变（管理员可写仍由
@@ -215,7 +215,7 @@ func TestConfigGetNeverReturnsThirdPartyCredentials(t *testing.T) {
 	}
 }
 
-// R6-L8-F-05：jwt_secret 与 Gist 凭据同口径——管理员经 config/get
+// R6-L8-F-05：jwt_secret 与第三方凭据同口径——管理员经 config/get
 // 亦不得读回本体（跨用户凭据：泄露后可离线伪造任意用户令牌，
 // 且改密不影响该秘密），config/list 侧同步缺席。写路径后由
 // R1-11-02 单独收紧为点名拒绝（DB 行零消费、假成功误导轮换），
@@ -258,49 +258,6 @@ func TestConfigGetNeverReturnsLicenseCredentials(t *testing.T) {
 		resp := httptest.NewRecorder()
 		router.ServeHTTP(resp, req)
 		assertHandlerCodeMsg(t, resp, 403, "禁止访问系统授权凭据")
-	}
-}
-
-// R14-F01（R14-X-01 / A3-01 / A8-01）：管理员经单键 config/get 亦不得
-// 读回 gist_token / gist_password 明文，与 config/list 侧 delete +
-// gist/status tokenHint-only 设计对齐。边界：其余 sensitive 键管理
-// 员可读是既有行为，见 TestConfigGetAllowsSensitiveKeysForAdmin；
-// jwt_secret 当时同列既有行为，后由 R6-L8-F-05 按同一口径单独
-// 收紧，见 TestConfigGetNeverReturnsJWTSecret。
-func TestConfigGetNeverReturnsGistCredentials(t *testing.T) {
-	router, r := setupConfigAccessTestRouter(t)
-	adminToken := mustGenerateConfigAccessToken(t, 1, "admin_user", 0)
-	seedConfigValue(t, r, "gist_token", "gist-token-secret")
-	seedConfigValue(t, r, "gist_password", "gist-password-secret")
-
-	for _, name := range []string{"gist_token", "gist_password"} {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"`+name+`"}`))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", adminToken)
-		resp := httptest.NewRecorder()
-		router.ServeHTTP(resp, req)
-		assertHandlerCodeMsg(t, resp, 403, "禁止访问 Gist 凭据，请经 gist/status 查看")
-		if strings.Contains(resp.Body.String(), "gist-token-secret") || strings.Contains(resp.Body.String(), "gist-password-secret") {
-			t.Fatalf("config/get %s response must not contain gist credential: %s", name, resp.Body.String())
-		}
-	}
-
-	// 对照：config/list 仍缺席两键；gist/status 仍只回 tokenHint。
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/list", nil)
-	req.Header.Set("Authorization", adminToken)
-	resp := httptest.NewRecorder()
-	router.ServeHTTP(resp, req)
-	if strings.Contains(resp.Body.String(), "gist-token-secret") || strings.Contains(resp.Body.String(), "gist-password-secret") {
-		t.Fatalf("config/list must not contain gist credentials: %s", resp.Body.String())
-	}
-
-	// 对照：匿名读 gist 键仍 403（既有 PolicyForConfig 敏感守卫，与修前一致）。
-	for _, name := range []string{"gist_token", "gist_password"} {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/get", bytes.NewBufferString(`{"name":"`+name+`"}`))
-		req.Header.Set("Content-Type", "application/json")
-		resp := httptest.NewRecorder()
-		router.ServeHTTP(resp, req)
-		assertHandlerCodeMsg(t, resp, 403, "禁止访问敏感配置")
 	}
 }
 

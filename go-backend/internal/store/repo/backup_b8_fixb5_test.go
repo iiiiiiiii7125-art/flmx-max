@@ -626,7 +626,7 @@ func TestImportConfigsDroppedKeysNamedInReceipt(t *testing.T) {
 		Version: "1.0",
 		Configs: map[string]string{
 			"jwt_secret":        "should-not-land-or-leak",
-			"gist_id":           "gist-xyz",
+			"license_key":       "license-xyz",
 			"notify_daily_last": "123",
 			"plain_key":         "kept-value",
 		},
@@ -639,7 +639,7 @@ func TestImportConfigsDroppedKeysNamedInReceipt(t *testing.T) {
 		t.Fatalf("ConfigsImported = %d, want 1 (only plain_key), warnings=%v", result.ConfigsImported, result.ImportWarnings)
 	}
 	warnText := strings.Join(result.ImportWarnings, "\n")
-	for _, want := range []string{"3 个配置键", "jwt_secret", "gist_id", "notify_daily_last"} {
+	for _, want := range []string{"3 个配置键", "jwt_secret", "license_key", "notify_daily_last"} {
 		if !strings.Contains(warnText, want) {
 			t.Fatalf("receipt must name %q, warnings=%v", want, result.ImportWarnings)
 		}

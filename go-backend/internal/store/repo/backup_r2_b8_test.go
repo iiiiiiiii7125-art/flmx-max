@@ -315,7 +315,10 @@ func TestR2B8ImportKernelReplacementRepointsInbounds(t *testing.T) {
 
 // R2X-047（单元）：FilterBackupConfigs 精确排除日报运行时两键；
 // pending_realm_settle:* 与 notify_daily_hour 必须豁免（禁止前缀匹配）。
-// R2-I-02：两待发通知运行时键（I-01 配额恢复、R2-I-02 Gist 失败）同样排除。
+// R2-I-02：待发通知运行时键（I-01 配额恢复）同样排除；已下线的
+// Gist 失败待发键 notify_gist_failure_pending 自 2.1.0 起未登记，
+// 经未分类键默认敏感口径在导出面同样被排除（本钉格兼作该口径的
+// 回归断言：一旦有人给它放行分类，此格即红）。
 func TestR2B8FilterBackupConfigsExcludesDailyRuntimeKeys(t *testing.T) {
 	filtered := FilterBackupConfigs(map[string]string{
 		"notify_daily_last":             "2026-10-21",

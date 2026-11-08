@@ -88,7 +88,7 @@ func decodeBC01Envelope(t *testing.T, rec *httptest.ResponseRecorder) (int, stri
 // 标记、不含新导入的键），且文件权限为 0600。
 func TestSEC01BC01ImportRetainsServerSideSnapshot(t *testing.T) {
 	h, dir := setupBC01Test(t)
-	r := gistTestRepo(t, h)
+	r := handlerTestRepo(t, h)
 	seedSEC01Credentials(t, r)
 
 	rec := callBC01Import(t, h, bc01ImportBody(t))
@@ -242,7 +242,7 @@ func TestSEC01BC01DownloadAuth(t *testing.T) {
 // 未过期（23h）仍有效；过期快照在下一次导入入口被清理并由新快照覆盖。
 func TestSEC01BC01ExpiredSnapshotPurged(t *testing.T) {
 	h, dir := setupBC01Test(t)
-	r := gistTestRepo(t, h)
+	r := handlerTestRepo(t, h)
 	seedSEC01Credentials(t, r)
 
 	rec := callBC01Import(t, h, bc01ImportBody(t))
@@ -319,7 +319,7 @@ func TestSEC01BC01ExpiredSnapshotPurged(t *testing.T) {
 // 继续执行、DB 被改写，警告进回执 importWarnings 披露，且无快照留存。
 func TestSEC01BC01SnapshotFailureWarnsAndContinuesImport(t *testing.T) {
 	h, dir := setupBC01Test(t)
-	r := gistTestRepo(t, h)
+	r := handlerTestRepo(t, h)
 	seedSEC01Credentials(t, r)
 
 	blocker := filepath.Join(dir, "blocker")

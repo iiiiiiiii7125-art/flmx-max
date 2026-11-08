@@ -241,7 +241,7 @@ docker start <backend容器>
 - `FLMX_FETCH_PRIVATE_ALLOWLIST=127.0.0.1/32`：仅放行指定 CIDR（推荐）
 - `FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true`：放行所有私网地址（不推荐）
 
-**设置位置与生效方法**：这两个变量是**后端进程的环境变量**，随版 `docker-compose.yml` 的 `backend` 服务默认**没有**它们的传递行——只把变量写进部署目录的 `.env` 文件不会进入后端容器、不会生效。需要在部署目录的 `docker-compose.yml` 里给 `backend` 服务的 `environment:` 段补上对应行（直接写字面量，或写 `- FLMX_FETCH_PRIVATE_ALLOWLIST=${FLMX_FETCH_PRIVATE_ALLOWLIST}` 再把值放进同目录 `.env`），然后执行 `docker compose up -d backend` 重建后端容器才生效。自检：`docker exec <后端容器> printenv FLMX_FETCH_PRIVATE_ALLOWLIST` 能打印出所设值，即已进入后端进程；打印为空就是传递行没补对。同一口径适用于全部 `FLMX_FETCH_*` 与 `FLMX_GIST_API_BASE` 环境变量（见 [导入节点](./import.md#订阅源地址安全策略) 与 [Gist 备份](./gist-backup.md#高级-api-基地址)）。
+**设置位置与生效方法**：这两个变量是**后端进程的环境变量**，随版 `docker-compose.yml` 的 `backend` 服务默认**没有**它们的传递行——只把变量写进部署目录的 `.env` 文件不会进入后端容器、不会生效。需要在部署目录的 `docker-compose.yml` 里给 `backend` 服务的 `environment:` 段补上对应行（直接写字面量，或写 `- FLMX_FETCH_PRIVATE_ALLOWLIST=${FLMX_FETCH_PRIVATE_ALLOWLIST}` 再把值放进同目录 `.env`），然后执行 `docker compose up -d backend` 重建后端容器才生效。自检：`docker exec <后端容器> printenv FLMX_FETCH_PRIVATE_ALLOWLIST` 能打印出所设值，即已进入后端进程；打印为空就是传递行没补对。同一口径适用于全部 `FLMX_FETCH_*` 环境变量（见 [导入节点](./import.md#订阅源地址安全策略)）。
 
 ## 可信代理名单收窄：升级后核对限流的客户端 IP 口径（C4-01）
 
@@ -272,7 +272,6 @@ docker start <backend容器>
 | `FLVX_FETCH_PRIVATE_ALLOWLIST` | `FLMX_FETCH_PRIVATE_ALLOWLIST` | 后端：出站抓取按 CIDR 放行私网。不改名 → 放行名单失效 |
 | `FLVX_FEDERATION_TRUSTED_PROXIES` | `FLMX_FEDERATION_TRUSTED_PROXIES` | 后端：联邦对端 IP 白名单解析的可信代理。不改名 → 只认连接对端地址、不解析转发头 |
 | `FLVX_WEBAUTHN_ORIGIN` | `FLMX_WEBAUTHN_ORIGIN` | 后端：Passkey Origin。不改名 → 通行证密钥按未配置处理、入口整体消失；随版 docker-compose 模板里旧名的透传行同步移除 |
-| `FLVX_GIST_API_BASE` | `FLMX_GIST_API_BASE` | 后端：Gist 备份的 GitHub API 基址。不改名 → 回落官方 `https://api.github.com` |
 | `FLVX_LOG_REDACT_EXEMPT_PREFIXES` | `FLMX_LOG_REDACT_EXEMPT_PREFIXES` | 后端：日志 URL 路径段脱敏的豁免前缀。不改名 → 豁免失效、恢复全量掩码 |
 | `FLVX_KERNEL_DIR` | `FLMX_KERNEL_DIR` | 节点 agent：内核状态根目录覆盖（写在 agent 的 systemd unit 或 drop-in 里）。不改名 → agent 回落缺省根目录、内核状态换根（旧目录文件不删） |
 | `FLVX_VERIFY_DOWNLOADS` | `FLMX_VERIFY_DOWNLOADS` | 面板安装脚本 `panel_install.sh`：下载校验开关。不改名 → 回落默认开启校验——曾用旧名关过校验的部署，升级后校验会重新打开 |

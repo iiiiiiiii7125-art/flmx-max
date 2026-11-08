@@ -15,7 +15,7 @@ import (
 
 // SEC-01 BC-01 (b)：导入前自动备份只留存服务端文件，恢复 A10-10 承诺。
 //
-//  - 快照在 backupImport 与 gistBackupRestore 的 ImportContext 改写 DB
+//  - 快照在 backupImport 的 ImportContext 改写 DB
 //    之前生成（ExportAllContext 全量导出），只保留最新一份（每次导入
 //    覆盖同一文件），24h 过期，下载不删除。
 //  - 落盘目录与 DB 同级（与 jwt_secret 同惯例：<DBPath 同级>，默认
@@ -25,7 +25,6 @@ import (
 //    ImportResult.AutoBackup 仍永不赋值（SEC-01 不回退）。
 //  - 过期清理为懒清理：status/download/import 三处入口遇到超过 24h 的
 //    快照即删除并按无快照处理；每次成功导入后也顺带清理一次。
-//  - 范围含 backupImport 与 gistBackupRestore（R7-06 起恢复路同口径接入）。
 
 const (
 	// importAutoBackupFileName 导入前自动备份快照的文件名（目录内唯一一份）。

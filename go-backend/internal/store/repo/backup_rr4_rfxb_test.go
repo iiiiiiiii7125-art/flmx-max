@@ -15,7 +15,7 @@ import (
 // RR4-F1-01 / RR4-F4-01 回归钉：备份恢复面对订阅行自身的引用做存
 // 在性对账——同批被跳过的源/入站与从未存在的幽灵 id 不再逐字落库，
 // 回执汇总 warning 点名受影响订阅并真计数；全部引用有效时逐字保真。
-// 本地导入与 Gist 恢复共用 repo.Import 同一路径，此钉同覆两面。
+// 本地导入经 repo.Import 同一路径，此钉覆盖恢复面。
 func TestImportReconcilesSubscriptionRefs(t *testing.T) {
 	now := time.Now().UnixMilli()
 	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))

@@ -10,6 +10,15 @@ import (
 	"go-backend/internal/store/repo"
 )
 
+// shieldRestoreAllTypes 是恢复的段全集（13 段，与 repository.go
+// validBackupTypes / 前端 BACKUP_TYPE_VALUES 同集）。
+var shieldRestoreAllTypes = []string{
+	"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
+	"configs", "inbounds",
+	"userInbounds", "announcements", "monitorPermissions",
+	"userSubscriptions", "serviceMonitors",
+}
+
 // F6-02 钉格：删除屏蔽登记随 inbounds 段备份往返——管理员手工删
 // 过的导入节点在全量恢复后，订阅源下一轮同步不得复活（修复前：
 // 屏蔽不入任何备份段，恢复后同步以新行复活，与 subscription.md
@@ -49,13 +58,13 @@ func TestShieldSurvivesBackupRestoreAndBlocksResurrection(t *testing.T) {
 		t.Fatalf("unmarshal backup: %v", err)
 	}
 
-	// 全新库恢复（走 Gist 恢复的 13 段全集，与真实恢复同路径）。
+	// 全新库恢复（走 13 段全集导入，与真实恢复同路径）。
 	dest, err := repo.Open(filepath.Join(t.TempDir(), "shield-restore.db"))
 	if err != nil {
 		t.Fatalf("open dest repo: %v", err)
 	}
 	t.Cleanup(func() { _ = dest.Close() })
-	result, err := dest.Import(&decoded, gistRestoreTypes)
+	result, err := dest.Import(&decoded, shieldRestoreAllTypes)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -101,7 +110,7 @@ func TestImportDisclosesRemovedNodeGroupsAndGroupIDs(t *testing.T) {
 			},
 		},
 	}
-	result, err := dest.Import(backup, gistRestoreTypes)
+	result, err := dest.Import(backup, shieldRestoreAllTypes)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}

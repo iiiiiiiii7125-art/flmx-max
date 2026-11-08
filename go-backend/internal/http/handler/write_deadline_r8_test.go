@@ -88,8 +88,6 @@ func TestR8T1EndpointsExtendWriteDeadline(t *testing.T) {
 		{"inboundUpdate", h.inboundUpdate, 360 * time.Second},
 		// R8-T-08: export generation is size-proportional (unbounded).
 		{"backupExport", h.backupExport, 30 * time.Minute},
-		// R8-T-08: gist upload = export build + up to 120s of gist calls.
-		{"gistBackupUpload", h.gistBackupUpload, 30 * time.Minute},
 		// R8-T-04 + B05-002 (R2-K2): empty version pays the <=120s
 		// discovery prelude before upgradeTimeout 300s (bound 420s);
 		// server relief and frontend both 480s.

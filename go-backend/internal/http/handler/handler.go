@@ -113,9 +113,6 @@ type Handler struct {
 	// I-01：配额恢复通知待发标记的串行化锁（user_quota.go）。
 	quotaRecoveryMu sync.Mutex
 
-	// R2-I-02：Gist 备份失败通知待发标记的串行化锁（gist_backup.go）。
-	gistFailureMu sync.Mutex
-
 	// R2X-018：日报待发原文缓存（notify_reports.go）。首次生成后
 	// 同日重试逐字复用，snapshot 与 daily_last 仅整条投递成功时推进。
 	dailyMu      sync.Mutex
@@ -327,11 +324,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 		{"/api/v1/backup/export", h.backupExport},
 		{"/api/v1/backup/import-auto-backup", h.backupImportAutoBackup},
 		{"/api/v1/backup/import-auto-backup/status", h.backupImportAutoBackupStatus},
-		{"/api/v1/backup/gist/status", h.gistBackupStatus},
-		{"/api/v1/backup/gist/save", h.gistBackupSave},
-		{"/api/v1/backup/gist/upload", h.gistBackupUpload},
-		{"/api/v1/backup/gist/versions", h.gistBackupVersions},
-		{"/api/v1/backup/gist/restore", h.gistBackupRestore},
 		{"/api/v1/backup/import", h.backupImport},
 		{"/api/v1/backup/restore", h.backupImport},
 	} {
@@ -745,7 +737,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 
 // thirdPartyCredentialConfigKeys 是 R7-L8-03 关闭读面的第三方凭
 // 据键全集：getConfigByName 对全角色 403、getConfigs 对全角色
-// delete，两面共用本清单防口径漂移（jwt/gist/license 三组关闭集
+// delete，两面共用本清单防口径漂移（jwt/license 两组关闭集
 // 在彼时各自成对硬编码，本组起改单一清单）。键名口径与
 // repo/config_policy.go 的 sensitiveConfigKeys 同步。
 var thirdPartyCredentialConfigKeys = []string{
@@ -801,19 +793,9 @@ func (h *Handler) getConfigByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// R14-F01（R14-X-01 / A3-01 / A8-01）：Gist 令牌与密码即使对管理
-	// 员也不经 config/get 下发，与 getConfigs（config/list）侧 delete
-	// + gist/status 仅 tokenHint 的设计对齐。置于敏感/登录守卫之后，
-	// 故只收紧此前唯一漏防的管理员读路径；非管理员与匿名仍走既有
-	// 403「禁止访问敏感配置」/ 401 口径。
-	if configName == gistConfigToken || configName == gistConfigPassword {
-		response.WriteJSON(w, response.Err(403, "禁止访问 Gist 凭据，请经 gist/status 查看"))
-		return
-	}
-
-	// R6-L8-F-05：jwt_secret 与 Gist 凭据同口径——即使对管理员也不
-	// 经 config/get 回本体（getConfigs 侧同步 delete）。它与 Gist
-	// 凭据不同，是跨用户凭据：经管理员会话泄露后可离线为任意用户
+	// R6-L8-F-05：jwt_secret 与第三方凭据同口径——即使对管理员也不
+	// 经 config/get 回本体（getConfigs 侧同步 delete）。它是
+	// 跨用户凭据：经管理员会话泄露后可离线为任意用户
 	// 伪造令牌，且改密不影响该秘密（中间件只比对 iat 与
 	// PasswordChangedAt），须轮换签名密钥本身才止血，故读面与
 	// license 凭据一样彻底关闭；轮换走部署面（.env 的 JWT_SECRET
@@ -878,10 +860,6 @@ func (h *Handler) getConfigs(w http.ResponseWriter, r *http.Request) {
 	delete(cfgMap, "license_key")
 	delete(cfgMap, "license_machine_id")
 	delete(cfgMap, "machine_fingerprint")
-	// PORT-3342/B1：Gist 令牌与密码即使对管理员也不经 config/list
-	// 下发（与上游一致）；读取走专用的 gist/status 端点（仅 tokenHint）。
-	delete(cfgMap, gistConfigToken)
-	delete(cfgMap, gistConfigPassword)
 	// R6-L8-F-05：jwt_secret 同口径——管理员经 config/list 亦不回
 	// 本体（与 getConfigByName 侧的 403 成对，理由见彼处注释）。
 	delete(cfgMap, "jwt_secret")
@@ -2927,7 +2905,7 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 // the pre-import full-database snapshot used to be embedded in the
 // receipt and leaked live credentials, and ImportContext never used
 // it for rollback.
-// Gist restore must never call Import and stop here, and must never
+// Import must never stop at the Import call itself, and must never
 // call only reconcileNodeKernels: every hook below runs.
 func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *model.BackupData, types []string) {
 	// R6X-010：恢复也是 origin 状态的写路径——导入成功后同步触发

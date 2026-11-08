@@ -3,8 +3,8 @@ package handler
 // 修复轮 10 路 caps：R10-10（I-F2-03）handler 入口钉格——本地
 // 导入在取 backupImportMu 单飞锁之前先行校验 bcrypt 预算，超限
 // 整单以 -2 点名拒绝（repo 层计数/Import 收口钉格见 repo 包
-// backup_import_hash_budget_r10_test.go；Gist 恢复入口同判、
-// 与本地共用 repo.ValidateBackupImportUserHashBudget）。
+// backup_import_hash_budget_r10_test.go；入口与计数共用
+// repo.ValidateBackupImportUserHashBudget）。
 
 import (
 	"fmt"

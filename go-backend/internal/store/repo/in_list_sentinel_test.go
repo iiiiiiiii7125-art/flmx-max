@@ -67,6 +67,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_federation_cleanup.go:ListFederationTunnelBindingsForCleanup": {"", "字面量 2 元状态清单"},
 	"repository_federation_reconcile.go:ListPendingPeerShareNodeIDs":          {"", "字面量 2 元角色清单"},
 	"repository_subscription.go:migrateSubscriptions":                         {"", "字面量 5 元旧配置键清单"},
+	"repository.go:migrateRemoveGistConfigKeys":                               {"", "字面量 10 元已下线 Gist 配置键清单（DEV-RM-GIST，schema v8 清理）"},
 	"repository_mutations.go:ListSoleSegmentTunnelsForNode":                   {"", "字面量 2 元链路段角色清单（入口/出口，L4-03）"},
 
 	// —— 子查询形（IN (?) 传 *gorm.DB，不展开变量）——

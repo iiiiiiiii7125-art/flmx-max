@@ -1,10 +1,49 @@
 package handler
 
 import (
+	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"go-backend/internal/auth"
+	"go-backend/internal/http/middleware"
 	"go-backend/internal/store/repo"
 )
+
+// setupHandlerTestRepo builds a Handler backed by a throwaway repo in
+// a temp dir.
+func setupHandlerTestRepo(t *testing.T) *Handler {
+	t.Helper()
+	r, err := repo.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "test-secret")
+	return h
+}
+
+func handlerTestRepo(t *testing.T, h *Handler) *repo.Repository {
+	t.Helper()
+	// New() 不暴露 repo；测试经 Handler 的 repo 字段取（同包）。
+	return h.repo
+}
+
+// adminRequest builds a request carrying admin claims in context.
+func adminRequest(t *testing.T, method, path string, body []byte) *http.Request {
+	t.Helper()
+	var reader *bytes.Reader
+	if body == nil {
+		reader = bytes.NewReader(nil)
+	} else {
+		reader = bytes.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	return req.WithContext(context.WithValue(req.Context(), middleware.ClaimsContextKey,
+		auth.Claims{Sub: "1", User: "admin@user", RoleID: 0}))
+}
 
 func mustLastInsertID(t *testing.T, r *repo.Repository, label string) int64 {
 	t.Helper()

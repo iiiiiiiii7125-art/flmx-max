@@ -37,7 +37,6 @@ export default defineConfig({
         text: "更多",
         items: [
           { text: "流量转发与管理", link: "/guide/forward" },
-          { text: "Gist 备份", link: "/guide/gist-backup" },
           { text: "通知", link: "/guide/notify" },
           { text: "监控", link: "/guide/monitoring" },
           { text: "PostgreSQL", link: "/guide/postgresql" },

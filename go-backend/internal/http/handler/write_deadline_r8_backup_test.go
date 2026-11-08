@@ -7,9 +7,9 @@ import (
 )
 
 // TestR8T02BackupEndpointsExtendWriteDeadline covers the element-(a)
-// server legs of R8-T-02 (x-verdicts-r8 §2.2): /backup/import,
-// /backup/restore (both served by backupImport) and
-// /backup/gist/restore get per-endpoint write-deadline relief so the
+// server legs of R8-T-02 (x-verdicts-r8 §2.2): /backup/import and
+// /backup/restore (both served by backupImport) get per-endpoint
+// write-deadline relief so the
 // aligned budget chain can deliver a long import's response. Element
 // (b) was resolved by user ruling ④ on 2026-10-30 (B14-001): the
 // snapshot phase stays bound to r.Context(), the write phase runs on
@@ -23,7 +23,6 @@ func TestR8T02BackupEndpointsExtendWriteDeadline(t *testing.T) {
 		want time.Duration
 	}{
 		{"backupImport", h.backupImport, 30 * time.Minute},
-		{"gistBackupRestore", h.gistBackupRestore, 30 * time.Minute},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
