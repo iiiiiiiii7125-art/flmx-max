@@ -155,7 +155,7 @@ export function RestartScheduleModal({
             计时器保存在节点本机（systemd timer），面板离线或面板暂时连不上时照常执行；关闭开关会删除节点上的计时器。默认关闭。
           </p>
           {enabled && !timeValid && (
-            <p className="text-xs font-semibold text-danger">
+            <p className="text-xs font-semibold text-danger-700">
               重启时刻格式无效，请用 24 小时制时间。
             </p>
           )}
