@@ -1,12 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import { Copy, Check, QrCode, ChevronDown } from "lucide-react";
+import { Copy, Check, QrCode, ChevronDown, Search } from "lucide-react";
 
 import { getMyInbounds, getMySubscriptions, getSubInfo } from "@/api";
 import type { MySubscriptionItem } from "@/api";
 import type { InboundApiItem } from "@/api/types";
 import { copyWithToast } from "@/utils/clipboard";
 import { SubFrontPicker } from "@/pages/subscription/front-picker";
+import { Segmented } from "@/pages/subscription/controls";
+import {
+  GroupHeader,
+  groupItems,
+  groupKeyOf,
+  groupLabelOf,
+  groupRank,
+  inboundMatchesSearch,
+  inboundOriginOf,
+  inboundSubtitleOf,
+  type InboundOriginFilter,
+} from "@/pages/inbound/group";
 import { useSubscriptionFrontURLs } from "@/utils/subscription-front";
 import { formatTraffic } from "@/utils/traffic";
 import { QrCodeButton } from "@/pages/inbound/share";
@@ -15,6 +27,7 @@ import { SubTrafficStats } from "@/pages/subscription/traffic-stats";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
+import { Input } from "@/shadcn-bridge/heroui/input";
 
 const SUB_FORMATS = [
   { key: "", label: "通用" },
@@ -55,6 +68,13 @@ export default function MySubscriptionPage() {
   const [expandedTrafficId, setExpandedTrafficId] = useState<number | null>(
     null,
   );
+  const [inboundSectionOpen, setInboundSectionOpen] = useState(true);
+  const [inboundOriginFilter, setInboundOriginFilter] =
+    useState<InboundOriginFilter>("all");
+  const [inboundSearch, setInboundSearch] = useState("");
+  const [inboundGroupOpenOverrides, setInboundGroupOpenOverrides] = useState<
+    Record<string, boolean>
+  >({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -236,6 +256,89 @@ export default function MySubscriptionPage() {
 
   const inbounds = data?.inbounds ?? [];
   const relays = data?.relays ?? [];
+  const localInboundCount = inbounds.filter((i) => !i.external).length;
+  const importedInboundCount = inbounds.length - localInboundCount;
+  const filteredInbounds = inbounds.filter(
+    (inbound) =>
+      (inboundOriginFilter === "all" ||
+        inboundOriginOf(inbound) === inboundOriginFilter) &&
+      inboundMatchesSearch(inbound, inboundSearch),
+  );
+  const inboundGroups = groupItems(filteredInbounds, groupKeyOf, (_key, i) =>
+    groupLabelOf(i),
+  ).sort((a, b) => groupRank(a.key) - groupRank(b.key));
+  const showInboundGroups = inboundGroups.length > 1;
+  const inboundGroupIsOpen = (key: string) =>
+    inboundGroupOpenOverrides[key] ?? groupRank(key) === 0;
+  const toggleInboundGroup = (key: string) =>
+    setInboundGroupOpenOverrides((prev) => ({
+      ...prev,
+      [key]: !inboundGroupIsOpen(key),
+    }));
+
+  const renderInboundCard = (inbound: InboundApiItem) => (
+    <Card key={inbound.id}>
+      <CardBody className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="flex items-center gap-2 font-medium">
+              <span>{inbound.name}</span>
+              {inbound.external && (
+                <Chip
+                  color="warning"
+                  size="sm"
+                  title={
+                    inbound.sourceId
+                      ? `订阅源 ${inbound.sourceName || inbound.sourceId}`
+                      : "手动导入"
+                  }
+                  variant="flat"
+                >
+                  导入
+                </Chip>
+              )}
+            </p>
+            <p className="text-xs font-semibold text-foreground">
+              {inboundSubtitleOf(inbound)}
+            </p>
+          </div>
+        </div>
+        <div className="rounded-lg glass-inset p-3">
+          <p className="text-xs font-semibold text-foreground mb-2 break-all select-all">
+            {subUrl(undefined, inbound.id)}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {SUB_FORMATS.map((f) => {
+              const key = `${inbound.id}-${f.key || "auto"}`;
+              const url = subUrl(f.key || undefined, inbound.id);
+              const label = `${inbound.name} ${f.label}`;
+              return (
+                <div key={key} className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    color={copiedKey === key ? "success" : "default"}
+                    onPress={() => handleCopy(url, key, label)}
+                    isDisabled={!subPath}
+                    startContent={
+                      copiedKey === key ? (
+                        <Check className="w-3 h-3" />
+                      ) : (
+                        <Copy className="w-3 h-3" />
+                      )
+                    }
+                  >
+                    {copiedKey === key ? "已复制" : f.label}
+                  </Button>
+                  <QrCodeButton url={url} label={label} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </CardBody>
+    </Card>
+  );
 
   return (
     <div className="p-6 space-y-4 max-w-4xl mx-auto">
@@ -382,56 +485,95 @@ export default function MySubscriptionPage() {
 
       {/* 按入站单独订阅 */}
       <div className="space-y-3">
-        <h2 className="text-base font-semibold">按入站单独订阅</h2>
-        {inbounds.map((inbound) => (
-          <Card key={inbound.id}>
-            <CardBody className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium">{inbound.name}</p>
-                  <p className="text-xs font-semibold text-foreground">
-                    {inbound.protocol} · {inbound.nodeName}
-                  </p>
-                </div>
+        <button
+          aria-expanded={inboundSectionOpen}
+          className="flex items-center gap-1 text-left"
+          type="button"
+          onClick={() => setInboundSectionOpen((open) => !open)}
+        >
+          <h2 className="text-base font-semibold">
+            按入站单独订阅（共 {inbounds.length}）
+          </h2>
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 text-foreground transition-transform ${inboundSectionOpen ? "" : "-rotate-90"}`}
+          />
+        </button>
+        {inboundSectionOpen && (
+          <>
+            {(localInboundCount > 0 && importedInboundCount > 0) ||
+            inbounds.length > 8 ? (
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+                {localInboundCount > 0 && importedInboundCount > 0 && (
+                  <div className="lg:w-[22rem] lg:shrink-0">
+                    <Segmented<InboundOriginFilter>
+                      options={[
+                        ["all", `全部 ${inbounds.length}`],
+                        ["local", `本地创建 ${localInboundCount}`],
+                        ["imported", `导入 ${importedInboundCount}`],
+                      ]}
+                      value={inboundOriginFilter}
+                      onChange={setInboundOriginFilter}
+                    />
+                  </div>
+                )}
+                {inbounds.length > 8 && (
+                  <Input
+                    aria-label="搜索按入站单独订阅"
+                    className="lg:flex-1"
+                    placeholder="搜索名称、节点、协议、端口、备注或来源"
+                    size="sm"
+                    startContent={<Search className="h-4 w-4" />}
+                    value={inboundSearch}
+                    onChange={(e) => setInboundSearch(e.target.value)}
+                  />
+                )}
               </div>
-              <div className="rounded-lg glass-inset p-3">
-                <p className="text-xs font-semibold text-foreground mb-2 break-all select-all">
-                  {subUrl(undefined, inbound.id)}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {SUB_FORMATS.map((f) => {
-                    const key = `${inbound.id}-${f.key || "auto"}`;
-                    const url = subUrl(f.key || undefined, inbound.id);
-                    const label = `${inbound.name} ${f.label}`;
-                    return (
-                      <div key={key} className="flex items-center gap-1">
-                        <Button
+            ) : null}
+            {filteredInbounds.length === 0 ? (
+              <Card>
+                <CardBody>
+                  <p className="text-sm font-semibold text-foreground">
+                    没有匹配的入站
+                  </p>
+                </CardBody>
+              </Card>
+            ) : showInboundGroups ? (
+              inboundGroups.map((group) => {
+                const open = inboundGroupIsOpen(group.key);
+                const rank = groupRank(group.key);
+
+                return (
+                  <div key={group.key} className="space-y-3">
+                    <GroupHeader
+                      collapsed={!open}
+                      count={group.items.length}
+                      extra={
+                        <Chip
+                          color={rank === 0 ? "default" : "warning"}
                           size="sm"
                           variant="flat"
-                          color={copiedKey === key ? "success" : "default"}
-                          onPress={() => handleCopy(url, key, label)}
-                          isDisabled={!subPath}
-                          startContent={
-                            copiedKey === key ? (
-                              <Check className="w-3 h-3" />
-                            ) : (
-                              <Copy className="w-3 h-3" />
-                            )
-                          }
                         >
-                          {copiedKey === key ? "已复制" : f.label}
-                        </Button>
-                        <QrCodeButton url={url} label={label} />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </CardBody>
-          </Card>
-        ))}
+                          {rank === 0
+                            ? "本地创建"
+                            : rank === 1
+                              ? "手动导入"
+                              : "订阅源导入"}
+                        </Chip>
+                      }
+                      title={group.title}
+                      unit="个入站"
+                      onToggle={() => toggleInboundGroup(group.key)}
+                    />
+                    {open && group.items.map(renderInboundCard)}
+                  </div>
+                );
+              })
+            ) : (
+              filteredInbounds.map(renderInboundCard)
+            )}
+          </>
+        )}
       </div>
-
       {/* 按中转单独订阅 */}
       {relays.length > 0 && (
         <div className="space-y-3">

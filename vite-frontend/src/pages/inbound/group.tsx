@@ -1,5 +1,10 @@
+import type { InboundApiItem } from "@/api/types";
+
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
+
+/** Label shown where a panel-managed inbound shows its node or kernel. */
+export const EXTERNAL_LABEL = "导入的节点";
 
 export type GroupBy = "node" | "kernel";
 
@@ -71,6 +76,52 @@ export interface Group<T> {
   key: string;
   title: string;
   items: T[];
+}
+
+export type InboundOriginFilter = "all" | "local" | "imported";
+
+/** Servers first, then hand-imported nodes, then each remote source. */
+export function groupKeyOf(i: InboundApiItem): string {
+  if (!i.external) return String(i.nodeId);
+
+  return i.sourceId ? `source:${i.sourceId}` : "external";
+}
+
+export function groupLabelOf(i: InboundApiItem): string {
+  if (!i.external) return i.nodeName || `节点 ${i.nodeId}`;
+
+  return i.sourceId ? `订阅源 · ${i.sourceName || i.sourceId}` : EXTERNAL_LABEL;
+}
+
+export function groupRank(key: string): number {
+  return key.startsWith("source:") ? 2 : key === "external" ? 1 : 0;
+}
+
+export function inboundOriginOf(
+  i: InboundApiItem,
+): Exclude<InboundOriginFilter, "all"> {
+  return i.external ? "imported" : "local";
+}
+
+export function inboundSubtitleOf(i: InboundApiItem): string {
+  if (!i.external) return `${i.protocol} · ${i.nodeName || `节点 ${i.nodeId}`}`;
+  if (i.sourceId) return `${i.protocol} · 订阅源 ${i.sourceName || i.sourceId}`;
+
+  return `${i.protocol} · 手动导入`;
+}
+
+export function inboundMatchesSearch(
+  i: InboundApiItem,
+  keyword: string,
+): boolean {
+  const kw = keyword.trim().toLowerCase();
+
+  if (!kw) return true;
+
+  return [i.name, i.nodeName, i.protocol, String(i.port), i.remark, i.sourceName]
+    .join(" ")
+    .toLowerCase()
+    .includes(kw);
 }
 
 /** Groups items by key, ordered by title so the layout stays stable. */

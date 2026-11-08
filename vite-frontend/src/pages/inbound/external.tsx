@@ -37,8 +37,7 @@ import { Switch } from "@/shadcn-bridge/heroui/switch";
 const modalBase =
   "!w-[calc(100%-32px)] !mx-auto sm:!w-full rounded-2xl overflow-hidden";
 
-/** Label shown where a panel-managed inbound shows its node or kernel. */
-export const EXTERNAL_LABEL = "导入的节点";
+export { EXTERNAL_LABEL } from "@/pages/inbound/group";
 
 /** A lone http(s) URL: a subscription that can be kept in sync. */
 function subscriptionURL(text: string): URL | null {
