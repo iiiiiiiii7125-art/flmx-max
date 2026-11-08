@@ -39,7 +39,14 @@ import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { useTargetIdemKey } from "@/hooks/useIdemKey";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { latestProbe } from "@/utils/latest-probe";
-import { GroupHeader, groupItems, useCollapsed } from "@/pages/inbound/group";
+import {
+  GroupHeader,
+  groupItems,
+  groupKeyOf,
+  groupLabelOf,
+  groupRank,
+  useCollapsed,
+} from "@/pages/inbound/group";
 import { ActionSheet } from "@/pages/inbound/action-sheet";
 import { SplitModal } from "@/pages/inbound/split-modal";
 import {
@@ -207,23 +214,6 @@ function detailRows(item: InboundApiItem): Array<[string, string]> {
   }
 
   return rows;
-}
-
-/** Servers first, then hand-imported nodes, then each remote source. */
-function groupKeyOf(i: InboundApiItem): string {
-  if (!i.external) return String(i.nodeId);
-
-  return i.sourceId ? `source:${i.sourceId}` : "external";
-}
-
-function groupLabelOf(i: InboundApiItem): string {
-  if (!i.external) return i.nodeName || `节点 ${i.nodeId}`;
-
-  return i.sourceId ? `订阅源 · ${i.sourceName || i.sourceId}` : EXTERNAL_LABEL;
-}
-
-function groupRank(key: string): number {
-  return key.startsWith("source:") ? 2 : key === "external" ? 1 : 0;
 }
 
 export default function InboundPage() {
