@@ -180,9 +180,12 @@ ensure_alpine_runtime_dependencies() {
 #   - 动作：fallocate 建 1G（不可用时退 dd）→ chmod 600 → mkswap →
 #     swapon → 按文件路径判重写 /etc/fstab 持久化；全序任一步失败
 #     即回滚半成品（已启用先 swapoff、半成品文件删除、未生效不写
-#     fstab），点名「swap 未建、OOM 风险在」并 return 1——调用方
-#     既有装机路径 return 1 只告警续装（装机主流程不因本步半途
-#     死），非交互参数路径 exit 1 中止装机。
+#     fstab），点名「swap 未建、OOM 风险在」并 return 1——全部调用
+#     方（新装 install_flmx_agent / 更新 update_flmx_agent 两函数
+#     头，非交互参数路径与菜单 1/2 均经这两函数汇入）一律只告警
+#     续行：失败只经 return 1 回传，main 以 `|| rc=$?` 收下且不据
+#     此中止后续流程。调用点全集＝本函数定义＋上述两函数头各一
+#     处，不在别处散挂。
 #   - 幂等：swapfile 已在 fstab 且已启用＝已建形态，二跑零改动；
 #     仅缺 fstab 行时只补行、不重建。
 #   - 退出开关：FLMX_SKIP_SWAP=1 跳过并明示（大小写不敏感，与
@@ -194,16 +197,22 @@ ensure_small_host_swap() {
   local swap_file="$FLMX_SWAP_FILE"
   local fstab_file="$FLMX_FSTAB_FILE"
 
-  case "${FLMX_SKIP_SWAP:-}" in
-    1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss])
-      echo "⏭️ FLMX_SKIP_SWAP 已设置，跳过小内存机 swap 检查（本机若 ≤512MB 且无 swap，OOM 风险自担；自检: swapon --show）"
-      return 0
-      ;;
-  esac
-
+  # 实读先行：退出开关分支也要带实读值与自检法输出（读失败时后续
+  # 统一判定分支同样会跳过，不在此重复处理）。
   local mem_kb="" swap_kb=""
   mem_kb=$(awk '/^MemTotal:/ {print $2}' "$meminfo_file" 2>/dev/null || true)
   swap_kb=$(awk '/^SwapTotal:/ {print $2}' "$meminfo_file" 2>/dev/null || true)
+
+  case "${FLMX_SKIP_SWAP:-}" in
+    1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss])
+      if [[ -n "$mem_kb" ]]; then
+        echo "⏭️ FLMX_SKIP_SWAP 已设置，跳过小内存机 swap 检查（本机内存实读 $(( mem_kb / 1024 ))MiB、当前 SwapTotal $(( ${swap_kb:-0} / 1024 ))MiB；本机若 ≤512MB 且无 swap，OOM 风险自担；自检: free -h; swapon --show）"
+      else
+        echo "⏭️ FLMX_SKIP_SWAP 已设置，跳过小内存机 swap 检查（本机若 ≤512MB 且无 swap，OOM 风险自担；自检: free -h; swapon --show）"
+      fi
+      return 0
+      ;;
+  esac
   if [[ -z "$mem_kb" ]]; then
     echo "⚠️ 无法实读 $meminfo_file 的 MemTotal，跳过小内存机 swap 检查（请人工自检: free -h; swapon --show）"
     return 0
@@ -1538,11 +1547,50 @@ disable_flmx_agent_service() {
   esac
 }
 
+# agent_memory_limits echoes "<MemoryHigh MiB> <MemoryMax MiB>" for
+# the agent's systemd unit, computed from this machine's MemTotal via
+# the shared memory tier table (P1-06): the soft cap itself is the
+# in-process GOMEMLIMIT the agent sets at startup (go-gost/memlimit.go
+# memoryTierFor — ≤512MiB machines: 70% of total; larger: half of
+# total, capped at 2048MiB); the unit's cgroup rungs step above it
+# (High = soft×5/4, Max = soft×3/2, Max never above total memory) so
+# the soft cap always binds first and the unit is only the hard
+# fallback. Both copies of the table are pinned to identical numbers
+# by their tests (memlimit_test.go and test-install-scripts-proxy.sh);
+# change them together. When MemTotal cannot be read, fall back to
+# the 512MiB tier rather than writing no limits at all.
+# AGENT_MEMINFO_PATH exists so the script test suite can feed
+# fixtures; production always reads /proc/meminfo.
+agent_memory_limits() {
+  local meminfo_path="${AGENT_MEMINFO_PATH:-/proc/meminfo}"
+  local total_kb total_mib soft high max
+  total_kb=$(awk '/^MemTotal:/ {print $2; exit}' "$meminfo_path" 2>/dev/null || true)
+  case "$total_kb" in
+    ''|*[!0-9]*) total_kb=524288 ;;
+  esac
+  total_mib=$((total_kb / 1024))
+  if [ "$total_mib" -le 512 ]; then
+    soft=$((total_mib * 7 / 10))
+  else
+    soft=$((total_mib / 2))
+    if [ "$soft" -gt 2048 ]; then soft=2048; fi
+  fi
+  high=$((soft * 5 / 4))
+  max=$((soft * 3 / 2))
+  if [ "$max" -gt "$total_mib" ]; then max=$total_mib; fi
+  if [ "$high" -gt "$max" ]; then high=$max; fi
+  printf '%s %s\n' "$high" "$max"
+}
+
 write_flmx_agent_service() {
   ensure_service_manager || return 1
 
   case "$SERVICE_MANAGER" in
     systemd)
+      local agent_mem_limits agent_mem_high agent_mem_max
+      agent_mem_limits=$(agent_memory_limits)
+      agent_mem_high=${agent_mem_limits%% *}
+      agent_mem_max=${agent_mem_limits##* }
       mkdir -p "$(dirname "$FLMX_AGENT_SYSTEMD_SERVICE_FILE")"
       cat > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" <<EOF
 [Unit]
@@ -1563,6 +1611,13 @@ LimitCORE=0
 # 样需要句柄上限，直接写进 unit 本体。limits.d 与 unit 两路并
 # 存、互不替代（TuneStatus 的 nofile 概要报进程真实 rlimit）。
 LimitNOFILE=1048576
+# 内存天花板（P1-06，部署层兜底）：数值由 agent_memory_limits 按
+# 本机 MemTotal 从共享档位表算出，与 agent 进程内 GOMEMLIMIT 软帽
+# （go-gost/memlimit.go）同表——High＝软帽×5/4、Max＝软帽×3/2，
+# 软帽先行收紧 GC，cgroup 两档只作硬兜底。OpenRC 无 cgroup 对应
+# 面，只靠进程内软帽。
+MemoryHigh=${agent_mem_high}M
+MemoryMax=${agent_mem_max}M
 # R17-C (R17-X-01): stdout/stderr must be retrievable — StandardOutput=null
 # discarded the agent's startup logs, so a poisoned gost.json left no
 # diagnosable failure reason. Journal keeps them queryable via
@@ -2485,6 +2540,12 @@ flmx_agent_installed_version() {
 # 更新功能
 update_flmx_agent() {
   echo "🔄 开始更新 flmx_agent..."
+
+  # H1-05: 更新路径同样先过小内存机 swap 防线：存量小内存机可能
+  # 只走更新路径、从未经过新装，swap 供给缺口只有这里能补上（全
+  # 集口径见 ensure_small_host_swap 头注）。失败只告警续行，更新
+  # 主流程不因本步半途死。
+  ensure_small_host_swap || echo "⚠️ swap 检查步未完成（见上 ❌ 行），更新继续；该机 OOM 风险未解除，请按上方人工建法处理后以 free -h; swapon --show 自检"
 
   # 布局解析（改名迁移）：新目录无 agent、存量目录有 → 该节点尚
   # 是改名前的存量布局。先对存量目录过归属守卫（AI-06 同口径），
