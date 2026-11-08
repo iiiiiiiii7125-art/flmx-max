@@ -23,6 +23,13 @@ import (
 	xrecorder "github.com/go-gost/x/recorder"
 )
 
+// udpAssociationIdleTimeout is the no-progress window the UDP
+// relay enforces for one association (F07); the control
+// connection's lifetime is bounded through it (F06). A variable
+// only so tests can shrink the window — production keeps the
+// FIX-1-aligned 300s.
+var udpAssociationIdleTimeout = 300 * time.Second
+
 func (h *socks5Handler) handleUDP(ctx context.Context, conn net.Conn, ro *xrecorder.HandlerRecorderObject, log logger.Logger) error {
 	log = log.WithFields(map[string]any{
 		"cmd": "udp",
@@ -123,9 +130,29 @@ func (h *socks5Handler) handleUDP(ctx context.Context, conn net.Conn, ro *xrecor
 
 	r := udp.NewRelay(socks.UDPConn(cc), pc).
 		WithBypass(h.options.Bypass).
-		WithLogger(log)
+		WithLogger(log).
+		WithIdleTimeout(udpAssociationIdleTimeout)
 
-	go r.Run(ctx)
+	// F06: RFC 1928 ties the association's lifetime to the TCP
+	// control connection, and the drain below (io.Copy) returns
+	// when the peer closes or resets it. That alone was not
+	// enough: a client whose application died while its kernel
+	// kept the connection up (no FIN, no RST, no data) pinned the
+	// handler, the control connection, the UDP socket and the
+	// relay goroutines forever, because nothing else ever ended
+	// the wait. The relay now ends it: Run returns when the
+	// association is over — an endpoint error, or the F07
+	// no-progress timeout after a full window of silence on the
+	// UDP leg — and closing the control connection unblocks the
+	// drain immediately, so the deferred closes reap the whole
+	// association. Progress on either leg keeps the association
+	// alive; the criterion is bidirectional progress, not
+	// connection age. No new goroutine: the relay goroutine is
+	// the one that has always run here.
+	go func() {
+		r.Run(ctx)
+		conn.Close()
+	}()
 
 	t := time.Now()
 	log.Debugf("%s <-> %s", conn.RemoteAddr(), cc.LocalAddr())
