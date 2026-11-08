@@ -152,14 +152,10 @@ var routeClassification = []routeEntry{
 
 	// ---- 管理员：requiresAdmin 前缀/精确清单 ----
 	adm("/api/v1/announcement/update"),
-	adm("/api/v1/api/v1/backup/export"), adm("/api/v1/api/v1/backup/gist/restore"),
-	adm("/api/v1/api/v1/backup/gist/save"), adm("/api/v1/api/v1/backup/gist/status"),
-	adm("/api/v1/api/v1/backup/gist/upload"), adm("/api/v1/api/v1/backup/gist/versions"),
+	adm("/api/v1/api/v1/backup/export"),
 	adm("/api/v1/api/v1/backup/import"), adm("/api/v1/api/v1/backup/import-auto-backup"),
 	adm("/api/v1/api/v1/backup/import-auto-backup/status"), adm("/api/v1/api/v1/backup/restore"),
-	adm("/api/v1/backup/export"), adm("/api/v1/backup/gist/restore"),
-	adm("/api/v1/backup/gist/save"), adm("/api/v1/backup/gist/status"),
-	adm("/api/v1/backup/gist/upload"), adm("/api/v1/backup/gist/versions"),
+	adm("/api/v1/backup/export"),
 	adm("/api/v1/backup/import"), adm("/api/v1/backup/import-auto-backup"),
 	adm("/api/v1/backup/import-auto-backup/status"), adm("/api/v1/backup/restore"),
 	adm("/api/v1/config/update"), adm("/api/v1/config/update-single"),

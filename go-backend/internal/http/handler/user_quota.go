@@ -382,10 +382,10 @@ func (h *Handler) notifyUserQuotaRecovered(userID int64, reason string) {
 // pendingQuotaRecovery is one undelivered quota-recovery notice,
 // persisted in vite_config under notifyQuotaRecoveryPendingConfigKey.
 //
-// Gen is the generation of the mark (R6-I-01), same mechanism as the
-// Gist face: every mark advances it monotonically per user, clears
-// never move it, and a Failed callback carries the generation its
-// dispatch was sent under. Records written before generations existed
+// Gen is the generation of the mark (R6-I-01): every mark advances
+// it monotonically per user, clears never move it, and a Failed
+// callback carries the generation its dispatch was sent under.
+// Records written before generations existed
 // unmarshal with Gen 0 and are advanced past by the next mark.
 type pendingQuotaRecovery struct {
 	UserID int64  `json:"userId"`
@@ -482,10 +482,9 @@ func (h *Handler) saveQuotaRecoveryGenLocked(gens map[string]int64) {
 
 // markQuotaRecoveryPending arms (or re-arms) the pending mark for one
 // user with a fresh generation and returns it. The watermark is written
-// before the list for the same reason as the Gist face: a failed list
-// write after a watermark advance is harmless, while a list written
-// ahead of the watermark could let a stale callback resurrect after a
-// success-clear.
+// before the list: a failed list write after a watermark advance is
+// harmless, while a list written ahead of the watermark could let a
+// stale callback resurrect after a success-clear.
 func (h *Handler) markQuotaRecoveryPending(userID int64, reason string) int64 {
 	if h == nil || h.repo == nil || userID <= 0 {
 		return 0
@@ -518,9 +517,8 @@ func (h *Handler) markQuotaRecoveryPending(userID int64, reason string) int64 {
 	return gen
 }
 
-// remarkQuotaRecoveryPendingIfCurrent is the quota face of the R6-I-01
-// generation guard (see remarkGistFailurePendingIfCurrent for the
-// rule): re-arm only if the record still carries gen, or the record
+// remarkQuotaRecoveryPendingIfCurrent is the R6-I-01 generation
+// guard: re-arm only if the record still carries gen, or the record
 // is gone and no newer mark for this user has been issued since gen.
 // A newer reason, or a newer generation's success-clear, makes the
 // callback stale.

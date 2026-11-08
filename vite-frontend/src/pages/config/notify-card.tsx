@@ -48,11 +48,6 @@ const NOTIFY_EVENTS = [
       "转发用户流量用到 90%、用完或 3 天内到期；分享订阅流量用到 90%、用完或 3 天内到期",
   },
   {
-    key: "backup_failed",
-    label: "Gist 备份失败",
-    description: "自动上传到 GitHub Gist 失败时提醒",
-  },
-  {
     key: "daily_report",
     label: "每日汇总",
     description: "每天定时发一条：节点在线、出错、流量、分享订阅",
@@ -163,8 +158,8 @@ export function NotifyCard({
   );
 
   // R7-L8-03 写-only 凭据字段：后端 config/get 对全角色 403、
-  // config/list 删除这三键，表单永不回填已保存值（gist tokenHint
-  // 形态）——configs 里该键缺席＝未改动（留空保留）；输入非空＝
+  // config/list 删除这三键，表单永不回填已保存值——configs 里
+  // 该键缺席＝未改动（留空保留）；输入非空＝
   // 替换；键在场且为空＝已显式清除（或输入后删空），保存时以空
   // 值下发删除已保存值（后端对三键按可清除键处理）。发送测试时
   // 留空由后端回退到已保存值（notify/test 的 saved 回退口径）。

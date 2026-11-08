@@ -92,7 +92,7 @@ const (
 	// the parity relief (same value as update); the work itself
 	// remains uncapped.
 	tunnelCreateWriteDeadline = 300 * time.Second
-	// Backup import/restore/export and gist restore/upload perform
+	// Backup import/restore/export perform
 	// size-proportional work (a full export/import scales with the
 	// backup and the fleet). The magnitude follows the gh-mirror
 	// precedent; the relief extends write patience only. The import

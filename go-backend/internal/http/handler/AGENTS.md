@@ -26,7 +26,6 @@ handler/
 ├── node_*.go               # Node surfaces: install/uninstall, latency, route, traffic, tune, status reconcile
 ├── subscription*.go        # Subscription delivery, front URLs, metering, templates, traffic
 ├── system_upgrade.go       # Panel self-upgrade API (+ upgrade.go node upgrade)
-├── gist_backup.go          # Gist backup/restore
 ├── passkey.go              # Passkey (WebAuthn) login
 └── ...                     # Remaining single-area files (notify, realm, storage, user_*, tunnel_*, nftables_*, …)
 ```

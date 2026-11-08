@@ -142,7 +142,9 @@ func TestR1C15UpdatePasswordSameValueRejected(t *testing.T) {
 }
 
 // R1-C15 / B14-002：备份端点全集的双前缀别名必须与正常前缀覆盖一致。
-// 清单与 handler.go 中备份路由注册表一一对应（10 条 × 2 前缀）；任一路径
+// 清单与 handler.go 中备份路由注册表一一对应（5 条 × 2 前缀；Gist 五
+// 端点已随 2.1.0 Gist 备份下线移除，404 断言见 handler 包
+// TestGistRoutesRemoved）；任一路径
 // 不得再返回 Go ServeMux 的裸文本 404，必须走 handler（信封或备份载荷）。
 func TestR1C15BackupDoublePrefixAliasesComplete(t *testing.T) {
 	const secret = "c15-jwt-secret"
@@ -164,11 +166,6 @@ func TestR1C15BackupDoublePrefixAliasesComplete(t *testing.T) {
 		{"/api/v1/backup/export", http.MethodPost, `{"types":["configs"]}`},
 		{"/api/v1/backup/import-auto-backup", http.MethodGet, ""},
 		{"/api/v1/backup/import-auto-backup/status", http.MethodGet, ""},
-		{"/api/v1/backup/gist/status", http.MethodPost, `{}`},
-		{"/api/v1/backup/gist/save", http.MethodPost, `{}`},
-		{"/api/v1/backup/gist/upload", http.MethodPost, `{}`},
-		{"/api/v1/backup/gist/versions", http.MethodPost, `{}`},
-		{"/api/v1/backup/gist/restore", http.MethodPost, `{`},
 		{"/api/v1/backup/import", http.MethodPost, `{`},
 		{"/api/v1/backup/restore", http.MethodPost, `{`},
 	}

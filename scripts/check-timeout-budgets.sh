@@ -272,7 +272,6 @@ STREAM_S=""
 be_literal_anchor() {
   case "$1" in
     T006) grep -qP '"RollbackAgent".*,\s*30\s*\*\s*time\.Second' "$HANDLER_DIR/upgrade.go" && echo 30 ;;
-    T010) grep -qP 'WithTimeout\(ctx,\s*60\s*\*\s*time\.Second\)' "$HANDLER_DIR/gist_backup.go" && echo 60 ;;
     T017|T018|T024|T061|T062|T063) grep -qP 'WithTimeout\(ctx,\s*20\s*\*\s*time\.Second\)' "$HANDLER_DIR/kernel_external.go" && echo 20 ;;
     A001) grep -oP 'downloadTimeout\s*=\s*\K4\s*\*\s*time\.Minute' "$ROOT/go-gost/x/kernel/install.go" >/dev/null && echo 240 ;;
   esac

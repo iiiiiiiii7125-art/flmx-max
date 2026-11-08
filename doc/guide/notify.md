@@ -14,7 +14,6 @@
 | 节点即将到期 | 节点设置了到期时间，到期前 3 天内提醒一次（在节点页关掉到期提醒的节点不会提醒） |
 | 用户流量 / 到期 | 转发用户流量用到 90%、用完，或 3 天内到期；[分享订阅](./subscription.md#流量上限) 流量用到 90%、用完，或 3 天内到期；用户[日/月配额](./forward.md#日-月配额)用到 90%、用完时同样提醒，配额解除（窗口滚动或手动重置）后发一条恢复 |
 | 每日汇总 | 每天在设定的时间发一条：节点在线数、内核出错数、导入节点连不上的数量、入站和转发流量、分享订阅情况、日/月配额超额用户数（无超额时不显示该行） |
-| Gist 备份失败 | [Gist 备份](./gist-backup.md)定时上传失败时提醒，失败详情见 Gist 状态里的 `lastError` |
 
 同一个问题只提醒一次，恢复后才会再次提醒。不想收的事件取消勾选即可。全部取消时，后端会把事件配置 `none` 视为"不启用任何事件"（O8-006 兼容说明：旧版本前端就是靠这个字面量表示全不选的）。
 
@@ -60,7 +59,7 @@
 }
 ```
 
-- `event`：`node_offline`、`inbound_down`、`kernel_error`、`node_expiry`、`user_quota`、`daily_report`、`latency_bad`（延迟/丢包异常与恢复）、`route_change`（回程线路变化）、`backup_failed`（Gist 备份失败），测试消息是 `test`
+- `event`：`node_offline`、`inbound_down`、`kernel_error`、`node_expiry`、`user_quota`、`daily_report`、`latency_bad`（延迟/丢包异常与恢复）、`route_change`（回程线路变化），测试消息是 `test`
 - `text`：拼好的完整文本，直接转发给企业微信、钉钉、Bark、Server 酱等服务时用它即可
 - `time`：毫秒级 Unix 时间戳（数字，不是格式化字符串）；带时区的格式化时间在 `text` 字段里
 - 返回 2xx 视为发送成功

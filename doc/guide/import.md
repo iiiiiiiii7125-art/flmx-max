@@ -56,7 +56,7 @@
 - `FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true`：放行所有私网地址（不推荐）
 - `FLMX_FETCH_PRIVATE_ALLOWLIST=192.168.0.0/16,10.0.0.0/8`：仅放行指定 CIDR（推荐）
 
-**设置位置与生效方法**：这两个变量是**后端进程的环境变量**。随版 `docker-compose.yml` 的 `backend` 服务 `environment:` 段默认**没有**它们的传递行——只把变量写进部署目录的 `.env` 文件**不会生效**（后端读的是进程环境，不是 `.env` 文件本身）。正确做法：在部署目录的 `docker-compose.yml` 里给 `backend` 服务补上对应传递行（写字面量，或写 `- FLMX_FETCH_PRIVATE_ALLOWLIST=${FLMX_FETCH_PRIVATE_ALLOWLIST}` 再把值放进同目录 `.env`），保存后执行 `docker compose up -d backend` 重建后端容器才生效。自检：`docker exec <后端容器> printenv FLMX_FETCH_PRIVATE_ALLOWLIST` 能打印出所设值，即已进入后端进程；打印为空就是传递行没补对。全部 `FLMX_FETCH_*` 变量与 `FLMX_GIST_API_BASE` 均为同一口径。
+**设置位置与生效方法**：这两个变量是**后端进程的环境变量**。随版 `docker-compose.yml` 的 `backend` 服务 `environment:` 段默认**没有**它们的传递行——只把变量写进部署目录的 `.env` 文件**不会生效**（后端读的是进程环境，不是 `.env` 文件本身）。正确做法：在部署目录的 `docker-compose.yml` 里给 `backend` 服务补上对应传递行（写字面量，或写 `- FLMX_FETCH_PRIVATE_ALLOWLIST=${FLMX_FETCH_PRIVATE_ALLOWLIST}` 再把值放进同目录 `.env`），保存后执行 `docker compose up -d backend` 重建后端容器才生效。自检：`docker exec <后端容器> printenv FLMX_FETCH_PRIVATE_ALLOWLIST` 能打印出所设值，即已进入后端进程；打印为空就是传递行没补对。全部 `FLMX_FETCH_*` 变量均为同一口径。
 
 **风险说明**：放行私网地址会允许面板服务器访问内网资源。请确保订阅源可信，并注意：
 - 云元数据地址（`169.254.169.254`）在任何配置下都被拒绝

@@ -173,7 +173,7 @@ func TestConfigPolicyFullTableEnumeration(t *testing.T) {
 		"hide_footer_brand", "is_commercial", "login_bg_image",
 	)
 	wantSensitive := keySet(
-		"cloudflare_secret_key", "gist_password", "gist_token",
+		"cloudflare_secret_key",
 		"jwt_secret", "license_expiry", "license_key",
 		"license_machine_id", "machine_fingerprint", "node_sub_token",
 		"notify_telegram_api_base", "notify_telegram_bot_token",
@@ -201,9 +201,7 @@ func TestConfigPolicyFullTableEnumeration(t *testing.T) {
 		"monitor_tunnel_quality_interval_sec",
 	)
 	wantSystemManaged := keySet(
-		"gist_id", "gist_interval_hours", "gist_last_at",
-		"gist_last_error", "gist_last_hash", "gist_last_upload",
-		"gist_password", "gist_token", "is_commercial",
+		"is_commercial",
 		"license_expiry", "license_key", "license_machine_id",
 		"machine_fingerprint", "node_sub_token",
 	)

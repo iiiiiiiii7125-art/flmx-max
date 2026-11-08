@@ -3780,7 +3780,7 @@ const MaxImportUserPasswordHashes = 1000
 
 // ValidateBackupImportUserHashBudget 统计所选段为 users 时备份中
 // 需重新哈希口令的用户行数，超限返回错误。Repository.Import 在
-// 进事务前调用；本地导入与 Gist 恢复两个 handler 入口在取
+// 进事务前调用；本地导入的 handler 入口在取
 // backupImportMu 之前亦先行调用，使拒绝不占锁、不进事务、
 // 不烧任何哈希。计数只看口令形态（逐行是否最终被跳过由
 // importUsers 的行级校验另判，预算从严计全集）。
@@ -4890,8 +4890,8 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 			continue
 		}
 		// R8-07（H-F3-02）：恢复面补 R7-04 空段集谓词——零有效目标
-		// 与写面同口径逐行跳过 + warning，不整批中止。本地导入与
-		// gist 恢复共用本路径，一处修两面通；修复前版本落库的零
+		// 与写面同口径逐行跳过 + warning，不整批中止。本地导入
+		// 共用本路径；修复前版本落库的零
 		// 目标行不得借备份迁移绕过新门重入（重入行占端口且在补正
 		// 目标前被更新面冻结）。R9-09 起零目标按归一后有效段集计
 		// （remoteAddrHasNoTargets 镜像写面新定义）："#"、纯 scheme、
@@ -4952,8 +4952,7 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 		}
 		// R4-F3-01（F4-01）：realm 策略门镜像写面——realm 隧道＋多
 		// 目标非 {round, hash} 逐行跳过 + warning（R8-07 同口径，
-		// 不整批中止）；本地导入与 Gist 恢复共用本路径，一处修两
-		// 面通。此前唯独本面无门，恢复落库后渲染层静默改写轮询、
+		// 不整批中止）；本地导入共用本路径。此前唯独本面无门，恢复落库后渲染层静默改写轮询、
 		// 且经正常编辑面又会被合并值判定拒绝（恢复得进、改不动、
 		// 跑不对）。
 		engine, err := tunnelEngineOf(f.TunnelID)
@@ -6036,7 +6035,7 @@ func getUserTunnelByID(db *gorm.DB, id int64) (*model.UserTunnel, error) {
 
 // ─── Migration ───────────────────────────────────────────────────────
 
-const currentSchemaVersion = 7
+const currentSchemaVersion = 8
 
 var ensurePostgresIDDefaultsFn = ensurePostgresIDDefaults
 var migrateViteConfigValueColumnTypeFn = migrateViteConfigValueColumnType
@@ -6044,6 +6043,7 @@ var migrateSpeedLimitTunnelBindingFn = migrateSpeedLimitTunnelBinding
 var migratePostgresTrafficInt64ColumnsFn = migratePostgresTrafficInt64Columns
 var migrateTunnelMetricBucketUniqueIndexFn = migrateTunnelMetricBucketUniqueIndex
 var migrateConfigKeyCaseShadowsFn = migrateConfigKeyCaseShadows
+var migrateRemoveGistConfigKeysFn = migrateRemoveGistConfigKeys
 
 // getSchemaVersion 读取 schema_version 当前版本。仅「表在但无行」
 // （ErrRecordNotFound）走建行回 0 的新库分支；其余读错误一律上抛
@@ -6148,12 +6148,49 @@ func migrateSchema(db *gorm.DB) error {
 		}
 	}
 
+	if ver < 8 {
+		if err := migrateRemoveGistConfigKeysFn(db); err != nil {
+			return err
+		}
+	}
+
 	// X01-002：版本推进失败必须让 migrateSchema 报错、启动显式失败，
 	// 与本函数其余迁移步骤（及 autoMigrateAll / migrateSubscriptions
 	// 在 Open/OpenPostgres 的处置）同口径——迁移已执行而版本未落库
 	// 时静默成功，下次启动会把整批迁移当作未执行重跑且无人知晓。
 	if err := setSchemaVersion(db, currentSchemaVersion); err != nil {
 		return err
+	}
+	return nil
+}
+
+// migrateRemoveGistConfigKeys 删除 2.1.0 随 Gist 备份功能下线而失活
+// 的配置行：8 个 gist_* 键（设置与运行态）与 Gist 失败通知台账两键。
+// 功能代码删除后这些行无人读写，留置即残留（且其中 gist_token 是
+// GitHub 凭据本体），按「删除不留残留」口径在 schema v8 迁移里删净；
+// 幂等，键不存在时无副作用。本地备份/恢复与自动快照的键不在此列。
+func migrateRemoveGistConfigKeys(db *gorm.DB) error {
+	if db == nil {
+		return errors.New("nil db")
+	}
+	keys := []string{
+		"gist_token",
+		"gist_password",
+		"gist_id",
+		"gist_interval_hours",
+		"gist_last_at",
+		"gist_last_upload",
+		"gist_last_error",
+		"gist_last_hash",
+		"notify_gist_failure_pending",
+		"notify_gist_failure_pending_gen",
+	}
+	if err := db.Where("name IN ?", keys).Delete(&model.ViteConfig{}).Error; err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "no such table") || (strings.Contains(msg, "relation") && strings.Contains(msg, "does not exist")) {
+			return nil
+		}
+		return fmt.Errorf("remove gist config keys: %w", err)
 	}
 	return nil
 }

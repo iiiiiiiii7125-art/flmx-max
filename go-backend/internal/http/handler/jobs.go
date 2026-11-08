@@ -27,7 +27,9 @@ func (h *Handler) StartBackgroundJobs() {
 	// DB-3：重连重测队列须在 jobsStarted 置位前就绪，onNodeOnline 的
 	// scheduleNodeReconnectProbe 在锁内读它。
 	h.reconnectProbes = newNodeReconnectProbeQueue()
-	h.jobsWG.Add(18)
+	// 计数必须与下方 go h.run* 循环全集逐一对应（增删循环同步改）：
+	// 2.1.0 删 Gist 定时循环后 18 → 17（DEV-RM-GIST）。
+	h.jobsWG.Add(17)
 	h.jobsMu.Unlock()
 
 	// R4B03-001 启动清扫腿：同步复位上个进程周期残留的僵尸在线
@@ -60,9 +62,6 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runNotifyLoop(ctx)
 	go h.runSubscriptionLoop(ctx)
 	go h.runRemoteSourceLoop(ctx)
-	// PORT-3342/B1：Gist 备份定时循环（默认关闭：未填令牌或间隔 0
-	// 时 gistDue 恒 false，不产生任何上传）。
-	go h.runGistBackupLoop(ctx)
 }
 
 func (h *Handler) runFederationCleanupRetryLoop(ctx context.Context) {

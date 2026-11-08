@@ -767,66 +767,6 @@ export const downloadImportAutoBackup = async () => {
   window.URL.revokeObjectURL(url);
 };
 
-// PORT-3342/B1：备份上传 GitHub Gist（后端 /api/v1/backup/gist/*）。
-// status 不含令牌与密码，只给 tokenHint；令牌/密码只经 save 上行。
-export interface GistBackupStatus {
-  configured: boolean;
-  tokenHint: string;
-  encrypted: boolean;
-  intervalHours: number;
-  gistUrl: string;
-  lastAt: number;
-  lastUpload: number;
-  lastError: string;
-}
-
-export interface GistBackupSavePayload {
-  token: string;
-  password: string;
-  intervalHours: number;
-  clearToken?: boolean;
-  clearPassword?: boolean;
-}
-
-export interface GistBackupUploadResult {
-  uploaded: boolean;
-  message: string;
-}
-
-export const getGistBackupStatus = () =>
-  Network.post<GistBackupStatus>("/backup/gist/status", {});
-
-export const saveGistBackup = (data: GistBackupSavePayload) =>
-  Network.post<GistBackupStatus>("/backup/gist/save", data);
-
-export const uploadGistBackup = () =>
-  Network.post<{ result: GistBackupUploadResult; status: GistBackupStatus }>(
-    "/backup/gist/upload",
-    {},
-    { timeout: 120000 },
-  );
-
-// PORT-3342/G-frontend：Gist 版本列表 + 恢复接线点（在 B1 三 API 基础上补齐）。
-// versions 端点由 G-后端批落定；restore 端点与恢复执行链归 G-恢复链批，
-// 本批只导出函数供集成时接线，恢复弹窗确认按钮暂不调用 restoreGistBackup。
-export interface GistBackupVersion {
-  version: string;
-  committedAt: number;
-}
-
-export const getGistBackupVersions = () =>
-  // R8-T-03：后端为单次 gist 调用、逐调用 ctx 60s，前端须 ≥90s。
-  Network.post<GistBackupVersion[]>("/backup/gist/versions", {}, { timeout: 90_000 });
-
-export const restoreGistBackup = (data: {
-  version: string;
-  password: string;
-}) =>
-  // R8-T-02 元素 (a)：下载腿 ≤120s（两次串行 gist 调用）叠同落点导入
-  // （无界），与本地恢复统一 30 分钟口径；ctx 语义与本地导入同口径
-  //（B14-001 裁决④的机制扩展）：下载/准备相位绑请求 ctx 可取消，
-  // 进入 ImportContext 写入相位后解绑整单跑完，见 importBackup 注。
-  Network.post("/backup/gist/restore", data, { timeout: 1_800_000 });
 
 export interface AnnouncementData {
   content: string;

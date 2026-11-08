@@ -4,8 +4,8 @@ import { Button } from "@/shadcn-bridge/heroui/button";
 // importWarnings 里逐项点名被忽略/跳过的数据（含已移除的
 // tunnelGroups/userGroups/permissions/nodeGroups 段与订阅 groupIds），
 // 并带删除屏蔽恢复数、SSH 配置恢复节点清单与转发重推失败节点清单。
-// 此前 UI 只报警告条数、Gist 恢复整份回执零消费，点名内容在面板里
-// 不可达。本组件把回执关键面全文呈现，本地导入与 Gist 恢复共用。
+// 此前 UI 只报警告条数，点名内容在面板里不可达。本组件把回执
+// 关键面全文呈现，供本地导入使用。
 
 const asNumber = (v: unknown): number =>
   typeof v === "number" && Number.isFinite(v) ? v : 0;

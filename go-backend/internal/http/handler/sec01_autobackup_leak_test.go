@@ -12,7 +12,7 @@ import (
 	"go-backend/internal/store/repo"
 )
 
-// SEC-01：backupImport / gistBackupRestore 的回执不得内嵌导入前全量快照
+// SEC-01：backupImport 的回执不得内嵌导入前全量快照
 // （ImportResult.autoBackup）。快照是整库导出，含真实凭据——用户密码
 // hash、节点 secret、配置 token；把它放进 API 回执即向任何能调该接口
 // 的调用方（及一切记录回执的日志）泄露凭据。以下标记串均为合成测试值，
@@ -64,8 +64,8 @@ func assertSEC01ReceiptClean(t *testing.T, body string) {
 
 // 文件导入入口：回执不得含导入前快照。
 func TestSEC01BackupImportReceiptMustNotContainAutoBackup(t *testing.T) {
-	h := setupGistTest(t)
-	r := gistTestRepo(t, h)
+	h := setupHandlerTestRepo(t)
+	r := handlerTestRepo(t, h)
 	seedSEC01Credentials(t, r)
 
 	// 导入体只含一个普通 configs 键，不含任何标记串。
@@ -84,23 +84,6 @@ func TestSEC01BackupImportReceiptMustNotContainAutoBackup(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil || env.Code != 0 {
 		t.Fatalf("backupImport code = %d err = %v body = %s", env.Code, err, rec.Body.String())
-	}
-	assertSEC01ReceiptClean(t, rec.Body.String())
-}
-
-// Gist 恢复入口：回执同样不得含导入前快照。
-func TestSEC01GistRestoreReceiptMustNotContainAutoBackup(t *testing.T) {
-	h := setupGistTest(t)
-	r := gistTestRepo(t, h)
-	seedGistRestoreConfigs(t, r)
-	seedSEC01Credentials(t, r)
-
-	// 恢复体只含一个普通 configs 键，不含任何标记串。
-	gistRestoreMockServer(t, []byte(`{"version":"1.0","configs":{"imported_probe_key":"plain-value"}}`))
-	rec := callGistRestore(t, h, "ver-1", "")
-	code, msg, _ := decodeGistRestore(t, rec)
-	if code != 0 {
-		t.Fatalf("gist restore code = %d msg = %q body = %s", code, msg, rec.Body.String())
 	}
 	assertSEC01ReceiptClean(t, rec.Body.String())
 }

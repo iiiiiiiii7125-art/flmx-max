@@ -72,7 +72,7 @@ func TestFederationSyncErrorCode(t *testing.T) {
 	}
 }
 
-// R1-07-F4 回归钉：本地导入未知字段点名提取 + Gist 恢复未知顶层段
+// R1-07-F4 回归钉：本地导入未知字段点名提取 + 未知顶层段
 // 机械普查（已知集由 BackupData 结构体反射推导）。
 func TestUnknownFieldNaming(t *testing.T) {
 	var dst struct {
@@ -89,14 +89,5 @@ func TestUnknownFieldNaming(t *testing.T) {
 	}
 	if got := unknownJSONFieldName(errors.New("some other error")); got != "" {
 		t.Fatalf("unknownJSONFieldName(other) = %q, want empty", got)
-	}
-
-	plain := []byte(`{"exportedAt":1,"version":"1.0","bogusSegment":[],"anotherNew":{}}`)
-	unknown := unknownBackupTopLevelKeys(plain)
-	if len(unknown) != 2 || unknown[0] != "anotherNew" || unknown[1] != "bogusSegment" {
-		t.Fatalf("unknownBackupTopLevelKeys = %v, want [anotherNew bogusSegment]", unknown)
-	}
-	if got := unknownBackupTopLevelKeys([]byte(`{"exportedAt":1,"forwards":[]}`)); len(got) != 0 {
-		t.Fatalf("clean backup must have no unknown keys, got %v", got)
 	}
 }

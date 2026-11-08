@@ -79,9 +79,9 @@ export function switchDemoRole(role: DemoRole) {
  * 同理 tunnel/delete-preview 与 tunnel/batch-delete-preview 是带
  * 数据的预览读、由 deletePreviewAnswer 先于词表合成（见下两函数）。
  * R4-C5-01/02/03 同族：node/install、subscription/template/refresh、
- * backup/import、backup/gist/restore、inbound/import、backup/export、
+ * backup/import、inbound/import、backup/export、
  * subscription/source/refresh、monitor/services/run、
- * federation/node/import 与 backup/gist/save（echo 形状不符）的回执
+ * federation/node/import 的回执
  * 均由 receiptAnswer 先于词表按真实形状合成（见该函数头注）。
  * RR4-C5-02/I03 续：user/login（登录表单实读 data，词表 data:null 与
  * 之相撞）与 backup/import-auto-backup 两端点（导入/恢复后的有状态
@@ -384,9 +384,6 @@ const listOf = (book: Record<string, Entry[]>, k: string) =>
  *    in the request body), with the removed group segments counted
  *    as *Ignored and named in importWarnings in the backend's own
  *    wording — a zero-skip receipt for current-format files;
- *  - backup/gist/restore: the same receipt shape, counted from the
- *    recorded lists (the demo's own data set is what a restore of
- *    the demo backup would bring back);
  *  - inbound/import: one created id per non-empty pasted line;
  *  - subscription/source/refresh: a zero-change sync result;
  *  - monitor/services/run: one successful result row (the demo has
@@ -395,10 +392,6 @@ const listOf = (book: Record<string, Entry[]>, k: string) =>
  *    sample);
  *  - federation/node/import: a fresh import whose peer version is
  *    the recorded book's latest version, with no version warning;
- *  - backup/gist/save: a GistBackupStatus built from the recorded
- *    status plus the submitted token/password/interval semantics
- *    (the save echo previously returned the raw request body, which
- *    the page applied as an unconfigured status).
  * backup/export is not an envelope at all: it returns a download
  * marker the adapter turns into an attachment response (see
  * demoAdapter), carrying a backup file assembled from the recorded
@@ -488,8 +481,8 @@ function importReceipt(
 }
 
 /**
- * RR4-C5-I03：导入前自动备份在真实面是服务端状态——本地导入与 Gist
- * 恢复都先把导入前状态落服务端快照（留存 24h，仅管理员经 status /
+ * RR4-C5-I03：导入前自动备份在真实面是服务端状态——本地导入
+ * 先把导入前状态落服务端快照（留存 24h，仅管理员经 status /
  * download 两端点取用）。演示无服务端：导入/恢复合成时把「导入前」
  * 的录制状态按 export 形状留一份在页面会话内，使状态面与下载入口在
  * 演示里同样可达；整页刷新后模块状态重置、回落录制的 exists:false
@@ -624,31 +617,6 @@ function backupImportAnswer(
     );
 
   return importReceipt(counts, warnings);
-}
-
-function gistRestoreAnswer(bare: string, book: Record<string, Entry[]>) {
-  if (bare !== "backup/gist/restore") return null;
-  // 真实面 Gist 恢复与本地导入同口径：恢复前先落导入前快照（I03）。
-  rememberImportAutoBackup(book);
-  const n = (k: string) => listOf(book, k).length;
-
-  return importReceipt(
-    {
-      usersImported: n("user/list"),
-      nodesImported: n("node/list"),
-      tunnelsImported: n("tunnel/list"),
-      forwardsImported: n("forward/list"),
-      speedLimitsImported: n("speed-limit/list"),
-      userSubscriptionsImported: n("user-subscription/list"),
-      serviceMonitorsImported: n("monitor/services"),
-      inboundKernelsImported: n("kernel/list"),
-      inboundsImported: n("inbound/list"),
-      inboundRelaysImported: n("inbound/relay/list"),
-      inboundSourcesImported: n("subscription/source/list"),
-      inboundTemplatesImported: n("subscription/template/list"),
-    },
-    [],
-  );
 }
 
 // RR4-C5-I02：真实面逐行解析（kernel.ParseImport 的 parseLines）、失败
@@ -793,58 +761,6 @@ function federationImportAnswer(bare: string, book: Record<string, Entry[]>) {
   return { code: 0, msg: "操作成功", data, ts: Date.now() };
 }
 
-function gistSaveAnswer(
-  bare: string,
-  body: unknown,
-  book: Record<string, Entry[]>,
-) {
-  if (bare !== "backup/gist/save") return null;
-  const req = parseBody(body);
-  const prev = (book["backup/gist/status"]?.[0]?.res.data ?? {}) as Record<
-    string,
-    unknown
-  >;
-  const uploaded = book["backup/gist/upload"]?.[0]?.res.data as
-    | { status?: Record<string, unknown> }
-    | undefined;
-  const status: Record<string, unknown> = {
-    configured: false,
-    tokenHint: "",
-    encrypted: false,
-    intervalHours: 0,
-    gistUrl: "",
-    lastAt: 0,
-    lastUpload: 0,
-    lastError: "",
-    ...prev,
-  };
-
-  if (req.clearToken === true) {
-    status.configured = false;
-    status.tokenHint = "";
-    status.gistUrl = "";
-    // RR4-C5-I01：与后端 R3-F6-O2 同口径——清令牌必须联动间隔归零，
-    // 且下方按请求值写 intervalHours 时不得把 0 又覆回残存间隔（防日后
-    // 填回令牌时自动上传按残存间隔静默复活）。
-    status.intervalHours = 0;
-  } else if (typeof req.token === "string" && req.token) {
-    const t = req.token;
-
-    status.configured = true;
-    status.tokenHint =
-      t.length >= 8 ? `${t.slice(0, 4)}••••••••${t.slice(-4)}` : "••••••••";
-    if (!status.gistUrl && uploaded?.status?.gistUrl)
-      status.gistUrl = uploaded.status.gistUrl;
-  }
-  if (req.clearPassword === true) status.encrypted = false;
-  else if (typeof req.password === "string" && req.password)
-    status.encrypted = true;
-  if (req.clearToken !== true && typeof req.intervalHours === "number")
-    status.intervalHours = req.intervalHours;
-
-  return { code: 0, msg: "操作成功", data: status, ts: Date.now() };
-}
-
 function exportAnswer(
   bare: string,
   body: unknown,
@@ -891,23 +807,6 @@ function exportAnswer(
   };
 }
 
-/**
- * Gist versions: the recording holds an empty list (a seeded panel
- * has no real Gist to list), which leaves the restore entry point
- * unrendered and the whole restore surface unreachable in the demo.
- * Same precedent as the synthesized upload fixture: present the one
- * version the demo's own upload produced, stamped an hour ago.
- */
-function gistVersionsAnswer(bare: string) {
-  if (bare !== "backup/gist/versions") return null;
-
-  return {
-    code: 0,
-    msg: "操作成功",
-    data: [{ version: "demo-v1", committedAt: Date.now() - 3600_000 }],
-    ts: Date.now(),
-  };
-}
 
 /**
  * RR4-C5-02：user/login 在词表里是写，但登录表单是它 data 的真实消费
@@ -1018,17 +917,14 @@ function receiptAnswer(
 ) {
   return (
     loginAnswer(bare, body) ??
-    gistVersionsAnswer(bare) ??
     installAnswer(bare, body) ??
     templateRefreshAnswer(bare, body, book) ??
     backupImportAnswer(bare, body, book) ??
-    gistRestoreAnswer(bare, book) ??
     inboundImportAnswer(bare, body) ??
     sourceRefreshAnswer(bare, body, book) ??
     serviceRunAnswer(bare, body, book) ??
     batchAnswer(bare, body) ??
     federationImportAnswer(bare, book) ??
-    gistSaveAnswer(bare, body, book) ??
     importAutoBackupStatusAnswer(bare) ??
     importAutoBackupDownloadAnswer(bare) ??
     exportAnswer(bare, body, book)

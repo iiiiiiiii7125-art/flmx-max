@@ -44,7 +44,6 @@ import {
 } from "@/api";
 import { BackIcon, SettingsIcon } from "@/components/icons";
 import { NotifyCard } from "@/pages/config/notify-card";
-import { GistBackup } from "@/pages/config/gist-backup";
 import { BackupImportReceiptPanel } from "@/pages/config/import-receipt";
 import { LatencySettings } from "@/pages/config/latency-card";
 import { SubFrontSettings } from "@/pages/config/sub-front-card";
@@ -98,7 +97,7 @@ interface ConfigItem {
   type: "input" | "password" | "switch" | "select" | "bg_image";
   // 写-only 凭据字段（R7-L8-03）：后端 config/get 对全角色 403、
   // config/list 删除该键，表单永不回填已保存值——留空＝保留、
-  // 输入＝替换、显式清除并保存＝删除已保存值（gist tokenHint 形态）。
+  // 输入＝替换、显式清除并保存＝删除已保存值。
   writeOnly?: boolean;
   options?: { label: string; value: string; description?: string }[];
   dependsOn?: string; // 依赖的配置项key
@@ -2367,13 +2366,6 @@ export default function ConfigPage() {
             )}
           </div>
 
-          {/* PORT-3342/B1：Gist 上传（仅管理员；组件内 status 未加载时亦不渲染）。 */}
-          {isAdmin() && (
-            <>
-              <Divider />
-              <GistBackup />
-            </>
-          )}
         </CardBody>
       </Card>
 

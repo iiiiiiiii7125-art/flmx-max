@@ -51,12 +51,6 @@ var sensitiveConfigKeys = map[string]struct{}{
 	"notify_telegram_chat_id":   {},
 	"notify_telegram_api_base":  {},
 	"notify_webhook_url":        {},
-	// PORT-3342/B1：Gist 备份凭据（与上游一致）。非管理员经
-	// config/list 与 config/get 均不可见；管理员经 config/list 亦
-	// 不可见（handler.getConfigs 另行删除），只走 gist/status 的
-	// tokenHint。
-	"gist_token":    {},
-	"gist_password": {},
 }
 
 // requiredConfigKeys carry a mandatory value domain: submitting an empty
@@ -92,18 +86,6 @@ var systemManagedConfigKeys = map[string]struct{}{
 	"is_commercial":       {},
 	"machine_fingerprint": {},
 	"node_sub_token":      {},
-	// PORT-3342/B1：Gist 备份设置与运行态（与上游一致）：只能经
-	// 专用的 gist/save、gist/upload 端点写入，通用 config/update
-	// 拒绝；且 FilterBackupConfigs 据此把它们排除在备份 configs
-	// 段之外——恢复旧备份不会覆盖当前 Gist 设置、凭据不进备份文件。
-	"gist_token":          {},
-	"gist_password":       {},
-	"gist_id":             {},
-	"gist_interval_hours": {},
-	"gist_last_at":        {},
-	"gist_last_upload":    {},
-	"gist_last_error":     {},
-	"gist_last_hash":      {},
 }
 
 // authenticatedConfigKeys 是现行在用、但既非公开品牌键也非凭据的
@@ -243,14 +225,9 @@ var backupRuntimeExcludedConfigKeys = map[string]struct{}{
 	// 依据），不是管理员配置——随备份往返会在恢复旧备份时把已
 	// 送达过的恢复通知在目标实例上重发一遍。
 	"notify_quota_recovery_pending": {},
-	// R2-I-02：待发 Gist 备份失败通知是运行时台账（上传失败时发送
-	// 失败的补发依据），不是管理员配置——随备份往返会在恢复旧备份
-	// 时把已过时的失败通知在目标实例上重发一遍。
-	"notify_gist_failure_pending": {},
-	// R6-I-01：两待发标记的世代水位与标记本身同为运行时台账——
+	// R6-I-01：待发标记的世代水位与标记本身同为运行时台账——
 	// 随备份往返会在恢复旧备份时把水位回滚，使旧回调在目标实例上
 	// 重新满足“同代”条件而复活过时消息。
-	"notify_gist_failure_pending_gen":   {},
 	"notify_quota_recovery_pending_gen": {},
 }
 
@@ -284,7 +261,7 @@ func isBackupFilterExemptConfigKey(name string) bool {
 }
 
 // filterBackupConfigSet 是备份 configs 段过滤的共用骨架：凭据
-// 明单、systemManaged（凭据与 Gist 设置/运行态）与运行时台账三组
+// 明单、systemManaged（凭据与系统托管运行态）与运行时台账三组
 // 恒排除；excludeDefaultSensitive 决定是否再叠加 PolicyForConfig
 // 的默认敏感口径（导出面叠加、导入面不叠加，见两包装函数注释）。
 func filterBackupConfigSet(in map[string]string, excludeDefaultSensitive bool) map[string]string {
@@ -315,8 +292,8 @@ func filterBackupConfigSet(in map[string]string, excludeDefaultSensitive bool) m
 	return out
 }
 
-// FilterBackupConfigs 是备份**导出**面（本地备份导出与 Gist 上传
-// 共用同一过滤）的 configs 段过滤：在共用骨架上叠加
+// FilterBackupConfigs 是备份**导出**面（本地备份导出）的
+// configs 段过滤：在共用骨架上叠加
 // PolicyForConfig 的默认敏感口径——未知/legacy 键不进备份明文；
 // 设计豁免前缀族（pending_realm_settle:*）显式保留。
 func FilterBackupConfigs(in map[string]string) map[string]string {
