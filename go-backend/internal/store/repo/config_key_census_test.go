@@ -61,7 +61,7 @@ import (
 //     该形态涉及的键均另有 BE-A/BE-C/FE 通道覆盖。
 //   - 前端 config 页表单的 key: 字面量是管理员写面，模式与通用
 //     表单 schema 混杂不设通道；其键均经后端读面或 FE 通道入集。
-const configKeyRegistryBaseline = 53
+const configKeyRegistryBaseline = 55
 
 var configKeyShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
