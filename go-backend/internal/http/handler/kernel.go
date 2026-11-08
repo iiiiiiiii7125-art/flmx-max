@@ -2779,7 +2779,31 @@ func (h *Handler) applyKernelWith(kernelID int64, install bool, realmOverride ma
 	if state.Version != "" {
 		fields["installed_version"] = truncate(state.Version, 100)
 	}
-	return h.repo.UpdateNodeKernelFields(k.ID, fields)
+	if err := h.repo.UpdateNodeKernelFields(k.ID, fields); err != nil {
+		return err
+	}
+	// FIX-REALM-METER：realm 下发成功后立即拉一次计数面，把计数基
+	// 线钉在下发时刻。agent 侧累计计数自本次下发重建 nft 表起算，
+	// 而入账按「样本 − 已存基线」差分、首个样本只建基线不入账：若
+	// 不主动拉，基线只能由 60s 周期轮询的首个样本建立，下发后至
+	// 首轮询前产生的全部流量被基线整段吞掉、永不入账（真机
+	// EXEC-RERUN3：新建 realm 转发立即发流量，180s 窗内 forward
+	// 流量恒 0→0；gost 无基线语义、同轮 0→54 正常）。R3-01 曾在
+	// 引擎切换路径以 settleRealmCountersAtSwitch 修复同一机制，但
+	// 创建/更新/暂停恢复/重连对账等普通下发路径漏修——本点是全部
+	// realm KernelApply 的唯一漏斗，在此统一钉基线。
+	// 范围只限 Relay 内核（realm）：入站内核（xray/singbox/snell）
+	// 的入站计数同为首样本基线语义、存在同形窗口，但其下发轮次有
+	// R4X-009 的正典计量口径（以 KernelStatus 轮询数计 reconcile
+	// 轮次，backup_r4_b5_test）钉死，逐下发加轮询会打破该不变量的
+	// 代理等式——入站面须与该口径一并设计，已点名立案（见
+	// FIX-REALM-METER 报告），不在本修复顺手扩面。
+	// settle 只拉计数面（settleKernelCountersAfterApply 注释），
+	// 失败静默：周期轮询随后补建基线，退化为原行为，不阻塞回执。
+	if info, ok := kernel.Lookup(k.KernelType); ok && info.Relay {
+		h.settleKernelCountersAfterApply(k.NodeID)
+	}
+	return nil
 }
 
 func kernelStateStatus(state agentKernelState, enabled bool) string {
@@ -2929,6 +2953,13 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 		_ = h.repo.UpdateNodeKernelFields(k.ID, fields)
 	}
 
+	h.ingestKernelCounters(nodeID, status, now)
+}
+
+// ingestKernelCounters 把一次 KernelStatus 回读的计数面入账：订阅
+// 用户计数、入站计数（realm 转发端口分流到 forward 入账链）。只做
+// 计数，不做内核状态对账——状态面归 pollNodeKernels 独占。
+func (h *Handler) ingestKernelCounters(nodeID int64, status agentKernelStatus, now int64) {
 	if !status.NftAvailable {
 		return
 	}
@@ -2962,6 +2993,26 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 	if len(realmCounters) > 0 {
 		h.applyRealmCounters(nodeID, status.Epoch, realmCounters, time.UnixMilli(now))
 	}
+}
+
+// settleKernelCountersAfterApply 在 realm 的 KernelApply 成功后
+// 立即拉一次 KernelStatus、只入账计数面，把计数基线钉在下发时刻
+// （FIX-REALM-METER，调用点注释详述）。刻意不走全量
+// pollNodeKernels：状态对账含 drift 重下发与孤儿清理，下发后立刻
+// 全量对账会与 drift 逻辑互相触发（agent 回读 hash 与 DB 不一致
+// 时 spawn 的重下发又触发新一轮对账），形成无界下发-轮询链；计数
+// 钉基线只需要计数面，恰好一条 KernelStatus、入账即止。
+func (h *Handler) settleKernelCountersAfterApply(nodeID int64) {
+	res, err := h.sendNodeCommandWithTimeout(nodeID, "KernelStatus", map[string]interface{}{}, kernelCommandTimeout, false, false)
+	if err != nil {
+		return // 节点刚离线等：周期轮询随后补建基线，退化为原行为
+	}
+	var status agentKernelStatus
+	if err := remarshal(res.Data, &status); err != nil {
+		log.Printf("kernel settle decode failed node_id=%d err=%v", nodeID, err)
+		return
+	}
+	h.ingestKernelCounters(nodeID, status, time.Now().UnixMilli())
 }
 
 // kernelStatusParallel 是内核状态轮询的单节点并发上限（D6-04）：旧实现
