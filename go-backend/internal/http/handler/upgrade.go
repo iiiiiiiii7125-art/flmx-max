@@ -644,10 +644,7 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	h.markNodePendingUpgradeRedeploy(req.ID)
 
-	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"version": version,
-		"message": result.Message,
-	}))
+	response.WriteJSON(w, response.OK(upgradeReceiptData(version, result)))
 }
 
 func resolveLatestRelease() (string, error) {
@@ -924,6 +921,36 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 	h.markNodePendingUpgradeRedeploy(req.ID)
 
 	response.WriteJSON(w, response.OK(rollbackReceiptData(result)))
+}
+
+// upgradeReceiptData builds the node upgrade receipt (J6-F02).
+//
+// Same dispatch-receipt doctrine as rollbackReceiptData (M-0051):
+// the agent's UpgradeAgent reply only confirms the upgrade was
+// accepted and started — the binary swap and the service restart
+// happen after the reply, and a silently failed upgrade script is
+// indistinguishable from a landed one at dispatch time. The
+// pre-J6-F02 receipt carried the target under the bare field name
+// "version" with the agent's bare "OK" message, which API
+// consumers read as the node's landed version. The receipt
+// therefore names the target as expectedVersion, carries status
+// "dispatched", and tells the operator to verify the landed
+// version in the node list after reconnect (the agent reports its
+// version on WS connect, so a failed upgrade shows up as the
+// version not changing). The "version" field is removed from this
+// receipt: keeping it would let consumers keep misreading the
+// target as landed (same BC shape as the rollback toVersion
+// removal; the panel UI only ever read alreadyLatest/message).
+// The same-version short-circuit receipt above is NOT a dispatch
+// receipt and keeps its shape: nothing was sent, and its version
+// field names the node's own reported current version — a fact,
+// not a target.
+func upgradeReceiptData(version string, result ws.CommandResult) map[string]interface{} {
+	return map[string]interface{}{
+		"status":          "dispatched",
+		"expectedVersion": version,
+		"message":         fmt.Sprintf("升级命令已下发，节点正在重启；目标版本 %s，落点待节点重连后在节点列表核验", version),
+	}
 }
 
 // rollbackReceiptData builds the node rollback receipt (R6-05).
