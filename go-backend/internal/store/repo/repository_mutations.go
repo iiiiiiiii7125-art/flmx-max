@@ -1570,7 +1570,24 @@ func (r *Repository) DeleteSpeedLimit(id int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
-	return r.db.Where("id = ?", id).Delete(&model.SpeedLimit{}).Error
+	// R2-E1-03：删除与引用剥离同事务。此前为裸删，删后
+	// forward.speed_id / forward.ip_speed_id / user_tunnel.speed_id
+	// 三处仍以悬空 id 指向已删规则，消费面 LEFT JOIN 使限速静默
+	// 失效且无点名——与备份导入尾 sweepDanglingSpeedRefsTx 同
+	// 口径置 NULL（引用行本身保留）。数据面回退重下发由 handler
+	// 删除前枚举引用集、删除后 resync 承担（R6X-017）。
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ?", id).Delete(&model.SpeedLimit{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Forward{}).Where("speed_id = ?", id).Update("speed_id", nil).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Forward{}).Where("ip_speed_id = ?", id).Update("ip_speed_id", nil).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.UserTunnel{}).Where("speed_id = ?", id).Update("speed_id", nil).Error
+	})
 }
 
 // RevokedUserTunnelPair holds the (userID, tunnelID) of a deleted user_tunnel row,
