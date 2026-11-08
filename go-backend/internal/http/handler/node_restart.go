@@ -71,14 +71,17 @@ func restartSchedulePayload(enabled int, timeStr string, jitterMinutes int) map[
 
 // pushNodeRestartSchedule sends the node's stored setting to its
 // agent. It returns (true, nil) only when the agent acknowledged.
-// Remote and nftables nodes are skipped silently (false, nil):
-// their agents are not this panel's to configure.
+// nftables nodes are skipped silently (false, nil): they have no
+// agent service for this panel to configure. (The remote-node skip
+// from the original implementation is gone with DEV-RM-SHARE: the
+// federation removal deletes remote nodes and the IsRemote column,
+// so every remaining node is this panel's own.)
 func (h *Handler) pushNodeRestartSchedule(nodeID int64) (bool, error) {
 	node, err := h.repo.GetNodeByID(nodeID)
 	if err != nil || node == nil {
 		return false, err
 	}
-	if node.IsRemote == 1 || defaultNodeForwardMode(node.ForwardMode) == "nftables" {
+	if defaultNodeForwardMode(node.ForwardMode) == "nftables" {
 		return false, nil
 	}
 	// 下发超时 30s：agent 侧要跑 daemon-reload + enable --now，
@@ -121,10 +124,6 @@ func (h *Handler) nodeRestartScheduleSet(w http.ResponseWriter, r *http.Request)
 	node, err := h.repo.GetNodeByID(req.ID)
 	if err != nil || node == nil {
 		response.WriteJSON(w, response.ErrDefault("节点不存在"))
-		return
-	}
-	if node.IsRemote == 1 {
-		response.WriteJSON(w, response.ErrDefault("远程节点的定时重启请在其所属面板设置"))
 		return
 	}
 	if defaultNodeForwardMode(node.ForwardMode) == "nftables" {
