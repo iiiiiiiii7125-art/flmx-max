@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -48,14 +49,56 @@ type adminSession struct {
 	userID int64
 	claims auth.Claims
 	conn   *connWrap
-	queue  chan []byte
+	queue  *realtimeQueue
 }
 
 type monitorSession struct {
 	userID int64
 	claims auth.Claims
 	conn   *connWrap
-	queue  chan []byte
+	queue  *realtimeQueue
+}
+
+// realtimeQueue 是每会话一条的广播发送队列及其字节记账（R2-P1-F09）。
+// 此前队列只有深度帽（16 条）：载荷源是节点上行帧原文，单条可达入站
+// 读上限 10MiB，慢消费者可让单会话滞留 16×10MiB=160MiB。现加字节
+// 预算作第二道帽：入队按帧长原子记账，记账与准入均为 O(1)、不加锁。
+type realtimeQueue struct {
+	ch           chan []byte
+	queuedBytes  atomic.Int64 // 已准入、尚未被 writer 取走的字节数
+	dropped      atomic.Int64 // 被后盾（字节预算或深度帽）丢弃的帧数
+	droppedBytes atomic.Int64 // 被后盾丢弃的字节数
+}
+
+func newRealtimeQueue() *realtimeQueue {
+	return &realtimeQueue{ch: make(chan []byte, wsBroadcastQueueSize)}
+}
+
+// offer 非阻塞投递一帧，返回 false 表示本帧被后盾丢弃（计数已记账）。
+// 准入条件：准入后 queuedBytes 不超过字节预算；或队列为空且单帧不
+// 超过入站读上限——单条合法大帧（上限 10MiB 大于预算）不被预算饿死，
+// 此时队列滞留至多为该单帧。深度帽满同样丢弃（沿用 D2-04 丢新帧语义）。
+func (q *realtimeQueue) offer(payload []byte) bool {
+	n := int64(len(payload))
+	total := q.queuedBytes.Add(n)
+	if total > wsBroadcastQueueBytes && total != n {
+		q.queuedBytes.Add(-n)
+		q.noteDrop(n)
+		return false
+	}
+	select {
+	case q.ch <- payload:
+		return true
+	default:
+		q.queuedBytes.Add(-n)
+		q.noteDrop(n)
+		return false
+	}
+}
+
+func (q *realtimeQueue) noteDrop(n int64) {
+	q.dropped.Add(1)
+	q.droppedBytes.Add(n)
 }
 
 type commandResponse struct {
@@ -84,6 +127,15 @@ const (
 	// D2-04/D6-01: 每会话广播发送队列深度。队列满即丢弃该会话的本条
 	// 实时消息（metric/status 均为最新值语义，可丢），绝不阻塞广播方。
 	wsBroadcastQueueSize = 16
+	// R2-P1-F09: 每会话广播队列字节预算（深度帽之外的第二道帽）。
+	// 取值依据：仓内每会话队列的既有合规档为 4–6MiB（UDP 接收队列
+	// 4MiB、pht 接收队列约 6MiB），8MiB 与之同档；512MiB 小机上进程
+	// 软帽约 358MiB，单会话滞留从最坏 160MiB 压到稳态 ≤8MiB（单条
+	// 合法大帧至多 10MiB，见 realtimeQueue.offer 的空队列准入）。
+	wsBroadcastQueueBytes = 8 << 20
+	// R2-P1-F09: 广播丢弃聚合日志窗口——窗口内丢弃只计数、至多打
+	// 一条汇总，不逐帧打日志。
+	wsBroadcastDropLogWindow = 30 * time.Second
 	// D2-03: /system-info 未认证失败尝试按 IP 限流的窗口与上限。
 	// 每次失败鉴权都要打一次 DB（GetNodeBySecret / token 校验），
 	// 无限流时伪造 secret 洪泛可独占单连接 SQLite。
@@ -118,6 +170,11 @@ type Server struct {
 	// 与 admins/monitors 同受 s.mu 保护：计数与预留必须在同一把锁内
 	// 原子完成，否则计数检查与会话登记之间的 Upgrade 窗口可被并发突破。
 	wsReserved map[wsSessionReservationKey]int
+
+	// R2-P1-F09: 全服广播丢弃聚合计数（原子，无锁热路径）。
+	broadcastDropped      atomic.Int64
+	broadcastDroppedBytes atomic.Int64
+	lastBroadcastDropLog  atomic.Int64
 
 	authFail *wsAuthFailLimiter
 
@@ -525,12 +582,13 @@ func (s *Server) wsReservationCount(userID int64, kind wsSessionKind) int {
 // runRealtimeWriter 是每会话独立的广播写 goroutine（D2-04/D6-01）：
 // 广播方只往会话队列非阻塞投递，慢消费者只会拖住自己的 writer——
 // 写失败即关连接逐出（读循环随之退出并清理会话），不阻塞任何人。
-func runRealtimeWriter(cw *connWrap, queue <-chan []byte, done <-chan struct{}) {
+func runRealtimeWriter(cw *connWrap, queue *realtimeQueue, done <-chan struct{}) {
 	for {
 		select {
 		case <-done:
 			return
-		case msg := <-queue:
+		case msg := <-queue.ch:
+			queue.queuedBytes.Add(-int64(len(msg)))
 			if err := writeWSMessage(cw, websocket.TextMessage, msg); err != nil {
 				_ = cw.conn.Close()
 				return
@@ -558,7 +616,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, userID int6
 		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	})
 	done := make(chan struct{})
-	session := &adminSession{userID: userID, claims: claims, conn: cw, queue: make(chan []byte, wsBroadcastQueueSize)}
+	session := &adminSession{userID: userID, claims: claims, conn: cw, queue: newRealtimeQueue()}
 	go runRealtimeWriter(cw, session.queue, done)
 	go startKeepalive(cw, done, func() bool {
 		return s.validateAdminSession(session.userID, session.claims)
@@ -600,7 +658,7 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request, userID in
 		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	})
 	done := make(chan struct{})
-	session := &monitorSession{userID: userID, claims: claims, conn: cw, queue: make(chan []byte, wsBroadcastQueueSize)}
+	session := &monitorSession{userID: userID, claims: claims, conn: cw, queue: newRealtimeQueue()}
 	go runRealtimeWriter(cw, session.queue, done)
 	go startKeepalive(cw, done, func() bool {
 		return s.validateMonitorSession(session.userID, session.claims)
@@ -1027,11 +1085,12 @@ func (s *Server) broadcastTyped(nodeID int64, msgType string, data string) {
 // 旧实现在节点读循环内同步串行直写全部会话：一个慢消费者每次广播
 // 吃满 5s 写截止，队头阻塞该节点的全部后续消息。现改为非阻塞投递：
 // 队列满即丢弃该会话的本条消息（实时值为最新值语义），实际写由
-// runRealtimeWriter 完成，写失败在那里关连接逐出。
+// runRealtimeWriter 完成，写失败在那里关连接逐出。R2-P1-F09 起每
+// 队列另有字节预算后盾（realtimeQueue.offer），丢弃计数并聚合上报。
 func (s *Server) broadcastToRealtime(message string) {
 	payload := []byte(message)
 	s.mu.RLock()
-	queues := make([]chan []byte, 0, len(s.admins)+len(s.monitors))
+	queues := make([]*realtimeQueue, 0, len(s.admins)+len(s.monitors))
 	for c := range s.admins {
 		if c != nil && c.queue != nil {
 			queues = append(queues, c.queue)
@@ -1045,11 +1104,26 @@ func (s *Server) broadcastToRealtime(message string) {
 	s.mu.RUnlock()
 
 	for _, q := range queues {
-		select {
-		case q <- payload:
-		default:
+		if !q.offer(payload) {
 			// 慢消费者：丢本条，不阻塞广播方与其他会话。
+			s.noteBroadcastDrop(int64(len(payload)))
 		}
+	}
+}
+
+// noteBroadcastDrop 汇总全服广播丢弃计数，并按窗口聚合打一条日志
+// （窗口内至多一条，不逐帧打）。聚合计数同时供测试与后续观测面读取。
+func (s *Server) noteBroadcastDrop(n int64) {
+	s.broadcastDropped.Add(1)
+	s.broadcastDroppedBytes.Add(n)
+	now := time.Now().UnixNano()
+	last := s.lastBroadcastDropLog.Load()
+	if now-last < int64(wsBroadcastDropLogWindow) {
+		return
+	}
+	if s.lastBroadcastDropLog.CompareAndSwap(last, now) {
+		log.Printf("ws realtime broadcast backpressure: dropped_frames=%d dropped_bytes=%d (per-session byte budget %d, queue depth %d)",
+			s.broadcastDropped.Load(), s.broadcastDroppedBytes.Load(), wsBroadcastQueueBytes, wsBroadcastQueueSize)
 	}
 }
 
