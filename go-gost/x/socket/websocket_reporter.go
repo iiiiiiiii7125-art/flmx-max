@@ -1085,10 +1085,11 @@ func (w *WebSocketReporter) claimCommandRequestID(id string, now time.Time) bool
 // the no-secret local form keeps accepting plaintext, with the standing
 // one-time warning.
 func (w *WebSocketReporter) dispatchReceivedCommand(cmd CommandMessage, wasEncrypted bool) {
-	if cmd.Type == "call" {
-		// Dead legacy frame type, silently dropped (unchanged behavior).
-		return
-	}
+	// R2-X2-03：已删除旧版 "call" 帧型的静默丢弃分支与零调用的
+	// handleCall 死代码——该帧型没有任何现行发送方，删除后它与其余
+	// 未知命令同路：经下方加密/重放门后落 routeCommand 兜底，回
+	// UnknownCommandResponse 明确回执，不再有永不达处理层的静默
+	// 接收面。
 	if !wasEncrypted {
 		if w.commandChannelSecretConfigured() {
 			fmt.Printf("❌ 拒绝明文命令: type=%s requestId=%s（本节点已配置 secret，命令必须走加密信封）\n", cmd.Type, cmd.RequestId)
@@ -1126,7 +1127,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 			// D1-02: 校验时间戳窗口，拒绝重放的加密信封。
 			if err := validateEncryptedTimestamp(encryptedWrapper.Timestamp, time.Now()); err != nil {
 				fmt.Printf("❌ 拒绝加密命令: %v\n", err)
-				w.sendErrorResponse("StaleTimestamp", err.Error())
+				w.sendErrorResponse("StaleTimestamp", err.Error(), "")
 				return
 			}
 			if w.aesCrypto != nil {
@@ -1134,14 +1135,14 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 				decryptedData, err := w.aesCrypto.Decrypt(encryptedWrapper.Data)
 				if err != nil {
 					fmt.Printf("❌ 解密失败: %v\n", err)
-					w.sendErrorResponse("DecryptError", fmt.Sprintf("解密失败: %v", err))
+					w.sendErrorResponse("DecryptError", fmt.Sprintf("解密失败: %v", err), "")
 					return
 				}
 				message = decryptedData
 				wasEncrypted = true
 			} else {
 				fmt.Printf("❌ 收到加密消息但没有加密器\n")
-				w.sendErrorResponse("NoDecryptor", "没有可用的解密器")
+				w.sendErrorResponse("NoDecryptor", "没有可用的解密器", "")
 				return
 			}
 		}
@@ -1162,7 +1163,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 			decompressedData, err := decompressCommandPayload(compressedMsg.Data)
 			if err != nil {
 				fmt.Printf("❌ 解压数据失败: %v\n", err)
-				w.sendErrorResponse("DecompressError", fmt.Sprintf("解压失败: %v", err))
+				w.sendErrorResponse("DecompressError", fmt.Sprintf("解压失败: %v", err), compressedMsg.RequestId)
 				return
 			}
 
@@ -1176,7 +1177,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 			cmdMsg.TimeoutMS = compressedMsg.TimeoutMS
 			if err := json.Unmarshal(message, &cmdMsg.Data); err != nil {
 				fmt.Printf("❌ 解析解压后的命令数据失败: %v\n", err)
-				w.sendErrorResponse("ParseError", fmt.Sprintf("解析命令失败: %v", err))
+				w.sendErrorResponse("ParseError", fmt.Sprintf("解析命令失败: %v", err), compressedMsg.RequestId)
 				return
 			}
 
@@ -1186,7 +1187,7 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 			var cmdMsg CommandMessage
 			if err := json.Unmarshal(message, &cmdMsg); err != nil {
 				fmt.Printf("❌ 解析命令消息失败: %v\n", err)
-				w.sendErrorResponse("ParseError", fmt.Sprintf("解析命令失败: %v", err))
+				w.sendErrorResponse("ParseError", fmt.Sprintf("解析命令失败: %v", err), bestEffortRequestID(message))
 				return
 			}
 			w.dispatchReceivedCommand(cmdMsg, wasEncrypted)
@@ -3534,43 +3535,6 @@ func updateLocalConfigJSON(httpVal int, tlsVal int, socksVal int) error {
 	return writeFileAtomic(path, data, mode)
 }
 
-// handleCall 处理服务端的call回调消息
-func (w *WebSocketReporter) handleCall(data interface{}) error {
-	// 解析call数据
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("序列化call数据失败: %v", err)
-	}
-
-	// 可以根据call的具体内容进行不同的处理
-	var callData map[string]interface{}
-	if err := json.Unmarshal(jsonData, &callData); err != nil {
-		return fmt.Errorf("解析call数据失败: %v", err)
-	}
-
-	fmt.Printf("🔔 收到服务端call回调: %v\n", callData)
-
-	// 根据call的类型执行不同的操作
-	if callType, exists := callData["type"]; exists {
-		switch callType {
-		case "ping":
-			fmt.Printf("📡 收到ping，发送pong回应\n")
-			// 可以在这里发送pong响应
-		case "info_request":
-			fmt.Printf("📊 服务端请求额外信息\n")
-			// 可以在这里发送额外的系统信息
-		case "command":
-			fmt.Printf("⚡ 服务端发送执行命令\n")
-			// 可以在这里执行特定命令
-		default:
-			fmt.Printf("❓ 未知的call类型: %v\n", callType)
-		}
-	}
-
-	// 简单返回成功，表示call已被处理
-	return nil
-}
-
 // sendResponse 发送响应消息到服务端
 func (w *WebSocketReporter) sendResponse(response CommandResponse) {
 	w.connMutex.Lock()
@@ -3611,14 +3575,36 @@ func (w *WebSocketReporter) sendResponse(response CommandResponse) {
 	}
 }
 
-// sendErrorResponse 发送错误响应
-func (w *WebSocketReporter) sendErrorResponse(responseType, message string) {
+// sendErrorResponse 发送解析前错误响应（R2-X2-02）。这类失败发生在
+// 命令执行之前，requestId 的可得性因失败点而异：压缩帧与明文帧在
+// 解析失败时仍可从帧上读出 requestId（压缩帧取信封字段、明文帧走
+// bestEffortRequestID 宽松提取），回执带上它，面板 tryResolvePending
+// 即可把失败原因直达等待方而不是超时；加密信封三型（StaleTimestamp/
+// DecryptError/NoDecryptor）的 requestId 在未解密的信封内层，构造上
+// 不可得，传空串——该情形由面板侧按类型白名单记录 message 兜底
+// （ws/server.go 的 agentPreParseErrorReason），双侧都不改
+// fail-closed 语义。
+func (w *WebSocketReporter) sendErrorResponse(responseType, message, requestID string) {
 	response := CommandResponse{
-		Type:    responseType,
-		Success: false,
-		Message: message,
+		Type:      responseType,
+		Success:   false,
+		Message:   message,
+		RequestId: requestID,
 	}
 	w.sendResponse(response)
+}
+
+// bestEffortRequestID 在 CommandMessage 整体解析失败时宽松提取帧上
+// 的 requestId（解析失败常出在 data 字段类型不符，顶层字段仍可读）。
+// 提取不到返回空串，回执退化为无关联形态。
+func bestEffortRequestID(message []byte) string {
+	var probe struct {
+		RequestId string `json:"requestId"`
+	}
+	if err := json.Unmarshal(message, &probe); err != nil {
+		return ""
+	}
+	return probe.RequestId
 }
 
 // getUptime 获取系统开机时间（秒）

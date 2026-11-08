@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// D1-04: the panel↔agent command set (31 types) had no mechanical
+// D1-04: the panel↔agent command set (32 types) had no mechanical
 // contract test — consistency rested on the runtime "unknown command"
 // fallback, so a rename or typo on either side passed every unit test
 // and only surfaced on a live node. This census test extracts both
@@ -23,16 +23,19 @@ import (
 //   - agent set: the case labels of routeCommand's switch in
 //     websocket_reporter.go (AST, this package);
 //   - panel set: every string literal under go-backend/internal
-//     (non-test files) matching the command shapes, plus the dynamic
-//     "Add"/"Update"+suffix expansions used by federation_resources.go.
+//     (non-test files) matching the command shapes, plus expansions
+//     of any dynamic "Add"/"Update"+suffix constructions found in
+//     the sources (see the census safeguard in panelCommandSet).
 //
 // The golden set additionally contains agentHandledNotRouted
 // (below): the retired first-generation tuning commands. The agent
 // still answers them — with an explicit retirement error — and the
 // golden list pins that answer surface: removing an agent-side
-// answer requires a same-change golden update. They appear in the
-// agent set only via that list, not via the routeCommand census,
-// because the panel no longer sends them at all.
+// answer requires a same-change golden update. The three names do
+// appear in the routeCommand census (the shared Tune case routes
+// them to the rejecting handler); the list's role is the panel-side
+// subtraction in TestD1CommandSetContract — the panel must never
+// send commands the agent only rejects.
 //
 // Adding or renaming a command now requires touching the golden list
 // and both ends in the same change, or this test goes red. The panel
@@ -52,16 +55,16 @@ var goldenCommandSet = []string{
 	"UpgradeAgent",
 }
 
-// agentHandledNotRouted lists the command types the agent answers
-// without routing them through routeCommand: the retired
-// first-generation tuning commands. handleTuneCommandContext
-// (tuning.go) rejects them with an explicit unsupported error.
-// They never appear as string literals in non-test panel sources
-// (only as unquoted words inside comments), so the panel census
-// never collects them; the panel comparisons in
-// TestD1CommandSetContract therefore run against the golden set
-// minus exactly these names — the panel must not send commands
-// the agent only rejects.
+// agentHandledNotRouted lists the retired first-generation tuning
+// commands. Despite the historical name, routeCommand does route
+// them: its shared Tune case hands them to handleTuneCommandContext
+// (tuning.go), which rejects them with an explicit unsupported
+// error instead of executing anything. They never appear as string
+// literals in non-test panel sources (only as unquoted words inside
+// comments), so the panel census never collects them; the panel
+// comparisons in TestD1CommandSetContract therefore run against
+// the golden set minus exactly these names — the panel must not
+// send commands the agent only rejects.
 var agentHandledNotRouted = []string{"TuneApply", "TuneCancel", "TuneStart"}
 
 func sortedSet(in map[string]bool) []string {
@@ -172,9 +175,15 @@ func panelCommandSet(t *testing.T) (map[string]bool, bool) {
 					}
 				}
 			case *ast.BinaryExpr:
-				// federation_resources.go builds "Add"+suffix /
-				// "Update"+suffix with suffix in {Limiters, Chains,
-				// CLimiters}; expand those constructions explicitly.
+				// Census safeguard for dynamically built command
+				// names: expand any "Add"+<ident> / "Update"+<ident>
+				// construction against the known suffix literals
+				// {Limiters, Chains, CLimiters}, so a command name
+				// assembled at runtime is pinned by this contract
+				// instead of slipping past the literal census. (The
+				// federation-era panel code that built names this
+				// way no longer exists; the expansion stays as a
+				// guard.)
 				if node.Op == token.ADD {
 					if lit, ok := node.X.(*ast.BasicLit); ok && lit.Kind == token.STRING {
 						if v, uerr := strconv.Unquote(lit.Value); uerr == nil && (v == "Add" || v == "Update") {

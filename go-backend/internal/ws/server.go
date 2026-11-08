@@ -750,6 +750,15 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 				// 进实时广播。未知类型一律不广播（旧 default 全量广播是
 				// fail-open：未来新增 agent 上行类型会自动进入 monitor
 				// 可见集）。只记类型名，不记原文（原文可能含敏感数据）。
+				// R2-X2-02 例外：agent 解析前错误五型是封闭诊断集且多半
+				// 无 requestId 可挂靠（加密信封三型的 requestId 在未解
+				// 密内层、构造上不可得），其 message 是面板侧唯一能拿到
+				// 失败明示原因的通道——仅对这五型记下经单行化＋截断的
+				// message，仍不广播、不改 fail-closed。
+				if reason, ok := agentPreParseErrorReason(parsed.Type, msg); ok {
+					log.Printf("websocket: agent pre-parse error type=%q from node %d: %s", parsed.Type, nodeID, reason)
+					continue
+				}
 				log.Printf("websocket: dropping non-whitelisted agent message type=%q from node %d", parsed.Type, nodeID)
 				continue
 			}
@@ -773,6 +782,39 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 
 		// D2-02：无 type 且不像系统信息的消息同样不广播（白名单制）。
 	}
+}
+
+// agentPreParseErrorTypes 是 agent 在命令解析前即失败时回的封闭
+// 错误型集（go-gost/x/socket/websocket_reporter.go 的 sendErrorResponse
+// 调用点全集）。这五型的 message 由 agent 本地错误值生成，是诊断
+// 信息而非命令载荷。
+var agentPreParseErrorTypes = map[string]bool{
+	"StaleTimestamp":  true,
+	"DecryptError":    true,
+	"NoDecryptor":     true,
+	"DecompressError": true,
+	"ParseError":      true,
+}
+
+// agentPreParseErrorReason 为 R2-X2-02 的日志侧关联口径：仅当消息
+// 类型属解析前错误五型时，提取其 message 并做日志安全化（换行折
+// 空格、防日志注入；按 256 rune 截断）。非五型或无 message 时返回
+// false，调用方维持只记类型名的既有口径。
+func agentPreParseErrorReason(msgType, msg string) (string, bool) {
+	if !agentPreParseErrorTypes[msgType] {
+		return "", false
+	}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(msg), &body); err != nil || body.Message == "" {
+		return "", false
+	}
+	reason := strings.NewReplacer("\r", " ", "\n", " ").Replace(body.Message)
+	if r := []rune(reason); len(r) > 256 {
+		reason = string(r[:256]) + "…"
+	}
+	return reason, true
 }
 
 func looksLikeSystemInfoMessage(msg string) bool {
