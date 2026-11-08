@@ -75,7 +75,7 @@ Rig 节点“从未面板升级却报出 previous 代次备份”一事，代码
 ## 测试总结果
 
 - `go test./internal/kernel/ -count=1`：**ok（2.405s）**，含 4 个新增别名测试。
-- `go test./internal/http/handler/ -timeout 1800s -count=1`：****。
+- `go test ./internal/http/handler/ -timeout 1800s -count=1`: ok (639.380s), full package passes.
 - `gofmt`：5 个改动文件全净；`go vet./internal/kernel/` 净。
 
 ## 改动清单（git）
