@@ -617,6 +617,10 @@ export interface SystemUpgradeRunApiData {
   helperContainer: string;
   backendImageId: string;
   message: string;
+  /** 本次升级的 DB 快照相对路径（SQLite 模式；PG 模式切出时缺省） */
+  snapshotPath?: string;
+  /** PG 模式下升级前 DB 快照未落盘的显式标记（SQLite 模式恒缺省） */
+  pgSnapshotDeferred?: boolean;
 }
 
 // 面板升级状态（后端 GET /api/v1/system/upgrade/status；进程重启后不丢失）。
@@ -629,6 +633,10 @@ export interface SystemUpgradeStatusApiData {
   finishedAt?: string;
   /** R8-003：本次升级的第二锚降级点名（单锚降级时非空、双锚通过时缺省） */
   anchorNote?: string;
+  /** 本次升级的 DB 快照相对路径（SQLite 模式；无快照时缺省） */
+  snapshotPath?: string;
+  /** PG 模式下升级前 DB 快照未落盘的显式标记（与回执面同口径） */
+  pgSnapshotDeferred?: boolean;
 }
 
 export interface MonitorNodeApiItem {

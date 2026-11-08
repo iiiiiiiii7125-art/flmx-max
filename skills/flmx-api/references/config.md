@@ -157,7 +157,7 @@ Update the site announcement (admin only).
 | `cloudflare_site_key` | public | Cloudflare Turnstile site key |
 | `cloudflare_secret_key` | sensitive, write-only | Turnstile secret key (never readable via this API) |
 | `captcha_enabled` | authenticated | `"true"` enables login captcha |
-| `panel_domain` | authenticated | Panel domain used when composing links |
+| `panel_domain` | authenticated | Panel domain (reserved; not consumed by any feature in the current version) |
 | `subscription_front_urls` | authenticated | JSON array of subscription front origins |
 | `monitor_tunnel_quality_enabled` | authenticated | `"true"`/`"false"` tunnel quality probing |
 | `monitor_tunnel_quality_interval_sec` | authenticated | Probe interval, 1–3600 |
