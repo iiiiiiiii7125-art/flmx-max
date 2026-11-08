@@ -1495,21 +1495,36 @@ func panelMirrorPrefixFromAgentAddr(agentAddr string) string {
 // buildNodeInstallCommand 生成节点安装命令（1.7.7 KU5 重构）。
 //
 // 首跳（install.sh 本体的获取）不再依赖面板的 GitHub 加速配置——
-// 该设置已整体移除，且命令在节点机上执行、面板无法替节点测速。
-// 命令内置与全产品统一的候选清单（githubFetchProxyCandidates +
-// 直连，github_routes.go），按「直连优先、其后代理清单原序」的顺
-// 序逐个试取：每个候选先取 install.sh.sha256 并校验内容为 64 位
-// 十六进制哈希（真实目标判活，防代理落地页假活），再从同一候选
-// 取 install.sh 本体；首个两件齐备的候选即停（获胜候选记入 w），
-// 随后过 F-060 的 sha256sum 比对（第一锚）与 R7-002 的跨线路复核
-// （第二锚）才 chmod 执行。全部候选失败则整条命令失败（ok 恒为
-// 0、test 中止），不执行任何已下载内容。
+// 该设置已整体移除，且命令在节点机上执行、面板无法替节点测速：
+// 选路证据只能由命令在节点机本地采集（FIX-SELROUTE / R2-P2-08
+// 定案——面板侧探测测的是面板的网络位置，对节点无代表性，故
+// 不采用「面板探测后把路线序写死进命令」一案）。命令内置与全
+// 产品统一的候选清单（githubFetchProxyCandidates + 直连，
+// github_routes.go），选路与 install.sh 的 probe 选路同形：
+// 先以真实小目标（install.sh.sha256，内容须为 64 位十六进制
+// 哈希——真实目标判活，防代理落地页假活）并行探测全部候选并
+// 记录实测延迟，判活候选按延迟升序排成尝试序，未判活候选按
+// 清单原序殿后（探测只排序不删除）；随后按尝试序逐个取
+// install.sh 本体（判活候选的 .sha256 已在探测期落盘、直接
+// 复用），首个两件齐备的候选即停（获胜候选记入 w），再过
+// F-060 的 sha256sum 比对（第一锚）与 R7-002 的跨线路复核
+// （第二锚）才 chmod 执行。旧形态（R2-P2-08 前）按静态序逐个
+// 全量试取：.sha256 30s + 本体 60s 的胜负面意味着约 2.4KB/s
+// 即赢，面板源恒居首跳——一条重定向快、本体涓流的塌方线路可
+// 独占首跳拖满 60s 才切线，静态序本身不构成选路证据。残余形
+// 态如实登记：探测延迟低但本体涓流的路线仍可能赢得本体首试，
+// 其代价由本体 60s 界封顶、失败即按排名续切，与全败语义不变
+// （全部候选失败则整条命令失败、ok 恒为 0、test 中止，不执行
+// 任何已下载内容）。
 //
 // 面板源一期③：候选表最前面 prepend 面板源（由 agentAddr 派生，
 // 见 panelMirrorPrefixFromAgentAddr）——新节点此刻唯一已证可达
 // 的目的地就是面板本身，国内机经面板拉 install.sh 不再先撞
 // GitHub 直连；面板候选与其余候选受同一套双锚校验约束，镜
 // 像回源失败时端点回 502、命令自动顺延下一候选，不劣化现状。
+// 注：prepend 定的是候选集与探测/殿后序，R2-P2-08 后不再定胜
+// 负序——面板源凭其对节点的实测低延迟通常仍在排名中居前，但
+// 赢面来自实测而非静态特权。
 //
 // 脚本本体内的二进制下载由 install.sh 内置测速直选负责（同候选
 // 清单），命令不再注入 PROXY_ENABLED / PROXY_URL；运维显式传入
@@ -1575,6 +1590,28 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 	}
 	routeList := strings.Join(quoted, " ")
 	base := "https://github.com/" + githubRepo + "/releases/download/" + version
+	// R2-P2-08 选路段（shell 段，语义见函数头注）：probeStep 并行
+	// 探测全部候选——每候选一个子壳拉真实 .sha256（--max-time 10）
+	// 并以 -w 记录实测延迟，判活者把「延迟 序号」行写入临时目录
+	// 的 $i.rank；ord 为尝试序：判活序号按延迟升序（sort -n），
+	// 未判活序号按序号本身（即清单原序）补齐殿后。序号→前缀的
+	// 映射由 fetchStep 内的 case 在生成期展开（运行时零解析）。
+	// 探测全败时 ord 退化为清单原序全集，与旧形态逐个试取等价。
+	indexList := make([]string, 0, len(routes))
+	caseArms := make([]string, 0, len(routes))
+	for i, prefix := range routes {
+		indexList = append(indexList, strconv.Itoa(i+1))
+		caseArms = append(caseArms, strconv.Itoa(i+1)+`) p="`+prefix+`";;`)
+	}
+	probeStep := `d=$(mktemp -d); i=0; for p in ` + routeList + `; do i=$((i+1)); ( u="${p:+$p/}` + base + `"; ` +
+		`t=$(curl -fsSL --connect-timeout 5 --max-time 10 -w '%{time_total}' "$u/install.sh.sha256" -o "$d/$i.sha" 2>/dev/null) && grep -Eq '^[0-9a-f]{64}' "$d/$i.sha" && { [ -n "$t" ] || t=99; printf '%s %s\n' "$t" "$i" > "$d/$i.rank"; } ) & done; wait; ` +
+		`ord=$(cat "$d"/*.rank 2>/dev/null | sort -n | awk '{print $2}' | tr '\n' ' '); ` +
+		`for j in ` + strings.Join(indexList, " ") + `; do case " $ord " in *" $j "*) ;; *) ord="$ord$j ";; esac; done; `
+	// fetchStep 按 ord 逐个取本体：判活候选复用探测期落盘的
+	// .sha256（cp 成功即跳过重取），未判活候选按旧口径现取现验
+	// （30s 界）；本体界仍为 60s。获胜候选记入 w 后 break。
+	fetchStep := `for j in $ord; do case $j in ` + strings.Join(caseArms, " ") + ` esac; u="${p:+$p/}` + base + `"; ` +
+		`if { cp "$d/$j.sha" ./install.sh.sha256 2>/dev/null || curl -fsSL --connect-timeout 5 --max-time 30 "$u/install.sh.sha256" -o ./install.sh.sha256; } && grep -Eq '^[0-9a-f]{64}' ./install.sh.sha256 && curl -fsSL --connect-timeout 5 --max-time 60 "$u/install.sh" -o ./install.sh; then ok=1; w="$p"; break; fi; done; rm -rf "$d"; test "$ok" = 1`
 	// R7-002 第二锚（shell 段，语义见函数头注）：a = 落盘本体实际
 	// 哈希（第一锚已证其等于获胜候选的校验值）；anchor 三态——
 	// 0=尚无异路给出合法校验值、1=异路同值复核通过、2=异路异值。
@@ -1588,8 +1625,9 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 		`g=$(awk '{print $1}' ./install.sh.sha256.alt | tr 'A-F' 'a-f'); case "$g" in ''|*[!0-9a-f]*) continue;; esac; [ "${#g}" = 64 ] || continue; ` +
 		`if [ "$g" != "$a" ]; then echo "❌ 跨线路锚复核失败：install.sh 的校验值经两条不同线路获取的结果不一致，已中止安装（R7-002 第二锚）" >&2; anchor=2; else echo "✅ 跨线路锚复核通过（第二线路: ${q:-直连}）"; anchor=1; fi; break; done; ` +
 		`rm -f ./install.sh.sha256.alt; if [ "$anchor" = 0 ]; then if [ -z "$w" ] || [ "$w" = "$pp" ]; then echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（R7-002 第二锚）"; else echo "❌ 跨线路锚复核失败：获胜线路为代理（$w）且其他线路均未给出校验值，无法复核校验锚，已中止安装并删除已下载脚本（R7-002 第二锚，FIX-R2-9 分层）" >&2; rm -f ./install.sh ./install.sh.sha256; anchor=2; fi; fi; [ "$anchor" != 2 ]; }`
-	return `ok=0; w=""; pp="` + panelPrefix + `"; for p in ` + routeList + `; do u="${p:+$p/}` + base + `"; ` +
-		`if curl -fsSL --connect-timeout 5 --max-time 30 "$u/install.sh.sha256" -o ./install.sh.sha256 && grep -Eq '^[0-9a-f]{64}' ./install.sh.sha256 && curl -fsSL --connect-timeout 5 --max-time 60 "$u/install.sh" -o ./install.sh; then ok=1; w="$p"; break; fi; done; test "$ok" = 1` +
+	return `ok=0; w=""; pp="` + panelPrefix + `"; ` +
+		probeStep +
+		fetchStep +
 		verifyStep +
 		corroborateStep +
 		` && chmod +x ./install.sh && VERSION=` + version + ` ./install.sh -a ` + shellQuoteForInstall(agentAddr) + ` -s ` + shellQuoteForInstall(secret)

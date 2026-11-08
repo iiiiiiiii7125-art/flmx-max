@@ -46,18 +46,26 @@ func seedGitHubRoutesForTest(t *testing.T, directAlive bool, proxyOrder []string
 	githubRouteCache.Lock()
 	prevAt := githubRouteCache.at
 	prevDirectProbed, prevDirectAlive := githubRouteCache.directProbed, githubRouteCache.directAlive
+	prevDirectLatency := githubRouteCache.directLatency
 	prevProxiesProbed, prevProxyOrder := githubRouteCache.proxiesProbed, githubRouteCache.proxyOrder
+	prevProxyLatencies := githubRouteCache.proxyLatencies
 	githubRouteCache.at = time.Now()
 	githubRouteCache.directProbed = true
 	githubRouteCache.directAlive = directAlive
+	// seed 的直连一律按「快」处理（延迟 0 ≤ 门），与本夹具只钉
+	// 判活/排名、不钉延迟的既有口径一致（R2-P2-07）。
+	githubRouteCache.directLatency = 0
 	githubRouteCache.proxiesProbed = true
 	githubRouteCache.proxyOrder = append([]string(nil), proxyOrder...)
+	githubRouteCache.proxyLatencies = nil
 	githubRouteCache.Unlock()
 	t.Cleanup(func() {
 		githubRouteCache.Lock()
 		githubRouteCache.at = prevAt
 		githubRouteCache.directProbed, githubRouteCache.directAlive = prevDirectProbed, prevDirectAlive
+		githubRouteCache.directLatency = prevDirectLatency
 		githubRouteCache.proxiesProbed, githubRouteCache.proxyOrder = prevProxiesProbed, prevProxyOrder
+		githubRouteCache.proxyLatencies = prevProxyLatencies
 		githubRouteCache.Unlock()
 	})
 }
