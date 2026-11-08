@@ -149,7 +149,7 @@ const CONFIG_ITEMS: ConfigItem[] = [
     key: "panel_domain",
     label: "面板域名",
     placeholder: "请输入面板域名",
-    description: "当前面板的域名，用于与其他面板进行联邦共享时验证身份",
+    description: "当前面板对外访问的域名。此项为预留配置，当前版本暂无功能读取使用，填写与否不影响面板运行",
     type: "input",
   },
   {
@@ -2051,6 +2051,27 @@ export default function ConfigPage() {
                   <div className="rounded-lg border border-warning-500/25 bg-warning-500/10 px-4 py-3 font-medium text-warning-800">
                     <p className="text-xs font-semibold">
                       本次升级校验提示：{systemUpgradeStatus.anchorNote}
+                    </p>
+                  </div>
+                )}
+
+                {/* J6-F01：状态面同步透出升级前 DB 快照点名（后端随状态
+                    落盘），SQLite 模式显示快照相对路径；PG 模式快照未
+                    落盘时以显式标记警告，不得以路径为空让运维误以为
+                    已有快照兜底 */}
+                {systemUpgradeStatus?.snapshotPath && (
+                  <div className="rounded-lg border border-divider glass-inset px-4 py-3 font-medium text-foreground">
+                    <p className="text-xs font-semibold">
+                      本次升级前数据库快照：
+                      {systemUpgradeStatus.snapshotPath}
+                      （位于部署目录内）
+                    </p>
+                  </div>
+                )}
+                {systemUpgradeStatus?.pgSnapshotDeferred && (
+                  <div className="rounded-lg border border-warning-500/25 bg-warning-500/10 px-4 py-3 font-medium text-warning-800">
+                    <p className="text-xs font-semibold">
+                      PostgreSQL 模式：本次升级前未生成数据库快照
                     </p>
                   </div>
                 )}

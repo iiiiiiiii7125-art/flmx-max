@@ -52,7 +52,9 @@ export default function MonitorPage() {
 // 监控权限的普通用户只看自己隧道的监控（TunnelMonitorView，数据由
 // 后端按可达隧道过滤），不渲染节点/服务区，也不再调用已收管理员的
 // 端点与节点实时流；无权限用户显示授权提示（h5 布局的同名 toast
-// 仍由 access 探针驱动，行为不变）。
+// 仍由 access 探针驱动，行为不变）。探针失败（异常或非成功响应）
+// 同样落拒绝卡、不回落用户视图（R2-F1-03）：权限未证实时不挂载任何
+// 监控数据面，不对受限面发请求，后端逐面 403 仍兜底。
 function MonitorOverview() {
   const [accessState, setAccessState] = useState<
     "loading" | "admin" | "user" | "denied"
@@ -74,9 +76,9 @@ function MonitorOverview() {
           return;
         }
       } catch {
-        // 探针失败回落用户视图：后端逐面兜底鉴权与过滤。
+        // 探针失败落拒绝卡（R2-F1-03）：不回落用户视图。
       }
-      if (!cancelled) setAccessState("user");
+      if (!cancelled) setAccessState("denied");
     })();
 
     return () => {
