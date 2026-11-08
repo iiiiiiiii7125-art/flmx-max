@@ -50,7 +50,13 @@ type Handler struct {
 	// 取消手段，重复提交或双开页面并发导入会基于中间态叠写，故同一
 	// 时刻只允许一单备份导入（快照相位与写入相位全程持锁）。
 	backupImportMu sync.Mutex
-	wsServer       *ws.Server
+	// FIX-BASELINE（R2-E2-01）×R4X-009：备份导入尾钩子执行深度。
+	// 尾钩子内的内核 apply 属于导入这一次物化事件，其基线由导入
+	// reconcile 轮的尾随 poll 钉定（与轮内豁免同构）；若逐个
+	// settle 多发 KernelStatus，会被 R4X-009 的轮次口径计为额外
+	// reconcile 轮。深度 >0 时 applyKernelWithMode 抑制 settle。
+	importTailBatchDepth atomic.Int32
+	wsServer             *ws.Server
 	metrics        *metrics.IngestionService
 	healthCheck    *health.Checker
 	// R5-B5 D14: 下沉到 manager 层的 per-node 串行化包装。
@@ -2889,6 +2895,13 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 // Import must never stop at the Import call itself, and must never
 // call only reconcileNodeKernels: every hook below runs.
 func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *model.BackupData, types []string) {
+	// FIX-BASELINE：整段尾钩子是一个导入批次——其内 apply 的基线
+	// 钉定由下方 reconcile 轮尾随 poll 承担，settle 全程抑制（见
+	// Handler.importTailBatchDepth）。同步段结束即退出批次；异步
+	// reconcile goroutine 的轮内 apply 本就不 settle。
+	h.importTailBatchDepth.Add(1)
+	defer h.importTailBatchDepth.Add(-1)
+
 	// R6X-010：恢复也是 origin 状态的写路径——导入成功后同步触发
 	// 一次计量对账，使恢复出的 metering origin 的伴生行立即物化，
 	// 与入站保存/删除路径同口径。此前 backupImport 不在触发点全集
