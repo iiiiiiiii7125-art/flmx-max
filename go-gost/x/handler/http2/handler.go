@@ -284,7 +284,7 @@ func (h *http2Handler) roundTrip(ctx context.Context, w http.ResponseWriter, req
 		}
 
 		rw := xio.NewReadWriter(req.Body, flushWriter{w})
-		hijacked := false
+		var hijackedConn net.Conn
 
 		// compatible with HTTP1.x
 		if hj, ok := w.(http.Hijacker); ok && req.ProtoMajor == 1 {
@@ -299,7 +299,7 @@ func (h *http2Handler) roundTrip(ctx context.Context, w http.ResponseWriter, req
 			defer conn.Close()
 
 			rw = conn
-			hijacked = true
+			hijackedConn = conn
 		}
 
 		rw = traffic_wrapper.WrapReadWriter(
@@ -320,12 +320,20 @@ func (h *http2Handler) roundTrip(ctx context.Context, w http.ResponseWriter, req
 			defer pstats.Add(stats.KindCurrentConns, -1)
 			rw = stats_wrapper.WrapReadWriter(rw, pstats)
 		}
-		if !hijacked {
+		if hijackedConn == nil {
 			// Re-expose the request body's Close as the endpoint's
 			// own (see streamReadWriter in conn.go): Transport's
 			// no-progress teardown must be able to unblock the copy
 			// parked on the request body (P1-01).
 			rw = &streamReadWriter{ReadWriter: rw, body: req.Body}
+		} else {
+			// Hijacked HTTP/1.x: rw is the raw client conn, possibly
+			// hidden again by the limiter/stats wrappers above —
+			// they embed io.ReadWriter and expose neither deadlines
+			// nor Close, which is exactly the P1-01 shape. Re-wrap
+			// outside them so Transport can arm the conn's deadlines
+			// and close it on teardown (P1-01, hijack sub-form).
+			rw = xnet.NewReadWriteConn(rw, rw, hijackedConn)
 		}
 
 		start := time.Now()
