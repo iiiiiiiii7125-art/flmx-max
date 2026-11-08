@@ -13,6 +13,7 @@ import (
 	"github.com/go-gost/core/recorder"
 	ctxvalue "github.com/go-gost/x/ctx"
 	netudp "github.com/go-gost/x/internal/net/udp"
+	"github.com/go-gost/x/internal/util/eventlog"
 	"github.com/go-gost/x/internal/util/relay"
 	"github.com/go-gost/x/internal/util/ss"
 	rate_limiter "github.com/go-gost/x/limiter/rate"
@@ -205,6 +206,19 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 	// R2-A02-001: one pin memo per association (this relayPacket
 	// call), shared by both directions of the same association only.
 	pins := &netudp.PinMemo{}
+
+	// F11: the bypass-drop and pin-failure warnings fire at packet
+	// rate; aggregate them exactly like udp.Relay does (one
+	// summary line per kind per window, flushed when the
+	// association ends). The drop semantics do not change — only
+	// the log shape does.
+	events := eventlog.New(log, eventlog.DefaultInterval)
+	bypassHits := events.DetailCounter(
+		"ss udp relay: %d packet(s) dropped by bypass, last peer %s, %d total")
+	pinErrs := events.DetailCounter(
+		"ss udp relay: %d bypass pin failure(s), last: %s, %d total")
+	defer events.Flush()
+
 	errc := make(chan error, 2)
 
 	go func() {
@@ -221,13 +235,13 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 				}
 
 				if h.options.Bypass != nil && h.options.Bypass.Contains(ctx, addr.Network(), addr.String()) {
-					log.Warn("bypass: ", addr)
+					bypassHits.NoteDetail(addr.String())
 					return nil
 				}
 
 				target, perr := h.pinUDPTarget(ctx, pins, addr)
 				if perr != nil {
-					log.Warn("bypass pin: ", perr)
+					pinErrs.NoteErr(perr)
 					return nil
 				}
 
@@ -257,13 +271,13 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 				}
 
 				if h.options.Bypass != nil && h.options.Bypass.Contains(ctx, raddr.Network(), raddr.String()) {
-					log.Warn("bypass: ", raddr)
+					bypassHits.NoteDetail(raddr.String())
 					return nil
 				}
 
 				target, perr := h.pinUDPTarget(ctx, pins, raddr)
 				if perr != nil {
-					log.Warn("bypass pin: ", perr)
+					pinErrs.NoteErr(perr)
 					return nil
 				}
 
