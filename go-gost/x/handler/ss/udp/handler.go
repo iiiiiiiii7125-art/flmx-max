@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-gost/core/handler"
@@ -13,6 +15,7 @@ import (
 	"github.com/go-gost/core/recorder"
 	ctxvalue "github.com/go-gost/x/ctx"
 	netudp "github.com/go-gost/x/internal/net/udp"
+	"github.com/go-gost/x/internal/util/eventlog"
 	"github.com/go-gost/x/internal/util/relay"
 	"github.com/go-gost/x/internal/util/ss"
 	rate_limiter "github.com/go-gost/x/limiter/rate"
@@ -205,14 +208,47 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 	// R2-A02-001: one pin memo per association (this relayPacket
 	// call), shared by both directions of the same association only.
 	pins := &netudp.PinMemo{}
+
+	// F11: the bypass-drop and pin-failure warnings fire at packet
+	// rate; aggregate them exactly like udp.Relay does (one
+	// summary line per kind per window, flushed when the
+	// association ends). The drop semantics do not change — only
+	// the log shape does.
+	events := eventlog.New(log, eventlog.DefaultInterval)
+	bypassHits := events.DetailCounter(
+		"ss udp relay: %d packet(s) dropped by bypass, last peer %s, %d total")
+	pinErrs := events.DetailCounter(
+		"ss udp relay: %d bypass pin failure(s), last: %s, %d total")
+	defer events.Flush()
+
+	// Rescan member of the F07 family: these two hand-rolled copy
+	// loops had no no-progress bound at all. In UDP-over-TCP mode
+	// pc1 is a stream conn, so a client whose application died
+	// while its kernel kept the connection up blocked both
+	// goroutines — and held the upstream association — forever.
+	// Both directions now read under the shared bidirectional
+	// progress window, exactly as udp.Relay enforces it (F07): a
+	// direction that finds the whole association stalled closes
+	// both endpoints and ends the relay.
+	act := &ssRelayActivity{}
+	act.touch()
+	window := ssRelayIdleTimeout
+	var timedOut atomic.Bool
+
 	errc := make(chan error, 2)
 
 	go func() {
 		var b [MaxMessageSize]byte
 		for {
 			err := func() error {
-				n, addr, err := pc1.ReadFrom(b[:])
+				n, addr, err := readSSPacket(pc1, b[:], act, window)
 				if err != nil {
+					if isSSTimeout(err) {
+						timedOut.Store(true)
+						pc1.Close()
+						pc2.Close()
+						return errSSRelayIdleTimeout
+					}
 					return err
 				}
 
@@ -221,19 +257,20 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 				}
 
 				if h.options.Bypass != nil && h.options.Bypass.Contains(ctx, addr.Network(), addr.String()) {
-					log.Warn("bypass: ", addr)
+					bypassHits.NoteDetail(addr.String())
 					return nil
 				}
 
 				target, perr := h.pinUDPTarget(ctx, pins, addr)
 				if perr != nil {
-					log.Warn("bypass pin: ", perr)
+					pinErrs.NoteErr(perr)
 					return nil
 				}
 
 				if _, err = pc2.WriteTo(b[:n], target); err != nil {
 					return err
 				}
+				act.touch()
 
 				log.Tracef("%s >>> %s data: %d",
 					pc2.LocalAddr(), addr, n)
@@ -251,25 +288,32 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 		var b [MaxMessageSize]byte
 		for {
 			err := func() error {
-				n, raddr, err := pc2.ReadFrom(b[:])
+				n, raddr, err := readSSPacket(pc2, b[:], act, window)
 				if err != nil {
+					if isSSTimeout(err) {
+						timedOut.Store(true)
+						pc1.Close()
+						pc2.Close()
+						return errSSRelayIdleTimeout
+					}
 					return err
 				}
 
 				if h.options.Bypass != nil && h.options.Bypass.Contains(ctx, raddr.Network(), raddr.String()) {
-					log.Warn("bypass: ", raddr)
+					bypassHits.NoteDetail(raddr.String())
 					return nil
 				}
 
 				target, perr := h.pinUDPTarget(ctx, pins, raddr)
 				if perr != nil {
-					log.Warn("bypass pin: ", perr)
+					pinErrs.NoteErr(perr)
 					return nil
 				}
 
 				if _, err = pc1.WriteTo(b[:n], target); err != nil {
 					return err
 				}
+				act.touch()
 
 				log.Tracef("%s <<< %s data: %d",
 					pc2.LocalAddr(), raddr, n)
@@ -283,7 +327,74 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 		}
 	}()
 
-	return <-errc
+	err = <-errc
+	if timedOut.Load() {
+		err = errSSRelayIdleTimeout
+	}
+	return err
+}
+
+// ssRelayIdleTimeout is the no-progress window for one SS-UDP
+// association. It matches the FIX-1 transport window and
+// udp.Relay's default (300s): the criterion is absence of
+// progress in either direction, not age. A variable only so
+// tests can shrink the window.
+var ssRelayIdleTimeout = 300 * time.Second
+
+var errSSRelayIdleTimeout = errors.New("ss udp relay: idle timeout, no progress in either direction")
+
+// ssRelayActivity is the shared bidirectional progress clock of
+// one SS-UDP association: an atomic timestamp, no goroutine (the
+// same construction udp.Relay uses for F07).
+type ssRelayActivity struct {
+	last atomic.Int64 // unix nano of the last successful packet move
+}
+
+func (a *ssRelayActivity) touch() {
+	a.last.Store(time.Now().UnixNano())
+}
+
+func (a *ssRelayActivity) deadline(window time.Duration) time.Time {
+	return time.Unix(0, a.last.Load()).Add(window)
+}
+
+func (a *ssRelayActivity) stalled(window time.Duration) bool {
+	return time.Since(time.Unix(0, a.last.Load())) >= window
+}
+
+func isSSTimeout(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// readSSPacket reads one packet from pc under the shared
+// no-progress window: pc's read deadline is armed at
+// lastProgress+window before each blocking read, and a timeout
+// wake is returned to the caller only when the whole association
+// has in fact made no progress for the full window — if the
+// sibling direction moved a packet recently, the deadline is
+// re-armed instead. An endpoint that refuses deadline arming
+// keeps the historical unbounded behaviour for its own direction
+// only.
+func readSSPacket(pc net.PacketConn, b []byte, act *ssRelayActivity, window time.Duration) (int, net.Addr, error) {
+	dl, canArm := pc.(interface{ SetReadDeadline(time.Time) error })
+	for {
+		if canArm {
+			_ = dl.SetReadDeadline(act.deadline(window))
+		}
+		n, addr, err := pc.ReadFrom(b)
+		if err == nil {
+			act.touch()
+			return n, addr, nil
+		}
+		if isSSTimeout(err) && !act.stalled(window) {
+			continue
+		}
+		return 0, nil, err
+	}
 }
 
 func (h *ssuHandler) checkRateLimit(addr net.Addr) bool {

@@ -9,7 +9,9 @@ import (
 	"io"
 	"math"
 	"net"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-gost/core/common/bufpool"
@@ -75,6 +77,15 @@ func (h *routerHandler) handleAssociate(ctx context.Context, conn net.Conn, netw
 
 	conn = &packetConn{Conn: conn}
 
+	// F08: track bidirectional progress of this association. The
+	// read loop below and the ConnectorPool writer both run over
+	// this conn, so wrapping it here makes reads (packets from the
+	// connector) and writes (packets routed to the connector)
+	// count as progress alike.
+	act := &associateActivity{}
+	act.touch()
+	conn = &activityConn{Conn: conn, act: act}
+
 	clientID := fmt.Sprintf("%s@%s", host, routerID)
 	var stats stats.Stats
 	if h.stats != nil {
@@ -121,10 +132,34 @@ func (h *routerHandler) handleAssociate(ctx context.Context, conn net.Conn, netw
 
 	log.Debugf("%s/%s: router=%s, connector=%s, weight=%d established", host, network, routerID, connectorID, connectorID.Weight())
 
+	// F08: this read loop is the association's only lifecycle
+	// owner, and it previously blocked in Read with no deadline
+	// at all (the handler cleared the handshake deadline before
+	// dispatch). A connector whose application died while its
+	// kernel kept the tunnel up therefore never returned: its
+	// ConnectorPool entry stayed routable forever and sdRenew
+	// kept renewing its SD registration without bound. The loop
+	// now arms the read deadline at lastProgress+window before
+	// every read (the FIX-1 transport discipline; packetConn may
+	// serve a buffered remainder without blocking, in which case
+	// the armed deadline simply applies to the next real read),
+	// and a timeout wake ends the association only when neither
+	// direction has moved a packet for the full window. Returning
+	// is what reaps the rest: the deferred pool.Del drops the
+	// pool entry and the deferred cancel stops sdRenew.
+	defer conn.SetReadDeadline(time.Time{})
+
 	var b [MaxMessageSize]byte
 	for {
+		_ = conn.SetReadDeadline(act.deadline(associateIdleTimeout))
 		n, err := conn.Read(b[:])
 		if err != nil {
+			if isTimeoutErr(err) {
+				if act.stalled(associateIdleTimeout) {
+					return errAssociateIdleTimeout
+				}
+				continue
+			}
 			if err == io.EOF {
 				return nil
 			}
@@ -133,6 +168,67 @@ func (h *routerHandler) handleAssociate(ctx context.Context, conn net.Conn, netw
 
 		h.handlePacket(ctx, b[:n], routerID, log)
 	}
+}
+
+// associateIdleTimeout is the no-progress window for one router
+// association. It matches the FIX-1 transport window (300s): the
+// criterion is absence of progress in either direction, not age,
+// so a connector exchanging even a trickle of packets stays
+// associated indefinitely. A variable only so tests can shrink
+// the window.
+var associateIdleTimeout = 300 * time.Second
+
+var errAssociateIdleTimeout = errors.New("router: association idle timeout, no progress in either direction")
+
+// associateActivity is the shared bidirectional progress clock of
+// one association: an atomic timestamp, no goroutine. The
+// per-packet cost is one deadline arm plus one atomic store, the
+// arming discipline the FIX-1 transport applies per read segment.
+type associateActivity struct {
+	last atomic.Int64 // unix nano of the last successful read or write
+}
+
+func (a *associateActivity) touch() {
+	a.last.Store(time.Now().UnixNano())
+}
+
+func (a *associateActivity) deadline(window time.Duration) time.Time {
+	return time.Unix(0, a.last.Load()).Add(window)
+}
+
+func (a *associateActivity) stalled(window time.Duration) bool {
+	return time.Since(time.Unix(0, a.last.Load())) >= window
+}
+
+// activityConn records successful reads and writes on the
+// association connection as progress.
+type activityConn struct {
+	net.Conn
+	act *associateActivity
+}
+
+func (c *activityConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.act.touch()
+	}
+	return n, err
+}
+
+func (c *activityConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.act.touch()
+	}
+	return n, err
+}
+
+func isTimeoutErr(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 func (h *routerHandler) sdRenew(ctx context.Context, clientID string, connectorID string) {
