@@ -627,7 +627,13 @@ resolve_latest_release_tag() {
 # 存在由下载/拉取环节 fail-closed 回答。API 解析出的 tag 由
 # 解析侧的渠道文法把关（release_tag_pattern），不在此列。
 panel_validate_explicit_version() {
-  [[ "$1" =~ ^[0-9A-Za-z][0-9A-Za-z.-]*$ ]]
+  [[ "$1" =~ ^[0-9A-Za-z][0-9A-Za-z.-]*$ ]] || return 1
+  # R2-P2-11：边缘按规范文法（后端 kernelVersionPattern）对齐——
+  # 禁 ".."、总长 ≤40；首字符与字符集本已与规范一致。install.sh
+  # 的 version_value_format_ok 同律（其 ".." 本已在拒绝集内）。
+  [[ "$1" != *".."* ]] || return 1
+  (( ${#1} <= 40 )) || return 1
+  return 0
 }
 
 resolve_version() {

@@ -305,6 +305,14 @@ func containsString(list []string, v string) bool {
 // into download URL templates unchecked, and the only guards were the
 // handler's normaliser and the agent's pattern — any future caller
 // bypassing the normaliser silently reopened template injection.
+//
+// 规范文法（R2-P2-11 收敛，本点为规范表述）:版本/tag 单段文法＝
+// ^[0-9A-Za-z][0-9A-Za-z.-]{0,39}$（首字符字母数字、总长 ≤40）且
+// 不含 ".."。其余实现点——agent safeVersionPattern（镜像本点）、
+// handler normalizeKernelVersion、validateUpgradeVersion、
+// redirectTagPattern、脚本 panel_validate_explicit_version 与
+// version_value_format_ok——一律按本规范对齐边缘;保留差异者必须
+// 在各自实现处点名并给出理由,新增版本文法实现点须先对照本规范。
 var kernelVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,39}$`)
 
 func validKernelVersion(version string) bool {

@@ -48,6 +48,30 @@ jobs:
       - name: Check panel_install.sh version stamp bump
         run: bash scripts/check-script-version-bump.sh
 
+      # R2-X2-01: 「只给 main 已绿提交打 tag」中「属 main」一半的机
+      # 械门。此前 verify（reusable ci-build）只证明该提交能过门、
+      # 不证明它在 main 上，发版归属靠仓外约定（见下方 verify 的
+      # C4-02 注）。本步在产出任何发版决策前断言归属：tag push 要
+      # 求被打 tag 的提交是 origin/main 的祖先；workflow_dispatch
+      # 要求触发 ref 本身就是 main（手动发版会在当前提交上建 tag，
+      # 从其他分支 dispatch 等于给非 main 提交发版）。任一不成立即
+      # 红：check-version 失败、无任何输出，后续 build/create-
+      # release 全部 needs 本 job，自然停摆。
+      - name: Verify release commit is on main
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+              echo "::error::workflow_dispatch 发版必须从 main 分支触发（当前 ref: ${{ github.ref }}）"
+              exit 1
+            fi
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::发版提交 $GITHUB_SHA 不在 main 上（不是 origin/main 的祖先），拒绝发版"
+            exit 1
+          fi
+          echo "✅ Release commit $GITHUB_SHA is on main"
+
       - name: Determine version and build strategy
         id: version
         run: |

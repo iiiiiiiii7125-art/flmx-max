@@ -257,7 +257,16 @@ func isValidAgentVersion(v string) bool {
 // C-01：重定向解析出的 tag 会进入 nodeInstall 的 shell 命令
 // （VERSION=%s 无引号拼接），生产处必须校验字符集：只允
 // [0-9A-Za-z.-]，拒一切 shell 元字符（; $ 空格 | 等）。
-var redirectTagPattern = regexp.MustCompile(`^[0-9A-Za-z.-]+$`)
+// R2-P2-11：边缘按规范文法（internal/kernel/capabilities.go 的
+// 规范表述）对齐——首字符须为字母数字、总长 ≤40、另禁 ".."
+// （旧裸字符集放行 ".." 与首字符 "."/"-"；tag 还会进 URL 路径
+// 段，穿越必须在此拦下）。两处消费（本文件与 gh_mirror.go）统
+// 一走 validRedirectTag，不再各自直查 pattern。
+var redirectTagPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.-]{0,39}$`)
+
+func validRedirectTag(tag string) bool {
+	return redirectTagPattern.MatchString(tag) && !strings.Contains(tag, "..")
+}
 
 // ---- GitHub 版本列表缓存 ----
 // 未认证 GitHub API 限流 60 次/小时/IP（面板出口常为共享 NAT，更易耗尽）。
@@ -468,7 +477,7 @@ func fetchLatestTagByRedirectWithTimeout(url string, timeout time.Duration) (str
 		return "", fmt.Errorf("无法从重定向解析最新版本: %q", loc)
 	}
 	// C-01：tag 字符集校验（纵深第一道；第二道在 nodeInstall）。
-	if !redirectTagPattern.MatchString(tag) {
+	if !validRedirectTag(tag) {
 		return "", fmt.Errorf("重定向解析的版本号格式无效: %q", tag)
 	}
 	return tag, nil

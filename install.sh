@@ -885,6 +885,10 @@ resolve_latest_release_tag() {
 version_value_format_ok() {
   local value="$1"
   [[ -n "$value" ]] || return 1
+  # R2-P2-11：总长 ≤40，与规范文法（后端 kernelVersionPattern）
+  # 同界；".." 与穿越字符已由下方 case 拒绝、字符集已由渠道正则
+  # 把关。panel_install.sh 的 panel_validate_explicit_version 同律。
+  (( ${#value} <= 40 )) || return 1
   case "$value" in
     */*|*\?*|*\#*|*%*|*\\*|*[[:space:]]*|*..*) return 1 ;;
   esac
