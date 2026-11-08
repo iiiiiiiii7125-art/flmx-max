@@ -29,6 +29,11 @@ func (c *relayConnector) Bind(ctx context.Context, conn net.Conn, network, addre
 
 	switch network {
 	case "tcp", "tcp4", "tcp6":
+		// The bind handshake in c.bind is parsed with small stream
+		// reads; over a datagram transport they would discard
+		// datagram tails, so present stream semantics by transport
+		// as in Connect (F-UDP-2b). No-op for stream transports.
+		conn = udp.StreamConnIfDatagram(conn)
 		return c.bindTCP(ctx, conn, network, address, log)
 	case "udp", "udp4", "udp6":
 		// Same datagram-transport hazard as in Connect: the bind

@@ -70,6 +70,14 @@ func (c *tunnelConnector) Connect(ctx context.Context, conn net.Conn, network, a
 		conn = xudp.NewStreamConn(conn)
 	}
 
+	// A stream payload (e.g. TCP) over a datagram transport needs
+	// the same protection as the UDP payload above: the response
+	// drain below reads a fixed-size header, and a response merged
+	// with the first data frame into one datagram would lose the
+	// frame (F-UDP-2b). No-op for stream transports and for conns
+	// already wrapped above.
+	conn = xudp.StreamConnIfDatagram(conn)
+
 	if c.options.Auth != nil {
 		pwd, _ := c.options.Auth.Password()
 		req.Features = append(req.Features, &relay.UserAuthFeature{
