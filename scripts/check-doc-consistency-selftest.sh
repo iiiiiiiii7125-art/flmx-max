@@ -36,6 +36,13 @@
 # 环境前提（与头部「无 go 时 §10/§16 等子项实核」口径一致），
 # 不静默跳过。注：变体 4–7（FIX-DOC-R 的 §18–§21 四族）与本变体
 # 同树，合并后自检依次跑变体 1–8。
+# FIX-GATE-CALIB 改钉（R2-GATE-02）：上文 55/153、59/149 均为历史
+# 标定记录（出处见各重标定提交），不再是变体 8 的写死锚点——变体
+# 8 改为运行时从镜像内 ci-build.yml 机械读现行标记值（其后标记又
+# 经 INT-5 重标定为 61/147），按实读值做 -1 变异并按实读值拼装
+# 期望点名串，另加变异落点断言防静默空转；各变体变异后逐个还原
+# 本变体文件（变体 7 的 monitoring.md 还原一并补齐，旧实现漏还原
+# 曾污染变体 8 的判定环境）。
 #
 # 用法：check-doc-consistency-selftest.sh（无参数，作用于本仓库）。
 # 退出码：0 = 基线 PASS 且变体均被抓；1 = 任一断言不成立。
@@ -129,16 +136,31 @@ if run_gate "$TMP/v7.log"; then
 fi
 grep -q "服务监控限值披露门" "$TMP/v7.log" && echo "OK: variant 7 caught and named" || {
   echo "FAIL: variant 7 caught but the drift was not named"; sed 's/^/    /' "$TMP/v7.log"; exit 1; }
+cp "$ROOT/doc/guide/monitoring.md" "$MIR/doc/guide/monitoring.md"
 
 echo "== variant 8: ci-build.yml x-count marker drifts from go list reality must FAIL and name it (§10(b)) =="
 if ! command -v go >/dev/null 2>&1; then
   echo "FAIL: variant 8 undecidable — go toolchain missing, §10(b) is PENDING in this environment (see header)"; exit 1
 fi
-sed -i 's/\[K11-COUNT:x-tested=59\]/[K11-COUNT:x-tested=58]/' "$MIR/.github/workflows/ci-build.yml"
+# 变异目标与期望一律从镜像内现行标记机械导出、不写死计数
+# （FIX-GATE-CALIB / R2-GATE-02：旧实现写死 59/149，INT-5 把标记
+# 重标定为 61/147 后 sed 零匹配静默空转、期望串永不命中，自检在
+# 任何环境下都无法 PASS）。变异落点另行断言，锚点漂移即点名红，
+# 不许再静默空转。
+CI_YML="$MIR/.github/workflows/ci-build.yml"
+CUR_T=$(grep -oP '\[K11-COUNT:x-tested=\K[0-9]+' "$CI_YML" | head -n 1)
+CUR_U=$(grep -oP '\[K11-COUNT:x-untested=\K[0-9]+' "$CI_YML" | head -n 1)
+if [ -z "$CUR_T" ] || [ -z "$CUR_U" ]; then
+  echo "FAIL: variant 8 cannot read the current x-count markers from the mirror ci-build.yml"; exit 1
+fi
+MUT_T=$((CUR_T - 1))
+sed -i "s/\[K11-COUNT:x-tested=${CUR_T}\]/[K11-COUNT:x-tested=${MUT_T}]/" "$CI_YML"
+grep -q "\[K11-COUNT:x-tested=${MUT_T}\]" "$CI_YML" || {
+  echo "FAIL: variant 8 mutation did not land (marker anchor drifted)"; exit 1; }
 if run_gate "$TMP/v8.log"; then
   echo "FAIL: variant 8 was not caught"; exit 1
 fi
-grep -q "声称 tested=58 untested=149 ≠ 实数 tested=59 untested=149" "$TMP/v8.log" && echo "OK: variant 8 caught and named" || {
+grep -q "声称 tested=${MUT_T} untested=${CUR_U} ≠ 实数 tested=${CUR_T} untested=${CUR_U}" "$TMP/v8.log" && echo "OK: variant 8 caught and named" || {
   echo "FAIL: variant 8 caught but the drift was not named"; sed 's/^/    /' "$TMP/v8.log"; exit 1; }
 cp "$ROOT/.github/workflows/ci-build.yml" "$MIR/.github/workflows/ci-build.yml"
 
