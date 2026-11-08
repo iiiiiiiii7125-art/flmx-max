@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261108.01"
+SCRIPT_VERSION="20261108.02"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -3135,6 +3135,39 @@ pull_panel_update_images() {
   fi
 }
 
+# GARBAGE-AUDIT A1：升级收尾定点删除旧版本镜像。此前两条升级路径
+# 都只拉新、换容器，全程零清理，backend/frontend 用版本号 tag、
+# 每版都是新镜像对象，旧版逐版无界累积（约 0.2–0.5 GB/版）。
+# 删除面严格定点：仅本面板发布前缀（panel_image_prefix）下、镜像
+# 名为现行 backend/frontend 名或旧仓名形态（flmx-flux-panel-
+# backend、flvx-flux-panel-backend）、且 tag 恰为升级前版本者。
+# 调用点在健康检查与卷名自检全过之后；现行版本与 latest 永不入
+# 列（同版本重装时 old==new 直接跳过）；数据卷与任何其他镜像一
+# 律不动。删除失败（镜像仍被残留容器占用等）只告警、不回滚已
+# 经通过健康检查的升级。
+cleanup_old_panel_images_after_update() {
+  local old_version="$1" new_version="$2"
+  if [[ -z "$old_version" || "$old_version" == "$new_version" ]]; then
+    return 0
+  fi
+  if [[ "$old_version" == "latest" ]] || ! panel_validate_explicit_version "$old_version"; then
+    echo "⚠️ 升级前版本 tag「${old_version}」不可定点解析，跳过旧镜像清理（升级不受影响）"
+    return 0
+  fi
+  local prefix name ref
+  prefix=$(panel_image_prefix)
+  for name in flmx-panel-backend flmx-flux-panel-backend flvx-flux-panel-backend flmx-vite-frontend; do
+    ref="${prefix}${name}:${old_version}"
+    if docker image inspect "$ref" >/dev/null 2>&1; then
+      if docker rmi "$ref" >/dev/null 2>&1; then
+        echo "🧹 已删除旧版本镜像：$ref"
+      else
+        echo "⚠️ 旧版本镜像删除失败（可能仍被残留容器占用），已跳过：$ref（升级不受影响，可稍后手动 docker rmi 清理）"
+      fi
+    fi
+  done
+}
+
 # FIX2-C #1（V6-01）：升级替换 compose 前，把存量 compose 的网络名
 # 与子网搬进候选文件。FIX-G 已把模板子网改为 172.30.0.0/16，但那
 # 只应作用于全新安装；整份覆写会连在用子网一起换掉，等于升级即
@@ -3960,6 +3993,11 @@ update_panel() {
   if [[ -z "$current_version" ]]; then
     current_version=$(get_env_var "FLUX_VERSION" || true)
   fi
+  # GARBAGE-AUDIT A1：升级前 .env 版本 tag 在此定格（下方与实际运
+  # 行版本交叉核对会覆写 current_version）：升级收尾按此 tag 定点
+  # 删除旧镜像；两者不一致时收尾对实际运行 tag 再补一轮同口径
+  # 清理（见 cleanup_old_panel_images_after_update）。
+  local pre_update_env_version="$current_version"
   # FIX2-C #9：与实际运行版本交叉核对——两者不一致时告警并以实际
   # 运行版本为准做防降级判定（.env 可能被手改或停留在失败的升级
   # 目标上，只信它会放过真实降级）。取不到实际版本时保持 .env 口径。
@@ -4139,6 +4177,15 @@ update_panel() {
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
     return 1
+  fi
+
+  # GARBAGE-AUDIT A1：健康检查与卷名自检全过、升级已成定局后，
+  # 按升级前版本 tag 定点删除旧 backend/frontend 镜像（失败只告
+  # 警不回滚）。current_version 经实际运行版本交叉核对后可能与
+  # .env 记录不同，两者不同则各清一轮（均为本部署自己的旧 tag）。
+  cleanup_old_panel_images_after_update "$pre_update_env_version" "$LATEST_VERSION"
+  if [[ "$current_version" != "$pre_update_env_version" ]]; then
+    cleanup_old_panel_images_after_update "$current_version" "$LATEST_VERSION"
   fi
 
   echo "✅ 更新完成"
