@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync/atomic"
 
 	"github.com/go-gost/core/chain"
 	"github.com/go-gost/core/connector"
@@ -107,17 +108,41 @@ func (tr *Transport) Copy() chain.Transporter {
 	return tr2
 }
 
+// retireSkips counts the dialers and connectors that Transport.Retire
+// found without a Retire method. The skip used to be silent, which is
+// how the ssh/sshd dialers leaked their sessions across chain reloads
+// unnoticed (F05): a component that cannot be retired keeps its old
+// generation's resources alive, so the event must at least be
+// observable. Components that legitimately hold no cross-generation
+// state may still appear here; the count is the signal to audit, not
+// a verdict.
+var retireSkips atomic.Int64
+
+// RetireSkipCount returns the number of dialer/connector Retire
+// skips observed since process start.
+func RetireSkipCount() int64 {
+	return retireSkips.Load()
+}
+
 // Retire prevents long-lived dialer sessions owned by an obsolete chain from
 // accepting new streams while allowing existing streams to drain.
 func (tr *Transport) Retire() {
 	if tr == nil {
 		return
 	}
-	if retirer, ok := tr.dialer.(interface{ Retire() }); ok {
-		retirer.Retire()
+	if tr.dialer != nil {
+		if retirer, ok := tr.dialer.(interface{ Retire() }); ok {
+			retirer.Retire()
+		} else {
+			retireSkips.Add(1)
+		}
 	}
-	if retirer, ok := tr.connector.(interface{ Retire() }); ok {
-		retirer.Retire()
+	if tr.connector != nil {
+		if retirer, ok := tr.connector.(interface{ Retire() }); ok {
+			retirer.Retire()
+		} else {
+			retireSkips.Add(1)
+		}
 	}
 }
 

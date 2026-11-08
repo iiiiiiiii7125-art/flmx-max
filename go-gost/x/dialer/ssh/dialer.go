@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ func init() {
 type sshDialer struct {
 	sessions     map[string]*ssh_util.Session
 	sessionMutex sync.Mutex
+	retired      bool
 	md           metadata
 	options      dialer.Options
 }
@@ -52,6 +54,10 @@ func (d *sshDialer) Multiplex() bool {
 func (d *sshDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialOption) (conn net.Conn, err error) {
 	d.sessionMutex.Lock()
 	defer d.sessionMutex.Unlock()
+
+	if d.retired {
+		return nil, net.ErrClosed
+	}
 
 	session, ok := d.sessions[addr]
 	if session != nil && session.IsClosed() {
@@ -93,6 +99,47 @@ func (d *sshDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialOp
 	go ssh.DiscardRequests(reqs)
 
 	return ssh_util.NewConn(session, channel), nil
+}
+
+// Retire releases the sessions of a dialer whose chain has been
+// replaced (F05). Previously this dialer had no Retire at all, so
+// Transport.Retire's type assertion silently skipped it and the
+// old generation's sessions — underlying connections plus their
+// Wait/WaitClose goroutines — survived every chain reload until
+// the peer happened to die (with keepalive off by default, a
+// silently dead peer meant forever). Sessions are detached so no
+// new channel can be opened over them, then each session drains:
+// its connection closes when its last open channel finishes.
+func (d *sshDialer) Retire() {
+	for _, session := range d.detachSessions() {
+		session.Retire()
+	}
+}
+
+// Close immediately closes every cached session.
+func (d *sshDialer) Close() error {
+	var errs []error
+	for _, session := range d.detachSessions() {
+		errs = append(errs, session.Close())
+	}
+	return errors.Join(errs...)
+}
+
+func (d *sshDialer) detachSessions() []*ssh_util.Session {
+	if d == nil {
+		return nil
+	}
+	d.sessionMutex.Lock()
+	d.retired = true
+	sessions := make([]*ssh_util.Session, 0, len(d.sessions))
+	for _, session := range d.sessions {
+		if session != nil {
+			sessions = append(sessions, session)
+		}
+	}
+	d.sessions = make(map[string]*ssh_util.Session)
+	d.sessionMutex.Unlock()
+	return sessions
 }
 
 func (d *sshDialer) initSession(ctx context.Context, addr string, conn net.Conn) (*ssh_util.Session, error) {
