@@ -224,7 +224,9 @@ func (ep *entrypoint) handleHTTP(ctx context.Context, conn net.Conn, ro *xrecord
 
 	ro.Time = time.Time{}
 
-	if err := ep.httpRoundTrip(ctx, xio.NewReadWriter(br, conn), req, ro, &pStats, log); err != nil {
+	// NewReadWriteConn (not xio.NewReadWriter): keeps the conn's deadlines
+	// and Close reachable for Transport's no-progress teardown (P1-01).
+	if err := ep.httpRoundTrip(ctx, xnet.NewReadWriteConn(br, conn, conn), req, ro, &pStats, log); err != nil {
 		log.Error(err)
 		return err
 	}
@@ -245,7 +247,9 @@ func (ep *entrypoint) handleHTTP(ctx context.Context, conn net.Conn, ro *xrecord
 			log.Trace(string(dump))
 		}
 
-		if err := ep.httpRoundTrip(ctx, xio.NewReadWriter(br, conn), req, ro, &pStats, log); err != nil {
+		// NewReadWriteConn (not xio.NewReadWriter): keeps the conn's deadlines
+		// and Close reachable for Transport's no-progress teardown (P1-01).
+		if err := ep.httpRoundTrip(ctx, xnet.NewReadWriteConn(br, conn, conn), req, ro, &pStats, log); err != nil {
 			return err
 		}
 	}

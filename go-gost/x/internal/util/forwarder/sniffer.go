@@ -180,7 +180,9 @@ func (h *Sniffer) HandleHTTP(ctx context.Context, conn net.Conn, opts ...HandleO
 
 	ro.Time = time.Time{}
 
-	shouldClose, err := h.httpRoundTrip(ctx, xio.NewReadWriter(br, conn), cc, node, req, &pStats, &ho)
+	// NewReadWriteConn (not xio.NewReadWriter): keeps the conn's deadlines
+	// and Close reachable for Transport's no-progress teardown (P1-01).
+	shouldClose, err := h.httpRoundTrip(ctx, xnet.NewReadWriteConn(br, conn, conn), cc, node, req, &pStats, &ho)
 	if err != nil || shouldClose {
 		return err
 	}
@@ -201,7 +203,9 @@ func (h *Sniffer) HandleHTTP(ctx context.Context, conn net.Conn, opts ...HandleO
 			log.Trace(string(dump))
 		}
 
-		if shouldClose, err := h.httpRoundTrip(ctx, xio.NewReadWriter(br, conn), cc, node, req, &pStats, &ho); err != nil || shouldClose {
+		// NewReadWriteConn (not xio.NewReadWriter): keeps the conn's deadlines
+		// and Close reachable for Transport's no-progress teardown (P1-01).
+		if shouldClose, err := h.httpRoundTrip(ctx, xnet.NewReadWriteConn(br, conn, conn), cc, node, req, &pStats, &ho); err != nil || shouldClose {
 			return err
 		}
 	}

@@ -32,7 +32,6 @@ import (
 	xbypass "github.com/go-gost/x/bypass"
 	ctxvalue "github.com/go-gost/x/ctx"
 	ctx_internal "github.com/go-gost/x/internal/ctx"
-	xio "github.com/go-gost/x/internal/io"
 	xnet "github.com/go-gost/x/internal/net"
 	xhttp "github.com/go-gost/x/internal/net/http"
 	"github.com/go-gost/x/internal/util/sniffing"
@@ -469,7 +468,10 @@ func (h *httpHandler) handleProxy(ctx context.Context, conn net.Conn, req *http.
 			log.Trace(string(dump))
 		}
 
-		if close, err := h.proxyRoundTrip(ctx, xio.NewReadWriter(br, conn), req, ro, &pStats, log); err != nil || close {
+		// NewReadWriteConn (not xio.NewReadWriter): keeps the conn's
+		// deadlines and Close reachable through the bufio reader, so
+		// Transport can arm and tear down an upgraded session (P1-01).
+		if close, err := h.proxyRoundTrip(ctx, xnet.NewReadWriteConn(br, conn, conn), req, ro, &pStats, log); err != nil || close {
 			return err
 		}
 	}
