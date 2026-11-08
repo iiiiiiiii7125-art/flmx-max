@@ -38,24 +38,36 @@ import (
 const DefaultReadQueueSize = 1024
 
 // DefaultReadQueueBytes is the per-session byte cap on the receive
-// queue: a datagram is admitted only while the queued byte total
-// plus its own size stays within this budget. Before this cap the
-// queue was metered by packet count only, so a stalled consumer
-// plus a sender flooding maximum-size (64KiB) datagrams could pin
-// 1024 x 65535B ≈ 64MiB in a single session — on a 464MB node a
-// handful of such sessions could exhaust memory on their own
-// (P1-02).
+// queue: a datagram is admitted only while the retained bytes it
+// would add stay within this budget. The charge is the capacity
+// of the pooled buffer the datagram pins until dequeue, NOT its
+// payload length: a queued datagram retains its whole backing
+// array, so metering by payload length let 1024 small datagrams
+// pin 1024 full-size read buffers (1024 x 65536B = 64MiB) in one
+// session while the metered payload total stayed far below the
+// cap (R2-P1-F01). Before any byte cap existed the queue was
+// metered by packet count only, so a stalled consumer plus a
+// sender flooding maximum-size (64KiB) datagrams could pin the
+// same 64MiB — on a 464MB node a handful of such sessions could
+// exhaust memory on their own (P1-02).
 //
-// 4MiB is chosen as follows: at the typical MTU-sized datagram
-// (<=1500B) the 1024-packet depth caps the queue at ~1.5MiB, so
-// the byte cap never binds for real traffic and burst absorption
-// is unchanged; the cap only engages against oversized-datagram
-// floods, where it cuts the worst case 16x (64MiB -> 4MiB). 4MiB
-// still admits 64 maximum-size datagrams back to back, far beyond
-// any legitimate in-flight window for a single UDP association,
-// while keeping the per-session worst case small against the
-// session counts a small node carries. The packet count remains
-// as a second, independent cap; whichever is hit first drops.
+// listenLoop shrinks an oversized read buffer down to the
+// datagram's own bufpool size class before enqueue whenever that
+// at least halves the pinned capacity (see fitDatagramBuffer),
+// so the charge tracks the payload's size class: a <=128B
+// datagram queues in a 128B buffer, an MTU-sized one in a 2048B
+// buffer, and the 1024-packet depth then caps a small-datagram
+// queue at ~2MiB, below this budget — burst absorption is
+// unchanged. The budget binds first only for datagrams that pin
+// large buffers: a maximum-size datagram charges its full
+// 65536B buffer, so 64 of them fill the budget exactly. Either
+// way the retained worst case is now provably this budget, by
+// construction of the charge. 4MiB still admits 64 maximum-size
+// datagrams back to back, far beyond any legitimate in-flight
+// window for a single UDP association, while keeping the
+// per-session worst case small against the session counts a
+// small node carries. The packet count remains as a second,
+// independent cap; whichever is hit first drops.
 const DefaultReadQueueBytes = 4 << 20
 
 // DefaultBacklog is the new-session queue depth NewListener falls
@@ -192,13 +204,14 @@ func (ln *listener) listenLoop() {
 			continue
 		}
 
-		if err := c.WriteQueue(b[:n]); err != nil {
+		dgram := fitDatagramBuffer(b, n)
+		if err := c.WriteQueue(dgram); err != nil {
 			// The datagram is dropped, so ownership of the pooled
 			// buffer stays with listenLoop: return it (D3-08).
 			// Without this, the queue-full path — exactly the
 			// overload condition — allocates a fresh buffer per
 			// dropped packet instead of reusing the pool.
-			bufpool.Put(b)
+			bufpool.Put(dgram)
 			if errors.Is(err, errQueueFull) {
 				// Counted and logged in aggregated summaries,
 				// never per packet (P1-03).
@@ -210,6 +223,35 @@ func (ln *listener) listenLoop() {
 			}
 		}
 	}
+}
+
+// fitDatagramBuffer returns the datagram b[:n] backed by a pooled
+// buffer of the datagram's own bufpool size class whenever that at
+// least halves the capacity the queued datagram would pin. b is
+// the listener's read buffer, sized for the largest datagram
+// (ReadBufferSize), so without this step every queued small
+// datagram pins a full-size buffer — 65536B at the default size —
+// for as long as it sits in the queue, and the byte budget
+// (metered on the pinned capacity, see WriteQueue) would bind
+// after 64 datagrams of any size, gutting burst absorption.
+// Shrinking keeps the charge proportional to the datagram. The
+// swap costs one pool Get/Put plus a payload copy, and only
+// happens when it at least halves the pinned capacity, so
+// near-full buffers keep the zero-copy path. Ownership: the
+// returned slice is the one to enqueue or Put; when a swap
+// happens the original b has already been returned to the pool.
+func fitDatagramBuffer(b []byte, n int) []byte {
+	if 2*n > cap(b) {
+		return b[:n]
+	}
+	nb := bufpool.Get(n)
+	if 2*cap(nb) > cap(b) {
+		bufpool.Put(nb)
+		return b[:n]
+	}
+	copy(nb, b[:n])
+	bufpool.Put(b)
+	return nb
 }
 
 func (ln *listener) isClosed() bool {
@@ -327,7 +369,7 @@ type conn struct {
 	// the read-face state) keeps the enqueue hot path free of any
 	// interaction with stream reads and deadline changes.
 	qmu    sync.Mutex
-	qBytes int // bytes currently held in rc
+	qBytes int // retained bytes currently held in rc, charged at each queued buffer's cap
 
 	mu        sync.Mutex    // guards rbuf and the deadline state
 	rbuf      []byte        // unread remainder of the current datagram (stream face)
@@ -374,13 +416,15 @@ func (c *conn) readDatagram() ([]byte, error) {
 			if timer != nil {
 				timer.Stop()
 			}
-			// Release the datagram's bytes from the queue byte
-			// budget at dequeue time (P1-02); the buffer itself
-			// stays alive with the reader until returned to the
-			// pool, but the admission budget frees up here so a
-			// draining consumer immediately makes room.
+			// Release the datagram's charged bytes — the
+			// capacity of the buffer it pinned (R2-P1-F01) —
+			// from the queue byte budget at dequeue time
+			// (P1-02); the buffer itself stays alive with the
+			// reader until returned to the pool, but the
+			// admission budget frees up here so a draining
+			// consumer immediately makes room.
 			c.qmu.Lock()
-			c.qBytes -= len(bb)
+			c.qBytes -= cap(bb)
 			c.qmu.Unlock()
 			c.SetIdle(false)
 			return bb, nil
@@ -551,24 +595,30 @@ func (c *conn) SetIdle(idle bool) {
 
 // WriteQueue enqueues one datagram for the session's consumer.
 // Admission is capped twice (P1-02): by the channel's packet-count
-// depth and by the DefaultReadQueueBytes byte budget, metered on
-// the datagram's actual size — whichever cap is hit first drops
-// the datagram with errQueueFull. The session-closed check rides
-// in the same critical section so a closed session can never
-// strand accounted bytes nobody will dequeue.
+// depth and by the DefaultReadQueueBytes byte budget — whichever
+// cap is hit first drops the datagram with errQueueFull. The byte
+// budget is metered on the capacity of the buffer backing b: a
+// queued datagram retains its whole backing array until dequeue,
+// so the payload length would understate the retained memory by
+// up to the buffer's size class (R2-P1-F01). The accounting is a
+// single add/compare on the admission path, as before. The
+// session-closed check rides in the same critical section so a
+// closed session can never strand accounted bytes nobody will
+// dequeue.
 func (c *conn) WriteQueue(b []byte) error {
+	cost := cap(b)
 	c.qmu.Lock()
 	if c.isClosed() {
 		c.qmu.Unlock()
 		return net.ErrClosed
 	}
-	if c.qBytes+len(b) > DefaultReadQueueBytes {
+	if c.qBytes+cost > DefaultReadQueueBytes {
 		c.qmu.Unlock()
 		return errQueueFull
 	}
 	select {
 	case c.rc <- b:
-		c.qBytes += len(b)
+		c.qBytes += cost
 		c.qmu.Unlock()
 		c.SetIdle(false)
 		return nil
