@@ -20,6 +20,18 @@
 # 体、改坏文案必须被对应节抓红并点名。§10(b) 的 x 包计数标记属
 # 环境漂移敏感面（合并波次新增带测试包即漂移），不属本自检变体
 # 面：计数对账由 INT-3/R2 在合并尖端按实数重标定并点名。
+# FIX-XCOUNT 扩围：变体 8 覆盖 §10(b) x 包计数标记
+# （ci-build.yml 的 [K11-COUNT:x-tested/x-untested] 声称 vs go list
+# 实数）。标记在 int-wave 尖端 e5a83bf1 按实数重标定为 55/153
+# （基线 557322be 实数 45/162——INT-3 合入波次给 9 个既有包新增
+# 首个测试文件、FIX-LOGS 新增 internal/util/eventlog 包且自带
+# 测试，净增 1 包，逐项对账见重标定提交说明）。变体 8 把镜像内
+# 标记的 x-tested 数字改坏，必须被 §10(b) 抓红并点名（FAIL 行含
+# 「声称 tested=」且给出实数）。无 go 时 §10(b) 按门自身口径
+# PENDING 未核、变体不可判定，本自检在无 go 环境直接 FAIL 点名
+# 环境前提（与头部「无 go 时 §10/§16 等子项实核」口径一致），
+# 不静默跳过。注：变体 4–7（FIX-DOC-R 的 §18–§21 四族）与本变体
+# 同树，合并后自检依次跑变体 1–8。
 #
 # 用法：check-doc-consistency-selftest.sh（无参数，作用于本仓库）。
 # 退出码：0 = 基线 PASS 且变体均被抓；1 = 任一断言不成立。
@@ -113,5 +125,17 @@ if run_gate "$TMP/v7.log"; then
 fi
 grep -q "服务监控限值披露门" "$TMP/v7.log" && echo "OK: variant 7 caught and named" || {
   echo "FAIL: variant 7 caught but the drift was not named"; sed 's/^/    /' "$TMP/v7.log"; exit 1; }
+
+echo "== variant 8: ci-build.yml x-count marker drifts from go list reality must FAIL and name it (§10(b)) =="
+if ! command -v go >/dev/null 2>&1; then
+  echo "FAIL: variant 8 undecidable — go toolchain missing, §10(b) is PENDING in this environment (see header)"; exit 1
+fi
+sed -i 's/\[K11-COUNT:x-tested=55\]/[K11-COUNT:x-tested=54]/' "$MIR/.github/workflows/ci-build.yml"
+if run_gate "$TMP/v8.log"; then
+  echo "FAIL: variant 8 was not caught"; exit 1
+fi
+grep -q "声称 tested=54 untested=153 ≠ 实数 tested=55 untested=153" "$TMP/v8.log" && echo "OK: variant 8 caught and named" || {
+  echo "FAIL: variant 8 caught but the drift was not named"; sed 's/^/    /' "$TMP/v8.log"; exit 1; }
+cp "$ROOT/.github/workflows/ci-build.yml" "$MIR/.github/workflows/ci-build.yml"
 
 echo "SELFTEST PASS"
