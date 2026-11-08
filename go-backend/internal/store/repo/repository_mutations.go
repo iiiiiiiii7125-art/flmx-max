@@ -353,6 +353,12 @@ func (r *Repository) DeleteUserCascade(userID int64) error {
 		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
 			return err
 		}
+		// FIX-CASCADE（E1-12）：本级联删掉的转发同步摘除配额暂停
+		// 清单（本用户的 UserQuota 行下方一并删除，此处覆盖清单被
+		// 其他用户行引用的残余形态，口径与单删转发一致）。
+		if err := prunePausedForwardIDsTx(tx, userForwardIDs); err != nil {
+			return err
+		}
 		if err := tx.Where("forward_id IN (?)", forwardIDs).Delete(&model.NodeInboundRelay{}).Error; err != nil {
 			return err
 		}
@@ -668,17 +674,53 @@ func (r *Repository) ListSoleSegmentTunnelsForNode(nodeID int64) ([]SoleSegmentT
 }
 
 func (r *Repository) DeleteNodeCascade(nodeID int64) error {
+	_, err := r.DeleteNodeCascadeWithOutcome(nodeID)
+	return err
+}
+
+// DeleteNodeCascadeWithOutcome 是 DeleteNodeCascade 的结果变体：
+// 除级联删除外，把「失去最后一个入口端口而整行删除的 Forward」
+// 带回供 handler 在删节点回执中点名（FIX-CASCADE / E1-11）。
+func (r *Repository) DeleteNodeCascadeWithOutcome(nodeID int64) (*NodeCascadeOutcome, error) {
 	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
+		return nil, errors.New("repository not initialized")
 	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	outcome := &NodeCascadeOutcome{}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
 		// R5-B7: 补全级联删除（C-004~C-008）。
 		// 数据面清理由 handler 的 deleteNodeByID 在调用本函数前尽力尝试
 		// （B4/F-056：删除其上转发服务 + nftables 节点清表，失败记录日志
 		// 不阻断——死节点必须能删）；本函数只负责 DB 行。此前注释声称的
 		// 「调用方 pending 流程」并不存在，已按实际改写。
+		// FIX-CASCADE（E1-11）：摘除本节点端口行之前先物化受影响的
+		// Forward 集——摘除后失去最后一个入口端口的 Forward 必须整
+		// 行删除，否则留下零端口僵尸行（列表 inPort 为空、gost 同步
+		// 报错、realm 零端点渲染）；多入口 Forward 只摘本节点行。
+		var nodeForwardIDs []int64
+		if err := tx.Model(&model.ForwardPort{}).Where("node_id = ?", nodeID).
+			Distinct("forward_id").Pluck("forward_id", &nodeForwardIDs).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.ForwardPort{}).Error; err != nil {
 			return err
+		}
+		if len(nodeForwardIDs) > 0 {
+			remaining, err := forwardIDsWithRemainingPortsTx(tx, nodeForwardIDs)
+			if err != nil {
+				return err
+			}
+			var zeroPortIDs []int64
+			for _, fid := range nodeForwardIDs {
+				if _, ok := remaining[fid]; !ok {
+					zeroPortIDs = append(zeroPortIDs, fid)
+				}
+			}
+			if len(zeroPortIDs) > 0 {
+				if err := deleteForwardCascadeSetTx(tx, zeroPortIDs); err != nil {
+					return err
+				}
+				outcome.DeletedForwardIDs = zeroPortIDs
+			}
 		}
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.ChainTunnel{}).Error; err != nil {
 			return err
@@ -739,8 +781,28 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		if err := tx.Where("scope LIKE ?", fmt.Sprintf("flow:%d:%%", nodeID)).Delete(&TrafficStreamCursor{}).Error; err != nil {
 			return err
 		}
+		// FIX-CASCADE（E1-04 / R2-E3-F01）：legacy 批次去重登记按
+		// node_id 归属本节点——此前不在级联内，唯一清理点是该节点
+		// 下一次领取时顺带清过期行，节点已删永不触发、永久残留。
+		if err := tx.Where("node_id = ?", nodeID).Delete(&FlowLegacyBatchDedupe{}).Error; err != nil {
+			return err
+		}
+		// FIX-CASCADE（E1-05）：vite_config 的待结算标记与孤儿重查
+		// 标记都按 node_id 后缀键归属本节点，节点删除后永不再被消
+		// 费/收敛，随节点一并删除（NodeUninstall 的 secret 键行是
+		// 有意悬置拦截，不在此列）。
+		if err := tx.Where("name IN ?", []string{
+			pendingRealmSettleConfigKey(nodeID),
+			kernelOrphanRecheckKey(nodeID),
+		}).Delete(&model.ViteConfig{}).Error; err != nil {
+			return err
+		}
 		return tx.Where("id = ?", nodeID).Delete(&model.Node{}).Error
 	})
+	if err != nil {
+		return nil, err
+	}
+	return outcome, nil
 }
 
 func (r *Repository) GetNodePortRange(nodeID int64) (string, error) {
@@ -969,33 +1031,60 @@ func (r *Repository) GetTunnelIPPreference(tunnelID int64) string {
 }
 
 func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		return deleteTunnelCascadeTx(tx, tunnelID)
-	})
+	_, err := r.DeleteTunnelCascadeWithOutcome(tunnelID)
+	return err
 }
 
-func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
+// DeleteTunnelCascadeWithOutcome 是 DeleteTunnelCascade 的结果
+// 变体：把墓碑转发的终局/保留分流带回供 handler 回执点名
+// （FIX-CASCADE / E1-01）。
+func (r *Repository) DeleteTunnelCascadeWithOutcome(tunnelID int64) (*TunnelCascadeOutcome, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var outcome *TunnelCascadeOutcome
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		outcome, err = deleteTunnelCascadeTx(tx, tunnelID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return outcome, nil
+}
+
+func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) (*TunnelCascadeOutcome, error) {
+	outcome := &TunnelCascadeOutcome{}
 	// AUDIT-R1 (TST-001): 物化 ID 列表。原子查询在 Forward/UserTunnel 行删除后
 	// 即失效（子查询变空），而级联清理必须引用已删行的 ID，故先物化。
 	var forwardIDs []int64
 	if err := tx.Model(&model.Forward{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &forwardIDs).Error; err != nil {
-		return err
+		return nil, err
 	}
 	var userTunnelIDs []int64
 	if err := tx.Model(&model.UserTunnel{}).Where("tunnel_id = ?", tunnelID).Pluck("id", &userTunnelIDs).Error; err != nil {
-		return err
+		return nil, err
 	}
 	// R1 X-P1-1：pending-delete 墓碑转发（status=2）不随隧道级联删除——
 	// 其转发行的端口/计数/绑定与 NftPendingDelete 台账是后台重试清理
 	// 的唯一依据，级联清掉会让节点侧规则成无台账孤儿。这类转发只删
 	// relay 关联（下方按全部 forwardIDs），其余行保留待重试收敛后由
 	// DeleteForwardCascade 终删。
+	// FIX-CASCADE（E1-01）：上款的保留只对「仍在重试调度内」的墓
+	// 碑成立。台账已耗尽（next_retry_at=0 哨兵）的墓碑已退出调度
+	// （ListDue 恒排除），隧道删除后只会以已删 tunnel_id 无限悬
+	// 空——这类在本级联内终删并点名
+	// （outcome.FinalizedPendingForwardIDs）。仍在活调度内（含台账
+	// 行缺失的形状——状态翻转唯一写入点 MarkForwardPendingDelete
+	// 与台账建行同事务，生产不可达，K8 契约按保留编码）的保留待
+	// 后台重试：节点被删/长离线时重试必失败、24h 总帽耗尽后，若
+	// 隧道已删由 retryNftPendingDeletes 在耗尽点补终删（见
+	// jobs.go），若隧道后删则由本级联的耗尽分支终删，收敛终点
+	// 在两条路径上闭合。
 	var pendingForwardIDs []int64
 	if err := tx.Model(&model.Forward{}).Where("tunnel_id = ? AND status = ?", tunnelID, model.ForwardStatusPendingDelete).Pluck("id", &pendingForwardIDs).Error; err != nil {
-		return err
+		return nil, err
 	}
 	pendingSet := make(map[int64]struct{}, len(pendingForwardIDs))
 	for _, id := range pendingForwardIDs {
@@ -1007,11 +1096,31 @@ func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
 			cascadeForwardIDs = append(cascadeForwardIDs, id)
 		}
 	}
+	if len(pendingForwardIDs) > 0 {
+		ledgerRows, err := loadNftPendingDeletesByForwardIDsTx(tx, pendingForwardIDs)
+		if err != nil {
+			return nil, err
+		}
+		ledgerByForward := make(map[int64]*model.NftPendingDelete, len(ledgerRows))
+		for i := range ledgerRows {
+			ledgerByForward[ledgerRows[i].ForwardID] = &ledgerRows[i]
+		}
+		for _, fid := range pendingForwardIDs {
+			row, ok := ledgerByForward[fid]
+			terminal := ok && row.NextRetryAt == 0
+			if terminal {
+				outcome.FinalizedPendingForwardIDs = append(outcome.FinalizedPendingForwardIDs, fid)
+				cascadeForwardIDs = append(cascadeForwardIDs, fid)
+			} else {
+				outcome.RetainedPendingForwardIDs = append(outcome.RetainedPendingForwardIDs, fid)
+			}
+		}
+	}
 	// K8/X01-001：物化集（forwardIDs / cascadeForwardIDs /
 	// userTunnelIDs）随隧道规模无上界，全部回灌删除走分块助手，
 	// 删除顺序与集合语义不变（物化本身因 TST-001 顺序约束保留）。
 	if err := deleteByIDSliceInChunksTx(tx, &model.ForwardPort{}, "forward_id", cascadeForwardIDs); err != nil {
-		return err
+		return nil, err
 	}
 	// AUDIT-R1 (TST-001): NodeInboundRelay / NftCounterState 没有 tunnel_id 列，
 	// 它们通过 forward_id 关联本隧道的转发；移到 Forward 删除之前清理。
@@ -1019,47 +1128,61 @@ func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
 	// 的 user_inbound 授权行，避免孤儿授权残留。
 	relayIDs, err := pluckInboundRelayIDsByColumnTx(tx, "forward_id", forwardIDs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
-		return err
+		return nil, err
 	}
 	if err := deleteByIDSliceInChunksTx(tx, &model.NodeInboundRelay{}, "forward_id", forwardIDs); err != nil {
-		return err
+		return nil, err
 	}
 	if err := deleteByIDSliceInChunksTx(tx, &model.NftCounterState{}, "forward_id", cascadeForwardIDs); err != nil {
-		return err
+		return nil, err
 	}
 	if err := deleteByIDSliceInChunksTx(tx, &model.NftRuleBinding{}, "forward_id", cascadeForwardIDs); err != nil {
-		return err
+		return nil, err
 	}
 	// AUDIT-R18 (DAT18-001): NftPendingDelete 通过 forward_id 关联，与
 	// DeleteForwardCascade 的 R5-B3 D1-001 补充保持一致；
-	// R1 X-P1-1：pending 墓碑转发的台账行除外（见上方分流注释）。
+	// R1 X-P1-1：活调度墓碑的台账行除外（cascadeForwardIDs 只含
+	// 非墓碑 + 已终局墓碑，保留墓碑的台账行不在集内）。
 	if err := deleteByIDSliceInChunksTx(tx, &model.NftPendingDelete{}, "forward_id", cascadeForwardIDs); err != nil {
-		return err
+		return nil, err
 	}
 	if err := tx.Where("tunnel_id = ? AND status <> ?", tunnelID, model.ForwardStatusPendingDelete).Delete(&model.Forward{}).Error; err != nil {
-		return err
+		return nil, err
+	}
+	// E1-01 终局墓碑的 Forward 本行（上行按 status 排除墓碑，此处
+	// 按终局集点删）。
+	if err := deleteByIDSliceInChunksTx(tx, &model.Forward{}, "id", outcome.FinalizedPendingForwardIDs); err != nil {
+		return nil, err
+	}
+	// FIX-CASCADE（E1-12）：本级联整行删掉的全部转发同步摘除配额
+	// 暂停清单（保留墓碑未删、不摘）。
+	if err := prunePausedForwardIDsTx(tx, cascadeForwardIDs); err != nil {
+		return nil, err
 	}
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.UserTunnel{}).Error; err != nil {
-		return err
+		return nil, err
 	}
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.ChainTunnel{}).Error; err != nil {
-		return err
+		return nil, err
 	}
 	// R5-B7 C-009: 补全隧道级联删除（以下模型确有 tunnel_id 列）。
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.SpeedLimit{}).Error; err != nil {
-		return err
+		return nil, err
 	}
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelMetric{}).Error; err != nil {
-		return err
+		return nil, err
 	}
 	// AUDIT-R18 (DAT18-002): 隧道质量探测历史（tunnel_id 索引）。
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.TunnelQuality{}).Error; err != nil {
-		return err
+		return nil, err
 	}
-	return tx.Where("id = ?", tunnelID).Delete(&model.Tunnel{}).Error
+	if err := tx.Where("id = ?", tunnelID).Delete(&model.Tunnel{}).Error; err != nil {
+		return nil, err
+	}
+	return outcome, nil
 }
 
 func (r *Repository) TunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {
@@ -1298,35 +1421,12 @@ func (r *Repository) DeleteForwardCascade(forwardID int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	// 实现收口到 deleteForwardCascadeSetTx（单元素集）：nft 三表
+	// （R5-B3 D1-001 补充 A.3）、ForwardPort、relay 物化集授权清理
+	// （A3-03/X2-01）与 Forward 本行同口径，FIX-CASCADE 起另含
+	// UserQuota.PausedForwardIDs 摘除（E1-12）。
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NftCounterState{}).Error; err != nil {
-			return err
-		}
-		// R5-B3 D1-001 补充 A.3: pending 行最终删除时同步清理 binding 与
-		// pending bookkeeping，避免残留基线与未来同 ID 新转发串号。
-		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NftRuleBinding{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NftPendingDelete{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.ForwardPort{}).Error; err != nil {
-			return err
-		}
-		// A3-03/X2-01：删 relay 行前先物化其 id 集合，同步清理指向
-		// 这些 relay 的 user_inbound 授权行，否则留下孤儿授权
-		// （与单删 DeleteInboundRelay 的口径一致）。
-		relayIDs, err := pluckInboundRelayIDsTx(tx, "forward_id = ?", forwardID)
-		if err != nil {
-			return err
-		}
-		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
-			return err
-		}
-		if err := tx.Where("forward_id = ?", forwardID).Delete(&model.NodeInboundRelay{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("id = ?", forwardID).Delete(&model.Forward{}).Error
+		return deleteForwardCascadeSetTx(tx, []int64{forwardID})
 	})
 }
 

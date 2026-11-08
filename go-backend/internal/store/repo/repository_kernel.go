@@ -134,6 +134,12 @@ func (r *Repository) DeleteNodeKernel(id int64) error {
 		if err := tx.Where("kernel_id = ?", id).Delete(&model.NodeInbound{}).Error; err != nil {
 			return err
 		}
+		// FIX-CASCADE（E1-10）：存活入站对被删入站的链式/分流引用
+		// 与订阅 CSV 引用同步回写清理（口径见
+		// cleanupInboundReferencesTx）。
+		if err := cleanupInboundReferencesTx(tx, ids); err != nil {
+			return err
+		}
 		// AUDIT-R1 (TST-002): 删除 R5-B7 误加的行。UserInbound 模型没有 kernel_id 列
 		//（仅 user_id/inbound_id/relay_id），该删除恒以 "no such column" 失败并回滚
 		// 整个内核删除；NodeInbound 的 kernel_id 已由上一行清理，无悬空可清。
@@ -223,6 +229,11 @@ func deleteNodeKernelsTx(tx *gorm.DB, nodeID int64) error {
 		return err
 	}
 	if err := tx.Where("node_id = ?", nodeID).Delete(&model.NodeInbound{}).Error; err != nil {
+		return err
+	}
+	// FIX-CASCADE（E1-10）：同 DeleteNodeKernel 的引用回写清理
+	//（删节点级联经本函数删全部入站，跨节点引用方在此收口）。
+	if err := cleanupInboundReferencesTx(tx, ids); err != nil {
 		return err
 	}
 	return tx.Where("node_id = ?", nodeID).Delete(&model.NodeKernel{}).Error
@@ -389,7 +400,13 @@ func (r *Repository) DeleteNodeInbound(id int64) error {
 		if err := deleteUserInboundGrantsByRelayIDsTx(tx, relayIDs); err != nil {
 			return err
 		}
-		return tx.Where("id = ?", id).Delete(&model.NodeInbound{}).Error
+		if err := tx.Where("id = ?", id).Delete(&model.NodeInbound{}).Error; err != nil {
+			return err
+		}
+		// FIX-CASCADE（E1-10）：同 DeleteNodeKernel 的引用回写清理
+		//（单删入站面：其他入站 outbound_id / split_rules 与订阅
+		// CSV 对本入站的引用同步摘除）。
+		return cleanupInboundReferencesTx(tx, []int64{id})
 	})
 }
 
