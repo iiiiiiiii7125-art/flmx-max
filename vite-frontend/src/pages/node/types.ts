@@ -28,6 +28,10 @@ export interface Node {
   http?: number; // 0 关 1 开
   tls?: number; // 0 关 1 开
   socks?: number; // 0 关 1 开
+  /** 定时重启 agent 服务（保险丝，默认关）：restartTime 为节点本机时间 HH:MM，jitter 为随机抖动分钟数。 */
+  restartEnabled?: number; // 0 关 1 开
+  restartTime?: string;
+  restartJitterMinutes?: number;
   status: number;
   isRemote?: number;
   forwardMode?: "agent" | "nftables";

@@ -50,6 +50,7 @@ import {
 import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
+import { RestartScheduleModal } from "@/pages/node/restart-schedule-modal";
 import { PageLoadingState } from "@/components/page-state";
 import { ActionSheet } from "@/components/action-sheet";
 import {
@@ -345,6 +346,7 @@ export default function NodePage({
   const [routeNode, setRouteNode] = useState<Node | null>(null);
   const [trendNode, setTrendNode] = useState<Node | null>(null);
   const [targetNodes, setTargetNodes] = useState<Node[]>([]);
+  const [restartNode, setRestartNode] = useState<Node | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
   const [batchResultModal, setBatchResultModal] =
@@ -2332,6 +2334,18 @@ export default function NodePage({
                         label: "测试点",
                         onPress: () => setTargetNodes([node]),
                       },
+                      // 定时重启只对本面板直管的 agent 节点开放：
+                      // 远程节点归所属面板、nftables 无 agent 服务。
+                      ...(node.isRemote !== 1 &&
+                      node.forwardMode !== "nftables"
+                        ? [
+                            {
+                              key: "restart",
+                              label: "定时重启",
+                              onPress: () => setRestartNode(node),
+                            },
+                          ]
+                        : []),
                       {
                         key: "upgrade",
                         label: "升级",
@@ -2528,6 +2542,11 @@ export default function NodePage({
       <LatencyTargetsModal
         nodes={targetNodes}
         onClose={() => setTargetNodes([])}
+        onSaved={() => loadNodes({ silent: true })}
+      />
+      <RestartScheduleModal
+        node={restartNode}
+        onClose={() => setRestartNode(null)}
         onSaved={() => loadNodes({ silent: true })}
       />
     </PageShell>

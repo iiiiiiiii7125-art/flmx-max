@@ -1563,6 +1563,21 @@ export const setNodeLatencyTargets = (data: {
   points: string[];
   pinned: string[];
 }) => Network.post("/node/latency/targets", data, { timeout: 60000 });
+/**
+ * 设置节点的定时重启 agent 服务（保险丝，默认关）。
+ * pushed=false 表示节点离线或 agent 未确认：设置已存面板，节点重连时自动补发。
+ */
+export const setNodeRestartSchedule = (data: {
+  id: number;
+  enabled: number;
+  time: string;
+  jitterMinutes: number;
+}) =>
+  Network.post<{ pushed: boolean; pushError?: string }>(
+    "/node/restart-schedule",
+    data,
+    { timeout: 60000 },
+  );
 /** 节点到各测试点最近 hours 小时的延迟趋势。 */
 export const getNodeLatencyHistory = (id: number, hours: number) =>
   Network.post<LatencyTrend>("/node/latency/history", { id, hours });
