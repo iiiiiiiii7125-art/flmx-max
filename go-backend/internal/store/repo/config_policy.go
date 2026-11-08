@@ -57,6 +57,17 @@ var sensitiveConfigKeys = map[string]struct{}{
 	// tokenHint。
 	"gist_token":    {},
 	"gist_password": {},
+	// FIX-KCPMEM (P1-04/P1-05): KCP generation-face settings, admin-only.
+	// kcp_fec_mode is the FEC档位 (default/off); kcp_node_mem_mb is the
+	// per-node memory declaration (nodeID→MiB JSON) that caps KCP
+	// windows/buffers. Neither is read by any non-admin surface (no
+	// frontend getConfigByName call); both are written only via the
+	// admin config page with normalizeAndValidateConfigValue, and an
+	// empty submission clears back to default. Sensitive, as
+	// kcp_tuning.go states for kcp_fec_mode; the node-memory map is
+	// infrastructure detail with the same admin-only posture.
+	"kcp_fec_mode":    {},
+	"kcp_node_mem_mb": {},
 }
 
 // requiredConfigKeys carry a mandatory value domain: submitting an empty

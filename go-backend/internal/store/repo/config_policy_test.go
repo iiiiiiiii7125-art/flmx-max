@@ -174,7 +174,8 @@ func TestConfigPolicyFullTableEnumeration(t *testing.T) {
 	)
 	wantSensitive := keySet(
 		"cloudflare_secret_key", "gist_password", "gist_token",
-		"jwt_secret", "license_expiry", "license_key",
+		"jwt_secret", "kcp_fec_mode", "kcp_node_mem_mb",
+		"license_expiry", "license_key",
 		"license_machine_id", "machine_fingerprint", "node_sub_token",
 		"notify_telegram_api_base", "notify_telegram_bot_token",
 		"notify_telegram_chat_id", "notify_webhook_url",
