@@ -68,6 +68,21 @@ FLMX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flmx_agent"
 # error_log 由 OpenRC 直接 append、无封顶，随安装落一份 logrotate
 # 配置封顶；卸载时一并删除（remove_flmx_agent_service）。
 FLMX_AGENT_LOGROTATE_FILE="${FLMX_AGENT_LOGROTATE_FILE:-/etc/logrotate.d/flmx_agent}"
+# 定时重启 timer 对落点（DEV-RESTART）：单元由 agent 运行时按面板
+# 下发设置生成（go-gost/x/socket/restart_schedule.go 的单元名常量
+# 与 restartScheduleUnitDir），install.sh 本身不写，但卸载必须回
+# 收——timer 带 Persistent=true 且处于 enabled 时，卸载后仍会每
+# 日触发已删的 agent 服务（R2-SCR-F05）。做成变量以便测试夹具
+# 改指临时目录（与 FLMX_AGENT_LOGROTATE_FILE 同钩子）。
+FLMX_AGENT_RESTART_TIMER_FILE="${FLMX_AGENT_RESTART_TIMER_FILE:-/etc/systemd/system/flmx-agent-restart.timer}"
+FLMX_AGENT_RESTART_SERVICE_FILE="${FLMX_AGENT_RESTART_SERVICE_FILE:-/etc/systemd/system/flmx-agent-restart.service}"
+FLMX_AGENT_RESTART_TIMER_UNIT="flmx-agent-restart.timer"
+FLMX_AGENT_RESTART_SERVICE_UNIT="flmx-agent-restart.service"
+# OpenRC 日志面落点目录：日志本体由 OpenRC 服务定义的
+# output_log/error_log 长期 append 写入，两代布局名（flmx_agent/
+# flux_agent）各一对（见现行与存量 OpenRC 模板），轮转件为
+# logrotate 的 rotate 产物。做成变量以便测试夹具改指临时目录。
+FLMX_AGENT_LOG_DIR="${FLMX_AGENT_LOG_DIR:-/var/log}"
 # OpenRC pidfile 单一来源（A3-08）：服务文件里写的 pidfile 与脚本
 # 判活（flmx_agent_main_pid）读的 pidfile 是同一个变量值——模板生
 # 成时把变量现值写进服务文件，不再写死 /run/${RC_SVCNAME}.pid。
@@ -2748,14 +2763,15 @@ flmx_agent_uninstall_write_tuning_defaults() {
 # 删四面与第一代全部足迹文件、gai.conf 按备份还原、删 MSS 钳制
 # 规则、内存值复位，再由 cleanupHostTuningFiles 兜底删漏）→ 停
 # 内核并删 agent 自建 nft 三表 → 才停服务删目录。本函数第 3)～
-# 7) 步与 cleanupHostTuningFiles 的清理全集逐项对齐；第 1) 步
-# 与第 2) 步的一代部分是第一代兼容恢复（整形前队列回放、
-# tuning-backup.json 逐键写回 sysctl 原值）——该部分第二代面板
-# 路径已不再执行，但备份与整形脚本都在即将删除的安装目录里，
-# 脚本卸载是它们最后的恢复机会，故保留（产物不存在时两步都是
-# 空转）；第 2) 步的二代部分（面③ TL-02 快照逐键写回原值后消
-# 费删除、无快照时回退标题默认值并点名其余不可恢复键）与面板
-# 路径 restoreKernelSysctls 同口径（J9-01）。旧脚本卸载只有停服
+# 7) 步与 cleanupHostTuningFiles 的对应清理面逐项对齐（精确边
+# 界见下方「对齐范围」段）；第 1) 步与第 2) 步的一代部分是第
+# 一代兼容恢复（整形前队列回放、tuning-backup.json 逐键写回
+# sysctl 原值）——该部分第二代面板路径已不再执行，但备份与整
+# 形脚本都在即将删除的安装目录里，脚本卸载是它们最后的恢复
+# 机会，故保留（产物不存在时两步都是空转）；第 2) 步的二代部
+# 分（面③ TL-02 快照逐键写回原值后消费删除、无快照时回退标
+# 题默认值并点名其余不可恢复键）与面板路径
+# restoreKernelSysctls 同口径（J9-01）。旧脚本卸载只有停服
 # 删目录，残留后果：调优 sysctl conf 与 qdisc unit 开机自动重放、
 # nft 白名单 DROP 规则比所有者长寿（R2-001 危害形态）、
 # tuning-backup.json 随目录删除后原值永久不可恢复、同机重装还会
@@ -2763,6 +2779,15 @@ flmx_agent_uninstall_write_tuning_defaults() {
 # 行同一清理全集。口径与面板路径一致：逐项尽力而为，单项失败只
 # 告警并逐项列明、不中断后续项；全部以「存在才处理」为前提，重
 # 复执行只剩跳过、无副作用（幂等）。
+# 对齐范围的精确边界（防「逐项对齐」宣称漂移）：第 3) 步的 unit
+# 集、第 4) 步的 MSS 规则、第 5)～7) 步的文件集与
+# cleanupHostTuningFiles 的对应面逐项一致；第 8) 步 nft 三表对
+# 应 agent 侧 kernel.Uninstall 的 removeTables（同一全集，
+# flvx_kernel 的足迹守卫差异见下段）；面③ sysctl 快照的处置形态是唯一例外（agent 侧
+# tuneKernelSnapshotPath，/etc/security/flmx-tuning-kernel-sysctls.json）
+# ——脚本侧由第 2) 步二代部分恢复式处置（逐键写回原值后消费
+# 删除，J9-01／R2-SCR-F02），不裸删，避免重演「原值永久不可
+# 恢复」；agent 侧则由调优回退步消费后兜底删除，两路终态一致。
 # 归属圈定：只处理带 flmx 标识的自有产物，不触碰同机其他程序的
 # 文件。其中两件 legacy 同名资源（99-flvx-tuning.conf、nft 表
 # flvx_kernel）与旧谱系面板的 agent 同名共用——它们既是本产品改
@@ -2896,15 +2921,19 @@ uninstall_flmx_agent_host_cleanup() {
     echo "⚠️ 调优前快照缺失，以下 sysctl 键未能回退（仍为调优值、保留至重启）: ${FLMX_TUNING_KERNEL_UNRESTORED_KEYS// /, }"
   fi
 
-  # 3) 调优 systemd unit（第二代 RPS 与第一代 qdisc 两件）：先
-  # disable --now 再删文件、两件都处理完再统一 daemon-reload 一
-  # 次（与 agent 侧 cleanupHostTuningFiles 同序），否则悬空启用
-  # 项在下次开机仍会去执行已被删除的脚本（RPS unit 执行
-  # /usr/local/bin 下的助手脚本、qdisc unit 执行安装目录内的整
-  # 形脚本）。OpenRC 形态没有这些 unit，文件不存在即跳过。
+  # 3) systemd unit（第二代 RPS、第一代 qdisc 与定时重启 timer
+  # 对四件）：先 disable --now 再删文件、都处理完再统一
+  # daemon-reload 一次（与 agent 侧 cleanupHostTuningFiles 的
+  # unit 段同集同序），否则悬空启用项在下次开机仍会去执行已被
+  # 删除的脚本（RPS unit 执行 /usr/local/bin 下的助手脚本、
+  # qdisc unit 执行安装目录内的整形脚本）；定时重启 timer 对由
+  # agent 运行时按面板设置生成（R2-SCR-F05：脚本侧此前漏收，
+  # timer 带 Persistent=true、enabled 状态下卸载后仍会每日触
+  # 发已删的 agent 服务）。OpenRC 形态没有这些 unit，文件不存
+  # 在即跳过。
   local unit_removed=0
   local unit_pair="" unit_file="" unit_name=""
-  for unit_pair in "$FLMX_TUNING_RPS_UNIT_FILE|$FLMX_TUNING_RPS_UNIT" "$FLMX_TUNING_QDISC_UNIT_FILE|$FLMX_TUNING_QDISC_UNIT"; do
+  for unit_pair in "$FLMX_TUNING_RPS_UNIT_FILE|$FLMX_TUNING_RPS_UNIT" "$FLMX_TUNING_QDISC_UNIT_FILE|$FLMX_TUNING_QDISC_UNIT" "$FLMX_AGENT_RESTART_TIMER_FILE|$FLMX_AGENT_RESTART_TIMER_UNIT" "$FLMX_AGENT_RESTART_SERVICE_FILE|$FLMX_AGENT_RESTART_SERVICE_UNIT"; do
     unit_file="${unit_pair%%|*}"
     unit_name="${unit_pair##*|}"
     if [[ -e "$unit_file" ]]; then
@@ -2912,11 +2941,11 @@ uninstall_flmx_agent_host_cleanup() {
         systemctl disable --now "$unit_name" 2>/dev/null || true
       fi
       if rm -f "$unit_file"; then
-        echo "🧹 删除调优服务: $unit_file"
+        echo "🧹 删除 systemd 单元: $unit_file"
         unit_removed=1
       else
         failures=$((failures + 1))
-        echo "⚠️ 删除调优服务失败: $unit_file"
+        echo "⚠️ 删除 systemd 单元失败: $unit_file"
       fi
     fi
   done
@@ -3111,6 +3140,46 @@ resolve_custom_kernel_dir() {
   CUSTOM_KERNEL_DIR="$dir"
 }
 
+# OpenRC 日志面清理（R2-P2-04）：logrotate 配置与两代日志本体及
+# 其轮转件。日志本体由 OpenRC 服务定义的 output_log/error_log
+# 长期 append 写入、只有 OpenRC 形态才产生，但删除按「存在才处
+# 理」不分当前形态执行——形态判定靠当前 init 系统、与装机时形
+# 态未必一致，按在位文件收口才不漏；轮转件为 logrotate 配置的
+# rotate 3 产物（.1–.3，含可能的 .gz 形态）。逐项点名、单项失
+# 败只告警不中断（与宿主清理同口径），重复执行为空转（幂等）。
+# 面板自卸载路径的对应处置在 agent 侧 buildAgentUninstallScript
+# 生成的脚本里（同名派生集）。
+remove_flmx_agent_log_files() {
+  local failures=0
+  local target=""
+  if [[ -e "$FLMX_AGENT_LOGROTATE_FILE" ]]; then
+    if rm -f "$FLMX_AGENT_LOGROTATE_FILE"; then
+      echo "🧹 删除日志轮转配置: $FLMX_AGENT_LOGROTATE_FILE"
+    else
+      failures=$((failures + 1))
+      echo "⚠️ 删除日志轮转配置失败: $FLMX_AGENT_LOGROTATE_FILE"
+    fi
+  fi
+  local base="" suffix=""
+  for base in "flmx_agent.log" "flmx_agent.err.log" "flux_agent.log" "flux_agent.err.log"; do
+    for suffix in "" ".1" ".2" ".3" ".gz" ".1.gz" ".2.gz" ".3.gz"; do
+      target="$FLMX_AGENT_LOG_DIR/$base$suffix"
+      if [[ -e "$target" ]]; then
+        if rm -f "$target"; then
+          echo "🧹 删除日志文件: $target"
+        else
+          failures=$((failures + 1))
+          echo "⚠️ 删除日志文件失败: $target"
+        fi
+      fi
+    done
+  done
+  if [[ "$failures" -gt 0 ]]; then
+    echo "⚠️ 日志面清理有 ${failures} 项未完成（见上 ⚠️ 行），其余卸载步骤继续执行"
+  fi
+  return 0
+}
+
 # 卸载功能
 uninstall_flmx_agent() {
   echo "🗑️ 开始卸载 flmx_agent..."
@@ -3136,7 +3205,7 @@ uninstall_flmx_agent() {
   # configured_kernel_dir），卸载末尾一并清理。
   resolve_custom_kernel_dir
 
-  local confirm_prompt="确认卸载 flmx_agent 吗？将停止服务，并删除安装目录、agent 服务文件、调优宿主文件与自建 nft 表，同时恢复调优前的系统参数"
+  local confirm_prompt="确认卸载 flmx_agent 吗？将停止服务，并删除安装目录、agent 服务文件、定时重启单元、日志文件、调优宿主文件与自建 nft 表，同时恢复调优前的系统参数"
   if [[ -n "$has_legacy" ]]; then
     confirm_prompt="$confirm_prompt（检测到改名前的存量布局 $LEGACY_INSTALL_DIR，将一并卸载）"
   fi
@@ -3187,6 +3256,10 @@ uninstall_flmx_agent() {
     remove_legacy_flux_agent_service
     echo "🧹 删除改名前的存量服务文件"
   fi
+
+  # R2-P2-04：OpenRC 日志面（logrotate 配置＋两代日志本体与轮
+  # 转件）——在安装目录之外，单独清理（逐项点名见函数内）。
+  remove_flmx_agent_log_files
 
   # 删除安装目录
   if [[ -d "$INSTALL_DIR" ]]; then

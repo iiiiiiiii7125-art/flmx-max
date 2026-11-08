@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261108.02"
+SCRIPT_VERSION="20261109.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1089,6 +1089,142 @@ caddyfile_without_site() {
     }
     END { if (inblock) printf "%s", buf }
   ' "$file"
+}
+
+# 抽出 Caddyfile 中「不反代到指定本机端口」的全部内容（卸载回收
+# 用）：按站点块切分（与 caddyfile_without_site 同 brace-depth 口
+# 径），块体内含 reverse_proxy 127.0.0.1:<port> 行的整块剔除、
+# 命中块的块头行经 stderr 逐个点名；其余内容（其他站点块、全
+# 局块、块外行）逐字保留。结构不完整的尾部内容按保留处理，宁
+# 可多留不可误删。归属判据是反代目标端口而非域名：菜单 5/6 写
+# 的面板块与订阅前置块都反代到本部署前端端口，同机共存的第二
+# 套面板前端端口不同、不受影响。
+caddyfile_without_panel_port_blocks() {
+  local file="$1" port="$2"
+  awk -v port="$port" '
+    function flush_block(   i, hit) {
+      if (buf == "") return
+      hit = 0
+      for (i = 1; i <= nlines; i++) {
+        if (lines[i] ~ /^[[:space:]]*#/) continue
+        if (lines[i] ~ ("(^|[[:space:]\{])reverse_proxy[[:space:]]+127\\.0\\.0\\.1:" port "([[:space:]]|$)")) hit = 1
+      }
+      if (hit) {
+        printf "🧹 摘除站点块（反代 127.0.0.1:%s）: %s\n", port, first > "/dev/stderr"
+      } else {
+        printf "%s", buf
+      }
+      buf = ""; nlines = 0
+    }
+    {
+      line = $0
+      tmp = line; opens = gsub(/\{/, "{", tmp)
+      tmp = line; closes = gsub(/\}/, "}", tmp)
+      if (!inblock) {
+        if (opens > 0) {
+          first = line; buf = line "\n"; nlines = 1; lines[1] = line
+          depth = opens - closes
+          if (depth <= 0) flush_block(); else inblock = 1
+        } else {
+          print line
+        }
+      } else {
+        buf = buf line "\n"; nlines++; lines[nlines] = line
+        depth += opens - closes
+        if (depth <= 0) { flush_block(); inblock = 0 }
+      }
+    }
+    END { if (inblock) printf "%s", buf }
+  ' "$file"
+}
+
+# 卸载时的 Caddy 回收（R2-P2-05）：菜单 5/6 的站点块此前只有追
+# 加、没有移除面，面板卸载后陈旧块仍把域名反代到已删部署的端
+# 口（502）。本函数按部署前端端口判归属整块摘除：先备份（沿菜
+# 单 5/6 的 .bak.<ts>.<pid> 命名纪律）、候选内容先经 caddy
+# validate（不过不落盘）、restart 或重启后未就活则回滚备份——
+# 与菜单 5/6 的生效口径一致；任一步失败只告警点名、不阻断卸载
+# 本体。摘除后文件为空时留一行注释占位（空文件无法被 caddy 加
+# 载）。Caddyfile 不存在时静默跳过；CADDYFILE_PATH 仅供测试夹
+# 具覆盖，默认即现行路径。Caddy 本体、官方源与 keyring、历史备
+# 份均不在卸载回收集内（保留事项在本函数尾部与卸载回执点名）。
+uninstall_caddy_panel_blocks() {
+  local port="$1"
+  local caddyfile="${CADDYFILE_PATH:-/etc/caddy/Caddyfile}"
+  [[ -f "$caddyfile" ]] || return 0
+  local stripped=""
+  stripped=$(mktemp) || return 0
+  if ! caddyfile_without_panel_port_blocks "$caddyfile" "$port" > "$stripped"; then
+    rm -f "$stripped"
+    echo "⚠️ Caddyfile 解析失败，面板站点块未摘除，请人工检查 $caddyfile 中反代 127.0.0.1:$port 的站点块"
+    return 0
+  fi
+  if cmp -s "$stripped" "$caddyfile"; then
+    rm -f "$stripped"
+    echo "ℹ️ $caddyfile 中未发现反代到本部署端口 127.0.0.1:$port 的站点块，未做修改（如部署曾改过前端端口，请人工检查该文件）"
+    return 0
+  fi
+  local caddyfile_bak="${caddyfile}.bak.$(date +%s).$$"
+  if ! cp "$caddyfile" "$caddyfile_bak"; then
+    rm -f "$stripped"
+    echo "⚠️ Caddyfile 备份失败，面板站点块未摘除，请人工处理 $caddyfile"
+    return 0
+  fi
+  echo "🗄️  已备份现有 Caddy 配置到 $caddyfile_bak"
+  if ! grep -q '[^[:space:]]' "$stripped"; then
+    printf '# FLMX 面板已卸载：原站点块已随卸载摘除，本文件无剩余站点配置。\n' > "$stripped"
+  fi
+  if command -v caddy >/dev/null 2>&1; then
+    if ! caddy validate --config "$stripped" >/dev/null 2>&1; then
+      rm -f "$stripped"
+      echo "⚠️ 摘除面板站点块后的 Caddy 配置校验失败，已保留原配置未改动（备份在 $caddyfile_bak），请人工处理 $caddyfile"
+      return 0
+    fi
+  fi
+  if ! cat "$stripped" > "$caddyfile"; then
+    rm -f "$stripped"
+    echo "⚠️ Caddyfile 写回失败，请人工处理（备份在 $caddyfile_bak）"
+    return 0
+  fi
+  rm -f "$stripped"
+  echo "🧹 已从 $caddyfile 摘除反代到本部署端口 127.0.0.1:$port 的面板站点块（域名见上）"
+  if command -v systemctl >/dev/null 2>&1 && systemctl cat caddy >/dev/null 2>&1; then
+    if ! systemctl restart caddy; then
+      echo "⚠️ Caddy 重启失败，正在回滚到摘除前的配置..."
+      cp "$caddyfile_bak" "$caddyfile"
+      systemctl restart caddy || true
+      echo "⚠️ Caddy 站点块摘除未生效（已回滚），请人工处理 $caddyfile"
+      return 0
+    fi
+    if ! systemctl is-active --quiet caddy; then
+      echo "⚠️ Caddy 重启后未处于运行状态，正在回滚到摘除前的配置..."
+      cp "$caddyfile_bak" "$caddyfile"
+      systemctl restart caddy || true
+      echo "⚠️ Caddy 站点块摘除未生效（已回滚），请人工处理 $caddyfile"
+      return 0
+    fi
+    echo "✅ Caddy 已重启，站点块摘除已生效"
+  else
+    echo "ℹ️ 未检测到 systemd 管理的 Caddy 服务，配置已更新，下次 Caddy 启动/重载时生效"
+  fi
+  echo "ℹ️ Caddyfile 历史备份（$caddyfile.bak.*，含其他站点的配置历史）未随卸载删除，确认无用后可人工清理"
+  return 0
+}
+
+# 解析本部署的前端端口（卸载 Caddy 回收的归属判据）：读部署
+# .env 的 FRONTEND_PORT，合法（纯数字 1-65535）才采，否则回退
+# 菜单 5/6 的既定缺省 6366（与 resolve_caddy_frontend_port 的回
+# 退口径一致，但卸载不做部署定位，只读给定 .env）。
+panel_uninstall_frontend_port() {
+  local env_file="$1" port=""
+  if [[ -f "$env_file" ]]; then
+    port=$(get_env_var_raw "FRONTEND_PORT" "$env_file" 2>/dev/null | tr -d ' \r\n\t' || true)
+  fi
+  if [[ "$port" =~ ^[0-9]+$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 )); then
+    printf '%s' "$port"
+  else
+    printf '6366'
+  fi
 }
 
 # L2-29（R5-FD）：菜单 5/6 的系统前置检查——这两处菜单的 Caddy 安
@@ -4804,9 +4940,11 @@ uninstall_panel() {
     # 备份与更新临时文件全部残留，且仅剩这些残留时还谎称「无
     # 需清理」。现按同一集合先建清单逐项点名，再走下方归属门
     # （AI-09 口径不变），确认后整集删除、回执复述已删清单。
+    # R2-SCR-F04：同一集合含面板内升级工件五件（.env.upgrade.bak
+    # 等，见 Docker 分支同名注释），两分支逐字同集才算对齐。
     local -a nodocker_residuals=()
     local nodocker_item nodocker_match
-    for nodocker_item in docker-compose.yml .env .env.pre-postgres-migration gost.db.bak; do
+    for nodocker_item in docker-compose.yml .env .env.pre-postgres-migration gost.db.bak .env.upgrade.bak docker-compose.yml.upgrade.bak upgrade.log .flmx_upgrade_status.json .flmx_upgrade_heartbeat; do
       if [[ -e "$nodocker_item" ]]; then
         nodocker_residuals+=("$nodocker_item")
       fi
@@ -4842,9 +4980,15 @@ uninstall_panel() {
         return 0
       fi
     fi
+    # R2-P2-05：Caddy 回收的归属判据（前端端口）须在删除 .env
+    # 之前读出（.env 不在残留集时按缺省 6366 匹配）。
+    local nodocker_caddy_port
+    nodocker_caddy_port=$(panel_uninstall_frontend_port .env)
     echo "🧹 清理残留配置文件..."
     rm -rf "${nodocker_residuals[@]}"
     echo "✅ 清理完成（已删除：${nodocker_residuals[*]}）"
+    # R2-P2-05：菜单 5/6 的 Caddy 站点块与 Docker 分支同口径回收。
+    uninstall_caddy_panel_blocks "$nodocker_caddy_port"
     return 0
   fi
 
@@ -4881,6 +5025,11 @@ uninstall_panel() {
     return 0
   fi
 
+  # R2-P2-05：Caddy 回收的归属判据（本部署前端端口）须在删除
+  # .env 之前读出，卸载尾部按它摘除菜单 5/6 写入的站点块。
+  local uninstall_caddy_port
+  uninstall_caddy_port=$(panel_uninstall_frontend_port .env)
+
   echo "🛑 停止并删除容器、镜像、卷..."
   # L2-14（R5-FD）：down 失败不得被 set -e 无声吞掉后仍报完成。
   if ! $DOCKER_CMD down --rmi all --volumes --remove-orphans; then
@@ -4896,6 +5045,17 @@ uninstall_panel() {
   rm -rf backups
   rm -f .env.bak.* docker-compose.yml.bak.* .env.pre-postgres-migration gost.db.bak
   rm -f .docker-compose.yml.update.* .docker-compose.yml.install.*
+  # R2-SCR-F04：面板内升级（后端 helper）落在部署目录的工件不在
+  # 上面的脚本更新面内、此前两卸载分支都漏——.env.upgrade.bak
+  # 是含 JWT_SECRET 与数据库口令的完整 .env 副本（helper 仅在
+  # 成功路径自删，失败/回滚终态刻意保留，正是卸载时最可能在场
+  # 的状态）、compose 升级备份、升级日志与状态/心跳文件，一并
+  # 清除，不留残口。
+  rm -f .env.upgrade.bak docker-compose.yml.upgrade.bak upgrade.log .flmx_upgrade_status.json .flmx_upgrade_heartbeat
+  # R2-P2-05：菜单 5/6 在 Caddyfile 里追加的面板/订阅前置站点块
+  # 一并回收（按上文读出的前端端口判归属整块摘除，失败只告警、
+  # 不推翻已完成的卸载）。
+  uninstall_caddy_panel_blocks "$uninstall_caddy_port"
   echo "✅ 卸载完成"
 }
 

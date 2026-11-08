@@ -157,6 +157,12 @@ func runAgentUninstall() {
 		uninstallExit(0)
 		return
 	}
+	// 自定义内核目录（脚本形态）：FLMX_KERNEL_DIR 把内核状态根
+	// 指到安装目录之外时，删安装目录覆盖不到它——在内核已停
+	// （uninstallKernels 已执行）后按守卫单独清理，与 install.sh
+	// 的 resolve_custom_kernel_dir 同口径。容器形态不走这里：
+	// 其 FLMX_KERNEL_DIR 钉在数据目录内，已随数据目录清空。
+	removeCustomKernelDirForUninstall(binaryPath)
 	manager, err := uninstallDetectManager()
 	if err != nil {
 		fmt.Printf("❌ 卸载失败: %v\n", err)
@@ -443,8 +449,84 @@ func buildAgentUninstallScript(manager serviceManager, binaryPath string) (strin
 	default:
 		return "", fmt.Errorf("不支持的服务管理器: %q", string(manager))
 	}
+	// OpenRC 日志面（R2-P2-04）：logrotate 配置与 /var/log 下的
+	// 日志本体及轮转件按安装名派生，与 install.sh 的
+	// remove_flmx_agent_log_files 同集。日志本体只有 OpenRC 形
+	// 态才产生、logrotate 配置也只由脚本的 OpenRC 支落盘，但生
+	// 成脚本不分形态统一带上：systemd 形态下这些文件不存在，
+	// rm -f 空转无害，按在位文件收口才不漏。
+	fmt.Fprintf(&b, "rm -f %s; ", q(filepath.Join("/etc/logrotate.d", name)))
+	for _, suffix := range []string{"", ".1", ".2", ".3", ".gz", ".1.gz", ".2.gz", ".3.gz"} {
+		fmt.Fprintf(&b, "rm -f %s %s; ", q("/var/log/"+name+".log"+suffix), q("/var/log/"+name+".err.log"+suffix))
+	}
 	fmt.Fprintf(&b, "rm -rf %s; echo 'agent uninstall done'", q(dir))
 	return b.String(), nil
+}
+
+// guardedCustomKernelDir 判定 FLMX_KERNEL_DIR 指向的自定义内核
+// 目录是否应随卸载单独删除，口径与 install.sh 的
+// resolve_custom_kernel_dir 对齐：绝对路径、至少两级、不在系统
+// 目录名单内、不是安装目录或其默认内核子目录（那两处随安装目
+// 录一并删除）、不是安装目录的上级目录；目录非空时还须见内核
+// 状态痕迹（state.json 或子目录）。返回 (待删目录, "") 或
+// ("", 跳过原因)；环境变量未设、目录已被安装目录覆盖或目录不
+// 存在时返回 ("", "")。配置值形态不可确认时不删、点名披露请人
+// 工确认——宁可留痕不误删。
+func guardedCustomKernelDir(binaryPath string) (string, string) {
+	raw := strings.TrimSpace(os.Getenv("FLMX_KERNEL_DIR"))
+	if raw == "" {
+		return "", ""
+	}
+	dir := filepath.Clean(raw)
+	installDir := filepath.Dir(binaryPath)
+	if dir == installDir || dir == filepath.Join(installDir, "kernels") {
+		return "", ""
+	}
+	if !filepath.IsAbs(dir) || strings.Count(dir, string(filepath.Separator)) < 2 {
+		return "", fmt.Sprintf("FLMX_KERNEL_DIR 配置值（%s）不是两级以上的绝对路径，卸载不自动清理该目录，请人工确认", raw)
+	}
+	switch dir {
+	case "/etc", "/usr", "/var", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev", "/proc", "/sys", "/run", "/home", "/root", "/opt", "/srv", "/mnt", "/media", "/tmp":
+		return "", fmt.Sprintf("FLMX_KERNEL_DIR 指向系统目录（%s），卸载不自动清理，请人工确认", dir)
+	}
+	if strings.HasPrefix(installDir, dir+string(filepath.Separator)) {
+		return "", fmt.Sprintf("FLMX_KERNEL_DIR（%s）是安装目录的上级目录，卸载不自动清理，请人工确认", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", ""
+	}
+	if len(entries) > 0 {
+		hasTrace := false
+		for _, e := range entries {
+			if e.IsDir() || e.Name() == "state.json" {
+				hasTrace = true
+				break
+			}
+		}
+		if !hasTrace {
+			return "", fmt.Sprintf("自定义内核目录 %s 内未见内核状态痕迹（state.json 或子目录），卸载不自动清理，请人工确认", dir)
+		}
+	}
+	return dir, ""
+}
+
+// removeCustomKernelDirForUninstall 执行 guardedCustomKernelDir
+// 的判定结果：删除并点名，或点名披露跳过原因。
+func removeCustomKernelDirForUninstall(binaryPath string) {
+	dir, skip := guardedCustomKernelDir(binaryPath)
+	if skip != "" {
+		fmt.Printf("⚠️ %s\n", skip)
+		return
+	}
+	if dir == "" {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		fmt.Printf("⚠️ 删除自定义内核目录失败: %s（%v）\n", dir, err)
+		return
+	}
+	fmt.Printf("🧹 删除自定义内核目录: %s\n", dir)
 }
 
 // wipeContainerDataDir 是容器形态的清理入口：以数据目录（config

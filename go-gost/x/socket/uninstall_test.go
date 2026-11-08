@@ -69,6 +69,122 @@ func TestBuildAgentUninstallScriptRejectsForeignInstalls(t *testing.T) {
 	}
 }
 
+// R2-P2-04：自卸载脚本必须一并带上 OpenRC 日志面——按安装名派
+// 生的 logrotate 配置与 /var/log 日志本体及轮转件（与 install.sh
+// 的 remove_flmx_agent_log_files 同集）；两种服务管理器形态都带
+// （systemd 形态下文件不存在、rm -f 空转）。
+func TestBuildAgentUninstallScriptRemovesLogSurface(t *testing.T) {
+	for _, manager := range []serviceManager{serviceManagerSystemd, serviceManagerOpenRC} {
+		script, err := buildAgentUninstallScript(manager, "/etc/flmx_agent/flmx_agent")
+		if err != nil {
+			t.Fatalf("build script (%s): %v", manager, err)
+		}
+		for _, want := range []string{
+			"rm -f '/etc/logrotate.d/flmx_agent'",
+			"rm -f '/var/log/flmx_agent.log' '/var/log/flmx_agent.err.log'",
+			"rm -f '/var/log/flmx_agent.log.1' '/var/log/flmx_agent.err.log.1'",
+			"rm -f '/var/log/flmx_agent.log.3.gz' '/var/log/flmx_agent.err.log.3.gz'",
+		} {
+			if !strings.Contains(script, want) {
+				t.Fatalf("script (%s) missing %q:\n%s", manager, want, script)
+			}
+		}
+	}
+}
+
+// 自定义内核目录的卸载守卫（与 install.sh 的
+// resolve_custom_kernel_dir 同口径）：只有通过全套守卫的目录才
+// 进删除集；形态不可确认的一律跳过并给原因。
+func TestGuardedCustomKernelDir(t *testing.T) {
+	const binaryPath = "/etc/flmx_agent/flmx_agent"
+
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("FLMX_KERNEL_DIR", "")
+		if dir, skip := guardedCustomKernelDir(binaryPath); dir != "" || skip != "" {
+			t.Fatalf("unset env must be a silent no-op, got dir=%q skip=%q", dir, skip)
+		}
+	})
+
+	t.Run("covered by install dir", func(t *testing.T) {
+		for _, v := range []string{"/etc/flmx_agent", "/etc/flmx_agent/kernels"} {
+			t.Setenv("FLMX_KERNEL_DIR", v)
+			if dir, skip := guardedCustomKernelDir(binaryPath); dir != "" || skip != "" {
+				t.Fatalf("%q is covered by the install dir removal, got dir=%q skip=%q", v, dir, skip)
+			}
+		}
+	})
+
+	t.Run("valid with state file", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("FLMX_KERNEL_DIR", dir)
+		got, skip := guardedCustomKernelDir(binaryPath)
+		if skip != "" || got != dir {
+			t.Fatalf("state.json dir must be accepted, got dir=%q skip=%q", got, skip)
+		}
+	})
+
+	t.Run("valid with kernel subdir only", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "sing-box"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("FLMX_KERNEL_DIR", dir)
+		got, skip := guardedCustomKernelDir(binaryPath)
+		if skip != "" || got != dir {
+			t.Fatalf("subdir dir must be accepted, got dir=%q skip=%q", got, skip)
+		}
+	})
+
+	t.Run("no kernel traces", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "random.txt"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("FLMX_KERNEL_DIR", dir)
+		got, skip := guardedCustomKernelDir(binaryPath)
+		if got != "" || !strings.Contains(skip, "未见内核状态痕迹") {
+			t.Fatalf("traceless dir must be skipped with a reason, got dir=%q skip=%q", got, skip)
+		}
+	})
+
+	t.Run("system dir and shallow and ancestor", func(t *testing.T) {
+		for _, v := range []string{"/var", "/opt", "/kernels", "/etc"} {
+			t.Setenv("FLMX_KERNEL_DIR", v)
+			got, skip := guardedCustomKernelDir(binaryPath)
+			if got != "" || skip == "" {
+				t.Fatalf("%q must be skipped with a reason, got dir=%q skip=%q", v, got, skip)
+			}
+		}
+	})
+}
+
+// removeCustomKernelDirForUninstall 对守卫通过的真实目录执行删
+// 除、对跳过目录不动分毫。
+func TestRemoveCustomKernelDirForUninstall(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLMX_KERNEL_DIR", dir)
+	removeCustomKernelDirForUninstall("/etc/flmx_agent/flmx_agent")
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("guarded custom kernel dir must be removed, stat err=%v", err)
+	}
+
+	keep := t.TempDir()
+	if err := os.WriteFile(filepath.Join(keep, "random.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLMX_KERNEL_DIR", keep)
+	removeCustomKernelDirForUninstall("/etc/flmx_agent/flmx_agent")
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("traceless dir must be kept, stat err=%v", err)
+	}
+}
+
 // 容器形态的数据目录清理（镜像布局）：数据目录与二进制目录分离
 // （/etc/flmx_agent vs /usr/local/bin），以数据目录为锚清空——只留
 // 标记，配置（含 secret）与内核目录必须清掉，二进制本体在目录外
