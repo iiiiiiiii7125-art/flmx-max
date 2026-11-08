@@ -141,13 +141,6 @@ func TestSharePhase3(t *testing.T) {
 	for _, in := range phase3Inbounds(t)[:4] {
 		eps = append(eps, Endpoint{Name: in.Protocol, Host: "203.0.113.10", Port: in.Port, Inbound: in})
 	}
-	snell := Inbound{ID: 9, Protocol: ProtocolSnell, Port: 6160, Settings: Settings{Password: "psk-cccccccc", SnellVersion: 5, BackendPort: 36160},
-		Security: Security{Type: SecurityShadowTLS, SNI: "www.microsoft.com", ShadowTLSPassword: "stls-pass-2"}}
-	if err := Normalize(TypeSnell, &snell); err != nil {
-		t.Fatal(err)
-	}
-	eps = append(eps, Endpoint{Name: "snell", Host: "203.0.113.10", Port: 6160, Inbound: snell})
-
 	var uris []string
 	for _, e := range eps {
 		if uri, ok := ShareURI(e); ok {
@@ -155,7 +148,7 @@ func TestSharePhase3(t *testing.T) {
 		}
 	}
 	if len(uris) != 4 {
-		t.Fatalf("snell has no share link, others do: %v", uris)
+		t.Fatalf("every phase-3 endpoint has a share link: %v", uris)
 	}
 	var all strings.Builder
 	all.WriteString(strings.Join(uris, "\n") + "\n")
@@ -171,7 +164,6 @@ func TestSharePhase3(t *testing.T) {
 	for _, want := range []string{
 		"hysteria2://hy2-secret@203.0.113.10:443/?insecure=1&sni=www.bing.com#hysteria2",
 		"plugin=shadow-tls%3Bhost%3Dwww.microsoft.com%3Bpassword%3Dstls-secret-123%3Bversion%3D3",
-		"snell = snell, 203.0.113.10, 6160, psk=psk-cccccccc, version=5, reuse=true, tfo=true, shadow-tls-password=stls-pass-2, shadow-tls-sni=www.microsoft.com, shadow-tls-version=3",
 		"tuic-v5, 203.0.113.10, 8443",
 		`"detour": "shadowsocks (shadowtls)"`,
 	} {
@@ -184,14 +176,6 @@ func TestSharePhase3(t *testing.T) {
 		if _, bad := o["tls"].(map[string]interface{})["utls"]; bad {
 			t.Fatalf("sing-box rejects uTLS on QUIC outbound %s", e.Name)
 		}
-	}
-	// R9-01 再订正：B1（1.3.1）曾据「Mihomo 接受 Snell 1-4、5 归一到
-	// 4」把 v5 入站钉进 Clash 段——该依据的钉版（v1.19.32）不在公开
-	// 发行线、不可复现；第九轮以官方 Mihomo v1.19.16 / v1.19.17 二进制
-	// 实测：v4 条目整份拒绝、仅 v3 可过。故 Clash 段不得出现 Snell
-	// （黄金已同步更新）；Surge 段的原生 Snell 行由上方 want 钉住。
-	if strings.Contains(out[strings.Index(out, "### clash"):strings.Index(out, "### singbox")], "snell") {
-		t.Fatal("snell must not be offered in the clash format (R9-01)")
 	}
 }
 

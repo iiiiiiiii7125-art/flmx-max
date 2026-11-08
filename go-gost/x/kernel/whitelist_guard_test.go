@@ -11,10 +11,10 @@ import (
 )
 
 // Inbound whitelist fail-closed tests. A whitelisted port is only
-// protected while its nft rules are installed, so — like the Snell
-// egress guard — a whitelist kernel must never run when the ruleset
-// sync fails or nftables is missing, and a failed sync must also stop
-// guarded kernels that were already running.
+// protected while its nft rules are installed, so a whitelist kernel
+// must never run when the ruleset sync fails or nftables is missing,
+// and a failed sync must also stop guarded kernels that were already
+// running.
 
 type whitelistNftStub struct {
 	failLoad  bool // script loads ("-f -") fail
@@ -120,13 +120,6 @@ func TestReqNeedsNftGuard(t *testing.T) {
 	disabled.Enabled = false
 	if reqNeedsNftGuard(disabled) {
 		t.Fatal("disabled kernel runs nothing and needs no guard")
-	}
-	snell := ApplyRequest{
-		Type: "snell", Enabled: true,
-		Processes: []ProcessSpec{{Name: "snell-7"}},
-	}
-	if !reqNeedsNftGuard(snell) {
-		t.Fatal("snell-server must need the nft guard")
 	}
 }
 

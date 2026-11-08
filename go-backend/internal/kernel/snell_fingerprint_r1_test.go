@@ -5,8 +5,8 @@ import (
 )
 
 // X-P3-12（L-02-2）：sing-box 来源的 Snell+ShadowTLS 解析此前不生成
-// client-fingerprint——同文件 ss detour 分支置 "chrome"、自建入站
-// clashSnell 恒输出，唯独此路缺失，两路渲染的 ShadowTLS 伪装字段不一致。
+// client-fingerprint——同文件 ss detour 分支置 "chrome"，唯独此路
+// 缺失，两路渲染的 ShadowTLS 伪装字段不一致。
 func TestR1B7ImportedSnellShadowTLSFingerprint(t *testing.T) {
 	nodes, errs := ParseImport(`{"outbounds":[
 		{"type":"snell","tag":"stls4","server_port":0,"version":4,"psk":"psk-aaaa","detour":"stls4-d"},

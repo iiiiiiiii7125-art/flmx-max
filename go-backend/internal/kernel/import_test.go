@@ -129,7 +129,7 @@ DIRECT-ish = direct
 	// 公开支持 v4），该节点（Surge 导入的 v4 + ShadowTLS）在此必须
 	// 渲染且带 obfs-opts。clash（Mihomo）格式另经 R10-01 接受域门
 	// （官方 1.19.16/1.19.17 实测 v4 与 shadow-tls 均整份拒绝），
-	// 不经本函数口径（见 snell_clash_split_r9_test.go 的 R10 钉格）。
+	// 不经本函数口径（见 R10 钉格）。
 	snellClash, ok := proxyClash(Endpoint{Name: "Snell", Host: "1.2.3.4", Port: 6160, Proxy: nodes[0].Proxy})
 	if !ok {
 		t.Fatal("Mihomo renders Snell v4 (B1)")

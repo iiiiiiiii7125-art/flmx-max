@@ -358,11 +358,7 @@ func TestPhase3KernelsContract(t *testing.T) {
 	nodeID := seedKernelNode(t, r, "landing")
 
 	// Offline node: kernels are registered, versions resolved.
-	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"snell","version":"4.1.1"}`)
 	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"singbox"}`)
-	if got := mustQueryString(t, r, `SELECT version FROM node_kernel WHERE kernel_type = 'snell'`); got != "4.1.1" {
-		t.Fatalf("snell version: %q", got)
-	}
 	if got := mustQueryString(t, r, `SELECT version FROM node_kernel WHERE kernel_type = 'singbox'`); got != "latest" {
 		t.Fatalf("sing-box version: %q", got)
 	}
@@ -379,12 +375,11 @@ func TestPhase3KernelsContract(t *testing.T) {
 	}
 	n := jsonInt64(nodeID)
 
-	if _, msg := create(`{"nodeId":` + n + `,"kernelType":"snell","name":"s5","protocol":"snell","port":6160,"settings":{"snellVersion":5}}`); !strings.Contains(msg, "4.1.1") {
-		t.Fatalf("v5 inbound on a 4.1.1 binary must be rejected: %s", msg)
-	}
-	snellID, msg := create(`{"nodeId":` + n + `,"kernelType":"snell","name":"s4","protocol":"snell","port":6160,"settings":{"snellVersion":4},"security":{"type":"shadowtls","sni":"www.microsoft.com"}}`)
-	if snellID == 0 {
-		t.Fatalf("snell v4 + shadowtls: %s", msg)
+	// 端口占用夹具（原自建 Snell 入站整删后改由 SS 入站占位 6160）：
+	// 下方 dup 创建与 hop 段覆盖两格均以「他入站已占 6160」为前提。
+	occID, msg := create(`{"nodeId":` + n + `,"kernelType":"singbox","name":"occ","protocol":"shadowsocks","port":6160}`)
+	if occID == 0 {
+		t.Fatalf("occupant shadowsocks inbound: %s", msg)
 	}
 	hyID, msg := create(`{"nodeId":` + n + `,"kernelType":"singbox","name":"hy2","protocol":"hysteria2","port":443,"transport":{"type":"quic"},"security":{"type":"tls"}}`)
 	if hyID == 0 {
@@ -394,23 +389,9 @@ func TestPhase3KernelsContract(t *testing.T) {
 		t.Fatalf("PROXY protocol must be Xray-only: %s", msg)
 	}
 	if _, msg := create(`{"nodeId":` + n + `,"kernelType":"singbox","name":"dup","protocol":"anytls","port":6160,"security":{"type":"tls"}}`); !strings.Contains(msg, "已被") {
-		t.Fatalf("port shared with the snell inbound must be rejected: %s", msg)
-	}
-	if got := mustQueryString(t, r, `SELECT settings FROM node_inbound WHERE id = ?`, snellID); !strings.Contains(got, `"backendPort"`) {
-		t.Fatalf("shadowtls snell needs a backend port: %s", got)
+		t.Fatalf("port shared with another inbound must be rejected: %s", msg)
 	}
 
-	// Upgrading the binary is fine; downgrading below a v5 inbound is not.
-	if out := kernelContractPost(t, router, admin, "/api/v1/inbound/update",
-		`{"id":`+jsonInt64(snellID)+`,"name":"s4","protocol":"snell","port":6160,"settings":{"snellVersion":4},"security":{"type":"shadowtls","sni":"www.microsoft.com"}}`); out.Code != 0 {
-		t.Fatalf("update: %+v", out)
-	}
-
-	share := kernelContractPost(t, router, admin, "/api/v1/inbound/share", `{"id":`+jsonInt64(snellID)+`}`)
-	entry := share.Data.([]interface{})[0].(map[string]interface{})
-	if entry["uri"] != "" || !strings.Contains(entry["surge"].(string), "shadow-tls-version=3") || !strings.Contains(entry["surge"].(string), "version=4") {
-		t.Fatalf("snell share must be a Surge line: %v", entry)
-	}
 	// Port hopping: the range is reserved on the node like a port.
 	hop := func(rng string) string {
 		return kernelContractPost(t, router, admin, "/api/v1/inbound/update",
@@ -420,7 +401,7 @@ func TestPhase3KernelsContract(t *testing.T) {
 		t.Fatalf("hop range inside the node forwarding range must be rejected: %s", msg)
 	}
 	if msg := hop("6100-6200"); !strings.Contains(msg, "已被") {
-		t.Fatalf("hop range covering the snell port must be rejected: %s", msg)
+		t.Fatalf("hop range covering the occupied port must be rejected: %s", msg)
 	}
 	if msg := hop("1100-1200"); strings.Contains(msg, "端口") {
 		t.Fatalf("free hop range: %s", msg)
@@ -436,15 +417,12 @@ func TestPhase3KernelsContract(t *testing.T) {
 	info := kernelContractPost(t, router, admin, "/api/v1/inbound/sub/info", `{}`)
 	token := info.Data.(map[string]interface{})["token"].(string)
 	surge := getSub(t, router, "/api/v1/open_api/sub/"+token+"?format=surge", "").Body.String()
-	if !strings.Contains(surge, "= snell,") || !strings.Contains(surge, "= hysteria2,") {
+	if strings.Contains(surge, "= snell,") || !strings.Contains(surge, "= hysteria2,") {
 		t.Fatalf("surge sub: %s", surge)
 	}
 	clash := getSub(t, router, "/api/v1/open_api/sub/"+token, "clash-verge").Body.String()
-	// B1 再订正（R9-01）：B1 订正所据的「Mihomo v1.19.32 接受 Snell
-	// v4」说法经官方二进制实测推翻——1.19.16/1.19.17 对含 Snell 条目
-	// 的 clash 文件整份拒绝（snell version error: 4），面板已按格式
-	// 分流：clash 格式不再下发自建 Snell（v4/v5 与 v6 同口径），
-	// Stash/Shadowrocket 保留 v4 口径。故断言回到不得含 snell。
+	// 自建 Snell 入站已整删：任何格式都不得再出现 snell 条目
+	// （导入 Snell 节点不在本夹具面内）。
 	if strings.Contains(clash, "snell") || !strings.Contains(clash, `type: "hysteria2"`) {
 		t.Fatalf("clash sub: %s", clash)
 	}

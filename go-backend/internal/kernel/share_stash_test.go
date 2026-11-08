@@ -106,27 +106,27 @@ func stashMatrixEndpoints(t *testing.T) []Endpoint {
 		{Name: "普通 Trojan", Host: "203.0.113.30", Port: 8443, Direct: true, Inbound: Inbound{ID: 71, Protocol: ProtocolTrojan, Port: 8443,
 			Settings: Settings{Password: "tpw"}, Security: Security{Type: SecurityTLS, SNI: "t.example.com"}}},
 		{Name: "ENC 节点", Host: "203.0.113.20", Port: 443, Direct: true, Inbound: enc},
-		g4SnellEndpoint(t, 5, false),
-		g4SnellEndpoint(t, 6, false),
+		{Name: "G4 Snell", Host: "snell.example.com", Port: 6160, Direct: true, Proxy: Proxy{"type": "snell", "server": "snell.example.com", "port": 6160, "psk": "psk-g4-test-123456", "version": 5}},
+		{Name: "G4 Snell", Host: "snell.example.com", Port: 6160, Direct: true, Proxy: Proxy{"type": "snell", "server": "snell.example.com", "port": 6160, "psk": "psk-g4-test-123456", "version": 6}},
 	}
 }
 
 func TestStashNodeSetAndCountParity(t *testing.T) {
 	eps := stashMatrixEndpoints(t)
-	// g4SnellEndpoint 的 Name 固定为 "G4 Snell"，v5/v6 同名会被
+	// 两个导入 Snell 端点同名 "G4 Snell"，v5/v6 同名会被
 	// uniqueNames 去重——改名以便逐个断言携带面。
 	eps[2].Name = "Snell v5 节点"
 	eps[3].Name = "Snell v6 节点"
 
-	// X-P3-2 的 stash=clash 计数平价自 R9-01 起在 Snell 格分叉：
-	// clash 不下发自建 Snell（v5/v6 均出局）得 2，stash 保留 v5 得 3。
+	// X-P3-2 的 stash=clash 计数平价在导入 Snell 格分叉：
+	// clash 不下发导入 Snell v5/v6 得 2，stash 保留 v5 得 3。
 	countClash := SubscriptionNodeCount(FormatClash, eps, SubOptions{})
 	countStash := SubscriptionNodeCount(FormatStash, eps, SubOptions{})
 	if countStash != 3 {
 		t.Fatalf("node count stash=%d, want 3 (trojan+enc+snell v5)", countStash)
 	}
 	if countClash != 2 {
-		t.Fatalf("node count clash=%d, want 2 (built snell out, R9-01)", countClash)
+		t.Fatalf("node count clash=%d, want 2 (imported snell out)", countClash)
 	}
 
 	stash, _, err := Subscription(FormatStash, eps, SubOptions{})
@@ -152,7 +152,7 @@ func TestStashNodeSetAndCountParity(t *testing.T) {
 		}
 	}
 	if strings.Contains(clash, "Snell v5 节点") || strings.Contains(clash, "Snell v6 节点") {
-		t.Fatalf("clash output must not carry built snell nodes (R9-01):\n%s", clash)
+		t.Fatalf("clash output must not carry imported snell v5/v6 nodes:\n%s", clash)
 	}
 }
 

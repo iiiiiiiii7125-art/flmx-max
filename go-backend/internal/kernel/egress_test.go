@@ -194,8 +194,8 @@ func TestIPv6OnlySplitChainAndAdvancedConfiguration(t *testing.T) {
 			}
 		})
 	}
-	if _, err := NormalizeOutboundIPStrategy(TypeSnell, OutboundIPv6Only); err == nil {
-		t.Fatal("standalone Snell must reject IPv6 egress policy")
+	if _, err := NormalizeOutboundIPStrategy("unsupported-kernel", OutboundIPv6Only); err == nil {
+		t.Fatal("standalone unsupported kernel must reject IPv6 egress policy")
 	}
 }
 
@@ -260,12 +260,12 @@ func TestIPv4OnlyShadowTLSAndValidation(t *testing.T) {
 	if !reflect.DeepEqual(got, []interface{}{"in-3", "in-3-ss"}) {
 		t.Fatalf("both ShadowTLS and decrypted traffic must be covered: %v", got)
 	}
-	for _, tt := range []struct{ kernel, policy string }{{TypeSnell, OutboundIPv4Only}, {TypeXray, "invalid_policy"}} {
+	for _, tt := range []struct{ kernel, policy string }{{"unsupported-kernel", OutboundIPv4Only}, {TypeXray, "invalid_policy"}} {
 		if _, err := NormalizeOutboundIPStrategy(tt.kernel, tt.policy); err == nil {
 			t.Fatalf("unsupported policy accepted: %+v", tt)
 		}
 	}
-	if got, err := NormalizeOutboundIPStrategy(TypeSnell, ""); err != nil || got != OutboundIPAuto {
+	if got, err := NormalizeOutboundIPStrategy("unsupported-kernel", ""); err != nil || got != OutboundIPAuto {
 		t.Fatalf("old configurations must remain automatic: %q %v", got, err)
 	}
 }

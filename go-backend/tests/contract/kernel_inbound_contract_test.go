@@ -65,17 +65,6 @@ func TestKernelInboundLifecycleContract(t *testing.T) {
 		}
 	})
 
-	t.Run("unpinned snell version rejected", func(t *testing.T) {
-		out := kernelContractPost(t, router, admin, "/api/v1/kernel/install",
-			`{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"snell","version":"6.0.0rc"}`)
-		if out.Code == 0 || !strings.Contains(out.Msg, "5.0.1") {
-			t.Fatalf("snell v6 must be rejected with the supported list: %+v", out)
-		}
-		if mustQueryInt(t, r, `SELECT COUNT(*) FROM node_kernel WHERE kernel_type = 'snell'`) != 0 {
-			t.Fatal("rejected install must not register a kernel")
-		}
-	})
-
 	t.Run("bad version rejected", func(t *testing.T) {
 		out := kernelContractPost(t, router, admin, "/api/v1/kernel/install",
 			`{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"xray","version":"1.0/../../x"}`)

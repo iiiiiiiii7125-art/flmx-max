@@ -359,7 +359,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 // kernel.Normalize。kernel_id>0 的自建入站落库形态按对象裁定
 // （RR4-F2-01 与 R5X-024/R11X-001 护栏的收口形态）：Normalize 对
 // 凭据类字段是生成而非拒绝（ENC secret、UUID、Reality 钥、密码
-// 缺失即补，auth/flow 仅 TrimSpace，SnellVersion 0 补默认），只取
+// 缺失即补，auth/flow 仅 TrimSpace），只取
 // error 做校验时这类靠愈合才合法的行会以未愈合形态落库（ENC 空
 // secret 行下发复检无感、订阅派生直接报错）——被愈合改变的对象
 // 改落愈合后的序列化形态（验什么存什么）；Normalize 未触碰的对
@@ -527,7 +527,7 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 		return settings, transport, security, err
 	}
 	// RR4-F2-01：验什么存什么——被愈合改变的对象改落其序列化形态
-	// （生成型凭据、TrimSpace、SnellVersion 默认均体现在差分里）；
+	// （生成型凭据、TrimSpace 等默认值均体现在差分里）；
 	// 未被触碰的对象与仅 XHTTP mode 大小写差的 Transport 逐字恢复
 	// （R5X-024 / R11X-001 护栏，见函数头注）。
 	if !reflect.DeepEqual(beforeSettings, vin.Settings) {
@@ -1754,8 +1754,6 @@ func meteringShapeBlockedBackup(acceptProxyProtocol, relayOnly int, outboundID i
 func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep *importReport) error {
 	srcStripped, outStripped, rulesStripped := 0, 0, 0
 	meteringStripped := 0
-	// R14-A5-08：恢复出的 Snell 毒化行（带链式出站/分流）剥离计数。
-	snellStripped := 0
 	for _, ib := range rows {
 		var row model.NodeInbound
 		res := tx.Where("id = ?", ib.ID).Limit(1).Find(&row)
@@ -1804,26 +1802,6 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 				effSplitRules = pruned
 			}
 		}
-		// R14-A5-08：Snell 内核的行带链式出站/分流是毒化组合（渲染期整
-		// 内核拒绝；保存期已拒，见 handler.validateChainVersion）——
-		// 备份里带出来的旧毒化行在恢复时即剥离为直连（与上方悬空引用
-		// 剥离同口径：行照常恢复、只清路由列、计数披露），不得原样落
-		// 库后阻塞整内核后续下发。以前置悬空剥离后的有效值判定（目标
-		// 已悬空的行已在上方清为直连，不重复计数）。
-		if row.KernelID > 0 && (effOutboundID != 0 || strings.TrimSpace(effSplitRules) != "") {
-			var krow model.NodeKernel
-			if kerr := tx.Where("id = ?", row.KernelID).Limit(1).Find(&krow).Error; kerr == nil && krow.KernelType == kernel.TypeSnell {
-				if effOutboundID != 0 {
-					updates["outbound_id"] = 0
-					effOutboundID = 0
-				}
-				if strings.TrimSpace(effSplitRules) != "" {
-					updates["split_rules"] = ""
-					effSplitRules = ""
-				}
-				snellStripped++
-			}
-		}
 		// X-01 (G1)：恢复出的「计量开 + 形态被排除」行在保存面是被
 		// 拒绝/自愈关开关的组合（B-01 的静默不计量形态：开关显示
 		// 开、伴生永不物化、无任何提示）。导入面按最终落库形态判
@@ -1845,14 +1823,11 @@ func validateImportedInboundRefsTx(tx *gorm.DB, rows []model.InboundBackup, rep 
 	if meteringStripped > 0 {
 		rep.warnf("备份恢复：%d 条入站开启了订阅计量但形态不兼容（PROXY 协议/仅中转/链式出口/分流，计量伴生无法服务），已关闭其计量开关，入站本身已照常恢复，改为直连形态后可重新开启计量", meteringStripped)
 	}
-	if snellStripped > 0 {
-		rep.warnf("备份恢复：%d 条 Snell 内核入站带有链式出站/分流（Snell 内核不支持，已清除其出站与分流配置改直连），入站本身已照常恢复", snellStripped)
-	}
 	// R2-F2-C-B01：链式策略冲突只披露不改行。恢复出的「出站 IP 策略 ×
 	// 链式下一跳字面 IP」冲突组合在保存面会被拒绝（validateChainVersion），
 	// 导入面不改恢复语义（行照常恢复、路由列不动），但必须在回执点名——
 	// 否则渲染期把链式出站静默标 unreachable 丢弃流量、回执无声。以剥离
-	// 后的最终落库形态判定（悬空/Snell 已清为直连的行不再算冲突）。
+	// 后的最终落库形态判定（悬空引用已清为直连的行不再算冲突）。
 	conflictNames := []string{}
 	for _, ib := range rows {
 		var row model.NodeInbound

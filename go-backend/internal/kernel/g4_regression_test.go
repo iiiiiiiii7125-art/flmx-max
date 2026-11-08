@@ -8,103 +8,10 @@ import (
 )
 
 // G4 (1.3.1) 回归组：
-//   - B1（A1 复审）：自建 Snell 入站在 Clash/Mihomo 输出被静默丢弃；
-//   - 同类口径：导入 Snell 节点在 proxyClash 的 v4/v5 门控、proxySingbox
+//   - 导入 Snell 节点在 proxyClash 的 v4/v5 门控、proxySingbox
 //     的缺失分支与 shadow-tls 键的静默丢弃；
 //   - BUG-A4-2：导入对 vless/vmess/tuic 的 UUID 只查非空不查格式。
 // 每个用例在修复前都应 FAIL（Snell 渲染类）或收下坏节点（UUID 类）。
-
-func g4SnellEndpoint(t *testing.T, version int, shadowTLS bool) Endpoint {
-	t.Helper()
-	in := Inbound{ID: 91, Protocol: ProtocolSnell, Port: 6160,
-		Settings: Settings{Password: "psk-g4-test-123456", SnellVersion: version}}
-	if shadowTLS {
-		in.Security = Security{Type: SecurityShadowTLS, SNI: "www.microsoft.com",
-			ShadowTLSPassword: "stls-pass-g4", Fingerprint: "chrome"}
-	}
-	if err := Normalize(TypeSingbox, &in); err != nil {
-		t.Fatalf("normalize snell v%d: %v", version, err)
-	}
-	return Endpoint{Name: "G4 Snell", Host: "snell.example.com", Port: 6160, Inbound: in}
-}
-
-// B1 黄金断言：Snell v5 入站（面板默认版本）必须出现在 Clash 输出中，
-// 参数与 sing-box 渲染同口径（version 4、psk 一致、v5 带 UDP）。
-func TestG4ClashProxyRendersSnell(t *testing.T) {
-	node, ok := ClashProxy(g4SnellEndpoint(t, 5, false))
-	if !ok {
-		t.Fatal("B1: snell v5 inbound must render for clash/mihomo")
-	}
-	m := yamlToMap(node)
-	if m["type"] != "snell" || m["psk"] != "psk-g4-test-123456" || m["version"] != 4 || m["udp"] != true {
-		t.Fatalf("snell clash node fields: %v", m)
-	}
-	out := marshalYAML(node)
-	for _, want := range []string{`type: "snell"`, "psk-g4-test-123456", "version: 4", "udp: true"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("clash snell yaml missing %q:\n%s", want, out)
-		}
-	}
-
-	// v4：同样渲染为 version 4，但 v4 无 UDP（与入站 Network() 口径一致）。
-	node, ok = ClashProxy(g4SnellEndpoint(t, 4, false))
-	if !ok {
-		t.Fatal("snell v4 inbound must render for clash/mihomo")
-	}
-	if m = yamlToMap(node); m["version"] != 4 || m["udp"] != false {
-		t.Fatalf("snell v4 clash node: %v", m)
-	}
-
-	// v6：Mihomo 的 NewSnell 直接报 "snell version error"、且无 mode
-	// 字段可放——有据不支持，保持不渲染（而非渲染出坏节点）。
-	if _, ok = ClashProxy(g4SnellEndpoint(t, 6, false)); ok {
-		t.Fatal("snell v6 has no mihomo client support and must stay out")
-	}
-
-	// ShadowTLS 前置：obfs-opts 承载 shadowtls 模式，UDP 关闭。
-	node, ok = ClashProxy(g4SnellEndpoint(t, 5, true))
-	if !ok {
-		t.Fatal("snell over shadowtls must render for clash/mihomo")
-	}
-	m = yamlToMap(node)
-	if m["udp"] != false || m["client-fingerprint"] != "chrome" {
-		t.Fatalf("snell+shadowtls clash node: %v", m)
-	}
-	oo, _ := m["obfs-opts"].(map[string]interface{})
-	if oo["mode"] != "shadow-tls" || oo["host"] != "www.microsoft.com" || oo["password"] != "stls-pass-g4" || oo["version"] != 3 {
-		t.Fatalf("snell+shadowtls obfs-opts: %v", m)
-	}
-}
-
-// B1 端到端（R9-01 改版）：B1 当年让 Snell 进 Clash 输出，前提是
-// Mihomo 接受 v4——第九轮以官方 Mihomo 1.19.16/1.19.17 实测推翻：
-// v4 条目整份拒绝。故 clash 格式不再下发自建 Snell（v4/v5 与 v6
-// 同口径），Stash / Shadowrocket 保留下发，本用例钉住分流后的形态；
-// 分流全矩阵见 snell_clash_split_r9_test.go。
-func TestG4SubscriptionClashCarriesSnell(t *testing.T) {
-	eps := []Endpoint{g4SnellEndpoint(t, 5, false)}
-	body, _, err := Subscription(FormatClash, eps, SubOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(body, "snell") || strings.Contains(body, "G4 Snell") {
-		t.Fatalf("clash subscription must not carry the snell node (R9-01):\n%s", body)
-	}
-	stash, _, err := Subscription(FormatStash, eps, SubOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(stash, "snell") {
-		t.Fatalf("stash profile must carry the snell node:\n%s", stash)
-	}
-	sr, _, err := Subscription(FormatShadowrocket, eps, SubOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(sr, "snell") {
-		t.Fatalf("shadowrocket profile must carry the snell node:\n%s", sr)
-	}
-}
 
 // 导入 Snell 节点的 Clash 口径：v5 归一到 4、v3 原样、v6 不渲染；
 // "shadow-tls" 面板键须转成 obfs-opts 而非静默丢弃。
@@ -144,7 +51,7 @@ func TestG4ProxyClashSnell(t *testing.T) {
 	}
 }
 
-// 导入 Snell 节点的 sing-box 口径：受与自建入站相同的 UA 门控
+// 导入 Snell 节点的 sing-box 口径：受 UA 门控
 // （<1.14 不下发）；渲染参数与 singboxOutbound 同口径；带 obfs 的
 // 节点 sing-box 无法表达，保持不渲染；ShadowTLS 走 detour 双出站。
 func TestG4ProxySingboxSnell(t *testing.T) {

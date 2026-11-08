@@ -1,6 +1,6 @@
 # Kernel Management API
 
-Kernels are the proxy cores (Xray / sing-box / Snell) installed per node. Inbounds
+Kernels are the proxy cores (Xray / sing-box) installed per node. Inbounds
 are rendered onto kernels; see [inbounds](inbounds.md). All endpoints require
 admin privileges.
 
@@ -8,7 +8,7 @@ admin privileges.
 
 The capability matrix: which protocol × kernel × transport combinations can be
 rendered, plus version gates (e.g. Xray ≥ 25.9.5 for VLESS ENC, sing-box ≥ 1.12
-for AnyTLS, ≥ 1.14 for ACME, Snell major versions). Unsupported combinations are
+for AnyTLS, ≥ 1.14 for ACME). Unsupported combinations are
 rejected when creating an inbound.
 
 ## POST /api/v1/kernel/list

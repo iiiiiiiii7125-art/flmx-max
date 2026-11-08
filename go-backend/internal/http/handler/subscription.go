@@ -937,7 +937,7 @@ type subscriptionView struct {
 	InboundIDs []int64 `json:"inboundIds"`
 	SourceIDs  []int64 `json:"sourceIds"`
 	// SharedIDs are selected inbounds of a share subscription that can't
-	// carry per-user credentials (Snell, Shadowsocks, imported nodes).
+	// carry per-user credentials (Shadowsocks, imported nodes).
 	SharedIDs  []int64     `json:"sharedIds"`
 	Options    subPipeline `json:"options"`
 	ExpireTime int64       `json:"expireTime"`
@@ -1077,7 +1077,7 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	}
 	// A5-02/BC-11：NodeCount 按目标格式的实际渲染数计（与该格式的客户
 	// 端实得一致），不再是格式过滤前的终结点数。sing-box 口径按现行
-	// 客户端（1.14+，含 Snell）计，与真机实测对齐。
+	// 客户端（1.14+，含导入 Snell）计，与真机实测对齐。
 	format = nodeCountFormat(format)
 	countOpts := pipe.options()
 	if format == kernel.FormatSingbox {

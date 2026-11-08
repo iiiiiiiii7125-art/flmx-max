@@ -796,8 +796,8 @@ function Editor({
           )}
           {sharedPicked > 0 && (
             <p className="text-xs font-semibold text-warning-700">
-              其中 {sharedPicked} 个是导入的节点或 Shadowsocks /
-              Snell，没法单独分配凭据：对方拿到共用的密码，停用后订阅失效，但已导入的配置仍能连接。
+              其中 {sharedPicked} 个是导入的节点或
+              Shadowsocks，没法单独分配凭据：对方拿到共用的密码，停用后订阅失效，但已导入的配置仍能连接。
             </p>
           )}
         </Section>
@@ -1878,13 +1878,13 @@ export default function SubscriptionPage() {
                   </p>
                 )}
                 {/* X-P2-14（L-03-1/V-06）：sharedIds 即共用凭据落地
-                    （SS/Snell/导入节点），其已导入配置不随重置失效。 */}
+                    （SS/导入节点），其已导入配置不随重置失效。 */}
                 {confirm === "reset" &&
                   detail &&
                   detail.sharedIds.length > 0 && (
                     <p className="mt-2 text-sm text-warning-700">
                       其中 {detail.sharedIds.length}{" "}
-                      个落地用的是共用凭据（Shadowsocks、Snell、导入节点），重置不使它们已导入的配置失效，要断开只能改对应入站的密码。
+                      个落地用的是共用凭据（Shadowsocks、导入节点），重置不使它们已导入的配置失效，要断开只能改对应入站的密码。
                     </p>
                   )}
               </ModalBody>

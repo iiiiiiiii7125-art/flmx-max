@@ -37,8 +37,8 @@ FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde
 # Container boundary: this image has no systemd. Tuning steps that
 # persist through a systemd unit (flmx-tuning-qdisc.service) are
 # skipped in container form, and runtime sysctl writes only take
-# effect in privileged containers. Forwarding, nftables guards and
-# the Snell user guard behave exactly as in the script form.
+# effect in privileged containers. Forwarding and nftables guards
+# behave exactly as in the script form.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates nftables kmod dsniff iproute2 procps iperf3 \
     && rm -rf /var/lib/apt/lists/*

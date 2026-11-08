@@ -10,8 +10,10 @@ import (
 
 // 修复轮 2 · 版本门家族（R2-015/R2-016/R2-032）。本文件只用基线已有
 // 符号（kernelVersionGate / encDialGate / validateOutboundIPVersion /
-// snellMajor / snellServes / 宽松版三函数），使同一文件能在基线树上
+// 宽松版三函数），使同一文件能在基线树上
 // 跑出红灯、修复树上转绿，作为先红后绿证据。
+// （原 R2-015 的 snellMajor/snellServes 用例与经自建 Snell 目标的
+// 链路用例已随自建 Snell 入站整删一并删除。）
 
 // R2-016（B-sub-03，BC）：硬门对畸形具体版本串 fail-closed。台账逐格
 // 点名：「25.9」过 ENC 门、「25.5.16-rc1」过 ENC 与 prefer 门——即
@@ -88,24 +90,20 @@ func TestHardGatesRejectMalformedTwoSegmentFloors(t *testing.T) {
 
 // R4-06（D-F5-01，BC）：两段下限硬门的第三段后缀格——严格变体此前
 // 只解析前两段，"1.14.0-rc1" 这类第三段带后缀的畸形串能白过 ACME
-// （1.14）/AnyTLS（1.12）/Snell（1.14）/出站 IP 策略（1.12）/Naive
+// （1.14）/AnyTLS（1.12）/出站 IP 策略（1.12）/Naive
 // 拨号（1.13）全部两段硬门，与同族「在席段后缀一律拒」不一致。本
-// 用例逐门钉死拒绝，并以纯数字第三段形态作防过修对照；链路能力标
-// 志与换版扫描同经严格变体、一并钉死。
+// 用例逐门钉死拒绝，并以纯数字第三段形态作防过修对照；换版扫描
+// 同经严格变体、一并钉死。
 func TestHardGatesRejectThirdSegmentSuffixOnTwoSegmentFloors(t *testing.T) {
 	acme := &kernel.Inbound{Protocol: kernel.ProtocolVLESS}
 	acme.Security.CertMode = kernel.CertModeACME
 	anytls := &kernel.Inbound{Protocol: kernel.ProtocolAnyTLS}
-	snell := &kernel.Inbound{Protocol: kernel.ProtocolSnell}
 
 	if msg := kernelVersionGate(kernel.TypeSingbox, "1.14.0-rc1", acme); msg == "" {
 		t.Error("ACME 门：sing-box \"1.14.0-rc1\" 第三段带后缀必须拒绝，却放行")
 	}
 	if msg := kernelVersionGate(kernel.TypeSingbox, "1.12.0-rc1", anytls); msg == "" {
 		t.Error("AnyTLS 门：sing-box \"1.12.0-rc1\" 第三段带后缀必须拒绝，却放行")
-	}
-	if msg := kernelVersionGate(kernel.TypeSingbox, "1.14.0-rc1", snell); msg == "" {
-		t.Error("Snell 门：sing-box \"1.14.0-rc1\" 第三段带后缀必须拒绝，却放行")
 	}
 	if err := validateOutboundIPVersion(kernel.TypeSingbox, "1.12.0-rc1", kernel.OutboundIPv4Only); err == nil {
 		t.Error("出站 IP 策略门：sing-box \"1.12.0-rc1\" 第三段带后缀必须拒绝，却放行")
@@ -121,9 +119,6 @@ func TestHardGatesRejectThirdSegmentSuffixOnTwoSegmentFloors(t *testing.T) {
 	if msg := kernelVersionGate(kernel.TypeSingbox, "1.12.0", anytls); msg != "" {
 		t.Errorf("AnyTLS 门：sing-box \"1.12.0\" 须放行，got %q", msg)
 	}
-	if msg := kernelVersionGate(kernel.TypeSingbox, "1.14.0", snell); msg != "" {
-		t.Errorf("Snell 门：sing-box \"1.14.0\" 须放行，got %q", msg)
-	}
 	if err := validateOutboundIPVersion(kernel.TypeSingbox, "1.12.0", kernel.OutboundIPv4Only); err != nil {
 		t.Errorf("出站 IP 策略门：sing-box \"1.12.0\" 须放行，got %v", err)
 	}
@@ -131,31 +126,12 @@ func TestHardGatesRejectThirdSegmentSuffixOnTwoSegmentFloors(t *testing.T) {
 		t.Errorf("Naive 拨号门：sing-box \"1.13.0\" 须放行，got %q", msg)
 	}
 
-	// 链路能力标志面（kernel_chain.go 的 SingboxSnell 标志同走严格
-	// 变体）：经 Snell 目标的链在 "1.14.0-rc1" 必须 fail-closed。
 	r, err := repo.Open(t.TempDir() + "/gatesuffix.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
 	h := New(r, "unit-test-secret")
-	snellNode := seedRelayTargetNode(t, r, "snell-node", "203.0.113.30")
-	snellKernel := seedChainKernel(t, r, snellNode, kernel.TypeSnell)
-	target := seedChainInbound(t, r, snellKernel, "snell-target", kernel.Inbound{
-		Protocol: kernel.ProtocolSnell, Port: 10001,
-		Settings: kernel.Settings{Password: "password123", SnellVersion: 5},
-	}, 0)
-	entryNode := seedRelayTargetNode(t, r, "entry-node", "198.51.100.9")
-	box := seedChainKernel(t, r, entryNode, kernel.TypeSingbox)
-	entry := seedChainInbound(t, r, box, "entry", kernel.Inbound{
-		Protocol: kernel.ProtocolShadowsocks, Port: 8388,
-	}, target.ID)
-	if err := h.validateChainVersion(*entry, kernel.TypeSingbox, "1.14.0-rc1"); err == nil || !strings.Contains(err.Error(), "1.14") {
-		t.Fatalf("链路校验：\"1.14.0-rc1\" 必须 fail-closed，got %v", err)
-	}
-	if err := h.validateChainVersion(*entry, kernel.TypeSingbox, "1.14.0"); err != nil {
-		t.Fatalf("链路校验：\"1.14.0\" 须放行，got %v", err)
-	}
 
 	// 换版扫描面：内核上挂 AnyTLS 入站时以 "1.12.0-rc1" 换版必须被
 	// checkKernelVersionGates 拦下（经 kernelVersionGate 同口径）。
@@ -170,74 +146,6 @@ func TestHardGatesRejectThirdSegmentSuffixOnTwoSegmentFloors(t *testing.T) {
 	}
 	if err := h.checkKernelVersionGates(scanBox.ID, kernel.TypeSingbox, "1.12.0"); err != nil {
 		t.Fatalf("换版扫描：\"1.12.0\" 须放行，got %v", err)
-	}
-}
-
-// R2-016 同族复扫格：validateChainVersion 的 CheckChainWith 能力标志
-// （SingboxSnell/SingboxNaive）同样决定保存接受/拒绝，复扫时一并改走
-// 严格变体；空版本豁免（validateChain 的既有契约）必须原样保留。
-func TestValidateChainVersionMalformedVersionFailsClosed(t *testing.T) {
-	r, err := repo.Open(t.TempDir() + "/chainstrict.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = r.Close() })
-	h := New(r, "unit-test-secret")
-
-	snellNode := seedRelayTargetNode(t, r, "snell-node", "203.0.113.30")
-	snellKernel := seedChainKernel(t, r, snellNode, kernel.TypeSnell)
-	target := seedChainInbound(t, r, snellKernel, "snell-target", kernel.Inbound{
-		Protocol: kernel.ProtocolSnell, Port: 10001,
-		Settings: kernel.Settings{Password: "password123", SnellVersion: 5},
-	}, 0)
-	entryNode := seedRelayTargetNode(t, r, "entry-node", "198.51.100.9")
-	box := seedChainKernel(t, r, entryNode, kernel.TypeSingbox)
-	entry := seedChainInbound(t, r, box, "entry", kernel.Inbound{
-		Protocol: kernel.ProtocolShadowsocks, Port: 8388,
-	}, target.ID)
-
-	if err := h.validateChainVersion(*entry, kernel.TypeSingbox, "1.14-rc1"); err == nil || !strings.Contains(err.Error(), "1.14") {
-		t.Fatalf("malformed serving version must fail closed for a Snell target, got %v", err)
-	}
-	if err := h.validateChainVersion(*entry, kernel.TypeSingbox, "1.13.0"); err == nil {
-		t.Fatal("numerically-old serving version must stay rejected")
-	}
-	for _, v := range []string{"1.14.3", "", "latest"} {
-		if err := h.validateChainVersion(*entry, kernel.TypeSingbox, v); err != nil {
-			t.Fatalf("serving version %q must pass (empty/latest exemption preserved): %v", v, err)
-		}
-	}
-}
-
-// R2-015（B-sub-02）：snellMajor 健壮解析——枚举形态逐个钉死。
-func TestSnellMajorRobustForms(t *testing.T) {
-	for version, want := range map[string]int{
-		"4.1.1":   4,
-		"4":       4,
-		"5.0.1":   5,
-		"6.0.0":   6,
-		"v6.0.0":  6,  // 剥可选 v 前缀
-		"6":       6,  // 裸大版本
-		"10.0.0":  10, // 两位数大版本按数值
-		"6.0.0b1": 6,  // 首段数字之后的后缀不影响大版本
-		" 6.0.0 ": 6,  // TrimSpace 与家族同口径
-		"latest":  5,  // 不可解析保守回退 5
-		"":        5,
-		"V6.0.0":  5, // 口径登记：家族只认小写 v 前缀，不擅自扩（R2-032）
-	} {
-		if got := snellMajor(version); got != want {
-			t.Errorf("snellMajor(%q) = %d, want %d", version, got, want)
-		}
-	}
-	// 端到端：v 前缀形态的真 6.x 不得再被当 5.x 放行 v5 客户端。
-	if err := snellServes("v6.0.0", 5); err == nil {
-		t.Error("snellServes(v6.0.0, v5 client) must reject")
-	}
-	if err := snellServes("v6.0.0", 6); err != nil {
-		t.Errorf("snellServes(v6.0.0, v6 client) must serve: %v", err)
-	}
-	if err := snellServes("10.0.0", 6); err != nil {
-		t.Errorf("snellServes(10.0.0, v6 client) must serve: %v", err)
 	}
 }
 

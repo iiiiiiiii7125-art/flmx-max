@@ -339,7 +339,7 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
           </div>
           <p className="text-xs font-semibold text-foreground">
             统计口径与订阅「已用」一致：仅统计独立凭据协议（VLESS、VMess、Trojan、Hysteria2、TUIC
-            等）的流量；Shadowsocks、Snell、导入节点等共用凭据不计入。曲线为该订阅的合计流量，自本功能上线起记录
+            等）的流量；Shadowsocks、导入节点等共用凭据不计入。曲线为该订阅的合计流量，自本功能上线起记录
           </p>
           <p className="text-xs font-semibold text-foreground">
             订阅「已用」从本周期开始（{sinceDate}

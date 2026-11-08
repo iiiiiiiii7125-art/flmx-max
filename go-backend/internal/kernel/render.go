@@ -29,8 +29,6 @@ type Rendered struct {
 	Files     []File    `json:"files"`
 	Args      []string  `json:"args"`
 	Processes []Process `json:"processes,omitempty"`
-	// Extras names helper binaries the processes need (e.g. shadow-tls).
-	Extras []string `json:"extras,omitempty"`
 	// Idle means there is nothing to run (a per-inbound kernel without
 	// inbounds); the kernel is applied disabled.
 	Idle bool `json:"idle,omitempty"`
@@ -93,12 +91,6 @@ func RenderWith(kernelType string, inbounds []Inbound, opts RenderOptions) (Rend
 		}
 		out.Files = []File{{Name: "config.json", Content: content}}
 		out.Args = []string{"run", "-c", "{RUN_DIR}/config.json"}
-	case TypeSnell:
-		r, err := renderSnell(sorted)
-		if err != nil {
-			return Rendered{}, err
-		}
-		out = r
 	default:
 		return Rendered{}, fmt.Errorf("暂不支持内核 %s", kernelType)
 	}
@@ -123,10 +115,6 @@ func hashRendered(r Rendered) string {
 		h.Write([]byte(p.Name + "\x00" + p.Bin + "\x00" + strings.Join(p.Args, "\x00")))
 		h.Write([]byte{1})
 	}
-	for _, e := range r.Extras {
-		h.Write([]byte(e))
-		h.Write([]byte{2})
-	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -148,8 +136,7 @@ var extraProtectedTopKeys = map[string]bool{
 	"protocol": true, "type": true,
 	"settings": true, "users": true, "tls": true, "transport": true,
 	"method": true, "password": true,
-	// R3X-013：sing-box Snell 入站的凭据键名是 psk（非 password）、
-	// v6 整形键名 mode，两键亦在并集内（Xray 对象无同名顶层键）。
+	// 凭据/形态类键名（psk、mode 等）亦在并集内（Xray 对象无同名顶层键）。
 	"psk": true, "mode": true,
 	"detour": true, "handshake": true, "version": true,
 }

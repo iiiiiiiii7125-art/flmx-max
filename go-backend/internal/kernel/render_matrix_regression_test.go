@@ -98,7 +98,6 @@ func TestComboSupportedMatrix(t *testing.T) {
 		{TypeSingbox, ProtocolVLESS, TransportXHTTP, SecurityTLS, false},
 		{TypeXray, ProtocolVLESS, TransportXHTTP, SecurityReality, true},
 		{TypeSingbox, ProtocolAnyTLS, TransportTCP, SecurityTLS, true},
-		{TypeSnell, ProtocolSnell, TransportTCP, SecurityShadowTLS, true},
 		{TypeXray, ProtocolHysteria2, TransportQUIC, SecurityTLS, false},
 		{"nosuchkernel", ProtocolVLESS, TransportTCP, SecurityTLS, false},
 	}

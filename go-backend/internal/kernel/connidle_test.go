@@ -167,12 +167,6 @@ func TestConnIdleNormalize(t *testing.T) {
 	// a plain-language reason instead of being silently dropped. Each
 	// case uses a protocol its kernel actually serves, so the failure is
 	// the connIdle gate itself, not an unrelated combo rejection.
-	snell := Inbound{ID: 1, Protocol: ProtocolSnell, Port: 1234, Settings: Settings{Password: "secret-password-1"}, Security: Security{Type: SecurityNone}, ConnIdleSeconds: 120}
-	if err := Normalize(TypeSnell, &snell); err == nil {
-		t.Fatal("connIdle on snell must be rejected")
-	} else if !strings.Contains(err.Error(), "空闲超时") {
-		t.Fatalf("connIdle on snell error must name the field: %v", err)
-	}
 	{
 		in := base()
 		in.ConnIdleSeconds = 120

@@ -4,15 +4,15 @@
 # 本脚本结论）。
 #
 # 产品正本段集（flmx-no-private：节点侧出口守卫必须拦截的非公网段）
-# 有两处实现拷贝，分属两个 Go 模块、无法共享常量：
+# 现只有一处实现（Snell 入站整删后，agent 侧 nft 丢弃集拷贝随
+# snell_guard.go 一并删除）：
 #   - go-backend/internal/kernel/private_ranges.go
 #       guardPrivateCIDRsV4 / guardPrivateCIDRsV6（面板渲染 sing-box
 #       ip_cidr 守卫规则，字面量与域名两形态共用）
-#   - go-gost/x/kernel/snell_guard.go
-#       snellPrivateV4 / snellPrivateV6（agent 的 Snell nft 丢弃集）
-# 本脚本从两处源码机械提取段集字面量逐段对账，任一段漂移即 FAIL 并
-# 点名该段；并核两边都保留 IPv4-mapped 形式（::ffff:…）的派生（段集
-# 本体之外的第二处同族拷贝面）。变体自检见
+# 本脚本从源码机械提取段集字面量，与本门内嵌的金标准段集逐段对账
+# （金标准独立于被检文件，改段必须同步改金标准并留裁定记录），任
+# 一段漂移即 FAIL 并点名该段；并核 IPv4-mapped 形式（::ffff:…）的
+# 派生在代码面在位。变体自检见
 # scripts/check-private-ranges-selftest.sh。
 #
 # 提取面（修复轮 6，R6-C4-05/06 机制处置）：旧实现直接在原文上提
@@ -27,8 +27,8 @@
 # 段集元素；自检变体 5 钉死。
 #
 # 背景：sing-box 守卫曾用 ip_is_private 谓词，其 netip 段集缺 CGNAT
-# 100.64.0.0/10 与基准段 198.18.0.0/15，与 Snell 正本不一致而静默
-# 放行（R8-004 / R8-022）；改显式段集后，本门防两处拷贝再次漂移。
+# 100.64.0.0/10 与基准段 198.18.0.0/15，与规范集不一致而静默
+# 放行（R8-004 / R8-022）；改显式段集后，本门防段集再次漂移。
 #
 # 第二部分（文末，R3-C6-01 / R3-C2-01）：netguard 分类器谱系对账。
 # 谱系三面——go-backend/internal/netguard/netguard.go（后端正本）、
@@ -62,15 +62,12 @@ set -u
 
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 BE="$ROOT/go-backend/internal/kernel/private_ranges.go"
-AG="$ROOT/go-gost/x/kernel/snell_guard.go"
 
 FAIL=0
 fail() { echo "FAIL: $*"; FAIL=1; }
 ok()   { echo "OK:   $*"; }
 
-for f in "$BE" "$AG"; do
-  [ -f "$f" ] || { echo "FAIL: 前提失效，文件不存在：$f"; exit 2; }
-done
+[ -f "$BE" ] || { echo "FAIL: 前提失效，文件不存在：$BE"; exit 2; }
 
 # go_strip：Go 词法剥注释（状态机跨行携带块注释/原始字符串状态；
 # 字符串、原始字符串、符文字面量内容原样保留，注释整体丢弃）。
@@ -149,10 +146,9 @@ raw_blank() {
 }
 
 # 后续全部判定只对剥注释＋消隐原始字符串后的代码面副本进行。
-BE_S="$(mktemp)"; AG_S="$(mktemp)"
-trap 'rm -f "$BE_S" "$AG_S"' EXIT
+BE_S="$(mktemp)"
+trap 'rm -f "$BE_S"' EXIT
 go_strip < "$BE" | raw_blank > "$BE_S"
-go_strip < "$AG" | raw_blank > "$AG_S"
 
 # extract <file> <varname>：打印 var <varname> = []string{ ... } 块内
 # 全部 CIDR 形字符串字面量（去重排序）。输入已剥注释，注释掉的段
@@ -165,37 +161,57 @@ extract() {
   ' "$1" | grep -oE '"[^"]+"' | tr -d '"' | grep -E '^[0-9a-fA-F:.]+/[0-9]+$' | sort -u
 }
 
-cmp_family() {
-  local name="$1" be ag
-  be="$(extract "$BE_S" "$2")"
-  ag="$(extract "$AG_S" "$3")"
-  if [ -z "$be" ] || [ -z "$ag" ]; then
+# 金标准段集（独立金标准：与规范集的定义同源于 flmx-no-private 裁定，
+# 不从被检文件派生；增删任何一段须先有裁定并同步修改此处）。
+GOLD_V4="0.0.0.0/8
+10.0.0.0/8
+100.64.0.0/10
+127.0.0.0/8
+169.254.0.0/16
+172.16.0.0/12
+192.0.0.0/24
+192.0.2.0/24
+192.168.0.0/16
+198.18.0.0/15
+198.51.100.0/24
+203.0.113.0/24
+224.0.0.0/4
+240.0.0.0/4"
+GOLD_V6="100::/64
+2001:db8::/32
+::/128
+::1/128
+fc00::/7
+fe80::/10
+ff00::/8"
+
+cmp_gold() {
+  local name="$1" got gold
+  got="$(extract "$BE_S" "$2")"
+  gold="$(printf '%s\n' "$3" | sort -u)"
+  if [ -z "$got" ]; then
     fail "$name 段集提取为空（前提失效：变量改名或字面量形态变化）"
     return
   fi
-  if [ "$be" = "$ag" ]; then
-    ok "$name 段集两处一致（$(printf '%s\n' "$be" | wc -l) 段）"
+  if [ "$got" = "$gold" ]; then
+    ok "$name 段集与金标准一致（$(printf '%s\n' "$got" | wc -l) 段）"
   else
-    fail "$name 段集漂移（< 仅面板 sing-box 拷贝 / > 仅 agent Snell 拷贝）："
-    diff <(printf '%s\n' "$be") <(printf '%s\n' "$ag") | sed 's/^/    /'
+    fail "$name 段集漂移（< 仅金标准 / > 仅代码面）："
+    diff <(printf '%s\n' "$gold") <(printf '%s\n' "$got") | sed 's/^/    /'
   fi
 }
 
-cmp_family "IPv4" guardPrivateCIDRsV4 snellPrivateV4
-cmp_family "IPv6" guardPrivateCIDRsV6 snellPrivateV6
+cmp_gold "IPv4" guardPrivateCIDRsV4 "$GOLD_V4"
+cmp_gold "IPv6" guardPrivateCIDRsV6 "$GOLD_V6"
 
-# mapped 派生：两边都必须由 v4 段集派生 ::ffff: 形式（函数名可不同，
-# 派生字面量必须在代码面在位——只对剥注释后的副本判定，注释里的
-# ::ffff: 提及不算数；派生行为的逐格正确性另由后端
-# TestSnellMappedSetDerivedFromV4 与私网实拨测试钉住）。
-for pair in "$BE:$BE_S" "$AG:$AG_S"; do
-  f="${pair%%:*}"; fs="${pair##*:}"
-  if grep -q '::ffff:' "$fs"; then
-    ok "$f 保留 IPv4-mapped 派生"
-  else
-    fail "$f 缺失 IPv4-mapped（::ffff:）派生，mapped 形态将绕过 v4 段集"
-  fi
-done
+# mapped 派生：必须由 v4 段集派生 ::ffff: 形式（派生字面量必须在
+# 代码面在位——只对剥注释后的副本判定，注释里的 ::ffff: 提及不
+# 算数；派生行为的逐格正确性另由后端私网段集测试钉住）。
+if grep -q '::ffff:' "$BE_S"; then
+  ok "$BE 保留 IPv4-mapped 派生"
+else
+  fail "$BE 缺失 IPv4-mapped（::ffff:）派生，mapped 形态将绕过 v4 段集"
+fi
 
 # ═══ 第二部分：netguard 谱系对账（层定义与裁定见文件头）═══
 
@@ -208,7 +224,7 @@ for f in "$NG" "$BP" "$SK"; do
 done
 
 NG_S="$(mktemp)"; BP_S="$(mktemp)"; SK_S="$(mktemp)"
-trap 'rm -f "$BE_S" "$AG_S" "$NG_S" "$BP_S" "$SK_S"' EXIT
+trap 'rm -f "$BE_S" "$NG_S" "$BP_S" "$SK_S"' EXIT
 go_strip < "$NG" | raw_blank > "$NG_S"
 go_strip < "$BP" | raw_blank > "$BP_S"
 go_strip < "$SK" | raw_blank > "$SK_S"
@@ -422,5 +438,5 @@ fi
 
 n4="$(extract "$BE_S" guardPrivateCIDRsV4 | wc -l)"
 n6="$(extract "$BE_S" guardPrivateCIDRsV6 | wc -l)"
-echo "private-ranges: $((n4 + n6)) segments (v4 $n4 + v6 $n6; mapped forms derived on both sides)"
+echo "private-ranges: $((n4 + n6)) segments (v4 $n4 + v6 $n6; mapped forms derived from the v4 set)"
 exit "$FAIL"

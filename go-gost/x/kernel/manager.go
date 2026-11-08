@@ -58,10 +58,6 @@ type Manager struct {
 	instances   map[string]*instance
 	nft         *nftCounters
 
-	// Snell egress guard identity (snell_guard.go), resolved when a
-	// Snell apply first needs it and reused by Control start.
-	snellUID uint32
-	snellGID uint32
 }
 
 var (
@@ -213,7 +209,7 @@ func (m *Manager) persist() {
 // otherwise outlive it indefinitely and silently discard traffic
 // for whatever later binds the port, and its counters would keep
 // attributing that traffic to the disabled inbound (R2-001). The
-// Enabled predicate matches reqHasWhitelist / reqHasSnellServer.
+// Enabled predicate matches reqHasWhitelist.
 func (m *Manager) allPorts() []Port {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -259,12 +255,12 @@ func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir st
 }
 
 // reqNeedsNftGuard reports whether an enabled request's security
-// posture depends on the nft ruleset being installed: a Snell server
-// (private-egress guard) or any port carrying a source whitelist.
+// posture depends on the nft ruleset being installed: any port
+// carrying a source whitelist.
 // Such a kernel must never run while its rules are missing — the
 // panel would show the protection on while nothing enforces it.
 func reqNeedsNftGuard(req ApplyRequest) bool {
-	return reqHasSnellServer(req) || reqHasWhitelist(req)
+	return reqHasWhitelist(req)
 }
 
 // nftGuardFailure builds the fail-closed error surfaced when the nft
@@ -272,8 +268,6 @@ func reqNeedsNftGuard(req ApplyRequest) bool {
 // therefore kept (or put) down.
 func nftGuardFailure(req ApplyRequest, err error) error {
 	switch {
-	case reqHasSnellServer(req):
-		return fmt.Errorf("Snell 私网拦截规则下发失败，已停止 Snell（不允许无拦截运行）: %v", err)
 	case reqHasWhitelist(req):
 		return fmt.Errorf("入站白名单规则同步失败，已停止受保护内核（不允许无白名单运行）: %v", err)
 	default:
@@ -319,10 +313,7 @@ func (m *Manager) stopGuardedInstances(cur *instance, syncErr error) bool {
 // content-verified, so a table flushed or rewritten out-of-band is
 // rebuilt here instead of the restart silently running unguarded.
 func (m *Manager) syncGuardBeforeRestart() error {
-	m.mu.Lock()
-	guard := m.snellGuardForLocked(m.snellUID)
-	m.mu.Unlock()
-	gate, _ := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard))
+	gate, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks()))
 	return gate
 }
 
@@ -373,55 +364,6 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	}
 	m.mu.Unlock()
 
-	// Snell egress guard (snell_guard.go): an enabled Snell request
-	// must never start unguarded, so the guard's prerequisites — the
-	// dedicated user and nftables — are hard prerequisites of the
-	// apply itself, checked before any download or process starts.
-	needGuard := reqHasSnellServer(req)
-	if needGuard {
-		uid, gid, err := ensureSnellGuardUser(context.Background())
-		if err != nil {
-			m.setErr(inst, err)
-			return m.state(req.Type, false), err
-		}
-		if err := nftAvailable(); err != nil {
-			err = fmt.Errorf("Snell 私网拦截需要 nftables，本机不可用: %v", err)
-			m.setErr(inst, err)
-			return m.state(req.Type, false), err
-		}
-		m.mu.Lock()
-		m.snellUID, m.snellGID = uid, gid
-		m.mu.Unlock()
-	}
-
-	if needGuard {
-		// R8-021: install the guard BEFORE any snell-server process
-		// starts. The sync used to run only at the end of the apply,
-		// leaving a seconds-wide window — first enable, stop→start,
-		// and Restore after a node reboot (the nft table is gone
-		// then) — in which a freshly started snell-server ran
-		// unguarded. The table rebuild is a single atomic nft
-		// transaction and the guard content depends only on the
-		// guard uid and the system resolvers, not on this apply's
-		// files or processes, so it can go first; the sync at the
-		// end still runs and finalizes the counter rules (a no-op
-		// when nothing changed). Failing here means no process was
-		// started at all. If a later step fails, the guard simply
-		// stays installed with no snell-server running under it —
-		// harmless, and the next sync cleans it up.
-		m.mu.Lock()
-		guardUID := m.snellUID
-		m.mu.Unlock()
-		guard := &snellGuard{UID: guardUID, Resolvers: systemResolvers()}
-		if err, hopNote := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)); err != nil {
-			err = fmt.Errorf("Snell 私网拦截规则下发失败，未启动 Snell（不允许无拦截运行）: %v", err)
-			m.setErr(inst, err)
-			return m.state(req.Type, false), err
-		} else if hopNote != "" {
-			inst.logs.add("[flmx] " + hopNote)
-		}
-	}
-
 	binDir := m.binDir(req.Type, req.Version)
 	bins := map[string]string{}
 	// R2-F2-A2: a request carrying the unresolved "latest" sentinel can
@@ -462,15 +404,6 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.setErr(inst, err)
 		return m.state(req.Type, false), err
 	}
-	if needGuard {
-		// snell-server runs as the guard user and must be able to
-		// reach its binary and its config under the agent's 0700
-		// directories: make the path ancestors traverse-only.
-		if err := chmodTraverseAncestors(m.baseDir, binDir); err != nil {
-			m.setErr(inst, err)
-			return m.state(req.Type, false), err
-		}
-	}
 	files := req.Files
 	if req.Type == "singbox" {
 		// FN34: localize the config's remote rule sets (downloaded
@@ -495,16 +428,6 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 			return m.state(req.Type, false), err
 		}
 	}
-	if needGuard {
-		m.mu.Lock()
-		uid, gid := m.snellUID, m.snellGID
-		m.mu.Unlock()
-		if err := fixSnellRunPerms(runDir, files, uid, gid); err != nil {
-			m.setErr(inst, err)
-			return m.state(req.Type, false), err
-		}
-	}
-
 	m.mu.Lock()
 	changed := inst.req.Hash != req.Hash || inst.bins[""] != mainBin || len(inst.bins) != len(bins)
 	running := len(inst.procs) > 0
@@ -531,15 +454,11 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	}
 
 	// The nft sync runs BEFORE any process starts: the ruleset carries
-	// the traffic counters, the inbound whitelists and the Snell egress
-	// guard. Counting alone is best-effort, but a kernel guarded by the
+	// the traffic counters and the inbound whitelists. Counting alone
+	// is best-effort, but a kernel guarded by the
 	// ruleset (reqNeedsNftGuard) must never listen while its rules are
 	// not installed, so a failed sync blocks its start outright.
-	m.mu.Lock()
-	guardUID := m.snellUID
-	m.mu.Unlock()
-	guard := m.snellGuardFor(guardUID)
-	syncErr, hopNote := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard))
+	syncErr, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks()))
 	if hopNote != "" {
 		// R2-F2-E02: the main ruleset is in place; only port hopping
 		// is ineffective. Name it as what it is — never as a guard
@@ -720,21 +639,6 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 			_ = writeFileAtomic(path, content, 0o600)
 		}
 	}
-	if reqHasSnellServer(prev.req) {
-		// Restored configs are root-owned again after the rewrite;
-		// hand them back to the guard user before the processes
-		// start or snell-server cannot read its own config.
-		m.mu.Lock()
-		uid, gid := m.snellUID, m.snellGID
-		m.mu.Unlock()
-		files := make([]File, 0, len(prev.files))
-		for name, content := range prev.files {
-			if content != nil {
-				files = append(files, File{Name: name})
-			}
-		}
-		_ = fixSnellRunPerms(runDir, files, uid, gid)
-	}
 	m.mu.Lock()
 	inst.req = prev.req
 	inst.binDir = prev.binDir
@@ -810,8 +714,6 @@ func (m *Manager) startProcesses(inst *instance) {
 	specs := inst.req.processSpecs()
 	runDir := m.runDir(inst.req.Type)
 	bins := inst.bins
-	kernelType := inst.req.Type
-	guardUID, guardGID := m.snellUID, m.snellGID
 	m.mu.Unlock()
 
 	procs := make([]*process, 0, len(specs))
@@ -842,12 +744,6 @@ func (m *Manager) startProcesses(inst *instance) {
 		// posture the gate is a no-op pass, so unguarded kernels keep
 		// the bare supervisor behavior.
 		p.relaunchGuard = func() error { return m.restartGuardError(inst) }
-		if kernelType == "snell" && isSnellServerSpec(spec) {
-			// Snell egress guard: only snell-server itself drops to
-			// the guard user; shadow-tls fronts stay on the agent
-			// identity (they dial admin-configured targets only).
-			p.credUID, p.credGID = guardUID, guardGID
-		}
 		procs = append(procs, p)
 	}
 	m.mu.Lock()
@@ -894,12 +790,9 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 			_ = os.RemoveAll(filepath.Join(m.baseDir, kernelType))
 		}
 		m.persist()
-		m.mu.Lock()
-		guard := m.snellGuardForLocked(m.snellUID)
-		m.mu.Unlock()
 		// A hop-only failure does not make the removal fail: the
 		// remaining ruleset synced fine (R2-F2-E02).
-		if err, _ := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)); err != nil {
+		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks())); err != nil {
 			return State{Type: kernelType}, err
 		}
 		return State{Type: kernelType}, nil
@@ -915,43 +808,18 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		inst.req.Enabled = false
 		m.mu.Unlock()
 	case "start", "restart":
-		// reqHasSnellServer keys on Enabled, which a preceding stop
-		// left false: judge the request as the start will leave it,
-		// or the prerequisites and the guard pre-sync below are both
-		// skipped exactly on the stop→start path.
-		startReq := inst.req
-		startReq.Enabled = true
-		hasSnell := reqHasSnellServer(startReq)
-		if hasSnell {
-			// Same hard prerequisites as Apply: no guard identity or
-			// no nftables means Snell must not come up at all.
-			uid, gid, err := ensureSnellGuardUser(context.Background())
-			if err != nil {
-				m.setErr(inst, err)
-				return m.state(kernelType, false), err
-			}
-			if err := nftAvailable(); err != nil {
-				err = fmt.Errorf("Snell 私网拦截需要 nftables，本机不可用: %v", err)
-				m.setErr(inst, err)
-				return m.state(kernelType, false), err
-			}
-			m.mu.Lock()
-			m.snellUID, m.snellGID = uid, gid
-			m.mu.Unlock()
-		}
 		m.mu.Lock()
 		inst.req.Enabled = true
-		guard := m.snellGuardForLocked(m.snellUID)
 		m.mu.Unlock()
 		m.stopProcesses(inst)
 		// Sync before start, as in Apply (B-02, R8-021): a guarded
-		// kernel (Snell egress guard or an inbound whitelist) must
+		// kernel (an inbound whitelist) must
 		// never listen before its rules are installed — a preceding
 		// stop stripped them from the table, and after a node reboot
 		// the table is gone entirely — so the guard goes back in
 		// after stopping and before starting, and a failed sync
 		// leaves the kernel stopped instead of running unguarded.
-		if err, hopNote := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)); err != nil {
+		if err, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks())); err != nil {
 			ferr := nftGuardFailure(inst.req, err)
 			m.setErr(inst, ferr)
 			return m.state(kernelType, false), ferr
@@ -984,10 +852,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		// Keep the rules in lockstep with the lifecycle: stopping a
 		// kernel must leave none of its rules behind. A sync failure
 		// here is surfaced, not swallowed.
-		m.mu.Lock()
-		guard := m.snellGuardForLocked(m.snellUID)
-		m.mu.Unlock()
-		if err, _ := isolateHopSync(m.nft.syncGuard(m.allPorts(), m.allUserMarks(), guard)); err != nil {
+		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks())); err != nil {
 			return m.state(kernelType, false), err
 		}
 	}

@@ -8,14 +8,14 @@ import (
 
 // Canonical non-public destination ranges: the product's single
 // definition of which targets a node-side egress guard must block
-// (the flmx-no-private definition). Three kernels enforce it three
-// ways — Xray via freedom's built-in rule (version-gated, see
-// handler/kernel.go), sing-box via the rendered ip_cidr guard below,
-// and Snell via the agent's nft drop sets. The Snell copy lives in
-// go-gost/x/kernel/snell_guard.go (snellPrivateV4 / snellPrivateV6);
-// the two copies are kept in lockstep by
-// scripts/check-private-ranges.sh, wired into CI through
-// check-doc-consistency.sh. Never edit one copy without the other.
+// (the flmx-no-private definition). Two kernels enforce it — Xray via
+// freedom's built-in rule (version-gated, see handler/kernel.go) and
+// sing-box via the rendered ip_cidr guard below. (A third copy, the
+// agent's nft drop sets for the Snell server, was deleted with the
+// built Snell inbound feature.) The set is pinned against the gold
+// segment list embedded in scripts/check-private-ranges.sh, wired
+// into CI through check-doc-consistency.sh; changing a segment
+// requires a ruling and a matching gold-list update.
 //
 // The sing-box guard spells the set out as explicit ip_cidr ranges
 // instead of sing-box's ip_is_private predicate (R8-004 / R8-022):
@@ -23,7 +23,7 @@ import (
 // does not cover the CGNAT shared address space 100.64.0.0/10, the
 // benchmarking range 198.18.0.0/15 and several other special-purpose
 // ranges below — a sing-box node silently let those destinations
-// through while the Xray and Snell guards blocked them.
+// through while the Xray guard blocked them.
 //
 // Registered divergence from the netguard classifier lineage
 // (R3-C2-01 adjudication): this canonical set blocks the four
@@ -71,11 +71,10 @@ var guardPrivateCIDRsV6 = []string{
 // range, derived from guardPrivateCIDRsV4 so the forms can never
 // drift apart — a destination that reaches the guard in mapped form
 // (a resolver or DNS64 path handing back ::ffff:100.64.0.1) must not
-// slip past the v4 set, exactly as with the Snell guard's
-// snellPrivateV6All.
+// slip past the v4 set.
 //
-// Registered residual (R8-049, shared with the Snell and Xray
-// guards): translated forms (NAT64 / 6to4 with an embedded IPv4
+// Registered residual (R8-049, shared with the Xray
+// guard): translated forms (NAT64 / 6to4 with an embedded IPv4
 // address) are not extracted — the translation prefixes themselves
 // are not blocked, because dropping them wholesale would kill
 // legitimate NAT64 public traffic. The embedded target is only

@@ -34,12 +34,6 @@ func TestConnIdleUnlimitedNormalize(t *testing.T) {
 		}
 	}
 	// Non-Xray kernels refuse -1 exactly like any other set value.
-	snell := Inbound{ID: 1, Protocol: ProtocolSnell, Port: 1234, Settings: Settings{Password: "secret-password-1"}, Security: Security{Type: SecurityNone}, ConnIdleSeconds: UnlimitedConnIdleSentinel}
-	if err := Normalize(TypeSnell, &snell); err == nil {
-		t.Fatal("connIdle -1 (unlimited) on snell must be rejected")
-	} else if !strings.Contains(err.Error(), "空闲超时") {
-		t.Fatalf("connIdle -1 on snell error must name the field: %v", err)
-	}
 	{
 		in := base()
 		in.ConnIdleSeconds = UnlimitedConnIdleSentinel

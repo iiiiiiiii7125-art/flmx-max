@@ -68,13 +68,13 @@ type SubOptions struct {
 	// RuleGroups 中的服务组（见 sub_rules.go）；在这些格式里隐含 RegionGroups。
 	Rules      bool
 	RuleGroups []string
-	// SingboxSnell puts Snell nodes in sing-box profiles: the client is
-	// sing-box 1.14+ (see SingboxClientHasSnell).
+	// SingboxSnell puts imported Snell nodes in sing-box profiles: the
+	// client is sing-box 1.14+ (see SingboxClientHasSnell).
 	SingboxSnell bool
 	// SingboxNaive puts Naive nodes in sing-box profiles: the client is
 	// sing-box 1.13+ (see SingboxClientHasNaive). R9X-005 连带格：低于
-	// 1.13 的客户端略过 Naive 节点（整表 FATAL 的替代处置，与 Snell
-	// 的 UA 略过同型），其余节点照常下发。
+	// 1.13 的客户端略过 Naive 节点（整表 FATAL 的替代处置，与导入
+	// Snell 节点的 UA 略过同型），其余节点照常下发。
 	SingboxNaive bool
 	// Notices are placeholder nodes put first, after the other steps
 	// (see sub_notice.go). The handler fills them: expiry / traffic
@@ -103,7 +103,7 @@ func SubscriptionProtocols() []string {
 		}
 	}
 	for _, p := range []string{ProtocolVLESS, ProtocolVMess, ProtocolTrojan, ProtocolShadowsocks,
-		ProtocolHysteria2, ProtocolTUIC, ProtocolAnyTLS, ProtocolSnell, ProtocolNaive} {
+		ProtocolHysteria2, ProtocolTUIC, ProtocolAnyTLS, ProtocolNaive} {
 		add(p)
 	}
 	keys := make([]string, 0, len(importTypes))
