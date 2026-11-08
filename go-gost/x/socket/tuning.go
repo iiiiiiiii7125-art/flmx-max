@@ -504,9 +504,23 @@ func rpsCPUMask(cpus int) string {
 	return strconv.FormatUint((uint64(1)<<uint(cpus))-1, 16)
 }
 
-// parseEthtoolMaxRing extracts the "Pre-set maximums" RX ring size
-// from `ethtool -g` output.
-func parseEthtoolMaxRing(out string) (int, bool) {
+// ethtoolRingMax holds the "Pre-set maximums" RX/TX ring sizes from
+// `ethtool -g`. The two maxima differ per driver (e.g. ens5: RX 2048 /
+// TX 1024); one shared value makes `ethtool -G rx <v> tx <v>` fail
+// wholesale when <v> exceeds the smaller maximum, so RX and TX are
+// parsed and applied separately.
+type ethtoolRingMax struct {
+	RX int
+	TX int
+}
+
+// parseEthtoolMaxRings extracts the "Pre-set maximums" RX and TX ring
+// sizes from `ethtool -g` output. The second return is true when a
+// usable RX maximum was found; TX is 0 when that line is absent or
+// unparsable, and the caller falls back to the default for TX only.
+func parseEthtoolMaxRings(out string) (ethtoolRingMax, bool) {
+	var max ethtoolRingMax
+	rxFound := false
 	inMax := false
 	for _, line := range strings.Split(out, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -520,15 +534,46 @@ func parseEthtoolMaxRing(out string) (int, bool) {
 		if strings.HasPrefix(trimmed, "Current hardware settings") {
 			break
 		}
-		if f := strings.Fields(trimmed); len(f) >= 2 && f[0] == "RX:" {
+		f := strings.Fields(trimmed)
+		if len(f) < 2 {
+			continue
+		}
+		switch f[0] {
+		case "RX:":
 			n, err := strconv.Atoi(f[1])
-			if err == nil && n > 0 {
-				return n, true
+			if err != nil || n <= 0 {
+				return ethtoolRingMax{}, false
 			}
-			return 0, false
+			max.RX, rxFound = n, true
+		case "TX:":
+			if n, err := strconv.Atoi(f[1]); err == nil && n > 0 {
+				max.TX = n
+			}
 		}
 	}
-	return 0, false
+	return max, rxFound
+}
+
+// parseEthtoolMaxRing extracts the "Pre-set maximums" RX ring size
+// from `ethtool -g` output.
+func parseEthtoolMaxRing(out string) (int, bool) {
+	max, ok := parseEthtoolMaxRings(out)
+	return max.RX, ok
+}
+
+// ethtoolRingArgs builds the `ethtool -G` arguments that push both
+// rings to their own preset maxima. A non-positive maximum falls
+// back to 1024 for that direction only, never borrowing the other
+// direction's value.
+func ethtoolRingArgs(iface string, max ethtoolRingMax) []string {
+	rx, tx := max.RX, max.TX
+	if rx <= 0 {
+		rx = 1024
+	}
+	if tx <= 0 {
+		tx = 1024
+	}
+	return []string{"-G", iface, "rx", strconv.Itoa(rx), "tx", strconv.Itoa(tx)}
 }
 
 func tuneWriteSysFile(path, value string) error {
@@ -537,15 +582,27 @@ func tuneWriteSysFile(path, value string) error {
 
 // applyNICSteering pushes the ring buffers to their preset maximum
 // and spreads receive processing over all cores for one interface.
-func applyNICSteering(ctx context.Context, iface, mask string) {
+// It returns warnings for every ethtool step that failed, so a
+// rejected `ethtool -G` (e.g. a TX value above the TX maximum) is
+// surfaced in the TuneStatus reply instead of silently reporting
+// success with the rings untouched.
+func applyNICSteering(ctx context.Context, iface, mask string) []string {
+	var warnings []string
 	if _, err := tuneLookPath("ethtool"); err == nil {
-		ring := 1024
+		max := ethtoolRingMax{RX: 1024, TX: 1024}
 		if out, err := tuneCommand(ctx, "ethtool", "-g", iface); err == nil {
-			if n, ok := parseEthtoolMaxRing(out); ok {
-				ring = n
+			if parsed, ok := parseEthtoolMaxRings(out); ok {
+				max.RX = parsed.RX
+				if parsed.TX > 0 {
+					max.TX = parsed.TX
+				}
 			}
+		} else {
+			warnings = append(warnings, fmt.Sprintf("网卡 %s 读取环形缓冲上限失败: %v", iface, err))
 		}
-		_, _ = tuneCommand(ctx, "ethtool", "-G", iface, "rx", strconv.Itoa(ring), "tx", strconv.Itoa(ring))
+		if _, err := tuneCommand(ctx, "ethtool", ethtoolRingArgs(iface, max)...); err != nil {
+			warnings = append(warnings, fmt.Sprintf("网卡 %s 设置环形缓冲失败（rx %d tx %d）: %v", iface, max.RX, max.TX, err))
+		}
 	}
 	queues := filepath.Join(tuneNetDir, iface, "queues")
 	if files, _ := filepath.Glob(filepath.Join(queues, "rx-*", "rps_cpus")); files != nil {
@@ -558,6 +615,7 @@ func applyNICSteering(ctx context.Context, iface, mask string) {
 			_ = tuneWriteSysFile(f, "4096")
 		}
 	}
+	return warnings
 }
 
 // tuneRPSScript renders the boot-persistence script for face ④: the
@@ -623,10 +681,11 @@ func applyNICTuning(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("枚举网卡失败: %w", err)
 	}
 	mask := rpsCPUMask(tuneNumCPU())
+	var warnings []string
 	for _, iface := range ifaces {
-		applyNICSteering(ctx, iface, mask)
+		warnings = append(warnings, applyNICSteering(ctx, iface, mask)...)
 	}
-	warnings := applySysctlSettings([]tuneKV{{"net.core.rps_sock_flow_entries", "32768"}})
+	warnings = append(warnings, applySysctlSettings([]tuneKV{{"net.core.rps_sock_flow_entries", "32768"}})...)
 	warnings = append(warnings, persistNICSteering(ctx, ifaces, mask)...)
 	return warnings, nil
 }
