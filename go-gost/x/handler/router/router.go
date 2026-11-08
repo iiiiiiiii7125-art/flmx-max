@@ -139,8 +139,13 @@ func (r *Router) GetConnector(host string) *Connector {
 }
 
 func (r *Router) DelConnector(host string, cid relay.ConnectorID) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	// This mutates the connectors slice and map, so it needs the
+	// write lock: it previously took RLock, racing every
+	// concurrent GetConnector read (exposed by the F08 reaping
+	// tests under -race; the race existed on any association
+	// teardown concurrent with packet routing).
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	connectors := r.connectors[host]
 	for i, c := range connectors {
