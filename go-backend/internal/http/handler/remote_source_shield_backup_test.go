@@ -10,13 +10,14 @@ import (
 	"go-backend/internal/store/repo"
 )
 
-// shieldRestoreAllTypes 是恢复的段全集（13 段，与 repository.go
-// validBackupTypes / 前端 BACKUP_TYPE_VALUES 同集）。
+// shieldRestoreAllTypes 是恢复的段全集（14 段，与 repository.go
+// validBackupTypes / 前端 BACKUP_TYPE_VALUES 同集；passkeys 为
+// R2-E3-F02 新增段）。
 var shieldRestoreAllTypes = []string{
 	"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
 	"configs", "inbounds",
 	"userInbounds", "announcements", "monitorPermissions",
-	"userSubscriptions", "serviceMonitors",
+	"userSubscriptions", "serviceMonitors", "passkeys",
 }
 
 // F6-02 钉格：删除屏蔽登记随 inbounds 段备份往返——管理员手工删

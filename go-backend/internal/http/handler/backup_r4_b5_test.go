@@ -240,7 +240,7 @@ func TestR4B5BackupImportFullImportTriggersReconcileOnce(t *testing.T) {
 	}
 	allTypes := []string{"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
 		"configs", "inbounds", "userInbounds",
-		"announcements", "monitorPermissions", "userSubscriptions", "serviceMonitors"}
+		"announcements", "monitorPermissions", "userSubscriptions", "serviceMonitors", "passkeys"}
 	postR4B5Import(t, s, allTypes, data)
 
 	waitR4B5Allow(t, s, baseline, "198.51.100.99/32", "198.51.100.2/32",

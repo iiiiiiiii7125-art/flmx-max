@@ -25,6 +25,7 @@ import (
 	"unicode"
 
 	gsqlite "github.com/glebarez/sqlite"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -2061,6 +2062,13 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 	}
 	backup.MonitorPermissions = monitorPermissions
 
+	// R2-E3-F02：导出 passkey 整表（WebAuthn 公钥凭据）
+	passkeys, err := r.exportPasskeys()
+	if err != nil {
+		return nil, fmt.Errorf("export passkeys failed: %w", err)
+	}
+	backup.Passkeys = passkeys
+
 	// B4/F-004：导出 user_subscription 整表（订阅分配关系）
 	userSubscriptions, err := r.exportUserSubscriptions()
 	if err != nil {
@@ -2081,7 +2089,7 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 // validBackupTypes is the full set of top-level backup segment names
 // accepted by ExportPartial / Import (R13X-005). It must stay identical
 // to the frontend BACKUP_TYPE_VALUES list (vite-frontend config.tsx,
-// 13 values): any drift reopens the silent-ignore gap for API callers,
+// 14 values): any drift reopens the silent-ignore gap for API callers,
 // since the handler's non-empty check cannot catch an all-unknown list.
 // The group-trio segment names (tunnelGroups/userGroups/permissions)
 // were removed with the feature in 1.9.6: old backups carrying them
@@ -2092,7 +2100,7 @@ var validBackupTypes = map[string]bool{
 	"userTunnels": true, "speedLimits": true, "configs": true,
 	"inbounds": true, "userInbounds": true, "announcements": true,
 	"monitorPermissions": true, "userSubscriptions": true,
-	"serviceMonitors": true,
+	"serviceMonitors": true, "passkeys": true,
 }
 
 // validateBackupTypes rejects unknown segment names, naming each one
@@ -2222,6 +2230,14 @@ func (r *Repository) exportPartial(types []string) (*model.BackupData, error) {
 			return nil, fmt.Errorf("export monitor permissions failed: %w", err)
 		}
 		backup.MonitorPermissions = v
+	}
+	// R2-E3-F02：passkey 整表随段导出。
+	if typeSet["passkeys"] {
+		v, err := r.exportPasskeys()
+		if err != nil {
+			return nil, fmt.Errorf("export passkeys failed: %w", err)
+		}
+		backup.Passkeys = v
 	}
 	// B4/F-004/F-030：补齐 user_subscription/service_monitor 两表
 	if typeSet["userSubscriptions"] {
@@ -2655,6 +2671,28 @@ func (r *Repository) exportMonitorPermissions() ([]model.MonitorPermissionBackup
 	return out, nil
 }
 
+// exportPasskeys 导出 passkey 整表（R2-E3-F02）。CredentialJSON 只
+// 含公钥凭据材料（逐字段核验见 model.PasskeyBackup 注），随备份
+// 往返不引入私钥类数据。
+func (r *Repository) exportPasskeys() ([]model.PasskeyBackup, error) {
+	var rows []model.Passkey
+	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.PasskeyBackup, 0, len(rows))
+	for _, p := range rows {
+		out = append(out, model.PasskeyBackup{
+			ID:             p.ID,
+			UserID:         p.UserID,
+			Name:           p.Name,
+			CredentialJSON: p.CredentialJSON,
+			CreatedAt:      p.CreatedAt,
+			LastUsedAt:     p.LastUsedAt,
+		})
+	}
+	return out, nil
+}
+
 // ─── Import Methods ──────────────────────────────────────────────────
 
 // importReport 收集一次 Import 的跳过与提示，最终落入 ImportResult
@@ -2958,6 +2996,15 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 				return fmt.Errorf("import monitor permissions failed: %w", err)
 			}
 			result.MonitorPermissionsImported = count
+		}
+		// R2-E3-F02：导入 passkey 表（WebAuthn 公钥凭据，按 user
+		// 归属落库；用户不存在的行跳过并经 SkippedRows 点名计数）。
+		if typeSet["passkeys"] && len(backup.Passkeys) > 0 {
+			count, err := importPasskeys(tx, backup.Passkeys, rep)
+			if err != nil {
+				return fmt.Errorf("import passkeys failed: %w", err)
+			}
+			result.PasskeysImported = count
 		}
 		// B4/F-004：导入 user_subscription 表（订阅分配关系）。
 		// 旧备份无该字段时 len=0 自动跳过，不报错。
@@ -4958,6 +5005,51 @@ func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup,
 			Columns: []clause.Column{{Name: "id"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"user_id", "created_time",
+			}),
+		}).Create(&item).Error
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// importPasskeys 恢复 passkey 段（R2-E3-F02）：按 user 归属落库，
+// 同 id 行按备份内容更新（整表段「备份为准」的既有恢复语义）。
+// 用户不存在的行跳过并计入 SkippedRows["passkeys"]（回执点名计
+// 数，与 monitorPermissions 的跳过口径一致）；credential_json 无
+// 法解为 webauthn.Credential 的行同样跳过并逐行点名——坏凭据落
+// 库后在登录面也永不可用，不如在恢复面挡下并披露。
+func importPasskeys(tx *gorm.DB, rows []model.PasskeyBackup, rep *importReport) (int, error) {
+	count := 0
+	for _, p := range rows {
+		userExists, err := rowExistsTx(tx, &model.User{}, p.UserID)
+		if err != nil {
+			return count, err
+		}
+		if !userExists {
+			rep.skip("passkeys")
+			continue
+		}
+		var credential webauthn.Credential
+		if err := json.Unmarshal([]byte(p.CredentialJSON), &credential); err != nil {
+			rep.skip("passkeys")
+			rep.warnf("备份恢复：用户 #%d 的 passkey %q 凭据数据无法解析，已跳过未恢复", p.UserID, p.ID)
+			continue
+		}
+		item := model.Passkey{
+			ID:             p.ID,
+			UserID:         p.UserID,
+			Name:           p.Name,
+			CredentialJSON: p.CredentialJSON,
+			CreatedAt:      p.CreatedAt,
+			LastUsedAt:     p.LastUsedAt,
+		}
+		err = tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"user_id", "name", "credential_json", "created_at", "last_used_at",
 			}),
 		}).Create(&item).Error
 		if err != nil {

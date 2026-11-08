@@ -22,7 +22,7 @@ var allBackupTypes = []string{
 	"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
 	"configs", "inbounds",
 	"userInbounds", "announcements", "monitorPermissions",
-	"userSubscriptions", "serviceMonitors",
+	"userSubscriptions", "serviceMonitors", "passkeys",
 }
 
 func openBackupRepo(t *testing.T, name string) *Repository {

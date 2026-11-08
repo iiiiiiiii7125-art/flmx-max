@@ -387,6 +387,10 @@ type BackupData struct {
 	Announcements []AnnouncementBackup `json:"announcements,omitempty"`
 	// O7-008：monitor_permission 整表备份（监控权限丢失修复）
 	MonitorPermissions []MonitorPermissionBackup `json:"monitorPermissions,omitempty"`
+	// R2-E3-F02：passkey 整表备份（WebAuthn 公钥凭据，字段核验
+	// 见 PasskeyBackup 注）。此前整表漏列，灾备恢复后全体用户
+	// passkey 静默全失、回执无披露，只能回落密码逐个重注册。
+	Passkeys []PasskeyBackup `json:"passkeys,omitempty"`
 	// B4/F-004：user_subscription 整表备份（1.0.12 订阅分配关系；
 	// 此前整表漏列，恢复后全部分配丢失）
 	UserSubscriptions []UserSubscriptionBackup `json:"userSubscriptions,omitempty"`
@@ -700,6 +704,25 @@ type MonitorPermissionBackup struct {
 	CreatedTime int64 `json:"createdTime"`
 }
 
+// PasskeyBackup 是 R2-E3-F02 补齐的 WebAuthn 凭据备份结构（字段
+// 对照 model.Passkey）。CredentialJSON 是 go-webauthn 的
+// webauthn.Credential 序列化，逐字段核验均为公钥凭据材料：
+// id（凭据 ID）、publicKey（凭据公钥）、attestationType、
+// transport、flags（userPresent/userVerified/backupEligible/
+// backupState 布尔）、authenticator（AAGUID、signCount 签名
+// 计数、cloneWarning、attachment）、attestation（clientDataJSON、
+// clientDataHash、authenticatorData、publicKeyAlgorithm、object
+// ——均为公开仪式数据）。WebAuthn 私钥按协议从不离开认证器，
+// 服务端不存在私钥类字段，本段敏感级不高于 users 段的密码哈希。
+type PasskeyBackup struct {
+	ID             string `json:"id"`
+	UserID         int64  `json:"userId"`
+	Name           string `json:"name"`
+	CredentialJSON string `json:"credentialJson"`
+	CreatedAt      int64  `json:"createdAt"`
+	LastUsedAt     int64  `json:"lastUsedAt"`
+}
+
 type NodeBackup struct {
 	ID             int64  `json:"id"`
 	Name           string `json:"name"`
@@ -911,6 +934,9 @@ type ImportResult struct {
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int `json:"announcementsImported"`
 	MonitorPermissionsImported int `json:"monitorPermissionsImported"`
+	// R2-E3-F02：passkey 导入计数（用户不存在/凭据坏损的跳过行
+	// 走 SkippedRows["passkeys"] 回执点名计数）。
+	PasskeysImported int `json:"passkeysImported"`
 	// B4/F-004/F-030：订阅分配与监控定义导入计数
 	UserSubscriptionsImported int `json:"userSubscriptionsImported"`
 	// BUG-A2-4：订阅按 token 重建换 id 时分配经 subRemap 重写落位；

@@ -460,6 +460,7 @@ const IMPORT_COUNT_KEYS = [
   "monitorPermissionsImported",
   "userSubscriptionsImported",
   "serviceMonitorsImported",
+  "passkeysImported",
   "nodeSSHConfigsImported",
 ];
 
@@ -569,6 +570,7 @@ function backupImportAnswer(
     counts.userSubscriptionsImported = len(req.userSubscriptions);
   if (on("serviceMonitors"))
     counts.serviceMonitorsImported = len(req.serviceMonitors);
+  if (on("passkeys")) counts.passkeysImported = len(req.passkeys);
   if (on("inbounds")) {
     const inb = (req.inbounds ?? {}) as Record<string, unknown>;
 

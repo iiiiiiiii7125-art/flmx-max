@@ -99,5 +99,5 @@ var r31H01AllBackupTypes = []string{
 	"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
 	"configs", "inbounds",
 	"userInbounds", "announcements", "monitorPermissions",
-	"userSubscriptions", "serviceMonitors",
+	"userSubscriptions", "serviceMonitors", "passkeys",
 }
