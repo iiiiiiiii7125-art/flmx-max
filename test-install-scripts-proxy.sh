@@ -535,6 +535,139 @@ test_panel_uninstall_without_docker_cleans_full_residual_set() (
   assert_residuals_gone "$d"
 )
 
+# R2-SCR-F04（FIX-UNINSTALL-RESIDUE）：面板内升级工件五件两卸
+# 载分支同集回收——.env.upgrade.bak 是含 JWT_SECRET 与数据库口
+# 令的完整 .env 副本（后端 helper 仅成功路径自删、失败/回滚终
+# 态刻意保留＝卸载时最可能在场），此前两分支皆漏。Docker 分支
+# 断言五件随卸载删除；无 Docker 分支断言五件进残留清单被点名
+# 且删除（与 A2-06 同归属夹具）。
+test_panel_uninstall_removes_inpanel_upgrade_artifacts() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  make_upgrade_artifacts() {
+    local d="$1"
+    printf 'JWT_SECRET=x\nPOSTGRES_PASSWORD=y\n' > "$d/.env.upgrade.bak"
+    printf 'services:\n' > "$d/docker-compose.yml.upgrade.bak"
+    printf 'upgrade log\n' > "$d/upgrade.log"
+    printf '{"status":"failed"}\n' > "$d/.flmx_upgrade_status.json"
+    printf 'hb\n' > "$d/.flmx_upgrade_heartbeat"
+  }
+  assert_artifacts_gone() {
+    local d="$1" item
+    for item in .env.upgrade.bak docker-compose.yml.upgrade.bak upgrade.log .flmx_upgrade_status.json .flmx_upgrade_heartbeat; do
+      [[ ! -e "$d/$item" ]] || fail "R2-SCR-F04: upgrade artifact $item must be deleted"
+    done
+  }
+
+  # ① Docker 分支
+  check_docker() { DOCKER_CMD="true"; }
+  local d out rc="0"
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=x\nFRONTEND_PORT=6400\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  make_upgrade_artifacts "$d"
+  FIXTURE_DIR="$d"
+  resolve_panel_deployment() {
+    PANEL_DEPLOY_DIR="$FIXTURE_DIR"
+    PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+    cd "$PANEL_DEPLOY_DIR" || return 1
+  }
+  systemctl() { return 0; }
+  caddy() { return 0; }
+  out=$( ( cd "$d" && PANEL_DEPLOY_DIR="$d" PANEL_BACKEND_CONTAINER="flmx-panel-backend" uninstall_panel <<< "y" 2>&1 ) ) || rc="$?"
+  assert_equals "0" "$rc" "R2-SCR-F04: docker-branch uninstall should succeed"
+  assert_artifacts_gone "$d"
+  [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "R2-SCR-F04: compose/.env must be removed (docker branch)"
+
+  # ② 无 Docker 分支
+  check_docker() { return 1; }
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  make_upgrade_artifacts "$d"
+  rc="0"
+  out=$( ( cd "$d" && uninstall_panel </dev/null 2>&1 ) ) || rc="$?"
+  assert_equals "0" "$rc" "R2-SCR-F04: no-docker uninstall should succeed"
+  assert_artifacts_gone "$d"
+  grep -q '.env.upgrade.bak' <<< "$out" || fail "R2-SCR-F04: the residual listing must name .env.upgrade.bak before deletion"
+)
+
+# R2-P2-05（FIX-UNINSTALL-RESIDUE）：卸载回收 Caddy 站点块——菜
+# 单 5/6 此前只追加无移除。归属判据＝块体反代 127.0.0.1:<本部
+# 署前端端口>：自家两块（面板＋订阅前置）整块摘除并逐个点名，
+# 他人端口块、无关块、全局块逐字保留；摘除前留 .bak 备份、
+# caddy validate 不过则原文件不动只告警；二跑无命中为干净
+# no-op。CADDYFILE_PATH 改指临时文件、caddy/systemctl 全桩。
+test_panel_uninstall_removes_own_caddy_blocks() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work cf calls
+  work=$(mktemp -d)
+  cf="$work/Caddyfile"
+  calls="$work/systemctl-calls"
+  : > "$calls"
+  cat > "$cf" <<'CF'
+{
+	email ops@example.com
+}
+
+z.example.com {
+	reverse_proxy 127.0.0.1:6400
+}
+
+sub.example.com {
+	reverse_proxy 127.0.0.1:6400
+}
+
+other.example.com {
+	reverse_proxy 127.0.0.1:7777
+}
+
+plain.example.com {
+	root * /srv/www
+	file_server
+}
+CF
+  systemctl() { echo "$*" >> "$calls"; return 0; }
+  caddy() { return 0; }
+
+  local rc="0" out
+  out=$(CADDYFILE_PATH="$cf" uninstall_caddy_panel_blocks 6400 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R2-P2-05: caddy block removal should succeed"
+  ! grep -q 'z.example.com' "$cf" || fail "R2-P2-05: own panel block must be removed"
+  ! grep -q 'sub.example.com' "$cf" || fail "R2-P2-05: own subscription-front block must be removed"
+  grep -q 'other.example.com' "$cf" || fail "R2-P2-05: another deployment's block must be kept"
+  grep -q 'plain.example.com' "$cf" || fail "R2-P2-05: unrelated blocks must be kept"
+  grep -q 'ops@example.com' "$cf" || fail "R2-P2-05: the global block must be kept"
+  grep -q 'z.example.com' <<< "$out" || fail "R2-P2-05: removed blocks must be named in output"
+  compgen -G "$cf.bak.*" >/dev/null || fail "R2-P2-05: a timestamped backup of the original Caddyfile must be kept"
+  grep -q 'restart caddy' "$calls" || fail "R2-P2-05: caddy must be restarted after block removal"
+
+  # 二跑：无命中 → 文件不动、点名未发现、仍成功。
+  local before
+  before=$(cat "$cf")
+  rc="0"
+  out=$(CADDYFILE_PATH="$cf" uninstall_caddy_panel_blocks 6400 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R2-P2-05: second pass should succeed"
+  assert_equals "$before" "$(cat "$cf")" "R2-P2-05: second pass must not modify the Caddyfile"
+  grep -q '未发现' <<< "$out" || fail "R2-P2-05: second pass must report no matching blocks"
+
+  # validate 失败：原文件逐字不动、只告警、卸载不失败。
+  cat > "$cf" <<'CF'
+z.example.com {
+	reverse_proxy 127.0.0.1:6400
+}
+CF
+  caddy() { return 1; }
+  rc="0"
+  out=$(CADDYFILE_PATH="$cf" uninstall_caddy_panel_blocks 6400 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R2-P2-05: validate failure must not fail the uninstall"
+  grep -q 'z.example.com' "$cf" || fail "R2-P2-05: validate failure must leave the Caddyfile untouched"
+  grep -q '校验失败' <<< "$out" || fail "R2-P2-05: validate failure must be named in output"
+)
+
 # A1-03（audit-max）：显式版本 env 在拼 URL/镜像 tag 前须过格式
 # 校验——旧实现 resolve_version 与 update_panel 的版本链对
 # VERSION/FLMX_VERSION/FLUX_VERSION/PINNED_VERSION 零校验原样
@@ -682,9 +815,10 @@ test_panel_docker_ipv6_uses_mktemp_not_predictable_tmp() (
 # A2-07（audit-max）：入口进程锁＋备份名唯一后缀——① 锁被另一
 # 进程持有时 panel_acquire_run_lock 必须点名拒绝（返回非 0）；
 # 锁空闲时取得成功；main() 必须接线调用（静态断言）。② 菜单
-# 5/6 的 Caddyfile 备份名此前只有秒级时间戳，同秒再跑即覆盖前
-# 一份回滚源：两处命名都必须带进程号唯一后缀（静态钉格，与
-# A1-06 同因：菜单全流程夹具不产出同秒双跑场景）。
+# 5/6 与卸载回收（R2-P2-05）的 Caddyfile 备份名此前只有秒级时
+# 间戳，同秒再跑即覆盖前一份回滚源：三处命名都必须带进程号唯
+# 一后缀（静态钉格，与 A1-06 同因：菜单全流程夹具不产出同秒
+# 双跑场景）。
 test_panel_run_lock_and_unique_caddy_backup_names() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -710,7 +844,7 @@ test_panel_run_lock_and_unique_caddy_backup_names() (
 
   local bak_count
   bak_count=$(grep -Fc 'caddyfile}.bak.$(date +%s).$$' "$ROOT_DIR/panel_install.sh" || true)
-  assert_equals "2" "$bak_count" "A2-07: both Caddy backup names must carry the PID suffix"
+  assert_equals "3" "$bak_count" "A2-07: all Caddy backup names (menus 5/6 and uninstall) must carry the PID suffix"
 )
 
 # A2-08（audit-max）：非法 FLMX_INSTANCE 在管理路径须与装机路径
@@ -2245,6 +2379,77 @@ EOF
     grep -q "delete table inet $table" "$nft_input" || \
       fail "R6-02: nft delete should be issued for table $table"
   done
+)
+
+# R2-SCR-F05/R2-P2-04（FIX-UNINSTALL-RESIDUE）：脚本卸载补收定
+# 时重启 timer 对与 OpenRC 日志面——timer 对由 agent 运行时按面
+# 板设置生成、带 Persistent=true，此前脚本卸载不 disable 不删
+# 除，卸载后仍每日触发已删 unit；logrotate 配置此前仅服务删除
+# 的 openrc 分支顺带删、/var/log 两代日志本体与轮转件两路皆漏。
+# 全集改指临时目录，逐项断言删除＋点名，无关日志文件不得误删，
+# 日志清理二跑幂等无回执。
+test_uninstall_flmx_agent_cleans_restart_pair_and_logs() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
+  FLMX_AGENT_RESTART_TIMER_FILE="$work/systemd/flmx-agent-restart.timer"
+  FLMX_AGENT_RESTART_SERVICE_FILE="$work/systemd/flmx-agent-restart.service"
+  FLMX_AGENT_LOGROTATE_FILE="$work/logrotate.d/flmx_agent"
+  FLMX_AGENT_LOG_DIR="$work/log"
+  mkdir -p "$INSTALL_DIR" "$work/systemd" "$work/logrotate.d" "$FLMX_AGENT_LOG_DIR"
+  printf 'binary' > "$INSTALL_DIR/flmx_agent"
+  printf '%s' '{"addr": "https://panel.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  echo '[Unit]' > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+  echo '[Unit]' > "$FLMX_AGENT_RESTART_TIMER_FILE"
+  echo '[Unit]' > "$FLMX_AGENT_RESTART_SERVICE_FILE"
+  echo '/var/log/flmx_agent.log { rotate 3 }' > "$FLMX_AGENT_LOGROTATE_FILE"
+  echo 'log' > "$FLMX_AGENT_LOG_DIR/flmx_agent.log"
+  echo 'err' > "$FLMX_AGENT_LOG_DIR/flmx_agent.err.log"
+  echo 'old' > "$FLMX_AGENT_LOG_DIR/flmx_agent.log.1"
+  echo 'oldgz' > "$FLMX_AGENT_LOG_DIR/flmx_agent.err.log.2.gz"
+  echo 'legacy' > "$FLMX_AGENT_LOG_DIR/flux_agent.log"
+  echo 'legacyerr' > "$FLMX_AGENT_LOG_DIR/flux_agent.err.log.3"
+  echo 'keep' > "$FLMX_AGENT_LOG_DIR/other.log"
+
+  local systemctl_calls="$work/systemctl-calls"
+  : > "$systemctl_calls"
+  systemctl() { echo "$*" >> "$systemctl_calls"; return 0; }
+  nft() { cat >/dev/null; return 0; }
+  iptables() { return 1; }
+
+  local rc="0" out
+  out=$(mktemp)
+  printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R2-P2-04/F05: uninstall with restart pair and logs should succeed"
+  [[ ! -d "$INSTALL_DIR" ]] || fail "R2-P2-04/F05: install dir should be removed"
+  [[ ! -e "$FLMX_AGENT_RESTART_TIMER_FILE" ]] || fail "R2-SCR-F05: restart timer file should be removed"
+  [[ ! -e "$FLMX_AGENT_RESTART_SERVICE_FILE" ]] || fail "R2-SCR-F05: restart service file should be removed"
+  grep -q 'disable --now flmx-agent-restart.timer' "$systemctl_calls" || \
+    fail "R2-SCR-F05: restart timer should be disabled before removal"
+  grep -q 'disable --now flmx-agent-restart.service' "$systemctl_calls" || \
+    fail "R2-SCR-F05: restart service should be disabled before removal"
+  grep -q 'flmx-agent-restart.timer' "$out" || fail "R2-SCR-F05: restart timer removal should be named in output"
+  [[ ! -e "$FLMX_AGENT_LOGROTATE_FILE" ]] || fail "R2-P2-04: logrotate config should be removed"
+  local logf
+  for logf in flmx_agent.log flmx_agent.err.log flmx_agent.log.1 flmx_agent.err.log.2.gz flux_agent.log flux_agent.err.log.3; do
+    [[ ! -e "$FLMX_AGENT_LOG_DIR/$logf" ]] || fail "R2-P2-04: log file $logf should be removed"
+  done
+  [[ -f "$FLMX_AGENT_LOG_DIR/other.log" ]] || fail "R2-P2-04: unrelated log files must be kept"
+  grep -q '删除日志文件:' "$out" || fail "R2-P2-04: log removals should be named in output"
+  grep -q '删除日志轮转配置:' "$out" || fail "R2-P2-04: logrotate removal should be named in output"
+
+  # 幂等：已清状态下重复执行日志清理须成功且不再声称删除。
+  local out2
+  out2=$(mktemp)
+  remove_flmx_agent_log_files >"$out2" 2>&1 || fail "R2-P2-04: second log cleanup pass must succeed"
+  ! grep -q '删除日志文件:' "$out2" || fail "R2-P2-04: second pass must not claim removals"
 )
 
 # R6-02：宿主清理逐项尽力而为——nft 删除失败只告警并逐项列明，
@@ -11525,6 +11730,7 @@ test_update_flmx_agent_menu_guard_interactive
 test_uninstall_flmx_agent_refuses_unowned_agent
 test_uninstall_flmx_agent_menu_guard_pass_forms
 test_uninstall_flmx_agent_cleans_host_tuning_residue
+test_uninstall_flmx_agent_cleans_restart_pair_and_logs
 test_install_small_host_swap_creates_when_tiny_and_swapless
 test_install_small_host_swap_keeps_existing_swap
 test_install_small_host_swap_skips_large_memory
@@ -11854,6 +12060,8 @@ test_panel_installer_script_curl_uses_timeouts
 test_panel_caddy_source_fetches_use_timeouts
 test_panel_caddyfile_without_site_keeps_shared_addresses
 test_panel_uninstall_without_docker_cleans_full_residual_set
+test_panel_uninstall_removes_inpanel_upgrade_artifacts
+test_panel_uninstall_removes_own_caddy_blocks
 test_panel_explicit_version_format_validated
 test_panel_probe_route_uses_channel_tag_grammar
 test_panel_normalize_proxy_prefix_strips_all_trailing_slashes
