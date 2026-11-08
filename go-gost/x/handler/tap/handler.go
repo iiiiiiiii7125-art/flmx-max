@@ -29,7 +29,20 @@ func init() {
 }
 
 type tapHandler struct {
-	hop     hop.Hop
+	hop hop.Hop
+	// routes is the learned forwarding table (source MAC -> tunnel
+	// address). It intentionally has NO entry aging (R2 wave-3
+	// disposition of the FIX-LEAK-FAMILY §7 residue note): entries
+	// hold only two small values — no connection, goroutine or
+	// handle — the table lives and dies with this handler instance,
+	// and its growth is bounded by the address space of the attached
+	// L2 network (keys are source MACs of frames arriving on an
+	// established association, not values an unauthenticated peer
+	// can mint at will). The panel never emits tap services today;
+	// the handler is registered only for upstream gost completeness.
+	// If tap services ever become a product surface, add bounded
+	// entry aging here first: a departed peer's stale entry can
+	// otherwise keep attracting traffic to its old address.
 	routes  sync.Map
 	exit    chan struct{}
 	cipher  core.Cipher
