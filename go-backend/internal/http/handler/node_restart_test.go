@@ -58,12 +58,12 @@ func TestRestartSchedulePayloadShape(t *testing.T) {
 	}
 }
 
-func seedRestartNode(t *testing.T, r *repo.Repository, id int64, isRemote int, forwardMode string) {
+func seedRestartNode(t *testing.T, r *repo.Repository, id int64, forwardMode string) {
 	t.Helper()
 	err := r.DB().Exec(
-		`INSERT INTO node(id, name, secret, server_ip, port, created_time, status, is_remote, forward_mode)
-		 VALUES(?, ?, 'secret', '192.0.2.1', '1000-65535', 1000, 0, ?, ?)`,
-		id, "restart-test-node", isRemote, forwardMode,
+		`INSERT INTO node(id, name, secret, server_ip, port, created_time, status, forward_mode)
+		 VALUES(?, ?, 'secret', '192.0.2.1', '1000-65535', 1000, 0, ?)`,
+		id, "restart-test-node", forwardMode,
 	).Error
 	if err != nil {
 		t.Fatalf("seed node: %v", err)
@@ -89,7 +89,7 @@ func TestNodeRestartScheduleSetOfflineNodePersists(t *testing.T) {
 		t.Fatalf("open repo: %v", err)
 	}
 	defer func() { _ = r.Close() }()
-	seedRestartNode(t, r, 41, 0, "agent")
+	seedRestartNode(t, r, 41, "agent")
 	h := New(r, "test-secret")
 
 	// Offline node: the setting must persist and report pushed=false
@@ -132,16 +132,14 @@ func TestNodeRestartScheduleSetRejects(t *testing.T) {
 		t.Fatalf("open repo: %v", err)
 	}
 	defer func() { _ = r.Close() }()
-	seedRestartNode(t, r, 42, 0, "agent")
-	seedRestartNode(t, r, 43, 1, "agent")
-	seedRestartNode(t, r, 44, 0, "nftables")
+	seedRestartNode(t, r, 42, "agent")
+	seedRestartNode(t, r, 44, "nftables")
 	h := New(r, "test-secret")
 
 	cases := []map[string]interface{}{
 		{"id": 42, "enabled": 1, "time": "24:00", "jitterMinutes": 30},  // bad time
 		{"id": 42, "enabled": 1, "time": "04:00", "jitterMinutes": 721}, // jitter too large
 		{"id": 42, "enabled": 2, "time": "04:00", "jitterMinutes": 30},  // bad switch
-		{"id": 43, "enabled": 1, "time": "04:00", "jitterMinutes": 30},  // remote node
 		{"id": 44, "enabled": 1, "time": "04:00", "jitterMinutes": 30},  // nftables node
 		{"id": 999, "enabled": 1, "time": "04:00", "jitterMinutes": 30}, // missing node
 	}
