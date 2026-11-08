@@ -247,6 +247,45 @@ func isBackupRuntimeExcludedConfigKey(name string) bool {
 	return ok
 }
 
+// retiredConfigKeysList 是已随功能下线而注销的配置键全集（单一
+// 事实源）：这些键的功能代码已删除、键已退出全部策略登记表，存量
+// 行由对应迁移一次性删净。但迁移是版本门控的一次性步进，实例到
+// 位后永不重跑；备份导入面又按 R3 K5 口径对未分类键原样恢复——
+// 旧备份一恢复，注销键即全数落库复活、无读者、无清理路径，与
+// 「删除不留残留」裁定正相反（R2-E3-F03）。故备份过滤骨架恒排除
+// 本集（导出/导入两面），与 schema v8 迁移
+// migrateRemoveGistConfigKeys 同源消费本清单——增删注销键只改
+// 这一处，两面自动同步。
+//   - gist_* 8 键＋ Gist 失败通知台账 2 键（DEV-RM-GIST，2.1.0；
+//     其中 gist_token 是 GitHub 凭据本体）。
+var retiredConfigKeysList = []string{
+	"gist_token",
+	"gist_password",
+	"gist_id",
+	"gist_interval_hours",
+	"gist_last_at",
+	"gist_last_upload",
+	"gist_last_error",
+	"gist_last_hash",
+	"notify_gist_failure_pending",
+	"notify_gist_failure_pending_gen",
+}
+
+var retiredConfigKeys = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(retiredConfigKeysList))
+	for _, k := range retiredConfigKeysList {
+		out[k] = struct{}{}
+	}
+	return out
+}()
+
+// IsRetiredConfigKey 报告键是否已随功能下线注销（备份恒排除集，
+// 与迁移删行清单 retiredConfigKeysList 同源）。
+func IsRetiredConfigKey(name string) bool {
+	_, ok := retiredConfigKeys[normalizeConfigKey(name)]
+	return ok
+}
+
 // backupFilterExemptConfigKeyPrefixes 是备份**导出**过滤的设计
 // 豁免前缀族（RB4-01）：这些键按 PolicyForConfig 落默认 sensitive，
 // 但其值是必须随备份往返的运行时语义数据而非凭据。豁免只按本
@@ -272,16 +311,17 @@ func isBackupFilterExemptConfigKey(name string) bool {
 }
 
 // filterBackupConfigSet 是备份 configs 段过滤的共用骨架：凭据
-// 明单、systemManaged（凭据与系统托管运行态）与运行时台账三组
-// 恒排除；excludeDefaultSensitive 决定是否再叠加 PolicyForConfig
-// 的默认敏感口径（导出面叠加、导入面不叠加，见两包装函数注释）。
+// 明单、systemManaged（凭据与系统托管运行态）、运行时台账与已
+// 注销键（功能下线，R2-E3-F03）四组恒排除；excludeDefaultSensitive
+// 决定是否再叠加 PolicyForConfig 的默认敏感口径（导出面叠加、
+// 导入面不叠加，见两包装函数注释）。
 func filterBackupConfigSet(in map[string]string, excludeDefaultSensitive bool) map[string]string {
 	if len(in) == 0 {
 		return map[string]string{}
 	}
 	out := make(map[string]string, len(in))
 	for name, value := range in {
-		if IsSensitiveConfigKey(name) || IsSystemManagedConfigKey(name) || isBackupRuntimeExcludedConfigKey(name) {
+		if IsSensitiveConfigKey(name) || IsSystemManagedConfigKey(name) || isBackupRuntimeExcludedConfigKey(name) || IsRetiredConfigKey(name) {
 			continue
 		}
 		if excludeDefaultSensitive {
@@ -333,6 +373,23 @@ func restoreDroppedConfigKeys(in map[string]string) []string {
 	dropped := make([]string, 0)
 	for name := range in {
 		if IsSensitiveConfigKey(name) || IsSystemManagedConfigKey(name) || isBackupRuntimeExcludedConfigKey(name) {
+			dropped = append(dropped, name)
+		}
+	}
+	sort.Strings(dropped)
+	return dropped
+}
+
+// restoreRetiredConfigKeys 返回导入载荷中命中的已注销键名清单
+// （字典序）：判据与 filterBackupConfigSet 的注销集恒同源
+// （IsRetiredConfigKey）。importConfigs 在过滤前取此清单单独点名
+// ——注销键的处置理由是功能已下线，与 B8-12 的凭据/系统托管/台账
+// 点名分开（R2-E3-F03），两份名单不重叠（注销键已退出全部策略
+// 登记表，不会同时命中 restoreDroppedConfigKeys）。
+func restoreRetiredConfigKeys(in map[string]string) []string {
+	dropped := make([]string, 0)
+	for name := range in {
+		if IsRetiredConfigKey(name) {
 			dropped = append(dropped, name)
 		}
 	}

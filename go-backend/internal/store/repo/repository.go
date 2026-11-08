@@ -5001,6 +5001,14 @@ func normalizeImportedMonitoringConfigValue(name, value string) (string, error) 
 }
 
 func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *importReport) (int, error) {
+	// R2-E3-F03：已注销键（随功能下线）在过滤前单独点名——它们
+	// 不在凭据/系统托管/台账排除集里，处置理由是功能已删除：旧
+	// 备份恢复若落库即成无读者、无清理路径的复活残留（gist_token
+	// 更是凭据本体），过滤骨架恒排除，此处只报键名与条数、绝不
+	// 带值。与下方 B8-12 点名不重叠（注销键已退出全部策略表）。
+	if retired := restoreRetiredConfigKeys(configs); len(retired) > 0 {
+		rep.warnf("备份恢复：%d 个配置键已随功能下线注销，未随恢复落库：%s", len(retired), strings.Join(retired, "、"))
+	}
 	// B8-12：被导入面过滤剔除的键在过滤前先取名单进回执点名
 	// （只报键名与条数、绝不带值）——此前静默消失，管理员无从
 	// 知道备份中哪些设置未恢复。
@@ -5492,22 +5500,14 @@ func migrateSchema(db *gorm.DB) error {
 // 功能代码删除后这些行无人读写，留置即残留（且其中 gist_token 是
 // GitHub 凭据本体），按「删除不留残留」口径在 schema v8 迁移里删净；
 // 幂等，键不存在时无副作用。本地备份/恢复与自动快照的键不在此列。
+// 键清单与备份过滤的已注销键集同源单点（retiredConfigKeysList，
+// config_policy.go）：本迁移是版本门控的一次性步进、到 v8 后永不
+// 重跑，恢复面靠同一清单恒排除，两面才不会一删一复活（R2-E3-F03）。
 func migrateRemoveGistConfigKeys(db *gorm.DB) error {
 	if db == nil {
 		return errors.New("nil db")
 	}
-	keys := []string{
-		"gist_token",
-		"gist_password",
-		"gist_id",
-		"gist_interval_hours",
-		"gist_last_at",
-		"gist_last_upload",
-		"gist_last_error",
-		"gist_last_hash",
-		"notify_gist_failure_pending",
-		"notify_gist_failure_pending_gen",
-	}
+	keys := retiredConfigKeysList
 	if err := db.Where("name IN ?", keys).Delete(&model.ViteConfig{}).Error; err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "no such table") || (strings.Contains(msg, "relation") && strings.Contains(msg, "does not exist")) {
