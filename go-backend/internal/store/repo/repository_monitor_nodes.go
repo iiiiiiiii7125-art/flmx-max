@@ -40,6 +40,22 @@ func (r *Repository) SetNodesLatencyTargets(ids []int64, value string) error {
 	return nil
 }
 
+// SetNodeRestartSchedule stores one node's scheduled agent-restart
+// setting (the panel is the authority; the agent mirrors it into a
+// systemd timer). Values are validated by the handler before they
+// reach this method; the update is a single-row write of the three
+// columns so a partial state can never land.
+func (r *Repository) SetNodeRestartSchedule(id int64, enabled int, restartTime string, jitterMinutes int) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.Node{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"restart_enabled":        enabled,
+		"restart_time":           restartTime,
+		"restart_jitter_minutes": jitterMinutes,
+	}).Error
+}
+
 // ListNodeLatencyTargets returns every node's stored explicit latency
 // test-point choice (raw JSON), keyed by node id. An empty value means
 // "follow the global defaults" and is omitted, so callers can tell an

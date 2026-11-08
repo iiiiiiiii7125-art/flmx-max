@@ -299,6 +299,21 @@ probe in that bucket failed.
 Apply or revert the 6 sysctl tuning groups (BBR, buffers, TCP, …) on a node.
 Applied values persist across reboots.
 
+## POST /api/v1/node/restart-schedule
+
+Set one node's scheduled agent restart (a fuse, off by default). Request:
+`{"id": 1, "enabled": 1, "time": "04:00", "jitterMinutes": 30}` — `time` is
+the node's local time in `HH:MM` (00:00–23:59); `jitterMinutes` is a random
+delay window of 0–720 minutes after that time. The panel stores the setting
+(authoritative) and pushes it to the agent, which persists it as a systemd
+timer on the node: only the agent service (`flmx_agent`) restarts, never the
+host, and the timer fires even while the panel is unreachable. Response
+`data`: `{enabled, time, jitterMinutes, pushed}` — `pushed=false` means the
+node was offline (the setting is stored and re-pushed automatically on
+reconnect) or `pushError` explains the failure. Remote (federation) nodes
+must be configured on their owning panel; nftables nodes have no agent
+service and are rejected.
+
 ## POST /api/v1/node/route
 
 Get the node's cached return-route classification (CN2 / 163 / 4837 / 9929 /

@@ -1312,8 +1312,12 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"status":                  n.Status,
 			"forwardMode":             defaultNodeForwardMode(n.ForwardMode),
 			"expiryReminderDismissed": n.ExpiryReminderDismissed,
-			"interfaceName":           nullableString(n.InterfaceName),
-			"sshConfig":               sshConfigByNodeID[n.ID],
+			// 定时重启 agent 服务的面板权威设置（默认关）。
+			"restartEnabled":       n.RestartEnabled,
+			"restartTime":          n.RestartTime,
+			"restartJitterMinutes": n.RestartJitterMinutes,
+			"interfaceName":        nullableString(n.InterfaceName),
+			"sshConfig":            sshConfigByNodeID[n.ID],
 		})
 	}
 	return items, nil
