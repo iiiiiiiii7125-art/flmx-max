@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-gost/core/logger"
+	"github.com/go-gost/x/internal/util/eventlog"
 	xlogger "github.com/go-gost/x/logger"
 )
 
@@ -198,15 +199,14 @@ func TestListenerFloodDropsCountedAndLogCapped(t *testing.T) {
 		}
 	}
 
-	events := ln.(*listener).events
+	dropped := ln.(*listener).dropped
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		dropped, _, _ := events.totals()
-		if dropped >= 150 {
+		if dropped.Total() >= 150 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("counted %d dropped datagrams after 10s, want >= 150 of %d flooded", dropped, flood)
+			t.Fatalf("counted %d dropped datagrams after 10s, want >= 150 of %d flooded", dropped.Total(), flood)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -234,18 +234,29 @@ func TestListenerFloodDropsCountedAndLogCapped(t *testing.T) {
 // once the window has elapsed, silence inside the window, and a
 // forced flush on close — with exact pending/total accounting for
 // all three event kinds.
+//
+// The listener's counters now live on the shared eventlog
+// Aggregator, so this test drives that Aggregator directly with a
+// short (40ms) window instead of the deleted private eventLog: the
+// window-open flush is driven by Flush() after a sleep past the
+// window (window-gating itself is covered by the shared package's
+// own TestWindowAggregation); the pending/total numbers and the
+// summary wordings are asserted exactly as before.
 func TestEventLogSummaryCadence(t *testing.T) {
 	capLog := newCaptureLogger()
-	e := newEventLog(capLog)
+	events := eventlog.New(capLog, 40*time.Millisecond)
+	dropped := events.Counter("udp listener: %d datagram(s) discarded (session recv queue full), %d total")
+	sessDropped := events.Counter("udp listener: %d new session(s) discarded (connection queue full), %d total")
+	readErrs := events.DetailCounter("udp listener: %d temporary read error(s), last: %s, %d total")
 	// Pretend the previous window just expired.
-	e.lastFlush = time.Now().Add(-dropLogInterval - time.Second)
+	time.Sleep(50 * time.Millisecond)
 
-	e.noteDropped()
+	dropped.Note()
 	if n := capLog.count(); n != 1 {
 		t.Fatalf("first note past the window flushed %d lines, want 1", n)
 	}
 	for i := 0; i < 100; i++ {
-		e.noteDropped()
+		dropped.Note()
 	}
 	if n := capLog.count(); n != 1 {
 		t.Fatalf("100 notes inside the window produced %d lines total, want 1", n)
@@ -253,9 +264,8 @@ func TestEventLogSummaryCadence(t *testing.T) {
 
 	// Force the next window open: the 100 pending drops flush as
 	// one line, carrying pending and cumulative counts.
-	e.mu.Lock()
-	e.flushLocked(time.Now().Add(dropLogInterval+time.Second), false)
-	e.mu.Unlock()
+	time.Sleep(50 * time.Millisecond)
+	events.Flush()
 	lines := capLog.all()
 	if len(lines) != 2 {
 		t.Fatalf("window flush produced %d lines total, want 2: %v", len(lines), lines)
@@ -264,12 +274,12 @@ func TestEventLogSummaryCadence(t *testing.T) {
 		t.Fatalf("second summary = %q, want 100 pending / 101 total", lines[1])
 	}
 
-	e.noteSessionDropped()
-	e.noteReadError(errors.New("boom"))
+	sessDropped.Note()
+	readErrs.NoteErr(errors.New("boom"))
 	if n := capLog.count(); n != 2 {
 		t.Fatalf("notes inside the window produced %d lines total, want 2", n)
 	}
-	e.close()
+	events.Flush()
 	lines = capLog.all()
 	if len(lines) != 4 {
 		t.Fatalf("close flush produced %d lines total, want 4: %v", len(lines), lines)
@@ -282,7 +292,7 @@ func TestEventLogSummaryCadence(t *testing.T) {
 		t.Fatalf("close flush missing read-error summary with last error: %q", joined)
 	}
 
-	if d, s, r := e.totals(); d != 101 || s != 1 || r != 1 {
+	if d, s, r := dropped.Total(), sessDropped.Total(), readErrs.Total(); d != 101 || s != 1 || r != 1 {
 		t.Fatalf("totals = (%d, %d, %d), want (101, 1, 1)", d, s, r)
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-gost/core/common/bufpool"
 	"github.com/go-gost/core/logger"
+	"github.com/go-gost/x/internal/util/eventlog"
 )
 
 // DefaultReadQueueSize is the per-session datagram receive queue
@@ -63,121 +64,14 @@ const DefaultReadQueueBytes = 4 << 20
 // 128).
 const DefaultBacklog = 128
 
-// dropLogInterval is the aggregation window for the overload-path
-// log summaries produced by eventLog (P1-03).
-const dropLogInterval = 30 * time.Second
-
-// eventLog rate-limits the listener's overload-path logging. The
-// drop paths (receive queue full, session queue full, temporary
-// read errors) used to emit one Warn per event inside the hot read
-// loop, so under a UDP flood the log rate equalled the drop rate —
-// up to tens of thousands of lines per second through journald,
-// competing with forwarding for CPU and disk on small nodes
-// (P1-03). There is no rate-limiting precedent for log output in
-// this codebase, so this is the minimal aggregator: each event
-// kind is a pair of atomic counters (total, and pending since the
-// last summary); a single flushLocked summary line per kind is
-// emitted at most once per dropLogInterval, and the final pending
-// counts are flushed when the listener closes so a flood that ends
-// with the listener is not silently lost. The hot path cost is one
-// atomic increment per event.
-type eventLog struct {
-	logger logger.Logger
-
-	mu        sync.Mutex // guards lastFlush
-	lastFlush time.Time
-
-	dropped      atomic.Uint64 // datagrams dropped: session receive queue full
-	droppedPend  atomic.Uint64
-	sessDropped  atomic.Uint64 // new sessions dropped: session queue full
-	sessPend     atomic.Uint64
-	readErrs     atomic.Uint64 // temporary read errors
-	readErrsPend atomic.Uint64
-	readErrLast  atomic.Value // string: most recent temporary read error
-}
-
-func newEventLog(l logger.Logger) *eventLog {
-	return &eventLog{logger: l, lastFlush: time.Now()}
-}
-
-// flushLocked emits one summary Warn per event kind that has
-// pending events, provided the aggregation window has elapsed
-// (unless force is set), and resets the pending counters. The
-// caller must hold e.mu.
-func (e *eventLog) flushLocked(now time.Time, force bool) {
-	if e.logger == nil {
-		e.droppedPend.Store(0)
-		e.sessPend.Store(0)
-		e.readErrsPend.Store(0)
-		return
-	}
-	if !force && now.Sub(e.lastFlush) < dropLogInterval {
-		return
-	}
-	flushed := false
-	if n := e.droppedPend.Swap(0); n > 0 {
-		e.logger.Warnf("udp listener: %d datagram(s) discarded (session recv queue full), %d total", n, e.dropped.Load())
-		flushed = true
-	}
-	if n := e.sessPend.Swap(0); n > 0 {
-		e.logger.Warnf("udp listener: %d new session(s) discarded (connection queue full), %d total", n, e.sessDropped.Load())
-		flushed = true
-	}
-	if n := e.readErrsPend.Swap(0); n > 0 {
-		last, _ := e.readErrLast.Load().(string)
-		e.logger.Warnf("udp listener: %d temporary read error(s), last: %s, %d total", n, last, e.readErrs.Load())
-		flushed = true
-	}
-	if flushed || force {
-		e.lastFlush = now
-	}
-}
-
-// noteDropped records one datagram dropped on a full session
-// receive queue, flushing the aggregated summary if the window
-// has elapsed.
-func (e *eventLog) noteDropped() {
-	e.dropped.Add(1)
-	e.droppedPend.Add(1)
-	e.mu.Lock()
-	e.flushLocked(time.Now(), false)
-	e.mu.Unlock()
-}
-
-// noteSessionDropped records one new session discarded on a full
-// connection queue.
-func (e *eventLog) noteSessionDropped() {
-	e.sessDropped.Add(1)
-	e.sessPend.Add(1)
-	e.mu.Lock()
-	e.flushLocked(time.Now(), false)
-	e.mu.Unlock()
-}
-
-// noteReadError records one temporary read error, keeping the most
-// recent error text for the summary line.
-func (e *eventLog) noteReadError(err error) {
-	e.readErrs.Add(1)
-	e.readErrsPend.Add(1)
-	e.readErrLast.Store(err.Error())
-	e.mu.Lock()
-	e.flushLocked(time.Now(), false)
-	e.mu.Unlock()
-}
-
-// close flushes any pending counts one final time.
-func (e *eventLog) close() {
-	e.mu.Lock()
-	e.flushLocked(time.Now(), true)
-	e.mu.Unlock()
-}
-
-// totals returns the cumulative event counts (receive-queue drops,
-// session-queue drops, temporary read errors).
-func (e *eventLog) totals() (dropped, sessDropped, readErrs uint64) {
-	return e.dropped.Load(), e.sessDropped.Load(), e.readErrs.Load()
-}
-
+// Overload-path logging for this listener is aggregated through
+// the shared eventlog package (P1-03): the drop paths (receive
+// queue full, session queue full, temporary read errors) used to
+// emit one Warn per event inside the hot read loop, so under a UDP
+// flood the log rate equalled the drop rate. The three counters
+// below are registered on the listener's Aggregator with the same
+// summary wordings the private aggregator used; Flush on Close
+// emits the trailing counts.
 type ListenConfig struct {
 	Addr           net.Addr
 	Backlog        int
@@ -188,13 +82,16 @@ type ListenConfig struct {
 	Logger         logger.Logger
 }
 type listener struct {
-	conn     net.PacketConn
-	cqueue   chan net.Conn
-	connPool *connPool
-	closed   chan struct{}
-	errChan  chan error
-	config   *ListenConfig
-	events   *eventLog
+	conn        net.PacketConn
+	cqueue      chan net.Conn
+	connPool    *connPool
+	closed      chan struct{}
+	errChan     chan error
+	config      *ListenConfig
+	events      *eventlog.Aggregator
+	dropped     *eventlog.Counter // datagrams dropped: session receive queue full
+	sessDropped *eventlog.Counter // new sessions dropped: session queue full
+	readErrs    *eventlog.Counter // temporary read errors (detail: most recent error)
 }
 
 func NewListener(conn net.PacketConn, cfg *ListenConfig) net.Listener {
@@ -224,8 +121,11 @@ func NewListener(conn net.PacketConn, cfg *ListenConfig) net.Listener {
 		closed:  make(chan struct{}),
 		errChan: make(chan error, 1),
 		config:  cfg,
-		events:  newEventLog(cfg.Logger),
 	}
+	ln.events = eventlog.New(cfg.Logger, eventlog.DefaultInterval)
+	ln.dropped = ln.events.Counter("udp listener: %d datagram(s) discarded (session recv queue full), %d total")
+	ln.sessDropped = ln.events.Counter("udp listener: %d new session(s) discarded (connection queue full), %d total")
+	ln.readErrs = ln.events.DetailCounter("udp listener: %d temporary read error(s), last: %s, %d total")
 	ln.connPool = newConnPool(cfg.TTL).WithLogger(cfg.Logger)
 	go ln.listenLoop()
 
@@ -271,7 +171,7 @@ func (ln *listener) listenLoop() {
 				// transient error must not become a log flood
 				// (P1-03). Note the logger may be nil; the
 				// counters still advance.
-				ln.events.noteReadError(err)
+				ln.readErrs.NoteErr(err)
 				if !isTimeoutError(err) {
 					// Non-timeout transient errors can repeat
 					// immediately; avoid a hot spin. Timeout
@@ -302,7 +202,7 @@ func (ln *listener) listenLoop() {
 			if errors.Is(err, errQueueFull) {
 				// Counted and logged in aggregated summaries,
 				// never per packet (P1-03).
-				ln.events.noteDropped()
+				ln.dropped.Note()
 			} else if ln.config.Logger != nil {
 				// Session closed mid-delivery: rare, not a flood
 				// vector; keep the immediate log.
@@ -357,7 +257,7 @@ func (ln *listener) Close() error {
 		close(ln.closed)
 		ln.conn.Close()
 		ln.connPool.Close()
-		ln.events.close()
+		ln.events.Flush()
 	}
 
 	return nil
@@ -378,7 +278,7 @@ func (ln *listener) getConn(raddr net.Addr) *conn {
 		c.Close()
 		// Aggregated with the other overload drops (P1-03):
 		// under a new-session flood this fired once per client.
-		ln.events.noteSessionDropped()
+		ln.sessDropped.Note()
 		return nil
 	}
 }
