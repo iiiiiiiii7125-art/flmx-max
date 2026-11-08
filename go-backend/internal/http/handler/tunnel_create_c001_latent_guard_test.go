@@ -27,20 +27,12 @@ import (
 // deadlocks deterministically and wedges the whole panel DB until restart
 // (see plans/042 for the hard constraint: a tx must reuse its own handle).
 //
-// Reachability note (verified 2026-10-19 against HEAD b04a218):
-// prepareTunnelCreateState only populates OutNodes for type-2 tunnels, so the
-// inner branch that held the offending query is currently unreachable for
-// type 1 -- the defect was latent, never triggerable. The redundant query has
-// been removed anyway (zero-risk, eliminates the landmine).
-func TestTunnelCreateType1RemoteFirstNodeLatentGuard(t *testing.T) {
-	// Fake remote panel: should never be hit on the type-1 path today, but
-	// serve success anyway so the test stays valid if the path becomes live.
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":0,"msg":"ok","data":{}}`))
-	}))
-	defer remote.Close()
-
+// Removal note (2.1.0): the remote-entry (federation) branch itself was
+// deleted with the whole federation/sharing feature, so the guarded shape
+// no longer exists; this guard now pins the surviving plain type-1 create
+// path end-to-end with the same tx-discipline tripwire (a hang fails loudly
+// instead of wedging a production panel's SQLite database).
+func TestTunnelCreateType1LatentGuard(t *testing.T) {
 	r, err := repo.Open(filepath.Join(t.TempDir(), "c001.db"))
 	if err != nil {
 		t.Fatalf("open repo: %v", err)
@@ -49,19 +41,19 @@ func TestTunnelCreateType1RemoteFirstNodeLatentGuard(t *testing.T) {
 	h := &Handler{repo: r}
 	now := time.Now().UnixMilli()
 
-	// Remote entry node (id 1).
+	// Entry node (id 1).
 	if err := r.DB().Exec(
-		`INSERT INTO node(name, secret, server_ip, port, status, is_remote, remote_url, remote_token, forward_mode, created_time)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"remote-1", "s1", "10.0.0.1", "10000-20000", 1, 1, remote.URL, "tok", "agent", now,
+		`INSERT INTO node(name, secret, server_ip, port, status, forward_mode, created_time)
+		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		"entry-1", "s1", "10.0.0.1", "10000-20000", 1, "agent", now,
 	).Error; err != nil {
-		t.Fatalf("insert remote node: %v", err)
+		t.Fatalf("insert entry node: %v", err)
 	}
 	// Local landing node (id 2).
 	if err := r.DB().Exec(
-		`INSERT INTO node(name, secret, server_ip, port, status, is_remote, forward_mode, created_time)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		"local-1", "s2", "10.0.0.2", "10000-20000", 1, 0, "agent", now,
+		`INSERT INTO node(name, secret, server_ip, port, status, forward_mode, created_time)
+		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		"local-1", "s2", "10.0.0.2", "10000-20000", 1, "agent", now,
 	).Error; err != nil {
 		t.Fatalf("insert local node: %v", err)
 	}

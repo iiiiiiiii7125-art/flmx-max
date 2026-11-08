@@ -193,7 +193,6 @@ cat ~/.agents/skills/flmx-api/SKILL.md >> ~/.claude/CLAUDE.md
 | 隧道 | 增删改查、用户分配 |
 | 转发 | 增删改查、暂停/恢复、诊断 |
 | 限速 | 增删改查 |
-| 联邦 | 节点共享、远程节点 |
 | 内核 | 能力矩阵、安装、版本、启停、日志 |
 | 入站 | 增删改查、导入、分享、分流、中转线路 |
 | 订阅 | 增删改查、订阅源、按订阅分配、公开拉取、流量统计（`/api/v1/subscription/traffic`、`/api/v1/user/subscription/traffic`） |

@@ -20,7 +20,7 @@ const BASE = "/flmx-max/demo/";
 // admin walk page. The user walk covers it instead: the demo user book
 // is a monitoring-authorized one (monitor/access allowed:true), which
 // is the only role that still renders MonitorOverview at /monitor.
-const ADMIN_PAGES = ["dashboard", "node", "inbound", "relay", "forward", "tunnel", "subscription", "limit", "user", "panel-sharing", "config", "profile", "change-password"];
+const ADMIN_PAGES = ["dashboard", "node", "inbound", "relay", "forward", "tunnel", "subscription", "limit", "user", "config", "profile", "change-password"];
 const USER_PAGES = ["dashboard", "my-subscription", "forward", "monitor", "profile"];
 // Settle, condition-based (R9 BINFRA; K settle 条件化评估采纳,
 // R9-X-verdicts §7 / R9-K-report 观察项, same root as R8-J O-1): a
@@ -200,7 +200,6 @@ const INTERACTIONS = {
   // panelVersion/versionWarning disclosure (data:null, generic
   // success). Fill the dialog, import, and settle on the dialog
   // closing — it only closes on a code-0 answer.
-  "admin panel-sharing": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const setVal = (el, v) => { const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; setter.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }; const dlg = () => [...document.querySelectorAll('[role="dialog"]')].find((d) => { const h = d.querySelector('[data-slot="modal-header"]') ?? d.querySelector("h2"); return h && h.textContent.trim() === "导入远程节点"; }) ?? null; if (!w.__pf0) { const t = [...scope.querySelectorAll('[role="tab"]')].find((x) => x.textContent.includes("远程节点")); if (!t) return false; w.__pf0 = true; t.focus(); for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window })); return false; } if (!w.__pf1) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "导入远程节点"); if (!b) return false; w.__pf1 = true; b.click(); return false; } if (!w.__pf2) { const d = dlg(); if (!d) return false; const url = d.querySelector('input[placeholder^="http://panel"]'); const tok = d.querySelector('input[placeholder^="Bearer"]'); if (!url || !tok) return false; if (!url.value) setVal(url, "http://panel.example.com:8088"); if (!tok.value) setVal(tok, "demo-token"); const b = [...d.querySelectorAll("button")].find((x) => x.textContent.trim() === "导入"); if (!b || b.disabled) return false; w.__pf2 = true; b.click(); return false; } return !dlg(); })()`,
   // R4-C5-02: the external-node import dialog's receipt (created
   // ids + per-line errors) used to be unreachable (data:null →
   // "已导入 0 个节点"). Paste one share link, submit, and settle
@@ -256,7 +255,6 @@ const STEP_BUDGET_MS = {
   "admin tunnel": 45000,
   "admin node": 45000,
   "admin inbound": 45000,
-  "admin panel-sharing": 45000,
   "admin subscription": 45000,
 };
 

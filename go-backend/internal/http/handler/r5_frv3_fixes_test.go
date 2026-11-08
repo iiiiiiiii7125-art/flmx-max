@@ -265,7 +265,7 @@ func TestRV3NonNftStreamDiagnosisTargetLegTCPOnly(t *testing.T) {
 	h := fixture.handler
 	r := h.repo
 	now := time.Now().UnixMilli()
-	gostNodeID, err := r.CreateNode("gost-node", "secret", "198.51.100.12", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "")
+	gostNodeID, err := r.CreateNode("gost-node", "secret", "198.51.100.12", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, nil, "")
 	if err != nil {
 		t.Fatalf("create gost node: %v", err)
 	}

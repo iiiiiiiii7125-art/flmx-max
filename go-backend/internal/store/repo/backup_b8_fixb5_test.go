@@ -507,63 +507,6 @@ func TestImportSubscriptionTemplateMirrorGates(t *testing.T) {
 	}
 }
 
-// B8-10：PeerShare AllowedIPs 恢复面与写面同律规范化——CIDR 取
-// 网络形、IPv4-mapped/host:port 归一、重复去重、非法条目剔除 +
-// 计数回执（不回显原值）；已规范的对照逐字落库、无回执。
-func TestImportPeerShareAllowedIPsNormalization(t *testing.T) {
-	now := time.Now().UnixMilli()
-	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = dst.Close() }()
-
-	backup := &model.BackupData{
-		Version: "1.0",
-		Nodes: []model.NodeBackup{
-			{ID: 41, Name: "n41", Secret: "s", ServerIP: "192.0.2.41", Status: 1},
-		},
-		PeerShares: []model.PeerShareBackup{
-			{ID: 1, Name: "messy", NodeID: 41, Token: "tok-messy", IsActive: 1, CreatedTime: now,
-				AllowedIPs: " 10.0.0.1 , 10.0.0.9/8, ::ffff:192.0.2.1, 10.0.0.1, bogus-entry, 192.0.2.5:8080, 2001:db8::1/32"},
-			{ID: 2, Name: "clean", NodeID: 41, Token: "tok-clean", IsActive: 1, CreatedTime: now,
-				AllowedIPs: "10.0.0.1,10.0.0.0/8"},
-		},
-	}
-	result, err := dst.Import(backup, []string{"nodes"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.PeerSharesImported != 2 {
-		t.Fatalf("PeerSharesImported = %d, want 2, warnings=%v", result.PeerSharesImported, result.ImportWarnings)
-	}
-	readShare := func(id int64) model.PeerShare {
-		t.Helper()
-		var s model.PeerShare
-		if err := dst.db.Where("id = ?", id).First(&s).Error; err != nil {
-			t.Fatalf("read share #%d: %v", id, err)
-		}
-		return s
-	}
-	want := "10.0.0.1,10.0.0.0/8,192.0.2.1,192.0.2.5,2001:db8::/32"
-	if s := readShare(1); s.AllowedIPs != want {
-		t.Fatalf("share 1 allowedIPs = %q, want %q (write-face normalization)", s.AllowedIPs, want)
-	}
-	if s := readShare(2); s.AllowedIPs != "10.0.0.1,10.0.0.0/8" {
-		t.Fatalf("share 2 allowedIPs = %q, want verbatim", s.AllowedIPs)
-	}
-	warnText := strings.Join(result.ImportWarnings, "\n")
-	if !strings.Contains(warnText, "messy") || !strings.Contains(warnText, "1 条非法条目") {
-		t.Fatalf("receipt must name the share and the dropped count, warnings=%v", result.ImportWarnings)
-	}
-	if strings.Contains(warnText, "bogus-entry") {
-		t.Fatalf("receipt must not echo dropped values, warnings=%v", result.ImportWarnings)
-	}
-	if strings.Contains(warnText, "clean") && strings.Contains(warnText, "IP 白名单") {
-		t.Fatalf("already-normalized share must not raise an IP receipt, warnings=%v", result.ImportWarnings)
-	}
-}
-
 // B8-11：节点 RenewalCycle/ForwardMode 恢复面归一镜像写面——
 // 集外值归一 + 点名原值，大小写/空白形态归一，合法值逐字落库。
 func TestImportNodeRenewalForwardModeNormalization(t *testing.T) {

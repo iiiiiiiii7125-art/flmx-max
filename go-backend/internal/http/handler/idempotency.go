@@ -28,7 +28,6 @@ import (
 // inboundSave "inbound:create" （仅新建分支）
 // monitorServiceCreate "monitor-service:create" （monitoring.go）
 // inboundRelayCreate "inbound-relay:create" （kernel_relay.go）
-// federationShareCreate "federation-share:create"（federation.go）
 // remoteSourceSave "remote-source:create" （仅 ID==0 新建分支）
 // subscriptionTemplateSave "subscription-template:create" （仅 ID==0 新建分支，R10-06 补接）
 // tunnelCreate "tunnel:create" （mutations.go）

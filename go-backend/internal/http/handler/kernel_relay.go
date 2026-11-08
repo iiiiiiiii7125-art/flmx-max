@@ -563,12 +563,9 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 		if nodeErr != nil {
 			// L4-02：与 forwardCreate/Update 的 validateForwardEntryNodes
 			// 同口径 fail-closed——节点记录读失败不得 continue 跳过该
-			// 节点的端口规格/远程范围校验后仍落库（占用面虽有
-			// CreateForwardTx 锁内四源复检兜底，规格面无兜底）。
+			// 节点的端口规格校验后仍落库（占用面虽有
+			// CreateForwardTx 锁内三源复检兜底，规格面无兜底）。
 			return 0, nodeErr
-		}
-		if err := validateRemoteNodePort(node, port); err != nil {
-			return 0, err
 		}
 		if err := validateLocalNodePort(node, port); err != nil {
 			return 0, err

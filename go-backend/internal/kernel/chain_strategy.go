@@ -45,20 +45,3 @@ func ChainStrategyLegalValues(chainType int) string {
 	}
 	return "fifo、round、rand、best"
 }
-
-// PeerRuntimeStrategyLegal 是联邦运行面策略
-// （peer_share_runtime.strategy）写面合法集的单一定义点
-// （R1-03-L1）：合法集 {fifo, round, rand, hash, best}——前四者是
-// agent selector 的真实解析集（hash 在链路域前端不提供、但消费方
-// 可能以存量链路行策略经联邦面透传，且 agent 对 hash 有真实实现、
-// 落库即生效、无声明≠生效分叉）；best 为面板伪策略，下发前经
-// runtimeTunnelStrategy 转 fifo。集外值（banana、大小写异形、
-// 别名）一律拒：agent 对未知值 default 轮询，正是本门要关的静默
-// 分叉。空串同为「未提供」形态、由写面先解析缺省（round）。
-func PeerRuntimeStrategyLegal(strategy string) bool {
-	switch strings.TrimSpace(strategy) {
-	case "fifo", "round", "rand", "hash", "best":
-		return true
-	}
-	return false
-}

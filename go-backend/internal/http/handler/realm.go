@@ -51,9 +51,6 @@ func (h *Handler) validateRealmTunnelTx(tx *gorm.DB, typeVal int, entryNodeIDs [
 		if node == nil {
 			return errors.New("节点不存在")
 		}
-		if node.IsRemote == 1 {
-			return fmt.Errorf("节点 %s 是远程节点，不能使用 realm 引擎", node.Name)
-		}
 		if isNftablesForwardMode(node.ForwardMode) {
 			return fmt.Errorf("节点 %s 是 nftables 模式，不能使用 realm 引擎", node.Name)
 		}

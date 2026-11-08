@@ -42,7 +42,7 @@ func TestNodeUpdateProtocolChangeRequiresOnline(t *testing.T) {
 	srv := httptest.NewServer(h.WebSocketHandler())
 	defer srv.Close()
 
-	offlineID := kr1SeedNode(t, r, "r4-upd-offline", "198.51.100.31", 0, 0, "agent")
+	offlineID := kr1SeedNode(t, r, "r4-upd-offline", "198.51.100.31", 0, "agent")
 
 	// 离线 + 协议变更 + 名称变更同单：整单拒绝，名称也不得落库。
 	env := kr1CallNodeUpdate(t, h, map[string]interface{}{
@@ -83,7 +83,7 @@ func TestNodeUpdateProtocolChangeRequiresOnline(t *testing.T) {
 
 	// DB 标在线但无实时会话（僵尸在线）：下发必失败，整单拒绝、
 	// 不落库假成功。
-	zombieID := kr1SeedNode(t, r, "r4-upd-zombie", "198.51.100.32", 1, 0, "agent")
+	zombieID := kr1SeedNode(t, r, "r4-upd-zombie", "198.51.100.32", 1, "agent")
 	env = kr1CallNodeUpdate(t, h, map[string]interface{}{
 		"id": zombieID, "tls": 1,
 	})
@@ -96,7 +96,7 @@ func TestNodeUpdateProtocolChangeRequiresOnline(t *testing.T) {
 	}
 
 	// 真在线：SetProtocol 下发成功后落库。
-	liveID := kr1SeedNode(t, r, "r4-upd-live", "198.51.100.33", 0, 0, "agent")
+	liveID := kr1SeedNode(t, r, "r4-upd-live", "198.51.100.33", 0, "agent")
 	rec := &kr1CommandRecorder{}
 	stopLive := startKR1MockNode(t, srv.URL, "r4-upd-live-secret", rec)
 	defer stopLive()

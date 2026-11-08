@@ -40,10 +40,6 @@ func TestNodeSSHHostKeyFingerprintPinLifecycle(t *testing.T) {
 		"[::]",
 		"[::]",
 		1,
-		0,
-		nil,
-		nil,
-		nil,
 		nil,
 		"nftables",
 	); err != nil {
@@ -152,10 +148,6 @@ func TestListNodesExposesPinnedHostKeyFingerprint(t *testing.T) {
 		"[::]",
 		"[::]",
 		1,
-		0,
-		nil,
-		nil,
-		nil,
 		nil,
 		"nftables",
 	); err != nil {

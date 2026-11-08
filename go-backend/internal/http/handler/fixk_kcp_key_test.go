@@ -99,47 +99,6 @@ func TestFixKKCPKeyDerivationFailureRejects(t *testing.T) {
 	if _, err := h.tunnelKCPKey(42, "tls", "kcp"); err == nil {
 		t.Fatal("KCP tunnel without panel secret must fail, not fall back to the default key")
 	}
-	if _, err := federationKCPKey("", 7, "kcp"); err == nil {
-		t.Fatal("federation KCP without secret must fail")
-	}
-	if _, err := federationKCPKey(fixkTestSecret, 0, "kcp"); err == nil {
-		t.Fatal("federation KCP without share scope must fail")
-	}
-	// 非 KCP 联邦腿不派生、不报错。
-	if k, err := federationKCPKey("", 0, "tls"); err != nil || k != "" {
-		t.Fatalf("non-kcp federation leg must not need a key: %q err=%v", k, err)
-	}
-}
-
-func TestFixKFederationKCPSameSource(t *testing.T) {
-	// 消费方中继链 builder 与提供方角色服务 builder 用同一
-	// (secret, shareID) 派生——两面 metadata 必须逐字同源。
-	chain, err := buildFederationMiddleChainConfig("fed_chain_1", 7, "tls", "round",
-		[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: "kcp"}}, "", fixkTestSecret, 7, false)
-	if err != nil {
-		t.Fatalf("build federation middle chain: %v", err)
-	}
-	hops := chain["hops"].([]map[string]interface{})
-	nodes := hops[0]["nodes"].([]map[string]interface{})
-	dialerMD := fixkKCPMetadata(t, nodes[0]["dialer"].(map[string]interface{}))
-
-	svcKey, err := federationKCPKey(fixkTestSecret, 7, "kcp")
-	if err != nil {
-		t.Fatalf("federationKCPKey: %v", err)
-	}
-	svc := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "kcp", "exit", "", 1, "", svcKey, false)
-	listenerMD := fixkKCPMetadata(t, svc["listener"].(map[string]interface{}))
-	if !reflect.DeepEqual(dialerMD, listenerMD) {
-		t.Fatalf("federation dialer/listener metadata drift:\n dialer=%v\n listener=%v", dialerMD, listenerMD)
-	}
-	if dialerMD["kcp.key"] != KCPKeyFor(fixkTestSecret, 7) {
-		t.Fatalf("federation key must be the share-scoped derivation, got %v", dialerMD["kcp.key"])
-	}
-	// 中继链含 KCP 目标而密钥作用域缺失 → 整条链拒绝生成。
-	if _, err := buildFederationMiddleChainConfig("fed_chain_1", 7, "tls", "round",
-		[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: "kcp"}}, "", "", 0, false); err == nil {
-		t.Fatal("KCP federation chain without key scope must be rejected")
-	}
 }
 
 func TestFixKSegmentProtocolFallbackAligned(t *testing.T) {

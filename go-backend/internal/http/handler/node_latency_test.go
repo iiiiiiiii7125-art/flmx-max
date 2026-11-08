@@ -48,9 +48,9 @@ func setupLatencyHandler(t *testing.T, targets string) (*Handler, *repo.Reposito
 	return New(r, "unit-test-secret"), r
 }
 
-func mustCreateLatencyNode(t *testing.T, r *repo.Repository, name string, status, isRemote int) int64 {
+func mustCreateLatencyNode(t *testing.T, r *repo.Repository, name string, status int) int64 {
 	t.Helper()
-	n := model.Node{Name: name, Secret: name, ServerIP: "198.51.100.1", Status: status, IsRemote: isRemote}
+	n := model.Node{Name: name, Secret: name, ServerIP: "198.51.100.1", Status: status}
 	if err := r.DB().Create(&n).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -78,9 +78,8 @@ func TestProbeNodeLatencyMeasuresOnlineLocalNodes(t *testing.T) {
 		{"name":"联通","host":"cu.example.com","port":80,"enabled":true},
 		{"name":"停用","host":"off.example.com","port":80,"enabled":false},
 		{"name":"移动","host":"cm.example.com","port":80,"enabled":true}]`)
-	online := mustCreateLatencyNode(t, r, "online", 1, 0)
-	offline := mustCreateLatencyNode(t, r, "offline", 0, 0)
-	remote := mustCreateLatencyNode(t, r, "remote", 1, 1)
+	online := mustCreateLatencyNode(t, r, "online", 1)
+	offline := mustCreateLatencyNode(t, r, "offline", 0)
 
 	calls := stubLatencyPing(t, func(_ int64, host string) (map[string]interface{}, error) {
 		switch host {
@@ -102,9 +101,6 @@ func TestProbeNodeLatencyMeasuresOnlineLocalNodes(t *testing.T) {
 	}
 	if _, ok := results[offline]; ok {
 		t.Fatal("offline node must not be measured")
-	}
-	if _, ok := results[remote]; ok {
-		t.Fatal("remote node must not be measured")
 	}
 	p := results[online]
 	if !p.OK || p.LatencyMs != 38 || len(p.Points) != 3 {

@@ -141,10 +141,6 @@ var routeClassification = []routeEntry{
 	pub("/api/v1/user/login"),
 	pub("/api/v1/user/passkey/status"), pub("/api/v1/user/passkey/login/begin"), pub("/api/v1/user/passkey/login/finish"),
 	pub("/api/v1/public/config/get"),
-	pub("/api/v1/federation/connect"), pub("/api/v1/federation/tunnel/create"),
-	pub("/api/v1/federation/runtime/apply-role"), pub("/api/v1/federation/runtime/command"),
-	pub("/api/v1/federation/runtime/diagnose"), pub("/api/v1/federation/runtime/release-role"),
-	pub("/api/v1/federation/runtime/reserve-port"),
 	// ---- 公开面：可选鉴权（无 token 可达，策略门在 handler 内）----
 	pubOpt("/api/v1/config/get"),
 	// ---- 公开面：非 /api/ 面（JWT 不覆盖）----
@@ -163,10 +159,6 @@ var routeClassification = []routeEntry{
 	adm("/api/v1/backup/import"), adm("/api/v1/backup/import-auto-backup"),
 	adm("/api/v1/backup/import-auto-backup/status"), adm("/api/v1/backup/restore"),
 	adm("/api/v1/config/update"), adm("/api/v1/config/update-single"),
-	adm("/api/v1/federation/node/import"),
-	adm("/api/v1/federation/share/create"), adm("/api/v1/federation/share/delete"),
-	adm("/api/v1/federation/share/list"), adm("/api/v1/federation/share/remote-usage/list"),
-	adm("/api/v1/federation/share/reset-flow"), adm("/api/v1/federation/share/update"),
 	adm("/api/v1/inbound/batch-delete"), adm("/api/v1/inbound/batch-toggle"),
 	adm("/api/v1/inbound/create"), adm("/api/v1/inbound/delete"),
 	adm("/api/v1/inbound/external/update"), adm("/api/v1/inbound/import"),

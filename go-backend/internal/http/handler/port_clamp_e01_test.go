@@ -123,8 +123,8 @@ func TestPickTunnelPortNeverExceeds65535(t *testing.T) {
 		h := &Handler{repo: r}
 		now := time.Now().UnixMilli()
 		if err := r.DB().Exec(`
-			INSERT INTO node(name, secret, server_ip, port, created_time, status, tcp_listen_addr, udp_listen_addr, is_remote)
-			VALUES(?, 'secret', '10.0.0.1', ?, ?, 1, '[::]', '[::]', 0)
+			INSERT INTO node(name, secret, server_ip, port, created_time, status, tcp_listen_addr, udp_listen_addr)
+			VALUES(?, 'secret', '10.0.0.1', ?, ?, 1, '[::]', '[::]')
 		`, name, portRange, now).Error; err != nil {
 			t.Fatalf("insert node: %v", err)
 		}

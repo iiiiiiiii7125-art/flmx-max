@@ -92,7 +92,7 @@ func TestLatencyRoundsRecordAndAlert(t *testing.T) {
 	if err := r.UpsertConfig(latencyTargetsConfigKey, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`, time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	node := mustCreateLatencyNode(t, r, "香港", 1, 0)
+	node := mustCreateLatencyNode(t, r, "香港", 1)
 	loss := 50.0
 	stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) {
 		return map[string]interface{}{"success": true, "averageTime": 30.0, "packetLoss": loss}, nil

@@ -630,9 +630,6 @@ func (h *Handler) planSingleTunnelDeleteForwardMigration(forward *forwardRecord,
 			return tunnelForwardMigrationPlan{}, nodeErr
 		}
 		nodePort := forwardEntryPort(oldPortByNode, nodeID, targetPort)
-		if err := validateRemoteNodePort(node, nodePort); err != nil {
-			return tunnelForwardMigrationPlan{}, err
-		}
 		if err := validateLocalNodePort(node, nodePort); err != nil {
 			return tunnelForwardMigrationPlan{}, err
 		}
@@ -993,9 +990,6 @@ func (h *Handler) deleteTunnelAndCleanup(tunnelID int64) error {
 		return err
 	}
 	h.cleanupTunnelRuntime(tunnelID)
-	if err := h.cleanupFederationRuntime(tunnelID); err != nil {
-		log.Printf("delete tunnel %d: federation runtime cleanup failed: %v", tunnelID, err)
-	}
 	if err := h.deleteTunnelByID(tunnelID); err != nil {
 		// R19-X-01：清理已返回 nil，名下转发已删（deleted 清单为准；
 		// nft 离线待清理形的残留转发库行仍保留，由

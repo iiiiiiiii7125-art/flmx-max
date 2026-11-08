@@ -115,9 +115,6 @@ func TestR8TimeoutBudgetRegistryPinsGoConstants(t *testing.T) {
 		// nodeTune 后端界（T019 的 be）：RR4-C6-01 同面未钉符号，
 		// 与 nodeTuneProbeTimeout 同文件同批补钉（登记 30s）。
 		"nodeTuneTimeout": nodeTuneTimeout,
-		// 联邦余量与运行时面
-		"federationClientMargin":         federationClientMargin,
-		"federationRuntimeClientTimeout": federationRuntimeClientTimeout,
 	}
 	for sym, actual := range pins {
 		want, ok := r8RegistrySeconds(rows, sym)
@@ -202,9 +199,9 @@ func TestR7SystemUpgradeAnchorTimeoutPinnedAcrossCopies(t *testing.T) {
 		want int
 	}
 	shellCopies := map[string]shellCopySpec{
-		"panel_install.sh corroborate_download_anchor": {filepath.Join("..", "..", "..", "..", "panel_install.sh"), 1},
+		"panel_install.sh corroborate_download_anchor":                {filepath.Join("..", "..", "..", "..", "panel_install.sh"), 1},
 		"install.sh corroborate_latest_tag+corroborate_binary_anchor": {filepath.Join("..", "..", "..", "..", "install.sh"), 2},
-		"mutations.go generated install command": {"mutations.go", 1},
+		"mutations.go generated install command":                      {"mutations.go", 1},
 	}
 	for name, spec := range shellCopies {
 		raw, err := os.ReadFile(spec.path)
@@ -235,13 +232,6 @@ func TestR8TimeoutBudgetComposites(t *testing.T) {
 	// 对账 go_const_s upgradeTimeout == 登记 300。
 	if upgradeTimeout != 300*time.Second {
 		t.Errorf("upgradeTimeout = %v, want 300s (T005/T031/A002 component)", upgradeTimeout)
-	}
-	// 联邦 client = 对端命令预算 + federationClientMargin（构造性余量）。
-	if got := federationClientTimeout(120 * time.Second); got != 130*time.Second {
-		t.Errorf("federationClientTimeout(120s) = %v, want 130s (budget + margin)", got)
-	}
-	if got := federationClientTimeout(diagnosisRequestTimeout); got != diagnosisRequestTimeout+federationClientMargin {
-		t.Errorf("federationClientTimeout(diagnosisRequestTimeout) = %v, want budget+margin", got)
 	}
 	// P002：guard join 界 = addServiceGuardJoinTimeout + 一次命令往返。
 	var p002 string

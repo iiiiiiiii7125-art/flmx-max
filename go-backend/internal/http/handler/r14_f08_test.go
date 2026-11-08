@@ -22,7 +22,7 @@ import (
 func seedR14F08Node(t *testing.T, r *repo.Repository) int64 {
 	t.Helper()
 	now := time.Now().UnixMilli()
-	id, err := r.CreateNode("r14f08-node", "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "xray")
+	id, err := r.CreateNode("r14f08-node", "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, nil, "xray")
 	if err != nil {
 		t.Fatalf("create node: %v", err)
 	}

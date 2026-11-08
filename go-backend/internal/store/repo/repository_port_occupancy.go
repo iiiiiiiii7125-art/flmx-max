@@ -10,14 +10,8 @@ import (
 
 // P01-001（Round 2 K9）：节点端口占用知识的唯一实现。
 //
-// 节点端口空间由四张表共享：forward_port（转发入口口）、node_inbound
-// （内核入站口）、chain_tunnel（隧道链路段/出口段口，port>0 才算）、
-// peer_share_runtime（联邦分享有效预留/运行时口，status=1 才算）。
-// X-P2-13 当年只对齐了转发面与联邦面，隧道选口（pickNodePortTx）、
-// 隧道显式口谓词（NodePortOccupiedForTunnelTx）、入站 occupant
-// （NodePortRangeOccupant）、备份预检四面仍各写一份三源集合，漏掉
-// peer_share_runtime：本地隧道/入站可与分享运行时同节点同口双分配，
-// 后下发一方在节点上绑口失败，且按三表排查不到占用方。
+// 节点端口空间由三张表共享：forward_port（转发入口口）、node_inbound
+// （内核入站口）、chain_tunnel（隧道链路段/出口段口，port>0 才算）。
 //
 // 现在全部选口/判重点位一律走本文件的入口：
 //   - 点判重：NodePortOccupantTx / NodePortOccupiedTx
@@ -33,13 +27,10 @@ const (
 	PortSourceForward = "forward"
 	PortSourceInbound = "inbound"
 	PortSourceChain   = "chain_tunnel"
-	PortSourcePeer    = "peer_share_runtime"
 )
 
 // PortExclusions 描述判重时要排除的「自己人」行：转发按 forward_id、
 // 链路按 tunnel_id、入站按入站 id 排除（可多值，备份预检按整单排除）。
-// 联邦预留无排除面：备份不含运行时预留、本地任何分配都不得占用
-// 有效预留口。
 type PortExclusions struct {
 	ForwardIDs []int64
 	TunnelIDs  []int64
@@ -151,7 +142,6 @@ func (r *Repository) NodePortOccupantTx(tx *gorm.DB, nodeID int64, port int, exc
 	if nodeID <= 0 || port <= 0 {
 		return "", nil
 	}
-	var count int64
 
 	occupied, err := existsOccupantNotExcludedTx(func() *gorm.DB {
 		return tx.Model(&model.ForwardPort{}).Where("node_id = ? AND port = ?", nodeID, port)
@@ -183,14 +173,6 @@ func (r *Repository) NodePortOccupantTx(tx *gorm.DB, nodeID int64, port int, exc
 		return PortSourceChain, nil
 	}
 
-	if err := tx.Model(&model.PeerShareRuntime{}).
-		Where("node_id = ? AND port = ? AND port > 0 AND status = 1", nodeID, port).
-		Count(&count).Error; err != nil {
-		return "", err
-	}
-	if count > 0 {
-		return PortSourcePeer, nil
-	}
 	return "", nil
 }
 
@@ -203,9 +185,27 @@ func (r *Repository) NodePortOccupiedTx(tx *gorm.DB, nodeID int64, port int, exc
 	return source != "", nil
 }
 
-// UsedPortsOnNodeTx 返回节点上全部已占用端口的集合（四源，含排除）。
-// 全部自动选口（隧道 pick、转发 pick、联邦 pick）都以本集合为判重
+// UsedPortsOnNodeTx 返回节点上全部已占用端口的集合（三源，含排除）。
+// 全部自动选口（隧道 pick、转发 pick）都以本集合为判重
 // 依据，不再各自拼装。
+// ListUsedPortsOnNode 返回节点上已被三源占用的端口清单
+// （UsedPortsOnNodeTx 的列表形）。原寄居于已删的联邦 repo 文件，
+// 因属统一占用谓词的消费面而随 DEV-RM-SHARE 迁回本文件，实现未动。
+func (r *Repository) ListUsedPortsOnNode(nodeID int64) ([]int, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	used, err := r.UsedPortsOnNodeTx(r.db, nodeID, PortExclusions{})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]int, 0, len(used))
+	for p := range used {
+		result = append(result, p)
+	}
+	return result, nil
+}
+
 func (r *Repository) UsedPortsOnNodeTx(tx *gorm.DB, nodeID int64, excl PortExclusions) (map[int]struct{}, error) {
 	if tx == nil {
 		return nil, errors.New("database unavailable")
@@ -241,14 +241,6 @@ func (r *Repository) UsedPortsOnNodeTx(tx *gorm.DB, nodeID int64, excl PortExclu
 	}
 	add(chainPorts)
 
-	var peerPorts []int
-	if err := tx.Model(&model.PeerShareRuntime{}).
-		Where("node_id = ? AND port > 0 AND status = 1", nodeID).
-		Pluck("port", &peerPorts).Error; err != nil {
-		return nil, err
-	}
-	add(peerPorts)
-
 	return used, nil
 }
 
@@ -271,13 +263,12 @@ type PortRangeOccupancy struct {
 	InboundCompanion bool
 }
 
-// NodePortRangeOccupancyTx 返回区间内各来源的占用情况（四源）。
+// NodePortRangeOccupancyTx 返回区间内各来源的占用情况（三源）。
 func (r *Repository) NodePortRangeOccupancyTx(tx *gorm.DB, nodeID int64, lo, hi int, excl PortExclusions) (*PortRangeOccupancy, error) {
 	if tx == nil {
 		return nil, errors.New("database unavailable")
 	}
 	occ := &PortRangeOccupancy{Sources: map[string]bool{}}
-	var count int64
 
 	inboundOccupied, err := existsOccupantNotExcludedTx(func() *gorm.DB {
 		return tx.Model(&model.NodeInbound{}).Where("node_id = ? AND port BETWEEN ? AND ?", nodeID, lo, hi)
@@ -317,20 +308,12 @@ func (r *Repository) NodePortRangeOccupancyTx(tx *gorm.DB, nodeID int64, lo, hi 
 		occ.Sources[PortSourceChain] = true
 	}
 
-	if err := tx.Model(&model.PeerShareRuntime{}).
-		Where("node_id = ? AND port BETWEEN ? AND ? AND port > 0 AND status = 1", nodeID, lo, hi).
-		Count(&count).Error; err != nil {
-		return nil, err
-	}
-	if count > 0 {
-		occ.Sources[PortSourcePeer] = true
-	}
 	return occ, nil
 }
 
 // TunnelChainPortReusableTx 判断隧道现有非入口段口在更新时能否沿用
 // （P01-002）：口仍落在节点端口规格内（与 pickNodePortTx 的候选集
-// 同口径），且统一四源判重（排除本隧道自身链路行）下未被他人占用。
+// 同口径），且统一三源判重（排除本隧道自身链路行）下未被他人占用。
 // 节点不存在按不可沿用处理（后续流程会以「节点不存在」报错）。
 func (r *Repository) TunnelChainPortReusableTx(tx *gorm.DB, nodeID int64, port int, tunnelID int64) (bool, error) {
 	if tx == nil {

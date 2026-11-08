@@ -81,7 +81,7 @@ export function switchDemoRole(role: DemoRole) {
  * R4-C5-01/02/03 同族：node/install、subscription/template/refresh、
  * backup/import、backup/gist/restore、inbound/import、backup/export、
  * subscription/source/refresh、monitor/services/run、
- * federation/node/import 与 backup/gist/save（echo 形状不符）的回执
+ * backup/gist/save（echo 形状不符）的回执
  * 均由 receiptAnswer 先于词表按真实形状合成（见该函数头注）。
  * RR4-C5-02/I03 续：user/login（登录表单实读 data，词表 data:null 与
  * 之相撞）与 backup/import-auto-backup 两端点（导入/恢复后的有状态
@@ -393,8 +393,6 @@ const listOf = (book: Record<string, Entry[]>, k: string) =>
  *    no agents, but "ran and failed" would be a false claim — the
  *    recorded definitions/results make a success row the honest
  *    sample);
- *  - federation/node/import: a fresh import whose peer version is
- *    the recorded book's latest version, with no version warning;
  *  - backup/gist/save: a GistBackupStatus built from the recorded
  *    status plus the submitted token/password/interval semantics
  *    (the save echo previously returned the raw request body, which
@@ -471,7 +469,6 @@ const IMPORT_COUNT_KEYS = [
   "userSubscriptionsImported",
   "serviceMonitorsImported",
   "nodeSSHConfigsImported",
-  "peerSharesImported",
 ];
 
 function importReceipt(
@@ -561,7 +558,6 @@ function backupImportAnswer(
   if (on("nodes")) {
     counts.nodesImported = len(req.nodes);
     counts.nodeSSHConfigsImported = len(req.nodeSSHConfigs);
-    counts.peerSharesImported = len(req.peerShares);
   }
   if (on("tunnels")) counts.tunnelsImported = len(req.tunnels);
   if (on("forwards")) counts.forwardsImported = len(req.forwards);
@@ -778,19 +774,6 @@ function serviceRunAnswer(
     },
     ts: Date.now(),
   };
-}
-
-function federationImportAnswer(bare: string, book: Record<string, Entry[]>) {
-  if (bare !== "federation/node/import") return null;
-  const version = book["system/version"]?.[0]?.res.data as
-    | { latestVersion?: string; currentVersion?: string }
-    | undefined;
-  const panelVersion = version?.latestVersion || version?.currentVersion || "";
-  const data: Record<string, unknown> = { refreshed: false, versionWarning: "" };
-
-  if (panelVersion) data.panelVersion = panelVersion;
-
-  return { code: 0, msg: "操作成功", data, ts: Date.now() };
 }
 
 function gistSaveAnswer(
@@ -1027,7 +1010,6 @@ function receiptAnswer(
     sourceRefreshAnswer(bare, body, book) ??
     serviceRunAnswer(bare, body, book) ??
     batchAnswer(bare, body) ??
-    federationImportAnswer(bare, book) ??
     gistSaveAnswer(bare, body, book) ??
     importAutoBackupStatusAnswer(bare) ??
     importAutoBackupDownloadAnswer(bare) ??

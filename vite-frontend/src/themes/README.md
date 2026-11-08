@@ -304,7 +304,6 @@ export default MyAdminLayout;
 | `ProfilePage` | `/profile` |
 | `LimitPage` | `/limit` |
 | `ConfigPage` | `/config` |
-| `PanelSharingPage` | `/panel-sharing` |
 | `SettingsPage` | `/settings` |
 
 ### 生命周期钩子

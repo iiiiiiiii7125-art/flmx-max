@@ -8,14 +8,8 @@ import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Progress } from "@/shadcn-bridge/heroui/progress";
 import { LatencyCell, probePoints } from "@/components/latency-cell";
 import { ListRow } from "@/components/page-kit";
+import { getConnectionStatusMeta } from "@/pages/node/display";
 import {
-  getConnectionStatusMeta,
-  getRemoteSyncErrorMessage,
-} from "@/pages/node/display";
-import {
-  formatChainType,
-  formatFlow,
-  formatSpeed,
   formatUptime,
   getNodeExpiryMeta,
   SortableItem,
@@ -25,7 +19,7 @@ import {
   formatNodeRenewalTime,
   getNodeRenewalCycleLabel,
 } from "@/pages/node/renewal";
-import type { Node, RemoteUsageNode } from "@/pages/node/types";
+import type { Node } from "@/pages/node/types";
 
 export interface NodeUpgradeProgressEntry {
   stage: string;
@@ -77,7 +71,6 @@ interface NodeRowCommonProps {
 }
 
 export interface NodeCardRowProps extends NodeRowCommonProps {
-  remoteUsage?: RemoteUsageNode | null;
   infoPlacement: "left" | "bottom";
   showMonitor: boolean;
 }
@@ -116,7 +109,7 @@ function renderLatencySlot({
   probing: boolean;
   actions: NodeRowActions;
 }) {
-  if (node.isRemote === 1 || node.connectionStatus !== "online") {
+  if (node.connectionStatus !== "online") {
     return null;
   }
 
@@ -175,7 +168,6 @@ const NodeCardContent = memo(function NodeCardContent({
   actions,
   selected,
   selectMode,
-  remoteUsage,
   upgradeProgressEntry,
   monthIn,
   monthOut,
@@ -186,7 +178,6 @@ const NodeCardContent = memo(function NodeCardContent({
   showMonitor,
   listeners,
 }: RowContentProps<NodeCardRowProps>) {
-  const isRemoteNode = node.isRemote === 1;
   const expiryMeta = getNodeExpiryMeta(
     node.expiryTime,
     node.renewalCycle,
@@ -363,11 +354,6 @@ const NodeCardContent = memo(function NodeCardContent({
       </CardHeader>
 
       <CardBody className="pt-0 pb-3 md:pt-0 md:pb-3 flex-1 flex flex-col">
-        {isRemoteNode && node.syncError && (
-          <div className="mb-3 px-2 py-1.5 rounded-md bg-warning-500/10 text-warning-700 text-xs font-semibold">
-            {getRemoteSyncErrorMessage(node.syncError)}
-          </div>
-        )}
         {/* 基础信息 */}
         <div className="space-y-2 mb-4">
           {node.expiryTime &&
@@ -408,8 +394,7 @@ const NodeCardContent = memo(function NodeCardContent({
               )}
             </div>
           </div>
-          {!isRemoteNode && (
-            <>
+          <>
               <div className="flex justify-between text-sm">
                 <span className="text-foreground">
                   版本
@@ -456,158 +441,8 @@ const NodeCardContent = memo(function NodeCardContent({
                   </span>
                 </div>
               )}
-            </>
-          )}
+          </>
         </div>
-
-        {isRemoteNode && (
-          <div className="space-y-3 mb-4">
-            {remoteUsage ? (
-              <>
-                <div className="text-xs font-semibold rounded-md border border-divider glass-inset p-2.5 space-y-2">
-                  <div className="flex justify-between gap-2">
-                    <span className="text-foreground">
-                      远程地址
-                    </span>
-                    <span
-                      className="font-mono text-right truncate"
-                      title={
-                        remoteUsage.remoteUrl ||
-                        node.remoteUrl ||
-                        "-"
-                      }
-                    >
-                      {remoteUsage.remoteUrl ||
-                        node.remoteUrl ||
-                        "-"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <span className="text-foreground">
-                      共享ID
-                    </span>
-                    <span className="font-mono">
-                      #{remoteUsage.shareId}
-                    </span>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <span className="text-foreground">
-                      流量
-                    </span>
-                    <span className="font-mono">
-                      {formatFlow(remoteUsage.currentFlow)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between gap-2">
-                    <span className="text-foreground">
-                      带宽上限
-                    </span>
-                    <span className="font-mono">
-                      {remoteUsage.maxBandwidth > 0
-                        ? formatSpeed(
-                            remoteUsage.maxBandwidth,
-                          )
-                        : "不限"}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="text-xs font-semibold rounded-md border border-divider glass-inset p-2.5">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-foreground">
-                      占用端口
-                    </span>
-                    <span className="font-mono text-default-800">
-                      {remoteUsage.usedPorts.length}/
-                      {Math.max(
-                        remoteUsage.portRangeEnd -
-                          remoteUsage.portRangeStart +
-                          1,
-                        0,
-                      )}
-                    </span>
-                  </div>
-                  <div className="max-h-20 overflow-y-auto rounded glass-inset p-1.5 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
-                    {remoteUsage.usedPorts.length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {remoteUsage.usedPorts.map(
-                          (port) => (
-                            <Chip
-                              key={`${node.id}-port-${port}`}
-                              className="font-mono shrink-0 whitespace-nowrap"
-                              size="sm"
-                              variant="flat"
-                            >
-                              {port}
-                            </Chip>
-                          ),
-                        )}
-                      </div>
-                    ) : (
-                      <div className="text-foreground">
-                        暂无占用端口
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="text-xs font-semibold rounded-md border border-divider glass-inset p-2.5">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-foreground">
-                      绑定明细
-                    </span>
-                    <span className="font-mono text-default-800">
-                      {remoteUsage.activeBindingNum}
-                    </span>
-                  </div>
-                  <div className="max-h-32 overflow-y-auto space-y-1.5 pr-1 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1">
-                    {remoteUsage.bindings.length > 0 ? (
-                      remoteUsage.bindings.map(
-                        (binding) => (
-                          <div
-                            key={binding.bindingId}
-                            className="rounded border border-default-200 glass-inset p-2"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span
-                                className="font-medium truncate"
-                                title={binding.tunnelName}
-                              >
-                                {binding.tunnelName}
-                              </span>
-                              <span className="font-mono text-[11px] font-semibold">
-                                #{binding.tunnelId}
-                              </span>
-                            </div>
-                            <div className="mt-1 text-[11px] font-semibold text-foreground flex items-center justify-between gap-2">
-                              <span>
-                                {formatChainType(
-                                  binding.chainType,
-                                  binding.hopInx,
-                                )}
-                              </span>
-                              <span className="font-mono">
-                                端口 {binding.allocatedPort}
-                              </span>
-                            </div>
-                          </div>
-                        ),
-                      )
-                    ) : (
-                      <div className="text-foreground">
-                        暂无绑定明细
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="text-xs font-semibold rounded-md border border-divider glass-inset p-2.5 text-foreground">
-                暂未获取到远程占用数据
-              </div>
-            )}
-          </div>
-        )}
 
         {node.latency ||
         latencyPoolEmpty ||
@@ -617,8 +452,7 @@ const NodeCardContent = memo(function NodeCardContent({
           </div>
         ) : null}
 
-        {!isRemoteNode && (
-          <div className="mb-4 space-y-2">
+        <div className="mb-4 space-y-2">
             <NodeLiveStats
               info={node.systemInfo ?? null}
               month={month}
@@ -635,13 +469,11 @@ const NodeCardContent = memo(function NodeCardContent({
               </Button>
             )}
           </div>
-        )}
 
         <div className="mt-auto space-y-3">
           {/* 操作按钮 */}
           <div className="space-y-1.5">
-            {!isRemoteNode && (
-              <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-3 gap-1.5">
                 <Button
                   className="min-h-8"
                   color="success"
@@ -681,14 +513,10 @@ const NodeCardContent = memo(function NodeCardContent({
                   回退
                 </Button>
               </div>
-            )}
-            <div
-              className={`grid gap-1.5 ${isRemoteNode ? "grid-cols-1" : "grid-cols-3"}`}
-            >
+            <div className="grid gap-1.5 grid-cols-3">
               {/* R2X-041：调优仅 agent 模式有入口（nodes.md:161），
                   nftables 节点无 agent 通道、点了必失败，故不渲染 */}
-              {!isRemoteNode &&
-                node.forwardMode !== "nftables" && (
+              {node.forwardMode !== "nftables" && (
                   <Button
                     className="min-h-8"
                     color="success"
@@ -702,17 +530,15 @@ const NodeCardContent = memo(function NodeCardContent({
                     调优
                   </Button>
                 )}
-              {!isRemoteNode && (
-                <Button
-                  className="min-h-8"
-                  color="primary"
-                  size="sm"
-                  variant="flat"
-                  onPress={() => actions.editNode(node)}
-                >
-                  编辑
-                </Button>
-              )}
+              <Button
+                className="min-h-8"
+                color="primary"
+                size="sm"
+                variant="flat"
+                onPress={() => actions.editNode(node)}
+              >
+                编辑
+              </Button>
               <Button
                 className="min-h-8"
                 color="danger"
@@ -754,7 +580,6 @@ const NodeListContent = memo(function NodeListContent({
   isDisplayFiltered,
   listeners,
 }: RowContentProps<NodeListRowProps>) {
-  const isRemoteNode = node.isRemote === 1;
   const online = node.connectionStatus === "online";
   const expiryMeta = getNodeExpiryMeta(
     node.expiryTime,
@@ -773,20 +598,16 @@ const NodeListContent = memo(function NodeListContent({
     node.serverIpV4?.trim() ||
     node.serverIpV6?.trim() ||
     node.serverIp.trim();
-  const meta = isRemoteNode
-    ? [address, node.syncError ? "同步失败" : ""]
-    : [
-        address,
-        upgrading
-          ? `升级中 ${progress.percent}%`
-          : node.version || "未连接过",
-        online && node.systemInfo
-          ? `已运行 ${formatUptime(node.systemInfo.uptime)}`
-          : "",
-        monthLabel
-          ? `本月网卡 ${monthLabel}`
-          : "",
-      ];
+  const meta = [
+    address,
+    upgrading
+      ? `升级中 ${progress.percent}%`
+      : node.version || "未连接过",
+    online && node.systemInfo
+      ? `已运行 ${formatUptime(node.systemInfo.uptime)}`
+      : "",
+    monthLabel ? `本月网卡 ${monthLabel}` : "",
+  ];
   const month = monthTuple(monthIn, monthOut);
   const renderRowLatency = () =>
     renderLatencySlot({ node, variant: "list", latencyPoolEmpty, probing, actions });
@@ -795,15 +616,6 @@ const NodeListContent = memo(function NodeListContent({
     <ListRow
       badges={
         <>
-          {isRemoteNode && (
-            <Chip
-              className="shrink-0"
-              size="sm"
-              variant="flat"
-            >
-              远程
-            </Chip>
-          )}
           {showExpiry && (
             <Chip
               className="shrink-0"
@@ -817,13 +629,11 @@ const NodeListContent = memo(function NodeListContent({
         </>
       }
       footer={
-        isRemoteNode ? undefined : (
-          <NodeLiveStats
-            info={node.systemInfo ?? null}
-            month={month}
-            variant="footer"
-          />
-        )
+        <NodeLiveStats
+          info={node.systemInfo ?? null}
+          month={month}
+          variant="footer"
+        />
       }
       meta={meta.filter(Boolean).join(" · ")}
       right={

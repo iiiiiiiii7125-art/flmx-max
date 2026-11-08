@@ -515,53 +515,6 @@ export const batchChangeTunnel = (data: {
     { timeout: batchCallTimeout(data.forwardIds.length) },
   );
 
-// 面板共享 (Federation) 接口
-export const getPeerShareList = () =>
-  Network.post<Array<Record<string, unknown>>>("/federation/share/list");
-export const createPeerShare = (data: {
-  name: string;
-  nodeId: number;
-  maxBandwidth?: number;
-  expiryTime?: number;
-  portRangeStart?: number;
-  portRangeEnd?: number;
-  allowedDomains?: string;
-  allowedIps?: string;
-}, idemKey?: string) =>
-  Network.post("/federation/share/create", data, { idemKey });
-/** 共享更新回执（B13-001）：端口段缩小后段外存量运行时的释放结果。
- * 释放失败者另带整句 warning，须原样透传给管理员。 */
-export interface PeerShareUpdateResult {
-  releasedPorts?: number[];
-  releaseFailedPorts?: number[];
-  warning?: string;
-}
-export const updatePeerShare = (data: {
-  id: number;
-  name: string;
-  maxBandwidth: number;
-  expiryTime: number;
-  portRangeStart: number;
-  portRangeEnd: number;
-  allowedDomains: string;
-  allowedIps: string;
-}) => Network.post<PeerShareUpdateResult>("/federation/share/update", data);
-/** 共享删除回执（R2-F3-02）：个别联邦隧道清理失败时共享照常删除，
- * 未清隧道在此点名，管理员据 ID 在隧道列表手工清理。 */
-export interface PeerShareDeleteResult {
-  uncleanedTunnelIds?: number[];
-}
-export const deletePeerShare = (id: number) =>
-  Network.post<PeerShareDeleteResult>("/federation/share/delete", { id });
-export const resetPeerShareFlow = (id: number) =>
-  Network.post("/federation/share/reset-flow", { id });
-export const getPeerRemoteUsageList = () =>
-  Network.post<Array<Record<string, unknown>>>(
-    "/federation/share/remote-usage/list",
-  );
-export const importRemoteNode = (data: { remoteUrl: string; token: string }) =>
-  Network.post("/federation/node/import", data);
-
 export interface BackupTypes {
   users?: boolean;
   nodes?: boolean;

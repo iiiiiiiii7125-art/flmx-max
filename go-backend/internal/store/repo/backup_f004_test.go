@@ -195,40 +195,35 @@ func TestBackupTableCoverage(t *testing.T) {
 		"subscription_template": "inbounds",
 		"remote_source":         "inbounds",
 		"sub_user":              "inbounds",
-		// FIX132-C：A3-04 订阅计数基线随 inbounds 段；A3-05 两表随
-		// nodes 段（nodeSSHConfigs / peerShares 独立键）。
+		// FIX132-C：A3-04 订阅计数基线随 inbounds 段；A3-05 的
+		// node_ssh_config 随 nodes 段（nodeSSHConfigs 独立键）。
 		"subscription_counter": "inbounds",
 		// F6-02：删除屏蔽登记随 inbounds 段往返——源按 ID 保号恢复，
 		// 屏蔽键的源 ID 恢复后仍指向同一源，先前「跨恢复不稳定」的
 		// 排除理由已被现行实现推翻。
 		"remote_source_shield": "inbounds",
 		"node_ssh_config":      "nodeSSHConfigs",
-		"peer_share":           "peerShares",
 	}
 	// excluded: 表 -> 排除理由（安全凭据 / 运行时状态 / 遥测时序 / 簿记）。
 	excluded := map[string]string{
-		"passkey":                    "凭据材料，安全排除（O7 口径：备份不含 passkey）",
-		"nft_rule_binding":           "nft 运行时状态，由 reconcile 按期望状态重建",
-		"nft_counter_state":          "nft 计数基线，运行时状态",
-		"nft_pending_delete":         "pending-delete 重试台账，运行时状态",
-		"node_uninstall":             "删服务器待卸载登记，运行时台账（180 天保留），非配置数据",
-		"node_seq":                   "agent 流量序号，运行时状态",
-		"traffic_stream_cursor":      "可靠上报 v2 流游标，运行时状态；备份恢复后游标回退/缺失由 reset_stream 自愈闭环处理（agent 换 stream 原字节重报），随备份搬运反而会与 agent spool 状态错位",
-		"statistics_flow":            "流量统计时序，非配置数据",
-		"node_metric":                "监控遥测时序",
-		"node_traffic":               "节点网卡流量遥测时序，非配置数据（400 天保留，上报持续重建）",
-		"node_latency_sample":        "延迟探测遥测时序，非配置数据（7 天保留，探测自动重建）",
-		"tunnel_metric":              "监控遥测时序",
-		"tunnel_quality":             "质量探测时序",
-		"service_monitor_result":     "监控结果时序（定义在 service_monitor，已备份）",
-		"subscription_traffic":       "订阅流量时序遥测，非配置数据（400 天保留，计数样本持续重建）",
-		"peer_share_runtime":         "联邦运行时状态",
-		"peer_share_resource":        "联邦运行时状态",
-		"federation_tunnel_binding":  "联邦运行时绑定，跨实例恢复无语义",
-		"federation_pending_release": "联邦运行时状态",
+		"passkey":                  "凭据材料，安全排除（O7 口径：备份不含 passkey）",
+		"nft_rule_binding":         "nft 运行时状态，由 reconcile 按期望状态重建",
+		"nft_counter_state":        "nft 计数基线，运行时状态",
+		"nft_pending_delete":       "pending-delete 重试台账，运行时状态",
+		"node_uninstall":           "删服务器待卸载登记，运行时台账（180 天保留），非配置数据",
+		"node_seq":                 "agent 流量序号，运行时状态",
+		"traffic_stream_cursor":    "可靠上报 v2 流游标，运行时状态；备份恢复后游标回退/缺失由 reset_stream 自愈闭环处理（agent 换 stream 原字节重报），随备份搬运反而会与 agent spool 状态错位",
+		"statistics_flow":          "流量统计时序，非配置数据",
+		"node_metric":              "监控遥测时序",
+		"node_traffic":             "节点网卡流量遥测时序，非配置数据（400 天保留，上报持续重建）",
+		"node_latency_sample":      "延迟探测遥测时序，非配置数据（7 天保留，探测自动重建）",
+		"tunnel_metric":            "监控遥测时序",
+		"tunnel_quality":           "质量探测时序",
+		"service_monitor_result":   "监控结果时序（定义在 service_monitor，已备份）",
+		"subscription_traffic":     "订阅流量时序遥测，非配置数据（400 天保留，计数样本持续重建）",
 		"flow_legacy_batch_dedupe": "旧版无序号流量批次去重台账，24 小时保留的运行时簿记（F2-03）",
-		"schema_version":             "迁移簿记",
-		"schema_migration":           "迁移簿记",
+		"schema_version":           "迁移簿记",
+		"schema_migration":         "迁移簿记",
 	}
 
 	var tables []string

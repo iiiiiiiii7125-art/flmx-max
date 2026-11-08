@@ -21,11 +21,8 @@ export interface NodeApiItem {
   http?: number;
   tls?: number;
   socks?: number;
-  isRemote?: number;
-  remoteUrl?: string | null;
   interfaceName?: string | null;
   expiryReminderDismissed?: number;
-  syncError?: string;
   [key: string]: unknown;
 }
 

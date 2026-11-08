@@ -104,11 +104,7 @@ type Node struct {
 	TCPListenAddr           string         `gorm:"column:tcp_listen_addr;type:varchar(100);not null;default:'[::]'"`
 	UDPListenAddr           string         `gorm:"column:udp_listen_addr;type:varchar(100);not null;default:'[::]'"`
 	Inx                     int            `gorm:"not null;default:0"`
-	IsRemote                int            `gorm:"column:is_remote;default:0"`
 	ForwardMode             string         `gorm:"column:forward_mode;type:varchar(20);not null;default:'agent'"`
-	RemoteURL               sql.NullString `gorm:"column:remote_url;type:text"`
-	RemoteToken             sql.NullString `gorm:"column:remote_token;type:text"`
-	RemoteConfig            sql.NullString `gorm:"column:remote_config;type:text"`
 	ExpiryReminderDismissed int            `gorm:"column:expiry_reminder_dismissed;not null;default:0"`
 	// 节点自选的延迟测试点（JSON），空则跟随全局默认。
 	LatencyTargets string `gorm:"column:latency_targets;type:text;not null;default:''"`
@@ -361,81 +357,6 @@ type SchemaVersion struct {
 
 func (SchemaVersion) TableName() string { return "schema_version" }
 
-type PeerShare struct {
-	ID             int64  `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name           string `gorm:"type:text;not null" json:"name"`
-	NodeID         int64  `gorm:"column:node_id;not null" json:"nodeId"`
-	Token          string `gorm:"type:text;not null;uniqueIndex" json:"token"`
-	MaxBandwidth   int64  `gorm:"column:max_bandwidth;default:0" json:"maxBandwidth"`
-	ExpiryTime     int64  `gorm:"column:expiry_time;default:0" json:"expiryTime"`
-	PortRangeStart int    `gorm:"column:port_range_start;default:0" json:"portRangeStart"`
-	PortRangeEnd   int    `gorm:"column:port_range_end;default:0" json:"portRangeEnd"`
-	CurrentFlow    int64  `gorm:"column:current_flow;default:0" json:"currentFlow"`
-	IsActive       int    `gorm:"column:is_active;default:1" json:"isActive"`
-	CreatedTime    int64  `gorm:"column:created_time;not null" json:"createdTime"`
-	UpdatedTime    int64  `gorm:"column:updated_time;not null" json:"updatedTime"`
-	AllowedDomains string `gorm:"column:allowed_domains;type:text;default:''" json:"allowedDomains"`
-	AllowedIPs     string `gorm:"column:allowed_ips;type:text;default:''" json:"allowedIps"`
-	// D3-04: 本 share 的 middle/exit 角色服务凭据（每 share 独立）。
-	// 角色服务 handler 恒带此 auth，消费方经 Connect 取得后在建链时
-	// 写入 relay connector。存量 share 由 repo 启动回填 + handler 懒
-	// 补发，见 migration_fix132_v3.go 的 backfill 与
-	// ensurePeerShareRelayCredentials。
-	RelayUsername string `gorm:"column:relay_username;type:text;default:''" json:"relayUsername"`
-	RelayPassword string `gorm:"column:relay_password;type:text;default:''" json:"relayPassword"`
-}
-
-func (PeerShare) TableName() string { return "peer_share" }
-
-type PeerShareRuntime struct {
-	ID            int64  `gorm:"primaryKey;autoIncrement"`
-	ShareID       int64  `gorm:"column:share_id;not null;index:idx_peer_share_runtime_share_node_status"`
-	NodeID        int64  `gorm:"column:node_id;not null;index:idx_peer_share_runtime_share_node_status"`
-	ReservationID string `gorm:"column:reservation_id;type:text;not null;uniqueIndex"`
-	// D3-05: resource_key 的唯一性是 (share_id, resource_key) 复合口径，
-	// 由版本化迁移 fix132_v3 维护（与 R5-B4 同规矩：唯一索引不放 model
-	// tag，避免 AutoMigrate 在存量数据上静默建索引失败）。旧单列全局
-	// 唯一索引会让第二个消费方面板必然撞键。
-	ResourceKey    string `gorm:"column:resource_key;type:text;not null"`
-	BindingID      string `gorm:"column:binding_id;type:text;not null;default:'';index:idx_peer_share_runtime_binding_id"`
-	Role           string `gorm:"type:text;not null;default:''"`
-	ChainName      string `gorm:"column:chain_name;type:text;not null;default:''"`
-	ServiceName    string `gorm:"column:service_name;type:text;not null;default:''"`
-	Protocol       string `gorm:"type:text;not null;default:'tls'"`
-	Strategy       string `gorm:"type:text;not null;default:'round'"`
-	Port           int    `gorm:"not null;default:0"`
-	Target         string `gorm:"type:text;not null;default:''"`
-	Applied        int    `gorm:"not null;default:0"`
-	ReleasePending int    `gorm:"column:release_pending;not null;default:0"`
-	Status         int    `gorm:"not null;default:1;index:idx_peer_share_runtime_share_node_status"`
-	CreatedTime    int64  `gorm:"column:created_time;not null"`
-	UpdatedTime    int64  `gorm:"column:updated_time;not null"`
-}
-
-func (PeerShareRuntime) TableName() string { return "peer_share_runtime" }
-
-type FederationTunnelBinding struct {
-	ID              int64  `gorm:"primaryKey;autoIncrement"`
-	TunnelID        int64  `gorm:"column:tunnel_id;not null;uniqueIndex:idx_federation_tunnel_binding_unique;index:idx_federation_tunnel_binding_tunnel"`
-	NodeID          int64  `gorm:"column:node_id;not null;uniqueIndex:idx_federation_tunnel_binding_unique"`
-	ChainType       int    `gorm:"column:chain_type;not null;uniqueIndex:idx_federation_tunnel_binding_unique"`
-	HopInx          int    `gorm:"column:hop_inx;not null;default:0;uniqueIndex:idx_federation_tunnel_binding_unique"`
-	RemoteURL       string `gorm:"column:remote_url;type:text;not null"`
-	ResourceKey     string `gorm:"column:resource_key;type:text;not null;uniqueIndex"`
-	RemoteBindingID string `gorm:"column:remote_binding_id;type:text;not null"`
-	AllocatedPort   int    `gorm:"column:allocated_port;not null"`
-	Status          int    `gorm:"not null;default:1;index:idx_federation_tunnel_binding_tunnel"`
-	CreatedTime     int64  `gorm:"column:created_time;not null"`
-	UpdatedTime     int64  `gorm:"column:updated_time;not null"`
-}
-
-func (FederationTunnelBinding) TableName() string { return "federation_tunnel_binding" }
-
-// ─── Backup / Import-Export Structs ──────────────────────────────────
-// These are not GORM models; they define the JSON wire format for the
-// backup/restore API and MUST keep their existing json tags unchanged.
-
-// BackupData represents the full backup structure.
 type BackupData struct {
 	Version     string             `json:"version"`
 	ExportedAt  int64              `json:"exportedAt"`
@@ -465,12 +386,11 @@ type BackupData struct {
 	// B4/F-030：service_monitor 监控定义整表备份（此前只有结果表口径，
 	// 定义未备，恢复后监控项全丢）
 	ServiceMonitors []ServiceMonitorBackup `json:"serviceMonitors,omitempty"`
-	// FIX132-C（A3-05/BC-28）：node_ssh_config 与 peer_share 定义进
-	// 备份（随 nodes 段导出/导入）。此前恢复出的实例节点在、SSH
-	// 凭据与联邦共享定义不在，子系统静默不可用；备份文件因此与
-	// 节点 secret/订阅 token 同敏感级，文档与导出提示须明示。
+	// FIX132-C（A3-05/BC-28）：node_ssh_config 定义进备份（随 nodes
+	// 段导出/导入）。此前恢复出的实例节点在、SSH 凭据不在，子系统
+	// 静默不可用；备份文件因此与节点 secret/订阅 token 同敏感级，
+	// 文档与导出提示须明示。
 	NodeSSHConfigs []NodeSSHConfigBackup `json:"nodeSSHConfigs,omitempty"`
-	PeerShares     []PeerShareBackup     `json:"peerShares,omitempty"`
 	// Inbounds carries node kernels, their inbounds (imported nodes too),
 	// relay links and traffic counter baselines; restored as one unit.
 	Inbounds *InboundsBackup `json:"inbounds,omitempty"`
@@ -489,31 +409,6 @@ type NodeSSHConfigBackup struct {
 	Passphrase  string `json:"passphrase,omitempty"`
 	SudoMode    string `json:"sudoMode"`
 	CreatedTime int64  `json:"createdTime"`
-}
-
-// PeerShareBackup 是 A3-05 补齐的面板共享定义备份结构
-// （字段对照 model.PeerShare；runtime/resource 等运行时表仍按
-// 登记排除，不随备份）。
-type PeerShareBackup struct {
-	ID             int64  `json:"id"`
-	Name           string `json:"name"`
-	NodeID         int64  `json:"nodeId"`
-	Token          string `json:"token"`
-	MaxBandwidth   int64  `json:"maxBandwidth"`
-	ExpiryTime     int64  `json:"expiryTime"`
-	PortRangeStart int    `json:"portRangeStart"`
-	PortRangeEnd   int    `json:"portRangeEnd"`
-	CurrentFlow    int64  `json:"currentFlow"`
-	IsActive       int    `json:"isActive"`
-	CreatedTime    int64  `json:"createdTime"`
-	UpdatedTime    int64  `json:"updatedTime,omitempty"`
-	AllowedDomains string `json:"allowedDomains,omitempty"`
-	AllowedIPs     string `json:"allowedIps,omitempty"`
-	// FIX2-B（V3-01）：FIX-I 的 relay 凭据列随备份往返。缺失时全新
-	// 恢复后提供方补发新凭据、消费方存量凭据失配至其重新 Connect
-	// 才自愈，且回执无提示。
-	RelayUsername string `json:"relayUsername,omitempty"`
-	RelayPassword string `json:"relayPassword,omitempty"`
 }
 
 type InboundsBackup struct {
@@ -821,10 +716,6 @@ type NodeBackup struct {
 	TCPListenAddr  string `json:"tcpListenAddr"`
 	UDPListenAddr  string `json:"udpListenAddr"`
 	Inx            int    `json:"inx"`
-	IsRemote       int    `json:"isRemote"`
-	RemoteURL      string `json:"remoteUrl,omitempty"`
-	RemoteToken    string `json:"remoteToken,omitempty"`
-	RemoteConfig   string `json:"remoteConfig,omitempty"`
 	LatencyTargets string `json:"latencyTargets,omitempty"`
 	ForwardMode    string `json:"forwardMode,omitempty"`
 	// O7-006：恢复后保留已忽略的到期提醒状态
@@ -972,21 +863,21 @@ type RevokedImportPair struct {
 
 // ImportResult contains the result of an import operation.
 type ImportResult struct {
-	UsersImported        int `json:"usersImported"`
-	NodesImported        int `json:"nodesImported"`
-	TunnelsImported      int `json:"tunnelsImported"`
-	ForwardsImported     int `json:"forwardsImported"`
-	UserTunnelsImported  int `json:"userTunnelsImported"`
-	SpeedLimitsImported  int `json:"speedLimitsImported"`
+	UsersImported       int `json:"usersImported"`
+	NodesImported       int `json:"nodesImported"`
+	TunnelsImported     int `json:"tunnelsImported"`
+	ForwardsImported    int `json:"forwardsImported"`
+	UserTunnelsImported int `json:"userTunnelsImported"`
+	SpeedLimitsImported int `json:"speedLimitsImported"`
 	// RR-S2-01：分组三件套（隧道分组/用户分组/分组权限）已于
 	// 1.9.6 整套移除，旧备份这三段永不落库——原字段名
 	// TunnelGroupsImported/UserGroupsImported/PermissionsImported
 	// 名实相反且计数器从未累加、恒为 0，与 InboundNodeGroupsIgnored
 	// （R3-S2-01）同病，现整族改名据实计数（与 ImportWarnings 的
 	// 文本披露同数）。前端未消费这三个字段。
-	TunnelGroupsIgnored int `json:"tunnelGroupsIgnored"`
-	UserGroupsIgnored   int `json:"userGroupsIgnored"`
-	PermissionsIgnored  int `json:"permissionsIgnored"`
+	TunnelGroupsIgnored  int `json:"tunnelGroupsIgnored"`
+	UserGroupsIgnored    int `json:"userGroupsIgnored"`
+	PermissionsIgnored   int `json:"permissionsIgnored"`
 	ConfigsImported      int `json:"configsImported"`
 	InboundsImported     int `json:"inboundsImported"`
 	UserInboundsImported int `json:"userInboundsImported"`
@@ -1020,11 +911,10 @@ type ImportResult struct {
 	// 不再混入 UserSubscriptionsImported 假报成功。
 	UserSubscriptionsSkipped int `json:"userSubscriptionsSkipped,omitempty"`
 	ServiceMonitorsImported  int `json:"serviceMonitorsImported"`
-	// FIX132-C（A3-05）：SSH 配置与面板共享定义的恢复计数与受影响
-	// 节点清单——恢复后这些节点的数据面待重新校验下发，回执如实
-	// 披露（降级标记），不再静默降级。
+	// FIX132-C（A3-05）：SSH 配置的恢复计数与受影响节点清单——
+	// 恢复后这些节点的数据面待重新校验下发，回执如实披露（降级
+	// 标记），不再静默降级。
 	NodeSSHConfigsImported int     `json:"nodeSSHConfigsImported"`
-	PeerSharesImported     int     `json:"peerSharesImported"`
 	RestoredSSHNodeIDs     []int64 `json:"restoredSSHNodeIds,omitempty"`
 	// FIX132-C（D4-03）：各段因引用不存在被跳过的行数（键为备份段
 	// 名），与 ImportWarnings 一起构成恢复回执的完整披露；订阅段的
@@ -1119,11 +1009,7 @@ type NodeRecord struct {
 	TCPListenAddr string
 	UDPListenAddr string
 	InterfaceName string
-	IsRemote      int
 	ForwardMode   string
-	RemoteURL     string
-	RemoteToken   string
-	RemoteConfig  string
 }
 
 type ChainNodeRecord struct {
@@ -1315,33 +1201,3 @@ type TunnelQuality struct {
 }
 
 func (TunnelQuality) TableName() string { return "tunnel_quality" }
-
-// PeerShareResource is the durable desired state for a namespaced peer command.
-// Rows are retained as tombstones until deletion has been acknowledged.
-type PeerShareResource struct {
-	ID                int64  `gorm:"primaryKey;autoIncrement"`
-	ShareID           int64  `gorm:"column:share_id;not null;uniqueIndex:idx_peer_share_resource_key"`
-	NodeID            int64  `gorm:"column:node_id;not null;index"`
-	Kind              string `gorm:"type:text;not null;uniqueIndex:idx_peer_share_resource_key"`
-	OriginalName      string `gorm:"column:original_name;type:text;not null;uniqueIndex:idx_peer_share_resource_key"`
-	RuntimeName       string `gorm:"column:runtime_name;type:text;not null;index"`
-	LegacyNames       string `gorm:"column:legacy_names;type:text;not null;default:''"`
-	LegacyServiceBase string `gorm:"column:legacy_service_base;type:text;not null;default:''"`
-	// FIX132-C（R4-P1）：此列不得带 GORM 默认值。原 default:false
-	// 在 SQLite 建表渲染为 `numeric NOT NULL DEFAULT false`，
-	// pgloader 翻译到 PG 时以 22P02 拒绝、整条 SQLite→PG 官方迁移
-	// 在建表期 FATAL（R4 于 PG 16 实测，全库仅此 1 列）。备选均已
-	// 实测否决：default:0 会被 bool 默认值解析重新渲染回 false；
-	// 表达式默认 (0) 在 SQLite 可行，但 PG 原生建表会生成
-	// `boolean DEFAULT (0)` 被 PG 拒绝。去掉默认值后两方言建表
-	// 均为「NOT NULL 无默认」，该表全部写入都经 GORM 显式带值
-	//（peer_share_resources.go 的 upsert），语义不变；存量
-	// numeric 列（0/1）读 bool 亦不受影响。
-	ReleaseLegacyFamily bool   `gorm:"column:release_legacy_family;not null"`
-	Config              string `gorm:"type:text;not null;default:''"`
-	DesiredState        string `gorm:"column:desired_state;type:text;not null;default:'active'"`
-	Applied             int    `gorm:"not null;default:0"`
-	UpdatedTime         int64  `gorm:"column:updated_time;not null"`
-}
-
-func (PeerShareResource) TableName() string { return "peer_share_resource" }

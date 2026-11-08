@@ -29,7 +29,6 @@ export interface Node {
   tls?: number; // 0 关 1 开
   socks?: number; // 0 关 1 开
   status: number;
-  isRemote?: number;
   forwardMode?: "agent" | "nftables";
   sshConfig?: {
     host?: string;
@@ -43,9 +42,7 @@ export interface Node {
     /** C3-02：已钉入的 SSH 主机密钥指纹（SHA256:…）；缺失＝未钉入。 */
     hostKeyFingerprint?: string;
   } | null;
-  remoteUrl?: string | null;
   interfaceName?: string | null;
-  syncError?: string;
   connectionStatus: "online" | "offline";
   systemInfo?: NodeSystemInfo | null;
   copyLoading?: boolean;
@@ -81,34 +78,7 @@ export interface NodeForm {
   socks: number; // 0 关 1 开
 }
 
-export type NodeTab = "local" | "remote";
-
-export interface RemoteUsageBinding {
-  bindingId: number;
-  tunnelId: number;
-  tunnelName: string;
-  chainType: number;
-  hopInx: number;
-  allocatedPort: number;
-  resourceKey: string;
-  remoteBindingId: string;
-  updatedTime: number;
-}
-
-export interface RemoteUsageNode {
-  nodeId: number;
-  nodeName: string;
-  remoteUrl: string;
-  shareId: number;
-  portRangeStart: number;
-  portRangeEnd: number;
-  maxBandwidth: number;
-  currentFlow: number;
-  usedPorts: number[];
-  bindings: RemoteUsageBinding[];
-  activeBindingNum: number;
-  syncError?: string;
-}
+export type NodeTab = "local";
 
 export type NodeExpiryState =
   | "permanent"

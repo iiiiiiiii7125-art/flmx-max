@@ -248,7 +248,6 @@ export default function H5Layout({ children }: { children: React.ReactNode }) {
                 "/user",
                 "/limit",
                 "/config",
-                "/panel-sharing",
               ].includes(location.pathname));
           const isMonitor = item.path === "/monitor";
           const isMonitorBlocked = isMonitor && monitorAllowed !== true;

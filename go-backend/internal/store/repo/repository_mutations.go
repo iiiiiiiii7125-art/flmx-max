@@ -463,7 +463,7 @@ func getUserDefaultsForTunnel(db *gorm.DB, userID int64) (flow int64, num int, e
 	return user.Flow, user.Num, user.ExpTime, user.FlowResetTime, nil
 }
 
-func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serverIPV6, port, interfaceName, version, remark, expiryTime, renewalCycle interface{}, httpFlag, tlsFlag, socksFlag int, now int64, status int, tcpAddr, udpAddr string, inx, isRemote int, remoteURL, remoteToken, remoteConfig, extraIPs interface{}, forwardMode string) (int64, error) {
+func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serverIPV6, port, interfaceName, version, remark, expiryTime, renewalCycle interface{}, httpFlag, tlsFlag, socksFlag int, now int64, status int, tcpAddr, udpAddr string, inx int, extraIPs interface{}, forwardMode string) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
 	}
@@ -489,11 +489,7 @@ func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serve
 		TCPListenAddr: tcpAddr,
 		UDPListenAddr: udpAddr,
 		Inx:           inx,
-		IsRemote:      isRemote,
 		ForwardMode:   defaultNodeForwardMode(forwardMode),
-		RemoteURL:     nullStringFromInterface(remoteURL),
-		RemoteToken:   nullStringFromInterface(remoteToken),
-		RemoteConfig:  nullStringFromInterface(remoteConfig),
 	}
 	// O1-002：Create 返回的 node.ID 即新节点 ID，避免按 name+serverIP 反查
 	//（并发创建同名同 IP 节点时可能查到错误的节点）。
@@ -687,9 +683,6 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.ChainTunnel{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("node_id = ?", nodeID).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
-			return err
-		}
 		if err := deleteNodeKernelsTx(tx, nodeID); err != nil {
 			return err
 		}
@@ -727,19 +720,6 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NodeTraffic{}).Error; err != nil {
 			return err
 		}
-		// C-007: peer share。
-		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShareRuntime{}).Error; err != nil {
-			return err
-		}
-		// AUDIT-R18 (R5R18-001): PeerShare 与 PeerShareResource（node_id），
-		// 与 C-007 的 PeerShareRuntime 清理保持一致。已删节点的 share token
-		// 在 GetPeerShareByToken 中不校验节点存在性，残留即未吊销。
-		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShareResource{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("node_id = ?", nodeID).Delete(&model.PeerShare{}).Error; err != nil {
-			return err
-		}
 		// C-008: 订阅计数器。
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.SubscriptionCounter{}).Error; err != nil {
 			return err
@@ -761,25 +741,6 @@ func (r *Repository) DeleteNodeCascade(nodeID int64) error {
 		}
 		return tx.Where("id = ?", nodeID).Delete(&model.Node{}).Error
 	})
-}
-
-func (r *Repository) GetNodeRemoteFields(nodeID int64) (isRemote int, remoteURL, remoteToken sql.NullString, err error) {
-	if r == nil || r.db == nil {
-		return 0, sql.NullString{}, sql.NullString{}, errors.New("repository not initialized")
-	}
-	return r.GetNodeRemoteFieldsTx(r.db, nodeID)
-}
-
-func (r *Repository) GetNodeRemoteFieldsTx(tx *gorm.DB, nodeID int64) (isRemote int, remoteURL, remoteToken sql.NullString, err error) {
-	if tx == nil {
-		return 0, sql.NullString{}, sql.NullString{}, errors.New("database unavailable")
-	}
-	var node model.Node
-	err = tx.Select("is_remote", "remote_url", "remote_token").Where("id = ?", nodeID).First(&node).Error
-	if err != nil {
-		return 0, sql.NullString{}, sql.NullString{}, normalizeNotFoundErr(err)
-	}
-	return node.IsRemote, node.RemoteURL, node.RemoteToken, nil
 }
 
 func (r *Repository) GetNodePortRange(nodeID int64) (string, error) {
@@ -895,24 +856,6 @@ func (r *Repository) CreateChainTunnelTx(tx *gorm.DB, tunnelID int64, chainType 
 	return tx.Create(&ct).Error
 }
 
-func (r *Repository) IsRemoteNodeTx(tx *gorm.DB, nodeID int64) (bool, error) {
-	if tx == nil {
-		return false, errors.New("database unavailable")
-	}
-	if nodeID <= 0 {
-		return false, errors.New("节点不存在")
-	}
-	var node model.Node
-	err := tx.Select("is_remote").Where("id = ?", nodeID).First(&node).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, errors.New("节点不存在")
-	}
-	if err != nil {
-		return false, err
-	}
-	return node.IsRemote == 1, nil
-}
-
 func (r *Repository) PickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int64]int, excludeTunnelID int64) (int, error) {
 	return r.pickNodePortTx(tx, nodeID, allocated, excludeTunnelID, false)
 }
@@ -946,7 +889,7 @@ func (r *Repository) pickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int
 		return 0, errors.New("节点端口已满，无可用端口")
 	}
 
-	// P01-001：已用集走统一四源谓词 UsedPortsOnNodeTx。此前这里手写
+	// P01-001：已用集走统一三源谓词 UsedPortsOnNodeTx。此前这里手写
 	// 三源（chain/forward/inbound），漏联邦有效预留口：随机选口能挑中
 	// 分享运行时正在用的口，同节点同口双分配、后下发方绑口失败。
 	// 排除口径不变：仅排除本隧道自身链路行（更新沿用/重挑时不被
@@ -1034,22 +977,6 @@ func (r *Repository) DeleteTunnelCascade(tunnelID int64) error {
 	})
 }
 
-// DeleteTunnelCascadeWithPeerRelease 在同一事务内完成隧道级联删除与
-// 联邦 runtime 释放标记。X-P3-23（L-09-5）：旧实现尾步
-// MarkPeerShareRuntimeReleasedByPort 在级联事务之外，失败时隧道已
-// 删、runtime 未释放且无回滚，只能靠后台收敛；现纳入主事务。
-func (r *Repository) DeleteTunnelCascadeWithPeerRelease(tunnelID, shareID int64, port int, updatedTime int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := deleteTunnelCascadeTx(tx, tunnelID); err != nil {
-			return err
-		}
-		return markPeerShareRuntimeReleasedByPortTx(tx, shareID, port, updatedTime)
-	})
-}
-
 func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
 	// AUDIT-R1 (TST-001): 物化 ID 列表。原子查询在 Forward/UserTunnel 行删除后
 	// 即失效（子查询变空），而级联清理必须引用已删行的 ID，故先物化。
@@ -1119,12 +1046,6 @@ func deleteTunnelCascadeTx(tx *gorm.DB, tunnelID int64) error {
 		return err
 	}
 	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.ChainTunnel{}).Error; err != nil {
-		return err
-	}
-	// R2X-010 ①：待释放（status=2）绑定承载已提交的删除意图，级联不得
-	// 一并删掉——对端 role 的释放由后台重试环按此行收敛（删隧道时
-	// 联邦清理失败正是靠它留痕）；此处只删非 pending 绑定。
-	if err := tx.Where("tunnel_id = ? AND status <> ?", tunnelID, FederationBindingPendingRelease).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
 		return err
 	}
 	// R5-B7 C-009: 补全隧道级联删除（以下模型确有 tunnel_id 列）。
@@ -1437,7 +1358,7 @@ func lockPortAllocForEntries(entries []struct {
 }
 
 // replaceForwardPortsTx 是 ReplaceForwardPorts 的事务内核心：删旧口、
-// 锁内四源占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
+// 锁内三源占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
 // 窗口，旧端口已在本事务内删除、自占用天然排除）、插入新口。
 func (r *Repository) replaceForwardPortsTx(tx *gorm.DB, forwardID int64, entries []struct {
 	NodeID int64
@@ -1591,7 +1512,7 @@ func (r *Repository) GetUsedPortsOnNodeAsMap(nodeID int64) (map[int]bool, error)
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
-	// P01-001：四源已用集收敛到统一谓词 UsedPortsOnNodeTx，本函数只做
+	// P01-001：三源已用集收敛到统一谓词 UsedPortsOnNodeTx，本函数只做
 	// map[int]struct{} → map[int]bool 的形状适配。B4/F-013（入站口纳入
 	// 自动选口排除集）与 X-P2-13（联邦有效预留口纳入）的结论由统一
 	// 谓词承载；external 入站行 node_id=0 天然不在本节点集合内。
@@ -1657,61 +1578,6 @@ func (r *Repository) DeleteSpeedLimit(id int64) error {
 type RevokedUserTunnelPair struct {
 	UserID   int64
 	TunnelID int64
-}
-
-func (r *Repository) ReplaceFederationTunnelBindingsTx(tx *gorm.DB, tunnelID int64, bindings []FederationTunnelBinding) error {
-	if tx == nil {
-		return errors.New("database unavailable")
-	}
-	if err := tx.Where("tunnel_id = ?", tunnelID).Delete(&model.FederationTunnelBinding{}).Error; err != nil {
-		return err
-	}
-	if len(bindings) == 0 {
-		return nil
-	}
-
-	rows := make([]model.FederationTunnelBinding, 0, len(bindings))
-	now := time.Now().UnixMilli()
-	for _, b := range bindings {
-		created := b.CreatedTime
-		if created <= 0 {
-			created = now
-		}
-		updated := b.UpdatedTime
-		if updated <= 0 {
-			updated = created
-		}
-		rows = append(rows, model.FederationTunnelBinding{
-			TunnelID:        tunnelID,
-			NodeID:          b.NodeID,
-			ChainType:       b.ChainType,
-			HopInx:          b.HopInx,
-			RemoteURL:       b.RemoteURL,
-			ResourceKey:     b.ResourceKey,
-			RemoteBindingID: b.RemoteBindingID,
-			AllocatedPort:   b.AllocatedPort,
-			Status:          b.Status,
-			CreatedTime:     created,
-			UpdatedTime:     updated,
-		})
-	}
-
-	// FIX2-B（V4-N2 同族）：status 带 default:1，Status=0 的 binding
-	// 会在 Create 时被吞成 1（停用绑定被静默激活）。意图先行捕获——
-	// Create 后 GORM 会把默认值回填进 rows，不可再读。
-	intents := make([]int, len(rows))
-	for i := range rows {
-		intents[i] = rows[i].Status
-	}
-	if err := tx.Create(&rows).Error; err != nil {
-		return err
-	}
-	for i := range rows {
-		if err := restoreZeroValuedInt(tx, &model.FederationTunnelBinding{}, rows[i].ID, "status", intents[i]); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnelID int64, remoteAddr, strategy string, now int64, inx int, entryNodeIDs []int64, port int, inIp string, speedID interface{}, maxConn int, ipMaxConn int, ipSpeedID interface{}, proxyProtocol int, proxyProtocolReceive int, proxyProtocolSend int) (int64, error) {
@@ -1788,7 +1654,7 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 				return ErrUserTunnelForwardNumExceeded
 			}
 		}
-		// B4/F-013: 锁内四源复检（同 ReplaceForwardPorts）。handler 预检
+		// B4/F-013: 锁内三源复检（同 ReplaceForwardPorts）。handler 预检
 		// 在锁外，跨表并发（入站/隧道创建）可穿透窗口双占用落库。
 		for _, nodeID := range uniqueEntryNodeIDs {
 			occupied, err := r.HasOtherForwardOnNodePortTx(tx, nodeID, port, 0)
@@ -2200,4 +2066,10 @@ func advanceByMonths(timestamp int64, months int) int64 {
 	t := time.Unix(timestamp/1000, 0)
 	next := t.AddDate(0, months, 0)
 	return next.UnixMilli()
+}
+
+func (r *Repository) ListTunnelChainNodeIDsTx(tx *gorm.DB, tunnelID int64) ([]int64, error) {
+	var ids []int64
+	err := tx.Model(&model.ChainTunnel{}).Where("tunnel_id = ?", tunnelID).Pluck("node_id", &ids).Error
+	return ids, err
 }

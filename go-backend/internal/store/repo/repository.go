@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -53,10 +54,6 @@ type UserTunnelDetail = model.UserTunnelDetail
 type UserForwardDetail = model.UserForwardDetail
 type StatisticsFlow = model.StatisticsFlow
 type Node = model.Node
-type PeerShare = model.PeerShare
-type PeerShareResource = model.PeerShareResource
-type PeerShareRuntime = model.PeerShareRuntime
-type FederationTunnelBinding = model.FederationTunnelBinding
 type BackupData = model.BackupData
 type UserBackup = model.UserBackup
 type NodeBackup = model.NodeBackup
@@ -496,11 +493,6 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.UserTunnel{},
 		&model.MonitorPermission{},
 		&model.ViteConfig{},
-		&model.PeerShare{},
-		&model.PeerShareRuntime{},
-		&model.PeerShareResource{},
-		&model.FederationTunnelBinding{},
-		&model.FederationPendingRelease{},
 		&model.Announcement{},
 		&model.SchemaVersion{},
 		&model.NodeMetric{},
@@ -542,9 +534,6 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateV2NodeInboundPartialUnique(db); err != nil {
 			return err
 		}
-		if err := migrateV3PeerShareRuntimeCompositeUnique(db); err != nil {
-			return err
-		}
 		// C12 v4（X04）: 转发查询面普通索引（双后端同口径执行）。
 		if err := migrateC12V4ForwardLookupIndexes(db); err != nil {
 			return err
@@ -553,8 +542,11 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateV5UsernameCasefoldUnique(db); err != nil {
 			return err
 		}
-		// FIX-132（D3-04）: 存量 share 的 relay 凭据一次性回填。
-		backfillPeerShareRelayCredentials(db)
+		// RM-SHARE v6: 跨面板共享/联邦功能移除的一次性数据清理
+		// （删远端节点及其级联、删五张联邦表、删 node 远端列）。
+		if err := migrateV6FederationRemoval(db); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -593,13 +585,6 @@ func autoMigrateAll(db *gorm.DB) error {
 		return err
 	}
 
-	// FIX-132 v3（D3-05）: peer_share_runtime 唯一索引由单列
-	// resource_key 改为复合 (share_id, resource_key)，存量单列索引
-	// 显式 DROP + CREATE 转换（预检同 share 内重复时跳过、下次重试）。
-	if err := migrateV3PeerShareRuntimeCompositeUnique(db); err != nil {
-		return err
-	}
-
 	// C12 v4（X04-001/X04-002）: 转发查询面普通索引——
 	// forward_port(forward_id)、forward(user_id)、forward(status, inx)。
 	if err := migrateC12V4ForwardLookupIndexes(db); err != nil {
@@ -612,10 +597,11 @@ func autoMigrateAll(db *gorm.DB) error {
 		return err
 	}
 
-	// FIX-132（D3-04）: 存量 share 的 relay 凭据一次性回填
-	// （relay_password 为空者）；新 share 在创建时生成、消费侧懒补发
-	// 另有 handler.ensurePeerShareRelayCredentials 兜底。
-	backfillPeerShareRelayCredentials(db)
+	// RM-SHARE v6: 跨面板共享/联邦功能移除的一次性数据清理
+	// （删远端节点及其级联、删五张联邦表、删 node 远端列）。
+	if err := migrateV6FederationRemoval(db); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -633,10 +619,6 @@ func preparePostgresLegacySchema(db *gorm.DB) error {
 	type rename struct{ table, oldName, newName string }
 	renames := []rename{
 		{"vite_config", "vite_config_name_key", "uni_vite_config_name"},
-		{"peer_share", "peer_share_token_key", "uni_peer_share_token"},
-		{"peer_share_runtime", "peer_share_runtime_reservation_id_key", "uni_peer_share_runtime_reservation_id"},
-		{"peer_share_runtime", "peer_share_runtime_resource_key_key", "uni_peer_share_runtime_resource_key"},
-		{"federation_tunnel_binding", "federation_tunnel_binding_resource_key_key", "uni_federation_tunnel_binding_resource_key"},
 	}
 
 	for _, r := range renames {
@@ -670,7 +652,7 @@ func prepareSQLiteLegacyColumns(db *gorm.DB) error {
 	m := db.Migrator()
 
 	if m.HasTable(&model.Node{}) {
-		for _, field := range []string{"ServerIPV4", "ServerIPV6", "ExtraIPs", "TCPListenAddr", "UDPListenAddr", "Inx", "IsRemote", "RemoteURL", "RemoteToken", "RemoteConfig", "Remark", "ExpiryTime", "RenewalCycle", "ExpiryReminderDismissed"} {
+		for _, field := range []string{"ServerIPV4", "ServerIPV6", "ExtraIPs", "TCPListenAddr", "UDPListenAddr", "Inx", "Remark", "ExpiryTime", "RenewalCycle", "ExpiryReminderDismissed"} {
 			if m.HasColumn(&model.Node{}, field) {
 				continue
 			}
@@ -1197,21 +1179,21 @@ func (r *Repository) UpdateNodeStatus(nodeID int64, status int) error {
 // 在线标记（R4B03-001）：进程重启后 WS 会话表为空，停机前残留的
 // status=1 全是僵尸值（断开 defer 在进程退出时不执行）；agent 重连
 // 会经 UpdateNodeOnline 立即置回 1，故复位不会误伤真实在线节点。
-// 范围与节点在线语义一致：仅 is_remote=0 且非 nftables 模式——
+// 范围与节点在线语义一致：仅非 nftables 模式——
 // nftables 节点创建即 status=1、无 agent 会话语义，不在复位面内。
 func (r *Repository) ResetLocalNodeStatusesAtStartup() (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
 	}
 	res := r.db.Model(&model.Node{}).
-		Where("is_remote = ? AND status = ? AND forward_mode <> ?", 0, 1, "nftables").
+		Where("status = ? AND forward_mode <> ?", 1, "nftables").
 		Updates(map[string]interface{}{
 			"status": 0, "updated_time": unixMilliNow(),
 		})
 	return res.RowsAffected, res.Error
 }
 
-// ListOnlineLocalNodes 返回 DB 中仍标记在线的本地节点（is_remote=0
+// ListOnlineLocalNodes 返回 DB 中仍标记在线的节点（
 // 且 status=1），供周期对账以 WS 实时会话为准复位僵尸在线
 // （R4B03-001）。forward_mode 的 nftables 判定由调用方经
 // defaultNodeForwardMode 归一化后做，与全仓口径一致。
@@ -1220,7 +1202,7 @@ func (r *Repository) ListOnlineLocalNodes() ([]model.Node, error) {
 		return nil, errors.New("repository not initialized")
 	}
 	var nodes []model.Node
-	if err := r.db.Where("is_remote = ? AND status = ?", 0, 1).Order("id ASC").Find(&nodes).Error; err != nil {
+	if err := r.db.Where("status = ?", 1).Order("id ASC").Find(&nodes).Error; err != nil {
 		return nil, err
 	}
 	return nodes, nil
@@ -1314,16 +1296,8 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"udpListenAddr": n.UDPListenAddr,
 			"version":       nullableString(n.Version),
 			"http":          n.HTTP, "tls": n.TLS, "socks": n.Socks,
-			"status": n.Status, "isRemote": n.IsRemote,
-			"forwardMode": defaultNodeForwardMode(n.ForwardMode),
-			"remoteUrl":   nullableString(n.RemoteURL),
-			// R7-L8/F2-01：remoteToken 是联邦凭据，不得随节点列表
-			// DTO 下发（前端零消费，仅类型声明）。远端状态同步改经
-			// repo.ListRemoteNodes 在服务端内部取用（见 handler 的
-			// syncRemoteNodeStatuses），不借道列表 DTO。
-			// 全集复扫同族：remoteConfig 同为零消费（前端仅类型声
-			// 明、后端只走 DB 模型），且其 JSON 内嵌 D3-04 relay
-			// 凭据（relayUsername/relayPassword），一并删除下发。
+			"status":                  n.Status,
+			"forwardMode":             defaultNodeForwardMode(n.ForwardMode),
 			"expiryReminderDismissed": n.ExpiryReminderDismissed,
 			"interfaceName":           nullableString(n.InterfaceName),
 			"sshConfig":               sshConfigByNodeID[n.ID],
@@ -1915,479 +1889,6 @@ func (r *Repository) ListTunnels() ([]map[string]interface{}, error) {
 	return result, nil
 }
 
-// ─── PeerShare CRUD ──────────────────────────────────────────────────
-
-func (r *Repository) CreatePeerShare(share *model.PeerShare) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Create(share).Error
-}
-
-func (r *Repository) UpdatePeerShare(share *model.PeerShare) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Model(&model.PeerShare{}).Where("id = ?", share.ID).Updates(map[string]interface{}{
-		"name": share.Name, "max_bandwidth": share.MaxBandwidth,
-		"expiry_time": share.ExpiryTime, "port_range_start": share.PortRangeStart,
-		"port_range_end": share.PortRangeEnd, "is_active": share.IsActive,
-		"updated_time": share.UpdatedTime, "allowed_domains": share.AllowedDomains,
-		"allowed_ips": share.AllowedIPs,
-	}).Error
-}
-
-// UpdatePeerShareRelayCredentials 只更新 share 的 D3-04 relay 凭据
-// 两列（UpdatePeerShare 的显式列集合不含凭据列，避免常规更新路径
-// 用旧结构体覆盖凭据）。
-func (r *Repository) UpdatePeerShareRelayCredentials(id int64, username, password string, updatedTime int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Model(&model.PeerShare{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"relay_username": username, "relay_password": password, "updated_time": updatedTime,
-	}).Error
-}
-
-func (r *Repository) DeletePeerShare(id int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("share_id = ?", id).Delete(&model.PeerShareRuntime{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("share_id = ?", id).Delete(&model.PeerShareResource{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("id = ?", id).Delete(&model.PeerShare{}).Error
-	})
-}
-
-func (r *Repository) GetPeerShare(id int64) (*model.PeerShare, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var s model.PeerShare
-	err := r.db.Where("id = ?", id).First(&s).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &s, nil
-}
-
-func (r *Repository) GetPeerShareByToken(token string) (*model.PeerShare, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var s model.PeerShare
-	err := r.db.Where("token = ?", token).First(&s).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &s, nil
-}
-
-func (r *Repository) ListPeerShares() ([]model.PeerShare, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var shares []model.PeerShare
-	err := r.db.Order("id DESC").Find(&shares).Error
-	return shares, err
-}
-
-func (r *Repository) AddPeerShareCurrentFlow(shareID int64, delta int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	if shareID <= 0 || delta <= 0 {
-		return nil
-	}
-	return r.db.Model(&model.PeerShare{}).Where("id = ?", shareID).
-		UpdateColumns(map[string]interface{}{
-			// B08-001 同族：current_flow 是对端上报驱动的持久累加器，
-			// 裸加溢出同 flow 三面（SQLite 回绕落库 / PG 报错），走饱和口径。
-			"current_flow": saturatingCounterIncrExpr("current_flow", delta),
-			"updated_time": unixMilliNow(),
-		}).Error
-}
-
-func (r *Repository) ResetPeerShareCurrentFlow(shareID int64, updatedTime int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	if shareID <= 0 {
-		return nil
-	}
-	if updatedTime <= 0 {
-		updatedTime = unixMilliNow()
-	}
-	return r.db.Model(&model.PeerShare{}).Where("id = ?", shareID).Updates(map[string]interface{}{
-		"current_flow": 0, "updated_time": updatedTime,
-	}).Error
-}
-
-// ─── PeerShareRuntime CRUD ───────────────────────────────────────────
-
-func (r *Repository) CreatePeerShareRuntime(item *model.PeerShareRuntime) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	if item == nil {
-		return errors.New("runtime item is nil")
-	}
-	return r.db.Create(item).Error
-}
-
-func (r *Repository) UpdatePeerShareRuntime(item *model.PeerShareRuntime) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	if item == nil {
-		return errors.New("runtime item is nil")
-	}
-	return r.db.Model(&model.PeerShareRuntime{}).Where("id = ?", item.ID).Updates(map[string]interface{}{
-		"reservation_id": item.ReservationID,
-		"binding_id":     item.BindingID, "role": item.Role,
-		"chain_name": item.ChainName, "service_name": item.ServiceName,
-		"protocol": item.Protocol, "strategy": item.Strategy,
-		"port": item.Port, "target": item.Target,
-		"applied": item.Applied, "status": item.Status,
-		"updated_time": item.UpdatedTime,
-	}).Error
-}
-
-func (r *Repository) MarkPeerShareRuntimeReleased(id int64, updatedTime int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Model(&model.PeerShareRuntime{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"status": 0, "updated_time": updatedTime,
-	}).Error
-}
-
-func (r *Repository) GetPeerShareRuntimeByResourceKey(shareID int64, resourceKey string) (*model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var item model.PeerShareRuntime
-	err := r.db.Where("share_id = ? AND resource_key = ?", shareID, resourceKey).First(&item).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
-}
-
-func (r *Repository) GetPeerShareRuntimeByReservationID(shareID int64, reservationID string) (*model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var item model.PeerShareRuntime
-	err := r.db.Where("share_id = ? AND reservation_id = ?", shareID, reservationID).First(&item).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
-}
-
-func (r *Repository) GetPeerShareRuntimeByBindingID(shareID int64, bindingID string) (*model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var item model.PeerShareRuntime
-	err := r.db.Where("share_id = ? AND binding_id = ?", shareID, bindingID).First(&item).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
-}
-
-func (r *Repository) GetPeerShareRuntimeByID(id int64) (*model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var item model.PeerShareRuntime
-	err := r.db.Where("id = ?", id).First(&item).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
-}
-
-func (r *Repository) ListActivePeerShareRuntimesByShareID(shareID int64) ([]model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var out []model.PeerShareRuntime
-	err := r.db.Where("share_id = ? AND status = 1", shareID).Order("port ASC, id ASC").Find(&out).Error
-	if err != nil {
-		return nil, err
-	}
-	if out == nil {
-		out = make([]model.PeerShareRuntime, 0)
-	}
-	return out, nil
-}
-
-// ListPeerShareRuntimesByShareID returns every runtime row of a share
-// regardless of status, including already-released rows. Share-delete
-// cleanup uses it to recover federation tunnel IDs from tunnel/create
-// resource keys even after the runtimes themselves were released, so a
-// provider-renamed federation tunnel is still found (R2-F3-02).
-func (r *Repository) ListPeerShareRuntimesByShareID(shareID int64) ([]model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var out []model.PeerShareRuntime
-	err := r.db.Where("share_id = ?", shareID).Order("port ASC, id ASC").Find(&out).Error
-	if err != nil {
-		return nil, err
-	}
-	if out == nil {
-		out = make([]model.PeerShareRuntime, 0)
-	}
-	return out, nil
-}
-
-func (r *Repository) ListActivePeerShareRuntimePorts(shareID int64, nodeID int64) ([]int, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var ports []int
-	err := r.db.Model(&model.PeerShareRuntime{}).
-		Where("share_id = ? AND node_id = ? AND status = 1 AND port > 0", shareID, nodeID).
-		Pluck("port", &ports).Error
-	if err != nil {
-		return nil, err
-	}
-	if ports == nil {
-		ports = make([]int, 0)
-	}
-	return ports, nil
-}
-
-func (r *Repository) ListActiveForwardPeerShareRuntimesByServiceName(serviceName string) ([]model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var items []model.PeerShareRuntime
-	err := r.db.Where("service_name = ? AND status = 1 AND role = ?", serviceName, "forward").
-		Order("id ASC").
-		Find(&items).Error
-	if err != nil {
-		return nil, err
-	}
-	if items == nil {
-		items = make([]model.PeerShareRuntime, 0)
-	}
-	return items, nil
-}
-
-func (r *Repository) ListActiveForwardPeerShareRuntimesByNodeAndServiceName(nodeID int64, serviceName string) ([]model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	serviceName = strings.TrimSpace(serviceName)
-	if serviceName == "" {
-		return []model.PeerShareRuntime{}, nil
-	}
-	var items []model.PeerShareRuntime
-	err := r.db.Where("node_id = ? AND service_name = ? AND status = 1 AND role = ?", nodeID, serviceName, "forward").
-		Order("id ASC").
-		Find(&items).Error
-	if err != nil {
-		return nil, err
-	}
-	if items == nil {
-		items = make([]model.PeerShareRuntime, 0)
-	}
-	return items, nil
-}
-
-func (r *Repository) ListActiveForwardPeerShareRuntimesByNode(nodeID int64) ([]model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var items []model.PeerShareRuntime
-	err := r.db.Where("node_id = ? AND status = 1 AND role = ?", nodeID, "forward").Find(&items).Error
-	if err != nil {
-		return nil, err
-	}
-	if items == nil {
-		items = make([]model.PeerShareRuntime, 0)
-	}
-	return items, nil
-}
-
-func (r *Repository) GetActiveForwardPeerShareRuntimeByPort(shareID int64, port int) (*model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var item model.PeerShareRuntime
-	err := r.db.Where("share_id = ? AND port = ? AND status = 1 AND role = ?", shareID, port, "forward").First(&item).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
-}
-
-func (r *Repository) GetActiveForwardPeerShareRuntimeByServiceName(shareID int64, serviceName string) (*model.PeerShareRuntime, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	serviceName = strings.TrimSpace(serviceName)
-	if shareID <= 0 || serviceName == "" {
-		return nil, nil
-	}
-	var item model.PeerShareRuntime
-	err := r.db.Where("share_id = ? AND service_name = ? AND status = 1 AND role = ?", shareID, serviceName, "forward").
-		Order("id ASC").
-		First(&item).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
-}
-
-func (r *Repository) ExistsActivePeerShareRuntimeOnNodePort(nodeID int64, port int) (bool, error) {
-	if r == nil || r.db == nil {
-		return false, errors.New("repository not initialized")
-	}
-	var count int64
-	err := r.db.Model(&model.PeerShareRuntime{}).
-		Where("node_id = ? AND port = ? AND status = 1", nodeID, port).
-		Count(&count).Error
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
-}
-
-func (r *Repository) UpdatePeerShareRuntimeServiceName(id int64, serviceName string, updatedTime int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Model(&model.PeerShareRuntime{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"service_name": serviceName,
-		"applied":      1,
-		"updated_time": updatedTime,
-	}).Error
-}
-
-func (r *Repository) MarkPeerShareRuntimeReleasedByPort(shareID int64, port int, updatedTime int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return markPeerShareRuntimeReleasedByPortTx(r.db, shareID, port, updatedTime)
-}
-
-func markPeerShareRuntimeReleasedByPortTx(tx *gorm.DB, shareID int64, port int, updatedTime int64) error {
-	if tx == nil {
-		return errors.New("database unavailable")
-	}
-	if shareID <= 0 || port <= 0 {
-		return nil
-	}
-	if updatedTime <= 0 {
-		updatedTime = unixMilliNow()
-	}
-	return tx.Model(&model.PeerShareRuntime{}).Where("share_id = ? AND port = ? AND status = 1", shareID, port).Updates(map[string]interface{}{
-		"status":       0,
-		"applied":      0,
-		"service_name": "",
-		"updated_time": updatedTime,
-	}).Error
-}
-
-func (r *Repository) MarkForwardPeerShareRuntimeReleasedByServiceName(shareID int64, serviceName string, updatedTime int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	serviceName = strings.TrimSpace(serviceName)
-	if shareID <= 0 || serviceName == "" {
-		return nil
-	}
-	if updatedTime <= 0 {
-		updatedTime = unixMilliNow()
-	}
-	return r.db.Model(&model.PeerShareRuntime{}).
-		Where("share_id = ? AND status = 1 AND role = ? AND service_name = ?", shareID, "forward", serviceName).
-		Updates(map[string]interface{}{
-			"status":       0,
-			"applied":      0,
-			"service_name": "",
-			"updated_time": updatedTime,
-		}).Error
-}
-
-// ─── FederationTunnelBinding ─────────────────────────────────────────
-
-func (r *Repository) UpsertFederationTunnelBinding(item *model.FederationTunnelBinding) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	if item == nil {
-		return errors.New("binding item is nil")
-	}
-	return r.db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "tunnel_id"}, {Name: "node_id"}, {Name: "chain_type"}, {Name: "hop_inx"},
-		},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"remote_url", "resource_key", "remote_binding_id",
-			"allocated_port", "status", "updated_time",
-		}),
-	}).Create(item).Error
-}
-
-func (r *Repository) ListActiveFederationTunnelBindingsByTunnel(tunnelID int64) ([]model.FederationTunnelBinding, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var out []model.FederationTunnelBinding
-	err := r.db.Where("tunnel_id = ? AND status = 1", tunnelID).
-		Order("chain_type ASC, hop_inx ASC, id ASC").Find(&out).Error
-	if err != nil {
-		return nil, err
-	}
-	if out == nil {
-		out = make([]model.FederationTunnelBinding, 0)
-	}
-	return out, nil
-}
-
-func (r *Repository) DeleteFederationTunnelBindingsByTunnel(tunnelID int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Where("tunnel_id = ?", tunnelID).Delete(&model.FederationTunnelBinding{}).Error
-}
-
 // ─── Export Methods ──────────────────────────────────────────────────
 
 // withContext 返回共享同一连接池、但 DB 会话绑定 ctx 的仓库克隆。
@@ -2479,18 +1980,12 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 	}
 	backup.Nodes = nodes
 
-	// FIX132-C（A3-05）：SSH 配置与面板共享定义随 nodes 段导出。
+	// FIX132-C（A3-05）：SSH 配置随 nodes 段导出。
 	nodeSSHConfigs, err := r.exportNodeSSHConfigs()
 	if err != nil {
 		return nil, fmt.Errorf("export node ssh configs failed: %w", err)
 	}
 	backup.NodeSSHConfigs = nodeSSHConfigs
-
-	peerShares, err := r.exportPeerShares()
-	if err != nil {
-		return nil, fmt.Errorf("export peer shares failed: %w", err)
-	}
-	backup.PeerShares = peerShares
 
 	tunnels, err := r.exportTunnels()
 	if err != nil {
@@ -2639,17 +2134,12 @@ func (r *Repository) exportPartial(types []string) (*model.BackupData, error) {
 			return nil, fmt.Errorf("export nodes failed: %w", err)
 		}
 		backup.Nodes = v
-		// A3-05：SSH 配置与面板共享定义随 nodes 段。
+		// A3-05：SSH 配置随 nodes 段。
 		sc, err := r.exportNodeSSHConfigs()
 		if err != nil {
 			return nil, fmt.Errorf("export node ssh configs failed: %w", err)
 		}
 		backup.NodeSSHConfigs = sc
-		ps, err := r.exportPeerShares()
-		if err != nil {
-			return nil, fmt.Errorf("export peer shares failed: %w", err)
-		}
-		backup.PeerShares = ps
 	}
 	if typeSet["tunnels"] {
 		v, err := r.exportTunnels()
@@ -2790,7 +2280,7 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 			Port: n.Port, HTTP: n.HTTP, TLS: n.TLS, Socks: n.Socks,
 			CreatedTime: n.CreatedTime, Status: n.Status,
 			TCPListenAddr: n.TCPListenAddr, UDPListenAddr: n.UDPListenAddr,
-			Inx: n.Inx, IsRemote: n.IsRemote,
+			Inx: n.Inx,
 		}
 		if n.ExpiryTime.Valid {
 			b.ExpiryTime = n.ExpiryTime.Int64
@@ -2815,15 +2305,6 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 		if n.Version.Valid {
 			b.Version = n.Version.String
 		}
-		if n.RemoteURL.Valid {
-			b.RemoteURL = n.RemoteURL.String
-		}
-		if n.RemoteToken.Valid {
-			b.RemoteToken = n.RemoteToken.String
-		}
-		if n.RemoteConfig.Valid {
-			b.RemoteConfig = n.RemoteConfig.String
-		}
 		b.LatencyTargets = n.LatencyTargets
 		b.ForwardMode = n.ForwardMode
 		// O7-006：恢复后保留已忽略的到期提醒状态
@@ -2845,28 +2326,6 @@ func (r *Repository) exportNodeSSHConfigs() ([]model.NodeSSHConfigBackup, error)
 			NodeID: c.NodeID, Host: c.Host, Port: c.Port, Username: c.Username,
 			AuthType: c.AuthType, Password: c.Password.String, PrivateKey: c.PrivateKey.String,
 			Passphrase: c.Passphrase.String, SudoMode: c.SudoMode, CreatedTime: c.CreatedTime,
-		})
-	}
-	return out, nil
-}
-
-// exportPeerShares 导出 peer_share 定义全表（A3-05；runtime/resource
-// 等运行时表按登记排除，不在此列）。
-func (r *Repository) exportPeerShares() ([]model.PeerShareBackup, error) {
-	var rows []model.PeerShare
-	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	out := make([]model.PeerShareBackup, 0, len(rows))
-	for _, s := range rows {
-		out = append(out, model.PeerShareBackup{
-			ID: s.ID, Name: s.Name, NodeID: s.NodeID, Token: s.Token,
-			MaxBandwidth: s.MaxBandwidth, ExpiryTime: s.ExpiryTime,
-			PortRangeStart: s.PortRangeStart, PortRangeEnd: s.PortRangeEnd,
-			CurrentFlow: s.CurrentFlow, IsActive: s.IsActive,
-			CreatedTime: s.CreatedTime, UpdatedTime: s.UpdatedTime,
-			AllowedDomains: s.AllowedDomains, AllowedIPs: s.AllowedIPs,
-			RelayUsername: s.RelayUsername, RelayPassword: s.RelayPassword,
 		})
 	}
 	return out, nil
@@ -3394,17 +2853,10 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			}
 			result.NodeSSHConfigsImported = count
 		}
-		if typeSet["nodes"] && len(backup.PeerShares) > 0 {
-			count, err := importPeerShares(tx, backup.PeerShares, now, rep)
-			if err != nil {
-				return fmt.Errorf("import peer shares failed: %w", err)
-			}
-			result.PeerSharesImported = count
-		}
 		// B4-02 残面：转发端口替换集全集预判（见
 		// predictImportedForwardPortReplacements）——在 tunnels
 		// 段之前算定（链路面复检要用），供 tunnels/forwards 两段
-		// 的行内四源复检作转发排除集；成员资格与备份内声明顺序
+		// 的行内三源复检作转发排除集；成员资格与备份内声明顺序
 		// 无关。users 段已在本点之前落库，用户存在性是终态。
 		forwardReplaceIDs := map[int64]bool{}
 		if typeSet["forwards"] && len(backup.Forwards) > 0 {
@@ -3941,17 +3393,6 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 UDP 监听地址（节点 #%d）格式非法，已回落默认 [::]，恢复后请在节点设置中重新填写", n.ID)
 			udpListenAddr = "[::]"
 		}
-		// X-03（本轮重推）：恢复面与写面同口径——远端节点 URL 的
-		// host 含空标签时清空 + warning（与同函数 ServerIP 面同型；
-		// 写面 C-35 validateRemoteNodeURL 经 checkFederationRemoteAddr
-		// 做 DNS 判定（B13-001 起与传输层同口径），`a..b` 解析失败即
-		// 拒。恢复面不做 DNS，只判空标签语法；
-		// 不整行跳过，否则依赖该节点的隧道/转发段同批恢复会被连带误伤）。
-		remoteURL := n.RemoteURL
-		if remoteURL != "" && urlHostHasEmptyLabel(remoteURL) {
-			rep.warnf("备份恢复：节点 #%d 的远端节点地址 %q 含空标签主机名，已清空，恢复后请在节点设置中重新填写", n.ID, n.RemoteURL)
-			remoteURL = ""
-		}
 		// B3-01（导入面）：节点 secret 字符集门，镜像生成面
 		// nodeSecretCharset（^[0-9a-f]{32}$，randomToken(16) 契
 		// 约）。安装命令构造把 secret 插值进以 root 执行的
@@ -3961,7 +3402,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 		// 用纵深）。恢复面同口径拒收该值：不落库、清空 +
 		// warning 点名节点与处置（绝不回显 secret 原文），节点
 		// 行本身保留（整行跳过会连带误伤同批隧道/转发段，与本
-		// 函数 ServerIP/RemoteURL 清空先例同理）；恢复后管理员
+		// 函数 ServerIP 清空先例同理）；恢复后管理员
 		// 重置 secret 即可，与生成面拒绝文案的指引一致。空
 		// secret 与清空后状态等价，不重复回执。
 		secret := n.Secret
@@ -3994,26 +3435,19 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			ServerIPV4:   sql.NullString{String: serverIPv4, Valid: serverIPv4 != ""},
 			ServerIPV6:   sql.NullString{String: serverIPv6, Valid: serverIPv6 != ""},
 			// B4/F-027：导入侧同样补 ExtraIPs（此前导出/导入双漏）。
-			ExtraIPs:      sql.NullString{String: extraIPs, Valid: extraIPs != ""},
-			Port:          n.Port,
-			InterfaceName: sql.NullString{String: n.InterfaceName, Valid: n.InterfaceName != ""},
-			Version:       sql.NullString{String: n.Version, Valid: n.Version != ""},
-			HTTP:          n.HTTP,
-			TLS:           n.TLS,
-			Socks:         n.Socks,
-			CreatedTime:   n.CreatedTime,
-			UpdatedTime:   sql.NullInt64{Int64: now, Valid: true},
-			Status:        n.Status,
-			TCPListenAddr: tcpListenAddr,
-			UDPListenAddr: udpListenAddr,
-			Inx:           n.Inx,
-			IsRemote:      n.IsRemote,
-			// 导出仅在 Valid 时写 remote* 三字段，'' 不是合法取值：
-			// 空即 NULL（旧实现无条件 Valid:true 把 NULL 写成 ''，
-			// 同 BUG-A2-3 的丢 NULL 类）。
-			RemoteURL:      sql.NullString{String: remoteURL, Valid: remoteURL != ""},
-			RemoteToken:    sql.NullString{String: n.RemoteToken, Valid: n.RemoteToken != ""},
-			RemoteConfig:   sql.NullString{String: n.RemoteConfig, Valid: n.RemoteConfig != ""},
+			ExtraIPs:       sql.NullString{String: extraIPs, Valid: extraIPs != ""},
+			Port:           n.Port,
+			InterfaceName:  sql.NullString{String: n.InterfaceName, Valid: n.InterfaceName != ""},
+			Version:        sql.NullString{String: n.Version, Valid: n.Version != ""},
+			HTTP:           n.HTTP,
+			TLS:            n.TLS,
+			Socks:          n.Socks,
+			CreatedTime:    n.CreatedTime,
+			UpdatedTime:    sql.NullInt64{Int64: now, Valid: true},
+			Status:         n.Status,
+			TCPListenAddr:  tcpListenAddr,
+			UDPListenAddr:  udpListenAddr,
+			Inx:            n.Inx,
 			LatencyTargets: n.LatencyTargets,
 			ForwardMode:    forwardMode,
 			// O7-006：恢复后保留已忽略的到期提醒状态
@@ -4024,7 +3458,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "extra_ips", "port", "interface_name", "version",
 				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
-				"inx", "is_remote", "remote_url", "remote_token", "remote_config", "latency_targets", "forward_mode", "expiry_reminder_dismissed",
+				"inx", "latency_targets", "forward_mode", "expiry_reminder_dismissed",
 			}),
 		}).Create(&item).Error
 		if err != nil {
@@ -4102,120 +3536,6 @@ func importNodeSSHConfigs(tx *gorm.DB, rows []model.NodeSSHConfigBackup, now int
 	return count, nil
 }
 
-// importPeerShares 恢复 peer_share 定义（A3-05）。token 是全局唯一
-// 业务键：同 token 异 id 的既有行先删占位（与 user_subscriptions
-// 导入的既有处理一致）；节点不存在的定义跳过并计数（D4-03）。
-// runtime/resource 等运行时表不随备份，对端凭原 token 重新接入后
-// 由运行时重建，回执如实提示。
-func importPeerShares(tx *gorm.DB, rows []model.PeerShareBackup, now int64, rep *importReport) (int, error) {
-	count := 0
-	for _, s := range rows {
-		// R7-H-01：共享端口范围过恢复面端口门（界 + 顺序；0-0 为
-		// 未设置形态放行），且必须在下方 token 占位清理之前判——
-		// 被跳过的行不得触发对目标库既有共享的删除。域外整行
-		// 跳过 + warning，与入站行同处置（保存面 federation 双面
-		// 同口径拒收）。
-		if !validRestorePeerSharePortRange(s.PortRangeStart, s.PortRangeEnd) {
-			rep.skip("peerShares")
-			rep.warnf("备份恢复：面板共享 #%d（%q）的端口范围 %d-%d 不是合法的 1-65535 有序区间，已跳过该行未恢复", s.ID, s.Name, s.PortRangeStart, s.PortRangeEnd)
-			continue
-		}
-		nodeExists, err := rowExistsTx(tx, &model.Node{}, s.NodeID)
-		if err != nil {
-			return count, err
-		}
-		if !nodeExists {
-			rep.skip("peerShares")
-			continue
-		}
-		if s.Token != "" {
-			// H-S01：删占位 share 时连带删其 runtime/resource 行
-			// （与 DeletePeerShare 的级联口径对齐），不留 share_id
-			// 悬空的运行时残留行。
-			var occupyingShares []int64
-			if err := tx.Model(&model.PeerShare{}).Where("token = ? AND id <> ?", s.Token, s.ID).Pluck("id", &occupyingShares).Error; err != nil {
-				return count, err
-			}
-			if len(occupyingShares) > 0 {
-				if err := tx.Where("share_id IN ?", occupyingShares).Delete(&model.PeerShareRuntime{}).Error; err != nil {
-					return count, err
-				}
-				if err := tx.Where("share_id IN ?", occupyingShares).Delete(&model.PeerShareResource{}).Error; err != nil {
-					return count, err
-				}
-			}
-			if err := tx.Where("token = ? AND id <> ?", s.Token, s.ID).Delete(&model.PeerShare{}).Error; err != nil {
-				return count, err
-			}
-		}
-		updated := s.UpdatedTime
-		if updated == 0 {
-			updated = now
-		}
-		// 复扫 R-08：恢复面与写面同口径——剔除空标签域名条目 + warning。
-		allowedDomains := s.AllowedDomains
-		if cleaned, dropped := filterPeerShareAllowedDomains(s.AllowedDomains); dropped {
-			rep.warnf("备份恢复：面板共享 #%d（%q）的域名白名单含空标签条目 %q，已剔除", s.ID, s.Name, s.AllowedDomains)
-			allowedDomains = cleaned
-		}
-		// B8-10：AllowedIPs 与域名同律——镜像写面规范化（见
-		// normalizeImportedPeerShareAllowedIPs）。写面产出的备
-		// 份恒为规范形，不触发回执；仅外部/手工备份的非规范形
-		// 与非法条目在此归一/剔除并点名。
-		allowedIPs := s.AllowedIPs
-		if normalized, dropped := normalizeImportedPeerShareAllowedIPs(s.AllowedIPs); normalized != s.AllowedIPs {
-			if dropped > 0 {
-				rep.warnf("备份恢复：面板共享 #%d（%q）的 IP 白名单含 %d 条非法条目，已剔除，其余条目已按保存面同口径规范化", s.ID, s.Name, dropped)
-			} else {
-				rep.warnf("备份恢复：面板共享 #%d（%q）的 IP 白名单已按保存面同口径规范化（非规范形态/重复条目已归一）", s.ID, s.Name)
-			}
-			allowedIPs = normalized
-		}
-		item := model.PeerShare{
-			ID: s.ID, Name: s.Name, NodeID: s.NodeID, Token: s.Token,
-			MaxBandwidth: s.MaxBandwidth, ExpiryTime: s.ExpiryTime,
-			PortRangeStart: s.PortRangeStart, PortRangeEnd: s.PortRangeEnd,
-			CurrentFlow: clampImportedCounter(rep, fmt.Sprintf("面板共享 #%d（%q）", s.ID, s.Name), "currentFlow", s.CurrentFlow), IsActive: s.IsActive,
-			CreatedTime: s.CreatedTime, UpdatedTime: updated,
-			AllowedDomains: allowedDomains, AllowedIPs: allowedIPs,
-			RelayUsername: s.RelayUsername, RelayPassword: s.RelayPassword,
-		}
-		if item.CreatedTime == 0 {
-			item.CreatedTime = now
-		}
-		// FIX2-B（V3-01）：凭据列仅在备份确实携带时才进 DoUpdates；
-		// 旧备份无此二字段（恒空），无条件更新会把同实例现存凭据
-		// 清零（与 D4-11「无信号即不动」同口径）。全新恢复走插入
-		// 分支，凭据随 item 落库，不受此限。
-		peerShareDoUpdates := []string{
-			"name", "node_id", "token", "max_bandwidth", "expiry_time",
-			"port_range_start", "port_range_end", "current_flow", "is_active",
-			"updated_time", "allowed_domains", "allowed_ips",
-		}
-		if s.RelayUsername != "" || s.RelayPassword != "" {
-			peerShareDoUpdates = append(peerShareDoUpdates, "relay_username", "relay_password")
-		}
-		if err := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns(peerShareDoUpdates),
-		}).Create(&item).Error; err != nil {
-			return count, err
-		}
-		// FIX2-B（V4-N2）：is_active 带 default:1，新插入分支会吞掉
-		// 停用共享的显式 0 并静默重新激活（原 token 立即可用）——
-		// 与 kernel/inbound 等恢复路径同口径补写回。意图必须取备份
-		// 行 s（Create 后 GORM 会把默认值回填进 item，不可读）。
-		if err := restoreZeroValuedInt(tx, &model.PeerShare{}, item.ID, "is_active", s.IsActive); err != nil {
-			return count, err
-		}
-		count++
-	}
-	if count > 0 {
-		rep.warnf("已恢复 %d 条面板共享（联邦）定义；运行时状态未随备份恢复，对端凭原 token 重新接入后自动重建", count)
-	}
-	return count, nil
-}
-
 // normalizeBackupTunnelEngine mirrors handler.normalizeTunnelEngine (the repo
 // layer cannot import the handler): "" or "gost" select the agent's
 // forwarder, "realm" selects realm; anything else is an error, never
@@ -4287,21 +3607,10 @@ func validateImportedTunnelStatus(status int) error {
 // set"): a value that is SET must be a port in 1-65535 (ranges: both
 // bounds in range and ordered). Carriers with a defined unset form
 // keep it: chain_tunnel.port NULL/0 ("undetermined"), an unconfigured
-// tunnel probe target (empty host + port 0, judged by the caller), a
-// peer_share range of 0-0 ("not configured", save face accepts it and
-// consumers fail closed on it), and an empty node.port spec.
+// tunnel probe target (empty host + port 0, judged by the caller), and
+// an empty node.port spec.
 func validRestorePort(port int) bool {
 	return port >= 1 && port <= 65535
-}
-
-// validRestorePeerSharePortRange judges a peer_share port range: the
-// fully unset form (0,0) is legitimate; any set range must satisfy
-// 1 <= start <= end <= 65535 (a half-set range is not a range).
-func validRestorePeerSharePortRange(start, end int) bool {
-	if start == 0 && end == 0 {
-		return true
-	}
-	return validRestorePort(start) && validRestorePort(end) && start <= end
 }
 
 // validRestoreNodePortSpec judges a node.port range spec string: the
@@ -4554,7 +3863,7 @@ func (r *Repository) importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, no
 				rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的端口 %d 不在 1-65535 之间，已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.Port)
 				continue
 			}
-			// B4-02 残面：链路声明口落库前四源占用复检（与转发面
+			// B4-02 残面：链路声明口落库前三源占用复检（与转发面
 			// R1-03-M2 同型）——预检排除集按备份 ID 全集组装，
 			// 被行门跳过的转发其存量端口行在导入后存活，链路声明
 			// 与之同节点同口时预检放行、此前落库无门，可跨表双
@@ -4812,7 +4121,7 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 	// rep.skip("forwardPorts") 调用点都须同步累计对应分计数，
 	// 否则汇总条数与合计数对不上。
 	var portsSkippedMissingNode, portsSkippedBadInIP, portsSkippedBadPort int
-	// R1-03-M2：端口行落库前四源占用＋节点端口范围复检的状态。
+	// R1-03-M2：端口行落库前三源占用＋节点端口范围复检的状态。
 	// 恢复前预检（precheckBackupPortConflicts）按整单排除集判重，
 	// 存在盲区：被本单跳过的转发（策略/零目标等门）与 ForwardPorts
 	// 为 nil 的转发，其存量端口行被预检排除、却在导入后原样存
@@ -5084,7 +4393,7 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 					}
 					inIP = stripped
 				}
-				// R1-03-M2：落库前四源占用＋节点端口范围复检（预
+				// R1-03-M2：落库前三源占用＋节点端口范围复检（预
 				// 检盲区收口，状态定义见函数前段）。占用走统一谓
 				// 词 NodePortOccupantTx、排除集仅含尚未处理的备
 				// 份转发；范围内判走节点 Port 规格集合语义（与写
@@ -6114,9 +5423,6 @@ func migrateSchema(db *gorm.DB) error {
 	if err := normalizeStrategy(&model.ChainTunnel{}, "chain_tunnel", "round"); err != nil {
 		return err
 	}
-	if err := normalizeStrategy(&model.PeerShareRuntime{}, "peer_share_runtime", "round"); err != nil {
-		return err
-	}
 
 	if ver < 3 {
 		if err := migrateViteConfigValueColumnTypeFn(db); err != nil {
@@ -6311,8 +5617,6 @@ func migratePostgresTrafficInt64Columns(db *gorm.DB) error {
 		{TableName: "user_tunnel", ColumnName: "flow"},
 		{TableName: "user_tunnel", ColumnName: "in_flow"},
 		{TableName: "user_tunnel", ColumnName: "out_flow"},
-		{TableName: "peer_share", ColumnName: "max_bandwidth"},
-		{TableName: "peer_share", ColumnName: "current_flow"},
 	}
 
 	for _, column := range columns {
@@ -7102,31 +6406,13 @@ func importIsDecimalPort(s string) bool {
 }
 
 // importPortInNodeSpec 是恢复面的节点端口范围判（R1-03-M2）：
-// 与写面 validateLocalNodePort/validateRemoteNodePort 同口径——
-// 本地节点按 node.Port 规格的集合语义（逗号多段、段间空隙不放
-// 行；规格空=不限；规格不可解析时宽松放行；可解析但钳制后为空
-// 集且含数字时全拒，E-01 口径）；远端节点按 RemoteConfig 的
-// portRangeStart/End（未配置=不限）。不做全量展开、逐段区间
-// 成员判。
+// 与写面 validateLocalNodePort 同口径——按 node.Port 规格的集合
+// 语义（逗号多段、段间空隙不放行；规格空=不限；规格不可解析时
+// 宽松放行；可解析但钳制后为空集且含数字时全拒，E-01 口径）。
+// 不做全量展开、逐段区间成员判。
 func importPortInNodeSpec(node *model.Node, port int) bool {
 	if node == nil || port <= 0 {
 		return true
-	}
-	if node.IsRemote == 1 {
-		if !node.RemoteConfig.Valid {
-			return true
-		}
-		var cfg struct {
-			PortRangeStart int `json:"portRangeStart"`
-			PortRangeEnd   int `json:"portRangeEnd"`
-		}
-		if err := json.Unmarshal([]byte(node.RemoteConfig.String), &cfg); err != nil {
-			return true
-		}
-		if cfg.PortRangeStart <= 0 || cfg.PortRangeEnd <= 0 {
-			return true
-		}
-		return port >= cfg.PortRangeStart && port <= cfg.PortRangeEnd
 	}
 	spec := strings.TrimSpace(node.Port)
 	if spec == "" {
@@ -7573,55 +6859,6 @@ func latencyTargetIsASCIIDigit(r rune) bool {
 	return r >= '0' && r <= '9'
 }
 
-// normalizeImportedPeerShareAllowedIPs 是写面
-// normalizePeerShareAllowedIPs（handler/federation.go）的恢复面
-// 镜像，与下方 filterPeerShareAllowedDomains 同律：逐条规范化
-// （含 "/" 条目走 net.ParseCIDR 取网络规范形、裸 IP 走
-// parseIPLiteral 镜像、按规范形去重），使联邦运行时的精确字符
-// 串匹配与写面产出同字面——此前 AllowedIPs 原样落库，CIDR 主
-// 机位、IPv4-mapped、host:port、重复等非规范形态与消费面匹配
-// 字面脱节，白名单可静默失效。非法条目的处置与写面不同：写面
-// 整单拒收，恢复面按域名先例逐条剔除并回计数（fail-closed 方
-// 向：被剔条目永不命中，收紧不放宽）；回执只报条数、不回显原
-// 值。返回规范化结果与剔除条数。
-func normalizeImportedPeerShareAllowedIPs(raw string) (string, int) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", 0
-	}
-	parts := strings.Split(raw, ",")
-	normalized := make([]string, 0, len(parts))
-	seen := make(map[string]struct{}, len(parts))
-	dropped := 0
-	for _, part := range parts {
-		item := strings.TrimSpace(part)
-		if item == "" {
-			continue
-		}
-		if strings.Contains(item, "/") {
-			_, network, err := net.ParseCIDR(item)
-			if err != nil {
-				dropped++
-				continue
-			}
-			item = network.String()
-		} else {
-			ip := parseImportedIPLiteral(item)
-			if ip == nil {
-				dropped++
-				continue
-			}
-			item = ip.String()
-		}
-		if _, exists := seen[item]; exists {
-			continue
-		}
-		seen[item] = struct{}{}
-		normalized = append(normalized, item)
-	}
-	return strings.Join(normalized, ","), dropped
-}
-
 // parseImportedIPLiteral 镜像 handler.parseIPLiteral：trim 空白与
 // 引号后 net.ParseIP，失败再按 host:port 拆主机段，命中后统一
 // normalizeImportedIPAddress 规范形。
@@ -7652,26 +6889,6 @@ func normalizeImportedIPAddress(ip net.IP) net.IP {
 		return v4
 	}
 	return ip.To16()
-}
-
-// filterPeerShareAllowedDomains 剔除分享域名白名单中的空标签条目，
-// 返回清理后的列表与是否剔除过（恢复面；fail-closed 方向：
-// 被剔除的条目在等值匹配中永不命中，收紧而非放宽）。
-func filterPeerShareAllowedDomains(raw string) (string, bool) {
-	kept := make([]string, 0)
-	dropped := false
-	for _, d := range strings.Split(raw, ",") {
-		d = strings.TrimSpace(d)
-		if d == "" {
-			continue
-		}
-		if kernel.HasEmptyLabel(d) {
-			dropped = true
-			continue
-		}
-		kept = append(kept, d)
-	}
-	return strings.Join(kept, ","), dropped
 }
 
 func nullableString(v sql.NullString) interface{} {
@@ -8193,4 +7410,76 @@ func (r *Repository) PruneServiceMonitorResults(olderThanMs int64) error {
 		return nil
 	}
 	return r.db.Where("timestamp < ?", olderThanMs).Delete(&model.ServiceMonitorResult{}).Error
+}
+
+// inxAllocMu 与 inxAllocLast 是 NextIndex 的进程内发放台账
+// （B04-001）：按 *gorm.DB 实例 + 表记录上次发放的 inx。
+//
+// 旧实现是「SELECT MIN(inx) → handler 再 Create」的读-写分离：并发
+// 建节点/隧道/转发时多个请求读到同一最小值、拿到相同 inx，排序
+// 序号撞车（12 路并发实测重复）。改为发放时持锁并取
+// min(DB 当前最小值-1, 上次发放值-1)：发放值在本进程内单调递减、
+// 绝不重复，落库先后不影响唯一性；每次仍重读 DB 最小值，导入或
+// 手动排序把 inx 压到更低时自动跟随。面板为单进程部署，进程内
+// 原子即足够；不走 inx 唯一索引路线——存量库可能已有撞车数据，
+// 建唯一索引会在迁移期失败。
+var (
+	inxAllocMu   sync.Mutex
+	inxAllocLast = map[*gorm.DB]map[string]int{}
+)
+
+func (r *Repository) NextIndex(table string) int {
+	if r == nil || r.db == nil {
+		return 0
+	}
+	var modelRef interface{}
+	switch table {
+	case "node":
+		modelRef = &model.Node{}
+	case "tunnel":
+		modelRef = &model.Tunnel{}
+	case "forward":
+		modelRef = &model.Forward{}
+	default:
+		return 0
+	}
+
+	inxAllocMu.Lock()
+	defer inxAllocMu.Unlock()
+
+	// DB 当前口径下的下一个值（与旧实现一致：空表 0，否则最小值-1）。
+	dbNext := 0
+	dbKnown := true
+	type inxRow struct {
+		Inx int
+	}
+	var row inxRow
+	err := r.db.Model(modelRef).
+		Select("inx").
+		Order("inx ASC, id ASC").
+		Limit(1).
+		Take(&row).Error
+	switch {
+	case err == nil:
+		dbNext = row.Inx - 1
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		dbNext = 0
+	default:
+		// 查询失败：有台账时靠台账继续保唯一；无台账才回旧兜底 0。
+		dbKnown = false
+	}
+
+	byTable, ok := inxAllocLast[r.db]
+	if !ok {
+		byTable = map[string]int{}
+		inxAllocLast[r.db] = byTable
+	}
+	next := dbNext
+	if last, handed := byTable[table]; handed && last-1 < next {
+		next = last - 1
+	} else if !dbKnown && !handed {
+		return 0
+	}
+	byTable[table] = next
+	return next
 }

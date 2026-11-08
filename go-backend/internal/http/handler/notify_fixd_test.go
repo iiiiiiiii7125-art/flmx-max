@@ -97,8 +97,8 @@ func insertFixdNode(t *testing.T, r *repo.Repository, id int64, name string) {
 	t.Helper()
 	now := time.Now().UnixMilli()
 	if err := r.DB().Exec(`
-		INSERT INTO node(id, name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx, is_remote, remote_url, remote_token)
-		VALUES(?, ?, 'secret-x', '10.0.0.7', '10.0.0.7', '', '40000-40010', '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0, 0, '', '')
+		INSERT INTO node(id, name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
+		VALUES(?, ?, 'secret-x', '10.0.0.7', '10.0.0.7', '', '40000-40010', '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0)
 	`, id, name, now, now).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}

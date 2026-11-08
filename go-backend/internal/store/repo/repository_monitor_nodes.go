@@ -13,7 +13,6 @@ func (r *Repository) ListMonitorNodes() ([]model.Node, error) {
 	}
 	var nodes []model.Node
 	err := r.db.Select("id", "inx", "name", "status", "version", "updated_time", "latency_targets").
-		Where("is_remote = ?", 0).
 		Order("inx ASC, id ASC").
 		Find(&nodes).Error
 	return nodes, err
@@ -33,7 +32,7 @@ func (r *Repository) SetNodesLatencyTargets(ids []int64, value string) error {
 		return nil
 	}
 	for _, chunk := range chunkInt64IDs(ids) {
-		if err := r.db.Model(&model.Node{}).Where("id IN ? AND is_remote = ?", chunk, 0).
+		if err := r.db.Model(&model.Node{}).Where("id IN ?", chunk).
 			Update("latency_targets", value).Error; err != nil {
 			return err
 		}
@@ -70,7 +69,7 @@ func (r *Repository) ListNodesWithExpiry() ([]model.Node, error) {
 	}
 	var nodes []model.Node
 	err := r.db.Select("id", "name", "expiry_time", "renewal_cycle", "expiry_reminder_dismissed").
-		Where("is_remote = ? AND expiry_time IS NOT NULL AND expiry_time > 0", 0).
+		Where("expiry_time IS NOT NULL AND expiry_time > 0").
 		Order("id ASC").
 		Find(&nodes).Error
 	return nodes, err
@@ -109,16 +108,16 @@ func (r *Repository) SumInboundTraffic() (int64, error) {
 	return total, err
 }
 
-// CountNodesOnline returns (online, total) for local nodes.
+// CountNodesOnline returns (online, total) node counts.
 func (r *Repository) CountNodesOnline() (int64, int64, error) {
 	if r == nil || r.db == nil {
 		return 0, 0, errors.New("repository not initialized")
 	}
 	var total, online int64
-	if err := r.db.Model(&model.Node{}).Where("is_remote = ?", 0).Count(&total).Error; err != nil {
+	if err := r.db.Model(&model.Node{}).Count(&total).Error; err != nil {
 		return 0, 0, err
 	}
-	if err := r.db.Model(&model.Node{}).Where("is_remote = ? AND status = ?", 0, 1).Count(&online).Error; err != nil {
+	if err := r.db.Model(&model.Node{}).Where("status = ?", 1).Count(&online).Error; err != nil {
 		return 0, 0, err
 	}
 	return online, total, nil

@@ -20,10 +20,10 @@ func TestValidateTunnelEntryPortConflictsForNewEntriesDoesNotBlockOnSQLiteTx(t *
 	now := time.Now().UnixMilli()
 
 	if err := r.DB().Exec(`
-		INSERT INTO node(name, secret, server_ip, port, created_time, status, tcp_listen_addr, udp_listen_addr, is_remote)
+		INSERT INTO node(name, secret, server_ip, port, created_time, status, tcp_listen_addr, udp_listen_addr)
 		VALUES
-			('entry-old', 'secret-old', '10.0.0.1', '12000-12010', ?, 1, '[::]', '[::]', 0),
-			('entry-new', 'secret-new', '10.0.0.2', '12000-12010', ?, 1, '[::]', '[::]', 0)
+			('entry-old', 'secret-old', '10.0.0.1', '12000-12010', ?, 1, '[::]', '[::]'),
+			('entry-new', 'secret-new', '10.0.0.2', '12000-12010', ?, 1, '[::]', '[::]')
 	`, now, now).Error; err != nil {
 		t.Fatalf("insert nodes: %v", err)
 	}

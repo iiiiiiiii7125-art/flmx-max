@@ -53,10 +53,6 @@ func TestR2B1CheckSingleRemoteAddrNonPublicDenied(t *testing.T) {
 			t.Fatalf("checkSingleRemoteAddr(%q) must stay allowed: %v", addr, err)
 		}
 	}
-	// 联邦 RemoteURL 校验共用 IsSafeRemoteAddr：元数据主机必须被拒。
-	if err := validateRemoteNodeURL("http://169.254.169.254:6365"); err == nil {
-		t.Fatal("validateRemoteNodeURL(metadata) must be rejected")
-	}
 }
 
 // R2X-026：硬拒层 = 名单 ∪ 169.254/16，SecureFetch 与 notify 共用；
@@ -76,43 +72,6 @@ func TestR2B1HardSegmentDeniedUnderAllowPrivate(t *testing.T) {
 	}
 	if err := validateNotifyURL("http://10.0.0.1/hook"); err != nil {
 		t.Fatalf("private notify target must stay allowed (only hard deny applies): %v", err)
-	}
-}
-
-// R2X-006 诊断面：NAT64/本地 NAT64/6to4 形态默认全拒，内嵌公网放行。
-func TestR2B1FederationDiagnoseTranslatedForms(t *testing.T) {
-	clearFetchEnv(t)
-	deny := []string{
-		"64:ff9b::a9fe:a9fe", "64:ff9b::a00:1", "64:ff9b:1::808:808",
-		"2002:a9fe:a9fe::1", "2002:0a00:0001::1",
-	}
-	for _, target := range deny {
-		if _, err := resolveFederationDiagnoseTarget(target); err == nil {
-			t.Fatalf("resolveFederationDiagnoseTarget(%q) must be rejected", target)
-		}
-	}
-	for _, target := range []string{"64:ff9b::808:808", "2002:0808:0808::1"} {
-		if _, err := resolveFederationDiagnoseTarget(target); err != nil {
-			t.Fatalf("resolveFederationDiagnoseTarget(%q) embedded public must pass: %v", target, err)
-		}
-	}
-}
-
-// R2X-006 角色目标面：硬拒前置于 isPrivateAllowed——allow_private 下
-// 元数据直连仍拒、普通私网仍过、NAT64 内嵌元数据仍拒。
-func TestR2B1FederationRoleTargetsHardBeforeAllow(t *testing.T) {
-	allowFetchEnv(t)
-	deny := []federationRuntimeTarget{
-		{Host: "169.254.169.254"}, {Host: "169.254.0.23"}, {Host: "100.100.100.200"},
-		{Host: "64:ff9b::a9fe:a9fe"},
-	}
-	for _, target := range deny {
-		if err := validateFederationRoleTargets([]federationRuntimeTarget{target}); err == nil {
-			t.Fatalf("role target %q must be hard-denied even with allow_private", target.Host)
-		}
-	}
-	if err := validateFederationRoleTargets([]federationRuntimeTarget{{Host: "10.0.0.1"}}); err != nil {
-		t.Fatalf("role target 10.0.0.1 with allow_private must stay allowed: %v", err)
 	}
 }
 

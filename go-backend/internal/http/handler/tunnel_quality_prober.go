@@ -923,7 +923,7 @@ func (p *tunnelQualityProber) probePublicTargetCandidates(
 }
 
 func isTunnelProbeNodeOnline(node *nodeRecord) bool {
-	return node != nil && (node.IsRemote == 1 || node.Status == 1)
+	return node != nil && node.Status == 1
 }
 
 func (p *tunnelQualityProber) firstOnlineChainNode(nodes []chainNodeRecord) (chainNodeRecord, *nodeRecord, bool) {
@@ -1006,13 +1006,7 @@ func (p *tunnelQualityProber) tcpPingNode(nodeID int64, ip string, port int, opt
 		return 0, 100, errors.New("节点不在线")
 	}
 
-	var pingData map[string]interface{}
-	var pingErr error
-	if node != nil && node.IsRemote == 1 {
-		pingData, pingErr = h.tcpPingViaRemoteNode(node, ip, port, options)
-	} else {
-		pingData, pingErr = h.tcpPingViaNode(nodeID, ip, port, options)
-	}
+	pingData, pingErr := h.tcpPingViaNode(nodeID, ip, port, options)
 	if pingErr != nil {
 		return 0, 100, pingErr
 	}

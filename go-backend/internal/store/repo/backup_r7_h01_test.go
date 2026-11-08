@@ -250,60 +250,6 @@ func TestR7H01NodeSSHConfigPortGate(t *testing.T) {
 	}
 }
 
-// Carrier 5: peer_share port ranges — bounds must be in range and
-// ordered. A set range must be a full 1-65535 ordered range; the fully
-// unset form (0,0), which the save face accepts and consumers treat as
-// fail-closed "not configured", restores untouched.
-func TestR7H01PeerSharePortRangeGate(t *testing.T) {
-	now := time.Now().UnixMilli()
-	dest := openBackupRepo(t, "r7h01-share.db")
-	createRow(t, dest, &model.Node{ID: 71, Name: "r7h01-node", Secret: "s", ServerIP: "203.0.113.10", Port: "1000-65535", CreatedTime: now, Status: 1})
-	cases := []struct {
-		name     string
-		id       int64
-		start    int
-		end      int
-		wantLand bool
-	}{
-		{"out-of-range-pair", 81, 70000, -5, false},
-		{"inverted", 82, 5000, 4000, false},
-		{"boundary-65536", 83, 65536, 65537, false},
-		{"negative-start", 84, -1, 100, false},
-		{"half-set", 85, 0, 5000, false},
-		{"valid", 86, 4000, 5000, true},
-		{"unset", 87, 0, 0, true},
-	}
-	rows := make([]model.PeerShareBackup, 0, len(cases))
-	for _, c := range cases {
-		rows = append(rows, model.PeerShareBackup{
-			ID: c.id, Name: "r7h01-share-" + c.name, NodeID: 71, Token: "r7h01-token-" + c.name,
-			PortRangeStart: c.start, PortRangeEnd: c.end, IsActive: 1, CreatedTime: now, UpdatedTime: now,
-		})
-	}
-	backup := &model.BackupData{Version: "1.0", PeerShares: rows}
-	result, err := dest.Import(backup, []string{"nodes"})
-	if err != nil {
-		t.Fatalf("import: %v", err)
-	}
-	if got := result.SkippedRows["peerShares"]; got != 5 {
-		t.Fatalf("R7-H-01 peer_share range: SkippedRows[peerShares] = %d, want 5, warnings=%v", got, result.ImportWarnings)
-	}
-	for _, c := range cases {
-		n := r7h01Count(t, dest, `SELECT COUNT(1) FROM peer_share WHERE id = ?`, c.id)
-		if c.wantLand && n != 1 {
-			t.Fatalf("R7-H-01 peer_share %s: share must restore, got %d rows", c.name, n)
-		}
-		if !c.wantLand && n != 0 {
-			t.Fatalf("R7-H-01 peer_share %s: share (%d,%d) must be skipped, got %d rows", c.name, c.start, c.end, n)
-		}
-	}
-	var start, end int64
-	row := dest.DB().Raw(`SELECT port_range_start, port_range_end FROM peer_share WHERE id = 86`).Row()
-	if err := row.Scan(&start, &end); err != nil || start != 4000 || end != 5000 {
-		t.Fatalf("R7-H-01 peer_share valid: restored range = %d-%d err=%v, want 4000-5000", start, end, err)
-	}
-}
-
 // Carrier 6: node.port range strings — every token of the spec must be
 // a port or an ordered range within 1-65535; a bad spec skips the node
 // row. The empty spec (unset) restores untouched.
@@ -378,9 +324,6 @@ func TestR7H01ValidRestoresPassUntouched(t *testing.T) {
 		NodeSSHConfigs: []model.NodeSSHConfigBackup{
 			{NodeID: 71, Host: "203.0.113.10", Port: 2222, Username: "root", AuthType: "password", Password: "pw", SudoMode: "none", CreatedTime: now},
 		},
-		PeerShares: []model.PeerShareBackup{
-			{ID: 81, Name: "r7h01-valid-share", NodeID: 71, Token: "r7h01-valid-token", PortRangeStart: 4000, PortRangeEnd: 5000, IsActive: 1, CreatedTime: now, UpdatedTime: now},
-		},
 		Tunnels: []model.TunnelBackup{
 			{ID: 21, Name: "r7h01-valid-tunnel", Type: 2, Flow: 1, TrafficRatio: 1, Status: 1, CreatedTime: now,
 				ProbeTargetHost: "www.bing.com", ProbeTargetPort: 443,
@@ -409,7 +352,6 @@ func TestR7H01ValidRestoresPassUntouched(t *testing.T) {
 	}{
 		{"node", `SELECT COUNT(1) FROM node WHERE id = 71 AND port = '1000-2000'`, nil},
 		{"ssh config port 2222", `SELECT COUNT(1) FROM node_ssh_config WHERE node_id = 71 AND port = 2222`, nil},
-		{"peer share range", `SELECT COUNT(1) FROM peer_share WHERE id = 81 AND port_range_start = 4000 AND port_range_end = 5000`, nil},
 		{"tunnel probe port 443", `SELECT COUNT(1) FROM tunnel WHERE id = 21 AND probe_target_port = 443`, nil},
 		{"chain port 0", `SELECT COUNT(1) FROM chain_tunnel WHERE id = 51 AND port = 0`, nil},
 		{"chain port 23456", `SELECT COUNT(1) FROM chain_tunnel WHERE id = 52 AND port = 23456`, nil},

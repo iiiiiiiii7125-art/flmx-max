@@ -17,14 +17,11 @@ type flowPolicyTarget struct {
 }
 
 type flowUploadBatch struct {
-	flowDeltas            []repo.FlowUploadCounterDelta
-	quotaUsage            map[int64]int64
-	policyTargets         []flowPolicyTarget
-	forwardTraffic        map[int64]tunnelTrafficDelta
-	orphanServices        map[string]struct{}
-	peerShareForwardItems map[string]flowItem
-	peerShareRuntimeItems map[int64]flowItem
-	peerShareUsage        map[int64]int64
+	flowDeltas     []repo.FlowUploadCounterDelta
+	quotaUsage     map[int64]int64
+	policyTargets  []flowPolicyTarget
+	forwardTraffic map[int64]tunnelTrafficDelta
+	orphanServices map[string]struct{}
 	// seqAdvance X-P3-31：agent 上报路径设置——入账单事务提交时同
 	// tx 推进 seq；非上报路径（策略单条/内部调用）为 nil。
 	seqAdvance *repo.FlowSeqAdvance
@@ -32,18 +29,16 @@ type flowUploadBatch struct {
 
 func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.FlowUploadForwardMeta) flowUploadBatch {
 	batch := flowUploadBatch{
-		quotaUsage:            make(map[int64]int64),
-		forwardTraffic:        make(map[int64]tunnelTrafficDelta),
-		orphanServices:        make(map[string]struct{}),
-		peerShareForwardItems: make(map[string]flowItem),
-		peerShareRuntimeItems: make(map[int64]flowItem),
+		quotaUsage:     make(map[int64]int64),
+		forwardTraffic: make(map[int64]tunnelTrafficDelta),
+		orphanServices: make(map[string]struct{}),
 	}
 	policySeen := map[flowPolicyTarget]struct{}{}
 
 	// X-P3-18（L-05-1）：gost 合并/缩放溢出检查（对齐 nft 路径：溢出
 	// 整条丢弃并记日志）。旧实现逐项直接累加，两条各 ≈9.2e18 的上报
 	// 合并回绕为负、负增量落账。现本地转发先聚合到 pending（任一加法
-	// 溢出即整条转发丢弃），最后统一落 batch；peer 合并同口径丢弃。
+	// 溢出即整条转发丢弃），最后统一落 batch。
 	type pendingLocal struct {
 		userID, userTunnelID int64
 		rawIn, rawOut        int64
@@ -52,8 +47,6 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 	pending := make(map[int64]*pendingLocal)
 	pendingOrder := make([]int64, 0)
 	droppedLocal := make(map[int64]struct{})
-	droppedPeerRuntime := make(map[int64]struct{})
-	droppedPeerForward := make(map[string]struct{})
 	addOverflows := func(a, b int64) bool {
 		return (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b)
 	}
@@ -68,42 +61,10 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 		if serviceName == "" || serviceName == "web_api" {
 			continue
 		}
-		if runtimeID, ok := parsePeerShareRuntimeServiceID(serviceName); ok {
-			if _, dropped := droppedPeerRuntime[runtimeID]; dropped {
-				continue
-			}
-			merged := batch.peerShareRuntimeItems[runtimeID]
-			if addOverflows(merged.U, item.U) || addOverflows(merged.D, item.D) {
-				log.Printf("gost overflow discard peer runtime_id=%d service=%s u=%d d=%d", runtimeID, serviceName, item.U, item.D)
-				delete(batch.peerShareRuntimeItems, runtimeID)
-				droppedPeerRuntime[runtimeID] = struct{}{}
-				continue
-			}
-			merged.N = serviceName
-			merged.U += item.U
-			merged.D += item.D
-			batch.peerShareRuntimeItems[runtimeID] = merged
-			continue
-		}
 		forwardID, userID, userTunnelID, ok := parseFlowServiceIDs(serviceName)
 		if !ok {
 			continue
 		}
-		normalized := normalizeForwardRuntimeServiceName(serviceName)
-		if _, dropped := droppedPeerForward[normalized]; !dropped {
-			merged := batch.peerShareForwardItems[normalized]
-			if addOverflows(merged.U, item.U) || addOverflows(merged.D, item.D) {
-				log.Printf("gost overflow discard peer service=%s u=%d d=%d", normalized, item.U, item.D)
-				delete(batch.peerShareForwardItems, normalized)
-				droppedPeerForward[normalized] = struct{}{}
-			} else {
-				merged.N = normalized
-				merged.U += item.U
-				merged.D += item.D
-				batch.peerShareForwardItems[normalized] = merged
-			}
-		}
-
 		meta, exists := metas[forwardID]
 		if !exists {
 			batch.orphanServices[serviceName] = struct{}{}
@@ -213,7 +174,7 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 
 // applyFlowUploadBatch 返回入账错误（X-P3-31/V-08）：总量+quota 由
 // repo 单事务原子入账（seqAdvance 非 nil 时 seq 同 tx 推进）；失败时
-// 整批未入账，策略执行/孤儿清理/peer-share 结算一律不进行，调用方
+// 整批未入账，策略执行/孤儿清理一律不进行，调用方
 // （flowUpload）据此整批拒收返非 ok，agent 同 seq 重报重新入账。
 // 旧「两段分开写、一段失败另一段继续 + 逐条 fallback」取舍已按
 // V-08 裁定废弃（断言更新登记见 flow_upload_batch_test.go 三测试）。
@@ -231,7 +192,7 @@ func (h *Handler) applyFlowUploadBatch(nodeID int64, batch flowUploadBatch, now 
 }
 
 // runFlowUploadSideEffects 是入账提交后的副作用面（配额强制、策略
-// 执行、孤儿清理、peer-share 结算）：只应在批次确实入账后调用。
+// 执行、孤儿清理）：只应在批次确实入账后调用。
 // v1（applyFlowUploadBatch）与 v2（flowUploadV2 的 applied 分支）
 // 共用，保证两条上报路径入账后的面板行为一致。
 func (h *Handler) runFlowUploadSideEffects(nodeID int64, batch flowUploadBatch, quotaViews map[int64]*model.UserQuotaView) {
@@ -250,17 +211,5 @@ func (h *Handler) runFlowUploadSideEffects(nodeID int64, batch flowUploadBatch, 
 			serviceNames = append(serviceNames, serviceName)
 		}
 		h.sendDeleteOrphanedForwardServices(nodeID, serviceNames)
-	}
-	for serviceName, item := range batch.peerShareForwardItems {
-		forwardID, _, _, ok := parseFlowServiceIDs(serviceName)
-		if ok {
-			h.processPeerShareFlowFromForward(forwardID, nodeID, serviceName, item)
-		}
-	}
-	for runtimeID, item := range batch.peerShareRuntimeItems {
-		h.processPeerShareFlow(nodeID, runtimeID, item)
-	}
-	for shareID, delta := range batch.peerShareUsage {
-		h.addPeerShareFlow(nodeID, shareID, delta)
 	}
 }

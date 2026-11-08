@@ -84,107 +84,6 @@ func parseFlowServiceIDs(serviceName string) (int64, int64, int64, bool) {
 	return forwardID, userID, userTunnelID, true
 }
 
-func parsePeerShareRuntimeServiceID(serviceName string) (int64, bool) {
-	const prefix = "fed_svc_"
-	if !strings.HasPrefix(serviceName, prefix) {
-		return 0, false
-	}
-	raw := strings.TrimPrefix(serviceName, prefix)
-	if raw == "" {
-		return 0, false
-	}
-	parts := strings.SplitN(raw, "_", 2)
-	runtimeID, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil || runtimeID <= 0 {
-		return 0, false
-	}
-	return runtimeID, true
-}
-
-func parsePeerShareInfoFromFederationTunnelName(tunnelName string) (int64, int, bool) {
-	tunnelName = strings.TrimSpace(tunnelName)
-	if !strings.HasPrefix(tunnelName, "Share-") {
-		return 0, 0, false
-	}
-	raw := strings.TrimPrefix(tunnelName, "Share-")
-	idx := strings.Index(raw, "-Port-")
-	if idx <= 0 {
-		return 0, 0, false
-	}
-	shareID, err := strconv.ParseInt(raw[:idx], 10, 64)
-	if err != nil || shareID <= 0 {
-		return 0, 0, false
-	}
-	portValue := strings.TrimSpace(raw[idx+len("-Port-"):])
-	port, err := strconv.Atoi(portValue)
-	if err != nil || port <= 0 {
-		return 0, 0, false
-	}
-	return shareID, port, true
-}
-
-func parsePeerShareIDFromFederationTunnelName(tunnelName string) (int64, bool) {
-	tunnelName = strings.TrimSpace(tunnelName)
-	if !strings.HasPrefix(tunnelName, "Share-") {
-		return 0, false
-	}
-	raw := strings.TrimPrefix(tunnelName, "Share-")
-	idx := strings.Index(raw, "-Port-")
-	if idx <= 0 {
-		return 0, false
-	}
-	shareID, err := strconv.ParseInt(raw[:idx], 10, 64)
-	if err != nil || shareID <= 0 {
-		return 0, false
-	}
-	return shareID, true
-}
-
-func (h *Handler) processPeerShareFlow(nodeID, runtimeID int64, item flowItem) {
-	if h == nil || h.repo == nil || nodeID <= 0 || runtimeID <= 0 {
-		return
-	}
-	runtime, err := h.repo.GetPeerShareRuntimeByID(runtimeID)
-	if err != nil || runtime == nil || runtime.NodeID != nodeID || runtime.Status != 1 {
-		return
-	}
-	h.addPeerShareFlow(nodeID, runtime.ShareID, item.D+item.U)
-}
-
-func (h *Handler) processPeerShareFlowFromForward(forwardID int64, nodeID int64, serviceName string, item flowItem) {
-	if h == nil || h.repo == nil || forwardID <= 0 || nodeID <= 0 {
-		return
-	}
-	// Prefer the reporting node's explicit shared ownership over a coincidentally
-	// equal local forward ID. Never fall back to a service on another node.
-	runtimes, err := h.repo.ListActiveForwardPeerShareRuntimesByNode(nodeID)
-	if err != nil {
-		return
-	}
-	for _, runtime := range runtimes {
-		if normalizeForwardRuntimeServiceName(runtime.ServiceName) == normalizeForwardRuntimeServiceName(serviceName) {
-			h.processPeerShareFlowByServiceName(nodeID, serviceName, item)
-			return
-		}
-	}
-	forward, err := h.getForwardRecord(forwardID)
-	if err != nil || forward == nil {
-		return
-	}
-	_, userID, _, ok := parseFlowServiceIDs(serviceName)
-	if !ok || userID != forward.UserID {
-		return
-	}
-	tunnelName, err := h.repo.GetTunnelName(forward.TunnelID)
-	if err != nil {
-		return
-	}
-	shareID, ok := parsePeerShareIDFromFederationTunnelName(tunnelName)
-	if ok {
-		h.addPeerShareFlow(nodeID, shareID, item.D+item.U)
-	}
-}
-
 func normalizeForwardRuntimeServiceName(serviceName string) string {
 	name := strings.TrimSpace(serviceName)
 	if strings.HasSuffix(name, "_tcp") {
@@ -194,39 +93,6 @@ func normalizeForwardRuntimeServiceName(serviceName string) string {
 		return strings.TrimSuffix(name, "_udp")
 	}
 	return name
-}
-
-func (h *Handler) processPeerShareFlowByServiceName(nodeID int64, serviceName string, item flowItem) {
-	if h == nil || h.repo == nil || nodeID <= 0 || strings.TrimSpace(serviceName) == "" {
-		return
-	}
-	runtimes, err := h.repo.ListActiveForwardPeerShareRuntimesByNode(nodeID)
-	if err != nil {
-		return
-	}
-	var shareID int64
-	for _, runtime := range runtimes {
-		if normalizeForwardRuntimeServiceName(runtime.ServiceName) != normalizeForwardRuntimeServiceName(serviceName) {
-			continue
-		}
-		if shareID != 0 {
-			log.Printf("ambiguous peer share runtime service=%s node_id=%d", serviceName, nodeID)
-			return
-		}
-		shareID = runtime.ShareID
-	}
-	if shareID > 0 {
-		h.addPeerShareFlow(nodeID, shareID, item.D+item.U)
-	}
-}
-
-func (h *Handler) enforcePeerShareFlowLimit(shareID int64) {
-	if h == nil || h.repo == nil || shareID <= 0 {
-		return
-	}
-	if err := h.cleanupPeerShareRuntimes(shareID); err != nil {
-		log.Printf("peer share quota cleanup pending share_id=%d err=%v", shareID, err)
-	}
 }
 
 // O2-002：已删除 scaleFlowByTunnel 死代码（原含 M-001 同类 bug：把 tunnel.Flow 当乘数用，
@@ -510,16 +376,7 @@ func (h *Handler) cleanNodeConfigs(nodeID int64, rawConfig string) {
 		return
 	}
 
-	protection, err := h.loadForwardServiceProtection(nodeID)
-	if err != nil {
-		return
-	}
-	h.cleanOrphanedServicesWithProtection(nodeID, snapshot.Services, protection)
-	// Dependencies are sent before services. A pending shared reservation may
-	// therefore have chains/limiters that are not referenced in this snapshot yet.
-	if protection.unbound {
-		return
-	}
+	h.cleanOrphanedServices(nodeID, snapshot.Services)
 	chainsInUse := make(map[string]struct{})
 	limitersInUse := make(map[string]struct{})
 	for _, service := range snapshot.Services {
@@ -541,71 +398,19 @@ func (h *Handler) cleanNodeConfigs(nodeID int64, rawConfig string) {
 	h.cleanOrphanedLimiters(nodeID, snapshot.Limiters, limitersInUse)
 }
 
-type forwardServiceProtection struct {
-	sharedNames map[string]struct{}
-	unbound     bool
-}
-
-// Shared forward IDs belong to another panel and need not exist in our forward
-// table. Use the same node-scoped ownership check for config and flow reports.
-func (h *Handler) loadForwardServiceProtection(nodeID int64) (forwardServiceProtection, error) {
-	protection := forwardServiceProtection{sharedNames: make(map[string]struct{})}
-	// Read names and pending bindings in one snapshot, so a concurrent bind
-	// cannot fall between two queries and disappear from both protections.
-	runtimes, err := h.repo.ListActiveForwardPeerShareRuntimesByNode(nodeID)
-	if err != nil {
-		return protection, err
-	}
-	minUpdatedTime := time.Now().Add(-10 * time.Minute).UnixMilli()
-	for _, runtime := range runtimes {
-		serviceName := normalizeForwardRuntimeServiceName(runtime.ServiceName)
-		if serviceName == "" {
-			if runtime.Applied == 0 && runtime.UpdatedTime >= minUpdatedTime {
-				protection.unbound = true
-			}
-			continue
-		}
-		protection.sharedNames[serviceName] = struct{}{}
-	}
-	resources, err := h.repo.ListPeerShareResourcesByNode(nodeID)
-	if err != nil {
-		return protection, err
-	}
-	for _, resource := range resources {
-		if base := normalizeForwardRuntimeServiceName(resource.LegacyServiceBase); base != "" {
-			protection.sharedNames[base] = struct{}{}
-		}
-	}
-	return protection, nil
-}
-
-func (p forwardServiceProtection) preserves(serviceName string) bool {
-	_, shared := p.sharedNames[normalizeForwardRuntimeServiceName(serviceName)]
-	return shared || p.unbound
-}
-
 func (h *Handler) cleanOrphanedServices(nodeID int64, services []namedConfigItem) {
 	if h == nil || h.repo == nil || nodeID <= 0 {
 		return
 	}
-	protection, err := h.loadForwardServiceProtection(nodeID)
-	if err != nil {
-		// A failed ownership lookup must never authorize deletion.
-		return
-	}
-	h.cleanOrphanedServicesWithProtection(nodeID, services, protection)
-}
-
-func (h *Handler) cleanOrphanedServicesWithProtection(nodeID int64, services []namedConfigItem, protection forwardServiceProtection) {
 	for _, item := range services {
 		name := strings.TrimSpace(item.Name)
 		if name == "" || name == "web_api" {
 			continue
 		}
+		// Legacy federation service names are not local services; the
+		// orphan path never issues deletes for them (they disappear with
+		// node config resync after the federation removal).
 		if strings.HasPrefix(name, "fed_svc_") || strings.HasPrefix(name, "peer-share-") {
-			continue
-		}
-		if _, ok := protection.sharedNames[normalizeForwardRuntimeServiceName(name)]; ok {
 			continue
 		}
 
@@ -619,7 +424,7 @@ func (h *Handler) cleanOrphanedServicesWithProtection(nodeID int64, services []n
 		}
 
 		if _, _, _, ok := parseFlowServiceIDs(name); ok {
-			h.deleteOrphanedForwardService(nodeID, name, protection)
+			h.deleteOrphanedForwardService(nodeID, name)
 			continue
 		}
 		suffix := parts[len(parts)-1]
@@ -704,10 +509,6 @@ func (h *Handler) sendDeleteOrphanedForwardServices(nodeID int64, serviceNames [
 	if h == nil || h.repo == nil || nodeID <= 0 || len(serviceNames) == 0 {
 		return
 	}
-	protection, err := h.loadForwardServiceProtection(nodeID)
-	if err != nil {
-		return
-	}
 	seen := make(map[string]struct{}, len(serviceNames))
 	for _, serviceName := range serviceNames {
 		serviceName = normalizeForwardRuntimeServiceName(serviceName)
@@ -715,22 +516,17 @@ func (h *Handler) sendDeleteOrphanedForwardServices(nodeID int64, serviceNames [
 			continue
 		}
 		seen[serviceName] = struct{}{}
-		h.deleteOrphanedForwardService(nodeID, serviceName, protection)
+		h.deleteOrphanedForwardService(nodeID, serviceName)
 	}
 }
 
-func (h *Handler) deleteOrphanedForwardService(nodeID int64, serviceName string, protection forwardServiceProtection) {
+func (h *Handler) deleteOrphanedForwardService(nodeID int64, serviceName string) {
 	forwardID, _, _, ok := parseFlowServiceIDs(serviceName)
-	if !ok || protection.preserves(serviceName) {
+	if !ok {
 		return
 	}
 	parts := strings.Split(serviceName, "_")
 	base := parts[0] + "_" + parts[1] + "_" + parts[2]
-	// Parsing accepts legacy suffixes, while deletion targets the entire base
-	// family. Verify the actual targets cannot include a protected share.
-	if protection.preserves(base) {
-		return
-	}
 	// Batch metadata can be missing after a read failure, or stale by the time
 	// cleanup runs. Confirm absence before issuing a destructive command.
 	exists, err := h.repo.ForwardExists(forwardID)

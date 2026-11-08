@@ -454,13 +454,6 @@ EOF
           if [ "$fe_kind" = "default" ]; then
             [ "$fe_k" = "default" ] || fail "$tag observed 格（默认预算）调用点获得了专属 timeout（提取 $fe_k），必须重新裁定登记"
           fi ;;
-        federation)
-          case "$cell" in
-            F004) grep -qP 'newFederationHTTPClient\(10 \* time\.Second\)' "$ROOT/go-backend/internal/http/client/federation.go" \
-                    || fail "$tag 联邦默认 client 10s 锚点缺失" ;;
-            F005) grep -qP 'NewFederationClientWithTimeout\(5 \* time\.Second\)' "$HANDLER_DIR/federation.go" \
-                    || fail "$tag 联邦状态同步 5s 锚点缺失" ;;
-          esac ;;
       esac
       ;;
     pin)

@@ -38,7 +38,7 @@ var k9PortDecisionPoints = []struct {
 }{
 	{"repository_mutations.go", "pickNodePortTx", "UsedPortsOnNodeTx"},
 	{"repository_mutations.go", "GetUsedPortsOnNodeAsMap", "UsedPortsOnNodeTx"},
-	{"repository_federation.go", "ListUsedPortsOnNode", "UsedPortsOnNodeTx"},
+	{"repository_port_occupancy.go", "ListUsedPortsOnNode", "UsedPortsOnNodeTx"},
 	{"repository_control.go", "HasOtherForwardOnNodePortTx", "NodePortOccupiedTx"},
 	{"repository_control.go", "NodePortOccupiedForTunnelTx", "NodePortOccupiedTx"},
 	{"repository_kernel.go", "NodePortRangeOccupant", "NodePortRangeOccupancyTx"},
@@ -53,19 +53,15 @@ var k9PortDecisionPoints = []struct {
 
 // k9PortQueryAllowlist 是负向扫描的豁免清单（函数名 → 理由）。这些
 // 函数含 node+port 决策形查询，但语义上不做「端口是否可分配」的
-// 判定：要么只按已判定来源补取详情，要么是联邦源内部的子集守卫/
-// 清单（只能在统一判重之外多拒、不能放行统一谓词禁止的口）。
+// 判定：只按已判定来源补取详情、或只读展示既有占用。
 var k9PortQueryAllowlist = map[string]string{
-	"FindOtherForwardOnNodePortTx":           "详情补取：来源判定走 NodePortOccupantTx（正向清单已锁），本函数只按来源取名称/状态",
-	"ExistsActivePeerShareRuntimeOnNodePort": "联邦子集守卫：federation tunnel/create 在统一已用集判重之外叠加，只会多拒不会放行",
-	"ListActivePeerShareRuntimePorts":        "联邦子集清单：pickPeerSharePort 在统一已用集之外叠加排除本分享自有预留",
-	"ListActiveForwardPortsForNode":          "节点页展示清单：只读列出本节点转发口，不做分配决策",
-	"GetActiveForwardPeerShareRuntimeByPort": "回放识别门：按 (share_id, port) 认领既有 runtime，命中只导向同参回放或拒绝，其后紧跟 ListUsedPortsOnNode 四源全集判重，只多拒不放行",
-	"getTunnelEntryPortRanges":               "展示聚合：按隧道读既有链路/入站端口聚合 min/max 供列表渲染，不做分配决策",
+	"FindOtherForwardOnNodePortTx":  "详情补取：来源判定走 NodePortOccupantTx（正向清单已锁），本函数只按来源取名称/状态",
+	"ListActiveForwardPortsForNode": "节点页展示清单：只读列出本节点转发口，不做分配决策",
+	"getTunnelEntryPortRanges":      "展示聚合：按隧道读既有链路/入站端口聚合 min/max 供列表渲染，不做分配决策",
 }
 
 // k9HandlerQueryAllowlist 是 handler 包负向扫描的豁免清单。handler
-// 层的选口/判重一律经 repo 统一入口，原则上不应出现对四表的直查
+// 层的选口/判重一律经 repo 统一入口，原则上不应出现对三表的直查
 // 决策形；确有合法直查时在此点名登记理由。
 var k9HandlerQueryAllowlist = map[string]string{}
 
@@ -119,10 +115,9 @@ func k9CallName(fun ast.Expr) string {
 }
 
 var k9OccupancyModels = map[string]bool{
-	"ForwardPort":      true,
-	"ChainTunnel":      true,
-	"NodeInbound":      true,
-	"PeerShareRuntime": true,
+	"ForwardPort": true,
+	"ChainTunnel": true,
+	"NodeInbound": true,
 }
 
 var k9DecisionVerbs = map[string]bool{

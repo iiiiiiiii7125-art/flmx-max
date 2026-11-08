@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"go-backend/internal/http/client"
 	runtimenft "go-backend/internal/runtime/nftables"
 	"go-backend/internal/store/model"
 	"go-backend/internal/ws"
@@ -174,41 +173,6 @@ const (
 	diagnosisCommandTimeoutMsg = "诊断超时（30秒）"
 	diagnosisRequestTimeoutMsg = "诊断超时（2分钟）"
 )
-
-const (
-	// R8-T-06: a federation HTTP client's patience must exceed the
-	// peer's own work budget, never equal it. The peer executes a
-	// threaded command under its global resource mutex as sequential
-	// per-item node commands (defaultNodeCommandTimeout apiece), so a
-	// client timeout constructed as exactly the command budget T is
-	// consumed by one full-budget item plus HTTP traversal and any
-	// mutex queueing — the caller recorded failure while the peer
-	// succeeded, and compensation legs then churned against the
-	// succeeded state. Threaded call sites add this fixed margin.
-	federationClientMargin = 10 * time.Second
-	// federationRuntimeClientTimeout is the explicit client budget
-	// for the federation runtime faces that carry no threaded budget
-	// (Connect / CreateTunnel / ReservePort / ApplyRole): the peer
-	// applies share resources as sequential node commands at
-	// defaultNodeCommandTimeout apiece under the shared role mutex,
-	// so the previous 10s default client could declare failure while
-	// the peer was still legitimately working. 60s is an order of
-	// magnitude over the per-item budget while staying inside the
-	// patience of every calling flow.
-	federationRuntimeClientTimeout = 60 * time.Second
-)
-
-// federationClientTimeout returns the HTTP client timeout for a
-// federation call whose peer work is budgeted at commandTimeout: the
-// budget plus federationClientMargin (R8-T-06). A non-positive budget
-// falls back to defaultNodeCommandTimeout, mirroring
-// sendNodeCommandWithTimeout's normalization.
-func federationClientTimeout(commandTimeout time.Duration) time.Duration {
-	if commandTimeout <= 0 {
-		commandTimeout = defaultNodeCommandTimeout
-	}
-	return commandTimeout + federationClientMargin
-}
 
 func (h *Handler) resolveForwardAccess(r *http.Request, forwardID int64) (*forwardRecord, int64, int, error) {
 	userID, roleID, err := userRoleFromRequest(r)
@@ -660,7 +624,7 @@ func (h *Handler) rebindForwardServiceOnSelfOccupiedPort(forward *forwardRecord,
 		return err
 	}
 	if conflict != nil {
-		// L9 观察 2：四源判重命中的未必是转发，按来源措辞（助手在
+		// L9 观察 2：三源判重命中的未必是转发，按来源措辞（助手在
 		// mutations.go），不误报「已被其他转发占用」。
 		return errors.New(forwardPortConflictMessage(node, port, conflict))
 	}
@@ -946,12 +910,7 @@ func (h *Handler) sendNodeCommandWithTimeout(nodeID int64, commandType string, d
 		timeout = defaultNodeCommandTimeout
 	}
 
-	node, nodeErr := h.getNodeRecord(nodeID)
-	if nodeErr == nil && node != nil && node.IsRemote == 1 {
-		result, err = h.sendRemoteNodeCommandWithTimeout(node, commandType, data, timeout)
-	} else {
-		result, err = h.wsServer.SendCommand(nodeID, commandType, data, timeout)
-	}
+	result, err = h.wsServer.SendCommand(nodeID, commandType, data, timeout)
 	if err == nil {
 		return result, nil
 	}
@@ -967,50 +926,6 @@ func (h *Handler) sendNodeCommandWithTimeout(nodeID int64, commandType string, d
 		}
 	}
 	return result, err
-}
-
-func (h *Handler) sendRemoteNodeCommand(node *nodeRecord, commandType string, data interface{}) (ws.CommandResult, error) {
-	return h.sendRemoteNodeCommandWithTimeout(node, commandType, data, 0)
-}
-
-func (h *Handler) sendRemoteNodeCommandWithTimeout(node *nodeRecord, commandType string, data interface{}, timeout time.Duration) (ws.CommandResult, error) {
-	if node == nil {
-		return ws.CommandResult{}, errors.New("节点不存在")
-	}
-	remoteURL := strings.TrimSpace(node.RemoteURL)
-	remoteToken := strings.TrimSpace(node.RemoteToken)
-	if remoteURL == "" || remoteToken == "" {
-		return ws.CommandResult{}, errors.New("远程节点缺少共享配置")
-	}
-
-	// R8-T-06: client patience = command budget + fixed margin; the
-	// peer spends the budget itself under its resource mutex.
-	fc := client.NewFederationClientWithTimeout(federationClientTimeout(timeout))
-	res, err := fc.Command(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeNodeCommandRequest{
-		CommandType: commandType,
-		Data:        data,
-	})
-	if err != nil {
-		return ws.CommandResult{}, err
-	}
-	if res == nil {
-		return ws.CommandResult{}, errors.New("远程节点未返回命令结果")
-	}
-
-	result := ws.CommandResult{
-		Type:    res.Type,
-		Success: res.Success,
-		Message: res.Message,
-		Data:    res.Data,
-	}
-	if !result.Success {
-		msg := strings.TrimSpace(result.Message)
-		if msg == "" {
-			msg = "命令执行失败"
-		}
-		return result, errors.New(msg)
-	}
-	return result, nil
 }
 
 func (h *Handler) diagnoseForwardRuntime(ctx context.Context, forward *forwardRecord) (map[string]interface{}, error) {
@@ -1817,11 +1732,7 @@ func (h *Handler) appendPathDiagnosis(results *[]map[string]interface{}, nodeCac
 		pingData map[string]interface{}
 		pingErr  error
 	)
-	if fromNode.IsRemote == 1 {
-		pingData, pingErr = h.pingViaRemoteNode(fromNode, targetIP, targetPort, protocol, options)
-	} else {
-		pingData, pingErr = h.pingViaNode(fromNodeID, targetIP, targetPort, protocol, options)
-	}
+	pingData, pingErr = h.pingViaNode(fromNodeID, targetIP, targetPort, protocol, options)
 	if pingErr != nil {
 		item["success"] = false
 		item["message"] = pingErr.Error()
@@ -2003,65 +1914,6 @@ func (h *Handler) tcpPingViaNode(nodeID int64, ip string, port int, options diag
 	return res.Data, nil
 }
 
-func (h *Handler) tcpPingViaRemoteNode(node *nodeRecord, ip string, port int, options diagnosisExecOptions) (map[string]interface{}, error) {
-	if node == nil {
-		return nil, errors.New("节点不存在")
-	}
-	remoteURL := strings.TrimSpace(node.RemoteURL)
-	remoteToken := strings.TrimSpace(node.RemoteToken)
-	if remoteURL == "" || remoteToken == "" {
-		return nil, errors.New("远程节点缺少共享配置")
-	}
-	if options.commandTimeout <= 0 {
-		options.commandTimeout = diagnosisCommandTimeout
-	}
-	if options.pingTimeoutMS <= 0 {
-		options.pingTimeoutMS = int(diagnosisCommandTimeout / time.Millisecond)
-	}
-	pingCount := options.pingCount
-	if pingCount <= 0 {
-		pingCount = 4
-	}
-
-	// R8-T-06: the peer clamps its agent command budget to the same
-	// requested timeout, so the client must carry budget + margin.
-	fc := client.NewFederationClientWithTimeout(federationClientTimeout(options.commandTimeout))
-	return fc.Diagnose(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeDiagnoseRequest{
-		IP:       strings.TrimSpace(ip),
-		Port:     port,
-		Count:    pingCount,
-		Timeout:  options.pingTimeoutMS,
-		Protocol: "tcp",
-	})
-}
-
-func (h *Handler) udpPingViaRemoteNode(node *nodeRecord, ip string, port int, options diagnosisExecOptions) (map[string]interface{}, error) {
-	if node == nil {
-		return nil, errors.New("节点不存在")
-	}
-	remoteURL := strings.TrimSpace(node.RemoteURL)
-	remoteToken := strings.TrimSpace(node.RemoteToken)
-	if remoteURL == "" || remoteToken == "" {
-		return nil, errors.New("远程节点缺少共享配置")
-	}
-	if options.commandTimeout <= 0 {
-		options.commandTimeout = diagnosisCommandTimeout
-	}
-	if options.pingTimeoutMS <= 0 {
-		options.pingTimeoutMS = int(diagnosisCommandTimeout / time.Millisecond)
-	}
-
-	// R8-T-06: see tcpPingViaRemoteNode.
-	fc := client.NewFederationClientWithTimeout(federationClientTimeout(options.commandTimeout))
-	return fc.Diagnose(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeDiagnoseRequest{
-		IP:       strings.TrimSpace(ip),
-		Port:     port,
-		Count:    4,
-		Timeout:  options.pingTimeoutMS,
-		Protocol: "udp",
-	})
-}
-
 func isUDPBasedProtocol(protocol string) bool {
 	p := strings.ToLower(strings.TrimSpace(protocol))
 	return p == "kcp" || p == "udp" || p == "quic"
@@ -2100,13 +1952,6 @@ func (h *Handler) pingViaNode(nodeID int64, ip string, port int, protocol string
 		return h.udpPingViaNode(nodeID, ip, port, options)
 	}
 	return h.tcpPingViaNode(nodeID, ip, port, options)
-}
-
-func (h *Handler) pingViaRemoteNode(node *nodeRecord, ip string, port int, protocol string, options diagnosisExecOptions) (map[string]interface{}, error) {
-	if isUDPBasedProtocol(protocol) {
-		return h.udpPingViaRemoteNode(node, ip, port, options)
-	}
-	return h.tcpPingViaRemoteNode(node, ip, port, options)
 }
 
 func (h *Handler) udpPingViaNode(nodeID int64, ip string, port int, options diagnosisExecOptions) (map[string]interface{}, error) {
@@ -2443,8 +2288,8 @@ func processServerAddress(serverAddr string) string {
 		if ip := net.ParseIP(serverAddr); ip != nil && ip.To4() == nil {
 			// PC-03: "2001:db8::1:443" parses as a valid IPv6 literal, but
 			// it arrives here as a bare-IPv6 host + Sprintf port
-			// (mutations.go:6460, federation.go:146, control_plane.go:2057,
-			// realm.go:100). If the tail after the last ":" is a decimal
+			// (mutations.go, control_plane.go,
+			// realm.go). If the tail after the last ":" is a decimal
 			// port and the prefix is itself a valid IP, treat the input as
 			// host:port instead of bracketing the whole string (which would
 			// fold the port into the address and drop the port component).

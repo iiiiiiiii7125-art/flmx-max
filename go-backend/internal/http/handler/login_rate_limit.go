@@ -21,9 +21,6 @@ import (
 // 本文件负责浏览器侧（login）的限流桶与检查入口。客户端 IP 的
 // 可信代理链解析已收口到 internal/clientip（R5-FC）：登录、
 // gh 镜像、WS 鉴权失败三面共用同一解析（见 clientip 包注释）。
-// 联邦侧（federation AllowedIPs）是另一种信任模型，其链长判定
-// 逻辑仍在 federation.go 内独立实现，仅借用 clientip 的切分/
-// 计数原语与跳数配置。
 
 const (
 	loginRateLimitWindow      = time.Minute
@@ -52,8 +49,7 @@ const (
 
 // TrustedProxyHops 读取 FLMX_TRUSTED_PROXY_HOPS，默认 1。
 // 实现正本在 internal/clientip（限流三面共用：登录 / gh 镜像 /
-// WS 鉴权失败），此处保留同名入口供本包存量调用（含联邦侧借用
-// 跳数配置——其信任模型仍独立，见 federation.go）。
+// WS 鉴权失败），此处保留同名入口供本包存量调用。
 func TrustedProxyHops() int {
 	return clientip.TrustedProxyHops()
 }

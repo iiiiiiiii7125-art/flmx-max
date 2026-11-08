@@ -28,18 +28,3 @@ func TestChainStrategyLegalGrid(t *testing.T) {
 		}
 	}
 }
-
-// R1-03-L1：联邦运行面策略合法集钉格——agent 真实解析集四值＋
-// 面板伪策略 best 放行，其余（含大小写异形与空串）必拒。
-func TestPeerRuntimeStrategyLegalGrid(t *testing.T) {
-	for _, s := range []string{"fifo", "round", "rand", "hash", "best", " fifo "} {
-		if !PeerRuntimeStrategyLegal(s) {
-			t.Errorf("PeerRuntimeStrategyLegal(%q) = false, want true", s)
-		}
-	}
-	for _, s := range []string{"", "banana", "FIFO", "rr", "random", "ha", "Round"} {
-		if PeerRuntimeStrategyLegal(s) {
-			t.Errorf("PeerRuntimeStrategyLegal(%q) = true, want false", s)
-		}
-	}
-}

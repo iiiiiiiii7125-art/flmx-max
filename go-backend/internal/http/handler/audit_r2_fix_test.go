@@ -37,8 +37,8 @@ func latencyAlertState(h *Handler) (streak, down int) {
 func TestProbeRoundKindSemantics(t *testing.T) {
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
 	ctx := context.Background()
-	a := mustCreateLatencyNode(t, r, "a", 1, 0)
-	b := mustCreateLatencyNode(t, r, "b", 1, 0)
+	a := mustCreateLatencyNode(t, r, "a", 1)
+	b := mustCreateLatencyNode(t, r, "b", 1)
 	stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) {
 		return nil, errors.New("测试点连接失败")
 	})
@@ -99,8 +99,8 @@ func TestProbeRoundKindSemantics(t *testing.T) {
 // neither raise nor feed a latency alert.
 func TestLatencyConfigChangeRefreshDoesNotCountStreak(t *testing.T) {
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
-	mustCreateLatencyNode(t, r, "a", 1, 0)
-	mustCreateLatencyNode(t, r, "b", 1, 0)
+	mustCreateLatencyNode(t, r, "a", 1)
+	mustCreateLatencyNode(t, r, "b", 1)
 	var pings atomic.Int64
 	stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) {
 		pings.Add(1)
@@ -137,7 +137,7 @@ func TestEmptyExpansionRoundsCannotCountStreak(t *testing.T) {
 	ctx := context.Background()
 
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
-	node := mustCreateLatencyNode(t, r, "late", 1, 0)
+	node := mustCreateLatencyNode(t, r, "late", 1)
 	stubLatencyPing(t, func(int64, string) (map[string]interface{}, error) {
 		return nil, errors.New("测试点连接失败")
 	})

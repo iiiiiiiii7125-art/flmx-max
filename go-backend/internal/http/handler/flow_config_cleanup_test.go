@@ -4,14 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
+
+	"go-backend/internal/store/model"
 
 	"gorm.io/gorm"
 )
 
-func TestConfigCleanupPreservesSharedDependencies(t *testing.T) {
+func TestConfigCleanupPreservesServiceDependencies(t *testing.T) {
 	a := newCleanupAgent(t)
-	a.addRuntime(t, "70_1_0", 1, 1, 1, time.Now())
+	if err := a.h.repo.DB().Create(&model.Forward{ID: 70, UserID: 1, UserName: "local", Name: "local", TunnelID: 1, RemoteAddr: "127.0.0.1:80", Status: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := a.h.repo.DB().Create(&model.ForwardPort{ForwardID: 70, NodeID: 1, Port: 32000}).Error; err != nil {
+		t.Fatal(err)
+	}
 	a.h.cleanNodeConfigs(1, `{
 		"services": [{"name":"70_1_0_tcp", "handler":{"chain":"chains_88"}, "limiter":"13, rule_traffic_limit_70"}],
 		"chains": [{"name":"fed_chain_17"}, {"name":"chains_88"}, {"name":"chains_999"}],
@@ -32,37 +38,8 @@ func TestConfigCleanupRemovesOrphanedForwardLimiter(t *testing.T) {
 	assertCleanupDependency(t, a, "DeleteLimiters", "limiter", "rule_traffic_limit_70")
 }
 
-func TestConfigCleanupProtectsPendingSharedDependencies(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		age  time.Duration
-		keep bool
-	}{
-		{name: "pending", age: time.Minute, keep: true},
-		{name: "expired-reservation", age: 11 * time.Minute},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a := newCleanupAgent(t)
-			a.addRuntime(t, "", 1, 1, 0, time.Now().Add(-tc.age))
-			// Dependencies may arrive before the service and its runtime binding.
-			a.h.cleanNodeConfigs(1, `{"chains":[{"name":"chains_88"}],"limiters":[{"name":"13"}]}`)
-			a.probe(t)
-			if tc.keep {
-				for _, commandType := range []string{"DeleteChains", "DeleteLimiters"} {
-					if commands := a.commandsOfType(commandType); len(commands) != 0 {
-						t.Fatalf("pending shared dependencies deleted: %+v", commands)
-					}
-				}
-				return
-			}
-			assertCleanupDependency(t, a, "DeleteChains", "chain", "chains_88")
-			assertCleanupDependency(t, a, "DeleteLimiters", "limiter", "13")
-		})
-	}
-}
-
 func TestConfigCleanupPreservesDependenciesOnLookupFailure(t *testing.T) {
-	for _, table := range []string{"peer_share_runtime", "tunnel", "speed_limit", "forward"} {
+	for _, table := range []string{"tunnel", "speed_limit", "forward"} {
 		t.Run(table, func(t *testing.T) {
 			a := newCleanupAgent(t)
 			callback := "test:config-cleanup-query-failure"
@@ -77,10 +54,9 @@ func TestConfigCleanupPreservesDependenciesOnLookupFailure(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = a.h.repo.DB().Callback().Query().Remove(callback) })
 			configs := map[string]string{
-				"peer_share_runtime": `{"chains":[{"name":"chains_88"}],"limiters":[{"name":"13"}]}`,
-				"tunnel":             `{"chains":[{"name":"chains_88"}]}`,
-				"speed_limit":        `{"limiters":[{"name":"13"}]}`,
-				"forward":            `{"limiters":[{"name":"rule_traffic_limit_70"}]}`,
+				"tunnel":      `{"chains":[{"name":"chains_88"}]}`,
+				"speed_limit": `{"limiters":[{"name":"13"}]}`,
+				"forward":     `{"limiters":[{"name":"rule_traffic_limit_70"}]}`,
 			}
 			a.h.cleanNodeConfigs(1, configs[table])
 			a.probe(t)
@@ -91,39 +67,6 @@ func TestConfigCleanupPreservesDependenciesOnLookupFailure(t *testing.T) {
 				if commands := a.commandsOfType(commandType); len(commands) != 0 {
 					t.Fatalf("lookup failure must not authorize cleanup: %+v", commands)
 				}
-			}
-		})
-	}
-}
-
-func TestSharedForwardCleanupDuringRuntimeBinding(t *testing.T) {
-	for _, mode := range []string{"single", "batch", "config"} {
-		t.Run(mode, func(t *testing.T) {
-			a := newCleanupAgent(t)
-			a.addRuntime(t, "", 1, 1, 0, time.Now())
-			callback := "test:bind-during-cleanup"
-			bound := false
-			if err := a.h.repo.DB().Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
-				if tx.Statement.Table != "peer_share_runtime" || bound {
-					return
-				}
-				bound = true
-				// Reproduce binding immediately after the first ownership read.
-				// Separate name/unbound queries would both miss this runtime.
-				if err := a.h.repo.DB().Exec("UPDATE peer_share_runtime SET service_name = ?, applied = 1", "70_1_0").Error; err != nil {
-					t.Errorf("bind shared runtime: %v", err)
-				}
-			}); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = a.h.repo.DB().Callback().Query().Remove(callback) })
-			runCleanupPath(a.h, mode, []string{"70_1_0_tcp"})
-			a.probe(t)
-			if !bound {
-				t.Fatal("binding transition did not run")
-			}
-			if commands := a.commandsOfType("DeleteService"); len(commands) != 0 {
-				t.Fatalf("service was deleted during binding: %+v", commands)
 			}
 		})
 	}

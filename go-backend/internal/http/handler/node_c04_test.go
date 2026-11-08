@@ -127,7 +127,7 @@ func TestC04_DismissExpiryReminderMissingNode(t *testing.T) {
 	}
 
 	now := time.Now().UnixMilli()
-	id, err := h.repo.CreateNode("c04-node", "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "")
+	id, err := h.repo.CreateNode("c04-node", "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, nil, "")
 	if err != nil {
 		t.Fatalf("create node: %v", err)
 	}

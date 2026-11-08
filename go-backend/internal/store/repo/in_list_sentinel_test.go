@@ -60,21 +60,18 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_flow.go:MapForwardIDsToTunnelIDs": {"[start:end]", "整表转发集，手工切片分块"},
 
 	// —— 代码字面量小清单（构造上有界）——
-	"repository.go:seedData":                                                  {"", "字面量 3 元品牌名清单"},
-	"repository.go:ensurePostgresIDDefaults":                                  {"", "字面量 2 元类型名清单"},
-	"repository.go:ListEnabledServiceMonitors":                                {"", "字面量 2 元协议清单"},
-	"repository.go:importServiceMonitorLimits":                                {"", "字面量 7 元服务监控限值配置键清单"},
-	"repository_federation_cleanup.go:ListFederationTunnelBindingsForCleanup": {"", "字面量 2 元状态清单"},
-	"repository_federation_reconcile.go:ListPendingPeerShareNodeIDs":          {"", "字面量 2 元角色清单"},
-	"repository_subscription.go:migrateSubscriptions":                         {"", "字面量 5 元旧配置键清单"},
-	"repository_mutations.go:ListSoleSegmentTunnelsForNode":                   {"", "字面量 2 元链路段角色清单（入口/出口，L4-03）"},
+	"repository.go:seedData":                                {"", "字面量 3 元品牌名清单"},
+	"repository.go:ensurePostgresIDDefaults":                {"", "字面量 2 元类型名清单"},
+	"repository.go:ListEnabledServiceMonitors":              {"", "字面量 2 元协议清单"},
+	"repository.go:importServiceMonitorLimits":              {"", "字面量 7 元服务监控限值配置键清单"},
+	"repository_subscription.go:migrateSubscriptions":       {"", "字面量 5 元旧配置键清单"},
+	"repository_mutations.go:ListSoleSegmentTunnelsForNode": {"", "字面量 2 元链路段角色清单（入口/出口，L4-03）"},
 
 	// —— 子查询形（IN (?) 传 *gorm.DB，不展开变量）——
 	"repository_mutations.go:DeleteUserCascade": {"", "forwardIDs/userTunnelIDs 为 Select 子查询，X01 A 集已核"},
 
 	// —— 有界豁免（前提经 R3 复核仍成立，见 rescan.md）——
 	"repository.go:GetConfigsByNames":               {"", "全部调用方传代码字面量小清单（X01 A 集已核 5 处）"},
-	"repository.go:importPeerShares":                {"", "同 token 占位 share 集：按单个 token 的分享行物化，管理面创建、实际恒小（X01 A 集）"},
 	"repository_kernel.go:applyInboundCounterChunk": {"", "调用方 ApplyInboundCounters 已按 200 条分片（X01 A 集）"},
 
 	// —— 排除集反连接（K8/B5）——

@@ -184,7 +184,7 @@ func TestRelayProbeEmptyIDsStaysTargeted(t *testing.T) {
 // 后续重构把守卫弄丢后以空集调 probeNodeLatency 触发全量轮+计数。
 func TestNodeLatencyTargetsSetEmptyIDsRejected(t *testing.T) {
 	h, r := setupLatencyHandler(t, `[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`)
-	node := mustCreateLatencyNode(t, r, "n1", 1, 0)
+	node := mustCreateLatencyNode(t, r, "n1", 1)
 	res := postJSONToHandler(t, h.nodeLatencyTargetsSet, map[string]interface{}{"ids": []int64{}, "custom": false})
 	if out := decodeCode(t, res.Body.String()); out.Code == 0 {
 		t.Fatalf("empty ids must be rejected: %s", res.Body.String())

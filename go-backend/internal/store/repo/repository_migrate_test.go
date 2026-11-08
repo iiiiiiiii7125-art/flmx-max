@@ -491,13 +491,13 @@ func TestMigrateSchemaReturnsTrafficInt64MigrationError(t *testing.T) {
 }
 
 func TestAlterPostgresColumnToBigIntIfNeededValidatesNames(t *testing.T) {
-	if err := alterPostgresColumnToBigIntIfNeeded(nil, "peer_share", "max_bandwidth"); err == nil || !strings.Contains(err.Error(), "nil db") {
+	if err := alterPostgresColumnToBigIntIfNeeded(nil, "node", "max_bandwidth"); err == nil || !strings.Contains(err.Error(), "nil db") {
 		t.Fatalf("expected nil db error, got %v", err)
 	}
 	if err := alterPostgresColumnToBigIntIfNeeded(&gorm.DB{}, "", "max_bandwidth"); err == nil || !strings.Contains(err.Error(), "empty table or column name") {
 		t.Fatalf("expected empty name error, got %v", err)
 	}
-	if err := alterPostgresColumnToBigIntIfNeeded(&gorm.DB{}, "peer_share", ""); err == nil || !strings.Contains(err.Error(), "empty table or column name") {
+	if err := alterPostgresColumnToBigIntIfNeeded(&gorm.DB{}, "node", ""); err == nil || !strings.Contains(err.Error(), "empty table or column name") {
 		t.Fatalf("expected empty name error, got %v", err)
 	}
 }

@@ -242,12 +242,12 @@ func (r *Repository) FindOtherForwardOnNodePort(nodeID int64, port int, currentF
 // caller's tx (补充 B: no second global query — that is the C-001 pattern).
 //
 // P01-001: WHICH source occupies the port is decided by the unified
-// four-source predicate (NodePortOccupantTx, same check order
-// forward → inbound → chain → peer); this function only fetches the
+// three-source predicate (NodePortOccupantTx, same check order
+// forward → inbound → chain); this function only fetches the
 // winning source's display details. The per-source history — B4/F-013
-// (inbound invisible to the forward precheck), O2-003 (chain_tunnel),
-// X-P2-13 (federation share reservations) — is carried by the unified
-// predicate, so a future source lands in exactly one place.
+// (inbound invisible to the forward precheck), O2-003 (chain_tunnel)
+// — is carried by the unified predicate, so a future source lands in
+// exactly one place.
 func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port int, currentForwardID int64) (*ForwardPortConflict, error) {
 	if tx == nil {
 		return nil, errors.New("database unavailable")
@@ -321,22 +321,6 @@ func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, por
 			var tunnelName string
 			_ = tx.Model(&model.Tunnel{}).Select("name").Where("id = ?", ct.TunnelID).Scan(&tunnelName).Error
 			return &ForwardPortConflict{ForwardID: ct.ID, Name: tunnelName, Status: 1, Source: PortSourceChain}, nil
-		}
-	case PortSourcePeer:
-		var pr struct {
-			ID int64
-		}
-		err := tx.Model(&model.PeerShareRuntime{}).
-			Select("id").
-			Where("node_id = ? AND port = ? AND port > 0 AND status = 1", nodeID, port).
-			Order("id ASC").
-			Limit(1).
-			Scan(&pr).Error
-		if err != nil {
-			return nil, err
-		}
-		if pr.ID != 0 {
-			return &ForwardPortConflict{ForwardID: pr.ID, Name: "联邦共享预留端口", Status: 1, Source: PortSourcePeer}, nil
 		}
 	}
 	return nil, nil

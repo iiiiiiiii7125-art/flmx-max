@@ -2,19 +2,18 @@ package repo
 
 import (
 	"database/sql"
-	"strings"
 	"testing"
 	"time"
 
 	"go-backend/internal/store/model"
 )
 
-// Round 2 K9 / P01-001：统一四源谓词的行为枚举——每一种占用源
-// （forward_port / node_inbound / chain_tunnel / peer_share_runtime
-// 有效预留）都必须被每一个选口/判重点位看见。此前隧道选口、隧道
-// 显式口谓词、入站 occupant、备份预检四面手写三源集合、漏联邦预留
-// 源，可与分享运行时同节点同口双分配。本测试按源 × 点位逐格断言，
-// 任一面再漏一源即红。
+// Round 2 K9 / P01-001：统一三源谓词的行为枚举——每一种占用源
+// （forward_port / node_inbound / chain_tunnel）都必须被每一个
+// 选口/判重点位看见。此前隧道选口、隧道显式口谓词、入站 occupant、
+// 备份预检四面手写集合、口径不一，可同节点同口双分配。本测试按
+// 源 × 点位逐格断言，任一面再漏一源即红。
+// （原第四源 peer_share_runtime 联邦预留已随 DEV-RM-SHARE 删除。）
 //
 // 点位全集（与 port_occupancy_sentinel_test.go 的源码清单对应）：
 //   - NodePortOccupantTx / NodePortOccupiedTx（统一谓词本体）
@@ -54,13 +53,7 @@ func seedK9Chain(t *testing.T, r *Repository) {
 	createRow(t, r, &model.ChainTunnel{ID: 71, TunnelID: 700, ChainType: "3", NodeID: k9NodeID, Port: sql.NullInt64{Int64: k9Port, Valid: true}, Inx: sql.NullInt64{Int64: 1, Valid: true}})
 }
 
-func seedK9Peer(t *testing.T, r *Repository, status int) {
-	t.Helper()
-	now := time.Now().UnixMilli()
-	createRow(t, r, &model.PeerShareRuntime{ID: 31, ShareID: 5, NodeID: k9NodeID, ReservationID: "resv-k9", ResourceKey: "rk-k9", Port: k9Port, Status: status, CreatedTime: now, UpdatedTime: now})
-}
-
-func TestK9UnifiedOccupancySeesAllFourSources(t *testing.T) {
+func TestK9UnifiedOccupancySeesAllSources(t *testing.T) {
 	cases := []struct {
 		name          string
 		seed          func(t *testing.T, r *Repository)
@@ -70,7 +63,6 @@ func TestK9UnifiedOccupancySeesAllFourSources(t *testing.T) {
 		{"forward", seedK9Forward, PortSourceForward, "转发"},
 		{"inbound", seedK9Inbound, PortSourceInbound, "其他节点服务"},
 		{"chain", seedK9Chain, PortSourceChain, "隧道"},
-		{"peer", func(t *testing.T, r *Repository) { seedK9Peer(t, r, 1) }, PortSourcePeer, "联邦分享预留"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -216,28 +208,6 @@ func TestK9UnifiedOccupancyExclusions(t *testing.T) {
 		}
 	})
 
-	t.Run("inactive peer reservation does not occupy", func(t *testing.T) {
-		r := openCascadeRepo(t, "k9-peer-inactive.db")
-		seedK9Node(t, r)
-		// status 列带 default:1，Create 传 0 会被 GORM 当未设置落成 1；
-		// 按生产路径（lifecycle 以 map Updates 置 0）种入失活行。
-		seedK9Peer(t, r, 1)
-		if err := r.DB().Model(&model.PeerShareRuntime{}).Where("id = ?", 31).Update("status", 0).Error; err != nil {
-			t.Fatalf("deactivate peer row: %v", err)
-		}
-		source, err := r.NodePortOccupantTx(r.DB(), k9NodeID, k9Port, PortExclusions{})
-		if err != nil || source != "" {
-			t.Fatalf("status=0 reservation must not occupy, got %q err=%v", source, err)
-		}
-		set, err := r.UsedPortsOnNodeTx(r.DB(), k9NodeID, PortExclusions{})
-		if err != nil {
-			t.Fatalf("UsedPortsOnNodeTx: %v", err)
-		}
-		if _, ok := set[k9Port]; ok {
-			t.Fatal("status=0 reservation must not enter the used set")
-		}
-	})
-
 	t.Run("reusable requires in-spec port", func(t *testing.T) {
 		r := openCascadeRepo(t, "k9-reuse-spec.db")
 		seedK9Node(t, r)
@@ -254,41 +224,8 @@ func TestK9UnifiedOccupancyExclusions(t *testing.T) {
 	})
 }
 
-func TestK9BackupPrecheckSeesPeerReservationAndChain(t *testing.T) {
-	now := time.Now().UnixMilli()
-
-	t.Run("forward claim colliding with peer reservation aborts", func(t *testing.T) {
-		dest := openCascadeRepo(t, "k9-precheck-peer.db")
-		seedK9Node(t, dest)
-		seedK9Peer(t, dest, 1)
-		backup := &model.BackupData{Version: "1.0", Forwards: []model.ForwardBackup{forwardBackup(51, "clash", k9NodeID, k9Port)}}
-		_, err := dest.Import(backup, []string{"forwards"})
-		if err == nil || !strings.Contains(err.Error(), "端口冲突") || !strings.Contains(err.Error(), "联邦分享预留") {
-			t.Fatalf("P01-001: import onto an active peer reservation must abort naming it, got %v", err)
-		}
-		if n := countWhere(t, dest, "forward", "id = ?", 51); n != 0 {
-			t.Fatalf("aborted import must not write the forward, found %d rows", n)
-		}
-	})
-
-	t.Run("tunnel chain claim colliding with peer reservation aborts", func(t *testing.T) {
-		dest := openCascadeRepo(t, "k9-precheck-chain-peer.db")
-		seedK9Node(t, dest)
-		seedK9Peer(t, dest, 1)
-		chainPort := k9Port
-		backup := &model.BackupData{Version: "1.0", Tunnels: []model.TunnelBackup{{
-			ID: 61, Name: "tun", Type: 2, Protocol: "tls", Flow: 1, Status: 1, CreatedTime: now, UpdatedTime: now,
-			ChainTunnels: []model.ChainTunnelBackup{{ID: 71, TunnelID: 61, ChainType: "3", NodeID: k9NodeID, Port: &chainPort}},
-		}}}
-		_, err := dest.Import(backup, []string{"tunnels"})
-		if err == nil || !strings.Contains(err.Error(), "端口冲突") {
-			t.Fatalf("P01-001: tunnel restore onto an active peer reservation must abort, got %v", err)
-		}
-	})
-}
-
 // P01-003：隧道列表（详情同源组装）回吐链路段与出口段端口；
-// 入口行 port 恒 NULL 不带字段，未预留的远端行（NULL）同样省略。
+// 入口行 port 恒 NULL 不带字段，端口为 NULL 的行同样省略。
 func TestK9ListTunnelsExposesSegmentPorts(t *testing.T) {
 	r := openCascadeRepo(t, "k9-list-ports.db")
 	seedK9Node(t, r)

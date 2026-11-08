@@ -26,8 +26,8 @@ func TestTraceNodeRoutesHonorsContextCancelF079(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := r.DB().Exec(`
-		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx, is_remote, latency_targets)
-		VALUES('f079-node', 'f079-secret', '10.0.0.1', '10.0.0.1', '', '10000-20000', '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0, 0, '')
+		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx, latency_targets)
+		VALUES('f079-node', 'f079-secret', '10.0.0.1', '10.0.0.1', '', '10000-20000', '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0, '')
 	`, now, now).Error; err != nil {
 		t.Fatal(err)
 	}

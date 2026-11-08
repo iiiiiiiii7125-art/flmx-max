@@ -127,7 +127,7 @@ func startR1KernelMockNode(t *testing.T, baseURL, secret string, mock *r1KernelM
 func TestR1KernelErrorNotifyFailureResendsNextRound(t *testing.T) {
 	wh := newFixdWebhook(t)
 	h, r := setupFixdNotifyHandler(t, wh)
-	nodeID := mustCreateLatencyNode(t, r, "r1-kerr-node", 1, 0)
+	nodeID := mustCreateLatencyNode(t, r, "r1-kerr-node", 1)
 
 	mock := &r1KernelMock{}
 	srv := httptest.NewServer(h.WebSocketHandler())
@@ -197,7 +197,7 @@ func TestR1RouteChangeNotifyFailureResendsNextRound(t *testing.T) {
 		`[{"name":"电信","host":"ct.example.com","port":80,"enabled":true}]`, time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	nodeID := mustCreateLatencyNode(t, r, "r1-route-node", 1, 0)
+	nodeID := mustCreateLatencyNode(t, r, "r1-route-node", 1)
 
 	// 旧比对基准：电信走 163。
 	h.nodeRoutes.set(nodeID, nodeRoute{

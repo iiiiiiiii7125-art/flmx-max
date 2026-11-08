@@ -344,9 +344,6 @@ func (h *Handler) kernelNodeEligible(nodeID int64) (*model.Node, error) {
 	if node == nil {
 		return nil, errors.New("节点不存在")
 	}
-	if node.IsRemote == 1 {
-		return nil, errors.New("远程节点不支持部署内核")
-	}
 	if isNftablesForwardMode(node.ForwardMode) {
 		return nil, errors.New("nftables 模式节点不支持部署内核")
 	}

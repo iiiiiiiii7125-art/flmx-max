@@ -9,19 +9,12 @@ import (
 	"strings"
 	"unicode"
 
-	"go-backend/internal/http/client"
 	"go-backend/internal/kernel"
 	"go-backend/internal/netguard"
 )
 
 // DisableSafeRemoteAddrCheckForTesting allows bypassing the safety check during integration tests.
 var DisableSafeRemoteAddrCheckForTesting = false
-
-// D3-01: 联邦出站客户端的拨号期 SSRF 复检与本包的入口校验共用同一
-// 测试旁路开关（契约测试以 127.0.0.1 的 httptest 充当对端面板）。
-func init() {
-	client.SetSafetyBypassFunc(func() bool { return DisableSafeRemoteAddrCheckForTesting })
-}
 
 // maxRemoteAddrSegments 是转发目标地址的段数上限（R10-09/I-F2-02，
 // 与订阅条目 ids 帽 100 同量级）。此前段数无门：普通用户一条创建
@@ -72,9 +65,9 @@ func validateRemoteAddrPorts(addr string) error {
 	return nil
 }
 
-// safeRemoteLookupIP 是 checkSingleRemoteAddr 的解析点（与
-// federationDiagnoseLookupIP 同形态的可注入点，供计数型钉格在不
-// 依赖真实 DNS 的前提下验证 R10-09 的按主机名 memo 化）。
+// safeRemoteLookupIP 是 checkSingleRemoteAddr 的解析点
+// （可注入点，供计数型钉格在不依赖真实 DNS 的前提下验证
+// R10-09 的按主机名 memo 化）。
 var safeRemoteLookupIP = net.LookupIP
 
 // IsSafeRemoteAddr checks if a given address is safe to connect to (prevents SSRF/Open Proxy).
@@ -247,50 +240,6 @@ func checkSingleRemoteAddrMemo(addr string, resolutions map[string][]net.IP) err
 		// 可被普通用户直读）。管理员与 allow_local_remote_addr
 		// 例外在调用方，本函数口径不变。
 		if d := netguard.Judge(ip, netguard.PolicyPublicOnly, false); !d.Allowed {
-			return fmt.Errorf("address %q resolves to internal IP: %s", addr, ip.String())
-		}
-	}
-
-	return nil
-}
-
-// checkFederationRemoteAddr 是联邦远端节点 URL 的写面校验（B13-001）：
-// 与联邦出站传输层（client/federation_transport.go 的 validateFederationIPs）
-// 同一口径——逐个解析地址走 netguard PolicyAllowPrivate：硬拒层
-// （元数据精确集 ∪ 169.254/16 ∪ 未指定等）恒拒、先于放行；其余非公网
-// 地址仅在与 SecureFetch 共用的私网放行策略（isPrivateAllowed：
-// FLMX_FETCH_ALLOW_PRIVATE_NETWORKS=true 或 FLMX_FETCH_PRIVATE_ALLOWLIST
-// 命中判定口径地址）开启时放行。此前写面走 IsSafeRemoteAddr 的
-// PolicyPublicOnly，运维按传输层注释开启内网放行后 import/create 仍被
-// 无条件 403，内网/Tailscale 联邦只能经备份恢复旁路写入。本校验只决定
-// 写面是否接受该 URL；实际拨号仍由传输层逐跳钉死复检，不因写面放行而
-// 放宽拨号面。
-func checkFederationRemoteAddr(addr string) error {
-	if DisableSafeRemoteAddrCheckForTesting {
-		return nil
-	}
-
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		if strings.Contains(err.Error(), "missing port in address") {
-			host = addr
-		} else {
-			return fmt.Errorf("invalid address format: %v", err)
-		}
-	}
-
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return fmt.Errorf("could not resolve address %q: %v", addr, err)
-	}
-
-	for _, ip := range ips {
-		// 与 validateFederationRoleTargets 同一判定式：硬拒层由
-		// netguard.Judge 前置处理，放行按判定口径（翻译内嵌）地址
-		// 查 allowlist，与传输层 federationPrivateAllowed(EffectiveIP)
-		// 等价。
-		eff := netguard.EffectiveIP(ip)
-		if d := netguard.Judge(ip, netguard.PolicyAllowPrivate, eff != nil && isPrivateAllowed(eff)); !d.Allowed {
 			return fmt.Errorf("address %q resolves to internal IP: %s", addr, ip.String())
 		}
 	}

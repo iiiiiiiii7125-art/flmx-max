@@ -22,7 +22,7 @@ func setupC04TestDB(t *testing.T) *Repository {
 func createC04Node(t *testing.T, r *Repository, name string, inx int) int64 {
 	t.Helper()
 	now := time.Now().UnixMilli()
-	id, err := r.CreateNode(name, "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", inx, 0, nil, nil, nil, nil, "")
+	id, err := r.CreateNode(name, "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", inx, nil, "")
 	if err != nil {
 		t.Fatalf("create node %s: %v", name, err)
 	}
@@ -44,7 +44,7 @@ func TestC04_ConcurrentCreateNodeInxUnique(t *testing.T) {
 			defer wg.Done()
 			inx := r.NextIndex("node")
 			now := time.Now().UnixMilli()
-			_, errs[idx] = r.CreateNode("conc-node", "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", inx, 0, nil, nil, nil, nil, "")
+			_, errs[idx] = r.CreateNode("conc-node", "secret", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", inx, nil, "")
 		}(i)
 	}
 	wg.Wait()

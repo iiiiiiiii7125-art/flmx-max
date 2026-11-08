@@ -25,6 +25,32 @@ import (
 // 目标行，其余行正常删除。先红后绿：修复前回执只含原始 DB 错误、
 // 不含已删披露。
 
+// assertR18F01ForwardRow / assertR18F01TunnelRow 原定义于已删的
+// r18_f01 文件（该文件的远端夹具用例随联邦整删），这两个行存断言
+// 助手与本地 nft 披露用例共用，迁入本文件保留（名字不变以免改动
+// 全部调用点）。
+func assertR18F01ForwardRow(t *testing.T, h *Handler, id int64, wantGone bool) {
+	t.Helper()
+	fr, _ := h.repo.GetForwardRecord(id)
+	if wantGone && fr != nil {
+		t.Fatalf("forward #%d row must be deleted", id)
+	}
+	if !wantGone && fr == nil {
+		t.Fatalf("forward #%d row must remain", id)
+	}
+}
+
+func assertR18F01TunnelRow(t *testing.T, h *Handler, tunnelID int64, wantGone bool) {
+	t.Helper()
+	tun, _ := h.repo.GetTunnelRecord(tunnelID)
+	if wantGone && tun != nil {
+		t.Fatalf("tunnel #%d row must be deleted", tunnelID)
+	}
+	if !wantGone && tun == nil {
+		t.Fatalf("tunnel #%d row must remain", tunnelID)
+	}
+}
+
 // seedR19F01NftTunnel 在 nft 入口节点上建隧道 + N 条转发（名/端口各异），
 // 返回隧道 ID、按 ID 升序的转发清单（与 ListForwardsByTunnel 同序）
 // 与 fake manager（用于断言 reconcile 命中次数）。

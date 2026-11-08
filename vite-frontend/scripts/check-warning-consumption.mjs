@@ -19,8 +19,8 @@
 // 提取前先词法剥注释（与 check-route-lists 同实现）：注释掉的生产者
 // 或 .warning 读不得算数。
 //
-// 注意：data 通道内的 warning（如 federation share/update 的
-// data.warning）不是信封字段、不经 OKWithWarning，不在本门普查内。
+// 注意：data 通道内的 warning（即 data.warning）不是信封字段、
+// 不经 OKWithWarning，不在本门普查内。
 //
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-warning-consumption.mjs

@@ -10,46 +10,6 @@ import (
 // 无待迁移；PendingMigrations() 还恒回 v1 名误标。本组用例以
 // 索引手术模拟卡住态，逐项钉住状态面与兼容接口的真实回报。
 
-func TestPendingMigrationStatusSeesV3(t *testing.T) {
-	r := openCascadeRepo(t, "status-v3.db")
-
-	if s := r.GetPendingMigrationStatus(); s.Required {
-		t.Fatalf("fresh migrated DB must report no pending migration, got %+v", s)
-	}
-
-	// 模拟 v3 卡住态：复合索引退回旧单列唯一索引 + 删除 v3 记录。
-	if err := r.DB().Exec(`DROP INDEX ` + compositeResourceIndexName).Error; err != nil {
-		t.Fatalf("drop composite index: %v", err)
-	}
-	if err := r.DB().Exec(`CREATE UNIQUE INDEX ` + legacyResourceKeyIndexName + ` ON peer_share_runtime (resource_key)`).Error; err != nil {
-		t.Fatalf("recreate legacy index: %v", err)
-	}
-	if err := r.DB().Exec(`DELETE FROM schema_migration WHERE version = ?`, migrationV3Version).Error; err != nil {
-		t.Fatalf("delete v3 record: %v", err)
-	}
-
-	s := r.GetPendingMigrationStatus()
-	if !s.Required {
-		t.Fatal("C1-01: legacy single-column index with v3 unapplied must be reported as pending")
-	}
-	found := false
-	for _, tbl := range s.Tables {
-		if tbl.Table == peerShareRuntimeTableName {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("pending detail must name peer_share_runtime, got %+v", s.Tables)
-	}
-	pm := r.PendingMigrations()
-	if !slices.Contains(pm, migrationV3Version) {
-		t.Fatalf("PendingMigrations must name the v3 version, got %v", pm)
-	}
-	if slices.Contains(pm, migrationV1Version) {
-		t.Fatalf("PendingMigrations must not mislabel v3-pending as v1, got %v", pm)
-	}
-}
-
 func TestPendingMigrationStatusSeesV4(t *testing.T) {
 	r := openCascadeRepo(t, "status-v4.db")
 

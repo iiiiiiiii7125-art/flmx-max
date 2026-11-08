@@ -175,9 +175,11 @@ func TestK6TunnelUpdateShiftedNodePortTakenRepicksWithWarning(t *testing.T) {
 	h := setupK9Handler(t)
 	seedK9Node(t, h.repo, 14, "chain-b", "10.0.0.5", "36500-36510")
 	seedK6TunnelWithRows(t, h, 93, "k6-shift-taken", k6TwoHopRows())
-	// node14 的现口被联邦有效预留抢占：移位后沿用判定失败，必须重挑
-	// 且回执点名旧口（不许静默）。
-	seedK9PeerReservation(t, h, 14, 36508)
+	// node14 的现口被一条入站占用抢占：移位后沿用判定失败，必须
+	// 重挑且回执点名旧口（不许静默）。（原格以联邦预留为占用源，
+	// 联邦源已随共享板块整删；链路段源有 (node_id, port) 唯一索引
+	// 不能造同口撞态，改以入站源同形复证。）
+	seedK9InboundOccupant(t, h, 14, 36508)
 
 	env := k9Post(t, h, h.tunnelUpdate, "/api/v1/tunnel/update", k6UpdatePayload(93, "k6-shift-taken", 14, 12))
 	if env.Code != 0 {
@@ -453,7 +455,7 @@ func TestK6BatchResumeNftNumLimitCountsBatchItself(t *testing.T) {
 		pausedNFT = append(pausedNFT, fwd.ID)
 	}
 	// 1 条 gost 暂停转发（另一节点/隧道；id 最大、批内最后处理）。
-	gostNode, err := h.repo.CreateNode("k6-gost-node", "secret2", "198.51.100.11", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, 0, nil, nil, nil, nil, "")
+	gostNode, err := h.repo.CreateNode("k6-gost-node", "secret2", "198.51.100.11", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, nil, "")
 	if err != nil {
 		t.Fatalf("create gost node: %v", err)
 	}

@@ -7,12 +7,14 @@ import (
 )
 
 // R2-019 回归（B-traffic B-T-01）：入账批次的归属分类层
-// buildNodeFlowUploadBatch 有三条归属查询（peer_share_runtime /
-// peer_share_resource / forward_port）。修复前任一查询出错只记一行
-// 日志即返回空批次，v1/v2 两端点照常推进 seq/游标并回确认，agent
-// 随即清掉待确认批次——整批流量静默丢失且不可恢复。
+// buildNodeFlowUploadBatch 的归属查询（forward_port：
+// ListForwardIDsByNode；2.1.0 联邦整删后原 peer_share_runtime /
+// peer_share_resource 两条联邦归属查询随功能删除，归属面收敛为
+// 本地 forward 一条）。修复前查询出错只记一行日志即返回空批次，
+// v1/v2 两端点照常推进 seq/游标并回确认，agent 随即清掉待确认
+// 批次——整批流量静默丢失且不可恢复。
 //
-// 本文件按「三条查询逐条注错 × 两端点」矩阵钉死 fail-closed 口径：
+// 本文件按「归属查询注错 × 两端点」矩阵钉死 fail-closed 口径：
 // 注错期间整批拒收（v1 回 error、v2 回 503）、不入账、不推进
 // seq/游标；故障消除后同批重报必须恰好入账一次（metas 先行拒收的
 // 既有安全路径口径不得退化）。
@@ -33,9 +35,7 @@ func hideFlowTable(t *testing.T, h *Handler, table string) (restore func()) {
 }
 
 var flowOwnershipQueryTables = []string{
-	"peer_share_runtime",  // 查询一：ListActiveForwardPeerShareRuntimesByNode
-	"peer_share_resource", // 查询二：ListPeerShareResourcesByNode
-	"forward_port",        // 查询三：ListForwardIDsByNode
+	"forward_port", // 归属查询：ListForwardIDsByNode
 }
 
 func TestFlowUploadV1OwnershipLookupFailureRejectsBatch(t *testing.T) {
@@ -74,7 +74,7 @@ func TestFlowUploadV1OwnershipLookupFailureRejectsBatch(t *testing.T) {
 	}
 }
 
-// 包装层契约：三条查询逐条注错时 buildNodeFlowUploadBatch 必须
+// 包装层契约：归属查询注错时 buildNodeFlowUploadBatch 必须
 // 返回非 nil error 且批次为零值；健康库上返回 nil error。
 func TestBuildNodeFlowUploadBatchPropagatesOwnershipErrors(t *testing.T) {
 	for _, table := range flowOwnershipQueryTables {
@@ -90,7 +90,7 @@ func TestBuildNodeFlowUploadBatchPropagatesOwnershipErrors(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ownership lookup failure (%s) must propagate an error", table)
 			}
-			if len(batch.flowDeltas) != 0 || len(batch.quotaUsage) != 0 || len(batch.peerShareUsage) != 0 {
+			if len(batch.flowDeltas) != 0 || len(batch.quotaUsage) != 0 {
 				t.Fatalf("failed lookup must return a zero batch, got %+v", batch)
 			}
 		})

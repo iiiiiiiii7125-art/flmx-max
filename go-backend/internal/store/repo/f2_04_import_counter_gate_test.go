@@ -42,18 +42,15 @@ func TestImportNegativeCountersClampedF204(t *testing.T) {
 		UserTunnels: []model.UserTunnelBackup{{
 			ID: 901, UserID: 501, TunnelID: 601, Status: 1, InFlow: -300, OutFlow: -400,
 		}},
-		PeerShares: []model.PeerShareBackup{{
-			ID: 1001, Name: "share1001", NodeID: 701, CurrentFlow: -777,
-		}},
 		Inbounds: &model.InboundsBackup{
 			Kernels: []model.KernelBackup{{
 				ID: 1100, NodeID: 701, KernelType: "xray", Version: "latest", Enabled: 1, CreatedTime: 1000,
 			}},
 			Inbounds: []model.InboundBackup{{
 				ID: 1101, KernelID: 1100, NodeID: 701, Name: "in1101", Protocol: "vless", Port: 443, Enabled: 1,
-				Settings:  `{"uuid":"11111111-2222-3333-4444-555555555555"}`,
-				Transport: `{"type":"tcp"}`,
-				Security:  `{"type":"none"}`,
+				Settings:    `{"uuid":"11111111-2222-3333-4444-555555555555"}`,
+				Transport:   `{"type":"tcp"}`,
+				Security:    `{"type":"none"}`,
 				UploadBytes: -111, DownloadBytes: -222,
 			}},
 			Subscriptions: []model.SubscriptionBackup{{
@@ -100,13 +97,6 @@ func TestImportNegativeCountersClampedF204(t *testing.T) {
 	}
 	if ut.InFlow != 0 || ut.OutFlow != 0 {
 		t.Fatalf("F2-04: user-tunnel counters landed verbatim: in=%d out=%d, want 0/0", ut.InFlow, ut.OutFlow)
-	}
-	var share model.PeerShare
-	if err := r.DB().First(&share, 1001).Error; err != nil {
-		t.Fatalf("load peer share: %v", err)
-	}
-	if share.CurrentFlow != 0 {
-		t.Fatalf("F2-04: peer-share CurrentFlow landed verbatim: %d, want 0", share.CurrentFlow)
 	}
 	var inb model.NodeInbound
 	if err := r.DB().First(&inb, 1101).Error; err != nil {

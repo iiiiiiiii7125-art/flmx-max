@@ -22,7 +22,7 @@ func TestNodeBatchUpgradeDedupesIDs(t *testing.T) {
 	srv := httptest.NewServer(h.WebSocketHandler())
 	defer srv.Close()
 
-	nodeID := kr1SeedNode(t, r, "r4-batch-node", "198.51.100.41", 0, 0, "agent")
+	nodeID := kr1SeedNode(t, r, "r4-batch-node", "198.51.100.41", 0, "agent")
 	rec := &kr1CommandRecorder{}
 	stop := startKR1MockNode(t, srv.URL, "r4-batch-node-secret", rec)
 	defer stop()

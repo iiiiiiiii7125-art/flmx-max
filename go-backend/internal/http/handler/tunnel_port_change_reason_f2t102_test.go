@@ -62,7 +62,10 @@ func TestTunnelUpdateOccupiedWarningKeepsOriginalSuffix(t *testing.T) {
 	h := setupK9Handler(t)
 	seedK9Node(t, h.repo, 14, "chain-b", "10.0.0.5", "36500-36510")
 	seedK6TunnelWithRows(t, h, 97, "k6-occ", k6TwoHopRows())
-	seedK9PeerReservation(t, h, 14, 36508)
+	// 占用源：入站（原格用联邦预留，联邦源已随共享板块整删；链路
+	// 段源有 (node_id, port) 唯一索引不能造同口撞态，改以入站源
+	// 同形复证）。
+	seedK9InboundOccupant(t, h, 14, 36508)
 
 	env := k9Post(t, h, h.tunnelUpdate, "/api/v1/tunnel/update", k6UpdatePayload(97, "k6-occ", 14, 12))
 	if env.Code != 0 {

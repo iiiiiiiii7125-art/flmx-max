@@ -91,39 +91,3 @@ func TestR3B6ImportSameIDRelayNoRepoint(t *testing.T) {
 		t.Fatalf("same-id relay import must produce no repoint warning, got %v", result.ImportWarnings)
 	}
 }
-
-// H-S01：同 token 占位 share 删除时连带删除其 runtime/resource 行
-// （与 DeletePeerShare 级联口径对齐；红：两行悬空残留）。
-func TestR3B6ImportPeerSharePlaceholderDeletesRuntime(t *testing.T) {
-	now := time.Now().UnixMilli()
-	dest := openBackupRepo(t, "b6-hs01.db")
-	createRow(t, dest, &model.Node{ID: 1, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "10000-10100",
-		CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
-	createRow(t, dest, &model.PeerShare{ID: 99, Name: "sh", NodeID: 1, Token: "tokX", IsActive: 1, CreatedTime: now, UpdatedTime: now})
-	createRow(t, dest, &model.PeerShareRuntime{ShareID: 99, NodeID: 1, ReservationID: "res-1", ResourceKey: "rk-1", CreatedTime: now, UpdatedTime: now})
-	createRow(t, dest, &model.PeerShareResource{ShareID: 99, NodeID: 1, Kind: "service", OriginalName: "orig", RuntimeName: "rt", UpdatedTime: now})
-
-	backup := &model.BackupData{
-		Version: "1.0",
-		PeerShares: []model.PeerShareBackup{
-			{ID: 5, Name: "sh", NodeID: 1, Token: "tokX", IsActive: 1, CreatedTime: now},
-		},
-	}
-	result, err := dest.Import(backup, []string{"nodes"})
-	if err != nil {
-		t.Fatalf("import: %v", err)
-	}
-	if result.PeerSharesImported != 1 {
-		t.Fatalf("peer share must import, got %d", result.PeerSharesImported)
-	}
-	if n := countWhere(t, dest, "peer_share", "id = ?", 99); n != 0 {
-		t.Fatalf("placeholder share 99 must be replaced, got %d", n)
-	}
-	if n := countWhere(t, dest, "peer_share_runtime", "share_id = ?", 99); n != 0 {
-		t.Fatalf("H-S01: runtime rows of the placeholder share must be deleted with it, got %d", n)
-	}
-	if n := countWhere(t, dest, "peer_share_resource", "share_id = ?", 99); n != 0 {
-		t.Fatalf("H-S01: resource rows of the placeholder share must be deleted with it, got %d", n)
-	}
-}
-

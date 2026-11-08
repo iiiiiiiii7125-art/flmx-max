@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"fmt"
 	"testing"
 	"time"
 )
@@ -13,10 +12,7 @@ import (
 //   建两行。钉格按 r2_b2 形态：同键重发只建一行且回放首次结果；同键
 //   update（ID>0）正常执行不被回放吞掉。（同批的 nodeGroupSave 格已
 //   随节点组功能移除一并摘除。）
-// - R10-07（I-C2-02）：联邦 tunnel/create 无重投回放语义——首投建成
-//   而回执丢失后，同参重试被 (share, port) 占位检查恒 403 挡死。钉格：
-//   同 (share, port) 且 Target/Protocol 一致时回放既有 tunnelId；不一
-//   致维持 403；新端口仍可正常新建。
+// （R10-07 联邦 tunnel/create 回放格已随联邦功能删除一并摘除。）
 
 // idemStore 为进程级全局，键加实例唯一后缀防同进程重复跑（-count>1）
 // 互相回放污染（r2_b2 登记 #4 同口径）。
@@ -67,56 +63,4 @@ func r10TunnelID(t *testing.T, data interface{}) int64 {
 		t.Fatalf("tunnelId = %v, want positive number", m["tunnelId"])
 	}
 	return int64(f)
-}
-
-func TestR10FederationTunnelCreateReplay(t *testing.T) {
-	h, r, share := fix132ShareFixture(t, 20000, 20010)
-	create := federationTunnelRequest{Protocol: "tcp", RemotePort: 20005, Target: "1.1.1.1:443"}
-
-	first := fix132PeerRequest(t, h, "/api/v1/federation/tunnel/create", share.Token, create, h.federationTunnelCreate)
-	if first.Code != 0 {
-		t.Fatalf("tunnel/create first: expected code 0, got %d (%s)", first.Code, first.Msg)
-	}
-	tunnelID := r10TunnelID(t, first.Data)
-
-	// 同参重投（首投回执丢失后的用户重试）：必须回放既有 tunnelId，
-	// 不得 403、不得重复建隧道/runtime。
-	second := fix132PeerRequest(t, h, "/api/v1/federation/tunnel/create", share.Token, create, h.federationTunnelCreate)
-	if second.Code != 0 {
-		t.Fatalf("tunnel/create same-params retry: expected replay code 0, got %d (%s)", second.Code, second.Msg)
-	}
-	if got := r10TunnelID(t, second.Data); got != tunnelID {
-		t.Fatalf("tunnel/create retry tunnelId = %d, want replay of %d", got, tunnelID)
-	}
-	name := fmt.Sprintf("Share-%d-Port-%d", share.ID, 20005)
-	if n := mustQueryInt(t, r, `SELECT COUNT(1) FROM tunnel WHERE name = ?`, name); n != 1 {
-		t.Fatalf("tunnels named %q = %d, want 1", name, n)
-	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(1) FROM peer_share_runtime WHERE share_id = ? AND port = 20005 AND status = 1`, share.ID); n != 1 {
-		t.Fatalf("active runtimes for port 20005 = %d, want 1", n)
-	}
-
-	// 同端口异目标：不是同一笔提交的重投，维持 403 防占用。
-	other := federationTunnelRequest{Protocol: "tcp", RemotePort: 20005, Target: "2.2.2.2:443"}
-	denied := fix132PeerRequest(t, h, "/api/v1/federation/tunnel/create", share.Token, other, h.federationTunnelCreate)
-	if denied.Code != 403 {
-		t.Fatalf("tunnel/create same port other target: expected 403, got %d (%s)", denied.Code, denied.Msg)
-	}
-
-	// 同端口异协议：同样维持 403。
-	otherProto := federationTunnelRequest{Protocol: "udp", RemotePort: 20005, Target: "1.1.1.1:443"}
-	denied = fix132PeerRequest(t, h, "/api/v1/federation/tunnel/create", share.Token, otherProto, h.federationTunnelCreate)
-	if denied.Code != 403 {
-		t.Fatalf("tunnel/create same port other protocol: expected 403, got %d (%s)", denied.Code, denied.Msg)
-	}
-
-	// 回放不得污染后续新建：另一端口同目标仍可正常建成新隧道。
-	fresh := federationTunnelRequest{Protocol: "tcp", RemotePort: 20006, Target: "1.1.1.1:443"}
-	created := fix132PeerRequest(t, h, "/api/v1/federation/tunnel/create", share.Token, fresh, h.federationTunnelCreate)
-	if created.Code != 0 {
-		t.Fatalf("tunnel/create fresh port: expected code 0, got %d (%s)", created.Code, created.Msg)
-	}
-	if got := r10TunnelID(t, created.Data); got == tunnelID {
-		t.Fatalf("tunnel/create fresh port reused tunnelId %d, want a new tunnel", got)
-	}
 }

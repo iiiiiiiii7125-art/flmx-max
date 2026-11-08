@@ -152,29 +152,6 @@ func TestNftPendingDeleteExhaustedNotDue(t *testing.T) {
 	}
 }
 
-func TestListTunnelIDsByNamePrefixExactSemantics(t *testing.T) {
-	r := openCascadeRepo(t, "prefix.db")
-	now := time.Now().UnixMilli()
-	names := []string{"Fed_X", "FedXY", "fed-one"}
-	for i, name := range names {
-		createRow(t, r, &model.Tunnel{ID: int64(100 + i), Name: name, Type: 1, CreatedTime: now, UpdatedTime: now})
-	}
-	ids, err := r.ListTunnelIDsByNamePrefix("Fed_")
-	if err != nil {
-		t.Fatalf("ListTunnelIDsByNamePrefix: %v", err)
-	}
-	if len(ids) != 1 || ids[0] != 100 {
-		t.Fatalf("F-072: prefix %q must match only literal Fed_X (underscore is not a wildcard), got %v", "Fed_", ids)
-	}
-	ids, err = r.ListTunnelIDsByNamePrefix("FED")
-	if err != nil {
-		t.Fatalf("ListTunnelIDsByNamePrefix: %v", err)
-	}
-	if len(ids) != 0 {
-		t.Fatalf("F-072: prefix match must be case-sensitive like PostgreSQL, got %v for %q", ids, "FED")
-	}
-}
-
 func TestNodeSeqConcurrentFirstReports(t *testing.T) {
 	r := openCascadeRepo(t, "seq.db")
 	const workers = 16

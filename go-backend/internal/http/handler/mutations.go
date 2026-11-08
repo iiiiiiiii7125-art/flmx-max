@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"go-backend/internal/http/client"
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
 	"go-backend/internal/security"
@@ -692,17 +691,6 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("网卡名称长度不能超过200个字符"))
 		return
 	}
-	// D3-02: 直填 remoteUrl 与 nodeImport 共用同一校验（validateRemoteNodeURL），
-	// 此前该路径零校验，可把内网/元数据地址写成远端节点 URL。
-	if asInt(req["isRemote"], 0) == 1 {
-		if remoteURL := strings.TrimSpace(asString(req["remoteUrl"])); remoteURL != "" {
-			if err := validateRemoteNodeURL(remoteURL); err != nil {
-				writeRemoteURLValidationError(w, err)
-				return
-			}
-		}
-	}
-
 	now := time.Now().UnixMilli()
 	inx := h.repo.NextIndex("node")
 	forwardMode := defaultNodeForwardMode(asString(req["forwardMode"]))
@@ -776,10 +764,6 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		defaultString(tcpListenAddr, "[::]"),
 		defaultString(udpListenAddr, "[::]"),
 		inx,
-		asInt(req["isRemote"], 0),
-		nullableText(asString(req["remoteUrl"])),
-		nullableText(asString(req["remoteToken"])),
-		nullableText(asString(req["remoteConfig"])),
 		// PORT-CLOSURE B-NEW-01 + R2 K1 枚举复扫：extraIPs 已在上方
 		// 逐项先验后剥（extraIPs 变量），校验口径与 V4/V6 一致。
 		nullableText(extraIPs),
@@ -906,9 +890,8 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	// 离线时旧口径跳过下发仍落库回成功，而节点重连握手会以 agent
 	// 本地值无条件覆回（UpdateNodeOnline），修改无声丢失。与前端
 	// 既定口径一致：本地节点不在线且三开关有变更时整单拒绝并点名，
-	// 不落库；其他字段的离线修改不受此门影响。远程节点无本地握手
-	// 覆写面，不在本机制范围内，保持原口径。
-	if protocolChanged && !usesNftablesRuntime && currentNode.IsRemote != 1 && currentStatus != 1 {
+	// 不落库；其他字段的离线修改不受此门影响。
+	if protocolChanged && !usesNftablesRuntime && currentStatus != 1 {
 		response.WriteJSON(w, response.ErrDefault("节点未在线，等待节点上线后再设置"))
 		return
 	}
@@ -1364,7 +1347,7 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 
 // panelRequestScheme 推断本次管理请求所见的面板实际服务方式
 // （"http"/"https"）：直接对端命中本机代理链谓词（回环/私网/
-// 链路本地，见 federation.go 的 isTrustedProxyIP）时采信
+// 链路本地，见下方 isTrustedProxyIP）时采信
 // X-Forwarded-Proto，其次连接自身 TLS。
 //
 // 信任口径明示（R2-02-01）：本面与 C4-01 起的登录限流口径
@@ -1379,6 +1362,52 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 // 配套：vite-frontend/nginx.conf 已改为透传上游 X-Forwarded-Proto
 // （此前被覆写为 nginx 自身 $scheme，Caddy 终止 TLS 的部署里后端
 // 永远只能看到 http）。
+func parseIPLiteral(raw string) net.IP {
+	value := strings.Trim(strings.TrimSpace(raw), "\"")
+	if value == "" {
+		return nil
+	}
+
+	if ip := net.ParseIP(value); ip != nil {
+		return normalizeIPAddress(ip)
+	}
+
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		return nil
+	}
+
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return nil
+	}
+	return normalizeIPAddress(net.ParseIP(host))
+}
+
+func normalizeIPAddress(ip net.IP) net.IP {
+	if ip == nil {
+		return nil
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4
+	}
+	return ip.To16()
+}
+
+// isTrustedProxyIP 是「本机代理链」谓词（回环/私网/链路
+// 本地），唯一生产调用点是 panelRequestScheme
+// （节点安装命令的 scheme 推断；R2-02-01 已逐点定性：该消费
+// 不参与任何安全决策）。它不是 C4-01 的客户端 IP 信任模型：
+// 登录限流与一切 XFF 采信走 internal/clientip（仅回环＋
+// FLMX_TRUSTED_PROXIES 名单）。新代码不得把
+// 本谓词用于鉴权、限流或信任判定。
+func isTrustedProxyIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
 func panelRequestScheme(r *http.Request) string {
 	if r != nil {
 		if ip := parseIPLiteral(r.RemoteAddr); ip != nil && isTrustedProxyIP(ip) {
@@ -2183,19 +2212,14 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UnixMilli()
 	inx := h.repo.NextIndex("tunnel")
-	localDomain := h.federationLocalDomain()
 
-	// B4/F-012: 创建流程重排为四段。此前整个创建共用一把「仅含出口
-	// 节点」的端口锁 + 一个长事务，联邦 HTTP（fc.CreateTunnel 与
-	// applyFederationRuntime，单次最长 10s）全在锁+事务内执行——
-	// SQLite 单连接下远端慢响应让全站 DB 排队，且入口/链式节点根本
-	// 不在锁内，违背 port_alloc_lock「锁内禁止网络调用」的自述约束。
-	// 现在：1) 验证段（无锁、throwaway 事务 prepare+校验，算出联邦
-	// CreateTunnel 参数后回滚）；2) 联邦 CreateTunnel 在锁/事务外；
-	// 3) 提交段（锁覆盖入/出/链全部节点，事务内重新 prepare 定型端口
-	// 后建隧道+链路，提交即释锁）；4) applyFederationRuntime 在锁外，
-	// 成功后以短事务落链路（联邦分配口）与绑定，失败释放远端预留并
-	// 删除刚建的隧道，保持「失败不留半成品」的原语义。
+	// B4/F-012: 创建流程重排。此前整个创建共用一把「仅含出口
+	// 节点的端口锁 + 一个长事务——SQLite 单连接下慢响应让全站 DB
+	// 排队，且入口/链式节点根本不在锁内，违背 port_alloc_lock「锁内
+	// 禁止网络调用」的自述约束。现在：1) 验证段（无锁、throwaway
+	// 事务 prepare+校验后回滚）；2) 提交段（锁覆盖入/出/链全部节点，
+	// 事务内重新 prepare 定型端口后建隧道+链路，提交即释锁）；
+	// 3) applyTunnelRuntime 在锁外下发运行时。
 	validationTx := h.repo.BeginTx()
 	if validationTx.Error != nil {
 		response.WriteJSON(w, response.Err(-2, validationTx.Error.Error()))
@@ -2239,57 +2263,6 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 联邦 CreateTunnel 参数：只依赖请求与节点记录，在事务内算出、
-	// 回滚后才真正发出 HTTP（R5 C-001 的 localDomain 复用保持不变）。
-	type federationCreateCall struct {
-		url, token, proto, addr string
-		port                    int
-	}
-	var fcCall *federationCreateCall
-	if len(runtimeState.InNodes) > 0 {
-		firstNodeID := runtimeState.InNodes[0].NodeID
-		isRemote, rUrl, rToken, _ := h.repo.GetNodeRemoteFieldsTx(validationTx, firstNodeID)
-		if isRemote == 1 && typeVal == 1 {
-			targetProto := "tcp"
-			targetPort := 0
-			targetAddr := ""
-			if len(runtimeState.OutNodes) > 0 {
-				outNode := runtimeState.OutNodes[0]
-				outNodeRec := runtimeState.Nodes[outNode.NodeID]
-				// R28-FIX-F01（sweep）：ServerIP 可含 :port；先剥离再
-				// 拼 outNode.Port，否则联邦建链地址成 "IP:6366:port"
-				// 双端口。processServerAddress 本身不剥 :port。
-				// R35-FIX-F02：stripShareHostPort 剥不动无括号 IPv6
-				// host:port（"2001:db8::1:8080"），须用 stripHostPortOnce
-				//（PC-03 读法）；剥离后仍带端口/畸形者直接拒绝，
-				// 不把畸形地址发给对端面板。
-				fedHost := stripHostPortOnce(outNodeRec.ServerIP)
-				if fedHost != "" && (!isBareDialHost(fedHost) || stripHostPortOnce(fedHost) != fedHost) {
-					validationTx.Rollback()
-					response.WriteJSON(w, response.ErrDefault("出站节点地址不正确"))
-					return
-				}
-				targetAddr = processServerAddress(fedHost)
-				if outNode.Port > 0 {
-					targetAddr = fmt.Sprintf("%s:%d", targetAddr, outNode.Port)
-				}
-			}
-			inNodesRaw := asMapSlice(req["inNodeId"])
-			if len(inNodesRaw) > 0 {
-				targetPort = asInt(inNodesRaw[0]["port"], 0)
-				targetProto = defaultString(asString(inNodesRaw[0]["protocol"]), "tcp")
-			}
-			if targetPort > 0 && targetAddr != "" {
-				inNodeRec := runtimeState.Nodes[firstNodeID]
-				if err := validateRemoteNodePort(inNodeRec, targetPort); err != nil {
-					validationTx.Rollback()
-					response.WriteJSON(w, response.ErrDefault(err.Error()))
-					return
-				}
-				fcCall = &federationCreateCall{url: rUrl.String, token: rToken.String, proto: targetProto, addr: targetAddr, port: targetPort}
-			}
-		}
-	}
 	validationTx.Rollback()
 
 	// A3-01：SSH 能力校验在此执行（无事务、无端口锁）。提交段内只
@@ -2298,16 +2271,6 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	if err := h.testNftablesNodeCapabilities(nftPairs); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
-	}
-
-	if fcCall != nil {
-		// R8-T-06: CreateTunnel is a runtime face; see
-		// federationRuntimeClientTimeout.
-		fc := client.NewFederationClientWithTimeout(federationRuntimeClientTimeout)
-		if _, err := fc.CreateTunnel(fcCall.url, fcCall.token, localDomain, fcCall.proto, fcCall.port, fcCall.addr); err != nil {
-			response.WriteJSON(w, response.ErrDefault("Remote tunnel creation failed: "+err.Error()))
-			return
-		}
 	}
 
 	// 提交段：全节点锁内重新 prepare 定型端口（验证段的选口结果不
@@ -2410,53 +2373,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	releasePortLocks()
 
-	// 联邦运行时（HTTP）在锁/事务之外执行；成功后以短事务落链路
-	// （含联邦分配口）与绑定。失败释放远端预留并删除刚建的隧道。
-	federationBindings, federationReleaseRefs, err := h.applyFederationRuntime(runtimeState, localDomain)
-	if err != nil {
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		_ = h.deleteTunnelByID(tunnelID)
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
-	if len(federationBindings) > 0 || len(federationReleaseRefs) > 0 {
-		applyTunnelPortsToRequest(req, runtimeState)
-		bindTx := h.repo.BeginTx()
-		if bindTx.Error != nil {
-			err := errors.Join(bindTx.Error, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-			_ = h.deleteTunnelByID(tunnelID)
-			response.WriteJSON(w, response.Err(-2, err.Error()))
-			return
-		}
-		bindErr := func() error {
-			defer bindTx.Rollback()
-			if err := h.repo.DeleteChainTunnelsByTunnelTx(bindTx, tunnelID); err != nil {
-				return err
-			}
-			if err := h.replaceTunnelChainsTx(bindTx, tunnelID, req); err != nil {
-				return err
-			}
-			if err := h.repo.ReplaceFederationTunnelBindingsTx(bindTx, tunnelID, federationBindings); err != nil {
-				return err
-			}
-			return bindTx.Commit().Error
-		}()
-		if bindErr != nil {
-			err := errors.Join(bindErr, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-			_ = h.deleteTunnelByID(tunnelID)
-			response.WriteJSON(w, response.Err(-2, err.Error()))
-			return
-		}
-	}
 	if typeVal == 2 {
 		createdChains, createdServices, applyErr := h.applyTunnelRuntime(runtimeState)
 		if applyErr != nil {
 			h.rollbackTunnelRuntime(createdChains, createdServices, tunnelID, tunnelProtocol)
-			if cleanupErr := h.cleanupFederationRuntime(tunnelID); cleanupErr != nil {
-				applyErr = errors.Join(applyErr, cleanupErr)
-			} else {
-				_ = h.deleteTunnelByID(tunnelID)
-			}
+			_ = h.deleteTunnelByID(tunnelID)
 			response.WriteJSON(w, response.ErrDefault(applyErr.Error()))
 			return
 		}
@@ -2790,7 +2711,6 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UnixMilli()
-	localDomain := h.federationLocalDomain()
 
 	// B4/F-014: 隧道更新此前全程无 per-node 端口锁——验证事务与正式
 	// 提交之间隔着联邦网络调用，与并发的转发/入站/隧道创建存在跨表
@@ -2983,27 +2903,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	// R2X-010 ②：编辑是非删除操作——联邦清理失败中止时把本轮新置的
-	// pending 绑定回滚为 active，避免重试环日后拆掉仍在用的隧道。
-	if err := h.cleanupFederationRuntimePreserving(id); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
 	if oldTunnel.Type == 2 && typeVal != 2 {
 		h.cleanupTunnelRuntime(id)
 	}
 
-	var federationBindings []repo.FederationTunnelBinding
-	var federationReleaseRefs []federationRuntimeReleaseRef
-	federationBindings, federationReleaseRefs, err = h.applyFederationRuntime(runtimeState, localDomain)
-	if err != nil {
-		err = errors.Join(err, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
 	applyTunnelPortsToRequest(req, runtimeState)
 
-	// B4/F-014 提交段：重新持锁，锁内先复检最终显式端口（联邦下发后
+	// B4/F-014 提交段：重新持锁，锁内先复检最终显式端口（下发定型后
 	// 的 runtimeState 口径）的跨表占用，再执行正式写入并提交；锁在
 	// 提交/回滚后即释放，后续运行时下发（网络）不持锁。
 	cErr, cCode := func() (error, int) {
@@ -3030,7 +2936,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			node := runtimeState.Nodes[n.NodeID]
-			if node == nil || node.IsRemote == 1 {
+			if node == nil {
 				continue
 			}
 			occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, n.NodeID, n.Port, id)
@@ -3089,10 +2995,6 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		if err := h.replaceTunnelChainsTx(tx, id, req); err != nil {
 			return err, -2
 		}
-		if err := h.repo.ReplaceFederationTunnelBindingsTx(tx, id, federationBindings); err != nil {
-			return err, -2
-		}
-
 		newEntryNodeIDs := make([]int64, 0, len(runtimeState.InNodes))
 		for _, in := range runtimeState.InNodes {
 			if in.NodeID > 0 {
@@ -3109,11 +3011,10 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		return nil, 0
 	}()
 	if cErr != nil {
-		joined := errors.Join(cErr, h.releaseFederationRuntimeRefs(federationReleaseRefs))
 		if cCode == -2 {
-			response.WriteJSON(w, response.Err(-2, joined.Error()))
+			response.WriteJSON(w, response.Err(-2, cErr.Error()))
 		} else {
-			response.WriteJSON(w, response.ErrDefault(joined.Error()))
+			response.WriteJSON(w, response.ErrDefault(cErr.Error()))
 		}
 		return
 	}
@@ -3167,8 +3068,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			if oldTunnel == nil || oldTunnel.Type != 2 {
 				h.rollbackTunnelRuntime(createdChains, createdServices, id, updateProtocol)
 			}
-			applyErr = errors.Join(applyErr, h.cleanupFederationRuntimePreserving(id))
-			if len(federationReleaseRefs) == 0 && shouldDeferTunnelRuntimeApplyError(applyErr) {
+			if shouldDeferTunnelRuntimeApplyError(applyErr) {
 				respondTunnelUpdateOK()
 				return
 			}
@@ -3433,8 +3333,8 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 	return warnings
 }
 
-// forwardPortConflictMessage 按统一四源谓词给出的占用来源措辞
-// （L9 观察 2）：入站/链路段/联邦预留占用不得误报为「已被其他转发
+// forwardPortConflictMessage 按统一三源谓词给出的占用来源措辞
+// （L9 观察 2）：入站/链路段占用不得误报为「已被其他转发
 // 占用」——归因错误会让排障找错对象。conflict 为 nil（来源不可知）
 // 时退回不点名的「已被占用」。
 func forwardPortConflictMessage(node *nodeRecord, port int, conflict *repo.ForwardPortConflict) string {
@@ -3451,8 +3351,6 @@ func forwardPortConflictMessage(node *nodeRecord, port int, conflict *repo.Forwa
 				return fmt.Sprintf("节点 %s 端口 %d 已被隧道 %s 的链路段占用", node.Name, port, name)
 			}
 			return fmt.Sprintf("节点 %s 端口 %d 已被隧道链路段占用", node.Name, port)
-		case repo.PortSourcePeer:
-			return fmt.Sprintf("节点 %s 端口 %d 已被联邦共享预留占用", node.Name, port)
 		}
 	}
 	return fmt.Sprintf("节点 %s 端口 %d 已被其他转发占用", node.Name, port)
@@ -3626,8 +3524,7 @@ func (h *Handler) resolvePortForNewEntryNode(nodeID int64, referencePort int, fo
 	}
 
 	// Check if referencePort is within the node's allowed range.
-	if validateLocalNodePort(node, referencePort) == nil &&
-		validateRemoteNodePort(node, referencePort) == nil {
+	if validateLocalNodePort(node, referencePort) == nil {
 		// In range — check availability.
 		occupied, occErr := h.repo.HasOtherForwardOnNodePort(nodeID, referencePort, forwardID)
 		if occErr == nil && !occupied {
@@ -3721,12 +3618,6 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		h.refreshInboundWhitelists(affectedInboundIDs)
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
-	}
-	// R2X-010 ①（BC-R2-01）：删除类与 X-P1-1 离线待清理对齐——联邦
-	// 清理失败不中止删库，绑定留 pending 由重试环在对端恢复后收敛
-	//（与 delete-with-forwards 的既有口径统一）。
-	if err := h.cleanupFederationRuntime(id); err != nil {
-		log.Printf("tunnel delete: federation cleanup deferred to retry loop tunnel_id=%d err=%v", id, err)
 	}
 	h.cleanupTunnelRuntime(id)
 	if err := h.deleteTunnelByID(id); err != nil {
@@ -3848,11 +3739,6 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 			failures = appendBatchFailure(failures, id, tunnelName, err)
 			continue
 		}
-		// R2X-010 ①：同单删口径，联邦清理失败不中止删库（绑定留
-		// pending 由重试环收敛）。
-		if err := h.cleanupFederationRuntime(id); err != nil {
-			log.Printf("tunnel batch delete: federation cleanup deferred to retry loop tunnel_id=%d err=%v", id, err)
-		}
 		h.cleanupTunnelRuntime(id)
 		if err := h.deleteTunnelByID(id); err != nil {
 			// R19-X-01：与单删同型——转发已删、删隧道行失败时失败
@@ -3966,29 +3852,9 @@ func (h *Handler) redeployTunnelAndForwards(tunnelID int64) error {
 		if err := validateTunnelRuntimeBeforeApply(state); err != nil {
 			return err
 		}
-		// R2X-010 ②：重部署是非删除操作，清理失败中止时回滚 pending。
-		if err := h.cleanupFederationRuntimePreserving(tunnelID); err != nil {
-			return err
-		}
 		h.cleanupTunnelRuntime(tunnelID)
-		federationBindings, federationReleaseRefs, fedErr := h.applyFederationRuntime(state, h.federationLocalDomain())
-		if fedErr != nil {
-			return errors.Join(fedErr, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		}
-		tx := h.repo.BeginTx()
-		if tx.Error != nil {
-			return errors.Join(tx.Error, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		}
-		if replaceErr := h.repo.ReplaceFederationTunnelBindingsTx(tx, tunnelID, federationBindings); replaceErr != nil {
-			tx.Rollback()
-			return errors.Join(replaceErr, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		}
-		if commitErr := tx.Commit().Error; commitErr != nil {
-			return errors.Join(commitErr, h.releaseFederationRuntimeRefs(federationReleaseRefs))
-		}
 		_, _, applyErr := h.applyTunnelRuntime(state)
 		if applyErr != nil {
-			applyErr = errors.Join(applyErr, h.cleanupFederationRuntimePreserving(tunnelID))
 			return applyErr
 		}
 	}
@@ -6055,11 +5921,6 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 				break
 			}
 			nodePort := forwardEntryPort(oldPortByNode, nid, p)
-			if validateErr := validateRemoteNodePort(nd, nodePort); validateErr != nil {
-				portRangeOk = false
-				portRangeErr = validateErr
-				break
-			}
 			if validateErr := validateLocalNodePort(nd, nodePort); validateErr != nil {
 				portRangeOk = false
 				portRangeErr = validateErr
@@ -6575,8 +6436,6 @@ func (h *Handler) detachedSegmentPortConflictError(tx *gorm.DB, nodeID int64, no
 		return fmt.Errorf("节点 %s 端口 %d 已被入站占用", nodeName, port)
 	case repo.PortSourceChain:
 		return fmt.Errorf("节点 %s 端口 %d 已被隧道链路段占用", nodeName, port)
-	case repo.PortSourcePeer:
-		return fmt.Errorf("节点 %s 端口 %d 已被联邦共享预留占用", nodeName, port)
 	case repo.PortSourceForward:
 		return fmt.Errorf("节点 %s 端口 %d 已被其他转发占用", nodeName, port)
 	}
@@ -6650,37 +6509,20 @@ func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interf
 		}
 		port := asInt(item["port"], 0)
 		if port > 0 {
-			// RV3-02：显式口恢复范围＋四源占用两检（规格/端口池检
+			// RV3-02：显式口恢复范围＋跨表占用两检（规格/端口池检
 			// 保持豁免，见函数头注）。范围检与 validateExplicitPort
-			// 同位、无条件；占用检按节点远端性分流（远端节点的口
-			// 不在本地端口空间，与 validateExplicitPort 对远端跳
-			// 过占用检同口径），远端判定走 IsRemoteNodeTx 而非尽力
-			// 而为的节点记录缓存——记录读不到时占用检照常执行，
-			// 不重蹈「无检落库」。
+			// 同位、无条件；占用检照常执行，不重蹈「无检落库」。
 			if port > 65535 {
 				return fmt.Errorf("端口 %d 超出有效范围 1-65535", port)
 			}
-			isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
-			if remoteErr != nil {
-				return remoteErr
+			occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, nodeID, port, excludeTunnelID)
+			if err != nil {
+				return err
 			}
-			if !isRemote {
-				occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, nodeID, port, excludeTunnelID)
-				if err != nil {
-					return err
-				}
-				if occupied {
-					return h.detachedSegmentPortConflictError(tx, nodeID, state.Nodes[nodeID], port, excludeTunnelID)
-				}
+			if occupied {
+				return h.detachedSegmentPortConflictError(tx, nodeID, state.Nodes[nodeID], port, excludeTunnelID)
 			}
 			state.SegmentPorts[tunnelChainPortKey{chainType: chainType, inx: inx, nodeID: nodeID}] = port
-			return nil
-		}
-		isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
-		if remoteErr != nil {
-			return remoteErr
-		}
-		if isRemote {
 			return nil
 		}
 		resolved, err := h.resolveTunnelSegmentPort(tx, state, nodeID, chainType, inx, allocated, excludeTunnelID, existingPorts, existingPortsByNode)
@@ -6768,16 +6610,10 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			}
 			port := asInt(item["port"], 0)
 			if port <= 0 {
-				isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
-				if remoteErr != nil {
-					return nil, remoteErr
-				}
-				if !isRemote {
-					var err error
-					port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 3, idx+1, allocated, excludeTunnelID, existingPorts, existingPortsByNode)
-					if err != nil {
-						return nil, err
-					}
+				var err error
+				port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 3, idx+1, allocated, excludeTunnelID, existingPorts, existingPortsByNode)
+				if err != nil {
+					return nil, err
 				}
 			}
 			if port > 0 {
@@ -6810,16 +6646,10 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 				}
 				port := asInt(item["port"], 0)
 				if port <= 0 {
-					isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
-					if remoteErr != nil {
-						return nil, remoteErr
-					}
-					if !isRemote {
-						var err error
-						port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 2, hopIdx+1, allocated, excludeTunnelID, existingPorts, existingPortsByNode)
-						if err != nil {
-							return nil, err
-						}
+					var err error
+					port, err = h.resolveTunnelSegmentPort(tx, state, nodeID, 2, hopIdx+1, allocated, excludeTunnelID, existingPorts, existingPortsByNode)
+					if err != nil {
+						return nil, err
 					}
 				}
 				if port > 0 {
@@ -6845,7 +6675,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		// 解析这些行的端口：更新时省略 port 的行在落库兜底被随机重
 		// 挑（与 P01-002「缺省沿用现口、重挑必回执警示」口径不符，
 		// 且无任何 PortChanges 记录）。在此解析（缺省沿用/重挑
-		// ＋记录，显式口过范围＋四源占用两检、规格检豁免），
+		// ＋记录，显式口过范围＋三源占用两检、规格检豁免），
 		// 结果经 SegmentPorts 回写请求后落库。
 		if err := h.prepareDetachedSegmentPorts(tx, req, state, excludeTunnelID); err != nil {
 			return nil, err
@@ -6886,7 +6716,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		if node == nil {
 			return nil, errors.New("节点不存在")
 		}
-		if node.IsRemote != 1 && node.Status != 1 {
+		if node.Status != 1 {
 			// For tunnel updates, allow offline nodes that already belong to the
 			// tunnel (user may be removing them). Only reject genuinely new offline nodes.
 			_, isExisting := existingNodeIDs[nodeID]
@@ -6897,22 +6727,9 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		state.Nodes[nodeID] = node
 	}
 
-	for _, outNode := range state.OutNodes {
-		if err := validateRemoteNodePort(state.Nodes[outNode.NodeID], outNode.Port); err != nil {
-			return nil, err
-		}
-	}
-	for _, hop := range state.ChainHops {
-		for _, chainNode := range hop {
-			if err := validateRemoteNodePort(state.Nodes[chainNode.NodeID], chainNode.Port); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	// B4/F-015: 显式指定出口/链式端口此前只过 validateRemoteNodePort
-	// （对本地节点恒 nil）——范围外、超 65535、与转发/入站/其他隧道
-	// 链路撞口全部落库，运行时才 bind 失败。本地节点显式口补齐
+	// B4/F-015: 显式指定出口/链式端口此前无写面校验
+	// ——范围外、超 65535、与转发/入站/其他隧道
+	// 链路撞口全部落库，运行时才 bind 失败。显式口补齐
 	// 「有效范围 + 节点规格 + 跨表占用」三检（与转发 inPort 的
 	// O2-001 口径一致）；自动分配的口由 Pick* 保证，不重复检。
 	validateExplicitPort := func(n tunnelRuntimeNode) error {
@@ -6923,7 +6740,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			return fmt.Errorf("端口 %d 超出有效范围 1-65535", n.Port)
 		}
 		node := state.Nodes[n.NodeID]
-		if node == nil || node.IsRemote == 1 {
+		if node == nil {
 			return nil
 		}
 		if err := validateLocalNodePort(node, n.Port); err != nil {
@@ -6954,8 +6771,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 	// F-UDP-4：段协议同时充当链服务的 listener 类型与上一跳的
 	// dialer 类型，非法值会直达 agent 解析（注册表内 sshd/tun 等
 	// 设计外类型可被实例化）。创建/更新共用本入口，在此按合法集
-	// （peerTunnelTransportTypes）统一校验并小写归一，与联邦面
-	// reserve/apply-role 同口径。
+	// （tunnelTransportTypes）统一校验并小写归一。
 	normalizeNodeProtocols := func(nodes []tunnelRuntimeNode) error {
 		for i := range nodes {
 			if !isAllowedTunnelProtocol(nodes[i].Protocol) {
@@ -6980,6 +6796,22 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 	return state, nil
 }
 
+// tunnelTransportTypes 是隧道段协议（链服务 listener 与上一跳
+// dialer）的合法集，与前端 tunnel 协议枚举及 fork 注册表一致：
+// tcp/udp/tls/mtls/mtcp/kcp/ws/wss/mws/mwss。
+var tunnelTransportTypes = map[string]bool{
+	"tcp": true, "udp": true, "tls": true, "mtls": true, "mtcp": true, "kcp": true,
+	"ws": true, "wss": true, "mws": true, "mwss": true,
+}
+
+func isAllowedTunnelProtocol(protocol string) bool {
+	return tunnelTransportTypes[strings.ToLower(strings.TrimSpace(protocol))]
+}
+
+func normalizeTunnelProtocol(protocol string) string {
+	return strings.ToLower(strings.TrimSpace(protocol))
+}
+
 func validateTunnelRuntimeBeforeApply(state *tunnelCreateState) error {
 	if state.Type != 2 {
 		return nil
@@ -7001,11 +6833,6 @@ func validateTunnelRuntimeBeforeApply(state *tunnelCreateState) error {
 			}
 		}
 	}
-	for _, node := range state.Nodes {
-		if node.IsRemote == 1 && (strings.TrimSpace(node.RemoteURL) == "" || strings.TrimSpace(node.RemoteToken) == "") {
-			return fmt.Errorf("远程节点 %s 缺少共享配置", nodeDisplayName(node))
-		}
-	}
 	groups := append([][]tunnelRuntimeNode{state.InNodes}, state.ChainHops...)
 	groups = append(groups, state.OutNodes)
 	for i := 0; i+1 < len(groups); i++ {
@@ -7018,7 +6845,7 @@ func validateTunnelRuntimeBeforeApply(state *tunnelCreateState) error {
 				if _, err := selectTunnelDialHost(state.Nodes[source.NodeID], node, state.IPPreference, target.ConnectIP); err != nil {
 					return err
 				}
-				if node.IsRemote != 1 && target.Port <= 0 {
+				if target.Port <= 0 {
 					return errors.New("节点端口不能为空")
 				}
 			}
@@ -7028,7 +6855,6 @@ func validateTunnelRuntimeBeforeApply(state *tunnelCreateState) error {
 }
 
 // Exercise known chain write constraints inside the validation transaction.
-// Remote ports that have not been reserved yet remain NULL until actual apply.
 func (h *Handler) validateTunnelChainReplacementTx(tx *gorm.DB, state *tunnelCreateState) error {
 	if err := h.repo.DeleteChainTunnelsByTunnelTx(tx, state.TunnelID); err != nil {
 		return err
@@ -7198,424 +7024,6 @@ func applyTunnelPortsToRequest(req map[string]interface{}, state *tunnelCreateSt
 	}
 }
 
-type federationRuntimeReleaseRef struct {
-	RemoteURL     string
-	RemoteToken   string
-	BindingID     string
-	ReservationID string
-	ResourceKey   string
-}
-
-func federationRuntimeResourceKey(tunnelID int64, nodeID int64, chainType int, hopInx int) string {
-	return fmt.Sprintf("tunnel:%d:node:%d:type:%d:hop:%d", tunnelID, nodeID, chainType, hopInx)
-}
-
-func remoteShareIDFromConfig(raw string) int64 {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0
-	}
-	var cfg map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return 0
-	}
-	return asInt64(cfg["shareId"], 0)
-}
-
-func (h *Handler) federationLocalDomain() string {
-	cfg, _ := h.repo.GetConfigByName("panel_domain")
-	if cfg == nil {
-		return ""
-	}
-	return strings.TrimSpace(cfg.Value)
-}
-
-// ensureRemoteNodeRelayAuth 是消费方凭据自愈（D3-04）：下发前向
-// 提供方做一次 Connect，按现行凭据合并刷新 RemoteConfig 并写回 DB
-// 与内存副本。D3-04 初版只在本地密码为空（升级前导入的存量节点）时
-// 才刷新；R2-F3-01：提供方从旧备份恢复到空库后凭据被重新补发，
-// 消费方持旧的非空凭据时旧实现永不刷新、数据面无限期被 relay 鉴权
-// 拒绝而控制面无感——现改为每次下发前都比对刷新（与用量同步的无
-// 条件覆写同口径，经 mergeRemoteConnectCredentials 合并落盘），刷
-// 新后本次下发即以新凭据继续，构成一次重试。best-effort：Connect
-// 失败记日志并保留存量值继续下发——提供方不可达会在后续运行时调
-// 用处显形为隧道错误，凭据失效另由节点状态同步面同口径自愈并以
-// syncError 披露；目标服务若已强制鉴权，旧凭据会在提供方被拒，不
-// 会静默放行。
-func (h *Handler) ensureRemoteNodeRelayAuth(fc *client.FederationClient, node *nodeRecord, localDomain string) {
-	if node == nil || node.IsRemote != 1 {
-		return
-	}
-	remoteURL := strings.TrimSpace(node.RemoteURL)
-	remoteToken := strings.TrimSpace(node.RemoteToken)
-	if remoteURL == "" || remoteToken == "" {
-		return
-	}
-	info, err := fc.Connect(remoteURL, remoteToken, localDomain)
-	if err != nil {
-		log.Printf("federation credential self-heal: connect remote node %d (%s) before tunnel apply: %v", node.ID, nodeDisplayName(node), err)
-		return
-	}
-	if info == nil {
-		return
-	}
-	// FIX2-B（V5-3）：版本提示记日志、对端版本随凭据自愈一并留痕。
-	logFederationVersionWarning(info)
-	if updated, changed := h.mergeRemoteConnectCredentials(node.ID, node.RemoteConfig, info); changed {
-		node.RemoteConfig = updated
-	}
-}
-
-func (h *Handler) applyFederationRuntime(state *tunnelCreateState, localDomain string) ([]repo.FederationTunnelBinding, []federationRuntimeReleaseRef, error) {
-	bindings := make([]repo.FederationTunnelBinding, 0)
-	releaseRefs := make([]federationRuntimeReleaseRef, 0)
-	if h == nil || state == nil {
-		return bindings, releaseRefs, nil
-	}
-	// R8-T-06: this client drives Connect/ReservePort/ApplyRole —
-	// runtime faces whose peer work is sequential 6s node commands
-	// under a shared mutex; give it the explicit runtime budget
-	// instead of the 10s default.
-	fc := client.NewFederationClientWithTimeout(federationRuntimeClientTimeout)
-	now := time.Now().UnixMilli()
-
-	// D3-04: 下发前为所有远端节点自愈 relay 凭据（每个节点至多一次
-	// Connect），供下方 middle 目标与本地链构建取用。
-	for _, node := range state.Nodes {
-		h.ensureRemoteNodeRelayAuth(fc, node, localDomain)
-	}
-
-	for outIdx := range state.OutNodes {
-		outNode := state.OutNodes[outIdx]
-		node := state.Nodes[outNode.NodeID]
-		if node == nil || node.IsRemote != 1 {
-			continue
-		}
-		remoteURL := strings.TrimSpace(node.RemoteURL)
-		remoteToken := strings.TrimSpace(node.RemoteToken)
-		if remoteURL == "" || remoteToken == "" {
-			return bindings, releaseRefs, fmt.Errorf("远程节点 %s 缺少共享配置", nodeDisplayName(node))
-		}
-
-		resourceKey := federationRuntimeResourceKey(state.TunnelID, outNode.NodeID, 3, 0)
-		reserveReq := client.RuntimeReservePortRequest{
-			ResourceKey:   resourceKey,
-			Protocol:      effectiveSegmentProtocol(outNode.Protocol, state.TunnelProtocol),
-			RequestedPort: outNode.Port,
-		}
-		reserveRes, err := fc.ReservePort(remoteURL, remoteToken, localDomain, reserveReq)
-		if err != nil && reserveReq.RequestedPort > 0 {
-			reserveReq.RequestedPort = 0
-			reserveRes, err = fc.ReservePort(remoteURL, remoteToken, localDomain, reserveReq)
-		}
-		if err != nil {
-			return bindings, releaseRefs, fmt.Errorf("远程节点 %s 端口分配失败: %w", nodeDisplayName(node), err)
-		}
-
-		releaseRefs = append(releaseRefs, federationRuntimeReleaseRef{
-			RemoteURL: remoteURL, RemoteToken: remoteToken, BindingID: reserveRes.BindingID,
-			ReservationID: reserveRes.ReservationID, ResourceKey: resourceKey,
-		})
-
-		state.OutNodes[outIdx].Port = reserveRes.AllocatedPort
-		outNode = state.OutNodes[outIdx]
-
-		applyReq := client.RuntimeApplyRoleRequest{
-			ReservationID: reserveRes.ReservationID,
-			ResourceKey:   resourceKey,
-			Role:          "exit",
-			Protocol:      effectiveSegmentProtocol(outNode.Protocol, state.TunnelProtocol),
-			Strategy:      defaultString(outNode.Strategy, "round"),
-		}
-		applyRes, err := fc.ApplyRole(remoteURL, remoteToken, localDomain, applyReq)
-		if err != nil {
-			return bindings, releaseRefs, fmt.Errorf("远程节点 %s 运行时下发失败: %w", nodeDisplayName(node), err)
-		}
-		if applyRes.AllocatedPort > 0 {
-			state.OutNodes[outIdx].Port = applyRes.AllocatedPort
-			outNode = state.OutNodes[outIdx]
-		}
-
-		bindings = append(bindings, repo.FederationTunnelBinding{
-			TunnelID:        state.TunnelID,
-			NodeID:          outNode.NodeID,
-			ChainType:       3,
-			HopInx:          0,
-			RemoteURL:       remoteURL,
-			ResourceKey:     resourceKey,
-			RemoteBindingID: defaultString(applyRes.BindingID, reserveRes.BindingID),
-			AllocatedPort:   outNode.Port,
-			Status:          1,
-			CreatedTime:     now,
-			UpdatedTime:     now,
-		})
-		releaseRefs[len(releaseRefs)-1].BindingID = defaultString(applyRes.BindingID, reserveRes.BindingID)
-	}
-
-	for hopIdx := len(state.ChainHops) - 1; hopIdx >= 0; hopIdx-- {
-		for nodeIdx := range state.ChainHops[hopIdx] {
-			chainNode := state.ChainHops[hopIdx][nodeIdx]
-			node := state.Nodes[chainNode.NodeID]
-			if node == nil || node.IsRemote != 1 {
-				continue
-			}
-			remoteURL := strings.TrimSpace(node.RemoteURL)
-			remoteToken := strings.TrimSpace(node.RemoteToken)
-			if remoteURL == "" || remoteToken == "" {
-				return bindings, releaseRefs, fmt.Errorf("远程节点 %s 缺少共享配置", nodeDisplayName(node))
-			}
-
-			resourceKey := federationRuntimeResourceKey(state.TunnelID, chainNode.NodeID, 2, hopIdx+1)
-			reserveReq := client.RuntimeReservePortRequest{
-				ResourceKey:   resourceKey,
-				Protocol:      effectiveSegmentProtocol(chainNode.Protocol, state.TunnelProtocol),
-				RequestedPort: chainNode.Port,
-			}
-			reserveRes, err := fc.ReservePort(remoteURL, remoteToken, localDomain, reserveReq)
-			if err != nil && reserveReq.RequestedPort > 0 {
-				reserveReq.RequestedPort = 0
-				reserveRes, err = fc.ReservePort(remoteURL, remoteToken, localDomain, reserveReq)
-			}
-			if err != nil {
-				return bindings, releaseRefs, fmt.Errorf("远程节点 %s 端口分配失败: %w", nodeDisplayName(node), err)
-			}
-
-			releaseRefs = append(releaseRefs, federationRuntimeReleaseRef{
-				RemoteURL: remoteURL, RemoteToken: remoteToken, BindingID: reserveRes.BindingID,
-				ReservationID: reserveRes.ReservationID, ResourceKey: resourceKey,
-			})
-
-			state.ChainHops[hopIdx][nodeIdx].Port = reserveRes.AllocatedPort
-			chainNode = state.ChainHops[hopIdx][nodeIdx]
-
-			nextTargets := state.OutNodes
-			if hopIdx+1 < len(state.ChainHops) {
-				nextTargets = state.ChainHops[hopIdx+1]
-			} else {
-				nextTargets = h.orderBestExitTargets(state.TunnelID, chainNode.NodeID, nextTargets)
-			}
-			applyTargets := make([]client.RuntimeTarget, 0, len(nextTargets))
-			for _, target := range nextTargets {
-				targetNode := state.Nodes[target.NodeID]
-				if targetNode == nil {
-					return bindings, releaseRefs, errors.New("节点不存在")
-				}
-				host, hostErr := selectTunnelDialHost(node, targetNode, state.IPPreference, target.ConnectIP)
-				if hostErr != nil {
-					return bindings, releaseRefs, hostErr
-				}
-				if target.Port <= 0 {
-					return bindings, releaseRefs, errors.New("节点端口不能为空")
-				}
-				rt := client.RuntimeTarget{
-					Host:     host,
-					Port:     target.Port,
-					Protocol: effectiveSegmentProtocol(target.Protocol, state.TunnelProtocol),
-				}
-				// D3-04: 目标是远端节点时附上其 share 凭据，供提供方
-				// 为 middle 的 chain connector 写 auth。
-				if targetNode.IsRemote == 1 {
-					rt.RelayUsername, rt.RelayPassword = parseRemoteShareRelayAuth(targetNode.RemoteConfig)
-				}
-				applyTargets = append(applyTargets, rt)
-			}
-
-			applyReq := client.RuntimeApplyRoleRequest{
-				ReservationID: reserveRes.ReservationID,
-				ResourceKey:   resourceKey,
-				Role:          "middle",
-				Protocol:      effectiveSegmentProtocol(chainNode.Protocol, state.TunnelProtocol),
-				Strategy:      runtimeStrategyForTargets(chainNode, nextTargets),
-				Targets:       applyTargets,
-			}
-			applyRes, err := fc.ApplyRole(remoteURL, remoteToken, localDomain, applyReq)
-			if err != nil {
-				return bindings, releaseRefs, fmt.Errorf("远程节点 %s 运行时下发失败: %w", nodeDisplayName(node), err)
-			}
-			if applyRes.AllocatedPort > 0 {
-				state.ChainHops[hopIdx][nodeIdx].Port = applyRes.AllocatedPort
-				chainNode = state.ChainHops[hopIdx][nodeIdx]
-			}
-
-			bindings = append(bindings, repo.FederationTunnelBinding{
-				TunnelID:        state.TunnelID,
-				NodeID:          chainNode.NodeID,
-				ChainType:       2,
-				HopInx:          hopIdx + 1,
-				RemoteURL:       remoteURL,
-				ResourceKey:     resourceKey,
-				RemoteBindingID: defaultString(applyRes.BindingID, reserveRes.BindingID),
-				AllocatedPort:   chainNode.Port,
-				Status:          1,
-				CreatedTime:     now,
-				UpdatedTime:     now,
-			})
-			releaseRefs[len(releaseRefs)-1].BindingID = defaultString(applyRes.BindingID, reserveRes.BindingID)
-		}
-	}
-
-	return bindings, releaseRefs, nil
-}
-
-// releaseFederationRuntimeRefs is used after the caller has rolled back its
-// transaction. Failed releases survive process restarts in a separate queue.
-func (h *Handler) releaseFederationRuntimeRefs(refs []federationRuntimeReleaseRef) error {
-	if h == nil || len(refs) == 0 {
-		return nil
-	}
-	fc := client.NewFederationClient()
-	localDomain := h.federationLocalDomain()
-	var failures []error
-	for i := len(refs) - 1; i >= 0; i-- {
-		ref := refs[i]
-		pending := &model.FederationPendingRelease{
-			RemoteURL: ref.RemoteURL, RemoteToken: ref.RemoteToken,
-			BindingID: ref.BindingID, ReservationID: ref.ReservationID, ResourceKey: ref.ResourceKey,
-		}
-		if err := h.repo.SavePendingFederationRelease(pending); err != nil {
-			failures = append(failures, fmt.Errorf("保存共享运行时清理任务失败: %w", err))
-			continue
-		}
-		req := client.RuntimeReleaseRoleRequest{
-			BindingID: ref.BindingID, ReservationID: ref.ReservationID, ResourceKey: ref.ResourceKey,
-		}
-		if err := fc.ReleaseRole(ref.RemoteURL, ref.RemoteToken, localDomain, req); err != nil {
-			failures = append(failures, err)
-			continue
-		}
-		if err := h.repo.DeletePendingFederationRelease(pending.ID); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	return errors.Join(failures...)
-}
-
-func (h *Handler) cleanupFederationRuntime(tunnelID int64) error {
-	if h == nil || tunnelID <= 0 {
-		return nil
-	}
-	bindings, err := h.repo.ListFederationTunnelBindingsForCleanup(tunnelID)
-	if err != nil {
-		return err
-	}
-	var failures []error
-	for _, b := range bindings {
-		// Persist intent before sending the request: timeouts can occur after
-		// the peer has already acted, and must remain safely retryable.
-		if err := h.repo.MarkFederationTunnelBindingPendingRelease(b.ID); err != nil {
-			failures = append(failures, err)
-			continue
-		}
-		if err := h.releaseFederationTunnelBinding(b); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	return errors.Join(failures...)
-}
-
-// cleanupFederationRuntimePreserving is cleanupFederationRuntime for
-// non-delete operations (tunnelUpdate / redeploy) — R2X-010 ②: it
-// snapshots each binding's status on entry, and when the cleanup fails
-// (so the caller aborts and the tunnel stays alive) it rolls the
-// bindings this round flipped from active (1) to pending (2) back to
-// status=1, so the background retry loop cannot later release the
-// runtime of a tunnel that was never actually deleted or replaced.
-// Bindings already pending on entry keep their status: their pending
-// state belongs to an earlier, committed delete intent.
-func (h *Handler) cleanupFederationRuntimePreserving(tunnelID int64) error {
-	if h == nil || tunnelID <= 0 {
-		return nil
-	}
-	bindings, err := h.repo.ListFederationTunnelBindingsForCleanup(tunnelID)
-	if err != nil {
-		return err
-	}
-	original := make(map[int64]int, len(bindings))
-	for _, b := range bindings {
-		original[b.ID] = b.Status
-	}
-	if err := h.cleanupFederationRuntime(tunnelID); err != nil {
-		for id, status := range original {
-			if status != 1 {
-				continue
-			}
-			if rerr := h.repo.SetFederationTunnelBindingStatus(id, 1); rerr != nil {
-				log.Printf("federation cleanup rollback failed tunnel_id=%d binding_id=%d err=%v", tunnelID, id, rerr)
-			}
-		}
-		return err
-	}
-	return nil
-}
-
-func (h *Handler) releaseFederationTunnelBinding(b repo.FederationTunnelBinding) error {
-	node, err := h.repo.GetNodeByID(b.NodeID)
-	if err != nil {
-		return err
-	}
-	if node == nil {
-		return fmt.Errorf("共享节点 %d 不存在，保留待清理绑定", b.NodeID)
-	}
-	remoteURL := strings.TrimSpace(b.RemoteURL)
-	if remoteURL == "" {
-		remoteURL = strings.TrimSpace(node.RemoteURL.String)
-	}
-	remoteToken := strings.TrimSpace(node.RemoteToken.String)
-	if remoteURL == "" || remoteToken == "" {
-		return fmt.Errorf("共享节点 %d 缺少连接配置，保留待清理绑定", b.NodeID)
-	}
-	req := client.RuntimeReleaseRoleRequest{
-		BindingID: strings.TrimSpace(b.RemoteBindingID), ResourceKey: strings.TrimSpace(b.ResourceKey),
-	}
-	if err := client.NewFederationClient().ReleaseRole(remoteURL, remoteToken, h.federationLocalDomain(), req); err != nil {
-		return fmt.Errorf("共享节点 %d 清理失败: %w", b.NodeID, err)
-	}
-	return h.repo.DeleteFederationTunnelBinding(b.ID)
-}
-
-// retryPendingFederationRuntimeCleanup never touches active bindings.
-func (h *Handler) retryPendingFederationRuntimeCleanup() error {
-	bindings, err := h.repo.ListPendingFederationTunnelBindings()
-	if err != nil {
-		return err
-	}
-	var failures []error
-	for _, binding := range bindings {
-		// R2X-010 ③（纵深防线）：释放前复核绑定所属隧道是否仍存在——
-		// 仍存在说明该 pending 不是已提交的删除意图（例如旧口径下失败
-		// 的删除/编辑尝试遗留），释放它会拆掉仍在用隧道的数据面，跳过
-		// 并记日志。隧道 ID 自增不复用，此判据不会误伤真删除。
-		if exists, err := h.repo.TunnelExists(binding.TunnelID); err != nil {
-			failures = append(failures, err)
-			continue
-		} else if exists {
-			log.Printf("federation cleanup retry: skip binding_id=%d tunnel_id=%d: tunnel still exists", binding.ID, binding.TunnelID)
-			continue
-		}
-		if err := h.releaseFederationTunnelBinding(binding); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	pending, err := h.repo.ListPendingFederationReleases()
-	if err != nil {
-		return errors.Join(append(failures, err)...)
-	}
-	fc := client.NewFederationClient()
-	for _, item := range pending {
-		req := client.RuntimeReleaseRoleRequest{
-			BindingID: item.BindingID, ReservationID: item.ReservationID, ResourceKey: item.ResourceKey,
-		}
-		if err := fc.ReleaseRole(item.RemoteURL, item.RemoteToken, h.federationLocalDomain(), req); err != nil {
-			failures = append(failures, err)
-			continue
-		}
-		if err := h.repo.DeletePendingFederationRelease(item.ID); err != nil {
-			failures = append(failures, err)
-		}
-	}
-	return errors.Join(failures...)
-}
-
 func (h *Handler) applyTunnelRuntime(state *tunnelCreateState) ([]int64, []int64, error) {
 	return h.applyTunnelRuntimeWithMode(state, false)
 }
@@ -7670,7 +7078,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 				nextTargets = h.orderBestExitTargets(state.TunnelID, chainNode.NodeID, nextTargets)
 			}
 			node := state.Nodes[chainNode.NodeID]
-			if node != nil && (node.IsRemote == 1 || node.Status != 1) {
+			if node != nil && node.Status != 1 {
 				continue
 			}
 			chainData, err := h.buildTunnelChainConfig(state.TunnelID, chainNode.NodeID, nextTargets, state.Nodes, state.IPPreference, state.TunnelProtocol)
@@ -7698,7 +7106,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 
 	for _, outNode := range state.OutNodes {
 		node := state.Nodes[outNode.NodeID]
-		if node != nil && (node.IsRemote == 1 || node.Status != 1) {
+		if node != nil && node.Status != 1 {
 			continue
 		}
 		serviceData := h.buildTunnelChainServiceConfig(state.TunnelID, outNode, state.Nodes[outNode.NodeID], 1, state.TunnelProtocol)
@@ -7748,15 +7156,6 @@ func (h *Handler) applyBestExitChainOrder(tunnelID, ownerNodeID int64, outNodes 
 			nodes[target.NodeID] = node
 		}
 	}
-	owner := nodes[ownerNodeID]
-	if owner != nil && owner.IsRemote == 1 {
-		if err := h.applyRemoteBestExitChainOrder(tunnelID, ownerNodeID, owner, targets, nodes, ipPreference); err != nil {
-			log.Printf("best_exit: update remote federation chain failed tunnel=%d owner=%d err=%v", tunnelID, ownerNodeID, err)
-			return err
-		}
-		log.Printf("best_exit: updated remote federation chain tunnel=%d owner=%d best_exit=%d", tunnelID, ownerNodeID, targets[0].NodeID)
-		return nil
-	}
 	chainData, err := h.buildTunnelChainConfig(tunnelID, ownerNodeID, targets, nodes, ipPreference)
 	if err != nil {
 		log.Printf("best_exit: build chain failed tunnel=%d owner=%d err=%v", tunnelID, ownerNodeID, err)
@@ -7768,89 +7167,6 @@ func (h *Handler) applyBestExitChainOrder(tunnelID, ownerNodeID int64, outNodes 
 	}
 	log.Printf("best_exit: updated chain tunnel=%d owner=%d best_exit=%d", tunnelID, ownerNodeID, targets[0].NodeID)
 	return nil
-}
-
-func (h *Handler) applyRemoteBestExitChainOrder(tunnelID, ownerNodeID int64, owner *nodeRecord, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string) error {
-	if h == nil || h.repo == nil || owner == nil {
-		return errors.New("invalid remote best exit update context")
-	}
-	bindings, err := h.repo.ListActiveFederationTunnelBindingsByTunnel(tunnelID)
-	if err != nil {
-		return err
-	}
-	var binding *repo.FederationTunnelBinding
-	for i := range bindings {
-		if bindings[i].NodeID == ownerNodeID && bindings[i].ChainType == 2 && bindings[i].Status == 1 {
-			binding = &bindings[i]
-			break
-		}
-	}
-	if binding == nil {
-		return fmt.Errorf("active federation middle binding not found for tunnel=%d owner=%d", tunnelID, ownerNodeID)
-	}
-
-	remoteURL := strings.TrimSpace(owner.RemoteURL)
-	if remoteURL == "" {
-		remoteURL = strings.TrimSpace(binding.RemoteURL)
-	}
-	remoteToken := strings.TrimSpace(owner.RemoteToken)
-	if remoteURL == "" || remoteToken == "" {
-		return errors.New("远程节点缺少共享配置")
-	}
-
-	applyTargets := make([]client.RuntimeTarget, 0, len(targets))
-	for _, target := range targets {
-		targetNode := nodes[target.NodeID]
-		if targetNode == nil {
-			return errors.New("节点不存在")
-		}
-		host, hostErr := selectTunnelDialHost(owner, targetNode, ipPreference, target.ConnectIP)
-		if hostErr != nil {
-			return hostErr
-		}
-		if target.Port <= 0 {
-			return errors.New("节点端口不能为空")
-		}
-		rt := client.RuntimeTarget{
-			Host:     host,
-			Port:     target.Port,
-			Protocol: effectiveSegmentProtocol(target.Protocol, h.tunnelProtocolOf(tunnelID)),
-		}
-		// D3-04: 与 applyFederationRuntime 同口径附目标 share 凭据。
-		if targetNode.IsRemote == 1 {
-			rt.RelayUsername, rt.RelayPassword = parseRemoteShareRelayAuth(targetNode.RemoteConfig)
-		}
-		applyTargets = append(applyTargets, rt)
-	}
-
-	ownerRuntimeNode := tunnelRuntimeNode{NodeID: ownerNodeID, Protocol: "", Strategy: "round", ChainType: 2}
-	if chainRows, listErr := h.repo.ListChainNodesForTunnel(tunnelID); listErr == nil {
-		for _, row := range chainRows {
-			if row.NodeID == ownerNodeID && row.ChainType == 2 {
-				ownerRuntimeNode = tunnelRuntimeNode{
-					NodeID:    row.NodeID,
-					Protocol:  row.Protocol,
-					Strategy:  row.Strategy,
-					Inx:       int(row.Inx),
-					ChainType: row.ChainType,
-					Port:      row.Port,
-					ConnectIP: row.ConnectIP,
-				}
-				break
-			}
-		}
-	}
-
-	// R8-T-06: ApplyRole is a runtime face; see
-	// federationRuntimeClientTimeout.
-	_, err = client.NewFederationClientWithTimeout(federationRuntimeClientTimeout).ApplyRole(remoteURL, remoteToken, h.federationLocalDomain(), client.RuntimeApplyRoleRequest{
-		ResourceKey: strings.TrimSpace(binding.ResourceKey),
-		Role:        "middle",
-		Protocol:    effectiveSegmentProtocol(ownerRuntimeNode.Protocol, h.tunnelProtocolOf(tunnelID)),
-		Strategy:    runtimeStrategyForTargets(ownerRuntimeNode, targets),
-		Targets:     applyTargets,
-	})
-	return err
 }
 
 func (h *Handler) upsertTunnelChainOnNode(nodeID int64, chainData map[string]interface{}) error {
@@ -8002,12 +7318,11 @@ func isNodeUnreachableError(err error) bool {
 }
 
 // tunnelRelayMetadata 是 relay connector/handler 在给定隧道协议下的
-// metadata 全集。本地链 builder（buildTunnelChainConfig /
-// buildTunnelChainServiceConfig）与联邦 builder
-// （buildFederationMiddleChainConfig / buildFederationServiceConfig）
-// 共用同一构造，防止两套生成面参数漂移——F-UDP-7：联邦面曾缺
-// mux.maxFrameSize / mux.maxStreamBuffer，其中 MaxStreamBuffer 有效
-// 值 64KB（库默认） vs 本地 2MB，联邦端作接收方时单流在途窗被压小。
+// metadata 全集。链 builder（buildTunnelChainConfig /
+// buildTunnelChainServiceConfig）共用同一构造，防止生成面参数
+// 漂移——F-UDP-7：生成面曾缺 mux.maxFrameSize /
+// mux.maxStreamBuffer，其中 MaxStreamBuffer 有效值 64KB（库默认）
+// vs 本地 2MB，接收方时单流在途窗被压小。
 func tunnelRelayMetadata(protocol string) map[string]interface{} {
 	metadata := map[string]interface{}{}
 	if isTCPTunnelProtocol(protocol) {
@@ -8034,7 +7349,7 @@ func tunnelRelayMetadata(protocol string) map[string]interface{} {
 // "tls"，与探针面分歧：存量空 protocol 行在隧道协议为 kcp 时会
 // 生成 TLS 腿、探针面却按 UDP 段记「未测」。所有生成/组装面的
 // 段协议回落一律经此函数（tunnelProtocol 由调用方按隧道解析，
-// 见 tunnelKCPKey 与 applyTunnelRuntime/applyFederationRuntime
+// 见 tunnelKCPKey 与 applyTunnelRuntime
 // 的 state 装配）。
 func effectiveSegmentProtocol(segmentProtocol, tunnelProtocol string) string {
 	return chainSegmentProtocol(segmentProtocol, tunnelProtocol)
@@ -8123,13 +7438,6 @@ func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targe
 		connector := map[string]interface{}{
 			"type": "relay",
 		}
-		// D3-04: 目标是远端节点（其角色服务带鉴权）时写入该 share
-		// 的 relay 凭据；本地节点目标不带。
-		if targetNode.IsRemote == 1 {
-			if auth := relayAuthConfig(parseRemoteShareRelayAuth(targetNode.RemoteConfig)); auth != nil {
-				connector["auth"] = auth
-			}
-		}
 		if connectorMetadata := tunnelRelayMetadata(protocol); len(connectorMetadata) > 0 {
 			connector["metadata"] = connectorMetadata
 		}
@@ -8204,8 +7512,7 @@ func (h *Handler) buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnel
 	// （Phase F 收尾复验真机定性：本地多跳链 middle 未开 bind
 	// 时第一跳即 0/6，middle 日志实锤）。本 builder 产出的服务
 	// 只有 ChainType 2（中段）与 ChainType 3（出口）两种，全部
-	// 位于 BIND 逐跳路径上，故无条件开 bind opt-in；与联邦
-	// builder 同口径（buildFederationServiceConfig）。KU9 的
+	// 位于 BIND 逐跳路径上，故无条件开 bind opt-in。KU9 的
 	// 终端-only 口径（有 chain 即 forward、不查开关）已被真机
 	// 证伪，勿回退。
 	handlerMetadata["bind"] = true
@@ -8354,15 +7661,13 @@ const kcpCryptAlgorithm = "aes-256"
 
 // KCPKeyFor 按作用域派生 KCP 段的加密密钥（K1-01 修复）：与
 // SSUserPSK 同构的免存储确定性派生——HMAC-SHA256(面板 jwtSecret,
-// 域分隔串 + scopeID)，两端（本地链的拨号/监听两侧、联邦的消费
-// 方与提供方）用同一 (secret, scopeID) 必然算出同一把钥匙，无需
-// 任何新增存储或跨面板协议字段。scopeID 在本地链为隧道 ID、在
-// 联邦角色面为 share ID（PeerShareRuntime 行自带 ShareID，提供
-// 方本地可达；消费方面板用自己库里的同一 share 行 ID）。密钥对
-// 同一作用域恒定：隧道/份额重下发不换钥；jwtSecret 轮换（或面板
-// 数据整体迁移）才会换钥，那时全网 KCP 腿须同批重下发。空 secret
-// 或非法 scopeID 返回 ""，调用方必须拒绝生成 KCP 配置——绝不回
-// 落到 kcp-go 的公开默认密钥（回落即漏洞保留）。
+// 域分隔串 + scopeID)，本地链的拨号/监听两侧用同一
+// (secret, scopeID) 必然算出同一把钥匙，无需任何新增存储。
+// scopeID 为隧道 ID。密钥对同一作用域恒定：隧道重下发不换钥；
+// jwtSecret 轮换（或面板数据整体迁移）才会换钥，那时全网 KCP
+// 腿须同批重下发。空 secret 或非法 scopeID 返回 ""，调用方必须
+// 拒绝生成 KCP 配置——绝不回落到 kcp-go 的公开默认密钥（回落
+// 即漏洞保留）。
 func KCPKeyFor(secret string, scopeID int64) string {
 	if strings.TrimSpace(secret) == "" || scopeID <= 0 {
 		return ""
@@ -8548,24 +7853,12 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 		port := asInt(n["port"], 0)
 		portVal := sql.NullInt64{Int64: int64(port), Valid: true}
 		if port <= 0 {
-			// E-01：与 prepareTunnelCreateState（:5578）同口径——远端
-			// 节点端口留 NULL，待联邦层预留后由 bindTx 写回；此前无
-			// 条件 PickRandomNodePortTx 会把未预留的随机端口写进链行，
-			// 无端口段分享更会误报"节点端口已满"。
-			isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
-			if remoteErr != nil {
-				return remoteErr
+			var pickErr error
+			port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
+			if pickErr != nil {
+				return pickErr
 			}
-			if isRemote {
-				portVal = sql.NullInt64{}
-			} else {
-				var pickErr error
-				port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
-				if pickErr != nil {
-					return pickErr
-				}
-				portVal = sql.NullInt64{Int64: int64(port), Valid: true}
-			}
+			portVal = sql.NullInt64{Int64: int64(port), Valid: true}
 		}
 		connectIp := asString(n["connectIp"])
 		strategy, serr := normalizeChainStrategy(3, asString(n["strategy"]))
@@ -8596,22 +7889,12 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 			port := asInt(n["port"], 0)
 			portVal := sql.NullInt64{Int64: int64(port), Valid: true}
 			if port <= 0 {
-				// E-01：与 prepareTunnelCreateState（:5617）同口径——
-				// 远端节点端口留 NULL（见出口分支注释）。
-				isRemote, remoteErr := h.repo.IsRemoteNodeTx(tx, nodeID)
-				if remoteErr != nil {
-					return remoteErr
+				var pickErr error
+				port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
+				if pickErr != nil {
+					return pickErr
 				}
-				if isRemote {
-					portVal = sql.NullInt64{}
-				} else {
-					var pickErr error
-					port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
-					if pickErr != nil {
-						return pickErr
-					}
-					portVal = sql.NullInt64{Int64: int64(port), Valid: true}
-				}
+				portVal = sql.NullInt64{Int64: int64(port), Valid: true}
 			}
 			connectIp := asString(n["connectIp"])
 			strategy, serr := normalizeChainStrategy(2, asString(n["strategy"]))
@@ -8898,19 +8181,9 @@ func (h *Handler) deleteTunnelByID(id int64) error {
 		return errors.New("repository not initialized")
 	}
 
-	tunnelName, _ := h.repo.GetTunnelName(id)
 	tunnel, _ := h.repo.GetTunnelRecord(id)
 	entryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
-	// X-P3-23（L-09-5）：尾步 peer runtime 释放标记纳入级联主事务——
-	// 释放失败则整个删除回滚，不再出现「隧道已删、runtime 未释放、
-	// 靠后台收敛」的不一致中间态。share 信息须在删前解析（隧道名
-	// 随行删除即不可读）。
-	shareID, port, isPeerShare := parsePeerShareInfoFromFederationTunnelName(tunnelName)
-	if isPeerShare {
-		if err := h.repo.DeleteTunnelCascadeWithPeerRelease(id, shareID, port, time.Now().UnixMilli()); err != nil {
-			return err
-		}
-	} else if err := h.repo.DeleteTunnelCascade(id); err != nil {
+	if err := h.repo.DeleteTunnelCascade(id); err != nil {
 		return err
 	}
 	if tunnelIsRealm(tunnel) {
@@ -10126,7 +9399,7 @@ func asInt64Slice(v interface{}) []int64 {
 }
 
 func validateLocalNodePort(node *nodeRecord, port int) error {
-	if node == nil || node.IsRemote == 1 || port <= 0 {
+	if node == nil || port <= 0 {
 		return nil
 	}
 	portRange := strings.TrimSpace(node.PortRange)
@@ -10184,9 +9457,6 @@ func (h *Handler) validateForwardEntryNodesWithPortFunc(entryNodes []int64, port
 			return nodeErr
 		}
 		port := portForNode(nodeID)
-		if err := validateRemoteNodePort(node, port); err != nil {
-			return err
-		}
 		if err := validateLocalNodePort(node, port); err != nil {
 			return err
 		}
