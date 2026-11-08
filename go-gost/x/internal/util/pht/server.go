@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-gost/core/common/bufpool"
@@ -29,6 +30,15 @@ const (
 	defaultBacklog        = 128
 	defaultReadBufferSize = 32 * 1024
 	defaultReadTimeout    = 10 * time.Second
+
+	// defaultConnTTL bounds how long an authorized connection may
+	// sit in the server's table without any push or pull activity
+	// before it is reaped (F02). The value matches the FIX-1
+	// family no-progress window (300s); a live pht client issues a
+	// pull at least once per readTimeout (10s), so the margin is
+	// wide, while an authorize-then-abandon client is fully
+	// reaped within one window.
+	defaultConnTTL = 300 * time.Second
 )
 
 type serverOptions struct {
@@ -40,6 +50,7 @@ type serverOptions struct {
 	tlsConfig      *tls.Config
 	readBufferSize int
 	readTimeout    time.Duration
+	connTTL        time.Duration
 	mptcp          bool
 	logger         logger.Logger
 }
@@ -84,6 +95,14 @@ func ReadTimeoutServerOption(timeout time.Duration) ServerOption {
 	}
 }
 
+// ConnTTLServerOption sets how long an authorized connection may
+// be inactive (no push, no pull) before the server reaps it.
+func ConnTTLServerOption(ttl time.Duration) ServerOption {
+	return func(opts *serverOptions) {
+		opts.connTTL = ttl
+	}
+}
+
 func MPTCPServerOption(mptcp bool) ServerOption {
 	return func(opts *serverOptions) {
 		opts.mptcp = mptcp
@@ -96,7 +115,33 @@ func LoggerServerOption(logger logger.Logger) ServerOption {
 	}
 }
 
-// TODO: remove stale clients from conns
+// connEntry is one authorized client connection held by the
+// server. last is the unix-nano instant of its last activity
+// (authorization, or a push/pull request); the sweeper reaps
+// entries idle for longer than the configured TTL (F02 — this
+// replaces the long-standing "remove stale clients" TODO: entries
+// were previously only deleted on push/pull error paths, so an
+// authorize-then-abandon client, and any entry whose pull ended
+// on EOF, stayed in the table forever).
+type connEntry struct {
+	conn net.Conn
+	last atomic.Int64
+}
+
+func newConnEntry(conn net.Conn) *connEntry {
+	e := &connEntry{conn: conn}
+	e.touch()
+	return e
+}
+
+func (e *connEntry) touch() {
+	e.last.Store(time.Now().UnixNano())
+}
+
+func (e *connEntry) idleFor() time.Duration {
+	return time.Since(time.Unix(0, e.last.Load()))
+}
+
 type Server struct {
 	addr        net.Addr
 	httpServer  *http.Server
@@ -152,6 +197,8 @@ func NewServer(addr string, opts ...ServerOption) *Server {
 	mux.HandleFunc(options.pullPath, s.handlePull)
 	s.httpServer.Handler = mux
 
+	s.startSweeper()
+
 	return s
 }
 
@@ -192,6 +239,8 @@ func NewHTTP3Server(addr string, quicConfig *quic.Config, opts ...ServerOption) 
 	mux.HandleFunc(options.pushPath, s.handlePush)
 	mux.HandleFunc(options.pullPath, s.handlePull)
 	s.http3Server.Handler = mux
+
+	s.startSweeper()
 
 	return s
 }
@@ -253,11 +302,70 @@ func (s *Server) Close() error {
 	default:
 		close(s.closed)
 
+		// F02: drain the connection table. Close previously left
+		// every authorized entry (and its pipe end) behind.
+		s.conns.Range(func(key, value any) bool {
+			s.conns.Delete(key)
+			value.(*connEntry).conn.Close()
+			return true
+		})
+
 		if s.http3Server != nil {
 			return s.http3Server.Close()
 		}
 		return s.httpServer.Close()
 	}
+}
+
+// connTTL resolves the configured entry TTL, applying the
+// default when the option was left unset.
+func (s *Server) connTTL() time.Duration {
+	if s.options.connTTL > 0 {
+		return s.options.connTTL
+	}
+	return defaultConnTTL
+}
+
+// startSweeper launches the stale-connection reaper: ONE
+// goroutine per Server (never per connection), ticking at a
+// third of the TTL and stopping when the server closes. A
+// background reaper is what makes the TTL a time bound rather
+// than a next-request bound: with lazy reaping alone, entries on
+// an otherwise idle server would sit until some unrelated
+// request happened by.
+func (s *Server) startSweeper() {
+	interval := s.connTTL() / 3
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				s.reapStaleConns()
+			case <-s.closed:
+				return
+			}
+		}
+	}()
+}
+
+// reapStaleConns deletes and closes every entry that has seen no
+// push or pull activity for longer than the TTL. Closing the
+// pipe end also unblocks any pull in flight on it and delivers
+// EOF to the accepted side, so the whole tunnel is reaped, not
+// just the table entry.
+func (s *Server) reapStaleConns() {
+	ttl := s.connTTL()
+	s.conns.Range(func(key, value any) bool {
+		e := value.(*connEntry)
+		if e.idleFor() > ttl && s.conns.CompareAndDelete(key, value) {
+			e.conn.Close()
+		}
+		return true
+	})
 }
 
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +401,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Write([]byte(fmt.Sprintf("token=%s", cid)))
-	s.conns.Store(cid, c2)
+	s.conns.Store(cid, newConnEntry(c2))
 }
 
 func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
@@ -320,7 +428,9 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
-	conn := v.(net.Conn)
+	entry := v.(*connEntry)
+	entry.touch()
+	conn := entry.conn
 
 	br := bufio.NewReader(r.Body)
 	data, err := br.ReadString('\n')
@@ -384,7 +494,9 @@ func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn := v.(net.Conn)
+	entry := v.(*connEntry)
+	entry.touch()
+	conn := entry.conn
 
 	w.WriteHeader(http.StatusOK)
 	if fw, ok := w.(http.Flusher); ok {
@@ -413,7 +525,14 @@ func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
 				b[0] = '\n' // no data
 				w.Write(b[:1])
 			} else if errors.Is(err, io.EOF) {
-				// server connection closed
+				// Server connection closed: the accepted side
+				// is gone, so the tunnel is over. This path
+				// previously returned without deleting the
+				// entry, one of the F02 only-in-never-out
+				// shapes; delete it now instead of leaving it
+				// for the sweeper.
+				s.conns.Delete(cid)
+				conn.Close()
 			} else {
 				if !errors.Is(err, io.ErrClosedPipe) {
 					s.options.logger.Error(err)
