@@ -10,7 +10,11 @@ const (
 	ConfigMonitorRetentionDays  = "monitor_retention_days"
 	DefaultMonitorRetentionDays = 7
 	MinMonitorRetentionDays     = 1
-	MaxMonitorRetentionDays     = 3650
+	// MaxMonitorRetentionDays 原为 3650：界虽有界但极宽，管理员配满
+	// 时四张监控表按写入节奏积 10 年量（GARBAGE-AUDIT A3）。收紧到
+	// 与节点流量小时桶的固定保留期同口径的 400 天；存量已存的大于
+	// 400 的值在读面按非法值回落默认 7 天、保存面直接拒绝。
+	MaxMonitorRetentionDays = 400
 )
 
 func MonitoringRetentionDaysFromConfigMap(cfg map[string]string) int {
