@@ -2219,6 +2219,23 @@ func legacyGostCleanupSegment(ownAddr, legacyAddr string) string {
 	return scan + "if [ -n \"$legacy_service\" ]; then echo " + tuneShellQuote(msg) + "; fi; "
 }
 
+// agentUpgradeLogMaxBytes 是 agent-upgrade.log 的大小封顶（字节）：
+// GARBAGE-AUDIT A2——该日志此前只 append、无 truncate/rotate/上限，
+// 每次升级/回滚 append 一段，口径上真无界（增速极低、KB 级/年）。
+const agentUpgradeLogMaxBytes = 1048576
+
+// agentUpgradeLogCapSegment renders the size cap prepended to the
+// upgrade/rollback scripts: before the script redirects its output
+// into agent-upgrade.log, a log already past the cap is truncated
+// and reopened empty. The log is a post-mortem trail of the most
+// recent operations, so whole-file truncation past the cap keeps
+// the newest record while bounding the file. Size probing is best
+// effort (wc failure reads as 0 = under cap) and truncation failure
+// never blocks the upgrade script itself.
+func agentUpgradeLogCapSegment(logPath string) string {
+	return fmt.Sprintf("if [ -f %s ]; then _flmx_log_size=$(wc -c < %s 2>/dev/null || echo 0); case \"$_flmx_log_size\" in ''|*[!0-9]*) _flmx_log_size=0 ;; esac; if [ \"$_flmx_log_size\" -gt %d ]; then : > %s || true; fi; fi; ", logPath, logPath, agentUpgradeLogMaxBytes, logPath)
+}
+
 // buildAgentRestartScriptFor builds the self-contained upgrade restart
 // script: stop, swap the binary in, start, then verify the service
 // actually came up — if it did not, restore the backup copy and start
@@ -2239,7 +2256,7 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "exec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s; sleep 1; %s; ", logPath, healthFn, stop)
+	fmt.Fprintf(&b, "%sexec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s; sleep 1; %s; ", agentUpgradeLogCapSegment(logPath), logPath, healthFn, stop)
 	if manager == serviceManagerSystemd {
 		// Legacy pre-FLMX gost cleanup (systemd units only), gated
 		// on the C4-F01 ownership guard: the fingerprint alone does
@@ -2319,8 +2336,8 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 	// script removes the temp file it created. mktemp lands the
 	// file 0600 and cp onto an existing file keeps that mode, so
 	// the staged copy is chmod'ed back to 755 before the swap.
-	return fmt.Sprintf("exec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
-		logPath, healthFn, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
+	return fmt.Sprintf("%sexec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
+		agentUpgradeLogCapSegment(logPath), logPath, healthFn, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
 }
 
 // smokeTestAgentBinary verifies a downloaded binary actually executes on

@@ -13,7 +13,8 @@ func TestMonitoringRetentionDaysFromConfigMap(t *testing.T) {
 		{"trimmed custom", map[string]string{ConfigMonitorRetentionDays: " 30 "}, 30},
 		{"invalid uses default", map[string]string{ConfigMonitorRetentionDays: "abc"}, 7},
 		{"too small uses default", map[string]string{ConfigMonitorRetentionDays: "0"}, 7},
-		{"too large uses default", map[string]string{ConfigMonitorRetentionDays: "3651"}, 7},
+		{"too large uses default", map[string]string{ConfigMonitorRetentionDays: "401"}, 7},
+		{"legacy over-cap uses default", map[string]string{ConfigMonitorRetentionDays: "3650"}, 7},
 	}
 
 	for _, tc := range tests {
@@ -26,13 +27,13 @@ func TestMonitoringRetentionDaysFromConfigMap(t *testing.T) {
 }
 
 func TestNormalizeMonitoringRetentionDays(t *testing.T) {
-	for _, value := range []string{"1", "7", "3650", " 30 "} {
+	for _, value := range []string{"1", "7", "400", " 30 "} {
 		if got, err := NormalizeMonitoringRetentionDays(value); err != nil || got == "" {
 			t.Fatalf("expected %q valid, got value=%q err=%v", value, got, err)
 		}
 	}
 
-	for _, value := range []string{"", "0", "-1", "3651", "abc", "1.5"} {
+	for _, value := range []string{"", "0", "-1", "401", "3650", "abc", "1.5"} {
 		if got, err := NormalizeMonitoringRetentionDays(value); err == nil {
 			t.Fatalf("expected %q invalid, got value=%q", value, got)
 		}

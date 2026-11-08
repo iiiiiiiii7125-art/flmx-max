@@ -6101,9 +6101,103 @@ test_panel_anchor_corroboration_degrades() (
   grep -q "跨线路锚复核已降级" "$errlog" || fail "R2-01-01: single-route degradation must be named on stderr"
 )
 
+# GARBAGE-AUDIT A1：升级收尾按升级前版本 tag 定点删除旧
+# backend/frontend 镜像。删除面只许本面板前缀下、现行名＋旧仓
+# 名形态、tag 恰为旧版本；现行版本/latest/空/非法格式一律不
+# 动；在场的删、不在场的不调 rmi；单条 rmi 失败只告警、函数
+# 仍返回 0 且不中断其余删除（不回滚升级的口径在脚本层先钉住
+# 「失败不放大」）。
+test_cleanup_old_panel_images_after_update_targets_only_old_tag() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local rmi_calls=""
+  local fail_rmi_for=""
+  docker() {
+    if [[ "$1" == "image" && "$2" == "inspect" ]]; then
+      # flvx 旧仓名形态假定不在场，其余三名在场。
+      [[ "$3" != *"flvx-flux-panel-backend"* ]]
+      return
+    fi
+    if [[ "$1" == "rmi" ]]; then
+      rmi_calls+=" $2"
+      [[ -z "$fail_rmi_for" || "$2" != *"$fail_rmi_for"* ]]
+      return
+    fi
+    return 1
+  }
+
+  local prefix
+  prefix=$(panel_image_prefix)
+
+  cleanup_old_panel_images_after_update "1.9.9" "2.0.0"
+  case "$rmi_calls" in
+    *"${prefix}flmx-panel-backend:1.9.9"*) ;;
+    *) fail "GARBAGE-A1: current-name backend old tag must be removed (got:$rmi_calls)" ;;
+  esac
+  case "$rmi_calls" in
+    *"${prefix}flmx-flux-panel-backend:1.9.9"*) ;;
+    *) fail "GARBAGE-A1: legacy-repo backend old tag must be removed (got:$rmi_calls)" ;;
+  esac
+  case "$rmi_calls" in
+    *"${prefix}flmx-vite-frontend:1.9.9"*) ;;
+    *) fail "GARBAGE-A1: frontend old tag must be removed (got:$rmi_calls)" ;;
+  esac
+  case "$rmi_calls" in
+    *":2.0.0"*|*":latest"*|*"flvx-flux-panel-backend"*)
+      fail "GARBAGE-A1: cleanup must never target the new version, latest, or absent images (got:$rmi_calls)" ;;
+  esac
+
+  # rmi 失败只告警：函数返回 0、其余镜像照常尝试删除。
+  rmi_calls=""
+  fail_rmi_for="flmx-vite-frontend"
+  cleanup_old_panel_images_after_update "1.9.9" "2.0.0"
+  case "$rmi_calls" in
+    *"${prefix}flmx-panel-backend:1.9.9"*"${prefix}flmx-vite-frontend:1.9.9"*) ;;
+    *) fail "GARBAGE-A1: one failed rmi must not stop the remaining targeted removals (got:$rmi_calls)" ;;
+  esac
+
+  # 同版本重装、latest、空值与非法格式：整步跳过，零 rmi。
+  rmi_calls=""
+  fail_rmi_for=""
+  cleanup_old_panel_images_after_update "2.0.0" "2.0.0"
+  cleanup_old_panel_images_after_update "latest" "2.0.0"
+  cleanup_old_panel_images_after_update "" "2.0.0"
+  cleanup_old_panel_images_after_update '1.9.9";evil' "2.0.0"
+  assert_equals "" "$rmi_calls" \
+    "GARBAGE-A1: same-version/latest/empty/malformed old tags must trigger no removal"
+)
+
+# GARBAGE-AUDIT A2：OpenRC 安装随服务文件落一份 logrotate 配置
+# 给两份 append 日志封顶（1M×3、copytruncate），卸载一并删除。
+test_openrc_install_writes_logrotate_config() (
+  set -euo pipefail
+  local work
+  work=$(mktemp -d)
+  SERVICE_MANAGER="openrc"
+  load_script_without_main "$ROOT_DIR/install.sh"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$work/flmx.initd"
+  FLMX_AGENT_LOGROTATE_FILE="$work/logrotate.d/flmx_agent"
+  write_flmx_agent_service
+  [[ -f "$work/flmx.initd" ]] || fail "GARBAGE-A2: OpenRC service file must be written"
+  grep -Fq '/var/log/flmx_agent.log /var/log/flmx_agent.err.log' "$FLMX_AGENT_LOGROTATE_FILE" || \
+    fail "GARBAGE-A2: OpenRC install must drop a logrotate config covering both agent logs"
+  grep -Fq 'size 1M' "$FLMX_AGENT_LOGROTATE_FILE" || \
+    fail "GARBAGE-A2: logrotate config must cap the logs at 1M"
+  grep -Fq 'copytruncate' "$FLMX_AGENT_LOGROTATE_FILE" || \
+    fail "GARBAGE-A2: logrotate config must use copytruncate (OpenRC holds the log fds)"
+  remove_flmx_agent_service
+  [[ ! -e "$FLMX_AGENT_LOGROTATE_FILE" ]] || \
+    fail "GARBAGE-A2: uninstall must remove the logrotate config"
+  [[ ! -e "$work/flmx.initd" ]] || \
+    fail "GARBAGE-A2: uninstall must remove the OpenRC service file"
+)
+
 test_preserve_compose_networks_keeps_existing_subnet
 test_preserve_compose_networks_no_subnet_existing
 test_activate_panel_update_files_preserves_subnet
+test_cleanup_old_panel_images_after_update_targets_only_old_tag
+test_openrc_install_writes_logrotate_config
 test_get_deployed_panel_version_parses_image_tag
 test_update_panel_crosschecks_deployed_image_version
 test_install_flmx_agent_keeps_service_when_download_fails

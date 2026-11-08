@@ -161,7 +161,7 @@ Update the site announcement (admin only).
 | `subscription_front_urls` | authenticated | JSON array of subscription front origins |
 | `monitor_tunnel_quality_enabled` | authenticated | `"true"`/`"false"` tunnel quality probing |
 | `monitor_tunnel_quality_interval_sec` | authenticated | Probe interval, 1–3600 |
-| `monitor_retention_days` | authenticated | Monitoring data retention, 1–3650 (default 7) |
+| `monitor_retention_days` | authenticated | Monitoring data retention, 1–400 (default 7) |
 | `notify_enabled` | authenticated | `"true"` enables notifications |
 
 There are **no global default-user keys**: per-user quota / expiry /

@@ -64,6 +64,10 @@ get_architecture() {
 INSTALL_DIR="/etc/flmx_agent"
 FLMX_AGENT_SYSTEMD_SERVICE_FILE="/etc/systemd/system/flmx_agent.service"
 FLMX_AGENT_OPENRC_SERVICE_FILE="/etc/init.d/flmx_agent"
+# OpenRC 形态的日志轮转配置落点（GARBAGE-AUDIT A2）：output_log/
+# error_log 由 OpenRC 直接 append、无封顶，随安装落一份 logrotate
+# 配置封顶；卸载时一并删除（remove_flmx_agent_service）。
+FLMX_AGENT_LOGROTATE_FILE="${FLMX_AGENT_LOGROTATE_FILE:-/etc/logrotate.d/flmx_agent}"
 # OpenRC pidfile 单一来源（A3-08）：服务文件里写的 pidfile 与脚本
 # 判活（flmx_agent_main_pid）读的 pidfile 是同一个变量值——模板生
 # 成时把变量现值写进服务文件，不再写死 /run/${RC_SVCNAME}.pid。
@@ -1652,6 +1656,7 @@ depend() {
 }
 EOF
       chmod +x "$FLMX_AGENT_OPENRC_SERVICE_FILE"
+      write_flmx_agent_logrotate_config
       ;;
   esac
 }
@@ -1754,6 +1759,31 @@ flmx_agent_health_ok() {
   [[ -n "$p1" && "$p1" != "0" && "$p1" == "$p2" ]]
 }
 
+# GARBAGE-AUDIT A2：给 OpenRC 的两份 append 日志落 logrotate 封顶
+# 配置（size 1M、保留 3 份；copytruncate 因 OpenRC 长期持有日志
+# fd）。写入失败只告警不阻断装机：logrotate 本体缺席的系统上配
+# 置躺着无害，装上即生效；无轮转时日志增速极低（KB 级/年）。
+write_flmx_agent_logrotate_config() {
+  mkdir -p "$(dirname "$FLMX_AGENT_LOGROTATE_FILE")" || {
+    echo "⚠️ 创建 logrotate 配置目录失败，OpenRC 日志轮转未配置（不影响安装）" >&2
+    return 0
+  }
+  cat > "$FLMX_AGENT_LOGROTATE_FILE" <<'LOGROTATE_EOF' || {
+# flmx_agent OpenRC logs: output_log/error_log are appended by
+# OpenRC without any cap; bound them at 1MB x 3 rotations.
+/var/log/flmx_agent.log /var/log/flmx_agent.err.log {
+    size 1M
+    rotate 3
+    missingok
+    notifempty
+    copytruncate
+}
+LOGROTATE_EOF
+    echo "⚠️ 写入 logrotate 配置失败，OpenRC 日志轮转未配置（不影响安装）" >&2
+  }
+  return 0
+}
+
 remove_flmx_agent_service() {
   ensure_service_manager || return 1
 
@@ -1764,6 +1794,7 @@ remove_flmx_agent_service() {
       ;;
     openrc)
       rm -f "$FLMX_AGENT_OPENRC_SERVICE_FILE"
+      rm -f "$FLMX_AGENT_LOGROTATE_FILE"
       ;;
   esac
 }

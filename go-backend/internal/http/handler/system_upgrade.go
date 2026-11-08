@@ -903,6 +903,57 @@ if [ -n "${FLMX_UPGRADE_REMOVE_PG_CONTAINER:-}" ]; then
   fi
 fi
 
+# GARBAGE-AUDIT A1：健康与卷名校验全过、升级已成定局后，按升级
+# 前 .env 版本 tag 定点删除旧 backend/frontend 镜像。此前本路径
+# 与脚本面一样只拉新换容器、零清理，旧版镜像逐版无界累积（约
+# 0.2–0.5 GB/版）。旧 tag 取自 .env.upgrade.bak（升级前 .env 备
+# 份，FLMX_VERSION 优先、FLUX_VERSION 回退，与脚本面同口径）；
+# 归属前缀取自新后端容器实际镜像引用（与面板 panelImageRefPrefix
+# 同根）；镜像名仅现行名与旧仓名形态（flmx-flux-panel-backend、
+# flvx-flux-panel-backend）；同版本重装（old==目标版本）、latest
+# 或格式不可解析时整步跳过，现行镜像永不入列。任一删除失败（镜
+# 像仍被残留容器占用等）只记日志告警，绝不回滚已通过健康检查
+# 的升级；数据卷与其他镜像一律不动。
+old_version=""
+if [ -f .env.upgrade.bak ]; then
+  old_version=$(grep -m1 '^FLMX_VERSION=' .env.upgrade.bak | cut -d= -f2- | tr -d '" \r' || true)
+  if [ -z "$old_version" ]; then
+    old_version=$(grep -m1 '^FLUX_VERSION=' .env.upgrade.bak | cut -d= -f2- | tr -d '" \r' || true)
+  fi
+fi
+if [ -n "$old_version" ] && [ "$old_version" != "${FLMX_UPGRADE_VERSION:-}" ] && [ "$old_version" != "latest" ]; then
+  case "$old_version" in
+    [!A-Za-z0-9]*|*[!A-Za-z0-9._-]*)
+      log "警告: 升级前版本 tag「$old_version」格式不可定点解析，跳过旧镜像清理（升级不受影响）"
+      ;;
+    *)
+      cleanup_backend=$(docker compose ps backend --format '{{.Name}}' 2>/dev/null | head -n 1 || true)
+      cleanup_image=""
+      if [ -n "$cleanup_backend" ]; then
+        cleanup_image=$(docker inspect -f '{{.Config.Image}}' "$cleanup_backend" 2>/dev/null || true)
+      fi
+      cleanup_prefix=$(printf '%s' "$cleanup_image" | sed 's|/[^/]*$|/|' || true)
+      case "$cleanup_prefix" in
+        ghcr.io/*/)
+          for image_name in flmx-panel-backend flmx-flux-panel-backend flvx-flux-panel-backend flmx-vite-frontend; do
+            old_ref="${cleanup_prefix}${image_name}:${old_version}"
+            if docker image inspect "$old_ref" >/dev/null 2>&1; then
+              if docker rmi "$old_ref" >> "$LOGFILE" 2>&1; then
+                log "已删除旧版本镜像: $old_ref"
+              else
+                log "警告: 旧版本镜像删除失败（可能仍被残留容器占用），已跳过: $old_ref（升级不受影响）"
+              fi
+            fi
+          done
+          ;;
+        *)
+          log "警告: 无法从新后端镜像引用派生归属前缀，跳过旧镜像清理（升级不受影响）"
+          ;;
+      esac
+      ;;
+  esac
+fi
+
 log "升级完成"
 # U1-002：只有健康检查通过才清理备份文件；升级终态写入状态文件
 write_status "false" "success"

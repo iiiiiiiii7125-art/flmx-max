@@ -139,13 +139,35 @@ func logStartupFailure(stage string, err error) {
 		dir = filepath.Dir(exe)
 	}
 	path := filepath.Join(dir, "agent-startup.log")
-	f, ferr := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if ferr != nil {
+	line := fmt.Sprintf("%s agent startup failed [%s]: %v\n", time.Now().Format(time.RFC3339), stage, err)
+	if ferr := appendStartupLogLine(path, line); ferr != nil {
 		fmt.Fprintf(os.Stderr, "agent: cannot write startup log %s: %v (startup error: %v)\n", path, ferr, err)
-		return
+	}
+}
+
+// startupLogMaxBytes 是 agent-startup.log 的大小封顶（字节）：
+// GARBAGE-AUDIT A2——该日志此前只 append 无上限（每次启动失败一
+// 行，增速极低但真无界）。与 agent-upgrade.log 同口径的 1MB。
+const startupLogMaxBytes = 1048576
+
+// appendStartupLogLine appends one line to the startup log, first
+// truncating the file back to empty when it has grown past
+// startupLogMaxBytes (truncate-and-reopen per the A2 prescription:
+// the log only needs the most recent startup failures, and the new
+// line is always written after any truncation). Truncation failure
+// is ignored — the append itself is the diagnostic that must not
+// be lost.
+func appendStartupLogLine(path, line string) error {
+	if info, err := os.Stat(path); err == nil && info.Size() > startupLogMaxBytes {
+		_ = os.Truncate(path, 0)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s agent startup failed [%s]: %v\n", time.Now().Format(time.RFC3339), stage, err)
+	_, err = fmt.Fprint(f, line)
+	return err
 }
 
 func main() {

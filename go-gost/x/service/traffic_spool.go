@@ -77,7 +77,9 @@ func TrafficSpoolIdentity(addr, secret string) string {
 // ConfigureTrafficSpool 在服务启动前选定 spool 文件（按身份隔离）。
 // 由主程序在加载 config.json 后调用；失败（文件损坏等）返回错误，
 // 调用方应拒绝启动——静默换新 spool 会丢掉未确认流量且无痕。
-// 选定后顺带扫描同目录其他身份的 spool 文件并逐个告警（见
+// 选定后顺带清扫与告警：可证明无未确认流量的超龄孤儿 spool 与
+// 陈旧升级暂存先行定点清理（见 sweepOrphanTrafficSpools /
+// sweepStaleUpgradeStaging），其余孤儿逐个告警（见
 // findOrphanTrafficSpools）：地址归一化后仍可能因 secret 轮换等
 // 留下孤儿，其未确认流量不自动并账、须人工核对。
 func ConfigureTrafficSpool(dir, identity string) error {
@@ -87,6 +89,12 @@ func ConfigureTrafficSpool(dir, identity string) error {
 		return err
 	}
 	configuredTrafficSpool = spool
+	for _, name := range sweepOrphanTrafficSpools(dir, path, time.Now()) {
+		fmt.Printf("🧹 其他身份的流量 spool %s 已闲置超过 %d 天且无未确认流量，已清理\n", name, int(orphanSpoolMaxAge/(24*time.Hour)))
+	}
+	for _, name := range sweepStaleUpgradeStaging(dir, time.Now()) {
+		fmt.Printf("🧹 陈旧的 agent 升级暂存文件 %s 已闲置超过 %d 天，已清理\n", name, int(staleUpgradeStagingMaxAge/(24*time.Hour)))
+	}
 	for _, orphan := range findOrphanTrafficSpools(dir, path) {
 		fmt.Printf("⚠️ 发现其他身份的流量 spool 文件 %s：其中的未确认流量不会自动上报，如系本节点旧地址/旧 secret 遗留，请人工核对处理\n", orphan)
 	}
@@ -97,9 +105,11 @@ func ConfigureTrafficSpool(dir, identity string) error {
 }
 
 // findOrphanTrafficSpools 枚举 dir 下不属于 ownPath 的 spool 文件
-// （返回带大小的点名串）。只点名不处置：孤儿批次的归属无法由本
-// 进程证明，自动删除可能销毁待确认流量、自动并账可能串账。隔离
-// 留证存档（.rejected-*.json）不算孤儿，不在此列——它们由
+// （返回带大小的点名串）。点名的孤儿只点名不处置：孤儿批次的归
+// 属无法由本进程证明，自动删除可能销毁待确认流量、自动并账可
+// 能串账。唯一例外是 sweepOrphanTrafficSpools 的保守老化清扫
+// （超龄且可完整解析证明无任何未确认流量者，先于本扫描执行）。
+// 隔离留证存档（.rejected-*.json）不算孤儿，不在此列——它们由
 // sweepRejectedTrafficArchives 按保留上限老化清理；原子写的 .tmp
 // 残留不以 .json 结尾、天然不入列。
 func findOrphanTrafficSpools(dir, ownPath string) []string {
@@ -169,6 +179,92 @@ func sweepRejectedTrafficArchives(dir string, now time.Time) []string {
 		}
 		if err := os.Remove(filepath.Join(dir, a.name)); err == nil {
 			removed = append(removed, a.name)
+		}
+	}
+	sort.Strings(removed)
+	return removed
+}
+
+// 孤儿 spool 的老化清扫口径（GARBAGE-AUDIT A4）：换面板/轮换
+// secret 后留下的旧身份 spool 此前只告警永不删，数量随人工轮换
+// 次数无界（每份仅数十 B～KB，风险最低，但口径是真无界）。清
+// 理路径必须保守——同时满足三条才删：① mtime 超过 90 天（与建
+// 议口径「>90 天且无 pending 即删」对齐，且远超任何正常重连周
+// 期）；② 文件能通过 openTrafficSpool 的完整身份校验（损坏/异
+// 形文件一律保留待人工）；③ 状态里无任何未确认流量（Pending
+// 为空且 Buffered/Retry 皆空）。任一条件不满足即保留并照旧告
+// 警：宁漏删，不误删在用 spool。
+const orphanSpoolMaxAge = 90 * 24 * time.Hour
+
+// sweepOrphanTrafficSpools 删除 dir 下满足上述口径的其他身份
+// spool 文件，返回实际删除的文件名。ownPath（本进程自己的
+// spool）与隔离留证存档（.rejected-*.json，各有保留上限）不在
+// 此列。尽力而为——单个删除失败只跳过，绝不阻断启动。
+func sweepOrphanTrafficSpools(dir, ownPath string, now time.Time) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var removed []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "flmx_traffic_") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		if strings.Contains(name, ".rejected-") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if path == ownPath {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || now.Sub(info.ModTime()) <= orphanSpoolMaxAge {
+			continue
+		}
+		spool, err := openTrafficSpool(path)
+		if err != nil {
+			continue
+		}
+		if spool.state.Pending != nil || len(spool.state.Buffered) > 0 || len(spool.state.Retry) > 0 {
+			continue
+		}
+		if err := os.Remove(path); err == nil {
+			removed = append(removed, name)
+		}
+	}
+	sort.Strings(removed)
+	return removed
+}
+
+// 陈旧升级暂存的清扫口径（GARBAGE-AUDIT 第 13 项残口）：agent
+// 自升级的暂存文件（.<name>.upgrade-*，含脚本回滚的
+// .<name>.upgrade-rollback-* 形态）在升级瞬间断电时可残留一
+// 份（≤100MB）；正常流程都自带清理，残留只按龄期处置——暂存
+// 生命周期以分钟计，mtime 超过 90 天者不可能是进行中的升级。
+const staleUpgradeStagingMaxAge = 90 * 24 * time.Hour
+
+// sweepStaleUpgradeStaging 删除 dir 下超龄的升级暂存文件，返回
+// 实际删除的文件名。识别口径收窄：点开头且含 ".upgrade-" 标
+// 记的普通文件；同目录的二进制本体、config 与 spool 均不带此
+// 形态、天然不入列。尽力而为，删除失败只跳过。
+func sweepStaleUpgradeStaging(dir string, now time.Time) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var removed []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, ".") || !strings.Contains(name, ".upgrade-") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || now.Sub(info.ModTime()) <= staleUpgradeStagingMaxAge {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err == nil {
+			removed = append(removed, name)
 		}
 	}
 	sort.Strings(removed)
