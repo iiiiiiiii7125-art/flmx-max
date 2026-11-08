@@ -473,6 +473,7 @@ EOF
         P002)
           j="$(go_const_s addServiceGuardJoinTimeout "$HANDLER_DIR")"; d="$(go_const_s defaultNodeCommandTimeout "$HANDLER_DIR")"
           [ "$(awk -v a="$j" -v b="$d" 'BEGIN{ print a+b }')" = "$be_s" ] || fail "$tag guard join 界漂移：${j}+${d} ≠ 登记 ${be_s}s" ;;
+        P004) [ "$(go_const_s defaultNodeCommandTimeout "$HANDLER_DIR")" = "$be_s" ] || fail "$tag defaultNodeCommandTimeout 漂移（登记 ${be_s}s）" ;;
       esac
       ;;
     agent)
