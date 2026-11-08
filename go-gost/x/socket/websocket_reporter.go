@@ -1326,7 +1326,7 @@ func isMutationCommand(commandType string) bool {
 		// 这一时序，此处是 agent 侧的兜底串行化（老面板/重连拦截再下发
 		// 时同样有序）；回执超时上面板按未确认登记待卸载，重连时再下
 		// 发，与离线口径一致。
-		"setprotocol", "upgradeagent", "rollbackagent", "uninstallagent":
+		"setprotocol", "setrestartschedule", "upgradeagent", "rollbackagent", "uninstallagent":
 		return true
 	default:
 		return false
@@ -1505,6 +1505,12 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 	case "SetProtocol":
 		err = w.handleSetProtocol(cmd.Data)
 		response.Type = "SetProtocolResponse"
+
+	// 定时重启 agent 服务设置：落成 systemd timer 持久化，
+	// 面板离线照常触发（见 restart_schedule.go）。
+	case "SetRestartSchedule":
+		err = w.handleSetRestartSchedule(cmd.Data)
+		response.Type = "SetRestartScheduleResponse"
 
 	// 升级 Agent 命令（异步执行，不需要保存配置）
 	case "UpgradeAgent":

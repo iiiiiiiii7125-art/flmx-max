@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// D1-04: the panel↔agent command set (30 types) had no mechanical
+// D1-04: the panel↔agent command set (31 types) had no mechanical
 // contract test — consistency rested on the runtime "unknown command"
 // fallback, so a rename or typo on either side passed every unit test
 // and only surfaced on a live node. This census test extracts both
@@ -44,7 +44,7 @@ var goldenCommandSet = []string{
 	"DeleteCLimiters", "DeleteChains", "DeleteLimiters", "DeleteService",
 	"KernelApply", "KernelControl", "KernelStatus",
 	"PauseService", "ResumeService", "RollbackAgent",
-	"ServiceMonitorCheck", "SetProtocol",
+	"ServiceMonitorCheck", "SetProtocol", "SetRestartSchedule",
 	"TcpPing", "Traceroute",
 	"Tune", "TuneApply", "TuneCancel", "TuneProbe", "TuneStart", "TuneStatus",
 	"UdpPing", "UninstallAgent",
@@ -134,7 +134,7 @@ func agentCommandSet(t *testing.T) map[string]bool {
 	return set
 }
 
-var panelCommandShape = regexp.MustCompile(`^(Add|Update|Delete|Pause|Resume)[A-Z][A-Za-z0-9]*$|^(Tcp|Udp)[A-Z][A-Za-z0-9]*$|^Tune([A-Z][A-Za-z0-9]*)?$|^Kernel[A-Z][A-Za-z0-9]*$|^(Traceroute|ServiceMonitorCheck|SetProtocol|UpgradeAgent|RollbackAgent|UninstallAgent)$`)
+var panelCommandShape = regexp.MustCompile(`^(Add|Update|Delete|Pause|Resume)[A-Z][A-Za-z0-9]*$|^(Tcp|Udp)[A-Z][A-Za-z0-9]*$|^Tune([A-Z][A-Za-z0-9]*)?$|^Kernel[A-Z][A-Za-z0-9]*$|^(Traceroute|ServiceMonitorCheck|SetProtocol|SetRestartSchedule|UpgradeAgent|RollbackAgent|UninstallAgent)$`)
 
 func panelCommandSet(t *testing.T) (map[string]bool, bool) {
 	t.Helper()

@@ -265,6 +265,10 @@ func cleanupHostTuningFiles() hostTuningCleanupReport {
 	for _, u := range []struct{ path, name string }{
 		{tuneRPSUnitPath, tuneRPSUnitName},
 		{oldTuneShapeUnitPath, oldTuneShapeUnitName},
+		// 定时重启 timer 对：不随卸载残留（否则已卸载的节点仍会
+		// 每日尝试重启一个不存在的服务）。
+		{filepath.Join(restartScheduleUnitDir, restartTimerUnitName), restartTimerUnitName},
+		{filepath.Join(restartScheduleUnitDir, restartServiceUnitName), restartServiceUnitName},
 	} {
 		if !exists(u.path) {
 			continue
