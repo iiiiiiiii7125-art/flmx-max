@@ -251,7 +251,7 @@ func TestApplyBBRAndKernel(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	calls := stubTuneCommands(t, map[string]bool{}) // no iptables anywhere
 
-	warnings, err := applyBBR()
+	warnings, err := applyBBR(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,6 +468,7 @@ func TestKernelSnapshotRollbackRestoresExact(t *testing.T) {
 		"net.ipv4.tcp_congestion_control":           "cubic",
 		"net.core.default_qdisc":                    "fq_codel",
 		"net.ipv4.tcp_rmem":                         "4096 131072 6291456",
+		"net.core.rps_sock_flow_entries":            "16384",
 		"net.ipv4.tcp_available_congestion_control": "reno cubic bbr",
 	}
 	for k, v := range operator {
@@ -485,7 +486,8 @@ func TestKernelSnapshotRollbackRestoresExact(t *testing.T) {
 		}
 	}
 	// The snapshot carries exactly the operator state for the
-	// kernelTuneSettings key set — no more, no less.
+	// full apply write set — the kernelTuneSettings keys plus
+	// face ④'s rps_sock_flow_entries — no more, no less.
 	raw, err := os.ReadFile(tuneKernelSnapshotPath)
 	if err != nil {
 		t.Fatalf("snapshot not written: %v", err)
@@ -494,8 +496,18 @@ func TestKernelSnapshotRollbackRestoresExact(t *testing.T) {
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		t.Fatal(err)
 	}
-	if len(snap.Values) != len(kernelTuneSettings(0)) {
-		t.Fatalf("snapshot keys = %d, want %d (the kernelTuneSettings set)", len(snap.Values), len(kernelTuneSettings(0)))
+	wantKeys := map[string]bool{}
+	for _, s := range kernelTuneSettings(0) {
+		wantKeys[s.key] = true
+	}
+	wantKeys["net.core.rps_sock_flow_entries"] = true
+	if len(snap.Values) != len(wantKeys) {
+		t.Fatalf("snapshot keys = %d, want %d (the full apply write set)", len(snap.Values), len(wantKeys))
+	}
+	for k := range wantKeys {
+		if _, ok := snap.Values[k]; !ok {
+			t.Fatalf("snapshot missing write-set key %s", k)
+		}
 	}
 	for k, v := range operator {
 		if k == "net.ipv4.tcp_available_congestion_control" {
@@ -530,6 +542,11 @@ func TestKernelSnapshotRollbackRestoresExact(t *testing.T) {
 		if got, _ := readSysctl(s.key); got != want {
 			t.Fatalf("%s after rollback = %q, want snapshot %q", s.key, got, want)
 		}
+	}
+	// The face-④ counter restores to its recorded operator value,
+	// not to a hard-coded 0.
+	if got, _ := readSysctl("net.core.rps_sock_flow_entries"); got != "16384" {
+		t.Fatalf("rps_sock_flow_entries after rollback = %q, want snapshot value 16384", got)
 	}
 	if _, err := os.Stat(tuneKernelSnapshotPath); !os.IsNotExist(err) {
 		t.Fatal("snapshot must be consumed by rollback")
@@ -621,7 +638,7 @@ func TestKernelSnapshotCaptureAbort(t *testing.T) {
 		return oldStat(name)
 	}
 	t.Cleanup(func() { tuneRead, tuneStat = oldRead, oldStat })
-	warnings := captureKernelSysctlSnapshot(kernelTuneSettings(0))
+	warnings := captureTuningSnapshot(context.Background())
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "tcp_fastopen") {
 		t.Fatalf("warnings = %v, want one naming the unreadable key", warnings)
 	}
