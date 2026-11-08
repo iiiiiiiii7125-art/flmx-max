@@ -89,11 +89,16 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 	if err != nil {
 		return err
 	}
+	// FIX-KCPMEM（P1-05）：FEC 档位单点读面——中继链拨号面与
+	// 角色服务监听面同口径消费（监听面 ServeConn 按本地 shard
+	// 构造已接受会话的 FEC 编码器，见 buildFederationServiceConfig
+	// 注记），两处共用同一 fecOff 值，不许一处穿线一处写死。
+	fecOff := kcpFecOff(h.kcpFecMode())
 	var chain map[string]interface{}
 	if runtime.Role == "middle" {
 		// KCP 目标腿的拨号钥在 builder 内按同一 (secret, shareID)
 		// 派生，派生失败由 builder 返回错误、整条 runtime 拒绝。
-		chain, err = buildFederationMiddleChainConfig(runtime.ChainName, runtime.ID, runtime.Protocol, runtime.Strategy, targets, node.InterfaceName, h.jwtSecret, runtime.ShareID, kcpFecOff(h.kcpFecMode()))
+		chain, err = buildFederationMiddleChainConfig(runtime.ChainName, runtime.ID, runtime.Protocol, runtime.Strategy, targets, node.InterfaceName, h.jwtSecret, runtime.ShareID, fecOff)
 		if err != nil {
 			return err
 		}
@@ -105,7 +110,7 @@ func (h *Handler) applyPeerShareRoleRuntime(runtime *repo.PeerShareRuntime) erro
 	// 包了也修不了本处。
 	// F-UDP-6：监听地址按协议分取（nodeListenAddrForProtocol）——
 	// udp/kcp 角色服务绑 UDPListenAddr，与转发面/本地链面同口径。
-	service := buildFederationServiceConfig(runtime.ServiceName, net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, runtime.Protocol)), "[]"), strconv.Itoa(runtime.Port)), runtime.Protocol, runtime.Role, runtime.ChainName, len(targets), node.InterfaceName, serviceKCPKey)
+	service := buildFederationServiceConfig(runtime.ServiceName, net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, runtime.Protocol)), "[]"), strconv.Itoa(runtime.Port)), runtime.Protocol, runtime.Role, runtime.ChainName, len(targets), node.InterfaceName, serviceKCPKey, fecOff)
 	if auth := relayAuthConfig(share.RelayUsername, share.RelayPassword); auth != nil {
 		service["handler"].(map[string]interface{})["auth"] = auth
 	}

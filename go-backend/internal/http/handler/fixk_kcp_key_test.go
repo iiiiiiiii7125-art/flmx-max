@@ -127,7 +127,7 @@ func TestFixKFederationKCPSameSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("federationKCPKey: %v", err)
 	}
-	svc := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "kcp", "exit", "", 1, "", svcKey)
+	svc := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "kcp", "exit", "", 1, "", svcKey, false)
 	listenerMD := fixkKCPMetadata(t, svc["listener"].(map[string]interface{}))
 	if !reflect.DeepEqual(dialerMD, listenerMD) {
 		t.Fatalf("federation dialer/listener metadata drift:\n dialer=%v\n listener=%v", dialerMD, listenerMD)
