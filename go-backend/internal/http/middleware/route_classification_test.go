@@ -188,6 +188,7 @@ var routeClassification = []routeEntry{
 	adm("/api/v1/node/list"), adm("/api/v1/node/nftables/clear"),
 	adm("/api/v1/node/nftables/pending-deletes"), adm("/api/v1/node/nftables/reconcile"),
 	adm("/api/v1/node/nftables/test"), adm("/api/v1/node/releases"),
+	adm("/api/v1/node/restart-schedule"),
 	adm("/api/v1/node/rollback"), adm("/api/v1/node/route"),
 	adm("/api/v1/node/route/probe"), adm("/api/v1/node/traffic/month"),
 	adm("/api/v1/node/tune"), adm("/api/v1/node/update"),
