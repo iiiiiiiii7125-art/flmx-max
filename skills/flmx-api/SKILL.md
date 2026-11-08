@@ -153,6 +153,7 @@ User request → Check env vars → Auto-login if needed → Call API → Return
 | "检查更新" / "面板升级" | `/api/v1/system/check-updates` / `/api/v1/system/upgrade` | [system](references/system.md) |
 | "修改公告" | `/api/v1/announcement/update` | [system](references/system.md) |
 | "节点调优" | `/api/v1/node/tune` | [nodes](references/nodes.md) |
+| "节点定时重启" / "定时重启 agent" | `/api/v1/node/restart-schedule` | [nodes](references/nodes.md) |
 | "回程路由" | `/api/v1/node/route` | [nodes](references/nodes.md) |
 | "待删除转发" / "pending-delete" | `/api/v1/node/nftables/pending-deletes` | [nodes](references/nodes.md) |
 
