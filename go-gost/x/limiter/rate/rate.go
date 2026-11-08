@@ -19,6 +19,22 @@ import (
 const (
 	GlobalLimitKey = "$"
 	IPLimitKey     = "$$"
+
+	// maxCachedLimiters bounds the per-key limiter table below, and
+	// limiterIdleTTL is how long an unused entry may sit before the
+	// idle sweep may drop it. The table is keyed by caller-supplied
+	// strings (client IPs in production) and previously only ever
+	// grew: entries were created on first sight of a key and deleted
+	// only when a config reload reset the whole table — and reloads
+	// happen only when a reload period is configured, which defaults
+	// to never. That is the P1-07 grow-only family, so the table now
+	// carries a hard cap plus an amortized idle sweep, mirroring the
+	// resolver cache and the util/cache base. Eviction is semantically
+	// transparent: a dropped entry is recomputed from the current
+	// config on its next access, exactly as after a reload.
+	maxCachedLimiters = 8192
+	limiterIdleTTL    = 10 * time.Minute
+	limiterSweepEvery = time.Minute
 )
 
 type options struct {
@@ -71,10 +87,19 @@ func LoggerOption(logger logger.Logger) Option {
 type rateLimiter struct {
 	ipLimits   map[string]RateLimitGenerator
 	cidrLimits cidranger.Ranger
-	limits     map[string]limiter.Limiter
+	limits     map[string]*rateLimitEntry
 	mu         sync.Mutex
 	cancelFunc context.CancelFunc
 	options    options
+	lastSweep  time.Time
+}
+
+// rateLimitEntry wraps a cached limiter with its last-use stamp for
+// the idle sweep. lim may be nil (key with no configured limit); nil
+// entries are cached too, so they are bounded and swept like the rest.
+type rateLimitEntry struct {
+	lim      limiter.Limiter
+	lastUsed time.Time
 }
 
 func NewRateLimiter(opts ...Option) limiter.RateLimiter {
@@ -87,7 +112,7 @@ func NewRateLimiter(opts ...Option) limiter.RateLimiter {
 	lim := &rateLimiter{
 		ipLimits:   make(map[string]RateLimitGenerator),
 		cidrLimits: cidranger.NewPCTrieRanger(),
-		limits:     make(map[string]limiter.Limiter),
+		limits:     make(map[string]*rateLimitEntry),
 		options:    options,
 		cancelFunc: cancel,
 	}
@@ -105,8 +130,10 @@ func (l *rateLimiter) Limiter(key string) limiter.Limiter {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if lim, ok := l.limits[key]; ok {
-		return lim
+	now := time.Now()
+	if e, ok := l.limits[key]; ok {
+		e.lastUsed = now
+		return e.lim
 	}
 
 	var lims []limiter.Limiter
@@ -148,13 +175,50 @@ func (l *rateLimiter) Limiter(key string) limiter.Limiter {
 	if len(lims) > 0 {
 		lim = newLimiterGroup(lims...)
 	}
-	l.limits[key] = lim
+	l.limits[key] = &rateLimitEntry{lim: lim, lastUsed: now}
+	l.enforceLimitLocked()
+	l.sweepLocked(now)
 
 	if lim != nil && l.options.logger != nil {
 		l.options.logger.Debugf("input limit for %s: %d", key, lim.Limit())
 	}
 
 	return lim
+}
+
+// enforceLimitLocked evicts arbitrary entries until the table is at
+// or below maxCachedLimiters, regardless of sweep cadence. Caller
+// must hold mu.
+func (l *rateLimiter) enforceLimitLocked() {
+	for k := range l.limits {
+		if len(l.limits) <= maxCachedLimiters {
+			break
+		}
+		delete(l.limits, k)
+	}
+}
+
+// sweepLocked drops entries idle for longer than limiterIdleTTL, at
+// most once per limiterSweepEvery. Caller must hold mu. Dropped
+// entries are recomputed on next access.
+func (l *rateLimiter) sweepLocked(now time.Time) {
+	if now.Sub(l.lastSweep) < limiterSweepEvery {
+		return
+	}
+	l.lastSweep = now
+	for k, e := range l.limits {
+		if now.Sub(e.lastUsed) > limiterIdleTTL {
+			delete(l.limits, k)
+		}
+	}
+}
+
+// cachedCount reports the number of retained per-key entries. It
+// exists for tests and diagnostics.
+func (l *rateLimiter) cachedCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.limits)
 }
 
 func (l *rateLimiter) periodReload(ctx context.Context) error {
@@ -218,7 +282,8 @@ func (l *rateLimiter) reload(ctx context.Context) error {
 
 	l.ipLimits = ipLimits
 	l.cidrLimits = cidrLimits
-	l.limits = make(map[string]limiter.Limiter)
+	l.limits = make(map[string]*rateLimitEntry)
+	l.lastSweep = time.Time{}
 
 	return nil
 }
