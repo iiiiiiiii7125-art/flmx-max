@@ -4186,7 +4186,7 @@ update_panel() {
   if ! start_panel_after_update "$CURRENT_DB_TYPE"; then
     echo "🛑 新版本启动失败"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本"
+      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -4196,7 +4196,7 @@ update_panel() {
   if ! verify_panel_update_sqlite_volume "$update_expected_sqlite_volume"; then
     echo "🛑 升级后卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本"
+      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -4208,7 +4208,7 @@ update_panel() {
   if [[ "$CURRENT_DB_TYPE" == "postgres" ]] && ! verify_panel_update_postgres_volume "$update_expected_postgres_volume"; then
     echo "🛑 升级后 PG 卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本"
+      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
