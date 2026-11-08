@@ -23,13 +23,18 @@ func TestLookupOtherKernelsUnaffected(t *testing.T) {
 	for in, want := range map[string]string{
 		"xray":  TypeXray,
 		"XRAY":  TypeXray,
-		"snell": TypeSnell,
 		"realm": TypeRealm,
 	} {
 		info, ok := Lookup(in)
 		if !ok || info.Type != want {
 			t.Fatalf("Lookup(%q) = %+v, %v, want type %q", in, info, ok, want)
 		}
+	}
+	// The Snell kernel was removed in 2.1.0 (DEV-RM-SNELL): "snell"
+	// survives only as ProtocolSnell for imported nodes, never as a
+	// kernel type, so it must not resolve through Lookup.
+	if _, ok := Lookup("snell"); ok {
+		t.Fatal("Lookup(snell) must not match: the Snell kernel was removed")
 	}
 	if _, ok := Lookup("singboxx"); ok {
 		t.Fatal("Lookup(singboxx) must not match")
