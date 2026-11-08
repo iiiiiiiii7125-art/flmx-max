@@ -728,7 +728,10 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
     check(rel, "Node", "extraIPs", { mustNull: true });
   }
   // node.tsx 本地 Node（列表经 any 映射透传，null 会原样进入本地模型）
-  for (const f of ["remark", "expiryTime", "renewalCycle", "serverIpV4", "serverIpV6", "extraIPs", "version", "remoteUrl"])
+  // 登记表随功能移除同步（R2-C6-01）：联邦共享移除（DEV-RM-SHARE）后
+  // 后端不再下发 remoteUrl、前端声明已摘，本表该字段一并摘除
+  // （R2-GATE-01：残行曾令本门在 2.1.0 尖端恒红）。
+  for (const f of ["remark", "expiryTime", "renewalCycle", "serverIpV4", "serverIpV6", "extraIPs", "version"])
     check(`${FE}/pages/node/types.ts`, "Node", f, { mustNull: true });
   // src/types/index.ts 第二套类型：Tunnel 不得再声明幻影必填 entry/exitNodeId
   check(`${FE}/types/index.ts`, "Tunnel", "entryNodeId", { absent: true });
