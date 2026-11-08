@@ -816,6 +816,15 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 	// 汇总 warning 无从定位——收集被跳过行身份（#{id} {name}）与
 	// 逐行错误摘要，随汇总 warning 一并披露（清单截断见循环后）。
 	var invalidInboundIdentities []string
+	// R2-E3（复活面清扫）：旧备份恢复不得反转已删功能的迁移处置
+	// ——snell 内核行与内核托管 Snell 入站（迁移 rmsnell_v1 谓词同
+	// 形）计数与身份清单，循环后统一点名；restoredKernelTypes 记
+	// 本批已落库内核的归一类型，供入站循环判定所属内核为 snell
+	// 的行（不在本备份内的内核则回查 tx 现行行）。
+	snellKernelsNeutralized := 0
+	snellInboundsDisabled := 0
+	var snellInboundIdentities []string
+	restoredKernelTypes := map[int64]string{}
 	for _, k := range b.Kernels {
 		// D4-03：引用的节点不存在时跳过该内核并计数。
 		kernelNodeExists, err := rowExistsTx(tx, &model.Node{}, k.NodeID)
@@ -825,6 +834,19 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 		if !kernelNodeExists {
 			rep.skip("kernels")
 			continue
+		}
+		// R2-E3：snell 内核行属于已删除的入站 Snell 功能——按
+		// rmsnell_v1 迁移同口径落库：enabled=0、installed_version
+		// 清空（status 本就恒置 pending、config/applied 哈希不随
+		// 备份往返恒为空），不得以备份中的启用态/已装版本复活。
+		kernelType := kernel.CanonicalKernelType(k.KernelType)
+		restoredKernelTypes[k.ID] = kernelType
+		kernelEnabled := k.Enabled
+		kernelInstalledVersion := k.InstalledVersion
+		if kernelType == "snell" {
+			kernelEnabled = 0
+			kernelInstalledVersion = ""
+			snellKernelsNeutralized++
 		}
 		// R2X-046：同节点同类型的旧内核行被新行替换前，先把引用旧
 		// 行的存量入站（多为备份之后新建、不在本备份内的行）重指向
@@ -854,8 +876,8 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 		}
 		item := model.NodeKernel{
 			ID: k.ID, NodeID: k.NodeID, KernelType: k.KernelType, Version: version,
-			Status: "pending", Enabled: k.Enabled, CreatedTime: k.CreatedTime, UpdatedTime: now,
-			InstalledVersion: k.InstalledVersion,
+			Status: "pending", Enabled: kernelEnabled, CreatedTime: k.CreatedTime, UpdatedTime: now,
+			InstalledVersion: kernelInstalledVersion,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -866,13 +888,16 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 		}).Create(&item).Error; err != nil {
 			return inboundImportCounts{}, err
 		}
-		if err := restoreZeroValuedInt(tx, &model.NodeKernel{}, k.ID, "enabled", k.Enabled); err != nil {
+		if err := restoreZeroValuedInt(tx, &model.NodeKernel{}, k.ID, "enabled", kernelEnabled); err != nil {
 			return inboundImportCounts{}, err
 		}
 		counts.kernels++
 	}
 	if kernelRepointed > 0 {
 		rep.warnf("备份恢复：内核行替换时已将 %d 条存量入站的内核引用重指向恢复后的内核行（旧内核行已被同节点同类型的新行替换）", kernelRepointed)
+	}
+	if snellKernelsNeutralized > 0 {
+		rep.warnf("备份恢复：%d 条 snell 内核行属于已删除的入站 Snell 功能，已按禁用状态恢复并清除已装版本（与迁移 rmsnell_v1 处置一致）", snellKernelsNeutralized)
 	}
 
 	// Sources first: imported nodes point at them. A refresh fills in the
@@ -1002,6 +1027,29 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 			rep.skip("inbounds")
 			continue
 		}
+		// R2-E3（复活面清扫）：内核托管 Snell 入站（迁移 rmsnell_v1
+		// 谓词同形：kernel_id>0 且 protocol='snell' 或所属内核类型
+		// 为 snell）属于已删除的入站 Snell 功能，恢复时强制禁用落
+		// 库（行保留、与迁移处置一致），不得以备份中的启用态复活；
+		// 导入型 Snell 节点（kernel_id=0、协议由 Extra 推导）是
+		// 保留功能，不在此列。
+		forceDisableSnell := false
+		if i.KernelID > 0 {
+			kernelType, ok := restoredKernelTypes[i.KernelID]
+			if !ok {
+				var krow model.NodeKernel
+				if err := tx.Select("kernel_type").First(&krow, i.KernelID).Error; err == nil {
+					kernelType = kernel.CanonicalKernelType(krow.KernelType)
+				}
+			}
+			if strings.EqualFold(strings.TrimSpace(i.Protocol), "snell") || kernelType == "snell" {
+				forceDisableSnell = true
+			}
+		}
+		enabled := i.Enabled
+		if forceDisableSnell {
+			enabled = 0
+		}
 		listen := i.Listen
 		if listen == "" {
 			listen = "::"
@@ -1128,7 +1176,7 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 			Listen: listen, Port: i.Port, Transport: healedTransport, Security: healedSecurity,
 			Settings: healedSettings, Extra: i.Extra, ShareHost: shareHost, ShareAddressMode: shareMode, Remark: i.Remark,
 			RelayOnly: i.RelayOnly, AcceptProxyProtocol: i.AcceptProxyProtocol,
-			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: whitelistExtra, Enabled: i.Enabled,
+			RelayWhitelist: i.RelayWhitelist, WhitelistExtra: whitelistExtra, Enabled: enabled,
 			UploadBytes: clampImportedCounter(rep, fmt.Sprintf("入站 #%d（%q）", i.ID, i.Name), "uploadBytes", i.UploadBytes), DownloadBytes: clampImportedCounter(rep, fmt.Sprintf("入站 #%d（%q）", i.ID, i.Name), "downloadBytes", i.DownloadBytes), Inx: i.Inx,
 			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
 			SplitRules: splitRules, OutboundIPStrategy: strategy, MeteringEnabled: i.MeteringEnabled,
@@ -1146,7 +1194,7 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 		}).Create(&item).Error; err != nil {
 			return inboundImportCounts{}, err
 		}
-		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "enabled", i.Enabled); err != nil {
+		if err := restoreZeroValuedInt(tx, &model.NodeInbound{}, i.ID, "enabled", enabled); err != nil {
 			return inboundImportCounts{}, err
 		}
 		// F6 (B-07): restored rows are always origins — backups never
@@ -1161,6 +1209,20 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 			return inboundImportCounts{}, err
 		}
 		counts.inbounds++
+		if forceDisableSnell {
+			snellInboundsDisabled++
+			snellInboundIdentities = append(snellInboundIdentities, fmt.Sprintf("#%d %s", i.ID, i.Name))
+		}
+	}
+	if snellInboundsDisabled > 0 {
+		identities := snellInboundIdentities
+		suffix := ""
+		if len(identities) > 10 {
+			suffix = fmt.Sprintf(" 等共 %d 条", len(identities))
+			identities = identities[:10]
+		}
+		rep.warnf("备份恢复：%d 条内核托管 Snell 入站属于已删除的入站 Snell 功能，已按禁用状态恢复（与迁移 rmsnell_v1 处置一致）：%s%s",
+			snellInboundsDisabled, strings.Join(identities, "、"), suffix)
 	}
 	if invalidInboundObjects > 0 {
 		// R6X-009：汇总 warning 附被跳过行身份清单（前 10 条，超出
