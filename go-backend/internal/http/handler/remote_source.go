@@ -127,12 +127,20 @@ func (r remoteSyncResult) summary() string {
 	return strings.Join(parts, "，")
 }
 
-// importedNameKey / importedAddrKey are the two keys a source entry is
-// matched by: the name key is case-insensitive over the truncated name,
-// the address key is the externalKey form. The sync's in-batch dedup,
-// its existing-row indexes and the deletion shield's identity tuple all
-// derive from these two definitions — there is no second identity
-// semantics for imported nodes.
+// importedNameKey is the name key a source entry is matched by:
+// case-insensitive over the truncated name. The sync's in-batch dedup
+// and its existing-row matching use it, and it is one leg of the
+// deletion shield's identity tuple.
+//
+// importedAddrKey is the address leg of the deletion-shield identity
+// tuple only (R10-04): the bare externalKey form. The shield is
+// deliberately coarse (see importedIdentityKey). The sync's dedup
+// must NOT use it — dedup follows the identity semantics of the main
+// loop and of manual import ("id:" + externalIdentityKey: address +
+// protocol + credentials), so entries that share an address but
+// differ in protocol or credentials are distinct nodes end to end
+// (J7-01: the pre-dedup once used this bare key and silently dropped
+// such entries before they ever reached the main loop).
 func importedNameKey(name string) string {
 	return "name:" + strings.ToLower(truncateRunes(name, 100))
 }
@@ -207,15 +215,19 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	// R2-017（B-sub-06）：截断判定改在批内去重之后。旧口径按解析后
 	// 原始条数判，溢出部分纯为重复条目时（501 条/500 唯一）每轮恒触
 	// 发截断门、下线节点永不回收。去重键与主循环的 F-025 判定同口径
-	// （名称取与 fresh 同款的截断后小写、地址取 externalKey），被跳
-	// 过的重复条目在此即发同一条展示提示；主循环的 seen 判定保留作
-	// 第二道防线（口径一致、正常轮次不再触发）。
+	// （名称取与 fresh 同款的截断后小写、地址取 externalIdentityKey
+	// 身份键＝地址＋协议＋凭据），被跳过的重复条目在此即发同一条展
+	// 示提示；主循环的 seen 判定保留作第二道防线（口径一致、正常轮
+	// 次不再触发）。J7-01：地址腿旧实现误用裸 host:port 的
+	// importedAddrKey（那是删除屏蔽元组的粗粒度腿），与主循环不同
+	// 构——同址同端口靠协议/凭据区分的条目在预去重即被当重复条目
+	// 吞掉、永远同步不进来，已改齐为身份键。
 	{
 		seenPre := map[string]bool{}
 		unique := make([]kernel.ImportedNode, 0, len(nodes))
 		for _, node := range nodes {
 			nameKey := importedNameKey(node.Name)
-			addrKey := importedAddrKey(node.Host, node.Port)
+			addrKey := "id:" + externalIdentityKey(node.Host, node.Port, node.Proxy)
 			if seenPre[nameKey] || seenPre[addrKey] {
 				noticeErr(fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
 				continue
