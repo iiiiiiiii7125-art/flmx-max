@@ -2757,6 +2757,61 @@ func noteRemovedGroupSegments(backup *model.BackupData, rep *importReport) (tunn
 	return tunnelGroups, userGroups, permissions
 }
 
+// noteRemovedFeatureSegments discloses the 2.1.0-removed feature
+// segments an old backup still carries, in the same shape as
+// noteRemovedGroupSegments: counted, named in the import warnings,
+// and kept out of the database. Runs for every import carrying the
+// segments, whatever segment set the caller selected.
+//
+//   - peerShares: the federation/peer-share segment. BackupData
+//     keeps the field as a decode shell only; the rows never land.
+//   - themes: the theme-pack segment. Same shell treatment (the
+//     segment never shipped in panel backups — theme choice lived
+//     in browser localStorage — so this guards crafted/cross-
+//     version backups).
+//   - gist config keys: the Gist backup feature had no segment of
+//     its own; its footprint in a backup is the removedGistConfigKeys
+//     set inside the configs segment. Those keys used to be restored
+//     verbatim (silently resurrecting even the gist_token credential
+//     until the next boot's migration), so they are stripped from
+//     backup.Configs here — before the configs segment is imported
+//     later in the same transaction — and named by key (names only,
+//     never values, same discipline as B8-12).
+//
+// Returns the per-face counts so the caller can fill the receipt's
+// *Ignored fields with the same numbers the warnings disclose.
+func noteRemovedFeatureSegments(backup *model.BackupData, rep *importReport) (peerShares, gistKeys, themes int) {
+	if n := len(backup.PeerShares); n > 0 {
+		peerShares = n
+		rep.warnf("备份恢复：面板共享（联邦）功能已移除，备份中的 peerShares 段（%d 条）已忽略未恢复", n)
+	}
+	if n := len(backup.Themes); n > 0 {
+		themes = n
+		rep.warnf("备份恢复：主题功能已移除，备份中的 themes 段（%d 条）已忽略未恢复", n)
+	}
+	if len(backup.Configs) > 0 {
+		removed := make(map[string]bool, len(removedGistConfigKeys))
+		for _, k := range removedGistConfigKeys {
+			removed[k] = true
+		}
+		var present []string
+		for name := range backup.Configs {
+			if removed[normalizeConfigKey(name)] {
+				present = append(present, name)
+			}
+		}
+		if len(present) > 0 {
+			sort.Strings(present)
+			gistKeys = len(present)
+			for _, name := range present {
+				delete(backup.Configs, name)
+			}
+			rep.warnf("备份恢复：GitHub/Gist 备份功能已移除，备份中的 %d 个 gist 配置键已忽略未恢复：%s", gistKeys, strings.Join(present, "、"))
+		}
+	}
+	return peerShares, gistKeys, themes
+}
+
 func (r *Repository) Import(backup *model.BackupData, types []string) (*model.ImportResult, error) {
 	// O7-009：版本兼容性检查（导出仅写 "1.0"），未知版本拒绝导入，
 	// 避免不兼容格式被错误恢复。
@@ -2807,6 +2862,11 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		// importInbounds 内披露）。计数同时写入回执的 *Ignored
 		// 结构化字段，与文本披露同数（RR-S2-01）。
 		result.TunnelGroupsIgnored, result.UserGroupsIgnored, result.PermissionsIgnored = noteRemovedGroupSegments(backup, rep)
+		// 2.1.0 四删除面中的顶层三面同口径披露：peerShares/themes
+		// 段只计数点名不落库；gist 面以 configs 段内的已删功能键
+		// 为载体，在此剥离并点名（configs 段在本事务后段才导入，
+		// 剥离生效）。Snell 面在 inbounds 段内由 importInbounds 处置。
+		result.PeerSharesIgnored, result.GistConfigsIgnored, result.ThemesIgnored = noteRemovedFeatureSegments(backup, rep)
 		// R4X-006：事务尾转发授权收口只裁定本次导入新落的行——先
 		// 快照 forwards 备份 id 在目标库的存量存在性，尾部清扫据此
 		// 区分「本次新落」与「存量行被刷新」（后者是目标库现行
@@ -2932,6 +2992,8 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.InboundSourcesImported = counts.sources
 			result.InboundShieldsImported = counts.shields
 			result.InboundNodeGroupsIgnored = counts.groupsIgnored
+			result.InboundSnellKernelsDisabled = counts.snellKernelsDisabled
+			result.InboundSnellInboundsIgnored = counts.snellInboundsIgnored
 			result.InboundTemplatesImported = counts.templates
 			result.InboundLegacyUsersImported = counts.legacyUsers
 		}
@@ -5487,27 +5549,34 @@ func migrateSchema(db *gorm.DB) error {
 	return nil
 }
 
-// migrateRemoveGistConfigKeys 删除 2.1.0 随 Gist 备份功能下线而失活
-// 的配置行：8 个 gist_* 键（设置与运行态）与 Gist 失败通知台账两键。
-// 功能代码删除后这些行无人读写，留置即残留（且其中 gist_token 是
-// GitHub 凭据本体），按「删除不留残留」口径在 schema v8 迁移里删净；
-// 幂等，键不存在时无副作用。本地备份/恢复与自动快照的键不在此列。
+// removedGistConfigKeys 是 2.1.0 随 Gist 备份功能下线而失活的配置
+// 键全集：8 个 gist_* 键（设置与运行态）与 Gist 失败通知台账两键。
+// 单一事实源两个消费方：存量迁移 migrateRemoveGistConfigKeys 删净
+// 库内行；备份恢复 noteRemovedFeatureSegments 据此识别旧备份
+// configs 段携带的同名键、点名忽略且不落库。
+var removedGistConfigKeys = []string{
+	"gist_token",
+	"gist_password",
+	"gist_id",
+	"gist_interval_hours",
+	"gist_last_at",
+	"gist_last_upload",
+	"gist_last_error",
+	"gist_last_hash",
+	"notify_gist_failure_pending",
+	"notify_gist_failure_pending_gen",
+}
+
+// migrateRemoveGistConfigKeys 删除 removedGistConfigKeys 的存量配置
+// 行。功能代码删除后这些行无人读写，留置即残留（且其中 gist_token
+// 是 GitHub 凭据本体），按「删除不留残留」口径在 schema v8 迁移里
+// 删净；幂等，键不存在时无副作用。本地备份/恢复与自动快照的键不
+// 在此列。
 func migrateRemoveGistConfigKeys(db *gorm.DB) error {
 	if db == nil {
 		return errors.New("nil db")
 	}
-	keys := []string{
-		"gist_token",
-		"gist_password",
-		"gist_id",
-		"gist_interval_hours",
-		"gist_last_at",
-		"gist_last_upload",
-		"gist_last_error",
-		"gist_last_hash",
-		"notify_gist_failure_pending",
-		"notify_gist_failure_pending_gen",
-	}
+	keys := removedGistConfigKeys
 	if err := db.Where("name IN ?", keys).Delete(&model.ViteConfig{}).Error; err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "no such table") || (strings.Contains(msg, "relation") && strings.Contains(msg, "does not exist")) {

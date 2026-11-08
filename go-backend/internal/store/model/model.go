@@ -3,7 +3,10 @@
 // transparently with both SQLite and PostgreSQL.
 package model
 
-import "database/sql"
+import (
+	"database/sql"
+	"encoding/json"
+)
 
 // ─── Core Business Tables ────────────────────────────────────────────
 
@@ -398,9 +401,42 @@ type BackupData struct {
 	// 静默不可用；备份文件因此与节点 secret/订阅 token 同敏感级，
 	// 文档与导出提示须明示。
 	NodeSSHConfigs []NodeSSHConfigBackup `json:"nodeSSHConfigs,omitempty"`
+	// PeerShares 仅作导入兼容壳保留（面板共享/联邦功能已随 2.1.0
+	// 整删）：旧备份解码时承接数据，导入侧只计数并在
+	// ImportWarnings 中点名披露已忽略，不再落库；导出侧永不填充。
+	PeerShares []PeerShareBackup `json:"peerShares,omitempty"`
+	// Themes 仅作导入兼容壳保留（主题包/多主题机制已随 2.1.0 整
+	// 删）：主题选择本只存于浏览器 localStorage、正规备份从不携带
+	// 本段，此壳为异源/构造备份的防御性承接——解码时承接数据，
+	// 导入侧只计数点名披露已忽略，不落库；导出侧永不填充。行形
+	// 不定（主题包格式已删无从校验），以 RawMessage 逐行承接。
+	Themes []json.RawMessage `json:"themes,omitempty"`
 	// Inbounds carries node kernels, their inbounds (imported nodes too),
 	// relay links and traffic counter baselines; restored as one unit.
 	Inbounds *InboundsBackup `json:"inbounds,omitempty"`
+}
+
+// PeerShareBackup 是面板共享（联邦）定义的旧备份结构（字段对照
+// 已删的 model.PeerShare，2.1.0 前随 nodes 段导出/导入）。功能整
+// 删后本结构仅作 BackupData.PeerShares 的解码壳保留：导入侧只计
+// 数点名，不再落库（peer_share 表与模型均已删除）。
+type PeerShareBackup struct {
+	ID             int64  `json:"id"`
+	Name           string `json:"name"`
+	NodeID         int64  `json:"nodeId"`
+	Token          string `json:"token"`
+	MaxBandwidth   int64  `json:"maxBandwidth"`
+	ExpiryTime     int64  `json:"expiryTime"`
+	PortRangeStart int    `json:"portRangeStart"`
+	PortRangeEnd   int    `json:"portRangeEnd"`
+	CurrentFlow    int64  `json:"currentFlow"`
+	IsActive       int    `json:"isActive"`
+	CreatedTime    int64  `json:"createdTime"`
+	UpdatedTime    int64  `json:"updatedTime,omitempty"`
+	AllowedDomains string `json:"allowedDomains,omitempty"`
+	AllowedIPs     string `json:"allowedIps,omitempty"`
+	RelayUsername  string `json:"relayUsername,omitempty"`
+	RelayPassword  string `json:"relayPassword,omitempty"`
 }
 
 // NodeSSHConfigBackup 是 A3-05 补齐的节点 SSH 配置备份结构
@@ -882,9 +918,17 @@ type ImportResult struct {
 	// 名实相反且计数器从未累加、恒为 0，与 InboundNodeGroupsIgnored
 	// （R3-S2-01）同病，现整族改名据实计数（与 ImportWarnings 的
 	// 文本披露同数）。前端未消费这三个字段。
-	TunnelGroupsIgnored  int `json:"tunnelGroupsIgnored"`
-	UserGroupsIgnored    int `json:"userGroupsIgnored"`
-	PermissionsIgnored   int `json:"permissionsIgnored"`
+	TunnelGroupsIgnored int `json:"tunnelGroupsIgnored"`
+	UserGroupsIgnored   int `json:"userGroupsIgnored"`
+	PermissionsIgnored  int `json:"permissionsIgnored"`
+	// 2.1.0 四删除面的旧备份披露（与 ImportWarnings 文本同数）：
+	// PeerSharesIgnored＝联邦共享段被忽略条数（整段不落库）；
+	// GistConfigsIgnored＝configs 段中 gist_* 等已删功能键被忽略
+	// 个数（键名随 warning 点名、值不落库）；ThemesIgnored＝主题
+	// 段被忽略条数（整段不落库）。
+	PeerSharesIgnored    int `json:"peerSharesIgnored"`
+	GistConfigsIgnored   int `json:"gistConfigsIgnored"`
+	ThemesIgnored        int `json:"themesIgnored"`
 	ConfigsImported      int `json:"configsImported"`
 	InboundsImported     int `json:"inboundsImported"`
 	UserInboundsImported int `json:"userInboundsImported"`
@@ -905,9 +949,16 @@ type ImportResult struct {
 	// InboundNodeGroupsImported 名实相反且计数器从未累加、恒为
 	// 0，现改名据实计数（与 ImportWarnings 的文本披露同数）。
 	// 前端未消费此字段（仅消费 inboundShieldsImported）。
-	InboundNodeGroupsIgnored   int `json:"inboundNodeGroupsIgnored"`
-	InboundTemplatesImported   int `json:"inboundTemplatesImported"`
-	InboundLegacyUsersImported int `json:"inboundLegacyUsersImported"`
+	InboundNodeGroupsIgnored int `json:"inboundNodeGroupsIgnored"`
+	// 入站 Snell 功能已随 2.1.0 整删：旧备份的自建 Snell 内核行
+	// 按存量迁移 rmsnell_v1 同口径禁用恢复（计数
+	// InboundSnellKernelsDisabled），其自建 Snell 入站无法恢复
+	// （计数 InboundSnellInboundsIgnored）；导入型 Snell 节点
+	// （kernelId=0）不在此列、照常恢复不计数。
+	InboundSnellKernelsDisabled int `json:"inboundSnellKernelsDisabled"`
+	InboundSnellInboundsIgnored int `json:"inboundSnellInboundsIgnored"`
+	InboundTemplatesImported    int `json:"inboundTemplatesImported"`
+	InboundLegacyUsersImported  int `json:"inboundLegacyUsersImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int `json:"announcementsImported"`
 	MonitorPermissionsImported int `json:"monitorPermissionsImported"`
