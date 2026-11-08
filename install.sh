@@ -103,7 +103,7 @@ SERVICE_MANAGER="${SERVICE_MANAGER:-}"
 # 侧 go-gost/x/socket/tuning.go 的路径常量一一对应——第二代四面
 # 模型：tuneKernelConfPath / tuneLimitsConfPath / tuneBBRConfPath /
 # tuneGaiConfPath / tuneGaiBackupPath / tuneRPSUnitPath /
-# tuneRPSScriptPath；第一代残留：oldTuneConfPath /
+# tuneRPSScriptPath / tuneKernelSnapshotPath；第一代残留：oldTuneConfPath /
 # oldTuneBBRModulePath / oldTuneShapeUnitPath / legacyTuneConfPath
 # （全集见 agent 侧 uninstall.go 的 hostTuningFileSet）。脚本卸载
 # 必须与面板自卸载路径（runAgentUninstall →
@@ -120,6 +120,16 @@ FLMX_TUNING_GAI_PRECEDENCE_LINE="precedence ::ffff:0:0/96  100"
 FLMX_TUNING_RPS_UNIT_FILE="/etc/systemd/system/flmx-tuning-rps.service"
 FLMX_TUNING_RPS_UNIT="flmx-tuning-rps.service"
 FLMX_TUNING_RPS_SCRIPT="/usr/local/bin/flmx-tuning-rps.sh"
+# 第二代面③ 的 TL-02 调优前 sysctl 快照（agent 侧
+# tuneKernelSnapshotPath）：卸载时按快照写回原值后消费删除，
+# 见 uninstall_flmx_agent_host_cleanup 第 2) 步二代部分。
+FLMX_TUNING_KERNEL_SNAPSHOT="/etc/security/flmx-tuning-kernel-sysctls.json"
+# 无 TL-02 快照时不可恢复的面③键：agent 侧 kernelTuneSettings
+# 全集去掉两项可回退标题默认值的键（net.core.default_qdisc、
+# net.ipv4.tcp_congestion_control）；net.core.rps_sock_flow_entries
+# 由标题默认值回退覆盖、不在此列。与 agent 侧
+# restoreKernelSysctls 的 unrestored 清单逐字对齐。
+FLMX_TUNING_KERNEL_UNRESTORED_KEYS="net.core.somaxconn net.core.netdev_max_backlog net.ipv4.tcp_max_syn_backlog net.ipv4.ip_local_port_range net.core.rmem_max net.core.wmem_max net.ipv4.tcp_rmem net.ipv4.tcp_wmem net.core.rmem_default net.core.wmem_default net.ipv4.tcp_notsent_lowat net.ipv4.tcp_mtu_probing net.ipv4.udp_rmem_min net.ipv4.udp_wmem_min net.ipv4.tcp_ecn net.ipv4.tcp_max_orphans net.ipv4.tcp_slow_start_after_idle net.ipv4.tcp_tw_reuse net.ipv4.tcp_fin_timeout net.ipv4.tcp_retries2 net.ipv4.tcp_fastopen"
 # 第一代残留（兼容清理）：
 FLMX_TUNING_SYSCTL_CONF="/etc/sysctl.d/99-flmx-tuning.conf"
 FLMX_TUNING_SYSCTL_CONF_LEGACY="/etc/sysctl.d/99-flvx-tuning.conf"
@@ -2714,17 +2724,38 @@ rollback_flmx_agent() {
   fi
 }
 
+# 写单个 sysctl 运行时值：只写 $FLMX_PROC_SYS_DIR 下已存在的叶
+# 子（本脚本恢复路径的统一纪律），写失败忽略（与 agent 侧
+# tuneWrite 的 `_ =` 同口径）。
+flmx_agent_uninstall_write_sysctl_value() {
+  local target="$FLMX_PROC_SYS_DIR/${1//.//}"
+  if [[ -f "$target" ]]; then
+    { printf '%s\n' "$2" > "$target"; } 2>/dev/null || true
+  fi
+}
+
+# 三项标题默认值回退，与 agent 侧 restoreKernelSysctls 的
+# writeDefaults 逐字对齐（无快照/快照损坏时用）。
+flmx_agent_uninstall_write_tuning_defaults() {
+  flmx_agent_uninstall_write_sysctl_value "net.ipv4.tcp_congestion_control" "cubic"
+  flmx_agent_uninstall_write_sysctl_value "net.core.default_qdisc" "pfifo_fast"
+  flmx_agent_uninstall_write_sysctl_value "net.core.rps_sock_flow_entries" "0"
+}
+
 # R6-02：脚本卸载与面板自卸载路径（go-gost/x/socket/uninstall.go
 # 的 runAgentUninstall）对齐的宿主清理。面板路径在删安装目录之前
 # 依次：回退调优（restoreTuningForUninstall 走第二代 rollback：
 # 删四面与第一代全部足迹文件、gai.conf 按备份还原、删 MSS 钳制
 # 规则、内存值复位，再由 cleanupHostTuningFiles 兜底删漏）→ 停
 # 内核并删 agent 自建 nft 三表 → 才停服务删目录。本函数第 3)～
-# 7) 步与 cleanupHostTuningFiles 的清理全集逐项对齐；第 1)、2)
-# 步是第一代兼容恢复（整形前队列回放、tuning-backup.json 逐键
-# 写回 sysctl 原值）——第二代面板路径已不再执行，但备份与整形
-# 脚本都在即将删除的安装目录里，脚本卸载是它们最后的恢复机
-# 会，故保留（产物不存在时两步都是空转）。旧脚本卸载只有停服
+# 7) 步与 cleanupHostTuningFiles 的清理全集逐项对齐；第 1) 步
+# 与第 2) 步的一代部分是第一代兼容恢复（整形前队列回放、
+# tuning-backup.json 逐键写回 sysctl 原值）——该部分第二代面板
+# 路径已不再执行，但备份与整形脚本都在即将删除的安装目录里，
+# 脚本卸载是它们最后的恢复机会，故保留（产物不存在时两步都是
+# 空转）；第 2) 步的二代部分（面③ TL-02 快照逐键写回原值后消
+# 费删除、无快照时回退标题默认值并点名其余不可恢复键）与面板
+# 路径 restoreKernelSysctls 同口径（J9-01）。旧脚本卸载只有停服
 # 删目录，残留后果：调优 sysctl conf 与 qdisc unit 开机自动重放、
 # nft 白名单 DROP 规则比所有者长寿（R2-001 危害形态）、
 # tuning-backup.json 随目录删除后原值永久不可恢复、同机重装还会
@@ -2801,6 +2832,70 @@ uninstall_flmx_agent_host_cleanup() {
     fi
   fi
 
+  # 2) 之二代部分：面③ TL-02 快照恢复（J9-01，与面板路径
+  # restoreKernelSysctls 同口径）。快照是 agent 首次 apply-kernel
+  # 前留的 {values:{键:原值}, absent:[调优前不存在的键]} JSON，
+  # 写在宿主机 /etc/security、不在安装目录里——旧脚本卸载从不处
+  # 理它：运行时值不恢复、文件成孤儿残留，同机重装时 capture
+  # 「首份胜出」还会让陈旧快照继续压住运营者的现值。处置分三
+  # 路（与 agent 侧逐项对应）：
+  #   快照可解析：逐键写回原值（同第 2) 步的键字符集与「只写
+  #   已存在叶子」纪律）；absent 键无法回退删除、逐项点名；
+  #   末尾把 rps_sock_flow_entries 复位为 0（agent 侧恢复路径
+  #   同样无条件做）；快照文件随后消费删除（agent 侧 defer 删
+  #   除，任何分支都不留）。
+  #   快照损坏（解析不出键值对且无 absent 清单）：按 agent 侧
+  #   同向处理——回退三项标题默认值并点名其余不可恢复键，快
+  #   照同样删除。
+  #   无快照但面③ 内核 conf 在位（旧 agent 部署、无 TL-02）：
+  #   回退三项标题默认值并点名其余不可恢复键（保留至重启）。
+  # 三项标题默认值与 agent 侧 writeDefaults 逐字对齐：
+  # tcp_congestion_control=cubic、default_qdisc=pfifo_fast、
+  # rps_sock_flow_entries=0（写失败按 agent 侧同为忽略）。
+  local snap_pairs=0 snap_restored=0 snap_unsupported=0
+  local snap_absent=""
+  if [[ -f "$FLMX_TUNING_KERNEL_SNAPSHOT" ]]; then
+    snap_absent=$(sed -n 's/.*"absent"[[:space:]]*:[[:space:]]*\[\(.*\)\].*/\1/p' "$FLMX_TUNING_KERNEL_SNAPSHOT" 2>/dev/null | grep -oE '"[A-Za-z0-9_.]+"' | tr -d '"' | paste -sd, -) || snap_absent=""
+    local skey="" svalue="" starget=""
+    while IFS=$'\t' read -r skey svalue; do
+      [[ -n "$skey" ]] || continue
+      snap_pairs=$((snap_pairs + 1))
+      starget="$FLMX_PROC_SYS_DIR/${skey//.//}"
+      if [[ ! -f "$starget" ]]; then
+        snap_unsupported=$((snap_unsupported + 1))
+        continue
+      fi
+      if { printf '%s\n' "$svalue" > "$starget"; } 2>/dev/null; then
+        snap_restored=$((snap_restored + 1))
+      else
+        failures=$((failures + 1))
+        echo "⚠️ sysctl 参数按快照恢复失败: $skey"
+      fi
+    done < <(grep -oE '"[A-Za-z0-9_.]+": *"[^"]*"' "$FLMX_TUNING_KERNEL_SNAPSHOT" 2>/dev/null | sed -e 's/^"//' -e 's/"$//' -e 's/": *"/\t/')
+    if [[ "$snap_pairs" -eq 0 && -z "$snap_absent" ]]; then
+      failures=$((failures + 1))
+      echo "⚠️ 调优前快照损坏、无法解析，以下 sysctl 键未能回退（仍为调优值）: ${FLMX_TUNING_KERNEL_UNRESTORED_KEYS// /, }"
+      flmx_agent_uninstall_write_tuning_defaults
+    else
+      if [[ "$snap_restored" -gt 0 || "$snap_unsupported" -gt 0 ]]; then
+        echo "🧹 已按调优前快照恢复 sysctl 原值（${snap_restored} 项生效，${snap_unsupported} 项本机内核不支持已跳过）"
+      fi
+      if [[ -n "$snap_absent" ]]; then
+        echo "⚠️ 以下 sysctl 键在调优前不存在、无法回退删除: $snap_absent"
+      fi
+      flmx_agent_uninstall_write_sysctl_value "net.core.rps_sock_flow_entries" "0"
+    fi
+    if rm -f "$FLMX_TUNING_KERNEL_SNAPSHOT"; then
+      echo "🧹 删除调优宿主文件: $FLMX_TUNING_KERNEL_SNAPSHOT"
+    else
+      failures=$((failures + 1))
+      echo "⚠️ 删除调优宿主文件失败: $FLMX_TUNING_KERNEL_SNAPSHOT"
+    fi
+  elif [[ -e "$FLMX_TUNING_KERNEL_CONF" ]]; then
+    flmx_agent_uninstall_write_tuning_defaults
+    echo "⚠️ 调优前快照缺失，以下 sysctl 键未能回退（仍为调优值、保留至重启）: ${FLMX_TUNING_KERNEL_UNRESTORED_KEYS// /, }"
+  fi
+
   # 3) 调优 systemd unit（第二代 RPS 与第一代 qdisc 两件）：先
   # disable --now 再删文件、两件都处理完再统一 daemon-reload 一
   # 次（与 agent 侧 cleanupHostTuningFiles 同序），否则悬空启用
@@ -2867,9 +2962,10 @@ uninstall_flmx_agent_host_cleanup() {
 
   # 6) 宿主调优文件：第二代三件 conf（内核调优、limits、BBR）与
   # RPS 助手脚本、第一代两件（sysctl conf、BBR 开机加载 conf）。
-  # 删掉后调优值不再开机重放；运行时值已在第 2 步按一代备份尽
-  # 力恢复（第二代无原值备份概念，未恢复的运行时值保留至重
-  # 启，与面板路径同口径）。
+  # 删掉后调优值不再开机重放；运行时值已在第 2 步按一代备份与
+  # 二代 TL-02 快照尽力恢复（快照文件已在第 2 步消费删除，不在
+  # 本步清单内）；无快照的二代存量已按面板路径同口径回退标题
+  # 默认值并点名其余键，未恢复的运行时值保留至重启。
   local host_file=""
   for host_file in "$FLMX_TUNING_KERNEL_CONF" "$FLMX_TUNING_LIMITS_CONF" "$FLMX_TUNING_BBR_CONF" "$FLMX_TUNING_RPS_SCRIPT" "$FLMX_TUNING_SYSCTL_CONF" "$FLMX_TUNING_BBR_MODULE_FILE"; do
     if [[ -e "$host_file" ]]; then
