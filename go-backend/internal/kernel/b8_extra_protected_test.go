@@ -83,17 +83,3 @@ func TestRenderRejectsProtectedExtraBypassingNormalizeF022(t *testing.T) {
 		t.Fatalf("error must name the protected field, got %q", err.Error())
 	}
 }
-
-func TestNormalizeSnellExtraRejectedF022(t *testing.T) {
-	// Snell 渲染（INI）根本不消费 Extra；保存期必须明确报错，不得静默忽略。
-	in := Inbound{Protocol: ProtocolSnell, Port: 8388,
-		Settings: Settings{Password: "snell-psk"},
-		Extra:    json.RawMessage(`{"sniffing":{"enabled":false}}`)}
-	err := Normalize(TypeSnell, &in)
-	if err == nil {
-		t.Fatal("Snell inbound with Extra must be rejected at save time")
-	}
-	if !strings.Contains(err.Error(), "Snell") || !strings.Contains(err.Error(), "高级配置") {
-		t.Fatalf("error must explain Snell ignores高级配置, got %q", err.Error())
-	}
-}

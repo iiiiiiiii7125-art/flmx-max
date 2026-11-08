@@ -70,8 +70,8 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 // defaultBlockPrivateRule, so without this rule every sing-box inbound
 // could reach the node's private addresses and the cloud metadata
 // address 169.254.169.254 directly. The guard matches the product's
-// canonical non-public range set (private_ranges.go — the same set
-// the Snell agent guard enforces) spelled out as ip_cidr ranges. It
+// canonical non-public range set (private_ranges.go) spelled out as
+// ip_cidr ranges. It
 // deliberately does not use sing-box's ip_is_private predicate: that
 // predicate delegates to Go netip's notion of "public", which misses
 // the CGNAT range 100.64.0.0/10, the benchmarking range
@@ -312,7 +312,7 @@ func (a *acmeProviders) tag(sec Security) string {
 }
 
 // singboxInbounds returns the inbound objects for one panel inbound. A
-// ShadowTLS-fronted Shadowsocks or Snell becomes two: the public shadowtls
+// ShadowTLS-fronted Shadowsocks becomes two: the public shadowtls
 // inbound and a loopback backend it detours to.
 func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 	item := obj{
@@ -349,22 +349,6 @@ func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 		item["type"] = "shadowsocks"
 		item["method"] = s.Method
 		item["password"] = NormalizedSS2022Password(s.Method, s.Password)
-	case ProtocolSnell:
-		// Server version 5 also serves v4 clients (the same wire protocol
-		// without QUIC proxy mode, which sing-box does not offer).
-		snell := obj{"type": "snell", "version": 5, "psk": s.Password}
-		if s.SnellVersion == 6 {
-			snell["version"] = 6
-			if s.SnellMode != "" {
-				snell["mode"] = s.SnellMode
-			}
-		}
-		if in.Security.Type == SecurityShadowTLS {
-			return singboxShadowTLSFront(in, snell)
-		}
-		for k, v := range snell {
-			item[k] = v
-		}
 	case ProtocolHysteria2:
 		item["type"] = "hysteria2"
 		item["users"] = []interface{}{obj{"password": s.Password}}
@@ -416,7 +400,7 @@ func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 }
 
 // singboxShadowTLSFront returns the public shadowtls v3 inbound and the
-// loopback backend (a Shadowsocks or Snell inbound) it detours to.
+// loopback backend (a Shadowsocks inbound) it detours to.
 func singboxShadowTLSFront(in Inbound, backend obj) ([]interface{}, error) {
 	backendTag := singboxShadowTLSBackendTag(in)
 	front := obj{

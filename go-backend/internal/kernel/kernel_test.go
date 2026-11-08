@@ -68,7 +68,7 @@ func TestNormalizeRejectsUnsupportedCombos(t *testing.T) {
 		})
 	}
 	in := Inbound{Protocol: ProtocolVLESS, Port: 1}
-	if err := Normalize(TypeSnell, &in); err == nil {
+	if err := Normalize("nosuchkernel", &in); err == nil {
 		t.Fatal("unimplemented kernel must be rejected")
 	}
 }
@@ -300,21 +300,6 @@ func TestResolveDownload(t *testing.T) {
 		t.Fatalf("xray latest must defer to the agent like sing-box: %v", latest)
 	}
 
-	snell, _ := Lookup(TypeSnell)
-	sd, err := ResolveDownload(snell, "latest", "https://mirror.example")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sd["url"] != "https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-{ARCH}.zip" {
-		t.Fatalf("snell must default to 5.0.1 and never use the github mirror: %v", sd["url"])
-	}
-	if sd["sha256"].(map[string]string)["amd64"] != "9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539" {
-		t.Fatalf("snell pin: %v", sd["sha256"])
-	}
-	if _, err := ResolveDownload(snell, "6.0.0rc", ""); err == nil {
-		t.Fatal("unpinned snell version must be rejected")
-	}
-
 	sb, _ := Lookup(TypeSingbox)
 	sl, err := ResolveDownload(sb, "latest", "")
 	if err != nil || !strings.Contains(sl["url"].(string), "{VERSION}") || sl["github"].(map[string]interface{})["repo"] != "SagerNet/sing-box" {
@@ -325,10 +310,6 @@ func TestResolveDownload(t *testing.T) {
 		t.Fatalf("sing-box pinned version: %v", sv)
 	}
 
-	st, err := ExtraDownload(ShadowTLSDownload(), ShadowTLSVersion, "")
-	if err != nil || st["sha256"].(map[string]string)["x86_64-unknown-linux-musl"] == "" {
-		t.Fatalf("shadow-tls: %v %v", st, err)
-	}
 }
 
 func assertGolden(t *testing.T, name, got string) {
@@ -449,39 +430,6 @@ func TestRenderSingboxGolden(t *testing.T) {
 	}
 }
 
-func TestRenderSnell(t *testing.T) {
-	ins := []Inbound{
-		{ID: 7, Protocol: ProtocolSnell, Listen: "::", Port: 6160, Settings: Settings{Password: "psk-aaaaaaaa", SnellVersion: 4}},
-		{ID: 8, Protocol: ProtocolSnell, Listen: "0.0.0.0", Port: 6161, Settings: Settings{Password: "psk-bbbbbbbb", BackendPort: 36161},
-			Security: Security{Type: SecurityShadowTLS, SNI: "www.microsoft.com", ShadowTLSPassword: "stls-pass-1"}},
-	}
-	for i := range ins {
-		if err := Normalize(TypeSnell, &ins[i]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	out, err := Render(TypeSnell, ins)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var b strings.Builder
-	for _, f := range out.Files {
-		b.WriteString("# " + f.Name + "\n" + f.Content)
-	}
-	for _, p := range out.Processes {
-		b.WriteString(p.Name + " [" + p.Bin + "] " + strings.Join(p.Args, " ") + "\n")
-	}
-	b.WriteString("extras: " + strings.Join(out.Extras, ",") + "\n")
-	assertGolden(t, "snell.golden.txt", b.String())
-	if ins[0].Network() != "tcp" || ins[1].Network() != "tcp" {
-		t.Fatal("snell v4 and shadowtls-fronted snell are tcp only")
-	}
-	idle, _ := Render(TypeSnell, nil)
-	if !idle.Idle || len(idle.Processes) != 0 {
-		t.Fatal("snell without inbounds must be idle")
-	}
-}
-
 func TestNormalizePhase3Rules(t *testing.T) {
 	hy := Inbound{Protocol: ProtocolHysteria2, Port: 443, Transport: Transport{Type: TransportQUIC}, Security: Security{Type: SecurityTLS}}
 	if err := Normalize(TypeSingbox, &hy); err != nil {
@@ -490,20 +438,10 @@ func TestNormalizePhase3Rules(t *testing.T) {
 	if hy.Security.SNI != DefaultQUICSNI || strings.Join(hy.Security.ALPN, ",") != "h3" || hy.Settings.Password == "" || hy.Network() != "udp" {
 		t.Fatalf("hy2 defaults: %+v", hy)
 	}
-	sn := Inbound{Protocol: ProtocolSnell, Port: 6160, Security: Security{Type: SecurityShadowTLS}}
-	if err := Normalize(TypeSnell, &sn); err != nil {
-		t.Fatal(err)
-	}
-	if sn.Settings.SnellVersion != 5 || sn.Settings.BackendPort < 20000 || sn.Security.ShadowTLSPassword == "" || sn.Security.SNI != DefaultRealitySNI {
-		t.Fatalf("snell defaults: %+v", sn)
-	}
 	bad := []struct {
 		kernel string
 		in     Inbound
 	}{
-		// Snell v6 合法 PSK 应通过（见下方正例）；这里只拒 PSK 不足 12 位的。
-		{TypeSnell, Inbound{Protocol: ProtocolSnell, Port: 1, Settings: Settings{SnellVersion: 6, Password: "psk-123456"}}},
-		{TypeSnell, Inbound{Protocol: ProtocolSnell, Port: 1, Settings: Settings{Password: "has space"}}},
 		{TypeSingbox, Inbound{Protocol: ProtocolHysteria2, Port: 1, Transport: Transport{Type: TransportQUIC}, Settings: Settings{Masquerade: "ftp://x"}}},
 		{TypeSingbox, Inbound{Protocol: ProtocolVLESS, Port: 1, AcceptProxyProtocol: true}},
 		{TypeXray, Inbound{Protocol: ProtocolHysteria2, Port: 1}},
@@ -514,11 +452,6 @@ func TestNormalizePhase3Rules(t *testing.T) {
 		if err := Normalize(tc.kernel, &in); err == nil {
 			t.Fatalf("case %d must fail: %+v", i, tc.in)
 		}
-	}
-	// S4 移植后 Snell v6 是合法版本：TypeSnell + v6 + 合法 PSK 必须通过。
-	v6 := Inbound{Protocol: ProtocolSnell, Port: 1, Settings: Settings{SnellVersion: 6, Password: "psk-1234567890"}}
-	if err := Normalize(TypeSnell, &v6); err != nil {
-		t.Fatalf("snell v6 with a valid psk must normalize: %v", err)
 	}
 }
 

@@ -98,8 +98,6 @@ if (typeof toPayload === "function") {
     encryptionSecret: "",
     password: "",
     method: "",
-    snellVersion: "",
-    snellMode: "",
     masquerade: "",
     backendPort: 0,
     portHopping: "",

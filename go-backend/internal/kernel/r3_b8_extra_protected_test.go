@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// R3 批 8 · R3X-013（D-02）：Extra 受保护键表漏 sing-box Snell 的
+// R3 批 8 · R3X-013（D-02）：Extra 受保护键表漏凭据/版本键的
 // psk/mode 拼写。本文件的回归分三层：
 //  1. 逐协议全集 diff：渲染每个协议的入站对象，其全部顶层键必须被
 //     分类为「受保护」或「明示良性增量键」——出现未分类键即红，
@@ -58,14 +58,6 @@ func r3b8Samples() []r3b8RenderSample {
 			Settings: Settings{Method: DefaultSSMethod, Password: "AAAAAAAAAAAAAAAAAAAAAA=="},
 			Security: Security{Type: SecurityShadowTLS, SNI: "www.microsoft.com", ShadowTLSPassword: "stls-secret-123"}},
 			[]string{"method", "password", "version", "users", "handshake", "detour"}},
-		{"singbox/snell-v5", TypeSingbox, Inbound{ID: 6, Protocol: ProtocolSnell, Port: 6160,
-			Settings: Settings{Password: "psk-aaaaaaaa", SnellVersion: 5}}, []string{"version", "psk"}},
-		{"singbox/snell-v6-mode", TypeSingbox, Inbound{ID: 7, Protocol: ProtocolSnell, Port: 6161,
-			Settings: Settings{Password: "psk-bbbbbbbbbbbb", SnellVersion: 6, SnellMode: SnellModeUnshaped}}, []string{"version", "psk", "mode"}},
-		{"singbox/snell+shadowtls", TypeSingbox, Inbound{ID: 8, Protocol: ProtocolSnell, Port: 6162,
-			Settings: Settings{Password: "psk-cccccccc"},
-			Security: Security{Type: SecurityShadowTLS, SNI: "www.microsoft.com", ShadowTLSPassword: "stls-pass-1"}},
-			[]string{"version", "psk", "users", "handshake", "detour"}},
 		{"singbox/hysteria2", TypeSingbox, Inbound{ID: 9, Protocol: ProtocolHysteria2, Port: 443,
 			Transport: Transport{Type: TransportQUIC}, Security: tlsSec,
 			Settings: Settings{Password: "hy2-secret", Masquerade: "https://www.bing.com"}}, []string{"users"}},
@@ -146,14 +138,9 @@ func TestR3B8ProtectedKeyUniverseDiff(t *testing.T) {
 }
 
 func TestR3B8ExtraPskModeRejectedAtSaveAndRender(t *testing.T) {
-	snellV6 := func(extra string) Inbound {
-		return Inbound{Protocol: ProtocolSnell, Port: 6160,
-			Settings: Settings{Password: "psk-bbbbbbbbbbbb", SnellVersion: 6},
-			Extra:    json.RawMessage(extra)}
-	}
-	snellV5 := func(extra string) Inbound {
-		return Inbound{Protocol: ProtocolSnell, Port: 6161,
-			Settings: Settings{Password: "psk-aaaaaaaa", SnellVersion: 5},
+	ss := func(extra string) Inbound {
+		return Inbound{Protocol: ProtocolShadowsocks, Port: 6160,
+			Settings: Settings{Method: DefaultSSMethod, Password: "AAAAAAAAAAAAAAAAAAAAAA=="},
 			Extra:    json.RawMessage(extra)}
 	}
 	cases := []struct {
@@ -161,9 +148,8 @@ func TestR3B8ExtraPskModeRejectedAtSaveAndRender(t *testing.T) {
 		in   Inbound
 		key  string
 	}{
-		{"snell v6 psk override", snellV6(`{"psk":"ab"}`), "psk"},
-		{"snell v5 mode injection", snellV5(`{"mode":"unshaped"}`), "mode"},
-		{"snell v6 mode override", snellV6(`{"mode":"unshaped"}`), "mode"},
+		{"psk override", ss(`{"psk":"ab"}`), "psk"},
+		{"mode injection", ss(`{"mode":"unshaped"}`), "mode"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,10 +175,10 @@ func TestR3B8ExtraPskModeRejectedAtSaveAndRender(t *testing.T) {
 }
 
 func TestR3B8BenignExtraStillAllowed(t *testing.T) {
-	// 防过修：sniffing 类合法增量键在 sing-box Snell 入站上仍可保存
+	// 防过修：sniffing 类合法增量键在 sing-box 入站上仍可保存
 	// 与渲染（受保护表补两键不得扩大到整表拒绝）。
-	in := Inbound{Protocol: ProtocolSnell, Port: 6160,
-		Settings: Settings{Password: "psk-aaaaaaaa", SnellVersion: 5},
+	in := Inbound{Protocol: ProtocolShadowsocks, Port: 6160,
+		Settings: Settings{Method: DefaultSSMethod, Password: "AAAAAAAAAAAAAAAAAAAAAA=="},
 		Extra:    json.RawMessage(`{"sniffing":{"enabled":false}}`)}
 	if err := Normalize(TypeSingbox, &in); err != nil {
 		t.Fatalf("benign Extra must stay allowed at save time: %v", err)

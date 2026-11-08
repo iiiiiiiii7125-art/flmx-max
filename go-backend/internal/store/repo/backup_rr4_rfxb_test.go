@@ -123,8 +123,8 @@ func TestImportReconcilesSubscriptionRefs(t *testing.T) {
 
 // RR4-F2-01 回归钉：恢复面验什么存什么——靠 Normalize 生成/愈合才
 // 合法的入站行以愈合形态落库（ENC 空 secret、UUID/Reality 钥空、
-// auth/flow 带空格、SnellVersion 0），不再逐字落备份原文；本身合
-// 法的行保真。
+// auth/flow 带空格），不再逐字落备份原文；本身合
+// 法的行保真。（原 SnellVersion 0 愈合行已随自建 Snell 入站整删删除。）
 func TestImportStoresNormalizedInboundObjects(t *testing.T) {
 	now := time.Now().UnixMilli()
 	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
@@ -156,10 +156,6 @@ func TestImportStoresNormalizedInboundObjects(t *testing.T) {
 					Transport: `{"type":"tcp"}`, Security: `{"type":"reality","sni":"www.example.com"}`,
 					Settings: `{"uuid":"11111111-2222-3333-4444-555555555555","flow":" xtls-rprx-vision "}`,
 					Enabled:  1, CreatedTime: now},
-				// SnellVersion 0：副本靠默认 5 通过。
-				{ID: 13, KernelID: 32, NodeID: 3, Name: "snell", Protocol: "snell", Listen: "0.0.0.0", Port: 24446,
-					Transport: `{"type":"tcp"}`, Security: `{"type":"none"}`,
-					Settings: `{"password":"snellpsk123","snellVersion":0}`, Enabled: 1, CreatedTime: now},
 				// 本身合法：UUID 保真。
 				{ID: 14, KernelID: 31, NodeID: 3, Name: "legal", Protocol: "vless", Listen: "0.0.0.0", Port: 24447,
 					Transport: `{"type":"tcp"}`, Security: `{"type":"none"}`,
@@ -171,8 +167,8 @@ func TestImportStoresNormalizedInboundObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.InboundsImported != 5 {
-		t.Fatalf("InboundsImported = %d, want 5, warnings=%v", result.InboundsImported, result.ImportWarnings)
+	if result.InboundsImported != 4 {
+		t.Fatalf("InboundsImported = %d, want 4, warnings=%v", result.InboundsImported, result.ImportWarnings)
 	}
 
 	landed := func(id int64) (kernel.Settings, kernel.Security) {
@@ -221,11 +217,6 @@ func TestImportStoresNormalizedInboundObjects(t *testing.T) {
 	}
 	if vs.UUID != "11111111-2222-3333-4444-555555555555" {
 		t.Errorf("Vision row UUID must be preserved, got %q", vs.UUID)
-	}
-
-	sn, _ := landed(13)
-	if sn.SnellVersion != 5 {
-		t.Errorf("Snell row version = %d, want healed default 5", sn.SnellVersion)
 	}
 
 	lg, _ := landed(14)

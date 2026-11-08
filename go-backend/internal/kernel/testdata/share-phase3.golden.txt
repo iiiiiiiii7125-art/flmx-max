@@ -222,10 +222,9 @@ hysteria2 = hysteria2, 203.0.113.10, 443, password=hy2-secret, sni=www.bing.com,
 tuic = tuic-v5, 203.0.113.10, 8443, password=tuic-secret, uuid=0b6e4c38-8f0e-4a3e-9d2d-7a1c2b3c4d5e, alpn=h3, sni=www.bing.com, skip-cert-verify=true
 anytls = anytls, 203.0.113.10, 9443, password=anytls-secret, sni=www.bing.com, skip-cert-verify=true
 shadowsocks = ss, 203.0.113.10, 10443, encrypt-method=2022-blake3-aes-128-gcm, password=AAAAAAAAAAAAAAAAAAAAAA==, shadow-tls-password=stls-secret-123, shadow-tls-sni=www.microsoft.com, shadow-tls-version=3
-snell = snell, 203.0.113.10, 6160, psk=psk-cccccccc, version=5, reuse=true, tfo=true, shadow-tls-password=stls-pass-2, shadow-tls-sni=www.microsoft.com, shadow-tls-version=3
 
 [Proxy Group]
-节点选择 = select, hysteria2, tuic, anytls, shadowsocks, snell
+节点选择 = select, hysteria2, tuic, anytls, shadowsocks
 
 [Rule]
 GEOIP,LAN,DIRECT

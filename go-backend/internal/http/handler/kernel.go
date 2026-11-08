@@ -384,7 +384,7 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestedLatest := version == "latest"
-	// Kernels with a closed version list (Snell) store the concrete version
+	// Kernels with a closed version list store the concrete version
 	// so the binary directory and protocol checks agree with what is pinned.
 	resolved, err := kernel.ResolveVersion(info, version)
 	if err != nil {
@@ -400,12 +400,6 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
-	}
-	if k != nil && info.Type == kernel.TypeSnell {
-		if err := h.checkSnellVersions(k.ID, version); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
 	}
 	if k != nil {
 		// F-021: 换版同样要过入站版本门（AnyTLS/ACME/ENC），不能把存量
@@ -1120,9 +1114,6 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		}
 		// R3X-012：R2X-030 全集复查漏项——回填条件按入站形态判定（部分
 		// 更新时 req 形态即旧形态），避免给无关协议/传输塞值。
-		if in.Protocol == kernel.ProtocolSnell && in.Settings.SnellVersion == 0 {
-			in.Settings.SnellVersion = oldIn.Settings.SnellVersion
-		}
 		if in.Protocol == kernel.ProtocolShadowsocks && in.Settings.Method == "" {
 			in.Settings.Method = oldIn.Settings.Method
 		}
@@ -1184,8 +1175,6 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
-	// Snell 双向版本判定已并入 kernelVersionGate（上方同一调用点），
-	// 保存路径不再单设散点检查（S4 移植，原单向检查会放行 6.x+v4/v5）。
 	if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
 		releasePortAlloc()
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -1425,13 +1414,10 @@ func (s portSpan) String() string {
 
 func (s portSpan) overlaps(o portSpan) bool { return s.lo <= o.hi && o.lo <= s.hi }
 
-// inboundSpans lists the ports an inbound needs: its listen port, the
-// loopback backend of a ShadowTLS front, and the port-hopping range.
+// inboundSpans lists the ports an inbound needs: its listen port and
+// the port-hopping range.
 func inboundSpans(in kernel.Inbound) []portSpan {
 	spans := []portSpan{{in.Port, in.Port, "端口"}}
-	if bp := in.Settings.BackendPort; bp > 0 {
-		spans = append(spans, portSpan{bp, bp, "后端端口"})
-	}
 	if lo, hi := in.HopRange(); lo > 0 {
 		spans = append(spans, portSpan{lo, hi, "端口跳跃范围"})
 	}
@@ -2123,8 +2109,6 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	inbounds := make([]kernel.Inbound, 0, len(rows))
 	ports := make([]map[string]interface{}, 0, len(rows))
 	users := h.activeUsersByInbound(time.Now())
-	backendPorts := make(map[int]string)
-	publicPorts := make(map[int]string)
 	// A companion inbound renders only while its origin renders: if the
 	// origin is disabled (or gone), the companion must not keep serving
 	// previously distributed metering links. This render-time gate is
@@ -2162,13 +2146,6 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		if msg := kernelVersionGate(k.KernelType, k.Version, &in); msg != "" {
 			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
-		publicPorts[in.Port] = row.Name
-		if in.Protocol == kernel.ProtocolSnell && in.Security.Type == kernel.SecurityShadowTLS && in.Settings.BackendPort > 0 {
-			if prev, dup := backendPorts[in.Settings.BackendPort]; dup {
-				return nil, "", fmt.Errorf("入站「%s」与「%s」的 ShadowTLS 回环端口同为 %d，下发必然冲突，请删除其一后重试", row.Name, prev, in.Settings.BackendPort)
-			}
-			backendPorts[in.Settings.BackendPort] = row.Name
-		}
 		if in.UserCapable() {
 			in.Users = users[in.ID]
 		}
@@ -2200,7 +2177,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			}
 		}
 		inbounds = append(inbounds, in)
-		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.NetworkOn(k.KernelType)}
+		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
 		if lo, hi := in.HopRange(); lo > 0 {
 			port["hopFrom"], port["hopTo"] = lo, hi
 		}
@@ -2221,11 +2198,6 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			port["allow"] = allow
 		}
 		ports = append(ports, port)
-	}
-	for bp, name := range backendPorts {
-		if owner, clash := publicPorts[bp]; clash {
-			return nil, "", fmt.Errorf("入站「%s」的 ShadowTLS 回环端口 %d 与入站「%s」的监听端口冲突，已拒绝下发", name, bp, owner)
-		}
 	}
 	// 1.7.7（KU5）：给 agent 下发的下载描述不再带面板配置的代理前
 	// 缀——「开启 GitHub 加速」设置已整体移除，proxy 恒为空（直连
@@ -2264,20 +2236,6 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	}
 	if len(rendered.Processes) > 0 {
 		payload["processes"] = rendered.Processes
-	}
-	if len(rendered.Extras) > 0 {
-		extras := make([]map[string]interface{}, 0, len(rendered.Extras))
-		for _, name := range rendered.Extras {
-			if name != kernel.ShadowTLSExtra {
-				return nil, "", fmt.Errorf("未知的附加程序 %s", name)
-			}
-			d, err := kernel.ExtraDownload(kernel.ShadowTLSDownload(), kernel.ShadowTLSVersion, proxy)
-			if err != nil {
-				return nil, "", err
-			}
-			extras = append(extras, map[string]interface{}{"name": name, "version": kernel.ShadowTLSVersion, "download": d})
-		}
-		payload["extras"] = extras
 	}
 	return payload, rendered.Hash, nil
 }
@@ -2623,9 +2581,6 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolAnyTLS && versionBelowStrict(version, 1, 12) {
 		return fmt.Sprintf("AnyTLS 需要 sing-box 1.12 及以上，节点安装的是 %s", version)
 	}
-	if kernelType == kernel.TypeSingbox && in.Protocol == kernel.ProtocolSnell && versionBelowStrict(version, 1, 14) {
-		return fmt.Sprintf("sing-box 内置 Snell 需要 1.14 及以上，节点安装的是 %s", version)
-	}
 	if kernelType == kernel.TypeXray && in.Settings.EncryptionEnabled() && versionBelow3Strict(version, 25, 9, 5) {
 		return fmt.Sprintf("VLESS 加密需要 Xray 25.9.5 及以上，节点安装的是 %s", version)
 	}
@@ -2633,14 +2588,6 @@ func kernelVersionGate(kernelType, version string, in *kernel.Inbound) string {
 	// 换版三处同拦；未知策略字符串也在此拒绝。
 	if err := validateOutboundIPVersion(kernelType, version, in.OutboundIPStrategy); err != nil {
 		return err.Error()
-	}
-	// Snell 独立内核：服务端/客户端版本双向判定（S4 移植）。6.x 只接
-	// v6 客户端，旧单向检查（客户端版本 > 服务端 major 才拦）会放行
-	// 「6.0.0 内核 + v4/v5 入站」这类必然连不上的组合。
-	if kernelType == kernel.TypeSnell && in.Protocol == kernel.ProtocolSnell {
-		if err := snellServes(version, in.Settings.SnellVersion); err != nil {
-			return err.Error()
-		}
 	}
 	return ""
 }
@@ -2721,7 +2668,7 @@ func (h *Handler) inboundRowHasENC(target *model.NodeInbound) bool {
 }
 
 // checkKernelVersionGates refuses a kernel (re)install whose target version
-// would break an existing inbound's version gate（F-021，仿 checkSnellVersions）。
+// would break an existing inbound's version gate（F-021）。
 func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version string) error {
 	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
 	if err != nil {
@@ -2735,18 +2682,9 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		if msg := kernelVersionGate(kernelType, version, &in); msg != "" {
 			return fmt.Errorf("入站 %s 与目标版本不兼容：%s，不能安装 %s", row.Name, msg, version)
 		}
-		// 经 Snell 节点出站（链式/分流目标）的入站同样要求 sing-box
-		// 1.14+；目标入站不在本内核上，gate 看不到，须单独扫描（S4）。
-		if kernelType == kernel.TypeSingbox && versionBelowStrict(version, 1, 14) {
-			for _, id := range outboundTargets(row) {
-				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && t.Protocol == kernel.ProtocolSnell {
-					return fmt.Errorf("入站 %s 经 Snell 节点 %s 出站，需要 sing-box 1.14 及以上，不能安装 %s", row.Name, t.Name, version)
-				}
-			}
-		}
 		// R9X-005：经 Naive 节点出站（链式/分流目标）的入站同样要求
 		// sing-box 1.13+；目标入站不在本内核上，gate 看不到，须单独
-		// 扫描（仿上方 Snell 扫描块）。
+		// 扫描。
 		if kernelType == kernel.TypeSingbox && versionBelowStrict(version, 1, 13) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowIsNaive(t) {
@@ -2756,7 +2694,7 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		}
 		// R2X-007：经 ENC 节点出站（链式/分流目标）的入站同样要求拨号
 		// 内核 Xray 25.9.5+；目标入站不在本内核上，gate 看不到，须单独
-		// 扫描（仿上方 Snell 扫描块）。
+		// 扫描。
 		if kernelType == kernel.TypeXray && versionBelow3Strict(version, 25, 9, 5) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowHasENC(t) {
@@ -2768,101 +2706,11 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 	return nil
 }
 
-// snellMajor returns the protocol major version a Snell binary serves.
-// R2-015（B-sub-02）：旧实现只认 "4."/"6." 前缀，其余形态（"v6.0.0"、
-// 裸 "6"、"10.0.0"）一律默认 5——真 6.x 以这类形态进入会被判成 5.x
-// 口径（放行 v4/v5、误拦 v6）。现按版本家族通例健壮解析：TrimSpace、
-// 剥一个可选的小写 "v" 前缀（与 normalizeKernelVersion 同口径，家族
-// 只认小写 v、不扩），取首段数字。无法解析（空、"latest"、非数字
-// 首段）保守回退 5 并保持既有判定：5 的口径接 v4/v5、对 v6 客户端
-// 明确报错，好过把未知版本当成更新大版本放行。
-func snellMajor(version string) int {
-	v := strings.TrimPrefix(strings.TrimSpace(version), "v")
-	if i := strings.IndexByte(v, '.'); i >= 0 {
-		v = v[:i]
-	}
-	if n, err := strconv.Atoi(v); err == nil && n > 0 {
-		return n
-	}
-	return 5
-}
-
-// snellServes reports whether a snell-server version accepts clients of a
-// protocol version: 5.x also serves v4, while 6.x serves v6 only（S4 移植，
-// 上游同名判定）。
-func snellServes(version string, client int) error {
-	major := snellMajor(version)
-	switch {
-	case major == 6 && client != 6:
-		return fmt.Errorf("Snell %s 只接受 v6 客户端：请把入站改成 v6，或安装 Snell 5.0.1", version)
-	case client > major:
-		return fmt.Errorf("节点安装的是 Snell %s，不支持 v%d 客户端", version, client)
-	}
-	return nil
-}
-
-// checkSnellVersions refuses to install a Snell binary that cannot serve
-// the protocol version an existing inbound advertises to clients.
-func (h *Handler) checkSnellVersions(kernelID int64, version string) error {
-	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
-	if err != nil {
-		return err
-	}
-	for _, row := range rows {
-		in, err := inboundFromModel(row)
-		if err == nil {
-			if serr := snellServes(version, in.Settings.SnellVersion); serr != nil {
-				return fmt.Errorf("入站 %s：%v，不能安装 %s", row.Name, serr, version)
-			}
-		}
-	}
-	return nil
-}
-
 // applyKernel pushes the current configuration of a kernel to its node. An
 // offline node is not an error for persistence: the kernel stays pending and
 // is reconciled when the agent reconnects.
 func (h *Handler) applyKernel(kernelID int64, install bool) error {
 	return h.applyKernelWith(kernelID, install, nil)
-}
-
-// healSnellPoisonedRows is the cleanup/migration path for R14-A5-08
-// poisoned rows: a Snell-kernel inbound carrying OutboundID / SplitRules
-// can never render (renderSnell rejects the whole kernel), so without
-// healing the poisoned row blocks every later deploy of that kernel —
-// including deploys of unrelated inbounds — until someone clears it by
-// hand. Save-time validation (validateChainVersion) refuses the
-// combination for new saves, but rows that landed before the guard
-// (backup import / direct DB writes) are healed here, at deploy time,
-// to the only servable shape (direct): the routing columns are cleared
-// in the DB and the healing is logged by inbound name. The inbound
-// itself keeps serving; only its (never-effective) chained exit is
-// dropped. Returns the healed inbound names (nil when nothing to heal).
-// Deliberately scoped to the deploy entry (applyKernelWith), not the
-// payload builder: buildKernelApplyPayload is also called by the
-// read-only metering hash check (kernelConfigApplied), which must not
-// mutate rows.
-func (h *Handler) healSnellPoisonedRows(k *model.NodeKernel) []string {
-	if h == nil || h.repo == nil || k == nil || k.KernelType != kernel.TypeSnell {
-		return nil
-	}
-	rows, err := h.repo.ListNodeInboundsByKernel(k.ID)
-	if err != nil {
-		return nil
-	}
-	var healed []string
-	for _, row := range rows {
-		if row.OutboundID == 0 && strings.TrimSpace(row.SplitRules) == "" {
-			continue
-		}
-		if err := h.repo.ClearNodeInboundRouting(row.ID, time.Now().UnixMilli()); err != nil {
-			log.Printf("snell poisoned row heal failed kernel_id=%d inbound_id=%d err=%v", k.ID, row.ID, err)
-			continue
-		}
-		healed = append(healed, row.Name)
-		log.Printf("snell poisoned row healed kernel_id=%d inbound_id=%d name=%q: Snell 内核不支持链式出站/分流，已清除其出站与分流配置改直连", k.ID, row.ID, row.Name)
-	}
-	return healed
 }
 
 func (h *Handler) applyKernelWith(kernelID int64, install bool, realmOverride map[int64]bool) error {
@@ -2895,13 +2743,6 @@ func (h *Handler) applyKernelWith(kernelID int64, install bool, realmOverride ma
 				log.Printf("kernel apply: resolve latest for kernel_id=%d type=%s failed, keeping %q: %v", k.ID, k.KernelType, k.Version, rerr)
 			}
 		}
-	}
-	// R14-A5-08：毒化行清理——下发前先把 Snell 内核上历史毒化行的
-	// 出站/分流清为直连，否则 renderSnell 拒绝整单、后续一切下发
-	// 都被一行毒化行阻塞。清理失败的行留待下次下发重试（heal 内
-	// 已记日志），本次仍按原行渲染、由渲染错误如实返回。
-	if healed := h.healSnellPoisonedRows(k); len(healed) > 0 {
-		log.Printf("kernel apply healed snell poisoned rows kernel_id=%d inbounds=%v", k.ID, healed)
 	}
 	payload, hash, err := h.buildKernelApplyPayloadWith(k, realmOverride)
 	now := time.Now().UnixMilli()

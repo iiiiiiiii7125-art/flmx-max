@@ -9,9 +9,9 @@ import (
 // position, plus its fallthrough twin closing the list — is
 // asserted over the mechanically derived matrix of the sing-box
 // render surface, not just the audited cases:
-//   - protocols: the nine sing-box entries of capabilities.go
+//   - protocols: the eight sing-box entries of capabilities.go
 //     (Hysteria2, TUIC, AnyTLS, Naive, VLESS, VMess, Trojan,
-//     Shadowsocks, Snell), matching the singboxInbounds switch 1:1;
+//     Shadowsocks), matching the singboxInbounds switch 1:1;
 //   - forms per protocol: plain, chained, split (a private-CIDR
 //     direct split rule — the bypass shape), counted users where the
 //     protocol supports them;
@@ -62,15 +62,12 @@ func g1MatrixInbounds() []Inbound {
 		{ID: 2, Protocol: ProtocolVMess, Port: 443, Settings: Settings{UUID: uuid}},
 		{ID: 3, Protocol: ProtocolTrojan, Port: 443, Settings: Settings{Password: "p"}, Security: tls},
 		{ID: 4, Protocol: ProtocolShadowsocks, Port: 443, Settings: Settings{Method: "aes-128-gcm", Password: "x"}},
-		{ID: 5, Protocol: ProtocolSnell, Port: 443, Settings: Settings{Password: "psk-aaaaaaaa"}},
 		{ID: 6, Protocol: ProtocolHysteria2, Port: 443, Settings: Settings{Password: "p"}, Security: tls},
 		{ID: 7, Protocol: ProtocolTUIC, Port: 443, Settings: Settings{UUID: uuid, Password: "p"}, Security: tls},
 		{ID: 8, Protocol: ProtocolAnyTLS, Port: 443, Settings: Settings{Password: "p"}, Security: tls},
 		{ID: 9, Protocol: ProtocolNaive, Port: 443, Settings: Settings{Username: "u", Password: "p"}, Security: tls},
 		// ShadowTLS-fronted forms (inbound detour to a loopback backend).
 		{ID: 10, Protocol: ProtocolShadowsocks, Port: 443, Settings: Settings{Method: "aes-128-gcm", Password: "x"},
-			Security: Security{Type: SecurityShadowTLS, SNI: "www.example.com", ShadowTLSPassword: "pw"}},
-		{ID: 11, Protocol: ProtocolSnell, Port: 443, Settings: Settings{Password: "psk-cccccccc"},
 			Security: Security{Type: SecurityShadowTLS, SNI: "www.example.com", ShadowTLSPassword: "pw"}},
 	}
 }

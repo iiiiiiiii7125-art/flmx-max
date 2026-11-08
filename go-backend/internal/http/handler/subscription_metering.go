@@ -56,7 +56,7 @@ const meteringReconcileInterval = 30 * time.Second
 // subscription metering at all: Shadowsocks with a 2022 method and no
 // ShadowTLS front (the front would need its own companion pair; v1
 // boundary). Legacy SS methods have no multi-user mode in either
-// kernel, and Snell has no user concept at all.
+// kernel.
 func ssMeteringEligible(in kernel.Inbound) bool {
 	return in.Protocol == kernel.ProtocolShadowsocks &&
 		kernel.SS2022KeyLen(in.Settings.Method) > 0 &&

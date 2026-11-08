@@ -553,6 +553,11 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateV5UsernameCasefoldUnique(db); err != nil {
 			return err
 		}
+		// DEV-RM-SNELL v1（2.1.0）: 存量 Snell 入站强制禁用、Snell
+		// 内核行清已装状态（双后端同口径）。
+		if err := migrateV1SnellInboundRemoved(db); err != nil {
+			return err
+		}
 		// FIX-132（D3-04）: 存量 share 的 relay 凭据一次性回填。
 		backfillPeerShareRelayCredentials(db)
 		return nil
@@ -609,6 +614,12 @@ func autoMigrateAll(db *gorm.DB) error {
 	// K10 v5（B02-003）: 用户名大小写折叠唯一索引 (LOWER("user"))；
 	// 存量折叠重复时按 D23 跳过并逐组点名，不阻塞启动。
 	if err := migrateV5UsernameCasefoldUnique(db); err != nil {
+		return err
+	}
+
+	// DEV-RM-SNELL v1（2.1.0）: 存量 Snell 入站强制禁用、Snell
+	// 内核行清已装状态（数据行保留，处置口径见 migration_rmsnell_v1.go）。
+	if err := migrateV1SnellInboundRemoved(db); err != nil {
 		return err
 	}
 

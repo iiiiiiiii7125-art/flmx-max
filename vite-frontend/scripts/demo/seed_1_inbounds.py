@@ -1,9 +1,8 @@
 """Step 1: nodes, kernels, inbounds and imported nodes (see README.md).
 
 Adapted to FLMX: the seeded panel's admin starts as admin@user /
-admin@user and is forced to change it on first login (M-05), node IPs
-stay in the documentation ranges, and one extra Snell v6 kernel+inbound
-shows the sing-box Snell port (Lane B).
+admin@user and is forced to change it on first login (M-05), and node
+IPs stay in the documentation ranges.
 """
 import json, sqlite3, sys, time, urllib.request, urllib.parse, base64
 
@@ -39,8 +38,8 @@ for i, (name, ip) in enumerate(NODES):
       (name, f"demo-secret-{i}", ip, ip, now - 86400000 * (30 - i), now, i))
     ids[name] = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 kernels = {}
-for node, kt, ver in [("香港 HKT", "xray", "25.10.15"), ("日本 东京", "xray", "25.10.15"), ("日本 东京", "snell", "5.0.1"),
-                      ("美国 圣何塞", "singbox", "1.14.3"), ("新加坡", "singbox", "1.14.3"), ("新加坡", "snell", "6.0.0")]:
+for node, kt, ver in [("香港 HKT", "xray", "25.10.15"), ("日本 东京", "xray", "25.10.15"),
+                      ("美国 圣何塞", "singbox", "1.14.3"), ("新加坡", "singbox", "1.14.3")]:
     x("INSERT INTO node_kernel(node_id, kernel_type, version, status, created_time, updated_time) VALUES(?,?,?,'pending',?,?)",
       (ids[node], kt, ver, now, now))
     kernels[(node, kt)] = db.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -58,8 +57,10 @@ INB = [
                           "security": {"type": "none"}}),
     ("日本 东京", "xray", {"name": "东京 Reality", "protocol": "vless", "port": 443, "settings": {"flow": "xtls-rprx-vision"},
                           "security": {"type": "reality", "sni": "www.apple.com"}}),
-    ("日本 东京", "snell", {"name": "东京 Snell", "protocol": "snell", "port": 6160, "settings": {"snellVersion": 5}}),
-    ("新加坡", "snell", {"name": "新加坡 Snell v6", "protocol": "snell", "port": 6161, "settings": {"snellVersion": 6}}),
+    ("日本 东京", "xray", {"name": "东京 Shadowsocks", "protocol": "shadowsocks", "port": 6160,
+                          "settings": {"method": "2022-blake3-aes-128-gcm"}}),
+    ("新加坡", "singbox", {"name": "新加坡 AnyTLS", "protocol": "anytls", "port": 6161,
+                          "security": {"type": "tls", "sni": "www.bing.com", "certMode": "self"}}),
     ("美国 圣何塞", "singbox", {"name": "圣何塞 Hysteria2", "protocol": "hysteria2", "port": 443, "settings": {"portHopping": "40000-50000"},
                               "transport": {"type": "quic"}, "security": {"type": "tls", "sni": "www.bing.com", "certMode": "self"}}),
     ("美国 圣何塞", "singbox", {"name": "圣何塞 AnyTLS", "protocol": "anytls", "port": 8443,

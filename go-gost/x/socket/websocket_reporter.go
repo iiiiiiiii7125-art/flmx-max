@@ -1526,7 +1526,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Type = "UninstallAgentResponse"
 		// needSaveConfig = false (默认值)
 
-	// 代理内核（Xray / sing-box / Snell）相关命令，由 kernel.Manager 自行串行化
+	// 代理内核（Xray / sing-box）相关命令，由 kernel.Manager 自行串行化
 	case "KernelApply", "KernelControl", "KernelStatus":
 		response.Type = cmd.Type + "Response"
 		response.Data, err = handleKernelCommandContext(ctx, cmd.Type, cmd.Data)

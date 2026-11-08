@@ -21,7 +21,7 @@ func TestCheckSettingsConditionsPoisonCells(t *testing.T) {
 		{"enc on sing-box", TypeSingbox, Inbound{Protocol: ProtocolVLESS, Port: 443,
 			Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityNone},
 			Settings: Settings{EncryptionAuth: EncryptionAuthMLKEM}}, "VLESS 加密仅支持 Xray 内核的 VLESS 入站"},
-		{"enc on snell kernel", TypeSnell, Inbound{Protocol: ProtocolVLESS, Port: 443,
+		{"enc on sing-box kernel x25519", TypeSingbox, Inbound{Protocol: ProtocolVLESS, Port: 443,
 			Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityNone},
 			Settings: Settings{EncryptionAuth: EncryptionAuthX25519}}, "VLESS 加密仅支持 Xray 内核的 VLESS 入站"},
 		{"enc on xray vless passes", TypeXray, Inbound{Protocol: ProtocolVLESS, Port: 443,
@@ -30,7 +30,7 @@ func TestCheckSettingsConditionsPoisonCells(t *testing.T) {
 		{"connidle on sing-box", TypeSingbox, Inbound{Protocol: ProtocolVLESS, Port: 443,
 			Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityNone},
 			ConnIdleSeconds: 300}, "空闲超时（connIdle）仅支持 Xray 内核"},
-		{"connidle on snell", TypeSnell, Inbound{Protocol: ProtocolSnell, Port: 443,
+		{"connidle unlimited on sing-box", TypeSingbox, Inbound{Protocol: ProtocolVLESS, Port: 443,
 			Security: Security{Type: SecurityNone}, ConnIdleSeconds: -1}, "空闲超时（connIdle）仅支持 Xray 内核"},
 		{"connidle on xray passes", TypeXray, Inbound{Protocol: ProtocolVLESS, Port: 443,
 			Transport: Transport{Type: TransportTCP}, Security: Security{Type: SecurityNone},
@@ -75,7 +75,7 @@ func TestCheckSettingsConditionsPoisonCells(t *testing.T) {
 func TestConnIdleRejectionCopyIsKernelNeutral(t *testing.T) {
 	in := Inbound{Protocol: ProtocolVLESS, Port: 443, Transport: Transport{Type: TransportTCP},
 		Security: Security{Type: SecurityNone}, ConnIdleSeconds: 300}
-	for _, kt := range []string{TypeSingbox, TypeSnell} {
+	for _, kt := range []string{TypeSingbox, TypeRealm} {
 		err := CheckSettingsConditions(kt, &in)
 		if err == nil {
 			t.Fatalf("%s: connIdle must be rejected", kt)

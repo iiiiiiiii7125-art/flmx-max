@@ -85,16 +85,6 @@ func b7Rows() []b7PresenceRow {
 			expect: "myuser123",
 		},
 		{
-			name:       "settings.snellVersion",
-			kernelType: kernel.TypeSingbox,
-			seed: kernel.Inbound{Protocol: kernel.ProtocolSnell, Port: 24443,
-				Security: kernel.Security{Type: kernel.SecurityNone},
-				Settings: kernel.Settings{Password: "psk-aaaaaaaa", SnellVersion: 4}},
-			clear:  func(req *inboundRequest) { req.Settings.SnellVersion = 0 },
-			get:    func(in kernel.Inbound) string { return fmt.Sprint(in.Settings.SnellVersion) },
-			expect: "4",
-		},
-		{
 			name:       "security.realityPrivateKey",
 			kernelType: kernel.TypeXray,
 			seed: kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 24443,
@@ -283,14 +273,6 @@ func TestR3B7CreateStillGenerates(t *testing.T) {
 		Protocol: kernel.ProtocolShadowsocks, Port: 25444})
 	if ss.Settings.Method != kernel.DefaultSSMethod {
 		t.Fatalf("create SS with empty method must still default, got %q", ss.Settings.Method)
-	}
-
-	snell := create("b7-c-snell", inboundRequest{NodeID: nodeID, KernelType: kernel.TypeSingbox,
-		Protocol: kernel.ProtocolSnell, Port: 25445,
-		Security: kernel.Security{Type: kernel.SecurityNone},
-		Settings: kernel.Settings{Password: "psk-aaaaaaaa"}})
-	if snell.Settings.SnellVersion != kernel.DefaultSnellVersion {
-		t.Fatalf("create snell with version 0 must still default, got %d", snell.Settings.SnellVersion)
 	}
 
 	stls := create("b7-c-stls", inboundRequest{NodeID: nodeID, KernelType: kernel.TypeSingbox,

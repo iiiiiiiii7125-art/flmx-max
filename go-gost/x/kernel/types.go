@@ -1,4 +1,4 @@
-// Package kernel runs third-party proxy kernels (Xray, sing-box, Snell, ...)
+// Package kernel runs third-party proxy kernels (Xray, sing-box, ...)
 // next to the agent. The panel renders every configuration file; this package
 // only installs binaries, writes files, supervises processes and counts
 // per-inbound traffic with nftables.
@@ -34,8 +34,7 @@ type GitHubRelease struct {
 	Proxy string `json:"proxy"` // retired (KU4, 1.7.7): parsed for wire compatibility but ignored — download routing is probe-selected locally from built-in candidates
 }
 
-// ExtraBinary is a helper program a kernel needs next to its main binary
-// (e.g. shadow-tls in front of Snell).
+// ExtraBinary is a helper program a kernel needs next to its main binary.
 type ExtraBinary struct {
 	Name     string    `json:"name"`
 	Version  string    `json:"version"`
@@ -75,8 +74,8 @@ type ApplyRequest struct {
 	Download *Download `json:"download"`
 	Files    []File    `json:"files"`
 	Args     []string  `json:"args"`
-	// Processes, when set, replaces Args with several processes (Snell runs
-	// one per inbound, plus shadow-tls fronts).
+	// Processes, when set, replaces Args with several processes (a
+	// per-inbound kernel runs one process per inbound).
 	Processes []ProcessSpec `json:"processes,omitempty"`
 	Extras    []ExtraBinary `json:"extras,omitempty"`
 	Hash      string        `json:"hash"`
@@ -136,7 +135,6 @@ type adapter struct {
 var adapters = map[string]adapter{
 	"xray":    {versionArgs: []string{"version"}},
 	"singbox": {versionArgs: []string{"version"}},
-	"snell":   {versionArgs: []string{"-v"}},
 	// realm runs the forwards of realm-engine tunnels.
 	"realm": {versionArgs: []string{"-v"}, fixFile: realmFixFile},
 }

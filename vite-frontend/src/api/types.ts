@@ -819,9 +819,6 @@ export interface InboundSettings {
   encryptionSecret?: string;
   password?: string;
   method?: string;
-  snellVersion?: number;
-  /** Snell v6 traffic shaping: unset (default) or "unshaped". */
-  snellMode?: string;
   masquerade?: string;
   backendPort?: number;
   portHopping?: string;

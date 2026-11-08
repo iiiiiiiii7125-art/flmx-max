@@ -101,7 +101,7 @@ func singboxChainOutboundsWith(via Endpoint, tag string, mark int64, snell, naiv
 }
 
 // singboxInboundTags lists the tags a panel inbound's connections carry; a
-// ShadowTLS front hands them to its loopback Shadowsocks / Snell backend.
+// ShadowTLS front hands them to its loopback Shadowsocks backend.
 func singboxInboundTags(in Inbound) []string {
 	if backend := singboxShadowTLSBackendTag(in); backend != "" {
 		return []string{in.Tag(), backend}
@@ -118,8 +118,6 @@ func singboxShadowTLSBackendTag(in Inbound) string {
 	switch in.Protocol {
 	case ProtocolShadowsocks:
 		return in.Tag() + "-ss"
-	case ProtocolSnell:
-		return in.Tag() + "-snell"
 	}
 	return ""
 }

@@ -23,7 +23,7 @@ const NOTIFY_EVENTS = [
   {
     key: "kernel_error",
     label: "内核运行出错",
-    description: "Xray / sing-box / Snell 报错时提醒",
+    description: "Xray / sing-box 报错时提醒",
   },
   {
     key: "node_expiry",

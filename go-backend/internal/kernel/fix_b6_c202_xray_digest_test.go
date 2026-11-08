@@ -58,11 +58,4 @@ func TestFixB6EveryKernelSpecHasStrongAnchor(t *testing.T) {
 			t.Fatalf("%s spec relies on a co-located checksum file: %v", info.Type, spec)
 		}
 	}
-	st, err := ExtraDownload(ShadowTLSDownload(), ShadowTLSVersion, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := st["sha256"]; !ok {
-		t.Fatalf("shadow-tls spec lost its pinned anchor: %v", st)
-	}
 }

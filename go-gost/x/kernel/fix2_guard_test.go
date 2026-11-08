@@ -14,7 +14,7 @@ import (
 // postureStub models the live nft table for the R2-002 test: loads
 // rebuild it (clearing any tamper), listings render it, and both the
 // load failure and the out-of-band tamper are under the test's
-// control. The tamper matters: syncGuard's content fingerprint
+// control. The tamper matters: the sync's content fingerprint
 // short-circuits an unchanged, verified table, so a gate call only
 // reaches the load — and can only fail — once the live content no
 // longer matches.
@@ -254,108 +254,4 @@ func TestControlStartReportsStartFailure(t *testing.T) {
 	if !st.Enabled {
 		t.Fatal("Enabled must stay persisted so Restore retries the start (self-heal semantics unchanged)")
 	}
-}
-
-// R2-030: Snell's guard posture and the guard-user credential drop
-// used to key on the rendered process NAME ("snell-" prefix), so a
-// panel-side rename would silently disarm both, and the fallback
-// single-process shape (Processes empty) was never recognised. The
-// predicates now key on the kernel type and on which binary a spec
-// runs: the main binary (Bin == "") of a snell kernel IS
-// snell-server; extra-binary specs are fronts.
-func TestSnellGuardKeysOnTypeAndBinary(t *testing.T) {
-	cases := []struct {
-		name string
-		req  ApplyRequest
-		want bool
-	}{
-		{"fallback single process", ApplyRequest{Type: "snell", Enabled: true}, true},
-		{"renamed server spec", ApplyRequest{Type: "snell", Enabled: true,
-			Processes: []ProcessSpec{{Name: "server-7", Bin: ""}}}, true},
-		{"classic rendered pair", ApplyRequest{Type: "snell", Enabled: true,
-			Processes: []ProcessSpec{{Name: "snell-7", Bin: ""}, {Name: "stls-7", Bin: "shadow-tls"}}}, true},
-		{"front only", ApplyRequest{Type: "snell", Enabled: true,
-			Processes: []ProcessSpec{{Name: "stls-7", Bin: "shadow-tls"}}}, false},
-		{"front name on main binary is no server", ApplyRequest{Type: "snell", Enabled: true,
-			Processes: []ProcessSpec{{Name: "stls-7", Bin: ""}}}, false},
-		{"server name on extra binary is no server", ApplyRequest{Type: "snell", Enabled: true,
-			Processes: []ProcessSpec{{Name: "snell-7", Bin: "shadow-tls"}}}, false},
-		{"disabled", ApplyRequest{Type: "snell", Enabled: false,
-			Processes: []ProcessSpec{{Name: "snell-7", Bin: ""}}}, false},
-		{"other kernel type", ApplyRequest{Type: "xray", Enabled: true,
-			Processes: []ProcessSpec{{Name: "snell-7", Bin: ""}}}, false},
-	}
-	for _, c := range cases {
-		if got := reqHasSnellServer(c.req); got != c.want {
-			t.Errorf("%s: reqHasSnellServer = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-// R2-030 wiring: startProcesses must drop the credential exactly on
-// the main-binary processes of a snell instance, whatever their
-// rendered names are, and on the fallback shape too.
-func TestStartProcessesDropsCredOnMainBinarySpecs(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses a shell script as fake kernel")
-	}
-	stubWhitelistNft(t)
-	m := NewManager(t.TempDir())
-	t.Cleanup(m.Shutdown)
-	m.mu.Lock()
-	m.snellUID, m.snellGID = 65534, 65534
-	m.mu.Unlock()
-	marker := filepath.Join(t.TempDir(), "starts")
-	placeMarkerKernel(t, m, "snell", "4.1.1", "snell-server", marker)
-	placeMarkerKernel(t, m, "snell", "4.1.1", "shadow-tls", marker)
-	if err := os.MkdirAll(m.runDir("snell"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	newInst := func(req ApplyRequest, bins map[string]string) *instance {
-		inst := &instance{logs: &logRing{}, req: req, bins: bins}
-		m.mu.Lock()
-		m.instances[req.Type] = inst
-		m.mu.Unlock()
-		return inst
-	}
-
-	// Renamed server (main binary) + front (extra binary).
-	inst := newInst(ApplyRequest{
-		Type: "snell", Version: "4.1.1", Enabled: true,
-		Processes: []ProcessSpec{
-			{Name: "server-7", Bin: "", Args: []string{"-c", "x.conf"}},
-			{Name: "stls-7", Bin: "shadow-tls", Args: []string{"server"}},
-		},
-	}, map[string]string{"": filepath.Join(m.binDir("snell", "4.1.1"), "snell-server"),
-		"shadow-tls": filepath.Join(m.binDir("snell", "4.1.1"), "shadow-tls")})
-	m.startProcesses(inst)
-	m.mu.Lock()
-	procs := inst.procs
-	m.mu.Unlock()
-	if len(procs) != 2 {
-		t.Fatalf("want 2 processes, got %d", len(procs))
-	}
-	if procs[0].credUID != 65534 {
-		t.Fatalf("main-binary snell process must run as the guard user regardless of its name, credUID=%d", procs[0].credUID)
-	}
-	if procs[1].credUID != 0 {
-		t.Fatalf("front process must keep the agent identity, credUID=%d", procs[1].credUID)
-	}
-	m.stopProcesses(inst)
-
-	// Fallback shape: no explicit processes, the single main-binary
-	// process is the server.
-	inst2 := newInst(ApplyRequest{
-		Type: "snell", Version: "4.1.1", Enabled: true,
-		Args: []string{"-c", "x.conf"},
-	}, map[string]string{"": filepath.Join(m.binDir("snell", "4.1.1"), "snell-server")})
-	m.startProcesses(inst2)
-	m.mu.Lock()
-	procs2 := inst2.procs
-	m.mu.Unlock()
-	if len(procs2) != 1 || procs2[0].credUID != 65534 {
-		t.Fatalf("fallback single process must be treated as the server, procs=%+v", procs2)
-	}
-	m.stopProcesses(inst2)
 }

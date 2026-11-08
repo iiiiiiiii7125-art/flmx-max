@@ -62,7 +62,7 @@ export default function NodeHubPage() {
       <PageHeader
         description={
           tab === "kernels"
-            ? "节点上安装的 Xray / sing-box / Snell 等内核，落地的入站跑在内核上"
+            ? "节点上安装的 Xray / sing-box 等内核，落地的入站跑在内核上"
             : "装了 agent 的服务器：实时状态、监控和管理都在这里"
         }
         // The kernel tab has its own 安装内核 button.

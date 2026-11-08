@@ -42,7 +42,7 @@
 //                                    cells (code -1, data null) and no
 //                                    gate covered the key, so the demo
 //                                    kernel dialog showed the error
-//                                    verbatim. snell / realm recordings
+//                                    verbatim. realm recordings
 //                                    under the same key are static lists
 //                                    and stay out of this check's scope.
 //
@@ -77,7 +77,7 @@ const CHECKS = [
 ];
 
 // kernel/versions recordings whose payload comes from the live GitHub
-// release list (R8X-006). snell / realm use pinned static lists.
+// release list (R8X-006). realm uses a pinned static list.
 const VERSION_LIST_TYPES = ["xray", "singbox"];
 
 // Universal recorded-code gate (R9 BINFRA, J O-1 通则): per-cell

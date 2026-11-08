@@ -77,8 +77,6 @@ export interface InboundForm {
   encryptionSecret: string;
   password: string;
   method: string;
-  snellVersion: string;
-  snellMode: string;
   masquerade: string;
   backendPort: number;
   portHopping: string;
@@ -235,46 +233,6 @@ export const PRESETS: Preset[] = [
     needsDomain: true,
     certMode: "acme",
   },
-  {
-    key: "snell",
-    label: "Snell",
-    description: "Surge 专用协议",
-    kernel: "snell",
-    protocol: "snell",
-    transport: "tcp",
-    security: "none",
-  },
-  {
-    key: "snell-shadowtls",
-    label: "Snell + ShadowTLS",
-    description: "Surge 专用，握手伪装成访问真实网站",
-    kernel: "snell",
-    protocol: "snell",
-    transport: "tcp",
-    security: "shadowtls",
-  },
-  // F-L3-03: sing-box 目录同样支持 Snell（内置服务端，≥1.14，传输/安全
-  // 组合与 Snell 内核面逐字一致），此前预设只挂 Snell 内核、sing-box
-  // 只能手选协议到达。此处补同名预设入口，供给面与目录对齐；版本门
-  // （sing-box ≥1.14）仍由后端保存期校验并点名拒绝。
-  {
-    key: "snell-singbox",
-    label: "Snell",
-    description: "Surge 专用协议（sing-box 内置，需 sing-box 1.14+）",
-    kernel: "singbox",
-    protocol: "snell",
-    transport: "tcp",
-    security: "none",
-  },
-  {
-    key: "snell-shadowtls-singbox",
-    label: "Snell + ShadowTLS",
-    description: "Surge 专用，握手伪装成访问真实网站（sing-box 内置，需 1.14+）",
-    kernel: "singbox",
-    protocol: "snell",
-    transport: "tcp",
-    security: "shadowtls",
-  },
 ];
 
 /** Presets the given kernel can serve with its exact transport + security. */
@@ -313,8 +271,6 @@ export function emptyForm(
     encryptionSecret: "",
     password: "",
     method: caps?.defaults.ssMethod ?? "2022-blake3-aes-128-gcm",
-    snellVersion: "",
-    snellMode: "",
     masquerade: "",
     backendPort: 0,
     portHopping: "",
@@ -417,10 +373,6 @@ export function formFromItem(item: InboundApiItem): InboundForm {
     encryptionSecret: item.settings.encryptionSecret ?? "",
     password: item.settings.password ?? "",
     method: item.settings.method ?? "",
-    snellVersion: item.settings.snellVersion
-      ? String(item.settings.snellVersion)
-      : "",
-    snellMode: item.settings.snellMode ?? "",
     masquerade: item.settings.masquerade ?? "",
     backendPort: item.settings.backendPort ?? 0,
     portHopping: item.settings.portHopping ?? "",
@@ -496,7 +448,6 @@ export const passwordProtocols = [
   "hysteria2",
   "tuic",
   "anytls",
-  "snell",
   "naive",
 ];
 
@@ -548,14 +499,6 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
           : undefined,
       password: usesPassword ? form.password.trim() : undefined,
       method: form.protocol === "shadowsocks" ? form.method : undefined,
-      snellVersion:
-        form.protocol === "snell" && form.snellVersion
-          ? Number(form.snellVersion)
-          : undefined,
-      snellMode:
-        form.protocol === "snell" && form.snellVersion === "6"
-          ? form.snellMode || undefined
-          : undefined,
       masquerade:
         form.protocol === "hysteria2" ? form.masquerade.trim() : undefined,
       backendPort: form.backendPort || undefined,
@@ -666,9 +609,6 @@ export function describeInbound(item: InboundApiItem): string {
 
   if (!implicitTransport.includes(item.protocol)) {
     parts.push(TRANSPORT_LABELS[item.transport.type] ?? item.transport.type);
-  }
-  if (item.protocol === "snell" && item.settings.snellVersion) {
-    parts[0] = `Snell v${item.settings.snellVersion}`;
   }
   if (item.security.type && item.security.type !== "none") {
     parts.push(SECURITY_LABELS[item.security.type] ?? item.security.type);

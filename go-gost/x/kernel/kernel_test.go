@@ -463,13 +463,12 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 		t.Skip("shell scripts")
 	}
 	stubNft(t)
-	stubSnellGuardIdentity(t)
-	main := []byte("#!/bin/sh\nif [ \"$1\" = \"-v\" ]; then echo 'snell-server v5.0.1'; exit 0; fi\necho \"main $2\"\nexec sleep 300\n")
+	main := []byte("#!/bin/sh\nif [ \"$1\" = \"version\" ]; then echo 'sing-box version 1.12.0'; exit 0; fi\necho \"main $2\"\nexec sleep 300\n")
 	extra := []byte("#!/bin/sh\necho \"front $*\"\nexec sleep 300\n")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/main.zip":
-			_, _ = w.Write(zipWith(t, map[string]string{"snell-server": string(main)}))
+			_, _ = w.Write(zipWith(t, map[string]string{"sing-box": string(main)}))
 		case "/front":
 			_, _ = w.Write(extra)
 		}
@@ -486,12 +485,12 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 
 	mk := func(withFront bool, hash string) ApplyRequest {
 		req := ApplyRequest{
-			Type: "snell", Version: "5.0.1",
-			Download: &Download{URL: srv.URL + "/main.zip", Archive: "zip", BinName: "snell-server", ArchMap: arch, SHA256: map[string]string{"test": sha(body)}},
-			Files:    []File{{Name: "snell-1.conf", Content: "a"}, {Name: "snell-2.conf", Content: "b"}},
+			Type: "singbox", Version: "1.12.0",
+			Download: &Download{URL: srv.URL + "/main.zip", Archive: "zip", BinName: "sing-box", ArchMap: arch, SHA256: map[string]string{"test": sha(body)}},
+			Files:    []File{{Name: "sb-1.json", Content: "a"}, {Name: "sb-2.json", Content: "b"}},
 			Processes: []ProcessSpec{
-				{Name: "snell-1", Args: []string{"-c", "{RUN_DIR}/snell-1.conf"}},
-				{Name: "snell-2", Args: []string{"-c", "{RUN_DIR}/snell-2.conf"}},
+				{Name: "sb-1", Args: []string{"-c", "{RUN_DIR}/sb-1.json"}},
+				{Name: "sb-2", Args: []string{"-c", "{RUN_DIR}/sb-2.json"}},
 			},
 			Hash: hash, Enabled: true,
 		}
@@ -508,11 +507,11 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if !st.Running || !strings.Contains(st.Version, "5.0.1") {
+	if !st.Running || !strings.Contains(st.Version, "1.12.0") {
 		t.Fatalf("state: %+v", st)
 	}
-	logs := strings.Join(m.Status("snell").Kernels[0].Logs, "\n")
-	for _, want := range []string{"[snell-1] main ", "[snell-2] main ", "[stls-2] front --v3 server"} {
+	logs := strings.Join(m.Status("singbox").Kernels[0].Logs, "\n")
+	for _, want := range []string{"[sb-1] main ", "[sb-2] main ", "[stls-2] front --v3 server"} {
 		if !strings.Contains(logs, want) {
 			t.Fatalf("missing %q in logs:\n%s", want, logs)
 		}
@@ -523,7 +522,7 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 		t.Fatalf("reapply: %+v %v", st, err)
 	}
 	m.mu.Lock()
-	n := len(m.instances["snell"].procs)
+	n := len(m.instances["singbox"].procs)
 	m.mu.Unlock()
 	if n != 2 {
 		t.Fatalf("want 2 processes, got %d", n)

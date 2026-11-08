@@ -19,15 +19,8 @@ type Settings struct {
 	Password string `json:"password,omitempty"`
 	Method   string `json:"method,omitempty"`
 
-	// SnellVersion is the protocol version clients use (4, 5 or 6).
-	SnellVersion int `json:"snellVersion,omitempty"`
-	// SnellMode is Snell v6's traffic shaping: "" (default) or "unshaped";
-	// clients must use the same.
-	SnellMode string `json:"snellMode,omitempty"`
 	// Masquerade is the site Hysteria2 serves to non-clients (optional URL).
 	Masquerade string `json:"masquerade,omitempty"`
-	// BackendPort is the loopback port a ShadowTLS-fronted Snell listens on.
-	BackendPort int `json:"backendPort,omitempty"`
 	// PortHopping is a UDP range ("20000-30000") the agent redirects to the
 	// Hysteria2 port so clients can hop between ports.
 	PortHopping string `json:"portHopping,omitempty"`
@@ -167,15 +160,6 @@ func (in Inbound) Tag() string {
 	return fmt.Sprintf("in-%d", in.ID)
 }
 
-// NetworkOn is Network for the kernel serving the inbound: sing-box's Snell
-// has no QUIC proxy mode, so it only listens on TCP.
-func (in Inbound) NetworkOn(kernelType string) string {
-	if in.Protocol == ProtocolSnell && kernelType == TypeSingbox {
-		return "tcp"
-	}
-	return in.Network()
-}
-
 // Network reports which L4 protocols the inbound listens on, used for nft
 // traffic counters.
 func (in Inbound) Network() string {
@@ -189,13 +173,6 @@ func (in Inbound) Network() string {
 		return "tcp,udp"
 	case ProtocolNaive:
 		// HTTP/2 over TCP, plus HTTP/3 for clients that enable QUIC.
-		return "tcp,udp"
-	case ProtocolSnell:
-		// v5 adds UDP (QUIC proxy mode); behind ShadowTLS only TCP is exposed.
-		// v6 carries UDP over TCP.
-		if in.Security.Type == SecurityShadowTLS || in.Settings.SnellVersion == 4 || in.Settings.SnellVersion == 6 {
-			return "tcp"
-		}
 		return "tcp,udp"
 	}
 	return "tcp"
@@ -214,7 +191,6 @@ const (
 	ACMEDNSAliDNS              = "alidns"
 	DefaultQUICSNI             = "www.bing.com"
 	DefaultRealityMinClientVer = "1.0.0"
-	DefaultSnellVersion        = 5
 	// DefaultConnIdleSeconds is Xray's level-0 connIdle default (official
 	// policy doc: "connIdle: Connection idle time limit. Unit is seconds.
 	// Default value is 300"). The panel never writes it explicitly: an
@@ -352,10 +328,6 @@ func Normalize(kernelType string, in *Inbound) error {
 	if err := normalizeSecurity(in); err != nil {
 		return err
 	}
-	if in.Protocol == ProtocolSnell && kernelType == TypeSingbox {
-		// sing-box chains ShadowTLS to Snell internally; no loopback port.
-		in.Settings.BackendPort = 0
-	}
 	if in.Security.CertMode == CertModeACME && kernelType != TypeSingbox {
 		return errors.New("自动申请证书（ACME）目前只支持 sing-box 内核")
 	}
@@ -445,11 +417,6 @@ func normalizeExtra(kernelType string, in *Inbound) error {
 	var obj map[string]interface{}
 	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
 		return errors.New("高级配置必须是 JSON 对象")
-	}
-	// F-022: Snell 的 INI 渲染根本不消费 Extra，填了只会静默无效；
-	// 保存期明确拒绝，提示清空，而不是让用户以为已生效。
-	if kernelType == TypeSnell {
-		return errors.New("Snell 内核不支持高级配置（Extra 会被忽略），请清空高级配置")
 	}
 	// F-022: 受保护键在保存期就拒绝，不要等到下发渲染才暴露。
 	if err := validateExtraProtectedKeys(obj); err != nil {
@@ -629,7 +596,7 @@ func normalizeSettings(in *Inbound) error {
 		if s.Password == "" {
 			s.Password = RandomPassword()
 		}
-		if !snellPSKPattern.MatchString(s.Password) {
+		if !pskCharsetPattern.MatchString(s.Password) {
 			return errors.New("密码只能包含字母、数字和 -_，长度 8-64")
 		}
 		s.UUID, s.Method, s.Flow = "", "", ""
@@ -644,31 +611,6 @@ func normalizeSettings(in *Inbound) error {
 			s.Password = RandomPassword()
 		}
 		s.Method, s.Flow = "", ""
-	case ProtocolSnell:
-		if s.Password == "" {
-			s.Password = RandomPassword()
-		}
-		if !snellPSKPattern.MatchString(s.Password) {
-			return errors.New("Snell PSK 只能包含字母、数字和 -_，长度 8-64")
-		}
-		if s.SnellVersion == 0 {
-			s.SnellVersion = DefaultSnellVersion
-		}
-		if s.SnellVersion != 4 && s.SnellVersion != 5 && s.SnellVersion != 6 {
-			return errors.New("Snell 版本只支持 4、5 或 6")
-		}
-		if s.SnellVersion == 6 && len(s.Password) < snellV6MinPSK {
-			return fmt.Errorf("Snell v6 的 PSK 至少 %d 位", snellV6MinPSK)
-		}
-		s.SnellMode = strings.TrimSpace(s.SnellMode)
-		if s.SnellMode == "default" || s.SnellVersion != 6 {
-			s.SnellMode = ""
-		}
-		// unsafe-raw turns encryption off; not offered.
-		if s.SnellMode != "" && s.SnellMode != SnellModeUnshaped {
-			return errors.New("Snell v6 流量整形只支持默认或 unshaped")
-		}
-		s.UUID, s.Method, s.Flow = "", "", ""
 	}
 	if in.Protocol == ProtocolHysteria2 {
 		lo, hi, err := parseHopRange(s.PortHopping)
@@ -685,16 +627,6 @@ func normalizeSettings(in *Inbound) error {
 	} else {
 		s.PortHopping = ""
 	}
-	if in.Protocol == ProtocolSnell && in.Security.Type == SecurityShadowTLS {
-		if s.BackendPort == 0 {
-			s.BackendPort = randomPort(20000, 60000)
-		}
-		if s.BackendPort < 1024 || s.BackendPort > 65535 || s.BackendPort == in.Port {
-			return errors.New("ShadowTLS 后端端口无效")
-		}
-	} else {
-		s.BackendPort = 0
-	}
 	return nil
 }
 
@@ -702,13 +634,15 @@ var naiveUserPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 var semverPattern = regexp.MustCompile(`^\d{1,4}\.\d{1,4}\.\d{1,4}$`)
 
-var snellPSKPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
-
-// snellV6MinPSK is the shortest PSK Snell v6 accepts.
-const snellV6MinPSK = 12
+// pskCharsetPattern is the shared credential charset for password-style
+// secrets whose consumers accept only letters, digits, "-" and "_"
+// (NaïveProxy passwords, ShadowTLS passwords).
+var pskCharsetPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
 // SnellModeUnshaped keeps Snell v6's encryption but turns traffic shaping
-// off; the zero value ("") is Snell's default shaping.
+// off; the zero value ("") is Snell's default shaping. It belongs to the
+// imported-node vocabulary (mihomo / sing-box Snell clients), not to any
+// panel-built inbound.
 const SnellModeUnshaped = "unshaped"
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -747,7 +681,7 @@ func normalizeSecurity(in *Inbound) error {
 		if sec.ShadowTLSPassword == "" {
 			sec.ShadowTLSPassword = RandomPassword()
 		}
-		if !snellPSKPattern.MatchString(sec.ShadowTLSPassword) {
+		if !pskCharsetPattern.MatchString(sec.ShadowTLSPassword) {
 			return errors.New("ShadowTLS 密码只能包含字母、数字和 -_，长度 8-64")
 		}
 		return nil

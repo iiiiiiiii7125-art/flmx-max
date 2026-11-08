@@ -137,9 +137,6 @@ func TestNormalizeSplitRules(t *testing.T) {
 			t.Fatalf("must reject %+v", bad)
 		}
 	}
-	if _, err := Render(TypeSnell, []Inbound{{ID: 1, Protocol: ProtocolSnell, Port: 1, Split: got}}); err == nil {
-		t.Fatal("snell has no 分流")
-	}
 }
 
 func TestXrayGeoData(t *testing.T) {

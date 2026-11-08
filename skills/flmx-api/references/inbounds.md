@@ -1,6 +1,6 @@
 # Inbound Management API
 
-Inbounds are the proxy endpoints rendered onto node kernels (Xray / sing-box / Snell).
+Inbounds are the proxy endpoints rendered onto node kernels (Xray / sing-box).
 All inbound endpoints require admin privileges unless noted. Inbound CRUD lives on
 nodes: install a kernel first (see [kernels](kernels.md)), then create inbounds on it.
 
@@ -22,8 +22,7 @@ Update an inbound (name, port, transport, security, settings, extra config).
 > (`POST /api/v1/inbound/regenerate`). This covers the credential subfields
 > (encryption secret, Reality private key / short IDs, listen address, UUID and
 > password) and, when the stored inbound's protocol / security / transport
-> matches, the Naïve username, the ShadowTLS password, the Snell version
-> (send the stored value; `0` on update means "not provided"), the
+> matches, the Naïve username, the ShadowTLS password, the
 > Shadowsocks method, the WebSocket transport path and the gRPC service
 > name: leaving any of them empty on update keeps the stored value instead
 > of rotating it. Creation is unchanged (empty values are generated).
@@ -70,8 +69,7 @@ material). Existing share links for the inbound change accordingly.
 
 ## POST /api/v1/inbound/share
 
-Get an inbound's share link / QR payload. Snell has no generic share link (a Surge
-config line is returned instead).
+Get an inbound's share link / QR payload.
 
 ## POST /api/v1/inbound/import
 

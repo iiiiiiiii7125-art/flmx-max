@@ -182,7 +182,7 @@ func ShareURI(e Endpoint) (string, bool) {
 		return fmt.Sprintf("anytls://%s@%s/?%s#%s", url.PathEscape(in.Settings.Password), hostPort(e.Host, e.Port),
 			q.Encode(), url.PathEscape(e.Name)), true
 	}
-	// Snell has no standard share link; it is only exported to Surge.
+	// Protocols without a standard share link end here.
 	return "", false
 }
 
@@ -230,8 +230,7 @@ func addSecurityQuery(q url.Values, e Endpoint) {
 // ClashProxy renders a Mihomo-schema proxy entry, as consumed by Stash
 // and Shadowrocket. XHTTP is rendered with xhttp-opts (Mihomo ≥1.19
 // supports it; the same shape proxy_produce emits for imported nodes).
-// The clash format itself goes through clashProxyMihomo: the two
-// disagree on built Snell inbounds (see clashSnell).
+// The clash format itself goes through clashProxyMihomo.
 func ClashProxy(e Endpoint) (yamlNode, bool) {
 	return clashProxy(e, false)
 }
@@ -254,17 +253,6 @@ func clashProxy(e Endpoint, mihomo bool) (yamlNode, bool) {
 	if in.Protocol == ProtocolNaive {
 		// Mihomo has no NaïveProxy client.
 		return nil, false
-	}
-	if in.Protocol == ProtocolSnell {
-		if mihomo {
-			// R9-01: official Mihomo builds refuse a whole clash file
-			// over any Snell entry this panel can render (see
-			// clashSnell), so the clash format leaves built Snell
-			// inbounds out entirely — v4/v5 join v6 there. Stash and
-			// Shadowrocket keep the entries via ClashProxy.
-			return nil, false
-		}
-		return clashSnell(e)
 	}
 	switch in.Protocol {
 	case ProtocolHysteria2, ProtocolTUIC, ProtocolAnyTLS:
@@ -369,59 +357,6 @@ func clashProxy(e Endpoint, mihomo bool) (yamlNode, bool) {
 	return p, true
 }
 
-// clashSnell renders a built Snell inbound in the Mihomo schema for the
-// consumers that take it: Stash and Shadowrocket, whose native clients
-// support Snell v4. The clash format never reaches this function
-// (clashProxy leaves built Snell out there): measured against the
-// official Mihomo v1.19.16 / v1.19.17 binaries — the core line Clash
-// Verge, Mihomo Party and FlClash ship — a snell entry with version 4 is
-// rejected with "snell version error: 4" and the refusal is whole-file,
-// so one Snell inbound used to make a whole clash subscription
-// unloadable; of the versions tried only 3 loads there, and the
-// shadow-tls obfs mode is rejected at every version. Built inbounds are
-// v4/v5/v6 only, so v4/v5 render as version 4 (v5 servers accept v4
-// clients, the same interop singboxOutbound relies on) and v6 stays out.
-// B1 (W10 复审): 此前 Snell 在此无分支、被整体丢弃，Clash 系用户静默少节点。
-func clashSnell(e Endpoint) (yamlNode, bool) {
-	in := e.Inbound
-	v := in.Settings.SnellVersion
-	if v == 0 {
-		v = DefaultSnellVersion
-	}
-	if v != 4 && v != 5 {
-		return nil, false
-	}
-	p := yamlNode{
-		{"name", e.Name},
-		{"type", "snell"},
-		{"server", strings.Trim(e.Host, "[]")},
-		{"port", e.Port},
-		{"udp", in.Network() == "tcp,udp"},
-		{"psk", in.Settings.Password},
-		{"version", 4},
-	}
-	if in.Security.Type == SecurityShadowTLS {
-		// ShadowTLS is carried as a snell obfs mode (obfs-opts
-		// mode=shadow-tls with host/password/version, plus the uTLS
-		// fingerprint at proxy level). R5 批 1: the canonical spelling
-		// is "shadow-tls" — the historical "shadowtls" this code
-		// emitted is not a mode any consumer accepts (Mihomo's docs
-		// list http/tls/shadow-tls/restls/jls). The entry goes to
-		// Stash / Shadowrocket only: Mihomo itself rejects the
-		// shadow-tls snell obfs mode outright, one of the reasons the
-		// clash format takes no Snell at all (see above).
-		p = append(p,
-			yamlField{"client-fingerprint", in.Security.Fingerprint},
-			yamlField{"obfs-opts", yamlNode{
-				{"host", in.Security.SNI},
-				{"mode", "shadow-tls"},
-				{"password", in.Security.ShadowTLSPassword},
-				{"version", 3},
-			}})
-	}
-	return p, true
-}
-
 // IsNaiveEndpoint reports whether an endpoint is a Naive node, whether
 // it is a panel inbound or an imported proxy.
 func IsNaiveEndpoint(e Endpoint) bool {
@@ -433,16 +368,15 @@ func IsNaiveEndpoint(e Endpoint) bool {
 
 // SingboxOutbounds renders the sing-box client outbounds (1.11+ schema) for
 // an endpoint. The first one carries the endpoint's tag; ShadowTLS adds a
-// second outbound the first detours through. Snell is left out: only
-// sing-box 1.14+ has it (see singboxOutbounds).
+// second outbound the first detours through.
 func SingboxOutbounds(e Endpoint) ([]map[string]interface{}, bool) {
 	return singboxOutbounds(e, false)
 }
 
-// singboxOutbounds is SingboxOutbounds; snell includes built Snell inbounds
-// for sing-box 1.14+. Naive is not gated here (legacy callers without a
-// version context keep the pre-R9X-005 behavior); version-aware callers
-// use singboxOutboundsWith.
+// singboxOutbounds is SingboxOutbounds; the snell flag gates imported
+// Snell nodes, which only sing-box 1.14+ can dial. Naive is not gated
+// here (legacy callers without a version context keep the pre-R9X-005
+// behavior); version-aware callers use singboxOutboundsWith.
 func singboxOutbounds(e Endpoint, snell bool) ([]map[string]interface{}, bool) {
 	return singboxOutboundsWith(e, snell, true)
 }
@@ -457,16 +391,13 @@ func singboxOutboundsWith(e Endpoint, snell, naive bool) ([]map[string]interface
 	}
 	if e.Proxy != nil {
 		if e.Proxy.Type() == "snell" && !snell {
-			// Same UA gate as built inbounds: sing-box before 1.14 has
-			// no Snell client and would reject the whole profile.
+			// sing-box before 1.14 has no Snell client and would
+			// reject the whole profile.
 			return nil, false
 		}
 		return proxySingbox(e)
 	}
 	in := e.Inbound
-	if in.Protocol == ProtocolSnell && !snell {
-		return nil, false
-	}
 	if in.Settings.EncryptionEnabled() {
 		// sing-box 不支持 VLESS 加密（官方 changelog 与字段文档均无），跳过而非
 		// 渲染出缺 encryption 的坏节点。
@@ -476,7 +407,7 @@ func singboxOutboundsWith(e Endpoint, snell, naive bool) ([]map[string]interface
 	if !ok {
 		return nil, false
 	}
-	if (in.Protocol == ProtocolShadowsocks || in.Protocol == ProtocolSnell) && in.Security.Type == SecurityShadowTLS {
+	if in.Protocol == ProtocolShadowsocks && in.Security.Type == SecurityShadowTLS {
 		stlsTag := e.Name + " (shadowtls)"
 		o["detour"] = stlsTag
 		return []map[string]interface{}{o, {
@@ -520,23 +451,6 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 	case ProtocolTrojan:
 		o["type"] = "trojan"
 		o["password"] = in.Settings.Password
-	case ProtocolSnell:
-		// The v4 client speaks to v4 and v5 servers (sing-box has no v5
-		// client: without QUIC proxy mode v5 is v4).
-		o["type"] = "snell"
-		o["version"] = 4
-		if in.Settings.SnellVersion == 6 {
-			o["version"] = 6
-			if in.Settings.SnellMode != "" {
-				o["mode"] = in.Settings.SnellMode
-			}
-		}
-		o["psk"] = in.Settings.Password
-		if in.Security.Type == SecurityShadowTLS {
-			delete(o, "server")
-			delete(o, "server_port")
-		}
-		return o, true
 	case ProtocolShadowsocks:
 		o["type"] = "shadowsocks"
 		o["method"] = in.Settings.Method
@@ -664,22 +578,6 @@ func SurgeLine(e Endpoint) (string, bool) {
 		} else {
 			parts = append(parts, "udp-relay=true")
 		}
-		return name + " = " + strings.Join(parts, ", "), true
-	case ProtocolSnell:
-		// C2-01：0 是存量行未归一的值——订阅装配经 inboundFromModel
-		// 直读存量行、不经 Normalize，逐字恢复行同样可达。Surge 的
-		// snell version 合法域为 1–6、直出 0 该节点独家无效；与
-		// clashSnell 同口径，0 取 DefaultSnellVersion，4/5/6 直出不变。
-		snellVersion := in.Settings.SnellVersion
-		if snellVersion == 0 {
-			snellVersion = DefaultSnellVersion
-		}
-		parts = append(parts, "snell", host, strconv.Itoa(e.Port), "psk="+surgeEscape(in.Settings.Password),
-			fmt.Sprintf("version=%d", snellVersion), "reuse=true", "tfo=true")
-		if in.Settings.SnellMode != "" {
-			parts = append(parts, "mode="+in.Settings.SnellMode)
-		}
-		parts = append(parts, shadowTLS()...)
 		return name + " = " + strings.Join(parts, ", "), true
 	case ProtocolHysteria2:
 		parts = append(parts, "hysteria2", host, strconv.Itoa(e.Port), "password="+surgeEscape(in.Settings.Password))
@@ -896,7 +794,7 @@ func Subscription(format string, endpoints []Endpoint, opts SubOptions) (string,
 // stash writes rule sets as YAML and leaves out the Mihomo-only DNS and
 // sniffer settings. The clash format (stash=false) renders through
 // clashProxyMihomo, Stash through ClashProxy — the difference is the
-// built-Snell gate (R9-01).
+// imported-node format gate inside proxyClashFor (R10-01).
 func clashProfile(endpoints []Endpoint, withRegions bool, opts SubOptions, stash bool) string {
 	render := ClashProxy
 	if !stash {

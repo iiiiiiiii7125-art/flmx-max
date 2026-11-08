@@ -177,10 +177,7 @@ function detailRows(item: InboundApiItem): Array<[string, string]> {
   if (s.username) rows.push(["用户名", s.username]);
   if (s.flow) rows.push(["Flow", s.flow]);
   if (s.method) rows.push(["加密方式", s.method]);
-  if (s.password)
-    rows.push([item.protocol === "snell" ? "PSK" : "密码", s.password]);
-  if (s.snellVersion) rows.push(["Snell 版本", `v${s.snellVersion}`]);
-  if (s.snellMode) rows.push(["流量整形", s.snellMode]);
+  if (s.password) rows.push(["密码", s.password]);
   if (s.masquerade) rows.push(["伪装网站", s.masquerade]);
   if (s.portHopping) rows.push(["端口跳跃", `${s.portHopping}（UDP）`]);
   if (t.path) rows.push(["路径", t.path]);
@@ -1428,16 +1425,12 @@ export default function InboundPage() {
                     color: "secondary" as const,
                     onPress: () => setRelaying(sheetItem),
                   },
-                  ...(sheetItem.kernelType === "snell"
-                    ? []
-                    : [
-                        {
-                          key: "split",
-                          label: "出站",
-                          color: "success" as const,
-                          onPress: () => setSplitting(sheetItem),
-                        },
-                      ]),
+                  {
+                    key: "split",
+                    label: "出站",
+                    color: "success" as const,
+                    onPress: () => setSplitting(sheetItem),
+                  },
                   {
                     key: "details",
                     label: "参数",

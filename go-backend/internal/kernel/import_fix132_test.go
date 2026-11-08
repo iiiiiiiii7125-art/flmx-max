@@ -77,11 +77,12 @@ func TestImportSingboxSnellNaive(t *testing.T) {
 	}
 }
 
-// A5-01 round-trip：面板自产的 sing-box 订阅（自建 Snell v6 + Naïve 入站）
+// A5-01 round-trip：面板自产的 sing-box 订阅（Hysteria2 + Naïve 入站）
 // 经 ParseImport 回导，节点数不减。
 func TestImportSingboxOwnProfileRoundTrip(t *testing.T) {
 	ins := []Inbound{
-		{ID: 1, Protocol: ProtocolSnell, Port: 6161, Settings: Settings{Password: "psk-bbbbbbbbbbbb", SnellVersion: 6}},
+		{ID: 1, Protocol: ProtocolHysteria2, Port: 6161, Settings: Settings{Password: "hy2-bbbbbbbbbbbb"},
+			Transport: Transport{Type: TransportQUIC}, Security: Security{Type: SecurityTLS, SNI: "hy2.example.com"}},
 		{ID: 2, Protocol: ProtocolNaive, Port: 443, Settings: Settings{Username: "nu", Password: "naive-pass-1"},
 			Security: Security{Type: SecurityTLS, CertMode: CertModeACME, SNI: "nv.example.com", ACMEEmail: "me@example.com"}},
 	}
@@ -92,7 +93,7 @@ func TestImportSingboxOwnProfileRoundTrip(t *testing.T) {
 		}
 		eps = append(eps, Endpoint{Name: "n" + in.Protocol, Host: "203.0.113.9", Port: in.Port, Inbound: in})
 	}
-	body, _, err := Subscription(FormatSingbox, eps, SubOptions{SingboxSnell: true, SingboxNaive: true})
+	body, _, err := Subscription(FormatSingbox, eps, SubOptions{SingboxNaive: true})
 	if err != nil {
 		t.Fatal(err)
 	}

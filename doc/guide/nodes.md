@@ -8,7 +8,7 @@
 
 - 落地机已按 [安装部署](./install.md) 装好节点 agent，并在面板里显示在线
 - Linux amd64 / arm64，root 权限
-- 建议安装 nftables（`apt install nftables`）：入站流量统计、白名单和 Hysteria2 端口跳跃依赖它。一般功能没有 nftables 也能跑，但有一个例外要先知道：入站开启了**白名单**、或节点上有**独立 Snell 内核**的服务端时，内核启动前必须先把 nft 规则同步成功；nftables 缺失或同步失败时，受保护的内核会**整体不启动**（该内核下全部入站下线）——这是刻意的 fail-closed 口径，不是「少几个功能」的降级运行。这类节点务必先装好 nftables 再启用白名单 / Snell。这里的 Snell 只指独立 Snell 内核：sing-box 内置的 Snell 入站走配置面拦截、不经 agent 的 nft 同步，不在这条前置要求之列
+- 建议安装 nftables（`apt install nftables`）：入站流量统计、白名单和 Hysteria2 端口跳跃依赖它。一般功能没有 nftables 也能跑，但有一个例外要先知道：入站开启了**白名单**时，内核启动前必须先把 nft 规则同步成功；nftables 缺失或同步失败时，受保护的内核会**整体不启动**（该内核下全部入站下线）——这是刻意的 fail-closed 口径，不是「少几个功能」的降级运行。这类节点务必先装好 nftables 再启用白名单
 
 ## 安装内核
 
@@ -18,7 +18,6 @@
 |------|------|------|
 | Xray | 默认最新版，可指定 | 从 GitHub Release 下载，用官方校验文件校验 |
 | sing-box | 默认最新版，可指定 | 从 GitHub Release 下载，用 Release 资产的 SHA256 校验 |
-| Snell | 5.0.1 / 6.0.0 / 4.1.1 | 只从官方 `dl.nssurge.com` 下载，使用内置的校验值；6.0.0 为 beta、仅 v6 入站可用 |
 
 一台节点可以同时安装多个内核，内核按节点分组显示。点击内核可以启停、重启、查看日志、更换版本或卸载；节点重启后内核会自动恢复运行。
 
@@ -40,7 +39,6 @@
 | AnyTLS | sing-box | |
 | SS2022 + ShadowTLS | sing-box | 仅 TCP |
 | NaïveProxy | sing-box | 需要域名和真实证书 |
-| Snell / Snell + ShadowTLS | Snell / sing-box（≥1.14） | Surge 专用 |
 
 ### 证书
 
@@ -123,7 +121,7 @@ Xray 内核的 VLESS 入站可开启 VLESS 加密（ENC），启用 ENC 的入�
 注意事项：
 
 - 分类数据自动更新：Xray 用 v2fly 的 geosite / geoip 数据，由节点 agent 经内置的 GitHub 下载路线自动测速直选下载（先测直连，直连不通才按延迟在内置代理候选中选最快，无需在面板里配置加速地址），节点每天检查一次，有新版本就下载、校验后替换并重启 Xray（启动失败会恢复原文件），内核日志里可以看到更新记录；sing-box 的分流规则集走同一条路线：由节点 agent 经内置的 GitHub 下载路线测速选线预下载（下载时校验规则集文件格式，假活/错误页会被判失败换线），落盘后以本地规则集形式交给 sing-box 加载，agent 还会周期性检查规则集更新（内容有变化才替换并重启）——因此 sing-box 分流**不要求落地机直连访问 GitHub**；规则集下载失败且本地没有可用副本时，本次配置下发会在写盘前中止、继续使用上一次能运行的配置（见下），已有副本时刷新失败会沿用旧副本并在内核日志中记录
-- Xray 能连接 VLESS / VMess / Trojan / Shadowsocks（不含插件和 ShadowTLS）/ SOCKS5 / HTTP 出站节点；Hysteria2、TUIC、AnyTLS 等请用 sing-box 内核；Snell 内核的入站不能再设出站或分流
+- Xray 能连接 VLESS / VMess / Trojan / Shadowsocks（不含插件和 ShadowTLS）/ SOCKS5 / HTTP 出站节点；Hysteria2、TUIC、AnyTLS 等请用 sing-box 内核
 - 出站节点是本面板的自签证书入站时，Xray 用证书指纹校验；导入的节点如果跳过了证书验证，Xray 无法连接（新版 Xray 已移除 `allowInsecure`），请改用 sing-box
 - 开启了“获取真实客户端 IP”的入站只能经中转连接，不能作为出站节点；只监听本机的入站只能被同一节点上的入站选用
 - 出站节点开启了白名单时，会自动放行经它出站的节点；规则之间形成循环（A 经 B、B 又经 A）时无法保存
@@ -134,26 +132,24 @@ Xray 内核的 VLESS 入站可开启 VLESS 加密（ENC），启用 ENC 的入�
 
 ## 分享与订阅
 
-- 点击入站 → **分享**（电脑上也可以直接点行内的“分享”按钮）：显示通用分享链接和二维码；Snell 没有通用链接，显示 Surge 配置行。Surge 用户请使用 Surge 订阅
+- 点击入站 → **分享**（电脑上也可以直接点行内的“分享”按钮）：显示通用分享链接和二维码
 - **订阅** 页：一个链接包含落地和中转线路，可以建多个、分别过滤和改名，也可以分享给别人，见 [订阅](./subscription.md)
 - **分享地址**：新建 / 编辑入站时可选客户端连接用的地址——**自动**（节点默认地址）、**节点 IPv4**、**节点 IPv6** 或 **自定义域名 / IP**。分享链接、订阅下发与链式代理的下一跳统一使用该地址；选 IPv4 / IPv6 后节点地址变化会自动跟随；节点没有对应地址族时不能选该档（保存会报错）。自定义地址须是规范主机名或 IP（尾点域名会自动规范化；含下划线、中文域名、回环地址的值不接受）
 
 | 订阅格式 | 适用客户端 | 不包含 |
 |----------|------------|--------|
 | 自动识别 | 按客户端 UA 返回对应格式 | |
-| Clash / Mihomo | Clash Verge、Stash、FlClash | NaïveProxy、Snell（自建入站） |
+| Clash / Mihomo | Clash Verge、Stash、FlClash | NaïveProxy |
 | sing-box | SFA / SFI / SFM | XHTTP |
 | Shadowrocket | Shadowrocket | NaïveProxy |
-| Loon | Loon | TUIC、gRPC、XHTTP、Snell、NaïveProxy、TCP+HTTP 头伪装 |
-| Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、Snell、NaïveProxy、TCP+HTTP 头伪装 |
-| 通用 base64 | v2rayN、NekoBox | Snell |
+| Loon | Loon | TUIC、gRPC、XHTTP、NaïveProxy、TCP+HTTP 头伪装 |
+| Quantumult X | Quantumult X | Hysteria2、TUIC、gRPC、XHTTP、ShadowTLS、NaïveProxy、TCP+HTTP 头伪装 |
+| 通用 base64 | v2rayN、NekoBox |  |
 | Surge | Surge | VLESS、Reality、gRPC、XHTTP、NaïveProxy、TCP+HTTP 头伪装 |
 
-Snell 的下发按版本与客户端区分：Clash / Mihomo 不下发自建 Snell 入站（v4 / v5 / v6 均不下发，原因见下方版本提示）；Stash 与 Shadowrocket 下发 v4 / v5 入站（按 v4 客户端口径渲染），v6 入站不下发（客户端无 v6 支持）；sing-box 仅 1.14 及以上版本下发。注意：sing-box 是否下发 Snell 按**拉取请求的 UA** 判定（须 sing-box 1.14+ 的 UA），与是否用 `?format=` 指定格式无关；用浏览器或普通工具拉取（UA 不带 sing-box 版本）时不含 Snell，属正常现象，用 sing-box 1.14+ 客户端直接拉取（含 `?format=singbox` 链接）即可。另注意**导入**的 Snell 节点按格式另有口径（与上面自建入站的分流不同）：sing-box 订阅侧略过 v1–v3（只下发 v4 / v5（按 v4 渲染）/ v6 口径）；Clash 格式下发 v1 / v2 / v3，其中 v1 / v2 强制以 `udp: false` 输出（mihomo 不接受这两个版本的 UDP 开关为真），v4 / v5 不下发（mihomo 收到会整份拒绝，理由同自建面）；Stash / Shadowrocket 下发 v1–v4（原样）、v5 按 v4 渲染下发，v6 与负数等异常版本略过不下发。导入的 Snell + ShadowTLS 节点：sing-box 侧经 shadow-tls 转换（detour 双出站）下发，两种存储形态（`shadow-tls` 键形态、Clash YAML 的 `obfs-opts` 形态）同口径；带 shadow-tls / restls / jls 混淆的导入节点在 Clash 格式不下发（mihomo 无此混淆模式、收到会整份拒绝）；v3 带 http / tls 混淆的导入节点 Clash 照常下发、sing-box 侧不下发（sing-box 的 Snell 客户端没有混淆模式可表达）。
+**导入**的 Snell 节点按格式有口径：sing-box 订阅侧略过 v1–v3（只下发 v4 / v5（按 v4 渲染）/ v6 口径）；Clash 格式下发 v1 / v2 / v3，其中 v1 / v2 强制以 `udp: false` 输出（mihomo 不接受这两个版本的 UDP 开关为真），v4 / v5 不下发（mihomo 收到会整份拒绝）；Stash / Shadowrocket 下发 v1–v4（原样）、v5 按 v4 渲染下发，v6 与负数等异常版本略过不下发。导入的 Snell + ShadowTLS 节点：sing-box 侧经 shadow-tls 转换（detour 双出站）下发，两种存储形态（`shadow-tls` 键形态、Clash YAML 的 `obfs-opts` 形态）同口径；带 shadow-tls / restls / jls 混淆的导入节点在 Clash 格式不下发（mihomo 无此混淆模式、收到会整份拒绝）；v3 带 http / tls 混淆的导入节点 Clash 照常下发、sing-box 侧不下发（sing-box 的 Snell 客户端没有混淆模式可表达）。
 
 NaïveProxy 的 sing-box 出站需要 sing-box 1.13 及以上：节点 sing-box 低于 1.13 时，以 NaïveProxy 节点为链式落地（默认去向或分流目标）在保存、下发和更换内核版本时会被点名拒绝，把节点 sing-box 升到 1.13 及以上即可；订阅侧同理，sing-box 客户端低于 1.13（按拉取请求的 UA 判定）时不下发 NaïveProxy 节点、其余节点照常下发。自建 NaïveProxy 入站本身不受此下限影响。
-
-> 客户端版本提示：mihomo 官方版本（已实测 1.19.16 / 1.19.17，即 Clash Verge、Mihomo Party、FlClash 等现行发行所带内核线）只接受 Snell v3，含 Snell v4 条目的配置会被整份拒绝——这是现行版本的口径、不是旧版本缺陷，升级 mihomo 也不会改变。面板因此不在 Clash 格式下发自建 Snell 入站；Stash / Shadowrocket 与 sing-box（1.14 以上）侧照常下发。
 
 VLESS 加密（ENC）入站不在上表的协议排除之列，但只有 Clash / Mihomo、Stash 与通用 base64 输出会携带它的完整 `encryption` 参数，其余格式（sing-box、Shadowrocket、Loon、Quantumult X、Surge）直接略过这类入站。
 
@@ -312,7 +308,7 @@ VLESS 加密（ENC）入站不在上表的协议排除之列，但只有 Clash /
 
 优先模式需要 Xray 25.6.8+ 或 sing-box 1.12+；仅 IPv4 / 仅 IPv6 在 sing-box 上同样需要 1.12+。UDP 按解析结果优先选择地址；因为 UDP 没有连接握手，远端静默不回包无法可靠判定故障，不会自动把同一数据包重放到另一种 IP。
 
-支持 Xray、sing-box 1.12 及以上（含 sing-box 内置 Snell），独立 Snell 内核不支持。策略按入站保存，编辑、重新下发和重启后仍生效；把节点内核降级到不支持已保存策略的版本会被拒绝。
+支持 Xray、sing-box 1.12 及以上。策略按入站保存，编辑、重新下发和重启后仍生效；把节点内核降级到不支持已保存策略的版本会被拒绝。
 
 指定出站 IP 策略时，高级 JSON 不能覆盖 `tag` 或 `detour`，以免绕过按入站生效的策略；存在冲突会提示并拒绝保存。
 

@@ -146,13 +146,6 @@ func TestCheckChainRejections(t *testing.T) {
 	if err := CheckChain(TypeSingbox, hy2); err != nil {
 		t.Fatalf("sing-box dials hysteria2: %v", err)
 	}
-	snell := Endpoint{Host: "1.1.1.1", Port: 443, Inbound: Inbound{Protocol: ProtocolSnell, Settings: Settings{Password: "p"}}}
-	if err := CheckChain(TypeSingbox, snell); err == nil {
-		t.Fatal("sing-box cannot dial snell")
-	}
-	if err := CheckChain(TypeSnell, hy2); err == nil {
-		t.Fatal("snell kernel has no outbounds")
-	}
 	insecure := Endpoint{Host: "1.1.1.1", Port: 443, Proxy: Proxy{"type": "trojan", "server": "1.1.1.1", "port": 443,
 		"password": "p", "skip-cert-verify": true}}
 	if err := CheckChain(TypeXray, insecure); err == nil {
@@ -161,9 +154,6 @@ func TestCheckChainRejections(t *testing.T) {
 	insecure.Proxy["fingerprint"] = strings.Repeat("ab", 32)
 	if err := CheckChain(TypeXray, insecure); err != nil {
 		t.Fatalf("a pinned certificate works: %v", err)
-	}
-	if _, err := Render(TypeSnell, []Inbound{{ID: 1, Protocol: ProtocolSnell, Port: 1, Via: &hy2}}); err == nil {
-		t.Fatal("snell render must refuse a chained inbound")
 	}
 }
 

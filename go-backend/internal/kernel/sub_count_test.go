@@ -4,9 +4,9 @@ import (
 	"testing"
 )
 
-// A5-02/BC-11：与 R3 真机同构的 9 节点混合订阅（Reality、Hy2、Snell
-// v5、Snell v6 + ss2022/trojan/vmess-ws/tuic/anytls），计数必须按目标
-// 格式的实际渲染数，不再是渲染前的 9。R9-01 后 clash 不下发自建
+// A5-02/BC-11：9 节点混合订阅（Reality、Hy2、导入 Snell
+// v5、导入 Snell v6 + ss2022/trojan/vmess-ws/tuic/anytls），计数必须按目标
+// 格式的实际渲染数，不再是渲染前的 9。clash 不下发导入
 // Snell（v5/v6 均出局）实得 7，Stash / Shadowrocket 保留 v5 实得 8。
 func mixEndpoints(t *testing.T) []Endpoint {
 	t.Helper()
@@ -19,8 +19,8 @@ func mixEndpoints(t *testing.T) []Endpoint {
 			Security: Security{Type: SecurityReality, SNI: "www.microsoft.com", RealityPublicKey: "pk", RealityShortIDs: []string{"ab"}}}),
 		mk("hy2", Inbound{ID: 2, Protocol: ProtocolHysteria2, Port: 443, Settings: Settings{Password: "hy2-secret"},
 			Security: Security{Type: SecurityTLS, SNI: "h.example.com"}}),
-		mk("snell5", Inbound{ID: 3, Protocol: ProtocolSnell, Port: 6160, Settings: Settings{Password: "psk-cccccccc", SnellVersion: 5}}),
-		mk("snell6", Inbound{ID: 4, Protocol: ProtocolSnell, Port: 6161, Settings: Settings{Password: "psk-dddddddd", SnellVersion: 6}}),
+		{Name: "snell5", Host: "203.0.113.10", Port: 6160, Proxy: Proxy{"type": "snell", "server": "203.0.113.10", "port": 6160, "psk": "psk-cccccccc", "version": 5}},
+		{Name: "snell6", Host: "203.0.113.10", Port: 6161, Proxy: Proxy{"type": "snell", "server": "203.0.113.10", "port": 6161, "psk": "psk-dddddddd", "version": 6}},
 		mk("ss2022", Inbound{ID: 5, Protocol: ProtocolShadowsocks, Port: 8388,
 			Settings: Settings{Method: "2022-blake3-aes-256-gcm", Password: "ss-secret"}}),
 		mk("trojan", Inbound{ID: 6, Protocol: ProtocolTrojan, Port: 443, Settings: Settings{Password: "trojan-secret"},
@@ -36,7 +36,7 @@ func mixEndpoints(t *testing.T) []Endpoint {
 
 func TestSubscriptionNodeCountClash(t *testing.T) {
 	if got := SubscriptionNodeCount(FormatClash, mixEndpoints(t), SubOptions{}); got != 7 {
-		t.Fatalf("clash count = %d, want 7 (built snell v5/v6 both dropped, R9-01)", got)
+		t.Fatalf("clash count = %d, want 7 (imported snell v5/v6 both dropped)", got)
 	}
 	// 分流另一面：Stash / Shadowrocket 保留 v5、只丢 v6。
 	for _, format := range []string{FormatStash, FormatShadowrocket} {

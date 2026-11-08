@@ -1,5 +1,5 @@
 // Package kernel turns panel-side inbound definitions into proxy-kernel
-// configuration (Xray, sing-box, Snell, ...). Everything here is pure so it can
+// configuration (Xray, sing-box, ...). Everything here is pure so it can
 // be covered by golden tests; the HTTP layer only persists and dispatches.
 package kernel
 
@@ -12,7 +12,6 @@ import (
 const (
 	TypeXray    = "xray"
 	TypeSingbox = "singbox"
-	TypeSnell   = "snell"
 )
 
 const (
@@ -65,7 +64,7 @@ type Download struct {
 	BinName     string            `json:"binName"`
 	ArchMap     map[string]string `json:"archMap"`
 	// Pinned SHA-256 per version and mapped arch, for projects that publish
-	// no checksum files (Snell, shadow-tls). Only these versions install.
+	// no checksum files. Only these versions install.
 	Pinned map[string]map[string]string `json:"-"`
 	// GitHub repo + asset template for digest lookup ("" when unused).
 	GitHubRepo  string `json:"-"`
@@ -122,51 +121,6 @@ var singboxDownload = &Download{
 	GitHubRepo:  "SagerNet/sing-box",
 	GitHubAsset: "sing-box-{VERSION}-linux-{ARCH}.tar.gz",
 	Mirrorable:  true,
-}
-
-// Snell is closed source and only distributed by Surge; the official site has
-// no checksum files, so installable versions are pinned. Hashes were checked
-// against the official downloads for every arch.
-var snellDownload = &Download{
-	URL:     "https://dl.nssurge.com/snell/snell-server-v{VERSION}-linux-{ARCH}.zip",
-	Archive: "zip",
-	BinName: "snell-server",
-	ArchMap: map[string]string{"amd64": "amd64", "arm64": "aarch64", "arm": "armv7l"},
-	Pinned: map[string]map[string]string{
-		// 6.0.0 is a beta; Surge publishes no armv7 build of it.
-		"6.0.0": {
-			"amd64":   "8a9c4463ca87cfa5eaa37c6af0d37ab93ea275aa12391985bb2a375ca3abd7f2",
-			"aarch64": "a0b2915cbc77dc3baf8fa069e741c20808d8a10c3a8a93e709a0a580645c3bd7",
-		},
-		"5.0.1": {
-			"amd64":   "9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539",
-			"aarch64": "2f178bf5ac468ce1a130454efa40a0603fbbe4e47ecc4880a989f4abc7f824cf",
-			"armv7l":  "14489f3e857569c8835dd3598b7ea6bca5371d4290ac7cf0f6c8dfb3381c1fb2",
-		},
-		"4.1.1": {
-			"amd64":   "cc2271b79c7506888b34e651e8741b3aa7fc7d5f60aa65ef8bb096f3313a193b",
-			"aarch64": "38d4cdc03dcdb3608af8594df83e1795265167fafc5d802f815148908902d758",
-			"armv7l":  "d00b98ed803be4039f0f0630b810932cd3d3d87ee3e6ed224106fdc63347d8e6",
-		},
-	},
-}
-
-// ShadowTLSVersion is the ihciah/shadow-tls release used to front Snell.
-const ShadowTLSVersion = "0.2.25"
-
-var shadowTLSDownload = &Download{
-	URL:     "https://github.com/ihciah/shadow-tls/releases/download/v{VERSION}/shadow-tls-{ARCH}",
-	Archive: "raw",
-	BinName: "shadow-tls",
-	ArchMap: map[string]string{"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-musl", "arm": "armv7-unknown-linux-musleabihf"},
-	Pinned: map[string]map[string]string{
-		ShadowTLSVersion: {
-			"x86_64-unknown-linux-musl":      "a173f5f2d57f45211b68e10ceeddc15b1791077b914fa89747bc705fddc71532",
-			"aarch64-unknown-linux-musl":     "3295476b37f549a68906519d3eaecb74bf3b6eaf9094cebb16ee84f0151373c6",
-			"armv7-unknown-linux-musleabihf": "e6f918a072557c50fd0ea950af9a156a9b102af72c1d010ff85d08d13006c54f",
-		},
-	},
-	Mirrorable: true,
 }
 
 var catalog = []Info{
@@ -229,20 +183,6 @@ var catalog = []Info{
 			{Protocol: ProtocolShadowsocks, Transports: []TransportCap{
 				{Type: TransportTCP, Securities: []string{SecurityNone, SecurityShadowTLS}},
 			}},
-			// Built-in Snell server, sing-box 1.14+.
-			{Protocol: ProtocolSnell, Transports: []TransportCap{{Type: TransportTCP, Securities: []string{SecurityNone, SecurityShadowTLS}}}},
-		},
-	},
-	{
-		Type:        TypeSnell,
-		Name:        "Snell",
-		Implemented: true,
-		CertModes:   []string{},
-		Download:    snellDownload,
-		// 5.0.1 stays the default: the 6.0.0 beta only serves v6 clients.
-		Versions: []string{"5.0.1", "6.0.0", "4.1.1"},
-		Protocols: []ProtocolCap{
-			{Protocol: ProtocolSnell, Transports: []TransportCap{{Type: TransportTCP, Securities: []string{SecurityNone, SecurityShadowTLS}}}},
 		},
 	},
 	{
@@ -256,9 +196,6 @@ var catalog = []Info{
 		Relay:       true,
 	},
 }
-
-// ShadowTLSDownload is the helper binary used to front Snell with ShadowTLS.
-func ShadowTLSDownload() *Download { return shadowTLSDownload }
 
 // Catalog returns every known kernel; unimplemented ones are listed so the UI
 // can show them as upcoming.
@@ -416,16 +353,11 @@ func ResolveDownload(info Info, version, proxy string) (map[string]interface{}, 
 	return downloadSpec(info.Download, version, proxy)
 }
 
-// ExtraDownload resolves a helper binary such as shadow-tls.
-func ExtraDownload(d *Download, version, proxy string) (map[string]interface{}, error) {
-	return downloadSpec(d, version, proxy)
-}
-
 func downloadSpec(d *Download, version, proxy string) (map[string]interface{}, error) {
 	// C2-01: downloadSpec is the funnel every spec build passes through
-	// (ResolveDownload and ExtraDownload alike), so the version is
-	// validated here as well — a caller that skips ResolveVersion
-	// still cannot inject into the URL template.
+	// (via ResolveDownload), so the version is validated here as
+	// well — a caller that skips ResolveVersion still cannot inject
+	// into the URL template.
 	if version != "" && !strings.EqualFold(version, "latest") && !validKernelVersion(version) {
 		return nil, fmt.Errorf("版本号 %s 格式不正确", version)
 	}

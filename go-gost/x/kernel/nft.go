@@ -272,23 +272,15 @@ func writeSet(b *strings.Builder, name, typ string, elems []string) {
 // the inbound port. Only traffic addressed to this host is redirected; the
 // output hook covers clients running on the node itself.
 func nftScript(rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64) string {
-	return nftScriptGuard(rules, guards, hops, users, nil)
-}
-
-func nftScriptGuard(rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64, guard *snellGuard) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {}\n", nftTable)
 	fmt.Fprintf(&b, "delete table inet %s\n", nftTable)
 	fmt.Fprintf(&b, "table inet %s {}\n", legacyNFTTable)
 	fmt.Fprintf(&b, "delete table inet %s\n", legacyNFTTable)
-	if len(rules) == 0 && len(users) == 0 && guard == nil {
+	if len(rules) == 0 && len(users) == 0 {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "table inet %s {\n", nftTable)
-	if guard != nil {
-		writeSet(&b, "snell_priv4", "ipv4_addr", snellPrivateV4)
-		writeSet(&b, "snell_priv6", "ipv6_addr", snellPrivateV6All())
-	}
 	for _, r := range rules {
 		fmt.Fprintf(&b, "\tcounter %s {}\n", r.name("in"))
 		fmt.Fprintf(&b, "\tcounter %s {}\n", r.name("out"))
@@ -321,32 +313,6 @@ func nftScriptGuard(rules []counterRule, guards map[int64]allowGuard, hops []hop
 		fmt.Fprintf(&b, "\t\tct mark 0x%08x counter name %s\n", userMarkBase|id, userCounterName("down", id))
 	}
 	b.WriteString("\t}\n\tchain output {\n\t\ttype filter hook output priority -150; policy accept;\n")
-	if guard != nil {
-		// Snell egress guard (see snell_guard.go): the system resolvers
-		// stay reachable on DNS ports so domain targets keep resolving;
-		// packets of an already established flow pass (they are replies
-		// to sessions a client opened TO the Snell inbound — that client
-		// may itself sit on a private address, and its source address
-		// must not make the session's replies look like a private
-		// target); every other packet from the guard uid to a
-		// non-public range is dropped by destination IP, whatever name
-		// it came from. The established exemption cannot open a private
-		// target: a flow reaches the established state only after a
-		// reply packet was seen, and the guard uid's opening packet
-		// towards a non-public range is dropped below before it can
-		// leave the host, so no such flow ever gets there.
-		for _, r := range guard.Resolvers {
-			fam := "ip"
-			if strings.Contains(r, ":") {
-				fam = "ip6"
-			}
-			fmt.Fprintf(&b, "\t\tmeta skuid %d %s daddr %s udp dport 53 accept\n", guard.UID, fam, r)
-			fmt.Fprintf(&b, "\t\tmeta skuid %d %s daddr %s tcp dport { 53, 853 } accept\n", guard.UID, fam, r)
-		}
-		fmt.Fprintf(&b, "\t\tmeta skuid %d ct state established,related accept\n", guard.UID)
-		fmt.Fprintf(&b, "\t\tmeta skuid %d ip daddr @snell_priv4 drop\n", guard.UID)
-		fmt.Fprintf(&b, "\t\tmeta skuid %d ip6 daddr @snell_priv6 drop\n", guard.UID)
-	}
 	for _, r := range rules {
 		fmt.Fprintf(&b, "\t\t%s sport %d counter name %s\n", r.Proto, r.Port, r.name("out"))
 	}
@@ -422,7 +388,7 @@ func (n *nftCounters) tableFingerprint(ctx context.Context) (string, error) {
 // removeTables 删除 agent 建的全部 nftables 表（计数/白名单主表、
 // 改名前的旧表、端口跳跃探针表），供 agent 卸载时调用：表驻留在
 // 内核里，不随进程退出消失，必须在进程还活着时显式删掉。脚本沿用
-// nftScriptGuard 的「先建空表再删」惯例，表不存在时也不报错。
+// nftScript 的「先建空表再删」惯例，表不存在时也不报错。
 func (n *nftCounters) removeTables() error {
 	var b strings.Builder
 	for _, table := range []string{nftTable, legacyNFTTable, nftHopProbeTable} {
@@ -435,14 +401,10 @@ func (n *nftCounters) removeTables() error {
 	return err
 }
 
-func (n *nftCounters) sync(ports []Port, users []int64) error {
-	return n.syncGuard(ports, users, nil)
-}
-
 // hopRulesError reports that every port-hop rule was rejected by the
 // kernel (typically an old kernel without nft_fib) while the main
-// ruleset — traffic counters, inbound whitelists, the Snell egress
-// guard — was applied successfully. syncGuard returns it so the
+// ruleset — traffic counters and inbound whitelists — was applied
+// successfully. sync returns it so the
 // failure stays named and per-rule, but it is not a ruleset failure:
 // port hopping is a reachability nicety outside the security posture,
 // so gating callers must not block a kernel start on it or report it
@@ -452,20 +414,17 @@ type hopRulesError struct{ msg string }
 
 func (e *hopRulesError) Error() string { return e.msg }
 
-// syncGuard is sync with the Snell egress guard folded into the same
-// atomic table rebuild. Unlike traffic counting (best-effort: a node
-// without nftables just loses its counters), the guard is a security
-// control — when a guard is requested, a missing nft binary or a failed
-// ruleset load is a hard error so the caller can refuse to run Snell
+// sync rebuilds the whole table atomically: traffic counters and
+// inbound whitelists in one ruleset. Traffic counting alone is
+// best-effort (a node without nftables just loses its counters), but
+// a port carrying a source whitelist is a security control — with a
+// whitelist in play, a missing nft binary or a failed ruleset load
+// is a hard error so the caller can refuse to run the kernel
 // unguarded.
-func (n *nftCounters) syncGuard(ports []Port, users []int64, guard *snellGuard) error {
+func (n *nftCounters) sync(ports []Port, users []int64) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := nftAvailable(); err != nil {
-		if guard != nil {
-			n.lastErr = "Snell 私网拦截需要 nftables: " + err.Error()
-			return fmt.Errorf("Snell 私网拦截需要 nftables: %v", err)
-		}
 		if portsHaveWhitelist(ports) {
 			n.lastErr = "入站白名单需要 nftables: " + err.Error()
 			return fmt.Errorf("入站白名单需要 nftables: %v", err)
@@ -500,9 +459,9 @@ func (n *nftCounters) syncGuard(ports []Port, users []int64, guard *snellGuard) 
 		}
 	}
 
-	script := nftScriptGuard(rules, expandGuards(ports), hops, users, guard)
+	script := nftScript(rules, expandGuards(ports), hops, users)
 	sig := hashString(script)
-	hasContent := len(rules) > 0 || len(users) > 0 || guard != nil
+	hasContent := len(rules) > 0 || len(users) > 0
 	if sig == n.state.Signature {
 		if !hasContent {
 			n.lastErr = ""

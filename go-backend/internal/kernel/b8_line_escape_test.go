@@ -31,15 +31,6 @@ func TestSurgeLineEscapesCredentialsF081(t *testing.T) {
 		t.Fatalf("field count must stay stable (6 fields), got %d separators: %s", n, line)
 	}
 
-	// Snell PSK 在保存期有字符集约束（Normalize 拒绝逗号），故自建路径
-	// 的逗号 PSK 只能来自存量/直写行——渲染层仍须兜底转义，直构 struct
-	// 模拟该行（与 F-022 的渲染兜底用例同理）。
-	snell := Inbound{Protocol: ProtocolSnell, Port: 8389,
-		Settings: Settings{Password: "p,k=1", SnellVersion: 5}}
-	line, ok = SurgeLine(Endpoint{Name: "snell 节点", Host: "1.2.3.4", Port: 8389, Inbound: snell, Direct: true})
-	if !ok || strings.Contains(line, "p,k=1") || !strings.Contains(line, "psk=p k=1") {
-		t.Fatalf("snell psk must be escaped: %q", line)
-	}
 }
 
 func TestLineFormatsPreserveSS2022KeyPaddingF081(t *testing.T) {

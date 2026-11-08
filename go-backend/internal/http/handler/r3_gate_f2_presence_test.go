@@ -34,13 +34,6 @@ func gf2Forms() []gf2Form {
 				Settings: kernel.Settings{Method: "aes-256-gcm", Password: "ss-pass-12345"}},
 		},
 		{
-			name:       "shadowtls-snell",
-			kernelType: kernel.TypeSingbox,
-			seed: kernel.Inbound{Protocol: kernel.ProtocolSnell, Port: 24444,
-				Security: kernel.Security{Type: kernel.SecurityShadowTLS, SNI: "st.example.com", ShadowTLSPassword: "snellstls-pw-1"},
-				Settings: kernel.Settings{Password: "psk-bbbbbbbb", SnellVersion: 5}},
-		},
-		{
 			name:       "reality-vless",
 			kernelType: kernel.TypeXray,
 			seed: kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 24445,
@@ -149,17 +142,10 @@ func TestR3GateF2OmitSecurityObjectPreserves(t *testing.T) {
 	}
 }
 
-// ①b 整对象省略 settings：非凭据字段（BackendPort/Masquerade/PortHopping/
+// ①b 整对象省略 settings：非凭据字段（Masquerade/PortHopping/
 // Flow）不在字段级回填集内，整对象省略必须整对象保留。
 func TestR3GateF2OmitSettingsObjectPreserves(t *testing.T) {
 	forms := []gf2Form{
-		{
-			name:       "snell-shadowtls-backendport",
-			kernelType: kernel.TypeSingbox,
-			seed: kernel.Inbound{Protocol: kernel.ProtocolSnell, Port: 24453,
-				Security: kernel.Security{Type: kernel.SecurityShadowTLS, SNI: "st.example.com", ShadowTLSPassword: "snellstls-pw-1"},
-				Settings: kernel.Settings{Password: "psk-bbbbbbbb", SnellVersion: 5}},
-		},
 		{
 			name:       "hy2-masquerade-hopping",
 			kernelType: kernel.TypeSingbox,

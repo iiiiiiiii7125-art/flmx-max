@@ -20,9 +20,9 @@ func (u User) Email() string { return fmt.Sprintf("u%d@flmx", u.ID) }
 func (u User) Name() string { return fmt.Sprintf("u%d", u.ID) }
 
 // SupportsUsers reports whether the inbound can carry per-user credentials.
-// Snell has a single PSK. Shadowsocks stays shared too: 2022 multi-user
-// mode would require every client, the owner's included, to send a user
-// identity, breaking existing links.
+// Shadowsocks stays shared: 2022 multi-user mode would require every
+// client, the owner's included, to send a user identity, breaking
+// existing links.
 func (in Inbound) SupportsUsers() bool {
 	switch in.Protocol {
 	case ProtocolVLESS, ProtocolVMess, ProtocolTrojan, ProtocolHysteria2, ProtocolTUIC, ProtocolAnyTLS, ProtocolNaive:

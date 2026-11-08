@@ -13,10 +13,11 @@ import (
 )
 
 // A5-02/BC-11：列表的 NodeCount 按请求的目标格式实际渲染数计。
-// 夹具 5 入站（VLESS Reality、Snell v5、Snell v6、SS2022、Trojan）：
-// 旧口径恒为 5（渲染前计数）；现口径 clash 3（R9-01：自建 Snell
-// v5/v6 均不下发）/ stash 4（保留 v5）/ sing-box 5 / surge 4 /
-// base64 3（缺省与非法 format 均回落 base64）。
+// 夹具 3 入站（VLESS Reality、SS2022、Trojan）：
+// 旧口径恒为 3（渲染前计数）；现口径 base64 3 / clash 3 / stash 3 /
+// sing-box 3 / surge 2（vless 不下发）（缺省与非法 format 均回落
+// base64）。（原夹具的自建 Snell v5/v6 两行已随自建 Snell 入站
+// 整删一并移除；导入 Snell 节点不在 NodeInbound 夹具面内。）
 func TestSubscriptionListNodeCountByFormat(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/sub_nodecount.db")
 	if err != nil {
@@ -32,10 +33,6 @@ func TestSubscriptionListNodeCountByFormat(t *testing.T) {
 	seedChainInbound(t, r, box, "nc-reality", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 443,
 		Settings: kernel.Settings{UUID: uuid},
 		Security: kernel.Security{Type: kernel.SecurityReality, SNI: "www.microsoft.com", RealityPublicKey: "pk", RealityShortIDs: []string{"ab"}}}, 0)
-	seedChainInbound(t, r, box, "nc-snell5", kernel.Inbound{Protocol: kernel.ProtocolSnell, Port: 6160,
-		Settings: kernel.Settings{Password: "psk-cccccccc", SnellVersion: 5}}, 0)
-	seedChainInbound(t, r, box, "nc-snell6", kernel.Inbound{Protocol: kernel.ProtocolSnell, Port: 6161,
-		Settings: kernel.Settings{Password: "psk-dddddddd", SnellVersion: 6}}, 0)
 	seedChainInbound(t, r, box, "nc-ss", kernel.Inbound{Protocol: kernel.ProtocolShadowsocks, Port: 8388,
 		Settings: kernel.Settings{Method: "2022-blake3-aes-256-gcm", Password: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}, 0)
 	seedChainInbound(t, r, box, "nc-trojan", kernel.Inbound{Protocol: kernel.ProtocolTrojan, Port: 8443,
@@ -73,10 +70,10 @@ func TestSubscriptionListNodeCountByFormat(t *testing.T) {
 	cases := map[string]int{
 		`{}`:                    3, // 缺省 = 无 UA 默认格式 base64
 		`{"format":"base64"}`:   3,
-		`{"format":"clash"}`:    3, // 自建 snell v5/v6 均不下发（R9-01）
-		`{"format":"stash"}`:    4, // stash 保留 snell v5、仅 v6 不下发
-		`{"format":"singbox"}`:  5, // 现行 sing-box 客户端全收（含 snell v6）
-		`{"format":"surge"}`:    4, // vless 不下发
+		`{"format":"clash"}`:    3,
+		`{"format":"stash"}`:    3,
+		`{"format":"singbox"}`:  3,
+		`{"format":"surge"}`:    2, // vless 不下发
 		`{"format":"nonsense"}`: 3, // 非法值回落 base64，不整单失败
 	}
 	for body, want := range cases {
