@@ -363,6 +363,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/node/latency/history", h.nodeLatencyHistory)
 	// 节点网络调优。
 	mux.HandleFunc("/api/v1/node/tune", h.nodeTune)
+	// 节点定时重启 agent 服务（开关＋时刻＋抖动，默认关）。
+	mux.HandleFunc("/api/v1/node/restart-schedule", h.nodeRestartScheduleSet)
 	// 回程路由追踪。
 	mux.HandleFunc("/api/v1/node/route", h.nodeRouteGet)
 	mux.HandleFunc("/api/v1/node/route/probe", h.nodeRouteProbe)

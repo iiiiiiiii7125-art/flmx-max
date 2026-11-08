@@ -10,7 +10,7 @@ HTTP request handlers for FLMX Admin API. Core business logic layer.
 **Stack:** Go 1.25, net/http, GORM via Repository pattern.
 
 ## STRUCTURE
-The package holds 73 non-test Go files (plus the test files alongside
+The package holds 75 non-test Go files (plus the test files alongside
 them), split by functional area. The largest hubs:
 
 ```

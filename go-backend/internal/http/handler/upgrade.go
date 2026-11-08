@@ -1043,6 +1043,14 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 		h.reconcileNodeKernels(nodeID)
 		h.scheduleNodeReconnectProbe(nodeID)
 	}()
+	// 定时重启设置补发：离线期间改过的设置、以及 agent 重装后
+	// 丢失的 systemd timer，都在重连时按面板存量重推一遍（面板
+	// 为权威源，推送幂等）。尽力而为，失败只记日志，下次重连再试。
+	go func() {
+		if _, err := h.pushNodeRestartSchedule(nodeID); err != nil {
+			log.Printf("node restart schedule re-push failed node_id=%d err=%v", nodeID, err)
+		}
+	}()
 	if !h.startNodeOnlineRedeploy(nodeID, time.Now()) {
 		return
 	}

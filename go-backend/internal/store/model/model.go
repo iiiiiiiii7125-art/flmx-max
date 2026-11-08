@@ -112,6 +112,13 @@ type Node struct {
 	ExpiryReminderDismissed int            `gorm:"column:expiry_reminder_dismissed;not null;default:0"`
 	// 节点自选的延迟测试点（JSON），空则跟随全局默认。
 	LatencyTargets string `gorm:"column:latency_targets;type:text;not null;default:''"`
+	// 定时重启 agent 服务（保险丝，默认关）：面板是权威源，agent 侧
+	// 落成 systemd timer 持久化执行，面板离线照常触发。RestartTime
+	// 为节点本机时间的 "HH:MM"；RestartJitterMinutes 为随机抖动窗
+	// 口（分钟，实际触发时刻在设定时刻后 0..jitter 内均匀随机）。
+	RestartEnabled       int    `gorm:"column:restart_enabled;not null;default:0"`
+	RestartTime          string `gorm:"column:restart_time;type:varchar(5);not null;default:'04:00'"`
+	RestartJitterMinutes int    `gorm:"column:restart_jitter_minutes;not null;default:30"`
 }
 
 func (Node) TableName() string { return "node" }

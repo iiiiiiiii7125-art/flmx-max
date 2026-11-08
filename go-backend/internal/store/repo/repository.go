@@ -1325,8 +1325,12 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			// 明、后端只走 DB 模型），且其 JSON 内嵌 D3-04 relay
 			// 凭据（relayUsername/relayPassword），一并删除下发。
 			"expiryReminderDismissed": n.ExpiryReminderDismissed,
-			"interfaceName":           nullableString(n.InterfaceName),
-			"sshConfig":               sshConfigByNodeID[n.ID],
+			// 定时重启 agent 服务的面板权威设置（默认关）。
+			"restartEnabled":       n.RestartEnabled,
+			"restartTime":          n.RestartTime,
+			"restartJitterMinutes": n.RestartJitterMinutes,
+			"interfaceName":        nullableString(n.InterfaceName),
+			"sshConfig":            sshConfigByNodeID[n.ID],
 		})
 	}
 	return items, nil
