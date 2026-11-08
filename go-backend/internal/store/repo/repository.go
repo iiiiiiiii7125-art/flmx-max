@@ -25,6 +25,7 @@ import (
 	"unicode"
 
 	gsqlite "github.com/glebarez/sqlite"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -2061,6 +2062,13 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 	}
 	backup.MonitorPermissions = monitorPermissions
 
+	// R2-E3-F02：导出 passkey 整表（WebAuthn 公钥凭据）
+	passkeys, err := r.exportPasskeys()
+	if err != nil {
+		return nil, fmt.Errorf("export passkeys failed: %w", err)
+	}
+	backup.Passkeys = passkeys
+
 	// B4/F-004：导出 user_subscription 整表（订阅分配关系）
 	userSubscriptions, err := r.exportUserSubscriptions()
 	if err != nil {
@@ -2081,7 +2089,7 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 // validBackupTypes is the full set of top-level backup segment names
 // accepted by ExportPartial / Import (R13X-005). It must stay identical
 // to the frontend BACKUP_TYPE_VALUES list (vite-frontend config.tsx,
-// 13 values): any drift reopens the silent-ignore gap for API callers,
+// 14 values): any drift reopens the silent-ignore gap for API callers,
 // since the handler's non-empty check cannot catch an all-unknown list.
 // The group-trio segment names (tunnelGroups/userGroups/permissions)
 // were removed with the feature in 1.9.6: old backups carrying them
@@ -2092,7 +2100,7 @@ var validBackupTypes = map[string]bool{
 	"userTunnels": true, "speedLimits": true, "configs": true,
 	"inbounds": true, "userInbounds": true, "announcements": true,
 	"monitorPermissions": true, "userSubscriptions": true,
-	"serviceMonitors": true,
+	"serviceMonitors": true, "passkeys": true,
 }
 
 // validateBackupTypes rejects unknown segment names, naming each one
@@ -2222,6 +2230,14 @@ func (r *Repository) exportPartial(types []string) (*model.BackupData, error) {
 			return nil, fmt.Errorf("export monitor permissions failed: %w", err)
 		}
 		backup.MonitorPermissions = v
+	}
+	// R2-E3-F02：passkey 整表随段导出。
+	if typeSet["passkeys"] {
+		v, err := r.exportPasskeys()
+		if err != nil {
+			return nil, fmt.Errorf("export passkeys failed: %w", err)
+		}
+		backup.Passkeys = v
 	}
 	// B4/F-004/F-030：补齐 user_subscription/service_monitor 两表
 	if typeSet["userSubscriptions"] {
@@ -2655,6 +2671,28 @@ func (r *Repository) exportMonitorPermissions() ([]model.MonitorPermissionBackup
 	return out, nil
 }
 
+// exportPasskeys 导出 passkey 整表（R2-E3-F02）。CredentialJSON 只
+// 含公钥凭据材料（逐字段核验见 model.PasskeyBackup 注），随备份
+// 往返不引入私钥类数据。
+func (r *Repository) exportPasskeys() ([]model.PasskeyBackup, error) {
+	var rows []model.Passkey
+	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.PasskeyBackup, 0, len(rows))
+	for _, p := range rows {
+		out = append(out, model.PasskeyBackup{
+			ID:             p.ID,
+			UserID:         p.UserID,
+			Name:           p.Name,
+			CredentialJSON: p.CredentialJSON,
+			CreatedAt:      p.CreatedAt,
+			LastUsedAt:     p.LastUsedAt,
+		})
+	}
+	return out, nil
+}
+
 // ─── Import Methods ──────────────────────────────────────────────────
 
 // importReport 收集一次 Import 的跳过与提示，最终落入 ImportResult
@@ -2770,7 +2808,7 @@ func noteRemovedGroupSegments(backup *model.BackupData, rep *importReport) (tunn
 //     in browser localStorage — so this guards crafted/cross-
 //     version backups).
 //   - gist config keys: the Gist backup feature had no segment of
-//     its own; its footprint in a backup is the removedGistConfigKeys
+//     its own; its footprint in a backup is the retiredConfigKeysList
 //     set inside the configs segment. Those keys used to be restored
 //     verbatim (silently resurrecting even the gist_token credential
 //     until the next boot's migration), so they are stripped from
@@ -2790,8 +2828,8 @@ func noteRemovedFeatureSegments(backup *model.BackupData, rep *importReport) (pe
 		rep.warnf("备份恢复：主题功能已移除，备份中的 themes 段（%d 条）已忽略未恢复", n)
 	}
 	if len(backup.Configs) > 0 {
-		removed := make(map[string]bool, len(removedGistConfigKeys))
-		for _, k := range removedGistConfigKeys {
+		removed := make(map[string]bool, len(retiredConfigKeysList))
+		for _, k := range retiredConfigKeysList {
 			removed[k] = true
 		}
 		var present []string
@@ -2806,7 +2844,7 @@ func noteRemovedFeatureSegments(backup *model.BackupData, rep *importReport) (pe
 			for _, name := range present {
 				delete(backup.Configs, name)
 			}
-			rep.warnf("备份恢复：GitHub/Gist 备份功能已移除，备份中的 %d 个 gist 配置键已忽略未恢复：%s", gistKeys, strings.Join(present, "、"))
+			rep.warnf("备份恢复：GitHub/Gist 备份功能已移除，备份中的 %d 个已随功能下线注销的 gist 配置键已忽略未恢复：%s", gistKeys, strings.Join(present, "、"))
 		}
 	}
 	return peerShares, gistKeys, themes
@@ -2993,7 +3031,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 			result.InboundShieldsImported = counts.shields
 			result.InboundNodeGroupsIgnored = counts.groupsIgnored
 			result.InboundSnellKernelsDisabled = counts.snellKernelsDisabled
-			result.InboundSnellInboundsIgnored = counts.snellInboundsIgnored
+			result.InboundSnellInboundsDisabled = counts.snellInboundsDisabled
 			result.InboundTemplatesImported = counts.templates
 			result.InboundLegacyUsersImported = counts.legacyUsers
 		}
@@ -3020,6 +3058,15 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 				return fmt.Errorf("import monitor permissions failed: %w", err)
 			}
 			result.MonitorPermissionsImported = count
+		}
+		// R2-E3-F02：导入 passkey 表（WebAuthn 公钥凭据，按 user
+		// 归属落库；用户不存在的行跳过并经 SkippedRows 点名计数）。
+		if typeSet["passkeys"] && len(backup.Passkeys) > 0 {
+			count, err := importPasskeys(tx, backup.Passkeys, rep)
+			if err != nil {
+				return fmt.Errorf("import passkeys failed: %w", err)
+			}
+			result.PasskeysImported = count
 		}
 		// B4/F-004：导入 user_subscription 表（订阅分配关系）。
 		// 旧备份无该字段时 len=0 自动跳过，不报错。
@@ -5030,6 +5077,51 @@ func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup,
 	return count, nil
 }
 
+// importPasskeys 恢复 passkey 段（R2-E3-F02）：按 user 归属落库，
+// 同 id 行按备份内容更新（整表段「备份为准」的既有恢复语义）。
+// 用户不存在的行跳过并计入 SkippedRows["passkeys"]（回执点名计
+// 数，与 monitorPermissions 的跳过口径一致）；credential_json 无
+// 法解为 webauthn.Credential 的行同样跳过并逐行点名——坏凭据落
+// 库后在登录面也永不可用，不如在恢复面挡下并披露。
+func importPasskeys(tx *gorm.DB, rows []model.PasskeyBackup, rep *importReport) (int, error) {
+	count := 0
+	for _, p := range rows {
+		userExists, err := rowExistsTx(tx, &model.User{}, p.UserID)
+		if err != nil {
+			return count, err
+		}
+		if !userExists {
+			rep.skip("passkeys")
+			continue
+		}
+		var credential webauthn.Credential
+		if err := json.Unmarshal([]byte(p.CredentialJSON), &credential); err != nil {
+			rep.skip("passkeys")
+			rep.warnf("备份恢复：用户 #%d 的 passkey %q 凭据数据无法解析，已跳过未恢复", p.UserID, p.ID)
+			continue
+		}
+		item := model.Passkey{
+			ID:             p.ID,
+			UserID:         p.UserID,
+			Name:           p.Name,
+			CredentialJSON: p.CredentialJSON,
+			CreatedAt:      p.CreatedAt,
+			LastUsedAt:     p.LastUsedAt,
+		}
+		err = tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"user_id", "name", "credential_json", "created_at", "last_used_at",
+			}),
+		}).Create(&item).Error
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
 func normalizeImportedMonitoringConfigValue(name, value string) (string, error) {
 	switch name {
 	case "monitor_tunnel_quality_enabled":
@@ -5063,6 +5155,14 @@ func normalizeImportedMonitoringConfigValue(name, value string) (string, error) 
 }
 
 func importConfigs(tx *gorm.DB, configs map[string]string, now int64, rep *importReport) (int, error) {
+	// R2-E3-F03：已注销键（随功能下线）在过滤前单独点名——它们
+	// 不在凭据/系统托管/台账排除集里，处置理由是功能已删除：旧
+	// 备份恢复若落库即成无读者、无清理路径的复活残留（gist_token
+	// 更是凭据本体），过滤骨架恒排除，此处只报键名与条数、绝不
+	// 带值。与下方 B8-12 点名不重叠（注销键已退出全部策略表）。
+	if retired := restoreRetiredConfigKeys(configs); len(retired) > 0 {
+		rep.warnf("备份恢复：%d 个配置键已随功能下线注销，未随恢复落库：%s", len(retired), strings.Join(retired, "、"))
+	}
 	// B8-12：被导入面过滤剔除的键在过滤前先取名单进回执点名
 	// （只报键名与条数、绝不带值）——此前静默消失，管理员无从
 	// 知道备份中哪些设置未恢复。
@@ -5549,34 +5649,20 @@ func migrateSchema(db *gorm.DB) error {
 	return nil
 }
 
-// removedGistConfigKeys 是 2.1.0 随 Gist 备份功能下线而失活的配置
-// 键全集：8 个 gist_* 键（设置与运行态）与 Gist 失败通知台账两键。
-// 单一事实源两个消费方：存量迁移 migrateRemoveGistConfigKeys 删净
-// 库内行；备份恢复 noteRemovedFeatureSegments 据此识别旧备份
-// configs 段携带的同名键、点名忽略且不落库。
-var removedGistConfigKeys = []string{
-	"gist_token",
-	"gist_password",
-	"gist_id",
-	"gist_interval_hours",
-	"gist_last_at",
-	"gist_last_upload",
-	"gist_last_error",
-	"gist_last_hash",
-	"notify_gist_failure_pending",
-	"notify_gist_failure_pending_gen",
-}
-
-// migrateRemoveGistConfigKeys 删除 removedGistConfigKeys 的存量配置
-// 行。功能代码删除后这些行无人读写，留置即残留（且其中 gist_token
-// 是 GitHub 凭据本体），按「删除不留残留」口径在 schema v8 迁移里
-// 删净；幂等，键不存在时无副作用。本地备份/恢复与自动快照的键不
-// 在此列。
+// migrateRemoveGistConfigKeys 删除 2.1.0 随 Gist 备份功能下线而失活
+// 的配置行：8 个 gist_* 键（设置与运行态）与 Gist 失败通知台账两键。
+// 功能代码删除后这些行无人读写，留置即残留（且其中 gist_token 是
+// GitHub 凭据本体），按「删除不留残留」口径在 schema v8 迁移里删净；
+// 幂等，键不存在时无副作用。本地备份/恢复与自动快照的键不在此列。
+// 键清单与备份过滤的已注销键集同源单点（retiredConfigKeysList，
+// config_policy.go）：本迁移是版本门控的一次性步进、到 v8 后永不
+// 重跑，恢复面（filterRestoreConfigs 恒排除＋noteRemovedFeatureSegments
+// 剥离点名）靠同一清单恒排除，两面才不会一删一复活（R2-E3-F03）。
 func migrateRemoveGistConfigKeys(db *gorm.DB) error {
 	if db == nil {
 		return errors.New("nil db")
 	}
-	keys := removedGistConfigKeys
+	keys := retiredConfigKeysList
 	if err := db.Where("name IN ?", keys).Delete(&model.ViteConfig{}).Error; err != nil {
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "no such table") || (strings.Contains(msg, "relation") && strings.Contains(msg, "does not exist")) {

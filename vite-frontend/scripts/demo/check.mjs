@@ -155,36 +155,28 @@ const INTERACTIONS = {
   // Expanding a subscription's traffic section mounts SubTrafficStats,
   // which pulls user/subscription/traffic.
   "user my-subscription": `(() => { const b = [...(document.querySelector("main") ?? document).querySelectorAll("button")].find((x) => x.textContent.includes("该订阅流量统计")); if (!b) return false; b.click(); return true; })()`,
-  // R3-C5-02: the Gist upload button only calls backup/gist/upload
-  // after a click, and the endpoint is a recorded fixture (not a
-  // WRITE_WORDS success) because the page consumes the response's
-  // {result, status} shape — the not-recorded empty array crashed
-  // the section (setStatus(undefined) + TypeError) while no walk
-  // ever clicked it. Fill token + password (the button stays
-  // disabled until both are present), then click 立即上传. Filling
-  // is idempotent, so the poll may re-run this step until the
-  // button enables; the click itself happens exactly once (the
-  // step returns true only on the evaluating pass that clicks).
-  // R4-C5-01/02/03: the same step continues through the config
-  // page's other data-carrying actions, in window-flagged phases
-  // (each click exactly once; later passes only observe):
-  // phase 2 exports a backup (选择并导出 → 全选 → 确认导出; the
-  // selector modal closing is the success marker — a failed export
-  // keeps it open behind an error toast, and before the adapter
-  // synthesized an attachment response the click threw a TypeError
-  // page error). 全选 and the confirm click are separate passes:
-  // the confirm handler reads the selection from React state, so
-  // clicking both in one pass confirms the still-empty selection);
-  // phase 3+4 imports one (选择并导入 → 全选 →
-  // 下一步选择文件, then the CDP hook in interact() sets the
-  // patrol backup file on the hidden input, then 确认导入; the
-  // settle marker is the receipt panel's 共导入 line — the patrol
-  // file carries a legacy tunnelGroups row, so the panel must also
-  // name it as ignored); phase 5 restores from Gist (刷新版本列表
-  // → 恢复此版本 → password → 恢复; success reloads the page and
-  // the receipt survives via sessionStorage, so the final marker
-  // is checked before phase 1 — a reloaded step sees it at once).
-  "admin config": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const setVal = (el, v) => { const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; setter.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }; const btn = (root, t) => [...root.querySelectorAll("button")].find((x) => x.textContent.trim() === t); const dlgByTitle = (t) => [...document.querySelectorAll('[role="dialog"]')].find((d) => { const h = d.querySelector('[data-slot="modal-header"]') ?? d.querySelector("h2"); return h && h.textContent.trim() === t; }) ?? null; if (document.body.textContent.includes("最近一次 Gist 恢复结果")) return true; if (!w.__cg1) { const token = scope.querySelector('input[aria-label="GitHub 令牌"]'); const password = scope.querySelector('input[aria-label="加密密码"]'); if (!token || !password) return false; if (!token.value) setVal(token, "ghp_demo_patrol_token"); if (!password.value) setVal(password, "demo-patrol-password"); const b = btn(scope, "立即上传"); if (!b || b.disabled) return false; w.__cg1 = true; b.click(); return false; } if (!w.__cg2) { const b = btn(scope, "选择并导出"); if (!b) return false; w.__cg2 = true; b.click(); return false; } if (!w.__cg3) { const d = dlgByTitle("选择导出内容"); if (!d) return false; const all = btn(d, "全选"); if (!all) return false; w.__cg3 = true; all.click(); return false; } if (!w.__cg3b) { const d = dlgByTitle("选择导出内容"); if (!d) return false; const b = btn(d, "确认导出"); if (!b || b.disabled) return false; w.__cg3b = true; b.click(); return false; } if (dlgByTitle("选择导出内容")) return false; if (!w.__cg4) { const b = btn(scope, "选择并导入"); if (!b) return false; w.__cg4 = true; b.click(); return false; } if (!w.__cg5) { const d = dlgByTitle("选择导入内容"); if (!d) return false; const all = btn(d, "全选"); if (!all) return false; w.__cg5 = true; all.click(); return false; } if (!w.__cg5b) { const d = dlgByTitle("选择导入内容"); if (!d) return false; const b = btn(d, "下一步选择文件"); if (!b || b.disabled) return false; w.__cg5b = true; w.__impPick = true; b.click(); return false; } if (!w.__impDone) return false; if (!w.__cg6) { const d = dlgByTitle("确认导入备份"); if (!d) return false; const b = btn(d, "确认导入"); if (!b || b.disabled) return false; w.__cg6 = true; b.click(); return false; } if (!document.body.textContent.includes("共导入")) return false; if (!w.__cg7) { const b = btn(scope, "刷新版本列表"); if (!b) return false; w.__cg7 = true; b.click(); return false; } if (!w.__cg8) { const b = btn(scope, "恢复此版本"); if (!b) return false; w.__cg8 = true; b.click(); return false; } if (!w.__cg9) { const d = dlgByTitle("从 Gist 恢复"); if (!d) return false; const pw = d.querySelector('input[aria-label="加密密码"]'); if (!pw) return false; if (!pw.value) setVal(pw, "demo-patrol-password"); const b = btn(d, "恢复"); if (!b || b.disabled) return false; w.__cg9 = true; b.click(); return false; } return false; })()`,
+  // R4-C5-01/02/03: the config step drives the local backup
+  // chain, in window-flagged phases (each click exactly once;
+  // later passes only observe): phase 1 exports a backup
+  // (选择并导出 → 全选 → 确认导出; the selector modal closing
+  // is the success marker — a failed export keeps it open behind
+  // an error toast, and before the adapter synthesized an
+  // attachment response the click threw a TypeError page error).
+  // 全选 and the confirm click are separate passes: the confirm
+  // handler reads the selection from React state, so clicking
+  // both in one pass confirms the still-empty selection);
+  // phase 2+3 imports one (选择并导入 → 全选 → 下一步选择文件,
+  // then the CDP hook in interact() sets the patrol backup file
+  // on the hidden input, then 确认导入; the settle marker is
+  // the receipt panel's 共导入 line — the patrol file carries a
+  // legacy tunnelGroups row, so the panel must also name it as
+  // ignored).
+  // R2-E3 cleanup (2.1.0): the step used to open with a
+  // token-upload phase and close with a restore phase against
+  // the remote backup feature the panel removed in 2.1.0; both
+  // phases were deleted with the feature — the walk covers the
+  // local backup surface only.
+  "admin config": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const btn = (root, t) => [...root.querySelectorAll("button")].find((x) => x.textContent.trim() === t); const dlgByTitle = (t) => [...document.querySelectorAll('[role="dialog"]')].find((d) => { const h = d.querySelector('[data-slot="modal-header"]') ?? d.querySelector("h2"); return h && h.textContent.trim() === t; }) ?? null; if (!w.__cg1) { const b = btn(scope, "选择并导出"); if (!b) return false; w.__cg1 = true; b.click(); return false; } if (!w.__cg2) { const d = dlgByTitle("选择导出内容"); if (!d) return false; const all = btn(d, "全选"); if (!all) return false; w.__cg2 = true; all.click(); return false; } if (!w.__cg2b) { const d = dlgByTitle("选择导出内容"); if (!d) return false; const b = btn(d, "确认导出"); if (!b || b.disabled) return false; w.__cg2b = true; b.click(); return false; } if (dlgByTitle("选择导出内容")) return false; if (!w.__cg3) { const b = btn(scope, "选择并导入"); if (!b) return false; w.__cg3 = true; b.click(); return false; } if (!w.__cg4) { const d = dlgByTitle("选择导入内容"); if (!d) return false; const all = btn(d, "全选"); if (!all) return false; w.__cg4 = true; all.click(); return false; } if (!w.__cg4b) { const d = dlgByTitle("选择导入内容"); if (!d) return false; const b = btn(d, "下一步选择文件"); if (!b || b.disabled) return false; w.__cg4b = true; w.__impPick = true; b.click(); return false; } if (!w.__impDone) return false; if (!w.__cg5) { const d = dlgByTitle("确认导入备份"); if (!d) return false; const b = btn(d, "确认导入"); if (!b || b.disabled) return false; w.__cg5 = true; b.click(); return false; } return document.body.textContent.includes("共导入"); })()`,
   // R4-C5-01: the node row's action sheet is the only path to
   // node/install; its answer used to be data:null and the modal
   // error-toasted the write answer's own msg ("操作成功"). Open
@@ -245,9 +237,8 @@ const INTERACTIONS = {
   "admin tunnel": `(() => { const w = window; const scope = document.querySelector("main") ?? document; const dlgByTitle = (title) => { const h = [...document.querySelectorAll("h2")].find((x) => x.textContent.trim() === title); return h?.closest('[role="dialog"]') ?? h?.closest("section") ?? null; }; const cancelOf = (dlg) => [...dlg.querySelectorAll("button")].find((x) => x.textContent.trim() === "取消"); if (!w.__dt1) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt1 = true; b.click(); return false; } if (!w.__dt1Done) { const dlg = dlgByTitle("删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("发现关联规则") || !t.includes("关联规则预览")) return false; const c = cancelOf(dlg); if (c) c.click(); w.__dt1Done = true; return false; } if (!w.__dt2) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "批量" && !x.disabled); if (!b) return false; w.__dt2 = true; b.click(); return false; } if (!w.__dt2Picked) { const box = scope.querySelector('[role="checkbox"]'); if (!box) return false; box.click(); w.__dt2Picked = true; return false; } if (!w.__dt2Clicked) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "删除" && !x.disabled); if (!b) return false; w.__dt2Clicked = true; b.click(); return false; } if (!w.__dt2Done) { const dlg = dlgByTitle("批量删除隧道"); if (!dlg) return false; const t = dlg.textContent ?? ""; if (t.includes("正在检查")) return false; if (!t.includes("条仍被规则使用")) return false; const c = cancelOf(dlg); if (c) c.click(); w.__dt2Done = true; return false; } if (!w.__dt3) { const b = [...scope.querySelectorAll("button")].find((x) => x.textContent.trim() === "下发" && !x.disabled); if (!b) { if (!w.__dt3Picked) { const box = scope.querySelector('[role="checkbox"]'); if (box) { box.click(); w.__dt3Picked = true; } } return false; } w.__dt3 = true; b.click(); return false; } const t = document.body.textContent ?? ""; return t.includes("成功重新下发") || t.includes("重新下发完成：成功"); })()`,
 };
 
-// Multi-phase steps (R4-C5: the config step chains gist upload,
-// backup export, backup import and gist restore, the last of which
-// reloads the page) get a longer poll ceiling than the page settle;
+// Multi-phase steps (R4-C5: the config step chains backup export
+// and backup import) get a longer poll ceiling than the page settle;
 // the minimum settle is unchanged, so no step is judged earlier
 // than under the old fixed wait.
 const STEP_BUDGET_MS = {

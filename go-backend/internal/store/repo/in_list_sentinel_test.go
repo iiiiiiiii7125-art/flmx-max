@@ -65,7 +65,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository.go:ListEnabledServiceMonitors":              {"", "字面量 2 元协议清单"},
 	"repository.go:importServiceMonitorLimits":              {"", "字面量 7 元服务监控限值配置键清单"},
 	"repository_subscription.go:migrateSubscriptions":       {"", "字面量 5 元旧配置键清单"},
-	"repository.go:migrateRemoveGistConfigKeys":            {"", "字面量 10 元已下线 Gist 配置键清单（DEV-RM-GIST，schema v8 清理）"},
+	"repository.go:migrateRemoveGistConfigKeys":            {"", "已下线 Gist 配置键清单已提升为 repo 包级单点 retiredConfigKeysList（config_policy.go），本函数与备份恢复过滤同源消费（R2-E3-F03）"},
 	"repository_mutations.go:ListSoleSegmentTunnelsForNode": {"", "字面量 2 元链路段角色清单（入口/出口，L4-03）"},
 
 	// —— 子查询形（IN (?) 传 *gorm.DB，不展开变量）——

@@ -10,7 +10,7 @@ body** (with a `Content-Disposition: attachment` header), not an envelope.
 
 ## Segment types
 
-Backups are organized into 13 segment types (exact names, camelCase):
+Backups are organized into 14 segment types (exact names, camelCase):
 
 - `users` - User accounts
 - `nodes` - Node configurations (also carries the `nodeSSHConfigs`
@@ -20,7 +20,9 @@ Backups are organized into 13 segment types (exact names, camelCase):
 - `userTunnels` - User-tunnel assignments
 - `speedLimits` - Speed limit rules
 - `configs` - System configurations (filtered: sensitive, system-managed
-  keys never enter a backup file)
+  and retired keys never enter a backup file; retired keys — config keys
+  whose feature was removed, e.g. the `gist_*` keys — are also dropped
+  on restore from old backups and named in `importWarnings`)
 - `inbounds` - Node kernels, inbounds, relay links and traffic counter
   baselines (restored as one unit)
 - `userInbounds` - Legacy per-inbound user assignments
@@ -28,10 +30,15 @@ Backups are organized into 13 segment types (exact names, camelCase):
 - `monitorPermissions` - Monitoring permission grants
 - `userSubscriptions` - Subscription assignments
 - `serviceMonitors` - Service monitor definitions
+- `passkeys` - WebAuthn passkey credentials (public-key material only:
+  credential ID, public key, sign counter, attestation ceremony data —
+  WebAuthn private keys never leave the authenticator). Rows whose
+  user no longer exists are skipped on restore and counted in
+  `skippedRows.passkeys`.
 
 Unknown type names are rejected by name.
 
-A backup file has 14 top-level segment keys: the 13 types above plus
+A backup file has 15 top-level segment keys: the 14 types above plus
 `nodeSSHConfigs` (per-node SSH connection configs), which travels with
 the `nodes` type.
 The removed node-group segments (`tunnelGroups`, `userGroups`,
@@ -190,8 +197,8 @@ The import body is the backup file **plus** the `types` field (the
 exported file does not carry one):
 
 ```bash
-# Import all 13 segment types from a backup file
-jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","announcements","monitorPermissions","userSubscriptions","serviceMonitors"]}' \
+# Import all 14 segment types from a backup file
+jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","announcements","monitorPermissions","userSubscriptions","serviceMonitors","passkeys"]}' \
   backup-20260226.json > import-body.json
 
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/backup/import" \
@@ -210,7 +217,7 @@ curl -s -X POST "${SOURCE_URL}/api/v1/backup/export" \
   -d '{}' > migration.json
 
 # On target panel (add the types field as in the restore workflow)
-jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","announcements","monitorPermissions","userSubscriptions","serviceMonitors"]}' \
+jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","announcements","monitorPermissions","userSubscriptions","serviceMonitors","passkeys"]}' \
   migration.json > migration-import.json
 
 curl -s -X POST "${TARGET_URL}/api/v1/backup/import" \

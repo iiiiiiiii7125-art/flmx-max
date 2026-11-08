@@ -117,13 +117,14 @@ func TestR13BRUnknownBackupTypeRejected(t *testing.T) {
 	if _, err := r.Import(&model.BackupData{Version: "1.0"}, []string{"bogus_only"}); err == nil || !strings.Contains(err.Error(), "bogus_only") {
 		t.Fatalf("R13X-005: Import unknown-only type must error naming bogus_only, got err=%v", err)
 	}
-	// 合法类型清单行为不变：13 值全量导出/导入均成功。
-	legal := []string{"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits", "configs", "inbounds", "userInbounds", "announcements", "monitorPermissions", "userSubscriptions", "serviceMonitors"}
+	// 合法类型清单行为不变：14 值全量导出/导入均成功（passkeys 为
+	// R2-E3-F02 新增段）。
+	legal := []string{"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits", "configs", "inbounds", "userInbounds", "announcements", "monitorPermissions", "userSubscriptions", "serviceMonitors", "passkeys"}
 	if _, err := r.ExportPartial(legal); err != nil {
-		t.Fatalf("R13X-005: legal 13-type export must succeed, got %v", err)
+		t.Fatalf("R13X-005: legal 14-type export must succeed, got %v", err)
 	}
 	if _, err := r.Import(&model.BackupData{Version: "1.0"}, legal); err != nil {
-		t.Fatalf("R13X-005: legal 13-type import of empty backup must succeed, got %v", err)
+		t.Fatalf("R13X-005: legal 14-type import of empty backup must succeed, got %v", err)
 	}
 	// 已移除的分组三件套段名按未知类型点名拒绝（1.9.6 段集收口）。
 	for _, removed := range []string{"tunnelGroups", "userGroups", "permissions"} {

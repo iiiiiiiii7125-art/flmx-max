@@ -45,7 +45,8 @@ func TestRemovedFeatureSegments210Receipt(t *testing.T) {
 				{"id": 22, "nodeId": 10, "kernelType": "singbox", "version": "latest", "enabled": 1, "createdTime": ` + itoa(int(now)) + `}
 			],
 			"inbounds": [
-				{"id": 301, "kernelId": 21, "nodeId": 10, "name": "snell-self", "protocol": "snell", "listen": "::", "port": 8480, "enabled": 1, "createdTime": ` + itoa(int(now)) + `,
+				{"id": 301, "kernelId": 21, "nodeId": 10, "name": "snell-self", "protocol": "snell", "listen": "::", "port": 8480, "enabled": 1, "createdTime": ` + itoa(int(now)) + `},
+				{"id": 304, "kernelId": 21, "nodeId": 10, "name": "snell-with-settings", "protocol": "snell", "listen": "::", "port": 8482, "enabled": 1, "createdTime": ` + itoa(int(now)) + `,
 				 "settings": "{\"psk\":\"abc\"}", "transport": "{\"type\":\"tcp\"}", "security": "{\"type\":\"none\"}"},
 				{"id": 302, "kernelId": 0, "nodeId": 10, "name": "snell-imported", "protocol": "snell", "listen": "::", "port": 8481, "enabled": 1, "createdTime": ` + itoa(int(now)) + `,
 				 "extra": "{\"type\":\"snell\",\"server\":\"203.0.113.9\",\"port\":8389,\"psk\":\"xyz\",\"version\":5}"},
@@ -76,9 +77,9 @@ func TestRemovedFeatureSegments210Receipt(t *testing.T) {
 	if result.TunnelGroupsIgnored != 1 {
 		t.Fatalf("control segment tunnelGroups ignored = %d, want 1", result.TunnelGroupsIgnored)
 	}
-	if result.InboundSnellKernelsDisabled != 1 || result.InboundSnellInboundsIgnored != 1 {
-		t.Fatalf("snell counts kernelsDisabled/inboundsIgnored = %d/%d, want 1/1",
-			result.InboundSnellKernelsDisabled, result.InboundSnellInboundsIgnored)
+	if result.InboundSnellKernelsDisabled != 1 || result.InboundSnellInboundsDisabled != 1 {
+		t.Fatalf("snell counts kernelsDisabled/inboundsDisabled = %d/%d, want 1/1",
+			result.InboundSnellKernelsDisabled, result.InboundSnellInboundsDisabled)
 	}
 	for _, want := range []string{"peerShares", "themes", "gist_token", "Snell 内核（1 条）", "自建 Snell 入站（1 条）", "tunnelGroups"} {
 		found := false
@@ -96,7 +97,7 @@ func TestRemovedFeatureSegments210Receipt(t *testing.T) {
 		t.Fatalf("marshal receipt: %v", err)
 	}
 	for _, want := range []string{`"peerSharesIgnored":2`, `"themesIgnored":2`, `"gistConfigsIgnored":3`,
-		`"inboundSnellKernelsDisabled":1`, `"inboundSnellInboundsIgnored":1`} {
+		`"inboundSnellKernelsDisabled":1`, `"inboundSnellInboundsDisabled":1`} {
 		if !strings.Contains(string(receipt), want) {
 			t.Fatalf("receipt JSON missing %s: %s", want, receipt)
 		}
@@ -116,8 +117,13 @@ func TestRemovedFeatureSegments210Receipt(t *testing.T) {
 		t.Fatalf("configs imported = %d, want 2 (app_name + custom_probe_key)", result.ConfigsImported)
 	}
 
-	// Snell 内核按禁用恢复；自建 Snell 入站不落库；导入型 Snell
-	// 节点与普通入站照常恢复（保留面不受牵连）。
+	// Snell 内核按禁用恢复；自建 Snell 入站按 rmsnell_v1 同口径
+	// 禁用落库（INT-6 集成裁定：与 BKUP 的中和处置并存，终态取
+	// 禁用保留而非不落库，与存量迁移对同类行处置一致）；带
+	// settings 的自建 Snell 入站（304）因协议实现已删、Normalize
+	// 校验必然拒绝，整行跳过并在校验跳过 warning 中点名（合并
+	// 语义的第二子形态）；导入型 Snell 节点与普通入站照常恢复
+	// （保留面不受牵连）。
 	var kernel21 model.NodeKernel
 	if err := dest.DB().Where("id = ?", 21).First(&kernel21).Error; err != nil {
 		t.Fatalf("snell kernel row must be kept (disabled): %v", err)
@@ -125,12 +131,22 @@ func TestRemovedFeatureSegments210Receipt(t *testing.T) {
 	if kernel21.Enabled != 0 {
 		t.Fatalf("snell kernel must be restored disabled, got enabled=%d", kernel21.Enabled)
 	}
-	var inboundCount int64
-	if err := dest.DB().Model(&model.NodeInbound{}).Where("id = ?", 301).Count(&inboundCount).Error; err != nil {
+	var inbound301 model.NodeInbound
+	if err := dest.DB().Where("id = ?", 301).First(&inbound301).Error; err != nil {
+		t.Fatalf("self-built snell inbound must land disabled (rmsnell_v1 disposition): %v", err)
+	}
+	if inbound301.Enabled != 0 {
+		t.Fatalf("self-built snell inbound must land disabled, got enabled=%d", inbound301.Enabled)
+	}
+	var inbound304Count int64
+	if err := dest.DB().Model(&model.NodeInbound{}).Where("id = ?", 304).Count(&inbound304Count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if inboundCount != 0 {
-		t.Fatalf("self-built snell inbound must not land, found %d rows", inboundCount)
+	if inbound304Count != 0 {
+		t.Fatalf("settings-carrying snell inbound must be skipped by the Normalize gate, found %d rows", inbound304Count)
+	}
+	if !strings.Contains(strings.Join(result.ImportWarnings, "\n"), "snell-with-settings") {
+		t.Fatalf("skipped settings-carrying snell inbound must be named in warnings, got %v", result.ImportWarnings)
 	}
 	for _, id := range []int64{302, 303} {
 		var n int64
@@ -149,7 +165,7 @@ func TestRemovedFeatureSegments210Receipt(t *testing.T) {
 		t.Fatalf("clean import: %v", err)
 	}
 	if result2.PeerSharesIgnored != 0 || result2.ThemesIgnored != 0 || result2.GistConfigsIgnored != 0 ||
-		result2.InboundSnellKernelsDisabled != 0 || result2.InboundSnellInboundsIgnored != 0 {
+		result2.InboundSnellKernelsDisabled != 0 || result2.InboundSnellInboundsDisabled != 0 {
 		t.Fatalf("clean import removed-feature counts must all be 0, got %+v", result2)
 	}
 	if len(result2.ImportWarnings) != 0 {

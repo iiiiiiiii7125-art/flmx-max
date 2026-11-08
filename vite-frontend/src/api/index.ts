@@ -531,6 +531,8 @@ export interface BackupTypes {
   // B4/F-004/F-030：订阅分配与监控定义。
   userSubscriptions?: boolean;
   serviceMonitors?: boolean;
+  // R2-E3-F02：Passkey 公钥凭据。
+  passkeys?: boolean;
 }
 
 export const exportBackup = async (types: string[] = []) => {

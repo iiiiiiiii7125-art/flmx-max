@@ -218,7 +218,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/backup/export" \
   -d '{"types":["users","tunnels"]}' > partial-backup.json
 
 # Import backup (the import body must carry a "types" field — see backup.md)
-jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","announcements","monitorPermissions","userSubscriptions","serviceMonitors"]}' \
+jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","announcements","monitorPermissions","userSubscriptions","serviceMonitors","passkeys"]}' \
   backup-20260226.json > import-body.json
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/backup/import" \
   -H "Authorization: ${TOKEN}" \

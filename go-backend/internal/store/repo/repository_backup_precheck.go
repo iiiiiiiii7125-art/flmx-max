@@ -343,6 +343,11 @@ func validateBackupSectionBudgets(backup *model.BackupData, typeSet map[string]b
 			return err
 		}
 	}
+	if typeSet["passkeys"] {
+		if err := check("passkeys", len(backup.Passkeys), maxImportSectionRows); err != nil {
+			return err
+		}
+	}
 	if typeSet["userSubscriptions"] {
 		if err := check("userSubscriptions", len(backup.UserSubscriptions), maxImportSectionRows); err != nil {
 			return err
