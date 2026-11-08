@@ -15,6 +15,12 @@
 # 依赖；本地同理（未装依赖时 §14 会先红在环境前提上，按其输出装
 # 依赖后复跑）。
 #
+# FIX-DOC-R 扩围：变体 4–7 覆盖 §18–§21（去重键凭据指纹、计量伴
+# 生端口区间、监控目标两面口径、服务监控限值披露），每族一个变
+# 体、改坏文案必须被对应节抓红并点名。§10(b) 的 x 包计数标记属
+# 环境漂移敏感面（合并波次新增带测试包即漂移），不属本自检变体
+# 面：计数对账由 INT-3/R2 在合并尖端按实数重标定并点名。
+#
 # 用法：check-doc-consistency-selftest.sh（无参数，作用于本仓库）。
 # 退出码：0 = 基线 PASS 且变体均被抓；1 = 任一断言不成立。
 set -u
@@ -71,5 +77,41 @@ if run_gate "$TMP/v3.log"; then
 fi
 grep -q "初始口令口径门" "$TMP/v3.log" && echo "OK: variant 3 caught and named" || {
   echo "FAIL: variant 3 caught but the drift was not named"; sed 's/^/    /' "$TMP/v3.log"; exit 1; }
+cp "$ROOT/doc/guide/getting-started.md" "$MIR/doc/guide/getting-started.md"
+
+echo "== variant 4: dedupe key drops the credential fingerprint again must FAIL and name it (§18) =="
+sed -i 's/凭据指纹：凭据字段集的 sha256 前 16 位/凭据原文/' "$MIR/doc/guide/subscription.md"
+if run_gate "$TMP/v4.log"; then
+  echo "FAIL: variant 4 was not caught"; exit 1
+fi
+grep -q "去重键口径门" "$TMP/v4.log" && echo "OK: variant 4 caught and named" || {
+  echo "FAIL: variant 4 caught but the drift was not named"; sed 's/^/    /' "$TMP/v4.log"; exit 1; }
+cp "$ROOT/doc/guide/subscription.md" "$MIR/doc/guide/subscription.md"
+
+echo "== variant 5: metering companion port range drifts back to 59999 must FAIL and name it (§19) =="
+sed -i 's/在 \[20000, 60000) 内随机取空闲端口/在 20000–59999 内随机取空闲端口/' "$MIR/doc/guide/subscription.md"
+if run_gate "$TMP/v5.log"; then
+  echo "FAIL: variant 5 was not caught"; exit 1
+fi
+grep -q "计量伴生端口口径门" "$TMP/v5.log" && echo "OK: variant 5 caught and named" || {
+  echo "FAIL: variant 5 caught but the drift was not named"; sed 's/^/    /' "$TMP/v5.log"; exit 1; }
+cp "$ROOT/doc/guide/subscription.md" "$MIR/doc/guide/subscription.md"
+
+echo "== variant 6: monitor targets collapse back to hard-reject-only must FAIL and name it (§20) =="
+sed -i 's/按\*\*非公网全集\*\*拒绝/按**硬拒集**拒绝/' "$MIR/doc/guide/monitoring.md"
+if run_gate "$TMP/v6.log"; then
+  echo "FAIL: variant 6 was not caught"; exit 1
+fi
+grep -q "监控目标口径门" "$TMP/v6.log" && echo "OK: variant 6 caught and named" || {
+  echo "FAIL: variant 6 caught but the drift was not named"; sed 's/^/    /' "$TMP/v6.log"; exit 1; }
+cp "$ROOT/doc/guide/monitoring.md" "$MIR/doc/guide/monitoring.md"
+
+echo "== variant 7: service-monitor limit disclosure drifts must FAIL and name it (§21) =="
+sed -i 's/并发上限默认 20（保存上限 50）/并发上限默认 30（保存上限 50）/' "$MIR/doc/guide/monitoring.md"
+if run_gate "$TMP/v7.log"; then
+  echo "FAIL: variant 7 was not caught"; exit 1
+fi
+grep -q "服务监控限值披露门" "$TMP/v7.log" && echo "OK: variant 7 caught and named" || {
+  echo "FAIL: variant 7 caught but the drift was not named"; sed 's/^/    /' "$TMP/v7.log"; exit 1; }
 
 echo "SELFTEST PASS"

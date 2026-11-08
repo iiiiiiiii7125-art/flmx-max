@@ -1,9 +1,9 @@
 # BACKEND HTTP HANDLER KNOWLEDGE BASE
 
 **Generated:** 2026-11-08
-**Commit:** 557322be (int-wave-20261107 tip)
-**Branch:** int-wave-20261107
-**Version:** 2.0.0 released; next release in preparation is 2.1.0 (no tag yet)
+**Base commit:** e5a83bf1 (int-wave-20261107 tip at generation time)
+**Branch context:** int-wave-20261107 integration line; the latest
+release tag in this repository is 2.0.0
 
 ## OVERVIEW
 HTTP request handlers for FLMX Admin API. Core business logic layer.
@@ -36,7 +36,7 @@ handler/
 |------|----------|-------|
 | **User/Tunnel CRUD** | `mutations.go` | Largest file; all create/update/delete ops |
 | **Login/Captcha** | `handler.go` | Login flow, captcha verification |
-| **Route registration** | `handler.go`, `../../router.go` | All `/api/v1` routes are registered here |
+| **Route registration** | `handler.go` (`Register()`), `../router.go` | `/api/v1` routes are registered in `Handler.Register()`; the mux itself is assembled in `internal/http/router.go` |
 | **Federation Sync** | `federation.go` | Panel-to-panel sync |
 | **Traffic Policies** | `flow_policy.go` | Flow limiting, quota management |
 | **Background Jobs** | `jobs.go` | Scheduled sync/cleanup tasks |
