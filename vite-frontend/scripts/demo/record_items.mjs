@@ -16,12 +16,9 @@ const callAs = (book) => async (token, method, path, body) => {
 };
 const call = callAs(rec.admin);
 await call(tok, "POST", "kernel/capabilities");
-// R15-X-02: the config page mounts <GistBackup/> unconditionally for
-// admins and calls backup/gist/status on mount; without a direct
-// recording the demo adapter warns "[demo] not recorded" and the
-// config walk fails. Record the seed panel's honest answer (no token
-// configured) like every other item-level endpoint here.
-await call(tok, "POST", "backup/gist/status", {});
+// The config page's remote-backup section was removed with the
+// feature in 2.1.0 (routes deleted); the page no longer calls its
+// status endpoint on mount, so nothing is recorded for it here.
 // The config page also polls the pre-import auto-backup snapshot status
 // (GET, no body) on mount; without a direct recording the demo adapter
 // warns "[demo] not recorded" and the config walk fails. Record the seed
