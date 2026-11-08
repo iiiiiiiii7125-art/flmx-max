@@ -1054,7 +1054,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 			return
 		}
 		var err error
-		k, err = h.repo.GetNodeKernelByType(req.NodeID, strings.ToLower(strings.TrimSpace(req.KernelType)))
+		k, err = h.repo.GetNodeKernelByType(req.NodeID, kernel.CanonicalKernelType(req.KernelType))
 		if err != nil {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return

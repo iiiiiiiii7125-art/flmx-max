@@ -268,8 +268,30 @@ func Catalog() []Info {
 	return out
 }
 
+// normalizeKernelType folds user-supplied kernel names onto the catalog
+// key space: lower-case, trim, and drop hyphens. The catalog display
+// name for sing-box is "sing-box" while its Type is "singbox", so the
+// alias is the name every operator naturally types (M-0001). Before
+// this, the alias failed three faces with three different wordings:
+// /kernel/versions said "未知内核", inbound creation said "请先在该
+// 节点安装内核" (misleading — the kernel was installed), and
+// Normalize said "暂不支持内核 sing-box".
+func normalizeKernelType(kernelType string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(kernelType)), "-", "")
+}
+
+// CanonicalKernelType returns the catalog Type for a kernel name, or
+// the normalized input when it names no known kernel, so DB lookups
+// keep today's not-found behaviour for genuinely unknown names.
+func CanonicalKernelType(kernelType string) string {
+	if info, ok := Lookup(kernelType); ok {
+		return info.Type
+	}
+	return normalizeKernelType(kernelType)
+}
+
 func Lookup(kernelType string) (Info, bool) {
-	kernelType = strings.ToLower(strings.TrimSpace(kernelType))
+	kernelType = normalizeKernelType(kernelType)
 	for _, info := range catalog {
 		if info.Type == kernelType {
 			return info, true

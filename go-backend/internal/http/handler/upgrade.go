@@ -917,17 +917,39 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("回退失败: %v", err)))
 		return
 	}
+	// M-0051: the rollback script restarts the agent, so mark the node
+	// pending-redeploy like the upgrade path does — on reconnect the
+	// runtime is restored immediately instead of waiting out the
+	// redeploy cooldown.
+	h.markNodePendingUpgradeRedeploy(req.ID)
 
 	response.WriteJSON(w, response.OK(rollbackReceiptData(result)))
 }
 
 // rollbackReceiptData builds the node rollback receipt (R6-05).
-// Agents that carry the backup-pairing pre-flight report the
-// landing version in the command data; the receipt must name that
-// version — a rollback whose target the operator cannot see is how
-// the cross-path generation skip (panel upgrade A->B, script
-// update B->C, rollback silently landing on A) stayed invisible.
-// The backupGeneration field is passed through verbatim; a
+//
+// M-0051: this is a DISPATCH receipt, not a landing certificate. The
+// agent handler (handleRollbackAgent) returns as soon as the detached
+// rollback script is spawned — the handler process itself dies in the
+// service restart the script performs — so at dispatch time nobody
+// can know whether the swap landed. The pre-M-0051 receipt named the
+// target as "toVersion" under a success toast, which operators read
+// as "rollback landed"; a silently failed script then stayed
+// invisible (LIVE-ALL: receipt 04:53 UTC, binary untouched since
+// 03:35, no .old, agent never restarted). The receipt therefore
+// names the target as expectedVersion, carries status "dispatched",
+// and tells the operator to verify the landed version in the node
+// list after reconnect (the agent reports its version on WS
+// connect, so a failed rollback shows up as the version not
+// changing). The toVersion field is removed: keeping it would let
+// API consumers keep misreading the target as landed (BC break,
+// named in the release notes; the panel UI only ever read message).
+// Agents that carry the backup-pairing pre-flight report the target
+// version in the command data; the receipt must name that version —
+// a rollback whose target the operator cannot see is how the
+// cross-path generation skip (panel upgrade A->B, script update
+// B->C, rollback silently landing on A) stayed invisible. The
+// backupGeneration field is passed through verbatim; a
 // "legacy-unknown" backup (written before pairing records existed)
 // is disclosed as unverified in the message. Older agents report
 // no data at all (R7-13): their rollback ran under the pre-pairing
@@ -936,17 +958,17 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 // the agent's bare message — in a mixed-version fleet every
 // unverified rollback shows the same signal.
 func rollbackReceiptData(result ws.CommandResult) map[string]interface{} {
-	data := map[string]interface{}{"message": result.Message}
+	data := map[string]interface{}{"message": result.Message, "status": "dispatched"}
 	toVersion, _ := result.Data["toVersion"].(string)
 	if toVersion == "" {
-		data["message"] = "回退命令已发送，节点将自动重启（该备份无代际配对记录，未经紧邻上一代校验）"
+		data["message"] = "回退命令已下发，节点正在重启（该备份无代际配对记录，未经紧邻上一代校验）"
 		return data
 	}
-	data["toVersion"] = toVersion
+	data["expectedVersion"] = toVersion
 	if fromVersion, _ := result.Data["fromVersion"].(string); fromVersion != "" {
 		data["fromVersion"] = fromVersion
 	}
-	message := fmt.Sprintf("回退命令已发送，节点将回退到版本 %s 并自动重启", toVersion)
+	message := fmt.Sprintf("回退命令已下发，节点正在重启；目标版本 %s，落点待节点重连后在节点列表核验", toVersion)
 	if generation, _ := result.Data["backupGeneration"].(string); generation != "" {
 		data["backupGeneration"] = generation
 		if generation == "legacy-unknown" {
