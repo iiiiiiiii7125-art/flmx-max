@@ -744,8 +744,8 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
 //   (a) 前端声明字段 ⊆ agent json tag 集——前端查不存在的字段恒
 //       为 undefined，渲染恒空，属静默漂移；
 //   (b) C2-01 裁定的新字段集两侧齐在（sock_diag 分布三件＋参考
-//       腿序列七件）。agent 另有 suggested/bandwidth* 等前端不声
-//       明的字段，故只单向断言，不反向要求 agent ⊆ 前端。
+//       腿序列七件）。agent 另有 suggested 一件前端不声明的字段，
+//       故只单向断言，不反向要求 agent ⊆ 前端。
 {
   const problems = [];
   const agentProbeGo = readCode("go-gost/x/socket/tuning_probe.go", true);
@@ -761,7 +761,15 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
   }
   if (agentTags === null) {
     problems.push("go-gost/x/socket/tuning_probe.go 未找到 tuneProbeResult 结构");
-  } else if (agentTags.size < 20) {
+  } else if (agentTags.size < 18) {
+    // 健全性阈值标定（FIX-C8 重标定）：tuneProbeResult 现行字段
+    // 恰 18 个 json tag。原阈值 20 系 FIX-PROBE 分支单路标定
+    // （该分支 21 个，含 bandwidthMbps/bandwidthAvailable/
+    // bandwidthSource 三个测速回包字段）；合并世界里 FIX-DEAD
+    // （01153a07）已删该三字段，21→18 差集经逐个对账恰为此三件、
+    // 无其他丢失、无新增。阈值按现行全集取 18：字段再减任一即
+    // 红、点名复核；结构合法增减字段时须连同 selftest 变体 5
+    // 一并重标定，不得无声改。
     problems.push(`tuneProbeResult json tag 提取异常（仅 ${agentTags.size} 条，疑似定位失效）`);
   }
   const feBlock = tsInterfaceBlock(
