@@ -17,6 +17,28 @@
 #      口径字面（与 initial_admin.go 的随机播种实现对齐）。提取/
 #      命中为空属前提失效、点名硬红。§6 只对账用户名字面量，
 #      本项对账口令口径，两门互补。
+#   18. 去重键口径门（FIX-DOC-R 常设门）：subscription.md 两处去重
+#      文案必须含凭据指纹口径（凭据指纹：字段集 sha256 前 16 位），
+#      且代码面 endpointCredentialFingerprint（kernel/sub_options.go）
+#      必须仍以 sha256 摘要前 16 位实现——F1-02 文档补齐后立此门，
+#      防文案或实现任一侧回退到「键＝地址/端口/协议」的旧口径。
+#   19. 计量伴生端口口径门（FIX-DOC-R 常设门）：subscription.md
+#      伴生端口文案必须为实现口径 [20000, 60000)，且代码面
+#      pickFreePortWithFallback 的实参必须仍是 (20000, 60000)
+#      （kernel.go）——F1-03 上界漂移（文档 59999 vs 实现 [20000,
+#      60000)）防复发。
+#   20. 监控目标口径门（FIX-DOC-R 常设门）：monitoring.md 必须同
+#      时含两面口径——本机面「非公网全集」拒绝＋经节点面「只拒硬
+#      拒集」——且代码面 monitor_ssrf.go 两函数同在、本机面注释
+#      仍含 NonPublic 全集口径、节点面注释仍含「只补硬拒子集」。
+#      F2-01 的旧形态（两面混写成只拒硬拒集）防复发。
+#   21. 服务监控限值披露门（FIX-DOC-R 常设门）：monitoring.md
+#      「系统级限值」行须逐项披露 7 个 service_monitor_* 键的缺省
+#      与上限（扫描 1s / 并发默认 20 上限 50 / 间隔最小·默认 1s /
+#      超时最小 1s·默认 5s·最大 60s、三超时键保存 ≤60），文案关键
+#      数字与 limits.go 的 DefaultServiceMonitorLimits 及域上限
+#      （MaxServiceMonitorWorkerLimit=50 / MaxServiceMonitorTimeoutSec
+#      =60）机械对账——F2-03 披露段防漂移。
 #   7. notify.md Webhook `event` 取值枚举 vs handler notifyEvent* 常量全集
 #      （R7-M-01 常设门：文档自称列全的枚举与代码常量集 diff 必须为 ∅）。
 #   8. 超时预算登记表 vs 产品代码（R8 T-GATE 常设门：转跑
@@ -591,6 +613,78 @@ for doc_file in doc/guide/getting-started.md doc/guide/install.md README.md; do
     note_ok "初始口令口径门：$doc_file 与随机播种口径一致"
   fi
 done
+
+# ── 18. 去重键口径门（FIX-DOC-R）：subscription.md 两处文案含凭据指纹口径，
+#    代码面指纹实现仍为 sha256 摘要前 16 位（F1-02 防回退）。
+SUB_MD="doc/guide/subscription.md"
+SUB_OPTS_GO="go-backend/internal/kernel/sub_options.go"
+if ! grep -Fq '端点带凭据时再追加凭据指纹' "$SUB_MD"; then
+  note_fail "去重键口径门：subscription.md 处理节括注缺凭据指纹口径（去重键＝地址/端口/协议＋凭据指纹，漂移回旧口径，请人工复核）"
+elif ! grep -Fq '凭据指纹：凭据字段集的 sha256 前 16 位' "$SUB_MD"; then
+  note_fail "去重键口径门：subscription.md 去重表格行缺「凭据指纹：凭据字段集的 sha256 前 16 位」口径字面"
+elif ! grep -Fq 'func endpointCredentialFingerprint' "$SUB_OPTS_GO" \
+     || ! grep -Fq 'sha256.Sum256' "$SUB_OPTS_GO" \
+     || ! grep -Fq '[:16]' "$SUB_OPTS_GO"; then
+  note_fail "去重键口径门：$SUB_OPTS_GO 的 endpointCredentialFingerprint 实现提取异常（函数/sha256/前 16 位截取任一缺失，前提失效，请人工复核）"
+else
+  note_ok "去重键口径门：subscription.md 两处文案与 endpointCredentialFingerprint（sha256 前 16 位）一致"
+fi
+
+# ── 19. 计量伴生端口口径门（FIX-DOC-R）：文案区间与代码面下发实参同为
+#    [20000, 60000)（F1-03 防复发）。
+KERNEL_GO="go-backend/internal/http/handler/kernel.go"
+if ! grep -Fq '在 [20000, 60000) 内随机取空闲端口' "$SUB_MD"; then
+  note_fail "计量伴生端口口径门：subscription.md 伴生端口文案缺「[20000, 60000)」实现口径（上界漂移回 59999 式表述，请人工复核）"
+elif ! grep -Fq 'pickFreePortWithFallback(20000, 60000' "$KERNEL_GO"; then
+  note_fail "计量伴生端口口径门：$KERNEL_GO 未找到 pickFreePortWithFallback(20000, 60000 实参（实现漂移或提取失效，请人工复核）"
+else
+  note_ok "计量伴生端口口径门：subscription.md 文案与 kernel.go 实参同为 [20000, 60000)"
+fi
+
+# ── 20. 监控目标口径门（FIX-DOC-R）：monitoring.md 两面口径齐备且代码面
+#    两校验函数与注释口径同在（F2-01 防复发）。
+MON_MD="doc/guide/monitoring.md"
+SSRF_GO="go-backend/internal/health/monitor_ssrf.go"
+if ! grep -Fq '按**非公网全集**拒绝' "$MON_MD" || ! grep -Fq '只拒**硬拒集**' "$MON_MD"; then
+  note_fail "监控目标口径门：monitoring.md 两面口径不全（本机面须「非公网全集」拒绝、经节点面须「只拒硬拒集」，F2-01 旧形态复发，请人工复核）"
+elif ! grep -Fq 'func ValidateMonitorTCPTarget' "$SSRF_GO" \
+     || ! grep -Fq 'func ValidateNodeMonitorTarget' "$SSRF_GO" \
+     || ! grep -Fq 'NonPublic' "$SSRF_GO" \
+     || ! grep -Fq '只补硬拒子集' "$SSRF_GO"; then
+  note_fail "监控目标口径门：$SSRF_GO 两校验函数或注释口径提取异常（ValidateMonitorTCPTarget/ValidateNodeMonitorTarget/NonPublic/只补硬拒子集任一缺失，请人工复核）"
+else
+  note_ok "监控目标口径门：monitoring.md 两面口径与 monitor_ssrf.go 两校验函数一致"
+fi
+
+# ── 21. 服务监控限值披露门（FIX-DOC-R）：monitoring.md 披露行的键集与关键
+#    数字同 limits.go 缺省/域上限机械对账（F2-03 防漂移）。
+LIMITS_GO="go-backend/internal/monitoring/limits.go"
+limits_line=$(grep -F '系统级限值' "$MON_MD" | grep 'service_monitor_' | head -1)
+limits_keys_want=$(grep -oP 'ConfigServiceMonitor\w+\s*=\s*"\Kservice_monitor_[a-z_]+' "$LIMITS_GO" | sort -u)
+def_block=$(sed -n '/func DefaultServiceMonitorLimits/,/^}/p' "$LIMITS_GO")
+def_scan=$(printf '%s' "$def_block" | grep -oP 'CheckerScanIntervalSec:\s*\K[0-9]+')
+def_worker=$(printf '%s' "$def_block" | grep -oP 'WorkerLimit:\s*\K[0-9]+')
+def_minint=$(printf '%s' "$def_block" | grep -oP 'MinIntervalSec:\s*\K[0-9]+')
+def_defint=$(printf '%s' "$def_block" | grep -oP 'DefaultIntervalSec:\s*\K[0-9]+')
+def_minto=$(printf '%s' "$def_block" | grep -oP 'MinTimeoutSec:\s*\K[0-9]+')
+def_defto=$(printf '%s' "$def_block" | grep -oP 'DefaultTimeoutSec:\s*\K[0-9]+')
+def_maxto=$(printf '%s' "$def_block" | grep -oP 'MaxTimeoutSec:\s*\K[0-9]+')
+cap_worker=$(grep -oP 'MaxServiceMonitorWorkerLimit\s*=\s*\K[0-9]+' "$LIMITS_GO")
+cap_timeout=$(grep -oP 'MaxServiceMonitorTimeoutSec\s*=\s*\K[0-9]+' "$LIMITS_GO")
+if [ -z "$limits_line" ] || [ -z "$limits_keys_want" ] \
+   || [ -z "$def_scan" ] || [ -z "$def_worker" ] || [ -z "$def_minint" ] || [ -z "$def_defint" ] \
+   || [ -z "$def_minto" ] || [ -z "$def_defto" ] || [ -z "$def_maxto" ] \
+   || [ -z "$cap_worker" ] || [ -z "$cap_timeout" ]; then
+  note_fail "服务监控限值披露门：前提失效（monitoring.md 限值行或 limits.go 缺省/上限提取为空，请人工复核）"
+elif ! printf '%s' "$limits_line" | grep -Fq "检查器扫描间隔默认 $def_scan 秒" \
+     || ! printf '%s' "$limits_line" | grep -Fq "并发上限默认 $def_worker（保存上限 $cap_worker）" \
+     || ! printf '%s' "$limits_line" | grep -Fq "单项间隔最小/默认 $def_minint 秒" \
+     || ! printf '%s' "$limits_line" | grep -Fq "单项超时最小 $def_minto 秒 / 默认 $def_defto 秒 / 最大 $def_maxto 秒" \
+     || ! printf '%s' "$limits_line" | grep -Fq "三个超时键保存时都不得超过 $cap_timeout"; then
+  note_fail "服务监控限值披露门：monitoring.md 限值数字与 limits.go 缺省/上限不一致（代码面：扫描 $def_scan / 并发 $def_worker 上限 $cap_worker / 间隔 $def_minint·$def_defint / 超时 $def_minto·$def_defto·$def_maxto 保存帽 $cap_timeout，请人工复核）"
+else
+  note_ok "服务监控限值披露门：monitoring.md 对 limits.go $(printf '%s\n' "$limits_keys_want" | wc -l | tr -d ' ') 个 service_monitor_* 键的缺省/上限披露一致"
+fi
 
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
