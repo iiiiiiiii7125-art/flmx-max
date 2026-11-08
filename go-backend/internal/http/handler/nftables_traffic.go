@@ -264,6 +264,31 @@ func (h *Handler) drainNftCountersBeforeReconcileCtx(ctx context.Context, nodeID
 	return true
 }
 
+// settleNftCountersAfterSync 是 R2-E2-02（FIX-BASELINE）：sync 的
+// Reconcile 重建表、binding 已按新 hash 落库后，立即走既有采集漏
+// 斗（accountNftablesNodeTrafficCtx，与周期采集/drain 同一入口、
+// 同一 per-node 入账串行锁）做一次结算，把新绑定与哈希变化绑定
+// 的计数基线钉在落成时刻。此前基线只能由首个 30s 周期样本建
+// 立，buildNftCounterDeltas 对「无旧状态/哈希变化」只落基线零增
+// 量——绑定落成至首采集之间的流量被基线整段吞掉、永不入账（首
+// 次创建无 drain 兜底，全同形于 realm 修复前的窗口）。
+// 代际语义内的安全性：本调用在 manager.Reconcile 返回后执行，
+// serializedNftManager 此时已清 applying、generation 已递增并稳
+// 定，采集不会被 D18 丢弃；若期间另有 apply 并发，D18 整轮丢弃
+// 本次结算（不写基线），退化为周期采集补建，与旧行为一致。
+// 可结算部分（同 hash 绑定的真实增量等）经同一入账段正常入账，
+// 执法尾（配额强制/隧道指标/流量策略）与 drain 同口径留待周期
+// 采集执行。失败不阻塞 sync（可用性优先，与 drain 同口径）：
+// 记日志，基线退化为首个周期样本建立。
+func (h *Handler) settleNftCountersAfterSync(ctx context.Context, nodeID int64, cfgModel *model.NodeSSHConfig) {
+	if h == nil || h.repo == nil || cfgModel == nil {
+		return
+	}
+	if _, _, _, _, err := h.accountNftablesNodeTrafficCtx(ctx, nodeID, cfgModel, time.Now()); err != nil {
+		log.Printf("nftables post-sync settle failed op=settle node_id=%d err=%v action=baseline_deferred_to_periodic_collect", nodeID, err)
+	}
+}
+
 func firstNftBatchMissingDelta(deltas []nftTrafficDelta, batch flowUploadBatch) (int64, bool) {
 	flowSeen := make(map[int64]struct{}, len(batch.flowDeltas))
 	for _, delta := range batch.flowDeltas {

@@ -433,14 +433,25 @@ func subDueReset(s *model.Subscription, now time.Time) bool {
 // applyUserCounters adds a node's per-user traffic to the subscriptions
 // and cuts off the ones that reached their limit right away.
 func (h *Handler) applyUserCounters(nodeID int64, epoch string, counters []agentUserCounter, now int64) {
-	samples := h.scopedSubscriptionSamples(nodeID, counters)
-	if len(samples) > 0 {
-		if err := h.repo.ApplySubscriptionCounterSamples(nodeID, epoch, samples, now); err != nil {
-			log.Printf("subscription traffic apply failed node_id=%d err=%v", nodeID, err)
-			return
-		}
+	if err := h.applyUserCounterSamples(nodeID, epoch, counters, now); err != nil {
+		log.Printf("subscription traffic apply failed node_id=%d err=%v", nodeID, err)
+		return
 	}
 	h.syncSubscriptions(time.UnixMilli(now))
+}
+
+// applyUserCounterSamples 只把用户计数样本入账（基线推进＋订阅累
+// 计＋小时桶），不做凭据同步/限额切断。供下发后 settle 在
+// per-kernel apply 锁内调用：syncSubscriptions 会经
+// applyKernelsForInbounds 回头取同一 kernel 的 apply 锁（不可重
+// 入），锁内同步必自锁；同步与切断由周期轮询的 applyUserCounters
+// 全量面在 ≤60s 内补做，切断判据读已入账累计值，不漏不重。
+func (h *Handler) applyUserCounterSamples(nodeID int64, epoch string, counters []agentUserCounter, now int64) error {
+	samples := h.scopedSubscriptionSamples(nodeID, counters)
+	if len(samples) == 0 {
+		return nil
+	}
+	return h.repo.ApplySubscriptionCounterSamples(nodeID, epoch, samples, now)
 }
 
 // scopedSubscriptionSamples F2-01: a node's per-user samples book only

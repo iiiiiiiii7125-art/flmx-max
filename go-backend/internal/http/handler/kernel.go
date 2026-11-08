@@ -2711,6 +2711,16 @@ func (h *Handler) applyKernel(kernelID int64, install bool) error {
 }
 
 func (h *Handler) applyKernelWith(kernelID int64, install bool, realmOverride map[int64]bool) error {
+	return h.applyKernelWithMode(kernelID, install, realmOverride, true)
+}
+
+// applyKernelWithMode 是 applyKernelWith 的实现。settleCounters=false
+// 仅供 reconcileNodeKernels 轮内下发使用：轮尾的 pollNodeKernels 本
+// 就摄入计数钉基线，且 R4X-009 以「每轮 reconcile 恰一次
+// KernelStatus」为轮次正典计量（backup_r4_b5_test），轮内逐下发
+// settle 会打散该计数。独立下发（创建/更新/暂停恢复/订阅推送/
+// drift 补推等）不在轮次计量内，逐个 settle（调用点注释详述）。
+func (h *Handler) applyKernelWithMode(kernelID int64, install bool, realmOverride map[int64]bool, settleCounters bool) error {
 	unlock := lockKernelApply(kernelID)
 	defer unlock()
 
@@ -2782,25 +2792,36 @@ func (h *Handler) applyKernelWith(kernelID int64, install bool, realmOverride ma
 	if err := h.repo.UpdateNodeKernelFields(k.ID, fields); err != nil {
 		return err
 	}
-	// FIX-REALM-METER：realm 下发成功后立即拉一次计数面，把计数基
-	// 线钉在下发时刻。agent 侧累计计数自本次下发重建 nft 表起算，
-	// 而入账按「样本 − 已存基线」差分、首个样本只建基线不入账：若
-	// 不主动拉，基线只能由 60s 周期轮询的首个样本建立，下发后至
-	// 首轮询前产生的全部流量被基线整段吞掉、永不入账（真机
-	// EXEC-RERUN3：新建 realm 转发立即发流量，180s 窗内 forward
-	// 流量恒 0→0；gost 无基线语义、同轮 0→54 正常）。R3-01 曾在
-	// 引擎切换路径以 settleRealmCountersAtSwitch 修复同一机制，但
-	// 创建/更新/暂停恢复/重连对账等普通下发路径漏修——本点是全部
-	// realm KernelApply 的唯一漏斗，在此统一钉基线。
-	// 范围只限 Relay 内核（realm）：入站内核（xray/singbox/snell）
-	// 的入站计数同为首样本基线语义、存在同形窗口，但其下发轮次有
-	// R4X-009 的正典计量口径（以 KernelStatus 轮询数计 reconcile
-	// 轮次，backup_r4_b5_test）钉死，逐下发加轮询会打破该不变量的
-	// 代理等式——入站面须与该口径一并设计，已点名立案（见
-	// FIX-REALM-METER 报告），不在本修复顺手扩面。
-	// settle 只拉计数面（settleKernelCountersAfterApply 注释），
-	// 失败静默：周期轮询随后补建基线，退化为原行为，不阻塞回执。
-	if info, ok := kernel.Lookup(k.KernelType); ok && info.Relay {
+	// FIX-BASELINE（R2-E2-01）：下发成功后立即拉一次计数面，把计
+	// 数基线钉在下发时刻。agent 侧累计计数自本次下发重建 nft 表
+	// 起算，而入账按「样本 − 已存基线」差分、首个样本只建基线不
+	// 入账：若不主动拉，基线只能由 60s 周期轮询的首个样本建立，
+	// 下发后至首轮询前产生的全部流量被基线整段吞掉、永不入账
+	// （真机 EXEC-RERUN3：新建 realm 转发立即发流量，180s 窗内
+	// forward 流量恒 0→0；gost 无基线语义、同轮 0→54 正常）。
+	// FIX-REALM-METER 已在 realm（Relay）面以本点为唯一漏斗修复
+	// 同一机制；入站内核（xray/singbox）的入站计数与订阅用户计
+	// 数同乘 KernelStatus 计数面、同为首样本基线语义，本轮扩面
+	// 到全部内核。
+	// 与 R4X-009 轮次口径的共存设计（本修复的钉死约束）：settle
+	// 只走计数面（ingestKernelCountersMode 的 settle 口径：纯计数
+	// 入账，不带订阅同步/执法尾——两者在 apply 锁内会自锁），不走全量
+	// pollNodeKernels——状态对账含 drift 重下发与孤儿清理，下发
+	// 后立刻全量对账会与 drift 互相触发成无界下发-轮询链（realm
+	// v1 实证），计数面不发任何出站命令、不成链；reconcile 轮内
+	// 下发由 settleCounters=false 豁免，轮次保持「恰一次
+	// KernelStatus（轮尾 poll）」的正典计量不变，轮内基线由轮尾
+	// poll 的计数摄入钉定（窗口以下发→轮尾 poll 的时长为界，与
+	// drift 补推的既有残余同量级）。
+	// settle 失败静默：周期轮询随后补建基线，退化为原行为，不
+	// 阻塞下发回执。
+	// 导入批次豁免（与轮内豁免同构）：备份导入尾钩子执行期间的
+	// apply 属于导入这一次物化事件，基线由导入 reconcile 轮的
+	// 尾随 poll 钉定；逐个 settle 会被 R4X-009 轮次口径计为额外
+	// 轮次（FIX-BASELINE 实测全量导入 3 轮≠1）。非物化导入（如
+	// users-only）的收敛性 apply 在批次内同样抑制——保持原行为
+	// （基线由次个周期轮询钉定），不引入新窗口。
+	if settleCounters && h.importTailBatchDepth.Load() == 0 {
 		h.settleKernelCountersAfterApply(k.NodeID)
 	}
 	return nil
@@ -2834,7 +2855,12 @@ func (h *Handler) reconcileNodeKernels(nodeID int64) {
 		return
 	}
 	for _, k := range kernels {
-		if err := h.applyKernel(k.ID, false); err != nil {
+		// settleCounters=false：本轮尾随的 pollNodeKernels 会摄入
+		// 计数钉基线，轮内不再逐下发 settle——R4X-009 以「每轮
+		// reconcile 恰一次 KernelStatus」计轮次（backup_r4_b5_test），
+		// 逐下发 settle 会把轮次计数打散。窗口与口径见
+		// applyKernelWithMode 调用点注释（FIX-BASELINE）。
+		if err := h.applyKernelWithMode(k.ID, false, nil, false); err != nil {
 			log.Printf("kernel reconcile failed node_id=%d kernel=%s err=%v", nodeID, k.KernelType, err)
 		}
 	}
@@ -2907,7 +2933,15 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 				continue
 			}
 			go func(id int64) {
-				if err := h.applyKernel(id, false); err != nil {
+				// FIX-BASELINE：本补推由 poll 摄入自身派生、处于
+				// poll 收敛环内，基线由 poll 循环钉定（下一轮询的
+				// 计数摄入），故走 settleCounters=false：若在此
+				// settle，多发的 KernelStatus 会被 R4X-009 轮次
+				// 口径计为额外 reconcile 轮（导入全量格实测），
+				// 且摄入路径异步再入状态面与「每轮询至多一次补
+				// 推」的既有上界相悖。本路径残余窗口（补推→下轮
+				// 询 ≤60s）与修复前同量级，不扩大。
+				if err := h.applyKernelWithMode(id, false, nil, false); err != nil {
 					log.Printf("kernel drift re-apply failed kernel_id=%d err=%v", id, err)
 				}
 			}(k.ID)
@@ -2960,11 +2994,29 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 // 用户计数、入站计数（realm 转发端口分流到 forward 入账链）。只做
 // 计数，不做内核状态对账——状态面归 pollNodeKernels 独占。
 func (h *Handler) ingestKernelCounters(nodeID int64, status agentKernelStatus, now int64) {
+	h.ingestKernelCountersMode(nodeID, status, now, true)
+}
+
+// ingestKernelCountersMode 是计数摄入的两种口径：full=true 为周期
+// 轮询面（用户计数连带 syncSubscriptions 同步/切断、realm 入账连
+// 带执法尾）；full=false 为下发后 settle 面——只入账计数面本身。
+// settle 在 applyKernelWith 的 per-kernel apply 锁（不可重入
+// sync.Mutex）内执行，而 syncSubscriptions 会经
+// applyKernelsForInbounds 回头取同一 kernel 的 apply 锁、执法尾的
+// 暂停面同理可达 apply：锁内带这两者必自锁（realm 旧 settle 靠
+// 「realm 不拥有入站」侥幸避开，FIX-BASELINE 扩面到入站内核后
+// 不能再靠侥幸）。同步/切断/执法由 ≤60s 后的周期轮询全量面补
+// 做，判据读的都是已入账累计值，不漏不重。
+func (h *Handler) ingestKernelCountersMode(nodeID int64, status agentKernelStatus, now int64, full bool) {
 	if !status.NftAvailable {
 		return
 	}
 	if len(status.Users) > 0 {
-		h.applyUserCounters(nodeID, status.Epoch, status.Users, now)
+		if full {
+			h.applyUserCounters(nodeID, status.Epoch, status.Users, now)
+		} else if err := h.applyUserCounterSamples(nodeID, status.Epoch, status.Users, now); err != nil {
+			log.Printf("subscription traffic apply failed node_id=%d err=%v", nodeID, err)
+		}
 	}
 	if len(status.Counters) == 0 {
 		return
@@ -2991,17 +3043,21 @@ func (h *Handler) ingestKernelCounters(nodeID int64, status agentKernelStatus, n
 		log.Printf("kernel traffic apply failed node_id=%d err=%v", nodeID, err)
 	}
 	if len(realmCounters) > 0 {
-		h.applyRealmCounters(nodeID, status.Epoch, realmCounters, time.UnixMilli(now))
+		h.applyRealmCountersMode(nodeID, status.Epoch, realmCounters, time.UnixMilli(now), full)
 	}
 }
 
-// settleKernelCountersAfterApply 在 realm 的 KernelApply 成功后
-// 立即拉一次 KernelStatus、只入账计数面，把计数基线钉在下发时刻
-// （FIX-REALM-METER，调用点注释详述）。刻意不走全量
+// settleKernelCountersAfterApply 在 KernelApply 成功后立即拉一次
+// KernelStatus、只入账计数面，把计数基线钉在下发时刻
+// （FIX-REALM-METER 立法、FIX-BASELINE 扩面到全部内核，调用点
+// 注释详述）。刻意不走全量
 // pollNodeKernels：状态对账含 drift 重下发与孤儿清理，下发后立刻
 // 全量对账会与 drift 逻辑互相触发（agent 回读 hash 与 DB 不一致
 // 时 spawn 的重下发又触发新一轮对账），形成无界下发-轮询链；计数
-// 钉基线只需要计数面，恰好一条 KernelStatus、入账即止。
+// 钉基线只需要计数面，恰好一条 KernelStatus、入账即止。入账走
+// settle 口径（ingestKernelCountersMode full=false）：纯计数入
+// 账，不带订阅同步与执法尾——本函数在 apply 锁内执行，两者都可
+// 回头取同一把锁（注释见 ingestKernelCountersMode）。
 func (h *Handler) settleKernelCountersAfterApply(nodeID int64) {
 	res, err := h.sendNodeCommandWithTimeout(nodeID, "KernelStatus", map[string]interface{}{}, kernelCommandTimeout, false, false)
 	if err != nil {
@@ -3012,7 +3068,7 @@ func (h *Handler) settleKernelCountersAfterApply(nodeID int64) {
 		log.Printf("kernel settle decode failed node_id=%d err=%v", nodeID, err)
 		return
 	}
-	h.ingestKernelCounters(nodeID, status, time.Now().UnixMilli())
+	h.ingestKernelCountersMode(nodeID, status, time.Now().UnixMilli(), false)
 }
 
 // kernelStatusParallel 是内核状态轮询的单节点并发上限（D6-04）：旧实现

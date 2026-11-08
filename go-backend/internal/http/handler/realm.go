@@ -586,6 +586,16 @@ func (h *Handler) settleRealmCountersAtSwitch(nodeIDs []int64) {
 // applyRealmCounters credits realm forwards with the traffic the agent
 // counted on their ports, the same way nftables forwards are accounted.
 func (h *Handler) applyRealmCounters(nodeID int64, epoch string, counters []agentKernelCounter, now time.Time) {
+	h.applyRealmCountersMode(nodeID, epoch, counters, now, true)
+}
+
+// applyRealmCountersMode 是 applyRealmCounters 的实现；enforce=false
+// 为下发后 settle 口径：只入账、不执行执法尾（指标/配额强制/流量
+// 策略）——settle 在 per-kernel apply 锁内执行，执法尾的暂停面可
+// 回头取同一 kernel 的 apply 锁（不可重入）必自锁；执法由 ≤60s
+// 后的周期轮询全量面按已入账累计补做（与 nftables drain/settle
+// 的同口径分工一致）。
+func (h *Handler) applyRealmCountersMode(nodeID int64, epoch string, counters []agentKernelCounter, now time.Time, enforce bool) {
 	samples := make([]runtimenft.CounterSample, 0, len(counters))
 	hashes := map[int64]string{}
 	for _, c := range counters {
@@ -608,6 +618,9 @@ func (h *Handler) applyRealmCounters(nodeID int64, epoch string, counters []agen
 	}
 	batch, metas, nowMs, quotaViews, err := h.accountForwardCounterSamples(nodeID, samples, hashes, now)
 	if err != nil || batch == nil {
+		return
+	}
+	if !enforce {
 		return
 	}
 	// 与采集路径（collectNftablesNodeTraffic）相同的执法尾：指标、配额

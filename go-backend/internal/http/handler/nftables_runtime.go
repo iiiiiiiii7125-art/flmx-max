@@ -463,6 +463,10 @@ func (h *Handler) syncNftablesNodeWithOverridesCtx(ctx context.Context, nodeID i
 		}
 		_ = h.repo.DeleteNftRuleBindingsByForward(binding.ForwardID)
 	}
+	// R2-E2-02（FIX-BASELINE）：新绑定/新 hash 的计数基线在落成
+	// 时刻钉定，不再等首个 30s 周期样本（窗口内流量会被首样本
+	// 基线吞掉）。失败不阻塞 sync，见 settleNftCountersAfterSync。
+	h.settleNftCountersAfterSync(ctx, nodeID, cfgModel)
 	return nil
 }
 
