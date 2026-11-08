@@ -2,6 +2,7 @@ package pht
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,9 +19,19 @@ import (
 // behind forever. Entries must now be reaped after one TTL of
 // inactivity, and Close must drain whatever is left.
 
-func startTestServer(t *testing.T, ttl time.Duration) *Server {
+func startTestServer(t *testing.T, ttl time.Duration) (*Server, string) {
 	t.Helper()
-	s := NewServer("127.0.0.1:0",
+
+	// Pick the port up front: polling s.addr from the test would
+	// race ListenAndServe's assignment of it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	s := NewServer(addr,
 		PathServerOption("/authorize", "/push", "/pull"),
 		ReadTimeoutServerOption(50*time.Millisecond),
 		ConnTTLServerOption(ttl),
@@ -29,18 +40,21 @@ func startTestServer(t *testing.T, ttl time.Duration) *Server {
 	go s.ListenAndServe()
 
 	deadline := time.Now().Add(3 * time.Second)
-	for s.addr == nil && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return s, addr
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if s.addr == nil {
-		t.Fatal("server did not start listening")
-	}
-	return s
+	t.Fatal("server did not start listening")
+	return nil, ""
 }
 
-func authorize(t *testing.T, s *Server) string {
+func authorize(t *testing.T, addr string) string {
 	t.Helper()
-	resp, err := http.Get("http://" + s.addr.String() + "/authorize")
+	resp, err := http.Get("http://" + addr + "/authorize")
 	if err != nil {
 		t.Fatalf("authorize request: %v", err)
 	}
@@ -57,10 +71,10 @@ func authorize(t *testing.T, s *Server) string {
 }
 
 func TestServerReapsAbandonedAuthorize(t *testing.T) {
-	s := startTestServer(t, 300*time.Millisecond)
+	s, addr := startTestServer(t, 300*time.Millisecond)
 	defer s.Close()
 
-	token := authorize(t, s)
+	token := authorize(t, addr)
 
 	// The accepted side of the pipe is what the service reads the
 	// tunnel from.
@@ -99,9 +113,9 @@ func TestServerReapsAbandonedAuthorize(t *testing.T) {
 func TestServerCloseDrainsConns(t *testing.T) {
 	// A long TTL proves the drain is done by Close, not by the
 	// sweeper.
-	s := startTestServer(t, 30*time.Second)
+	s, addr := startTestServer(t, 30*time.Second)
 
-	token := authorize(t, s)
+	token := authorize(t, addr)
 	accepted, err := s.Accept()
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
@@ -128,10 +142,10 @@ func TestServerCloseDrainsConns(t *testing.T) {
 }
 
 func TestServerActiveEntrySurvivesTTL(t *testing.T) {
-	s := startTestServer(t, 300*time.Millisecond)
+	s, addr := startTestServer(t, 300*time.Millisecond)
 	defer s.Close()
 
-	token := authorize(t, s)
+	token := authorize(t, addr)
 	accepted, err := s.Accept()
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
@@ -143,7 +157,7 @@ func TestServerActiveEntrySurvivesTTL(t *testing.T) {
 	// readTimeout with no data; the cadence still counts.)
 	stop := time.Now().Add(900 * time.Millisecond)
 	for time.Now().Before(stop) {
-		resp, err := http.Get("http://" + s.addr.String() + "/pull?token=" + token)
+		resp, err := http.Get("http://" + addr + "/pull?token=" + token)
 		if err != nil {
 			t.Fatalf("pull request: %v", err)
 		}
