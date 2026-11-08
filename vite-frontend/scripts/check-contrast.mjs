@@ -2269,7 +2269,6 @@ const SOLID_FILL_PINS = {
   "pages/inbound/target-picker.tsx": 1,
   "pages/subscription.tsx": 4,
   "pages/subscription/rename-rules.tsx": 1,
-  "pages/config/gist-backup.tsx": 1,
   "pages/node/tune-modal.tsx": 1,
   // 控件填充：模板页两处原生 select（templates 与 builder 的
   // selectCls）——R4-S1-02 点名一并登记，属控件口径、非表面。

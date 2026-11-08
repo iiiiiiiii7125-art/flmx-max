@@ -1,6 +1,6 @@
 ---
 name: flmx-api
-description: Operate FLMX traffic forwarding management system via REST API. Supports user/node/tunnel/forward management, federation clustering, and traffic monitoring. Use when user wants to manage FLMX panel programmatically or via natural language.
+description: Operate FLMX traffic forwarding management system via REST API. Supports user/node/tunnel/forward management and traffic monitoring. Use when user wants to manage FLMX panel programmatically or via natural language.
 metadata:
   author: FLMX Team
   version: "1.9.9"
@@ -130,10 +130,8 @@ User request → Check env vars → Auto-login if needed → Call API → Return
 | "查看流量" / "流量统计" | `/api/v1/forward/list` or `/api/v1/user/package` | [forwards](references/forwards.md) |
 | "诊断转发" / "测试连通性" | `/api/v1/forward/diagnose` | [forwards](references/forwards.md) |
 | "创建限速规则" | `/api/v1/speed-limit/create` | [speed-limits](references/speed-limits.md) |
-| "联邦共享" / "节点共享" | `/api/v1/federation/share/create` | [federation](references/federation.md) |
 | "导出备份" | `/api/v1/backup/export` | [backup](references/backup.md) |
 | "导入备份" | `/api/v1/backup/import` | [backup](references/backup.md) |
-| "Gist 备份" / "备份上传 Gist" | `/api/v1/backup/gist/status` / `/api/v1/backup/gist/save` / `/api/v1/backup/gist/upload` / `/api/v1/backup/gist/versions` / `/api/v1/backup/gist/restore` | [backup](references/backup.md) |
 | "下载导入前自动备份（GET，仅管理员）" | `/api/v1/backup/import-auto-backup` | [backup](references/backup.md) |
 | "导入前自动备份状态（GET，仅管理员；exists / expiresAt=mtime+24h）" | `/api/v1/backup/import-auto-backup/status` | [backup](references/backup.md) |
 | "安装内核" / "装 Xray / sing-box" | `/api/v1/kernel/install` | [kernels](references/kernels.md) |
@@ -282,7 +280,6 @@ Non-admin users can only see/modify their own resources.
 | Tunnels | CRUD, user assignment | [tunnels.md](references/tunnels.md) |
 | Forwards | CRUD, pause/resume, diagnose | [forwards.md](references/forwards.md) |
 | Speed Limits | CRUD | [speed-limits.md](references/speed-limits.md) |
-| Federation | Share, remote nodes | [federation.md](references/federation.md) |
 | Kernels | Capabilities, install, versions, control, logs | [kernels.md](references/kernels.md) |
 | Inbounds | CRUD, import, share, split, relay lines | [inbounds.md](references/inbounds.md) |
 | Subscriptions | CRUD, sources, user assignment, public fetch | [subscriptions.md](references/subscriptions.md) |

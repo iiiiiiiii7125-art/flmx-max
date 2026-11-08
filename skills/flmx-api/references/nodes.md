@@ -9,8 +9,7 @@ List all nodes with status information.
 **Request:** `{}`
 
 **Response:** `data` is a bare array of node objects (no wrapper). The
-list DTO deliberately omits the node `secret` and the federation
-`remoteToken` / `remoteConfig` credentials:
+list DTO deliberately omits the node `secret`:
 
 ```json
 {
@@ -36,9 +35,7 @@ list DTO deliberately omits the node `secret` and the federation
       "tcpListenAddr": "[::]",
       "udpListenAddr": "[::]",
       "status": 1,
-      "isRemote": 0,
       "forwardMode": "agent",
-      "remoteUrl": "",
       "version": "1.9.9",
       "expiryReminderDismissed": 0,
       "sshConfig": null
@@ -50,10 +47,6 @@ list DTO deliberately omits the node `secret` and the federation
 **Status Values:**
 - `0` = Offline
 - `1` = Online
-
-**is_remote Values:**
-- `0` = Local node (managed by this panel)
-- `1` = Remote node (federation from another panel)
 
 ## POST /api/v1/node/create
 
@@ -73,9 +66,6 @@ Create a new node.
   "socks": 1,
   "tcpListenAddr": "[::]",
   "udpListenAddr": "[::]",
-  "isRemote": 0,
-  "remoteUrl": "",
-  "remoteToken": ""
 }
 ```
 
@@ -99,9 +89,6 @@ Create a new node.
 | tcpListenAddr | string | No | TCP listen address (default: "[::]") |
 | udpListenAddr | string | No | UDP listen address (default: "[::]") |
 | forwardMode | string | No | `"agent"` (default) or `"nftables"` |
-| isRemote | number | No | Federation node (1/0) |
-| remoteUrl | string | If isRemote=1 | Remote panel URL |
-| remoteToken | string | If isRemote=1 | Federation token |
 
 The panel generates the node secret itself at creation.
 
@@ -310,9 +297,8 @@ timer on the node: only the agent service (`flmx_agent`) restarts, never the
 host, and the timer fires even while the panel is unreachable. Response
 `data`: `{enabled, time, jitterMinutes, pushed}` — `pushed=false` means the
 node was offline (the setting is stored and re-pushed automatically on
-reconnect) or `pushError` explains the failure. Remote (federation) nodes
-must be configured on their owning panel; nftables nodes have no agent
-service and are rejected.
+reconnect) or `pushError` explains the failure. nftables nodes have no
+agent service and are rejected.
 
 ## POST /api/v1/node/route
 

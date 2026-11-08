@@ -75,7 +75,7 @@ interface UserPackage {
 ## Node
 
 ```typescript
-// node/list item — the secret and federation credentials are NOT exposed here
+// node/list item — the secret is NOT exposed here
 interface Node {
   id: number;
   inx: number;
@@ -96,9 +96,7 @@ interface Node {
   tcpListenAddr: string;  // "[::]"
   udpListenAddr: string;
   status: number;         // 1 = online, 0 = offline
-  isRemote: number;       // 0 = local, 1 = federation
   forwardMode?: string;   // "agent" | "nftables"
-  remoteUrl?: string;
   version?: string;
   expiryReminderDismissed?: number;
   sshConfig?: unknown;
@@ -122,7 +120,6 @@ interface NodeCreateRequest {
   udpListenAddr?: string;
   forwardMode?: string;
   isRemote?: number;
-  remoteUrl?: string;
   remoteToken?: string;
 }
 ```
@@ -235,30 +232,6 @@ interface UserTunnel {
   flowResetTime: number;
   speedId?: number | null;
   speedLimitName?: string | null;
-}
-```
-
-## Federation
-
-```typescript
-// federation/share/list item (create returns no data — read the token here)
-interface PeerShare {
-  id: number;
-  name: string;
-  nodeId: number;
-  token: string;
-  maxBandwidth: number;
-  expiryTime: number;
-  portRangeStart: number;
-  portRangeEnd: number;
-  currentFlow: number;
-  isActive: boolean;
-  allowedDomains: string;
-  allowedIps: string;
-  createdTime?: number;
-  updatedTime?: number;
-  usedPorts?: number[];
-  activeRuntimeNum?: number;
 }
 ```
 

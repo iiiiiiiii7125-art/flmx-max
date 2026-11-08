@@ -11,12 +11,12 @@ three tiers, enforced identically on every read/write path:
   default to sensitive.**
 
 Some keys are never returned by the config API at all, even to admins:
-`license_key`, `license_machine_id`, `machine_fingerprint`, `gist_token`,
-`gist_password`, `jwt_secret`, `cloudflare_secret_key`,
+`license_key`, `license_machine_id`, `machine_fingerprint`,
+`jwt_secret`, `cloudflare_secret_key`,
 `notify_telegram_bot_token`, `notify_telegram_api_base`,
 `notify_webhook_url`. Reading them yields 403 and `config/list` omits
-them; they are written only through their dedicated surfaces (Gist
-endpoints, deployment files) or write-only form fields.
+them; they are written only through their dedicated surfaces
+(deployment files) or write-only form fields.
 
 > Only use keys that exist in the product (see the table below). The
 > write endpoints accept unclassified keys and store them, but an
@@ -87,7 +87,7 @@ Only include the keys you want to update.
 
 Rules enforced on write:
 
-- System-managed keys are rejected (`gist_*`, `license_*`,
+- System-managed keys are rejected (`license_*`,
   `is_commercial`, `node_sub_token`, `machine_fingerprint`, …) — they
   have dedicated writers.
 - Required keys (`jwt_secret`, `monitor_tunnel_quality_enabled`,

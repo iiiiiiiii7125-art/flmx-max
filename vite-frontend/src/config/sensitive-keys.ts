@@ -24,6 +24,8 @@ export const SENSITIVE_CONFIG_KEYS = new Set([
   "notify_telegram_chat_id",
   "notify_telegram_api_base",
   "notify_webhook_url",
+  "kcp_fec_mode",
+  "kcp_node_mem_mb",
 ]);
 
 // 与 config/site.ts 的 CACHE_PREFIX 保持一致（配置缓存键前缀）。
