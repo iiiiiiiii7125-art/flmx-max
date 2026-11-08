@@ -97,6 +97,30 @@ func NewStreamConn(c net.Conn) net.Conn {
 	return &streamConn{Conn: c, r: NewDatagramReader(c)}
 }
 
+// IsDatagramConn reports whether c has datagram read semantics:
+// every Read returns at most one datagram, and any part of that
+// datagram that does not fit into the caller's buffer is silently
+// discarded. Stream transports (TCP, TLS, KCP/QUIC sessions, ...)
+// do not have this property. The detection follows the codebase
+// idiom of asserting the net.PacketConn interface, which datagram
+// conns implement (the udp dialer's conn, *net.UDPConn) and stream
+// conns do not.
+func IsDatagramConn(c net.Conn) bool {
+	_, ok := c.(net.PacketConn)
+	return ok
+}
+
+// StreamConnIfDatagram wraps c with NewStreamConn when c has
+// datagram read semantics, and returns c unchanged otherwise. It
+// never double-wraps: a conn already wrapped by NewStreamConn does
+// not expose the net.PacketConn interface, so it is returned as is.
+func StreamConnIfDatagram(c net.Conn) net.Conn {
+	if IsDatagramConn(c) {
+		return NewStreamConn(c)
+	}
+	return c
+}
+
 func (c *streamConn) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }

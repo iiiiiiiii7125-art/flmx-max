@@ -21,6 +21,11 @@ func (c *tunnelConnector) Bind(ctx context.Context, conn net.Conn, network, addr
 		// bind handshake is parsed with small stream reads
 		// (F-UDP-2).
 		conn = xudp.NewStreamConn(conn)
+	default:
+		// A stream payload over a datagram transport hits the same
+		// small reads in the bind handshake, so wrap by transport
+		// as in Connect (F-UDP-2b). No-op for stream transports.
+		conn = xudp.StreamConnIfDatagram(conn)
 	}
 
 	addr, cid, err := c.initTunnel(conn, network, address)

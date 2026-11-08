@@ -68,6 +68,15 @@ func (c *relayConnector) Connect(ctx context.Context, conn net.Conn, network, ad
 		// everything below (bind handshake, response drain, frames,
 		// UDP association). Writes are unaffected.
 		conn = xudp.NewStreamConn(conn)
+	default:
+		// The payload may itself be a stream (e.g. TCP) while the
+		// transport underneath is still datagram-oriented - a TCP
+		// payload tunnelled over a UDP segment. The merged
+		// response+first-frame datagram then hits the same small
+		// reads in the response drain below, so wrap by transport,
+		// not only by payload network (F-UDP-2b). No-op for stream
+		// transports.
+		conn = xudp.StreamConnIfDatagram(conn)
 	}
 
 	req := relay.Request{

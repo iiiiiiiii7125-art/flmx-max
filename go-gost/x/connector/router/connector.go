@@ -55,9 +55,13 @@ func (c *routerConnector) Connect(ctx context.Context, conn net.Conn, network, a
 
 	// Same datagram-transport hazard as connector/relay: this
 	// protocol layer reads a byte stream (response header, then
-	// length-prefixed frames) over a possibly datagram-oriented
-	// transport; small reads would discard datagram tails (F-UDP-2).
-	conn = xudp.NewStreamConn(conn)
+	// length-prefixed frames); small reads on a raw datagram
+	// transport would discard datagram tails (F-UDP-2). Wrap when
+	// the payload network is UDP or when the transport underneath
+	// is datagram-oriented (F-UDP-2b).
+	if network == "udp" || network == "udp4" || network == "udp6" || xudp.IsDatagramConn(conn) {
+		conn = xudp.NewStreamConn(conn)
+	}
 
 	req := relay.Request{
 		Version: relay.Version1,
