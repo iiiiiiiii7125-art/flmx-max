@@ -537,10 +537,23 @@ func validateUpgradeVersion(value string) error {
 	}
 	// G-001：收紧为版本号字符集，防止路径注入（与工作流版本号校验一致）
 	// 旧逻辑仅拒绝控制字符，允许 "/" 等路径字符
+	// R2-P2-11：边缘按规范文法（internal/kernel/capabilities.go 的
+	// 规范表述）对齐——首字符须为字母数字、禁 ".."、总长 ≤40；
+	// 字符集去掉 "_"：版本/tag 规范与发版工作流文法均不含下划线，
+	// 本面只是注入防护、语义仍由 compareVersions 复核。
+	if len(value) > 40 {
+		return fmt.Errorf("unsafe upgrade version: exceeds 40 characters")
+	}
+	if c := value[0]; !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+		return fmt.Errorf("unsafe upgrade version: must start with a letter or digit")
+	}
 	for _, r := range value {
-		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '.' || r == '-' || r == '_') {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '.' || r == '-') {
 			return fmt.Errorf("unsafe upgrade version: invalid character %q", r)
 		}
+	}
+	if strings.Contains(value, "..") {
+		return fmt.Errorf("unsafe upgrade version: must not contain %q", "..")
 	}
 	// O9-007：拒绝全由 "." 组成的版本（如 "."、".."、"..."），避免路径/URL 语义歧义
 	if strings.Trim(value, ".") == "" {

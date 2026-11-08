@@ -459,7 +459,7 @@ func ghMirrorLatestTag(repo, file string) (string, error) {
 		}
 		_, rest, found := strings.Cut(loc, marker)
 		tag, _, _ := strings.Cut(rest, "/")
-		if !found || !redirectTagPattern.MatchString(tag) {
+		if !found || !validRedirectTag(tag) {
 			return "", fmt.Errorf("GitHub 返回 %d", resp.StatusCode)
 		}
 		return tag, nil

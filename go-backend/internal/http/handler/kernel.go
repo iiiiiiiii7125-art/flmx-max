@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -498,6 +499,16 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OKEmpty())
 }
 
+// kernelVersionEntryPattern 是 normalizeKernelVersion 的入口文法。
+// R2-P2-11:边缘按规范文法（internal/kernel/capabilities.go 的
+// kernelVersionPattern 规范表述）对齐——首字符须为字母数字、总长
+// ≤40、另禁 ".."（旧实现只查字符集与总长,"-"/"."/"1..2" 这类形态
+// 能过本入口、要到漏斗本体才被拒,同对象两入口结论不一致)。
+// 点名保留差异:本入口只收小写——受支持内核的发布 tag 均为小写,
+// 用户输入面在此 fail-closed 拒绝大写不丢任何合法版本;漏斗本体
+// 允许大小写的规范不变。
+var kernelVersionEntryPattern = regexp.MustCompile(`^[0-9a-z][0-9a-z.-]{0,39}$`)
+
 // normalizeKernelVersion accepts "latest" or a dotted version, returning ""
 // for anything that could inject into a download URL.
 func normalizeKernelVersion(v string) string {
@@ -505,12 +516,7 @@ func normalizeKernelVersion(v string) string {
 	if v == "" || strings.EqualFold(v, "latest") {
 		return "latest"
 	}
-	for _, c := range v {
-		if !(c >= '0' && c <= '9') && c != '.' && c != '-' && !(c >= 'a' && c <= 'z') {
-			return ""
-		}
-	}
-	if len(v) > 40 {
+	if !kernelVersionEntryPattern.MatchString(v) || strings.Contains(v, "..") {
 		return ""
 	}
 	return v
