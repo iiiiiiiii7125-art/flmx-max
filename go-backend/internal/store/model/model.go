@@ -1190,7 +1190,10 @@ func (ServiceMonitorResult) TableName() string { return "service_monitor_result"
 
 // TunnelQuality stores periodic probe results for a tunnel.
 // Unlike the old upsert model, rows accumulate for history/charting.
-// Old rows are pruned periodically (default: keep 24h).
+// Old rows are pruned periodically by the monitor_retention_days
+// config (default 7 days, range 1-400; see internal/monitoring/
+// retention.go and the prune in tunnel_quality_prober.go). There is
+// no 24h retention anywhere for this table (R2-E3-F04).
 type TunnelQuality struct {
 	ID                 int64   `gorm:"primaryKey;autoIncrement" json:"id"`
 	TunnelID           int64   `gorm:"column:tunnel_id;not null;index:idx_tunnel_quality_tunnel_time,priority:1" json:"tunnelId"`
