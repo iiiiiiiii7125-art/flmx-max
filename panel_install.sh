@@ -438,7 +438,7 @@ rank_proxy_routes() {
   done
 }
 
-# direct_latency_within_gate <秒>：与 Go 侧 routes.go 同口径——直连
+# direct_latency_within_gate <秒>：与 agent 侧 go-gost/x/internal/util/download/routes.go 同口径——直连
 # 探测延迟 ≤800ms 才配短路独占；shell 浮点比较走 awk。
 direct_latency_within_gate() {
   awk -v t="$1" 'BEGIN { exit !(t + 0 <= 0.8) }'
@@ -494,7 +494,7 @@ ensure_download_routes() {
           echo "🌐 GitHub 下载路线: 直连" >&2
         else
           # L2-35（R5-FD，与 install.sh 的 L2-06 同族）：慢直连不得
-          # 短路独占——按实测延迟并入代理排名，与 Go 侧 routes.go
+          # 短路独占——按实测延迟并入代理排名，与 agent 侧 go-gost/x/internal/util/download/routes.go
           # 的 800ms 门同口径。旧实现对面板侧直连只判成败，一条
           # 「探针 2.9s」的慢直连也会被恒排首位。
           rank_proxy_routes

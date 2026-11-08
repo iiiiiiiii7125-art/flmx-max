@@ -340,7 +340,7 @@ ensure_small_host_swap() {
 #      源按实测延迟并入代理排名（与慢直连同法），下载全败时经
 #      extend_download_routes 补测代理排名 + 直连兜底；
 #   1) 先单独探测直连（真实目标、~3-5s）：通且延迟 ≤800ms → 只用
-#      直连，不测代理（与 Go 侧 routes.go 的短路门同口径）；通但
+#      直连，不测代理（与 agent 侧 go-gost/x/internal/util/download/routes.go 的短路门同口径）；通但
 #      慢 → 按实测延迟并入第 2) 步的排名，不丢弃也不短路独占；
 #   2) 直连不通/过慢 → 并行探测 9 个代理按延迟排名，未判活的按清
 #      单原序殿后，直连兜底；已选路线下载失败时逐个续切；
@@ -492,7 +492,7 @@ rank_proxy_routes() {
   done
 }
 
-# direct_latency_within_gate <秒>：与 Go 侧 routes.go 同口径——直连
+# direct_latency_within_gate <秒>：与 agent 侧 go-gost/x/internal/util/download/routes.go 同口径——直连
 # 探测延迟 ≤800ms 才配短路独占；shell 浮点比较走 awk。面板源独占
 # 的延迟门与本门同值同口径（FIX2/D-03：旧实现面板分支丢弃
 # probe_route 耗时、延迟再高也独占）。
@@ -630,7 +630,7 @@ ensure_download_routes() {
         else
           # L2-06①（R5-FD）：慢直连门——旧实现 probe_route 回读了
           # time_total 却只用成败，探针耗时近 5s 的直连也短路独占。
-          # 与 Go 侧 routes.go 同口径：>800ms 不短路，按实测延迟
+          # 与 agent 侧 go-gost/x/internal/util/download/routes.go 同口径：>800ms 不短路，按实测延迟
           # 并入代理排名（不丢弃）。
           rank_proxy_routes
           routes_insert_slow_direct "$direct_latency"

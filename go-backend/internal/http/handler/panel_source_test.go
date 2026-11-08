@@ -195,6 +195,129 @@ func TestBuildNodeInstallCommandSecondAnchor(t *testing.T) {
 	})
 }
 
+// R2-P2-08 行为门：生成命令的首跳不再静态恒定——带延迟桩的真
+// 跑断言本体首试落点由探测实测延迟决定，而非候选静态序。桩
+// curl 在提供 .sha256 时向 stdout 打印该路线的伪造 time_total
+// （生成命令的探测段以 $(...) 捕获为实测延迟），并把每次成功
+// 提供 install.sh 本体的路线记入 STUB_BODY_LOG——本体首个成
+// 功者即获胜候选，日志首行即首跳落点。三路线提供同一脚本
+// （哈希一致，第二锚可正常复核通过）。
+func runNodeInstallCommandWithLatencyStub(t *testing.T, lat map[string]string) (string, []string, error) {
+	t.Helper()
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	serveDir := filepath.Join(root, "serve")
+	workDir := filepath.Join(root, "work")
+	for _, d := range []string{binDir, serveDir, workDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := "#!/bin/sh\ntouch ./executed.marker\n"
+	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(script)))
+	for _, key := range []string{"panel", "direct", "ghfast"} {
+		dir := filepath.Join(serveDir, key)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "install.sh"), []byte(script), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "install.sh.sha256"), []byte(sum+"  install.sh\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stub := `#!/bin/bash
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2;;
+    --connect-timeout|--max-time) shift 2;;
+    -*) shift;;
+    *) url="$1"; shift;;
+  esac
+done
+key=""
+case "$url" in
+  *"/api/v1/open_api/gh/"*) key="panel";;
+  "https://ghfast.top/"*) key="ghfast";;
+  "https://github.com/"*) key="direct";;
+  *) exit 22;;
+esac
+f="$STUB_SERVE/$key/${url##*/}"
+[ -f "$f" ] || exit 22
+cp "$f" "$out"
+case "${url##*/}" in
+  install.sh.sha256)
+    case "$key" in
+      panel) printf '%s' "$STUB_LAT_PANEL";;
+      direct) printf '%s' "$STUB_LAT_DIRECT";;
+      ghfast) printf '%s' "$STUB_LAT_GHFAST";;
+    esac;;
+  install.sh) echo "$key" >> "$STUB_BODY_LOG";;
+esac
+`
+	if err := os.WriteFile(filepath.Join(binDir, "curl"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bodyLog := filepath.Join(workDir, "body.log")
+	cmd := exec.Command("bash", "-c", buildNodeInstallCommand("1.8.0", "wss://panel.example.com:8443", "secret-x"))
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"STUB_SERVE="+serveDir,
+		"STUB_BODY_LOG="+bodyLog,
+		"STUB_LAT_PANEL="+lat["panel"],
+		"STUB_LAT_DIRECT="+lat["direct"],
+		"STUB_LAT_GHFAST="+lat["ghfast"],
+	)
+	out, err := cmd.CombinedOutput()
+	var body []string
+	if data, readErr := os.ReadFile(bodyLog); readErr == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if line != "" {
+				body = append(body, line)
+			}
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(workDir, "executed.marker")); statErr == nil {
+		return string(out) + "\n<<executed>>", body, err
+	}
+	return string(out), body, err
+}
+
+func TestBuildNodeInstallCommandProbeRankedFirstHop(t *testing.T) {
+	t.Run("static-first-but-slowest-panel-loses-to-fastest-direct", func(t *testing.T) {
+		out, body, err := runNodeInstallCommandWithLatencyStub(t, map[string]string{
+			"panel": "0.300", "direct": "0.050", "ghfast": "0.200",
+		})
+		if err != nil {
+			t.Fatalf("三路线齐备时命令应成功, err=%v out=%q", err, out)
+		}
+		if !strings.Contains(out, "<<executed>>") {
+			t.Fatalf("脚本应被执行, out=%q", out)
+		}
+		if len(body) != 1 || body[0] != "direct" {
+			t.Fatalf("本体首试应落在实测最快的直连（面板源静态居首但实测最慢），body=%v out=%q", body, out)
+		}
+	})
+
+	t.Run("panel-wins-when-measured-fastest", func(t *testing.T) {
+		out, body, err := runNodeInstallCommandWithLatencyStub(t, map[string]string{
+			"panel": "0.010", "direct": "0.400", "ghfast": "0.200",
+		})
+		if err != nil {
+			t.Fatalf("三路线齐备时命令应成功, err=%v out=%q", err, out)
+		}
+		if !strings.Contains(out, "<<executed>>") {
+			t.Fatalf("脚本应被执行, out=%q", out)
+		}
+		if len(body) != 1 || body[0] != "panel" {
+			t.Fatalf("面板源实测最快时本体首试应落在面板源（赢面来自实测）, body=%v out=%q", body, out)
+		}
+	})
+}
+
 func TestAgentArchFromReportedVersion(t *testing.T) {
 	cases := []struct{ v, want string }{
 		{"1.8.0 (debian/amd64)", "amd64"},

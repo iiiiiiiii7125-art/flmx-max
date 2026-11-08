@@ -17,12 +17,20 @@ import (
 // panel_install.sh 三面同表同序（改一处须同步其余两处）。
 //
 // 路线选择口径（面板侧版本发现与脚本测速同此）：
-//   1. 先单独探测直连（真实目标、3s 超时）：通 → 直接用直连，
-//      不再测任何代理——海内外一律先测直连，直连可用时零代理
-//      依赖、零额外开销。
-//   2. 直连不通（或已选直连在真实请求中失败）→ 才并行探测
-//      9 个代理，按延迟选最快；真实请求失败按排名续切；已选
-//      路线中途失败时同样按此顺序补测/续切。
+//   1. 先单独探测直连（真实目标、3s 超时）并记录实测延迟：
+//      通且延迟 ≤800ms（githubDirectShortCircuitMaxLatency，
+//      与 agent 侧 download.DirectShortCircuitMaxLatency 同值
+//      同口径）→ 直接用直连，不再测任何代理——海内外一律先
+//      测直连，直连快时零代理依赖、零额外开销。通但慢
+//      （>800ms）的直连不配独占首试：它不被丢弃，而是带实测
+//      延迟并入第 2 步的合并排名竞争，只在它实测最快时才赢
+//      得首试（FIX-SELROUTE / R2-P2-07：旧实现只记判活 bool、
+//      丢弃延迟，一条近 3s 的慢直连也恒排首位独占首试）。
+//   2. 直连不通、过慢（或已选直连在真实请求中失败）→ 才并行
+//      探测 9 个代理，按延迟选最快；真实请求失败按排名续切；
+//      已选路线中途失败时同样按此顺序补测/续切。慢直连在场
+//      时排名为合并排名：判活路线（直连＋代理）按实测延迟
+//      升序，未判活代理按清单原序殿后。
 //   3. 判活只认真实目标内容校验（全产品统一口径，非裸
 //      HTTP 200）：资产面以真实 .sha256 拉取成功且可解析为
 //      准入（agent 升级/内核下载、面板生成安装命令首跳）；
@@ -40,8 +48,9 @@ import (
 //
 // 每段（API 段 / 重定向段）尝试有总预算：逐个候选尝试、首个
 // 成功即用，单次尝试超时取客户端固有界（30s）与段预算剩余量
-// 的较小者。整链最坏耗时 = 直连探测 3s + 代理探测 ≤5s（仅升级
-// 时发生）+ API 段 50s + 重定向段 50s ≈ 108s，仍在登记的后端
+// 的较小者。整链最坏耗时 = 直连探测 3s + 代理探测 ≤5s（仅直连
+// 判死/过慢或直连实试失败时发生）+ API 段 50s + 重定向段 50s
+// ≈ 108s，仍在登记的后端
 // 界 120s 内（doc/audit/timeout-budgets.tsv 的 C059/C080；内核
 // 版本列表只有一段，≈58s，在其 60s 界内，T007）。
 
@@ -76,13 +85,25 @@ const (
 	githubAssetDownloadBudget = 115 * time.Second
 )
 
+// githubDirectShortCircuitMaxLatency 是直连短路独占的延迟门：
+// 直连探测判活但实测延迟超过此值时，直连不再独占首试，而是带
+// 实测延迟并入合并排名（见 gitHubMergedOrder）。与 agent 侧
+// download.DirectShortCircuitMaxLatency 同值同口径（800ms：小
+// 探测文件已耗时超此值的线路，对整轮 240s 总预算而言是涓流级
+// 慢线）。var 以便测试调小（与 agent 侧同例）。
+var githubDirectShortCircuitMaxLatency = 800 * time.Millisecond
+
 var githubRouteCache = struct {
 	sync.Mutex
 	at            time.Time
 	directProbed  bool
 	directAlive   bool
+	directLatency time.Duration
 	proxiesProbed bool
 	proxyOrder    []string
+	// proxyLatencies 是并行探测中判活代理的实测延迟（前缀 →
+	// 延迟），供慢直连在场时构造合并排名；未判活代理不在此表。
+	proxyLatencies map[string]time.Duration
 }{}
 
 // githubRouteCacheStaleLocked 报告探测缓存是否已过期（调用方持锁）。
@@ -96,18 +117,24 @@ func githubRouteCacheStaleLocked() bool {
 func githubRouteCacheResetLocked() {
 	githubRouteCache.directProbed = false
 	githubRouteCache.directAlive = false
+	githubRouteCache.directLatency = 0
 	githubRouteCache.proxiesProbed = false
 	githubRouteCache.proxyOrder = nil
+	githubRouteCache.proxyLatencies = nil
 }
 
 // probeGitHubDirectLocked 单独探测直连（调用方持锁）：以本仓
 // releases/latest 重定向端点为真实目标，复用重定向解析的校验链
-// 判定存活（不跟随重定向 + Location 主机校验 + tag 字符集）。
+// 判定存活（不跟随重定向 + Location 主机校验 + tag 字符集），
+// 并记录实测延迟供 800ms 短路门与合并排名使用（R2-P2-07：旧
+// 实现只存 bool、丢弃延迟，慢直连无从被门挡下）。
 func probeGitHubDirectLocked() {
 	target := githubHTMLBase + "/" + githubRepo + "/releases/latest"
+	start := time.Now()
 	_, err := fetchLatestTagByRedirectWithTimeout(target, githubDirectProbeTimeout)
 	githubRouteCache.directProbed = true
 	githubRouteCache.directAlive = err == nil
+	githubRouteCache.directLatency = time.Since(start)
 	githubRouteCache.at = time.Now()
 }
 
@@ -136,9 +163,11 @@ func probeGitHubProxiesLocked() {
 	wg.Wait()
 
 	alive := make([]probeResult, 0, len(results))
+	latencies := make(map[string]time.Duration, len(results))
 	for _, r := range results {
 		if r.alive {
 			alive = append(alive, r)
+			latencies[r.prefix] = r.latency
 		}
 	}
 	sort.SliceStable(alive, func(a, b int) bool { return alive[a].latency < alive[b].latency })
@@ -155,11 +184,13 @@ func probeGitHubProxiesLocked() {
 	}
 	githubRouteCache.proxiesProbed = true
 	githubRouteCache.proxyOrder = order
+	githubRouteCache.proxyLatencies = latencies
 	githubRouteCache.at = time.Now()
 }
 
-// gitHubDirectAlive 返回直连探测结论（必要时先探测，结果缓存）。
-func gitHubDirectAlive() bool {
+// gitHubDirectProbe 返回直连探测结论与实测延迟（必要时先探测，
+// 结果缓存）。latency 仅在 alive 时有意义。
+func gitHubDirectProbe() (alive bool, latency time.Duration) {
 	githubRouteCache.Lock()
 	defer githubRouteCache.Unlock()
 	if githubRouteCacheStaleLocked() {
@@ -168,7 +199,64 @@ func gitHubDirectAlive() bool {
 	if !githubRouteCache.directProbed {
 		probeGitHubDirectLocked()
 	}
-	return githubRouteCache.directAlive
+	return githubRouteCache.directAlive, githubRouteCache.directLatency
+}
+
+// mergedRouteOrderLocked 构造合并排名（调用方持锁且直连与代理
+// 均已探测）：判活路线（直连＋代理）按实测延迟升序——延迟门
+// （800ms）两侧的路线由此自然分层，门内恒在门外之前，门外只
+// 在其实测最快时才居首；未判活代理按 proxyOrder 原序（清单
+// 序）殿后（探测只排序不删除）。直连判死时不入合并段，其殿
+// 后兜底由调用方按各自口径处理（见 forEachGitHubRoute 与
+// gitHubRouteOrder）。
+func mergedRouteOrderLocked() []string {
+	type rankedRoute struct {
+		prefix  string
+		latency time.Duration
+	}
+	// 判活段先按 proxyOrder 既有序列收集（其判活段本身已按延迟
+	// 升序）、直连殿其后，再稳定排序按延迟归位——同延迟并列的
+	// 相对序由此确定，不受 map 迭代序影响。
+	admitted := make([]rankedRoute, 0, len(githubRouteCache.proxyLatencies)+1)
+	seen := make(map[string]bool, len(githubRouteCache.proxyOrder)+1)
+	for _, prefix := range githubRouteCache.proxyOrder {
+		if latency, ok := githubRouteCache.proxyLatencies[prefix]; ok {
+			admitted = append(admitted, rankedRoute{prefix: prefix, latency: latency})
+			seen[prefix] = true
+		}
+	}
+	if githubRouteCache.directAlive {
+		admitted = append(admitted, rankedRoute{prefix: "", latency: githubRouteCache.directLatency})
+		seen[""] = true
+	}
+	sort.SliceStable(admitted, func(a, b int) bool { return admitted[a].latency < admitted[b].latency })
+	order := make([]string, 0, len(githubRouteCache.proxyOrder)+1)
+	for _, r := range admitted {
+		order = append(order, r.prefix)
+	}
+	for _, prefix := range githubRouteCache.proxyOrder {
+		if !seen[prefix] {
+			order = append(order, prefix)
+		}
+	}
+	return order
+}
+
+// gitHubMergedOrder 返回合并排名（必要时先完成直连与代理探测，
+// 结果缓存）：慢直连与静态路线表调用方共用此序。
+func gitHubMergedOrder() []string {
+	githubRouteCache.Lock()
+	defer githubRouteCache.Unlock()
+	if githubRouteCacheStaleLocked() {
+		githubRouteCacheResetLocked()
+	}
+	if !githubRouteCache.directProbed {
+		probeGitHubDirectLocked()
+	}
+	if !githubRouteCache.proxiesProbed {
+		probeGitHubProxiesLocked()
+	}
+	return mergedRouteOrderLocked()
 }
 
 // gitHubProxyOrder 返回代理排名（必要时先并行探测，结果缓存）。
@@ -185,9 +273,11 @@ func gitHubProxyOrder() []string {
 }
 
 // gitHubRouteOrder 是需要静态路线表的调用方（面板自升级资产下载
-// 的候选 URL 列表）的全序：直连判活时直连居首（代理未探测时以
-// 清单原序殿后作兜底，已探测时用排名）；直连判死时为代理排名
-// + 直连殿后兜底。
+// 的候选 URL 列表）的全序：直连判活且快（≤800ms 门）时直连居
+// 首（代理未探测时以清单原序殿后作兜底，已探测时用排名）；直
+// 连判活但慢时先补测代理并给合并排名（直连按实测延迟入列，
+// 不再恒居首——R2-P2-07）；直连判死时为代理排名 + 直连殿后
+// 兜底。
 func gitHubRouteOrder() []string {
 	githubRouteCache.Lock()
 	defer githubRouteCache.Unlock()
@@ -196,6 +286,12 @@ func gitHubRouteOrder() []string {
 	}
 	if !githubRouteCache.directProbed {
 		probeGitHubDirectLocked()
+	}
+	if githubRouteCache.directAlive && githubRouteCache.directLatency > githubDirectShortCircuitMaxLatency {
+		if !githubRouteCache.proxiesProbed {
+			probeGitHubProxiesLocked()
+		}
+		return mergedRouteOrderLocked()
 	}
 	proxies := githubRouteCache.proxyOrder
 	if !githubRouteCache.proxiesProbed {
@@ -227,10 +323,13 @@ func gitHubRouteLabel(prefix string) string {
 	return prefix
 }
 
-// forEachGitHubRoute 按「直连优先、失败升级代理排名」的顺序逐个
-// 执行 attempt（prefix "" 为直连），首个成功即返回 nil：
-//   - 直连探测判活：先尝试直连；直连尝试失败才触发代理探测
-//     （若尚未探测）并按排名续切；
+// forEachGitHubRoute 按「快直连短路、慢直连入排名、判死走排名
+// 加兜底」的顺序逐个执行 attempt（prefix "" 为直连），首个
+// 成功即返回 nil：
+//   - 直连判活且快（实测延迟 ≤800ms 门）：先尝试直连；直连
+//     尝试失败才触发代理探测（若尚未探测）并按排名续切；
+//   - 直连判活但慢：触发代理探测后按合并排名尝试（直连带
+//     实测延迟参与竞争，见 mergedRouteOrderLocked）；
 //   - 直连探测判死：直接按代理排名尝试，全部失败后最后兜底
 //     尝试一次直连（探测口径与请求口径可能不一致）。
 //
@@ -264,20 +363,35 @@ func forEachGitHubRoute(stageBudget time.Duration, attempt func(prefix string, a
 		succeeded = true
 	}
 
-	directAlive := gitHubDirectAlive()
-	if directAlive {
+	directAlive, directLatency := gitHubDirectProbe()
+	switch {
+	case directAlive && directLatency > githubDirectShortCircuitMaxLatency:
+		// 慢直连：不配独占首试，按合并排名逐个尝试（直连已在
+		// 排名内按实测延迟就位，不再单独兜底）。
+		for _, prefix := range gitHubMergedOrder() {
+			tryPrefix(prefix)
+			if succeeded {
+				return nil
+			}
+		}
+	case directAlive:
 		tryPrefix("")
 		if succeeded {
 			return nil
 		}
-	}
-	for _, prefix := range gitHubProxyOrder() {
-		tryPrefix(prefix)
-		if succeeded {
-			return nil
+		for _, prefix := range gitHubProxyOrder() {
+			tryPrefix(prefix)
+			if succeeded {
+				return nil
+			}
 		}
-	}
-	if !directAlive {
+	default:
+		for _, prefix := range gitHubProxyOrder() {
+			tryPrefix(prefix)
+			if succeeded {
+				return nil
+			}
+		}
 		tryPrefix("")
 		if succeeded {
 			return nil
@@ -305,12 +419,16 @@ func PinGitHubVersionSourceForTesting(apiBase string) (restore func()) {
 	githubRouteCache.Lock()
 	prevAt := githubRouteCache.at
 	prevDirectProbed, prevDirectAlive := githubRouteCache.directProbed, githubRouteCache.directAlive
+	prevDirectLatency := githubRouteCache.directLatency
 	prevProxiesProbed, prevProxyOrder := githubRouteCache.proxiesProbed, githubRouteCache.proxyOrder
+	prevProxyLatencies := githubRouteCache.proxyLatencies
 	githubRouteCache.at = time.Now()
 	githubRouteCache.directProbed = true
 	githubRouteCache.directAlive = true
+	githubRouteCache.directLatency = 0
 	githubRouteCache.proxiesProbed = true
 	githubRouteCache.proxyOrder = nil
+	githubRouteCache.proxyLatencies = nil
 	githubRouteCache.Unlock()
 
 	clearKernelVersionCacheForPin()
@@ -319,7 +437,9 @@ func PinGitHubVersionSourceForTesting(apiBase string) (restore func()) {
 		githubRouteCache.Lock()
 		githubRouteCache.at = prevAt
 		githubRouteCache.directProbed, githubRouteCache.directAlive = prevDirectProbed, prevDirectAlive
+		githubRouteCache.directLatency = prevDirectLatency
 		githubRouteCache.proxiesProbed, githubRouteCache.proxyOrder = prevProxiesProbed, prevProxyOrder
+		githubRouteCache.proxyLatencies = prevProxyLatencies
 		githubRouteCache.Unlock()
 		clearKernelVersionCacheForPin()
 	}
