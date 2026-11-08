@@ -132,7 +132,7 @@ func federationKCPKey(secret string, shareID int64, protocols ...string) (string
 	return key, nil
 }
 
-func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protocol, strategy string, targets []federationRuntimeTarget, interfaceName string, kcpSecret string, kcpShareID int64) (map[string]interface{}, error) {
+func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protocol, strategy string, targets []federationRuntimeTarget, interfaceName string, kcpSecret string, kcpShareID int64, fecOff bool) (map[string]interface{}, error) {
 	chainName = strings.TrimSpace(chainName)
 	if chainName == "" {
 		return nil, fmt.Errorf("chain name is required")
@@ -174,7 +174,11 @@ func buildFederationMiddleChainConfig(chainName string, runtimeID int64, protoco
 			"name":      fmt.Sprintf("node_%d", i+1),
 			"addr":      processServerAddress(fmt.Sprintf("%s:%d", host, target.Port)),
 			"connector": connector,
-			"dialer":    buildTunnelDialerConfig(targetProtocol, kcpKey),
+			// FIX-KCPMEM（P1-04）：联邦中继链的拨号方是本面板的
+			// 中段节点，但 builder 无节点上下文，恒走 small 保守
+			// 缺省档（声明面覆盖不到此纯函数路径，同 listener 面
+			// 口径）；fecOff 由调用方按本面板设置传入。
+			"dialer": buildTunnelDialerConfig(targetProtocol, kcpKey, kcpTierSmall, fecOff),
 		})
 	}
 
@@ -363,14 +367,24 @@ func applyFederationExitPrivateGuard(service map[string]interface{}, role, agent
 	}
 }
 
-func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName string, targetCount int, interfaceName, kcpKey string) map[string]interface{} {
+func buildFederationServiceConfig(serviceName, addr, protocol, role, chainName string, targetCount int, interfaceName, kcpKey string, fecOff bool) map[string]interface{} {
 	service := map[string]interface{}{
 		"name": serviceName,
 		"addr": addr,
 		"handler": map[string]interface{}{
 			"type": "relay",
 		},
-		"listener": buildTunnelListenerConfig(protocol, kcpKey),
+		// FIX-KCPMEM（P1-04）：联邦提供方面板不知远端节点内存，
+		// 恒走 small 保守缺省档（声明面只覆盖本面板自有节点）。
+		// FEC 档（P1-05）由调用方按本面板设置穿线，与拨号面同
+		// 口径消费 kcp_fec_mode：监听面并非纯接收方——kcp-go
+		// ServeConn 按监听配置的 datashard/parityshard 为已接受
+		// 会话构造 FEC 编码器（x/listener/kcp/listener.go），本
+		// 端发送方向的冗余比由监听面本地配置决定；「接收方自
+		// 适应」只覆盖解码方向。故 off 时本面同样不下发 shard
+		// 键、改下发 fec_off 标记（与 tunnelKCPMetadata 真源同
+		// 形态），不得在此写死 default。
+		"listener": buildTunnelListenerConfig(protocol, kcpKey, kcpTierSmall, fecOff),
 	}
 	// F-UDP-7: 与本地链 builder 共用 tunnelRelayMetadata。
 	handlerMetadata := tunnelRelayMetadata(protocol)

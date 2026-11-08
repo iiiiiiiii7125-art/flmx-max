@@ -47,17 +47,17 @@ func ku1AssertUDPListenerKeepAlive(t *testing.T, surface string, service map[str
 
 func TestKU1TunnelListenerConfigUDPKeepAlive(t *testing.T) {
 	ku1AssertUDPListenerKeepAlive(t, "buildTunnelListenerConfig(udp)",
-		map[string]interface{}{"listener": buildTunnelListenerConfig("udp", "")})
+		map[string]interface{}{"listener": buildTunnelListenerConfig("udp", "", kcpTierSmall, false)})
 	ku1AssertUDPListenerKeepAlive(t, "buildTunnelListenerConfig(UDP)",
-		map[string]interface{}{"listener": buildTunnelListenerConfig("UDP", "")})
+		map[string]interface{}{"listener": buildTunnelListenerConfig("UDP", "", kcpTierSmall, false)})
 
 	for _, protocol := range []string{"tcp", "tls", "mtls", "mtcp", "ws", "wss", "mws", "mwss"} {
-		listener := buildTunnelListenerConfig(protocol, "")
+		listener := buildTunnelListenerConfig(protocol, "", kcpTierSmall, false)
 		if _, hasMetadata := listener["metadata"]; hasMetadata {
 			t.Fatalf("protocol %s must not gain listener metadata, got %v", protocol, listener)
 		}
 	}
-	kcp := buildTunnelListenerConfig("kcp", "")
+	kcp := buildTunnelListenerConfig("kcp", "", kcpTierSmall, false)
 	kcpMetadata, _ := kcp["metadata"].(map[string]interface{})
 	if kcpMetadata == nil || kcpMetadata["kcp.mode"] != "fast3" {
 		t.Fatalf("kcp listener metadata must be preserved, got %v", kcp)
@@ -88,7 +88,7 @@ func TestKU1UDPGenerationSurfaceEnumeration(t *testing.T) {
 	for _, role := range []string{"middle", "exit"} {
 		role := role
 		surfaces["联邦 "+role+" runtime 服务"] = func() map[string]interface{} {
-			return buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", role, "fed_chain_1", 1, "", "")
+			return buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", role, "fed_chain_1", 1, "", "", false)
 		}
 	}
 	surfaces["本地转发 _udp 服务（既有合规面，防回退）"] = func() map[string]interface{} {
@@ -160,7 +160,7 @@ func TestKU1MuxMetadataAlignedBetweenBuilders(t *testing.T) {
 
 	for _, protocol := range []string{"tcp", "tls", "mtls", "mtcp", "kcp", "ws"} {
 		// handler 面：联邦服务 vs 本地链服务。
-		fedService := buildFederationServiceConfig("fed_svc_1", "[::]:24002", protocol, "exit", "", 1, "", "")
+		fedService := buildFederationServiceConfig("fed_svc_1", "[::]:24002", protocol, "exit", "", 1, "", "", false)
 		fedHandler, _ := fedService["handler"].(map[string]interface{})
 		localServices := (&Handler{jwtSecret: "ku1-align-secret"}).buildTunnelChainServiceConfig(99, tunnelRuntimeNode{NodeID: 2, Protocol: protocol, Port: 24001, ChainType: 3}, node, 1)
 		localHandler, _ := localServices[0]["handler"].(map[string]interface{})
@@ -171,7 +171,7 @@ func TestKU1MuxMetadataAlignedBetweenBuilders(t *testing.T) {
 
 		// connector 面：联邦 middle 链 vs 本地链。
 		fedChain, err := buildFederationMiddleChainConfig("fed_chain_1", 7, protocol, "round",
-			[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: protocol}}, "", "ku1-align-secret", 99)
+			[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: protocol}}, "", "ku1-align-secret", 99, false)
 		if err != nil {
 			t.Fatalf("protocol %s: build federation middle chain: %v", protocol, err)
 		}

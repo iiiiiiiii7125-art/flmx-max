@@ -55,7 +55,7 @@ func ku9AssertNoBindKey(t *testing.T, surface string, value interface{}) {
 func TestKU9TerminalRelayHandlersCarryBindOptIn(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	for _, protocol := range []string{"tcp", "tls", "mtls", "mtcp", "kcp", "udp", "ws", "wss"} {
-		fedService := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", protocol, "exit", "", 1, "", "")
+		fedService := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", protocol, "exit", "", 1, "", "", false)
 		fedMetadata := ku9HandlerMetadata(t, fedService)
 		if fedMetadata["bind"] != true {
 			t.Fatalf("protocol %s: federation exit handler must carry bind=true, got %v", protocol, fedMetadata)
@@ -83,7 +83,7 @@ func TestKU9UDPExitMetadataIsExactlyBind(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	want := map[string]interface{}{"bind": true}
 
-	fedService := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", "exit", "", 1, "", "")
+	fedService := buildFederationServiceConfig("fed_svc_1", "192.0.2.2:24002", "udp", "exit", "", 1, "", "", false)
 	if got := ku9HandlerMetadata(t, fedService); !reflect.DeepEqual(got, want) {
 		t.Fatalf("federation udp exit metadata = %v, want %v", got, want)
 	}
@@ -128,7 +128,7 @@ func TestKU9NonRelaySurfacesHaveNoBind(t *testing.T) {
 		ku9AssertNoBindKey(t, "local chain config", localChain)
 
 		fedChain, err := buildFederationMiddleChainConfig("fed_chain_1", 7, protocol, "round",
-			[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: protocol}}, "", "", 0)
+			[]federationRuntimeTarget{{Host: "10.0.0.2", Port: 24001, Protocol: protocol}}, "", "", 0, false)
 		if err != nil {
 			t.Fatalf("protocol %s: build federation middle chain: %v", protocol, err)
 		}
