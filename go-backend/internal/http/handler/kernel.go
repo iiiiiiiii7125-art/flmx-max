@@ -602,12 +602,12 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		unlock := lockKernelApply(k.ID)
-		_, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
+		_, dispatchErr := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
 			"type": k.KernelType, "action": "remove",
 		}, kernelCommandTimeout, false, true)
-		if err != nil && !req.Force {
+		if dispatchErr != nil && !req.Force {
 			unlock()
-			response.WriteJSON(w, response.ErrDefault("节点卸载失败: "+err.Error()+"（可强制删除面板记录）"))
+			response.WriteJSON(w, response.ErrDefault("节点卸载失败: "+dispatchErr.Error()+"（可强制删除面板记录）"))
 			return
 		}
 		// R9-08（I-F2-03）：落库前按最终引用集复检——守卫与删除之间
@@ -666,6 +666,19 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			}
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
+		}
+		// FIX-CASCADE（E1-09 子形态 b）：走到这里且 dispatchErr 非
+		// 空，只可能是 Force 强删（下发未确认、agent 侧内核可能
+		// 仍在运行）。登记孤儿重查标记：周期轮询把该节点并入轮询
+		// 集、以未知类型分支持续下发移除，agent 确认空集后清除
+		// ——否则节点最后一个内核被强删后该节点退出轮询集，孤儿
+		// 只能等下次重连才收敛。下发已确认（dispatchErr==nil）时
+		// 不登记。登记失败只记日志：删除已落库，孤儿仍有重连
+		// reconcile 兜底，与修复前等价、不回滚删除。
+		if dispatchErr != nil {
+			if merr := h.repo.MarkKernelOrphanRecheck(k.NodeID, k.KernelType, time.Now().UnixMilli()); merr != nil {
+				log.Printf("kernel remove: orphan recheck mark failed node_id=%d kernel=%s err=%v", k.NodeID, k.KernelType, merr)
+			}
 		}
 		if len(brokenReferrers) > 0 {
 			response.WriteJSON(w, response.OK(map[string]interface{}{
@@ -2848,20 +2861,31 @@ func (h *Handler) refreshNodeKernelStatus(nodeID int64) {
 	h.pollNodeKernels(nodeID, false)
 }
 
-func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
+// kernelPollOutcome 是一轮 pollNodeKernels 的收敛判据（FIX-CASCADE
+// / E1-09 子形态 b）：Reachable 表示 agent 的 KernelStatus 回读已
+// 取得；OrphanTypes 是 agent 仍在运行、但 DB 已无对应行的内核类
+// 型中「本轮下发移除未确认」的子集——两者同时满足（可达且子集
+// 为空）才证明 agent 侧已收敛到 DB 空集，孤儿重查标记可清除。
+type kernelPollOutcome struct {
+	Reachable   bool
+	OrphanTypes []string
+}
+
+func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutcome {
 	kernels, err := h.repo.ListNodeKernels(nodeID)
 	if err != nil || (len(kernels) == 0 && !evenIfNone) {
-		return
+		return kernelPollOutcome{}
 	}
 	res, err := h.sendNodeCommandWithTimeout(nodeID, "KernelStatus", map[string]interface{}{}, kernelCommandTimeout, false, false)
 	if err != nil {
-		return // offline, or an agent without kernel support
+		return kernelPollOutcome{} // offline, or an agent without kernel support
 	}
 	var status agentKernelStatus
 	if err := remarshal(res.Data, &status); err != nil {
 		log.Printf("kernel status decode failed node_id=%d err=%v", nodeID, err)
-		return
+		return kernelPollOutcome{}
 	}
+	outcome := kernelPollOutcome{Reachable: true}
 
 	now := time.Now().UnixMilli()
 	byType := make(map[string]agentKernelState, len(status.Kernels))
@@ -2895,6 +2919,7 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 			"type": t, "action": "remove",
 		}, kernelCommandTimeout, false, true); err != nil {
 			log.Printf("kernel orphan removal failed node_id=%d kernel=%s err=%v", nodeID, t, err)
+			outcome.OrphanTypes = append(outcome.OrphanTypes, t)
 		}
 	}
 	for _, k := range kernels {
@@ -2954,6 +2979,7 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) {
 	}
 
 	h.ingestKernelCounters(nodeID, status, now)
+	return outcome
 }
 
 // ingestKernelCounters 把一次 KernelStatus 回读的计数面入账：订阅
@@ -3037,19 +3063,81 @@ func (h *Handler) runKernelStatusLoop(ctx context.Context) {
 }
 
 // refreshKernelStatuses 执行一轮内核状态刷新（全部内核节点、有限并发）。
+// FIX-CASCADE（E1-09 子形态 b）：轮询集 = ListKernelNodeIDs ∪
+// 孤儿重查标记节点——最后一个内核被强删的节点不在前者内，不并
+// 入标记集就永远等不到周期收敛。标记节点走 convergeKernelOrphan-
+// Recheck（evenIfNone 轮询 + 确认空集后清标记）。
 func (h *Handler) refreshKernelStatuses() {
 	nodeIDs, err := h.repo.ListKernelNodeIDs()
 	if err != nil {
 		log.Printf("kernel status node lookup failed: %v", err)
 		return
 	}
+	orphanSet := make(map[int64]struct{})
+	if orphanIDs, orphanErr := h.repo.ListKernelOrphanRecheckNodeIDs(); orphanErr != nil {
+		log.Printf("kernel orphan recheck node lookup failed: %v", orphanErr)
+	} else {
+		seen := make(map[int64]struct{}, len(nodeIDs))
+		for _, id := range nodeIDs {
+			seen[id] = struct{}{}
+		}
+		for _, id := range orphanIDs {
+			orphanSet[id] = struct{}{}
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				nodeIDs = append(nodeIDs, id)
+			}
+		}
+	}
 	runParallelNodeTasks(nodeIDs, kernelStatusParallel, func(nodeID int64) {
 		node, err := h.repo.GetNodeByID(nodeID)
 		if err != nil || node == nil || node.Status != 1 {
 			return
 		}
+		if _, marked := orphanSet[nodeID]; marked {
+			h.convergeKernelOrphanRecheck(nodeID)
+			return
+		}
 		h.refreshNodeKernelStatus(nodeID)
 	})
+}
+
+// convergeKernelOrphanRecheck 对一个已登记孤儿重查的节点做一轮
+// 收敛轮询：pollNodeKernels 的未知类型分支会逐个下发移除；只有
+// 回读可达且无未确认孤儿时才清标记（节点离线/移除失败时保留标
+// 记、下轮再查——标记即「未收敛」的持久事实，不许提前清除）。
+func (h *Handler) convergeKernelOrphanRecheck(nodeID int64) {
+	outcome := h.pollNodeKernels(nodeID, true)
+	if !outcome.Reachable || len(outcome.OrphanTypes) > 0 {
+		return
+	}
+	if err := h.repo.ClearKernelOrphanRecheck(nodeID); err != nil {
+		log.Printf("kernel orphan recheck clear failed node_id=%d err=%v", nodeID, err)
+	}
+}
+
+// removeNodeKernelsFromAgent 在删节点级联前尽力下发本节点全部内
+// 核的移除（FIX-CASCADE / E1-09 子形态 a，调用点在删节点漏斗）。
+// 逐个经 lockKernelApply 串行化（与并发 apply/控制同口径）；失败
+// 只记日志点名——删节点漏斗的数据面清理一贯尽力而为（死节点必
+// 须能删），且节点记录删除后 secret 与会话都不复存在、没有后续
+// 收敛面，日志即该形态的终局披露。
+func (h *Handler) removeNodeKernelsFromAgent(nodeID int64) {
+	kernels, err := h.repo.ListNodeKernels(nodeID)
+	if err != nil {
+		log.Printf("node delete: list kernels failed node_id=%d err=%v (continuing)", nodeID, err)
+		return
+	}
+	for _, k := range kernels {
+		unlock := lockKernelApply(k.ID)
+		_, derr := h.sendNodeCommandWithTimeout(nodeID, "KernelControl", map[string]interface{}{
+			"type": k.KernelType, "action": "remove",
+		}, kernelCommandTimeout, false, true)
+		unlock()
+		if derr != nil {
+			log.Printf("node delete: kernel removal unconfirmed node_id=%d kernel=%s err=%v (continuing; node record is being deleted, no convergence path remains)", nodeID, k.KernelType, derr)
+		}
+	}
 }
 
 // runParallelNodeTasks 以至多 limit 个并发对每个 id 执行 fn 并等待全部完成。

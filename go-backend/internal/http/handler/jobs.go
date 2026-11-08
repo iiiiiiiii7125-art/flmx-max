@@ -217,6 +217,22 @@ func (h *Handler) retryNftPendingDeletes(now time.Time) {
 					}
 					log.Printf("nftables pending-delete exhausted node_id=%d forward_id=%d retry_count=%d last_error=%q action=manual_cleanup_required",
 						nodeID, fid, retryCount, lastErr)
+					// FIX-CASCADE（E1-01）：耗尽是本墓碑的最后调度
+					// 点。隧道尚存的维持人工处理口径（D7 的 24h 窗
+					// 内先清规则、终局由管理员 force-delete）；隧道
+					// 已被删的墓碑没有任何后续收敛路径，在此终删并
+					// 点名——否则其行以已删 tunnel_id 无限悬空。终
+					// 删走 DeleteForwardCascade 全集（含台账行与配
+					// 额暂停清单摘除）。
+					if fwd, ferr := h.repo.GetForwardRecord(fid); ferr == nil && fwd != nil {
+						if tunnel, terr := h.repo.GetTunnelRecordRaw(fwd.TunnelID); terr == nil && tunnel == nil {
+							if derr := h.deleteForwardByID(fid); derr != nil {
+								log.Printf("nftables pending-delete orphan finalize failed forward_id=%d err=%v", fid, derr)
+							} else {
+								log.Printf("nftables pending-delete orphan finalized node_id=%d forward_id=%d tunnel_id=%d", nodeID, fid, fwd.TunnelID)
+							}
+						}
+					}
 				}
 			}
 			continue

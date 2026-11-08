@@ -455,6 +455,23 @@ func findBestExitScore(scores []bestExitCandidateScore, exitNodeID int64) bestEx
 	return failedBestExitCandidate(0, chainNodeRecord{NodeID: exitNodeID}, "current exit has no successful score")
 }
 
+// forgetTunnel 清除一条隧道的全部决策条目（FIX-CASCADE /
+// E1-02）：删除路径此前从不调用任何清除，条目以 (TunnelID,
+// OwnerNodeID) 为键驻留至进程重启——id 不复用故无误读，但进程内
+// 单调累积。删隧道漏斗（deleteTunnelByID）成功后调用。
+func (m *bestExitManager) forgetTunnel(tunnelID int64) {
+	if m == nil || tunnelID <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key := range m.decisions {
+		if key.TunnelID == tunnelID {
+			delete(m.decisions, key)
+		}
+	}
+}
+
 func (m *bestExitManager) decisionLocked(key bestExitOwnerKey) *bestExitDecision {
 	if d := m.decisions[key]; d != nil {
 		return d
