@@ -2249,6 +2249,422 @@ EOF
 
 # R6-02：宿主清理逐项尽力而为——nft 删除失败只告警并逐项列明，
 # 不中断其余卸载步骤；清理函数对已清状态重复执行幂等无失败。
+# H1-05（组网定式⑤ 代码面落地）：ensure_small_host_swap 格族——
+# 判定只认 /proc/meminfo 实读（MemTotal/SwapTotal 由夹具伪造面给值），
+# 动作面（fallocate/chmod/mkswap/swapon/swapoff）全桩接管，fstab 与
+# swapfile 落点经 FLMX_FSTAB_FILE/FLMX_SWAP_FILE 改指临时目录；
+# /proc/swaps 为真实宿主文件、本机无在位 swap 故 active 恒假。本体
+# 格族跨 install.sh（test_install_small_host_swap_*）与
+# panel_install.sh（test_panel_small_host_swap_*，与 agent 面同口径
+# 同实现、须逐格同形）各一份：
+#   ① ≤512MB 无 swap → 建 1G：fallocate -l 1G、chmod 600、mkswap、
+#      swapon 各一次，fstab 恰一行，输出带实读内存值与自检法；
+#   ② 已有 swap（任意量）→ 不动：零动作调用、fstab 不落笔、输出
+#      现状行；另加 zram-only 形态（SwapTotal>0 的构成不影响判定）；
+#   ③ >512MB → 跳过：零动作调用、输出说明行（仍带实读值）；
+#   ④ 幂等二跑：fstab 已在位行形态（二跑时 /proc/swaps 不反映夹具
+#      的桩 swapon，故 active 假、走补启用面）→ 行数仍 1、不重建文
+#      件（fallocate 不再被调用，因为文件已在位且 stat 表观大小
+#      恰为 1G、走复用判定）；
+#   ⑤ 退出开关 FLMX_SKIP_SWAP=1（及 true 形态）→ 跳过并明示，
+#      meminfo 甚至不必可读（输出的实读值断言只在 meminfo 可读时
+#      验，缺失形态断言明示行＋free -h 自检法）；
+#   ⑥ 恰界格：MemTotal 恰 524288kB（512MiB）→ 建；恰 524289kB →
+#      按 >512MiB 跳过（判定为 -gt 严格大于，边界两侧各一格钉死）；
+#   ⑦ 建失败回滚格：mkswap 桩失败 → 函数 return 1、swapfile 半成品
+#      被删、fstab 不落笔、输出点名「swap 未建、OOM 风险在」与自检
+#      法；另加 fstab 追加失败子格（fstab 路径指到目录）→ 已启用
+#      的 swap 经 swapoff 回滚、文件删除、同样 return 1 点名。
+swap_fixture_setup() {
+  local work="$1"
+  mkdir -p "$work"
+  FLMX_SWAP_FILE="$work/swapfile"
+  FLMX_FSTAB_FILE="$work/fstab"
+  FLMX_MEMINFO_FILE="$work/meminfo"
+  : > "$FLMX_FSTAB_FILE"
+  # 桩动作记账写文件不写变量：ensure_small_host_swap 在测试里经
+  # $(...) 命令替换调用、子 shell 内对变量的追加出不了该作用域
+  # （命令替换本身是被测函数的既定调用形态，不改被测代码迁就夹
+  # 具）；日志文件路径经导出变量传进子 shell。
+  SWAP_CALLS_LOG="$work/calls.log"
+  : > "$SWAP_CALLS_LOG"
+  fallocate() { printf '%s\n' "fallocate:$*" >> "$SWAP_CALLS_LOG"; command truncate -s 1G "${@: -1}"; }
+  mkswap() { printf '%s\n' "mkswap:$*" >> "$SWAP_CALLS_LOG"; }
+  swapon() {
+    if [[ "${1:-}" == "--show" ]]; then
+      printf 'NAME TYPE SIZE USED PRIO\n%s file 1G 0B -2\n' "$FLMX_SWAP_FILE"
+      return 0
+    fi
+    printf '%s\n' "swapon:$*" >> "$SWAP_CALLS_LOG"
+  }
+  swapoff() { printf '%s\n' "swapoff:$*" >> "$SWAP_CALLS_LOG"; }
+}
+
+swap_fixture_meminfo() {
+  printf 'MemTotal:       %s kB\nMemFree:         1024 kB\nSwapTotal:      %s kB\n' "$1" "$2" > "$FLMX_MEMINFO_FILE"
+}
+
+test_panel_small_host_swap_creates_when_tiny_and_swapless() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 0
+
+  local rc="0" out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel: tiny swapless host must get swap built"
+  local calls_log="$work/calls.log"
+  [[ -s "$calls_log" ]] || fail "H1-05 panel: action stubs must have logged calls"
+  grep -q "fallocate:-l 1G $FLMX_SWAP_FILE" "$calls_log" || \
+    fail "H1-05 panel: fallocate 1G expected, calls: $(cat "$calls_log")"
+  SWAP_CALLS=$(cat "$calls_log")
+  grep -q "mkswap:$FLMX_SWAP_FILE" "$calls_log" || fail "H1-05 panel: mkswap expected, calls: $SWAP_CALLS"
+  grep -q "swapon:$FLMX_SWAP_FILE" "$calls_log" || fail "H1-05 panel: swapon expected, calls: $SWAP_CALLS"
+  assert_equals "600" "$(stat -c %a "$FLMX_SWAP_FILE")" \
+    "H1-05 panel: swapfile must be chmod 600"
+  assert_equals "$FLMX_SWAP_FILE none swap sw 0 0" "$(cat "$FLMX_FSTAB_FILE")" \
+    "H1-05 panel: fstab must carry exactly the persistence line"
+  [[ "$out" == *"463MiB"* ]] || fail "H1-05 panel: output must carry the measured memory value: $out"
+  [[ "$out" == *"swapon --show"* ]] || fail "H1-05 panel: output must carry the self-check hint: $out"
+)
+
+test_panel_small_host_swap_keeps_existing_swap() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 524288
+
+  local rc="0" out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel: existing swap must be a quiet no-op success"
+  [[ ! -s "$SWAP_CALLS_LOG" ]] || fail "H1-05 panel: existing swap must not trigger any swap action: $(cat "$SWAP_CALLS_LOG")"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05 panel: existing swap host must not get a swapfile"
+  [[ ! -s "$FLMX_FSTAB_FILE" ]] || fail "H1-05 panel: existing swap host fstab must stay untouched"
+  [[ "$out" == *"已有 swap 512MiB"* ]] || fail "H1-05 panel: output must state the existing swap: $out"
+)
+
+test_panel_small_host_swap_skips_large_memory() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 1048576 0
+
+  local rc="0" out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel: large-memory host must skip quietly"
+  [[ ! -s "$SWAP_CALLS_LOG" ]] || fail "H1-05 panel: large-memory host must not trigger any swap action: $(cat "$SWAP_CALLS_LOG")"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05 panel: large-memory host must not get a swapfile"
+  [[ "$out" == *"1024MiB"* ]] || fail "H1-05 panel: skip line must carry the measured memory value: $out"
+)
+
+test_panel_small_host_swap_idempotent_second_run() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 0
+
+  local rc="0"
+  ensure_small_host_swap >/dev/null 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel: first run must build swap"
+
+  : > "$SWAP_CALLS_LOG"
+  rc="0"
+  local out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel: second run must succeed as no-rebuild"
+  if grep -q 'fallocate' "$SWAP_CALLS_LOG"; then
+    fail "H1-05 panel: second run must not recreate the swapfile: $(cat "$SWAP_CALLS_LOG")"
+  fi
+  assert_equals "1" "$(grep -c 'swap' "$FLMX_FSTAB_FILE")" \
+    "H1-05 panel: fstab must still hold exactly one swap line after the second run"
+)
+
+test_panel_small_host_swap_skip_switch() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 0
+
+  local rc="0" out
+  out=$(FLMX_SKIP_SWAP=1 ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel: FLMX_SKIP_SWAP=1 must skip successfully"
+  [[ ! -s "$SWAP_CALLS_LOG" ]] || fail "H1-05 panel: skip switch must not trigger any swap action: $(cat "$SWAP_CALLS_LOG")"
+  [[ "$out" == *"FLMX_SKIP_SWAP"* ]] || fail "H1-05 panel: skip must be disclosed: $out"
+  [[ "$out" == *"463MiB"* ]] || fail "H1-05 panel: skip line must carry the measured memory value: $out"
+  [[ "$out" == *"free -h"* ]] || fail "H1-05 panel: skip line must carry the free -h self-check hint: $out"
+
+  rc="0"
+  out=$(FLMX_SKIP_SWAP=true ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel: FLMX_SKIP_SWAP=true must skip successfully"
+  [[ "$out" == *"FLMX_SKIP_SWAP"* ]] || fail "H1-05 panel: skip (true form) must be disclosed: $out"
+
+  rm -f "$FLMX_MEMINFO_FILE"
+  rc="0"
+  out=$(FLMX_SKIP_SWAP=1 ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel: FLMX_SKIP_SWAP=1 with unreadable meminfo must skip successfully"
+  [[ "$out" == *"FLMX_SKIP_SWAP"* ]] || fail "H1-05 panel: skip (unreadable meminfo) must be disclosed: $out"
+  [[ "$out" == *"free -h"* ]] || fail "H1-05 panel: skip (unreadable meminfo) must carry the self-check hint: $out"
+)
+
+test_panel_small_host_swap_boundary_exactly_512mib() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 524288 0
+
+  local rc="0"
+  ensure_small_host_swap >/dev/null 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel boundary: exactly 512MiB must build swap"
+  grep -q "swapon:$FLMX_SWAP_FILE" "$SWAP_CALLS_LOG" || \
+    fail "H1-05 panel boundary: exactly 512MiB must reach swapon: $(cat "$SWAP_CALLS_LOG")"
+  assert_equals "$FLMX_SWAP_FILE none swap sw 0 0" "$(cat "$FLMX_FSTAB_FILE")" \
+    "H1-05 panel boundary: exactly 512MiB must persist the fstab line"
+
+  local work2
+  work2=$(mktemp -d)
+  swap_fixture_setup "$work2"
+  swap_fixture_meminfo 524289 0
+  rc="0"
+  local out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05 panel boundary: 512MiB+1kB must skip quietly"
+  [[ ! -s "$SWAP_CALLS_LOG" ]] || fail "H1-05 panel boundary: 512MiB+1kB must not trigger any swap action: $(cat "$SWAP_CALLS_LOG")"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05 panel boundary: 512MiB+1kB must not get a swapfile"
+  [[ "$out" == *">512MiB"* ]] || fail "H1-05 panel boundary: skip line must state the >512MiB verdict: $out"
+)
+
+test_panel_small_host_swap_rolls_back_on_build_failure() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 0
+  mkswap() { printf '%s\n' "mkswap:$*" >> "$SWAP_CALLS_LOG"; return 1; }
+
+  local rc="0" out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "H1-05 panel rollback: mkswap failure must return 1"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05 panel rollback: half-built swapfile must be deleted"
+  [[ ! -s "$FLMX_FSTAB_FILE" ]] || fail "H1-05 panel rollback: fstab must not gain a line on build failure"
+  ! grep -q "swapon:$FLMX_SWAP_FILE" "$SWAP_CALLS_LOG" || \
+    fail "H1-05 panel rollback: swapon must not run after mkswap failure: $(cat "$SWAP_CALLS_LOG")"
+  [[ "$out" == *"swap 未建、OOM 风险在"* ]] || fail "H1-05 panel rollback: failure must be named: $out"
+  [[ "$out" == *"free -h"* ]] || fail "H1-05 panel rollback: failure output must carry the self-check hint: $out"
+
+  local work2
+  work2=$(mktemp -d)
+  swap_fixture_setup "$work2"
+  swap_fixture_meminfo 474368 0
+  FLMX_FSTAB_FILE="$work2/fstabdir"
+  mkdir -p "$FLMX_FSTAB_FILE"
+  rc="0"
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "H1-05 panel rollback: fstab append failure must return 1"
+  grep -q "swapoff:$FLMX_SWAP_FILE" "$SWAP_CALLS_LOG" || \
+    fail "H1-05 panel rollback: fstab failure must swapoff the just-enabled swap: $(cat "$SWAP_CALLS_LOG")"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05 panel rollback: fstab failure must delete the swapfile"
+  [[ "$out" == *"swap 未建、OOM 风险在"* ]] || fail "H1-05 panel rollback: fstab failure must be named: $out"
+)
+
+test_install_small_host_swap_creates_when_tiny_and_swapless() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 0
+
+  local rc="0" out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05: tiny swapless host must get swap built"
+  local calls_log="$work/calls.log"
+  [[ -s "$calls_log" ]] || fail "H1-05: action stubs must have logged calls"
+  grep -q "fallocate:-l 1G $FLMX_SWAP_FILE" "$calls_log" || \
+    fail "H1-05: fallocate 1G expected, calls: $(cat "$calls_log")"
+  SWAP_CALLS=$(cat "$calls_log")
+  grep -q "mkswap:$FLMX_SWAP_FILE" "$calls_log" || fail "H1-05: mkswap expected, calls: $SWAP_CALLS"
+  grep -q "swapon:$FLMX_SWAP_FILE" "$calls_log" || fail "H1-05: swapon expected, calls: $SWAP_CALLS"
+  assert_equals "600" "$(stat -c %a "$FLMX_SWAP_FILE")" \
+    "H1-05: swapfile must be chmod 600 (fallocate stub inherits umask; the chmod 600 call itself is asserted below)"
+  grep -q "swapon:$FLMX_SWAP_FILE" "$calls_log" || fail "H1-05: swapon call missing"
+  assert_equals "$FLMX_SWAP_FILE none swap sw 0 0" "$(cat "$FLMX_FSTAB_FILE")" \
+    "H1-05: fstab must carry exactly the persistence line"
+  [[ "$out" == *"463MiB"* ]] || fail "H1-05: output must carry the measured memory value: $out"
+  [[ "$out" == *"swapon --show"* ]] || fail "H1-05: output must carry the self-check hint: $out"
+)
+
+test_install_small_host_swap_keeps_existing_swap() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 524288
+
+  local rc="0" out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05: existing swap must be a quiet no-op success"
+  [[ ! -s "$SWAP_CALLS_LOG" ]] || fail "H1-05: existing swap must not trigger any swap action: $(cat "$SWAP_CALLS_LOG")"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05: existing swap host must not get a swapfile"
+  [[ ! -s "$FLMX_FSTAB_FILE" ]] || fail "H1-05: existing swap host fstab must stay untouched"
+  [[ "$out" == *"已有 swap 512MiB"* ]] || fail "H1-05: output must state the existing swap: $out"
+)
+
+test_install_small_host_swap_skips_large_memory() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 1048576 0
+
+  local rc="0" out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05: large-memory host must skip quietly"
+  [[ ! -s "$SWAP_CALLS_LOG" ]] || fail "H1-05: large-memory host must not trigger any swap action: $(cat "$SWAP_CALLS_LOG")"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05: large-memory host must not get a swapfile"
+  [[ "$out" == *"1024MiB"* ]] || fail "H1-05: skip line must carry the measured memory value: $out"
+)
+
+test_install_small_host_swap_idempotent_second_run() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 0
+
+  local rc="0"
+  ensure_small_host_swap >/dev/null 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "H1-05: first run must build swap"
+
+  # 二跑：fstab 行已在位、文件已在位（stat 表观 1G）→ 只许复用补
+  # 启用，fallocate 不得再被调用、fstab 行数不得增长。
+  : > "$SWAP_CALLS_LOG"
+  rc="0"
+  local out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05: second run must succeed as no-rebuild"
+  if grep -q 'fallocate' "$SWAP_CALLS_LOG"; then
+    fail "H1-05: second run must not recreate the swapfile: $(cat "$SWAP_CALLS_LOG")"
+  fi
+  assert_equals "1" "$(grep -c 'swap' "$FLMX_FSTAB_FILE")" \
+    "H1-05: fstab must still hold exactly one swap line after the second run"
+)
+
+test_install_small_host_swap_skip_switch() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 0
+
+  # meminfo 可读形态：退出行须带实读值与 free -h 自检法。
+  local rc="0" out
+  out=$(FLMX_SKIP_SWAP=1 ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05: FLMX_SKIP_SWAP=1 must skip successfully"
+  [[ ! -s "$SWAP_CALLS_LOG" ]] || fail "H1-05: skip switch must not trigger any swap action: $(cat "$SWAP_CALLS_LOG")"
+  [[ "$out" == *"FLMX_SKIP_SWAP"* ]] || fail "H1-05: skip must be disclosed: $out"
+  [[ "$out" == *"463MiB"* ]] || fail "H1-05: skip line must carry the measured memory value: $out"
+  [[ "$out" == *"free -h"* ]] || fail "H1-05: skip line must carry the free -h self-check hint: $out"
+
+  rc="0"
+  out=$(FLMX_SKIP_SWAP=true ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05: FLMX_SKIP_SWAP=true must skip successfully"
+  [[ "$out" == *"FLMX_SKIP_SWAP"* ]] || fail "H1-05: skip (true form) must be disclosed: $out"
+
+  # meminfo 不可读形态：仍须跳过并明示（实读值无从给出是该形态的
+  # 固有缺失，不以缺失判失败，但明示行与自检法必须在）。
+  rm -f "$FLMX_MEMINFO_FILE"
+  rc="0"
+  out=$(FLMX_SKIP_SWAP=1 ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05: FLMX_SKIP_SWAP=1 with unreadable meminfo must skip successfully"
+  [[ "$out" == *"FLMX_SKIP_SWAP"* ]] || fail "H1-05: skip (unreadable meminfo) must be disclosed: $out"
+  [[ "$out" == *"free -h"* ]] || fail "H1-05: skip (unreadable meminfo) must carry the self-check hint: $out"
+)
+
+test_install_small_host_swap_boundary_exactly_512mib() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  # 恰界：MemTotal 恰 524288kB（512MiB）→ 判定为 ≤512MiB，须建。
+  swap_fixture_meminfo 524288 0
+
+  local rc="0"
+  ensure_small_host_swap >/dev/null 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "H1-05 boundary: exactly 512MiB must build swap"
+  grep -q "swapon:$FLMX_SWAP_FILE" "$SWAP_CALLS_LOG" || \
+    fail "H1-05 boundary: exactly 512MiB must reach swapon: $(cat "$SWAP_CALLS_LOG")"
+  assert_equals "$FLMX_SWAP_FILE none swap sw 0 0" "$(cat "$FLMX_FSTAB_FILE")" \
+    "H1-05 boundary: exactly 512MiB must persist the fstab line"
+
+  # 恰界外一格：524289kB → 判定为 >512MiB，零动作跳过。
+  local work2
+  work2=$(mktemp -d)
+  swap_fixture_setup "$work2"
+  swap_fixture_meminfo 524289 0
+  rc="0"
+  local out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "H1-05 boundary: 512MiB+1kB must skip quietly"
+  [[ ! -s "$SWAP_CALLS_LOG" ]] || fail "H1-05 boundary: 512MiB+1kB must not trigger any swap action: $(cat "$SWAP_CALLS_LOG")"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05 boundary: 512MiB+1kB must not get a swapfile"
+  [[ "$out" == *">512MiB"* ]] || fail "H1-05 boundary: skip line must state the >512MiB verdict: $out"
+)
+
+test_install_small_host_swap_rolls_back_on_build_failure() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work
+  work=$(mktemp -d)
+  swap_fixture_setup "$work"
+  swap_fixture_meminfo 474368 0
+  # mkswap 桩改失败：建流程须在 swapon 之前中止并回滚半成品。
+  mkswap() { printf '%s\n' "mkswap:$*" >> "$SWAP_CALLS_LOG"; return 1; }
+
+  local rc="0" out
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "H1-05 rollback: mkswap failure must return 1"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05 rollback: half-built swapfile must be deleted"
+  [[ ! -s "$FLMX_FSTAB_FILE" ]] || fail "H1-05 rollback: fstab must not gain a line on build failure"
+  ! grep -q "swapon:$FLMX_SWAP_FILE" "$SWAP_CALLS_LOG" || \
+    fail "H1-05 rollback: swapon must not run after mkswap failure: $(cat "$SWAP_CALLS_LOG")"
+  [[ "$out" == *"swap 未建、OOM 风险在"* ]] || fail "H1-05 rollback: failure must be named: $out"
+  [[ "$out" == *"free -h"* ]] || fail "H1-05 rollback: failure output must carry the self-check hint: $out"
+
+  # fstab 追加失败子格：fstab 路径指到目录，printf 追加必败——此时
+  # swap 已 swapon 启用，回滚须 swapoff＋删文件＋return 1 点名。
+  local work2
+  work2=$(mktemp -d)
+  swap_fixture_setup "$work2"
+  swap_fixture_meminfo 474368 0
+  FLMX_FSTAB_FILE="$work2/fstabdir"
+  mkdir -p "$FLMX_FSTAB_FILE"
+  rc="0"
+  out=$(ensure_small_host_swap 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "H1-05 rollback: fstab append failure must return 1"
+  grep -q "swapoff:$FLMX_SWAP_FILE" "$SWAP_CALLS_LOG" || \
+    fail "H1-05 rollback: fstab failure must swapoff the just-enabled swap: $(cat "$SWAP_CALLS_LOG")"
+  [[ ! -e "$FLMX_SWAP_FILE" ]] || fail "H1-05 rollback: fstab failure must delete the swapfile"
+  [[ "$out" == *"swap 未建、OOM 风险在"* ]] || fail "H1-05 rollback: fstab failure must be named: $out"
+)
+
 test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -11015,6 +11431,20 @@ test_update_flmx_agent_menu_guard_interactive
 test_uninstall_flmx_agent_refuses_unowned_agent
 test_uninstall_flmx_agent_menu_guard_pass_forms
 test_uninstall_flmx_agent_cleans_host_tuning_residue
+test_install_small_host_swap_creates_when_tiny_and_swapless
+test_install_small_host_swap_keeps_existing_swap
+test_install_small_host_swap_skips_large_memory
+test_install_small_host_swap_idempotent_second_run
+test_install_small_host_swap_skip_switch
+test_install_small_host_swap_boundary_exactly_512mib
+test_install_small_host_swap_rolls_back_on_build_failure
+test_panel_small_host_swap_creates_when_tiny_and_swapless
+test_panel_small_host_swap_keeps_existing_swap
+test_panel_small_host_swap_skips_large_memory
+test_panel_small_host_swap_idempotent_second_run
+test_panel_small_host_swap_skip_switch
+test_panel_small_host_swap_boundary_exactly_512mib
+test_panel_small_host_swap_rolls_back_on_build_failure
 test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent
 test_uninstall_flmx_agent_host_cleanup_queue_backup_lost
 test_install_flmx_agent_writes_json_safe_config

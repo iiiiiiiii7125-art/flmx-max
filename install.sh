@@ -27,6 +27,14 @@ if [ -z "${BASH_VERSION:-}" ]; then
   exit 1
 fi
 
+# H1-05: ≤512MB 小内存机无 swap 时装机自动建 1G swap 的常量（组网
+# 定式⑤的代码面落地）。三个路径/阈值变量做成可覆盖仅为测试夹具改
+# 指临时目录与伪造内存面，生产缺省值即注释所列；退出开关沿用脚本
+# 既有 FLMX_* 命名族。
+FLMX_SWAP_FILE="${FLMX_SWAP_FILE:-/swapfile}"
+FLMX_FSTAB_FILE="${FLMX_FSTAB_FILE:-/etc/fstab}"
+FLMX_MEMINFO_FILE="${FLMX_MEMINFO_FILE:-/proc/meminfo}"
+
 # GitHub repo used for release downloads
 REPO="iiiiiiiii7125-art/flmx-max"
 
@@ -158,6 +166,163 @@ ensure_alpine_runtime_dependencies() {
   else
     apk add --no-cache "${missing_packages[@]}"
   fi
+}
+
+# H1-05: 小内存机 swap 装机防线（组网定式⑤「内存 ≤512MB 装机即加
+# 1G swap 并 fstab 持久化」的代码面落地）。背景：ECS1686（464MB＋
+# Swap=0）上 agent 长活驻留会话累积、夜间被 oom-killer 反复杀死
+# （见 audit-out/release-2.1.0-audit/R1-H1-history-regression.md
+# §9.2/§10 H1-05）；此前装机流程对 swap 零动作、零提示，同型新机
+# 按现行脚本装机仍可复现。本步口径（裁定：自动建＋幂等＋可退出）：
+#   - 判定只认 /proc/meminfo 实读：MemTotal ≤512MB 且 SwapTotal=0
+#     才动手；内存 >512MB 跳过并说明；已有 swap（任意量，含
+#     zram/分区）不动并输出现状。
+#   - 动作：fallocate 建 1G（不可用时退 dd）→ chmod 600 → mkswap →
+#     swapon → 按文件路径判重写 /etc/fstab 持久化；全序任一步失败
+#     即回滚半成品（已启用先 swapoff、半成品文件删除、未生效不写
+#     fstab），点名「swap 未建、OOM 风险在」并 return 1——全部调用
+#     方（新装 install_flmx_agent / 更新 update_flmx_agent 两函数
+#     头，非交互参数路径与菜单 1/2 均经这两函数汇入）一律只告警
+#     续行：失败只经 return 1 回传，main 以 `|| rc=$?` 收下且不据
+#     此中止后续流程。调用点全集＝本函数定义＋上述两函数头各一
+#     处，不在别处散挂。
+#   - 幂等：swapfile 已在 fstab 且已启用＝已建形态，二跑零改动；
+#     仅缺 fstab 行时只补行、不重建。
+#   - 退出开关：FLMX_SKIP_SWAP=1 跳过并明示（大小写不敏感，与
+#     PROXY_ENABLED 的 L2-33 同口径）。
+# 每次运行都输出实读内存值、判定结果与自检法（free -h /
+# swapon --show）。
+ensure_small_host_swap() {
+  local meminfo_file="$FLMX_MEMINFO_FILE"
+  local swap_file="$FLMX_SWAP_FILE"
+  local fstab_file="$FLMX_FSTAB_FILE"
+
+  # 实读先行：退出开关分支也要带实读值与自检法输出（读失败时后续
+  # 统一判定分支同样会跳过，不在此重复处理）。
+  local mem_kb="" swap_kb=""
+  mem_kb=$(awk '/^MemTotal:/ {print $2}' "$meminfo_file" 2>/dev/null || true)
+  swap_kb=$(awk '/^SwapTotal:/ {print $2}' "$meminfo_file" 2>/dev/null || true)
+
+  case "${FLMX_SKIP_SWAP:-}" in
+    1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss])
+      if [[ -n "$mem_kb" ]]; then
+        echo "⏭️ FLMX_SKIP_SWAP 已设置，跳过小内存机 swap 检查（本机内存实读 $(( mem_kb / 1024 ))MiB、当前 SwapTotal $(( ${swap_kb:-0} / 1024 ))MiB；本机若 ≤512MB 且无 swap，OOM 风险自担；自检: free -h; swapon --show）"
+      else
+        echo "⏭️ FLMX_SKIP_SWAP 已设置，跳过小内存机 swap 检查（本机若 ≤512MB 且无 swap，OOM 风险自担；自检: free -h; swapon --show）"
+      fi
+      return 0
+      ;;
+  esac
+  if [[ -z "$mem_kb" ]]; then
+    echo "⚠️ 无法实读 $meminfo_file 的 MemTotal，跳过小内存机 swap 检查（请人工自检: free -h; swapon --show）"
+    return 0
+  fi
+  swap_kb="${swap_kb:-0}"
+  local mem_mib=$(( mem_kb / 1024 ))
+  local swap_mib=$(( swap_kb / 1024 ))
+
+  if [[ "$mem_kb" -gt 524288 ]]; then
+    echo "ℹ️ 本机内存实读 ${mem_mib}MiB（>512MiB），无需装机自动建 swap（当前 SwapTotal ${swap_mib}MiB；自检: swapon --show）"
+    return 0
+  fi
+  if [[ "$swap_kb" -gt 0 ]]; then
+    echo "ℹ️ 本机内存实读 ${mem_mib}MiB（≤512MiB），已有 swap ${swap_mib}MiB，保持现状不新建（自检: swapon --show）"
+    if [[ -f "$swap_file" ]] && ! swapon --show 2>/dev/null | grep -q "^${swap_file} "; then
+      echo "⚠️ 注意: $swap_file 文件在位但当前未启用（swapon --show 未见），重启后是否自动启用取决于 $fstab_file 是否有对应行，请人工核对"
+    fi
+    return 0
+  fi
+
+  echo "🧩 本机内存实读 ${mem_mib}MiB（≤512MiB）且无 swap，按组网定式⑤自动建 1G swap: $swap_file"
+
+  # fstab 在位判定（按文件路径判重，幂等二跑的依据）：fstab 中以
+  # 本路径为第一字段、类型为 swap 的行。
+  local in_fstab=""
+  if [[ -f "$fstab_file" ]] && awk -v f="$swap_file" '$1 == f && $3 == "swap" {found=1} END {exit !found}' "$fstab_file"; then
+    in_fstab="1"
+  fi
+
+  # 已启用判定用 /proc/swaps 实读（swapon --show 的数据源），不
+  # 依赖 util-linux 的输出格式。
+  local active=""
+  if grep -q "^${swap_file} " /proc/swaps 2>/dev/null; then
+    active="1"
+  fi
+
+  if [[ -n "$active" && -n "$in_fstab" ]]; then
+    echo "✅ 1G swap 已在位且已持久化（$swap_file，先前装机已建），本次不重复建（自检: swapon --show）"
+    return 0
+  fi
+
+  # 回滚闭包：只有本步刚 swapon 成功的才 swapoff（active 判定在进
+  # 入时已存量在位的形态不进建流程、不会走到这里）。文件删除只对
+  # 本步新建的：进入时已在位且大小恰为 1G 的文件是复用形态（上次
+  # 中断的半成品或人工预建），回滚不删它。
+  local swapped_on="" created_here=""
+  swap_step_abort() {
+    echo "❌ swap 未建、OOM 风险在: $1" >&2
+    echo "   本步已回滚半成品；请处理后（查 df -h / 的可用空间与文件系统支持）重跑装机，或人工建: fallocate -l 1G $swap_file && chmod 600 $swap_file && mkswap $swap_file && swapon $swap_file，并把「$swap_file none swap sw 0 0」写入 $fstab_file" >&2
+    echo "   自检: free -h; swapon --show" >&2
+    if [[ -n "$swapped_on" ]]; then
+      swapoff "$swap_file" 2>/dev/null || true
+    fi
+    if [[ -n "$created_here" ]]; then
+      rm -f "$swap_file" 2>/dev/null || true
+    fi
+    return 1
+  }
+
+  if [[ -z "$active" ]]; then
+    # 建文件：已存在且大小恰为 1G 的文件可复用（上次中断的半成品
+    # 或人工预建），其余形态一律先删后建，不在未知内容上 mkswap。
+    # 大小判定用 stat 表观大小：稀疏文件 du 读 0、会把可复用文
+    # 件误判成残缺；fallocate/dd 建的都是表观 1G。
+    local existing_bytes=""
+    if [[ -f "$swap_file" ]]; then
+      existing_bytes=$(stat -c %s "$swap_file" 2>/dev/null || true)
+    fi
+    if [[ "$existing_bytes" != "1073741824" ]]; then
+      rm -f "$swap_file" || { swap_step_abort "旧 swapfile 残留删除失败: $swap_file"; return 1; }
+      created_here="1"
+      if ! fallocate -l 1G "$swap_file" 2>/dev/null; then
+        # fallocate 不可用或文件系统不支持时退 dd（慢但通用）。
+        rm -f "$swap_file"
+        dd if=/dev/zero of="$swap_file" bs=1M count=1024 2>/dev/null || { swap_step_abort "创建 1G swapfile 失败（磁盘空间不足或文件系统不支持）: $swap_file"; return 1; }
+      fi
+    fi
+    chmod 600 "$swap_file" || { swap_step_abort "设置 swapfile 权限 600 失败: $swap_file"; return 1; }
+    # 权限回读复核：chmod 成功不等于形态正确（如被 ACL/挂载选项改
+    # 写），以 stat 实读回断言 600，不符按失败回滚。
+    local perm_now=""
+    perm_now=$(stat -c %a "$swap_file" 2>/dev/null || true)
+    if [[ "$perm_now" != "600" ]]; then
+      swap_step_abort "swapfile 权限回读为 ${perm_now:-未知}、不是 600: $swap_file"
+      return 1
+    fi
+    mkswap "$swap_file" >/dev/null 2>&1 || { swap_step_abort "mkswap 失败: $swap_file"; return 1; }
+    swapon "$swap_file" 2>/dev/null || { swap_step_abort "swapon 启用失败: $swap_file"; return 1; }
+    swapped_on="1"
+  fi
+
+  if [[ -z "$in_fstab" ]]; then
+    printf '%s none swap sw 0 0\n' "$swap_file" >> "$fstab_file" || { swap_step_abort "写入 fstab 持久化失败: $fstab_file"; return 1; }
+  fi
+
+  # 落账复核：刚写完必须回读在位——fstab 行回读断言（按路径＋类
+  # 型双字段，比写入时判重同口径），不在位即本步未完成、点名报
+  # 错（不回滚已启用的 swap：运行时保护已生效，只是持久化缺失、
+  # 重启后会丢，人工补行即可，不必拆已生效面）。
+  if [[ -f "$fstab_file" ]] && awk -v f="$swap_file" '$1 == f && $3 == "swap" {found=1} END {exit !found}' "$fstab_file"; then
+    echo "   持久化复核: $fstab_file 已含 $swap_file 的 swap 行，重启后自动启用"
+  else
+    echo "❌ swap 已启用，但持久化复核失败: $fstab_file 未见 $swap_file 的 swap 行——重启后 swap 不会自动启用，请人工补行「$swap_file none swap sw 0 0」" >&2
+    echo "   自检: grep swap $fstab_file; swapon --show" >&2
+    return 1
+  fi
+
+  echo "✅ 已建 1G swap 并启用: $swap_file（权限 600，已写入 $fstab_file 持久化）"
+  echo "   自检: free -h 应见 Swap 约 1.0Gi; swapon --show 应见 $swap_file"
+  return 0
 }
 
 # ---- 内置 GitHub 下载候选与测速直选（1.7.7）----
@@ -2133,6 +2298,12 @@ rollback_install_replaced_agent() {
 install_flmx_agent() {
   echo "🚀 开始安装 flmx_agent..."
 
+  # H1-05: 小内存机 swap 防线在装机最前面跑（下载/落盘之前，低内
+  # 存机先有缓冲再承压）。失败只告警续装：本步是风险防线不是前置
+  # 条件，续装与否不改变 OOM 风险的存在——函数内已点名「swap 未
+  # 建、OOM 风险在」并给出人工建法与自检法。
+  ensure_small_host_swap || echo "⚠️ swap 装机步未完成（见上 ❌ 行），装机继续；该机 OOM 风险未解除，请按上方人工建法处理后以 free -h; swapon --show 自检"
+
   ensure_download_url_initialized || exit 1
 
   get_config_params
@@ -2369,6 +2540,12 @@ flmx_agent_installed_version() {
 # 更新功能
 update_flmx_agent() {
   echo "🔄 开始更新 flmx_agent..."
+
+  # H1-05: 更新路径同样先过小内存机 swap 防线：存量小内存机可能
+  # 只走更新路径、从未经过新装，swap 供给缺口只有这里能补上（全
+  # 集口径见 ensure_small_host_swap 头注）。失败只告警续行，更新
+  # 主流程不因本步半途死。
+  ensure_small_host_swap || echo "⚠️ swap 检查步未完成（见上 ❌ 行），更新继续；该机 OOM 风险未解除，请按上方人工建法处理后以 free -h; swapon --show 自检"
 
   # 布局解析（改名迁移）：新目录无 agent、存量目录有 → 该节点尚
   # 是改名前的存量布局。先对存量目录过归属守卫（AI-06 同口径），
