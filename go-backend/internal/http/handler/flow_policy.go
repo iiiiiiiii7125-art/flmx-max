@@ -587,7 +587,17 @@ func (h *Handler) lookupSpeedLimiter(name string) (bool, error) {
 		if errors.Is(err, errForwardNotFound) {
 			return false, nil
 		}
-		return forward != nil && forward.IPSpeedID.Valid && forward.IPSpeedID.Int64 > 0, err
+		if err != nil {
+			return false, err
+		}
+		if forward == nil || !forward.IPSpeedID.Valid || forward.IPSpeedID.Int64 <= 0 {
+			return false, nil
+		}
+		// S1-F01：与数字分支谓词同形——条目存续以「所绑限速规则
+		// 存在且已启用」为准（SpeedLimitExists 只认 status=1）。
+		// 旧实现只看转发行的 IPSpeedID 是否落值，规则禁用后条目
+		// 仍被判存续、永不回收（两分支谓词不同形）。
+		return h.repo.SpeedLimitExists(forward.IPSpeedID.Int64)
 	}
 
 	id, err := strconv.ParseInt(name, 10, 64)
