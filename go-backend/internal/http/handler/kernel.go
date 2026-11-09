@@ -2773,6 +2773,7 @@ func (h *Handler) applyKernelWithMode(kernelID int64, install bool, realmOverrid
 	payload, hash, err := h.buildKernelApplyPayloadWith(k, realmOverride)
 	now := time.Now().UnixMilli()
 	if err != nil {
+		h.observeKernelStatusTransition(*k, kernelStatusError, err.Error())
 		_ = h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
 			"status": kernelStatusError, "last_error": err.Error(), "updated_time": now,
 		})
@@ -2791,6 +2792,7 @@ func (h *Handler) applyKernelWithMode(kernelID int64, install bool, realmOverrid
 		if strings.Contains(err.Error(), "不在线") {
 			status = kernelStatusPending
 		}
+		h.observeKernelStatusTransition(*k, status, err.Error())
 		_ = h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
 			"status": status, "last_error": err.Error(), "updated_time": now,
 		})
@@ -2799,9 +2801,11 @@ func (h *Handler) applyKernelWithMode(kernelID int64, install bool, realmOverrid
 
 	var state agentKernelState
 	_ = remarshal(res.Data, &state)
+	newStatus := kernelStateStatus(state, k.Enabled == 1)
+	h.observeKernelStatusTransition(*k, newStatus, state.Error)
 	fields := map[string]interface{}{
 		"applied_hash": hash,
-		"status":       kernelStateStatus(state, k.Enabled == 1),
+		"status":       newStatus,
 		"last_error":   state.Error,
 		"updated_time": now,
 	}
@@ -2903,6 +2907,47 @@ type kernelPollOutcome struct {
 	OrphanTypes []string
 }
 
+// observeKernelStatusTransition 是内核状态跃迁的通知判定唯一漏斗：
+// 进入 error 时发 kernel_error（发送失败回滚置位、留待下一次跃迁判
+// 定重试，X-P2-8），离开 error 时清问题指纹重新武装（A7-02）。
+//
+// 判定必须覆盖全部落状态面，而非只有 poll 摄入：applyKernelWithMode
+// 的三条落状态路径（构建失败／发送失败／回执状态）若直写 error，
+// 跃迁会被提前「消费」——其后 poll 摄入时 DB 已是 error、永不跃
+// 迁，告警永久丢失（INV-NOTIFY-KERNELERR，真机 M-0160 三触发之
+// (a) 同步安装失败、(b) 恢复→再坏均未得事件）。故 poll 与 apply
+// 两面在落状态前都先过本判定，prevStatus 以落状态方读到的现行行
+// 状态为准；判定本身不写状态，落状态仍由各调用方按原口径执行。
+func (h *Handler) observeKernelStatusTransition(k model.NodeKernel, newStatus, errText string) {
+	if newStatus == kernelStatusError && k.Status != kernelStatusError {
+		msg := fmt.Sprintf("节点：%s\n内核：%s", h.nodeLabel(k.NodeID), k.KernelType)
+		if errText != "" {
+			msg += "\n错误：" + truncate(errText, 300)
+		}
+		kernelID, prevStatus := k.ID, k.Status
+		h.notifyTracked(notifyEventKernelError, "内核运行出错", msg, func(outcome notifyOutcome) {
+			// X-P2-8（A7-03 同族）：发送失败回滚 error 置位。调用方随后
+			// 会把状态落为 error，若不回滚，下一轮 KernelStatus 因
+			// 「已是 error」永不再触发、告警永久丢失（旧实现为裸 notify
+			// 无条件落状态）。仅当 DB 仍为 error 时回滚为触发前状态，
+			// 期间已恢复/被改状态则不覆盖。
+			if outcome != notifyOutcomeFailed || h.repo == nil {
+				return
+			}
+			if cur, err := h.repo.GetNodeKernel(kernelID); err == nil && cur != nil && cur.Status == kernelStatusError {
+				_ = h.repo.UpdateNodeKernelFields(kernelID, map[string]interface{}{"status": prevStatus})
+			}
+		})
+	}
+	if newStatus != kernelStatusError && k.Status == kernelStatusError && h.notifier != nil {
+		// A7-02：内核恢复没有恢复通知可挂——直接清掉该内核的问题
+		// 指纹，否则 30 分钟窗口内再次出错会被指纹吞掉（同一问题
+		// 只提醒一次以「恢复后重新武装」为前提）。
+		h.notifier.forgetFingerprintPrefix(notifyEventKernelError + "\x00内核运行出错\x00" +
+			fmt.Sprintf("节点：%s\n内核：%s", h.nodeLabel(k.NodeID), k.KernelType))
+	}
+}
+
 func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutcome {
 	kernels, err := h.repo.ListNodeKernels(nodeID)
 	if err != nil || (len(kernels) == 0 && !evenIfNone) {
@@ -2979,33 +3024,7 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 			continue
 		}
 		newStatus := kernelStateStatus(s, k.Enabled == 1)
-		if newStatus == kernelStatusError && k.Status != kernelStatusError {
-			msg := fmt.Sprintf("节点：%s\n内核：%s", h.nodeLabel(nodeID), k.KernelType)
-			if s.Error != "" {
-				msg += "\n错误：" + truncate(s.Error, 300)
-			}
-			kernelID, prevStatus := k.ID, k.Status
-			h.notifyTracked(notifyEventKernelError, "内核运行出错", msg, func(outcome notifyOutcome) {
-				// X-P2-8（A7-03 同族）：发送失败回滚 error 置位。下方 fields
-				// 更新已把状态落为 error，若不回滚，下一轮 KernelStatus 因
-				// 「已是 error」永不再触发、告警永久丢失（旧实现为裸 notify
-				// 无条件落状态）。仅当 DB 仍为 error 时回滚为触发前状态，
-				// 期间已恢复/被改状态则不覆盖。
-				if outcome != notifyOutcomeFailed || h.repo == nil {
-					return
-				}
-				if cur, err := h.repo.GetNodeKernel(kernelID); err == nil && cur != nil && cur.Status == kernelStatusError {
-					_ = h.repo.UpdateNodeKernelFields(kernelID, map[string]interface{}{"status": prevStatus})
-				}
-			})
-		}
-		if newStatus != kernelStatusError && k.Status == kernelStatusError && h.notifier != nil {
-			// A7-02：内核恢复没有恢复通知可挂——直接清掉该内核的问题
-			// 指纹，否则 30 分钟窗口内再次出错会被指纹吞掉（同一问题
-			// 只提醒一次以「恢复后重新武装」为前提）。
-			h.notifier.forgetFingerprintPrefix(notifyEventKernelError + "\x00内核运行出错\x00" +
-				fmt.Sprintf("节点：%s\n内核：%s", h.nodeLabel(nodeID), k.KernelType))
-		}
+		h.observeKernelStatusTransition(k, newStatus, s.Error)
 		fields := map[string]interface{}{
 			"status":       newStatus,
 			"last_error":   s.Error,
