@@ -702,8 +702,9 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("网卡名称长度不能超过200个字符"))
 		return
 	}
-	// 展示分组标签（纯展示）：落库前归一＋校验，坏值整单拒绝。
-	displayGroup, dgErr := normalizeNodeDisplayGroup(asString(req["displayGroup"]))
+	// 展示分组标签（纯展示）：落库前归一＋校验（含保留名拒绝，与
+	// 建组面同口径，S3-1），坏值整单拒绝。
+	displayGroup, dgErr := validateWritableNodeDisplayGroup(asString(req["displayGroup"]))
 	if dgErr != nil {
 		response.WriteJSON(w, response.ErrDefault(dgErr.Error()))
 		return
@@ -999,10 +1000,11 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 展示分组标签（纯展示）：presence 口径——未传保持现值、显式
-	// 传空＝脱组回未分组；归一与校验同 nodeCreate，坏值整单拒绝。
+	// 传空＝脱组回未分组；归一与校验同 nodeCreate（含保留名拒绝，
+	// S3-1），坏值整单拒绝。
 	var displayGroup *string
 	if _, ok := req["displayGroup"]; ok {
-		g, gErr := normalizeNodeDisplayGroup(asString(req["displayGroup"]))
+		g, gErr := validateWritableNodeDisplayGroup(asString(req["displayGroup"]))
 		if gErr != nil {
 			response.WriteJSON(w, response.ErrDefault(gErr.Error()))
 			return

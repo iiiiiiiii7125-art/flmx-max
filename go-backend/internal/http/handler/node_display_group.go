@@ -28,8 +28,12 @@ const nodeGroupOrderConfigKey = "node_display_group_order"
 
 // nodeGroupUngroupedLabel 是未分组段的固定标题，与前端
 // UNGROUPED_LABEL 同值：分组名与之相同会出两个同名段，建组/改名
-// 面一律拒绝。
+// 面与节点标签写面（批量移入/创建/编辑）一律拒绝（S3-1）。
 const nodeGroupUngroupedLabel = "未分组"
+
+// errNodeGroupReservedName 保留名拒绝文案：建组/改名校验与节点标
+// 签写面校验共用同一句，回执口径不分叉。
+var errNodeGroupReservedName = errors.New("「未分组」是保留名称，不能用作分组名")
 
 // parseNodeGroupOrderValue 解析名单值（JSON 名称数组）：trim、去
 // 重、丢空项；坏值降级为空名单（与前端 parseNodeGroupOrder 同口
@@ -107,12 +111,29 @@ func validateNodeGroupName(raw string, registry []string, inUse map[string]int64
 		return "", errors.New("分组名称不能为空")
 	}
 	if name == nodeGroupUngroupedLabel {
-		return "", errors.New("「未分组」是保留名称，不能用作分组名")
+		return "", errNodeGroupReservedName
 	}
 	if name != exclude && nodeGroupExists(registry, inUse, name) {
 		return "", fmt.Errorf("分组「%s」已存在", name)
 	}
 	return name, nil
+}
+
+// validateWritableNodeDisplayGroup 节点标签写面（批量移入、节点创
+// 建/编辑的 displayGroup 字段）的组名校验（S3-1）：归一与长度口径
+// 同 normalizeNodeDisplayGroup，另补与建组面同口径的保留名拒绝——
+// 非空标签不得等于「未分组」，否则节点页会出现真组段与未分组段同
+// 名并列。空标签是脱组语义（回未分组），不在此拒；目标组名仍不
+// 要求在册（名单是偏好不是登记册，见 nodeBatchSetGroup 注释）。
+func validateWritableNodeDisplayGroup(raw string) (string, error) {
+	group, err := normalizeNodeDisplayGroup(raw)
+	if err != nil {
+		return "", err
+	}
+	if group == nodeGroupUngroupedLabel {
+		return "", errNodeGroupReservedName
+	}
+	return group, nil
 }
 
 type nodeGroupCreateResult struct {
@@ -302,7 +323,9 @@ func (h *Handler) nodeGroupDelete(w http.ResponseWriter, r *http.Request) {
 // 条聚合回执（M-0051 口径）——成功/失败分别计数、失败带 id＋原
 // 因，部分失败不许报全成功。空 group＝移出回未分组。目标组名不
 // 要求在册（名单是偏好不是登记册的口径不变：在册外标签按名序
-// 排在名单之后渲染，管理面亦可对其改名/删组）。
+// 排在名单之后渲染，管理面亦可对其改名/删组）。group 校验走
+// validateWritableNodeDisplayGroup：保留名「未分组」整单拒绝
+// （S3-1），与建组面同口径。
 func (h *Handler) nodeBatchSetGroup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -324,7 +347,7 @@ func (h *Handler) nodeBatchSetGroup(w http.ResponseWriter, r *http.Request) {
 	if !checkBatchIDsCap(w, len(ids)) {
 		return
 	}
-	group, gErr := normalizeNodeDisplayGroup(req.Group)
+	group, gErr := validateWritableNodeDisplayGroup(req.Group)
 	if gErr != nil {
 		response.WriteJSON(w, response.ErrDefault(gErr.Error()))
 		return
