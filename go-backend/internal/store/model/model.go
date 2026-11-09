@@ -122,6 +122,36 @@ type Node struct {
 
 func (Node) TableName() string { return "node" }
 
+// NodeUpgradeVerification 是节点升级/回退的落地核验记录（A4-V-06）。
+// 面板下发 UpgradeAgent / RollbackAgent 成功后按节点落一条待核验
+// 行：面板在下发时握有目标版本（与期望哈希），节点重连时握有新自
+// 报版本——旧实现从不比对，ACK 后静默失败的升级在面板上毫无痕
+// 迹。本表把双边事实落库（不落内存：面板重启不丢待核验项）：重
+// 连自报命中目标即核销 landed；核验窗口内未命中由后台扫描置
+// failed 并发节点级告警事件（node_upgrade_failed）；failed 后节点
+// 又以目标版本回连则翻 landed 并置 Late=1（告警已按时发出、不撤
+// 回，但状态面不得与版本列自相矛盾）。一节点一行，新下发整行覆
+// 盖（同节点升级类操作有 L2-10 在途互斥，覆盖只发生在上一条命令
+// 已回执之后，语义为「以最新下发为准」）。
+type NodeUpgradeVerification struct {
+	ID              int64  `gorm:"primaryKey;autoIncrement"`
+	NodeID          int64  `gorm:"column:node_id;not null;uniqueIndex"`
+	Kind            string `gorm:"type:varchar(20);not null"` // upgrade | rollback
+	TargetVersion   string `gorm:"column:target_version;type:varchar(100);not null"`
+	ExpectedSHA     string `gorm:"column:expected_sha;type:varchar(128);not null;default:''"`
+	FromVersion     string `gorm:"column:from_version;type:varchar(100);not null;default:''"`
+	ObservedVersion string `gorm:"column:observed_version;type:varchar(100);not null;default:''"`
+	Status          string `gorm:"type:varchar(20);not null;default:'pending'"` // pending | landed | failed
+	Late            int    `gorm:"not null;default:0"`
+	DispatchedAt    int64  `gorm:"column:dispatched_at;not null"`
+	DeadlineAt      int64  `gorm:"column:deadline_at;not null"`
+	ResolvedAt      int64  `gorm:"column:resolved_at;not null;default:0"`
+	CreatedTime     int64  `gorm:"column:created_time;not null"`
+	UpdatedTime     int64  `gorm:"column:updated_time;not null"`
+}
+
+func (NodeUpgradeVerification) TableName() string { return "node_upgrade_verification" }
+
 type NodeSSHConfig struct {
 	ID         int64          `gorm:"primaryKey;autoIncrement"`
 	NodeID     int64          `gorm:"column:node_id;not null;uniqueIndex"`
