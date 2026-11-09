@@ -57,6 +57,11 @@ type ConnlogEvent struct {
 	SessionKind      string
 	StartTime        int64
 	EndTime          int64
+	// Status 是 close 事件的 agent 侧终态（"" / "closed" /
+	// "interrupted")：interrupted 表示代末结清（EndTime 为最后
+	// 已知时刻、无真时长），落库必须原样保留，不得升格为
+	// closed（设计 §4.6）。open 事件恒为空。
+	Status string
 }
 
 // ResolveConnlogDisplayKeys 按拓扑解析一条事件的归属键（设计
@@ -187,7 +192,9 @@ func (r *Repository) ApplyConnlogStreamBatch(scope string, sequence int64, diges
 // upsertConnlogEventTx 按 (entry_node_id, conn_id) 应用一条事件。
 // 状态机：open 只建行/刷新未终态行；close 补终态（缺 open 时直接
 // 建完整行——open 事件丢失不连带丢掉整条记录）；closed 是终态，
-// 之后到达的 open/close 一律不再改动该行（首个 close 为准）。
+// 之后到达的 open/close 一律不再改动该行（首个真 close 为准）。
+// close 携 interrupted 时落 interrupted（end 为最后已知时刻、
+// 无 duration），真 close 迟到可把 interrupted 补成 closed。
 func upsertConnlogEventTx(tx *gorm.DB, ev *ConnlogEvent, nowMs int64) error {
 	var row model.InboundConnLog
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -211,13 +218,20 @@ func upsertConnlogEventTx(tx *gorm.DB, ev *ConnlogEvent, nowMs int64) error {
 			CreatedTime:      nowMs,
 		}
 		if ev.Type == "close" {
-			row.Status = ConnlogStatusClosed
-			row.EndTime = ev.EndTime
 			if row.StartTime <= 0 {
 				row.StartTime = ev.EndTime
 			}
-			if ev.EndTime >= row.StartTime {
-				row.DurationMs = ev.EndTime - row.StartTime
+			if ev.Status == ConnlogStatusInterrupted {
+				// 无 open 的结清 close：行以 interrupted 落地，
+				// end 为最后已知时刻，不造时长。
+				row.Status = ConnlogStatusInterrupted
+				row.EndTime = ev.EndTime
+			} else {
+				row.Status = ConnlogStatusClosed
+				row.EndTime = ev.EndTime
+				if ev.EndTime >= row.StartTime {
+					row.DurationMs = ev.EndTime - row.StartTime
+				}
 			}
 		}
 		return tx.Create(&row).Error
@@ -254,7 +268,29 @@ func upsertConnlogEventTx(tx *gorm.DB, ev *ConnlogEvent, nowMs int64) error {
 		return tx.Model(&model.InboundConnLog{}).Where("id = ?", row.ID).Updates(updates).Error
 	case "close":
 		if row.Status == ConnlogStatusClosed {
+			// closed 是终态：首个真 close 为准，后到的一切 close
+			// （含结清）不再改动该行。
 			return nil
+		}
+		if ev.Status == ConnlogStatusInterrupted {
+			// 结清 close（agent 代末清扫）：open 行落 interrupted，
+			// end_time 取最后已知时刻且永不产生 duration；已
+			// interrupted 的行只把最后已知时刻向后刷新。真 close
+			// 迟到时走下方分支升格为 closed。
+			updates := map[string]interface{}{
+				"status": ConnlogStatusInterrupted,
+			}
+			if ev.EndTime >= row.EndTime {
+				updates["end_time"] = ev.EndTime
+			}
+			if row.ClientIP == "" && ev.ClientIP != "" {
+				updates["client_ip"] = ev.ClientIP
+			}
+			if row.DisplayInboundID == 0 && ev.DisplayInboundID != 0 {
+				updates["display_node_id"] = ev.DisplayNodeID
+				updates["display_inbound_id"] = ev.DisplayInboundID
+			}
+			return tx.Model(&model.InboundConnLog{}).Where("id = ?", row.ID).Updates(updates).Error
 		}
 		updates := map[string]interface{}{
 			"status":   ConnlogStatusClosed,

@@ -43,6 +43,11 @@ type connlogEvent struct {
 	SessionKind string `json:"sessionKind"`
 	StartTime   int64  `json:"startTime"`
 	EndTime     int64  `json:"endTime"`
+	// Status 是 close 事件的终态（closed/interrupted）：agent 侧
+	// 代末结清（内核进程换代、agent 重启）产出的 close 带
+	// interrupted 且 endTime 为最后已知时刻——面板必须原样落
+	// interrupted，绝不把结清当成真实断开（设计 §4.6）。
+	Status string `json:"status"`
 }
 
 type connlogEnvelope struct {
@@ -130,6 +135,7 @@ func (h *Handler) flowConnlogV2(w http.ResponseWriter, r *http.Request) {
 			SessionKind:      item.SessionKind,
 			StartTime:        item.StartTime,
 			EndTime:          item.EndTime,
+			Status:           item.Status,
 		})
 	}
 
@@ -203,6 +209,9 @@ func validateConnlogEvents(events []connlogEvent) error {
 		}
 		switch ev.Type {
 		case "open":
+			if ev.Status != "" {
+				return fmt.Errorf("event %d: open carries status %q", i, ev.Status)
+			}
 			if ev.StartTime <= 0 {
 				return fmt.Errorf("event %d: open without startTime", i)
 			}
@@ -218,6 +227,9 @@ func validateConnlogEvents(events []connlogEvent) error {
 				return fmt.Errorf("event %d: unknown sessionKind %q", i, ev.SessionKind)
 			}
 		case "close":
+			if ev.Status != "" && ev.Status != repo.ConnlogStatusClosed && ev.Status != repo.ConnlogStatusInterrupted {
+				return fmt.Errorf("event %d: unknown close status %q", i, ev.Status)
+			}
 			if ev.EndTime <= 0 {
 				return fmt.Errorf("event %d: close without endTime", i)
 			}

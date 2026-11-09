@@ -396,3 +396,62 @@ func TestConnLogEnabledKeyPolicy(t *testing.T) {
 		t.Fatal("connlog_enabled must be clearable (clearing falls back to the default-on state)")
 	}
 }
+
+// TestConnlogInterruptedCloseSemantics 钉死集成对账 R3 的终态语
+// 义：agent 侧结清 close（status=interrupted）必须落 interrupted
+// 且无 duration——结清时刻/最后已知时刻不得冒充真实断开；真
+// close 迟到时仍可升格为 closed 并补真时长。
+func TestConnlogInterruptedCloseSemantics(t *testing.T) {
+	r := newConnlogTestRepo(t)
+	now := time.UnixMilli(1_700_000_100_000)
+	base := ConnlogEvent{EntryNodeID: 1, EntryKind: ConnlogEntryInbound, EntryID: "in-9",
+		ClientIP: "198.51.100.23", Network: "tcp", SessionKind: "tcp_conn"}
+
+	// ① open 后结清 close：interrupted、end=最后已知、无 duration。
+	evOpen := base
+	evOpen.Type, evOpen.ConnID, evOpen.StartTime = "open", "k1", 1_700_000_000_000
+	evSweep := base
+	evSweep.Type, evSweep.ConnID, evSweep.StartTime = "close", "k1", 1_700_000_000_000
+	evSweep.EndTime, evSweep.Status = 1_700_000_030_000, ConnlogStatusInterrupted
+	if _, err := r.ApplyConnlogStreamBatch("connlog:1:s1", 1, connlogDigest("i1"), now, []ConnlogEvent{evOpen, evSweep}); err != nil {
+		t.Fatalf("apply open+sweep: %v", err)
+	}
+	rows := connlogRows(t, r)
+	if len(rows) != 1 || rows[0].Status != ConnlogStatusInterrupted || rows[0].EndTime != 1_700_000_030_000 || rows[0].DurationMs != 0 {
+		t.Fatalf("after sweep: rows = %+v, want one interrupted row, end=last known, no duration", rows)
+	}
+
+	// ② 真 close 迟到（新 stream 重报）：升格 closed 并补真时长。
+	evReal := base
+	evReal.Type, evReal.ConnID, evReal.StartTime = "close", "k1", 1_700_000_000_000
+	evReal.EndTime, evReal.Status = 1_700_000_045_000, ConnlogStatusClosed
+	if _, err := r.ApplyConnlogStreamBatch("connlog:1:s2", 1, connlogDigest("i2"), now, []ConnlogEvent{evReal}); err != nil {
+		t.Fatalf("apply late real close: %v", err)
+	}
+	rows = connlogRows(t, r)
+	if len(rows) != 1 || rows[0].Status != ConnlogStatusClosed || rows[0].EndTime != 1_700_000_045_000 || rows[0].DurationMs != 45_000 {
+		t.Fatalf("after late close: rows = %+v, want closed with real duration 45000", rows)
+	}
+
+	// ③ 无 open 的结清 close 独立建行：interrupted，不造时长；
+	// 其后再来结清不回退 end（取更大最后已知时刻）。
+	evOrphan := base
+	evOrphan.Type, evOrphan.ConnID, evOrphan.StartTime = "close", "k2", 1_700_000_010_000
+	evOrphan.EndTime, evOrphan.Status = 1_700_000_020_000, ConnlogStatusInterrupted
+	if _, err := r.ApplyConnlogStreamBatch("connlog:1:s3", 1, connlogDigest("i3"), now, []ConnlogEvent{evOrphan}); err != nil {
+		t.Fatalf("apply orphan sweep close: %v", err)
+	}
+	evOrphan2 := evOrphan
+	evOrphan2.EndTime = 1_700_000_025_000
+	if _, err := r.ApplyConnlogStreamBatch("connlog:1:s4", 1, connlogDigest("i4"), now, []ConnlogEvent{evOrphan2}); err != nil {
+		t.Fatalf("apply second sweep close: %v", err)
+	}
+	rows = connlogRows(t, r)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	orphan := rows[1]
+	if orphan.Status != ConnlogStatusInterrupted || orphan.EndTime != 1_700_000_025_000 || orphan.DurationMs != 0 {
+		t.Fatalf("orphan row = %+v, want interrupted, end refreshed to 1700000025000, no duration", orphan)
+	}
+}
