@@ -26,21 +26,30 @@ var subscriptionCheckInterval = time.Minute
 var subSyncMu sync.Mutex
 
 // subPipeline is the JSON form of the stored subscription options.
-// Since 2.1.2 the only stored processing-era option is the relay
-// scope (Lines); the processing block (regions/protocols/include/
-// exclude/rename/flag/prefix/dedupe/sort/region groups/info nodes),
-// the subscription chain options and rules/scripts were removed, and
-// their stored keys are ignored on read and dropped on the next save.
+// Since 2.1.2 the only stored processing-era options are the relay
+// scope (Lines + RelayIDs); the processing block (regions/protocols/
+// include/exclude/rename/flag/prefix/dedupe/sort/region groups/info
+// nodes), the subscription chain options and rules/scripts were
+// removed, and their stored keys are ignored on read and dropped on
+// the next save.
 type subPipeline struct {
 	// Lines is the relay scope （中转范围三档）: "" keeps every
 	// endpoint, "direct" keeps direct endpoints only, "relay" keeps
 	// relayed endpoints only. It keeps the historical "lines" JSON
 	// key on purpose: before 2.1.2 the same key carried the same
 	// three-state scope inside the removed processing block, so a
-	// stored value keeps its exact meaning. The legacy relayIds
-	// whitelist is folded into this field at parse time (see
-	// UnmarshalJSON).
+	// stored value keeps its exact meaning. It applies only when no
+	// RelayIDs whitelist is present.
 	Lines string `json:"lines"`
+	// RelayIDs is the exact endpoint whitelist (0 = direct, >0 =
+	// relay id): when non-empty it is the operative scope filter and
+	// takes precedence over Lines (see kernel.FilterEndpoints). It is
+	// carried verbatim on parse and on save — never folded into
+	// Lines. (2.1.2 folded it into Lines at parse time, which widened
+	// a partial whitelist to its whole tier; that fold is removed so
+	// stored pre-2.1.2 whitelists mean their exact set again.)
+	RelayIDs []int64 `json:"relayIds,omitempty"`
+	// Templates 按客户端槽位选订阅模板（kernel.TemplateClash /
 	// Templates 按客户端槽位选订阅模板（kernel.TemplateClash /
 	// TemplateSingbox / TemplateSurge / TemplateStash /
 	// TemplateShadowrocket → 模板 ID）。选了模板的格式渲染进模板骨架；
@@ -48,61 +57,8 @@ type subPipeline struct {
 	Templates map[string]int64 `json:"templates,omitempty"`
 }
 
-// UnmarshalJSON folds the legacy relayIds whitelist (removed in
-// 2.1.2) into Lines when Lines itself carries no scope: empty or
-// missing list → "" (all), exactly [0] → "direct", a list without 0 →
-// "relay", a mixed list → "" (all). A stored Lines value always wins:
-// it was the explicit scope control, and the whitelist was the
-// secondary filter. (The widening this fold implies for partial
-// whitelists is disclosed at backup restore; see
-// scrubRemovedSubOptions in the repo layer, which applies the same
-// fold when a backup lands.)
-func (p *subPipeline) UnmarshalJSON(data []byte) error {
-	type alias subPipeline
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
-	}
-	var legacy struct {
-		RelayIDs []int64 `json:"relayIds"`
-	}
-	_ = json.Unmarshal(data, &legacy)
-	*p = subPipeline(a)
-	// 存量 lines 只有 "direct"/"relay" 是有效档位（其余值在旧过滤里
-	// 恒为惰性无过滤）；没有有效档位时 relayIds 才是 operative 的
-	// 过滤，按折算表折进 Lines。已有有效档位则 lines 优先。
-	if t := strings.TrimSpace(p.Lines); t != "direct" && t != "relay" {
-		if scope := relayScopeFromLegacyIDs(legacy.RelayIDs); scope != "" {
-			p.Lines = scope
-		}
-	}
-	return nil
-}
-
-// relayScopeFromLegacyIDs translates a legacy relayIds whitelist into
-// the Lines scope value. Negative ids never matched an endpoint and
-// are ignored, mirroring the old normalize.
-func relayScopeFromLegacyIDs(ids []int64) string {
-	hasZero, hasRelay := false, false
-	for _, id := range ids {
-		switch {
-		case id == 0:
-			hasZero = true
-		case id > 0:
-			hasRelay = true
-		}
-	}
-	switch {
-	case hasZero && !hasRelay:
-		return "direct"
-	case hasRelay && !hasZero:
-		return "relay"
-	}
-	return ""
-}
-
 func (p subPipeline) options() kernel.SubOptions {
-	return kernel.SubOptions{Lines: p.Lines}
+	return kernel.SubOptions{Lines: p.Lines, RelayIDs: p.RelayIDs}
 }
 
 func (p *subPipeline) normalize() error {
@@ -679,10 +635,10 @@ func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInb
 	if s == nil {
 		return endpoints
 	}
-	// 中转范围（三档）在装配层按 Lines 先过滤一遍（旧 relayIds 白名单
-	// 就在这一层收紧，计数/预览/拉取共用此口径）；渲染流水线里
-	// kernel.FilterEndpoints 还会再过一次，幂等。存量 relayIds 已在
-	// parsePipeline 折算进 Lines。
+	// 中转范围在装配层先过滤一遍（计数/预览/拉取共用此口径）；
+	// 渲染流水线里 kernel.FilterEndpoints 还会再过一次，幂等。
+	// relayIds 白名单非空时是精确端点集过滤并优先于 lines 三档，
+	// 无白名单时才按 lines 收紧（见 kernel.FilterEndpoints）。
 	return kernel.FilterEndpoints(endpoints, parsePipeline(s.Options).options())
 }
 
