@@ -603,6 +603,27 @@ func (r *Repository) UpdateNodeOrder(nodeID int64, inx int, now int64) (int64, e
 	return res.RowsAffected, nil
 }
 
+// UpdateNodeIdleTimeoutSeconds stores one node's forwarding-plane
+// no-progress teardown window (seconds, 0 = disabled). The panel is
+// the authority; the value reaches the agent as service metadata at
+// the next config generation for the node. Same not-found contract
+// as UpdateNodeExpiryReminderDismissed.
+func (r *Repository) UpdateNodeIdleTimeoutSeconds(nodeID int64, seconds int) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", nodeID).
+		Update("idle_timeout_seconds", seconds)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("节点不存在")
+	}
+	return nil
+}
+
 func (r *Repository) UpdateNodeExpiryReminderDismissed(nodeID int64, dismissed int) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")

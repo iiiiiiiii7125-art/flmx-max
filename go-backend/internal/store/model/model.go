@@ -118,6 +118,12 @@ type Node struct {
 	RestartEnabled       int    `gorm:"column:restart_enabled;not null;default:0"`
 	RestartTime          string `gorm:"column:restart_time;type:varchar(5);not null;default:'04:00'"`
 	RestartJitterMinutes int    `gorm:"column:restart_jitter_minutes;not null;default:30"`
+	// 转发面会话无进展拆除阈值（秒，保险丝，默认关）：0＝不拆；
+	// >0 时 agent 只拆双向零字节满该秒数的 gost 会话（任一方向有
+	// 字节即不拆）。面板是权威源，随服务配置 metadata 下发、服务
+	// 重建时生效。与内核面 connIdle（Xray per-inbound）是两套
+	// 口径，故意不共用（同 FIX-1 transport 注释的既有裁定）。
+	IdleTimeoutSeconds int `gorm:"column:idle_timeout_seconds;not null;default:0"`
 }
 
 func (Node) TableName() string { return "node" }
@@ -830,6 +836,10 @@ type NodeBackup struct {
 	RestartEnabled       int    `json:"restartEnabled"`
 	RestartTime          string `json:"restartTime,omitempty"`
 	RestartJitterMinutes int    `json:"restartJitterMinutes,omitempty"`
+	// 转发面会话无进展拆除阈值（秒）随备份：旧备份无此字段时按
+	// 0（关闭）回落，与存量未配置形态等价（默认值即关闭，不会
+	// 因恢复旧备份而静默开启拆除）。
+	IdleTimeoutSeconds int `json:"idleTimeoutSeconds,omitempty"`
 	// O7-006：恢复后保留已忽略的到期提醒状态
 	ExpiryReminderDismissed int `json:"expiryReminderDismissed,omitempty"`
 }
@@ -1029,8 +1039,8 @@ type ImportResult struct {
 	// （kernelId=0）不在此列、照常恢复不计数。
 	InboundSnellKernelsDisabled  int `json:"inboundSnellKernelsDisabled"`
 	InboundSnellInboundsDisabled int `json:"inboundSnellInboundsDisabled"`
-	InboundTemplatesImported    int `json:"inboundTemplatesImported"`
-	InboundLegacyUsersImported  int `json:"inboundLegacyUsersImported"`
+	InboundTemplatesImported     int `json:"inboundTemplatesImported"`
+	InboundLegacyUsersImported   int `json:"inboundLegacyUsersImported"`
 	// O7-007/O7-008：公告与监控权限导入计数
 	AnnouncementsImported      int `json:"announcementsImported"`
 	MonitorPermissionsImported int `json:"monitorPermissionsImported"`
@@ -1143,6 +1153,9 @@ type NodeRecord struct {
 	UDPListenAddr string
 	InterfaceName string
 	ForwardMode   string
+	// IdleTimeoutSeconds 是节点级无进展拆除阈值（秒，0＝关），
+	// 服务配置生成面据此注入 metadata。
+	IdleTimeoutSeconds int
 }
 
 type ChainNodeRecord struct {

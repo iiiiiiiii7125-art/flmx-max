@@ -244,6 +244,7 @@ export default function NodePage({
     remark: "",
     expiryTime: 0,
     renewalCycle: "",
+    idleTimeoutSeconds: 0,
     serverHost: "",
     serverIpV4: "",
     serverIpV6: "",
@@ -871,6 +872,7 @@ export default function NodePage({
       remark: node.remark || "",
       expiryTime: node.expiryTime || 0,
       renewalCycle: node.renewalCycle || "",
+      idleTimeoutSeconds: node.idleTimeoutSeconds || 0,
       serverHost: normalizedHost,
       serverIpV4: normalizedV4,
       serverIpV6: normalizedV6,
@@ -1436,6 +1438,7 @@ export default function NodePage({
                     remark: form.remark.trim(),
                     expiryTime: form.expiryTime,
                     renewalCycle: form.renewalCycle,
+                    idleTimeoutSeconds: form.idleTimeoutSeconds,
                     serverIp:
                       form.serverIpV4?.trim() ||
                       form.serverIpV6?.trim() ||
@@ -1478,6 +1481,7 @@ export default function NodePage({
       remark: "",
       expiryTime: 0,
       renewalCycle: "",
+      idleTimeoutSeconds: 0,
       serverHost: "",
       serverIpV4: "",
       serverIpV6: "",

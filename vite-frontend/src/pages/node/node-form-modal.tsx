@@ -604,6 +604,26 @@ export function NodeFormModal({
                       }
                     />
                   </div>
+
+                  <Input
+                    description="保险丝，默认关闭：填 0 表示永不因空闲拆除会话；填正整数（1–86400）表示一条会话在两个方向都完全没有流量满该秒数时才被 agent 拆除——任一方向有流量都不会拆。修改后在该节点的服务配置重新下发时生效"
+                    label="会话无进展拆除（秒）"
+                    max={86400}
+                    min={0}
+                    placeholder="0（关闭）"
+                    type="number"
+                    value={String(form.idleTimeoutSeconds)}
+                    variant="bordered"
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        idleTimeoutSeconds: Math.max(
+                          0,
+                          Math.floor(Number(e.target.value) || 0),
+                        ),
+                      }))
+                    }
+                  />
                   {/* 屏蔽协议 */}
                   <div>
                     <div className="text-sm font-medium text-default-800 mb-2">

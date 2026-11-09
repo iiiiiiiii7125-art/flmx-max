@@ -42,6 +42,8 @@ export interface Node {
   restartEnabled?: number; // 0 关 1 开
   restartTime?: string;
   restartJitterMinutes?: number;
+  /** 转发面会话无进展拆除阈值（秒，保险丝，默认关）：0＝不拆；>0 时只拆双向零流量满该秒数的会话。 */
+  idleTimeoutSeconds?: number;
   status: number;
   forwardMode?: "agent" | "nftables";
   sshConfig?: {
@@ -90,6 +92,7 @@ export interface NodeForm {
   http: number; // 0 关 1 开
   tls: number; // 0 关 1 开
   socks: number; // 0 关 1 开
+  idleTimeoutSeconds: number; // 会话无进展拆除阈值（秒），0＝关闭（默认）
 }
 
 export type NodeTab = "local";

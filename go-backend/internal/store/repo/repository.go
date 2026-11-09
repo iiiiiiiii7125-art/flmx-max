@@ -1330,9 +1330,11 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"restartEnabled":       n.RestartEnabled,
 			"restartTime":          n.RestartTime,
 			"restartJitterMinutes": n.RestartJitterMinutes,
-			"interfaceName":        nullableString(n.InterfaceName),
-			"sshConfig":            sshConfigByNodeID[n.ID],
-			"upgradeVerification":  upgradeVerification,
+			// 转发面会话无进展拆除阈值（秒，0＝关，默认关）。
+			"idleTimeoutSeconds":  n.IdleTimeoutSeconds,
+			"interfaceName":       nullableString(n.InterfaceName),
+			"sshConfig":           sshConfigByNodeID[n.ID],
+			"upgradeVerification": upgradeVerification,
 		})
 	}
 	return items, nil
@@ -2359,6 +2361,7 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 		b.RestartEnabled = n.RestartEnabled
 		b.RestartTime = n.RestartTime
 		b.RestartJitterMinutes = n.RestartJitterMinutes
+		b.IdleTimeoutSeconds = n.IdleTimeoutSeconds
 		// O7-006：恢复后保留已忽略的到期提醒状态
 		b.ExpiryReminderDismissed = n.ExpiryReminderDismissed
 		out = append(out, b)
@@ -3602,6 +3605,15 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 #%d（%q）的定时重启抖动 %d 分钟超出 0–720，已按默认 30 恢复", n.ID, n.Name, n.RestartJitterMinutes)
 			restartJitter = 30
 		}
+		// 无进展拆除阈值恢复面归一，镜像写面 validateNodeIdleTimeoutSeconds
+		//（0–86400 秒，0＝关）。旧备份无此字段（零值）即关闭，与存量
+		// 未配置形态等价、静默；带值越界按关闭归一并回执点名原值——
+		// 该保险丝宁可关错不可开错。
+		idleTimeoutSeconds := n.IdleTimeoutSeconds
+		if idleTimeoutSeconds < 0 || idleTimeoutSeconds > 86400 {
+			rep.warnf("备份恢复：节点 #%d（%q）的会话无进展拆除阈值 %d 秒超出 0–86400，已按关闭（0）恢复", n.ID, n.Name, n.IdleTimeoutSeconds)
+			idleTimeoutSeconds = 0
+		}
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
@@ -3632,6 +3644,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			RestartEnabled:       restartEnabled,
 			RestartTime:          restartTime,
 			RestartJitterMinutes: restartJitter,
+			IdleTimeoutSeconds:   idleTimeoutSeconds,
 			// O7-006：恢复后保留已忽略的到期提醒状态
 			ExpiryReminderDismissed: n.ExpiryReminderDismissed,
 		}
@@ -3640,7 +3653,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "extra_ips", "port", "interface_name", "version",
 				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
-				"inx", "latency_targets", "forward_mode", "restart_enabled", "restart_time", "restart_jitter_minutes", "expiry_reminder_dismissed",
+				"inx", "latency_targets", "forward_mode", "restart_enabled", "restart_time", "restart_jitter_minutes", "idle_timeout_seconds", "expiry_reminder_dismissed",
 			}),
 		}).Create(&item).Error
 		if err != nil {

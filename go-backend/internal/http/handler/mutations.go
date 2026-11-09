@@ -635,6 +635,43 @@ func validatePanelInstallAddr(panelAddr string) error {
 	return IsValidNodeAddress(raw)
 }
 
+// --- 节点级会话无进展拆除阈值（保险丝，默认关）---
+//
+// 设计口径（用户 2026-11-09 23:04 裁定，2.1.2 热修）：2.1.0 的
+// FIX-1 以写死的 300 秒窗口拆双向零字节会话，伤及心跳间隔大于
+// 窗口的在用长连接。改定：默认关；按节点可调（节点编辑字段
+// idleTimeoutSeconds，秒），面板是权威源，随服务配置 metadata
+// 下发 agent、服务重建时生效；agent 侧开启时也只拆双向零字节
+// 满窗的会话，任一方向有字节即不拆。与内核面 connIdle（Xray
+// per-inbound）是两套口径，故意不共用。
+const maxNodeIdleTimeoutSeconds = 86400 // 24h
+
+// validateNodeIdleTimeoutSeconds 是写面与恢复面共用的值域门：
+// 0＝关闭，1..86400 为窗口秒数。
+func validateNodeIdleTimeoutSeconds(seconds int) error {
+	if seconds < 0 || seconds > maxNodeIdleTimeoutSeconds {
+		return fmt.Errorf("会话空闲拆除阈值须在 0–%d 秒之间（0＝关闭）", maxNodeIdleTimeoutSeconds)
+	}
+	return nil
+}
+
+// nodeIdleTimeoutFromReq parses the optional idleTimeoutSeconds
+// field with A2-04 presence semantics: absent means "keep the
+// stored value", present means "validate and store". Callers must
+// have run presentNumericFieldInvalid on the key first (in-field
+// but unparseable values are rejected there, fail-closed).
+func nodeIdleTimeoutFromReq(req map[string]interface{}) (seconds int, present bool, err error) {
+	v, ok := req["idleTimeoutSeconds"]
+	if !ok {
+		return 0, false, nil
+	}
+	seconds = asInt(v, 0)
+	if err := validateNodeIdleTimeoutSeconds(seconds); err != nil {
+		return 0, true, err
+	}
+	return seconds, true, nil
+}
+
 func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -658,11 +695,16 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	// B04-003（R3 K4）：与 nodeUpdate 同口径——在场但不可解析的数值
 	// 字段 fail-closed 拒绝（FIX2-A 门此前唯独漏了创建面，expiryTime
 	// 传 "abc" 被静默套 0 = 到期时间丢失且回成功）。
-	for _, key := range []string{"http", "tls", "socks", "expiryTime"} {
+	for _, key := range []string{"http", "tls", "socks", "expiryTime", "idleTimeoutSeconds"} {
 		if presentNumericFieldInvalid(req, key) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
 			return
 		}
+	}
+	idleTimeoutSeconds, idleTimeoutPresent, idleErr := nodeIdleTimeoutFromReq(req)
+	if idleErr != nil {
+		response.WriteJSON(w, response.ErrDefault(idleErr.Error()))
+		return
 	}
 	name := asString(req["name"])
 	// R30-FIX-F04（写侧归一化，用户 2026-10-26 拍板）：入库前剥离
@@ -773,6 +815,17 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	if idleTimeoutPresent {
+		if err := h.repo.UpdateNodeIdleTimeoutSeconds(nodeID, idleTimeoutSeconds); err != nil {
+			// 同 persistNodeSSHConfig 的补偿口径：第二步失败不留
+			// 与请求不一致的半成品节点。
+			if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
+				log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
+			}
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+	}
 	if err := h.persistNodeSSHConfig(nodeID, req, forwardMode, now, false); err != nil {
 		// X-P2-15（L-09-1）：第二步失败补偿删除刚建节点行，不留无 SSH
 		// 配置的半成品节点（forward/tunnel 创建均有 delete 回滚，独此
@@ -803,11 +856,16 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed，不落
 	// 库（expiryTime 旧口径静默套 0 = 清空到期，http/tls/socks 同族）。
-	for _, key := range []string{"http", "tls", "socks", "expiryTime"} {
+	for _, key := range []string{"http", "tls", "socks", "expiryTime", "idleTimeoutSeconds"} {
 		if presentNumericFieldInvalid(req, key) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
 			return
 		}
+	}
+	idleTimeoutSeconds, idleTimeoutPresent, idleErr := nodeIdleTimeoutFromReq(req)
+	if idleErr != nil {
+		response.WriteJSON(w, response.ErrDefault(idleErr.Error()))
+		return
 	}
 
 	currentStatus, currentHTTP, currentTLS, currentSocks, err := h.repo.GetNodeStatusFields(id)
@@ -1060,6 +1118,14 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	if idleTimeoutPresent {
+		// 无进展拆除阈值走独立 setter（UpdateNode 的全字段签名不
+		// 为单个新字段再膨胀）；失败如实报错，不静默吞。
+		if err := h.repo.UpdateNodeIdleTimeoutSeconds(id, idleTimeoutSeconds); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
 	}
 	if err := h.applyNodeSSHConfig(id, sshPlan, now); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -7695,8 +7761,14 @@ func (h *Handler) buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnel
 	if chainNode.ChainType == 2 {
 		service["handler"].(map[string]interface{})["chain"] = fmt.Sprintf("chains_%d", tunnelID)
 	}
+	if node.IdleTimeoutSeconds > 0 {
+		// 节点级无进展拆除阈值（秒）随服务 metadata 下发，agent
+		// 加载配置时收敛为全节点窗口（默认关，见 doc/guide/
+		// forward.md「会话无进展拆除」）。
+		ensureServiceMetadata(service)["idleTimeout"] = node.IdleTimeoutSeconds
+	}
 	if chainNode.ChainType == 3 && strings.TrimSpace(node.InterfaceName) != "" {
-		service["metadata"] = map[string]interface{}{"interface": node.InterfaceName}
+		ensureServiceMetadata(service)["interface"] = node.InterfaceName
 	}
 	return []map[string]interface{}{service}
 }

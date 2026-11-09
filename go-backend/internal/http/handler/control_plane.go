@@ -2226,6 +2226,12 @@ func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel 
 			serviceMetadata := ensureServiceMetadata(service)
 			serviceMetadata["proxyProtocol"] = proxyProtocolReceive
 		}
+		if node.IdleTimeoutSeconds > 0 {
+			// 节点级无进展拆除阈值（秒）随服务 metadata 下发，
+			// agent 加载配置时收敛为全节点窗口（默认关，见
+			// doc/guide/forward.md「会话无进展拆除」）。
+			ensureServiceMetadata(service)["idleTimeout"] = node.IdleTimeoutSeconds
+		}
 		if proxyProtocolSend > 0 {
 			handlerConfig := service["handler"].(map[string]interface{})
 			if handlerConfig["metadata"] == nil {
