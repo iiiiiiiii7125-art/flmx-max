@@ -76,6 +76,30 @@ func TestScrubRemovedSubOptions(t *testing.T) {
 		t.Fatalf("explicit lines must win over the fold: %q", lines)
 	}
 
+	// S1-8 两面同口径：lines 档位判定先 TrimSpace（与 handler 读路径
+	// UnmarshalJSON 一致）。带空格的有效档位优先于 relayIds 折算、
+	// 原值保留；带空格的无效值才走折算覆写。
+	out, _, folded = scrubRemovedSubOptions(`{"lines":" direct ","relayIds":[2]}`)
+	if !folded {
+		t.Fatalf("relayIds fold receipt must fire, folded=%v", folded)
+	}
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["relayIds"]; ok {
+		t.Fatalf("relayIds key must be scrubbed: %s", out)
+	}
+	if err := json.Unmarshal(m["lines"], &lines); err != nil || lines != " direct " {
+		t.Fatalf("trimmed-valid explicit lines must win verbatim over the fold: %q", lines)
+	}
+	out, _, _ = scrubRemovedSubOptions(`{"lines":" bogus ","relayIds":[2]}`)
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(m["lines"], &lines); err != nil || lines != "relay" {
+		t.Fatalf("trimmed-invalid lines must be overwritten by the fold: %q", lines)
+	}
+
 	// 干净 Options 原样返回；坏 JSON 不动。
 	clean := `{"lines":"direct","templates":{"clash":3}}`
 	if out, removed, folded := scrubRemovedSubOptions(clean); out != clean || removed || folded {
