@@ -1635,6 +1635,13 @@ WorkingDirectory=$INSTALL_DIR
 ExecStart=$INSTALL_DIR/flmx_agent
 Environment=GODEBUG=disablethp=1
 Restart=on-failure
+# OBS-A5-01：无 RestartSec 时快速失败（配置损坏等）以默认 100ms
+# 间隔连撞，1 秒内烧完 systemd 默认启动限速（10 秒内 5 次）进入
+# failed，配置修好后仍须人工 reset-failed 才能拉起。3 秒间隔使
+# 任意 10 秒窗口内至多 4 次启动、限速不被瞬时烧完，瞬态故障可自
+# 愈重试；存量 unit 不随面板内二进制升级刷新，下次脚本安装/更新
+# 时随模板自然带入。
+RestartSec=3s
 # Core dumps of the agent or its helpers must never pile up in the
 # data directory (the binary also zeroes RLIMIT_CORE itself at
 # startup and sweeps stockpiled core files, see go-gost/coredump.go).
