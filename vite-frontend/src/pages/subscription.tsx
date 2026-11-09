@@ -6,7 +6,7 @@ import type {
   SubscriptionDraft,
   SubscriptionItem,
 } from "@/api";
-import type { InboundApiItem } from "@/api/types";
+import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useState } from "react";
 import toast from "react-hot-toast";
@@ -22,6 +22,7 @@ import {
 import {
   deleteSubscription,
   getInboundList,
+  getInboundRelays,
   getSubscriptionTemplates,
   getRemoteSources,
   getSubscriptions,
@@ -227,6 +228,12 @@ function draftFrom(s?: SubscriptionItem): Draft {
     };
   }
 
+  // 中转范围「自定义」：存量非空 relayIds 原样带入（打开即自定义模式，
+  // 勾选集与存储逐一相同）；空/缺省则不带，免得把三档订阅误开成自定义。
+  const storedRelayIds = Array.from(
+    new Set((s.options?.relayIds ?? []).filter((id) => id >= 0)),
+  );
+
   return {
     id: s.id,
     name: s.name,
@@ -241,6 +248,7 @@ function draftFrom(s?: SubscriptionItem): Draft {
         s.options?.lines === "direct" || s.options?.lines === "relay"
           ? s.options.lines
           : "",
+      relayIds: storedRelayIds.length ? storedRelayIds : undefined,
     },
     expireTime: s.expireTime,
     expire: toDateInput(s.expireTime),
@@ -320,6 +328,81 @@ function Editor({
           draft.sourceIds.includes(i.sourceId ?? 0)) &&
       (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
   ).length;
+
+  // 中转范围「自定义」：每个入站的中转线路（逐端点勾选的数据源）。
+  const [relaysByInbound, setRelaysByInbound] = useState<
+    Record<number, InboundRelayApiItem[]>
+  >({});
+
+  useEffect(() => {
+    let active = true;
+
+    Promise.all(
+      inbounds.map((i) =>
+        getInboundRelays(i.id).then((r) => ({
+          id: i.id,
+          relays: r.code === 0 ? (r.data ?? []) : [],
+        })),
+      ),
+    ).then((results) => {
+      if (!active) return;
+      const map: Record<number, InboundRelayApiItem[]> = {};
+
+      for (const { id, relays } of results) map[id] = relays;
+      setRelaysByInbound(map);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [inbounds]);
+
+  // 当前订阅覆盖的入站（全部落地 = 全部入站；指定落地 = 已勾选的
+  // 入站 + 订阅源派生的入站，与 sharedPicked 同口径）。
+  const scopeInbounds = draft.sourceAll
+    ? inbounds
+    : inbounds.filter(
+        (i) =>
+          draft.inboundIds.includes(i.id) ||
+          draft.sourceIds.includes(i.sourceId ?? 0),
+      );
+
+  // 覆盖范围内的全部端点 ID：0 = 直连（任一入站可直连时纳入），
+  // >0 = 中转线路 ID。relayIds 是全局端点集（0 对所选落地整体生效）。
+  const allEndpointIds = () => {
+    const ids = new Set<number>();
+
+    for (const inbound of scopeInbounds) {
+      if (!inbound.relayOnly) ids.add(0);
+      for (const relay of relaysByInbound[inbound.id] ?? []) ids.add(relay.id);
+    }
+
+    return Array.from(ids);
+  };
+
+  // 当前档位实际生效的端点：进入「自定义」时的预填集。
+  const effectiveEndpointIds = () =>
+    allEndpointIds().filter((id) =>
+      o.lines === "direct" ? id === 0 : o.lines === "relay" ? id > 0 : true,
+    );
+
+  // 自定义模式 = relayIds 键在场（哪怕暂时勾成空集）；三档 = 键缺省。
+  const relayCustom = o.relayIds !== undefined;
+  const endpointChecked = (id: number) => (o.relayIds ?? []).includes(id);
+  const toggleEndpoint = (id: number) => {
+    const cur = o.relayIds ?? [];
+
+    setOpts({
+      relayIds: cur.includes(id) ? cur.filter((x) => x !== id)
+        : [...cur, id],
+    });
+  };
+  const setScope = (v: "" | "direct" | "relay" | "custom") => {
+    if (v === "custom") setOpts({ relayIds: effectiveEndpointIds() });
+    // 切回三档必须摘掉 relayIds：非空白名单在后端优先于 lines，
+    // 留着会让档位形同虚设。
+    else setOpts({ lines: v, relayIds: undefined });
+  };
 
   const runPreview = async () => {
     setPreviewing(true);
@@ -528,14 +611,20 @@ function Editor({
 
         <Section
           collapsible
-          defaultOpen={o.lines !== ""}
-          hint="全部＝直连和所有中转都包含；只要中转＝只保留经中转的线路；只要直连＝只保留直连线路"
+          defaultOpen={o.lines !== "" || relayCustom}
+          hint={
+            relayCustom
+              ? "自定义＝只保留勾选的端点；「直连」对所选落地整体生效。勾空后保存将回到当前档位范围"
+              : "全部＝直连和所有中转都包含；只要中转＝只保留经中转的线路；只要直连＝只保留直连线路；自定义＝逐个勾选端点"
+          }
           summary={
-            o.lines === "relay"
-              ? "只要中转"
-              : o.lines === "direct"
-                ? "只要直连"
-                : "全部端点"
+            relayCustom
+              ? `自定义 · 已选 ${(o.relayIds ?? []).length} 个端点`
+              : o.lines === "relay"
+                ? "只要中转"
+                : o.lines === "direct"
+                  ? "只要直连"
+                  : "全部端点"
           }
           title="中转范围"
         >
@@ -544,10 +633,60 @@ function Editor({
               ["", "全部"],
               ["relay", "只要中转"],
               ["direct", "只要直连"],
+              ["custom", "自定义"],
             ]}
-            value={o.lines}
-            onChange={(lines) => setOpts({ lines })}
+            value={relayCustom ? "custom" : o.lines}
+            onChange={setScope}
           />
+          {relayCustom &&
+            (scopeInbounds.length === 0 ? (
+              <p className="text-xs font-semibold text-foreground">
+                先在「来源」里选择落地，这里才能挑端点
+              </p>
+            ) : (
+              <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
+                {scopeInbounds.map((inbound) => {
+                  const relays = relaysByInbound[inbound.id] ?? [];
+
+                  if (inbound.relayOnly && relays.length === 0) return null;
+
+                  return (
+                    <div key={inbound.id} className="space-y-1">
+                      <p className="text-xs font-semibold text-foreground">
+                        {inbound.name}
+                        <span className="ml-1 text-foreground">
+                          {inbound.protocol} · {inbound.nodeName}
+                        </span>
+                      </p>
+                      {!inbound.relayOnly && (
+                        <Checkbox
+                          className="w-full"
+                          isSelected={endpointChecked(0)}
+                          onValueChange={() => toggleEndpoint(0)}
+                        >
+                          <span className="text-sm">直连</span>
+                        </Checkbox>
+                      )}
+                      {relays.map((relay) => (
+                        <Checkbox
+                          key={relay.id}
+                          className="w-full"
+                          isSelected={endpointChecked(relay.id)}
+                          onValueChange={() => toggleEndpoint(relay.id)}
+                        >
+                          <span className="text-sm">
+                            {relay.name || `中转 ${relay.id}`}
+                          </span>
+                          <span className="ml-1 text-xs font-semibold text-foreground">
+                            中转
+                          </span>
+                        </Checkbox>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
         </Section>
 
         <Section
