@@ -5,38 +5,23 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 )
-
-func TestInfoNotices(t *testing.T) {
-	expire := time.Date(2026, 12, 31, 23, 59, 59, 0, time.Local).UnixMilli()
-	got := InfoNotices(expire, 3*1024*1024*1024, 10*1024*1024*1024)
-	if len(got) != 2 || got[0] != "⏳ 到期 2026-12-31" || got[1] != "📊 剩余 7.00GB / 10.00GB" {
-		t.Fatalf("info notices: %v", got)
-	}
-	// No expiry and no limit: long-term + used only.
-	got = InfoNotices(0, 512, 0)
-	if got[0] != "⏳ 长期有效" || got[1] != "📊 已用 512B" {
-		t.Fatalf("unlimited notices: %v", got)
-	}
-	// Over-used clamps the remainder at zero.
-	got = InfoNotices(0, 2048, 1024)
-	if got[1] != "📊 剩余 0B / 1.00KB" {
-		t.Fatalf("over-used notices: %v", got)
-	}
-}
 
 var allSubFormats = []string{
 	FormatBase64, FormatClash, FormatStash, FormatSingbox,
 	FormatSurge, FormatLoon, FormatQX, FormatShadowrocket,
 }
 
-// TestSubscriptionInfoNoticesReachEveryFormat renders an active
-// subscription with info nodes on: both notices must be present in the
-// output of every supported format, in front of the real nodes.
-func TestSubscriptionInfoNoticesReachEveryFormat(t *testing.T) {
+// TestSubscriptionNoticesReachEveryFormat renders an active
+// subscription carrying placeholder notices (the SubOptions.Notices
+// mechanism — the same one stopped subscriptions use for their
+// reason): both notices must be present in the output of every
+// supported format, in front of the real nodes.
+// （2.1.2: the info-node builder InfoNotices left with the infoNodes
+// option; the notice strings here are literals of the same shape.）
+func TestSubscriptionNoticesReachEveryFormat(t *testing.T) {
 	eps := shareFixtures(t)
-	notices := InfoNotices(time.Date(2027, 1, 2, 0, 0, 0, 0, time.Local).UnixMilli(), 1024, 4096)
+	notices := []string{"⏳ 到期 2027-01-02", "📊 剩余 3.00KB / 4.00KB"}
 	for _, format := range allSubFormats {
 		body, _, err := Subscription(format, eps, SubOptions{Notices: notices})
 		if err != nil {
@@ -97,7 +82,7 @@ func TestSubscriptionReasonNoticeOnly(t *testing.T) {
 // nodes; placeholders are not nodes.
 func TestSubscriptionNodeCountIgnoresNotices(t *testing.T) {
 	eps := shareFixtures(t)
-	notices := InfoNotices(0, 1, 2)
+	notices := []string{"⏳ 长期有效", "📊 已用 1B"}
 	for _, format := range allSubFormats {
 		plain := SubscriptionNodeCount(format, eps, SubOptions{})
 		withNotices := SubscriptionNodeCount(format, eps, SubOptions{Notices: notices})

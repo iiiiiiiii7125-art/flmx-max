@@ -104,10 +104,11 @@ func TestRemoteSourceContract(t *testing.T) {
 	}
 }
 
-// TestFileSourceChainContract：以文件上传的机场源按源做链式中转——
-// 改名后仍是中转、隐藏中转不进节点名单、按源筛选+DropUnused
-// 与筛选修剪（只保留链内来源）在拉取侧全程成立。
-func TestFileSourceChainContract(t *testing.T) {
+// TestFileSourceContract：文件上传的订阅源（role 标记保留）经
+// sourceIds 整源加入订阅，节点以原样明文节点下发。
+// （2.1.2：原「按源做链式中转」契约随订阅链式删除同去——源不再
+// 自动播种到任何链式侧，chainRelaySources 等键保存时被忽略。）
+func TestFileSourceContract(t *testing.T) {
 	secret := "contract-jwt-secret"
 	router, _ := setupContractRouter(t, secret)
 	admin, _ := auth.GenerateToken(1, "admin_user", 0, secret)
@@ -130,17 +131,17 @@ func TestFileSourceChainContract(t *testing.T) {
 	}
 	airportID := jsonInt64(int64(airport["id"].(float64)))
 	landing := save(`{"name":"落地","kind":"file","role":"landing","content":"` + quote(ssLink("198.51.100.1", "8388", "美国 落地")) + `"}`)
+	landingID := jsonInt64(int64(landing["id"].(float64)))
 	if out := kernelContractPost(t, router, admin, "/api/v1/subscription/source/refresh", `{"id":`+airportID+`}`); out.Code == 0 {
 		t.Fatal("a file source is not refreshed from a URL")
 	}
 
-	sub := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"链式","sourceAll":false,"inboundIds":[],"sourceIds":[],"options":{`+
-		`"chainRelaySources":[`+airportID+`],"chainLandingSources":[`+jsonInt64(int64(landing["id"].(float64)))+`],"chainNoneNames":["日本 01"],"chainHideRelays":true}}`)
+	sub := kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"源订阅","sourceAll":false,"inboundIds":[],"sourceIds":[`+airportID+`,`+landingID+`]}`)
 	if sub.Code != 0 || valueAsInt(sub.Data.(map[string]interface{})["nodeCount"]) != 3 {
-		t.Fatalf("chain sources join the subscription: %+v", sub)
+		t.Fatalf("sources join the subscription: %+v", sub)
 	}
 	path := sub.Data.(map[string]interface{})["path"].(string)
-	check := func(relay string) {
+	check := func(names ...string) {
 		t.Helper()
 		var cfg struct {
 			Proxies []map[string]interface{} `yaml:"proxies"`
@@ -152,41 +153,27 @@ func TestFileSourceChainContract(t *testing.T) {
 		if err := yaml.Unmarshal(getSub(t, router, path+"?format=clash", "").Body.Bytes(), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		groups := map[string][]string{}
-		for _, g := range cfg.Groups {
-			groups[g.Name] = g.Proxies
-		}
-		if strings.Join(groups["中转节点"], ",") != relay || strings.Join(groups["落地节点"], ",") != "美国 落地" {
-			t.Fatalf("chain groups: %v", groups)
-		}
-		if strings.Contains(strings.Join(groups["节点选择"], ","), relay) || !strings.Contains(strings.Join(groups["节点选择"], ","), "日本 01") {
-			t.Fatalf("relays stay out of the node list, 不用 nodes stay in: %v", groups["节点选择"])
-		}
+		got := map[string]bool{}
 		for _, p := range cfg.Proxies {
-			if p["name"] == "美国 落地" && p["dialer-proxy"] != "中转节点" {
-				t.Fatalf("landing dials through the relays: %v", p)
+			got[p["name"].(string)] = true
+			if p["dialer-proxy"] != nil {
+				t.Fatalf("plain rendering must not chain: %v", p)
+			}
+		}
+		for _, n := range names {
+			if !got[n] {
+				t.Fatalf("node %q missing from plain profile: %v", n, got)
+			}
+		}
+		for _, g := range cfg.Groups {
+			if g.Name == "中转节点" || g.Name == "落地节点" {
+				t.Fatalf("no chain groups in plain rendering: %v", cfg.Groups)
 			}
 		}
 	}
-	check("香港 01")
-	// The airport renames its node; it is still a relay.
+	check("香港 01", "日本 01", "美国 落地")
+	// The airport renames its node; the new name renders as-is.
 	save(`{"id":` + airportID + `,"name":"机场","kind":"file","role":"relay","content":"` +
 		quote(ssLink("203.0.113.1", "8388", "香港 01 2x")+"\n"+ssLink("203.0.113.2", "8388", "日本 01")) + `"}`)
-	check("香港 01 2x")
-
-	// Only the airport's 香港 nodes relay; the rest of it is left out.
-	sub = kernelContractPost(t, router, admin, "/api/v1/subscription/save", `{"name":"香港前置","sourceAll":false,"inboundIds":[],"sourceIds":[],"options":{`+
-		`"chainRelaySources":[`+airportID+`],"chainLandingSources":[`+jsonInt64(int64(landing["id"].(float64)))+`],`+
-		`"chainSourceFilters":{"`+airportID+`":"香港","999":"ignored"},"chainDropUnused":true}}`)
-	if sub.Code != 0 {
-		t.Fatalf("filtered chain: %+v", sub)
-	}
-	view := sub.Data.(map[string]interface{})
-	if f := view["options"].(map[string]interface{})["chainSourceFilters"].(map[string]interface{}); len(f) != 1 || f[airportID] != "香港" {
-		t.Fatalf("filters are kept for chain sources only: %v", f)
-	}
-	body := getSub(t, router, view["path"].(string)+"?format=clash", "").Body.String()
-	if !strings.Contains(body, "香港 01 2x") || strings.Contains(body, "日本 01") || !strings.Contains(body, `dialer-proxy: "中转节点"`) {
-		t.Fatalf("filtered chain profile:\n%s", body)
-	}
+	check("香港 01 2x", "日本 01", "美国 落地")
 }

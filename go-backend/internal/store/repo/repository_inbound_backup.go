@@ -692,37 +692,112 @@ func filterBackupRefIDList(raw string, valid map[int64]bool) (kept string, dropp
 	return formatBackupRefIDList(surviving), dropped
 }
 
-// backupOptionsChainSourceIDs collects every source id a subscription
-// Options blob references through its chain slots (landing/relay lists
-// and the per-source filter keys).
-func backupOptionsChainSourceIDs(raw string) []int64 {
+// removedSubOptionKeys are the subscription Options keys removed in
+// 2.1.2: the processing block (regions/protocols/include/exclude/
+// rename/addFlag/prefix/dedupe/sort/regionGroups/infoNodes), the
+// subscription chain options (chain*) and rules/scripts. A restored
+// backup's Options are stripped of them (see scrubRemovedSubOptions).
+var removedSubOptionKeys = []string{
+	"regions", "protocols", "include", "exclude", "rename", "addFlag", "prefix",
+	"dedupe", "sort", "regionGroups", "infoNodes",
+	"chainLanding", "chainRelay", "script", "rules", "ruleGroups",
+	"chainLandingNames", "chainRelayNames",
+	"chainLandingSources", "chainRelaySources", "chainLandingOwn",
+	"chainNoneNames", "chainHideRelays", "chainSourceFilters", "chainDropUnused",
+}
+
+// subOptionValueNonDefault reports whether a stored option value is a
+// real setting rather than the zero value (null/false/""/[]/{}), for
+// the restore receipt's disclosure counting.
+func subOptionValueNonDefault(v json.RawMessage) bool {
+	switch strings.TrimSpace(string(v)) {
+	case "", "null", "false", `""`, "[]", "{}":
+		return false
+	}
+	return true
+}
+
+// foldLegacyRelayIDs mirrors the handler read path's translation of a
+// legacy relayIds whitelist into the surviving lines scope (the repo
+// layer cannot import the handler; the two must stay in step):
+// empty → "", exactly [0] → "direct", no 0 → "relay", mixed → "".
+func foldLegacyRelayIDs(ids []int64) string {
+	hasZero, hasRelay := false, false
+	for _, id := range ids {
+		switch {
+		case id == 0:
+			hasZero = true
+		case id > 0:
+			hasRelay = true
+		}
+	}
+	switch {
+	case hasZero && !hasRelay:
+		return "direct"
+	case hasRelay && !hasZero:
+		return "relay"
+	}
+	return ""
+}
+
+// scrubRemovedSubOptions rewrites a backed-up subscription's Options
+// for the 2.1.2 option removals: the removed keys are stripped, and a
+// legacy relayIds whitelist is folded into the lines scope (an
+// explicit stored lines scope wins, mirroring the read path). Returns
+// the rewritten Options plus two receipt flags: whether the row
+// carried a non-default removed setting, and whether it carried a
+// non-empty relayIds list (whose fold can widen a partial whitelist
+// to the whole scope tier — disclosed in the import warnings).
+// Unparseable or untouched Options are returned verbatim.
+func scrubRemovedSubOptions(raw string) (clean string, hadSettings bool, hadRelayIDs bool) {
 	if strings.TrimSpace(raw) == "" {
-		return nil
+		return raw, false, false
 	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &top); err != nil {
-		return nil
+		return raw, false, false
 	}
-	var out []int64
-	for _, key := range []string{"chainLandingSources", "chainRelaySources"} {
-		rawList, ok := top[key]
+	changed := false
+	for _, key := range removedSubOptionKeys {
+		v, ok := top[key]
 		if !ok {
 			continue
 		}
-		var ids []int64
-		if err := json.Unmarshal(rawList, &ids); err == nil {
-			out = append(out, ids...)
+		// relayIds 不计入「已忽略」计数：它由下方折算路径单独回执。
+		if key != "relayIds" && subOptionValueNonDefault(v) {
+			hadSettings = true
 		}
+		delete(top, key)
+		changed = true
 	}
-	if rawFilters, ok := top["chainSourceFilters"]; ok {
-		var filters map[int64]string
-		if err := json.Unmarshal(rawFilters, &filters); err == nil {
-			for id := range filters {
-				out = append(out, id)
+	if rawIDs, ok := top["relayIds"]; ok {
+		delete(top, "relayIds")
+		changed = true
+		var ids []int64
+		_ = json.Unmarshal(rawIDs, &ids)
+		if len(ids) > 0 {
+			hadRelayIDs = true
+			if scope := foldLegacyRelayIDs(ids); scope != "" {
+				explicit := ""
+				if lv, ok := top["lines"]; ok {
+					_ = json.Unmarshal(lv, &explicit)
+				}
+				if explicit != "direct" && explicit != "relay" {
+					if enc, err := json.Marshal(scope); err == nil {
+						top["lines"] = enc
+					}
+				}
 			}
 		}
 	}
-	return out
+	if !changed {
+		return raw, false, false
+	}
+	out, err := json.Marshal(top)
+	if err != nil {
+		return raw, hadSettings, hadRelayIDs
+	}
+	return string(out), hadSettings, hadRelayIDs
 }
 
 // existingIDSetTx batch-checks which candidate ids exist in one table
@@ -764,9 +839,6 @@ func subscriptionRefUniverseTx(tx *gorm.DB, subs []model.SubscriptionBackup) (so
 		}
 		for _, id := range parseBackupRefIDList(sb.InboundIDs) {
 			inbCandidates[id] = true
-		}
-		for _, id := range backupOptionsChainSourceIDs(sb.Options) {
-			srcCandidates[id] = true
 		}
 	}
 	if sources, err = existingIDSetTx(tx, &model.RemoteSource{}, srcCandidates); err != nil {
@@ -1549,6 +1621,11 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 	// 节点组引用披露计数：订阅行不再写入 groupIds（节点组功能已
 	// 移除），携带非空引用的订阅在此计数、循环后统一披露。
 	subsWithGroupIDs := 0
+	// 2.1.2 订阅选项删除披露计数：携带非默认已删设置（处理/链式/
+	// 规则/脚本）的订阅、携带 relayIds 白名单（导入时折算进 lines
+	// 三档）的订阅，循环后统一在回执点名（scrubRemovedSubOptions）。
+	subsWithRemovedOptions := 0
+	subsWithRelayIDs := 0
 	subs := append([]model.SubscriptionBackup(nil), b.Subscriptions...)
 	for _, u := range b.Users {
 		subs = append(subs, model.SubscriptionBackup{
@@ -1566,79 +1643,6 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 	validSourceIDs, validInboundIDs, err := subscriptionRefUniverseTx(tx, subs)
 	if err != nil {
 		return inboundImportCounts{}, err
-	}
-	// remapChainSourceRefs processes only the Options chain-by-source
-	// slots, mirroring remapTemplateRefs: entries naming a source that
-	// does not exist after this import are removed, and the removed
-	// source ids are returned for the receipt.
-	remapChainSourceRefs := func(raw string) (string, []int64) {
-		if strings.TrimSpace(raw) == "" {
-			return raw, nil
-		}
-		var top map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(raw), &top); err != nil {
-			return raw, nil
-		}
-		var dropped []int64
-		changed := false
-		for _, key := range []string{"chainLandingSources", "chainRelaySources"} {
-			rawList, ok := top[key]
-			if !ok {
-				continue
-			}
-			var ids []int64
-			if err := json.Unmarshal(rawList, &ids); err != nil {
-				continue
-			}
-			kept := make([]int64, 0, len(ids))
-			keyChanged := false
-			for _, id := range ids {
-				if id > 0 && !validSourceIDs[id] {
-					dropped = append(dropped, id)
-					keyChanged = true
-					continue
-				}
-				kept = append(kept, id)
-			}
-			if !keyChanged {
-				continue
-			}
-			encoded, err := json.Marshal(kept)
-			if err != nil {
-				return raw, nil
-			}
-			top[key] = encoded
-			changed = true
-		}
-		if rawFilters, ok := top["chainSourceFilters"]; ok {
-			var filters map[int64]string
-			if err := json.Unmarshal(rawFilters, &filters); err == nil {
-				filtersChanged := false
-				for id := range filters {
-					if id > 0 && !validSourceIDs[id] {
-						delete(filters, id)
-						dropped = append(dropped, id)
-						filtersChanged = true
-					}
-				}
-				if filtersChanged {
-					encoded, err := json.Marshal(filters)
-					if err != nil {
-						return raw, nil
-					}
-					top["chainSourceFilters"] = encoded
-					changed = true
-				}
-			}
-		}
-		if !changed {
-			return raw, nil
-		}
-		out, err := json.Marshal(top)
-		if err != nil {
-			return raw, nil
-		}
-		return string(out), dropped
 	}
 	danglingSubRefSubs := 0
 	danglingSourceRefCount := 0
@@ -1660,22 +1664,18 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 			subsWithGroupIDs++
 		}
 		// RR4-F1-01 / RR4-F4-01：落库前对账本行引用——剔除指向未
-		// 恢复源/入站的 SourceIDs、InboundIDs 与 Options 链式按源
-		// 引用（含 chainSourceFilters 键），受影响订阅循环后点名。
+		// 恢复源/入站的 SourceIDs、InboundIDs，受影响订阅循环后点名。
+		// Options 先过模板槽位对账，再过 2.1.2 已删选项清洗（处理/
+		// 链式/规则/脚本键剔除＋relayIds 折算进 lines 三档），清洗
+		// 命中计数同样循环后点名。
 		keptInboundIDs, droppedInboundRefs := filterBackupRefIDList(sb.InboundIDs, validInboundIDs)
 		keptSourceIDs, droppedSourceRefs := filterBackupRefIDList(sb.SourceIDs, validSourceIDs)
-		cleanOptions, droppedChainRefs := remapChainSourceRefs(remapTemplateRefs(sb.Options))
-		if len(droppedChainRefs) > 0 {
-			seenDropped := make(map[int64]bool, len(droppedSourceRefs))
-			for _, id := range droppedSourceRefs {
-				seenDropped[id] = true
-			}
-			for _, id := range droppedChainRefs {
-				if !seenDropped[id] {
-					seenDropped[id] = true
-					droppedSourceRefs = append(droppedSourceRefs, id)
-				}
-			}
+		cleanOptions, optRemoved, optRelay := scrubRemovedSubOptions(remapTemplateRefs(sb.Options))
+		if optRemoved {
+			subsWithRemovedOptions++
+		}
+		if optRelay {
+			subsWithRelayIDs++
 		}
 		if len(droppedSourceRefs) > 0 || len(droppedInboundRefs) > 0 {
 			danglingSubRefSubs++
@@ -1738,6 +1738,14 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 
 	if subsWithGroupIDs > 0 {
 		rep.warnf("备份恢复：节点组功能已移除，%d 条订阅携带的 groupIds 引用已忽略未恢复（订阅本身与其余来源照常恢复）", subsWithGroupIDs)
+	}
+
+	if subsWithRemovedOptions > 0 {
+		rep.warnf("备份恢复：订阅的「处理 / 链式代理 / 规则与脚本」功能已移除，%d 条订阅携带的相关设置已忽略未恢复（订阅本身与其余设置照常恢复）", subsWithRemovedOptions)
+	}
+
+	if subsWithRelayIDs > 0 {
+		rep.warnf("备份恢复：%d 条订阅的中转范围白名单（relayIds）已折算为三档（只要直连 / 只要中转 / 全部）；原白名单若只挑了部分中转，折算后范围会放宽到整档，请在订阅编辑中核对", subsWithRelayIDs)
 	}
 
 	if danglingTemplateRefs > 0 {

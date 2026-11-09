@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -858,10 +857,9 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // stripRemoteSourceFromSubscriptions 把已删除订阅源的 ID 从全部订阅
-// 的源引用中摘除（SourceIDs、Options.ChainLandingSources/
-// ChainRelaySources 及对应的 ChainSourceFilters 条目），返回受影响
-// 的订阅名（订阅 ID 序）。Options 解码失败的行只处理 SourceIDs 面
-// （与读面容错口径一致，不因坏 Options 中止删源）。
+// 的源引用中摘除（SourceIDs），返回受影响的订阅名（订阅 ID 序）。
+// （2.1.2 前 Options 内的链式按源引用一并在此摘除；订阅链式删除后
+// Options 不再持有源引用，本函数只剩 SourceIDs 一面。）
 func (h *Handler) stripRemoteSourceFromSubscriptions(sourceID int64) ([]string, error) {
 	subs, err := h.repo.ListSubscriptions()
 	if err != nil {
@@ -874,34 +872,6 @@ func (h *Handler) stripRemoteSourceFromSubscriptions(sourceID int64) ([]string, 
 		if ids := parseIDList(s.SourceIDs); int64SliceContains(ids, sourceID) {
 			s.SourceIDs = formatIDList(int64SliceRemove(ids, sourceID))
 			changed = true
-		}
-		if strings.TrimSpace(s.Options) != "" {
-			var p subPipeline
-			if json.Unmarshal([]byte(s.Options), &p) == nil {
-				optsChanged := false
-				if int64SliceContains(p.ChainLandingSources, sourceID) {
-					p.ChainLandingSources = int64SliceRemove(p.ChainLandingSources, sourceID)
-					optsChanged = true
-				}
-				if int64SliceContains(p.ChainRelaySources, sourceID) {
-					p.ChainRelaySources = int64SliceRemove(p.ChainRelaySources, sourceID)
-					optsChanged = true
-				}
-				if p.ChainSourceFilters != nil {
-					if _, ok := p.ChainSourceFilters[sourceID]; ok {
-						delete(p.ChainSourceFilters, sourceID)
-						optsChanged = true
-					}
-				}
-				if optsChanged {
-					raw, mErr := json.Marshal(p)
-					if mErr != nil {
-						return affected, mErr
-					}
-					s.Options = string(raw)
-					changed = true
-				}
-			}
 		}
 		if !changed {
 			continue

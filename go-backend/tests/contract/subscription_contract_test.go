@@ -39,8 +39,15 @@ func TestSubscriptionContract(t *testing.T) {
 	// what the old API returns.
 	list := kernelContractPost(t, router, admin, "/api/v1/subscription/list", `{}`).Data.(map[string]interface{})
 	items := list["items"].([]interface{})
-	if len(items) != 1 || items[0].(map[string]interface{})["kind"] != "share" || len(list["regions"].([]interface{})) < 10 {
+	if len(items) != 1 || items[0].(map[string]interface{})["kind"] != "share" {
 		t.Fatalf("default subscription: %v", list)
+	}
+	// 2.1.2：列表响应不再携带 regions / ruleGroups 选项清单（功能已删）。
+	if _, ok := list["regions"]; ok {
+		t.Fatalf("list must not carry the removed regions key: %v", list)
+	}
+	if _, ok := list["ruleGroups"]; ok {
+		t.Fatalf("list must not carry the removed ruleGroups key: %v", list)
 	}
 	def := items[0].(map[string]interface{})
 	info := kernelContractPost(t, router, admin, "/api/v1/inbound/sub/info", `{}`).Data.(map[string]interface{})
@@ -48,26 +55,58 @@ func TestSubscriptionContract(t *testing.T) {
 		t.Fatalf("legacy info must point at the default subscription: %v vs %v", info, def)
 	}
 
-	t.Run("own subscription with pipeline", func(t *testing.T) {
+	t.Run("own subscription with scope", func(t *testing.T) {
+		// 2.1.2：处理流水线（地区/国旗/改名/过滤/脚本）已整块删除，
+		// 订阅选项只剩中转范围三档。两个自建入站都是直连端点：
+		// direct 档全出、relay 档全滤、存量 relayIds 保存时折算。
 		out := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"name":"只要香港","sourceAll":true,"options":{"regions":["🇭🇰 香港"],"addFlag":true,"prefix":"[x] "}}`)
+			`{"name":"只要直连","sourceAll":true,"options":{"lines":"direct"}}`)
 		if out.Code != 0 {
 			t.Fatalf("save: %+v", out)
 		}
 		code, body, _ := sub(out.Data.(map[string]interface{})["path"].(string))
-		if code != 200 || strings.Contains(body, "vless://") || !strings.Contains(body, "%5Bx%5D%20%F0%9F%87%AD%F0%9F%87%B0%20") {
-			t.Fatalf("filtered, flagged, prefixed: %d %s", code, body)
+		if code != 200 || !strings.Contains(body, "vless://") || !strings.Contains(body, "ss://") {
+			t.Fatalf("direct scope carries both own inbounds: %d %s", code, body)
 		}
+		out = kernelContractPost(t, router, admin, "/api/v1/subscription/save",
+			`{"name":"存量折算","sourceAll":true,"options":{"relayIds":[0]}}`)
+		if out.Code != 0 {
+			t.Fatalf("legacy save: %+v", out)
+		}
+		if v := out.Data.(map[string]interface{})["options"].(map[string]interface{}); v["lines"] != "direct" {
+			t.Fatalf("relayIds [0] must fold to lines=direct in the saved view: %v", v)
+		}
+		code, body, _ = sub(out.Data.(map[string]interface{})["path"].(string))
+		if code != 200 || !strings.Contains(body, "vless://") {
+			t.Fatalf("folded direct scope: %d %s", code, body)
+		}
+		out = kernelContractPost(t, router, admin, "/api/v1/subscription/save",
+			`{"name":"只要中转","sourceAll":true,"options":{"lines":"relay"}}`)
+		if out.Code != 0 {
+			t.Fatalf("save relay scope: %+v", out)
+		}
+		code, body, _ = sub(out.Data.(map[string]interface{})["path"].(string))
+		if code != 200 || strings.Contains(body, "vless://") || strings.Contains(body, "ss://") {
+			t.Fatalf("relay scope must filter out direct inbounds: %d %s", code, body)
+		}
+		// 已删的处理键保存时被忽略（不再有校验面）：坏正则不再报错，
+		// 订阅按原样节点下发。
 		if out := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"name":"bad","sourceAll":true,"options":{"include":"/[/"}}`); out.Code == 0 {
-			t.Fatal("bad regex must be rejected")
+			`{"name":"旧键","sourceAll":true,"options":{"include":"/[/","regions":["🇭🇰 香港"]}}`); out.Code != 0 {
+			t.Fatalf("removed option keys must be ignored on save: %+v", out)
 		}
+		// 预览：节点名原样（name == original），无处理改名、无丢弃。
 		prev := kernelContractPost(t, router, admin, "/api/v1/subscription/preview",
-			`{"sourceAll":true,"options":{"protocols":["vless"],"rename":"东京 => Tokyo"}}`).Data.(map[string]interface{})
+			`{"sourceAll":true,"options":{}}`).Data.(map[string]interface{})
 		pi := prev["items"].([]interface{})
-		if len(pi) != 1 || pi[0].(map[string]interface{})["name"] != "Tokyo VLESS" ||
-			pi[0].(map[string]interface{})["original"] != "东京 VLESS" || valueAsInt(prev["dropped"]) != 1 {
+		if len(pi) != 2 || valueAsInt(prev["dropped"]) != 0 {
 			t.Fatalf("preview: %v", prev)
+		}
+		for _, it := range pi {
+			m := it.(map[string]interface{})
+			if m["name"] != m["original"] {
+				t.Fatalf("preview must echo raw names: %v", m)
+			}
 		}
 	})
 

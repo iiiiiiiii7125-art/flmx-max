@@ -3,7 +3,6 @@ package repo
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -117,12 +116,10 @@ func migrateSubscriptions(db *gorm.DB, now int64) error {
 		for _, r := range rows {
 			cfg[r.Name] = r.Value
 		}
-		opts, _ := json.Marshal(map[string]interface{}{
-			"rename":       cfg[legacySubRename],
-			"prefix":       cfg[legacySubPrefix],
-			"sort":         cfg[legacySubSort],
-			"regionGroups": cfg[legacySubRegions] == "true",
-		})
+		// 旧单订阅设置（rename/prefix/sort/regionGroups）所属的处理
+		// 功能已于 2.1.2 整套移除，迁移不再把它们写进新订阅的
+		// Options；旧配置行仍在下方一并清掉（存量清理口径不变）。
+		opts := []byte("{}")
 		token := cfg[legacySubTokenKey]
 		if len(token) < 32 {
 			var tokenErr error

@@ -134,8 +134,9 @@ func TestUserSubscriptionSetGuards(t *testing.T) {
 	}
 }
 
-// 1.0.12: 中转范围过滤的白名单语义（纯逻辑全分支）。
-func TestFilterEndpointsByRelayIDs(t *testing.T) {
+// 中转范围三档（2.1.2）：渲染分类口径——direct 只出 RelayID==0、
+// relay 只出 RelayID!=0、all 全部（kernel.FilterEndpoints 的 Lines 条款）。
+func TestFilterEndpointsByScopeLines(t *testing.T) {
 	mk := func() []kernel.Endpoint {
 		return []kernel.Endpoint{
 			{Name: "direct", RelayID: 0, Direct: true},
@@ -143,26 +144,22 @@ func TestFilterEndpointsByRelayIDs(t *testing.T) {
 			{Name: "relay3", RelayID: 3},
 		}
 	}
-	if got := filterEndpointsByRelayIDs(mk(), nil); len(got) != 3 {
-		t.Fatalf("nil filter must keep all endpoints, got %d", len(got))
+	if got := kernel.FilterEndpoints(mk(), kernel.SubOptions{}); len(got) != 3 {
+		t.Fatalf("empty scope must keep all endpoints, got %d", len(got))
 	}
-	if got := filterEndpointsByRelayIDs(mk(), []int64{}); len(got) != 3 {
-		t.Fatalf("empty filter must keep all endpoints, got %d", len(got))
+	got := kernel.FilterEndpoints(mk(), kernel.SubOptions{Lines: "relay"})
+	if len(got) != 2 || got[0].RelayID != 2 || got[1].RelayID != 3 {
+		t.Fatalf("relay scope must keep only relayed endpoints, got %+v", got)
 	}
-	got := filterEndpointsByRelayIDs(mk(), []int64{2})
-	if len(got) != 1 || got[0].RelayID != 2 {
-		t.Fatalf("filter [2] must keep only relay 2, got %+v", got)
-	}
-	got = filterEndpointsByRelayIDs(mk(), []int64{0, 2})
-	if len(got) != 2 || got[0].RelayID != 0 || got[1].RelayID != 2 {
-		t.Fatalf("filter [0,2] must keep direct+relay2, got %+v", got)
-	}
-	if got := filterEndpointsByRelayIDs(mk(), []int64{0}); len(got) != 1 || got[0].RelayID != 0 {
-		t.Fatalf("filter [0] must keep only direct, got %+v", got)
+	if got := kernel.FilterEndpoints(mk(), kernel.SubOptions{Lines: "direct"}); len(got) != 1 || got[0].RelayID != 0 {
+		t.Fatalf("direct scope must keep only the direct endpoint, got %+v", got)
 	}
 }
 
-// 1.0.12: subEndpoints 实际应用 RelayIDs（真实入站夹具，直连端点）。
+// 中转范围三档 + 存量 relayIds 折算在 subEndpoints 的实际应用
+// （真实入站夹具，直连端点）：新 lines 键直接生效；旧 relayIds 经
+// subPipeline.UnmarshalJSON 折算——[0]→direct 保住直连端点、
+// [2]→relay 把直连端点滤掉。
 func TestSubEndpointsAppliesRelayIDs(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/usersub_filter.db")
 	if err != nil {
@@ -198,27 +195,44 @@ func TestSubEndpointsAppliesRelayIDs(t *testing.T) {
 	if got := h.subEndpoints(mkSub(""), rows); len(got) != 1 || got[0].RelayID != 0 {
 		t.Fatalf("no filter: want 1 direct endpoint, got %+v", got)
 	}
+	if got := h.subEndpoints(mkSub(`{"lines":"direct"}`), rows); len(got) != 1 {
+		t.Fatalf("scope direct: want the direct endpoint, got %+v", got)
+	}
+	if got := h.subEndpoints(mkSub(`{"lines":"relay"}`), rows); len(got) != 0 {
+		t.Fatalf("scope relay: direct endpoint must be filtered out, got %+v", got)
+	}
 	if got := h.subEndpoints(mkSub(`{"relayIds":[0]}`), rows); len(got) != 1 {
-		t.Fatalf("filter [0]: want the direct endpoint, got %+v", got)
+		t.Fatalf("legacy relayIds [0] folds to direct: want the direct endpoint, got %+v", got)
 	}
 	if got := h.subEndpoints(mkSub(`{"relayIds":[2]}`), rows); len(got) != 0 {
-		t.Fatalf("filter [2]: direct endpoint must be filtered out, got %+v", got)
+		t.Fatalf("legacy relayIds [2] folds to relay: direct endpoint must be filtered out, got %+v", got)
+	}
+	if got := h.subEndpoints(mkSub(`{"relayIds":[0,2]}`), rows); len(got) != 1 {
+		t.Fatalf("legacy relayIds mixed folds to all: want the direct endpoint, got %+v", got)
 	}
 }
 
-// 1.0.12: subPipeline.normalize 归一化 RelayIDs（去重、剔除负数、保留 0）。
-func TestSubPipelineNormalizeRelayIDs(t *testing.T) {
-	p := subPipeline{RelayIDs: []int64{2, -1, 2, 0, -5, 3}}
-	if err := p.normalize(); err != nil {
-		t.Fatalf("normalize: %v", err)
+// 存量 relayIds 折算表（subPipeline.UnmarshalJSON）：空/缺失→all、
+// 恰 [0]→direct、非空不含 0→relay、混合→all；新 lines 键优先、
+// 存量 lines 语义由构造保留（direct 存量＝旧「仅直连条目」）。
+func TestParsePipelineLegacyRelayIDsFold(t *testing.T) {
+	cases := map[string]string{
+		`{}`:                                "",
+		`{"relayIds":[]}`:                   "",
+		`{"relayIds":[0]}`:                  "direct",
+		`{"relayIds":[2]}`:                  "relay",
+		`{"relayIds":[2,3]}`:                "relay",
+		`{"relayIds":[0,2]}`:                "",
+		`{"relayIds":[-1,0]}`:               "direct",
+		`{"lines":"relay"}`:                 "relay",
+		`{"lines":"relay","relayIds":[0]}`:  "relay",
+		`{"lines":"direct","relayIds":[2]}`: "direct",
+		`{"lines":"bogus","relayIds":[0]}`:  "direct",
 	}
-	want := []int64{2, 0, 3}
-	if len(p.RelayIDs) != len(want) {
-		t.Fatalf("normalized relayIds = %v, want %v", p.RelayIDs, want)
-	}
-	for i := range want {
-		if p.RelayIDs[i] != want[i] {
-			t.Fatalf("normalized relayIds = %v, want %v", p.RelayIDs, want)
+	for raw, want := range cases {
+		p := parsePipeline(raw)
+		if p.Lines != want {
+			t.Fatalf("parsePipeline(%s).Lines = %q, want %q", raw, p.Lines, want)
 		}
 	}
 }
@@ -266,9 +280,6 @@ func TestSubscriptionListMarksDefault(t *testing.T) {
 			if it.ID != def.ID {
 				t.Fatalf("isDefault marked on id=%d, want default id=%d", it.ID, def.ID)
 			}
-		}
-		if it.RelayIDs == nil {
-			t.Fatalf("relayIds must serialize as [] not null: %+v", it)
 		}
 	}
 	if defaults != 1 {

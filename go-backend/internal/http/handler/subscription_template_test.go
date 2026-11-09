@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -175,89 +174,4 @@ func tplJSONStr(s string) string {
 func tplIDStr(id int64) string {
 	b, _ := json.Marshal(id)
 	return string(b)
-}
-
-// TestOpenSubscriptionTemplateWithInfoNodes is the handler-layer half of
-// the template × info-node weave: a subscription that both picks
-// templates and enables info nodes must still lead with the expiry and
-// traffic placeholders in template-rendered formats (clash + sing-box).
-func TestOpenSubscriptionTemplateWithInfoNodes(t *testing.T) {
-	h, r, _ := subFixture(t)
-
-	_, env := tplPost(t, h.subscriptionTemplateSave, `{"name":"clash模板","kind":"clash","content":`+tplJSONStr(tplTestClash)+`}`)
-	if env["code"] != float64(0) {
-		t.Fatalf("save clash template: %v", env)
-	}
-	clashID := int64(env["data"].(map[string]interface{})["id"].(float64))
-
-	singboxTpl := `{"outbounds":[{"type":"selector","tag":"选择","outbounds":["{all}"]}]}`
-	_, env = tplPost(t, h.subscriptionTemplateSave, `{"name":"sb模板","kind":"singbox","content":`+tplJSONStr(singboxTpl)+`}`)
-	if env["code"] != float64(0) {
-		t.Fatalf("save singbox template: %v", env)
-	}
-	sbID := int64(env["data"].(map[string]interface{})["id"].(float64))
-
-	expire := time.Date(2027, 3, 4, 0, 0, 0, 0, time.Local).UnixMilli()
-	opts, _ := json.Marshal(subPipeline{InfoNodes: true, Templates: map[string]int64{"clash": clashID, "singbox": sbID}})
-	s := createShareSub(t, r, &model.Subscription{
-		Name: "模板信息", Kind: model.SubscriptionShare, Token: strings.Repeat("d", 32), UUID: "uuid-tplinfo", Password: "pw-tplinfo",
-		SourceAll: 1, Options: string(opts), Enabled: 1, ExpireTime: expire,
-		TrafficLimit: 10 * 1024 * 1024 * 1024, UploadBytes: 1024 * 1024 * 1024, DownloadBytes: 2 * 1024 * 1024 * 1024,
-	})
-
-	notices := []string{"⏳ 到期 2027-03-04", "📊 剩余 7.00GB / 10.00GB"}
-	code, body := fetchSub(t, h, s.Token, "clash")
-	if code != http.StatusOK {
-		t.Fatalf("clash fetch: %d %s", code, body)
-	}
-	for _, want := range append(notices, "hk-1") {
-		if !strings.Contains(body, want) {
-			t.Fatalf("clash template output missing %q\n%s", want, body)
-		}
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/open_api/sub/"+s.Token+"?format=singbox", nil)
-	rec := httptest.NewRecorder()
-	h.openSubscription(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("singbox fetch: %d %s", rec.Code, rec.Body.String())
-	}
-	for _, want := range append(notices, "hk-1") {
-		if !strings.Contains(rec.Body.String(), want) {
-			t.Fatalf("sing-box template output missing %q\n%s", want, rec.Body.String())
-		}
-	}
-}
-
-// TestSubscriptionTemplateCheckIncludesRenderNodes: the template check
-// preview for a picked subscription must use the subscription's render
-// set, matching subscriptionPreview — checking against an empty or
-// all-nodes sample would misjudge whether the template's auto group
-// receives the subscription's nodes.
-func TestSubscriptionTemplateCheckIncludesRenderNodes(t *testing.T) {
-	h, r, ids := subFixture(t)
-	s := createShareSub(t, r, &model.Subscription{
-		Name: "G", Kind: model.SubscriptionShare, Token: strings.Repeat("c", 32), UUID: "uuid-g", Password: "pw-g",
-		InboundIDs: formatIDList([]int64{ids["hk-1"], ids["hk-2"]}), Enabled: 1,
-	})
-
-	_, env := tplPost(t, h.subscriptionTemplateCheck, `{"kind":"clash","content":`+tplJSONStr(tplTestClash)+`,"subscriptionId":`+tplIDStr(s.ID)+`}`)
-	if env["code"] != float64(0) {
-		t.Fatalf("check: %v", env)
-	}
-	data := env["data"].(map[string]interface{})
-	if data["nodes"] != float64(2) {
-		t.Fatalf("check sample must include the 2 render nodes, got nodes=%v (data=%v)", data["nodes"], data)
-	}
-	summary := data["summary"].(map[string]interface{})
-	var autoNodes string
-	for _, gi := range summary["groups"].([]interface{}) {
-		gm := gi.(map[string]interface{})
-		if gm["auto"] == true {
-			autoNodes = fmt.Sprint(gm["nodes"])
-		}
-	}
-	if !strings.Contains(autoNodes, "hk-1") || !strings.Contains(autoNodes, "hk-2") {
-		t.Fatalf("auto group must preview the render nodes, got %s", autoNodes)
-	}
 }

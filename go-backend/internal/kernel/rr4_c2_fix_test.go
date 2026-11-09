@@ -8,11 +8,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RR4-C2-01: the chain rename pick and the node dedupe must consult
-// the same occupied-name universe — the kind's full output namespace
-// (template groups, non-group outbound tags, endpoint tags, Surge
-// [Proxy] entries) plus the final node names. The audit's five
-// remaining cells, one per subtest, plus the relay-side mirror.
+// RR4-C2-01: the node dedupe must consult the kind's full output
+// namespace (template groups, non-group outbound tags, endpoint tags,
+// Surge [Proxy] entries) plus the final node names.
+// （2.1.2: the chain rename-pick cells left with the subscription
+// chain removal — no chain groups are generated any more.）
 
 func extraEndpoint(name string) Endpoint {
 	return Endpoint{Name: name, Host: "203.0.113.5", Port: 8399, Inbound: Inbound{
@@ -68,95 +68,7 @@ func allCountsOne(t *testing.T, counts map[string]int, body string) {
 	}
 }
 
-func TestRR4C2ChainPickAvoidsNodeNames(t *testing.T) {
-	t.Run("clash node named like the landing rename target", func(t *testing.T) {
-		opts := chainOpts
-		opts.Templates = map[string]string{TemplateClash: "proxy-groups:\n  - {name: 落地节点, type: select, proxies: [DIRECT]}\n  - {name: 选择, type: select, include-all: true}\nrules: [MATCH，选择]\n"}
-		eps := append(chainEndpoints(), extraEndpoint("落地节点 · 链式 1"))
-		body, _, err := Subscription(FormatClash, eps, opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		counts := clashNameCounts(t, body)
-		allCountsOne(t, counts, body)
-		if counts["落地节点 · 链式 2"] != 1 {
-			t.Fatalf("chain landing group must skip the node's name and land on · 链式 2: %v", counts)
-		}
-	})
-
-	t.Run("clash node named like the relay rename target", func(t *testing.T) {
-		opts := chainOpts
-		opts.Templates = map[string]string{TemplateClash: "proxy-groups:\n  - {name: 中转节点, type: select, proxies: [DIRECT]}\n  - {name: 选择, type: select, include-all: true}\nrules: [MATCH，选择]\n"}
-		eps := append(chainEndpoints(), extraEndpoint("中转节点 · 链式 1"))
-		body, _, err := Subscription(FormatClash, eps, opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		counts := clashNameCounts(t, body)
-		allCountsOne(t, counts, body)
-		if !strings.Contains(body, "中转节点 · 链式 2") || !strings.Contains(body, `dialer-proxy: "中转节点 · 链式 2"`) {
-			t.Fatalf("relay pick must skip the node's name and dialer-proxy must follow:\n%s", body)
-		}
-	})
-
-	t.Run("singbox node named like the landing rename target", func(t *testing.T) {
-		tpl := `{"outbounds": [
-			{"type": "selector", "tag": "落地节点", "outbounds": ["direct"]},
-			{"type": "selector", "tag": "节点选择", "outbounds": ["{all}"]},
-			{"type": "direct", "tag": "direct"}
-		], "route": {"final": "节点选择"}}`
-		opts := chainOpts
-		opts.Templates = map[string]string{TemplateSingbox: tpl}
-		eps := append(chainEndpoints(), extraEndpoint("落地节点 · 链式 1"))
-		body, _, err := Subscription(FormatSingbox, eps, opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		counts := singboxTagCounts(t, body)
-		allCountsOne(t, counts, body)
-		if counts["落地节点 · 链式 2"] != 1 {
-			t.Fatalf("chain landing selector must skip the node's name and land on · 链式 2: %v", counts)
-		}
-	})
-
-	t.Run("surge node named like the landing rename target", func(t *testing.T) {
-		opts := chainOpts
-		opts.Templates = map[string]string{TemplateSurge: "[Proxy Group]\n落地节点 = select, DIRECT\n选择 = select, include-all-proxies=1\n"}
-		eps := append(chainEndpoints(), extraEndpoint("落地节点 · 链式 1"))
-		body, _, err := Subscription(FormatSurge, eps, opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if n := strings.Count(body, "\n落地节点 · 链式 1 = "); n != 1 {
-			t.Fatalf("the node itself must be defined exactly once, got %d:\n%s", n, body)
-		}
-		if !strings.Contains(body, "\n落地节点 · 链式 2 = select, ") {
-			t.Fatalf("chain landing group must skip the node's name and land on · 链式 2:\n%s", body)
-		}
-	})
-}
-
 func TestRR4C2TemplateUniverseCells(t *testing.T) {
-	t.Run("singbox endpoint tag equals chain base name", func(t *testing.T) {
-		tpl := `{"outbounds": [
-			{"type": "selector", "tag": "节点选择", "outbounds": ["{all}"]},
-			{"type": "direct", "tag": "direct"}
-		], "endpoints": [
-			{"type": "wireguard", "tag": "落地节点", "address": ["10.0.0.2/32"]}
-		], "route": {"final": "节点选择"}}`
-		opts := chainOpts
-		opts.Templates = map[string]string{TemplateSingbox: tpl}
-		body, _, err := Subscription(FormatSingbox, chainEndpoints(), opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		counts := singboxTagCounts(t, body)
-		allCountsOne(t, counts, body)
-		if counts["落地节点 · 链式 1"] != 1 {
-			t.Fatalf("chain landing selector must be renamed off the endpoint tag: %v", counts)
-		}
-	})
-
 	t.Run("singbox endpoint tag equals node name", func(t *testing.T) {
 		tpl := `{"outbounds": [
 			{"type": "selector", "tag": "节点选择", "outbounds": ["{all}"]},
@@ -194,39 +106,6 @@ func TestRR4C2TemplateUniverseCells(t *testing.T) {
 		}
 	})
 
-	t.Run("surge template proxy entry equals chain base name", func(t *testing.T) {
-		opts := chainOpts
-		opts.Templates = map[string]string{TemplateSurge: "[Proxy]\n落地节点 = direct\n\n[Proxy Group]\n选择 = select, include-all-proxies=1\n"}
-		body, _, err := Subscription(FormatSurge, chainEndpoints(), opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if n := strings.Count(body, "\n落地节点 = "); n != 1 {
-			t.Fatalf("the template's own proxy must be the only 落地节点 definition, got %d:\n%s", n, body)
-		}
-		if !strings.Contains(body, "\n落地节点 · 链式 1 = select, 美国 落地 01, 美国 落地 02\n") {
-			t.Fatalf("chain landing group must be renamed off the template proxy:\n%s", body)
-		}
-	})
-}
-
-// The chained-expansion derived names (「X（经 Y）」) share the
-// output namespace too: rendered into a template, a copy name equal
-// to a template group name must be rechecked against the groups, not
-// just against the proxy list.
-func TestRR4C2ExpandedCopyAvoidsTemplateGroups(t *testing.T) {
-	tpl := "proxy-groups:\n  - {name: \"A（经 R1）\", type: select, proxies: [DIRECT]}\n  - {name: 选择, type: select, include-all: true}\nrules: [MATCH，选择]\n"
-	opts := srChainOpts
-	opts.Templates = map[string]string{TemplateShadowrocket: tpl}
-	body, _, err := Subscription(FormatShadowrocket, srChainEndpoints()[:4], opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	counts := clashNameCounts(t, body)
-	allCountsOne(t, counts, body)
-	if counts["A（经 R1） #2"] != 1 {
-		t.Fatalf("the expanded copy must move off the template group name: %v\n%s", counts, body)
-	}
 }
 
 // RR4-C2-02: the ShadowTLS companion tag is derived at render time

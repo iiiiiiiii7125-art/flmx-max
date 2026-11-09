@@ -71,7 +71,7 @@ func TestImportSingboxSnellNaive(t *testing.T) {
 	if !types["snell:s6"] || !types["naive:nv"] {
 		t.Fatalf("round trip lost nodes: %v", types)
 	}
-	clash := clashProfile(eps, false, SubOptions{}, false)
+	clash := clashProfile(eps, SubOptions{}, false)
 	if strings.Contains(clash, "type: naive") || strings.Contains(clash, "type: \"naive\"") {
 		t.Fatalf("naive must not render into Clash profiles:\n%s", clash)
 	}

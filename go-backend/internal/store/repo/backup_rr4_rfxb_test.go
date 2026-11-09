@@ -78,20 +78,11 @@ func TestImportReconcilesSubscriptionRefs(t *testing.T) {
 	if a.InboundIDs != "10" {
 		t.Errorf("甲 InboundIDs = %q, want %q (skipped inbound 9 stripped)", a.InboundIDs, "10")
 	}
-	var aOpts struct {
-		ChainLandingSources []int64          `json:"chainLandingSources"`
-		ChainRelaySources   []int64          `json:"chainRelaySources"`
-		ChainSourceFilters  map[int64]string `json:"chainSourceFilters"`
-	}
-	if err := json.Unmarshal([]byte(a.Options), &aOpts); err != nil {
-		t.Fatalf("甲 Options unparseable after restore: %v (%q)", err, a.Options)
-	}
-	if len(aOpts.ChainLandingSources) != 0 || len(aOpts.ChainRelaySources) != 0 {
-		t.Errorf("甲 chain sources = %v/%v, want both empty (998/999 stripped)",
-			aOpts.ChainLandingSources, aOpts.ChainRelaySources)
-	}
-	if len(aOpts.ChainSourceFilters) != 1 || aOpts.ChainSourceFilters[5] != "ok" {
-		t.Errorf("甲 chainSourceFilters = %v, want only key 5 kept", aOpts.ChainSourceFilters)
+	// 2.1.2：甲 的 Options 全是已删的链式键——导入时被 scrub 剔净
+	// （不再做链式引用对账），落库为 {}；悬空引用对账只剩
+	// SourceIDs/InboundIDs 两面。
+	if a.Options != "{}" {
+		t.Errorf("甲 Options = %q, want {} (chain keys scrubbed on import)", a.Options)
 	}
 
 	b := subByToken("tokrefb000000000000000000000000b")
@@ -100,8 +91,8 @@ func TestImportReconcilesSubscriptionRefs(t *testing.T) {
 	}
 
 	c := subByToken("tokrefc000000000000000000000000c")
-	if c.SourceIDs != "5" || c.InboundIDs != "10" || c.Options != `{"chainRelaySources":[5]}` {
-		t.Errorf("丙 must restore verbatim, got SourceIDs=%q InboundIDs=%q Options=%q",
+	if c.SourceIDs != "5" || c.InboundIDs != "10" || c.Options != "{}" {
+		t.Errorf("丙 refs restore verbatim and its chain key is scrubbed, got SourceIDs=%q InboundIDs=%q Options=%q",
 			c.SourceIDs, c.InboundIDs, c.Options)
 	}
 
@@ -109,10 +100,13 @@ func TestImportReconcilesSubscriptionRefs(t *testing.T) {
 	if !strings.Contains(warnText, "2 条订阅引用了未恢复的订阅源/入站") {
 		t.Errorf("receipt must summarize 2 affected subscriptions, warnings=%v", result.ImportWarnings)
 	}
-	if !strings.Contains(warnText, "已剔除悬空引用 4 处（源 3、入站 1）") {
-		t.Errorf("receipt must carry true strip counts （源 3、入站 1), warnings=%v", result.ImportWarnings)
+	if !strings.Contains(warnText, "已剔除悬空引用 3 处（源 2、入站 1）") {
+		t.Errorf("receipt must carry true strip counts （源 2、入站 1), warnings=%v", result.ImportWarnings)
 	}
-	if !strings.Contains(warnText, "「甲」") || !strings.Contains(warnText, "999") || !strings.Contains(warnText, "998") ||
+	if !strings.Contains(warnText, "2 条订阅携带的相关设置已忽略未恢复") {
+		t.Errorf("receipt must carry the removed-settings scrub notice for 甲/丙, warnings=%v", result.ImportWarnings)
+	}
+	if !strings.Contains(warnText, "「甲」") || !strings.Contains(warnText, "999") ||
 		!strings.Contains(warnText, "「乙」") {
 		t.Errorf("receipt must name affected subscriptions and stripped ids, warnings=%v", result.ImportWarnings)
 	}
