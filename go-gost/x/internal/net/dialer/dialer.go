@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-gost/core/logger"
 	ctxvalue "github.com/go-gost/x/ctx"
+	"github.com/go-gost/x/internal/keepalive"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/vishvananda/netns"
 )
@@ -175,6 +176,7 @@ func (d *Dialer) dialOnce(ctx context.Context, network, addr, ifceName string, i
 		// https://github.com/golang/go/issues/44922#issuecomment-796645858
 		netd.FallbackDelay = -1
 	}
+	keepalive.ApplyDialer(&netd)
 
 	return netd.DialContext(ctx, network, addr)
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/core/sd"
+	"github.com/go-gost/x/internal/keepalive"
 )
 
 type Dialer struct {
@@ -73,6 +74,7 @@ func (d *Dialer) Dial(ctx context.Context, network string, tid string) (conn net
 	dialer := net.Dialer{
 		Timeout: d.timeout,
 	}
+	keepalive.ApplyDialer(&dialer)
 	conn, err = dialer.DialContext(ctx, "tcp", service.Address)
 	return
 }

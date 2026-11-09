@@ -20,6 +20,7 @@ import (
 	"github.com/go-gost/core/common/bufpool"
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/internal/idle"
+	"github.com/go-gost/x/internal/keepalive"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/util/eventlog"
 	"github.com/quic-go/quic-go"
@@ -258,6 +259,7 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	lc := net.ListenConfig{}
+	keepalive.ApplyListenConfig(&lc)
 	if s.options.mptcp {
 		lc.SetMultipathTCP(true)
 		s.options.logger.Debugf("mptcp enabled: %v", lc.MultipathTCP())

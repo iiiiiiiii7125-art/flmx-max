@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/go-gost/x/internal/keepalive"
 	"github.com/vishvananda/netns"
 )
 
@@ -78,6 +79,7 @@ func (lc *ListenConfig) Listen(ctx context.Context, network, address string) (ne
 		}
 	}
 
+	keepalive.ApplyListenConfig(&lc.ListenConfig)
 	return lc.ListenConfig.Listen(ctx, network, address)
 }
 

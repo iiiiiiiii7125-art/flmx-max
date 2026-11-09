@@ -26,6 +26,7 @@ import (
 	xbypass "github.com/go-gost/x/bypass"
 	ctxvalue "github.com/go-gost/x/ctx"
 	xio "github.com/go-gost/x/internal/io"
+	"github.com/go-gost/x/internal/keepalive"
 	xnet "github.com/go-gost/x/internal/net"
 	xhttp "github.com/go-gost/x/internal/net/http"
 	tls_util "github.com/go-gost/x/internal/util/tls"
@@ -178,7 +179,7 @@ func (h *Sniffer) HandleHTTP(ctx context.Context, conn net.Conn, opts ...HandleO
 
 	dial := ho.Dial
 	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
+		dial = defaultDial
 	}
 	cc, err := dial(ctx, "tcp", host)
 	if err != nil {
@@ -242,7 +243,7 @@ func (h *Sniffer) serveH2(ctx context.Context, conn net.Conn, ho *HandleOptions)
 				return dial(ctx, network, addr, cfg)
 			}
 
-			cc, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+			cc, err := defaultDial(ctx, network, addr)
 			if err != nil {
 				return nil, err
 			}
@@ -588,7 +589,7 @@ func (h *Sniffer) HandleTLS(ctx context.Context, conn net.Conn, opts ...HandleOp
 
 	dial := ho.Dial
 	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
+		dial = defaultDial
 	}
 	cc, err := dial(ctx, "tcp", host)
 	if err != nil {
@@ -906,4 +907,13 @@ func (h *h2Handler) setHeader(w http.ResponseWriter, header http.Header) {
 			w.Header().Add(k, v[i])
 		}
 	}
+}
+
+// defaultDial is the fallback direct dial used when the handler
+// options carry no Dial: a bare net.Dialer with the agent-wide
+// kernel keepalive policy stamped on (internal/keepalive).
+func defaultDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := &net.Dialer{}
+	keepalive.ApplyDialer(d)
+	return d.DialContext(ctx, network, addr)
 }

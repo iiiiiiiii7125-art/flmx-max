@@ -16,6 +16,7 @@ import (
 	"github.com/go-gost/core/logger"
 	md "github.com/go-gost/core/metadata"
 	admission "github.com/go-gost/x/admission/wrapper"
+	"github.com/go-gost/x/internal/keepalive"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/util/eventlog"
 	traffic_limiter "github.com/go-gost/x/limiter/traffic"
@@ -81,6 +82,7 @@ func (l *dnsListener) Init(md md.Metadata) (err error) {
 		}
 
 		lc := net.ListenConfig{}
+		keepalive.ApplyListenConfig(&lc)
 		if l.md.mptcp {
 			lc.SetMultipathTCP(true)
 			l.logger.Debugf("mptcp enabled: %v", lc.MultipathTCP())
@@ -117,6 +119,7 @@ func (l *dnsListener) Init(md md.Metadata) (err error) {
 		}
 
 		lc := net.ListenConfig{}
+		keepalive.ApplyListenConfig(&lc)
 		if l.md.mptcp {
 			lc.SetMultipathTCP(true)
 			l.logger.Debugf("mptcp enabled: %v", lc.MultipathTCP())
@@ -155,6 +158,7 @@ func (l *dnsListener) Init(md md.Metadata) (err error) {
 		}
 
 		lc := net.ListenConfig{}
+		keepalive.ApplyListenConfig(&lc)
 		if l.md.mptcp {
 			lc.SetMultipathTCP(true)
 			l.logger.Debugf("mptcp enabled: %v", lc.MultipathTCP())
@@ -192,6 +196,7 @@ func (l *dnsListener) Init(md md.Metadata) (err error) {
 		}
 
 		lc := net.ListenConfig{}
+		keepalive.ApplyListenConfig(&lc)
 		if l.md.mptcp {
 			lc.SetMultipathTCP(true)
 			l.logger.Debugf("mptcp enabled: %v", lc.MultipathTCP())
