@@ -70,7 +70,10 @@ import (
 // authenticated table (47 → 48) — the node page's display-group
 // section order, read via config/list like the forward page's
 // group-order keys before it.
-const configKeyRegistryBaseline = 48
+// feat/inbound-connlog: connlog_retention_days joins the
+// authenticated + required tables (48 → 49) — the inbound connection
+// log retention setting, domain-validated like monitor_retention_days.
+const configKeyRegistryBaseline = 49
 
 var configKeyShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 

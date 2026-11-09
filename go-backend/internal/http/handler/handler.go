@@ -416,6 +416,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/kernel/control", h.kernelControl)
 	mux.HandleFunc("/api/v1/kernel/logs", h.kernelLogs)
 	mux.HandleFunc("/api/v1/inbound/list", h.inboundList)
+	mux.HandleFunc("/api/v1/inbound/connlog", h.inboundConnlog)
 	mux.HandleFunc("/api/v1/inbound/create", h.inboundCreate)
 	mux.HandleFunc("/api/v1/inbound/update", h.inboundUpdate)
 	mux.HandleFunc("/api/v1/inbound/delete", h.inboundDelete)
@@ -526,6 +527,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/flow/config", h.flowConfig)
 	mux.HandleFunc("/flow/upload", h.flowUpload)
 	mux.HandleFunc("/flow/upload/v2", h.flowUploadV2)
+	mux.HandleFunc("/flow/connlog/v2", h.flowConnlogV2)
 	mux.HandleFunc("/error", h.errorPage)
 }
 
@@ -2035,6 +2037,8 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		return repo.NormalizeNotifyDailyHour(value)
 	case monitoring.ConfigMonitorRetentionDays:
 		return monitoring.NormalizeMonitoringRetentionDays(value)
+	case monitoring.ConfigConnlogRetentionDays:
+		return monitoring.NormalizeConnlogRetentionDays(value)
 	case monitoring.ConfigTunnelQualityProbeIntervalSec:
 		return monitoring.NormalizeTunnelQualityProbeIntervalSeconds(value)
 	case monitoring.ConfigServiceMonitorCheckerScanIntervalSec,
