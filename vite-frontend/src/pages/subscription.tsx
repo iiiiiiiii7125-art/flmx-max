@@ -3,13 +3,12 @@ import type {
   SubPipeline,
   SubTemplateItem,
   SubPreviewItem,
-  SubRuleGroup,
   SubscriptionDraft,
   SubscriptionItem,
 } from "@/api";
-import type { InboundApiItem, InboundRelayApiItem } from "@/api/types";
+import type { InboundApiItem } from "@/api/types";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { ChevronDown, Copy, QrCode } from "lucide-react";
 
@@ -24,7 +23,6 @@ import {
   deleteSubscription,
   getInboundList,
   getSubscriptionTemplates,
-  getInboundRelays,
   getRemoteSources,
   getSubscriptions,
   previewSubscription,
@@ -34,7 +32,6 @@ import {
 } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
-import { PROTOCOL_LABELS } from "@/pages/inbound/presets";
 import { copyText, panelOrigin, QrImage } from "@/pages/inbound/share";
 import { SubFrontPicker } from "@/pages/subscription/front-picker";
 import { useSubscriptionFrontURLs } from "@/utils/subscription-front";
@@ -42,7 +39,7 @@ import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
-import { Input, Textarea } from "@/shadcn-bridge/heroui/input";
+import { Input } from "@/shadcn-bridge/heroui/input";
 import {
   Modal,
   ModalBody,
@@ -53,7 +50,7 @@ import {
 import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { formatTraffic } from "@/utils/traffic";
 import { SUB_CLIENTS } from "@/pages/subscription/clients";
-import { Segmented, ToggleRow } from "@/pages/subscription/controls";
+import { Segmented } from "@/pages/subscription/controls";
 import { SubscriptionTemplatesModal } from "@/pages/subscription/templates";
 import { SubTrafficStats } from "@/pages/subscription/traffic-stats";
 
@@ -72,36 +69,8 @@ const MULTI_USER_PROTOCOLS = new Set([
 ]);
 
 const EMPTY_PIPELINE: SubPipeline = {
-  lines: "",
-  regions: [],
-  protocols: [],
-  include: "",
-  exclude: "",
-  rename: "",
-  addFlag: false,
-  prefix: "",
-  dedupe: false,
-  sort: "",
-  regionGroups: false,
-  chainLanding: "",
-  chainRelay: "",
-  // 订阅规则、链式代理多选、脚本。
-  rules: false,
-  ruleGroups: [],
-  chainLandingNames: [],
-  chainRelayNames: [],
-  // 3.3.29 #87：链式按来源（一期 UI 只写 sources/own，其余三项只透传保留）。
-  chainLandingSources: [],
-  chainRelaySources: [],
-  chainLandingOwn: false,
-  chainNoneNames: [],
-  chainHideRelays: false,
-  chainSourceFilters: {},
-  chainDropUnused: false,
-  script: "",
-  /** 中转范围：端点 ID（0=直连，>0=中转 ID）；空 = 全部端点。 */
-  relayIds: [],
-  infoNodes: false,
+  /** 中转范围三档：全部端点 / 只要直连 / 只要中转。 */
+  relayScope: "all",
   /** 订阅模板槽位 → 模板 ID；空 = 不用模板。 */
   templates: {},
 };
@@ -168,56 +137,6 @@ function Usage({ s, compact }: { s: SubscriptionItem; compact?: boolean }) {
   );
 }
 
-function ChipPicker({
-  options,
-  selected,
-  onChange,
-  emptyText,
-}: {
-  options: Array<[string, string]>;
-  selected: string[];
-  onChange: (v: string[]) => void;
-  emptyText: string;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      <button
-        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
-          selected.length === 0
-            ? "border-primary bg-primary-500/10 text-primary-700"
-            : "border-divider text-foreground"
-        }`}
-        type="button"
-        onClick={() => onChange([])}
-      >
-        {emptyText}
-      </button>
-      {options.map(([value, label]) => {
-        const on = selected.includes(value);
-
-        return (
-          <button
-            key={value}
-            className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
-              on
-                ? "border-primary bg-primary-500/10 text-primary-700"
-                : "border-divider text-foreground"
-            }`}
-            type="button"
-            onClick={() =>
-              onChange(
-                on ? selected.filter((x) => x !== value) : [...selected, value],
-              )
-            }
-          >
-            {label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function Section({
   title,
   hint,
@@ -272,28 +191,6 @@ function Section({
   );
 }
 
-/** Names the processing steps a pipeline turns on, e.g. "过滤、改名". */
-function pipelineSummary(o: SubPipeline): string {
-  const steps: string[] = [];
-
-  if (
-    o.lines ||
-    o.regions.length ||
-    o.protocols.length ||
-    o.include ||
-    o.exclude
-  )
-    steps.push("过滤");
-  if (o.rename.trim()) steps.push("改名");
-  if (o.addFlag) steps.push("国旗");
-  if (o.dedupe) steps.push("去重");
-  if (o.prefix) steps.push("前缀");
-  if (o.sort) steps.push("排序");
-  if (o.regionGroups) steps.push("地区分组");
-
-  return steps.join("、");
-}
-
 interface Draft extends SubscriptionDraft {
   expire: string;
   /** Traffic limit typed in GB ("" = unlimited). */
@@ -309,15 +206,8 @@ function gbText(bytes: number): string {
   return String(Number.isInteger(v) ? v : Number(v.toFixed(2)));
 }
 
-function draftFrom(
-  s?: SubscriptionItem,
-  sources: RemoteSourceItem[] = [],
-): Draft {
+function draftFrom(s?: SubscriptionItem): Draft {
   if (!s) {
-    const ids = (role: string) =>
-      sources.filter((x) => x.role === role).map((x) => x.id);
-    const relays = ids("relay");
-
     return {
       name: "",
       // New subscriptions get their own credentials, so any of them can
@@ -326,14 +216,7 @@ function draftFrom(
       sourceAll: true,
       inboundIds: [],
       sourceIds: [],
-      // Sources marked with a 用途 set up the chain by default: relay
-      // sources relay, landing sources and the own nodes are the exits.
-      options: {
-        ...EMPTY_PIPELINE,
-        chainRelaySources: relays,
-        chainLandingSources: ids("landing"),
-        chainLandingOwn: relays.length > 0,
-      },
+      options: { ...EMPTY_PIPELINE },
       expireTime: 0,
       expire: "",
       enabled: true,
@@ -354,7 +237,7 @@ function draftFrom(
     options: {
       ...EMPTY_PIPELINE,
       ...s.options,
-      relayIds: s.relayIds ?? s.options?.relayIds ?? [],
+      relayScope: s.options?.relayScope ?? "all",
     },
     expireTime: s.expireTime,
     expire: toDateInput(s.expireTime),
@@ -380,53 +263,11 @@ function toPayload(d: Draft): SubscriptionDraft {
   };
 }
 
-type ChainRole = "" | "landing" | "relay";
-
-/** 不用 / 落地 / 中转：给整个订阅源设链式角色（一期）。 */
-function ChainRoleButtons({
-  value,
-  onChange,
-}: {
-  value: ChainRole;
-  onChange: (role: ChainRole) => void;
-}) {
-  return (
-    <div className="flex shrink-0 gap-1">
-      {(
-        [
-          ["", "不用"],
-          ["landing", "落地"],
-          ["relay", "中转"],
-        ] as Array<[ChainRole, string]>
-      ).map(([r, label]) => (
-        <button
-          key={r || "none"}
-          className={`rounded-lg border px-2 py-1 text-xs font-semibold transition-colors ${
-            value === r
-              ? r === "landing"
-                ? "border-warning-500/40 bg-warning-500/10 text-warning-700"
-                : r === "relay"
-                  ? "border-secondary-500/40 bg-secondary-500/10 text-secondary-700"
-                  : "border-divider glass-inset text-foreground"
-              : "border-default-200 text-foreground hover:border-default-400"
-          }`}
-          type="button"
-          onClick={() => onChange(r)}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function Editor({
   draft,
   setDraft,
   inbounds,
   sources,
-  regions,
-  ruleGroups,
   saving,
   onSave,
   onClose,
@@ -435,8 +276,6 @@ function Editor({
   setDraft: (d: Draft) => void;
   inbounds: InboundApiItem[];
   sources: RemoteSourceItem[];
-  regions: string[];
-  ruleGroups: SubRuleGroup[];
   saving: boolean;
   onSave: () => void;
   onClose: () => void;
@@ -445,7 +284,6 @@ function Editor({
     items: SubPreviewItem[];
     total: number;
     dropped: number;
-    scriptError?: string;
     excludedCompanionIds?: number[];
   } | null>(null);
   const [previewing, setPreviewing] = useState(false);
@@ -468,13 +306,6 @@ function Editor({
     setPreview(null);
   };
 
-  const protocols = useMemo(
-    () =>
-      [...new Set(inbounds.map((i) => i.protocol))].map(
-        (p) => [p, PROTOCOL_LABELS[p] ?? p] as [string, string],
-      ),
-    [inbounds],
-  );
   const selfBuilt = inbounds.filter((i) => !i.external);
   // Nodes of a remote source are picked as the whole source.
   const imported = inbounds.filter((i) => i.external && !i.sourceId);
@@ -486,68 +317,6 @@ function Editor({
           draft.sourceIds.includes(i.sourceId ?? 0)) &&
       (i.external || !MULTI_USER_PROTOCOLS.has(i.protocol)),
   ).length;
-
-  // 中转范围：每个入站的中转列表（端点多选用）。
-  const [relaysByInbound, setRelaysByInbound] = useState<
-    Record<number, InboundRelayApiItem[]>
-  >({});
-
-  useEffect(() => {
-    let active = true;
-
-    Promise.all(
-      inbounds.map((i) =>
-        getInboundRelays(i.id).then((r) => ({
-          id: i.id,
-          relays: r.code === 0 ? (r.data ?? []) : [],
-        })),
-      ),
-    ).then((results) => {
-      if (!active) return;
-      const map: Record<number, InboundRelayApiItem[]> = {};
-
-      for (const { id, relays } of results) map[id] = relays;
-      setRelaysByInbound(map);
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [inbounds]);
-
-  // 当前订阅覆盖的入站（全部落地 = 全部入站；指定落地 = 已勾选的入站）。
-  const scopeInbounds = useMemo(
-    () =>
-      draft.sourceAll
-        ? inbounds
-        : inbounds.filter((i) => draft.inboundIds.includes(i.id)),
-    [inbounds, draft.sourceAll, draft.inboundIds],
-  );
-
-  // 当前覆盖的全部端点 ID：0=直连（任一入站可直连时纳入），>0=中转 ID。
-  const allEndpointIds = useCallback(() => {
-    const ids = new Set<number>();
-
-    for (const inbound of scopeInbounds) {
-      if (!inbound.relayOnly) ids.add(0);
-      for (const relay of relaysByInbound[inbound.id] ?? []) ids.add(relay.id);
-    }
-
-    return Array.from(ids);
-  }, [scopeInbounds, relaysByInbound]);
-
-  // relayIds 为空表示全部端点；勾选时先把全部端点展开为显式列表再增减。
-  const endpointChecked = (id: number) =>
-    o.relayIds.length === 0 || o.relayIds.includes(id);
-  const toggleEndpoint = (id: number) => {
-    const current = o.relayIds.length === 0 ? allEndpointIds() : o.relayIds;
-
-    setOpts({
-      relayIds: current.includes(id)
-        ? current.filter((x) => x !== id)
-        : [...current, id],
-    });
-  };
 
   const runPreview = async () => {
     setPreviewing(true);
@@ -564,46 +333,6 @@ function Editor({
       setPreviewing(false);
     }
   };
-
-  // 链式是否已配置：关键词、按节点多选、按来源、自建落地任一存在。
-  const chainConfigured = Boolean(
-    (o.chainLanding && o.chainRelay) ||
-      o.chainLandingNames.length ||
-      o.chainRelayNames.length ||
-      o.chainLandingSources.length ||
-      o.chainRelaySources.length ||
-      o.chainLandingOwn,
-  );
-
-  // 按来源设角色（一期）：只写 sources 两列。注意后端语义——一旦用按
-  // 来源/节点/自建判定，旧的关键词表达式即被忽略（chainMatchers），
-  // 故与上游一致在此清掉表达式，避免表单里留着已失效的值误导用户。
-  // chainNoneNames / chainSourceFilters / chainDropUnused /
-  // chainHideRelays 是二期字段：一期不提供编辑入口，这里一律不碰，
-  // 随 draft.options 原样透传回保存请求（见 toPayload 的 ...rest）。
-  const setSourceRole = (id: number, role: ChainRole) => {
-    const without = (list: number[]) => list.filter((x) => x !== id);
-
-    setOpts({
-      chainLandingSources:
-        role === "landing"
-          ? [...without(o.chainLandingSources), id]
-          : without(o.chainLandingSources),
-      chainRelaySources:
-        role === "relay"
-          ? [...without(o.chainRelaySources), id]
-          : without(o.chainRelaySources),
-      chainLanding: "",
-      chainRelay: "",
-    });
-  };
-
-  const sourceRole = (id: number): ChainRole =>
-    o.chainLandingSources.includes(id)
-      ? "landing"
-      : o.chainRelaySources.includes(id)
-        ? "relay"
-        : "";
 
   const pickList = (title: string, list: InboundApiItem[]) =>
     list.length > 0 && (
@@ -763,33 +492,25 @@ function Editor({
                   <p className="text-xs font-semibold text-foreground">
                     订阅源（整个源，更新后的节点自动跟上）
                   </p>
-                  {sources.map((src) => {
-                    const inChain =
-                      o.chainRelaySources.includes(src.id) ||
-                      o.chainLandingSources.includes(src.id);
-
-                    return (
-                      <Checkbox
-                        key={src.id}
-                        className="w-full"
-                        isDisabled={inChain}
-                        isSelected={inChain || draft.sourceIds.includes(src.id)}
-                        onValueChange={(on) =>
-                          set({
-                            sourceIds: on
-                              ? [...draft.sourceIds, src.id]
-                              : draft.sourceIds.filter((x) => x !== src.id),
-                          })
-                        }
-                      >
-                        <span className="text-sm">{src.name}</span>
-                        <span className="ml-1 text-xs font-semibold text-foreground">
-                          {src.nodeCount} 个节点
-                          {inChain && " · 链式代理在用，自动包含"}
-                        </span>
-                      </Checkbox>
-                    );
-                  })}
+                  {sources.map((src) => (
+                    <Checkbox
+                      key={src.id}
+                      className="w-full"
+                      isSelected={draft.sourceIds.includes(src.id)}
+                      onValueChange={(on) =>
+                        set({
+                          sourceIds: on
+                            ? [...draft.sourceIds, src.id]
+                            : draft.sourceIds.filter((x) => x !== src.id),
+                        })
+                      }
+                    >
+                      <span className="text-sm">{src.name}</span>
+                      <span className="ml-1 text-xs font-semibold text-foreground">
+                        {src.nodeCount} 个节点
+                      </span>
+                    </Checkbox>
+                  ))}
                 </div>
               )}
             </div>
@@ -804,313 +525,42 @@ function Editor({
 
         <Section
           collapsible
-          defaultOpen={o.relayIds.length > 0}
-          hint="默认包含所选落地的全部端点（直连 + 所有中转）；开始勾选后只保留选中的端点，与旧的按中转分配粒度一致"
+          defaultOpen={o.relayScope !== "all"}
+          hint="全部＝直连和所有中转都包含；只要中转＝只保留经中转的线路；只要直连＝只保留直连线路"
           summary={
-            o.relayIds.length ? `已选 ${o.relayIds.length} 个端点` : "全部端点"
+            o.relayScope === "relay"
+              ? "只要中转"
+              : o.relayScope === "direct"
+                ? "只要直连"
+                : "全部端点"
           }
           title="中转范围"
         >
-          {scopeInbounds.length === 0 ? (
-            <p className="text-xs font-semibold text-foreground">
-              先在「来源」里选择落地，这里才能挑端点
-            </p>
-          ) : (
-            <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
-              {scopeInbounds.map((inbound) => {
-                const relays = relaysByInbound[inbound.id] ?? [];
-
-                if (inbound.relayOnly && relays.length === 0) return null;
-
-                return (
-                  <div key={inbound.id} className="space-y-1">
-                    <p className="text-xs font-semibold text-foreground">
-                      {inbound.name}
-                      <span className="ml-1 text-foreground">
-                        {inbound.protocol} · {inbound.nodeName}
-                      </span>
-                    </p>
-                    {!inbound.relayOnly && (
-                      <Checkbox
-                        className="w-full"
-                        isSelected={endpointChecked(0)}
-                        onValueChange={() => toggleEndpoint(0)}
-                      >
-                        <span className="text-sm">直连</span>
-                      </Checkbox>
-                    )}
-                    {relays.map((relay) => (
-                      <Checkbox
-                        key={relay.id}
-                        className="w-full"
-                        isSelected={endpointChecked(relay.id)}
-                        onValueChange={() => toggleEndpoint(relay.id)}
-                      >
-                        <span className="text-sm">
-                          {relay.name || `中转 ${relay.id}`}
-                        </span>
-                        <span className="ml-1 text-xs font-semibold text-foreground">
-                          中转
-                        </span>
-                      </Checkbox>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Section>
-
-        <Section
-          collapsible
-          defaultOpen={Boolean(pipelineSummary(o))}
-          hint="按顺序执行：过滤 → 改名 → 国旗 → 去重 → 前缀 → 排序"
-          summary={pipelineSummary(o) || "未设置"}
-          title="处理"
-        >
-          <div className="space-y-1.5">
-            <p className="text-xs font-semibold">线路</p>
-            <Segmented
-              options={[
-                ["", "全部"],
-                ["relay", "只要中转"],
-                ["direct", "只要直连"],
-              ]}
-              value={o.lines}
-              onChange={(lines) => setOpts({ lines })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <p className="text-xs font-semibold">地区</p>
-            <ChipPicker
-              emptyText="全部地区"
-              options={regions.map((r) => [r, r])}
-              selected={o.regions}
-              onChange={(regions) => setOpts({ regions })}
-            />
-          </div>
-          {protocols.length > 1 && (
-            <div className="space-y-1.5">
-              <p className="text-xs font-semibold">协议</p>
-              <ChipPicker
-                emptyText="全部协议"
-                options={protocols}
-                selected={o.protocols}
-                onChange={(protocols) => setOpts({ protocols })}
-              />
-            </div>
-          )}
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Input
-              description="多个关键词用 | 分隔，或 /正则/"
-              label="名称包含"
-              placeholder="例如 IEPL|专线"
-              value={o.include}
-              variant="bordered"
-              onChange={(e) => setOpts({ include: e.target.value })}
-            />
-            <Input
-              label="名称排除"
-              placeholder="例如 /过期|剩余/"
-              value={o.exclude}
-              variant="bordered"
-              onChange={(e) => setOpts({ exclude: e.target.value })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <p className="text-xs font-semibold">改名规则</p>
-            <p className="text-xs font-semibold text-foreground">
-              每行一条 <code>要替换的 =&gt; 替换成</code>，右边留空就是删除，
-              <code>/.../</code> 是正则
-            </p>
-            <Textarea
-              classNames={{ input: "font-mono text-xs font-semibold" }}
-              minRows={2}
-              placeholder={"花云| =>\n/\\|[0-9.]+x/ =>"}
-              value={o.rename}
-              variant="bordered"
-              onChange={(e) => setOpts({ rename: e.target.value })}
-            />
-          </div>
-          <ToggleRow
-            hint="按名称识别地区，在前面加上国旗"
-            id="sub-flag"
-            label="自动加国旗"
-            value={o.addFlag}
-            onChange={(addFlag) => setOpts({ addFlag })}
-          />
-          <Input
-            label="名称前缀"
-            placeholder="例如 [家宽] "
-            value={o.prefix}
-            variant="bordered"
-            onChange={(e) => setOpts({ prefix: e.target.value })}
-          />
-          <ToggleRow
-            hint="地址、端口、协议与凭据都相同的只保留第一个"
-            id="sub-dedupe"
-            label="去重"
-            value={o.dedupe}
-            onChange={(dedupe) => setOpts({ dedupe })}
-          />
-          <div className="space-y-1.5">
-            <p className="text-xs font-semibold">排序</p>
-            <Segmented
-              options={[
-                ["", "面板顺序"],
-                ["name", "按名称"],
-              ]}
-              value={o.sort}
-              onChange={(sort) => setOpts({ sort })}
-            />
-          </div>
-          <ToggleRow
-            hint="Clash / sing-box / Surge 里每个地区一个自动测速组"
-            id="sub-groups"
-            label="按地区分组"
-            value={o.regionGroups}
-            onChange={(regionGroups) => setOpts({ regionGroups })}
-          />
-          <ToggleRow
-            hint="在节点列表最前面加占位节点显示到期日与剩余流量，给不显示订阅信息的客户端看"
-            id="sub-info-nodes"
-            label="显示到期与流量节点"
-            value={o.infoNodes}
-            onChange={(infoNodes) => setOpts({ infoNodes })}
+          <Segmented
+            options={[
+              ["all", "全部"],
+              ["relay", "只要中转"],
+              ["direct", "只要直连"],
+            ]}
+            value={o.relayScope}
+            onChange={(relayScope) => setOpts({ relayScope })}
           />
         </Section>
 
         <Section
           collapsible
-          defaultOpen={chainConfigured}
-          hint="客户端先连中转节点，再经它连落地节点，网站看到的是落地节点的 IP。落地节点会挂到「中转节点」组上，在「落地节点」里选出口、在「中转节点」里选中转。落地和中转都至少有一个才生效；通用分享链接（Base64）无法表达链式"
-          summary={chainConfigured ? "已开启" : "未开启"}
-          title="链式代理"
+          defaultOpen={Object.keys(o.templates ?? {}).length > 0}
+          summary={
+            Object.keys(o.templates ?? {}).length
+              ? `已选 ${Object.keys(o.templates ?? {}).length} 个`
+              : "未设置"
+          }
+          title="订阅模板"
         >
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Input
-              description="多个关键词用 | 分隔，或 /正则/"
-              label="落地节点"
-              placeholder="例如 美国|家宽"
-              value={o.chainLanding}
-              variant="bordered"
-              onChange={(e) => setOpts({ chainLanding: e.target.value })}
-            />
-            <Input
-              description="同时匹配两项的节点算作落地"
-              label="中转节点"
-              placeholder="例如 香港|IEPL"
-              value={o.chainRelay}
-              variant="bordered"
-              onChange={(e) => setOpts({ chainRelay: e.target.value })}
-            />
-          </div>
-          {(o.chainLanding || o.chainRelay) && (
-            <p className="rounded-xl bg-warning-500/10 px-3 py-2 text-xs font-semibold text-warning-700">
-              现在用的是上面的关键词方式。在下面按来源设置角色后会改用按来源设置，关键词会被清空
-            </p>
-          )}
-          <div className="space-y-3">
-            <p className="text-xs font-semibold">按来源</p>
-            <ToggleRow
-              hint="自己面板上的节点（含它们的中转线路）都作为出口"
-              id="chain-landing-own"
-              label="自建节点全部作落地"
-              value={o.chainLandingOwn}
-              onChange={(chainLandingOwn) => {
-                setOpts({
-                  chainLandingOwn,
-                  // 同 setSourceRole：用新判定后关键词即失效，一并清掉。
-                  chainLanding: "",
-                  chainRelay: "",
-                });
-              }}
-            />
-            {sources.length > 0 && (
-              <div className="divide-y divide-divider rounded-xl border border-divider">
-                {sources.map((src) => (
-                  <div
-                    key={src.id}
-                    className="flex items-center gap-3 px-3 py-2"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <span className="truncate text-sm">{src.name}</span>
-                        {src.role && (
-                          <span
-                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${src.role === "relay" ? "tray-secondary" : "tray-warning"}`}
-                          >
-                            用途：{src.role === "relay" ? "中转" : "落地"}
-                          </span>
-                        )}
-                      </div>
-                      <div className="truncate text-xs font-semibold text-foreground">
-                        {src.nodeCount} 个节点
-                      </div>
-                    </div>
-                    <ChainRoleButtons
-                      value={sourceRole(src.id)}
-                      onChange={(r) => setSourceRole(src.id, r)}
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-            <p className="text-xs font-semibold text-foreground">
-              给订阅源设了角色，它的节点会自动加入这个订阅；机场改名、增删节点会自动跟上
-            </p>
-          </div>
-        </Section>
-
-        <Section
-          collapsible
-          defaultOpen={o.rules || o.script !== ""}
-          hint="给 Mihomo、sing-box、Surge 等客户端加分流规则与自定义脚本"
-          summary={o.rules ? "已开启" : o.script ? "有脚本" : "未开启"}
-          title="规则与脚本"
-        >
-          <ToggleRow
-            hint="国内直连、境外走代理，另加下面勾选的分组"
-            id="sub-rules"
-            label="开启分流规则"
-            value={o.rules}
-            onChange={(rules) =>
-              setOpts(
-                rules && !o.rules && o.ruleGroups.length === 0
-                  ? { rules, ruleGroups: ruleGroups.map((g) => g.key) }
-                  : { rules },
-              )
-            }
-          />
-          {o.rules && ruleGroups.length > 0 && (
-            <div className="space-y-1.5">
-              <p className="text-xs font-semibold">规则分组</p>
-              <p className="text-xs font-semibold text-foreground">
-                每组可在客户端里单独选节点
-              </p>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {ruleGroups.map((g) => (
-                  <Checkbox
-                    key={g.key}
-                    isSelected={o.ruleGroups.includes(g.key)}
-                    onValueChange={(on) =>
-                      setOpts({
-                        ruleGroups: on
-                          ? [...o.ruleGroups, g.key]
-                          : o.ruleGroups.filter((x) => x !== g.key),
-                      })
-                    }
-                  >
-                    <span className="text-sm">{g.name}</span>
-                  </Checkbox>
-                ))}
-              </div>
-            </div>
-          )}
           <div className="space-y-1.5">
             <p className="text-xs font-semibold">订阅模板</p>
             <p className="text-xs font-semibold text-foreground">
-              选了模板的客户端按模板骨架下发（面板只填节点），分流规则对它不生效；
+              选了模板的客户端按模板骨架下发（面板只填节点）；
               没选的照旧。在订阅页右上角「模板」里管理模板。
             </p>
             {(
@@ -1154,26 +604,6 @@ function Editor({
               </div>
             ))}
           </div>
-          <div className="space-y-1.5">
-            <p className="text-xs font-semibold">自定义脚本</p>
-            <p className="text-xs font-semibold text-foreground">
-              对处理后的节点再做筛选、改名、排序。写一个{" "}
-              <code className="rounded bg-tray px-1">
-                function operator(nodes)
-              </code>{" "}
-              函数返回新的节点数组；每个节点有
-              name（可改）、original、server、port、protocol、region、line
-              字段。
-            </p>
-            <Textarea
-              className="font-mono text-xs font-semibold"
-              minRows={6}
-              placeholder={`// 示例：过滤并改名\nfunction operator(nodes) {\n  return nodes\n    .filter((n) => !/过期/.test(n.name))\n    .map((n) => {\n      n.name = n.name.replace("IEPL", "专线");\n      return n;\n    });\n}`}
-              value={o.script}
-              variant="bordered"
-              onChange={(e) => setOpts({ script: e.target.value })}
-            />
-          </div>
         </Section>
 
         <Section title="预览">
@@ -1187,13 +617,6 @@ function Editor({
           </Button>
           {preview && (
             <>
-              {preview.scriptError && (
-                <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-xs font-semibold text-warning-700">
-                  {preview.scriptError}
-                  <br />
-                  已保留其余处理步骤生成的节点；修复脚本后请重新预览。
-                </p>
-              )}
               <p className="text-xs font-semibold text-foreground">
                 共 {preview.items.length} 个节点
                 {preview.dropped > 0 && `，过滤掉 ${preview.dropped} 个`}
@@ -1225,13 +648,6 @@ function Editor({
                           </span>
                         )}
                       </span>
-                      {p.chain && (
-                        <span
-                          className={`shrink-0 rounded-full px-1.5 py-0.5 ${p.chain === "landing" ? "tray-warning" : "tray-secondary"}`}
-                        >
-                          {p.chain === "landing" ? "落地" : "中转"}
-                        </span>
-                      )}
                       {(p.own || p.sourceId) && (
                         <span className="max-w-28 shrink-0 truncate text-foreground">
                           {p.own
@@ -1281,9 +697,6 @@ export default function SubscriptionPage() {
   const [tab, setTab] = useState<"manage" | "assign">("manage");
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [subs, setSubs] = useState<SubscriptionRow[]>([]);
-  const [regions, setRegions] = useState<string[]>([]);
-  // 订阅规则组（后端下发）。
-  const [ruleGroups, setRuleGroups] = useState<SubRuleGroup[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
   const [sources, setSources] = useState<RemoteSourceItem[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -1311,8 +724,6 @@ export default function SubscriptionPage() {
 
       if (subRes.code === 0 && subRes.data) {
         setSubs(subRes.data.items ?? []);
-        setRegions(subRes.data.regions ?? []);
-        setRuleGroups(subRes.data.ruleGroups ?? []);
       } else {
         toast.error(subRes.msg || "加载订阅失败");
       }
@@ -1576,7 +987,7 @@ export default function SubscriptionPage() {
             color="primary"
             size="sm"
             variant="solid"
-            onPress={() => setDraft(draftFrom(undefined, sources))}
+            onPress={() => setDraft(draftFrom())}
           >
             新建订阅
           </Button>
@@ -1734,12 +1145,7 @@ export default function SubscriptionPage() {
                     {SUB_CLIENTS.map((c) => {
                       const link = url(detail, c.format);
                       const open = () => {
-                        if (detail.options.rules && c.configImportURL) {
-                          window.location.href = c.configImportURL(
-                            link,
-                            detail.name,
-                          );
-                        } else if (c.importURL) {
+                        if (c.importURL) {
                           window.location.href = c.importURL(link, detail.name);
                         } else {
                           copyText(link, `${c.label}订阅已复制`);
@@ -1836,8 +1242,6 @@ export default function SubscriptionPage() {
               <Editor
                 draft={draft}
                 inbounds={inbounds}
-                regions={regions}
-                ruleGroups={ruleGroups}
                 saving={saving}
                 setDraft={setDraft}
                 sources={sources}
