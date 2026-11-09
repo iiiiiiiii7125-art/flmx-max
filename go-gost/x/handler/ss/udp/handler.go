@@ -378,7 +378,14 @@ func isSSTimeout(err error) bool {
 // wake is returned to the caller only when the whole association
 // has in fact made no progress for the full window — if the
 // sibling direction moved a packet recently, the deadline is
-// re-armed instead. An endpoint that refuses deadline arming
+// re-armed instead. The resumable-wake treatment applies only
+// while the window is armed (window > 0): with the window off no
+// deadline is armed at all, so a timeout-class error surfacing
+// then cannot be one of these wakes — it is a real failure of
+// that leg (F-212-C: a kernel keepalive verdict on a silently
+// dead peer returns ETIMEDOUT) and is returned unswallowed, so
+// the caller unwinds the whole association and closes both
+// endpoints. An endpoint that refuses deadline arming
 // keeps the historical unbounded behaviour for its own direction
 // only.
 func readSSPacket(pc net.PacketConn, b []byte, act *ssRelayActivity, window time.Duration) (int, net.Addr, error) {
@@ -392,7 +399,7 @@ func readSSPacket(pc net.PacketConn, b []byte, act *ssRelayActivity, window time
 			act.touch()
 			return n, addr, nil
 		}
-		if isSSTimeout(err) && (window <= 0 || !act.stalled(window)) {
+		if isSSTimeout(err) && window > 0 && !act.stalled(window) {
 			continue
 		}
 		return 0, nil, err

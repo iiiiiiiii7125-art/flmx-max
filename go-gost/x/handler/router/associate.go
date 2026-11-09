@@ -159,7 +159,18 @@ func (h *routerHandler) handleAssociate(ctx context.Context, conn net.Conn, netw
 		n, err := conn.Read(b[:])
 		if err != nil {
 			if isTimeoutErr(err) {
-				if window > 0 && act.stalled(window) {
+				// With the window off the loop arms no deadline
+				// at all, so a timeout-class error surfacing
+				// then cannot be one of its wakes — it is a
+				// real failure of the conn (F-212-C: a kernel
+				// keepalive verdict on a silently dead peer
+				// returns ETIMEDOUT). Return it unswallowed:
+				// ending the association is what reaps the
+				// pool entry and stops sdRenew.
+				if window <= 0 {
+					return err
+				}
+				if act.stalled(window) {
 					return errAssociateIdleTimeout
 				}
 				continue
