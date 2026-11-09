@@ -2,6 +2,8 @@ package loader
 
 import (
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
@@ -21,6 +23,7 @@ import (
 	router_parser "github.com/go-gost/x/config/parsing/router"
 	sd_parser "github.com/go-gost/x/config/parsing/sd"
 	service_parser "github.com/go-gost/x/config/parsing/service"
+	"github.com/go-gost/x/internal/idle"
 	"github.com/go-gost/x/registry"
 )
 
@@ -78,7 +81,56 @@ func apply(cfg *config.Config, run func(*config.Config) error) error {
 
 type loader struct{}
 
+// applyIdleWindow publishes the panel's per-node no-progress
+// teardown window (service metadata "idleTimeout") to the
+// forwarding plane (internal/idle). The panel writes the same
+// node-level value into every service it generates for a node; the
+// scan takes the maximum, so a partially annotated config can only
+// ever widen the window, never narrow it below the node's setting.
+// No service carrying the key leaves the teardown disabled (the
+// default). Load is the single funnel for initial load, reload and
+// reload-rollback, so the published window always matches the
+// config actually in force.
+func applyIdleWindow(cfg *config.Config) {
+	var window time.Duration
+	if cfg != nil {
+		for _, svc := range cfg.Services {
+			if svc == nil {
+				continue
+			}
+			if d := idleTimeoutValue(svc.Metadata["idleTimeout"]); d > window {
+				window = d
+			}
+		}
+	}
+	idle.Set(window)
+}
+
+// idleTimeoutValue decodes one "idleTimeout" metadata value with
+// the metadata/util GetDuration semantics: numbers are seconds,
+// strings are durations ("300s") or bare seconds ("300").
+func idleTimeoutValue(v any) time.Duration {
+	switch vv := v.(type) {
+	case int:
+		return time.Duration(vv) * time.Second
+	case int64:
+		return time.Duration(vv) * time.Second
+	case float64:
+		return time.Duration(vv) * time.Second
+	case string:
+		if d, err := time.ParseDuration(vv); err == nil {
+			return d
+		}
+		if n, err := strconv.Atoi(vv); err == nil {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 0
+}
+
 func (l *loader) Load(cfg *config.Config) error {
+	applyIdleWindow(cfg)
+
 	logCfg := cfg.Log
 	if logCfg == nil {
 		logCfg = &config.LogConfig{}

@@ -21,6 +21,7 @@ import (
 	"github.com/go-gost/core/router"
 	"github.com/go-gost/core/sd"
 	"github.com/go-gost/relay"
+	"github.com/go-gost/x/internal/idle"
 	xip "github.com/go-gost/x/internal/net/ip"
 	"github.com/go-gost/x/internal/util/cache"
 	traffic_wrapper "github.com/go-gost/x/limiter/traffic/wrapper"
@@ -149,13 +150,16 @@ func (h *routerHandler) handleAssociate(ctx context.Context, conn net.Conn, netw
 	// pool entry and the deferred cancel stops sdRenew.
 	defer conn.SetReadDeadline(time.Time{})
 
+	window := idle.Resolve(associateIdleTimeout)
 	var b [MaxMessageSize]byte
 	for {
-		_ = conn.SetReadDeadline(act.deadline(associateIdleTimeout))
+		if window > 0 {
+			_ = conn.SetReadDeadline(act.deadline(window))
+		}
 		n, err := conn.Read(b[:])
 		if err != nil {
 			if isTimeoutErr(err) {
-				if act.stalled(associateIdleTimeout) {
+				if window > 0 && act.stalled(window) {
 					return errAssociateIdleTimeout
 				}
 				continue
@@ -170,13 +174,14 @@ func (h *routerHandler) handleAssociate(ctx context.Context, conn net.Conn, netw
 	}
 }
 
-// associateIdleTimeout is the no-progress window for one router
-// association. It matches the FIX-1 transport window (300s): the
-// criterion is absence of progress in either direction, not age,
-// so a connector exchanging even a trickle of packets stays
-// associated indefinitely. A variable only so tests can shrink
-// the window.
-var associateIdleTimeout = 300 * time.Second
+// associateIdleTimeout optionally overrides the no-progress
+// window for one router association. Zero — the production
+// value — defers to the node-wide window (internal/idle, disabled
+// unless the panel configured one); the criterion is absence of
+// progress in either direction, not age, so a connector
+// exchanging even a trickle of packets stays associated
+// indefinitely. A variable only so tests can shrink the window.
+var associateIdleTimeout time.Duration
 
 var errAssociateIdleTimeout = errors.New("router: association idle timeout, no progress in either direction")
 

@@ -14,6 +14,7 @@ import (
 	md "github.com/go-gost/core/metadata"
 	"github.com/go-gost/core/recorder"
 	ctxvalue "github.com/go-gost/x/ctx"
+	"github.com/go-gost/x/internal/idle"
 	netudp "github.com/go-gost/x/internal/net/udp"
 	"github.com/go-gost/x/internal/util/eventlog"
 	"github.com/go-gost/x/internal/util/relay"
@@ -232,7 +233,7 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 	// both endpoints and ends the relay.
 	act := &ssRelayActivity{}
 	act.touch()
-	window := ssRelayIdleTimeout
+	window := idle.Resolve(ssRelayIdleTimeout)
 	var timedOut atomic.Bool
 
 	errc := make(chan error, 2)
@@ -334,12 +335,13 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 	return err
 }
 
-// ssRelayIdleTimeout is the no-progress window for one SS-UDP
-// association. It matches the FIX-1 transport window and
-// udp.Relay's default (300s): the criterion is absence of
-// progress in either direction, not age. A variable only so
-// tests can shrink the window.
-var ssRelayIdleTimeout = 300 * time.Second
+// ssRelayIdleTimeout optionally overrides the no-progress window
+// for one SS-UDP association. Zero — the production value —
+// defers to the node-wide window (internal/idle, disabled unless
+// the panel configured one); the criterion is absence of progress
+// in either direction, not age. A variable only so tests can
+// shrink the window.
+var ssRelayIdleTimeout time.Duration
 
 var errSSRelayIdleTimeout = errors.New("ss udp relay: idle timeout, no progress in either direction")
 
@@ -382,7 +384,7 @@ func isSSTimeout(err error) bool {
 func readSSPacket(pc net.PacketConn, b []byte, act *ssRelayActivity, window time.Duration) (int, net.Addr, error) {
 	dl, canArm := pc.(interface{ SetReadDeadline(time.Time) error })
 	for {
-		if canArm {
+		if canArm && window > 0 {
 			_ = dl.SetReadDeadline(act.deadline(window))
 		}
 		n, addr, err := pc.ReadFrom(b)
@@ -390,7 +392,7 @@ func readSSPacket(pc net.PacketConn, b []byte, act *ssRelayActivity, window time
 			act.touch()
 			return n, addr, nil
 		}
-		if isSSTimeout(err) && !act.stalled(window) {
+		if isSSTimeout(err) && (window <= 0 || !act.stalled(window)) {
 			continue
 		}
 		return 0, nil, err

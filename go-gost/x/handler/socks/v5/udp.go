@@ -23,12 +23,13 @@ import (
 	xrecorder "github.com/go-gost/x/recorder"
 )
 
-// udpAssociationIdleTimeout is the no-progress window the UDP
-// relay enforces for one association (F07); the control
-// connection's lifetime is bounded through it (F06). A variable
-// only so tests can shrink the window — production keeps the
-// FIX-1-aligned 300s.
-var udpAssociationIdleTimeout = 300 * time.Second
+// udpAssociationIdleTimeout optionally overrides the no-progress
+// window the UDP relay enforces for one association (F07); the
+// control connection's lifetime is bounded through it (F06). Zero —
+// the production value — defers to the node-wide window
+// (internal/idle, disabled unless the panel configured one). A
+// variable only so tests can shrink the window.
+var udpAssociationIdleTimeout time.Duration
 
 func (h *socks5Handler) handleUDP(ctx context.Context, conn net.Conn, ro *xrecorder.HandlerRecorderObject, log logger.Logger) error {
 	log = log.WithFields(map[string]any{

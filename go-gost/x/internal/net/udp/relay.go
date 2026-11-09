@@ -12,21 +12,12 @@ import (
 
 	"github.com/go-gost/core/bypass"
 	"github.com/go-gost/core/logger"
+	"github.com/go-gost/x/internal/idle"
 	"github.com/go-gost/x/internal/util/eventlog"
 )
 
 const (
 	MaxMessageSize = math.MaxUint16
-
-	// defaultIdleTimeout bounds a UDP association that makes no
-	// progress in either direction. The value matches the FIX-1
-	// transport no-progress window (internal/net, 300s) so the
-	// whole forwarding stack applies one silence budget: the
-	// criterion is absence of progress, not connection age, so a
-	// slow trickle of datagrams keeps an association alive
-	// indefinitely while a peer whose kernel stays up but whose
-	// application died is reaped within one window.
-	defaultIdleTimeout = 300 * time.Second
 )
 
 // errIdleTimeout is returned by Relay.Run when the association is
@@ -92,8 +83,9 @@ type Relay struct {
 	bypassHits *eventlog.Counter
 	pinErrs    *eventlog.Counter
 
-	// idleTimeout is the no-progress window enforced by Run
-	// (F07). Zero means defaultIdleTimeout.
+	// idleTimeout is a per-relay override of the no-progress
+	// window enforced by Run (F07). Zero defers to the node-wide
+	// window (internal/idle), which is itself disabled by default.
 	idleTimeout time.Duration
 }
 
@@ -162,10 +154,11 @@ func (r *Relay) WithLogger(logger logger.Logger) *Relay {
 }
 
 // WithIdleTimeout overrides the no-progress window after which Run
-// tears the association down. A window <= 0 restores the default
-// (defaultIdleTimeout). Production handlers use the default; the
-// override exists for tests and for callers with a stricter local
-// policy.
+// tears the association down. A window of zero defers to the
+// node-wide window published in internal/idle (disabled unless the
+// panel configured one); a negative window pins the teardown off
+// for this relay. The override exists for tests and for callers
+// with a stricter local policy.
 func (r *Relay) WithIdleTimeout(d time.Duration) *Relay {
 	r.idleTimeout = d
 	return r
@@ -224,7 +217,7 @@ func isTimeout(err error) bool {
 func (r *Relay) readDatagram(src net.PacketConn, b []byte, prog *progressTracker, window time.Duration) (int, net.Addr, error) {
 	dl, canArm := src.(readDeadliner)
 	for {
-		if canArm {
+		if canArm && window > 0 {
 			_ = dl.SetReadDeadline(prog.deadline(window))
 		}
 		n, addr, err := src.ReadFrom(b)
@@ -232,7 +225,7 @@ func (r *Relay) readDatagram(src net.PacketConn, b []byte, prog *progressTracker
 			prog.touch()
 			return n, addr, nil
 		}
-		if isTimeout(err) && !prog.stalled(window) {
+		if isTimeout(err) && (window <= 0 || !prog.stalled(window)) {
 			continue
 		}
 		return 0, nil, err
@@ -247,10 +240,15 @@ func (r *Relay) Run(ctx context.Context) (err error) {
 		"udp relay: %d bypass pin failure(s), last: %s, %d total")
 	defer r.events.Flush()
 
-	window := r.idleTimeout
-	if window <= 0 {
-		window = defaultIdleTimeout
-	}
+	// The effective window: a per-relay override wins, zero defers
+	// to the node-wide panel setting (internal/idle), which is
+	// disabled by default — with no window in force Run keeps the
+	// pre-F07 unbounded behaviour and returns only on an endpoint
+	// error or close. Note the layers below the relay keep their
+	// own budgets: the UDP listener/bind session pool reaps a
+	// session silent in BOTH directions after its TTL (30s panel
+	// default) regardless of this window.
+	window := idle.Resolve(r.idleTimeout)
 
 	// F07: the relay itself bounds the association's lifetime.
 	// Previously Run returned only when an endpoint errored or was

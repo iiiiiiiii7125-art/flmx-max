@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-gost/core/common/bufpool"
 	"github.com/go-gost/core/logger"
+	"github.com/go-gost/x/internal/idle"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/util/eventlog"
 	"github.com/quic-go/quic-go"
@@ -30,15 +31,6 @@ const (
 	defaultBacklog        = 128
 	defaultReadBufferSize = 32 * 1024
 	defaultReadTimeout    = 10 * time.Second
-
-	// defaultConnTTL bounds how long an authorized connection may
-	// sit in the server's table without any push or pull activity
-	// before it is reaped (F02). The value matches the FIX-1
-	// family no-progress window (300s); a live pht client issues a
-	// pull at least once per readTimeout (10s), so the margin is
-	// wide, while an authorize-then-abandon client is fully
-	// reaped within one window.
-	defaultConnTTL = 300 * time.Second
 )
 
 type serverOptions struct {
@@ -317,13 +309,18 @@ func (s *Server) Close() error {
 	}
 }
 
-// connTTL resolves the configured entry TTL, applying the
-// default when the option was left unset.
+// connTTL resolves the configured entry TTL (F02): an explicit
+// ConnTTLServerOption wins; otherwise the node-wide no-progress
+// window (internal/idle) applies. That window is disabled by
+// default, in which case authorized connections are not reaped
+// for inactivity at all (a live pht client issues a pull at least
+// once per readTimeout anyway; an authorize-then-abandon entry
+// then lives until the server closes, the pre-F02 behaviour).
 func (s *Server) connTTL() time.Duration {
 	if s.options.connTTL > 0 {
 		return s.options.connTTL
 	}
-	return defaultConnTTL
+	return idle.Get()
 }
 
 // startSweeper launches the stale-connection reaper: ONE
@@ -359,6 +356,9 @@ func (s *Server) startSweeper() {
 // just the table entry.
 func (s *Server) reapStaleConns() {
 	ttl := s.connTTL()
+	if ttl <= 0 {
+		return
+	}
 	s.conns.Range(func(key, value any) bool {
 		e := value.(*connEntry)
 		if e.idleFor() > ttl && s.conns.CompareAndDelete(key, value) {

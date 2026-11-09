@@ -10,37 +10,18 @@ import (
 	"time"
 
 	"github.com/go-gost/core/common/bufpool"
+	"github.com/go-gost/x/internal/idle"
 )
 
 var errHalfCloseNotSupported = errors.New("half-close not supported by the underlying connection")
 
 // ErrNoProgress is returned by Transport when a session is torn down
 // because neither direction moved a single byte for the whole idle
-// window (see defaultIdleTimeout).
+// window (see idle.Get).
 var ErrNoProgress = errors.New("transport: no progress in either direction within idle timeout")
 
 const (
 	bufferSize = 64 * 1024
-
-	// defaultIdleTimeout bounds how long a forwarded session may go
-	// without a single byte moving in either direction before
-	// Transport tears it down (FIX-1, audit A-01/B-01).
-	//
-	// Basis: kernel TCP keepalive already reaps a fully dead endpoint
-	// (peer kernel silent) in ~150s (live-measured 140-150s in audit
-	// C, 141-241s in C2 cell 4b), so 300s stays roughly 2x above that
-	// path and never pre-empts it; the window only fires where the
-	// kernel is blind — peer kernel alive but application dead, or a
-	// half-close stalled mid-chain. On the other side, production
-	// accumulation reached OOM over hours, so capping a dead
-	// session's residency at ~5 minutes bounds resident dead
-	// sessions to arrival-rate x 300s, orders of magnitude below the
-	// thousands observed on ECS1686. The value is an internal
-	// constant of the forwarding plane: the panel's connIdle setting
-	// is a per-inbound Xray-kernel policy that is never plumbed into
-	// gost forwarding services (and carries its own 0/-1 user
-	// semantics), so it is deliberately not reused here.
-	defaultIdleTimeout = 300 * time.Second
 )
 
 type closeWriter interface {
@@ -87,8 +68,14 @@ func (a *sessionActivity) deadline() time.Time {
 }
 
 // stalled reports whether no byte has moved in either direction for
-// the full timeout window.
+// the full timeout window. A non-positive window disables the
+// teardown (the 2.1.2 default): stalled is then never true, so a
+// deadline wake — only possible from a deadline armed elsewhere —
+// always resumes instead of tearing down.
 func (a *sessionActivity) stalled(now time.Time) bool {
+	if a.timeout <= 0 {
+		return false
+	}
 	return now.Sub(time.Unix(0, a.last.Load())) >= a.timeout
 }
 
@@ -116,22 +103,27 @@ func (a *sessionActivity) teardown(rw1, rw2 io.ReadWriter) {
 // deferred closes then discarded whatever the reverse direction still
 // had in flight: a half-closing client lost the tail of the response.
 //
-// No-progress bound (FIX-1): a byte moving in either direction counts
-// as progress and keeps the session alive; if neither direction moves
-// a byte for defaultIdleTimeout, both endpoints are closed and
-// ErrNoProgress is returned. This covers the two stall shapes the old
-// "ends by the peer's own close" bound never reaped: a peer whose
-// kernel still answers keepalive while its application is dead, and
-// a half-close that stalls the reverse direction mid-chain (the
-// surviving copy goroutine parked on Read forever, pinning the
-// FIN-WAIT-2 socket). Endpoints that expose read/write deadlines get
-// a rolling deadline armed at last-progress + timeout — no extra
-// timer goroutine per session; endpoints without deadline support
-// keep the legacy behaviour unless the sibling direction's teardown
-// closes them. Deadlines armed by Transport are cleared again before
-// it returns.
+// No-progress bound (FIX-1, reworked 2.1.2): a byte moving in either
+// direction counts as progress and keeps the session alive; if
+// neither direction moves a byte for the configured window, both
+// endpoints are closed and ErrNoProgress is returned. The window is
+// the node-level panel setting published via internal/idle (service
+// metadata "idleTimeout") and is DISABLED by default: with no
+// window configured, no deadline is ever armed and Transport keeps
+// the pre-FIX-1 unbounded behaviour. The bound exists for the two
+// stall shapes the old "ends by the peer's own close" bound never
+// reaped: a peer whose kernel still answers keepalive while its
+// application is dead, and a half-close that stalls the reverse
+// direction mid-chain (the surviving copy goroutine parked on Read
+// forever, pinning the FIN-WAIT-2 socket) — a node operator opts
+// into reaping those by setting the window. Endpoints that expose
+// read/write deadlines get a rolling deadline armed at
+// last-progress + timeout — no extra timer goroutine per session;
+// endpoints without deadline support keep the legacy behaviour
+// unless the sibling direction's teardown closes them. Deadlines
+// armed by Transport are cleared again before it returns.
 func Transport(rw1, rw2 io.ReadWriter) error {
-	return transport(rw1, rw2, defaultIdleTimeout)
+	return transport(rw1, rw2, idle.Get())
 }
 
 func transport(rw1, rw2 io.ReadWriter, idleTimeout time.Duration) error {
