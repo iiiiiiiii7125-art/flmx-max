@@ -1486,7 +1486,10 @@ export interface NodeTuneFaces {
   nic: boolean;
 }
 /** 调优状态（agent TuneStatus / Tune 回包，面板原样透传）：
- * 四面布尔 + 当前拥塞算法 / 默认队列算法概要。 */
+ * 四面布尔 + 当前拥塞算法 / 默认队列算法概要。消费侧须先经
+ * normalizeNodeTuneStatus（api/node-tune-status）归一：2.1.0
+ * agent 的回包是扁平形状（ipv4Priority / congestionControl /
+ * defaultQdisc），不归一会被误判为旧 agent。 */
 export interface NodeTuneStatus {
   faces: NodeTuneFaces;
   /** 当前拥塞控制算法（如 "bbr" / "cubic"）。 */
