@@ -350,6 +350,7 @@ case "$*" in
   "exec"*) exit 0 ;;
   "inspect"*)
     case "$*" in
+      *"Config.Image"*) echo "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:1.9.8" ;;
       *"/var/lib/postgresql/data"*) echo "` + actualPGVolume + `" ;;
       *) echo "sqlite_data" ;;
     esac

@@ -455,7 +455,12 @@ case "$*" in
     esac
     exit 0 ;;
   "exec"*) exit 0 ;;
-  "inspect"*) echo "` + actualVolume + `" ;;
+  "inspect"*)
+    case "$*" in
+      *"Config.Image"*) echo "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:1.9.8" ;;
+      *) echo "` + actualVolume + `" ;;
+    esac
+    exit 0 ;;
 esac
 exit 0
 `

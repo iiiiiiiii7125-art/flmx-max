@@ -396,17 +396,58 @@ func newSystemUpgradeExecutor() *systemUpgradeExecutor {
 }
 
 func currentPanelVersion() string {
-	// 改名过渡：新键 FLMX_VERSION 优先、旧键 FLUX_VERSION 回退。
-	// 升级写面双写两键同值（见 updateEnvVersion），两键长期并存，
-	// 读面恒以新键优先、旧键只作存量回退。
+	// 改名收官（S1-F02）：FLUX_VERSION 回退读已按 2026-11-05
+	// 「过渡兼容到期直接退场」裁定清除——双读过渡自 2.0.0 终结，
+	// 本函数只认现行键 FLMX_VERSION。写面双写（updateEnvVersion）
+	// 与脚本面同口径另行对齐，不再作为读面回退的理由。
 	version := strings.TrimSpace(os.Getenv("FLMX_VERSION"))
-	if version == "" {
-		version = strings.TrimSpace(os.Getenv("FLUX_VERSION"))
-	}
 	if version == "" {
 		return "dev"
 	}
 	return version
+}
+
+// deployedPanelVersion 实读当前后端容器的镜像 tag 作为部署版本
+// （C4-G1，与脚本面 get_deployed_panel_version 同口径）：.env 的
+// 版本键是「打算跑的版本」，helper 启动前即被改写为目标版本，
+// 不能证明正在跑的镜像；docker inspect 的 Config.Image tag 才是
+// 落地实读。取不到（无 docker 通道、容器不在、无 tag 等）返回
+// 空串，调用方回退 currentPanelVersion 的 .env 口径（与脚本面
+// 调用方回退口径一致）。
+// panelImageTag 从镜像引用剥出 tag：先剥 @digest，再取末段
+// 冒号后内容；引用无 tag、或剩余串仍含 "/"（冒号属 registry
+// 端口段、引用其实无 tag）时返回空串表示取不到。
+func panelImageTag(image string) string {
+	image = strings.TrimSpace(image)
+	image = strings.SplitN(image, "@", 2)[0] // 去 digest
+	idx := strings.LastIndex(image, ":")
+	if idx < 0 {
+		return ""
+	}
+	tag := image[idx+1:]
+	if tag == "" || strings.Contains(tag, "/") {
+		return ""
+	}
+	return tag
+}
+
+func (e *systemUpgradeExecutor) deployedPanelVersion(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.Config.Image}}", e.backendContainer).Output()
+	if err != nil {
+		return ""
+	}
+	return panelImageTag(string(out))
+}
+
+// panelVersionForDisplay 是版本读面的统一入口：实读部署 tag
+// 优先、.env 回退（脚本面 get_deployed_panel_version 调用方同
+// 口径），保证「当前版本/是否有更新」的呈现绑定落地实读而非
+// 预先改写的 .env（C4-G1）。
+func (e *systemUpgradeExecutor) panelVersionForDisplay(ctx context.Context) string {
+	if deployed := e.deployedPanelVersion(ctx); deployed != "" {
+		return deployed
+	}
+	return currentPanelVersion()
 }
 
 // parseVersionParts 把版本号解析成数字段序列（严格语义，供 compareVersions）。
@@ -694,7 +735,8 @@ rollback() {
     return 0
   fi
   log "用恢复后的配置重建旧容器..."
-  if docker compose up -d --force-recreate --remove-orphans $UPGRADE_SERVICES >> "$LOGFILE" 2>&1 && wait_backend_healthy; then
+  reconcile_network_label
+  if docker compose up -d --force-recreate --remove-orphans $UPGRADE_SERVICES >> "$LOGFILE" 2>&1 && wait_backend_healthy && wait_frontend_healthy; then
     write_status "false" "rolled_back"
     log "回滚完成：旧容器已按恢复后的配置重建并通过健康检查（.bak 保留）"
   else
@@ -738,6 +780,124 @@ wait_backend_healthy() {
   done
   log "错误: 后端健康检查超时（5 分钟内未稳定）"
   return 1
+}
+
+# 前端健康校验（C4-中·前端健康）：UPGRADE_SERVICES 含 frontend 且
+# pull/up 覆盖它，此前成功判据只有后端——前端重建失败（镜像坏、
+# nginx 起不来）仍报 success。此处与后端同型：连续 30s 内 compose ps
+# 状态为 running 且进程探针（http://127.0.0.1/，与镜像 healthcheck
+# 同一锚点，见 F-124 的 127.0.0.1 口径）通过，才算前端健康。compose
+# 文件未定义 frontend 服务时跳过并点名。
+wait_frontend_healthy() {
+  if ! docker compose config --services 2>/dev/null | grep -qx frontend; then
+    log "compose 未定义 frontend 服务，跳过前端健康检查"
+    return 0
+  fi
+  health_deadline=$(( $(date +%s) + 300 ))
+  stable_since=0
+  while [ "$(date +%s)" -lt "$health_deadline" ]; do
+    state=$(docker compose ps frontend --format '{{.State}}' 2>/dev/null | head -n 1)
+    if [ "$state" = "running" ]; then
+      container=$(docker compose ps frontend --format '{{.Name}}' 2>/dev/null | head -n 1)
+      probe_ok=1
+      if [ -n "$container" ]; then
+        if docker exec "$container" wget --no-verbose --tries=1 --spider http://127.0.0.1/ >/dev/null 2>&1; then
+          probe_ok=0
+        fi
+      fi
+      if [ "$probe_ok" -eq 0 ]; then
+        if [ "$stable_since" -eq 0 ]; then
+          stable_since=$(date +%s)
+        fi
+        if [ $(( $(date +%s) - stable_since )) -ge 30 ]; then
+          log "新前端健康检查通过（持续 running 且进程探针成功）"
+          return 0
+        fi
+      else
+        stable_since=0
+      fi
+    else
+      stable_since=0
+    fi
+    sleep 5
+  done
+  log "错误: 前端健康检查超时（5 分钟内未稳定）"
+  return 1
+}
+
+# 落地版本实读校验（C4-G1）：.env 的版本键在 helper 启动前已被面板
+# 改写为目标版本，健康通过只证明新进程能跑、不证明跑的是目标版本
+# 镜像（同 tag 旧镜像命中、拉取缓存旧 digest 时后端照样健康启动）。
+# 此处与脚本面 get_deployed_panel_version 同口径：实读新后端容器
+# Config.Image 的 tag 与目标版本比对，不一致或取不到即判失败走回
+# 滚，绝不以 success 收场。
+verify_landed_version() {
+  target="${FLMX_UPGRADE_VERSION:-}"
+  if [ -z "$target" ]; then
+    log "错误: 目标版本为空，无法实读校验落地版本"
+    return 1
+  fi
+  landed_backend=$(docker compose ps backend --format '{{.Name}}' 2>/dev/null | head -n 1 || true)
+  landed_image=""
+  if [ -n "$landed_backend" ]; then
+    landed_image=$(docker inspect -f '{{.Config.Image}}' "$landed_backend" 2>/dev/null || true)
+  fi
+  landed_image="${landed_image%%@*}"   # 去 digest
+  landed_tag="${landed_image##*:}"     # 去 registry/repo 前缀，只留 tag
+  if [ -z "$landed_image" ] || [ -z "$landed_tag" ] || [ "$landed_tag" = "$landed_image" ]; then
+    log "错误: 无法实读新后端镜像 tag（镜像引用「${landed_image:-（空）}」），不能证明落地版本为 $target"
+    return 1
+  fi
+  case "$landed_tag" in
+    */*)
+      log "错误: 新后端镜像 tag 解析异常（「$landed_tag」），不能证明落地版本为 $target"
+      return 1
+      ;;
+  esac
+  if [ "$landed_tag" != "$target" ]; then
+    log "错误: 新后端实际落地版本为「$landed_tag」，与目标版本「$target」不一致（疑似同 tag 旧镜像命中/拉取未更新），执行回滚"
+    return 1
+  fi
+  log "落地版本校验通过: 新后端镜像 tag 与目标版本一致（$landed_tag）"
+  return 0
+}
+
+# 存量网络标签对账（NETLABEL-211 的 Go 半）：存量网络对象的
+# com.docker.compose.network 标签与现行 docker-compose.yml 的网络
+# 键名不符时（旧时代以网络全名落标签等形态），compose up 会以标签
+# 不符拒绝，升级与回滚同撞此墙、后端晾停待人工删网。此处在 up 之
+# 前对账：标签不符时停齐本项目全部服务排空端点，删除该网络对象、
+# 由随后的 up 按现行文件重建（网络名取 .env 的 FLMX_NETWORK、缺省
+# flmx-network，与模板表达式同口径；子网由 compose 文件决定，不
+# 变）。删除失败（仍被项目外容器占用等）只点名告警并保留现状，
+# 后续 up 的成败仍按既有终态收口；日志给出字段级人工处置指引。
+# 标签相符或网络不存在时无操作。
+reconcile_network_label() {
+  net_name=$(grep -m1 '^FLMX_NETWORK=' .env 2>/dev/null | cut -d= -f2- | tr -d '" \r' || true)
+  if [ -z "$net_name" ]; then
+    net_name="flmx-network"
+  fi
+  net_key=$(awk '/^networks:/{f=1; next} f && /^  [A-Za-z0-9_.-]+:/{k=$1; sub(/:$/, "", k); print k; exit} f && /^[^ ]/{exit}' docker-compose.yml 2>/dev/null || true)
+  if [ -z "$net_key" ]; then
+    log "网络标签对账跳过: 无法从 docker-compose.yml 解析网络键名"
+    return 0
+  fi
+  if ! docker network inspect "$net_name" >/dev/null 2>&1; then
+    return 0
+  fi
+  labels_json=$(docker network inspect -f '{{json .Labels}}' "$net_name" 2>/dev/null || true)
+  actual_label=$(printf '%s' "$labels_json" | sed -n 's/.*"com\.docker\.compose\.network"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  if [ "$actual_label" = "$net_key" ]; then
+    return 0
+  fi
+  log "警告: 存量网络「$net_name」的 compose 标签为「${actual_label:-（无）}」，与现行 compose 网络键名「$net_key」不符，compose up 将拒绝使用该网络；正在停齐本项目服务并删除该网络对象以便重建（网络名/子网不变）"
+  docker compose stop >> "$LOGFILE" 2>&1 || true
+  if docker network rm "$net_name" >> "$LOGFILE" 2>&1; then
+    log "已删除标签不符的存量网络「$net_name」，将由 compose 按现行文件重建"
+  else
+    attached=$(docker network inspect -f '{{range $id, $c := .Containers}}{{$c.Name}} {{end}}' "$net_name" 2>/dev/null || true)
+    log "错误: 删除存量网络「$net_name」失败（可能仍被占用，在册容器：${attached:-（读不到）}）。请人工处理：docker network disconnect/rm 该网络后重试升级；其标签 com.docker.compose.network 应为「$net_key」"
+  fi
 }
 
 cd "$PANEL_DEPLOY_DIR"
@@ -841,6 +1001,7 @@ if [ -n "${FLMX_UPGRADE_SNAPSHOT_DIR:-}" ]; then
 fi
 
 log "重启服务（force-recreate）..."
+reconcile_network_label
 if ! docker compose up -d --force-recreate --remove-orphans $UPGRADE_SERVICES >> "$LOGFILE" 2>&1; then
   log "错误: 重启服务失败"
   rollback
@@ -849,6 +1010,12 @@ fi
 
 if ! wait_backend_healthy; then
   log "错误: 新后端未通过健康检查"
+  rollback
+  exit 1
+fi
+
+if ! wait_frontend_healthy; then
+  log "错误: 新前端未通过健康检查"
   rollback
   exit 1
 fi
@@ -896,6 +1063,15 @@ if [ -n "${FLMX_EXPECTED_POSTGRES_VOLUME:-}" ]; then
     exit 1
   fi
   log "PG 数据卷校验通过: /var/lib/postgresql/data 挂载卷与升级前一致（$actual_pg_volume）"
+fi
+
+# 落地版本实读校验（C4-G1）：健康与卷名校验只证明新后端能跑且挂对
+# 卷，不证明镜像就是目标版本。此处实读镜像 tag 与目标比对，不一致
+# 即回滚。置于改名收尾删旧 PG 容器之前：版本不符走回滚时旧容器与
+# 恢复的旧 .env 仍成对在场。
+if ! verify_landed_version; then
+  rollback
+  exit 1
 fi
 
 # 改名收尾（1.9.9，SQLite 模式，面板侧透传旧 PG 容器名时启用）：
@@ -2895,8 +3071,8 @@ func (h *Handler) systemVersion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channel := releaseChannelStable
-	current := currentPanelVersion()
 	exec := newSystemUpgradeExecutor()
+	current := exec.panelVersionForDisplay(r.Context())
 	capability := exec.capability(r.Context())
 	latest, err := h.resolveSystemUpgradeLatestReleaseByChannel(channel)
 	data := systemUpgradeVersionResponse(current, channel, latest, err, capability)
@@ -2924,8 +3100,8 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	channel := normalizeReleaseChannel(req.Channel)
-	current := currentPanelVersion()
 	exec := newSystemUpgradeExecutor()
+	current := exec.panelVersionForDisplay(r.Context())
 	capability := exec.capability(r.Context())
 
 	githubReleases, err := h.fetchSystemUpgradeReleases(50)
