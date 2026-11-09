@@ -672,6 +672,17 @@ func nodeIdleTimeoutFromReq(req map[string]interface{}) (seconds int, present bo
 	return seconds, true, nil
 }
 
+// normalizeNodeDisplayGroup 归一节点展示分组标签（纯展示功能，
+// 用户 2026-11-09 拍板）：去首尾空白后按列宽 varchar(100) 校验，
+// 与节点名称同口径；纯空白归为空（未分组）。
+func normalizeNodeDisplayGroup(raw string) (string, error) {
+	group := strings.TrimSpace(raw)
+	if len([]rune(group)) > 100 {
+		return "", fmt.Errorf("分组标签长度不能超过100个字符")
+	}
+	return group, nil
+}
+
 func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -731,6 +742,12 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if len([]rune(asString(req["interfaceName"]))) > 200 {
 		response.WriteJSON(w, response.ErrDefault("网卡名称长度不能超过200个字符"))
+		return
+	}
+	// 展示分组标签（纯展示）：落库前归一＋校验，坏值整单拒绝。
+	displayGroup, dgErr := normalizeNodeDisplayGroup(asString(req["displayGroup"]))
+	if dgErr != nil {
+		response.WriteJSON(w, response.ErrDefault(dgErr.Error()))
 		return
 	}
 	now := time.Now().UnixMilli()
@@ -819,6 +836,17 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		if err := h.repo.UpdateNodeIdleTimeoutSeconds(nodeID, idleTimeoutSeconds); err != nil {
 			// 同 persistNodeSSHConfig 的补偿口径：第二步失败不留
 			// 与请求不一致的半成品节点。
+			if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
+				log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
+			}
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+	}
+	// 展示分组标签随创建落库（空标签即列默认空串、无需写）。失败
+	// 与 SSH 配置同处置：补偿删除刚建节点，不留半成品。
+	if displayGroup != "" {
+		if err := h.repo.UpdateNodeDisplayGroup(nodeID, displayGroup); err != nil {
 			if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
 				log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
 			}
@@ -1028,6 +1056,17 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("网卡名称长度不能超过200个字符"))
 		return
 	}
+	// 展示分组标签（纯展示）：presence 口径——未传保持现值、显式
+	// 传空＝脱组回未分组；归一与校验同 nodeCreate，坏值整单拒绝。
+	var displayGroup *string
+	if _, ok := req["displayGroup"]; ok {
+		g, gErr := normalizeNodeDisplayGroup(asString(req["displayGroup"]))
+		if gErr != nil {
+			response.WriteJSON(w, response.ErrDefault(gErr.Error()))
+			return
+		}
+		displayGroup = &g
+	}
 	nodePort := currentNode.Port
 	if _, ok := req["port"]; ok {
 		nodePort = defaultString(asString(req["port"]), "1000-65535")
@@ -1134,6 +1173,14 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			log.Printf("node idle timeout updated node_id=%d seconds=%d operator_id=%d (runtime repush queued if online)",
 				id, idleTimeoutSeconds, idemUserID(r))
 			h.repushNodeRuntimeAfterSettingChange(id)
+		}
+	}
+	// 展示分组标签在主字段落库后单独落列（纯展示，不参与下方地
+	// 址变更重算面）。
+	if displayGroup != nil {
+		if err := h.repo.UpdateNodeDisplayGroup(id, *displayGroup); err != nil {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
 		}
 	}
 	if err := h.applyNodeSSHConfig(id, sshPlan, now); err != nil {

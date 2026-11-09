@@ -32,6 +32,11 @@ export interface NodeFormModalProps {
   protocolControlsReason: string;
   /** C3-02：该节点已钉入的 SSH 主机密钥指纹（""＝未钉入/新节点）。 */
   sshHostKeyFingerprint?: string;
+  /**
+   * 展示分组的可选项（v2：分组登记册∪在用标签）：分组字段是下拉，
+   * 只能从已有组里选或未分组——建组统一走节点页「新建分组」。
+   */
+  groupOptions?: string[];
   setDialogVisible: Dispatch<SetStateAction<boolean>>;
   setForm: Dispatch<SetStateAction<NodeForm>>;
   submitLoading: boolean;
@@ -47,6 +52,7 @@ export function NodeFormModal({
   protocolControlsDisabled,
   protocolControlsReason,
   sshHostKeyFingerprint,
+  groupOptions,
   setDialogVisible,
   setForm,
   submitLoading,
@@ -141,6 +147,28 @@ export function NodeFormModal({
                 setForm((prev) => ({ ...prev, remark: e.target.value }))
               }
             />
+
+            <Select
+              description="纯展示：节点页按分组分段排列，一个节点至多一个分组；新建分组请用节点页工具栏的「新建分组」"
+              label="分组"
+              placeholder="未分组"
+              selectedKeys={form.displayGroup ? [form.displayGroup] : []}
+              variant="bordered"
+              onSelectionChange={(keys) => {
+                const selected = Array.from(keys)[0] as string | undefined;
+
+                setForm((prev) => ({
+                  ...prev,
+                  displayGroup: selected || "",
+                }));
+              }}
+            >
+              {(groupOptions ?? []).map((label) => (
+                <SelectItem key={label} textValue={label}>
+                  {label}
+                </SelectItem>
+              ))}
+            </Select>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Select

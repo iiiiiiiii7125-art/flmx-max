@@ -548,6 +548,88 @@ func (r *Repository) UpdateNode(id int64, name, serverIP string, serverIPV4, ser
 		Updates(updates).Error
 }
 
+// UpdateNodeDisplayGroup 单独更新节点的展示分组标签（纯展示字
+// 段）：创建/编辑面按 presence 调用，独立成法避免为一个展示列改
+// CreateNode/UpdateNode 的长签名（其调用面含大量测试）。group 已
+// 由 handler 归一（trim＋长度校验），空串＝脱组回未分组。
+func (r *Repository) UpdateNodeDisplayGroup(id int64, group string) error {
+	_, err := r.SetNodeDisplayGroup(id, group)
+	return err
+}
+
+// SetNodeDisplayGroup 同 UpdateNodeDisplayGroup，但回带受影响行
+// 数：批量移入端点逐条聚合回执（M-0051 口径）靠行数区分「节点不
+// 存在」（0 行）与写库失败（err），不得把不存在的节点报成成功。
+func (r *Repository) SetNodeDisplayGroup(id int64, group string) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", id).
+		Update("display_group", group)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
+
+// RenameNodeDisplayGroup 分组改名级联：把全部成员节点的标签从
+// oldName 改为 newName，回带受影响行数（成员数）。两名均须已由
+// handler 归一校验；oldName 无成员时回 0 行、不报错（空组改名只
+// 动顺序名单，由 handler 侧处理）。
+func (r *Repository) RenameNodeDisplayGroup(oldName, newName string) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("display_group = ?", oldName).
+		Update("display_group", newName)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
+
+// ClearNodeDisplayGroup 删除分组的成员回落：把该组全部节点的标
+// 签清为空（未分组），回带受影响行数。
+func (r *Repository) ClearNodeDisplayGroup(group string) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("display_group = ?", group).
+		Update("display_group", "")
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
+
+// CountNodesByDisplayGroup 在用分组标签的成员计数（空标签不计）：
+// 分组管理面（重名判定/成员数展示）的权威读面。
+func (r *Repository) CountNodesByDisplayGroup() (map[string]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	type groupCount struct {
+		DisplayGroup string `gorm:"column:display_group"`
+		Count        int64  `gorm:"column:cnt"`
+	}
+	var rows []groupCount
+	if err := r.db.Model(&model.Node{}).
+		Select("display_group, COUNT(*) AS cnt").
+		Where("display_group <> ''").
+		Group("display_group").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.DisplayGroup] = row.Count
+	}
+	return out, nil
+}
+
 func defaultNodeForwardMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case "nftables":

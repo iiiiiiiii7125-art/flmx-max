@@ -7,6 +7,8 @@ export interface NodeApiItem {
   inx?: number;
   // 以下字段后端以 nullable* 下发：无值时为显式 null，不是键缺失（F-062）。
   remark?: string | null;
+  /** 展示分组标签（纯展示）：后端恒下发字符串，空＝未分组。 */
+  displayGroup?: string;
   expiryTime?: number | null;
   renewalCycle?: "month" | "quarter" | "year" | "" | null;
   ip?: string;
@@ -338,6 +340,8 @@ export interface NodeMutationPayload {
   forwardMode?: "agent" | "nftables";
   sshConfig?: NodeSshConfigMutationPayload | null;
   remark?: string;
+  /** 展示分组标签（纯展示）：编辑面 presence 口径，未传保持现值、传空＝脱组。 */
+  displayGroup?: string;
   expiryTime?: number;
   renewalCycle?: "month" | "quarter" | "year" | "";
   serverIp?: string;

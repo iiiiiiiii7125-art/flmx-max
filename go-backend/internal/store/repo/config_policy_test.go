@@ -187,7 +187,7 @@ func TestConfigPolicyFullTableEnumeration(t *testing.T) {
 		"monitor_retention_days", "monitor_tunnel_quality_enabled",
 		"monitor_tunnel_quality_interval_sec", "notify_daily_hour",
 		"notify_enabled", "notify_events", "notify_latency_loss_pct",
-		"notify_latency_ms", "panel_domain",
+		"notify_latency_ms", "node_display_group_order", "panel_domain",
 		"service_monitor_checker_scan_interval_sec",
 		"service_monitor_default_interval_sec",
 		"service_monitor_default_timeout_sec",

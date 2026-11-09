@@ -366,6 +366,7 @@ func TestR10B6ConfigGetClassifiedKeysRegressionForNonAdmin(t *testing.T) {
 	// 补分类后）：普通用户读取必须逐字不变。
 	authenticatedKeys := []string{
 		"forward_compact_mode", "forward_group_order_map", "forward_group_collapsed_map",
+		"node_display_group_order",
 		"latency_targets",
 		"monitor_tunnel_quality_enabled", "monitor_tunnel_quality_interval_sec", "monitor_retention_days",
 		"captcha_enabled", "panel_domain", "ip",
