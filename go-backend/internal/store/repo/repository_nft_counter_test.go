@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"database/sql"
 	"math"
 	"path/filepath"
 	"testing"
@@ -239,6 +240,12 @@ func TestListNftablesNodesForCollectionReturnsActiveNftablesWithSSHOrdered(t *te
 	}, now); err != nil {
 		t.Fatalf("upsert ssh config 2: %v", err)
 	}
+	// DEFECT-NFT-COLLECT-01：节点 2 钉入指纹、节点 4 不钉——采集查询
+	// 必须把已钉入的指纹原样带回（漏投影时两者的指纹都为空、无法区分
+	// 「未钉入」与「投影丢失」，这正是原缺陷在存量测试下隐身的原因）。
+	if err := r.UpdateNodeSSHHostKeyFingerprint(2, "SHA256:node2-pinned-fingerprint", now); err != nil {
+		t.Fatalf("pin fingerprint node 2: %v", err)
+	}
 
 	nodes, err := r.ListNftablesNodesForCollection()
 	if err != nil {
@@ -253,8 +260,104 @@ func TestListNftablesNodesForCollectionReturnsActiveNftablesWithSSHOrdered(t *te
 	if nodes[0].Config.NodeID != 2 || nodes[0].Config.Host != "203.0.113.2" || nodes[0].Config.Username != "admin" {
 		t.Fatalf("unexpected first config: %+v", nodes[0].Config)
 	}
+	if nodes[0].Config.HostKeyFingerprint != "SHA256:node2-pinned-fingerprint" {
+		t.Fatalf("pinned fingerprint lost in collection projection: %+v", nodes[0].Config)
+	}
+	if nodes[0].Config.AuthType != "private_key" || nodes[0].Config.SudoMode != "sudo" {
+		t.Fatalf("unexpected first config auth/sudo: %+v", nodes[0].Config)
+	}
 	if nodes[1].Config.NodeID != 4 || nodes[1].Config.Port != 2222 || nodes[1].Config.Password.String != "secret-4" {
 		t.Fatalf("unexpected second config: %+v", nodes[1].Config)
+	}
+	if nodes[1].Config.HostKeyFingerprint != "" {
+		t.Fatalf("unpinned node must report empty fingerprint, got %q", nodes[1].Config.HostKeyFingerprint)
+	}
+}
+
+// TestListNftablesNodesForCollectionProjectsEverySSHConfigField 是
+// DEFECT-NFT-COLLECT-01 的字段级回归钉：种子配置行 13 个字段全部填
+// 互异非零值，采集查询返回的 Config 必须逐字段等值——投影/组装漏
+// 任一列（或列序错位串值）都会在此转红。原缺陷即漏投影
+// host_key_fingerprint 一列：采集器与 blocked-port sweep 每轮拿到
+// 空指纹、SSH runner fail-closed，nft 转发永不入账。
+func TestListNftablesNodesForCollectionProjectsEverySSHConfigField(t *testing.T) {
+	r, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer r.Close()
+
+	now := time.Now().UnixMilli()
+	seedCollectionNode(t, r, 7, "nftables", 1, now)
+
+	want := model.NodeSSHConfig{
+		ID:                 77,
+		NodeID:             7,
+		Host:               "192.0.2.77",
+		Port:               2207,
+		Username:           "collector-user",
+		AuthType:           "private_key",
+		Password:           sql.NullString{String: "pw-distinct", Valid: true},
+		PrivateKey:         sql.NullString{String: "pk-distinct", Valid: true},
+		Passphrase:         sql.NullString{String: "pp-distinct", Valid: true},
+		SudoMode:           "sudo",
+		HostKeyFingerprint: "SHA256:fp-distinct-0123456789",
+		CreatedTime:        1700000000123,
+		UpdatedTime:        1700000000456,
+	}
+	if err := r.DB().Create(&want).Error; err != nil {
+		t.Fatalf("seed ssh config: %v", err)
+	}
+
+	nodes, err := r.ListNftablesNodesForCollection()
+	if err != nil {
+		t.Fatalf("ListNftablesNodesForCollection: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 collection node, got %d: %+v", len(nodes), nodes)
+	}
+	if nodes[0].NodeID != want.NodeID {
+		t.Fatalf("wrapper node id: got %d want %d", nodes[0].NodeID, want.NodeID)
+	}
+	got := nodes[0].Config
+	if got.ID != want.ID {
+		t.Errorf("ID: got %d want %d", got.ID, want.ID)
+	}
+	if got.NodeID != want.NodeID {
+		t.Errorf("NodeID: got %d want %d", got.NodeID, want.NodeID)
+	}
+	if got.Host != want.Host {
+		t.Errorf("Host: got %q want %q", got.Host, want.Host)
+	}
+	if got.Port != want.Port {
+		t.Errorf("Port: got %d want %d", got.Port, want.Port)
+	}
+	if got.Username != want.Username {
+		t.Errorf("Username: got %q want %q", got.Username, want.Username)
+	}
+	if got.AuthType != want.AuthType {
+		t.Errorf("AuthType: got %q want %q", got.AuthType, want.AuthType)
+	}
+	if got.Password != want.Password {
+		t.Errorf("Password: got %+v want %+v", got.Password, want.Password)
+	}
+	if got.PrivateKey != want.PrivateKey {
+		t.Errorf("PrivateKey: got %+v want %+v", got.PrivateKey, want.PrivateKey)
+	}
+	if got.Passphrase != want.Passphrase {
+		t.Errorf("Passphrase: got %+v want %+v", got.Passphrase, want.Passphrase)
+	}
+	if got.SudoMode != want.SudoMode {
+		t.Errorf("SudoMode: got %q want %q", got.SudoMode, want.SudoMode)
+	}
+	if got.HostKeyFingerprint != want.HostKeyFingerprint {
+		t.Errorf("HostKeyFingerprint: got %q want %q", got.HostKeyFingerprint, want.HostKeyFingerprint)
+	}
+	if got.CreatedTime != want.CreatedTime {
+		t.Errorf("CreatedTime: got %d want %d", got.CreatedTime, want.CreatedTime)
+	}
+	if got.UpdatedTime != want.UpdatedTime {
+		t.Errorf("UpdatedTime: got %d want %d", got.UpdatedTime, want.UpdatedTime)
 	}
 }
 
