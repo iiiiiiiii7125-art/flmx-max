@@ -99,9 +99,19 @@ type ApplyRequest struct {
 	// geosite.dat / geoip.dat).
 	GeoData []GeoFile `json:"geoData,omitempty"`
 	// ConnlogEntries are the inbounds marked as direct connection-log
-	// entries (see ConnlogEntry). The panel always sends the key —
-	// an empty list clears any previously applied marks.
+	// entries (see ConnlogEntry): the panel's topology qualification
+	// for kernel collection. The panel always sends the key — an
+	// empty list clears any previously applied marks.
 	ConnlogEntries []ConnlogEntry `json:"connlogEntries,omitempty"`
+	// ConnLogInbounds is the per-inbound opt-in list for connection log
+	// collection (design §4.5): the ids of the direct inbounds rendered
+	// into this kernel whose connection events the agent collects from
+	// the kernel's logs. The panel (unit U5) fills it; empty means
+	// collection is off for this kernel. It is a rendering-level fact,
+	// so it rides the Apply request rather than a side channel.
+	// Collection is effective only for ids present in BOTH lists
+	// (opt-in ∩ topology qualification), resolved in applyConnLog.
+	ConnLogInbounds []int64 `json:"connLogInbounds,omitempty"`
 }
 
 type State struct {
@@ -235,6 +245,11 @@ func (r *ApplyRequest) validate() error {
 	for _, id := range r.UserMarks {
 		if id <= 0 || id > userMarkMax {
 			return fmt.Errorf("非法用户标记: %d", id)
+		}
+	}
+	for _, id := range r.ConnLogInbounds {
+		if id <= 0 {
+			return fmt.Errorf("非法连接日志入站: %d", id)
 		}
 	}
 	return r.validatePorts()

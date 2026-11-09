@@ -69,6 +69,19 @@ type process struct {
 	// process comes back on its own once the gate passes again.
 	relaunchGuard func() error
 
+	// lineTap, when set, sees every raw output line (no prefix)
+	// before the log ring does; returning true diverts the line
+	// out of the ring. The connection log parser uses it to lift
+	// per-connection event lines out of the troubleshooting tail
+	// (design §4.5). It must be fast and never block: it runs on
+	// the process's scan goroutine.
+	lineTap func(line string, at time.Time) bool
+	// launchHook/exitHook bracket each process run; the
+	// connection log collector uses them as generation markers
+	// (a kernel's connection ids only live within one launch).
+	launchHook func(pid int, at time.Time)
+	exitHook   func(at time.Time)
+
 	mu        sync.Mutex
 	cmd       *exec.Cmd
 	running   bool
@@ -175,6 +188,9 @@ func (p *process) runOnce() error {
 	p.pid = cmd.Process.Pid
 	p.startedAt = time.Now().UnixMilli()
 	p.mu.Unlock()
+	if p.launchHook != nil {
+		p.launchHook(p.pid, time.Now())
+	}
 
 	// D2-05: a stop requested while Start was in flight fired
 	// its signals into a nil cmd and missed. Re-check now that
@@ -192,6 +208,9 @@ func (p *process) runOnce() error {
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
 		for sc.Scan() {
 			if line := strings.TrimRight(sc.Text(), "\r"); line != "" {
+				if p.lineTap != nil && p.lineTap(line, time.Now()) {
+					continue
+				}
 				p.logs.add(p.prefix + line)
 			}
 		}
@@ -202,6 +221,11 @@ func (p *process) runOnce() error {
 	pw.Close()
 	<-scanDone
 	pr.Close()
+	if p.exitHook != nil {
+		// The scan goroutine has drained by now, so every line
+		// of this generation has been fed before the sweep.
+		p.exitHook(time.Now())
+	}
 
 	p.mu.Lock()
 	p.running = false
