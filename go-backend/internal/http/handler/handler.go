@@ -345,6 +345,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/node/update-order", h.nodeUpdateOrder)
 	mux.HandleFunc("/api/v1/node/dismiss-expiry-reminder", h.nodeDismissExpiryReminder)
 	mux.HandleFunc("/api/v1/node/batch-delete", h.nodeBatchDelete)
+	// 节点展示分组 v2（建组/改名/删组/批量移入，见 node_display_group.go）。
+	mux.HandleFunc("/api/v1/node/batch-set-group", h.nodeBatchSetGroup)
+	mux.HandleFunc("/api/v1/node/group/create", h.nodeGroupCreate)
+	mux.HandleFunc("/api/v1/node/group/rename", h.nodeGroupRename)
+	mux.HandleFunc("/api/v1/node/group/delete", h.nodeGroupDelete)
 	mux.HandleFunc("/api/v1/node/check-status", h.nodeCheckStatus)
 	mux.HandleFunc("/api/v1/node/upgrade", h.nodeUpgrade)
 	mux.HandleFunc("/api/v1/node/batch-upgrade", h.nodeBatchUpgrade)
