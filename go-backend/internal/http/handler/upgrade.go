@@ -1203,6 +1203,36 @@ func (h *Handler) retryNodeLocalRuntime(nodeID int64) {
 	}
 }
 
+// repushNodeRuntimeAfterSettingChange re-applies a node's generated
+// runtime after a panel-side setting that rides inside the generated
+// service configs changes value — currently the per-node idle
+// teardown window (node.idle_timeout_seconds, injected as service
+// metadata "idleTimeout" by buildForwardServiceConfigs /
+// buildTunnelChainServiceConfig). F-212-A: node/update used to
+// persist such a change without any re-push, so a running agent's
+// gost.json kept the old services and the knob never took effect
+// until some unrelated redeploy. This funnels into the same guarded
+// redeploy the reconnect path uses (retryNodeLocalRuntime →
+// redeployLocalNodeRuntime), whose generation re-reads the new DB
+// value into every service it rebuilds. nftables nodes have no gost
+// runtime to re-push (the field is inert there); offline nodes are
+// skipped — onNodeOnline redeploys from the DB when they reconnect.
+// Best effort: the redeploy machinery retries failures itself, and
+// the setting is already persisted when this is called.
+func (h *Handler) repushNodeRuntimeAfterSettingChange(nodeID int64) {
+	if h == nil || h.repo == nil || h.wsServer == nil {
+		return
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return
+	}
+	if defaultNodeForwardMode(node.ForwardMode) == "nftables" || node.Status != 1 {
+		return
+	}
+	go h.retryNodeLocalRuntime(nodeID)
+}
+
 func (h *Handler) startNodeOnlineRedeploy(nodeID int64, now time.Time) bool {
 	if h == nil || nodeID <= 0 {
 		return false

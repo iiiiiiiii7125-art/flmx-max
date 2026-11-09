@@ -1126,6 +1126,15 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
+		if idleTimeoutSeconds != currentNode.IdleTimeoutSeconds {
+			// F-212-A：该值随生成服务 metadata 下发，只落库不重推
+			// 则运行中 agent 的 gost.json 恒为旧值、旋钮永不生效。
+			// 值真变化时走重连同款整节点重推漏斗（离线节点跳过，
+			// 其重连时 onNodeOnline 按 DB 新值重布）。
+			log.Printf("node idle timeout updated node_id=%d seconds=%d operator_id=%d (runtime repush queued if online)",
+				id, idleTimeoutSeconds, idemUserID(r))
+			h.repushNodeRuntimeAfterSettingChange(id)
+		}
 	}
 	if err := h.applyNodeSSHConfig(id, sshPlan, now); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
