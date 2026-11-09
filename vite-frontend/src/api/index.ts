@@ -973,10 +973,10 @@ export const batchToggleInbounds = (ids: number[], enabled: boolean) =>
   );
 export interface SubPipeline {
   /**
-   * 中转范围三档：all = 全部端点（直连 + 所有中转）；
-   * direct = 只要直连；relay = 只要中转。
+   * 中转范围三档（后端 lines 键）：""
+   * = 全部端点（直连 + 所有中转）；direct = 只要直连；relay = 只要中转。
    */
-  relayScope: "all" | "direct" | "relay";
+  lines: "" | "direct" | "relay";
   /**
    * 订阅模板：按客户端槽位（clash / singbox / surge / stash /
    * shadowrocket）选模板 ID；选了模板的格式渲染进模板骨架。

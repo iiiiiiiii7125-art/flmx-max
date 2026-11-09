@@ -69,8 +69,8 @@ const MULTI_USER_PROTOCOLS = new Set([
 ]);
 
 const EMPTY_PIPELINE: SubPipeline = {
-  /** 中转范围三档：全部端点 / 只要直连 / 只要中转。 */
-  relayScope: "all",
+  /** 中转范围三档（后端 lines 键）："" = 全部端点 / direct = 只要直连 / relay = 只要中转。 */
+  lines: "",
   /** 订阅模板槽位 → 模板 ID；空 = 不用模板。 */
   templates: {},
 };
@@ -237,7 +237,10 @@ function draftFrom(s?: SubscriptionItem): Draft {
     options: {
       ...EMPTY_PIPELINE,
       ...s.options,
-      relayScope: s.options?.relayScope ?? "all",
+      lines:
+        s.options?.lines === "direct" || s.options?.lines === "relay"
+          ? s.options.lines
+          : "",
     },
     expireTime: s.expireTime,
     expire: toDateInput(s.expireTime),
@@ -525,12 +528,12 @@ function Editor({
 
         <Section
           collapsible
-          defaultOpen={o.relayScope !== "all"}
+          defaultOpen={o.lines !== ""}
           hint="全部＝直连和所有中转都包含；只要中转＝只保留经中转的线路；只要直连＝只保留直连线路"
           summary={
-            o.relayScope === "relay"
+            o.lines === "relay"
               ? "只要中转"
-              : o.relayScope === "direct"
+              : o.lines === "direct"
                 ? "只要直连"
                 : "全部端点"
           }
@@ -538,12 +541,12 @@ function Editor({
         >
           <Segmented
             options={[
-              ["all", "全部"],
+              ["", "全部"],
               ["relay", "只要中转"],
               ["direct", "只要直连"],
             ]}
-            value={o.relayScope}
-            onChange={(relayScope) => setOpts({ relayScope })}
+            value={o.lines}
+            onChange={(lines) => setOpts({ lines })}
           />
         </Section>
 
