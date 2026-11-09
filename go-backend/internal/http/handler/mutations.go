@@ -3289,6 +3289,8 @@ func (h *Handler) deleteForwardServicesOnNodeBatch(forward *forwardRecord, nodeI
 	// R19-X-03：服务已删后清该转发的 rule 级 climiter（与 controlForwardServices
 	// 的 DeleteService 分支同口径）。nft/realm 分支在上方已提前返回，不到这里。
 	h.deleteForwardConnLimiterOnNode(forward, nodeID)
+	// A1-02：同口径清该转发的流量 limiter（DeleteLimiters）。
+	h.deleteForwardTrafficLimitersOnNode(forward, nodeID)
 	return nil
 }
 
@@ -6242,12 +6244,25 @@ func (h *Handler) speedLimitDelete(w http.ResponseWriter, r *http.Request) {
 	// 删除前完成）。
 	affectedForwardIDs := h.speedLimitAffectedForwardIDs(id)
 
+	// A1-02：删除前快照引用转发的记录（IPSpeedID 归属在删除后即
+	// 不可考），供 resync 后按名补发 DeleteLimiters 清理节点侧条目。
+	affectedForwards := make([]*forwardRecord, 0, len(affectedForwardIDs))
+	for _, forwardID := range affectedForwardIDs {
+		if forward, err := h.getForwardRecord(forwardID); err == nil && forward != nil {
+			affectedForwards = append(affectedForwards, forward)
+		}
+	}
+
 	if err := h.repo.DeleteSpeedLimit(id); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 
 	warnings := h.resyncForwardsForSpeedLimit(id, affectedForwardIDs)
+
+	// A1-02：服务侧引用已由 resync 摘除后，删各受影响节点上的规则
+	// limiter 条目（规则总速条目＋以本规则作 IP 限速的转发的专属条目）。
+	h.deleteSpeedLimitLimitersOnNodes(id, affectedForwards)
 
 	writeSpeedLimitResyncReceipt(w, warnings)
 }
@@ -6309,6 +6324,57 @@ func (h *Handler) resyncForwardsForSpeedLimit(speedLimitID int64, forwardIDs []i
 		}
 	}
 	return warnings
+}
+
+// deleteSpeedLimitLimitersOnNodes 是 A1-02 的删规则清理：规则行已删、
+// 引用转发的服务已由 resyncForwardsForSpeedLimit 按新口径重下发（服务
+// 侧 limiter 引用摘除）后，尽力删除各受影响节点上的规则 limiter
+// 条目——规则总速条目（名＝规则 ID）发往每个受影响转发的全部节点；
+// 以本规则作 IP 限速的转发另删其专属条目 rule_traffic_limit_<id>。
+// 规则已无任何存续引用，删除无条件安全；逐节点失败只记日志（尽力
+// 而为纪律同 resync），离线节点留待重连后配置上报对账
+// （cleanNodeConfigs）兜底。同（节点， 名）只发一次。
+func (h *Handler) deleteSpeedLimitLimitersOnNodes(ruleID int64, forwards []*forwardRecord) {
+	if h == nil || ruleID <= 0 || len(forwards) == 0 {
+		return
+	}
+	ruleName := strconv.FormatInt(ruleID, 10)
+	sent := make(map[int64]map[string]struct{})
+	send := func(nodeID int64, name string) {
+		byName, ok := sent[nodeID]
+		if !ok {
+			byName = make(map[string]struct{})
+			sent[nodeID] = byName
+		}
+		if _, dup := byName[name]; dup {
+			return
+		}
+		byName[name] = struct{}{}
+		if _, err := h.sendNodeCommand(nodeID, "DeleteLimiters", map[string]interface{}{"limiter": name}, false, true); err != nil {
+			log.Printf("speed limit delete: limiter cleanup failed node_id=%d speed_limit_id=%d limiter=%s err=%v (continuing)", nodeID, ruleID, name, err)
+		}
+	}
+	for _, forward := range forwards {
+		if forward == nil {
+			continue
+		}
+		ports, err := h.listForwardPorts(forward.ID)
+		if err != nil {
+			log.Printf("speed limit delete: list forward ports failed speed_limit_id=%d forward_id=%d err=%v", ruleID, forward.ID, err)
+			continue
+		}
+		nodeSeen := make(map[int64]struct{})
+		for _, fp := range ports {
+			if _, ok := nodeSeen[fp.NodeID]; ok {
+				continue
+			}
+			nodeSeen[fp.NodeID] = struct{}{}
+			send(fp.NodeID, ruleName)
+			if forward.IPSpeedID.Valid && forward.IPSpeedID.Int64 == ruleID {
+				send(fp.NodeID, fmt.Sprintf("rule_traffic_limit_%d", forward.ID))
+			}
+		}
+	}
 }
 
 type tunnelRuntimeNode struct {
