@@ -62,17 +62,12 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 	return marshalYAML(yamlNode{{"proxies", proxies}})
 }
 
-// shadowrocketProxies renders Clash proxies for Shadowrocket. Names are
-// returned in the same order（供模板的 Shadowrocket 路径用）。
-func shadowrocketProxies(endpoints []Endpoint, opts SubOptions) ([]interface{}, []string) {
-	return shadowrocketProxiesTaken(endpoints, opts, nil)
-}
-
-// shadowrocketProxiesTaken is shadowrocketProxies with the names a
-// template already occupies in the output namespace. Callers render
-// into templates only after uniqueNamesExcept has kept node names off
-// the taken set, so no recheck happens here; the parameter stays for
-// the template call site's shape.
+// shadowrocketProxiesTaken renders Clash proxies for Shadowrocket.
+// Names are returned in the same order. The taken parameter carries
+// the names a template already occupies in the output namespace.
+// Callers render into templates only after uniqueNamesExcept has
+// kept node names off the taken set, so no recheck happens here; the
+// parameter stays for the template call site's shape.
 func shadowrocketProxiesTaken(endpoints []Endpoint, opts SubOptions, taken []string) ([]interface{}, []string) {
 	var out []yamlNode
 	for _, e := range endpoints {
@@ -487,9 +482,4 @@ func qxLine(p Proxy) (string, bool) {
 	}
 	tag := strings.NewReplacer(",", " ", "\n", " ").Replace(p.str("name"))
 	return kind + "=" + strings.Join(append(parts, "tag="+tag), ", "), true
-}
-
-// qxName 返回 Quantumult X 安全的节点名（供规则模式的 qxConfig 用）。
-func qxName(p Proxy) string {
-	return strings.NewReplacer(",", " ", "\n", " ").Replace(p.str("name"))
 }
