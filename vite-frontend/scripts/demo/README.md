@@ -41,3 +41,5 @@ node scripts/demo/check.mjs dist-demo   # CHROME=/path/to/chrome 指定浏览器
 node scripts/demo/check-shape-drift.mjs      # 声明形状：types.ts + api/index.ts 双源必填字段 × fixtures（R7X-007）
 node scripts/demo/check-fixtures-content.mjs # 内容非空：关键键清单逐条 data 非空（R7X-006，与 build_fixtures 内容闸同口径）+ 通用 code 闸：全册每条录制 code 须为 0（逐格白名单 13 格除外，R9 基建批）
 ```
+
+**节点展示分组合成面登记（feat/node-display-groups 批）**：节点页展示分组（纯展示标签＋手动段序）上线时录制册尚无该面，adapter 以合成面兜底（`src/demo/index.ts` 的 `demoGroupAnswer`，在录制回放之前处理）：① `node/list` 回放时给录制节点按种子表盖 `displayGroup`（三组：落地节点×2、中转节点×2、备用节点×1，新加坡一台未分组）；② `config/list` 与 `config/get` 对 `node_display_group_order` 键合成当前生效段序（种子序＝落地/中转/备用，与名序不同以便看出名单在起作用）；③ `config/update-single`、`config/update` 写该键与 `node/update` 携带 `displayGroup` 时落 **localStorage**（`flmx-demo-node-groups-v1`）——这是演示里唯一刷新不丢的写面，理由：该功能本体即纯展示状态、演示访客正是来试它的，通用「不会保存修改」提示对这一个字段不适用（其余字段写面口径不变）。**保真边界**：状态仅存本浏览器；录制册 fixtures 一字不改（录制源头唯一纪律不破）；演示里新建的节点仍不进录制列表（演示全局写边界），分组只能在录制节点上试。日后按正道重录演示数据时，种子标签与段序应改由种子面板产出、本合成面同步下线，并在此销账。
