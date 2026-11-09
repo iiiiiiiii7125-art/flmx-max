@@ -148,6 +148,16 @@ wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest
 - 若面板未显示在线，看 agent 的 WebSocket 连接日志（地址 scheme 是否与面板对外方式一致、是否被 308/握手拒绝等都会写在日志里），再对照下一节排查：systemd 节点执行 `journalctl -u flmx_agent -n 100`；Alpine/OpenRC 节点没有 journald，日志在文件 `/var/log/flmx_agent.log`（错误日志 `/var/log/flmx_agent.err.log`），用 `tail -n 100 /var/log/flmx_agent.log` 查看。
 - 改名前安装的节点在迁移前，服务名、安装目录与日志文件仍是旧名（`flux_agent`、`/etc/flux_agent`、`/var/log/flux_agent.log`），上述命令把名字换成旧名即可；迁移只在节点机上重新执行安装命令（或脚本更新）时发生，完成后统一为新名——面板内的节点升级只换二进制、不迁布局，不做迁移也不影响使用，旧名在过渡期内仍被脚本与面板识别。
 
+### 小内存机自动建 swap（装机防线）
+
+节点安装/更新脚本带一条小内存防线（新装与脚本更新两条路径都会执行）：
+
+- **触发条件**：脚本实读 `/proc/meminfo`，仅当整机内存 **≤512MiB 且当前完全没有 swap**（SwapTotal=0）时才动手；内存大于 512MiB、或已有任意 swap（含 zram/分区）时不动，只输出现状。
+- **动作**：自动建 **1G** `/swapfile` 并启用，同时写入 `/etc/fstab` 持久化（重启不丢）；重复执行幂等（已建形态二跑零改动、缺 fstab 行时只补行）。任一步失败会回滚半成品并明示「swap 未建、OOM 风险在」，但不中止装机流程。
+- **退出开关**：不想自动建时，在运行脚本前设置环境变量 `FLMX_SKIP_SWAP=1`（大小写不敏感）跳过本步，脚本会明示 OOM 风险自担。
+- **完成后自检**：`free -h; swapon --show` ——Swap 一行应显示约 1G 且 `swapon --show` 里有 `/swapfile`。
+- 背景：无 swap 的 ≤512MiB 小机上，Agent 长活驻留内存涨满后会被内核 OOM 反复杀死重启；这 1G swap 是装机即兜底。手动装机后想补建，重新跑一次安装脚本即可（幂等）。
+
 ### 节点机上已有其他面板的 agent 时（归属守卫）
 
 脚本形态 agent 与旧版/同类面板的 agent 共用同一个安装槽：现行槽为目录 `/etc/flmx_agent`、服务 `flmx_agent`；改名前的旧槽（目录 `/etc/flux_agent`、服务 `flux_agent`）在过渡期内仍被脚本识别——机器上已有旧槽 agent 时同样先做**归属判定**，判定为本面板的在本面板安装命令（或脚本更新）执行时迁移到新槽，他人面板的照样不改动。往一台已经装有其他面板 agent 的节点机上执行本面板的安装命令时，脚本先做归属判定，判定不过不会改动现有 agent 的任何文件：
