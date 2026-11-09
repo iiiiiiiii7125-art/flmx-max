@@ -652,6 +652,11 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.markNodePendingUpgradeRedeploy(req.ID)
+	// A4-V-06：落待核验记录——重连自报将由 onNodeOnline 与本目
+	// 标比对，窗口内未命中由后台扫描置 failed 并告警（见
+	// upgrade_verify.go）。回执形状不变（M-0051）。
+	expectedSHA, _ := upgradeData["expectedSha256"].(string)
+	h.recordNodeUpgradeVerification(req.ID, upgradeVerifyKindUpgrade, version, expectedSHA)
 
 	response.WriteJSON(w, response.OK(upgradeReceiptData(version, result)))
 }
@@ -817,6 +822,9 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.markNodePendingUpgradeRedeploy(nodeID)
+			// A4-V-06：与单节点升级同口径落待核验记录。
+			expectedSHA, _ := data["expectedSha256"].(string)
+			h.recordNodeUpgradeVerification(nodeID, upgradeVerifyKindUpgrade, version, expectedSHA)
 			results[index] = upgradeResult{ID: nodeID, Success: true, Message: result.Message}
 		}(i, id)
 	}
@@ -928,6 +936,12 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 	// runtime is restored immediately instead of waiting out the
 	// redeploy cooldown.
 	h.markNodePendingUpgradeRedeploy(req.ID)
+	// A4-V-06：回退同口径核验，目标 = agent 预检实测的备份版本
+	// （result.Data 的 toVersion）。老 agent 无配对记录时不报目
+	// 标——无目标可比对，不落记录（回执已明示未经校验）。
+	if toVersion, _ := result.Data["toVersion"].(string); strings.TrimSpace(toVersion) != "" {
+		h.recordNodeUpgradeVerification(req.ID, upgradeVerifyKindRollback, toVersion, "")
+	}
 
 	response.WriteJSON(w, response.OK(rollbackReceiptData(result)))
 }
@@ -1082,6 +1096,10 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	if h == nil || h.repo == nil || h.wsServer == nil {
 		return
 	}
+	// A4-V-06：自报版本刚由 handleNode 落库，第一时间做升级落
+	// 地对账（先于下方各重连动作：核验只读记录与版本，不依赖
+	// 节点启用状态，禁用节点的回连同样能证明落地）。
+	h.verifyNodeUpgradeLanding(nodeID)
 	h.notifyNodeOnline(nodeID)
 	if node, err := h.getNodeRecord(nodeID); err == nil && (node == nil || node.Status != 1) {
 		return // The next connection will resume any pending reconciliation.

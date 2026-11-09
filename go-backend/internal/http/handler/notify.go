@@ -24,6 +24,8 @@ import (
 // Notification events. An empty notify_events config enables all of them.
 const (
 	notifyEventNodeOffline = "node_offline"
+	// A4-V-06：升级/回退下发后在核验窗口内未回连到目标版本。
+	notifyEventNodeUpgradeFailed = "node_upgrade_failed"
 	notifyEventInboundDown = "inbound_down"
 	notifyEventKernelError = "kernel_error"
 	notifyEventNodeExpiry  = "node_expiry"

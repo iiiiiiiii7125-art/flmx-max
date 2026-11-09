@@ -72,6 +72,10 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runNodeStatusReconcileLoop(ctx)
 	h.jobsWG.Add(1)
 	go h.runNotifyLoop(ctx)
+	// A4-V-06：升级落地核验的截止扫描（启动首扫接管面板重启前
+	// 的待核验记录）。
+	h.jobsWG.Add(1)
+	go h.runNodeUpgradeVerifyLoop(ctx)
 	h.jobsWG.Add(1)
 	go h.runSubscriptionLoop(ctx)
 	h.jobsWG.Add(1)

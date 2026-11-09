@@ -403,6 +403,26 @@ const NodeCardContent = memo(function NodeCardContent({
                   {node.version || "未知"}
                 </span>
               </div>
+              {node.upgradeVerification?.status === "failed" && (
+                <div className="mt-1 text-xs font-semibold text-danger-700">
+                  {node.upgradeVerification.kind === "rollback"
+                    ? "回退未落地"
+                    : "升级未落地"}
+                  ：期望 {node.upgradeVerification.targetVersion}
+                  {node.upgradeVerification.observedVersion
+                    ? `，实际 ${node.upgradeVerification.observedVersion}`
+                    : "，尚未回连"}
+                </div>
+              )}
+              {node.upgradeVerification?.status === "pending" && (
+                <div className="mt-1 text-xs font-semibold text-warning-700">
+                  {node.upgradeVerification.kind === "rollback"
+                    ? "回退已下发"
+                    : "升级已下发"}
+                  ：等待节点以 {node.upgradeVerification.targetVersion}{" "}
+                  回连核验
+                </div>
+              )}
               {upgradeProgressEntry &&
                 upgradeProgressEntry.percent < 100 && (
                   <div className="mt-1">

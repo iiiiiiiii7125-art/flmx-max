@@ -38,6 +38,7 @@ type inListSiteClass struct {
 var inListSiteRegistry = map[string]inListSiteClass{
 	// —— 分块（chunkInt64IDs）——
 	"repository.go:ListNodes":                                           {"chunkInt64IDs", "整表节点集，T2-NEW-01 已分块"},
+	"repository_upgrade_verify.go:ListVisibleNodeUpgradeVerifications":  {"chunkInt64IDs", "整表节点集（升级核验可见行），A4-V-06 已分块"},
 	"repository.go:ListForwards":                                        {"chunkInt64IDs", "整表转发集，已分块"},
 	"repository.go:getTunnelEntryPortRanges":                            {"chunkInt64IDs", "整表隧道集，已分块"},
 	"repository.go:Import":                                              {"chunkInt64IDs", "备份载荷全量，已分块"},

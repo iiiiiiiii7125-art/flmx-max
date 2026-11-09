@@ -480,6 +480,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.ForwardPort{},
 		&model.Node{},
 		&model.NodeUninstall{},
+		&model.NodeUpgradeVerification{},
 		&model.NodeSSHConfig{},
 		&model.NftRuleBinding{},
 		&model.NftCounterState{},
@@ -1282,8 +1283,32 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			}
 		}
 	}
+	// A4-V-06：升级/回退落地核验状态随节点列表回读（pending /
+	// failed 才露面，landed 不占面）——用户在版本列旁即可看到
+	// 「已下发待核验 / 未落地（期望 X、实际 Y）」，不必靠人肉对
+	// 账。查询失败不拖垮整个列表：核验面缺失时该字段为 nil。
+	allNodeIDs := make([]int64, 0, len(nodes))
+	for _, n := range nodes {
+		allNodeIDs = append(allNodeIDs, n.ID)
+	}
+	upgradeVerifyByNodeID := map[int64]*model.NodeUpgradeVerification{}
+	if byID, verr := r.ListVisibleNodeUpgradeVerifications(allNodeIDs); verr == nil {
+		upgradeVerifyByNodeID = byID
+	}
 	items := make([]map[string]interface{}, 0, len(nodes))
 	for _, n := range nodes {
+		var upgradeVerification map[string]interface{}
+		if v := upgradeVerifyByNodeID[n.ID]; v != nil {
+			upgradeVerification = map[string]interface{}{
+				"kind":            v.Kind,
+				"targetVersion":   v.TargetVersion,
+				"status":          v.Status,
+				"observedVersion": v.ObservedVersion,
+				"fromVersion":     v.FromVersion,
+				"dispatchedAt":    v.DispatchedAt,
+				"deadlineAt":      v.DeadlineAt,
+			}
+		}
 		items = append(items, map[string]interface{}{
 			"id": n.ID, "inx": n.Inx, "name": n.Name,
 			"remark":       nullableString(n.Remark),
@@ -1307,6 +1332,7 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"restartJitterMinutes": n.RestartJitterMinutes,
 			"interfaceName":        nullableString(n.InterfaceName),
 			"sshConfig":            sshConfigByNodeID[n.ID],
+			"upgradeVerification":  upgradeVerification,
 		})
 	}
 	return items, nil

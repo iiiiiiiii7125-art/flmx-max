@@ -401,7 +401,52 @@ func (w *WebSocketReporter) connect() error {
 	})
 
 	fmt.Printf("✅ WebSocket连接建立成功 (%s, http=%d, tls=%d, socks=%d)\n", sanitizeWebSocketURL(usedURL), cfg.Http, cfg.Tls, cfg.Socks)
+	// A4-V-07：落回连证据标记——升级/回退脚本的判活要能区分「进
+	// 程活着」与「真的连回了面板」，本地唯一可信的信号就是连接
+	// 成功点在这里写下的时间戳（见 agentConnectedMarkerPath）。
+	markAgentPanelConnected(w.version)
 	return nil
+}
+
+// agentConnectedMarkerName 是回连证据标记的文件名，与二进制、
+// agent-upgrade.log 同目录（升级脚本按 binaryPath 锚定同目录）。
+const agentConnectedMarkerName = "agent-connected.state"
+
+// agentConnectedMarkerPath 返回标记路径：运行中二进制所在目录
+// 下的 agent-connected.state。二进制路径取 os.Executable，与升
+// 级脚本换版的 binaryPath 是同一文件（脚本换的正是它）。
+func agentConnectedMarkerPath() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(exe), agentConnectedMarkerName), nil
+}
+
+// writeAgentConnectedMarker 原子写标记：内容首行是本次连接成功
+// 的 Unix 秒，第二行是自报版本（供人工对账）。先写临时文件再
+// rename，防脚本轮询读到半行。
+var writeAgentConnectedMarker = func(path, version string, now time.Time) error {
+	tmp := path + ".tmp"
+	content := fmt.Sprintf("%d\n%s\n", now.Unix(), version)
+	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// markAgentPanelConnected 在每次 WS 连接成功后刷新标记。尽力而
+// 为：写失败只记一行日志——连接本身已成功，标记缺失会让升级脚
+// 本的回连门降级为纯进程判活并在 agent-upgrade.log 里明示，不
+// 该反过来影响连接。
+func markAgentPanelConnected(version string) {
+	path, err := agentConnectedMarkerPath()
+	if err != nil {
+		return
+	}
+	if err := writeAgentConnectedMarker(path, version, time.Now()); err != nil {
+		fmt.Printf("⚠️ 回连证据标记写入失败 (%s): %v\n", path, err)
+	}
 }
 
 func buildWebSocketCandidates(addr string, secret string, version string, http int, tls int, socks int, preferredScheme string) []string {
@@ -2092,6 +2137,73 @@ func agentHealthCheckFunctionFor(activeCmd, pidCmd string, sampleGapSec int) str
 		pidCmd, activeCmd, sampleGapSec, pidCmd, activeCmd)
 }
 
+// agentReconnectWindowSec 是升级/回退脚本等待新进程回连面板的
+// 窗口（A4-V-07）。取值依据：新进程启动后立即拨号（握手超时
+// 10s/候选），正常回连在数秒内完成；60s 覆盖面板短暂重启、网
+// 络抖动与重连退避，又远短于面板侧落地核验的 5 分钟窗口——本
+// 地先判、面板后核，两环口径不冲突。窗口只在失败路径上耗满，
+// 成功路径首轮轮询即命中，happy path 成本≈0。
+const agentReconnectWindowSec = 60
+
+// agentReconnectPollSec 是回连轮询间隔。
+const agentReconnectPollSec = 2
+
+// agentReconnectCheckFunctionFor renders the POSIX sh function
+// flmx_agent_reconnected_ok implementing the A4-V-07 reconnect
+// rule: it polls the connection marker (written by the agent
+// process itself at every successful panel WebSocket connect,
+// see markAgentPanelConnected) until the marker's connect epoch
+// reaches the given since-epoch — proof the CURRENT process
+// generation reached the panel, not merely that a process
+// exists. The comparison is >=, deliberately: the script
+// captures since right after it stops the old service, so the
+// old (dead) process cannot write at or after since, while a
+// new process that connects within the same wall-clock second
+// as the capture writes exactly since — a strict > would wait
+// forever on a marker that never changes again and fail a
+// healthy upgrade. Malformed or missing marker content reads
+// as epoch 0 (never satisfies a real since).
+func agentReconnectCheckFunctionFor(markerPath string, windowSec, pollSec int) string {
+	return fmt.Sprintf("flmx_agent_reconnected_ok() { _since=$1; _waited=0; while :; do _ts=$(head -n 1 %s 2>/dev/null); case \"$_ts\" in ''|*[!0-9]*) _ts=0 ;; esac; if [ \"$_ts\" -ge \"$_since\" ]; then return 0; fi; if [ \"$_waited\" -ge %d ]; then return 1; fi; sleep %d; _waited=$((_waited + %d)); done; }",
+		markerPath, windowSec, pollSec, pollSec)
+}
+
+// agentReconnectGateFunction renders flmx_agent_reconnect_ok, the
+// gate the verdict points call: when the marker mechanism is
+// unavailable for this install (flmx_marker_gate != 1, captured by
+// agentReconnectGateSetup before the service stops) the gate
+// passes and the verdict degrades to process liveness — but the
+// degradation is announced in agent-upgrade.log by the setup
+// segment, never silent. With the marker present, the gate is the
+// reconnect check against $flmx_reconnect_since.
+func agentReconnectGateFunction() string {
+	return "flmx_agent_reconnect_ok() { if [ \"$flmx_marker_gate\" != \"1\" ]; then return 0; fi; flmx_agent_reconnected_ok \"$flmx_reconnect_since\"; }"
+}
+
+// agentReconnectGateSetup renders the pre-stop setup segment:
+// capture whether the connection marker exists for this install
+// (a fixed agent that received the upgrade command has connected
+// at least once, so its marker exists; absence means the marker
+// was removed or the layout cannot carry it) and announce the
+// degraded verdict mode up front when it does not.
+func agentReconnectGateSetup(markerPath string) string {
+	return fmt.Sprintf("flmx_marker_gate=0; flmx_reconnect_since=0; if [ -f %s ]; then flmx_marker_gate=1; else echo 'warning: panel connection marker not found (%s); upgrade verdict falls back to process liveness only'; fi; ",
+		markerPath, markerPath)
+}
+
+// agentUpgradeVerdictFunctions renders the full verdict surface
+// the upgrade/rollback scripts share: R4-N2 liveness function +
+// A4-V-07 reconnect function + the gate wrapper.
+func agentUpgradeVerdictFunctions(manager serviceManager, serviceName, markerPath string) (string, error) {
+	healthFn, err := agentHealthCheckFunction(manager, serviceName)
+	if err != nil {
+		return "", err
+	}
+	return healthFn + "\n" +
+		agentReconnectCheckFunctionFor(markerPath, agentReconnectWindowSec, agentReconnectPollSec) + "\n" +
+		agentReconnectGateFunction(), nil
+}
+
 // agentHealthCheckFunction resolves one install layout's commands
 // and renders flmx_agent_health_ok with the production sampling gap.
 func agentHealthCheckFunction(manager serviceManager, serviceName string) (string, error) {
@@ -2256,14 +2368,18 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 		return "", err
 	}
 	start = scriptStartCommand(manager, serviceName, start)
-	healthFn, err := agentHealthCheckFunction(manager, serviceName)
+	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
+	markerPath := filepath.Join(filepath.Dir(binaryPath), agentConnectedMarkerName)
+	verdictFns, err := agentUpgradeVerdictFunctions(manager, serviceName, markerPath)
 	if err != nil {
 		return "", err
 	}
-	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%sexec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s; sleep 1; %s; ", agentUpgradeLogCapSegment(logPath), logPath, healthFn, stop)
+	// A4-V-07：停服前捕获标记可用性（gate setup），停服后（旧进
+	// 程已死、不可能再刷新标记）捕获回连判据的 since 时刻——此
+	// 后标记时间戳变新只能出自新进程。
+	fmt.Fprintf(&b, "%sexec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s%s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); ", agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetup(markerPath), verdictFns, stop)
 	if manager == serviceManagerSystemd {
 		// Legacy pre-FLMX gost cleanup (systemd units only), gated
 		// on the C4-F01 ownership guard: the fingerprint alone does
@@ -2274,6 +2390,7 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	}
 	// R4-N2：判活走 flmx_agent_health_ok 的两次采样（PID 稳定），
 	// 不再单次 is-active 采样——flap 窗口内的假活会跳过自动回滚。
+	// A4-V-07：进程判活之上再叠回连判据（见下方主判活处注释）。
 	// F-RM-01: the swap itself is guarded. An unchecked mv let a
 	// missing staging file (handler-side cleanup racing the script)
 	// flow into the health check on the OLD binary and log
@@ -2297,7 +2414,14 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	// is logged by name, and 'rollback succeeded' stays reachable
 	// only past the staged swap.
 	rollbackTmpTemplate := filepath.Join(filepath.Dir(binaryPath), "."+serviceName+".upgrade-rollback-XXXXXX")
-	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; if flmx_agent_health_ok; then echo 'agent upgrade restart ok'; else echo 'new agent failed health check, rolling back'; if [ -f %s ]; then %s; sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
+	// A4-V-07：主判活从「进程存活」升级为「存活 ∧ 回连」——健康
+	// 检查通过只说明进程活着，新进程必须在 60s 内把回连标记刷
+	// 新才许记 'agent upgrade restart ok'；活着但没回连与健康
+	// 检查失败同路走自动回滚，且失败原因在日志中分开点名。回
+	// 滚腿自身的成功判（'rollback succeeded'）同口径要求回连
+	// （since 在回滚停服后重置）；两处「aborted: still running」
+	// 诊断行陈述的是进程状态本身，维持进程判活口径。
+	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; flmx_new_ok=0; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then flmx_new_ok=1; else echo 'agent upgrade failed: new agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'new agent failed health check'; fi; if [ \"$flmx_new_ok\" = \"1\" ]; then echo 'agent upgrade restart ok'; else echo 'rolling back to previous version'; if [ -f %s ]; then %s; flmx_reconnect_since=$(date +%%s); sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok && flmx_agent_reconnect_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
 		tmpPath, binaryPath, start, backupPath, stop, rollbackTmpTemplate, backupPath, backupPath, binaryPath, start, start, tmpPath, start)
 	return b.String(), nil
 }
@@ -2311,11 +2435,12 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 		return "", err
 	}
 	start = scriptStartCommand(manager, serviceName, start)
-	healthFn, err := agentHealthCheckFunction(manager, serviceName)
+	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
+	markerPath := filepath.Join(filepath.Dir(binaryPath), agentConnectedMarkerName)
+	verdictFns, err := agentUpgradeVerdictFunctions(manager, serviceName, markerPath)
 	if err != nil {
 		return "", err
 	}
-	logPath := filepath.Join(filepath.Dir(binaryPath), "agent-upgrade.log")
 	tmpTemplate := filepath.Join(filepath.Dir(binaryPath), "."+serviceName+".rollback-XXXXXX")
 	// 判活与升级路径同口径（R4-N2 两次采样），避免 'rollback restart ok'
 	// 在 flap 窗口内误报。
@@ -2343,8 +2468,12 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 	// script removes the temp file it created. mktemp lands the
 	// file 0600 and cp onto an existing file keeps that mode, so
 	// the staged copy is chmod'ed back to 755 before the swap.
-	return fmt.Sprintf("%sexec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s; sleep 1; %s; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then echo 'rollback restart ok'; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
-		agentUpgradeLogCapSegment(logPath), logPath, healthFn, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
+	// A4-V-07：与升级脚本同口径——'rollback restart ok' 须进程
+	// 判活 ∧ 回连判据双过；活着但没回连单独点名失败，不许冒用
+	// restart ok。停服后捕获 since（旧进程已死，标记变新只能出
+	// 自恢复出的进程）。
+	return fmt.Sprintf("%sexec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s%s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then echo 'rollback restart ok'; else echo 'rollback failed: restored agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
+		agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetup(markerPath), verdictFns, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
 }
 
 // smokeTestAgentBinary verifies a downloaded binary actually executes on
