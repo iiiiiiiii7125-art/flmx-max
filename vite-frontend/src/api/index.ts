@@ -1037,6 +1037,11 @@ export interface SubPipeline {
    */
   lines: "" | "direct" | "relay";
   /**
+   * 中转范围「自定义」：逐端点白名单（0 = 直连，>0 = 中转线路 ID）。
+   * 非空时即精确范围、优先于 lines；缺省或空数组 = 不启用自定义。
+   */
+  relayIds?: number[];
+  /**
    * 订阅模板：按客户端槽位（clash / singbox / surge / stash /
    * shadowrocket）选模板 ID；选了模板的格式渲染进模板骨架。
    * 空 = 不用模板。
