@@ -148,8 +148,7 @@ function diagnoseAnswer(
     ? tunnels.find((t) => Number(t.id) === Number(item.tunnelId))
     : item;
   const entryNodeId = Number(
-    (tunnelOf?.inNodeId as Array<{ nodeId?: number }> | undefined)?.[0]
-      ?.nodeId,
+    (tunnelOf?.inNodeId as Array<{ nodeId?: number }> | undefined)?.[0]?.nodeId,
   );
   const nodeName =
     nodes.find((n) => Number(n.id) === entryNodeId)?.name ??
@@ -170,8 +169,7 @@ function diagnoseAnswer(
   // markDiagnosisItemUnverified) when the diagnosed tunnel rides one,
   // so the demo shows the neutral unverified presentation.
   const chainProtocols = [
-    ...((tunnelOf?.inNodeId as Array<{ protocol?: string }> | undefined) ??
-      []),
+    ...((tunnelOf?.inNodeId as Array<{ protocol?: string }> | undefined) ?? []),
     ...((tunnelOf?.outNodeId as Array<{ protocol?: string }> | undefined) ??
       []),
   ].map((e) => String(e.protocol ?? "").toLowerCase());
@@ -309,12 +307,14 @@ function deletePreviewAnswer(
 function tuneAnswer(bare: string, configData?: unknown) {
   if (bare !== "node/tune") return null;
   let action = "";
+
   try {
-    action = (
-      (typeof configData === "string"
-        ? JSON.parse(configData)
-        : configData) as { action?: string } | undefined
-    )?.action ?? "";
+    action =
+      (
+        (typeof configData === "string"
+          ? JSON.parse(configData)
+          : configData) as { action?: string } | undefined
+      )?.action ?? "";
   } catch {
     action = "";
   }
@@ -368,7 +368,9 @@ const parseBody = (body: unknown): Record<string, unknown> => {
  * onto the recorded nodes and keeps this feature's later changes —
  * node/update carrying displayGroup, group-order saves through the
  * config endpoints, and (v2) the batch move + group create/rename/
- * delete endpoints — in localStorage. This is the one demo
+ * delete endpoints — in localStorage. The collapsed-section list
+ * (`node_display_group_collapsed`) rides the same overlay: answered
+ * on config/list + config/get, persisted on config writes. This is the one demo
  * surface whose writes survive a reload, deliberately: the feature
  * is pure presentation state, and trying it IS the demo's purpose.
  * Fidelity boundaries: state is per-browser; the recorded fixtures
@@ -379,6 +381,7 @@ const parseBody = (body: unknown): Record<string, unknown> => {
  */
 const DEMO_NODE_GROUPS_KEY = "flmx-demo-node-groups-v1";
 const DEMO_GROUP_ORDER_CONFIG_KEY = "node_display_group_order";
+const DEMO_GROUP_COLLAPSED_CONFIG_KEY = "node_display_group_collapsed";
 const DEMO_GROUP_SEED_LABELS: Record<number, string> = {
   1: "落地节点",
   2: "落地节点",
@@ -391,6 +394,7 @@ const DEMO_GROUP_SEED_ORDER = ["落地节点", "中转节点", "备用节点"];
 type DemoNodeGroupState = {
   labels: Record<string, string>;
   order: string[] | null;
+  collapsed: string[] | null;
 };
 
 function loadDemoNodeGroupState(): DemoNodeGroupState {
@@ -406,9 +410,10 @@ function loadDemoNodeGroupState(): DemoNodeGroupState {
             ? (parsed.labels as Record<string, string>)
             : {},
         order: Array.isArray(parsed.order)
-          ? parsed.order.filter(
-              (x): x is string => typeof x === "string",
-            )
+          ? parsed.order.filter((x): x is string => typeof x === "string")
+          : null,
+        collapsed: Array.isArray(parsed.collapsed)
+          ? parsed.collapsed.filter((x): x is string => typeof x === "string")
           : null,
       };
     }
@@ -416,7 +421,7 @@ function loadDemoNodeGroupState(): DemoNodeGroupState {
     // Corrupt or unavailable storage: fall back to the seed state.
   }
 
-  return { labels: {}, order: null };
+  return { labels: {}, order: null, collapsed: null };
 }
 
 function saveDemoNodeGroupState(state: DemoNodeGroupState) {
@@ -438,6 +443,36 @@ function parseDemoGroupOrderValue(value: unknown): string[] {
       .filter((x): x is string => typeof x === "string")
       .map((x) => x.trim())
       .filter((x) => x !== "");
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Collapsed-list values mirror the page parser: entries are
+ * trimmed and deduped, and a single "" entry (the ungrouped
+ * section) is meaningful and kept.
+ */
+function parseDemoGroupCollapsedValue(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+
+    for (const item of parsed) {
+      if (typeof item !== "string") continue;
+      const label = item.trim();
+
+      if (!seen.has(label)) {
+        seen.add(label);
+        out.push(label);
+      }
+    }
+
+    return out;
   } catch {
     return [];
   }
@@ -478,22 +513,32 @@ function demoGroupAnswer(
     if (res.data && typeof res.data === "object") {
       (res.data as Record<string, unknown>)[DEMO_GROUP_ORDER_CONFIG_KEY] =
         JSON.stringify(effectiveOrder);
+      (res.data as Record<string, unknown>)[DEMO_GROUP_COLLAPSED_CONFIG_KEY] =
+        JSON.stringify(state.collapsed ?? []);
     }
 
     return res;
   }
   const req = parseBody(body);
 
-  if (
-    bare === "config/get" &&
-    req.name === DEMO_GROUP_ORDER_CONFIG_KEY
-  ) {
+  if (bare === "config/get" && req.name === DEMO_GROUP_ORDER_CONFIG_KEY) {
     return {
       code: 0,
       msg: "操作成功",
       data: {
         name: DEMO_GROUP_ORDER_CONFIG_KEY,
         value: JSON.stringify(effectiveOrder),
+      },
+      ts: Date.now(),
+    };
+  }
+  if (bare === "config/get" && req.name === DEMO_GROUP_COLLAPSED_CONFIG_KEY) {
+    return {
+      code: 0,
+      msg: "操作成功",
+      data: {
+        name: DEMO_GROUP_COLLAPSED_CONFIG_KEY,
+        value: JSON.stringify(state.collapsed ?? []),
       },
       ts: Date.now(),
     };
@@ -508,12 +553,27 @@ function demoGroupAnswer(
     return { code: 0, msg: "操作成功", data: null, ts: Date.now() };
   }
   if (
-    bare === "config/update" &&
-    typeof req[DEMO_GROUP_ORDER_CONFIG_KEY] === "string"
+    bare === "config/update-single" &&
+    req.name === DEMO_GROUP_COLLAPSED_CONFIG_KEY
   ) {
-    state.order = parseDemoGroupOrderValue(
-      req[DEMO_GROUP_ORDER_CONFIG_KEY],
-    );
+    state.collapsed = parseDemoGroupCollapsedValue(req.value);
+    saveDemoNodeGroupState(state);
+
+    return { code: 0, msg: "操作成功", data: null, ts: Date.now() };
+  }
+  if (
+    bare === "config/update" &&
+    (typeof req[DEMO_GROUP_ORDER_CONFIG_KEY] === "string" ||
+      typeof req[DEMO_GROUP_COLLAPSED_CONFIG_KEY] === "string")
+  ) {
+    if (typeof req[DEMO_GROUP_ORDER_CONFIG_KEY] === "string") {
+      state.order = parseDemoGroupOrderValue(req[DEMO_GROUP_ORDER_CONFIG_KEY]);
+    }
+    if (typeof req[DEMO_GROUP_COLLAPSED_CONFIG_KEY] === "string") {
+      state.collapsed = parseDemoGroupCollapsedValue(
+        req[DEMO_GROUP_COLLAPSED_CONFIG_KEY],
+      );
+    }
     saveDemoNodeGroupState(state);
 
     return { code: 0, msg: "操作成功", data: null, ts: Date.now() };
@@ -569,9 +629,7 @@ function demoGroupAnswer(
 
   if (bare === "node/batch-set-group") {
     const ids = Array.isArray(req.ids)
-      ? req.ids
-          .map((x) => Number(x))
-          .filter((n) => Number.isFinite(n))
+      ? req.ids.map((x) => Number(x)).filter((n) => Number.isFinite(n))
       : [];
 
     if (ids.length === 0) return fail("ids不能为空");
@@ -619,10 +677,8 @@ function demoGroupAnswer(
     };
   }
   if (bare === "node/group/rename") {
-    const oldName =
-      typeof req.oldName === "string" ? req.oldName.trim() : "";
-    const newName =
-      typeof req.newName === "string" ? req.newName.trim() : "";
+    const oldName = typeof req.oldName === "string" ? req.oldName.trim() : "";
+    const newName = typeof req.newName === "string" ? req.newName.trim() : "";
 
     if (!oldName) return fail("分组名称不能为空");
     if (!groupExists(oldName)) return fail("分组不存在");
@@ -783,10 +839,7 @@ const IMPORT_COUNT_KEYS = [
   "nodeSSHConfigsImported",
 ];
 
-function importReceipt(
-  counts: Record<string, number>,
-  warnings: string[],
-) {
+function importReceipt(counts: Record<string, number>, warnings: string[]) {
   const data: Record<string, unknown> = {};
 
   for (const k of IMPORT_COUNT_KEYS) data[k] = counts[k] ?? 0;
@@ -898,9 +951,7 @@ function backupImportAnswer(
     counts.inboundRelaysImported = len(inb.relays);
     counts.inboundCountersImported = len(inb.counters);
     counts.inboundSubscriptionsImported = len(inb.subscriptions);
-    counts.inboundSubscriptionCountersImported = len(
-      inb.subscriptionCounters,
-    );
+    counts.inboundSubscriptionCountersImported = len(inb.subscriptionCounters);
     counts.inboundSourcesImported = len(inb.sources);
     counts.inboundShieldsImported = len(inb.shields);
     counts.inboundTemplatesImported = len(inb.templates);
@@ -1015,10 +1066,9 @@ function sourceRefreshAnswer(
 ) {
   if (bare !== "subscription/source/refresh") return null;
   const req = parseBody(body);
-  const source =
-    listOf(book, "subscription/source/list").find(
-      (s) => Number(s.id) === Number(req.id),
-    ) ?? { id: Number(req.id) || 0 };
+  const source = listOf(book, "subscription/source/list").find(
+    (s) => Number(s.id) === Number(req.id),
+  ) ?? { id: Number(req.id) || 0 };
   const result = {
     added: 0,
     updated: 0,
@@ -1043,9 +1093,7 @@ function serviceRunAnswer(
   if (bare !== "monitor/services/run") return null;
   const req = parseBody(body);
   const id = Number(req.id);
-  const def = listOf(book, "monitor/services").find(
-    (m) => Number(m.id) === id,
-  );
+  const def = listOf(book, "monitor/services").find((m) => Number(m.id) === id);
 
   return {
     code: 0,
@@ -1109,7 +1157,6 @@ function exportAnswer(
     },
   };
 }
-
 
 /**
  * RR4-C5-02：user/login 在词表里是写，但登录表单是它 data 的真实消费
