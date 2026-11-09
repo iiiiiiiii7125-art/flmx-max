@@ -282,3 +282,10 @@ docker start <backend容器>
 - 脚本键 `FLMX_VERIFY_DOWNLOADS`：它是运行 `panel_install.sh` 时的进程环境变量，在命令前设置（如 `FLMX_VERIFY_DOWNLOADS=0 ./panel_install.sh`）或先 `export` 再运行脚本。
 
 **升级前自检**：面板部署目录执行 `grep -E '^FLVX_' .env`，有输出即逐行按下表改名为同名 `FLMX_` 键；节点机上另查 `grep -rs 'FLVX_KERNEL_DIR' /etc/systemd/system/flmx_agent.service /etc/systemd/system/flmx_agent.service.d/ 2>/dev/null`（改名前装的节点单元名仍为 `flux_agent` 时，把路径换成对应的旧单元名）。
+
+## 2.1.0 移除项（升级须知）
+
+- **GitHub Gist 备份已移除**：2.1.0 起面板不再提供 Gist 备份与恢复；升级前请先在 **网站配置 → 数据备份与恢复** 下载一份本地备份（本地备份与自动快照不受影响；已存在于 GitHub 的 Gist 本体不会被删除）。
+- **跨面板共享（联邦）已移除**：已建的分享在升级后失效；消费侧已生成的隧道行会保留，等待管理员处理。
+- **自建 Snell 入站已移除**：存量自建 Snell 入站以禁用形态保留；经导入 / 订阅源进来的 Snell 节点不受影响、照常下发。
+- **多主题与深色模式已移除**：界面只保留默认主题；旧版本保存在浏览器本地的主题选择升级后不再生效，无需手动处理。
