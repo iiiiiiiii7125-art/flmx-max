@@ -1136,6 +1136,32 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// S2-4/5（A1 同形残留）：interfaceName 与 tcpListenAddr/
+	// udpListenAddr 同为生成面输入——前者进转发服务 metadata
+	// "interface" 与链 hop/出口服务，后者决定生成服务的监听
+	// 地址——与 idleTimeoutSeconds 同形：只落库不重推则运行中
+	// agent 恒用旧值，须等下次重布/重连才生效。此处按落库口径
+	// 归一后与存量比对（interfaceName 空白提交按 nullableText
+	// 口径落 NULL、比对作空串；监听地址空值按写路径归一
+	// "[::]"），UpdateNode 成功后值真变化才走 A1 同一条重推
+	// 漏斗（见下方紧随落库的分支）。
+	interfaceNameChanged := false
+	if _, ok := req["interfaceName"]; ok {
+		submitted := asString(req["interfaceName"])
+		if strings.TrimSpace(submitted) == "" {
+			submitted = ""
+		}
+		interfaceNameChanged = submitted != currentNode.InterfaceName.String
+	}
+	currentTCPListenAddr := currentNode.TCPListenAddr
+	if strings.TrimSpace(currentTCPListenAddr) == "" {
+		currentTCPListenAddr = "[::]"
+	}
+	currentUDPListenAddr := currentNode.UDPListenAddr
+	if strings.TrimSpace(currentUDPListenAddr) == "" {
+		currentUDPListenAddr = "[::]"
+	}
+	listenAddrChanged := tcpAddr != currentTCPListenAddr || udpAddr != currentUDPListenAddr
 	if err := h.repo.UpdateNode(id,
 		nodeName,
 		serverIP,
@@ -1157,6 +1183,15 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
+	}
+	if interfaceNameChanged || listenAddrChanged {
+		// S2-4/5：值已落库，运行面重推与 idleTimeoutSeconds 走
+		// 同一漏斗（repushNodeRuntimeAfterSettingChange：离线/
+		// nftables 跳过，离线节点重连时 onNodeOnline 按 DB 新值
+		// 重布）。
+		log.Printf("node runtime inputs updated node_id=%d interface_changed=%v listen_addr_changed=%v operator_id=%d (runtime repush queued if online)",
+			id, interfaceNameChanged, listenAddrChanged, idemUserID(r))
+		h.repushNodeRuntimeAfterSettingChange(id)
 	}
 	if idleTimeoutPresent {
 		// 无进展拆除阈值走独立 setter（UpdateNode 的全字段签名不
@@ -1224,6 +1259,19 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// S2-6（回头看观察项核实属实）：链式隧道上一跳的拨号地址
+		// 在生成时由目标节点地址派生并嵌进上一跳节点的 chains
+		// 配置（buildTunnelChainConfig → selectTunnelDialHost 按
+		// 目标节点 ServerIP/V4/V6 取址），是节点地址的第三处物化
+		// 状态——上述白名单与 Managed 中转 RemoteAddr 两处刷新
+		// 都不覆盖此面，改址后上一跳仍拨旧址，只能等某次隧道编
+		// 辑或任一参与节点重连才被动收敛。此处走与 A1 同一条整
+		// 节点重推漏斗：redeployLocalNodeRuntime 按参与关系枚举
+		// 本节点全部活跃隧道并整隧道重布，生成面按 DB 新址重算
+		// 每一跳拨号地址、下发全部参与节点（离线/nftables 跳过
+		// 口径一致，离线节点重连时 onNodeOnline 按新值重布）。
+		log.Printf("node address changed node_id=%d operator_id=%d (tunnel chain repush queued if online)", id, idemUserID(r))
+		h.repushNodeRuntimeAfterSettingChange(id)
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
