@@ -42,23 +42,27 @@ func (r *Repository) ListNftablesNodesForCollection() ([]NftablesCollectionNode,
 	}
 
 	type collectionRow struct {
-		NodeID      int64  `gorm:"column:node_id"`
-		ConfigID    int64  `gorm:"column:config_id"`
-		Host        string `gorm:"column:host"`
-		Port        int    `gorm:"column:port"`
-		Username    string `gorm:"column:username"`
-		AuthType    string `gorm:"column:auth_type"`
-		Password    string `gorm:"column:password"`
-		PrivateKey  string `gorm:"column:private_key"`
-		Passphrase  string `gorm:"column:passphrase"`
-		SudoMode    string `gorm:"column:sudo_mode"`
-		CreatedTime int64  `gorm:"column:created_time"`
-		UpdatedTime int64  `gorm:"column:updated_time"`
+		NodeID     int64  `gorm:"column:node_id"`
+		ConfigID   int64  `gorm:"column:config_id"`
+		Host       string `gorm:"column:host"`
+		Port       int    `gorm:"column:port"`
+		Username   string `gorm:"column:username"`
+		AuthType   string `gorm:"column:auth_type"`
+		Password   string `gorm:"column:password"`
+		PrivateKey string `gorm:"column:private_key"`
+		Passphrase string `gorm:"column:passphrase"`
+		SudoMode   string `gorm:"column:sudo_mode"`
+		// HostKeyFingerprint 必须随行投影：采集/清扫两消费方经
+		// sshConfigFromModel 把它带入 runner，未投影即恒空、runner
+		// 对已钉入节点也 fail-closed（DEFECT-NFT-COLLECT-01）。
+		HostKeyFingerprint string `gorm:"column:host_key_fingerprint"`
+		CreatedTime        int64  `gorm:"column:created_time"`
+		UpdatedTime        int64  `gorm:"column:updated_time"`
 	}
 
 	var rows []collectionRow
 	if err := r.db.Table("node").
-		Select("node.id AS node_id, node_ssh_config.id AS config_id, node_ssh_config.host, node_ssh_config.port, node_ssh_config.username, node_ssh_config.auth_type, node_ssh_config.password, node_ssh_config.private_key, node_ssh_config.passphrase, node_ssh_config.sudo_mode, node_ssh_config.created_time, node_ssh_config.updated_time").
+		Select("node.id AS node_id, node_ssh_config.id AS config_id, node_ssh_config.host, node_ssh_config.port, node_ssh_config.username, node_ssh_config.auth_type, node_ssh_config.password, node_ssh_config.private_key, node_ssh_config.passphrase, node_ssh_config.sudo_mode, node_ssh_config.host_key_fingerprint, node_ssh_config.created_time, node_ssh_config.updated_time").
 		Joins("JOIN node_ssh_config ON node_ssh_config.node_id = node.id").
 		Where("node.status = ? AND LOWER(TRIM(node.forward_mode)) = ?", 1, "nftables").
 		Order("node.id ASC").
@@ -71,18 +75,19 @@ func (r *Repository) ListNftablesNodesForCollection() ([]NftablesCollectionNode,
 		nodes = append(nodes, NftablesCollectionNode{
 			NodeID: row.NodeID,
 			Config: model.NodeSSHConfig{
-				ID:          row.ConfigID,
-				NodeID:      row.NodeID,
-				Host:        row.Host,
-				Port:        row.Port,
-				Username:    row.Username,
-				AuthType:    row.AuthType,
-				Password:    nullStringFromInterface(row.Password),
-				PrivateKey:  nullStringFromInterface(row.PrivateKey),
-				Passphrase:  nullStringFromInterface(row.Passphrase),
-				SudoMode:    row.SudoMode,
-				CreatedTime: row.CreatedTime,
-				UpdatedTime: row.UpdatedTime,
+				ID:                 row.ConfigID,
+				NodeID:             row.NodeID,
+				Host:               row.Host,
+				Port:               row.Port,
+				Username:           row.Username,
+				AuthType:           row.AuthType,
+				Password:           nullStringFromInterface(row.Password),
+				PrivateKey:         nullStringFromInterface(row.PrivateKey),
+				Passphrase:         nullStringFromInterface(row.Passphrase),
+				SudoMode:           row.SudoMode,
+				HostKeyFingerprint: row.HostKeyFingerprint,
+				CreatedTime:        row.CreatedTime,
+				UpdatedTime:        row.UpdatedTime,
 			},
 		})
 	}
