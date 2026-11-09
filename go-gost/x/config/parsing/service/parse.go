@@ -413,6 +413,12 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 		xservice.ObserverOption(observer),
 		xservice.ObserverPeriodOption(observerPeriod),
 		xservice.LoggerOption(serviceLogger),
+		// Connlog (U1): the panel marks its generated entry
+		// services with metadata "connlogEntry" (U7); only those
+		// services record inbound connection events. Internal
+		// services built elsewhere (tunnel entrypoints, relay
+		// binds) never pass this option and stay unrecorded.
+		xservice.ConnLogEntryOption(xservice.ConnLogEntryFromMetadata(cfg.Metadata)),
 	)
 
 	serviceLogger.Infof("listening on %s/%s", s.Addr().String(), s.Addr().Network())
