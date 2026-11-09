@@ -69,9 +69,10 @@ func (a *sessionActivity) deadline() time.Time {
 
 // stalled reports whether no byte has moved in either direction for
 // the full timeout window. A non-positive window disables the
-// teardown (the 2.1.2 default): stalled is then never true, so a
-// deadline wake — only possible from a deadline armed elsewhere —
-// always resumes instead of tearing down.
+// teardown (the 2.1.2 default): stalled is then never true. (With
+// the window off, timeout-class errors from an endpoint are not
+// converted into deadline wakes at all — see trackedRW — so this
+// judge is only ever consulted for wakes Transport armed itself.)
 func (a *sessionActivity) stalled(now time.Time) bool {
 	if a.timeout <= 0 {
 		return false
@@ -252,7 +253,15 @@ var errReadTimeout = errors.New("transport: read deadline exceeded")
 // byte progress into the shared activity tracker and converts a
 // deadline expiry into errReadTimeout so copyDirection can
 // distinguish a resumable deadline wake from a hard failure. The
-// conversion is state-free and exact: a Go net.Conn Read/Write
+// conversion applies only while the session window is armed
+// (act.timeout > 0): the only deadlines Transport itself ever arms
+// are the window's, so a timeout-class error surfacing while the
+// window is off cannot be one of Transport's wakes — it is a real
+// failure of that leg (F-212-C: a kernel keepalive verdict on a
+// silently dead peer returns ETIMEDOUT) and must reach
+// copyDirection unconverted, so the session unwinds whole instead
+// of "resuming" against a dead socket forever. The conversion is
+// state-free and exact: a Go net.Conn Read/Write
 // that reports a timeout error has transferred no bytes (its
 // internal deadline abort is all-or-nothing), so a timed-out call
 // contributes nothing and the copy can resume as if the wake had
@@ -275,7 +284,7 @@ func (t *trackedRW) Read(p []byte) (int, error) {
 	if n > 0 {
 		t.act.touch()
 	}
-	if err != nil && isTimeoutError(err) {
+	if err != nil && t.act.timeout > 0 && isTimeoutError(err) {
 		return n, errReadTimeout
 	}
 	return n, err
@@ -286,7 +295,7 @@ func (t *trackedRW) Write(p []byte) (int, error) {
 	if n > 0 {
 		t.act.touch()
 	}
-	if err != nil && isTimeoutError(err) {
+	if err != nil && t.act.timeout > 0 && isTimeoutError(err) {
 		return n, errReadTimeout
 	}
 	return n, err
@@ -332,7 +341,7 @@ func (t *trackedRW) WriteTo(w io.Writer) (int64, error) {
 				if n > 0 {
 					t.act.touch()
 				}
-				if err != nil && isTimeoutError(err) {
+				if err != nil && t.act.timeout > 0 && isTimeoutError(err) {
 					return n, errReadTimeout
 				}
 				return n, err
@@ -366,7 +375,7 @@ func (t *trackedRW) ReadFrom(r io.Reader) (int64, error) {
 				if n > 0 {
 					t.act.touch()
 				}
-				if err != nil && isTimeoutError(err) {
+				if err != nil && t.act.timeout > 0 && isTimeoutError(err) {
 					return n, errReadTimeout
 				}
 				return n, err
