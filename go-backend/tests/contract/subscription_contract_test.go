@@ -57,8 +57,9 @@ func TestSubscriptionContract(t *testing.T) {
 
 	t.Run("own subscription with scope", func(t *testing.T) {
 		// 2.1.2：处理流水线（地区/国旗/改名/过滤/脚本）已整块删除，
-		// 订阅选项只剩中转范围三档。两个自建入站都是直连端点：
-		// direct 档全出、relay 档全滤、存量 relayIds 保存时折算。
+		// 订阅选项只剩中转范围：lines 三档 + relayIds 逐端点白名单。
+		// 两个自建入站都是直连端点：direct 档全出、relay 档全滤、
+		// relayIds 白名单保存时原样落库（不折算 lines）、按精确集渲染。
 		out := kernelContractPost(t, router, admin, "/api/v1/subscription/save",
 			`{"name":"只要直连","sourceAll":true,"options":{"lines":"direct"}}`)
 		if out.Code != 0 {
@@ -69,16 +70,18 @@ func TestSubscriptionContract(t *testing.T) {
 			t.Fatalf("direct scope carries both own inbounds: %d %s", code, body)
 		}
 		out = kernelContractPost(t, router, admin, "/api/v1/subscription/save",
-			`{"name":"存量折算","sourceAll":true,"options":{"relayIds":[0]}}`)
+			`{"name":"存量白名单","sourceAll":true,"options":{"relayIds":[0]}}`)
 		if out.Code != 0 {
 			t.Fatalf("legacy save: %+v", out)
 		}
-		if v := out.Data.(map[string]interface{})["options"].(map[string]interface{}); v["lines"] != "direct" {
-			t.Fatalf("relayIds [0] must fold to lines=direct in the saved view: %v", v)
+		if v := out.Data.(map[string]interface{})["options"].(map[string]interface{}); v["lines"] != "" {
+			t.Fatalf("relayIds must not fold into lines in the saved view: %v", v)
+		} else if ids, ok := v["relayIds"].([]interface{}); !ok || len(ids) != 1 || valueAsInt(ids[0]) != 0 {
+			t.Fatalf("saved view must carry the relayIds whitelist verbatim: %v", v)
 		}
 		code, body, _ = sub(out.Data.(map[string]interface{})["path"].(string))
-		if code != 200 || !strings.Contains(body, "vless://") {
-			t.Fatalf("folded direct scope: %d %s", code, body)
+		if code != 200 || !strings.Contains(body, "vless://") || !strings.Contains(body, "ss://") {
+			t.Fatalf("whitelist [0] keeps exactly the direct endpoints: %d %s", code, body)
 		}
 		out = kernelContractPost(t, router, admin, "/api/v1/subscription/save",
 			`{"name":"只要中转","sourceAll":true,"options":{"lines":"relay"}}`)

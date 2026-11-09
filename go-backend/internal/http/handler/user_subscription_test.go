@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -156,10 +157,50 @@ func TestFilterEndpointsByScopeLines(t *testing.T) {
 	}
 }
 
-// 中转范围三档 + 存量 relayIds 折算在 subEndpoints 的实际应用
-// （真实入站夹具，直连端点）：新 lines 键直接生效；旧 relayIds 经
-// subPipeline.UnmarshalJSON 折算——[0]→direct 保住直连端点、
-// [2]→relay 把直连端点滤掉。
+// relayIds 白名单（逐端点精确集）：非空时按 RelayID 精确过滤并
+// 优先于 lines 三档；[0] 只出直连、单条中转只出该条、混合子集
+// 只出子集本身——不再折算放宽到整档。
+func TestFilterEndpointsByRelayIDsWhitelist(t *testing.T) {
+	mk := func() []kernel.Endpoint {
+		return []kernel.Endpoint{
+			{Name: "direct", RelayID: 0, Direct: true},
+			{Name: "relay2", RelayID: 2},
+			{Name: "relay3", RelayID: 3},
+		}
+	}
+	ids := func(eps []kernel.Endpoint) []int64 {
+		out := []int64{}
+		for _, e := range eps {
+			out = append(out, e.RelayID)
+		}
+		return out
+	}
+	cases := []struct {
+		opts kernel.SubOptions
+		want []int64
+	}{
+		{kernel.SubOptions{RelayIDs: []int64{2}}, []int64{2}},
+		{kernel.SubOptions{RelayIDs: []int64{0}}, []int64{0}},
+		{kernel.SubOptions{RelayIDs: []int64{0, 3}}, []int64{0, 3}},
+		{kernel.SubOptions{RelayIDs: []int64{3, 2}}, []int64{2, 3}},
+		// 白名单优先于 lines：lines 说 relay，白名单 [0] 只出直连。
+		{kernel.SubOptions{Lines: "relay", RelayIDs: []int64{0}}, []int64{0}},
+		{kernel.SubOptions{Lines: "direct", RelayIDs: []int64{2, 3}}, []int64{2, 3}},
+		// 空白名单不生效，lines 照常。
+		{kernel.SubOptions{Lines: "relay", RelayIDs: []int64{}}, []int64{2, 3}},
+	}
+	for _, c := range cases {
+		got := ids(kernel.FilterEndpoints(mk(), c.opts))
+		if fmt.Sprint(got) != fmt.Sprint(c.want) {
+			t.Fatalf("FilterEndpoints(%+v) relay ids = %v, want %v", c.opts, got, c.want)
+		}
+	}
+}
+
+// 中转范围在 subEndpoints 装配收口的实际应用（真实夹具：一个落地
+// 入站 + 两条中转线）：lines 三档直接生效；relayIds 白名单是精确
+// 端点集——只挑一条中转线时只出那一条（2.1.2 折算曾放宽成整档
+// relay 全出），[0] 只出直连，混合子集只出子集，白名单优先于 lines。
 func TestSubEndpointsAppliesRelayIDs(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/usersub_filter.db")
 	if err != nil {
@@ -168,72 +209,110 @@ func TestSubEndpointsAppliesRelayIDs(t *testing.T) {
 	t.Cleanup(func() { _ = r.Close() })
 	h := New(r, "unit-test-secret")
 	now := time.Now().UnixMilli()
+	db := r.DB()
 
-	if err := r.DB().Exec(`INSERT INTO node(name, secret, server_ip, port, created_time, status) VALUES('n', 's', '203.0.113.1', '1000-2000', ?, 1)`, now).Error; err != nil {
-		t.Fatal(err)
+	landingNode := seedRelayTargetNode(t, r, "wl-landing", "192.0.2.30")
+	row := seedShareInbound(t, r, landingNode, "wl-in")
+
+	mkRelay := func(name string, entryIP string, port int) int64 {
+		entry := seedRelayTargetNode(t, r, name+"-entry", entryIP)
+		tunnel := model.Tunnel{Name: name, Type: 1, Protocol: "tcp", Flow: 99999, Status: 1, CreatedTime: now, UpdatedTime: now}
+		if err := db.Create(&tunnel).Error; err != nil {
+			t.Fatal(err)
+		}
+		fwd := model.Forward{UserID: 1, UserName: "admin", Name: name, TunnelID: tunnel.ID, RemoteAddr: "203.0.113.1:443", Status: 1, CreatedTime: now, UpdatedTime: now}
+		if err := db.Create(&fwd).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&model.ForwardPort{ForwardID: fwd.ID, NodeID: entry, Port: port}).Error; err != nil {
+			t.Fatal(err)
+		}
+		rel := model.NodeInboundRelay{InboundID: row.ID, ForwardID: fwd.ID, Name: name, Managed: 1, CreatedTime: now}
+		if err := db.Create(&rel).Error; err != nil {
+			t.Fatal(err)
+		}
+		return rel.ID
 	}
-	nodeID := mustLastInsertID(t, r, "node")
-	if err := r.DB().Exec(`INSERT INTO node_kernel(node_id, kernel_type, version, status, created_time, updated_time) VALUES(?, 'xray', 'latest', 'pending', ?, ?)`, nodeID, now, now).Error; err != nil {
-		t.Fatal(err)
-	}
-	kernelID := mustLastInsertID(t, r, "kernel")
-	if err := r.DB().Exec(`INSERT INTO node_inbound(kernel_id, node_id, name, protocol, listen, port, settings, enabled, created_time, updated_time)
-		VALUES(?, ?, 'a', 'trojan', '::', 443, '{"password":"owner-pw"}', 1, ?, ?)`, kernelID, nodeID, now, now).Error; err != nil {
-		t.Fatal(err)
-	}
-	inboundID := mustLastInsertID(t, r, "inbound")
+	relayA := mkRelay("line-a", "203.0.113.10", 31001)
+	relayB := mkRelay("line-b", "203.0.113.11", 31002)
+
 	rows, err := r.ListNodeInbounds()
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	mkSub := func(options string) *model.Subscription {
 		return &model.Subscription{Name: "x", Kind: model.SubscriptionShare, Token: strings.Repeat("a", 32),
-			UUID: "u", Password: "p", InboundIDs: fmt.Sprint(inboundID), Options: options, Enabled: 1}
+			UUID: "u", Password: "p", InboundIDs: fmt.Sprint(row.ID), Options: options, Enabled: 1}
+	}
+	relayIDsOf := func(eps []kernel.Endpoint) []int64 {
+		out := []int64{}
+		for _, e := range eps {
+			out = append(out, e.RelayID)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		return out
+	}
+	want := func(options string, ids ...int64) {
+		t.Helper()
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		if got := relayIDsOf(h.subEndpoints(mkSub(options), rows)); fmt.Sprint(got) != fmt.Sprint(ids) {
+			t.Fatalf("subEndpoints(%s) relay ids = %v, want %v", options, got, ids)
+		}
 	}
 
-	if got := h.subEndpoints(mkSub(""), rows); len(got) != 1 || got[0].RelayID != 0 {
-		t.Fatalf("no filter: want 1 direct endpoint, got %+v", got)
-	}
-	if got := h.subEndpoints(mkSub(`{"lines":"direct"}`), rows); len(got) != 1 {
-		t.Fatalf("scope direct: want the direct endpoint, got %+v", got)
-	}
-	if got := h.subEndpoints(mkSub(`{"lines":"relay"}`), rows); len(got) != 0 {
-		t.Fatalf("scope relay: direct endpoint must be filtered out, got %+v", got)
-	}
-	if got := h.subEndpoints(mkSub(`{"relayIds":[0]}`), rows); len(got) != 1 {
-		t.Fatalf("legacy relayIds [0] folds to direct: want the direct endpoint, got %+v", got)
-	}
-	if got := h.subEndpoints(mkSub(`{"relayIds":[2]}`), rows); len(got) != 0 {
-		t.Fatalf("legacy relayIds [2] folds to relay: direct endpoint must be filtered out, got %+v", got)
-	}
-	if got := h.subEndpoints(mkSub(`{"relayIds":[0,2]}`), rows); len(got) != 1 {
-		t.Fatalf("legacy relayIds mixed folds to all: want the direct endpoint, got %+v", got)
-	}
+	// 无范围：直连 + 两条中转全出。
+	want(``, 0, relayA, relayB)
+	want(`{"lines":"relay"}`, relayA, relayB)
+	want(`{"lines":"direct"}`, 0)
+	// 白名单精确集：单条中转只出该条（存量 Options 原文即此形，
+	// 解析恢复后原样生效）。
+	want(fmt.Sprintf(`{"relayIds":[%d]}`, relayA), relayA)
+	want(`{"relayIds":[0]}`, 0)
+	want(fmt.Sprintf(`{"relayIds":[0,%d]}`, relayB), 0, relayB)
+	// 白名单优先于 lines 三档。
+	want(`{"lines":"relay","relayIds":[0]}`, 0)
+	want(fmt.Sprintf(`{"lines":"direct","relayIds":[%d]}`, relayB), relayB)
 }
 
-// 存量 relayIds 折算表（subPipeline.UnmarshalJSON）：空/缺失→all、
-// 恰 [0]→direct、非空不含 0→relay、混合→all；新 lines 键优先、
-// 存量 lines 语义由构造保留（direct 存量＝旧「仅直连条目」）。
-func TestParsePipelineLegacyRelayIDsFold(t *testing.T) {
-	cases := map[string]string{
-		`{}`:                                "",
-		`{"relayIds":[]}`:                   "",
-		`{"relayIds":[0]}`:                  "direct",
-		`{"relayIds":[2]}`:                  "relay",
-		`{"relayIds":[2,3]}`:                "relay",
-		`{"relayIds":[0,2]}`:                "",
-		`{"relayIds":[-1,0]}`:               "direct",
-		`{"lines":"relay"}`:                 "relay",
-		`{"lines":"relay","relayIds":[0]}`:  "relay",
-		`{"lines":"direct","relayIds":[2]}`: "direct",
-		`{"lines":"bogus","relayIds":[0]}`:  "direct",
+
+// relayIds 解析保真（subPipeline）：白名单原样保留、与 lines 相互
+// 独立（不再折算），options() 两者都带，marshal 往返不丢白名单
+// （保存回写口径）；空白名单不落键。
+func TestParsePipelineRelayIDsPreserved(t *testing.T) {
+	p := parsePipeline(`{"lines":"relay","relayIds":[0,7]}`)
+	if p.Lines != "relay" {
+		t.Fatalf("lines must parse independently of relayIds, got %q", p.Lines)
 	}
-	for raw, want := range cases {
-		p := parsePipeline(raw)
-		if p.Lines != want {
-			t.Fatalf("parsePipeline(%s).Lines = %q, want %q", raw, p.Lines, want)
-		}
+	if fmt.Sprint(p.RelayIDs) != "[0 7]" {
+		t.Fatalf("relayIds must be preserved verbatim, got %v", p.RelayIDs)
+	}
+	opts := p.options()
+	if opts.Lines != "relay" || fmt.Sprint(opts.RelayIDs) != "[0 7]" {
+		t.Fatalf("options() must carry both scope fields, got %+v", opts)
+	}
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"relayIds":[0,7]`) {
+		t.Fatalf("marshal round-trip must keep the whitelist: %s", out)
+	}
+	// 存量白名单单独出现（2.1.2 前的 Options 原文）：lines 不被
+	// 折算改写，白名单原样复活。
+	p = parsePipeline(`{"relayIds":[3]}`)
+	if p.Lines != "" || fmt.Sprint(p.RelayIDs) != "[3]" {
+		t.Fatalf("legacy whitelist-only options must revive verbatim, got %+v", p)
+	}
+	p = parsePipeline(`{"relayIds":[]}`)
+	if len(p.RelayIDs) != 0 {
+		t.Fatalf("empty whitelist parses to no whitelist, got %v", p.RelayIDs)
+	}
+	out, err = json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "relayIds") {
+		t.Fatalf("empty whitelist must not be re-marshalled: %s", out)
 	}
 }
 
