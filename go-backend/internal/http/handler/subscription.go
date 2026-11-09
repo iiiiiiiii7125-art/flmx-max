@@ -57,6 +57,21 @@ type subPipeline struct {
 	Templates map[string]int64 `json:"templates,omitempty"`
 }
 
+// UnmarshalJSON decodes the options object leniently. Request
+// decoding runs with DisallowUnknownFields, but the options object
+// must keep tolerating keys removed in 2.1.2: old clients still send
+// them, and they are ignored here and dropped on the next save.
+// relayIds is captured verbatim — never folded into Lines.
+func (p *subPipeline) UnmarshalJSON(data []byte) error {
+	type alias subPipeline
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*p = subPipeline(a)
+	return nil
+}
+
 func (p subPipeline) options() kernel.SubOptions {
 	return kernel.SubOptions{Lines: p.Lines, RelayIDs: p.RelayIDs}
 }
