@@ -4164,6 +4164,11 @@ func (h *Handler) userTunnelBatchAssign(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	// LB-01：整批同步成功后逐条清失势的旧回退规则条目（口径同单条
+	// 路径；回滚分支已在上方返回，不会走到这里）。
+	for _, outcome := range outcomes {
+		h.deleteStaleUserTunnelLimiter(outcome.userID, outcome.tunnelID, outcome.prevSpeedID)
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -4338,6 +4343,8 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// LB-01：同 upsert 路径——UT 限速改绑/清零成功后清失势旧条目。
+	h.deleteStaleUserTunnelLimiter(userID, tunnelID, oldSpeedID)
 	response.WriteJSON(w, response.OKEmpty())
 }
 
@@ -8708,6 +8715,9 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 		_ = h.syncUserTunnelForwards(outcome.userID, outcome.tunnelID)
 		return fmt.Errorf("下发失败，已回滚: %w", syncErr)
 	}
+	// LB-01：UT 限速改绑/清零成功后，清节点上失势的旧回退规则条目
+	// （helper 内按引用集正本守卫，失败只记日志不挡回执）。
+	h.deleteStaleUserTunnelLimiter(outcome.userID, outcome.tunnelID, outcome.prevSpeedID)
 	return nil
 }
 

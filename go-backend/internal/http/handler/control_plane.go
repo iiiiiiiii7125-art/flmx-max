@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -2577,6 +2578,81 @@ func (h *Handler) deleteStaleForwardTrafficLimitersOnNode(oldForward, newForward
 			continue
 		}
 		send(strconv.FormatInt(ruleID, 10))
+	}
+}
+
+// deleteStaleUserTunnelLimiter 是 LB-01（A1-02 同族）的 user_tunnel
+// 更新面清理：UT 的 speed_id 改绑/清零时，syncUserTunnelForwards 只
+// 按新绑定建新条目，旧回退规则在节点上落的总速条目（名＝旧规则
+// ID）无人下发删除；对账 cleanOrphanedLimiters 又以 SpeedLimitExists
+// 判存活——旧规则仍存在且启用时条目被判「在用」永久保留（条目实际
+// 无任何服务引用、不生效，与 A1-02 残留同级）。本 helper 只挂在 UT
+// 更新的成功路径（单条 upsert／批量 assign／userTunnelUpdate 三面，
+// 同步已按新绑定下发完毕之后），prevSpeedID 取 upsert outcome 在更
+// 新前捕获的旧值。口径与 FIX-RESIDUAL-2 完全一致：
+//   - prevSpeedID 无效/非正（新建 UT、无旧回退）零删除；与当前 UT
+//     解析出的生效规则相同（限速未变更）零删除；当前解析出错整类
+//     跳过——无法判定即不删；
+//   - 共享守卫用引用集正本 SpeedLimitAffectedForwardIDs（更新后口
+//     径重新枚举）：仍有任一存续引用（其他转发直引、其他 UT 回
+//     退、本 UT 转发对旧规则的直引）即整条保留；枚举失败同样保
+//     留。守卫通过即证明全网再无任何转发引用旧规则，条目必为孤
+//     儿，删除为对账兜底补不上的那一格；
+//   - 删除面＝本 UT 名下转发（与 syncUserTunnelForwards 同集）的
+//     入口节点并集——条目按节点落盘、与单条转发无关，一节点一
+//     发。失败只记日志、不挡更新回执（与 deleteStale* 同纪律）。
+//     离线节点本轮达不到：其残留待下一次该 UT 成功更新（节点在线
+//     时）或旧规则被删除/禁用后由对账收敛，如实登记为本轮边界。
+func (h *Handler) deleteStaleUserTunnelLimiter(userID, tunnelID int64, prevSpeedID sql.NullInt64) {
+	if h == nil || !prevSpeedID.Valid || prevSpeedID.Int64 <= 0 {
+		return
+	}
+	prevRuleID := prevSpeedID.Int64
+	_, curLimiterID, _, err := h.resolveUserTunnelAndLimiter(userID, tunnelID)
+	if err != nil {
+		log.Printf("user tunnel update: stale limiter sweep skipped user_id=%d tunnel_id=%d err=%v (keeping limiters)", userID, tunnelID, err)
+		return
+	}
+	if curLimiterID != nil && *curLimiterID == prevRuleID {
+		return
+	}
+	referrers, err := h.repo.SpeedLimitAffectedForwardIDs(prevRuleID)
+	if err != nil {
+		log.Printf("user tunnel update: enumerate stale limiter referrers failed speed_limit_id=%d err=%v (keeping limiter)", prevRuleID, err)
+		return
+	}
+	if len(referrers) > 0 {
+		return
+	}
+	forwards, err := h.listForwardsByTunnel(tunnelID)
+	if err != nil {
+		log.Printf("user tunnel update: enumerate forwards for stale limiter sweep failed tunnel_id=%d err=%v (keeping limiters)", tunnelID, err)
+		return
+	}
+	name := strconv.FormatInt(prevRuleID, 10)
+	seenNodes := make(map[int64]struct{})
+	for i := range forwards {
+		f := &forwards[i]
+		if f.UserID != userID {
+			continue
+		}
+		ports, err := h.listForwardPorts(f.ID)
+		if err != nil {
+			log.Printf("user tunnel update: enumerate forward ports for stale limiter sweep failed forward_id=%d err=%v (continuing)", f.ID, err)
+			continue
+		}
+		for _, fp := range ports {
+			if fp.NodeID <= 0 {
+				continue
+			}
+			if _, ok := seenNodes[fp.NodeID]; ok {
+				continue
+			}
+			seenNodes[fp.NodeID] = struct{}{}
+			if _, err := h.sendNodeCommand(fp.NodeID, "DeleteLimiters", map[string]interface{}{"limiter": name}, false, true); err != nil {
+				log.Printf("user tunnel update: stale limiter cleanup failed node_id=%d user_id=%d tunnel_id=%d limiter=%s err=%v (continuing)", fp.NodeID, userID, tunnelID, name, err)
+			}
+		}
 	}
 }
 
