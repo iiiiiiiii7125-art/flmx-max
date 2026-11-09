@@ -362,6 +362,180 @@ const parseBody = (body: unknown): Record<string, unknown> => {
   }
 };
 
+/**
+ * Node display groups (feature overlay): the recorded fixtures
+ * predate the node display-group label, so the adapter seeds labels
+ * onto the recorded nodes and keeps this feature's later changes —
+ * node/update carrying displayGroup, and group-order saves through
+ * the config endpoints — in localStorage. This is the one demo
+ * surface whose writes survive a reload, deliberately: the feature
+ * is pure presentation state, and trying it IS the demo's purpose.
+ * Fidelity boundaries: state is per-browser; the recorded fixtures
+ * are never edited; a node created in the demo still does not join
+ * the recorded list (the demo-wide write boundary), so labels are
+ * only triable on the recorded nodes. Registered in
+ * scripts/demo/README.md.
+ */
+const DEMO_NODE_GROUPS_KEY = "flmx-demo-node-groups-v1";
+const DEMO_GROUP_ORDER_CONFIG_KEY = "node_display_group_order";
+const DEMO_GROUP_SEED_LABELS: Record<number, string> = {
+  1: "落地节点",
+  2: "落地节点",
+  3: "备用节点",
+  5: "中转节点",
+  6: "中转节点",
+};
+const DEMO_GROUP_SEED_ORDER = ["落地节点", "中转节点", "备用节点"];
+
+type DemoNodeGroupState = {
+  labels: Record<string, string>;
+  order: string[] | null;
+};
+
+function loadDemoNodeGroupState(): DemoNodeGroupState {
+  try {
+    const raw = localStorage.getItem(DEMO_NODE_GROUPS_KEY);
+
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<DemoNodeGroupState>;
+
+      return {
+        labels:
+          parsed.labels && typeof parsed.labels === "object"
+            ? (parsed.labels as Record<string, string>)
+            : {},
+        order: Array.isArray(parsed.order)
+          ? parsed.order.filter(
+              (x): x is string => typeof x === "string",
+            )
+          : null,
+      };
+    }
+  } catch {
+    // Corrupt or unavailable storage: fall back to the seed state.
+  }
+
+  return { labels: {}, order: null };
+}
+
+function saveDemoNodeGroupState(state: DemoNodeGroupState) {
+  try {
+    localStorage.setItem(DEMO_NODE_GROUPS_KEY, JSON.stringify(state));
+  } catch {
+    // Storage unavailable: the feature still works until reload.
+  }
+}
+
+function parseDemoGroupOrderValue(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter((x): x is string => typeof x === "string")
+      .map((x) => x.trim())
+      .filter((x) => x !== "");
+  } catch {
+    return [];
+  }
+}
+
+function demoGroupAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  const state = loadDemoNodeGroupState();
+  const effectiveOrder = state.order ?? DEMO_GROUP_SEED_ORDER;
+
+  if (bare === "node/list") {
+    const recorded = (book["node/list"] ?? [])[0];
+
+    if (!recorded) return null;
+    const res = structuredClone(recorded.res);
+    const data = res.data as Array<Record<string, unknown>> | undefined;
+
+    if (Array.isArray(data)) {
+      for (const node of data) {
+        const id = Number(node.id);
+
+        node.displayGroup =
+          state.labels[String(id)] ?? DEMO_GROUP_SEED_LABELS[id] ?? "";
+      }
+    }
+
+    return res;
+  }
+  if (bare === "config/list") {
+    const recorded = (book["config/list"] ?? [])[0];
+
+    if (!recorded) return null;
+    const res = structuredClone(recorded.res);
+
+    if (res.data && typeof res.data === "object") {
+      (res.data as Record<string, unknown>)[DEMO_GROUP_ORDER_CONFIG_KEY] =
+        JSON.stringify(effectiveOrder);
+    }
+
+    return res;
+  }
+  const req = parseBody(body);
+
+  if (
+    bare === "config/get" &&
+    req.name === DEMO_GROUP_ORDER_CONFIG_KEY
+  ) {
+    return {
+      code: 0,
+      msg: "操作成功",
+      data: {
+        name: DEMO_GROUP_ORDER_CONFIG_KEY,
+        value: JSON.stringify(effectiveOrder),
+      },
+      ts: Date.now(),
+    };
+  }
+  if (
+    bare === "config/update-single" &&
+    req.name === DEMO_GROUP_ORDER_CONFIG_KEY
+  ) {
+    state.order = parseDemoGroupOrderValue(req.value);
+    saveDemoNodeGroupState(state);
+
+    return { code: 0, msg: "操作成功", data: null, ts: Date.now() };
+  }
+  if (
+    bare === "config/update" &&
+    typeof req[DEMO_GROUP_ORDER_CONFIG_KEY] === "string"
+  ) {
+    state.order = parseDemoGroupOrderValue(
+      req[DEMO_GROUP_ORDER_CONFIG_KEY],
+    );
+    saveDemoNodeGroupState(state);
+
+    return { code: 0, msg: "操作成功", data: null, ts: Date.now() };
+  }
+  if (bare === "node/update" && typeof req.displayGroup === "string") {
+    const id = Number(req.id);
+
+    if (Number.isFinite(id) && id > 0) {
+      state.labels[String(id)] = req.displayGroup.trim();
+      saveDemoNodeGroupState(state);
+    }
+
+    return {
+      code: 0,
+      msg: "操作成功",
+      data: { id: Date.now() % 100000, ...req },
+      ts: Date.now(),
+    };
+  }
+
+  return null;
+}
+
 const listOf = (book: Record<string, Entry[]>, k: string) =>
   (book[k]?.[0]?.res.data ?? []) as Array<Record<string, unknown>>;
 
@@ -1032,6 +1206,15 @@ async function answer(config: InternalAxiosRequestConfig) {
   const tune = tuneAnswer(bare, config.data);
 
   if (tune) return tune;
+  const grp = demoGroupAnswer(bare, config.data, book);
+
+  if (grp) {
+    // Only the cloned recordings carry recorded timestamps worth
+    // shifting; the synthesized config/write answers are current.
+    return bare === "node/list" || bare === "config/list"
+      ? shiftTimes(grp, fixtures.recordedAt, delta)
+      : grp;
+  }
   const receipt = receiptAnswer(bare, config.data, book);
 
   if (receipt) return receipt;

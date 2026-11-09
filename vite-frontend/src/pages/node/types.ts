@@ -13,6 +13,8 @@ export interface Node {
   latencyTargets?: { points: string[]; pinned: string[] } | null;
   // 后端 nullable* 下发：无值时为 null（列表经 any 映射透传，须按可空声明，B2 变体同步）。
   remark?: string | null;
+  /** 展示分组标签（纯展示）：空/缺失＝未分组，节点页据此分段展示。 */
+  displayGroup?: string | null;
   expiryTime?: number | null;
   renewalCycle?: NodeRenewalCycle | null;
   expiryReminderDismissed?: number;
@@ -68,6 +70,7 @@ export interface NodeForm {
   id: number | null;
   name: string;
   remark: string;
+  displayGroup: string;
   expiryTime: number;
   renewalCycle: NodeRenewalCycle;
   serverHost: string;

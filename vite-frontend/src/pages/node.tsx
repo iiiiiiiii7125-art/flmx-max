@@ -4,7 +4,14 @@ import type {
   InboundApiItem,
 } from "@/api/types";
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import {
+  Fragment,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+} from "react";
 import toast from "react-hot-toast";
 import {
   DndContext,
@@ -29,6 +36,7 @@ import { Progress } from "@/shadcn-bridge/heroui/progress";
 import {
   createNode,
   getConfigs,
+  updateConfig,
   getNodeList,
   getNodeMonthTraffic,
   getInboundList,
@@ -50,6 +58,16 @@ import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
 import { RestartScheduleModal } from "@/pages/node/restart-schedule-modal";
+import { GroupOrderModal } from "@/pages/node/group-order-modal";
+import {
+  NODE_GROUP_ORDER_CONFIG_KEY,
+  UNGROUPED_LABEL,
+  collectNodeGroupLabels,
+  nodeGroupLabel,
+  orderNodeGroupLabels,
+  parseNodeGroupOrder,
+  segmentNodesByGroup,
+} from "@/pages/node/grouping";
 import { PageLoadingState } from "@/components/page-state";
 import { ActionSheet } from "@/components/action-sheet";
 import {
@@ -242,6 +260,7 @@ export default function NodePage({
     id: null,
     name: "",
     remark: "",
+    displayGroup: "",
     expiryTime: 0,
     renewalCycle: "",
     serverHost: "",
@@ -275,6 +294,10 @@ export default function NodePage({
   const [selectMode, setSelectMode] = useState(false);
   const [viewMode, setViewMode] = useViewMode("node");
   const card = viewMode === "card";
+  // 展示分组段序（面板配置 node_display_group_order）：与延迟池同
+  // 一次 getConfigs 读取载入，保存走 updateConfig 落服务端。
+  const [groupOrder, setGroupOrder] = useState<string[]>([]);
+  const [groupOrderOpen, setGroupOrderOpen] = useState(false);
   const [infoPopoverPlacement, setInfoPopoverPlacement] = useState<
     Record<number, "left" | "bottom">
   >({});
@@ -633,6 +656,9 @@ export default function NodePage({
         setLatencyPoolEmpty(
           parseLatencyTargets(r.data[LATENCY_TARGETS_KEY]).length === 0,
         );
+        setGroupOrder(
+          parseNodeGroupOrder(r.data[NODE_GROUP_ORDER_CONFIG_KEY]),
+        );
       })
       .catch(() => {});
 
@@ -869,6 +895,7 @@ export default function NodePage({
       id: node.id,
       name: node.name,
       remark: node.remark || "",
+      displayGroup: node.displayGroup || "",
       expiryTime: node.expiryTime || 0,
       renewalCycle: node.renewalCycle || "",
       serverHost: normalizedHost,
@@ -1404,6 +1431,7 @@ export default function NodePage({
       const data = {
         ...rest,
         remark: form.remark.trim(),
+        displayGroup: form.displayGroup.trim(),
         expiryTime: form.expiryTime,
         renewalCycle: form.renewalCycle,
         extraIPs: form.extraIPs,
@@ -1434,6 +1462,7 @@ export default function NodePage({
                     ...n,
                     name: form.name,
                     remark: form.remark.trim(),
+                    displayGroup: form.displayGroup.trim(),
                     expiryTime: form.expiryTime,
                     renewalCycle: form.renewalCycle,
                     serverIp:
@@ -1476,6 +1505,7 @@ export default function NodePage({
       id: null,
       name: "",
       remark: "",
+      displayGroup: "",
       expiryTime: 0,
       renewalCycle: "",
       serverHost: "",
@@ -1953,10 +1983,83 @@ export default function NodePage({
   const hasActiveFilters = nodeFilterMode !== "all";
   const isDisplayFiltered = hasKeywordSearch || hasActiveFilters;
 
+  // 展示分组（纯展示）：标签全集取自全量节点（表单提示与排序弹窗
+  // 消费），分段只作用于已过滤的显示列表。
+  const allGroupLabels = useMemo(
+    () => collectNodeGroupLabels(nodeList),
+    [nodeList],
+  );
+  // 分段口径：显示列表里没有任何带标签节点时回落平铺渲染（与无
+  // 分组时完全一致、零段标题）；否则先过滤后分段、空段不显示、
+  // 未分组沉底。
+  const groupSections = useMemo(() => {
+    if (!displayNodes.some((node) => nodeGroupLabel(node) !== "")) {
+      return null;
+    }
+
+    return segmentNodesByGroup(displayNodes, groupOrder);
+  }, [displayNodes, groupOrder]);
+  const effectiveGroupOrder = useMemo(
+    () => orderNodeGroupLabels(allGroupLabels, groupOrder),
+    [allGroupLabels, groupOrder],
+  );
+  const saveGroupOrder = useCallback(async (order: string[]) => {
+    try {
+      const res = await updateConfig(
+        NODE_GROUP_ORDER_CONFIG_KEY,
+        JSON.stringify(order),
+      );
+
+      if (res.code !== 0) return false;
+      setGroupOrder(order);
+
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   const sortableNodeIds = useMemo(
     () => displayNodes.map((n) => n.id),
     [displayNodes],
   );
+
+  const renderNodeRow = (node: Node) => {
+    const month = monthTraffic[String(node.id)];
+
+    return card ? (
+      <NodeCardRow
+        key={node.id}
+        actions={rowActions}
+        infoPlacement={infoPopoverPlacement[node.id] ?? "left"}
+        latencyPoolEmpty={latencyPoolEmpty}
+        monthIn={month?.[0]}
+        monthLabel={monthTrafficText(node.id)}
+        monthOut={month?.[1]}
+        node={node}
+        probing={probingIds.has(node.id)}
+        selectMode={selectMode}
+        selected={selectedIds.has(node.id)}
+        showMonitor={!!onOpenMonitor}
+        upgradeProgressEntry={upgradeProgress[node.id]}
+      />
+    ) : (
+      <NodeListRow
+        key={node.id}
+        actions={rowActions}
+        isDisplayFiltered={isDisplayFiltered}
+        latencyPoolEmpty={latencyPoolEmpty}
+        monthIn={month?.[0]}
+        monthLabel={monthTrafficText(node.id)}
+        monthOut={month?.[1]}
+        node={node}
+        probing={probingIds.has(node.id)}
+        selectMode={selectMode}
+        selected={selectedIds.has(node.id)}
+        upgradeProgressEntry={upgradeProgress[node.id]}
+      />
+    );
+  };
 
   return (
     <PageShell embedded={embedded}>
@@ -2027,6 +2130,16 @@ export default function NodePage({
           >
             {nodeFilterMode !== "all" ? "已筛选" : "筛选"}
           </Button>
+          {allGroupLabels.length > 0 && (
+            <Button
+              className="shrink-0"
+              size="sm"
+              variant="flat"
+              onPress={() => setGroupOrderOpen(true)}
+            >
+              分组排序
+            </Button>
+          )}
           <ViewModeToggle value={viewMode} onChange={setViewMode} />
         </PageToolbar>
       )}
@@ -2068,41 +2181,21 @@ export default function NodePage({
                 card ? CARD_GRID : "grid grid-cols-1 gap-2 2xl:grid-cols-2"
               }
             >
-              {displayNodes.map((node) => {
-                const month = monthTraffic[String(node.id)];
-
-                return card ? (
-                  <NodeCardRow
-                    key={node.id}
-                    actions={rowActions}
-                    infoPlacement={infoPopoverPlacement[node.id] ?? "left"}
-                    latencyPoolEmpty={latencyPoolEmpty}
-                    monthIn={month?.[0]}
-                    monthLabel={monthTrafficText(node.id)}
-                    monthOut={month?.[1]}
-                    node={node}
-                    probing={probingIds.has(node.id)}
-                    selectMode={selectMode}
-                    selected={selectedIds.has(node.id)}
-                    showMonitor={!!onOpenMonitor}
-                    upgradeProgressEntry={upgradeProgress[node.id]}
-                  />
-                ) : (
-                  <NodeListRow
-                    key={node.id}
-                    actions={rowActions}
-                    isDisplayFiltered={isDisplayFiltered}
-                    latencyPoolEmpty={latencyPoolEmpty}
-                    monthIn={month?.[0]}
-                    monthLabel={monthTrafficText(node.id)}
-                    monthOut={month?.[1]}
-                    node={node}
-                    probing={probingIds.has(node.id)}
-                    selectMode={selectMode}
-                    selected={selectedIds.has(node.id)}
-                    upgradeProgressEntry={upgradeProgress[node.id]}
-                  />                );
-              })}
+              {groupSections
+                ? groupSections.map((section) => (
+                    <Fragment key={section.label || "__ungrouped"}>
+                      <div className="col-span-full flex items-baseline gap-2 pt-2 first:pt-0">
+                        <h3 className="text-sm font-bold">
+                          {section.label || UNGROUPED_LABEL}
+                        </h3>
+                        <span className="text-xs font-semibold text-foreground">
+                          {section.nodes.length} 台
+                        </span>
+                      </div>
+                      {section.nodes.map((node) => renderNodeRow(node))}
+                    </Fragment>
+                  ))
+                : displayNodes.map((node) => renderNodeRow(node))}
             </div>
           </SortableContext>
         </DndContext>
@@ -2278,6 +2371,7 @@ export default function NodePage({
         errors={errors}
         form={form}
         handleSubmit={handleSubmit}
+        groupSuggestions={allGroupLabels}
         protocolControlsDisabled={protocolControlsDisabled}
         protocolControlsReason={protocolControlsReason}
         sshHostKeyFingerprint={editingHostKeyFingerprint}
@@ -2393,6 +2487,12 @@ export default function NodePage({
         node={restartNode}
         onClose={() => setRestartNode(null)}
         onSaved={() => loadNodes({ silent: true })}
+      />
+      <GroupOrderModal
+        labels={effectiveGroupOrder}
+        open={groupOrderOpen}
+        onClose={() => setGroupOrderOpen(false)}
+        onSave={saveGroupOrder}
       />
     </PageShell>
   );

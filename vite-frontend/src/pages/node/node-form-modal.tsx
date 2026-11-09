@@ -32,6 +32,8 @@ export interface NodeFormModalProps {
   protocolControlsReason: string;
   /** C3-02：该节点已钉入的 SSH 主机密钥指纹（""＝未钉入/新节点）。 */
   sshHostKeyFingerprint?: string;
+  /** 展示分组的已有标签（其他节点在用），供分组输入框提示点选。 */
+  groupSuggestions?: string[];
   setDialogVisible: Dispatch<SetStateAction<boolean>>;
   setForm: Dispatch<SetStateAction<NodeForm>>;
   submitLoading: boolean;
@@ -47,6 +49,7 @@ export function NodeFormModal({
   protocolControlsDisabled,
   protocolControlsReason,
   sshHostKeyFingerprint,
+  groupSuggestions,
   setDialogVisible,
   setForm,
   submitLoading,
@@ -141,6 +144,29 @@ export function NodeFormModal({
                 setForm((prev) => ({ ...prev, remark: e.target.value }))
               }
             />
+
+            <div>
+              <Input
+                description="纯展示：节点页按分组分段排列，一个节点至多一个分组；留空为未分组，清空即脱组"
+                label="分组"
+                list="node-group-suggestions"
+                maxLength={100}
+                placeholder="可从已有分组中选，或输入新分组名"
+                value={form.displayGroup}
+                variant="bordered"
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    displayGroup: e.target.value,
+                  }))
+                }
+              />
+              <datalist id="node-group-suggestions">
+                {(groupSuggestions ?? []).map((label) => (
+                  <option key={label} value={label} />
+                ))}
+              </datalist>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Select
