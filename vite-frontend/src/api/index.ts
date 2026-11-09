@@ -972,59 +972,17 @@ export const batchToggleInbounds = (ids: number[], enabled: boolean) =>
     { timeout: batchCallTimeoutKernelApply(ids.length) },
   );
 export interface SubPipeline {
-  lines: "" | "relay" | "direct";
-  regions: string[];
-  protocols: string[];
-  include: string;
-  exclude: string;
-  rename: string;
-  addFlag: boolean;
-  prefix: string;
-  dedupe: boolean;
-  sort: "" | "name";
-  regionGroups: boolean;
-  /** Client-side chain: names matching chainLanding dial through the relay group. */
-  chainLanding: string;
-  chainRelay: string;
-  /** 路由规则、DNS 与所选服务组（Mihomo / sing-box / Surge）。 */
-  rules: boolean;
-  ruleGroups: string[];
-  /** 链式代理所选节点，按 pipeline 处理前的原名。 */
-  chainLandingNames: string[];
-  chainRelayNames: string[];
-  /** 整个订阅源进链式：源内节点全作落地 / 全作中转（87-d）。 */
-  chainLandingSources: number[];
-  chainRelaySources: number[];
-  /** 自建节点全部作落地。 */
-  chainLandingOwn: boolean;
-  /** 被源/自建落地带入又单独设为「不用」的节点名（二期 UI 设置，一期只透传）。 */
-  chainNoneNames: string[];
-  /** 中转节点不进普通节点名单（二期 UI 设置，一期只透传）。 */
-  chainHideRelays: boolean;
-  /** 按源的名称筛选表达式，键为订阅源 ID（二期 UI 设置，一期只透传）。 */
-  chainSourceFilters?: Record<string, string>;
-  /** 链式源里没角色的节点不放进订阅（二期 UI 设置，一期只透传）。 */
-  chainDropUnused: boolean;
   /**
-   * 中转范围：订阅包含的端点 ID（0=直连，>0=中转 ID）。
-   * 空数组 = 全部端点（不做范围过滤）。
+   * 中转范围三档（后端 lines 键）：""
+   * = 全部端点（直连 + 所有中转）；direct = 只要直连；relay = 只要中转。
    */
-  relayIds: number[];
-  /** JavaScript `function operator(nodes)`，在其他步骤后运行。 */
-  script: string;
-  /** 在节点列表最前面显示到期与流量的占位节点（给不显示订阅信息的客户端看）。 */
-  infoNodes: boolean;
+  lines: "" | "direct" | "relay";
   /**
    * 订阅模板：按客户端槽位（clash / singbox / surge / stash /
-   * shadowrocket）选模板 ID；选了模板的格式渲染进模板骨架，
-   * 不再走内置分流规则。空 = 不用模板。
+   * shadowrocket）选模板 ID；选了模板的格式渲染进模板骨架。
+   * 空 = 不用模板。
    */
   templates?: Record<string, number>;
-}
-/** 订阅规则组（后端下发）。 */
-export interface SubRuleGroup {
-  key: string;
-  name: string;
 }
 export interface SubscriptionItem {
   id: number;
@@ -1053,8 +1011,6 @@ export interface SubscriptionItem {
   overQuota: boolean;
   /** 默认订阅：普通用户的个人链接（?user=&sig=）挂在它上面。 */
   isDefault: boolean;
-  /** 中转范围（与 options.relayIds 同步下发）：空 = 全部端点。 */
-  relayIds: number[];
   /** 仅保存响应回填（B10-002）：本次保存校验时被排除的伴生入站 ID
    * （伴生入站不能作订阅源）；列表等其他视图恒缺省。 */
   excludedCompanionIds?: number[];
@@ -1091,8 +1047,6 @@ export interface SubPreviewItem {
 export const getSubscriptions = () =>
   Network.post<{
     items: SubscriptionItem[];
-    regions: string[];
-    ruleGroups: SubRuleGroup[];
   }>("/subscription/list");
 export const saveSubscription = (data: SubscriptionDraft, idemKey?: string) =>
   // B11-001 家族（R2-K2）：保存后同步下发订阅涉及的各内核，未装
