@@ -1094,10 +1094,8 @@ export interface SubscriptionDraft {
 export interface SubPreviewItem {
   name: string;
   original: string;
-  region: string;
   protocol: string;
   line: "direct" | "relay";
-  chain?: "landing" | "relay";
   /** 导入节点的订阅源 ID；0/缺省 = 非订阅源节点。 */
   sourceId?: number;
   /** 自建入站的端点（非导入节点）。 */
@@ -1293,9 +1291,6 @@ export const previewSubscription = (data: SubscriptionDraft) =>
     items: SubPreviewItem[];
     total: number;
     dropped: number;
-    // F-024：脚本步骤出错时后端保留其余步骤的节点并在此回告错误，
-    // 预览区必须展示，避免用户以为节点被脚本吞掉。
-    scriptError?: string;
     // B10-002：与 save 同口径，预览也回告被排除的伴生入站（非空才出现）。
     excludedCompanionIds?: number[];
   }>("/subscription/preview", data);
