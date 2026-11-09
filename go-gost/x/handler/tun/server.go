@@ -3,6 +3,7 @@ package tun
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -38,6 +39,9 @@ func (h *tunHandler) handleServer(ctx context.Context, conn net.Conn, config *tu
 }
 
 func (h *tunHandler) transportServer(ctx context.Context, tun io.ReadWriter, conn net.PacketConn, config *tun_util.Config, log logger.Logger) error {
+	events := newTunPacketEvents(log)
+	defer events.Flush()
+
 	errc := make(chan error, 1)
 
 	go func() {
@@ -56,7 +60,7 @@ func (h *tunHandler) transportServer(ctx context.Context, tun io.ReadWriter, con
 				if waterutil.IsIPv4(b[:n]) {
 					header, err := ipv4.ParseHeader(b[:n])
 					if err != nil {
-						log.Warnf("parse ipv4 packet header: %v", err)
+						events.badHeader.NoteErr(err)
 						return nil
 					}
 					src, dst = header.Src, header.Dst
@@ -69,7 +73,7 @@ func (h *tunHandler) transportServer(ctx context.Context, tun io.ReadWriter, con
 				} else if waterutil.IsIPv6(b[:n]) {
 					header, err := ipv6.ParseHeader(b[:n])
 					if err != nil {
-						log.Warnf("parse ipv6 packet header: %v", err)
+						events.badHeader.NoteErr(err)
 						return nil
 					}
 					src, dst = header.Src, header.Dst
@@ -81,7 +85,7 @@ func (h *tunHandler) transportServer(ctx context.Context, tun io.ReadWriter, con
 							header.PayloadLen, header.TrafficClass)
 					}
 				} else {
-					log.Warnf("unknown packet, discarded(%d)", n)
+					events.unknown.Note()
 					return nil
 				}
 
@@ -156,7 +160,7 @@ func (h *tunHandler) transportServer(ctx context.Context, tun io.ReadWriter, con
 
 					addrPort, err := netip.ParseAddrPort(addr.String())
 					if err != nil {
-						log.Warnf("keepalive from %v: %v", addr, err)
+						events.keepalive.NoteDetail(fmt.Sprintf("from %v: %v", addr, err))
 						return nil
 					}
 					var keepAliveData [keepAliveHeaderLength]byte
@@ -165,7 +169,7 @@ func (h *tunHandler) transportServer(ctx context.Context, tun io.ReadWriter, con
 					copy(keepAliveData[4:], a16[:])
 
 					if _, err := conn.WriteTo(keepAliveData[:], addr); err != nil {
-						log.Warnf("keepalive to %v: %v", addr, err)
+						events.keepalive.NoteDetail(fmt.Sprintf("to %v: %v", addr, err))
 						return nil
 					}
 
@@ -179,7 +183,7 @@ func (h *tunHandler) transportServer(ctx context.Context, tun io.ReadWriter, con
 				if waterutil.IsIPv4(b[:n]) {
 					header, err := ipv4.ParseHeader(b[:n])
 					if err != nil {
-						log.Warnf("parse ipv4 packet header: %v", err)
+						events.badHeader.NoteErr(err)
 						return nil
 					}
 					src, dst = header.Src, header.Dst
@@ -192,7 +196,7 @@ func (h *tunHandler) transportServer(ctx context.Context, tun io.ReadWriter, con
 				} else if waterutil.IsIPv6(b[:n]) {
 					header, err := ipv6.ParseHeader(b[:n])
 					if err != nil {
-						log.Warnf("parse ipv6 packet header: %v", err)
+						events.badHeader.NoteErr(err)
 						return nil
 					}
 					src, dst = header.Src, header.Dst
@@ -204,7 +208,7 @@ func (h *tunHandler) transportServer(ctx context.Context, tun io.ReadWriter, con
 							header.PayloadLen, header.TrafficClass)
 					}
 				} else {
-					log.Warnf("unknown packet, discarded(%d): % x", n, b[:n])
+					events.unknown.Note()
 					return nil
 				}
 
