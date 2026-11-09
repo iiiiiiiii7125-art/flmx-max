@@ -138,7 +138,11 @@ func (r *Router) GetConnector(host string) *Connector {
 	return rw.Next()
 }
 
-func (r *Router) DelConnector(host string, cid relay.ConnectorID) {
+// DelConnector removes one connector and reports whether the
+// router is now empty. R2-P1-F04: the host key is deleted once its
+// last connector goes, so an emptied router holds no per-host
+// residue for the pool to reclaim by dropping the router itself.
+func (r *Router) DelConnector(host string, cid relay.ConnectorID) bool {
 	// This mutates the connectors slice and map, so it needs the
 	// write lock: it previously took RLock, racing every
 	// concurrent GetConnector read (exposed by the F08 reaping
@@ -153,6 +157,10 @@ func (r *Router) DelConnector(host string, cid relay.ConnectorID) {
 			r.connectors[host] = append(connectors[:i], connectors[i+1:]...)
 		}
 	}
+	if len(r.connectors[host]) == 0 {
+		delete(r.connectors, host)
+	}
+	return len(r.connectors) == 0
 }
 
 func (r *Router) Close() error {
@@ -224,15 +232,28 @@ func (p *ConnectorPool) Del(rid relay.TunnelID, host string, cid relay.Connector
 		return
 	}
 
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	// R2-P1-F04: Del takes the write lock because removing the
+	// last connector of a router now also reclaims the router
+	// entry itself. Previously the empty Router shell (struct,
+	// close chan, empty map) stayed in p.routers forever — keyed
+	// by an associate-supplied TunnelID with no idle sweep,
+	// unlike the tunnel ConnectorPool's closeIdles — so shell
+	// residue grew linearly with historical router IDs for the
+	// life of the service. An emptied Router holds no resources
+	// beyond its (now empty) connector map: nothing outside the
+	// pool references Router values, and a later Add for the
+	// same rid simply creates a fresh Router.
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
 	r := p.routers[rid]
 	if r == nil {
 		return
 	}
 
-	r.DelConnector(host, cid)
+	if r.DelConnector(host, cid) {
+		delete(p.routers, rid)
+	}
 }
 
 func (p *ConnectorPool) Close() error {
