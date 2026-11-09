@@ -125,6 +125,8 @@ export interface InboundForm {
   meteringEnabled: boolean;
   /** Read-only: a metering companion currently exists for this inbound. */
   meteringActive: boolean;
+  /** Per-inbound connection-log collection opt-in (design §4.5). */
+  connLogEnabled: boolean;
   /** Per-inbound idle timeout (seconds) for Xray, "" = unset (default 300s). */
   connIdleSeconds: string;
 }
@@ -311,6 +313,7 @@ export function emptyForm(
     enabled: true,
     meteringEnabled: false,
     meteringActive: false,
+    connLogEnabled: false,
     connIdleSeconds: "",
   };
 }
@@ -509,6 +512,7 @@ export function formFromItem(item: InboundApiItem): InboundForm {  return {
     enabled: item.enabled,
     meteringEnabled: item.meteringEnabled,
     meteringActive: item.meteringActive,
+    connLogEnabled: Boolean(item.connLogEnabled),
     connIdleSeconds: item.connIdleSeconds ? String(item.connIdleSeconds) : "",
   };
 }
@@ -665,6 +669,7 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     splitRules: splitPayload(form.splitRules),
     enabled: form.enabled,
     meteringEnabled: form.meteringEnabled,
+    connLogEnabled: form.connLogEnabled,
     // "" sends 0 = unset (Xray default 300s); an explicit number sets it;
     // 0 is the legal clear value on Xray (148-P3-1); "-1" sends -1 =
     // unlimited (renders as 31536000). A non-Xray inbound
