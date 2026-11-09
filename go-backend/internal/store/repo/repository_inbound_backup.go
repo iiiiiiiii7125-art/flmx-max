@@ -782,7 +782,9 @@ func scrubRemovedSubOptions(raw string) (clean string, hadSettings bool, hadRela
 				if lv, ok := top["lines"]; ok {
 					_ = json.Unmarshal(lv, &explicit)
 				}
-				if explicit != "direct" && explicit != "relay" {
+				// Mirror the read path (handler UnmarshalJSON): the
+				// stored lines value is judged after TrimSpace.
+				if t := strings.TrimSpace(explicit); t != "direct" && t != "relay" {
 					if enc, err := json.Marshal(scope); err == nil {
 						top["lines"] = enc
 					}
