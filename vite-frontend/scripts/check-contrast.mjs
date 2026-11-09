@@ -1192,6 +1192,102 @@ if (fgRgb && GLASS_TIERS.every((t) => t.stops.length === 3)) {
   check("玻璃合成网格可复算（--foreground 与三级停点齐备）", false, "token 或停点缺失");
 }
 
+// ── 低透明前景普查（F-W1-06 同族复发，2026-11-10 修复波路 5）──
+// Round 6 已清零的 text-foreground/60 在 2.1.2 新文件
+// group-manage-modal.tsx:175 复发：玻璃载体最差格复算 3.48–4.11 ＜ 4.5，
+// 而本门此前只钉全不透明 --foreground 的 36 格合成值，带透明后缀的
+// 小字绕过了门。本段把该族迁入常设门：机械普查 src 内全部
+// text-foreground/<alpha> 字面用法，逐处按 alpha 把 --foreground 合成
+// 到载体上再与载体算比值，取玻璃 36 格＋实色两底的最差格断言 ≥ 4.5
+// （底线）；命中 0 处时仍断言普查面有效，扫描面失效即红，不许空集
+// 冒充通过。变异验活：任一处新植 text-foreground/60 须红（见本段
+// 末尾注记；修复波 W5 验活记录在 W5-report.md）。
+{
+  const fg = tokens["--foreground"] ? hexToRgb(tokens["--foreground"]) : null;
+  const carriers = [];
+  if (fg && GLASS_TIERS.every((t) => t.stops.length === 3)) {
+    for (const tier of GLASS_TIERS) {
+      for (const [bgName, bg] of GLASS_BACKDROPS) {
+        tier.stops.forEach((stop, si) => {
+          const base =
+            tier.name.startsWith("内嵌")
+              ? compositeOver(GLASS_TIERS[0].stops[2], bg)
+              : bg;
+          carriers.push([
+            `${tier.name} 停点${si + 1} × ${bgName}`,
+            compositeOver(stop, base),
+          ]);
+        });
+      }
+    }
+  }
+  for (const t of ["--content1", "--background"]) {
+    if (tokens[t]) carriers.push([`实色 ${t}`, hexToRgb(tokens[t])]);
+  }
+  const hits = [];
+  let scannedFiles = 0;
+  const fgWalk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        fgWalk(path);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        scannedFiles++;
+        const lines = readFileSync(path, "utf8").split("\n");
+        lines.forEach((line, i) => {
+          for (const m of line.matchAll(
+            /text-foreground\/(?:(\d+)|\[([\d.]+)\])/g,
+          )) {
+            const alpha = m[1]
+              ? parseInt(m[1], 10) / 100
+              : parseFloat(m[2]);
+            hits.push({ file: path, line: i + 1, alpha });
+          }
+        });
+      }
+    }
+  };
+  fgWalk(join(here, "..", "src"));
+  if (!fg || carriers.length === 0) {
+    check(
+      "低透明前景普查可复算（--foreground 与载体网格齐备）",
+      false,
+      "token 或载体缺失",
+    );
+  } else {
+    const bad = [];
+    for (const h of hits) {
+      let worst = Infinity;
+      let worstCarrier = "";
+      for (const [cname, surface] of carriers) {
+        const eff = [0, 1, 2].map(
+          (i) => h.alpha * fg[i] + (1 - h.alpha) * surface[i],
+        );
+        const r = contrastRgb(eff, surface);
+        if (r < worst) {
+          worst = r;
+          worstCarrier = cname;
+        }
+      }
+      if (worst < 4.5) {
+        bad.push(
+          `${h.file.split("/src/")[1]}:${h.line} /${Math.round(h.alpha * 100)} 最差 ${worst.toFixed(2)}（${worstCarrier}）`,
+        );
+      }
+    }
+    check(
+      `低透明前景普查差集 ∅（text-foreground/<alpha> 实扫 ${scannedFiles} 文件、命中 ${hits.length} 处，最差格底线 4.5）`,
+      bad.length === 0,
+      bad.slice(0, 5).join("；"),
+    );
+  }
+  check(
+    "低透明前景普查面有效（实扫文件数 > 0）",
+    scannedFiles > 0,
+    "普查扫描面失效",
+  );
+}
+
 // ── 托盘 hover 对（R2-S1-05）──────────────────────────────
 // 此前 PAIRS 只钉托盘静止对，hover 对不在断言内，tray-danger
 // hover 一度跌到 6.93（底线虽守、目标 7 未达）无人报。现 hover

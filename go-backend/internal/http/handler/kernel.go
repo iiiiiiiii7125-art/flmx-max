@@ -116,14 +116,17 @@ type inboundView struct {
 	Remark           string             `json:"remark"`
 	RelayOnly        bool               `json:"relayOnly"`
 	RelayCount       int                `json:"relayCount"`
-	AcceptProxy      bool               `json:"acceptProxyProtocol"`
-	Whitelist        bool               `json:"relayWhitelist"`
-	WhitelistExtra   string             `json:"whitelistExtra"`
-	Enabled          bool               `json:"enabled"`
-	UploadBytes      int64              `json:"uploadBytes"`
-	DownloadBytes    int64              `json:"downloadBytes"`
-	CreatedTime      int64              `json:"createdTime"`
-	UpdatedTime      int64              `json:"updatedTime"`
+	// RelayInvalidCount (IRL-7) counts relays whose backing forward is
+	// deleted or paused; RelayCount itself counts only live relays.
+	RelayInvalidCount int    `json:"relayInvalidCount"`
+	AcceptProxy       bool   `json:"acceptProxyProtocol"`
+	Whitelist         bool   `json:"relayWhitelist"`
+	WhitelistExtra    string `json:"whitelistExtra"`
+	Enabled           bool   `json:"enabled"`
+	UploadBytes       int64  `json:"uploadBytes"`
+	DownloadBytes     int64  `json:"downloadBytes"`
+	CreatedTime       int64  `json:"createdTime"`
+	UpdatedTime       int64  `json:"updatedTime"`
 	// Probe is the last reachability check of an imported node.
 	Probe *externalProbe `json:"probe,omitempty"`
 	// SourceID / SourceName: the remote subscription it came from.
@@ -753,9 +756,18 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
+	// IRL-7: count only relays that can actually carry traffic — the
+	// backing forward must exist and be enabled (status 1), the same
+	// predicate relayViews uses. Dead relays are counted separately so
+	// the UI can flag them instead of inflating the headline count.
 	relayCounts := make(map[int64]int)
+	relayInvalidCounts := make(map[int64]int)
 	for _, rel := range relays {
-		relayCounts[rel.InboundID]++
+		if rel.ForwardExists && rel.ForwardStatus == 1 {
+			relayCounts[rel.InboundID]++
+		} else {
+			relayInvalidCounts[rel.InboundID]++
+		}
 	}
 	kernelByID := make(map[int64]model.NodeKernel, len(kernels))
 	for _, k := range kernels {
@@ -830,6 +842,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			Remark:             row.Remark,
 			RelayOnly:          row.RelayOnly == 1,
 			RelayCount:         relayCounts[row.ID],
+			RelayInvalidCount:  relayInvalidCounts[row.ID],
 			AcceptProxy:        row.AcceptProxyProtocol == 1,
 			Whitelist:          row.RelayWhitelist == 1,
 			WhitelistExtra:     row.WhitelistExtra,

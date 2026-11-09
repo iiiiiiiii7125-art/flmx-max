@@ -20,17 +20,44 @@ import type { NodeTuneStatus } from "./index";
  * congestionControl（它的拥塞字段叫 congestion，与新规范名撞键，
  * 故判别绝不能只看 congestion）。
  */
+/** C3-03：nofile 子对象须验形后才带出——形状不对当缺失处理，
+ * 消费面据此整段省略，绝不拿常量顶替实回值。 */
+function nofileOf(
+  r: Record<string, unknown>,
+): NodeTuneStatus["nofile"] | undefined {
+  const n = r.nofile;
+
+  if (!n || typeof n !== "object") return undefined;
+  const o = n as Record<string, unknown>;
+
+  if (typeof o.soft !== "number" || typeof o.hard !== "number")
+    return undefined;
+
+  return {
+    soft: o.soft,
+    hard: o.hard,
+    limitsFile: o.limitsFile === true,
+  };
+}
+
 export function normalizeNodeTuneStatus(raw: unknown): NodeTuneStatus | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const faces = r.faces;
   if (faces && typeof faces === "object") {
-    return raw as NodeTuneStatus;
+    const nofile = nofileOf(r);
+
+    return {
+      ...(raw as NodeTuneStatus),
+      ...(nofile ? { nofile } : { nofile: undefined }),
+    };
   }
   if (
     typeof r.ipv4Priority === "boolean" ||
     typeof r.congestionControl === "string"
   ) {
+    const nofile = nofileOf(r);
+
     return {
       faces: {
         ipv4: r.ipv4Priority === true,
@@ -41,6 +68,7 @@ export function normalizeNodeTuneStatus(raw: unknown): NodeTuneStatus | null {
       congestion:
         typeof r.congestionControl === "string" ? r.congestionControl : "",
       qdisc: typeof r.defaultQdisc === "string" ? r.defaultQdisc : "",
+      ...(nofile ? { nofile } : {}),
       ...(Array.isArray(r.warnings)
         ? { warnings: r.warnings as string[] }
         : {}),

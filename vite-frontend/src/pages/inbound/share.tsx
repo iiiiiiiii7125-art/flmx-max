@@ -508,6 +508,8 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
 
   const localInboundCount = inbounds.filter((i) => !i.external).length;
   const importedInboundCount = inbounds.length - localInboundCount;
+  // IRL-5：总数里混着已停用入站时点名个数，与逐项「已停用」标记同口径。
+  const disabledInboundCount = inbounds.filter((i) => !i.enabled).length;
   const filteredInbounds = inbounds.filter(
     (inbound) =>
       (originFilter === "all" || inboundOriginOf(inbound) === originFilter) &&
@@ -556,6 +558,20 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                   导入
                 </Chip>
               )}
+              {/* IRL-5：已停用入站的单独链接拉回的是空节点集（后端
+                  拉取跳过停用行），必须当面标明，不能与可用入站同面
+                  陈列装作可复制即用。 */}
+              {!inbound.enabled && (
+                <Chip
+                  className="shrink-0"
+                  color="warning"
+                  size="sm"
+                  title="该入站已停用，单独订阅链接拉取为空，启用后恢复"
+                  variant="flat"
+                >
+                  已停用
+                </Chip>
+              )}
             </p>
             <p className="text-xs font-semibold text-foreground">
               {inboundSubtitleOf(inbound)}
@@ -582,6 +598,11 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
         </button>
         {expanded && (
           <div className="pt-2 space-y-2">
+            {!inbound.enabled && (
+              <p className="rounded-lg bg-warning-50 px-2 py-1.5 text-xs font-semibold text-warning-700">
+                该入站已停用：下面的单独订阅链接现在拉取到的是空节点集（其中转同理），在入站页启用后恢复。
+              </p>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {SUB_FORMATS.filter((f) => f.key).map((f) => {
                 const fmtUrl = url(f.key, inbound.id);
@@ -715,7 +736,11 @@ export function SubscriptionCard({ inbounds = [] }: { inbounds?: InboundApiItem[
                 onClick={() => setInboundSectionOpen((open) => !open)}
               >
                 <h4 className="text-sm font-semibold">
-                  按入站单独订阅（共 {inbounds.length}）
+                  按入站单独订阅（共 {inbounds.length}
+                  {disabledInboundCount > 0
+                    ? `，含 ${disabledInboundCount} 个已停用`
+                    : ""}
+                  ）
                 </h4>
                 <ChevronDown
                   className={`h-4 w-4 shrink-0 text-foreground transition-transform ${inboundSectionOpen ? "" : "-rotate-90"}`}

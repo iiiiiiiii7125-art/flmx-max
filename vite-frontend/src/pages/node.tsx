@@ -237,6 +237,9 @@ export default function NodePage({
   >({});
   const [nodeOrder, setNodeOrder] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
+  // IRL-3 同族（普查补入）：节点列表初始加载失败标记——空状态据此
+  // 改判「加载失败」而非「还没有节点」。
+  const [nodesLoadFailed, setNodesLoadFailed] = useState(false);
   const [localSearchKeyword, setLocalSearchKeyword] = useLocalStorageState(
     "node-search-keyword-local",
     "",
@@ -455,6 +458,8 @@ export default function NodePage({
       }
 
       if (res.code === 0) {
+        // IRL-3 同族（普查补入）：任一次成功加载清失败标记。
+        setNodesLoadFailed(false);
         const nodesData: Node[] = (res.data || []).map((node: any) => ({
           ...node,
           inx: node.inx ?? 0,
@@ -493,11 +498,15 @@ export default function NodePage({
       } else {
         if (!silent) {
           toast.error(res.msg || "加载节点列表失败");
+          // IRL-3 同族（普查补入）：初始加载失败不得落到「还没有
+          // 节点」的假空状态——置位后空状态改判为加载失败＋重试。
+          setNodesLoadFailed(true);
         }
       }
     } catch {
       if (!silent && loadNodesSeqRef.current === seq) {
         toast.error("网络错误，请重试");
+        setNodesLoadFailed(true);
       }
     } finally {
       if (!silent && loadNodesSeqRef.current === seq) {
@@ -2372,6 +2381,15 @@ export default function NodePage({
 
       {loading ? (
         <PageLoadingState message="正在加载..." />
+      ) : nodeList.length === 0 && nodesLoadFailed ? (
+        <EmptyHint
+          action={{
+            key: "retry",
+            label: "重新加载",
+            onPress: () => loadNodes(),
+          }}
+          text="节点列表加载失败，不能据此判断是否已有节点；请检查网络后重试。"
+        />
       ) : nodeList.length === 0 ? (
         <EmptyHint
           action={{ key: "add", label: "新建节点", onPress: handleAdd }}

@@ -16,10 +16,13 @@ import {
   TRANSPORT_LABELS,
   type InboundForm,
   applyPreset,
+  encryptionSecretMatchesAuth,
+  generateEncryptionSecret,
   isAutoName,
   passwordProtocols,
   presetsFor,
   protocolCap,
+  secretForAuth,
   sniOptionalProtocols,
   toPayload,
   uuidProtocols,
@@ -49,6 +52,9 @@ interface Props {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   caps: KernelCapabilitiesApiData | null;
+  /** IRL-3：内核能力加载失败（caps 为空不是「没有能力」而是没取到）——
+   * 弹窗内明示，避免协议/传输/安全选项全空无解释。 */
+  capsFailed?: boolean;
   nodes: NodeApiItem[];
   kernels: KernelApiItem[];
   /** All inbounds, to confirm a save whose answer was lost. */
@@ -114,6 +120,7 @@ export function InboundFormModal({
   isOpen,
   onOpenChange,
   caps,
+  capsFailed,
   nodes,
   kernels,
   inbounds,
@@ -149,6 +156,9 @@ export function InboundFormModal({
   );
   // Visible feedback when a preset fills fields inside the folded area.
   const [presetNote, setPresetNote] = useState("");
+  // IRL-4：本次编辑中因认证切换/套预设而换过 ENC 密钥时置位，密钥区
+  // 常驻提示「保存后客户端需重新导入」，不靠用户自己发现链接变了。
+  const [secretRotated, setSecretRotated] = useState(false);
   const isEdit = Boolean(initial.id);
 
   // Reset when the parent opens the modal with a different item.
@@ -158,6 +168,7 @@ export function InboundFormModal({
     setConnIdleBeforeUnlimited("");
     setShowAdvanced(Boolean(initial.id) || seedReachesAdvanced(initial));
     setPresetNote("");
+    setSecretRotated(false);
   }
 
   const set = <K extends keyof InboundForm>(key: K, value: InboundForm[K]) =>
@@ -389,6 +400,19 @@ export function InboundFormModal({
     ) {
       return "当前传输/安全组合不支持 XTLS Vision 流控（仅 VLESS + TCP + TLS/Reality 安全层，或开启 VLESS 加密时可用）：请改回 TCP + TLS/Reality、开启 VLESS 加密，或关闭 Vision 流控";
     }
+    // IRL-4：ENC 密钥长度与认证方式不匹配时后端必拒（x25519=32 字节 /
+    // mlkem768=64 字节 seed），前端同口径先拦并指自救路径，免得用户
+    // 只在保存后吃一个无从下手的报错。留空不拦（后端自动生成/回填）。
+    if (
+      form.encryptionEnabled &&
+      form.encryptionSecret.trim() &&
+      !encryptionSecretMatchesAuth(
+        form.encryptionAuth,
+        form.encryptionSecret,
+      )
+    ) {
+      return "ENC 密钥长度与所选认证方式不匹配（X25519 需 32 字节、ML-KEM-768 需 64 字节的 base64url 密钥）：请点密钥框旁的「重新生成」换一把新密钥";
+    }
 
     return null;
   };
@@ -514,6 +538,11 @@ export function InboundFormModal({
             </ModalHeader>
             <ModalBody>
               <div className="space-y-4">
+                {capsFailed && (
+                  <p className="rounded-xl bg-danger-50 px-3 py-2 text-xs font-semibold text-danger-700">
+                    内核能力加载失败：内核、协议、传输与安全层选项暂时不可用（不是平台不支持）。请关闭弹窗、刷新页面后重试。
+                  </p>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Select
                     isDisabled={isEdit}
@@ -762,11 +791,25 @@ export function InboundFormModal({
                               // 差异是有意分层、不是同一形态的两套标准：
                               // 要 IEPL 形态点标签，不要用本开关逐项凑；
                               // 差异同时写明于开关下方注记与预设文件头。
+                              // IRL-4：认证被填成 mlkem768，旧密钥若是
+                              // x25519 的 32 字节则长度不合、保存必拒；
+                              // 与新认证不匹配时当场换合法新密钥（更新
+                              // 留空会被后端回填旧密钥，清字段救不了）。
+                              const sec = secretForAuth(
+                                "mlkem768",
+                                form.encryptionSecret,
+                              );
+
+                              if (sec.rotated && isEdit) setSecretRotated(true);
                               setForm((prev) => ({
                                 ...prev,
                                 encryptionEnabled: true,
                                 encryptionAuth: "mlkem768",
                                 encryptionMode: "native",
+                                encryptionSecret: secretForAuth(
+                                  "mlkem768",
+                                  prev.encryptionSecret,
+                                ).secret,
                                 transportType: "tcp",
                                 securityType: "none",
                                 flowVision: false,
@@ -790,13 +833,32 @@ export function InboundFormModal({
                         title="一键填入 IEPL 专用（纯 ENC）配置：VLESS / TCP / 安全无 / ML-KEM-768 后量子认证 / xorpub 外观，无 SNI、不启用 Vision 流控，并勾选空闲超时「不限」。只填表单，不创建。"
                         variant="flat"
                         onClick={() => {
-                          setForm((prev) => applyPureEncPreset(prev));
+                          // IRL-4：预设可能因认证锁定而换密钥（见
+                          // applyPureEncPreset），编辑既有入站时提示
+                          // 客户端需重新导入。
+                          const next = applyPureEncPreset(form);
+
+                          if (
+                            isEdit &&
+                            next.encryptionSecret !== form.encryptionSecret
+                          ) {
+                            setSecretRotated(true);
+                          }
+                          setForm(next);
                           setPresetNote("IEPL专用");
                         }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            setForm((prev) => applyPureEncPreset(prev));
+                            const next = applyPureEncPreset(form);
+
+                            if (
+                              isEdit &&
+                              next.encryptionSecret !== form.encryptionSecret
+                            ) {
+                              setSecretRotated(true);
+                            }
+                            setForm(next);
                           }
                         }}
                       >
@@ -808,14 +870,30 @@ export function InboundFormModal({
                         <Select
                           label="认证方式"
                           selectedKeys={[form.encryptionAuth]}
-                          onSelectionChange={(keys) =>
+                          onSelectionChange={(keys) => {
+                            // IRL-4：两种认证的密钥长度互不兼容（32 /
+                            // 64 字节），切换认证必须同时处理旧密钥：
+                            // 不匹配就当场换新，否则保存必被后端以
+                            // 「encryptionSecret 无效」拒绝、且更新留空
+                            // 会被回填旧密钥而无从自救。
+                            const auth = String(
+                              Array.from(keys)[0] ?? form.encryptionAuth,
+                            );
+                            const sec = secretForAuth(
+                              auth,
+                              form.encryptionSecret,
+                            );
+
+                            if (sec.rotated && isEdit) setSecretRotated(true);
                             setForm((prev) => ({
                               ...prev,
-                              encryptionAuth: String(
-                                Array.from(keys)[0] ?? prev.encryptionAuth,
-                              ),
-                            }))
-                          }
+                              encryptionAuth: auth,
+                              encryptionSecret: secretForAuth(
+                                auth,
+                                prev.encryptionSecret,
+                              ).secret,
+                            }));
+                          }}
                         >
                           <SelectItem
                             key="x25519"
@@ -852,6 +930,55 @@ export function InboundFormModal({
                             random 全随机
                           </SelectItem>
                         </Select>
+                        {/* IRL-4 存量自救入口：密钥字段此前从未在表单
+                            呈现，存量错长度密钥（如早期导入/切换认证的
+                            残留）没有任何修复路径。这里显式给出字段、
+                            长度校验提示与一键重生成。 */}
+                        <div className="flex items-end gap-2">
+                          <Input
+                            className="flex-1"
+                            description={
+                              form.encryptionAuth === "mlkem768"
+                                ? "ML-KEM-768 密钥为 64 字节 seed（base64url）"
+                                : "X25519 密钥为 32 字节私钥（base64url）"
+                            }
+                            label="服务端密钥（ENC）"
+                            placeholder="留空保存时自动生成"
+                            value={form.encryptionSecret}
+                            variant="bordered"
+                            onChange={(e) =>
+                              set("encryptionSecret", e.target.value)
+                            }
+                          />
+                          <Button
+                            size="sm"
+                            variant="flat"
+                            onPress={() => {
+                              set(
+                                "encryptionSecret",
+                                generateEncryptionSecret(form.encryptionAuth),
+                              );
+                              if (isEdit) setSecretRotated(true);
+                            }}
+                          >
+                            重新生成
+                          </Button>
+                        </div>
+                        {form.encryptionSecret &&
+                          !encryptionSecretMatchesAuth(
+                            form.encryptionAuth,
+                            form.encryptionSecret,
+                          ) && (
+                            <p className="text-xs font-semibold text-danger-700">
+                              当前密钥长度与所选认证方式不匹配，保存会被拒绝；点「重新生成」换一把匹配的新密钥即可修复。
+                            </p>
+                          )}
+                        {secretRotated && (
+                          <p className="text-xs font-semibold text-warning-700">
+                            本次编辑已更换 ENC
+                            密钥：保存后，已分发的客户端配置将失效，需重新导入订阅/分享链接。
+                          </p>
+                        )}
                         <p className="text-xs font-semibold text-foreground">
                           开启时自动套用标准配置（TCP、安全无、ML-KEM-768
                           认证、native 外观；纯 ENC 形态不开启 Vision

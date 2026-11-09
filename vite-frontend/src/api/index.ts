@@ -1516,6 +1516,10 @@ export interface NodeTuneStatus {
   congestion: string;
   /** 当前默认队列算法（如 "fq" / "pfifo_fast"）。 */
   qdisc: string;
+  /** agent 进程自身的句柄上限实回值（C3-03）：soft/hard 为当前进程
+   * 的 RLIMIT_NOFILE，limitsFile 表示 limits 文件是否在位。旧回包
+   * 缺失时为 undefined，消费面必须整段省略、不得写死数字冒充。 */
+  nofile?: { soft: number; hard: number; limitsFile: boolean };
   warnings?: string[];
 }
 /** 线路探针结果（agent TuneProbe 回包）：保留两条腿——参考主机

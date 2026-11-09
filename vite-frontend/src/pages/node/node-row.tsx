@@ -584,6 +584,18 @@ const NodeCardContent = memo(function NodeCardContent({
                 删除
               </Button>
             </div>
+            {/* CARDVIEW-RESTART：卡片视图此前没有任何打开详情 sheet
+                的入口，定时重启/测试点/安装命令等只存在于列表行点击
+                的 sheet 里，两视图功能不对等。补一个与列表同路的
+                sheet 入口，入口集合自动与列表一致。 */}
+            <Button
+              className="min-h-8 w-full"
+              size="sm"
+              variant="light"
+              onPress={() => actions.openSheet(node.id)}
+            >
+              更多操作（含定时重启）
+            </Button>
           </div>
         </div>
       </CardBody>
@@ -637,7 +649,10 @@ const NodeListContent = memo(function NodeListContent({
     address,
     upgrading
       ? `升级中 ${progress.percent}%`
-      : node.version || "未连接过",
+      : // C3-05：版本缺失的兜底三面统一为「未知」——旧列表面写作
+        // 「未连接过」是因果断言（版本未回填的节点未必没连过），
+        // 与卡片/详情面同字段两说法。
+        node.version || "未知",
     online && node.systemInfo
       ? `已运行 ${formatUptime(node.systemInfo.uptime)}`
       : "",

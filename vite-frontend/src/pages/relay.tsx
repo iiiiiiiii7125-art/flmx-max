@@ -12,6 +12,7 @@ import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { useVisiblePolling } from "@/hooks/use-visible-polling";
 import { latestProbe } from "@/utils/latest-probe";
 import ForwardPage from "@/pages/forward";
+import { isIeplForm } from "@/pages/inbound/presets";
 import { RelayModal } from "@/pages/inbound/relay-modal";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
 import TunnelPage from "@/pages/tunnel";
@@ -48,6 +49,15 @@ function LinesView() {
   const [loading, setLoading] = useState(true);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
   const [relays, setRelays] = useState<InboundRelayApiItem[]>([]);
+  // IRL-3：任一列表加载失败都要与「真空」可区分——relRes 失败旧实现
+  // 完全静默，total=0 直接渲染「还没有中转线路」装空。
+  const [loadError, setLoadError] = useState("");
+  // IRL-3 同族残留（接管复核发现）：中转列表从未成功加载过时，relays
+  // 恒为 []，每条落地都会渲染「无中转」——把「未知」说成「没有」；
+  // 顶部横幅还宣称「显示的是上次成功加载的数据」，初载时根本没有上
+  // 次数据。relaysLoaded 区分「从未取到」与「轮询失败留旧数据」两种
+  // 情形，前者必须整面报错、后者才可留旧数据加横幅。
+  const [relaysLoaded, setRelaysLoaded] = useState(false);
   const [editing, setEditing] = useState<InboundApiItem | null>(null);
   const [probingIds, setProbingIds] = useState<Set<number>>(new Set());
   const [onlyWithRelays, setOnlyWithRelays] = useState(false);
@@ -73,7 +83,8 @@ function LinesView() {
 
       if (loadSeqRef.current !== seq) return;
       if (inRes.code === 0) setInbounds(inRes.data ?? []);
-      if (relRes.code === 0)
+      if (relRes.code === 0) {
+        setRelaysLoaded(true);
         setRelays((prev) => {
           const previous = new Map(prev.map((r) => [r.id, r]));
 
@@ -82,8 +93,23 @@ function LinesView() {
             latency: latestProbe(r.latency, previous.get(r.id)?.latency),
           }));
         });
-      if (inRes.code !== 0 && !options?.silent)
-        toast.error(inRes.msg || "加载失败");
+      }
+      // IRL-3：两路任一失败都置错（旧实现只看 inRes、relRes 失败静默
+      // 装空）；两路全成才清错。已有数据时轮询失败只置错不清空，页面
+      // 顶部出提示行，数据本体不假装消失。
+      if (inRes.code === 0 && relRes.code === 0) {
+        setLoadError("");
+      } else {
+        const failed =
+          inRes.code !== 0 ? inRes : relRes;
+
+        setLoadError(failed.msg || "加载失败");
+        if (!options?.silent) toast.error(failed.msg || "加载失败");
+      }
+    } catch {
+      if (loadSeqRef.current !== seq) return;
+      setLoadError("网络错误，请重试");
+      if (!options?.silent) toast.error("网络错误，请重试");
     } finally {
       if (loadSeqRef.current === seq) {
         setLoading(false);
@@ -167,7 +193,11 @@ function LinesView() {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-semibold text-foreground">
-          {inbounds.length} 个落地 · {total} 条中转线路。点落地可添加或删除中转
+          {inbounds.length} 个落地 ·{" "}
+          {loadError && !relaysLoaded
+            ? "中转线路未知（列表尚未成功加载）"
+            : `${total} 条中转线路`}
+          。点落地可添加或删除中转
         </p>
         <div className="flex shrink-0 gap-2">
           <Button
@@ -203,12 +233,35 @@ function LinesView() {
         </div>
       </div>
 
-      {shown.length === 0 ? (
+      {loadError && shown.length > 0 && relaysLoaded && (
+        <p className="rounded-xl bg-warning-50 px-3 py-2 text-xs font-semibold text-warning-700">
+          部分数据刷新失败（{loadError}），当前显示的是上次成功加载的数据。
+        </p>
+      )}
+
+      {shown.length === 0 || (loadError && !relaysLoaded) ? (
         <Card className="shadow-sm">
           <CardBody className="py-12 text-center text-sm text-foreground">
-            {inbounds.length === 0
-              ? "还没有落地。先在“落地”里搭建或导入节点，再回来对接中转。"
-              : "还没有中转线路"}
+            {loadError ? (
+              <div className="flex flex-col items-center justify-center gap-3">
+                <p className="font-semibold text-danger-700">
+                  中转线路加载失败：{loadError}
+                </p>
+                <p>不能据此判断是否已有中转线路，请重试。</p>
+                <Button
+                  color="danger"
+                  size="sm"
+                  variant="flat"
+                  onPress={() => load()}
+                >
+                  重新加载
+                </Button>
+              </div>
+            ) : inbounds.length === 0 ? (
+              "还没有落地。先在“落地”里搭建或导入节点，再回来对接中转。"
+            ) : (
+              "还没有中转线路"
+            )}
           </CardBody>
         </Card>
       ) : viewMode === "grid" ? (
@@ -224,7 +277,7 @@ function LinesView() {
                 <div>
                   <div className="flex items-center gap-1.5">
                     <div className="truncate font-semibold">{i.name}</div>
-                    {i.settings.encryptionAuth && (
+                    {isIeplForm(i) && (
                       <Chip color="danger" size="sm" variant="flat">
                         IEPL专用
                       </Chip>
@@ -322,7 +375,7 @@ function LinesView() {
                   <span className="min-w-0 flex-1 truncate font-medium">
                     {i.name}
                   </span>
-                  {i.settings.encryptionAuth && (
+                  {isIeplForm(i) && (
                     <Chip color="danger" size="sm" variant="flat">
                       IEPL专用
                     </Chip>

@@ -81,6 +81,10 @@ export function RelayModal({
   const [relays, setRelays] = useState<InboundRelayApiItem[]>([]);
   const [tunnels, setTunnels] = useState<TunnelApiItem[]>([]);
   const [loading, setLoading] = useState(false);
+  // IRL-3：中转/隧道任一加载失败必须明示——旧实现两路失败全静默，
+  // 失败被渲染成「还没有对接中转」「没有可用的隧道」的假空状态，
+  // 还会诱导用户在假空下重复创建。
+  const [loadError, setLoadError] = useState("");
   const [form, setForm] = useState({
     tunnelId: "",
     inPort: "",
@@ -113,6 +117,21 @@ export function RelayModal({
 
       if (relRes.code === 0) setRelays(relRes.data || []);
       if (tunRes.code === 0) setTunnels(tunRes.data || []);
+      // IRL-3：任一失败置错（点名是哪一路），两路全成才清错；失败时
+      // 不渲染真空文案、创建入口禁用，防假空诱导重复创建。
+      if (relRes.code === 0 && tunRes.code === 0) {
+        setLoadError("");
+      } else if (relRes.code !== 0 && tunRes.code !== 0) {
+        setLoadError("中转列表与隧道列表都加载失败");
+      } else if (relRes.code !== 0) {
+        setLoadError(`中转列表加载失败：${relRes.msg || "未知错误"}`);
+      } else {
+        setLoadError(`隧道列表加载失败：${tunRes.msg || "未知错误"}`);
+      }
+    } catch {
+      if (loadSeqRef.current === seq) {
+        setLoadError("加载失败：网络错误");
+      }
     } finally {
       if (loadSeqRef.current === seq) {
         setLoading(false);
@@ -123,6 +142,7 @@ export function RelayModal({
   useEffect(() => {
     if (!item) return;
     setForm({ tunnelId: "", inPort: "", name: "", shareHost: "" });
+    setLoadError("");
     load();
   }, [item, load]);
 
@@ -234,7 +254,26 @@ export function RelayModal({
                     {loading && (
                       <p className="text-sm text-foreground">加载中...</p>
                     )}
-                    {!loading && relays.length === 0 && (
+                    {!loading && loadError && (
+                      <div className="rounded-xl bg-danger-50 px-3 py-2">
+                        <p className="text-sm font-semibold text-danger-700">
+                          {loadError}
+                        </p>
+                        <p className="text-xs font-semibold text-danger-700">
+                          列表没取到，不能据此判断是否已有中转；加载成功前「创建中转」不可用，避免重复创建。
+                        </p>
+                        <Button
+                          className="mt-2"
+                          color="danger"
+                          size="sm"
+                          variant="flat"
+                          onPress={() => load()}
+                        >
+                          重新加载
+                        </Button>
+                      </div>
+                    )}
+                    {!loading && !loadError && relays.length === 0 && (
                       <p className="text-sm text-foreground">
                         还没有对接中转。
                       </p>
@@ -303,7 +342,7 @@ export function RelayModal({
 
                   <div className="space-y-3 rounded-xl border border-divider p-3">
                     <p className="text-sm font-medium">添加中转</p>
-                    {usable.length === 0 && !loading && (
+                    {usable.length === 0 && !loading && !loadError && (
                       <p className="text-xs font-semibold text-warning-700">
                         没有可用的隧道：请先在“隧道”页创建以中转机为入口的端口转发或隧道转发。
                       </p>
@@ -312,6 +351,7 @@ export function RelayModal({
                       disabledKeys={options
                         .filter((o) => o.blocker)
                         .map((o) => String(o.tunnel.id))}
+                      isDisabled={Boolean(loadError)}
                       label="隧道"
                       placeholder="选择中转隧道"
                       selectedKeys={form.tunnelId ? [form.tunnelId] : []}
@@ -373,7 +413,7 @@ export function RelayModal({
                     </div>
                     <Button
                       color="primary"
-                      isDisabled={!form.tunnelId}
+                      isDisabled={!form.tunnelId || Boolean(loadError)}
                       isLoading={creating}
                       size="sm"
                       variant="flat"

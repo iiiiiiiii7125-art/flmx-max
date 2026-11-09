@@ -109,7 +109,7 @@ function SortableGroupRow({
     >
       <button
         aria-label={`拖动 ${label} 调整顺序`}
-        className="shrink-0 cursor-grab touch-none text-foreground/60"
+        className="shrink-0 cursor-grab touch-none text-foreground"
         type="button"
         {...attributes}
         {...listeners}
@@ -172,7 +172,10 @@ function SortableGroupRow({
         <>
           <span className="min-w-0 flex-1 truncate text-sm font-semibold">
             {label}
-            <span className="ml-2 text-xs font-semibold text-foreground/60">
+            {/* F-W1-06：低透明前景字在玻璃载体上实测 3.48–4.11＜4.5，
+                R6 口径此类为零——改全量前景色（与仓内 bg-tray＋
+                text-foreground 已验组合一致）。 */}
+            <span className="ml-2 text-xs font-semibold text-foreground">
               {count} 台
             </span>
           </span>

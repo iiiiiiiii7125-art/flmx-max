@@ -66,6 +66,7 @@ import {
   describeInbound,
   emptyForm,
   formFromItem,
+  isIeplForm,
 } from "@/pages/inbound/presets";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody } from "@/shadcn-bridge/heroui/card";
@@ -176,6 +177,28 @@ function detailRows(item: InboundApiItem): Array<[string, string]> {
   if (s.uuid) rows.push(["UUID", s.uuid]);
   if (s.username) rows.push(["用户名", s.username]);
   if (s.flow) rows.push(["Flow", s.flow]);
+  // IRL-6：「参数」面自述供手动配置，ENC 入站却整段缺席——照表手配
+  // （encryption=none）必然握手失败。这里如实列 ENC 状态，并把客户端
+  // encryption 派生串的唯一出处点名（服务端密钥单向派生，前端与本表
+  // 都给不出该串），不许用户照着一张缺行的表去手配。
+  if (s.encryptionAuth) {
+    const authLabel =
+      s.encryptionAuth === "mlkem768"
+        ? "ML-KEM-768（后量子）"
+        : s.encryptionAuth === "x25519"
+          ? "X25519"
+          : s.encryptionAuth;
+    const modeLabel =
+      { native: "native 原生", xorpub: "xorpub 公钥混淆", random: "random 全随机" }[
+        s.encryptionMode ?? "native"
+      ] ?? s.encryptionMode;
+
+    rows.push(["VLESS 加密（ENC）", `已开启 · ${authLabel} · ${modeLabel}`]);
+    rows.push([
+      "客户端 encryption",
+      "由服务端密钥派生，本参数表不含该串；请用「分享」的链接/二维码导入，照表手配（encryption=none）连不上",
+    ]);
+  }
   if (s.method) rows.push(["加密方式", s.method]);
   if (s.password) rows.push(["密码", s.password]);
   if (s.masquerade) rows.push(["伪装网站", s.masquerade]);
@@ -216,6 +239,10 @@ function detailRows(item: InboundApiItem): Array<[string, string]> {
 export default function InboundPage() {
   const [loading, setLoading] = useState(true);
   const [caps, setCaps] = useState<KernelCapabilitiesApiData | null>(null);
+  // IRL-3：能力/列表加载失败必须与「真空」可区分——capsFailed 驱动表单
+  // 弹窗内的明示，loadFailed 驱动页级横幅与空状态改判（失败不装空）。
+  const [capsFailed, setCapsFailed] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [nodes, setNodes] = useState<NodeApiItem[]>([]);
   const [kernels, setKernels] = useState<KernelApiItem[]>([]);
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
@@ -293,6 +320,21 @@ export default function InboundPage() {
         }
 
         if (capsRes.code === 0) setCaps(capsRes.data);
+        // IRL-3：能力加载失败不再静默——置位后表单弹窗明示、页级横幅
+        // 点名；任一次加载成功即清除（轮询自愈）。静默轮询失败且已有
+        // 旧 caps 时不翻标记（选项仍按旧数据可用，不假报不可用）。
+        if (capsRes.code === 0) {
+          setCapsFailed(false);
+        } else if (initial) {
+          setCapsFailed(true);
+        }
+        if (initial) {
+          setLoadFailed(
+            [capsRes, nodeRes, kernelRes, inboundRes, sourceRes].some(
+              (r) => r.code !== 0,
+            ),
+          );
+        }
         if (sourceRes.code === 0) setSources(sourceRes.data ?? []);
         if (nodeRes.code === 0) setNodes(nodeRes.data || []);
         if (kernelRes.code === 0) setKernels(kernelRes.data || []);
@@ -322,6 +364,8 @@ export default function InboundPage() {
       } catch {
         if (initial && loadSeqRef.current === seq) {
           toast.error("加载数据失败");
+          setCapsFailed(true);
+          setLoadFailed(true);
         }
       } finally {
         if (initial && loadInitialSeqRef.current === initialSeq) {
@@ -616,10 +660,18 @@ export default function InboundPage() {
         ? item.probe
         : undefined;
     const unreachable = item.enabled && probe !== undefined && !probe.ok;
+    // IRL-2：导入入站没有面板侧内核状态，无可用探测结果（从未检测，
+    // 或后端对 UDP 类恒 skipped）时旧推导靠 `item.external ||` 恒真报
+    // 「运行中」绿点——未实测冒充在跑。改为：external 的 running 必须
+    // 有真实 probe.ok 背书；无背书时呈「未实测」中性警告态。
+    const untested = item.external && item.enabled && !probe;
+    const probeSkipped = Boolean(item.probe?.skipped);
     const running =
       item.enabled &&
       !unreachable &&
-      (item.external || item.kernelStatus === "running");
+      (item.external
+        ? probe !== undefined
+        : item.kernelStatus === "running");
     const kernelBad =
       item.enabled && !item.external && item.kernelStatus !== "running";
     // The group header already names the server.
@@ -647,9 +699,13 @@ export default function InboundPage() {
         ? probe
           ? `可连接 · ${probe.latencyMs} ms`
           : "运行中"
-        : item.enabled
-          ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
-          : "已停用";
+        : untested
+          ? probeSkipped
+            ? "未实测（不支持探测）"
+            : "未实测"
+          : item.enabled
+            ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
+            : "已停用";
 
     if (viewMode === "grid") {
       return (
@@ -691,7 +747,7 @@ export default function InboundPage() {
               <div className="mt-0.5 flex items-center gap-1.5 text-xs font-semibold text-foreground">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
                 <span
-                  className={`truncate ${unreachable ? "text-danger-700" : kernelBad ? "text-warning-700" : ""}`}
+                  className={`truncate ${unreachable ? "text-danger-700" : kernelBad || untested ? "text-warning-700" : ""}`}
                 >
                   {stateText}
                 </span>
@@ -717,7 +773,7 @@ export default function InboundPage() {
             <Chip color="primary" size="sm" variant="flat">
               {describeInbound(item)}
             </Chip>
-            {item.settings.encryptionAuth && (
+            {isIeplForm(item) && (
               <Chip color="danger" size="sm" variant="flat">
                 IEPL专用
               </Chip>
@@ -745,6 +801,16 @@ export default function InboundPage() {
             {item.relayCount > 0 && (
               <Chip color="secondary" size="sm" variant="flat">
                 {item.relayCount} 条中转
+              </Chip>
+            )}
+            {(item.relayInvalidCount ?? 0) > 0 && (
+              <Chip
+                color="warning"
+                size="sm"
+                title="底层转发已删除或已停用，这些中转不会产生流量"
+                variant="flat"
+              >
+                {item.relayInvalidCount} 条中转已失效
               </Chip>
             )}
             {item.outboundId > 0 &&
@@ -896,15 +962,19 @@ export default function InboundPage() {
                 ? probe
                   ? `可连接 · ${probe.latencyMs} ms`
                   : "运行中"
-                : item.enabled
-                  ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
-                  : "已停用"
+                : untested
+                  ? probeSkipped
+                    ? "未实测（UDP 类入站不支持面板探测）"
+                    : "未实测（点「检测」实测连通性）"
+                  : item.enabled
+                    ? `内核${KERNEL_STATUS[item.kernelStatus]?.label ?? "异常"}`
+                    : "已停用"
           }
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="truncate font-medium">{item.name}</span>
-            {item.settings.encryptionAuth && (
+            {isIeplForm(item) && (
               <Chip
                 className="shrink-0 whitespace-nowrap"
                 color="danger"
@@ -939,6 +1009,17 @@ export default function InboundPage() {
                 variant="flat"
               >
                 {item.relayCount} 中转
+              </Chip>
+            )}
+            {(item.relayInvalidCount ?? 0) > 0 && (
+              <Chip
+                className="shrink-0 whitespace-nowrap"
+                color="warning"
+                size="sm"
+                title="底层转发已删除或已停用，这些中转不会产生流量"
+                variant="flat"
+              >
+                {item.relayInvalidCount} 条已失效
               </Chip>
             )}
             {item.outboundId > 0 &&
@@ -1110,10 +1191,17 @@ export default function InboundPage() {
       : undefined;
   const sheetUnreachable =
     !!sheetItem?.enabled && sheetProbe !== undefined && !sheetProbe.ok;
+  // IRL-2：导入入站没有面板侧内核状态可依，无可用探测结果时不得报
+  // 「运行中」——未实测就是未实测（skipped＝UDP 类不支持面板探测）。
+  const sheetUntested =
+    !!sheetItem?.external && !!sheetItem?.enabled && !sheetProbe;
+  const sheetProbeSkipped = Boolean(sheetItem?.probe?.skipped);
   const sheetRunning =
     !!sheetItem?.enabled &&
     !sheetUnreachable &&
-    !!(sheetItem?.external || sheetItem?.kernelStatus === "running");
+    (sheetItem?.external
+      ? sheetProbe !== undefined
+      : sheetItem?.kernelStatus === "running");
   const sheetKernelBad =
     !!sheetItem?.enabled &&
     !sheetItem?.external &&
@@ -1124,9 +1212,13 @@ export default function InboundPage() {
       ? sheetProbe
         ? `可连接 · ${sheetProbe.latencyMs} ms`
         : "运行中"
-      : sheetItem?.enabled
-        ? `内核${KERNEL_STATUS[sheetItem.kernelStatus]?.label ?? "异常"}`
-        : "已停用";
+      : sheetUntested
+        ? sheetProbeSkipped
+          ? "未实测（不支持探测）"
+          : "未实测"
+        : sheetItem?.enabled
+          ? `内核${KERNEL_STATUS[sheetItem.kernelStatus]?.label ?? "异常"}`
+          : "已停用";
   const tabs: Array<{ key: PageTab; label: string; badge?: React.ReactNode }> =
     [
       { key: "inbounds", label: "入站", badge: inbounds.length || undefined },
@@ -1165,6 +1257,22 @@ export default function InboundPage() {
           </button>
         ))}
       </div>
+
+      {loadFailed && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-danger-50 px-3 py-2">
+          <p className="text-xs font-semibold text-danger-700">
+            部分数据加载失败（入站/节点/内核/能力/订阅源其一未取到），页面显示的可能是空或不完整数据，不是真实状态。
+          </p>
+          <Button
+            color="danger"
+            size="sm"
+            variant="flat"
+            onPress={() => loadData(true)}
+          >
+            重新加载
+          </Button>
+        </div>
+      )}
 
       {tab === "sources" && (
         <RemoteSourcesSection
@@ -1310,14 +1418,20 @@ export default function InboundPage() {
             <Card className="shadow-sm">
               <CardBody className="text-center py-16 flex flex-col items-center justify-center gap-3">
                 <h3 className="text-lg font-medium">
-                  {inbounds.length === 0 ? "暂无入站" : "没有匹配的入站"}
+                  {loadFailed && inbounds.length === 0
+                    ? "入站列表加载失败"
+                    : inbounds.length === 0
+                      ? "暂无入站"
+                      : "没有匹配的入站"}
                 </h3>
                 <p className="text-foreground text-sm max-w-sm">
-                  {kernels.length === 0 && inbounds.length === 0
-                    ? "先为落地节点安装内核，然后在这里创建 VLESS-Reality、SS2022 等入站；也可以点“导入”，导入别处搭好的 ss 节点用来对接中转。"
-                    : inbounds.length === 0
-                      ? "点击“新建入站”，选择一个模板即可快速创建。"
-                      : "换个关键词或节点试试。"}
+                  {loadFailed && inbounds.length === 0
+                    ? "没能从面板取到入站列表，不能据此判断是否已有入站；请点上方「重新加载」重试。"
+                    : kernels.length === 0 && inbounds.length === 0
+                      ? "先为落地节点安装内核，然后在这里创建 VLESS-Reality、SS2022 等入站；也可以点“导入”，导入别处搭好的 ss 节点用来对接中转。"
+                      : inbounds.length === 0
+                        ? "点击“新建入站”，选择一个模板即可快速创建。"
+                        : "换个关键词或节点试试。"}
                 </p>
                 {kernels.length === 0 && inbounds.length === 0 && (
                   <Button
@@ -1487,7 +1601,7 @@ export default function InboundPage() {
                   : (KERNEL_LABELS[sheetItem.kernelType] ??
                     sheetItem.kernelType)}
               </Chip>
-              {sheetItem.settings.encryptionAuth && (
+              {isIeplForm(sheetItem) && (
                 <Chip color="danger" size="sm" variant="flat">
                   IEPL专用
                 </Chip>
@@ -1528,6 +1642,16 @@ export default function InboundPage() {
               {sheetItem.relayCount > 0 && (
                 <Chip color="secondary" size="sm" variant="flat">
                   {sheetItem.relayCount} 条中转
+                </Chip>
+              )}
+              {(sheetItem.relayInvalidCount ?? 0) > 0 && (
+                <Chip
+                  color="warning"
+                  size="sm"
+                  title="底层转发已删除或已停用，这些中转不会产生流量"
+                  variant="flat"
+                >
+                  {sheetItem.relayInvalidCount} 条中转已失效
                 </Chip>
               )}
               {sheetItem.outboundId > 0 &&
@@ -1632,6 +1756,7 @@ export default function InboundPage() {
 
       <InboundFormModal
         caps={caps}
+        capsFailed={capsFailed}
         inbounds={inbounds}
         initial={formInitial}
         isOpen={formOpen}
