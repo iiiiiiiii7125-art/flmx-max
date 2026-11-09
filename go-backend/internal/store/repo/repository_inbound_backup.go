@@ -717,45 +717,21 @@ func subOptionValueNonDefault(v json.RawMessage) bool {
 	return true
 }
 
-// foldLegacyRelayIDs mirrors the handler read path's translation of a
-// legacy relayIds whitelist into the surviving lines scope (the repo
-// layer cannot import the handler; the two must stay in step):
-// empty → "", exactly [0] → "direct", no 0 → "relay", mixed → "".
-func foldLegacyRelayIDs(ids []int64) string {
-	hasZero, hasRelay := false, false
-	for _, id := range ids {
-		switch {
-		case id == 0:
-			hasZero = true
-		case id > 0:
-			hasRelay = true
-		}
-	}
-	switch {
-	case hasZero && !hasRelay:
-		return "direct"
-	case hasRelay && !hasZero:
-		return "relay"
-	}
-	return ""
-}
-
 // scrubRemovedSubOptions rewrites a backed-up subscription's Options
-// for the 2.1.2 option removals: the removed keys are stripped, and a
-// legacy relayIds whitelist is folded into the lines scope (an
-// explicit stored lines scope wins, mirroring the read path). Returns
-// the rewritten Options plus two receipt flags: whether the row
-// carried a non-default removed setting, and whether it carried a
-// non-empty relayIds list (whose fold can widen a partial whitelist
-// to the whole scope tier — disclosed in the import warnings).
-// Unparseable or untouched Options are returned verbatim.
-func scrubRemovedSubOptions(raw string) (clean string, hadSettings bool, hadRelayIDs bool) {
+// for the 2.1.2 option removals: the removed keys are stripped. A
+// legacy relayIds whitelist is NOT touched: it is a live scope option
+// again (exact endpoint-set filter, handler parsePipeline carries it
+// verbatim), so a restored whitelist keeps its exact meaning.
+// Returns the rewritten Options plus a receipt flag: whether the row
+// carried a non-default removed setting. Unparseable or untouched
+// Options are returned verbatim.
+func scrubRemovedSubOptions(raw string) (clean string, hadSettings bool) {
 	if strings.TrimSpace(raw) == "" {
-		return raw, false, false
+		return raw, false
 	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &top); err != nil {
-		return raw, false, false
+		return raw, false
 	}
 	changed := false
 	for _, key := range removedSubOptionKeys {
@@ -763,43 +739,20 @@ func scrubRemovedSubOptions(raw string) (clean string, hadSettings bool, hadRela
 		if !ok {
 			continue
 		}
-		// relayIds 不计入「已忽略」计数：它由下方折算路径单独回执。
-		if key != "relayIds" && subOptionValueNonDefault(v) {
+		if subOptionValueNonDefault(v) {
 			hadSettings = true
 		}
 		delete(top, key)
 		changed = true
 	}
-	if rawIDs, ok := top["relayIds"]; ok {
-		delete(top, "relayIds")
-		changed = true
-		var ids []int64
-		_ = json.Unmarshal(rawIDs, &ids)
-		if len(ids) > 0 {
-			hadRelayIDs = true
-			if scope := foldLegacyRelayIDs(ids); scope != "" {
-				explicit := ""
-				if lv, ok := top["lines"]; ok {
-					_ = json.Unmarshal(lv, &explicit)
-				}
-				// Mirror the read path (handler UnmarshalJSON): the
-				// stored lines value is judged after TrimSpace.
-				if t := strings.TrimSpace(explicit); t != "direct" && t != "relay" {
-					if enc, err := json.Marshal(scope); err == nil {
-						top["lines"] = enc
-					}
-				}
-			}
-		}
-	}
 	if !changed {
-		return raw, false, false
+		return raw, false
 	}
 	out, err := json.Marshal(top)
 	if err != nil {
-		return raw, hadSettings, hadRelayIDs
+		return raw, hadSettings
 	}
-	return string(out), hadSettings, hadRelayIDs
+	return string(out), hadSettings
 }
 
 // existingIDSetTx batch-checks which candidate ids exist in one table
@@ -1624,10 +1577,9 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 	// 移除），携带非空引用的订阅在此计数、循环后统一披露。
 	subsWithGroupIDs := 0
 	// 2.1.2 订阅选项删除披露计数：携带非默认已删设置（处理/链式/
-	// 规则/脚本）的订阅、携带 relayIds 白名单（导入时折算进 lines
-	// 三档）的订阅，循环后统一在回执点名（scrubRemovedSubOptions）。
+	// 规则/脚本）的订阅，循环后统一在回执点名
+	// （scrubRemovedSubOptions；relayIds 白名单原样保留、不计数）。
 	subsWithRemovedOptions := 0
-	subsWithRelayIDs := 0
 	subs := append([]model.SubscriptionBackup(nil), b.Subscriptions...)
 	for _, u := range b.Users {
 		subs = append(subs, model.SubscriptionBackup{
@@ -1668,16 +1620,13 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 		// RR4-F1-01 / RR4-F4-01：落库前对账本行引用——剔除指向未
 		// 恢复源/入站的 SourceIDs、InboundIDs，受影响订阅循环后点名。
 		// Options 先过模板槽位对账，再过 2.1.2 已删选项清洗（处理/
-		// 链式/规则/脚本键剔除＋relayIds 折算进 lines 三档），清洗
+		// 链式/规则/脚本键剔除；relayIds 白名单原样保留），清洗
 		// 命中计数同样循环后点名。
 		keptInboundIDs, droppedInboundRefs := filterBackupRefIDList(sb.InboundIDs, validInboundIDs)
 		keptSourceIDs, droppedSourceRefs := filterBackupRefIDList(sb.SourceIDs, validSourceIDs)
-		cleanOptions, optRemoved, optRelay := scrubRemovedSubOptions(remapTemplateRefs(sb.Options))
+		cleanOptions, optRemoved := scrubRemovedSubOptions(remapTemplateRefs(sb.Options))
 		if optRemoved {
 			subsWithRemovedOptions++
-		}
-		if optRelay {
-			subsWithRelayIDs++
 		}
 		if len(droppedSourceRefs) > 0 || len(droppedInboundRefs) > 0 {
 			danglingSubRefSubs++
@@ -1744,10 +1693,6 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 
 	if subsWithRemovedOptions > 0 {
 		rep.warnf("备份恢复：订阅的「处理 / 链式代理 / 规则与脚本」功能已移除，%d 条订阅携带的相关设置已忽略未恢复（订阅本身与其余设置照常恢复）", subsWithRemovedOptions)
-	}
-
-	if subsWithRelayIDs > 0 {
-		rep.warnf("备份恢复：%d 条订阅的中转范围白名单（relayIds）已折算为三档（只要直连 / 只要中转 / 全部）；原白名单若只挑了部分中转，折算后范围会放宽到整档，请在订阅编辑中核对", subsWithRelayIDs)
 	}
 
 	if danglingTemplateRefs > 0 {

@@ -2,7 +2,7 @@ package kernel
 
 // SubOptions is a subscription's render-time options. The stored
 // pipeline (handler subPipeline) maps into it; only the relay scope
-// (Lines) still filters endpoints — the former processing pipeline
+// (Lines / RelayIDs) still filters endpoints — the former processing pipeline
 // (region/protocol/name filters, rename, flag, dedupe, prefix, sort),
 // the subscription chain options, the rule engine and the JavaScript
 // hook were removed in 2.1.2, and subscriptions now render in the
@@ -12,10 +12,17 @@ package kernel
 type SubOptions struct {
 	// Lines is the subscription's relay scope: "direct" keeps direct
 	// endpoints only, "relay" keeps relayed endpoints only, "" keeps
-	// both. It is the one surviving stored option (the 中转范围
-	// three-state scope); legacy relayIds lists are folded into it
-	// when the stored options are parsed (see handler parsePipeline).
+	// both. It is a stored option (the 中转范围 three-state scope).
 	Lines string
+	// RelayIDs is the subscription's exact endpoint whitelist
+	// (0 = direct, >0 = relay id): when non-empty it is the operative
+	// scope filter and takes precedence over Lines — an endpoint is
+	// kept iff its RelayID is in the list. Lines applies only when no
+	// whitelist is present. It is a stored option (the pre-2.1.2
+	// per-endpoint picker; 2.1.2 folded it into Lines at parse time
+	// and widened partial whitelists to the whole tier — that fold is
+	// removed, the whitelist again means exactly the listed set).
+	RelayIDs []int64
 	// ChainHideRelays is a render-time flag consulted by the template
 	// renderer's chain vocabulary (listed): with a chain, relay nodes
 	// stay out of the node lists. No stored option maps into it since
@@ -59,10 +66,25 @@ func EndpointProtocol(e Endpoint) string {
 // It stays as the save path's single validation hook.
 func (o SubOptions) Validate() error { return nil }
 
-// FilterEndpoints applies the relay-scope filter only: "direct" keeps
-// direct endpoints, "relay" keeps relayed ones, anything else keeps
-// both.
+// FilterEndpoints applies the relay-scope filter: a non-empty
+// RelayIDs whitelist is an exact endpoint-set filter (endpoint kept
+// iff its RelayID is listed; 0 = direct) and wins over Lines; without
+// a whitelist, "direct" keeps direct endpoints, "relay" keeps relayed
+// ones, anything else keeps both.
 func FilterEndpoints(endpoints []Endpoint, opts SubOptions) []Endpoint {
+	if len(opts.RelayIDs) > 0 {
+		allowed := make(map[int64]bool, len(opts.RelayIDs))
+		for _, id := range opts.RelayIDs {
+			allowed[id] = true
+		}
+		out := make([]Endpoint, 0, len(endpoints))
+		for _, e := range endpoints {
+			if allowed[e.RelayID] {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
 	if opts.Lines != "relay" && opts.Lines != "direct" {
 		return endpoints
 	}

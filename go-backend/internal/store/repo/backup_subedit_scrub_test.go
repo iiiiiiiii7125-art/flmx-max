@@ -11,43 +11,23 @@ import (
 )
 
 // 2.1.2 订阅编辑改造的备份面：旧备份里已删的 Options 键（处理整块 +
-// 订阅级链式 + 规则与脚本）在导入时真剔除（不只是忽略），存量
-// relayIds 按三档折算表折进 lines，两件事都计数并在 ImportWarnings
-// 聚合点名（E-02 删除先例口径）。
-
-func TestFoldLegacyRelayIDs(t *testing.T) {
-	cases := []struct {
-		ids  []int64
-		want string
-	}{
-		{nil, ""},
-		{[]int64{}, ""},
-		{[]int64{0}, "direct"},
-		{[]int64{2}, "relay"},
-		{[]int64{2, 3}, "relay"},
-		{[]int64{0, 2}, ""},
-		{[]int64{-1}, ""},
-		{[]int64{-1, 0}, "direct"},
-	}
-	for _, c := range cases {
-		if got := foldLegacyRelayIDs(c.ids); got != c.want {
-			t.Fatalf("foldLegacyRelayIDs(%v) = %q, want %q", c.ids, got, c.want)
-		}
-	}
-}
+// 订阅级链式 + 规则与脚本）在导入时真剔除（不只是忽略）并计数、
+// 在 ImportWarnings 聚合点名（E-02 删除先例口径）。relayIds 白名单
+// 是活选项（逐端点精确集），导入时原样保留、不折算 lines。
 
 func TestScrubRemovedSubOptions(t *testing.T) {
-	// 已删键非默认 + relayIds [0]：剔键、折算 direct、两面计数。
-	out, removed, folded := scrubRemovedSubOptions(
+	// 已删键非默认 + relayIds [0]：剔已删键、白名单原样保留、
+	// 不生成 lines 折算。
+	out, removed := scrubRemovedSubOptions(
 		`{"regions":["🇭🇰 香港"],"rules":true,"script":"s","chainRelay":"x","relayIds":[0],"templates":{"clash":3}}`)
-	if !removed || !folded {
-		t.Fatalf("removed=%v folded=%v, want both true", removed, folded)
+	if !removed {
+		t.Fatalf("removed=%v, want true", removed)
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(out), &m); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"regions", "rules", "script", "chainRelay", "relayIds"} {
+	for _, k := range []string{"regions", "rules", "script", "chainRelay"} {
 		if _, ok := m[k]; ok {
 			t.Fatalf("removed key %q survived scrub: %s", k, out)
 		}
@@ -55,16 +35,19 @@ func TestScrubRemovedSubOptions(t *testing.T) {
 	if _, ok := m["templates"]; !ok {
 		t.Fatalf("templates must survive scrub: %s", out)
 	}
-	var lines string
-	if err := json.Unmarshal(m["lines"], &lines); err != nil || lines != "direct" {
-		t.Fatalf("folded lines = %q (err %v), want direct", lines, err)
+	var ids []int64
+	if err := json.Unmarshal(m["relayIds"], &ids); err != nil || len(ids) != 1 || ids[0] != 0 {
+		t.Fatalf("relayIds whitelist must survive the scrub verbatim: %s", out)
+	}
+	if _, ok := m["lines"]; ok {
+		t.Fatalf("relayIds must not fold into lines: %s", out)
 	}
 
-	// 显式 lines 优先于 relayIds 折算；已删键仅默认值时不计数
-	// （但键本身仍被剔除——删净口径）。
-	out, removed, folded = scrubRemovedSubOptions(`{"lines":"relay","relayIds":[0],"rules":false,"dedupe":false}`)
-	if removed || !folded {
-		t.Fatalf("default-only removed values must not count: removed=%v folded=%v", removed, folded)
+	// 已删键仅默认值时不计数（但键本身仍被剔除——删净口径）；
+	// 显式 lines 与白名单互不影响、双双原样。
+	out, removed = scrubRemovedSubOptions(`{"lines":"relay","relayIds":[0],"rules":false,"dedupe":false}`)
+	if removed {
+		t.Fatalf("default-only removed values must not count: removed=%v", removed)
 	}
 	if err := json.Unmarshal([]byte(out), &m); err != nil {
 		t.Fatal(err)
@@ -72,41 +55,27 @@ func TestScrubRemovedSubOptions(t *testing.T) {
 	if _, ok := m["rules"]; ok {
 		t.Fatalf("default-valued removed key must still be scrubbed: %s", out)
 	}
+	var lines string
 	if err := json.Unmarshal(m["lines"], &lines); err != nil || lines != "relay" {
-		t.Fatalf("explicit lines must win over the fold: %q", lines)
+		t.Fatalf("explicit lines must pass through verbatim: %q", lines)
+	}
+	if err := json.Unmarshal(m["relayIds"], &ids); err != nil || len(ids) != 1 || ids[0] != 0 {
+		t.Fatalf("relayIds must pass through verbatim next to lines: %s", out)
 	}
 
-	// S1-8 两面同口径：lines 档位判定先 TrimSpace（与 handler 读路径
-	// UnmarshalJSON 一致）。带空格的有效档位优先于 relayIds 折算、
-	// 原值保留；带空格的无效值才走折算覆写。
-	out, _, folded = scrubRemovedSubOptions(`{"lines":" direct ","relayIds":[2]}`)
-	if !folded {
-		t.Fatalf("relayIds fold receipt must fire, folded=%v", folded)
-	}
-	if err := json.Unmarshal([]byte(out), &m); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := m["relayIds"]; ok {
-		t.Fatalf("relayIds key must be scrubbed: %s", out)
-	}
-	if err := json.Unmarshal(m["lines"], &lines); err != nil || lines != " direct " {
-		t.Fatalf("trimmed-valid explicit lines must win verbatim over the fold: %q", lines)
-	}
-	out, _, _ = scrubRemovedSubOptions(`{"lines":" bogus ","relayIds":[2]}`)
-	if err := json.Unmarshal([]byte(out), &m); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(m["lines"], &lines); err != nil || lines != "relay" {
-		t.Fatalf("trimmed-invalid lines must be overwritten by the fold: %q", lines)
+	// 只带白名单的 Options 无已删键 → 原样返回、不计数。
+	whitelistOnly := `{"relayIds":[2,3]}`
+	if out, removed := scrubRemovedSubOptions(whitelistOnly); out != whitelistOnly || removed {
+		t.Fatalf("whitelist-only options altered: %q %v", out, removed)
 	}
 
 	// 干净 Options 原样返回；坏 JSON 不动。
 	clean := `{"lines":"direct","templates":{"clash":3}}`
-	if out, removed, folded := scrubRemovedSubOptions(clean); out != clean || removed || folded {
-		t.Fatalf("clean options altered: %q %v %v", out, removed, folded)
+	if out, removed := scrubRemovedSubOptions(clean); out != clean || removed {
+		t.Fatalf("clean options altered: %q %v", out, removed)
 	}
-	if out, removed, folded := scrubRemovedSubOptions(`{oops`); out != `{oops` || removed || folded {
-		t.Fatalf("invalid JSON must pass through: %q %v %v", out, removed, folded)
+	if out, removed := scrubRemovedSubOptions(`{oops`); out != `{oops` || removed {
+		t.Fatalf("invalid JSON must pass through: %q %v", out, removed)
 	}
 }
 
@@ -137,8 +106,8 @@ func TestImportScrubsRemovedSubOptionsWithReceipt(t *testing.T) {
 	if !strings.Contains(joined, "1 条订阅携带的相关设置已忽略未恢复") {
 		t.Fatalf("receipt must name the scrubbed subscription count, warnings=%v", result.ImportWarnings)
 	}
-	if !strings.Contains(joined, "1 条订阅的中转范围白名单（relayIds）已折算为三档") {
-		t.Fatalf("receipt must name the relayIds fold, warnings=%v", result.ImportWarnings)
+	if strings.Contains(joined, "relayIds") {
+		t.Fatalf("receipt must not claim a relayIds fold — the whitelist is restored verbatim, warnings=%v", result.ImportWarnings)
 	}
 
 	subs, err := dst.ListSubscriptions()
@@ -150,7 +119,7 @@ func TestImportScrubsRemovedSubOptionsWithReceipt(t *testing.T) {
 		byToken[s.Token] = s.Options
 	}
 	legacy := byToken["tok-legacy-sub"]
-	for _, k := range []string{`"regions"`, `"addFlag"`, `"chainLanding"`, `"ruleGroups"`, `"relayIds"`} {
+	for _, k := range []string{`"regions"`, `"addFlag"`, `"chainLanding"`, `"ruleGroups"`} {
 		if strings.Contains(legacy, k) {
 			t.Fatalf("stored legacy options still carry %s: %s", k, legacy)
 		}
@@ -159,9 +128,12 @@ func TestImportScrubsRemovedSubOptionsWithReceipt(t *testing.T) {
 	if err := json.Unmarshal([]byte(legacy), &m); err != nil {
 		t.Fatalf("stored legacy options not JSON: %v (%s)", err, legacy)
 	}
-	var lines string
-	if err := json.Unmarshal(m["lines"], &lines); err != nil || lines != "relay" {
-		t.Fatalf("legacy relayIds [7,9] must fold to lines=relay, stored %s", legacy)
+	var ids []int64
+	if err := json.Unmarshal(m["relayIds"], &ids); err != nil || len(ids) != 2 || ids[0] != 7 || ids[1] != 9 {
+		t.Fatalf("legacy relayIds [7,9] must be restored verbatim, stored %s", legacy)
+	}
+	if _, ok := m["lines"]; ok {
+		t.Fatalf("relayIds must not fold into lines on restore, stored %s", legacy)
 	}
 	if got := byToken["tok-clean-sub"]; got != `{"lines":"relay"}` {
 		t.Fatalf("clean subscription options must pass through untouched, got %s", got)
