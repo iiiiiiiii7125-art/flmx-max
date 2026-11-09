@@ -1521,6 +1521,15 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	if len(uninstallWarnings) > 0 {
 		deleteResp["uninstallWarnings"] = uninstallWarnings
 	}
+	// F2-21：未带 uninstall 的删除必须在回执里明示「未卸载」——
+	// 后端默认不卸载只是 API 口径，前端弹窗的默认勾选是其局部
+	// 状态；绕过弹窗的调用方此前收到无提示的成功回执，删后
+	// agent 残留在服务器上无人知晓。
+	if uninstallState == "" {
+		deleteResp["uninstall"] = "not_requested"
+		response.WriteJSON(w, response.OKWithWarning(deleteResp, "节点记录已删除，但本次未卸载该服务器上的 agent：agent 将残留在服务器上（其连接会被面板拒绝），请在服务器上手动卸载，或重新添加该节点后使用「同时卸载」删除"))
+		return
+	}
 	response.WriteJSON(w, response.OK(deleteResp))
 }
 
@@ -1876,6 +1885,15 @@ func panelInstanceID() string {
 	return id
 }
 
+// panelInstanceInvalid 返回 FLMX_INSTANCE 的原始值与「已设置但
+// 不合规」标记（F2-22）：panelInstanceID 本身保持纯函数口径
+// （非法即默认），告警由生成面在回执里点名，不让非法值静默
+// 按默认实例落进容器名/路径。
+func panelInstanceInvalid() (string, bool) {
+	raw := strings.TrimSpace(os.Getenv(panelInstanceEnv))
+	return raw, raw != "" && !validPanelInstanceID(raw)
+}
+
 func validPanelInstanceID(id string) bool {
 	if id == "" || len(id) > 32 {
 		return false
@@ -2093,11 +2111,25 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	default:
 		cmd = buildNodeInstallCommand(version, agentAddr, secret)
 	}
+	// F2-22：容器形态生成面点名非法实例键——FLMX_INSTANCE 已设
+	// 置但不合规时，panelInstanceID 按默认实例处理，容器名与数
+	// 据目录不带后缀；同机多面板场景下这会与默认实例撞名，必
+	// 须在回执里告警而不是静默生成（脚本形态不消费实例后缀，
+	// 不在此告警面内）。与下方明文警告合并为同一 warning 字段。
+	var warnings []string
+	if mode != nodeInstallModeScript {
+		if raw, invalid := panelInstanceInvalid(); invalid {
+			warnings = append(warnings, fmt.Sprintf("面板实例键 FLMX_INSTANCE=%q 不合规（须以小写字母/数字开头，可含连字符与下划线，全长 ≤32），已按默认实例生成命令：容器名与数据目录不带实例后缀，同机多面板部署会与默认实例撞名；请修正后端环境变量后重新生成命令", raw))
+		}
+	}
 	// R7-J-01 (non-BC part): a plaintext ws:// result must not leave
 	// silently — carry the explicit warning in the envelope. The
 	// command string above is generated exactly as before.
 	if warning := nodeInstallPlaintextWarning(agentAddr); warning != "" {
-		response.WriteJSON(w, response.OKWithWarning(cmd, warning))
+		warnings = append(warnings, warning)
+	}
+	if len(warnings) > 0 {
+		response.WriteJSON(w, response.OKWithWarning(cmd, strings.Join(warnings, "；")))
 		return
 	}
 	response.WriteJSON(w, response.OK(cmd))
@@ -2301,7 +2333,14 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings, UninstalledCount: uninstalledCount, UninstallPendingCount: uninstallPendingCount, UninstallUnsupportedCount: uninstallUnsupportedCount, UninstallWarnings: uninstallWarnings, DeletedForwardCount: deletedForwardTotal}))
+	// F2-21：批量同口径——未带 uninstall 时在 warnings 里明示未
+	// 卸载（仅有成功删除时才有意义），不让批量调用方以为 agent
+	// 已随记录一并清除。
+	var batchWarnings []string
+	if !uninstall && success > 0 {
+		batchWarnings = append(batchWarnings, "本次批量删除未卸载节点 agent：agent 将残留在对应服务器上，请手动卸载或重新添加节点后使用「同时卸载」删除")
+	}
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings, UninstalledCount: uninstalledCount, UninstallPendingCount: uninstallPendingCount, UninstallUnsupportedCount: uninstallUnsupportedCount, UninstallWarnings: uninstallWarnings, DeletedForwardCount: deletedForwardTotal}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -4595,6 +4634,13 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("转发名称和目标地址不能为空"))
 		return
 	}
+	// LIVE-212-01：remotePort 分离字段全仓无任何消费点，旧实现
+	// 静默忽略——调用方以为端口已生效、实际落库的是无端口目标。
+	// 在场即点名拒绝，引导并入 remoteAddr 的 host:port 形式。
+	if v, ok := req["remotePort"]; ok && v != nil {
+		response.WriteJSON(w, response.ErrDefault("不支持 remotePort 字段：端口请并入 remoteAddr（host:port 形式）"))
+		return
+	}
 	// R2 K1 枚举复扫（B03-001 同族）：名称按列宽 varchar(100) 校验。
 	if len([]rune(name)) > 100 {
 		response.WriteJSON(w, response.ErrDefault("转发名称长度不能超过100个字符"))
@@ -4623,6 +4669,13 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	// 端口段在场却非 1–65535 数字端口的目标不得落库（判定点
 	// validateRemoteAddrPorts，与消费面 parseTargetAddress 同口径）。
 	if err := validateRemoteAddrPorts(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	// LIVE-212-01：无端口目标同为格式层判定——消费面按 host:port
+	// 拨号，缺端口段落到 agent 拼出 :0 死服务且回执假成功，创建
+	// 面在此拒绝（判定点 validateRemoteAddrRequiresPorts）。
+	if err := validateRemoteAddrRequiresPorts(remoteAddr); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -4873,6 +4926,12 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	if remoteAddr == "" {
 		remoteAddr = forward.RemoteAddr
 	}
+	// LIVE-212-01：同创建面——remotePort 分离字段无消费点，在场
+	// 即点名拒绝，不许静默忽略（仅判提交值，不判回填值）。
+	if v, ok := req["remotePort"]; ok && v != nil {
+		response.WriteJSON(w, response.ErrDefault("不支持 remotePort 字段：端口请并入 remoteAddr（host:port 形式）"))
+		return
+	}
 	// 终审 L1-F-06：与创建面同口径，管理员面同样补语法层空标签判。
 	if err := validateNoEmptyLabelAddr(remoteAddr); err != nil {
 		response.WriteJSON(w, response.ErrDefault("转发目标地址主机名格式无效："+err.Error()))
@@ -4896,6 +4955,12 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	// F2-F1-02：端口格式与创建面同口径，对回填后的合并值判定
 	// （存量坏端口行任何编辑须先补正端口，与上方段数帽口径一致）。
 	if err := validateRemoteAddrPorts(remoteAddr); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	// LIVE-212-01：无端口目标与创建面同口径，对回填后的合并值
+	// 判定（存量无端口行任何编辑须先补正为 host:port 形式）。
+	if err := validateRemoteAddrRequiresPorts(remoteAddr); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -5343,10 +5408,12 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 		isRealm = true
 	}
 	nftMode := false
+	cleanupSkipped := false
 	if mode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID); modeErr == nil && mode {
 		nftMode = true
 		for _, nodeID := range entryNodeIDs {
 			if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
+				cleanupSkipped = true
 				log.Printf("audit op=force_delete_forward_reconcile_skipped forward_id=%d node_id=%d err=%v", id, nodeID, err)
 			}
 		}
@@ -5361,12 +5428,20 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 		// 保持原样（两分支仍可同跑，本段只在两者皆否时执行）。
 		for _, nodeID := range forwardPortNodeIDs(oldPorts) {
 			if err := h.deleteForwardServicesOnNodeBatch(forward, nodeID); err != nil {
+				cleanupSkipped = true
 				log.Printf("audit op=force_delete_forward_cleanup_skipped forward_id=%d node_id=%d err=%v", id, nodeID, err)
 			}
 		}
 	}
 	log.Printf("audit op=force_delete_forward operator_id=%d forward_id=%d name=%q user_id=%d %s",
 		operatorID, id, forward.Name, forward.UserID, residueHint)
+	// C1-01：节点侧清理被跳过/失败时回执必须带警告——残留提示
+	// 此前只进服务端日志，调用方收到裸 OKEmpty 会以为节点侧已
+	// 清净；清理全数确认时维持原裸成功回执。
+	if cleanupSkipped {
+		response.WriteJSON(w, response.OKWithWarning(nil, "转发已强制删除，但部分节点侧规则清理未确认（节点不可达或对账失败），残留规则需人工确认清理："+residueHint))
+		return
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
