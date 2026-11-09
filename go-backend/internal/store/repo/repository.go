@@ -2340,6 +2340,11 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 		}
 		b.LatencyTargets = n.LatencyTargets
 		b.ForwardMode = n.ForwardMode
+		// R2-E1-06：定时重启三字段随备份导出（此前 DTO 已补列、此处
+		// 赋值，缺一仍会静默回落默认）。
+		b.RestartEnabled = n.RestartEnabled
+		b.RestartTime = n.RestartTime
+		b.RestartJitterMinutes = n.RestartJitterMinutes
 		// O7-006：恢复后保留已忽略的到期提醒状态
 		b.ExpiryReminderDismissed = n.ExpiryReminderDismissed
 		out = append(out, b)
@@ -2359,6 +2364,8 @@ func (r *Repository) exportNodeSSHConfigs() ([]model.NodeSSHConfigBackup, error)
 			NodeID: c.NodeID, Host: c.Host, Port: c.Port, Username: c.Username,
 			AuthType: c.AuthType, Password: c.Password.String, PrivateKey: c.PrivateKey.String,
 			Passphrase: c.Passphrase.String, SudoMode: c.SudoMode, CreatedTime: c.CreatedTime,
+			// R2-E1-08：已钉入指纹随备份导出。
+			HostKeyFingerprint: c.HostKeyFingerprint,
 		})
 	}
 	return out, nil
@@ -2504,6 +2511,10 @@ func (r *Repository) exportForwardPorts(forwardID int64) ([]model.ForwardPortBac
 		if fp.InIP.Valid {
 			b.InIP = fp.InIP.String
 		}
+		// R2-E1-14：绑定回退告警随备份导出。
+		if fp.BindWarning.Valid {
+			b.BindWarning = fp.BindWarning.String
+		}
 		out = append(out, b)
 	}
 	return out, nil
@@ -2528,6 +2539,10 @@ func (r *Repository) exportForwardPortsBatch(forwardIDs []int64) (map[int64][]mo
 			b := model.ForwardPortBackup{NodeID: fp.NodeID, Port: fp.Port}
 			if fp.InIP.Valid {
 				b.InIP = fp.InIP.String
+			}
+			// R2-E1-14：同 exportForwardPorts，告警随备份导出。
+			if fp.BindWarning.Valid {
+				b.BindWarning = fp.BindWarning.String
 			}
 			out[fp.ForwardID] = append(out[fp.ForwardID], b)
 		}
@@ -3550,6 +3565,29 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 		if forwardMode != n.ForwardMode && n.ForwardMode != "" {
 			rep.warnf("备份恢复：节点 #%d（%q）的转发模式 %q 不在合法集 {agent, nftables} 内，已按保存面同口径归一为 %q", n.ID, n.Name, n.ForwardMode, forwardMode)
 		}
+		// R2-E1-06：定时重启三字段恢复面归一，镜像写面
+		// validateRestartSchedule（开关 {0,1}／时刻 HH:MM／抖动
+		// 0–720）。旧备份无此三字段（零值）时：开关 0 与合法集内值
+		// 无别、空时刻按模型默认 "04:00" 回落、抖动 0 在合法集内，
+		// 均静默（与存量未配置形态等价）；带值越界者逐项归一并回执
+		// 点名原值，与 B8-11 同口径。
+		restartEnabled := n.RestartEnabled
+		if restartEnabled != 0 && restartEnabled != 1 {
+			rep.warnf("备份恢复：节点 #%d（%q）的定时重启开关值 %d 无效，已按关闭恢复", n.ID, n.Name, n.RestartEnabled)
+			restartEnabled = 0
+		}
+		restartTime := n.RestartTime
+		if restartTime == "" {
+			restartTime = "04:00"
+		} else if !validImportRestartTime(restartTime) {
+			rep.warnf("备份恢复：节点 #%d（%q）的定时重启时刻 %q 不是合法的 HH:MM，已按默认 04:00 恢复", n.ID, n.Name, n.RestartTime)
+			restartTime = "04:00"
+		}
+		restartJitter := n.RestartJitterMinutes
+		if restartJitter < 0 || restartJitter > 720 {
+			rep.warnf("备份恢复：节点 #%d（%q）的定时重启抖动 %d 分钟超出 0–720，已按默认 30 恢复", n.ID, n.Name, n.RestartJitterMinutes)
+			restartJitter = 30
+		}
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
@@ -3576,6 +3614,10 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			Inx:            n.Inx,
 			LatencyTargets: n.LatencyTargets,
 			ForwardMode:    forwardMode,
+			// R2-E1-06：归一后的定时重启三字段落库。
+			RestartEnabled:       restartEnabled,
+			RestartTime:          restartTime,
+			RestartJitterMinutes: restartJitter,
 			// O7-006：恢复后保留已忽略的到期提醒状态
 			ExpiryReminderDismissed: n.ExpiryReminderDismissed,
 		}
@@ -3584,7 +3626,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "extra_ips", "port", "interface_name", "version",
 				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
-				"inx", "latency_targets", "forward_mode", "expiry_reminder_dismissed",
+				"inx", "latency_targets", "forward_mode", "restart_enabled", "restart_time", "restart_jitter_minutes", "expiry_reminder_dismissed",
 			}),
 		}).Create(&item).Error
 		if err != nil {
@@ -3628,6 +3670,20 @@ func importNodeSSHConfigs(tx *gorm.DB, rows []model.NodeSSHConfigBackup, now int
 			rep.warnf("备份恢复：节点 #%d 的 SSH 配置主机 %q 含空标签主机名，已清空，恢复后请在节点设置中重新填写", c.NodeID, c.Host)
 			host = ""
 		}
+		// R2-E1-08：指纹列刻意不进下方 AssignmentColumns——旧备份
+		// 不携带指纹（空值）时不得把目标库已钉入的指纹冲掉。落值
+		// 分两路在 upsert 后显式处理（见后）。
+		existingPin := ""
+		if c.HostKeyFingerprint == "" {
+			var existing model.NodeSSHConfig
+			res := tx.Where("node_id = ?", c.NodeID).Limit(1).Find(&existing)
+			if res.Error != nil {
+				return count, res.Error
+			}
+			if res.RowsAffected > 0 {
+				existingPin = existing.HostKeyFingerprint
+			}
+		}
 		item := model.NodeSSHConfig{
 			NodeID:      c.NodeID,
 			Host:        host,
@@ -3640,6 +3696,8 @@ func importNodeSSHConfigs(tx *gorm.DB, rows []model.NodeSSHConfigBackup, now int
 			SudoMode:    c.SudoMode,
 			CreatedTime: c.CreatedTime,
 			UpdatedTime: now,
+			// 插入路径直接落备份指纹；冲突路径由下方显式 Update 落值。
+			HostKeyFingerprint: c.HostKeyFingerprint,
 		}
 		if item.CreatedTime == 0 {
 			item.CreatedTime = now
@@ -3652,6 +3710,17 @@ func importNodeSSHConfigs(tx *gorm.DB, rows []model.NodeSSHConfigBackup, now int
 			}),
 		}).Create(&item).Error; err != nil {
 			return count, err
+		}
+		// R2-E1-08 落值/保留点名：备份携带指纹时显式写入（覆盖冲突
+		// 路径未更新该列的缺口）；未携带且目标库已有钉入值时，现值
+		// 已由「不进 AssignmentColumns」保留，回执点名披露。
+		if c.HostKeyFingerprint != "" {
+			if err := tx.Model(&model.NodeSSHConfig{}).Where("node_id = ?", c.NodeID).
+				Update("host_key_fingerprint", c.HostKeyFingerprint).Error; err != nil {
+				return count, err
+			}
+		} else if existingPin != "" {
+			rep.warnf("备份恢复：节点 #%d 的备份未携带 SSH 主机指纹（旧备份格式），面板现有钉入指纹已保留", c.NodeID)
 		}
 		rep.restoredSSHNodeIDs = append(rep.restoredSSHNodeIDs, c.NodeID)
 		count++
@@ -4552,9 +4621,11 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 					continue
 				}
 				// O7-005：恢复 ForwardPort 的 InIP（sql.NullString）
+				// R2-E1-14：BindWarning 同路恢复（空串＝无告警 NULL）。
 				if err := tx.Create(&model.ForwardPort{
 					ForwardID: f.ID, NodeID: fp.NodeID, Port: fp.Port,
-					InIP: sql.NullString{String: inIP, Valid: inIP != ""},
+					InIP:        sql.NullString{String: inIP, Valid: inIP != ""},
+					BindWarning: sql.NullString{String: fp.BindWarning, Valid: fp.BindWarning != ""},
 				}).Error; err != nil {
 					return count, err
 				}
@@ -6380,6 +6451,26 @@ func validImportListenAddr(addr string) bool {
 	}
 	// L1-F-04: 裸主机名补空标签判（与 IsValidNodeAddress 同口径）。
 	return !kernel.HasEmptyLabel(addr)
+}
+
+// validImportRestartTime mirrors the write face's HH:MM rule for
+// node restart times (handler restartTimePattern
+// ^([01][0-9]|2[0-3]):[0-5][0-9]$; the repo layer cannot import the
+// handler, same precedent as normalizeBackupTunnelEngine). Digit
+// checks are explicit so signed or spaced forms the regexp would
+// reject cannot slip through strconv parsing.
+func validImportRestartTime(s string) bool {
+	if len(s) != 5 || s[2] != ':' {
+		return false
+	}
+	for _, i := range []int{0, 1, 3, 4} {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	hh := int(s[0]-'0')*10 + int(s[1]-'0')
+	mm := int(s[3]-'0')*10 + int(s[4]-'0')
+	return hh <= 23 && mm <= 59
 }
 
 // stripAndValidateImportInIPList strips :port per item of a tunnel

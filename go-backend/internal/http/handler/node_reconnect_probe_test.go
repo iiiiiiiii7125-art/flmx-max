@@ -248,7 +248,7 @@ func TestReconnectWorkerCoalescesBursts(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	h.jobsWG.Add(1) // 生产侧由 StartBackgroundJobs 的 Add(16) 承担配对
+	h.jobsWG.Add(1) // 生产侧由 StartBackgroundJobs 中启动点相邻的 Add(1) 承担配对
 	go func() {
 		defer close(done)
 		h.runNodeReconnectProbes(ctx, queue, 10*time.Millisecond)

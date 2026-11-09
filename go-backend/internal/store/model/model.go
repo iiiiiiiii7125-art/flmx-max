@@ -456,6 +456,10 @@ type NodeSSHConfigBackup struct {
 	Passphrase  string `json:"passphrase,omitempty"`
 	SudoMode    string `json:"sudoMode"`
 	CreatedTime int64  `json:"createdTime"`
+	// R2-E1-08：已钉入的 SSH 主机指纹随备份（此前漏列，恢复后指纹
+	// 回未钉入态、特权操作 fail-closed 至重新 TOFU 且回执不点名）。
+	// 旧备份无此字段时导入面保留目标库现有钉入值并回执点名。
+	HostKeyFingerprint string `json:"hostKeyFingerprint,omitempty"`
 }
 
 type InboundsBackup struct {
@@ -784,6 +788,13 @@ type NodeBackup struct {
 	Inx            int    `json:"inx"`
 	LatencyTargets string `json:"latencyTargets,omitempty"`
 	ForwardMode    string `json:"forwardMode,omitempty"`
+	// R2-E1-06：节点定时重启三字段随备份（DEV-RESTART 落地时本 DTO
+	// 漏列，恢复后静默回落默认关/04:00/30、节点 timer 与面板认知
+	// 分叉）。旧备份无此三字段时导入面按模型默认回落并保持关闭，
+	// 与存量未配置形态等价。
+	RestartEnabled       int    `json:"restartEnabled"`
+	RestartTime          string `json:"restartTime,omitempty"`
+	RestartJitterMinutes int    `json:"restartJitterMinutes,omitempty"`
 	// O7-006：恢复后保留已忽略的到期提醒状态
 	ExpiryReminderDismissed int `json:"expiryReminderDismissed,omitempty"`
 }
@@ -855,6 +866,9 @@ type ForwardPortBackup struct {
 	NodeID int64  `json:"nodeId"`
 	Port   int    `json:"port"`
 	InIP   string `json:"inIp,omitempty"`
+	// R2-E1-14：B08-005 的绑定回退告警随备份（此前漏列，恢复后
+	// 告警丢失、仅影响可观测性）。空串＝无告警（列为 NULL）。
+	BindWarning string `json:"bindWarning,omitempty"`
 }
 
 type UserTunnelBackup struct {
@@ -1267,7 +1281,10 @@ func (ServiceMonitorResult) TableName() string { return "service_monitor_result"
 
 // TunnelQuality stores periodic probe results for a tunnel.
 // Unlike the old upsert model, rows accumulate for history/charting.
-// Old rows are pruned periodically (default: keep 24h).
+// Old rows are pruned periodically by the monitor_retention_days
+// config (default 7 days, range 1-400; see internal/monitoring/
+// retention.go and the prune in tunnel_quality_prober.go). There is
+// no 24h retention anywhere for this table (R2-E3-F04).
 type TunnelQuality struct {
 	ID                 int64   `gorm:"primaryKey;autoIncrement" json:"id"`
 	TunnelID           int64   `gorm:"column:tunnel_id;not null;index:idx_tunnel_quality_tunnel_time,priority:1" json:"tunnelId"`

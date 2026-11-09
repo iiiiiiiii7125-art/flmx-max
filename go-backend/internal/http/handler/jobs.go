@@ -27,10 +27,12 @@ func (h *Handler) StartBackgroundJobs() {
 	// DB-3：重连重测队列须在 jobsStarted 置位前就绪，onNodeOnline 的
 	// scheduleNodeReconnectProbe 在锁内读它。
 	h.reconnectProbes = newNodeReconnectProbeQueue()
-	// 计数必须与下方 go h.run* 循环全集逐一对应（增删循环同步改）：
-	// 2.1.0 删 Gist 定时循环（DEV-RM-GIST）与联邦清理重试循环
-	// （DEV-RM-SHARE）后 18 → 16。
-	h.jobsWG.Add(16)
+	// jobsWG 计数采用启动点相邻 Add(1) 形态：下方每个 go h.run*
+	// 前紧邻一次 Add(1)，与各循环首行的 defer Done() 一一配对，
+	// 计数由结构自维护——增删循环时增删其相邻 Add(1) 即可。此前
+	// 的写死总数 Add(16) 与启动全集脱钩、靠人工注释纪律对齐，
+	// 2.1.0 删除波次曾两度人工同步（18 → 17 → 16），属 PD-23
+	// 硬编码计数漂移原型面；结构哨兵见 jobs_wg_structure_test.go。
 	h.jobsMu.Unlock()
 
 	// R4B03-001 启动清扫腿：同步复位上个进程周期残留的僵尸在线
@@ -40,23 +42,39 @@ func (h *Handler) StartBackgroundJobs() {
 	// FIX-D（D6-07）：通知派发 worker 绑定 jobs ctx，随 jobs 一起停。
 	h.ensureNotifyDispatcher()
 
+	h.jobsWG.Add(1)
 	go h.runHourlyStatsLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runResetAndExpiryLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runNodeRenewalCycleLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runMetricsIngestion(ctx)
+	h.jobsWG.Add(1)
 	go h.runHealthChecks(ctx)
+	h.jobsWG.Add(1)
 	go h.runTunnelQualityProber(ctx)
+	h.jobsWG.Add(1)
 	go h.runNftablesTrafficCollectLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runNftPendingDeleteRetryLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runNftAutoReconcileWorker(ctx)
+	h.jobsWG.Add(1)
 	go h.runKernelStatusLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runExternalProbeLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runNodeReconnectProbes(ctx, h.reconnectProbes, 5*time.Second)
 	// R4B03-001 周期对账腿：DB 在线但 WS 无会话且超过重连宽限的
 	// 本地非 nftables 节点复位为离线。
+	h.jobsWG.Add(1)
 	go h.runNodeStatusReconcileLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runNotifyLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runSubscriptionLoop(ctx)
+	h.jobsWG.Add(1)
 	go h.runRemoteSourceLoop(ctx)
 }
 
@@ -208,6 +226,14 @@ func (h *Handler) retryNftPendingDeletes(now time.Time) {
 				if exhausted {
 					// 补充 E：退避耗尽的可计数信号（node_id、forward_id、
 					// 失败原因、已重试次数），转人工处理。
+					// R2-E1-13 终局语义点名（低/观察，现状登记不改行为）：
+					// 耗尽后该转发 status=2 行与 pending-delete 记账、
+					// 端口台账无限期保留（列表隐藏、端口仍占用），自动
+					// 路径不再重试；终局只有人工 force-delete 一条。
+					// 保留集可经管理员端点 GET
+					// /api/v1/node/nftables/pending-deletes 枚举点名
+					// （nftPendingDeleteList），与本日志的
+					// action=manual_cleanup_required 构成可观测闭环。
 					row, _ := h.repo.GetNftPendingDelete(fid)
 					retryCount := 0
 					lastErr := ""

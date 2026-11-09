@@ -27,7 +27,21 @@ func init() {
 }
 
 type tunHandler struct {
-	hop     hop.Hop
+	hop hop.Hop
+	// routes is the learned forwarding table (source IP -> tunnel
+	// address; a single collapsed key in p2p mode). It intentionally
+	// has NO entry aging (R2 wave-3 disposition of the
+	// FIX-LEAK-FAMILY §7 residue note): entries hold only two small
+	// values — no connection, goroutine or handle — the table lives
+	// and dies with this handler instance, and its growth is bounded
+	// by the address space of the attached network (keys are source
+	// IPs of packets arriving on an established association, not
+	// values an unauthenticated peer can mint at will). The panel
+	// never emits tun services today; the handler is registered only
+	// for upstream gost completeness. If tun services ever become a
+	// product surface, add bounded entry aging here first: a departed
+	// peer's stale entry can otherwise keep attracting traffic to
+	// its old address.
 	routes  sync.Map
 	md      metadata
 	options handler.Options

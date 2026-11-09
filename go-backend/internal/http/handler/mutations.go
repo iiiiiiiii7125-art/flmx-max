@@ -6237,8 +6237,9 @@ func (h *Handler) speedLimitDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// R6X-017：删除前先枚举引用集（删后 forward/user_tunnel 行仍以
-	// 悬空 id 指向该规则，此集即回退重下发的对象）。
+	// R6X-017：删除前先枚举引用集，此集即回退重下发的对象
+	// （R2-E1-03 后删除事务内会把三处引用置 NULL，枚举须在
+	// 删除前完成）。
 	affectedForwardIDs := h.speedLimitAffectedForwardIDs(id)
 
 	if err := h.repo.DeleteSpeedLimit(id); err != nil {
