@@ -1,15 +1,13 @@
-import type { ForwardApiItem, NodeApiItem } from "@/api/types";
+import type { ForwardApiItem } from "@/api/types";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 import {
   getAnnouncement,
-  getDashboardNodeExpiryList,
   getUserPackageInfo,
   type AnnouncementData,
 } from "@/api";
-import { getNodeRenewalSnapshot } from "@/pages/node/renewal";
 import { getAdminFlag, getUserId } from "@/utils/session";
 
 export interface DashboardUserInfo {
@@ -57,21 +55,9 @@ export interface DashboardStatisticsFlow {
   time: string;
 }
 
-export interface DashboardNodeExpiryItem {
-  id: number;
-  name: string;
-  remark?: string;
-  expiryTime?: number;
-  renewalCycle?: "month" | "quarter" | "year" | "";
-}
-
-const normalizeDashboardRenewalCycle = (
-  value: unknown,
-): DashboardNodeExpiryItem["renewalCycle"] => {
-  return value === "month" || value === "quarter" || value === "year"
-    ? value
-    : "";
-};
+// AP-10：原 DashboardNodeExpiryItem／normalizeNodeExpiryReminders／
+// loadNodeExpiryData 已删——后端 dashboardNodeExpiryList 恒 404，
+// 该路径恒失败后置空、其仅供的到期提醒卡结构性永不渲染，同为死代码。
 
 const DASHBOARD_POLL_INTERVAL_MS = 5000;
 const EXPIRATION_NOTIFICATION_STORAGE_KEY =
@@ -112,7 +98,6 @@ interface DashboardDataState {
   userTunnels: DashboardUserTunnel[];
   forwardList: DashboardForward[];
   statisticsFlows: DashboardStatisticsFlow[];
-  nodeExpiryReminders: DashboardNodeExpiryItem[];
   isAdmin: boolean;
   announcement: AnnouncementData | null;
   isAnnouncementModalOpen: boolean;
@@ -241,44 +226,6 @@ const normalizeTunnelPermissions = (items: DashboardUserTunnel[]) => {
   }));
 };
 
-const normalizeNodeExpiryReminders = (items: NodeApiItem[]) => {
-  const now = Date.now();
-  const warningWindowMs = 7 * 24 * 60 * 60 * 1000;
-
-  return (items || [])
-    .map((item) => ({
-      id: item.id,
-      name: item.name || "",
-      remark: typeof item.remark === "string" ? item.remark : "",
-      renewalCycle: normalizeDashboardRenewalCycle(item.renewalCycle),
-      expiryTime:
-        typeof item.expiryTime === "number" && item.expiryTime > 0
-          ? item.expiryTime
-          : undefined,
-      expiryReminderDismissed: item.expiryReminderDismissed,
-    }))
-    .filter((item) => {
-      if (item.expiryReminderDismissed) return false;
-      if (!item.expiryTime || !item.renewalCycle) return false;
-      const snapshot = getNodeRenewalSnapshot(
-        item.expiryTime,
-        item.renewalCycle,
-      );
-
-      if (!snapshot.nextDueTime) return false;
-
-      return snapshot.nextDueTime <= now + warningWindowMs;
-    })
-    .sort((a, b) => {
-      const aDue =
-        getNodeRenewalSnapshot(a.expiryTime, a.renewalCycle).nextDueTime || 0;
-      const bDue =
-        getNodeRenewalSnapshot(b.expiryTime, b.renewalCycle).nextDueTime || 0;
-
-      return aDue - bDue;
-    });
-};
-
 export const useDashboardData = (): DashboardDataState => {
   const [loading, setLoading] = useState(true);
   const [userInfo, setUserInfo] = useState<DashboardUserInfo>(
@@ -289,9 +236,6 @@ export const useDashboardData = (): DashboardDataState => {
   const [statisticsFlows, setStatisticsFlows] = useState<
     DashboardStatisticsFlow[]
   >([]);
-  const [nodeExpiryReminders, setNodeExpiryReminders] = useState<
-    DashboardNodeExpiryItem[]
-  >([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [announcement, setAnnouncement] = useState<AnnouncementData | null>(
     null,
@@ -299,7 +243,6 @@ export const useDashboardData = (): DashboardDataState => {
   const [isAnnouncementModalOpen, setIsAnnouncementModalOpen] = useState(false);
   const isMountedRef = useRef(true);
   const packageRequestInFlightRef = useRef(false);
-  const nodeExpiryRequestInFlightRef = useRef(false);
 
   const applyPackageData = useCallback(
     (data: {
@@ -413,29 +356,6 @@ export const useDashboardData = (): DashboardDataState => {
     }
   }, [announcement]);
 
-  const loadNodeExpiryData = useCallback(async () => {
-    if (nodeExpiryRequestInFlightRef.current) {
-      return;
-    }
-
-    nodeExpiryRequestInFlightRef.current = true;
-
-    try {
-      const res = await getDashboardNodeExpiryList();
-
-      if (!isMountedRef.current) {
-        return;
-      }
-
-      if (res.code === 0 && Array.isArray(res.data)) {
-        setNodeExpiryReminders(normalizeNodeExpiryReminders(res.data));
-      }
-    } catch {
-    } finally {
-      nodeExpiryRequestInFlightRef.current = false;
-    }
-  }, []);
-
   useEffect(() => {
     isMountedRef.current = true;
     const adminFlag = getAdminFlag();
@@ -444,14 +364,11 @@ export const useDashboardData = (): DashboardDataState => {
 
     void loadPackageData({ notifyOnError: true });
     void loadAnnouncement();
-    if (adminFlag) {
-      void loadNodeExpiryData();
-    }
 
     return () => {
       isMountedRef.current = false;
     };
-  }, [loadAnnouncement, loadNodeExpiryData, loadPackageData]);
+  }, [loadAnnouncement, loadPackageData]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -461,9 +378,6 @@ export const useDashboardData = (): DashboardDataState => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         void loadPackageData({ silent: true });
-        if (isAdmin) {
-          void loadNodeExpiryData();
-        }
       }
     };
 
@@ -473,9 +387,6 @@ export const useDashboardData = (): DashboardDataState => {
       }
 
       void loadPackageData({ silent: true });
-      if (isAdmin) {
-        void loadNodeExpiryData();
-      }
     }, DASHBOARD_POLL_INTERVAL_MS);
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -484,7 +395,7 @@ export const useDashboardData = (): DashboardDataState => {
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [isAdmin, loadNodeExpiryData, loadPackageData]);
+  }, [loadPackageData]);
 
   return {
     loading,
@@ -492,7 +403,6 @@ export const useDashboardData = (): DashboardDataState => {
     userTunnels,
     forwardList,
     statisticsFlows,
-    nodeExpiryReminders,
     isAdmin,
     announcement,
     isAnnouncementModalOpen,

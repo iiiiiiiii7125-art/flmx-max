@@ -224,8 +224,6 @@ export const getNodeMonthTraffic = () =>
     // 起点，DST 切换月不再偏移；tzOffset 保留作旧后端回落。
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
   });
-export const getDashboardNodeExpiryList = () =>
-  Network.post<NodeApiItem[]>("/node/list", {});
 export const updateNode = (data: NodeMutationPayload) =>
   Network.post("/node/update", data);
 export const deleteNode = (id: number, uninstall = false) =>
