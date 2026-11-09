@@ -34,7 +34,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 
 ## 5. 订阅
 
-**订阅** 页里默认有一个“我的订阅”，点开它选客户端一键导入（Clash、sing-box、Shadowrocket、Loon、Quantumult X、Surge、Stash），或点复制按钮复制链接，直连和中转线路都在里面。想按地区拆分、改名或分享给朋友，见 [订阅](./subscription.md)。
+**订阅** 页里默认有一个“我的订阅”，点开它选客户端一键导入（Clash、sing-box、Shadowrocket、Loon、Quantumult X、Surge、Stash），或点复制按钮复制链接，直连和中转线路都在里面。想按中转 / 直连拆分端点、套订阅模板或分享给朋友，见 [订阅](./subscription.md)。
 
 ::: tip 复制失败？
 浏览器只在 HTTPS 页面里完全开放复制功能。建议给面板配置域名和 HTTPS，见 [安装部署 - 反向代理](./install.md#反向代理-可选)。

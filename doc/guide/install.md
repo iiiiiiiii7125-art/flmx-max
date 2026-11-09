@@ -123,7 +123,7 @@ Alpine Linux 最小化安装若未包含 `curl`，可使用系统自带的 `wget
 wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh && wget -O install.sh.sha256 https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/install.sh.sha256 && sha256sum -c install.sh.sha256 && chmod +x install.sh && ./install.sh
 ```
 
-> 校验口径提示：上面两条手抄命令（curl / wget）的脚本与校验文件都走同一条线路、只有单锚（同源校验）；在面板里点「安装」生成的节点安装命令为双锚（脚本与校验文件分走两条不同线路互相复核）。能从面板复制命令时优先用生成的命令。
+> 校验口径提示：上面两条手抄命令（curl / wget）的脚本与校验文件都走同一条线路、只有单锚（同源校验）；在面板里点「安装」生成的节点安装命令里，**脚本形态**是双锚（脚本与校验文件分走两条不同线路互相复核），但有两条例外、不要按双锚预期：① 实际获胜的是直连 / 面板源线路、且另一条线路没有应答时，命令会**点名降级为单锚**继续，输出里会写明；② **docker / docker-compose 两种容器形态**的生成命令没有脚本校验链，只靠镜像 tag 拉取。能从面板复制命令时优先用生成的命令，并留意输出里对校验形态的点名。
 
 脚本会在 Alpine 上自动安装 Bash、`curl` 和 CA 证书，并使用 OpenRC 注册、启动和管理 `flmx_agent` 服务；其他受支持的 Linux 发行版继续使用 systemd。
 

@@ -27,7 +27,7 @@ features:
   - title: 导入节点
     details: 粘贴分享链接、Clash / sing-box / Surge 配置或订阅地址，别处搭好的节点也能对接中转、加入订阅。
   - title: 订阅
-    details: 参考 Sub-Store：多个订阅各自选落地、过滤、改名、按地区分组，可分享给他人；按客户端自动返回 Clash / Mihomo、sing-box、Shadowrocket、Loon、Quantumult X、Surge、Stash 或 base64。
+    details: 参考 Sub-Store：多个订阅各自选落地与中转范围、套订阅模板，可分享给他人；按客户端自动返回 Clash / Mihomo、sing-box、Shadowrocket、Loon、Quantumult X、Surge、Stash 或 base64。
   - title: 流量转发
     details: TCP / UDP 端口转发与隧道转发，配额、限速、单向或双向计费。
   - title: 面板内升级

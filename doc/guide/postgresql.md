@@ -311,7 +311,7 @@ echo "0 3 * * * <部署目录>/backup.sh" | crontab -
 
 **A**: 
 1. 确认 PostgreSQL 容器已完全就绪（状态为 `healthy`）。
-2. 确认 `--network` 参数填的是部署 `.env` 里 `FLMX_NETWORK` 的值（脚本安装默认 `flmx-network`；只有 `.env` 未写该键的手工部署才是 `gost-network`），使 pgloader 容器与 PostgreSQL 在同一网络中。
+2. 确认 `--network` 参数填的是部署 `.env` 里 `FLMX_NETWORK` 的值（脚本安装默认 `flmx-network`；现行模板 `.env` 未写该键时也是 `flmx-network`，只有用旧模板且未写该键的手工部署才是 `gost-network`），使 pgloader 容器与 PostgreSQL 在同一网络中。
 3. 如果数据库已有表结构，pgloader 可能会报冲突。可以先清空目标数据库后重试。
 4. 若报 `invalid input syntax for type numeric: "false"`，是 1.3.2 及更早版本库的已知兼容问题，见上方「迁移被 `release_legacy_family` 堵住时」。
 
