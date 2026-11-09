@@ -10,7 +10,8 @@ import (
 )
 
 // 节点升级/回退落地核验（A4-V-06）的仓储面。记录一节点一行，状态
-// 机 pending → landed / failed，failed → landed（迟到命中，Late=1）。
+// 机 pending → landed / failed，failed → landed（迟到命中，Late=1），
+// pending / failed → superseded（LB-03：被无目标回退下发接管结案）。
 // 全部状态翻转走带前置状态的条件更新：并发的核验者（重连钩子与
 // 后台扫描）只有一个能赢得翻转，赢家负责后续动作（记日志/发告
 // 警），输家静默——告警恰好一次的口径由这条条件更新保证，不靠
@@ -20,6 +21,9 @@ const (
 	NodeUpgradeVerifyPending = "pending"
 	NodeUpgradeVerifyLanded  = "landed"
 	NodeUpgradeVerifyFailed  = "failed"
+	// NodeUpgradeVerifySuperseded 是 LB-03 的结案态：既有未结行被
+	// 一次无目标回退下发接管（见 SupersedeNodeUpgradeVerification）。
+	NodeUpgradeVerifySuperseded = "superseded"
 )
 
 // UpsertNodeUpgradeVerification 落一条新的待核验记录；同节点已有
@@ -35,12 +39,13 @@ func (r *Repository) UpsertNodeUpgradeVerification(rec *model.NodeUpgradeVerific
 	rec.Late = 0
 	rec.ResolvedAt = 0
 	rec.ObservedVersion = ""
+	rec.CloseReason = ""
 	return r.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "node_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"kind", "target_version", "expected_sha", "from_version",
 			"observed_version", "status", "late", "dispatched_at",
-			"deadline_at", "resolved_at", "updated_time",
+			"deadline_at", "resolved_at", "updated_time", "close_reason",
 		}),
 	}).Create(rec).Error
 }
@@ -120,6 +125,36 @@ func (r *Repository) ResolveNodeUpgradeVerification(nodeID int64, fromStatus, to
 	res := r.db.Model(&model.NodeUpgradeVerification{}).
 		Where("node_id = ? AND status = ?", nodeID, fromStatus).
 		Updates(updates)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+// SupersedeNodeUpgradeVerification 把节点的未结核验行（pending
+// 或 failed）置 superseded 结案并记下结案理由，返回是否赢得翻转。
+// 调用点是无目标回退的成功下发（LB-03）：操作员已用一次回退接管
+// 该节点的版本走向，原行不再有独立核验意义——pending 行若留到
+// 截止会误发「升级未落地」告警（那次升级确实未按目标落地，但报
+// 警与已执行的回退意图相冲、纯属噪声），failed 行的红色状态行
+// 也会一直挂到下一次带目标下发覆盖。结案是终态：与
+// ResolveNodeUpgradeVerification 同样走带前置状态的条件更新，
+// 与截止扫描/重连核销并发时只有一个赢家；已 landed 的行不在结
+// 案面内（成功事实不被接管改写）。结案不发任何通知（告警若已在
+// failed 时发出，不撤回、只清 standing 状态）。
+func (r *Repository) SupersedeNodeUpgradeVerification(nodeID int64, reason string, now int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.NodeUpgradeVerification{}).
+		Where("node_id = ? AND status IN ?", nodeID,
+			[]string{NodeUpgradeVerifyPending, NodeUpgradeVerifyFailed}).
+		Updates(map[string]interface{}{
+			"status":       NodeUpgradeVerifySuperseded,
+			"close_reason": reason,
+			"resolved_at":  now,
+			"updated_time": now,
+		})
 	if res.Error != nil {
 		return false, res.Error
 	}

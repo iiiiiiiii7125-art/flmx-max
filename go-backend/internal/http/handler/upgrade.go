@@ -941,6 +941,13 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 	// 标——无目标可比对，不落记录（回执已明示未经校验）。
 	if toVersion, _ := result.Data["toVersion"].(string); strings.TrimSpace(toVersion) != "" {
 		h.recordNodeUpgradeVerification(req.ID, upgradeVerifyKindRollback, toVersion, "")
+	} else {
+		// LB-03：无目标回退同样接管了该节点的版本走向——既有未
+		// 结核验行（多为窗内未落地的升级行）若不结案，回退落地
+		// 后仍会过截止翻 failed 误发告警、红状态行长挂。在此把
+		// 未结行置 superseded 结案（只记接管事实，不伪造
+		// landed：回执按 M-0051 只证下发不证落地）。
+		h.supersedeNodeUpgradeVerificationForTargetlessRollback(req.ID)
 	}
 
 	response.WriteJSON(w, response.OK(rollbackReceiptData(result)))

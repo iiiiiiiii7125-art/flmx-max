@@ -70,6 +70,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_subscription.go:migrateSubscriptions":       {"", "字面量 5 元旧配置键清单"},
 	"repository.go:migrateRemoveGistConfigKeys":             {"", "已下线 Gist 配置键清单已提升为 repo 包级单点 retiredConfigKeysList（config_policy.go），本函数与备份恢复过滤同源消费（R2-E3-F03）"},
 	"repository_mutations.go:ListSoleSegmentTunnelsForNode": {"", "字面量 2 元链路段角色清单（入口/出口，L4-03）"},
+	"repository_upgrade_verify.go:SupersedeNodeUpgradeVerification": {"", "字面量 2 元核验状态清单（pending/failed 未结态，LB-03）"},
 	"repository_mutations.go:DeleteNodeCascadeWithOutcome":  {"", "字面量 2 元节点归属动态键清单（pending_realm_settle:<id> / kernel_orphan_recheck:<id>，FIX-CASCADE/E1-05）"},
 
 	// —— 子查询形（IN (?) 传 *gorm.DB，不展开变量）——

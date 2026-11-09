@@ -132,7 +132,11 @@ func (Node) TableName() string { return "node" }
 // 又以目标版本回连则翻 landed 并置 Late=1（告警已按时发出、不撤
 // 回，但状态面不得与版本列自相矛盾）。一节点一行，新下发整行覆
 // 盖（同节点升级类操作有 L2-10 在途互斥，覆盖只发生在上一条命令
-// 已回执之后，语义为「以最新下发为准」）。
+// 已回执之后，语义为「以最新下发为准」）。LB-03：无目标回退（老
+// agent 回执无 toVersion）成功下发时，既有未结行置 superseded 结
+// 案并在 CloseReason 记明原因——回退意图已接管该节点的版本走向，
+// 原行若继续挂到截止只会误发「未落地」告警；结案只记「被接管」
+// 事实、绝不伪造 landed（回退回执按 M-0051 只证下发不证落地）。
 type NodeUpgradeVerification struct {
 	ID              int64  `gorm:"primaryKey;autoIncrement"`
 	NodeID          int64  `gorm:"column:node_id;not null;uniqueIndex"`
@@ -141,7 +145,8 @@ type NodeUpgradeVerification struct {
 	ExpectedSHA     string `gorm:"column:expected_sha;type:varchar(128);not null;default:''"`
 	FromVersion     string `gorm:"column:from_version;type:varchar(100);not null;default:''"`
 	ObservedVersion string `gorm:"column:observed_version;type:varchar(100);not null;default:''"`
-	Status          string `gorm:"type:varchar(20);not null;default:'pending'"` // pending | landed | failed
+	Status          string `gorm:"type:varchar(20);not null;default:'pending'"` // pending | landed | failed | superseded
+	CloseReason     string `gorm:"column:close_reason;type:varchar(200);not null;default:''"`
 	Late            int    `gorm:"not null;default:0"`
 	DispatchedAt    int64  `gorm:"column:dispatched_at;not null"`
 	DeadlineAt      int64  `gorm:"column:deadline_at;not null"`

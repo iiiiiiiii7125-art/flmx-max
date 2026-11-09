@@ -27,6 +27,10 @@ import (
 //   - failed 之后节点又以目标版本回连，翻 landed 并标 late——
 //     告警已按时发出不撤回，但状态面不得留下与版本列矛盾的假
 //     失败。
+//   - 无目标回退（老 agent 无 toVersion）成功下发时，既有未结
+//     行置 superseded 结案（LB-03）：回退意图已接管版本走向，
+//     原行留到截止只会误发与回退意图相冲的告警；结案记理由、
+//     不伪造 landed、不发通知。
 // 回执语义（M-0051）不变：回执仍是 dispatched + expectedVersion，
 // 本核验环是回执之外的系统侧对账，不回头改回执形状。
 
@@ -135,6 +139,32 @@ func (h *Handler) verifyNodeUpgradeLanding(nodeID int64) {
 		log.Printf("node upgrade verification landed late node_id=%d kind=%s target=%s reported=%s (deadline had already fired an alert)", nodeID, rec.Kind, rec.TargetVersion, reported)
 	} else {
 		log.Printf("node upgrade verification landed node_id=%d kind=%s target=%s reported=%s", nodeID, rec.Kind, rec.TargetVersion, reported)
+	}
+}
+
+// nodeUpgradeVerifySupersededReason 是 LB-03 结案理由的原文，落
+// CloseReason 备查：点名接管方（无目标回退）与未核验事实——结案
+// 只说明「这条核验被回退意图取代」，不说明回退落到了哪里。
+const nodeUpgradeVerifySupersededReason = "被无目标回退接管（回退回执无 toVersion，落地未经核验）"
+
+// supersedeNodeUpgradeVerificationForTargetlessRollback 在无目标
+// 回退（老 agent 回执无代际配对、无 toVersion）成功下发后结案该
+// 节点既有未结核验行。没有这一步时（LB-03）：窗内未结的升级行会
+// 在回退落地后照样过截止翻 failed、误发「升级未落地」告警（内
+// 容为真但与已执行的回退意图相冲），failed 行的红色状态行更会
+// 长挂至下一次带目标下发。结案失败只记日志：回退命令已经下发，
+// 结案缺失不得反噬回退本身的回执（与落记录同纪律）。
+func (h *Handler) supersedeNodeUpgradeVerificationForTargetlessRollback(nodeID int64) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return
+	}
+	closed, err := h.repo.SupersedeNodeUpgradeVerification(nodeID, nodeUpgradeVerifySupersededReason, time.Now().UnixMilli())
+	if err != nil {
+		log.Printf("node upgrade verification supersede failed node_id=%d err=%v", nodeID, err)
+		return
+	}
+	if closed {
+		log.Printf("node upgrade verification superseded by targetless rollback node_id=%d", nodeID)
 	}
 }
 
