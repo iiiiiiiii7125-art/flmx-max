@@ -1152,23 +1152,11 @@ func (r *Repository) GetNodeByID(id int64) (*model.Node, error) {
 	return &n, nil
 }
 
-// GetNodeAgentVersion 返回节点最近一次 WS 握手上报的 agent 版本
-// （从未上报时为空）。供按 agent 能力分版下发配置用（如 FIX2-C #8
-// 的内置 bypass 版本门）。
-func (r *Repository) GetNodeAgentVersion(id int64) (string, error) {
-	if r == nil || r.db == nil {
-		return "", errors.New("repository not initialized")
-	}
-	var n model.Node
-	err := r.db.Select("version").Where("id = ?", id).First(&n).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return n.Version.String, nil
-}
+// V-17（AUD-A4）：原 GetNodeAgentVersion 读口已删——其注释宣称供
+// 「FIX2-C #8 内置 bypass 版本门」按版本分版下发，但全仓无任何调用
+// 方、该版本门并不存在（bypass 为 agent 侧无条件内置，按名在解析期
+// 解析，见 go-gost/x/bypass/flmx_no_private.go）。节点版本串仍由
+// UpdateNodeOnline 落库、经 GetNodeByID 的 Node.Version 读取。
 
 func (r *Repository) UpdateNodeOnline(nodeID int64, status int, version string, httpVal, tlsVal, socksVal int) error {
 	if r == nil || r.db == nil {

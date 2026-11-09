@@ -559,8 +559,13 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 	// ——重连重推 redeployLocalNodeRuntime 在重推成功后按 ID 补删
 	// （R21-X-02 deleteRedeployStaleRuleConnLimiter）——或删除兜底 ②）。
 	// 失败只记日志、不挡更新回执（helper 内处理）。
+	// FIX-RESIDUAL-2（A1-02 同族）：同序补删更新失势的流量 limiter 条目
+	//（总速规则条目＋rule_traffic_limit_<id>）；离线节点同上不删，重连后
+	// 由配置上报对账 cleanNodeConfigs 按全集差集兜底（与 A1-02 口径一致，
+	// 本类不设重推补删）。
 	for _, nodeID := range pushedNodeIDs {
 		h.deleteStaleForwardConnLimiterOnNode(oldForward, forward, nodeID)
+		h.deleteStaleForwardTrafficLimitersOnNode(oldForward, forward, nodeID)
 	}
 
 	// Keep paused forwards paused after UpdateService/AddService, since agent-side UpdateService
@@ -781,6 +786,9 @@ func (h *Handler) controlForwardServices(forward *forwardRecord, commandType str
 			// 这里（上支 continue，已记入 offlineNodes、调用方不删库，重连
 			// 清理经同一漏斗重试）；其余失败由 helper 内记日志、不阻塞删库。
 			h.deleteForwardConnLimiterOnNode(forward, fp.NodeID)
+			// A1-02：同漏斗清该转发的流量 limiter（转发专属条目恒删、
+			// 共享总速规则条目仅在无其他存续引用时删）。
+			h.deleteForwardTrafficLimitersOnNode(forward, fp.NodeID)
 		}
 		if len(offlineNodes) > 0 {
 			// S-04: 返回离线节点信息，调用方不得静默返回成功
@@ -2483,6 +2491,174 @@ func (h *Handler) deleteStaleForwardConnLimiterOnNode(oldForward, newForward *fo
 		return
 	}
 	h.deleteForwardConnLimiterOnNode(newForward, nodeID)
+}
+
+// A1-02：流量 limiter（DeleteLimiters）的删除编排。此前删转发只发
+// DeleteService＋DeleteCLimiters，限速规则在节点上落的 LimiterConfig
+// 条目无人删除，服务清零后仍残留在 agent gost.json（DeleteLimiters
+// 全程零下发，真机收据总账实证）。与 deleteForwardConnLimiterOnNode
+// 同纪律：服务已删后才调、失败只记日志不阻塞删库、离线节点由调用方
+// S-04 分支拦截不到此处（重连后由配置上报对账 cleanNodeConfigs 按
+// 全集差集兜底）。
+//
+// 删除对象两类：
+//  1. rule_traffic_limit_<forwardID>：转发专属条目，名只由转发 ID
+//     派生（与 forwardRuleConnLimiterNameByID 同口径，不依赖当前
+//     记录的限速值——更新清零后删除仍须命中旧名）；agent 删不存
+//     在者为 noop，无条件发送安全。
+//  2. 总速规则条目（名＝规则 ID 字符串）：可被多条转发共享（直引
+//     SpeedID 或经 user_tunnel 回退），仅当引用集正本
+//     （SpeedLimitAffectedForwardIDs）内除本转发外再无存续引用时
+//     才删；枚举失败按「仍有引用」处理，宁留残、不误删在用条目
+//     （残留由删规则路径与配置上报对账兜底清理）。
+func (h *Handler) deleteForwardTrafficLimitersOnNode(forward *forwardRecord, nodeID int64) {
+	if forward == nil || nodeID <= 0 {
+		return
+	}
+	names := []string{fmt.Sprintf("rule_traffic_limit_%d", forward.ID)}
+	for _, ruleID := range h.forwardTotalLimiterRuleIDs(forward) {
+		if h.speedLimitHasOtherReferrer(ruleID, forward.ID) {
+			continue
+		}
+		names = append(names, strconv.FormatInt(ruleID, 10))
+	}
+	for _, name := range names {
+		if _, err := h.sendNodeCommand(nodeID, "DeleteLimiters", map[string]interface{}{"limiter": name}, false, true); err != nil {
+			log.Printf("forward delete: traffic limiter cleanup failed node_id=%d forward_id=%d limiter=%s err=%v (continuing)", nodeID, forward.ID, name, err)
+		}
+	}
+}
+
+// deleteStaleForwardTrafficLimitersOnNode 是 A1-02 同族的更新路径清理
+// （FIX-RESIDUAL-2）：转发更新清零/改绑 SpeedID 时，更新路径此前从不
+// 发 DeleteLimiters，节点上失势的流量 limiter 条目永久残留（删除编排
+// A1-02 与配置上报对账之外无第三个清理者；CLimiter 有
+// deleteStaleForwardConnLimiterOnNode 对位、流量 limiter 此前无）。
+// 调用方保证在服务推送成功后才调（先推服务后删 limiter，与 R20-X-01
+// ① 同序）；失败只记日志、不挡更新回执。
+//
+// 两类条目与 A1-02 同口径：
+//  1. rule_traffic_limit_<forwardID>（转发专属，IP 限速落点）：旧记录
+//     有、新记录已无时恒删——名只属本转发、无共享可能；新记录仍有
+//     时同步刚以新值原地 Add/Update，不得删。
+//  2. 总速规则条目（名＝规则 ID）：以「新旧生效总速规则不同」为闸
+//     （forwardEffectiveTotalLimiterRuleID 折算，清零/改绑/回退变化
+//     才触发），扫旧记录候选集（forwardTotalLimiterRuleIDs：直引＋
+//     user_tunnel 回退，与 A1-02 枚举同口径）：仍是新记录生效规则的
+//     跳过；引用集正本内除本转发外还有存续引用的跳过
+//     （speedLimitHasOtherReferrer，枚举失败按仍有引用保留）。
+//     任一侧生效规则解析出错则整类跳过——无法判定即不删。
+func (h *Handler) deleteStaleForwardTrafficLimitersOnNode(oldForward, newForward *forwardRecord, nodeID int64) {
+	if oldForward == nil || newForward == nil || nodeID <= 0 {
+		return
+	}
+	send := func(name string) {
+		if _, err := h.sendNodeCommand(nodeID, "DeleteLimiters", map[string]interface{}{"limiter": name}, false, true); err != nil {
+			log.Printf("forward update: stale traffic limiter cleanup failed node_id=%d forward_id=%d limiter=%s err=%v (continuing)", nodeID, newForward.ID, name, err)
+		}
+	}
+	if h.forwardHasIPTrafficLimiter(oldForward) && !h.forwardHasIPTrafficLimiter(newForward) {
+		send(fmt.Sprintf("rule_traffic_limit_%d", newForward.ID))
+	}
+	oldEffective, oldErr := h.forwardEffectiveTotalLimiterRuleID(oldForward)
+	newEffective, newErr := h.forwardEffectiveTotalLimiterRuleID(newForward)
+	if oldErr != nil || newErr != nil {
+		log.Printf("forward update: stale traffic limiter sweep skipped node_id=%d forward_id=%d old_err=%v new_err=%v (keeping limiters)", nodeID, newForward.ID, oldErr, newErr)
+		return
+	}
+	if oldEffective == newEffective {
+		return
+	}
+	for _, ruleID := range h.forwardTotalLimiterRuleIDs(oldForward) {
+		if ruleID == newEffective {
+			continue
+		}
+		if h.speedLimitHasOtherReferrer(ruleID, newForward.ID) {
+			continue
+		}
+		send(strconv.FormatInt(ruleID, 10))
+	}
+}
+
+// forwardEffectiveTotalLimiterRuleID 按同步侧口径折算转发实际生效的
+// 总速 limiter 规则 ID：直引 SpeedID 且规则速度可读、>0 时优先，否则
+// user_tunnel 回退（ResolveUserTunnelAndLimiter 的 JOIN 已保证回退
+// 规则启用且速度 >0）；无生效总速返回 0。GetSpeedLimitSpeed 读取失败
+// 按同步侧同口径视为无直引限速（非枚举失败）；user_tunnel 解析出错
+// 返回 err，调用方须按「无法判定」保留条目（fail-safe 方向为不删）。
+func (h *Handler) forwardEffectiveTotalLimiterRuleID(forward *forwardRecord) (int64, error) {
+	if forward == nil {
+		return 0, nil
+	}
+	if forward.SpeedID.Valid && forward.SpeedID.Int64 > 0 {
+		if speedVal, err := h.repo.GetSpeedLimitSpeed(forward.SpeedID.Int64); err == nil && speedVal > 0 {
+			return forward.SpeedID.Int64, nil
+		}
+	}
+	_, utLimiterID, utSpeed, err := h.resolveUserTunnelAndLimiter(forward.UserID, forward.TunnelID)
+	if err != nil {
+		return 0, err
+	}
+	if utLimiterID != nil && utSpeed != nil && *utLimiterID > 0 {
+		return *utLimiterID, nil
+	}
+	return 0, nil
+}
+
+// forwardHasIPTrafficLimiter 判断转发是否落 rule_traffic_limit_<id>
+// 专属条目：与同步侧 ipSpeed 解析同口径（IPSpeedID 指向的规则速度
+// 可读、>0 才算落；读取失败按同步侧同口径视为未落）。
+func (h *Handler) forwardHasIPTrafficLimiter(forward *forwardRecord) bool {
+	if forward == nil || !forward.IPSpeedID.Valid || forward.IPSpeedID.Int64 <= 0 {
+		return false
+	}
+	speedVal, err := h.repo.GetSpeedLimitSpeed(forward.IPSpeedID.Int64)
+	return err == nil && speedVal > 0
+}
+
+// forwardTotalLimiterRuleIDs 枚举转发总速 limiter 的候选规则 ID：
+// 直引 forward.SpeedID 与 user_tunnel 回退规则，与同步侧
+// syncForwardServicesWithWarnings 的解析口径一致（直引优先、回退
+// 次之）。两候选都返回、由引用集守卫逐个裁决：转发实际未落某候选
+// 条目时删除为 noop，无害。
+func (h *Handler) forwardTotalLimiterRuleIDs(forward *forwardRecord) []int64 {
+	if forward == nil {
+		return nil
+	}
+	var ids []int64
+	if forward.SpeedID.Valid && forward.SpeedID.Int64 > 0 {
+		ids = append(ids, forward.SpeedID.Int64)
+	}
+	if _, utLimiterID, _, err := h.resolveUserTunnelAndLimiter(forward.UserID, forward.TunnelID); err == nil && utLimiterID != nil && *utLimiterID > 0 {
+		dup := false
+		for _, id := range ids {
+			if id == *utLimiterID {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			ids = append(ids, *utLimiterID)
+		}
+	}
+	return ids
+}
+
+// speedLimitHasOtherReferrer 判断除 excludeForwardID 外是否再无存续
+// 转发引用该限速规则；枚举失败返回 true（保留条目，fail-closed
+// 方向为不删）。
+func (h *Handler) speedLimitHasOtherReferrer(ruleID, excludeForwardID int64) bool {
+	ids, err := h.repo.SpeedLimitAffectedForwardIDs(ruleID)
+	if err != nil {
+		log.Printf("forward delete: enumerate speed limit referrers failed speed_limit_id=%d err=%v (keeping limiter)", ruleID, err)
+		return true
+	}
+	for _, id := range ids {
+		if id != excludeForwardID {
+			return true
+		}
+	}
+	return false
 }
 
 func joinLimiterNames(configs []forwardLimiterConfig) string {
