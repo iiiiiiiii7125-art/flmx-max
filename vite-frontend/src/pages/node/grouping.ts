@@ -64,6 +64,35 @@ export function parseNodeGroupOrder(raw: string | null | undefined): string[] {
   }
 }
 
+/**
+ * The full set of groups the management surfaces work with: the
+ * persisted registry (order list) first, in list order — including
+ * registered-but-empty groups — then any in-use labels missing from
+ * the registry (v1 free-text leftovers), by name. Saving this merged
+ * list as the order materializes leftover labels into the registry.
+ */
+export function mergeNodeGroupRegistry(
+  order: string[],
+  inUse: string[],
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const label of [
+    ...order,
+    ...[...inUse].sort((a, b) => a.localeCompare(b)),
+  ]) {
+    const trimmed = label.trim();
+
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  }
+
+  return out;
+}
+
 export interface NodeGroupSection<T> {
   /** Group label; "" is the ungrouped section (always last). */
   label: string;

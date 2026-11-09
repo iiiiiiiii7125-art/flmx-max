@@ -115,7 +115,9 @@ export function PageTabs<T extends string>({
         >
           {t.label}
           {t.badge !== undefined && t.badge !== null && (
-            <span className="ml-1 text-xs font-semibold text-foreground">{t.badge}</span>
+            <span className="ml-1 text-xs font-semibold text-foreground">
+              {t.badge}
+            </span>
           )}
         </button>
       ))}
@@ -221,12 +223,15 @@ export function SelectionBar({
   onToggleAll,
   actions,
   onExit,
+  children,
 }: {
   count: number;
   allSelected: boolean;
   onToggleAll: () => void;
   actions: PageAction[];
   onExit: () => void;
+  /** Extra controls (e.g. a dropdown menu) rendered with the actions. */
+  children?: React.ReactNode;
 }) {
   return (
     <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-xl glass-surface px-3 py-2 shadow-sm">
@@ -249,6 +254,7 @@ export function SelectionBar({
             {a.label}
           </Button>
         ))}
+        {children}
         <Button size="sm" variant="light" onPress={onExit}>
           完成
         </Button>
@@ -318,7 +324,11 @@ export function ListRow({
           <span className="truncate font-medium">{title}</span>
           {badges}
         </div>
-        {meta && <div className="truncate text-xs font-semibold text-foreground">{meta}</div>}
+        {meta && (
+          <div className="truncate text-xs font-semibold text-foreground">
+            {meta}
+          </div>
+        )}
       </div>
       {right && !selectMode && (
         <div

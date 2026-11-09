@@ -63,6 +63,7 @@ import type {
 import axios from "axios";
 
 import Network from "./network";
+
 import { clearSession } from "@/utils/session";
 
 export type ReleaseChannel = "stable" | "dev";
@@ -286,7 +287,11 @@ export const batchUpgradeNodes = (
   );
 export const getNodeReleases = (channel: ReleaseChannel = "stable") =>
   // R8-T-03：冷缓存版本发现后端界 60s（双腿各 30s 客户端），前端须 ≥90s。
-  Network.post<NodeReleaseApiItem[]>("/node/releases", { channel }, { timeout: 90_000 });
+  Network.post<NodeReleaseApiItem[]>(
+    "/node/releases",
+    { channel },
+    { timeout: 90_000 },
+  );
 export const rollbackNode = (id: number) =>
   // R8-T-04：后端界 30s，须破恰等。
   Network.post("/node/rollback", { id }, { timeout: 45_000 });
@@ -367,10 +372,8 @@ export const userTunnel = () =>
   Network.post<UserTunnelApiItem[]>("/tunnel/user/tunnel");
 
 // 转发CRUD操作 - 全部使用POST请求
-export const createForward = (
-  data: ForwardMutationPayload,
-  idemKey?: string,
-) => Network.post("/forward/create", data, { idemKey });
+export const createForward = (data: ForwardMutationPayload, idemKey?: string) =>
+  Network.post("/forward/create", data, { idemKey });
 export const getForwardList = () =>
   Network.post<ForwardApiItem[]>("/forward/list");
 export const updateForward = (data: ForwardMutationPayload) =>
@@ -494,26 +497,81 @@ export const checkCaptcha = () => Network.post("/captcha/check");
 
 // 批量操作接口（R8-T-07：后端串行逐项，前端按项数放宽，见 batchCallTimeout）
 export const batchDeleteForwards = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/forward/batch-delete", { ids }, { timeout: batchCallTimeout(ids.length) });
+  Network.post<BatchOperationResult>(
+    "/forward/batch-delete",
+    { ids },
+    { timeout: batchCallTimeout(ids.length) },
+  );
 export const batchPauseForwards = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/forward/batch-pause", { ids }, { timeout: batchCallTimeout(ids.length) });
+  Network.post<BatchOperationResult>(
+    "/forward/batch-pause",
+    { ids },
+    { timeout: batchCallTimeout(ids.length) },
+  );
 export const batchResumeForwards = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/forward/batch-resume", { ids }, { timeout: batchCallTimeout(ids.length) });
+  Network.post<BatchOperationResult>(
+    "/forward/batch-resume",
+    { ids },
+    { timeout: batchCallTimeout(ids.length) },
+  );
 export const batchDeleteNodes = (ids: number[], uninstall = false) =>
-  Network.post<BatchOperationResult>("/node/batch-delete", { ids, uninstall }, { timeout: batchCallTimeout(ids.length) });
+  Network.post<BatchOperationResult>(
+    "/node/batch-delete",
+    { ids, uninstall },
+    { timeout: batchCallTimeout(ids.length) },
+  );
+
+/** 节点展示分组 v2（后端 node_display_group.go）：结果类型与 Go 侧回执结构同形。 */
+export interface NodeGroupCreateResult {
+  name: string;
+  order: string[];
+}
+export interface NodeGroupRenameResult {
+  oldName: string;
+  newName: string;
+  updatedCount: number;
+  order: string[];
+}
+export interface NodeGroupDeleteResult {
+  name: string;
+  updatedCount: number;
+  order: string[];
+}
+/** 批量移入/移出分组：group 为 "" 即移出回未分组；回执逐条计数（M-0051 口径）。 */
+export const batchSetNodeGroup = (ids: number[], group: string) =>
+  Network.post<BatchOperationResult>(
+    "/node/batch-set-group",
+    { ids, group },
+    { timeout: batchCallTimeout(ids.length) },
+  );
+export const createNodeGroup = (name: string) =>
+  Network.post<NodeGroupCreateResult>("/node/group/create", { name });
+export const renameNodeGroup = (oldName: string, newName: string) =>
+  Network.post<NodeGroupRenameResult>("/node/group/rename", {
+    oldName,
+    newName,
+  });
+export const deleteNodeGroup = (name: string) =>
+  Network.post<NodeGroupDeleteResult>("/node/group/delete", { name });
 export const batchRedeployForwards = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/forward/batch-redeploy", { ids }, { timeout: batchCallTimeout(ids.length) });
+  Network.post<BatchOperationResult>(
+    "/forward/batch-redeploy",
+    { ids },
+    { timeout: batchCallTimeout(ids.length) },
+  );
 export const batchRedeployTunnels = (ids: number[]) =>
-  Network.post<BatchOperationResult>("/tunnel/batch-redeploy", { ids }, { timeout: batchCallTimeout(ids.length) });
+  Network.post<BatchOperationResult>(
+    "/tunnel/batch-redeploy",
+    { ids },
+    { timeout: batchCallTimeout(ids.length) },
+  );
 export const batchChangeTunnel = (data: {
   forwardIds: number[];
   targetTunnelId: number;
 }) =>
-  Network.post<BatchOperationResult>(
-    "/forward/batch-change-tunnel",
-    data,
-    { timeout: batchCallTimeout(data.forwardIds.length) },
-  );
+  Network.post<BatchOperationResult>("/forward/batch-change-tunnel", data, {
+    timeout: batchCallTimeout(data.forwardIds.length),
+  });
 
 export interface BackupTypes {
   users?: boolean;
@@ -645,6 +703,7 @@ export const downloadImportAutoBackup = async () => {
   const token = window.localStorage.getItem("token");
 
   let response;
+
   try {
     response = await axios.get(resolveApiPath("/backup/import-auto-backup"), {
       headers: {
@@ -721,7 +780,6 @@ export const downloadImportAutoBackup = async () => {
   document.body.removeChild(link);
   window.URL.revokeObjectURL(url);
 };
-
 
 export interface AnnouncementData {
   content: string;
@@ -823,7 +881,11 @@ export const getMonitorTunnelQualityHistory = async (
 };
 
 export const getServiceMonitorList = () =>
-  Network.get<ServiceMonitorApiItem[]>("/monitor/services", {}, { silent: true });
+  Network.get<ServiceMonitorApiItem[]>(
+    "/monitor/services",
+    {},
+    { silent: true },
+  );
 
 export const getServiceMonitorLimits = () =>
   Network.get<ServiceMonitorLimitsApiData>(
@@ -936,10 +998,7 @@ export const getKernelLogs = (id: number) =>
   Network.post<KernelStateApiData>("/kernel/logs", { id });
 export const getInboundList = () =>
   Network.post<InboundApiItem[]>("/inbound/list");
-export const createInbound = (
-  data: InboundMutationPayload,
-  idemKey?: string,
-) =>
+export const createInbound = (data: InboundMutationPayload, idemKey?: string) =>
   // R8-T-01：保存末尾在内核未装版本时条件性继承 300s 内核应用预算，
   // 前端与 installKernel 同口径 ≥330s。
   Network.post<{ id: number }>("/inbound/create", data, {
@@ -1247,18 +1306,21 @@ export interface RemoteSyncResult {
 }
 export const getRemoteSources = () =>
   Network.post<RemoteSourceItem[]>("/subscription/source/list");
-export const saveRemoteSource = (data: {
-  id?: number;
-  name: string;
-  url: string;
-  kind?: "url" | "file";
-  role?: RemoteSourceRole;
-  /** Uploaded file contents (file sources). */
-  content?: string;
-  intervalHours: number;
-  relayOnly: boolean;
-  enabled?: boolean;
-}, idemKey?: string) =>
+export const saveRemoteSource = (
+  data: {
+    id?: number;
+    name: string;
+    url: string;
+    kind?: "url" | "file";
+    role?: RemoteSourceRole;
+    /** Uploaded file contents (file sources). */
+    content?: string;
+    intervalHours: number;
+    relayOnly: boolean;
+    enabled?: boolean;
+  },
+  idemKey?: string,
+) =>
   Network.post<
     RemoteSourceItem | { source: RemoteSourceItem; result: RemoteSyncResult }
   >("/subscription/source/save", data, { timeout: 60000, idemKey });
@@ -1351,7 +1413,11 @@ export const getInboundShare = (id: number) =>
 export const getSubInfo = (reset = false, silent = false, idemKey?: string) =>
   // C1-06：reset=true 是凭据轮换，可带幂等键（useTargetIdemKey）；
   // 读分支不带键、行为不变。
-  Network.post<SubInfoApiData>("/inbound/sub/info", { reset }, { silent, idemKey });
+  Network.post<SubInfoApiData>(
+    "/inbound/sub/info",
+    { reset },
+    { silent, idemKey },
+  );
 export const getInboundRelays = (inboundId: number) =>
   Network.post<InboundRelayApiItem[]>("/inbound/relay/list", { inboundId });
 /** 立即测量中转线路（空 ids = 全部）及其入口节点的延迟。 */
@@ -1362,14 +1428,16 @@ export const probeInboundRelays = (ids: number[] = []) =>
     // R8-T-08：两段扇出按公式放宽（见 relayProbeTimeout）。
     { timeout: relayProbeTimeout(ids.length) },
   );
-export const createInboundRelay = (data: {
-  inboundId: number;
-  tunnelId: number;
-  inPort?: number;
-  name?: string;
-  shareHost?: string;
-}, idemKey?: string) =>
-  Network.post<{ id: number }>("/inbound/relay/create", data, { idemKey });
+export const createInboundRelay = (
+  data: {
+    inboundId: number;
+    tunnelId: number;
+    inPort?: number;
+    name?: string;
+    shareHost?: string;
+  },
+  idemKey?: string,
+) => Network.post<{ id: number }>("/inbound/relay/create", data, { idemKey });
 export const deleteInboundRelay = (id: number, force = false) =>
   Network.post("/inbound/relay/delete", { id, force });
 export const getMyInbounds = () => Network.post("/user-inbound/mine", {});
@@ -1431,14 +1499,12 @@ const trafficQuery = (id: number, range: SubTrafficRange) => ({
   // 非整小时时区与 DST 切换周不再错位；tzOffset 保留作旧后端回落。
   tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
 });
+
 /** 管理端：任一订阅的流量统计。 */
 export const getSubscriptionTraffic = (id: number, range: SubTrafficRange) =>
   Network.post<SubTraffic>("/subscription/traffic", trafficQuery(id, range));
 /** 用户端：分配给当前用户的一条订阅的流量统计（整条订阅合计）。 */
-export const getMySubscriptionTraffic = (
-  id: number,
-  range: SubTrafficRange,
-) =>
+export const getMySubscriptionTraffic = (id: number, range: SubTrafficRange) =>
   Network.post<SubTraffic>(
     "/user/subscription/traffic",
     trafficQuery(id, range),

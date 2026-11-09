@@ -156,6 +156,66 @@ Delete multiple nodes.
 {"ids": [2, 3, 4]}
 ```
 
+## POST /api/v1/node/batch-set-group
+
+Set the display group of multiple nodes at once (display-only grouping on
+the node page). An empty `group` moves the nodes out of their group.
+
+**Request:**
+```json
+{"ids": [2, 3, 4], "group": "Rack A"}
+```
+
+**Response:** `data` reports per-item results honestly:
+```json
+{
+  "code": 0,
+  "data": {
+    "total": 3, "successCount": 2, "failCount": 1,
+    "successIds": [2, 3],
+    "failures": [{"id": 4, "reason": "节点不存在"}]
+  }
+}
+```
+
+## POST /api/v1/node/group/create
+
+Create a node display group. The group is registered in the group order
+list (`node_display_group_order`) and exists even while it has no member
+nodes. Duplicate names (registered or in use) and the reserved name
+`未分组` are rejected.
+
+**Request:**
+```json
+{"name": "Rack A"}
+```
+
+**Response:** `data` is `{"name": "Rack A", "order": ["Rack A"]}`.
+
+## POST /api/v1/node/group/rename
+
+Rename a display group; member nodes' `displayGroup` values are updated
+in cascade.
+
+**Request:**
+```json
+{"oldName": "Rack A", "newName": "Rack B"}
+```
+
+**Response:** `data` is `{"updatedCount": 3, "order": ["Rack B"]}`.
+
+## POST /api/v1/node/group/delete
+
+Delete a display group; its member nodes fall back to ungrouped and the
+name leaves the order list.
+
+**Request:**
+```json
+{"name": "Rack B"}
+```
+
+**Response:** `data` is `{"updatedCount": 3, "order": []}`.
+
 ## POST /api/v1/node/check-status
 
 Refresh and check status of all nodes.

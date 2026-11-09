@@ -45,6 +45,10 @@ import {
   getNodeInstallCommand,
   updateNodeOrder,
   batchDeleteNodes,
+  batchSetNodeGroup,
+  createNodeGroup,
+  renameNodeGroup,
+  deleteNodeGroup,
   upgradeNode,
   batchUpgradeNodes,
   getNodeReleases,
@@ -58,16 +62,27 @@ import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
 import { RestartScheduleModal } from "@/pages/node/restart-schedule-modal";
-import { GroupOrderModal } from "@/pages/node/group-order-modal";
+import {
+  GroupCreateModal,
+  GroupManageModal,
+  type GroupOpResult,
+} from "@/pages/node/group-manage-modal";
 import {
   NODE_GROUP_ORDER_CONFIG_KEY,
   UNGROUPED_LABEL,
   collectNodeGroupLabels,
+  mergeNodeGroupRegistry,
   nodeGroupLabel,
-  orderNodeGroupLabels,
   parseNodeGroupOrder,
   segmentNodesByGroup,
 } from "@/pages/node/grouping";
+import {
+  Dropdown,
+  DropdownItem,
+  DropdownMenu,
+  DropdownMenuSeparator,
+  DropdownTrigger,
+} from "@/shadcn-bridge/heroui/dropdown";
 import { PageLoadingState } from "@/components/page-state";
 import { ActionSheet } from "@/components/action-sheet";
 import {
@@ -99,11 +114,7 @@ import { useLocalStorageState } from "@/hooks/use-local-storage-state";
 import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { JwtUtil } from "@/utils/jwt";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
-import {
-  Node,
-  NodeForm,
-  NodeFilterMode,
-} from "@/pages/node/types";
+import { Node, NodeForm, NodeFilterMode } from "@/pages/node/types";
 import {
   formatFlow,
   formatUptime,
@@ -297,7 +308,9 @@ export default function NodePage({
   // 展示分组段序（面板配置 node_display_group_order）：与延迟池同
   // 一次 getConfigs 读取载入，保存走 updateConfig 落服务端。
   const [groupOrder, setGroupOrder] = useState<string[]>([]);
-  const [groupOrderOpen, setGroupOrderOpen] = useState(false);
+  const [groupManageOpen, setGroupManageOpen] = useState(false);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [groupMoving, setGroupMoving] = useState(false);
   const [infoPopoverPlacement, setInfoPopoverPlacement] = useState<
     Record<number, "left" | "bottom">
   >({});
@@ -583,7 +596,9 @@ export default function NodePage({
             // 的初值兜底（类型为必填），不再覆盖已知值。
             systemInfo: {
               cpuUsage:
-                metric.cpuUsage ?? metric.cpu_usage ?? node.systemInfo?.cpuUsage,
+                metric.cpuUsage ??
+                metric.cpu_usage ??
+                node.systemInfo?.cpuUsage,
               memoryUsage:
                 metric.memoryUsage ??
                 metric.memory_usage ??
@@ -617,9 +632,13 @@ export default function NodePage({
               load5: metric.load5 ?? node.systemInfo?.load5,
               load15: metric.load15 ?? node.systemInfo?.load15,
               tcpConns:
-                metric.tcpConns ?? metric.tcp_conns ?? node.systemInfo?.tcpConns,
+                metric.tcpConns ??
+                metric.tcp_conns ??
+                node.systemInfo?.tcpConns,
               udpConns:
-                metric.udpConns ?? metric.udp_conns ?? node.systemInfo?.udpConns,
+                metric.udpConns ??
+                metric.udp_conns ??
+                node.systemInfo?.udpConns,
               netInSpeed:
                 metric.netInSpeed ??
                 metric.net_in_speed ??
@@ -656,9 +675,7 @@ export default function NodePage({
         setLatencyPoolEmpty(
           parseLatencyTargets(r.data[LATENCY_TARGETS_KEY]).length === 0,
         );
-        setGroupOrder(
-          parseNodeGroupOrder(r.data[NODE_GROUP_ORDER_CONFIG_KEY]),
-        );
+        setGroupOrder(parseNodeGroupOrder(r.data[NODE_GROUP_ORDER_CONFIG_KEY]));
       })
       .catch(() => {});
 
@@ -681,7 +698,6 @@ export default function NodePage({
 
   // 格式化流量
 
-
   // 本月网卡流量文案（↓入 ↑出）：无数据（远程/联邦节点不上报本机，
   // 或本月尚无累计）返回 null，展示位留空。
   const monthTrafficText = (nodeId: number): string | null => {
@@ -693,7 +709,6 @@ export default function NodePage({
 
     return `↓${formatFlow(t[0])} ↑${formatFlow(t[1])}`;
   };
-
 
   // IPv4/IPv6 格式验证（仅用于判定地址族）
   const ipv4Regex =
@@ -1055,7 +1070,12 @@ export default function NodePage({
   ) => {
     setInstallModeLoading(true);
     try {
-      const res = await getNodeInstallCommand(nodeId, "stable", mode, privileged);
+      const res = await getNodeInstallCommand(
+        nodeId,
+        "stable",
+        mode,
+        privileged,
+      );
 
       if (res.code === 0 && res.data) {
         setInstallCommand(res.data);
@@ -1375,8 +1395,7 @@ export default function NodePage({
         const data = (res.data ?? null) as { message?: string } | null;
 
         toast.success(
-          data?.message ||
-            `节点 ${node.name} 回退命令已发送，节点将自动重启`,
+          data?.message || `节点 ${node.name} 回退命令已发送，节点将自动重启`,
         );
       } else {
         toast.error(res.msg || "回退失败");
@@ -1562,7 +1581,6 @@ export default function NodePage({
       });
     }
   };
-
 
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
@@ -1973,8 +1991,7 @@ export default function NodePage({
       showRoute: delegate("showRoute"),
       showTrend: delegate("showTrend"),
       openSheet: delegate("openSheet"),
-      openMonitor: (...args) =>
-        rowActionsRef.current?.openMonitor?.(...args),
+      openMonitor: (...args) => rowActionsRef.current?.openMonitor?.(...args),
     };
   }, []);
 
@@ -1999,10 +2016,23 @@ export default function NodePage({
 
     return segmentNodesByGroup(displayNodes, groupOrder);
   }, [displayNodes, groupOrder]);
-  const effectiveGroupOrder = useMemo(
-    () => orderNodeGroupLabels(allGroupLabels, groupOrder),
-    [allGroupLabels, groupOrder],
+  // 分组全集（v2）：登记名单∪在用标签——移入菜单、分组管理弹窗与
+  // 编辑表单下拉的共同选项源；空组（0 台）在名单里存在、页面不出段。
+  const knownGroups = useMemo(
+    () => mergeNodeGroupRegistry(groupOrder, allGroupLabels),
+    [groupOrder, allGroupLabels],
   );
+  const groupCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+
+    for (const node of nodeList) {
+      const label = nodeGroupLabel(node);
+
+      if (label) counts[label] = (counts[label] ?? 0) + 1;
+    }
+
+    return counts;
+  }, [nodeList]);
   const saveGroupOrder = useCallback(async (order: string[]) => {
     try {
       const res = await updateConfig(
@@ -2018,6 +2048,146 @@ export default function NodePage({
       return false;
     }
   }, []);
+
+  // 分组管理三操作（v2）：名单以服务端回执的 order 为准刷新；改名/
+  // 删组级联改了成员标签，静默重拉节点列表对齐段与计数。
+  const handleCreateGroup = useCallback(
+    async (name: string): Promise<GroupOpResult> => {
+      try {
+        const res = await createNodeGroup(name);
+
+        if (res.code !== 0) {
+          return { ok: false, msg: res.msg || "创建失败" };
+        }
+        if (res.data?.order) setGroupOrder(res.data.order);
+
+        return { ok: true };
+      } catch {
+        return { ok: false, msg: "网络错误，请重试" };
+      }
+    },
+    [],
+  );
+  const handleRenameGroup = useCallback(
+    async (oldName: string, newName: string): Promise<GroupOpResult> => {
+      try {
+        const res = await renameNodeGroup(oldName, newName);
+
+        if (res.code !== 0) {
+          return { ok: false, msg: res.msg || "改名失败" };
+        }
+        if (res.data?.order) setGroupOrder(res.data.order);
+        await loadNodes({ silent: true });
+        const count = res.data?.updatedCount ?? 0;
+
+        return {
+          ok: true,
+          msg:
+            count > 0
+              ? `已改名为「${newName}」，${count} 台节点已同步`
+              : `已改名为「${newName}」`,
+        };
+      } catch {
+        return { ok: false, msg: "网络错误，请重试" };
+      }
+    },
+    [loadNodes],
+  );
+  const handleDeleteGroup = useCallback(
+    async (name: string): Promise<GroupOpResult> => {
+      try {
+        const res = await deleteNodeGroup(name);
+
+        if (res.code !== 0) {
+          return { ok: false, msg: res.msg || "删除失败" };
+        }
+        if (res.data?.order) setGroupOrder(res.data.order);
+        await loadNodes({ silent: true });
+        const count = res.data?.updatedCount ?? 0;
+
+        return {
+          ok: true,
+          msg:
+            count > 0
+              ? `分组「${name}」已删除，${count} 台节点已回未分组`
+              : `分组「${name}」已删除`,
+        };
+      } catch {
+        return { ok: false, msg: "网络错误，请重试" };
+      }
+    },
+    [loadNodes],
+  );
+
+  // 批量移入/移出分组：消费后端逐条回执（M-0051 口径）——只把成功
+  // 项的标签改到本地状态，失败项保留勾选并经结果弹窗逐条呈现原
+  // 因，不按选中数虚报全成功（与批量删除同纪律）。
+  const handleMoveToGroup = async (group: string) => {
+    if (selectedIds.size === 0 || groupMoving) return;
+    setGroupMoving(true);
+    const ids = Array.from(selectedIds);
+
+    try {
+      const res = await batchSetNodeGroup(ids, group);
+
+      if (res.code !== 0) {
+        toast.error(res.msg || "移入分组失败");
+
+        return;
+      }
+      const result = res.data as BatchOperationResult | null | undefined;
+      const failures = extractBatchFailures(result);
+      const failedIds = new Set(
+        failures.map((f) => Number(f.id ?? 0)).filter((id) => id > 0),
+      );
+      const failCount = result?.failCount ?? failedIds.size;
+
+      if (
+        result &&
+        typeof result.successCount === "number" &&
+        (failCount === 0 || failedIds.size > 0)
+      ) {
+        const successCount = result.successCount;
+
+        setNodeList((prev) =>
+          prev.map((node) =>
+            selectedIds.has(node.id) && !failedIds.has(node.id)
+              ? { ...node, displayGroup: group }
+              : node,
+          ),
+        );
+        if (failCount > 0) {
+          toast.error(
+            `成功 ${successCount} 个节点，失败 ${failCount} 个，失败的节点已保留勾选`,
+          );
+          if (failures.length > 0) {
+            setBatchResultModal({
+              failures,
+              open: true,
+              summary: `成功 ${successCount} 项，失败 ${failCount} 项`,
+              title: "移入分组结果",
+            });
+          }
+          setSelectedIds(failedIds);
+        } else {
+          toast.success(
+            group
+              ? `已将 ${successCount} 个节点移入「${group}」`
+              : `已将 ${successCount} 个节点移出分组`,
+          );
+          toggleSelectMode();
+        }
+      } else {
+        // 后端未给逐条回执时不虚报：以服务器列表为准刷新。
+        toast.success("操作已完成，正在刷新列表确认结果");
+        await loadNodes({ silent: true });
+      }
+    } catch {
+      toast.error("移入分组失败，请重试");
+    } finally {
+      setGroupMoving(false);
+    }
+  };
 
   const sortableNodeIds = useMemo(
     () => displayNodes.map((n) => n.id),
@@ -2106,7 +2276,36 @@ export default function NodePage({
               ? deselectAll()
               : selectAll()
           }
-        />
+        >
+          <Dropdown placement="bottom-end">
+            <DropdownTrigger>
+              <Button
+                isDisabled={selectedIds.size === 0 || groupMoving}
+                size="sm"
+                variant="flat"
+              >
+                移入分组
+              </Button>
+            </DropdownTrigger>
+            <DropdownMenu aria-label="移入分组">
+              {knownGroups.map((label) => (
+                <DropdownItem
+                  key={label}
+                  onPress={() => void handleMoveToGroup(label)}
+                >
+                  {label}
+                </DropdownItem>
+              ))}
+              {knownGroups.length > 0 && <DropdownMenuSeparator />}
+              <DropdownItem
+                key="__ungrouped__"
+                onPress={() => void handleMoveToGroup("")}
+              >
+                未分组（移出）
+              </DropdownItem>
+            </DropdownMenu>
+          </Dropdown>
+        </SelectionBar>
       ) : (
         <PageToolbar
           more={[
@@ -2130,14 +2329,22 @@ export default function NodePage({
           >
             {nodeFilterMode !== "all" ? "已筛选" : "筛选"}
           </Button>
-          {allGroupLabels.length > 0 && (
+          <Button
+            className="shrink-0"
+            size="sm"
+            variant="flat"
+            onPress={() => setCreateGroupOpen(true)}
+          >
+            新建分组
+          </Button>
+          {knownGroups.length > 0 && (
             <Button
               className="shrink-0"
               size="sm"
               variant="flat"
-              onPress={() => setGroupOrderOpen(true)}
+              onPress={() => setGroupManageOpen(true)}
             >
-              分组排序
+              分组管理
             </Button>
           )}
           <ViewModeToggle value={viewMode} onChange={setViewMode} />
@@ -2211,34 +2418,34 @@ export default function NodePage({
         const close = () => setSheetNodeId(null);
         const rows: Array<[string, React.ReactNode]> = node
           ? [
-                [
-                  "IP",
-                  [node.serverIpV4?.trim(), node.serverIpV6?.trim()]
-                    .filter(Boolean)
-                    .join(" / ") || node.serverIp.trim(),
-                ],
-                ["版本", node.version || "未知"],
-                ...(online && node.systemInfo
-                  ? ([
-                      ["已运行", formatUptime(node.systemInfo.uptime)],
-                    ] as Array<[string, React.ReactNode]>)
-                  : []),
-                ...(monthTrafficText(node.id)
-                  ? ([["本月流量（网卡）", monthTrafficText(node.id)]] as Array<
-                      [string, React.ReactNode]
-                    >)
-                  : []),
-                ...(node.expiryTime && node.renewalCycle && expiryMeta
-                  ? ([
-                      [
-                        "续费",
-                        `${expiryMeta.label} · ${formatNodeRenewalTime(
-                          expiryMeta.nextDueTime,
-                        )}（${getNodeRenewalCycleLabel(node.renewalCycle)}）`,
-                      ],
-                    ] as Array<[string, React.ReactNode]>)
-                  : []),
-              ]
+              [
+                "IP",
+                [node.serverIpV4?.trim(), node.serverIpV6?.trim()]
+                  .filter(Boolean)
+                  .join(" / ") || node.serverIp.trim(),
+              ],
+              ["版本", node.version || "未知"],
+              ...(online && node.systemInfo
+                ? ([["已运行", formatUptime(node.systemInfo.uptime)]] as Array<
+                    [string, React.ReactNode]
+                  >)
+                : []),
+              ...(monthTrafficText(node.id)
+                ? ([["本月流量（网卡）", monthTrafficText(node.id)]] as Array<
+                    [string, React.ReactNode]
+                  >)
+                : []),
+              ...(node.expiryTime && node.renewalCycle && expiryMeta
+                ? ([
+                    [
+                      "续费",
+                      `${expiryMeta.label} · ${formatNodeRenewalTime(
+                        expiryMeta.nextDueTime,
+                      )}（${getNodeRenewalCycleLabel(node.renewalCycle)}）`,
+                    ],
+                  ] as Array<[string, React.ReactNode]>)
+                : []),
+            ]
           : [];
 
         return (
@@ -2247,90 +2454,87 @@ export default function NodePage({
               !node
                 ? []
                 : [
-                      {
-                        key: "install",
-                        label: "安装命令",
-                        color: "primary" as const,
-                        onPress: () => openInstallSelector(node),
-                      },
-                      // R2X-041：同卡片入口，nftables 节点不显示调优（必失败入口）
-                      ...(node.forwardMode !== "nftables"
-                        ? [
-                            {
-                              key: "tune",
-                              label: "调优",
-                              disabled: !online,
-                              onPress: () => setTuneNode(node),
-                            },
-                          ]
-                        : []),
-                      {
-                        key: "edit",
-                        label: "编辑",
-                        onPress: () => handleEdit(node),
-                      },
-                      ...(onOpenMonitor
-                        ? [
-                            {
-                              key: "monitor",
-                              label: "监控",
-                              onPress: () => onOpenMonitor(node.id),
-                            },
-                          ]
-                        : []),
-                      {
-                        key: "targets",
-                        label: "测试点",
-                        onPress: () => setTargetNodes([node]),
-                      },
-                      // 定时重启只对 agent 节点开放：nftables 无 agent
-                      // 服务。（原远程节点排除随联邦功能移除一并下线。）
-                      ...(node.forwardMode !== "nftables"
-                        ? [
-                            {
-                              key: "restart",
-                              label: "定时重启",
-                              onPress: () => setRestartNode(node),
-                            },
-                          ]
-                        : []),
-                      {
-                        key: "upgrade",
-                        label: "升级",
-                        disabled: !online,
-                        onPress: () => openUpgradeModal("single", node.id),
-                      },
-                      {
-                        key: "rollback",
-                        label: "回退",
-                        disabled: !online,
-                        onPress: () => handleRollbackNode(node),
-                      },
-                      ...(node.expiryTime &&
-                      node.renewalCycle &&
-                      !node.expiryReminderDismissed &&
-                      expiryMeta?.isHighlighted
-                        ? [
-                            {
-                              key: "dismiss",
-                              label: "关闭到期提醒",
-                              onPress: () =>
-                                handleDismissExpiryReminder(node.id),
-                            },
-                          ]
-                        : []),
-                      {
-                        key: "delete",
-                        label: "删除",
-                        color: "danger" as const,
-                        onPress: () => handleDelete(node),
-                      },
-                    ]
+                    {
+                      key: "install",
+                      label: "安装命令",
+                      color: "primary" as const,
+                      onPress: () => openInstallSelector(node),
+                    },
+                    // R2X-041：同卡片入口，nftables 节点不显示调优（必失败入口）
+                    ...(node.forwardMode !== "nftables"
+                      ? [
+                          {
+                            key: "tune",
+                            label: "调优",
+                            disabled: !online,
+                            onPress: () => setTuneNode(node),
+                          },
+                        ]
+                      : []),
+                    {
+                      key: "edit",
+                      label: "编辑",
+                      onPress: () => handleEdit(node),
+                    },
+                    ...(onOpenMonitor
+                      ? [
+                          {
+                            key: "monitor",
+                            label: "监控",
+                            onPress: () => onOpenMonitor(node.id),
+                          },
+                        ]
+                      : []),
+                    {
+                      key: "targets",
+                      label: "测试点",
+                      onPress: () => setTargetNodes([node]),
+                    },
+                    // 定时重启只对 agent 节点开放：nftables 无 agent
+                    // 服务。（原远程节点排除随联邦功能移除一并下线。）
+                    ...(node.forwardMode !== "nftables"
+                      ? [
+                          {
+                            key: "restart",
+                            label: "定时重启",
+                            onPress: () => setRestartNode(node),
+                          },
+                        ]
+                      : []),
+                    {
+                      key: "upgrade",
+                      label: "升级",
+                      disabled: !online,
+                      onPress: () => openUpgradeModal("single", node.id),
+                    },
+                    {
+                      key: "rollback",
+                      label: "回退",
+                      disabled: !online,
+                      onPress: () => handleRollbackNode(node),
+                    },
+                    ...(node.expiryTime &&
+                    node.renewalCycle &&
+                    !node.expiryReminderDismissed &&
+                    expiryMeta?.isHighlighted
+                      ? [
+                          {
+                            key: "dismiss",
+                            label: "关闭到期提醒",
+                            onPress: () => handleDismissExpiryReminder(node.id),
+                          },
+                        ]
+                      : []),
+                    {
+                      key: "delete",
+                      label: "删除",
+                      color: "danger" as const,
+                      onPress: () => handleDelete(node),
+                    },
+                  ]
             }
             isOpen={Boolean(node)}
-            subtitle={
-              node && (online ? "在线" : "离线 · agent 没有连上面板")
-            }
+            subtitle={node && (online ? "在线" : "离线 · agent 没有连上面板")}
             title={node?.name ?? ""}
             onClose={close}
           >
@@ -2370,13 +2574,13 @@ export default function NodePage({
         dialogVisible={dialogVisible}
         errors={errors}
         form={form}
+        groupOptions={knownGroups}
         handleSubmit={handleSubmit}
-        groupSuggestions={allGroupLabels}
         protocolControlsDisabled={protocolControlsDisabled}
         protocolControlsReason={protocolControlsReason}
-        sshHostKeyFingerprint={editingHostKeyFingerprint}
         setDialogVisible={setDialogVisible}
         setForm={setForm}
+        sshHostKeyFingerprint={editingHostKeyFingerprint}
         submitLoading={submitLoading}
       />
 
@@ -2488,11 +2692,20 @@ export default function NodePage({
         onClose={() => setRestartNode(null)}
         onSaved={() => loadNodes({ silent: true })}
       />
-      <GroupOrderModal
-        labels={effectiveGroupOrder}
-        open={groupOrderOpen}
-        onClose={() => setGroupOrderOpen(false)}
-        onSave={saveGroupOrder}
+      <GroupManageModal
+        counts={groupCounts}
+        groups={knownGroups}
+        open={groupManageOpen}
+        onClose={() => setGroupManageOpen(false)}
+        onCreate={handleCreateGroup}
+        onDelete={handleDeleteGroup}
+        onRename={handleRenameGroup}
+        onSaveOrder={saveGroupOrder}
+      />
+      <GroupCreateModal
+        open={createGroupOpen}
+        onClose={() => setCreateGroupOpen(false)}
+        onCreate={handleCreateGroup}
       />
     </PageShell>
   );
