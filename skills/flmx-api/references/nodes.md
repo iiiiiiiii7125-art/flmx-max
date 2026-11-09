@@ -159,7 +159,10 @@ Delete multiple nodes.
 ## POST /api/v1/node/batch-set-group
 
 Set the display group of multiple nodes at once (display-only grouping on
-the node page). An empty `group` moves the nodes out of their group.
+the node page). An empty `group` moves the nodes out of their group. The
+reserved name `未分组` is rejected for `group` (same rule as group create,
+and as the `displayGroup` field of node create/update); an unregistered
+group name is allowed and renders after the registered groups.
 
 **Request:**
 ```json

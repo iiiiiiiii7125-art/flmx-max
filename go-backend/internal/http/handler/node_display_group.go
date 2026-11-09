@@ -28,8 +28,12 @@ const nodeGroupOrderConfigKey = "node_display_group_order"
 
 // nodeGroupUngroupedLabel 是未分组段的固定标题，与前端
 // UNGROUPED_LABEL 同值：分组名与之相同会出两个同名段，建组/改名
-// 面一律拒绝。
+// 面与节点标签写面（批量移入/创建/编辑）一律拒绝（S3-1）。
 const nodeGroupUngroupedLabel = "未分组"
+
+// errNodeGroupReservedName 保留名拒绝文案：建组/改名校验与节点标
+// 签写面校验共用同一句，回执口径不分叉。
+var errNodeGroupReservedName = errors.New("「未分组」是保留名称，不能用作分组名")
 
 // parseNodeGroupOrderValue 解析名单值（JSON 名称数组）：trim、去
 // 重、丢空项；坏值降级为空名单（与前端 parseNodeGroupOrder 同口
@@ -72,12 +76,20 @@ func (h *Handler) loadNodeGroupRegistry() ([]string, error) {
 	return parseNodeGroupOrderValue(raw), nil
 }
 
-func (h *Handler) saveNodeGroupRegistry(order []string) error {
+func marshalNodeGroupRegistry(order []string) (string, error) {
 	value, err := json.Marshal(order)
+	if err != nil {
+		return "", err
+	}
+	return string(value), nil
+}
+
+func (h *Handler) saveNodeGroupRegistry(order []string) error {
+	value, err := marshalNodeGroupRegistry(order)
 	if err != nil {
 		return err
 	}
-	return h.repo.UpsertConfig(nodeGroupOrderConfigKey, string(value), time.Now().UnixMilli())
+	return h.repo.UpsertConfig(nodeGroupOrderConfigKey, value, time.Now().UnixMilli())
 }
 
 func nodeGroupNameInRegistry(registry []string, name string) bool {
@@ -107,12 +119,29 @@ func validateNodeGroupName(raw string, registry []string, inUse map[string]int64
 		return "", errors.New("分组名称不能为空")
 	}
 	if name == nodeGroupUngroupedLabel {
-		return "", errors.New("「未分组」是保留名称，不能用作分组名")
+		return "", errNodeGroupReservedName
 	}
 	if name != exclude && nodeGroupExists(registry, inUse, name) {
 		return "", fmt.Errorf("分组「%s」已存在", name)
 	}
 	return name, nil
+}
+
+// validateWritableNodeDisplayGroup 节点标签写面（批量移入、节点创
+// 建/编辑的 displayGroup 字段）的组名校验（S3-1）：归一与长度口径
+// 同 normalizeNodeDisplayGroup，另补与建组面同口径的保留名拒绝——
+// 非空标签不得等于「未分组」，否则节点页会出现真组段与未分组段同
+// 名并列。空标签是脱组语义（回未分组），不在此拒；目标组名仍不
+// 要求在册（名单是偏好不是登记册，见 nodeBatchSetGroup 注释）。
+func validateWritableNodeDisplayGroup(raw string) (string, error) {
+	group, err := normalizeNodeDisplayGroup(raw)
+	if err != nil {
+		return "", err
+	}
+	if group == nodeGroupUngroupedLabel {
+		return "", errNodeGroupReservedName
+	}
+	return group, nil
 }
 
 type nodeGroupCreateResult struct {
@@ -147,6 +176,9 @@ func (h *Handler) nodeGroupCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// S3-2：名单读-改-写全程持锁串行（见 Handler.nodeGroupMu）。
+	h.nodeGroupMu.Lock()
+	defer h.nodeGroupMu.Unlock()
 	registry, err := h.loadNodeGroupRegistry()
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
@@ -170,9 +202,11 @@ func (h *Handler) nodeGroupCreate(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(nodeGroupCreateResult{Name: name, Order: registry}))
 }
 
-// nodeGroupRename 分组改名：名单先落（原位替换；在册外标签改名则
-// 新名追加进名单），成员标签随后级联——名单先行保证级联失败时只
-// 多一个空组，不留「标签已改名、名单仍是旧名」的半成品。
+// nodeGroupRename 分组改名：名单新值与成员标签级联经 repo 同一事
+// 务落库（RenameNodeDisplayGroupWithRegistry，S3-2）——任一失败整
+// 体回滚，不留「名单已改、标签未改」的分叉，失败后同名重试也不
+// 会被名单里的新名堵住重名门。整个读-改-写另在 nodeGroupMu 内串
+// 行，与建组/删组/存序写面互斥。
 func (h *Handler) nodeGroupRename(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -186,6 +220,9 @@ func (h *Handler) nodeGroupRename(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// S3-2：名单读-改-写全程持锁串行（见 Handler.nodeGroupMu）。
+	h.nodeGroupMu.Lock()
+	defer h.nodeGroupMu.Unlock()
 	oldName := strings.TrimSpace(req.OldName)
 	if oldName == "" {
 		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
@@ -227,11 +264,12 @@ func (h *Handler) nodeGroupRename(w http.ResponseWriter, r *http.Request) {
 	if !replaced {
 		next = append(next, newName)
 	}
-	if err := h.saveNodeGroupRegistry(next); err != nil {
+	value, err := marshalNodeGroupRegistry(next)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	updated, err := h.repo.RenameNodeDisplayGroup(oldName, newName)
+	updated, err := h.repo.RenameNodeDisplayGroupWithRegistry(oldName, newName, value, time.Now().UnixMilli())
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -244,7 +282,9 @@ func (h *Handler) nodeGroupRename(w http.ResponseWriter, r *http.Request) {
 	}))
 }
 
-// nodeGroupDelete 删除分组：名单先摘除，成员标签随后清回未分组。
+// nodeGroupDelete 删除分组：名单摘除与成员标签清回未分组经 repo
+// 同一事务落库（ClearNodeDisplayGroupWithRegistry，S3-2），失败整
+// 体回滚不留分叉；读-改-写另在 nodeGroupMu 内串行。
 func (h *Handler) nodeGroupDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -257,6 +297,9 @@ func (h *Handler) nodeGroupDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
+	// S3-2：名单读-改-写全程持锁串行（见 Handler.nodeGroupMu）。
+	h.nodeGroupMu.Lock()
+	defer h.nodeGroupMu.Unlock()
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		response.WriteJSON(w, response.ErrDefault("分组名称不能为空"))
@@ -282,11 +325,12 @@ func (h *Handler) nodeGroupDelete(w http.ResponseWriter, r *http.Request) {
 			next = append(next, item)
 		}
 	}
-	if err := h.saveNodeGroupRegistry(next); err != nil {
+	value, err := marshalNodeGroupRegistry(next)
+	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	updated, err := h.repo.ClearNodeDisplayGroup(name)
+	updated, err := h.repo.ClearNodeDisplayGroupWithRegistry(name, value, time.Now().UnixMilli())
 	if err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -302,7 +346,9 @@ func (h *Handler) nodeGroupDelete(w http.ResponseWriter, r *http.Request) {
 // 条聚合回执（M-0051 口径）——成功/失败分别计数、失败带 id＋原
 // 因，部分失败不许报全成功。空 group＝移出回未分组。目标组名不
 // 要求在册（名单是偏好不是登记册的口径不变：在册外标签按名序
-// 排在名单之后渲染，管理面亦可对其改名/删组）。
+// 排在名单之后渲染，管理面亦可对其改名/删组）。group 校验走
+// validateWritableNodeDisplayGroup：保留名「未分组」整单拒绝
+// （S3-1），与建组面同口径。
 func (h *Handler) nodeBatchSetGroup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -324,11 +370,15 @@ func (h *Handler) nodeBatchSetGroup(w http.ResponseWriter, r *http.Request) {
 	if !checkBatchIDsCap(w, len(ids)) {
 		return
 	}
-	group, gErr := normalizeNodeDisplayGroup(req.Group)
+	group, gErr := validateWritableNodeDisplayGroup(req.Group)
 	if gErr != nil {
 		response.WriteJSON(w, response.ErrDefault(gErr.Error()))
 		return
 	}
+	// S3-2：标签写面与改名级联互斥（同 nodeGroupMu）——级联扫过之
+	// 后不得再有并发移入把节点写回旧名留下在用残留。
+	h.nodeGroupMu.Lock()
+	defer h.nodeGroupMu.Unlock()
 	success := 0
 	fail := 0
 	failures := make([]batchFailureDetail, 0)

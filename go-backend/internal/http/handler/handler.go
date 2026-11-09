@@ -87,6 +87,13 @@ type Handler struct {
 	passkeyMu      sync.Mutex
 	passkeyPending map[string]passkeyCeremony
 
+	// S3-2：展示分组名单（配置键 node_display_group_order）的读-改-写
+	// 串行化锁。建组/改名/删组与批量移入（其标签写面与改名级联须互
+	// 斥，否则级联扫过后并发移入旧名会留下在用残留）在 handler 内
+	// 全程持锁；通用配置写面（updateConfigs/updateSingleConfig）触
+	// 及同一键时在落库前同锁，避免并发下名单互相覆盖（lost-update）。
+	nodeGroupMu sync.Mutex
+
 	jobsMu      sync.Mutex
 	jobsCtx     context.Context
 	jobsCancel  context.CancelFunc
@@ -1768,6 +1775,13 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 		prevPools[key] = h.latencyPoolBefore(key)
 	}
 
+	// S3-2：载荷触及展示分组名单键时，与分组端点的名单读-改-写共用
+	// nodeGroupMu 落库，避免整值覆写与改名/删组交错互相覆盖。
+	if _, ok := validated[nodeGroupOrderConfigKey]; ok || slices.Contains(cleared, nodeGroupOrderConfigKey) {
+		h.nodeGroupMu.Lock()
+		defer h.nodeGroupMu.Unlock()
+	}
+
 	if err := h.repo.ApplyConfigBatch(validated, cleared, now); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
@@ -1816,6 +1830,13 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
+	}
+
+	// S3-2：同 updateConfigs——触及展示分组名单键时与分组端点的名单
+	// 读-改-写同锁落库。
+	if name == nodeGroupOrderConfigKey {
+		h.nodeGroupMu.Lock()
+		defer h.nodeGroupMu.Unlock()
 	}
 
 	// G3-131（A3 F-1）：与 updateConfigs 同一清空语义——可清空键传空 =

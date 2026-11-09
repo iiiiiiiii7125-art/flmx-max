@@ -94,3 +94,105 @@ func TestBackupNodeDisplayGroupRoundTrip(t *testing.T) {
 		t.Fatalf("node 43 display group after clear = %q, want empty", g)
 	}
 }
+
+// S3-2：改名/删组的名单写与成员写同事务（Rename/ClearNodeDisplay-
+// GroupWithRegistry）。注入成员更新失败时名单与标签整体回滚、不
+// 留分叉，且失败后同名重试直接成功——旧两步写先落名单时，名单里
+// 的新名空组会把同名重试堵在重名门外。
+func TestNodeDisplayGroupRegistryWritesAreAtomic(t *testing.T) {
+	dst, err := Open(filepath.Join(t.TempDir(), "group-atomic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = dst.Close() })
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Nodes: []model.NodeBackup{
+			{ID: 51, Name: "atomic-a", Secret: "s", ServerIP: "192.0.2.51", Status: 1, DisplayGroup: "旧名"},
+			{ID: 52, Name: "atomic-b", Secret: "s", ServerIP: "192.0.2.52", Status: 1, DisplayGroup: "旧名"},
+			{ID: 53, Name: "atomic-c", Secret: "s", ServerIP: "192.0.2.53", Status: 1, DisplayGroup: "其他"},
+		},
+	}
+	if _, err := dst.Import(backup, []string{"nodes"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.UpsertConfig(nodeDisplayGroupOrderConfigKey, `["旧名","其他"]`, 1); err != nil {
+		t.Fatal(err)
+	}
+	readGroup := func(id int64) string {
+		t.Helper()
+		var n model.Node
+		if err := dst.db.Where("id = ?", id).First(&n).Error; err != nil {
+			t.Fatalf("read node #%d: %v", id, err)
+		}
+		return n.DisplayGroup
+	}
+	readRegistry := func() string {
+		t.Helper()
+		raw, err := dst.GetViteConfigValue(nodeDisplayGroupOrderConfigKey)
+		if err != nil {
+			t.Fatalf("read registry: %v", err)
+		}
+		return raw
+	}
+
+	// 正常改名：名单原位替换与成员级联同落。
+	updated, err := dst.RenameNodeDisplayGroupWithRegistry("旧名", "新名", `["新名","其他"]`, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != 2 {
+		t.Fatalf("rename updated = %d, want 2", updated)
+	}
+	if got := readRegistry(); got != `["新名","其他"]` {
+		t.Fatalf("registry = %s, want [\"新名\",\"其他\"]", got)
+	}
+	if g := readGroup(51); g != "新名" {
+		t.Fatalf("node 51 group = %q, want 新名", g)
+	}
+
+	// 注入成员更新失败：改名整体回滚——名单不落、标签不变。
+	if err := dst.db.Exec(`CREATE TRIGGER fail_display_group_update BEFORE UPDATE ON node BEGIN SELECT RAISE(ABORT, 'injected failure'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dst.RenameNodeDisplayGroupWithRegistry("新名", "终名", `["终名","其他"]`, 1001); err == nil {
+		t.Fatal("rename with injected member failure must return error")
+	}
+	if got := readRegistry(); got != `["新名","其他"]` {
+		t.Fatalf("registry after failed rename = %s, want unchanged (no fork)", got)
+	}
+	if g := readGroup(51); g != "新名" {
+		t.Fatalf("node 51 group after failed rename = %q, want 新名 unchanged", g)
+	}
+	if err := dst.db.Exec(`DROP TRIGGER fail_display_group_update`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// 失败后同名重试：名单里没有半成品新名，重试直接成功。
+	updated, err = dst.RenameNodeDisplayGroupWithRegistry("新名", "终名", `["终名","其他"]`, 1002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != 2 || readGroup(52) != "终名" || readRegistry() != `["终名","其他"]` {
+		t.Fatalf("retry rename: updated=%d node52=%q registry=%s", updated, readGroup(52), readRegistry())
+	}
+
+	// 删组原子写：名单摘除与成员回落同落。
+	updated, err = dst.ClearNodeDisplayGroupWithRegistry("终名", `["其他"]`, 1003)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated != 2 {
+		t.Fatalf("clear updated = %d, want 2", updated)
+	}
+	if g := readGroup(51); g != "" {
+		t.Fatalf("node 51 group after delete = %q, want empty", g)
+	}
+	if got := readRegistry(); got != `["其他"]` {
+		t.Fatalf("registry after delete = %s, want [\"其他\"]", got)
+	}
+	if g := readGroup(53); g != "其他" {
+		t.Fatalf("node 53 group = %q, want 其他 untouched", g)
+	}
+}

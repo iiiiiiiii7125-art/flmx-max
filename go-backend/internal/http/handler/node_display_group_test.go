@@ -307,3 +307,113 @@ func TestNodeGroupDeleteFallsBackToUngrouped(t *testing.T) {
 		t.Fatalf("delete of unknown group must be rejected, got code 0")
 	}
 }
+
+// S3-1：批量移入写面此前只做归一不查保留名，「未分组」可 code=0 落
+// 库造出与未分组段同名的真组段。现与建组面同口径整单拒绝；对照：
+// 正常组移入与空 group 移出语义不被保留名门连坐。
+func TestNodeBatchSetGroupRejectsReservedName(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/group-batch-reserved.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "test-secret")
+	id1 := seedGroupedNode(t, r, "g-rsv", "198.51.100.43", "")
+
+	for _, group := range []string{"未分组", " 未分组 "} {
+		env := postNodeGroup(t, h.nodeBatchSetGroup, "/api/v1/node/batch-set-group",
+			`{"ids":[`+itoa(id1)+`],"group":"`+group+`"}`)
+		if env.Code == 0 {
+			t.Fatalf("batch set reserved group %q must be rejected, got code 0", group)
+		}
+		if !strings.Contains(env.Msg, "保留名称") {
+			t.Fatalf("rejection msg = %q, want 保留名称 named", env.Msg)
+		}
+	}
+	if g := readNodeGroup(t, r, id1); g != "" {
+		t.Fatalf("node group = %q, want empty (reserved write must not land)", g)
+	}
+
+	// 对照：正常组名移入、空 group 移出照常。
+	env := postNodeGroup(t, h.nodeBatchSetGroup, "/api/v1/node/batch-set-group",
+		`{"ids":[`+itoa(id1)+`],"group":"落地"}`)
+	if env.Code != 0 {
+		t.Fatalf("batch set normal group code=%d msg=%s", env.Code, env.Msg)
+	}
+	if g := readNodeGroup(t, r, id1); g != "落地" {
+		t.Fatalf("node group = %q, want 落地", g)
+	}
+	env = postNodeGroup(t, h.nodeBatchSetGroup, "/api/v1/node/batch-set-group",
+		`{"ids":[`+itoa(id1)+`],"group":""}`)
+	if env.Code != 0 {
+		t.Fatalf("batch move-out code=%d msg=%s", env.Code, env.Msg)
+	}
+	if g := readNodeGroup(t, r, id1); g != "" {
+		t.Fatalf("node group = %q, want empty after move-out", g)
+	}
+}
+
+// S3-1：编辑节点写面（nodeCreate/nodeUpdate 的 displayGroup 字段）
+// 同族补门——保留名整单拒绝且零落库；对照：正常标签创建/改组/脱
+// 组照常。
+func TestNodeEditPathsRejectReservedDisplayGroup(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/group-edit-reserved.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "test-secret")
+
+	// 创建面：保留名整单拒绝，节点不得落库。
+	out := pcFixCreateNode(t, h, `{"name":"g-edit-rsv","serverIp":"198.51.100.44","displayGroup":"未分组","forwardMode":"agent"}`)
+	if out.Code == 0 {
+		t.Fatalf("nodeCreate with reserved displayGroup must be rejected, got code 0")
+	}
+	var cnt int
+	if err := r.DB().Raw(`SELECT COUNT(*) FROM node WHERE name = 'g-edit-rsv'`).Scan(&cnt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cnt != 0 {
+		t.Fatalf("rejected create left %d node rows, want 0", cnt)
+	}
+
+	// 对照：正常标签创建成功（trim 后落库）。
+	out = pcFixCreateNode(t, h, `{"name":"g-edit-ok","serverIp":"198.51.100.45","displayGroup":" 落地 ","forwardMode":"agent"}`)
+	if out.Code != 0 {
+		t.Fatalf("nodeCreate with normal displayGroup failed: %+v", out)
+	}
+	id := pcFixNodeID(t, r, "g-edit-ok")
+	if g := readNodeGroup(t, r, id); g != "落地" {
+		t.Fatalf("created node group = %q, want 落地", g)
+	}
+
+	// 编辑面：保留名整单拒绝、存量标签不变。
+	res := httptest.NewRecorder()
+	h.nodeUpdate(res, newAuthenticatedJSONRequest(t, map[string]interface{}{"id": id, "displayGroup": "未分组"}))
+	if code, msg := decodeEnvelopeA204(t, res); code == 0 {
+		t.Fatalf("nodeUpdate with reserved displayGroup must be rejected, got code 0")
+	} else if !strings.Contains(msg, "保留名称") {
+		t.Fatalf("rejection msg = %q, want 保留名称 named", msg)
+	}
+	if g := readNodeGroup(t, r, id); g != "落地" {
+		t.Fatalf("node group = %q, want 落地 unchanged after rejected update", g)
+	}
+
+	// 对照：正常改组与显式脱组照常。
+	res = httptest.NewRecorder()
+	h.nodeUpdate(res, newAuthenticatedJSONRequest(t, map[string]interface{}{"id": id, "displayGroup": "中转"}))
+	if code, msg := decodeEnvelopeA204(t, res); code != 0 {
+		t.Fatalf("nodeUpdate normal group failed: code=%d msg=%s", code, msg)
+	}
+	if g := readNodeGroup(t, r, id); g != "中转" {
+		t.Fatalf("node group = %q, want 中转", g)
+	}
+	res = httptest.NewRecorder()
+	h.nodeUpdate(res, newAuthenticatedJSONRequest(t, map[string]interface{}{"id": id, "displayGroup": ""}))
+	if code, msg := decodeEnvelopeA204(t, res); code != 0 {
+		t.Fatalf("nodeUpdate clear group failed: code=%d msg=%s", code, msg)
+	}
+	if g := readNodeGroup(t, r, id); g != "" {
+		t.Fatalf("node group = %q, want empty after explicit clear", g)
+	}
+}
