@@ -1106,10 +1106,29 @@ type tuneNoFileStatus struct {
 	LimitsFile bool   `json:"limitsFile"`
 }
 
+// tuneFaces is the canonical four-face object of the panel's
+// NodeTuneStatus contract (faces.ipv4 / faces.bbr / faces.kernel /
+// faces.nic). It mirrors the flat per-face booleans below.
+type tuneFaces struct {
+	IPv4   bool `json:"ipv4"`
+	BBR    bool `json:"bbr"`
+	Kernel bool `json:"kernel"`
+	NIC    bool `json:"nic"`
+}
+
 // tuneStatus is the TuneStatus reply: the four faces as booleans
 // (detected exactly the way the reference script's menu detects
 // them), the live headline values, and the agent process's own
 // nofile summary.
+//
+// The reply carries two shapes additively: the original flat
+// fields (ipv4Priority / congestionControl / ...) and the
+// canonical contract fields the panel frontend consumes
+// (faces / congestion / qdisc). The flat-only shape shipped in
+// 2.1.0 did not match the frontend contract, so every 2.1.0 agent
+// was misread as an old agent; the canonical fields make the
+// reply itself conform. The flat fields stay for wire compat
+// (older panels and the frontend's flat-shape normalization).
 type tuneStatus struct {
 	IPv4Priority       bool             `json:"ipv4Priority"`
 	BBR                bool             `json:"bbr"`
@@ -1120,6 +1139,9 @@ type tuneStatus struct {
 	RPSSockFlowEntries int64            `json:"rpsSockFlowEntries"`
 	NoFile             tuneNoFileStatus `json:"nofile"`
 	Warnings           []string         `json:"warnings,omitempty"`
+	Faces              tuneFaces        `json:"faces"`
+	Congestion         string           `json:"congestion"`
+	Qdisc              string           `json:"qdisc"`
 }
 
 func readTuneStatus() tuneStatus {
@@ -1142,6 +1164,11 @@ func readTuneStatus() tuneStatus {
 	if _, err := os.Stat(tuneLimitsConfPath); err == nil {
 		st.NoFile.LimitsFile = true
 	}
+	// Canonical contract fields mirror the flat fields above;
+	// filled last, once every flat source value is final.
+	st.Faces = tuneFaces{IPv4: st.IPv4Priority, BBR: st.BBR, Kernel: st.Kernel, NIC: st.NIC}
+	st.Congestion = st.CongestionControl
+	st.Qdisc = st.DefaultQdisc
 	return st
 }
 

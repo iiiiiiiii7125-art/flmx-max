@@ -18,6 +18,7 @@ import {
   type NodeTuneProbeResult,
   type NodeTuneStatus,
 } from "@/api";
+import { normalizeNodeTuneStatus } from "@/api/node-tune-status";
 
 /**
  * 节点调优（四面模型，tcp.vpsing.de 脚本谱系）：IPv4 优先解析、
@@ -117,13 +118,15 @@ export function NodeTuneModal({
       setError(res.msg || "读取节点状态失败");
       return;
     }
-    // 旧 agent 的 TuneStatus 回包是已退役的分组形态（无 faces）：
-    // 按「不支持新版调优」呈现，不把旧形态误读成四面全关。
-    if (!res.data.faces) {
+    // 回包先归一：2.1.0 agent 的扁平形状与规范 faces 形状都认。
+    // 归一后仍为空的才是旧 agent 的已退役分组形态，按「不支持
+    // 新版调优」呈现，不把旧形态误读成四面全关。
+    const data = normalizeNodeTuneStatus(res.data);
+    if (!data) {
       setError("节点 agent 版本过旧，不支持新版调优，请先升级节点 Agent");
       return;
     }
-    setStatus(res.data);
+    setStatus(data);
   };
 
   useEffect(() => {
@@ -153,12 +156,13 @@ export function NodeTuneModal({
         toast.error(res.msg || "调优失败");
         return;
       }
-      if (!res.data.faces) {
+      const data = normalizeNodeTuneStatus(res.data);
+      if (!data) {
         toast.error("节点 agent 版本过旧，不支持新版调优，请先升级节点 Agent");
         return;
       }
-      setStatus(res.data);
-      (res.data.warnings || []).forEach((w) => toast(w, { icon: "⚠️" }));
+      setStatus(data);
+      (data.warnings || []).forEach((w) => toast(w, { icon: "⚠️" }));
       if (action === "rollback") toast.success("已回退到默认设置");
       else toast.success("已应用");
     } catch {
