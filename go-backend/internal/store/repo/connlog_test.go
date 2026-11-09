@@ -343,3 +343,56 @@ func TestConnlogInterruptSweeps(t *testing.T) {
 		t.Fatalf("fresh-open after boot interrupt = %+v, want interrupted with end=lastKnown", row)
 	}
 }
+
+// U5 总开关（connlog_enabled）口径：默认开、仅显式 false 关；
+// 保存面值域 true/false、空串走可清空语义；策略分类为
+// authenticated 且可清空（非必填、非系统托管）。
+func TestConnLogEnabledFromConfigMap(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  map[string]string
+		want bool
+	}{
+		{"nil map", nil, true},
+		{"absent", map[string]string{}, true},
+		{"true", map[string]string{ConnLogEnabledConfigKey: "true"}, true},
+		{"false", map[string]string{ConnLogEnabledConfigKey: "false"}, false},
+		{"false padded/cased", map[string]string{ConnLogEnabledConfigKey: " FALSE "}, false},
+		{"empty", map[string]string{ConnLogEnabledConfigKey: ""}, true},
+		{"dirty falls back to default on", map[string]string{ConnLogEnabledConfigKey: "yes"}, true},
+	}
+	for _, c := range cases {
+		if got := ConnLogEnabledFromConfigMap(c.cfg); got != c.want {
+			t.Errorf("%s: ConnLogEnabledFromConfigMap = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestNormalizeConnLogEnabledValue(t *testing.T) {
+	for in, want := range map[string]string{
+		"":       "",
+		"true":   "true",
+		" True ": "true",
+		"FALSE":  "false",
+		"false":  "false",
+	} {
+		got, err := NormalizeConnLogEnabledValue(in)
+		if err != nil || got != want {
+			t.Errorf("NormalizeConnLogEnabledValue(%q) = %q, %v; want %q, nil", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"yes", "1", "0", "on"} {
+		if _, err := NormalizeConnLogEnabledValue(in); err == nil {
+			t.Errorf("NormalizeConnLogEnabledValue(%q) must reject non-boolean values", in)
+		}
+	}
+}
+
+func TestConnLogEnabledKeyPolicy(t *testing.T) {
+	if got := PolicyForConfig(ConnLogEnabledConfigKey); got != ConfigAccessAuthenticated {
+		t.Fatalf("PolicyForConfig(%q) = %q, want authenticated", ConnLogEnabledConfigKey, got)
+	}
+	if !IsClearableConfigKey(ConnLogEnabledConfigKey) {
+		t.Fatal("connlog_enabled must be clearable (clearing falls back to the default-on state)")
+	}
+}

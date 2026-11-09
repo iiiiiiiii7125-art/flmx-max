@@ -70,10 +70,13 @@ import (
 // authenticated table (47 → 48) — the node page's display-group
 // section order, read via config/list like the forward page's
 // group-order keys before it.
-// feat/inbound-connlog: connlog_retention_days joins the
-// authenticated + required tables (48 → 49) — the inbound connection
-// log retention setting, domain-validated like monitor_retention_days.
-const configKeyRegistryBaseline = 49
+// feat/inbound-connlog (U3+U5, counted once at integration):
+// connlog_retention_days joins the authenticated + required tables
+// and connlog_enabled joins the authenticated table (48 → 50) —
+// the inbound connection log retention setting (domain-validated
+// like monitor_retention_days) and the feature master switch
+// (design §4.5; gost entrance collection, default on).
+const configKeyRegistryBaseline = 50
 
 var configKeyShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 

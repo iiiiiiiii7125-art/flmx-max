@@ -153,6 +153,11 @@ type inboundView struct {
 	// metered right now.
 	MeteringEnabled bool `json:"meteringEnabled"`
 	MeteringActive  bool `json:"meteringActive"`
+	// ConnLogEnabled is the per-inbound connection-log collection
+	// opt-in (design §4.5): while on, the inbound's kernel rendering
+	// carries the agent-side collection surface (sing-box debug log /
+	// Xray access log).
+	ConnLogEnabled bool `json:"connLogEnabled"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -198,6 +203,9 @@ type inboundRequest struct {
 	// MeteringEnabled is a pointer for the same reason: an edit that
 	// omits it keeps the SS subscription-metering switch as stored.
 	MeteringEnabled *bool `json:"meteringEnabled"`
+	// ConnLogEnabled is a pointer for the same reason: an edit that
+	// omits it keeps the connection-log collection opt-in as stored.
+	ConnLogEnabled *bool `json:"connLogEnabled"`
 }
 
 // ---- conversion ----
@@ -205,8 +213,8 @@ type inboundRequest struct {
 func inboundFromModel(row model.NodeInbound) (kernel.Inbound, error) {
 	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port,
 		AcceptProxyProtocol: row.AcceptProxyProtocol == 1, OutboundIPStrategy: row.OutboundIPStrategy,
-		ConnIdleSeconds: row.ConnIdleSeconds,
-		Companion:       row.CompanionOf > 0}
+		ConnIdleSeconds: row.ConnIdleSeconds, ConnLogEnabled: row.ConnLogEnabled == 1,
+		Companion: row.CompanionOf > 0}
 	if err := unmarshalOptional(row.Settings, &in.Settings); err != nil {
 		return in, fmt.Errorf("入站 %d settings 损坏: %v", row.ID, err)
 	}
@@ -898,6 +906,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			ConnIdleSeconds:    row.ConnIdleSeconds,
 			MeteringEnabled:    row.MeteringEnabled == 1,
 			MeteringActive:     meteringActive[row.ID],
+			ConnLogEnabled:     row.ConnLogEnabled == 1,
 		}
 		v.ShareAddress = inboundShareAddress(&row, node)
 		if v.SplitRules == nil {
@@ -1348,6 +1357,13 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// 用已定稿的内核形态 in 与落库行 row（与对账读到的形态一致）。
 	if req.MeteringEnabled != nil {
 		row.MeteringEnabled = boolToInt(*req.MeteringEnabled)
+	}
+	// 连接日志采集 opt-in（设计 §4.5）：无资格门——Xray 与 sing-box
+	// 两栈都有采集面；开关变化经下方 applyKernel 的渲染 hash 差异
+	// 自动触发重下发（开：sing-box 升 debug / Xray 开 access；关：
+	// 渲染回原状）。
+	if req.ConnLogEnabled != nil {
+		row.ConnLogEnabled = boolToInt(*req.ConnLogEnabled)
 	}
 	explicitMetering := req.MeteringEnabled != nil && *req.MeteringEnabled
 	if row.MeteringEnabled == 1 && !ssMeteringEligible(in) {

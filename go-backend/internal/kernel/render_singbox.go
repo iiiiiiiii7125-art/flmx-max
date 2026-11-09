@@ -17,8 +17,18 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 		}
 		list = append(list, items...)
 	}
+	// Connection-log collection (design §3.3/§4.5): the paired
+	// inbound-connection / connection-closed lines the agent parser
+	// consumes only exist at debug level, and the log level is
+	// per-process — one opted-in inbound raises the whole kernel to
+	// debug. With no opt-in the level stays warn and the render is
+	// unchanged.
+	logLevel := "warn"
+	if anyConnLogEnabled(inbounds) {
+		logLevel = "debug"
+	}
 	cfg := obj{
-		"log":       obj{"level": "warn"},
+		"log":       obj{"level": logLevel},
 		"inbounds":  list,
 		"outbounds": []interface{}{obj{"type": "direct", "tag": "direct"}},
 	}

@@ -660,6 +660,10 @@ type InboundBackup struct {
 	// ConnIdleSeconds is the per-inbound idle timeout (seconds) for
 	// Xray (policy.levels[].connIdle); 0 = unset (Xray default 300s).
 	ConnIdleSeconds int `json:"connIdleSeconds,omitempty"`
+	// ConnLogEnabled is the per-inbound connection-log collection
+	// opt-in (design §4.5); it rides the backup like the other inbound
+	// switches so a restored inbound keeps collecting.
+	ConnLogEnabled int `json:"connLogEnabled,omitempty"`
 }
 
 type RemoteSourceBackup struct {

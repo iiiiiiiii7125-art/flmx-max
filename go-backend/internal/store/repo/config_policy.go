@@ -156,6 +156,12 @@ var authenticatedConfigKeys = map[string]struct{}{
 	"notify_daily_hour":       {},
 	"notify_latency_loss_pct": {},
 	"notify_latency_ms":       {},
+	// 连接日志总开关（入站连接日志设计 §4.5）：gost 中转入口采集的
+	// 启停键、默认开（缺失即开，故不在 required 表——清空回落默认
+	// 开是合法语义）；值域 true/false 在保存面校验。非凭据，归
+	// authenticated（与监控开关同级）；入站级 opt-in 是入站行字段
+	// 不经本表，保留期键 connlog_retention_days 由 U3 单独登记。
+	"connlog_enabled": {},
 }
 
 func PolicyForConfig(name string) ConfigAccessPolicy {

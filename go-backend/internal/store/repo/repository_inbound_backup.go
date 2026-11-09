@@ -255,7 +255,7 @@ func (r *Repository) exportInbounds() (*model.InboundsBackup, error) {
 			UploadBytes: i.UploadBytes, DownloadBytes: i.DownloadBytes, Inx: i.Inx,
 			CreatedTime: i.CreatedTime, SourceID: i.SourceID, OutboundID: i.OutboundID, SplitRules: i.SplitRules,
 			OutboundIPStrategy: i.OutboundIPStrategy, MeteringEnabled: i.MeteringEnabled,
-			ConnIdleSeconds: i.ConnIdleSeconds,
+			ConnIdleSeconds: i.ConnIdleSeconds, ConnLogEnabled: i.ConnLogEnabled,
 		})
 	}
 
@@ -467,7 +467,7 @@ func validateImportedInboundObjects(tx *gorm.DB, i model.InboundBackup, listen, 
 	}
 	vin := kernel.Inbound{ID: i.ID, Protocol: i.Protocol, Listen: listen, Port: i.Port,
 		AcceptProxyProtocol: i.AcceptProxyProtocol == 1, OutboundIPStrategy: strategy,
-		ConnIdleSeconds: i.ConnIdleSeconds}
+		ConnIdleSeconds: i.ConnIdleSeconds, ConnLogEnabled: i.ConnLogEnabled == 1}
 	for _, f := range []struct {
 		raw string
 		out interface{}
@@ -1227,7 +1227,7 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 			UploadBytes: clampImportedCounter(rep, fmt.Sprintf("入站 #%d（%q）", i.ID, i.Name), "uploadBytes", i.UploadBytes), DownloadBytes: clampImportedCounter(rep, fmt.Sprintf("入站 #%d（%q）", i.ID, i.Name), "downloadBytes", i.DownloadBytes), Inx: i.Inx,
 			CreatedTime: i.CreatedTime, UpdatedTime: now, SourceID: i.SourceID, OutboundID: i.OutboundID,
 			SplitRules: splitRules, OutboundIPStrategy: strategy, MeteringEnabled: i.MeteringEnabled,
-			ConnIdleSeconds: i.ConnIdleSeconds,
+			ConnIdleSeconds: i.ConnIdleSeconds, ConnLogEnabled: i.ConnLogEnabled,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "id"}},
@@ -1236,7 +1236,7 @@ func (r *Repository) importInbounds(tx *gorm.DB, b *model.InboundsBackup, now in
 				"settings", "extra", "share_host", "share_address_mode", "remark", "relay_only", "accept_proxy_protocol",
 				"relay_whitelist", "whitelist_extra", "enabled", "upload_bytes", "download_bytes",
 				"inx", "updated_time", "source_id", "outbound_id", "split_rules", "outbound_ip_strategy",
-				"metering_enabled", "companion_of", "conn_idle_seconds",
+				"metering_enabled", "companion_of", "conn_idle_seconds", "conn_log_enabled",
 			}),
 		}).Create(&item).Error; err != nil {
 			return inboundImportCounts{}, err

@@ -413,3 +413,45 @@ func (r *Repository) InterruptStaleOpenInboundConnLogs(startedBeforeMs int64) (i
 	}
 	return res.RowsAffected, nil
 }
+
+// ConnLogEnabledConfigKey 是入站连接日志功能的**总开关**设置键
+// （设计 §4.5）：gost 中转入口的采集无日志放大代价，随本开关走、
+// **默认开**（键缺失/被清空即开）。内核直连入站的采集另有入站级
+// opt-in（NodeInbound.ConnLogEnabled，默认关）逐个开启——本键不
+// 代管内核面，避免一次关开静默改变全网内核日志形态。
+//
+// 值域：规范形态 "true"/"false"（保存面
+// handler.normalizeAndValidateConfigValue 经
+// NormalizeConnLogEnabledValue 收口）；读面
+// ConnLogEnabledFromConfigMap 对脏值（绕过保存面直入 DB）按默认
+// 开处理，与隧道质量开关的读面口径一致（!= "false" 即开）。
+//
+// 与 U3 的保留期键 connlog_retention_days 分工：本键只管采不采，
+// 保留期/行数帽是摄入面口径，两键不互相代管。
+const ConnLogEnabledConfigKey = "connlog_enabled"
+
+// NormalizeConnLogEnabledValue 校验并归一总开关值。空串返回 ""
+// （走调用方既有可清空语义：删除该键、回落默认开）；仅接受
+// true/false（大小写/首尾空白不敏感），其余整批拒绝并点名。
+func NormalizeConnLogEnabledValue(raw string) (string, error) {
+	trimmed := strings.TrimSpace(strings.ToLower(raw))
+	switch trimmed {
+	case "":
+		return "", nil
+	case "true", "false":
+		return trimmed, nil
+	default:
+		return "", fmt.Errorf("连接日志总开关配置值无效")
+	}
+}
+
+// ConnLogEnabledFromConfigMap 从配置快照读总开关：仅显式 "false"
+// 为关，键缺失、空值与脏值一律按默认开（与
+// monitoring/隧道质量开关的读面口径一致）。消费方（U7 入口标记、
+// U1 采集下发）统一经此读，不各自解析。
+func ConnLogEnabledFromConfigMap(cfg map[string]string) bool {
+	if cfg == nil {
+		return true
+	}
+	return strings.TrimSpace(strings.ToLower(cfg[ConnLogEnabledConfigKey])) != "false"
+}

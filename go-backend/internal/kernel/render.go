@@ -99,6 +99,20 @@ func RenderWith(kernelType string, inbounds []Inbound, opts RenderOptions) (Rend
 	return out, nil
 }
 
+// anyConnLogEnabled reports whether any inbound in the render set
+// opted into connection-log collection (design §4.5). The observation
+// surfaces it gates (sing-box log level, Xray access log) are
+// per-process, so a single opted-in inbound turns them on for the
+// whole kernel render.
+func anyConnLogEnabled(inbounds []Inbound) bool {
+	for _, in := range inbounds {
+		if in.ConnLogEnabled {
+			return true
+		}
+	}
+	return false
+}
+
 func hashRendered(r Rendered) string {
 	h := sha256.New()
 	for _, f := range r.Files {
