@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
@@ -26,207 +25,92 @@ var subscriptionCheckInterval = time.Minute
 // same kernels at once.
 var subSyncMu sync.Mutex
 
-// subPipeline is the JSON form of kernel.SubOptions stored per subscription.
+// subPipeline is the JSON form of the stored subscription options.
+// Since 2.1.2 the only stored processing-era option is the relay
+// scope (Lines); the processing block (regions/protocols/include/
+// exclude/rename/flag/prefix/dedupe/sort/region groups/info nodes),
+// the subscription chain options and rules/scripts were removed, and
+// their stored keys are ignored on read and dropped on the next save.
 type subPipeline struct {
-	Lines             string   `json:"lines"`
-	Regions           []string `json:"regions"`
-	Protocols         []string `json:"protocols"`
-	Include           string   `json:"include"`
-	Exclude           string   `json:"exclude"`
-	Rename            string   `json:"rename"`
-	AddFlag           bool     `json:"addFlag"`
-	Prefix            string   `json:"prefix"`
-	Dedupe            bool     `json:"dedupe"`
-	Sort              string   `json:"sort"`
-	RegionGroups      bool     `json:"regionGroups"`
-	ChainLanding      string   `json:"chainLanding"`
-	ChainRelay        string   `json:"chainRelay"`
-	Script            string   `json:"script"`
-	Rules             bool     `json:"rules"`
-	RuleGroups        []string `json:"ruleGroups"`
-	ChainLandingNames []string `json:"chainLandingNames"`
-	ChainRelayNames   []string `json:"chainRelayNames"`
-	// ChainLandingSources / ChainRelaySources take whole remote sources
-	// (their nodes join the subscription), ChainLandingOwn the panel's own
-	// nodes; ChainNoneNames are nodes set to 不用 that those would take.
-	ChainLandingSources []int64  `json:"chainLandingSources"`
-	ChainRelaySources   []int64  `json:"chainRelaySources"`
-	ChainLandingOwn     bool     `json:"chainLandingOwn"`
-	ChainNoneNames      []string `json:"chainNoneNames"`
-	ChainHideRelays     bool     `json:"chainHideRelays"`
-	// ChainSourceFilters narrows a chain source to the nodes whose name
-	// matches; ChainDropUnused leaves the rest of its nodes out.
-	ChainSourceFilters map[int64]string `json:"chainSourceFilters,omitempty"`
-	ChainDropUnused    bool             `json:"chainDropUnused"`
-	// RelayIDs 是端点白名单（1.0.12 中转范围过滤）：空/nil = 不过滤（旧行为）；
-	// 非空时仅保留 RelayID 命中的端点，0 表示直连端点，N>0 表示该中转的端点。
-	RelayIDs []int64 `json:"relayIds,omitempty"`
-	// InfoNodes puts expiry / traffic placeholder nodes at the head of
-	// the rendered node list (kernel.InfoNotices), for clients that do
-	// not display the Subscription-Userinfo header. It is read by the
-	// fetch handler directly; options() does not map it (the notice
-	// texts are computed per fetch, not stored).
-	InfoNodes bool `json:"infoNodes"`
+	// Lines is the relay scope （中转范围三档）: "" keeps every
+	// endpoint, "direct" keeps direct endpoints only, "relay" keeps
+	// relayed endpoints only. It keeps the historical "lines" JSON
+	// key on purpose: before 2.1.2 the same key carried the same
+	// three-state scope inside the removed processing block, so a
+	// stored value keeps its exact meaning. The legacy relayIds
+	// whitelist is folded into this field at parse time (see
+	// UnmarshalJSON).
+	Lines string `json:"lines"`
 	// Templates 按客户端槽位选订阅模板（kernel.TemplateClash /
 	// TemplateSingbox / TemplateSurge / TemplateStash /
-	// TemplateShadowrocket → 模板 ID）。选了模板的格式渲染进模板骨架，
-	// 不再走内置配置与 Rules；模板正文在渲染时按 ID 加载（见
-	// Handler.subOptions），不落订阅行。
+	// TemplateShadowrocket → 模板 ID）。选了模板的格式渲染进模板骨架；
+	// 模板正文在渲染时按 ID 加载（见 Handler.subOptions），不落订阅行。
 	Templates map[string]int64 `json:"templates,omitempty"`
 }
 
-func (p subPipeline) options() kernel.SubOptions {
-	return kernel.SubOptions{
-		Lines: p.Lines, Regions: p.Regions, Protocols: p.Protocols, Include: p.Include, Exclude: p.Exclude,
-		Rename: p.Rename, AddFlag: p.AddFlag, Prefix: p.Prefix, Dedupe: p.Dedupe, Sort: p.Sort,
-		RegionGroups: p.RegionGroups, ChainLanding: p.ChainLanding, ChainRelay: p.ChainRelay,
-		Script: p.Script, Rules: p.Rules, RuleGroups: p.RuleGroups,
-		ChainLandingNames: p.ChainLandingNames, ChainRelayNames: p.ChainRelayNames,
-		ChainLandingSources: p.ChainLandingSources, ChainRelaySources: p.ChainRelaySources,
-		ChainLandingOwn: p.ChainLandingOwn, ChainNoneNames: p.ChainNoneNames, ChainHideRelays: p.ChainHideRelays,
-		ChainSourceFilters: p.ChainSourceFilters, ChainDropUnused: p.ChainDropUnused,
+// UnmarshalJSON folds the legacy relayIds whitelist (removed in
+// 2.1.2) into Lines when Lines itself carries no scope: empty or
+// missing list → "" (all), exactly [0] → "direct", a list without 0 →
+// "relay", a mixed list → "" (all). A stored Lines value always wins:
+// it was the explicit scope control, and the whitelist was the
+// secondary filter. (The widening this fold implies for partial
+// whitelists is disclosed at backup restore; see
+// scrubRemovedSubOptions in the repo layer, which applies the same
+// fold when a backup lands.)
+func (p *subPipeline) UnmarshalJSON(data []byte) error {
+	type alias subPipeline
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
 	}
+	var legacy struct {
+		RelayIDs []int64 `json:"relayIds"`
+	}
+	_ = json.Unmarshal(data, &legacy)
+	*p = subPipeline(a)
+	// 存量 lines 只有 "direct"/"relay" 是有效档位（其余值在旧过滤里
+	// 恒为惰性无过滤）；没有有效档位时 relayIds 才是 operative 的
+	// 过滤，按折算表折进 Lines。已有有效档位则 lines 优先。
+	if t := strings.TrimSpace(p.Lines); t != "direct" && t != "relay" {
+		if scope := relayScopeFromLegacyIDs(legacy.RelayIDs); scope != "" {
+			p.Lines = scope
+		}
+	}
+	return nil
+}
+
+// relayScopeFromLegacyIDs translates a legacy relayIds whitelist into
+// the Lines scope value. Negative ids never matched an endpoint and
+// are ignored, mirroring the old normalize.
+func relayScopeFromLegacyIDs(ids []int64) string {
+	hasZero, hasRelay := false, false
+	for _, id := range ids {
+		switch {
+		case id == 0:
+			hasZero = true
+		case id > 0:
+			hasRelay = true
+		}
+	}
+	switch {
+	case hasZero && !hasRelay:
+		return "direct"
+	case hasRelay && !hasZero:
+		return "relay"
+	}
+	return ""
+}
+
+func (p subPipeline) options() kernel.SubOptions {
+	return kernel.SubOptions{Lines: p.Lines}
 }
 
 func (p *subPipeline) normalize() error {
-	p.Rename = strings.TrimSpace(strings.ReplaceAll(p.Rename, "\r\n", "\n"))
-	p.Include = strings.TrimSpace(p.Include)
-	p.Exclude = strings.TrimSpace(p.Exclude)
-	p.ChainLanding = strings.TrimSpace(p.ChainLanding)
-	p.ChainRelay = strings.TrimSpace(p.ChainRelay)
-	if len(p.Rename) > 10000 || len(p.Include) > 1000 || len(p.Exclude) > 1000 ||
-		len(p.ChainLanding) > 1000 || len(p.ChainRelay) > 1000 {
-		return errText("规则太长")
-	}
-	if len([]rune(p.Prefix)) > 50 {
-		return errText("前缀最多 50 个字")
-	}
-	if p.Sort != "name" {
-		p.Sort = ""
-	}
 	if p.Lines != "relay" && p.Lines != "direct" {
 		p.Lines = ""
 	}
-	// R2X-025（B2-04）：Regions / Protocols 此前仅 nil→[]，带空格或
-	// 未知值原样落库后过滤恒不命中、拉取静默为空。与 RuleGroups 同
-	// 口径：按已知集修剪、去重、过滤未知值（正常前端数据不受影响）。
-	knownRegions := make(map[string]bool)
-	for _, name := range append(kernel.RegionNames(), kernel.RegionOther) {
-		knownRegions[name] = true
-	}
-	regions := []string{}
-	seenRegions := map[string]bool{}
-	for _, name := range p.Regions {
-		name = strings.TrimSpace(name)
-		if name == "" || seenRegions[name] || !knownRegions[name] {
-			continue
-		}
-		seenRegions[name] = true
-		regions = append(regions, name)
-	}
-	p.Regions = regions
-	// 已知协议集 = 自建协议常量 + importTypes 值域（kernel 侧统一导出）。
-	knownProtocols := make(map[string]bool)
-	for _, proto := range kernel.SubscriptionProtocols() {
-		knownProtocols[proto] = true
-	}
-	protocols := []string{}
-	seenProtocols := map[string]bool{}
-	for _, proto := range p.Protocols {
-		proto = strings.ToLower(strings.TrimSpace(proto))
-		if proto == "" || seenProtocols[proto] || !knownProtocols[proto] {
-			continue
-		}
-		seenProtocols[proto] = true
-		protocols = append(protocols, proto)
-	}
-	p.Protocols = protocols
-	if p.RuleGroups == nil {
-		p.RuleGroups = []string{}
-	}
-	// O4-005/H-003：保存时过滤非法规则组 key（此前只在渲染侧 fail-safe，
-	// 非法值会原样落库）。NormalizeRuleGroups 只保留已知 key 并按展示顺序排列。
-	p.RuleGroups = kernel.NormalizeRuleGroups(p.RuleGroups)
-	if p.ChainLandingNames == nil {
-		p.ChainLandingNames = []string{}
-	}
-	if p.ChainRelayNames == nil {
-		p.ChainRelayNames = []string{}
-	}
-	if p.ChainNoneNames == nil {
-		p.ChainNoneNames = []string{}
-	}
-	// 链式按源（3.3.29 #87）：新字段归一化——None 名单修剪去重、来源 ID
-	// 去零去重；筛选表达式只保留链内来源的（其余静默丢弃）。
-	noneNames, err := normalizeNames(p.ChainNoneNames)
-	if err != nil {
-		return err
-	}
-	p.ChainNoneNames = noneNames
-	// X-P3-1（B-F1）：ChainLandingNames/ChainRelayNames 此前唯独未过
-	// normalizeNames，带空格的名字落库后与 Original 精确匹配永不命中。
-	// 与 None 名单同口径（修剪/去重/条数与长度上限、同一文案）。
-	landingNames, err := normalizeNames(p.ChainLandingNames)
-	if err != nil {
-		return err
-	}
-	p.ChainLandingNames = landingNames
-	relayNames, err := normalizeNames(p.ChainRelayNames)
-	if err != nil {
-		return err
-	}
-	p.ChainRelayNames = relayNames
-	landingSources, err := normalizeIDs(p.ChainLandingSources)
-	if err != nil {
-		return err
-	}
-	p.ChainLandingSources = landingSources
-	relaySources, err := normalizeIDs(p.ChainRelaySources)
-	if err != nil {
-		return err
-	}
-	p.ChainRelaySources = relaySources
-	// Filters are kept for the sources in the chain only.
-	inChain := map[int64]bool{}
-	for _, id := range append(append([]int64{}, p.ChainLandingSources...), p.ChainRelaySources...) {
-		inChain[id] = true
-	}
-	filters := map[int64]string{}
-	for id, expr := range p.ChainSourceFilters {
-		if expr = strings.TrimSpace(expr); expr != "" && inChain[id] {
-			if len(expr) > 1000 {
-				return errText("规则太长")
-			}
-			filters[id] = expr
-		}
-	}
-	p.ChainSourceFilters = filters
-	// 脚本长度限制（与执行时的 20000 一致，保存时提前拦截）
-	// X-P3-3（B-F3/BC-10）：按字符计数，与执行侧 ValidateSubScript 同口径。
-	if utf8.RuneCountInString(p.Script) > 20000 {
-		return errText("脚本过长（最多 20000 字符）")
-	}
-	// 中转范围白名单归一化：去重、剔除负数（0=直连合法）。
-	// R2X-025：补条数上限 1000（与名称名单同口径，原始条数计），
-	// 超限报错而非静默截断。
-	if len(p.RelayIDs) > 1000 {
-		return errText("选的中转太多（最多 1000 个）")
-	}
-	if len(p.RelayIDs) > 0 {
-		seen := make(map[int64]bool, len(p.RelayIDs))
-		clean := make([]int64, 0, len(p.RelayIDs))
-		for _, id := range p.RelayIDs {
-			if id < 0 || seen[id] {
-				continue
-			}
-			seen[id] = true
-			clean = append(clean, id)
-		}
-		p.RelayIDs = clean
-	}
-	// 模板槽位归一化：只保留已知槽位与正 ID，未知槽位静默丢弃（与
-	// Regions/Protocols 的修剪口径一致）；模板存在性与格式匹配在
-	// 保存时由 checkPipelineTemplates 校验。
+	// 模板槽位归一化：只保留已知槽位与正 ID，未知槽位静默丢弃；
+	// 模板存在性与格式匹配在保存时由 checkPipelineTemplates 校验。
 	templates := map[string]int64{}
 	for _, slot := range kernel.TemplateSlots {
 		if id := p.Templates[slot]; id > 0 {
@@ -240,73 +124,10 @@ func (p *subPipeline) normalize() error {
 func parsePipeline(raw string) subPipeline {
 	var p subPipeline
 	_ = json.Unmarshal([]byte(raw), &p)
-	if p.Regions == nil {
-		p.Regions = []string{}
-	}
-	if p.Protocols == nil {
-		p.Protocols = []string{}
-	}
-	// 新字段 nil→[] 默认值，防止前端收到 null 崩溃（H-001）
-	if p.RuleGroups == nil {
-		p.RuleGroups = []string{}
-	}
-	if p.ChainLandingNames == nil {
-		p.ChainLandingNames = []string{}
-	}
-	if p.ChainRelayNames == nil {
-		p.ChainRelayNames = []string{}
-	}
-	if p.ChainNoneNames == nil {
-		p.ChainNoneNames = []string{}
-	}
-	if p.ChainLandingSources == nil {
-		p.ChainLandingSources = []int64{}
-	}
-	if p.ChainRelaySources == nil {
-		p.ChainRelaySources = []int64{}
-	}
 	if p.Templates == nil {
 		p.Templates = map[string]int64{}
 	}
 	return p
-}
-
-// normalizeIDs drops zero and repeated ids.
-func normalizeIDs(ids []int64) ([]int64, error) {
-	if len(ids) > 100 {
-		return nil, errText("选的订阅源太多")
-	}
-	out := []int64{}
-	seen := map[int64]bool{}
-	for _, id := range ids {
-		if id > 0 && !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	return out, nil
-}
-
-// normalizeNames trims and dedupes picked node names; a node picked as
-// both landing and relay counts as landing (see markChain).
-func normalizeNames(names []string) ([]string, error) {
-	if len(names) > 1000 {
-		return nil, errText("选的节点太多")
-	}
-	out := []string{}
-	seen := map[string]bool{}
-	for _, n := range names {
-		n = strings.TrimSpace(n)
-		if n == "" || seen[n] {
-			continue
-		}
-		if len([]rune(n)) > 200 {
-			return nil, errText("节点名称太长")
-		}
-		seen[n] = true
-		out = append(out, n)
-	}
-	return out, nil
 }
 
 type errText string
@@ -561,9 +382,7 @@ func subInboundIDs(s *model.Subscription, rows []model.NodeInbound) []int64 {
 		picked[id] = true
 	}
 	sources := map[int64]bool{}
-	pipeline := parsePipeline(s.Options)
-	// The chain's sources come with their nodes.
-	for _, id := range append(append(parseIDList(s.SourceIDs), pipeline.ChainLandingSources...), pipeline.ChainRelaySources...) {
+	for _, id := range parseIDList(s.SourceIDs) {
 		sources[id] = true
 	}
 	for _, r := range rows {
@@ -860,8 +679,11 @@ func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInb
 	if s == nil {
 		return endpoints
 	}
-	// 1.0.12: 中转范围过滤（Options.relayIds）。空 = 不过滤，保持旧行为。
-	return filterEndpointsByRelayIDs(endpoints, parsePipeline(s.Options).RelayIDs)
+	// 中转范围（三档）在装配层按 Lines 先过滤一遍（旧 relayIds 白名单
+	// 就在这一层收紧，计数/预览/拉取共用此口径）；渲染流水线里
+	// kernel.FilterEndpoints 还会再过一次，幂等。存量 relayIds 已在
+	// parsePipeline 折算进 Lines。
+	return kernel.FilterEndpoints(endpoints, parsePipeline(s.Options).options())
 }
 
 // filterInboundRowsByUserAssignments 保留用户被分配的入站行
@@ -916,26 +738,6 @@ func filterEndpointsByUserAssignments(endpoints []kernel.Endpoint, assignments [
 	return filtered
 }
 
-// filterEndpointsByRelayIDs 按 relayIds 白名单过滤端点：
-// relayIDs 为空时原样返回；端点的 RelayID==0 视为直连（含导入端点），
-// 仅当 0 在白名单中才保留；RelayID>0 的中转端点同理按号命中。
-func filterEndpointsByRelayIDs(endpoints []kernel.Endpoint, relayIDs []int64) []kernel.Endpoint {
-	if len(relayIDs) == 0 {
-		return endpoints
-	}
-	allowed := make(map[int64]bool, len(relayIDs))
-	for _, id := range relayIDs {
-		allowed[id] = true
-	}
-	out := endpoints[:0]
-	for _, e := range endpoints {
-		if allowed[e.RelayID] {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
 // ---- API ----
 
 type subscriptionView struct {
@@ -971,8 +773,6 @@ type subscriptionView struct {
 	// (creation or last reset), resolved via subTrafficSince.
 	TrafficSince int64 `json:"trafficSince"`
 	OverQuota    bool  `json:"overQuota"`
-	// RelayIDs 是该订阅的中转范围白名单（与 options.relayIds 同源，顶层暴露便于前端回显）。
-	RelayIDs []int64 `json:"relayIds"`
 	// IsDefault 标记"默认订阅"（个人订阅链接的载体）：排序第一条，由 subscriptionList 回填。
 	IsDefault bool `json:"isDefault"`
 	// ExcludedCompanionIDs 是本次 save 校验时被排除的伴生入站 ID
@@ -1082,10 +882,6 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		sourceIDs = append(sourceIDs, parseIDList(s.SourceIDs)...)
 	}
 	pipe := parsePipeline(s.Options)
-	relayIDs := pipe.RelayIDs
-	if relayIDs == nil {
-		relayIDs = []int64{}
-	}
 	// A5-02/BC-11：NodeCount 按目标格式的实际渲染数计（与该格式的客户
 	// 端实得一致），不再是格式过滤前的终结点数。sing-box 口径按现行
 	// 客户端（1.14+，含导入 Snell）计，与真机实测对齐。
@@ -1106,7 +902,7 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		ExpireTime: s.ExpireTime, Enabled: s.Enabled == 1, Active: subActive(s, now), PendingDelete: s.PendingDelete == 1, Remark: s.Remark,
 		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
-		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s), RelayIDs: relayIDs,
+		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s),
 		MeteringUnsupported: isShare(s) && s.ID > kernel.MaxUserMarkID,
 	}
 }
@@ -1157,9 +953,7 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"items":      items,
-		"regions":    append(kernel.RegionNames(), kernel.RegionOther),
-		"ruleGroups": kernel.RuleGroups(),
+		"items": items,
 	}))
 }
 
@@ -1263,21 +1057,20 @@ func (req *subscriptionRequest) validateDetailed(rows []model.NodeInbound) ([]in
 		}
 	}
 	req.SourceIDs = sources
-	chainSources := len(req.Options.ChainLandingSources) + len(req.Options.ChainRelaySources)
-	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 && chainSources == 0 {
+	if !req.SourceAll && len(ids) == 0 && len(sources) == 0 {
 		return nil, nil, errText("请至少选择一个入站或订阅源，或选择全部")
 	}
 	return ids, excluded, nil
 }
 
 // checkSubscriptionSourceRefs（R4-F1-01）：订阅对订阅源的引用在保存
-// 时验存在——SourceIDs 与 Options 的链式按源（ChainLandingSources/
-// ChainRelaySources）此前仅过滤正数/去零去重，未验的幽灵 ID 被计入
-// 「至少选一个」的非空判定后落库、渲染为空且无人知晓。与入站
-// （B10-002「入站不存在」）同口径：未知源 ID 硬拒并点名。删除面
-// 的对称处置（删源时清理引用并回执点名）见 remoteSourceDelete。
+// 时验存在——SourceIDs 此前仅过滤正数，未验的幽灵 ID 被计入「至少
+// 选一个」的非空判定后落库、渲染为空且无人知晓。与入站（B10-002
+// 「入站不存在」）同口径：未知源 ID 硬拒并点名。删除面的对称处置
+// （删源时清理引用并回执点名）见 remoteSourceDelete。（2.1.2 起
+// Options 内的链式按源引用已随订阅链式删除，本检查只剩 SourceIDs。）
 func (h *Handler) checkSubscriptionSourceRefs(req *subscriptionRequest) error {
-	if len(req.SourceIDs) == 0 && len(req.Options.ChainLandingSources) == 0 && len(req.Options.ChainRelaySources) == 0 {
+	if len(req.SourceIDs) == 0 {
 		return nil
 	}
 	sources, err := h.repo.ListRemoteSources()
@@ -1290,12 +1083,10 @@ func (h *Handler) checkSubscriptionSourceRefs(req *subscriptionRequest) error {
 	}
 	var unknown []int64
 	seen := make(map[int64]bool)
-	for _, group := range [][]int64{req.SourceIDs, req.Options.ChainLandingSources, req.Options.ChainRelaySources} {
-		for _, id := range group {
-			if id > 0 && !known[id] && !seen[id] {
-				seen[id] = true
-				unknown = append(unknown, id)
-			}
+	for _, id := range req.SourceIDs {
+		if id > 0 && !known[id] && !seen[id] {
+			seen[id] = true
+			unknown = append(unknown, id)
 		}
 	}
 	if len(unknown) > 0 {
@@ -1653,11 +1444,8 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 type subPreviewItem struct {
 	Name     string `json:"name"`
 	Original string `json:"original"`
-	Region   string `json:"region"`
 	Protocol string `json:"protocol"`
 	Line     string `json:"line"` // "direct" or "relay"
-	// Chain is "landing" or "relay" when the subscription chains proxies.
-	Chain string `json:"chain,omitempty"`
 	// SourceID is the remote source of an imported node; Own marks the
 	// panel's own nodes.
 	SourceID int64 `json:"sourceId,omitempty"`
@@ -1694,19 +1482,15 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		Options: string(options)}
 	source := h.subRenderEndpoints(draft, rows)
 	opts := req.Options.options()
-	// F-024（O4-001 的另一半）：脚本出错时预览必须保留其他步骤的节点并
-	// 附带 scriptError——此前实现直接返回空 items + dropped=全部，与
-	// guide「脚本执行失败不影响其他步骤的结果」相悖，还误导用户以为
-	// 节点全被过滤。单次流水线同时拿结果与脚本错误，不再重跑。
-	result, scriptErr := kernel.ApplySubOptionsReport(source, opts)
+	result := kernel.ApplySubOptions(source, opts)
 	items := make([]subPreviewItem, 0, len(result))
 	for _, e := range result {
 		line := "relay"
 		if e.Direct {
 			line = "direct"
 		}
-		items = append(items, subPreviewItem{Name: e.Name, Original: e.Original, Region: kernel.RegionOf(e.Name),
-			Protocol: kernel.EndpointProtocol(e), Line: line, Chain: e.ChainRole, SourceID: e.SourceID, Own: e.Proxy == nil && e.SourceID == 0})
+		items = append(items, subPreviewItem{Name: e.Name, Original: e.Original,
+			Protocol: kernel.EndpointProtocol(e), Line: line, SourceID: e.SourceID, Own: e.Proxy == nil && e.SourceID == 0})
 	}
 	resp := map[string]interface{}{
 		"items":   items,
@@ -1716,9 +1500,6 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 	if len(excludedCompanions) > 0 {
 		// B10-002：与 save 同口径，预览也标注被排除的伴生入站。
 		resp["excludedCompanionIds"] = excludedCompanions
-	}
-	if scriptErr != nil {
-		resp["scriptError"] = scriptErr.Error()
 	}
 	response.WriteJSON(w, response.OK(resp))
 }

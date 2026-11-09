@@ -81,7 +81,7 @@ func TestCheckClashTemplate(t *testing.T) {
 
 func TestSubscriptionClashTemplate(t *testing.T) {
 	eps := namedEndpoints("香港 01", "HK IPLC", "美国 01")
-	opts := SubOptions{Templates: map[string]string{TemplateClash: clashTpl}, Rules: true}
+	opts := SubOptions{Templates: map[string]string{TemplateClash: clashTpl}}
 	body, ct, err := Subscription(FormatClash, eps, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -132,25 +132,6 @@ func TestSubscriptionClashTemplate(t *testing.T) {
 	// The Sing-box format has no Mihomo fallback.
 	if sb, _, _ := Subscription(FormatSingbox, eps, opts); strings.Contains(sb, "🚀 节点选择") {
 		t.Fatal("sing-box must not take the Mihomo template")
-	}
-}
-
-func TestSubscriptionClashTemplateChain(t *testing.T) {
-	opts := chainOpts
-	opts.Templates = map[string]string{TemplateClash: "proxy-groups:\n  - {name: 选择, type: select, include-all: true}\nrules: [MATCH,选择]\n"}
-	body, _, err := Subscription(FormatClash, chainEndpoints(), opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cfg struct {
-		Proxies []map[string]interface{} `yaml:"proxies"`
-		Groups  []map[string]interface{} `yaml:"proxy-groups"`
-	}
-	if err := yaml.Unmarshal([]byte(body), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Groups) != 3 || cfg.Groups[1]["name"] != ChainLandingGroup || cfg.Proxies[0]["dialer-proxy"] != ChainRelayGroup {
-		t.Fatalf("chain groups and dialer-proxy:\n%s", body)
 	}
 }
 
@@ -243,15 +224,14 @@ func TestSubscriptionSurgeTemplate(t *testing.T) {
 		t.Fatalf("nodes go after the template's own proxies:\n%s", body)
 	}
 
-	// No [Proxy] section: one is added before [Proxy Group]; chain groups too.
-	opts := chainOpts
-	opts.Templates = map[string]string{TemplateSurge: "[Proxy Group]\n选择 = select, include-all-proxies=1\n"}
+	// No [Proxy] section: one is added before [Proxy Group]; the nodes
+	// land in it as plain entries (2.1.2: no chain groups any more).
+	opts := SubOptions{Templates: map[string]string{TemplateSurge: "[Proxy Group]\n选择 = select, include-all-proxies=1\n"}}
 	body, _, err = Subscription(FormatSurge, chainEndpoints(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(body, "[Proxy]\n美国 落地 01 = ") || !strings.Contains(body, "underlying-proxy="+ChainRelayGroup) ||
-		!strings.Contains(body, "\n"+ChainLandingGroup+" = select, 美国 落地 01, 美国 落地 02\n") {
+	if !strings.HasPrefix(body, "[Proxy]\n美国 落地 01 = ") || strings.Contains(body, "underlying-proxy=") {
 		t.Fatalf("surge without [Proxy]:\n%s", body)
 	}
 	if _, err := CheckTemplate(TemplateSurge, "[General]\n", nil); err == nil {
@@ -313,20 +293,6 @@ rules:
 		t.Fatalf("mihomo template changed:\n%s", body)
 	}
 
-	// Shadowrocket: chained copies named after their relay, no chain groups.
-	chain := chainOpts
-	chain.Templates = map[string]string{TemplateShadowrocket: "proxy-groups:\n  - {name: 选择, type: select, include-all: true}\nrules: [MATCH,选择]\n"}
-	body, _, err := Subscription(FormatShadowrocket, chainEndpoints(), chain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cfg profile
-	if err := yaml.Unmarshal([]byte(body), &cfg); err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Groups) != 1 || !strings.Contains(fmt.Sprint(cfg.Groups[0]["proxies"]), "美国 落地 01") || cfg.Proxies[0]["dialer-proxy"] != "香港 中转" {
-		t.Fatalf("shadowrocket chain:\n%s", body)
-	}
 }
 
 // Stash / Shadowrocket groups are written out the way Mihomo would fill
@@ -390,23 +356,17 @@ func TestSubscriptionWithoutTemplateUnchanged(t *testing.T) {
 		{Templates: map[string]string{}},
 		{Templates: map[string]string{TemplateClash: "", TemplateSingbox: "  ", TemplateSurge: ""}},
 	}
-	rules := []SubOptions{
-		{Rules: true},
-		{Rules: true, Templates: map[string]string{TemplateClash: ""}},
-	}
 	for _, format := range formats {
-		for gi, group := range [][]SubOptions{plain, rules} {
-			var want string
-			for i, opts := range group {
-				body, _, err := Subscription(format, eps, opts)
-				if err != nil {
-					t.Fatalf("%s group %d variant %d: %v", format, gi, i, err)
-				}
-				if i == 0 {
-					want = body
-				} else if body != want {
-					t.Fatalf("%s group %d variant %d differs from the no-template baseline", format, gi, i)
-				}
+		var want string
+		for i, opts := range plain {
+			body, _, err := Subscription(format, eps, opts)
+			if err != nil {
+				t.Fatalf("%s variant %d: %v", format, i, err)
+			}
+			if i == 0 {
+				want = body
+			} else if body != want {
+				t.Fatalf("%s variant %d differs from the no-template baseline", format, i)
 			}
 		}
 	}

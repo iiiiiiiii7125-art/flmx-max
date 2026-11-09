@@ -1,9 +1,13 @@
 package kernel
 
-// Chained proxies in subscriptions (client side): landing nodes carry a
-// dialer-proxy (Mihomo), detour (sing-box) or underlying-proxy (Surge) set
-// to the relay group, so the client reaches a landing node through whichever
-// relay node is selected there. Base64 share links cannot express a chain.
+// Chain vocabulary for subscription rendering. The subscription chain
+// options themselves (marking landing/relay endpoints from stored
+// options) were removed in 2.1.2: nothing assigns Endpoint.ChainRole
+// anymore, so every consumer below always sees "no chain". The group
+// names, role constants and the two helpers stay because the template
+// renderer (sub_template.go) still threads them — its chain branches
+// are unreachable in practice, and its behaviour for templates that
+// mention the reserved group names is unchanged.
 
 const (
 	// ChainLandingGroup holds the exit nodes; it heads the node selection.
@@ -14,92 +18,6 @@ const (
 	ChainRoleLanding = "landing"
 	ChainRoleRelay   = "relay"
 )
-
-// markChain tags the endpoints the chain options match. A name matching
-// both is a landing node: it must not relay for itself. Nothing is tagged
-// unless both sides match a node. With ChainDropUnused, the nodes of chain
-// sources that got no role are left out.
-func markChain(endpoints []Endpoint, opts SubOptions) []Endpoint {
-	isLanding, isRelay := chainMatchers(opts)
-	if isLanding == nil || isRelay == nil {
-		return endpoints
-	}
-	for i := range endpoints {
-		e := &endpoints[i]
-		switch {
-		case isLanding(*e):
-			e.ChainRole = ChainRoleLanding
-		case isRelay(*e):
-			e.ChainRole = ChainRoleRelay
-		}
-	}
-	if _, _, ok := chainGroups(endpoints); !ok {
-		for i := range endpoints {
-			endpoints[i].ChainRole = ""
-		}
-		return endpoints
-	}
-	if !opts.ChainDropUnused {
-		return endpoints
-	}
-	sources := idSet(append(append([]int64{}, opts.ChainLandingSources...), opts.ChainRelaySources...))
-	kept := endpoints[:0]
-	for _, e := range endpoints {
-		if e.ChainRole != "" || !sources[e.SourceID] {
-			kept = append(kept, e)
-		}
-	}
-	return kept
-}
-
-// chainMatchers 区分落地和中转节点：有多选名称、来源或自建落地时，名字
-// 优先，否则按来源（含每源名称筛选）或归属判定；没有这些时用旧的名称
-// 表达式。未设置时返回 nil。
-func chainMatchers(opts SubOptions) (func(Endpoint) bool, func(Endpoint) bool) {
-	if len(opts.ChainLandingNames) > 0 || len(opts.ChainRelayNames) > 0 || len(opts.ChainLandingSources) > 0 ||
-		len(opts.ChainRelaySources) > 0 || opts.ChainLandingOwn {
-		landing, relay, none := toSet(opts.ChainLandingNames), toSet(opts.ChainRelayNames), toSet(opts.ChainNoneNames)
-		landingSrc, relaySrc := idSet(opts.ChainLandingSources), idSet(opts.ChainRelaySources)
-		filters := map[int64]*matcher{}
-		for id, expr := range opts.ChainSourceFilters {
-			if m, err := ParseMatcher(expr); err == nil && m != nil {
-				filters[id] = m
-			}
-		}
-		// A picked name decides; otherwise the node's source (narrowed by
-		// its filter) or ownership.
-		byGroup := func(e Endpoint) bool {
-			if landing[e.Original] || relay[e.Original] || none[e.Original] {
-				return false
-			}
-			m := filters[e.SourceID]
-			return m == nil || m.match(e.Original)
-		}
-		return func(e Endpoint) bool {
-				return landing[e.Original] || byGroup(e) && (landingSrc[e.SourceID] || opts.ChainLandingOwn && e.Proxy == nil && e.SourceID == 0)
-			}, func(e Endpoint) bool {
-				return relay[e.Original] || byGroup(e) && relaySrc[e.SourceID]
-			}
-	}
-	landing, _ := ParseMatcher(opts.ChainLanding)
-	relay, _ := ParseMatcher(opts.ChainRelay)
-	if landing == nil || relay == nil {
-		return nil, nil
-	}
-	return func(e Endpoint) bool { return landing.match(e.Name) || landing.match(e.Original) },
-		func(e Endpoint) bool { return relay.match(e.Name) || relay.match(e.Original) }
-}
-
-// idSet holds the non-zero ids.
-func idSet(ids []int64) map[int64]bool {
-	out := map[int64]bool{}
-	for _, id := range ids {
-		if id > 0 {
-			out[id] = true
-		}
-	}
-	return out
-}
 
 // listed reports whether a node goes into the node lists and groups: with
 // ChainHideRelays a chain's relay nodes are only in the relay group.

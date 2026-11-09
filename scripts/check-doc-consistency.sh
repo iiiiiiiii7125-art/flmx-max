@@ -17,11 +17,6 @@
 #      口径字面（与 initial_admin.go 的随机播种实现对齐）。提取/
 #      命中为空属前提失效、点名硬红。§6 只对账用户名字面量，
 #      本项对账口令口径，两门互补。
-#   18. 去重键口径门（FIX-DOC-R 常设门）：subscription.md 两处去重
-#      文案必须含凭据指纹口径（凭据指纹：字段集 sha256 前 16 位），
-#      且代码面 endpointCredentialFingerprint（kernel/sub_options.go）
-#      必须仍以 sha256 摘要前 16 位实现——F1-02 文档补齐后立此门，
-#      防文案或实现任一侧回退到「键＝地址/端口/协议」的旧口径。
 #   19. 计量伴生端口口径门（FIX-DOC-R 常设门）：subscription.md
 #      伴生端口文案必须为实现口径 [20000, 60000)，且代码面
 #      pickFreePortWithFallback 的实参必须仍是 (20000, 60000)
@@ -614,24 +609,9 @@ for doc_file in doc/guide/getting-started.md doc/guide/install.md README.md; do
   fi
 done
 
-# ── 18. 去重键口径门（FIX-DOC-R）：subscription.md 两处文案含凭据指纹口径，
-#    代码面指纹实现仍为 sha256 摘要前 16 位（F1-02 防回退）。
-SUB_MD="doc/guide/subscription.md"
-SUB_OPTS_GO="go-backend/internal/kernel/sub_options.go"
-if ! grep -Fq '端点带凭据时再追加凭据指纹' "$SUB_MD"; then
-  note_fail "去重键口径门：subscription.md 处理节括注缺凭据指纹口径（去重键＝地址/端口/协议＋凭据指纹，漂移回旧口径，请人工复核）"
-elif ! grep -Fq '凭据指纹：凭据字段集的 sha256 前 16 位' "$SUB_MD"; then
-  note_fail "去重键口径门：subscription.md 去重表格行缺「凭据指纹：凭据字段集的 sha256 前 16 位」口径字面"
-elif ! grep -Fq 'func endpointCredentialFingerprint' "$SUB_OPTS_GO" \
-     || ! grep -Fq 'sha256.Sum256' "$SUB_OPTS_GO" \
-     || ! grep -Fq '[:16]' "$SUB_OPTS_GO"; then
-  note_fail "去重键口径门：$SUB_OPTS_GO 的 endpointCredentialFingerprint 实现提取异常（函数/sha256/前 16 位截取任一缺失，前提失效，请人工复核）"
-else
-  note_ok "去重键口径门：subscription.md 两处文案与 endpointCredentialFingerprint（sha256 前 16 位）一致"
-fi
-
 # ── 19. 计量伴生端口口径门（FIX-DOC-R）：文案区间与代码面下发实参同为
 #    [20000, 60000)（F1-03 防复发）。
+SUB_MD="doc/guide/subscription.md"
 KERNEL_GO="go-backend/internal/http/handler/kernel.go"
 if ! grep -Fq '在 [20000, 60000) 内随机取空闲端口' "$SUB_MD"; then
   note_fail "计量伴生端口口径门：subscription.md 伴生端口文案缺「[20000, 60000)」实现口径（上界漂移回 59999 式表述，请人工复核）"

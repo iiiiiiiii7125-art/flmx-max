@@ -1019,9 +1019,6 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	if reason := subInactiveReason(sub, time.Now()); reason != "" {
 		body, contentType, err = kernel.Subscription(format, nil, kernel.SubOptions{Notices: []string{reason}})
 	} else {
-		if pipe.InfoNodes {
-			subOpts.Notices = kernel.InfoNotices(sub.ExpireTime, up+down, total)
-		}
 		body, contentType, err = kernel.Subscription(format, endpoints, subOpts)
 	}
 	if err != nil {

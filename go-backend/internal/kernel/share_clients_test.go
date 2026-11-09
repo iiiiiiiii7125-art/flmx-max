@@ -33,7 +33,7 @@ func clientEndpoints(t *testing.T) []Endpoint {
 
 func TestLoonList(t *testing.T) {
 	eps := clientEndpoints(t)
-	body, _, err := Subscription(FormatLoon, eps, chainOpts2)
+	body, _, err := Subscription(FormatLoon, eps, SubOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,32 +70,6 @@ func TestQXList(t *testing.T) {
 	}
 	if strings.Count(body, "\n") != 3 {
 		t.Fatalf("QX has no Hysteria2 / TUIC:\n%s", body)
-	}
-}
-
-var chainOpts2 = SubOptions{ChainLanding: "落地", ChainRelay: "中转"}
-
-func TestShadowrocketChain(t *testing.T) {
-	eps := clientEndpoints(t)
-	body, _, _ := Subscription(FormatShadowrocket, eps, chainOpts2)
-	for _, want := range []string{
-		"- name: \"美国 落地（经 香港 中转 1）\"",
-		"dialer-proxy: \"香港 中转 1\"",
-		"- name: \"美国 落地（经 香港 中转 2）\"",
-		"dialer-proxy: \"香港 中转 2\"",
-		"- name: \"日本, tuic\"",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("missing %q in:\n%s", want, body)
-		}
-	}
-	if strings.Contains(body, "proxy-groups") || strings.Contains(body, ChainRelayGroup) {
-		t.Fatalf("a node list has no groups to dial through:\n%s", body)
-	}
-	// One relay keeps the landing node's name.
-	body, _, _ = Subscription(FormatShadowrocket, eps[:2], chainOpts2)
-	if !strings.Contains(body, "- name: \"美国 落地\"") || !strings.Contains(body, "dialer-proxy: \"香港 中转 1\"") {
-		t.Fatalf("single relay:\n%s", body)
 	}
 }
 

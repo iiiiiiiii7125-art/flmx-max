@@ -107,42 +107,6 @@ func TestSourcelessSubscriptionRendersEmpty(t *testing.T) {
 	}
 }
 
-// TestOpenSubscriptionInfoNodes: with the info-nodes switch on, an
-// active subscription's fetch leads with the expiry and traffic
-// placeholder nodes; without it, no placeholders appear.
-func TestOpenSubscriptionInfoNodes(t *testing.T) {
-	h, r, ids := subFixture(t)
-	_ = ids
-	expire := time.Date(2027, 3, 4, 0, 0, 0, 0, time.Local).UnixMilli()
-	s := createShareSub(t, r, &model.Subscription{
-		Name: "信息", Kind: model.SubscriptionShare, Token: strings.Repeat("e", 32), UUID: "uuid-info", Password: "pw-info",
-		SourceAll: 1, Options: `{"infoNodes":true}`, Enabled: 1, ExpireTime: expire,
-		TrafficLimit: 10 * 1024 * 1024 * 1024, UploadBytes: 1024 * 1024 * 1024, DownloadBytes: 2 * 1024 * 1024 * 1024,
-	})
-	code, body := fetchSub(t, h, s.Token, "clash")
-	if code != http.StatusOK {
-		t.Fatalf("fetch: %d %s", code, body)
-	}
-	expireNode := "⏳ 到期 2027-03-04"
-	trafficNode := "📊 剩余 7.00GB / 10.00GB"
-	iExpire, iTraffic, iNode := strings.Index(body, expireNode), strings.Index(body, trafficNode), strings.Index(body, "hk-1")
-	if iExpire < 0 || iTraffic < 0 || iNode < 0 {
-		t.Fatalf("info nodes missing: expire=%d traffic=%d node=%d\n%s", iExpire, iTraffic, iNode, body)
-	}
-	if !(iExpire < iNode && iTraffic < iNode) {
-		t.Fatalf("info nodes must lead the list:\n%s", body)
-	}
-
-	plain := createShareSub(t, r, &model.Subscription{
-		Name: "无信息", Kind: model.SubscriptionShare, Token: strings.Repeat("f", 32), UUID: "uuid-plain", Password: "pw-plain",
-		SourceAll: 1, Enabled: 1,
-	})
-	code, body = fetchSub(t, h, plain.Token, "clash")
-	if code != http.StatusOK || strings.Contains(body, "⏳") || strings.Contains(body, "📊") {
-		t.Fatalf("switch off must render no placeholders: %d\n%s", code, body)
-	}
-}
-
 // TestOpenSubscriptionInactiveReasonNodes: a disabled, expired or
 // over-quota subscription answers 200 with a single reason placeholder
 // instead of the old 403, so clients replace their stale node list.

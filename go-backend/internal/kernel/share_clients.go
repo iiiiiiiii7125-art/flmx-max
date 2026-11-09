@@ -42,42 +42,19 @@ func yamlToMap(n yamlNode) map[string]interface{} {
 // ---- Shadowrocket ----
 
 // shadowrocketProfile is a Clash proxy list, which Shadowrocket imports as
-// a node subscription. Groups are not imported, so a chained landing node
-// names its relay directly: one landing node per relay node.
+// a node subscription. Groups are not imported.
 func shadowrocketProfile(endpoints []Endpoint) string {
-	var rendered []Endpoint
-	var nodes []yamlNode
+	var out []yamlNode
 	for _, e := range endpoints {
-		// 与 config 路径同口径：SR 无法表达的节点（VLESS 加密、WireGuard）不进
+		// 与模板路径同口径：SR 无法表达的节点（VLESS 加密、WireGuard）不进
 		// profile，避免用户拿到能显示却握手必失败的坏节点。
 		if p, ok := endpointProxy(e); ok && shadowrocketSkips(p) {
 			continue
 		}
 		if p, ok := ClashProxy(e); ok {
-			rendered = append(rendered, e)
-			nodes = append(nodes, p)
+			out = append(out, p)
 		}
 	}
-	_, relays, chain := chainGroups(rendered)
-	var out []yamlNode
-	var expanded []bool
-	for i, e := range rendered {
-		if !chain || e.ChainRole != ChainRoleLanding {
-			out = append(out, nodes[i])
-			expanded = append(expanded, false)
-			continue
-		}
-		for _, relay := range relays {
-			p := append(yamlNode{}, nodes[i]...)
-			multi := len(relays) > 1
-			if multi {
-				p[0] = yamlField{"name", chainedName(e.Name, relay)}
-			}
-			out = append(out, append(p, yamlField{"dialer-proxy", relay}))
-			expanded = append(expanded, multi)
-		}
-	}
-	dedupeExpandedProxyNames(out, expanded, nil)
 	proxies := make([]interface{}, len(out))
 	for i, n := range out {
 		proxies[i] = n
@@ -85,58 +62,29 @@ func shadowrocketProfile(endpoints []Endpoint) string {
 	return marshalYAML(yamlNode{{"proxies", proxies}})
 }
 
-// shadowrocketProxies renders Clash proxies for Shadowrocket, expanding
-// chained landing nodes into one copy per relay. Names are returned in
-// the same order（供规则模式的 shadowrocketConfig 用）。
-//
-// A5-03：proxies 保留全部条目（中转条目是落地副本 dialer-proxy 的指向
-// 目标，删之整链悬空，与 Clash 把中转保留在 proxies 同口径）；names
-// （进普通策略组的那份）按 listed() 过滤，隐藏的中转不进任何组。
+// shadowrocketProxies renders Clash proxies for Shadowrocket. Names are
+// returned in the same order（供模板的 Shadowrocket 路径用）。
 func shadowrocketProxies(endpoints []Endpoint, opts SubOptions) ([]interface{}, []string) {
 	return shadowrocketProxiesTaken(endpoints, opts, nil)
 }
 
 // shadowrocketProxiesTaken is shadowrocketProxies with the names a
-// template already occupies in the output namespace, so the expanded
-// copies' post-expansion recheck keeps off them too.
+// template already occupies in the output namespace. Callers render
+// into templates only after uniqueNamesExcept has kept node names off
+// the taken set, so no recheck happens here; the parameter stays for
+// the template call site's shape.
 func shadowrocketProxiesTaken(endpoints []Endpoint, opts SubOptions, taken []string) ([]interface{}, []string) {
-	var rendered []Endpoint
-	var nodes []yamlNode
+	var out []yamlNode
 	for _, e := range endpoints {
 		if p, ok := ClashProxy(e); ok && !shadowrocketSkips(Proxy(yamlToMap(p))) {
-			rendered = append(rendered, e)
-			nodes = append(nodes, p)
+			out = append(out, p)
 		}
 	}
-	_, relays, chain := chainGroups(rendered)
-	var out []yamlNode
-	var expanded, inGroups []bool
-	for i, e := range rendered {
-		if !chain || e.ChainRole != ChainRoleLanding {
-			out = append(out, nodes[i])
-			expanded = append(expanded, false)
-			inGroups = append(inGroups, listed(e, chain, opts))
-			continue
-		}
-		for _, relay := range relays {
-			p := append(yamlNode{}, nodes[i]...)
-			multi := len(relays) > 1
-			if multi {
-				p[0] = yamlField{"name", chainedName(e.Name, relay)}
-			}
-			out = append(out, append(p, yamlField{"dialer-proxy", relay}))
-			expanded = append(expanded, multi)
-			inGroups = append(inGroups, true)
-		}
-	}
-	finalNames := dedupeExpandedProxyNames(out, expanded, taken)
 	proxies := make([]interface{}, len(out))
-	names := []string{}
+	names := make([]string, 0, len(out))
 	for i, n := range out {
 		proxies[i] = n
-		if inGroups[i] {
-			names = append(names, finalNames[i])
-		}
+		names = append(names, proxyName(n))
 	}
 	return proxies, names
 }
@@ -153,11 +101,6 @@ func hasVLESSEncryption(p Proxy) bool {
 	return enc != "" && enc != "none"
 }
 
-// chainedName names the copy of a landing node dialed through one relay.
-func chainedName(landing, relay string) string {
-	return landing + "（经 " + relay + "）"
-}
-
 func proxyName(n yamlNode) string {
 	for _, f := range n {
 		if f.Key == "name" {
@@ -169,73 +112,13 @@ func proxyName(n yamlNode) string {
 	return ""
 }
 
-func setProxyName(n yamlNode, name string) {
-	for i, f := range n {
-		if f.Key == "name" {
-			n[i].Value = name
-			return
-		}
-	}
-}
-
-// dedupeExpandedProxyNames is the post-expansion name recheck
-// (R2-014/B-sub-01): chained expansion runs after uniqueNames, so a
-// generated copy name 「落地（经 中转）」can collide with a literal node
-// name and put two same-named proxies into one profile (the panel count
-// is by entry, so it then exceeds the distinct names a client gets).
-// Only the expanded copies are renamed, with the same " #N" suffix
-// algorithm as uniqueNamesExcept: pre-existing names are registered
-// first and never move, because dialer-proxy fields point at relay
-// names — renaming a relay would silently retarget every copy dialed
-// through it. taken adds names occupied outside the proxy list —
-// a template's group names, when the copies render into a template
-// (RR4-C2-01: the derived-name family shares the one output
-// namespace). Returns the final names in emission order.
-func dedupeExpandedProxyNames(nodes []yamlNode, expanded []bool, taken []string) []string {
-	seen := map[string]bool{"direct": true, "DIRECT": true, "REJECT": true,
-		ChainLandingGroup: true, ChainRelayGroup: true}
-	for _, n := range taken {
-		seen[n] = true
-	}
-	names := make([]string, len(nodes))
-	for i, n := range nodes {
-		names[i] = proxyName(n)
-		if !expanded[i] {
-			seen[names[i]] = true
-		}
-	}
-	for i, n := range nodes {
-		if !expanded[i] {
-			continue
-		}
-		base := strings.TrimSpace(names[i])
-		if base == "" {
-			base = fmt.Sprintf("node-%d", i+1)
-		}
-		name := base
-		for k := 2; seen[name]; k++ {
-			name = fmt.Sprintf("%s #%d", base, k)
-		}
-		seen[name] = true
-		names[i] = name
-		setProxyName(n, name)
-	}
-	return names
-}
-
 // ---- Loon ----
 
 // loonList renders Loon node lines. Loon nodes cannot name a front proxy,
 // so landing nodes connect directly.
 func loonList(endpoints []Endpoint, opts SubOptions) string {
-	_, _, chain := chainGroups(endpoints)
 	var lines []string
 	for _, e := range endpoints {
-		// A5-03：列表无组概念，ChainHideRelays 的隐藏即不下发该行
-		// （落地直连、无引用悬空），与三主格式的 listed() 语义对齐。
-		if !listed(e, chain, opts) {
-			continue
-		}
 		if p, ok := endpointProxy(e); ok {
 			if line, ok := loonLine(p); ok {
 				lines = append(lines, line)
@@ -427,12 +310,8 @@ func loonLine(p Proxy) (string, bool) {
 // qxList renders Quantumult X server lines ([server_remote] resource). QX
 // has no front-proxy option, so landing nodes connect directly.
 func qxList(endpoints []Endpoint, opts SubOptions) string {
-	_, _, chain := chainGroups(endpoints)
 	var lines []string
 	for _, e := range endpoints {
-		if !listed(e, chain, opts) { // A5-03：同 loonList
-			continue
-		}
 		if p, ok := endpointProxy(e); ok {
 			if line, ok := qxLine(p); ok {
 				lines = append(lines, line)

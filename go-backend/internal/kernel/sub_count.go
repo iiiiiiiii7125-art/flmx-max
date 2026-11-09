@@ -7,7 +7,7 @@ package kernel
 // number a client of that format actually receives (A5-02/BC-11: the
 // old count was taken before format filtering and matched no client).
 func SubscriptionNodeCount(format string, endpoints []Endpoint, opts SubOptions) int {
-	endpoints = uniqueNames(ApplySubOptions(endpoints, opts), opts.Rules)
+	endpoints = uniqueNames(ApplySubOptions(endpoints, opts))
 	count := func(ok func(Endpoint) bool) int {
 		n := 0
 		for _, e := range endpoints {
@@ -36,11 +36,7 @@ func SubscriptionNodeCount(format string, endpoints []Endpoint, opts SubOptions)
 	case FormatSurge:
 		return count(func(e Endpoint) bool { _, ok := SurgeLine(e); return ok })
 	case FormatLoon:
-		_, _, chain := chainGroups(endpoints)
 		return count(func(e Endpoint) bool {
-			if !listed(e, chain, opts) {
-				return false
-			}
 			p, ok := endpointProxy(e)
 			if !ok {
 				return false
@@ -49,11 +45,7 @@ func SubscriptionNodeCount(format string, endpoints []Endpoint, opts SubOptions)
 			return ok
 		})
 	case FormatQX:
-		_, _, chain := chainGroups(endpoints)
 		return count(func(e Endpoint) bool {
-			if !listed(e, chain, opts) {
-				return false
-			}
 			p, ok := endpointProxy(e)
 			if !ok {
 				return false
@@ -62,8 +54,7 @@ func SubscriptionNodeCount(format string, endpoints []Endpoint, opts SubOptions)
 			return ok
 		})
 	case FormatShadowrocket:
-		// Entries of the profile: every rendered Clash proxy, with a
-		// chained landing expanded to one copy per relay (see
+		// Entries of the profile: every rendered Clash proxy (see
 		// shadowrocketProfile).
 		var rendered []Endpoint
 		for _, e := range endpoints {
@@ -74,16 +65,7 @@ func SubscriptionNodeCount(format string, endpoints []Endpoint, opts SubOptions)
 				rendered = append(rendered, e)
 			}
 		}
-		_, relays, chain := chainGroups(rendered)
-		n := 0
-		for _, e := range rendered {
-			if chain && e.ChainRole == ChainRoleLanding {
-				n += len(relays)
-			} else {
-				n++
-			}
-		}
-		return n
+		return len(rendered)
 	}
 	return 0
 }

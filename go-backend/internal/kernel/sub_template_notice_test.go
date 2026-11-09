@@ -4,33 +4,29 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
-// 模板 × 信息节点组合（集成裁决的织入点）：Subscription 的模板分支以
+// 模板 × 占位节点组合（集成裁决的织入点）：Subscription 的模板分支以
 // uniqueNamesExcept(withNotices(ApplySubOptions(...)), 模板组名) 织入
-// 信息节点。此前全仓没有一处测试同时设置 Templates 与 Notices——任一
-// 路改动织入顺序或模板引擎都可能静默丢占位节点。本文件逐槽位钉住：
-// 两条信息节点与真实节点在六种组合下全部存活。
+// Notices 占位节点。此前全仓没有一处测试同时设置 Templates 与
+// Notices——任一路改动织入顺序或模板引擎都可能静默丢占位节点。本
+// 文件逐槽位钉住：两条占位与真实节点在六种组合下全部存活。
 func TestSubscriptionTemplateWithNoticesAllSlots(t *testing.T) {
 	eps := namedEndpoints("香港 01", "美国 01")
-	notices := InfoNotices(time.Date(2027, 1, 2, 0, 0, 0, 0, time.Local).UnixMilli(), 1024, 4096)
-	if len(notices) != 2 {
-		t.Fatalf("InfoNotices must yield 2 notices, got %v", notices)
-	}
+	notices := []string{"⏳ 到期 2027-01-02", "📊 剩余 3.00KB / 4.00KB"}
 	for _, tc := range []struct {
 		name   string
 		format string
 		opts   SubOptions
 	}{
-		{"clash 自有模板", FormatClash, SubOptions{Templates: map[string]string{TemplateClash: clashTpl}, Notices: notices, Rules: true}},
+		{"clash 自有模板", FormatClash, SubOptions{Templates: map[string]string{TemplateClash: clashTpl}, Notices: notices}},
 		{"sing-box 自有模板", FormatSingbox, SubOptions{Templates: map[string]string{TemplateSingbox: singboxTpl}, Notices: notices}},
 		{"surge 自有模板", FormatSurge, SubOptions{Templates: map[string]string{TemplateSurge: surgeTpl}, Notices: notices}},
-		{"stash 自有模板", FormatStash, SubOptions{Templates: map[string]string{TemplateStash: clashTpl}, Notices: notices, Rules: true}},
-		{"stash 继承 clash 模板", FormatStash, SubOptions{Templates: map[string]string{TemplateClash: clashTpl}, Notices: notices, Rules: true}},
-		{"shadowrocket 自有模板", FormatShadowrocket, SubOptions{Templates: map[string]string{TemplateShadowrocket: clashTpl}, Notices: notices, Rules: true}},
+		{"stash 自有模板", FormatStash, SubOptions{Templates: map[string]string{TemplateStash: clashTpl}, Notices: notices}},
+		{"stash 继承 clash 模板", FormatStash, SubOptions{Templates: map[string]string{TemplateClash: clashTpl}, Notices: notices}},
+		{"shadowrocket 自有模板", FormatShadowrocket, SubOptions{Templates: map[string]string{TemplateShadowrocket: clashTpl}, Notices: notices}},
 	} {
 		body, _, err := Subscription(tc.format, eps, tc.opts)
 		if err != nil {
@@ -52,7 +48,6 @@ func TestSubscriptionTemplateNoticeNameCollidingWithGroup(t *testing.T) {
 	body, _, err := Subscription(FormatClash, eps, SubOptions{
 		Templates: map[string]string{TemplateClash: clashTpl},
 		Notices:   []string{"♻️ 自动选择"},
-		Rules:     true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -111,10 +106,10 @@ func TestTemplateNodeCountMatchesDeliveredWithDuplicateNames(t *testing.T) {
 		opts   SubOptions
 		names  func(t *testing.T, body string) map[string]bool
 	}{
-		{"clash", FormatClash, SubOptions{Templates: map[string]string{TemplateClash: clashTpl}, Rules: true}, clashNames},
-		{"stash 自有", FormatStash, SubOptions{Templates: map[string]string{TemplateStash: clashTpl}, Rules: true}, clashNames},
-		{"stash 继承", FormatStash, SubOptions{Templates: map[string]string{TemplateClash: clashTpl}, Rules: true}, clashNames},
-		{"shadowrocket", FormatShadowrocket, SubOptions{Templates: map[string]string{TemplateShadowrocket: clashTpl}, Rules: true}, clashNames},
+		{"clash", FormatClash, SubOptions{Templates: map[string]string{TemplateClash: clashTpl}}, clashNames},
+		{"stash 自有", FormatStash, SubOptions{Templates: map[string]string{TemplateStash: clashTpl}}, clashNames},
+		{"stash 继承", FormatStash, SubOptions{Templates: map[string]string{TemplateClash: clashTpl}}, clashNames},
+		{"shadowrocket", FormatShadowrocket, SubOptions{Templates: map[string]string{TemplateShadowrocket: clashTpl}}, clashNames},
 		{"sing-box", FormatSingbox, SubOptions{Templates: map[string]string{TemplateSingbox: singboxTpl}}, func(t *testing.T, body string) map[string]bool {
 			var doc struct {
 				Outbounds []map[string]interface{} `json:"outbounds"`

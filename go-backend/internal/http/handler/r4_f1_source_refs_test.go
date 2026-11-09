@@ -20,6 +20,8 @@ import (
 // 修复前：保存面不验源存在（幽灵 ID 落库且计入「至少选一个」）、
 // 删源面不清理不点名（订阅留死 ID、渲染静默变空）。修复后：保存
 // 硬拒点名；删源清理引用并在回执 warning 点名受影响订阅。
+// （2.1.2：原步骤 2 的 Options 链式按源引用已随订阅链式整体删除——
+// 只带已删链式键的保存退化为「什么都没选」，仍被硬拒。）
 
 func callSubscriptionSaveR4(t *testing.T, h *Handler, payload map[string]interface{}) response.R {
 	t.Helper()
@@ -59,20 +61,18 @@ func TestR4F1SubscriptionSourceRefIntegrity(t *testing.T) {
 		t.Fatalf("step1: rejected save must not persist, rows=%d", n)
 	}
 
-	// 步骤 2：仅 options.chainLandingSources 指向幽灵源 → 同样硬拒。
+	// 步骤 2：只带已删的链式按源键（无任何真实来源）→ 仍被硬拒
+	// （链式删除后它不再计入「至少选一个」，空订阅不得落库）。
 	out = callSubscriptionSaveR4(t, h, map[string]interface{}{
 		"name":    "ghost-chain-sub",
 		"options": map[string]interface{}{"chainLandingSources": []int64{888888}},
 	})
 	if out.Code == 0 {
-		t.Fatal("step2: save with nonexistent chainLandingSources must be rejected")
-	}
-	if !strings.Contains(out.Msg, "888888") {
-		t.Fatalf("step2: rejection must name the unknown source id, msg=%q", out.Msg)
+		t.Fatal("step2: save with only removed chain options must be rejected")
 	}
 
 	// 步骤 3：真源订阅 → keepNodes 删源 → 回执点名该订阅，且订阅
-	// 的 SourceIDs 与链式按源引用被清理（不留死 ID）。
+	// 的 SourceIDs 被清理（不留死 ID）。
 	now := time.Now().UnixMilli()
 	src := &model.RemoteSource{Name: "r4f1-src", Kind: model.RemoteSourceFile, Enabled: 1, CreatedTime: now, UpdatedTime: now}
 	if err := r.SaveRemoteSource(src); err != nil {
@@ -81,7 +81,6 @@ func TestR4F1SubscriptionSourceRefIntegrity(t *testing.T) {
 	out = callSubscriptionSaveR4(t, h, map[string]interface{}{
 		"name":      "real-source-sub",
 		"sourceIds": []int64{src.ID},
-		"options":   map[string]interface{}{"chainRelaySources": []int64{src.ID}},
 	})
 	if out.Code != 0 {
 		t.Fatalf("step3: save with a real source must succeed, code=%d msg=%q", out.Code, out.Msg)
@@ -121,15 +120,6 @@ func TestR4F1SubscriptionSourceRefIntegrity(t *testing.T) {
 	for _, id := range parseIDList(stored.SourceIDs) {
 		if id == src.ID {
 			t.Fatalf("step3: subscription SourceIDs still holds deleted source %d: %q", src.ID, stored.SourceIDs)
-		}
-	}
-	var p subPipeline
-	if err := json.Unmarshal([]byte(stored.Options), &p); err != nil {
-		t.Fatalf("step3: decode stored options: %v", err)
-	}
-	for _, id := range p.ChainRelaySources {
-		if id == src.ID {
-			t.Fatalf("step3: stored chainRelaySources still holds deleted source %d", src.ID)
 		}
 	}
 
