@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"go-backend/internal/http/response"
@@ -99,8 +100,33 @@ func (h *Handler) userSubscriptionSet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// W3/S-001（后端半）：撤销分配的回执语义——set 是全量替换，被移出
+	// 集合的订阅即「撤销」。撤销前先读现行分配算出被撤销集，成功后在
+	// 回执里点名并附语义提示：订阅认 token 不认人（1.2.0 定案），撤销
+	// 只收回面板内的可见性，已复制出去的链接不会因此失效。此前回执
+	// 是裸 OK(true)，管理员会误以为撤销即断链。
+	currentIDs, err := h.repo.ListUserSubscriptionIDs(req.UserID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	var revokedNames []string
+	for _, id := range currentIDs {
+		if seen[id] {
+			continue
+		}
+		name := fmt.Sprintf("ID %d", id)
+		if sub, serr := h.repo.GetSubscription(id); serr == nil && sub != nil && sub.Name != "" {
+			name = "「" + sub.Name + "」"
+		}
+		revokedNames = append(revokedNames, name)
+	}
 	if err := h.repo.SetUserSubscriptions(req.UserID, req.SubscriptionIDs); err != nil {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	if len(revokedNames) > 0 {
+		response.WriteJSON(w, response.OKWithWarning(true, fmt.Sprintf("已撤销订阅 %s 的分配：撤销只收回面板内的可见性，已经复制出去的订阅链接不会失效；要让已复制的链接失效，请重置或删除对应订阅", strings.Join(revokedNames, "、"))))
 		return
 	}
 	response.WriteJSON(w, response.OK(true))

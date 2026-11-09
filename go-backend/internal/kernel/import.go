@@ -75,6 +75,9 @@ func ParseImportHostPort(hostport string) (string, int, error) {
 	if err != nil || port < 1 || port > 65535 {
 		return "", 0, errors.New("端口不正确")
 	}
+	// W3/I-006：与 validateImportedProxyAddress 同口径——尾点 FQDN 先
+	// 规范化（剥一个根点）再校验、返回值即规范形，链接面落库不带尾点。
+	host = CanonicalShareHostValue(host)
 	if err := ValidateImportHost(host); err != nil {
 		return "", 0, err
 	}

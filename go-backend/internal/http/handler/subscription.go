@@ -1468,6 +1468,20 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		"total":   len(source),
 		"dropped": len(source) - len(items),
 	}
+	// W3/P-003：按格式点名略过——某些协议/格式组合在某些投递格式里
+	// 无表达（如 Snell 进不了 Surge），此前列表 NodeCount 静默变小、
+	// 预览零提示，管理员无从知道少了谁。此处对全部格式用与计数同源
+	// 的谓词（SubscriptionFormatSkipped）逐格式列出被略过的节点名，
+	// 前端在预览处呈现「N 个节点不被该格式支持：…」。
+	formatSkipped := map[string][]string{}
+	for _, format := range kernel.SubscriptionFormats() {
+		if names := kernel.SubscriptionFormatSkipped(format, source, opts); len(names) > 0 {
+			formatSkipped[format] = names
+		}
+	}
+	if len(formatSkipped) > 0 {
+		resp["formatSkipped"] = formatSkipped
+	}
 	if len(excludedCompanions) > 0 {
 		// B10-002：与 save 同口径，预览也标注被排除的伴生入站。
 		resp["excludedCompanionIds"] = excludedCompanions

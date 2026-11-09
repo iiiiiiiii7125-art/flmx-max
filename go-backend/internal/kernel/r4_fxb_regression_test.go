@@ -92,32 +92,29 @@ func TestConnIdleRejectionCopyIsKernelNeutral(t *testing.T) {
 	}
 }
 
-// R4-C2C-01: 构建器创建面拒绝链式保留组名。
-func TestTemplateBuilderRejectsChainGroupNames(t *testing.T) {
+// W3/S-002（取代 R4-C2C-01 的保留名口径）：订阅级链式已删除，
+// 「落地节点 / 中转节点」不再是保留名——构建器必须接受它们作成策略组。
+func TestTemplateBuilderAcceptsFormerChainGroupNames(t *testing.T) {
 	for _, name := range []string{ChainLandingGroup, ChainRelayGroup} {
 		b := builderFixture()
-		b.Groups = []TemplateBuilderGroup{{Name: name, Type: "select"}}
-		if _, err := BuildSubscriptionTemplate(TemplateClash, b); err == nil ||
-			!strings.Contains(err.Error(), "保留名") {
-			t.Fatalf("builder group %q must be refused as a reserved chain name, got %v", name, err)
+		b.Groups = append(b.Groups, TemplateBuilderGroup{Name: name, Type: "select"})
+		if _, err := BuildSubscriptionTemplate(TemplateClash, b); err != nil {
+			t.Fatalf("builder group %q must be accepted as an ordinary name, got %v", name, err)
 		}
 	}
 }
 
-// R4-C2C-01: CheckTemplate 对与链式保留名同名的模板组给出改名警告。
-func TestCheckTemplateWarnsChainGroupName(t *testing.T) {
+// W3/S-002：CheckTemplate 对与旧链式组名同名的模板组不再发警告——
+// 保留名概念已随订阅级链式删除，不存在会被改名的链式组。
+func TestCheckTemplateNoChainGroupNameWarning(t *testing.T) {
 	tpl := "proxy-groups:\n  - {name: 落地节点, type: select, proxies: [DIRECT]}\n  - {name: 选择, type: select, include-all: true}\nrules: [MATCH,选择]\n"
 	s, err := CheckTemplate(TemplateClash, tpl, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
 	for _, w := range s.Warnings {
-		if strings.Contains(w, "落地节点") && strings.Contains(w, "链式") {
-			found = true
+		if strings.Contains(w, "链式") {
+			t.Fatalf("no chain-reserved-name warning expected, got %v", s.Warnings)
 		}
-	}
-	if !found {
-		t.Fatalf("want a chain-rename warning, got %v", s.Warnings)
 	}
 }

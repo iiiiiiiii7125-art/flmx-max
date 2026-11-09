@@ -212,6 +212,68 @@ func (p Proxy) usesTLS() bool {
 	return p.flag("tls") || len(p.sub("reality-opts")) > 0
 }
 
+// bandwidthMbps parses a Hysteria2 bandwidth value (the up / down keys)
+// into whole Mbps. Accepted shapes are the ones the import faces store:
+// a bare number (int / float / numeric string) or a number with an
+// Mbps unit suffix ("100Mbps", "100 Mbps", "100 mbps"). Anything else
+// (including Gbps forms, which no import face produces) reports false
+// so render faces omit the field instead of emitting a wrong limit.
+func (p Proxy) bandwidthMbps(key string) (int, bool) {
+	switch v := p[key].(type) {
+	case int:
+		return v, v > 0
+	case int64:
+		return int(v), v > 0
+	case float64:
+		return int(v), v > 0
+	case string:
+		s := strings.TrimSpace(strings.ToLower(v))
+		s = strings.TrimSpace(strings.TrimSuffix(s, "mbps"))
+		if n, err := strconv.Atoi(s); err == nil {
+			return n, n > 0
+		}
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return int(f), f > 0
+		}
+	}
+	return 0, false
+}
+
+// IdentityShape is the non-credential identity descriptor of an
+// imported proxy: transport, security form, SNI and the Reality /
+// transport discriminators. Two entries at the same address with the
+// same credentials but different shapes are different nodes (a
+// VLESS+WS+Reality entry and a VLESS+TCP+TLS entry behind one
+// host:port do not substitute for each other), so the import dedupe
+// identity (handler.externalIdentityKey) mixes this descriptor in
+// (W3/I-004 — the key previously covered credentials only, and a
+// second import differing only in shape was rejected as a duplicate).
+func (p Proxy) IdentityShape() string {
+	security := "none"
+	if len(p.sub("reality-opts")) > 0 {
+		security = "reality"
+	} else if p.usesTLS() {
+		security = "tls"
+	}
+	parts := []string{"net:" + p.network(), "sec:" + security, "sni:" + strings.ToLower(p.serverName())}
+	if ro := p.sub("reality-opts"); len(ro) > 0 {
+		parts = append(parts, "pbk:"+ro.str("public-key"), "sid:"+ro.str("short-id"))
+	}
+	// Transport discriminators: the path / service name / host header
+	// that decide where the entry actually lands.
+	switch p.network() {
+	case "ws":
+		parts = append(parts, "path:"+p.sub("ws-opts").str("path"))
+	case "grpc":
+		parts = append(parts, "svc:"+p.sub("grpc-opts").str("grpc-service-name"))
+	case "xhttp":
+		parts = append(parts, "path:"+p.sub("xhttp-opts").str("path"))
+	case "h2":
+		parts = append(parts, "path:"+p.sub("h2-opts").str("path"))
+	}
+	return strings.Join(parts, "|")
+}
+
 func (p Proxy) clone() Proxy {
 	b, _ := json.Marshal(p)
 	out := Proxy{}
