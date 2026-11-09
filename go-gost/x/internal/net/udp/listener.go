@@ -508,7 +508,19 @@ func (c *conn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	if !wdl.IsZero() && time.Until(wdl) <= 0 {
 		return 0, os.ErrDeadlineExceeded
 	}
-	return c.PacketConn.WriteTo(b, addr)
+	n, err = c.PacketConn.WriteTo(b, addr)
+	if n > 0 {
+		// A successful outbound datagram is session activity just
+		// as an inbound one is: the pool's idle judgement counts
+		// both directions (WriteQueue and readDatagram clear the
+		// flag on the inbound side). Before this, a purely
+		// outbound flow — a client that sent one request and only
+		// receives — never cleared the flag and its session was
+		// reaped after one TTL despite live traffic. Write covers
+		// the stream face too: it delegates here.
+		c.SetIdle(false)
+	}
+	return n, err
 }
 
 func (c *conn) Write(b []byte) (n int, err error) {
