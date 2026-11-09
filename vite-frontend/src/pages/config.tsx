@@ -48,6 +48,7 @@ import { BackupImportReceiptPanel } from "@/pages/config/import-receipt";
 import { LatencySettings } from "@/pages/config/latency-card";
 import { SubFrontSettings } from "@/pages/config/sub-front-card";
 import { isAdmin } from "@/utils/auth";
+import { SUBSCRIPTION_FRONT_URLS_KEY } from "@/utils/subscription-front";
 import { getCachedConfigs, configCache, updateSiteConfig } from "@/config/site";
 import { SENSITIVE_CONFIG_KEYS } from "@/config/sensitive-keys";
 import {
@@ -149,7 +150,8 @@ const CONFIG_ITEMS: ConfigItem[] = [
     key: "panel_domain",
     label: "面板域名",
     placeholder: "请输入面板域名",
-    description: "当前面板对外访问的域名。此项为预留配置，当前版本暂无功能读取使用，填写与否不影响面板运行",
+    description:
+      "当前面板对外访问的域名。此项为预留配置，当前版本暂无功能读取使用，填写与否不影响面板运行",
     type: "input",
   },
   {
@@ -370,8 +372,10 @@ export default function ConfigPage() {
   // 最近一次本地导入的完整回执（R2-C5-01）：toast 只报计数摘要，
   // 回执全文（警告逐条点名、屏蔽恢复数、SSH/重推节点清单）在导入区
   // 下方的披露面呈现，不随弹窗关闭丢失。
-  const [lastImportReceipt, setLastImportReceipt] =
-    useState<Record<string, unknown> | null>(null);
+  const [lastImportReceipt, setLastImportReceipt] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const logoFileInputRef = useRef<HTMLInputElement>(null);
@@ -414,6 +418,10 @@ export default function ConfigPage() {
   const importInFlightRef = useRef(false);
   const [previewLoadFailed, setPreviewLoadFailed] = useState<
     Partial<Record<BrandPreviewKey, boolean>>
+  >({});
+  // W2-UX-01：壁纸预览加载失败标记（与品牌预览 previewLoadFailed 同范式）
+  const [bgPreviewLoadFailed, setBgPreviewLoadFailed] = useState<
+    Partial<Record<BgImageKey, boolean>>
   >({});
   const [brandUploading, setBrandUploading] = useState<
     Partial<Record<BrandPreviewKey, boolean>>
@@ -809,6 +817,32 @@ export default function ConfigPage() {
 
     const effectiveConfigs = { ...configs };
 
+    // AP-7：订阅前置地址编辑行允许输入中留空行，但空行不得随保存下发——
+    // 此前后端校验整单拒绝（400）且回执看不出问题在空行。保存前滤掉
+    // 空白行，保存成功后编辑器状态同步为清洗后的值。
+    const rawFrontUrls = effectiveConfigs[SUBSCRIPTION_FRONT_URLS_KEY];
+
+    if (typeof rawFrontUrls === "string" && rawFrontUrls) {
+      try {
+        const parsed: unknown = JSON.parse(rawFrontUrls);
+
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed.filter(
+            (v): v is string => typeof v === "string" && v.trim() !== "",
+          );
+
+          effectiveConfigs[SUBSCRIPTION_FRONT_URLS_KEY] = cleaned.length
+            ? JSON.stringify(cleaned)
+            : "";
+        }
+      } catch {
+        // 非 JSON 内容原样下发，交给后端校验报错点名
+      }
+    }
+    const frontUrlsCleaned =
+      effectiveConfigs[SUBSCRIPTION_FRONT_URLS_KEY] !==
+      configs[SUBSCRIPTION_FRONT_URLS_KEY];
+
     setSaving(true);
     try {
       const changedKeys = Object.keys(effectiveConfigs).filter(
@@ -831,6 +865,10 @@ export default function ConfigPage() {
 
       if (response.code === 0) {
         toast.success("配置保存成功");
+
+        if (frontUrlsCleaned) {
+          setConfigs({ ...effectiveConfigs });
+        }
 
         Object.entries(effectiveConfigs).forEach(([key, value]) => {
           configCache.set(key, value);
@@ -876,7 +914,9 @@ export default function ConfigPage() {
               detail: {
                 // R8-018：与开关显示共用同一判读（缺失＝开启），
                 // 不许再写 === "true"——键未落库时会误报 false。
-                enabled: resolveSwitchSelected(TUNNEL_QUALITY_ENABLED_CONFIG_KEY),
+                enabled: resolveSwitchSelected(
+                  TUNNEL_QUALITY_ENABLED_CONFIG_KEY,
+                ),
                 intervalSec: parseTunnelQualityIntervalSeconds(
                   configs[TUNNEL_QUALITY_INTERVAL_CONFIG_KEY],
                 ),
@@ -975,7 +1015,13 @@ export default function ConfigPage() {
       );
 
       handleConfigChange(key, pngDataURL);
-      toast.success(key === "app_logo" ? "Logo 上传成功" : "Favicon 上传成功");
+      // AP-2：与壁纸上传同口径——此处只是载入待保存值，落库后才生效，
+      // 此前直接报「上传成功」会让用户以为已生效。
+      toast.success(
+        key === "app_logo"
+          ? "Logo 上传成功，保存配置后生效"
+          : "Favicon 上传成功，保存配置后生效",
+      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "图片处理失败，请重试";
@@ -1082,6 +1128,14 @@ export default function ConfigPage() {
               未单独设置，使用默认背景
             </p>
           )}
+          {isDefault && (configs.app_bg_image_light || "") && (
+            <p className="text-xs font-semibold text-warning-700 mt-1">
+              {/* W2-UX-02：App 生效优先级为浅色专属背景恒压默认背景，
+                  此前默认背景处只字未提，用户改了默认背景会以为不生效 */}
+              当前已设置「☀️
+              壁纸」，页面实际显示它；本处「默认背景」将在清除「☀️ 壁纸」后生效
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-4">
           <input
@@ -1136,16 +1190,38 @@ export default function ConfigPage() {
 
         {bgImage && isImage && (
           <div className="relative rounded-xl overflow-hidden border border-divider">
-            <img
-              alt={`${label}预览`}
-              className="w-full max-h-48 object-cover opacity-80"
-              src={bgImage}
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent flex items-end p-4">
-              <span className="rounded bg-black/70 px-1.5 py-0.5 text-white text-sm font-medium">
-                预览效果
-              </span>
-            </div>
+            {bgPreviewLoadFailed[key] ? (
+              <div className="h-32 flex items-center justify-center bg-background">
+                <span className="text-sm font-medium text-danger-700">
+                  壁纸图片加载失败，请检查地址或重新上传
+                </span>
+              </div>
+            ) : (
+              <>
+                <img
+                  alt={`${label}预览`}
+                  className="w-full max-h-48 object-cover opacity-80"
+                  src={bgImage}
+                  onError={() =>
+                    setBgPreviewLoadFailed((prev) => ({
+                      ...prev,
+                      [key]: true,
+                    }))
+                  }
+                  onLoad={() =>
+                    setBgPreviewLoadFailed((prev) => ({
+                      ...prev,
+                      [key]: false,
+                    }))
+                  }
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent flex items-end p-4">
+                  <span className="rounded bg-black/70 px-1.5 py-0.5 text-white text-sm font-medium">
+                    预览效果
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -1268,9 +1344,7 @@ export default function ConfigPage() {
     return (
       <div
         className={`rounded-lg border p-3 ${
-          isChanged
-            ? "border-warning-300"
-            : "border-default-200"
+          isChanged ? "border-warning-300" : "border-default-200"
         }`}
       >
         <input
@@ -1732,9 +1806,7 @@ export default function ConfigPage() {
                   />
                   <span
                     className={`font-medium ${
-                      isSelected
-                        ? "text-default-900"
-                        : "text-default-800"
+                      isSelected ? "text-default-900" : "text-default-800"
                     }`}
                   >
                     {option.label}
@@ -1904,19 +1976,25 @@ export default function ConfigPage() {
               <div className="space-y-4 rounded-lg border border-divider glass-inset px-4 py-4 text-sm text-foreground">
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <p className="text-xs font-semibold text-foreground">当前版本</p>
+                    <p className="text-xs font-semibold text-foreground">
+                      当前版本
+                    </p>
                     <p className="mt-1 font-medium">
                       {systemUpgradeInfo?.currentVersion || "未获取到版本信息"}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs font-semibold text-foreground">最新版本</p>
+                    <p className="text-xs font-semibold text-foreground">
+                      最新版本
+                    </p>
                     <p className="mt-1 font-medium">
                       {systemUpgradeInfo?.latestVersion || "未获取到可用版本"}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs font-semibold text-foreground">升级能力</p>
+                    <p className="text-xs font-semibold text-foreground">
+                      升级能力
+                    </p>
                     <p className="mt-1 font-medium">
                       {systemUpgradeInfo?.capability.capable
                         ? "可升级"
@@ -1927,14 +2005,18 @@ export default function ConfigPage() {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <p className="text-xs font-semibold text-foreground">部署目录</p>
+                    <p className="text-xs font-semibold text-foreground">
+                      部署目录
+                    </p>
                     <p className="mt-1 break-all font-medium">
                       {systemUpgradeInfo?.capability.deployDir ||
                         "未获取到部署目录"}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs font-semibold text-foreground">后端容器</p>
+                    <p className="text-xs font-semibold text-foreground">
+                      后端容器
+                    </p>
                     <p className="mt-1 break-all font-medium">
                       {systemUpgradeInfo?.capability.backendContainer ||
                         "未获取到容器信息"}
@@ -1998,7 +2080,8 @@ export default function ConfigPage() {
                     </p>
                     <p className="mt-2 text-xs font-semibold">
                       默认管理员账号缺失且用户名 admin@user
-                      已被其他账号占用，系统不会自动补建、也不会把任何现有账号提权为管理员。处置办法：把占用该用户名的账号改名或删除后重启面板，系统会自动补建默认管理员；或停面板后经数据库直接补建管理员账号（重复行清理口径见 doc/guide/upgrade.md）。
+                      已被其他账号占用，系统不会自动补建、也不会把任何现有账号提权为管理员。处置办法：把占用该用户名的账号改名或删除后重启面板，系统会自动补建默认管理员；或停面板后经数据库直接补建管理员账号（重复行清理口径见
+                      doc/guide/upgrade.md）。
                     </p>
                   </div>
                 )}
@@ -2382,7 +2465,6 @@ export default function ConfigPage() {
               />
             )}
           </div>
-
         </CardBody>
       </Card>
 
@@ -2479,8 +2561,8 @@ export default function ConfigPage() {
                 的数据会被备份文件中的内容覆盖，未包含在所选类型内的数据不受影响。
               </p>
               <p>
-                导入执行前，系统会先尝试生成一份导入前自动备份并保留在服务
-                端 24 小时，窗口期内可在此页下载、过期后自动清理，如结果不
+                导入执行前，系统会先尝试生成一份导入前自动备份并保留在服务 端 24
+                小时，窗口期内可在此页下载、过期后自动清理，如结果不
                 符合预期，可下载该备份再导入恢复。自动备份的范围与手动导出
                 相同：只含备份所覆盖的各类数据，配置项按备份过滤口径剔除未
                 分类/敏感键，流量与监控的历史曲线不在备份范围内。若自动备

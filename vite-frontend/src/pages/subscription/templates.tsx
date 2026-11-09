@@ -296,7 +296,7 @@ export function SubscriptionTemplatesModal({
                 <div className="space-y-3">
                   <p className="text-xs font-semibold text-foreground">
                     用自己的 Mihomo / sing-box / Surge 配置作骨架下发订阅，面板只把节点填进策略组。
-                    网址模板每天自动刷新一次，失败继续用上次内容。在订阅编辑的「规则与脚本」里给客户端选用模板。
+                    网址模板每天自动刷新一次，失败继续用上次内容。在订阅编辑的「订阅模板」一节里给客户端选用模板。
                   </p>
                   {items.length === 0 && (
                     <p className="text-sm text-foreground">还没有模板。</p>
