@@ -62,7 +62,18 @@ func TestNodeUpdateIdleTimeoutChangeRepushesServices(t *testing.T) {
 	}
 
 	// Re-submitting the SAME value is not a change: it must not
-	// trigger another whole-node redeploy.
+	// trigger another whole-node redeploy. The first redeploy is
+	// asynchronous and emits its UpdateService burst over an
+	// unbounded wall-clock window (the tail stretches under
+	// full-suite CPU contention), so drain the stream to
+	// quiescence before snapshotting the baseline count —
+	// otherwise leftover commands from the first burst land
+	// inside this leg's counting window and are miscounted as a
+	// fresh repush (occasional full-suite-only flake; solo runs
+	// pass deterministically). Test-only hardening; the product
+	// behaviour under test is unchanged.
+	waitForCommandQuiescence(t, a, "UpdateService", 2*time.Second, 20*time.Second)
+	a.probe(t)
 	midCount := len(a.commandsOfType("UpdateService"))
 	res = postJSONToHandler(t, a.h.nodeUpdate, map[string]interface{}{
 		"id": 1, "idleTimeoutSeconds": 60,
@@ -75,6 +86,7 @@ func TestNodeUpdateIdleTimeoutChangeRepushesServices(t *testing.T) {
 	}
 	time.Sleep(1500 * time.Millisecond)
 	a.probe(t)
+	waitForCommandQuiescence(t, a, "UpdateService", time.Second, 10*time.Second)
 	if got := len(a.commandsOfType("UpdateService")); got != midCount {
 		t.Fatalf("unchanged idleTimeoutSeconds triggered %d extra UpdateService commands", got-midCount)
 	}
@@ -112,4 +124,34 @@ func jsonTreeHasKeyValue(v interface{}, key string, want float64) bool {
 		}
 	}
 	return false
+}
+
+// waitForCommandQuiescence polls the recorded command stream of
+// the given type until its length has stayed constant for
+// quietFor, returning the settled count; it fails the test if the
+// stream does not settle within cap. Async redeploy bursts have
+// no bounded wall-clock duration under CPU contention, so any
+// test that snapshots a baseline count and later asserts "no new
+// commands of this type" must drain through this helper before
+// snapshotting — a count taken the moment the first burst command
+// appears races the burst's own tail.
+func waitForCommandQuiescence(t *testing.T, a *cleanupAgent, commandType string, quietFor, cap time.Duration) int {
+	t.Helper()
+	deadline := time.Now().Add(cap)
+	last := len(a.commandsOfType(commandType))
+	stableSince := time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		cur := len(a.commandsOfType(commandType))
+		if cur != last {
+			last = cur
+			stableSince = time.Now()
+			continue
+		}
+		if time.Since(stableSince) >= quietFor {
+			return last
+		}
+	}
+	t.Fatalf("%s command stream did not quiesce within %v (last count %d)", commandType, cap, last)
+	return last
 }
