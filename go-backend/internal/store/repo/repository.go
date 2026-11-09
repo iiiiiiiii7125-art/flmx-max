@@ -1326,6 +1326,8 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"status":                  n.Status,
 			"forwardMode":             defaultNodeForwardMode(n.ForwardMode),
 			"expiryReminderDismissed": n.ExpiryReminderDismissed,
+			// 展示分组标签（纯展示；空＝未分组）。
+			"displayGroup": n.DisplayGroup,
 			// 定时重启 agent 服务的面板权威设置（默认关）。
 			"restartEnabled":       n.RestartEnabled,
 			"restartTime":          n.RestartTime,
@@ -2354,6 +2356,8 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 		}
 		b.LatencyTargets = n.LatencyTargets
 		b.ForwardMode = n.ForwardMode
+		// 展示分组标签随备份导出（纯展示字段）。
+		b.DisplayGroup = n.DisplayGroup
 		// R2-E1-06：定时重启三字段随备份导出（此前 DTO 已补列、此处
 		// 赋值，缺一仍会静默回落默认）。
 		b.RestartEnabled = n.RestartEnabled
@@ -3602,6 +3606,14 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 #%d（%q）的定时重启抖动 %d 分钟超出 0–720，已按默认 30 恢复", n.ID, n.Name, n.RestartJitterMinutes)
 			restartJitter = 30
 		}
+		// 展示分组标签恢复面归一，镜像写面（trim＋列宽 100）：旧备
+		// 份无此字段为空＝未分组、静默；带值越界者截断并回执点名
+		// 原值，与 B8-11 同口径。
+		displayGroup := strings.TrimSpace(n.DisplayGroup)
+		if len([]rune(displayGroup)) > 100 {
+			rep.warnf("备份恢复：节点 #%d（%q）的展示分组标签 %q 超过 100 个字符，已截断恢复", n.ID, n.Name, n.DisplayGroup)
+			displayGroup = string([]rune(displayGroup)[:100])
+		}
 		item := model.Node{
 			ID:           n.ID,
 			Name:         n.Name,
@@ -3628,6 +3640,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			Inx:            n.Inx,
 			LatencyTargets: n.LatencyTargets,
 			ForwardMode:    forwardMode,
+			DisplayGroup:   displayGroup,
 			// R2-E1-06：归一后的定时重启三字段落库。
 			RestartEnabled:       restartEnabled,
 			RestartTime:          restartTime,
@@ -3640,7 +3653,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "extra_ips", "port", "interface_name", "version",
 				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
-				"inx", "latency_targets", "forward_mode", "restart_enabled", "restart_time", "restart_jitter_minutes", "expiry_reminder_dismissed",
+				"inx", "latency_targets", "forward_mode", "display_group", "restart_enabled", "restart_time", "restart_jitter_minutes", "expiry_reminder_dismissed",
 			}),
 		}).Create(&item).Error
 		if err != nil {

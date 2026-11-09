@@ -111,6 +111,12 @@ type Node struct {
 	ExpiryReminderDismissed int            `gorm:"column:expiry_reminder_dismissed;not null;default:0"`
 	// 节点自选的延迟测试点（JSON），空则跟随全局默认。
 	LatencyTargets string `gorm:"column:latency_targets;type:text;not null;default:''"`
+	// 节点页展示分组标签（纯展示功能，用户 2026-11-09 拍板）：一
+	// 个节点至多一个自由文本标签，空＝未分组。只影响节点页双视
+	// 图的分段展示与段序，段序名单存 vite_config 的
+	// node_display_group_order 键；不参与订阅/隧道/转发/选线，
+	// agent 不感知、不下发。
+	DisplayGroup string `gorm:"column:display_group;type:varchar(100);not null;default:''"`
 	// 定时重启 agent 服务（保险丝，默认关）：面板是权威源，agent 侧
 	// 落成 systemd timer 持久化执行，面板离线照常触发。RestartTime
 	// 为节点本机时间的 "HH:MM"；RestartJitterMinutes 为随机抖动窗
@@ -823,6 +829,9 @@ type NodeBackup struct {
 	Inx            int    `json:"inx"`
 	LatencyTargets string `json:"latencyTargets,omitempty"`
 	ForwardMode    string `json:"forwardMode,omitempty"`
+	// 展示分组标签随备份往返（纯展示字段，旧备份无此字段时为空＝
+	// 未分组，与存量未配置形态等价）。
+	DisplayGroup string `json:"displayGroup,omitempty"`
 	// R2-E1-06：节点定时重启三字段随备份（DEV-RESTART 落地时本 DTO
 	// 漏列，恢复后静默回落默认关/04:00/30、节点 timer 与面板认知
 	// 分叉）。旧备份无此三字段时导入面按模型默认回落并保持关闭，

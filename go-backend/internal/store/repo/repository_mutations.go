@@ -548,6 +548,19 @@ func (r *Repository) UpdateNode(id int64, name, serverIP string, serverIPV4, ser
 		Updates(updates).Error
 }
 
+// UpdateNodeDisplayGroup 单独更新节点的展示分组标签（纯展示字
+// 段）：创建/编辑面按 presence 调用，独立成法避免为一个展示列改
+// CreateNode/UpdateNode 的长签名（其调用面含大量测试）。group 已
+// 由 handler 归一（trim＋长度校验），空串＝脱组回未分组。
+func (r *Repository) UpdateNodeDisplayGroup(id int64, group string) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.Node{}).
+		Where("id = ?", id).
+		Update("display_group", group).Error
+}
+
 func defaultNodeForwardMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case "nftables":

@@ -111,6 +111,10 @@ var authenticatedConfigKeys = map[string]struct{}{
 	"forward_compact_mode":        {},
 	"forward_group_order_map":     {},
 	"forward_group_collapsed_map": {},
+	// 节点页展示分组的段序名单（JSON 标签数组，纯展示偏好）：登记
+	// 为 authenticated 使其随备份 configs 段导出/恢复（导出面只剔
+	// sensitive，见 FilterBackupConfigs），与 forward 同族口径。
+	"node_display_group_order": {},
 	// 节点延迟目标（延迟测试点清单，非凭据）。
 	"latency_targets": {},
 	// 监控/隧道质量设置（config 页 + 隧道监控面直读）。

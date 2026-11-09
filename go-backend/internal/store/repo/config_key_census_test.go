@@ -66,7 +66,11 @@ import (
 // sensitive/system-managed tables with the Gist backup feature
 // (55 → 47 against the FIX-CENSUS baseline, which had added
 // kcp_fec_mode/kcp_node_mem_mb on top of the earlier 53).
-const configKeyRegistryBaseline = 47
+// feat/node-display-groups: node_display_group_order joins the
+// authenticated table (47 → 48) — the node page's display-group
+// section order, read via config/list like the forward page's
+// group-order keys before it.
+const configKeyRegistryBaseline = 48
 
 var configKeyShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
