@@ -605,6 +605,67 @@ func (r *Repository) ClearNodeDisplayGroup(group string) (int64, error) {
 	return res.RowsAffected, nil
 }
 
+// nodeDisplayGroupOrderConfigKey 是展示分组顺序名单的配置键，与
+// handler 包的 nodeGroupOrderConfigKey 同值：名单的新值由 handler
+// 序列化为完整 JSON 后整值传入，本包只负责与成员写同事务落库。
+const nodeDisplayGroupOrderConfigKey = "node_display_group_order"
+
+// RenameNodeDisplayGroupWithRegistry 分组改名的原子写（S3-2）：顺
+// 序名单新值与成员标签级联在同一事务内落库，任一失败整体回滚——
+// 名单永不先于标签生效，失败不留「新名空组＋旧名在用」的分叉；
+// 且失败后以同名重试不会撞上「新名已在名单」的重名门（旧两步写
+// 先落名单正是被该门堵死）。回带级联行数。
+func (r *Repository) RenameNodeDisplayGroupWithRegistry(oldName, newName, registryValue string, now int64) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	var updated int64
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := upsertConfigTx(tx, nodeDisplayGroupOrderConfigKey, registryValue, now); err != nil {
+			return err
+		}
+		res := tx.Model(&model.Node{}).
+			Where("display_group = ?", oldName).
+			Update("display_group", newName)
+		if res.Error != nil {
+			return res.Error
+		}
+		updated = res.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return updated, nil
+}
+
+// ClearNodeDisplayGroupWithRegistry 删组原子写（S3-2）：名单摘除后
+// 的新值与成员回落同事务落库，失败整体回滚、不留分叉，口径同
+// RenameNodeDisplayGroupWithRegistry。回带回落行数。
+func (r *Repository) ClearNodeDisplayGroupWithRegistry(group, registryValue string, now int64) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	var updated int64
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := upsertConfigTx(tx, nodeDisplayGroupOrderConfigKey, registryValue, now); err != nil {
+			return err
+		}
+		res := tx.Model(&model.Node{}).
+			Where("display_group = ?", group).
+			Update("display_group", "")
+		if res.Error != nil {
+			return res.Error
+		}
+		updated = res.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return updated, nil
+}
+
 // CountNodesByDisplayGroup 在用分组标签的成员计数（空标签不计）：
 // 分组管理面（重名判定/成员数展示）的权威读面。
 func (r *Repository) CountNodesByDisplayGroup() (map[string]int64, error) {
