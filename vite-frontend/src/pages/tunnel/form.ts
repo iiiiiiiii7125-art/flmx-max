@@ -138,8 +138,10 @@ export const validateTunnelForm = (
 
   if (!form.name.trim()) {
     errors.name = "请输入隧道名称";
-  } else if (form.name.length < 2 || form.name.length > 50) {
-    errors.name = "隧道名称长度应在2-50个字符之间";
+  } else if ([...form.name].length > 100) {
+    // FT-10：与后端 mutations.go 同口径——非空＋≤100 字符（按 rune 计），
+    // 此前前端单方面收紧为 2-50，存量合法名称编辑时未改名也过不了提交。
+    errors.name = "隧道名称长度不能超过100个字符";
   }
 
   if (!form.inNodeId || form.inNodeId.length === 0) {

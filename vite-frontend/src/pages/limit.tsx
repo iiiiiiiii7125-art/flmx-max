@@ -139,8 +139,10 @@ export default function LimitPage({
 
     if (!form.name.trim()) {
       newErrors.name = "请输入规则名称";
-    } else if (form.name.length < 2 || form.name.length > 50) {
-      newErrors.name = "规则名称长度应在2-50个字符之间";
+    } else if ([...form.name].length > 100) {
+      // FT-10 同族（普查差额）：与后端 speedLimitCreate 同口径——非空＋
+      // ≤100 字符（按 rune 计），此前前端单方面收紧为 2-50。
+      newErrors.name = "规则名称长度不能超过100个字符";
     }
 
     if (!form.speed || form.speed < 1) {

@@ -1395,13 +1395,27 @@ export default function TunnelPage() {
   };
 
   const selectAll = () => {
-    const allIds = sortedTunnels.map((t) => t.id);
+    // FT-3：全选＝把当前可见行并入已选集合，不替换掉跨筛选的不可见已选项。
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
 
-    setSelectedIds(new Set(allIds));
+      sortedTunnels.forEach((t) => next.add(t.id));
+
+      return next;
+    });
   };
 
   const deselectAll = () => {
     setSelectedIds(new Set());
+  };
+
+  // FT-3：表头全选框取消勾选时只移除当前可见行，不可见已选项保留。
+  const deselectVisible = () => {
+    const visibleIds = new Set(sortedTunnels.map((t) => t.id));
+
+    setSelectedIds(
+      (prev) => new Set([...prev].filter((id) => !visibleIds.has(id))),
+    );
   };
 
   const openBatchResultModal = useCallback(
@@ -1551,8 +1565,21 @@ export default function TunnelPage() {
           });
         }
         await refreshTunnelList(false);
-        setSelectedIds(new Set());
-        setSelectMode(false);
+        if (result.failCount > 0) {
+          // FT-1：部分失败只保留失败项勾选并留在多选模式，失败项可就地
+          // 重试；全部成功才清空勾选并退出多选（与节点页纪律一致）。
+          const failedIds = extractBatchFailures(result)
+            .map((failure) => failure.id)
+            .filter(
+              (id): id is number =>
+                typeof id === "number" && Number.isFinite(id),
+            );
+
+          setSelectedIds(new Set(failedIds));
+        } else {
+          setSelectedIds(new Set());
+          setSelectMode(false);
+        }
         setBatchDeleteModalOpen(false);
         resetBatchDeleteState();
       } else {
@@ -1600,8 +1627,20 @@ export default function TunnelPage() {
             );
           }
         }
-        setSelectedIds(new Set());
-        setSelectMode(false);
+        if (result.failCount > 0) {
+          // FT-1：部分失败只保留失败项勾选并留在多选模式，就地可重试。
+          const failedIds = extractBatchFailures(result)
+            .map((failure) => failure.id)
+            .filter(
+              (id): id is number =>
+                typeof id === "number" && Number.isFinite(id),
+            );
+
+          setSelectedIds(new Set(failedIds));
+        } else {
+          setSelectedIds(new Set());
+          setSelectMode(false);
+        }
         setBatchProgress({
           active: true,
           label: `重新下发完成：成功 ${result.successCount} 项，正在刷新列表...`,
@@ -2008,7 +2047,19 @@ export default function TunnelPage() {
 
       {/* 隧道卡片网格 */}
       {tunnels.length > 0 ? (
-        viewMode === "list" ? (
+        sortedTunnels.length === 0 ? (
+          /* FT-4：已有隧道但搜索无匹配时必须给提示，此前只渲染空白列表/网格 */
+          <Card>
+            <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
+              <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
+                没有匹配的隧道
+              </h3>
+              <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
+                当前搜索没有匹配的隧道，请调整搜索关键词
+              </p>
+            </CardBody>
+          </Card>
+        ) : viewMode === "list" ? (
           <Card>
             <Table
               aria-label="隧道列表"
@@ -2025,12 +2076,19 @@ export default function TunnelPage() {
                 {selectMode ? (
                   <TableColumn className="w-12 px-4 whitespace-nowrap overflow-hidden">
                     <Checkbox
+                      isIndeterminate={
+                        sortedTunnels.some((t) => selectedIds.has(t.id)) &&
+                        !(
+                          sortedTunnels.length > 0 &&
+                          sortedTunnels.every((t) => selectedIds.has(t.id))
+                        )
+                      }
                       isSelected={
-                        selectedIds.size === sortedTunnels.length &&
-                        sortedTunnels.length > 0
+                        sortedTunnels.length > 0 &&
+                        sortedTunnels.every((t) => selectedIds.has(t.id))
                       }
                       onValueChange={(checked) =>
-                        checked ? selectAll() : deselectAll()
+                        checked ? selectAll() : deselectVisible()
                       }
                     />
                   </TableColumn>
@@ -2070,12 +2128,23 @@ export default function TunnelPage() {
                         <div className="flex items-center gap-2">
                           <div
                             className={`shrink-0 w-2 h-2 rounded-full ${
-                              tunnel.status === 1 ? "bg-success" : "bg-danger"
+                              tunnel.status === 1
+                                ? "bg-success"
+                                : "bg-default-400"
                             }`}
                           />
                           <span className="font-medium text-foreground text-sm">
                             {tunnel.name}
                           </span>
+                          {/* FT-5：状态必须带文字标签——此前禁用（status=0）
+                              只画 danger 红点，与故障无从区分。 */}
+                          <Chip
+                            color={tunnel.status === 1 ? "success" : "default"}
+                            size="sm"
+                            variant="flat"
+                          >
+                            {tunnel.status === 1 ? "启用" : "已禁用"}
+                          </Chip>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -2224,6 +2293,18 @@ export default function TunnelPage() {
                                       realm
                                     </Chip>
                                   )}
+                                  {/* FT-5：网格卡片此前无任何状态指示，补与列表一致的状态标签 */}
+                                  <Chip
+                                    color={
+                                      tunnel.status === 1
+                                        ? "success"
+                                        : "default"
+                                    }
+                                    size="sm"
+                                    variant="flat"
+                                  >
+                                    {tunnel.status === 1 ? "启用" : "已禁用"}
+                                  </Chip>
                                 </div>
                               </div>
                               <div
@@ -4160,8 +4241,7 @@ export default function TunnelPage() {
                                 const isDiagnosing = Boolean(result.diagnosing);
                                 const isSuccess = result.success === true;
                                 // R6-L4-01：UDP 未验证项走中性形态。
-                                const isUnverified =
-                                  result.unverified === true;
+                                const isUnverified = result.unverified === true;
                                 const quality = getDiagnosisQualityDisplay(
                                   result.averageTime,
                                   result.packetLoss,

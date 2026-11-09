@@ -20,6 +20,8 @@ export interface ForwardBatchActionOutcome {
   resultTitle?: string;
   resultSummary?: string;
   failureDetails?: BatchOperationFailure[];
+  /** 待清理项（节点不可达转 pending-delete）：与失败分开呈现，不得打「失败」标签（FT-7）。 */
+  pendingDetails?: BatchOperationFailure[];
   /** 后端批量回执的非致命告警（R3X-024）：随 outcome 带出，呈现并入 toastMessage/resultSummary。 */
   warnings?: string[];
   progressPercent?: number;
@@ -119,8 +121,8 @@ export const executeForwardBatchDelete = async (
     const pendingCount = summary.pendingCount ?? 0;
 
     if (pendingCount > 0) {
-      // 有待清理项：结论里单列 pending 数，明细并入结果弹窗逐条呈现
-      // （原因文案为后端下发的「已加入待清理队列，后台将自动重试」）。
+      // 有待清理项：结论里单列 pending 数；明细按失败/待清理分开带出，
+      // 结果弹窗分开呈现（待清理不得与失败同列同标签，FT-7）。
       const summaryText =
         summary.failCount > 0
           ? `成功删除 ${summary.successCount} 项，失败 ${summary.failCount} 项，另有 ${pendingCount} 项待节点恢复后清理`
@@ -131,10 +133,8 @@ export const executeForwardBatchDelete = async (
         toastMessage: summaryText,
         resultTitle: "批量删除结果",
         resultSummary: summaryText,
-        failureDetails: [
-          ...(summary.failures || []),
-          ...(summary.pending || []),
-        ],
+        failureDetails: summary.failures || [],
+        pendingDetails: summary.pending || [],
         warnings: summary.warnings ?? [],
         shouldRefresh: true,
         progressPercent: 100,
