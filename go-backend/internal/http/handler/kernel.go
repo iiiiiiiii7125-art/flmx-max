@@ -2255,6 +2255,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		return nil, "", fmt.Errorf("查询入站链式归属失败: %w", err)
 	}
 	inbounds := make([]kernel.Inbound, 0, len(rows))
+	connLogInbounds := make([]int64, 0, len(rows))
 	ports := make([]map[string]interface{}, 0, len(rows))
 	connlogEntries := make([]map[string]interface{}, 0, len(rows))
 	users := h.activeUsersByInbound(time.Now())
@@ -2326,6 +2327,15 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			}
 		}
 		inbounds = append(inbounds, in)
+		// 连接日志 opt-in 名单（U5↔U4 契约）：agent 内核日志解析器
+		// 只对名单内的入站 tag 产连接事件（ApplyRequest.connLogInbounds）。
+		// 名单只含渲染集内已开启采集的入站；伴生入站是系统派生监听、
+		// 非用户入口（设计 §2 形态 6），恒排除。名单为空时不写键——
+		// agent 解码为 nil 即空集、采集器随之停用，与「最后一个开关
+		// 关闭后采集收敛」同义。
+		if in.ConnLogEnabled && !in.Companion {
+			connLogInbounds = append(connLogInbounds, in.ID)
+		}
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
 		if lo, hi := in.HopRange(); lo > 0 {
 			port["hopFrom"], port["hopTo"] = lo, hi
@@ -2392,6 +2402,9 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	}
 	if len(rendered.UserMarks) > 0 {
 		payload["userMarks"] = rendered.UserMarks
+	}
+	if len(connLogInbounds) > 0 {
+		payload["connLogInbounds"] = connLogInbounds
 	}
 	if k.KernelType == kernel.TypeXray {
 		// The agent keeps the 分流 data files next to Xray up to date.
