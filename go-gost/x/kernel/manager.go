@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-gost/x/internal/connlog"
 )
 
 // defaultBaseDir is the script form's kernel root under the current
@@ -622,6 +624,21 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 			inst.logs.add("[flmx] 已回收旧版本内核目录: " + strings.Join(removed, ", "))
 		}
 	}
+	// Publish the connection-log entry marks of the configuration
+	// now in force — the new request, or the previous one when this
+	// apply rolled back (rollback restores inst.req) — so the
+	// kernel log collector's view (internal/connlog) always matches
+	// the applied topology and a panel-side topology change leaves
+	// no stale mark behind.
+	m.mu.Lock()
+	effReq := inst.req
+	m.mu.Unlock()
+	entries := make([]connlog.KernelEntry, 0, len(effReq.ConnlogEntries))
+	for _, e := range effReq.ConnlogEntries {
+		entries = append(entries, connlog.KernelEntry{InboundID: e.InboundID, Tag: e.Tag})
+	}
+	connlog.PublishKernelEntries(req.Type, entries)
+
 	return m.state(req.Type, false), failure
 }
 

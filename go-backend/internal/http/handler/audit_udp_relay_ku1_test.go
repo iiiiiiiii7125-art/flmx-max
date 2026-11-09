@@ -85,7 +85,7 @@ func TestKU1UDPGenerationSurfaceEnumeration(t *testing.T) {
 	}
 	surfaces["本地转发 _udp 服务（既有合规面，防回退）"] = func() map[string]interface{} {
 		forward := &forwardRecord{RemoteAddr: "1.2.3.4:53", Strategy: "fifo", TunnelID: 7}
-		services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 24003, "", forwardRuntimeLimiters{})
+		services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 24003, "", forwardRuntimeLimiters{}, false)
 		for _, svc := range services {
 			if listener, _ := svc["listener"].(map[string]interface{}); listener["type"] == "udp" {
 				return svc

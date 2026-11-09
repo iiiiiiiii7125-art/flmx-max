@@ -38,7 +38,7 @@ func TestBuildForwardServiceConfigs_IdleTimeoutMetadata(t *testing.T) {
 	forward := &forwardRecord{RemoteAddr: "1.2.3.4:80", Strategy: "fifo", TunnelID: 7}
 
 	node := &nodeRecord{TCPListenAddr: "[::]", UDPListenAddr: "[::]", IdleTimeoutSeconds: 300}
-	services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 22000, "", forwardRuntimeLimiters{})
+	services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 22000, "", forwardRuntimeLimiters{}, false)
 	if len(services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(services))
 	}
@@ -50,7 +50,7 @@ func TestBuildForwardServiceConfigs_IdleTimeoutMetadata(t *testing.T) {
 	}
 
 	nodeOff := &nodeRecord{TCPListenAddr: "[::]", UDPListenAddr: "[::]"}
-	services = buildForwardServiceConfigs("1_2_0", forward, nil, nodeOff, 22000, "", forwardRuntimeLimiters{})
+	services = buildForwardServiceConfigs("1_2_0", forward, nil, nodeOff, 22000, "", forwardRuntimeLimiters{}, false)
 	for _, svc := range services {
 		if md, ok := svc["metadata"].(map[string]interface{}); ok {
 			if _, present := md["idleTimeout"]; present {

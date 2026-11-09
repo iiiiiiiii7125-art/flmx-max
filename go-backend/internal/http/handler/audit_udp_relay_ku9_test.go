@@ -117,11 +117,11 @@ func TestKU9NonRelaySurfacesHaveNoBind(t *testing.T) {
 	// forward 服务（链的消费端，handler 为 tcp/udp 非 relay）：
 	// 直连形态与挂链形态都不得出现 bind 键。
 	forward := &forwardRecord{RemoteAddr: "1.2.3.4:53", Strategy: "fifo", TunnelID: 7}
-	direct := buildForwardServiceConfigs("1_2_0", forward, nil, node, 24003, "", forwardRuntimeLimiters{})
+	direct := buildForwardServiceConfigs("1_2_0", forward, nil, node, 24003, "", forwardRuntimeLimiters{}, false)
 	for _, svc := range direct {
 		ku9AssertNoBindKey(t, "direct forward service", svc)
 	}
-	chained := buildForwardServiceConfigs("1_2_0", forward, &tunnelRecord{Type: 2}, node, 24003, "", forwardRuntimeLimiters{})
+	chained := buildForwardServiceConfigs("1_2_0", forward, &tunnelRecord{Type: 2}, node, 24003, "", forwardRuntimeLimiters{}, false)
 	for _, svc := range chained {
 		ku9AssertNoBindKey(t, "chained forward service", svc)
 	}

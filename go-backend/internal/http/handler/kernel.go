@@ -2227,8 +2227,20 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	if err != nil {
 		return nil, "", err
 	}
+	// 入站连接日志（U7）：有托管中转指向的入站是落地、非直连
+	// 入口（见 connlog_marks.go）。查询失败整单中止——标错会让
+	// agent 把上一跳地址当客户端采集，与白名单查询失败同口径。
+	relayTargets, err := h.connlogRelayTargetInboundIDs()
+	if err != nil {
+		return nil, "", fmt.Errorf("查询入站中转归属失败: %w", err)
+	}
+	chainTargets, err := h.connlogChainTargetInboundIDs()
+	if err != nil {
+		return nil, "", fmt.Errorf("查询入站链式归属失败: %w", err)
+	}
 	inbounds := make([]kernel.Inbound, 0, len(rows))
 	ports := make([]map[string]interface{}, 0, len(rows))
+	connlogEntries := make([]map[string]interface{}, 0, len(rows))
 	users := h.activeUsersByInbound(time.Now())
 	// A companion inbound renders only while its origin renders: if the
 	// origin is disabled (or gone), the companion must not keep serving
@@ -2319,6 +2331,17 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			port["allow"] = allow
 		}
 		ports = append(ports, port)
+		// U7 直连入口标记：渲染在册、非伴生、非导入、无托管中转
+		// 指向、且未声明「仅中转/白名单」面貌的入站，自身即客户
+		// 端入口（链式源入站同理：客户端连入的是它，出站指向只
+		// 作归属附加信息，不改变入口身份）。
+		if row.CompanionOf == 0 && row.SourceID == 0 && !relayTargets[row.ID] && !chainTargets[row.ID] &&
+			row.RelayOnly == 0 && row.RelayWhitelist == 0 {
+			connlogEntries = append(connlogEntries, map[string]interface{}{
+				"inboundId": row.ID,
+				"tag":       in.Tag(),
+			})
+		}
 	}
 	// 1.7.7（KU5）：给 agent 下发的下载描述不再带面板配置的代理前
 	// 缀——「开启 GitHub 加速」设置已整体移除，proxy 恒为空（直连
@@ -2347,6 +2370,9 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		"hash":     rendered.Hash,
 		"enabled":  k.Enabled == 1 && !rendered.Idle,
 		"ports":    ports,
+		// U7：恒下发（可为空集）——拓扑变更后旧标记靠空集清除，
+		// 不靠缺省键猜测（见 connlog_marks.go）。
+		"connlogEntries": connlogEntries,
 	}
 	if len(rendered.UserMarks) > 0 {
 		payload["userMarks"] = rendered.UserMarks

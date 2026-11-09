@@ -67,6 +67,17 @@ type Port struct {
 	HopTo   int `json:"hopTo,omitempty"`
 }
 
+// ConnlogEntry is one kernel inbound the panel marks as a direct
+// connection-log entry: the inbound itself is where end clients
+// enter this node (direct inbound, or the source of a chain), so
+// the kernel log collector (internal/connlog) may record its
+// connections under Tag. Inbounds absent from ApplyRequest's list —
+// relay landings, metering companions — are not collection sources.
+type ConnlogEntry struct {
+	InboundID int64  `json:"inboundId"`
+	Tag       string `json:"tag"`
+}
+
 // ApplyRequest is the KernelApply command body.
 type ApplyRequest struct {
 	Type     string    `json:"type"`
@@ -87,6 +98,10 @@ type ApplyRequest struct {
 	// GeoData are data files kept current next to the main binary (Xray's
 	// geosite.dat / geoip.dat).
 	GeoData []GeoFile `json:"geoData,omitempty"`
+	// ConnlogEntries are the inbounds marked as direct connection-log
+	// entries (see ConnlogEntry). The panel always sends the key —
+	// an empty list clears any previously applied marks.
+	ConnlogEntries []ConnlogEntry `json:"connlogEntries,omitempty"`
 }
 
 type State struct {

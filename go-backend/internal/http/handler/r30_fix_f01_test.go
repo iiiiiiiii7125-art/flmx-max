@@ -97,7 +97,7 @@ func (fx *r30FixF01Fixture) checkDownstreamAddrs(t *testing.T, forwardID int64, 
 		t.Fatalf("get node: %v", err)
 	}
 	stored := fx.storedInIP(t, forwardID)
-	services := buildForwardServiceConfigs("1_1_1", fwd, nil, node, port, stored, forwardRuntimeLimiters{})
+	services := buildForwardServiceConfigs("1_1_1", fwd, nil, node, port, stored, forwardRuntimeLimiters{}, false)
 	if len(services) != 2 {
 		t.Fatalf("CELL-A: expected 2 services, got %d", len(services))
 	}
