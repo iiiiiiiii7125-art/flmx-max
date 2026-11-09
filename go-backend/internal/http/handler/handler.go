@@ -889,7 +889,10 @@ func (h *Handler) userList(w http.ResponseWriter, r *http.Request) {
 
 	users, err := h.repo.ListUsers()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// F4-01：仓储错误收口——真因进服务端日志、对外泛化，
+		// 与监控面 respondInternalError 纪律一致（原文直出会把
+		// SQL/驱动细节漏给前端）。
+		respondInternalError(w, "userList: ListUsers failed", err)
 		return
 	}
 
@@ -1032,6 +1035,11 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "database unavailable"))
 		return
 	}
+	// F-W3-01：本面全程禁存——成功体经下方 w.Write 直出（不走
+	// response 信封），错误体走信封（已自带 no-store）；入口统一
+	// 设头覆盖两路。本面是凭据鉴权后的订阅数据，且不在 CF 订阅
+	// 前置的绕缓存覆盖内（覆盖面只有 /api/v1/open_api/sub/*）。
+	w.Header().Set("Cache-Control", "no-store")
 
 	var username, password, tunnel string
 	switch r.Method {
@@ -1783,7 +1791,8 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.ApplyConfigBatch(validated, cleared, now); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// F4-01：仓储错误收口（同 userList）。
+		respondInternalError(w, "updateConfigs: ApplyConfigBatch failed", err)
 		return
 	}
 	h.invalidateNotifyConfigCache()
@@ -1848,7 +1857,8 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		prevPool := h.latencyPoolBefore(name)
 		if err := h.repo.DeleteConfig(name); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// F4-01：仓储错误收口（同 userList）。
+			respondInternalError(w, "updateSingleConfig: DeleteConfig failed", err)
 			return
 		}
 		h.invalidateNotifyConfigCache()
@@ -1861,7 +1871,8 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 
 	prevPool := h.latencyPoolBefore(name)
 	if err := h.repo.UpsertConfig(name, value, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// F4-01：仓储错误收口（同 userList）。
+		respondInternalError(w, "updateSingleConfig: UpsertConfig failed", err)
 		return
 	}
 	h.invalidateNotifyConfigCache()
@@ -2749,6 +2760,8 @@ func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Disposition", "attachment; filename=backup.json")
 	w.Header().Set("Content-Type", "application/json")
+	// 备份含全量敏感配置：与通用信封同口径禁存（F-W3-02 同族补点）。
+	w.Header().Set("Cache-Control", "no-store")
 	// AUDIT-R22 (LAD22-001): 先 Encode 到 buffer，成功后再发 headers+body。
 	// 直接 Encode 到 w 时若中途失败（如客户端断开），HTTP 200 已发出，
 	// 错误信封会追加到截断的残缺流后，客户端收到既非合法备份也非合法信封的损坏响应。
