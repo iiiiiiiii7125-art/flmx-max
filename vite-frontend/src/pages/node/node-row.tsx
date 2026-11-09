@@ -163,6 +163,40 @@ function renderLatencySlot({
   );
 }
 
+/**
+ * Upgrade/rollback landing-verification status line (A4-V-06),
+ * shared by the card and list row variants. It renders only for
+ * the two open states the API exposes (pending / failed); a landed
+ * or absent verification renders nothing. Both views must render
+ * it through this one component — F-211-02: the line previously
+ * existed only in the card content, so it was invisible in the
+ * default list view while a verification was open.
+ */
+function NodeUpgradeVerificationLine({ node }: { node: Node }) {
+  const verification = node.upgradeVerification;
+
+  if (verification?.status === "failed") {
+    return (
+      <div className="mt-1 text-xs font-semibold text-danger-700">
+        {verification.kind === "rollback" ? "回退未落地" : "升级未落地"}
+        ：期望 {verification.targetVersion}
+        {verification.observedVersion
+          ? `，实际 ${verification.observedVersion}`
+          : "，尚未回连"}
+      </div>
+    );
+  }
+  if (verification?.status === "pending") {
+    return (
+      <div className="mt-1 text-xs font-semibold text-warning-700">
+        {verification.kind === "rollback" ? "回退已下发" : "升级已下发"}
+        ：等待节点以 {verification.targetVersion} 回连核验
+      </div>
+    );
+  }
+  return null;
+}
+
 const NodeCardContent = memo(function NodeCardContent({
   node,
   actions,
@@ -403,26 +437,7 @@ const NodeCardContent = memo(function NodeCardContent({
                   {node.version || "未知"}
                 </span>
               </div>
-              {node.upgradeVerification?.status === "failed" && (
-                <div className="mt-1 text-xs font-semibold text-danger-700">
-                  {node.upgradeVerification.kind === "rollback"
-                    ? "回退未落地"
-                    : "升级未落地"}
-                  ：期望 {node.upgradeVerification.targetVersion}
-                  {node.upgradeVerification.observedVersion
-                    ? `，实际 ${node.upgradeVerification.observedVersion}`
-                    : "，尚未回连"}
-                </div>
-              )}
-              {node.upgradeVerification?.status === "pending" && (
-                <div className="mt-1 text-xs font-semibold text-warning-700">
-                  {node.upgradeVerification.kind === "rollback"
-                    ? "回退已下发"
-                    : "升级已下发"}
-                  ：等待节点以 {node.upgradeVerification.targetVersion}{" "}
-                  回连核验
-                </div>
-              )}
+              <NodeUpgradeVerificationLine node={node} />
               {upgradeProgressEntry &&
                 upgradeProgressEntry.percent < 100 && (
                   <div className="mt-1">
@@ -649,11 +664,14 @@ const NodeListContent = memo(function NodeListContent({
         </>
       }
       footer={
-        <NodeLiveStats
-          info={node.systemInfo ?? null}
-          month={month}
-          variant="footer"
-        />
+        <>
+          <NodeUpgradeVerificationLine node={node} />
+          <NodeLiveStats
+            info={node.systemInfo ?? null}
+            month={month}
+            variant="footer"
+          />
+        </>
       }
       meta={meta.filter(Boolean).join(" · ")}
       right={
