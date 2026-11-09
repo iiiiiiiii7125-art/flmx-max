@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-gost/x/internal/idle"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -129,6 +130,7 @@ func Set(c *Config) {
 	defer globalMux.Unlock()
 
 	global = c
+	publishIdleWindow(c)
 }
 
 func OnUpdate(f func(c *Config) error) error {
@@ -139,7 +141,11 @@ func OnUpdate(f func(c *Config) error) error {
 	err := func() (err error) {
 		globalMux.Lock()
 		defer globalMux.Unlock()
-		return f(global)
+		if ferr := f(global); ferr != nil {
+			return ferr
+		}
+		publishIdleWindow(global)
+		return nil
 	}()
 
 	if err == nil {
@@ -147,6 +153,33 @@ func OnUpdate(f func(c *Config) error) error {
 	}
 
 	return err
+}
+
+// publishIdleWindow keeps the forwarding plane's no-progress
+// teardown window (internal/idle) in lockstep with the config in
+// force. It runs at both commit funnels of this package — Set
+// (whole-config replacement: initial load, reload, rollback) and
+// OnUpdate (incremental mutation: the panel's AddService /
+// UpdateService / DeleteService commands and every other runtime
+// edit). F-212-A's third break was here: the window used to be
+// published only by the config loader, so a threshold the panel
+// pushed into a running agent landed in gost.json and in the
+// service registry but never reached the forwarding plane — the
+// agent had to be restarted (full loader pass) before the knob
+// did anything.
+func publishIdleWindow(c *Config) {
+	if c == nil {
+		idle.Set(0)
+		return
+	}
+	metadatas := make([]map[string]any, 0, len(c.Services))
+	for _, svc := range c.Services {
+		if svc == nil {
+			continue
+		}
+		metadatas = append(metadatas, svc.Metadata)
+	}
+	idle.Publish(metadatas)
 }
 
 type LogConfig struct {

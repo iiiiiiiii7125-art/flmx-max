@@ -2,9 +2,6 @@ package loader
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
@@ -93,61 +90,18 @@ type loader struct{}
 // reload-rollback, so the published window always matches the
 // config actually in force.
 func applyIdleWindow(cfg *config.Config) {
-	var window time.Duration
-	if cfg != nil {
-		for _, svc := range cfg.Services {
-			if svc == nil {
-				continue
-			}
-			if d := serviceIdleTimeout(svc.Metadata); d > window {
-				window = d
-			}
-		}
+	if cfg == nil {
+		idle.Set(0)
+		return
 	}
-	idle.Set(window)
-}
-
-// serviceIdleTimeout extracts the "idleTimeout" entry from one
-// service's metadata. The lookup must be case-insensitive: a
-// gost.json file reaches the loader through viper
-// (config.ReadFile), whose key handling lowercases map keys, so
-// the panel-written "idleTimeout" arrives as "idletimeout"; only
-// an inline/programmatic config keeps the original case. Matching
-// the camelCase spelling alone silently disabled the knob for
-// every file-loaded agent (F-212-A: gost.json on disk correct,
-// window published 0, teardown never armed).
-func serviceIdleTimeout(md map[string]any) time.Duration {
-	if v, ok := md["idleTimeout"]; ok {
-		return idleTimeoutValue(v)
-	}
-	for k, v := range md {
-		if strings.EqualFold(k, "idleTimeout") {
-			return idleTimeoutValue(v)
+	metadatas := make([]map[string]any, 0, len(cfg.Services))
+	for _, svc := range cfg.Services {
+		if svc == nil {
+			continue
 		}
+		metadatas = append(metadatas, svc.Metadata)
 	}
-	return 0
-}
-
-// idleTimeoutValue decodes one "idleTimeout" metadata value with
-// the metadata/util GetDuration semantics: numbers are seconds,
-// strings are durations ("300s") or bare seconds ("300").
-func idleTimeoutValue(v any) time.Duration {
-	switch vv := v.(type) {
-	case int:
-		return time.Duration(vv) * time.Second
-	case int64:
-		return time.Duration(vv) * time.Second
-	case float64:
-		return time.Duration(vv) * time.Second
-	case string:
-		if d, err := time.ParseDuration(vv); err == nil {
-			return d
-		}
-		if n, err := strconv.Atoi(vv); err == nil {
-			return time.Duration(n) * time.Second
-		}
-	}
-	return 0
+	idle.Publish(metadatas)
 }
 
 func (l *loader) Load(cfg *config.Config) error {

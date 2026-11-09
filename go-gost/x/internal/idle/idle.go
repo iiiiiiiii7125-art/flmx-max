@@ -20,6 +20,8 @@
 package idle
 
 import (
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -53,4 +55,61 @@ func Resolve(override time.Duration) time.Duration {
 		return override
 	}
 	return Get()
+}
+
+// Publish scans service metadata maps for the panel's "idleTimeout"
+// entry (seconds) and publishes the maximum as the node-wide
+// window: the panel writes the same node-level value into every
+// service it generates, so a partially annotated config can only
+// ever widen the window, never narrow it below the node's setting.
+// No metadata carrying the key leaves the teardown disabled.
+//
+// The key lookup is case-insensitive on purpose: a gost.json file
+// reaches the agent through viper (config.ReadFile), whose key
+// handling lowercases map keys, so the panel-written "idleTimeout"
+// arrives as "idletimeout"; only an inline/programmatic config
+// keeps the original case. Matching the camelCase spelling alone
+// silently disabled the knob for every file-loaded agent (F-212-A).
+func Publish(metadatas []map[string]any) {
+	var window time.Duration
+	for _, md := range metadatas {
+		if d := metadataWindow(md); d > window {
+			window = d
+		}
+	}
+	Set(window)
+}
+
+func metadataWindow(md map[string]any) time.Duration {
+	if v, ok := md["idleTimeout"]; ok {
+		return timeoutValue(v)
+	}
+	for k, v := range md {
+		if strings.EqualFold(k, "idleTimeout") {
+			return timeoutValue(v)
+		}
+	}
+	return 0
+}
+
+// timeoutValue decodes one "idleTimeout" metadata value with the
+// metadata/util GetDuration semantics: numbers are seconds,
+// strings are durations ("300s") or bare seconds ("300").
+func timeoutValue(v any) time.Duration {
+	switch vv := v.(type) {
+	case int:
+		return time.Duration(vv) * time.Second
+	case int64:
+		return time.Duration(vv) * time.Second
+	case float64:
+		return time.Duration(vv) * time.Second
+	case string:
+		if d, err := time.ParseDuration(vv); err == nil {
+			return d
+		}
+		if n, err := strconv.Atoi(vv); err == nil {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 0
 }
