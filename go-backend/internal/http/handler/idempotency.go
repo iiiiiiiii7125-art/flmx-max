@@ -196,6 +196,9 @@ func (h *Handler) idemBegin(w http.ResponseWriter, r *http.Request, userID int64
 			body := append([]byte(nil), e.body...)
 			idemStore.Unlock()
 			w.Header().Set("Content-Type", "application/json")
+			// 回放体与原响应同为 JSON 信封：禁存口径与原响应一致
+			// （F-W3-02 同族补点，原响应经 response.WriteJSON 已带）。
+			w.Header().Set("Cache-Control", "no-store")
 			_, _ = w.Write(body)
 			return w, func() {}, true
 		}
