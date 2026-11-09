@@ -72,7 +72,9 @@ type memoryTier struct {
 // This table is duplicated in install.sh (agent_memory_limits) for
 // the unit layer. Both copies are pinned to identical numbers by
 // their tests (memlimit_test.go, test-install-scripts-proxy.sh);
-// change them together.
+// change them together. A third copy of the soft rung lives in the
+// panel backend (go-backend/cmd/paneld/memlimit.go, R2-P1-F12),
+// pinned to the same numbers by that package's memlimit_test.go.
 func memoryTierFor(totalMiB int64) memoryTier {
 	var soft int64
 	if totalMiB <= memTierSmallMaxMiB {

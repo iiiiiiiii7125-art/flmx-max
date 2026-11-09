@@ -19,6 +19,10 @@ import (
 )
 
 func main() {
+	// R2-P1-F12: 进程内内存软帽在任何业务分配之前安装（与 agent
+	// 面 go-gost/memlimit.go 同一机制与档位表，见本包 memlimit.go）。
+	applyMemoryLimit()
+
 	cfg := config.FromEnv()
 	// JWT 密钥持久化。未设 JWT_SECRET 时，优先从
 	// <DBPath 同级>/jwt_secret 文件加载，没有则生成并写入（0600），
