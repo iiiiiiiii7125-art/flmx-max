@@ -25,6 +25,16 @@ export interface Node {
   udpListenAddr?: string;
   extraIPs?: string | null;
   version?: string | null;
+  /** A4-V-06 升级/回退落地核验（后端仅回 pending/failed，landed 不下发）：failed 时版本行下显示未落地标记。 */
+  upgradeVerification?: {
+    kind: string; // upgrade | rollback
+    targetVersion: string;
+    status: string; // pending | failed
+    observedVersion?: string;
+    fromVersion?: string;
+    dispatchedAt?: number;
+    deadlineAt?: number;
+  } | null;
   http?: number; // 0 关 1 开
   tls?: number; // 0 关 1 开
   socks?: number; // 0 关 1 开

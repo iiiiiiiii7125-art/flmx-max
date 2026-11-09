@@ -16,6 +16,11 @@ const NOTIFY_EVENTS = [
     description: "断开超过 90 秒才提醒，重启和升级不打扰",
   },
   {
+    key: "node_upgrade_failed",
+    label: "节点升级未落地",
+    description: "升级 / 回退下发后 5 分钟内未回连到目标版本时提醒一次",
+  },
+  {
     key: "inbound_down",
     label: "导入节点连不上 / 恢复",
     description: "连续两次检测失败（约 6 分钟）才提醒",
