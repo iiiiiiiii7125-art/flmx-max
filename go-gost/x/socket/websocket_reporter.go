@@ -2168,27 +2168,149 @@ func agentReconnectCheckFunctionFor(markerPath string, windowSec, pollSec int) s
 		markerPath, windowSec, pollSec, pollSec)
 }
 
+// agentMarkerIntroVersion 是首个在连接成功点写回连标记的
+// agent 版本：标记机制（markAgentPanelConnected）随 A4-V-07 落
+// 地、随本版本发布，此前的二进制永不写标记。
+const agentMarkerIntroVersion = "2.1.1"
+
+// agentTargetMarkerCapability 是「被判活的目标二进制是否写回
+// 连标记」的三态判定。F-211-01（LIVE-211 真机 2d 格实证）：
+// V-07 初版以「停服前标记文件是否存在」决定是否启用回连门，
+// 但标记是执行方（新世代）写的——回退到旧世代 .old 时标记停
+// 在旧值、门必然烧满 60s 把实际成功的回退误判为未回连，还写
+// 下假 'rollback failed'；升级到旧世代目标同理且会误触发自
+// 动回滚。门的启用必须按目标二进制自身的世代判定。
+type agentTargetMarkerCapability int
+
+const (
+	// agentTargetMarkerCapable：目标 ≥ agentMarkerIntroVersion，
+	// 运行起来会刷新标记，回连门可启用。
+	agentTargetMarkerCapable agentTargetMarkerCapability = iota
+	// agentTargetMarkerIncapable：目标是标记机制之前的世代，
+	// 永不写标记——判活必须降级为进程存活＋日志明示。
+	agentTargetMarkerIncapable
+	// agentTargetMarkerUnknown：目标世代不可判（-V 探测失败或
+	// 版本串无法解析）——按不可判处理：降级＋明示，方向朝
+	// 「不误判失败」一侧（硬性口径③）。
+	agentTargetMarkerUnknown
+)
+
+// parseLeadingVersionTriple 解析版本串的前导 x.y.z 三段数字：
+// 后缀（-dev.int211、+build、空格后的打包说明）不参与代际比
+// 较——盖着 2.1.1-dev 戳的构建与 2.1.1 同出一个世代的代码树，
+// 标记能力相同。解析不出完整三段即不可判。
+func parseLeadingVersionTriple(version string) ([3]int, bool) {
+	var triple [3]int
+	core := strings.TrimSpace(version)
+	if i := strings.IndexAny(core, "-+ "); i >= 0 {
+		core = core[:i]
+	}
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return triple, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return triple, false
+		}
+		triple[i] = n
+	}
+	return triple, true
+}
+
+// classifyAgentTargetMarkerCapability 按版本串判定目标世代。
+func classifyAgentTargetMarkerCapability(version string) agentTargetMarkerCapability {
+	triple, ok := parseLeadingVersionTriple(version)
+	if !ok {
+		return agentTargetMarkerUnknown
+	}
+	intro, _ := parseLeadingVersionTriple(agentMarkerIntroVersion)
+	for i := 0; i < 3; i++ {
+		if triple[i] != intro[i] {
+			if triple[i] > intro[i] {
+				return agentTargetMarkerCapable
+			}
+			return agentTargetMarkerIncapable
+		}
+	}
+	return agentTargetMarkerCapable
+}
+
+// probeAgentTargetMarkerCapability 探测目标二进制自身的世代：
+// 实跑目标文件 -V 取它自报的版本（与冒烟测试、回退配对同一
+// 证据面，判的是将要落地的那个文件本身，不是面板下发的声
+// 称）。探测失败返回 Unknown＋空版本。包级变量以便测试替身。
+var probeAgentTargetMarkerCapability = func(path string) (agentTargetMarkerCapability, string) {
+	version, err := probeAgentBinaryVersion(path)
+	if err != nil {
+		return agentTargetMarkerUnknown, ""
+	}
+	return classifyAgentTargetMarkerCapability(version), version
+}
+
 // agentReconnectGateFunction renders flmx_agent_reconnect_ok, the
-// gate the verdict points call: when the marker mechanism is
-// unavailable for this install (flmx_marker_gate != 1, captured by
-// agentReconnectGateSetup before the service stops) the gate
-// passes and the verdict degrades to process liveness — but the
-// degradation is announced in agent-upgrade.log by the setup
-// segment, never silent. With the marker present, the gate is the
-// reconnect check against $flmx_reconnect_since.
+// gate the verdict points call: when the gate is disarmed for this
+// run (flmx_marker_gate != 1, decided by the setup segment before
+// the service stops) the gate passes and the verdict degrades to
+// process liveness — but the degradation is announced in
+// agent-upgrade.log by the setup segment, never silent. With the
+// gate armed, the gate is the reconnect check against
+// $flmx_reconnect_since.
 func agentReconnectGateFunction() string {
 	return "flmx_agent_reconnect_ok() { if [ \"$flmx_marker_gate\" != \"1\" ]; then return 0; fi; flmx_agent_reconnected_ok \"$flmx_reconnect_since\"; }"
 }
 
-// agentReconnectGateSetup renders the pre-stop setup segment:
-// capture whether the connection marker exists for this install
-// (a fixed agent that received the upgrade command has connected
-// at least once, so its marker exists; absence means the marker
-// was removed or the layout cannot carry it) and announce the
-// degraded verdict mode up front when it does not.
-func agentReconnectGateSetup(markerPath string) string {
-	return fmt.Sprintf("flmx_marker_gate=0; flmx_reconnect_since=0; if [ -f %s ]; then flmx_marker_gate=1; else echo 'warning: panel connection marker not found (%s); upgrade verdict falls back to process liveness only'; fi; ",
-		markerPath, markerPath)
+// agentRollbackReconnectGateFunction renders the reconnect gate
+// for the upgrade script's auto-rollback leg. That leg's target
+// is the backup binary, which is a copy of the currently running
+// binary — the very generation rendering the script — so it
+// always writes the marker; its gate (flmx_rb_marker_gate) is
+// armed purely on the marker mechanism being usable on this
+// install (marker file present before the stop), independent of
+// the upgrade target's generation.
+func agentRollbackReconnectGateFunction() string {
+	return "flmx_agent_rb_reconnect_ok() { if [ \"$flmx_rb_marker_gate\" != \"1\" ]; then return 0; fi; flmx_agent_reconnected_ok \"$flmx_reconnect_since\"; }"
+}
+
+// agentReconnectGateSetupFor renders the pre-stop setup segment
+// arming flmx_marker_gate for a verdict whose target binary has
+// the given marker capability (F-211-01 口径：按目标世代判定，
+// 不按停服前标记是否存在判定）：
+//   - capable: arm only when the marker file exists — its
+//     presence is the evidence the marker mechanism works on
+//     this install (the executing generation connected at least
+//     once, so it wrote one); absence degrades with the warning
+//     named in the log, as before.
+//   - incapable: the target never refreshes the marker, so the
+//     gate stays disarmed no matter what the file says; the
+//     degradation and its generation reason are written to the
+//     log up front. The verdict is process liveness only — it
+//     must never record a reconnect failure nor trigger an
+//     auto-rollback on reconnect grounds.
+//   - unknown: same degraded shape as incapable (fail-safe
+//     towards not misjudging), with its own warning.
+func agentReconnectGateSetupFor(markerPath string, capability agentTargetMarkerCapability, targetVersion string) string {
+	switch capability {
+	case agentTargetMarkerCapable:
+		return fmt.Sprintf("flmx_marker_gate=0; flmx_reconnect_since=0; if [ -f %s ]; then flmx_marker_gate=1; else echo 'warning: panel connection marker not found (%s); upgrade verdict falls back to process liveness only'; fi; ",
+			markerPath, markerPath)
+	case agentTargetMarkerIncapable:
+		msg := fmt.Sprintf("warning: target agent version %s predates the panel connection marker (written since agent %s) and never refreshes it; verdict falls back to process liveness only", displayVersion(targetVersion), agentMarkerIntroVersion)
+		return "flmx_marker_gate=0; flmx_reconnect_since=0; echo " + tuneShellQuote(msg) + "; "
+	default:
+		msg := "warning: the target agent generation could not be determined (version probe failed); verdict falls back to process liveness only"
+		return "flmx_marker_gate=0; flmx_reconnect_since=0; echo " + tuneShellQuote(msg) + "; "
+	}
+}
+
+// agentUpgradeGateSetupFor is the upgrade script's setup: the
+// main verdict's gate per the upgrade target's capability, plus
+// arming the auto-rollback leg's gate on marker-mechanism
+// presence (see agentRollbackReconnectGateFunction).
+func agentUpgradeGateSetupFor(markerPath string, capability agentTargetMarkerCapability, targetVersion string) string {
+	return agentReconnectGateSetupFor(markerPath, capability, targetVersion) +
+		fmt.Sprintf("flmx_rb_marker_gate=0; if [ -f %s ]; then flmx_rb_marker_gate=1; fi; ", markerPath)
 }
 
 // agentUpgradeVerdictFunctions renders the full verdict surface
@@ -2360,8 +2482,16 @@ func agentUpgradeLogCapSegment(logPath string) string {
 // actually came up — if it did not, restore the backup copy and start
 // again, all locally on the node without any panel round-trip
 // (A11-132-02). Progress is appended to agent-upgrade.log next to the
-// binary for post-mortem diagnosis.
+// binary for post-mortem diagnosis. The reconnect gate is armed per
+// the staged binary's own generation (F-211-01): the wrapper probes
+// the staged file itself, the ForCap variant renders for an explicit
+// capability (tests).
 func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, backupPath string) (string, error) {
+	capability, targetVersion := probeAgentTargetMarkerCapability(tmpPath)
+	return buildAgentRestartScriptForCap(manager, tmpPath, binaryPath, backupPath, capability, targetVersion)
+}
+
+func buildAgentRestartScriptForCap(manager serviceManager, tmpPath, binaryPath, backupPath string, capability agentTargetMarkerCapability, targetVersion string) (string, error) {
 	serviceName := agentServiceNameFor(binaryPath)
 	stop, start, _, err := serviceManagerCommandsFor(manager, serviceName)
 	if err != nil {
@@ -2374,12 +2504,16 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	if err != nil {
 		return "", err
 	}
+	// 自动回滚腿的回连门（目标＝备份＝当前世代，恒写标记）。
+	verdictFns += "\n" + agentRollbackReconnectGateFunction()
 
 	var b strings.Builder
 	// A4-V-07：停服前捕获标记可用性（gate setup），停服后（旧进
 	// 程已死、不可能再刷新标记）捕获回连判据的 since 时刻——此
 	// 后标记时间戳变新只能出自新进程。
-	fmt.Fprintf(&b, "%sexec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s%s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); ", agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetup(markerPath), verdictFns, stop)
+	// F-211-01：gate setup 按目标二进制世代判定（见
+	// agentUpgradeGateSetupFor），不按停服前标记是否存在判定。
+	fmt.Fprintf(&b, "%sexec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s%s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); ", agentUpgradeLogCapSegment(logPath), logPath, agentUpgradeGateSetupFor(markerPath, capability, targetVersion), verdictFns, stop)
 	if manager == serviceManagerSystemd {
 		// Legacy pre-FLMX gost cleanup (systemd units only), gated
 		// on the C4-F01 ownership guard: the fingerprint alone does
@@ -2421,14 +2555,27 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 	// 滚腿自身的成功判（'rollback succeeded'）同口径要求回连
 	// （since 在回滚停服后重置）；两处「aborted: still running」
 	// 诊断行陈述的是进程状态本身，维持进程判活口径。
-	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; flmx_new_ok=0; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then flmx_new_ok=1; else echo 'agent upgrade failed: new agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'new agent failed health check'; fi; if [ \"$flmx_new_ok\" = \"1\" ]; then echo 'agent upgrade restart ok'; else echo 'rolling back to previous version'; if [ -f %s ]; then %s; flmx_reconnect_since=$(date +%%s); sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok && flmx_agent_reconnect_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
+	// F-211-01：上述「回连」经 gate 按目标世代收放——主判活的
+	// 门按升级目标世代（pre-marker 世代目标自动降级为进程判活
+	// ＋日志明示，不写失败、不触发回滚）；回滚腿的目标恒为当
+	// 前世代备份、恒写标记，其门（flmx_rb_marker_gate）只按本
+	// 机标记机制是否在场收放，与升级目标世代无关。
+	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; flmx_new_ok=0; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then flmx_new_ok=1; else echo 'agent upgrade failed: new agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'new agent failed health check'; fi; if [ \"$flmx_new_ok\" = \"1\" ]; then echo 'agent upgrade restart ok'; else echo 'rolling back to previous version'; if [ -f %s ]; then %s; flmx_reconnect_since=$(date +%%s); sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok && flmx_agent_rb_reconnect_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
 		tmpPath, binaryPath, start, backupPath, stop, rollbackTmpTemplate, backupPath, backupPath, binaryPath, start, start, tmpPath, start)
 	return b.String(), nil
 }
 
 // buildAgentRollbackScriptFor builds the manual rollback script with the
-// same init abstraction as the upgrade path.
+// same init abstraction as the upgrade path. The reconnect gate is
+// armed per the backup binary's own generation (F-211-01): the
+// wrapper probes the backup file itself, the ForCap variant renders
+// for an explicit capability (tests).
 func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath string) (string, error) {
+	capability, targetVersion := probeAgentTargetMarkerCapability(backupPath)
+	return buildAgentRollbackScriptForCap(manager, backupPath, binaryPath, capability, targetVersion)
+}
+
+func buildAgentRollbackScriptForCap(manager serviceManager, backupPath, binaryPath string, capability agentTargetMarkerCapability, targetVersion string) (string, error) {
 	serviceName := agentServiceNameFor(binaryPath)
 	stop, start, _, err := serviceManagerCommandsFor(manager, serviceName)
 	if err != nil {
@@ -2472,8 +2619,12 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 	// 判活 ∧ 回连判据双过；活着但没回连单独点名失败，不许冒用
 	// restart ok。停服后捕获 since（旧进程已死，标记变新只能出
 	// 自恢复出的进程）。
+	// F-211-01：回连判据经 gate 按备份二进制世代收放——pre-
+	// marker 世代的备份（从 2.1.1 回退到旧版 .old 的必然形态）
+	// 降级为进程判活＋日志明示，绝不写 'rollback failed' 误判
+	// 实际成功的回退；世代不可判同降级。
 	return fmt.Sprintf("%sexec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s%s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then echo 'rollback restart ok'; else echo 'rollback failed: restored agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
-		agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetup(markerPath), verdictFns, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
+		agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetupFor(markerPath, capability, targetVersion), verdictFns, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
 }
 
 // smokeTestAgentBinary verifies a downloaded binary actually executes on
