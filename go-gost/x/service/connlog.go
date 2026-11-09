@@ -8,173 +8,150 @@ import (
 	"sync/atomic"
 )
 
-// Inbound connection log collection (入站连接日志, design
+// Inbound connection log (入站连接日志, design
 // ~/workspace/.int-wave/feat-inbound-connlog-design.md §3.1/§4/§5.3,
-// unit U1: agent-gost collection).
+// units U1+U2, unified at integration).
 //
-// The hook lives in defaultService.Serve, the one accept loop every
-// gost service shares: an admitted connection produces an "open"
-// event where the peer address is final (a PROXY-protocol listener
-// has already folded the real client address into RemoteAddr, so the
-// collected IP is the real client IP with zero extra work), and a
-// "close" event when Handler.Handle returns — the deterministic
-// close point of the connection. Only services the panel marked as
-// entry points are collected (see ConnLogEntryMetadataKey); hop legs
-// (tunnel entrypoint services, chain/mux legs) are constructed
-// without the mark and are never recorded, so a pooled or
-// multiplexed leg can never masquerade as an inbound connection.
+// Data path: producers — the gost service-layer capture hook in
+// defaultService.Serve (U1) and the kernel log parser (U4, via the
+// sink wired in the agent's main) — hand events to the reporter
+// through EnqueueConnEvent. The reporter (connlog_reporter.go)
+// drains its bounded ring into the on-disk spool and batch-posts to
+// the panel's POST /flow/connlog/v2; the panel upserts by
+// (entry node, ConnID): open creates the row, close completes it.
 //
-// Events land in a bounded in-memory ring buffer (this file) that
-// the reporter unit (U2) drains. The hot path cost per connection
-// is two clock reads plus one fixed-size struct copy under a short
-// lock; the forwarding copy loops are untouched. A full buffer
-// drops the oldest event and counts the drop — losing data under
-// overload is acceptable, pretending otherwise is not (design §4.2).
+// Capture discipline: only services the panel marked as entry
+// points produce events (the mark is parsed at service build time,
+// see config/parsing/service and internal/connlog); hop legs are
+// constructed without the mark and are never recorded, so a pooled
+// or multiplexed leg can never masquerade as an inbound connection.
+// The hot path cost per connection is two clock reads plus one
+// fixed-size struct copy into the ring under a short lock; the
+// forwarding copy loops are untouched. A full ring drops the oldest
+// event and counts the drop — losing data under overload is
+// acceptable, pretending otherwise is not (design §4.2).
 
-// ConnLogEntryMetadataKey is the service-level metadata key that
-// marks a service as a node entry point for connection logging.
-// The panel (unit U7, buildForwardServiceConfigs) writes
-// `"connlogEntry": true` into the metadata of the forward services
-// it generates for managed relays; ParseService forwards it into
-// NewService via ConnLogEntryOption. The spelling follows the
-// existing panel metadata keys ("proxyProtocol", "idleTimeout",
-// "interface").
-const ConnLogEntryMetadataKey = "connlogEntry"
-
-// ConnLogBufferCapacity is the in-memory ring buffer size (design
-// §4.2 suggests 4096 events; the on-disk spool is U2's layer).
-const ConnLogBufferCapacity = 4096
-
-// ConnEventType discriminates the two event kinds of the §5.3
-// ingest contract: "open" when a connection is admitted, "close"
-// when it ends. The panel upserts by (entry node, ConnID): open
-// creates the row, close completes it.
-type ConnEventType string
-
+// Event types of the §5.3 ingest contract: "open" when a
+// connection is admitted, "close" when it ends.
 const (
-	ConnEventOpen  ConnEventType = "open"
-	ConnEventClose ConnEventType = "close"
+	ConnEventOpen  = "open"
+	ConnEventClose = "close"
 )
 
-// Entry kinds and session kinds (design §5.1). Everything this
-// unit emits is a gost entry service, hence EntryKind "forward";
-// kernel inbounds ("inbound" / "kernel_session" / "event_only")
-// are unit U4's vocabulary.
+// Close-event status values (design §5.1). Open events leave
+// Status empty; a close either reports the observed end ("closed")
+// or an honest unknown end swept at a generation boundary
+// ("interrupted") — a sweep time must never pose as a real
+// disconnect time.
 const (
-	ConnEntryKindForward = "forward"
-
-	ConnSessionKindTCP = "tcp_conn"    // true lifecycle: accept → Handle return
-	ConnSessionKindUDP = "udp_session" // session semantics: first packet → idle-TTL teardown, TTL-level precision
+	ConnStatusClosed      = "closed"
+	ConnStatusInterrupted = "interrupted"
 )
 
-// ConnEvent is one fixed-size connection log event, mirroring the
-// §5.3 report contract fields. Close events repeat the open
-// event's descriptive fields so a close whose open was dropped
-// (buffer overflow) still carries everything the panel needs to
-// materialise the row; DurationMs is deliberately absent — the
-// panel derives it from EndMs-StartMs at ingest (design §5.1).
+// Entry kinds (design §5.1): gost entry services are "forward";
+// kernel direct inbounds are "inbound" (emitted by unit U4).
+const (
+	ConnEntryForward = "forward"
+	ConnEntryInbound = "inbound"
+)
+
+// Session kinds (design §5.1). The gost hook emits the first two;
+// the kernel parser's vocabulary (kernel_session / event_only) is
+// declared here as well so the wire contract has one spelling.
+const (
+	ConnSessionKindTCP       = "tcp_conn"       // true lifecycle: accept → Handle return
+	ConnSessionKindUDP       = "udp_session"    // session semantics: first packet → idle-TTL teardown, TTL-level precision
+	ConnSessionKindKernel    = "kernel_session" // sing-box packet session or QUIC-inbound stream: proxy-session lifecycle
+	ConnSessionKindEventOnly = "event_only"     // Xray degraded row: accept event only, no close exists
+)
+
+// ConnEvent is one fixed-size connection log event, in the §5.3
+// wire shape (the panel handler's decode is the contract's fixed
+// point; field names are camelCase like every other panel-facing
+// payload of this feature). Close events repeat the open event's
+// descriptive fields so a close whose open was dropped (ring
+// overflow) still carries everything the panel needs to
+// materialise the row; duration is deliberately absent — the panel
+// derives it from EndMs-StartMs at ingest (design §5.1). Times are
+// entry-machine clock Unix milliseconds (design §4.7).
 type ConnEvent struct {
-	Type        ConnEventType
-	ConnID      string // per-connection sid generated in Serve; unique per accepted connection
-	EntryKind   string // always ConnEntryKindForward for gost services
-	EntryID     string // service name (panel encoding carries the forward id)
-	ClientIP    string // effective peer at the entry; the real client IP under PROXY-protocol receive
-	ClientPort  int    // 0 when the peer address carries no port
-	Network     string // "tcp" or "udp"
-	SessionKind string // ConnSessionKindTCP or ConnSessionKindUDP
-	StartMs     int64  // entry-machine clock, accept time (Unix milliseconds)
-	EndMs       int64  // entry-machine clock, close time; 0 on open events
+	Type        string `json:"type"`                 // open | close
+	ConnID      string `json:"connId"`               // per-connection id, unique per accepted connection; panel upserts by (entry node, ConnID)
+	EntryKind   string `json:"entryKind"`            // forward | inbound
+	EntryID     string `json:"entryId"`              // forward service name (panel encoding carries the forward id) / inbound tag in-<ID>
+	ClientIP    string `json:"clientIp"`             // effective peer at the entry; the real client IP under PROXY-protocol receive
+	PeerIP      string `json:"peerIp,omitempty"`     // raw previous-hop address when the stack exposes both (gost entries leave it empty)
+	ClientPort  int    `json:"clientPort,omitempty"` // 0 when the peer address carries no port
+	Network     string `json:"network"`              // tcp | udp
+	SessionKind string `json:"sessionKind"`          // tcp_conn | udp_session | kernel_session | event_only
+	StartMs     int64  `json:"startTime"`            // connection start (entry-machine clock, milliseconds)
+	EndMs       int64  `json:"endTime,omitempty"`    // close time; for interrupted closes the last known moment
+	Status      string `json:"status,omitempty"`     // close events only: closed | interrupted
 }
 
-// ConnLogBuffer is the bounded ring buffer between the Serve hook
-// (producer, one per connection) and the U2 reporter (consumer).
-// Push never blocks: when full it overwrites the oldest event and
-// increments the dropped counter U2 reports to the panel.
-type ConnLogBuffer struct {
-	mu      sync.Mutex
-	ring    [ConnLogBufferCapacity]ConnEvent
-	head    int // index of the oldest live event
-	count   int
-	dropped atomic.Uint64
+// connRing is the bounded in-memory ring between the producers and
+// the reporter (design §4.2 first level): fixed size, short lock,
+// full → overwrite the oldest and report the drop. Push never
+// blocks and never fails.
+type connRing struct {
+	mu    sync.Mutex
+	buf   []ConnEvent
+	head  int // index of the oldest live event
+	count int
 }
 
-func NewConnLogBuffer() *ConnLogBuffer {
-	return &ConnLogBuffer{}
-}
-
-func (b *ConnLogBuffer) Push(ev ConnEvent) {
-	b.mu.Lock()
-	if b.count == ConnLogBufferCapacity {
-		// Full: overwrite the oldest slot and advance head; the
-		// overwritten event is lost and must be accounted.
-		b.ring[b.head] = ev
-		b.head = (b.head + 1) % ConnLogBufferCapacity
-		b.mu.Unlock()
-		b.dropped.Add(1)
-		return
+func newConnRing(capacity int) *connRing {
+	if capacity <= 0 {
+		capacity = 1
 	}
-	b.ring[(b.head+b.count)%ConnLogBufferCapacity] = ev
-	b.count++
-	b.mu.Unlock()
+	return &connRing{buf: make([]ConnEvent, capacity)}
 }
 
-// Drain removes and returns up to max oldest events in FIFO order.
-// max <= 0 drains everything currently buffered.
-func (b *ConnLogBuffer) Drain(max int) []ConnEvent {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	n := b.count
-	if max > 0 && max < n {
-		n = max
+// Push enqueues one event; when full it drops the oldest event and
+// returns true (the caller accumulates the drop count).
+func (r *connRing) Push(ev ConnEvent) (droppedOldest bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.count == len(r.buf) {
+		r.buf[r.head] = ev
+		r.head = (r.head + 1) % len(r.buf)
+		return true
 	}
-	if n == 0 {
+	r.buf[(r.head+r.count)%len(r.buf)] = ev
+	r.count++
+	return false
+}
+
+// Drain removes and returns all buffered events in FIFO order.
+func (r *connRing) Drain() []ConnEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.count == 0 {
 		return nil
 	}
-	out := make([]ConnEvent, 0, n)
-	for i := 0; i < n; i++ {
-		out = append(out, b.ring[b.head])
-		b.ring[b.head] = ConnEvent{}
-		b.head = (b.head + 1) % ConnLogBufferCapacity
+	out := make([]ConnEvent, 0, r.count)
+	for i := 0; i < r.count; i++ {
+		out = append(out, r.buf[(r.head+i)%len(r.buf)])
 	}
-	b.count -= n
+	r.head = 0
+	r.count = 0
 	return out
 }
 
-func (b *ConnLogBuffer) Len() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.count
+func (r *connRing) Len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.count
 }
 
-// Dropped returns how many events the buffer has overwritten since
-// process start. U2 attaches the counter to its batches so the
-// panel can surface it (design §4.2).
-func (b *ConnLogBuffer) Dropped() uint64 {
-	return b.dropped.Load()
-}
-
-func (b *ConnLogBuffer) reset() {
-	b.mu.Lock()
-	b.head = 0
-	b.count = 0
-	b.mu.Unlock()
-	b.dropped.Store(0)
-}
-
-var globalConnLogBuffer = NewConnLogBuffer()
-
-// GetConnLogBuffer returns the process-wide buffer the Serve hook
-// writes to and the U2 reporter drains.
-func GetConnLogBuffer() *ConnLogBuffer {
-	return globalConnLogBuffer
-}
-
-// connLogEnabled is the feature master switch for gost entry
-// collection. Design §4.5: gost entries carry no per-inbound
-// opt-in cost (unlike kernel inbounds), so collection follows the
-// master switch and defaults to ON. Driven by the optional
-// "connlog" key of the agent config.json (see LoadConfig) or by
-// SetConnLogEnabled from the agent's control path.
+// connLogEnabled is the agent-side master switch for gost entry
+// collection. Design §4.5: gost entries carry no per-inbound opt-in
+// cost (unlike kernel inbounds), so collection follows the master
+// switch and defaults to ON. Driven by the optional "connlog" key
+// of the agent config.json (see LoadConfig) or by
+// SetConnLogEnabled from the agent's control path. The panel-side
+// master switch (repo.ConnLogEnabledConfigKey) acts upstream of
+// this one: it stops the entry marks themselves from being issued.
 var connLogEnabled atomic.Bool
 
 func init() {
@@ -197,44 +174,6 @@ func ConnLogEntryOption(entry bool) Option {
 	}
 }
 
-// ConnLogEntryFromMetadata reports whether a service-level metadata
-// map carries the entry mark. The key match is case-insensitive on
-// purpose, mirroring internal/idle's "idleTimeout" handling: a
-// gost.json loaded through viper arrives with lowercased map keys,
-// so the panel-written "connlogEntry" may show up as "connlogentry"
-// (F-212-A class of bug). Accepted truthy values: bool true, the
-// strings "true"/"1", and non-zero numbers (JSON round-trips).
-func ConnLogEntryFromMetadata(md map[string]any) bool {
-	if len(md) == 0 {
-		return false
-	}
-	if v, ok := md[ConnLogEntryMetadataKey]; ok {
-		return connLogTruthy(v)
-	}
-	for k, v := range md {
-		if strings.EqualFold(k, ConnLogEntryMetadataKey) {
-			return connLogTruthy(v)
-		}
-	}
-	return false
-}
-
-func connLogTruthy(v any) bool {
-	switch vv := v.(type) {
-	case bool:
-		return vv
-	case string:
-		return vv == "1" || strings.EqualFold(vv, "true")
-	case int:
-		return vv != 0
-	case int64:
-		return vv != 0
-	case float64:
-		return vv != 0
-	}
-	return false
-}
-
 // connNetwork classifies an accepted connection as "tcp" or "udp"
 // from its remote address. For the shared UDP listener each session
 // surfaces as one accepted conn whose RemoteAddr is the session's
@@ -248,10 +187,11 @@ func connNetwork(conn net.Conn) string {
 	return "tcp"
 }
 
-// newConnEvent builds one event for the hook. clientAddr/clientIP
-// are the values Serve already finalised for the connection; the
-// port is split out of clientAddr (0 when unparsable).
-func (s *defaultService) newConnEvent(typ ConnEventType, sid, clientAddr, clientIP string, conn net.Conn, startMs, endMs int64) ConnEvent {
+// newConnEvent builds one event for the Serve hook. clientAddr and
+// clientIP are the values Serve already finalised for the
+// connection; the port is split out of clientAddr (0 when
+// unparsable).
+func (s *defaultService) newConnEvent(typ, sid, clientAddr, clientIP string, conn net.Conn, startMs, endMs int64) ConnEvent {
 	network := connNetwork(conn)
 	sessionKind := ConnSessionKindTCP
 	if network == "udp" {
@@ -261,10 +201,14 @@ func (s *defaultService) newConnEvent(typ ConnEventType, sid, clientAddr, client
 	if _, p, err := net.SplitHostPort(clientAddr); err == nil {
 		port, _ = strconv.Atoi(p)
 	}
+	status := ""
+	if typ == ConnEventClose {
+		status = ConnStatusClosed
+	}
 	return ConnEvent{
 		Type:        typ,
 		ConnID:      sid,
-		EntryKind:   ConnEntryKindForward,
+		EntryKind:   ConnEntryForward,
 		EntryID:     s.name,
 		ClientIP:    clientIP,
 		ClientPort:  port,
@@ -272,5 +216,6 @@ func (s *defaultService) newConnEvent(typ ConnEventType, sid, clientAddr, client
 		SessionKind: sessionKind,
 		StartMs:     startMs,
 		EndMs:       endMs,
+		Status:      status,
 	}
 }

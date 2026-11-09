@@ -237,7 +237,15 @@ func main() {
 			fmt.Printf("❌ 流量 spool 初始化失败，拒绝启动: %v\n", err)
 			os.Exit(1)
 		}
+		// 入站连接日志（U2）：spool 与流量 spool 同目录、同身份
+		// 隔离。纯旁路功能——初始化失败只禁用本功能，绝不拒绝
+		// agent 启动（与上方流量 spool 的口径差异是刻意的：转发
+		// 与计费是主业，连接日志不是）。
+		if err := service.ConfigureConnlogSpool(dir, service.TrafficSpoolIdentity(config.Addr, config.Secret)); err != nil {
+			fmt.Printf("⚠️ 连接日志 spool 初始化失败，本功能回退内存 spool: %v\n", err)
+		}
 	}
+	service.StartConnlogReporter(context.Background())
 
 	p := &program{
 		startReporter: func() reporter {

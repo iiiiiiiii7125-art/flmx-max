@@ -376,7 +376,7 @@ func (s *defaultService) Serve() error {
 		var connLogStartMs int64
 		if connLog {
 			connLogStartMs = time.Now().UnixMilli()
-			GetConnLogBuffer().Push(s.newConnEvent(
+			EnqueueConnEvent(s.newConnEvent(
 				ConnEventOpen, sid, clientAddr, clientIP, conn, connLogStartMs, 0))
 		}
 
@@ -388,7 +388,7 @@ func (s *defaultService) Serve() error {
 
 			if connLog {
 				defer func() {
-					GetConnLogBuffer().Push(s.newConnEvent(
+					EnqueueConnEvent(s.newConnEvent(
 						ConnEventClose, sid, clientAddr, clientIP, conn,
 						connLogStartMs, time.Now().UnixMilli()))
 				}()
