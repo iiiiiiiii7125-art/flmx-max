@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -174,4 +175,37 @@ func tplJSONStr(s string) string {
 func tplIDStr(id int64) string {
 	b, _ := json.Marshal(id)
 	return string(b)
+}
+
+// TestSubscriptionTemplateCheckIncludesRenderNodes: the template check
+// preview for a picked subscription must use the subscription's render
+// set, matching subscriptionPreview — checking against an empty or
+// all-nodes sample would misjudge whether the template's auto group
+// receives the subscription's nodes.
+func TestSubscriptionTemplateCheckIncludesRenderNodes(t *testing.T) {
+	h, r, ids := subFixture(t)
+	s := createShareSub(t, r, &model.Subscription{
+		Name: "G", Kind: model.SubscriptionShare, Token: strings.Repeat("c", 32), UUID: "uuid-g", Password: "pw-g",
+		InboundIDs: formatIDList([]int64{ids["hk-1"], ids["hk-2"]}), Enabled: 1,
+	})
+
+	_, env := tplPost(t, h.subscriptionTemplateCheck, `{"kind":"clash","content":`+tplJSONStr(tplTestClash)+`,"subscriptionId":`+tplIDStr(s.ID)+`}`)
+	if env["code"] != float64(0) {
+		t.Fatalf("check: %v", env)
+	}
+	data := env["data"].(map[string]interface{})
+	if data["nodes"] != float64(2) {
+		t.Fatalf("check sample must include the 2 render nodes, got nodes=%v (data=%v)", data["nodes"], data)
+	}
+	summary := data["summary"].(map[string]interface{})
+	var autoNodes string
+	for _, gi := range summary["groups"].([]interface{}) {
+		gm := gi.(map[string]interface{})
+		if gm["auto"] == true {
+			autoNodes = fmt.Sprint(gm["nodes"])
+		}
+	}
+	if !strings.Contains(autoNodes, "hk-1") || !strings.Contains(autoNodes, "hk-2") {
+		t.Fatalf("auto group must preview the render nodes, got %s", autoNodes)
+	}
 }
