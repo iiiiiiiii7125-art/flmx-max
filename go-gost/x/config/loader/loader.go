@@ -3,6 +3,7 @@ package loader
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-gost/core/logger"
@@ -98,12 +99,33 @@ func applyIdleWindow(cfg *config.Config) {
 			if svc == nil {
 				continue
 			}
-			if d := idleTimeoutValue(svc.Metadata["idleTimeout"]); d > window {
+			if d := serviceIdleTimeout(svc.Metadata); d > window {
 				window = d
 			}
 		}
 	}
 	idle.Set(window)
+}
+
+// serviceIdleTimeout extracts the "idleTimeout" entry from one
+// service's metadata. The lookup must be case-insensitive: a
+// gost.json file reaches the loader through viper
+// (config.ReadFile), whose key handling lowercases map keys, so
+// the panel-written "idleTimeout" arrives as "idletimeout"; only
+// an inline/programmatic config keeps the original case. Matching
+// the camelCase spelling alone silently disabled the knob for
+// every file-loaded agent (F-212-A: gost.json on disk correct,
+// window published 0, teardown never armed).
+func serviceIdleTimeout(md map[string]any) time.Duration {
+	if v, ok := md["idleTimeout"]; ok {
+		return idleTimeoutValue(v)
+	}
+	for k, v := range md {
+		if strings.EqualFold(k, "idleTimeout") {
+			return idleTimeoutValue(v)
+		}
+	}
+	return 0
 }
 
 // idleTimeoutValue decodes one "idleTimeout" metadata value with
