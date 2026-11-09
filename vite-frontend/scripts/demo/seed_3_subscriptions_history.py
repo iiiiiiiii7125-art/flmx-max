@@ -4,9 +4,9 @@
 FLMX model (do NOT port upstream's): a subscription is a row in
 `subscription`; who gets it lives in `user_subscription` (UserSubscription)
 and is written through POST /user-subscription/set. There is no user_id on
-the subscription. Node groups and subscription templates are our own
-features (not the upstream model); they are seeded at the end of this
-step. The default subscription is the
+the subscription. Subscription templates are our own feature (not
+the upstream model); they are seeded at the end of this step. The
+default subscription is the
 panel's own auto-created one (first row by inx, id; personal ?user=&sig=
 links hang on it).
 """
