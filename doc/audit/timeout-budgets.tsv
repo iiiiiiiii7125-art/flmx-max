@@ -151,7 +151,6 @@ C036	getAllUsers	fe	/user/list	30	default	network-default			120	global	12	class	
 C037	getAnnouncement	fe	/announcement/get	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
 C038	getConfigByName	fe	/config/get	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
 C039	getConfigs	fe	(template path; DB read)	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
-C040	getDashboardNodeExpiryList	fe	/node/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
 C041	getForwardList	fe	/forward/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
 C044	getImportAutoBackupStatus	fe	/backup/import-auto-backup/status	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
 C045	getInboundList	fe	/inbound/list	30	default	network-default			120	global	12	class	class-ceiling	class		-	DB/local class: handler is DB/local work or <=2 node commands (lane T row 34 census)
