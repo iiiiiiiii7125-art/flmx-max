@@ -230,6 +230,13 @@ const REGISTRY = [
     calls: 1,
     consumers: ["src/pages/subscription/assign.tsx"],
   },
+  {
+    producer: "go-backend/internal/http/handler/handler.go",
+    endpoint: "/config/update",
+    apiFn: "updateConfigs",
+    calls: 1,
+    consumers: ["src/pages/config.tsx"],
+  },
 ];
 
 // GAP 登记册（2026-11-10 合并树逐点独立核实）：T-001 新增生产者中
@@ -245,14 +252,6 @@ const REGISTRY = [
 // 缺口本身是产品问题（信封 warning 被 UI 丢弃），修复归产品波次；
 // 本册只负责让缺口不可静默、不可腐烂。
 const GAP_REGISTRY = [
-  {
-    producer: "go-backend/internal/http/handler/handler.go",
-    endpoint: "/config/update",
-    apiFn: "updateConfigs",
-    calls: 1,
-    callers: ["src/pages/config.tsx"],
-    gap: "延迟优选丢弃告警（latencyChoiceDropWarning）：config.tsx handleSave 只读 code，成功即 toast 成功，warning 被丢弃",
-  },
   {
     producer: "go-backend/internal/http/handler/handler.go",
     endpoint: "/config/update-single",

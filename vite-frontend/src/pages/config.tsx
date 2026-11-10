@@ -871,6 +871,11 @@ export default function ConfigPage() {
 
       if (response.code === 0) {
         toast.success("配置保存成功");
+        // T-001：延迟优选被丢弃时后端在信封 warning 里点名（network.ts
+        // 合同：must be surfaced），须原样透出，不得只报固定成功文案。
+        if (response.warning) {
+          toast(response.warning, { icon: "⚠️", duration: 12000 });
+        }
 
         if (frontUrlsCleaned) {
           setConfigs({ ...effectiveConfigs });
