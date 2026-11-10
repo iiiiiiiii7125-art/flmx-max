@@ -317,7 +317,10 @@ func (h *Handler) inboundConnlog(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.repo.ListInboundConnLogs(req.InboundID, strings.TrimSpace(req.IP), int(offset), size)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-F4-01 原始错误门：仓储错误原文只记服务端日志，
+		// 客户端回通用文案，不外泄存储层细节。
+		log.Printf("connlog query failed inbound_id=%d err=%v", req.InboundID, err)
+		response.WriteJSON(w, response.ErrDefault("查询连接日志失败"))
 		return
 	}
 	views := make([]connlogRowView, 0, len(rows))
