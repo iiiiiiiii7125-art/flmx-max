@@ -378,6 +378,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/node/tune", h.nodeTune)
 	// 节点定时重启 agent 服务（开关＋时刻＋抖动，默认关）。
 	mux.HandleFunc("/api/v1/node/restart-schedule", h.nodeRestartScheduleSet)
+	// 节点一键设置 Swap（现状查询＋建/改 /swapfile 大小）。
+	mux.HandleFunc("/api/v1/node/swap-info", h.nodeSwapInfo)
+	mux.HandleFunc("/api/v1/node/swap-set", h.nodeSwapSet)
 	// 回程路由追踪。
 	mux.HandleFunc("/api/v1/node/route", h.nodeRouteGet)
 	mux.HandleFunc("/api/v1/node/route/probe", h.nodeRouteProbe)
