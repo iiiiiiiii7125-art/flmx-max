@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/monitoring"
 	"go-backend/internal/store/repo"
 )
 
@@ -27,7 +28,9 @@ import (
 //     （ensureAdminAccess，含真实客户端 IP 不对普通用户开放），
 //     按归属键过滤、start_time 倒序、current/size 分页——前端按
 //     user.tsx 口径多取一条（size+1）做探针，本端只按所给
-//     current/size 如实分页。不提供任何跨机合并参数。
+//     current/size 如实分页。响应为页对象 {rows, dropped,
+//     retentionDays}（页脚定形见 connlogPageObject）。不提供
+//     任何跨机合并参数。
 
 const connlogMaxEventsPerBatch = 1000
 
@@ -169,10 +172,19 @@ func (h *Handler) flowConnlogV2(w http.ResponseWriter, r *http.Request) {
 			node.ID, envelope.Stream, envelope.Sequence, ack.Cursor, len(events))
 	}
 	if envelope.Dropped > 0 {
-		// agent 侧缓冲溢出的丢弃计数（设计 §4.2）：随批报上报的
-		// 累计值。本表 schema（§5.1）无此列，面板侧在此落结构化
-		// 日志留痕；弹窗页脚的落库展示点待集成时与前端一并定。
-		log.Printf("connlog upload dropped_report node_id=%d dropped_total=%d", node.ID, envelope.Dropped)
+		// agent 侧采集丢弃计数（设计 §4.2）：随批报上行的是
+		// 「尚未被面板确认」的丢弃快照——同一数值会随后续批次
+		// 反复出现，直到某批被真正应用、agent 才把它从待确认
+		// 计数里扣掉。故面板只在 ack.Applied 时把本批数值作增
+		// 量入账（connlog_node_dropped 按节点累计），重放/落后
+		// 批次不重复入账；弹窗页脚据此汇总展示。入账失败只记
+		// 日志：批报本身已提交，不能因页脚簿记失败判整批失败。
+		log.Printf("connlog upload dropped_report node_id=%d dropped_pending=%d applied=%v", node.ID, envelope.Dropped, ack.Applied)
+		if ack.Applied {
+			if err := h.repo.AddConnlogNodeDropped(node.ID, envelope.Dropped, time.Now().UnixMilli()); err != nil {
+				log.Printf("connlog dropped persist failed node_id=%d err=%v", node.ID, err)
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
@@ -298,7 +310,7 @@ func (h *Handler) inboundConnlog(w http.ResponseWriter, r *http.Request) {
 	offset := int64(0)
 	if current > 1 {
 		if int64(current-1) > (int64(1)<<62)/int64(size) {
-			response.WriteJSON(w, response.OK([]connlogRowView{}))
+			response.WriteJSON(w, response.OK(connlogPageObject([]connlogRowView{}, 0, monitoring.DefaultConnlogRetentionDays)))
 			return
 		}
 		offset = int64(current-1) * int64(size)
@@ -342,5 +354,33 @@ func (h *Handler) inboundConnlog(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, view)
 	}
-	response.WriteJSON(w, response.OK(views))
+	// 页脚字段（设计 §5.4，集成定形）：响应是页对象而非裸数组
+	// ——rows 为本页行；dropped 为「曾为本入站供数的入口节点」
+	// 的累计采集丢弃（connlog_node_dropped 汇总，让采集丢数在
+	// 弹窗页脚可见、不静默）；retentionDays 为当前保留期。页
+	// 脚取数失败不拖垮主查询：dropped 回 0、保留期回默认。
+	dropped := int64(0)
+	if nodeIDs, err := h.repo.ConnlogEntryNodeIDs(req.InboundID); err == nil && len(nodeIDs) > 0 {
+		if total, err := h.repo.SumConnlogDroppedByNodes(nodeIDs); err == nil {
+			dropped = total
+		}
+	}
+	retentionDays := monitoring.DefaultConnlogRetentionDays
+	if cfg, err := h.repo.GetConfigsByNames([]string{monitoring.ConfigConnlogRetentionDays}); err == nil {
+		retentionDays = monitoring.ConnlogRetentionDaysFromConfigMap(cfg)
+	}
+	response.WriteJSON(w, response.OK(connlogPageObject(views, dropped, retentionDays)))
+}
+
+// connlogPageObject 是连接日志查询的响应形态（页对象）：前端
+// 弹窗按 rows/dropped/retentionDays 消费，字段名是契约固定点。
+func connlogPageObject(rows []connlogRowView, dropped int64, retentionDays int) map[string]interface{} {
+	if rows == nil {
+		rows = []connlogRowView{}
+	}
+	return map[string]interface{}{
+		"rows":          rows,
+		"dropped":       dropped,
+		"retentionDays": retentionDays,
+	}
 }

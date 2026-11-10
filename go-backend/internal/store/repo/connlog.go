@@ -318,6 +318,59 @@ func upsertConnlogEventTx(tx *gorm.DB, ev *ConnlogEvent, nowMs int64) error {
 	return fmt.Errorf("unknown connlog event type %q", ev.Type)
 }
 
+// AddConnlogNodeDropped 把一个已应用批次携带的丢弃增量入账到
+// 上报节点名下（upsert 累加）。调用方（handler）只在批次 ack
+// 为 Applied 时调用一次——agent 的 dropped 是「未确认快照」，
+// 重放/落后批次不得重复入账。
+func (r *Repository) AddConnlogNodeDropped(nodeID, delta, nowMs int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	if delta <= 0 {
+		return nil
+	}
+	row := model.ConnlogNodeDropped{NodeID: nodeID, DroppedTotal: delta, UpdatedTime: nowMs}
+	return r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "node_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"dropped_total": gorm.Expr("connlog_node_dropped.dropped_total + ?", delta),
+			"updated_time":  nowMs,
+		}),
+	}).Create(&row).Error
+}
+
+// SumConnlogDroppedByNodes 汇总一组节点的累计采集丢弃（弹窗
+// 页脚）。无行按 0 计。
+func (r *Repository) SumConnlogDroppedByNodes(nodeIDs []int64) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	var total int64
+	err := r.db.Model(&model.ConnlogNodeDropped{}).
+		Where("node_id IN ?", nodeIDs).
+		Select("COALESCE(SUM(dropped_total), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
+// ConnlogEntryNodeIDs 返回曾为某归属入站供过连接日志行的入口
+// 节点集（去重）——页脚 dropped 只汇总真正供数的节点，不把无
+// 关节点的丢弃算进来。
+func (r *Repository) ConnlogEntryNodeIDs(inboundID int64) ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ids []int64
+	err := r.db.Model(&model.InboundConnLog{}).
+		Where("display_inbound_id = ?", inboundID).
+		Distinct("entry_node_id").
+		Pluck("entry_node_id", &ids).Error
+	return ids, err
+}
+
 // ListInboundConnLogs 是弹窗主查询：按归属键过滤、start_time 倒
 // 序（id 倒序兜底同毫秒稳定序），offset/limit 由 handler 按
 // current/size 换算（前端按 user.tsx 口径多取一条做探针）。ip

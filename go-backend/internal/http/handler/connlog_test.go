@@ -168,7 +168,13 @@ func TestConnlogIngestAuthAndValidation(t *testing.T) {
 	}
 }
 
-func (rig *connlogTestRig) query(t *testing.T, claims *auth.Claims, body string) (int, []connlogRowView) {
+type connlogQueryPage struct {
+	Rows          []connlogRowView `json:"rows"`
+	Dropped       int64            `json:"dropped"`
+	RetentionDays int              `json:"retentionDays"`
+}
+
+func (rig *connlogTestRig) query(t *testing.T, claims *auth.Claims, body string) (int, connlogQueryPage) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/inbound/connlog", strings.NewReader(body))
 	if claims != nil {
@@ -180,7 +186,7 @@ func (rig *connlogTestRig) query(t *testing.T, claims *auth.Claims, body string)
 	var envelope struct {
 		Code int              `json:"code"`
 		Msg  string           `json:"msg"`
-		Data []connlogRowView `json:"data"`
+		Data connlogQueryPage `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("query response not an envelope: %s", rec.Body.String())
@@ -204,7 +210,8 @@ func TestConnlogQueryPermissionsAndPagination(t *testing.T) {
 	user := &auth.Claims{Sub: "2", RoleID: 1}
 
 	body := fmt.Sprintf(`{"inboundId":%d,"current":1,"size":2}`, rig.inboundID)
-	code, page1 := rig.query(t, admin, body)
+	code, page := rig.query(t, admin, body)
+	page1 := page.Rows
 	if code != 0 {
 		t.Fatalf("admin page1 code = %d, want 0", code)
 	}
@@ -217,13 +224,15 @@ func TestConnlogQueryPermissionsAndPagination(t *testing.T) {
 	}
 
 	body = fmt.Sprintf(`{"inboundId":%d,"current":2,"size":2}`, rig.inboundID)
-	_, page2 := rig.query(t, admin, body)
+	_, page2p := rig.query(t, admin, body)
+	page2 := page2p.Rows
 	if len(page2) != 1 || page2[0].StartTime != base {
 		t.Fatalf("page2 = %v, want [q1]", page2)
 	}
 
 	body = fmt.Sprintf(`{"inboundId":%d,"current":1,"size":10,"ip":"203.0.113.7"}`, rig.inboundID)
-	_, byIP := rig.query(t, admin, body)
+	_, byIPPage := rig.query(t, admin, body)
+	byIP := byIPPage.Rows
 	if len(byIP) != 2 {
 		t.Fatalf("ip filter rows = %v, want q1+q3 only", byIP)
 	}
@@ -233,5 +242,70 @@ func TestConnlogQueryPermissionsAndPagination(t *testing.T) {
 	}
 	if code, _ := rig.query(t, nil, body); code != 401 {
 		t.Fatalf("anonymous query code = %d, want 401", code)
+	}
+}
+
+func (rig *connlogTestRig) postBatchDropped(t *testing.T, secret string, sequence int64, dropped int64, events string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := fmt.Sprintf(`{"stream":%q,"sequence":%d,"dropped":%d,"events":%s}`, connlogTestStream, sequence, dropped, events)
+	req := httptest.NewRequest(http.MethodPost, "/flow/connlog/v2?secret="+secret, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	rig.h.flowConnlogV2(rec, req)
+	return rec
+}
+
+// 集成遗留定形：dropped 落库＋页脚汇总。批次被真正应用时才按
+// 上报节点入账一次；同批重放（agent 的 dropped 是未确认快照、
+// 会随重放再到）不得重复入账；查询响应是页对象，dropped 汇总
+// 「为本入站供数的入口节点」的累计、retentionDays 回当前口径。
+func TestConnlogDroppedFooterEndToEnd(t *testing.T) {
+	rig := newConnlogTestRig(t)
+	base := int64(1_700_000_100_000)
+	events := fmt.Sprintf(`[
+		{"type":"open","connId":"d1","entryKind":"forward","entryId":"77_2_3_tcp","clientIp":"203.0.113.9","network":"tcp","sessionKind":"tcp_conn","startTime":%d}
+	]`, base)
+
+	if rec := rig.postBatchDropped(t, rig.entrySec, 1, 7, events); rec.Code != http.StatusOK {
+		t.Fatalf("ingest status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	admin := &auth.Claims{Sub: "1", RoleID: 0}
+	body := fmt.Sprintf(`{"inboundId":%d,"current":1,"size":10}`, rig.inboundID)
+	_, page := rig.query(t, admin, body)
+	if page.Dropped != 7 {
+		t.Fatalf("footer dropped = %d, want 7 after the applied batch", page.Dropped)
+	}
+	if page.RetentionDays != 7 {
+		t.Fatalf("footer retentionDays = %d, want the default 7", page.RetentionDays)
+	}
+
+	// 同批逐字节重放：ack 为 Replay，dropped 不得二次入账。
+	if rec := rig.postBatchDropped(t, rig.entrySec, 1, 7, events); rec.Code != http.StatusOK {
+		t.Fatalf("replay status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	_, page = rig.query(t, admin, body)
+	if page.Dropped != 7 {
+		t.Fatalf("footer dropped after replay = %d, want still 7 (no double booking)", page.Dropped)
+	}
+
+	// 下一批带新的未确认丢弃增量：应用后累计推进。
+	events2 := fmt.Sprintf(`[
+		{"type":"open","connId":"d2","entryKind":"forward","entryId":"77_2_3_tcp","clientIp":"203.0.113.10","network":"tcp","sessionKind":"tcp_conn","startTime":%d}
+	]`, base+1000)
+	if rec := rig.postBatchDropped(t, rig.entrySec, 2, 3, events2); rec.Code != http.StatusOK {
+		t.Fatalf("second ingest status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	_, page = rig.query(t, admin, body)
+	if page.Dropped != 10 {
+		t.Fatalf("footer dropped after second batch = %d, want 10", page.Dropped)
+	}
+
+	// 落地节点自身从未供数：其名下入站（此处借未归属查询不可
+	// 见，改查另一构造）——直接验 repo 汇总口径：只含供数节点。
+	ids, err := rig.r.ConnlogEntryNodeIDs(rig.inboundID)
+	if err != nil || len(ids) != 1 || ids[0] != rig.entryID {
+		t.Fatalf("entry node ids = (%v, %v), want [entry node]", ids, err)
+	}
+	if total, err := rig.r.SumConnlogDroppedByNodes([]int64{rig.landingID}); err != nil || total != 0 {
+		t.Fatalf("landing node dropped sum = (%d, %v), want 0", total, err)
 	}
 }

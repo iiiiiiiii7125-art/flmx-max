@@ -455,3 +455,36 @@ func TestConnlogInterruptedCloseSemantics(t *testing.T) {
 		t.Fatalf("orphan row = %+v, want interrupted, end refreshed to 1700000025000, no duration", orphan)
 	}
 }
+
+// 集成遗留：dropped 累计的 repo 口径——upsert 按节点累加、
+// delta<=0 不落行、汇总只算给定节点集。
+func TestConnlogNodeDroppedAccumulate(t *testing.T) {
+	r := newConnlogTestRepo(t)
+	if err := r.db.AutoMigrate(&model.ConnlogNodeDropped{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AddConnlogNodeDropped(11, 0, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if total, err := r.SumConnlogDroppedByNodes([]int64{11}); err != nil || total != 0 {
+		t.Fatalf("sum after zero delta = (%d, %v), want 0", total, err)
+	}
+	if err := r.AddConnlogNodeDropped(11, 5, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AddConnlogNodeDropped(11, 7, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AddConnlogNodeDropped(12, 3, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if total, err := r.SumConnlogDroppedByNodes([]int64{11}); err != nil || total != 12 {
+		t.Fatalf("node 11 sum = (%d, %v), want 12", total, err)
+	}
+	if total, err := r.SumConnlogDroppedByNodes([]int64{11, 12}); err != nil || total != 15 {
+		t.Fatalf("both nodes sum = (%d, %v), want 15", total, err)
+	}
+	if total, err := r.SumConnlogDroppedByNodes(nil); err != nil || total != 0 {
+		t.Fatalf("empty set sum = (%d, %v), want 0", total, err)
+	}
+}

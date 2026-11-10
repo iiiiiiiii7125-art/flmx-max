@@ -1284,7 +1284,7 @@ type NodeMetric struct {
 	ActiveSessions      int64 `gorm:"column:active_sessions" json:"activeSessions"`
 	BudgetRejectedTotal int64 `gorm:"column:budget_rejected_total" json:"budgetRejectedTotal"`
 	BudgetEvictedTotal  int64 `gorm:"column:budget_evicted_total" json:"budgetEvictedTotal"`
-	Uptime         int64 `gorm:"column:uptime" json:"uptime"`
+	Uptime              int64 `gorm:"column:uptime" json:"uptime"`
 }
 
 func (NodeMetric) TableName() string { return "node_metric" }
@@ -1360,6 +1360,25 @@ type InboundConnLog struct {
 }
 
 func (InboundConnLog) TableName() string { return "inbound_conn_log" }
+
+// ConnlogNodeDropped is the panel-side cumulative count of
+// connection-log events an entry node's agent dropped before they
+// could be reported (design §4.2: buffer/spool overflow drops the
+// oldest and counts — losing data is acceptable, hiding the loss
+// is not). The agent attaches its not-yet-acknowledged drop count
+// to every batch; the panel books the delta under the reporting
+// node exactly when the batch is applied (replays and behind
+// batches never double-book). The inbound log modal's footer sums
+// this over the nodes that actually feed the inbound. Telemetry
+// bookkeeping: NOT part of backups (same ruling as inbound_conn_log).
+type ConnlogNodeDropped struct {
+	ID           int64 `gorm:"primaryKey;autoIncrement" json:"id"`
+	NodeID       int64 `gorm:"column:node_id;not null;uniqueIndex" json:"nodeId"`
+	DroppedTotal int64 `gorm:"column:dropped_total;not null;default:0" json:"droppedTotal"`
+	UpdatedTime  int64 `gorm:"column:updated_time;not null;default:0" json:"updatedTime"`
+}
+
+func (ConnlogNodeDropped) TableName() string { return "connlog_node_dropped" }
 
 type TunnelMetric struct {
 	ID int64 `gorm:"primaryKey;autoIncrement" json:"id"`
