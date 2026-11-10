@@ -663,6 +663,13 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       return;
     }
+    if ([...userForm.user].length > 100) {
+      // AP-5 同族（普查差额）：后端用户名上限 100 字符，此前本页
+      // 只判非空，超长名要到后端才被拒，前端先行同口径拦截。
+      toast.error("用户名长度必须为 1-100 个字符");
+
+      return;
+    }
     if (!isEdit && !userForm.pwd) {
       toast.error("请输入密码");
 

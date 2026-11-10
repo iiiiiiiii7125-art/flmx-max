@@ -55,6 +55,7 @@ type IssueKind =
   | "kernel"
   | "inbound"
   | "probe"
+  | "relaygone"
   | "subflow"
   | "subexpire";
 
@@ -91,6 +92,11 @@ const KINDS: Record<
     label: (n) => `${n} 个节点连不上`,
     hint: "从面板服务器检测",
     path: "/inbound",
+  },
+  relaygone: {
+    label: (n) => `${n} 条中转线路已损坏`,
+    hint: "对应的转发已不存在、线路已失效，删除或重建",
+    path: "/relay",
   },
   subflow: {
     label: (n) => `${n} 个分享订阅流量快用完`,
@@ -311,6 +317,12 @@ export function AdminOverview() {
   const relaysUp = relays.filter(
     (r) => r.forwardExists && r.forwardStatus === 1,
   );
+  // AP-9：未计入「正常」的两类必须分开——转发已不存在（线路损坏）
+  // 与转发被停用，此前一律并作「未启用」误导管理员。
+  const relaysMissing = relays.filter((r) => !r.forwardExists);
+  const relaysDisabled = relays.filter(
+    (r) => r.forwardExists && r.forwardStatus !== 1,
+  );
   const shares = subs.filter((s) => s.kind === "share");
   const activeSubs = subs.filter((s) => s.active);
 
@@ -373,6 +385,16 @@ export function AdminOverview() {
         detail: i.probe?.error || "连不上",
       });
     }
+  }
+  for (const r of relaysMissing) {
+    // AP-9：损坏线路（底层转发已删）必须进「需要处理」点名，
+    // 不能只沉在指标差集里冒充「未启用」。
+    issues.push({
+      kind: "relaygone",
+      level: "warning",
+      name: r.name,
+      detail: "对应的转发已不存在",
+    });
   }
   for (const s of shares) {
     const used = s.uploadBytes + s.downloadBytes;
@@ -544,7 +566,16 @@ export function AdminOverview() {
               ? "还没有中转"
               : relaysUp.length === relays.length
                 ? "全部正常"
-                : `${relays.length - relaysUp.length} 条未启用`
+                : [
+                    relaysMissing.length > 0
+                      ? `转发已不存在 ${relaysMissing.length} 条`
+                      : null,
+                    relaysDisabled.length > 0
+                      ? `已停用 ${relaysDisabled.length} 条`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
           }
           footTone={
             relays.length > relaysUp.length

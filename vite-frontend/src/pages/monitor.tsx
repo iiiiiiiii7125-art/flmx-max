@@ -1,15 +1,9 @@
 import type { MonitorNodeApiItem } from "@/api/types";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { Navigate } from "react-router-dom";
-import {
-  RefreshCw,
-  LayoutGrid,
-  List,
-  Server,
-  ArrowRightLeft,
-} from "lucide-react";
+import { LayoutGrid, List } from "lucide-react";
 
 import { AnimatedPage } from "@/components/animated-page";
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -17,7 +11,6 @@ import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { getMonitorAccess, getMonitorNodes } from "@/api";
 import { MonitorView } from "@/pages/node/monitor-view";
 import { TunnelMonitorView } from "@/pages/node/tunnel-monitor-view";
-import { useNodeRealtime } from "@/pages/node/use-node-realtime";
 import { getAdminFlag } from "@/utils/session";
 
 type MonitorNode = {
@@ -27,21 +20,12 @@ type MonitorNode = {
   version?: string;
 };
 
-type MonitorTab = "nodes" | "tunnels";
-
-const formatBytesPerSecond = (bytesPerSecond: number): string => {
-  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return "0 B/s";
-
-  const k = 1024;
-  const sizes = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"];
-  const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k));
-
-  return `${parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-};
-
 /**
  * 监控： admins have it under 节点 (each node's 监控) and 中转 (质量);
  * users allowed to see monitoring get this overview (DA-1).
+ * AP-6：原 AdminMonitorOverview 管理员总览已删——管理员在 MonitorPage
+ * 入口即重定向 /node，该总览自监控权限收窄后不可达（连带其英雄指标
+ * 的假 0 与写死装饰柱，AP-3）。
  */
 export default function MonitorPage() {
   return getAdminFlag() ? <Navigate replace to="/node" /> : <MonitorOverview />;
@@ -87,7 +71,10 @@ function MonitorOverview() {
   }, []);
 
   if (accessState === "loading") return null;
-  if (accessState === "admin") return <AdminMonitorOverview />;
+  // AP-6：管理员在 MonitorPage 入口已重定向到 /node，本分支与原
+  // AdminMonitorOverview 总览同为不可达死代码（一并删除）；探针异常
+  // 报 admin 时同样按入口逻辑重定向，保持单一行为面。
+  if (accessState === "admin") return <Navigate replace to="/node" />;
   if (accessState === "denied") {
     return (
       <AnimatedPage className="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
@@ -133,383 +120,6 @@ function UserTunnelMonitorOverview() {
         </div>
       </div>
       <TunnelMonitorView viewMode={viewMode} />
-    </AnimatedPage>
-  );
-}
-
-function AdminMonitorOverview() {
-  const [nodes, setNodes] = useState<MonitorNodeApiItem[]>([]);
-  const [nodesLoading, setNodesLoading] = useState(false);
-  const [nodesError, setNodesError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
-  const [activeTab, setActiveTab] = useState<MonitorTab>("nodes");
-  // R2X-038：后端 access.admin 透传给 MonitorView，只读用户不渲染写入口。
-  const [canWrite, setCanWrite] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const res = await getMonitorAccess();
-
-        if (!cancelled && res.code === 0 && res.data) {
-          setCanWrite(Boolean(res.data.admin));
-        }
-      } catch {
-        // 查询失败保持只读呈现（后端仍以 403 兜底写入口）。
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const [realtimeNodeStatus, setRealtimeNodeStatus] = useState<
-    Record<number, "online" | "offline">
-  >({});
-  const [realtimeNodeMetrics, setRealtimeNodeMetrics] = useState<
-    Record<number, any>
-  >({});
-
-  const handleRealtimeMessage = useCallback((message: any) => {
-    const nodeId = Number(message?.id ?? 0);
-
-    if (!nodeId || Number.isNaN(nodeId)) return;
-
-    const type = String(message?.type ?? "");
-    const payload = message?.data;
-
-    if (type === "status") {
-      const status = Number(payload);
-
-      setRealtimeNodeStatus((prev) => ({
-        ...prev,
-        [nodeId]: status === 1 ? "online" : "offline",
-      }));
-
-      return;
-    }
-
-    if (type === "metric") {
-      let raw = payload;
-
-      if (typeof raw === "string") {
-        try {
-          raw = JSON.parse(raw);
-        } catch {
-          return;
-        }
-      }
-      if (!raw || typeof raw !== "object") return;
-      const metric = raw as any;
-
-      setRealtimeNodeMetrics((prev) => {
-        // A-F-02: no `?? 0` — a field the frame omits falls back to the
-        // previous frame's value, and a field never reported stays
-        // undefined so the aggregates below can leave it out instead
-        // of counting a fabricated 0.
-        const prevMetric = prev[nodeId];
-        const num = (camel: string, snake: string) => {
-          const raw = metric[camel] ?? metric[snake];
-
-          if (raw === undefined || raw === null) return undefined;
-          const n = Number(raw);
-
-          return Number.isFinite(n) ? n : undefined;
-        };
-
-        return {
-          ...prev,
-          [nodeId]: {
-            cpuUsage: num("cpuUsage", "cpu_usage") ?? prevMetric?.cpuUsage,
-            netInSpeed:
-              num("netInSpeed", "net_in_speed") ?? prevMetric?.netInSpeed,
-            netOutSpeed:
-              num("netOutSpeed", "net_out_speed") ?? prevMetric?.netOutSpeed,
-            tcpConns: num("tcpConns", "tcp_conns") ?? prevMetric?.tcpConns,
-            udpConns: num("udpConns", "udp_conns") ?? prevMetric?.udpConns,
-          },
-        };
-      });
-    }
-  }, []);
-
-  useNodeRealtime({
-    onMessage: handleRealtimeMessage,
-    enabled: true,
-  });
-
-  // loadNodes 序号：手动刷新与 30s 轮询可在途并发，只有最新一轮可落 state
-  const loadNodesSeqRef = useRef(0);
-
-  const loadNodes = useCallback(async (options?: { silent?: boolean }) => {
-    const silent = options?.silent ?? false;
-    const seq = (loadNodesSeqRef.current += 1);
-
-    if (!silent) setNodesLoading(true);
-    try {
-      const response = await getMonitorNodes();
-
-      if (loadNodesSeqRef.current !== seq) {
-        return;
-      }
-
-      if (response.code === 0 && Array.isArray(response.data)) {
-        setNodesError(null);
-        setNodes(response.data);
-
-        return;
-      }
-
-      if (response.code === 403) {
-        setNodes([]);
-        setNodesError(response.msg || "暂无监控权限，请联系管理员授权");
-
-        return;
-      }
-
-      if (!silent) toast.error(response.msg || "加载节点失败");
-    } catch {
-      if (!silent && loadNodesSeqRef.current === seq) {
-        toast.error("加载节点失败");
-      }
-    } finally {
-      if (!silent && loadNodesSeqRef.current === seq) {
-        setNodesLoading(false);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadNodes();
-  }, [loadNodes]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      // 后台标签暂停轮询，切回前台立即补一轮
-      if (document.hidden) {
-        return;
-      }
-      void loadNodes({ silent: true });
-    }, 30_000);
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        void loadNodes({ silent: true });
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [loadNodes]);
-
-  const nodeMap = useMemo(() => {
-    const list: MonitorNode[] = nodes
-      .filter((n) => Number(n.id) > 0)
-      .map((n) => ({
-        id: Number(n.id),
-        name: String(n.name ?? ""),
-        connectionStatus:
-          realtimeNodeStatus[Number(n.id)] ||
-          (n.status === 1 ? "online" : "offline"),
-        version: n.version,
-      }));
-
-    return new Map<number, MonitorNode>(list.map((n) => [n.id, n]));
-  }, [nodes, realtimeNodeStatus]);
-
-  const aggregateMetrics = useMemo(() => {
-    let totalCpu = 0;
-    let cpuReporters = 0;
-    let totalConns = 0;
-    let totalNetIn = 0;
-    let totalNetOut = 0;
-    let onlineCount = 0;
-
-    nodeMap.forEach((node) => {
-      if (node.connectionStatus === "online") {
-        onlineCount++;
-        const metric = realtimeNodeMetrics[node.id];
-
-        if (metric) {
-          // A-F-02: unreported figures are left out, never counted as
-          // 0 — the CPU average divides by the nodes that actually
-          // reported CPU, and the sums only add reported values (the
-          // `?? 0` here is the summation identity for an absent addend,
-          // not a displayed figure).
-          if (metric.cpuUsage !== undefined) {
-            totalCpu += metric.cpuUsage;
-            cpuReporters++;
-          }
-          totalConns += (metric.tcpConns ?? 0) + (metric.udpConns ?? 0);
-          totalNetIn += metric.netInSpeed ?? 0;
-          totalNetOut += metric.netOutSpeed ?? 0;
-        }
-      }
-    });
-
-    const avgCpu = cpuReporters > 0 ? totalCpu / cpuReporters : 0;
-
-    return {
-      avgCpu,
-      totalConns,
-      totalBandwidth: totalNetIn + totalNetOut,
-    };
-  }, [nodeMap, realtimeNodeMetrics]);
-
-  return (
-    <AnimatedPage className="px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
-      {/* 顶部英雄数据指标 (Hero Metrics) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
-          <div className="flex justify-between items-center z-10 relative">
-            <span className="glass-surface rounded-full px-2.5 py-1 font-semibold text-foreground text-sm">
-              System Load
-            </span>
-          </div>
-          <div className="z-10 relative w-fit rounded-xl glass-surface px-3 py-1.5">
-            <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
-              {aggregateMetrics.avgCpu.toFixed(1)}%
-            </span>
-          </div>
-          <div className="absolute bottom-0 left-0 right-0 h-12 flex items-end gap-1 px-6 pb-4 opacity-50 z-0">
-            <div className="w-full bg-primary/40 h-2 rounded-t-sm" />
-            <div className="w-full bg-primary/40 h-3 rounded-t-sm" />
-            <div className="w-full bg-primary/40 h-1.5 rounded-t-sm" />
-            <div className="w-full bg-primary/40 h-4 rounded-t-sm" />
-            <div className="w-full bg-primary/40 h-2.5 rounded-t-sm" />
-            <div className="w-full bg-primary h-5 rounded-t-sm" />
-          </div>
-        </div>
-
-        <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
-          <div className="flex justify-between items-center z-10 relative">
-            <span className="glass-surface rounded-full px-2.5 py-1 font-semibold text-foreground text-sm">
-              Active Connections
-            </span>
-          </div>
-          <div className="z-10 relative w-fit rounded-xl glass-surface px-3 py-1.5">
-            <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
-              {aggregateMetrics.totalConns}
-            </span>
-          </div>
-          <div className="absolute bottom-0 left-0 right-0 h-12 flex items-end gap-1 px-6 pb-4 opacity-50 z-0">
-            <div className="w-full bg-success/40 h-3.5 rounded-t-sm" />
-            <div className="w-full bg-success/40 h-4.5 rounded-t-sm" />
-            <div className="w-full bg-success/40 h-2.5 rounded-t-sm" />
-            <div className="w-full bg-success/40 h-6 rounded-t-sm" />
-            <div className="w-full bg-success/40 h-5.5 rounded-t-sm" />
-            <div className="w-full bg-success h-7 rounded-t-sm" />
-          </div>
-        </div>
-
-        <div className="glass-card rounded-2xl shadow-sm p-6 relative overflow-hidden flex flex-col justify-between h-40">
-          <div className="flex justify-between items-center z-10 relative">
-            <span className="glass-surface rounded-full px-2.5 py-1 font-semibold text-foreground text-sm">
-              Bandwidth
-            </span>
-          </div>
-          <div className="z-10 relative w-fit rounded-xl glass-surface px-3 py-1.5">
-            <span className="text-4xl font-bold tracking-tight tabular-nums text-foreground">
-              {formatBytesPerSecond(aggregateMetrics.totalBandwidth)}
-            </span>
-          </div>
-          <div className="absolute bottom-0 left-0 right-0 h-12 flex items-end gap-1 px-6 pb-4 opacity-50 z-0">
-            <div className="w-full bg-secondary/40 h-2 rounded-t-sm" />
-            <div className="w-full bg-secondary/40 h-3 rounded-t-sm" />
-            <div className="w-full bg-secondary/40 h-5 rounded-t-sm" />
-            <div className="w-full bg-secondary/40 h-8 rounded-t-sm" />
-            <div className="w-full bg-secondary/40 h-7 rounded-t-sm" />
-            <div className="w-full bg-secondary h-10 rounded-t-sm" />
-          </div>
-        </div>
-      </div>
-
-      <div className="mb-6 space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0 rounded-xl glass-card px-3 py-2">
-            <h2 className="text-xl font-semibold truncate">监控面板</h2>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              isIconOnly
-              size="sm"
-              variant="flat"
-              onPress={() => setViewMode(viewMode === "list" ? "grid" : "list")}
-            >
-              {viewMode === "list" ? (
-                <LayoutGrid className="w-4 h-4" />
-              ) : (
-                <List className="w-4 h-4" />
-              )}
-            </Button>
-            {activeTab === "nodes" && (
-              <Button
-                isLoading={nodesLoading}
-                size="sm"
-                variant="flat"
-                onPress={() => loadNodes()}
-              >
-                <RefreshCw className="w-4 h-4 mr-1" />
-                刷新节点
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {/* Tab Switcher */}
-        <div className="glass-surface flex items-center gap-1 p-1 rounded-full w-fit shadow-sm">
-          <button
-            className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
-              activeTab === "nodes"
-                ? "bg-gradient-to-r from-primary-700 to-secondary-700 shadow-sm text-white"
-                : "text-foreground hover:bg-white/30"
-            }`}
-            onClick={() => setActiveTab("nodes")}
-          >
-            <Server className="w-4 h-4" />
-            节点
-          </button>
-          <button
-            className={`flex items-center gap-1.5 px-5 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ease-refined ${
-              activeTab === "tunnels"
-                ? "bg-gradient-to-r from-primary-700 to-secondary-700 shadow-sm text-white"
-                : "text-foreground hover:bg-white/30"
-            }`}
-            onClick={() => setActiveTab("tunnels")}
-          >
-            <ArrowRightLeft className="w-4 h-4" />
-            隧道
-          </button>
-        </div>
-
-        {nodesError && activeTab === "nodes" ? (
-          <Card>
-            <CardHeader>
-              <h3 className="text-sm font-semibold">节点列表</h3>
-            </CardHeader>
-            <CardBody>
-              <div className="text-sm text-foreground">{nodesError}</div>
-            </CardBody>
-          </Card>
-        ) : null}
-      </div>
-
-      {activeTab === "nodes" ? (
-        <MonitorView
-          canWrite={canWrite}
-          nodeMap={nodeMap}
-          viewMode={viewMode}
-        />
-      ) : (
-        <TunnelMonitorView viewMode={viewMode} />
-      )}
     </AnimatedPage>
   );
 }

@@ -50,7 +50,9 @@ export default function ProfilePage() {
 
   useEffect(() => {
     // 获取用户信息
-    setUsername(getSessionName() || "Admin");
+    // AP-11：会话名缺失时不得回落「Admin」冒充身份，普通用户会被
+    // 误标成管理员名；用诚实占位。
+    setUsername(getSessionName() || "未命名用户");
     setIsAdmin(getAdminFlag());
   }, []);
 
@@ -97,8 +99,9 @@ export default function ProfilePage() {
 
       return false;
     }
-    if (passwordForm.newUsername.length < 3) {
-      toast.error("用户名长度至少3位");
+    if ([...passwordForm.newUsername].length > 100) {
+      // AP-5：与后端同口径——用户名 1-100 个字符（理由同 change-password 页）
+      toast.error("用户名长度必须为 1-100 个字符");
 
       return false;
     }
@@ -193,7 +196,8 @@ export default function ProfilePage() {
                     {isAdmin ? "管理员" : "普通用户"}
                   </span>
                   <span className="text-xs font-semibold text-foreground">
-                    {new Date().toLocaleDateString("zh-CN")}
+                    {/* AP-11：裸日期无标签、语义不明，注明是今天日期 */}
+                    今天：{new Date().toLocaleDateString("zh-CN")}
                   </span>
                 </div>
               </div>
@@ -310,7 +314,7 @@ export default function ProfilePage() {
                 <div className="space-y-4">
                   <Input
                     label="新用户名"
-                    placeholder="请输入新用户名（至少3位）"
+                    placeholder="请输入新用户名（1-100 个字符）"
                     value={passwordForm.newUsername}
                     variant="bordered"
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) =>

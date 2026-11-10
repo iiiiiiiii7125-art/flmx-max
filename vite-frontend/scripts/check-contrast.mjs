@@ -1898,11 +1898,12 @@ const DEFAULT_700_FILE_PINS = {
   "components/ui/input.tsx": 1, // bg-content1 占位符（PAIRS 钉 10.44）
   "components/ui/textarea.tsx": 1, // 同上
   "pages/config.tsx": 1, // 应用名预览小字（次级示意）
-  "pages/dashboard.tsx": 1, // bg-tray 徽标
+  // pages/dashboard.tsx 与 pages/subscription/controls.tsx 两条已销：
+  // 前者的唯一 -700 在已删的到期提醒卡内（AP-10 死代码删除），后者
+  // 在已删的 EditorTabs 徽标内（C3-01），实扫归零、登记同步撤销。
   "pages/dashboard/admin-overview.tsx": 1, // bg-tray 芯片
   "pages/forward.tsx": 5, // glass-inset 地址钮 ×4＋inset 页眉组标题 ×1
   "pages/node/node-row.tsx": 4, // bg-tray 芯片 hover ×2＋glass-inset 信息盒 ×2
-  "pages/subscription/controls.tsx": 1, // bg-default-300 实色徽标
 };
 {
   const d700Hex = tokens["--default-700"];
@@ -2364,7 +2365,7 @@ const SOLID_FILL_PINS = {
   "pages/inbound.tsx": 1,
   "pages/inbound/target-picker.tsx": 1,
   "pages/subscription.tsx": 4,
-  "pages/subscription/rename-rules.tsx": 1,
+  // pages/subscription/rename-rules.tsx 已整文件删除（C3-01 死代码），登记撤销。
   "pages/node/tune-modal.tsx": 1,
   // 控件填充：模板页两处原生 select（templates 与 builder 的
   // selectCls）——R4-S1-02 点名一并登记，属控件口径、非表面。
@@ -2401,7 +2402,7 @@ const SOLID_FILL_PINS_DEFAULT_300 = {
   "pages/limit.tsx": 1,
   "pages/node/monitor-view.tsx": 3,
   "pages/node/node-row.tsx": 1,
-  "pages/subscription/controls.tsx": 1, // 实色徽标（default-700 登记段已引此面）
+  // pages/subscription/controls.tsx 的 -300 徽标随 EditorTabs 删除（C3-01），登记撤销。
   "pages/subscription.tsx": 1,
 };
 {

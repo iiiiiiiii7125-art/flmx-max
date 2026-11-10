@@ -32,14 +32,8 @@ import {
   flowLimitBytes,
 } from "@/utils/traffic";
 import {
-  formatNodeRenewalTime,
-  getNodeRenewalCycleLabel,
-  getNodeRenewalSnapshot,
-} from "@/pages/node/renewal";
-import {
   useDashboardData,
   type DashboardForward as Forward,
-  type DashboardNodeExpiryItem,
   type DashboardUserTunnel as UserTunnel,
 } from "@/pages/dashboard/use-dashboard-data";
 
@@ -70,10 +64,10 @@ function UserDashboard() {
     userTunnels,
     forwardList,
     statisticsFlows,
-    nodeExpiryReminders,
     isAdmin,
     announcement,
     isAnnouncementModalOpen,
+    setIsAnnouncementModalOpen,
     dismissAnnouncementModal,
   } = useDashboardData();
 
@@ -93,97 +87,6 @@ function UserDashboard() {
     return value.toString();
   };
 
-  const getNodeExpiryStatus = (
-    nextDueTime?: number,
-    renewalState: "unset" | "expired" | "dueSoon" | "scheduled" = "unset",
-  ) => {
-    if (!nextDueTime || renewalState === "unset") {
-      return {
-        label: "未设置",
-        badgeClassName: "bg-tray text-default-700",
-        nextDueTime: undefined as number | undefined,
-      };
-    }
-
-    const diffDays = Math.ceil(
-      (nextDueTime - Date.now()) / (1000 * 60 * 60 * 24),
-    );
-
-    if (renewalState === "expired" || diffDays <= 0) {
-      return {
-        label: "已逾期",
-        badgeClassName:
-          "tray-danger",
-        nextDueTime,
-      };
-    }
-
-    if (diffDays === 1) {
-      return {
-        label: "明天到期",
-        badgeClassName: "tray-warning",
-        nextDueTime,
-      };
-    }
-
-    return {
-      label: `${diffDays}天后到期`,
-      badgeClassName:
-        diffDays <= 7
-          ? "tray-warning"
-          : "tray-success",
-      nextDueTime,
-    };
-  };
-
-  const renderNodeExpiryCard = (node: DashboardNodeExpiryItem) => {
-    const renewalSnapshot = getNodeRenewalSnapshot(
-      node.expiryTime,
-      node.renewalCycle,
-    );
-    const expiryStatus = getNodeExpiryStatus(
-      renewalSnapshot.nextDueTime,
-      renewalSnapshot.state,
-    );
-
-    return (
-      <div
-        key={node.id}
-        className="rounded-xl border border-warning-500/25 bg-warning-500/10 p-4"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-foreground truncate">
-              {node.name}
-            </div>
-            <div className="mt-1 text-xs font-semibold text-foreground">
-              节点 ID: {node.id}
-            </div>
-          </div>
-          <span
-            className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${expiryStatus.badgeClassName}`}
-          >
-            {expiryStatus.label}
-          </span>
-        </div>
-
-        <div className="mt-3 text-sm text-default-800">
-          {formatNodeRenewalTime(renewalSnapshot.nextDueTime)}
-        </div>
-
-        <div className="mt-1 text-xs font-semibold text-foreground">
-          {getNodeRenewalCycleLabel(node.renewalCycle)}
-        </div>
-
-        {node.remark?.trim() && (
-          <p className="mt-3 line-clamp-2 text-xs font-semibold leading-5 text-foreground">
-            {node.remark.trim()}
-          </p>
-        )}
-      </div>
-    );
-  };
-
   // 处理24小时流量统计数据
   const processFlowChartData = () => {
     // 生成最近24小时的时间数组（从当前小时往前推24小时）
@@ -201,7 +104,13 @@ function UserDashboard() {
     const flowMap = new Map<string, number>();
 
     statisticsFlows.forEach((item) => {
-      flowMap.set(item.time, item.flow || 0);
+      // AP-8：同一小时键只取首见行——后端按时间倒序返回，先到的
+      // 是该小时较新的一行；此前无条件 set 让靠后的旧行覆盖新值，
+      // 图表静默画出陈旧流量。（键本身只有 HH:00、无日期，跨日
+      // 同小时仍会并格，根治须后端补日期字段，非前端可解。）
+      if (!flowMap.has(item.time)) {
+        flowMap.set(item.time, item.flow || 0);
+      }
     });
 
     // 生成图表数据，没有数据的小时显示为0
@@ -714,14 +623,15 @@ function UserDashboard() {
       </div>
       {announcement && <AnnouncementBanner announcement={announcement} />}
       {announcement && (
-        // R7-F5-03：关闭即落已读——onClose 与「不再提示」同走
-        // dismissAnnouncementModal（写按用户分键的
-        // flmx_announcement_seen_time:<userId>，R8-044），
+        // AP-4（取代 R7-F5-03 的「关闭即落已读」）：「关闭」只关本次、
+        // 不落已读，下次进入仍会弹出（与按钮文案字面一致）；只有
+        // 「不再提示」才走 dismissAnnouncementModal 写已读键
+        // （按用户分键 flmx_announcement_seen_time:<userId>，R8-044）。
         // 公告内容更新（update_time 变大）后仍会重新弹窗。
         <AnnouncementModal
           announcement={announcement}
           isOpen={isAnnouncementModalOpen}
-          onClose={dismissAnnouncementModal}
+          onClose={() => setIsAnnouncementModalOpen(false)}
           onDontShowAgain={dismissAnnouncementModal}
         />
       )}
@@ -863,54 +773,6 @@ function UserDashboard() {
         formatFlow={formatFlow}
         statisticsFlowsCount={statisticsFlows.length}
       />
-
-      {isAdmin && nodeExpiryReminders.length > 0 && (
-        <Card className="mb-6 lg:mb-8 border-warning/30 shadow-sm">
-          <CardHeader className="pb-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between w-full">
-              <div className="flex items-center gap-2">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl tray-warning">
-                  <svg
-                    aria-hidden="true"
-                    className="h-5 w-5"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path
-                      clipRule="evenodd"
-                      d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.981-1.742 2.981H4.42c-1.53 0-2.492-1.647-1.743-2.98l5.58-9.92zM11 13a1 1 0 10-2 0 1 1 0 002 0zm-1-7a1 1 0 00-1 1v3a1 1 0 102 0V7a1 1 0 00-1-1z"
-                      fillRule="evenodd"
-                    />
-                  </svg>
-                </div>
-                <div>
-                  <h2 className="text-lg lg:text-xl font-semibold text-foreground">
-                    节点到期提醒
-                  </h2>
-                  <p className="text-sm text-foreground">
-                    展示 7
-                    天内需要续费或已经逾期的节点，基于月付/季付/年付周期自动推算
-                  </p>
-                </div>
-              </div>
-              <span className="inline-flex w-fit items-center rounded-full tray-warning px-3 py-1 text-xs font-semibold ring-1 ring-amber-200/80">
-                {nodeExpiryReminders.length} 个提醒
-              </span>
-            </div>
-          </CardHeader>
-          <CardBody className="pt-0">
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-              {nodeExpiryReminders.slice(0, 6).map(renderNodeExpiryCard)}
-            </div>
-            {nodeExpiryReminders.length > 6 && (
-              <p className="mt-4 text-xs font-semibold text-foreground">
-                还有 {nodeExpiryReminders.length - 6}{" "}
-                个节点未展开显示，可前往节点页面继续处理。
-              </p>
-            )}
-          </CardBody>
-        </Card>
-      )}
 
       {/* 隧道权限 - 管理员不显示 */}
       {!isAdmin && (

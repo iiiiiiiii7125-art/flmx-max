@@ -348,8 +348,9 @@ export default function AdminLayout({
 
       return false;
     }
-    if (passwordForm.newUsername.length < 3) {
-      toast.error("用户名长度至少3位");
+    if ([...passwordForm.newUsername].length > 100) {
+      // AP-5：与后端同口径——用户名 1-100 个字符（理由同 change-password 页）
+      toast.error("用户名长度必须为 1-100 个字符");
 
       return false;
     }
@@ -666,7 +667,7 @@ export default function AdminLayout({
                 <div className="space-y-4">
                   <Input
                     label="新用户名"
-                    placeholder="请输入新用户名（至少3位）"
+                    placeholder="请输入新用户名（1-100 个字符）"
                     value={passwordForm.newUsername}
                     variant="bordered"
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) =>

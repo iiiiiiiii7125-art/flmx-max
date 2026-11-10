@@ -41,8 +41,10 @@ export default function ChangePasswordPage() {
 
     if (!form.newUsername.trim()) {
       newErrors.newUsername = "请输入新用户名";
-    } else if (form.newUsername.length < 3) {
-      newErrors.newUsername = "用户名长度至少3位";
+    } else if ([...form.newUsername].length > 100) {
+      // AP-5：与后端同口径——用户名 1-100 个字符；此前前端 ≥3 的
+      // 私自下限会拦住后端合法的 1-2 字符存量用户名改密/改名。
+      newErrors.newUsername = "用户名长度必须为 1-100 个字符";
     }
 
     if (!form.currentPassword.trim()) {
@@ -148,7 +150,7 @@ export default function ChangePasswordPage() {
                   isDisabled={loading}
                   isInvalid={!!errors.newUsername}
                   label="新用户名"
-                  placeholder="请输入新用户名（至少3位）"
+                  placeholder="请输入新用户名（1-100 个字符）"
                   value={form.newUsername}
                   variant="bordered"
                   onChange={(e) =>

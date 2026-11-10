@@ -210,6 +210,7 @@ interface BatchProgressState {
 interface BatchResultModalState {
   failures: BatchOperationFailure[];
   open: boolean;
+  pending: BatchOperationFailure[];
   summary: string;
   title: string;
 }
@@ -217,6 +218,7 @@ interface BatchResultModalState {
 const EMPTY_BATCH_RESULT_MODAL_STATE: BatchResultModalState = {
   failures: [],
   open: false,
+  pending: [],
   summary: "",
   title: "",
 };
@@ -1849,26 +1851,23 @@ export default function ForwardPage() {
     } catch {}
   };
 
-  const applyForwardList = useCallback(
-    async (items: Forward[]) => {
-      const mergedForwards = normalizeForwardItems(items);
+  const applyForwardList = useCallback(async (items: Forward[]) => {
+    const mergedForwards = normalizeForwardItems(items);
 
-      setForwards(mergedForwards);
+    setForwards(mergedForwards);
 
-      const currentUserId = JwtUtil.getUserIdFromToken();
-      const { order, fromDatabase } = buildForwardOrder(
-        mergedForwards,
-        currentUserId,
-      );
+    const currentUserId = JwtUtil.getUserIdFromToken();
+    const { order, fromDatabase } = buildForwardOrder(
+      mergedForwards,
+      currentUserId,
+    );
 
-      setForwardOrder(order);
+    setForwardOrder(order);
 
-      if (fromDatabase) {
-        saveOrder(buildForwardOrderLocalKey(currentUserId), order);
-      }
-    },
-    [],
-  );
+    if (fromDatabase) {
+      saveOrder(buildForwardOrderLocalKey(currentUserId), order);
+    }
+  }, []);
 
   const refreshForwardList = useCallback(
     async (lod = true) => {
@@ -1917,7 +1916,12 @@ export default function ForwardPage() {
         if (tunnelsRes.code === 0) {
           setTunnels(tunnelsRes.data || []);
         } else {
+          // FT-6：隧道列表拉取失败不得静默——新建/导入/导出/批量换隧道的
+          // 隧道选择器全靠这份数据，失败时必须给用户可达信号。
+          toast.error(tunnelsRes.msg || "获取隧道列表失败，隧道选择器暂无数据");
         }
+
+        const auxLoadFailures: string[] = [];
 
         if (
           allTunnelsRes.status === "fulfilled" &&
@@ -1925,6 +1929,8 @@ export default function ForwardPage() {
           allTunnelsRes.value.code === 0
         ) {
           setAllTunnels((allTunnelsRes.value.data || []) as Tunnel[]);
+        } else if (isAdmin) {
+          auxLoadFailures.push("隧道总表");
         }
 
         if (
@@ -1933,10 +1939,20 @@ export default function ForwardPage() {
           nodesRes.value.code === 0
         ) {
           setNodes((nodesRes.value.data || []) as Node[]);
+        } else if (isAdmin) {
+          auxLoadFailures.push("节点列表");
         }
 
         if (speedLimitsRes && speedLimitsRes.code === 0) {
           setSpeedLimits(speedLimitsRes.data || []);
+        } else if (isAdmin && speedLimitsRes) {
+          auxLoadFailures.push("限速列表");
+        }
+
+        if (auxLoadFailures.length > 0) {
+          toast.error(
+            `部分基础数据加载失败（${auxLoadFailures.join("、")}），相关名称显示与下拉可能不完整`,
+          );
         }
       } catch {
         toast.error("加载数据失败");
@@ -1990,8 +2006,10 @@ export default function ForwardPage() {
 
     if (!form.name.trim()) {
       newErrors.name = "请输入规则名称";
-    } else if (form.name.length < 2 || form.name.length > 50) {
-      newErrors.name = "规则名称长度应在2-50个字符之间";
+    } else if ([...form.name].length > 100) {
+      // FT-10：与后端 mutations.go 同口径——非空＋≤100 字符（按 rune 计），
+      // 此前前端单方面收紧为 2-50，存量合法名称编辑时未改名也过不了提交。
+      newErrors.name = "规则名称长度不能超过100个字符";
     }
 
     if (!form.tunnelId) {
@@ -2101,7 +2119,10 @@ export default function ForwardPage() {
             } else if (colonCount === 1) {
               const [host, port] = seg.split(":");
 
-              if (!ipv4HostPattern.test(host) && !domainHostPattern.test(host)) {
+              if (
+                !ipv4HostPattern.test(host) &&
+                !domainHostPattern.test(host)
+              ) {
                 remoteError = `第${i + 1}行地址格式错误`;
               } else if (!isValidPort(port)) {
                 remoteError = `第${i + 1}行地址端口无效（须为 1-65535 的数字端口）`;
@@ -2763,8 +2784,10 @@ export default function ForwardPage() {
     setExportLoading(true);
 
     try {
-      // 获取要导出的规则列表
-      const forwardsToExport = sortedForwards.filter(
+      // FT-2：导出必须取未筛选的全集（原始 forwards），只按所选隧道过滤；
+      // 此前误用已筛选的 sortedForwards，高级筛选激活时导出静默残缺、
+      // 甚至误报「没有规则数据」。
+      const forwardsToExport = forwards.filter(
         (forward) => forward.tunnelId === selectedTunnelForExport,
       );
 
@@ -2841,7 +2864,9 @@ export default function ForwardPage() {
       } else {
         importFailCount += 1;
       }
-      setImportResults((prev) => [item, ...prev]);
+      // FT-11：收据按输入行序追加呈现，此前前插导致与粘贴文本完全逆序，
+      // 逐行定位失败行须倒着找。
+      setImportResults((prev) => [...prev, item]);
     };
 
     try {
@@ -2934,7 +2959,19 @@ export default function ForwardPage() {
             continue;
           }
 
-          const [remoteAddr, name, inPort] = parts;
+          // FT-9：格式为 目标地址|规则名称|入口端口。规则名可含「|」，
+          // 故按两端解析——首段恒为地址、末段恒为端口（3 段以上时），
+          // 中间段以「|」拼回规则名，使自家导出再回导无损（圆环封闭）。
+          const remoteAddr = parts[0];
+          let name = "";
+          let inPort = "";
+
+          if (parts.length === 2) {
+            name = parts[1];
+          } else {
+            inPort = parts[parts.length - 1];
+            name = parts.slice(1, -1).join("|");
+          }
 
           if (!remoteAddr.trim() || !name.trim()) {
             recordImportResult({
@@ -2964,9 +3001,22 @@ export default function ForwardPage() {
             let portNumber: number | null = null;
 
             if (inPort && inPort.trim()) {
-              const port = parseInt(inPort.trim());
+              const portText = inPort.trim();
 
-              if (isNaN(port) || port < 1 || port > 65535) {
+              // FT-9：端口须为纯数字串。此前 parseInt 放行「8080abc」、
+              // 「80.9」等尾随垃圾，与校验文案宣称的格式不符。
+              if (!/^\d+$/.test(portText)) {
+                recordImportResult({
+                  line,
+                  success: false,
+                  message: "入口端口格式错误，应为1-65535之间的数字",
+                });
+                continue;
+              }
+
+              const port = Number(portText);
+
+              if (port < 1 || port > 65535) {
                 recordImportResult({
                   line,
                   success: false,
@@ -3060,6 +3110,9 @@ export default function ForwardPage() {
         return { color: "success", text: "轮询" };
       case "rand":
         return { color: "warning", text: "随机" };
+      case "hash":
+        // FT-8：hash 是后端真实策略（表单可创建），此前无分支落「未知」。
+        return { color: "secondary", text: "IP哈希" };
       default:
         return { color: "default", text: "未知" };
     }
@@ -3235,17 +3288,20 @@ export default function ForwardPage() {
   const presentBatchOutcome = useCallback(
     (outcome: {
       failureDetails?: BatchOperationFailure[];
+      pendingDetails?: BatchOperationFailure[];
       resultSummary?: string;
       resultTitle?: string;
       toastMessage: string;
       toastVariant: "success" | "error";
     }) => {
       const failureDetails = outcome.failureDetails || [];
+      const pendingDetails = outcome.pendingDetails || [];
 
-      if (failureDetails.length > 0) {
+      if (failureDetails.length > 0 || pendingDetails.length > 0) {
         setBatchResultModal({
           failures: failureDetails,
           open: true,
+          pending: pendingDetails,
           summary: outcome.resultSummary || outcome.toastMessage,
           title: outcome.resultTitle || "批量操作结果",
         });
@@ -3258,6 +3314,30 @@ export default function ForwardPage() {
       } else {
         toast.error(outcome.toastMessage);
       }
+    },
+    [],
+  );
+
+  // FT-1：部分失败时只保留失败项勾选并留在多选模式，失败项可就地重试；
+  // 全部成功才清空勾选并退出多选（与节点页纪律一致）。
+  const settleSelectionAfterBatch = useCallback(
+    (outcome: { failureDetails?: BatchOperationFailure[] }) => {
+      const failedIds = (outcome.failureDetails || [])
+        .map((failure) => failure.id)
+        .filter(
+          (id): id is number => typeof id === "number" && Number.isFinite(id),
+        );
+
+      if (failedIds.length > 0) {
+        setSelectedIds(new Set(failedIds));
+
+        return true;
+      }
+
+      setSelectedIds(new Set());
+      setSelectMode(false);
+
+      return false;
     },
     [],
   );
@@ -3281,8 +3361,7 @@ export default function ForwardPage() {
           label: outcome.progressLabel || "正在刷新规则列表...",
           percent: outcome.progressPercent ?? 75,
         });
-        setSelectedIds(new Set());
-        setSelectMode(false);
+        settleSelectionAfterBatch(outcome);
         if (outcome.closeDeleteModal) {
           setBatchDeleteModalOpen(false);
         }
@@ -3316,8 +3395,7 @@ export default function ForwardPage() {
           label: outcome.progressLabel || "正在刷新规则列表...",
           percent: outcome.progressPercent ?? 75,
         });
-        setSelectedIds(new Set());
-        setSelectMode(false);
+        settleSelectionAfterBatch(outcome);
         await refreshForwardList(false);
       }
     } finally {
@@ -3347,8 +3425,7 @@ export default function ForwardPage() {
           label: outcome.progressLabel || "正在刷新规则列表...",
           percent: outcome.progressPercent ?? 75,
         });
-        setSelectedIds(new Set());
-        setSelectMode(false);
+        settleSelectionAfterBatch(outcome);
         await refreshForwardList(false);
       }
     } finally {
@@ -3379,12 +3456,13 @@ export default function ForwardPage() {
           label: outcome.progressLabel || "正在刷新规则列表...",
           percent: outcome.progressPercent ?? 75,
         });
-        setSelectedIds(new Set());
-        setSelectMode(false);
+        const hasFailures = settleSelectionAfterBatch(outcome);
+
         if (outcome.closeChangeTunnelModal) {
           setBatchChangeTunnelModalOpen(false);
         }
-        if (outcome.resetTargetTunnel) {
+        // 部分失败时保留目标隧道，重开弹窗即可对保留的失败项直接重试。
+        if (outcome.resetTargetTunnel && !hasFailures) {
           setBatchTargetTunnelId(null);
         }
         await refreshForwardList(false);
@@ -3716,35 +3794,49 @@ export default function ForwardPage() {
     [sortedForwards],
   );
 
-  const selectAll = () => {
-    const allIds = sortedForwards.map((f) => f.id);
+  // FT-4：空态区分「真的还没有数据」与「筛选无匹配」——原始列表非空而
+  // 筛选后为空时，不得再用「还没有创建任何规则」误导用户以为数据丢失。
+  const hasAnyForwards = forwards.length > 0;
+  const forwardEmptyTitle = hasAnyForwards ? "没有匹配的规则" : "暂无规则配置";
+  const forwardEmptyDescription = hasAnyForwards
+    ? "当前筛选条件没有匹配的规则，请调整或重置筛选条件"
+    : "还没有创建任何规则配置，点击上方按钮开始创建";
 
-    setSelectedIds(new Set(allIds));
+  const selectAll = () => {
+    // FT-3：全选＝把当前可见行并入已选集合，不得替换掉跨筛选的不可见已选项。
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+
+      sortedForwards.forEach((f) => next.add(f.id));
+
+      return next;
+    });
   };
 
   const isAllSelected = useMemo(() => {
+    // FT-3：按成员判定——当前可见行全部在已选集合内才算全选；
+    // 此前只比数量，跨筛选同数不同成员时会误报全选。
     return (
-      sortedForwards &&
       sortedForwards.length > 0 &&
-      selectedIds.size === sortedForwards.length
+      sortedForwards.every((f) => selectedIds.has(f.id))
     );
   }, [sortedForwards, selectedIds]);
 
   const isIndeterminate = useMemo(() => {
-    return (
-      selectedIds.size > 0 &&
-      sortedForwards &&
-      selectedIds.size < sortedForwards.length
-    );
-  }, [sortedForwards, selectedIds]);
+    return !isAllSelected && sortedForwards.some((f) => selectedIds.has(f.id));
+  }, [sortedForwards, selectedIds, isAllSelected]);
 
   const handleSelectAllToggle = (isSelected: boolean) => {
     if (isSelected) {
-      const allIds = sortedForwards.map((f) => f.id);
-
-      setSelectedIds(new Set(allIds));
+      selectAll();
     } else {
-      setSelectedIds(new Set());
+      // FT-3：取消全选只移除当前可见行，不可见的已选项保留，
+      // 此前整集清空会误清用户在其他筛选下选好的项。
+      const visibleIds = new Set(sortedForwards.map((f) => f.id));
+
+      setSelectedIds(
+        (prev) => new Set([...prev].filter((id) => !visibleIds.has(id))),
+      );
     }
   };
 
@@ -3882,9 +3974,7 @@ export default function ForwardPage() {
             <div className="space-y-1">
               <button
                 className={`cursor-pointer px-2 py-1 bg-tray rounded border border-default-200 transition-colors duration-200 ${
-                  hasMultipleAddresses(forward.inIp)
-                    ? "hover:bg-white/40"
-                    : ""
+                  hasMultipleAddresses(forward.inIp) ? "hover:bg-white/40" : ""
                 }`}
                 title={formatInAddress(forward.inIp, forward.inPort)}
                 type="button"
@@ -4382,7 +4472,7 @@ export default function ForwardPage() {
                         </TableColumn>
                       </TableHeader>
                       <TableBody
-                        emptyContent="暂无规则配置"
+                        emptyContent={forwardEmptyTitle}
                         items={sortedForwards}
                       >
                         {(forward) => (
@@ -4415,10 +4505,10 @@ export default function ForwardPage() {
             <Card>
               <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
                 <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-                  暂无规则配置
+                  {forwardEmptyTitle}
                 </h3>
                 <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
-                  还没有创建任何规则配置，点击上方按钮开始创建
+                  {forwardEmptyDescription}
                 </p>
               </CardBody>
             </Card>
@@ -4461,10 +4551,10 @@ export default function ForwardPage() {
           <Card>
             <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
               <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-                暂无规则配置
+                {forwardEmptyTitle}
               </h3>
               <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
-                还没有创建任何规则配置，点击上方按钮开始创建
+                {forwardEmptyDescription}
               </p>
             </CardBody>
           </Card>
@@ -4674,7 +4764,7 @@ export default function ForwardPage() {
                                       </TableColumn>
                                     </TableHeader>
                                     <TableBody
-                                      emptyContent="暂无规则配置"
+                                      emptyContent={forwardEmptyTitle}
                                       items={tunnel.items}
                                     >
                                       {(forward) => (
@@ -4723,10 +4813,10 @@ export default function ForwardPage() {
           <Card>
             <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
               <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-                暂无规则配置
+                {forwardEmptyTitle}
               </h3>
               <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
-                还没有创建任何规则配置，点击上方按钮开始创建
+                {forwardEmptyDescription}
               </p>
             </CardBody>
           </Card>
@@ -4844,10 +4934,10 @@ export default function ForwardPage() {
         <Card>
           <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-              暂无规则配置
+              {forwardEmptyTitle}
             </h3>
             <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
-              还没有创建任何规则配置，点击上方按钮开始创建
+              {forwardEmptyDescription}
             </p>
           </CardBody>
         </Card>
@@ -5373,6 +5463,16 @@ export default function ForwardPage() {
             <p className="text-small text-foreground">
               格式：目标地址|规则名称|入口端口
             </p>
+            <p className="text-small text-foreground">
+              导出所选隧道的全部规则，不受页面搜索/筛选影响
+              {selectedTunnelForExport
+                ? `；该隧道共 ${
+                    forwards.filter(
+                      (forward) => forward.tunnelId === selectedTunnelForExport,
+                    ).length
+                  } 条规则`
+                : ""}
+            </p>
           </ModalHeader>
           <ModalBody className="pb-6">
             <div className="space-y-4">
@@ -5686,7 +5786,9 @@ export default function ForwardPage() {
                               >
                                 {result.success ? "成功" : "失败"}
                               </span>
-                              <span className="text-xs font-semibold text-foreground">|</span>
+                              <span className="text-xs font-semibold text-foreground">
+                                |
+                              </span>
                               <code className="text-xs font-semibold font-mono text-foreground truncate">
                                 {result.line}
                               </code>
@@ -6131,8 +6233,7 @@ export default function ForwardPage() {
                                 const isDiagnosing = Boolean(result.diagnosing);
                                 const isSuccess = result.success === true;
                                 // R6-L4-01：UDP 未验证项走中性形态。
-                                const isUnverified =
-                                  result.unverified === true;
+                                const isUnverified = result.unverified === true;
                                 const quality =
                                   getForwardDiagnosisQualityDisplay(
                                     result.averageTime,
@@ -6608,6 +6709,7 @@ export default function ForwardPage() {
       <BatchActionResultModal
         failures={batchResultModal.failures}
         isOpen={batchResultModal.open}
+        pending={batchResultModal.pending}
         summary={batchResultModal.summary}
         title={batchResultModal.title}
         onOpenChange={(open) => {

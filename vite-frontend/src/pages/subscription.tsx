@@ -567,7 +567,9 @@ function Editor({
           />
           {draft.sourceAll ? (
             <p className="text-xs font-semibold text-foreground">
-              包括以后新增的落地；只想要一部分可以用下面的过滤
+              {/* F3 S-004：此前提示「用下面的过滤」指向不存在的位置；
+                  选子集的实际入口是上方切换到「指定落地」 */}
+              包括以后新增的落地；只想要一部分时，切换到「指定落地」逐个勾选
             </p>
           ) : (
             <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
@@ -761,7 +763,7 @@ function Editor({
             <>
               <p className="text-xs font-semibold text-foreground">
                 共 {preview.items.length} 个节点
-                {preview.dropped > 0 && `，过滤掉 ${preview.dropped} 个`}
+                {preview.dropped > 0 && `，未纳入 ${preview.dropped} 个`}
               </p>
               {preview.excludedCompanionIds &&
                 preview.excludedCompanionIds.length > 0 && (
@@ -769,7 +771,7 @@ function Editor({
                     另有 {preview.excludedCompanionIds.length}
                     个伴生入站被排除（ID：
                     {preview.excludedCompanionIds.join("、")}
-                    ）：伴生入站不能作为订阅源，不会出现在订阅中。此排除不计入上面的过滤数。
+                    ）：伴生入站不能作为订阅源，不会出现在订阅中。此排除不计入上面的未纳入数。
                   </p>
                 )}
               <div className="max-h-64 overflow-y-auto rounded-xl border border-divider">
@@ -1112,7 +1114,9 @@ export default function SubscriptionPage() {
         <div>
           <h1 className="text-lg font-semibold">订阅</h1>
           <p className="text-xs font-semibold text-foreground">
-            每个订阅一个链接：选落地、过滤、改名，客户端自动识别格式
+            {/* C3-02：副标题此前宣称「过滤、改名」——两项均为 2.1.2
+                已删除的订阅加工功能，文案对齐现行功能面 */}
+            每个订阅一个链接：选落地与中转范围、分配给用户，客户端自动识别格式
           </p>
         </div>
         <div className="flex items-center gap-2">
