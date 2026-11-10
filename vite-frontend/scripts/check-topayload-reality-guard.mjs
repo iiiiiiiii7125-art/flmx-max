@@ -9,7 +9,11 @@
 //
 // 断言：
 //   ① reality 路径：安全段仍含四项 Reality 值（不得改动 reality 路径行为）；
-//   ② 手动切 reality → none：安全段不含四项 Reality 值（修前含值 = 红，修后不含 = 绿）。
+//   ② 手动切 reality → none：安全段不含四项 Reality 值（修前含值 = 红，修后不含 = 绿）；
+//   ③ 手动切 reality → tls：安全段同样不含四项 Reality 值——谓词是
+//      「非 reality 即不发出」，只钉 none 一格时守卫被改写为
+//      !== "none" 的变异会在 tls 路径下存活（R3-MG-03），补此格
+//      使断言面与谓词等宽。
 //
 // 运行方法（工作目录 vite-frontend）：
 //   node scripts/check-topayload-reality-guard.mjs
@@ -175,6 +179,27 @@ if (typeof toPayload === "function") {
     check(`none 路径：${k} 不发出`,
       nonePayload.security[k] === undefined,
       `实际 ${JSON.stringify(nonePayload.security[k])}`);
+  }
+
+  // ③ 手动切 reality → tls（表单残留值不动）：安全段同样不得含
+  // Reality 值（R3-MG-03）。②的 none 格挡不住守卫改写为
+  // !== "none" 的变异——该变异在 none 下仍不发出、在 reality 下
+  // 仍发出，唯独 tls（及 shadowtls）路径会漏发残留值；本格以 tls
+  // 路径执行断言把该变异钉红。
+  const tlsForm = { ...baseForm, securityType: "tls" };
+  const tlsPayload = toPayload(tlsForm);
+  check("tls 路径：security.type === tls",
+    tlsPayload.security.type === "tls",
+    `实际 ${JSON.stringify(tlsPayload.security.type)}`);
+  for (const k of [
+    "realityDest",
+    "realityPrivateKey",
+    "realityShortIds",
+    "realityMinClientVer",
+  ]) {
+    check(`tls 路径：${k} 不发出`,
+      tlsPayload.security[k] === undefined,
+      `实际 ${JSON.stringify(tlsPayload.security[k])}`);
   }
 }
 
