@@ -239,7 +239,12 @@ func Lookup(kernelType string) (Info, bool) {
 
 // ComboSupported 只读判断 (协议, 传输, 安全层) 是否在该内核的 catalog 内，
 // 供下发前复检使用：历史脏数据不得在渲染层被静默降级，必须整单拒绝并报错。
-// transport 为空按 tcp、安全层为空按该传输的首个安全层（与 Normalize 的默认一致）。
+// transport 为空按 Normalize 的缺省（有 tcp 用 tcp、否则该协议的首个
+// 传输，W3/P-001 两面同口径）。security 为空则不豁免、直接判不支持
+// （W3/P-002）：合法存量行的安全层恒由 Normalize 填充，空值只可能是
+// 毒行，而渲染面按字面消费空值（如 trojan 空安全层渲染为无 TLS、
+// 弱于界面所示），复检面若放行即等于背书该降级——拒绝由调用方点名
+// 整单报错。
 func ComboSupported(kernelType, protocol, transport, security string) bool {
 	info, ok := Lookup(kernelType)
 	if !ok {
@@ -251,13 +256,16 @@ func ComboSupported(kernelType, protocol, transport, security string) bool {
 	}
 	if transport == "" {
 		transport = TransportTCP
+		if _, ok := pc.transport(transport); !ok && len(pc.Transports) > 0 {
+			transport = pc.Transports[0].Type
+		}
 	}
 	tc, ok := pc.transport(transport)
 	if !ok {
 		return false
 	}
 	if security == "" {
-		return true
+		return false
 	}
 	for _, s := range tc.Securities {
 		if s == security {

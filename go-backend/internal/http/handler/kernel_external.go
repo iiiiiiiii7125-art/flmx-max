@@ -263,7 +263,9 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 		response.WriteJSON(w, response.ErrDefault("名称不能为空，且不超过 100 字"))
 		return
 	}
-	host := strings.Trim(strings.TrimSpace(req.Host), "[]")
+	// W3/I-006：与导入面同口径——编辑导入节点时主机名先规范化（剥一个
+	// 尾点 FQDN 根点）再校验与落库，不再独家拒绝尾点域名。
+	host := kernel.CanonicalShareHostValue(req.Host)
 	if err := kernel.ValidateImportHost(host); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
@@ -389,12 +391,17 @@ func externalKey(host string, port int) string {
 }
 
 // externalIdentityKey is the dedupe identity of an imported node:
-// address + protocol + credentials. Gateways that multiplex exits by
-// credential (residential proxies: same host:port, the username's
-// session id picks the exit IP) must import as distinct nodes, so the
-// bare host:port key is not enough. The credential material is hashed
-// so the key never carries secrets; user-facing messages keep using
-// externalKey as the display key.
+// address + protocol + credentials + shape. Gateways that multiplex
+// exits by credential (residential proxies: same host:port, the
+// username's session id picks the exit IP) must import as distinct
+// nodes, so the bare host:port key is not enough. W3/I-004: the shape
+// leg (kernel.Proxy.IdentityShape — transport / security / SNI /
+// Reality / transport discriminators) joins the key: same address and
+// credentials behind a different transport or security form are a
+// different node, and the old key rejected the second import as a
+// duplicate. The credential and shape material is hashed so the key
+// never carries secrets; user-facing messages keep using externalKey
+// as the display key.
 func externalIdentityKey(host string, port int, p kernel.Proxy) string {
 	base := externalKey(host, port)
 	if p == nil {
@@ -407,10 +414,8 @@ func externalIdentityKey(host string, port int, p kernel.Proxy) string {
 			creds = append(creds, s)
 		}
 	}
-	if len(creds) == 0 {
-		return base + "|" + proto
-	}
-	sum := sha256.Sum256([]byte(strings.Join(creds, "\x00")))
+	shape := p.IdentityShape()
+	sum := sha256.Sum256([]byte(strings.Join(creds, "\x00") + "\x01" + shape))
 	return base + "|" + proto + "|" + hex.EncodeToString(sum[:])[:16]
 }
 

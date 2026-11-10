@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -41,10 +42,19 @@ func decodeSubscriptionBase64(text string) (string, bool) {
 	}
 	compact := strings.Join(strings.Fields(text), "")
 	b, err := decodeBase64Loose(compact)
-	if err != nil || !strings.Contains(string(b), "://") {
+	if err != nil {
 		return "", false
 	}
-	return string(b), true
+	// W3/I-002：接受谓词与 ParseImport 的格式分发同集——解码后是分享
+	// 链接清单、sing-box JSON（{ 起始）或 Clash YAML 任一即认。此前
+	// 只认含 "://" 的解码结果，base64 包裹的 Clash / sing-box 订阅被
+	// 拒之门外后落进 parseLines 逐行误报「暂不支持 http 链接」，
+	// 把用户引向完全错误的方向。
+	decoded := strings.TrimSpace(string(b))
+	if strings.Contains(decoded, "://") || strings.HasPrefix(decoded, "{") || looksLikeClash(decoded) {
+		return string(b), true
+	}
+	return "", false
 }
 
 func looksLikeClash(text string) bool {
@@ -591,6 +601,15 @@ func validateProxyCredentials(p Proxy) error {
 		if p.str("username") == "" || p.str("password") == "" {
 			return errors.New("缺少用户名或密码")
 		}
+	case "socks5", "http":
+		// W3/I-010：SOCKS5 / HTTP 的凭据必须成对——此前整类不在校验
+		// switch 内，单边凭据（只有用户名或只有密码）原样落库渲染，
+		// 而没有任何客户端能表达单边凭据（有用户名必连带密码校验、
+		// 光密码无处安放），节点注定不可用却报导入成功。两边都空是
+		// 合法的无认证代理，不拒。
+		if (p.str("username") == "") != (p.str("password") == "") {
+			return errors.New("SOCKS5 / HTTP 代理的用户名与密码必须成对填写（或都不填）")
+		}
 	}
 	// K-01: transport x security coupling — Vision only on TCP,
 	// Reality banned only on WS (TCP/gRPC/XHTTP legal per the
@@ -613,7 +632,12 @@ func validateProxyCredentials(p Proxy) error {
 // unchecked: loopback / cloud-metadata hosts and out-of-range ports
 // restored verbatim while ParseImport rejected the same rows).
 func validateImportedProxyAddress(p Proxy) (string, int, error) {
-	host := strings.Trim(p.str("server"), "[]")
+	// W3/I-006：主机名先规范化再校验、且落库即规范形——CanonicalShareHostValue
+	// 剥一个尾点（FQDN 根点）。自建分享面早已如此（B2-01），导入面此前在
+	// ValidateImportHost 里以 HasSuffix(".") 整条拒绝，与 nodes.md 的
+	// 「尾点将会被自动规范化」宣称不符。双尾点经规范化后仍带尾点、
+	// 照旧被拒，不放宽接受集。
+	host := CanonicalShareHostValue(p.str("server"))
 	if err := ValidateImportHost(host); err != nil {
 		return "", 0, err
 	}
@@ -769,7 +793,11 @@ func parseURI(line string) (Proxy, error) {
 	case "socks", "socks5":
 		return parseSocksURI(rest)
 	case "http", "https":
-		return nil, errors.New("http(s):// 是订阅地址，请单独粘贴在输入框里")
+		// W3/I-012：旧文案只说「是订阅地址」，用户拿着单条 http 代理
+		// 链接（机场的 HTTP 节点）照样被误导。点名两件事：整段粘贴时
+		// 它会被当订阅地址拉取；单个 HTTP 代理节点要走配置格式或
+		// 手动填写。
+		return nil, errors.New("http(s):// 不是单个节点链接：整段粘贴时会被当作订阅地址拉取；单个 HTTP 代理节点请粘贴 Clash / sing-box 配置，或用手动填写导入")
 	}
 	return nil, fmt.Errorf("暂不支持 %s:// 链接", scheme)
 }
@@ -1006,6 +1034,10 @@ func parseUserURI(typ, rest string) (Proxy, error) {
 			p["uuid"] = user
 			p.set("flow", q.Get("flow"))
 			p.set("encryption", q.Get("encryption"))
+			// W3/I-008：packetEncoding 是 VLESS 标准链接参数，此前不读、
+			// 静默丢弃。存面板规范键 packet-encoding（Mihomo 拼写），
+			// sing-box 面出口再映射回 packet_encoding。
+			p.set("packet-encoding", q.Get("packetEncoding"))
 		} else {
 			p["password"] = user
 		}
@@ -1062,6 +1094,12 @@ func parseUserURI(typ, rest string) (Proxy, error) {
 		p.set("obfs-password", q.Get("obfs-password"))
 		p.set("ports", firstNonEmptyString(q.Get("mport"), q.Get("ports")))
 		p.set("fingerprint", q.Get("pinSHA256"))
+		// W3/I-007：up / down 是 hy2 链接的带宽参数（服务端据此限速），
+		// 此前不读、整条静默丢弃，导入的节点在 sing-box 面失去带宽
+		// 上限。原样存字符串（"100"、"100Mbps"、"100 Mbps" 都是客户
+		// 端常见形态），渲染面经 bandwidthMbps 统一解析为 Mbps 整数。
+		p.set("up", q.Get("up"))
+		p.set("down", q.Get("down"))
 	case "tuic":
 		uuid, password, _ := strings.Cut(user, ":")
 		p["uuid"] = uuid
@@ -1076,6 +1114,19 @@ func parseUserURI(typ, rest string) (Proxy, error) {
 		p.set("udp-relay-mode", q.Get("udp_relay_mode"))
 		if q.Get("disable_sni") == "1" {
 			p["disable-sni"] = true
+		}
+		// W3/I-008：heartbeat_interval（毫秒）与 udp_over_stream 此前
+		// 不读、静默丢弃。heartbeat 存面板规范键 heartbeat-interval
+		// （Mihomo 拼写、毫秒整数）；坏值整条点名拒收，不静默吞。
+		if hb := q.Get("heartbeat_interval"); hb != "" {
+			n, err := strconv.Atoi(hb)
+			if err != nil || n <= 0 {
+				return nil, fmt.Errorf("TUIC heartbeat_interval 参数不正确：%q（须为正整数毫秒）", hb)
+			}
+			p["heartbeat-interval"] = n
+		}
+		if q.Get("udp_over_stream") == "true" {
+			p["udp_over_stream"] = true
 		}
 	case "anytls":
 		p["password"] = user
@@ -1336,6 +1387,7 @@ func normalizeYAML(v interface{}) interface{} {
 func parseSingboxProfile(text string) ([]ImportedNode, []string) {
 	var doc struct {
 		Outbounds []map[string]interface{} `json:"outbounds"`
+		Endpoints []map[string]interface{} `json:"endpoints"`
 	}
 	if err := json.Unmarshal([]byte(text), &doc); err != nil {
 		return nil, []string{"sing-box 配置解析失败：" + err.Error()}
@@ -1346,7 +1398,7 @@ func parseSingboxProfile(text string) ([]ImportedNode, []string) {
 	}
 	var nodes []ImportedNode
 	var errs []string
-	for _, raw := range doc.Outbounds {
+	for i, raw := range doc.Outbounds {
 		o := Proxy(raw)
 		switch o.str("type") {
 		case "selector", "urltest", "direct", "block", "dns", "shadowtls":
@@ -1360,9 +1412,28 @@ func parseSingboxProfile(text string) ([]ImportedNode, []string) {
 				continue
 			}
 		}
-		errs = append(errs, fmt.Sprintf("%s：%v", o.str("tag"), err))
+		// W3/I-011：无 tag 条目的回执名此前恒为空串（"：错误"），用户
+		// 无从定位是哪一条。与 Clash 分支同口径回落「第 N 个节点」。
+		name := o.str("tag")
+		if name == "" {
+			name = fmt.Sprintf("第 %d 个节点", i+1)
+		}
+		errs = append(errs, fmt.Sprintf("%s：%v", name, err))
 	}
-	if len(doc.Outbounds) == 0 {
+	// W3/I-001：sing-box 的 endpoints 数组（WireGuard 等端点形态）此前
+	// 根本不在解析结构里，整组静默吞没——配置里明明有节点、导入却
+	// 毫无回执。面板的导入类型集（importTypes）没有端点形态的对应
+	// 类型，在此逐条点名回执，不静默丢弃；将来 importTypes 纳入某
+	// 端点类型时，此处应改为真正转换而非点名拒绝。
+	for i, raw := range doc.Endpoints {
+		o := Proxy(raw)
+		name := o.str("tag")
+		if name == "" {
+			name = fmt.Sprintf("第 %d 个端点", i+1)
+		}
+		errs = append(errs, fmt.Sprintf("%s：sing-box endpoints 中的 %s 端点暂不支持导入（面板只导入 outbounds 中的节点）", name, o.str("type")))
+	}
+	if len(doc.Outbounds) == 0 && len(doc.Endpoints) == 0 {
 		errs = append(errs, "sing-box 配置里没有 outbounds")
 	}
 	return nodes, errs
@@ -1425,6 +1496,9 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 		// 普通 vless。此处只补搬运（set 空值不写），校验/回执/分面
 		// 全复用 finishProxy 既有实现，禁在转换层另设校验。
 		p.set("encryption", o.str("encryption"))
+		// W3/I-008：packet_encoding 同为漏搬字段——不搬则导入后
+		// sing-box 面回读不到、往返丢弃。存面板规范键 packet-encoding。
+		p.set("packet-encoding", o.str("packet_encoding"))
 	case "trojan", "hysteria2", "anytls":
 		p["password"] = o.str("password")
 	case "tuic":
@@ -1432,6 +1506,19 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 		p["password"] = o.str("password")
 		p.set("congestion-controller", o.str("congestion_control"))
 		p.set("udp-relay-mode", o.str("udp_relay_mode"))
+		// W3/I-008：heartbeat（sing-box duration 串）与 udp_over_stream
+		// 此前不搬、往返丢弃。heartbeat 换算为毫秒存面板规范键
+		// heartbeat-interval；duration 坏值按 D4-08 口径整条拒收。
+		if hb := o.str("heartbeat"); hb != "" {
+			d, err := time.ParseDuration(hb)
+			if err != nil || d <= 0 {
+				return nil, fmt.Errorf("heartbeat 格式不正确：%q", hb)
+			}
+			p["heartbeat-interval"] = int(d / time.Millisecond)
+		}
+		if o.flag("udp_over_stream") {
+			p["udp_over_stream"] = true
+		}
 	case "snell":
 		// A5-01：与 ss 分支同型——snell 本体字段 + detour 到 shadowtls
 		// 时地址在 detour 出站上（面板自产的 snell+ShadowTLS 订阅正是
@@ -1466,11 +1553,36 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 	case "socks5", "http":
 		p.set("username", o.str("username"))
 		p.set("password", o.str("password"))
+		// W3/I-008：sing-box 的 network 字段（tcp / udp）此前不读，
+		// tcp-only 出站也被写死 udp:true。network=tcp 时关闭 udp；
+		// udp-only 在 Mihomo 形态里无对应表达（udp 标志是布尔），
+		// 维持 true 并在 W3 报告中点名该不可表达格。
+		if o.str("network") == "tcp" {
+			p["udp"] = false
+		}
 	}
 	if typ == "hysteria2" {
 		obfs := o.sub("obfs")
 		p.set("obfs", obfs.str("type"))
 		p.set("obfs-password", obfs.str("password"))
+		// W3/I-007：up_mbps / down_mbps / hop_interval 此前整组不读，
+		// sing-box 来源的 hy2 节点导入后在 sing-box 面失去带宽与跳跃
+		// 间隔（自建面同字段俱全）。带宽存 Mbps 数字串（与链接面
+		// up/down 同形态，渲染面经 bandwidthMbps 统一解析）；hop_interval
+		// 是 duration 串，换算为秒存 hop-interval（面板内部形态）。
+		if n := o.num("up_mbps"); n > 0 {
+			p["up"] = strconv.Itoa(n)
+		}
+		if n := o.num("down_mbps"); n > 0 {
+			p["down"] = strconv.Itoa(n)
+		}
+		if hi := o.str("hop_interval"); hi != "" {
+			d, err := time.ParseDuration(hi)
+			if err != nil || d <= 0 {
+				return nil, fmt.Errorf("hop_interval 格式不正确：%q", hi)
+			}
+			p["hop-interval"] = int(d.Round(time.Second) / time.Second)
+		}
 		if ports := o.strs("server_ports"); len(ports) > 0 {
 			// R5 批 1：全部端口段以逗号拼回面板 ports 形态（此前只取
 			// 第一段、多段往返静默丢失），与 proxySingbox 的按项拆分
@@ -1518,11 +1630,36 @@ func singboxToProxy(o Proxy, byTag map[string]Proxy) (Proxy, error) {
 
 // ---- Surge / Loon ----
 
+// surgeProxyTypes is the type vocabulary parseSurgeLine's switch
+// accepts; the name-split scan below uses it to find the real "="
+// separator when the node name itself contains "=".
+var surgeProxyTypes = map[string]bool{
+	"ss": true, "shadowsocks": true, "vmess": true, "trojan": true,
+	"snell": true, "hysteria2": true, "tuic": true, "tuic-v5": true,
+	"anytls": true, "socks5": true, "socks5-tls": true,
+	"http": true, "https": true,
+}
+
 // parseSurgeLine parses "name = type, server, port, key=value, ...".
 func parseSurgeLine(line string) (Proxy, error) {
+	// W3/I-009：行名本身可含 "="（机场命名如 "A=B 港线"），按首个 "="
+	// 切分会把名字后半截当类型、整行错位拒绝。逐个 "=" 候选试切：
+	// 切后首字段（splitSurgeFields 口径）小写命中已知 Surge 类型集的
+	// 第一处即真分隔符；无一命中时回落原首切行为，垃圾行错误形态
+	// 不变。
 	name, body, ok := strings.Cut(line, "=")
 	if !ok {
 		return nil, errors.New("无法识别的格式")
+	}
+	for i := 0; i < len(line); i++ {
+		if line[i] != '=' {
+			continue
+		}
+		cand := splitSurgeFields(line[i+1:])
+		if len(cand) > 0 && surgeProxyTypes[strings.ToLower(cand[0])] {
+			name, body = line[:i], line[i+1:]
+			break
+		}
 	}
 	fields := splitSurgeFields(body)
 	if len(fields) < 3 {

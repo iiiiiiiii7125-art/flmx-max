@@ -284,7 +284,15 @@ func Normalize(kernelType string, in *Inbound) error {
 
 	in.Transport.Type = strings.ToLower(strings.TrimSpace(in.Transport.Type))
 	if in.Transport.Type == "" {
+		// W3/P-001：缺省传输不得恒填 tcp——quic-only 协议（Hysteria2 /
+		// TUIC 的能力格只有 quic）没有 tcp，恒填后只会得到「协议不
+		// 支持传输方式 tcp」的误导报错。有 tcp 仍用 tcp（既有缺省
+		// 不变），没有则用该协议的首个传输（quic-only 协议即其唯一
+		// 传输）。前端预设恒带 quic、UI 不可达，受损面仅 API 直调。
 		in.Transport.Type = TransportTCP
+		if _, ok := proto.transport(TransportTCP); !ok && len(proto.Transports) > 0 {
+			in.Transport.Type = proto.Transports[0].Type
+		}
 	}
 	tcap, ok := proto.transport(in.Transport.Type)
 	if !ok {
@@ -309,8 +317,8 @@ func Normalize(kernelType string, in *Inbound) error {
 	if net.ParseIP(in.Listen) == nil {
 		return errors.New("监听地址必须是 IP")
 	}
-	if in.AcceptProxyProtocol && kernelType != TypeXray {
-		return errors.New("获取真实 IP（PROXY protocol）目前只支持 Xray 内核")
+	if err := checkAcceptProxyKernel(kernelType, in); err != nil {
+		return err
 	}
 	if err := checkConnIdleKernel(kernelType, in.ConnIdleSeconds); err != nil {
 		return err
@@ -361,6 +369,20 @@ func checkConnIdleKernel(kernelType string, seconds int) error {
 	return nil
 }
 
+// checkAcceptProxyKernel 是 PROXY protocol 接收（AcceptProxyProtocol）
+// 的内核条件谓词：仅 Xray 支持。与其余 Settings 级谓词同形——创建面
+// Normalize 与下发复检 CheckSettingsConditions 共用本谓词一处真源
+// （W3/T-003：此前该格只住在 Normalize 本体，下发复检未覆盖，
+// AcceptProxyProtocol=1 的非 Xray 存量毒行可一路渲染到 sing-box
+// （其 PROXY 接收是全局开关、粒度粗于 Xray 的 per-inbound 字段）
+// 或被 gost 静默忽略，属「创建面拒、下发面放」的谓词覆盖缺口）。
+func checkAcceptProxyKernel(kernelType string, in *Inbound) error {
+	if in.AcceptProxyProtocol && kernelType != TypeXray {
+		return errors.New("获取真实 IP（PROXY protocol）目前只支持 Xray 内核")
+	}
+	return nil
+}
+
 // checkEncryptionKernel 是 VLESS 加密（ENC）的内核/协议条件：仅 Xray + VLESS。
 func checkEncryptionKernel(kernelType string, in *Inbound) error {
 	if in.Settings.EncryptionEnabled() && (kernelType != TypeXray || in.Protocol != ProtocolVLESS) {
@@ -388,11 +410,14 @@ func flowConditionError(in *Inbound) error {
 }
 
 // CheckSettingsConditions 只读复检入站的 Settings 级条件字段（ENC×内核、
-// ConnIdle×内核、Vision×组合），谓词即上方三个 helper、与创建面
-// Normalize 同源单点。下发面逐入站调用：创建面与备份恢复面均经
+// ConnIdle×内核、Vision×组合、AcceptProxy×内核），谓词即上方各 helper、
+// 与创建面 Normalize 同源单点。下发面逐入站调用：创建面与备份恢复面均经
 // Normalize 封口，存量毒行不得再经渲染面静默降级或带病下发
 // （R4-C2C-02）。返回首个不成立条件的拒绝原因。
 func CheckSettingsConditions(kernelType string, in *Inbound) error {
+	if err := checkAcceptProxyKernel(kernelType, in); err != nil {
+		return err
+	}
 	if err := checkConnIdleKernel(kernelType, in.ConnIdleSeconds); err != nil {
 		return err
 	}

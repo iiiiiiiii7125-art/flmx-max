@@ -120,11 +120,10 @@ func (b TemplateBuilder) validate() error {
 	}
 	targets := map[string]bool{builderMain: true, "DIRECT": true, "REJECT": true}
 	for _, g := range b.Groups {
-		if g.Name == ChainLandingGroup || g.Name == ChainRelayGroup {
-			// 链式组名是保留名：模板组与链式组同名时渲染面只能改名
-			// 追加（见 chainNamesFor），构建器面直接拒（R4-C2C-01）。
-			return fmt.Errorf("策略组名称「%s」是链式分组的保留名，请换一个名称", g.Name)
-		}
+		// W3/S-002：「落地节点 / 中转节点」不再是保留名——订阅级链式
+		// 已随 2.1.2 删除、ChainRole 无任何赋值点，这两个名字自此是
+		// 普通策略组名，与渲染面（sub_template.go 的同名警告已同波
+		// 删净）一致，不再独家硬拒。
 		if g.Name == "" || g.Name != strings.TrimSpace(g.Name) || len([]rune(g.Name)) > 50 || strings.ContainsAny(g.Name, ",=\r\n[]{}#\"\\") || g.Name == "direct" || g.Name == "reject" || targets[g.Name] {
 			return fmt.Errorf("策略组名称无效或重复：%s", g.Name)
 		}

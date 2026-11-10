@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ---- share link ----
@@ -128,6 +129,9 @@ func proxyURI(e Endpoint) (string, bool) {
 			if f := p.str("flow"); f != "" {
 				q.Set("flow", f)
 			}
+			// W3/I-008：packetEncoding 回放（与 parseUserURI 的读入互为
+			// 逆操作），存量无此键的节点逐字不变。
+			setIf(q, "packetEncoding", p.str("packet-encoding"))
 		}
 		netType := p.network()
 		if p.sub("ws-opts").flag("v2ray-http-upgrade") {
@@ -195,6 +199,14 @@ func proxyURI(e Endpoint) (string, bool) {
 		setIf(q, "obfs-password", p.str("obfs-password"))
 		setIf(q, "mport", p.str("ports"))
 		setIf(q, "pinSHA256", p.str("fingerprint"))
+		// W3/I-007：up/down 回放为纯 Mbps 数字（客户端通行的链接形态），
+		// 与 parseUserURI 的读入互为逆操作。
+		if n, ok := p.bandwidthMbps("up"); ok {
+			q.Set("up", strconv.Itoa(n))
+		}
+		if n, ok := p.bandwidthMbps("down"); ok {
+			q.Set("down", strconv.Itoa(n))
+		}
 		if alpn := p.strs("alpn"); len(alpn) > 0 {
 			q.Set("alpn", strings.Join(alpn, ","))
 		}
@@ -209,6 +221,14 @@ func proxyURI(e Endpoint) (string, bool) {
 		setIf(q, "sni", p.serverName())
 		setIf(q, "congestion_control", p.str("congestion-controller"))
 		setIf(q, "udp_relay_mode", p.str("udp-relay-mode"))
+		// W3/I-008：heartbeat_interval（毫秒）与 udp_over_stream 回放，
+		// 与 parseUserURI 的读入互为逆操作。
+		if ms := p.num("heartbeat-interval"); ms > 0 {
+			q.Set("heartbeat_interval", strconv.Itoa(ms))
+		}
+		if p.flag("udp_over_stream") {
+			q.Set("udp_over_stream", "true")
+		}
 		if alpn := p.strs("alpn"); len(alpn) > 0 {
 			q.Set("alpn", strings.Join(alpn, ","))
 		}
@@ -490,6 +510,9 @@ func proxyClashFor(e Endpoint, mihomo bool) (yamlNode, bool) {
 		}
 	}
 	delete(p, "shadow-tls") // panel-only key for Snell over ShadowTLS (converted above)
+	// W3/I-008：udp_over_stream 是 sing-box 专有键，Mihomo TUIC 无此
+	// 选项——与 shadow-tls 同口径在本面摘除，不随透传漏进 Clash YAML。
+	delete(p, "udp_over_stream")
 	node := yamlNode{{"name", e.Name}, {"type", p.Type()}, {"server", p.str("server")}, {"port", e.Port}}
 	keys := make([]string, 0, len(p))
 	for k := range p {
@@ -644,6 +667,12 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 		if f := p.str("flow"); f != "" {
 			o["flow"] = f
 		}
+		// W3/I-008：packet_encoding 回写——导入面（链接 packetEncoding /
+		// sing-box packet_encoding）已存面板规范键 packet-encoding，
+		// 本面此前不发，往返一周即丢。
+		if pe := p.str("packet-encoding"); pe != "" {
+			o["packet_encoding"] = pe
+		}
 		if !transport() {
 			return nil, false
 		}
@@ -658,6 +687,20 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 	case "hysteria2":
 		o["type"] = "hysteria2"
 		o["password"] = p.str("password")
+		// W3/I-007：带宽与跳跃间隔回写——up/down 此前在任何进口存入后
+		// 都到不了本面（sing-box 来源更是连存都没存，见 singboxToProxy
+		// 的补搬），自建面同字段俱全、导入面独缺。hop-interval 经
+		// forEndpoint 后只在直连端点上存活（中转面按设计删除），与
+		// 下方 ports 同口径。
+		if n, ok := p.bandwidthMbps("up"); ok {
+			o["up_mbps"] = n
+		}
+		if n, ok := p.bandwidthMbps("down"); ok {
+			o["down_mbps"] = n
+		}
+		if n := p.num("hop-interval"); n > 0 {
+			o["hop_interval"] = strconv.Itoa(n) + "s"
+		}
 		if ob := p.str("obfs"); ob != "" {
 			o["obfs"] = map[string]interface{}{"type": ob, "password": p.str("obfs-password")}
 		}
@@ -687,6 +730,15 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 		}
 		if m := p.str("udp-relay-mode"); m != "" {
 			o["udp_relay_mode"] = m
+		}
+		// W3/I-008：heartbeat / udp_over_stream 回写——导入面已存
+		// heartbeat-interval（毫秒整数）与 udp_over_stream，本面此前
+		// 不发、往返即丢。heartbeat 按 sing-box duration 串形态发出。
+		if ms := p.num("heartbeat-interval"); ms > 0 {
+			o["heartbeat"] = (time.Duration(ms) * time.Millisecond).String()
+		}
+		if p.flag("udp_over_stream") {
+			o["udp_over_stream"] = true
 		}
 		tls(true)
 	case "anytls":

@@ -8,6 +8,13 @@ package kernel
 // renderer (sub_template.go) still threads them — its chain branches
 // are unreachable in practice, and its behaviour for templates that
 // mention the reserved group names is unchanged.
+//
+// W3/S-002: the reserved-name ENFORCEMENT that still took effect for
+// users — the template builder's hard rejection of groups named
+// 落地节点 / 中转节点 and CheckTemplate's same-name warnings — was
+// removed in the 2.1.2 fix wave: with the chain feature deleted those
+// names are ordinary group names again. Only the unreachable render
+// threading below still references the constants.
 
 const (
 	// ChainLandingGroup holds the exit nodes; it heads the node selection.

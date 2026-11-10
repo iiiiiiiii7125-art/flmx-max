@@ -126,10 +126,10 @@ func (r remoteSyncResult) summary() string {
 	return strings.Join(parts, "，")
 }
 
-// importedNameKey is the name key a source entry is matched by:
-// case-insensitive over the truncated name. The sync's in-batch dedup
-// and its existing-row matching use it, and it is one leg of the
-// deletion shield's identity tuple.
+// importedNameKey is the name leg of the deletion-shield identity
+// tuple: case-insensitive over the truncated name. (The sync's dedup
+// does NOT use it — dedup follows identity only, see the pre-dedup
+// block in syncRemoteSource; W3/I-003.)
 //
 // importedAddrKey is the address leg of the deletion-shield identity
 // tuple only (R10-04): the bare externalKey form. The shield is
@@ -166,8 +166,9 @@ func sameImported(row *model.NodeInbound, node kernel.ImportedNode, extra string
 }
 
 // syncRemoteSource fetches the source (a file source takes the uploaded
-// content) and brings its imported nodes in line: nodes are matched by name
-// first (providers keep names when they move a server), then by address.
+// content) and brings its imported nodes in line: nodes are matched by
+// identity first (address + protocol + credentials + shape), then by
+// name (providers keep names when they move a server).
 func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource, upload string) (remoteSyncResult, error) {
 	remoteSourceMu.Lock()
 	defer remoteSourceMu.Unlock()
@@ -214,24 +215,26 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	// R2-017（B-sub-06）：截断判定改在批内去重之后。旧口径按解析后
 	// 原始条数判，溢出部分纯为重复条目时（501 条/500 唯一）每轮恒触
 	// 发截断门、下线节点永不回收。去重键与主循环的 F-025 判定同口径
-	// （名称取与 fresh 同款的截断后小写、地址取 externalIdentityKey
-	// 身份键＝地址＋协议＋凭据），被跳过的重复条目在此即发同一条展
-	// 示提示；主循环的 seen 判定保留作第二道防线（口径一致、正常轮
-	// 次不再触发）。J7-01：地址腿旧实现误用裸 host:port 的
-	// importedAddrKey（那是删除屏蔽元组的粗粒度腿），与主循环不同
-	// 构——同址同端口靠协议/凭据区分的条目在预去重即被当重复条目
-	// 吞掉、永远同步不进来，已改齐为身份键。
+	// （地址取 externalIdentityKey 身份键＝地址＋协议＋凭据＋形态），
+	// 被跳过的重复条目在此即发同一条展示提示；主循环的 seen 判定保留
+	// 作第二道防线（口径一致、正常轮次不再触发）。J7-01：地址腿旧实现
+	// 误用裸 host:port 的 importedAddrKey（那是删除屏蔽元组的粗粒度
+	// 腿），与主循环不同构——同址同端口靠协议/凭据区分的条目在预去重
+	// 即被当重复条目吞掉、永远同步不进来，已改齐为身份键。
+	// W3/I-003：去重谓词去掉名称腿——旧实现名称与身份任一命中即跳过，
+	// 同名不同址（机场同名多线路是常态）第二条起整批被当重复条目
+	// 吞掉。现在只有身份完全相同的才是重复条目；同名异身份条目照常
+	// 进主循环，新建时经 disambiguateExternalName 后缀消解（与手动
+	// 导入同口径），不丢节点也不建同名行。
 	{
 		seenPre := map[string]bool{}
 		unique := make([]kernel.ImportedNode, 0, len(nodes))
 		for _, node := range nodes {
-			nameKey := importedNameKey(node.Name)
 			addrKey := "id:" + externalIdentityKey(node.Host, node.Port, node.Proxy)
-			if seenPre[nameKey] || seenPre[addrKey] {
+			if seenPre[addrKey] {
 				noticeErr(fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
 				continue
 			}
-			seenPre[nameKey] = true
 			seenPre[addrKey] = true
 			unique = append(unique, node)
 		}
@@ -290,6 +293,14 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		byKey[externalRowKey(row)] = append(byKey[externalRowKey(row)], row)
 	}
 	used := map[int64]bool{}
+	// W3/I-003：名称占用集（全部导入行、不限来源）——同名异身份条目
+	// 新建时经 disambiguateExternalName 后缀消解，与手动导入同口径。
+	usedNames := map[string]bool{}
+	for i := range rows {
+		if isExternalInbound(&rows[i]) {
+			usedNames[strings.ToLower(rows[i].Name)] = true
+		}
+	}
 	take := func(list []*model.NodeInbound) *model.NodeInbound {
 		for _, row := range list {
 			if !used[row.ID] {
@@ -300,11 +311,13 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 		return nil
 	}
 
-	// F-025: 批内去重（与手动导入的 seen 同口径并扩到名称键）。byName/byKey
-	// 只是同步开始时的快照，本轮新建的行不回填映射——源内重复条目（同名或
-	// 同身份）会第二条再走新建分支：重复建行（external 行 kernel_id=0，
-	// 部分唯一索引不兜底），后续轮次还在两行间漂移匹配。命中批内已处理
-	// 的名称/身份即跳过并在结果里提示，不再重复建行。
+	// F-025: 批内去重。byName/byKey 只是同步开始时的快照，本轮新建
+	// 的行不回填映射——源内重复条目（同身份）会第二条再走新建分支：
+	// 重复建行（external 行 kernel_id=0，部分唯一索引不兜底），后续
+	// 轮次还在两行间漂移匹配。命中批内已处理的身份即跳过并在结果里
+	// 提示，不再重复建行。W3/I-003：去重只认身份键，不再认名称键——
+	// 同名异身份是不同节点（见预去重块注释），靠新建分支的名称后缀
+	// 消解保持可区分。
 	seen := map[string]bool{}
 
 	for _, node := range nodes {
@@ -314,17 +327,20 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			continue
 		}
 		fresh.SourceID = src.ID
-		nameKey := importedNameKey(fresh.Name)
 		addrKey := "id:" + externalIdentityKey(node.Host, node.Port, node.Proxy)
-		if seen[nameKey] || seen[addrKey] {
+		if seen[addrKey] {
 			noticeErr(fmt.Sprintf("%s：订阅源内重复条目，已跳过", node.Name))
 			continue
 		}
-		seen[nameKey] = true
 		seen[addrKey] = true
-		row := take(byName[strings.ToLower(fresh.Name)])
+		// W3/I-003：匹配顺序改身份优先、名称次之——身份命中是无歧义
+		// 的同一节点（服务商改名/改凭据都经它更新）；名称匹配保留给
+		// 「同名搬家/换凭据」（providers keep names when they move a
+		// server）。旧顺序名称优先在同名多节点时会把条目更到错误的行
+		// 上（身份对不上、再被保存期去重复检拒收计入门）。
+		row := take(byKey[externalIdentityKey(node.Host, node.Port, node.Proxy)])
 		if row == nil {
-			row = take(byKey[externalIdentityKey(node.Host, node.Port, node.Proxy)])
+			row = take(byName[strings.ToLower(fresh.Name)])
 		}
 		if row == nil {
 			// R10-04：命中删除屏蔽的条目不新建——管理员手工删过的
@@ -337,6 +353,10 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 				res.Shielded++
 				continue
 			}
+			// W3/I-003：同名异身份条目走到新建分支时与已占用名消解
+			// （后缀 (2)、(3)…），与手动导入 disambiguateExternalName
+			// 同口径——不丢节点，也不建无法区分的同名行。
+			fresh.Name = disambiguateExternalName(fresh.Name, usedNames)
 			// AUDIT-R3 (F2X-001): per-node 端口分配锁（CreateNodeInbound 内部已去锁）。
 			portMu := repo.AcquirePortAllocLock(fresh.NodeID)
 			err := h.repo.CreateNodeInbound(&fresh)
@@ -386,6 +406,9 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			gateErr(fmt.Sprintf("%s：%v", node.Name, saveErr))
 			continue
 		}
+		// W3/I-003：更新后的名字（可能被服务商改名）登记进占用集，
+		// 本轮后续新建条目据此消解同名。
+		usedNames[strings.ToLower(row.Name)] = true
 		res.Updated++
 		if moved {
 			for _, p := range h.retargetRelays(row) {

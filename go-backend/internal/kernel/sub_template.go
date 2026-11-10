@@ -143,11 +143,9 @@ func CheckTemplate(kind, content string, names []string) (TemplateSummary, error
 	if len(s.Groups) > 0 && s.AutoGroups() == 0 {
 		s.Warnings = append(s.Warnings, "没有策略组会自动收节点（"+autoHint(kind)+"），节点只会出现在节点列表里")
 	}
-	for _, g := range s.Groups {
-		if g.Name == ChainLandingGroup || g.Name == ChainRelayGroup {
-			s.Warnings = append(s.Warnings, fmt.Sprintf("策略组「%s」与链式分组保留名同名：订阅开启链式时，追加的链式组将以「%s · 链式 N」的形式改名以免同名冲突", g.Name, g.Name))
-		}
-	}
+	// W3/S-002：原「策略组与链式分组保留名同名」警告已删——订阅级
+	// 链式已删除、保留名概念不复存在，「落地节点 / 中转节点」是普通
+	// 组名，不再就同名发出不存在机制的警告。
 	return s, nil
 }
 
@@ -207,16 +205,16 @@ func nameSet(lists ...[]string) map[string]bool {
 }
 
 // chainNamesFor resolves the names the appended chain groups take in a
-// template render. The chain group names are reserved on the node side
-// (uniqueNamesExcept keeps node names off them), but a template may
-// already define a group with the same name: appending a second group
-// under that name makes sing-box reject the whole config (duplicate
-// outbound tag) and leaves Mihomo/Surge with one group shadowing the
-// other. On collision the appended chain group is renamed with a
-// "· 链式 N" suffix — the same rename-on-collision approach as the
-// template service groups — and the dialer references (dialer-proxy /
-// detour / underlying-proxy) follow the renamed relay group
-// (R4-C2C-01).
+// template render. (The names were once reserved on the node side;
+// that reservation is gone — W3/S-002 — and this helper only runs in
+// the unreachable chain branches.) A template may already define a
+// group with the same name: appending a second group under that name
+// makes sing-box reject the whole config (duplicate outbound tag) and
+// leaves Mihomo/Surge with one group shadowing the other. On collision
+// the appended chain group is renamed with a "· 链式 N" suffix — the
+// same rename-on-collision approach as the template service groups —
+// and the dialer references (dialer-proxy / detour / underlying-proxy)
+// follow the renamed relay group (R4-C2C-01).
 //
 // existing must be the kind's full output namespace — the template's
 // own names (templateTakenNames) plus the final node names — because
@@ -1011,25 +1009,8 @@ func checkSingboxTemplate(content string, names []string) (TemplateSummary, erro
 	// endpoints: duplicate tags make the client reject the profile.
 	allTags := singboxTags(cfg)
 	s.Warnings = append(s.Warnings, dupNameWarnings(allTags, "标签")...)
-	// Non-group tags with a chain group name get no warning from the
-	// group loop in CheckTemplate, though the render renames the
-	// appended chain group for them all the same (RR4-C2-I01).
-	groupTags := map[string]bool{}
-	for _, g := range singboxGroups(cfg) {
-		if tag, _ := g["tag"].(string); tag != "" {
-			groupTags[tag] = true
-		}
-	}
-	warned := map[string]bool{}
-	for _, tag := range allTags {
-		if groupTags[tag] || warned[tag] {
-			continue
-		}
-		if tag == ChainLandingGroup || tag == ChainRelayGroup {
-			warned[tag] = true
-			s.Warnings = append(s.Warnings, fmt.Sprintf("出站「%s」与链式分组保留名同名：订阅开启链式时，追加的链式组将以「%s · 链式 N」的形式改名以免同名冲突", tag, tag))
-		}
-	}
+	// W3/S-002：原「非组标签与链式分组保留名同名」警告已删（保留名
+	// 概念随订阅级链式删除而不存在，见 CheckTemplate 同处注）。
 	if len(names) > 0 {
 		universe := nameSet(allTags, names)
 		for _, g := range s.Groups {
@@ -1302,11 +1283,7 @@ func checkSurgeTemplate(content string, names []string) (TemplateSummary, error)
 	}
 	s.Warnings = append(s.Warnings, dupNameWarnings(groupNames, "策略组")...)
 	s.Warnings = append(s.Warnings, dupNameWarnings(proxyNames, "代理")...)
-	for _, n := range proxyNames {
-		if n == ChainLandingGroup || n == ChainRelayGroup {
-			s.Warnings = append(s.Warnings, fmt.Sprintf("代理「%s」与链式分组保留名同名：订阅开启链式时，追加的链式组将以「%s · 链式 N」的形式改名以免同名冲突", n, n))
-		}
-	}
+	// W3/S-002：原「代理与链式分组保留名同名」警告已删（同上）。
 	var finalTarget string
 	if r, ok := secs["rule"]; ok {
 		for _, l := range lines[r+1 : surgeSectionEnd(lines, r)] {

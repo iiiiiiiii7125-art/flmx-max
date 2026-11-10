@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
@@ -27,10 +28,16 @@ func TestKernelPayloadCarriesActiveShareSubscriptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	kernelID := mustLastInsertID(t, r, "kernel")
-	if err := r.DB().Exec(`INSERT INTO node_inbound(kernel_id, node_id, name, protocol, listen, port, settings, created_time, updated_time)
-		VALUES(?, ?, 'a', 'trojan', '::', 443, '{"password":"owner-pw"}', ?, ?)`, kernelID, nodeID, now, now).Error; err != nil {
+	// W3/P-002 口径对齐：本入站须是经 Normalize 落库的合法行（安全层
+	// 恒填充），不能再用直写 DB 的空 transport/security 毒行形态——
+	// 那正是 P-002 要求下发复检整单拒绝并点名的存量脏行形状。
+	k0, err := r.GetNodeKernel(kernelID)
+	if err != nil {
 		t.Fatal(err)
 	}
+	seedChainInbound(t, r, k0, "a", kernel.Inbound{Protocol: kernel.ProtocolTrojan, Port: 443,
+		Settings: kernel.Settings{Password: "owner-pw"},
+		Security: kernel.Security{Type: kernel.SecurityTLS, SNI: "example.com"}}, 0)
 	// "All inbounds" also covers inbounds added later.
 	s := &model.Subscription{Name: "x", Kind: model.SubscriptionShare, Token: strings.Repeat("a", 32), UUID: "u",
 		Password: "user-pw", SourceAll: 1, Enabled: 1, CreatedTime: now, UpdatedTime: now}

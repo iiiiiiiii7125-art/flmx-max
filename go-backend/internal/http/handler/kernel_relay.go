@@ -469,6 +469,33 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// W3/IRL-3（后端半）：中转创建去重闸——同一入站经同一隧道到同一
+	// 落地目标的中转已存在时点名拒绝，不再建第二条。此前本面无任何
+	// 查重，前端双击/重复提交（或不带 Idempotency-Key 的直调）即建出
+	// 两条同入站同目标中转及两条转发与两份服务。口径：托管
+	// （Managed=1）且转发仍存续的中转行，(隧道, 落地目标) 全等才算
+	// 重复；同隧道不同出口集（多出口变体走 relayTargetWithExits 的
+	// 创建面不在本端点）算出的目标不同、不误杀。查重失败 fail-closed
+	// 中止创建（与本仓去重门同口径：查不了就不写）。
+	existingRelays, err := h.repo.ListInboundRelays(row.ID)
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	for _, rel := range existingRelays {
+		if rel.Managed != 1 || !rel.ForwardExists {
+			continue
+		}
+		fwd, ferr := h.getForwardRecord(rel.ForwardID)
+		if ferr != nil || fwd == nil {
+			continue
+		}
+		if fwd.TunnelID == tunnel.ID && fwd.RemoteAddr == remoteAddr {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("该入站已建有经同一隧道到相同落地目标的中转「%s」，请勿重复创建", rel.Name)))
+			return
+		}
+	}
+
 	tunnelName, _ := h.repo.GetTunnelName(tunnel.ID)
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
