@@ -1150,6 +1150,11 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 			}
 			userAssignments = assignments
 			rows = filterInboundRowsByUserAssignments(rows, userAssignments)
+		} else {
+			// A-02 (AUDIT-R215): ?user= 在场但不是正整数时 fail-closed——
+			// 不得丢弃 userFilter、按裸 token 出全量。与已签名用户零分配
+			// 同口径：行集清空，后续正常渲染为 200 空节点列表。
+			rows = nil
 		}
 	}
 	endpoints := h.subRenderEndpoints(sub, rows)

@@ -662,7 +662,9 @@ function Editor({
           }
           summary={
             relayCustom
-              ? `自定义 · 已选 ${(o.relayIds ?? []).length} 个端点`
+              ? (o.relayIds ?? []).length === 0
+                ? "自定义 · 已选 0 个端点，将按三档回落"
+                : `自定义 · 已选 ${(o.relayIds ?? []).length} 个端点`
               : o.lines === "relay"
                 ? "只要中转"
                 : o.lines === "direct"
@@ -681,6 +683,17 @@ function Editor({
             value={relayCustom ? "custom" : o.lines}
             onChange={setScope}
           />
+          {relayCustom && (o.relayIds ?? []).length === 0 && (
+            <p className="text-xs font-semibold text-warning-700">
+              已选 0 个端点，将按三档回落（当前档位：
+              {o.lines === "relay"
+                ? "只要中转"
+                : o.lines === "direct"
+                  ? "只要直连"
+                  : "全部"}
+              ）；保存后回执会点名此次回落。
+            </p>
+          )}
           {relayCustom &&
             (scopeInbounds.length === 0 ? (
               <p className="text-xs font-semibold text-foreground">
