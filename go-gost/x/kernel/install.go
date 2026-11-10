@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/go-gost/x/bypass"
+	"github.com/go-gost/x/internal/keepalive"
 	"github.com/go-gost/x/internal/util/download"
 )
 
@@ -181,6 +182,7 @@ func fetchDialContext(ctx context.Context, network, addr string) (net.Conn, erro
 		return nil, err
 	}
 	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	keepalive.ApplyDialer(dialer)
 	var lastErr error
 	for _, ip := range ips {
 		dialIP := ip

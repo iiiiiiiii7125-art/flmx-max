@@ -19,6 +19,7 @@ import (
 	"github.com/go-gost/core/service"
 	"github.com/go-gost/relay"
 	ctxvalue "github.com/go-gost/x/ctx"
+	"github.com/go-gost/x/internal/keepalive"
 	xnet "github.com/go-gost/x/internal/net"
 	stats_util "github.com/go-gost/x/internal/util/stats"
 	rate_limiter "github.com/go-gost/x/limiter/rate"
@@ -143,7 +144,9 @@ func (h *tunnelHandler) initEntrypoint() (err error) {
 		network = "tcp4"
 	}
 
-	ln, err := net.Listen(network, h.md.entryPoint)
+	lc := net.ListenConfig{}
+	keepalive.ApplyListenConfig(&lc)
+	ln, err := lc.Listen(context.Background(), network, h.md.entryPoint)
 	if err != nil {
 		h.log.Error(err)
 		return

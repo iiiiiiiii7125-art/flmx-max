@@ -42,7 +42,7 @@ func TestG2HandleUdpPingDialableTargetReturnsUnverified(t *testing.T) {
 		}
 		port := pc.LocalAddr().(*net.UDPAddr).Port
 		w := &WebSocketReporter{}
-		resp, herr := w.handleUdpPing(map[string]interface{}{
+		resp, herr := w.handleUdpPing(context.Background(), map[string]interface{}{
 			"ip": ip.String(), "port": port, "count": 1, "timeout": 500,
 		})
 		_ = pc.Close()

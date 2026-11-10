@@ -12,6 +12,7 @@ import (
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/core/metrics"
 	"github.com/go-gost/core/selector"
+	"github.com/go-gost/x/internal/keepalive"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/net/dialer"
 	"github.com/go-gost/x/internal/net/udp"
@@ -93,7 +94,9 @@ func (*defaultRoute) Bind(ctx context.Context, network, address string, opts ...
 		if err != nil {
 			return nil, err
 		}
-		return net.ListenTCP(network, addr)
+		lc := net.ListenConfig{}
+		keepalive.ApplyListenConfig(&lc)
+		return lc.Listen(ctx, network, addr.String())
 	case "udp", "udp4", "udp6":
 		addr, err := net.ResolveUDPAddr(network, address)
 		if err != nil {

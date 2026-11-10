@@ -32,6 +32,7 @@ import (
 	xbypass "github.com/go-gost/x/bypass"
 	ctxvalue "github.com/go-gost/x/ctx"
 	ctx_internal "github.com/go-gost/x/internal/ctx"
+	"github.com/go-gost/x/internal/keepalive"
 	xnet "github.com/go-gost/x/internal/net"
 	xhttp "github.com/go-gost/x/internal/net/http"
 	"github.com/go-gost/x/internal/util/sniffing"
@@ -897,7 +898,9 @@ func (h *httpHandler) authenticate(ctx context.Context, conn net.Conn, req *http
 			resp = r
 			defer resp.Body.Close()
 		case "host":
-			cc, err := net.Dial("tcp", pr.Value)
+			decoyDialer := &net.Dialer{}
+			keepalive.ApplyDialer(decoyDialer)
+			cc, err := decoyDialer.Dial("tcp", pr.Value)
 			if err != nil {
 				log.Error(err)
 				break

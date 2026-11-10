@@ -291,10 +291,22 @@ func (r *Relay) Run(ctx context.Context) (err error) {
 				n, raddr, err := r.readDatagram(r.pc1, b[:], prog, window)
 				if err != nil {
 					if isTimeout(err) {
-						timedOut.Store(true)
+						// F2-19 attribution: unwind (close both ends)
+						// either way, but only a window that is armed
+						// AND fully stalled may be labelled idle
+						// timeout (router/associate caliber). With
+						// the window off, readDatagram has already
+						// passed a foreign timeout through verbatim;
+						// return it as-is so logs name the real
+						// cause (e.g. a keepalive verdict on a dead
+						// peer), not a no-progress teardown.
 						r.pc1.Close()
 						r.pc2.Close()
-						return errIdleTimeout
+						if window > 0 && prog.stalled(window) {
+							timedOut.Store(true)
+							return errIdleTimeout
+						}
+						return err
 					}
 					return err
 				}
@@ -342,10 +354,22 @@ func (r *Relay) Run(ctx context.Context) (err error) {
 				n, raddr, err := r.readDatagram(r.pc2, b[:], prog, window)
 				if err != nil {
 					if isTimeout(err) {
-						timedOut.Store(true)
+						// F2-19 attribution: unwind (close both ends)
+						// either way, but only a window that is armed
+						// AND fully stalled may be labelled idle
+						// timeout (router/associate caliber). With
+						// the window off, readDatagram has already
+						// passed a foreign timeout through verbatim;
+						// return it as-is so logs name the real
+						// cause (e.g. a keepalive verdict on a dead
+						// peer), not a no-progress teardown.
 						r.pc1.Close()
 						r.pc2.Close()
-						return errIdleTimeout
+						if window > 0 && prog.stalled(window) {
+							timedOut.Store(true)
+							return errIdleTimeout
+						}
+						return err
 					}
 					return err
 				}

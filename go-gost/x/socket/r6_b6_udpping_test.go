@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"net"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ import (
 func TestR6B6HandleUdpPingRejectsDeniedTargets(t *testing.T) {
 	w := &WebSocketReporter{}
 	for _, ip := range []string{"127.0.0.1", "0.0.0.0", "localhost", "169.254.169.254"} {
-		resp, err := w.handleUdpPing(map[string]interface{}{
+		resp, err := w.handleUdpPing(context.Background(), map[string]interface{}{
 			"ip": ip, "port": 53, "count": 1, "timeout": 200,
 		})
 		if err != nil {
@@ -34,7 +35,7 @@ func TestR6B6HandleUdpPingRejectsDeniedTargets(t *testing.T) {
 
 // 解析落点复检直测：udpPingHost 对解析到回环的主机名整体拒绝。
 func TestR6B6UdpPingHostResolvingToLoopbackDenied(t *testing.T) {
-	_, _, err := udpPingHost("localhost", 53, 1, 200)
+	_, _, err := udpPingHost(context.Background(), "localhost", 53, 1, 200)
 	if err == nil || err.Error() != "目标地址不允许" {
 		t.Fatalf("udpPingHost(localhost) err = %v, want 目标地址不允许", err)
 	}
@@ -45,7 +46,7 @@ func TestR6B6UdpPingHostResolvingToLoopbackDenied(t *testing.T) {
 func TestR6B6HandleUdpPingAllowsPublicPrivateTargets(t *testing.T) {
 	w := &WebSocketReporter{}
 	for _, ip := range []string{"8.8.8.8", "192.168.1.1", "10.0.0.5", "172.16.0.9"} {
-		resp, err := w.handleUdpPing(map[string]interface{}{
+		resp, err := w.handleUdpPing(context.Background(), map[string]interface{}{
 			"ip": ip, "port": 53, "count": 1, "timeout": 200,
 		})
 		if err != nil {
@@ -87,7 +88,7 @@ func TestR6B6HandleUdpPingPrivateListenerUnverifiedNotDenied(t *testing.T) {
 		}
 		port := pc.LocalAddr().(*net.UDPAddr).Port
 		w := &WebSocketReporter{}
-		resp, herr := w.handleUdpPing(map[string]interface{}{
+		resp, herr := w.handleUdpPing(context.Background(), map[string]interface{}{
 			"ip": ip.String(), "port": port, "count": 1, "timeout": 500,
 		})
 		_ = pc.Close()

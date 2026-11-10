@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-gost/x/internal/keepalive"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/miekg/dns"
 )
@@ -45,7 +46,9 @@ func (s *dohServer) Serve() error {
 		if xnet.IsIPv4(s.addr) {
 			network = "tcp4"
 		}
-		ln, err = net.Listen(network, s.addr)
+		lc := net.ListenConfig{}
+		keepalive.ApplyListenConfig(&lc)
+		ln, err = lc.Listen(context.Background(), network, s.addr)
 		if err != nil {
 			return err
 		}

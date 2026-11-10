@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/go-gost/x/internal/keepalive"
 )
 
 // One-click line probe (TuneProbe), added for the 3.3.42 tuning port.
@@ -33,12 +35,14 @@ type tuneProbeRequest struct {
 }
 
 type tuneProbeResult struct {
-	// Suggested is what the tuning inputs should be filled with. The
-	// RTT leg falls back to the standing default (150 ms, T-5) when
-	// its measurement is unavailable; the fallback is always
-	// explained in Warnings and in the per-leg Source fields, never
-	// silently substituted.
-	Suggested tuneParams `json:"suggested"`
+	// Suggested is computed for internal/diagnostic use only and is
+	// NOT sent on the wire (B-04): the suggested-vocabulary was
+	// retired panel-side (the frontend explicitly does not consume
+	// it — the measured fields below are the contract), but the
+	// value kept being serialized with every probe result. The
+	// field stays for the probe's own tests and logging; the wire
+	// no longer carries it.
+	Suggested tuneParams `json:"-"`
 	// RTTMedianMs is the measured median RTT in ms (clamped to the
 	// valid tune range), or nil when unavailable. This is the
 	// contract field name (frontend reads rttMedianMs); the earlier
@@ -256,6 +260,8 @@ func probeReferenceSeries(host string) (probeSeriesStats, error) {
 		return probeSeriesStats{}, err
 	}
 	dialer := &net.Dialer{Timeout: probeReferenceTimeout}
+	// LBK census: keepalive stamp at the dialer construction point.
+	keepalive.ApplyDialer(dialer)
 	var st probeSeriesStats
 	for i := 0; i < probeSeriesCount; i++ {
 		if i > 0 {

@@ -290,6 +290,15 @@ func deleteServices(req deleteServicesRequest) error {
 		return errors.New("services list cannot be empty")
 	}
 
+	// F-A01: snapshot before any registry mutation. Unregister below
+	// closes the live services; if the persist inside OnUpdate then
+	// fails, the pre-command state must come back in all three places
+	// (runtime re-parsed + re-served, in-memory config restored) —
+	// previously the deletion stood in runtime and memory while the
+	// disk kept the services, so a restart silently resurrected them
+	// and the panel believed them gone.
+	originalConfig := config.Global()
+
 	// 第一阶段：验证所有服务是否存在
 	var servicesToDelete []struct {
 		name    string
@@ -348,8 +357,32 @@ func deleteServices(req deleteServicesRequest) error {
 		}
 		return nil
 	})
+	if err != nil {
+		restoreConfigSnapshot(originalConfig)
+		if originalConfig != nil {
+			for _, name := range namesToRemove {
+				var sc *config.ServiceConfig
+				for _, s := range originalConfig.Services {
+					if s != nil && s.Name == name {
+						sc = s
+						break
+					}
+				}
+				if sc == nil {
+					continue
+				}
+				if rerr := restoreServiceRuntime(name, sc); rerr != nil {
+					logger.Default().Errorf("rollback delete services: failed to restore service %s: %v", name, rerr)
+				}
+			}
+		}
+		return err
+	}
+	// Traffic-manager cleanup only once the deletion is durable:
+	// doing it on the failure path would strip the counters of
+	// services the rollback just restored.
 	xservice.GetGlobalTrafficManager().RemoveServices(namesToRemove...)
-	return err
+	return nil
 }
 
 func pauseServices(req pauseServicesRequest) error {
@@ -465,7 +498,13 @@ func pauseServices(req pauseServicesRequest) error {
 	})
 
 	if err != nil {
-		// 配置更新失败，需要回滚所有暂停的服务
+		// 配置更新失败，需要回滚所有暂停的服务。F-A01: 先把内存
+		// 配置整体还原为命令前快照（cfg 是 Global() 深克隆）——
+		// OnUpdate 的闭包已就地改过全局配置、仅 persist 失败，
+		// 不还原则内存里 paused 标记与已恢复运行的服务分裂；
+		// rollbackPausedServices 的逐项 OnUpdate 随后会把还原后
+		// 的状态再落盘一次。
+		restoreConfigSnapshot(cfg)
 		rollbackPausedServices(pausedServices)
 		return errors.New(fmt.Sprintf("Failed to update config, rolling back paused services: %v", err))
 	}
@@ -620,7 +659,9 @@ func resumeServices(req resumeServicesRequest) error {
 	})
 
 	if err != nil {
-		// 配置更新失败，回滚所有已恢复的服务
+		// 配置更新失败，回滚所有已恢复的服务。F-A01: 同
+		// pauseServices，先整体还原内存配置快照再做运行时回滚。
+		restoreConfigSnapshot(cfg)
 		rollbackResumedServices(resumedServices)
 		return errors.New(fmt.Sprintf("Failed to update config, rolling back resumed services: %v", err))
 	}
@@ -649,8 +690,9 @@ func rollbackPausedServices(pausedServices []struct {
 
 		go svc.Serve()
 
-		// 移除暂停状态标记
-		config.OnUpdate(func(c *config.Config) error {
+		// 移除暂停状态标记。F-A01: 回滚内的 OnUpdate 失败此前被
+		// 静默丢弃——回滚落盘失败必须至少在日志里可见。
+		if uerr := config.OnUpdate(func(c *config.Config) error {
 			for i := range c.Services {
 				// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
 				if c.Services[i] == nil {
@@ -668,7 +710,9 @@ func rollbackPausedServices(pausedServices []struct {
 				}
 			}
 			return nil
-		})
+		}); uerr != nil {
+			logger.Default().Errorf("rollback paused services: failed to persist un-pause for %s: %v", pss.name, uerr)
+		}
 	}
 }
 
@@ -683,8 +727,9 @@ func rollbackResumedServices(resumedServices []struct {
 			svc.Close()
 		}
 
-		// 重新标记为暂停状态
-		config.OnUpdate(func(c *config.Config) error {
+		// 重新标记为暂停状态。F-A01: 同 rollbackPausedServices，
+		// 回滚内 OnUpdate 失败必须记日志、不得静默。
+		if uerr := config.OnUpdate(func(c *config.Config) error {
 			for i := range c.Services {
 				// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
 				if c.Services[i] == nil {
@@ -700,7 +745,9 @@ func rollbackResumedServices(resumedServices []struct {
 				}
 			}
 			return nil
-		})
+		}); uerr != nil {
+			logger.Default().Errorf("rollback resumed services: failed to persist re-pause for %s: %v", rss.name, uerr)
+		}
 	}
 }
 

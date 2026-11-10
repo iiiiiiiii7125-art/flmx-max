@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"net"
 	"net/http"
 
 	"github.com/go-gost/core/auth"
 	"github.com/go-gost/core/service"
+	"github.com/go-gost/x/internal/keepalive"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -42,7 +44,9 @@ func NewService(network, addr string, opts ...Option) (service.Service, error) {
 	if network == "" {
 		network = "tcp"
 	}
-	ln, err := net.Listen(network, addr)
+	lc := net.ListenConfig{}
+	keepalive.ApplyListenConfig(&lc)
+	ln, err := lc.Listen(context.Background(), network, addr)
 	if err != nil {
 		return nil, err
 	}

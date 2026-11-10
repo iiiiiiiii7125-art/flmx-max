@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/core/recorder"
+	"github.com/go-gost/x/internal/keepalive"
 )
 
 type tcpRecorderOptions struct {
@@ -41,12 +42,12 @@ func TCPRecorder(addr string, opts ...TCPRecorderOption) recorder.Recorder {
 		opt(&options)
 	}
 
+	d := &net.Dialer{Timeout: options.timeout}
+	keepalive.ApplyDialer(d)
 	return &tcpRecorder{
-		addr: addr,
-		dialer: &net.Dialer{
-			Timeout: options.timeout,
-		},
-		log: options.log,
+		addr:   addr,
+		dialer: d,
+		log:    options.log,
 	}
 }
 

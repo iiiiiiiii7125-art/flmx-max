@@ -2,6 +2,7 @@ package socket
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,32 +96,311 @@ func AgentUninstalled() bool {
 	return err == nil
 }
 
-// handleUninstallAgent 先返回（派发层随即回执面板），卸载在协程里
-// 延迟执行，避免回执还没发出去连接就被自己的卸载动作掐断。重复
-// 下发只执行一次。
+// --- C4-G2 uninstall protocol (agent side) ---
+//
+// The panel registers the node as pending_uninstall and converges
+// ONLY on an agent-reported final state; silence is never success.
+// The agent side of the contract:
+//   1. ack first (the UninstallAgentResponse), execute after the
+//      ack frame has actually been flushed — hard ordering via an
+//      ack waiter signalled by routeCommand after sendResponse,
+//      replacing the previous sleep(1s) bet (C2-F04);
+//   2. persist the intent (state file next to the binary) BEFORE
+//      any destructive step, judge every step, and report the
+//      final state (succeeded, or failed + the failed step named)
+//      on the unsolicited UninstallResult frame before the point
+//      of no return (container exit / script-driven stop);
+//   3. if reporting fails, the state file keeps reported=false and
+//      the next successful connect re-sends it; a duplicate
+//      dispatch against a stored final state only re-reports it,
+//      never re-executes. Idempotency key: the panel-supplied
+//      issuedAt when present, else the first dispatch's requestId.
+
+// uninstallStepResult is one judged step of the uninstall.
+type uninstallStepResult struct {
+	Step  string `json:"step"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// uninstallState is the persisted uninstall record.
+type uninstallState struct {
+	Key        string                `json:"key"`
+	IssuedAt   string                `json:"issuedAt,omitempty"`
+	RequestID  string                `json:"requestId,omitempty"`
+	State      string                `json:"state"` // acked | executing | succeeded | failed
+	Steps      []uninstallStepResult `json:"steps,omitempty"`
+	FailedStep string                `json:"failedStep,omitempty"`
+	Reason     string                `json:"reason,omitempty"`
+	AckFlushed bool                  `json:"ackFlushed"`
+	Reported   bool                  `json:"reported"`
+	UpdatedAt  string                `json:"updatedAt"`
+}
+
+// uninstallOutcome is the judged result of one execution pass.
+type uninstallOutcome struct {
+	steps      []uninstallStepResult
+	failedStep string
+	// pendingExit marks the container form: the wipe has run, the
+	// caller reports the final state first, then exits.
+	pendingExit bool
+}
+
+func (o *uninstallOutcome) addStep(name string, err error) {
+	st := uninstallStepResult{Step: name, OK: err == nil}
+	if err != nil {
+		st.Error = err.Error()
+		if o.failedStep == "" {
+			o.failedStep = name
+		}
+	}
+	o.steps = append(o.steps, st)
+}
+
+func (o *uninstallOutcome) failed() bool { return o.failedStep != "" }
+
+// Timing seams for the protocol flow (tests shrink them).
+var (
+	uninstallAckWaitTimeout  = 20 * time.Second
+	uninstallReportAttempts  = 3
+	uninstallReportRetryWait = 2 * time.Second
+)
+
+// uninstallStatePath locates the state file next to the agent
+// binary (same anchor as the reconnect marker). Via the
+// uninstallBinaryPath seam so tests redirect it into a temp tree.
+var uninstallStatePath = func() (string, error) {
+	exe, err := uninstallBinaryPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(exe), "agent-uninstall.state.json"), nil
+}
+
+func loadUninstallState() (*uninstallState, bool) {
+	path, err := uninstallStatePath()
+	if err != nil {
+		return nil, false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var st uninstallState
+	if err := json.Unmarshal(b, &st); err != nil {
+		return nil, false
+	}
+	return &st, true
+}
+
+func saveUninstallState(st *uninstallState) {
+	path, err := uninstallStatePath()
+	if err != nil {
+		fmt.Printf("⚠️ 卸载状态文件路径不可得: %v\n", err)
+		return
+	}
+	st.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	b, err := json.Marshal(st)
+	if err != nil {
+		return
+	}
+	if err := writeFileAtomic(path, b, 0o600); err != nil {
+		fmt.Printf("⚠️ 卸载状态文件写入失败: %v\n", err)
+	}
+}
+
+// handleUninstallAgent 登记卸载并回执（派发层随即发送回执），
+// 真正的执行在协程里等 ack flush 信号后开始（见 executeUninstall）。
+// 幂等键是面板签发的 issuedAt（无则用首发 requestId）：
+// 已有终局且键相同＝重复下发，只重报终局、不再执行；
+// 键不同是新一次卸载签发（面板重试须发新 issued_at，见
+// FIXWAVE-PROTOCOL-G2.md），旧终局不得吞掉新签发。
 //
 // 回执 data 携带预检 warnings：节点上有调优足迹在位时，预告卸
 // 载将回退调优并删除哪些宿主调优文件，面板据此向用户明示处置
 // 范围（既有 uninstallWarnings 呈现面）；无足迹时回执保持纯成功
 // 形态。实际卸载照常执行（回退＋宿主文件清理＋逐项日志）。
-func (w *WebSocketReporter) handleUninstallAgent() (interface{}, error) {
+func (w *WebSocketReporter) handleUninstallAgent(data interface{}, requestID string) (interface{}, error) {
+	issuedAt := ""
+	if data != nil {
+		var payload struct {
+			IssuedAt string `json:"issuedAt"`
+		}
+		if b, err := json.Marshal(data); err == nil {
+			_ = json.Unmarshal(b, &payload)
+			issuedAt = strings.TrimSpace(payload.IssuedAt)
+		}
+	}
+	key := issuedAt
+	if key == "" {
+		key = requestID
+	}
+	// 已有终局且幂等键相同：重复下发只重报（等本次 ack 后发终局
+	// 帧），绝不二次执行。键不同是新签发：先把本进程的执行守卫
+	// 复位（上一轮已完成、进程仍在时新签发不得被旧守卫挡掉），
+	// 再按新卸载执行并覆盖落盘状态。
+	if st, ok := loadUninstallState(); ok && (st.State == "succeeded" || st.State == "failed") {
+		if st.Key == key {
+			ackCh := w.registerUninstallAck(requestID)
+			go w.resendUninstallFinalAfterAck(ackCh, st)
+			return map[string]interface{}{
+				"uninstallKey": st.Key,
+				"state":        st.State,
+				"alreadyFinal": true,
+			}, nil
+		}
+		uninstallStarted.Store(false)
+	}
 	if !uninstallStarted.CompareAndSwap(false, true) {
-		return nil, nil
+		// 本进程已在执行：仅回执，不重复登记。
+		return map[string]interface{}{"state": "executing"}, nil
 	}
-	var data interface{}
+	st := &uninstallState{
+		Key:       key,
+		IssuedAt:  issuedAt,
+		RequestID: requestID,
+		State:     "acked",
+	}
+	// 终局意图先落盘再执行任何自删类动作（「能报必报」的地基：
+	// 进程在执行中死掉，重连补报靠这份状态收敛为 failed）。
+	saveUninstallState(st)
+	ackCh := w.registerUninstallAck(requestID)
+	respData := map[string]interface{}{
+		"uninstallKey": key,
+		"state":        "acked",
+	}
 	if warnings := uninstallTuningPreflight().warnings(); len(warnings) > 0 {
-		data = map[string]interface{}{"warnings": warnings}
+		respData["warnings"] = warnings
 	}
-	go func() {
-		time.Sleep(time.Second)
-		runAgentUninstall()
-	}()
-	return data, nil
+	go w.executeUninstall(ackCh, st)
+	return respData, nil
 }
 
+// executeUninstall is the protocol executor: wait for the ack
+// flush, run the judged steps, persist + report the final state,
+// and only then cross the point of no return (container exit).
+func (w *WebSocketReporter) executeUninstall(ackCh chan bool, st *uninstallState) {
+	flushed := false
+	select {
+	case flushed = <-ackCh:
+	case <-time.After(uninstallAckWaitTimeout):
+		// The ack could not be confirmed flushed (connection
+		// trouble). Proceeding anyway is the documented fallback:
+		// the panel keeps the node unconfirmed and converges on
+		// this final report or a later re-send; stranding the
+		// uninstall forever would be worse.
+		fmt.Println("⚠️ 卸载回执 flush 未确认，仍按协议继续执行并上报终局")
+	}
+	st.AckFlushed = flushed
+	st.State = "executing"
+	saveUninstallState(st)
+
+	outcome := runAgentUninstallSteps()
+	st.Steps = outcome.steps
+	st.FailedStep = outcome.failedStep
+	if outcome.failed() {
+		st.State = "failed"
+	} else {
+		st.State = "succeeded"
+	}
+	saveUninstallState(st)
+	if w.reportUninstallFinal(st) {
+		st.Reported = true
+		saveUninstallState(st)
+	}
+	if outcome.pendingExit {
+		uninstallExit(0)
+	}
+}
+
+// resendUninstallFinalAfterAck re-reports a stored final state
+// after a duplicate dispatch's ack has been flushed.
+func (w *WebSocketReporter) resendUninstallFinalAfterAck(ackCh chan bool, st *uninstallState) {
+	select {
+	case <-ackCh:
+	case <-time.After(uninstallAckWaitTimeout):
+	}
+	if w.reportUninstallFinal(st) && !st.Reported {
+		st.Reported = true
+		saveUninstallState(st)
+	}
+}
+
+// reportUninstallFinal sends the unsolicited UninstallResult frame
+// (same precedent as UpgradeProgress: a typed frame with no
+// requestId of its own; the idempotency key travels in data).
+// Returns true when a frame was written to the socket.
+func (w *WebSocketReporter) reportUninstallFinal(st *uninstallState) bool {
+	resp := CommandResponse{
+		Type:    "UninstallResult",
+		Success: st.State == "succeeded",
+		Message: st.Reason,
+		Data: map[string]interface{}{
+			"uninstallKey": st.Key,
+			"issuedAt":     st.IssuedAt,
+			"requestId":    st.RequestID,
+			"state":        st.State,
+			"failedStep":   st.FailedStep,
+			"steps":        st.Steps,
+		},
+	}
+	for i := 0; i < uninstallReportAttempts; i++ {
+		if w.sendResponse(resp) {
+			return true
+		}
+		if i+1 < uninstallReportAttempts {
+			time.Sleep(uninstallReportRetryWait)
+		}
+	}
+	return false
+}
+
+// flushPendingUninstallResult runs on every successful connect: a
+// stored final state that never got reported is re-sent; a stored
+// non-final state from a previous process means that process died
+// mid-uninstall, so the honest final state is failed/interrupted.
+func (w *WebSocketReporter) flushPendingUninstallResult() {
+	if uninstallStarted.Load() {
+		return // this process is executing it; its own flow reports
+	}
+	st, ok := loadUninstallState()
+	if !ok {
+		return
+	}
+	switch st.State {
+	case "succeeded", "failed":
+		if st.Reported {
+			return
+		}
+	case "acked", "executing":
+		st.State = "failed"
+		st.FailedStep = "interrupted"
+		st.Reason = "agent restarted before the uninstall completed"
+		saveUninstallState(st)
+	default:
+		return
+	}
+	if w.reportUninstallFinal(st) {
+		st.Reported = true
+		saveUninstallState(st)
+	}
+}
+
+// runAgentUninstall is the legacy synchronous entry (tests and any
+// non-protocol caller): run all steps and take the container exit
+// inline. The protocol flow uses runAgentUninstallSteps via
+// executeUninstall so the final report precedes the exit.
 func runAgentUninstall() {
+	outcome := runAgentUninstallSteps()
+	if outcome.pendingExit {
+		uninstallExit(0)
+	}
+}
+
+func runAgentUninstallSteps() (outcome uninstallOutcome) {
 	fmt.Println("🗑️ 面板已删除此服务器，开始卸载 agent...")
 	restoreErr := uninstallRestoreTuning()
+	outcome.addStep("restore-tuning", restoreErr)
 	if restoreErr != nil {
 		fmt.Printf("⚠️ 恢复调优前的系统参数失败: %v\n", restoreErr)
 	}
@@ -141,43 +421,63 @@ func runAgentUninstall() {
 	if restoreErr != nil && len(cleanup.Failed) > 0 {
 		fmt.Printf("⚠️ 调优恢复失败且以下宿主调优文件未能删除，卸载后仍有残留：%s\n", strings.Join(cleanup.Failed, "、"))
 	}
-	if err := uninstallKernels(); err != nil {
-		fmt.Printf("⚠️ 清理内核和 nftables 规则失败: %v\n", err)
+	// Skipped 是归属守卫的有意跳过、不是失败；只有 Failed 计入
+	// 步骤判定（C4-G2：逐项判定、失败点名）。
+	if len(cleanup.Failed) > 0 {
+		outcome.addStep("cleanup-host-tuning-files", fmt.Errorf("以下宿主调优文件未能删除：%s", strings.Join(cleanup.Failed, "、")))
+	} else {
+		outcome.addStep("cleanup-host-tuning-files", nil)
+	}
+	kernelsErr := uninstallKernels()
+	outcome.addStep("uninstall-kernels", kernelsErr)
+	if kernelsErr != nil {
+		fmt.Printf("⚠️ 清理内核和 nftables 规则失败: %v\n", kernelsErr)
 	}
 	binaryPath, err := uninstallBinaryPath()
+	outcome.addStep("locate-binary", err)
 	if err != nil {
 		fmt.Printf("❌ 卸载失败：无法定位 agent 二进制: %v\n", err)
-		return
+		return outcome
 	}
 	if uninstallInContainer() {
-		if err := wipeContainerDataDir(binaryPath); err != nil {
-			fmt.Printf("⚠️ 清理数据目录失败: %v\n", err)
+		wipeErr := wipeContainerDataDir(binaryPath)
+		outcome.addStep("wipe-data-dir", wipeErr)
+		if wipeErr != nil {
+			fmt.Printf("⚠️ 清理数据目录失败: %v\n", wipeErr)
 		}
 		fmt.Println("✅ 已卸载。容器无法删除自己，请在宿主机上执行 docker rm -f 删除这个容器")
-		uninstallExit(0)
-		return
+		// 出口延后给调用方：协议流须先上报终局再退出（见
+		// executeUninstall）；失败（含 wipe 失败）不改变退出语
+		// 义——容器形态 agent 已无可留守，终局由上报帧承载。
+		outcome.pendingExit = true
+		return outcome
 	}
 	// 自定义内核目录（脚本形态）：FLMX_KERNEL_DIR 把内核状态根
 	// 指到安装目录之外时，删安装目录覆盖不到它——在内核已停
 	// （uninstallKernels 已执行）后按守卫单独清理，与 install.sh
 	// 的 resolve_custom_kernel_dir 同口径。容器形态不走这里：
 	// 其 FLMX_KERNEL_DIR 钉在数据目录内，已随数据目录清空。
-	removeCustomKernelDirForUninstall(binaryPath)
+	outcome.addStep("remove-custom-kernel-dir", removeCustomKernelDirForUninstall(binaryPath))
 	manager, err := uninstallDetectManager()
+	outcome.addStep("detect-service-manager", err)
 	if err != nil {
 		fmt.Printf("❌ 卸载失败: %v\n", err)
-		return
+		return outcome
 	}
 	script, err := buildAgentUninstallScript(manager, binaryPath)
+	outcome.addStep("build-uninstall-script", err)
 	if err != nil {
 		fmt.Printf("❌ 卸载失败: %v\n", err)
-		return
+		return outcome
 	}
-	if err := uninstallLaunchScript(manager, script); err != nil {
-		fmt.Printf("❌ 启动卸载脚本失败: %v\n", err)
-		return
+	launchErr := uninstallLaunchScript(manager, script)
+	outcome.addStep("launch-uninstall-script", launchErr)
+	if launchErr != nil {
+		fmt.Printf("❌ 启动卸载脚本失败: %v\n", launchErr)
+		return outcome
 	}
 	fmt.Println("✅ 卸载脚本已启动，agent 即将停止")
+	return outcome
 }
 
 // restoreTuningForUninstall 把系统调优整套回退到默认：拿调优操
@@ -512,21 +812,24 @@ func guardedCustomKernelDir(binaryPath string) (string, string) {
 }
 
 // removeCustomKernelDirForUninstall 执行 guardedCustomKernelDir
-// 的判定结果：删除并点名，或点名披露跳过原因。
-func removeCustomKernelDirForUninstall(binaryPath string) {
+// 的判定结果：删除并点名，或点名披露跳过原因。守卫跳过是归属
+// 判定下的有意不删（原因已点名披露）、不算失败，返回 nil；实
+// 际删除失败返回 error 供卸载步骤判定点名（C4-G2）。
+func removeCustomKernelDirForUninstall(binaryPath string) error {
 	dir, skip := guardedCustomKernelDir(binaryPath)
 	if skip != "" {
 		fmt.Printf("⚠️ %s\n", skip)
-		return
+		return nil
 	}
 	if dir == "" {
-		return
+		return nil
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		fmt.Printf("⚠️ 删除自定义内核目录失败: %s（%v）\n", dir, err)
-		return
+		return err
 	}
 	fmt.Printf("🧹 删除自定义内核目录: %s\n", dir)
+	return nil
 }
 
 // wipeContainerDataDir 是容器形态的清理入口：以数据目录（config
