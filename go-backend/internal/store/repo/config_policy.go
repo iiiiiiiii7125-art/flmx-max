@@ -244,6 +244,11 @@ var backupRuntimeExcludedConfigKeys = map[string]struct{}{
 	// 随备份往返会在恢复旧备份时把水位回滚，使旧回调在目标实例上
 	// 重新满足“同代”条件而复活过时消息。
 	"notify_quota_recovery_pending_gen": {},
+	// R3-MON-01：升级未落地告警的待发台账与世代水位（发送失败
+	// 待补发的依据），与配额两键同理——随备份往返会在目标实例
+	// 上重发已送达的告警／回滚水位复活过时文案。
+	"notify_upgrade_failed_pending":     {},
+	"notify_upgrade_failed_pending_gen": {},
 }
 
 func isBackupRuntimeExcludedConfigKey(name string) bool {

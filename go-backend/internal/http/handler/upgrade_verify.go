@@ -2,8 +2,10 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -200,6 +202,10 @@ type upgradeVerifyFailure struct {
 	Observed    string
 	// Anchor 是期望哈希的降级形态（F2-12），非空时告警正文点名。
 	Anchor string
+	// DispatchedAt 是核验记录的下发时刻（毫秒）：待发告警台账以
+	// 它判别「哪一轮核验」（R3-MON-01），补发时与当前记录比对，
+	// 不一致即旧轮告警作废。
+	DispatchedAt int64
 }
 
 // failDueUpgradeVerifications 把过截止仍 pending 的记录置
@@ -237,13 +243,14 @@ func (h *Handler) failDueUpgradeVerifications(now time.Time) []upgradeVerifyFail
 		// F2-10：核验终局（failed）释放 ACK 后执行期占用。
 		h.releaseNodeUpgradeOpHold(rec.NodeID)
 		failures = append(failures, upgradeVerifyFailure{
-			NodeID:      rec.NodeID,
-			NodeName:    node.Name,
-			Kind:        rec.Kind,
+			NodeID:       rec.NodeID,
+			NodeName:     node.Name,
+			Kind:         rec.Kind,
 			Target:      rec.TargetVersion,
-			FromVersion: rec.FromVersion,
-			Observed:    observed,
-			Anchor:      rec.SHAAnchor,
+			FromVersion:  rec.FromVersion,
+			Observed:     observed,
+			Anchor:       rec.SHAAnchor,
+			DispatchedAt: rec.DispatchedAt,
 		})
 	}
 	return failures
@@ -281,17 +288,268 @@ func upgradeVerifyFailureMessage(f upgradeVerifyFailure) string {
 	return b.String()
 }
 
-// sweepNodeUpgradeVerifications 执行一轮截止扫描并为新 failed
-// 记录发告警（复用 notifyTracked 通知面，事件
-// node_upgrade_failed；发送失败不回滚 failed 状态——状态是事
-// 实，通知只是其广播，与掉线告警的标记语义不同：此处没有第二
-// 条提醒通道要靠回滚重试保住，节点列表的未落地标记是持久兜
-// 底）。
+// sweepNodeUpgradeVerifications 执行一轮截止扫描：为新 failed
+// 记录发告警，并补发台账中此前发送失败的未落地告警
+// （R3-MON-01）。发送失败不回滚 failed 状态——状态是事实、通知
+// 是其广播；广播的可靠性由待发台账负责（见下方
+// notifyUpgradeFailedPending* 一组），不再靠不存在的第二触发点。
 func (h *Handler) sweepNodeUpgradeVerifications(now time.Time) {
 	for _, f := range h.failDueUpgradeVerifications(now) {
 		log.Printf("node upgrade verification failed node_id=%d kind=%s target=%s observed=%q", f.NodeID, f.Kind, f.Target, f.Observed)
-		h.notifyTracked(notifyEventNodeUpgradeFailed, "节点升级未落地", upgradeVerifyFailureMessage(f), nil)
+		h.dispatchUpgradeFailedAlert(f.NodeID, f.DispatchedAt, upgradeVerifyFailureMessage(f))
 	}
+	h.retryPendingUpgradeFailedAlerts(now)
+}
+
+// ——— R3-MON-01：未落地告警的待发台账（与配额恢复通知 I-01 同机制）———
+//
+// node_upgrade_failed 是一次性跃迁事件：记录翻 failed 只发生一
+// 次，旧实现以 onDone=nil 派发——双通道在扫描窗内同败时告警永
+// 久丢失，与 notify.md「仍然失败的会在后续检查中补发」的通用承
+// 诺不符。本组按配额恢复通知的既有机制补齐：派发前先把待发记
+// 录持久化进 vite_config（按节点去重、带世代水位），再经
+// notifyTracked 发送；成功（或窗内已送达被抑制、或通知未启用）
+// 才销账，发送失败经世代守卫保标记，由后续扫描轮次补发。补发
+// 逐字重发置 failed 当轮组装的正文（指纹不变，通道台账能跳过
+// 已送达通道；正文中的观测值属于失败当轮，事后重组会把迟到观
+// 测混进来）。
+
+// pendingUpgradeFailedAlert 是一条已置 failed 但告警尚未送达的
+// 待发记录。DispatchedAt 判别核验轮次：补发校验时与当前记录比
+// 对，不一致说明节点已进入新一轮核验、旧告警作废。
+type pendingUpgradeFailedAlert struct {
+	NodeID       int64  `json:"nodeId"`
+	DispatchedAt int64  `json:"dispatchedAt"`
+	Message      string `json:"message"`
+	At           int64  `json:"at"`
+	Gen          int64  `json:"gen"`
+}
+
+// notifyUpgradeFailedPendingConfigKey / …GenConfigKey 是待发台账
+// 与世代水位（运行时状态，非管理员配置，已登记备份排除集）。
+const notifyUpgradeFailedPendingConfigKey = "notify_upgrade_failed_pending"
+const notifyUpgradeFailedPendingGenConfigKey = "notify_upgrade_failed_pending_gen"
+
+// upgradeFailedAlertRetryInterval 是待发告警的补发节流，与配额
+// 待发台账、节点到期检查的 10 分钟轮同口径：持续故障时每条告
+// 警至多每 10 分钟重派一次（每次派发内部仍有通道级一次重试），
+// 不轰炸通道。变量形态供测试收紧。
+var upgradeFailedAlertRetryInterval = 10 * time.Minute
+
+// dispatchUpgradeFailedAlert 是未落地告警的首发/补发共用派发口：
+// 先标记（新世代）再派发，回调按 outcome 结算——发送失败经世代
+// 守卫重记，其余 outcome（送达/抑制/未启用）销账。
+func (h *Handler) dispatchUpgradeFailedAlert(nodeID, dispatchedAt int64, message string) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return
+	}
+	gen := h.markUpgradeFailedAlertPending(nodeID, dispatchedAt, message)
+	h.notifyTracked(notifyEventNodeUpgradeFailed, "节点升级未落地", message, func(outcome notifyOutcome) {
+		if outcome == notifyOutcomeFailed {
+			h.remarkUpgradeFailedAlertPendingIfCurrent(nodeID, gen, dispatchedAt, message)
+			return
+		}
+		h.clearUpgradeFailedAlertPending(nodeID)
+	})
+}
+
+// retryPendingUpgradeFailedAlerts 补发台账中发送失败的未落地告
+// 警，由 sweep 每轮调用（30s 奏、逐条节流把关）。补发前逐条重
+// 校验，告警所述状态已不成立的一律静默销账、绝不发过时消息：
+//   - 核验记录已不存在、已 landed、或已被无目标回退接管
+//     （superseded，与 LB-03 接管语义同口径）；
+//   - DispatchedAt 与当前记录不一致（节点已进入新一轮核验，
+//     新一轮若失败自会重新标记）；
+//   - 节点已删除（不发幽灵告警）。
+func (h *Handler) retryPendingUpgradeFailedAlerts(now time.Time) {
+	if h == nil || h.repo == nil || h.notifier == nil {
+		return
+	}
+	for _, p := range h.loadPendingUpgradeFailedAlerts() {
+		if p.NodeID <= 0 {
+			h.clearUpgradeFailedAlertPending(p.NodeID)
+			continue
+		}
+		if h.upgradeFailedAlertStale(p) {
+			log.Printf("node upgrade failed alert retry dropped node_id=%d: verification no longer failed", p.NodeID)
+			h.clearUpgradeFailedAlertPending(p.NodeID)
+			continue
+		}
+		if now.UnixMilli()-p.At < upgradeFailedAlertRetryInterval.Milliseconds() {
+			continue
+		}
+		h.dispatchUpgradeFailedAlert(p.NodeID, p.DispatchedAt, p.Message)
+	}
+}
+
+// upgradeFailedAlertStale 判一条待发告警所述状态是否已不成立。
+func (h *Handler) upgradeFailedAlertStale(p pendingUpgradeFailedAlert) bool {
+	rec, err := h.repo.GetNodeUpgradeVerification(p.NodeID)
+	if err != nil || rec == nil {
+		return true
+	}
+	if rec.Status != repo.NodeUpgradeVerifyFailed || rec.DispatchedAt != p.DispatchedAt {
+		return true
+	}
+	node, nerr := h.repo.GetNodeByID(p.NodeID)
+	return nerr != nil || node == nil
+}
+
+func (h *Handler) loadPendingUpgradeFailedAlerts() []pendingUpgradeFailedAlert {
+	if h == nil || h.repo == nil {
+		return nil
+	}
+	h.upgradeAlertMu.Lock()
+	defer h.upgradeAlertMu.Unlock()
+	return h.loadPendingUpgradeFailedAlertsLocked()
+}
+
+func (h *Handler) loadPendingUpgradeFailedAlertsLocked() []pendingUpgradeFailedAlert {
+	cfg, err := h.repo.GetConfigByName(notifyUpgradeFailedPendingConfigKey)
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.Value) == "" {
+		return nil
+	}
+	var list []pendingUpgradeFailedAlert
+	if err := json.Unmarshal([]byte(cfg.Value), &list); err != nil {
+		// 损坏的待发记录无法解析：记日志后丢弃，避免每轮补发都
+		// 卡在同一行上（与配额台账同处置）。
+		log.Printf("upgrade failed alert pending list corrupt, dropping: %v", err)
+		_ = h.repo.UpsertConfig(notifyUpgradeFailedPendingConfigKey, "[]", time.Now().UnixMilli())
+		return nil
+	}
+	return list
+}
+
+func (h *Handler) savePendingUpgradeFailedAlertsLocked(list []pendingUpgradeFailedAlert) {
+	if len(list) == 0 {
+		if err := h.repo.UpsertConfig(notifyUpgradeFailedPendingConfigKey, "[]", time.Now().UnixMilli()); err != nil {
+			log.Printf("upgrade failed alert pending clear failed: %v", err)
+		}
+		return
+	}
+	raw, err := json.Marshal(list)
+	if err != nil {
+		log.Printf("upgrade failed alert pending marshal failed: %v", err)
+		return
+	}
+	if err := h.repo.UpsertConfig(notifyUpgradeFailedPendingConfigKey, string(raw), time.Now().UnixMilli()); err != nil {
+		log.Printf("upgrade failed alert pending save failed: %v", err)
+	}
+}
+
+func (h *Handler) upgradeFailedAlertGenLocked() map[string]int64 {
+	cfg, err := h.repo.GetConfigByName(notifyUpgradeFailedPendingGenConfigKey)
+	if err != nil || cfg == nil || strings.TrimSpace(cfg.Value) == "" {
+		return map[string]int64{}
+	}
+	var gens map[string]int64
+	if err := json.Unmarshal([]byte(cfg.Value), &gens); err != nil {
+		log.Printf("upgrade failed alert pending generation map corrupt, dropping: %v", err)
+		return map[string]int64{}
+	}
+	if gens == nil {
+		return map[string]int64{}
+	}
+	return gens
+}
+
+func (h *Handler) saveUpgradeFailedAlertGenLocked(gens map[string]int64) {
+	raw, err := json.Marshal(gens)
+	if err != nil {
+		log.Printf("upgrade failed alert pending generation marshal failed: %v", err)
+		return
+	}
+	if err := h.repo.UpsertConfig(notifyUpgradeFailedPendingGenConfigKey, string(raw), time.Now().UnixMilli()); err != nil {
+		log.Printf("upgrade failed alert pending generation save failed: %v", err)
+	}
+}
+
+// markUpgradeFailedAlertPending 为一次派发写入/刷新待发标记并分
+// 配新世代、返回世代号。水位先于清单写（与配额台账同序）：清单
+// 写失败而水位已进只是无害空转，反之则可能让旧回调在销账后复
+// 活过时文案。
+func (h *Handler) markUpgradeFailedAlertPending(nodeID, dispatchedAt int64, message string) int64 {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return 0
+	}
+	h.upgradeAlertMu.Lock()
+	defer h.upgradeAlertMu.Unlock()
+	list := h.loadPendingUpgradeFailedAlertsLocked()
+	gens := h.upgradeFailedAlertGenLocked()
+	key := strconv.FormatInt(nodeID, 10)
+	gen := gens[key] + 1
+	for i := range list {
+		if list[i].NodeID == nodeID && list[i].Gen >= gen {
+			gen = list[i].Gen + 1
+		}
+	}
+	gens[key] = gen
+	h.saveUpgradeFailedAlertGenLocked(gens)
+	now := time.Now().UnixMilli()
+	for i := range list {
+		if list[i].NodeID == nodeID {
+			list[i].DispatchedAt = dispatchedAt
+			list[i].Message = message
+			list[i].At = now
+			list[i].Gen = gen
+			h.savePendingUpgradeFailedAlertsLocked(list)
+			return gen
+		}
+	}
+	list = append(list, pendingUpgradeFailedAlert{NodeID: nodeID, DispatchedAt: dispatchedAt, Message: message, At: now, Gen: gen})
+	h.savePendingUpgradeFailedAlertsLocked(list)
+	return gen
+}
+
+// remarkUpgradeFailedAlertPendingIfCurrent 是发送失败回调的世代
+// 守卫（与配额台账 R6-I-01 同款）：仅当台账里仍是本世代（或记
+// 录已被更新世代的成功销账清掉、且水位未再前进）才重记；更新
+// 一轮的标记/文案在场时，旧回调直接退出，不得覆写。
+func (h *Handler) remarkUpgradeFailedAlertPendingIfCurrent(nodeID, gen, dispatchedAt int64, message string) {
+	if h == nil || h.repo == nil || nodeID <= 0 || gen <= 0 {
+		return
+	}
+	h.upgradeAlertMu.Lock()
+	defer h.upgradeAlertMu.Unlock()
+	list := h.loadPendingUpgradeFailedAlertsLocked()
+	now := time.Now().UnixMilli()
+	for i := range list {
+		if list[i].NodeID == nodeID {
+			if list[i].Gen != gen {
+				return
+			}
+			list[i].DispatchedAt = dispatchedAt
+			list[i].Message = message
+			list[i].At = now
+			h.savePendingUpgradeFailedAlertsLocked(list)
+			return
+		}
+	}
+	gens := h.upgradeFailedAlertGenLocked()
+	if gens[strconv.FormatInt(nodeID, 10)] != gen {
+		return
+	}
+	list = append(list, pendingUpgradeFailedAlert{NodeID: nodeID, DispatchedAt: dispatchedAt, Message: message, At: now, Gen: gen})
+	h.savePendingUpgradeFailedAlertsLocked(list)
+}
+
+func (h *Handler) clearUpgradeFailedAlertPending(nodeID int64) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return
+	}
+	h.upgradeAlertMu.Lock()
+	defer h.upgradeAlertMu.Unlock()
+	list := h.loadPendingUpgradeFailedAlertsLocked()
+	kept := list[:0]
+	for _, p := range list {
+		if p.NodeID != nodeID {
+			kept = append(kept, p)
+		}
+	}
+	if len(kept) == len(list) {
+		return
+	}
+	h.savePendingUpgradeFailedAlertsLocked(kept)
 }
 
 // runNodeUpgradeVerifyLoop 是核验截止扫描的后台循环：启动先扫
