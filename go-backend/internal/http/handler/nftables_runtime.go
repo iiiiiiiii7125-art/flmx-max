@@ -209,6 +209,15 @@ func sshConfigFromModel(cfg *model.NodeSSHConfig) (runtimenft.SSHConfig, error) 
 	}, nil
 }
 
+// nftSSHConfigError 是 collectNftablesSSHConfigsTx 的定型校验失
+// 败（R3-GEN-03）：SSH 配置缺失/不完整，文案由配置态唯一确定、
+// 不含仓储原文。调用方以 errors.As 分流后以 msg 字段原样回执；
+// 仓储错在 helper 内已标记、由调用方守卫泛化。「handler not
+// initialized」是内部故障、刻意不定型（回执泛化）。
+type nftSSHConfigError struct{ msg string }
+
+func (e *nftSSHConfigError) Error() string { return e.msg }
+
 // nftablesNodeSSHConfig 是入口节点的 nftables 模式判定 + SSH 配置
 // 快照（纯 DB 数据，不含任何网络校验结果）。
 type nftablesNodeSSHConfig struct {
@@ -243,13 +252,15 @@ func (h *Handler) collectNftablesSSHConfigsTx(tx *gorm.DB, entryNodeIDs []int64)
 		}
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return nil, errors.New("nftables 节点缺少 SSH 配置")
+				return nil, &nftSSHConfigError{msg: "nftables 节点缺少 SSH 配置"}
 			}
 			return nil, markRepoError(err)
 		}
 		sshCfg, err := sshConfigFromModel(cfg)
 		if err != nil {
-			return nil, err
+			// sshConfigFromModel 的失败为自著配置校验（配置不完整），
+			// 在本 helper 边界定型（其余调用面不受影响）。
+			return nil, &nftSSHConfigError{msg: err.Error()}
 		}
 		pairs = append(pairs, nftablesNodeSSHConfig{nodeID: nodeID, cfg: sshCfg})
 	}

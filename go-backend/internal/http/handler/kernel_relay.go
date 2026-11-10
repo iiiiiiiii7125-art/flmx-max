@@ -173,6 +173,45 @@ func respondRelayDeleteErrorWithNote(w http.ResponseWriter, op string, err error
 	respondInternalErrorWithNote(w, op, err, note)
 }
 
+// relayCreateError 是 createRelayForward 的定型回执失败
+// （R3-GEN-01）：由 createRelayForward 在每个返回点分类构造——
+// 配额/占用哨兵带其既有分流码（与 forwardCreate 对同一仓储哨兵的
+// 契约一致：配额 ErrDefault、占用 -2），其余定型校验与数据面同步
+// 错为 ErrDefault。已标记仓储错不进本型（relayCreateErr 原样上
+// 抛），回执经 respondRelayCreateError 以 msg 字段回执、余者泛化
+// ——管理员面 raw-error 门对可能携带仓储原文的 err.Error() 呈现
+// 无守卫豁免（其 Synthetic 的 pubMarkRepo 明示标记值直出即违规），
+// 故本面不走「守卫＋原文」形态、只走源头定型。
+type relayCreateError struct {
+	code int
+	msg  string
+}
+
+func (e *relayCreateError) Error() string { return e.msg }
+
+// relayCreateErr 是 createRelayForward 返回点的分类器：已标记仓
+// 储错原样上抛（回执泛化），其余失败（定型校验、数据面同步错）
+// 拼入 relayCreateError 由回执原样回。
+func relayCreateErr(err error) error {
+	if err == nil || isRepoError(err) {
+		return err
+	}
+	return &relayCreateError{code: -1, msg: err.Error()}
+}
+
+// respondRelayCreateError 是 inboundRelayCreate 的回执分流：定型
+// 失败按其 code 以 msg 字段原样回；其余（含已标记仓储错）走
+// respondInternalError 泛化（fail-closed：未定型的未知失败不直
+// 出原文）。
+func respondRelayCreateError(w http.ResponseWriter, op string, err error) {
+	var rce *relayCreateError
+	if errors.As(err, &rce) {
+		response.WriteJSON(w, response.Err(rce.code, rce.msg))
+		return
+	}
+	respondInternalError(w, op, err)
+}
+
 // validateRelayLandingExitSet enforces relayTarget's landing rule
 // against an explicit exit set: an inbound whose node is among the exits
 // requires that node to be the tunnel's only exit. tunnelUpdate 复跑此
@@ -587,24 +626,11 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	forwardID, err := h.createRelayForward(userID, name, tunnel, remoteAddr, req.InPort, ppSend)
 	if err != nil {
-		// R3-GEN-01：与 forwardCreate 的 CreateForwardTx 分流同口径——
-		// 配额哨兵原文回（ErrDefault）、端口占用哨兵原文回（-2）、
-		// 已标记仓储错由守卫泛化；其余为 createRelayForward 的定型
-		// 校验（端口规格/占用、入口端口耗尽、隧道无入口、nftables
-		// 请求校验）与数据面同步错，原文回。此前直走
+		// R3-GEN-01：定型分流回执（createRelayForward 已在源头把可
+		// 回执失败定型为 relayCreateError、仓储错已标记）——定型按
+		// 其码以 msg 字段原样回，余者泛化。此前直走
 		// respondInternalError 把整族定型文案全量泛化。
-		if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
-			return
-		}
-		if errors.Is(err, repo.ErrPortInUse) {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
-			return
-		}
-		if respondInternalIfRepoError(w, "inboundRelayCreate: createRelayForward failed", err) {
-			return
-		}
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondRelayCreateError(w, "inboundRelayCreate: createRelayForward failed", err)
 		return
 	}
 	rel := &model.NodeInboundRelay{
@@ -643,32 +669,35 @@ func firstNonEmpty(values ...string) string {
 // createRelayForward mirrors the admin path of forwardCreate: same port
 // validation, persistence and runtime sync, without user-facing quota checks.
 func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRecord, remoteAddr string, inPort int, proxyProtocolSend int) (int64, error) {
+	// R3-GEN-01：全部可回执失败在返回点经 relayCreateErr 定型
+	// （已标记仓储错原样上抛走泛化，定型校验/数据面错入
+	// relayCreateError 由回执以 msg 字段原样回）。
 	entryNodes, err := h.tunnelEntryNodeIDs(tunnel.ID)
 	if err != nil {
-		return 0, err
+		return 0, relayCreateErr(err)
 	}
 	if len(entryNodes) == 0 {
-		return 0, errors.New("隧道没有入口节点")
+		return 0, relayCreateErr(errors.New("隧道没有入口节点"))
 	}
 	isNftTunnel, _, err := h.tunnelUsesNftables(tunnel.ID)
 	if err != nil {
-		return 0, err
+		return 0, relayCreateErr(err)
 	}
 	if isNftTunnel {
 		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes); err != nil {
-			return 0, err
+			return 0, relayCreateErr(err)
 		}
 	}
 	port := inPort
 	if port <= 0 {
 		picked, pickErr := h.pickTunnelPort(tunnel.ID)
 		if pickErr != nil {
-			return 0, pickErr
+			return 0, relayCreateErr(pickErr)
 		}
 		port = picked
 	}
 	if port <= 0 || port > 65535 {
-		return 0, errors.New("没有可用的入口端口")
+		return 0, relayCreateErr(errors.New("没有可用的入口端口"))
 	}
 	for _, nodeID := range entryNodes {
 		node, nodeErr := h.getNodeRecord(nodeID)
@@ -677,13 +706,15 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 			// 同口径 fail-closed——节点记录读失败不得 continue 跳过该
 			// 节点的端口规格校验后仍落库（占用面虽有
 			// CreateForwardTx 锁内三源复检兜底，规格面无兜底）。
+			// getNodeRecord 的错误恒为已标记仓储错（其源头已标），
+			// 回执走泛化即正确分类，故此处不经 relayCreateErr 定型。
 			return 0, nodeErr
 		}
 		if err := validateLocalNodePort(node, port); err != nil {
-			return 0, err
+			return 0, relayCreateErr(err)
 		}
 		if err := h.validateForwardPortAvailability(node, port, 0); err != nil {
-			return 0, err
+			return 0, relayCreateErr(err)
 		}
 	}
 
@@ -695,26 +726,32 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnel.ID, remoteAddr, "fifo", now,
 		h.repo.NextIndex("forward"), entryNodes, port, "", nil, 0, 0, nil, 0, 0, proxyProtocolSend)
 	if err != nil {
-		// R3-GEN-01：仓储直通先标记——回执点对配额/占用哨兵与定型
-		// 校验原文回、其余仓储原文由守卫泛化（哨兵经 Unwrap 链仍可
-		// errors.Is，与 forwardCreate 的 CreateForwardTx 分流同口径）。
+		// R3-GEN-01：配额/占用哨兵在此定型（带与 forwardCreate 对同
+		// 一仓储哨兵的既有分流码：配额 -1、占用 -2，msg 取哨兵原文）；
+		// 其余仓储失败标记后上抛、回执泛化。
+		if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
+			return 0, &relayCreateError{code: -1, msg: err.Error()}
+		}
+		if errors.Is(err, repo.ErrPortInUse) {
+			return 0, &relayCreateError{code: -2, msg: err.Error()}
+		}
 		return 0, markRepoError(err)
 	}
 	created, err := h.getForwardRecord(forwardID)
 	if err != nil {
 		_ = h.deleteForwardByID(forwardID)
-		return 0, err
+		return 0, relayCreateErr(err)
 	}
 	if isNftTunnel {
 		if err := h.reconcileNftablesNodeByRequest(entryNodes[0]); err != nil {
 			_ = h.deleteForwardByID(forwardID)
-			return 0, err
+			return 0, relayCreateErr(err)
 		}
 		return forwardID, nil
 	}
 	if err := h.syncForwardServices(created, "UpdateService", true); err != nil {
 		_ = h.deleteForwardByID(forwardID)
-		return 0, err
+		return 0, relayCreateErr(err)
 	}
 	return forwardID, nil
 }

@@ -39,9 +39,17 @@ func normalizeTunnelEngine(raw string) (string, error) {
 }
 
 // validateRealmTunnelTx: realm runs port forwards on the panel's own agents.
+// realmTunnelValidationError 是 validateRealmTunnelTx 的定型校
+// 验失败（R3-GEN-03）：文案由请求态（隧道类型/节点模式）唯一确
+// 定、不含仓储原文。调用方以 errors.As 分流后以 msg 字段原样回
+// 执；仓储错在 helper 内已标记、由调用方守卫泛化。
+type realmTunnelValidationError struct{ msg string }
+
+func (e *realmTunnelValidationError) Error() string { return e.msg }
+
 func (h *Handler) validateRealmTunnelTx(tx *gorm.DB, typeVal int, entryNodeIDs []int64) error {
 	if typeVal != 1 {
-		return errors.New("realm 引擎仅支持端口转发隧道")
+		return &realmTunnelValidationError{msg: "realm 引擎仅支持端口转发隧道"}
 	}
 	for _, nodeID := range entryNodeIDs {
 		node, err := h.repo.GetNodeRecordTx(tx, nodeID)
@@ -50,10 +58,10 @@ func (h *Handler) validateRealmTunnelTx(tx *gorm.DB, typeVal int, entryNodeIDs [
 			return markRepoError(err)
 		}
 		if node == nil {
-			return errors.New("节点不存在")
+			return &realmTunnelValidationError{msg: "节点不存在"}
 		}
 		if isNftablesForwardMode(node.ForwardMode) {
-			return fmt.Errorf("节点 %s 是 nftables 模式，不能使用 realm 引擎", node.Name)
+			return &realmTunnelValidationError{msg: fmt.Sprintf("节点 %s 是 nftables 模式，不能使用 realm 引擎", node.Name)}
 		}
 	}
 	return nil
@@ -293,6 +301,25 @@ func (h *Handler) ensureRealmKernel(nodeID int64, create bool) (*model.NodeKerne
 
 // syncRealmNodes re-renders realm on the nodes. Offline nodes are skipped
 // with a warning; they catch up when the agent reconnects.
+// realmSyncError 是 syncRealmNodes 的定型回执失败（R3-GEN-02④）：
+// 同步失败细节（哪个节点、哪一步）对用户可行动，文案在
+// syncRealmNodes 边界由 realmSyncFailure 拼入；已标记仓储错不进
+// 本型。回执以 msg 字段原样回（管理员面 raw-error 门口径：可能
+// 携带仓储原文的值不经 err.Error() 呈现）。
+type realmSyncError struct{ msg string }
+
+func (e *realmSyncError) Error() string { return e.msg }
+
+// realmSyncFailure 是 syncRealmNodes 返回点的分类器：已标记仓储
+// 错原样上抛（回执守卫泛化），其余失败（渲染定型错、apply 数据
+// 面错、节点名前缀包装）拼入 realmSyncError。
+func realmSyncFailure(err error) error {
+	if err == nil || isRepoError(err) {
+		return err
+	}
+	return &realmSyncError{msg: err.Error()}
+}
+
 func (h *Handler) syncRealmNodes(nodeIDs []int64, override map[int64]bool) ([]string, error) {
 	var warnings []string
 	for _, nodeID := range uniqueInt64s(nodeIDs) {
@@ -301,11 +328,11 @@ func (h *Handler) syncRealmNodes(nodeIDs []int64, override map[int64]bool) ([]st
 		}
 		endpoints, _, err := h.realmNodeEndpoints(nodeID, override)
 		if err != nil {
-			return warnings, err
+			return warnings, realmSyncFailure(err)
 		}
 		k, err := h.ensureRealmKernel(nodeID, len(endpoints) > 0)
 		if err != nil {
-			return warnings, err
+			return warnings, realmSyncFailure(err)
 		}
 		if k == nil {
 			continue
@@ -317,9 +344,9 @@ func (h *Handler) syncRealmNodes(nodeIDs []int64, override map[int64]bool) ([]st
 				continue
 			}
 			if strings.Contains(err.Error(), "不支持的内核类型") {
-				return warnings, fmt.Errorf("节点 %s 的 agent 版本过旧，不支持 realm，请先升级节点", h.nodeLabel(nodeID))
+				return warnings, realmSyncFailure(fmt.Errorf("节点 %s 的 agent 版本过旧，不支持 realm，请先升级节点", h.nodeLabel(nodeID)))
 			}
-			return warnings, fmt.Errorf("节点 %s realm 下发失败: %w", h.nodeLabel(nodeID), err)
+			return warnings, realmSyncFailure(fmt.Errorf("节点 %s realm 下发失败: %w", h.nodeLabel(nodeID), err))
 		}
 	}
 	return warnings, nil
