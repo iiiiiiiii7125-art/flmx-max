@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-gost/core/logger"
 	xlogger "github.com/go-gost/x/logger"
+	"github.com/go-gost/x/kernel"
 	"github.com/go-gost/x/service"
 	"github.com/go-gost/x/socket"
 	"github.com/judwhite/go-svc"
@@ -246,6 +247,26 @@ func main() {
 		}
 	}
 	service.StartConnlogReporter(context.Background())
+
+	// 入站连接日志（U4→U2 接缝）：内核日志解析器（x/kernel）的
+	// 事件经 sink 汇入上报器——kernel 包按既有纪律不 import
+	// service 栈，故由装配根在此对接字段映射。sink 未装时
+	// collector 落自己的缓冲（单机/测试形态）。
+	kernel.SetConnEventSink(func(ev kernel.ConnEvent) {
+		service.EnqueueConnEvent(service.ConnEvent{
+			Type:        string(ev.Type),
+			ConnID:      ev.ConnID,
+			EntryKind:   ev.EntryKind,
+			EntryID:     ev.EntryID,
+			ClientIP:    ev.ClientIP,
+			ClientPort:  ev.ClientPort,
+			Network:     ev.Network,
+			SessionKind: ev.SessionKind,
+			StartMs:     ev.StartMs,
+			EndMs:       ev.EndMs,
+			Status:      ev.Status,
+		})
+	})
 
 	p := &program{
 		startReporter: func() reporter {

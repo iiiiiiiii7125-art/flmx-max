@@ -26,10 +26,7 @@
 // nothing itself.
 package connlog
 
-import (
-	"strings"
-	"sync"
-)
+import "strings"
 
 // Entry kinds, identical to the panel's entry_kind column values.
 const (
@@ -55,18 +52,6 @@ type Mark struct {
 	Kind string
 	ID   string
 }
-
-// KernelEntry is one marked kernel inbound from a KernelApply
-// payload.
-type KernelEntry struct {
-	InboundID int64
-	Tag       string
-}
-
-var (
-	mu            sync.RWMutex
-	kernelEntries = map[string][]KernelEntry{}
-)
 
 // ParseServiceMark reads the entry mark out of one service's
 // metadata. A mark is valid only with kind "forward"; the ID falls
@@ -102,43 +87,4 @@ func metadataString(md map[string]any, key string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// PublishKernelEntries replaces the marked-inbound set of one
-// kernel type with the entries of the configuration now in force.
-// Publishing an empty (or nil) list clears the type's set.
-func PublishKernelEntries(kernelType string, entries []KernelEntry) {
-	next := make([]KernelEntry, 0, len(entries))
-	for _, e := range entries {
-		if strings.TrimSpace(e.Tag) == "" {
-			continue
-		}
-		next = append(next, e)
-	}
-	mu.Lock()
-	kernelEntries[kernelType] = next
-	mu.Unlock()
-}
-
-// KernelEntries returns a copy of one kernel type's marked
-// inbounds.
-func KernelEntries(kernelType string) []KernelEntry {
-	mu.RLock()
-	defer mu.RUnlock()
-	out := make([]KernelEntry, len(kernelEntries[kernelType]))
-	copy(out, kernelEntries[kernelType])
-	return out
-}
-
-// KernelMark resolves a kernel inbound tag to its entry mark within
-// one kernel type.
-func KernelMark(kernelType, tag string) (Mark, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	for _, e := range kernelEntries[kernelType] {
-		if e.Tag == tag {
-			return Mark{Kind: KindInbound, ID: e.Tag}, true
-		}
-	}
-	return Mark{}, false
 }

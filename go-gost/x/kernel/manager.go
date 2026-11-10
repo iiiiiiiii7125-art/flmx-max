@@ -14,8 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/go-gost/x/internal/connlog"
 )
 
 // defaultBaseDir is the script form's kernel root under the current
@@ -636,21 +634,6 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 			inst.logs.add("[flmx] 已回收旧版本内核目录: " + strings.Join(removed, ", "))
 		}
 	}
-	// Publish the connection-log entry marks of the configuration
-	// now in force — the new request, or the previous one when this
-	// apply rolled back (rollback restores inst.req) — so the
-	// kernel log collector's view (internal/connlog) always matches
-	// the applied topology and a panel-side topology change leaves
-	// no stale mark behind.
-	m.mu.Lock()
-	effReq := inst.req
-	m.mu.Unlock()
-	entries := make([]connlog.KernelEntry, 0, len(effReq.ConnlogEntries))
-	for _, e := range effReq.ConnlogEntries {
-		entries = append(entries, connlog.KernelEntry{InboundID: e.InboundID, Tag: e.Tag})
-	}
-	connlog.PublishKernelEntries(req.Type, entries)
-
 	return m.state(req.Type, false), failure
 }
 
@@ -789,6 +772,35 @@ func (m *Manager) setErr(inst *instance, err error) {
 	inst.logs.add("[flmx] " + err.Error())
 }
 
+// connlogEffectiveOptIns resolves the collection-effective opt-in
+// set of an ApplyRequest: the per-inbound opt-in list
+// (ConnLogInbounds, unit U5) intersected with the panel's topology
+// qualification (ConnlogEntries, unit U7). An inbound is collected
+// only when BOTH lists name it — opt-in alone would let a relay
+// landing or chain target be collected if its switch were flipped
+// (its kernel log lines name the previous hop, not the client:
+// wrong data, not weak data), and topology alone would collect
+// inbounds the user never opted in (and whose rendering never
+// raised the log surface the parser feeds on). Resolved here, at
+// the point of use, from the one request that owns the instance,
+// so Apply and rollback can never disagree about the set.
+func connlogEffectiveOptIns(req ApplyRequest) []int64 {
+	if len(req.ConnLogInbounds) == 0 || len(req.ConnlogEntries) == 0 {
+		return nil
+	}
+	qualified := make(map[int64]bool, len(req.ConnlogEntries))
+	for _, e := range req.ConnlogEntries {
+		qualified[e.InboundID] = true
+	}
+	out := make([]int64, 0, len(req.ConnLogInbounds))
+	for _, id := range req.ConnLogInbounds {
+		if qualified[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // applyConnLog creates the instance's connection log collector on
 // first use (sing-box/xray only — the stacks with a parseable
 // connection log) and points it at the given request's opt-in set.
@@ -806,7 +818,7 @@ func (m *Manager) applyConnLog(inst *instance, req ApplyRequest) {
 	}
 	c := inst.connlog
 	m.mu.Unlock()
-	c.setOptIns(connLogTags(req.ConnLogInbounds))
+	c.setOptIns(connLogTags(connlogEffectiveOptIns(req)))
 	if req.Type == "xray" {
 		c.ensureTailer(m.runDir(req.Type), req.Files)
 	}

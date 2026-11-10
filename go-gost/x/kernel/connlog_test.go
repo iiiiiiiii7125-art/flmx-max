@@ -360,3 +360,32 @@ func TestApplyConnLogTagsValidation(t *testing.T) {
 		t.Errorf("valid connLogInbounds rejected: %v", err)
 	}
 }
+
+func TestConnlogEffectiveOptIns(t *testing.T) {
+	entries := []ConnlogEntry{{InboundID: 7, Tag: "in-7"}, {InboundID: 8, Tag: "in-8"}, {InboundID: 9, Tag: "in-9"}}
+	cases := []struct {
+		name  string
+		optIn []int64
+		want  []int64
+	}{
+		{"both lists agree", []int64{7, 9}, []int64{7, 9}},
+		{"opt-in without topology qualification is dropped", []int64{7, 42}, []int64{7}},
+		{"topology without opt-in collects nothing", nil, nil},
+		{"opt-in with empty topology collects nothing", []int64{7}, nil},
+	}
+	for _, tc := range cases {
+		req := ApplyRequest{ConnLogInbounds: tc.optIn}
+		if tc.name != "opt-in with empty topology collects nothing" {
+			req.ConnlogEntries = entries
+		}
+		got := connlogEffectiveOptIns(req)
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s: connlogEffectiveOptIns = %v, want %v", tc.name, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%s: connlogEffectiveOptIns = %v, want %v", tc.name, got, tc.want)
+			}
+		}
+	}
+}

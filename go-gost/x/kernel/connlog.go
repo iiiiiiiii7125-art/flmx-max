@@ -196,6 +196,42 @@ func GetConnLogBuffer() *ConnLogBuffer {
 	return globalConnLogBuffer
 }
 
+// connEventSink, when installed by the agent's composition root,
+// receives every event the collectors produce in place of the
+// package buffer. The kernel package deliberately does not import
+// the service stack (the reporter's home); the sink is how the two
+// planes meet without an import edge — main wires it to the
+// reporter's EnqueueConnEvent. With no sink installed (standalone
+// or test use), events land in GetConnLogBuffer() as before, and
+// drop accounting stays with that buffer; with a sink installed,
+// drops can only occur downstream in the reporter's ring/spool,
+// whose counter is the single accounting point the panel sees.
+var (
+	connSinkMu sync.RWMutex
+	connSink   func(ConnEvent)
+)
+
+// SetConnEventSink installs (or clears, with nil) the process-wide
+// consumer for collected connection events.
+func SetConnEventSink(fn func(ConnEvent)) {
+	connSinkMu.Lock()
+	connSink = fn
+	connSinkMu.Unlock()
+}
+
+// emit routes one collected event to the sink when installed, else
+// to the collector's buffer.
+func (c *connLogCollector) emit(ev ConnEvent) {
+	connSinkMu.RLock()
+	fn := connSink
+	connSinkMu.RUnlock()
+	if fn != nil {
+		fn(ev)
+		return
+	}
+	c.buffer.Push(ev)
+}
+
 // connLogTags renders the opt-in inbound id list of an ApplyRequest
 // into the tag set the parser filters on. Kernel inbound tags are
 // always "in-<id>" (panel kernel model), so the id list and the
@@ -239,7 +275,7 @@ type connLogCollector struct {
 
 	mu     sync.Mutex
 	optIns map[string]bool
-	gens   map[string]int64     // process name -> generation start (ms)
+	gens   map[string]int64       // process name -> generation start (ms)
 	open   map[string]*kernelConn // "<proc>\x00<raw id>" -> connection
 
 	tailer *accessTailer
@@ -312,7 +348,7 @@ func (c *connLogCollector) sweepLocked(proc string) {
 		if end <= 0 {
 			end = conn.startMs
 		}
-		c.buffer.Push(ConnEvent{
+		c.emit(ConnEvent{
 			Type:        ConnEventClose,
 			ConnID:      conn.connID,
 			EntryKind:   ConnEntryKindInbound,
@@ -585,7 +621,7 @@ func (c *connLogCollector) sbOpen(proc, tag, inboundType string, packet bool, ad
 		if end <= 0 {
 			end = old.startMs
 		}
-		c.buffer.Push(ConnEvent{
+		c.emit(ConnEvent{
 			Type: ConnEventClose, ConnID: old.connID, EntryKind: ConnEntryKindInbound,
 			EntryID: old.tag, ClientIP: old.clientIP, ClientPort: old.clientPort,
 			Network: old.network, SessionKind: old.sessionKind,
@@ -594,7 +630,7 @@ func (c *connLogCollector) sbOpen(proc, tag, inboundType string, packet bool, ad
 	}
 	c.open[key] = conn
 	c.mu.Unlock()
-	c.buffer.Push(ConnEvent{
+	c.emit(ConnEvent{
 		Type:        ConnEventOpen,
 		ConnID:      conn.connID,
 		EntryKind:   ConnEntryKindInbound,
@@ -647,7 +683,7 @@ func (c *connLogCollector) sbTerminal(proc, tag, addr, rawID string, lineMs, ela
 	if elapsedOK {
 		startMs = lineMs - elapsedMs
 	}
-	c.buffer.Push(ConnEvent{
+	c.emit(ConnEvent{
 		Type:        ConnEventClose,
 		ConnID:      c.composeID(proc, rawID),
 		EntryKind:   ConnEntryKindInbound,
@@ -671,7 +707,7 @@ func (c *connLogCollector) pushClose(conn *kernelConn, lineMs, elapsedMs int64, 
 	if elapsedOK {
 		endMs = conn.startMs + elapsedMs
 	}
-	c.buffer.Push(ConnEvent{
+	c.emit(ConnEvent{
 		Type:        ConnEventClose,
 		ConnID:      conn.connID,
 		EntryKind:   ConnEntryKindInbound,
@@ -739,7 +775,7 @@ func (c *connLogCollector) feedXray(line string, recvAt time.Time) bool {
 	// line (access-file tailer restart) replays to the same
 	// panel row instead of double-recording.
 	sum := sha256.Sum256([]byte(tag + "|" + m[3] + "|" + m[1] + "|" + line))
-	c.buffer.Push(ConnEvent{
+	c.emit(ConnEvent{
 		Type:        ConnEventOpen,
 		ConnID:      "xr-" + hex.EncodeToString(sum[:12]),
 		EntryKind:   ConnEntryKindInbound,
