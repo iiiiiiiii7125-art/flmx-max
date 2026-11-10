@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -62,8 +63,10 @@ func issuedAtGateShrinkTiming(t *testing.T) {
 }
 
 // issuedAtGateInstallTree 建脚本形态卸载所需的安装布局（与 W4 新
-// 签发测试同形），并把状态路径与执行钩子桩进临时树。
-func issuedAtGateInstallTree(t *testing.T) {
+// 签发测试同形），并把状态路径与执行钩子桩进临时树。返回钩子桩：
+// 执行钩子的调用序是「是否真的执行过一遍」的进程外观测（二次执
+// 行必然重跑钩子并追加记录）。
+func issuedAtGateInstallTree(t *testing.T) *uninstallHookStubs {
 	t.Helper()
 	stubUninstallStatePath(t)
 	dir := t.TempDir()
@@ -75,9 +78,10 @@ func issuedAtGateInstallTree(t *testing.T) {
 	if err := os.WriteFile(binPath, []byte("bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stubUninstallHooks(t, binPath, false)
+	stubs := stubUninstallHooks(t, binPath, false)
 	uninstallStarted.Store(false)
 	t.Cleanup(func() { uninstallStarted.Store(false) })
+	return stubs
 }
 
 // issuedAtGateDecodeCommand 按生产解码形态（encoding/json 解进
@@ -156,7 +160,7 @@ func TestIssuedAtGatePanelBytesDriveAgentHandler(t *testing.T) {
 func TestIssuedAtGateDuplicateDispatchWithNewRequestIDReReports(t *testing.T) {
 	w4Setup()
 	issuedAtGateShrinkTiming(t)
-	issuedAtGateInstallTree(t)
+	stubs := issuedAtGateInstallTree(t)
 
 	cmd := issuedAtGateDecodeCommand(t, issuedAtGatePanelCommand)
 	w := &WebSocketReporter{}
@@ -169,6 +173,13 @@ func TestIssuedAtGateDuplicateDispatchWithNewRequestIDReReports(t *testing.T) {
 	if st.Key != issuedAtGateKey || st.State != "succeeded" {
 		t.Fatalf("first final state = key %q state %q, want key %q succeeded", st.Key, st.State, issuedAtGateKey)
 	}
+	// 首发终局落盘后执行钩子调用序已定格：二次执行必然重跑钩子
+	// 追加记录、且必然先把落盘状态覆写为新 RequestID 的 acked
+	// 态——这两点是「未二次执行」的确定性观测。进程级执行闩
+	// uninstallStarted 不是观测点：它只在异键新签发时于
+	// handleUninstallAgent 内复位，首发真实执行后恒为 true，
+	// 同键重报根本不触闩（与路 4 预置终局态口径的差异在此）。
+	hookCalls := len(stubs.order)
 
 	cmd2 := issuedAtGateDecodeCommand(t, issuedAtGatePanelCommandReq2)
 	data2, err := w.handleUninstallAgent(cmd2.Data, cmd2.RequestId)
@@ -179,8 +190,17 @@ func TestIssuedAtGateDuplicateDispatchWithNewRequestIDReReports(t *testing.T) {
 	if !ok || m["alreadyFinal"] != true || m["uninstallKey"] != issuedAtGateKey || m["state"] != "succeeded" {
 		t.Fatalf("duplicate dispatch must re-report the stored final state, got %+v", data2)
 	}
-	if uninstallStarted.Load() {
-		t.Fatal("duplicate dispatch must not start a second execution")
+	if len(stubs.order) != hookCalls {
+		t.Fatalf("duplicate dispatch must not re-run uninstall steps, hooks before %v after %v", stubs.order[:hookCalls], stubs.order)
+	}
+	stAfter, ok := loadUninstallState()
+	if !ok {
+		t.Fatal("stored final state missing after duplicate dispatch")
+	}
+	if stAfter.Key != st.Key || stAfter.IssuedAt != st.IssuedAt || stAfter.RequestID != st.RequestID ||
+		stAfter.State != st.State || stAfter.FailedStep != st.FailedStep || stAfter.Reason != st.Reason ||
+		!reflect.DeepEqual(stAfter.Steps, st.Steps) {
+		t.Fatalf("stored final state must be unchanged after duplicate dispatch (a second execution would have overwritten it), before %+v after %+v", st, stAfter)
 	}
 	if st2, ok := loadUninstallState(); !ok || st2.Key != issuedAtGateKey || st2.RequestID != "gate-req-1" {
 		t.Fatalf("stored final state must be unchanged after duplicate dispatch, got %+v", st2)
