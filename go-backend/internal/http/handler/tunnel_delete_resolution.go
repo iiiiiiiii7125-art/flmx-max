@@ -202,11 +202,13 @@ func (h *Handler) tunnelDeleteWithForwards(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if len(failures) > 0 {
+		// T-001：failures 分支此前丢弃 result.Warnings（白名单
+		// 刷新失败等警告随部分失败一并丢失），同波补齐。
 		response.WriteJSON(w, response.R{
 			Code: -2,
 			Msg:  "部分规则迁移失败",
 			TS:   time.Now().UnixMilli(),
-			Data: batchOperationResult{SuccessCount: 0, FailCount: len(failures), Failures: failures},
+			Data: batchOperationResult{SuccessCount: 0, FailCount: len(failures), Failures: failures, Warnings: result.Warnings},
 		})
 		return
 	}
@@ -280,6 +282,11 @@ func (h *Handler) tunnelBatchDeleteWithForwards(w http.ResponseWriter, r *http.R
 			result.Failures = appendBatchFailure(result.Failures, tunnelID, tunnelName, processErr)
 			continue
 		}
+		// T-001：单条警告（白名单刷新失败等）须在 failures 分支
+		// 亦汇总——此前 continue 在聚合前丢弃。
+		if len(singleResult.Warnings) > 0 {
+			result.Warnings = append(result.Warnings, singleResult.Warnings...)
+		}
 		if len(failures) > 0 {
 			result.FailCount++
 			result.Failures = appendBatchFailureReason(
@@ -297,9 +304,8 @@ func (h *Handler) tunnelBatchDeleteWithForwards(w http.ResponseWriter, r *http.R
 		result.PortAdjustedCount += singleResult.PortAdjustedCount
 		result.PendingDeleteFinalizedCount += singleResult.PendingDeleteFinalizedCount
 		result.PendingDeleteRetainedCount += singleResult.PendingDeleteRetainedCount
-		if len(singleResult.Warnings) > 0 {
-			result.Warnings = append(result.Warnings, singleResult.Warnings...)
-		}
+		// T-001：单条警告已在上方 failures 检查前统一汇总（两路
+		// 均覆盖），此处不再重复追加。
 	}
 
 	response.WriteJSON(w, response.OK(result))
@@ -454,10 +460,18 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 			// R5X-004(c)：无转发分支收集集恒空、补刷为空转，仍保留
 			// 调用使「本函数内 deleteTunnelAndCleanup 的失败返回必
 			// 补刷」成为可机械核查的不变量（与 delete 分支同形）。
-			h.refreshInboundWhitelists(affectedInboundIDs)
+			// T-001：补偿刷新失败时错误须点名（%w 包装保持
+			// 调用方 err == / strings.Contains 判型）。
+			if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
+				err = fmt.Errorf("%w；%s", err, whitelistRefreshFailureNote(failed))
+			}
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
-		h.refreshInboundWhitelists(affectedInboundIDs)
+		// T-001：刷新失败进结果 warnings——删除本身已落库成功，
+		// 但内核仍按旧名单放行。
+		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
+			result.Warnings = append(result.Warnings, whitelistRefreshFailureNote(failed))
+		}
 		result.applyPendingOutcome(outcome)
 		return result, nil, nil
 	}
@@ -471,10 +485,18 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 			// 集按现行 DB 补刷（与成功路径同集、幂等）。同文件
 			// replace 分支的两条回滚返回已由 R4X-003 补刷，此处对
 			// 齐 delete 分支；批量版经本函数逐隧道调用、同受覆盖。
-			h.refreshInboundWhitelists(affectedInboundIDs)
+			// T-001：补偿刷新失败时错误须点名（%w 包装保持
+			// 调用方 err == / strings.Contains 判型）。
+			if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
+				err = fmt.Errorf("%w；%s", err, whitelistRefreshFailureNote(failed))
+			}
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
-		h.refreshInboundWhitelists(affectedInboundIDs)
+		// T-001：刷新失败进结果 warnings——删除本身已落库成功，
+		// 但内核仍按旧名单放行。
+		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
+			result.Warnings = append(result.Warnings, whitelistRefreshFailureNote(failed))
+		}
 		result.applyPendingOutcome(outcome)
 		return result, nil, nil
 	}
@@ -550,8 +572,13 @@ func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int6
 		// ——窗口内任何一次按暂态 DB 现算的下发都会把错误 allow 驻留
 		// 在落地节点。此处按执行前收集集统一补刷一次（与成功路径
 		// 对称，幂等），不逐回滚点打补丁。
-		h.refreshInboundWhitelists(affectedInboundIDs)
-		return tunnelDeleteWithForwardsResult{}, failures, nil
+		// T-001：补偿刷新失败进结果 warnings（单/批入口的
+		// failures 分支此前丢弃 result.Warnings，已同波补齐、
+		// 见两入口的 failures 处理）。
+		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
+			result.Warnings = append(result.Warnings, whitelistRefreshFailureNote(failed))
+		}
+		return result, failures, nil
 	}
 
 	outcome, err := h.deleteTunnelAndCleanupWithOutcome(tunnelID)
@@ -562,16 +589,24 @@ func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int6
 		// 隧道并按目标口径下发过服务，回滚后须按回滚后 DB 补刷一次
 		// 白名单（redeploy 只重下发隧道运行时与转发服务、不含
 		// applyKernel），否则 allow 停留在迁移后口径。
-		h.refreshInboundWhitelists(affectedInboundIDs)
+		// T-001：补偿刷新失败时错误须点名（%w 包装保持
+		// 调用方 err == / strings.Contains 判型）。
+		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
+			err = fmt.Errorf("%w；%s", err, whitelistRefreshFailureNote(failed))
+		}
 		return tunnelDeleteWithForwardsResult{}, nil, err
 	}
-	h.refreshInboundWhitelists(affectedInboundIDs)
+	// T-001：刷新失败进结果 warnings——迁移与删除本身已落库
+	// 成功，但内核仍按旧名单放行。
+	if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
+		result.Warnings = append(result.Warnings, whitelistRefreshFailureNote(failed))
+	}
 	result.applyPendingOutcome(outcome)
 
 	result.MigratedCount = len(plans)
 	result.PortAdjustedCount = portAdjustedCount
 	if len(warnings) > 0 {
-		result.Warnings = warnings
+		result.Warnings = append(result.Warnings, warnings...)
 	}
 	return result, nil, nil
 }

@@ -187,7 +187,15 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	}
 	now := time.Now().UnixMilli()
 	fail := func(err error) (remoteSyncResult, error) {
-		_ = h.repo.UpdateRemoteSourceStatus(src.ID, map[string]interface{}{"last_fetch": now, "last_error": truncate(err.Error(), 500)})
+		// RAW291：last_error 经源列表 API 外显（remoteSourceView），
+		// 仓储原文（已标 repoError）不得写入——原文只记日志，
+		// 库里只留固定文案；fetch/解析类固定文案照常写回。
+		lastErr := err.Error()
+		if isRepoError(err) {
+			log.Printf("remote source %d sync failed (storage): %v", src.ID, err)
+			lastErr = "内部错误，请稍后重试"
+		}
+		_ = h.repo.UpdateRemoteSourceStatus(src.ID, map[string]interface{}{"last_fetch": now, "last_error": truncate(lastErr, 500)})
 		return res, err
 	}
 
@@ -257,14 +265,17 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		return fail(err)
+		// RAW291：仓储直通错误标 repoError——fail() 的 last_error
+		// 与 respondRemoteSync 的 Msg 凭此标记改走固定文案。
+		return fail(markRepoError(err))
 	}
 	// R10-04：本源的删除屏蔽集（管理员手工删过的导入节点）。查询失
 	// 败 fail-closed 中止整轮——屏蔽读不到时照常新建会把已删节点静
 	// 默复活，与守卫查询失败同口径。
 	shieldRows, err := h.repo.ListRemoteSourceShields(src.ID)
 	if err != nil {
-		return fail(err)
+		// RAW291：同上。
+		return fail(markRepoError(err))
 	}
 	shielded := make(map[string]bool, len(shieldRows))
 	for _, s := range shieldRows {
@@ -323,6 +334,8 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 	for _, node := range nodes {
 		fresh, err := externalRow(node, src.RelayOnly == 1, now)
 		if err != nil {
+			// RAW291：externalRow 唯一错误源是 json.Marshal（纯函
+			// 数、无仓储调用），文本源于订阅内容本身，原样进 Errors。
 			gateErr(fmt.Sprintf("%s：%v", node.Name, err))
 			continue
 		}
@@ -362,7 +375,10 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			err := h.repo.CreateNodeInbound(&fresh)
 			repo.ReleasePortAllocLock(portMu)
 			if err != nil {
-				gateErr(fmt.Sprintf("%s：%v", node.Name, err))
+				// RAW291：建行错误只可能是仓储原文（本面无友好
+				// 映射），原文只记日志、Errors 里只留固定文案。
+				log.Printf("remote source %d sync create inbound failed node=%q err=%v", src.ID, node.Name, err)
+				gateErr(fmt.Sprintf("%s：保存失败", node.Name))
 				continue
 			}
 			res.Added++
@@ -391,7 +407,9 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			// 临界区唯一防线，查不了就不写。
 			rowsNow, err := h.repo.ListNodeInbounds()
 			if err != nil {
-				return err
+				// RAW291：仓储直通错误标 repoError，调用点凭此
+				// 标记改走固定文案；下方同址重复固定文案不标记。
+				return markRepoError(err)
 			}
 			key := externalRowKey(row)
 			for i := range rowsNow {
@@ -400,10 +418,20 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 					return fmt.Errorf("已存在地址、端口与凭据完全相同的导入节点（%s）", externalKey(row.Listen, row.Port))
 				}
 			}
-			return h.repo.SaveNodeInbound(row)
+			// RAW291：仓储直通错误标 repoError，调用点凭此标记
+			// 改走固定文案；同址重复固定文案不标记。
+			if saveErr := h.repo.SaveNodeInbound(row); saveErr != nil {
+				return markRepoError(saveErr)
+			}
+			return nil
 		}()
 		if saveErr != nil {
-			gateErr(fmt.Sprintf("%s：%v", node.Name, saveErr))
+			if isRepoError(saveErr) {
+				log.Printf("remote source %d sync update inbound failed node=%q err=%v", src.ID, node.Name, saveErr)
+				gateErr(fmt.Sprintf("%s：保存失败", node.Name))
+			} else {
+				gateErr(fmt.Sprintf("%s：%v", node.Name, saveErr))
+			}
 			continue
 		}
 		// W3/I-003：更新后的名字（可能被服务商改名）登记进占用集，
@@ -545,7 +573,8 @@ func (h *Handler) remoteSourceList(w http.ResponseWriter, r *http.Request) {
 	}
 	sources, err := h.repo.ListRemoteSources()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "remoteSourceList: ListRemoteSources failed", err)
 		return
 	}
 	out := make([]remoteSourceView, 0, len(sources))
@@ -615,6 +644,11 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 	// 语法、不做 DNS 解析；同步/拉取期 fail-closed 语义不动）。
 	if req.Kind == model.RemoteSourceURL {
 		if err := validateNoEmptyLabelURLHost(req.URL); err != nil {
+			// RAW291 拼接形态（普查谓词漏计，本路补登）：保留原
+			// 文——validateNoEmptyLabelURLHost 的唯一错误是固定格式
+			// `主机名 %q 包含空标签`（security_utils.go），%q 内
+			// 仅为管理员自填 URL 的主机名，无仓储/内部文本可泄漏；
+			// 解析失败时该函数返回 nil、不产错误。见报告 §4。
 			response.WriteJSON(w, response.ErrDefault("订阅地址主机名格式无效："+err.Error()))
 			return
 		}
@@ -658,7 +692,8 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 	}
 	src.UpdatedTime = now
 	if err := h.repo.SaveRemoteSource(src); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "remoteSourceSave: SaveRemoteSource failed", err)
 		return
 	}
 	if relayOnlyOnlyChange {
@@ -745,7 +780,16 @@ func (h *Handler) respondRemoteSync(w http.ResponseWriter, ctx context.Context, 
 	}
 	data := map[string]interface{}{"source": remoteSourceViewOf(saved), "result": res}
 	if err != nil {
-		response.WriteJSON(w, response.R{Code: -1, Msg: err.Error(), Data: data, TS: time.Now().UnixMilli()})
+		// RAW291：syncRemoteSource 的仓储直通错误（已标 repoError）
+		// 只记日志、回执通用文案；fetch/解析类固定文案原样回。
+		// 形态保持 Code -1 + Data 不变（前端按 -1 识别同步失败
+		// 并展示 result.Errors），只换 Msg。
+		msg := err.Error()
+		if isRepoError(err) {
+			log.Printf("respondRemoteSync: syncRemoteSource failed (storage): %v", err)
+			msg = "Internal error"
+		}
+		response.WriteJSON(w, response.R{Code: -1, Msg: msg, Data: data, TS: time.Now().UnixMilli()})
 		return
 	}
 	response.WriteJSON(w, response.R{Code: 0, Msg: res.summary(), Data: data, TS: time.Now().UnixMilli()})
@@ -810,7 +854,8 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.KeepNodes {
 		if err := h.repo.DetachSourceInbounds(req.ID); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+			respondInternalError(w, "remoteSourceDelete: DetachSourceInbounds failed", err)
 			return
 		}
 	} else {
@@ -819,7 +864,8 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 		// 查询失败同理中止，不得当作无引用放行。
 		rows, err := h.repo.ListNodeInbounds()
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+			respondInternalError(w, "remoteSourceDelete: ListNodeInbounds failed", err)
 			return
 		}
 		// X04-001：守卫共用这份已加载快照（旧实现逐行 chainInUseMessage
@@ -841,7 +887,8 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 			}
 			h.removeInboundRelays(row.ID)
 			if err := h.repo.DeleteNodeInbound(row.ID); err != nil {
-				response.WriteJSON(w, response.Err(-2, err.Error()))
+				// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+				respondInternalError(w, "remoteSourceDelete: DeleteNodeInbound failed", err)
 				return
 			}
 		}
@@ -855,17 +902,21 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 	// 除这一事实不因节点去向而变）。
 	affectedSubs, err := h.stripRemoteSourceFromSubscriptions(req.ID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：该助手唯一错误源是仓储调用（ListSubscriptions /
+		// SaveSubscription），原文只记日志、回执通用文案。
+		respondInternalError(w, "remoteSourceDelete: stripRemoteSourceFromSubscriptions failed", err)
 		return
 	}
 	// R10-04：删除屏蔽随源删除而清（keepNodes 与连节点删两路同口径）；
 	// 在删源行之前清、失败中止——屏蔽不得比源本身活得久。
 	if err := h.repo.DeleteRemoteSourceShields(req.ID); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "remoteSourceDelete: DeleteRemoteSourceShields failed", err)
 		return
 	}
 	if err := h.repo.DeleteRemoteSource(req.ID); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：同上。
+		respondInternalError(w, "remoteSourceDelete: DeleteRemoteSource failed", err)
 		return
 	}
 	if len(affectedSubs) > 0 {

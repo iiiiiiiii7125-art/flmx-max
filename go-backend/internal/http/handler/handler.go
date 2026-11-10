@@ -561,6 +561,20 @@ func respondInternalError(w http.ResponseWriter, op string, err error) {
 	response.WriteJSON(w, response.Err(-2, "Internal error"))
 }
 
+// respondInternalErrorWithNote is respondInternalError with an additional
+// operator note appended to the generic message (T-001: a post-commit
+// side-effect failure the operator must see, e.g. a whitelist refresh
+// that failed while the primary operation already failed). When note is
+// empty it behaves exactly like respondInternalError.
+func respondInternalErrorWithNote(w http.ResponseWriter, op string, err error, note string) {
+	log.Printf("%s: %v", op, err)
+	if note == "" {
+		response.WriteJSON(w, response.Err(-2, "Internal error"))
+		return
+	}
+	response.WriteJSON(w, response.Err(-2, "Internal error；"+note))
+}
+
 // repoError 标记一个源自仓储层的原始错误（RR4-C1-01）。Error() 与
 // 原文逐字一致、Unwrap 保留链——既有展示点（管理员面、批量回执）
 // 行为不变；双受众面的混合助手（权限/配额/占用校验等：业务文案与
@@ -584,28 +598,36 @@ func markRepoError(err error) error {
 	return &repoError{err: err}
 }
 
+// isRepoError 报告 err 是否携带仓储层标记——handler 侧 repoError
+// 或 repo 侧 StorageError（RAW291：validateIDsExistTx 在源头标
+// 记 gorm 直通错误，handler 调用点凭文案无法把它与固定缺失 ID
+// 文案区分）。Error() 文本在两种标记下均与原文一致。
+func isRepoError(err error) bool {
+	var re *repoError
+	var se *repo.StorageError
+	return errors.As(err, &re) || errors.As(err, &se)
+}
+
 // respondInternalIfRepoError 是混合错误出口的收口判：err 携带
 // repoError 标记（源自仓储层）时按 respondInternalError 回通用
 // 文案并返回 true；否则返回 false、由调用方按原有业务口径回执。
 func respondInternalIfRepoError(w http.ResponseWriter, op string, err error) bool {
-	var re *repoError
-	if errors.As(err, &re) {
-		respondInternalError(w, op, re.err)
+	if isRepoError(err) {
+		respondInternalError(w, op, err)
 		return true
 	}
 	return false
 }
 
 // batchFailureErr 是批量回执逐条失败原因的同口径净化（C1-01）：回执
-// 的 Reason 字段同样是回面通道，仓储错误（repoError 标记）替换为通用
-// 文案，业务/数据面原因逐字保留。直接的仓储调用点先以 markRepoError
-// 标明来源再传入。
+// 的 Reason 字段同样是回面通道，仓储错误（repoError / StorageError
+// 标记）替换为通用文案，业务/数据面原因逐字保留。直接的仓储调用点
+// 先以 markRepoError 标明来源再传入。
 func batchFailureErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	var re *repoError
-	if errors.As(err, &re) {
+	if isRepoError(err) {
 		return errors.New("内部错误，请稍后重试")
 	}
 	return err
@@ -3003,7 +3025,11 @@ func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *m
 	// 运行时全部撤销路径的 cleanupForwardsForUserTunnel 同口径），
 	// 不留「授权已撤、转发仍跑」的静默残留。
 	for _, pair := range result.RevokedUserTunnels {
-		h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID)
+		// T-001：备份恢复面无回执可点名，刷新失败只记日志（内核
+		// 仍按旧名单放行，下次面板清扫/节点重连时收敛）。
+		if failed := h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID); len(failed) > 0 {
+			log.Printf("backup restore: revoked user-tunnel forward cleanup whitelist refresh failed user_id=%d tunnel_id=%d %s", pair.UserID, pair.TunnelID, whitelistRefreshFailureNote(failed))
+		}
 	}
 
 	// F2-04：转发重推之前先做一轮配额重估。恢复出的计数已过负值

@@ -151,7 +151,9 @@ func (h *Handler) refreshTemplate(ctx context.Context, t *model.SubscriptionTemp
 		t.Content, t.LastError, t.UpdatedTime = body, "", now
 	}
 	if saveErr := h.repo.SaveSubscriptionTemplate(t); saveErr != nil {
-		return saveErr
+		// RAW291：仓储直通错误标 repoError，调用点 guard 后
+		// 改走通用文案；fetch/校验失败为固定文案不经此标记。
+		return markRepoError(saveErr)
 	}
 	return err
 }
@@ -179,7 +181,8 @@ func (h *Handler) subscriptionTemplateList(w http.ResponseWriter, r *http.Reques
 	}
 	templates, err := h.repo.ListSubscriptionTemplates()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionTemplateList: ListSubscriptionTemplates failed", err)
 		return
 	}
 	usage := h.templateUsage()
@@ -249,12 +252,15 @@ func (h *Handler) subscriptionTemplateCheck(w http.ResponseWriter, r *http.Reque
 	}
 	content, err := req.content(r.Context(), h)
 	if err != nil {
+		// RAW291 Type C：content() 只产 errText 固定校验文案
+		// （规则/网址互斥、URL 形态、下载失败提示），原样回。
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionTemplateCheck: ListNodeInbounds failed", err)
 		return
 	}
 	// Every node, unprocessed, unless a subscription is picked.
@@ -274,6 +280,8 @@ func (h *Handler) subscriptionTemplateCheck(w http.ResponseWriter, r *http.Reque
 	}
 	summary, err := kernel.CheckTemplate(req.Kind, content, names)
 	if err != nil {
+		// RAW291 Type C：kernel.CheckTemplate 校验错误，文本源于
+		// 用户模板内容（纯函数、无仓储调用），原样回。
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -320,10 +328,14 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 	}
 	content, err := req.content(r.Context(), h)
 	if err != nil {
+		// RAW291 Type C：同 subscriptionTemplateCheck 的 content()
+		// 口径，只产 errText 固定校验文案，原样回。
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	if _, err := kernel.CheckTemplate(req.Kind, content, nil); err != nil {
+		// RAW291 Type C：kernel.CheckTemplate 校验错误，文本源于
+		// 用户模板内容（纯函数、无仓储调用），原样回。
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -349,7 +361,8 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 		t.LastFetch = now
 	}
 	if err := h.repo.SaveSubscriptionTemplate(t); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionTemplateSave: SaveSubscriptionTemplate failed", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(templateView(t, h.templateUsage()[t.ID])))
@@ -373,6 +386,11 @@ func (h *Handler) subscriptionTemplateRefresh(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.refreshTemplate(r.Context(), t); err != nil {
+		// RAW291 Type B：混合错误——保存仓储错误（已标 repoError）
+		// 改走通用文案；下载/校验失败为固定文案，原样回。
+		if respondInternalIfRepoError(w, "subscriptionTemplateRefresh: refreshTemplate failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -396,7 +414,8 @@ func (h *Handler) subscriptionTemplateDelete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := h.repo.DeleteSubscriptionTemplate(req.ID); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionTemplateDelete: DeleteSubscriptionTemplate failed", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())

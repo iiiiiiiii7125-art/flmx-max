@@ -2229,7 +2229,11 @@ func validateIDsExistTx(tx *gorm.DB, target interface{}, label string, ids []int
 	for _, chunk := range chunkInt64IDs(uniq) {
 		var chunkExisting []int64
 		if err := tx.Model(target).Where("id IN ?", chunk).Pluck("id", &chunkExisting).Error; err != nil {
-			return err
+			// RAW291：gorm 直通错误须标 StorageError——调用方
+			// 无法凭文案把它与下方固定缺失 ID 文案区分；标记后
+			// handler 的 respondInternalIfRepoError 改走通用文案，
+			// 缺失 ID 的固定文案仍原样回（Error() 文本不变）。
+			return MarkStorageError(err)
 		}
 		existing = append(existing, chunkExisting...)
 	}

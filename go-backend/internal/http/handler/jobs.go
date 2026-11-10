@@ -296,8 +296,12 @@ func (h *Handler) retryNftPendingDeletes(now time.Time) {
 			log.Printf("nftables pending-delete completed node_id=%d forward_id=%d", nodeID, fid)
 		}
 		// R3X-018：本批终删完成后统一刷新一次（漏斗收尾）。
+		// T-001：后台任务无回执可进，刷新失败记日志留痕（内层
+		// refreshInboundWhitelist 已逐条记错，此处只记汇总）。
 		if finalized {
-			h.refreshInboundWhitelists(affectedInboundIDs)
+			if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
+				log.Printf("nftables pending-delete whitelist refresh failed inbound_ids=%v (kernel still enforces pre-change allow list)", failed)
+			}
 		}
 	}
 }
