@@ -319,8 +319,17 @@ func (r *chainRoute) connect(ctx context.Context, logger logger.Logger) (conn ne
 			}
 			return
 		}
-		cc, err = node.Options().Transport.Handshake(ctx, cc)
+		// 包 K：握手失败须关「刚拨出的连接本体」（hsIn）——旧
+		// 实现只关底座 cn，而 Handshake 失败时返回值多为 nil、
+		// 输入连接的所有权仍在本函数；各实现自关口径不一
+		// （tls 自关、ws 不关），不关则该连接在拨号侧漏 fd、
+		// 在对端留下一条开了没人关的会话（tunnel_49 式 2:1 净
+		// 累积的成形点：route 重试再拨一条成功的，失败这条永
+		// 不关）。对已自关的实现重复 Close 幂等安全。
+		hsIn := cc
+		cc, err = node.Options().Transport.Handshake(ctx, hsIn)
 		if err != nil {
+			hsIn.Close()
 			cn.Close()
 			if marker != nil {
 				marker.Mark()

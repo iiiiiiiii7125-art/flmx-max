@@ -29,6 +29,31 @@ func (c *tcpConn) Write(b []byte) (n int, err error) {
 	return
 }
 
+var errHalfCloseNotSupported = errors.New("half-close not supported by the underlying connection")
+
+// CloseWrite forwards a half-close to the wrapped conn when it
+// supports one. This wrapper heads the relay session stack, so
+// without the forwarding Transport's half-close propagation
+// silently no-ops on every relay session: the peer never learns
+// the stream ended, both hops park on Read, and the FIN'd leg
+// lingers in CLOSE-WAIT (package K census). An unflushed header
+// in wbuf means no payload ever crossed in this direction; the
+// FIN alone terminates the peer's wait either way, so plain
+// delegation is sufficient.
+func (c *tcpConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errHalfCloseNotSupported
+}
+
+func (c *tcpConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return errHalfCloseNotSupported
+}
+
 type udpConn struct {
 	net.Conn
 	wbuf bytes.Buffer
