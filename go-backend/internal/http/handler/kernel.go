@@ -2337,10 +2337,15 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// 连接日志 opt-in 名单（U5↔U4 契约）：agent 内核日志解析器
 		// 只对名单内的入站 tag 产连接事件（ApplyRequest.connLogInbounds）。
 		// 名单只含渲染集内已开启采集的入站；伴生入站是系统派生监听、
-		// 非用户入口（设计 §2 形态 6），恒排除。名单为空时不写键——
+		// 非用户入口（设计 §2 形态 6），恒排除。永无直连记录的形态
+		// 同样排除——被中转落地（relayTargets）、链式目标与分流目标
+		// （chainTargets，D-01 后含 SplitProxy 目标）、导入入站
+		// （SourceID>0）——它们的行本就被 connlogEntries 排除，收进
+		// 名单只会白开日志级、交集恒空。名单为空时不写键——
 		// agent 解码为 nil 即空集、采集器随之停用，与「最后一个开关
 		// 关闭后采集收敛」同义。
-		if in.ConnLogEnabled && !in.Companion && connlogMasterOn {
+		if in.ConnLogEnabled && !in.Companion && connlogMasterOn &&
+			!relayTargets[row.ID] && !chainTargets[row.ID] && row.SourceID == 0 {
 			connLogInbounds = append(connLogInbounds, in.ID)
 		}
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
@@ -2386,6 +2391,9 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		SingboxHTTPClient: !versionBelowStrict(k.Version, 1, 14),
 		SingboxSnell:      !versionBelowStrict(k.Version, 1, 14),
 		SingboxNaive:      !versionBelowStrict(k.Version, 1, 13),
+		// D-04：总开关实值进渲染——关时日志形态回落（不升
+		// debug／不开 access），与 connLogInbounds 的门同源。
+		ConnLogEnabled: connlogMasterOn,
 	})
 	if err != nil {
 		return nil, "", err

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -52,6 +53,117 @@ func TestBuildForwardServiceConfigs_ConnlogEntryMark(t *testing.T) {
 			if _, present := md[connlogEntryIDMetadataKey]; present {
 				t.Fatalf("service %v: ordinary forward carries an entry id", svc["name"])
 			}
+		}
+	}
+}
+
+// D-01：分流目标（SplitRule action=SplitProxy）是链式目标同形——
+// 其腿连接的对端是源入站所在机器，必须进拓扑排除集；只被
+// OutboundID 指向的入站与从未被指向的入站作对照。
+func TestConnlogChainTargetsIncludeSplitProxy(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/connlog-split.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+
+	node := seedRelayTargetNode(t, r, "cl-split", "198.51.100.5")
+	kern := seedChainKernel(t, r, node, kernel.TypeSingbox)
+	vless := func(port int) kernel.Inbound {
+		return kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: port,
+			Security: kernel.Security{Type: kernel.SecurityNone}}
+	}
+	splitTarget := seedChainInbound(t, r, kern, "cl-split-target", vless(8443), 0)
+	direct := seedChainInbound(t, r, kern, "cl-split-direct", vless(8444), 0)
+	src := seedChainInbound(t, r, kern, "cl-split-source", vless(8445), 0)
+	rules, err := json.Marshal([]kernel.SplitRule{{Action: kernel.SplitProxy, OutboundID: splitTarget.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DB().Exec(`UPDATE node_inbound SET split_rules = ? WHERE id = ?`, string(rules), src.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	ids, err := h.connlogChainTargetInboundIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ids[splitTarget.ID] {
+		t.Fatalf("split target %d missing from chain-target set: %v", splitTarget.ID, ids)
+	}
+	if ids[direct.ID] {
+		t.Fatalf("direct inbound %d wrongly in chain-target set: %v", direct.ID, ids)
+	}
+
+	// 端到端：分流目标在自己载荷的 connlogEntries 里不是入口。
+	payload, _, err := h.buildKernelApplyPayload(kern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, bad := connlogEntryTags(payload)[splitTarget.ID]; bad {
+		t.Fatalf("split target marked as entry: %v", connlogEntryTags(payload))
+	}
+	if got := connlogEntryTags(payload)[direct.ID]; got == "" {
+		t.Fatalf("direct inbound lost its entry mark: %v", connlogEntryTags(payload))
+	}
+}
+
+// D-05 后端：connLogInbounds（agent 内核日志解析器的 opt-in
+// 名单）不得收永无直连记录的入站形态——被中转落地／链式目标／
+// 分流目标／导入入站的开关即使开着，其行也被 connlogEntries
+// 排除，交集恒空；只会白开日志级。直连与链式源／分流源是对照。
+func TestConnlogOptInListExcludesNeverDirect(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/connlog-optin.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+	now := time.Now().UnixMilli()
+
+	node := seedRelayTargetNode(t, r, "cl-optin", "198.51.100.6")
+	kern := seedChainKernel(t, r, node, kernel.TypeSingbox)
+	vless := func(port int) kernel.Inbound {
+		return kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: port,
+			Security: kernel.Security{Type: kernel.SecurityNone}}
+	}
+	direct := seedChainInbound(t, r, kern, "cl-o-direct", vless(8443), 0)
+	chainTarget := seedChainInbound(t, r, kern, "cl-o-chain-target", vless(8444), 0)
+	chainSource := seedChainInbound(t, r, kern, "cl-o-chain-source", vless(8445), chainTarget.ID)
+	splitTarget := seedChainInbound(t, r, kern, "cl-o-split-target", vless(8446), 0)
+	splitSource := seedChainInbound(t, r, kern, "cl-o-split-source", vless(8447), 0)
+	relayTarget := seedChainInbound(t, r, kern, "cl-o-relay-target", vless(8448), 0)
+	imported := seedChainInbound(t, r, kern, "cl-o-imported", vless(8449), 0)
+	rules, err := json.Marshal([]kernel.SplitRule{{Action: kernel.SplitProxy, OutboundID: splitTarget.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DB().Exec(`UPDATE node_inbound SET split_rules = ? WHERE id = ?`, string(rules), splitSource.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateInboundRelay(&model.NodeInboundRelay{InboundID: relayTarget.ID, ForwardID: 777, Name: "relay", Managed: 1, CreatedTime: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DB().Exec(`UPDATE node_inbound SET conn_log_enabled = 1 WHERE kernel_id = ?`, kern.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DB().Exec(`UPDATE node_inbound SET source_id = 7 WHERE id = ?`, imported.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	payload, _, err := h.buildKernelApplyPayload(kern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := payload["connLogInbounds"].([]int64)
+	want := map[int64]bool{direct.ID: true, chainSource.ID: true, splitSource.ID: true}
+	if len(got) != len(want) {
+		t.Fatalf("connLogInbounds = %v, want exactly %v", got, want)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Fatalf("connLogInbounds = %v, want exactly %v", got, want)
 		}
 	}
 }
@@ -245,6 +357,21 @@ func TestConnlogMasterSwitchGatesAllMarkFaces(t *testing.T) {
 		payload, _, err := h.buildKernelApplyPayload(kern)
 		if err != nil {
 			t.Fatal(err)
+		}
+		// D-04：渲染面与标记面同门——总开关关时下发的 Xray 配置
+		// 不开 access 日志（opt-in 开着也不升），开时才开。
+		files, _ := payload["files"].([]kernel.File)
+		if len(files) == 0 {
+			t.Fatalf("%s: payload has no rendered files", stage)
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(files[0].Content), &parsed); err != nil {
+			t.Fatal(err)
+		}
+		logCfg, _ := parsed["log"].(map[string]interface{})
+		_, accessPresent := logCfg["access"]
+		if accessPresent != wantOn {
+			t.Fatalf("%s: rendered log.access present = %v, want %v", stage, accessPresent, wantOn)
 		}
 		entries := connlogEntryTags(payload)
 		if wantOn {

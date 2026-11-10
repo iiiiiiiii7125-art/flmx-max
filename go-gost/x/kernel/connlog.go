@@ -536,16 +536,26 @@ func (c *connLogCollector) sbInboundLine(proc, subsystem, msg, rawID string, lin
 		c.sbOpen(proc, tag, inboundType, true, strings.TrimPrefix(msg, "inbound packet connection from "), rawID, lineMs)
 	case strings.HasPrefix(msg, "inbound connection from "):
 		c.sbOpen(proc, tag, inboundType, false, strings.TrimPrefix(msg, "inbound connection from "), rawID, lineMs)
-	case strings.HasPrefix(msg, "process connection from "):
+	case strings.HasPrefix(msg, "process connection from "),
+		strings.HasPrefix(msg, "process packet connection from "):
 		// Handshake-stage failure (bad auth, undecodable stream):
 		// the connection is over. The line carries the source
 		// address itself, so it closes a tracked connection and
-		// can stand alone when the open line was never seen.
-		addr := strings.TrimPrefix(msg, "process connection from ")
+		// can stand alone when the open line was never seen. The
+		// packet form is the packet inbound's counterpart of the
+		// stream form; both go through sbTerminal with the
+		// inbound's own shape (D-06).
+		packet := strings.HasPrefix(msg, "process packet connection from ")
+		addr := msg
+		if packet {
+			addr = strings.TrimPrefix(addr, "process packet connection from ")
+		} else {
+			addr = strings.TrimPrefix(addr, "process connection from ")
+		}
 		if i := strings.Index(addr, ": "); i >= 0 {
 			addr = addr[:i]
 		}
-		c.sbTerminal(proc, tag, addr, rawID, lineMs, elapsedMs, elapsedOK)
+		c.sbTerminal(proc, tag, inboundType, packet, addr, rawID, lineMs, elapsedMs, elapsedOK)
 	case strings.HasPrefix(msg, "connection closed"):
 		// Router-level terminal line (closed/canceled/rejected
 		// class). Carries no address: only meaningful for a
@@ -585,6 +595,21 @@ func (c *connLogCollector) sbConnectionLine(proc, msg, level, rawID string, line
 	return true
 }
 
+// sbSessionShape derives the wire shape of a sing-box inbound
+// connection from its type and packet-ness — the single source of
+// truth sbOpen and sbTerminal both follow (truth rule: QUIC-inbound
+// streams and packet sessions are kernel_session, never dressed up
+// as tcp_conn).
+func sbSessionShape(inboundType string, packet bool) (network, sessionKind string) {
+	network, sessionKind = "tcp", ConnSessionKindTCP
+	if packet {
+		network, sessionKind = "udp", ConnSessionKindKernel
+	} else if quicInboundTypes[inboundType] {
+		sessionKind = ConnSessionKindKernel
+	}
+	return network, sessionKind
+}
+
 // sbOpen records a sing-box connection start and emits the open
 // event. Packet sessions and QUIC-inbound streams are kernel
 // sessions; plain streams are true TCP connections.
@@ -593,12 +618,7 @@ func (c *connLogCollector) sbOpen(proc, tag, inboundType string, packet bool, ad
 		return
 	}
 	host, port := splitHostPort(strings.TrimSpace(addr))
-	network, sessionKind := "tcp", ConnSessionKindTCP
-	if packet {
-		network, sessionKind = "udp", ConnSessionKindKernel
-	} else if quicInboundTypes[inboundType] {
-		sessionKind = ConnSessionKindKernel
-	}
+	network, sessionKind := sbSessionShape(inboundType, packet)
 	conn := &kernelConn{
 		connID:      c.composeID(proc, rawID),
 		tag:         tag,
@@ -658,12 +678,15 @@ func (c *connLogCollector) sbCloseTracked(proc, rawID string, lineMs, elapsedMs 
 }
 
 // sbTerminal closes a connection from a line that carries the tag
-// and the source address itself ("process connection from …"). A
-// tracked connection closes normally; an untracked one still
-// produces a stand-alone close (the panel materialises the row
-// from the close alone, per the U1 contract) with its start
-// derived from the line's own timestamp and elapsed.
-func (c *connLogCollector) sbTerminal(proc, tag, addr, rawID string, lineMs, elapsedMs int64, elapsedOK bool) {
+// and the source address itself ("process connection from …" /
+// "process packet connection from …"). A tracked connection closes
+// normally; an untracked one still produces a stand-alone close (the
+// panel materialises the row from the close alone, per the U1
+// contract) with its start derived from the line's own timestamp and
+// elapsed. The stand-alone row takes the inbound's own shape via
+// sbSessionShape (D-06): a QUIC-inbound stream or a packet session
+// is kernel_session, never a hard-coded tcp_conn.
+func (c *connLogCollector) sbTerminal(proc, tag, inboundType string, packet bool, addr, rawID string, lineMs, elapsedMs int64, elapsedOK bool) {
 	key := openKey(proc, rawID)
 	c.mu.Lock()
 	conn, ok := c.open[key]
@@ -683,6 +706,7 @@ func (c *connLogCollector) sbTerminal(proc, tag, addr, rawID string, lineMs, ela
 	if elapsedOK {
 		startMs = lineMs - elapsedMs
 	}
+	network, sessionKind := sbSessionShape(inboundType, packet)
 	c.emit(ConnEvent{
 		Type:        ConnEventClose,
 		ConnID:      c.composeID(proc, rawID),
@@ -690,8 +714,8 @@ func (c *connLogCollector) sbTerminal(proc, tag, addr, rawID string, lineMs, ela
 		EntryID:     tag,
 		ClientIP:    host,
 		ClientPort:  port,
-		Network:     "tcp",
-		SessionKind: ConnSessionKindTCP,
+		Network:     network,
+		SessionKind: sessionKind,
 		StartMs:     startMs,
 		EndMs:       lineMs,
 		Status:      ConnStatusClosed,
