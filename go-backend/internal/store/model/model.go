@@ -282,11 +282,11 @@ type SpeedLimit struct {
 func (SpeedLimit) TableName() string { return "speed_limit" }
 
 type StatisticsFlow struct {
-	ID          int64  `gorm:"primaryKey;autoIncrement" json:"id"`
-	UserID      int64  `gorm:"column:user_id;not null" json:"userId"`
-	Flow        int64  `gorm:"not null" json:"flow"`
-	TotalFlow   int64  `gorm:"column:total_flow;not null" json:"totalFlow"`
-	Time        string `gorm:"type:varchar(100);not null" json:"time"`
+	ID        int64  `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID    int64  `gorm:"column:user_id;not null" json:"userId"`
+	Flow      int64  `gorm:"not null" json:"flow"`
+	TotalFlow int64  `gorm:"column:total_flow;not null" json:"totalFlow"`
+	Time      string `gorm:"type:varchar(100);not null" json:"time"`
 	// AP-08：CreatedTime 此前 json:"-"，前端流量图只能按 HH:00
 	// 字符串拼日期（跨日断点错位）；现透出 UnixMilli 毫秒时间戳，
 	// 前端以它定日、Time 只作小时刻度。加字段向后兼容。
@@ -1267,7 +1267,12 @@ type NodeMetric struct {
 	Load15      float64 `gorm:"column:load15" json:"load15"`
 	TCPConns    int64   `gorm:"column:tcp_conns" json:"tcpConns"`
 	UDPConns    int64   `gorm:"column:udp_conns" json:"udpConns"`
-	Uptime      int64   `gorm:"column:uptime" json:"uptime"`
+	// ConntrackCount/ConntrackMax 是宿主机连接跟踪表用量（包
+	// K）：0/0 表示该节点无此面（旧 agent 或 nf_conntrack 未加
+	// 载）。历史行同表受 pruneMetrics 保留口径约束，不另设面。
+	ConntrackCount int64 `gorm:"column:conntrack_count" json:"conntrackCount"`
+	ConntrackMax   int64 `gorm:"column:conntrack_max" json:"conntrackMax"`
+	Uptime         int64 `gorm:"column:uptime" json:"uptime"`
 }
 
 func (NodeMetric) TableName() string { return "node_metric" }
@@ -1342,16 +1347,16 @@ type ServiceMonitor struct {
 func (ServiceMonitor) TableName() string { return "service_monitor" }
 
 type ServiceMonitorResult struct {
-	ID           int64   `gorm:"primaryKey;autoIncrement" json:"id"`
-	MonitorID    int64   `gorm:"column:monitor_id;not null;index:idx_monitor_result_monitor_time,priority:1" json:"monitorId"`
-	NodeID       int64   `gorm:"column:node_id;not null;index" json:"nodeId"`
-	Timestamp    int64   `gorm:"not null;index:idx_monitor_result_monitor_time,priority:2" json:"timestamp"`
-	Success      int     `gorm:"not null" json:"success"`
-	LatencyMs    float64 `gorm:"column:latency_ms" json:"latencyMs"`
+	ID        int64   `gorm:"primaryKey;autoIncrement" json:"id"`
+	MonitorID int64   `gorm:"column:monitor_id;not null;index:idx_monitor_result_monitor_time,priority:1" json:"monitorId"`
+	NodeID    int64   `gorm:"column:node_id;not null;index" json:"nodeId"`
+	Timestamp int64   `gorm:"not null;index:idx_monitor_result_monitor_time,priority:2" json:"timestamp"`
+	Success   int     `gorm:"not null" json:"success"`
+	LatencyMs float64 `gorm:"column:latency_ms" json:"latencyMs"`
 	// R2-C2-B01：agent 已删 statusCode 回包字段——读口恒缺失（恒 0）、
 	// 模型字段同步摘除；前端声明归路 6。存量列由 AutoMigrate 保留，
 	// 不再读写。
-	ErrorMessage string  `gorm:"column:error_message;type:text" json:"errorMessage"`
+	ErrorMessage string `gorm:"column:error_message;type:text" json:"errorMessage"`
 }
 
 func (ServiceMonitorResult) TableName() string { return "service_monitor_result" }

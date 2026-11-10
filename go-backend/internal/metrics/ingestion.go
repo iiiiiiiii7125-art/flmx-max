@@ -31,6 +31,11 @@ type SystemInfo struct {
 	UDPConns    int64   `json:"udp_conns"`
 	NetInSpeed  int64   `json:"net_in_speed"`
 	NetOutSpeed int64   `json:"net_out_speed"`
+	// ConntrackCount/ConntrackMax（包 K）：宿主机连接跟踪表用
+	// 量。加法字段；0 表示该节点无此面（旧 agent/未加载），落
+	// 库为 0 且面板不据此告警。
+	ConntrackCount int64 `json:"conntrack_count"`
+	ConntrackMax   int64 `json:"conntrack_max"`
 }
 
 // NodeTrafficRetention keeps a little over a year of hourly node NIC
@@ -168,21 +173,23 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 		return
 	}
 	m := &model.NodeMetric{
-		NodeID:      nodeID,
-		Timestamp:   time.Now().UnixMilli(),
-		CPUUsage:    clampPercent(info.CPUUsage),
-		MemUsage:    clampPercent(info.MemoryUsage),
-		DiskUsage:   clampPercent(info.DiskUsage),
-		NetInBytes:  int64(info.BytesReceived),
-		NetOutBytes: int64(info.BytesTransmitted),
-		NetInSpeed:  clampNonNegativeI(info.NetInSpeed),
-		NetOutSpeed: clampNonNegativeI(info.NetOutSpeed),
-		Load1:       clampNonNegativeF(info.Load1),
-		Load5:       clampNonNegativeF(info.Load5),
-		Load15:      clampNonNegativeF(info.Load15),
-		TCPConns:    clampNonNegativeI(info.TCPConns),
-		UDPConns:    clampNonNegativeI(info.UDPConns),
-		Uptime:      int64(info.Uptime),
+		NodeID:         nodeID,
+		Timestamp:      time.Now().UnixMilli(),
+		CPUUsage:       clampPercent(info.CPUUsage),
+		MemUsage:       clampPercent(info.MemoryUsage),
+		DiskUsage:      clampPercent(info.DiskUsage),
+		NetInBytes:     int64(info.BytesReceived),
+		NetOutBytes:    int64(info.BytesTransmitted),
+		NetInSpeed:     clampNonNegativeI(info.NetInSpeed),
+		NetOutSpeed:    clampNonNegativeI(info.NetOutSpeed),
+		Load1:          clampNonNegativeF(info.Load1),
+		Load5:          clampNonNegativeF(info.Load5),
+		Load15:         clampNonNegativeF(info.Load15),
+		TCPConns:       clampNonNegativeI(info.TCPConns),
+		UDPConns:       clampNonNegativeI(info.UDPConns),
+		ConntrackCount: clampNonNegativeI(info.ConntrackCount),
+		ConntrackMax:   clampNonNegativeI(info.ConntrackMax),
+		Uptime:         int64(info.Uptime),
 	}
 
 	s.nodeBufferMu.Lock()

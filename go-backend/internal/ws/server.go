@@ -257,6 +257,10 @@ type SystemInfo struct {
 	UDPConns         int64   `json:"udp_conns"`
 	NetInSpeed       int64   `json:"net_in_speed"`
 	NetOutSpeed      int64   `json:"net_out_speed"`
+	// ConntrackCount/ConntrackMax（包 K）：宿主机连接跟踪表用
+	// 量，加法字段，旧 agent 不发为 0。
+	ConntrackCount int64 `json:"conntrack_count"`
+	ConntrackMax   int64 `json:"conntrack_max"`
 }
 
 func (s *Server) SetNodeOnlineHook(fn func(nodeID int64)) {
