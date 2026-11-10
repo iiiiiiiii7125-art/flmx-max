@@ -65,6 +65,12 @@ type SystemInfo struct {
 	UDPConns    int64   `json:"udp_conns"`
 	NetInSpeed  int64   `json:"net_in_speed"`
 	NetOutSpeed int64   `json:"net_out_speed"`
+	// ConntrackCount/ConntrackMax 是宿主机连接跟踪表用量（包
+	// K）：面板据此在用量越阈时告警（表满＝全包皆丢的溺亡前
+	// 兆）。加法字段：旧面板忽略未知字段；nf_conntrack 未加载
+	// 或旧 agent 不发时为 0，面板以 max<=0 判「无此面」不告警。
+	ConntrackCount int64 `json:"conntrack_count"`
+	ConntrackMax   int64 `json:"conntrack_max"`
 }
 
 // NetworkStats 网络统计信息
@@ -899,6 +905,24 @@ var connInfoCached ConnectionInfo
 var connInfoCachedAt int64
 var connInfoCachedMu sync.Mutex
 
+// lastHostGuardLogNano 是惰性再检失败行的限速点：收敛持续失
+// 败（如 /proc/sys 只读）时每个上报周期都会重试，日志至多每
+// 分钟一组，防守卫自己的日志成为新的增长面。
+var lastHostGuardLogNano atomic.Int64
+
+func logHostGuardResult(res hostGuardResult) {
+	if res.Failed {
+		now := time.Now().UnixNano()
+		last := lastHostGuardLogNano.Load()
+		if now-last < int64(time.Minute) || !lastHostGuardLogNano.CompareAndSwap(last, now) {
+			return
+		}
+	}
+	for _, line := range res.Lines {
+		fmt.Printf("[flmx] %s\n", line)
+	}
+}
+
 // collectSystemInfo 收集系统信息
 func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 	networkStats := getNetworkStats()
@@ -907,6 +931,18 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 	diskInfo := getDiskInfo()
 	loadInfo := getLoadInfo()
 	connInfo := getConnectionInfo()
+
+	// conntrack 用量（包 K）：随指标周期上报供面板越阈告警；
+	// 若模块在 agent 启动后才加载、max 仍是发行版默认值，惰
+	// 性补跑一次保底收敛（启动自检当时无面可收），收敛后重读
+	// 供本轮上报。
+	ct := ReadConntrackState()
+	if ConntrackBelowFloor(ct) {
+		if res := EnsureConntrackFloor(false); res.Changed || res.Failed {
+			logHostGuardResult(res)
+			ct = ReadConntrackState()
+		}
+	}
 
 	now := time.Now().UnixMilli()
 	var netInSpeed, netOutSpeed int64
@@ -936,6 +972,8 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 		UDPConns:         connInfo.UDPConns,
 		NetInSpeed:       netInSpeed,
 		NetOutSpeed:      netOutSpeed,
+		ConntrackCount:   ct.Count,
+		ConntrackMax:     ct.Max,
 	}
 }
 
