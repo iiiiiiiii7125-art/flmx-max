@@ -9425,11 +9425,13 @@ func markUserTunnelIDsError(err error) error {
 // respondPhantomIDError 是 ValidateIDsExist 幻影 ID 的调用点分流：
 // 幻影（定型文案）原样回执、仓储故障走通用文案。门禁口径：Msg
 // 字段访问天然沉默，与 kernelVersionGateError 的 errors.As 分流
-// 同形。
+// 同形。回执码口径：幻影支恒 -2（W3 契约，TestR2W3ValidateIDsExist
+// MixedError 钉死；集成时 ErrDefault 曾把它规范为 -1、与该契约相
+// 撞，BOXFIX 恢复 -2——门禁只管文案污染、不管码值）。
 func respondPhantomIDError(w http.ResponseWriter, op string, err error) {
 	var pe *repo.PhantomIDError
 	if errors.As(err, &pe) {
-		response.WriteJSON(w, response.ErrDefault(pe.Msg))
+		response.WriteJSON(w, response.Err(-2, pe.Msg))
 		return
 	}
 	respondInternalError(w, op, err)
