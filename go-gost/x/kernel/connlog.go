@@ -764,7 +764,14 @@ func (c *connLogCollector) pushClose(conn *kernelConn, lineMs, elapsedMs int64, 
 // bracket only appears on accepted lines.
 var xrAccessRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?) from (?:(tcp|udp):)?(\S+?) (accepted|rejected)(?:\s|$)`)
 
-var xrTagRe = regexp.MustCompile(`\[([^\]\s]+)\s*>>\s*[^\]]*\]`)
+// xrTagRe extracts the entry (inbound) tag from an Xray access
+// line's bracket. Xray writes `>>` for a direct outbound and
+// `->` for a proxied outbound (LIVE-215 red 3 / D-01: the split
+// leg "[in-73 -> via-73-s1]" was silently dropped because only
+// `>>` matched). Both shapes attribute to the LEFT (inbound)
+// side — the bracket's right side is the outbound tag, never an
+// entry id.
+var xrTagRe = regexp.MustCompile(`\[([^\]\s]+)\s*(?:>>|->)\s*[^\]]*\]`)
 
 func parseXrayTimestamp(text string) (int64, bool) {
 	t, err := time.ParseInLocation("2006/01/02 15:04:05.999999999", text, time.Local)
