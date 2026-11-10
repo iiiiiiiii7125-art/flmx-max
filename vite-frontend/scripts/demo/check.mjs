@@ -326,8 +326,19 @@ for (const r of ADMIN_PAGES) {
   await visit("admin", r);
   await interact("admin", r);
 }
-// The demo note's switch signs in as the demo user and reloads.
-await evaluate(`[...document.querySelectorAll("button")].find((b) => b.textContent.includes("普通用户视角"))?.click()`);
+// The demo note's switch signs in as the demo user and reloads. Since
+// F-W4-02 the note starts collapsed to its 演示站 pill, so expand it
+// first — the same two clicks a visitor makes. A switch control that
+// never appears is recorded as a failure in its own right: the old
+// one-shot find silently no-oped after the banner change and the
+// whole user walk then ran under the admin session, surfacing as
+// five unrelated-looking page failures.
+let switched = false;
+for (let i = 0; i < 50 && !switched; i++) {
+  switched = await evaluate(`(() => { const b = [...document.querySelectorAll("button")].find((x) => x.textContent.includes("普通用户视角")); if (b) { b.click(); return true; } const pill = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "演示站"); if (pill) pill.click(); return false; })()`);
+  if (!switched) await sleep(SETTLE_POLL_MS);
+}
+if (!switched) problems.push("user (role switch): switch control not found");
 await sleep(SETTLE_MS);
 for (const r of USER_PAGES) {
   await visit("user", r);
