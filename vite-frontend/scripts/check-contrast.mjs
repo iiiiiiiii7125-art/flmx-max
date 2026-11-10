@@ -1364,6 +1364,72 @@ const TRAY_PLATE_REGISTERED = [
   );
 }
 
+// ── 半透黑遮罩载体登记（F-W1-07）────────────────────────────
+// bg-black/<alpha> 是半透明载体：其有效底由 alpha 与身后内容共同
+// 决定，alpha 无声漂移会改写遮罩强度与其上文字的对比下限。Modal
+// 遮罩分档（blur 档 bg-black/40＋blur、opaque 档 bg-black/70）与
+// config 壁纸预览标签芯片（白字坐 bg-black/70）在首轮审计终局
+// 登记缺位、仓内门禁对 bg-black 零命中；同族另有三处同形载体
+// （Dialog 遮罩、admin 遮罩、登录页验证码遮罩），按机制全集一并
+// 入册，不只登记被点名的两处。登记集按 file:line＋token 双向相等
+// 断言（多一处未登记载体 / 少一处登记载体都红；新增载体先登记再
+// 合入），与 tray-plate 普查同口径：只计字符串字面量内的 token，
+// 注释内提及不计数。另钉 config 芯片白字对比下限：bg-black/70 覆
+// 纯白底的合成底为 #4c4c4c，白字对比 8.52（钉值 ±0.1）；alpha 降
+// 至 0.3 即跌破 4.5（实测 2.11），故 alpha 值本身须钉住。
+const BLACK_SCRIM_REGISTERED = [
+  { loc: "src/shadcn-bridge/heroui/modal.tsx:56", token: "bg-black/40", note: "Modal blur 档遮罩" },
+  { loc: "src/shadcn-bridge/heroui/modal.tsx:59", token: "bg-black/70", note: "Modal opaque 档遮罩" },
+  { loc: "src/pages/config.tsx:1219", token: "bg-black/70", note: "config 壁纸预览标签芯片（白字）" },
+  { loc: "src/components/ui/dialog.tsx:39", token: "bg-black/40", note: "Dialog 遮罩" },
+  { loc: "src/layouts/admin.tsx:428", token: "bg-black/40", note: "admin 遮罩" },
+  { loc: "src/pages/index.tsx:320", token: "bg-black/60", note: "登录页验证码遮罩" },
+];
+{
+  const foundScrims = [];
+  const scrimWalk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scrimWalk(path);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        const text = readFileSync(path, "utf8");
+        const rel = path.slice(join(here, "..").length + 1);
+        for (const m of text.matchAll(/"([^"\n]*)"|'([^'\n]*)'|`([^`]*)`/g)) {
+          const body = m[1] ?? m[2] ?? m[3] ?? "";
+          for (const t of body.matchAll(/bg-black\/\d+/g)) {
+            const line = text.slice(0, m.index).split("\n").length;
+            foundScrims.push(`${rel}:${line} ${t[0]}`);
+          }
+        }
+      }
+    }
+  };
+  scrimWalk(join(here, "..", "src"));
+  const registeredKeys = BLACK_SCRIM_REGISTERED.map((r) => `${r.loc} ${r.token}`);
+  const scrimExtra = foundScrims.filter((f) => !registeredKeys.includes(f));
+  const scrimMissing = registeredKeys.filter((f) => !foundScrims.includes(f));
+  check(
+    `半透黑遮罩载体普查闭合（实扫 ${foundScrims.length} 处、登记 ${registeredKeys.length} 处）`,
+    scrimExtra.length === 0 && scrimMissing.length === 0,
+    [
+      scrimExtra.length ? `未登记：${scrimExtra.join(", ")}` : "",
+      scrimMissing.length ? `登记未用：${scrimMissing.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("；"),
+  );
+  // 黑 scrim 合成底：alpha 份黑覆在底色上（与玻璃网格的白 overlay
+  // compositeOver 相反方向，勿混用）。
+  const blackOver = (alpha, bg) => [0, 1, 2].map((i) => (1 - alpha) * bg[i]);
+  const chipWorst = contrastRgb([255, 255, 255], blackOver(0.7, [255, 255, 255]));
+  check(
+    `config 预览芯片白字对比下限（bg-black/70 覆纯白底 = ${chipWorst.toFixed(2)}、底线 4.5）`,
+    chipWorst >= 4.5 && Math.abs(chipWorst - 8.52) <= 0.1,
+    `实测 ${chipWorst.toFixed(2)}`,
+  );
+}
+
 // ── 玻璃语境语义文字（R2-S1-01）────────────────────────────
 // 玻璃恢复后语义色阶梯档（-700 为主）直坐玻璃的最差格只有
 // 1.76–2.77：已登记边界只量化过中性 default-700（3.67），而语义
