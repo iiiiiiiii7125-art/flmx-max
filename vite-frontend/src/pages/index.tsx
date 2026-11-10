@@ -7,7 +7,12 @@ import { motion } from "framer-motion";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import { Button } from "@/shadcn-bridge/heroui/button";
-import { siteConfig } from "@/config/site";
+import {
+  WALLPAPER_LOAD_FAILED_EVENT,
+  WALLPAPER_LOAD_SUCCEEDED_EVENT,
+  isWallpaperLoadFailed,
+  siteConfig,
+} from "@/config/site";
 import { VersionFooter } from "@/components/version-footer";
 import { BrandLogo } from "@/components/brand-logo";
 import {
@@ -42,6 +47,10 @@ export default function IndexPage() {
   const [passkeyEnabled, setPasskeyEnabled] = useState(false);
   // 站点标题跟随配置更新（无缓存首次打开时，异步配置回来后刷新标题）
   const [siteName, setSiteName] = useState(siteConfig.name);
+  // W2-UX-01（访客侧）：壁纸探针失败时在卡片下提示已用默认背景。
+  const [wallpaperFailed, setWallpaperFailed] = useState(() =>
+    isWallpaperLoadFailed(),
+  );
 
   useEffect(() => {
     const onConfigUpdate = () => setSiteName(siteConfig.name);
@@ -50,6 +59,22 @@ export default function IndexPage() {
 
     return () =>
       window.removeEventListener("site-config-updated", onConfigUpdate);
+  }, []);
+
+  useEffect(() => {
+    const onFailed = () => setWallpaperFailed(true);
+    const onSucceeded = () => setWallpaperFailed(false);
+
+    window.addEventListener(WALLPAPER_LOAD_FAILED_EVENT, onFailed);
+    window.addEventListener(WALLPAPER_LOAD_SUCCEEDED_EVENT, onSucceeded);
+
+    return () => {
+      window.removeEventListener(WALLPAPER_LOAD_FAILED_EVENT, onFailed);
+      window.removeEventListener(
+        WALLPAPER_LOAD_SUCCEEDED_EVENT,
+        onSucceeded,
+      );
+    };
   }, []);
   const navigate = useNavigate();
   const isWebView = useWebViewMode();
@@ -300,6 +325,12 @@ export default function IndexPage() {
               </div>
             </CardBody>
           </Card>
+          {/* W2-UX-01：壁纸加载失败时点名提示，避免访客只见纯色却不知情。 */}
+          {wallpaperFailed && (
+            <p className="mt-3 text-center text-xs font-semibold text-foreground">
+              背景图片加载失败，已使用默认背景
+            </p>
+          )}
         </motion.div>
 
         {/* 版权信息 - 固定在底部，不占据布局空间 */}

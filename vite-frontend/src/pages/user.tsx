@@ -212,6 +212,9 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
   // 状态管理
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  // R2-C3-01（IRL-3 同族）：用户列表初载失败必须留持久标记＋重试入口，
+  // 不得再按空列表渲染（与 node.tsx nodesLoadFailed 同款纪律）。
+  const [usersLoadFailed, setUsersLoadFailed] = useState(false);
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
     "user-search-keyword",
     "",
@@ -291,6 +294,10 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
     useState<number | null>(null);
   const [userTunnels, setUserTunnels] = useState<UserTunnel[]>([]);
   const [tunnelListLoading, setTunnelListLoading] = useState(false);
+  // R2-C3-01（IRL-3 同族）：权限抽屉内两张列表（可分配隧道／已有权限）
+  // 初载失败同样不得装空，各留失败位＋重试入口。
+  const [tunnelsLoadFailed, setTunnelsLoadFailed] = useState(false);
+  const [userTunnelsLoadFailed, setUserTunnelsLoadFailed] = useState(false);
 
   // 分配新隧道权限相关状态
   const [assignLoading, setAssignLoading] = useState(false);
@@ -408,6 +415,7 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
           setHasNextPage(nextHasNext);
           setUsers(nextUsers);
+          setUsersLoadFailed(false);
           setPagination((prev) => ({
             ...prev,
             current,
@@ -416,10 +424,12 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
               : (current - 1) * size + nextUsers.length,
           }));
         } else {
+          setUsersLoadFailed(true);
           toast.error(response.msg || "获取用户列表失败");
         }
       } catch {
         if (loadUsersSeqRef.current === seq) {
+          setUsersLoadFailed(true);
           toast.error("获取用户列表失败");
         }
       } finally {
@@ -437,10 +447,13 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       if (response.code === 0) {
         setTunnels(Array.isArray(response.data) ? response.data : []);
+        setTunnelsLoadFailed(false);
       } else {
+        setTunnelsLoadFailed(true);
         toast.error(response.msg || "获取隧道列表失败");
       }
     } catch {
+      setTunnelsLoadFailed(true);
       toast.error("获取隧道列表失败");
     }
   }, []);
@@ -515,11 +528,14 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
             ? response.data.map((item) => normalizeUserTunnelItem(item))
             : [],
         );
+        setUserTunnelsLoadFailed(false);
       } else {
+        setUserTunnelsLoadFailed(true);
         toast.error(response.msg || "获取隧道权限列表失败");
       }
     } catch {
       if (loadUserTunnelsSeqRef.current === seq) {
+        setUserTunnelsLoadFailed(true);
         toast.error("获取隧道权限列表失败");
       }
     } finally {
@@ -1210,17 +1226,48 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
       </div>
 
       {/* 用户列表 */}
+      {/* R2-C3-01：初载失败持久标记＋重试入口（失败不装空）。 */}
+      {!loading && usersLoadFailed && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-danger-50 px-3 py-2">
+          <p className="text-xs font-semibold text-danger-700">
+            {users.length > 0
+              ? "用户列表刷新失败，当前显示的是上次成功加载的数据，不是最新状态。"
+              : "用户列表加载失败，不能据此判断是否已有用户。"}
+          </p>
+          <Button
+            color="danger"
+            size="sm"
+            variant="flat"
+            onPress={() => loadUsers()}
+          >
+            重新加载
+          </Button>
+        </div>
+      )}
       {loading ? (
         <PageLoadingState message="正在加载..." />
       ) : users.length === 0 ? (
         <Card className="shadow-sm">
           <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-              暂无用户数据
+              {usersLoadFailed ? "用户列表加载失败" : "暂无用户数据"}
             </h3>
             <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
-              还没有创建任何用户，点击上方按钮开始创建
+              {usersLoadFailed
+                ? "没能从面板取到用户列表，不能据此判断是否已有用户；请检查网络后重试。"
+                : "还没有创建任何用户，点击上方按钮开始创建"}
             </p>
+            {usersLoadFailed && (
+              <Button
+                className="mt-4"
+                color="danger"
+                size="sm"
+                variant="flat"
+                onPress={() => loadUsers()}
+              >
+                重新加载
+              </Button>
+            )}
           </CardBody>
         </Card>
       ) : viewMode === "list" ? (
@@ -2056,8 +2103,30 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                       );
                     })}
                     {tunnels.length === 0 && (
-                      <div className="p-8 text-center text-foreground rounded-lg border border-dashed border-divider">
-                        暂无可用隧道
+                      <div className="p-8 text-center rounded-lg border border-dashed border-divider">
+                        {tunnelsLoadFailed ? (
+                          <>
+                            <p className="font-semibold text-danger-700">
+                              可分配隧道列表加载失败
+                            </p>
+                            <p className="mt-1 text-sm text-foreground">
+                              不能据此判断是否已有隧道；请重试。
+                            </p>
+                            <Button
+                              className="mt-3"
+                              color="danger"
+                              size="sm"
+                              variant="flat"
+                              onPress={() => loadTunnels()}
+                            >
+                              重新加载
+                            </Button>
+                          </>
+                        ) : (
+                          <span className="text-foreground">
+                            暂无可用隧道
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -2104,7 +2173,27 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
                     <TableColumn>操作</TableColumn>
                   </TableHeader>
                   <TableBody
-                    emptyContent="暂无隧道权限"
+                    emptyContent={
+                      userTunnelsLoadFailed ? (
+                        <div className="flex flex-col items-center gap-2 py-4">
+                          <span className="font-semibold text-danger-700">
+                            隧道权限加载失败，不能据此判断该用户是否已有隧道权限。
+                          </span>
+                          <Button
+                            color="danger"
+                            size="sm"
+                            variant="flat"
+                            onPress={() =>
+                              currentUser && loadUserTunnels(currentUser.id)
+                            }
+                          >
+                            重新加载
+                          </Button>
+                        </div>
+                      ) : (
+                        "暂无隧道权限"
+                      )
+                    }
                     isLoading={tunnelListLoading}
                     items={userTunnels}
                     loadingContent={<Spinner />}

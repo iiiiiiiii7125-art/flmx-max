@@ -139,6 +139,10 @@ export function NodeMonitorDetail({
   const [nodes, setNodes] = useState<MonitorNodeApiItem[]>([]);
   // Same R2X-038 access passthrough as the overview.
   const [canWrite, setCanWrite] = useState(false);
+  // R2-C3-01（IRL-3 同族）：节点列表初载失败必须留持久标记＋重试入口，
+  // 不得再按「暂无节点」空态渲染（与 node.tsx nodesLoadFailed 同款纪律）。
+  const [nodesLoadFailed, setNodesLoadFailed] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -148,10 +152,18 @@ export function NodeMonitorDetail({
         const res = await getMonitorNodes();
 
         if (!active) return;
-        if (res.code === 0 && Array.isArray(res.data)) setNodes(res.data);
-        else toast.error(res.msg || "加载节点失败");
+        if (res.code === 0 && Array.isArray(res.data)) {
+          setNodes(res.data);
+          setNodesLoadFailed(false);
+        } else {
+          setNodesLoadFailed(true);
+          toast.error(res.msg || "加载节点失败");
+        }
       } catch {
-        if (active) toast.error("加载节点失败");
+        if (active) {
+          setNodesLoadFailed(true);
+          toast.error("加载节点失败");
+        }
       }
       try {
         const res = await getMonitorAccess();
@@ -167,7 +179,7 @@ export function NodeMonitorDetail({
     return () => {
       active = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   const nodeMap = useMemo(
     () =>
@@ -190,11 +202,29 @@ export function NodeMonitorDetail({
   );
 
   return (
-    <MonitorView
-      canWrite={canWrite}
-      focusNodeId={nodeId}
-      nodeMap={nodeMap}
-      onBack={onBack}
-    />
+    <>
+      {nodesLoadFailed && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-danger-50 px-3 py-2">
+          <p className="text-xs font-semibold text-danger-700">
+            节点列表加载失败，当前显示的节点可能不完整或为空，不是真实状态。
+          </p>
+          <Button
+            color="danger"
+            size="sm"
+            variant="flat"
+            onPress={() => setReloadKey((k) => k + 1)}
+          >
+            重新加载
+          </Button>
+        </div>
+      )}
+      <MonitorView
+        canWrite={canWrite}
+        focusNodeId={nodeId}
+        nodeMap={nodeMap}
+        nodesLoadFailed={nodesLoadFailed}
+        onBack={onBack}
+      />
+    </>
   );
 }

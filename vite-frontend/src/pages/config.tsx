@@ -349,6 +349,10 @@ export default function ConfigPage() {
   const [hasChanges, setHasChanges] = useState(false);
   const [originalConfigs, setOriginalConfigs] =
     useState<Record<string, string>>(initialConfigs);
+  // R2-C3-01（IRL-3 同族）：配置初载失败必须留持久标记＋重试入口。
+  // 只加标记、不禁保存：handleSave 只发 changedPayload 差异键，载失败
+  // 显空默认值也不会整表清零（与公告节全量保存的禁保存先例不同）。
+  const [configsLoadFailed, setConfigsLoadFailed] = useState(false);
 
   const [exportTypes, setExportTypes] = useState<string[]>([]);
   const [importTypes, setImportTypes] = useState<string[]>([]);
@@ -498,9 +502,11 @@ export default function ConfigPage() {
         setHasChanges(false);
       } else {
       }
+      setConfigsLoadFailed(false);
     } catch {
       // 只有在没有缓存数据时才显示错误
       if (!hasInitialData) {
+        setConfigsLoadFailed(true);
         toast.error("加载配置出错，请重试");
       }
     } finally {
@@ -1848,6 +1854,25 @@ export default function ConfigPage() {
           <p className="text-foreground">管理网站的基本信息和显示设置</p>
         </div>
       </div>
+
+      {/* R2-C3-01：配置初载失败持久标记＋重试入口。失败时表单显示空默
+          认值，保存只发差异键、不会整表清零；但所见并非真实配置，
+          仍须点名提示，避免管理员误以为当前值就是真实值。 */}
+      {configsLoadFailed && (
+        <div className="mb-6 flex flex-wrap items-center gap-2 rounded-xl bg-danger-50 px-3 py-2">
+          <p className="text-xs font-semibold text-danger-700">
+            网站配置加载失败，当前表单显示的是空默认值，不是面板的真实配置；请重新加载后再编辑。
+          </p>
+          <Button
+            color="danger"
+            size="sm"
+            variant="flat"
+            onPress={() => loadConfigs()}
+          >
+            重新加载
+          </Button>
+        </div>
+      )}
 
       <Card className="shadow-md mb-6">
         <CardHeader className="pb-6">

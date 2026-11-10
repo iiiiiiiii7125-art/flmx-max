@@ -74,6 +74,9 @@ export default function LimitPage({
 }) {
   const [loading, setLoading] = useState(true);
   const [rules, setRules] = useState<SpeedLimitRule[]>([]);
+  // R2-C3-01（IRL-3 同族）：限速规则初载失败必须留持久标记＋重试入口，
+  // 不得再按空列表渲染（与 node.tsx nodesLoadFailed 同款纪律）。
+  const [rulesLoadFailed, setRulesLoadFailed] = useState(false);
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
     "limit-search-keyword",
     "",
@@ -123,10 +126,13 @@ export default function LimitPage({
 
       if (rulesRes.code === 0) {
         setRules(rulesRes.data || []);
+        setRulesLoadFailed(false);
       } else {
+        setRulesLoadFailed(true);
         toast.error(rulesRes.msg || "获取限速规则失败");
       }
     } catch {
+      setRulesLoadFailed(true);
       toast.error("加载数据失败");
     } finally {
       setLoading(false);
@@ -299,6 +305,23 @@ export default function LimitPage({
         </div>
       </div>
 
+      {/* R2-C3-01：刷新失败时旧数据保留展示，横幅点名是旧数据＋重试入口。 */}
+      {!loading && rulesLoadFailed && rules.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-danger-50 px-3 py-2">
+          <p className="text-xs font-semibold text-danger-700">
+            限速规则刷新失败，当前显示的是上次成功加载的数据，不是最新状态。
+          </p>
+          <Button
+            color="danger"
+            size="sm"
+            variant="flat"
+            onPress={() => loadData()}
+          >
+            重新加载
+          </Button>
+        </div>
+      )}
+
       {/* 统一卡片网格 */}
       {filteredRules.length > 0 ? (
         viewMode === "list" ? (
@@ -453,15 +476,30 @@ export default function LimitPage({
           </StaggerList>
         )
       ) : (
-        /* 空状态 */
+        /* 空状态：R2-C3-01——加载失败改判失败态＋重试，不得再用「暂无」假陈述 */
         <Card className="shadow-sm">
           <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-              暂无限速规则
+              {rulesLoadFailed && rules.length === 0
+                ? "限速规则加载失败"
+                : "暂无限速规则"}
             </h3>
             <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
-              还没有创建任何限速规则，点击上方按钮开始创建
+              {rulesLoadFailed && rules.length === 0
+                ? "没能从面板取到限速规则，不能据此判断是否已有规则；请检查网络后重试。"
+                : "还没有创建任何限速规则，点击上方按钮开始创建"}
             </p>
+            {rulesLoadFailed && rules.length === 0 && (
+              <Button
+                className="mt-4"
+                color="danger"
+                size="sm"
+                variant="flat"
+                onPress={() => loadData()}
+              >
+                重新加载
+              </Button>
+            )}
           </CardBody>
         </Card>
       )}

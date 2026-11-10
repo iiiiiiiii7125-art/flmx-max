@@ -76,6 +76,24 @@ const EMPTY_PIPELINE: SubPipeline = {
   templates: {},
 };
 
+// W8-R-P003：后端 formatSkipped 的键是 kernel.SubscriptionFormats()
+// 的原始格式名（base64/clash/sing-box/surge/stash/shadowrocket/loon/qx），
+// 预览区按展示名点名，未知键原样显示、不得丢弃。
+const FORMAT_SKIPPED_LABELS: Record<string, string> = {
+  base64: "Base64",
+  clash: "Clash",
+  "sing-box": "sing-box",
+  surge: "Surge",
+  stash: "Stash",
+  shadowrocket: "Shadowrocket",
+  loon: "Loon",
+  qx: "QX",
+};
+
+function formatSkippedLabel(format: string): string {
+  return FORMAT_SKIPPED_LABELS[format] ?? format;
+}
+
 function toDateInput(ms: number): string {
   if (!ms) return "";
   const d = new Date(ms);
@@ -296,17 +314,31 @@ function Editor({
     total: number;
     dropped: number;
     excludedCompanionIds?: number[];
+    // W8-R-P003：后端 subscriptionPreview 在 resp["formatSkipped"] 下发
+    // 逐格式跳过清单（map[string][]string，仅非空时出现），预览区须消费。
+    formatSkipped?: Record<string, string[]>;
   } | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [templates, setTemplates] = useState<SubTemplateItem[]>([]);
+  // R2-C3-01（IRL-3 同族）：编辑器内模板下拉初载失败不得静默装成「无模板」，
+  // 留失败标记＋重试入口（与模板弹窗 itemsLoadFailed 同款纪律）。
+  const [templatesLoadFailed, setTemplatesLoadFailed] = useState(false);
+  const [templatesReloadKey, setTemplatesReloadKey] = useState(0);
 
   useEffect(() => {
     getSubscriptionTemplates()
       .then((res) => {
-        if (res.code === 0) setTemplates(res.data ?? []);
+        if (res.code === 0) {
+          setTemplates(res.data ?? []);
+          setTemplatesLoadFailed(false);
+        } else {
+          setTemplatesLoadFailed(true);
+        }
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {
+        setTemplatesLoadFailed(true);
+      });
+  }, [templatesReloadKey]);
   const o = draft.options;
   const setOpts = (patch: Partial<SubPipeline>) => {
     setDraft({ ...draft, options: { ...o, ...patch } });
@@ -333,16 +365,24 @@ function Editor({
   const [relaysByInbound, setRelaysByInbound] = useState<
     Record<number, InboundRelayApiItem[]>
   >({});
+  // R2-C3-01（IRL-3 同族）：逐端点勾选初载失败不得静默装成「该入站无
+  // 中转线路」（relayOnly 入站整段会直接消失）；留失败标记＋重试入口。
+  // 另：原 Promise.all 无 catch，单路抛错会丢全部结果并留未处理拒绝。
+  const [relaysLoadFailed, setRelaysLoadFailed] = useState(false);
+  const [relaysReloadKey, setRelaysReloadKey] = useState(0);
 
   useEffect(() => {
     let active = true;
 
     Promise.all(
       inbounds.map((i) =>
-        getInboundRelays(i.id).then((r) => ({
-          id: i.id,
-          relays: r.code === 0 ? (r.data ?? []) : [],
-        })),
+        getInboundRelays(i.id)
+          .then((r) => ({
+            id: i.id,
+            relays: r.code === 0 ? (r.data ?? []) : [],
+            failed: r.code !== 0,
+          }))
+          .catch(() => ({ id: i.id, relays: [], failed: true })),
       ),
     ).then((results) => {
       if (!active) return;
@@ -350,12 +390,13 @@ function Editor({
 
       for (const { id, relays } of results) map[id] = relays;
       setRelaysByInbound(map);
+      setRelaysLoadFailed(results.some((r) => r.failed));
     });
 
     return () => {
       active = false;
     };
-  }, [inbounds]);
+  }, [inbounds, relaysReloadKey]);
 
   // 当前订阅覆盖的入站（全部落地 = 全部入站；指定落地 = 已勾选的
   // 入站 + 订阅源派生的入站，与 sharedPicked 同口径）。
@@ -646,7 +687,23 @@ function Editor({
                 先在「来源」里选择落地，这里才能挑端点
               </p>
             ) : (
-              <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
+              <>
+                {relaysLoadFailed && (
+                  <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-danger-50 px-3 py-2">
+                    <p className="text-xs font-semibold text-danger-700">
+                      中转线路加载失败，下面列出的端点可能不完整；保存前请重试。
+                    </p>
+                    <Button
+                      color="danger"
+                      size="sm"
+                      variant="flat"
+                      onPress={() => setRelaysReloadKey((k) => k + 1)}
+                    >
+                      重新加载
+                    </Button>
+                  </div>
+                )}
+                <div className="max-h-56 space-y-3 overflow-y-auto rounded-xl border border-divider p-2">
                 {scopeInbounds.map((inbound) => {
                   const relays = relaysByInbound[inbound.id] ?? [];
 
@@ -688,8 +745,27 @@ function Editor({
                   );
                 })}
               </div>
+              </>
             ))}
         </Section>
+
+        {/* R2-C3-01：模板加载失败标记放 Section 外——该节可折叠且默认收起，
+            标记放节内会在收起态下不可见，等于没标记。 */}
+        {templatesLoadFailed && (
+          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-danger-50 px-3 py-2">
+            <p className="text-xs font-semibold text-danger-700">
+              模板列表加载失败，下拉里没有模板可选不代表真的没有模板；请重试。
+            </p>
+            <Button
+              color="danger"
+              size="sm"
+              variant="flat"
+              onPress={() => setTemplatesReloadKey((k) => k + 1)}
+            >
+              重新加载
+            </Button>
+          </div>
+        )}
 
         <Section
           collapsible
@@ -774,6 +850,27 @@ function Editor({
                     ）：伴生入站不能作为订阅源，不会出现在订阅中。此排除不计入上面的未纳入数。
                   </p>
                 )}
+              {/* W8-R-P003：逐格式跳过清单（后端 subscriptionPreview 的
+                  formatSkipped，map[string][]string），与 dropped /
+                  excludedCompanionIds 同款点名纪律，不得吞掉。 */}
+              {preview.formatSkipped &&
+                Object.keys(preview.formatSkipped).length > 0 && (
+                  <div className="space-y-1 rounded-lg bg-warning-500/10 px-3 py-2">
+                    {Object.entries(preview.formatSkipped).map(
+                      ([format, names]) =>
+                        names.length > 0 && (
+                          <p
+                            key={format}
+                            className="text-xs font-semibold text-warning-700"
+                          >
+                            {names.length} 个节点不被
+                            {formatSkippedLabel(format)}
+                            格式支持（{names.join("、")}），已从该格式的订阅中跳过。
+                          </p>
+                        ),
+                    )}
+                  </div>
+                )}
               <div className="max-h-64 overflow-y-auto rounded-xl border border-divider">
                 {preview.items.length === 0 ? (
                   <p className="p-3 text-xs font-semibold text-foreground">没有节点</p>
@@ -856,29 +953,54 @@ export default function SubscriptionPage() {
   const fronts = useSubscriptionFrontURLs();
   const [frontBase, setFrontBase] = useState("");
 
+  // R2-C3-01（IRL-3 同族）：订阅本体与 picker 数据源的失败必须各留持久
+  // 标记＋重试入口，不得再按空列表渲染（与 node.tsx nodesLoadFailed 同款纪律）。
+  const [subsLoadFailed, setSubsLoadFailed] = useState(false);
+  const [inboundsLoadFailed, setInboundsLoadFailed] = useState(false);
+  const [sourcesLoadFailed, setSourcesLoadFailed] = useState(false);
+
   const load = useCallback(async () => {
+    // allSettled：任一请求抛错不得丢弃其余两份已回数据，各面失败位独立记。
+    const [subSettled, inSettled, srcSettled] = await Promise.allSettled([
+      getSubscriptions(),
+      getInboundList(),
+      getRemoteSources(),
+    ]);
+    const subRes =
+      subSettled.status === "fulfilled" ? subSettled.value : null;
+    const inRes = inSettled.status === "fulfilled" ? inSettled.value : null;
+    const srcRes =
+      srcSettled.status === "fulfilled" ? srcSettled.value : null;
+
+    // 本轮失败位用本地变量记（setState 当轮不生效，不得读旧 state）。
+    const srcFailed = !srcRes || srcRes.code !== 0;
+    const subFailed = !subRes || subRes.code !== 0 || !subRes.data;
+    const inFailed = !inRes || inRes.code !== 0;
+
     try {
-      const [subRes, inRes, srcRes] = await Promise.all([
-        getSubscriptions(),
-        getInboundList(),
-        getRemoteSources(),
-      ]);
+      if (!srcFailed) {
+        setSources(srcRes.data ?? []);
+      }
+      setSourcesLoadFailed(srcFailed);
 
-      if (srcRes.code === 0) setSources(srcRes.data ?? []);
-
-      if (subRes.code === 0 && subRes.data) {
+      if (!subFailed) {
         setSubs(subRes.data.items ?? []);
       } else {
-        toast.error(subRes.msg || "加载订阅失败");
+        toast.error(subRes?.msg || "加载订阅失败");
       }
-      if (inRes.code === 0) setInbounds(inRes.data ?? []);
+      setSubsLoadFailed(subFailed);
+
+      if (!inFailed) {
+        setInbounds(inRes.data ?? []);
+      }
+      setInboundsLoadFailed(inFailed);
       // 落地/订阅源是编辑器 picker 的数据源：失败静默装空会让管理员误判
       // 「什么都没选」甚至误改后保存（D5-11）。订阅本体 draft 内嵌列表项
       // 不受影响，此处只补失败提示，不改数据。
-      if (inRes.code !== 0 || srcRes.code !== 0) {
+      if (inFailed || srcFailed) {
         const failedParts = [
-          inRes.code !== 0 ? "落地列表" : null,
-          srcRes.code !== 0 ? "订阅源" : null,
+          inFailed ? "落地列表" : null,
+          srcFailed ? "订阅源" : null,
         ].filter(Boolean);
 
         toast.error(
@@ -1175,7 +1297,30 @@ export default function SubscriptionPage() {
       {tab === "assign" ? <SubscriptionAssignSection /> : <></>}
       {tab === "manage" && (
         <>
-          {inbounds.length === 0 && (
+          {/* R2-C3-01：picker 数据源失败持久标记＋重试入口（失败不装空）。 */}
+          {(inboundsLoadFailed || sourcesLoadFailed) && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl bg-danger-50 px-3 py-2">
+              <p className="text-xs font-semibold text-danger-700">
+                {[
+                  inboundsLoadFailed ? "落地列表" : null,
+                  sourcesLoadFailed ? "订阅源" : null,
+                ]
+                  .filter(Boolean)
+                  .join("与")}
+                加载失败，编辑器中的可选列表可能不完整，不是真实状态。
+              </p>
+              <Button
+                color="danger"
+                size="sm"
+                variant="flat"
+                onPress={() => load()}
+              >
+                重新加载
+              </Button>
+            </div>
+          )}
+
+          {inbounds.length === 0 && !inboundsLoadFailed && (
             <Card className="shadow-sm">
               <CardBody className="py-6 text-center text-sm text-foreground">
                 还没有落地。先在“落地”里搭建或导入节点，订阅里才会有内容。
@@ -1184,9 +1329,30 @@ export default function SubscriptionPage() {
           )}
 
           {subs.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs font-semibold text-foreground">
-              每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后自动断开
-            </p>
+            subsLoadFailed ? (
+              <Card className="shadow-sm">
+                <CardBody className="flex flex-col items-center justify-center gap-3 py-6 text-center">
+                  <p className="text-sm font-semibold text-danger-700">
+                    订阅列表加载失败
+                  </p>
+                  <p className="text-xs font-semibold text-foreground">
+                    没能从面板取到订阅列表，不能据此判断是否已有订阅；请检查网络后重试。
+                  </p>
+                  <Button
+                    color="danger"
+                    size="sm"
+                    variant="flat"
+                    onPress={() => load()}
+                  >
+                    重新加载
+                  </Button>
+                </CardBody>
+              </Card>
+            ) : (
+              <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs font-semibold text-foreground">
+                每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后自动断开
+              </p>
+            )
           ) : (
             <div className="grid grid-cols-1 gap-2 2xl:grid-cols-2">
               {subs.map(card)}

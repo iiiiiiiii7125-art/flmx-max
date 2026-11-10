@@ -1363,6 +1363,10 @@ export default function ForwardPage() {
     (searchParams.remoteAddr.trim() ? 1 : 0);
   const [loading, setLoading] = useState(true);
   const [forwards, setForwards] = useState<Forward[]>([]);
+  // R2-C3-01（IRL-3 同族）：规则列表初载失败必须留持久标记＋重试入口，
+  // 不得再按空列表渲染（与 node.tsx nodesLoadFailed / inbound.tsx
+  // loadFailed 同款纪律）。失败时旧数据保留展示，横幅点名是旧数据。
+  const [forwardsLoadFailed, setForwardsLoadFailed] = useState(false);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
   const [allTunnels, setAllTunnels] = useState<Tunnel[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -1879,11 +1883,14 @@ export default function ForwardPage() {
         const forwardsRes = await getForwardList();
 
         if (forwardsRes.code === 0) {
+          setForwardsLoadFailed(false);
           await applyForwardList(mapForwardApiItems(forwardsRes.data || []));
         } else {
+          setForwardsLoadFailed(true);
           toast.error(forwardsRes.msg || "获取规则列表失败");
         }
       } catch {
+        setForwardsLoadFailed(true);
         toast.error("获取规则列表失败");
       } finally {
         if (lod) {
@@ -3803,10 +3810,19 @@ export default function ForwardPage() {
   // FT-4：空态区分「真的还没有数据」与「筛选无匹配」——原始列表非空而
   // 筛选后为空时，不得再用「还没有创建任何规则」误导用户以为数据丢失。
   const hasAnyForwards = forwards.length > 0;
-  const forwardEmptyTitle = hasAnyForwards ? "没有匹配的规则" : "暂无规则配置";
-  const forwardEmptyDescription = hasAnyForwards
-    ? "当前筛选条件没有匹配的规则，请调整或重置筛选条件"
-    : "还没有创建任何规则配置，点击上方按钮开始创建";
+  // R2-C3-01：加载失败且列表为空时，空态标题/说明必须改判为失败态，
+  // 不得再用「暂无规则配置」假陈述（筛选无匹配时仍走原口径）。
+  const forwardEmptyTitle = !hasAnyForwards && forwardsLoadFailed
+    ? "规则列表加载失败"
+    : hasAnyForwards
+      ? "没有匹配的规则"
+      : "暂无规则配置";
+  const forwardEmptyDescription =
+    !hasAnyForwards && forwardsLoadFailed
+      ? "没能从面板取到规则列表，不能据此判断是否已有规则；请检查网络后重试。"
+      : hasAnyForwards
+        ? "当前筛选条件没有匹配的规则，请调整或重置筛选条件"
+        : "还没有创建任何规则配置，点击上方按钮开始创建";
 
   const selectAll = () => {
     // FT-3：全选＝把当前可见行并入已选集合，不得替换掉跨筛选的不可见已选项。
@@ -4412,6 +4428,25 @@ export default function ForwardPage() {
         </div>
       )}
 
+      {/* R2-C3-01：初载失败持久标记＋重试入口（失败不装空）。 */}
+      {!loading && forwardsLoadFailed && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-danger-50 px-3 py-2">
+          <p className="text-xs font-semibold text-danger-700">
+            {forwards.length > 0
+              ? "规则列表刷新失败，当前显示的是上次成功加载的数据，不是最新状态。"
+              : "规则列表加载失败，不能据此判断是否已有规则。"}
+          </p>
+          <Button
+            color="danger"
+            size="sm"
+            variant="flat"
+            onPress={() => loadData()}
+          >
+            重新加载
+          </Button>
+        </div>
+      )}
+
       {/* 根据显示模式渲染不同内容 */}
       {compactMode ? (
         viewMode === "grouped" ? (
@@ -4516,6 +4551,17 @@ export default function ForwardPage() {
                 <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
                   {forwardEmptyDescription}
                 </p>
+                {!hasAnyForwards && forwardsLoadFailed && (
+                  <Button
+                    className="mt-4"
+                    color="danger"
+                    size="sm"
+                    variant="flat"
+                    onPress={() => loadData()}
+                  >
+                    重新加载
+                  </Button>
+                )}
               </CardBody>
             </Card>
           )
@@ -4562,6 +4608,17 @@ export default function ForwardPage() {
               <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
                 {forwardEmptyDescription}
               </p>
+              {!hasAnyForwards && forwardsLoadFailed && (
+                <Button
+                  className="mt-4"
+                  color="danger"
+                  size="sm"
+                  variant="flat"
+                  onPress={() => loadData()}
+                >
+                  重新加载
+                </Button>
+              )}
             </CardBody>
           </Card>
         )
@@ -4824,6 +4881,17 @@ export default function ForwardPage() {
               <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
                 {forwardEmptyDescription}
               </p>
+              {!hasAnyForwards && forwardsLoadFailed && (
+                <Button
+                  className="mt-4"
+                  color="danger"
+                  size="sm"
+                  variant="flat"
+                  onPress={() => loadData()}
+                >
+                  重新加载
+                </Button>
+              )}
             </CardBody>
           </Card>
         )
@@ -4945,6 +5013,17 @@ export default function ForwardPage() {
             <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
               {forwardEmptyDescription}
             </p>
+            {!hasAnyForwards && forwardsLoadFailed && (
+              <Button
+                className="mt-4"
+                color="danger"
+                size="sm"
+                variant="flat"
+                onPress={() => loadData()}
+              >
+                重新加载
+              </Button>
+            )}
           </CardBody>
         </Card>
       )}
