@@ -26,7 +26,7 @@ type tcpConn struct {
 func (c *tcpConn) Read(b []byte) (n int, err error) {
 	c.once.Do(func() {
 		if c.wbuf != nil {
-			err = readResponse(c.Conn)
+			err = c.drainResponse()
 		}
 	})
 
@@ -34,6 +34,43 @@ func (c *tcpConn) Read(b []byte) (n int, err error) {
 		return
 	}
 	return c.Conn.Read(b)
+}
+
+// drainResponse completes the delayed (noDelay=false) handshake
+// from the read side: the cached request header must be put on the
+// wire before the response is drained. Previously Read drained a
+// response to a request that had never been sent — the header left
+// the buffer only when the application wrote its first payload
+// byte, so a server-first peer (one that speaks first and waits
+// for no client byte: game login servers, SSH/SMTP banners) never
+// saw the request, the far handler never dialled the target, and
+// the session sat until the far side's request-header read
+// deadline killed the hop at exactly 15s (F-212-B). Flushing here
+// preserves the write-side piggyback for client-first traffic
+// (Write still wins the race whenever a byte is written first)
+// while letting a read-first consumer drive the handshake.
+func (c *tcpConn) drainResponse() error {
+	if err := c.flushHeader(); err != nil {
+		return err
+	}
+	return readResponse(c.Conn)
+}
+
+// flushHeader writes the cached request header to the wire. It
+// takes the same mutex as Write so the header can never be
+// reordered against, or interleaved with, a first payload write:
+// whichever side runs first emits header-then-payload in order,
+// the other observes an empty buffer.
+func (c *tcpConn) flushHeader() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.wbuf != nil && c.wbuf.Len() > 0 {
+		if _, err := c.Conn.Write(c.wbuf.Bytes()); err != nil {
+			return err
+		}
+		c.wbuf.Reset()
+	}
+	return nil
 }
 
 func (c *tcpConn) Write(b []byte) (n int, err error) {
@@ -90,7 +127,7 @@ type udpConn struct {
 func (c *udpConn) Read(b []byte) (n int, err error) {
 	c.once.Do(func() {
 		if c.wbuf != nil {
-			err = readResponse(c.Conn)
+			err = c.drainResponse()
 		}
 	})
 	if err != nil {
@@ -153,6 +190,32 @@ func (c *udpConn) Write(b []byte) (n int, err error) {
 		return
 	}
 	return c.Conn.Write(b)
+}
+
+// drainResponse is the udpConn counterpart of tcpConn's: the
+// cached request header (a bare, unframed relay request — data
+// frames are the length-prefixed part) must reach the wire before
+// the response is drained, or a read-first consumer waits for a
+// response to a request that was never sent (F-212-B). UDP
+// sessions are normally write-first, so this is structural parity
+// with the TCP face rather than a separately observed stall.
+func (c *udpConn) drainResponse() error {
+	if err := c.flushHeader(); err != nil {
+		return err
+	}
+	return readResponse(c.Conn)
+}
+
+func (c *udpConn) flushHeader() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.wbuf != nil && c.wbuf.Len() > 0 {
+		if _, err := c.Conn.Write(c.wbuf.Bytes()); err != nil {
+			return err
+		}
+		c.wbuf.Reset()
+	}
+	return nil
 }
 
 func readResponse(r io.Reader) (err error) {

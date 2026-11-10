@@ -29,6 +29,24 @@ func (c *tcpConn) Write(b []byte) (n int, err error) {
 	return
 }
 
+// flushHeader writes the cached response header to the wire now
+// instead of waiting for the first payload byte in this direction
+// (F-212-B mirror gate): a peer connector in eager (nodelay) mode
+// drains this response inside its Connect call, before any payload
+// can flow, so deferring the header to the first Write deadlocked
+// establishment whenever the far side was waiting for it — the
+// target's first byte (which would have flushed it) itself depends
+// on payload that cannot be sent until Connect returns. Callers
+// flush synchronously right after caching, before the conn enters
+// Transport, so no locking against Write is needed.
+func (c *tcpConn) flushHeader() error {
+	if c.wbuf.Len() > 0 {
+		_, err := c.wbuf.WriteTo(c.Conn)
+		return err
+	}
+	return nil
+}
+
 var errHalfCloseNotSupported = errors.New("half-close not supported by the underlying connection")
 
 // CloseWrite forwards a half-close to the wrapped conn when it
@@ -114,4 +132,17 @@ func (c *udpConn) Write(b []byte) (n int, err error) {
 		return
 	}
 	return c.Conn.Write(b)
+}
+
+// flushHeader writes the cached response header to the wire now
+// instead of piggybacking it on the first framed datagram in this
+// direction — the udpConn counterpart of tcpConn.flushHeader
+// (F-212-B mirror gate). The cached header is a bare relay
+// response; data frames keep their length prefixes either way.
+func (c *udpConn) flushHeader() error {
+	if c.wbuf.Len() > 0 {
+		_, err := c.wbuf.WriteTo(c.Conn)
+		return err
+	}
+	return nil
 }
