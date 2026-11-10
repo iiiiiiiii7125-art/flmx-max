@@ -120,6 +120,10 @@ export function RouteModal({
   const [loading, setLoading] = useState(false);
   const [probing, setProbing] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  // IRL-3／R3-MR-02：初载失败常驻标记——失败与「还没有检测结果」
+  // 的无数据态必须可区分（probe 动作失败另有 toast，不在此面）。
+  const [routeLoadFailed, setRouteLoadFailed] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // 序号守卫（D5-04 同模式）：切换节点后迟到的旧响应不得覆盖新节点数据
   const routeSeqRef = useRef(0);
@@ -129,20 +133,28 @@ export function RouteModal({
     const seq = (routeSeqRef.current += 1);
 
     setRoute(null);
+    setRouteLoadFailed(false);
     setOpen(null);
     setLoading(true);
     getNodeRoute(nodeId)
       .then((res) => {
         if (routeSeqRef.current !== seq) return;
-        setRoute(res.code === 0 ? (res.data ?? null) : null);
+        if (res.code === 0) {
+          setRoute(res.data ?? null);
+        } else {
+          setRoute(null);
+          setRouteLoadFailed(true);
+        }
       })
       .catch(() => {
-        if (routeSeqRef.current === seq) setRoute(null);
+        if (routeSeqRef.current !== seq) return;
+        setRoute(null);
+        setRouteLoadFailed(true);
       })
       .finally(() => {
         if (routeSeqRef.current === seq) setLoading(false);
       });
-  }, [nodeId]);
+  }, [nodeId, reloadKey]);
 
   const probe = async () => {
     if (nodeId === null) return;
@@ -156,6 +168,7 @@ export function RouteModal({
         return;
       }
       setRoute(res.data ?? null);
+      setRouteLoadFailed(false);
     } catch {
       toast.error("检测失败");
     } finally {
@@ -187,6 +200,20 @@ export function RouteModal({
           {loading ? (
             <div className="flex justify-center py-6">
               <Loader2 className="h-5 w-5 animate-spin text-foreground" />
+            </div>
+          ) : routeLoadFailed ? (
+            <div className="py-6 text-center">
+              <p className="text-sm font-semibold text-danger-700">
+                回程路由加载失败，请重试
+              </p>
+              <Button
+                className="mt-3"
+                size="sm"
+                variant="flat"
+                onPress={() => setReloadKey((k) => k + 1)}
+              >
+                重试
+              </Button>
             </div>
           ) : !route || route.points.length === 0 ? (
             <p className="py-6 text-center text-sm text-foreground">
