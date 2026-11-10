@@ -1500,6 +1500,12 @@ export interface NodeSwapInfo {
   memTotalMB: number;
   /** 节点上已有面板管理的 /swapfile：执行将把它的大小调整为所选值。 */
   managedFilePresent: boolean;
+  /**
+   * /swapfile 在磁盘上的实际文件大小（MB），不在盘为 0；在盘未启用
+   * 也回真实大小——agent 容量校验把这块占量计入可用（重建时释放），
+   * 弹窗空间预检凭此字段逐字镜像 agent 谓词（R3-NODE-01）。
+   */
+  fileSizeMB: number;
 }
 export const getNodeSwapInfo = (nodeId: number) =>
   Network.post<NodeSwapInfo>("/node/swap-info", { nodeId }, { timeout: 60000 });

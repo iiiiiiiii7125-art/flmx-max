@@ -384,6 +384,7 @@ function swapAnswer(bare: string, configData?: unknown) {
       diskFreeMB: 51200,
       memTotalMB: 4096,
       managedFilePresent: demoSwap.sizeMB > 0,
+      fileSizeMB: demoSwap.sizeMB,
     };
 
     return { code: 0, msg: "操作成功", data, ts: Date.now() };

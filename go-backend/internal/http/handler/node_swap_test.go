@@ -212,6 +212,7 @@ func TestNodeSwapSuccessPassthrough(t *testing.T) {
 			map[string]interface{}{"name": "/swapfile", "type": "file", "sizeMB": 2048, "usedMB": 30},
 		},
 		"diskFreeMB": 5000, "memTotalMB": 8000, "managedFilePresent": true,
+		"fileSizeMB": 1536,
 	}
 	setData := map[string]interface{}{
 		"before": map[string]interface{}{"totalMB": 1024, "usedMB": 10},
@@ -237,6 +238,9 @@ func TestNodeSwapSuccessPassthrough(t *testing.T) {
 	}
 	if gotInfo["totalMB"] != float64(2048) || gotInfo["managedFilePresent"] != true || gotInfo["diskFreeMB"] != float64(5000) {
 		t.Fatalf("info data must pass through untouched, got %+v", gotInfo)
+	}
+	if gotInfo["fileSizeMB"] != float64(1536) {
+		t.Fatalf("fileSizeMB must pass through untouched (frontend precheck mirrors the agent predicate with it), got %+v", gotInfo)
 	}
 	if cmds := a.commandsOfType("SwapInfo"); len(cmds) != 1 {
 		t.Fatalf("expected exactly one SwapInfo command, got %+v", cmds)

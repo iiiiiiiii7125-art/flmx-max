@@ -2,6 +2,7 @@ package socket
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -149,7 +150,10 @@ type swapSim struct {
 	freeMB    int64
 	container bool
 	failAt    map[string]error
-	calls     []string
+	// failOnce 让指定命令仅第一次调用失败（后续恢复正常）：钉
+	// 「swapon 失败→restore 的 swapon 须成功」一类首败后愈支。
+	failOnce map[string]error
+	calls    []string
 }
 
 func (s *swapSim) diskFree(string) (int64, error) { return s.freeMB, nil }
@@ -157,6 +161,10 @@ func (s *swapSim) inCont() bool                   { return s.container }
 
 func (s *swapSim) run(_ context.Context, name string, args ...string) (string, error) {
 	s.calls = append(s.calls, name)
+	if err, ok := s.failOnce[name]; ok {
+		delete(s.failOnce, name)
+		return "", err
+	}
 	if err, ok := s.failAt[name]; ok {
 		return "", err
 	}
@@ -227,6 +235,7 @@ func newSwapSimEnv(t *testing.T, swapsContent string) (swapEnv, *swapSim) {
 		filePath:  filepath.Join(dir, "swapfile"),
 		freeMB:    8192,
 		failAt:    map[string]error{},
+		failOnce:  map[string]error{},
 	}
 	if err := os.WriteFile(sim.swapsPath, []byte(swapsContent), 0o644); err != nil {
 		t.Fatal(err)
@@ -458,5 +467,308 @@ func TestSwapCommandDispatchGuards(t *testing.T) {
 	if _, err := handleSwapCommandEnv(context.Background(), env, "SwapNope", nil); err == nil ||
 		!strings.Contains(err.Error(), "未知命令类型") {
 		t.Fatalf("unknown command must be named, got %v", err)
+	}
+}
+
+// --- fileSizeMB 契约三态（R3-NODE-01） ------------------------------------
+
+// setupActiveSwapFile 在 sim 里布一个在用托管条目＋同尺寸磁盘文件。
+func setupActiveSwapFile(t *testing.T, sim *swapSim, sizeMB int64, usedKiB int64) {
+	t.Helper()
+	entry := fmt.Sprintf("%s\t\t\tfile\t\t%d\t\t%d\t\t-2\n", sim.filePath, sizeMB*1024, usedKiB)
+	if err := os.WriteFile(sim.swapsPath, []byte(swapsHeader+entry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := makeSparse(sim.filePath, sizeMB*1024*1024); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSwapInfoFileSizeMBStates(t *testing.T) {
+	// 无文件：fileSizeMB=0、managedFilePresent=false。
+	env, _ := newSwapSimEnv(t, swapsHeader)
+	out, err := handleSwapCommandEnv(context.Background(), env, "SwapInfo", nil)
+	if err != nil {
+		t.Fatalf("SwapInfo: %v", err)
+	}
+	info := out.(swapInfoReply)
+	if info.FileSizeMB != 0 || info.ManagedFilePresent {
+		t.Fatalf("no file must report fileSizeMB=0/absent, got %+v", info)
+	}
+
+	// 在盘未启用：文件 1536MB 在盘、swaps 只有一条 1024MB 分区
+	// 条目 → fileSizeMB 回磁盘文件真实大小（与任何条目大小都不同，
+	// 防把条目大小误当文件大小），总量不含该文件。
+	env2, sim2 := newSwapSimEnv(t, swapsHeader+"/dev/vda2\t\t\tpartition\t1048576\t\t0\t\t-2\n")
+	if err := makeSparse(sim2.filePath, 1536*1024*1024); err != nil {
+		t.Fatal(err)
+	}
+	out, err = handleSwapCommandEnv(context.Background(), env2, "SwapInfo", nil)
+	if err != nil {
+		t.Fatalf("SwapInfo: %v", err)
+	}
+	info = out.(swapInfoReply)
+	if info.FileSizeMB != 1536 || !info.ManagedFilePresent {
+		t.Fatalf("on-disk inactive file must report its real size, got %+v", info)
+	}
+	if info.TotalMB != 1024 {
+		t.Fatalf("inactive file must not enter totals, got %+v", info)
+	}
+	raw, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"fileSizeMB":1536`) {
+		t.Fatalf("wire shape must carry fileSizeMB, got %s", raw)
+	}
+
+	// 已启用：文件与条目同在 → fileSizeMB=文件大小。
+	env3, sim3 := newSwapSimEnv(t, swapsHeader)
+	setupActiveSwapFile(t, sim3, 1024, 10240)
+	out, err = handleSwapCommandEnv(context.Background(), env3, "SwapInfo", nil)
+	if err != nil {
+		t.Fatalf("SwapInfo: %v", err)
+	}
+	info = out.(swapInfoReply)
+	if info.FileSizeMB != 1024 || !info.ManagedFilePresent || info.TotalMB != 1024 {
+		t.Fatalf("active file must report its size, got %+v", info)
+	}
+}
+
+// TestCheckSwapCapacityBoundaryMirror 与前端预检 CDP 边界格共用
+// 一组数字（在盘未启用文件 1024MB、目标 2GB、需求 2304MB）：
+// diskFree 1280 → 可用恰达需求放行；1279 → 差 1MB 拒绝。
+func TestCheckSwapCapacityBoundaryMirror(t *testing.T) {
+	if err := checkSwapCapacity(1280, 1024, 2); err != nil {
+		t.Fatalf("exact boundary must pass: %v", err)
+	}
+	err := checkSwapCapacity(1279, 1024, 2)
+	if err == nil {
+		t.Fatalf("1MB below boundary must be rejected")
+	}
+	for _, want := range []string{"2304", "2303"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("boundary error must carry %q: %v", want, err)
+		}
+	}
+}
+
+// --- SwapSet 故障支回归钉（R3-AG-01） --------------------------------------
+
+func TestSwapSetSwapoffFailureKeepsState(t *testing.T) {
+	env, sim := newSwapSimEnv(t, swapsHeader)
+	setupActiveSwapFile(t, sim, 1024, 10240)
+	sim.failAt["swapoff"] = errors.New("swapoff: 模拟失败")
+	_, err := handleSwapCommandEnv(context.Background(), env, "SwapSet", map[string]interface{}{"sizeGB": float64(2)})
+	if err == nil {
+		t.Fatalf("swapoff failure must error")
+	}
+	for _, want := range []string{"关闭现有 Swap", "机器状态未改变，现有 Swap 仍在启用中"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error must carry %q: %v", want, err)
+		}
+	}
+	if strings.Join(sim.calls, ",") != "swapoff" {
+		t.Fatalf("only swapoff may be attempted, got %v", sim.calls)
+	}
+	raw, _ := os.ReadFile(sim.swapsPath)
+	if !strings.Contains(string(raw), sim.filePath) {
+		t.Fatalf("entry must stay active after swapoff failure:\n%s", raw)
+	}
+	if fi, serr := os.Stat(sim.filePath); serr != nil || fi.Size() != 1024*1024*1024 {
+		t.Fatalf("swapfile must be untouched: %v %v", fi, serr)
+	}
+	if _, serr := os.Stat(env.backupPath); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("no backup may be created before swapoff succeeds")
+	}
+}
+
+func TestSwapSetSwaponFailureRestores(t *testing.T) {
+	env, sim := newSwapSimEnv(t, swapsHeader)
+	setupActiveSwapFile(t, sim, 1024, 10240)
+	sim.failOnce["swapon"] = errors.New("swapon: 模拟失败")
+	_, err := handleSwapCommandEnv(context.Background(), env, "SwapSet", map[string]interface{}{"sizeGB": float64(2)})
+	if err == nil {
+		t.Fatalf("swapon failure must error")
+	}
+	for _, want := range []string{"启用 Swap", "已恢复执行前状态：旧 /swapfile 已还原并重新启用"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error must carry %q: %v", want, err)
+		}
+	}
+	if strings.Join(sim.calls, ",") != "swapoff,fallocate,mkswap,swapon,swapon" {
+		t.Fatalf("restore must re-run swapon once, got %v", sim.calls)
+	}
+	if fi, serr := os.Stat(sim.filePath); serr != nil || fi.Size() != 1024*1024*1024 {
+		t.Fatalf("old swapfile must be restored at 1G: %v %v", fi, serr)
+	}
+	raw, _ := os.ReadFile(sim.swapsPath)
+	if !strings.Contains(string(raw), sim.filePath) {
+		t.Fatalf("old entry must be active again after restore:\n%s", raw)
+	}
+	if _, serr := os.Stat(env.backupPath); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("backup must be consumed by restore, stat err=%v", serr)
+	}
+}
+
+func TestSwapSetSwaponFailureRestoreAlsoFails(t *testing.T) {
+	env, sim := newSwapSimEnv(t, swapsHeader)
+	setupActiveSwapFile(t, sim, 1024, 10240)
+	sim.failAt["swapon"] = errors.New("swapon: 模拟持续失败")
+	_, err := handleSwapCommandEnv(context.Background(), env, "SwapSet", map[string]interface{}{"sizeGB": float64(2)})
+	if err == nil {
+		t.Fatalf("swapon failure must error")
+	}
+	for _, want := range []string{"启用 Swap", "重新启用失败", "当前无 Swap 生效", "请人工执行 swapon"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error must carry %q: %v", want, err)
+		}
+	}
+	// 文件已还原但未启用：状态说明必须与机器实况一致。
+	if fi, serr := os.Stat(sim.filePath); serr != nil || fi.Size() != 1024*1024*1024 {
+		t.Fatalf("old swapfile must be restored at 1G: %v %v", fi, serr)
+	}
+	raw, _ := os.ReadFile(sim.swapsPath)
+	if strings.Contains(string(raw), sim.filePath) {
+		t.Fatalf("entry must stay inactive when restore swapon fails:\n%s", raw)
+	}
+	if _, serr := os.Stat(env.backupPath); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("backup must be consumed by restore, stat err=%v", serr)
+	}
+}
+
+func TestSwapSetAllocDoubleFailureRestores(t *testing.T) {
+	env, sim := newSwapSimEnv(t, swapsHeader)
+	setupActiveSwapFile(t, sim, 1024, 10240)
+	sim.failAt["fallocate"] = errors.New("fallocate: 模拟失败")
+	sim.failAt["dd"] = errors.New("dd: 模拟失败")
+	_, err := handleSwapCommandEnv(context.Background(), env, "SwapSet", map[string]interface{}{"sizeGB": float64(2)})
+	if err == nil {
+		t.Fatalf("double alloc failure must error")
+	}
+	for _, want := range []string{"创建 Swap 文件", "fallocate 失败", "dd 回退亦失败", "已恢复执行前状态"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error must carry %q: %v", want, err)
+		}
+	}
+	if strings.Join(sim.calls, ",") != "swapoff,fallocate,dd,swapon" {
+		t.Fatalf("restore must follow the double failure, got %v", sim.calls)
+	}
+	if fi, serr := os.Stat(sim.filePath); serr != nil || fi.Size() != 1024*1024*1024 {
+		t.Fatalf("old swapfile must be restored at 1G: %v %v", fi, serr)
+	}
+	raw, _ := os.ReadFile(sim.swapsPath)
+	if !strings.Contains(string(raw), sim.filePath) {
+		t.Fatalf("old entry must be active again after restore:\n%s", raw)
+	}
+}
+
+func TestSwapSetRenameBackupFailureReactivates(t *testing.T) {
+	env, sim := newSwapSimEnv(t, swapsHeader)
+	setupActiveSwapFile(t, sim, 1024, 10240)
+	// 备份路径被非空目录占住：预清理 Remove 与改名 Rename 都会失败。
+	if err := os.MkdirAll(env.backupPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(env.backupPath, "keep"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := handleSwapCommandEnv(context.Background(), env, "SwapSet", map[string]interface{}{"sizeGB": float64(2)})
+	if err == nil {
+		t.Fatalf("rename failure must error")
+	}
+	for _, want := range []string{"备份现有 /swapfile", "现有 Swap 已重新启用，机器状态未改变"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error must carry %q: %v", want, err)
+		}
+	}
+	if strings.Join(sim.calls, ",") != "swapoff,swapon" {
+		t.Fatalf("rename failure must only re-activate, got %v", sim.calls)
+	}
+	if fi, serr := os.Stat(sim.filePath); serr != nil || fi.Size() != 1024*1024*1024 {
+		t.Fatalf("original swapfile must be untouched: %v %v", fi, serr)
+	}
+	raw, _ := os.ReadFile(sim.swapsPath)
+	if !strings.Contains(string(raw), sim.filePath) {
+		t.Fatalf("entry must be active again after rename failure:\n%s", raw)
+	}
+	if _, serr := os.Stat(filepath.Join(env.backupPath, "keep")); serr != nil {
+		t.Fatalf("foreign backup directory must be left alone: %v", serr)
+	}
+}
+
+func TestSwapSetFstabFailureKeepsActiveSwap(t *testing.T) {
+	env, sim := newSwapSimEnv(t, swapsHeader)
+	setupActiveSwapFile(t, sim, 1024, 10240)
+	// fstab 路径指向目录：读回 EISDIR，收敛写必然失败。
+	if err := os.Mkdir(env.fstabPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := handleSwapCommandEnv(context.Background(), env, "SwapSet", map[string]interface{}{"sizeGB": float64(2)})
+	if err == nil {
+		t.Fatalf("fstab failure must error, never report clean success")
+	}
+	for _, want := range []string{
+		"已按 2 GB 启用", "写入 /etc/fstab 失败", "新 Swap 正在生效",
+		"重启后不会自动挂载", "请人工在 /etc/fstab 中补一行",
+		sim.filePath + " none swap sw 0 0",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error must carry %q: %v", want, err)
+		}
+	}
+	// 文案与实况一致：新 swap 已按 2G 生效、备份已清、不回滚。
+	raw, _ := os.ReadFile(sim.swapsPath)
+	if !strings.Contains(string(raw), "2097152") {
+		t.Fatalf("new 2G swap must be the active one:\n%s", raw)
+	}
+	if fi, serr := os.Stat(sim.filePath); serr != nil || fi.Size() != 2*1024*1024*1024 {
+		t.Fatalf("new swapfile must be 2G: %v %v", fi, serr)
+	}
+	if _, serr := os.Stat(env.backupPath); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("backup must already be removed at fstab step, stat err=%v", serr)
+	}
+}
+
+func TestSwapSetBackupDeleteFailureWarns(t *testing.T) {
+	env, sim := newSwapSimEnv(t, swapsHeader)
+	setupActiveSwapFile(t, sim, 1024, 10240)
+	// 新 swap 启用成功后，把备份文件换成非空目录：代码的
+	// os.Remove(backupPath) 必然失败 → 必须走 warnings 而非装无瑕。
+	simRun := sim.run
+	env.run = func(ctx context.Context, name string, args ...string) (string, error) {
+		out, rerr := simRun(ctx, name, args...)
+		if rerr == nil && name == "swapon" {
+			if err := os.Remove(env.backupPath); err == nil {
+				if err := os.MkdirAll(env.backupPath, 0o755); err == nil {
+					_ = os.WriteFile(filepath.Join(env.backupPath, "keep"), []byte("x"), 0o644)
+				}
+			}
+		}
+		return out, rerr
+	}
+	out, err := handleSwapCommandEnv(context.Background(), env, "SwapSet", map[string]interface{}{"sizeGB": float64(2)})
+	if err != nil {
+		t.Fatalf("backup delete failure must stay a warning, got error %v", err)
+	}
+	res, ok := out.(swapSetReply)
+	if !ok {
+		t.Fatalf("reply type drifted: %T", out)
+	}
+	if res.Before.TotalMB != 1024 || res.After.TotalMB != 2048 {
+		t.Fatalf("before/after drifted: %+v", res)
+	}
+	if len(res.Warnings) != 1 {
+		t.Fatalf("exactly one warning expected, got %+v", res.Warnings)
+	}
+	for _, want := range []string{"旧 Swap 备份文件", "删除失败", "可人工删除"} {
+		if !strings.Contains(res.Warnings[0], want) {
+			t.Fatalf("warning must carry %q: %q", want, res.Warnings[0])
+		}
+	}
+	// fstab 收敛不受警告影响、恰一条标准行。
+	fstab, _ := os.ReadFile(env.fstabPath)
+	if string(fstab) != sim.filePath+" none swap sw 0 0\n" {
+		t.Fatalf("fstab must still converge:\n%s", fstab)
 	}
 }
