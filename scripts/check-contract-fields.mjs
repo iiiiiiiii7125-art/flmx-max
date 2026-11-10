@@ -764,15 +764,14 @@ for (const [fn, iface] of Object.entries(listToInterface)) {
   }
   if (agentTags === null) {
     problems.push("go-gost/x/socket/tuning_probe.go 未找到 tuneProbeResult 结构");
-  } else if (agentTags.size < 18) {
-    // 健全性阈值标定（FIX-C8 重标定）：tuneProbeResult 现行字段
-    // 恰 18 个 json tag。原阈值 20 系 FIX-PROBE 分支单路标定
-    // （该分支 21 个，含 bandwidthMbps/bandwidthAvailable/
-    // bandwidthSource 三个测速回包字段）；合并世界里 FIX-DEAD
-    // （01153a07）已删该三字段，21→18 差集经逐个对账恰为此三件、
-    // 无其他丢失、无新增。阈值按现行全集取 18：字段再减任一即
-    // 红、点名复核；结构合法增减字段时须连同 selftest 变体 5
-    // 一并重标定，不得无声改。
+  } else if (agentTags.size < 17) {
+    // 健全性阈值标定（FIX-C8 重标定，R2-C5-01 续标定）：tuneProbeResult 现行字段
+    // 恰 17 个 json tag。原阈值 18 系 FIX-C8 标定（FIX-PROBE 分支 21 个 tag，
+    // FIX-DEAD 删 bandwidthMbps/bandwidthAvailable/bandwidthSource 三测速
+    // 回包字段后为 18）；W4 b8b1324a（B-04）又把 Suggested 改 json:"-"（线
+    // 下不再携带），18→17 差集经逐个对账恰为此一件、无其他丢失、无新增。
+    // 阈值按现行全集取 17：字段再减任一即红、点名复核；结构合法增减字段
+    // 时须连同 selftest 变体 5 一并重标定，不得无声改。
     problems.push(`tuneProbeResult json tag 提取异常（仅 ${agentTags.size} 条，疑似定位失效）`);
   }
   const feBlock = tsInterfaceBlock(

@@ -156,3 +156,41 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: doc/.vitepress/dist
           force_orphan: true
+
+      # R2-C5-02: assert the live demo actually serves the release
+      # version. Pushing to gh-pages is not the same as serving:
+      # Pages propagation lags, and a human fetch racing the deploy
+      # misread 2.1.2 as still live after the 2.1.3 deploy (the
+      # deploy chain itself was green). Poll the live demo bundle
+      # until it contains the release tag, or fail the run after
+      # ~15 minutes, so a stale or half-propagated demo can never
+      # pass silently. Runs after every successful deploy (push,
+      # workflow_run chain, or manual dispatch — the demo version is
+      # always baked from releases/latest at build time, so the
+      # expectation holds for all triggers).
+      - name: Assert live demo version matches release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          EXPECTED="$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          if [ -z "$EXPECTED" ] || [ "$EXPECTED" = "null" ]; then
+            echo "::error::could not read releases/latest tag"
+            exit 1
+          fi
+          SITE="https://${{ github.repository_owner }}.github.io/flmx-max/demo/"
+          echo "expecting live demo to serve version: $EXPECTED"
+          for attempt in $(seq 1 15); do
+            ASSET="$(curl -fsSL --max-time 30 "$SITE" 2>/dev/null | grep -o '/flmx-max/demo/assets/[^"]*\.js' | head -1 || true)"
+            if [ -n "$ASSET" ]; then
+              HITS="$(curl -fsSL --max-time 60 "https://${{ github.repository_owner }}.github.io$ASSET" 2>/dev/null | grep -o -F "$EXPECTED" | wc -l || true)"
+              if [ "${HITS:-0}" -gt 0 ]; then
+                echo "live demo serves $EXPECTED (bundle hits: $HITS)"
+                exit 0
+              fi
+            fi
+            echo "attempt $attempt/15: live demo does not serve $EXPECTED yet; retrying in 60s"
+            sleep 60
+          done
+          echo "::error::live demo did not serve version $EXPECTED within 15 minutes of deploy"
+          exit 1
