@@ -43,6 +43,11 @@ type options struct {
 	observer       observer.Observer
 	observerPeriod time.Duration
 	logger         logger.Logger
+	// connLogEntry marks this service as a node entry point for
+	// inbound connection logging (see connlog.go); connLogEntryID
+	// is the entry_id its events carry (the panel mark's id).
+	connLogEntry   bool
+	connLogEntryID string
 }
 
 // R3-A01（顺手项）: the three protocol-block switches are atomic.
@@ -360,11 +365,36 @@ func (s *defaultService) Serve() error {
 			continue
 		}
 
+		// Connlog (U1, connlog.go): on entry services, an admitted
+		// connection emits its open event here — clientAddr/sid are
+		// final at this point and a PROXY-protocol listener has
+		// already folded the real client address into RemoteAddr —
+		// and the paired close event from the connection goroutine
+		// below, where Handle's return is the deterministic close
+		// point. Admission denials above never reach this point and
+		// stay unrecorded (design §3.1). For non-entry services or
+		// a disabled master switch this costs one bool check.
+		connLog := s.options.connLogEntry && ConnLogEnabled()
+		var connLogStartMs int64
+		if connLog {
+			connLogStartMs = time.Now().UnixMilli()
+			EnqueueConnEvent(s.newConnEvent(
+				ConnEventOpen, sid, clientAddr, clientIP, conn, connLogStartMs, 0))
+		}
+
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
 			defer releaseSession()
+
+			if connLog {
+				defer func() {
+					EnqueueConnEvent(s.newConnEvent(
+						ConnEventClose, sid, clientAddr, clientIP, conn,
+						connLogStartMs, time.Now().UnixMilli()))
+				}()
+			}
 
 			// D3-02: a panic anywhere in a connection handler
 			// must kill only this connection, never the agent
@@ -738,6 +768,17 @@ func LoadConfig(configPath string) (string, error) {
 	isTls.Store(int32(config.Tls))
 	isSocks.Store(int32(config.Socks))
 	isHttp.Store(int32(config.Http))
+
+	// Optional connlog master switch (design §4.5: gost entry
+	// collection follows the feature master switch and defaults to
+	// on). An absent key leaves the current value untouched, so an
+	// older panel-issued config cannot silently disable it.
+	var connLogProbe struct {
+		ConnLog *int `json:"connlog"`
+	}
+	if err := json.Unmarshal(data, &connLogProbe); err == nil && connLogProbe.ConnLog != nil {
+		SetConnLogEnabled(*connLogProbe.ConnLog != 0)
+	}
 
 	return "", nil
 

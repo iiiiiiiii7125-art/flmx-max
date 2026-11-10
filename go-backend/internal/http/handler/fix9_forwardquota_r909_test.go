@@ -312,7 +312,7 @@ func TestFix9R909StoredMixedRowRendersNoEmptyNode(t *testing.T) {
 		t.Fatalf("get forward record: %v", err)
 	}
 	node := &nodeRecord{TCPListenAddr: "[::]", UDPListenAddr: "[::]"}
-	svcs := buildForwardServiceConfigs("f9r9", fwd, nil, node, 15611, "", forwardRuntimeLimiters{})
+	svcs := buildForwardServiceConfigs("f9r9", fwd, nil, node, 15611, "", forwardRuntimeLimiters{}, false)
 	if len(svcs) != 2 {
 		t.Fatalf("expected tcp+udp services, got %d", len(svcs))
 	}

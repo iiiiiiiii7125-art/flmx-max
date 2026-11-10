@@ -416,6 +416,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/kernel/control", h.kernelControl)
 	mux.HandleFunc("/api/v1/kernel/logs", h.kernelLogs)
 	mux.HandleFunc("/api/v1/inbound/list", h.inboundList)
+	mux.HandleFunc("/api/v1/inbound/connlog", h.inboundConnlog)
 	mux.HandleFunc("/api/v1/inbound/create", h.inboundCreate)
 	mux.HandleFunc("/api/v1/inbound/update", h.inboundUpdate)
 	mux.HandleFunc("/api/v1/inbound/delete", h.inboundDelete)
@@ -526,6 +527,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/flow/config", h.flowConfig)
 	mux.HandleFunc("/flow/upload", h.flowUpload)
 	mux.HandleFunc("/flow/upload/v2", h.flowUploadV2)
+	mux.HandleFunc("/flow/connlog/v2", h.flowConnlogV2)
 	mux.HandleFunc("/error", h.errorPage)
 }
 
@@ -2027,6 +2029,11 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		default:
 			return "", fmt.Errorf("隧道质量检测开关配置值无效")
 		}
+	case repo.ConnLogEnabledConfigKey:
+		// 连接日志总开关（设计 §4.5）：值域/归一单点在
+		// repo.NormalizeConnLogEnabledValue（读面共用同口径）；空串
+		// 返回 "" 走可清空语义（本键非必填：清空回落默认开）。
+		return repo.NormalizeConnLogEnabledValue(value)
 	case notifyConfigDailyHour:
 		// R2-048：日报发送时刻此前走 default 直通落库，越界值靠读
 		// 面静默回落默认 9 点，与同族值域键（监控三键）「保存期拒
@@ -2035,6 +2042,8 @@ func normalizeAndValidateConfigValue(key, value string) (string, error) {
 		return repo.NormalizeNotifyDailyHour(value)
 	case monitoring.ConfigMonitorRetentionDays:
 		return monitoring.NormalizeMonitoringRetentionDays(value)
+	case monitoring.ConfigConnlogRetentionDays:
+		return monitoring.NormalizeConnlogRetentionDays(value)
 	case monitoring.ConfigTunnelQualityProbeIntervalSec:
 		return monitoring.NormalizeTunnelQualityProbeIntervalSeconds(value)
 	case monitoring.ConfigServiceMonitorCheckerScanIntervalSec,

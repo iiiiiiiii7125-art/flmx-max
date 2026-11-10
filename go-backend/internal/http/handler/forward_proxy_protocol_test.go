@@ -26,7 +26,7 @@ func TestBuildForwardServiceConfigsAppliesProxyProtocolReceiveAndSendIndependent
 		UDPListenAddr: "0.0.0.0",
 	}
 
-	services := buildForwardServiceConfigs("1_2_3", forward, tunnel, node, 4001, "", forwardRuntimeLimiters{})
+	services := buildForwardServiceConfigs("1_2_3", forward, tunnel, node, 4001, "", forwardRuntimeLimiters{}, false)
 	if len(services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(services))
 	}
@@ -72,7 +72,7 @@ func TestBuildForwardServiceConfigsKeepsLegacyProxyProtocolAsSend(t *testing.T) 
 		UDPListenAddr: "0.0.0.0",
 	}
 
-	services := buildForwardServiceConfigs("1_2_3", forward, tunnel, node, 4001, "", forwardRuntimeLimiters{})
+	services := buildForwardServiceConfigs("1_2_3", forward, tunnel, node, 4001, "", forwardRuntimeLimiters{}, false)
 	if len(services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(services))
 	}

@@ -660,6 +660,10 @@ type InboundBackup struct {
 	// ConnIdleSeconds is the per-inbound idle timeout (seconds) for
 	// Xray (policy.levels[].connIdle); 0 = unset (Xray default 300s).
 	ConnIdleSeconds int `json:"connIdleSeconds,omitempty"`
+	// ConnLogEnabled is the per-inbound connection-log collection
+	// opt-in (design §4.5); it rides the backup like the other inbound
+	// switches so a restored inbound keeps collecting.
+	ConnLogEnabled int `json:"connLogEnabled,omitempty"`
 }
 
 type RemoteSourceBackup struct {
@@ -1280,7 +1284,7 @@ type NodeMetric struct {
 	ActiveSessions      int64 `gorm:"column:active_sessions" json:"activeSessions"`
 	BudgetRejectedTotal int64 `gorm:"column:budget_rejected_total" json:"budgetRejectedTotal"`
 	BudgetEvictedTotal  int64 `gorm:"column:budget_evicted_total" json:"budgetEvictedTotal"`
-	Uptime         int64 `gorm:"column:uptime" json:"uptime"`
+	Uptime              int64 `gorm:"column:uptime" json:"uptime"`
 }
 
 func (NodeMetric) TableName() string { return "node_metric" }
@@ -1318,6 +1322,63 @@ type NodeLatencySample struct {
 }
 
 func (NodeLatencySample) TableName() string { return "node_latency_sample" }
+
+// InboundConnLog is one client connection observed at a node's entry
+// point (inbound connection log feature; design §5.1). The agent on
+// the entry machine reports open/close events; the panel writes rows
+// at ingest time. The collection key (EntryNodeID + ConnID) is the
+// event-level identity taken from the reporting session, never from
+// payload claims; the display keys are the topology attribution
+// resolved at ingest (forward → NodeInboundRelay → target inbound, or
+// the inbound itself for direct kernel entries) and stay 0 when no
+// attribution can be derived — attribution is never guessed from
+// addresses or ports. Telemetry table: retention is
+// connlog_retention_days plus a per-inbound row cap (repo prune), and
+// it is intentionally NOT part of backups (NodeTraffic /
+// NodeLatencySample precedent).
+type InboundConnLog struct {
+	ID               int64  `gorm:"primaryKey;autoIncrement" json:"id"`
+	EntryNodeID      int64  `gorm:"column:entry_node_id;not null;uniqueIndex:idx_connlog_entry_conn,priority:1;index:idx_connlog_node_status,priority:1" json:"entryNodeId"`
+	ConnID           string `gorm:"column:conn_id;type:varchar(64);not null;uniqueIndex:idx_connlog_entry_conn,priority:2" json:"connId"`
+	EntryKind        string `gorm:"column:entry_kind;type:varchar(16);not null;default:''" json:"entryKind"`
+	EntryID          string `gorm:"column:entry_id;type:varchar(100);not null;default:''" json:"entryId"`
+	DisplayNodeID    int64  `gorm:"column:display_node_id;not null;default:0" json:"displayNodeId"`
+	DisplayInboundID int64  `gorm:"column:display_inbound_id;not null;default:0;index:idx_connlog_display_start,priority:1" json:"displayInboundId"`
+	ClientIP         string `gorm:"column:client_ip;type:varchar(45);not null;default:'';index:idx_connlog_client_start,priority:1" json:"clientIp"`
+	PeerIP           string `gorm:"column:peer_ip;type:varchar(45);not null;default:''" json:"peerIp"`
+	ClientPort       int    `gorm:"column:client_port;not null;default:0" json:"clientPort"`
+	Network          string `gorm:"type:varchar(8);not null;default:''" json:"network"`
+	SessionKind      string `gorm:"column:session_kind;type:varchar(16);not null;default:''" json:"sessionKind"`
+	StartTime        int64  `gorm:"column:start_time;not null;default:0;index:idx_connlog_display_start,priority:2;index:idx_connlog_client_start,priority:2" json:"startTime"`
+	// EndTime is 0 while open, the real close moment when closed, and
+	// the last known moment when interrupted (never a fabricated
+	// disconnect time). DurationMs is set only when closed.
+	EndTime     int64  `gorm:"column:end_time;not null;default:0" json:"endTime"`
+	DurationMs  int64  `gorm:"column:duration_ms;not null;default:0" json:"durationMs"`
+	Status      string `gorm:"type:varchar(12);not null;default:'open';index:idx_connlog_node_status,priority:2" json:"status"`
+	CreatedTime int64  `gorm:"column:created_time;not null" json:"createdTime"`
+}
+
+func (InboundConnLog) TableName() string { return "inbound_conn_log" }
+
+// ConnlogNodeDropped is the panel-side cumulative count of
+// connection-log events an entry node's agent dropped before they
+// could be reported (design §4.2: buffer/spool overflow drops the
+// oldest and counts — losing data is acceptable, hiding the loss
+// is not). The agent attaches its not-yet-acknowledged drop count
+// to every batch; the panel books the delta under the reporting
+// node exactly when the batch is applied (replays and behind
+// batches never double-book). The inbound log modal's footer sums
+// this over the nodes that actually feed the inbound. Telemetry
+// bookkeeping: NOT part of backups (same ruling as inbound_conn_log).
+type ConnlogNodeDropped struct {
+	ID           int64 `gorm:"primaryKey;autoIncrement" json:"id"`
+	NodeID       int64 `gorm:"column:node_id;not null;uniqueIndex" json:"nodeId"`
+	DroppedTotal int64 `gorm:"column:dropped_total;not null;default:0" json:"droppedTotal"`
+	UpdatedTime  int64 `gorm:"column:updated_time;not null;default:0" json:"updatedTime"`
+}
+
+func (ConnlogNodeDropped) TableName() string { return "connlog_node_dropped" }
 
 type TunnelMetric struct {
 	ID int64 `gorm:"primaryKey;autoIncrement" json:"id"`

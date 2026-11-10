@@ -49,6 +49,8 @@ import type {
   KernelApiItem,
   KernelStateApiData,
   InboundApiItem,
+  InboundConnLogData,
+  InboundConnLogQuery,
   InboundProbe,
   InboundMutationPayload,
   SplitRule,
@@ -996,6 +998,8 @@ export const getKernelLogs = (id: number) =>
   Network.post<KernelStateApiData>("/kernel/logs", { id });
 export const getInboundList = () =>
   Network.post<InboundApiItem[]>("/inbound/list");
+export const getInboundConnLog = (data: InboundConnLogQuery) =>
+  Network.post<InboundConnLogData>("/inbound/connlog", data);
 export const createInbound = (data: InboundMutationPayload, idemKey?: string) =>
   // R8-T-01：保存末尾在内核未装版本时条件性继承 300s 内核应用预算，
   // 前端与 installKernel 同口径 ≥330s。

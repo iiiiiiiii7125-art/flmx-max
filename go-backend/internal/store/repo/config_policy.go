@@ -87,6 +87,7 @@ var requiredConfigKeys = map[string]struct{}{
 	"jwt_secret":                          {},
 	"monitor_tunnel_quality_enabled":      {},
 	"monitor_retention_days":              {},
+	"connlog_retention_days":              {},
 	"monitor_tunnel_quality_interval_sec": {},
 }
 
@@ -121,6 +122,10 @@ var authenticatedConfigKeys = map[string]struct{}{
 	"monitor_tunnel_quality_enabled":      {},
 	"monitor_tunnel_quality_interval_sec": {},
 	"monitor_retention_days":              {},
+	// 入站连接日志保留天数（config 页设置）：与 monitor_retention_days
+	// 同族口径登记；值域 1–30 由 monitoring.NormalizeConnlogRetentionDays
+	// 在保存面校验，读面非法值回落默认 7 天。
+	"connlog_retention_days": {},
 	// 服务监控内部限值（monitoring/limits.go 常量，后端引用全集）。
 	"service_monitor_checker_scan_interval_sec": {},
 	"service_monitor_worker_limit":              {},
@@ -151,6 +156,12 @@ var authenticatedConfigKeys = map[string]struct{}{
 	"notify_daily_hour":       {},
 	"notify_latency_loss_pct": {},
 	"notify_latency_ms":       {},
+	// 连接日志总开关（入站连接日志设计 §4.5）：gost 中转入口采集的
+	// 启停键、默认开（缺失即开，故不在 required 表——清空回落默认
+	// 开是合法语义）；值域 true/false 在保存面校验。非凭据，归
+	// authenticated（与监控开关同级）；入站级 opt-in 是入站行字段
+	// 不经本表，保留期键 connlog_retention_days 由 U3 单独登记。
+	"connlog_enabled": {},
 }
 
 func PolicyForConfig(name string) ConfigAccessPolicy {

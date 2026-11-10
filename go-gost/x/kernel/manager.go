@@ -44,6 +44,11 @@ type instance struct {
 	// 以它为准，不用下发瞬间的进程快照——旧进程正处崩溃退避间隙时
 	// 快照为 false，旧实现会因此放弃回滚并把坏配置 persist 固化。
 	goodHash string
+	// connlog is the inbound connection log collector for this
+	// instance (sing-box/xray only), created on first Apply and
+	// kept across process relaunches so connection-id generations
+	// stay scoped per process launch.
+	connlog *connLogCollector
 }
 
 // Manager owns every kernel instance on this agent. Apply/Control/Uninstall
@@ -496,6 +501,13 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	inst.err = ""
 	needVersion := inst.version == "" || changed
 	m.mu.Unlock()
+	// Point the connection log collector at the request just
+	// accepted. This deliberately reads the CURRENT request on
+	// every Apply (the R2-002 lesson): the rebuild predicate above
+	// does not watch ConnLogInbounds, so a same-hash apply that
+	// only flips collection keeps the process objects — the
+	// collector, consulted per log line, is what follows.
+	m.applyConnLog(inst, req)
 	if needVersion {
 		v := detectVersion(mainBin, adapters[req.Type].versionArgs)
 		m.mu.Lock()
@@ -695,6 +707,8 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 	inst.bins = prev.bins
 	inst.version = prev.version
 	m.mu.Unlock()
+	// The rolled-back request owns collection posture again.
+	m.applyConnLog(inst, prev.req)
 	m.stopProcesses(inst)
 	m.startProcesses(inst)
 	m.waitStable(prev.req.Type)
@@ -758,12 +772,65 @@ func (m *Manager) setErr(inst *instance, err error) {
 	inst.logs.add("[flmx] " + err.Error())
 }
 
+// connlogEffectiveOptIns resolves the collection-effective opt-in
+// set of an ApplyRequest: the per-inbound opt-in list
+// (ConnLogInbounds, unit U5) intersected with the panel's topology
+// qualification (ConnlogEntries, unit U7). An inbound is collected
+// only when BOTH lists name it — opt-in alone would let a relay
+// landing or chain target be collected if its switch were flipped
+// (its kernel log lines name the previous hop, not the client:
+// wrong data, not weak data), and topology alone would collect
+// inbounds the user never opted in (and whose rendering never
+// raised the log surface the parser feeds on). Resolved here, at
+// the point of use, from the one request that owns the instance,
+// so Apply and rollback can never disagree about the set.
+func connlogEffectiveOptIns(req ApplyRequest) []int64 {
+	if len(req.ConnLogInbounds) == 0 || len(req.ConnlogEntries) == 0 {
+		return nil
+	}
+	qualified := make(map[int64]bool, len(req.ConnlogEntries))
+	for _, e := range req.ConnlogEntries {
+		qualified[e.InboundID] = true
+	}
+	out := make([]int64, 0, len(req.ConnLogInbounds))
+	for _, id := range req.ConnLogInbounds {
+		if qualified[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// applyConnLog creates the instance's connection log collector on
+// first use (sing-box/xray only — the stacks with a parseable
+// connection log) and points it at the given request's opt-in set.
+// For xray it also (re)arms the access-file tailer against the
+// freshly written run directory. Called from Apply and from
+// rollback: whichever request currently owns the instance owns
+// the collection posture.
+func (m *Manager) applyConnLog(inst *instance, req ApplyRequest) {
+	if req.Type != "singbox" && req.Type != "xray" {
+		return
+	}
+	m.mu.Lock()
+	if inst.connlog == nil {
+		inst.connlog = newConnLogCollector(req.Type, nil)
+	}
+	c := inst.connlog
+	m.mu.Unlock()
+	c.setOptIns(connLogTags(connlogEffectiveOptIns(req)))
+	if req.Type == "xray" {
+		c.ensureTailer(m.runDir(req.Type), req.Files)
+	}
+}
+
 // startProcesses launches every process of the instance's current request.
 func (m *Manager) startProcesses(inst *instance) {
 	m.mu.Lock()
 	specs := inst.req.processSpecs()
 	runDir := m.runDir(inst.req.Type)
 	bins := inst.bins
+	collector := inst.connlog
 	m.mu.Unlock()
 
 	procs := make([]*process, 0, len(specs))
@@ -794,6 +861,26 @@ func (m *Manager) startProcesses(inst *instance) {
 		// posture the gate is a no-op pass, so unguarded kernels keep
 		// the bare supervisor behavior.
 		p.relaunchGuard = func() error { return m.restartGuardError(inst) }
+		if collector != nil {
+			// Connection log parsing (U4): every output line is
+			// offered to the collector first — it diverts the
+			// per-connection lines it recognises out of the log
+			// ring and turns them into events — and each launch
+			// opens a fresh connection-id generation for this
+			// process. The hooks are attached unconditionally
+			// (even with an empty opt-in set): Apply's rebuild
+			// predicate does not watch ConnLogInbounds, so a
+			// process created before collection was switched on
+			// must still follow when the collector activates
+			// (same R2-002 reasoning as relaunchGuard). Feed is a
+			// no-op while no inbound is opted in.
+			name := spec.Name
+			p.lineTap = func(line string, at time.Time) bool {
+				return collector.FeedAs(name, line, at)
+			}
+			p.launchHook = func(_ int, at time.Time) { collector.beginGeneration(name, at) }
+			p.exitHook = func(time.Time) { collector.endGeneration(name) }
+		}
 		procs = append(procs, p)
 	}
 	m.mu.Lock()
@@ -808,6 +895,7 @@ func (m *Manager) stopProcesses(inst *instance) {
 	m.mu.Lock()
 	procs := inst.procs
 	inst.procs = nil
+	collector := inst.connlog
 	m.mu.Unlock()
 	var wg sync.WaitGroup
 	for _, p := range procs {
@@ -818,6 +906,12 @@ func (m *Manager) stopProcesses(inst *instance) {
 		}(p)
 	}
 	wg.Wait()
+	if collector != nil {
+		// Each process's exitHook already swept its own open
+		// connections; the tailer is instance-scoped and stops
+		// with the process set.
+		collector.stopTailer()
+	}
 }
 
 // Control handles start / stop / restart / remove for an applied kernel.

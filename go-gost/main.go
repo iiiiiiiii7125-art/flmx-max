@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-gost/core/logger"
 	xlogger "github.com/go-gost/x/logger"
+	"github.com/go-gost/x/kernel"
 	"github.com/go-gost/x/service"
 	"github.com/go-gost/x/socket"
 	"github.com/judwhite/go-svc"
@@ -237,7 +238,35 @@ func main() {
 			fmt.Printf("❌ 流量 spool 初始化失败，拒绝启动: %v\n", err)
 			os.Exit(1)
 		}
+		// 入站连接日志（U2）：spool 与流量 spool 同目录、同身份
+		// 隔离。纯旁路功能——初始化失败只禁用本功能，绝不拒绝
+		// agent 启动（与上方流量 spool 的口径差异是刻意的：转发
+		// 与计费是主业，连接日志不是）。
+		if err := service.ConfigureConnlogSpool(dir, service.TrafficSpoolIdentity(config.Addr, config.Secret)); err != nil {
+			fmt.Printf("⚠️ 连接日志 spool 初始化失败，本功能回退内存 spool: %v\n", err)
+		}
 	}
+	service.StartConnlogReporter(context.Background())
+
+	// 入站连接日志（U4→U2 接缝）：内核日志解析器（x/kernel）的
+	// 事件经 sink 汇入上报器——kernel 包按既有纪律不 import
+	// service 栈，故由装配根在此对接字段映射。sink 未装时
+	// collector 落自己的缓冲（单机/测试形态）。
+	kernel.SetConnEventSink(func(ev kernel.ConnEvent) {
+		service.EnqueueConnEvent(service.ConnEvent{
+			Type:        string(ev.Type),
+			ConnID:      ev.ConnID,
+			EntryKind:   ev.EntryKind,
+			EntryID:     ev.EntryID,
+			ClientIP:    ev.ClientIP,
+			ClientPort:  ev.ClientPort,
+			Network:     ev.Network,
+			SessionKind: ev.SessionKind,
+			StartMs:     ev.StartMs,
+			EndMs:       ev.EndMs,
+			Status:      ev.Status,
+		})
+	})
 
 	p := &program{
 		startReporter: func() reporter {

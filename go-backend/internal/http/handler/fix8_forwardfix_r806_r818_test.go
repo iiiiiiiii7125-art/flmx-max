@@ -107,7 +107,7 @@ func TestFix8R806StoredNewlineForwardRendersEverywhere(t *testing.T) {
 		t.Fatalf("get forward record: %v", err)
 	}
 	node := &nodeRecord{TCPListenAddr: "[::]", UDPListenAddr: "[::]"}
-	svcs := buildForwardServiceConfigs("f8r6", fwd, nil, node, 15301, "", forwardRuntimeLimiters{})
+	svcs := buildForwardServiceConfigs("f8r6", fwd, nil, node, 15301, "", forwardRuntimeLimiters{}, false)
 	if len(svcs) != 2 {
 		t.Fatalf("expected tcp+udp services, got %d", len(svcs))
 	}
@@ -147,7 +147,7 @@ func TestFix8R806StoredNewlineForwardRendersEverywhere(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svcsComma := buildForwardServiceConfigs("f8r6", fwdComma, nil, node, 15302, "", forwardRuntimeLimiters{})
+	svcsComma := buildForwardServiceConfigs("f8r6", fwdComma, nil, node, 15302, "", forwardRuntimeLimiters{}, false)
 	nodesComma := svcsComma[0]["forwarder"].(map[string]interface{})["nodes"].([]map[string]interface{})
 	if len(nodesComma) != 2 || nodesComma[0]["addr"] != "203.0.113.5:443" || nodesComma[1]["addr"] != "198.51.100.7:443" {
 		t.Fatalf("comma-form rendering regressed: %v", nodesComma)

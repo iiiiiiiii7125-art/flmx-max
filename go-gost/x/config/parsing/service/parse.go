@@ -29,6 +29,7 @@ import (
 	hop_parser "github.com/go-gost/x/config/parsing/hop"
 	logger_parser "github.com/go-gost/x/config/parsing/logger"
 	selector_parser "github.com/go-gost/x/config/parsing/selector"
+	"github.com/go-gost/x/internal/connlog"
 	tls_util "github.com/go-gost/x/internal/util/tls"
 	cache_limiter "github.com/go-gost/x/limiter/traffic/cache"
 	"github.com/go-gost/x/metadata"
@@ -413,11 +414,34 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 		xservice.ObserverOption(observer),
 		xservice.ObserverPeriodOption(observerPeriod),
 		xservice.LoggerOption(serviceLogger),
+		// Connlog: the panel marks the forward services it
+		// generates for managed relays as node entry points via
+		// service metadata "connlogEntryKind"/"connlogEntryID"
+		// (internal/connlog is the single mark parser); only those
+		// services record inbound connection events. Internal
+		// services built elsewhere (tunnel entrypoints, relay
+		// binds) never pass this option and stay unrecorded.
+		xservice.ConnLogEntryOption(connlogEntryMark(cfg)),
 	)
 
 	serviceLogger.Infof("listening on %s/%s", s.Addr().String(), s.Addr().Network())
 	configured = true
 	return s, nil
+}
+
+// connlogEntryMark resolves the panel's connection-log entry
+// mark of a service config into the service option pair: whether
+// the service is an entry point, and the entry_id its connection
+// events carry.
+func connlogEntryMark(cfg *config.ServiceConfig) (bool, string) {
+	if cfg == nil {
+		return false, ""
+	}
+	mark, ok := connlog.ParseServiceMark(cfg.Name, cfg.Metadata)
+	if !ok {
+		return false, ""
+	}
+	return true, mark.ID
 }
 
 // serviceHasNoPrivateBypass reports whether the service references

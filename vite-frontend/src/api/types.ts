@@ -157,9 +157,6 @@ export interface SpeedLimitApiItem {
   [key: string]: unknown;
 }
 
-
-
-
 export interface TunnelDiagnosisApiItem {
   success: boolean;
   /** 流式诊断的起始帧标记（control_plane 起始项），页面本地类型早已自备（F-144）。 */
@@ -966,6 +963,13 @@ export interface InboundApiItem {
   meteringActive: boolean;
   /** Per-inbound idle timeout (seconds) for Xray (policy connIdle); 0 = unset (Xray default 300s), -1 = unlimited (renders as 31536000 = 365d). */
   connIdleSeconds: number;
+  /**
+   * Inbound connection-log opt-in for direct kernel collection (U5):
+   * when false, direct connections to this inbound are not recorded
+   * (relay-entry records are unaffected). Required: the backend list
+   * always carries the field (design §4.5).
+   */
+  connLogEnabled: boolean;
 }
 
 export interface InboundMutationPayload {
@@ -998,6 +1002,8 @@ export interface InboundMutationPayload {
   enabled?: boolean;
   /** SS subscription metering switch; omitted keeps the stored value. */
   meteringEnabled?: boolean;
+  /** Connection-log collection opt-in; omitted keeps the stored value. */
+  connLogEnabled?: boolean;
   /** Per-inbound idle timeout (seconds) for Xray; 0 clears it (Xray default 300s), -1 = unlimited (renders as 31536000). */
   connIdleSeconds?: number;
 }
@@ -1010,6 +1016,64 @@ export interface InboundShareEntry {
   uri: string;
   surge: string;
 }
+
+/** Query for POST /inbound/connlog (design §5.3): one page of an
+ * inbound's connection log, newest first. `size` follows the user.tsx
+ * probe convention: the caller sends pageSize + 1 and slices the probe
+ * row off to learn whether a next page exists. */
+export interface InboundConnLogQuery {
+  inboundId: number;
+  current: number;
+  size: number;
+  ip?: string;
+}
+
+/**
+ * One connection-log row (design §5.1). Times are entry-machine epoch
+ * milliseconds. `durationMs`/`endTime` stay empty while the connection
+ * is open; `event_only` rows (Xray degradation, ruling 2026-11-10 (a))
+ * never carry a duration.
+ */
+export interface InboundConnLogItem {
+  id: number;
+  connId: string;
+  /** Entry machine the record was collected on (panel session-derived). */
+  entryNodeId: number;
+  entryNodeName?: string;
+  /** forward = gost relay entry service; inbound = direct kernel entry. */
+  entryKind: "forward" | "inbound" | string;
+  /** Forward service name or inbound tag (`in-<ID>`). */
+  entryId: string;
+  clientIp: string;
+  /** Raw previous hop, only when the stack exposes both addresses. */
+  peerIp?: string;
+  clientPort?: number;
+  network: "tcp" | "udp" | string;
+  sessionKind:
+    | "tcp_conn"
+    | "udp_session"
+    | "kernel_session"
+    | "event_only"
+    | string;
+  startTime: number;
+  endTime?: number | null;
+  durationMs?: number | null;
+  status: "open" | "closed" | "interrupted" | string;
+}
+
+/**
+ * The query endpoint answers either a bare row array or a page object
+ * carrying collection metadata; the modal normalizes both. `dropped`
+ * is the entry node's lifetime discarded-event count (design §4.2),
+ * shown in the footer whenever the backend provides it.
+ */
+export interface InboundConnLogPage {
+  rows: InboundConnLogItem[];
+  dropped?: number;
+  retentionDays?: number;
+}
+
+export type InboundConnLogData = InboundConnLogItem[] | InboundConnLogPage;
 
 export interface InboundRelayApiItem {
   id: number;

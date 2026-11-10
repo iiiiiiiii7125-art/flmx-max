@@ -795,6 +795,303 @@ const listOf = (book: Record<string, Entry[]>, k: string) =>
  * config rows are real panel configuration and a demo download
  * must not carry them out.
  */
+/**
+ * Inbound connection log (feat/connlog U6): synthesized, not recorded.
+ * The feature postdates the recorded fixtures, and its rows are live
+ * event data a recording cannot carry (an open connection's start must
+ * sit minutes before "now" for the modal's ticking duration to read
+ * true), so the adapter builds rows relative to Date.now() per query:
+ *   - inbound/list: stamps the U5 opt-in field `connLogEnabled` onto
+ *     the recorded self-built inbounds (all on except id 4, whose
+ *     modal demonstrates the not-opted-in empty state);
+ *   - inbound/connlog: rows follow the design's per-stack truth —
+ *     relayed inbounds get full gost entry records from a transit
+ *     entry node (plus one interrupted row and a dropped count in the
+ *     page footer), direct Xray inbounds get event_only rows (IP +
+ *     start, never a duration), direct sing-box inbounds get full
+ *     records (kernel_session rows for UDP protocols). IP filtering
+ *     and the (current, size) slice mirror the real handler.
+ * Fidelity boundary: rows are illustrative samples keyed to the
+ * recorded inbound shapes; nothing here is persisted.
+ */
+function connlogAnswer(
+  bare: string,
+  body: unknown,
+  book: Record<string, Entry[]>,
+) {
+  if (bare === "inbound/list") {
+    const recorded = (book["inbound/list"] ?? [])[0];
+
+    if (!recorded) return null;
+    const res = structuredClone(recorded.res);
+    const data = res.data as Array<Record<string, unknown>> | undefined;
+
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (item.external !== true) {
+          item.connLogEnabled = Number(item.id) !== 4;
+        }
+      }
+    }
+
+    return res;
+  }
+  if (bare !== "inbound/connlog") return null;
+
+  const req = parseBody(body);
+  const inboundId = Number(req.inboundId);
+  const current = Math.max(1, Number(req.current) || 1);
+  const size = Math.max(1, Number(req.size) || 21);
+  const ip = String(req.ip ?? "").trim();
+  const inbounds = ((book["inbound/list"] ?? [])[0]?.res.data ?? []) as Array<
+    Record<string, unknown>
+  >;
+  const nodes = ((book["node/list"] ?? [])[0]?.res.data ?? []) as Array<
+    Record<string, unknown>
+  >;
+  const nodeName = (id: number) =>
+    String(nodes.find((n) => Number(n.id) === id)?.name ?? `节点 ${id}`);
+  const target = inbounds.find((i) => Number(i.id) === inboundId);
+  const now = Date.now();
+  const MIN = 60_000;
+  let seq = 0;
+  const row = (r: Record<string, unknown>): Record<string, unknown> => ({
+    id: (seq += 1),
+    ...r,
+  });
+
+  let rows: Array<Record<string, unknown>> = [];
+  let dropped = 0;
+
+  if (target && target.external !== true) {
+    const ownNodeId = Number(target.nodeId);
+    const relayCount = Number(target.relayCount ?? 0);
+    const kernelType = String(target.kernelType ?? "");
+    const network = String(target.network ?? "tcp");
+
+    if (relayCount > 0) {
+      // gost entry records, collected on a transit entry node.
+      const entryNodeId = inboundId % 2 === 0 ? 6 : 5;
+      const base = {
+        entryNodeId,
+        entryNodeName: nodeName(entryNodeId),
+        entryKind: "forward",
+        entryId: `fwd${inboundId}_tcp`,
+      };
+
+      rows = [
+        row({
+          ...base,
+          connId: `demo-${inboundId}-1`,
+          clientIp: "203.0.113.24",
+          clientPort: 52314,
+          network: "tcp",
+          sessionKind: "tcp_conn",
+          startTime: now - 164_000,
+          endTime: null,
+          durationMs: null,
+          status: "open",
+        }),
+        row({
+          ...base,
+          connId: `demo-${inboundId}-2`,
+          clientIp: "198.51.100.7",
+          clientPort: 44102,
+          network: "tcp",
+          sessionKind: "tcp_conn",
+          startTime: now - 26 * MIN,
+          endTime: now - 26 * MIN + 187_000,
+          durationMs: 187_000,
+          status: "closed",
+        }),
+        row({
+          ...base,
+          connId: `demo-${inboundId}-3`,
+          clientIp: "203.0.113.24",
+          clientPort: 61001,
+          network: "tcp",
+          sessionKind: "tcp_conn",
+          startTime: now - 72 * MIN,
+          endTime: now - 72 * MIN + 42_300,
+          durationMs: 42_300,
+          status: "closed",
+        }),
+        row({
+          ...base,
+          connId: `demo-${inboundId}-4`,
+          clientIp: "192.0.2.88",
+          clientPort: 39811,
+          network: "tcp",
+          sessionKind: "tcp_conn",
+          startTime: now - 150 * MIN,
+          endTime: now - 141 * MIN,
+          durationMs: null,
+          status: "interrupted",
+        }),
+        row({
+          ...base,
+          connId: `demo-${inboundId}-5`,
+          clientIp: "198.51.100.19",
+          clientPort: 51200,
+          network: "tcp",
+          sessionKind: "tcp_conn",
+          startTime: now - 300 * MIN,
+          endTime: now - 300 * MIN + 903_000,
+          durationMs: 903_000,
+          status: "closed",
+        }),
+      ];
+      if (network.includes("udp")) {
+        rows.splice(
+          4,
+          0,
+          row({
+            ...base,
+            entryId: `fwd${inboundId}_udp`,
+            connId: `demo-${inboundId}-6`,
+            clientIp: "203.0.113.77",
+            clientPort: 53100,
+            network: "udp",
+            sessionKind: "udp_session",
+            startTime: now - 190 * MIN,
+            endTime: now - 190 * MIN + 74_000,
+            durationMs: 74_000,
+            status: "closed",
+          }),
+        );
+      }
+      dropped = 2;
+    } else if (kernelType === "xray") {
+      // Xray degradation (ruling (a)): events only, never a duration.
+      // Id 4 is the not-opted-in sample: no rows at all.
+      if (inboundId !== 4) {
+        const base = {
+          entryNodeId: ownNodeId,
+          entryNodeName: nodeName(ownNodeId),
+          entryKind: "inbound",
+          entryId: `in-${inboundId}`,
+        };
+
+        rows = [
+          row({
+            ...base,
+            connId: `demo-${inboundId}-1`,
+            clientIp: "203.0.113.24",
+            clientPort: 52314,
+            network: "tcp",
+            sessionKind: "event_only",
+            startTime: now - 5 * MIN,
+            endTime: null,
+            durationMs: null,
+            status: "open",
+          }),
+          row({
+            ...base,
+            connId: `demo-${inboundId}-2`,
+            clientIp: "198.51.100.7",
+            clientPort: 44102,
+            network: "tcp",
+            sessionKind: "event_only",
+            startTime: now - 38 * MIN,
+            endTime: null,
+            durationMs: null,
+            status: "open",
+          }),
+          row({
+            ...base,
+            connId: `demo-${inboundId}-3`,
+            clientIp: "203.0.113.99",
+            clientPort: 60222,
+            network: "tcp",
+            sessionKind: "event_only",
+            startTime: now - 180 * MIN,
+            endTime: null,
+            durationMs: null,
+            status: "open",
+          }),
+          row({
+            ...base,
+            connId: `demo-${inboundId}-4`,
+            clientIp: "192.0.2.88",
+            clientPort: 39811,
+            network: "tcp",
+            sessionKind: "event_only",
+            startTime: now - 26 * 60 * MIN,
+            endTime: now - 25 * 60 * MIN,
+            durationMs: null,
+            status: "interrupted",
+          }),
+        ];
+      }
+    } else if (kernelType === "singbox") {
+      const base = {
+        entryNodeId: ownNodeId,
+        entryNodeName: nodeName(ownNodeId),
+        entryKind: "inbound",
+        entryId: `in-${inboundId}`,
+      };
+      const udpOnly = network === "udp";
+      const kind = udpOnly ? "kernel_session" : "tcp_conn";
+      const net = udpOnly ? "udp" : "tcp";
+
+      rows = [
+        row({
+          ...base,
+          connId: `demo-${inboundId}-1`,
+          clientIp: "203.0.113.24",
+          clientPort: 52314,
+          network: net,
+          sessionKind: kind,
+          startTime: now - 240_000,
+          endTime: null,
+          durationMs: null,
+          status: "open",
+        }),
+        row({
+          ...base,
+          connId: `demo-${inboundId}-2`,
+          clientIp: "198.51.100.7",
+          clientPort: 44102,
+          network: net,
+          sessionKind: kind,
+          startTime: now - 33 * MIN,
+          endTime: now - 33 * MIN + 512_000,
+          durationMs: 512_000,
+          status: "closed",
+        }),
+        row({
+          ...base,
+          connId: `demo-${inboundId}-3`,
+          clientIp: "192.0.2.88",
+          clientPort: 39811,
+          network: net,
+          sessionKind: kind,
+          startTime: now - 120 * MIN,
+          endTime: now - 120 * MIN + 65_000,
+          durationMs: 65_000,
+          status: "closed",
+        }),
+      ];
+    }
+  }
+
+  const filtered = ip
+    ? rows.filter((r) => String(r.clientIp).includes(ip))
+    : rows;
+  const start = (current - 1) * size;
+
+  return {
+    code: 0,
+    msg: "操作成功",
+    data: {
+      rows: filtered.slice(start, start + size),
+      dropped,
+      retentionDays: 7,
+    },
+    ts: Date.now(),
+  };
+}
+
 function installAnswer(bare: string, body: unknown) {
   if (bare !== "node/install") return null;
   const req = parseBody(body);
@@ -1441,6 +1738,15 @@ async function answer(config: InternalAxiosRequestConfig) {
     return bare === "node/list" || bare === "config/list"
       ? shiftTimes(grp, fixtures.recordedAt, delta)
       : grp;
+  }
+  const connlog = connlogAnswer(bare, config.data, book);
+
+  if (connlog) {
+    // inbound/list is a cloned recording (its timestamps shift like
+    // the plain replay); the connlog rows are synthesized at "now".
+    return bare === "inbound/list"
+      ? shiftTimes(connlog, fixtures.recordedAt, delta)
+      : connlog;
   }
   const receipt = receiptAnswer(bare, config.data, book);
 

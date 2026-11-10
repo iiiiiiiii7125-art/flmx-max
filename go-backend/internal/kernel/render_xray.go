@@ -8,6 +8,17 @@ import (
 
 type obj = map[string]interface{}
 
+// connLogAccessPath is the Xray access-log destination rendered when
+// any inbound on the kernel opted into connection-log collection
+// (design §3.2/§4.5): /dev/stdout lands the access lines on the
+// kernel process's stdout, where the agent-side parser (U4) diverts
+// them into the connlog pipeline. The error log level is deliberately
+// left at warning — Xray records access entries whenever an access
+// destination is configured, independent of loglevel, so collection
+// does not inflate the error-log volume. U4 contract: access lines
+// arrive on the process's stdout, mixed with the error log stream.
+const connLogAccessPath = "/dev/stdout"
+
 func renderXray(inbounds []Inbound) (string, error) {
 	// Per-inbound idle timeout: every inbound with ConnIdleSeconds set
 	// gets its own policy level (1..N, in inbound-ID order — inbounds
@@ -30,8 +41,12 @@ func renderXray(inbounds []Inbound) (string, error) {
 		}
 		list = append(list, item)
 	}
+	logCfg := obj{"loglevel": "warning"}
+	if anyConnLogEnabled(inbounds) {
+		logCfg["access"] = connLogAccessPath
+	}
 	cfg := obj{
-		"log":      obj{"loglevel": "warning"},
+		"log":      logCfg,
 		"inbounds": list,
 		"outbounds": []interface{}{
 			obj{"protocol": "freedom", "tag": "direct"},

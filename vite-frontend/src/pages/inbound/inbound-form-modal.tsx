@@ -1477,6 +1477,32 @@ export function InboundFormModal({
                         </div>
                       </div>
                     )}
+                    {/* 连接日志采集 opt-in（设计 §4.5）：仅直连内核入站
+                        有效。仅中转入站没有直连入口，内核收到的是上一跳
+                        中转机的连接、不是客户端连接，故开关禁用；中转入口
+                        的连接记在入口机，不在此入站下。已开启时开关不随
+                        形态禁用而消失，使「关采集 + 改形态」能在同一次保
+                        存内完成（计量开关 R6X-019 同口径）。 */}
+                    <div className="space-y-3 rounded-xl border border-divider p-3">
+                      <div className="flex items-start gap-2">
+                        <Switch
+                          isDisabled={form.relayOnly && !form.connLogEnabled}
+                          isSelected={form.connLogEnabled}
+                          size="sm"
+                          onValueChange={(v) => set("connLogEnabled", v)}
+                        />
+                        <div>
+                          <p className="text-sm">记录连接日志</p>
+                          <p className="text-xs font-semibold text-foreground">
+                            {form.relayOnly
+                              ? form.connLogEnabled
+                                ? "仅中转入站没有直连入口，不支持记录连接日志；当前已开启，请先关闭后再保存，或取消「仅通过中转提供」。"
+                                : "仅中转入站没有直连入口，不支持记录连接日志；中转入口的连接记在入口机。"
+                              : "开启后记录直连到本入站的客户端连接（客户端 IP、连接/断开时间、时长），在入站「连接日志」中查看。Xray 入站只记连接事件，时长显「—」。开启后内核日志形态随之调整（sing-box 日志升为 debug、Xray 开 access 日志），关闭即恢复。"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
                     <div className="space-y-3 rounded-xl border border-divider p-3">
                       <p className="text-sm font-medium">中转相关</p>
                       <div className="flex items-start gap-2">

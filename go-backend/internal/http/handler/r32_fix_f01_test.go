@@ -55,7 +55,7 @@ func TestR32L4PortedTCPListenAddrRealm(t *testing.T) {
 func TestR32L4PortedListenAddrGostServices(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "203.0.113.7:9999", UDPListenAddr: "203.0.113.7:9999"}
 	forward := &forwardRecord{RemoteAddr: "127.0.0.1:8080"}
-	services := buildForwardServiceConfigs("r32f01", forward, &tunnelRecord{}, node, 22001, "", forwardRuntimeLimiters{})
+	services := buildForwardServiceConfigs("r32f01", forward, &tunnelRecord{}, node, 22001, "", forwardRuntimeLimiters{}, false)
 	if len(services) != 2 {
 		t.Fatalf("CELL-A expected 2 services, got %d", len(services))
 	}
@@ -73,7 +73,7 @@ func TestR32L4BareListenAddrControl(t *testing.T) {
 		t.Errorf("control realmListenAddr bare = %q, want %q", got, "203.0.113.7:443")
 	}
 	forward := &forwardRecord{RemoteAddr: "127.0.0.1:8080"}
-	services := buildForwardServiceConfigs("r32f01", forward, &tunnelRecord{}, node, 22001, "", forwardRuntimeLimiters{})
+	services := buildForwardServiceConfigs("r32f01", forward, &tunnelRecord{}, node, 22001, "", forwardRuntimeLimiters{}, false)
 	if len(services) != 2 {
 		t.Fatalf("control expected 2 services, got %d", len(services))
 	}
@@ -104,7 +104,7 @@ func TestR32FixF01BracketedV6ListenAddrStripped(t *testing.T) {
 	// 同值走 gost 面：裸 IPv6 拼端口须加括号，不得误读成另一地址。
 	nodeUDP := &nodeRecord{TCPListenAddr: "[2001:db8::1]:9999", UDPListenAddr: "[2001:db8::1]:9999"}
 	forward := &forwardRecord{RemoteAddr: "127.0.0.1:8080"}
-	services := buildForwardServiceConfigs("r32f01", forward, &tunnelRecord{}, nodeUDP, 22001, "", forwardRuntimeLimiters{})
+	services := buildForwardServiceConfigs("r32f01", forward, &tunnelRecord{}, nodeUDP, 22001, "", forwardRuntimeLimiters{}, false)
 	if len(services) != 2 {
 		t.Fatalf("CELL-V6 expected 2 services, got %d", len(services))
 	}
@@ -121,7 +121,7 @@ func TestR32FixF01WildcardListenAddrControl(t *testing.T) {
 		t.Errorf("control realmListenAddr wildcard = %q, want %q", got, "[::]:443")
 	}
 	forward := &forwardRecord{RemoteAddr: "127.0.0.1:8080"}
-	services := buildForwardServiceConfigs("r32f01", forward, &tunnelRecord{}, node, 22001, "", forwardRuntimeLimiters{})
+	services := buildForwardServiceConfigs("r32f01", forward, &tunnelRecord{}, node, 22001, "", forwardRuntimeLimiters{}, false)
 	if len(services) != 2 {
 		t.Fatalf("control expected 2 services, got %d", len(services))
 	}

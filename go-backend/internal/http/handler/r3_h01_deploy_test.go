@@ -19,7 +19,7 @@ func TestR3H01DeploySideUnchanged(t *testing.T) {
 		{bindIP: "a..b", wantAddr: "a..b:8080"},
 	}
 	for _, c := range cells {
-		services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 8080, c.bindIP, forwardRuntimeLimiters{})
+		services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 8080, c.bindIP, forwardRuntimeLimiters{}, false)
 		if len(services) != 2 {
 			t.Fatalf("bindIP %q: expected 2 services, got %d", c.bindIP, len(services))
 		}

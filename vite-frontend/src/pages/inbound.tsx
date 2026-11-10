@@ -48,6 +48,7 @@ import {
   useCollapsed,
 } from "@/pages/inbound/group";
 import { ActionSheet } from "@/pages/inbound/action-sheet";
+import { ConnLogModal } from "@/pages/inbound/connlog-modal";
 import { SplitModal } from "@/pages/inbound/split-modal";
 import {
   EXTERNAL_LABEL,
@@ -270,6 +271,7 @@ export default function InboundPage() {
   const [details, setDetails] = useState<InboundApiItem | null>(null);
   const [sharing, setSharing] = useState<InboundApiItem | null>(null);
   const [relaying, setRelaying] = useState<InboundApiItem | null>(null);
+  const [connLogFor, setConnLogFor] = useState<InboundApiItem | null>(null);
   const [splitting, setSplitting] = useState<InboundApiItem | null>(null);
   const [confirm, setConfirm] = useState<{
     action: ConfirmAction;
@@ -278,10 +280,8 @@ export default function InboundPage() {
   const [confirmLoading, setConfirmLoading] = useState(false);
   // C1-06：重新生成密钥（凭据轮换）的幂等键，按入站目标绑定——
   // 超时后在同一弹窗重试复用同键，后端回放首轮回执不二次轮换。
-  const {
-    keyFor: regenKeyFor,
-    clearTargetIdemKey: clearRegenKey,
-  } = useTargetIdemKey();
+  const { keyFor: regenKeyFor, clearTargetIdemKey: clearRegenKey } =
+    useTargetIdemKey();
   const [toggling, setToggling] = useState<number | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -879,7 +879,7 @@ export default function InboundPage() {
           )}
           {!selectMode && (
             <div
-              className="grid grid-cols-3 gap-2"
+              className={`grid gap-2 ${item.external ? "grid-cols-3" : "grid-cols-4"}`}
               role="presentation"
               onClick={(e) => e.stopPropagation()}
             >
@@ -899,6 +899,15 @@ export default function InboundPage() {
               >
                 中转
               </Button>
+              {!item.external && (
+                <Button
+                  size="sm"
+                  variant="flat"
+                  onPress={() => setConnLogFor(item)}
+                >
+                  连接日志
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="flat"
@@ -1546,6 +1555,11 @@ export default function InboundPage() {
                     onPress: () => setSplitting(sheetItem),
                   },
                   {
+                    key: "connlog",
+                    label: "连接日志",
+                    onPress: () => setConnLogFor(sheetItem),
+                  },
+                  {
                     key: "details",
                     label: "参数",
                     onPress: () => setDetails(sheetItem),
@@ -1718,13 +1732,20 @@ export default function InboundPage() {
               </p>
             )}
             {sheetItem.remark && (
-              <p className="text-xs font-semibold text-foreground">{sheetItem.remark}</p>
+              <p className="text-xs font-semibold text-foreground">
+                {sheetItem.remark}
+              </p>
             )}
           </div>
         )}
       </ActionSheet>
 
       <ShareModal item={sharing} onClose={() => setSharing(null)} />
+      <ConnLogModal
+        item={connLogFor}
+        nodes={nodes}
+        onClose={() => setConnLogFor(null)}
+      />
       <SplitModal
         categories={caps?.splitCategories ?? []}
         inbounds={inbounds}

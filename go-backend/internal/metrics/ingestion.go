@@ -65,7 +65,10 @@ type IngestionService struct {
 	// lastBytes; it decides what a counter regression means.
 	lastBytes map[int64][2]int64
 	lastBoot  map[int64]string
-	traffic   map[trafficKey][2]int64
+	// lastSeen 是每节点上一条指标上报的面板时刻：入站连接日志的
+	// boot 结清以其为「最后已知时刻」（设计 §4.6①）。
+	lastSeen map[int64]int64
+	traffic  map[trafficKey][2]int64
 
 	// lastFullVacuum gates the package K SQLite full-VACUUM path
 	// (legacy auto_vacuum=NONE databases) to at most one run per
@@ -80,6 +83,7 @@ func NewIngestionService(repo *repo.Repository) *IngestionService {
 		flushInterval: 30 * time.Second,
 		lastBytes:     map[int64][2]int64{},
 		lastBoot:      map[int64]string{},
+		lastSeen:      map[int64]int64{},
 		traffic:       map[trafficKey][2]int64{},
 	}
 }
@@ -222,9 +226,26 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 		t[1] = repo.SaturatingAddInt64(t[1], counterDeltaForBoot(prev[1], m.NetOutBytes, s.lastBoot[nodeID], info.BootID))
 		s.traffic[k] = t
 	}
+	prevBoot := s.lastBoot[nodeID]
+	prevSeen := s.lastSeen[nodeID]
 	s.lastBytes[nodeID] = [2]int64{m.NetInBytes, m.NetOutBytes}
 	s.lastBoot[nodeID] = info.BootID
+	s.lastSeen[nodeID] = m.Timestamp
 	s.nodeBufferMu.Unlock()
+
+	// 入站连接日志的僵尸结清（设计 §4.6①）：boot_id 被证明变化
+	// （两侧都带 id 且不同，与 counterDeltaForBoot 的证明口径一
+	// 致）即该节点 agent 已重启，其名下仍 open 的连接行批量置
+	// interrupted，end_time 记面板最后收到旧 boot 消息的时刻
+	// （prevSeen，最后已知时刻，不冒充真实断开）。未证明的变化
+	// （任一侧缺 id）不动行，靠 24h 清道夫兜底。
+	if prevBoot != "" && info.BootID != "" && prevBoot != info.BootID && s.repo != nil {
+		if n, err := s.repo.InterruptOpenInboundConnLogs(nodeID, prevSeen); err != nil {
+			log.Printf("connlog boot interrupt failed node_id=%d err=%v", nodeID, err)
+		} else if n > 0 {
+			log.Printf("connlog boot interrupt node_id=%d interrupted=%d last_known=%d", nodeID, n, prevSeen)
+		}
+	}
 
 	if shouldFlush {
 		go s.flushNodeMetrics()
@@ -302,6 +323,17 @@ func (s *IngestionService) retentionDaysFromConfig() int {
 	return monitoring.MonitoringRetentionDaysFromConfigMap(cfg)
 }
 
+func (s *IngestionService) connlogRetentionDaysFromConfig() int {
+	if s == nil || s.repo == nil {
+		return monitoring.DefaultConnlogRetentionDays
+	}
+	cfg, err := s.repo.GetConfigsByNames([]string{monitoring.ConfigConnlogRetentionDays})
+	if err != nil {
+		return monitoring.DefaultConnlogRetentionDays
+	}
+	return monitoring.ConnlogRetentionDaysFromConfigMap(cfg)
+}
+
 func (s *IngestionService) pruneMetricsAt(now time.Time) {
 	cutoff := now.Add(-time.Duration(s.retentionDaysFromConfig()) * 24 * time.Hour).UnixMilli()
 	if s.repo == nil {
@@ -328,6 +360,18 @@ func (s *IngestionService) pruneMetricsAt(now time.Time) {
 	}
 	if err := s.repo.PruneNodeTraffic(now.Add(-NodeTrafficRetention).UnixMilli()); err != nil {
 		log.Printf("monitoring prune failed op=node_traffic err=%v", err)
+	}
+	// 入站连接日志（设计 §5.2/§4.6③）：独立保留期（不随监控保留
+	// 放大）＋每入站行数帽双限，另加 24h 僵尸 open 行清道夫。
+	connlogCutoff := now.Add(-time.Duration(s.connlogRetentionDaysFromConfig()) * 24 * time.Hour).UnixMilli()
+	if _, err := s.repo.PruneInboundConnLogsBefore(connlogCutoff); err != nil {
+		log.Printf("connlog prune failed op=inbound_conn_log.time err=%v", err)
+	}
+	if _, err := s.repo.PruneInboundConnLogsOverCap(repo.ConnlogPerInboundRowCap); err != nil {
+		log.Printf("connlog prune failed op=inbound_conn_log.cap err=%v", err)
+	}
+	if _, err := s.repo.InterruptStaleOpenInboundConnLogs(now.Add(-24 * time.Hour).UnixMilli()); err != nil {
+		log.Printf("connlog prune failed op=inbound_conn_log.stale_open err=%v", err)
 	}
 	s.reclaimSQLiteSpace(now)
 }

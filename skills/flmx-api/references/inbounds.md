@@ -58,6 +58,14 @@ Read / save split-routing rules for an inbound (which traffic exits via which
 outbound inbound). Rules pointing at deleted outbounds drop traffic instead of
 falling back to direct.
 
+## POST /api/v1/inbound/connlog
+
+Query one inbound's connection log (admin only): rows are client connections
+observed at the entry machine, attributed to this inbound by topology. Body:
+`inboundId`, `current`, `size`, optional `ip` (exact client-IP filter).
+Response data is a page object `{rows, dropped, retentionDays}` — `dropped` is
+the entry nodes' cumulative collector drop count for this inbound.
+
 ## POST /api/v1/inbound/reset-traffic
 
 Reset an inbound's traffic counters.

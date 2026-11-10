@@ -137,6 +137,13 @@ type Inbound struct {
 	// days.
 	// Non-Xray kernels have no equivalent and are refused at Normalize.
 	ConnIdleSeconds int `json:"connIdleSeconds,omitempty"`
+	// ConnLogEnabled is the per-inbound connection-log collection
+	// opt-in (design §4.5). Render-time only effect: while any inbound
+	// of a kernel carries it, that kernel's rendering gains the
+	// observation surface the agent-side parser consumes — sing-box
+	// log level debug, Xray access log on stdout. Off (the zero value)
+	// renders byte-identically to the pre-feature output.
+	ConnLogEnabled bool `json:"connLogEnabled,omitempty"`
 	// Users are extra clients (subscription users) rendered next to the
 	// inbound's own credentials. Filled in when building a kernel config.
 	Users []User `json:"-"`

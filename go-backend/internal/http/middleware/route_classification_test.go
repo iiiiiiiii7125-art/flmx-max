@@ -137,6 +137,7 @@ func pubNA(p string) routeEntry { return routeEntry{p, classPublic, gateNonAPI} 
 var routeClassification = []routeEntry{
 	// ---- 公开面：shouldSkip 免检（凭据自理或设计公开）----
 	pub("/flow/config"), pub("/flow/test"), pub("/flow/upload"), pub("/flow/upload/v2"),
+	pub("/flow/connlog/v2"),
 	pub("/api/v1/open_api/gh/"), pub("/api/v1/open_api/sub/"), pub("/api/v1/open_api/sub_store"),
 	pub("/api/v1/captcha/check"), pub("/api/v1/captcha/verify"),
 	pub("/api/v1/user/login"),
@@ -157,6 +158,7 @@ var routeClassification = []routeEntry{
 	adm("/api/v1/backup/import-auto-backup/status"), adm("/api/v1/backup/restore"),
 	adm("/api/v1/config/update"), adm("/api/v1/config/update-single"),
 	adm("/api/v1/inbound/batch-delete"), adm("/api/v1/inbound/batch-toggle"),
+	adm("/api/v1/inbound/connlog"),
 	adm("/api/v1/inbound/create"), adm("/api/v1/inbound/delete"),
 	adm("/api/v1/inbound/external/update"), adm("/api/v1/inbound/import"),
 	adm("/api/v1/inbound/list"), adm("/api/v1/inbound/probe"),

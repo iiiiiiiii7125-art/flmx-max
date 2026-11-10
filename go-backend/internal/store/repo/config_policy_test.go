@@ -181,7 +181,7 @@ func TestConfigPolicyFullTableEnumeration(t *testing.T) {
 		"notify_telegram_chat_id", "notify_webhook_url",
 	)
 	wantAuthenticated := keySet(
-		"allow_local_remote_addr", "captcha_enabled",
+		"allow_local_remote_addr", "captcha_enabled", "connlog_enabled", "connlog_retention_days",
 		"forward_compact_mode", "forward_group_collapsed_map",
 		"forward_group_order_map", "ip", "latency_targets",
 		"monitor_retention_days", "monitor_tunnel_quality_enabled",
@@ -197,7 +197,7 @@ func TestConfigPolicyFullTableEnumeration(t *testing.T) {
 		"service_monitor_worker_limit", "subscription_front_urls",
 	)
 	wantRequired := keySet(
-		"jwt_secret", "monitor_retention_days",
+		"connlog_retention_days", "jwt_secret", "monitor_retention_days",
 		"monitor_tunnel_quality_enabled",
 		"monitor_tunnel_quality_interval_sec",
 	)

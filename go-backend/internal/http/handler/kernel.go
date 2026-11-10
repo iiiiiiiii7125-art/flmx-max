@@ -153,6 +153,11 @@ type inboundView struct {
 	// metered right now.
 	MeteringEnabled bool `json:"meteringEnabled"`
 	MeteringActive  bool `json:"meteringActive"`
+	// ConnLogEnabled is the per-inbound connection-log collection
+	// opt-in (design §4.5): while on, the inbound's kernel rendering
+	// carries the agent-side collection surface (sing-box debug log /
+	// Xray access log).
+	ConnLogEnabled bool `json:"connLogEnabled"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -198,6 +203,9 @@ type inboundRequest struct {
 	// MeteringEnabled is a pointer for the same reason: an edit that
 	// omits it keeps the SS subscription-metering switch as stored.
 	MeteringEnabled *bool `json:"meteringEnabled"`
+	// ConnLogEnabled is a pointer for the same reason: an edit that
+	// omits it keeps the connection-log collection opt-in as stored.
+	ConnLogEnabled *bool `json:"connLogEnabled"`
 }
 
 // ---- conversion ----
@@ -205,8 +213,8 @@ type inboundRequest struct {
 func inboundFromModel(row model.NodeInbound) (kernel.Inbound, error) {
 	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port,
 		AcceptProxyProtocol: row.AcceptProxyProtocol == 1, OutboundIPStrategy: row.OutboundIPStrategy,
-		ConnIdleSeconds: row.ConnIdleSeconds,
-		Companion:       row.CompanionOf > 0}
+		ConnIdleSeconds: row.ConnIdleSeconds, ConnLogEnabled: row.ConnLogEnabled == 1,
+		Companion: row.CompanionOf > 0}
 	if err := unmarshalOptional(row.Settings, &in.Settings); err != nil {
 		return in, fmt.Errorf("入站 %d settings 损坏: %v", row.ID, err)
 	}
@@ -898,6 +906,7 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			ConnIdleSeconds:    row.ConnIdleSeconds,
 			MeteringEnabled:    row.MeteringEnabled == 1,
 			MeteringActive:     meteringActive[row.ID],
+			ConnLogEnabled:     row.ConnLogEnabled == 1,
 		}
 		v.ShareAddress = inboundShareAddress(&row, node)
 		if v.SplitRules == nil {
@@ -1348,6 +1357,13 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// 用已定稿的内核形态 in 与落库行 row（与对账读到的形态一致）。
 	if req.MeteringEnabled != nil {
 		row.MeteringEnabled = boolToInt(*req.MeteringEnabled)
+	}
+	// 连接日志采集 opt-in（设计 §4.5）：无资格门——Xray 与 sing-box
+	// 两栈都有采集面；开关变化经下方 applyKernel 的渲染 hash 差异
+	// 自动触发重下发（开：sing-box 升 debug / Xray 开 access；关：
+	// 渲染回原状）。
+	if req.ConnLogEnabled != nil {
+		row.ConnLogEnabled = boolToInt(*req.ConnLogEnabled)
 	}
 	explicitMetering := req.MeteringEnabled != nil && *req.MeteringEnabled
 	if row.MeteringEnabled == 1 && !ssMeteringEligible(in) {
@@ -2227,8 +2243,28 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	if err != nil {
 		return nil, "", err
 	}
+	// 入站连接日志（U7）：有托管中转指向的入站是落地、非直连
+	// 入口（见 connlog_marks.go）。查询失败整单中止——标错会让
+	// agent 把上一跳地址当客户端采集，与白名单查询失败同口径。
+	relayTargets, err := h.connlogRelayTargetInboundIDs()
+	if err != nil {
+		return nil, "", fmt.Errorf("查询入站中转归属失败: %w", err)
+	}
+	chainTargets, err := h.connlogChainTargetInboundIDs()
+	if err != nil {
+		return nil, "", fmt.Errorf("查询入站链式归属失败: %w", err)
+	}
+	// 连接日志总开关（connlog_enabled）：关时 connlogEntries 恒
+	// 下发空集（清 agent 旧标记）、connLogInbounds 不写键，采
+	// 集全链停下（见 connlog_marks.go 的 connlogMasterEnabled）。
+	connlogMasterOn, err := h.connlogMasterEnabled()
+	if err != nil {
+		return nil, "", fmt.Errorf("查询连接日志总开关失败: %w", err)
+	}
 	inbounds := make([]kernel.Inbound, 0, len(rows))
+	connLogInbounds := make([]int64, 0, len(rows))
 	ports := make([]map[string]interface{}, 0, len(rows))
+	connlogEntries := make([]map[string]interface{}, 0, len(rows))
 	users := h.activeUsersByInbound(time.Now())
 	// A companion inbound renders only while its origin renders: if the
 	// origin is disabled (or gone), the companion must not keep serving
@@ -2298,6 +2334,15 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			}
 		}
 		inbounds = append(inbounds, in)
+		// 连接日志 opt-in 名单（U5↔U4 契约）：agent 内核日志解析器
+		// 只对名单内的入站 tag 产连接事件（ApplyRequest.connLogInbounds）。
+		// 名单只含渲染集内已开启采集的入站；伴生入站是系统派生监听、
+		// 非用户入口（设计 §2 形态 6），恒排除。名单为空时不写键——
+		// agent 解码为 nil 即空集、采集器随之停用，与「最后一个开关
+		// 关闭后采集收敛」同义。
+		if in.ConnLogEnabled && !in.Companion && connlogMasterOn {
+			connLogInbounds = append(connLogInbounds, in.ID)
+		}
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
 		if lo, hi := in.HopRange(); lo > 0 {
 			port["hopFrom"], port["hopTo"] = lo, hi
@@ -2319,6 +2364,17 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			port["allow"] = allow
 		}
 		ports = append(ports, port)
+		// U7 直连入口标记：渲染在册、非伴生、非导入、无托管中转
+		// 指向、且未声明「仅中转/白名单」面貌的入站，自身即客户
+		// 端入口（链式源入站同理：客户端连入的是它，出站指向只
+		// 作归属附加信息，不改变入口身份）。
+		if connlogMasterOn && row.CompanionOf == 0 && row.SourceID == 0 && !relayTargets[row.ID] && !chainTargets[row.ID] &&
+			row.RelayOnly == 0 && row.RelayWhitelist == 0 {
+			connlogEntries = append(connlogEntries, map[string]interface{}{
+				"inboundId": row.ID,
+				"tag":       in.Tag(),
+			})
+		}
 	}
 	// 1.7.7（KU5）：给 agent 下发的下载描述不再带面板配置的代理前
 	// 缀——「开启 GitHub 加速」设置已整体移除，proxy 恒为空（直连
@@ -2347,9 +2403,15 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		"hash":     rendered.Hash,
 		"enabled":  k.Enabled == 1 && !rendered.Idle,
 		"ports":    ports,
+		// U7：恒下发（可为空集）——拓扑变更后旧标记靠空集清除，
+		// 不靠缺省键猜测（见 connlog_marks.go）。
+		"connlogEntries": connlogEntries,
 	}
 	if len(rendered.UserMarks) > 0 {
 		payload["userMarks"] = rendered.UserMarks
+	}
+	if len(connLogInbounds) > 0 {
+		payload["connLogInbounds"] = connLogInbounds
 	}
 	if k.KernelType == kernel.TypeXray {
 		// The agent keeps the 分流 data files next to Xray up to date.

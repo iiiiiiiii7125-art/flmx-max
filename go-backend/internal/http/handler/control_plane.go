@@ -441,6 +441,15 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 
 	serviceBase := buildForwardServiceBaseWithResolvedUserTunnel(forward.ID, forward.UserID, userTunnelID)
 
+	// 入站连接日志（U7）：入口标记按当前拓扑现算（见
+	// connlog_marks.go）。查询失败即整单失败——带错标记下发会
+	// 让 agent 把上一跳当客户端采集，比同步失败更糟（fail-closed）。
+	entryForwardIDs, err := h.connlogEntryForwardIDs()
+	if err != nil {
+		return nil, err
+	}
+	connlogEntry := entryForwardIDs[forward.ID]
+
 	user, err := h.repo.GetUserByID(forward.UserID)
 	if err != nil {
 		return nil, err
@@ -507,7 +516,7 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if err != nil {
 			return nil, err
 		}
-		services := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, strings.TrimSpace(fp.InIP), runtimeLimiters)
+		services := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, strings.TrimSpace(fp.InIP), runtimeLimiters, connlogEntry)
 		_, err = h.sendNodeCommand(node.ID, method, services, true, false)
 		if err == nil && (method == "UpdateService" || method == "AddService") {
 			// R17-B：UpdateService 成功即 agent 对这些服务名的注册确认
@@ -601,7 +610,12 @@ func (h *Handler) fallbackForwardPortToDefaultBind(forward *forwardRecord, tunne
 	}
 
 	time.Sleep(150 * time.Millisecond)
-	defaultServices := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, "", runtimeLimiters)
+	// U7：回退重建同样按当前拓扑现算入口标记，与主同步路径同口径。
+	entryForwardIDs, err := h.connlogEntryForwardIDs()
+	if err != nil {
+		return "", err
+	}
+	defaultServices := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, "", runtimeLimiters, entryForwardIDs[forward.ID])
 	// R17-B：默认监听回退的 AddService 走幂等守卫；刚删过旧服务，
 	// freshAbsence=true（新鲜缺失证据），不得用旧确认跳过。
 	if _, err := h.guardedAddService(node.ID, defaultServices, "default-bind-fallback", true); err != nil {
@@ -2178,7 +2192,7 @@ func compactErrorMessage(msg string) string {
 	return strings.Join(strings.Fields(strings.ToLower(msg)), "")
 }
 
-func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel *tunnelRecord, node *nodeRecord, port int, bindIP string, runtimeLimiters forwardRuntimeLimiters) []map[string]interface{} {
+func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel *tunnelRecord, node *nodeRecord, port int, bindIP string, runtimeLimiters forwardRuntimeLimiters, connlogEntry bool) []map[string]interface{} {
 	protocols := []string{"tcp", "udp"}
 	services := make([]map[string]interface{}, 0, 2)
 	targets := splitRemoteTargets(forward.RemoteAddr)
@@ -2242,6 +2256,15 @@ func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel 
 			// agent 加载配置时收敛为全节点窗口（默认关，见
 			// doc/guide/forward.md「会话无进展拆除」）。
 			ensureServiceMetadata(service)["idleTimeout"] = node.IdleTimeoutSeconds
+		}
+		if mark := connlogEntryMetadata(connlogEntry, service["name"].(string)); mark != nil {
+			// 入站连接日志（U7）：托管中转的入口服务显式标记，
+			// agent 只对带标记的服务采集连接事件（见
+			// connlog_marks.go）。普通转发恒无此标记。
+			serviceMetadata := ensureServiceMetadata(service)
+			for k, v := range mark {
+				serviceMetadata[k] = v
+			}
 		}
 		if proxyProtocolSend > 0 {
 			handlerConfig := service["handler"].(map[string]interface{})
