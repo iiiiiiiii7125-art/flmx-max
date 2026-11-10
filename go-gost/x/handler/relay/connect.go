@@ -131,6 +131,12 @@ func (h *relayHandler) handleConnect(ctx context.Context, conn net.Conn, network
 			if _, err := resp.WriteTo(&rc.wbuf); err != nil {
 				return err
 			}
+			// F-212-B: do not let the cached response ride on the
+			// first payload byte in this direction — an eager peer
+			// connector drains it before any payload can flow.
+			if err := rc.flushHeader(); err != nil {
+				return err
+			}
 		}
 		conn = rc
 	default:
@@ -140,6 +146,10 @@ func (h *relayHandler) handleConnect(ctx context.Context, conn net.Conn, network
 			}
 			// cache the header
 			if _, err := resp.WriteTo(&rc.wbuf); err != nil {
+				return err
+			}
+			// F-212-B: flush now, see the udp branch above.
+			if err := rc.flushHeader(); err != nil {
 				return err
 			}
 			conn = rc
