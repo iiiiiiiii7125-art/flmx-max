@@ -735,7 +735,15 @@ rollback() {
     return 0
   fi
   log "用恢复后的配置重建旧容器..."
-  reconcile_network_label
+  # R3-SCRIPT-01：对账的拒绝结论必须被消费——旧实现裸调用在 set -e
+  # 下会在拒绝瞬间直接杀死脚本，回滚终态（rolled_back /
+  # rollback_failed）永不落盘、面板只能按心跳过期猜残留。此处消费
+  # 之：点名留痕后仍按恢复后的配置尝试重建（网络若仍被标签墙挡，
+  # 重建失败即按下方 rollback_failed 诚实收口，拒绝原因已在日志中
+  # 点名、人工处置指引齐备）。
+  if ! reconcile_network_label; then
+    log "警告: 回滚前网络标签对账被前置拒绝（原因见上），仍尝试按恢复后的配置重建旧容器"
+  fi
   if docker compose up -d --force-recreate --remove-orphans $UPGRADE_SERVICES >> "$LOGFILE" 2>&1 && wait_backend_healthy && wait_frontend_healthy; then
     write_status "false" "rolled_back"
     log "回滚完成：旧容器已按恢复后的配置重建并通过健康检查（.bak 保留）"
@@ -874,7 +882,9 @@ verify_landed_version() {
 # 子网由 compose 文件决定，不变）。删除失败（仍被项目外容器
 # 占用等）只点名告警并保留现状，
 # 后续 up 的成败仍按既有终态收口；日志给出字段级人工处置指引。
-# 标签相符或网络不存在时无操作。
+# 标签相符或网络不存在时无操作。返回码即守卫结论：主流程（pull
+# 后前置调用）与 rollback 两处调用点都必须消费——拒绝即中止/留痕，
+# 不许裸调用（R3-SCRIPT-01）。
 reconcile_network_label() {
   net_key=$(awk '/^networks:/{f=1; next} f && /^  [A-Za-z0-9_.-]+:/{k=$1; sub(/:$/, "", k); print k; exit} f && /^[^ ]/{exit}' docker-compose.yml 2>/dev/null || true)
   if [ -z "$net_key" ]; then
@@ -985,6 +995,22 @@ if ! timeout 1200 docker compose pull $UPGRADE_SERVICES >> "$LOGFILE" 2>&1; then
   exit 1
 fi
 
+# R3-SCRIPT-01：存量网络标签对账前置于一切会动服务的动作（快照停
+# 后端、force-recreate 重建），且其拒绝结论必须在此被消费。对账
+# 前置拒绝（项目外容器占用标签不符的存量网络）时：恢复升级前文件
+# （rollback files 语义——容器分毫未动）、写回滚终态、点名中止，
+# 绝不续行。旧实现把对账裸调用放在 up 之前且不消费返回码：set -e
+# 在拒绝瞬间静默杀死脚本，状态文件永不落终态、拒绝原因不进任何
+# 回执，面板只能按心跳过期把本次升级判作残留（且拒绝时服务虽未
+# 停、终态却全无交代）；若对账点再后移或 -e 失效则会带病续行到
+# up 才撞标签墙（2.1.1 事故形态）。对账通过（含就地删除标签不符
+# 的存量网络）后，快照与重建段照常。
+if ! reconcile_network_label; then
+  log "错误: 存量网络标签对账前置拒绝（原因见上），升级中止：未停任何服务、未做 DB 快照、未重建任何容器；请先按上文指引人工处理占用该网络的项目外容器，再重试升级"
+  rollback files
+  exit 1
+fi
+
 log "等待旧容器释放资源..."
 sleep 3
 
@@ -1039,7 +1065,8 @@ if [ -n "${FLMX_UPGRADE_SNAPSHOT_DIR:-}" ]; then
 fi
 
 log "重启服务（force-recreate）..."
-reconcile_network_label
+# 网络标签对账已在 pull 之后、一切动服务动作之前完成并消费结论
+# （R3-SCRIPT-01），此处直接重建。
 if ! docker compose up -d --force-recreate --remove-orphans $UPGRADE_SERVICES >> "$LOGFILE" 2>&1; then
   log "错误: 重启服务失败"
   rollback
