@@ -187,6 +187,15 @@ const diff = (a, b) => a.filter((v) => !b.includes(v));
 //     通道 warnings，不在本门普查内）。这 12 处以 GAP_REGISTRY
 //     缺口登记（见下），不假登记为已消费；消费接线是产品修复、
 //     落地后须升格回本册。
+//   2026-11-10 消费接线波（fix/r2-warn）处置完毕：
+//   - 8 个端点共 10 处调用点的消费已落地并升格回本册：
+//     /config/update、/config/update-single、/inbound/relay/create、
+//     /inbound/relay/delete、/user/delete、/node/update、
+//     /tunnel/user/remove、/forward/delete——呈现与既有消费点同形
+//     （成功分支内 res.warning 原样 toast 透出）；
+//   - /tunnel/delete（2 处）逐项核实定性为前端不可达（无封装、
+//     无调用面，UI 走 delete-with-forwards 的 data 通道），保留
+//     GAP 登记并改登记为不可达口径，见 GAP_REGISTRY 该条。
 const REGISTRY = [
   {
     producer: "go-backend/internal/http/handler/kernel.go",
@@ -307,7 +316,7 @@ const GAP_REGISTRY = [
     apiFn: null,
     calls: 2,
     callers: [],
-    gap: "无前端 API 封装、无任何调用面：UI 删隧道走 /tunnel/delete-with-forwards（data 通道 warnings 已消费），本端点的信封 warning 当前无 UI 消费面",
+    gap: "前端不可达（2026-11-10 消费接线波逐项核实定性）：后端路由 /api/v1/tunnel/delete 在册（handler.go Register），但前端无 API 封装、无任何调用面——src/api 只有 delete-preview／delete-with-forwards／batch-delete-preview／batch-delete-with-forwards 四个删除封装，端点完整串 \"/tunnel/delete\" 在 src 全域出现 0 次；UI 删隧道（tunnel.tsx）只走 deleteTunnelWithForwards，其 data.warnings 已在 tunnel.tsx 消费。故本端点信封 warning 无 UI 消费面属不可达而非被丢弃，不为过门硬造无用封装；本条保留 GAP 登记（apiFn=null），门继续以反向断言守：端点串一旦在前端出现即红，必须补封装＋消费并升格回 REGISTRY",
   },
 ];
 
