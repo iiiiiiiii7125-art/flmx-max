@@ -74,6 +74,12 @@ const (
 	// and the frontend value (150s) now match the C080 treatment and
 	// the exception is removed. Frontend 150s.
 	nodeInstallWriteDeadline = 180 * time.Second
+	// nodeSwapSet: the backend bound is nodeSwapSetTimeout (600s —
+	// the agent may have to fallocate/dd several GB on a slow disk,
+	// mkswap and swapon); the relief adds a minute of margin so a
+	// set that runs its full budget can still deliver its
+	// before/after receipt. Frontend >= 660s.
+	nodeSwapSetWriteDeadline = 660 * time.Second
 	// Diagnosis: the 120s request context (diagnosisRequestTimeout)
 	// stays as the designed work cap; only the outer write layer
 	// rises, to ~150s, so a diagnosis that runs its full budget can

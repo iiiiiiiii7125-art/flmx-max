@@ -48,6 +48,7 @@ var goldenCommandSet = []string{
 	"KernelApply", "KernelControl", "KernelStatus",
 	"PauseService", "ResumeService", "RollbackAgent",
 	"ServiceMonitorCheck", "SetProtocol", "SetRestartSchedule",
+	"SwapInfo", "SwapSet",
 	"TcpPing", "Traceroute",
 	"Tune", "TuneApply", "TuneCancel", "TuneProbe", "TuneStart", "TuneStatus",
 	"UdpPing", "UninstallAgent",
@@ -137,7 +138,7 @@ func agentCommandSet(t *testing.T) map[string]bool {
 	return set
 }
 
-var panelCommandShape = regexp.MustCompile(`^(Add|Update|Delete|Pause|Resume)[A-Z][A-Za-z0-9]*$|^(Tcp|Udp)[A-Z][A-Za-z0-9]*$|^Tune([A-Z][A-Za-z0-9]*)?$|^Kernel[A-Z][A-Za-z0-9]*$|^(Traceroute|ServiceMonitorCheck|SetProtocol|SetRestartSchedule|UpgradeAgent|RollbackAgent|UninstallAgent)$`)
+var panelCommandShape = regexp.MustCompile(`^(Add|Update|Delete|Pause|Resume)[A-Z][A-Za-z0-9]*$|^(Tcp|Udp)[A-Z][A-Za-z0-9]*$|^Tune([A-Z][A-Za-z0-9]*)?$|^Kernel[A-Z][A-Za-z0-9]*$|^Swap(Info|Set)$|^(Traceroute|ServiceMonitorCheck|SetProtocol|SetRestartSchedule|UpgradeAgent|RollbackAgent|UninstallAgent)$`)
 
 func panelCommandSet(t *testing.T) (map[string]bool, bool) {
 	t.Helper()

@@ -1446,7 +1446,7 @@ func isMutationCommand(commandType string) bool {
 		// 这一时序，此处是 agent 侧的兜底串行化（老面板/重连拦截再下发
 		// 时同样有序）；回执超时上面板按未确认登记待卸载，重连时再下
 		// 发，与离线口径一致。
-		"setprotocol", "setrestartschedule", "upgradeagent", "rollbackagent", "uninstallagent":
+		"setprotocol", "setrestartschedule", "swapset", "upgradeagent", "rollbackagent", "uninstallagent":
 		return true
 	default:
 		return false
@@ -1631,6 +1631,13 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 	case "SetRestartSchedule":
 		err = w.handleSetRestartSchedule(cmd.Data)
 		response.Type = "SetRestartScheduleResponse"
+
+	// 节点一键设置 Swap：SwapInfo 只读回现状，SwapSet 管理
+	// /swapfile 的建/改大小与 fstab 收敛（见 swap.go）。SwapSet
+	// 已归变更命令串行队列（见 isMutationCommand）。
+	case "SwapInfo", "SwapSet":
+		response.Type = cmd.Type + "Response"
+		response.Data, err = handleSwapCommandContext(ctx, cmd.Type, cmd.Data)
 
 	// 升级 Agent 命令（异步执行，不需要保存配置）
 	case "UpgradeAgent":
