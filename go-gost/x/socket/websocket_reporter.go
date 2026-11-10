@@ -2628,17 +2628,29 @@ func buildAgentRollbackScriptForCap(manager serviceManager, backupPath, binaryPa
 }
 
 // smokeTestAgentBinary verifies a downloaded binary actually executes on
-// this node (-V) before it is swapped in. A checksum proves integrity,
-// not executability (wrong-arch asset, corrupted UPX payload, libc
-// mismatch all pass sha256 and brick the node without this).
-func smokeTestAgentBinary(path string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "-V").CombinedOutput()
+// this node (-V) before it is swapped in, and that the version it
+// reports is the target version. A checksum proves integrity, not
+// executability (wrong-arch asset, corrupted UPX payload, libc
+// mismatch all pass sha256 and brick the node without this) — and a
+// checksum cannot catch a wrong-version asset published under the
+// target tag, which would otherwise swap in silently (C4-中·冒烟版本：
+// 错版资产以目标 tag 发布、与随附 sha 自洽时全链换入）。
+func smokeTestAgentBinary(path, wantVersion string) error {
+	got, err := probeAgentBinaryVersion(path)
 	if err != nil {
-		return fmt.Errorf("新版本二进制冒烟测试失败 (%s -V): %v, 输出: %s", path, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("新版本二进制冒烟测试失败 (%s -V): %v", path, err)
+	}
+	if normalizeAgentVersion(got) != normalizeAgentVersion(wantVersion) {
+		return fmt.Errorf("新版本二进制冒烟测试失败：自报版本 %s 与目标版本 %s 不一致，疑似错版资产", got, wantVersion)
 	}
 	return nil
+}
+
+// normalizeAgentVersion strips the optional "v" prefix so a panel
+// version ("2.1.3") and a binary banner ("v2.1.3" / "2.1.3") compare
+// equal in the smoke test and rollback pre-flight.
+func normalizeAgentVersion(v string) string {
+	return strings.TrimPrefix(strings.TrimSpace(v), "v")
 }
 
 // backupCurrentAgentBinary copies the running binary to the rollback path.
@@ -2732,9 +2744,9 @@ func hashFileSHA256(path string) (string, error) {
 
 // probeAgentBinaryVersion runs path -V and parses the version out
 // of the "gost <version> (<go version> <os>/<arch>)" banner the
-// agent prints for -V. The upgrade smoke test only checks
-// executability; the rollback pre-flight also needs the version so
-// the receipt can name the landing point.
+// agent prints for -V. The upgrade smoke test compares the probed
+// version against the target version; the rollback pre-flight also
+// needs the version so the receipt can name the landing point.
 func probeAgentBinaryVersion(path string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -3626,9 +3638,11 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	}
 
 	// A11-132-02: 替换前先做可执行冒烟（-V）。sha256 只证明完整性，
-	// 不证明新二进制在本机可执行（错架构/UPX 损坏/libc 不兼容）。
+	// 不证明新二进制在本机可执行（错架构/UPX 损坏/libc 不兼容）；
+	// C4-中·冒烟版本：同时比对自报版本与目标版本，错版资产以目标
+	// tag 发布时在此拦截，不得换入。
 	w.sendUpgradeProgress("installing", 30, "冒烟测试新版本...")
-	if err := smokeTestAgentBinary(tmpPath); err != nil {
+	if err := smokeTestAgentBinary(tmpPath, version); err != nil {
 		staging.Discard()
 		return err
 	}

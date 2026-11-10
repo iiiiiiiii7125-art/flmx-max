@@ -189,17 +189,21 @@ func writeFakeBinary(t *testing.T, body string) string {
 }
 
 func TestSmokeTestAgentBinary(t *testing.T) {
-	ok := writeFakeBinary(t, "#!/bin/sh\necho 'flux_agent version 1.3.3'\nexit 0\n")
-	if err := smokeTestAgentBinary(ok); err != nil {
-		t.Fatalf("smoke test should pass for an executable binary: %v", err)
+	// C4-中·冒烟版本：冒烟须同时验可执行与自报版本＝目标版本。
+	ok := writeFakeBinary(t, "#!/bin/sh\necho 'gost 1.3.3 (go1.25.0 linux/amd64)'\nexit 0\n")
+	if err := smokeTestAgentBinary(ok, "1.3.3"); err != nil {
+		t.Fatalf("smoke test should pass for an executable binary reporting the target version: %v", err)
+	}
+	if err := smokeTestAgentBinary(ok, "1.3.4"); err == nil {
+		t.Fatal("smoke test must fail when the binary reports a different version than the target (wrong-version asset)")
 	}
 
 	bad := writeFakeBinary(t, "#!/bin/sh\nexit 3\n")
-	if err := smokeTestAgentBinary(bad); err == nil {
+	if err := smokeTestAgentBinary(bad, "1.3.3"); err == nil {
 		t.Fatal("smoke test must fail when -V exits non-zero (incompatible/corrupt binary)")
 	}
 
-	if err := smokeTestAgentBinary(filepath.Join(t.TempDir(), "missing")); err == nil {
+	if err := smokeTestAgentBinary(filepath.Join(t.TempDir(), "missing"), "1.3.3"); err == nil {
 		t.Fatal("smoke test must fail for a missing binary")
 	}
 }

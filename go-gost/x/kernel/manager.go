@@ -70,7 +70,11 @@ var (
 // or a container runtime name in the cgroup path); x/kernel cannot
 // import x/socket (socket imports kernel), so the probe lives here
 // too and both sides must keep the same notion of "container form".
-// The seams are variables so tests can pin every resolution branch.
+// F2-11: a bare "lxc" cgroup hit is not a container-form signal
+// (LXC system containers run the script-form install); see
+// socket/container.go for the rationale — both probes must stay
+// in sync. The seams are variables so tests can pin every
+// resolution branch.
 var (
 	kernelContainerMarkerPath = "/.dockerenv"
 	kernelContainerCgroupPath = "/proc/self/cgroup"
@@ -87,7 +91,7 @@ func probeKernelContainer() bool {
 		return false
 	}
 	for _, line := range strings.Split(string(b), "\n") {
-		if strings.Contains(line, "docker") || strings.Contains(line, "lxc") || strings.Contains(line, "kubepods") || strings.Contains(line, "containerd") {
+		if strings.Contains(line, "docker") || strings.Contains(line, "kubepods") || strings.Contains(line, "containerd") {
 			return true
 		}
 	}

@@ -206,3 +206,29 @@ func TestProbeAgentBinaryVersion(t *testing.T) {
 		t.Fatal("non-banner -V output must fail the probe")
 	}
 }
+
+// C4-中·冒烟版本：冒烟不仅验可执行，还须比对自报版本与目标版本——
+// 错版资产以目标 tag 发布（与随附 sha 自洽）时此前全链换入。
+func TestSmokeTestAgentBinaryVersion(t *testing.T) {
+	dir := t.TempDir()
+	bin := writeFakeAgentBinary(t, dir, "fake_agent", "2.1.3", "smoke")
+	if err := smokeTestAgentBinary(bin, "2.1.3"); err != nil {
+		t.Fatalf("matching version must pass the smoke test: %v", err)
+	}
+	// 目标带 v 前缀与自报不带 v 前缀须视为同一版本。
+	if err := smokeTestAgentBinary(bin, "v2.1.3"); err != nil {
+		t.Fatalf("v-prefixed target must match the same banner: %v", err)
+	}
+	if err := smokeTestAgentBinary(bin, "2.1.2"); err == nil {
+		t.Fatal("wrong-version asset must fail the smoke test")
+	} else if !strings.Contains(err.Error(), "2.1.3") || !strings.Contains(err.Error(), "2.1.2") {
+		t.Fatalf("mismatch error must name both versions, got %v", err)
+	}
+	bad := filepath.Join(dir, "bad_agent")
+	if err := os.WriteFile(bad, []byte("#!/bin/sh\necho hello\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := smokeTestAgentBinary(bad, "2.1.3"); err == nil {
+		t.Fatal("non-banner -V output must fail the smoke test")
+	}
+}
