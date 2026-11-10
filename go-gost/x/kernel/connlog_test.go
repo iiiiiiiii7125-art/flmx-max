@@ -8,22 +8,28 @@ import (
 	"time"
 )
 
-// Real log lines captured from sing-box 1.14.4 / 1.12.8 and Xray
-// 26.11.9 binaries (design U4 sampling run, 2026-11-09); the
-// parser's grammar is pinned to these shapes.
+// Sing-box fixture lines below are in the real LEVEL[uptime]
+// [connID elapsed] shape (LIVE-215 true-machine 1.14.4 lines pin
+// the grammar; see TestSingboxReal1144Lines). The pre-fix fixtures
+// carried the fabricated bare "LEVEL [id elapsed]" shape (no
+// [uptime] bracket, never emitted by any sing-box version — see
+// sbLineRe) and were migrated by inserting the [0000] uptime
+// bracket the real logger always emits; ids, elapsed values,
+// subsystems and messages are unchanged. The Xray lines are
+// untouched (out of scope for this fix).
 const (
-	sbOpenSlow   = "+0000 2026-11-09 21:25:34 INFO [431050131 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:54754"
-	sbToSlow     = "+0000 2026-11-09 21:25:34 INFO [431050131 0ms] inbound/socks[in-101]: inbound connection to 127.0.0.1:18080"
-	sbDownFin    = "+0000 2026-11-09 21:25:36 DEBUG [431050131 2.60s] connection: connection download finished"
-	sbUpFin      = "+0000 2026-11-09 21:25:36 DEBUG [431050131 2.65s] connection: connection upload finished"
-	sbOpenAuth   = "+0000 2026-11-09 21:25:35 INFO [3060665359 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:57134"
-	sbAuthFail   = "+0000 2026-11-09 21:25:35 ERROR [3060665359 0ms] inbound/socks[in-101]: process connection from 127.0.0.1:57134: socks5: authentication failed, username=u1, password=hunter2pw"
-	sbOpenRefuse = "+0000 2026-11-09 21:25:35 INFO [4140354012 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:57144"
-	sbRefused    = "+0000 2026-11-09 21:25:35 ERROR [4140354012 3ms] connection: open connection to 127.0.0.1:19999 using outbound/direct[direct]: dial tcp 127.0.0.1:19999: connect: connection refused"
-	sbOpenSS     = "+0000 2026-11-09 21:25:35 INFO [2867101150 0ms] inbound/shadowsocks[in-102]: inbound connection from 127.0.0.1:39386"
-	sbSSFail     = "+0000 2026-11-09 21:25:35 ERROR [2867101150 0ms] inbound/shadowsocks[in-102]: process connection from 127.0.0.1:39386: shadowsocks: serve TCP from 127.0.0.1:39386: cipher: message authentication failed"
-	sbOpenPkt    = "+0000 2026-11-09 21:25:36 INFO [2803896598 0ms] inbound/socks[in-101]: inbound packet connection from 127.0.0.1:40000"
-	sbPktFin     = "+0000 2026-11-09 21:25:38 DEBUG [2803896598 2.60s] connection: packet download finished"
+	sbOpenSlow   = "+0000 2026-11-09 21:25:34 INFO[0000] [431050131 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:54754"
+	sbToSlow     = "+0000 2026-11-09 21:25:34 INFO[0000] [431050131 0ms] inbound/socks[in-101]: inbound connection to 127.0.0.1:18080"
+	sbDownFin    = "+0000 2026-11-09 21:25:36 DEBUG[0000] [431050131 2.60s] connection: connection download finished"
+	sbUpFin      = "+0000 2026-11-09 21:25:36 DEBUG[0000] [431050131 2.65s] connection: connection upload finished"
+	sbOpenAuth   = "+0000 2026-11-09 21:25:35 INFO[0000] [3060665359 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:57134"
+	sbAuthFail   = "+0000 2026-11-09 21:25:35 ERROR[0000] [3060665359 0ms] inbound/socks[in-101]: process connection from 127.0.0.1:57134: socks5: authentication failed, username=u1, password=hunter2pw"
+	sbOpenRefuse = "+0000 2026-11-09 21:25:35 INFO[0000] [4140354012 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:57144"
+	sbRefused    = "+0000 2026-11-09 21:25:35 ERROR[0000] [4140354012 3ms] connection: open connection to 127.0.0.1:19999 using outbound/direct[direct]: dial tcp 127.0.0.1:19999: connect: connection refused"
+	sbOpenSS     = "+0000 2026-11-09 21:25:35 INFO[0000] [2867101150 0ms] inbound/shadowsocks[in-102]: inbound connection from 127.0.0.1:39386"
+	sbSSFail     = "+0000 2026-11-09 21:25:35 ERROR[0000] [2867101150 0ms] inbound/shadowsocks[in-102]: process connection from 127.0.0.1:39386: shadowsocks: serve TCP from 127.0.0.1:39386: cipher: message authentication failed"
+	sbOpenPkt    = "+0000 2026-11-09 21:25:36 INFO[0000] [2803896598 0ms] inbound/socks[in-101]: inbound packet connection from 127.0.0.1:40000"
+	sbPktFin     = "+0000 2026-11-09 21:25:38 DEBUG[0000] [2803896598 2.60s] connection: packet download finished"
 
 	xrAccepted = "2026/11/09 21:39:56.020145 from tcp:127.0.0.1:55038 accepted tcp:127.0.0.1:18080 [in-201 >> direct]"
 	xrRejected = "2026/11/09 21:39:59.236063 from tcp:127.0.0.1:55040 rejected  proxy/socks: invalid username or password"
@@ -39,6 +45,59 @@ func newTestCollector(kernelType string, ids ...int64) (*connLogCollector, *Conn
 	c := newConnLogCollector(kernelType, buf)
 	c.setOptIns(connLogTags(ids))
 	return c, buf
+}
+
+// LIVE-215 true-machine captured lines (sing-box 1.14.4, grid 2A:
+// agent log ring on node 1, 2026-11-11). Verbatim, except the
+// finished line: the 2A evidence prints it as
+// "DEBUG[0025] [834714304 10.0s] connection upload/download finished"
+// (slash = either direction, subsystem prefix elided in the prose);
+// a literal slash line has no "tag: message" split and cannot occur
+// in sing-box output, so it is restored to the source-verified form
+// "connection: connection upload finished" (route/conn.go, per U4;
+// same form as sbUpFin). Level, uptime, id and elapsed are verbatim.
+const (
+	sbReal1144OpenSS  = "INFO[0015] [834714304 0ms] inbound/shadowsocks[in-69]: inbound connection from 127.0.0.1:30304"
+	sbReal1144Fin     = "DEBUG[0025] [834714304 10.0s] connection: connection upload finished"
+	sbReal1144OpenHy2 = "INFO[0026] [978362404 0ms] inbound/hysteria2[in-70]: inbound packet connection from 127.0.0.1:44244"
+)
+
+// TestSingboxReal1144Lines pins the parser to the sing-box 1.14.4
+// lines the LIVE-215 true machine actually emitted (grid 2A, red 2):
+// LEVEL[uptime] [connID elapsed], no wall-clock prefix. The old
+// grammar (LEVEL [connID elapsed], no [uptime] bracket) never
+// matched these lines, so the whole direct sing-box path was blind.
+func TestSingboxReal1144Lines(t *testing.T) {
+	c, buf := newTestCollector("singbox", 69, 70)
+	c.beginGeneration("singbox", time.UnixMilli(utcMs(30)))
+	now := time.UnixMilli(utcMs(40))
+	if !c.FeedAs("singbox", sbReal1144OpenSS, now) {
+		t.Fatal("real 1.14.4 SS open line not consumed")
+	}
+	if !c.FeedAs("singbox", sbReal1144Fin, now) {
+		t.Fatal("real 1.14.4 finished line not consumed")
+	}
+	if !c.FeedAs("singbox", sbReal1144OpenHy2, now) {
+		t.Fatal("real 1.14.4 Hy2 packet open line not consumed")
+	}
+	evs := buf.Drain(0)
+	if len(evs) != 3 {
+		t.Fatalf("events = %d, want 3 (SS open+close, Hy2 open): %+v", len(evs), evs)
+	}
+	open, cls, hy2 := evs[0], evs[1], evs[2]
+	if open.Type != ConnEventOpen || open.EntryID != "in-69" || open.ClientIP != "127.0.0.1" ||
+		open.ClientPort != 30304 || open.Network != "tcp" || open.SessionKind != ConnSessionKindTCP ||
+		open.StartMs != utcMs(40) {
+		t.Errorf("SS open event wrong: %+v", open)
+	}
+	if cls.Type != ConnEventClose || cls.ConnID != open.ConnID || cls.Status != ConnStatusClosed ||
+		cls.StartMs != utcMs(40) || cls.EndMs != utcMs(40)+10000 {
+		t.Errorf("SS close event wrong (kernel-reported 10.0s elapsed): %+v", cls)
+	}
+	if hy2.Type != ConnEventOpen || hy2.EntryID != "in-70" || hy2.ClientIP != "127.0.0.1" ||
+		hy2.ClientPort != 44244 || hy2.Network != "udp" || hy2.SessionKind != ConnSessionKindKernel {
+		t.Errorf("Hy2 packet open event wrong: %+v", hy2)
+	}
 }
 
 func TestParseSbElapsed(t *testing.T) {
@@ -134,9 +193,9 @@ func TestSingboxTerminalKinds(t *testing.T) {
 	c, buf := newTestCollector("singbox", 101, 103, 104)
 	c.beginGeneration("singbox", time.UnixMilli(utcMs(30)))
 	// Stand-alone handshake-failure terminals (open line never seen).
-	c.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR [777001 0ms] inbound/tuic[in-103]: process connection from 10.0.0.9:5000: tuic: handshake failed", now)
-	c.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR [777002 0ms] inbound/hysteria2[in-104]: process connection from 10.0.0.10:5001: hysteria2: handshake failed", now)
-	c.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR [777003 0ms] inbound/socks[in-101]: process packet connection from 127.0.0.1:40000: packet: invalid header", now)
+	c.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR[0000] [777001 0ms] inbound/tuic[in-103]: process connection from 10.0.0.9:5000: tuic: handshake failed", now)
+	c.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR[0000] [777002 0ms] inbound/hysteria2[in-104]: process connection from 10.0.0.10:5001: hysteria2: handshake failed", now)
+	c.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR[0000] [777003 0ms] inbound/socks[in-101]: process packet connection from 127.0.0.1:40000: packet: invalid header", now)
 	evs := buf.Drain(0)
 	if len(evs) != 3 {
 		t.Fatalf("events = %d, want 3 stand-alone closes: %+v", len(evs), evs)
@@ -162,8 +221,8 @@ func TestSingboxTerminalKinds(t *testing.T) {
 	// Tracked QUIC stream closed by its terminal line keeps kernel_session.
 	c2, buf2 := newTestCollector("singbox", 103)
 	c2.beginGeneration("singbox", time.UnixMilli(utcMs(30)))
-	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:34 INFO [555 0ms] inbound/tuic[in-103]: inbound connection from 10.0.0.9:5000", now)
-	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR [555 0ms] inbound/tuic[in-103]: process connection from 10.0.0.9:5000: tuic: handshake failed", now)
+	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:34 INFO[0000] [555 0ms] inbound/tuic[in-103]: inbound connection from 10.0.0.9:5000", now)
+	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR[0000] [555 0ms] inbound/tuic[in-103]: process connection from 10.0.0.9:5000: tuic: handshake failed", now)
 	evs = buf2.Drain(0)
 	if len(evs) != 2 || evs[1].Type != ConnEventClose || evs[1].SessionKind != ConnSessionKindKernel {
 		t.Fatalf("tracked tuic terminal wrong: %+v", evs)
@@ -173,7 +232,7 @@ func TestSingboxTerminalKinds(t *testing.T) {
 func TestSingboxGenerationIsolation(t *testing.T) {
 	c, buf := newTestCollector("singbox", 101)
 	now := time.UnixMilli(utcMs(40))
-	open111 := "+0000 2026-11-09 21:25:34 INFO [111 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:50001"
+	open111 := "+0000 2026-11-09 21:25:34 INFO[0000] [111 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:50001"
 
 	// Generation 1: a connection left open at process exit is
 	// swept as interrupted with its last known timestamp.
@@ -190,7 +249,7 @@ func TestSingboxGenerationIsolation(t *testing.T) {
 	// Generation 2: the same raw id is a different connection.
 	c.beginGeneration("singbox", time.UnixMilli(2000))
 	c.FeedAs("singbox", open111, now)
-	c.FeedAs("singbox", "+0000 2026-11-09 21:25:36 DEBUG [111 1.20s] connection: connection download finished", now)
+	c.FeedAs("singbox", "+0000 2026-11-09 21:25:36 DEBUG[0000] [111 1.20s] connection: connection download finished", now)
 	evs = buf.Drain(0)
 	if len(evs) != 2 || evs[0].ConnID == gen1ID || evs[1].Status != ConnStatusClosed || evs[1].EndMs != utcMs(34)+1200 {
 		t.Fatalf("generation 2 pairing wrong: %+v (gen1 id %s)", evs, gen1ID)
@@ -200,8 +259,8 @@ func TestSingboxGenerationIsolation(t *testing.T) {
 	// first instead of corrupting it.
 	c2, buf2 := newTestCollector("singbox", 101)
 	c2.beginGeneration("singbox", time.UnixMilli(3000))
-	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:34 INFO [222 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:50002", now)
-	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:35 INFO [222 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:50003", now)
+	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:34 INFO[0000] [222 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:50002", now)
+	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:35 INFO[0000] [222 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:50003", now)
 	evs = buf2.Drain(0)
 	if len(evs) != 3 || evs[1].Type != ConnEventClose || evs[1].Status != ConnStatusInterrupted ||
 		evs[1].ClientPort != 50002 || evs[2].Type != ConnEventOpen || evs[2].ClientPort != 50003 {
@@ -215,7 +274,7 @@ func TestSingboxPacketAndQuicKinds(t *testing.T) {
 	now := time.UnixMilli(utcMs(40))
 	c.FeedAs("singbox", sbOpenPkt, now)
 	c.FeedAs("singbox", sbPktFin, now)
-	c.FeedAs("singbox", "+0000 2026-11-09 21:25:36 INFO [555 0ms] inbound/tuic[in-103]: inbound connection from 10.0.0.9:5000", now)
+	c.FeedAs("singbox", "+0000 2026-11-09 21:25:36 INFO[0000] [555 0ms] inbound/tuic[in-103]: inbound connection from 10.0.0.9:5000", now)
 	evs := buf.Drain(0)
 	if len(evs) != 3 {
 		t.Fatalf("events = %d, want 3: %+v", len(evs), evs)
@@ -265,12 +324,12 @@ func TestSingboxLineShapes(t *testing.T) {
 	c.beginGeneration("singbox", time.UnixMilli(utcMs(30)))
 	// ANSI-wrapped variant (colorised rendering): the connection
 	// id and level arrive wrapped in escapes and must still parse.
-	wrapped := "+0000 2026-11-09 21:25:33 \x1b[36mINFO\x1b[0m [\x1b[38;5;38m4294444415\x1b[0m 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:54750"
+	wrapped := "+0000 2026-11-09 21:25:33 \x1b[36mINFO[0000]\x1b[0m [\x1b[38;5;38m4294444415\x1b[0m 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:54750"
 	if !c.FeedAs("singbox", wrapped, time.UnixMilli(utcMs(40))) {
 		t.Fatal("ANSI-wrapped line not consumed")
 	}
 	// No timestamp prefix (log.timestamp=false): recvAt is the clock.
-	plain := "INFO [777 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:40001"
+	plain := "INFO[0000] [777 0ms] inbound/socks[in-101]: inbound connection from 127.0.0.1:40001"
 	recv := time.UnixMilli(123456789)
 	if !c.FeedAs("singbox", plain, recv) {
 		t.Fatal("timestamp-less line not consumed")

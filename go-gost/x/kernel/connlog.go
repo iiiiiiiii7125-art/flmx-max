@@ -407,9 +407,18 @@ func (c *connLogCollector) FeedAs(proc, line string, recvAt time.Time) bool {
 
 // sbLineRe splits a sing-box log line: an optional "+0000
 // 2026-11-09 21:25:33" timestamp prefix (log.timestamp rendering),
-// the level, and the "[<conn id> <elapsed>]" connection-context
-// header. Lines without the header are not per-connection lines.
-var sbLineRe = regexp.MustCompile(`^(?:([+-]\d{4}) (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) )?(TRACE|DEBUG|INFO|WARN|ERROR|PANIC|FATAL) \[(\d+) ([^\] ]+)\] (.*)$`)
+// the level with its seconds-since-start bracket glued on
+// ("INFO[0015]"), and the "[<conn id> <elapsed>]"
+// connection-context header. Lines without the header are not
+// per-connection lines. The [uptime] bracket is mandatory: it is
+// part of sing-box's default text output from 1.0.5 (real output
+// already shows INFO[0000]/WARN[0000], 2022-09-26) through 1.14.4
+// (LIVE-215 true-machine lines show INFO[0015]/DEBUG[0025]).
+// The earlier grammar's bare "LEVEL [id elapsed]" shape (no
+// [uptime] bracket) never existed in real sing-box output — it was
+// a shorthand copied from the design doc into the regex and the
+// fixtures — so it is deleted, not kept as an alternative.
+var sbLineRe = regexp.MustCompile(`^(?:([+-]\d{4}) (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) )?(TRACE|DEBUG|INFO|WARN|ERROR|PANIC|FATAL)\[\d+\] \[(\d+) ([^\] ]+)\] (.*)$`)
 
 // sbInboundRe extracts type and tag from an "inbound/<type>[<tag>]"
 // subsystem name.
