@@ -215,20 +215,49 @@ export function ConnLogModal({
   // Direct kernel collection is opt-in (design §4.5); relay-entry
   // records are collected regardless of the switch.
   const directNotOptedIn = item?.connLogEnabled === false;
+  // D-05: these morphologies never produce direct records — the backend
+  // U7 entry list excludes them (kernel.go:2371), so the switch changes
+  // nothing for them. Relay landing covers live relays (relayCount)
+  // and dead ones (relayInvalidCount): the backend target set takes
+  // all managed relays, not only live ones. Chain targets are the
+  // fourth morphology but are not visible from this modal's props
+  // (item + nodes only, no inbound list), so they keep the generic
+  // empty state until a caller passes the list or a backend flag.
+  const noDirectRecords =
+    item != null &&
+    (item.relayOnly ||
+      item.relayCount > 0 ||
+      (item.relayInvalidCount ?? 0) > 0 ||
+      item.external);
+  const noDirectReason = item?.relayOnly
+    ? "仅中转入站"
+    : item != null &&
+        (item.relayCount > 0 || (item.relayInvalidCount ?? 0) > 0)
+      ? "中转落地目标"
+      : item?.external
+        ? "导入入站"
+        : null;
+  const showNoDirectEmptyState =
+    !loading && !error && rows.length === 0 && noDirectRecords;
   const showOptInEmptyState =
     !loading && !error && rows.length === 0 && directNotOptedIn;
 
   const renderStatus = (row: InboundConnLogItem) => {
     if (row.sessionKind === "event_only") {
       return (
-        <Chip size="sm" variant="flat">
+        <Chip className="whitespace-nowrap" size="sm" variant="flat">
           连接事件
         </Chip>
       );
     }
     if (row.status === "open") {
       return (
-        <Chip color="success" size="sm" variant="flat">
+        <Chip
+          className="whitespace-nowrap"
+          color="success"
+          size="sm"
+          variant="flat"
+        >
           <span className="flex items-center gap-1.5">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
             连接中
@@ -238,14 +267,19 @@ export function ConnLogModal({
     }
     if (row.status === "interrupted") {
       return (
-        <Chip color="warning" size="sm" variant="flat">
+        <Chip
+          className="whitespace-nowrap"
+          color="warning"
+          size="sm"
+          variant="flat"
+        >
           已中断
         </Chip>
       );
     }
 
     return (
-      <Chip size="sm" variant="flat">
+      <Chip className="whitespace-nowrap" size="sm" variant="flat">
         已断开
       </Chip>
     );
@@ -344,9 +378,9 @@ export function ConnLogModal({
                 className="min-w-[40rem]"
                 classNames={{
                   wrapper:
-                    "bg-transparent p-0 shadow-none border-none overflow-auto rounded-2xl",
-                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px]",
-                  td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0",
+                    "bg-transparent p-0 shadow-none border-none overflow-x-auto rounded-2xl",
+                  th: "bg-transparent text-foreground font-semibold text-sm border-b border-white/20 py-3 uppercase tracking-wider first:rounded-tl-[24px] last:rounded-tr-[24px] whitespace-nowrap",
+                  td: "py-3 border-b border-divider/50 group-data-[last=true]:border-b-0 whitespace-nowrap",
                   tr: "hover:bg-white/40 transition-colors",
                 }}
               >
@@ -395,10 +429,15 @@ export function ConnLogModal({
                         )}
                       </TableCell>
                       <TableCell>
-                        <span className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-1.5 whitespace-nowrap">
                           {renderDuration(row)}
                           {isSessionKind(row) && (
-                            <Chip color="secondary" size="sm" variant="flat">
+                            <Chip
+                              className="whitespace-nowrap"
+                              color="secondary"
+                              size="sm"
+                              variant="flat"
+                            >
                               会话
                             </Chip>
                           )}
@@ -434,6 +473,16 @@ export function ConnLogModal({
                 </p>
               )}
             </>
+          ) : showNoDirectEmptyState ? (
+            <div className="py-10 text-center">
+              <p className="text-sm font-semibold">该入站无直连连接记录</p>
+              <p className="mx-auto mt-2 max-w-md text-xs font-semibold text-foreground">
+                该入站为{noDirectReason}，直连连接不会产生连接记录
+                {item?.external
+                  ? "：导入节点不由面板部署，连接日志不在面板采集。"
+                  : "；中转入口的连接记录请在对应的入口入站的连接日志中查看。"}
+              </p>
+            </div>
           ) : showOptInEmptyState ? (
             <div className="py-10 text-center">
               <p className="text-sm font-semibold">直连连接日志尚未开启</p>
@@ -472,7 +521,7 @@ export function ConnLogModal({
             </p>
             {dropped != null && dropped > 0 && (
               <p className="text-warning-700">
-                本节点采集曾丢弃 {dropped} 条记录（缓冲溢出时丢弃最旧）
+                本节点累计丢弃 {dropped} 条记录（清空连接行后归零）
               </p>
             )}
           </div>
