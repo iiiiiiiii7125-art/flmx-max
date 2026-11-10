@@ -275,7 +275,7 @@ jobs:
   # 引入，新增 FLMX 改动落到无测试包时须同步补测试。包总数与带测试
   # 包数不在散文里写死（AG-01：此处散文计数曾与实数漂移、而同文件
   # 的标记计数安然无恙），一律以下行 K11-COUNT 标记为唯一声称源。
-  # [K11-COUNT:x-tested=69] [K11-COUNT:x-untested=141] 上行包计数由
+  # [K11-COUNT:x-tested=73] [K11-COUNT:x-untested=138] 上行包计数由
   # scripts/check-doc-consistency.sh 第 10 项以 go list 机械对账
   # （R3-K11 / X02-002），增减包或测试文件须同步更新数字与标记。
   # 已知状态（B7 落地时）：fix 分支基线不含 B4，go-backend 全量测试含
