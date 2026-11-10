@@ -111,15 +111,15 @@ export function SwapModal({
     customNum <= MAX_CUSTOM_GB;
   const selectedGB = custom ? (customValid ? customNum : null) : choice;
 
-  // 还需占用的磁盘：托管文件是调大小——只补差额；非托管是另建——全额。
-  const managedSizeMB = info?.managedFilePresent
-    ? (info.entries.find((e) => e.name === "/swapfile")?.sizeMB ?? 0)
-    : 0;
-  const requiredMB =
-    info && selectedGB !== null
-      ? Math.max(0, selectedGB * 1024 - managedSizeMB)
-      : 0;
-  const shortMB = info ? Math.max(0, requiredMB - info.diskFreeMB) : 0;
+  // 空间预检逐字镜像 agent 权威校验（checkSwapCapacity，R3-NODE-01）：
+  // 可用＝磁盘剩余＋在盘 /swapfile 文件大小（在盘未启用也计入——执行
+  // 时先改名备份、重建后释放其占量）；需求＝目标＋256 MB 系统预留。
+  // 旧版 agent 回执无 fileSizeMB 时按 0 计（其 SwapSet 本就不可用、
+  // 会回版本过旧指引，不影响执行面判定）。
+  const fileSizeMB = info?.fileSizeMB ?? 0;
+  const availMB = info ? info.diskFreeMB + fileSizeMB : 0;
+  const needMB = selectedGB !== null ? selectedGB * 1024 + 256 : 0;
+  const shortMB = info && selectedGB !== null ? Math.max(0, needMB - availMB) : 0;
 
   const confirmDisabled =
     !info ||
@@ -342,9 +342,12 @@ export function SwapModal({
                 )}
                 {shortMB > 0 && selectedGB !== null && (
                   <p className="text-xs font-semibold text-danger-700">
-                    磁盘空间不足：设置 {selectedGB} GB 还需{" "}
-                    {formatMB(requiredMB)}，当前可用{" "}
-                    {formatMB(info.diskFreeMB)}，还差 {formatMB(shortMB)}
+                    磁盘空间不足：设置 {selectedGB} GB 需要至少{" "}
+                    {formatMB(needMB)} 可用（目标{" "}
+                    {formatMB(selectedGB * 1024)}＋预留 256 MB），当前可用{" "}
+                    {formatMB(availMB)}（磁盘剩余{" "}
+                    {formatMB(info.diskFreeMB)}＋现有 /swapfile 文件{" "}
+                    {formatMB(fileSizeMB)}），还差 {formatMB(shortMB)}
                     。请先清理节点磁盘或改选更小的大小。
                   </p>
                 )}
