@@ -17,8 +17,8 @@ import (
 //
 // 面板经 SwapInfo / SwapSet 两条命令管理节点上的 /swapfile：
 //   - SwapInfo 只读回全机 swap 现状（/proc/swaps 全量条目，含非
-//     面板管理的分区/他文件 swap——只报不动）、磁盘剩余、总内存
-//     与 /swapfile 是否在场；
+//     面板管理的分区/他文件 swap——只报不动）、磁盘剩余、总内存、
+//     /swapfile 是否在场及其在盘大小（fileSizeMB）；
 //   - SwapSet {sizeGB} 把 /swapfile 建到/调整到目标大小：空间校验
 //     （目标＋256MB 预留）、swapoff 风险校验（现有已用量大于可用
 //     内存时拒绝，防 swapoff 把换出页压回内存压死小机）、重建、
@@ -63,6 +63,11 @@ type swapInfoReply struct {
 	DiskFreeMB         int64           `json:"diskFreeMB"`
 	MemTotalMB         int64           `json:"memTotalMB"`
 	ManagedFilePresent bool            `json:"managedFilePresent"`
+	// FileSizeMB 是 /swapfile 在磁盘上的实际文件大小（stat 口径，
+	// MB 向下取整）；文件不在盘为 0。与启用状态无关——在盘未启用
+	// 也回真实大小：SwapSet 容量校验把这块占量计入可用（重建时
+	// 释放），前端预检须凭此字段逐字镜像同一谓词（R3-NODE-01）。
+	FileSizeMB int64 `json:"fileSizeMB"`
 }
 
 // swapSetReply 是 SwapSet 成功回执：全机总量 before → after。
@@ -293,6 +298,7 @@ func (e swapEnv) info() (swapInfoReply, error) {
 		DiskFreeMB:         freeMB,
 		MemTotalMB:         st.memTotalMB,
 		ManagedFilePresent: st.fileOnDisk || st.managed != nil,
+		FileSizeMB:         st.fileSizeMB,
 	}, nil
 }
 
