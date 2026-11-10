@@ -142,7 +142,26 @@ func TestHandleAssociateSilentConnectorIsReaped(t *testing.T) {
 	}
 
 	// Renewals stop with the association: the count stays frozen.
+	// A tick that fired just before the deferred cancel lands can
+	// still be inside Renew when handleAssociate returns, and under
+	// load its increment can land a scheduling quantum after the
+	// count is first sampled — so first wait for the count to hold
+	// steady across several renew intervals (a loop still running
+	// at the renew interval can never hold steady that long), then
+	// assert the frozen count exactly as strictly as before.
 	frozen := fsd.renews.Load()
+	stableDeadline := time.Now().Add(2 * time.Second)
+	for {
+		time.Sleep(100 * time.Millisecond)
+		if got := fsd.renews.Load(); got == frozen {
+			break
+		} else {
+			frozen = got
+		}
+		if time.Now().After(stableDeadline) {
+			t.Fatalf("SD Renew count did not stabilize after teardown (last %d)", frozen)
+		}
+	}
 	time.Sleep(150 * time.Millisecond)
 	if got := fsd.renews.Load(); got != frozen {
 		t.Fatalf("SD Renew continued after teardown: %d -> %d", frozen, got)
