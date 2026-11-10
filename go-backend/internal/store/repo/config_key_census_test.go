@@ -70,7 +70,11 @@ import (
 // authenticated table (47 → 48) — the node page's display-group
 // section order, read via config/list like the forward page's
 // group-order keys before it.
-const configKeyRegistryBaseline = 48
+// feat/node-group-collapse: node_display_group_collapsed joins the
+// authenticated table (48 → 49) — the node page's collapsed-section
+// list (JSON label array), read/written through the same config
+// channel as the order list.
+const configKeyRegistryBaseline = 49
 
 var configKeyShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 

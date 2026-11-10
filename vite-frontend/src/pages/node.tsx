@@ -29,6 +29,7 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { useNavigate } from "react-router-dom";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Alert } from "@/shadcn-bridge/heroui/alert";
@@ -69,11 +70,14 @@ import {
   type GroupOpResult,
 } from "@/pages/node/group-manage-modal";
 import {
+  NODE_GROUP_COLLAPSED_CONFIG_KEY,
   NODE_GROUP_ORDER_CONFIG_KEY,
   UNGROUPED_LABEL,
   collectNodeGroupLabels,
+  isNodeGroupCollapsed,
   mergeNodeGroupRegistry,
   nodeGroupLabel,
+  parseNodeGroupCollapsed,
   parseNodeGroupOrder,
   segmentNodesByGroup,
 } from "@/pages/node/grouping";
@@ -314,6 +318,10 @@ export default function NodePage({
   // 展示分组段序（面板配置 node_display_group_order）：与延迟池同
   // 一次 getConfigs 读取载入，保存走 updateConfig 落服务端。
   const [groupOrder, setGroupOrder] = useState<string[]>([]);
+  // 展示分组折叠名单（面板配置 node_display_group_collapsed，与段
+  // 序同一读写通道）：元素为组名，未分组段记 ""。纯渲染状态——不
+  // 改分段、计数与多选集合，仅决定段体是否渲染。
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
   const [groupManageOpen, setGroupManageOpen] = useState(false);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
   const [groupMoving, setGroupMoving] = useState(false);
@@ -689,6 +697,9 @@ export default function NodePage({
           parseLatencyTargets(r.data[LATENCY_TARGETS_KEY]).length === 0,
         );
         setGroupOrder(parseNodeGroupOrder(r.data[NODE_GROUP_ORDER_CONFIG_KEY]));
+        setCollapsedGroups(
+          parseNodeGroupCollapsed(r.data[NODE_GROUP_COLLAPSED_CONFIG_KEY]),
+        );
       })
       .catch(() => {});
 
@@ -2085,6 +2096,73 @@ export default function NodePage({
     }
   }, []);
 
+  // 折叠名单落库（与段序同一 updateConfig 通道）：本地先行生效，
+  // 写失败回滚到上一份名单并提示，不让页面与服务端状态静默分叉。
+  const saveCollapsedGroups = async (next: string[]) => {
+    const prev = collapsedGroups;
+
+    setCollapsedGroups(next);
+    try {
+      const res = await updateConfig(
+        NODE_GROUP_COLLAPSED_CONFIG_KEY,
+        JSON.stringify(next),
+      );
+
+      if (res.code !== 0) throw new Error("save collapsed groups failed");
+    } catch {
+      setCollapsedGroups(prev);
+      toast.error("保存折叠状态失败，已恢复");
+    }
+  };
+  const toggleGroupCollapsed = (label: string) => {
+    void saveCollapsedGroups(
+      collapsedGroups.includes(label)
+        ? collapsedGroups.filter((item) => item !== label)
+        : [...collapsedGroups, label],
+    );
+  };
+  // 全部折叠以当前渲染段为准写名单（顺带清掉已不存在组的陈旧项）；
+  // 全部展开即清空名单。
+  const collapseAllGroups = () => {
+    if (!groupSections) return;
+    void saveCollapsedGroups(groupSections.map((section) => section.label));
+  };
+  const expandAllGroups = () => {
+    void saveCollapsedGroups([]);
+  };
+  // 改名/删组后折叠名单跟随：改名把旧名原位换新名，删组摘除该名；
+  // 尽力写回（失败时以服务端名单为准，下次载入自愈），不阻塞主操作
+  // 的回执。函数式更新保证拿到的是最新名单。
+  const remapCollapsedAfterRename = useCallback(
+    (oldName: string, newName: string) => {
+      setCollapsedGroups((prev) => {
+        if (!prev.includes(oldName)) return prev;
+        const next = prev.map((label) => (label === oldName ? newName : label));
+
+        void updateConfig(
+          NODE_GROUP_COLLAPSED_CONFIG_KEY,
+          JSON.stringify(next),
+        ).catch(() => {});
+
+        return next;
+      });
+    },
+    [],
+  );
+  const dropCollapsedAfterDelete = useCallback((name: string) => {
+    setCollapsedGroups((prev) => {
+      if (!prev.includes(name)) return prev;
+      const next = prev.filter((label) => label !== name);
+
+      void updateConfig(
+        NODE_GROUP_COLLAPSED_CONFIG_KEY,
+        JSON.stringify(next),
+      ).catch(() => {});
+
+      return next;
+    });
+  }, []);
+
   // 分组管理三操作（v2）：名单以服务端回执的 order 为准刷新；改名/
   // 删组级联改了成员标签，静默重拉节点列表对齐段与计数。
   const handleCreateGroup = useCallback(
@@ -2113,6 +2191,7 @@ export default function NodePage({
           return { ok: false, msg: res.msg || "改名失败" };
         }
         if (res.data?.order) setGroupOrder(res.data.order);
+        remapCollapsedAfterRename(oldName, newName);
         await loadNodes({ silent: true });
         const count = res.data?.updatedCount ?? 0;
 
@@ -2127,7 +2206,7 @@ export default function NodePage({
         return { ok: false, msg: "网络错误，请重试" };
       }
     },
-    [loadNodes],
+    [loadNodes, remapCollapsedAfterRename],
   );
   const handleDeleteGroup = useCallback(
     async (name: string): Promise<GroupOpResult> => {
@@ -2138,6 +2217,7 @@ export default function NodePage({
           return { ok: false, msg: res.msg || "删除失败" };
         }
         if (res.data?.order) setGroupOrder(res.data.order);
+        dropCollapsedAfterDelete(name);
         await loadNodes({ silent: true });
         const count = res.data?.updatedCount ?? 0;
 
@@ -2152,7 +2232,7 @@ export default function NodePage({
         return { ok: false, msg: "网络错误，请重试" };
       }
     },
-    [loadNodes],
+    [loadNodes, dropCollapsedAfterDelete],
   );
 
   // 批量移入/移出分组：消费后端逐条回执（M-0051 口径）——只把成功
@@ -2383,6 +2463,30 @@ export default function NodePage({
               分组管理
             </Button>
           )}
+          {groupSections && (
+            <>
+              <Button
+                className="shrink-0"
+                isDisabled={groupSections.every((section) =>
+                  isNodeGroupCollapsed(collapsedGroups, section.label),
+                )}
+                size="sm"
+                variant="flat"
+                onPress={collapseAllGroups}
+              >
+                全部折叠
+              </Button>
+              <Button
+                className="shrink-0"
+                isDisabled={collapsedGroups.length === 0}
+                size="sm"
+                variant="flat"
+                onPress={expandAllGroups}
+              >
+                全部展开
+              </Button>
+            </>
+          )}
           <ViewModeToggle value={viewMode} onChange={setViewMode} />
         </PageToolbar>
       )}
@@ -2434,19 +2538,39 @@ export default function NodePage({
               }
             >
               {groupSections
-                ? groupSections.map((section) => (
-                    <Fragment key={section.label || "__ungrouped"}>
-                      <div className="col-span-full flex items-baseline gap-2 pt-2 first:pt-0">
-                        <h3 className="text-sm font-bold">
-                          {section.label || UNGROUPED_LABEL}
-                        </h3>
-                        <span className="text-xs font-semibold text-foreground">
-                          {section.nodes.length} 台
-                        </span>
-                      </div>
-                      {section.nodes.map((node) => renderNodeRow(node))}
-                    </Fragment>
-                  ))
+                ? groupSections.map((section) => {
+                    const collapsed = isNodeGroupCollapsed(
+                      collapsedGroups,
+                      section.label,
+                    );
+
+                    return (
+                      <Fragment key={section.label || "__ungrouped"}>
+                        <div className="col-span-full pt-2 first:pt-0">
+                          <button
+                            aria-expanded={!collapsed}
+                            className="flex w-full items-center gap-2 text-left"
+                            type="button"
+                            onClick={() => toggleGroupCollapsed(section.label)}
+                          >
+                            {collapsed ? (
+                              <ChevronRight className="h-4 w-4 shrink-0 text-foreground" />
+                            ) : (
+                              <ChevronDown className="h-4 w-4 shrink-0 text-foreground" />
+                            )}
+                            <span className="text-sm font-bold">
+                              {section.label || UNGROUPED_LABEL}
+                            </span>
+                            <span className="text-xs font-semibold text-foreground">
+                              {section.nodes.length} 台
+                            </span>
+                          </button>
+                        </div>
+                        {!collapsed &&
+                          section.nodes.map((node) => renderNodeRow(node))}
+                      </Fragment>
+                    );
+                  })
                 : displayNodes.map((node) => renderNodeRow(node))}
             </div>
           </SortableContext>

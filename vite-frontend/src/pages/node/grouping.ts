@@ -8,6 +8,17 @@
  */
 export const NODE_GROUP_ORDER_CONFIG_KEY = "node_display_group_order";
 
+/**
+ * Collapsed-section list, persisted server-side through the same
+ * panel-config channel as the section order (config key
+ * `node_display_group_collapsed`, value = JSON array of labels).
+ * The ungrouped section is recorded as the empty string "" — real
+ * group labels are never empty after trimming, so the encoding is
+ * unambiguous. Collapse is render state only: it never changes
+ * membership, counts, selection or ordering.
+ */
+export const NODE_GROUP_COLLAPSED_CONFIG_KEY = "node_display_group_collapsed";
+
 export const UNGROUPED_LABEL = "未分组";
 
 /** A node's effective label: trimmed, "" when ungrouped. */
@@ -62,6 +73,51 @@ export function parseNodeGroupOrder(raw: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Parses the persisted collapsed list (a JSON array of labels).
+ * Unlike the order parser, a single "" entry is meaningful (the
+ * ungrouped section) and is kept; other entries are trimmed,
+ * empties dropped, duplicates removed. Anything malformed
+ * degrades to an empty list — every section expanded — rather
+ * than failing to render. Entries naming groups that no longer
+ * exist are inert: they match no section, and re-creating a group
+ * with the same name restores its collapsed state.
+ */
+export function parseNodeGroupCollapsed(
+  raw: string | null | undefined,
+): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+
+    for (const item of parsed) {
+      if (typeof item !== "string") continue;
+      const label = item.trim();
+
+      if (!seen.has(label)) {
+        seen.add(label);
+        out.push(label);
+      }
+    }
+
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Whether the section with this label ("" = ungrouped) is collapsed. */
+export function isNodeGroupCollapsed(
+  collapsed: string[],
+  label: string,
+): boolean {
+  return collapsed.includes(label);
 }
 
 /**
