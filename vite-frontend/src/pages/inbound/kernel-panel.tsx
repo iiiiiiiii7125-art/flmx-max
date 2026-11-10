@@ -48,6 +48,8 @@ interface Props {
   installRequest: InstallRequest | null;
   onInstallRequestHandled: () => void;
   onChanged: () => void;
+  /** IRL-3：初载失败时空状态改判为加载失败（由 KernelsTab 传入）。 */
+  loadFailed?: boolean;
 }
 
 function shortVersion(v: string): string {
@@ -63,6 +65,7 @@ export function KernelPanel({
   installRequest,
   onInstallRequestHandled,
   onChanged,
+  loadFailed = false,
 }: Props) {
   const [sheetFor, setSheetFor] = useState<number | null>(null);
   const [releases, setReleases] = useState<{
@@ -370,9 +373,30 @@ export function KernelPanel({
 
       {kernels.length === 0 ? (
         <Card className="shadow-sm">
-          <CardBody className="text-center py-10 text-sm text-foreground">
-            还没有在任何节点上安装内核。点击“安装内核”，先在落地节点上安装
-            Xray，再到“入站”里创建节点。
+          <CardBody className="text-center py-10 text-sm text-foreground flex flex-col items-center justify-center gap-3">
+            {loadFailed ? (
+              <>
+                <p className="font-semibold text-danger-700">
+                  内核列表加载失败
+                </p>
+                <p>
+                  没能从面板取到内核列表，不能据此判断是否已安装内核；请点下方「重新加载」重试。
+                </p>
+                <Button
+                  color="danger"
+                  size="sm"
+                  variant="flat"
+                  onPress={() => onChanged()}
+                >
+                  重新加载
+                </Button>
+              </>
+            ) : (
+              <>
+                还没有在任何节点上安装内核。点击“安装内核”，先在落地节点上安装
+                Xray，再到“入站”里创建节点。
+              </>
+            )}
           </CardBody>
         </Card>
       ) : (

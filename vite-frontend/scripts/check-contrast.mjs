@@ -1327,7 +1327,7 @@ for (const [fg, bg, pinned] of TRAY_HOVER_PAIRS) {
 // 不计数（与 G5 门同口径）；globals.css 的 .tray-plate 定义
 // 住在 .css 内，天然不在 .ts/.tsx 普查面内。
 const TRAY_PLATE_REGISTERED = [
-  "src/pages/inbound/kernel-panel.tsx:358",
+  "src/pages/inbound/kernel-panel.tsx:361",
   "src/pages/config.tsx:1249",
 ];
 {
