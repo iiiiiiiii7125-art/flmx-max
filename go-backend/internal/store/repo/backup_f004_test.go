@@ -211,6 +211,7 @@ func TestBackupTableCoverage(t *testing.T) {
 		"nft_counter_state":        "nft 计数基线，运行时状态",
 		"nft_pending_delete":       "pending-delete 重试台账，运行时状态",
 		"node_uninstall":           "删服务器待卸载登记，运行时台账（180 天保留），非配置数据",
+		"node_pending_uninstall":   "待卸载四态登记（C4-G2），在途卸载操作运行时台账，非配置数据；随备份恢复会复活已失联的在途操作并误发未确认告警，下发时由管理员重新发起",
 		"node_upgrade_verification": "升级/回退落地核验台账，运行时簿记（A4-V-06）；随旧备份恢复会复活已过期的待核验行并误发未落地告警，下发时按次重建",
 		"node_seq":                 "agent 流量序号，运行时状态",
 		"traffic_stream_cursor":    "可靠上报 v2 流游标，运行时状态；备份恢复后游标回退/缺失由 reset_stream 自愈闭环处理（agent 换 stream 原字节重报），随备份搬运反而会与 agent spool 状态错位",
