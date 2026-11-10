@@ -16,6 +16,15 @@
 //   ③ 消费：每个 API 函数在 src/（api 层与 demo 适配器除外）的全部
 //      调用文件都必须实读 .warning，且登记册点名的消费文件必须确在
 //      调用之列——任一调用点只读 code/msg 即红。
+//   ④ 缺口登记（GAP）：T-001 新增的一批生产者，其前端调用点今天
+//      只读 code/msg、信封 warning 被静默丢弃（2026-11-10 合并树
+//      逐点独立核实，见 GAP_REGISTRY）。这类端点不得假登记为已
+//      消费，也不得静默漏登记：以 GAP 条目登记端点/API 函数/调
+//      用文件与缺口理由，门反向断言其调用点近处确无 .warning
+//      读——消费一旦落地，本门即红、必须把该条升格为正式消费
+//      登记（与 load-failure 门 missing→fixed 同口径）。无前端
+//      API 封装的端点以 apiFn=null 登记，门断言端点串在 src 全
+//      域确不存在——封装一旦出现即红、必须补消费登记。
 // 提取前先词法剥注释（与 check-route-lists 同实现）：注释掉的生产者
 // 或 .warning 读不得算数。
 //
@@ -156,17 +165,28 @@ const check = (label, ok, detail = "") => {
 const sorted = (arr) => [...arr].sort();
 const diff = (a, b) => a.filter((v) => !b.includes(v));
 
-// 登记册（RR4-C5-01 审计实测 3 处；W8 补登记 3 处）：新增 OKWithWarning
-// 生产者必须在此登记端点、API 函数与消费文件，并保证消费端实读
-// .warning。登记粒度为「一端点一登记」：同一生产者文件含多个端点
-// 时逐端点各登一条，calls 记该端点处理函数内的调用点数；调用点
-// 总数＝各条 calls 之和，须与后端普查实数相等。
+// 登记册（RR4-C5-01 审计实测 3 处；W8 补登记 3 处；2026-11-10
+// 合并树独立复核）：新增 OKWithWarning 生产者必须在此登记端点、
+// API 函数与消费文件，并保证消费端实读 .warning。登记粒度为
+// 「一端点一登记」：同一生产者文件含多个端点时逐端点各登一条，
+// calls 记该端点处理函数内的调用点数；调用点总数＝各条 calls
+// 之和（含 GAP 登记），须与后端普查实数相等。
 //   补登记（W8，修复波漏登记）：
 //   - mutations.go nodeDelete（/node/delete，F2-21 未勾卸载的残留
 //     说明）与 forwardForceDelete（/forward/force-delete，强制删
 //     除残留规则说明）——W2 新增生产者未登记；
 //   - user_subscription.go userSubscriptionSet（/user-subscription/set，
 //     S-001 撤销分配的「已复制链接不断」说明）——W3 新增生产者未登记。
+//   2026-11-10 复核订正：
+//   - nodeDelete 的 OKWithWarning 调用点实为 2 处（1622/1627，
+//     T-001 后其中一处带白名单刷新失败 note），calls 订正为 2；
+//   - W3 的 T-001 新增 12 处生产者（handler.go 3、kernel_relay.go
+//     2、mutations.go 7）的前端消费逐点核实后均未成立——调用点
+//     只读 code/msg，信封 warning 被丢弃；/tunnel/delete 更是无
+//     前端 API 封装（UI 走 /tunnel/delete-with-forwards 的 data
+//     通道 warnings，不在本门普查内）。这 12 处以 GAP_REGISTRY
+//     缺口登记（见下），不假登记为已消费；消费接线是产品修复、
+//     落地后须升格回本册。
 const REGISTRY = [
   {
     producer: "go-backend/internal/http/handler/kernel.go",
@@ -193,7 +213,7 @@ const REGISTRY = [
     producer: "go-backend/internal/http/handler/mutations.go",
     endpoint: "/node/delete",
     apiFn: "deleteNode",
-    calls: 1,
+    calls: 2,
     consumers: ["src/pages/node.tsx"],
   },
   {
@@ -209,6 +229,93 @@ const REGISTRY = [
     apiFn: "setUserSubscriptions",
     calls: 1,
     consumers: ["src/pages/subscription/assign.tsx"],
+  },
+];
+
+// GAP 登记册（2026-11-10 合并树逐点独立核实）：T-001 新增生产者中
+// 前端消费未成立的端点。每条登记 producer/endpoint/apiFn/calls 与
+// 实际调用文件 callers，并以 gap 写明缺口形态；门反向断言：
+//   - 条目必须带非空 gap 理由（不得静默豁免）；
+//   - apiFn 非空者：接线成立、实际调用文件集与 callers 逐项相等、
+//     且每个调用点后 60 行内确无对本次回执的 .warning 读——出现
+//     近处读即红，须把该条升格为 REGISTRY 消费登记；
+//   - apiFn=null 者（无前端封装）：端点串（含收尾引号的完整形）
+//     在 src/api 与全部调用面确不存在——出现即红，须补封装与
+//     消费登记。
+// 缺口本身是产品问题（信封 warning 被 UI 丢弃），修复归产品波次；
+// 本册只负责让缺口不可静默、不可腐烂。
+const GAP_REGISTRY = [
+  {
+    producer: "go-backend/internal/http/handler/handler.go",
+    endpoint: "/config/update",
+    apiFn: "updateConfigs",
+    calls: 1,
+    callers: ["src/pages/config.tsx"],
+    gap: "延迟优选丢弃告警（latencyChoiceDropWarning）：config.tsx handleSave 只读 code，成功即 toast 成功，warning 被丢弃",
+  },
+  {
+    producer: "go-backend/internal/http/handler/handler.go",
+    endpoint: "/config/update-single",
+    apiFn: "updateConfig",
+    calls: 2,
+    callers: ["src/pages/forward.tsx", "src/pages/node.tsx"],
+    gap: "同上 latencyChoiceDropWarning：两调用文件（分组顺序/折叠持久化）只读 code，warning 被丢弃",
+  },
+  {
+    producer: "go-backend/internal/http/handler/kernel_relay.go",
+    endpoint: "/inbound/relay/create",
+    apiFn: "createInboundRelay",
+    calls: 1,
+    callers: ["src/pages/inbound/relay-modal.tsx"],
+    gap: "T-001 白名单刷新失败 note：relay-modal 创建成功只 toast 成功，warning 被丢弃",
+  },
+  {
+    producer: "go-backend/internal/http/handler/kernel_relay.go",
+    endpoint: "/inbound/relay/delete",
+    apiFn: "deleteInboundRelay",
+    calls: 1,
+    callers: ["src/pages/inbound/relay-modal.tsx"],
+    gap: "T-001 白名单刷新失败 note：relay-modal 删除成功只 toast 成功，warning 被丢弃",
+  },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/user/delete",
+    apiFn: "deleteUser",
+    calls: 1,
+    callers: ["src/pages/user.tsx"],
+    gap: "T-001 白名单刷新失败 note：user.tsx 删除成功只 toast 成功，warning 被丢弃",
+  },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/node/update",
+    apiFn: "updateNode",
+    calls: 1,
+    callers: ["src/pages/node.tsx"],
+    gap: "T-001 白名单刷新失败 note：node.tsx 编辑保存成功只 toast 成功（同文件 .warning 读属 deleteNode/getNodeInstallCommand 调用点，不在本调用点近处），warning 被丢弃",
+  },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/tunnel/delete",
+    apiFn: null,
+    calls: 2,
+    callers: [],
+    gap: "无前端 API 封装、无任何调用面：UI 删隧道走 /tunnel/delete-with-forwards（data 通道 warnings 已消费），本端点的信封 warning 当前无 UI 消费面",
+  },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/tunnel/user/remove",
+    apiFn: "removeUserTunnel",
+    calls: 1,
+    callers: ["src/pages/user.tsx"],
+    gap: "T-001 白名单刷新失败 note：user.tsx 移除成功只 toast 成功，warning 被丢弃",
+  },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/forward/delete",
+    apiFn: "deleteForward",
+    calls: 2,
+    callers: ["src/pages/forward.tsx"],
+    gap: "T-001 白名单刷新失败 note：forward.tsx 常规删除成功只 toast 成功（同文件 .warning 读属 forceDeleteForward 调用点），warning 被丢弃",
   },
 ];
 
@@ -229,17 +336,23 @@ for (const file of goFiles) {
     censusCount += hits;
   }
 }
-const registryProducers = [...new Set(REGISTRY.map((r) => r.producer))];
+const registryProducers = [
+  ...new Set([
+    ...REGISTRY.map((r) => r.producer),
+    ...GAP_REGISTRY.map((r) => r.producer),
+  ]),
+];
 const registryCalls = REGISTRY.reduce((n, r) => n + (r.calls ?? 1), 0);
+const gapCalls = GAP_REGISTRY.reduce((n, r) => n + (r.calls ?? 1), 0);
 
 check(
-  `OKWithWarning 生产者文件集 ${registryProducers.length} 个（登记册）`,
+  `OKWithWarning 生产者文件集 ${registryProducers.length} 个（登记册＋GAP 登记）`,
   sorted(censusFiles).join() === sorted(registryProducers).join(),
   `未登记: ${diff(censusFiles, registryProducers).join(", ") || "无"}；已失效: ${diff(registryProducers, censusFiles).join(", ") || "无"}`,
 );
 check(
-  `OKWithWarning 调用点总数 ${registryCalls}（一处一登记）`,
-  censusCount === registryCalls,
+  `OKWithWarning 调用点总数 ${registryCalls + gapCalls}（消费登记 ${registryCalls}＋GAP 登记 ${gapCalls}，一处一登记）`,
+  censusCount === registryCalls + gapCalls,
   `实际 ${censusCount} 处`,
 );
 
@@ -278,7 +391,9 @@ const callerSrc = new Map(
 
 for (const entry of REGISTRY) {
   // ② 接线：API 函数定义体内含端点串
-  const defAt = apiSrc.indexOf(`export const ${entry.apiFn}`);
+  const defAt = apiSrc.search(
+    new RegExp(`export const ${entry.apiFn}\\b`),
+  );
   const defEnd =
     defAt < 0 ? -1 : apiSrc.indexOf("\nexport const ", defAt + 1);
   const defBody = defAt < 0 ? "" : apiSrc.slice(defAt, defEnd < 0 ? undefined : defEnd);
@@ -346,6 +461,95 @@ for (const entry of REGISTRY) {
     farSites.length === 0
       ? ""
       : `未读的调用点: ${farSites.map((h) => `${h.rel}:${h.lineNo}`).join(", ")}`,
+  );
+}
+
+// ⑤ GAP 登记双向断言：缺口在册且形态未变；消费落地即红、必须升格。
+for (const entry of GAP_REGISTRY) {
+  check(
+    `GAP 登记带缺口理由：${entry.endpoint}`,
+    typeof entry.gap === "string" && entry.gap.trim().length > 0,
+    "GAP 条目必须写明缺口形态，不得静默豁免",
+  );
+
+  if (entry.apiFn === null) {
+    // 无前端封装：端点完整串（含收尾引号，区别于 -preview /
+    // -with-forwards 等同前缀端点）在 src/api 与调用面确不存在。
+    const needle = `"${entry.endpoint}"`;
+    const inApi = apiSrc.includes(needle);
+    const inCallers = [...callerSrc.values()].some((src) =>
+      src.includes(needle),
+    );
+
+    check(
+      `GAP ${entry.endpoint} 确无前端封装与调用面`,
+      !inApi && !inCallers,
+      "端点串已出现在前端——封装已落地，须补消费并把本条升格为 REGISTRY 登记",
+    );
+    continue;
+  }
+
+  // 接线（与 ② 同口径）
+  const defAt = apiSrc.search(
+    new RegExp(`export const ${entry.apiFn}\\b`),
+  );
+  const defEnd =
+    defAt < 0 ? -1 : apiSrc.indexOf("\nexport const ", defAt + 1);
+  const defBody = defAt < 0 ? "" : apiSrc.slice(defAt, defEnd < 0 ? undefined : defEnd);
+
+  check(
+    `GAP ${entry.apiFn} 定义存在且接线 ${entry.endpoint}`,
+    defAt >= 0 && defBody.includes(`"${entry.endpoint}"`),
+    defAt < 0 ? "src/api 中找不到该 export" : `定义体内未见 "${entry.endpoint}"`,
+  );
+
+  // 实际调用文件集与登记 callers 逐项相等（与 ③ 同口径的导入感知）
+  const callRe = new RegExp(`\\b${entry.apiFn}\\s*\\(`);
+  const importRe = new RegExp(
+    `import\\s*\\{[^}]*\\b${entry.apiFn}\\b[^}]*\\}\\s*from\\s*["']@/api["']`,
+  );
+  const callers = [...callerSrc.entries()]
+    .filter(([, src]) => callRe.test(src) && importRe.test(src))
+    .map(([rel]) => rel);
+
+  check(
+    `GAP ${entry.apiFn} 调用文件集与登记一致（${entry.callers.join(", ")}）`,
+    sorted(callers).join() === sorted(entry.callers).join(),
+    `实际调用文件: ${callers.join(", ") || "无"}`,
+  );
+
+  // 反向近处读：调用点后 60 行内出现对本次回执的 .warning 读＝
+  // 消费已落地，本条必须升格为 REGISTRY 消费登记（与 ④ 同窗口
+  // 口径）。按赋值变量名匹配（const res = await fn(...) 的 res）：
+  // 同窗内其他调用回执的 .warning 读（如 forward.tsx 删除失败转
+  // forceDeleteForward 后读 forceRes.warning）不是本调用的消费，
+  // 不得误报；无赋值形态的调用点回退为任一 .warning 读即点名
+  // （保守口径，须人工裁定后升格或带理由登记）。
+  const landed = [];
+
+  for (const rel of callers) {
+    const src = callerSrc.get(rel);
+    const lines = src.split("\n");
+    const re = new RegExp(`\\b${entry.apiFn}\\s*\\(`, "g");
+    let m;
+
+    while ((m = re.exec(src)) !== null) {
+      const lineNo = src.slice(0, m.index).split("\n").length - 1;
+      const windowText = lines.slice(lineNo, lineNo + 61).join("\n");
+      const assign = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s*)?$/.exec(
+        lines[lineNo].slice(0, lines[lineNo].indexOf(entry.apiFn)),
+      );
+      const readRe = assign
+        ? new RegExp(`(?<![\\w$])${assign[1]}\\.warning\\b`)
+        : /\.warning\b/;
+
+      if (readRe.test(windowText)) landed.push(`${rel}:${lineNo + 1}`);
+    }
+  }
+  check(
+    `GAP ${entry.apiFn} 调用点近处确无 .warning 读（缺口形态未变）`,
+    landed.length === 0,
+    `以下调用点已实读 .warning——消费已落地，须把本条升格为 REGISTRY 消费登记: ${landed.join(", ")}`,
   );
 }
 
