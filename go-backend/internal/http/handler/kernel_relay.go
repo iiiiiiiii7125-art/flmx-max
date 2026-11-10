@@ -557,7 +557,24 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	forwardID, err := h.createRelayForward(userID, name, tunnel, remoteAddr, req.InPort, ppSend)
 	if err != nil {
-		respondInternalError(w, "inboundRelayCreate", err)
+		// R3-GEN-01：与 forwardCreate 的 CreateForwardTx 分流同口径——
+		// 配额哨兵原文回（ErrDefault）、端口占用哨兵原文回（-2）、
+		// 已标记仓储错由守卫泛化；其余为 createRelayForward 的定型
+		// 校验（端口规格/占用、入口端口耗尽、隧道无入口、nftables
+		// 请求校验）与数据面同步错，原文回。此前直走
+		// respondInternalError 把整族定型文案全量泛化。
+		if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		if errors.Is(err, repo.ErrPortInUse) {
+			response.WriteJSON(w, response.Err(-2, err.Error()))
+			return
+		}
+		if respondInternalIfRepoError(w, "inboundRelayCreate: createRelayForward failed", err) {
+			return
+		}
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	rel := &model.NodeInboundRelay{
@@ -648,7 +665,10 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnel.ID, remoteAddr, "fifo", now,
 		h.repo.NextIndex("forward"), entryNodes, port, "", nil, 0, 0, nil, 0, 0, proxyProtocolSend)
 	if err != nil {
-		return 0, err
+		// R3-GEN-01：仓储直通先标记——回执点对配额/占用哨兵与定型
+		// 校验原文回、其余仓储原文由守卫泛化（哨兵经 Unwrap 链仍可
+		// errors.Is，与 forwardCreate 的 CreateForwardTx 分流同口径）。
+		return 0, markRepoError(err)
 	}
 	created, err := h.getForwardRecord(forwardID)
 	if err != nil {
