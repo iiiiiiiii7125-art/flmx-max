@@ -324,6 +324,73 @@ func TestXrayEventOnly(t *testing.T) {
 	}
 }
 
+// LIVE-215 red 3 / D-01: Xray logs a proxied leg with `->`
+// ("[in-73 -> via-73-s1]") instead of `>>` ("[in-72 >> direct]").
+// The bracket and the S-leg source address below are verbatim
+// from the LIVE-215 grid-2A evidence (standalone reproduction of
+// the same binary); timestamp/target follow the xrAccepted shape.
+// Attribution is the LEFT (inbound) side in both shapes, exactly
+// as for `>>`: the event belongs to the entry inbound (in-73 for
+// the split leg). A `via-...` entry id could never be recorded —
+// the opt-in set only holds `in-<id>` tags (connLogTags) and the
+// panel's ResolveConnlogDisplayKeys only resolves an `in-` prefix
+// (via-... resolves to unassigned 0/0) — so taking the right side
+// would leave the S row missing, which is the defect itself.
+func TestXraySplitArrowRow(t *testing.T) {
+	const (
+		// S = in-73 (split source), T = in-72 (split target).
+		xrSplitLeg = "2026/11/10 22:17:08.000000 from tcp:16.146.199.68:26940 accepted tcp:16.146.199.68:26913 [in-73 -> via-73-s1]"
+		xrDirectS  = "2026/11/10 22:17:09.000000 from tcp:16.146.199.68:26941 accepted tcp:1.1.1.1:80 [in-73 >> direct]"
+		xrDirectT  = "2026/11/10 22:17:10.000000 from tcp:127.0.0.1:26942 accepted tcp:1.1.1.1:80 [in-72 >> direct]"
+	)
+	now := time.Now()
+
+	// Parser level: both arrow shapes attribute to the left
+	// (inbound) tag.
+	c, buf := newTestCollector("xray", 72, 73)
+	if !c.Feed(xrSplitLeg, now) {
+		t.Fatal("split `->` line not consumed")
+	}
+	if !c.Feed(xrDirectT, now) {
+		t.Fatal("direct `>>` line not consumed")
+	}
+	if !c.Feed(xrDirectS, now) {
+		t.Fatal("direct `>>` line (S) not consumed")
+	}
+	evs := buf.Drain(0)
+	if len(evs) != 3 {
+		t.Fatalf("events = %d, want 3: %+v", len(evs), evs)
+	}
+	if evs[0].EntryID != "in-73" || evs[0].ClientIP != "16.146.199.68" || evs[0].ClientPort != 26940 ||
+		evs[0].SessionKind != ConnSessionKindEventOnly || evs[0].Type != ConnEventOpen {
+		t.Errorf("split `->` leg must be an in-73 event_only open: %+v", evs[0])
+	}
+	if evs[1].EntryID != "in-72" {
+		t.Errorf("direct `>>` leg must keep EntryID in-72: %+v", evs[1])
+	}
+	if evs[2].EntryID != "in-73" {
+		t.Errorf("direct `>>` leg (S) must keep EntryID in-73: %+v", evs[2])
+	}
+
+	// D-01 panel-list level: after S was built, KernelApply
+	// carried connLogInbounds [68,73] — T (72) already excluded
+	// by the panel list. The S `->` leg must record; the T `>>`
+	// leg must divert with no event, by the list, not the parser.
+	c2, buf2 := newTestCollector("xray", 68, 73)
+	if !c2.Feed(xrSplitLeg, now) {
+		t.Fatal("split `->` line not consumed (panel-list collector)")
+	}
+	if evs := buf2.Drain(0); len(evs) != 1 || evs[0].EntryID != "in-73" {
+		t.Fatalf("panel-list collector: split leg events = %+v, want 1 in-73 event", evs)
+	}
+	if !c2.Feed(xrDirectT, now) {
+		t.Error("T `>>` line must still be diverted even when not opted in")
+	}
+	if n := buf2.Len(); n != 0 {
+		t.Fatalf("T leg produced %d events under the panel list [68,73]; exclusion must come from the list", n)
+	}
+}
+
 func TestConnLogBufferDropAccounting(t *testing.T) {
 	buf := NewConnLogBuffer()
 	for i := 0; i < ConnLogBufferCapacity+10; i++ {
