@@ -14,6 +14,10 @@ import (
 // 无法识别的字符串仍按 malformed 丢弃；与登记不符的数字仍按
 // stale 忽略。生产形状（数字）是第一格，字符串形是兼容格——
 // 字符串用例不得作为唯一证明。
+// 注：本文件造帧把 success/reason 放在 data 内嵌形态——那是解
+// 码兜底面（顶层缺席时回读），不是生产正形；正形（顶层
+// success/message）的字节级证明在 uninstall_final_contract_
+// test.go，本文件的格只钉 issuedAt 形态学，不作字段对齐证据。
 func TestHandleUninstallResultIssuedAtShapes(t *testing.T) {
 	issued := time.Now().Truncate(time.Millisecond)
 	cases := []struct {

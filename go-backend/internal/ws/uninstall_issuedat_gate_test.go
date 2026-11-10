@@ -19,10 +19,15 @@ import (
 // http/handler/node_delete_uninstall_issuedat_gate_test.go）同值。
 const issuedAtGateValue = int64(1794276644653)
 
-// issuedAtGateFrame 造 golden 终局帧字节：issuedAt 为 JSON 数字。
+// issuedAtGateFrame 造 golden 终局帧字节：生产形状——success
+// 与 reason（顶层 message）在帧顶层（agent CommandResponse 正
+// 形），issuedAt 为 data 内的 JSON 数字。此前造帧把 success/
+// reason 嵌进 data，与 agent 真帧错位、自洽掩盖了 C4-G2 字段
+// 错位缺陷，已按真帧改正；字节级全帧 golden 见
+// uninstall_final_contract_test.go。
 func issuedAtGateFrame(success bool, reason string, issuedAt int64) string {
-	return fmt.Sprintf(`{"type":"UninstallResult","data":{"issuedAt":%d,"success":%v,"reason":%q,"state":%q}}`,
-		issuedAt, success, reason, map[bool]string{true: "succeeded", false: "failed"}[success])
+	return fmt.Sprintf(`{"type":"UninstallResult","success":%v,"message":%q,"data":{"issuedAt":%d,"state":%q}}`,
+		success, reason, issuedAt, map[bool]string{true: "succeeded", false: "failed"}[success])
 }
 
 // issuedAtGateSeed 登记一笔 issued 态待卸载，issued_at 为 golden

@@ -428,16 +428,49 @@ func (w *WebSocketReporter) resendUninstallFinalAfterAck(ackCh chan bool, st *un
 	}
 }
 
+// uninstallFinalMessage renders the final frame's top-level
+// message: the panel records it verbatim as the failure reason,
+// so it is the only channel that can name why an uninstall
+// failed. A stored Reason wins verbatim; a failed state without
+// one (the executeUninstall path records only FailedStep and the
+// per-step errors) gets the reason composed here from the failed
+// step's name plus its recorded error text — composing at this
+// single choke point also covers re-sends of states stored by
+// older builds, which carry no Reason either.
+func uninstallFinalMessage(st *uninstallState) string {
+	if st.Reason != "" {
+		return st.Reason
+	}
+	if st.State != "failed" {
+		return ""
+	}
+	for _, s := range st.Steps {
+		if s.Step == st.FailedStep && s.Error != "" {
+			return "step " + s.Step + " failed: " + s.Error
+		}
+	}
+	if st.FailedStep != "" {
+		return "step " + st.FailedStep + " failed"
+	}
+	return ""
+}
+
 // buildUninstallFinalResponse renders the unsolicited
 // UninstallResult frame for a stored state. Pure constructor (no
 // I/O) so tests can assert the exact wire bytes: data.issuedAt
 // must be a JSON number (R2-ISSUEDAT — the panel decodes it as
 // int64, and an empty string made the whole frame malformed).
+// Wire contract (C4-G2): success and the failure reason ride the
+// CommandResponse top level (success/message); data carries only
+// the idempotency key and detail (issuedAt/state/failedStep/
+// steps). The panel decodes exactly this shape — the byte-level
+// golden is pinned on both sides (uninstall_final_contract_test.go
+// here and in go-backend/internal/ws).
 func buildUninstallFinalResponse(st *uninstallState) CommandResponse {
 	return CommandResponse{
 		Type:    "UninstallResult",
 		Success: st.State == "succeeded",
-		Message: st.Reason,
+		Message: uninstallFinalMessage(st),
 		Data: map[string]interface{}{
 			"uninstallKey": st.Key,
 			"issuedAt":     st.IssuedAt,

@@ -83,25 +83,35 @@ func (v *uninstallIssuedAt) UnmarshalJSON(b []byte) error {
 }
 
 // handleUninstallResult 落 agent 的卸载终局上报（C4-G2 面板
-// 半）：报文 {type:"UninstallResult", data:{issuedAt, success,
-// reason, warnings}}。幂等键 = 本连接的 node_id＋登记的
-// issued_at：issuedAt 与现行登记不符（重试已刷新、旧轮迟到）
-// 一律忽略；无登记时同样忽略（重复上报/已处置）。成功 →
-// succeeded（面板清扫随后删记录并清登记）；失败 → failed＋
-// agent 点名原因。warnings 逐条进日志（终局路径没有同步回执
-// 可挂，日志是其披露面，与重连拦截路径同口径）。
+// 半）：报文是 agent CommandResponse 正形——{type:
+// "UninstallResult", success, message, data:{issuedAt, state,
+// failedStep, steps, warnings}}，success 与失败原因在帧顶层
+// （agent buildUninstallFinalResponse 构造，字节级 golden 由
+// 两侧 uninstall_final_contract_test.go 对钉）。幂等键 = 本连
+// 接的 node_id＋登记的 issued_at：issuedAt 与现行登记不符（重
+// 试已刷新、旧轮迟到）一律忽略；无登记时同样忽略（重复上报/
+// 已处置）。成功 → succeeded（面板清扫随后删记录并清登记）；
+// 失败 → failed＋agent 点名原因（顶层 message 逐字透传）。
+// warnings 逐条进日志（终局路径没有同步回执可挂，日志是其披
+// 露面，与重连拦截路径同口径）。
 // R2-ISSUEDAT：issuedAt 接受数字（正形）、数字字符串、RFC3339
 // 字符串、空串/缺席（按 0、不参与新旧比对）；补发去重在 agent
 // 侧执行，面板侧重连补发以登记原 issued_at 为键、不刷新
 // （node_delete_uninstall.go 补发段）。
+// 兼容兜底：顶层 success 缺席时才回读 data.success/data.reason
+// 的内嵌形态——该形态从未有 agent 版本发出过（构造器自 C4-G2
+// 引入即为顶层形态，git 可证），保留它只为面板自身旧测试语料
+// 形态的在途帧不断链；顶层在场时内嵌值一律不看。
 func (s *Server) handleUninstallResult(nodeID int64, msg string) {
 	if s == nil || s.repo == nil {
 		return
 	}
 	var envelope struct {
-		Data struct {
+		Success *bool  `json:"success"`
+		Message string `json:"message"`
+		Data    struct {
 			IssuedAt uninstallIssuedAt `json:"issuedAt"`
-			Success  bool              `json:"success"`
+			Success  *bool             `json:"success"`
 			Reason   string            `json:"reason"`
 			Warnings []string          `json:"warnings"`
 		} `json:"data"`
@@ -109,6 +119,12 @@ func (s *Server) handleUninstallResult(nodeID int64, msg string) {
 	if err := json.Unmarshal([]byte(msg), &envelope); err != nil {
 		log.Printf("websocket: malformed UninstallResult from node %d: %v", nodeID, err)
 		return
+	}
+	success := false
+	if envelope.Success != nil {
+		success = *envelope.Success
+	} else if envelope.Data.Success != nil {
+		success = *envelope.Data.Success
 	}
 	rec, err := s.repo.GetNodePendingUninstall(nodeID)
 	if err != nil || rec == nil {
@@ -125,7 +141,7 @@ func (s *Server) handleUninstallResult(nodeID int64, msg string) {
 		}
 	}
 	now := time.Now()
-	if envelope.Data.Success {
+	if success {
 		won, terr := s.repo.TransitionNodePendingUninstall(nodeID,
 			[]string{repo.NodePendingUninstallIssued, repo.NodePendingUninstallAcked, repo.NodePendingUninstallUnconfirmed},
 			repo.NodePendingUninstallSucceeded, "", now)
@@ -136,7 +152,10 @@ func (s *Server) handleUninstallResult(nodeID int64, msg string) {
 		log.Printf("node %d agent reported uninstall success (issuedAt %d)", nodeID, rec.IssuedAt)
 		return
 	}
-	reason := strings.TrimSpace(envelope.Data.Reason)
+	reason := strings.TrimSpace(envelope.Message)
+	if reason == "" {
+		reason = strings.TrimSpace(envelope.Data.Reason)
+	}
 	if reason == "" {
 		reason = "agent 上报卸载失败（未附原因）"
 	}
