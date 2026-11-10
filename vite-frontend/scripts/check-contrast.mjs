@@ -1328,7 +1328,7 @@ for (const [fg, bg, pinned] of TRAY_HOVER_PAIRS) {
 // 住在 .css 内，天然不在 .ts/.tsx 普查面内。
 const TRAY_PLATE_REGISTERED = [
   "src/pages/inbound/kernel-panel.tsx:361",
-  "src/pages/config.tsx:1255",
+  "src/pages/config.tsx:1260",
 ];
 {
   const foundPlates = [];
@@ -1380,7 +1380,7 @@ const TRAY_PLATE_REGISTERED = [
 const BLACK_SCRIM_REGISTERED = [
   { loc: "src/shadcn-bridge/heroui/modal.tsx:56", token: "bg-black/40", note: "Modal blur 档遮罩" },
   { loc: "src/shadcn-bridge/heroui/modal.tsx:59", token: "bg-black/70", note: "Modal opaque 档遮罩" },
-  { loc: "src/pages/config.tsx:1225", token: "bg-black/70", note: "config 壁纸预览标签芯片（白字）" },
+  { loc: "src/pages/config.tsx:1230", token: "bg-black/70", note: "config 壁纸预览标签芯片（白字）" },
   { loc: "src/components/ui/dialog.tsx:39", token: "bg-black/40", note: "Dialog 遮罩" },
   { loc: "src/layouts/admin.tsx:428", token: "bg-black/40", note: "admin 遮罩" },
   { loc: "src/pages/index.tsx:351", token: "bg-black/60", note: "登录页验证码遮罩" },
