@@ -59,7 +59,7 @@
 }
 ```
 
-- `event`：`node_offline`、`node_upgrade_failed`（节点升级/回退下发后超时未回连到目标版本）、`inbound_down`、`kernel_error`、`node_expiry`、`user_quota`、`daily_report`、`latency_bad`（延迟/丢包异常与恢复）、`route_change`（回程线路变化），测试消息是 `test`
+- `event`：`node_offline`、`node_upgrade_failed`（节点升级/回退下发后超时未回连到目标版本）、`inbound_down`、`kernel_error`、`node_expiry`、`user_quota`、`daily_report`、`latency_bad`（延迟/丢包异常与恢复）、`route_change`（回程线路变化）、`conntrack_high`（节点连接跟踪表用量达 80%）、`disk_high`（节点或面板磁盘用量达 80%）、`agent_memory_high`（节点 agent 内存用量达 80%），测试消息是 `test`
 - `text`：拼好的完整文本，直接转发给企业微信、钉钉、Bark、Server 酱等服务时用它即可
 - `time`：毫秒级 Unix 时间戳（数字，不是格式化字符串）；带时区的格式化时间在 `text` 字段里
 - 返回 2xx 视为发送成功

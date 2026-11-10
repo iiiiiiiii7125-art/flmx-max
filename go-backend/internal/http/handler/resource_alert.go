@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"sync"
 
 	"go-backend/internal/metrics"
@@ -130,7 +131,7 @@ func (h *Handler) observeResourceSurface(nodeID int64, surface, event, title, la
 	key := resourceAlertKey(nodeID, surface)
 	switch h.resourceAlerts.decide(key, pct) {
 	case resourceActionEnter:
-		h.notifyTracked(event, title, message, func(outcome notifyOutcome) {
+		h.dispatchResourceAlert(event, title, message, func(outcome notifyOutcome) {
 			if outcome == notifyOutcomeFailed {
 				h.resourceAlerts.rollback(key)
 			}
@@ -140,5 +141,26 @@ func (h *Handler) observeResourceSurface(nodeID int64, surface, event, title, la
 			h.notifier.forgetFingerprintPrefix(event + "\x00" + title + "\x00" +
 				fmt.Sprintf("节点：%s\n", label))
 		}
+	}
+}
+
+// dispatchResourceAlert 是资源面告警的派发口（与未落地告警的
+// dispatchUpgradeFailedAlert 同形态）：事件在本函数内以
+// notifyEvent* 常量直达 notifyTracked，不经 observeResourceSurface
+// 的字符串形参原样转交——发射面「事件只来自常量」由
+// check-doc-consistency §7 的 doc-extract 机械守卫，形参转交会
+// 打断其静态证明。event 的合法取值只有四处调用点直传的三个常
+// 量；落到 default 属编程错误，记日志而不派发未知事件（旧形态
+// 会把任意字符串当事件发出，正是该门要防的形态）。
+func (h *Handler) dispatchResourceAlert(event, title, message string, onDone func(notifyOutcome)) {
+	switch event {
+	case notifyEventConntrackHigh:
+		h.notifyTracked(notifyEventConntrackHigh, title, message, onDone)
+	case notifyEventDiskHigh:
+		h.notifyTracked(notifyEventDiskHigh, title, message, onDone)
+	case notifyEventAgentMemHigh:
+		h.notifyTracked(notifyEventAgentMemHigh, title, message, onDone)
+	default:
+		log.Printf("resource alert dispatch skipped: unknown event %q", event)
 	}
 }
