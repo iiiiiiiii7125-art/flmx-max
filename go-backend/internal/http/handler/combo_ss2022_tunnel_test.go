@@ -25,7 +25,7 @@ func TestComboSS2022TunnelRelayGeneration(t *testing.T) {
 	// Entry forward services for the managed relay of the SS2022
 	// inbound (target is the inbound on the exit/landing node).
 	forward := &forwardRecord{RemoteAddr: "127.0.0.1:11080", Strategy: "fifo", TunnelID: 99}
-	services := buildForwardServiceConfigs("1_99_0", forward, &tunnelRecord{ID: 99, Type: 2}, entry, 12106, "", forwardRuntimeLimiters{})
+	services := buildForwardServiceConfigs("1_99_0", forward, &tunnelRecord{ID: 99, Type: 2}, entry, 12106, "", forwardRuntimeLimiters{}, false)
 	if len(services) != 2 {
 		t.Fatalf("expected tcp+udp forward service pair, got %d", len(services))
 	}
