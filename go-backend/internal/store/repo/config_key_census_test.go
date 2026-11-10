@@ -76,7 +76,11 @@ import (
 // the inbound connection log retention setting (domain-validated
 // like monitor_retention_days) and the feature master switch
 // (design §4.5; gost entrance collection, default on).
-const configKeyRegistryBaseline = 50
+// feat/node-group-collapse: node_display_group_collapsed joins the
+// authenticated table (50 → 51) — the node page's collapsed-section
+// list (JSON label array), read/written through the same config
+// channel as the order list.
+const configKeyRegistryBaseline = 51
 
 var configKeyShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
