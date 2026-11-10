@@ -57,8 +57,8 @@ type Handler struct {
 	// reconcile 轮。深度 >0 时 applyKernelWithMode 抑制 settle。
 	importTailBatchDepth atomic.Int32
 	wsServer             *ws.Server
-	metrics        *metrics.IngestionService
-	healthCheck    *health.Checker
+	metrics              *metrics.IngestionService
+	healthCheck          *health.Checker
 	// R5-B5 D14: 下沉到 manager 层的 per-node 串行化包装。
 	// 所有触碰节点 nft 状态的方法必须经此，不依赖调用方自觉。
 	nftablesManager *serializedNftManager
@@ -132,6 +132,15 @@ type Handler struct {
 	// 由 upgradeMu 保护；单节点升级 / 批量升级 / 节点回退三入口共用，
 	// 见 upgrade.go 的 tryAcquireNodeUpgradeOp。
 	nodeUpgradeOps map[int64]string
+	// F2-10：升级类操作在 ACK 后的执行期占用（nodeID → 操作名＋
+	// 到期时刻）：登记从「命令在途期」延展到核验终局（landed/
+	// failed）或有界 TTL，见 upgrade.go 的
+	// holdNodeUpgradeOpForVerification。
+	nodeUpgradeOpHolds map[int64]nodeUpgradeOpHold
+	// F2-02：启动复位前的在线节点快照（nodeID 集）：复位把本地
+	// 节点 status 1→0 后，「重启后仍离线」检查不能再以 DB
+	// status 为据，须以本快照＋实时会话判定。仅启动路径写一次。
+	startupOnlineSnapshot map[int64]struct{}
 	// FIX2-A（V2-04）：节点离线期间切走 realm 的待结算标记（按节点）。
 	// 离线切换时 settle 轮询够不到节点，重连后必须先结算 realm 计数
 	// 再允许重下发，否则增量随 agent 弃 realm 计数永久漏计。
@@ -889,7 +898,10 @@ func (h *Handler) userList(w http.ResponseWriter, r *http.Request) {
 
 	users, err := h.repo.ListUsers()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// F4-01：仓储错误收口——真因进服务端日志、对外泛化，
+		// 与监控面 respondInternalError 纪律一致（原文直出会把
+		// SQL/驱动细节漏给前端）。
+		respondInternalError(w, "userList: ListUsers failed", err)
 		return
 	}
 
@@ -942,6 +954,7 @@ func (h *Handler) nodeList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.attachNodeLatency(items)
+	h.attachNodeUninstallStates(items)
 
 	response.WriteJSON(w, response.OK(items))
 }
@@ -1032,6 +1045,11 @@ func (h *Handler) openAPISubStore(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, "database unavailable"))
 		return
 	}
+	// F-W3-01：本面全程禁存——成功体经下方 w.Write 直出（不走
+	// response 信封），错误体走信封（已自带 no-store）；入口统一
+	// 设头覆盖两路。本面是凭据鉴权后的订阅数据，且不在 CF 订阅
+	// 前置的绕缓存覆盖内（覆盖面只有 /api/v1/open_api/sub/*）。
+	w.Header().Set("Cache-Control", "no-store")
 
 	var username, password, tunnel string
 	switch r.Method {
@@ -1783,7 +1801,8 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.ApplyConfigBatch(validated, cleared, now); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// F4-01：仓储错误收口（同 userList）。
+		respondInternalError(w, "updateConfigs: ApplyConfigBatch failed", err)
 		return
 	}
 	h.invalidateNotifyConfigCache()
@@ -1848,7 +1867,8 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		prevPool := h.latencyPoolBefore(name)
 		if err := h.repo.DeleteConfig(name); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// F4-01：仓储错误收口（同 userList）。
+			respondInternalError(w, "updateSingleConfig: DeleteConfig failed", err)
 			return
 		}
 		h.invalidateNotifyConfigCache()
@@ -1861,7 +1881,8 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 
 	prevPool := h.latencyPoolBefore(name)
 	if err := h.repo.UpsertConfig(name, value, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// F4-01：仓储错误收口（同 userList）。
+		respondInternalError(w, "updateSingleConfig: UpsertConfig failed", err)
 		return
 	}
 	h.invalidateNotifyConfigCache()
@@ -2749,6 +2770,8 @@ func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Disposition", "attachment; filename=backup.json")
 	w.Header().Set("Content-Type", "application/json")
+	// 备份含全量敏感配置：与通用信封同口径禁存（F-W3-02 同族补点）。
+	w.Header().Set("Cache-Control", "no-store")
 	// AUDIT-R22 (LAD22-001): 先 Encode 到 buffer，成功后再发 headers+body。
 	// 直接 Encode 到 w 时若中途失败（如客户端断开），HTTP 200 已发出，
 	// 错误信封会追加到截断的残缺流后，客户端收到既非合法备份也非合法信封的损坏响应。

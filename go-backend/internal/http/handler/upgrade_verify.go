@@ -53,13 +53,27 @@ var nodeUpgradeVerifyWindow = 5 * time.Minute
 // 口足够细（最坏多等 30s 才发告警），又不给 DB 添高频查询。
 var nodeUpgradeVerifySweepInterval = 30 * time.Second
 
+// upgradeSHAAnchor 命名期望哈希的下发形态（F2-12）：已下发
+// 返回空串；未下发时区分「架构辨不出」（节点自报版本不带架构
+// 后缀的格式异常）与「哈希未就绪」两类降级，供核验记录、回执
+// 与告警面点名，不让回退锚静默生效。
+func upgradeSHAAnchor(nodeArch, expectedSHA string) string {
+	if expectedSHA != "" {
+		return ""
+	}
+	if nodeArch == "" {
+		return "arch-unresolvable"
+	}
+	return "hash-unavailable"
+}
+
 // recordNodeUpgradeVerification 在升级类命令下发成功后落待核验
 // 记录。目标版本为空（如无代际配对信息的老 agent 回退，面板根
 // 本不知道目标）时不落记录：无目标可比对，硬造一条永远命不中
 // 的记录只会误报——该情形的回执已按 M-0051 明示「未经校验」。
 // 记录失败只记日志：命令已经下发，核验环的缺失不得反噬下发本
 // 身的回执。
-func (h *Handler) recordNodeUpgradeVerification(nodeID int64, kind, targetVersion, expectedSHA string) {
+func (h *Handler) recordNodeUpgradeVerification(nodeID int64, kind, targetVersion, expectedSHA, shaAnchor string) {
 	if h == nil || h.repo == nil || nodeID <= 0 {
 		return
 	}
@@ -77,6 +91,7 @@ func (h *Handler) recordNodeUpgradeVerification(nodeID int64, kind, targetVersio
 		Kind:          kind,
 		TargetVersion: targetVersion,
 		ExpectedSHA:   strings.TrimSpace(expectedSHA),
+		SHAAnchor:     strings.TrimSpace(shaAnchor),
 		FromVersion:   fromVersion,
 		DispatchedAt:  now.UnixMilli(),
 		DeadlineAt:    now.Add(nodeUpgradeVerifyWindow).UnixMilli(),
@@ -85,6 +100,11 @@ func (h *Handler) recordNodeUpgradeVerification(nodeID int64, kind, targetVersio
 	}
 	if err := h.repo.UpsertNodeUpgradeVerification(rec); err != nil {
 		log.Printf("node upgrade verification record failed node_id=%d kind=%s target=%s err=%v", nodeID, kind, targetVersion, err)
+		return
+	}
+	if rec.SHAAnchor != "" {
+		// F2-12：降级点名进日志，与记录/回执/告警四面一致。
+		log.Printf("node upgrade verification anchor degraded node_id=%d kind=%s target=%s anchor=%s (expected sha not dispatched; verification falls back to version anchor)", nodeID, kind, targetVersion, rec.SHAAnchor)
 	}
 }
 
@@ -135,6 +155,8 @@ func (h *Handler) verifyNodeUpgradeLanding(nodeID int64) {
 	if err != nil || !won {
 		return
 	}
+	// F2-10：核验终局（landed）释放 ACK 后执行期占用。
+	h.releaseNodeUpgradeOpHold(nodeID)
 	if late {
 		log.Printf("node upgrade verification landed late node_id=%d kind=%s target=%s reported=%s (deadline had already fired an alert)", nodeID, rec.Kind, rec.TargetVersion, reported)
 	} else {
@@ -176,6 +198,8 @@ type upgradeVerifyFailure struct {
 	Target      string
 	FromVersion string
 	Observed    string
+	// Anchor 是期望哈希的降级形态（F2-12），非空时告警正文点名。
+	Anchor string
 }
 
 // failDueUpgradeVerifications 把过截止仍 pending 的记录置
@@ -208,6 +232,8 @@ func (h *Handler) failDueUpgradeVerifications(now time.Time) []upgradeVerifyFail
 		if rerr != nil || !won {
 			continue
 		}
+		// F2-10：核验终局（failed）释放 ACK 后执行期占用。
+		h.releaseNodeUpgradeOpHold(rec.NodeID)
 		failures = append(failures, upgradeVerifyFailure{
 			NodeID:      rec.NodeID,
 			NodeName:    node.Name,
@@ -215,6 +241,7 @@ func (h *Handler) failDueUpgradeVerifications(now time.Time) []upgradeVerifyFail
 			Target:      rec.TargetVersion,
 			FromVersion: rec.FromVersion,
 			Observed:    observed,
+			Anchor:      rec.SHAAnchor,
 		})
 	}
 	return failures
@@ -243,6 +270,12 @@ func upgradeVerifyFailureMessage(f upgradeVerifyFailure) string {
 	} else {
 		b.WriteString("\n当前自报版本：尚未回连")
 	}
+	if f.Anchor != "" {
+		// F2-12：哈希锚降级必须在告警面点名——本次核验只以版
+		// 本锚为准，处置方向（先修节点自报格式/等哈希就绪）与
+		// 普通未落地不同。
+		fmt.Fprintf(&b, "\n期望哈希：未下发（%s），本次仅以版本锚核验", f.Anchor)
+	}
 	return b.String()
 }
 
@@ -266,6 +299,7 @@ func (h *Handler) sweepNodeUpgradeVerifications(now time.Time) {
 func (h *Handler) runNodeUpgradeVerifyLoop(ctx context.Context) {
 	defer h.jobsWG.Done()
 	h.sweepNodeUpgradeVerifications(time.Now())
+	h.sweepNodePendingUninstalls(time.Now())
 	ticker := time.NewTicker(nodeUpgradeVerifySweepInterval)
 	defer ticker.Stop()
 	for {
@@ -274,6 +308,9 @@ func (h *Handler) runNodeUpgradeVerifyLoop(ctx context.Context) {
 			return
 		case now := <-ticker.C:
 			h.sweepNodeUpgradeVerifications(now)
+			// C4-G2：待卸载登记同环收敛（succeeded 删记录收尾、
+			// 超时置 unconfirmed），节奏与核验扫描一致即可。
+			h.sweepNodePendingUninstalls(now)
 		}
 	}
 }

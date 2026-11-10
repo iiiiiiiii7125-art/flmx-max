@@ -65,6 +65,26 @@ func validateRemoteAddrPorts(addr string) error {
 	return nil
 }
 
+// validateRemoteAddrRequiresPorts 要求每个有效目标段都显式带
+// 端口（LIVE-212-01）：与 validateRemoteAddrPorts 的分工——后者
+// 只校验「在场的端口段格式」，无端口段被 SplitHostPort 报错后
+// 跳过；但消费面按 host:port 拨号，无端口目标落到 agent 会拼出
+// :0 的死服务且创建回执假成功。本判定为格式层判定：任一有效
+// 段缺端口或端口不可解析即整单拒绝。
+func validateRemoteAddrRequiresPorts(addr string) error {
+	for _, part := range splitRemoteParts(addr) {
+		normalized := normalizeServerAddressInput(part)
+		if normalized == "" {
+			continue
+		}
+		_, port, err := net.SplitHostPort(normalized)
+		if err != nil || !isDecimalPort(port) {
+			return fmt.Errorf("目标地址 %q 缺少有效端口（须为 host:port 形式）", part)
+		}
+	}
+	return nil
+}
+
 // safeRemoteLookupIP 是 checkSingleRemoteAddr 的解析点
 // （可注入点，供计数型钉格在不依赖真实 DNS 的前提下验证
 // R10-09 的按主机名 memo 化）。

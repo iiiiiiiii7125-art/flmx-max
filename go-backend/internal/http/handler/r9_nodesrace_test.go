@@ -90,13 +90,27 @@ func TestR9NodeDeleteBlockedByInFlightUpgradeOp(t *testing.T) {
 	if sends != 1 {
 		t.Fatalf("R9-06: UninstallAgent dispatches after settle = %d, want 1", sends)
 	}
-	if got, _ := r.GetNodeByID(node.ID); got != nil {
-		t.Fatalf("R9-06: node row must be deleted after settle, got %v", got)
+	// C4-G2 两段式：受理回执只证明卸载已发起——记录保留至终局，
+	// 此刻行仍在、登记为 acked；模拟 agent 终局上报成功 → 清扫
+	// 完成删除，记录此时才删（旧口径「受理即删记录」已按协议废止）。
+	if resp.Data["uninstall"] != nodeUninstallAcked {
+		t.Fatalf("C4-G2: initiation must report acked, got %v", resp.Data["uninstall"])
+	}
+	if got, _ := r.GetNodeByID(node.ID); got == nil {
+		t.Fatal("C4-G2: node record must survive until the agent's final report")
 	}
 	if _, ok := h.tryAcquireNodeUpgradeOp(node.ID, "升级"); !ok {
 		t.Fatal("R9-06: registry must be free after the delete funnel released its 删除 op")
 	}
 	h.releaseNodeUpgradeOp(node.ID)
+	if won, err := r.TransitionNodePendingUninstall(node.ID,
+		[]string{nodeUninstallAcked}, nodeUninstallSucceeded, "", time.Now()); err != nil || !won {
+		t.Fatalf("final-report transition: won=%v err=%v", won, err)
+	}
+	h.sweepNodePendingUninstalls(time.Now())
+	if got, _ := r.GetNodeByID(node.ID); got != nil {
+		t.Fatalf("C4-G2: node row must be deleted after the final report + sweep, got %v", got)
+	}
 }
 
 type r9BatchDeleteResp struct {
@@ -105,6 +119,8 @@ type r9BatchDeleteResp struct {
 		SuccessCount int                  `json:"successCount"`
 		FailCount    int                  `json:"failCount"`
 		Failures     []batchFailureDetail `json:"failures"`
+		PendingCount int                  `json:"pendingCount"`
+		Pending      []batchFailureDetail `json:"pending"`
 	} `json:"data"`
 }
 
@@ -127,9 +143,12 @@ func TestR9NodeBatchDeleteBlockedByInFlightOp(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &env); err != nil {
 		t.Fatalf("decode batch response: %v body=%s", err, res.Body.String())
 	}
-	if env.Data.SuccessCount != 1 || env.Data.FailCount != 1 {
-		t.Fatalf("R9-06: batch delete counts = %d/%d, want 1 success (plain) + 1 fail (in-flight), body=%s",
-			env.Data.SuccessCount, env.Data.FailCount, res.Body.String())
+	// C4-G2 两段式：离线的 plain 节点不走同步删除——登记待卸载进
+	// pending 明细（非删除成功）；在途的 blocked 节点记失败点名
+	// 在途操作。旧口径「plain 同步删、计 1 success」已按协议废止。
+	if env.Data.SuccessCount != 0 || env.Data.FailCount != 1 || env.Data.PendingCount != 1 {
+		t.Fatalf("R9-06: batch delete counts = %d success/%d fail/%d pending, want 0 success + 1 fail (in-flight) + 1 pending (plain, offline), body=%s",
+			env.Data.SuccessCount, env.Data.FailCount, env.Data.PendingCount, res.Body.String())
 	}
 	named := false
 	for _, failure := range env.Data.Failures {
@@ -140,11 +159,33 @@ func TestR9NodeBatchDeleteBlockedByInFlightOp(t *testing.T) {
 	if !named {
 		t.Fatalf("R9-06: batch failure for the in-flight node must name the op, failures=%+v", env.Data.Failures)
 	}
+	pendingPlain := false
+	for _, pending := range env.Data.Pending {
+		if pending.ID == plain.ID && strings.Contains(pending.Reason, "已登记待卸载") {
+			pendingPlain = true
+		}
+	}
+	if !pendingPlain {
+		t.Fatalf("C4-G2: offline plain node must be listed as pending uninstall, pending=%+v", env.Data.Pending)
+	}
 	if got, _ := r.GetNodeByID(blocked.ID); got == nil {
 		t.Fatal("R9-06: in-flight node must survive the batch delete")
 	}
+	if got, _ := r.GetNodeByID(plain.ID); got == nil {
+		t.Fatal("C4-G2: plain node record must survive until the agent's final report")
+	}
+	// 模拟 plain 节点 agent 终局上报成功 → 清扫完成删除；在途的
+	// blocked 节点记录仍保留。
+	if won, err := r.TransitionNodePendingUninstall(plain.ID,
+		[]string{nodeUninstallIssued}, nodeUninstallSucceeded, "", time.Now()); err != nil || !won {
+		t.Fatalf("final-report transition: won=%v err=%v", won, err)
+	}
+	h.sweepNodePendingUninstalls(time.Now())
 	if got, _ := r.GetNodeByID(plain.ID); got != nil {
-		t.Fatal("R9-06: plain node must be deleted by the batch delete")
+		t.Fatal("C4-G2: plain node must be deleted after the final report + sweep")
+	}
+	if got, _ := r.GetNodeByID(blocked.ID); got == nil {
+		t.Fatal("R9-06: in-flight node must still survive after the sweep")
 	}
 }
 
@@ -546,7 +587,7 @@ func TestR9NodeDeleteRecheckNamesLateReferrer(t *testing.T) {
 	origOnline, origSend := nodeAgentIsOnline, nodeAgentSendCommand
 	inserted := false
 	nodeAgentIsOnline = func(h *Handler, nodeID int64) bool { return true }
-	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) ([]string, error) {
+	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, data map[string]interface{}, timeout time.Duration) ([]string, error) {
 		if !inserted {
 			inserted = true
 			_ = seedChainInbound(t, r, frontXray, "late-ref", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 8443,
@@ -560,17 +601,24 @@ func TestR9NodeDeleteRecheckNamesLateReferrer(t *testing.T) {
 	if resp.Code != 0 {
 		t.Fatalf("R9-08: node delete semantics stay best-effort, got code=%d msg=%q", resp.Code, resp.Msg)
 	}
-	rawList, _ := resp.Data["brokenReferrers"].([]interface{})
-	named := false
-	for _, item := range rawList {
-		if text, ok := item.(string); ok && strings.Contains(text, "late-ref") {
-			named = true
-		}
+	// C4-G2 两段式：受理回执只证明卸载已发起——记录保留至终局，
+	// 发起回执不再携带级联点名（尚无级联发生）；R9-08 的复检点
+	// 名随级联迁到完成时点（终局后清扫删记录，点名进完成日志，
+	// 见 completeNodeUninstallDeletion）。
+	if resp.Data["uninstall"] != nodeUninstallAcked {
+		t.Fatalf("C4-G2: initiation must report acked, got %v", resp.Data["uninstall"])
 	}
-	if !named {
-		t.Fatalf("R9-08: receipt must name the referrer saved during the uninstall window, got brokenReferrers=%v", resp.Data["brokenReferrers"])
+	if got, _ := r.GetNodeByID(victim.ID); got == nil {
+		t.Fatal("C4-G2: node record must survive until the agent's final report")
 	}
+	// 模拟 agent 终局上报成功 → 清扫完成删除（复检在此把窗内
+	// 新引用并入并点名于完成日志），记录此时才删。
+	if won, err := r.TransitionNodePendingUninstall(victim.ID,
+		[]string{nodeUninstallAcked}, nodeUninstallSucceeded, "", time.Now()); err != nil || !won {
+		t.Fatalf("final-report transition: won=%v err=%v", won, err)
+	}
+	h.sweepNodePendingUninstalls(time.Now())
 	if got, _ := r.GetNodeByID(victim.ID); got != nil {
-		t.Fatal("R9-08: node delete must still complete (naming, not blocking, is this surface's caliber)")
+		t.Fatal("C4-G2: node delete must complete after the final report + sweep")
 	}
 }

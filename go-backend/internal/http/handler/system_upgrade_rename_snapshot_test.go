@@ -383,6 +383,7 @@ case "$*" in
   "exec"*) exit 0 ;;
   "inspect"*)
     case "$*" in
+      *"Config.Image"*) echo "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:1.9.9" ;;
       *"/app/data"*) echo "` + inspectVolume + `" ;;
       *) exit 0 ;;
     esac

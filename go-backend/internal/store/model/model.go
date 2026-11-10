@@ -150,11 +150,17 @@ func (Node) TableName() string { return "node" }
 // 原行若继续挂到截止只会误发「未落地」告警；结案只记「被接管」
 // 事实、绝不伪造 landed（回退回执按 M-0051 只证下发不证落地）。
 type NodeUpgradeVerification struct {
-	ID              int64  `gorm:"primaryKey;autoIncrement"`
-	NodeID          int64  `gorm:"column:node_id;not null;uniqueIndex"`
-	Kind            string `gorm:"type:varchar(20);not null"` // upgrade | rollback
-	TargetVersion   string `gorm:"column:target_version;type:varchar(100);not null"`
-	ExpectedSHA     string `gorm:"column:expected_sha;type:varchar(128);not null;default:''"`
+	ID            int64  `gorm:"primaryKey;autoIncrement"`
+	NodeID        int64  `gorm:"column:node_id;not null;uniqueIndex"`
+	Kind          string `gorm:"type:varchar(20);not null"` // upgrade | rollback
+	TargetVersion string `gorm:"column:target_version;type:varchar(100);not null"`
+	ExpectedSHA   string `gorm:"column:expected_sha;type:varchar(128);not null;default:''"`
+	// SHAAnchor 记录期望哈希的下发形态（F2-12）：空 = 已随命令
+	// 下发；arch-unresolvable = 节点自报版本格式异常、无从辨识
+	// 架构而未附；hash-unavailable = 架构已知但期望哈希未就绪而
+	// 未附。后两态下核验以版本锚（回退锚）为准，须在回执/告警
+	// 面可见，不许静默降级。
+	SHAAnchor       string `gorm:"column:sha_anchor;type:varchar(40);not null;default:''"`
 	FromVersion     string `gorm:"column:from_version;type:varchar(100);not null;default:''"`
 	ObservedVersion string `gorm:"column:observed_version;type:varchar(100);not null;default:''"`
 	Status          string `gorm:"type:varchar(20);not null;default:'pending'"` // pending | landed | failed | superseded

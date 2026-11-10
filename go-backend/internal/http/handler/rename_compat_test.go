@@ -43,16 +43,18 @@ func TestRenameCompatLegacyEnvRetired(t *testing.T) {
 	}
 }
 
-// FLMX 改名兼容：面板版本键新名 FLMX_VERSION 优先、旧名
-// FLUX_VERSION 回退（存量 .env 未迁移前继续可读）。
+// FLMX 改名收官（S1-F02）：面板版本键只认现行名 FLMX_VERSION；
+// 旧名 FLUX_VERSION 的回退读已按 2026-11-05「过渡兼容到期直接
+// 退场」裁定清除（双读过渡自 2.0.0 终结），与本文件其余退场键
+// （FLVX_* 前缀）同口径——只设旧名必须读不到。
 func TestRenameCompatPanelVersionKeyPriority(t *testing.T) {
 	t.Setenv("FLUX_VERSION", "1.9.7")
-	if got := currentPanelVersion(); got != "1.9.7" {
-		t.Fatalf("legacy FLUX_VERSION ignored: got %q", got)
+	if got := currentPanelVersion(); got == "1.9.7" {
+		t.Fatalf("retired FLUX_VERSION fallback must be ignored: got %q", got)
 	}
 	t.Setenv("FLMX_VERSION", "2.0.0")
 	if got := currentPanelVersion(); got != "2.0.0" {
-		t.Fatalf("FLMX_VERSION must win over legacy FLUX_VERSION: got %q", got)
+		t.Fatalf("FLMX_VERSION must be honored: got %q", got)
 	}
 }
 

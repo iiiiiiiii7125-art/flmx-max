@@ -57,6 +57,10 @@ func ErrDefault(msg string) R {
 
 func WriteJSON(w http.ResponseWriter, payload R) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	// F-W3-02：通用 JSON 信封统一禁存——信封承载鉴权后的管理面
+	// 数据，此前仅靠「无验证器」默示安全，属缓存口径纵深缺口；
+	// 与主订阅面 no-store 口径对齐。
+	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
@@ -64,6 +68,7 @@ func WriteJSON(w http.ResponseWriter, payload R) {
 // （如文件下载端点无快照时的 404；先发头再写体，头须在 WriteHeader 前设好）。
 func WriteJSONStatus(w http.ResponseWriter, status int, payload R) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }

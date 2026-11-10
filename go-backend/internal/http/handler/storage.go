@@ -18,7 +18,7 @@ func (h *Handler) storageSummary(w http.ResponseWriter, r *http.Request) {
 
 	summary, err := h.repo.DatabaseStorageSummary()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "storageSummary: DatabaseStorageSummary failed", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(summary))

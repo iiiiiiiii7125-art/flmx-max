@@ -47,7 +47,8 @@ import (
 // 改以 go/parser 的 AST 为真值源：注释不是 AST 节点、字符串
 // 内容也不是调用点，注释/字符串里的注册文本永不构成注册。
 // 迁移等价性以修前修后枚举集与调用点全集逐条差集 ∅ 实证
-// （立门时点枚举条数见文末订正注，现行计数以 204 口径为准）。
+// （立门时点枚举条数见文末订正注；现行计数不写死在此，以
+// TestRouteClassificationCensus 的活普查输出为准，C1-04）。
 // 常设变异红证
 // TestRouteClassificationGateMutations 在合成后端树上复跑
 // M1/M2/M3/M4/M4b/M4c/M5，任一变异漏红即门退化、当场报红。
@@ -58,12 +59,13 @@ import (
 // 对等面 Bearer 为独立自理的对等鉴权体系，与面板裸 JWT 口径
 // 各自一致、非缺陷，仅口径备查，无代码变更。
 //
-// 分类口径的计数法（audit-max 台账 §9.8 订正，现行口径）：机械
-// 实注册 204 条 = handler.go 字面量 182 条 + ghMirrorPath 常量
-// 1 条 + 备份循环双前缀展开 20 条 + router.go 直注册
-// /system-info 1 条。立门时点（L1/L8 期）曾记 211 条（其分解为
-// handler.go 字面量 189 条起），该数是历史时点快照、已作废，
-// 不再引用。L1 的四分法（免
+// 分类口径的计数法（audit-max 台账 §9.8 订正）：总数由四类
+// 构成——handler.go 字面量注册 + ghMirrorPath 常量注册 + 备份
+// 循环双前缀展开 + router.go 直注册（/system-info）。各类的实
+// 计数随注册面增减而变，不写死在注释里（C1-04：旧注释把立门
+// 后某时点的 204 条当作现行总数，与活普查实数矛盾）；现行总
+// 数与分类条数以 TestRouteClassificationCensus 的日志输出为
+// 准（AG-01 口径：活计数不写死在注释里）。L1 的四分法（免
 // 检 20 + 可选鉴权 1 + 中间件管理员 144 + 登录＋handler 门 46）
 // 到本表三分法的映射：免检 20 → 公开面（gateSkip)；可选鉴权 1
 // （/api/v1/config/get）→ 公开面（gateOptional)；中间件管理员
@@ -75,9 +77,8 @@ import (
 //
 // 注：上文 R8-023 段与 L1 四分法的条数（189/20/144/46 等）是
 // 立门时点（L1/L8 期）的推导记录，冻结备查、不要随现行计数
-// 回改；其总计数 211 已按 audit-max 台账 §9.8 订正作废——现行
-// 口径为机械实注册 204 条（计数法见上文分类口径段），现行分
-// 类条数以 TestRouteClassificationCensus 的日志输出为准
+// 回改；其总计数 211 已按 audit-max 台账 §9.8 订正作废；现行
+// 分类条数以 TestRouteClassificationCensus 的日志输出为准
 // （AG-01 口径：活计数不写死在注释里）。
 
 type routeClass int
@@ -221,6 +222,11 @@ var routeClassification = []routeEntry{
 	admH("/api/v1/monitor/services/create"), admH("/api/v1/monitor/services/delete"),
 	admH("/api/v1/monitor/services/latest-results"), admH("/api/v1/monitor/services/limits"),
 	admH("/api/v1/monitor/services/run"), admH("/api/v1/monitor/services/update"),
+	// C1-03：forward/force-delete 的管理员门在 handler 内
+	// （forwardForceDelete 对 roleID!=0 回 403），与 monitoring
+	// 同形态归 gateHandler 管理员面——旧表误登记为普通用户面，
+	// 与 handler 实况矛盾。
+	admH("/api/v1/forward/force-delete"),
 
 	// ---- 普通用户：登录 + handler 本人/归属门 ----
 	usr("/api/v1/announcement/get"),
@@ -229,7 +235,7 @@ var routeClassification = []routeEntry{
 	usr("/api/v1/forward/batch-pause"), usr("/api/v1/forward/batch-redeploy"),
 	usr("/api/v1/forward/batch-resume"), usr("/api/v1/forward/create"),
 	usr("/api/v1/forward/delete"), usr("/api/v1/forward/diagnose"),
-	usr("/api/v1/forward/diagnose/stream"), usr("/api/v1/forward/force-delete"),
+	usr("/api/v1/forward/diagnose/stream"),
 	usr("/api/v1/forward/list"), usr("/api/v1/forward/pause"),
 	usr("/api/v1/forward/reset-flow"), usr("/api/v1/forward/resume"),
 	usr("/api/v1/forward/update"), usr("/api/v1/forward/update-order"),

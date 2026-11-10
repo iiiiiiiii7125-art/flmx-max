@@ -700,10 +700,27 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 		return s.validateNodeSession(nodeID, secret)
 	})
 
-	version := r.URL.Query().Get("version")
-	httpVal := parseIntDefault(r.URL.Query().Get("http"), 0)
-	tlsVal := parseIntDefault(r.URL.Query().Get("tls"), 0)
-	socksVal := parseIntDefault(r.URL.Query().Get("socks"), 0)
+	// F2-04：握手自报按「参数在场」落库——缺参不再塌缩成 0/空
+	// 串覆写既有版本与能力位（老 agent 不带能力位、或参数被中
+	// 间层剥离时，旧实现会把真实值清零）。
+	query := r.URL.Query()
+	onlineReport := repo.NodeOnlineReport{Status: 1}
+	if query.Has("version") {
+		v := query.Get("version")
+		onlineReport.Version = &v
+	}
+	if query.Has("http") {
+		n := parseIntDefault(query.Get("http"), 0)
+		onlineReport.HTTP = &n
+	}
+	if query.Has("tls") {
+		n := parseIntDefault(query.Get("tls"), 0)
+		onlineReport.TLS = &n
+	}
+	if query.Has("socks") {
+		n := parseIntDefault(query.Get("socks"), 0)
+		onlineReport.Socks = &n
+	}
 
 	s.mu.Lock()
 	if old, ok := s.nodes[nodeID]; ok {
@@ -720,7 +737,7 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 	s.byConn[conn] = ns
 	s.mu.Unlock()
 
-	_ = s.repo.UpdateNodeOnline(nodeID, 1, version, httpVal, tlsVal, socksVal)
+	_ = s.repo.UpdateNodeOnlineReport(nodeID, onlineReport)
 	s.broadcastStatus(nodeID, 1)
 
 	s.mu.RLock()
@@ -777,6 +794,11 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 		}
 		if parsed.Type != "" {
 			switch parsed.Type {
+			case "UninstallResult":
+				// C4-G2：agent 卸载终局上报（受理回执之外的第二
+				// 段），落待卸载登记状态；不进广播白名单。
+				s.handleUninstallResult(nodeID, msg)
+				continue
 			case "metric":
 				// Agent 新版指标消息：{type:"metric", data:{...}}
 				var envelope struct {
@@ -813,6 +835,15 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 				// 密内层、构造上不可得），其 message 是面板侧唯一能拿到
 				// 失败明示原因的通道——仅对这五型记下经单行化＋截断的
 				// message，仍不广播、不改 fail-closed。
+				// F2-05：在记日志之外，把该帧按连接关联到本节点最早
+				// 的在途命令并以点名真因结清——等待方不再等满泛化
+				// 超时才知道是时钟偏差/解密失败。
+				if cmdReason, ok := agentPreParseErrorCommandReason(parsed.Type, msg); ok {
+					if s.failOldestPendingForNode(nodeID, cmdReason) {
+						log.Printf("websocket: agent pre-parse error type=%q from node %d settled oldest pending command: %s", parsed.Type, nodeID, cmdReason)
+						continue
+					}
+				}
 				if reason, ok := agentPreParseErrorReason(parsed.Type, msg); ok {
 					log.Printf("websocket: agent pre-parse error type=%q from node %d: %s", parsed.Type, nodeID, reason)
 					continue
@@ -1105,6 +1136,76 @@ func (s *Server) failPendingForNode(nodeID int64, message string) {
 		}
 		close(item.pr.ch)
 	}
+}
+
+// failOldestPendingForNode 只结清该节点最早的一条在途命令
+// （F2-05）：agent 的解析前拒绝帧构造上不带 requestId（拒绝发
+// 生在解密/解析内层之前），无法精确认领是哪条命令被拒；命令
+// 按发送顺序被 agent 接收处理，最早在途者即最可能的被拒者。
+// 以真因结清它，等待方立即拿到点名原因，不再等满超时只见泛
+// 化文案；其余在途命令不受影响（它们已被 agent 正常解析）。
+// requestId 形如 <nodeID>_<unixnano>，以纳秒后缀定序。
+func (s *Server) failOldestPendingForNode(nodeID int64, message string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	var oldestID string
+	var oldest pendingRequest
+	var oldestSeq int64 = -1
+	for id, pr := range s.pending {
+		if pr.nodeID != nodeID {
+			continue
+		}
+		seq := int64(-1)
+		if idx := strings.LastIndex(id, "_"); idx >= 0 {
+			if n, err := strconv.ParseInt(id[idx+1:], 10, 64); err == nil {
+				seq = n
+			}
+		}
+		if oldestSeq == -1 || (seq >= 0 && seq < oldestSeq) {
+			oldestID, oldest, oldestSeq = id, pr, seq
+		}
+	}
+	if oldestSeq == -1 && oldestID == "" {
+		s.mu.Unlock()
+		return false
+	}
+	delete(s.pending, oldestID)
+	s.mu.Unlock()
+
+	select {
+	case oldest.ch <- CommandResult{Success: false, Message: message}:
+	default:
+	}
+	close(oldest.ch)
+	return true
+}
+
+// agentPreParseErrorCommandReason 把 agent 解析前错误五型映射
+// 为对等待方的点名结清文案（F2-05）：型别即真因（时钟偏差/
+// 解密失败等），附带 agent 自带 message 的安全化摘要。非五型
+// 返回 false。
+func agentPreParseErrorCommandReason(msgType, msg string) (string, bool) {
+	var base string
+	switch msgType {
+	case "StaleTimestamp":
+		base = "节点拒绝命令：面板与节点时钟偏差过大（StaleTimestamp），请校准节点与面板时间后重试"
+	case "DecryptError":
+		base = "节点拒绝命令：命令解密失败（DecryptError），节点密钥可能已轮换或与面板不一致"
+	case "NoDecryptor":
+		base = "节点拒绝命令：节点无可用解密器（NoDecryptor），节点密钥可能已轮换或与面板不一致"
+	case "DecompressError":
+		base = "节点拒绝命令：命令解压失败（DecompressError）"
+	case "ParseError":
+		base = "节点拒绝命令：命令帧解析失败（ParseError）"
+	default:
+		return "", false
+	}
+	if detail, ok := agentPreParseErrorReason(msgType, msg); ok && detail != "" {
+		return base + "：agent 原文：" + detail, true
+	}
+	return base, true
 }
 
 func (s *Server) broadcastStatus(nodeID int64, status int) {

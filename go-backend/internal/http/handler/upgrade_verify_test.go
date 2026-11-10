@@ -76,7 +76,7 @@ func TestUpgradeVerifyTargetMatches(t *testing.T) {
 func TestVerifyLandingMatchResolves(t *testing.T) {
 	h, r := setupUpgradeVerifyHandler(t)
 	insertUpgradeVerifyNode(t, r, 7, "node-match", "2.0.0 (debian/amd64)")
-	h.recordNodeUpgradeVerification(7, upgradeVerifyKindUpgrade, "2.1.0", "sha-x")
+	h.recordNodeUpgradeVerification(7, upgradeVerifyKindUpgrade, "2.1.0", "sha-x", "")
 	if rec := getVerifyRecord(t, r, 7); rec == nil || rec.Status != repo.NodeUpgradeVerifyPending || rec.FromVersion != "2.0.0 (debian/amd64)" {
 		t.Fatalf("record after dispatch mismatch: %+v", rec)
 	}
@@ -91,7 +91,7 @@ func TestVerifyLandingMatchResolves(t *testing.T) {
 func TestVerifyMismatchOnlyObserves(t *testing.T) {
 	h, r := setupUpgradeVerifyHandler(t)
 	insertUpgradeVerifyNode(t, r, 7, "node-mismatch", "2.0.0 (debian/amd64)")
-	h.recordNodeUpgradeVerification(7, upgradeVerifyKindUpgrade, "2.1.0", "")
+	h.recordNodeUpgradeVerification(7, upgradeVerifyKindUpgrade, "2.1.0", "", "arch-unresolvable")
 	// 旧进程残连/自动回滚后的旧版回连：只记 observed，不判死刑。
 	h.verifyNodeUpgradeLanding(7)
 	rec := getVerifyRecord(t, r, 7)
@@ -109,7 +109,7 @@ func TestVerifyMismatchOnlyObserves(t *testing.T) {
 func TestVerifyRollbackRecordSameCaliber(t *testing.T) {
 	h, r := setupUpgradeVerifyHandler(t)
 	insertUpgradeVerifyNode(t, r, 7, "node-rollback", "2.1.0 (debian/amd64)")
-	h.recordNodeUpgradeVerification(7, upgradeVerifyKindRollback, "2.0.0", "")
+	h.recordNodeUpgradeVerification(7, upgradeVerifyKindRollback, "2.0.0", "", "")
 	setNodeReportedVersion(t, r, 7, "2.0.0 (debian/amd64)")
 	h.verifyNodeUpgradeLanding(7)
 	rec := getVerifyRecord(t, r, 7)
@@ -122,7 +122,7 @@ func TestRecordSkipsUnknownTarget(t *testing.T) {
 	h, r := setupUpgradeVerifyHandler(t)
 	insertUpgradeVerifyNode(t, r, 7, "node-legacy", "2.1.0 (debian/amd64)")
 	// 无代际配对的老 agent 回退：面板不知道目标，不落记录。
-	h.recordNodeUpgradeVerification(7, upgradeVerifyKindRollback, "", "")
+	h.recordNodeUpgradeVerification(7, upgradeVerifyKindRollback, "", "", "")
 	if rec := getVerifyRecord(t, r, 7); rec != nil {
 		t.Fatalf("unknown target must not create a record: %+v", rec)
 	}
@@ -165,7 +165,7 @@ func TestSweepFailsOverdueAndAlertsOnce(t *testing.T) {
 func TestSweepKeepsWithinWindowPending(t *testing.T) {
 	h, r := setupUpgradeVerifyHandler(t)
 	insertUpgradeVerifyNode(t, r, 7, "node-waiting", "2.0.0 (debian/amd64)")
-	h.recordNodeUpgradeVerification(7, upgradeVerifyKindUpgrade, "2.1.0", "")
+	h.recordNodeUpgradeVerification(7, upgradeVerifyKindUpgrade, "2.1.0", "", "arch-unresolvable")
 	if failures := h.failDueUpgradeVerifications(time.Now()); len(failures) != 0 {
 		t.Fatalf("within-window record must not fail: %+v", failures)
 	}
@@ -206,7 +206,7 @@ func TestVerificationSurvivesPanelRestart(t *testing.T) {
 	}
 	h1 := New(r1, "unit-test-secret")
 	insertUpgradeVerifyNode(t, r1, 7, "node-restart", "2.0.0 (debian/amd64)")
-	h1.recordNodeUpgradeVerification(7, upgradeVerifyKindUpgrade, "2.1.0", "")
+	h1.recordNodeUpgradeVerification(7, upgradeVerifyKindUpgrade, "2.1.0", "", "arch-unresolvable")
 	if err := r1.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}

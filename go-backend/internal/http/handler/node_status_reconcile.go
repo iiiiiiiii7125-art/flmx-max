@@ -32,6 +32,18 @@ func (h *Handler) resetLocalNodeStatusesAtStartup() {
 	if h == nil || h.repo == nil {
 		return
 	}
+	// F2-02：复位前先快照在线集——复位后 checkStartupOfflineNodes
+	// 以快照判定「重启前在线、重启后仍未回连」，不再依赖已被
+	// 复位清零的 DB status（旧实现下本地节点结构性永不告警）。
+	if ids, err := h.repo.ListOnlineLocalNodeIDs(); err == nil {
+		snapshot := make(map[int64]struct{}, len(ids))
+		for _, id := range ids {
+			snapshot[id] = struct{}{}
+		}
+		h.startupOnlineSnapshot = snapshot
+	} else {
+		log.Printf("node status startup snapshot failed: %v", err)
+	}
 	reset, err := h.repo.ResetLocalNodeStatusesAtStartup()
 	if err != nil {
 		log.Printf("node status startup reset failed: %v", err)
@@ -94,6 +106,11 @@ func (h *Handler) reconcileNodeOnlineStatuses(now time.Time, offlineSince map[in
 			log.Printf("node status reconcile: reset node_id=%d failed: %v", node.ID, err)
 			continue
 		}
+		// F2-02 同族（B1/O6）：对账复位是状态翻转点，须与 WS 断
+		// 开路径同口径触发掉线告警登记——断开钩子未达成的翻转
+		// （如进程内边缘路径）此前只改 DB 不告警。notifyNodeOffline
+		// 内部有已告警去重，正常断开路径不会双发。
+		h.notifyNodeOffline(node.ID)
 		if h.wsServer != nil {
 			h.wsServer.BroadcastNodeStatus(node.ID, 0)
 		}

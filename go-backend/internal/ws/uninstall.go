@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"go-backend/internal/security"
+	"go-backend/internal/store/repo"
 )
 
 // uninstallReplyTimeout 是待卸载 agent 重连后等待其卸载回执的上限。
@@ -36,6 +37,73 @@ func uninstallReplyWarnings(data json.RawMessage) []string {
 		}
 	}
 	return out
+}
+
+// handleUninstallResult 落 agent 的卸载终局上报（C4-G2 面板
+// 半）：报文 {type:"UninstallResult", data:{issuedAt, success,
+// reason, warnings}}。幂等键 = 本连接的 node_id＋登记的
+// issued_at：issuedAt 与现行登记不符（重试已刷新、旧轮迟到）
+// 一律忽略；无登记时同样忽略（重复上报/已处置）。成功 →
+// succeeded（面板清扫随后删记录并清登记）；失败 → failed＋
+// agent 点名原因。warnings 逐条进日志（终局路径没有同步回执
+// 可挂，日志是其披露面，与重连拦截路径同口径）。
+func (s *Server) handleUninstallResult(nodeID int64, msg string) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	var envelope struct {
+		Data struct {
+			IssuedAt int64    `json:"issuedAt"`
+			Success  bool     `json:"success"`
+			Reason   string   `json:"reason"`
+			Warnings []string `json:"warnings"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(msg), &envelope); err != nil {
+		log.Printf("websocket: malformed UninstallResult from node %d: %v", nodeID, err)
+		return
+	}
+	rec, err := s.repo.GetNodePendingUninstall(nodeID)
+	if err != nil || rec == nil {
+		log.Printf("websocket: UninstallResult from node %d without pending registry, ignored", nodeID)
+		return
+	}
+	if envelope.Data.IssuedAt != 0 && envelope.Data.IssuedAt != rec.IssuedAt {
+		log.Printf("websocket: stale UninstallResult from node %d (issuedAt %d, current %d), ignored", nodeID, envelope.Data.IssuedAt, rec.IssuedAt)
+		return
+	}
+	for _, text := range envelope.Data.Warnings {
+		if strings.TrimSpace(text) != "" {
+			log.Printf("node %d agent uninstall warning: %s", nodeID, text)
+		}
+	}
+	now := time.Now()
+	if envelope.Data.Success {
+		won, terr := s.repo.TransitionNodePendingUninstall(nodeID,
+			[]string{repo.NodePendingUninstallIssued, repo.NodePendingUninstallAcked, repo.NodePendingUninstallUnconfirmed},
+			repo.NodePendingUninstallSucceeded, "", now)
+		if terr != nil || !won {
+			log.Printf("websocket: UninstallResult success transition failed node_id=%d won=%v err=%v", nodeID, won, terr)
+			return
+		}
+		log.Printf("node %d agent reported uninstall success (issuedAt %d)", nodeID, rec.IssuedAt)
+		return
+	}
+	reason := strings.TrimSpace(envelope.Data.Reason)
+	if reason == "" {
+		reason = "agent 上报卸载失败（未附原因）"
+	}
+	if r := []rune(reason); len(r) > 500 {
+		reason = string(r[:500])
+	}
+	won, terr := s.repo.TransitionNodePendingUninstall(nodeID,
+		[]string{repo.NodePendingUninstallIssued, repo.NodePendingUninstallAcked, repo.NodePendingUninstallUnconfirmed},
+		repo.NodePendingUninstallFailed, reason, now)
+	if terr != nil || !won {
+		log.Printf("websocket: UninstallResult failure transition failed node_id=%d won=%v err=%v", nodeID, won, terr)
+		return
+	}
+	log.Printf("node %d agent reported uninstall failure: %s", nodeID, reason)
 }
 
 // serveUninstalledNode 处理「服务器已删、agent 当时离线」的重连：

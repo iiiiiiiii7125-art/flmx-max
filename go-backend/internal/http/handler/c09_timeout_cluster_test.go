@@ -160,7 +160,7 @@ func c09PostCheckUpdates(t *testing.T, h *Handler, channel string) c09Envelope {
 }
 
 func TestC09CheckUpdatesFallsBackToRedirect(t *testing.T) {
-	t.Setenv("FLUX_VERSION", "1.0.0")
+	t.Setenv("FLMX_VERSION", "1.0.0")
 	h := c09CheckUpdatesStub(t, "1.7.2")
 
 	env := c09PostCheckUpdates(t, h, "stable")
