@@ -19,7 +19,7 @@ type obj = map[string]interface{}
 // arrive on the process's stdout, mixed with the error log stream.
 const connLogAccessPath = "/dev/stdout"
 
-func renderXray(inbounds []Inbound) (string, error) {
+func renderXray(inbounds []Inbound, opts RenderOptions) (string, error) {
 	// Per-inbound idle timeout: every inbound with ConnIdleSeconds set
 	// gets its own policy level (1..N, in inbound-ID order — inbounds
 	// arrive ID-sorted from RenderWith, so the assignment is stable
@@ -42,7 +42,11 @@ func renderXray(inbounds []Inbound) (string, error) {
 		list = append(list, item)
 	}
 	logCfg := obj{"loglevel": "warning"}
-	if anyConnLogEnabled(inbounds) {
+	// Connection-log collection (design §3.2/§4.5): the access log
+	// opens only when the master switch is on and some inbound
+	// opted in (D-04: master off falls back to no access log even
+	// with opt-ins set).
+	if opts.ConnLogEnabled && anyConnLogEnabled(inbounds) {
 		logCfg["access"] = connLogAccessPath
 	}
 	cfg := obj{

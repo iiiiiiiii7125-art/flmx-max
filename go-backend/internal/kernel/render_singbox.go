@@ -22,9 +22,12 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	// consumes only exist at debug level, and the log level is
 	// per-process — one opted-in inbound raises the whole kernel to
 	// debug. With no opt-in the level stays warn and the render is
-	// unchanged.
+	// unchanged. The master switch gates the raise as well (D-04):
+	// with connlog_enabled off the level stays warn even with
+	// opt-ins set, so debug chatter does not flood the
+	// troubleshooting ring while collection itself is off.
 	logLevel := "warn"
-	if anyConnLogEnabled(inbounds) {
+	if opts.ConnLogEnabled && anyConnLogEnabled(inbounds) {
 		logLevel = "debug"
 	}
 	cfg := obj{

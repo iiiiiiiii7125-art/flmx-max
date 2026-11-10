@@ -125,6 +125,51 @@ func TestSingboxErrorCloses(t *testing.T) {
 	}
 }
 
+// D-06：握手失败的独立终结行（open 行未见）不得硬编码
+// tcp/tcp_conn——QUIC 入站（tuic/hysteria2）流与包会话按
+// truth rule 是 kernel_session；包入站还是 udp。已跟踪连接经
+// pushClose 带正确 kind 的路径作回归对照。
+func TestSingboxTerminalKinds(t *testing.T) {
+	now := time.UnixMilli(utcMs(40))
+	c, buf := newTestCollector("singbox", 101, 103, 104)
+	c.beginGeneration("singbox", time.UnixMilli(utcMs(30)))
+	// Stand-alone handshake-failure terminals (open line never seen).
+	c.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR [777001 0ms] inbound/tuic[in-103]: process connection from 10.0.0.9:5000: tuic: handshake failed", now)
+	c.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR [777002 0ms] inbound/hysteria2[in-104]: process connection from 10.0.0.10:5001: hysteria2: handshake failed", now)
+	c.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR [777003 0ms] inbound/socks[in-101]: process packet connection from 127.0.0.1:40000: packet: invalid header", now)
+	evs := buf.Drain(0)
+	if len(evs) != 3 {
+		t.Fatalf("events = %d, want 3 stand-alone closes: %+v", len(evs), evs)
+	}
+	for _, ev := range evs {
+		if ev.Type != ConnEventClose || ev.Status != ConnStatusClosed {
+			t.Fatalf("stand-alone terminal must be a closed close: %+v", ev)
+		}
+	}
+	if evs[0].EntryID != "in-103" || evs[0].ClientIP != "10.0.0.9" || evs[0].ClientPort != 5000 ||
+		evs[0].Network != "tcp" || evs[0].SessionKind != ConnSessionKindKernel {
+		t.Errorf("tuic terminal must be a tcp kernel_session, never tcp_conn: %+v", evs[0])
+	}
+	if evs[1].EntryID != "in-104" || evs[1].ClientIP != "10.0.0.10" || evs[1].ClientPort != 5001 ||
+		evs[1].Network != "tcp" || evs[1].SessionKind != ConnSessionKindKernel {
+		t.Errorf("hysteria2 terminal must be a tcp kernel_session, never tcp_conn: %+v", evs[1])
+	}
+	if evs[2].EntryID != "in-101" || evs[2].ClientIP != "127.0.0.1" || evs[2].ClientPort != 40000 ||
+		evs[2].Network != "udp" || evs[2].SessionKind != ConnSessionKindKernel {
+		t.Errorf("packet terminal must be a udp kernel_session, never tcp_conn: %+v", evs[2])
+	}
+
+	// Tracked QUIC stream closed by its terminal line keeps kernel_session.
+	c2, buf2 := newTestCollector("singbox", 103)
+	c2.beginGeneration("singbox", time.UnixMilli(utcMs(30)))
+	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:34 INFO [555 0ms] inbound/tuic[in-103]: inbound connection from 10.0.0.9:5000", now)
+	c2.FeedAs("singbox", "+0000 2026-11-09 21:25:35 ERROR [555 0ms] inbound/tuic[in-103]: process connection from 10.0.0.9:5000: tuic: handshake failed", now)
+	evs = buf2.Drain(0)
+	if len(evs) != 2 || evs[1].Type != ConnEventClose || evs[1].SessionKind != ConnSessionKindKernel {
+		t.Fatalf("tracked tuic terminal wrong: %+v", evs)
+	}
+}
+
 func TestSingboxGenerationIsolation(t *testing.T) {
 	c, buf := newTestCollector("singbox", 101)
 	now := time.UnixMilli(utcMs(40))

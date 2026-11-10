@@ -16,8 +16,8 @@ import (
 //     转发没有 relay 行，天然零标记。
 //   - 内核入站：KernelApply 载荷的 connlogEntries 列出「自身即
 //     入口」的入站（直连，或链式源入站）：被中转落地（有 relay
-//     行指向）、链式目标（被其他入站的 OutboundID 指向，其连接
-//     对端是源入站所在机器）、计量伴生（CompanionOf>0）、导入
+//     行指向）、链式目标（被其他入站的 OutboundID 或分流规则的
+//     SplitProxy 目标指向，其连接对端是源入站所在机器）、计量伴生（CompanionOf>0）、导入
 //     来源（SourceID>0）以及 RelayOnly/RelayWhitelist 的入站都
 //     不在列——它们名下的连接对端是上一跳而非客户端，采下来
 //     是错数据。
@@ -91,8 +91,10 @@ func (h *Handler) connlogRelayTargetInboundIDs() (map[int64]bool, error) {
 // connlogChainTargetInboundIDs 返回被任一入站以 OutboundID 指
 // 向的入站 ID 集：链式目标是落地，客户端连入的是源入站，目标
 // 名下的连接对端是源机器，不得标直连入口（验收格一⑥「链式腿
-// 无记录混入」）。分流（SplitRules）目标在运行时才定、面板推
-// 导不出，按设计 §2 不在此列。
+// 无记录混入」）。分流目标同形同理：分流腿的对端同样是源机
+// 器——「分流目标在运行时才定」只对「某条连接命中哪条规则」
+// 成立，静态目标集合面板完全推导得出，故与 OutboundID 一并
+// 枚举（复用 kernel_chain.go 的 outboundTargets）。
 func (h *Handler) connlogChainTargetInboundIDs() (map[int64]bool, error) {
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
@@ -100,8 +102,8 @@ func (h *Handler) connlogChainTargetInboundIDs() (map[int64]bool, error) {
 	}
 	ids := make(map[int64]bool)
 	for _, row := range rows {
-		if row.OutboundID > 0 {
-			ids[row.OutboundID] = true
+		for _, id := range outboundTargets(row) {
+			ids[id] = true
 		}
 	}
 	return ids, nil
