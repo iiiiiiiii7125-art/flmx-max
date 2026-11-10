@@ -64,6 +64,10 @@ export function LatencyTrendModal({
   const [hours, setHours] = useState(24);
   const [trend, setTrend] = useState<LatencyTrend | null>(null);
   const [loading, setLoading] = useState(false);
+  // IRL-3／R3-MR-02：初载失败常驻标记——失败与「这段时间还没有记录」
+  // 的无数据态必须可区分，不许拿空图冒充无数据。
+  const [trendLoadFailed, setTrendLoadFailed] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   // 请求序号守卫（D5-04）：切换节点/范围时先清旧数据，迟到响应一律丢弃，
   // 避免新请求失败后旧请求成功把上一个节点的数据持久显示到新标题下
   const trendSeqRef = useRef(0);
@@ -73,19 +77,27 @@ export function LatencyTrendModal({
     const seq = (trendSeqRef.current += 1);
 
     setTrend(null);
+    setTrendLoadFailed(false);
     setLoading(true);
     getNodeLatencyHistory(nodeId, hours)
       .then((res) => {
         if (trendSeqRef.current !== seq) return;
-        setTrend(res.code === 0 ? (res.data ?? null) : null);
+        if (res.code === 0) {
+          setTrend(res.data ?? null);
+        } else {
+          setTrend(null);
+          setTrendLoadFailed(true);
+        }
       })
       .catch(() => {
-        if (trendSeqRef.current === seq) setTrend(null);
+        if (trendSeqRef.current !== seq) return;
+        setTrend(null);
+        setTrendLoadFailed(true);
       })
       .finally(() => {
         if (trendSeqRef.current === seq) setLoading(false);
       });
-  }, [nodeId, hours]);
+  }, [nodeId, hours, reloadKey]);
 
   useEffect(() => {
     if (nodeId === null) setHours(24);
@@ -151,6 +163,19 @@ export function LatencyTrendModal({
           {loading && !trend ? (
             <div className="flex h-52 items-center sm:h-64 justify-center">
               <Loader2 className="h-5 w-5 animate-spin text-foreground" />
+            </div>
+          ) : trendLoadFailed ? (
+            <div className="flex h-52 flex-col items-center justify-center gap-3 sm:h-64">
+              <p className="text-sm font-semibold text-danger-700">
+                延迟趋势加载失败，请重试
+              </p>
+              <Button
+                size="sm"
+                variant="flat"
+                onPress={() => setReloadKey((k) => k + 1)}
+              >
+                重试
+              </Button>
             </div>
           ) : rows.length === 0 ? (
             <p className="flex h-52 items-center sm:h-64 justify-center text-sm text-foreground">

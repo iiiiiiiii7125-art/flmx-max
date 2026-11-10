@@ -142,20 +142,40 @@ export function SwapModal({
 
         return;
       }
-      setResult(res.data);
+      // R3-NODE-02：set 回执与 info 拉取同款补形状校验——code 0 但 data
+      // 残缺（before/after/sizeGB 缺失）时不得拿残缺数据渲染成功态，
+      // 也不得让残缺字段在下方取值时抛错、被 catch 误报成连接中断。
+      const d = res.data;
+      const shapeOk =
+        typeof d.sizeGB === "number" &&
+        !!d.before &&
+        typeof d.before.totalMB === "number" &&
+        typeof d.before.usedMB === "number" &&
+        !!d.after &&
+        typeof d.after.totalMB === "number" &&
+        typeof d.after.usedMB === "number";
+
+      if (!shapeOk) {
+        setExecError(
+          "执行回执异常：面板返回的执行结果不完整，无法确认本次设置是否生效，请关闭弹窗重新打开核对节点现状",
+        );
+
+        return;
+      }
+      setResult(d);
       setInfo((prev) =>
         prev
           ? {
               ...prev,
-              totalMB: res.data.after.totalMB,
-              usedMB: res.data.after.usedMB,
+              totalMB: d.after.totalMB,
+              usedMB: d.after.usedMB,
             }
           : prev,
       );
-      toast.success(`已设置 Swap 为 ${res.data.sizeGB} GB`);
+      toast.success(`已设置 Swap 为 ${d.sizeGB} GB`);
       // 回执 warnings 是非致命残留提示（现仅旧 swap 备份删除失败一源）：逐条
       // 按全仓 envelope warning 形态追加 ⚠️ toast，不许只报成功吞掉。
-      for (const warning of res.data.warnings ?? []) {
+      for (const warning of d.warnings ?? []) {
         toast(warning, { icon: "⚠️", duration: 12000 });
       }
     } catch {
