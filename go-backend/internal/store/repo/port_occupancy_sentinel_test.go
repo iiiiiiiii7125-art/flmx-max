@@ -55,9 +55,8 @@ var k9PortDecisionPoints = []struct {
 // 函数含 node+port 决策形查询，但语义上不做「端口是否可分配」的
 // 判定：只按已判定来源补取详情、或只读展示既有占用。
 var k9PortQueryAllowlist = map[string]string{
-	"FindOtherForwardOnNodePortTx":  "详情补取：来源判定走 NodePortOccupantTx（正向清单已锁），本函数只按来源取名称/状态",
-	"ListActiveForwardPortsForNode": "节点页展示清单：只读列出本节点转发口，不做分配决策",
-	"getTunnelEntryPortRanges":      "展示聚合：按隧道读既有链路/入站端口聚合 min/max 供列表渲染，不做分配决策",
+	"FindOtherForwardOnNodePortTx": "详情补取：来源判定走 NodePortOccupantTx（正向清单已锁），本函数只按来源取名称/状态",
+	"getTunnelEntryPortRanges":     "展示聚合：按隧道读既有链路/入站端口聚合 min/max 供列表渲染，不做分配决策",
 }
 
 // k9HandlerQueryAllowlist 是 handler 包负向扫描的豁免清单。handler
@@ -234,6 +233,23 @@ func TestK9PortOccupancySentinel(t *testing.T) {
 		}
 	}
 
+	// 反向（R2-C5-03）：豁免表每项必须对应仍在场的函数——e6c0a318
+	// 删 ListActiveForwardPortsForNode 未清豁免，死条目滞留至今；
+	// 本门此前只查「在场函数须有出处」，不查「登记项须在场」。
+	// 与 in-list 哨兵的反向检查同款：登记项在源码中消失即红。
+	for name := range k9PortQueryAllowlist {
+		found := false
+		for _, fn := range funcs {
+			if fn.name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("P01-001 sentinel: allowlist entry %q names a function that no longer exists in the repo package; remove the dead entry (R2-C5-03 reverse check)", name)
+		}
+	}
+
 	// 负向（repo 包）：未登记函数不得出现决策形占用查询。
 	for _, fn := range funcs {
 		if fn.file == "repository_port_occupancy.go" {
@@ -250,6 +266,20 @@ func TestK9PortOccupancySentinel(t *testing.T) {
 	// 负向（handler 包）：选口/判重决策点不得绕开 repo 统一入口
 	// 对四表直查（R1C-03 扩扫）。
 	handlerFuncs := k9LoadDirFuncs(t, filepath.Join("..", "..", "http", "handler"))
+	// 反向（R2-C5-03 同款）：handler 豁免表每项亦须对应在场函数，
+	// 死条目不得滞留。
+	for name := range k9HandlerQueryAllowlist {
+		found := false
+		for _, fn := range handlerFuncs {
+			if fn.name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("P01-001 sentinel: handler allowlist entry %q names a function that no longer exists in the handler package; remove the dead entry (R2-C5-03 reverse check)", name)
+		}
+	}
 	for _, fn := range handlerFuncs {
 		if _, exempt := k9HandlerQueryAllowlist[fn.name]; exempt {
 			continue
