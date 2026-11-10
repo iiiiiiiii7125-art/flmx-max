@@ -20,6 +20,13 @@ if [ -z "${BASH_VERSION:-}" ]; then
       exit 1
     fi
 
+    # apk 失败时 bash 仍不在位：不得带着误导性的 exec 报错收场，
+    # 先验在位、点名缺失的包与人工装法（回执与结果一致）。
+    if ! command -v bash >/dev/null 2>&1; then
+      echo "❌ Alpine 安装 bash 失败，请先手动执行 apk add --no-cache bash 后重跑" >&2
+      exit 1
+    fi
+
     exec bash "$0" "$@"
   fi
 
@@ -190,10 +197,15 @@ ensure_alpine_runtime_dependencies() {
   fi
 
   echo "📦 Alpine 缺少运行依赖，正在安装: ${missing_packages[*]}"
+  local apk_rc=0
   if [[ -n "$privileged_command" ]]; then
-    "$privileged_command" apk add --no-cache "${missing_packages[@]}"
+    "$privileged_command" apk add --no-cache "${missing_packages[@]}" || apk_rc=$?
   else
-    apk add --no-cache "${missing_packages[@]}"
+    apk add --no-cache "${missing_packages[@]}" || apk_rc=$?
+  fi
+  if [[ "$apk_rc" -ne 0 ]]; then
+    echo "❌ Alpine 运行依赖安装失败（apk 退出码 $apk_rc），缺少的软件包: ${missing_packages[*]}；请先手动执行 apk add --no-cache ${missing_packages[*]} 后重跑" >&2
+    return 1
   fi
 }
 
@@ -1137,7 +1149,14 @@ download_agent_binary() {
       fi
       if curl -fL -C - --connect-timeout 10 --max-time "$remain" --speed-limit 40960 --speed-time 15 "$url" -o "$part" && [[ -s "$part" ]]; then
         if verify_downloaded_binary "$part" "$url" "$prefix"; then
-          mv -f "$part" "$dest"
+          # 落盘 mv 必须守卫：mv 失败（目标目录不可写/跨设备等）
+          # 时旧实现照印 ✅ 并 return 0，.part 残留、dest 仍是旧
+          # 二进制甚至不存在，调用方按「下载成功」继续装机。
+          if ! mv -f "$part" "$dest" || [[ ! -s "$dest" ]]; then
+            echo "❌ 下载已完成但落盘失败：无法把 $part 移为 $dest" >&2
+            rm -f "$part"
+            return 1
+          fi
           echo "✅ 下载完成（路线: ${prefix:-直连}）"
           return 0
         fi
@@ -1190,6 +1209,22 @@ show_menu() {
 # 文件，不得对无关路径执行 rm、也不得照印「已删除」。用户取消单独
 # 走 AGENT_OP_CANCELLED 标志（见 uninstall_flmx_agent，R2-F7-01）：
 # main 见标志不调用本函数、保留脚本并以 0 退出。
+# delete_self 的本体校验（多因子，两脚本同口径）：常规文件、首
+# 行是 sh/bash shebang、含本仓 REPO 钉死行、含本脚本标志性函数
+# 定义、且自身定义了 delete_self——全过才认本体。旧实现只查
+# REPO 行一因子，校验串与被校验内容同源（把 REPO 值改成本仓地
+# 址的异物文件即可骗过自删校验），现以结构因子叠加抬高伪造门
+# 槛；校验不过即保留并点名，永不误删。
+flmx_script_file_is_self() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  head -n 1 "$path" 2>/dev/null | grep -qE '^#!/[^ ]*/(ba)?sh' || return 1
+  grep -qF 'REPO="iiiiiiiii7125-art/flmx-max"' "$path" 2>/dev/null || return 1
+  grep -q '^install_flmx_agent()' "$path" 2>/dev/null || return 1
+  grep -q '^delete_self()' "$path" 2>/dev/null || return 1
+  return 0
+}
+
 delete_self() {
   local rc="${1:-0}"
   if [[ "$rc" != "0" ]]; then
@@ -1201,14 +1236,15 @@ delete_self() {
   # $0 是裸命令名 bash/sh，readlink -f 会按当前目录把它解析成
   # $CWD/bash——与脚本无关的同名文件，删之是数据事故、印「已
   # 删除」是假文案（管道形态本无文件可删）。判定两层：① $0 不
-  # 含 / 时，只认 CWD 下同名文件且其内容含 REPO 钉死行（脚本本
-  # 体标记）才继续（bash install.sh 的相对调用 $0 无斜杠但确是
-  # 本体，不受影响）；② 解析出的目标须真实存在且同样含该标记
-  # 才删。任一层不过 → 静默跳过。
+  # 含 / 时，只认 CWD 下同名文件且其内容经本体校验（多因子，见
+  # flmx_script_file_is_self）才继续（bash install.sh 的相对调用
+  # $0 无斜杠但确是本体，不受影响）；② 解析出的目标须真实存在
+  # 且同样过本体校验才删。任一层不过 → 保留并点名。
   case "$0" in
     */*) ;;
     *)
-      if [[ ! -f "$0" ]] || ! grep -qF 'REPO="iiiiiiiii7125-art/flmx-max"' "$0" 2>/dev/null; then
+      if ! flmx_script_file_is_self "$0"; then
+        echo "⚠️ 无法确认脚本本体文件（管道执行或同名异物），脚本文件已保留"
         return 0
       fi
       ;;
@@ -1217,7 +1253,8 @@ delete_self() {
   if [[ "$SCRIPT_PATH" == /dev/fd/* ]]; then
     return 0
   fi
-  if [[ ! -f "$SCRIPT_PATH" ]] || ! grep -qF 'REPO="iiiiiiiii7125-art/flmx-max"' "$SCRIPT_PATH" 2>/dev/null; then
+  if ! flmx_script_file_is_self "$SCRIPT_PATH"; then
+    echo "⚠️ 待删除的脚本文件校验未通过（$SCRIPT_PATH 无法确认为本脚本本体），已保留未删"
     return 0
   fi
   echo ""
@@ -1319,13 +1356,33 @@ check_and_install_tcpkill() {
 }
 
 json_escape() {
-  local value="$1"
-  value=${value//\\/\\\\}
-  value=${value//\"/\\\"}
-  value=${value//$'\n'/\\n}
-  value=${value//$'\r'/\\r}
-  value=${value//$'\t'/\\t}
-  printf '%s' "$value"
+  local value="$1" out="" ch code
+  local i
+  # 逐字转义：除 \" \\ 与 \n \r \t \b \f 的具名转义外，其余控制
+  # 字符（<0x20）一律 \u00XX——旧实现只处理五种，\b \f 与其他控
+  # 制字符原样透传会产出非法 JSON（值域为地址/密钥/代理 URL，
+  # 逐字循环的开销可忽略）。多字节字符逐字透传（UTF-8 在 JSON
+  # 字符串内合法）。
+  for (( i = 0; i < ${#value}; i++ )); do
+    ch=${value:i:1}
+    case "$ch" in
+      '\') out+='\\' ;;
+      '"') out+='\"' ;;
+      $'\n') out+='\n' ;;
+      $'\r') out+='\r' ;;
+      $'\t') out+='\t' ;;
+      $'\b') out+='\b' ;;
+      $'\f') out+='\f' ;;
+      *)
+        code=$(printf '%d' "'$ch" 2>/dev/null || printf '256')
+        if (( code < 32 )); then
+          printf -v ch '\\u%04x' "$code"
+        fi
+        out+="$ch"
+        ;;
+    esac
+  done
+  printf '%s' "$out"
 }
 
 # json_escape 的逆操作：把 JSON 字符串字面值还原为原始文本。
@@ -1375,7 +1432,10 @@ json_unescape() {
 agent_config_addr() {
   local config="$1/config.json" addr=""
   [[ -f "$config" ]] || return 0
-  addr=$(grep -o '"addr"[[:space:]]*:[[:space:]]*"[^"]*"' "$config" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/' || true)
+  # 值形态按 JSON 字符串文法提取（转义对优先于裸字符）：旧实现
+  # 的 "[^"]*" 在值含转义引号 \" 时于转义处截断，归属判定会把
+  # 自家 agent 误判为他人。
+  addr=$(grep -oE '"addr"[[:space:]]*:[[:space:]]*"(\\.|[^"\\])*"' "$config" | head -n 1 | sed -E 's/^"addr"[[:space:]]*:[[:space:]]*"((\\.|[^"\\])*)"$/\1/' || true)
   json_unescape "$addr"
 }
 
@@ -1392,12 +1452,14 @@ agent_config_protocol_count() {
   printf '%s' "$value"
 }
 
-# 足迹判定：某目录是否住着一个 agent——连接配置或任一世代的二进
-# 制（现行 flmx_agent／存量 flux_agent）在位即认。归属守卫、布局
-# 迁移与卸载的存量识别共用这一口径，不另造第二套。
+# 足迹判定：某目录是否住着一个 agent——连接配置、任一世代的二
+# 进制（现行 flmx_agent／存量 flux_agent）或 gost.json（本脚本安
+# 装/更新必落的伴生配置，只剩它时同样是自家 agent 的残骸）在位
+# 即认。归属守卫、布局迁移与卸载的存量识别共用这一口径，不另
+# 造第二套。
 agent_dir_has_agent() {
   local dir="$1"
-  [[ -e "$dir/config.json" || -e "$dir/flmx_agent" || -e "$dir/flux_agent" ]]
+  [[ -e "$dir/config.json" || -e "$dir/flmx_agent" || -e "$dir/flux_agent" || -e "$dir/gost.json" ]]
 }
 
 # 共存守卫（C2-02）：目标目录已有 agent 时，只有其 config 的
@@ -1826,6 +1888,10 @@ remove_flmx_agent_service() {
   case "$SERVICE_MANAGER" in
     systemd)
       rm -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+      # drop-in 目录（内核目录覆盖等运行时下发项）随 unit 本体一
+      # 并删除：旧实现只删 unit 文件，.d 残留会在同名 unit 日后
+      # 被重建时复活其中的覆盖项。
+      rm -rf "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d"
       systemctl daemon-reload 2>/dev/null || true
       ;;
     openrc)
@@ -1898,6 +1964,7 @@ remove_legacy_flux_agent_service() {
   case "$SERVICE_MANAGER" in
     systemd)
       rm -f "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE"
+      rm -rf "${LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE}.d"
       systemctl daemon-reload 2>/dev/null || true
       ;;
     openrc)
@@ -1921,9 +1988,13 @@ legacy_flux_agent_service_file_path() {
 # 旧 unit 文件的同形态重写：迁移回滚时旧 unit 已被摘除且无快照
 # 可还原（旧服务只在服务管理器里在册、无落盘文件）才用——内容
 # 与现行 write_flmx_agent_service 同模板、仅名与路径换回旧代，
-# 保证回滚拉起的旧服务与迁移前等价运行。一处有意例外：现行模
-# 板的 LimitNOFILE 不带入——回滚的目标是复原迁移前 unit 的原
-# 貌，旧 unit 本无此项。
+# 保证回滚拉起的旧服务与迁移前等价运行。三处有意例外（现行模
+# 板的新增项均不带入——回滚的目标是复原迁移前 unit 的原貌，旧
+# unit 本无这些项）：① LimitNOFILE=1048576；② RestartSec=3s
+# （OBS-A5-01 的防限速烧穿项）；③ MemoryHigh/MemoryMax 内存天
+# 花板（P1-06，按本机内存算出的档位值）。三项以逐字 diff 两模
+# 板核对（本轮复核：差异全集即此三处与名/路径/描述/SyslogIden-
+# tifier 的世代字面差）。
 write_legacy_flux_agent_service() {
   ensure_service_manager || return 1
 
@@ -2275,18 +2346,38 @@ cleanup_legacy_gost_installation() {
     systemctl disable gost 2>/dev/null || true
   fi
 
+  # 二进制删除面不得宽于指纹（判定材料须在删服务文件之前采集）：
+  # 仅当命中的服务文件确实以该路径为 ExecStart 时才删对应二进
+  # 制——旧实现任一分支命中即删 /usr/local/bin/gost，分支 1
+  # （ExecStart=/etc/gost/gost）与该路径无关，同机另装的 gost
+  # 二进制会被无干系地删掉。在位但未被指纹引用的二进制保留并
+  # 点名。
+  local legacy_gost_refs=""
+  legacy_gost_refs=$(cat "${matched_service_files[@]}" 2>/dev/null || true)
+
   for service_file in "${matched_service_files[@]}"; do
     if [[ -f "$service_file" ]]; then
-      rm -f "$service_file"
-      removed_service_file="1"
+      if rm -f "$service_file"; then
+        removed_service_file="1"
+      else
+        echo "⚠️ 删除旧式 gost 服务文件失败: $service_file"
+      fi
     fi
   done
 
   if [[ -f "$LEGACY_GOST_BINARY" ]]; then
-    rm -f "$LEGACY_GOST_BINARY"
+    if grep -Fq "ExecStart=$LEGACY_GOST_BINARY" <<< "$legacy_gost_refs"; then
+      rm -f "$LEGACY_GOST_BINARY" || echo "⚠️ 删除旧式 gost 二进制失败: $LEGACY_GOST_BINARY"
+    else
+      echo "ℹ️ $LEGACY_GOST_BINARY 在位但未被旧式 gost 服务文件引用（非本次指纹形态），已保留未删；如确认无用请人工删除"
+    fi
   fi
   if [[ -f "$LEGACY_GOST_CONFIG_DIR/gost" ]]; then
-    rm -f "$LEGACY_GOST_CONFIG_DIR/gost"
+    if grep -Fq "ExecStart=$LEGACY_GOST_CONFIG_DIR/gost" <<< "$legacy_gost_refs"; then
+      rm -f "$LEGACY_GOST_CONFIG_DIR/gost" || echo "⚠️ 删除旧式 gost 二进制失败: $LEGACY_GOST_CONFIG_DIR/gost"
+    else
+      echo "ℹ️ $LEGACY_GOST_CONFIG_DIR/gost 在位但未被旧式 gost 服务文件引用（非本次指纹形态），已保留未删；如确认无用请人工删除"
+    fi
   fi
 
   if [[ "$removed_service_file" == "1" && "$SERVICE_MANAGER" == "systemd" ]]; then
@@ -2313,7 +2404,7 @@ get_config_params() {
     
     if [[ -z "$SERVER_ADDR" || -z "$SECRET" ]]; then
       echo "❌ 参数不完整，操作取消。"
-      exit 1
+      return 1
     fi
   fi
 }
@@ -2344,6 +2435,16 @@ unset FLMX_NODE_SECRET
 # 恢复（enable_and_start_flmx_agent_service）；服务文件此时可能
 # 已按新版重写，但模板同内容、不影响旧二进制运行。
 rollback_install_replaced_agent() {
+  # 配置与二进制同为回滚面：config.json.bak 在位时一并还原（覆
+  # 盖安装整覆重写了 config.json，只还原二进制时旧二进制要配
+  # 新/坏配置，回滚不完整）。
+  if [[ -f "$INSTALL_DIR/config.json.bak" ]]; then
+    if mv -f "$INSTALL_DIR/config.json.bak" "$INSTALL_DIR/config.json"; then
+      echo "↩️ 已还原安装前的 config.json"
+    else
+      echo "⚠️ 还原 config.json 失败，请人工检查：$INSTALL_DIR/config.json.bak"
+    fi
+  fi
   if [[ -f "$INSTALL_DIR/flmx_agent.bak" ]]; then
     mv -f "$INSTALL_DIR/flmx_agent.bak" "$INSTALL_DIR/flmx_agent"
     chmod +x "$INSTALL_DIR/flmx_agent"
@@ -2371,26 +2472,29 @@ install_flmx_agent() {
   # 建、OOM 风险在」并给出人工建法与自检法。
   ensure_small_host_swap || echo "⚠️ swap 装机步未完成（见上 ❌ 行），装机继续；该机 OOM 风险未解除，请按上方人工建法处理后以 free -h; swapon --show 自检"
 
-  ensure_download_url_initialized || exit 1
+  # 失败一律 return 而非 exit：main 以 rc 分流 delete_self（失败
+  # 保留脚本并点名），函数内 exit 会绕过该分流、用户得不到「脚本
+  # 已保留可重试」的回执（下同）。
+  ensure_download_url_initialized || return 1
 
-  get_config_params
+  get_config_params || return 1
 
   # 共存守卫（C2-02）：在下载、停服、写文件之前先判定既有 agent 的
   # 归属；不属于本面板时终止，不留任何改动。
-  guard_agent_dir_ownership || exit 1
+  guard_agent_dir_ownership || return 1
 
   # 存量布局迁移：新目录无 agent、存量目录有 → 先对存量目录同口
   # 径过一遍归属守卫，再整体迁到新布局，之后按新装流程继续（配
   # 置以本次 -a/-s 参数重写、二进制换新版）。守卫不过则迁移不发
   # 生、存量原样不动。
   if ! agent_dir_has_agent "$INSTALL_DIR" && agent_dir_has_agent "$LEGACY_INSTALL_DIR"; then
-    guard_agent_dir_ownership "$LEGACY_INSTALL_DIR" || exit 1
-    migrate_legacy_agent_install || exit 1
+    guard_agent_dir_ownership "$LEGACY_INSTALL_DIR" || return 1
+    migrate_legacy_agent_install || return 1
   fi
 
   # 检查并安装 tcpkill
   check_and_install_tcpkill
-  ensure_service_manager || exit 1
+  ensure_service_manager || return 1
 
   mkdir -p "$INSTALL_DIR"
 
@@ -2399,8 +2503,11 @@ install_flmx_agent() {
   # 下载 flmx_agent（内置路线逐个尝试、首成即用；同源校验在
   # download_agent_binary 内完成，失败自动切下一条路线）
   echo "⬇️ 下载 flmx_agent 中..."
-  download_agent_binary "$tmp_binary" || { rm -f "$tmp_binary"; echo "❌ 下载失败，请检查网络或下载链接。"; exit 1; }
-  cleanup_legacy_gost_installation
+  download_agent_binary "$tmp_binary" || { rm -f "$tmp_binary"; echo "❌ 下载失败，请检查网络或下载链接。"; return 1; }
+  # legacy gost 清理不在此处：它含不可逆删除，须等防降级门的全
+  # 部「未被改动」回执点与二进制/配置备份（回滚源）都过去后才执
+  # 行（见下方落盘前调用点）——旧位置在门与备份之前，后续失败
+  # 时「现装版本未被改动」回执与已删的 legacy gost 不符。
 
   # A3-04 ①: 覆盖存量 agent 时先过防降级门（与 update 的 X-P2-12
   # 同口径）。此刻下载已完成、服务未停、现装二进制未动，拒绝不
@@ -2412,7 +2519,12 @@ install_flmx_agent() {
     replacing_existing="1"
     local current_version cmp_result
     current_version=$(flmx_agent_installed_version || true)
-    cmp_result=$(panel_version_cmp "${RESOLVED_VERSION:-}" "$current_version" || true)
+    cmp_result=$(panel_version_gate_cmp "${RESOLVED_VERSION:-}" "$current_version" || true)
+    if [[ -z "$cmp_result" && -n "$current_version" && -n "${RESOLVED_VERSION:-}" ]]; then
+      echo "❌ 目标版本 ${RESOLVED_VERSION:-} 与现装版本 $current_version 至少一侧格式不可比（版本段须为纯数字，带后缀的版本如 2.1.1-rc1 不可作安装目标），拒绝安装以防静默降级。现装版本未被改动。"
+      rm -f "$tmp_binary"
+      return 1
+    fi
     if [[ "$cmp_result" == "-1" ]]; then
       local confirm_downgrade=""
       if [[ -t 0 ]]; then
@@ -2453,10 +2565,34 @@ install_flmx_agent() {
       fi
       return 1
     fi
+    # 配置同为回滚面：覆盖安装会整覆重写 config.json，只备份二
+    # 进制时新配置写坏/写一半无回滚源（回滚后旧二进制配坏配置
+    # 同样起不来）。config.json 在位时同步备份，失败同口径中止。
+    if [[ -f "$INSTALL_DIR/config.json" ]] && ! cp -f "$INSTALL_DIR/config.json" "$INSTALL_DIR/config.json.bak"; then
+      echo "❌ 备份当前配置失败（磁盘空间不足或拷贝出错），已中止安装：现装版本与配置均未被替换。"
+      rm -f "$INSTALL_DIR/flmx_agent.bak" "$INSTALL_DIR/config.json.bak" "$tmp_binary"
+      if flmx_agent_service_exists; then
+        echo "🔄 正在恢复安装前已停止的服务..."
+        enable_and_start_flmx_agent_service || true
+      fi
+      return 1
+    fi
   fi
 
-  mv "$tmp_binary" "$INSTALL_DIR/flmx_agent"
-  chmod +x "$INSTALL_DIR/flmx_agent"
+  # legacy gost 清理的执行点：防降级门已过、二进制与配置备份
+  # （回滚源）已建立，此后失败回执不再声称「未被改动」且回滚源
+  # 在手。清理本身仍在新二进制落盘与新服务启动之前，端口与服
+  # 务名冲突面不变。
+  cleanup_legacy_gost_installation
+
+  if ! mv "$tmp_binary" "$INSTALL_DIR/flmx_agent" || ! chmod +x "$INSTALL_DIR/flmx_agent"; then
+    echo "❌ 新版本二进制落盘失败（mv/chmod 出错），已中止安装。"
+    rm -f "$tmp_binary"
+    if [[ -n "$replacing_existing" ]]; then
+      rollback_install_replaced_agent
+    fi
+    return 1
+  fi
 
   # A3-04 ③: 覆盖后先烟雾测试（与 update 同口径：-V 必须可执行），
   # 失败立即回滚——不等服务文件与配置按新版重写后才发现二进制
@@ -2474,7 +2610,13 @@ install_flmx_agent() {
   # 写入 config.json (安装时总是创建新的)
   CONFIG_FILE="$INSTALL_DIR/config.json"
   echo "📄 创建新配置: config.json"
-  write_flmx_agent_config "$CONFIG_FILE"
+  if ! write_flmx_agent_config "$CONFIG_FILE"; then
+    echo "❌ 写入 config.json 失败，已中止安装。"
+    if [[ -n "$replacing_existing" ]]; then
+      rollback_install_replaced_agent
+    fi
+    return 1
+  fi
 
   # 写入 gost.json
   GOST_CONFIG="$INSTALL_DIR/gost.json"
@@ -2482,16 +2624,29 @@ install_flmx_agent() {
     echo "⏭️ 跳过配置文件: gost.json (已存在)"
   else
     echo "📄 创建新配置: gost.json"
-    cat > "$GOST_CONFIG" <<EOF
+    if ! cat > "$GOST_CONFIG" <<EOF
 {}
 EOF
+    then
+      echo "❌ 写入 gost.json 失败，已中止安装。"
+      if [[ -n "$replacing_existing" ]]; then
+        rollback_install_replaced_agent
+      fi
+      return 1
+    fi
   fi
 
   # 加强权限
   chmod 600 "$INSTALL_DIR"/*.json
 
   # 创建 systemd 或 OpenRC 服务
-  write_flmx_agent_service
+  if ! write_flmx_agent_service; then
+    echo "❌ 写入服务文件失败，已中止安装。"
+    if [[ -n "$replacing_existing" ]]; then
+      rollback_install_replaced_agent
+    fi
+    return 1
+  fi
 
   # 启动服务
   enable_and_start_flmx_agent_service
@@ -2519,7 +2674,8 @@ EOF
     echo "   若面板未显示在线，请在节点机执行 journalctl -u flmx_agent -n 100 查看 WebSocket 连接日志（OpenRC 请看 rc-service flmx_agent status 与服务日志），并核对连接地址的 scheme 与面板对外方式是否一致（HTTPS 面板须为 wss/https）。"
     # A3-04: 覆盖安装成功后清备份（与 update 同口径）。
     if [[ -n "$replacing_existing" ]]; then
-      rm -f "$INSTALL_DIR/flmx_agent.bak"
+      rm -f "$INSTALL_DIR/flmx_agent.bak" || echo "⚠️ 清理二进制备份失败：$INSTALL_DIR/flmx_agent.bak 已保留，可人工删除"
+      rm -f "$INSTALL_DIR/config.json.bak" || echo "⚠️ 清理配置备份失败：$INSTALL_DIR/config.json.bak 已保留，可人工删除"
     fi
     return 0
   else
@@ -2538,8 +2694,9 @@ EOF
 
 # X-P2-12 (J-02): 与 panel_install.sh 同实现的点分数字版本比较。
 # 回显 -1/0/1 表示 a 小于/等于/大于 b；任一侧为空或含非数字段时
-# 不可比，回显空并返回 1——调用方不得据此拦截（V-19 既有口径：
-# 不可比放行，开发/测试标签等场景保持可用）。
+# 不可比，回显空并返回 1。防降级门不得直接据「不可比」放行（带
+# 粘连后缀的低版本如 2.1.1-rc1 即由此绕过），一律经
+# panel_version_gate_cmp 判定（见下）。
 panel_version_cmp() {
   local a="${1#v}" b="${2#v}"
   local -a pa pb
@@ -2571,13 +2728,40 @@ panel_version_cmp() {
   echo 0
 }
 
+# 防降级门判定（两脚本同实现，与 Go 面 compareVersions 对齐，
+# A11-132-06）：在 panel_version_cmp 之外补 "dev" 定序——dev 为
+# 最低版本（两侧同为 dev 判等、目标为 dev 判低、现装为 dev 判
+# 高）；其余情形回显 panel_version_cmp 的结果，不可比时回显空。
+# 调用方口径：两侧皆非空而回显空＝不可比，必须 fail-closed 拒
+# 绝（旧 V-19 放行口径使带后缀的低版本可绕过防降级、与 Go 面
+# 的严格口径分家，已废止）；现装版本为空（-V 不可读、无从判
+# 定）时维持放行。
+panel_version_gate_cmp() {
+  local target="$1" current="$2"
+  if [[ "$target" == "dev" && "$current" == "dev" ]]; then
+    echo 0
+    return 0
+  fi
+  if [[ "$target" == "dev" && -n "$current" ]]; then
+    echo -1
+    return 0
+  fi
+  if [[ "$current" == "dev" && -n "$target" ]]; then
+    echo 1
+    return 0
+  fi
+  panel_version_cmp "$target" "$current"
+}
+
 # X-P2-12 (J-02): 按 extractLeadingSemver（system_upgrade.go）同规则
 # 从版本串中取语义版本：逐个空白分隔段做严格点分数字校验，首个
 # 合格段即为版本。真实 -V 输出形如 "gost 1.3.4 (go1.25
 # linux/amd64)"（首段是程序名 gost），握手上报的 fullVersion 形如
 # "1.3.4 (debian/amd64)"，两种形态都由此归一；粘连后缀
-# （如 1.3.2-beta1）、无数字段、空串一律提取失败，调用方按
-# 不可比放行处理。"dev" 原样透传（panel_version_cmp 对其不可比）。
+# （如 1.3.2-beta1）、无数字段、空串一律提取失败，调用方得到空
+# 版本（无从判定降级，防降级门维持放行；目标侧不可比则由
+# panel_version_gate_cmp 口径拒绝）。"dev" 原样透传（防降级门
+# 按 Go 规则为其定序，见 panel_version_gate_cmp）。
 extract_leading_semver() {
   local raw="$1" token candidate
   # shellcheck disable=SC2086 # 此处需要按空白分词逐段校验
@@ -2638,11 +2822,17 @@ update_flmx_agent() {
   # X-P2-12 (J-02, BC-09): 下载前防降级。读现装版本（-V 经
   # extract_leading_semver 归一）与目标版本比较，目标更低时拒绝
   # 并说明——其余三条更新路径（面板自升级、节点面板升级单/批量、
-  # panel_install 脚本更新）均已有此门，脚本路径此前独缺。任一侧
-  # 不可比时沿用 panel_version_cmp 既有放行口径（V-19），不拦截。
+  # panel_install 脚本更新）均已有此门，脚本路径此前独缺。判定
+  # 经 panel_version_gate_cmp：两侧皆非空而不可比（带粘连后缀的
+  # 低版本如 2.1.1-rc1）fail-closed 拒绝，与 Go 面严格口径对
+  # 齐；现装版本不可读（为空）时无从判定、维持放行。
   local current_version cmp_result
   current_version=$(flmx_agent_installed_version || true)
-  cmp_result=$(panel_version_cmp "${RESOLVED_VERSION:-}" "$current_version" || true)
+  cmp_result=$(panel_version_gate_cmp "${RESOLVED_VERSION:-}" "$current_version" || true)
+  if [[ -z "$cmp_result" && -n "$current_version" && -n "${RESOLVED_VERSION:-}" ]]; then
+    echo "❌ 目标版本 ${RESOLVED_VERSION:-} 与当前版本 $current_version 至少一侧格式不可比（版本段须为纯数字，带后缀的版本如 2.1.1-rc1 不可作更新目标），拒绝更新以防静默降级。如确需更新请手动处理。"
+    return 1
+  fi
   if [[ "$cmp_result" == "-1" ]]; then
     echo "❌ 目标版本 ${RESOLVED_VERSION:-} 低于当前版本 $current_version，拒绝降级更新。如确需降级请手动处理。"
     return 1
@@ -2661,7 +2851,8 @@ update_flmx_agent() {
   # download_agent_binary 内完成，失败自动切下一条路线）
   echo "⬇️ 下载最新版本..."
   download_agent_binary "$INSTALL_DIR/flmx_agent.new" || { rm -f "$INSTALL_DIR/flmx_agent.new"; echo "❌ 下载失败。"; return 1; }
-  cleanup_legacy_gost_installation
+  # legacy gost 清理不在此处：含不可逆删除，须等下方备份（回滚
+  # 源）建立后再执行，与 install 流同口径（见落盘前调用点）。
 
   # 停止服务
   if flmx_agent_service_exists; then
@@ -2691,9 +2882,23 @@ update_flmx_agent() {
     fi
   fi
 
-  # 替换文件
-  mv "$INSTALL_DIR/flmx_agent.new" "$INSTALL_DIR/flmx_agent"
-  chmod +x "$INSTALL_DIR/flmx_agent"
+  # legacy gost 清理的执行点：备份（回滚源）已建立、落盘替换尚
+  # 未发生，与 install 流同口径。
+  cleanup_legacy_gost_installation
+
+  # 替换文件（落盘 mv/chmod 必须守卫：失败时旧实现照常往下走、
+  # 烟雾测试测的是未被替换的旧二进制、最终照印「✅ 更新完成」）
+  if ! mv "$INSTALL_DIR/flmx_agent.new" "$INSTALL_DIR/flmx_agent" || ! chmod +x "$INSTALL_DIR/flmx_agent"; then
+    echo "❌ 新版本二进制落盘失败（mv/chmod 出错），已中止更新。"
+    rm -f "$INSTALL_DIR/flmx_agent.new"
+    if [[ -f "$INSTALL_DIR/flmx_agent.bak" ]]; then
+      rollback_flmx_agent
+    elif flmx_agent_service_exists; then
+      echo "🔄 正在重新启动更新前已停止的服务..."
+      start_flmx_agent_service || true
+    fi
+    return 1
+  fi
 
   # 烟雾测试：新二进制必须可执行
   if ! "$INSTALL_DIR/flmx_agent" -V >/dev/null 2>&1; then
@@ -2766,6 +2971,10 @@ flmx_agent_uninstall_write_tuning_defaults() {
   flmx_agent_uninstall_write_sysctl_value "net.ipv4.tcp_congestion_control" "cubic"
   flmx_agent_uninstall_write_sysctl_value "net.core.default_qdisc" "pfifo_fast"
   flmx_agent_uninstall_write_sysctl_value "net.core.rps_sock_flow_entries" "0"
+  # 假定值披露：此三项是「快照缺失/损坏时」的假定回退值、不是读
+  # 回的调优前原值——调优前若为 bbr/fq 等非缺省值，无快照即无从
+  # 恢复，两调用点统一在此点名，不再静默以假定值冒充已恢复。
+  echo "ℹ️ 其中三项 sysctl 已按假定默认值回退（net.ipv4.tcp_congestion_control=cubic、net.core.default_qdisc=pfifo_fast、net.core.rps_sock_flow_entries=0）；若调优前原值不同（如 bbr/fq），因快照缺失/损坏无法自动恢复，请人工核对"
 }
 
 # R6-02：脚本卸载与面板自卸载路径（go-gost/x/socket/uninstall.go
@@ -3187,6 +3396,7 @@ remove_flmx_agent_log_files() {
   done
   if [[ "$failures" -gt 0 ]]; then
     echo "⚠️ 日志面清理有 ${failures} 项未完成（见上 ⚠️ 行），其余卸载步骤继续执行"
+    return 1
   fi
   return 0
 }
@@ -3249,28 +3459,31 @@ uninstall_flmx_agent() {
   # 与队列整形 unit、删 agent 自建 nft 表），与面板自卸载路径对
   # 齐。必须在删安装目录之前执行：调优原值备份 tuning-backup.json
   # 与队列回放脚本都在安装目录里，目录删掉原值就永久丢失。双布
-  # 局都在位时逐目录各跑一遍（清理本身幂等，宿主文件/nft 表在第
-  # 一遍后即不存在，第二遍为空转核对）。
-  if [[ -d "$INSTALL_DIR" ]]; then
-    uninstall_flmx_agent_host_cleanup "$INSTALL_DIR"
-  fi
-  if [[ -n "$has_legacy" && -d "$LEGACY_INSTALL_DIR" ]]; then
-    uninstall_flmx_agent_host_cleanup "$LEGACY_INSTALL_DIR"
-  fi
+  # 局逐目录各跑一遍（清理本身幂等，宿主文件/nft 表在第一遍后即
+  # 不存在，第二遍为空转核对）。调用不以目录存在为前提：宿主面
+  # 产物多在安装目录之外（/etc/security 的 TL-02 快照、sysctl
+  # conf、unit、nft 表），安装目录已被先前一次部分卸载删掉时恰
+  # 是最需要补跑的形态——旧实现以 -d 门控、该形态整集跳过却仍
+  # 报「卸载完成」；函数内各步均以存在才处理，目录缺失时目录内
+  # 步骤自然空转。
+  uninstall_flmx_agent_host_cleanup "$INSTALL_DIR"
+  uninstall_flmx_agent_host_cleanup "$LEGACY_INSTALL_DIR"
 
   # 删除服务文件
-  if [[ -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$FLMX_AGENT_OPENRC_SERVICE_FILE" ]]; then
+  if [[ -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$FLMX_AGENT_OPENRC_SERVICE_FILE" || -d "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d" ]]; then
     remove_flmx_agent_service
     echo "🧹 删除服务文件"
   fi
-  if [[ -f "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE" ]]; then
+  if [[ -f "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE" || -d "${LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE}.d" ]]; then
     remove_legacy_flux_agent_service
     echo "🧹 删除改名前的存量服务文件"
   fi
 
   # R2-P2-04：OpenRC 日志面（logrotate 配置＋两代日志本体与轮
-  # 转件）——在安装目录之外，单独清理（逐项点名见函数内）。
-  remove_flmx_agent_log_files
+  # 转件）——在安装目录之外，单独清理（逐项点名见函数内）；其
+  # 失败计数并入下方完成判决，不再被恒回 0 吞掉。
+  local uninstall_failures=0
+  remove_flmx_agent_log_files || uninstall_failures=$((uninstall_failures + 1))
 
   # 删除安装目录
   if [[ -d "$INSTALL_DIR" ]]; then
@@ -3287,6 +3500,30 @@ uninstall_flmx_agent() {
   if [[ -n "$CUSTOM_KERNEL_DIR" && -d "$CUSTOM_KERNEL_DIR" ]]; then
     rm -rf "$CUSTOM_KERNEL_DIR"
     echo "🧹 删除自定义内核目录: $CUSTOM_KERNEL_DIR"
+  fi
+
+  # 完成回执必须有后置实证：逐项核对本函数声称删除的对象确已
+  # 不在位，任一残留即点名并以非 0 收尾——旧实现 rm 集裸调用、
+  # 函数恒回 0 并无条件印「✅ 卸载完成」，删失败（权限/占用）
+  # 时用户无从知晓。
+  local leftover="" check_path=""
+  for check_path in "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d" \
+    "$FLMX_AGENT_OPENRC_SERVICE_FILE" \
+    "$LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE" "${LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE}.d" \
+    "$LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE" \
+    "$INSTALL_DIR" "$LEGACY_INSTALL_DIR"; do
+    if [[ -e "$check_path" ]]; then
+      leftover="$leftover $check_path"
+      uninstall_failures=$((uninstall_failures + 1))
+    fi
+  done
+  if [[ -n "$CUSTOM_KERNEL_DIR" && -e "$CUSTOM_KERNEL_DIR" ]]; then
+    leftover="$leftover $CUSTOM_KERNEL_DIR"
+    uninstall_failures=$((uninstall_failures + 1))
+  fi
+  if [[ "$uninstall_failures" -gt 0 ]]; then
+    echo "❌ 卸载未完全完成：以下对象未能删除：${leftover:-（见上日志面 ⚠️ 行）}，请人工处理后重跑卸载"
+    return 1
   fi
 
   echo "✅ 卸载完成"
@@ -3375,8 +3612,9 @@ main() {
   # 旧实现无条件 exit 0，菜单更新/卸载失败（函数以 return 1 报告）
   # 也被以退出码判断成败的自动化消费者误判为成功；成功路径仍
   # exit 0。delete_self 接收同一返回码分流（R4B11-005：失败保留
-  # 脚本、成功才自删）。install_flmx_agent 内部直接 exit 1 的失败
-  # 路径不受影响（进程已以 1 退出）。
+  # 脚本、成功才自删）。install_flmx_agent 的失败路径已统一为
+  # return 1（早年有函数内 exit 1 直接退出、绕过本分流且无保留
+  # 回执，现已收口）。
   local rc=0
 
   # 如果提供了命令行参数，直接执行安装

@@ -510,17 +510,30 @@ test_panel_uninstall_without_docker_cleans_full_residual_set() (
     done
   }
 
-  # ① 自家部署＋全量残留
+  # ① 自家部署＋全量残留（归属已证时与 Docker 分支同口径须显式
+  # 确认——backups/ 含完整 DB 备份与 .env 密钥副本、删除不可恢
+  # 复；旧实现无 Docker 分支零确认直删）
   local d out rc="0"
   d=$(mktemp -d)
   printf 'JWT_SECRET=x\n' > "$d/.env"
   printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
   make_residuals "$d"
-  out=$( ( cd "$d" && uninstall_panel </dev/null 2>&1 ) ) || rc="$?"
+  out=$( ( cd "$d" && uninstall_panel <<< "y" 2>&1 ) ) || rc="$?"
   assert_equals "0" "$rc" "A2-06: own no-docker uninstall should succeed"
   [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "A2-06: compose/.env must be removed"
   assert_residuals_gone "$d"
   grep -q 'backups/' <<< "$out" || fail "A2-06: the residual listing must name backups/ before deletion"
+
+  # ①b 自家部署但未确认（EOF/答 n）→ 取消、整集保留
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  make_residuals "$d"
+  rc="0"
+  out=$( ( cd "$d" && uninstall_panel </dev/null 2>&1 ) ) || rc="$?"
+  assert_equals "0" "$rc" "A2-06: unconfirmed no-docker uninstall of a proven deployment should be a clean cancel"
+  [[ -f "$d/.env" && -d "$d/backups" ]] || fail "A2-06: nothing may be deleted without confirmation"
+  grep -q '不可恢复' <<< "$out" || fail "A2-06: the confirmation must warn that deletion is unrecoverable"
 
   # ② 仅残留产物：拒绝保留、确认删除
   d=$(mktemp -d)
@@ -580,14 +593,15 @@ test_panel_uninstall_removes_inpanel_upgrade_artifacts() (
   assert_artifacts_gone "$d"
   [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "R2-SCR-F04: compose/.env must be removed (docker branch)"
 
-  # ② 无 Docker 分支
+  # ② 无 Docker 分支（归属已证亦须显式确认，C4-中·无Docker卸载
+  # 本轮改判：旧实现零确认直删；无输入即取消、工件保留）
   check_docker() { return 1; }
   d=$(mktemp -d)
   printf 'JWT_SECRET=x\n' > "$d/.env"
   printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
   make_upgrade_artifacts "$d"
   rc="0"
-  out=$( ( cd "$d" && uninstall_panel </dev/null 2>&1 ) ) || rc="$?"
+  out=$( ( cd "$d" && uninstall_panel <<< "y" 2>&1 ) ) || rc="$?"
   assert_equals "0" "$rc" "R2-SCR-F04: no-docker uninstall should succeed"
   assert_artifacts_gone "$d"
   grep -q '.env.upgrade.bak' <<< "$out" || fail "R2-SCR-F04: the residual listing must name .env.upgrade.bak before deletion"
@@ -3396,8 +3410,13 @@ EOF
 
   cleanup_legacy_gost_installation >/dev/null
 
-  if [[ -e "$LEGACY_GOST_BINARY" ]]; then
-    fail "cleanup_legacy_gost_installation should remove the legacy gost binary"
+  # 本夹具的 ExecStart 指向配置目录下的 gost 二进制（指纹命中
+  # 形态）；LEGACY_GOST_BINARY（真实部署中即 /usr/local/bin/
+  # gost）未被任何被删 unit 引用——旧实现按分支整集连带删除、
+  # 宽于指纹命中形态（C4 族六立案），现只删被引用者、未引用
+  # 者保留并在回执点名。
+  if [[ ! -e "$LEGACY_GOST_BINARY" ]]; then
+    fail "cleanup_legacy_gost_installation must preserve the unreferenced binary (only referenced binaries are removed)"
   fi
   if [[ -e "$LEGACY_GOST_SERVICE_FILE_ETC" ]]; then
     fail "cleanup_legacy_gost_installation should remove the legacy gost service file"
@@ -3569,6 +3588,7 @@ ExecStart=$LEGACY_GOST_CONFIG_DIR/gost
 EOF
   printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$LEGACY_GOST_CONFIG_DIR/config.json"
   : > "$LEGACY_GOST_CONFIG_DIR/gost.json"
+  printf 'x' > "$LEGACY_GOST_CONFIG_DIR/gost"
 
   systemctl() {
     if [[ "$1" == "list-units" ]]; then
@@ -3580,9 +3600,16 @@ EOF
   local out
   out=$(FLMX_AGENT_TAKEOVER="1" cleanup_legacy_gost_installation </dev/null 2>&1)
 
-  [[ ! -e "$LEGACY_GOST_BINARY" ]] || fail "C4-F01: takeover should let cleanup remove the legacy binary"
+  # 接管只放行归属门，不放宽指纹面：本夹具 ExecStart 指向配置目录
+  # 下的 gost 二进制，/usr/local/bin/gost 未被任何被删 unit 引用
+  # ——族六 legacy过宽已定按指纹删，未引用者保留并点名（与
+  # removes_service_and_binary 夹具同口径；旧断言按分支整集删，
+  # 正是该条立案的旧行为）。
+  [[ -e "$LEGACY_GOST_BINARY" ]] || fail "C4-F01: takeover cleanup must preserve the unreferenced binary (only referenced binaries are removed)"
+  [[ ! -e "$LEGACY_GOST_CONFIG_DIR/gost" ]] || fail "C4-F01: takeover should let cleanup remove the referenced config-dir binary"
   [[ ! -e "$LEGACY_GOST_SERVICE_FILE_ETC" ]] || fail "C4-F01: takeover should let cleanup remove the legacy service file"
   [[ "$out" == *"FLMX_AGENT_TAKEOVER=1"* ]] || fail "C4-F01: takeover cleanup must leave a trace line"
+  [[ "$out" == *"已保留未删"* ]] || fail "C4-F01: preserved unreferenced binary must be named in the output"
 )
 
 test_cleanup_legacy_gost_installation_matches_installed_agent_addr() (
@@ -3607,6 +3634,7 @@ ExecStart=$LEGACY_GOST_CONFIG_DIR/gost
 EOF
   printf '%s' '{"addr": "https://mine.example.com:443", "secret": "x"}' > "$LEGACY_GOST_CONFIG_DIR/config.json"
   : > "$LEGACY_GOST_CONFIG_DIR/gost.json"
+  printf 'x' > "$LEGACY_GOST_CONFIG_DIR/gost"
 
   systemctl() {
     if [[ "$1" == "list-units" ]]; then
@@ -3617,7 +3645,11 @@ EOF
 
   cleanup_legacy_gost_installation </dev/null >/dev/null
 
-  [[ ! -e "$LEGACY_GOST_BINARY" ]] || fail "C4-F01: legacy install matching the installed agent addr should be cleaned"
+  # 与 takeover 夹具同口径：ExecStart 指向配置目录下的 gost，
+  # /usr/local/bin/gost 未被引用，按族六 legacy过宽指纹面保留
+  # （旧断言按分支整集删，正是该条立案的旧行为）。
+  [[ -e "$LEGACY_GOST_BINARY" ]] || fail "C4-F01: unreferenced binary must be preserved even when the legacy install matches the installed agent addr"
+  [[ ! -e "$LEGACY_GOST_CONFIG_DIR/gost" ]] || fail "C4-F01: referenced config-dir binary should be cleaned when it matches the installed agent addr"
   [[ ! -e "$LEGACY_GOST_SERVICE_FILE_ETC" ]] || fail "C4-F01: legacy service file should be cleaned when it matches the installed agent addr"
 )
 
@@ -4619,6 +4651,8 @@ test_install_panel_prints_generated_initial_admin_password() (
     FRONTEND_PORT=6366; BACKEND_PORT=6365; RESOLVED_VERSION="9.9.9"
     DB_TYPE="sqlite"; DATABASE_URL=""; POSTGRES_DB="flux_panel"; POSTGRES_USER="flux_panel"
     POSTGRES_PASSWORD="test-postgres-password"
+    # 真 get_config_params 恒无条件赋 JWT_SECRET，桩须同契约：缺此赋值时 .env heredoc 在 set -u 下展开失败——旧无守卫实现静默跳过写盘仍报成功（heredoc 无守卫本条），守卫化后如实失败，故补齐桩而非放宽守卫。
+    JWT_SECRET="test-jwt-secret"
   }
   get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
   download_verified() {
@@ -8351,8 +8385,10 @@ test_panel_install_guards_single_file_and_backups() (
 )
 
 # AI-09: 无 Docker 分支的卸载清理必须按归属判定删文件——明确属他
-# 人的残留文件不删并返回 1；已证属自家的直接清理（不依赖确认输
-# 入）；归属未证须显式确认，拒绝确认时保留、无输入时不删。
+# 人的残留文件不删并返回 1；已证属自家同样须显式确认（删除集含
+# 完整 DB 备份与 .env 密钥副本、不可恢复，与 Docker 分支确认同
+# 口径——旧「已证即零确认直删」即 C4 族九立案点，本轮改判）；
+# 归属未证须显式确认，拒绝确认时保留、无输入时不删。
 test_panel_uninstall_without_docker_respects_ownership() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -8369,14 +8405,18 @@ test_panel_uninstall_without_docker_respects_ownership() (
   assert_equals "1" "$rc" "AI-09: no-docker uninstall must refuse files of a foreign deployment"
   [[ -e "$d/.env" && -e "$d/docker-compose.yml" ]] || fail "AI-09: foreign files must stay untouched"
 
-  # 自家残留（Compose 引用本面板镜像）：直接清理
+  # 自家残留（Compose 引用本面板镜像）：无输入不删、确认后清理
   d=$(mktemp -d)
   printf 'JWT_SECRET=x\n' > "$d/.env"
   printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
   rc="0"
   ( cd "$d" && uninstall_panel </dev/null >/dev/null 2>&1 ) || rc="$?"
-  assert_equals "0" "$rc" "AI-09: no-docker uninstall should clean an own deployment without prompting"
-  [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "AI-09: own leftover files must be removed"
+  assert_equals "0" "$rc" "AI-09: unconfirmed no-docker uninstall should be a clean cancel"
+  [[ -e "$d/.env" && -e "$d/docker-compose.yml" ]] || fail "AI-09: own files must stay without confirmation"
+  rc="0"
+  ( cd "$d" && uninstall_panel <<< "y" >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "AI-09: no-docker uninstall should clean an own deployment after confirmation"
+  [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "AI-09: own leftover files must be removed after confirmation"
 
   # 归属未证：拒绝确认 → 保留；确认 → 删除
   d=$(mktemp -d)
@@ -10673,7 +10713,11 @@ EOF
     fail "R1-01-L1: the pinned network must never be a concatenation of network names"
   fi
 
-  # 零网络（实读为空）：保留旧缺省回退，但必须点名、不静默
+  # 零网络（实读为空）：保留缺省回退，但必须点名、不静默；回退值
+  # 按在盘 compose 世代取模板实际网络名——旧实现无条件钉
+  # gost-network，正是族七 C4-中·网络名缺省立案的错（现行模板实
+  # 名为 flmx-network，gost-network 只是键名）。现行模板钉
+  # flmx-network、旧模板钉 gost-network，两幕分验。
   docker() {
     if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
       case "$3" in
@@ -10685,11 +10729,17 @@ EOF
     fi
     return 0
   }
+  printf 'networks:\n  gost-network:\n    name: ${FLMX_NETWORK:-flmx-network}\n# FLMX_SQLITE_VOLUME\n' > "$pdir/docker-compose.yml"
   printf 'FLMX_SQLITE_VOLUME=kept_sqlite\nFLMX_POSTGRES_VOLUME=kept_pg\nCOMPOSE_PROJECT_NAME=kept_project\nDB_TYPE=sqlite\n' > "$pdir/.env"
   ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c >> pin.log 2>&1 ) || \
     fail "A2-09R: pinning must succeed in the zero-network scenario"
-  grep -q '^FLMX_NETWORK=gost-network$' "$pdir/.env" || fail "A2-09R: an unreadable network read still falls back to the legacy default network"
+  grep -q '^FLMX_NETWORK=flmx-network$' "$pdir/.env" || fail "A2-09R: an unreadable network read on a current template must fall back to flmx-network, not the legacy default"
   grep -q '未能实读' "$pdir/pin.log" || fail "A2-09R: the zero-network fallback must be named in the pin output, not silent"
+  printf 'networks:\n  gost-network:\n    name: gost-network\n' > "$pdir/docker-compose.yml"
+  printf 'FLMX_SQLITE_VOLUME=kept_sqlite\nFLMX_POSTGRES_VOLUME=kept_pg\nCOMPOSE_PROJECT_NAME=kept_project\nDB_TYPE=sqlite\n' > "$pdir/.env"
+  ( cd "$pdir" && panel_pin_missing_resource_keys backend-c pg-c >> pin.log 2>&1 ) || \
+    fail "A2-09R: pinning must succeed in the zero-network legacy-template scenario"
+  grep -q '^FLMX_NETWORK=gost-network$' "$pdir/.env" || fail "A2-09R: an unreadable network read on a legacy template must fall back to gost-network"
 
   docker() {
     if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
@@ -12343,5 +12393,369 @@ test_install_probe_route_uses_channel_tag_grammar() (
   rc="0"; probe_route "" >/dev/null || rc="$?"
   [[ "$rc" != "0" ]] || fail "FIX2/D-05: a junk tag must fail the probe on the stable channel"
 )
+
+# W1 新增用例（并入 test-install-scripts-proxy.sh 末尾）
+
+# W1-UPSERT: upsert_env_var 逐字保真与键口径——awk -v 转义解释曾
+# 把字面 \n 展开成真换行注入新行、\t 变真 TAB；键 grep 按正则且
+# 不认行首空白键，get_env_var 却认，同一 .env 读得到写不进。现
+# 经 ENVIRON 逐字传递＋与读侧同口径的键匹配＋同键去重＋真换行
+# 拒绝，四格钉死。
+test_upsert_env_var_literal_values_and_key_parity() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local f
+  f=$(mktemp)
+  printf 'A=1\nSPACED=old\nK=v1\nK=v2\n' > "$f"
+
+  upsert_env_var "$f" NEWKEY 'x\ny=INJECTED' || fail "W1-UPSERT: literal backslash value must be accepted"
+  grep -Fxq 'NEWKEY=x\ny=INJECTED' "$f" || fail "W1-UPSERT: backslash sequence must be stored verbatim, not expanded"
+  [[ $(wc -l < "$f") -eq 5 ]] || fail "W1-UPSERT: value must not inject extra lines"
+
+  upsert_env_var "$f" TABKEY 'a\tb' || fail "W1-UPSERT: tab sequence value must be accepted"
+  grep -Fxq 'TABKEY=a\tb' "$f" || fail "W1-UPSERT: tab sequence must be stored verbatim"
+
+  upsert_env_var "$f" SPACED new || fail "W1-UPSERT: whitespace-padded key update must succeed"
+  [[ $(grep -c 'SPACED' "$f") -eq 1 ]] || fail "W1-UPSERT: whitespace-padded key must be replaced, not duplicated"
+  grep -Fxq 'SPACED=new' "$f" || fail "W1-UPSERT: replaced value must land"
+
+  upsert_env_var "$f" K v3 || fail "W1-UPSERT: duplicate key update must succeed"
+  [[ $(grep -c '^K=' "$f") -eq 1 ]] || fail "W1-UPSERT: duplicate keys must collapse to one line"
+  grep -Fxq 'K=v3' "$f" || fail "W1-UPSERT: the surviving line must carry the new value"
+
+  if upsert_env_var "$f" BAD "$(printf 'a\nb')" 2>/dev/null; then
+    fail "W1-UPSERT: a value with a real newline must be rejected"
+  fi
+  if grep -q '^BAD=' "$f"; then
+    fail "W1-UPSERT: rejected value must not be written"
+  fi
+)
+
+# W1-GATE: 防降级门版本口径与 Go 面对齐——带后缀目标旧实现经
+# 前导数字提取判「可比较」放行（2.1.1-rc1 冒充 2.1.1），dev 旧
+# 实现一边可比一边提不出而放行。现两脚本同走 gate 助手：不可
+# 比即空串（调用方拒绝）、dev 定序与 Go 面一致（dev 最低、同
+# dev 相等）、纯数字升降级判定不变。
+test_panel_version_gate_matches_go_semantics() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  assert_equals "" "$(panel_version_gate_cmp 2.1.1-rc1 2.1.2)" "W1-GATE: suffixed target must be incomparable"
+  assert_equals "" "$(panel_version_gate_cmp 2.1.2 2.1.1-rc1)" "W1-GATE: suffixed current must be incomparable"
+  assert_equals "-1" "$(panel_version_gate_cmp 1.9.9 2.1.2)" "W1-GATE: plain downgrade target stays -1"
+  assert_equals "1" "$(panel_version_gate_cmp 2.1.3 2.1.2)" "W1-GATE: plain upgrade stays 1"
+  assert_equals "0" "$(panel_version_gate_cmp v2.1.2 2.1.2)" "W1-GATE: v-prefixed equal stays 0"
+  assert_equals "-1" "$(panel_version_gate_cmp dev 2.1.2)" "W1-GATE: dev target is lowest"
+  assert_equals "1" "$(panel_version_gate_cmp 2.1.2 dev)" "W1-GATE: dev current is lowest"
+  assert_equals "0" "$(panel_version_gate_cmp dev dev)" "W1-GATE: dev vs dev is equal"
+)
+
+test_install_version_gate_matches_go_semantics() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  assert_equals "" "$(panel_version_gate_cmp 2.1.1-rc1 2.1.2)" "W1-GATE: install copy must reject suffixed target as incomparable"
+  assert_equals "-1" "$(panel_version_gate_cmp 1.9.9 2.1.2)" "W1-GATE: install copy plain downgrade stays -1"
+  assert_equals "-1" "$(panel_version_gate_cmp dev 2.1.2)" "W1-GATE: install copy dev target is lowest"
+)
+
+# W1-CADDY1L: caddyfile_without_site 对单行块——旧 flush 只剥行尾
+# 的 { ，单行块整行被当块头吞掉：独占块残留成无法解析的碎片、
+# 共享块连带删掉同行其他站点。现取首个 { 前的地址段，独占整
+# 行丢弃、共享以剩余地址重建单行块，多行块行为不变。
+test_caddyfile_without_site_single_line_blocks() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local cf out
+  cf=$(mktemp)
+  printf 'panel.example.com { reverse_proxy 127.0.0.1:6366 }\n' > "$cf"
+  out=$(caddyfile_without_site "$cf" panel.example.com)
+  [[ -z "${out//[$'\n ']/}" ]] || fail "W1-CADDY1L: solo single-line block must be fully removed, got: $out"
+
+  printf 'panel.example.com, other.example.com { reverse_proxy 127.0.0.1:6366 }\n' > "$cf"
+  out=$(caddyfile_without_site "$cf" panel.example.com)
+  assert_equals 'other.example.com { reverse_proxy 127.0.0.1:6366 }' "$out" "W1-CADDY1L: shared single-line block must keep the other site"
+
+  printf 'a.com {\n  reverse_proxy 127.0.0.1:1\n}\nb.com {\n  reverse_proxy 127.0.0.1:2\n}\n' > "$cf"
+  out=$(caddyfile_without_site "$cf" a.com)
+  assert_equals $'b.com {\n  reverse_proxy 127.0.0.1:2\n}' "$out" "W1-CADDY1L: multi-line removal must be unchanged"
+)
+
+# W1-NETNAME: panel_network_name 缺省名按在盘 compose 世代推导
+# （旧模板网络实名 gost-network、无 FLMX_NETWORK 展开式），不
+# 再无条件套现行缺省；NETLABEL 对账：标签合无动作、标签不合且
+# 网络为空时摘除待 compose 以现行键名重建、挂有外来容器时拒绝
+# 并点名。
+test_panel_network_default_name_and_label_reconcile() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  docker() { return 1; }
+
+  ( cd "$work" && printf 'networks:\n  gost-network:\n    name: ${FLMX_NETWORK:-flmx-network}\n# FLMX_SQLITE_VOLUME\n' > docker-compose.yml && panel_network_name ) > "$work/nn1"
+  assert_equals "flmx-network" "$(cat "$work/nn1")" "W1-NETNAME: current template default must be flmx-network"
+  ( cd "$work" && printf 'networks:\n  gost-network:\n    name: gost-network\n' > docker-compose.yml && panel_network_name ) > "$work/nn2"
+  assert_equals "gost-network" "$(cat "$work/nn2")" "W1-NETNAME: legacy template default must be gost-network"
+
+  DOCKER_CALLS="$work/calls"; : > "$DOCKER_CALLS"
+  # 对账段钉死现行模板（键名 gost-network、实名缺省 flmx-network），
+  # 与上方 nn2 的旧模板状态解耦。
+  printf 'networks:\n  gost-network:\n    name: ${FLMX_NETWORK:-flmx-network}\n# FLMX_SQLITE_VOLUME\n' > "$work/docker-compose.yml"
+  docker() {
+    echo "docker $*" >> "$DOCKER_CALLS"
+    if [[ "$1" == "network" && "$2" == "inspect" ]]; then
+      local fmt=""
+      [[ "${3:-}" == "-f" ]] && fmt="$4"
+      case "$fmt" in
+        *com.docker.compose.network*) printf '%s' "${FAKE_NET_LABEL:-}" ;;
+        *Containers*) for c in ${FAKE_NET_CONTAINERS:-}; do printf '%s\n' "$c"; done ;;
+        *) echo '{}' ;;
+      esac
+      return 0
+    fi
+    return 0
+  }
+  PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+  PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
+
+  ( cd "$work" && FAKE_NET_LABEL="flmx-network" panel_reconcile_network_label ) || fail "W1-NETNAME: mismatched empty network must reconcile"
+  grep -q 'network rm flmx-network' "$DOCKER_CALLS" || fail "W1-NETNAME: mismatched empty network must be removed for recreation"
+
+  : > "$DOCKER_CALLS"
+  ( cd "$work" && FAKE_NET_LABEL="gost-network" panel_reconcile_network_label ) || fail "W1-NETNAME: matching label must be a no-op success"
+  if grep -q 'network rm' "$DOCKER_CALLS"; then
+    fail "W1-NETNAME: matching label must not remove the network"
+  fi
+
+  : > "$DOCKER_CALLS"
+  if ( cd "$work" && FAKE_NET_LABEL="flmx-network" FAKE_NET_CONTAINERS="other-app" panel_reconcile_network_label ) 2>/dev/null; then
+    fail "W1-NETNAME: foreign containers on the network must refuse reconciliation"
+  fi
+  if grep -q 'network rm' "$DOCKER_CALLS"; then
+    fail "W1-NETNAME: refused reconciliation must not remove the network"
+  fi
+)
+
+# W1-DLMV: download_agent_binary 落盘 mv 失败必须点名返回非 0，
+# 不得续印「下载完成」。旧实现 mv 无守卫、失败后 dest 缺失/为空
+# 仍报 ✅。
+test_install_download_mv_failure_is_named() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  ensure_download_routes() { DOWNLOAD_ROUTES=("" ); }
+  extend_download_routes() { return 1; }
+  verify_downloaded_binary() { return 0; }
+  curl() { local out="" prev=""; for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done; printf 'binary-bytes' > "$out"; }
+  mv() { return 1; }
+
+  local d out rc="0"
+  d=$(mktemp -d)
+  out=$(download_agent_binary "$d/flmx_agent" 2>&1) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "W1-DLMV: mv failure must return non-zero"
+  [[ "$out" == *"落盘失败"* ]] || fail "W1-DLMV: mv failure must be named in the receipt"
+  [[ "$out" != *"✅"* ]] || fail "W1-DLMV: mv failure must not print a success receipt"
+)
+
+# W1-LEGACY-SCOPE: cleanup_legacy_gost_installation 的二进制删除
+# 按删除前采集的 unit 引用集合逐个判定——被引用才删、未引用
+# （如别产品 gost）保留并点名。旧实现按分支整集删，第一分支连
+# /usr/local/bin/gost 一并删。
+test_legacy_gost_cleanup_scoped_binary_deletion() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local d
+  d=$(mktemp -d)
+  LEGACY_GOST_BINARY="$d/usr-bin-gost"
+  LEGACY_GOST_CONFIG_DIR="$d/etc-gost"
+  mkdir -p "$LEGACY_GOST_CONFIG_DIR"
+  LEGACY_GOST_SERVICE_FILE_ETC="$d/gost.service"
+  LEGACY_GOST_SERVICE_FILE_LIB="$d/none1"
+  LEGACY_GOST_SERVICE_FILE_USR_LIB="$d/none2"
+  printf 'x' > "$LEGACY_GOST_BINARY"
+  printf 'x' > "$LEGACY_GOST_CONFIG_DIR/gost"
+  SERVICE_MANAGER="systemd"
+  systemctl() { return 0; }
+  legacy_gost_cleanup_ownership_confirmed() { return 0; }
+
+  printf '[Service]\nWorkingDirectory=%s\nExecStart=%s/gost\n' "$LEGACY_GOST_CONFIG_DIR" "$LEGACY_GOST_CONFIG_DIR" > "$LEGACY_GOST_SERVICE_FILE_ETC"
+  cleanup_legacy_gost_installation >/dev/null 2>&1
+  [[ -f "$LEGACY_GOST_BINARY" ]] || fail "W1-LEGACY-SCOPE: unreferenced binary must be preserved"
+  [[ ! -f "$LEGACY_GOST_CONFIG_DIR/gost" ]] || fail "W1-LEGACY-SCOPE: referenced config-dir binary must be removed"
+  [[ ! -f "$LEGACY_GOST_SERVICE_FILE_ETC" ]] || fail "W1-LEGACY-SCOPE: service file must be removed"
+
+  printf 'x' > "$LEGACY_GOST_CONFIG_DIR/gost"
+  printf '{}' > "$LEGACY_GOST_CONFIG_DIR/config.json"
+  printf '{}' > "$LEGACY_GOST_CONFIG_DIR/gost.json"
+  printf '[Service]\nWorkingDirectory=%s\nExecStart=%s\n' "$LEGACY_GOST_CONFIG_DIR" "$LEGACY_GOST_BINARY" > "$LEGACY_GOST_SERVICE_FILE_ETC"
+  cleanup_legacy_gost_installation >/dev/null 2>&1
+  [[ ! -f "$LEGACY_GOST_BINARY" ]] || fail "W1-LEGACY-SCOPE: referenced binary must be removed"
+)
+
+# W1-JSONESC: json_escape 全 C0 控制字符按 JSON 文法转义（旧手写
+# 表漏 \b \f 与其余控制字符、写出非法 JSON）；agent_config_addr
+# 提取按 JSON 字符串文法，转义引号不截断。
+test_json_escape_and_config_addr_grammar() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local esc d addr
+  esc=$(json_escape "$(printf 'a\x01b\x08c\x0cd\te"f\\g')")
+  assert_equals 'a\u0001b\bc\fd\te\"f\\g' "$esc" "W1-JSONESC: control characters must be escaped per JSON grammar"
+  esc=$(json_escape 'https://panel.example.com:8443')
+  assert_equals 'https://panel.example.com:8443' "$esc" "W1-JSONESC: plain values pass through"
+
+  d=$(mktemp -d)
+  printf '{ "addr": "https://pan\\"el.example.com", "secret": "x" }\n' > "$d/config.json"
+  addr=$(agent_config_addr "$d")
+  assert_equals 'https://pan"el.example.com' "$addr" "W1-JSONESC: escaped quote must not truncate addr extraction"
+  printf '{ "addr": "wss://a.example.com", "secret": "x" }\n' > "$d/config.json"
+  addr=$(agent_config_addr "$d")
+  assert_equals 'wss://a.example.com' "$addr" "W1-JSONESC: plain addr extraction unchanged"
+)
+
+# W1-UNINSTALL-VERDICT: install.sh 卸载完成回执须有后置实证——
+# 任一对象删失败即点名残留、返回非 0、不印「✅ 卸载完成」；全
+# 删净才印完成。旧实现 rm 集裸调用、恒回 0 无条件报完成。夹具
+# 口径同 R6-02：调优路径全集改指临时目录、异面板地址＋接管标
+# 志过归属守卫。
+test_install_uninstall_verdict_requires_poststate() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local root
+  root=$(mktemp -d)
+  SERVER_ADDR=""
+  INSTALL_DIR="$root/cur"; LEGACY_INSTALL_DIR="$root/legacy"
+  mkdir -p "$INSTALL_DIR"
+  printf 'bin' > "$INSTALL_DIR/flmx_agent"
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$root/flmx_agent.service"
+  LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE="$root/flux_agent.service"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$root/initd-cur"
+  LEGACY_FLUX_AGENT_OPENRC_SERVICE_FILE="$root/initd-legacy"
+  FLMX_AGENT_LOG_DIR="$root/logs"; FLMX_AGENT_LOGROTATE_FILE="$root/logrotate"
+  FLMX_TUNING_SYSCTL_CONF="$root/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$root/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$root/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$root/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$root/99-network-performance.conf"
+  FLMX_TUNING_LIMITS_CONF="$root/99-limits.conf"
+  FLMX_TUNING_BBR_CONF="$root/10-bbr.conf"
+  FLMX_TUNING_GAI_CONF="$root/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$root/gai.conf.bak"
+  FLMX_TUNING_RPS_UNIT_FILE="$root/flmx-tuning-rps.service"
+  FLMX_TUNING_RPS_SCRIPT="$root/flmx-tuning-rps.sh"
+  FLMX_PROC_SYS_DIR="$root/proc/sys"
+  SERVICE_MANAGER="systemd"
+  systemctl() { return 0; }
+  nft() { cat >/dev/null; return 0; }
+  iptables() { return 0; }
+
+  local out rc="0"
+  out=$(printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "W1-UNINSTALL-VERDICT: clean uninstall should succeed"
+  [[ "$out" == *"✅ 卸载完成"* ]] || fail "W1-UNINSTALL-VERDICT: clean uninstall should print the completion receipt"
+  [[ ! -e "$INSTALL_DIR" ]] || fail "W1-UNINSTALL-VERDICT: install dir must be gone"
+
+  # 服务文件删失败（rm 桩对该路径恒失败）→ 残留点名、非 0、无完成回执
+  mkdir -p "$INSTALL_DIR"
+  printf 'bin' > "$INSTALL_DIR/flmx_agent"
+  printf '%s' '{"addr": "https://other.example.com:443", "secret": "x"}' > "$INSTALL_DIR/config.json"
+  printf 'unit' > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+  rm() {
+    local a
+    for a in "$@"; do [[ "$a" == "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" ]] && return 1; done
+    command rm "$@"
+  }
+  rc="0"
+  out=$(printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent 2>&1) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "W1-UNINSTALL-VERDICT: leftover service file must fail the uninstall"
+  [[ "$out" == *"卸载未完全完成"* ]] || fail "W1-UNINSTALL-VERDICT: leftover must be named, got: $out"
+  [[ "$out" != *"✅ 卸载完成"* ]] || fail "W1-UNINSTALL-VERDICT: leftover must not print the completion receipt"
+)
+
+# W1-PANEL-UNINSTALL-VERDICT: panel Docker 分支卸载在印「卸载完
+# 成」前实查 compose/.env/backups 后置状态，残留即点名非 0。
+test_panel_uninstall_docker_branch_verifies_poststate() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  check_docker() { DOCKER_CMD="docker"; return 0; }
+  docker() { return 0; }
+
+  local d out rc="0"
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  out=$( ( cd "$d" && uninstall_panel <<< "y" 2>&1 ) ) || rc="$?"
+  assert_equals "0" "$rc" "W1-PANEL-UNINSTALL-VERDICT: clean docker-branch uninstall should succeed"
+  [[ "$out" == *"卸载完成"* ]] || fail "W1-PANEL-UNINSTALL-VERDICT: clean uninstall should print completion"
+  [[ ! -e "$d/.env" && ! -e "$d/docker-compose.yml" ]] || fail "W1-PANEL-UNINSTALL-VERDICT: files must be gone"
+
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=x\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  rm() {
+    local a
+    for a in "$@"; do [[ "$a" == *docker-compose.yml ]] && return 1; done
+    command rm "$@"
+  }
+  rc="0"
+  out=$( ( cd "$d" && uninstall_panel <<< "y" 2>&1 ) ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "W1-PANEL-UNINSTALL-VERDICT: leftover compose must fail the uninstall"
+  [[ "$out" == *"卸载未完全完成"* ]] || fail "W1-PANEL-UNINSTALL-VERDICT: leftover must be named, got: $out"
+  [[ "$out" != *"✅ 卸载完成"* ]] || fail "W1-PANEL-UNINSTALL-VERDICT: leftover must not print completion"
+)
+
+# W1-SELFCHECK: delete_self 本体校验须为多因子——仅含 REPO 钉死
+# 行的异物文件不得通过（旧单因子校验可被改 REPO 值的异物骗过，
+# C4-低·delete_self自指/无校验）；全因子齐备才认本体。反向臂：
+# 任一因子缺失即拒绝；若校验退回单因子，本用例必红。
+test_delete_self_multifactor_rejects_repo_line_only() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local f
+  f=$(mktemp)
+  printf 'REPO="iiiiiiiii7125-art/flmx-max"\n' > "$f"
+  if flmx_script_file_is_self "$f" 2>/dev/null; then
+    fail "W1-SELFCHECK: REPO-line-only file must not pass install self check"
+  fi
+  printf '#!/bin/bash\nREPO="iiiiiiiii7125-art/flmx-max"\n' > "$f"
+  if flmx_script_file_is_self "$f" 2>/dev/null; then
+    fail "W1-SELFCHECK: file without marker functions must not pass install self check"
+  fi
+  printf '#!/bin/bash\nREPO="iiiiiiiii7125-art/flmx-max"\ninstall_flmx_agent() { :; }\ndelete_self() { :; }\n' > "$f"
+  flmx_script_file_is_self "$f" || fail "W1-SELFCHECK: full-factor file must pass install self check"
+  flmx_script_file_is_self "$ROOT_DIR/install.sh" || fail "W1-SELFCHECK: install.sh itself must pass its own self check"
+
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  printf 'REPO="iiiiiiiii7125-art/flmx-max"\n' > "$f"
+  if panel_script_file_is_self "$f" 2>/dev/null; then
+    fail "W1-SELFCHECK: REPO-line-only file must not pass panel self check"
+  fi
+  printf '#!/bin/bash\nREPO="iiiiiiiii7125-art/flmx-max"\nSCRIPT_VERSION="9.9.9"\ninstall_panel() { :; }\ndelete_self() { :; }\n' > "$f"
+  panel_script_file_is_self "$f" || fail "W1-SELFCHECK: full-factor file must pass panel self check"
+  panel_script_file_is_self "$ROOT_DIR/panel_install.sh" || fail "W1-SELFCHECK: panel_install.sh itself must pass its own self check"
+)
+
+test_upsert_env_var_literal_values_and_key_parity
+test_panel_version_gate_matches_go_semantics
+test_install_version_gate_matches_go_semantics
+test_caddyfile_without_site_single_line_blocks
+test_panel_network_default_name_and_label_reconcile
+test_install_download_mv_failure_is_named
+test_legacy_gost_cleanup_scoped_binary_deletion
+test_json_escape_and_config_addr_grammar
+test_install_uninstall_verdict_requires_poststate
+test_panel_uninstall_docker_branch_verifies_poststate
+test_delete_self_multifactor_rejects_repo_line_only
 
 echo "install script tests passed"

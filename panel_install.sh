@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261109.01"
+SCRIPT_VERSION="20261110.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -670,7 +670,8 @@ resolve_version() {
 
 # A11-132-03: 点分数字版本比较（与 self_update_check 的防降级口径对齐）。
 # 回显 -1/0/1 表示 a 小于/等于/大于 b；任一侧为空或含非数字段时不可比，
-# 回显空并返回 1——调用方不得据此拦截（开发/测试标签等场景保持放行）。
+# 回显空并返回 1。防降级门不得直接据「不可比」放行（带粘连后缀的低版
+# 本如 2.1.1-rc1 即由此绕过），一律经 panel_version_gate_cmp 判定。
 panel_version_cmp() {
   local a="${1#v}" b="${2#v}"
   local -a pa pb
@@ -700,6 +701,31 @@ panel_version_cmp() {
     fi
   done
   echo 0
+}
+
+# 防降级门判定（两脚本同实现，与 Go 面 compareVersions 对齐，
+# A11-132-06）：在 panel_version_cmp 之外补 "dev" 定序——dev 为
+# 最低版本（两侧同为 dev 判等、目标为 dev 判低、现行为 dev 判
+# 高）；其余情形回显 panel_version_cmp 的结果，不可比时回显空。
+# 调用方口径：两侧皆非空而回显空＝不可比，必须 fail-closed 拒
+# 绝（旧 V-19 放行口径使带后缀的低版本可绕过防降级、与 Go 面
+# 的严格口径分家，已废止）；现行版本为空（无从读到）时无从判
+# 定降级，维持放行。
+panel_version_gate_cmp() {
+  local target="$1" current="$2"
+  if [[ "$target" == "dev" && "$current" == "dev" ]]; then
+    echo 0
+    return 0
+  fi
+  if [[ "$target" == "dev" && -n "$current" ]]; then
+    echo -1
+    return 0
+  fi
+  if [[ "$current" == "dev" && -n "$target" ]]; then
+    echo 1
+    return 0
+  fi
+  panel_version_cmp "$target" "$current"
 }
 
 # 根据版本号设置 compose 下载地址（1.7.7：只存 canonical 地址，
@@ -1042,7 +1068,11 @@ caddyfile_without_site() {
       keep = 1
       if (first != "{") {
         line = first
-        sub(/\{[[:space:]]*$/, "", line)
+        # 块头只取首个 { 之前的地址段：单行块（如
+        # `a.com { reverse_proxy ... }`）的 { 之后是块体不是地
+        # 址——旧实现只剥行尾 { ，单行块的 reverse_proxy/端口/}
+        # 被当作保留地址、重建出垃圾块头。
+        sub(/\{.*$/, "", line)
         n = split(line, parts, /[[:space:],]+/)
         keptn = 0
         for (i = 1; i <= n; i++) {
@@ -1197,16 +1227,22 @@ uninstall_caddy_panel_blocks() {
   if command -v systemctl >/dev/null 2>&1 && systemctl cat caddy >/dev/null 2>&1; then
     if ! systemctl restart caddy; then
       echo "⚠️ Caddy 重启失败，正在回滚到摘除前的配置..."
-      cp "$caddyfile_bak" "$caddyfile"
-      systemctl restart caddy || true
-      echo "⚠️ Caddy 站点块摘除未生效（已回滚），请人工处理 $caddyfile"
+      if caddy_restore_backup "$caddyfile" "$caddyfile_bak"; then
+        systemctl restart caddy || true
+        echo "⚠️ Caddy 站点块摘除未生效（已回滚），请人工处理 $caddyfile"
+      else
+        echo "⚠️ Caddy 站点块摘除未生效且回滚复制未完成（见上 ⚠️ 行），请人工处理 $caddyfile"
+      fi
       return 0
     fi
     if ! systemctl is-active --quiet caddy; then
       echo "⚠️ Caddy 重启后未处于运行状态，正在回滚到摘除前的配置..."
-      cp "$caddyfile_bak" "$caddyfile"
-      systemctl restart caddy || true
-      echo "⚠️ Caddy 站点块摘除未生效（已回滚），请人工处理 $caddyfile"
+      if caddy_restore_backup "$caddyfile" "$caddyfile_bak"; then
+        systemctl restart caddy || true
+        echo "⚠️ Caddy 站点块摘除未生效（已回滚），请人工处理 $caddyfile"
+      else
+        echo "⚠️ Caddy 站点块摘除未生效且回滚复制未完成（见上 ⚠️ 行），请人工处理 $caddyfile"
+      fi
       return 0
     fi
     echo "✅ Caddy 已重启，站点块摘除已生效"
@@ -1322,6 +1358,22 @@ resolve_caddy_frontend_port() {
   echo "⚠️ 未定位到部署 .env 或其中无 FRONTEND_PORT，将按默认前端端口 6366 生成反代配置"
   echo "   若本机面板的前端端口不是 6366（如同机共存的第二套面板改过端口），生成的配置会反代到无人监听的端口、站点打不开"
   echo "   修正方法：cd 到部署目录后重跑本菜单，或以 PANEL_DEPLOY_DIR=<部署目录> 指定部署目录后重试（自建镜像部署另需同时指定 PANEL_BACKEND_CONTAINER=<后端容器名>）"
+}
+
+# Caddyfile 回滚复制（菜单 5/6 共用）：备份存在则复制恢复、无备
+# 份则删本次新写文件。复制失败必须点名并返回非 0——旧实现各失
+# 败分支裸 cp 后照印「已回滚」，磁盘异常时坏配置留盘而回执称已
+# 恢复，下次 Caddy 重启加载坏文件致站点中断。
+caddy_restore_backup() {
+  local caddyfile="$1" caddyfile_bak="$2"
+  if [ -n "$caddyfile_bak" ]; then
+    if cp "$caddyfile_bak" "$caddyfile"; then
+      return 0
+    fi
+    echo "⚠️ 回滚复制失败：无法把 $caddyfile_bak 恢复为 $caddyfile，请手动执行 cp \"$caddyfile_bak\" \"$caddyfile\" 后重启 Caddy"
+    return 1
+  fi
+  rm -f "$caddyfile"
 }
 
 # 配置域名反向代理（Caddy 自动 HTTPS）
@@ -1466,7 +1518,10 @@ setup_domain_proxy() {
     # A2-07：备份名带进程号唯一后缀——原秒级时间戳同秒再跑即覆
     # 盖前一份回滚源（菜单 6 同型一并改）。
     caddyfile_bak="${caddyfile}.bak.$(date +%s).$$"
-    cp "$caddyfile" "$caddyfile_bak"
+    if ! cp "$caddyfile" "$caddyfile_bak"; then
+      echo "❌ 备份现有 Caddy 配置失败，未改动 $caddyfile ，请处理后（查 df -h 的可用空间）重试"
+      return 1
+    fi
     echo "🗄️  已备份现有配置到 $caddyfile_bak"
   fi
   # AUDIT-R1 (SCR-003)＋R6-03: 菜单 5 是独立流程，不经过
@@ -1482,7 +1537,7 @@ setup_domain_proxy() {
   if [ -n "$caddyfile_bak" ]; then
     preserved_blocks=$(caddyfile_without_site "$caddyfile_bak" "$DOMAIN")
   fi
-  cat > "$caddyfile" <<EOF
+  if ! cat > "$caddyfile" <<EOF
 $DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
     # §9.6 缓解（audit-max 裁定）：面板 WS 握手把 token 放在
@@ -1504,8 +1559,17 @@ $DOMAIN {
     }
 }
 EOF
+  then
+    echo "❌ 写入 $caddyfile 失败，正在恢复写入前的配置..."
+    caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
+    return 1
+  fi
   if [ -n "$preserved_blocks" ]; then
-    printf '%s\n' "$preserved_blocks" >> "$caddyfile"
+    if ! printf '%s\n' "$preserved_blocks" >> "$caddyfile"; then
+      echo "❌ 附回原有站点块失败，正在恢复写入前的配置..."
+      caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
+      return 1
+    fi
     echo "♻️ 已保留原配置中的其他站点块（订阅前置等配置不受本次修改影响）"
   fi
 
@@ -1515,12 +1579,10 @@ EOF
   # 尝试以旧配置恢复服务，并落到日志指引分支。
   if command -v caddy &> /dev/null; then
     if ! caddy validate --config "$caddyfile" > /dev/null 2>&1; then
-      if [ -n "$caddyfile_bak" ]; then
-        echo "❌ Caddy 配置校验失败，已回滚到 $caddyfile_bak ，未做任何生效变更"
-        cp "$caddyfile_bak" "$caddyfile"
+      if caddy_restore_backup "$caddyfile" "$caddyfile_bak"; then
+        echo "❌ Caddy 配置校验失败，已回滚到 ${caddyfile_bak:-（删除本次新写文件）}，未做任何生效变更"
       else
-        echo "❌ Caddy 配置校验失败，未做任何生效变更"
-        rm -f "$caddyfile"
+        echo "❌ Caddy 配置校验失败且回滚复制未完成（见上 ⚠️ 行），未做任何生效变更"
       fi
       return 1
     fi
@@ -1529,11 +1591,7 @@ EOF
 
   if ! systemctl restart caddy; then
     echo "❌ Caddy 重启失败，正在回滚到之前的配置..."
-    if [ -n "$caddyfile_bak" ]; then
-      cp "$caddyfile_bak" "$caddyfile"
-    else
-      rm -f "$caddyfile"
-    fi
+    caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
     systemctl restart caddy || true
     echo "❌ Caddy 启动失败，请检查日志: journalctl -u caddy -n 50"
     return 1
@@ -1556,11 +1614,7 @@ EOF
     # 上方 validate/restart 失败分支同口径：回滚备份并尝试以旧
     # 配置恢复服务。无备份（此前无 Caddyfile）时删除新写文件。
     echo "❌ Caddy 重启后未处于运行状态，正在回滚到之前的配置..."
-    if [ -n "$caddyfile_bak" ]; then
-      cp "$caddyfile_bak" "$caddyfile"
-    else
-      rm -f "$caddyfile"
-    fi
+    caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
     systemctl restart caddy || true
     echo "❌ Caddy 启动失败，请检查日志: journalctl -u caddy -n 50"
     return 1
@@ -1620,21 +1674,40 @@ setup_subscription_front_domain() {
   # 块（面板域名等）逐字保留。
   echo "📝 配置 Caddy..."
   local caddyfile_bak="${caddyfile}.bak.$(date +%s).$$"
-  cp "$caddyfile" "$caddyfile_bak"
+  if ! cp "$caddyfile" "$caddyfile_bak"; then
+    echo "❌ 备份现有 Caddy 配置失败，未改动 $caddyfile ，请处理后（查 df -h 的可用空间）重试"
+    return 1
+  fi
   echo "🗄️  已备份现有配置到 $caddyfile_bak"
-  cat >> "$caddyfile" <<EOF
+  if ! cat >> "$caddyfile" <<EOF
 $SUB_DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
 }
 EOF
+  then
+    echo "❌ 追加站点块到 $caddyfile 失败，正在回滚到之前的配置..."
+    caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
+    return 1
+  fi
+  # 落盘核验：下方 validate 对未追加的旧文件同样会通过，成功判据
+  # 必须含新站点块头确实已在文件中——旧实现追加写失败（磁盘满
+  # 等）时仍一路走到「🎉 配置完成」，前置域名实际未生效。
+  if ! grep -Fxq "$SUB_DOMAIN {" "$caddyfile"; then
+    echo "❌ 落盘核验失败：$caddyfile 中未找到新站点块「$SUB_DOMAIN {」，正在回滚到之前的配置..."
+    caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
+    return 1
+  fi
 
   # SCR-020: 先校验后生效。validate 不过即回滚备份并退出，此时尚未
   # restart，正在运行的 Caddy 仍用旧配置，不受影响。caddy 不在 PATH
   # 时跳过校验，靠下方 restart + is-active 兜底（同菜单 5）。
   if command -v caddy &> /dev/null; then
     if ! caddy validate --config "$caddyfile" > /dev/null 2>&1; then
-      echo "❌ Caddy 配置校验失败，已回滚到 $caddyfile_bak ，未做任何生效变更"
-      cp "$caddyfile_bak" "$caddyfile"
+      if caddy_restore_backup "$caddyfile" "$caddyfile_bak"; then
+        echo "❌ Caddy 配置校验失败，已回滚到 $caddyfile_bak ，未做任何生效变更"
+      else
+        echo "❌ Caddy 配置校验失败且回滚复制未完成（见上 ⚠️ 行），未做任何生效变更"
+      fi
       return 1
     fi
     echo "✅ Caddy 配置校验通过"
@@ -1646,7 +1719,7 @@ EOF
   # 落到日志指引分支——与上方 validate 失败回滚同口径。
   if ! systemctl restart caddy; then
     echo "❌ Caddy 重启失败，正在回滚到之前的配置..."
-    cp "$caddyfile_bak" "$caddyfile"
+    caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
     systemctl restart caddy || true
     echo "❌ Caddy 启动失败，请检查日志: journalctl -u caddy -n 50"
     return 1
@@ -1694,7 +1767,7 @@ EOF
     # （同菜单 5 口径）——旧实现此分支只有日志指引，本次追加的坏
     # 配置会留盘、下次重启仍加载且无人提示文件已被改动。
     echo "❌ Caddy 重启后未处于运行状态，正在回滚到之前的配置..."
-    cp "$caddyfile_bak" "$caddyfile"
+    caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
     systemctl restart caddy || true
     echo "❌ Caddy 启动失败，请检查日志: journalctl -u caddy -n 50"
     return 1
@@ -1739,19 +1812,60 @@ upsert_env_var() {
   local value="$3"
   local tmp_file
 
-  tmp_file=$(mktemp)
+  # .env 是单行格式：值含真实换行/回车无从表示，落盘只会注入新行
+  # 改写其他键——点名拒绝。旧实现还有第二条注入面：键值经 awk -v
+  # 传入，awk 会解释其中的反斜杠转义，字面 \n 被写成真换行、
+  # \t 写成真 TAB（读写两面口径分家：parse_env_file_value 对未引
+  # 号值不做反斜杠展开，写回不保真，含此序列的口令会被静默改写
+  # 并与 PG 卷已固化口令脱钩）。
+  case "$value" in
+    *$'\n'*|*$'\r'*)
+      echo "❌ 写入 .env 失败：键 $key 的值含换行/回车，.env 单行格式无法表示，已拒绝写入" >&2
+      return 1
+      ;;
+  esac
+
+  tmp_file=$(mktemp) || return 1
   if [ -f "$file" ]; then
-    awk -v k="$key" -v v="$value" '
-      BEGIN { found=0 }
-      $0 ~ ("^" k "=") { print k "=" v; found=1; next }
-      { print }
+    # 键/值改经环境变量传入 awk（ENVIRON 不做任何转义处理、逐字
+    # 保真）；键匹配与 get_env_var 读面同口径——取首个 = 前段、
+    # 两侧空白裁剪后逐字相等（键不再当正则、行首空白键同样命
+    # 中）；首个命中行替换、后续同键行丢弃（去重：读面后现胜出
+    # 与 Compose 对重复键的取值曾因此分家）；未命中在末尾追加。
+    if ! UPSERT_KEY="$key" UPSERT_VALUE="$value" awk '
+      BEGIN { k = ENVIRON["UPSERT_KEY"]; v = ENVIRON["UPSERT_VALUE"]; found = 0 }
+      {
+        eq = index($0, "=")
+        if (eq > 0) {
+          rawkey = substr($0, 1, eq - 1)
+          gsub(/^[ \t]+|[ \t]+$/, "", rawkey)
+          if (rawkey == k) {
+            if (!found) { print k "=" v; found = 1 }
+            next
+          }
+        }
+        print
+      }
       END { if (!found) print k "=" v }
-    ' "$file" > "$tmp_file"
+    ' "$file" > "$tmp_file"; then
+      rm -f "$tmp_file"
+      echo "❌ 写入 .env 失败：改写 $file 出错（键 $key），原文件未改动" >&2
+      return 1
+    fi
+    chmod --reference="$file" "$tmp_file" 2>/dev/null || true
   else
-    printf '%s=%s\n' "$key" "$value" > "$tmp_file"
+    if ! printf '%s=%s\n' "$key" "$value" > "$tmp_file"; then
+      rm -f "$tmp_file"
+      echo "❌ 写入 .env 失败：无法创建临时文件（键 $key）" >&2
+      return 1
+    fi
   fi
 
-  mv "$tmp_file" "$file"
+  if ! mv "$tmp_file" "$file"; then
+    rm -f "$tmp_file"
+    echo "❌ 写入 .env 失败：无法把新内容移入 $file（键 $key），原文件未改动" >&2
+    return 1
+  fi
 }
 
 # .env 单值解析（与 Go 面 parseEnvFileValue 逐字同口径，R1-01-L2
@@ -2284,21 +2398,21 @@ write_new_panel_identity() {
     sqlite_volume="flmx-sqlite-data${suffix}" postgres_volume="flmx-postgres-data${suffix}" network="flmx-network${suffix}"
     project_name="flmx-panel${suffix}"
   fi
-  upsert_env_var .env PANEL_BACKEND_CONTAINER "$backend"
-  upsert_env_var .env PANEL_FRONTEND_CONTAINER "$frontend"
-  upsert_env_var .env PANEL_POSTGRES_CONTAINER "$postgres"
-  upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume"
-  upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume"
-  upsert_env_var .env FLMX_NETWORK "$network"
+  upsert_env_var .env PANEL_BACKEND_CONTAINER "$backend" || return 1
+  upsert_env_var .env PANEL_FRONTEND_CONTAINER "$frontend" || return 1
+  upsert_env_var .env PANEL_POSTGRES_CONTAINER "$postgres" || return 1
+  upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume" || return 1
+  upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume" || return 1
+  upsert_env_var .env FLMX_NETWORK "$network" || return 1
   # Compose 项目名同样用专属名（仅新模板分支；旧模板回退分支保持与
   # 旧脚本逐字一致的缺省项目名推导，不改动装旧版的行为）。
   if [[ -z "$legacy_template" ]]; then
-    upsert_env_var .env COMPOSE_PROJECT_NAME "$project_name"
+    upsert_env_var .env COMPOSE_PROJECT_NAME "$project_name" || return 1
   fi
   local instance_id
   instance_id=$(panel_instance_id)
   if [[ -n "$instance_id" ]]; then
-    upsert_env_var .env FLMX_INSTANCE "$instance_id"
+    upsert_env_var .env FLMX_INSTANCE "$instance_id" || return 1
     if [[ -n "$legacy_template" ]]; then
       echo "⚠️ 目标版本的 Compose 模板使用旧版共享资源名，实例后缀不生效：该实例的容器/卷/网络仍用旧缺省名，同机请勿再并存第二套该版本部署"
     fi
@@ -2323,10 +2437,41 @@ panel_postgres_volume_name() {
   printf '%s' "${v:-postgres_data}"
 }
 
+# 网络缺省名（.env 无 FLMX_NETWORK 键、容器实读也取不到时的回
+# 退）：按当前目录 Compose 的模板世代取该模板的实际网络名——旧
+# 模板（无 FLMX_SQLITE_VOLUME 标记）的网络名写死 gost-network；
+# 现行模板的 name 缺省是 flmx-network（docker-compose-v4.yml 的
+# networks 段，gost-network 在现行模板里只是键名、不是网络名），
+# 实例部署带实例后缀（与 write_new_panel_identity 的写入口径一
+# 致）。
+panel_network_default_name() {
+  if [[ -f docker-compose.yml ]] && ! grep -Fq 'FLMX_SQLITE_VOLUME' docker-compose.yml; then
+    printf '%s' "gost-network"
+  else
+    printf 'flmx-network%s' "$(panel_instance_suffix)"
+  fi
+}
+
 panel_network_name() {
   local v
   v=$(get_env_var FLMX_NETWORK || true)
-  printf '%s' "${v:-gost-network}"
+  if [[ -n "$v" ]]; then
+    printf '%s' "$v"
+    return 0
+  fi
+  # 实读纠偏（与迁移源卷的 E4 同口径）：后端容器实际接入的网络
+  # 恰一个时以实读为准——旧实现恒回退字面 gost-network，现行模
+  # 板部署根本不存在该网络，迁移 pgloader 以此入网必败。
+  local backend="${PANEL_BACKEND_CONTAINER:-}" nets="" net_count=0
+  if [[ -n "$backend" ]] && command -v docker >/dev/null 2>&1; then
+    nets=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$backend" 2>/dev/null || true)
+    net_count=$(printf '%s' "$nets" | grep -c . || true)
+    if [[ "$net_count" == "1" ]]; then
+      printf '%s' "$nets" | head -n 1
+      return 0
+    fi
+  fi
+  panel_network_default_name
 }
 
 # 同代缺省推导：.env 缺 PG/前端身份键时，其实际容器名与后端同代
@@ -2592,8 +2737,8 @@ panel_pin_missing_resource_keys() {
       elif [[ "$network_count" -gt 1 ]]; then
         echo "⚠️ 后端 $backend_container 同时挂在多个网络（$(printf '%s' "$network_name" | tr '\n' ' '))，无法唯一判定部署网络，本次不钉 FLMX_NETWORK 键；重建将按 Compose 文件的缺省网络处理——如部署使用自定义网络名，请在 .env 中显式钉入 FLMX_NETWORK 后再重跑"
       else
-        echo "⚠️ 未能实读后端 $backend_container 的网络，本次按旧缺省钉 FLMX_NETWORK=gost-network；如部署使用自定义网络名，请改 .env 后再重跑"
-        upsert_env_var .env FLMX_NETWORK "gost-network" || return 1
+        echo "⚠️ 未能实读后端 $backend_container 的网络，本次按模板缺省钉 FLMX_NETWORK=$(panel_network_default_name)；如部署使用自定义网络名，请改 .env 后再重跑"
+        upsert_env_var .env FLMX_NETWORK "$(panel_network_default_name)" || return 1
       fi
     fi
     if [[ -z "$(get_env_var COMPOSE_PROJECT_NAME || true)" ]]; then
@@ -2616,7 +2761,21 @@ panel_pin_missing_resource_keys() {
 # 仍照旧关闭。
 panel_identity_rename_enabled() {
   local flag=""
-  if [[ -f .env ]] && grep -q '^PANEL_IDENTITY_RENAME=' .env; then
+  # 键在否的判定与 get_env_var/upsert_env_var 同口径（取首个 = 前
+  # 段、两侧空白裁剪后逐字相等）：旧实现以 grep '^PANEL_IDENTITY_
+  # RENAME=' 锚定行首，行首带空白的写法不命中、静默回落进程环境
+  # （缺省开），运维在 .env 里显式写的 =0 被无视、升级流照常改名。
+  if [[ -f .env ]] && awk '
+    {
+      eq = index($0, "=")
+      if (eq > 0) {
+        rawkey = substr($0, 1, eq - 1)
+        gsub(/^[ \t]+|[ \t]+$/, "", rawkey)
+        if (rawkey == "PANEL_IDENTITY_RENAME") { found = 1; exit }
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' .env; then
     flag=$(get_env_var PANEL_IDENTITY_RENAME || true)
   else
     flag="${PANEL_IDENTITY_RENAME:-}"
@@ -3261,12 +3420,23 @@ backup_postgres_for_update() {
 
   postgres_db=$(get_env_var "POSTGRES_DB" || true)
   postgres_user=$(get_env_var "POSTGRES_USER" || true)
-  postgres_db=${postgres_db:-flux_panel}
-  postgres_user=${postgres_user:-flux_panel}
+  # F1-02：缺键回退不得凭空写旧名——PG 的库名/用户名在卷首次初
+  # 始化时固化，运行中的 postgres 容器环境即当时的实际值，先实
+  # 读容器环境；实读也无才回退现行模板缺省 flmx_panel（旧实现恒
+  # 回退旧名 flux_panel，与模板缺省和迁移路径的分流口径都不一
+  # 致，缺键部署 pg_dump 必以错名失败且回执不点名所用名）。
+  if [[ -z "$postgres_db" ]]; then
+    postgres_db=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$PANEL_POSTGRES_CONTAINER" 2>/dev/null | sed -n 's/^POSTGRES_DB=//p' | head -n 1 || true)
+  fi
+  if [[ -z "$postgres_user" ]]; then
+    postgres_user=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$PANEL_POSTGRES_CONTAINER" 2>/dev/null | sed -n 's/^POSTGRES_USER=//p' | head -n 1 || true)
+  fi
+  postgres_db=${postgres_db:-flmx_panel}
+  postgres_user=${postgres_user:-flmx_panel}
 
   if ! docker exec "$PANEL_POSTGRES_CONTAINER" pg_dump -U "$postgres_user" "$postgres_db" > "$destination"; then
     rm -f "$destination"
-    echo "❌ PostgreSQL 数据备份失败"
+    echo "❌ PostgreSQL 数据备份失败（pg_dump 目标：容器 $PANEL_POSTGRES_CONTAINER、用户 $postgres_user、数据库 $postgres_db；请核对 .env 的 POSTGRES_USER/POSTGRES_DB 与该容器实际初始化的库名/用户名是否一致）"
     return 1
   fi
 }
@@ -3407,6 +3577,67 @@ preserve_compose_networks() {
   if [[ -n "$old_subnets" ]]; then
     echo "🌐 已保留现有部署的网络子网（${old_subnets//$'\n'/, }），模板子网仅对全新安装生效"
   fi
+}
+
+# 存量网络标签对账（FINDING-NETLABEL-211 脚本半）：Compose 以网络
+# 对象上的 com.docker.compose.network 标签核对归属，标签值须等于
+# 当前 Compose 文件 networks 段的键名。存量网络若由旧世代模板
+# （键名 flmx-network）或手工创建（无标签），现行模板键名已是
+# gost-network，up 会以 incorrect label 拒绝——升级与回滚双双死
+# 在同一网络上、只能人工删网络（2.1.1 实证）。preserve_compose_
+# networks 只搬文件文本、碰不到网络对象，故在任何 up 之前先行对
+# 账：标签已合即无动作；不合且无容器接入时删该空网络（名称与子
+# 网由 .env/preserve 口径保留，Compose 随即按模板重建）；接入容
+# 器全部属于本部署时先摘除它们（up 本就要强制重建）再删网络；
+# 有外来容器接入则点名拒绝并给字段级人工处置，绝不误删他人网
+# 络。$1＝即将用于 up 的 Compose 文件（缺省 docker-compose.yml，
+# 回滚路径在恢复备份文件后调用、按恢复后的键名对账）。
+panel_reconcile_network_label() {
+  local compose_file="${1:-docker-compose.yml}"
+  [[ -f "$compose_file" ]] || return 0
+  command -v docker >/dev/null 2>&1 || return 0
+
+  local key_name network_name label
+  key_name=$(awk '
+    /^networks:/ { in_net = 1; next }
+    in_net && /^[^[:space:]#]/ { exit }
+    in_net && /^  [^[:space:]#][^:]*:/ { line = $0; sub(/^  /, "", line); sub(/:.*/, "", line); print line; exit }
+  ' "$compose_file")
+  [[ -n "$key_name" ]] || return 0
+  network_name=$(panel_network_name)
+  docker network inspect "$network_name" >/dev/null 2>&1 || return 0
+  label=$(docker network inspect -f '{{ index .Labels "com.docker.compose.network" }}' "$network_name" 2>/dev/null || true)
+  if [[ "$label" == "$key_name" ]]; then
+    return 0
+  fi
+
+  local attached name foreign="" own_attached=""
+  attached=$(docker network inspect -f '{{range .Containers}}{{.Name}}{{"\n"}}{{end}}' "$network_name" 2>/dev/null || true)
+  local own_names=" ${PANEL_BACKEND_CONTAINER:-} ${PANEL_FRONTEND_CONTAINER:-} ${PANEL_POSTGRES_CONTAINER:-} $DEFAULT_PANEL_BACKEND_CONTAINER $DEFAULT_PANEL_POSTGRES_CONTAINER $NEW_PANEL_FRONTEND_CONTAINER $LEGACY_PANEL_BACKEND_CONTAINER $LEGACY_PANEL_FRONTEND_CONTAINER $LEGACY_PANEL_POSTGRES_CONTAINER "
+  for name in $attached; do
+    case "$own_names" in
+      *" $name "*) own_attached="$own_attached $name" ;;
+      *) foreign="$foreign $name" ;;
+    esac
+  done
+  if [[ -n "$foreign" ]]; then
+    echo "❌ 存量网络 $network_name 的 Compose 标签与当前模板不符（com.docker.compose.network=${label:-（无）}，模板键名 $key_name），且有非本部署的容器接入（$foreign），脚本无法自动修复、未做任何改动"
+    echo "   人工处置：停用并摘除上述容器后执行 docker network rm $network_name 再重跑；或把这些容器迁移到其他网络。切勿在有容器接入时强删网络。"
+    return 1
+  fi
+
+  echo "🔧 存量网络 $network_name 的 Compose 标签（com.docker.compose.network=${label:-（无）}）与模板键名 $key_name 不符，正在删除该网络并由 Compose 按现行模板重建（网络名与子网保持不变）"
+  if [[ -n "$own_attached" ]]; then
+    echo "   先摘除本部署接入该网络的容器（随后由 Compose 按当前配置重建）：$own_attached"
+    # shellcheck disable=SC2086 # 名单来自 docker inspect 的逐行输出，按空白分词即容器名集
+    docker rm -f $own_attached >/dev/null 2>&1 || true
+  fi
+  if ! docker network rm "$network_name" >/dev/null 2>&1; then
+    echo "❌ 删除存量网络 $network_name 失败，标签对账未完成；请按 docker network inspect $network_name 核对接入容器后人工处理再重跑"
+    return 1
+  fi
+  echo "✅ 已删除标签不符的存量网络 $network_name（Compose 将在启动时按模板重建）"
+  return 0
 }
 
 # compose_backend_env_has_hops_line <compose文件>
@@ -3603,6 +3834,10 @@ rollback_panel_update() {
     echo "❌ 配置回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     return 1
   fi
+  # NETLABEL-211：回滚 up 同样会撞存量网络标签（恢复的备份 Compose
+  # 键名与网络对象标签不符时升级/回滚同死），按恢复后的 Compose
+  # 先对账再拉起；对账失败即回滚失败（其函数内已点名人工处置）。
+  panel_reconcile_network_label || return 1
   if [[ "$db_type" == "postgres" ]]; then
     run_panel_compose up -d postgres || return 1
     wait_for_postgres_healthy || return 1
@@ -3726,6 +3961,24 @@ wait_for_backend_healthy() {
 # PANEL_OP_CANCELLED 标志（见 uninstall_panel 两处）：操作函数
 # 的返回码口径不变（取消仍是干净的 return 0，AI-09 钉格），main
 # 见标志不调用本函数、保留脚本并以 0 退出。
+# delete_self 的本体校验（多因子，两脚本同口径）：常规文件、首
+# 行是 bash shebang、含本仓 REPO 钉死行、含 SCRIPT_VERSION 行、
+# 含本脚本标志性函数定义、且自身定义了 delete_self——全过才认
+# 本体。旧实现零校验、凭解析路径直接 rm；校验串与被校验内容同
+# 源的单因子校验（install.sh 旧两层）同样可被改 REPO 值的异物
+# 骗过，现以结构因子叠加抬高伪造门槛；校验不过即保留并点名，
+# 永不误删。
+panel_script_file_is_self() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  head -n 1 "$path" 2>/dev/null | grep -qE '^#!/[^ ]*/(ba)?sh' || return 1
+  grep -qF 'REPO="iiiiiiiii7125-art/flmx-max"' "$path" 2>/dev/null || return 1
+  grep -q '^SCRIPT_VERSION="' "$path" 2>/dev/null || return 1
+  grep -q '^install_panel()' "$path" 2>/dev/null || return 1
+  grep -q '^delete_self()' "$path" 2>/dev/null || return 1
+  return 0
+}
+
 delete_self() {
   local rc="${1:-0}"
   if [[ "$rc" != "0" ]]; then
@@ -3735,6 +3988,10 @@ delete_self() {
   fi
   # 通过 bash <(curl ...) 进程替换执行时，$0 是 /dev/fd/63，无需清理
   if [[ "$PANEL_SCRIPT_PATH" == /dev/fd/* ]]; then
+    return 0
+  fi
+  if ! panel_script_file_is_self "$PANEL_SCRIPT_PATH"; then
+    echo "⚠️ 待删除的脚本文件校验未通过（$PANEL_SCRIPT_PATH 无法确认为本脚本本体），已保留未删"
     return 0
   fi
   echo ""
@@ -3950,11 +4207,17 @@ install_panel() {
     local backup_ts
     backup_ts=$(date +%Y%m%d%H%M%S)
     if [[ -f .env ]]; then
-      cp .env ".env.bak.$backup_ts"
+      if ! cp .env ".env.bak.$backup_ts"; then
+        echo "❌ 备份原 .env 到 .env.bak.$backup_ts 失败，强制重装中止（未覆写任何文件）"
+        return 1
+      fi
       echo "⚠️  PANEL_FORCE_REINSTALL=1：已备份原 .env 到 .env.bak.$backup_ts"
     fi
     if [[ -f docker-compose.yml ]]; then
-      cp docker-compose.yml "docker-compose.yml.bak.$backup_ts"
+      if ! cp docker-compose.yml "docker-compose.yml.bak.$backup_ts"; then
+        echo "❌ 备份原 docker-compose.yml 到 docker-compose.yml.bak.$backup_ts 失败，强制重装中止（未覆写任何文件）"
+        return 1
+      fi
       echo "⚠️  PANEL_FORCE_REINSTALL=1：已备份原 docker-compose.yml 到 docker-compose.yml.bak.$backup_ts，继续重装"
     fi
     # R9-11: 强制重装的带时间戳备份与更新备份同轮换口径（各保留
@@ -4025,7 +4288,7 @@ install_panel() {
   ensure_compose_trusted_proxy_hops docker-compose.yml || true
   echo "✅ 文件准备完成"
 
-  cat > .env <<EOF
+  if ! cat > .env <<EOF
 JWT_SECRET=$JWT_SECRET
 FRONTEND_PORT=$FRONTEND_PORT
 BACKEND_PORT=$BACKEND_PORT
@@ -4063,11 +4326,24 @@ POSTGRES_DB=$POSTGRES_DB
 POSTGRES_USER=$POSTGRES_USER
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 EOF
-  chmod 600 .env # M-01: .env 含 JWT_SECRET/数据库密码，禁止全局可读
+  then
+    echo "❌ 写入 .env 失败，安装终止"
+    return 1
+  fi
+  # M-01: .env 含 JWT_SECRET/数据库密码，禁止全局可读；设权失败
+  # 不得带着宽权限的密钥文件继续走完安装并报成功。
+  if ! chmod 600 .env; then
+    echo "❌ 设置 .env 权限 600 失败，安装终止（.env 含 JWT_SECRET/数据库密码，不得以宽权限留盘）"
+    return 1
+  fi
 
   # 共存身份（C2-01/C2-06）：新装把专属容器/卷/网络名写入 .env，
-  # Compose 据此命名，与同机其他面板的缺省名不再相撞。
-  write_new_panel_identity
+  # Compose 据此命名，与同机其他面板的缺省名不再相撞。写入失败
+  # 即终止：缺身份键的部署后续会按模板缺省名找资源（挂空卷族）。
+  if ! write_new_panel_identity; then
+    echo "❌ 写入面板身份键（容器/卷/网络名）失败，安装终止"
+    return 1
+  fi
 
   echo "🚀 启动 docker 服务..."
   if [[ "$DB_TYPE" == "postgres" ]]; then
@@ -4224,7 +4500,17 @@ update_panel() {
     echo "❌ 环境变量 $target_source 指定的版本号格式非法：$LATEST_VERSION（须以字母或数字开头、仅含字母/数字/点/连字符，如 1.9.9 或 1.9.9-rc.1），更新终止"
     return 1
   fi
-  cmp_result=$(panel_version_cmp "$LATEST_VERSION" "$current_version" || true)
+  # 防降级与 Go 面 compareVersions 同口径（A11-132-06）：经
+  # panel_version_gate_cmp 判定，两侧皆非空而不可比（带粘连后
+  # 缀的低版本如目标 2.1.1-rc1 对现行 2.1.2）即 fail-closed 拒
+  # 绝——旧实现只认回显 "-1"、不可比即放行，构成静默降级。现
+  # 行版本为空（读不到任何版本键与运行版本）时无从判定降级，
+  # 维持放行。
+  cmp_result=$(panel_version_gate_cmp "$LATEST_VERSION" "$current_version" || true)
+  if [[ -z "$cmp_result" && -n "$current_version" ]]; then
+    echo "❌ 目标版本 $LATEST_VERSION 与当前版本 $current_version 至少一侧格式不可比（版本段须为纯数字，带后缀的版本如 2.1.1-rc1 不可作更新目标），拒绝更新以防静默降级。如确需安装该版本请手动处理。"
+    return 1
+  fi
   if [[ "$cmp_result" == "-1" ]]; then
     echo "❌ 目标版本 $LATEST_VERSION 低于当前版本 $current_version，拒绝降级更新。如确需降级请手动处理。"
     return 1
@@ -4296,7 +4582,11 @@ update_panel() {
   fi
 
   if ! activate_panel_update_files; then
-    rollback_panel_update "$CURRENT_DB_TYPE" || true
+    if rollback_panel_update "$CURRENT_DB_TYPE"; then
+      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+    else
+      echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
+    fi
     return 1
   fi
 
@@ -4306,7 +4596,11 @@ update_panel() {
   # .env＋compose 并按旧名拉起）。
   if ! apply_panel_identity_rename; then
     echo "❌ 身份改名写入失败，更新已中止"
-    rollback_panel_update "$CURRENT_DB_TYPE" || true
+    if rollback_panel_update "$CURRENT_DB_TYPE"; then
+      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+    else
+      echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
+    fi
     return 1
   fi
 
@@ -4322,6 +4616,20 @@ update_panel() {
   local update_expected_postgres_volume=""
   if [[ "$CURRENT_DB_TYPE" == "postgres" ]]; then
     update_expected_postgres_volume=$(panel_postgres_volume_name)
+  fi
+
+  # NETLABEL-211：重建前先对存量网络标签对账（旧世代模板建的网
+  # 络标签与现行模板键名不符时 up 必被 incorrect label 拒绝、升
+  # 级死局无自愈）。对账失败（外来容器占用该网络）时旧服务尚未
+  # 被重建，走统一回滚口恢复更新前文件与服务。
+  if ! panel_reconcile_network_label; then
+    echo "🛑 存量网络标签对账未通过"
+    if rollback_panel_update "$CURRENT_DB_TYPE"; then
+      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+    else
+      echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
+    fi
+    return 1
   fi
 
   echo "🚀 原地重建更新后的服务..."
@@ -4570,7 +4878,10 @@ migrate_to_postgres() {
   # A11-132-04: 迁移前快照 .env，后续任一步失败时用它回滚配置，
   # 避免面板被留在「.env 已切 postgres 但服务未起来」的坏配置上。
   env_snapshot="$(pwd)/.env.pre-postgres-migration"
-  cp ".env" "$env_snapshot"
+  if ! cp ".env" "$env_snapshot"; then
+    echo "❌ 迁移前 .env 快照失败（无法写入 $env_snapshot），迁移终止（未改动现有部署与运行中的服务）"
+    return 1
+  fi
 
   # L2-02（R5-FD）：迁移失败统一回滚口——恢复 .env 为快照、尝试拉起
   # 迁移前服务、删除快照（恢复后快照与 .env 逐字相同，留着只是一份
@@ -4579,10 +4890,16 @@ migrate_to_postgres() {
   # set -e 下先于任何回滚退出：down 失败时服务已 stop、快照未恢复；
   # up 失败时 .env 已切 PG、服务半停，正是快照机制要防的坏状态却
   # 走不到回滚。以下每个失败点一律经此口回滚。
+  # 快照恢复失败必须点名且保住快照（唯一回滚源）：旧实现裸 cp
+  # 后无条件删快照，cp 失败时 .env 仍是已切 PG 的坏配置、快照却
+  # 已删除，回执还称已回滚。
   migrate_restore_snapshot() {
-    cp "$env_snapshot" ".env"
+    if cp "$env_snapshot" ".env"; then
+      rm -f "$env_snapshot"
+    else
+      echo "❌ 回滚恢复 .env 失败：迁移前快照已保留在 $env_snapshot ，请人工执行 cp \"$env_snapshot\" .env 后重启后端/前端服务"
+    fi
     $DOCKER_CMD up -d backend frontend || true
-    rm -f "$env_snapshot"
     # RR4-F7-04：本次迁移已尝试拉起过 PG 时，把本次新建的 PG 容器
     # 与 PG 卷一并清掉——不清则本次生成的随机口令已固化进新建卷、
     # .env 却随回滚恢复为哨兵值，重试时 PG 对已初始化卷忽略
@@ -4611,9 +4928,21 @@ migrate_to_postgres() {
     fi
   }
 
-  upsert_env_var ".env" "POSTGRES_DB" "$postgres_db"
-  upsert_env_var ".env" "POSTGRES_USER" "$postgres_user"
-  upsert_env_var ".env" "POSTGRES_PASSWORD" "$postgres_password"
+  # PG 三键是切换凭据面：任一写入失败即以快照回写 .env 后中止
+  # （此刻服务尚未停动，恢复只是文件回写并删快照），不得带着半
+  # 写入的凭据继续停服迁移。
+  if ! upsert_env_var ".env" "POSTGRES_DB" "$postgres_db" \
+    || ! upsert_env_var ".env" "POSTGRES_USER" "$postgres_user" \
+    || ! upsert_env_var ".env" "POSTGRES_PASSWORD" "$postgres_password"; then
+    echo "❌ 写入 PostgreSQL 凭据（POSTGRES_DB/USER/PASSWORD）到 .env 失败，迁移终止（未停动任何服务）"
+    if cp "$env_snapshot" ".env"; then
+      rm -f "$env_snapshot"
+      echo "↩️ 已恢复迁移前的 .env"
+    else
+      echo "⚠️ 恢复迁移前 .env 失败，快照保留在 $env_snapshot ，请人工执行 cp \"$env_snapshot\" .env"
+    fi
+    return 1
+  fi
 
   echo "🛑 停止当前服务..."
   docker stop -t 30 "$backend_container" 2>/dev/null || true
@@ -4629,6 +4958,16 @@ migrate_to_postgres() {
   echo "💾 备份 SQLite 数据到当前目录..."
   if ! docker run --rm -v "$sqlite_volume":/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"; then
     echo "❌ SQLite 备份失败，迁移终止，正在恢复迁移前状态..."
+    migrate_restore_snapshot
+    return 1
+  fi
+
+  # NETLABEL-211：下方 up -d postgres 同样过 Compose 网络标签核
+  # 对，存量网络标签与模板键名不符时在此先对账（服务已 down、网
+  # 络无本部署容器接入，正是删网重建的窗口）；对账失败走统一回
+  # 滚口。
+  if ! panel_reconcile_network_label; then
+    echo "❌ 存量网络标签对账失败，迁移终止，正在恢复迁移前状态..."
     migrate_restore_snapshot
     return 1
   fi
@@ -4882,8 +5221,12 @@ EOF
   fi
 
   database_url="postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}?sslmode=disable"
-  upsert_env_var ".env" "DB_TYPE" "postgres"
-  upsert_env_var ".env" "DATABASE_URL" "$database_url"
+  if ! upsert_env_var ".env" "DB_TYPE" "postgres" \
+    || ! upsert_env_var ".env" "DATABASE_URL" "$database_url"; then
+    echo "❌ 切换 .env 到 PostgreSQL（DB_TYPE/DATABASE_URL）失败，正在回滚 .env 并恢复迁移前的服务..."
+    migrate_restore_snapshot
+    return 1
+  fi
 
   echo "🚀 启动迁移后的服务..."
   # L2-02（R5-FD）：此 up 旧实现是裸调用——非 0 时 set -e 在下方健康
@@ -4920,6 +5263,9 @@ EOF
   rm -f "$env_snapshot"
   docker run --rm -v "$sqlite_volume":/sqlite alpine rm -f /sqlite/gost-migrate.db 2>/dev/null || true
   echo "✅ SQLite -> PostgreSQL 迁移完成"
+  echo "ℹ️ 迁移遗留物（脚本不自动删除，确认 PostgreSQL 运行无误后可人工清理）："
+  echo "   - $(pwd)/gost.db.bak：迁移前 SQLite 数据库的备份副本（含全量数据，请注意保管）"
+  echo "   - SQLite 数据卷 $sqlite_volume：原库所在卷，原样保留未删；确认不再回迁 SQLite 后可执行 docker volume rm $sqlite_volume 回收空间"
 }
 
 
@@ -4977,11 +5323,27 @@ uninstall_panel() {
     fi
     if ! panel_deploy_dir_is_ours "." ""; then
       local nodocker_confirm=""
+      echo "⚠️ 上述文件可能含完整数据库备份与 .env 密钥副本（如 backups/ 与各 .bak 文件），删除后不可恢复。"
       read -p "无法确认上述文件属于本面板，仍要删除吗？(y/N): " nodocker_confirm || nodocker_confirm=""
       if [[ "$nodocker_confirm" != "y" && "$nodocker_confirm" != "Y" ]]; then
         echo "❌ 未确认，保留上述文件，未做任何修改"
         # 用户取消（C4-F04）：置标志，main 见标志不自删、退出 0；
         # 返回码维持 0 的干净 no-op 口径（AI-09）。
+        PANEL_OP_CANCELLED="1"
+        return 0
+      fi
+    else
+      # 与 Docker 分支同口径：归属已证也须先 y/N 确认——残留集含
+      # backups/（完整 DB 备份与 .env 密钥副本）等不可恢复内容，
+      # 旧实现此分支零确认直删，Docker 临时不可用时误选菜单 3 即
+      # 永久删光全部更新备份。
+      local nodocker_confirm_ours=""
+      # 警告走 echo 而非只挂 read -p：非 tty（管道/脚本/日志）下
+      # -p 提示不显示，「不可恢复」警告必须在任何形态下可见。
+      echo "⚠️ 即将删除上述全部残留文件：其中 backups/ 含完整数据库备份与 .env 密钥副本，删除后不可恢复。"
+      read -p "确认删除上述全部残留文件吗？ (y/N): " nodocker_confirm_ours || nodocker_confirm_ours=""
+      if [[ "$nodocker_confirm_ours" != "y" && "$nodocker_confirm_ours" != "Y" ]]; then
+        echo "❌ 未确认，保留上述文件，未做任何修改"
         PANEL_OP_CANCELLED="1"
         return 0
       fi
@@ -4992,6 +5354,16 @@ uninstall_panel() {
     nodocker_caddy_port=$(panel_uninstall_frontend_port .env)
     echo "🧹 清理残留配置文件..."
     rm -rf "${nodocker_residuals[@]}"
+    local nodocker_leftovers=""
+    for nodocker_item in "${nodocker_residuals[@]}"; do
+      if [[ -e "$nodocker_item" ]]; then
+        nodocker_leftovers="$nodocker_leftovers $nodocker_item"
+      fi
+    done
+    if [[ -n "$nodocker_leftovers" ]]; then
+      echo "❌ 清理未完全完成，以下残留未能删除：$nodocker_leftovers（其余各项已删除），请人工处理"
+      return 1
+    fi
     echo "✅ 清理完成（已删除：${nodocker_residuals[*]}）"
     # R2-P2-05：菜单 5/6 的 Caddy 站点块与 Docker 分支同口径回收。
     uninstall_caddy_panel_blocks "$nodocker_caddy_port"
@@ -5062,6 +5434,19 @@ uninstall_panel() {
   # 一并回收（按上文读出的前端端口判归属整块摘除，失败只告警、
   # 不推翻已完成的卸载）。
   uninstall_caddy_panel_blocks "$uninstall_caddy_port"
+  # 回执前验后置状态：主部署文件与备份目录确已删除才许宣称完成
+  # （旧实现 rm 集裸调用、失败照印 ✅）。
+  local uninstall_leftovers=""
+  local uninstall_item
+  for uninstall_item in docker-compose.yml .env backups; do
+    if [[ -e "$uninstall_item" ]]; then
+      uninstall_leftovers="$uninstall_leftovers $uninstall_item"
+    fi
+  done
+  if [[ -n "$uninstall_leftovers" ]]; then
+    echo "❌ 卸载未完全完成，以下项目未能删除：$uninstall_leftovers，请人工处理（容器与数据卷已随 down 删除的部分不受影响）"
+    return 1
+  fi
   echo "✅ 卸载完成"
 }
 
@@ -5149,7 +5534,9 @@ main() {
         ;;
       7)
         echo "👋 退出脚本"
-        delete_self
+        # 未执行任何操作，不走 delete_self——「退出」不是「操作
+        # 已完成」，自删只属于成功的操作路径（与 install.sh 的
+        # A3-05 同口径）；旧实现退出也删脚本且回执称「操作已完成」。
         exit 0
         ;;
       *)
