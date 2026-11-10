@@ -959,6 +959,22 @@ func (m *Manager) Status(logsFor string) Status {
 	for _, t := range types {
 		out.Kernels = append(out.Kernels, m.state(t, t == logsFor))
 	}
+	// F2-23: a logs query for a type with no instance must say so
+	// explicitly — otherwise the panel synthesizes an empty state
+	// with code 0 and the caller cannot tell "not installed" from
+	// "installed but no logs yet".
+	if logsFor != "" {
+		found := false
+		for _, t := range types {
+			if t == logsFor {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out.MissingLogsFor = logsFor
+		}
+	}
 	if len(m.allPorts()) == 0 {
 		out.NftAvailable = nftAvailable() == nil
 		return out

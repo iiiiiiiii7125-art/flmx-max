@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -114,7 +115,9 @@ func AgentUninstalled() bool {
 //      the next successful connect re-sends it; a duplicate
 //      dispatch against a stored final state only re-reports it,
 //      never re-executes. Idempotency key: the panel-supplied
-//      issuedAt when present, else the first dispatch's requestId.
+//      issuedAt (UnixMilli JSON number, canonical since
+//      R2-ISSUEDAT) when present, else the first dispatch's
+//      requestId.
 
 // uninstallStepResult is one judged step of the uninstall.
 type uninstallStepResult struct {
@@ -123,10 +126,95 @@ type uninstallStepResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// issuedAtMillis is a UnixMilli timestamp on the C4-G2 wire.
+//
+// Canonical form (R2-ISSUEDAT): a JSON number, the same encoding the
+// panel sends (`node_delete_uninstall.go` dispatches
+// `{"issuedAt": now.UnixMilli()}`) and the same type the panel
+// decodes the final frame with (`internal/ws/uninstall.go` reads
+// `IssuedAt int64`). It always encodes as a JSON number; 0 means
+// absent (omitted by `omitempty`, as before).
+//
+// Decoding is defensively tolerant: a JSON number is the norm; a
+// numeric string or an RFC3339 string is also accepted (pre-fix
+// agent state files and W4 fixtures used RFC3339 strings —
+// normalizing them to millis preserves the idempotency key across
+// the upgrade instead of silently dropping to the requestId
+// fallback). Anything else is a hard error, never a silent
+// fallback: the previous `_ = json.Unmarshal` into a string field
+// swallowed the type error and left issuedAt permanently empty,
+// which broke the final-frame round-trip end to end.
+type issuedAtMillis int64
+
+func (v *issuedAtMillis) UnmarshalJSON(b []byte) error {
+	b = []byte(strings.TrimSpace(string(b)))
+	if len(b) == 0 || string(b) == "null" {
+		*v = 0
+		return nil
+	}
+	// JSON number: the canonical panel form.
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err == nil {
+		if i, err := n.Int64(); err == nil {
+			*v = issuedAtMillis(i)
+			return nil
+		}
+		return fmt.Errorf("issuedAt %s is not an integer UnixMilli value", string(b))
+	}
+	// Defensive: string form (numeric or RFC3339).
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("issuedAt must be a JSON number or string, got %s", string(b))
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		*v = 0
+		return nil
+	}
+	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+		*v = issuedAtMillis(i)
+		return nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		*v = issuedAtMillis(t.UnixMilli())
+		return nil
+	}
+	return fmt.Errorf("issuedAt string %q is neither a UnixMilli number nor RFC3339", s)
+}
+
+func (v issuedAtMillis) MarshalJSON() ([]byte, error) {
+	return []byte(strconv.FormatInt(int64(v), 10)), nil
+}
+
+// parseIssuedAt extracts the panel-issued idempotency key from an
+// UninstallAgent data payload. It reports (value, present, err):
+// absent/null/empty means no key was issued (legacy dispatch — the
+// caller falls back to the requestId); a present-but-malformed value
+// is an error the caller must surface, never silently ignored.
+func parseIssuedAt(data interface{}) (issuedAtMillis, bool, error) {
+	if data == nil {
+		return 0, false, nil
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		return 0, false, fmt.Errorf("序列化卸载命令数据失败: %v", err)
+	}
+	var payload struct {
+		IssuedAt *issuedAtMillis `json:"issuedAt"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		return 0, false, fmt.Errorf("解析卸载命令 issuedAt 失败: %v", err)
+	}
+	if payload.IssuedAt == nil || *payload.IssuedAt == 0 {
+		return 0, false, nil
+	}
+	return *payload.IssuedAt, true, nil
+}
+
 // uninstallState is the persisted uninstall record.
 type uninstallState struct {
 	Key        string                `json:"key"`
-	IssuedAt   string                `json:"issuedAt,omitempty"`
+	IssuedAt   issuedAtMillis        `json:"issuedAt,omitempty"`
 	RequestID  string                `json:"requestId,omitempty"`
 	State      string                `json:"state"` // acked | executing | succeeded | failed
 	Steps      []uninstallStepResult `json:"steps,omitempty"`
@@ -190,6 +278,16 @@ func loadUninstallState() (*uninstallState, bool) {
 	if err := json.Unmarshal(b, &st); err != nil {
 		return nil, false
 	}
+	// Migration-on-read (R2-ISSUEDAT): pre-fix state files stored
+	// the RFC3339 string as both issuedAt and key. The key is
+	// derived from issuedAt whenever one was issued, so re-derive
+	// it in canonical decimal-millis form; otherwise a duplicate
+	// dispatch of the same issuance would miss the stored final
+	// state and re-execute the uninstall. States without an
+	// issuedAt keep their requestId key untouched.
+	if st.IssuedAt != 0 {
+		st.Key = strconv.FormatInt(int64(st.IssuedAt), 10)
+	}
 	return &st, true
 }
 
@@ -221,19 +319,18 @@ func saveUninstallState(st *uninstallState) {
 // 范围（既有 uninstallWarnings 呈现面）；无足迹时回执保持纯成功
 // 形态。实际卸载照常执行（回退＋宿主文件清理＋逐项日志）。
 func (w *WebSocketReporter) handleUninstallAgent(data interface{}, requestID string) (interface{}, error) {
-	issuedAt := ""
-	if data != nil {
-		var payload struct {
-			IssuedAt string `json:"issuedAt"`
-		}
-		if b, err := json.Marshal(data); err == nil {
-			_ = json.Unmarshal(b, &payload)
-			issuedAt = strings.TrimSpace(payload.IssuedAt)
-		}
+	// Canonical wire form is a JSON number (UnixMilli); a present
+	// but malformed issuedAt is a hard error — the routeCommand
+	// caller turns it into a Success=false response so the panel
+	// sees the rejection instead of a false ack. Absent issuedAt
+	// (legacy dispatch) still falls back to the requestId key.
+	issuedAt, present, err := parseIssuedAt(data)
+	if err != nil {
+		return nil, err
 	}
-	key := issuedAt
-	if key == "" {
-		key = requestID
+	key := requestID
+	if present {
+		key = strconv.FormatInt(int64(issuedAt), 10)
 	}
 	// 已有终局且幂等键相同：重复下发只重报（等本次 ack 后发终局
 	// 帧），绝不二次执行。键不同是新签发：先把本进程的执行守卫
@@ -326,12 +423,13 @@ func (w *WebSocketReporter) resendUninstallFinalAfterAck(ackCh chan bool, st *un
 	}
 }
 
-// reportUninstallFinal sends the unsolicited UninstallResult frame
-// (same precedent as UpgradeProgress: a typed frame with no
-// requestId of its own; the idempotency key travels in data).
-// Returns true when a frame was written to the socket.
-func (w *WebSocketReporter) reportUninstallFinal(st *uninstallState) bool {
-	resp := CommandResponse{
+// buildUninstallFinalResponse renders the unsolicited
+// UninstallResult frame for a stored state. Pure constructor (no
+// I/O) so tests can assert the exact wire bytes: data.issuedAt
+// must be a JSON number (R2-ISSUEDAT — the panel decodes it as
+// int64, and an empty string made the whole frame malformed).
+func buildUninstallFinalResponse(st *uninstallState) CommandResponse {
+	return CommandResponse{
 		Type:    "UninstallResult",
 		Success: st.State == "succeeded",
 		Message: st.Reason,
@@ -344,6 +442,14 @@ func (w *WebSocketReporter) reportUninstallFinal(st *uninstallState) bool {
 			"steps":        st.Steps,
 		},
 	}
+}
+
+// reportUninstallFinal sends the unsolicited UninstallResult frame
+// (same precedent as UpgradeProgress: a typed frame with no
+// requestId of its own; the idempotency key travels in data).
+// Returns true when a frame was written to the socket.
+func (w *WebSocketReporter) reportUninstallFinal(st *uninstallState) bool {
+	resp := buildUninstallFinalResponse(st)
 	for i := 0; i < uninstallReportAttempts; i++ {
 		if w.sendResponse(resp) {
 			return true

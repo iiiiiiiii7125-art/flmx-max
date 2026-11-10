@@ -124,6 +124,14 @@ type Status struct {
 	Epoch        string        `json:"epoch"`
 	NftAvailable bool          `json:"nftAvailable"`
 	NftError     string        `json:"nftError,omitempty"`
+	// MissingLogsFor names the kernel type a logs query asked for
+	// that has no instance on this node (F2-23). Kernels lists
+	// only installed kernels, so without this field "no such
+	// kernel" and "kernel present but no logs yet" are
+	// indistinguishable downstream. Only ever set when the caller
+	// asked for one type's logs (logsFor != ""); the periodic poll
+	// asks for none and never sees it.
+	MissingLogsFor string `json:"missingLogsFor,omitempty"`
 }
 
 type adapter struct {

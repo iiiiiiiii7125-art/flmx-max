@@ -451,6 +451,8 @@ func TestFix212UninstallNewKeyExecutesAfterStoredFinal(t *testing.T) {
 	t.Cleanup(func() { uninstallStarted.Store(false) })
 
 	w := &WebSocketReporter{}
+	// Defensive-compat leg (R2-ISSUEDAT): an RFC3339 string still
+	// parses, but the key is canonicalized to decimal UnixMilli.
 	data, err := w.handleUninstallAgent(map[string]interface{}{"issuedAt": "2026-11-10T01:00:00Z"}, "req-new")
 	if err != nil {
 		t.Fatalf("handleUninstallAgent: %v", err)
@@ -461,8 +463,8 @@ func TestFix212UninstallNewKeyExecutesAfterStoredFinal(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if st, ok := loadUninstallState(); ok && st.State == "succeeded" {
-			if st.Key != "2026-11-10T01:00:00Z" {
-				t.Fatalf("final state key = %q, want the new issuance key", st.Key)
+			if st.Key != "1794272400000" {
+				t.Fatalf("final state key = %q, want the new issuance key in decimal UnixMilli", st.Key)
 			}
 			return
 		}
@@ -494,11 +496,13 @@ func TestFix212UninstallExecutesAfterAckTimeoutAndPersistsFinal(t *testing.T) {
 	t.Cleanup(func() { uninstallStarted.Store(false) })
 
 	w := &WebSocketReporter{}
-	data, err := w.handleUninstallAgent(map[string]interface{}{"issuedAt": "2026-11-10T00:00:00Z"}, "req-g2")
+	// Production shape (R2-ISSUEDAT): the panel dispatches a JSON
+	// number (UnixMilli), never an RFC3339 string.
+	data, err := w.handleUninstallAgent(map[string]interface{}{"issuedAt": int64(1794268800000)}, "req-g2")
 	if err != nil {
 		t.Fatalf("handleUninstallAgent: %v", err)
 	}
-	if m := data.(map[string]interface{}); m["uninstallKey"] != "2026-11-10T00:00:00Z" || m["state"] != "acked" {
+	if m := data.(map[string]interface{}); m["uninstallKey"] != "1794268800000" || m["state"] != "acked" {
 		t.Fatalf("ack data: %+v", data)
 	}
 	deadline := time.Now().Add(10 * time.Second)
@@ -507,7 +511,7 @@ func TestFix212UninstallExecutesAfterAckTimeoutAndPersistsFinal(t *testing.T) {
 			if st.State != "succeeded" {
 				t.Fatalf("final state = %q (failedStep %q, steps %+v)", st.State, st.FailedStep, st.Steps)
 			}
-			if st.Key != "2026-11-10T00:00:00Z" {
+			if st.Key != "1794268800000" {
 				t.Fatalf("idempotency key = %q", st.Key)
 			}
 			if len(st.Steps) == 0 {
