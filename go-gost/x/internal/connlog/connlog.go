@@ -13,19 +13,17 @@
 // metering companions — is unmarked on purpose: collecting there
 // would record a previous hop's address as if it were the client.
 //
-// The marks reach this package through the two configuration
-// funnels, mirroring how internal/idle publishes the panel's
-// teardown window: the config loader republishes the service marks
-// on every load/reload, and the kernel manager republishes the
-// kernel entries at the end of every Apply, always from the
-// configuration actually in force. Republishing replaces the whole
-// snapshot, so a topology change pushed by the panel (relay added,
-// removed, re-routed) converges the agent's view on the next config
-// push with no stale marks left behind.
-//
-// Collectors (the gost service hook and the kernel log parser) read
-// the snapshot through the getters here; this package only tracks
-// marks, it records nothing itself.
+// Integration ruling (one mark form, consumed at the point of use,
+// no shadow registry): the gost mark is parsed exactly once, by
+// ParseServiceMark below, when the service is built
+// (config/parsing/service) and travels with the service object — a
+// topology change converges on the next service rebuild, with no
+// snapshot that could go stale independently of the services
+// actually running. The kernel entries ride each ApplyRequest and
+// are intersected with the per-inbound opt-in list inside the
+// kernel manager at Apply time. This package therefore holds only
+// the shared mark vocabulary and the metadata parser; it records
+// nothing itself.
 package connlog
 
 import (
@@ -58,12 +56,6 @@ type Mark struct {
 	ID   string
 }
 
-// ServiceMeta is the slice of a service config the mark scan needs.
-type ServiceMeta struct {
-	Name     string
-	Metadata map[string]any
-}
-
 // KernelEntry is one marked kernel inbound from a KernelApply
 // payload.
 type KernelEntry struct {
@@ -73,7 +65,6 @@ type KernelEntry struct {
 
 var (
 	mu            sync.RWMutex
-	serviceMarks  = map[string]Mark{}
 	kernelEntries = map[string][]KernelEntry{}
 )
 
@@ -111,43 +102,6 @@ func metadataString(md map[string]any, key string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// PublishServices replaces the service mark snapshot with the marks
-// found in the given services. Services without a valid mark are
-// simply absent from the snapshot — including services that carried
-// a mark in a previous config but no longer do, which is what makes
-// panel-side topology changes converge here.
-func PublishServices(services []ServiceMeta) {
-	next := make(map[string]Mark, len(services))
-	for _, svc := range services {
-		if mark, ok := ParseServiceMark(svc.Name, svc.Metadata); ok {
-			next[svc.Name] = mark
-		}
-	}
-	mu.Lock()
-	serviceMarks = next
-	mu.Unlock()
-}
-
-// ServiceMark returns the entry mark for a service name, if the
-// panel marked that service as an entry.
-func ServiceMark(name string) (Mark, bool) {
-	mu.RLock()
-	defer mu.RUnlock()
-	mark, ok := serviceMarks[name]
-	return mark, ok
-}
-
-// ServiceMarks returns a copy of the current service mark snapshot.
-func ServiceMarks() map[string]Mark {
-	mu.RLock()
-	defer mu.RUnlock()
-	out := make(map[string]Mark, len(serviceMarks))
-	for name, mark := range serviceMarks {
-		out[name] = mark
-	}
-	return out
 }
 
 // PublishKernelEntries replaces the marked-inbound set of one

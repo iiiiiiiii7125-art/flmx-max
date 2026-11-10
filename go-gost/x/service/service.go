@@ -44,8 +44,10 @@ type options struct {
 	observerPeriod time.Duration
 	logger         logger.Logger
 	// connLogEntry marks this service as a node entry point for
-	// inbound connection logging (see connlog.go).
-	connLogEntry bool
+	// inbound connection logging (see connlog.go); connLogEntryID
+	// is the entry_id its events carry (the panel mark's id).
+	connLogEntry   bool
+	connLogEntryID string
 }
 
 // R3-A01（顺手项）: the three protocol-block switches are atomic.

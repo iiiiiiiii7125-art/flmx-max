@@ -21,7 +21,6 @@ import (
 	router_parser "github.com/go-gost/x/config/parsing/router"
 	sd_parser "github.com/go-gost/x/config/parsing/sd"
 	service_parser "github.com/go-gost/x/config/parsing/service"
-	"github.com/go-gost/x/internal/connlog"
 	"github.com/go-gost/x/internal/idle"
 	"github.com/go-gost/x/registry"
 )
@@ -105,32 +104,8 @@ func applyIdleWindow(cfg *config.Config) {
 	idle.Publish(metadatas)
 }
 
-// applyConnlogEntries publishes the panel's connection-log entry
-// marks (service metadata "connlogEntryKind"/"connlogEntryID") to
-// the collection plane (internal/connlog). Load is the single funnel
-// for initial load, reload and reload-rollback, so the published
-// snapshot always matches the config actually in force: when the
-// panel's topology changes (a relay is added, removed or re-routed)
-// the next config push replaces the snapshot wholesale and no stale
-// mark survives.
-func applyConnlogEntries(cfg *config.Config) {
-	if cfg == nil {
-		connlog.PublishServices(nil)
-		return
-	}
-	services := make([]connlog.ServiceMeta, 0, len(cfg.Services))
-	for _, svc := range cfg.Services {
-		if svc == nil {
-			continue
-		}
-		services = append(services, connlog.ServiceMeta{Name: svc.Name, Metadata: svc.Metadata})
-	}
-	connlog.PublishServices(services)
-}
-
 func (l *loader) Load(cfg *config.Config) error {
 	applyIdleWindow(cfg)
-	applyConnlogEntries(cfg)
 
 	logCfg := cfg.Log
 	if logCfg == nil {

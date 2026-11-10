@@ -87,12 +87,30 @@ func waitHandled(t *testing.T, h *gateHandler, want int32) {
 	t.Fatalf("handler ran %d times, want %d", h.handled.Load(), want)
 }
 
-func waitConnEvents(t *testing.T, buf *ConnLogBuffer, want int) []ConnEvent {
+// freshConnlogRing installs a fresh default reporter for the test
+// and returns its ring: the Serve hook enqueues through
+// EnqueueConnEvent into exactly this ring (integration-unified
+// data path — there is no second buffer).
+func freshConnlogRing(t *testing.T) *connRing {
+	t.Helper()
+	connlogMu.Lock()
+	connlogDefault = newConnlogReporter(connlogConfig{})
+	rep := connlogDefault
+	connlogMu.Unlock()
+	t.Cleanup(func() {
+		connlogMu.Lock()
+		connlogDefault = nil
+		connlogMu.Unlock()
+	})
+	return rep.ring
+}
+
+func waitConnEvents(t *testing.T, ring *connRing, want int) []ConnEvent {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	var got []ConnEvent
 	for time.Now().Before(deadline) {
-		got = append(got, buf.Drain(0)...)
+		got = append(got, ring.Drain()...)
 		if len(got) >= want {
 			return got
 		}
@@ -104,17 +122,16 @@ func waitConnEvents(t *testing.T, buf *ConnLogBuffer, want int) []ConnEvent {
 
 // serveOneConn starts an entry-marked (or not) service, feeds it a
 // single connection, and returns the pieces the test asserts on.
-func serveOneConn(t *testing.T, remote net.Addr, entry bool) (*ConnLogBuffer, *gateHandler, func()) {
+func serveOneConn(t *testing.T, remote net.Addr, entry bool) (*connRing, *gateHandler, func()) {
 	t.Helper()
-	buf := GetConnLogBuffer()
-	buf.reset()
+	ring := freshConnlogRing(t)
 	SetConnLogEnabled(true)
 
 	ln := newQueueListener(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 24003})
 	h := &gateHandler{release: make(chan struct{})}
 	opts := []Option{LoggerOption(xlogger.NewLogger())}
 	if entry {
-		opts = append(opts, ConnLogEntryOption(true))
+		opts = append(opts, ConnLogEntryOption(true, "fwd_entry_tcp"))
 	}
 	svc := NewService("fwd_entry_tcp", ln, h, opts...)
 	go func() { _ = svc.Serve() }()
@@ -122,7 +139,7 @@ func serveOneConn(t *testing.T, remote net.Addr, entry bool) (*ConnLogBuffer, *g
 	server, client := pipeConnPair(remote)
 	ln.conns <- server
 	t.Cleanup(func() { _ = client.Close() })
-	return buf, h, func() {
+	return ring, h, func() {
 		close(h.release)
 		_ = svc.Close()
 	}
@@ -130,16 +147,16 @@ func serveOneConn(t *testing.T, remote net.Addr, entry bool) (*ConnLogBuffer, *g
 
 func TestConnLogTCPOpenClosePairing(t *testing.T) {
 	remote := &net.TCPAddr{IP: net.ParseIP("203.0.113.7"), Port: 54321}
-	buf, h, finish := serveOneConn(t, remote, true)
+	ring, h, finish := serveOneConn(t, remote, true)
 
 	// While the handler is still blocked (connection alive), the
-	// open event must already be buffered — the "连接中" UI feeds
+	// open event must already be queued — the "连接中" UI feeds
 	// on open events alone.
-	open := waitConnEvents(t, buf, 1)[0]
+	open := waitConnEvents(t, ring, 1)[0]
 	if open.Type != ConnEventOpen {
 		t.Fatalf("first event type = %q, want open", open.Type)
 	}
-	if open.EntryID != "fwd_entry_tcp" || open.EntryKind != ConnEntryKindForward {
+	if open.EntryID != "fwd_entry_tcp" || open.EntryKind != ConnEntryForward {
 		t.Fatalf("entry = %q/%q, want fwd_entry_tcp/forward", open.EntryID, open.EntryKind)
 	}
 	if open.ClientIP != "203.0.113.7" || open.ClientPort != 54321 {
@@ -151,15 +168,18 @@ func TestConnLogTCPOpenClosePairing(t *testing.T) {
 	if open.ConnID == "" || open.StartMs <= 0 || open.EndMs != 0 {
 		t.Fatalf("open event fields wrong: %+v", open)
 	}
-	if got := buf.Len(); got != 0 {
-		t.Fatalf("buffer holds %d events while connection alive, want 0 extra", got)
+	if got := ring.Len(); got != 0 {
+		t.Fatalf("ring holds %d events while connection alive, want 0 extra", got)
 	}
 
 	finish()
 	waitHandled(t, h, 1)
-	cls := waitConnEvents(t, buf, 1)[0]
+	cls := waitConnEvents(t, ring, 1)[0]
 	if cls.Type != ConnEventClose || cls.ConnID != open.ConnID {
 		t.Fatalf("close event = %+v, want close paired with conn %s", cls, open.ConnID)
+	}
+	if cls.Status != ConnStatusClosed {
+		t.Fatalf("close status = %q, want closed", cls.Status)
 	}
 	if cls.StartMs != open.StartMs || cls.EndMs < cls.StartMs {
 		t.Fatalf("close times start=%d end=%d, want start=%d and end>=start", cls.StartMs, cls.EndMs, open.StartMs)
@@ -171,9 +191,9 @@ func TestConnLogTCPOpenClosePairing(t *testing.T) {
 
 func TestConnLogUDPSessionPairing(t *testing.T) {
 	remote := &net.UDPAddr{IP: net.ParseIP("198.51.100.9"), Port: 40000}
-	buf, h, finish := serveOneConn(t, remote, true)
+	ring, h, finish := serveOneConn(t, remote, true)
 
-	open := waitConnEvents(t, buf, 1)[0]
+	open := waitConnEvents(t, ring, 1)[0]
 	if open.Network != "udp" || open.SessionKind != ConnSessionKindUDP {
 		t.Fatalf("udp session classified as %q/%q, want udp/udp_session", open.Network, open.SessionKind)
 	}
@@ -183,7 +203,7 @@ func TestConnLogUDPSessionPairing(t *testing.T) {
 
 	finish()
 	waitHandled(t, h, 1)
-	cls := waitConnEvents(t, buf, 1)[0]
+	cls := waitConnEvents(t, ring, 1)[0]
 	if cls.Type != ConnEventClose || cls.ConnID != open.ConnID || cls.SessionKind != ConnSessionKindUDP {
 		t.Fatalf("udp close event = %+v, want udp_session close paired with %s", cls, open.ConnID)
 	}
@@ -191,28 +211,27 @@ func TestConnLogUDPSessionPairing(t *testing.T) {
 
 func TestConnLogNonEntryServiceSilent(t *testing.T) {
 	remote := &net.TCPAddr{IP: net.ParseIP("203.0.113.8"), Port: 12345}
-	buf, h, finish := serveOneConn(t, remote, false)
+	ring, h, finish := serveOneConn(t, remote, false)
 	// Prove the connection really flowed through Handle before
 	// asserting the absence of events.
 	waitHandled(t, h, 1)
 	finish()
 	// Give the goroutine a beat to (not) emit a close event.
 	time.Sleep(50 * time.Millisecond)
-	if got := buf.Len(); got != 0 {
+	if got := ring.Len(); got != 0 {
 		t.Fatalf("non-entry service produced %d conn events, want 0", got)
 	}
 }
 
 func TestConnLogMasterSwitchOff(t *testing.T) {
-	buf := GetConnLogBuffer()
-	buf.reset()
+	ring := freshConnlogRing(t)
 	SetConnLogEnabled(false)
 	defer SetConnLogEnabled(true)
 
 	ln := newQueueListener(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 24004})
 	h := &gateHandler{}
 	svc := NewService("fwd_entry_off", ln, h,
-		LoggerOption(xlogger.NewLogger()), ConnLogEntryOption(true))
+		LoggerOption(xlogger.NewLogger()), ConnLogEntryOption(true, "fwd_entry_off"))
 	go func() { _ = svc.Serve() }()
 	server, client := pipeConnPair(&net.TCPAddr{IP: net.ParseIP("203.0.113.9"), Port: 2222})
 	defer func() { _ = client.Close() }()
@@ -226,81 +245,71 @@ func TestConnLogMasterSwitchOff(t *testing.T) {
 		t.Fatalf("handler ran %d times, want 1", h.handled.Load())
 	}
 	time.Sleep(50 * time.Millisecond)
-	if got := buf.Len(); got != 0 {
+	if got := ring.Len(); got != 0 {
 		t.Fatalf("disabled master switch produced %d conn events, want 0", got)
 	}
 	_ = svc.Close()
 }
 
-func TestConnLogBufferOverflowDropsOldest(t *testing.T) {
-	buf := NewConnLogBuffer()
-	total := ConnLogBufferCapacity + 7
-	for i := 0; i < total; i++ {
-		buf.Push(ConnEvent{Type: ConnEventOpen, ConnID: connIDForIndex(i)})
+func TestConnRingOverflowDropsOldest(t *testing.T) {
+	ring := newConnRing(8)
+	dropped := 0
+	for i := 0; i < 15; i++ {
+		if ring.Push(ConnEvent{Type: ConnEventOpen, ConnID: connIDForIndex(i)}) {
+			dropped++
+		}
 	}
-	if got := buf.Len(); got != ConnLogBufferCapacity {
-		t.Fatalf("Len = %d, want capacity %d", got, ConnLogBufferCapacity)
+	if dropped != 7 {
+		t.Fatalf("dropped-oldest signals = %d, want 7", dropped)
 	}
-	if got := buf.Dropped(); got != 7 {
-		t.Fatalf("Dropped = %d, want 7", got)
+	if got := ring.Len(); got != 8 {
+		t.Fatalf("Len = %d, want capacity 8", got)
 	}
-	out := buf.Drain(0)
-	if len(out) != ConnLogBufferCapacity {
-		t.Fatalf("Drain returned %d events, want %d", len(out), ConnLogBufferCapacity)
+	out := ring.Drain()
+	if len(out) != 8 {
+		t.Fatalf("Drain returned %d events, want 8", len(out))
 	}
 	if out[0].ConnID != connIDForIndex(7) {
 		t.Fatalf("oldest surviving = %q, want %q (first 7 dropped)", out[0].ConnID, connIDForIndex(7))
 	}
-	if out[len(out)-1].ConnID != connIDForIndex(total-1) {
-		t.Fatalf("newest = %q, want %q", out[len(out)-1].ConnID, connIDForIndex(total-1))
+	if out[len(out)-1].ConnID != connIDForIndex(14) {
+		t.Fatalf("newest = %q, want %q", out[len(out)-1].ConnID, connIDForIndex(14))
 	}
-	if got := buf.Len(); got != 0 {
+	if got := ring.Len(); got != 0 {
 		t.Fatalf("Len after drain = %d, want 0", got)
 	}
 }
 
-func TestConnLogBufferDrainPartialFIFO(t *testing.T) {
-	buf := NewConnLogBuffer()
+func TestConnRingDrainFIFO(t *testing.T) {
+	ring := newConnRing(8)
 	for i := 0; i < 5; i++ {
-		buf.Push(ConnEvent{Type: ConnEventOpen, ConnID: connIDForIndex(i)})
+		ring.Push(ConnEvent{Type: ConnEventOpen, ConnID: connIDForIndex(i)})
 	}
-	out := buf.Drain(2)
-	if len(out) != 2 || out[0].ConnID != connIDForIndex(0) || out[1].ConnID != connIDForIndex(1) {
-		t.Fatalf("partial drain = %+v, want first two in FIFO order", out)
+	out := ring.Drain()
+	if len(out) != 5 {
+		t.Fatalf("Drain returned %d events, want 5", len(out))
 	}
-	if got := buf.Len(); got != 3 {
-		t.Fatalf("Len = %d, want 3", got)
+	for i, ev := range out {
+		if ev.ConnID != connIDForIndex(i) {
+			t.Fatalf("drain[%d] = %q, want %q (FIFO)", i, ev.ConnID, connIDForIndex(i))
+		}
 	}
-	if got := buf.Dropped(); got != 0 {
-		t.Fatalf("Dropped = %d, want 0", got)
+}
+
+func TestConnlogEnqueueOverflowCountsDropped(t *testing.T) {
+	r := newConnlogReporter(connlogConfig{})
+	total := defaultConnlogRingCapacity + 1
+	for i := 0; i < total; i++ {
+		r.Enqueue(ConnEvent{Type: ConnEventOpen, ConnID: connIDForIndex(i)})
+	}
+	if got := r.DroppedPending(); got != 1 {
+		t.Fatalf("DroppedPending = %d, want 1 (ring overflow must be counted)", got)
+	}
+	if got := r.ring.Len(); got != defaultConnlogRingCapacity {
+		t.Fatalf("ring Len = %d, want capacity %d", got, defaultConnlogRingCapacity)
 	}
 }
 
 func connIDForIndex(i int) string {
 	return fmt.Sprintf("conn-%d", i)
-}
-
-func TestConnLogEntryFromMetadata(t *testing.T) {
-	cases := []struct {
-		name string
-		md   map[string]any
-		want bool
-	}{
-		{"nil", nil, false},
-		{"empty", map[string]any{}, false},
-		{"bool true", map[string]any{"connlogEntry": true}, true},
-		{"bool false", map[string]any{"connlogEntry": false}, false},
-		{"viper lowercased key", map[string]any{"connlogentry": true}, true},
-		{"string true", map[string]any{"connlogEntry": "true"}, true},
-		{"string 1", map[string]any{"connlogEntry": "1"}, true},
-		{"string other", map[string]any{"connlogEntry": "yes"}, false},
-		{"json number", map[string]any{"connlogEntry": float64(1)}, true},
-		{"json zero", map[string]any{"connlogEntry": float64(0)}, false},
-		{"unrelated key", map[string]any{"idleTimeout": 300}, false},
-	}
-	for _, tc := range cases {
-		if got := ConnLogEntryFromMetadata(tc.md); got != tc.want {
-			t.Errorf("%s: ConnLogEntryFromMetadata = %v, want %v", tc.name, got, tc.want)
-		}
-	}
 }

@@ -80,37 +80,6 @@ func TestParseServiceMark(t *testing.T) {
 	}
 }
 
-func TestPublishServicesReplacesSnapshot(t *testing.T) {
-	marked := ServiceMeta{Name: "1_2_0_tcp", Metadata: map[string]any{
-		"connlogEntryKind": "forward", "connlogEntryID": "1_2_0_tcp"}}
-	plain := ServiceMeta{Name: "9_9_9_tcp", Metadata: map[string]any{"idleTimeout": 60}}
-
-	PublishServices([]ServiceMeta{marked, plain})
-	if _, ok := ServiceMark("1_2_0_tcp"); !ok {
-		t.Fatal("marked service missing from snapshot")
-	}
-	if _, ok := ServiceMark("9_9_9_tcp"); ok {
-		t.Fatal("unmarked service present in snapshot")
-	}
-
-	// Topology change: the panel unmarks the service (its relay was
-	// removed). Republishing the new config must drop the stale mark.
-	PublishServices([]ServiceMeta{plain})
-	if _, ok := ServiceMark("1_2_0_tcp"); ok {
-		t.Fatal("stale mark survived republish")
-	}
-	if got := ServiceMarks(); len(got) != 0 {
-		t.Fatalf("snapshot = %v, want empty", got)
-	}
-
-	// A nil publish (no config in force) clears everything.
-	PublishServices([]ServiceMeta{marked})
-	PublishServices(nil)
-	if got := ServiceMarks(); len(got) != 0 {
-		t.Fatalf("snapshot after nil publish = %v, want empty", got)
-	}
-}
-
 func TestPublishKernelEntriesReplacesPerType(t *testing.T) {
 	PublishKernelEntries("xray", []KernelEntry{{InboundID: 7, Tag: "in-7"}, {InboundID: 8, Tag: "in-8"}})
 	PublishKernelEntries("singbox", []KernelEntry{{InboundID: 9, Tag: "in-9"}})

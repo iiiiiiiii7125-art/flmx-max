@@ -167,10 +167,13 @@ func ConnLogEnabled() bool {
 }
 
 // ConnLogEntryOption marks the service as a node entry point whose
-// connections are recorded (subject to the master switch).
-func ConnLogEntryOption(entry bool) Option {
+// connections are recorded (subject to the master switch), with
+// entryID the entry_id its events carry (for forwards, the service
+// name — the panel encoding carries the forward id).
+func ConnLogEntryOption(entry bool, entryID string) Option {
 	return func(opts *options) {
 		opts.connLogEntry = entry
+		opts.connLogEntryID = entryID
 	}
 }
 
@@ -205,11 +208,15 @@ func (s *defaultService) newConnEvent(typ, sid, clientAddr, clientIP string, con
 	if typ == ConnEventClose {
 		status = ConnStatusClosed
 	}
+	entryID := s.options.connLogEntryID
+	if entryID == "" {
+		entryID = s.name
+	}
 	return ConnEvent{
 		Type:        typ,
 		ConnID:      sid,
 		EntryKind:   ConnEntryForward,
-		EntryID:     s.name,
+		EntryID:     entryID,
 		ClientIP:    clientIP,
 		ClientPort:  port,
 		Network:     network,
