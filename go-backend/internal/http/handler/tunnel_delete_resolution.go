@@ -1007,6 +1007,20 @@ func respondForwardDeleteDisclosureErrorWithNote(w http.ResponseWriter, op strin
 		response.WriteJSON(w, response.Err(-2, msg))
 		return
 	}
+	// R3-GEN-04：mixed 状态定型拒绝（mixedNftForwardStateRejection）
+	// 与披露支同码同形原样回——拒绝语义为「隧道未删除、先编辑隧道
+	// 去掉多余入口」，在其余回执面（forward 系守卫点）均原文存续，
+	// 此前独在删除面被泛化。note 同口径尾随。
+	var mixed *mixedNftForwardStateRejection
+	if errors.As(err, &mixed) {
+		log.Printf("%s: mixed nft forward state rejected tunnel_id=%d: %s", op, tunnelID, mixed.msg)
+		msg := mixed.msg
+		if note != "" {
+			msg += "；" + note
+		}
+		response.WriteJSON(w, response.Err(-2, msg))
+		return
+	}
 	respondInternalErrorWithNote(w, op, err, note)
 }
 

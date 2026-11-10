@@ -113,18 +113,30 @@ func (h *Handler) validateNftablesForwardRequest(tunnel *tunnelRecord, remoteAdd
 // sync 漏斗设防，本函数是其余分发点的同一口径后防线（单入口门不再是
 // 唯一防线）；遗留混合态的修复路径是先编辑隧道去掉 nft/多余入口，
 // 而不是在此处静默放行。
+// mixedNftForwardStateRejection 是 mixedNftForwardStateError 的
+// 定型拒绝（R3-GEN-04）：四支文案均为面向用户的行动指引（错在哪、
+// 下一步先编辑隧道），不含仓储原文。定型后删除面披露漏斗
+// （respondForwardDeleteDisclosureErrorWithNote）得以 errors.As
+// 识别并原样回执，与其余回执面（forward 系守卫点原文回）口径
+// 一致；此前为无型 plain error、流经漏斗时被全量泛化。
+type mixedNftForwardStateRejection struct {
+	msg string
+}
+
+func (e *mixedNftForwardStateRejection) Error() string { return e.msg }
+
 func mixedNftForwardStateError(tunnel *tunnelRecord, entryNodeIDs []int64) error {
 	if tunnel == nil {
-		return errors.New("隧道不存在")
+		return &mixedNftForwardStateRejection{msg: "隧道不存在"}
 	}
 	if len(entryNodeIDs) != 1 {
-		return errors.New("nftables 节点仅支持单入口隧道：该转发所在隧道存在多个入口且其中有 nftables 节点，请先编辑隧道去掉多余入口")
+		return &mixedNftForwardStateRejection{msg: "nftables 节点仅支持单入口隧道：该转发所在隧道存在多个入口且其中有 nftables 节点，请先编辑隧道去掉多余入口"}
 	}
 	if tunnel.Type != 1 {
-		return errors.New("nftables 节点仅支持直连隧道")
+		return &mixedNftForwardStateRejection{msg: "nftables 节点仅支持直连隧道"}
 	}
 	if tunnelIsRealm(tunnel) {
-		return fmt.Errorf("隧道 %d 使用 realm 引擎，入口节点不能为 nftables 模式", tunnel.ID)
+		return &mixedNftForwardStateRejection{msg: fmt.Sprintf("隧道 %d 使用 realm 引擎，入口节点不能为 nftables 模式", tunnel.ID)}
 	}
 	return nil
 }
