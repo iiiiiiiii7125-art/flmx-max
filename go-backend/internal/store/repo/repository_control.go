@@ -12,18 +12,47 @@ import (
 	"go-backend/internal/store/model"
 )
 
-func (r *Repository) UserTunnelExistsByUserAndTunnel(userID, tunnelID int64) (bool, error) {
-	if r == nil || r.db == nil {
-		return false, errors.New("repository not initialized")
-	}
+// userTunnelGrantExistsTx 是 (user,tunnel) 授权行存在性的唯一查询
+// 口径：仅 status=1 的行构成授权（停用授权不算，R4B02-001 与执行
+// 点同义）。运行时与导入收口共用，不许再各写一份计数。
+func userTunnelGrantExistsTx(db *gorm.DB, userID, tunnelID int64) (bool, error) {
 	var count int64
-	err := r.db.Model(&model.UserTunnel{}).
+	err := db.Model(&model.UserTunnel{}).
 		Where("user_id = ? AND tunnel_id = ? AND status = 1", userID, tunnelID).
 		Count(&count).Error
 	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func (r *Repository) UserTunnelExistsByUserAndTunnel(userID, tunnelID int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("repository not initialized")
+	}
+	return userTunnelGrantExistsTx(r.db, userID, tunnelID)
+}
+
+// tunnelUseAuthorizedTx 是转发隧道授权判定的唯一实现：运行时
+// ensureTunnelPermission 与备份导入尾 sweepImportedAuthorizationTx
+// 共用同一判定来源，不许再各写一份。roleID==0（管理员）恒授权——
+// 管理员自有转发从不落 user_tunnel 授权行、运行时合法存在，恢复
+// 语义必须同源承认，否则整库恢复会把管理员中转线整批删除
+// （R3-D-01）；其余角色须有 status=1 的 (user,tunnel) 授权行。
+func tunnelUseAuthorizedTx(db *gorm.DB, roleID int, userID, tunnelID int64) (bool, error) {
+	if roleID == 0 {
+		return true, nil
+	}
+	return userTunnelGrantExistsTx(db, userID, tunnelID)
+}
+
+// UserTunnelUseAuthorized 是运行时授权判定的仓库入口，与导入
+// sweep 的 tunnelUseAuthorizedTx 同一实现（判定同源，R3-D-01）。
+func (r *Repository) UserTunnelUseAuthorized(userID int64, roleID int, tunnelID int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("repository not initialized")
+	}
+	return tunnelUseAuthorizedTx(r.db, roleID, userID, tunnelID)
 }
 
 func (r *Repository) ListForwardsByTunnel(tunnelID int64) ([]model.ForwardRecord, error) {

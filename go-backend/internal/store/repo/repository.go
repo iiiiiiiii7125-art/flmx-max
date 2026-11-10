@@ -4252,18 +4252,40 @@ func restoreZeroValuedFloat(tx *gorm.DB, model interface{}, id int64, column str
 	return tx.Model(model).Where("id = ?", id).Update(column, 0.0).Error
 }
 
+// importedUserRoleTx 查导入后目标库中用户的 role_id（恢复尾 sweep
+// 的授权判定以库内角色为准：备份用户的角色随用户段一并落库）。
+// 用户不在目标库时 found=false——孤儿转发按无授权处理（照旧被
+// sweep），不因缺行误判为管理员。
+func importedUserRoleTx(tx *gorm.DB, userID int64) (roleID int, found bool, err error) {
+	var user model.User
+	res := tx.Select("role_id").Where("id = ?", userID).Limit(1).Find(&user)
+	if res.Error != nil {
+		return 0, false, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return 0, false, nil
+	}
+	return user.RoleID, true, nil
+}
+
 // sweepImportedAuthorizationTx 是导入段的事务尾转发授权收口：本次
-// 新落的转发若在终态下找不到对应 (user,tunnel) 的 user_tunnel 授权
-// 行（运行时 forwardCreate 本就被 ensureTunnelPermission 门控，无
-// 授权转发不可用），删除该行（含其端口/中转附属行，与
+// 新落的转发若在终态下按运行时同一授权判定（tunnelUseAuthorizedTx，
+// 与 ensureTunnelPermission 判定同源）不获授权（无授权转发运行时
+// 本就不可用），删除该行（含其端口/中转附属行，与
 // DeleteForwardCascade 同口径）并计 skipped + ImportWarnings。同批
 // userTunnels 段后落的授权在事务尾已可见，段序不误伤。
+//
+// R3-D-01：判定同源含管理员豁免——所有者 role_id=0 的自有转发从
+// 不落授权行、运行时恒放行，恢复时必须同样存续；旧实现只查授权
+// 行存在性，会把管理员中转线（常态形态）在整库恢复时整批删除。
+// 回执除计数外逐条点名被删转发（名称＋所属隧道），不许只给计数。
 //
 // R5-FGRP：用户隧道授权本身不再有任何分组口径的裁定——分组只
 // 限定分配范围，停用/删除分组、撤销组权限从不删除任何授权（旧
 // R4X-006「停用对覆盖即删除新导入授权」与 R5X-015 无台账 warning
 // 随组语义改版一并删除），导入的授权行逐字落库。
 func sweepImportedAuthorizationTx(tx *gorm.DB, forwards []model.ForwardBackup, preForwardIDs map[int64]bool, rep *importReport) (fwdSkipped int, err error) {
+	var swept []struct{ name, tunnel string }
 	for _, fb := range forwards {
 		if preForwardIDs[fb.ID] {
 			continue
@@ -4276,12 +4298,32 @@ func sweepImportedAuthorizationTx(tx *gorm.DB, forwards []model.ForwardBackup, p
 		if res.RowsAffected == 0 {
 			continue
 		}
-		var uts int64
-		if err := tx.Model(&model.UserTunnel{}).Where("user_id = ? AND tunnel_id = ?", row.UserID, row.TunnelID).Count(&uts).Error; err != nil {
+		// 授权判定与运行时 ensureTunnelPermission 同源（共用
+		// tunnelUseAuthorizedTx）：角色以目标库用户段落库值为准；
+		// 用户不在目标库时按非管理员走授权行判定，孤儿转发照旧删。
+		roleID, roleFound, err := importedUserRoleTx(tx, row.UserID)
+		if err != nil {
 			return fwdSkipped, err
 		}
-		if uts > 0 {
+		if !roleFound {
+			roleID = -1
+		}
+		authorized, err := tunnelUseAuthorizedTx(tx, roleID, row.UserID, row.TunnelID)
+		if err != nil {
+			return fwdSkipped, err
+		}
+		if authorized {
 			continue
+		}
+		// 回执点名用：先取所属隧道名（删除不触及隧道行，顺序无碍）。
+		var tun model.Tunnel
+		tunRes := tx.Select("name").Where("id = ?", row.TunnelID).Limit(1).Find(&tun)
+		if tunRes.Error != nil {
+			return fwdSkipped, tunRes.Error
+		}
+		tunnelName := fmt.Sprintf("隧道 #%d", row.TunnelID)
+		if tunRes.RowsAffected > 0 && tun.Name != "" {
+			tunnelName = tun.Name
 		}
 		// 与 DeleteForwardCascade 同口径清理附属行（刚落库的转发
 		// 通常只有 ForwardPort，其余为存量同 id 残留的兜底）。
@@ -4312,9 +4354,14 @@ func sweepImportedAuthorizationTx(tx *gorm.DB, forwards []model.ForwardBackup, p
 		}
 		rep.skip("forwardsUnauthorized")
 		fwdSkipped++
+		swept = append(swept, struct{ name, tunnel string }{name: row.Name, tunnel: tunnelName})
 	}
 	if fwdSkipped > 0 {
 		rep.warnf("备份恢复：%d 条转发在目标库中无对应用户隧道授权，已跳过未恢复", fwdSkipped)
+		// R3-D-01：逐条点名（名称＋所属隧道），不许只给计数。
+		for _, s := range swept {
+			rep.warnf("备份恢复：转发「%s」（所属隧道「%s」）无对应用户隧道授权，已跳过未恢复", s.name, s.tunnel)
+		}
 	}
 	return fwdSkipped, nil
 }
