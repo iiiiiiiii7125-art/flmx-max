@@ -35,6 +35,7 @@ func newSessionTestListener(t *testing.T, pc net.PacketConn) net.Listener {
 
 func listenUDP(t *testing.T) net.PacketConn {
 	t.Helper()
+	requireLoopbackUDP(t)
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
 		t.Fatal(err)

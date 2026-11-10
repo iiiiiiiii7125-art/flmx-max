@@ -152,6 +152,7 @@ func TestSessionQueuePacketCapBindsFirst(t *testing.T) {
 // line per dropped packet. Summaries are emitted at most once per
 // aggregation window, plus a final flush on listener close.
 func TestListenerFloodDropsCountedAndLogCapped(t *testing.T) {
+	requireLoopbackUDP(t)
 	capLog := newCaptureLogger()
 
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")

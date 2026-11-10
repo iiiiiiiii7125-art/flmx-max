@@ -1004,6 +1004,12 @@ export default function NodePage({
 
       if (res.code === 0) {
         toast.success("删除成功");
+        // F2-21：未勾「同时卸载」时后端把「agent 残留、须手动卸载」
+        // 的说明放在信封 warning 里（data 通道此时无此条），须原样
+        // 透出（network.ts 合同：must be surfaced）。
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
         // 连带卸载回执：离线待卸载单独播报；告警（过旧/未确认等）
         // 由后端逐条点名，前端原样呈现不吞。
         const uninstallWarnings = res.data?.uninstallWarnings ?? [];

@@ -1318,6 +1318,52 @@ for (const [fg, bg, pinned] of TRAY_HOVER_PAIRS) {
   );
 }
 
+// ── 托盘类使用点普查（F-W1-02）────────────────────────────
+// tray-plate 是小字的不透明托盘载体（Round 6 定规：小字恒在不
+// 透明托盘上）。审计终局登记「仅 2 处」却无门禁钉册，新增使用
+// 点静默放行。本段机械扫 src 全部 .ts/.tsx 字符串字面量内的
+// tray-plate，按 file:line 与登记集双向相等断言（多一处/少一
+// 处都红；新增使用点先登记再合入）。字面量口径：注释内提及
+// 不计数（与 G5 门同口径）；globals.css 的 .tray-plate 定义
+// 住在 .css 内，天然不在 .ts/.tsx 普查面内。
+const TRAY_PLATE_REGISTERED = [
+  "src/pages/inbound/kernel-panel.tsx:358",
+  "src/pages/config.tsx:1249",
+];
+{
+  const foundPlates = [];
+  const plateWalk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        plateWalk(path);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        const text = readFileSync(path, "utf8");
+        const rel = path.slice(join(here, "..").length + 1);
+        for (const m of text.matchAll(/"([^"\n]*)"|'([^'\n]*)'|`([^`]*)`/g)) {
+          const body = m[1] ?? m[2] ?? m[3] ?? "";
+          if (!body.includes("tray-plate")) continue;
+          const line = text.slice(0, m.index).split("\n").length;
+          foundPlates.push(`${rel}:${line}`);
+        }
+      }
+    }
+  };
+  plateWalk(join(here, "..", "src"));
+  const plateExtra = foundPlates.filter((f) => !TRAY_PLATE_REGISTERED.includes(f));
+  const plateMissing = TRAY_PLATE_REGISTERED.filter((f) => !foundPlates.includes(f));
+  check(
+    `托盘类 tray-plate 使用点普查闭合（实扫 ${foundPlates.length} 处、登记 ${TRAY_PLATE_REGISTERED.length} 处）`,
+    plateExtra.length === 0 && plateMissing.length === 0,
+    [
+      plateExtra.length ? `未登记：${plateExtra.join(", ")}` : "",
+      plateMissing.length ? `登记未用：${plateMissing.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("；"),
+  );
+}
+
 // ── 玻璃语境语义文字（R2-S1-01）────────────────────────────
 // 玻璃恢复后语义色阶梯档（-700 为主）直坐玻璃的最差格只有
 // 1.76–2.77：已登记边界只量化过中性 default-700（3.67），而语义
@@ -2000,16 +2046,12 @@ const DEFAULT_700_FILE_PINS = {
 // R3 修复：常态格不达标的五色由 -500 提至 -600 档（emerald
 // 2.49→#059669、warning 2.11→#d97706、cyan 2.39→#0891b2、
 // lime 1.94→#65a30d、orange 2.76→#ea580c），色相不变、系列间
-// 可区分。本段普查闭合：五个图表文件的全部 hex 字面量须恰
+// 可区分。本段普查闭合：src 全树走查收集的图表系列色须恰
 // 等于登记集（多一个未登记色、少一个登记色都红）。
-const CHART_FILES = [
-  "components/latency-trend-modal.tsx",
-  "pages/dashboard/components/flow-chart-card.tsx",
-  "pages/node/monitor-view.tsx",
-  "pages/node/tunnel-monitor-view.tsx",
-  "pages/subscription/traffic-stats.tsx",
-];
 // [hex, 默认底常态格钉值, 纯黑界格登记值]
+// F-W1-05：手写图表文件清单已删——普查改为 src 全树目录走查
+// （见下方 foundHexes 段），新图表文件带未登记色即红，不再
+// 依赖清单记得加文件。
 const CHART_SERIES = [
   ["#007aff", 3.95, 1.41],
   ["#6366f1", 4.39, 1.57],
@@ -2052,24 +2094,72 @@ const CHART_SERIES = [
     check("图表系列色网格可复算（--background 与卡片停点齐备）", false, "token 或停点缺失");
   }
 
-  const foundHexes = new Set();
-
-  for (const rel of CHART_FILES) {
-    const text = readFileSync(join(here, "..", "src", rel), "utf8");
-
-    for (const m of text.matchAll(/["'`](#[0-9a-fA-F]{6})["'`]/g)) {
-      foundHexes.add(m[1].toLowerCase());
+  // 图表系列色普查（F-W1-05）：目录走查 src 全树，只收集图表
+  // 系列色句法形态——(a) stroke/fill="#hex" 或
+  // stroke/fill={"#hex"}；(b) color: "#hex"（style: {...} 徽标
+  // 样式行除外：dashboard 数据徽标 background/color 非图表色）；
+  // (c) 整行仅一个 hex 字面量（数组元素，如 latency-trend-modal
+  // 的 COLORS）；(d) fill 与 (a) 同形；(e) const IDENT="#hex"
+  // 且同文件内有 stroke={IDENT} / fill={IDENT} /
+  // borderColor: IDENT / background: IDENT 引用（traffic-stats
+  // 的 DOWN/UP）。已知污染源已逐项排除：distro-icon 品牌色对象
+  // （键值对行，非裸字面量行）、config.tsx "#ffffff" 比较/入参
+  // （非裸字面量行）、use-dashboard-data.ts 徽标 style 行。
+  const foundHexes = new Map(); // hex → [来源 file:line ...]
+  const chartWalk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        chartWalk(path);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        const text = readFileSync(path, "utf8");
+        const rel = path.slice(join(here, "..").length + 1);
+        const addHex = (hex, line) => {
+          hex = hex.toLowerCase();
+          if (!foundHexes.has(hex)) foundHexes.set(hex, []);
+          foundHexes.get(hex).push(`${rel}:${line}`);
+        };
+        const lines = text.split("\n");
+        lines.forEach((line, i) => {
+          for (const m of line.matchAll(
+            /(?:stroke|fill)=(?:"(#[0-9a-fA-F]{6})"|\{"(#[0-9a-fA-F]{6})"\})/g,
+          )) {
+            addHex(m[1] ?? m[2], i + 1);
+          }
+          if (!line.includes("style:")) {
+            for (const m of line.matchAll(/color:\s*["'](#[0-9a-fA-F]{6})["']/g)) {
+              addHex(m[1], i + 1);
+            }
+          }
+          const bare = line.match(/^\s*["'`](#[0-9a-fA-F]{6})["'`],?\s*$/);
+          if (bare) addHex(bare[1], i + 1);
+        });
+        for (const m of text.matchAll(
+          /const\s+([A-Za-z_$][\w$]*)\s*=\s*["'](#[0-9a-fA-F]{6})["']/g,
+        )) {
+          const ref = new RegExp(
+            `(?:stroke|fill)=\\{${m[1]}\\}|borderColor:\\s*${m[1]}\\b|background:\\s*${m[1]}\\b`,
+          );
+          if (ref.test(text)) {
+            const line = text.slice(0, m.index).split("\n").length;
+            addHex(m[2], line);
+          }
+        }
+      }
     }
-  }
+  };
+  chartWalk(join(here, "..", "src"));
   const registeredHexes = new Set(CHART_SERIES.map(([hex]) => hex));
-  const unregistered = [...foundHexes].filter((h) => !registeredHexes.has(h));
+  const unregistered = [...foundHexes.keys()].filter((h) => !registeredHexes.has(h));
   const unused = [...registeredHexes].filter((h) => !foundHexes.has(h));
 
   check(
-    `图表文件 hex 普查闭合（实扫 ${foundHexes.size} 色、登记 ${registeredHexes.size} 色）`,
+    `图表系列色普查闭合（实扫 ${foundHexes.size} 色、登记 ${registeredHexes.size} 色）`,
     unregistered.length === 0 && unused.length === 0,
     [
-      unregistered.length ? `未登记：${unregistered.join(", ")}` : "",
+      unregistered.length
+        ? `未登记：${unregistered.map((h) => `${h}（${foundHexes.get(h).slice(0, 3).join(", ")}）`).join(", ")}`
+        : "",
       unused.length ? `登记未用：${unused.join(", ")}` : "",
     ]
       .filter(Boolean)

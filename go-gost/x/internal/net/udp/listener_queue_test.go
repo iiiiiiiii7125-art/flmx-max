@@ -18,6 +18,7 @@ import (
 // datagram ("recv queue is full"). An explicitly configured size
 // must be kept verbatim.
 func TestNewListenerDefaultsQueueSizes(t *testing.T) {
+	requireLoopbackUDP(t)
 	acceptOne := func(t *testing.T, cfg *ListenConfig) *conn {
 		t.Helper()
 		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -73,6 +74,7 @@ func TestNewListenerDefaultsQueueSizes(t *testing.T) {
 // consumer starts reading. On the pre-fix code the queue was
 // unbuffered, so virtually the whole burst was dropped.
 func TestListenerZeroGapBurstAbsorbed(t *testing.T) {
+	requireLoopbackUDP(t)
 	const burst = 300
 
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")

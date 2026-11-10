@@ -2,10 +2,11 @@
 // check-small-text-weight.mjs — G5 小字字重门（仓内等价物）。
 //
 // 口径（Round 6 用户定规，UI 视觉审计常设 G5）：12px 级小字说明
-// 正文必须带字重——text-xs / text-[10px] / text-[11px] 字面量内
-// 无 font-semibold 及更重字重（font-semibold|bold|extrabold|
-// black）即「小字无字重」族：小字以常规字重呈现时在实色面上发
-// 虚，用户定规以字号/字重而非灰度区分层级，小字一律加粗。
+// 正文必须带字重——text-xs / 任意值 text-[Npx]（0 < N < 12）
+// 字面量内无 font-semibold 及更重字重（font-semibold|bold|
+// extrabold|black）即「小字无字重」族：小字以常规字重呈现时在
+// 实色面上发虚，用户定规以字号/字重而非灰度区分层级，小字一律
+// 加粗。text-[0px] 按值豁免（隐藏占位，不可见面）。
 //
 // 来历：G5 此前只活在仓外审计脚本（audit/ui-refresh/
 // check-tray-contrast.sh 的 G5 节，随审计轮次手工实跑），未接
@@ -76,9 +77,21 @@ const collectSources = (dir) => {
   return out;
 };
 
-// ─── 谓词（与外置 G5 逐项一致） ────────────────────────────────────────────
-
-const SIZE_RE = /text-xs\b|text-\[10px\]|text-\[11px\]/;
+// ─── 谓词（与外置 G5 逐项一致；F-W1-01 起任意值按数值判定） ────────────────
+//
+// 小字＝text-xs，或任意值 text-[Npx] 且 0 < N < 12（小数可，如
+// 10.5px）。旧谓词只列 10px/11px 两档，[9px] 等静默逃逸
+// （tunnel-monitor-view.tsx:741 的 [9px] 实证）；text-[0px]
+// 按值豁免——隐藏占位（tunnel.tsx:2096,2125，w-0 溢出隐藏列，
+// 不可见面），0px 不是字号。12px 及以上不是小字。
+const isSmallText = (body) => {
+  if (/text-xs\b/.test(body)) return true;
+  for (const m of body.matchAll(/text-\[(\d+(?:\.\d+)?)px\]/g)) {
+    const n = parseFloat(m[1]);
+    if (n > 0 && n < 12) return true;
+  }
+  return false;
+};
 const WEIGHT_RE = /font-(semibold|bold|extrabold|black)/;
 const LITERAL_RE = /"([^"\n]*)"|'([^'\n]*)'|`([^`]*)`/g;
 
@@ -144,7 +157,7 @@ for (const path of files) {
     const body = m[1] ?? m[2] ?? m[3] ?? "";
 
     literalCount++;
-    if (!SIZE_RE.test(body) || WEIGHT_RE.test(body)) continue;
+    if (!isSmallText(body) || WEIGHT_RE.test(body)) continue;
     const start = m.index;
     const end = start + m[0].length;
     const line = text.slice(0, start).split("\n").length;

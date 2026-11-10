@@ -156,26 +156,59 @@ const check = (label, ok, detail = "") => {
 const sorted = (arr) => [...arr].sort();
 const diff = (a, b) => a.filter((v) => !b.includes(v));
 
-// 登记册（RR4-C5-01 审计实测 3 处）：新增 OKWithWarning 生产者必须
-// 在此登记端点、API 函数与消费文件，并保证消费端实读 .warning。
+// 登记册（RR4-C5-01 审计实测 3 处；W8 补登记 3 处）：新增 OKWithWarning
+// 生产者必须在此登记端点、API 函数与消费文件，并保证消费端实读
+// .warning。登记粒度为「一端点一登记」：同一生产者文件含多个端点
+// 时逐端点各登一条，calls 记该端点处理函数内的调用点数；调用点
+// 总数＝各条 calls 之和，须与后端普查实数相等。
+//   补登记（W8，修复波漏登记）：
+//   - mutations.go nodeDelete（/node/delete，F2-21 未勾卸载的残留
+//     说明）与 forwardForceDelete（/forward/force-delete，强制删
+//     除残留规则说明）——W2 新增生产者未登记；
+//   - user_subscription.go userSubscriptionSet（/user-subscription/set，
+//     S-001 撤销分配的「已复制链接不断」说明）——W3 新增生产者未登记。
 const REGISTRY = [
   {
     producer: "go-backend/internal/http/handler/kernel.go",
     endpoint: "/kernel/install",
     apiFn: "installKernel",
+    calls: 1,
     consumers: ["src/pages/inbound/kernel-panel.tsx"],
   },
   {
     producer: "go-backend/internal/http/handler/mutations.go",
     endpoint: "/node/install",
     apiFn: "getNodeInstallCommand",
+    calls: 1,
     consumers: ["src/pages/node.tsx"],
   },
   {
     producer: "go-backend/internal/http/handler/remote_source.go",
     endpoint: "/subscription/source/delete",
     apiFn: "deleteRemoteSource",
+    calls: 1,
     consumers: ["src/pages/inbound/sources.tsx"],
+  },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/node/delete",
+    apiFn: "deleteNode",
+    calls: 1,
+    consumers: ["src/pages/node.tsx"],
+  },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/forward/force-delete",
+    apiFn: "forceDeleteForward",
+    calls: 1,
+    consumers: ["src/pages/forward.tsx"],
+  },
+  {
+    producer: "go-backend/internal/http/handler/user_subscription.go",
+    endpoint: "/user-subscription/set",
+    apiFn: "setUserSubscriptions",
+    calls: 1,
+    consumers: ["src/pages/subscription/assign.tsx"],
   },
 ];
 
@@ -196,7 +229,8 @@ for (const file of goFiles) {
     censusCount += hits;
   }
 }
-const registryProducers = REGISTRY.map((r) => r.producer);
+const registryProducers = [...new Set(REGISTRY.map((r) => r.producer))];
+const registryCalls = REGISTRY.reduce((n, r) => n + (r.calls ?? 1), 0);
 
 check(
   `OKWithWarning 生产者文件集 ${registryProducers.length} 个（登记册）`,
@@ -204,8 +238,8 @@ check(
   `未登记: ${diff(censusFiles, registryProducers).join(", ") || "无"}；已失效: ${diff(registryProducers, censusFiles).join(", ") || "无"}`,
 );
 check(
-  `OKWithWarning 调用点总数 ${REGISTRY.length}（一处一登记）`,
-  censusCount === REGISTRY.length,
+  `OKWithWarning 调用点总数 ${registryCalls}（一处一登记）`,
+  censusCount === registryCalls,
   `实际 ${censusCount} 处`,
 );
 
@@ -256,9 +290,14 @@ for (const entry of REGISTRY) {
   );
 
   // ③ 消费：全部调用文件实读 .warning，登记消费文件确在调用之列
+  // 调用点须同时从 @/api 导入该函数——同名 prop 回调（如 node-row.tsx
+  // 的 actions.deleteNode）不是 API 调用，不得算入（W8）。
   const callRe = new RegExp(`\\b${entry.apiFn}\\s*\\(`);
+  const importRe = new RegExp(
+    `import\\s*\\{[^}]*\\b${entry.apiFn}\\b[^}]*\\}\\s*from\\s*["']@/api["']`,
+  );
   const callers = [...callerSrc.entries()]
-    .filter(([, src]) => callRe.test(src))
+    .filter(([, src]) => callRe.test(src) && importRe.test(src))
     .map(([rel]) => rel);
   const unread = callers.filter(
     (rel) => !/\.warning\b/.test(callerSrc.get(rel)),
@@ -278,6 +317,35 @@ for (const entry of REGISTRY) {
     `${entry.apiFn} 登记消费文件 ${entry.consumers.join(", ")} 确在调用之列`,
     entry.consumers.every((c) => callers.includes(c)),
     `实际调用文件: ${callers.join(", ") || "无"}`,
+  );
+
+  // ④ 近处读：文件级 .warning 存在不等于本次调用读了——同一文件调
+  //    两个登记 API 时，只读其一的调用点会被文件级检查漏放（W8 实
+  //    证：node.tsx 调 deleteNode 与 getNodeInstallCommand，文件级
+  //    有 .warning 而 deleteNode 调用点实未读）。故每次调用点之后
+  //    60 行内必须出现一次 .warning 读（现行六处调用点最远 13 行，
+  //    窗口留足余量；超窗的正当写法须重构到调用附近或带理由调窗）。
+  const callSiteLines = [...callerSrc.entries()]
+    .filter(([, src]) => callRe.test(src) && importRe.test(src))
+    .flatMap(([rel, src]) => {
+      const lines = src.split("\n");
+      const hits = [];
+      const re = new RegExp(`\\b${entry.apiFn}\\s*\\(`, "g");
+      let m;
+      while ((m = re.exec(src)) !== null) {
+        const lineNo = src.slice(0, m.index).split("\n").length - 1;
+        const windowText = lines.slice(lineNo, lineNo + 61).join("\n");
+        hits.push({ rel, lineNo: lineNo + 1, ok: /\.warning\b/.test(windowText) });
+      }
+      return hits;
+    });
+  const farSites = callSiteLines.filter((h) => !h.ok);
+  check(
+    `${entry.apiFn} 每次调用附近 60 行内实读 .warning`,
+    farSites.length === 0,
+    farSites.length === 0
+      ? ""
+      : `未读的调用点: ${farSites.map((h) => `${h.rel}:${h.lineNo}`).join(", ")}`,
   );
 }
 

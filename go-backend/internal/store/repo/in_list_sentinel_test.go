@@ -31,10 +31,11 @@ type inListSiteClass struct {
 	note string
 }
 
-// inListSiteRegistry 是 IN 家族点位闭合清单（文件:函数 → 归类）。
-// 与 lanes/X01/r3/in-list-enumeration.md（A/B 集）、
-// lanes/X04/r3/enumeration.md（61 处归类）、lanes/K8/r3/rescan.md
-// 三份枚举互为对照；增删点位须同步三处。
+// inListSiteRegistry 是 IN 家族点位闭合清单（文件:函数 → 归类），
+// 亦是该清单的唯一生效源：其余三份枚举（审计轮次工作底稿
+// lanes/X01/r3/in-list-enumeration.md、lanes/X04/r3/enumeration.md、
+// lanes/K8/r3/rescan.md）未随轮次归档保留在本工作区，无法同步；
+// 增删点位只须改此处，门禁以此处为准（W8 对账）。
 var inListSiteRegistry = map[string]inListSiteClass{
 	// —— 分块（chunkInt64IDs）——
 	"repository.go:ListNodes":                                           {"chunkInt64IDs", "整表节点集，T2-NEW-01 已分块"},
@@ -77,7 +78,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	// —— 子查询形（IN (?) 传 *gorm.DB，不展开变量）——
 	"repository_mutations.go:DeleteUserCascade": {"", "forwardIDs/userTunnelIDs 为 Select 子查询，X01 A 集已核"},
 
-	// —— 有界豁免（前提经 R3 复核仍成立，见 rescan.md）——
+	// —— 有界豁免（前提经 R3 复核仍成立；复核底稿未归档，见上注）——
 	"repository.go:GetConfigsByNames":               {"", "全部调用方传代码字面量小清单（X01 A 集已核 5 处）"},
 	"repository_kernel.go:applyInboundCounterChunk": {"", "调用方 ApplyInboundCounters 已按 200 条分片（X01 A 集）"},
 

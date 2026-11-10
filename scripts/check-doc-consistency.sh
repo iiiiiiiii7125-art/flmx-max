@@ -666,6 +666,68 @@ else
   note_ok "服务监控限值披露门：monitoring.md 对 limits.go $(printf '%s\n' "$limits_keys_want" | wc -l | tr -d ' ') 个 service_monitor_* 键的缺省/上限披露一致"
 fi
 
+# ── 22. W7 口径钉子四点（FIX-212 W7 移交、W8 落门）：文档关键口径
+#    漂移即红，逐点 fail-closed（节提取为空＝前提失效，按红处理）。
+FORWARD_MD="doc/guide/forward.md"
+INDEX_MD="doc/index.md"
+UPGRADE_MD="doc/guide/upgrade.md"
+IMPORT_MD="doc/guide/import.md"
+
+# 22a. forward.md 会话无进展拆除节须含内核探活参数 180 秒 / 60 秒 /
+#      6 次与 FLMX_KEEPALIVE（防再漂移回「探活不存在」口径）。
+ka_sec=$(awk '/^### 会话无进展拆除/{f=1;next} /^## /{if(f)exit} f' "$FORWARD_MD")
+if [ -z "$ka_sec" ]; then
+  note_fail "探活参数钉子：forward.md 找不到「会话无进展拆除」节（前提失效，请人工复核）"
+elif ! printf '%s' "$ka_sec" | grep -Fq "180 秒" \
+     || ! printf '%s' "$ka_sec" | grep -Fq "60 秒" \
+     || ! printf '%s' "$ka_sec" | grep -Fq "6 次" \
+     || ! printf '%s' "$ka_sec" | grep -Fq "FLMX_KEEPALIVE"; then
+  note_fail "探活参数钉子：forward.md 拆除节缺 180 秒 / 60 秒 / 6 次 / FLMX_KEEPALIVE 任一"
+else
+  note_ok "探活参数钉子：forward.md 拆除节含 180 秒 / 60 秒 / 6 次与 FLMX_KEEPALIVE"
+fi
+
+# 22b. nodes.md「节点分组（展示）」节在场且含「不参与订阅」限定句
+#      （防展示分组成员被后人写成订阅分组）。
+grp_sec=$(awk '/^## 节点分组（展示）/{f=1;next} /^## /{if(f)exit} f' "$NODES_MD")
+if [ -z "$grp_sec" ]; then
+  note_fail "节点分组钉子：nodes.md 找不到「## 节点分组（展示）」节（前提失效，请人工复核）"
+elif ! printf '%s' "$grp_sec" | grep -Fq "不参与订阅"; then
+  note_fail "节点分组钉子：nodes.md 分组节缺「不参与订阅」限定句"
+else
+  note_ok "节点分组钉子：nodes.md「节点分组（展示）」节在场且含「不参与订阅」"
+fi
+
+# 22c. nodes.md 协议开关节含「屏蔽开关」且不含「监听是否开启」
+#      （F2-13 防反转复发）。
+sw_sec=$(awk '/^## 节点协议开关/{f=1;next} /^## /{if(f)exit} f' "$NODES_MD")
+if [ -z "$sw_sec" ]; then
+  note_fail "协议开关钉子：nodes.md 找不到「## 节点协议开关」节（前提失效，请人工复核）"
+elif ! printf '%s' "$sw_sec" | grep -Fq "屏蔽开关"; then
+  note_fail "协议开关钉子：nodes.md 协议开关节缺「屏蔽开关」"
+elif printf '%s' "$sw_sec" | grep -Fq "监听是否开启"; then
+  note_fail "协议开关钉子：nodes.md 协议开关节出现「监听是否开启」（F2-13 反转复发）"
+else
+  note_ok "协议开关钉子：nodes.md 协议开关节含「屏蔽开关」且无「监听是否开启」"
+fi
+
+# 22d. 残留词零命中钉子：「远程节点」在 doc/index.md＋doc/guide/
+#      全域为 0、index.md「Snell」为 0；Snell 在 guide/ 内只许出现
+#      在导入语境（import.md 整篇属导入语境）或带「导入」/「已移除」
+#      的行（upgrade.md 移除项节、nodes.md/subscription.md 导入口径行）。
+remote_hits=$(grep -rn "远程节点" "$INDEX_MD" doc/guide/ 2>/dev/null || true)
+snell_index=$(grep -c "Snell" "$INDEX_MD" 2>/dev/null || true)
+snell_bad=$(grep -rn "Snell" doc/guide/ 2>/dev/null | grep -v "^$IMPORT_MD:" | grep -v "导入" | grep -v "已移除" || true)
+if [ -n "$remote_hits" ]; then
+  note_fail "残留词钉子：仍有「远程节点」：$(printf '%s' "$remote_hits" | head -3 | tr '\n' ';')"
+elif [ "${snell_index:-0}" != "0" ]; then
+  note_fail "残留词钉子：doc/index.md 仍有 Snell（${snell_index} 处）"
+elif [ -n "$snell_bad" ]; then
+  note_fail "残留词钉子：guide/ 内 Snell 脱离导入/移除语境：$(printf '%s' "$snell_bad" | head -3 | tr '\n' ';')"
+else
+  note_ok "残留词钉子：「远程节点」index＋guide 零命中、index.md Snell 零命中、guide/ 内 Snell 全在导入/移除语境"
+fi
+
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
   echo "RESULT: PASS（known-pending 项不计失败）"

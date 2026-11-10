@@ -163,6 +163,7 @@ func TestFitDatagramBuffer(t *testing.T) {
 // Everything past the depth is dropped and counted on the
 // aggregated drop counter.
 func TestListenerStalledSmallFloodFillsPacketDepthWithinByteBudget(t *testing.T) {
+	requireLoopbackUDP(t)
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("ListenPacket: %v", err)
@@ -289,6 +290,7 @@ func TestListenerStalledSmallFloodFillsPacketDepthWithinByteBudget(t *testing.T)
 // TestSessionQueueChargesPinnedBufferCap is where the counts
 // diverged 16x).
 func TestListenerStalledLargeFloodStopsAtByteBudget(t *testing.T) {
+	requireLoopbackUDP(t)
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("ListenPacket: %v", err)

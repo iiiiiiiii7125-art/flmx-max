@@ -37,6 +37,9 @@
 # 环境前提（与头部「无 go 时 §10/§16 等子项实核」口径一致），
 # 不静默跳过。注：变体 4–7（FIX-DOC-R 的 §18–§21 四族）与本变体
 # 同树，合并后自检依次跑变体 1–8。
+# FIX-212 W8 扩围：变体 9–12 覆盖 §22 四钉（探活参数、节点分组
+# 限定句、协议开关语义、残留词零命中），每钉一个变体、改坏文案
+# 必须被对应钉抓红并点名；变体 9–11 带变异落点断言防静默空转。
 # FIX-GATE-CALIB 改钉（R2-GATE-02）：上文 55/153、59/149 均为历史
 # 标定记录（出处见各重标定提交），不再是变体 8 的写死锚点——变体
 # 8 改为运行时从镜像内 ci-build.yml 机械读现行标记值（其后标记又
@@ -155,5 +158,47 @@ fi
 grep -q "声称 tested=${MUT_T} untested=${CUR_U} ≠ 实数 tested=${CUR_T} untested=${CUR_U}" "$TMP/v8.log" && echo "OK: variant 8 caught and named" || {
   echo "FAIL: variant 8 caught but the drift was not named"; sed 's/^/    /' "$TMP/v8.log"; exit 1; }
 cp "$ROOT/.github/workflows/ci-build.yml" "$MIR/.github/workflows/ci-build.yml"
+
+echo "== variant 9: keepalive params drift in forward.md must FAIL and name it (§22a) =="
+sed -i 's/满 180 秒后/满 181 秒后/' "$MIR/doc/guide/forward.md"
+grep -q "181 秒" "$MIR/doc/guide/forward.md" || {
+  echo "FAIL: variant 9 mutation did not land (keepalive anchor drifted)"; exit 1; }
+if run_gate "$TMP/v9.log"; then
+  echo "FAIL: variant 9 was not caught"; exit 1
+fi
+grep -q "探活参数钉子" "$TMP/v9.log" && echo "OK: variant 9 caught and named" || {
+  echo "FAIL: variant 9 caught but the drift was not named"; sed 's/^/    /' "$TMP/v9.log"; exit 1; }
+cp "$ROOT/doc/guide/forward.md" "$MIR/doc/guide/forward.md"
+
+echo "== variant 10: node-group section loses its subscription exclusion must FAIL and name it (§22b) =="
+sed -i 's/不参与订阅、转发、选线/不参与转发、选线/' "$MIR/doc/guide/nodes.md"
+grep -q "不参与订阅" "$MIR/doc/guide/nodes.md" && {
+  echo "FAIL: variant 10 mutation did not land (group-section anchor drifted)"; exit 1; }
+if run_gate "$TMP/v10.log"; then
+  echo "FAIL: variant 10 was not caught"; exit 1
+fi
+grep -q "节点分组钉子" "$TMP/v10.log" && echo "OK: variant 10 caught and named" || {
+  echo "FAIL: variant 10 caught but the drift was not named"; sed 's/^/    /' "$TMP/v10.log"; exit 1; }
+cp "$ROOT/doc/guide/nodes.md" "$MIR/doc/guide/nodes.md"
+
+echo "== variant 11: protocol-switch section reverts to listener wording must FAIL and name it (§22c) =="
+sed -i 's/屏蔽开关/监听是否开启/' "$MIR/doc/guide/nodes.md"
+grep -q "监听是否开启" "$MIR/doc/guide/nodes.md" || {
+  echo "FAIL: variant 11 mutation did not land (switch-section anchor drifted)"; exit 1; }
+if run_gate "$TMP/v11.log"; then
+  echo "FAIL: variant 11 was not caught"; exit 1
+fi
+grep -q "协议开关钉子" "$TMP/v11.log" && echo "OK: variant 11 caught and named" || {
+  echo "FAIL: variant 11 caught but the drift was not named"; sed 's/^/    /' "$TMP/v11.log"; exit 1; }
+cp "$ROOT/doc/guide/nodes.md" "$MIR/doc/guide/nodes.md"
+
+echo "== variant 12: banned term reappears in index.md must FAIL and name it (§22d) =="
+printf '\n远程节点（自测变异行）\n' >> "$MIR/doc/index.md"
+if run_gate "$TMP/v12.log"; then
+  echo "FAIL: variant 12 was not caught"; exit 1
+fi
+grep -q "残留词钉子" "$TMP/v12.log" && echo "OK: variant 12 caught and named" || {
+  echo "FAIL: variant 12 caught but the drift was not named"; sed 's/^/    /' "$TMP/v12.log"; exit 1; }
+cp "$ROOT/doc/index.md" "$MIR/doc/index.md"
 
 echo "SELFTEST PASS"

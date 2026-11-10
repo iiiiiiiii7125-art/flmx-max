@@ -2290,6 +2290,12 @@ export default function ForwardPage() {
 
           if (forceRes.code === 0) {
             toast.success("强制删除成功");
+            // 强制删除残留说明：部分节点侧规则清理未确认时后端把
+            // 「残留规则需人工确认清理」放在信封 warning 里，须原样
+            // 透出（network.ts 合同：must be surfaced）。
+            if (forceRes.warning) {
+              toast(forceRes.warning, { icon: "⚠️", duration: 12000 });
+            }
             setDeleteModalOpen(false);
             setForwardToDelete(null);
             setForwards((prev) =>

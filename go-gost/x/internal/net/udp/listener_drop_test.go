@@ -17,6 +17,7 @@ import (
 // the branch itself: the drop path is exercised and the listener and
 // session must stay fully functional afterwards.
 func TestListenerQueueFullDropKeepsListenerAlive(t *testing.T) {
+	requireLoopbackUDP(t)
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("ListenPacket: %v", err)

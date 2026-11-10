@@ -135,8 +135,15 @@ export default function SubscriptionAssignSection() {
     try {
       const res = await setUserSubscriptions(userId, Array.from(selected));
 
-      if (res.code === 0) toast.success("订阅分配已保存");
-      else toast.error(res.msg || "保存失败");
+      if (res.code === 0) {
+        toast.success("订阅分配已保存");
+        // S-001：撤销分配时后端在信封 warning 里点名「已复制出去的
+        // 订阅链接不会失效」，须原样透出（network.ts 合同：must be
+        // surfaced），不得只报固定成功文案。
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
+      } else toast.error(res.msg || "保存失败");
     } catch {
       toast.error("保存失败");
     } finally {
