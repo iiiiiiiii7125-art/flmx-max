@@ -124,6 +124,15 @@ type Node struct {
 	RestartEnabled       int    `gorm:"column:restart_enabled;not null;default:0"`
 	RestartTime          string `gorm:"column:restart_time;type:varchar(5);not null;default:'04:00'"`
 	RestartJitterMinutes int    `gorm:"column:restart_jitter_minutes;not null;default:30"`
+	// 定时重启下发结果（W8-R-C601 持久字段）：设置保存后下发
+	// agent 的实际结果，刷新列表行可见——此前失败只在当次回执
+	// 带 pushError，刷新即失。RestartPushStatus 取 pending（已保
+	// 存未下发，离线保存）/applied（agent 已确认）/failed（下发
+	// 失败，原因见 RestartPushError）；RestartPushedAt 为最近一次
+	// 下发尝试的 UnixMilli。运行态，不进备份。
+	RestartPushStatus string `gorm:"column:restart_push_status;type:varchar(16);not null;default:''"`
+	RestartPushError  string `gorm:"column:restart_push_error;type:varchar(500);not null;default:''"`
+	RestartPushedAt   int64  `gorm:"column:restart_pushed_at;not null;default:0"`
 	// 转发面会话无进展拆除阈值（秒，保险丝，默认关）：0＝不拆；
 	// >0 时 agent 只拆双向零字节满该秒数的 gost 会话（任一方向有
 	// 字节即不拆）。面板是权威源，随服务配置 metadata 下发、服务
@@ -278,7 +287,10 @@ type StatisticsFlow struct {
 	Flow        int64  `gorm:"not null" json:"flow"`
 	TotalFlow   int64  `gorm:"column:total_flow;not null" json:"totalFlow"`
 	Time        string `gorm:"type:varchar(100);not null" json:"time"`
-	CreatedTime int64  `gorm:"column:created_time;not null" json:"-"`
+	// AP-08：CreatedTime 此前 json:"-"，前端流量图只能按 HH:00
+	// 字符串拼日期（跨日断点错位）；现透出 UnixMilli 毫秒时间戳，
+	// 前端以它定日、Time 只作小时刻度。加字段向后兼容。
+	CreatedTime int64 `gorm:"column:created_time;not null" json:"createdTime"`
 }
 
 func (StatisticsFlow) TableName() string { return "statistics_flow" }
@@ -1336,7 +1348,9 @@ type ServiceMonitorResult struct {
 	Timestamp    int64   `gorm:"not null;index:idx_monitor_result_monitor_time,priority:2" json:"timestamp"`
 	Success      int     `gorm:"not null" json:"success"`
 	LatencyMs    float64 `gorm:"column:latency_ms" json:"latencyMs"`
-	StatusCode   int     `gorm:"column:status_code" json:"statusCode"`
+	// R2-C2-B01：agent 已删 statusCode 回包字段——读口恒缺失（恒 0）、
+	// 模型字段同步摘除；前端声明归路 6。存量列由 AutoMigrate 保留，
+	// 不再读写。
 	ErrorMessage string  `gorm:"column:error_message;type:text" json:"errorMessage"`
 }
 

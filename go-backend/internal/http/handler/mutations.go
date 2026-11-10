@@ -385,8 +385,7 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	// 隧道限额同步失败即上抛，不再只记日志回成功（否则用户行是新值、
 	// 全部 user_tunnel 行仍是旧限额，且前端无任何信号）。
 	if err := h.repo.PropagateUserFlowToTunnels(id, flow, num, expTime, flowResetTime, flowMiB); err != nil {
-		log.Printf("propagate user flow to tunnels failed user_id=%d err=%v", id, err)
-		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("隧道限额同步失败: %v", err)))
+		respondInternalError(w, fmt.Sprintf("userUpdate: propagate user flow to tunnels failed user_id=%d", id), err)
 		return
 	}
 	if hasUpdateQuota {
@@ -409,7 +408,7 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	if oldUser.MaxConn != maxConn {
 		warnings, syncErr := h.syncUserMaxConnForwards(id)
 		if syncErr != nil {
-			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("最大连接数下发失败: %v", syncErr)))
+			respondInternalError(w, "userUpdate: sync max-conn forwards failed", syncErr)
 			return
 		}
 		if len(warnings) > 0 {
@@ -479,7 +478,8 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 			// 现行 DB 补刷一次白名单（与成功路径同集、幂等），否则已
 			// 删转发的拨号地址无限驻留 allow（回执文案不变）。
 			h.refreshInboundWhitelists(affectedInboundIDs)
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// R2-A01：与 tunnelDelete 同口径——披露错原样回执，原错只进日志；其余失败才泛化。
+			respondForwardDeleteDisclosureError(w, "userDelete", tunnelID, err)
 			return
 		}
 	}
@@ -841,7 +841,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		forwardMode,
 	)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeCreate", err)
 		return
 	}
 	if idleTimeoutPresent {
@@ -851,7 +851,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 			if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
 				log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
 			}
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "nodeCreate", err)
 			return
 		}
 	}
@@ -862,7 +862,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 			if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
 				log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
 			}
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "nodeCreate", err)
 			return
 		}
 	}
@@ -873,7 +873,8 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
 			log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-A01：与 nodeUpdate 同口径——SSH 配置校验定型失败原样回，仓储故障才泛化。
+		respondNodeSSHConfigError(w, "nodeCreate", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -914,7 +915,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("节点不存在"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeUpdate", err)
 		return
 	}
 
@@ -923,7 +924,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	newSocks := asInt(req["socks"], currentSocks)
 	currentForwardMode, err := h.repo.GetNodeForwardMode(id)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeUpdate", err)
 		return
 	}
 	// A2-04（BC-06）：真部分更新——未传字段保持现值。旧口径未传
@@ -931,8 +932,12 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	// nftables 节点静默翻回 agent 模式；name/serverIp/port/监听地址/
 	// 附加字段同理被清空或复位。currentNode 为保值来源。
 	currentNode, err := h.repo.GetNodeByID(id)
-	if err != nil || currentNode == nil {
-		response.WriteJSON(w, response.Err(-2, errString(err)))
+	if err != nil {
+		respondInternalError(w, "nodeUpdate", err)
+		return
+	}
+	if currentNode == nil {
+		response.WriteJSON(w, response.ErrDefault("节点不存在"))
 		return
 	}
 	forwardMode := defaultNodeForwardMode(currentForwardMode)
@@ -974,11 +979,11 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	// 修复路径是先删除或移出该隧道的转发（或编辑隧道去掉本节点
 	// 入口），而不是翻完再补。未改变模式的部分更新不受影响。
 	if forwardMode != defaultNodeForwardMode(currentForwardMode) {
-		if tunnelID, tunnelName, gErr := h.entryNodeTunnelWithForwards(id); gErr != nil {
-			response.WriteJSON(w, response.Err(-2, gErr.Error()))
+		if ref, gErr := h.entryNodeTunnelWithForwards(id); gErr != nil {
+			respondInternalError(w, "nodeUpdate", gErr)
 			return
-		} else if tunnelID > 0 {
-			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点 %s 是隧道 %s（ID %d）的入口节点，该隧道下已有转发；请先删除或移出转发后再切换转发模式", currentNode.Name, tunnelName, tunnelID)))
+		} else if ref.ID > 0 {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("节点 %s 是隧道 %s（ID %d）的入口节点，该隧道下已有转发；请先删除或移出转发后再切换转发模式", currentNode.Name, ref.Name, ref.ID)))
 			return
 		}
 	}
@@ -1146,7 +1151,8 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	// 前置消除而非仅披露。
 	sshPlan, err := h.resolveNodeSSHConfig(id, req, forwardMode, true)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-A01：SSH 配置校验定型失败原样回（TestNodeUpdateSSH），仓储故障才泛化。
+		respondNodeSSHConfigError(w, "nodeUpdate", err)
 		return
 	}
 	// S2-4/5（A1 同形残留）：interfaceName 与 tcpListenAddr/
@@ -1194,7 +1200,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		udpAddr,
 		now,
 	); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeUpdate", err)
 		return
 	}
 	if interfaceNameChanged || listenAddrChanged {
@@ -1210,7 +1216,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		// 无进展拆除阈值走独立 setter（UpdateNode 的全字段签名不
 		// 为单个新字段再膨胀）；失败如实报错，不静默吞。
 		if err := h.repo.UpdateNodeIdleTimeoutSeconds(id, idleTimeoutSeconds); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "nodeUpdate", err)
 			return
 		}
 		if idleTimeoutSeconds != currentNode.IdleTimeoutSeconds {
@@ -1227,17 +1233,17 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	// 址变更重算面）。
 	if displayGroup != nil {
 		if err := h.repo.UpdateNodeDisplayGroup(id, *displayGroup); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "nodeUpdate", err)
 			return
 		}
 	}
 	if err := h.applyNodeSSHConfig(id, sshPlan, now); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeUpdate", err)
 		return
 	}
 	if forwardMode == "nftables" && currentStatus != 1 {
 		if err := h.repo.UpdateNodeStatus(id, 1); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "nodeUpdate", err)
 			return
 		}
 	}
@@ -1307,12 +1313,34 @@ type nodeSSHConfigPlan struct {
 	input  repo.NftSSHConfigInput
 }
 
+// nodeSSHConfigError 是节点 SSH 配置校验的定型失败：文案由请求
+// 与既存配置唯一确定，不含仓储原文。调用方以 errors.As 分流后
+// 原样回执（msg 字段访问），仓储故障仍走通用文案。R2-A01：
+// TestNodeUpdateSSH 的定型恢复（「nftables 节点 SSH 密码不能为空」）。
+type nodeSSHConfigError struct {
+	msg string
+}
+
+func (e *nodeSSHConfigError) Error() string { return e.msg }
+
+// respondNodeSSHConfigError 是 SSH 配置校验的调用点分流：定型
+// 校验失败原样回执、仓储故障走通用文案。门禁口径：msg 字段访问
+// 天然沉默，与 kernelVersionGateError 的 errors.As 分流同形。
+func respondNodeSSHConfigError(w http.ResponseWriter, op string, err error) {
+	var nse *nodeSSHConfigError
+	if errors.As(err, &nse) {
+		response.WriteJSON(w, response.ErrDefault(nse.msg))
+		return
+	}
+	respondInternalError(w, op, err)
+}
+
 func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{}, forwardMode string, preserveSecrets bool) (*nodeSSHConfigPlan, error) {
 	if h == nil || h.repo == nil {
-		return nil, errors.New("handler not initialized")
+		return nil, &nodeSSHConfigError{msg: "handler not initialized"}
 	}
 	if nodeID <= 0 {
-		return nil, errors.New("节点ID不能为空")
+		return nil, &nodeSSHConfigError{msg: "节点ID不能为空"}
 	}
 	if forwardMode != "nftables" {
 		return &nodeSSHConfigPlan{delete: true}, nil
@@ -1341,7 +1369,7 @@ func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{},
 	// 报错）明确拒绝，不再静默默认 22；在场但不可解析直接报错。
 	if rawPort, ok := cfgMap["port"]; ok && asString(rawPort) != "" {
 		if _, err := strconv.ParseInt(asString(rawPort), 10, 64); err != nil {
-			return nil, errors.New("nftables 节点 SSH 端口无效")
+			return nil, &nodeSSHConfigError{msg: "nftables 节点 SSH 端口无效"}
 		}
 	}
 	port := asInt(cfgMap["port"], 0)
@@ -1355,7 +1383,8 @@ func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{},
 	if preserveSecrets {
 		existing, err := h.repo.GetNodeSSHConfig(nodeID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return nil, markRepoError(err)
 		}
 		if existing != nil {
 			if host == "" {
@@ -1386,34 +1415,34 @@ func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{},
 	}
 
 	if host == "" || username == "" {
-		return nil, errors.New("nftables 节点 SSH 配置不完整")
+		return nil, &nodeSSHConfigError{msg: "nftables 节点 SSH 配置不完整"}
 	}
 	// 复扫 R-04：SSH host 是拨号目标主机名（runner 以
 	// JoinHostPort(host, sshPort) 拼地址），显式填值此前无任何
 	// 主机名校验；空标签在任何 DNS 下都不可解析，写面即拒。
 	// serverIp 派生分支已由节点地址门覆盖，此处复核无害。
 	if err := validateNoEmptyLabelAddr(host); err != nil {
-		return nil, fmt.Errorf("nftables 节点 SSH 主机名格式无效：%w", err)
+		return nil, &nodeSSHConfigError{msg: fmt.Sprintf("nftables 节点 SSH 主机名格式无效：%s", err.Error())}
 	}
 	if port <= 0 || port > 65535 {
-		return nil, errors.New("nftables 节点 SSH 端口无效")
+		return nil, &nodeSSHConfigError{msg: "nftables 节点 SSH 端口无效"}
 	}
 
 	authType = strings.ToLower(authType)
 	switch authType {
 	case "password":
 		if strings.TrimSpace(password) == "" {
-			return nil, errors.New("nftables 节点 SSH 密码不能为空")
+			return nil, &nodeSSHConfigError{msg: "nftables 节点 SSH 密码不能为空"}
 		}
 		privateKey = ""
 	case "private_key", "":
 		authType = "private_key"
 		if strings.TrimSpace(privateKey) == "" {
-			return nil, errors.New("nftables 节点 SSH 私钥不能为空")
+			return nil, &nodeSSHConfigError{msg: "nftables 节点 SSH 私钥不能为空"}
 		}
 		password = ""
 	default:
-		return nil, errors.New("nftables 节点 SSH 认证方式无效")
+		return nil, &nodeSSHConfigError{msg: "nftables 节点 SSH 认证方式无效"}
 	}
 
 	switch strings.ToLower(sudoMode) {
@@ -1421,7 +1450,7 @@ func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{},
 		sudoMode = "none"
 	case "sudo", "sudo_su":
 	default:
-		return nil, errors.New("nftables 节点 sudo 模式无效")
+		return nil, &nodeSSHConfigError{msg: "nftables 节点 sudo 模式无效"}
 	}
 
 	return &nodeSSHConfigPlan{input: repo.NftSSHConfigInput{
@@ -1476,7 +1505,8 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	// 若守卫随后中止删除，会留下「记录还在、agent 已卸载」。
 	guard, guardErr := h.checkNodeDeleteGuards(id)
 	if guardErr != nil {
-		response.WriteJSON(w, response.Err(-2, guardErr.Error()))
+		// R2-A01：在途占用定型文案原样回（TestR9），其余守卫失败才泛化。
+		respondNodeOpInFlightError(w, "nodeDelete", guardErr)
 		return
 	}
 	// R4-F2-02：守卫已占用的在途登记在本入口兜底释放——正常路径由
@@ -1519,7 +1549,7 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	// 清单随响应回传，不再静默。
 	brokenEntries, soleRoleWarnings, nodeOutcome, err := h.deleteNodeByIDAfterGuardsOutcome(id, guard)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeDelete", err)
 		return
 	}
 	// R5-B5 D14: 节点删除时释放 per-node 锁表条目，避免长期运行后 map 增长。
@@ -1848,12 +1878,19 @@ func buildNodeInstallCommand(version, agentAddr, secret string) string {
 		`g=$(awk '{print $1}' ./install.sh.sha256.alt | tr 'A-F' 'a-f'); case "$g" in ''|*[!0-9a-f]*) continue;; esac; [ "${#g}" = 64 ] || continue; ` +
 		`if [ "$g" != "$a" ]; then echo "❌ 跨线路锚复核失败：install.sh 的校验值经两条不同线路获取的结果不一致，已中止安装（R7-002 第二锚）" >&2; anchor=2; else echo "✅ 跨线路锚复核通过（第二线路: ${q:-直连}）"; anchor=1; fi; break; done; ` +
 		`rm -f ./install.sh.sha256.alt; if [ "$anchor" = 0 ]; then if [ -z "$w" ] || [ "$w" = "$pp" ]; then echo "⚠️ 跨线路锚复核已降级：其他线路均未给出校验值，按单锚继续（R7-002 第二锚）"; else echo "❌ 跨线路锚复核失败：获胜线路为代理（$w）且其他线路均未给出校验值，无法复核校验锚，已中止安装并删除已下载脚本（R7-002 第二锚，FIX-R2-9 分层）" >&2; rm -f ./install.sh ./install.sh.sha256; anchor=2; fi; fi; [ "$anchor" != 2 ]; }`
+	// W8-R-C4ARGV：secret 不许嵌进生成命令串的 argv——旧形态
+	// `./install.sh -a '<addr>' -s '<secret>'` 让密钥在整个安装
+	// 期间驻留进程 argv（ps / /proc/<pid>/cmdline 对本机所有本
+	// 地用户可读）。现改走环境变量：install.sh 已支持
+	// FLMX_NODE_SECRET（-s 保留为兼容回退且优先；env 值读入后
+	// 立即 unset，不随后续子进程扩散）。env 赋值只入子进程环境、
+	// 不入 argv，且 VERSION 赋值同在前缀内、执行语义不变。
 	return `ok=0; w=""; pp="` + panelPrefix + `"; ` +
 		probeStep +
 		fetchStep +
 		verifyStep +
 		corroborateStep +
-		` && chmod +x ./install.sh && VERSION=` + version + ` ./install.sh -a ` + shellQuoteForInstall(agentAddr) + ` -s ` + shellQuoteForInstall(secret)
+		` && chmod +x ./install.sh && FLMX_NODE_SECRET=` + shellQuoteForInstall(secret) + ` VERSION=` + version + ` ./install.sh -a ` + shellQuoteForInstall(agentAddr)
 }
 
 // ---------------------------------------------------------------------
@@ -1988,6 +2025,12 @@ func agentImageRef(version string) string {
 // 宽松权限落盘。addr 在 handler 侧已过格式校验、secret 为库内
 // 取值，与脚本形态同一插值口径。
 //
+// W8-R-C4ARGV：旧形态把 addr/secret 作 printf 的 argv 参数，密钥
+// 在命令执行期间驻留进程 argv（ps 可见）。现改走环境变量：
+// FLMX_AGENT_ADDR/FLMX_AGENT_SECRET 以 `VAR='...' cmd` 前缀形
+// 式只入 sh -c 子进程环境、内层 printf 从环境取值，secret 不再
+// 出现于任何 argv 位置；赋值本身仍经 shellQuoteForInstall 转义。
+//
 // 同一步播种 gost.json（与 install.sh 的初始 {} 对齐）：agent 的
 // 配置加载要求 gost.json 存在，缺失即 Fatal 退出——脚本形态靠
 // install.sh 播种，容器形态若无人播种则新节点容器无限重启、永
@@ -1997,7 +2040,7 @@ func agentImageRef(version string) string {
 func agentConfigWriteStep(agentAddr, secret string) string {
 	dataDir := agentDataDir()
 	return `mkdir -p ` + dataDir +
-		` && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' ` + shellQuoteForInstall(agentAddr) + ` ` + shellQuoteForInstall(secret) + ` > ` + dataDir + `/config.json)` +
+		` && (umask 077; FLMX_AGENT_ADDR=` + shellQuoteForInstall(agentAddr) + ` FLMX_AGENT_SECRET=` + shellQuoteForInstall(secret) + ` sh -c 'printf "{\n  \"addr\": \"%s\",\n  \"secret\": \"%s\"\n}\n" "$FLMX_AGENT_ADDR" "$FLMX_AGENT_SECRET"' > ` + dataDir + `/config.json)` +
 		` && chmod 600 ` + dataDir + `/config.json` +
 		` && { [ -f ` + dataDir + `/gost.json ] || (umask 077; printf '{}\n' > ` + dataDir + `/gost.json); }`
 }
@@ -2125,7 +2168,7 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("请先前往网站配置中设置ip"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeInstall", err)
 		return
 	}
 	// PORT-CLOSURE O-C-01（顺手收口）：面板地址在生成安装命令前须
@@ -2151,6 +2194,21 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	// 据目录不带后缀；同机多面板场景下这会与默认实例撞名，必
 	// 须在回执里告警而不是静默生成（脚本形态不消费实例后缀，
 	// 不在此告警面内）。与下方明文警告合并为同一 warning 字段。
+	warnings := nodeInstallWarnings(mode, agentAddr)
+	if len(warnings) > 0 {
+		response.WriteJSON(w, response.OKWithWarning(cmd, strings.Join(warnings, "；")))
+		return
+	}
+	response.WriteJSON(w, response.OK(cmd))
+}
+
+// nodeInstallWarnings assembles the install-command warnings (F2-22):
+// an invalid FLMX_INSTANCE key (container modes only — the script
+// form does not consume the instance suffix) plus the plaintext
+// ws:// address warning (R7-J-01). Pure, so the merge is
+// unit-testable; the HTTP end-to-end leg needs live GitHub version
+// discovery and is covered by a true-machine grid instead.
+func nodeInstallWarnings(mode, agentAddr string) []string {
 	var warnings []string
 	if mode != nodeInstallModeScript {
 		if raw, invalid := panelInstanceInvalid(); invalid {
@@ -2163,11 +2221,7 @@ func (h *Handler) nodeInstall(w http.ResponseWriter, r *http.Request) {
 	if warning := nodeInstallPlaintextWarning(agentAddr); warning != "" {
 		warnings = append(warnings, warning)
 	}
-	if len(warnings) > 0 {
-		response.WriteJSON(w, response.OKWithWarning(cmd, strings.Join(warnings, "；")))
-		return
-	}
-	response.WriteJSON(w, response.OK(cmd))
+	return warnings
 }
 
 func (h *Handler) nodeUpdateOrder(w http.ResponseWriter, r *http.Request) {
@@ -2234,7 +2288,12 @@ func (h *Handler) nodeDismissExpiryReminder(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := h.repo.UpdateNodeExpiryReminderDismissed(req.ID, 1); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-C04：行不存在时 repo 回哨兵 ErrNodeNotFound（「节点不存在」），原样回执；其余仓储错才泛化。
+		if errors.Is(err, repo.ErrNodeNotFound) {
+			response.WriteJSON(w, response.ErrDefault("节点不存在"))
+			return
+		}
+		respondInternalError(w, "nodeDismissExpiryReminder", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -2395,7 +2454,7 @@ func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.repo.ListNodes()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeCheckStatus", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(items))
@@ -2442,7 +2501,7 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	nameDup, err := h.repo.TunnelNameExists(name)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "tunnelCreate", err)
 		return
 	}
 	if nameDup {
@@ -2530,13 +2589,13 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	// 3) applyTunnelRuntime 在锁外下发运行时。
 	validationTx := h.repo.BeginTx()
 	if validationTx.Error != nil {
-		response.WriteJSON(w, response.Err(-2, validationTx.Error.Error()))
+		respondInternalError(w, "tunnelCreate", validationTx.Error)
 		return
 	}
 	runtimeState, err := h.prepareTunnelCreateState(validationTx, req, typeVal, 0)
 	if err != nil {
 		validationTx.Rollback()
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "tunnelCreate", err)
 		return
 	}
 	runtimeState.IPPreference = ipPreference
@@ -2555,13 +2614,13 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	nftPairs, err := h.collectNftablesSSHConfigsTx(validationTx, entryNodeIDs)
 	if err != nil {
 		validationTx.Rollback()
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "tunnelCreate", err)
 		return
 	}
 	if engine == tunnelEngineRealm {
 		if err := h.validateRealmTunnelTx(validationTx, typeVal, entryNodeIDs); err != nil {
 			validationTx.Rollback()
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			respondInternalError(w, "tunnelCreate", err)
 			return
 		}
 	}
@@ -2587,14 +2646,14 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	tx := h.repo.BeginTx()
 	if tx.Error != nil {
 		releasePortLocks()
-		response.WriteJSON(w, response.Err(-2, tx.Error.Error()))
+		respondInternalError(w, "tunnelCreate", tx.Error)
 		return
 	}
 	runtimeState, err = h.prepareTunnelCreateState(tx, req, typeVal, 0)
 	if err != nil {
 		tx.Rollback()
 		releasePortLocks()
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "tunnelCreate", err)
 		return
 	}
 	runtimeState.IPPreference = ipPreference
@@ -2610,6 +2669,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	if err := h.validateNftablesTunnelStateTx(tx, entryNodeIDs); err != nil {
 		tx.Rollback()
 		releasePortLocks()
+		// R2-F4-01：DB 侧复检的仓储错已标记，先守卫泛化；定型
+		// 业务错（缺少 SSH 配置）保留原文案。
+		if respondInternalIfRepoError(w, "tunnelCreate: validateNftablesTunnelStateTx failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -2617,7 +2681,7 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		if err := h.validateRealmTunnelTx(tx, typeVal, entryNodeIDs); err != nil {
 			tx.Rollback()
 			releasePortLocks()
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			respondInternalError(w, "tunnelCreate", err)
 			return
 		}
 	}
@@ -2661,7 +2725,7 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("隧道名称重复"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "tunnelCreate", err)
 		return
 	}
 	tunnelID := tunnel.ID
@@ -2670,13 +2734,13 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	if err := h.replaceTunnelChainsTx(tx, tunnelID, req); err != nil {
 		tx.Rollback()
 		releasePortLocks()
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "tunnelCreate", err)
 		return
 	}
 	if err := tx.Commit().Error; err != nil {
 		tx.Rollback()
 		releasePortLocks()
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "tunnelCreate", err)
 		return
 	}
 	releasePortLocks()
@@ -2774,11 +2838,17 @@ func (h *Handler) cleanupObsoleteTunnelRuntime(tunnelID int64, oldRows, newRows 
 	}
 	chainName := fmt.Sprintf("chains_%d", tunnelID)
 	for _, nodeID := range removedTunnelRuntimeNodeIDs(oldRows, newRows, tunnelRuntimeNeedsChain) {
-		_, _ = h.sendNodeCommand(nodeID, "DeleteChains", map[string]interface{}{"chain": chainName}, false, true)
+		// W8-R-F203：删除失败不再静默丢弃——点名进日志（节点/
+		// 隧道/链名），否则失势链残留无从发现、无从重对账。
+		if _, err := h.sendNodeCommand(nodeID, "DeleteChains", map[string]interface{}{"chain": chainName}, false, true); err != nil {
+			log.Printf("cleanupObsoleteTunnelRuntime: delete orphaned chain failed node_id=%d tunnel_id=%d chain=%s err=%v", nodeID, tunnelID, chainName, err)
+		}
 	}
 	serviceNames := tunnelRuntimeServiceNames(tunnelID)
 	for _, nodeID := range removedTunnelRuntimeNodeIDs(oldRows, newRows, tunnelRuntimeNeedsService) {
-		_, _ = h.sendNodeCommand(nodeID, "DeleteService", map[string]interface{}{"services": serviceNames}, false, true)
+		if _, err := h.sendNodeCommand(nodeID, "DeleteService", map[string]interface{}{"services": serviceNames}, false, true); err != nil {
+			log.Printf("cleanupObsoleteTunnelRuntime: delete orphaned services failed node_id=%d tunnel_id=%d services=%v err=%v", nodeID, tunnelID, serviceNames, err)
+		}
 	}
 }
 
@@ -2793,7 +2863,7 @@ func (h *Handler) tunnelGet(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.repo.ListTunnels()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "tunnelGet", err)
 		return
 	}
 	h.attachBestExitStates(items)
@@ -2936,7 +3006,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	oldEntryNodeIDs, err := h.tunnelEntryNodeIDs(id)
 	if err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "tunnelUpdate", err)
 		return
 	}
 	// R4X-004：旧值是下方 presence 回填的写回源，必须走不归一化的
@@ -2962,7 +3032,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	oldChainRows, err := h.listChainNodesForTunnel(id)
 	if err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "tunnelUpdate", err)
 		return
 	}
 
@@ -2991,7 +3061,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	if tunnelRenamed {
 		nameDup, dupErr := h.repo.TunnelNameExists(resolvedName)
 		if dupErr != nil {
-			response.WriteJSON(w, response.Err(-2, dupErr.Error()))
+			respondInternalError(w, "tunnelUpdate", dupErr)
 			return
 		}
 		if nameDup {
@@ -3043,7 +3113,8 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// any existing listener or remote binding.
 		validationTx := h.repo.BeginTx()
 		if validationTx.Error != nil {
-			return validationTx.Error, -2
+			// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+			return markRepoError(validationTx.Error), -2
 		}
 		defer validationTx.Rollback()
 		var err error
@@ -3092,7 +3163,8 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		if engine == tunnelEngineRealm && oldTunnel.Engine != tunnelEngineRealm {
 			switchForwards, err := h.repo.ListForwardsByTunnelTx(validationTx, id)
 			if err != nil {
-				return err, -2
+				// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+				return markRepoError(err), -2
 			}
 			if err := validateRealmEngineSwitchForwards(switchForwards); err != nil {
 				return err, 0
@@ -3128,17 +3200,24 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		if err := h.repo.UpdateTunnelTx(validationTx, id, resolvedName, typeVal,
 			resolvedFlow, resolvedRatio, resolvedStatus,
 			inIp, ipPreference, updateProtocol, probeTargetHost, probeTargetPort, now); err != nil {
-			return err, -2
+			// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+			return markRepoError(err), -2
 		}
 		if err := h.validateTunnelChainReplacementTx(validationTx, runtimeState); err != nil {
 			return err, -2
 		}
 		if err := validationTx.Rollback().Error; err != nil {
-			return err, -2
+			// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+			return markRepoError(err), -2
 		}
 		return nil, 0
 	}()
 	if vErr != nil {
+		// R2-F4-01：闭包内仓储错已标记（-2 码道与 0 码道中的仓储
+		// 直通），先守卫泛化；定型业务错（0 码道）保留原文案。
+		if respondInternalIfRepoError(w, "tunnelUpdate: validation failed", vErr) {
+			return
+		}
 		if vCode == -2 {
 			response.WriteJSON(w, response.Err(-2, vErr.Error()))
 		} else {
@@ -3188,7 +3267,8 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := h.validateTunnelRelayExits(id, newExits); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			// R2-A01：落地单出口定型校验原样回（TestR1B3），仓储故障才泛化。
+			respondRelayValidationError(w, "tunnelUpdate", err)
 			return
 		}
 	}
@@ -3200,7 +3280,8 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	if runtimeState != nil {
 		prospective := &tunnelRecord{ID: id, Type: typeVal}
 		if err := h.validateTunnelRelayRemoteAddrComputable(id, prospective, newExits); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			// R2-A01：环回入站定型校验原样回（TestR2B9），仓储故障才泛化。
+			respondRelayValidationError(w, "tunnelUpdate", err)
 			return
 		}
 	}
@@ -3225,7 +3306,8 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		defer release()
 		tx := h.repo.BeginTx()
 		if tx.Error != nil {
-			return tx.Error, -2
+			// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+			return markRepoError(tx.Error), -2
 		}
 		defer func() { tx.Rollback() }()
 
@@ -3249,7 +3331,8 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 			occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, n.NodeID, n.Port, id)
 			if err != nil {
-				return err, -2
+				// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+				return markRepoError(err), -2
 			}
 			if occupied {
 				return fmt.Errorf("节点 %s 端口 %d 已被占用", node.Name, n.Port), 0
@@ -3265,11 +3348,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// 串行化（LockTunnelNameTx，SQLite 下为空操作）。
 		if tunnelRenamed {
 			if lockErr := h.repo.LockTunnelNameTx(tx, resolvedName); lockErr != nil {
-				return lockErr, -2
+				// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+				return markRepoError(lockErr), -2
 			}
 			nameDup, dupErr := h.repo.TunnelNameExistsTx(tx, resolvedName)
 			if dupErr != nil {
-				return dupErr, -2
+				// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+				return markRepoError(dupErr), -2
 			}
 			if nameDup {
 				return errors.New("隧道名称重复"), 0
@@ -3291,14 +3376,17 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			probeTargetPort,
 			now,
 		); err != nil {
-			return err, -2
+			// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+			return markRepoError(err), -2
 		}
 		if err := h.repo.SetTunnelEngineTx(tx, id, engine); err != nil {
-			return err, -2
+			// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+			return markRepoError(err), -2
 		}
 
 		if err := h.repo.DeleteChainTunnelsByTunnelTx(tx, id); err != nil {
-			return err, -2
+			// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+			return markRepoError(err), -2
 		}
 		if err := h.replaceTunnelChainsTx(tx, id, req); err != nil {
 			return err, -2
@@ -3314,11 +3402,17 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := tx.Commit().Error; err != nil {
-			return err, -2
+			// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+			return markRepoError(err), -2
 		}
 		return nil, 0
 	}()
 	if cErr != nil {
+		// R2-F4-01：闭包内仓储错已标记（-2 码道与 0 码道中的仓储
+		// 直通），先守卫泛化；定型业务错（0 码道）保留原文案。
+		if respondInternalIfRepoError(w, "tunnelUpdate: commit failed", cErr) {
+			return
+		}
 		if cCode == -2 {
 			response.WriteJSON(w, response.Err(-2, cErr.Error()))
 		} else {
@@ -3391,7 +3485,8 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// A4-003：切换的数据面硬失败必须让用户可见（与下方引擎未变分支
 		// 返回 syncRealmNodes 错误的口径一致），不再恒报成功。
 		if err := h.switchTunnelEngine(id, tunnelIsRealm(oldTunnel), oldEntryNodeIDs, newEntryNodeIDs); err != nil {
-			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("引擎已切换，但数据面同步失败: %v", err)))
+			log.Printf("tunnelUpdate: switch engine data-plane sync failed tunnel_id=%d err=%v", id, err)
+			response.WriteJSON(w, response.ErrDefault("引擎已切换，但数据面同步失败"))
 			return
 		}
 		respondTunnelUpdateOK()
@@ -3401,7 +3496,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// realm renders whole nodes: re-render the old and new entries
 		// (forward ports, tunnel status).
 		if _, err := h.syncRealmNodes(append(append([]int64{}, oldEntryNodeIDs...), newEntryNodeIDs...), nil); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			respondInternalError(w, "tunnelUpdate", err)
 			return
 		}
 		respondTunnelUpdateOK()
@@ -3672,7 +3767,8 @@ func (h *Handler) validateForwardPortAvailabilityTx(tx *gorm.DB, node *nodeRecor
 	}
 	conflict, err := h.repo.FindOtherForwardOnNodePortTx(tx, node.ID, port, currentForwardID)
 	if err != nil {
-		return err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return markRepoError(err)
 	}
 	if conflict == nil {
 		return nil
@@ -3696,7 +3792,8 @@ func (h *Handler) validateTunnelEntryPortConflictsForNewEntriesTx(tx *gorm.DB, t
 
 	forwards, err := h.repo.ListForwardsByTunnelTx(tx, tunnelID)
 	if err != nil {
-		return err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return markRepoError(err)
 	}
 	if len(forwards) == 0 {
 		return nil
@@ -3709,7 +3806,8 @@ func (h *Handler) validateTunnelEntryPortConflictsForNewEntriesTx(tx *gorm.DB, t
 		}
 		oldPorts, portsErr := h.repo.ListForwardPortsTx(tx, f.ID)
 		if portsErr != nil {
-			return portsErr
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return markRepoError(portsErr)
 		}
 		port := pickForwardPortFromRecords(oldPorts)
 		if port <= 0 {
@@ -3719,7 +3817,8 @@ func (h *Handler) validateTunnelEntryPortConflictsForNewEntriesTx(tx *gorm.DB, t
 		for _, nodeID := range addedNodeIDs {
 			node, nodeErr := h.repo.GetNodeRecordTx(tx, nodeID)
 			if nodeErr != nil {
-				return nodeErr
+				// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+				return markRepoError(nodeErr)
 			}
 
 			if err := h.validateForwardPortAvailabilityTx(tx, node, port, f.ID); err != nil {
@@ -3926,7 +4025,8 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		// 失败返回前以删前收集集按现行 DB 补刷一次白名单（幂等），
 		// 否则回执称「未删除」而已删转发的拨号地址无限驻留 allow。
 		h.refreshInboundWhitelists(affectedInboundIDs)
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-A01：披露错原样回执（TestR19F01 三格），原错只进日志；其余失败才泛化。
+		respondForwardDeleteDisclosureError(w, "tunnelDelete", id, err)
 		return
 	}
 	h.cleanupTunnelRuntime(id)
@@ -3936,9 +4036,9 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		// R19-X-01：注释自认「转发已全删」却只补刷白名单、不披露——
 		// 此处补披露已删转发数与标识（deleted 清单为准），已删项
 		// 不回滚。
-		deleteErr := fmt.Errorf("隧道删除失败：%w；%s；隧道记录仍保留", err, h.formatTunnelDeleteFailureSummary(id, deletedForwards))
 		h.refreshInboundWhitelists(affectedInboundIDs)
-		response.WriteJSON(w, response.Err(-2, deleteErr.Error()))
+		log.Printf("tunnelDelete: delete tunnel row failed tunnel_id=%d err=%v", id, err)
+		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("隧道删除失败：%s；隧道记录仍保留", h.formatTunnelDeleteFailureSummary(id, deletedForwards))))
 		return
 	}
 	// O3-001：删除后刷新受影响入站的白名单。
@@ -3975,11 +4075,15 @@ func (h *Handler) tunnelDiagnose(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	result, err := h.diagnoseTunnelRuntime(ctx, id)
 	if err != nil {
-		if strings.Contains(err.Error(), "不存在") || strings.Contains(err.Error(), "不完整") {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+		if strings.Contains(err.Error(), "不存在") {
+			response.WriteJSON(w, response.ErrDefault("隧道不存在"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		if strings.Contains(err.Error(), "不完整") {
+			response.WriteJSON(w, response.ErrDefault("隧道配置不完整"))
+			return
+		}
+		respondInternalError(w, "tunnelDiagnose", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(result))
@@ -4353,7 +4457,8 @@ func (h *Handler) userTunnelAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.upsertUserTunnel(req); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-A01：幻影 ID 定型文案原样回（TestR2F401AdminRawErrorGeneralized），仓储故障才泛化。
+		respondPhantomIDError(w, "userTunnelAssign", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -4398,28 +4503,36 @@ func (h *Handler) userTunnelBatchAssign(w http.ResponseWriter, r *http.Request) 
 		}
 		outcome, err := h.upsertUserTunnelDB(tx, m)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// R2-A01：与 userTunnelAssign 同口径——幻影 ID 定型文案原样回，仓储故障才泛化。
+			respondPhantomIDError(w, "userTunnelBatchAssign", err)
 			return
 		}
 		outcomes = append(outcomes, outcome)
 	}
 	if err := tx.Commit().Error; err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userTunnelBatchAssign commit", err)
 		return
 	}
 	for _, outcome := range outcomes {
 		if err := h.syncUserTunnelForwards(outcome.userID, outcome.tunnelID); err != nil {
-			var rollbackErrs []string
+			// R2-F4-01：回滚错误是仓储原文——任一回滚失败即泛
+			// 化回执、详情进日志；回滚成功时同步错误再按混合
+			// 口径判（仓储直通泛化、分发失败留原原因文案）。
+			var rollbackErrs []error
 			for i := len(outcomes) - 1; i >= 0; i-- {
 				if rbErr := h.rollbackUserTunnelUpsert(outcomes[i]); rbErr != nil {
-					rollbackErrs = append(rollbackErrs, rbErr.Error())
+					rollbackErrs = append(rollbackErrs, rbErr)
 				}
 			}
 			for _, o := range outcomes {
 				_ = h.syncUserTunnelForwards(o.userID, o.tunnelID)
 			}
 			if len(rollbackErrs) > 0 {
-				response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败且回滚失败: %v; %s", err, strings.Join(rollbackErrs, "; "))))
+				log.Printf("userTunnelBatchAssign: sync failed and rollback failed user_id=%d err=%v rollback=%v", req.UserID, err, rollbackErrs)
+				response.WriteJSON(w, response.Err(-2, "下发失败且回滚失败，请检查面板日志"))
+				return
+			}
+			if respondInternalIfRepoError(w, "userTunnelBatchAssign sync", err) {
 				return
 			}
 			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败，已回滚: %v", err)))
@@ -4442,17 +4555,18 @@ func (h *Handler) userTunnelRemove(w http.ResponseWriter, r *http.Request) {
 	userID, tunnelID, lookupErr := h.repo.GetUserTunnelUserAndTunnel(id)
 	if lookupErr != nil {
 		// R2X-048（V-12 口径）：删除不存在的授权行幂等成功——repo 已把
-		// 未找到归一为 sql.ErrNoRows；其余 lookup 错误仍报错。
+		// 未找到归一为 sql.ErrNoRows；其余 lookup 错误是仓储原文，
+		// R2-F4-01 泛化回执、详情进日志。
 		if errors.Is(lookupErr, sql.ErrNoRows) {
 			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, lookupErr.Error()))
+		respondInternalError(w, "userTunnelRemove lookup", lookupErr)
 		return
 	}
 	h.cleanupForwardsForUserTunnel(userID, tunnelID)
 	if err := h.repo.DeleteUserTunnel(id); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userTunnelRemove delete", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -4476,25 +4590,32 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	speedID := asAnyToInt64Ptr(req["speedId"])
 	speedID, err := h.normalizeSpeedLimitReference(speedID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-F4-01：混合错误出口——仓储直通（normalize 内已标
+		// 记）泛化；限速规则不存在/已停用的定型文案原样回。
+		var sre *speedLimitReferenceError
+		if errors.As(err, &sre) {
+			response.WriteJSON(w, response.Err(-2, sre.msg))
+			return
+		}
+		respondInternalError(w, "userTunnelUpdate speed limit", err)
 		return
 	}
 
 	userID, tunnelID, utErr := h.repo.GetUserTunnelUserAndTunnel(id)
 	if utErr != nil {
-		response.WriteJSON(w, response.Err(-2, utErr.Error()))
+		respondInternalError(w, "userTunnelUpdate lookup", utErr)
 		return
 	}
 
 	_, oldFlow, oldNum, oldExpTime, oldFlowReset, oldSpeedID, oldStatus, oldErr :=
 		h.repo.GetExistingUserTunnel(userID, tunnelID)
 	if oldErr != nil {
-		response.WriteJSON(w, response.Err(-2, oldErr.Error()))
+		respondInternalError(w, "userTunnelUpdate existing", oldErr)
 		return
 	}
 	oldTunnel, oldTunnelErr := h.repo.GetUserTunnelByID(id)
 	if oldTunnelErr != nil {
-		response.WriteJSON(w, response.Err(-2, oldTunnelErr.Error()))
+		respondInternalError(w, "userTunnelUpdate by id", oldTunnelErr)
 		return
 	}
 	if oldTunnel == nil {
@@ -4577,7 +4698,7 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		status,
 		flowMiB,
 	); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userTunnelUpdate update", err)
 		return
 	}
 
@@ -4592,8 +4713,12 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			oldStatus,
 			oldTunnel.FlowMiB,
 		)
+		// R2-F4-01（同族新发现：本函数回滚分支两 Sprintf 与批
+		// 量路径同型）：回滚错误是仓储原文——回滚失败即泛化
+		// 回执、详情进日志；回滚成功时同步错误再按混合口径判。
 		if rollbackErr != nil {
-			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败且回滚失败: %v; 回滚错误: %v", syncErr, rollbackErr)))
+			log.Printf("userTunnelUpdate: sync failed and rollback failed user_id=%d tunnel_id=%d err=%v rollback=%v", userID, tunnelID, syncErr, rollbackErr)
+			response.WriteJSON(w, response.Err(-2, "下发失败且回滚失败，请检查面板日志"))
 			return
 		}
 
@@ -4601,6 +4726,9 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// 后 DB 对本条 UT 的转发集尽力重下发，纠正失败点之前已按
 		// 新口径下发成功的转发；失败不覆写原错误回执。
 		_ = h.syncUserTunnelForwards(userID, tunnelID)
+		if respondInternalIfRepoError(w, "userTunnelUpdate sync", syncErr) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("下发失败，已回滚: %v", syncErr)))
 		return
 	}
@@ -5427,7 +5555,7 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardForceDelete", err)
 		return
 	}
 	if forward == nil {
@@ -5447,7 +5575,7 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 	// R5-B3 D1-001 D7: 先删库（plan 不再含该转发），再 best-effort reconcile；
 	// 节点不可达时规则残留，残留信息进审计日志供人工清理。
 	if err := h.deleteForwardByID(id); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "forwardForceDelete", err)
 		return
 	}
 	h.refreshInboundWhitelists(affectedInboundIDs)
@@ -6446,7 +6574,7 @@ func (h *Handler) speedLimitCreate(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UnixMilli()
 	_, err := h.repo.CreateSpeedLimit(name, speed, now, status)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "speedLimitCreate", err)
 		return
 	}
 
@@ -6475,7 +6603,7 @@ func (h *Handler) speedLimitUpdate(w http.ResponseWriter, r *http.Request) {
 	// 100/1 是创建语义，不在此列。
 	old, err := h.repo.GetSpeedLimit(id)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "speedLimitUpdate", err)
 		return
 	}
 	if old == nil {
@@ -6528,12 +6656,34 @@ func (h *Handler) speedLimitUpdate(w http.ResponseWriter, r *http.Request) {
 	// 本次改值/禁用而变，写后按此集重下发即按新 DB 口径现查现算）。
 	affectedForwardIDs := h.speedLimitAffectedForwardIDs(id)
 
+	// R2-03：禁用前快照引用转发的记录（IPSpeedID 归属在写后重算
+	// 即不可考），与删除面 A1-02 同款，供 resync 后按名补发
+	// DeleteLimiters 清理节点侧条目。
+	affectedForwards := make([]*forwardRecord, 0, len(affectedForwardIDs))
+	for _, forwardID := range affectedForwardIDs {
+		if forward, err := h.getForwardRecord(forwardID); err == nil && forward != nil {
+			affectedForwards = append(affectedForwards, forward)
+		}
+	}
+
 	if err := h.repo.UpdateSpeedLimit(id, name, speed, status, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "speedLimitUpdate", err)
 		return
 	}
 
 	warnings := h.resyncForwardsForSpeedLimit(id, affectedForwardIDs)
+
+	// R2-03：禁用与删除同病——resync 只重推服务（新口径不再含已
+	// 禁用规则的 limiter 名单），节点侧已落盘的 limiter 对象无人
+	// 删；此前仅删除面调 deleteSpeedLimitLimitersOnNodes，禁用面
+	// 在 300s 窗内零 DeleteLimiters（LIVE R2-03 实测：禁用规则 15
+	// 后条目 rule_traffic_limit_96 全程在场、触发链零动作）。新
+	// status==0 时同款清理：幂等、无害（重启用时 resync 重推即
+	// 重建），且对存量孤儿有自愈作用（恒 0 编辑亦触发）；离线节
+	// 点仍留待重连后配置上报对账（cleanNodeConfigs）兜底。
+	if status == 0 {
+		h.deleteSpeedLimitLimitersOnNodes(id, affectedForwards)
+	}
 
 	writeSpeedLimitResyncReceipt(w, warnings)
 }
@@ -6559,7 +6709,7 @@ func (h *Handler) speedLimitDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.DeleteSpeedLimit(id); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "speedLimitDelete", err)
 		return
 	}
 
@@ -6631,11 +6781,12 @@ func (h *Handler) resyncForwardsForSpeedLimit(speedLimitID int64, forwardIDs []i
 	return warnings
 }
 
-// deleteSpeedLimitLimitersOnNodes 是 A1-02 的删规则清理：规则行已删、
-// 引用转发的服务已由 resyncForwardsForSpeedLimit 按新口径重下发（服务
-// 侧 limiter 引用摘除）后，尽力删除各受影响节点上的规则 limiter
-// 条目——规则总速条目（名＝规则 ID）发往每个受影响转发的全部节点；
-// 以本规则作 IP 限速的转发另删其专属条目 rule_traffic_limit_<id>。
+// deleteSpeedLimitLimitersOnNodes 是 A1-02 的删规则清理，亦为
+// R2-03 的禁规则清理：规则行已删（或已禁用）、引用转发的服务已
+// 由 resyncForwardsForSpeedLimit 按新口径重下发（服务侧 limiter
+// 引用摘除）后，尽力删除各受影响节点上的规则 limiter 条目——规
+// 则总速条目（名＝规则 ID）发往每个受影响转发的全部节点；以本
+// 规则作 IP 限速的转发另删其专属条目 rule_traffic_limit_<id>。
 // 规则已无任何存续引用，删除无条件安全；逐节点失败只记日志（尽力
 // 而为纪律同 resync），离线节点留待重连后配置上报对账
 // （cleanNodeConfigs）兜底。同（节点， 名）只发一次。
@@ -6767,7 +6918,8 @@ type tunnelChainNodePort struct {
 func (h *Handler) existingTunnelChainPorts(tx *gorm.DB, tunnelID int64) (map[tunnelChainPortKey]int, map[int64]tunnelChainNodePort, error) {
 	rows, err := h.repo.ListChainNodesForTunnelTx(tx, tunnelID)
 	if err != nil {
-		return nil, nil, err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return nil, nil, markRepoError(err)
 	}
 	ports := make(map[tunnelChainPortKey]int, len(rows))
 	byNode := make(map[int64]tunnelChainNodePort, len(rows))
@@ -6821,7 +6973,8 @@ func (h *Handler) resolveTunnelSegmentPort(tx *gorm.DB, state *tunnelCreateState
 			// not be silent (P01 口径：未沿用存量口的重挑一律回执点名）。
 			port, err := h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
 			if err != nil {
-				return 0, err
+				// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+				return 0, markRepoError(err)
 			}
 			if port != nodePort.port {
 				state.PortChanges = append(state.PortChanges, tunnelPortChange{
@@ -6832,7 +6985,12 @@ func (h *Handler) resolveTunnelSegmentPort(tx *gorm.DB, state *tunnelCreateState
 			return port, nil
 		}
 	}
-	return h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
+	// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+	port, err := h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
+	if err != nil {
+		return 0, markRepoError(err)
+	}
+	return port, nil
 }
 
 // reuseOrRepickTunnelSegmentPort keeps oldPort while it is still legal
@@ -6843,7 +7001,8 @@ func (h *Handler) resolveTunnelSegmentPort(tx *gorm.DB, state *tunnelCreateState
 func (h *Handler) reuseOrRepickTunnelSegmentPort(tx *gorm.DB, state *tunnelCreateState, nodeID int64, chainType int, oldPort int, allocated map[int64]int, excludeTunnelID int64) (int, error) {
 	reusable, err := h.repo.TunnelChainPortReusableTx(tx, nodeID, oldPort, excludeTunnelID)
 	if err != nil {
-		return 0, err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return 0, markRepoError(err)
 	}
 	if reusable {
 		allocated[nodeID] = oldPort
@@ -6851,7 +7010,8 @@ func (h *Handler) reuseOrRepickTunnelSegmentPort(tx *gorm.DB, state *tunnelCreat
 	}
 	port, err := h.repo.PickRandomNodePortTx(tx, nodeID, allocated, excludeTunnelID)
 	if err != nil {
-		return 0, err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return 0, markRepoError(err)
 	}
 	if port != oldPort {
 		state.PortChanges = append(state.PortChanges, tunnelPortChange{
@@ -6881,7 +7041,8 @@ func (h *Handler) detachedSegmentPortConflictError(tx *gorm.DB, nodeID int64, no
 	}
 	source, err := h.repo.NodePortOccupantTx(tx, nodeID, port, excl)
 	if err != nil {
-		return err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return markRepoError(err)
 	}
 	switch source {
 	case repo.PortSourceInbound:
@@ -6969,7 +7130,8 @@ func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interf
 			}
 			occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, nodeID, port, excludeTunnelID)
 			if err != nil {
-				return err
+				// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+				return markRepoError(err)
 			}
 			if occupied {
 				return h.detachedSegmentPortConflictError(tx, nodeID, state.Nodes[nodeID], port, excludeTunnelID)
@@ -7144,7 +7306,8 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		var err error
 		existIDs, err = h.repo.ListTunnelChainNodeIDsTx(tx, excludeTunnelID)
 		if err != nil {
-			return nil, err
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return nil, markRepoError(err)
 		}
 		for _, eid := range existIDs {
 			existingNodeIDs[eid] = struct{}{}
@@ -7163,7 +7326,8 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			if strings.Contains(err.Error(), "不存在") {
 				return nil, errors.New("节点不存在")
 			}
-			return nil, err
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return nil, markRepoError(err)
 		}
 		if node == nil {
 			return nil, errors.New("节点不存在")
@@ -7200,7 +7364,8 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		}
 		occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, n.NodeID, n.Port, excludeTunnelID)
 		if err != nil {
-			return err
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return markRepoError(err)
 		}
 		if occupied {
 			return fmt.Errorf("节点 %s 端口 %d 已被占用", node.Name, n.Port)
@@ -7309,7 +7474,8 @@ func validateTunnelRuntimeBeforeApply(state *tunnelCreateState) error {
 // Exercise known chain write constraints inside the validation transaction.
 func (h *Handler) validateTunnelChainReplacementTx(tx *gorm.DB, state *tunnelCreateState) error {
 	if err := h.repo.DeleteChainTunnelsByTunnelTx(tx, state.TunnelID); err != nil {
-		return err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return markRepoError(err)
 	}
 	groups := append([][]tunnelRuntimeNode{state.InNodes, state.OutNodes}, state.ChainHops...)
 	for groupIndex, group := range groups {
@@ -7321,7 +7487,8 @@ func (h *Handler) validateTunnelChainReplacementTx(tx *gorm.DB, state *tunnelCre
 			port := sql.NullInt64{Int64: int64(node.Port), Valid: node.Port > 0}
 			if err := h.repo.CreateChainTunnelTx(tx, state.TunnelID, strconv.Itoa(node.ChainType),
 				node.NodeID, port, node.Strategy, inx, node.Protocol, node.ConnectIP); err != nil {
-				return err
+				// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+				return markRepoError(err)
 			}
 		}
 	}
@@ -8300,7 +8467,8 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 			defaultString(asString(n["protocol"]), "tls"),
 			"",
 		); err != nil {
-			return err
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return markRepoError(err)
 		}
 	}
 	for i, n := range asMapSlice(req["outNodeId"]) {
@@ -8314,7 +8482,8 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 			var pickErr error
 			port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
 			if pickErr != nil {
-				return pickErr
+				// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+				return markRepoError(pickErr)
 			}
 			portVal = sql.NullInt64{Int64: int64(port), Valid: true}
 		}
@@ -8334,7 +8503,8 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 			defaultString(asString(n["protocol"]), "tls"),
 			connectIp,
 		); err != nil {
-			return err
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return markRepoError(err)
 		}
 	}
 	chainNodes := asAnySlice(req["chainNodes"])
@@ -8350,7 +8520,8 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 				var pickErr error
 				port, pickErr = h.repo.PickRandomNodePortTx(tx, nodeID, allocated, 0)
 				if pickErr != nil {
-					return pickErr
+					// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+					return markRepoError(pickErr)
 				}
 				portVal = sql.NullInt64{Int64: int64(port), Valid: true}
 			}
@@ -8370,7 +8541,8 @@ func (h *Handler) replaceTunnelChainsTx(tx *gorm.DB, tunnelID int64, req map[str
 				defaultString(asString(n["protocol"]), "tls"),
 				connectIp,
 			); err != nil {
-				return err
+				// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+				return markRepoError(err)
 			}
 		}
 	}
@@ -8450,6 +8622,29 @@ func (g *nodeDeleteGuard) releaseUpgradeOp(h *Handler, id int64) {
 // 受影响的他入站（经 ChainTunnel 引用本节点 + 以本节点入站为链式
 // 出站目标，见 inboundIDsAffectedByNodeDelete），级联删后由
 // AfterGuards 统一刷新；单删与 nodeBatchDelete 共用本漏斗同步受益。
+// nodeOpInFlightError 是节点在途操作占用的定型失败：文案由在途
+// 操作名（升级／回退／删除）唯一确定，不含仓储原文。调用方以
+// errors.As 分流后原样回执（msg 字段访问），其余守卫失败（仓储
+// 读错）仍走通用文案。R2-A01：TestR9NodeDeleteBlockedByInFlightUpgradeOp
+// 的定型恢复。
+type nodeOpInFlightError struct {
+	msg string
+}
+
+func (e *nodeOpInFlightError) Error() string { return e.msg }
+
+// respondNodeOpInFlightError 是在途占用守卫的调用点分流：定型
+// 占用文案原样回执、其余守卫失败走通用文案。门禁口径：msg 字段
+// 访问天然沉默，与 kernelVersionGateError 的 errors.As 分流同形。
+func respondNodeOpInFlightError(w http.ResponseWriter, op string, err error) {
+	var nie *nodeOpInFlightError
+	if errors.As(err, &nie) {
+		response.WriteJSON(w, response.ErrDefault(nie.msg))
+		return
+	}
+	respondInternalError(w, op, err)
+}
+
 func (h *Handler) checkNodeDeleteGuards(id int64) (*nodeDeleteGuard, error) {
 	guard, err := h.collectNodeDeleteGuard(id)
 	if err != nil {
@@ -8463,7 +8658,7 @@ func (h *Handler) checkNodeDeleteGuards(id int64) (*nodeDeleteGuard, error) {
 	// 同理由登记被拒并得知在途的是删除。占用由 deleteNodeByID-
 	// AfterGuards 收尾释放（三入口都必经级联段）。
 	if existing, ok := h.tryAcquireNodeUpgradeOp(id, "删除"); !ok {
-		return nil, fmt.Errorf("该节点已有%s操作正在进行，请等待其完成后再试", existing)
+		return nil, &nodeOpInFlightError{msg: fmt.Sprintf("该节点已有%s操作正在进行，请等待其完成后再试", existing)}
 	}
 	guard.holdsUpgradeOp = true
 	return guard, nil
@@ -8718,7 +8913,12 @@ func (h *Handler) batchForwardDelete(ids []int64) (int, int) {
 }
 
 func (h *Handler) tunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {
-	return h.repo.TunnelEntryNodeIDs(tunnelID)
+	// R2-F4-01：纯仓储直通，标记后由调用方守卫泛化。
+	ids, err := h.repo.TunnelEntryNodeIDs(tunnelID)
+	if err != nil {
+		return nil, markRepoError(err)
+	}
+	return ids, nil
 }
 
 // pickTunnelPort 在隧道的全部入口节点上挑一个公共可用端口。
@@ -9019,7 +9219,10 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 	}
 	if syncErr := h.syncUserTunnelForwards(outcome.userID, outcome.tunnelID); syncErr != nil {
 		if rollbackErr := h.rollbackUserTunnelUpsert(outcome); rollbackErr != nil {
-			return fmt.Errorf("下发失败且回滚失败: %v; %w", syncErr, rollbackErr)
+			// R2-F4-01：回滚错误是仓储原文，标记进 %w 链、由调
+			// 用方泛化；同步错误本身可能含仓储直通（已在
+			// syncUserTunnelForwards 标记），同链可判。
+			return fmt.Errorf("下发失败且回滚失败: %v; %w", syncErr, markRepoError(rollbackErr))
 		}
 		// R4X-011（verdicts §3）：逐条下发是首错返回——失败点之前
 		// 的转发已按新 UT 口径下发成功，DB 回滚后必须按回滚后 DB
@@ -9040,6 +9243,37 @@ func (h *Handler) upsertUserTunnel(req map[string]interface{}) error {
 // tx it participates in the caller's transaction (X-P3-22 batch assignment).
 // Data-plane sync is deliberately left to the caller so it never runs
 // inside a transaction.
+// markUserTunnelIDsError 区分 ValidateIDsExist 的两类失败：幻影
+// ID 是定型业务文案（repo.PhantomIDError，Msg 为「用户不存在:
+// [id]」／「隧道不存在: [id]」，原样可回）；DB 故障是仓储原文，
+// 须标记后由调用方泛化。标签口径见 repo validateKindTarget
+// （repository_mutations.go）；R2-F4-01 只泛化仓储失败支、保留
+// 幻影 ID 的定型文案。R2-A01：改类型判别（旧字符串前缀判别见
+// 本函数历史）后门禁可静态区分，调用方以 errors.As 分流。
+func markUserTunnelIDsError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pe *repo.PhantomIDError
+	if errors.As(err, &pe) {
+		return err
+	}
+	return markRepoError(err)
+}
+
+// respondPhantomIDError 是 ValidateIDsExist 幻影 ID 的调用点分流：
+// 幻影（定型文案）原样回执、仓储故障走通用文案。门禁口径：Msg
+// 字段访问天然沉默，与 kernelVersionGateError 的 errors.As 分流
+// 同形。
+func respondPhantomIDError(w http.ResponseWriter, op string, err error) {
+	var pe *repo.PhantomIDError
+	if errors.As(err, &pe) {
+		response.WriteJSON(w, response.ErrDefault(pe.Msg))
+		return
+	}
+	respondInternalError(w, op, err)
+}
+
 func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*userTunnelUpsertOutcome, error) {
 	userID := asInt64(req["userId"], 0)
 	tunnelID := asInt64(req["tunnelId"], 0)
@@ -9052,17 +9286,17 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 	// created (sequential IDs make that a near-future event, not theory).
 	if tx != nil {
 		if err := h.repo.ValidateIDsExistTx(tx, "user", []int64{userID}); err != nil {
-			return nil, err
+			return nil, markUserTunnelIDsError(err)
 		}
 		if err := h.repo.ValidateIDsExistTx(tx, "tunnel", []int64{tunnelID}); err != nil {
-			return nil, err
+			return nil, markUserTunnelIDsError(err)
 		}
 	} else {
 		if err := h.repo.ValidateIDsExist("user", []int64{userID}); err != nil {
-			return nil, err
+			return nil, markUserTunnelIDsError(err)
 		}
 		if err := h.repo.ValidateIDsExist("tunnel", []int64{tunnelID}); err != nil {
-			return nil, err
+			return nil, markUserTunnelIDsError(err)
 		}
 	}
 
@@ -9132,7 +9366,7 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 			// here is a real read error, never a phantom user to paper
 			// over with hard-coded defaults.
 			if uErr != nil {
-				return nil, uErr
+				return nil, markRepoError(uErr)
 			}
 			if reqFlow < 0 {
 				reqFlow = uFlow
@@ -9175,16 +9409,16 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 
 		if tx != nil {
 			if err := h.repo.InsertUserTunnelTx(tx, userID, tunnelID, nullableInt(speedID), reqNum, reqFlow, reqFlowReset, reqExpTime, reqStatus, reqFlowMiB); err != nil {
-				return nil, err
+				return nil, markRepoError(err)
 			}
 		} else if err := h.repo.InsertUserTunnel(userID, tunnelID, nullableInt(speedID), reqNum, reqFlow, reqFlowReset, reqExpTime, reqStatus, reqFlowMiB); err != nil {
-			return nil, err
+			return nil, markRepoError(err)
 		}
 
 		return &userTunnelUpsertOutcome{userID: userID, tunnelID: tunnelID, inserted: true}, nil
 	}
 	if lookupErr != nil {
-		return nil, lookupErr
+		return nil, markRepoError(lookupErr)
 	}
 
 	newFlow := currentFlow
@@ -9195,7 +9429,7 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 		oldTunnel, err = h.repo.GetUserTunnelByID(existingID)
 	}
 	if err != nil {
-		return nil, err
+		return nil, markRepoError(err)
 	}
 	if oldTunnel == nil {
 		return nil, fmt.Errorf("隧道权限不存在")
@@ -9238,10 +9472,10 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 
 	if tx != nil {
 		if err := h.repo.UpdateUserTunnelFieldsTx(tx, existingID, newSpeedID, newFlow, newNum, newExpTime, newFlowReset, newStatus, newFlowMiB); err != nil {
-			return nil, err
+			return nil, markRepoError(err)
 		}
 	} else if err := h.repo.UpdateUserTunnelFields(existingID, newSpeedID, newFlow, newNum, newExpTime, newFlowReset, newStatus, newFlowMiB); err != nil {
-		return nil, err
+		return nil, markRepoError(err)
 	}
 
 	return &userTunnelUpsertOutcome{
@@ -9261,7 +9495,10 @@ func (h *Handler) upsertUserTunnelDB(tx *gorm.DB, req map[string]interface{}) (*
 func (h *Handler) syncUserTunnelForwards(userID, tunnelID int64) error {
 	forwards, err := h.listForwardsByTunnel(tunnelID)
 	if err != nil {
-		return err
+		// R2-F4-01：枚举失败是仓储直通，标记后由调用方泛化；
+		// 分发失败（syncForwardServices）是不带标记的分发错，
+		// 调用方保留原下发原因文案。
+		return markRepoError(err)
 	}
 	for i := range forwards {
 		f := &forwards[i]
@@ -9401,7 +9638,7 @@ func (h *Handler) normalizeSpeedLimitReferenceTx(tx *gorm.DB, speedID *int64) (*
 	}
 	exists, err := h.repo.SpeedLimitExistsTx(tx, *speedID)
 	if err != nil {
-		return nil, err
+		return nil, markRepoError(err)
 	}
 	if exists {
 		return speedID, nil
@@ -9425,16 +9662,23 @@ func (h *Handler) speedLimitReferenceError(id int64) error {
 func (h *Handler) speedLimitReferenceErrorTx(tx *gorm.DB, id int64) error {
 	row, err := h.repo.GetSpeedLimitTx(tx, id)
 	if err != nil {
-		return err
+		return markRepoError(err)
 	}
 	return speedLimitReferenceErrorForRow(id, row)
 }
 
+// speedLimitReferenceError 是限速规则引用的业务拒绝：规则不存在或已停用。
+// 消息由规则状态＋ID 构成、不含仓储错误原文，调用方可原样回执；仓储
+// 错误仍走通用出口（R2-F4-01）。
+type speedLimitReferenceError struct{ msg string }
+
+func (e *speedLimitReferenceError) Error() string { return e.msg }
+
 func speedLimitReferenceErrorForRow(id int64, row *model.SpeedLimit) error {
 	if row == nil {
-		return fmt.Errorf("限速规则不存在（id=%d）", id)
+		return &speedLimitReferenceError{msg: fmt.Sprintf("限速规则不存在（id=%d）", id)}
 	}
-	return fmt.Errorf("限速规则已停用（id=%d）", id)
+	return &speedLimitReferenceError{msg: fmt.Sprintf("限速规则已停用（id=%d）", id)}
 }
 
 func sameSpeedLimitSelection(current sql.NullInt64, requested *int64) bool {

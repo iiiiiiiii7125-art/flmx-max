@@ -388,7 +388,7 @@ func (h *Handler) inboundProbe(w http.ResponseWriter, r *http.Request) {
 	if len(ids) == 0 {
 		rows, err := h.repo.ListNodeInbounds()
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "inboundProbe", err)
 			return
 		}
 		for i := range rows {
@@ -399,7 +399,7 @@ func (h *Handler) inboundProbe(w http.ResponseWriter, r *http.Request) {
 	}
 	results, err := h.probeExternalInbounds(r.Context(), ids, probeRoundTargeted)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundProbe", err)
 		return
 	}
 	out := make(map[string]externalProbe, len(results))

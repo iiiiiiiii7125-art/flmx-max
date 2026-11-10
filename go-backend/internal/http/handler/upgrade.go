@@ -1252,9 +1252,18 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	// 定时重启设置补发：离线期间改过的设置、以及 agent 重装后
 	// 丢失的 systemd timer，都在重连时按面板存量重推一遍（面板
 	// 为权威源，推送幂等）。尽力而为，失败只记日志，下次重连再试。
+	// W8-R-C601：补发结果同样持久化（成功 applied／失败 failed），
+	// 列表行刷新后可见；nftables 节点无 agent 服务、push 返回
+	// (false, nil)，不记结果。
 	go func() {
-		if _, err := h.pushNodeRestartSchedule(nodeID); err != nil {
+		pushed, err := h.pushNodeRestartSchedule(nodeID)
+		if err != nil {
 			log.Printf("node restart schedule re-push failed node_id=%d err=%v", nodeID, err)
+			h.recordRestartPushResult(nodeID, restartPushFailed, err.Error())
+			return
+		}
+		if pushed {
+			h.recordRestartPushResult(nodeID, restartPushApplied, "")
 		}
 	}()
 	if !h.startNodeOnlineRedeploy(nodeID, time.Now()) {

@@ -454,7 +454,7 @@ func (h *Handler) inboundRelayProbe(w http.ResponseWriter, r *http.Request) {
 		// 本页展示的中转入口，不再顺带全量探测无关节点。
 		rows, err := h.repo.ListInboundRelays(0)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "inboundRelayProbe", err)
 			return
 		}
 		want := make(map[int64]bool, len(req.IDs))
@@ -476,7 +476,7 @@ func (h *Handler) inboundRelayProbe(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(entries) > 0 {
 			if _, err := h.probeNodeLatency(r.Context(), entries, probeRoundTargeted); err != nil {
-				response.WriteJSON(w, response.Err(-2, err.Error()))
+				respondInternalError(w, "inboundRelayProbe", err)
 				return
 			}
 		}
@@ -486,7 +486,7 @@ func (h *Handler) inboundRelayProbe(w http.ResponseWriter, r *http.Request) {
 	// prober 内部不再以 len 推断（R3-B-02）。
 	results, err := h.probeRelayLatency(r.Context(), req.IDs, len(req.IDs) == 0)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundRelayProbe", err)
 		return
 	}
 	out := make(map[string]relayLatency, len(results))

@@ -63,7 +63,7 @@ func TestBuildNodeDockerInstallCommand(t *testing.T) {
 	cmd := buildNodeDockerInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", false)
 	for _, want := range []string{
 		"mkdir -p /etc/flmx_agent",
-		`(umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' 'wss://panel.example.com:443' 's3cr3t' > /etc/flmx_agent/config.json)`,
+		`(umask 077; FLMX_AGENT_ADDR='wss://panel.example.com:443' FLMX_AGENT_SECRET='s3cr3t' sh -c 'printf "{\n  \"addr\": \"%s\",\n  \"secret\": \"%s\"\n}\n" "$FLMX_AGENT_ADDR" "$FLMX_AGENT_SECRET"' > /etc/flmx_agent/config.json)`,
 		"chmod 600 /etc/flmx_agent/config.json",
 		"docker rm -f flmx-agent",
 		"docker run -d --name flmx-agent --network host --cap-add NET_ADMIN --restart unless-stopped -v /etc/flmx_agent:/etc/flmx_agent ghcr.io/iiiiiiiii7125-art/flmx-agent:1.9.4",
@@ -135,12 +135,12 @@ func TestBuildNodeDockerComposeInstallCommandPrivileged(t *testing.T) {
 func TestBuildNodeDockerCommandsDefaultInstanceGolden(t *testing.T) {
 	t.Setenv(panelInstanceEnv, "")
 
-	wantDocker := `mkdir -p /etc/flmx_agent && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' 'wss://panel.example.com:443' 's3cr3t' > /etc/flmx_agent/config.json) && chmod 600 /etc/flmx_agent/config.json && { [ -f /etc/flmx_agent/gost.json ] || (umask 077; printf '{}\n' > /etc/flmx_agent/gost.json); } && { docker rm -f flmx-agent >/dev/null 2>&1 || true; } && docker run -d --name flmx-agent --network host --cap-add NET_ADMIN --restart unless-stopped -v /etc/flmx_agent:/etc/flmx_agent ghcr.io/iiiiiiiii7125-art/flmx-agent:1.9.4`
+	wantDocker := `mkdir -p /etc/flmx_agent && (umask 077; FLMX_AGENT_ADDR='wss://panel.example.com:443' FLMX_AGENT_SECRET='s3cr3t' sh -c 'printf "{\n  \"addr\": \"%s\",\n  \"secret\": \"%s\"\n}\n" "$FLMX_AGENT_ADDR" "$FLMX_AGENT_SECRET"' > /etc/flmx_agent/config.json) && chmod 600 /etc/flmx_agent/config.json && { [ -f /etc/flmx_agent/gost.json ] || (umask 077; printf '{}\n' > /etc/flmx_agent/gost.json); } && { docker rm -f flmx-agent >/dev/null 2>&1 || true; } && docker run -d --name flmx-agent --network host --cap-add NET_ADMIN --restart unless-stopped -v /etc/flmx_agent:/etc/flmx_agent ghcr.io/iiiiiiiii7125-art/flmx-agent:1.9.4`
 	if got := buildNodeDockerInstallCommand("1.9.4", "wss://panel.example.com:443", "s3cr3t", false); got != wantDocker {
 		t.Fatalf("default docker command drifted:\n got: %s\nwant: %s", got, wantDocker)
 	}
 
-	wantCompose := `mkdir -p /etc/flmx_agent && (umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"\n}\n' 'wss://panel.example.com:443' 's3cr3t' > /etc/flmx_agent/config.json) && chmod 600 /etc/flmx_agent/config.json && { [ -f /etc/flmx_agent/gost.json ] || (umask 077; printf '{}\n' > /etc/flmx_agent/gost.json); } && mkdir -p /opt/docker/flmx-agent && cat > /opt/docker/flmx-agent/docker-compose.yaml <<'FLMX_AGENT_COMPOSE_EOF' && docker compose -f /opt/docker/flmx-agent/docker-compose.yaml up -d
+	wantCompose := `mkdir -p /etc/flmx_agent && (umask 077; FLMX_AGENT_ADDR='wss://panel.example.com:443' FLMX_AGENT_SECRET='s3cr3t' sh -c 'printf "{\n  \"addr\": \"%s\",\n  \"secret\": \"%s\"\n}\n" "$FLMX_AGENT_ADDR" "$FLMX_AGENT_SECRET"' > /etc/flmx_agent/config.json) && chmod 600 /etc/flmx_agent/config.json && { [ -f /etc/flmx_agent/gost.json ] || (umask 077; printf '{}\n' > /etc/flmx_agent/gost.json); } && mkdir -p /opt/docker/flmx-agent && cat > /opt/docker/flmx-agent/docker-compose.yaml <<'FLMX_AGENT_COMPOSE_EOF' && docker compose -f /opt/docker/flmx-agent/docker-compose.yaml up -d
 services:
   flmx-agent:
     image: ghcr.io/iiiiiiiii7125-art/flmx-agent:1.9.4

@@ -34,6 +34,12 @@ var ErrTunnelNameDuplicate = errors.New("隧道名称重复")
 var ErrForwardNumExceeded = errors.New("转发数量已达上限")
 var ErrUserTunnelForwardNumExceeded = errors.New("该隧道转发数量已达上限")
 
+// ErrNodeNotFound 是节点行不存在的哨兵（R2-C04）：GORM 对不存在的
+// 行 Update 不报错，UpdateNodeExpiryReminderDismissed 在
+// RowsAffected==0 时以此回「节点不存在」，handler 以 errors.Is
+// 分流原样回执、其余仓储错误才走通用文案。
+var ErrNodeNotFound = errors.New("节点不存在")
+
 // R5-B4: 唯一约束冲突检测。
 //
 // 将 DB 层的唯一约束冲突映射为友好错误，避免暴露 SQL 原文。

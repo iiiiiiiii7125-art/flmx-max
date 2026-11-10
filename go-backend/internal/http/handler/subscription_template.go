@@ -179,7 +179,7 @@ func (h *Handler) subscriptionTemplateList(w http.ResponseWriter, r *http.Reques
 	}
 	templates, err := h.repo.ListSubscriptionTemplates()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionTemplateList", err)
 		return
 	}
 	usage := h.templateUsage()
@@ -254,7 +254,7 @@ func (h *Handler) subscriptionTemplateCheck(w http.ResponseWriter, r *http.Reque
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionTemplateCheck", err)
 		return
 	}
 	// Every node, unprocessed, unless a subscription is picked.
@@ -349,7 +349,7 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 		t.LastFetch = now
 	}
 	if err := h.repo.SaveSubscriptionTemplate(t); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionTemplateSave", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(templateView(t, h.templateUsage()[t.ID])))
@@ -373,7 +373,7 @@ func (h *Handler) subscriptionTemplateRefresh(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.refreshTemplate(r.Context(), t); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "subscriptionTemplateRefresh", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(templateView(t, h.templateUsage()[t.ID])))
@@ -396,7 +396,7 @@ func (h *Handler) subscriptionTemplateDelete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := h.repo.DeleteSubscriptionTemplate(req.ID); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionTemplateDelete", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())

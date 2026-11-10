@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -157,6 +158,30 @@ func (h *Handler) validateChain(row model.NodeInbound, kernelType string) error 
 	return h.validateChainVersion(row, kernelType, "")
 }
 
+// chainValidationError 是链式出站校验的定型失败：文案由目标入站
+// 与版本门唯一确定，不含仓储原文。调用方以 errors.As 分流后原
+// 样回执（msg 字段访问），仓储故障仍走通用文案。R2-A01：
+// TestFixA（出站 IP 族冲突）／TestR2B6（ENC 拨号版本门）的定型
+// 恢复。chainEndpoint 的全部返回均为定型（GetNodeByID 错已丢弃），
+// 故 %v 包裹的仍是定型文案。
+type chainValidationError struct {
+	msg string
+}
+
+func (e *chainValidationError) Error() string { return e.msg }
+
+// respondChainValidationError 是链式校验的调用点分流：定型校验
+// 失败原样回执、仓储故障走通用文案。门禁口径：msg 字段访问天然
+// 沉默，与 kernelVersionGateError 的 errors.As 分流同形。
+func respondChainValidationError(w http.ResponseWriter, op string, err error) {
+	var cve *chainValidationError
+	if errors.As(err, &cve) {
+		response.WriteJSON(w, response.ErrDefault(cve.msg))
+		return
+	}
+	respondInternalError(w, op, err)
+}
+
 // validateChainVersion is validateChain with the serving kernel's version,
 // so version-gated targets (e.g. Naive via sing-box needs 1.13+) are
 // judged against the version that will actually run them. An empty
@@ -165,37 +190,38 @@ func (h *Handler) validateChain(row model.NodeInbound, kernelType string) error 
 func (h *Handler) validateChainVersion(row model.NodeInbound, kernelType, kernelVersion string) error {
 	check := func(targetID int64, what string) error {
 		if targetID == row.ID {
-			return fmt.Errorf("%s不能选择自己", what)
+			return &chainValidationError{msg: fmt.Sprintf("%s不能选择自己", what)}
 		}
 		target, err := h.repo.GetNodeInbound(targetID)
 		if err != nil {
-			return err
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return markRepoError(err)
 		}
 		if target == nil {
-			return fmt.Errorf("%s所选的节点不存在", what)
+			return &chainValidationError{msg: fmt.Sprintf("%s所选的节点不存在", what)}
 		}
 		if target.CompanionOf > 0 {
-			return fmt.Errorf("%s不能选择计量伴生入站", what)
+			return &chainValidationError{msg: fmt.Sprintf("%s不能选择计量伴生入站", what)}
 		}
 		if row.ID != 0 && h.chainReaches(target, row.ID) {
-			return fmt.Errorf("%s形成了循环，请检查链路", what)
+			return &chainValidationError{msg: fmt.Sprintf("%s形成了循环，请检查链路", what)}
 		}
 		e, err := h.chainEndpoint(target, row.NodeID)
 		if err != nil {
-			return fmt.Errorf("%s：%v", what, err)
+			return &chainValidationError{msg: fmt.Sprintf("%s：%v", what, err)}
 		}
 		// R2X-007：ENC 拨号侧版本门——目标带 VLESS 加密时，拨号方
 		// Xray 同样需要 25.9.5+（与入站自有门 kernelVersionGate 同口径）。
 		if msg := encDialGate(kernelType, kernelVersion, &e); msg != "" {
-			return fmt.Errorf("%s：%s", what, msg)
+			return &chainValidationError{msg: fmt.Sprintf("%s：%s", what, msg)}
 		}
 		// 出站 IP 策略是入站级的：链式/分流目标若是与策略族冲突的字面
 		// IP，保存期即拒绝（域名放行，由内核按同策略解析，S4）。
 		if err := kernel.ValidateOutboundIPServer(row.OutboundIPStrategy, e.Host); err != nil {
-			return fmt.Errorf("%s：%w", what, err)
+			return &chainValidationError{msg: fmt.Sprintf("%s：%s", what, err.Error())}
 		}
 		if err := kernel.CheckChainWith(kernelType, e, kernel.RenderOptions{SingboxSnell: !versionBelowStrict(kernelVersion, 1, 14), SingboxNaive: !versionBelowStrict(kernelVersion, 1, 13)}); err != nil {
-			return fmt.Errorf("%s：%v", what, err)
+			return &chainValidationError{msg: fmt.Sprintf("%s：%v", what, err)}
 		}
 		return nil
 	}
@@ -327,7 +353,8 @@ func (ix *chainRefIndex) dialerNodeIDs(inboundID int64) []int64 {
 func (h *Handler) chainReferrers(targetID int64) ([]model.NodeInbound, error) {
 	ix, err := h.loadChainRefIndex()
 	if err != nil {
-		return nil, fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targetID, err)
+		// R2-F4-01：索引加载是仓储直通，标记后由调用方守卫泛化。
+		return nil, markRepoError(fmt.Errorf("查询入站 %d 的链式引用方失败: %w", targetID, err))
 	}
 	return ix.referrers(targetID), nil
 }
@@ -618,7 +645,8 @@ func (h *Handler) setInboundRouting(row *model.NodeInbound, kernelType, kernelVe
 	}
 	split, err := kernel.NormalizeSplitRules(rules)
 	if err != nil {
-		return err
+		// R2-A01：分流规则归一化错为定型（kernel 包纯校验），与链式校验同口径回执。
+		return &chainValidationError{msg: err.Error()}
 	}
 	row.OutboundID = outboundID
 	row.SplitRules = ""
@@ -693,7 +721,8 @@ func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
 	}
 	prevTargets := outboundTargets(*row)
 	if err := h.setInboundRouting(row, k.KernelType, k.Version, req.OutboundID, req.SplitRules); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		// R2-A01：与 inboundSave 同口径——链式校验定型失败原样回，仓储故障才泛化。
+		respondChainValidationError(w, "inboundSplitSave", err)
 		return
 	}
 	// F1：已开启订阅计量的入站不能经分流面获得链式出口/分流（伴生不
@@ -705,7 +734,7 @@ func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
 	}
 	row.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.SaveNodeInbound(row); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundSplitSave", err)
 		return
 	}
 	// 路由形态变化直接决定计量资格（ssMeteringWanted），与 inboundSave

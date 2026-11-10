@@ -288,7 +288,7 @@ func (h *Handler) kernelList(w http.ResponseWriter, r *http.Request) {
 
 	views, err := h.kernelViews(req.NodeID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "kernelList", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(views))
@@ -340,16 +340,23 @@ func (h *Handler) kernelViews(nodeID int64) ([]kernelView, error) {
 	return views, nil
 }
 
+// kernelNodeEligible 的业务拒绝是定型文案，调用方可以 errors.Is 区分后
+// 原样回执；仓储错误仍走通用出口（R2-F4-01）。
+var (
+	errKernelNodeNotFound = errors.New("节点不存在")
+	errKernelNodeNftables = errors.New("nftables 模式节点不支持部署内核")
+)
+
 func (h *Handler) kernelNodeEligible(nodeID int64) (*model.Node, error) {
 	node, err := h.repo.GetNodeByID(nodeID)
 	if err != nil {
 		return nil, err
 	}
 	if node == nil {
-		return nil, errors.New("节点不存在")
+		return nil, errKernelNodeNotFound
 	}
 	if isNftablesForwardMode(node.ForwardMode) {
-		return nil, errors.New("nftables 模式节点不支持部署内核")
+		return nil, errKernelNodeNftables
 	}
 	return node, nil
 }
@@ -371,7 +378,15 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.kernelNodeEligible(req.NodeID); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		if errors.Is(err, errKernelNodeNotFound) {
+			response.WriteJSON(w, response.ErrDefault("节点不存在"))
+			return
+		}
+		if errors.Is(err, errKernelNodeNftables) {
+			response.WriteJSON(w, response.ErrDefault("nftables 模式节点不支持部署内核"))
+			return
+		}
+		respondInternalError(w, "kernelInstall", err)
 		return
 	}
 	info, ok := kernel.Lookup(req.KernelType)
@@ -399,14 +414,19 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UnixMilli()
 	k, err := h.repo.GetNodeKernelByType(req.NodeID, info.Type)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "kernelInstall", err)
 		return
 	}
 	if k != nil {
 		// F-021: 换版同样要过入站版本门（AnyTLS/ACME/ENC），不能把存量
 		// 入站降到其最低版本之下再靠下发失败暴露。
 		if err := h.checkKernelVersionGates(k.ID, info.Type, version); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+		var ge *kernelVersionGateError
+		if errors.As(err, &ge) {
+			response.WriteJSON(w, response.ErrDefault(ge.msg))
+			return
+		}
+		respondInternalError(w, "kernelInstall", err)
 			return
 		}
 	}
@@ -449,24 +469,27 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 			UpdatedTime: now,
 		}
 		if err := h.repo.CreateNodeKernel(k); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "kernelInstall", err)
 			return
 		}
 		// R4X-023：并发双到达时 CreateNodeKernel 幂等回读的是胜者行，
 		// 其版本可能与本次请求不同——按存量分支同一口径收敛到请求版本。
+		// F2-01：存量分支只写 version＋updated_time，不动 enabled——
+		// 旧形态无条件写 enabled:1，禁用的内核换版即静默启用，且
+		// 安装最终失败也已启用（副作用与成败无关）。
 		if k.Version != version {
 			if err := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
-				"version": version, "enabled": 1, "updated_time": now,
+				"version": version, "updated_time": now,
 			}); err != nil {
-				response.WriteJSON(w, response.Err(-2, err.Error()))
+				respondInternalError(w, "kernelInstall", err)
 				return
 			}
 			k.Version = version
 		}
 	} else if err := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
-		"version": version, "enabled": 1, "updated_time": now,
+		"version": version, "updated_time": now,
 	}); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "kernelInstall", err)
 		return
 	}
 
@@ -558,7 +581,7 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			enabled = 1
 		}
 		if err := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{"enabled": enabled, "updated_time": now}); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "kernelControl", err)
 			return
 		}
 		if err := h.applyKernel(k.ID, false); err != nil {
@@ -595,7 +618,7 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 		// 清单，不放行查询失败），不得当作无引用继续。
 		brokenReferrers, guardMsg, guardErr := h.kernelChainGuard(k.ID)
 		if guardErr != nil {
-			response.WriteJSON(w, response.Err(-2, guardErr.Error()))
+			respondInternalError(w, "kernelControl", guardErr)
 			return
 		}
 		if guardMsg != "" && !req.Force {
@@ -631,7 +654,7 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			if aerr := h.applyKernel(k.ID, false); aerr != nil {
 				log.Printf("kernel remove: repush after recheck failure kernel_id=%d err=%v", k.ID, aerr)
 			}
-			response.WriteJSON(w, response.Err(-2, recheckErr.Error()))
+			respondInternalError(w, "kernelControl", recheckErr)
 			return
 		}
 		if recheckMsg != "" {
@@ -673,7 +696,7 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 					log.Printf("kernel remove: whitelist repush after failed kernel delete kernel_id=%d err=%v", k.ID, aerr)
 				}
 			}
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "kernelControl", err)
 			return
 		}
 		// FIX-CASCADE（E1-09 子形态 b）：走到这里且 dispatchErr 非
@@ -743,17 +766,17 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundList", err)
 		return
 	}
 	kernels, err := h.repo.ListNodeKernels(0)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundList", err)
 		return
 	}
 	relays, err := h.repo.ListInboundRelays(0)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundList", err)
 		return
 	}
 	// IRL-7: count only relays that can actually carry traffic — the
@@ -1073,13 +1096,21 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		}
 	} else {
 		if _, err := h.kernelNodeEligible(req.NodeID); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+		if errors.Is(err, errKernelNodeNotFound) {
+			response.WriteJSON(w, response.ErrDefault("节点不存在"))
+			return
+		}
+		if errors.Is(err, errKernelNodeNftables) {
+			response.WriteJSON(w, response.ErrDefault("nftables 模式节点不支持部署内核"))
+			return
+		}
+		respondInternalError(w, "inboundSave", err)
 			return
 		}
 		var err error
 		k, err = h.repo.GetNodeKernelByType(req.NodeID, kernel.CanonicalKernelType(req.KernelType))
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "inboundSave", err)
 			return
 		}
 		if k == nil {
@@ -1176,7 +1207,11 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		port, err := h.pickFreeInboundPort(row.NodeID, row.ID)
 		if err != nil {
 			releasePortAlloc()
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			if errors.Is(err, errNoFreeInboundPort) {
+				response.WriteJSON(w, response.ErrDefault("未找到可用端口，请手动指定"))
+				return
+			}
+			respondInternalError(w, "inboundSave", err)
 			return
 		}
 		in.Port = port
@@ -1201,12 +1236,13 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	prevTargets := outboundTargets(row)
 	if err := h.setInboundRouting(&row, k.KernelType, k.Version, req.OutboundID, req.SplitRules); err != nil {
 		releasePortAlloc()
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		// R2-A01：链式校验定型失败原样回（TestFixA／TestR2B6），仓储故障才泛化。
+		respondChainValidationError(w, "inboundSave", err)
 		return
 	}
 	if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
 		releasePortAlloc()
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundSave", err)
 		return
 	} else if msg != "" {
 		releasePortAlloc()
@@ -1334,6 +1370,11 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	if update && (row.ShareHost != prevShareHost || shareMode != prevShareMode || row.Listen != prevListen || row.Port != prevPort) {
 		if err := h.validateReferrerChainPolicies(&row); err != nil {
 			releasePortAlloc()
+			// R2-F4-01：链式引用查询的仓储错已标记，先守卫泛化；
+			// 定型策略冲突文案保留原文案。
+			if respondInternalIfRepoError(w, "inboundSave: validateReferrerChainPolicies failed", err) {
+				return
+			}
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
@@ -1348,7 +1389,7 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// applyChangedTargets 会做网络调用（节点下发），必须无锁执行。
 	releasePortAlloc()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundSave", err)
 		return
 	}
 	// SS 计量：开关/方法/启停变化后立即对账伴生行（对账内部会下发受
@@ -1393,6 +1434,10 @@ func (h *Handler) pickFreeInboundPort(nodeID, excludeInboundID int64) (int, erro
 	})
 }
 
+// errNoFreeInboundPort 是选口耗尽的定型业务错误（范围内全满），调用方
+// 可以 errors.Is 区分后原样回执；冲突查询的仓储错误仍走通用出口。
+var errNoFreeInboundPort = errors.New("未找到可用端口，请手动指定")
+
 // pickFreePortWithFallback 在 [lo, hi) 内选一个无冲突端口。
 // B3-02：此前只有 64 次纯随机试探，高占用时（97.5%）约 20% 概率
 // 假报「未找到可用端口」且每次试探都跑全套冲突查询。现随机试探
@@ -1402,7 +1447,7 @@ func (h *Handler) pickFreeInboundPort(nodeID, excludeInboundID int64) (int, erro
 func pickFreePortWithFallback(lo, hi int, conflict func(port int) (bool, error)) (int, error) {
 	span := hi - lo
 	if span <= 0 {
-		return 0, errors.New("未找到可用端口，请手动指定")
+		return 0, errNoFreeInboundPort
 	}
 	for i := 0; i < 64; i++ {
 		port := lo + rand.Intn(span)
@@ -1425,7 +1470,7 @@ func pickFreePortWithFallback(lo, hi int, conflict func(port int) (bool, error))
 			return port, nil
 		}
 	}
-	return 0, errors.New("未找到可用端口，请手动指定")
+	return 0, errNoFreeInboundPort
 }
 
 // portSpan is a port range an inbound occupies on its node.
@@ -1525,7 +1570,7 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := h.repo.GetNodeInbound(id)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundDelete", err)
 		return
 	}
 	if row == nil {
@@ -1540,6 +1585,11 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 	// R3X-015：守卫查询失败 fail-closed 中止删除，不得当作无引用放行。
 	msg, guardErr := h.chainInUseMessage(row)
 	if guardErr != nil {
+		// R2-F4-01：守卫查询的仓储错已标记，泛化；无引用文案
+		// 本身只在 guardErr == nil 时使用。
+		if respondInternalIfRepoError(w, "inboundDelete: chainInUseMessage failed", guardErr) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, guardErr.Error()))
 		return
 	}
@@ -1556,6 +1606,10 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 	recheckMsg, recheckErr := h.chainInUseMessage(row)
 	if recheckErr != nil {
 		h.refreshInboundWhitelist(id)
+		// R2-F4-01：与上方首检同口径，守卫查询的仓储错泛化。
+		if respondInternalIfRepoError(w, "inboundDelete: chainInUseMessage recheck failed", recheckErr) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, recheckErr.Error()))
 		return
 	}
@@ -1572,7 +1626,7 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		// 本入站 allow 中。outboundTargets 面不受影响：本入站（拨
 		// 号方）尚存、其链式关系未变。
 		h.refreshInboundWhitelist(id)
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundDelete", err)
 		return
 	}
 	// E6-S1 同型补齐：连带删除计量伴生行移至原入站删除成功之后
@@ -1965,7 +2019,7 @@ func (h *Handler) inboundToggle(w http.ResponseWriter, r *http.Request) {
 	row.Enabled = boolToInt(req.Enabled)
 	row.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.SaveNodeInbound(row); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundToggle", err)
 		return
 	}
 	if isExternalInbound(row) {
@@ -1999,7 +2053,7 @@ func (h *Handler) inboundResetTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.ResetNodeInboundTraffic(id, time.Now().UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundResetTraffic", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -2056,7 +2110,7 @@ func (h *Handler) inboundRegenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	row.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.SaveNodeInbound(row); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundRegenerate", err)
 		return
 	}
 	if err := h.applyKernel(k.ID, false); err != nil {
@@ -2698,6 +2752,12 @@ func (h *Handler) inboundRowHasENC(target *model.NodeInbound) bool {
 
 // checkKernelVersionGates refuses a kernel (re)install whose target version
 // would break an existing inbound's version gate（F-021）。
+// kernelVersionGateError 是内核版本门的业务拒绝：消息由入站名＋版本门
+// 文案构成、不含仓储错误原文，调用方可原样回执；仓储错误仍走通用出口。
+type kernelVersionGateError struct{ msg string }
+
+func (e *kernelVersionGateError) Error() string { return e.msg }
+
 func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version string) error {
 	rows, err := h.repo.ListNodeInboundsByKernel(kernelID)
 	if err != nil {
@@ -2709,7 +2769,7 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 			continue
 		}
 		if msg := kernelVersionGate(kernelType, version, &in); msg != "" {
-			return fmt.Errorf("入站 %s 与目标版本不兼容：%s，不能安装 %s", row.Name, msg, version)
+			return &kernelVersionGateError{msg: fmt.Sprintf("入站 %s 与目标版本不兼容：%s，不能安装 %s", row.Name, msg, version)}
 		}
 		// R9X-005：经 Naive 节点出站（链式/分流目标）的入站同样要求
 		// sing-box 1.13+；目标入站不在本内核上，gate 看不到，须单独
@@ -2717,7 +2777,7 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		if kernelType == kernel.TypeSingbox && versionBelowStrict(version, 1, 13) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowIsNaive(t) {
-					return fmt.Errorf("入站 %s 经 Naive 节点 %s 出站，需要 sing-box 1.13 及以上，不能安装 %s", row.Name, t.Name, version)
+					return &kernelVersionGateError{msg: fmt.Sprintf("入站 %s 经 Naive 节点 %s 出站，需要 sing-box 1.13 及以上，不能安装 %s", row.Name, t.Name, version)}
 				}
 			}
 		}
@@ -2727,7 +2787,7 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		if kernelType == kernel.TypeXray && versionBelow3Strict(version, 25, 9, 5) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowHasENC(t) {
-					return fmt.Errorf("入站 %s 经 VLESS 加密节点 %s 出站，需要 Xray 25.9.5 及以上，不能安装 %s", row.Name, t.Name, version)
+					return &kernelVersionGateError{msg: fmt.Sprintf("入站 %s 经 VLESS 加密节点 %s 出站，需要 Xray 25.9.5 及以上，不能安装 %s", row.Name, t.Name, version)}
 				}
 			}
 		}

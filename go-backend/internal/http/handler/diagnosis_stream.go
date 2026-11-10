@@ -131,11 +131,15 @@ func (h *Handler) tunnelDiagnoseStream(w http.ResponseWriter, r *http.Request) {
 
 	tunnelName, tunnelType, workItems, err := h.prepareTunnelDiagnosis(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "不存在") || strings.Contains(err.Error(), "不完整") {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+		if strings.Contains(err.Error(), "不存在") {
+			response.WriteJSON(w, response.ErrDefault("隧道不存在"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		if strings.Contains(err.Error(), "不完整") {
+			response.WriteJSON(w, response.ErrDefault("隧道配置不完整"))
+			return
+		}
+		respondInternalError(w, "tunnelDiagnoseStream", err)
 		return
 	}
 

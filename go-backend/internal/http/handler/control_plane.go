@@ -294,7 +294,12 @@ func (h *Handler) listForwardsByTunnel(tunnelID int64) ([]forwardRecord, error) 
 }
 
 func (h *Handler) listForwardPorts(forwardID int64) ([]forwardPortRecord, error) {
-	return h.repo.ListForwardPorts(forwardID)
+	// R2-F4-01：纯仓储直通，标记后由调用方守卫泛化。
+	ports, err := h.repo.ListForwardPorts(forwardID)
+	if err != nil {
+		return nil, markRepoError(err)
+	}
+	return ports, nil
 }
 
 func (h *Handler) getNodeRecord(nodeID int64) (*nodeRecord, error) {
@@ -1034,7 +1039,8 @@ func (h *Handler) planNftablesForwardDiagnosis(forward *forwardRecord, nodeID in
 	}
 	bindings, err := h.repo.ListNftRuleBindingsByNode(nodeID)
 	if err != nil {
-		return nil, err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return nil, markRepoError(err)
 	}
 	var binding *model.NftRuleBinding
 	for i := range bindings {
@@ -1894,7 +1900,12 @@ func firstPortFromRange(portRange string) int {
 }
 
 func (h *Handler) listChainNodesForTunnel(tunnelID int64) ([]chainNodeRecord, error) {
-	return h.repo.ListChainNodesForTunnel(tunnelID)
+	// R2-F4-01：纯仓储直通，标记后由调用方守卫泛化。
+	rows, err := h.repo.ListChainNodesForTunnel(tunnelID)
+	if err != nil {
+		return nil, markRepoError(err)
+	}
+	return rows, nil
 }
 
 func (h *Handler) tcpPingViaNode(nodeID int64, ip string, port int, options diagnosisExecOptions) (map[string]interface{}, error) {

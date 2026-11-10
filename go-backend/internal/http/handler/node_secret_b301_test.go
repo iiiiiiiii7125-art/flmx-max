@@ -31,23 +31,31 @@ func TestB301SecretCharsetGate(t *testing.T) {
 
 func TestB301InstallCommandsQuoteInterpolants(t *testing.T) {
 	hostile := `a'b;$(touch /tmp/pwned)`
-	// 脚本形态: -a/-s 两插值都必须是转义后的单引号参数形态。
+	// 脚本形态（W8-R-C4ARGV）：-a 插值与 FLMX_NODE_SECRET 环境
+	// 赋值都必须是转义后的单引号形态；secret 不许再走 -s argv。
 	cmd := buildNodeInstallCommand("1.9.9", "wss://panel.example.com:443", hostile)
-	if !strings.Contains(cmd, `-s 'a'\''b;$(touch /tmp/pwned)'`) {
-		t.Fatalf("script-form command must shell-quote the secret, got %q", cmd)
+	if !strings.Contains(cmd, `FLMX_NODE_SECRET='a'\''b;$(touch /tmp/pwned)'`) {
+		t.Fatalf("script-form command must shell-quote the secret in env assignment, got %q", cmd)
+	}
+	if strings.Contains(cmd, " -s ") || strings.Contains(cmd, "-s "+hostile) {
+		t.Fatalf("secret must not travel via -s argv, got %q", cmd)
 	}
 	if strings.Contains(cmd, "-s "+hostile) {
 		t.Fatalf("secret must not appear unquoted, got %q", cmd)
 	}
-	// Docker/Compose 形态共用 agentConfigWriteStep: printf 两参数
-	// 同口径引用。
+	// Docker/Compose 形态共用 agentConfigWriteStep：secret 只许出
+	// 现在 FLMX_AGENT_SECRET 环境赋值里，不许作任何命令的 argv
+	// 参数（旧形态 printf 两参数已改走 sh -c 内层环境取值）。
 	step := agentConfigWriteStep("wss://panel.example.com:443", hostile)
-	if !strings.Contains(step, `'a'\''b;$(touch /tmp/pwned)'`) {
-		t.Fatalf("config write step must shell-quote the secret, got %q", step)
+	if !strings.Contains(step, `FLMX_AGENT_SECRET='a'\''b;$(touch /tmp/pwned)'`) {
+		t.Fatalf("config write step must shell-quote the secret in env assignment, got %q", step)
+	}
+	if strings.Contains(step, `printf '{\n`) {
+		t.Fatalf("config write step must not pass values as printf argv, got %q", step)
 	}
 	dockerCmd := buildNodeDockerInstallCommand("1.9.9", "wss://panel.example.com:443", hostile, false)
-	if !strings.Contains(dockerCmd, `'a'\''b;$(touch /tmp/pwned)'`) {
-		t.Fatalf("docker-form command must shell-quote the secret, got %q", dockerCmd)
+	if !strings.Contains(dockerCmd, `FLMX_AGENT_SECRET='a'\''b;$(touch /tmp/pwned)'`) {
+		t.Fatalf("docker-form command must shell-quote the secret in env assignment, got %q", dockerCmd)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -885,21 +886,21 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 	}
 	subs, err := h.repo.ListSubscriptions()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionList", err)
 		return
 	}
 	if len(subs) == 0 {
 		// Start everyone off with one; deleting it later is the user's call.
 		def, err := h.repo.DefaultSubscription(time.Now().UnixMilli())
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "subscriptionList", err)
 			return
 		}
 		subs = append(subs, *def)
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionList", err)
 		return
 	}
 	// 请求体可选：format 指定 NodeCount 的目标格式口径（A5-02/BC-11）。
@@ -1034,6 +1035,17 @@ func (req *subscriptionRequest) validateDetailed(rows []model.NodeInbound) ([]in
 	return ids, excluded, nil
 }
 
+// subscriptionSourceRefError 是订阅源引用校验的定型失败：文案由
+// 未知源 ID 列表唯一确定，不含仓储原文。调用方以 errors.As 分流
+// 后原样回执（msg 字段访问），仓储故障仍走通用文案。R2-A01：
+// TestR4F1SubscriptionSourceRefIntegrity 的定型恢复（取代此前
+// errText 形态——errText 在本函数外仍用于纯校验面，见 validateDetailed）。
+type subscriptionSourceRefError struct {
+	msg string
+}
+
+func (e *subscriptionSourceRefError) Error() string { return e.msg }
+
 // checkSubscriptionSourceRefs（R4-F1-01）：订阅对订阅源的引用在保存
 // 时验存在——SourceIDs 此前仅过滤正数，未验的幽灵 ID 被计入「至少
 // 选一个」的非空判定后落库、渲染为空且无人知晓。与入站（B10-002
@@ -1046,7 +1058,8 @@ func (h *Handler) checkSubscriptionSourceRefs(req *subscriptionRequest) error {
 	}
 	sources, err := h.repo.ListRemoteSources()
 	if err != nil {
-		return err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return markRepoError(err)
 	}
 	known := make(map[int64]bool, len(sources))
 	for _, s := range sources {
@@ -1061,7 +1074,7 @@ func (h *Handler) checkSubscriptionSourceRefs(req *subscriptionRequest) error {
 		}
 	}
 	if len(unknown) > 0 {
-		return errText(fmt.Sprintf("订阅源不存在: %v", unknown))
+		return &subscriptionSourceRefError{msg: fmt.Sprintf("订阅源不存在: %v", unknown)}
 	}
 	return nil
 }
@@ -1083,7 +1096,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionSave", err)
 		return
 	}
 	ids, excludedCompanions, err := req.validateDetailed(rows)
@@ -1092,7 +1105,13 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.checkSubscriptionSourceRefs(&req); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		// R2-A01：未知订阅源定型文案原样回（TestR4F1），仓储故障才泛化。
+		var sre *subscriptionSourceRefError
+		if errors.As(err, &sre) {
+			response.WriteJSON(w, response.ErrDefault(sre.msg))
+			return
+		}
+		respondInternalError(w, "subscriptionSave", err)
 		return
 	}
 	if err := h.checkPipelineTemplates(req.Options); err != nil {
@@ -1183,7 +1202,7 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 		saveErr = h.repo.SaveSubscription(s)
 	}
 	if saveErr != nil {
-		response.WriteJSON(w, response.Err(-2, saveErr.Error()))
+		respondInternalError(w, "subscriptionSave", saveErr)
 		return
 	}
 	push := before
@@ -1219,7 +1238,7 @@ func (h *Handler) subscriptionDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := h.repo.GetSubscription(id)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionDelete", err)
 		return
 	}
 	if s == nil {
@@ -1234,7 +1253,7 @@ func (h *Handler) subscriptionDelete(w http.ResponseWriter, r *http.Request) {
 	// B4/F-136: 硬删与清分配在同一 repo 事务内完成（旧两步第二步失败
 	// 仅打日志、分配行残留）。
 	if err := h.repo.MarkSubscriptionPendingDelete(id); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionDelete", err)
 		return
 	}
 	s.PendingDelete = 1
@@ -1360,7 +1379,7 @@ func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, applyErr, err := h.rotateSubscriptionCredentials(s)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionReset", err)
 		return
 	}
 	if applyErr != nil {
@@ -1389,7 +1408,7 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 	}
 	now := time.Now()
 	if err := h.repo.ResetSubscriptionTraffic(id, now.UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionResetTraffic", err)
 		return
 	}
 	if h.notifier != nil {
@@ -1440,7 +1459,7 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "subscriptionPreview", err)
 		return
 	}
 	ids, excludedCompanions, err := req.validateDetailed(rows)

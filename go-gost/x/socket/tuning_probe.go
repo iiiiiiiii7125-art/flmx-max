@@ -400,10 +400,14 @@ func probeTuneContext(ctx context.Context, req tuneProbeRequest) (tuneProbeResul
 	// agent's command router fills it from the live WebSocket
 	// connection to the panel (see routeCommand), so the frontend
 	// contract needs no host field. Absent when neither is
-	// available; a failed reference is simply unavailable, it never
-	// changes the suggested line.
-	if strings.TrimSpace(req.ReferenceHost) != "" {
-		if st, err := tuneProbeReferenceRT(strings.TrimSpace(req.ReferenceHost)); err == nil {
+	// available; a failed reference never changes the suggested
+	// line — but the failure itself is named (F2-16), never
+	// swallowed: the common case is validateProbeReferenceHost
+	// rejecting the panel address the agent auto-filled from the
+	// live WebSocket (a private/intranet address), and the
+	// operator previously saw a missing leg with no cause.
+	if host := strings.TrimSpace(req.ReferenceHost); host != "" {
+		if st, err := tuneProbeReferenceRT(host); err == nil {
 			res.PanelRTTSent = st.Sent
 			res.PanelRTTReceived = st.Received
 			if rate, ok := st.lossRate(); ok {
@@ -426,6 +430,13 @@ func probeTuneContext(ctx context.Context, req tuneProbeRequest) (tuneProbeResul
 			if st.Received == 0 {
 				res.Warnings = append(res.Warnings, "参考主机探针整轮无响应（丢包 100%），其延迟与抖动不可测")
 			}
+		} else {
+			// F2-16：参考腿失败不再静默吞掉——与 Leg 1 同口径，
+			// 记日志＋具名 warning（常见因是自动填充的面板地址
+			// 为内网地址、被 validateProbeReferenceHost 拒绝）；
+			// 建议值不受影响。
+			log.Printf("tune probe: reference leg failed for %q: %v", host, err)
+			res.Warnings = append(res.Warnings, fmt.Sprintf("参考主机 %s 探针失败（%v），面板往返延迟腿缺席", host, err))
 		}
 	}
 

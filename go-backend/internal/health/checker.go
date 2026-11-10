@@ -433,11 +433,6 @@ func (c *Checker) checkOnNode(m *model.ServiceMonitor, timeoutSec int, timeout t
 			result.LatencyMs = f
 		}
 	}
-	if v, ok := cmdRes.Data["statusCode"]; ok {
-		if f, ok := v.(float64); ok {
-			result.StatusCode = int(f)
-		}
-	}
 	if v, ok := cmdRes.Data["errorMessage"]; ok {
 		if s, ok := v.(string); ok {
 			result.ErrorMessage = s

@@ -949,7 +949,7 @@ func (h *Handler) nodeList(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.repo.ListNodes()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeList", err)
 		return
 	}
 
@@ -967,7 +967,7 @@ func (h *Handler) tunnelList(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.repo.ListTunnels()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "tunnelList", err)
 		return
 	}
 	h.attachBestExitStates(items)
@@ -1011,7 +1011,7 @@ func (h *Handler) speedLimitList(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.repo.ListSpeedLimits()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "speedLimitList", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(items))
@@ -1295,7 +1295,8 @@ func (h *Handler) userTunnelList(w http.ResponseWriter, r *http.Request) {
 
 	tunnels, err := h.repo.GetUserPackageTunnels(req.UserID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-F4-01：仓储直通原文泛化回执、详情进日志。
+		respondInternalError(w, "userTunnelList", err)
 		return
 	}
 
@@ -1806,9 +1807,16 @@ func (h *Handler) updateConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.invalidateNotifyConfigCache()
+	var latencyDrops []latencyChoiceDrop
 	for _, key := range hooks {
 		h.notifyTunnelQualityConfigChanged(key)
-		h.onLatencyConfigChanged(key, prevPools[key])
+		latencyDrops = append(latencyDrops, h.onLatencyConfigChanged(key, prevPools[key])...)
+	}
+	if len(latencyDrops) > 0 {
+		// F2-17：有节点自选测试点因改名＋改址/删除失效回落全局默认，
+		// 保存回执点名披露，不再静默。
+		response.WriteJSON(w, response.OKWithWarning(nil, latencyChoiceDropWarning(latencyDrops)))
+		return
 	}
 
 	response.WriteJSON(w, response.OKEmpty())
@@ -1873,7 +1881,12 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		h.invalidateNotifyConfigCache()
 		h.notifyTunnelQualityConfigChanged(name)
-		h.onLatencyConfigChanged(name, prevPool)
+		if drops := h.onLatencyConfigChanged(name, prevPool); len(drops) > 0 {
+			// F2-17：有节点自选测试点因改名＋改址/删除失效回落全局默认，
+			// 保存回执点名披露，不再静默。
+			response.WriteJSON(w, response.OKWithWarning(nil, latencyChoiceDropWarning(drops)))
+			return
+		}
 
 		response.WriteJSON(w, response.OKEmpty())
 		return
@@ -1887,7 +1900,11 @@ func (h *Handler) updateSingleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	h.invalidateNotifyConfigCache()
 	h.notifyTunnelQualityConfigChanged(name)
-	h.onLatencyConfigChanged(name, prevPool)
+	if drops := h.onLatencyConfigChanged(name, prevPool); len(drops) > 0 {
+		// F2-17：同上，upsert 分支亦披露。
+		response.WriteJSON(w, response.OKWithWarning(nil, latencyChoiceDropWarning(drops)))
+		return
+	}
 
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -2764,7 +2781,7 @@ func (h *Handler) backupExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "backupExport", err)
 		return
 	}
 
@@ -2919,7 +2936,7 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	defer cancelImport()
 	result, err := h.repo.ImportContext(importCtx, &req.BackupData, req.Types)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", err)))
+		respondInternalError(w, "backupImport", err)
 		return
 	}
 
@@ -3082,7 +3099,7 @@ func (h *Handler) updateAnnouncement(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UnixMilli()
 	if err := h.repo.UpsertAnnouncement(req.Content, req.Enabled, now); err != nil {
-		response.WriteJSON(w, response.Err(-1, fmt.Sprintf("更新公告失败: %v", err)))
+		respondInternalError(w, "updateAnnouncement", err)
 		return
 	}
 

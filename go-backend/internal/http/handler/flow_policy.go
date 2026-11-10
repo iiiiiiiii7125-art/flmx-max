@@ -402,6 +402,56 @@ func (h *Handler) cleanOrphanedServices(nodeID int64, services []namedConfigItem
 	if h == nil || h.repo == nil || nodeID <= 0 {
 		return
 	}
+	// W8-R-F203：隧道仍在不等于本节点仍应承载它——链行变更后被
+	// 移除节点上的同名服务此前永远不会被对账删除（旧谓词只认隧
+	// 道整行消失），旧入口继续监听旧端口分流。以隧道当前运行时
+	// 集判成员（与 deleteOrphanedForwardService 的 B4-03 同形）：
+	// 节点已不在运行时集才删；任一查证失败按存疑保留。运行时集
+	// 按隧道缓存（一次上报内同一隧道只查一次）。
+	runtimeSets := make(map[int64]map[int64]struct{})
+	nodeStillNeedsTunnelService := func(tunnelID int64) bool {
+		set, ok := runtimeSets[tunnelID]
+		if !ok {
+			rows, err := h.listChainNodesForTunnel(tunnelID)
+			if err != nil {
+				log.Printf("cleanOrphanedServices: list tunnel runtime nodes failed node_id=%d tunnel_id=%d err=%v (keeping service)", nodeID, tunnelID, err)
+				return true
+			}
+			set = make(map[int64]struct{})
+			for _, row := range rows {
+				if row.NodeID > 0 && tunnelRuntimeNeedsService(row) {
+					set[row.NodeID] = struct{}{}
+				}
+			}
+			runtimeSets[tunnelID] = set
+		}
+		_, needed := set[nodeID]
+		return needed
+	}
+	// W8-R-F203：tunnelExists 吞掉仓储错误（失败返回 false），旧
+	// 谓词在读失败时 fail-open 误删在役服务。改直读 TunnelExists：
+	// 读失败只记日志、按隧道仍在处理（存疑保留）。
+	tunnelGone := func(tunnelID int64) bool {
+		exists, err := h.repo.TunnelExists(tunnelID)
+		if err != nil {
+			log.Printf("cleanOrphanedServices: check tunnel existence failed node_id=%d tunnel_id=%d err=%v (keeping service)", nodeID, tunnelID, err)
+			return false
+		}
+		return !exists
+	}
+	// W8-R-F203：删除失败不再静默丢弃——点名进日志（节点/隧道/
+	// 服务名），否则失势服务残留无从发现、无从重对账。
+	deleteService := func(tunnelID int64, name string) {
+		if _, err := h.sendNodeCommand(nodeID, "DeleteService", map[string]interface{}{"services": []string{name}}, false, true); err != nil {
+			log.Printf("cleanOrphanedServices: delete orphaned service failed node_id=%d tunnel_id=%d service=%s err=%v", nodeID, tunnelID, name, err)
+		}
+	}
+	tunnelServiceOrphaned := func(tunnelID int64) bool {
+		if tunnelGone(tunnelID) {
+			return true
+		}
+		return !nodeStillNeedsTunnelService(tunnelID)
+	}
 	for _, item := range services {
 		name := strings.TrimSpace(item.Name)
 		if name == "" || name == "web_api" {
@@ -417,8 +467,8 @@ func (h *Handler) cleanOrphanedServices(nodeID int64, services []namedConfigItem
 		parts := strings.Split(name, "_")
 		if len(parts) == 2 && parts[0] == "tunnel" {
 			tunnelID, err := strconv.ParseInt(parts[1], 10, 64)
-			if err == nil && tunnelID > 0 && !h.tunnelExists(tunnelID) {
-				_, _ = h.sendNodeCommand(nodeID, "DeleteService", map[string]interface{}{"services": []string{name}}, false, true)
+			if err == nil && tunnelID > 0 && tunnelServiceOrphaned(tunnelID) {
+				deleteService(tunnelID, name)
 			}
 			continue
 		}
@@ -432,15 +482,15 @@ func (h *Handler) cleanOrphanedServices(nodeID int64, services []namedConfigItem
 		switch suffix {
 		case "tls", "kcp", "wss", "mtls", "mwss", "mtcp":
 			tunnelID, err := strconv.ParseInt(parts[0], 10, 64)
-			if err != nil || tunnelID <= 0 || h.tunnelExists(tunnelID) {
+			if err != nil || tunnelID <= 0 || !tunnelServiceOrphaned(tunnelID) {
 				continue
 			}
-			_, _ = h.sendNodeCommand(nodeID, "DeleteService", map[string]interface{}{"services": []string{name}}, false, true)
+			deleteService(tunnelID, name)
 		case "tcp":
 			if len(parts) < 4 {
 				tunnelID, err := strconv.ParseInt(parts[0], 10, 64)
-				if err == nil && tunnelID > 0 && !h.tunnelExists(tunnelID) {
-					_, _ = h.sendNodeCommand(nodeID, "DeleteService", map[string]interface{}{"services": []string{name}}, false, true)
+				if err == nil && tunnelID > 0 && tunnelServiceOrphaned(tunnelID) {
+					deleteService(tunnelID, name)
 				}
 				continue
 			}
@@ -470,7 +520,10 @@ func (h *Handler) cleanOrphanedChains(nodeID int64, chains []namedConfigItem, in
 		if err != nil || exists {
 			continue
 		}
-		_, _ = h.sendNodeCommand(nodeID, "DeleteChains", map[string]interface{}{"chain": name}, false, true)
+		// W8-R-F203 同族：删除失败点名进日志，不再静默丢弃。
+		if _, err := h.sendNodeCommand(nodeID, "DeleteChains", map[string]interface{}{"chain": name}, false, true); err != nil {
+			log.Printf("cleanOrphanedChains: delete orphaned chain failed node_id=%d tunnel_id=%d chain=%s err=%v", nodeID, tunnelID, name, err)
+		}
 	}
 }
 
@@ -487,7 +540,10 @@ func (h *Handler) cleanOrphanedLimiters(nodeID int64, limiters []namedConfigItem
 		if err != nil || exists {
 			continue
 		}
-		_, _ = h.sendNodeCommand(nodeID, "DeleteLimiters", map[string]interface{}{"limiter": name}, false, true)
+		// W8-R-F203 同族：删除失败点名进日志，不再静默丢弃。
+		if _, err := h.sendNodeCommand(nodeID, "DeleteLimiters", map[string]interface{}{"limiter": name}, false, true); err != nil {
+			log.Printf("cleanOrphanedLimiters: delete orphaned limiter failed node_id=%d limiter=%s err=%v", nodeID, name, err)
+		}
 	}
 }
 
@@ -561,9 +617,12 @@ func (h *Handler) deleteOrphanedForwardService(nodeID int64, serviceName string)
 			return
 		}
 	}
-	_, _ = h.sendNodeCommand(nodeID, "DeleteService", map[string]interface{}{
+	// W8-R-F203 同族：删除失败点名进日志，不再静默丢弃。
+	if _, err := h.sendNodeCommand(nodeID, "DeleteService", map[string]interface{}{
 		"services": buildForwardServiceDeleteNames([]string{base}),
-	}, false, true)
+	}, false, true); err != nil {
+		log.Printf("deleteOrphanedForwardService: delete orphaned forward service failed node_id=%d forward_id=%d service=%s err=%v", nodeID, forwardID, serviceName, err)
+	}
 }
 
 func (h *Handler) speedLimiterExists(name string) bool {

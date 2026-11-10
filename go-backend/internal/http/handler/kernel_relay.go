@@ -111,7 +111,7 @@ func (h *Handler) inboundRelayList(w http.ResponseWriter, r *http.Request) {
 	_ = decodeJSON(r.Body, &req)
 	views, err := h.relayViews(req.InboundID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundRelayList", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(views))
@@ -121,6 +121,28 @@ func (h *Handler) inboundRelayList(w http.ResponseWriter, r *http.Request) {
 // address when a tunnel exits on the landing node itself, otherwise the
 // landing node's public address (port forwards, and tunnels exiting on
 // another node such as an IX hop in front of the landing node).
+// relayValidationError 是中转落地校验的定型失败：文案由请求态
+// （出口集／入站监听地址）唯一确定，不含仓储原文。调用方以
+// errors.As 分流后原样回执（Msg 字段访问），仓储故障仍走通用
+// 文案。R2-A01：TestR1B3／TestR2B9 的定型恢复。
+type relayValidationError struct {
+	msg string
+}
+
+func (e *relayValidationError) Error() string { return e.msg }
+
+// respondRelayValidationError 是中转落地校验的调用点分流：定型
+// 校验失败原样回执、仓储故障走通用文案。门禁口径：msg 字段访问
+// 天然沉默，与 kernelVersionGateError 的 errors.As 分流同形。
+func respondRelayValidationError(w http.ResponseWriter, op string, err error) {
+	var rve *relayValidationError
+	if errors.As(err, &rve) {
+		response.WriteJSON(w, response.ErrDefault(rve.msg))
+		return
+	}
+	respondInternalError(w, op, err)
+}
+
 // validateRelayLandingExitSet enforces relayTarget's landing rule
 // against an explicit exit set: an inbound whose node is among the exits
 // requires that node to be the tunnel's only exit. tunnelUpdate 复跑此
@@ -128,7 +150,7 @@ func (h *Handler) inboundRelayList(w http.ResponseWriter, r *http.Request) {
 func validateRelayLandingExitSet(row *model.NodeInbound, exits []int64) error {
 	for _, id := range exits {
 		if id == row.NodeID && len(exits) > 1 {
-			return errors.New("出口为落地节点的隧道只能有这一个出口节点")
+			return &relayValidationError{msg: "出口为落地节点的隧道只能有这一个出口节点"}
 		}
 	}
 	return nil
@@ -138,7 +160,8 @@ func (h *Handler) relayTarget(row *model.NodeInbound, tunnel *tunnelRecord) (str
 	if tunnel.Type == 2 {
 		exits, err := h.repo.TunnelExitNodeIDs(tunnel.ID)
 		if err != nil {
-			return "", err
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return "", markRepoError(err)
 		}
 		return h.relayTargetWithExits(row, tunnel, exits)
 	}
@@ -170,20 +193,22 @@ func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRec
 			// 先剥离，残值仍畸形则拒收（空值沿旧口径原样进 JoinHostPort）。
 			host = stripShareHostPort(host)
 			if host != "" && !isBareDialHost(host) {
-				return "", fmt.Errorf("入站「%s」的监听地址不正确", row.Name)
+				return "", &relayValidationError{msg: fmt.Sprintf("入站「%s」的监听地址不正确", row.Name)}
 			}
 			return net.JoinHostPort(host, port), nil
 		}
 	}
 
 	if isLoopbackListen(row.Listen) {
-		return "", errors.New("入站只监听本机，只能通过出口为落地节点的隧道转发对接")
+		return "", &relayValidationError{msg: "入站只监听本机，只能通过出口为落地节点的隧道转发对接"}
 	}
 	host := row.Listen
 	if isWildcardListen(host) {
 		node, err := h.repo.GetNodeByID(row.NodeID)
 		if err != nil || node == nil {
-			return "", errors.New("落地节点不存在")
+			// R2-A01：GetNodeByID 错与行缺失同归定型文案（仓储原文
+			// 不进文案，见 relayValidationError）。
+			return "", &relayValidationError{msg: "落地节点不存在"}
 		}
 		host = strings.TrimSpace(node.ServerIP)
 		if v4 := strings.TrimSpace(node.ServerIPV4.String); host == "" && v4 != "" {
@@ -195,7 +220,7 @@ func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRec
 		}
 	}
 	if host == "" {
-		return "", errors.New("落地节点没有可用地址")
+		return "", &relayValidationError{msg: "落地节点没有可用地址"}
 	}
 	// R28-FIX-F01：ServerIP 可含 :port（写侧 IsValidNodeAddress 显式
 	// 放行）；进 JoinHostPort 前须剥离，否则产出不可拨号的
@@ -205,7 +230,7 @@ func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRec
 	// 须拒收，不产出 "[IP:port]:port" 畸形 RemoteAddr。
 	host = stripShareHostPort(host)
 	if !isBareDialHost(host) {
-		return "", fmt.Errorf("入站「%s」的落地节点地址不正确", row.Name)
+		return "", &relayValidationError{msg: fmt.Sprintf("入站「%s」的落地节点地址不正确", row.Name)}
 	}
 	return net.JoinHostPort(host, port), nil
 }
@@ -217,7 +242,8 @@ func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRec
 func (h *Handler) validateTunnelRelayExits(tunnelID int64, exits []int64) error {
 	forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
 	if err != nil {
-		return err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return markRepoError(err)
 	}
 	if len(forwards) == 0 {
 		return nil
@@ -228,7 +254,8 @@ func (h *Handler) validateTunnelRelayExits(tunnelID int64, exits []int64) error 
 	}
 	rels, err := h.repo.ListNodeInboundRelays()
 	if err != nil {
-		return err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return markRepoError(err)
 	}
 	for _, rel := range rels {
 		if _, ok := forwardIDs[rel.ForwardID]; !ok {
@@ -266,7 +293,8 @@ func (h *Handler) recomputedRelayRemoteAddr(forward *forwardRecord, tunnel *tunn
 func (h *Handler) recomputedRelayRemoteAddrWithExits(forward *forwardRecord, tunnel *tunnelRecord, exits []int64) (string, bool, error) {
 	rels, err := h.repo.ListNodeInboundRelays()
 	if err != nil {
-		return "", false, err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return "", false, markRepoError(err)
 	}
 	for _, rel := range rels {
 		if rel.ForwardID != forward.ID || rel.Managed != 1 {
@@ -293,7 +321,8 @@ func (h *Handler) recomputedRelayRemoteAddrWithExits(forward *forwardRecord, tun
 func (h *Handler) validateTunnelRelayRemoteAddrComputable(tunnelID int64, prospective *tunnelRecord, exits []int64) error {
 	forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
 	if err != nil {
-		return err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return markRepoError(err)
 	}
 	for i := range forwards {
 		if _, _, err := h.recomputedRelayRemoteAddrWithExits(&forwards[i], prospective, exits); err != nil {
@@ -465,7 +494,7 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	remoteAddr, err := h.relayTarget(row, tunnel)
 	if err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "inboundRelayCreate", err)
 		return
 	}
 
@@ -479,7 +508,7 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	// 中止创建（与本仓去重门同口径：查不了就不写）。
 	existingRelays, err := h.repo.ListInboundRelays(row.ID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundRelayCreate", err)
 		return
 	}
 	for _, rel := range existingRelays {
@@ -524,7 +553,7 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	forwardID, err := h.createRelayForward(userID, name, tunnel, remoteAddr, req.InPort, ppSend)
 	if err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "inboundRelayCreate", err)
 		return
 	}
 	rel := &model.NodeInboundRelay{
@@ -539,7 +568,7 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		if fwd, ferr := h.getForwardRecord(forwardID); ferr == nil && fwd != nil {
 			_ = h.removeForwardWithServices(fwd)
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundRelayCreate", err)
 		return
 	}
 	h.refreshInboundWhitelist(row.ID)
@@ -684,7 +713,7 @@ func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {
 		// 无条件补刷该入站白名单（按现行 DB 现算，未删部分的刷新
 		// 为同值空转），回执文案不变。
 		h.refreshInboundWhitelist(rel.InboundID)
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "inboundRelayDelete", err)
 		return
 	}
 	h.refreshInboundWhitelist(rel.InboundID)

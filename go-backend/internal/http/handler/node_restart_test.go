@@ -155,3 +155,99 @@ func TestNodeRestartScheduleSetRejects(t *testing.T) {
 		t.Fatalf("rejected writes must not persist: %+v", node)
 	}
 }
+
+// W8-R-C601：下发结果持久化——离线保存记 pending、在线确认记
+// applied，刷新列表行可见；失败只在当次回执带 pushError 的旧
+// 形态不再成立。
+func TestNodeRestartScheduleSetOfflineRecordsPending(t *testing.T) {
+	r, err := repo.Open(filepath.Join(t.TempDir(), "restart-pending.db"))
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	seedRestartNode(t, r, 41, "agent")
+	h := New(r, "test-secret")
+
+	env := postRestartSchedule(t, h, map[string]interface{}{
+		"id": 41, "enabled": 1, "time": "03:30", "jitterMinutes": 45,
+	})
+	if env["code"].(float64) != 0 {
+		t.Fatalf("expected success envelope, got %v", env)
+	}
+	data := env["data"].(map[string]interface{})
+	if data["pushStatus"] != restartPushPending {
+		t.Fatalf("offline save must report pushStatus=pending, got %v", data)
+	}
+	node, err := r.GetNodeByID(41)
+	if err != nil || node == nil {
+		t.Fatalf("reload node: %v", err)
+	}
+	if node.RestartPushStatus != restartPushPending {
+		t.Fatalf("push status not persisted: %q", node.RestartPushStatus)
+	}
+	if node.RestartPushedAt <= 0 {
+		t.Fatalf("push attempt time not persisted: %d", node.RestartPushedAt)
+	}
+	// 列表行透出三字段（前端路 5 呈现半的消费面）。
+	items, err := r.ListNodes()
+	if err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+	var found map[string]interface{}
+	for _, it := range items {
+		if id, _ := it["id"].(int64); id == 41 {
+			found = it
+		}
+	}
+	if found == nil {
+		t.Fatalf("node 41 missing from list")
+	}
+	if found["restartPushStatus"] != restartPushPending {
+		t.Fatalf("list row push status = %v, want pending", found["restartPushStatus"])
+	}
+	if found["restartPushedAt"] == int64(0) || found["restartPushedAt"] == nil {
+		t.Fatalf("list row push time missing: %v", found["restartPushedAt"])
+	}
+}
+
+// W8-R-C601：在线节点保存后 agent 确认，下发结果记 applied 且
+// SetRestartSchedule 命令确已发出。
+func TestNodeRestartScheduleSetOnlineRecordsApplied(t *testing.T) {
+	a := newCleanupAgent(t)
+	env := postRestartSchedule(t, a.h, map[string]interface{}{
+		"id": 1, "enabled": 1, "time": "03:30", "jitterMinutes": 45,
+	})
+	if env["code"].(float64) != 0 {
+		t.Fatalf("expected success envelope, got %v", env)
+	}
+	data := env["data"].(map[string]interface{})
+	if data["pushed"] != true || data["pushStatus"] != restartPushApplied {
+		t.Fatalf("online save must report pushed=true pushStatus=applied, got %v", data)
+	}
+	if cmds := a.commandsOfType("SetRestartSchedule"); len(cmds) == 0 {
+		t.Fatalf("SetRestartSchedule command was never sent")
+	}
+	node, err := a.h.repo.GetNodeByID(1)
+	if err != nil || node == nil {
+		t.Fatalf("reload node: %v", err)
+	}
+	if node.RestartPushStatus != restartPushApplied || node.RestartPushError != "" || node.RestartPushedAt <= 0 {
+		t.Fatalf("applied result not persisted: status=%q err=%q at=%d", node.RestartPushStatus, node.RestartPushError, node.RestartPushedAt)
+	}
+}
+
+// W8-R-C601：确定性失败判据——版本过旧／无 systemd 时重连亦然，
+// 不得承诺自动补发；瞬时失败（超时／离线）不在此列。
+func TestRestartPushDeterministicFailure(t *testing.T) {
+	if !restartPushDeterministicFailure("未知命令类型: SetRestartSchedule") {
+		t.Fatalf("unknown command must be deterministic")
+	}
+	if !restartPushDeterministicFailure("节点无 systemd，定时重启无法持久化（容器形态不支持）") {
+		t.Fatalf("no-systemd must be deterministic")
+	}
+	for _, transient := range []string{"", "节点离线", "命令超时", "connection reset"} {
+		if restartPushDeterministicFailure(transient) {
+			t.Fatalf("transient failure %q must not be deterministic", transient)
+		}
+	}
+}

@@ -780,8 +780,9 @@ func (r *Repository) UpdateNodeExpiryReminderDismissed(nodeID int64, dismissed i
 	if res.RowsAffected == 0 {
 		// B04-002：GORM 对不存在的行 Update 不报错，旧实现据此对
 		// 不存在的节点也报成功。对齐 node/update 口径回「节点不
-		// 存在」（handler 的既有 err 分支会原样透出该文案）。
-		return errors.New("节点不存在")
+		// 存在」（handler 以 errors.Is(ErrNodeNotFound) 分流原样
+		// 透出该文案，见 R2-C04）。
+		return ErrNodeNotFound
 	}
 	return nil
 }
@@ -2244,7 +2245,7 @@ func validateIDsExistTx(tx *gorm.DB, target interface{}, label string, ids []int
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("%s: %v", label, missing)
+		return &PhantomIDError{Msg: fmt.Sprintf("%s: %v", label, missing)}
 	}
 	return nil
 }
@@ -2265,6 +2266,18 @@ func validateKindTarget(kind string) (interface{}, string, error) {
 		return nil, "", fmt.Errorf("unknown existence-check kind %q", kind)
 	}
 }
+
+// PhantomIDError 是 ID 存在性校验的定型失败：引用的对象不存在。
+// Msg 为用户可见的定型文案（「用户不存在: [id]」／「隧道不存在:
+// [id]」／「入站不存在: [id]」／「订阅不存在: [id]」），不含仓储
+// 原文；调用方以 errors.As 分流后原样回执（Msg 字段访问），仓储
+// 故障仍走通用文案。R2-F4-01：与 markUserTunnelIDsError 的旧字
+// 符串前缀判别同语义，改类型判别后门禁可静态区分。
+type PhantomIDError struct {
+	Msg string
+}
+
+func (e *PhantomIDError) Error() string { return e.Msg }
 
 // ValidateIDsExistTx validates referenced IDs of the given kind inside the
 // caller's transaction (R2X-012). Kinds: user, tunnel, inbound,

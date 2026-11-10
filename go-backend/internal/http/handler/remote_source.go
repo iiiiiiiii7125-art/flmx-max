@@ -545,7 +545,7 @@ func (h *Handler) remoteSourceList(w http.ResponseWriter, r *http.Request) {
 	}
 	sources, err := h.repo.ListRemoteSources()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "remoteSourceList", err)
 		return
 	}
 	out := make([]remoteSourceView, 0, len(sources))
@@ -658,7 +658,7 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 	}
 	src.UpdatedTime = now
 	if err := h.repo.SaveRemoteSource(src); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "remoteSourceSave", err)
 		return
 	}
 	if relayOnlyOnlyChange {
@@ -810,7 +810,7 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.KeepNodes {
 		if err := h.repo.DetachSourceInbounds(req.ID); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "remoteSourceDelete", err)
 			return
 		}
 	} else {
@@ -819,7 +819,7 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 		// 查询失败同理中止，不得当作无引用放行。
 		rows, err := h.repo.ListNodeInbounds()
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "remoteSourceDelete", err)
 			return
 		}
 		// X04-001：守卫共用这份已加载快照（旧实现逐行 chainInUseMessage
@@ -841,7 +841,7 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 			}
 			h.removeInboundRelays(row.ID)
 			if err := h.repo.DeleteNodeInbound(row.ID); err != nil {
-				response.WriteJSON(w, response.Err(-2, err.Error()))
+				respondInternalError(w, "remoteSourceDelete", err)
 				return
 			}
 		}
@@ -855,17 +855,17 @@ func (h *Handler) remoteSourceDelete(w http.ResponseWriter, r *http.Request) {
 	// 除这一事实不因节点去向而变）。
 	affectedSubs, err := h.stripRemoteSourceFromSubscriptions(req.ID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "remoteSourceDelete", err)
 		return
 	}
 	// R10-04：删除屏蔽随源删除而清（keepNodes 与连节点删两路同口径）；
 	// 在删源行之前清、失败中止——屏蔽不得比源本身活得久。
 	if err := h.repo.DeleteRemoteSourceShields(req.ID); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "remoteSourceDelete", err)
 		return
 	}
 	if err := h.repo.DeleteRemoteSource(req.ID); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "remoteSourceDelete", err)
 		return
 	}
 	if len(affectedSubs) > 0 {

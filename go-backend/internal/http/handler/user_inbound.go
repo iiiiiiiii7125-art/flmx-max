@@ -111,7 +111,7 @@ func (h *Handler) getUserInbounds(w http.ResponseWriter, r *http.Request) {
 	}
 	assignments, err := h.repo.ListUserInboundAssignments(req.UserID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "getUserInbounds", err)
 		return
 	}
 	type assignment struct {
@@ -152,7 +152,8 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 	// referenced inbounds are validated the same way (the legacy repo
 	// path previously persisted phantom inbound rows verbatim).
 	if err := h.repo.ValidateIDsExist("user", []int64{raw.UserID}); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-A01：幻影 ID 定型文案原样回（「用户不存在: [id]」），仓储故障才泛化。
+		respondPhantomIDError(w, "setUserInbounds", err)
 		return
 	}
 	inboundIDsToCheck := raw.InboundIDs
@@ -169,7 +170,8 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.ValidateIDsExist("inbound", inboundIDsToCheck); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-A01：幻影 ID 定型文案原样回（「入站不存在: [id]」），仓储故障才泛化。
+		respondPhantomIDError(w, "setUserInbounds", err)
 		return
 	}
 	// 计量伴生入站不可分配：分配只认原入站，端点改指在拉取时完成。
@@ -188,13 +190,13 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 		var err error
 		skippedRelays, err = h.repo.SetUserInboundAssignmentsCounted(raw.UserID, assignments)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "setUserInbounds", err)
 			return
 		}
 	} else {
 		// Legacy format: plain inbound IDs (direct only).
 		if err := h.repo.SetUserInbounds(raw.UserID, raw.InboundIDs); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "setUserInbounds", err)
 			return
 		}
 	}

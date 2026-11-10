@@ -580,7 +580,7 @@ func (h *Handler) nodeRouteRespond(w http.ResponseWriter, r *http.Request, probe
 			return
 		}
 		if _, err := h.traceNodeRoutes(r.Context(), []int64{req.ID}, true); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "nodeRouteRespond", err)
 			return
 		}
 	}
