@@ -37,6 +37,11 @@ export interface Node {
     dispatchedAt?: number;
     deadlineAt?: number;
   } | null;
+  /** C4-G2 待卸载登记状态（后端 attachNodeUninstallStates 透出）：
+   * issued/acked/succeeded/failed/unconfirmed；无登记时无字段。
+   * failed/unconfirmed 附 uninstallReason。UI 不许合并成「已删除」。 */
+  uninstallState?: string;
+  uninstallReason?: string;
   http?: number; // 0 关 1 开
   tls?: number; // 0 关 1 开
   socks?: number; // 0 关 1 开

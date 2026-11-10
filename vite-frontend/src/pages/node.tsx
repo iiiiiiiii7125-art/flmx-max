@@ -125,6 +125,7 @@ import {
 import {
   NodeCardRow,
   NodeListRow,
+  NodeUninstallStateChip,
   type NodeRowActions,
 } from "@/pages/node/node-row";
 import { NodeFormModal } from "@/pages/node/node-form-modal";
@@ -2453,6 +2454,16 @@ export default function NodePage({
                   .join(" / ") || node.serverIp.trim(),
               ],
               ["版本", node.version || "未知"],
+              // C4-G2：卸载登记状态行（五态不合并；failed/unconfirmed
+              // 附原因），与列表/卡片芯片同一信源。
+              ...(node.uninstallState
+                ? ([
+                    [
+                      "卸载状态",
+                      <NodeUninstallStateChip key="uninstall" node={node} />,
+                    ],
+                  ] as Array<[string, React.ReactNode]>)
+                : []),
               ...(online && node.systemInfo
                 ? ([["已运行", formatUptime(node.systemInfo.uptime)]] as Array<
                     [string, React.ReactNode]

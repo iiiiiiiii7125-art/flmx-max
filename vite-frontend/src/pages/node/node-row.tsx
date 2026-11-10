@@ -197,6 +197,55 @@ function NodeUpgradeVerificationLine({ node }: { node: Node }) {
   return null;
 }
 
+/** C4-G2 四态呈现：卸载登记状态芯片（五态不合并）。后端
+ * attachNodeUninstallStates 透出 uninstallState/uninstallReason，
+ * 无登记的行不渲染。failed/unconfirmed 的原因文案常驻呈现。 */
+const UNINSTALL_STATE_META: Record<
+  string,
+  { label: string; color: "warning" | "success" | "danger" }
+> = {
+  issued: { label: "卸载已下发", color: "warning" },
+  acked: { label: "卸载执行中", color: "warning" },
+  succeeded: { label: "卸载已完成", color: "success" },
+  failed: { label: "卸载失败", color: "danger" },
+  unconfirmed: { label: "卸载结果未确认", color: "danger" },
+};
+
+export function NodeUninstallStateChip({ node }: { node: Node }) {
+  if (!node.uninstallState) return null;
+  const meta = UNINSTALL_STATE_META[node.uninstallState] ?? {
+    label: `卸载状态：${node.uninstallState}`,
+    color: "warning" as const,
+  };
+  const reason = node.uninstallReason?.trim();
+  const showReason =
+    reason &&
+    (node.uninstallState === "failed" ||
+      node.uninstallState === "unconfirmed");
+
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <Chip
+        className="shrink-0 whitespace-nowrap"
+        color={meta.color}
+        size="sm"
+        title={reason || meta.label}
+        variant="flat"
+      >
+        {meta.label}
+      </Chip>
+      {showReason && (
+        <span
+          className="min-w-0 truncate text-xs font-semibold text-danger-700"
+          title={reason}
+        >
+          {reason}
+        </span>
+      )}
+    </span>
+  );
+}
+
 const NodeCardContent = memo(function NodeCardContent({
   node,
   actions,
@@ -279,6 +328,8 @@ const NodeCardContent = memo(function NodeCardContent({
                   />
                   {connectionStatusMeta.text}
                 </div>
+                {/* C4-G2：卸载登记状态芯片（五态不合并），与在线状态并列。 */}
+                <NodeUninstallStateChip node={node} />
               </div>
             </div>
           </div>
@@ -676,6 +727,8 @@ const NodeListContent = memo(function NodeListContent({
               {expiryMeta.label}
             </Chip>
           )}
+          {/* C4-G2：卸载登记状态芯片（五态不合并），与到期芯片并列。 */}
+          <NodeUninstallStateChip node={node} />
         </>
       }
       footer={

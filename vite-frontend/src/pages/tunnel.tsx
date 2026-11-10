@@ -373,6 +373,10 @@ const mapTunnelApiItems = (items: any[]): Tunnel[] => {
 export default function TunnelPage() {
   const [loading, setLoading] = useState(true);
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
+  // IRL-3：初载失败常驻标记（失败不装空）。隧道列表失败时空状态改判；
+  // 节点列表失败时横幅点名（行节点名/新建表单节点选项可能不完整）。
+  const [tunnelsLoadFailed, setTunnelsLoadFailed] = useState(false);
+  const [nodesLoadFailed, setNodesLoadFailed] = useState(false);
   const [tunnelOrder, setTunnelOrder] = useState<number[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
@@ -541,11 +545,17 @@ export default function TunnelPage() {
         const tunnelsRes = await getTunnelList();
 
         if (tunnelsRes.code === 0) {
+          // IRL-3 同族：任一次成功加载清失败标记。
+          setTunnelsLoadFailed(false);
           applyTunnelList(mapTunnelApiItems(tunnelsRes.data || []));
         } else {
+          // IRL-3：初载失败不得落到「暂无隧道配置」假空——置位后
+          // 页级横幅与空状态改判（失败不装空），已有数据时不清空。
+          setTunnelsLoadFailed(true);
           toast.error(tunnelsRes.msg || "获取隧道列表失败");
         }
       } catch {
+        setTunnelsLoadFailed(true);
         toast.error("获取隧道列表失败");
       } finally {
         if (withLoading) {
@@ -561,9 +571,16 @@ export default function TunnelPage() {
       const nodesRes = await getNodeList();
 
       if (nodesRes.code === 0) {
+        setNodesLoadFailed(false);
         setNodes(nodesRes.data || []);
+      } else {
+        // 节点列表供隧道行节点名与新建表单选项：失败不静默，页级
+        // 横幅点名该路（不清空已有节点名）。
+        setNodesLoadFailed(true);
       }
-    } catch {}
+    } catch {
+      setNodesLoadFailed(true);
+    }
   }, []);
 
   // 加载所有数据
@@ -2045,6 +2062,25 @@ export default function TunnelPage() {
         </div>
       )}
 
+      {/* IRL-3：初载失败常驻横幅（失败不装空），点名失败的是哪一路，附重试入口。 */}
+      {(tunnelsLoadFailed || nodesLoadFailed) && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-danger-50 px-3 py-2">
+          <p className="text-xs font-semibold text-danger-700">
+            {tunnelsLoadFailed
+              ? "隧道列表加载失败，页面显示的可能是空或不完整数据，不是真实状态。"
+              : "节点列表加载失败，隧道行节点名与新建表单节点选项可能不完整。"}
+          </p>
+          <Button
+            color="danger"
+            size="sm"
+            variant="flat"
+            onPress={() => loadData()}
+          >
+            重新加载
+          </Button>
+        </div>
+      )}
+
       {/* 隧道卡片网格 */}
       {tunnels.length > 0 ? (
         sortedTunnels.length === 0 ? (
@@ -2550,15 +2586,27 @@ export default function TunnelPage() {
           </DndContext>
         )
       ) : (
-        /* 空状态 */
+        /* 空状态：失败与真空分开呈现（IRL-3） */
         <Card>
-          <CardBody className="text-center py-20 flex flex-col items-center justify-center min-h-[240px]">
+          <CardBody className="text-center py-20 flex flex-col items-center justify-center gap-3 min-h-[240px]">
             <h3 className="text-xl font-medium text-foreground tracking-tight mb-2">
-              暂无隧道配置
+              {tunnelsLoadFailed ? "隧道列表加载失败" : "暂无隧道配置"}
             </h3>
             <p className="text-foreground text-sm max-w-xs mx-auto leading-relaxed">
-              还没有创建任何隧道配置，点击上方按钮开始创建
+              {tunnelsLoadFailed
+                ? "没能从面板取到隧道列表，不能据此判断是否已有隧道；请点下方「重新加载」重试。"
+                : "还没有创建任何隧道配置，点击上方按钮开始创建"}
             </p>
+            {tunnelsLoadFailed && (
+              <Button
+                color="danger"
+                size="sm"
+                variant="flat"
+                onPress={() => loadData()}
+              >
+                重新加载
+              </Button>
+            )}
           </CardBody>
         </Card>
       )}
