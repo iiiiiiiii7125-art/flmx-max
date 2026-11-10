@@ -1508,6 +1508,8 @@ export interface NodeSwapSetResult {
   before: { totalMB: number; usedMB: number };
   after: { totalMB: number; usedMB: number };
   sizeGB: number;
+  /** 非致命残留提示（如旧 swap 备份文件删除失败）：执行已成功，逐条以 ⚠️ toast 呈现。 */
+  warnings?: string[];
 }
 export const setNodeSwap = (data: { nodeId: number; sizeGB: number }) =>
   Network.post<NodeSwapSetResult>("/node/swap-set", data, {

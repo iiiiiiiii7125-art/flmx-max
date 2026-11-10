@@ -153,6 +153,11 @@ export function SwapModal({
           : prev,
       );
       toast.success(`已设置 Swap 为 ${res.data.sizeGB} GB`);
+      // 回执 warnings 是非致命残留提示（现仅旧 swap 备份删除失败一源）：逐条
+      // 按全仓 envelope warning 形态追加 ⚠️ toast，不许只报成功吞掉。
+      for (const warning of res.data.warnings ?? []) {
+        toast(warning, { icon: "⚠️", duration: 12000 });
+      }
     } catch {
       setExecError("执行失败：与面板的连接中断，请重试");
     } finally {
