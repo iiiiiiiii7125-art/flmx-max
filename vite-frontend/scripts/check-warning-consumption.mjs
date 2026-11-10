@@ -28,6 +28,15 @@
 // 提取前先词法剥注释（与 check-route-lists 同实现）：注释掉的生产者
 // 或 .warning 读不得算数。
 //
+// 近处读断言（REGISTRY 循环内 ④）自 R3-MG-02 起绑接收变量名：旧
+// 断言只验「窗内存在任一 .warning 读」，同窗异变量读可掩盖真消费
+// 被删（mech-gates 变异 M-A 实证：删 forward.tsx deleteForward 的
+// res.warning 块门仍绿）。现由共用函数 extractReceiverVar 提取每
+// 次调用的接收变量（直形/三元/跨行三式），读判定改绑该变量名；
+// 提取不到的回退点必须逐点登记于 UNBOUND_FALLBACK_REGISTRY 并在
+// 断言标签带 unbound-fallback 字样，未登记回退与登记失效（形态
+// 已被提取覆盖）均判红。
+//
 // 注意：data 通道内的 warning（即 data.warning）不是信封字段、
 // 不经 OKWithWarning，不在本门普查内。
 //
@@ -390,6 +399,61 @@ const callerSrc = new Map(
   ]),
 );
 
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// extractReceiverVar（④ 近处读与 ⑤ GAP 反向断言共用，R3-MG-02）：
+// 从调用点所在语句提取 `const <var> = [await] fn(...)` 的接收变量
+// <var>。覆盖三式：
+//   (1) 同行直形：const res = await fn( —— 调用行前缀直接匹配；
+//   (2) 同行三元中段：const res = cond ? await fn( —— 前缀含三元
+//       中段，按 `= … await$` 宽式匹配取声明名；
+//   (3) 跨行赋值：声明起始行在调用行上方至多 3 行内（声明与调用
+//       之间不得有 ; 收束上一语句），拼合前缀后按 (1)(2) 同式
+//       匹配——updateNode 的 `const res = isEdit` 换行 `? await
+//       updateNode(` 即此形。
+// 三式皆不中返回 null：调用方回退任一 .warning 读判定，但回退点
+// 必须逐点登记进 UNBOUND_FALLBACK_REGISTRY（见下），不许静默。
+const extractReceiverVar = (lines, lineNo, apiFn) => {
+  const line = lines[lineNo];
+  const at = line.indexOf(apiFn);
+
+  if (at < 0) return null;
+  const prefix = line.slice(0, at);
+  const directRe =
+    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s*)?$/;
+  const ternaryRe =
+    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=[\s\S]*(?:await\s*)$/;
+  const same = directRe.exec(prefix) ?? ternaryRe.exec(prefix);
+
+  if (same) return same[1];
+
+  for (let up = 1; up <= 3 && lineNo - up >= 0; up++) {
+    const joined = [...lines.slice(lineNo - up, lineNo), prefix].join("\n");
+    const m = directRe.exec(joined) ?? ternaryRe.exec(joined);
+
+    if (!m) continue;
+    // 声明起始之后、调用之前的文本若出现 ; ，说明该声明语句已在
+    // 本调用之前收束（声明属上一条语句），此候选作废。
+    const declHead = /(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=/.exec(joined);
+    const afterDecl = joined.slice(declHead.index + declHead[0].length);
+
+    if (!afterDecl.includes(";")) return m[1];
+  }
+
+  return null;
+};
+
+// UNBOUND_FALLBACK_REGISTRY：extractReceiverVar 三式仍提取不到接收
+// 变量的调用点逐点登记（file 为 src 相对路径、line 为调用点行号、
+// reason 写明形态与为何不扩提取式）。登记条目与实际回退点双向对
+// 账：实际回退未登记即红，登记条目已无对应回退（形态已被提取覆
+// 盖）同样即红，须摘除登记（与端口哨兵反向检查同纪律）。终树现
+// 行 16 个调用点三式全覆盖，本册应为空。
+const UNBOUND_FALLBACK_REGISTRY = [];
+
+// ④ 循环内收集的实际回退点（"src/...:line"），循环后汇总对账。
+const unboundFallbackSites = [];
+
 for (const entry of REGISTRY) {
   // ② 接线：API 函数定义体内含端点串
   const defAt = apiSrc.search(
@@ -435,12 +499,21 @@ for (const entry of REGISTRY) {
     `实际调用文件: ${callers.join(", ") || "无"}`,
   );
 
-  // ④ 近处读：文件级 .warning 存在不等于本次调用读了——同一文件调
-  //    两个登记 API 时，只读其一的调用点会被文件级检查漏放（W8 实
-  //    证：node.tsx 调 deleteNode 与 getNodeInstallCommand，文件级
-  //    有 .warning 而 deleteNode 调用点实未读）。故每次调用点之后
-  //    60 行内必须出现一次 .warning 读（现行六处调用点最远 13 行，
-  //    窗口留足余量；超窗的正当写法须重构到调用附近或带理由调窗）。
+  // ④ 近处读（绑接收变量名，R3-MG-02）：文件级 .warning 存在不等
+  //    于本次调用读了——同一文件调两个登记 API 时，只读其一的调用
+  //    点会被文件级检查漏放（W8 实证：node.tsx 调 deleteNode 与
+  //    getNodeInstallCommand，文件级有 .warning 而 deleteNode 调
+  //    用点实未读）。再进一步，窗内任一 .warning 读也不等于本次
+  //    回执的读：同窗异变量读可掩盖真消费被删（mech-gates 变异
+  //    M-A 实证：forward.tsx 删 deleteForward 的 res.warning 块
+  //    后，43 行外 forceDeleteForward 的 forceRes.warning 读仍使
+  //    旧断言 PASS）。故每次调用点之后 60 行内必须出现对「本次调
+  //    用接收变量」的 .warning 读——变量名由 extractReceiverVar
+  //    提取（直形/三元/跨行三式，与 ⑤ 共用）；提取不到的调用点
+  //    回退任一读判定，其回退事实记入 unboundFallbackSites 并在
+  //    本断言标签带 unbound-fallback 字样，循环后统一对账（现行
+  //    调用点最远 13 行，窗口留足余量；超窗的正当写法须重构到
+  //    调用附近或带理由调窗）。
   const callSiteLines = [...callerSrc.entries()]
     .filter(([, src]) => callRe.test(src) && importRe.test(src))
     .flatMap(([rel, src]) => {
@@ -451,19 +524,58 @@ for (const entry of REGISTRY) {
       while ((m = re.exec(src)) !== null) {
         const lineNo = src.slice(0, m.index).split("\n").length - 1;
         const windowText = lines.slice(lineNo, lineNo + 61).join("\n");
-        hits.push({ rel, lineNo: lineNo + 1, ok: /\.warning\b/.test(windowText) });
+        const varName = extractReceiverVar(lines, lineNo, entry.apiFn);
+        const readRe = varName
+          ? new RegExp(`(?<![\\w$])${escapeRegExp(varName)}\\.warning\\b`)
+          : /\.warning\b/;
+        const hit = {
+          rel,
+          lineNo: lineNo + 1,
+          ok: readRe.test(windowText),
+          bound: varName !== null,
+        };
+
+        if (!hit.bound) unboundFallbackSites.push(`${rel}:${lineNo + 1}`);
+        hits.push(hit);
       }
       return hits;
     });
   const farSites = callSiteLines.filter((h) => !h.ok);
+  const entryHasFallback = callSiteLines.some((h) => !h.bound);
   check(
-    `${entry.apiFn} 每次调用附近 60 行内实读 .warning`,
+    `${entry.apiFn} 每次调用附近 60 行内实读 .warning${entryHasFallback ? " [unbound-fallback]" : ""}`,
     farSites.length === 0,
     farSites.length === 0
       ? ""
       : `未读的调用点: ${farSites.map((h) => `${h.rel}:${h.lineNo}`).join(", ")}`,
   );
 }
+
+// ④附：变量名绑定回退点汇总对账——实际回退点必须逐点在
+// UNBOUND_FALLBACK_REGISTRY 登记理由，未登记者判红；登记条目若
+// 已无对应实际回退（形态已被提取式覆盖）同样判红，须摘除登记
+// （防死登记滞留，与 R2-C5-03 反向检查同纪律）。终树现行回退点
+// 应为 0：16 个调用点三式全覆盖（含 updateNode 三元跨行形）。
+const registeredFallbackKeys = UNBOUND_FALLBACK_REGISTRY.map(
+  (r) => `${r.file}:${r.line}`,
+);
+const unregisteredFallbacks = unboundFallbackSites.filter(
+  (s) => !registeredFallbackKeys.includes(s),
+);
+const staleFallbacks = registeredFallbackKeys.filter(
+  (s) => !unboundFallbackSites.includes(s),
+);
+
+for (const r of UNBOUND_FALLBACK_REGISTRY) {
+  console.log(
+    `NOTE  unbound-fallback 已登记回退点 ${r.file}:${r.line} — ${r.reason}`,
+  );
+}
+check(
+  `warning 近处读 unbound-fallback 回退点 ${unboundFallbackSites.length} 个，全部已登记且登记无失效`,
+  unregisteredFallbacks.length === 0 && staleFallbacks.length === 0,
+  `未登记回退点: ${unregisteredFallbacks.join(", ") || "无"}；已失效登记: ${staleFallbacks.join(", ") || "无"}——须扩 extractReceiverVar 形态覆盖、逐点登记理由，或摘除失效登记`,
+);
 
 // ⑤ GAP 登记双向断言：缺口在册且形态未变；消费落地即红、必须升格。
 for (const entry of GAP_REGISTRY) {
@@ -521,11 +633,12 @@ for (const entry of GAP_REGISTRY) {
 
   // 反向近处读：调用点后 60 行内出现对本次回执的 .warning 读＝
   // 消费已落地，本条必须升格为 REGISTRY 消费登记（与 ④ 同窗口
-  // 口径）。按赋值变量名匹配（const res = await fn(...) 的 res）：
-  // 同窗内其他调用回执的 .warning 读（如 forward.tsx 删除失败转
-  // forceDeleteForward 后读 forceRes.warning）不是本调用的消费，
-  // 不得误报；无赋值形态的调用点回退为任一 .warning 读即点名
-  // （保守口径，须人工裁定后升格或带理由登记）。
+  // 口径）。按接收变量名匹配（extractReceiverVar 与 ④ 共用，
+  // 直形/三元/跨行三式）：同窗内其他调用回执的 .warning 读（如
+  // forward.tsx 删除失败转 forceDeleteForward 后读
+  // forceRes.warning）不是本调用的消费，不得误报；提取不到变量
+  // 名的调用点回退为任一 .warning 读即点名（保守口径，须人工
+  // 裁定后升格或带理由登记）。
   const landed = [];
 
   for (const rel of callers) {
@@ -537,11 +650,9 @@ for (const entry of GAP_REGISTRY) {
     while ((m = re.exec(src)) !== null) {
       const lineNo = src.slice(0, m.index).split("\n").length - 1;
       const windowText = lines.slice(lineNo, lineNo + 61).join("\n");
-      const assign = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s*)?$/.exec(
-        lines[lineNo].slice(0, lines[lineNo].indexOf(entry.apiFn)),
-      );
-      const readRe = assign
-        ? new RegExp(`(?<![\\w$])${assign[1]}\\.warning\\b`)
+      const varName = extractReceiverVar(lines, lineNo, entry.apiFn);
+      const readRe = varName
+        ? new RegExp(`(?<![\\w$])${escapeRegExp(varName)}\\.warning\\b`)
         : /\.warning\b/;
 
       if (readRe.test(windowText)) landed.push(`${rel}:${lineNo + 1}`);
