@@ -57,8 +57,8 @@ type Handler struct {
 	// reconcile 轮。深度 >0 时 applyKernelWithMode 抑制 settle。
 	importTailBatchDepth atomic.Int32
 	wsServer             *ws.Server
-	metrics        *metrics.IngestionService
-	healthCheck    *health.Checker
+	metrics              *metrics.IngestionService
+	healthCheck          *health.Checker
 	// R5-B5 D14: 下沉到 manager 层的 per-node 串行化包装。
 	// 所有触碰节点 nft 状态的方法必须经此，不依赖调用方自觉。
 	nftablesManager *serializedNftManager
@@ -132,6 +132,15 @@ type Handler struct {
 	// 由 upgradeMu 保护；单节点升级 / 批量升级 / 节点回退三入口共用，
 	// 见 upgrade.go 的 tryAcquireNodeUpgradeOp。
 	nodeUpgradeOps map[int64]string
+	// F2-10：升级类操作在 ACK 后的执行期占用（nodeID → 操作名＋
+	// 到期时刻）：登记从「命令在途期」延展到核验终局（landed/
+	// failed）或有界 TTL，见 upgrade.go 的
+	// holdNodeUpgradeOpForVerification。
+	nodeUpgradeOpHolds map[int64]nodeUpgradeOpHold
+	// F2-02：启动复位前的在线节点快照（nodeID 集）：复位把本地
+	// 节点 status 1→0 后，「重启后仍离线」检查不能再以 DB
+	// status 为据，须以本快照＋实时会话判定。仅启动路径写一次。
+	startupOnlineSnapshot map[int64]struct{}
 	// FIX2-A（V2-04）：节点离线期间切走 realm 的待结算标记（按节点）。
 	// 离线切换时 settle 轮询够不到节点，重连后必须先结算 realm 计数
 	// 再允许重下发，否则增量随 agent 弃 realm 计数永久漏计。
@@ -945,6 +954,7 @@ func (h *Handler) nodeList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.attachNodeLatency(items)
+	h.attachNodeUninstallStates(items)
 
 	response.WriteJSON(w, response.OK(items))
 }

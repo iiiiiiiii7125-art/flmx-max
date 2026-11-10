@@ -625,7 +625,16 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("该节点已有%s操作正在进行，请等待其完成后再试", existing)))
 		return
 	}
-	defer h.releaseNodeUpgradeOp(req.ID)
+	// F2-10：下发成功并落核验记录后，登记转为 ACK 后执行期占
+	// 用（holdOp），不随 handler 返回释放；下发失败仍即时释放。
+	holdOp := false
+	defer func() {
+		if holdOp {
+			h.holdNodeUpgradeOpForVerification(req.ID)
+		} else {
+			h.releaseNodeUpgradeOp(req.ID)
+		}
+	}()
 
 	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version
 	// Agent 侧用编译期常量仓库 + 严格校验的版本号本地拼 URL。
@@ -656,9 +665,16 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 标比对，窗口内未命中由后台扫描置 failed 并告警（见
 	// upgrade_verify.go）。回执形状不变（M-0051）。
 	expectedSHA, _ := upgradeData["expectedSha256"].(string)
-	h.recordNodeUpgradeVerification(req.ID, upgradeVerifyKindUpgrade, version, expectedSHA)
+	// F2-12：期望哈希未下发时点名降级形态，不许静默走回退锚。
+	shaAnchor := upgradeSHAAnchor(nodeArch, expectedSHA)
+	h.recordNodeUpgradeVerification(req.ID, upgradeVerifyKindUpgrade, version, expectedSHA, shaAnchor)
+	holdOp = true
 
-	response.WriteJSON(w, response.OK(upgradeReceiptData(version, result)))
+	receipt := upgradeReceiptData(version, result)
+	if shaAnchor != "" {
+		receipt["shaAnchor"] = shaAnchor
+	}
+	response.WriteJSON(w, response.OK(receipt))
 }
 
 func resolveLatestRelease() (string, error) {
@@ -740,6 +756,13 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 		ID      int64  `json:"id"`
 		Success bool   `json:"success"`
 		Message string `json:"message"`
+		// F2-06：已下发条目与单升级回执同形披露——status=
+		// dispatched + expectedVersion（目标版本），不再用裸
+		// version＋agent 原话，避免消费方把「已下发」误读为
+		// 「已落地」；哈希锚降级时带 shaAnchor 点名（F2-12）。
+		Status          string `json:"status,omitempty"`
+		ExpectedVersion string `json:"expectedVersion,omitempty"`
+		SHAAnchor       string `json:"shaAnchor,omitempty"`
 		// R8-015：同版本短路（未下发命令）单独标记——Success=true 但
 		// 未下发，前端汇总不得计入「命令已发送到 N 个节点」。
 		AlreadyLatest bool `json:"alreadyLatest,omitempty"`
@@ -780,7 +803,16 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 				results[index] = upgradeResult{ID: nodeID, Success: false, Message: fmt.Sprintf("该节点已有%s操作正在进行，已跳过", existing)}
 				return
 			}
-			defer h.releaseNodeUpgradeOp(nodeID)
+			// F2-10：同单升级——下发成功并落核验记录后转执行期
+			// 占用，不随 goroutine 返回释放。
+			holdOp := false
+			defer func() {
+				if holdOp {
+					h.holdNodeUpgradeOpForVerification(nodeID)
+				} else {
+					h.releaseNodeUpgradeOp(nodeID)
+				}
+			}()
 
 			// O9-005：目标版本低于该节点当前版本时拒绝（防误降级；有意降级请用 nodeRollback）
 			// A11-132-06：不可比版本同样 fail-closed 拒绝。
@@ -816,23 +848,27 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 					"expectedSha256": sum,
 				}
 			}
-			result, err := h.wsServer.SendCommandContext(dispatchCtx, nodeID, "UpgradeAgent", data, upgradeTimeout)
-			if err != nil {
+			if _, err := h.wsServer.SendCommandContext(dispatchCtx, nodeID, "UpgradeAgent", data, upgradeTimeout); err != nil {
 				results[index] = upgradeResult{ID: nodeID, Success: false, Message: err.Error()}
 				return
 			}
 			h.markNodePendingUpgradeRedeploy(nodeID)
 			// A4-V-06：与单节点升级同口径落待核验记录。
 			expectedSHA, _ := data["expectedSha256"].(string)
-			h.recordNodeUpgradeVerification(nodeID, upgradeVerifyKindUpgrade, version, expectedSHA)
-			results[index] = upgradeResult{ID: nodeID, Success: true, Message: result.Message}
+			shaAnchor := upgradeSHAAnchor(nodeArch, expectedSHA)
+			h.recordNodeUpgradeVerification(nodeID, upgradeVerifyKindUpgrade, version, expectedSHA, shaAnchor)
+			holdOp = true
+			// F2-06：回执与单升级同形（dispatched＋expectedVersion
+			// ＋同文案），不回 agent 原话。
+			results[index] = upgradeResult{ID: nodeID, Success: true, Status: "dispatched", ExpectedVersion: version, SHAAnchor: shaAnchor, Message: upgradeDispatchMessage(version)}
 		}(i, id)
 	}
 	wg.Wait()
 
+	// F2-06：顶层目标版本同改 expectedVersion，不再用裸 version。
 	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"version": version,
-		"results": results,
+		"expectedVersion": version,
+		"results":         results,
 	}))
 }
 
@@ -924,7 +960,16 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, fmt.Sprintf("该节点已有%s操作正在进行，请等待其完成后再试", existing)))
 		return
 	}
-	defer h.releaseNodeUpgradeOp(req.ID)
+	// F2-10：同升级——落核验记录后转执行期占用；无目标回退不
+	// 落记录、仍随返回释放（无核验行可被覆盖）。
+	holdOp := false
+	defer func() {
+		if holdOp {
+			h.holdNodeUpgradeOpForVerification(req.ID)
+		} else {
+			h.releaseNodeUpgradeOp(req.ID)
+		}
+	}()
 
 	result, err := h.wsServer.SendCommand(req.ID, "RollbackAgent", map[string]interface{}{}, 30*time.Second)
 	if err != nil {
@@ -940,7 +985,8 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 	// （result.Data 的 toVersion）。老 agent 无配对记录时不报目
 	// 标——无目标可比对，不落记录（回执已明示未经校验）。
 	if toVersion, _ := result.Data["toVersion"].(string); strings.TrimSpace(toVersion) != "" {
-		h.recordNodeUpgradeVerification(req.ID, upgradeVerifyKindRollback, toVersion, "")
+		h.recordNodeUpgradeVerification(req.ID, upgradeVerifyKindRollback, toVersion, "", "")
+		holdOp = true
 	} else {
 		// LB-03：无目标回退同样接管了该节点的版本走向——既有未
 		// 结核验行（多为窗内未落地的升级行）若不结案，回退落地
@@ -975,11 +1021,17 @@ func (h *Handler) nodeRollback(w http.ResponseWriter, r *http.Request) {
 // receipt and keeps its shape: nothing was sent, and its version
 // field names the node's own reported current version — a fact,
 // not a target.
+// upgradeDispatchMessage 是升级下发回执的统一文案（单升级与
+// 批量逐条共用，F2-06）：只证下发、不证落地。
+func upgradeDispatchMessage(version string) string {
+	return fmt.Sprintf("升级命令已下发，节点正在重启；目标版本 %s，落点待节点重连后在节点列表核验", version)
+}
+
 func upgradeReceiptData(version string, result ws.CommandResult) map[string]interface{} {
 	return map[string]interface{}{
 		"status":          "dispatched",
 		"expectedVersion": version,
-		"message":         fmt.Sprintf("升级命令已下发，节点正在重启；目标版本 %s，落点待节点重连后在节点列表核验", version),
+		"message":         upgradeDispatchMessage(version),
 	}
 }
 
@@ -1049,9 +1101,25 @@ func rollbackReceiptData(result ws.CommandResult) map[string]interface{} {
 // 成功，整批回执却误报失败（回退排在升级后还会按 .old 语义回退
 // 刚替换的二进制）。改为下发前互斥：后到者明确被拒并告知在途
 // 操作，根本不进 agent 队列；前端守卫只是页内状态（多标签页/
-// 多管理员绕得过），后端登记才是收口。登记只覆盖命令在途期
-// （下发到回执/超时/断连结算），随面板进程重启清空（与
-// pendingUpgradeRedeploy 等记账同为内存态）。
+// 多管理员绕得过），后端登记才是收口。登记覆盖命令在途期
+// （下发到回执/超时/断连结算），下发成功且落核验记录后转为
+// ACK 后执行期占用（F2-10，见 holdNodeUpgradeOpForVerification），
+// 随面板进程重启清空（与 pendingUpgradeRedeploy 等记账同为内存态）。
+// nodeUpgradeOpHold 是升级类操作在 ACK 后执行期的占用
+// （F2-10）：op 为展示名，until 为有界到期时刻（核验窗口＋扫
+// 描余量）。核验终局（landed/failed）由 upgrade_verify.go 的结
+// 案点主动释放；到期未终局的由 tryAcquire 惰性回收，避免登记
+// 泄漏把节点永久锁死。
+type nodeUpgradeOpHold struct {
+	op    string
+	until time.Time
+}
+
+// nodeUpgradeOpHoldGrace 是占用 TTL 相对核验窗口的余量：覆盖
+// 截止扫描周期与告警发放，占用在核验记录翻 failed 的同一轮
+// 内即被主动释放，TTL 只作兜底。
+const nodeUpgradeOpHoldGrace = 2 * time.Minute
+
 func (h *Handler) tryAcquireNodeUpgradeOp(nodeID int64, op string) (string, bool) {
 	if h == nil || nodeID <= 0 {
 		return "", true
@@ -1064,6 +1132,18 @@ func (h *Handler) tryAcquireNodeUpgradeOp(nodeID int64, op string) (string, bool
 	if existing, ok := h.nodeUpgradeOps[nodeID]; ok {
 		return existing, false
 	}
+	// F2-10：ACK 后执行期占用同为互斥面——核验未终局前第二条
+	// 升级类操作不得插入（其重启会切断首条的换版/回连，且新
+	// 一轮 Upsert 会覆盖首条的核验记录）。过期占用惰性回收。
+	if h.nodeUpgradeOpHolds == nil {
+		h.nodeUpgradeOpHolds = make(map[int64]nodeUpgradeOpHold)
+	}
+	if hold, ok := h.nodeUpgradeOpHolds[nodeID]; ok {
+		if time.Now().Before(hold.until) {
+			return hold.op + "（已下发待核验落地）", false
+		}
+		delete(h.nodeUpgradeOpHolds, nodeID)
+	}
 	h.nodeUpgradeOps[nodeID] = op
 	return "", true
 }
@@ -1074,6 +1154,39 @@ func (h *Handler) releaseNodeUpgradeOp(nodeID int64) {
 	}
 	h.upgradeMu.Lock()
 	delete(h.nodeUpgradeOps, nodeID)
+	h.upgradeMu.Unlock()
+}
+
+// holdNodeUpgradeOpForVerification 把命令在途登记转换为 ACK
+// 后执行期占用（F2-10）：在升级/回退下发成功且已落核验记录
+// 后调用，占用持续到核验终局或 TTL 到期。
+func (h *Handler) holdNodeUpgradeOpForVerification(nodeID int64) {
+	if h == nil || nodeID <= 0 {
+		return
+	}
+	h.upgradeMu.Lock()
+	defer h.upgradeMu.Unlock()
+	op, ok := h.nodeUpgradeOps[nodeID]
+	if !ok {
+		return
+	}
+	delete(h.nodeUpgradeOps, nodeID)
+	if h.nodeUpgradeOpHolds == nil {
+		h.nodeUpgradeOpHolds = make(map[int64]nodeUpgradeOpHold)
+	}
+	h.nodeUpgradeOpHolds[nodeID] = nodeUpgradeOpHold{
+		op:    op,
+		until: time.Now().Add(nodeUpgradeVerifyWindow + nodeUpgradeOpHoldGrace),
+	}
+}
+
+// releaseNodeUpgradeOpHold 在核验终局时释放执行期占用。
+func (h *Handler) releaseNodeUpgradeOpHold(nodeID int64) {
+	if h == nil || nodeID <= 0 {
+		return
+	}
+	h.upgradeMu.Lock()
+	delete(h.nodeUpgradeOpHolds, nodeID)
 	h.upgradeMu.Unlock()
 }
 
@@ -1107,6 +1220,16 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	// 地对账（先于下方各重连动作：核验只读记录与版本，不依赖
 	// 节点启用状态，禁用节点的回连同样能证明落地）。
 	h.verifyNodeUpgradeLanding(nodeID)
+	// C4-G2：有未终局待卸载登记的节点重连即自动补发卸载命令
+	// （协议第 4 条）——赶在常规重连动作之前：该节点的正当终
+	// 局是卸载自身，下方 realm 结算/redeploy 对它都不再适用，
+	// 补发受理后即返回。补发是同步等待受理回执（≤15s），与本
+	// 钩子的其他同步段同口径。
+	if rec, rerr := h.repo.GetNodePendingUninstall(nodeID); rerr == nil && rec != nil &&
+		(rec.State == nodeUninstallIssued || rec.State == nodeUninstallUnconfirmed) {
+		h.reissuePendingNodeUninstall(nodeID)
+		return
+	}
 	h.notifyNodeOnline(nodeID)
 	if node, err := h.getNodeRecord(nodeID); err == nil && (node == nil || node.Status != 1) {
 		return // The next connection will resume any pending reconciliation.

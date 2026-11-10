@@ -73,7 +73,7 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 
 	exists, err := h.repo.UserExists(username)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userCreate: UserExists failed", err)
 		return
 	}
 	if exists {
@@ -152,17 +152,17 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("用户名已存在"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userCreate: CreateUserTx failed", err)
 		return
 	}
 	if dailyQuotaGB > 0 || monthlyQuotaGB > 0 {
 		if err := h.repo.SaveUserQuotaConfigTx(tx, userID, dailyQuotaGB, monthlyQuotaGB, now); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "userCreate: SaveUserQuotaConfigTx failed", err)
 			return
 		}
 	}
 	if err := tx.Commit().Error; err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userCreate: commit failed", err)
 		return
 	}
 
@@ -201,7 +201,7 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("用户不存在"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userUpdate: GetUserRoleID failed", err)
 		return
 	}
 	if roleID == 0 {
@@ -210,7 +210,7 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	oldUser, err := h.repo.GetUserByID(id)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userUpdate: GetUserByID failed", err)
 		return
 	}
 	if oldUser == nil {
@@ -220,7 +220,7 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 
 	dup, err := h.repo.UserExistsExcluding(username, id)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userUpdate: UserExistsExcluding failed", err)
 		return
 	}
 	if dup {
@@ -319,7 +319,7 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 			// 行）才是合法的 0。
 			currentQuota, qErr := h.repo.GetUserQuotaView(id, time.Now())
 			if qErr != nil {
-				response.WriteJSON(w, response.Err(-2, qErr.Error()))
+				respondInternalError(w, "userUpdate: GetUserQuotaView failed", qErr)
 				return
 			}
 			if currentQuota != nil {
@@ -336,7 +336,13 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	pwd := asString(req["pwd"])
 	if strings.TrimSpace(pwd) == "" {
 		if err := h.repo.UpdateUserWithoutPassword(id, username, flow, num, expTime, flowResetTime, status, maxConn, now, flowMiB); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// F4-01：改名守卫把唯一冲突映射为 repo.ErrUsernameExists
+			// （与锁外预检同口径回友好文案），其余仓储错误收口。
+			if errors.Is(err, repo.ErrUsernameExists) {
+				response.WriteJSON(w, response.ErrDefault("用户名已存在"))
+				return
+			}
+			respondInternalError(w, "userUpdate: UpdateUserWithoutPassword failed", err)
 			return
 		}
 	} else if passwordTooShort(pwd) {
@@ -351,7 +357,12 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.repo.UpdateUserWithPassword(id, username, hashedPassword, flow, num, expTime, flowResetTime, status, maxConn, now, flowMiB); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// F4-01：同 UpdateUserWithoutPassword，唯一冲突回友好文案。
+			if errors.Is(err, repo.ErrUsernameExists) {
+				response.WriteJSON(w, response.ErrDefault("用户名已存在"))
+				return
+			}
+			respondInternalError(w, "userUpdate: UpdateUserWithPassword failed", err)
 			return
 		}
 	}
@@ -365,7 +376,7 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	// UpdateUserWithPassword 推进同一时间戳，重复推进无副作用。
 	if oldUser.Status == 1 && status == 0 {
 		if err := h.repo.RevokeUserSessions(id, now); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "userUpdate: RevokeUserSessions failed", err)
 			return
 		}
 	}
@@ -386,11 +397,11 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		defer func() { tx.Rollback() }()
 		if err := h.repo.SaveUserQuotaConfigTx(tx, id, updateDailyQuotaGB, updateMonthlyQuotaGB, now); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "userUpdate: SaveUserQuotaConfigTx failed", err)
 			return
 		}
 		if err := tx.Commit().Error; err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "userUpdate: commit failed", err)
 			return
 		}
 	}
@@ -428,7 +439,7 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.OKEmpty())
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userDelete: GetUserRoleID failed", err)
 		return
 	}
 	if roleID == 0 {
@@ -442,7 +453,7 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 	// 任一失败中止删用户（单条转发可用 force-delete 兜底）。
 	userForwards, err := h.repo.ListForwardsByUser(id)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userDelete: ListForwardsByUser failed", err)
 		return
 	}
 	// R2X-008（E2-01）：级联删转发会删 relay 行，拨号节点集随之变化——
@@ -476,7 +487,7 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 	if err := h.repo.DeleteUserCascade(id); err != nil {
 		// R5X-004(b)：同上——全部转发已删、级联删用户失败时同样补刷。
 		h.refreshInboundWhitelists(affectedInboundIDs)
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userDelete: DeleteUserCascade failed", err)
 		return
 	}
 	h.refreshInboundWhitelists(affectedInboundIDs)
@@ -506,7 +517,7 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 	if typeVal == 1 {
 		u, err := h.repo.GetUserByID(id)
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "userResetFlow: GetUserByID failed", err)
 			return
 		}
 		if u == nil {
@@ -516,7 +527,7 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 		// B2-02：重置落库失败必须如实报错，不再恒回成功
 		// （与上方存在性检查的 -2 口径一致）。
 		if err := h.repo.ResetUserFlowByUser(id, time.Now().UnixMilli()); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "userResetFlow: ResetUserFlowByUser failed", err)
 			return
 		}
 	} else {
@@ -524,12 +535,12 @@ func (h *Handler) userResetFlow(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, sql.ErrNoRows) {
 				response.WriteJSON(w, response.ErrDefault("隧道不存在"))
 			} else {
-				response.WriteJSON(w, response.Err(-2, err.Error()))
+				respondInternalError(w, "userResetFlow: GetUserTunnelUserAndTunnel failed", err)
 			}
 			return
 		}
 		if err := h.repo.ResetUserFlowByUserTunnel(id); err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "userResetFlow: ResetUserFlowByUserTunnel failed", err)
 			return
 		}
 	}
@@ -1473,12 +1484,36 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	// 段从未进入，靠本 defer 在展开期释放，避免登记泄漏至进程重启。
 	defer guard.releaseUpgradeOp(h, id)
 	// 连带卸载必须赶在删记录之前：记录删除后 secret 与在线会话都不
-	// 复存在，既下发不了命令也登记不了待卸载。卸载步的失败只进
-	// uninstallWarnings，不中止删除（见 node_delete_uninstall.go）。
+	// 复存在，既下发不了命令也登记不了待卸载。C4-G2 起卸载改为
+	// 两段式：本步只发起（登记＋下发），状态非空即表示卸载流程
+	// 已接管该节点——节点记录保留至 agent 终局上报，删除回执如
+	// 实带状态，绝不在此级联删记录（见 node_delete_uninstall.go）。
 	uninstallState := ""
 	var uninstallWarnings []string
-	if asBool(req["uninstall"], false) {
+	uninstallRequested := asBool(req["uninstall"], false)
+	if uninstallRequested {
 		uninstallState, uninstallWarnings = h.prepareNodeAgentUninstall(id)
+	}
+	if uninstallState != "" {
+		keptResp := map[string]interface{}{
+			"nodeDeleted": false,
+			"uninstall":   uninstallState,
+		}
+		if len(uninstallWarnings) > 0 {
+			keptResp["uninstallWarnings"] = uninstallWarnings
+		}
+		switch uninstallState {
+		case nodeUninstallAcked:
+			keptResp["message"] = "卸载命令已被节点受理，正在执行；节点记录将在 agent 上报卸载成功后自动删除"
+		case nodeUninstallSucceeded:
+			keptResp["message"] = "agent 已卸载，节点记录删除正在收尾"
+		case nodeUninstallFailed:
+			keptResp["message"] = "卸载未完成，节点记录已保留，请按提示处置后重试，或不带「同时卸载」强制删除记录"
+		default: // issued
+			keptResp["message"] = "已登记待卸载，节点记录保留至卸载终局确认（agent 重连时自动补发）"
+		}
+		response.WriteJSON(w, response.OK(keptResp))
+		return
 	}
 	// R2X-045：删除语义不变（尽力而为，N-05），但删除打断的跨节点引用
 	// 清单随响应回传，不再静默。
@@ -1525,7 +1560,7 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 	// 后端默认不卸载只是 API 口径，前端弹窗的默认勾选是其局部
 	// 状态；绕过弹窗的调用方此前收到无提示的成功回执，删后
 	// agent 残留在服务器上无人知晓。
-	if uninstallState == "" {
+	if !uninstallRequested {
 		deleteResp["uninstall"] = "not_requested"
 		response.WriteJSON(w, response.OKWithWarning(deleteResp, "节点记录已删除，但本次未卸载该服务器上的 agent：agent 将残留在服务器上（其连接会被面板拒绝），请在服务器上手动卸载，或重新添加该节点后使用「同时卸载」删除"))
 		return
@@ -2254,9 +2289,11 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// L4-03：唯一入口/出口点名同 funnel 汇总（同文案只报一次）。
 	var soleRoleWarnings []string
 	seenSoleRole := make(map[string]struct{})
-	// 连带卸载三态聚合（仅请求带 uninstall 时填充）。
-	uninstalledCount, uninstallPendingCount, uninstallUnsupportedCount := 0, 0, 0
+	// 连带卸载聚合（仅请求带 uninstall 时填充）。C4-G2 状态机
+	// 后按登记状态分列计数，记录保留至终局的节点进 pending 明细。
+	uninstallAckedCount, uninstallIssuedCount, uninstallFailedCount := 0, 0, 0
 	var uninstallWarnings []string
+	var uninstallPendings []batchFailureDetail
 	// FIX-CASCADE（E1-11）：零端口 Forward 整行删除聚合计数。
 	deletedForwardTotal := 0
 	for _, id := range ids {
@@ -2282,14 +2319,32 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 		// 路径级联段已释放并清标、defer 恒 no-op；仅连带步 panic
 		// 展开时对未清标的本节点生效）。
 		defer guard.releaseUpgradeOp(h, id)
-		// 连带卸载步（同单删：赶在删记录前下发/登记，失败只进
-		// warnings 不中止删除）。三态先暂存，删除成功后才计入聚合
-		// 计数（见级联成功后的 switch）。
+		// 连带卸载步（同单删：赶在删记录前登记/下发）。C4-G2 起
+		// 状态非空即卸载流程接管该节点：记录保留至 agent 终局，
+		// 本轮不级联删除——issued/acked/succeeded 计入 pending
+		// 明细（非删除成功），failed 计失败并点名。
 		var uninstallState string
 		if uninstall {
 			state, warns := h.prepareNodeAgentUninstall(id)
 			uninstallState = state
 			uninstallWarnings = append(uninstallWarnings, warns...)
+		}
+		if uninstallState != "" {
+			switch uninstallState {
+			case nodeUninstallFailed:
+				uninstallFailedCount++
+				fail++
+				failures = appendBatchFailureReason(failures, id, nodeName, "远程卸载失败，节点记录已保留（详情见卸载告警）")
+			case nodeUninstallAcked:
+				uninstallAckedCount++
+				uninstallPendings = append(uninstallPendings, batchFailureDetail{ID: id, Name: nodeName, Reason: "远程卸载已被节点受理，待 agent 上报终局后自动删除记录"})
+			case nodeUninstallSucceeded:
+				uninstallPendings = append(uninstallPendings, batchFailureDetail{ID: id, Name: nodeName, Reason: "agent 已卸载，节点记录删除收尾中"})
+			default: // issued
+				uninstallIssuedCount++
+				uninstallPendings = append(uninstallPendings, batchFailureDetail{ID: id, Name: nodeName, Reason: "已登记待卸载，agent 重新连接时自动补发"})
+			}
+			continue
 		}
 		nodeReferrers, nodeSoleWarnings, nodeOutcome, delErr := h.deleteNodeByIDAfterGuardsOutcome(id, guard)
 		// B4/F-056（X1-203 变体）: 批量删除此前连单删有的
@@ -2301,16 +2356,6 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 			fail++
 			failures = appendBatchFailure(failures, id, nodeName, delErr)
 			continue
-		}
-		// 卸载计数在删除成功后才累加：旧实现删除前累加，删除失败
-		// 的节点会同时计入 fail 与卸载计数，回执自相矛盾。
-		switch uninstallState {
-		case nodeUninstallDone:
-			uninstalledCount++
-		case nodeUninstallPending:
-			uninstallPendingCount++
-		case nodeUninstallUnsupported:
-			uninstallUnsupportedCount++
 		}
 		for _, referrer := range nodeReferrers {
 			if _, dup := seenReferrer[referrer.ID]; dup {
@@ -2340,7 +2385,7 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	if !uninstall && success > 0 {
 		batchWarnings = append(batchWarnings, "本次批量删除未卸载节点 agent：agent 将残留在对应服务器上，请手动卸载或重新添加节点后使用「同时卸载」删除")
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings, UninstalledCount: uninstalledCount, UninstallPendingCount: uninstallPendingCount, UninstallUnsupportedCount: uninstallUnsupportedCount, UninstallWarnings: uninstallWarnings, DeletedForwardCount: deletedForwardTotal}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings, PendingCount: len(uninstallPendings), Pending: uninstallPendings, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings, UninstallAckedCount: uninstallAckedCount, UninstallIssuedCount: uninstallIssuedCount, UninstallFailedCount: uninstallFailedCount, UninstallWarnings: uninstallWarnings, DeletedForwardCount: deletedForwardTotal}))
 }
 
 func (h *Handler) nodeCheckStatus(w http.ResponseWriter, r *http.Request) {
@@ -4178,12 +4223,18 @@ type batchOperationResult struct {
 	// L4-03：批量删节点的「唯一入口/出口」点名清单（与单删的
 	// soleRoleWarnings 同名字段/同口径）；仅删节点批量入口填充。
 	SoleRoleWarnings []string `json:"soleRoleWarnings,omitempty"`
-	// 删节点连带卸载 agent 的三态聚合计数与告警（与单删的 uninstall /
+	// 删节点连带卸载 agent 的聚合计数与告警（与单删的 uninstall /
 	// uninstallWarnings 同口径）；仅批量删节点入口在请求带 uninstall
-	// 时填充，omitempty 向后兼容。
+	// 时填充，omitempty 向后兼容。C4-G2 状态机后计数按登记状态
+	// 分列（acked 已受理/issued 已登记待补发/failed 终局失败）；
+	// 旧三字段（uninstalledCount 等）是受理即 done 的旧口径，已
+	// 停用、不再填充。
 	UninstalledCount          int      `json:"uninstalledCount,omitempty"`
 	UninstallPendingCount     int      `json:"uninstallPendingCount,omitempty"`
 	UninstallUnsupportedCount int      `json:"uninstallUnsupportedCount,omitempty"`
+	UninstallAckedCount       int      `json:"uninstallAckedCount,omitempty"`
+	UninstallIssuedCount      int      `json:"uninstallIssuedCount,omitempty"`
+	UninstallFailedCount      int      `json:"uninstallFailedCount,omitempty"`
 	UninstallWarnings         []string `json:"uninstallWarnings,omitempty"`
 	// FIX-CASCADE（E1-11）：批量删节点时因失去最后一个入口端口而
 	// 整行删除的 Forward 总数（与单删的 deletedForwardCount 同口
@@ -8549,6 +8600,16 @@ func (h *Handler) deleteNodeByIDAfterGuardsOutcome(id int64, guard *nodeDeleteGu
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// C4-G2：记录删除即待卸载登记的生命周期终点（管理员不带卸
+	// 载的强制删除、清扫的 succeeded 收尾都经此漏斗），同点清
+	// 登记，不留孤儿行。强制删（failed/unconfirmed 登记被管理员
+	// 删记录动作丢弃）须留痕：succeeded 收尾已有完成日志，此处
+	// 只记 failed/unconfirmed 的丢弃，避免重复记账。
+	if rec, rerr := h.repo.GetNodePendingUninstall(id); rerr == nil && rec != nil &&
+		(rec.State == nodeUninstallFailed || rec.State == nodeUninstallUnconfirmed) {
+		log.Printf("node delete: discarding pending uninstall registry node_id=%d state=%s reason=%s (admin deleted node record without uninstall)", id, rec.State, rec.Reason)
+	}
+	_ = h.repo.DeleteNodePendingUninstall(id)
 	outcome := &nodeDeleteOutcome{}
 	if cascadeOutcome != nil {
 		outcome.deletedForwardIDs = cascadeOutcome.DeletedForwardIDs

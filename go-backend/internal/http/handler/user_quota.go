@@ -641,7 +641,7 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 	// R2X-012 同口径），不存在即报错，不建孤儿 user_quota 行。
 	u, err := h.repo.GetUserByID(req.UserID)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userQuotaReset: GetUserByID failed", err)
 		return
 	}
 	if u == nil {
@@ -650,7 +650,7 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 	}
 	release, err := h.repo.ResetUserQuotaUsage(req.UserID, req.Scope, time.Now())
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "userQuotaReset: ResetUserQuotaUsage failed", err)
 		return
 	}
 	nowMs := time.Now().UnixMilli()

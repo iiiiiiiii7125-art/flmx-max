@@ -480,6 +480,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.ForwardPort{},
 		&model.Node{},
 		&model.NodeUninstall{},
+		&model.NodePendingUninstall{},
 		&model.NodeUpgradeVerification{},
 		&model.NodeSSHConfig{},
 		&model.NftRuleBinding{},
@@ -1169,6 +1170,42 @@ func (r *Repository) UpdateNodeOnline(nodeID int64, status int, version string, 
 	}).Error
 }
 
+// NodeOnlineReport 是节点握手自报的在场性载体（F2-04）：指针
+// 为 nil 表示该字段本次未自报，落库时不得覆写既有值。旧实现
+// 把缺参一律塌缩为 0/空串无条件覆写（UpdateNodeOnline），老
+// agent 或参数被代理剥离的握手会把真实版本与能力位清零。
+type NodeOnlineReport struct {
+	Status  int
+	Version *string
+	HTTP    *int
+	TLS     *int
+	Socks   *int
+}
+
+// UpdateNodeOnlineReport 按在场性落库握手自报：status 恒更新，
+// version/http/tls/socks 仅在自报在场时覆写。
+func (r *Repository) UpdateNodeOnlineReport(nodeID int64, report NodeOnlineReport) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	updates := map[string]interface{}{
+		"status": report.Status, "updated_time": unixMilliNow(),
+	}
+	if report.Version != nil {
+		updates["version"] = *report.Version
+	}
+	if report.HTTP != nil {
+		updates["http"] = *report.HTTP
+	}
+	if report.TLS != nil {
+		updates["tls"] = *report.TLS
+	}
+	if report.Socks != nil {
+		updates["socks"] = *report.Socks
+	}
+	return r.db.Model(&model.Node{}).Where("id = ?", nodeID).Updates(updates).Error
+}
+
 func (r *Repository) UpdateNodeStatus(nodeID int64, status int) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
@@ -1194,6 +1231,20 @@ func (r *Repository) ResetLocalNodeStatusesAtStartup() (int64, error) {
 			"status": 0, "updated_time": unixMilliNow(),
 		})
 	return res.RowsAffected, res.Error
+}
+
+// ListOnlineLocalNodeIDs 返回当前 status=1 的本地（非
+// nftables）节点 ID 集，与 ResetLocalNodeStatusesAtStartup 的
+// 复位谓词完全同形——供启动路径在复位前留快照（F2-02）。
+func (r *Repository) ListOnlineLocalNodeIDs() ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ids []int64
+	err := r.db.Model(&model.Node{}).
+		Where("status = ? AND forward_mode <> ?", 1, "nftables").
+		Pluck("id", &ids).Error
+	return ids, err
 }
 
 // ListOnlineLocalNodes 返回 DB 中仍标记在线的节点（
