@@ -2942,6 +2942,33 @@ func noteRemovedFeatureSegments(backup *model.BackupData, rep *importReport) (pe
 	return peerShares, gistKeys, themes
 }
 
+// ImportValidationError 标记备份导入中「由备份内容本身导致」的
+// 拒绝（R3-GEN-02①）：不支持的版本、未知段类型、预算超限、端口
+// 冲突、管理员不变式——文案均为面向操作者的自著文本，可由传输层
+// 原样回执（基线 backupImport 的「导入失败: %v」口径）；Import 的
+// 其余错误皆为仓储/事务故障，传输层必须泛化。本型只在校验点构造
+// （进事务前的各校验与事务内 validateImportAdminInvariant 的自著
+// 拒绝支），事务的存储错误包装（"import users failed: %w" 等）
+// 不得套用本型。
+type ImportValidationError struct {
+	msg string
+}
+
+func (e *ImportValidationError) Error() string { return e.msg }
+
+func newImportValidationError(format string, args ...interface{}) *ImportValidationError {
+	return &ImportValidationError{msg: fmt.Sprintf(format, args...)}
+}
+
+// wrapImportValidationError 把既有校验函数的自著错误定型为
+// ImportValidationError（文本逐字不变）。
+func wrapImportValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ImportValidationError{msg: err.Error()}
+}
+
 func (r *Repository) Import(backup *model.BackupData, types []string) (*model.ImportResult, error) {
 	// O7-009：版本兼容性检查（导出仅写 "1.0"），未知版本拒绝导入，
 	// 避免不兼容格式被错误恢复。
@@ -2950,10 +2977,10 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		if backup != nil {
 			version = backup.Version
 		}
-		return nil, fmt.Errorf("不支持的备份版本 %q（仅支持 1.0）", version)
+		return nil, newImportValidationError("不支持的备份版本 %q（仅支持 1.0）", version)
 	}
 	if err := validateBackupTypes(types); err != nil {
-		return nil, err
+		return nil, wrapImportValidationError(err)
 	}
 	result := &model.ImportResult{}
 	typeSet := make(map[string]bool)
@@ -2966,13 +2993,13 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 	// 已在取单飞锁前先行同判，此处为 repo 层单一收口，覆盖全部
 	// Import 调用方）。
 	if err := ValidateBackupImportUserHashBudget(backup, types); err != nil {
-		return nil, err
+		return nil, wrapImportValidationError(err)
 	}
 
 	// B8-14：per-section 行数预算——与哈希预算同收口位（进事务
 	// 与端口预检之前整单拒绝，见 validateBackupSectionBudgets）。
 	if err := validateBackupSectionBudgets(backup, typeSet); err != nil {
-		return nil, err
+		return nil, wrapImportValidationError(err)
 	}
 
 	// B4/F-055: 端口预检 + per-node 锁（见 repository_backup_precheck.go）。
@@ -3422,10 +3449,10 @@ func validateImportAdminInvariant(tx *gorm.DB, preAdminRow1 int64) error {
 		return fmt.Errorf("import users admin invariant check failed: %w", err)
 	}
 	if admins == 0 {
-		return fmt.Errorf("备份恢复被拒绝：该备份的用户段不含任何启用中管理员（role_id=0 且 status=1），导入后将没有任何管理员可登录，已整单取消")
+		return newImportValidationError("备份恢复被拒绝：该备份的用户段不含任何启用中管理员（role_id=0 且 status=1），导入后将没有任何管理员可登录，已整单取消")
 	}
 	if preAdminRow1 > 0 && adminRow1 == 0 {
-		return fmt.Errorf("备份恢复被拒绝：该备份的 id=1 用户不是启用中管理员（role_id≠0 或 status≠1），导入会把现行 id=1 管理员降权或停用覆盖，已整单取消")
+		return newImportValidationError("备份恢复被拒绝：该备份的 id=1 用户不是启用中管理员（role_id≠0 或 status≠1），导入会把现行 id=1 管理员降权或停用覆盖，已整单取消")
 	}
 	return nil
 }

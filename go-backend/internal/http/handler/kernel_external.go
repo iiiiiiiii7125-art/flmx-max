@@ -481,10 +481,20 @@ func containsMethod(method string) bool {
 
 // retargetRelays updates the remote address of every managed relay forward
 // of an inbound after its address changed.
+//
+// R3-GEN-05 旁注核销（修）：problems 会进成功附注回执
+// （inboundExternalUpdate「已保存，但部分中转更新失败: …」）与远程
+// 源同步的完整性门摘要，属回面通道——仓储原文不得直拼。此前
+// ListInboundRelays／UpdateForward 两处仓储直通未标记、relayTarget
+// 的已标记仓储错经 Error() 亦以原文入串。现与批量回执同口径
+// （C1-01 batchFailureErr）：直通点先 markRepoError 标明来源，全部
+// 失败原因统一经 batchFailureErr 净化（仓储错→通用文案，定型校验
+// 与数据面同步错逐字保留）；与 remote_source.go saveErr 支的
+// isRepoError 分流同义。problems 的成员资格（计入门）不变。
 func (h *Handler) retargetRelays(row *model.NodeInbound) []string {
 	relays, err := h.repo.ListInboundRelays(row.ID)
 	if err != nil {
-		return []string{err.Error()}
+		return []string{batchFailureErr(markRepoError(err)).Error()}
 	}
 	var problems []string
 	for _, rel := range relays {
@@ -501,7 +511,7 @@ func (h *Handler) retargetRelays(row *model.NodeInbound) []string {
 		}
 		target, err := h.relayTarget(row, tunnel)
 		if err != nil {
-			problems = append(problems, rel.Name+": "+err.Error())
+			problems = append(problems, rel.Name+": "+batchFailureErr(err).Error())
 			continue
 		}
 		if target == fwd.RemoteAddr {
@@ -509,7 +519,7 @@ func (h *Handler) retargetRelays(row *model.NodeInbound) []string {
 		}
 		if err := h.repo.UpdateForward(fwd.ID, fwd.Name, fwd.TunnelID, target, fwd.Strategy, time.Now().UnixMilli(),
 			fwd.SpeedID, fwd.MaxConn, fwd.IPMaxConn, fwd.IPSpeedID, 0, fwd.ProxyProtocolReceive, fwd.ProxyProtocolSend); err != nil {
-			problems = append(problems, rel.Name+": "+err.Error())
+			problems = append(problems, rel.Name+": "+batchFailureErr(markRepoError(err)).Error())
 			continue
 		}
 		updated, err := h.getForwardRecord(fwd.ID)
@@ -517,7 +527,7 @@ func (h *Handler) retargetRelays(row *model.NodeInbound) []string {
 			continue
 		}
 		if err := h.syncForwardServices(updated, "UpdateService", true); err != nil {
-			problems = append(problems, rel.Name+": "+err.Error())
+			problems = append(problems, rel.Name+": "+batchFailureErr(err).Error())
 		}
 	}
 	return problems

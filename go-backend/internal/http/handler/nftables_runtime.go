@@ -114,18 +114,30 @@ func (h *Handler) validateNftablesForwardRequest(tunnel *tunnelRecord, remoteAdd
 // sync 漏斗设防，本函数是其余分发点的同一口径后防线（单入口门不再是
 // 唯一防线）；遗留混合态的修复路径是先编辑隧道去掉 nft/多余入口，
 // 而不是在此处静默放行。
+// mixedNftForwardStateRejection 是 mixedNftForwardStateError 的
+// 定型拒绝（R3-GEN-04）：四支文案均为面向用户的行动指引（错在哪、
+// 下一步先编辑隧道），不含仓储原文。定型后删除面披露漏斗
+// （respondForwardDeleteDisclosureErrorWithNote）得以 errors.As
+// 识别并原样回执，与其余回执面（forward 系守卫点原文回）口径
+// 一致；此前为无型 plain error、流经漏斗时被全量泛化。
+type mixedNftForwardStateRejection struct {
+	msg string
+}
+
+func (e *mixedNftForwardStateRejection) Error() string { return e.msg }
+
 func mixedNftForwardStateError(tunnel *tunnelRecord, entryNodeIDs []int64) error {
 	if tunnel == nil {
-		return errors.New("隧道不存在")
+		return &mixedNftForwardStateRejection{msg: "隧道不存在"}
 	}
 	if len(entryNodeIDs) != 1 {
-		return errors.New("nftables 节点仅支持单入口隧道：该转发所在隧道存在多个入口且其中有 nftables 节点，请先编辑隧道去掉多余入口")
+		return &mixedNftForwardStateRejection{msg: "nftables 节点仅支持单入口隧道：该转发所在隧道存在多个入口且其中有 nftables 节点，请先编辑隧道去掉多余入口"}
 	}
 	if tunnel.Type != 1 {
-		return errors.New("nftables 节点仅支持直连隧道")
+		return &mixedNftForwardStateRejection{msg: "nftables 节点仅支持直连隧道"}
 	}
 	if tunnelIsRealm(tunnel) {
-		return fmt.Errorf("隧道 %d 使用 realm 引擎，入口节点不能为 nftables 模式", tunnel.ID)
+		return &mixedNftForwardStateRejection{msg: fmt.Sprintf("隧道 %d 使用 realm 引擎，入口节点不能为 nftables 模式", tunnel.ID)}
 	}
 	return nil
 }
@@ -198,6 +210,15 @@ func sshConfigFromModel(cfg *model.NodeSSHConfig) (runtimenft.SSHConfig, error) 
 	}, nil
 }
 
+// nftSSHConfigError 是 collectNftablesSSHConfigsTx 的定型校验失
+// 败（R3-GEN-03）：SSH 配置缺失/不完整，文案由配置态唯一确定、
+// 不含仓储原文。调用方以 errors.As 分流后以 msg 字段原样回执；
+// 仓储错在 helper 内已标记、由调用方守卫泛化。「handler not
+// initialized」是内部故障、刻意不定型（回执泛化）。
+type nftSSHConfigError struct{ msg string }
+
+func (e *nftSSHConfigError) Error() string { return e.msg }
+
 // nftablesNodeSSHConfig 是入口节点的 nftables 模式判定 + SSH 配置
 // 快照（纯 DB 数据，不含任何网络校验结果）。
 type nftablesNodeSSHConfig struct {
@@ -232,13 +253,15 @@ func (h *Handler) collectNftablesSSHConfigsTx(tx *gorm.DB, entryNodeIDs []int64)
 		}
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return nil, errors.New("nftables 节点缺少 SSH 配置")
+				return nil, &nftSSHConfigError{msg: "nftables 节点缺少 SSH 配置"}
 			}
 			return nil, markRepoError(err)
 		}
 		sshCfg, err := sshConfigFromModel(cfg)
 		if err != nil {
-			return nil, err
+			// sshConfigFromModel 的失败为自著配置校验（配置不完整），
+			// 在本 helper 边界定型（其余调用面不受影响）。
+			return nil, &nftSSHConfigError{msg: err.Error()}
 		}
 		pairs = append(pairs, nftablesNodeSSHConfig{nodeID: nodeID, cfg: sshCfg})
 	}

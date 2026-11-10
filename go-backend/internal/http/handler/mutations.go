@@ -408,6 +408,18 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	if oldUser.MaxConn != maxConn {
 		warnings, syncErr := h.syncUserMaxConnForwards(id)
 		if syncErr != nil {
+			// R3-GEN-02③：恢复基线定型前缀——前缀已由
+			// syncUserMaxConnForwards 在源头拼入 maxConnSyncError，
+			// 本点以 msg 字段原样回；已标记仓储错先经守卫泛化；未
+			// 定型的残余 fail-closed 泛化。此前全量泛化只剩日志可见。
+			if respondInternalIfRepoError(w, "userUpdate: sync max-conn forwards failed", syncErr) {
+				return
+			}
+			var mse *maxConnSyncError
+			if errors.As(syncErr, &mse) {
+				response.WriteJSON(w, response.ErrDefault(mse.msg))
+				return
+			}
 			respondInternalError(w, "userUpdate: sync max-conn forwards failed", syncErr)
 			return
 		}
@@ -2666,13 +2678,39 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	nftPairs, err := h.collectNftablesSSHConfigsTx(validationTx, entryNodeIDs)
 	if err != nil {
 		validationTx.Rollback()
-		respondInternalError(w, "tunnelCreate", err)
+		// R3-GEN-03：定型校验（nftables 节点缺少 SSH 配置、
+		// sshConfigFromModel 校验）已在 helper 源头定型为
+		// nftSSHConfigError，本点以 msg 字段原样回；仓储错已在
+		// helper 内标记、先经守卫泛化；未定型残余 fail-closed 泛
+		// 化。此前无守卫直泛化、同 helper 口径不一致。
+		if respondInternalIfRepoError(w, "tunnelCreate: collectNftablesSSHConfigsTx failed", err) {
+			return
+		}
+		var nce *nftSSHConfigError
+		if errors.As(err, &nce) {
+			response.WriteJSON(w, response.ErrDefault(nce.msg))
+			return
+		}
+		respondInternalError(w, "tunnelCreate: collectNftablesSSHConfigsTx failed", err)
 		return
 	}
 	if engine == tunnelEngineRealm {
 		if err := h.validateRealmTunnelTx(validationTx, typeVal, entryNodeIDs); err != nil {
 			validationTx.Rollback()
-			respondInternalError(w, "tunnelCreate", err)
+			// R3-GEN-03：同上——realm 三定型（仅支持端口转发隧道／
+			// 节点不存在／nftables 不能用 realm）已在 helper 源头定
+			// 型为 realmTunnelValidationError，本点以 msg 字段原样
+			// 回；仓储错守卫泛化（与 tunnelUpdate 闭包分发器口径一
+			// 致）；未定型残余 fail-closed 泛化。
+			if respondInternalIfRepoError(w, "tunnelCreate: validateRealmTunnelTx failed", err) {
+				return
+			}
+			var rve *realmTunnelValidationError
+			if errors.As(err, &rve) {
+				response.WriteJSON(w, response.ErrDefault(rve.msg))
+				return
+			}
+			respondInternalError(w, "tunnelCreate: validateRealmTunnelTx failed", err)
 			return
 		}
 	}
@@ -2734,7 +2772,17 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		if err := h.validateRealmTunnelTx(tx, typeVal, entryNodeIDs); err != nil {
 			tx.Rollback()
 			releasePortLocks()
-			respondInternalError(w, "tunnelCreate", err)
+			// R3-GEN-03：与验证段同点同口径（源头定型＋msg 字段
+			// 回、守卫泛化、残余 fail-closed）。
+			if respondInternalIfRepoError(w, "tunnelCreate: validateRealmTunnelTx failed", err) {
+				return
+			}
+			var rve *realmTunnelValidationError
+			if errors.As(err, &rve) {
+				response.WriteJSON(w, response.ErrDefault(rve.msg))
+				return
+			}
+			respondInternalError(w, "tunnelCreate: validateRealmTunnelTx failed", err)
 			return
 		}
 	}
@@ -3581,7 +3629,20 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// realm renders whole nodes: re-render the old and new entries
 		// (forward ports, tunnel status).
 		if _, err := h.syncRealmNodes(append(append([]int64{}, oldEntryNodeIDs...), newEntryNodeIDs...), nil); err != nil {
-			respondInternalError(w, "tunnelUpdate", err)
+			// R3-GEN-02④：恢复基线细节回——同步失败细节（哪节点
+			// realm 下发失败）已由 syncRealmNodes 在源头定型为
+			// realmSyncError，本点以 msg 字段原样回；仓储源已在
+			// realm.go 内标记、先经守卫泛化；未定型残余 fail-closed
+			// 泛化。此前全量泛化、细节仅日志可见。
+			if respondInternalIfRepoError(w, "tunnelUpdate: syncRealmNodes failed", err) {
+				return
+			}
+			var rse *realmSyncError
+			if errors.As(err, &rse) {
+				response.WriteJSON(w, response.ErrDefault(rse.msg))
+				return
+			}
+			respondInternalError(w, "tunnelUpdate: syncRealmNodes failed", err)
 			return
 		}
 		respondTunnelUpdateOK()
@@ -9769,6 +9830,16 @@ func (h *Handler) syncUserTunnelForwards(userID, tunnelID int64) error {
 	return nil
 }
 
+// maxConnSyncError 是 syncUserMaxConnForwards 的定型回执失败
+// （R3-GEN-02③）：msg 已含基线定型前缀「最大连接数下发失败: 」＋
+// 同步失败原因，由 syncUserMaxConnForwards 在同步失败返回点拼
+// 入；已标记仓储错不进本型。userUpdate 回执以 msg 字段原样回
+// （管理员面 raw-error 门口径：可能携带仓储原文的值不经
+// Sprintf/err.Error() 呈现）。
+type maxConnSyncError struct{ msg string }
+
+func (e *maxConnSyncError) Error() string { return e.msg }
+
 func (h *Handler) syncUserMaxConnForwards(userID int64) ([]string, error) {
 	// R3 B09-002（分诊 §5.2 方案 ①）：枚举该用户全部转发，不限
 	// status=1。此前只重下发启用中的转发，暂停中的转发被跳过后，
@@ -9778,7 +9849,9 @@ func (h *Handler) syncUserMaxConnForwards(userID int64) ([]string, error) {
 	// 重下发面同形），故全量枚举不改变暂停态语义。
 	forwards, err := h.repo.ListForwardsByUser(userID)
 	if err != nil {
-		return nil, err
+		// R3-GEN-02③：仓储直通先标记——userUpdate 回执点恢复定型
+		// 前缀后，靠守卫把仓储原文挡在回执外。
+		return nil, markRepoError(err)
 	}
 	warnings := make([]string, 0)
 	for i := range forwards {
@@ -9789,7 +9862,12 @@ func (h *Handler) syncUserMaxConnForwards(userID int64) ([]string, error) {
 		syncWarnings, syncErr := h.syncForwardServicesWithWarnings(f, "UpdateService", true)
 		warnings = append(warnings, syncWarnings...)
 		if syncErr != nil {
-			return warnings, syncErr
+			// R3-GEN-02③：已标记仓储错原样上抛（回执守卫泛化）；
+			// 其余同步失败（数据面/定型）在此拼入定型前缀定型。
+			if isRepoError(syncErr) {
+				return warnings, syncErr
+			}
+			return warnings, &maxConnSyncError{msg: fmt.Sprintf("最大连接数下发失败: %v", syncErr)}
 		}
 	}
 	return warnings, nil
