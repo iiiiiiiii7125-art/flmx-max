@@ -244,6 +244,13 @@ const REGISTRY = [
     calls: 2,
     consumers: ["src/pages/forward.tsx", "src/pages/node.tsx"],
   },
+  {
+    producer: "go-backend/internal/http/handler/kernel_relay.go",
+    endpoint: "/inbound/relay/create",
+    apiFn: "createInboundRelay",
+    calls: 1,
+    consumers: ["src/pages/inbound/relay-modal.tsx"],
+  },
 ];
 
 // GAP 登记册（2026-11-10 合并树逐点独立核实）：T-001 新增生产者中
@@ -259,14 +266,6 @@ const REGISTRY = [
 // 缺口本身是产品问题（信封 warning 被 UI 丢弃），修复归产品波次；
 // 本册只负责让缺口不可静默、不可腐烂。
 const GAP_REGISTRY = [
-  {
-    producer: "go-backend/internal/http/handler/kernel_relay.go",
-    endpoint: "/inbound/relay/create",
-    apiFn: "createInboundRelay",
-    calls: 1,
-    callers: ["src/pages/inbound/relay-modal.tsx"],
-    gap: "T-001 白名单刷新失败 note：relay-modal 创建成功只 toast 成功，warning 被丢弃",
-  },
   {
     producer: "go-backend/internal/http/handler/kernel_relay.go",
     endpoint: "/inbound/relay/delete",

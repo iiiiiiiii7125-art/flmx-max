@@ -199,6 +199,12 @@ export function RelayModal({
       }
       rotateIdemKey();
       toast.success("已创建中转转发");
+      // T-001：白名单刷新失败时后端在信封 warning 里点名受影响入站
+      // （network.ts 合同：must be surfaced），须原样透出，不得只报
+      // 固定成功文案。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
       setForm({ tunnelId: "", inPort: "", name: "", shareHost: "" });
       await load();
       onChanged();
