@@ -408,7 +408,14 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	if oldUser.MaxConn != maxConn {
 		warnings, syncErr := h.syncUserMaxConnForwards(id)
 		if syncErr != nil {
-			respondInternalError(w, "userUpdate: sync max-conn forwards failed", syncErr)
+			// R3-GEN-02③：恢复基线定型前缀——下发失败的原因（数据面
+			// 同步错）对用户可行动，原文随前缀回；已标记仓储错先经
+			// 守卫泛化。与本文件 switchTunnelEngine 分支保留固定前缀
+			// 的口径一致，此前全量泛化只剩日志可见。
+			if respondInternalIfRepoError(w, "userUpdate: sync max-conn forwards failed", syncErr) {
+				return
+			}
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("最大连接数下发失败: %v", syncErr)))
 			return
 		}
 		if len(warnings) > 0 {
@@ -3554,7 +3561,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// realm renders whole nodes: re-render the old and new entries
 		// (forward ports, tunnel status).
 		if _, err := h.syncRealmNodes(append(append([]int64{}, oldEntryNodeIDs...), newEntryNodeIDs...), nil); err != nil {
-			respondInternalError(w, "tunnelUpdate", err)
+			// R3-GEN-02④：恢复基线原文回——同步失败细节（哪节点
+			// realm 下发失败）是用户可行动信息；仓储源已在 realm.go
+			// 内标记，先经守卫泛化。此前全量泛化、细节仅日志可见。
+			if respondInternalIfRepoError(w, "tunnelUpdate: syncRealmNodes failed", err) {
+				return
+			}
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
 		respondTunnelUpdateOK()
@@ -9723,7 +9736,9 @@ func (h *Handler) syncUserMaxConnForwards(userID int64) ([]string, error) {
 	// 重下发面同形），故全量枚举不改变暂停态语义。
 	forwards, err := h.repo.ListForwardsByUser(userID)
 	if err != nil {
-		return nil, err
+		// R3-GEN-02③：仓储直通先标记——userUpdate 回执点恢复定型
+		// 前缀后，靠守卫把仓储原文挡在回执外。
+		return nil, markRepoError(err)
 	}
 	warnings := make([]string, 0)
 	for i := range forwards {

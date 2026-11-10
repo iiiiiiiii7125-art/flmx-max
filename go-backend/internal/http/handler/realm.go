@@ -177,7 +177,9 @@ func (h *Handler) realmNodeEndpoints(nodeID int64, override map[int64]bool) ([]k
 	}
 	forwards, err := h.repo.ListRealmForwardsByNode(nodeID)
 	if err != nil {
-		return nil, nil, err
+		// R3-GEN-02④：仓储直通先标记——syncRealmNodes 的回执面恢复
+		// 原文后（tunnelUpdate），靠各调用方守卫把仓储原文挡在回执外。
+		return nil, nil, markRepoError(err)
 	}
 	var endpoints []kernel.RealmEndpoint
 	var ports []map[string]interface{}
@@ -258,8 +260,14 @@ func (h *Handler) buildRealmApplyPayload(k *model.NodeKernel, info kernel.Info, 
 // ensureRealmKernel returns the node's realm kernel, registering it when the
 // node needs one (create false only looks it up).
 func (h *Handler) ensureRealmKernel(nodeID int64, create bool) (*model.NodeKernel, error) {
+	// R3-GEN-02④：本函数三处仓储直通统一先标记（读/建/改），与
+	// realmNodeEndpoints 同口径——syncRealmNodes 回执面恢复原文后
+	// 靠守卫泛化仓储原文。
 	k, err := h.repo.GetNodeKernelByType(nodeID, kernel.TypeRealm)
 	if err != nil || (k == nil && !create) {
+		if err != nil {
+			err = markRepoError(err)
+		}
 		return k, err
 	}
 	now := time.Now().UnixMilli()
@@ -268,12 +276,15 @@ func (h *Handler) ensureRealmKernel(nodeID int64, create bool) (*model.NodeKerne
 			NodeID: nodeID, KernelType: kernel.TypeRealm, Version: kernel.RealmVersion,
 			Status: kernelStatusPending, Enabled: 1, CreatedTime: now, UpdatedTime: now,
 		}
-		return k, h.repo.CreateNodeKernel(k)
+		if err := h.repo.CreateNodeKernel(k); err != nil {
+			return k, markRepoError(err)
+		}
+		return k, nil
 	}
 	if k.Version != kernel.RealmVersion {
 		// A panel upgrade moved to a newer realm.
 		if err := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{"version": kernel.RealmVersion, "updated_time": now}); err != nil {
-			return nil, err
+			return nil, markRepoError(err)
 		}
 		k.Version = kernel.RealmVersion
 	}

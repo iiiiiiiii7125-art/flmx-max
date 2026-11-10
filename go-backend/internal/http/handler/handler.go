@@ -2961,6 +2961,16 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	defer cancelImport()
 	result, err := h.repo.ImportContext(importCtx, &req.BackupData, req.Types)
 	if err != nil {
+		// R3-GEN-02①：恢复基线「导入失败: %v」——仅限 repo 定型的
+		// 备份校验错（ImportValidationError：版本/段类型/预算/端口
+		// 冲突/管理员不变式，均为用户可改正的自著文案），经
+		// errors.As 分流后以 -2 原文回；仓储/事务故障仍泛化。
+		// 呈现值取分流后的定型错本体，不直用 err 变量。
+		var importValidationErr *repo.ImportValidationError
+		if errors.As(err, &importValidationErr) {
+			response.WriteJSON(w, response.Err(-2, fmt.Sprintf("导入失败: %v", importValidationErr)))
+			return
+		}
 		respondInternalError(w, "backupImport", err)
 		return
 	}

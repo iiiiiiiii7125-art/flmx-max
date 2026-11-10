@@ -435,7 +435,7 @@ func (r *Repository) precheckBackupPortConflicts(backup *model.BackupData, typeS
 	for _, claim := range claims {
 		key := portKey{claim.nodeID, claim.port}
 		if owner, ok := claimed[key]; ok {
-			return fmt.Errorf("备份恢复端口冲突：节点 %d 端口 %d 已被%s占用（备份中的%s需要该端口），已中止恢复，未写入任何数据",
+			return newImportValidationError("备份恢复端口冲突：节点 %d 端口 %d 已被%s占用（备份中的%s需要该端口），已中止恢复，未写入任何数据",
 				claim.nodeID, claim.port, owner, claim.owner)
 		}
 		source, err := r.NodePortOccupantTx(r.db, claim.nodeID, claim.port, excl)
@@ -443,7 +443,7 @@ func (r *Repository) precheckBackupPortConflicts(backup *model.BackupData, typeS
 			return err
 		}
 		if source != "" {
-			return fmt.Errorf("备份恢复端口冲突：节点 %d 端口 %d 已被%s占用（备份中的%s需要该端口），已中止恢复，未写入任何数据",
+			return newImportValidationError("备份恢复端口冲突：节点 %d 端口 %d 已被%s占用（备份中的%s需要该端口），已中止恢复，未写入任何数据",
 				claim.nodeID, claim.port, backupPortSourceLabel(source), claim.owner)
 		}
 		claimed[key] = "备份中的" + claim.owner
