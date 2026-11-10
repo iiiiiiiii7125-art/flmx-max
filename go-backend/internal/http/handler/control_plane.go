@@ -240,10 +240,10 @@ func (h *Handler) ensureForwardAccessByActor(actorUserID int64, actorRole int, f
 }
 
 func (h *Handler) ensureTunnelPermission(userID int64, roleID int, tunnelID int64) error {
-	if roleID == 0 {
-		return nil
-	}
-	ok, err := h.repo.UserTunnelExistsByUserAndTunnel(userID, tunnelID)
+	// 授权判定与备份导入尾 sweep 共用 repo 的同一实现（管理员恒
+	// 授权、其余角色须 status=1 授权行），见
+	// repo.UserTunnelUseAuthorized（R3-D-01 判定同源）。
+	ok, err := h.repo.UserTunnelUseAuthorized(userID, roleID, tunnelID)
 	if err != nil {
 		return markRepoError(err)
 	}
