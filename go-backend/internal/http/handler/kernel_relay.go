@@ -648,10 +648,34 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		respondInternalError(w, "inboundRelayCreate", err)
 		return
 	}
+	// LIVE-215 红 1：createRelayForward 内的首次同步发生在 relay 行
+	// 落库前，connlogEntryForwardIDs() 当时算不出该 forward、入口
+	// 服务以下发时无 connlogEntry 标记；落库后不重推则标记永不补
+	// 发，新建中转的连接日志零行。relay 行落库后立即重推一次，
+	// 使入口标记随新建中转一起落地，无需手动重推。nft 隧道无
+	// gost 服务可标（其创建面只做 nft reconcile），跳过重推；
+	// 总开关关时该 forward 不在入口集内，重推亦无标记可补，跳过。
+	var warnings []string
+	if isNft, _, nftErr := h.tunnelUsesNftables(tunnel.ID); nftErr != nil {
+		warnings = append(warnings, fmt.Sprintf("中转入口标记重推失败：隧道模式读取失败（%v），连接日志暂收不到该中转入口的记录", nftErr))
+	} else if !isNft {
+		if entryIDs, entryErr := h.connlogEntryForwardIDs(); entryErr != nil {
+			warnings = append(warnings, fmt.Sprintf("中转入口标记重推失败：入口集合读取失败（%v），连接日志暂收不到该中转入口的记录", entryErr))
+		} else if entryIDs[forwardID] {
+			if fwd, ferr := h.getForwardRecord(forwardID); ferr != nil || fwd == nil {
+				warnings = append(warnings, "中转入口标记重推失败：转发记录读取失败，连接日志暂收不到该中转入口的记录")
+			} else if err := h.syncForwardServices(fwd, "UpdateService", true); err != nil {
+				warnings = append(warnings, fmt.Sprintf("中转入口标记重推失败（%v），连接日志暂收不到该中转入口的记录", err))
+			}
+		}
+	}
 	// T-001：刷新失败进回执 warning——创建本身已落库成功，但内核
 	// 仍按旧名单放行，新中转可能无法连通。
 	if err := h.refreshInboundWhitelist(row.ID); err != nil {
-		response.WriteJSON(w, response.OKWithWarning(map[string]interface{}{"id": rel.ID, "forwardId": forwardID}, whitelistRefreshFailureNote([]int64{row.ID})+"，请检查节点内核状态"))
+		warnings = append(warnings, whitelistRefreshFailureNote([]int64{row.ID})+"，请检查节点内核状态")
+	}
+	if len(warnings) > 0 {
+		response.WriteJSON(w, response.OKWithWarning(map[string]interface{}{"id": rel.ID, "forwardId": forwardID}, strings.Join(warnings, "；")))
 		return
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{"id": rel.ID, "forwardId": forwardID}))
