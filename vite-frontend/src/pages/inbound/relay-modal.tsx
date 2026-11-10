@@ -226,6 +226,12 @@ export function RelayModal({
         return;
       }
       toast.success("已删除");
+      // T-001：白名单刷新失败时后端在信封 warning 里点名受影响入站
+      // （network.ts 合同：must be surfaced），须原样透出，不得只报
+      // 固定成功文案。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
       setRemoving(null);
       await load();
       onChanged();
