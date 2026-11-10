@@ -220,6 +220,10 @@ secrets.json
 *.p12
 *.pfx
 
+# R1-12-01 一次性初始管理员口令：Open(":memory:") 时数据目录退为 "."，
+# 测试会在包目录重生此文件（曾误提交，见 F212B-MERGE-report §3）；生产落 /app/data，永不入仓
+**/initial-admin-password.txt
+
 # Go-gost 特定配置文件
 go-gost/config.json
 go-gost/gost.json
