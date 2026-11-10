@@ -153,6 +153,11 @@ export function ImportModal({
       else if (result?.errors?.length)
         toast(`已添加：${syncText(result)}`, { icon: "⚠️", duration: 5000 });
       else toast.success(result ? `已添加：${syncText(result)}` : "已添加");
+      // R2-02（防静默）：纯中转源回执的 warning（其导入节点不可订阅）
+      // 同款透出，不得吞掉。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
       onSourceAdded();
       onClose();
     } finally {

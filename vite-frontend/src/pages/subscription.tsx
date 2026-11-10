@@ -1070,6 +1070,12 @@ export default function SubscriptionPage() {
           { icon: "⚠️", duration: 8000 },
         );
       }
+      // R2-02（防静默）：所选节点含纯中转导入节点时后端在回执
+      // warning 逐个点名（不可订阅、不会出现在订阅中）——与入站/
+      // 中转等面同款式透出，不得吞掉。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
       setDraft(null);
       await load();
     } finally {

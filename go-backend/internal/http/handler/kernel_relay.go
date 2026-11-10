@@ -949,7 +949,22 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 		// carry it.
 		postQuantum := proxy == nil && in.Protocol == kernel.ProtocolVLESS &&
 			in.Security.Type == kernel.SecurityReality && pqFor(row.KernelID)
-		if row.RelayOnly != 1 && !isLoopbackListen(row.Listen) {
+		switch {
+		case row.RelayOnly == 1:
+			// R2-02（防静默）：纯中转入站不产直连端点，只经其面板
+			// 中转端点出现。此前此分支无声——relayOnly 源导入的节
+			// 点被选入订阅后四档拉取全空、保存回执无提示、装配日
+			// 志零行，管理员无从察觉。行为不变（仍不产直连端点），
+			// 但每次装配跳过必须留日志点名；保存面另有回执点名
+			// （见 relayOnlySelectedWarning），建源面有源级提示
+			// （见 relayOnlySourceWarning）。
+			log.Printf("inboundEndpoints: relay-only inbound %q (inbound %d, node %d) serves no direct endpoint; only its relay endpoints, if any, are included", row.Name, row.ID, row.NodeID)
+		case isLoopbackListen(row.Listen):
+			// 同门另一静默分支：只监听本机地址的入站同样不产直连
+			// 端点（远端客户端无从拨节点的本机地址），与 RelayOnly
+			// 同口径留痕，只经其面板中转端点出现。
+			log.Printf("inboundEndpoints: local-only inbound %q (inbound %d, node %d, listen %s) serves no direct endpoint; only its relay endpoints, if any, are included", row.Name, row.ID, row.NodeID, row.Listen)
+		default:
 			host := inboundShareAddress(&row, node)
 			mode := inboundShareMode(&row)
 			switch {

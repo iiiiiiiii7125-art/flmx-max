@@ -583,6 +583,16 @@ func (h *Handler) remoteSourceList(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OK(out))
 }
 
+// relayOnlySourceWarning is the fixed receipt notice for relay-only
+// sources (R2-02 防静默面 ③, user decision 2026-11-11: warn only).
+// The source's own save/sync receipt speaks first: nodes imported
+// from this source are relay-only — they serve no direct endpoint
+// and never appear in a subscription as nodes (the subscription
+// save receipt additionally names any such node actually selected,
+// see relayOnlySelectedWarning; assembly logs every skip, see
+// inboundEndpoints).
+const relayOnlySourceWarning = "该源为纯中转源：其导入节点不可订阅，不会出现在订阅中"
+
 // remoteSourceSave creates or edits a source; a new one (or a changed URL, a
 // changed relayOnly flag — IMP-003, or an uploaded file) is synced right away.
 func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
@@ -701,6 +711,10 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 		if saved, rerr := h.repo.GetRemoteSource(src.ID); rerr == nil && saved != nil {
 			src = saved
 		}
+		if src.RelayOnly == 1 {
+			response.WriteJSON(w, response.OKWithWarning(remoteSourceViewOf(src), relayOnlySourceWarning))
+			return
+		}
 		response.WriteJSON(w, response.OK(remoteSourceViewOf(src)))
 		return
 	}
@@ -715,7 +729,15 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 		// IMP-006：保存时若为公网 http 地址，提前提示同步必败（SecureFetch 对
 		// 公网强制 https）。精确判定在同步时由 SecureFetch 按解析 IP 做。
 		if isLikelyPublicHTTP(req.URL) {
-			response.WriteJSON(w, response.R{Code: 0, Msg: "订阅源已保存。注意：公网 http 地址在同步时会被拒绝，建议改用 https 地址。", Data: remoteSourceViewOf(src), TS: now})
+			resp := response.R{Code: 0, Msg: "订阅源已保存。注意：公网 http 地址在同步时会被拒绝，建议改用 https 地址。", Data: remoteSourceViewOf(src), TS: now}
+			if src.RelayOnly == 1 {
+				resp.Warning = relayOnlySourceWarning
+			}
+			response.WriteJSON(w, resp)
+			return
+		}
+		if src.RelayOnly == 1 {
+			response.WriteJSON(w, response.OKWithWarning(remoteSourceViewOf(src), relayOnlySourceWarning))
 			return
 		}
 		response.WriteJSON(w, response.OK(remoteSourceViewOf(src)))
@@ -797,7 +819,13 @@ func (h *Handler) respondRemoteSync(w http.ResponseWriter, ctx context.Context, 
 		response.WriteJSON(w, response.R{Code: -1, Msg: msg, Data: data, TS: time.Now().UnixMilli()})
 		return
 	}
-	response.WriteJSON(w, response.R{Code: 0, Msg: res.summary(), Data: data, TS: time.Now().UnixMilli()})
+	// R2-02（防静默面 ③）：纯中转源的同步回执同带源级提示——新建
+	// 源的主路径正经此（fetch），刷新回执同口径重申。
+	resp := response.R{Code: 0, Msg: res.summary(), Data: data, TS: time.Now().UnixMilli()}
+	if src.RelayOnly == 1 {
+		resp.Warning = relayOnlySourceWarning
+	}
+	response.WriteJSON(w, resp)
 }
 
 func (h *Handler) remoteSourceRefresh(w http.ResponseWriter, r *http.Request) {

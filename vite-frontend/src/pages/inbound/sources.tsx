@@ -211,7 +211,14 @@ export function RemoteSourcesSection({
   const refresh = async (s: RemoteSourceItem) => {
     setRefreshing(s.id);
     try {
-      report(await refreshRemoteSource(s.id));
+      const res = await refreshRemoteSource(s.id);
+
+      // R2-02（防静默）：纯中转源同步回执的 warning（其导入节点不可
+      // 订阅）在调用点直读透出（check-warning-consumption 近处读口径）。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
+      report(res);
       await onChanged();
     } finally {
       setRefreshing(null);
@@ -226,7 +233,13 @@ export function RemoteSourcesSection({
     if (content === null) return;
     setRefreshing(s.id);
     try {
-      report(await saveRemoteSource({ ...draftOf(s), content }));
+      const res = await saveRemoteSource({ ...draftOf(s), content });
+
+      // R2-02（防静默）：同 refresh，纯中转源回执 warning 调用点直读。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
+      report(res);
       await onChanged();
     } finally {
       setRefreshing(null);
@@ -267,6 +280,11 @@ export function RemoteSourcesSection({
       );
 
       report(res);
+      // R2-02（防静默）：纯中转源保存回执的 warning（其导入节点不可
+      // 订阅）在调用点直读透出（check-warning-consumption 近处读口径）。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
       if (res.code === 0 && !draft.id) rotateIdemKey();
       // A source whose first fetch failed is still saved; keep the editor
       // open only when nothing was stored.
