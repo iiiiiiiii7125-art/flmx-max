@@ -15,7 +15,10 @@
 //      traffic-stats.tsx:103 为证）；
 //   2. 登记表 `load-failure-markers.json` 以（file, apiFn）为键，
 //      登记每个初载列表面及其失败标记标识符（fixed 者标记必须
-//      在场、missing 者期望标记必须仍缺席）；
+//      在场、missing 者期望标记必须仍缺席）；另有 exempt 者：
+//      经逐项裁定的谓词外调用点（picker／aux 数据源、动作型
+//      明细加载、权限探针等），不设标记断言，但必须写明机制
+//      理由（reason 非空），锚点同样不得腐烂——静默豁免不许；
 //   3. 双向断言：登记为 fixed 者标记缺席即红（回归）；登记为
 //      missing 者标记出现即红（修复落地未同步登记，须同提交把
 //      本条翻为 fixed）；登记项在普查中消失（文件改名／apiFn
@@ -24,9 +27,10 @@
 //      下限（现行实数见末尾日志），普查口径损坏致基数缩水即红，
 //      门不得以小集合假绿。
 //
-// 覆盖边界（明示）：登记表只覆盖初载列表面（审计已判定的 17
-// 面）；其余调用点多为动作调用（创建／删除／探测／保存等），
-// 其失败 UX 是动作上的 toast，本就不适用持久标记，不入登记。
+// 覆盖边界（明示）：登记表覆盖初载列表面（fixed）与逐项裁定
+// 的谓词外同批调用点（exempt，理由见登记表）；其余调用点多为
+// 动作调用（创建／删除／探测／保存等），其失败 UX 是动作上的
+// toast，本就不适用持久标记，不入登记。
 // 标记存在性判定剥除注释后按整词匹配（注释内提及不计数——
 // S3 记 modal:48 注释行假阳性同族）；字符串字面量内的提及计
 // 入（标记名只出现在文案里仍算在场，属宽松口径、由行为审计兜
@@ -229,6 +233,14 @@ function markerPresent(file, marker) {
       "登记项已从普查消失（文件改名／apiFn 改名／调用点删除）——登记腐烂，须同步更新",
     );
     if (!inCensus) continue;
+    if (s.status === "exempt") {
+      check(
+        `豁免登记带机制理由：${s.file} ${s.apiFn}`,
+        typeof s.reason === "string" && s.reason.trim().length > 0,
+        "exempt 登记必须写明机制理由，不得静默豁免",
+      );
+      continue;
+    }
     const present = markerPresent(s.file, s.marker);
     if (s.status === "fixed") {
       check(
@@ -247,7 +259,7 @@ function markerPresent(file, marker) {
     }
   }
   console.log(
-    `\n加载点普查：${sites.length} 调用点、${distinctFiles} 文件、${distinctFns} 不同 apiFn；登记 ${surfaces.length} 面（fixed ${surfaces.filter((s) => s.status === "fixed").length}／missing ${surfaces.filter((s) => s.status === "missing").length}）`,
+    `\n加载点普查：${sites.length} 调用点、${distinctFiles} 文件、${distinctFns} 不同 apiFn；登记 ${surfaces.length} 面（fixed ${surfaces.filter((s) => s.status === "fixed").length}／missing ${surfaces.filter((s) => s.status === "missing").length}／exempt ${surfaces.filter((s) => s.status === "exempt").length}）`,
   );
 }
 
