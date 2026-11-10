@@ -110,16 +110,40 @@ export function SubscriptionTemplatesModal({
   const [checkSub, setCheckSub] = useState(0);
   const [busy, setBusy] = useState(false);
 
+  // R2-C3-01（IRL-3 同族）：模板列表初载失败必须留持久标记＋重试入口，
+  // 不得再按「还没有模板。」空态渲染（与 node.tsx nodesLoadFailed 同款纪律）。
+  const [itemsLoadFailed, setItemsLoadFailed] = useState(false);
+  // 分类/订阅为弹窗内 picker 数据源：失败只留一行警告，不谎称列表失败。
+  const [auxLoadFailed, setAuxLoadFailed] = useState(false);
+
   const load = useCallback(async () => {
-    const [listRes, catRes, subRes] = await Promise.all([
+    // allSettled：任一请求抛错不得丢弃其余已回数据，各面失败位独立记。
+    const [listSettled, catSettled, subSettled] = await Promise.allSettled([
       getSubscriptionTemplates(),
       getTemplateCatalog(),
       getSubscriptions(),
     ]);
-    if (listRes.code === 0) setItems(listRes.data ?? []);
-    else toast.error(listRes.msg || "加载模板失败");
-    if (catRes.code === 0) setCatalog(catRes.data ?? []);
-    if (subRes.code === 0 && subRes.data) setSubs(subRes.data.items ?? []);
+    const listRes =
+      listSettled.status === "fulfilled" ? listSettled.value : null;
+    const catRes = catSettled.status === "fulfilled" ? catSettled.value : null;
+    const subRes = subSettled.status === "fulfilled" ? subSettled.value : null;
+    if (listRes && listRes.code === 0) {
+      setItems(listRes.data ?? []);
+      setItemsLoadFailed(false);
+    } else {
+      setItemsLoadFailed(true);
+      toast.error(listRes?.msg || "加载模板失败");
+    }
+    const auxFailed =
+      !catRes ||
+      catRes.code !== 0 ||
+      !subRes ||
+      subRes.code !== 0 ||
+      !subRes.data;
+    setAuxLoadFailed(auxFailed);
+    if (catRes && catRes.code === 0) setCatalog(catRes.data ?? []);
+    if (subRes && subRes.code === 0 && subRes.data)
+      setSubs(subRes.data.items ?? []);
   }, []);
 
   useEffect(() => {
@@ -298,9 +322,32 @@ export function SubscriptionTemplatesModal({
                     用自己的 Mihomo / sing-box / Surge 配置作骨架下发订阅，面板只把节点填进策略组。
                     网址模板每天自动刷新一次，失败继续用上次内容。在订阅编辑的「订阅模板」一节里给客户端选用模板。
                   </p>
-                  {items.length === 0 && (
-                    <p className="text-sm text-foreground">还没有模板。</p>
+                  {auxLoadFailed && (
+                    <p className="rounded-lg bg-warning-500/10 px-3 py-2 text-xs font-semibold text-warning-700">
+                      分类或订阅数据加载失败，模板校验与选用可能不完整，请重试。
+                    </p>
                   )}
+                  {items.length === 0 &&
+                    (itemsLoadFailed ? (
+                      <div className="space-y-2 rounded-lg border border-danger-200 bg-danger-50 px-3 py-3 text-center">
+                        <p className="text-sm font-semibold text-danger-700">
+                          模板列表加载失败
+                        </p>
+                        <p className="text-xs font-semibold text-foreground">
+                          没能从面板取到模板列表，不能据此判断是否已有模板；请重试。
+                        </p>
+                        <Button
+                          color="danger"
+                          size="sm"
+                          variant="flat"
+                          onPress={() => load()}
+                        >
+                          重新加载
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-foreground">还没有模板。</p>
+                    ))}
                   {items.map((t) => (
                     <div
                       key={t.id}

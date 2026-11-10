@@ -548,7 +548,8 @@ export interface ServiceMonitorResultApiItem {
   timestamp: number;
   success: number;
   latencyMs: number;
-  statusCode: number;
+  // R2-C2-B01：agent 侧已删 statusCode 字段（恒 0），前端声明同步删除，
+  // 不得再以它渲染或断言。对应后端 health/checker.go 读口归路 2。
   errorMessage: string;
 }
 

@@ -491,6 +491,8 @@ export default function TunnelPage() {
     number | null
   >(null);
   const [batchLoading, setBatchLoading] = useState(false);
+  // FT-5：行级/批量启停进行中的隧道 id（按钮 isLoading＋防重复点击）。
+  const [togglingId, setTogglingId] = useState<number | null>(null);
   const [batchProgress, setBatchProgress] = useState<BatchProgressState>({
     active: false,
     label: "",
@@ -1658,6 +1660,92 @@ export default function TunnelPage() {
     }
   };
 
+  // FT-5：禁用隧道补启停入口（此前只能进编辑表单改 status）。
+  // 载荷镜像编辑提交字段（updateTunnel 后端已证接受合法 status 翻转，
+  // TestK9TunnelUpdateAcceptsLegalStatusToggle）；只改 status 一位，
+  // 其余字段原样回传，后端缺席字段回填存量（R13X-003 省略形态）。
+  const toggleTunnelStatus = async (tunnel: Tunnel, nextStatus: number) => {
+    const payload: TunnelMutationPayload = {
+      id: tunnel.id,
+      name: tunnel.name,
+      type: tunnel.type,
+      status: nextStatus,
+      flow: tunnel.flow,
+      trafficRatio: tunnel.trafficRatio,
+      inIp: tunnel.inIp,
+      ipPreference: tunnel.ipPreference,
+      probeTargetHost: tunnel.probeTargetHost,
+      probeTargetPort: tunnel.probeTargetPort,
+      engine: tunnel.engine,
+      inNodeId: tunnel.inNodeId,
+      outNodeId: tunnel.outNodeId,
+      chainNodes: tunnel.chainNodes,
+    };
+    const response = await updateTunnel(payload);
+
+    if (response.code !== 0) {
+      throw new Error(response.msg || "更新失败");
+    }
+  };
+
+  const handleToggleStatus = async (tunnel: Tunnel) => {
+    if (togglingId !== null) return;
+    const nextStatus = tunnel.status === 1 ? 0 : 1;
+
+    setTogglingId(tunnel.id);
+    try {
+      await toggleTunnelStatus(tunnel, nextStatus);
+      toast.success(nextStatus === 1 ? "隧道已启用" : "隧道已停用");
+      await refreshTunnelList(false);
+    } catch (error) {
+      toast.error(extractApiErrorMessage(error, "切换状态失败"));
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  // FT-5 批量启停：顺序执行、逐条汇总（失败项留勾选就地可重试，仿 FT-1）。
+  const handleBatchToggleStatus = async (nextStatus: number) => {
+    if (selectedIds.size === 0 || batchLoading) return;
+    const targets = tunnels.filter((tunnel) => selectedIds.has(tunnel.id));
+    const failures: number[] = [];
+    let changed = 0;
+
+    setBatchLoading(true);
+    try {
+      for (const tunnel of targets) {
+        if (tunnel.status === nextStatus) continue;
+        try {
+          await toggleTunnelStatus(tunnel, nextStatus);
+          changed += 1;
+        } catch {
+          failures.push(tunnel.id);
+        }
+      }
+      const skipped = targets.filter(
+        (tunnel) => tunnel.status === nextStatus,
+      ).length;
+
+      if (failures.length === 0) {
+        toast.success(
+          nextStatus === 1
+            ? `已启用 ${changed} 条隧道${skipped > 0 ? `（${skipped} 条已是启用态）` : ""}`
+            : `已停用 ${changed} 条隧道${skipped > 0 ? `（${skipped} 条已是停用态）` : ""}`,
+        );
+        setSelectedIds(new Set());
+        setSelectMode(false);
+      } else {
+        toast.error(
+          `切换状态：成功 ${changed} 条，失败 ${failures.length} 条，失败项已保留勾选可重试`,
+        );
+        setSelectedIds(new Set(failures));
+      }
+      await refreshTunnelList(false);
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
   // 传感器配置
   const sensors = useSensors(
     useSensor(MouseSensor, {
@@ -1979,6 +2067,27 @@ export default function TunnelPage() {
                 >
                   下发
                 </Button>
+                {/* FT-5：批量启停——所选隧道顺序翻转状态，已是目标态的跳过。 */}
+                <Button
+                  color="success"
+                  isDisabled={selectedIds.size === 0}
+                  isLoading={batchLoading}
+                  size="sm"
+                  variant="flat"
+                  onPress={() => handleBatchToggleStatus(1)}
+                >
+                  启用所选
+                </Button>
+                <Button
+                  color="warning"
+                  isDisabled={selectedIds.size === 0}
+                  isLoading={batchLoading}
+                  size="sm"
+                  variant="flat"
+                  onPress={() => handleBatchToggleStatus(0)}
+                >
+                  停用所选
+                </Button>
                 <Button
                   color="secondary"
                   size="sm"
@@ -2224,6 +2333,17 @@ export default function TunnelPage() {
                             onPress={() => handleDiagnose(tunnel)}
                           >
                             诊断
+                          </Button>
+                          {/* FT-5：行级启停——禁用隧道不再只能进编辑表单改状态。 */}
+                          <Button
+                            className="h-6 px-2 min-w-0 text-xs font-semibold bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20"
+                            isDisabled={togglingId !== null}
+                            isLoading={togglingId === tunnel.id}
+                            size="sm"
+                            variant="flat"
+                            onPress={() => handleToggleStatus(tunnel)}
+                          >
+                            {tunnel.status === 1 ? "停用" : "启用"}
                           </Button>
                           <Button
                             className="h-6 px-2 min-w-0 text-xs font-semibold bg-rose-500/10 text-rose-700 hover:bg-rose-500/20"
@@ -2537,6 +2657,18 @@ export default function TunnelPage() {
                                 onPress={() => handleDelete(tunnel)}
                               >
                                 删除
+                              </Button>
+                              {/* FT-5：卡片视图启停（与列表视图同款）。 */}
+                              <Button
+                                className="flex-1 min-h-8"
+                                color="success"
+                                isDisabled={togglingId !== null}
+                                isLoading={togglingId === tunnel.id}
+                                size="sm"
+                                variant="flat"
+                                onPress={() => handleToggleStatus(tunnel)}
+                              >
+                                {tunnel.status === 1 ? "停用" : "启用"}
                               </Button>
                             </div>
                           </CardBody>

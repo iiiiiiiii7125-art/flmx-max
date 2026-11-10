@@ -6,7 +6,6 @@ import {
   Navigate,
 } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
-import { AnimatePresence } from "framer-motion";
 
 import IndexPage from "@/pages/index";
 import AdminLayout from "@/layouts/admin";
@@ -287,8 +286,13 @@ function App() {
     };
   }, []);
 
+  // F-W4-03：Routes 外不得再包 AnimatePresence。实测：会话内跨断点切换
+  // 布局（AdminLayout→H5Layout）会卸载/重挂页面 AnimatedPage，之后
+  // AnimatePresence 的退出追踪失效——wait 模式新路由永不挂载、sync 模式
+  // 旧页面成幽灵常驻（两 main 共存），hash 变而内容不动。入场动画仍在
+  // （AnimatedPage 的 initial/animate），只丢 0.28s 退场动画。
   return (
-    <AnimatePresence mode="wait">
+    <>
       <Routes key={location.pathname} location={location}>
         <Route element={<LoginRoute />} path="/" />
         <Route
@@ -406,7 +410,7 @@ function App() {
         {/* 兜底：未知路径回仪表盘，避免落进受保护布局里渲染空白内容区 */}
         <Route element={<Navigate replace to="/dashboard" />} path="*" />
       </Routes>
-    </AnimatePresence>
+    </>
   );
 }
 

@@ -101,6 +101,9 @@ interface MonitorViewProps {
   focusNodeId?: number | null;
   /** With focusNodeId: the back button leaves the view. */
   onBack?: () => void;
+  // R2-C3-01（IRL-3 同族）：节点列表由调用方初载，失败时空态必须改判，
+  // 不得再用「暂无节点」假陈述（调用方同时渲染持久横幅＋重试入口）。
+  nodesLoadFailed?: boolean;
 }
 
 type RealtimeNodeMetric = {
@@ -612,6 +615,7 @@ export function MonitorView({
   canWrite = false,
   focusNodeId = null,
   onBack,
+  nodesLoadFailed = false,
 }: MonitorViewProps) {
   const [detailNodeId, setDetailNodeId] = useState<number | null>(focusNodeId);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(
@@ -629,8 +633,14 @@ export function MonitorView({
     ServiceMonitorApiItem[]
   >([]);
   const [monitorsLoading, setMonitorsLoading] = useState(false);
-  const [, setMonitorsError] = useState<string | null>(null);
-  const [, setLatestResultsError] = useState<string | null>(null);
+  // R2-C3-01（IRL-3 同族）：此前两处错误值被丢弃（const [, setX]）——
+  // setter 在、渲染无，服务监控列表/检查记录加载失败时页面仍按空态
+  // 渲染（「暂无服务监控」「暂无检查记录」假陈述）。现保留错误值并渲染
+  // 失败标记＋重试入口（与 NodeMetricsChartCard error={metricsError} 同款）。
+  const [monitorsError, setMonitorsError] = useState<string | null>(null);
+  const [latestResultsError, setLatestResultsError] = useState<
+    string | null
+  >(null);
   const [monitorResults, setMonitorResults] = useState<
     Record<number, ServiceMonitorResultApiItem[]>
   >({});
@@ -1551,7 +1561,13 @@ export function MonitorView({
                   <TableColumn>存储</TableColumn>
                   <TableColumn align="center">操作</TableColumn>
                 </TableHeader>
-                <TableBody emptyContent="暂无节点">
+                <TableBody
+                  emptyContent={
+                    nodesLoadFailed
+                      ? "节点列表加载失败，不能据此判断是否已有节点；请重试。"
+                      : "暂无节点"
+                  }
+                >
                   {nodes.map((node) => {
                     const metric = realtimeNodeMetrics[node.id] || null;
                     const isOnline = node.connectionStatus === "online";
@@ -1955,6 +1971,24 @@ export function MonitorView({
                   </div>
                 </CardHeader>
                 <CardBody className="space-y-4">
+                  {/* R2-C3-01：列表刷新失败时旧数据保留展示，横幅点名是旧数据＋重试入口。 */}
+                  {monitorsError &&
+                    !monitorsLoading &&
+                    detailServiceMonitors.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 rounded-xl bg-danger-50 px-3 py-2">
+                        <p className="text-xs font-semibold text-danger-700">
+                          服务监控列表刷新失败，当前显示的是上次成功加载的数据，不是最新状态。
+                        </p>
+                        <Button
+                          color="danger"
+                          size="sm"
+                          variant="flat"
+                          onPress={() => void loadServiceMonitors()}
+                        >
+                          重新加载
+                        </Button>
+                      </div>
+                    )}
                   {monitorsLoading ? (
                     <div className="flex justify-center py-8">
                       <RefreshCw className="w-6 h-6 animate-spin" />
@@ -2170,12 +2204,40 @@ export function MonitorView({
                             </LineChart>
                           </ResponsiveContainer>
                         </div>
+                      ) : latestResultsError && resolvedActiveMonitor ? (
+                        <div className="flex flex-col items-center gap-2 py-8 text-center">
+                          <p className="text-sm font-semibold text-danger-700">
+                            检查记录加载失败，不能据此判断该监控是否已有检查记录。
+                          </p>
+                          <Button
+                            color="danger"
+                            size="sm"
+                            variant="flat"
+                            onPress={() => void loadLatestMonitorResults()}
+                          >
+                            重新加载
+                          </Button>
+                        </div>
                       ) : (
                         <div className="text-center py-8 text-foreground">
                           暂无检查记录
                         </div>
                       )}
                     </>
+                  ) : monitorsError ? (
+                    <div className="flex flex-col items-center gap-2 py-8 text-center">
+                      <p className="text-sm font-semibold text-danger-700">
+                        服务监控列表加载失败，不能据此判断是否已有服务监控。
+                      </p>
+                      <Button
+                        color="danger"
+                        size="sm"
+                        variant="flat"
+                        onPress={() => void loadServiceMonitors()}
+                      >
+                        重新加载
+                      </Button>
+                    </div>
                   ) : (
                     <div className="text-center py-8 text-foreground">
                       {canWrite

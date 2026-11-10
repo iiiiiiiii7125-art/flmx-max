@@ -5,17 +5,38 @@ import { demoRole, switchDemoRole } from "@/demo";
 
 const DOCS = "https://iiiiiiiii7125-art.github.io/flmx-max/guide/install";
 
+const BANNER_OPEN_KEY = "flmx-demo-banner-open";
+
 /** The demo's floating note: sample data, switch views, how to install. */
 export function DemoBanner() {
-  const [open, setOpen] = useState(true);
+  // F-W4-02：默认折叠为「演示站」小 pill——展开态 320×120 固定卡片
+  // 默认盖住右下内容（实测盖住订阅编辑保存钮），且源码与实测均无
+  // pointer-events: none（S3 的「点击可穿透」与源码/实测不符，见报告），
+  // 盖住即不可点。选择记 localStorage，跨导航/刷新跟随用户选择。
+  const [open, setOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(BANNER_OPEN_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
   const role = demoRole();
+
+  const setOpenPersisted = (next: boolean) => {
+    setOpen(next);
+    try {
+      localStorage.setItem(BANNER_OPEN_KEY, String(next));
+    } catch {
+      // 忽略写缓存失败：横幅状态不影响功能。
+    }
+  };
 
   if (!open) {
     return (
       <button
         className="fixed bottom-[84px] right-3 z-[60] rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-lg lg:bottom-4"
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => setOpenPersisted(true)}
       >
         演示站
       </button>
@@ -30,7 +51,7 @@ export function DemoBanner() {
           aria-label="收起"
           className="rounded p-1 text-foreground hover:bg-white/40"
           type="button"
-          onClick={() => setOpen(false)}
+          onClick={() => setOpenPersisted(false)}
         >
           <X className="h-3.5 w-3.5" />
         </button>

@@ -174,16 +174,25 @@ const getInitialConfig = () => {
 
 export const siteConfig = getInitialConfig();
 
+// W2-UX-01（访客侧）：壁纸探针失败须留可查状态＋派发事件，访客面
+// （登录页）据此提示「已用默认背景」，不再静默只剩纯色。
+export const WALLPAPER_LOAD_FAILED_EVENT = "wallpaper-load-failed";
+export const WALLPAPER_LOAD_SUCCEEDED_EVENT = "wallpaper-load-succeeded";
+let wallpaperFailedUrl: string | null = null;
+
+/** 当前壁纸是否探针失败（登录页挂载时即读，避免事件竞态）。 */
+export const isWallpaperLoadFailed = () => wallpaperFailedUrl !== null;
+
 // 预加载壁纸图片，避免等 CSS 变量设置后才开始下载
 const preloadWallpaper = (url: string | undefined | null) => {
   if (!url || typeof document === "undefined") return;
   const isImage =
     url.startsWith("http") || url.startsWith("data:") || url.startsWith("/") || url.startsWith("blob:");
   if (!isImage || url === "wallpaper" || url === "theme") return;
-  // 避免重复预加载同一张
+  // 避免重复预加载同一张；曾失败的地址不走短路，须重探以确认是否恢复。
   const id = "wallpaper-preload";
   let link = document.getElementById(id) as HTMLLinkElement | null;
-  if (link && link.href === url) return;
+  if (link && link.href === url && wallpaperFailedUrl !== url) return;
   if (!link) {
     link = document.createElement("link");
     link.id = id;
@@ -192,8 +201,22 @@ const preloadWallpaper = (url: string | undefined | null) => {
     document.head.appendChild(link);
   }
   link.href = url;
-  // 同时用 Image 对象触发下载，兼容不支持 preload 的情况
+  // 同时用 Image 对象触发下载，兼容不支持 preload 的情况；
+  // link[rel=preload] 的失败不一定可观测，以 Image 探针为准。
   const img = new Image();
+
+  img.onload = () => {
+    if (wallpaperFailedUrl === url) {
+      wallpaperFailedUrl = null;
+      window.dispatchEvent(new Event(WALLPAPER_LOAD_SUCCEEDED_EVENT));
+    }
+  };
+  img.onerror = () => {
+    wallpaperFailedUrl = url;
+    window.dispatchEvent(
+      new CustomEvent(WALLPAPER_LOAD_FAILED_EVENT, { detail: { url } }),
+    );
+  };
   img.src = url;
 };
 
@@ -404,8 +427,17 @@ export const getCachedConfigs = async (): Promise<Record<string, string>> => {
     }
 
     const publicConfigs = await fetchPublicBrandConfigs();
+    const merged = { ...publicCachedConfigs, ...publicConfigs };
 
-    return { ...publicCachedConfigs, ...publicConfigs };
+    // R2-C3-01：任一数据源都无数据时抛错，不得返回 {} 冒充「面板无配置」。
+    // 空对象成功（后端 code 0 返回 {}，全新面板亦可能）仍走上面的
+    // return configs，不受影响；本 throw 会落入下方 catch，catch 内再次
+    // 回落失败时同样抛错（失败后端上多一轮公开键探针，可接受）。
+    if (Object.keys(merged).length === 0) {
+      throw new Error("load configs failed: no data from any source");
+    }
+
+    return merged;
   } catch {
     // API失败时返回缓存的数据
     if (hasCachedData) {
@@ -413,10 +445,15 @@ export const getCachedConfigs = async (): Promise<Record<string, string>> => {
     }
 
     const publicConfigs = await fetchPublicBrandConfigs();
-
-    return hasPublicCachedData
+    const merged = hasPublicCachedData
       ? { ...publicCachedConfigs, ...publicConfigs }
       : publicConfigs;
+
+    if (Object.keys(merged).length === 0) {
+      throw new Error("load configs failed: no data from any source");
+    }
+
+    return merged;
   }
 };
 
@@ -472,7 +509,13 @@ const updateDocumentFavicon = (faviconUrl: string) => {
 
 // 动态更新网站配置
 export const updateSiteConfig = async (configMap?: Record<string, string>) => {
-  const resolvedConfigMap = configMap ?? (await getCachedConfigs());
+  // R2-C3-01：无参刷新是 App 后台静默刷新，任一数据源都无数据时
+  // getCachedConfigs 会抛错；此处吞掉保持既有静默行为（调用方为
+  // void fire-and-forget）。需感知失败的调用方（配置页）直接调
+  // getCachedConfigs 并自行 try/catch。
+  const resolvedConfigMap =
+    configMap ??
+    (await getCachedConfigs().catch((): Record<string, string> => ({})));
 
   Object.entries(resolvedConfigMap).forEach(([key, value]) => {
     const normalizedKey = key.trim().toLowerCase();
