@@ -12,7 +12,9 @@ func (r *Repository) ListMonitorNodes() ([]model.Node, error) {
 		return nil, errors.New("repository not initialized")
 	}
 	var nodes []model.Node
-	err := r.db.Select("id", "inx", "name", "status", "version", "updated_time", "latency_targets").
+	// forward_mode 供启动掉线检查豁免 nftables 节点（F2-02：
+	// 其 status=1 是构造口径、无 agent 会话语义）。
+	err := r.db.Select("id", "inx", "name", "status", "version", "updated_time", "latency_targets", "forward_mode").
 		Order("inx ASC, id ASC").
 		Find(&nodes).Error
 	return nodes, err

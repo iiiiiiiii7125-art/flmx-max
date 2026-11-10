@@ -43,7 +43,7 @@ func (r *Repository) UpsertNodeUpgradeVerification(rec *model.NodeUpgradeVerific
 	return r.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "node_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"kind", "target_version", "expected_sha", "from_version",
+			"kind", "target_version", "expected_sha", "sha_anchor", "from_version",
 			"observed_version", "status", "late", "dispatched_at",
 			"deadline_at", "resolved_at", "updated_time", "close_reason",
 		}),
@@ -112,8 +112,8 @@ func (r *Repository) ResolveNodeUpgradeVerification(nodeID int64, fromStatus, to
 		return false, errors.New("repository not initialized")
 	}
 	updates := map[string]interface{}{
-		"status":      toStatus,
-		"resolved_at": now,
+		"status":       toStatus,
+		"resolved_at":  now,
 		"updated_time": now,
 	}
 	if observed != "" {

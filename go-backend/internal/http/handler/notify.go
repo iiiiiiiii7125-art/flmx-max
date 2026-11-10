@@ -26,12 +26,12 @@ const (
 	notifyEventNodeOffline = "node_offline"
 	// A4-V-06：升级/回退下发后在核验窗口内未回连到目标版本。
 	notifyEventNodeUpgradeFailed = "node_upgrade_failed"
-	notifyEventInboundDown = "inbound_down"
-	notifyEventKernelError = "kernel_error"
-	notifyEventNodeExpiry  = "node_expiry"
-	notifyEventLatencyBad  = "latency_bad"
-	notifyEventRouteChange = "route_change"
-	notifyEventTest        = "test"
+	notifyEventInboundDown       = "inbound_down"
+	notifyEventKernelError       = "kernel_error"
+	notifyEventNodeExpiry        = "node_expiry"
+	notifyEventLatencyBad        = "latency_bad"
+	notifyEventRouteChange       = "route_change"
+	notifyEventTest              = "test"
 )
 
 const (
@@ -972,7 +972,17 @@ func (h *Handler) checkStartupOfflineNodes() {
 		return
 	}
 	for _, node := range nodes {
-		if node.Status != 1 {
+		// F2-02：nftables 节点 status=1 是创建时的构造口径、无
+		// agent 会话语义，「无 WS 会话」不构成离线——旧实现对
+		// 每个 nftables 节点在每次面板重启时都误发掉线告警。
+		if defaultNodeForwardMode(node.ForwardMode) == "nftables" {
+			continue
+		}
+		// F2-02：候选集 = DB 仍标在线，或启动复位前快照中在线
+		// （本地节点的 status 已被启动复位清零，不能再以
+		// Status!=1 一律跳过——那正是本地节点永不告警的成因）。
+		_, wasOnlineAtStartup := h.startupOnlineSnapshot[node.ID]
+		if node.Status != 1 && !wasOnlineAtStartup {
 			continue
 		}
 		if h.wsServer.IsNodeOnline(node.ID) {

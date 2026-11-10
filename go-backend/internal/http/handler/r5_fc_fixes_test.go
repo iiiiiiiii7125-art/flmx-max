@@ -280,7 +280,9 @@ func TestNodeUpgradeOpsMutuallyExclusiveAcrossEntrypoints(t *testing.T) {
 		}
 	}
 
-	// 放行 A 的升级 → 完成成功；之后回退恢复可用。
+	// 放行 A 的升级 → 下发成功。F2-10：ACK 后登记转为核验执行
+	// 期占用——核验未终局前回退仍须被拒（旧语义随 handler 返回
+	// 即释放，第二条操作可插入执行期并覆盖核验记录）。
 	close(barrierA.release)
 	select {
 	case env := <-upgradeDone:
@@ -290,13 +292,19 @@ func TestNodeUpgradeOpsMutuallyExclusiveAcrossEntrypoints(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("A 的升级放行后未在限时内返回")
 	}
+	if env := callNodeOp(t, h.nodeRollback, map[string]interface{}{"id": idA}); env.Code == 0 || !strings.Contains(env.Msg, "待核验落地") {
+		t.Fatalf("核验未终局时回退应被拒并点名待核验，got %+v", env)
+	}
+	// 核验截止扫描置 failed 即终局，占用随之释放、回退恢复可用。
+	h.failDueUpgradeVerifications(time.Now().Add(2 * nodeUpgradeVerifyWindow))
 	if env := callNodeOp(t, h.nodeRollback, map[string]interface{}{"id": idA}); env.Code != 0 {
-		t.Fatalf("升级完成后回退应恢复可用，got %+v", env)
+		t.Fatalf("核验终局后回退应恢复可用，got %+v", env)
 	}
 	h.upgradeMu.Lock()
 	left := len(h.nodeUpgradeOps)
+	leftHolds := len(h.nodeUpgradeOpHolds)
 	h.upgradeMu.Unlock()
-	if left != 0 {
-		t.Fatalf("全部操作结束后登记应为空，残留 %d 条", left)
+	if left != 0 || leftHolds != 0 {
+		t.Fatalf("全部操作结束后登记应为空，残留 ops=%d holds=%d", left, leftHolds)
 	}
 }

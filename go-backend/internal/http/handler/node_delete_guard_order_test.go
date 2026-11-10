@@ -21,7 +21,7 @@ func stubCountingNodeAgentChannel(t *testing.T, online bool, sends *int) {
 	t.Helper()
 	origOnline, origSend := nodeAgentIsOnline, nodeAgentSendCommand
 	nodeAgentIsOnline = func(h *Handler, nodeID int64) bool { return online }
-	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, timeout time.Duration) ([]string, error) {
+	nodeAgentSendCommand = func(h *Handler, nodeID int64, cmdType string, data map[string]interface{}, timeout time.Duration) ([]string, error) {
 		*sends++
 		return nil, nil
 	}
@@ -72,6 +72,9 @@ func TestNodeDeleteGuardFailureSkipsUninstallOnline(t *testing.T) {
 	if row := pendingRow(t, r, "secret-guarded-online"); row != nil {
 		t.Fatalf("guard failure must not register pending uninstall: %+v", row)
 	}
+	if row := pendingUninstallRow(t, r, node.ID); row != nil {
+		t.Fatalf("guard failure must not register pending uninstall (C4-G2 registry): %+v", row)
+	}
 	if got, err := r.GetNodeByID(node.ID); err != nil || got == nil {
 		t.Fatalf("node record must survive an aborted delete: node=%v err=%v", got, err)
 	}
@@ -93,6 +96,9 @@ func TestNodeDeleteGuardFailureSkipsUninstallOffline(t *testing.T) {
 	}
 	if row := pendingRow(t, r, "secret-guarded-offline"); row != nil {
 		t.Fatalf("guard failure must not register pending uninstall: %+v", row)
+	}
+	if row := pendingUninstallRow(t, r, node.ID); row != nil {
+		t.Fatalf("guard failure must not register pending uninstall (C4-G2 registry): %+v", row)
 	}
 	if got, err := r.GetNodeByID(node.ID); err != nil || got == nil {
 		t.Fatalf("node record must survive an aborted delete: node=%v err=%v", got, err)
@@ -124,6 +130,10 @@ func TestNodeBatchDeleteGuardFailureSkipsUninstallAndCounts(t *testing.T) {
 			UninstalledCount          int `json:"uninstalledCount"`
 			UninstallPendingCount     int `json:"uninstallPendingCount"`
 			UninstallUnsupportedCount int `json:"uninstallUnsupportedCount"`
+			PendingCount              int `json:"pendingCount"`
+			UninstallAckedCount       int `json:"uninstallAckedCount"`
+			UninstallIssuedCount      int `json:"uninstallIssuedCount"`
+			UninstallFailedCount      int `json:"uninstallFailedCount"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -135,6 +145,9 @@ func TestNodeBatchDeleteGuardFailureSkipsUninstallAndCounts(t *testing.T) {
 	if resp.Data.UninstalledCount != 0 || resp.Data.UninstallPendingCount != 0 || resp.Data.UninstallUnsupportedCount != 0 {
 		t.Fatalf("uninstall counts must stay 0 when every delete failed: %s", rec.Body.String())
 	}
+	if resp.Data.PendingCount != 0 || resp.Data.UninstallAckedCount != 0 || resp.Data.UninstallIssuedCount != 0 || resp.Data.UninstallFailedCount != 0 {
+		t.Fatalf("C4-G2 uninstall counts must stay 0 when every delete failed: %s", rec.Body.String())
+	}
 	if sends != 0 {
 		t.Fatalf("uninstall command sent %d times despite guard failures", sends)
 	}
@@ -144,6 +157,9 @@ func TestNodeBatchDeleteGuardFailureSkipsUninstallAndCounts(t *testing.T) {
 		}
 	}
 	for _, id := range []int64{n1.ID, n2.ID} {
+		if row := pendingUninstallRow(t, r, id); row != nil {
+			t.Fatalf("guard failure must not register pending uninstall for node %d (C4-G2 registry): %+v", id, row)
+		}
 		if got, err := r.GetNodeByID(id); err != nil || got == nil {
 			t.Fatalf("node %d must survive an aborted batch delete: node=%v err=%v", id, got, err)
 		}
