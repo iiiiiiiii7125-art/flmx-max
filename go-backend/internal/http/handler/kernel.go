@@ -726,6 +726,14 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OKEmpty())
 }
 
+// kernelLogsMissingReply reports whether a KernelStatus reply
+// says the requested kernel type has no instance on the node
+// (F2-23). Extracted as a pure predicate so the decision is
+// unit-testable without a live agent; the handler only renders it.
+func kernelLogsMissingReply(status agentKernelStatus, kernelType string) bool {
+	return status.MissingLogsFor != "" && status.MissingLogsFor == kernelType
+}
+
 func (h *Handler) kernelLogs(w http.ResponseWriter, r *http.Request) {
 	id := idFromBody(r, w)
 	if id <= 0 {
@@ -746,6 +754,14 @@ func (h *Handler) kernelLogs(w http.ResponseWriter, r *http.Request) {
 	var status agentKernelStatus
 	if err := remarshal(res.Data, &status); err != nil {
 		response.WriteJSON(w, response.ErrDefault("节点返回数据格式错误"))
+		return
+	}
+	// F2-23: the agent says this kernel type has no instance on
+	// the node. Say so explicitly instead of synthesizing an
+	// empty code-0 state, which is indistinguishable from
+	// "kernel present but no logs yet".
+	if kernelLogsMissingReply(status, k.KernelType) {
+		response.WriteJSON(w, response.ErrDefault("节点上未安装 "+k.KernelType+" 内核，无法查询日志"))
 		return
 	}
 	for _, ks := range status.Kernels {
@@ -2178,6 +2194,9 @@ type agentKernelStatus struct {
 	Epoch        string               `json:"epoch"`
 	NftAvailable bool                 `json:"nftAvailable"`
 	NftError     string               `json:"nftError"`
+	// MissingLogsFor mirrors the agent's Status signal (F2-23):
+	// the requested kernel type has no instance on the node.
+	MissingLogsFor string `json:"missingLogsFor,omitempty"`
 }
 
 func remarshal(in interface{}, out interface{}) error {
