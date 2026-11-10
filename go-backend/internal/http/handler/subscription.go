@@ -1144,6 +1144,32 @@ func (h *Handler) relayOnlySelectedWarning(s *model.Subscription, rows []model.N
 	return fmt.Sprintf("以下节点为纯中转导入节点，不可订阅、不会出现在订阅中：%s", strings.Join(names, "、"))
 }
 
+// customEmptyRelayFallbackWarning names the A-01 (AUDIT-R215) fallback
+// on the save receipt: the request carried relayIds as an explicit
+// empty set (custom mode, zero endpoints checked), so FilterEndpoints
+// falls back to the three-tier Lines scope by established semantics
+// (user_subscription_test.go:190 pins the fallback; it is not changed
+// here). Key-in-field vs absent is what tells the two apart: a
+// three-tier save sends no relayIds key (nil), a custom-empty save
+// sends relayIds: [] (non-nil, length 0). "" when no fallback happened.
+func customEmptyRelayFallbackWarning(opts subPipeline) string {
+	if opts.RelayIDs == nil || len(opts.RelayIDs) > 0 {
+		return ""
+	}
+	return fmt.Sprintf("自定义中转范围已选 0 个端点，将按三档「%s」回落下发", relayScopeTierName(opts.Lines))
+}
+
+func relayScopeTierName(lines string) string {
+	switch lines {
+	case "relay":
+		return "只要中转"
+	case "direct":
+		return "只要直连"
+	default:
+		return "全部"
+	}
+}
+
 func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	// R2-K2 family closure (B11-001): the response awaits
 	// applyKernelsForInbounds for the saved subscription's kernels,
@@ -1290,6 +1316,15 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	// 功/失败两条出口同带（warning 为 omitempty，无点名时信封与
 	// 此前逐字一致）。
 	warning := h.relayOnlySelectedWarning(s, rows)
+	// A-01 (AUDIT-R215): 自定义空勾选回落须在保存回执点名——界面
+	// 当刻显示「已选 0 个端点」，拉取却按三档出端点；不点名即静默。
+	// 两条 warning 同属一个回执，以「；」并成一条（前端单 toast 透出）。
+	if fb := customEmptyRelayFallbackWarning(req.Options); fb != "" {
+		if warning != "" {
+			warning += "；"
+		}
+		warning += fb
+	}
 	if err := h.applyKernelsForInbounds(push); err != nil {
 		// 下发失败：不更新 AppliedActive，循环会重试；仅提示用户。
 		// RAW291：仓储原文经 pushFailureMsg 换成固定文案。
