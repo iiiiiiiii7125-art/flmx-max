@@ -179,7 +179,14 @@ func TestR202AssemblyLogNamesSkips(t *testing.T) {
 	r, h := r202Setup(t)
 	roSrc := r202ImportSource(t, r, h, "ro-src", true, r202LinkROa)
 	now := time.Now().UnixMilli()
-	localRow := seedExternalRow(t, r, "vless://11111111-2222-3333-4444-555555555555@127.0.0.1:443?security=none#local-node", roSrc.ID, now)
+	// 导入解析按契约拒绝本机地址（「地址不能是本机或 0.0.0.0」），
+	// 无法用 127.0.0.1 链接播种本机监听行；先按公网链接落行，再把
+	// Listen 改为回环并落库——与面板本地创建的只监听本机入站同形。
+	localRow := seedExternalRow(t, r, "vless://11111111-2222-3333-4444-555555555555@198.51.100.77:443?security=none#local-node", roSrc.ID, now)
+	localRow.Listen = "127.0.0.1"
+	if err := r.DB().Save(localRow).Error; err != nil {
+		t.Fatalf("make local row loopback: %v", err)
+	}
 	okRow := seedExternalRow(t, r, r202LinkOK, roSrc.ID, now)
 	roRow := r202RowsOf(t, r, roSrc.ID)[0]
 
