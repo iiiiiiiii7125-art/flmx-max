@@ -696,15 +696,22 @@ func (h *Handler) remoteSourceSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if relayOnlyOnlyChange {
 		h.applyRemoteSourceRelayOnly(src)
-		saved, _ := h.repo.GetRemoteSource(src.ID)
-		if saved != nil {
+		// 判空＋查错双条件取值：重读干净成功才以库内副本刷新 src，
+		// 失败保留手头刚落库的 src（权威副本），不产生空集。
+		if saved, rerr := h.repo.GetRemoteSource(src.ID); rerr == nil && saved != nil {
 			src = saved
 		}
 		response.WriteJSON(w, response.OK(remoteSourceViewOf(src)))
 		return
 	}
 	if !fetch {
-		src, _ = h.repo.GetRemoteSource(src.ID)
+		// R3-MR-01：与上方 relayOnly 分支同形判空＋查错取值——重读
+		// 失败（或行已消失）时保留手头刚落库的 src，禁止以
+		// (nil, err) 覆盖后在 remoteSourceViewOf 解引用（旧形态靠
+		// 上层 recover 兜成 500，保存已成功却报内部错误）。
+		if saved, rerr := h.repo.GetRemoteSource(src.ID); rerr == nil && saved != nil {
+			src = saved
+		}
 		// IMP-006：保存时若为公网 http 地址，提前提示同步必败（SecureFetch 对
 		// 公网强制 https）。精确判定在同步时由 SecureFetch 按解析 IP 做。
 		if isLikelyPublicHTTP(req.URL) {

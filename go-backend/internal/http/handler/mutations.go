@@ -3095,7 +3095,15 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// （inNodeId 等结构字段是本接口的全量语义，不在本条范围）。
 	resolvedName := asString(req["name"])
 	if _, ok := req["name"]; !ok {
-		resolvedName, _ = h.repo.GetTunnelName(id)
+		// R3-MR-01（机械复推新增点）：未提交 name 时靠存量名回填，
+		// 读失败装空会让 UpdateTunnelTx 把隧道名逐字写空（repo 侧
+		// 无空值守卫）且回执成功——数据损坏级，必须诚实失败。
+		var nameErr error
+		resolvedName, nameErr = h.repo.GetTunnelName(id)
+		if nameErr != nil {
+			respondInternalError(w, "tunnelUpdate", nameErr)
+			return
+		}
 	}
 	// R2 K1 枚举复扫（B03-001 同族）：显式提交的改名按列宽 100 校验
 	// （presence 口径，未提交的存量名不连坐）。
@@ -3108,7 +3116,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// tunnel 表无唯一索引，可改出同名隧道。仅显式提交且与现名不同
 	// 才查（同名即自身不算重复）；提交段落库前再复检一次（见下方
 	// 提交段），把竞态窗口收敛到与 create 同级。
-	currentTunnelName, _ := h.repo.GetTunnelName(id)
+	// R3-MR-01（机械复推新增点）：现名读失败装空会误判「发生了
+	// 改名」、把空名喂给下方改名同步；与上方回填读同口径查错。
+	currentTunnelName, curNameErr := h.repo.GetTunnelName(id)
+	if curNameErr != nil {
+		respondInternalError(w, "tunnelUpdate", curNameErr)
+		return
+	}
 	_, tunnelNameSubmitted := req["name"]
 	tunnelRenamed := tunnelNameSubmitted && resolvedName != currentTunnelName
 	if tunnelRenamed {
@@ -3508,7 +3522,13 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.OKEmpty())
 	}
 
-	newEntryNodeIDs, _ := h.tunnelEntryNodeIDs(id)
+	// R3-MR-01：入口集读失败不得装空——空集会让下方入口变更判定
+	// （入口增删/name 迁移）整体误判、按空集清理与同步运行时。
+	newEntryNodeIDs, entryErr := h.tunnelEntryNodeIDs(id)
+	if entryErr != nil {
+		respondInternalError(w, "tunnelUpdate", entryErr)
+		return
+	}
 	if !sameInt64Set(oldEntryNodeIDs, newEntryNodeIDs) {
 		entryCleanupWarnings = h.cleanupTunnelForwardRuntimesOnRemovedEntryNodes(id, oldEntryNodeIDs, newEntryNodeIDs)
 		entryPortSyncWarnings = h.syncTunnelForwardsEntryPorts(id, newEntryNodeIDs)
@@ -3535,7 +3555,14 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(applyErr.Error()))
 			return
 		}
-		newChainRows, _ := h.listChainNodesForTunnel(id)
+		// R3-MR-01：新链集读失败不得装空——空集会让
+		// cleanupObsoleteTunnelRuntime 把全部旧链节点判为已移除、
+		// 删链删服务且回执仍成功（同函数旧集读本就查错）。
+		newChainRows, chainErr := h.listChainNodesForTunnel(id)
+		if chainErr != nil {
+			respondInternalError(w, "tunnelUpdate", chainErr)
+			return
+		}
 		h.cleanupObsoleteTunnelRuntime(id, oldChainRows, newChainRows)
 	}
 
@@ -3766,7 +3793,13 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 	}
 
 	// S-06: 检查是否为 nftables 模式
-	nftMode, _, _ := h.tunnelUsesNftables(tunnelID)
+	// R3-MR-01：模式判定读失败不得装非 nft——那会让 nft 隧道走
+	// gost 路径误清且静默。本函数自有 warnings 通道：记一条
+	// 判定失败、本轮跳过清理（节点重连对账时补扫），不走错路。
+	nftMode, _, modeErr := h.tunnelUsesNftables(tunnelID)
+	if modeErr != nil {
+		return []string{fmt.Sprintf("隧道 %d 入口节点变更后清理旧节点转发服务失败：读取隧道模式出错（%v），本轮跳过清理，残留服务将在节点重连对账时清除", tunnelID, modeErr)}
+	}
 
 	var warnings []string
 	for i := range forwards {
@@ -5011,7 +5044,14 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-1, "端口必须在 1-65535 范围内"))
 		return
 	}
-	entryNodes, _ := h.tunnelEntryNodeIDs(tunnelID)
+	// R3-MR-01：入口集读失败不得装空落库——空集会绕过下方入口
+	// 数/节点校验并把无入口转发写入库。与同函数下方的
+	// tunnelUsesNftables 失败同口径回内部错误。
+	entryNodes, entryErr := h.tunnelEntryNodeIDs(tunnelID)
+	if entryErr != nil {
+		respondInternalError(w, "forwardCreate: tunnelEntryNodeIDs failed", entryErr)
+		return
+	}
 	isNftTunnel, _, err := h.tunnelUsesNftables(tunnelID)
 	if err != nil {
 		respondInternalError(w, "forwardCreate: tunnelUsesNftables failed", err)
@@ -5401,7 +5441,14 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	fwdEntryNodes, _ := h.tunnelEntryNodeIDs(tunnelID)
+	// R3-MR-01：入口集读失败不得装空——空集同时喂下方自定义 IP
+	// 校验门（多入口判定）、切隧道时的移除集计算与入口校验，
+	// 失败装空等于校验旁路＋旧节点全判移除。诚实失败。
+	fwdEntryNodes, fwdEntryErr := h.tunnelEntryNodeIDs(tunnelID)
+	if fwdEntryErr != nil {
+		respondInternalError(w, "forwardUpdate: tunnelEntryNodeIDs failed", fwdEntryErr)
+		return
+	}
 	if hasInIP && strings.TrimSpace(inIp) != "" && len(fwdEntryNodes) > 1 {
 		response.WriteJSON(w, response.ErrDefault("多入口隧道的转发不支持自定义监听IP"))
 		return
@@ -5700,7 +5747,15 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 	affectedInboundIDs := h.inboundIDsForForward(id)
 	// 审计所需：节点与端口（删库前采集，供残留规则人工清理）。
 	residueHint := h.buildForwardResidueHint(forward)
-	oldPorts, _ := h.listForwardPorts(id)
+	// R3-MR-01（机械复推新增点）：旧端口集读失败不得装空——空集
+	// 会让下方 realm/gost 两路清理都打空集，而 cleanupSkipped
+	// 仍为 false、回执裸 OK，与本函数 C1-01「清理未确认必须
+	// warning」合同相撞。失败并入未确认判定、走既有警告通道。
+	oldPorts, oldPortsErr := h.listForwardPorts(id)
+	oldPortsReadFailed := oldPortsErr != nil
+	if oldPortsReadFailed {
+		log.Printf("force delete forward: list old ports failed forward_id=%d err=%v", id, oldPortsErr)
+	}
 
 	// DeleteForwardCascade 同步清理 forward / forward_port / nft_counter_state /
 	// nft_rule_binding / nft_pending_delete（R5-B3 补充 A.3）。
@@ -5753,9 +5808,9 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 	// 此前只进服务端日志，调用方收到裸 OKEmpty 会以为节点侧已
 	// 清净；清理全数确认时维持原裸成功回执。
 	// T-001：白名单刷新失败同口径合并进警告（见上方 refreshFailed）。
-	if cleanupSkipped || len(refreshFailed) > 0 {
+	if cleanupSkipped || oldPortsReadFailed || len(refreshFailed) > 0 {
 		warning := ""
-		if cleanupSkipped {
+		if cleanupSkipped || oldPortsReadFailed {
 			warning = "转发已强制删除，但部分节点侧规则清理未确认（节点不可达或对账失败），残留规则需人工确认清理：" + residueHint
 		}
 		if len(refreshFailed) > 0 {

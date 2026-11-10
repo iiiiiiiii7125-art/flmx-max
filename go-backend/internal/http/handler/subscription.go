@@ -1363,7 +1363,16 @@ func (h *Handler) rotateSubscriptionCredentials(s *model.Subscription) (rows []m
 		// 改走通用文案；随机源失败为固定文案不经此标记。
 		return nil, nil, markRepoError(err)
 	}
-	rows, _ = h.repo.ListNodeInbounds()
+	rows, listErr := h.repo.ListNodeInbounds()
+	if listErr != nil {
+		// R3-MR-01：入站读失败时下发集不可知——按下方 push 失败同
+		// 漏斗处置：AppliedActive 停在 -1 待 sync 循环重试、把错误
+		// 作为 applyErr 回执披露（pushFailureMsg 对仓储错误只留固定
+		// 文案）。禁止拿空集继续：那会让 applyKernels 空转「成功」
+		// 并记成已下发，新凭据永不下发、旧凭据继续有效却报成功。
+		_ = h.repo.UpdateSubscriptionApplied(s.ID, -1)
+		return nil, markRepoError(listErr), nil
+	}
 	var push []int64
 	if isShare(s) {
 		push = h.subAllInboundIDs(s, rows, nil)
@@ -1458,7 +1467,13 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 		response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功，订阅已删除", Data: nil, TS: time.Now().UnixMilli()})
 		return
 	}
-	rows, _ := h.repo.ListNodeInbounds()
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		// R3-MR-01：视图渲染读失败不得装空集回「已重置」——流量
+		// 重置虽已落库，回执视图须诚实失败（与本函数其余读错同口径）。
+		respondInternalError(w, "subscriptionResetTraffic", err)
+		return
+	}
 	response.WriteJSON(w, response.OK(h.subscriptionView(s, rows, now, "")))
 }
 

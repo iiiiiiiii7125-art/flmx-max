@@ -1,0 +1,31 @@
+# R3-MR-01 读错误吞噬登记册（read_error_swallow_gate_test.go 消费）
+# 格式：文件<TAB>所在函数<TAB>被调名<TAB>同键点数<TAB>豁免理由
+# 派生集与本册必须精确相等：新点未登记即红、死行残留即红。
+# 入册标准：读失败的后果被该点的语义封顶——只降级展示/诊断/富集
+# 字段，或已有判空守卫/权威判定在别处，或失败与「不存在」同形且
+# 后者本就是设计内处置。凡读失败能驱动落库/下发/清理/回执成败的
+# 点一律修复、不许入册。
+control_plane.go	appendChainHopDiagnosis	cachedNode	1	诊断面节点富集读：失败得 nil 与节点不存在同形，跳诊断条目按未知节点呈现；不驱动任何写面
+control_plane.go	buildDiagnosisStreamStartItems	cachedNode	1	诊断流起始项的节点富集读：同 appendChainHopDiagnosis 口径，nil 有定义处置
+control_plane.go	syncForwardServicesWithWarnings	getNodeRecord	2	仅为离线错误文案取节点名：失败回退数字 ID，主错误 fail-closed 不变（同函数两处同形）
+flow_policy.go	speedLimiterExists	lookupSpeedLimiter	1	该包装仅测试代码调用、生产无调用方；生产面（cleanOrphanedLimiters 等）直读 lookupSpeedLimiter 且查错
+handler.go	flowUpload	GetNodeBySecret	1	鉴权读 fail-closed：失败与节点不存在同处置（整批拒收＋失败计数＋日志），放行从不依赖该值
+handler.go	login	captchaEnabled	1	仅用户名桶收紧的信号读：权威 captcha 判定在同函数下方的查错点，失败仅信号降级、永不据此硬拒（D11-D13 设计）
+jobs.go	retryNftPendingDeletes	GetNftPendingDelete	1	耗尽日志的富集读（retryCount/lastErr）：已判空守卫，主状态由上文 exhausted 判定，失败仅日志少两字段
+kernel.go	inboundList	GetNodeByID	1	入站视图富集（NodeName/NodeServerIP）：判空守卫，本体行已查错加载，失败仅视图字段缺项
+kernel.go	kernelViews	GetNodeByID	1	内核视图富集（NodeName/NodeOnline）：判空守卫，内核行本体已查错加载，失败仅视图字段缺项
+kernel_chain.go	chainEndpoint	GetNodeByID	1	分享地址推导富集读：inboundShareAddress 对 nil 节点有定义（回空地址），空地址由调用方点名错误兜底
+kernel_relay.go	inboundRelayCreate	GetTunnelName	1	新建中转的默认名拼装富集：失败回退字面量「中转」，名称非权威数据
+mutations.go	deleteTunnelByIDWithOutcome	GetTunnelRecord	1	删前收敛快照读：删除主操作已查错落定，失败仅 realm 收敛延后、由节点重连/后续同步重渲染补齐（审计裁定排除族）
+mutations.go	deleteTunnelByIDWithOutcome	tunnelEntryNodeIDs	1	删前收敛目标集快照：同 GetTunnelRecord 口径，收敛失败自愈、不影响删除本身成败
+mutations.go	tunnelBatchDelete	GetTunnelName	1	批量删除失败清单的展示名：主流程另有查错重读，失败仅清单名称缺项、错误本体在 failures 内
+mutations.go	tunnelBatchRedeploy	GetTunnelName	1	批量重部署失败清单的展示名：同 tunnelBatchDelete 口径
+mutations.go	tunnelUpdateOrder	GetTunnelName	1	批量改序失败清单的展示名：更新错误本体已在 failures 内，名称仅呈现
+nftables_runtime.go	entryNodeTunnelWithForwards	GetTunnelName	1	入口隧道引用的展示名字段：失败为空名，引用其余字段（ID/转发集）均为查错读
+notify_reports.go	checkUserReminders	ListUserQuotaViewsByUserIDs	1	周期提醒的配额视图富集：代码注释明示降级口径——失败仅本轮配额档跳过，总量/到期档不受影响，下周期自愈
+relay_latency.go	planRelayPath	cachedNode	1	中转延迟探测规划的源节点富集读：失败为 nil 时目标解析走 ServerIP 回退（有定义），目的节点读在同函数为查错形态；只读规划面不驱动写面
+remote_source.go	respondRemoteSync	GetRemoteSource	1	判空守卫的刷新读：失败保留手头刚同步的 src（权威副本）渲染回执，不产生空集
+subscription.go	subscriptionResetTraffic	GetSubscription	1	R10-03 点名收口：回读判空且有专门分支（同步中被删按「操作成功，订阅已删除」回执），非空集驱动
+tunnel_delete_resolution.go	tunnelBatchDeleteWithForwards	GetTunnelName	1	批量删除失败清单的展示名：同 mutations.tunnelBatchDelete 口径
+tunnel_quality_prober.go	probeTunnel	nodeRecord	1	后台质量探活的节点富集读：(nil, nil) 本就是该 helper 的设计内结果（节点不存在），失败并入同一处置，不驱动任何写面
+user_inbound.go	getMyInbounds	GetNodeByID	1	「我的入站」视图富集：本体行已查错加载，失败仅节点名/在线字段缺项

@@ -186,7 +186,16 @@ func (h *Handler) realmNodeEndpoints(nodeID int64, override map[int64]bool) ([]k
 		f := &forwards[i]
 		tunnel, ok := tunnels[f.TunnelID]
 		if !ok {
-			tunnel, _ = h.repo.GetTunnelRecord(f.TunnelID)
+			var terr error
+			tunnel, terr = h.repo.GetTunnelRecord(f.TunnelID)
+			if terr != nil {
+				// R3-MR-01（机械复推新增点）：隧道读失败不得以 nil
+				// 隧道把在役转发判为未运行而从 realm 渲染中静默
+				// 剔除——与下方 listForwardPorts 失败同口径回错。
+				// 注：GetTunnelRecord 对「行不存在」回 (nil, nil)，
+				// 只有真存储错误才进本分支，不误伤已删隧道。
+				return nil, nil, terr
+			}
 			tunnels[f.TunnelID] = tunnel
 		}
 		run := f.Status == 1 && tunnel != nil && tunnel.Status == 1

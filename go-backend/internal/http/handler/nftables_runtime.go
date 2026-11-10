@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"sort"
@@ -442,7 +443,12 @@ func (h *Handler) syncNftablesNodeWithOverridesCtx(ctx context.Context, nodeID i
 	if err != nil {
 		// D9(b): 记录 apply 失败，节点恢复后由采集循环触发自动 reconcile。
 		h.markNftApplyFailed(nodeID, true)
-		bindings, _ := h.repo.ListNftRuleBindingsByNode(nodeID)
+		// R3-MR-01：绑定读失败不得装空集静默跳过标错——标错不全会
+		// 让失败绑定的待删账被误清；失败点名记日志，下轮 sync 再结清。
+		bindings, bindErr := h.repo.ListNftRuleBindingsByNode(nodeID)
+		if bindErr != nil {
+			log.Printf("nftables sync: list rule bindings for error marking failed node_id=%d err=%v", nodeID, bindErr)
+		}
 		for _, binding := range bindings {
 			_ = h.repo.MarkNftRuleBindingError(binding.ForwardID, nodeID, err.Error(), now)
 		}
@@ -466,7 +472,13 @@ func (h *Handler) syncNftablesNodeWithOverridesCtx(ctx context.Context, nodeID i
 		hash := result.Hashes[rule.ForwardID]
 		_ = h.repo.UpsertNftRuleBinding(modelToRuleBindingInput(nodeID, rule, hash), now)
 	}
-	bindings, _ := h.repo.ListNftRuleBindingsByNode(nodeID)
+	// R3-MR-01：陈旧绑定清理的读失败必须显式跳过本轮清理并记
+	// 日志——空集绝不参与删除差集判定（旧形态恰为不删、但静默
+	// 不可审计）；孤儿绑定由下一轮 sync 再清。
+	bindings, bindErr := h.repo.ListNftRuleBindingsByNode(nodeID)
+	if bindErr != nil {
+		log.Printf("nftables sync: list rule bindings for stale sweep failed, sweep skipped node_id=%d err=%v", nodeID, bindErr)
+	}
 	for _, binding := range bindings {
 		if _, ok := activeForwardIDs[binding.ForwardID]; ok {
 			continue
