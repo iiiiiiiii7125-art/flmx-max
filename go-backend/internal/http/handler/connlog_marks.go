@@ -1,5 +1,9 @@
 package handler
 
+import (
+	"go-backend/internal/store/repo"
+)
+
 // 入站连接日志（设计 feat-inbound-connlog §2/§6-U7）的入口标记：
 // 面板在既有配置下发通道里显式标明「入口」，agent 只对带标记的
 // 面采集，禁止靠服务名/地址猜测归属。
@@ -26,9 +30,34 @@ const (
 	connlogEntryKindForward     = "forward"
 )
 
+// connlogMasterEnabled 读功能总开关（connlog_enabled，设计
+// §4.5，读面口径单点在 repo.ConnLogEnabledFromConfigMap）。一切
+// 标记/名单的下发都先过这道门：关时三面皆空——gost 入口标记
+// （connlogEntryForwardIDs 直接返回空集）、KernelApply 的
+// connlogEntries（恒下发空集、清 agent 旧标记）与
+// connLogInbounds（不写键）——agent 侧采集随下一次配置推送全
+// 链停下，不许只停一半。读失败返回错误：两个下发面本就以
+// 「查询失败整单中止」为口径（半知状态下发标记可能把上一跳
+// 标成客户端），不静默按开处理。
+func (h *Handler) connlogMasterEnabled() (bool, error) {
+	cfg, err := h.repo.GetConfigsByNames([]string{repo.ConnLogEnabledConfigKey})
+	if err != nil {
+		return false, err
+	}
+	return repo.ConnLogEnabledFromConfigMap(cfg), nil
+}
+
 // connlogEntryForwardIDs 返回被标为连接日志入口的 forward ID 集
-// （存在 Managed=1 的 NodeInboundRelay 行指向它）。
+// （存在 Managed=1 的 NodeInboundRelay 行指向它）；总开关关时
+// 返回空集（见 connlogMasterEnabled）。
 func (h *Handler) connlogEntryForwardIDs() (map[int64]bool, error) {
+	enabled, err := h.connlogMasterEnabled()
+	if err != nil {
+		return nil, err
+	}
+	if !enabled {
+		return map[int64]bool{}, nil
+	}
 	rels, err := h.repo.ListNodeInboundRelays()
 	if err != nil {
 		return nil, err

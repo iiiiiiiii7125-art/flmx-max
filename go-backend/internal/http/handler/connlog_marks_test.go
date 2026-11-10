@@ -208,3 +208,76 @@ func TestConnlogKernelPayloadEntryMarks(t *testing.T) {
 		t.Fatalf("after relay removal, inbound did not converge to direct entry: %v", connlogEntryTags(payload))
 	}
 }
+
+// 集成对账③：总开关 connlog_enabled 是三面下发的总门——关时
+// gost 入口集为空、KernelApply 的 connlogEntries 为空集、
+// connLogInbounds 不写键；恢复后三面回到拓扑/opt-in 现算结果。
+// 不许只停一半。
+func TestConnlogMasterSwitchGatesAllMarkFaces(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/connlog-master.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+	now := time.Now().UnixMilli()
+
+	if err := r.CreateInboundRelay(&model.NodeInboundRelay{InboundID: 101, ForwardID: 201, Name: "managed", Managed: 1, CreatedTime: now}); err != nil {
+		t.Fatal(err)
+	}
+	node := seedRelayTargetNode(t, r, "cl-master", "198.51.100.77")
+	kern := seedChainKernel(t, r, node, kernel.TypeXray)
+	direct := seedChainInbound(t, r, kern, "cl-master-direct", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 8443,
+		Security: kernel.Security{Type: kernel.SecurityNone}}, 0)
+	if err := r.DB().Exec(`UPDATE node_inbound SET conn_log_enabled = 1 WHERE id = ?`, direct.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	assertFaces := func(wantOn bool, stage string) {
+		t.Helper()
+		forwards, err := h.connlogEntryForwardIDs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := forwards[201]; got != wantOn {
+			t.Fatalf("%s: gost entry set[201] = %v, want %v", stage, got, wantOn)
+		}
+		payload, _, err := h.buildKernelApplyPayload(kern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := connlogEntryTags(payload)
+		if wantOn {
+			if entries[direct.ID] == "" {
+				t.Fatalf("%s: connlogEntries lost the direct inbound: %v", stage, entries)
+			}
+			ids, _ := payload["connLogInbounds"].([]int64)
+			found := false
+			for _, id := range ids {
+				if id == direct.ID {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s: connLogInbounds = %v, want it to contain %d", stage, payload["connLogInbounds"], direct.ID)
+			}
+		} else {
+			if len(entries) != 0 {
+				t.Fatalf("%s: connlogEntries = %v, want empty with the master switch off", stage, entries)
+			}
+			if _, present := payload["connLogInbounds"]; present {
+				t.Fatalf("%s: connLogInbounds key present with the master switch off: %v", stage, payload["connLogInbounds"])
+			}
+		}
+	}
+
+	assertFaces(true, "default (key absent)")
+	if err := r.UpsertConfig(repo.ConnLogEnabledConfigKey, "false", now); err != nil {
+		t.Fatal(err)
+	}
+	assertFaces(false, "master off")
+	if err := r.UpsertConfig(repo.ConnLogEnabledConfigKey, "true", now); err != nil {
+		t.Fatal(err)
+	}
+	assertFaces(true, "master back on")
+}

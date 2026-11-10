@@ -2254,6 +2254,13 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	if err != nil {
 		return nil, "", fmt.Errorf("查询入站链式归属失败: %w", err)
 	}
+	// 连接日志总开关（connlog_enabled）：关时 connlogEntries 恒
+	// 下发空集（清 agent 旧标记）、connLogInbounds 不写键，采
+	// 集全链停下（见 connlog_marks.go 的 connlogMasterEnabled）。
+	connlogMasterOn, err := h.connlogMasterEnabled()
+	if err != nil {
+		return nil, "", fmt.Errorf("查询连接日志总开关失败: %w", err)
+	}
 	inbounds := make([]kernel.Inbound, 0, len(rows))
 	connLogInbounds := make([]int64, 0, len(rows))
 	ports := make([]map[string]interface{}, 0, len(rows))
@@ -2333,7 +2340,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// 非用户入口（设计 §2 形态 6），恒排除。名单为空时不写键——
 		// agent 解码为 nil 即空集、采集器随之停用，与「最后一个开关
 		// 关闭后采集收敛」同义。
-		if in.ConnLogEnabled && !in.Companion {
+		if in.ConnLogEnabled && !in.Companion && connlogMasterOn {
 			connLogInbounds = append(connLogInbounds, in.ID)
 		}
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
@@ -2361,7 +2368,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// 指向、且未声明「仅中转/白名单」面貌的入站，自身即客户
 		// 端入口（链式源入站同理：客户端连入的是它，出站指向只
 		// 作归属附加信息，不改变入口身份）。
-		if row.CompanionOf == 0 && row.SourceID == 0 && !relayTargets[row.ID] && !chainTargets[row.ID] &&
+		if connlogMasterOn && row.CompanionOf == 0 && row.SourceID == 0 && !relayTargets[row.ID] && !chainTargets[row.ID] &&
 			row.RelayOnly == 0 && row.RelayWhitelist == 0 {
 			connlogEntries = append(connlogEntries, map[string]interface{}{
 				"inboundId": row.ID,
