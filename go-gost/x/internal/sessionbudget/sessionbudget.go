@@ -268,7 +268,26 @@ const (
 type session struct {
 	id           uint64
 	raw          net.Conn
+	remote       string       // client address snapshot from Track time
+	createdAt    int64        // unix nano of registration
 	lastActivity atomic.Int64 // unix nano of last Read/Write byte movement
+	bytesIn      atomic.Int64 // bytes read from the client leg
+	bytesOut     atomic.Int64 // bytes written to the client leg
+}
+
+// remoteAddrOf snapshots a conn's remote address for the
+// eviction log. Guarded: wrappers over a nil embedded conn can
+// panic on the call, and a forensic log path must never take the
+// agent down with it.
+func remoteAddrOf(c net.Conn) (addr string) {
+	addr = "?"
+	defer func() { _ = recover() }()
+	if c != nil {
+		if a := c.RemoteAddr(); a != nil {
+			addr = a.String()
+		}
+	}
+	return addr
 }
 
 var (
@@ -294,8 +313,9 @@ func EvictedTotal() int64 { return evicted.Load() }
 // eviction itself only runs when enforcement is on.
 func Track(c net.Conn, release func()) (net.Conn, func()) {
 	initState()
-	s := &session{id: sessionSeq.Add(1), raw: c}
-	s.lastActivity.Store(defaultEnv.now().UnixNano())
+	now := defaultEnv.now()
+	s := &session{id: sessionSeq.Add(1), raw: c, remote: remoteAddrOf(c), createdAt: now.UnixNano()}
+	s.lastActivity.Store(now.UnixNano())
 	sessionsMu.Lock()
 	sessions[s.id] = s
 	sessionsMu.Unlock()
@@ -327,6 +347,7 @@ func (c *trackedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
 		c.s.lastActivity.Store(defaultEnv.now().UnixNano())
+		c.s.bytesIn.Add(int64(n))
 	}
 	return n, err
 }
@@ -335,6 +356,7 @@ func (c *trackedConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 	if n > 0 {
 		c.s.lastActivity.Store(defaultEnv.now().UnixNano())
+		c.s.bytesOut.Add(int64(n))
 	}
 	return n, err
 }
@@ -423,14 +445,25 @@ func EvictUnderPressure() int {
 	if len(candidates) > evictionMaxPerTick {
 		candidates = candidates[:evictionMaxPerTick]
 	}
+	if len(candidates) > 0 {
+		evicted.Add(int64(len(candidates)))
+	}
 	for _, s := range candidates {
 		// Closing the raw inbound leg fails the session's
 		// Transport in both directions; the service's deferred
 		// release then unregisters and uncounts it.
 		s.raw.Close()
+		// 每条受害者单独留痕（身份/静默时长/存活时长/双向字
+		// 节）：只有计数器时，误伤无从归因——LIVE 灌压首条
+		// canary 之死无法定因的教训。驱逐受单轮封顶约束、
+		// 仅压力期发生，逐条日志量有界。
+		defaultLogf("session budget: evicted session id=%d remote=%s idle=%ds age=%ds bytes_in=%d bytes_out=%d (active=%d evicted_total=%d)",
+			s.id, s.remote,
+			int64(now.Sub(time.Unix(0, s.lastActivity.Load()))/time.Second),
+			int64(now.Sub(time.Unix(0, s.createdAt))/time.Second),
+			s.bytesIn.Load(), s.bytesOut.Load(), active.Load(), evicted.Load())
 	}
 	if len(candidates) > 0 {
-		evicted.Add(int64(len(candidates)))
 		if EvictLogDue() {
 			defaultLogf("session budget: pressure eviction closed %d coldest sessions (evicted_total=%d active=%d rss=%d)",
 				len(candidates), evicted.Load(), active.Load(), RSSBytes())

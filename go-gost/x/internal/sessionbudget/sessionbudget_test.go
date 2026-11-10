@@ -1,8 +1,11 @@
 package sessionbudget
 
 import (
+	"fmt"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -271,5 +274,113 @@ func TestEvictUnderPressureClosesColdestOnly(t *testing.T) {
 	rss.Store(b.ResumeRSSBytes)
 	if n := EvictUnderPressure(); n != 0 {
 		t.Fatalf("evicted %d after relief, want 0", n)
+	}
+}
+
+// byteFakeConn serves a fixed read buffer so byte counters can
+// move in tests (fakeConn.Read never returns bytes).
+type byteFakeConn struct {
+	fakeConn
+	rbuf []byte
+}
+
+func (c *byteFakeConn) Read(b []byte) (int, error) {
+	if c.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	if len(c.rbuf) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(b, c.rbuf)
+	c.rbuf = c.rbuf[n:]
+	return n, nil
+}
+
+func logFieldInt(t *testing.T, line, key string) int64 {
+	t.Helper()
+	i := strings.Index(line, key)
+	if i < 0 {
+		t.Fatalf("log line %q lacks %q", line, key)
+	}
+	rest := line[i+len(key):]
+	end := strings.IndexByte(rest, 's')
+	if end < 0 {
+		rest = strings.Fields(rest)[0]
+	} else {
+		rest = rest[:end]
+	}
+	v, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil {
+		t.Fatalf("log line %q: bad %s value: %v", line, key, err)
+	}
+	return v
+}
+
+// The eviction victim log is the forensic record a bare counter
+// cannot provide (LIVE canary lesson): it must carry the
+// victim's identity, idle and total age, and both byte counters,
+// with values matching the session's actual state.
+func TestEvictionLogsVictimIdentity(t *testing.T) {
+	var rss atomic.Int64
+	resetStateForTest(t, 100<<20, &rss, false)
+	resetRegistryForTest()
+
+	var logMu sync.Mutex
+	var lines []string
+	oldLogf := defaultLogf
+	defaultLogf = func(format string, args ...any) {
+		logMu.Lock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+		logMu.Unlock()
+	}
+	defer func() { defaultLogf = oldLogf }()
+
+	rel, ok := TryAcquire()
+	if !ok {
+		t.Fatal("acquire refused")
+	}
+	raw := &byteFakeConn{rbuf: []byte("xyz")}
+	tracked, combined := Track(raw, rel)
+	defer combined()
+	buf := make([]byte, 8)
+	if n, err := tracked.Read(buf); n != 3 || err != nil {
+		t.Fatalf("tracked Read = %d, %v; want 3, nil", n, err)
+	}
+	if _, err := tracked.Write([]byte("ab")); err != nil {
+		t.Fatal(err)
+	}
+	sessionsMu.Lock()
+	for _, s := range sessions {
+		s.lastActivity.Store(time.Now().Add(-(evictionMinIdle + 60*time.Second)).UnixNano())
+		s.createdAt = time.Now().Add(-(evictionMinIdle + 120*time.Second)).UnixNano()
+	}
+	sessionsMu.Unlock()
+
+	rss.Store(CurrentBudget().MaxRSSBytes)
+	if n := EvictUnderPressure(); n != 1 {
+		t.Fatalf("evicted %d, want 1", n)
+	}
+	if !raw.closed.Load() {
+		t.Fatal("victim session was not closed")
+	}
+	var victim string
+	for _, l := range lines {
+		if strings.Contains(l, "evicted session id=") {
+			victim = l
+		}
+	}
+	if victim == "" {
+		t.Fatalf("no per-victim log line captured; lines = %v", lines)
+	}
+	for _, want := range []string{"bytes_in=3", "bytes_out=2", "remote=?", "active=1", "evicted_total=1"} {
+		if !strings.Contains(victim, want) {
+			t.Fatalf("victim line %q missing %q", victim, want)
+		}
+	}
+	if idle := logFieldInt(t, victim, "idle="); idle < 239 || idle > 245 {
+		t.Fatalf("victim idle = %ds, want ~240s", idle)
+	}
+	if age := logFieldInt(t, victim, "age="); age < 299 || age > 305 {
+		t.Fatalf("victim age = %ds, want ~300s", age)
 	}
 }
