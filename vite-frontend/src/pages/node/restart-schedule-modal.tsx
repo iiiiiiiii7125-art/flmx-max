@@ -38,6 +38,10 @@ export function RestartScheduleModal({
   const [time, setTime] = useState("04:00");
   const [jitter, setJitter] = useState("30");
   const [saving, setSaving] = useState(false);
+  // C6-01：agent 下发失败（pushError）时不关弹窗——失败原因必须在
+  // 弹窗内常驻呈现，直到用户读完手动关闭；旧实现只 toast 一闪，
+  // 随后列表照常显示「已启用」，用户无从知道计时器根本没落到节点。
+  const [pushFailed, setPushFailed] = useState("");
   const open = node !== null;
 
   useEffect(() => {
@@ -45,6 +49,7 @@ export function RestartScheduleModal({
     setEnabled(node.restartEnabled === 1);
     setTime(node.restartTime || "04:00");
     setJitter(String(node.restartJitterMinutes ?? 30));
+    setPushFailed("");
   }, [open, node]);
 
   const jitterNum = Number(jitter);
@@ -73,8 +78,16 @@ export function RestartScheduleModal({
         return;
       }
       if (res.data?.pushError) {
-        toast.error(res.data.pushError);
-      } else if (res.data?.pushed) {
+        // C6-01：设置已落库但 agent 没接受（如无 systemd 环境直接
+        // 拒绝持久化）。刷新列表（开关会显示已启用——那只是面板侧
+        // 设置），但弹窗保持打开并常驻失败原因，讲清「已启用≠会
+        // 生效」，由用户读完后手动关闭；不再 toast 一闪了事。
+        setPushFailed(res.data.pushError);
+        onSaved();
+
+        return;
+      }
+      if (res.data?.pushed) {
         toast.success("已保存并下发到节点");
       } else {
         toast.success("已保存，节点上线后自动下发");
@@ -112,7 +125,10 @@ export function RestartScheduleModal({
             <Switch
               isSelected={enabled}
               size="sm"
-              onValueChange={setEnabled}
+              onValueChange={(v) => {
+                setEnabled(v);
+                setPushFailed("");
+              }}
             />
             <div className="text-sm">
               <span className="font-semibold">每天定时重启 agent 服务</span>
@@ -154,6 +170,24 @@ export function RestartScheduleModal({
           <p className="text-xs font-semibold text-foreground">
             计时器保存在节点本机（systemd timer），面板离线或面板暂时连不上时照常执行；关闭开关会删除节点上的计时器。默认关闭。
           </p>
+          {/* C6-01 前置边界：持久化依赖节点上有 systemd。容器形态 /
+              无 systemd 的节点开启时 agent 会直接拒绝，设置存进面板
+              也不会生效——先讲清，免得用户对着「已启用」空等。 */}
+          <p className="text-xs font-semibold text-foreground">
+            前提：节点 agent 须以 systemd 服务方式运行。容器形态或无
+            systemd 的节点无法持久化此设置，开启时 agent 会拒绝下发，面板里显示「已启用」也不代表会执行。
+          </p>
+          {pushFailed && (
+            <div className="rounded-xl bg-danger-50 px-3 py-2">
+              <p className="text-xs font-semibold text-danger-700">
+                {pushFailed}
+              </p>
+              <p className="mt-1 text-xs font-semibold text-danger-700">
+                在 agent 实际接受前，该节点的定时重启不会生效；节点重连时面板会自动补发，但同一原因（如无
+                systemd）会再次失败。请处理节点环境后重新保存。
+              </p>
+            </div>
+          )}
           {enabled && !timeValid && (
             <p className="text-xs font-semibold text-danger-700">
               重启时刻格式无效，请用 24 小时制时间。

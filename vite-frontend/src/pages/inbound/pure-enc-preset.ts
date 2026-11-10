@@ -27,6 +27,41 @@ import type { InboundForm } from "./presets";
  * 空闲超时「不限」只在套用时写入 -1，不做反向回滚：用户可在表单里
  * 自行取消勾选（沿表单通例，取消时恢复勾选前的值或留空）。
  */
+/**
+ * IRL-4（本地实现，理由见 applyPureEncPreset 内注记）：现密钥解码后
+ * 恰为 64 字节则保留，否则生成一把新的 64 字节 seed（base64url 无
+ * 填充，与后端 mlkem768 口径一致）。
+ */
+function mlkem768Secret(current: string): string {
+  const normalized = (current ?? "")
+    .trim()
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+  let length = -1;
+
+  if (/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
+    try {
+      length = atob(
+        normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="),
+      ).length;
+    } catch {
+      length = -1;
+    }
+  }
+  if (length === 64) return current;
+
+  const bytes = new Uint8Array(64);
+
+  crypto.getRandomValues(bytes);
+  let binary = "";
+
+  bytes.forEach((b) => {
+    binary += String.fromCharCode(b);
+  });
+
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 export function applyPureEncPreset(prev: InboundForm): InboundForm {
   return {
     ...prev,
@@ -39,6 +74,14 @@ export function applyPureEncPreset(prev: InboundForm): InboundForm {
     // 后量子认证锁死 ML-KEM-768；x25519 不是后量子，绝不能选。
     encryptionAuth: "mlkem768",
     encryptionMode: "xorpub",
+    // IRL-4：认证锁到 mlkem768 后，旧 x25519 密钥（32 字节）长度不合
+    // mlkem768 的 64 字节 seed 要求，留着保存必被后端拒。密钥与
+    // mlkem768 不匹配时当场换一把合法的新密钥（已匹配则原样保留，
+    // 不动已分发客户端）。本文件按 check-pure-enc-preset 门禁约束
+    // 只能 import type、不得引入运行时依赖，故在此自带实现；通用版
+    // 在 presets.ts 的 secretForAuth，两处口径一致（长度判据同后端
+    // ValidateEncryptionSecret）。
+    encryptionSecret: mlkem768Secret(prev.encryptionSecret),
     // 纯 ENC 不需要 SNI。
     sni: "",
     // Reality 残留字段：toPayload 已按 securityType 设防（仅 reality 发

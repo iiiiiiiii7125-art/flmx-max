@@ -60,7 +60,10 @@ const FACES: FaceDef[] = [
     id: "kernel",
     action: "apply-kernel",
     name: "生产级内核调优",
-    desc: "缓冲区按总内存定尺寸、扩大连接队列与文件句柄、MSS 钳制",
+    // F2-18：本面键集前两项就是拥塞算法 BBR 与 fq 队列——与 BBR 面
+    // 共用同一组运行时值，应用本面会同时点亮 BBR 面。此前文案只字
+    // 不提，用户会误以为四面完全独立；在此明示耦合。
+    desc: "缓冲区按总内存定尺寸、扩大连接队列与文件句柄、MSS 钳制；键集包含拥塞算法 BBR 与 fq 队列，应用后 BBR 面会随之激活（两面共用同一运行时值）",
   },
   {
     id: "nic",
@@ -266,6 +269,14 @@ export function NodeTuneModal({
                       <p className="mt-1 text-xs font-semibold text-foreground">
                         {face.desc}
                       </p>
+                      {/* F2-18：BBR 已激活且内核面也在位时，点名 BBR
+                          可能由内核面键集一并设置，不假装两面独立。 */}
+                      {face.id === "bbr" && faces.bbr && faces.kernel && (
+                        <p className="mt-1 text-xs font-semibold text-warning-700">
+                          注：内核面的键集同样包含 BBR 与 fq，当前 BBR
+                          可能由内核面一并设置；两面共用拥塞算法运行时值，不是完全独立的两个开关。
+                        </p>
+                      )}
                     </div>
                   ))}
 
@@ -434,11 +445,16 @@ export function NodeTuneModal({
                     )}
                   </div>
 
-                  {/* 当前状态行 */}
+                  {/* 当前状态行。C3-03：句柄数字必须用 agent 实回的
+                      nofile（进程 soft/hard 上限），旧实现写死
+                      「1048576」与实测拥塞/队列混排冒充实测；回包
+                      无 nofile 时整段省略，不给任何数字。 */}
                   <p className="px-1 pt-1 text-xs font-semibold text-foreground">
                     当前状态：算法 {status.congestion || "未知"} · 队列{" "}
-                    {status.qdisc || "未知"} · 句柄由内核面 limits
-                    文件管理（1048576）
+                    {status.qdisc || "未知"}
+                    {status.nofile
+                      ? ` · agent 句柄 ${status.nofile.soft}/${status.nofile.hard}${status.nofile.limitsFile ? "（limits 文件在位）" : ""}`
+                      : ""}
                   </p>
                 </div>
               )}

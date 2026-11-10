@@ -356,8 +356,103 @@ export function applyPreset(
   };
 }
 
-export function formFromItem(item: InboundApiItem): InboundForm {
+/**
+ * Strict CHG-01 IEPL shape (IRL-1): the 「IEPL专用」 badge may only claim an
+ * inbound that matches the frozen preset form field-for-field — VLESS over
+ * TCP, no security layer, ENC on with ML-KEM-768 auth in xorpub appearance,
+ * no SNI, no Vision flow, and the unlimited (-1) idle timeout the preset
+ * applies. A plain encryptionAuth check lit the badge for any ENC inbound
+ * (Reality / x25519 / manual variants alike).
+ */
+export function isIeplForm(item: InboundApiItem): boolean {
+  const s = item.settings;
+
+  return (
+    item.protocol === "vless" &&
+    item.transport.type === "tcp" &&
+    item.security.type === "none" &&
+    s.encryptionAuth === "mlkem768" &&
+    s.encryptionMode === "xorpub" &&
+    !s.flow &&
+    !item.security.sni &&
+    item.connIdleSeconds === -1
+  );
+}
+
+/**
+ * Decoded secret lengths the backend demands per ENC auth mode
+ * (ValidateEncryptionSecret: x25519 = 32-byte private key, mlkem768 =
+ * 64-byte seed). The two lengths are disjoint, so a secret minted for one
+ * auth mode can never validate for the other (IRL-4).
+ */
+export const ENCRYPTION_SECRET_BYTES: Record<string, number> = {
+  x25519: 32,
+  mlkem768: 64,
+};
+
+function base64UrlDecodeLength(value: string): number {
+  const normalized = (value ?? "")
+    .trim()
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) return -1;
+  try {
+    return atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="))
+      .length;
+  } catch {
+    return -1;
+  }
+}
+
+/** Whether `secret` decodes to the exact byte length `auth` requires. */
+export function encryptionSecretMatchesAuth(
+  auth: string,
+  secret: string,
+): boolean {
+  const want = ENCRYPTION_SECRET_BYTES[auth];
+
+  return want !== undefined && base64UrlDecodeLength(secret) === want;
+}
+
+/** Mint a fresh server secret of the exact shape `auth` requires. */
+export function generateEncryptionSecret(auth: string): string {
+  const bytes = new Uint8Array(ENCRYPTION_SECRET_BYTES[auth] ?? 32);
+
+  crypto.getRandomValues(bytes);
+  let binary = "";
+
+  bytes.forEach((b) => {
+    binary += String.fromCharCode(b);
+  });
+
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * The secret to keep when the form's ENC auth becomes `auth`: the current
+ * one if it already matches the new auth's length, otherwise a freshly
+ * generated one. An update that posts an empty secret makes the backend
+ * refill the OLD stored secret (R2X-030 semantics), so clearing the field
+ * cannot rescue a length-mismatched secret — the form must carry a valid
+ * new secret itself (IRL-4). `rotated` tells the caller a new secret was
+ * minted, so the UI can warn that distributed clients must re-import.
+ */
+export function secretForAuth(
+  auth: string,
+  current: string,
+): { secret: string; rotated: boolean } {
+  if (current && encryptionSecretMatchesAuth(auth, current)) {
+    return { secret: current, rotated: false };
+  }
+
   return {
+    secret: generateEncryptionSecret(auth),
+    rotated: Boolean(current),
+  };
+}
+
+export function formFromItem(item: InboundApiItem): InboundForm {  return {
     id: item.id,
     nodeId: String(item.nodeId),
     kernelType: item.kernelType,

@@ -933,6 +933,8 @@ export interface InboundApiItem {
   remark: string;
   relayOnly: boolean;
   relayCount: number;
+  /** IRL-7: relays whose backing forward is deleted/paused. */
+  relayInvalidCount?: number;
   acceptProxyProtocol: boolean;
   relayWhitelist: boolean;
   whitelistExtra: string;

@@ -97,6 +97,9 @@ export function KernelPanel({
   const logsSeqRef = useRef(0);
   const [logs, setLogs] = useState<KernelStateApiData | null>(null);
   const [logsLoading, setLogsLoading] = useState(false);
+  // IRL-3 同族（普查补入）：日志加载失败与「暂无日志」必须可区分——
+  // 旧实现请求抛错时无任何提示、正文直接落「暂无日志」假空。
+  const [logsError, setLogsError] = useState("");
   const [removeTarget, setRemoveTarget] = useState<KernelApiItem | null>(null);
   const [removeFailed, setRemoveFailed] = useState(false);
   // X-P2-2：被跨内核引用守卫拦下时，后端回传的引用方入站名清单。
@@ -192,6 +195,7 @@ export function KernelPanel({
 
     setLogsFor(k);
     setLogs(null);
+    setLogsError("");
     setLogsLoading(true);
     try {
       const res = await getKernelLogs(k.id);
@@ -203,7 +207,13 @@ export function KernelPanel({
       if (res.code === 0) {
         setLogs(res.data);
       } else {
-        toast.error(res.msg || "获取日志失败");
+        // IRL-3 同族：失败在弹窗正文内常驻呈现，不再只 toast 后落
+        // 「暂无日志」。
+        setLogsError(res.msg || "获取日志失败");
+      }
+    } catch {
+      if (logsSeqRef.current === seq) {
+        setLogsError("获取日志失败：网络错误");
       }
     } finally {
       if (logsSeqRef.current === seq) {
@@ -693,7 +703,9 @@ export function KernelPanel({
                 <pre className="text-xs font-semibold whitespace-pre-wrap break-all bg-white/40 rounded-xl p-3 max-h-[60vh] overflow-auto">
                   {logsLoading
                     ? "加载中..."
-                    : (logs?.logs ?? []).join("\n") || "暂无日志"}
+                    : logsError
+                      ? `日志加载失败：${logsError}（可点下方「刷新」重试）`
+                      : (logs?.logs ?? []).join("\n") || "暂无日志"}
                 </pre>
               </ModalBody>
               <ModalFooter>
