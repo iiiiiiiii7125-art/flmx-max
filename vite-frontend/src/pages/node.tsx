@@ -2109,6 +2109,11 @@ export default function NodePage({
       );
 
       if (res.code !== 0) throw new Error("save collapsed groups failed");
+      // T-001：信封 warning 须原样透出（与 saveGroupOrder 同口径）；
+      // 静默持久化无成功 toast，只在后端点名时出声。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
     } catch {
       setCollapsedGroups(prev);
       toast.error("保存折叠状态失败，已恢复");
@@ -2139,10 +2144,22 @@ export default function NodePage({
         if (!prev.includes(oldName)) return prev;
         const next = prev.map((label) => (label === oldName ? newName : label));
 
-        void updateConfig(
-          NODE_GROUP_COLLAPSED_CONFIG_KEY,
-          JSON.stringify(next),
-        ).catch(() => {});
+        void (async () => {
+          try {
+            const res = await updateConfig(
+              NODE_GROUP_COLLAPSED_CONFIG_KEY,
+              JSON.stringify(next),
+            );
+
+            // T-001：信封 warning 须原样透出（与 saveGroupOrder 同
+            // 口径）；写失败仍按尽力口径静默，下次载入自愈。
+            if (res.code === 0 && res.warning) {
+              toast(res.warning, { icon: "⚠️", duration: 12000 });
+            }
+          } catch {
+            // 尽力写回：失败以服务端名单为准，下次载入自愈。
+          }
+        })();
 
         return next;
       });
@@ -2154,10 +2171,22 @@ export default function NodePage({
       if (!prev.includes(name)) return prev;
       const next = prev.filter((label) => label !== name);
 
-      void updateConfig(
-        NODE_GROUP_COLLAPSED_CONFIG_KEY,
-        JSON.stringify(next),
-      ).catch(() => {});
+      void (async () => {
+        try {
+          const res = await updateConfig(
+            NODE_GROUP_COLLAPSED_CONFIG_KEY,
+            JSON.stringify(next),
+          );
+
+          // T-001：信封 warning 须原样透出（与 saveGroupOrder 同
+          // 口径）；写失败仍按尽力口径静默，下次载入自愈。
+          if (res.code === 0 && res.warning) {
+            toast(res.warning, { icon: "⚠️", duration: 12000 });
+          }
+        } catch {
+          // 尽力写回：失败以服务端名单为准，下次载入自愈。
+        }
+      })();
 
       return next;
     });
