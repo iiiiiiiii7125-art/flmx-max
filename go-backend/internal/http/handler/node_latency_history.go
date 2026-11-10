@@ -357,7 +357,7 @@ func (h *Handler) nodeLatencyHistory(w http.ResponseWriter, r *http.Request) {
 	since := now - int64(req.Hours)*int64(time.Hour/time.Millisecond)
 	samples, err := h.repo.ListNodeLatencySamples(req.ID, since)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeLatencyHistory", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{

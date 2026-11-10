@@ -866,21 +866,43 @@ verify_landed_version() {
 # com.docker.compose.network 标签与现行 docker-compose.yml 的网络
 # 键名不符时（旧时代以网络全名落标签等形态），compose up 会以标签
 # 不符拒绝，升级与回滚同撞此墙、后端晾停待人工删网。此处在 up 之
-# 前对账：标签不符时停齐本项目全部服务排空端点，删除该网络对象、
-# 由随后的 up 按现行文件重建（网络名取 .env 的 FLMX_NETWORK、缺省
-# flmx-network，与模板表达式同口径；子网由 compose 文件决定，不
-# 变）。删除失败（仍被项目外容器占用等）只点名告警并保留现状，
+# 前对账：标签不符时先查在册容器——项目外容器在场则前置拒绝
+# （return 1、不停服务）；仅本项目容器或空网时停齐本项目全部
+# 服务排空端点，删除该网络对象、由随后的 up 按现行文件重建
+# （网络名从 compose 的 networks「name:」字段派生并展开
+# ${FLMX_NETWORK:-<缺省>}，无 name: 字段的旧模板取网络键名本身；
+# 子网由 compose 文件决定，不变）。删除失败（仍被项目外容器
+# 占用等）只点名告警并保留现状，
 # 后续 up 的成败仍按既有终态收口；日志给出字段级人工处置指引。
 # 标签相符或网络不存在时无操作。
 reconcile_network_label() {
-  net_name=$(grep -m1 '^FLMX_NETWORK=' .env 2>/dev/null | cut -d= -f2- | tr -d '" \r' || true)
-  if [ -z "$net_name" ]; then
-    net_name="flmx-network"
-  fi
   net_key=$(awk '/^networks:/{f=1; next} f && /^  [A-Za-z0-9_.-]+:/{k=$1; sub(/:$/, "", k); print k; exit} f && /^[^ ]/{exit}' docker-compose.yml 2>/dev/null || true)
   if [ -z "$net_key" ]; then
     log "网络标签对账跳过: 无法从 docker-compose.yml 解析网络键名"
     return 0
+  fi
+  # 网络实际名派生（NETLABEL-211 Go 半 G2，与脚本半 panel_network_name
+  # 同口径）：优先 .env 的 FLMX_NETWORK；否则读 compose 的 networks
+  # 「name:」字段并展开 ${FLMX_NETWORK:-<缺省>}；无 name: 字段时
+  # （旧模板世代）实际名即网络键名本身（如 gost-network）——此前
+  # 硬编码 flmx-network，旧装真实网络从未被问到、静默 no-op。
+  net_name=$(grep -m1 '^FLMX_NETWORK=' .env 2>/dev/null | cut -d= -f2- | tr -d '" \r' || true)
+  if [ -z "$net_name" ]; then
+    name_field=$(awk -v key="$net_key" '/^networks:/{f=1; next} f && /^  [A-Za-z0-9_.-]+:/{k=$1; sub(/:$/, "", k); if (k == key) {inkey=1; next} if (inkey) exit; next} inkey && /^    name:/{sub(/^    name:[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); print; exit} f && /^[^ ]/{exit}' docker-compose.yml 2>/dev/null | tr -d '\r' || true)
+    case "$name_field" in
+      *'${FLMX_NETWORK:-'*'}')
+        net_name=$(printf '%s' "$name_field" | sed -n 's/.*${FLMX_NETWORK:-\([^}]*\)}.*/\1/p' || true)
+        ;;
+      '')
+        net_name="$net_key"
+        ;;
+      *)
+        net_name="$name_field"
+        ;;
+    esac
+  fi
+  if [ -z "$net_name" ]; then
+    net_name="$net_key"
   fi
   if ! docker network inspect "$net_name" >/dev/null 2>&1; then
     return 0
@@ -890,7 +912,23 @@ reconcile_network_label() {
   if [ "$actual_label" = "$net_key" ]; then
     return 0
   fi
-  log "警告: 存量网络「$net_name」的 compose 标签为「${actual_label:-（无）}」，与现行 compose 网络键名「$net_key」不符，compose up 将拒绝使用该网络；正在停齐本项目服务并删除该网络对象以便重建（网络名/子网不变）"
+  log "警告: 存量网络「$net_name」的 compose 标签为「${actual_label:-（无）}」，与现行 compose 网络键名「$net_key」不符，compose up 将拒绝使用该网络；正在检查占用并删除该网络对象以便重建（网络名/子网不变）"
+  # G3：rm 前先查在册容器——外来容器（非本项目）在场时 rm 必败，
+  # 且此前已 stop 服务致后端晾停；改为前置拒绝：点名＋return 1、
+  # 不停服务（脚本半同口径：外来容器在场时前置拒绝 rc 1）。
+  attached=$(docker network inspect -f '{{range $id, $c := .Containers}}{{$c.Name}} {{end}}' "$net_name" 2>/dev/null || true)
+  project_containers=$(docker compose ps --format '{{.Name}}' 2>/dev/null | tr '\n' ' ' || true)
+  foreign=""
+  for c in $attached; do
+    case " $project_containers " in
+      *" $c "*) ;;
+      *) foreign="$foreign$c " ;;
+    esac
+  done
+  if [ -n "$foreign" ]; then
+    log "错误: 存量网络「$net_name」标签不符，但仍被项目外容器占用（${foreign}），拒绝删除以免停服；请人工处理：docker network disconnect 该容器后重试升级；其标签 com.docker.compose.network 应为「$net_key」"
+    return 1
+  fi
   docker compose stop >> "$LOGFILE" 2>&1 || true
   if docker network rm "$net_name" >> "$LOGFILE" 2>&1; then
     log "已删除标签不符的存量网络「$net_name」，将由 compose 按现行文件重建"
@@ -1096,7 +1134,9 @@ fi
 # 前 .env 版本 tag 定点删除旧 backend/frontend 镜像。此前本路径
 # 与脚本面一样只拉新换容器、零清理，旧版镜像逐版无界累积（约
 # 0.2–0.5 GB/版）。旧 tag 取自 .env.upgrade.bak（升级前 .env 备
-# 份，FLMX_VERSION 优先、FLUX_VERSION 回退，与脚本面同口径）；
+# 份，只认现行键 FLMX_VERSION（S1-F02：FLUX_VERSION 回退读已按
+# 2026-11-05「过渡兼容到期直接退场」裁定清除，与 currentPanelVersion
+# 同口径；两脚本回退读归路 1）；
 # 归属前缀取自新后端容器实际镜像引用（与面板 panelImageRefPrefix
 # 同根）；镜像名仅现行名与旧仓名形态（flmx-flux-panel-backend、
 # flvx-flux-panel-backend）；同版本重装（old==目标版本）、latest
@@ -1106,9 +1146,6 @@ fi
 old_version=""
 if [ -f .env.upgrade.bak ]; then
   old_version=$(grep -m1 '^FLMX_VERSION=' .env.upgrade.bak | cut -d= -f2- | tr -d '" \r' || true)
-  if [ -z "$old_version" ]; then
-    old_version=$(grep -m1 '^FLUX_VERSION=' .env.upgrade.bak | cut -d= -f2- | tr -d '" \r' || true)
-  fi
 fi
 if [ -n "$old_version" ] && [ "$old_version" != "${FLMX_UPGRADE_VERSION:-}" ] && [ "$old_version" != "latest" ]; then
   case "$old_version" in

@@ -122,10 +122,10 @@ func (h *Handler) tunnelDeletePreview(w http.ResponseWriter, r *http.Request) {
 	preview, err := h.buildTunnelDeletePreview(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "不存在") {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			response.WriteJSON(w, response.ErrDefault("隧道不存在"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "tunnelDeletePreview", err)
 		return
 	}
 
@@ -194,11 +194,23 @@ func (h *Handler) tunnelDeleteWithForwards(w http.ResponseWriter, r *http.Reques
 			response.WriteJSON(w, response.ErrDefault("目标隧道不能为空"))
 			return
 		}
-		if strings.Contains(err.Error(), "目标隧道不能与当前隧道相同") || strings.Contains(err.Error(), "目标隧道不存在") || strings.Contains(err.Error(), "目标隧道已禁用") || strings.Contains(err.Error(), "隧道不存在") {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+		if strings.Contains(err.Error(), "目标隧道不能与当前隧道相同") {
+			response.WriteJSON(w, response.ErrDefault("目标隧道不能与当前隧道相同"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		if strings.Contains(err.Error(), "目标隧道不存在") {
+			response.WriteJSON(w, response.ErrDefault("目标隧道不存在"))
+			return
+		}
+		if strings.Contains(err.Error(), "目标隧道已禁用") {
+			response.WriteJSON(w, response.ErrDefault("目标隧道已禁用"))
+			return
+		}
+		if strings.Contains(err.Error(), "隧道不存在") {
+			response.WriteJSON(w, response.ErrDefault("隧道不存在"))
+			return
+		}
+		respondInternalError(w, "tunnelDeleteWithForwards", err)
 		return
 	}
 	if len(failures) > 0 {
@@ -957,6 +969,47 @@ func (h *Handler) formatTunnelDeleteFailureSummary(tunnelID int64, deleted []mod
 	return fmt.Sprintf("%s；其余 %d 条转发未删除、数据库记录仍保留：%s", summary, len(remaining), formatForwardDeleteLabels(remaining))
 }
 
+// forwardDeleteDisclosureError 是转发级联删除失败的定型回执错：
+// msg 为用户可见的披露（已删／已标记数与标识、数据面状态），不含
+// 仓储或数据面原错；cause 为底层原错，只进日志。Error() 只回
+// msg，故经 appendBatchFailure／回执格式化等 err.Error() 路径亦
+// 只见披露。R19-X-01／R18-X-01：逐条清理是前进式操作，中途硬失
+// 败时靠前的转发已实际删除，回执必须披露已删项、不得只称「未删
+// 除」。R2-A01：TestR19F01 三格的定型恢复。
+type forwardDeleteDisclosureError struct {
+	msg   string
+	cause error
+}
+
+func (e *forwardDeleteDisclosureError) Error() string { return e.msg }
+func (e *forwardDeleteDisclosureError) Unwrap() error { return e.cause }
+
+// respondForwardDeleteDisclosureError 是转发级联删除失败的调用点
+// 分流：披露错原样回执（并把原错记日志）、其余失败走通用文案。
+// 门禁口径：msg 字段访问天然沉默，与 kernelVersionGateError 的
+// errors.As 分流同形。
+func respondForwardDeleteDisclosureError(w http.ResponseWriter, op string, tunnelID int64, err error) {
+	respondForwardDeleteDisclosureErrorWithNote(w, op, tunnelID, err, "")
+}
+
+// respondForwardDeleteDisclosureErrorWithNote 同上，但回执尾部追加
+// 操作者须知的定型说明 note（T-001：补偿白名单刷新失败点名）：
+// 披露支追加在披露文案后，泛化支经 respondInternalErrorWithNote
+// 追加；note 为空时与 respondForwardDeleteDisclosureError 逐字同。
+func respondForwardDeleteDisclosureErrorWithNote(w http.ResponseWriter, op string, tunnelID int64, err error, note string) {
+	var de *forwardDeleteDisclosureError
+	if errors.As(err, &de) {
+		log.Printf("%s: forward cleanup failed tunnel_id=%d cause=%v", op, tunnelID, de.cause)
+		msg := de.msg
+		if note != "" {
+			msg += "；" + note
+		}
+		response.WriteJSON(w, response.Err(-2, msg))
+		return
+	}
+	respondInternalErrorWithNote(w, op, err, note)
+}
+
 func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.ForwardRecord, scope string, offlineTolerant bool) ([]model.ForwardRecord, error) {
 	if len(forwards) == 0 {
 		return nil, nil
@@ -967,7 +1020,7 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 	}
 	if nftMode {
 		if len(entryNodeIDs) == 0 {
-			return nil, errors.New("nftables 转发缺少入口节点")
+			return nil, &forwardDeleteDisclosureError{msg: "nftables 转发缺少入口节点"}
 		}
 		// R35-FIX-F01：遗留/竞态混合态下拒绝级联删除而不是标记
 		// pending 后删库报成功（gost/realm 服务会残留监听）；隧道
@@ -983,7 +1036,10 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 				// R19-X-01（L2 §1a 邻接点）：reconcile 尚未执行，规则
 				// 未下线；此前转发仅已标记待删除、库行仍保留。披露
 				// 已标记数与标识，不回滚已标记项。
-				return nil, fmt.Errorf("转发 %s 标记待删除失败，%s未删除：%w；%s；该转发未标记、规则未下线", formatForwardDeleteLabel(forwards[i]), scope, err, formatMarkedForwardsSummary(marked))
+				return nil, &forwardDeleteDisclosureError{
+					msg:   fmt.Sprintf("转发 %s 标记待删除失败，%s未删除；%s；该转发未标记、规则未下线", formatForwardDeleteLabel(forwards[i]), scope, formatMarkedForwardsSummary(marked)),
+					cause: err,
+				}
 			}
 			marked = append(marked, forwards[i])
 		}
@@ -994,7 +1050,10 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 				log.Printf("tunnel delete: node unreachable, %d nft forwards left in pending-delete ledger tunnel_id=%d node_id=%d err=%v", len(forwards), tunnelID, nodeID, err)
 				return nil, nil
 			}
-			return nil, fmt.Errorf("节点不可达，%d 条转发已加入待清理队列，后台将自动重试，%s未删除", len(forwards), scope)
+			return nil, &forwardDeleteDisclosureError{
+				msg:   fmt.Sprintf("节点不可达，%d 条转发已加入待清理队列，后台将自动重试，%s未删除", len(forwards), scope),
+				cause: err,
+			}
 		}
 		var deleted []model.ForwardRecord
 		for i := range forwards {
@@ -1009,7 +1068,10 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 				if len(deleted) > 0 {
 					summary += "（规则已下线、库行已删）"
 				}
-				return deleted, fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发规则已下线、数据库记录仍保留", formatForwardDeleteLabel(forwards[i]), scope, err, summary)
+				return deleted, &forwardDeleteDisclosureError{
+					msg:   fmt.Sprintf("转发 %s 数据库删除失败，%s未删除；%s；该转发规则已下线、数据库记录仍保留", formatForwardDeleteLabel(forwards[i]), scope, summary),
+					cause: err,
+				}
 			}
 			deleted = append(deleted, forwards[i])
 		}
@@ -1026,18 +1088,27 @@ func (h *Handler) cleanupForwardsDataPlane(tunnelID int64, forwards []model.Forw
 				if delErr := h.deleteForwardByID(fwd.ID); delErr != nil {
 					// R18-X-01：离线分支删库失败亦为硬失败，披露已删项；
 					// 本条数据面未动（节点离线、残留监听待重连对账）。
-					return deleted, fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发数据面未清理（节点离线，待重连对账）", formatForwardDeleteLabel(fwd), scope, delErr, formatDeletedForwardsSummary(deleted))
+					return deleted, &forwardDeleteDisclosureError{
+						msg:   fmt.Sprintf("转发 %s 数据库删除失败，%s未删除；%s；该转发数据面未清理（节点离线，待重连对账）", formatForwardDeleteLabel(fwd), scope, formatDeletedForwardsSummary(deleted)),
+						cause: delErr,
+					}
 				}
 				deleted = append(deleted, fwd)
 				continue
 			}
 			// R18-X-01：数据面硬失败，中止前披露此前已删转发。
-			return deleted, fmt.Errorf("转发 %s 数据面清理失败，%s未删除：%w；%s", formatForwardDeleteLabel(fwd), scope, err, formatDeletedForwardsSummary(deleted))
+			return deleted, &forwardDeleteDisclosureError{
+				msg:   fmt.Sprintf("转发 %s 数据面清理失败，%s未删除；%s", formatForwardDeleteLabel(fwd), scope, formatDeletedForwardsSummary(deleted)),
+				cause: err,
+			}
 		}
 		if err := h.deleteForwardByID(fwd.ID); err != nil {
 			// R18-X-01：删库失败亦为硬失败，披露已删项；本条数据面
 			// 服务已清理、数据库记录仍保留（不回滚）。
-			return deleted, fmt.Errorf("转发 %s 数据库删除失败，%s未删除：%w；%s；该转发数据面服务已清理、数据库记录仍保留", formatForwardDeleteLabel(fwd), scope, err, formatDeletedForwardsSummary(deleted))
+			return deleted, &forwardDeleteDisclosureError{
+				msg:   fmt.Sprintf("转发 %s 数据库删除失败，%s未删除；%s；该转发数据面服务已清理、数据库记录仍保留", formatForwardDeleteLabel(fwd), scope, formatDeletedForwardsSummary(deleted)),
+				cause: err,
+			}
 		}
 		deleted = append(deleted, fwd)
 	}

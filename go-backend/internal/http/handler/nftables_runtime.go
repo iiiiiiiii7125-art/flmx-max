@@ -61,7 +61,8 @@ func (h *Handler) nodeUsesNftablesTx(tx *gorm.DB, nodeID int64) (bool, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, errNftablesNodeNotFound
 		}
-		return false, err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return false, markRepoError(err)
 	}
 	return isNftablesForwardMode(mode), nil
 }
@@ -145,26 +146,33 @@ func (h *Handler) rejectMixedNftForwardState(tunnelID int64, nftMode bool, entry
 // entryNodeTunnelWithForwards 找节点作为入口节点、且名下已有转发的第一
 // 条隧道（按隧道 ID 升序），供 nodeUpdate 翻转发模式前置拒绝时点名。
 // 无此类隧道时返回 tunnelID 0。
-func (h *Handler) entryNodeTunnelWithForwards(nodeID int64) (int64, string, error) {
+// entryTunnelRef 是 entryNodeTunnelWithForwards 的返回值：入口隧道的 ID
+// 与名称。字段是纯数据（不含错误文本），调用方可以将其拼进回执文案。
+type entryTunnelRef struct {
+	ID   int64
+	Name string
+}
+
+func (h *Handler) entryNodeTunnelWithForwards(nodeID int64) (entryTunnelRef, error) {
 	if h == nil || h.repo == nil || nodeID <= 0 {
-		return 0, "", errors.New("handler not initialized")
+		return entryTunnelRef{}, errors.New("handler not initialized")
 	}
 	tunnelIDs, err := h.repo.TunnelIDsByEntryNode(nodeID)
 	if err != nil {
-		return 0, "", err
+		return entryTunnelRef{}, err
 	}
 	for _, tunnelID := range tunnelIDs {
 		forwards, err := h.repo.ListForwardsByTunnel(tunnelID)
 		if err != nil {
-			return 0, "", err
+			return entryTunnelRef{}, err
 		}
 		if len(forwards) == 0 {
 			continue
 		}
 		name, _ := h.repo.GetTunnelName(tunnelID)
-		return tunnelID, name, nil
+		return entryTunnelRef{ID: tunnelID, Name: name}, nil
 	}
-	return 0, "", nil
+	return entryTunnelRef{}, nil
 }
 
 func sshConfigFromModel(cfg *model.NodeSSHConfig) (runtimenft.SSHConfig, error) {
@@ -292,11 +300,13 @@ func (h *Handler) buildNftablesNodePlanWithOverrides(nodeID int64, exclude map[i
 		if errors.Is(err, sql.ErrNoRows) {
 			return runtimenft.NodePlan{}, nil, errors.New("nftables 节点缺少 SSH 配置")
 		}
-		return runtimenft.NodePlan{}, nil, err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return runtimenft.NodePlan{}, nil, markRepoError(err)
 	}
 	forwards, err := h.repo.ListActiveForwardsByNode(nodeID)
 	if err != nil {
-		return runtimenft.NodePlan{}, nil, err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return runtimenft.NodePlan{}, nil, markRepoError(err)
 	}
 	if len(exclude) > 0 {
 		kept := forwards[:0]
@@ -501,7 +511,8 @@ func (h *Handler) nftBlockedPorts(nodeID int64, exclude map[int64]bool, include 
 	}
 	paused, err := h.repo.ListPausedForwardsByNode(nodeID)
 	if err != nil {
-		return nil, err
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+		return nil, markRepoError(err)
 	}
 	for i := range paused {
 		if resumed[paused[i].ID] {
@@ -636,7 +647,7 @@ func (h *Handler) nodeNftablesTest(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("节点不存在"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeNftablesTest", err)
 		return
 	}
 	if !usesNft {
@@ -649,7 +660,7 @@ func (h *Handler) nodeNftablesTest(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("nftables 节点缺少 SSH 配置"))
 			return
 		}
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "nodeNftablesTest", err)
 		return
 	}
 	sshCfg, err := sshConfigFromModel(cfgModel)
@@ -684,7 +695,7 @@ func (h *Handler) nodeNftablesTest(w http.ResponseWriter, r *http.Request) {
 	}
 	if pinning {
 		if err := h.repo.UpdateNodeSSHHostKeyFingerprint(nodeID, probed, time.Now().UnixMilli()); err != nil {
-			response.WriteJSON(w, response.Err(-2, "SSH 主机密钥指纹钉入失败: "+err.Error()))
+			respondInternalError(w, "nodeNftablesTest", err)
 			return
 		}
 		response.WriteJSON(w, response.OK(map[string]interface{}{
@@ -704,6 +715,11 @@ func (h *Handler) nodeNftablesReconcile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.reconcileNftablesNodeByRequest(nodeID); err != nil {
+		// R2-F4-01：reconcile 的仓储错已标记，先守卫泛化；定型
+		// 业务错（未启用 nftables 模式）与 SSH/数据面错保留原文案。
+		if respondInternalIfRepoError(w, "nodeNftablesReconcile: reconcile failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -728,7 +744,7 @@ func (h *Handler) nftPendingDeleteList(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.repo.ListAllNftPendingDeletes()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nftPendingDeleteList", err)
 		return
 	}
 	items := make([]map[string]interface{}, 0, len(rows))
@@ -766,7 +782,7 @@ func (h *Handler) nodeNftablesClear(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("节点不存在"))
 			return
 		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeNftablesClear", err)
 		return
 	}
 	if !usesNft {
@@ -774,7 +790,7 @@ func (h *Handler) nodeNftablesClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.clearNftablesNode(nodeID); err != nil {
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "nodeNftablesClear", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())

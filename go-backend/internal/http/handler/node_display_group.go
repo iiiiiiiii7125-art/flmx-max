@@ -181,12 +181,12 @@ func (h *Handler) nodeGroupCreate(w http.ResponseWriter, r *http.Request) {
 	defer h.nodeGroupMu.Unlock()
 	registry, err := h.loadNodeGroupRegistry()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeGroupCreate", err)
 		return
 	}
 	inUse, err := h.repo.CountNodesByDisplayGroup()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeGroupCreate", err)
 		return
 	}
 	name, vErr := validateNodeGroupName(req.Name, registry, inUse, "")
@@ -196,7 +196,7 @@ func (h *Handler) nodeGroupCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	registry = append(registry, name)
 	if err := h.saveNodeGroupRegistry(registry); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeGroupCreate", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(nodeGroupCreateResult{Name: name, Order: registry}))
@@ -230,12 +230,12 @@ func (h *Handler) nodeGroupRename(w http.ResponseWriter, r *http.Request) {
 	}
 	registry, err := h.loadNodeGroupRegistry()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeGroupRename", err)
 		return
 	}
 	inUse, err := h.repo.CountNodesByDisplayGroup()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeGroupRename", err)
 		return
 	}
 	if !nodeGroupExists(registry, inUse, oldName) {
@@ -271,7 +271,7 @@ func (h *Handler) nodeGroupRename(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := h.repo.RenameNodeDisplayGroupWithRegistry(oldName, newName, value, time.Now().UnixMilli())
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeGroupRename", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(nodeGroupRenameResult{
@@ -307,12 +307,12 @@ func (h *Handler) nodeGroupDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	registry, err := h.loadNodeGroupRegistry()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeGroupDelete", err)
 		return
 	}
 	inUse, err := h.repo.CountNodesByDisplayGroup()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeGroupDelete", err)
 		return
 	}
 	if !nodeGroupExists(registry, inUse, name) {
@@ -332,7 +332,7 @@ func (h *Handler) nodeGroupDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := h.repo.ClearNodeDisplayGroupWithRegistry(name, value, time.Now().UnixMilli())
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeGroupDelete", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(nodeGroupDeleteResult{

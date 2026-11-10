@@ -116,7 +116,7 @@ func (h *Handler) inboundImport(w http.ResponseWriter, r *http.Request) {
 
 	existing, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundImport", err)
 		return
 	}
 	seen := make(map[string]bool)
@@ -352,7 +352,7 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
 		repo.ReleasePortAllocLock(externalMu)
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundExternalUpdate", err)
 		return
 	}
 	key := externalRowKey(row)
@@ -369,7 +369,7 @@ func (h *Handler) inboundExternalUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := h.repo.SaveNodeInbound(row); err != nil {
 		repo.ReleasePortAllocLock(externalMu)
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "inboundExternalUpdate", err)
 		return
 	}
 	repo.ReleasePortAllocLock(externalMu)

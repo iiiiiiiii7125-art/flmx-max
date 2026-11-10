@@ -479,17 +479,22 @@ func (h *Handler) latencyPoolBefore(key string) []latencyTarget {
 
 // onLatencyConfigChanged carries renamed points over to the nodes that
 // picked them, then re-measures every node so cards do not keep showing
-// removed points until the next round.
-func (h *Handler) onLatencyConfigChanged(key string, prev []latencyTarget) {
+// removed points until the next round. It returns every dropped
+// (node, point) pair (F2-17 disclosure): the caller surfaces it on the
+// save receipt, and each drop is logged here with the node and point.
+func (h *Handler) onLatencyConfigChanged(key string, prev []latencyTarget) []latencyChoiceDrop {
 	if strings.TrimSpace(key) != latencyTargetsConfigKey {
-		return
+		return nil
 	}
-	h.syncNodeTargetChoices(prev, h.latencyPool())
+	drops := h.syncNodeTargetChoices(prev, h.latencyPool())
+	for _, d := range drops {
+		log.Printf("node latency choice dropped point node_id=%d point=%q (renamed+address-changed or removed; node falls back to global defaults)", d.NodeID, d.Point)
+	}
 	h.jobsMu.Lock()
 	ctx := h.jobsCtx
 	h.jobsMu.Unlock()
 	if ctx == nil {
-		return
+		return drops
 	}
 	go func() {
 		// A full refresh (removed points must disappear from cards),
@@ -505,10 +510,18 @@ func (h *Handler) onLatencyConfigChanged(key string, prev []latencyTarget) {
 			log.Printf("node route trace failed: %v", err)
 		}
 	}()
+	return drops
 }
 
 // renamedTargets maps old names to new ones for points whose address stayed
 // while the name changed.
+//
+// F2-17 残差 1:1：地址映射后，未映射的消失旧名恰 1 个且未匹配的
+// 新名恰 1 个、且地址映射本身未命中任何改名时，视为同一点改名＋
+// 改址（单点改名＋改址这一常见操作形态）。「地址映射未命中」是
+// 必要守卫：多点同改时消失/新增无法确定配对——既有单测钉死的
+// 「删 移动、加 联通」同型（另有一处同址改名）必须仍按丢弃处理，
+// 不得多义猜测。
 func renamedTargets(prev, next []latencyTarget) map[string]string {
 	oldNames := make(map[string]bool, len(prev))
 	for _, t := range prev {
@@ -531,30 +544,70 @@ func renamedTargets(prev, next []latencyTarget) map[string]string {
 			renames[t.Name] = name
 		}
 	}
+	if len(renames) == 0 {
+		var unmatchedOld []string
+		for _, t := range prev {
+			if !newNames[t.Name] {
+				unmatchedOld = append(unmatchedOld, t.Name)
+			}
+		}
+		var unmatchedNew []string
+		for _, t := range next {
+			if !oldNames[t.Name] {
+				unmatchedNew = append(unmatchedNew, t.Name)
+			}
+		}
+		if len(unmatchedOld) == 1 && len(unmatchedNew) == 1 {
+			renames[unmatchedOld[0]] = unmatchedNew[0]
+		}
+	}
 	return renames
+}
+
+// latencyChoiceDrop records one node whose explicit test-point choice
+// lost a point in the sync (F2-17 disclosure): the point was neither
+// renamed nor still in the pool, so the node falls back to the global
+// defaults for that point.
+type latencyChoiceDrop struct {
+	NodeID int64
+	Point  string
 }
 
 // syncNodeTargetChoices follows renames in the nodes' own choices and drops
 // removed points; a choice left empty follows the defaults again (one that
-// was empty on purpose stays so).
-func (h *Handler) syncNodeTargetChoices(prev, next []latencyTarget) {
+// was empty on purpose stays so). It returns every dropped (node, point)
+// pair so callers can disclose it (F2-17) instead of silently falling back.
+func (h *Handler) syncNodeTargetChoices(prev, next []latencyTarget) []latencyChoiceDrop {
 	nodes, err := h.repo.ListMonitorNodes()
 	if err != nil {
-		return
+		return nil
 	}
 	renames := renamedTargets(prev, next)
 	inPool := make(map[string]bool, len(next))
 	for _, t := range next {
 		inPool[t.Name] = true
 	}
-	carry := func(names []string) []string {
+	var drops []latencyChoiceDrop
+	seenDrop := make(map[int64]map[string]struct{})
+	carry := func(nodeID int64, names []string) []string {
 		var out []string
 		for _, n := range names {
+			orig := n
 			if r, ok := renames[n]; ok {
 				n = r
 			}
 			if inPool[n] {
 				out = append(out, n)
+				continue
+			}
+			byNode, ok := seenDrop[nodeID]
+			if !ok {
+				byNode = make(map[string]struct{})
+				seenDrop[nodeID] = byNode
+			}
+			if _, dup := byNode[orig]; !dup {
+				byNode[orig] = struct{}{}
+				drops = append(drops, latencyChoiceDrop{NodeID: nodeID, Point: orig})
 			}
 		}
 		return out
@@ -564,7 +617,7 @@ func (h *Handler) syncNodeTargetChoices(prev, next []latencyTarget) {
 		if c == nil || len(c.Points) == 0 {
 			continue
 		}
-		next := nodeTargetChoice{Points: carry(c.Points), Pinned: carry(c.Pinned)}
+		next := nodeTargetChoice{Points: carry(n.ID, c.Points), Pinned: carry(n.ID, c.Pinned)}
 		value := ""
 		if len(next.Points) > 0 {
 			b, _ := json.Marshal(next)
@@ -576,6 +629,25 @@ func (h *Handler) syncNodeTargetChoices(prev, next []latencyTarget) {
 			}
 		}
 	}
+	return drops
+}
+
+// latencyChoiceDropWarning renders the F2-17 disclosure for a save
+// receipt: which nodes lost an explicit test point and fell back to
+// the global defaults. Long lists are capped.
+func latencyChoiceDropWarning(drops []latencyChoiceDrop) string {
+	parts := make([]string, 0, len(drops))
+	for i, d := range drops {
+		if i >= 5 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("节点 %d 的「%s」", d.NodeID, d.Point))
+	}
+	msg := "以下节点自选延迟测试点已失效并回落全局默认：" + strings.Join(parts, "、")
+	if len(drops) > 5 {
+		msg += fmt.Sprintf("等 %d 项", len(drops))
+	}
+	return msg
 }
 
 // attachNodeLatency enriches /node/list items with the latest latency
@@ -665,7 +737,7 @@ func (h *Handler) nodeLatencyTargetsSet(w http.ResponseWriter, r *http.Request) 
 	{
 		existing, err := h.repo.ListMonitorNodes()
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "nodeLatencyTargetsSet", err)
 			return
 		}
 		exists := make(map[int64]bool, len(existing))
@@ -716,7 +788,7 @@ func (h *Handler) nodeLatencyTargetsSet(w http.ResponseWriter, r *http.Request) 
 		value = string(b)
 	}
 	if err := h.repo.SetNodesLatencyTargets(req.IDs, value); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeLatencyTargetsSet", err)
 		return
 	}
 	if measuresNothing {
@@ -765,7 +837,7 @@ func (h *Handler) nodeLatencyProbe(w http.ResponseWriter, r *http.Request) {
 		// 定向轮（probeRoundTargeted）也使缓存按合并而非整体替换更新
 		nodes, err := h.repo.ListMonitorNodes()
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			respondInternalError(w, "nodeLatencyProbe", err)
 			return
 		}
 		for _, n := range nodes {
@@ -780,7 +852,7 @@ func (h *Handler) nodeLatencyProbe(w http.ResponseWriter, r *http.Request) {
 	}
 	results, err := h.probeNodeLatency(r.Context(), ids, probeRoundTargeted)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeLatencyProbe", err)
 		return
 	}
 	out := make(map[string]externalProbe, len(results))

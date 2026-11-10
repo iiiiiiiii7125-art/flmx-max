@@ -111,8 +111,7 @@ func (h *Handler) getUserInbounds(w http.ResponseWriter, r *http.Request) {
 	}
 	assignments, err := h.repo.ListUserInboundAssignments(req.UserID)
 	if err != nil {
-		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-		respondInternalError(w, "getUserInbounds: ListUserInboundAssignments failed", err)
+		respondInternalError(w, "getUserInbounds", err)
 		return
 	}
 	type assignment struct {
@@ -153,12 +152,8 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 	// referenced inbounds are validated the same way (the legacy repo
 	// path previously persisted phantom inbound rows verbatim).
 	if err := h.repo.ValidateIDsExist("user", []int64{raw.UserID}); err != nil {
-		// RAW291 Type B：混合错误——gorm 直通错误（已标
-		// StorageError）改走通用文案，幻影用户固定文案原样回。
-		if respondInternalIfRepoError(w, "setUserInbounds: ValidateIDsExist user failed", err) {
-			return
-		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-A01：幻影 ID 定型文案原样回（「用户不存在: [id]」），仓储故障才泛化。
+		respondPhantomIDError(w, "setUserInbounds", err)
 		return
 	}
 	inboundIDsToCheck := raw.InboundIDs
@@ -175,12 +170,8 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.repo.ValidateIDsExist("inbound", inboundIDsToCheck); err != nil {
-		// RAW291 Type B：混合错误——gorm 直通错误（已标
-		// StorageError）改走通用文案，幻影入站固定文案原样回。
-		if respondInternalIfRepoError(w, "setUserInbounds: ValidateIDsExist inbound failed", err) {
-			return
-		}
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// R2-A01：幻影 ID 定型文案原样回（「入站不存在: [id]」），仓储故障才泛化。
+		respondPhantomIDError(w, "setUserInbounds", err)
 		return
 	}
 	// 计量伴生入站不可分配：分配只认原入站，端点改指在拉取时完成。
@@ -199,15 +190,13 @@ func (h *Handler) setUserInbounds(w http.ResponseWriter, r *http.Request) {
 		var err error
 		skippedRelays, err = h.repo.SetUserInboundAssignmentsCounted(raw.UserID, assignments)
 		if err != nil {
-			// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-			respondInternalError(w, "setUserInbounds: SetUserInboundAssignmentsCounted failed", err)
+			respondInternalError(w, "setUserInbounds", err)
 			return
 		}
 	} else {
 		// Legacy format: plain inbound IDs (direct only).
 		if err := h.repo.SetUserInbounds(raw.UserID, raw.InboundIDs); err != nil {
-			// RAW291：同上。
-			respondInternalError(w, "setUserInbounds: SetUserInbounds failed", err)
+			respondInternalError(w, "setUserInbounds", err)
 			return
 		}
 	}

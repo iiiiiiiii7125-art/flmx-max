@@ -224,10 +224,12 @@ func (h *Handler) failDueUpgradeVerifications(now time.Time) []upgradeVerifyFail
 			_ = h.repo.DeleteNodeUpgradeVerification(rec.NodeID)
 			continue
 		}
+		// F2-07：observed 恒取 rec.ObservedVersion（真实观测值，
+		// 仅当节点回连上报才写入）——旧形态在 observed 为空时回
+		// 退取 node.Version（DB 存量旧版本），致使「尚未回连」
+		// 分支永不达、告警把未回连的节点谎报为「当前自报版本：
+		// 2.1.2-old」。
 		observed := rec.ObservedVersion
-		if observed == "" && node.Version.Valid {
-			observed = strings.TrimSpace(node.Version.String)
-		}
 		won, rerr := h.repo.ResolveNodeUpgradeVerification(rec.NodeID, repo.NodeUpgradeVerifyPending, repo.NodeUpgradeVerifyFailed, observed, false, now.UnixMilli())
 		if rerr != nil || !won {
 			continue

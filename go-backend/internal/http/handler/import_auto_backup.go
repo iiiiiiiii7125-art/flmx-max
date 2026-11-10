@@ -162,6 +162,10 @@ func (h *Handler) backupImportAutoBackup(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Disposition", "attachment; filename=auto_backup_"+info.ModTime().Format("20060102_150405")+".json")
 	w.Header().Set("Content-Type", "application/json")
+	// C-17：快照含全量敏感配置的导入前备份，与 backupExport 同口径
+	// 禁存——直接写头下载面绕过 JSON 信封（WriteJSON 自带 no-store），
+	// 此处须显式补 Cache-Control: no-store。
+	w.Header().Set("Cache-Control", "no-store")
 	if _, err := w.Write(data); err != nil {
 		// headers+body 已发出，此时只能记录日志，无法再返回错误信封。
 		log.Printf("backupImportAutoBackup: write response failed: %v", err)

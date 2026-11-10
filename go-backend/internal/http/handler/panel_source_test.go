@@ -44,8 +44,9 @@ func TestBuildNodeInstallCommandPanelCandidateFirst(t *testing.T) {
 	if !(iPanel < iDirect && iDirect < iMirror) {
 		t.Fatalf("候选顺序应为 面板源 > 直连 > 镜像, got %q", cmd)
 	}
-	// F-060 同源校验步与执行步保持原样。
-	if !strings.Contains(cmd, "sha256sum ./install.sh") || !strings.Contains(cmd, "VERSION=1.8.0 ./install.sh -a 'wss://panel.example.com:8443' -s 'secret-x'") {
+	// F-060 同源校验步与执行步保持原样；W8-R-C4ARGV：执行步 secret
+	// 改走 FLMX_NODE_SECRET 环境变量，不再进 -s argv。
+	if !strings.Contains(cmd, "sha256sum ./install.sh") || !strings.Contains(cmd, "FLMX_NODE_SECRET='secret-x' VERSION=1.8.0 ./install.sh -a 'wss://panel.example.com:8443'") {
 		t.Fatalf("安装命令的校验/执行段不应被改动, got %q", cmd)
 	}
 

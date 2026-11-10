@@ -161,6 +161,11 @@ func TestSEC01BC01ImportRetainsServerSideSnapshot(t *testing.T) {
 	if cd := dlRec.Header().Get("Content-Disposition"); cd != wantCD {
 		t.Fatalf("download Content-Disposition = %q, want %q", cd, wantCD)
 	}
+	// C-17：快照含全量敏感配置的导入前备份，与 backupExport 同口径
+	// 禁存（直接写头下载面绕过 JSON 信封，此处须显式 no-store）。
+	if cc := dlRec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("download Cache-Control = %q, want no-store", cc)
+	}
 	if !bytes.Equal(dlRec.Body.Bytes(), data) {
 		t.Fatal("downloaded bytes must equal the retained snapshot file bytes")
 	}

@@ -155,6 +155,15 @@ func TestSweepFailsOverdueAndAlertsOnce(t *testing.T) {
 	if !strings.Contains(msgs[0].Message, "node-overdue") || !strings.Contains(msgs[0].Message, "2.1.0") || !strings.Contains(msgs[0].Message, "2.0.0 (debian/amd64)") {
 		t.Fatalf("alert must name node, expected and actual versions: %q", msgs[0].Message)
 	}
+	// F2-07：从未回连的节点不得谎报旧版本为「当前自报版本」——
+	// observed 为空时须走「尚未回连」分支；2.0.0 只许出现在
+	// 「下发前版本」行。
+	if !strings.Contains(msgs[0].Message, "当前自报版本：尚未回连") {
+		t.Fatalf("never-reconnected node must report 尚未回连: %q", msgs[0].Message)
+	}
+	if strings.Contains(msgs[0].Message, "当前自报版本：2.0.0") {
+		t.Fatalf("stale DB version must not pose as the current report: %q", msgs[0].Message)
+	}
 	// 第二轮扫描不得重复告警（记录已 failed、不在 due 集）。
 	h.sweepNodeUpgradeVerifications(time.Now())
 	if msgs := sent(); len(msgs) != 1 {

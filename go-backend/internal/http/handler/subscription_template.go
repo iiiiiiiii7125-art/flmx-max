@@ -181,8 +181,7 @@ func (h *Handler) subscriptionTemplateList(w http.ResponseWriter, r *http.Reques
 	}
 	templates, err := h.repo.ListSubscriptionTemplates()
 	if err != nil {
-		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-		respondInternalError(w, "subscriptionTemplateList: ListSubscriptionTemplates failed", err)
+		respondInternalError(w, "subscriptionTemplateList", err)
 		return
 	}
 	usage := h.templateUsage()
@@ -259,8 +258,7 @@ func (h *Handler) subscriptionTemplateCheck(w http.ResponseWriter, r *http.Reque
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-		respondInternalError(w, "subscriptionTemplateCheck: ListNodeInbounds failed", err)
+		respondInternalError(w, "subscriptionTemplateCheck", err)
 		return
 	}
 	// Every node, unprocessed, unless a subscription is picked.
@@ -361,8 +359,7 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 		t.LastFetch = now
 	}
 	if err := h.repo.SaveSubscriptionTemplate(t); err != nil {
-		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-		respondInternalError(w, "subscriptionTemplateSave: SaveSubscriptionTemplate failed", err)
+		respondInternalError(w, "subscriptionTemplateSave", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(templateView(t, h.templateUsage()[t.ID])))
@@ -386,12 +383,7 @@ func (h *Handler) subscriptionTemplateRefresh(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.refreshTemplate(r.Context(), t); err != nil {
-		// RAW291 Type B：混合错误——保存仓储错误（已标 repoError）
-		// 改走通用文案；下载/校验失败为固定文案，原样回。
-		if respondInternalIfRepoError(w, "subscriptionTemplateRefresh: refreshTemplate failed", err) {
-			return
-		}
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		respondInternalError(w, "subscriptionTemplateRefresh", err)
 		return
 	}
 	response.WriteJSON(w, response.OK(templateView(t, h.templateUsage()[t.ID])))
@@ -414,8 +406,7 @@ func (h *Handler) subscriptionTemplateDelete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := h.repo.DeleteSubscriptionTemplate(req.ID); err != nil {
-		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-		respondInternalError(w, "subscriptionTemplateDelete: DeleteSubscriptionTemplate failed", err)
+		respondInternalError(w, "subscriptionTemplateDelete", err)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())

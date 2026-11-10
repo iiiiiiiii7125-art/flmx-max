@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,48 @@ func uninstallReplyWarnings(data json.RawMessage) []string {
 	return out
 }
 
+// uninstallIssuedAt 解终局帧的 issuedAt：正形为数字 UnixMilli
+// （面板登记表 IssuedAt int64 同形，统一编码已定）；兼容旧
+// agent 发来的数字字符串与 RFC3339 字符串；空串/缺席/null 按
+// 0 处理——C2 wirecheck 实证：缺席键可解、显式空串比缺席更
+// 糟；存量旧 agent 恒发空串，按 0 接受（跳过新旧比对）严格优
+// 于整帧判 malformed 丢弃。无法识别的字符串仍报错，由调用方
+// 按 malformed 丢弃。
+type uninstallIssuedAt int64
+
+func (v *uninstallIssuedAt) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*v = 0
+		return nil
+	}
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			*v = 0
+			return nil
+		}
+		if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
+			*v = uninstallIssuedAt(ms)
+			return nil
+		}
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			*v = uninstallIssuedAt(t.UnixMilli())
+			return nil
+		}
+		return fmt.Errorf("issuedAt %q is neither millis nor RFC3339", s)
+	}
+	var n int64
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*v = uninstallIssuedAt(n)
+	return nil
+}
+
 // handleUninstallResult 落 agent 的卸载终局上报（C4-G2 面板
 // 半）：报文 {type:"UninstallResult", data:{issuedAt, success,
 // reason, warnings}}。幂等键 = 本连接的 node_id＋登记的
@@ -47,16 +90,20 @@ func uninstallReplyWarnings(data json.RawMessage) []string {
 // succeeded（面板清扫随后删记录并清登记）；失败 → failed＋
 // agent 点名原因。warnings 逐条进日志（终局路径没有同步回执
 // 可挂，日志是其披露面，与重连拦截路径同口径）。
+// R2-ISSUEDAT：issuedAt 接受数字（正形）、数字字符串、RFC3339
+// 字符串、空串/缺席（按 0、不参与新旧比对）；补发去重在 agent
+// 侧执行，面板侧重连补发以登记原 issued_at 为键、不刷新
+// （node_delete_uninstall.go 补发段）。
 func (s *Server) handleUninstallResult(nodeID int64, msg string) {
 	if s == nil || s.repo == nil {
 		return
 	}
 	var envelope struct {
 		Data struct {
-			IssuedAt int64    `json:"issuedAt"`
-			Success  bool     `json:"success"`
-			Reason   string   `json:"reason"`
-			Warnings []string `json:"warnings"`
+			IssuedAt uninstallIssuedAt `json:"issuedAt"`
+			Success  bool              `json:"success"`
+			Reason   string            `json:"reason"`
+			Warnings []string          `json:"warnings"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(msg), &envelope); err != nil {
@@ -68,7 +115,7 @@ func (s *Server) handleUninstallResult(nodeID int64, msg string) {
 		log.Printf("websocket: UninstallResult from node %d without pending registry, ignored", nodeID)
 		return
 	}
-	if envelope.Data.IssuedAt != 0 && envelope.Data.IssuedAt != rec.IssuedAt {
+	if envelope.Data.IssuedAt != 0 && int64(envelope.Data.IssuedAt) != rec.IssuedAt {
 		log.Printf("websocket: stale UninstallResult from node %d (issuedAt %d, current %d), ignored", nodeID, envelope.Data.IssuedAt, rec.IssuedAt)
 		return
 	}

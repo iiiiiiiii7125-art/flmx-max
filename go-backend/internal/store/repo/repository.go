@@ -1383,6 +1383,11 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"restartEnabled":       n.RestartEnabled,
 			"restartTime":          n.RestartTime,
 			"restartJitterMinutes": n.RestartJitterMinutes,
+			// 定时重启下发结果（W8-R-C601 持久字段）：最近一次下
+			// 发尝试的状态／原因／时刻，刷新列表行可见。
+			"restartPushStatus": n.RestartPushStatus,
+			"restartPushError":  n.RestartPushError,
+			"restartPushedAt":   n.RestartPushedAt,
 			// 转发面会话无进展拆除阈值（秒，0＝关，默认关）。
 			"idleTimeoutSeconds":  n.IdleTimeoutSeconds,
 			"interfaceName":       nullableString(n.InterfaceName),
@@ -7753,7 +7758,7 @@ func (r *Repository) GetLatestServiceMonitorResults() ([]model.ServiceMonitorRes
 
 	// Prefer a window-function query (works on modern SQLite + Postgres).
 	q1 := `
-		SELECT id, monitor_id, node_id, timestamp, success, latency_ms, status_code, error_message
+		SELECT id, monitor_id, node_id, timestamp, success, latency_ms, error_message
 		FROM (
 			SELECT *, ROW_NUMBER() OVER (PARTITION BY monitor_id ORDER BY timestamp DESC, id DESC) AS rn
 			FROM service_monitor_result
@@ -7769,7 +7774,7 @@ func (r *Repository) GetLatestServiceMonitorResults() ([]model.ServiceMonitorRes
 	// Note: This may not include all monitors if the table is extremely large and skewed.
 	results = nil
 	q2 := `
-		SELECT id, monitor_id, node_id, timestamp, success, latency_ms, status_code, error_message
+		SELECT id, monitor_id, node_id, timestamp, success, latency_ms, error_message
 		FROM service_monitor_result
 		ORDER BY timestamp DESC, id DESC
 		LIMIT 5000

@@ -46,7 +46,8 @@ func (h *Handler) validateRealmTunnelTx(tx *gorm.DB, typeVal int, entryNodeIDs [
 	for _, nodeID := range entryNodeIDs {
 		node, err := h.repo.GetNodeRecordTx(tx, nodeID)
 		if err != nil {
-			return err
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return markRepoError(err)
 		}
 		if node == nil {
 			return errors.New("节点不存在")

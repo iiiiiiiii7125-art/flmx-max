@@ -166,6 +166,41 @@ func TestTuneProbeReferenceLeg(t *testing.T) {
 	}
 }
 
+// F2-16 回归：参考腿失败此前整段静默吞掉（无 warning 无日志）——
+// 常见因是自动填充的面板地址为内网地址、被
+// validateProbeReferenceHost 拒绝，操作者只见腿缺席、不见原因。
+// 现与 Leg 1 同口径记日志＋具名 warning；建议值不受影响。
+func TestTuneProbeReferenceLegFailureWarns(t *testing.T) {
+	fakeProcSys(t, "reno cubic bbr")
+	stubProbeSeams(t, []uint32{80000}, nil)
+	tuneProbeReferenceRT = func(string) (probeSeriesStats, error) {
+		return probeSeriesStats{}, errors.New("reference host is a private address")
+	}
+
+	out, err := handleTuneCommand("TuneProbe", map[string]interface{}{
+		"referenceHost": "10.0.0.1:443",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := out.(tuneProbeResult)
+	if res.PanelRTTAvail || res.PanelRTTMs != nil {
+		t.Fatalf("failed reference leg must stay unavailable: %+v", res)
+	}
+	if res.Suggested != (tuneParams{BandwidthMbps: 1000, RTTMs: 80}) {
+		t.Fatalf("suggested must be unaffected by reference failure: %+v", res.Suggested)
+	}
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "10.0.0.1:443") && strings.Contains(w, "探针失败") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("reference failure must be named in warnings: %v", res.Warnings)
+	}
+}
+
 func TestProbeSeriesStatsMath(t *testing.T) {
 	st := probeSeriesStats{Sent: 10, Received: 8, RTTsMs: []int{10, 14, 12, 20, 11, 13, 12, 40}}
 	if med, ok := st.medianMs(); !ok || med != 12 { // sorted: 10 11 12 12 13 14 20 40 -> (12+13)/2

@@ -58,6 +58,21 @@ func (r *Repository) SetNodeRestartSchedule(id int64, enabled int, restartTime s
 	}).Error
 }
 
+// SetNodeRestartPushResult records the outcome of the latest
+// SetRestartSchedule push attempt (W8-R-C601): status is pending /
+// applied / failed; errMsg is the agent-facing cause (empty on
+// applied/pending); at is the attempt time in UnixMilli.
+func (r *Repository) SetNodeRestartPushResult(id int64, status, errMsg string, at int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Model(&model.Node{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"restart_push_status": status,
+		"restart_push_error":  errMsg,
+		"restart_pushed_at":   at,
+	}).Error
+}
+
 // ListNodeLatencyTargets returns every node's stored explicit latency
 // test-point choice (raw JSON), keyed by node id. An empty value means
 // "follow the global defaults" and is omitted, so callers can tell an

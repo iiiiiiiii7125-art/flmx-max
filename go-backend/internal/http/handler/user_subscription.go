@@ -30,8 +30,7 @@ func (h *Handler) userSubscriptionList(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, err := h.repo.ListUserSubscriptionIDs(req.UserID)
 	if err != nil {
-		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-		respondInternalError(w, "userSubscriptionList: ListUserSubscriptionIDs failed", err)
+		respondInternalError(w, "userSubscriptionList", err)
 		return
 	}
 	if ids == nil {
@@ -72,12 +71,8 @@ func (h *Handler) userSubscriptionSet(w http.ResponseWriter, r *http.Request) {
 	// was already validated below, but a phantom user silently accepted
 	// (and persisted) the assignment.
 	if err := h.repo.ValidateIDsExist("user", []int64{req.UserID}); err != nil {
-		// RAW291 Type B：混合错误——gorm 直通错误（已标
-		// StorageError）改走通用文案，幻影用户固定文案原样回。
-		if respondInternalIfRepoError(w, "userSubscriptionSet: ValidateIDsExist user failed", err) {
-			return
-		}
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		// R2-A01：幻影 ID 定型文案原样回（「用户不存在: [id]」），仓储故障才泛化。
+		respondPhantomIDError(w, "userSubscriptionSet", err)
 		return
 	}
 	seen := make(map[int64]bool, len(req.SubscriptionIDs))
@@ -92,8 +87,7 @@ func (h *Handler) userSubscriptionSet(w http.ResponseWriter, r *http.Request) {
 		seen[id] = true
 		sub, err := h.repo.GetSubscription(id)
 		if err != nil {
-			// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-			respondInternalError(w, "userSubscriptionSet: GetSubscription failed", err)
+			respondInternalError(w, "userSubscriptionSet", err)
 			return
 		}
 		if sub == nil {
@@ -114,8 +108,7 @@ func (h *Handler) userSubscriptionSet(w http.ResponseWriter, r *http.Request) {
 	// 是裸 OK(true)，管理员会误以为撤销即断链。
 	currentIDs, err := h.repo.ListUserSubscriptionIDs(req.UserID)
 	if err != nil {
-		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-		respondInternalError(w, "userSubscriptionSet: ListUserSubscriptionIDs failed", err)
+		respondInternalError(w, "userSubscriptionSet", err)
 		return
 	}
 	var revokedNames []string
@@ -130,8 +123,7 @@ func (h *Handler) userSubscriptionSet(w http.ResponseWriter, r *http.Request) {
 		revokedNames = append(revokedNames, name)
 	}
 	if err := h.repo.SetUserSubscriptions(req.UserID, req.SubscriptionIDs); err != nil {
-		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
-		respondInternalError(w, "userSubscriptionSet: SetUserSubscriptions failed", err)
+		respondInternalError(w, "userSubscriptionSet", err)
 		return
 	}
 	if len(revokedNames) > 0 {

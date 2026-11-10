@@ -40,6 +40,37 @@ const (
 	restartSchedulePushTimeout   = 30 * time.Second
 )
 
+// 定时重启下发结果持久状态（W8-R-C601）：pending 已保存未下发、
+// applied agent 已确认、failed 下发失败（原因见 RestartPushError）。
+const (
+	restartPushPending = "pending"
+	restartPushApplied = "applied"
+	restartPushFailed  = "failed"
+)
+
+// recordRestartPushResult 落一次下发尝试的结果（尽力而为：落库
+// 失败只记日志，不挡回执）。errMsg 按列宽 500 截断（PG varchar
+// 上限），空原因的失败不落地（调用方须给原因）。
+func (h *Handler) recordRestartPushResult(nodeID int64, status, errMsg string) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return
+	}
+	if r := []rune(errMsg); len(r) > 500 {
+		errMsg = string(r[:500])
+	}
+	if err := h.repo.SetNodeRestartPushResult(nodeID, status, errMsg, time.Now().UnixMilli()); err != nil {
+		log.Printf("node restart schedule push result persist failed node_id=%d status=%s err=%v", nodeID, status, err)
+	}
+}
+
+// restartPushDeterministicFailure 判下发失败是否确定性失败（重连
+// 补发亦然）：agent 明确回「未知命令类型」（版本过旧）或「无
+// systemd」（容器形态无持久化能力）时，重连不会改变结果，不得
+// 再承诺「节点重连时自动补发」。
+func restartPushDeterministicFailure(msg string) bool {
+	return strings.Contains(msg, "未知命令类型") || strings.Contains(msg, "无 systemd")
+}
+
 var restartTimePattern = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
 // validateRestartSchedule judges the full setting triple. The
@@ -131,7 +162,7 @@ func (h *Handler) nodeRestartScheduleSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := h.repo.SetNodeRestartSchedule(req.ID, req.Enabled, req.Time, req.JitterMinutes); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		respondInternalError(w, "nodeRestartScheduleSet save", err)
 		return
 	}
 	// 设置变更留痕（与本仓设置面同一口径：结构化 log 行，含操作者）。
@@ -146,14 +177,25 @@ func (h *Handler) nodeRestartScheduleSet(w http.ResponseWriter, r *http.Request)
 	}
 	if node.Status != 1 {
 		// 离线：已落库，onNodeOnline 重连时补发（见 upgrade.go）。
+		// W8-R-C601：下发结果持久化——离线保存记 pending，刷新
+		// 列表行可见，不再只靠当次回执。
+		h.recordRestartPushResult(req.ID, restartPushPending, "")
+		data["pushStatus"] = restartPushPending
 		response.WriteJSON(w, response.OK(data))
 		return
 	}
 	pushed, perr := h.pushNodeRestartSchedule(req.ID)
 	if perr != nil {
 		msg := perr.Error()
+		// W8-R-C601：确定性失败（版本过旧／无 systemd）不得再承
+		// 诺「节点重连时自动补发」——重连亦然；瞬时失败才保留该
+		// 承诺（onNodeOnline 确会补发）。结果一律持久化。
+		h.recordRestartPushResult(req.ID, restartPushFailed, msg)
+		data["pushStatus"] = restartPushFailed
 		if strings.Contains(msg, "未知命令类型") {
 			msg = "节点 agent 版本过旧，不支持定时重启；设置已保存，升级 agent 后将自动生效"
+		} else if restartPushDeterministicFailure(msg) {
+			msg = "设置已保存，但节点无法持久化定时重启（节点无 systemd，容器形态不支持）；重连不会改变结果"
 		} else {
 			msg = "设置已保存，但下发 agent 失败（节点重连时自动补发）: " + msg
 		}
@@ -161,6 +203,8 @@ func (h *Handler) nodeRestartScheduleSet(w http.ResponseWriter, r *http.Request)
 		response.WriteJSON(w, response.OK(data))
 		return
 	}
+	h.recordRestartPushResult(req.ID, restartPushApplied, "")
+	data["pushStatus"] = restartPushApplied
 	data["pushed"] = pushed
 	response.WriteJSON(w, response.OK(data))
 }
