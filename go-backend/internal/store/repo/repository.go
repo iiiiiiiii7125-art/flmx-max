@@ -345,7 +345,17 @@ func Open(path string) (*Repository, error) {
 	}
 
 	// R1-12-01：初始管理员口令一次性文件落 SQLite 库同级目录。
-	setInitialAdminDataDir(filepath.Dir(path))
+	// E-01 (AUDIT-R215)：path == ":memory:" 时 filepath.Dir 得 "."，
+	// 无条件置目录会把数据目录定为进程 CWD，播种随即把随机初始
+	// 口令写入 ./initial-admin-password.txt（测试包目录）。内存库
+	// 无同级目录可言：显式置空，沿用「直接调 seedData 的测试形态
+	// 文件面关闭、仅内存候选生效」既有语义（initial_admin.go:60-62）。
+	// 全仓 10 余处同型 Open(":memory:") 调用点同受益。
+	if path == ":memory:" {
+		setInitialAdminDataDir("")
+	} else {
+		setInitialAdminDataDir(filepath.Dir(path))
+	}
 	seedData(db)
 
 	if err := migrateSchema(db); err != nil {
