@@ -1658,6 +1658,11 @@ export default function ForwardPage() {
 
       if (saveRes.code !== 0) {
         toast.error(saveRes.msg || "保存分组排序失败");
+      } else if (saveRes.warning) {
+        // T-001：信封 warning（延迟优选丢弃点名，network.ts 合同：
+        // must be surfaced）须原样透出；静默持久化无成功 toast，
+        // 只在后端点名时出声。
+        toast(saveRes.warning, { icon: "⚠️", duration: 12000 });
       }
     } catch {
       toast.error("保存分组排序失败");
@@ -1691,6 +1696,11 @@ export default function ForwardPage() {
 
       if (saveRes.code !== 0) {
         toast.error(saveRes.msg || "保存分组折叠状态失败");
+      } else if (saveRes.warning) {
+        // T-001：信封 warning（延迟优选丢弃点名，network.ts 合同：
+        // must be surfaced）须原样透出；静默持久化无成功 toast，
+        // 只在后端点名时出声。
+        toast(saveRes.warning, { icon: "⚠️", duration: 12000 });
       }
     } catch {
       toast.error("保存分组折叠状态失败");

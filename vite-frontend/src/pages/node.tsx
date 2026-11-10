@@ -2061,6 +2061,12 @@ export default function NodePage({
       );
 
       if (res.code !== 0) return false;
+      // T-001：信封 warning（延迟优选丢弃点名，network.ts 合同：
+      // must be surfaced）须原样透出；静默持久化无成功 toast，
+      // 只在后端点名时出声。
+      if (res.warning) {
+        toast(res.warning, { icon: "⚠️", duration: 12000 });
+      }
       setGroupOrder(order);
 
       return true;
