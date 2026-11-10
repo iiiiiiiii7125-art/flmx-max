@@ -1489,6 +1489,12 @@ export default function NodePage({
 
       if (res.code === 0) {
         toast.success(isEdit ? "更新成功" : "创建成功");
+        // T-001：编辑保存后白名单刷新失败时后端在信封 warning 里点名
+        // 受影响入站（network.ts 合同：must be surfaced），须原样透出，
+        // 不得只报固定成功文案（创建路径后端不发此 warning，恒为空）。
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
         setDialogVisible(false);
 
         if (isEdit) {

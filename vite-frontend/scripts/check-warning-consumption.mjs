@@ -265,6 +265,13 @@ const REGISTRY = [
     calls: 1,
     consumers: ["src/pages/user.tsx"],
   },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/node/update",
+    apiFn: "updateNode",
+    calls: 1,
+    consumers: ["src/pages/node.tsx"],
+  },
 ];
 
 // GAP 登记册（2026-11-10 合并树逐点独立核实）：T-001 新增生产者中
@@ -280,14 +287,6 @@ const REGISTRY = [
 // 缺口本身是产品问题（信封 warning 被 UI 丢弃），修复归产品波次；
 // 本册只负责让缺口不可静默、不可腐烂。
 const GAP_REGISTRY = [
-  {
-    producer: "go-backend/internal/http/handler/mutations.go",
-    endpoint: "/node/update",
-    apiFn: "updateNode",
-    calls: 1,
-    callers: ["src/pages/node.tsx"],
-    gap: "T-001 白名单刷新失败 note：node.tsx 编辑保存成功只 toast 成功（同文件 .warning 读属 deleteNode/getNodeInstallCommand 调用点，不在本调用点近处），warning 被丢弃",
-  },
   {
     producer: "go-backend/internal/http/handler/mutations.go",
     endpoint: "/tunnel/delete",
