@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:${FLMX_VERSION:-${FLUX_VERSION:-latest}}
+    image: ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:${FLMX_VERSION:-latest}
     container_name: ${PANEL_BACKEND_CONTAINER:-flmx-panel-backend}
     restart: unless-stopped
     logging:
@@ -28,8 +28,7 @@ services:
       # 字段级指引填写（标准拓扑填前端容器子网）。
       FLMX_TRUSTED_PROXIES: ${FLMX_TRUSTED_PROXIES:-}
       TZ: Asia/Shanghai
-      FLMX_VERSION: ${FLMX_VERSION:-${FLUX_VERSION:-dev}}
-      FLUX_VERSION: ${FLMX_VERSION:-${FLUX_VERSION:-dev}}
+      FLMX_VERSION: ${FLMX_VERSION:-dev}
       PANEL_DEPLOY_DIR: /opt/flmx-panel
       PANEL_BACKEND_CONTAINER: ${PANEL_BACKEND_CONTAINER:-flmx-panel-backend}
       # AI-03：实例 id 须透传进后端进程，后端据此派生本实例的节点
@@ -77,7 +76,7 @@ services:
       start_period: 20s
 
   frontend:
-    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:${FLMX_VERSION:-${FLUX_VERSION:-latest}}
+    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:${FLMX_VERSION:-latest}
     container_name: ${PANEL_FRONTEND_CONTAINER:-flmx-panel-frontend}
     restart: unless-stopped
     logging:

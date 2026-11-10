@@ -886,7 +886,7 @@ resolve_latest_release_tag() {
 }
 
 # A3-02: 显式版本值的格式校验（与 S-02 在 agent 升级面确立的口径
-# 同族）。VERSION/FLMX_VERSION/FLUX_VERSION/PINNED_VERSION 此前原样
+# 同族）。VERSION/FLMX_VERSION/PINNED_VERSION 此前原样
 # 回显、直接内插进下载 URL：含 ../ 的值经 curl 点段压缩可逃出钉死
 # 的 ${REPO} 指向任意 GitHub 仓库的 Release，且 .sha256 由同一拼出
 # URL 派生、校验自洽不构成防线（LIVE-A S5 实证）。现统一校验：
@@ -911,15 +911,13 @@ version_value_format_ok() {
 }
 
 resolve_version() {
-  # 四个显式入口统一过 version_value_format_ok，不合即点名来源中止
+  # 三个显式入口统一过 version_value_format_ok，不合即点名来源中止
   # （A3-02）。优先级顺序不变（RN-1）。
   local explicit="" explicit_source=""
   if [[ -n "${VERSION:-}" ]]; then
     explicit="$VERSION"; explicit_source="VERSION"
   elif [[ -n "${FLMX_VERSION:-}" ]]; then
     explicit="$FLMX_VERSION"; explicit_source="FLMX_VERSION"
-  elif [[ -n "${FLUX_VERSION:-}" ]]; then
-    explicit="$FLUX_VERSION"; explicit_source="FLUX_VERSION"
   elif [[ -n "${PINNED_VERSION:-}" ]]; then
     explicit="$PINNED_VERSION"; explicit_source="PINNED_VERSION"
   fi
