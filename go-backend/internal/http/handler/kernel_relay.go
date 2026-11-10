@@ -494,7 +494,11 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	remoteAddr, err := h.relayTarget(row, tunnel)
 	if err != nil {
-		respondInternalError(w, "inboundRelayCreate", err)
+		// BOXFIX：落地校验定型文案走既有分流（与 tunnelUpdate 同
+		// 口径）——此前直走 respondInternalError 把 relayValidation
+		// Error 的定型文案一并泛化，TestInboundRelayValidation
+		// Contract 的 loopback 两格因此被吞。
+		respondRelayValidationError(w, "inboundRelayCreate", err)
 		return
 	}
 

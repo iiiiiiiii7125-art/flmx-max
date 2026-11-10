@@ -2643,7 +2643,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	runtimeState, err := h.prepareTunnelCreateState(validationTx, req, typeVal, 0)
 	if err != nil {
 		validationTx.Rollback()
-		respondInternalError(w, "tunnelCreate", err)
+		// BOXFIX：prepare 错误走定型分流——tunnelValidationError
+		// 原文回、其余泛化。此前直走 respondInternalError 全量泛
+		// 化，F-015 合同三格的定型文案被吞（该覆盖此前被合同包
+		// 构建失败掩盖，W2 §2.7 曾以「无测试覆盖」误记此面）。
+		respondTunnelPrepareError(w, "tunnelCreate", err)
 		return
 	}
 	runtimeState.IPPreference = ipPreference
@@ -2701,7 +2705,8 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		tx.Rollback()
 		releasePortLocks()
-		respondInternalError(w, "tunnelCreate", err)
+		// BOXFIX：同验证段口径（见上）——prepare 错误走定型分流。
+		respondTunnelPrepareError(w, "tunnelCreate", err)
 		return
 	}
 	runtimeState.IPPreference = ipPreference
@@ -7174,6 +7179,40 @@ func (h *Handler) reuseOrRepickTunnelSegmentPort(tx *gorm.DB, state *tunnelCreat
 	return port, nil
 }
 
+// tunnelValidationError 是 prepareTunnelCreateState 及其端口校验
+// 闭包产出的定型业务校验错（BOXFIX）：端口范围/规格/占用、节点
+// 存在性/在线、策略与协议合法集等用户可改正的输入错误。文案存
+// msg 字段——管理员面门对定型字段访问天然沉默（与 phantomIDError
+// ／relayValidationError 同型）。此前 tunnelCreate 对 prepare 错
+// 误整段直走 respondInternalError，定型文案被全量泛化（F-015
+// 合同三格被吞——该覆盖此前被合同包构建失败掩盖，W2 §2.7 以
+// 「无测试覆盖」误记此面）；基线口径是原文回执，现以定型恢复：
+// respondTunnelPrepareError 仅对本型原文回，其余（仓储标记错与
+// 一切未分类错误）fail-closed 泛化。
+type tunnelValidationError struct{ msg string }
+
+func (e *tunnelValidationError) Error() string { return e.msg }
+
+func tunnelValidationErrorf(format string, args ...interface{}) *tunnelValidationError {
+	return &tunnelValidationError{msg: fmt.Sprintf(format, args...)}
+}
+
+func tunnelValidationErrorMsg(msg string) *tunnelValidationError {
+	return &tunnelValidationError{msg: msg}
+}
+
+// respondTunnelPrepareError 是 tunnelCreate 消费 prepare 错误的
+// 分流：定型校验错以基线 ErrDefault 口径原文回；其余一律
+// respondInternalError 泛化（服务端记 op＋原文）。
+func respondTunnelPrepareError(w http.ResponseWriter, op string, err error) {
+	var ve *tunnelValidationError
+	if errors.As(err, &ve) {
+		response.WriteJSON(w, response.ErrDefault(ve.msg))
+		return
+	}
+	respondInternalError(w, op, err)
+}
+
 // detachedSegmentPortConflictError 为游离显式段口的占用拒绝生成
 // 点名来源的文案（RV3-02，与 L9 观察 2 的 forwardPortConflictMessage
 // 同口径：入站/链路段/联邦预留占用不得误报为「已被其他转发占用」）。
@@ -7199,13 +7238,13 @@ func (h *Handler) detachedSegmentPortConflictError(tx *gorm.DB, nodeID int64, no
 	}
 	switch source {
 	case repo.PortSourceInbound:
-		return fmt.Errorf("节点 %s 端口 %d 已被入站占用", nodeName, port)
+		return tunnelValidationErrorf("节点 %s 端口 %d 已被入站占用", nodeName, port)
 	case repo.PortSourceChain:
-		return fmt.Errorf("节点 %s 端口 %d 已被隧道链路段占用", nodeName, port)
+		return tunnelValidationErrorf("节点 %s 端口 %d 已被隧道链路段占用", nodeName, port)
 	case repo.PortSourceForward:
-		return fmt.Errorf("节点 %s 端口 %d 已被其他转发占用", nodeName, port)
+		return tunnelValidationErrorf("节点 %s 端口 %d 已被其他转发占用", nodeName, port)
 	}
-	return fmt.Errorf("节点 %s 端口 %d 已被占用", nodeName, port)
+	return tunnelValidationErrorf("节点 %s 端口 %d 已被占用", nodeName, port)
 }
 
 // prepareDetachedSegmentPorts resolves ports for the non-entry
@@ -7266,7 +7305,7 @@ func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interf
 		// replaceTunnelChainsTx 从 req 原文落库——在此与 type-2
 		// 段同口径过链路策略合法集门（该函数落库前另有同判兜底）。
 		if _, err := normalizeChainStrategy(chainType, asString(item["strategy"])); err != nil {
-			return err
+			return tunnelValidationErrorMsg(err.Error())
 		}
 		if _, ok := state.Nodes[nodeID]; !ok {
 			if node, nErr := h.repo.GetNodeRecordTx(tx, nodeID); nErr == nil && node != nil {
@@ -7279,7 +7318,7 @@ func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interf
 			// 保持豁免，见函数头注）。范围检与 validateExplicitPort
 			// 同位、无条件；占用检照常执行，不重蹈「无检落库」。
 			if port > 65535 {
-				return fmt.Errorf("端口 %d 超出有效范围 1-65535", port)
+				return tunnelValidationErrorf("端口 %d 超出有效范围 1-65535", port)
 			}
 			occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, nodeID, port, excludeTunnelID)
 			if err != nil {
@@ -7332,7 +7371,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		}
 		strategy, err := normalizeChainStrategy(1, asString(item["strategy"]))
 		if err != nil {
-			return nil, err
+			return nil, tunnelValidationErrorMsg(err.Error())
 		}
 		nodeIDs = append(nodeIDs, nodeID)
 		state.InNodes = append(state.InNodes, tunnelRuntimeNode{
@@ -7343,13 +7382,13 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		})
 	}
 	if len(state.InNodes) == 0 {
-		return nil, errors.New("入口不能为空")
+		return nil, tunnelValidationErrorMsg("入口不能为空")
 	}
 
 	if tunnelType == 2 {
 		outNodesRaw := asMapSlice(req["outNodeId"])
 		if len(outNodesRaw) == 0 {
-			return nil, errors.New("出口不能为空")
+			return nil, tunnelValidationErrorMsg("出口不能为空")
 		}
 
 		// P01-002：更新时先载入本隧道现存的非入口段口，供缺省口走
@@ -7373,7 +7412,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			nodeIDs = append(nodeIDs, nodeID)
 			strategy, err := normalizeChainStrategy(3, asString(item["strategy"]))
 			if err != nil {
-				return nil, err
+				return nil, tunnelValidationErrorMsg(err.Error())
 			}
 			port := asInt(item["port"], 0)
 			if port <= 0 {
@@ -7396,7 +7435,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			})
 		}
 		if len(state.OutNodes) == 0 {
-			return nil, errors.New("出口不能为空")
+			return nil, tunnelValidationErrorMsg("出口不能为空")
 		}
 
 		for hopIdx, hopRaw := range asAnySlice(req["chainNodes"]) {
@@ -7409,7 +7448,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 				nodeIDs = append(nodeIDs, nodeID)
 				strategy, err := normalizeChainStrategy(2, asString(item["strategy"]))
 				if err != nil {
-					return nil, err
+					return nil, tunnelValidationErrorMsg(err.Error())
 				}
 				port := asInt(item["port"], 0)
 				if port <= 0 {
@@ -7470,27 +7509,27 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 	seen := make(map[int64]struct{}, len(nodeIDs))
 	for _, nodeID := range nodeIDs {
 		if _, ok := seen[nodeID]; ok {
-			return nil, errors.New("节点重复")
+			return nil, tunnelValidationErrorMsg("节点重复")
 		}
 		seen[nodeID] = struct{}{}
 		state.NodeIDList = append(state.NodeIDList, nodeID)
 		node, err := h.repo.GetNodeRecordTx(tx, nodeID)
 		if err != nil {
 			if strings.Contains(err.Error(), "不存在") {
-				return nil, errors.New("节点不存在")
+				return nil, tunnelValidationErrorMsg("节点不存在")
 			}
 			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
 			return nil, markRepoError(err)
 		}
 		if node == nil {
-			return nil, errors.New("节点不存在")
+			return nil, tunnelValidationErrorMsg("节点不存在")
 		}
 		if node.Status != 1 {
 			// For tunnel updates, allow offline nodes that already belong to the
 			// tunnel (user may be removing them). Only reject genuinely new offline nodes.
 			_, isExisting := existingNodeIDs[nodeID]
 			if excludeTunnelID <= 0 || !isExisting {
-				return nil, errors.New("部分节点不在线")
+				return nil, tunnelValidationErrorMsg("部分节点不在线")
 			}
 		}
 		state.Nodes[nodeID] = node
@@ -7506,14 +7545,14 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			return nil
 		}
 		if n.Port > 65535 {
-			return fmt.Errorf("端口 %d 超出有效范围 1-65535", n.Port)
+			return tunnelValidationErrorf("端口 %d 超出有效范围 1-65535", n.Port)
 		}
 		node := state.Nodes[n.NodeID]
 		if node == nil {
 			return nil
 		}
 		if err := validateLocalNodePort(node, n.Port); err != nil {
-			return err
+			return tunnelValidationErrorMsg(err.Error())
 		}
 		occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, n.NodeID, n.Port, excludeTunnelID)
 		if err != nil {
@@ -7521,7 +7560,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 			return markRepoError(err)
 		}
 		if occupied {
-			return fmt.Errorf("节点 %s 端口 %d 已被占用", node.Name, n.Port)
+			return tunnelValidationErrorf("节点 %s 端口 %d 已被占用", node.Name, n.Port)
 		}
 		return nil
 	}
@@ -7545,7 +7584,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 	normalizeNodeProtocols := func(nodes []tunnelRuntimeNode) error {
 		for i := range nodes {
 			if !isAllowedTunnelProtocol(nodes[i].Protocol) {
-				return fmt.Errorf("不支持的隧道协议 %q", strings.TrimSpace(nodes[i].Protocol))
+				return tunnelValidationErrorf("不支持的隧道协议 %q", strings.TrimSpace(nodes[i].Protocol))
 			}
 			nodes[i].Protocol = normalizeTunnelProtocol(nodes[i].Protocol)
 		}
@@ -9425,11 +9464,13 @@ func markUserTunnelIDsError(err error) error {
 // respondPhantomIDError 是 ValidateIDsExist 幻影 ID 的调用点分流：
 // 幻影（定型文案）原样回执、仓储故障走通用文案。门禁口径：Msg
 // 字段访问天然沉默，与 kernelVersionGateError 的 errors.As 分流
-// 同形。
+// 同形。回执码口径：幻影支恒 -2（W3 契约，TestR2W3ValidateIDsExist
+// MixedError 钉死；集成时 ErrDefault 曾把它规范为 -1、与该契约相
+// 撞，BOXFIX 恢复 -2——门禁只管文案污染、不管码值）。
 func respondPhantomIDError(w http.ResponseWriter, op string, err error) {
 	var pe *repo.PhantomIDError
 	if errors.As(err, &pe) {
-		response.WriteJSON(w, response.ErrDefault(pe.Msg))
+		response.WriteJSON(w, response.Err(-2, pe.Msg))
 		return
 	}
 	respondInternalError(w, op, err)

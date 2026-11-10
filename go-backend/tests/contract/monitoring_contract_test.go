@@ -562,7 +562,6 @@ func TestServiceMonitorCRUD(t *testing.T) {
 			Timestamp:    now,
 			Success:      1,
 			LatencyMs:    1,
-			StatusCode:   0,
 			ErrorMessage: "",
 		}); err != nil {
 			t.Fatalf("seed monitor result: %v", err)
@@ -654,7 +653,6 @@ func TestServiceMonitorResults(t *testing.T) {
 				Timestamp:    now - int64(i*60000),
 				Success:      1,
 				LatencyMs:    float64(10 + i),
-				StatusCode:   0,
 				ErrorMessage: "",
 			}
 			if err := repo.InsertServiceMonitorResult(result); err != nil {
@@ -736,7 +734,6 @@ func TestServiceMonitorResults(t *testing.T) {
 			Timestamp:    now,
 			Success:      0,
 			LatencyMs:    0,
-			StatusCode:   0,
 			ErrorMessage: "connection refused",
 		}
 		if err := repo.InsertServiceMonitorResult(result); err != nil {
