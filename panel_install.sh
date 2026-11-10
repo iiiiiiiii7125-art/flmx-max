@@ -27,7 +27,7 @@ SCRIPT_VERSION="20261110.01"
 # 覆写自身以 root 重执行，无任何完整性校验，绕过同文件 download_verified
 # 的 fail-closed 标准与 PINNED_VERSION 定版语义。现改为只走 Release 资产：
 #   目标版本由 resolve_version() 解析（VERSION > FLMX_VERSION >
-#   FLUX_VERSION > PINNED_VERSION > 最新 Release）。Release 副本带 PINNED_VERSION 时目标
+#   PINNED_VERSION > 最新 Release）。Release 副本带 PINNED_VERSION 时目标
 #   恒为其自身版本，定版脚本不会被自更新带跑偏到更新的版本。
 #   新脚本经 download_verified 拉取同版本资产的 .sha256 校验，通过才覆写。
 # 缓存与校验如何兼得：旧实现用 cache-buster 是因为 main 分支 raw 内容
@@ -644,9 +644,6 @@ resolve_version() {
   elif [[ -n "${FLMX_VERSION:-}" ]]; then
     explicit="$FLMX_VERSION"
     explicit_source="FLMX_VERSION"
-  elif [[ -n "${FLUX_VERSION:-}" ]]; then
-    explicit="$FLUX_VERSION"
-    explicit_source="FLUX_VERSION"
   elif [[ -n "${PINNED_VERSION:-}" ]]; then
     explicit="$PINNED_VERSION"
     explicit_source="PINNED_VERSION"
@@ -951,9 +948,16 @@ configure_docker_ipv6() {
   OS_TYPE=$(uname -s)
 
   if [[ "$OS_TYPE" == "Darwin" ]]; then
-    # macOS 上 Docker Desktop 已默认支持 IPv6
-    echo "✅ macOS Docker Desktop 默认支持 IPv6"
-    return 0
+    # R2-C4-01：macOS 上 Docker Desktop 不默认启用 IPv6（默认
+    # bridge 的 EnableIPv6 为 false），且 daemon.json 不在宿主机
+    # 上生效——不得凭平台假定印 ✅。以 docker_ipv6_usable 实测
+    # 为准：可用才印 ✅，否则如实点名并返回非 0，由调用方降级 v4。
+    if docker_ipv6_usable; then
+      echo "✅ macOS Docker Desktop IPv6 已验证可用"
+      return 0
+    fi
+    echo "⚠️ macOS Docker Desktop 未启用 IPv6（默认 bridge 未开启 IPv6），将按 IPv4 部署；如需 IPv6，请在 Docker Desktop 设置中启用后重跑"
+    return 1
   fi
 
   # Docker daemon 配置文件路径
@@ -968,8 +972,9 @@ configure_docker_ipv6() {
 
   # 检查 Docker 配置文件
   if [ -f "$DOCKER_CONFIG" ]; then
-    # 检查是否已经配置了 IPv6
-    if grep -q '"ipv6"' "$DOCKER_CONFIG"; then
+    # R2-C4-01：只查键名不查值是假回执——"ipv6": false 同样命中。
+    # 与写路径同口径查值：true 才算已配置；false/缺失都走更新路径。
+    if grep -q '"ipv6"[[:space:]]*:[[:space:]]*true' "$DOCKER_CONFIG"; then
       echo "✅ Docker 已配置 IPv6 支持"
     else
       echo "📝 更新 Docker 配置以启用 IPv6..."
@@ -996,8 +1001,19 @@ configure_docker_ipv6() {
           return 1
         fi
       else
-        # 如果没有 jq，使用 sed
-        $SUDO_CMD sed -i 's/^{$/{\n  "ipv6": true,\n  "fixed-cidr-v6": "fd00::\/80",/' "$DOCKER_CONFIG"
+        # 如果没有 jq，使用 sed。
+        # R2-C4-01：已有 ipv6 键时必须就地改值，不得再插入一个重复
+        # 键——JSON 重复键以后值为准，插入式写法会在 "ipv6": false
+        # 后留一个 "ipv6": true，骗过下方写后 grep 校验（grep 只看
+        # 首个命中），daemon 实际仍读到 false。无键时沿用 { 后插入。
+        if grep -q '"ipv6"' "$DOCKER_CONFIG" 2>/dev/null; then
+          $SUDO_CMD sed -i -E 's/"ipv6"[[:space:]]*:[[:space:]]*(true|false)/"ipv6": true/' "$DOCKER_CONFIG"
+          if ! grep -q '"fixed-cidr-v6"' "$DOCKER_CONFIG" 2>/dev/null; then
+            $SUDO_CMD sed -i 's/^{$/{\n  "fixed-cidr-v6": "fd00::\/80",/' "$DOCKER_CONFIG"
+          fi
+        else
+          $SUDO_CMD sed -i 's/^{$/{\n  "ipv6": true,\n  "fixed-cidr-v6": "fd00::\/80",/' "$DOCKER_CONFIG"
+        fi
         # AUDIT-R1 (SCR-009): 该正则只匹配"整行仅为 {" 的多行 JSON；单行压缩
         # JSON 无匹配时 sed 静默无操作但退出码为 0。写后由下方统一校验兜底。
       fi
@@ -1022,6 +1038,13 @@ configure_docker_ipv6() {
   "ipv6": true,
   "fixed-cidr-v6": "fd00::/80"
 }' | $SUDO_CMD tee "$DOCKER_CONFIG" > /dev/null
+
+    # R2-C4-01：新建路径与更新路径同口径写后校验（F-052）——落盘
+    # 未含 "ipv6": true 即失败，不带着未生效的配置继续。
+    if ! $SUDO_CMD grep -q '"ipv6"[[:space:]]*:[[:space:]]*true' "$DOCKER_CONFIG" 2>/dev/null; then
+      echo "❌ IPv6 配置写入失败，请手动在 $DOCKER_CONFIG 添加 \"ipv6\": true 后重试"
+      return 1
+    fi
 
     echo "🔄 重启 Docker 服务..."
     restart_docker_checked || return 1
@@ -3310,10 +3333,10 @@ validate_panel_compose_content() {
   backend_port="${backend_port:-6365}"
   frontend_port="${frontend_port:-6366}"
   jwt_secret="${jwt_secret:-flmx-compose-validate-placeholder}"
-  if ! FLMX_VERSION="$version" FLUX_VERSION="$version" BACKEND_PORT="$backend_port" FRONTEND_PORT="$frontend_port" JWT_SECRET="$jwt_secret" run_panel_compose -f "$file" config -q; then
+  if ! FLMX_VERSION="$version" BACKEND_PORT="$backend_port" FRONTEND_PORT="$frontend_port" JWT_SECRET="$jwt_secret" run_panel_compose -f "$file" config -q; then
     return 1
   fi
-  if ! services=$(FLMX_VERSION="$version" FLUX_VERSION="$version" BACKEND_PORT="$backend_port" FRONTEND_PORT="$frontend_port" JWT_SECRET="$jwt_secret" run_panel_compose -f "$file" config --services 2>/dev/null); then
+  if ! services=$(FLMX_VERSION="$version" BACKEND_PORT="$backend_port" FRONTEND_PORT="$frontend_port" JWT_SECRET="$jwt_secret" run_panel_compose -f "$file" config --services 2>/dev/null); then
     return 1
   fi
   # INT-01: 服务名比对走 herestring，不用管道 grep——pipefail 下
@@ -3477,9 +3500,9 @@ pull_panel_update_images() {
   local db_type="$1"
 
   if [[ "$db_type" == "postgres" ]]; then
-    FLMX_VERSION="$LATEST_VERSION" FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend postgres
+    FLMX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend postgres
   else
-    FLMX_VERSION="$LATEST_VERSION" FLUX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend
+    FLMX_VERSION="$LATEST_VERSION" run_panel_compose -f "$UPDATE_COMPOSE_CANDIDATE" pull backend frontend
   fi
 }
 
@@ -3791,14 +3814,10 @@ activate_panel_update_files() {
     echo "❌ 更新版本配置失败"
     return 1
   fi
-  # 过渡期双写：旧键 FLUX_VERSION 同步同值——尚未切换读面的消费
-  # 者（旧版面板的 .env 版本改写、旧脚本）按旧口径读到的与新键同
-  # 一版本，不会因只剩新键而读空或读到陈旧值；一切读面以
-  # FLMX_VERSION 优先（resolve_version / update_panel 同口径）。
-  if ! upsert_env_var ".env" "FLUX_VERSION" "$LATEST_VERSION"; then
-    echo "❌ 更新版本配置失败"
-    return 1
-  fi
+  # S1-F02：旧键 FLUX_VERSION 已按 2026-11-05「过渡兼容到期直接
+  # 退场」裁定摘除——不再双写。存量 .env 里残留的旧键不再被任何
+  # 读面消费（脚本面 resolve_version／update_panel 与面板内升级
+  # currentPanelVersion 均已只认 FLMX_VERSION），属惰性残留。
 }
 
 start_panel_after_update() {
@@ -4393,7 +4412,7 @@ EOF
 
 # 更新功能
 # FIX2-C #9（V6 P3）：读取实际运行中的后端容器镜像 tag 作为部署
-# 版本。.env 的版本键（FLMX_VERSION，旧键 FLUX_VERSION 回退）是「打算跑的版本」，可能与正在跑的
+# 版本。.env 的版本键（FLMX_VERSION）是「打算跑的版本」，可能与正在跑的
 # 镜像不一致（手改 .env、升级中途失败）；防降级判定若只信 .env
 # 会被这种不一致绕过。取不到（容器不在、无 tag 等）时返回非 0，
 # 调用方回退 .env 口径。
@@ -4439,14 +4458,14 @@ update_panel() {
   # A11-132-03: 目标版本感知 + 防降级。旧实现恒取 latest 且不看当前版本：
   # ① 定版意图被静默忽略、直升 latest；② 本机版本高于 latest 时
   # 构成静默降级覆写。现与面板内升级（system_upgrade）口径对齐：
-  # 目标版本走下方优先级链；写入前与 .env 的版本键（FLMX_VERSION
-  # 优先、FLUX_VERSION 回退）比较，两侧都可解析且目标更低时拒绝；
+  # 目标版本走下方优先级链；写入前与 .env 的版本键（FLMX_VERSION）
+  # 比较，两侧都可解析且目标更低时拒绝；
   # 同版本按重装继续（与面板口径一致）。
   local current_version cmp_result
   current_version=$(get_env_var "FLMX_VERSION" || true)
-  if [[ -z "$current_version" ]]; then
-    current_version=$(get_env_var "FLUX_VERSION" || true)
-  fi
+  # S1-F02：旧键 FLUX_VERSION 已退场，不再回退读；.env 无
+  # FLMX_VERSION 时 current_version 为空，由下方实际运行版本交叉
+  # 核对补位（取不到实际版本时保持空口径、按「未知」输出）。
   # GARBAGE-AUDIT A1：升级前 .env 版本 tag 在此定格（下方与实际运
   # 行版本交叉核对会覆写 current_version）：升级收尾按此 tag 定点
   # 删除旧镜像；两者不一致时收尾对实际运行 tag 再补一轮同口径
@@ -4462,7 +4481,7 @@ update_panel() {
     current_version="$deployed_version"
   fi
   # L2-12（R5-FD）：目标版本走 resolve_version 同一优先级链
-  # VERSION > FLMX_VERSION > FLUX_VERSION > PINNED_VERSION > latest。
+  # VERSION > FLMX_VERSION > PINNED_VERSION > latest。
   # 旧实现只认 VERSION、其余情形直取 latest：以版本键定版更新时被
   # 静默升到 latest（且自更新腿先按版本键换上定版脚本再 re-exec，
   # 菜单 2 却跳 latest，意图自相矛盾）；定版 install.sh 更新 agent
@@ -4475,9 +4494,6 @@ update_panel() {
   elif [[ -n "${FLMX_VERSION:-}" ]]; then
     LATEST_VERSION="$FLMX_VERSION"
     target_source="FLMX_VERSION"
-  elif [[ -n "${FLUX_VERSION:-}" ]]; then
-    LATEST_VERSION="$FLUX_VERSION"
-    target_source="FLUX_VERSION"
   elif [[ -n "${PINNED_VERSION:-}" ]]; then
     LATEST_VERSION="$PINNED_VERSION"
     target_source="PINNED_VERSION"

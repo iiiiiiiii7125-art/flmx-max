@@ -684,7 +684,7 @@ CF
 
 # A1-03（audit-max）：显式版本 env 在拼 URL/镜像 tag 前须过格式
 # 校验——旧实现 resolve_version 与 update_panel 的版本链对
-# VERSION/FLMX_VERSION/FLUX_VERSION/PINNED_VERSION 零校验原样
+# VERSION/FLMX_VERSION/PINNED_VERSION 零校验原样
 # 透传，路径穿越/空白/命令片段可进入全部拼接面。文法取并集
 # （数字开头、仅含数字/字母/点/连字符）：稳定版与显式预发布
 # （J-02 既定支持面）放行，穿越/注入形态全拒；update 链为第二
@@ -5610,8 +5610,13 @@ YAML
   if grep -q "172.30.0.0/16" docker-compose.yml; then
     fail "FIX2-C#1: activate_panel_update_files must not switch the deployed subnet"
   fi
-  grep -q "FLUX_VERSION=1.3.3" .env \
-    || fail "activate_panel_update_files must still bump FLUX_VERSION"
+  grep -q "FLMX_VERSION=1.3.3" .env \
+    || fail "activate_panel_update_files must bump FLMX_VERSION"
+  grep -q "FLUX_VERSION=1.3.2" .env \
+    || fail "activate_panel_update_files must leave the retired FLUX_VERSION key untouched (S1-F02)"
+  if grep -q "FLUX_VERSION=1.3.3" .env; then
+    fail "activate_panel_update_files must not bump the retired FLUX_VERSION key"
+  fi
 )
 
 test_ensure_compose_trusted_proxy_hops_injects_mapping_form() (
@@ -6025,7 +6030,7 @@ test_update_panel_crosschecks_deployed_image_version() (
   local calls=""
   local deploy_dir
   deploy_dir=$(mktemp -d)
-  printf 'FLUX_VERSION=1.0.0\nJWT_SECRET=x\n' > "$deploy_dir/.env"
+  printf 'FLMX_VERSION=1.0.0\nJWT_SECRET=x\n' > "$deploy_dir/.env"
   printf 'services: {}\n' > "$deploy_dir/docker-compose.yml"
 
   docker() {
@@ -8747,10 +8752,11 @@ EOF
   grep -q '^FLMX_SQLITE_VOLUME="real_vol"$' "$pdir/.env" || fail "R1-01-L2: a parsed-equal volume key must stay verbatim (no rewrite)"
 )
 
-# L2-12（R5-FD）：update_panel 必须走 VERSION > FLUX_VERSION >
-# PINNED_VERSION > latest 优先级链——旧实现只认 VERSION，FLUX_VERSION
+# L2-12（R5-FD）：update_panel 必须走 VERSION > FLMX_VERSION >
+# PINNED_VERSION > latest 优先级链——旧实现只认 VERSION，FLMX_VERSION
 # /PINNED 定版被静默吞掉直升 latest（桩 latest=9.9.9 不得被选中），
-# 且定版来源须在输出中点名。
+# 且定版来源须在输出中点名。S1-F02：旧键 FLUX_VERSION 已退场，
+# 不再参与定版链，设值也不得被选中、不得在输出中被点名为版本来源。
 test_panel_update_honors_version_priority_chain() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -8777,10 +8783,12 @@ test_panel_update_honors_version_priority_chain() (
   VERSION=""
   FLUX_VERSION="1.5.0"
   PINNED_VERSION=""
-  update_panel >"$log" 2>&1 || fail "L2-12: update should succeed with FLUX_VERSION pinned"
+  update_panel >"$log" 2>&1 || fail "L2-12: update should succeed with FLUX_VERSION set (ignored)"
   grep -q "本次更新目标" "$log" || fail "B2-04: update must name its target deployment before mutating anything"
-  assert_equals "1.5.0" "$LATEST_VERSION" "L2-12: FLUX_VERSION must win over latest"
-  grep -q "FLUX_VERSION" "$log" || fail "L2-12: the pinned version source must be named in the output"
+  assert_equals "9.9.9" "$LATEST_VERSION" "L2-12: FLUX_VERSION must be ignored after the transition window (falls through to latest)"
+  if grep -q "FLUX_VERSION" "$log"; then
+    fail "L2-12: FLUX_VERSION must not be named as the version source"
+  fi
 
   VERSION=""
   FLUX_VERSION=""
@@ -9203,7 +9211,7 @@ test_panel_menu5_dns_pointing_elsewhere_warns() (
 # RN-1: 改名后的新装缺省全集——脚本常量（现行缺省为 flmx 名、旧名
 # 只留在识别集）、两份 compose 模板的回退默认（容器/PG 库用户/卷/
 # 网络/后端镜像/默认口令哨兵）、版本键优先级（FLMX_VERSION 优先、
-# FLUX_VERSION 回退）与新装 PG 库/用户缺省。
+# FLUX_VERSION 已退场）与新装 PG 库/用户缺省。
 test_panel_rename_new_install_defaults_are_flmx() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/panel_install.sh"
@@ -9217,14 +9225,14 @@ test_panel_rename_new_install_defaults_are_flmx() (
   local f lit
   for f in docker-compose-v4.yml docker-compose-v6.yml; do
     for lit in \
-      'flmx-panel-backend:${FLMX_VERSION:-${FLUX_VERSION:-latest}}' \
+      'flmx-panel-backend:${FLMX_VERSION:-latest}' \
       'container_name: ${PANEL_BACKEND_CONTAINER:-flmx-panel-backend}' \
       'container_name: ${PANEL_POSTGRES_CONTAINER:-flmx-panel-postgres}' \
       'container_name: ${PANEL_FRONTEND_CONTAINER:-flmx-panel-frontend}' \
       'POSTGRES_DB: ${POSTGRES_DB:-flmx_panel}' \
       'POSTGRES_USER: ${POSTGRES_USER:-flmx_panel}' \
       'POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flmx_panel_change_me}' \
-      'flmx-vite-frontend:${FLMX_VERSION:-${FLUX_VERSION:-latest}}' \
+      'flmx-vite-frontend:${FLMX_VERSION:-latest}' \
       'name: ${FLMX_SQLITE_VOLUME:-flmx-sqlite-data}' \
       'name: ${FLMX_POSTGRES_VOLUME:-flmx-postgres-data}' \
       'name: ${FLMX_NETWORK:-flmx-network}'; do
@@ -9239,16 +9247,21 @@ test_panel_rename_new_install_defaults_are_flmx() (
     if grep -Fq ':-flux_panel}' "$ROOT_DIR/$f"; then
       fail "RN-1: $f must not keep the legacy PG db/user fallback"
     fi
+    if grep -Fq 'FLUX_VERSION' "$ROOT_DIR/$f"; then
+      fail "RN-1: $f must not keep a retired FLUX_VERSION fallback (S1-F02)"
+    fi
     if grep -Fq ':-vite-frontend}' "$ROOT_DIR/$f"; then
       fail "RN-1: $f must not keep the legacy frontend fallback"
     fi
   done
 
-  # 版本键环境链：FLMX_VERSION 优先、FLUX_VERSION 回退。
+  # 版本键环境链：FLMX_VERSION 优先；旧键 FLUX_VERSION 已退场，
+  # 设值也不得被选中（S1-F02）。
+  resolve_latest_release_tag() { echo "9.9.9"; }
   VERSION="" FLMX_VERSION="2.0.0" FLUX_VERSION="1.0.0" PINNED_VERSION=""
   assert_equals "2.0.0" "$(resolve_version)" "RN-1: FLMX_VERSION must win over FLUX_VERSION"
   VERSION="" FLMX_VERSION="" FLUX_VERSION="1.0.0" PINNED_VERSION=""
-  assert_equals "1.0.0" "$(resolve_version)" "RN-1: FLUX_VERSION must remain readable as the fallback key"
+  assert_equals "9.9.9" "$(resolve_version)" "RN-1: FLUX_VERSION must be ignored after the transition window (falls through to latest)"
 
   # 新装选 PostgreSQL 时库/用户缺省为 flmx_panel。
   get_config_params <<< $'\n\n2' >/dev/null
@@ -9524,7 +9537,10 @@ test_panel_update_renames_legacy_identity() (
     grep -q '^PANEL_FRONTEND_CONTAINER=flmx-panel-frontend$' "$dir/.env" || fail "RN-1: frontend identity key must be renamed in .env"
     grep -q '^PANEL_POSTGRES_CONTAINER=flmx-panel-postgres$' "$dir/.env" || fail "RN-1: postgres identity key must be renamed in .env"
     grep -q '^FLMX_VERSION=1.9.8$' "$dir/.env" || fail "RN-1: update must write FLMX_VERSION"
-    grep -q '^FLUX_VERSION=1.9.8$' "$dir/.env" || fail "RN-1: update must keep the FLUX_VERSION fallback key in sync during the transition"
+    grep -q '^FLUX_VERSION=1.9.7$' "$dir/.env" || fail "RN-1: update must leave the retired FLUX_VERSION key untouched (no longer bumped, S1-F02)"
+    if grep -q '^FLUX_VERSION=1.9.8$' "$dir/.env"; then
+      fail "RN-1: update must not bump the retired FLUX_VERSION key"
+    fi
     grep -q '^FLMX_SQLITE_VOLUME=sqlite_data$' "$dir/.env" || fail "RN-1: a missing sqlite volume key must be pinned to the effective volume, not renamed"
     grep -q '^FLMX_POSTGRES_VOLUME=postgres_data$' "$dir/.env" || fail "RN-1: a missing postgres volume key must be pinned to the effective volume, not renamed"
     grep -q '^FLMX_NETWORK=gost-network$' "$dir/.env" || fail "RN-1: a missing network key must be pinned to the effective network, not renamed"
@@ -11426,7 +11442,7 @@ STUBEOF
   grep -q 'keep-this-env' "$work3/.env" || fail "FIX199-D6: .env must stay untouched after a mismatched confirmation"
 )
 
-# A3-02: 显式版本四入口（VERSION/FLMX_VERSION/FLUX_VERSION/
+# A3-02: 显式版本三入口（VERSION/FLMX_VERSION/
 # PINNED_VERSION）拼下载 URL 前必须过严格格式校验——含 /、..、?、#
 # 等能改变 URL 指向的畸形值一律拒绝（旧实现原样直通，../ 可逃出
 # 钉死仓库且同源派生的 .sha256 使校验失效，LIVE-A S5 已实证）。
@@ -11436,7 +11452,7 @@ test_install_script_rejects_malformed_explicit_versions() (
   load_script_without_main "$ROOT_DIR/install.sh"
 
   local var value
-  for var in VERSION FLMX_VERSION FLUX_VERSION PINNED_VERSION; do
+  for var in VERSION FLMX_VERSION PINNED_VERSION; do
     for value in '../../../evil/repo/releases/download/9.9.9' '1.9.9/extra' '1.9.9?x=1' '1.9.9#x' '1.9.9 2.0.0' '..' 'v' '1.' 'a.b.c' '1.9.9%2e'; do
       VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
       printf -v "$var" '%s' "$value"
@@ -11445,6 +11461,13 @@ test_install_script_rejects_malformed_explicit_versions() (
       fi
     done
   done
+
+  # S1-F02：旧键 FLUX_VERSION 已退场，不再是显式入口——恶意值不
+  # 得被选中，也不得导致拒绝（注入面本身已随读面摘除而消失）；
+  # 须直落 latest，不回显该值。
+  resolve_latest_release_tag() { echo "9.9.9"; }
+  VERSION="" FLMX_VERSION="" FLUX_VERSION='../../../evil/repo/releases/download/9.9.9' PINNED_VERSION=""
+  assert_equals "9.9.9" "$(resolve_version)" "A3-02/S1-F02: a malicious FLUX_VERSION value must be ignored (falls through to latest)"
 
   # 合法值放行（稳定渠道：可选 v 前缀的纯点分数字）。
   VERSION="1.9.9" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
@@ -12355,44 +12378,6 @@ test_shipped_compose_templates_carry_trusted_proxies_passthrough
 
 
 # FIX2/D-05（节点审计 D 路）：install.sh 的 probe_route 与
-# resolve_latest_release_tag 共用渠道 tag 文法——与 panel_install.sh
-# 的 A1-04 同型。旧实现探测侧写死宽文法，稳定渠道下会把重定向
-# 落到预发布 tag 的路线判活、解析器随后按稳定文法拒绝，自相矛
-# 盾。断言：稳定渠道探测拒绝预发布 tag、beta 渠道两处同放行、
-# 垃圾 tag 两渠道同拒。
-test_install_probe_route_uses_channel_tag_grammar() (
-  set -euo pipefail
-  load_script_without_main "$ROOT_DIR/install.sh"
-
-  curl() {
-    printf '0.123 https://github.com/some-owner/some-repo/releases/tag/%s' "$FAKE_TAG"
-    return 0
-  }
-
-  local rc
-  unset FLMX_RELEASE_CHANNEL
-  FAKE_TAG='1.9.10'
-  rc="0"; probe_route "" >/dev/null || rc="$?"
-  assert_equals "0" "$rc" "FIX2/D-05: a stable tag must pass the probe on the stable channel"
-  FAKE_TAG='1.9.10-beta.1'
-  rc="0"; probe_route "" >/dev/null || rc="$?"
-  [[ "$rc" != "0" ]] || fail "FIX2/D-05: on the stable channel the probe must reject a prerelease tag, matching the parser grammar"
-
-  FLMX_RELEASE_CHANNEL='beta'
-  FAKE_TAG='1.9.10-beta.1'
-  rc="0"; probe_route "" >/dev/null || rc="$?"
-  assert_equals "0" "$rc" "FIX2/D-05: a prerelease tag must pass the probe on the beta channel"
-  FAKE_TAG='1.9.10'
-  rc="0"; probe_route "" >/dev/null || rc="$?"
-  assert_equals "0" "$rc" "FIX2/D-05: a stable tag must pass the probe on the beta channel"
-
-  FAKE_TAG='releases'
-  rc="0"; probe_route "" >/dev/null || rc="$?"
-  [[ "$rc" != "0" ]] || fail "FIX2/D-05: a junk tag must fail the probe on the beta channel"
-  unset FLMX_RELEASE_CHANNEL
-  rc="0"; probe_route "" >/dev/null || rc="$?"
-  [[ "$rc" != "0" ]] || fail "FIX2/D-05: a junk tag must fail the probe on the stable channel"
-)
 
 # W1 新增用例（并入 test-install-scripts-proxy.sh 末尾）
 
@@ -12508,6 +12493,11 @@ test_panel_network_default_name_and_label_reconcile() (
   docker() {
     echo "docker $*" >> "$DOCKER_CALLS"
     if [[ "$1" == "network" && "$2" == "inspect" ]]; then
+      # R2-W1-NETLABEL: absent-network case — plain inspect must fail
+      # so reconcile takes the no-op path.
+      if [[ -n "${FAKE_NET_ABSENT:-}" && "${3:-}" != "-f" ]]; then
+        return 1
+      fi
       local fmt=""
       [[ "${3:-}" == "-f" ]] && fmt="$4"
       case "$fmt" in
@@ -12539,6 +12529,165 @@ test_panel_network_default_name_and_label_reconcile() (
   if grep -q 'network rm' "$DOCKER_CALLS"; then
     fail "W1-NETNAME: refused reconciliation must not remove the network"
   fi
+
+  # R2-W1-NETLABEL: mismatched label + only own containers attached →
+  # detach them first, then remove the network for recreation.
+  : > "$DOCKER_CALLS"
+  ( cd "$work" && FAKE_NET_LABEL="flmx-network" FAKE_NET_CONTAINERS="flmx-panel-backend flmx-panel-frontend" panel_reconcile_network_label ) || fail "R2-W1-NETLABEL: own-only attached containers must detach and reconcile"
+  grep -q 'rm -f flmx-panel-backend flmx-panel-frontend' "$DOCKER_CALLS" || fail "R2-W1-NETLABEL: own containers must be detached before network removal"
+  grep -q 'network rm flmx-network' "$DOCKER_CALLS" || fail "R2-W1-NETLABEL: mismatched own-only network must be removed for recreation"
+
+  # R2-W1-NETLABEL: target network absent → rc 0, no-op.
+  : > "$DOCKER_CALLS"
+  ( cd "$work" && FAKE_NET_ABSENT=1 FAKE_NET_LABEL="flmx-network" panel_reconcile_network_label ) || fail "R2-W1-NETLABEL: absent network must be a no-op success"
+  if grep -q 'network rm' "$DOCKER_CALLS"; then
+    fail "R2-W1-NETLABEL: absent network must not attempt removal"
+  fi
+)
+
+# R2-C4-01: configure_docker_ipv6 must not claim success from the key
+# name alone — "ipv6": false must be rewritten, not receipted. The
+# function hardcodes /etc/docker/daemon.json; tests run as root in the
+# sandbox and restore whatever was there (skip if not writable).
+test_configure_docker_ipv6_false_value_is_updated_not_claimed() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local cfg="/etc/docker/daemon.json" bak had_cfg=0
+  bak=$(mktemp)
+  restore_cfg() {
+    if [[ "$had_cfg" == "1" ]]; then cp "$bak" "$cfg" 2>/dev/null || true; else rm -f "$cfg"; fi
+    rm -f "$bak"
+  }
+  trap restore_cfg EXIT
+  if [[ -f "$cfg" ]]; then had_cfg=1; cp "$cfg" "$bak" 2>/dev/null || { echo "skip: test_configure_docker_ipv6_false_value_is_updated_not_claimed needs a readable /etc/docker/daemon.json"; return 0; }; fi
+  if ! mkdir -p /etc/docker 2>/dev/null; then
+    echo "skip: test_configure_docker_ipv6_false_value_is_updated_not_claimed needs a writable /etc/docker"
+    return 0
+  fi
+  printf '{\n  "ipv6": false,\n  "fixed-cidr-v6": "fd00::/80"\n}\n' > "$cfg" 2>/dev/null || {
+    echo "skip: test_configure_docker_ipv6_false_value_is_updated_not_claimed needs a writable /etc/docker"
+    return 0
+  }
+
+  local work restarted=0
+  work=$(mktemp -d)
+  restart_docker_checked() { restarted=1; return 0; }
+  sleep() { :; }
+
+  configure_docker_ipv6 >"$work/out" 2>&1 || fail "R2-C4-01: updating a false ipv6 value must succeed"
+  if grep -q "✅ Docker 已配置 IPv6 支持" "$work/out"; then
+    fail "R2-C4-01: an existing \"ipv6\": false must not print the configured receipt"
+  fi
+  grep -q '"ipv6": true' "$cfg" || fail "R2-C4-01: the false value must be rewritten to true"
+  [[ "$(grep -c '"ipv6"' "$cfg")" == "1" ]] || fail "R2-C4-01: the config must carry exactly one ipv6 key (no duplicate from sed/jq)"
+  assert_equals "1" "$restarted" "R2-C4-01: docker must be restarted after rewriting the config"
+)
+
+# R2-C4-01: the jq-less (sed) path must replace a false value in place —
+# inserting a second "ipv6": true would fool the write-back grep check
+# (JSON duplicate keys resolve to the last value, i.e. false).
+test_configure_docker_ipv6_sed_path_replaces_false_value() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local cfg="/etc/docker/daemon.json" bak had_cfg=0
+  bak=$(mktemp)
+  restore_cfg() {
+    if [[ "$had_cfg" == "1" ]]; then cp "$bak" "$cfg" 2>/dev/null || true; else rm -f "$cfg"; fi
+    rm -f "$bak"
+  }
+  trap restore_cfg EXIT
+  if [[ -f "$cfg" ]]; then had_cfg=1; cp "$cfg" "$bak" 2>/dev/null || { echo "skip: test_configure_docker_ipv6_sed_path_replaces_false_value needs a readable /etc/docker/daemon.json"; return 0; }; fi
+  if ! mkdir -p /etc/docker 2>/dev/null; then
+    echo "skip: test_configure_docker_ipv6_sed_path_replaces_false_value needs a writable /etc/docker"
+    return 0
+  fi
+  printf '{\n  "ipv6": false,\n  "fixed-cidr-v6": "fd00::/80"\n}\n' > "$cfg" 2>/dev/null || {
+    echo "skip: test_configure_docker_ipv6_sed_path_replaces_false_value needs a writable /etc/docker"
+    return 0
+  }
+
+  # Hide jq: a stub bin dir with every tool the sed path needs except jq.
+  local work bindir old_path
+  work=$(mktemp -d); bindir="$work/bin"; mkdir -p "$bindir"
+  local t
+  for t in uname grep cp sed sleep rm mkdir chmod mv tee; do
+    ln -s "$(command -v "$t")" "$bindir/$t"
+  done
+  old_path="$PATH"
+  PATH="$bindir"
+  trap 'PATH="$old_path"; restore_cfg' EXIT
+
+  restart_docker_checked() { return 0; }
+  sleep() { :; }
+
+  configure_docker_ipv6 >"$work/out" 2>&1 || fail "R2-C4-01: sed-path update of a false value must succeed"
+  grep -q '"ipv6": true' "$cfg" || fail "R2-C4-01: sed path must rewrite the false value to true"
+  [[ "$(grep -c '"ipv6"' "$cfg")" == "1" ]] || fail "R2-C4-01: sed path must not leave a duplicate ipv6 key"
+)
+
+# R2-C4-01: an already-true value is accepted without rewrite/restart.
+test_configure_docker_ipv6_true_value_is_accepted_without_rewrite() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local cfg="/etc/docker/daemon.json" bak had_cfg=0
+  bak=$(mktemp)
+  restore_cfg() {
+    if [[ "$had_cfg" == "1" ]]; then cp "$bak" "$cfg" 2>/dev/null || true; else rm -f "$cfg"; fi
+    rm -f "$bak"
+  }
+  trap restore_cfg EXIT
+  if [[ -f "$cfg" ]]; then had_cfg=1; cp "$cfg" "$bak" 2>/dev/null || { echo "skip: test_configure_docker_ipv6_true_value_is_accepted_without_rewrite needs a readable /etc/docker/daemon.json"; return 0; }; fi
+  if ! mkdir -p /etc/docker 2>/dev/null; then
+    echo "skip: test_configure_docker_ipv6_true_value_is_accepted_without_rewrite needs a writable /etc/docker"
+    return 0
+  fi
+  printf '{\n  "ipv6": true,\n  "fixed-cidr-v6": "fd00::/80"\n}\n' > "$cfg" 2>/dev/null || {
+    echo "skip: test_configure_docker_ipv6_true_value_is_accepted_without_rewrite needs a writable /etc/docker"
+    return 0
+  }
+
+  local work restarted=0
+  work=$(mktemp -d)
+  restart_docker_checked() { restarted=1; return 0; }
+  sleep() { :; }
+
+  configure_docker_ipv6 >"$work/out" 2>&1 || fail "R2-C4-01: an already-true value must succeed"
+  grep -q "✅ Docker 已配置 IPv6 支持" "$work/out" || fail "R2-C4-01: an already-true value must print the configured receipt"
+  assert_equals "0" "$restarted" "R2-C4-01: an already-true value must not restart docker"
+  grep -q '"ipv6": true' "$cfg" || fail "R2-C4-01: the true value must be left in place"
+)
+
+# R2-C4-01: the macOS branch must verify with docker_ipv6_usable
+# instead of assuming Docker Desktop enables IPv6 by default.
+test_configure_docker_ipv6_darwin_does_not_claim_without_proof() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  uname() { echo "Darwin"; }
+  docker_ipv6_usable() { return 1; }
+
+  local out rc="0"
+  out=$(configure_docker_ipv6 2>&1) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "R2-C4-01: Darwin without verified IPv6 must not return success"
+  if grep -q "✅" <<< "$out"; then
+    fail "R2-C4-01: Darwin must not print a success receipt without verification"
+  fi
+)
+
+test_configure_docker_ipv6_darwin_verified_prints_receipt() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  uname() { echo "Darwin"; }
+  docker_ipv6_usable() { return 0; }
+
+  local out rc="0"
+  out=$(configure_docker_ipv6 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R2-C4-01: Darwin with verified IPv6 must succeed"
+  grep -q "✅" <<< "$out" || fail "R2-C4-01: Darwin with verified IPv6 must print the verified receipt"
 )
 
 # W1-DLMV: download_agent_binary 落盘 mv 失败必须点名返回非 0，
@@ -12751,6 +12900,11 @@ test_panel_version_gate_matches_go_semantics
 test_install_version_gate_matches_go_semantics
 test_caddyfile_without_site_single_line_blocks
 test_panel_network_default_name_and_label_reconcile
+test_configure_docker_ipv6_false_value_is_updated_not_claimed
+test_configure_docker_ipv6_sed_path_replaces_false_value
+test_configure_docker_ipv6_true_value_is_accepted_without_rewrite
+test_configure_docker_ipv6_darwin_does_not_claim_without_proof
+test_configure_docker_ipv6_darwin_verified_prints_receipt
 test_install_download_mv_failure_is_named
 test_legacy_gost_cleanup_scoped_binary_deletion
 test_json_escape_and_config_addr_grammar
