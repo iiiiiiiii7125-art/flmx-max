@@ -2126,51 +2126,33 @@ export default function NodePage({
         : [...collapsedGroups, label],
     );
   };
-  // 全部折叠以当前渲染段为准写名单（顺带清掉已不存在组的陈旧项）；
-  // 全部展开即清空名单。
+  // 全部折叠只把当前渲染段并入旧名单（B-01）：被搜索/筛选滤掉的
+  // 段、空组、已删组陈旧项、未分组段 "" 的旧折叠记录一律保留；
+  // 全部展开即清空名单（文档明示口径，不变）。
   const collapseAllGroups = () => {
     if (!groupSections) return;
-    void saveCollapsedGroups(groupSections.map((section) => section.label));
+    const rendered = groupSections.map((section) => section.label);
+    void saveCollapsedGroups([
+      ...collapsedGroups,
+      ...rendered.filter((label) => !collapsedGroups.includes(label)),
+    ]);
   };
   const expandAllGroups = () => {
     void saveCollapsedGroups([]);
   };
-  // 改名/删组后折叠名单跟随：改名把旧名原位换新名，删组摘除该名；
-  // 尽力写回（失败时以服务端名单为准，下次载入自愈），不阻塞主操作
-  // 的回执。函数式更新保证拿到的是最新名单。
+  // 改名/删组后折叠名单跟随：改名把旧名原位换新名，删组摘除该名。
+  // 写回在 setState updater 之外做（B-02：副作用不得进 updater，
+  // 否则 StrictMode 下 updater 双调会产生重复写）；写失败时 toast
+  // 报错，不静默吞错——本地态已跟随、服务端仍为旧名单，下次载入
+  // 以服务端为准，故须有可见提示。成功路径行为不变。
   const remapCollapsedAfterRename = useCallback(
     (oldName: string, newName: string) => {
-      setCollapsedGroups((prev) => {
-        if (!prev.includes(oldName)) return prev;
-        const next = prev.map((label) => (label === oldName ? newName : label));
+      if (!collapsedGroups.includes(oldName)) return;
+      const next = collapsedGroups.map((label) =>
+        label === oldName ? newName : label,
+      );
 
-        void (async () => {
-          try {
-            const res = await updateConfig(
-              NODE_GROUP_COLLAPSED_CONFIG_KEY,
-              JSON.stringify(next),
-            );
-
-            // T-001：信封 warning 须原样透出（与 saveGroupOrder 同
-            // 口径）；写失败仍按尽力口径静默，下次载入自愈。
-            if (res.code === 0 && res.warning) {
-              toast(res.warning, { icon: "⚠️", duration: 12000 });
-            }
-          } catch {
-            // 尽力写回：失败以服务端名单为准，下次载入自愈。
-          }
-        })();
-
-        return next;
-      });
-    },
-    [],
-  );
-  const dropCollapsedAfterDelete = useCallback((name: string) => {
-    setCollapsedGroups((prev) => {
-      if (!prev.includes(name)) return prev;
-      const next = prev.filter((label) => label !== name);
-
+      setCollapsedGroups(next);
       void (async () => {
         try {
           const res = await updateConfig(
@@ -2178,19 +2160,43 @@ export default function NodePage({
             JSON.stringify(next),
           );
 
-          // T-001：信封 warning 须原样透出（与 saveGroupOrder 同
-          // 口径）；写失败仍按尽力口径静默，下次载入自愈。
-          if (res.code === 0 && res.warning) {
+          if (res.code !== 0) throw new Error("save collapsed groups failed");
+          // T-001：信封 warning 须原样透出（与 saveGroupOrder 同口径）。
+          if (res.warning) {
             toast(res.warning, { icon: "⚠️", duration: 12000 });
           }
         } catch {
-          // 尽力写回：失败以服务端名单为准，下次载入自愈。
+          toast.error("分组改名后折叠状态保存失败，刷新后可能恢复为改名前状态");
         }
       })();
+    },
+    [collapsedGroups],
+  );
+  const dropCollapsedAfterDelete = useCallback(
+    (name: string) => {
+      if (!collapsedGroups.includes(name)) return;
+      const next = collapsedGroups.filter((label) => label !== name);
 
-      return next;
-    });
-  }, []);
+      setCollapsedGroups(next);
+      void (async () => {
+        try {
+          const res = await updateConfig(
+            NODE_GROUP_COLLAPSED_CONFIG_KEY,
+            JSON.stringify(next),
+          );
+
+          if (res.code !== 0) throw new Error("save collapsed groups failed");
+          // T-001：信封 warning 须原样透出（与 saveGroupOrder 同口径）。
+          if (res.warning) {
+            toast(res.warning, { icon: "⚠️", duration: 12000 });
+          }
+        } catch {
+          toast.error("删除分组后折叠状态保存失败，服务端可能仍保留该分组的折叠记录");
+        }
+      })();
+    },
+    [collapsedGroups],
+  );
 
   // 分组管理三操作（v2）：名单以服务端回执的 order 为准刷新；改名/
   // 删组级联改了成员标签，静默重拉节点列表对齐段与计数。
@@ -2578,7 +2584,7 @@ export default function NodePage({
                         <div className="col-span-full pt-2 first:pt-0">
                           <button
                             aria-expanded={!collapsed}
-                            className="flex w-full items-center gap-2 text-left"
+                            className="flex w-full cursor-pointer items-center gap-2 rounded-md text-left hover:bg-white/40"
                             type="button"
                             onClick={() => toggleGroupCollapsed(section.label)}
                           >
