@@ -1511,8 +1511,10 @@ export interface NodeSwapSetResult {
 }
 export const setNodeSwap = (data: { nodeId: number; sizeGB: number }) =>
   Network.post<NodeSwapSetResult>("/node/swap-set", data, {
-    // swapoff 须把在用页换入内存、fallocate 大文件在慢盘上也慢，给足时间。
-    timeout: 180000,
+    // 与后端预算对齐（timeout-budgets.tsv P006/T067）：后端命令腿 600s、写截止
+    // 660s；swapoff 须排空在用页、慢盘 dd 回退更久，FE 短于 660s 会出现「界面
+    // 报超时失败、agent 实际执行成功」的假失败回执。
+    timeout: 660000,
   });
 /** 节点到各测试点最近 hours 小时的延迟趋势。 */
 export const getNodeLatencyHistory = (id: number, hours: number) =>
