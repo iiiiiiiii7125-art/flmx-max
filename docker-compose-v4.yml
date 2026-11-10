@@ -59,6 +59,7 @@ services:
       driver: json-file
       options:
         max-size: "20m"
+        max-file: "3"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-flmx_panel}
       POSTGRES_USER: ${POSTGRES_USER:-flmx_panel}

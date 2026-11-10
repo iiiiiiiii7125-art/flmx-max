@@ -293,6 +293,11 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 			NetOutSpeed:      info.NetOutSpeed,
 			ConntrackCount:   info.ConntrackCount,
 			ConntrackMax:     info.ConntrackMax,
+			AgentRSSBytes:       info.AgentRSSBytes,
+			MemTotalBytes:       info.MemTotalBytes,
+			ActiveSessions:      info.ActiveSessions,
+			BudgetRejectedTotal: info.BudgetRejectedTotal,
+			BudgetEvictedTotal:  info.BudgetEvictedTotal,
 		}
 		h.metrics.RecordNodeMetric(nodeID, metricInfo)
 		// 包 K：累积面越阈判定与落库同源同点——每个指标样本都

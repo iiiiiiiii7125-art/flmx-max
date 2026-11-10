@@ -1272,6 +1272,14 @@ type NodeMetric struct {
 	// 载）。历史行同表受 pruneMetrics 保留口径约束，不另设面。
 	ConntrackCount int64 `gorm:"column:conntrack_count" json:"conntrackCount"`
 	ConntrackMax   int64 `gorm:"column:conntrack_max" json:"conntrackMax"`
+	// agent 内存面（包 K 扩围）：RSS/总内存/活跃会话/预算拒
+	// 绝累计。旧 agent 不发时为 0，面板以 MemTotalBytes<=0
+	// 判「无此面」。
+	AgentRSSBytes       int64 `gorm:"column:agent_rss_bytes" json:"agentRssBytes"`
+	MemTotalBytes       int64 `gorm:"column:mem_total_bytes" json:"memTotalBytes"`
+	ActiveSessions      int64 `gorm:"column:active_sessions" json:"activeSessions"`
+	BudgetRejectedTotal int64 `gorm:"column:budget_rejected_total" json:"budgetRejectedTotal"`
+	BudgetEvictedTotal  int64 `gorm:"column:budget_evicted_total" json:"budgetEvictedTotal"`
 	Uptime         int64 `gorm:"column:uptime" json:"uptime"`
 }
 
