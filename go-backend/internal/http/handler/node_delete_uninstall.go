@@ -224,12 +224,17 @@ func (h *Handler) completeNodeUninstallDeletion(nodeID int64) {
 		return
 	}
 	defer guard.releaseUpgradeOp(h, nodeID)
-	broken, soleWarnings, _, err := h.deleteNodeByIDAfterGuardsOutcome(nodeID, guard)
+	broken, soleWarnings, outcome, err := h.deleteNodeByIDAfterGuardsOutcome(nodeID, guard)
 	if err != nil {
 		log.Printf("node pending uninstall completion delete failed node_id=%d err=%v", nodeID, err)
 		_ = h.repo.SetNodePendingUninstallReason(nodeID,
 			"agent 已卸载，但面板删除节点记录失败："+err.Error(), time.Now())
 		return
+	}
+	// T-001：后台收尾无回执可点名，刷新失败只记日志（内核仍按
+	// 旧名单放行，下次面板清扫/节点重连时收敛）。
+	if outcome != nil && len(outcome.refreshFailed) > 0 {
+		log.Printf("node pending uninstall completion whitelist refresh failed node_id=%d %s", nodeID, whitelistRefreshFailureNote(outcome.refreshFailed))
 	}
 	for _, entry := range broken {
 		log.Printf("node pending uninstall completion broke cross-node referrer node_id=%d referrer=%s", nodeID, entry.Display)

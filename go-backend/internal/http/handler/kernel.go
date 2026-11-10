@@ -1555,13 +1555,22 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 	// fail-closed，同守卫口径。
 	recheckMsg, recheckErr := h.chainInUseMessage(row)
 	if recheckErr != nil {
-		h.refreshInboundWhitelist(id)
-		response.WriteJSON(w, response.Err(-2, recheckErr.Error()))
+		// T-001：补偿刷新失败时回执须点名（已删 relay 的拨号地址
+		// 可能残留在 allow 中）。
+		refreshNote := ""
+		if rerr := h.refreshInboundWhitelist(id); rerr != nil {
+			refreshNote = "；" + whitelistRefreshFailureNote([]int64{id})
+		}
+		response.WriteJSON(w, response.Err(-2, recheckErr.Error()+refreshNote))
 		return
 	}
 	if recheckMsg != "" {
-		h.refreshInboundWhitelist(id)
-		response.WriteJSON(w, response.ErrDefault(recheckMsg))
+		// T-001：同上，补偿刷新失败进回执。
+		refreshNote := ""
+		if rerr := h.refreshInboundWhitelist(id); rerr != nil {
+			refreshNote = "；" + whitelistRefreshFailureNote([]int64{id})
+		}
+		response.WriteJSON(w, response.ErrDefault(recheckMsg+refreshNote))
 		return
 	}
 	if err := h.repo.DeleteNodeInbound(id); err != nil {
@@ -1570,9 +1579,12 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		// 白名单（refreshInboundWhitelist 内部按 RelayWhitelist 门
 		// 控、非白名单入站为空转），否则已删中转的拨号地址残留在
 		// 本入站 allow 中。outboundTargets 面不受影响：本入站（拨
-		// 号方）尚存、其链式关系未变。
-		h.refreshInboundWhitelist(id)
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// 号方）尚存、其链式关系未变。T-001：补偿刷新失败时回执须点名。
+		refreshNote := ""
+		if rerr := h.refreshInboundWhitelist(id); rerr != nil {
+			refreshNote = "；" + whitelistRefreshFailureNote([]int64{id})
+		}
+		response.WriteJSON(w, response.Err(-2, err.Error()+refreshNote))
 		return
 	}
 	// E6-S1 同型补齐：连带删除计量伴生行移至原入站删除成功之后
@@ -2758,7 +2770,11 @@ func (h *Handler) applyKernelWithMode(kernelID int64, install bool, realmOverrid
 
 	k, err := h.repo.GetNodeKernel(kernelID)
 	if err != nil {
-		return err
+		// RAW291（路 3）：仓储直通错误标 repoError——applyKernel 的
+		// 调用方（如订阅保存/轮换的「下发失败」Msg）凭此标记把仓
+		// 储原文换成固定文案；数据面下发错误不经此标记、原样回。
+		// 标记只改错误类型、Error() 文本不变，其余调用方行为不变。
+		return markRepoError(err)
 	}
 	if k == nil {
 		return errors.New("内核不存在")

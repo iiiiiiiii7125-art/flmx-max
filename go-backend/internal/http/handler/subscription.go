@@ -133,7 +133,9 @@ func formatIDList(ids []int64) string {
 func randomHex(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := cryptoRandRead(b); err != nil {
-		return "", fmt.Errorf("生成随机凭据失败: %w", err)
+		// RAW291：随机源错误只含操作系统熵源失败，不含任何
+		// 内部状态——但仍以固定文案回执，不拼 err 原文。
+		return "", errText("生成随机凭据失败")
 	}
 	return hex.EncodeToString(b), nil
 }
@@ -141,7 +143,8 @@ func randomHex(n int) (string, error) {
 func newUUID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := cryptoRandRead(b); err != nil {
-		return "", fmt.Errorf("生成随机凭据失败: %w", err)
+		// RAW291：同 randomHex，固定文案。
+		return "", errText("生成随机凭据失败")
 	}
 	b[6] = b[6]&0x0f | 0x40
 	b[8] = b[8]&0x3f | 0x80
@@ -483,6 +486,18 @@ func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 		}
 	}
 	return firstErr
+}
+
+// pushFailureMsg 把下发失败拼进成功回执 Msg 前的净化（RAW291）：
+// 仓储错误（repoError 标记，如 applyKernel 的 GetNodeKernel 读失败）
+// 只留固定前缀、原文只记日志；数据面下发错误（节点不在线、agent
+// 拒收）原样附后——那是管理员排查所需的诊断信息。
+func pushFailureMsg(prefix string, err error) string {
+	if isRepoError(err) {
+		log.Printf("push failure (storage): %v", err)
+		return prefix
+	}
+	return prefix + ": " + err.Error()
 }
 
 // syncSubscriptions pushes credential changes for share subscriptions
@@ -885,21 +900,24 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 	}
 	subs, err := h.repo.ListSubscriptions()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionList: ListSubscriptions failed", err)
 		return
 	}
 	if len(subs) == 0 {
 		// Start everyone off with one; deleting it later is the user's call.
 		def, err := h.repo.DefaultSubscription(time.Now().UnixMilli())
 		if err != nil {
-			response.WriteJSON(w, response.Err(-2, err.Error()))
+			// RAW291：同上。
+			respondInternalError(w, "subscriptionList: DefaultSubscription failed", err)
 			return
 		}
 		subs = append(subs, *def)
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：同上。
+		respondInternalError(w, "subscriptionList: ListNodeInbounds failed", err)
 		return
 	}
 	// 请求体可选：format 指定 NodeCount 的目标格式口径（A5-02/BC-11）。
@@ -1046,7 +1064,9 @@ func (h *Handler) checkSubscriptionSourceRefs(req *subscriptionRequest) error {
 	}
 	sources, err := h.repo.ListRemoteSources()
 	if err != nil {
-		return err
+		// RAW291：仓储直通错误标 repoError，调用点 guard 后
+		// 改走通用文案；未知源固定文案不经此标记。
+		return markRepoError(err)
 	}
 	known := make(map[int64]bool, len(sources))
 	for _, s := range sources {
@@ -1083,19 +1103,29 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionSave: ListNodeInbounds failed", err)
 		return
 	}
 	ids, excludedCompanions, err := req.validateDetailed(rows)
 	if err != nil {
+		// RAW291 Type C：validateDetailed 只产 errText 固定校验
+		// 文案（名称/重置日/入站不存在等用户输入校验），原样回。
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	if err := h.checkSubscriptionSourceRefs(&req); err != nil {
+		// RAW291 Type B：混合错误——仓储错误（已标 repoError）
+		// 改走通用文案，未知订阅源固定文案原样回。
+		if respondInternalIfRepoError(w, "subscriptionSave: checkSubscriptionSourceRefs failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	if err := h.checkPipelineTemplates(req.Options); err != nil {
+		// RAW291 Type C：checkPipelineTemplates 只产 errText
+		// 固定校验文案（模板不存在），原样回。
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -1132,7 +1162,8 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	} else {
 		token, tokenErr := randomHex(16)
 		if tokenErr != nil {
-			response.WriteJSON(w, response.Err(-2, tokenErr.Error()))
+			// RAW291：随机源失败为内部错误，原文只记日志。
+			respondInternalError(w, "subscriptionSave: randomHex failed", tokenErr)
 			return
 		}
 		s = &model.Subscription{Token: token, Enabled: 1, CreatedTime: now.UnixMilli(), TrafficSince: now.UnixMilli()}
@@ -1142,12 +1173,14 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	if isShare(s) && (s.UUID == "" || s.Password == "") {
 		uuid, uuidErr := newUUID()
 		if uuidErr != nil {
-			response.WriteJSON(w, response.Err(-2, uuidErr.Error()))
+			// RAW291：随机源失败为内部错误，原文只记日志。
+			respondInternalError(w, "subscriptionSave: newUUID failed", uuidErr)
 			return
 		}
 		pw, pwErr := randomHex(16)
 		if pwErr != nil {
-			response.WriteJSON(w, response.Err(-2, pwErr.Error()))
+			// RAW291：同上。
+			respondInternalError(w, "subscriptionSave: randomHex failed", pwErr)
 			return
 		}
 		s.UUID, s.Password = uuid, pw
@@ -1183,7 +1216,8 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 		saveErr = h.repo.SaveSubscription(s)
 	}
 	if saveErr != nil {
-		response.WriteJSON(w, response.Err(-2, saveErr.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionSave: SaveSubscription failed", saveErr)
 		return
 	}
 	push := before
@@ -1195,7 +1229,8 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	view.ExcludedCompanionIDs = excludedCompanions
 	if err := h.applyKernelsForInbounds(push); err != nil {
 		// 下发失败：不更新 AppliedActive，循环会重试；仅提示用户。
-		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), Data: view, TS: time.Now().UnixMilli()})
+		// RAW291：仓储原文经 pushFailureMsg 换成固定文案。
+		response.WriteJSON(w, response.R{Code: 0, Msg: pushFailureMsg("已保存，但下发到节点失败", err), Data: view, TS: time.Now().UnixMilli()})
 		return
 	}
 	// 下发成功：更新 AppliedActive。
@@ -1207,7 +1242,8 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) respondAfterSubPush(w http.ResponseWriter, inboundIDs []int64, data interface{}) {
 	msg := "操作成功"
 	if err := h.applyKernelsForInbounds(inboundIDs); err != nil {
-		msg = "已保存，但下发到节点失败: " + err.Error()
+		// RAW291：仓储原文经 pushFailureMsg 换成固定文案。
+		msg = pushFailureMsg("已保存，但下发到节点失败", err)
 	}
 	response.WriteJSON(w, response.R{Code: 0, Msg: msg, Data: data, TS: time.Now().UnixMilli()})
 }
@@ -1219,7 +1255,8 @@ func (h *Handler) subscriptionDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := h.repo.GetSubscription(id)
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionDelete: GetSubscription failed", err)
 		return
 	}
 	if s == nil {
@@ -1234,14 +1271,16 @@ func (h *Handler) subscriptionDelete(w http.ResponseWriter, r *http.Request) {
 	// B4/F-136: 硬删与清分配在同一 repo 事务内完成（旧两步第二步失败
 	// 仅打日志、分配行残留）。
 	if err := h.repo.MarkSubscriptionPendingDelete(id); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionDelete: MarkSubscriptionPendingDelete failed", err)
 		return
 	}
 	s.PendingDelete = 1
 	s.Enabled = 0
 	if err := h.completePendingSubscriptionDelete(s); err != nil {
 		log.Printf("subscription %d: delete push failed, tombstone kept for retry: %v", id, err)
-		response.WriteJSON(w, response.R{Code: 0, Msg: "已标记删除，但下发到节点失败，后台将自动重试: " + err.Error(), Data: nil, TS: time.Now().UnixMilli()})
+		// RAW291：仓储原文经 pushFailureMsg 换成固定文案。
+		response.WriteJSON(w, response.R{Code: 0, Msg: pushFailureMsg("已标记删除，但下发到节点失败，后台将自动重试", err), Data: nil, TS: time.Now().UnixMilli()})
 		return
 	}
 	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: nil, TS: time.Now().UnixMilli()})
@@ -1259,7 +1298,9 @@ func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error
 	if isShare(s) {
 		rows, err := h.repo.ListNodeInbounds()
 		if err != nil {
-			return err
+			// RAW291：仓储直通错误标 repoError，调用点凭此标记
+			// 把仓储原文换成固定文案；下发错误不经此标记。
+			return markRepoError(err)
 		}
 		push = h.subAllInboundIDs(s, rows, nil)
 	}
@@ -1267,7 +1308,8 @@ func (h *Handler) completePendingSubscriptionDelete(s *model.Subscription) error
 		return err
 	}
 	if err := h.repo.DeleteSubscriptionWithAssignments(s.ID); err != nil {
-		return err
+		// RAW291：同上。
+		return markRepoError(err)
 	}
 	// P1-07: the row is gone, so its one-shot warning dedupe entry can
 	// be reclaimed (a future subscription reusing the id must warn
@@ -1312,7 +1354,9 @@ func (h *Handler) rotateSubscriptionCredentials(s *model.Subscription) (rows []m
 	}
 	s.UpdatedTime = time.Now().UnixMilli()
 	if err := h.repo.SaveSubscription(s); err != nil {
-		return nil, nil, err
+		// RAW291：仓储直通错误标 repoError，调用点 guard 后
+		// 改走通用文案；随机源失败为固定文案不经此标记。
+		return nil, nil, markRepoError(err)
 	}
 	rows, _ = h.repo.ListNodeInbounds()
 	var push []int64
@@ -1360,11 +1404,18 @@ func (h *Handler) subscriptionReset(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, applyErr, err := h.rotateSubscriptionCredentials(s)
 	if err != nil {
+		// RAW291 Type B：混合错误——SaveSubscription 仓储错误
+		// （已标 repoError）改走通用文案；随机源失败与墓碑拒绝
+		// 为固定文案，原样回。
+		if respondInternalIfRepoError(w, "subscriptionReset: rotateSubscriptionCredentials failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
 	if applyErr != nil {
-		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + applyErr.Error(), Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
+		// RAW291：仓储原文经 pushFailureMsg 换成固定文案。
+		response.WriteJSON(w, response.R{Code: 0, Msg: pushFailureMsg("已重置，但下发到节点失败", applyErr), Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
 		return
 	}
 	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: h.subscriptionView(s, rows, time.Now(), ""), TS: time.Now().UnixMilli()})
@@ -1389,7 +1440,8 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 	}
 	now := time.Now()
 	if err := h.repo.ResetSubscriptionTraffic(id, now.UnixMilli()); err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionResetTraffic: ResetSubscriptionTraffic failed", err)
 		return
 	}
 	if h.notifier != nil {
@@ -1440,11 +1492,14 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.repo.ListNodeInbounds()
 	if err != nil {
-		response.WriteJSON(w, response.Err(-2, err.Error()))
+		// RAW291：纯仓储错误，原文只记日志、回执通用文案。
+		respondInternalError(w, "subscriptionPreview: ListNodeInbounds failed", err)
 		return
 	}
 	ids, excludedCompanions, err := req.validateDetailed(rows)
 	if err != nil {
+		// RAW291 Type C：validateDetailed 只产 errText 固定校验
+		// 文案（名称/重置日/入站不存在等用户输入校验），原样回。
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -1527,11 +1582,18 @@ func (h *Handler) inboundSubInfo(w http.ResponseWriter, r *http.Request) {
 		// 内核），不再只换 token——否则经此路重置的旧配置仍能连接。
 		_, applyErr, err := h.rotateSubscriptionCredentials(s)
 		if err != nil {
+			// RAW291 Type B：混合错误——SaveSubscription 仓储错误
+			// （已标 repoError）改走通用文案；随机源失败与墓碑拒绝
+			// 为固定文案，原样回。
+			if respondInternalIfRepoError(w, "inboundSubInfo: rotateSubscriptionCredentials failed", err) {
+				return
+			}
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
 		if applyErr != nil {
-			response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败: " + applyErr.Error(), Data: map[string]interface{}{
+			// RAW291：仓储原文经 pushFailureMsg 换成固定文案。
+			response.WriteJSON(w, response.R{Code: 0, Msg: pushFailureMsg("已重置，但下发到节点失败", applyErr), Data: map[string]interface{}{
 				"token": s.Token,
 				"path":  "/api/v1/open_api/sub/" + s.Token,
 			}, TS: time.Now().UnixMilli()})

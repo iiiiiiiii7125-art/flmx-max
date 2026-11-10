@@ -542,7 +542,12 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	h.refreshInboundWhitelist(row.ID)
+	// T-001：刷新失败进回执 warning——创建本身已落库成功，但内核
+	// 仍按旧名单放行，新中转可能无法连通。
+	if err := h.refreshInboundWhitelist(row.ID); err != nil {
+		response.WriteJSON(w, response.OKWithWarning(map[string]interface{}{"id": rel.ID, "forwardId": forwardID}, whitelistRefreshFailureNote([]int64{row.ID})+"，请检查节点内核状态"))
+		return
+	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{"id": rel.ID, "forwardId": forwardID}))
 }
 
@@ -682,12 +687,21 @@ func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {
 		// （ForwardExists 转假、该 relay 应即刻掉出 allow 计算）而
 		// relay 行尚存；DeleteInboundRelay 失败面同理。失败返回前
 		// 无条件补刷该入站白名单（按现行 DB 现算，未删部分的刷新
-		// 为同值空转），回执文案不变。
-		h.refreshInboundWhitelist(rel.InboundID)
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		// 为同值空转）；T-001：补偿刷新失败时回执须点名——否则已删
+		// 转发的拨号地址残留在 allow 中而回执只字不提。
+		refreshNote := ""
+		if rerr := h.refreshInboundWhitelist(rel.InboundID); rerr != nil {
+			refreshNote = "；" + whitelistRefreshFailureNote([]int64{rel.InboundID})
+		}
+		response.WriteJSON(w, response.ErrDefault(err.Error()+refreshNote))
 		return
 	}
-	h.refreshInboundWhitelist(rel.InboundID)
+	// T-001：刷新失败进回执 warning——删除本身已落库成功，但内核
+	// 仍按旧名单放行。
+	if err := h.refreshInboundWhitelist(rel.InboundID); err != nil {
+		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshFailureNote([]int64{rel.InboundID})+"，请检查节点内核状态"))
+		return
+	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 

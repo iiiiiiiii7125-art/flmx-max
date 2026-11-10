@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,10 +41,14 @@ func (h *Handler) inboundAllowListIx(row model.NodeInbound, ix *chainRefIndex) (
 	for _, c := range loopbackAllow {
 		set[c] = true
 	}
+	// T-002：附加名单解析失败不得静默丢弃——记错留痕（方向仍为
+	// fail-closed：解析失败的附加条目不进 allow，只记日志不放行）。
 	if extra, err := kernel.ParseAllowList(row.WhitelistExtra); err == nil {
 		for _, c := range extra {
 			set[c] = true
 		}
+	} else {
+		log.Printf("whitelist extra allowlist parse failed inbound_id=%d err=%v (extra entries dropped)", row.ID, err)
 	}
 
 	relays, err := h.repo.ListInboundRelays(row.ID)
@@ -57,6 +62,9 @@ func (h *Handler) inboundAllowListIx(row model.NodeInbound, ix *chainRefIndex) (
 		}
 		dialers, err := h.relayDialerNodeIDs(rel.TunnelID, rel.TunnelType)
 		if err != nil {
+			// T-002：拨号节点查询失败不得静默跳过——记错留痕（方向仍
+			// 为 fail-closed：查不到的拨号节点不进 allow，只记日志）。
+			log.Printf("whitelist relay dialer lookup failed inbound_id=%d tunnel_id=%d err=%v (dialer nodes dropped)", row.ID, rel.TunnelID, err)
 			continue
 		}
 		for _, nodeID := range dialers {
@@ -66,6 +74,8 @@ func (h *Handler) inboundAllowListIx(row model.NodeInbound, ix *chainRefIndex) (
 			seenNodes[nodeID] = true
 			node, err := h.repo.GetNodeByID(nodeID)
 			if err != nil || node == nil {
+				// T-002：同上，拨号节点行查不到时记错留痕，不进 allow。
+				log.Printf("whitelist relay dialer node lookup failed inbound_id=%d node_id=%d err=%v (node dropped)", row.ID, nodeID, err)
 				continue
 			}
 			for _, host := range nodeAddresses(node) {
@@ -94,6 +104,9 @@ func (h *Handler) inboundAllowListIx(row model.NodeInbound, ix *chainRefIndex) (
 		seenNodes[nodeID] = true
 		node, err := h.repo.GetNodeByID(nodeID)
 		if err != nil || node == nil {
+			// T-002：链式拨号节点行查不到时记错留痕，不进 allow
+			//（fail-closed；链式查询本身失败仍按 R3X-015 上抛）。
+			log.Printf("whitelist chain dialer node lookup failed inbound_id=%d node_id=%d err=%v (node dropped)", row.ID, nodeID, err)
 			continue
 		}
 		for _, host := range nodeAddresses(node) {
@@ -394,26 +407,54 @@ func (h *Handler) inboundIDsDialedByNodeIx(nodeID int64, ix *chainRefIndex) ([]i
 	return out, nil
 }
 
-// refreshInboundWhitelists refreshes each affected inbound once.
-func (h *Handler) refreshInboundWhitelists(inboundIDs []int64) {
+// refreshInboundWhitelists refreshes each affected inbound once and
+// returns the IDs whose refresh failed (T-001): callers must surface
+// the failure in the triggering operation's receipt — a success receipt
+// issued while the kernel still enforces the pre-change allow list is
+// a false receipt (new relays cannot connect, deleted relays stay
+// allowed). Background callers without a receipt log the IDs instead.
+func (h *Handler) refreshInboundWhitelists(inboundIDs []int64) []int64 {
 	seen := make(map[int64]struct{}, len(inboundIDs))
+	var failed []int64
 	for _, inboundID := range inboundIDs {
 		if _, ok := seen[inboundID]; ok {
 			continue
 		}
 		seen[inboundID] = struct{}{}
-		h.refreshInboundWhitelist(inboundID)
+		if err := h.refreshInboundWhitelist(inboundID); err != nil {
+			failed = append(failed, inboundID)
+		}
 	}
+	return failed
 }
 
 // refreshInboundWhitelist re-applies the kernel when the relay set of a
 // whitelisted inbound changed, so the allowed sources follow the relays.
-func (h *Handler) refreshInboundWhitelist(inboundID int64) {
+// It returns nil when the inbound is missing or not whitelisted (no-op)
+// or the re-apply succeeded, and the apply error otherwise; the failure
+// is also logged server-side (T-001).
+func (h *Handler) refreshInboundWhitelist(inboundID int64) error {
 	row, err := h.repo.GetNodeInbound(inboundID)
 	if err != nil || row == nil || row.RelayWhitelist != 1 {
-		return
+		return nil
 	}
 	if err := h.applyKernel(row.KernelID, false); err != nil {
 		log.Printf("whitelist refresh failed inbound_id=%d err=%v", inboundID, err)
+		return err
 	}
+	return nil
+}
+
+// whitelistRefreshFailureNote renders the operator-facing note for failed
+// whitelist refreshes (T-001): the triggering operation itself succeeded,
+// but the kernel still enforces the pre-change allow list.
+func whitelistRefreshFailureNote(failed []int64) string {
+	if len(failed) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(failed))
+	for _, id := range failed {
+		ids = append(ids, strconv.FormatInt(id, 10))
+	}
+	return "白名单刷新失败（入站 " + strings.Join(ids, "、") + "），内核仍按旧名单放行"
 }
