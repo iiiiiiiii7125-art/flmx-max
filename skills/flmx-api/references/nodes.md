@@ -363,6 +363,42 @@ node was offline (the setting is stored and re-pushed automatically on
 reconnect) or `pushError` explains the failure. nftables nodes have no
 agent service and are rejected.
 
+## POST /api/v1/node/swap-info
+
+Read a node's live swap state (admin only). Request: `{"nodeId": 1}`.
+Response `data`: `{totalMB, usedMB, entries, diskFreeMB, memTotalMB,
+managedFilePresent, fileSizeMB}` — totals are host-wide; `entries` lists
+every active swap on the host (`{name, type, sizeMB, usedMB}` from
+`/proc/swaps`, including non-panel-managed partition/file swap, which is
+reported but never touched); `managedFilePresent` tells whether a
+panel-managed `/swapfile` exists, and `fileSizeMB` is that file's actual
+on-disk size in MB (0 when absent, regardless of whether it is active) —
+free space for a resize is judged as `diskFreeMB + fileSizeMB`. nftables nodes are rejected (no agent service).
+Agent-side failures (node offline, timeout) come back with code `-2` and
+the agent's message; an agent too old to know the command yields
+`节点 agent 版本过旧，不支持一键设置 Swap，请先升级节点 Agent`.
+
+## POST /api/v1/node/swap-set
+
+Create or resize the node's panel-managed `/swapfile` (admin only).
+Request: `{"nodeId": 1, "sizeGB": 2}` — `sizeGB` is an integer in 1–32,
+validated by both the panel and the agent. Only `/swapfile` is managed;
+any other existing swap is left untouched. The agent refuses when free
+disk plus the existing `/swapfile` size is below the target plus a
+256 MB reserve (the message carries the actual figures), and refuses to
+swap off the current file when its used amount exceeds available memory
+(MemAvailable), since swapoff would force the pages back into RAM.
+On success the file is rebuilt, `/etc/fstab` is converged to exactly one
+`/swapfile none swap sw 0 0` line (all other lines untouched), and
+`data` returns `{before: {totalMB, usedMB}, after: {totalMB, usedMB},
+sizeGB, warnings?}` — `warnings` holds non-fatal leftovers (e.g. the old
+swap backup file could not be deleted). Failures restore the previous
+file/state where possible, and the message names the failed step and the
+actual current state; if the swap is already active but the fstab write
+fails, the message says so explicitly (active now, but not persistent
+across reboot, with the exact line to add by hand). nftables nodes and
+containerized agents are rejected.
+
 ## POST /api/v1/node/route
 
 Get the node's cached return-route classification (CN2 / 163 / 4837 / 9929 /
