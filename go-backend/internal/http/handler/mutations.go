@@ -2673,13 +2673,26 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	nftPairs, err := h.collectNftablesSSHConfigsTx(validationTx, entryNodeIDs)
 	if err != nil {
 		validationTx.Rollback()
-		respondInternalError(w, "tunnelCreate", err)
+		// R3-GEN-03：与本函数提交段 validateNftablesTunnelStateTx 点
+		// 同口径——仓储错已在 helper 内标记、先守卫泛化；定型校验
+		// （nftables 节点缺少 SSH 配置、sshConfigFromModel 校验）
+		// 保留原文。此前无守卫直泛化、同 helper 口径不一致。
+		if respondInternalIfRepoError(w, "tunnelCreate: collectNftablesSSHConfigsTx failed", err) {
+			return
+		}
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	if engine == tunnelEngineRealm {
 		if err := h.validateRealmTunnelTx(validationTx, typeVal, entryNodeIDs); err != nil {
 			validationTx.Rollback()
-			respondInternalError(w, "tunnelCreate", err)
+			// R3-GEN-03：同上——realm 三定型（仅支持端口转发隧道／
+			// 节点不存在／nftables 不能用 realm）保留原文，仓储错
+			// 守卫泛化（与 tunnelUpdate 闭包分发器口径一致）。
+			if respondInternalIfRepoError(w, "tunnelCreate: validateRealmTunnelTx failed", err) {
+				return
+			}
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
 	}
@@ -2741,7 +2754,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		if err := h.validateRealmTunnelTx(tx, typeVal, entryNodeIDs); err != nil {
 			tx.Rollback()
 			releasePortLocks()
-			respondInternalError(w, "tunnelCreate", err)
+			// R3-GEN-03：与验证段同点同口径（守卫＋原文）。
+			if respondInternalIfRepoError(w, "tunnelCreate: validateRealmTunnelTx failed", err) {
+				return
+			}
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
 	}
