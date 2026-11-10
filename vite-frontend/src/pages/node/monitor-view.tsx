@@ -875,7 +875,10 @@ export function MonitorView({
       } catch {
         if (metricsSeqRef.current === seq) {
           setMetricsTruncated(false);
-          if (!silent) setMetricsError("加载指标失败");
+          // R3-MON-02：传输层失败与回执码失败同等置陈旧标记——silent
+          // 轮询期面板不可达是最常见的失败形态，旧数据不得冒充新鲜
+          // （与回执码失败分支及 loadLatestMonitorResults 同口径）。
+          setMetricsError("加载指标失败");
         }
       } finally {
         if (!silent && metricsSeqRef.current === seq) {
@@ -916,7 +919,9 @@ export function MonitorView({
         setMonitorsError(response.msg || "加载服务监控失败");
         if (!silent) toast.error(response.msg || "加载服务监控失败");
       } catch {
-        if (!silent) setMonitorsError("加载服务监控失败");
+        // R3-MON-02：同 loadMetrics——silent 轮询的传输失败亦置标记，
+        // 使「刷新失败，当前显示的是上次成功加载的数据」横幅真出。
+        setMonitorsError("加载服务监控失败");
       } finally {
         serviceMonitorsInFlightRef.current = false;
         if (!silent) setMonitorsLoading(false);
