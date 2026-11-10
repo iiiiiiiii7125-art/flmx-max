@@ -1094,6 +1094,56 @@ func (h *Handler) checkSubscriptionSourceRefs(req *subscriptionRequest) error {
 	return nil
 }
 
+// relayOnlySelectedWarning is the save receipt's naming of the
+// selected inbounds that can never appear in the subscription
+// (R2-02 防静默面 ①, user decision 2026-11-11: warn only, never
+// materialize endpoints or change scope semantics). A relay-only
+// inbound serves no direct endpoint (see inboundEndpoints); without
+// a live relay endpoint of its own it is absent under every scope —
+// before this warning the save answered 操作成功， the pulls came
+// back empty and nothing anywhere said why. Inbounds that do have a
+// live relay endpoint are NOT named: they appear through it, so the
+// warning's claim stays exact. "" when nothing is lost.
+func (h *Handler) relayOnlySelectedWarning(s *model.Subscription, rows []model.NodeInbound) string {
+	ids := h.subAllInboundIDs(s, rows, nil)
+	if len(ids) == 0 {
+		return ""
+	}
+	live := make(map[int64]bool)
+	relays, err := h.relayViews(0)
+	if err != nil {
+		// 与装配面同口径：中转视图查询失败已由 inboundEndpoints
+		// 记日志（M-003）；此处按无在册中转端点继续点名——回执宁可
+		// 多点一个实际经坏视图丢失的节点，不可再静默。
+		log.Printf("relayOnlySelectedWarning: relayViews failed for subscription %d: %v", s.ID, err)
+	} else {
+		for _, rel := range relays {
+			if rel.ForwardExists && rel.ForwardStatus == 1 && len(rel.Entries) > 0 {
+				live[rel.InboundID] = true
+			}
+		}
+	}
+	byID := make(map[int64]model.NodeInbound, len(rows))
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	var names []string
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if row, ok := byID[id]; ok && row.RelayOnly == 1 && !live[id] {
+			names = append(names, row.Name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("以下节点为纯中转导入节点，不可订阅、不会出现在订阅中：%s", strings.Join(names, "、"))
+}
+
 func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	// R2-K2 family closure (B11-001): the response awaits
 	// applyKernelsForInbounds for the saved subscription's kernels,
@@ -1234,16 +1284,22 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 	// B10-002：响应视图回填本次被排除的伴生入站，管理员可见。
 	view := h.subscriptionView(s, rows, now, req.Format)
 	view.ExcludedCompanionIDs = excludedCompanions
+	// R2-02（防静默面 ①）：所选节点含无在册中转端点的纯中转导入
+	// 节点时，回执 warning 逐个点名——它们在任何范围档位下都不
+	// 会出现在订阅中，保存面是管理员当刻唯一能得知的面。下发成
+	// 功/失败两条出口同带（warning 为 omitempty，无点名时信封与
+	// 此前逐字一致）。
+	warning := h.relayOnlySelectedWarning(s, rows)
 	if err := h.applyKernelsForInbounds(push); err != nil {
 		// 下发失败：不更新 AppliedActive，循环会重试；仅提示用户。
 		// RAW291：仓储原文经 pushFailureMsg 换成固定文案。
-		response.WriteJSON(w, response.R{Code: 0, Msg: pushFailureMsg("已保存，但下发到节点失败", err), Data: view, TS: time.Now().UnixMilli()})
+		response.WriteJSON(w, response.R{Code: 0, Msg: pushFailureMsg("已保存，但下发到节点失败", err), Data: view, TS: time.Now().UnixMilli(), Warning: warning})
 		return
 	}
 	// 下发成功：更新 AppliedActive。
 	_ = h.repo.UpdateSubscriptionApplied(s.ID, newAppliedActive)
 	s.AppliedActive = newAppliedActive
-	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: view, TS: time.Now().UnixMilli()})
+	response.WriteJSON(w, response.R{Code: 0, Msg: "操作成功", Data: view, TS: time.Now().UnixMilli(), Warning: warning})
 }
 
 func (h *Handler) respondAfterSubPush(w http.ResponseWriter, inboundIDs []int64, data interface{}) {

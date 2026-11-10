@@ -205,6 +205,14 @@ const diff = (a, b) => a.filter((v) => !b.includes(v));
 //   - /tunnel/delete（2 处）逐项核实定性为前端不可达（无封装、
 //     无调用面，UI 走 delete-with-forwards 的 data 通道），保留
 //     GAP 登记并改登记为不可达口径，见 GAP_REGISTRY 该条。
+//   2026-11-11 R2-02 防静默补登记：
+//   - remote_source.go remoteSourceSave 新增 2 处 OKWithWarning
+//     生产者（/subscription/source/save，纯中转源提示），消费接线
+//     同步落地：sources.tsx 三个调用点（save/uploadAgain 直读
+//     res.warning，refresh 走 refreshRemoteSource 同形直读）与
+//     external.tsx addSource 直读——登记 consumers 为两个实际调
+//     用文件。同函数内公网 http 分支的手工 R 信封同带 Warning 字
+//     段（非 OKWithWarning 调用点，不入本门普查，消费同点成立）。
 const REGISTRY = [
   {
     producer: "go-backend/internal/http/handler/kernel.go",
@@ -226,6 +234,13 @@ const REGISTRY = [
     apiFn: "deleteRemoteSource",
     calls: 1,
     consumers: ["src/pages/inbound/sources.tsx"],
+  },
+  {
+    producer: "go-backend/internal/http/handler/remote_source.go",
+    endpoint: "/subscription/source/save",
+    apiFn: "saveRemoteSource",
+    calls: 2,
+    consumers: ["src/pages/inbound/sources.tsx", "src/pages/inbound/external.tsx"],
   },
   {
     producer: "go-backend/internal/http/handler/mutations.go",
