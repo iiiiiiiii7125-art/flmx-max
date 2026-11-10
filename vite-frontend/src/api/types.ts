@@ -963,16 +963,12 @@ export interface InboundApiItem {
   meteringActive: boolean;
   /** Per-inbound idle timeout (seconds) for Xray (policy connIdle); 0 = unset (Xray default 300s), -1 = unlimited (renders as 31536000 = 365d). */
   connIdleSeconds: number;
-<<<<<<< HEAD
   /**
    * Inbound connection-log opt-in for direct kernel collection (U5):
    * when false, direct connections to this inbound are not recorded
    * (relay-entry records are unaffected). Required: the backend list
    * always carries the field (design §4.5).
    */
-=======
-  /** Per-inbound connection-log collection opt-in (design §4.5). */
->>>>>>> 0b24c4a2 (feat(connlog): connection-log opt-in switch in inbound edit form (U5))
   connLogEnabled: boolean;
 }
 
