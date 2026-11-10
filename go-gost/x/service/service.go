@@ -25,6 +25,7 @@ import (
 	"github.com/go-gost/core/service"
 	ctxvalue "github.com/go-gost/x/ctx"
 	xnet "github.com/go-gost/x/internal/net"
+	"github.com/go-gost/x/internal/sessionbudget"
 	"github.com/go-gost/x/internal/util/eventlog"
 	xmetrics "github.com/go-gost/x/metrics"
 	xstats "github.com/go-gost/x/observer/stats"
@@ -333,8 +334,27 @@ func (s *defaultService) Serve() error {
 				break
 			}
 		}
+		// 包 K 会话预算（与上面的地址 ACL 不同：这是整机资源
+		// 准入）——RSS/会话数越过按 RAM 推导的预算线时拒新会话、
+		// 保住存量与整机，先于 ACL 执行（风暴时不做无谓功）。
+		releaseSession, admitted := sessionbudget.TryAcquire()
+		if !admitted {
+			conn.Close()
+			if sessionbudget.RejectLogDue() {
+				b := sessionbudget.CurrentBudget()
+				log.Warnf("session budget: refusing new session from %s (active=%d/%d rss=%d/%d rejected_total=%d)",
+					clientAddr, sessionbudget.Active(), b.MaxSessions,
+					sessionbudget.RSSBytes(), b.MaxRSSBytes, sessionbudget.RejectedTotal())
+			}
+			continue
+		}
+		// 登记进压力驱逐名册并接活动时钟：包裹 conn 的字节流
+		// 动更新会话活跃时刻，release 合并注销与计数归还。
+		conn, releaseSession = sessionbudget.Track(conn, releaseSession)
+
 		if s.options.admission != nil &&
 			!s.options.admission.Admit(ctx, clientAddr) {
+			releaseSession()
 			conn.Close()
 			log.Debugf("admission: %s is denied", clientAddr)
 			continue
@@ -344,6 +364,7 @@ func (s *defaultService) Serve() error {
 
 		go func() {
 			defer wg.Done()
+			defer releaseSession()
 
 			// D3-02: a panic anywhere in a connection handler
 			// must kill only this connection, never the agent

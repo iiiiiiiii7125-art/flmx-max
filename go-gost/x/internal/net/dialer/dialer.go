@@ -131,6 +131,9 @@ func (d *Dialer) dialOnce(ctx context.Context, network, addr, ifceName string, i
 			}
 			sc, err := c.SyscallConn()
 			if err != nil {
+				// 包 K：刚建的 UDPConn 必须随错误分支一并释放
+				// ——旧实现直接 return，fd 随每次失败漏一个。
+				c.Close()
 				log.Error(err)
 				return nil, err
 			}

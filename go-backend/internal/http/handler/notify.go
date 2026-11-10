@@ -28,10 +28,16 @@ const (
 	notifyEventNodeUpgradeFailed = "node_upgrade_failed"
 	notifyEventInboundDown       = "inbound_down"
 	notifyEventKernelError       = "kernel_error"
-	notifyEventNodeExpiry        = "node_expiry"
-	notifyEventLatencyBad        = "latency_bad"
-	notifyEventRouteChange       = "route_change"
-	notifyEventTest              = "test"
+	// 包 K：宿主机累积面越阈（连接跟踪表、根盘）——溺亡/盘满都
+	// 是「撞墙即死」型故障，告警必须在撞墙之前发出。判定状态
+	// 机在 resource_alert.go，与 kernel_error 同走单漏斗。
+	notifyEventConntrackHigh = "conntrack_high"
+	notifyEventDiskHigh      = "disk_high"
+	notifyEventAgentMemHigh  = "agent_memory_high"
+	notifyEventNodeExpiry    = "node_expiry"
+	notifyEventLatencyBad    = "latency_bad"
+	notifyEventRouteChange   = "route_change"
+	notifyEventTest          = "test"
 )
 
 const (

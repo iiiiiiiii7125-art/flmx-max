@@ -31,6 +31,16 @@ type SystemInfo struct {
 	UDPConns    int64   `json:"udp_conns"`
 	NetInSpeed  int64   `json:"net_in_speed"`
 	NetOutSpeed int64   `json:"net_out_speed"`
+	// ConntrackCount/ConntrackMax（包 K）：宿主机连接跟踪表用
+	// 量。加法字段；0 表示该节点无此面（旧 agent/未加载），落
+	// 库为 0 且面板不据此告警。
+	ConntrackCount int64 `json:"conntrack_count"`
+	ConntrackMax   int64 `json:"conntrack_max"`
+	AgentRSSBytes       int64 `json:"agent_rss_bytes"`
+	MemTotalBytes       int64 `json:"mem_total_bytes"`
+	ActiveSessions      int64 `json:"active_sessions"`
+	BudgetRejectedTotal int64 `json:"budget_rejected_total"`
+	BudgetEvictedTotal  int64 `json:"budget_evicted_total"`
 }
 
 // NodeTrafficRetention keeps a little over a year of hourly node NIC
@@ -56,6 +66,11 @@ type IngestionService struct {
 	lastBytes map[int64][2]int64
 	lastBoot  map[int64]string
 	traffic   map[trafficKey][2]int64
+
+	// lastFullVacuum gates the package K SQLite full-VACUUM path
+	// (legacy auto_vacuum=NONE databases) to at most one run per
+	// sqliteFullVacuumMinInterval; see reclaimSQLiteSpace.
+	lastFullVacuum time.Time
 }
 
 func NewIngestionService(repo *repo.Repository) *IngestionService {
@@ -168,21 +183,28 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 		return
 	}
 	m := &model.NodeMetric{
-		NodeID:      nodeID,
-		Timestamp:   time.Now().UnixMilli(),
-		CPUUsage:    clampPercent(info.CPUUsage),
-		MemUsage:    clampPercent(info.MemoryUsage),
-		DiskUsage:   clampPercent(info.DiskUsage),
-		NetInBytes:  int64(info.BytesReceived),
-		NetOutBytes: int64(info.BytesTransmitted),
-		NetInSpeed:  clampNonNegativeI(info.NetInSpeed),
-		NetOutSpeed: clampNonNegativeI(info.NetOutSpeed),
-		Load1:       clampNonNegativeF(info.Load1),
-		Load5:       clampNonNegativeF(info.Load5),
-		Load15:      clampNonNegativeF(info.Load15),
-		TCPConns:    clampNonNegativeI(info.TCPConns),
-		UDPConns:    clampNonNegativeI(info.UDPConns),
-		Uptime:      int64(info.Uptime),
+		NodeID:         nodeID,
+		Timestamp:      time.Now().UnixMilli(),
+		CPUUsage:       clampPercent(info.CPUUsage),
+		MemUsage:       clampPercent(info.MemoryUsage),
+		DiskUsage:      clampPercent(info.DiskUsage),
+		NetInBytes:     int64(info.BytesReceived),
+		NetOutBytes:    int64(info.BytesTransmitted),
+		NetInSpeed:     clampNonNegativeI(info.NetInSpeed),
+		NetOutSpeed:    clampNonNegativeI(info.NetOutSpeed),
+		Load1:          clampNonNegativeF(info.Load1),
+		Load5:          clampNonNegativeF(info.Load5),
+		Load15:         clampNonNegativeF(info.Load15),
+		TCPConns:       clampNonNegativeI(info.TCPConns),
+		UDPConns:       clampNonNegativeI(info.UDPConns),
+		ConntrackCount: clampNonNegativeI(info.ConntrackCount),
+		ConntrackMax:   clampNonNegativeI(info.ConntrackMax),
+		AgentRSSBytes:       clampNonNegativeI(info.AgentRSSBytes),
+		MemTotalBytes:       clampNonNegativeI(info.MemTotalBytes),
+		ActiveSessions:      clampNonNegativeI(info.ActiveSessions),
+		BudgetRejectedTotal: clampNonNegativeI(info.BudgetRejectedTotal),
+		BudgetEvictedTotal:  clampNonNegativeI(info.BudgetEvictedTotal),
+		Uptime:         int64(info.Uptime),
 	}
 
 	s.nodeBufferMu.Lock()
@@ -306,6 +328,72 @@ func (s *IngestionService) pruneMetricsAt(now time.Time) {
 	}
 	if err := s.repo.PruneNodeTraffic(now.Add(-NodeTrafficRetention).UnixMilli()); err != nil {
 		log.Printf("monitoring prune failed op=node_traffic err=%v", err)
+	}
+	s.reclaimSQLiteSpace(now)
+}
+
+// SQLite file reclaim gates (包 K). Prunes bound row counts, but
+// SQLite keeps deleted pages on its freelist: the gost.db file
+// only ever grows to its high-water mark unless the space is
+// vacuumed back. On the small disks this panel targets, that
+// turns bounded tables into an unbounded file.
+const (
+	// sqliteFullVacuumMinReclaim: a full VACUUM rewrites the
+	// whole file over the single connection, so legacy
+	// (auto_vacuum=NONE) databases only pay it when at least
+	// this much space comes back.
+	sqliteFullVacuumMinReclaim = 128 << 20
+	// sqliteFullVacuumMinInterval: and at most once a day, no
+	// matter how much churn the prunes produce.
+	sqliteFullVacuumMinInterval = 24 * time.Hour
+)
+
+// reclaimSQLiteSpace returns prune-freed pages to the OS after
+// each hourly prune cycle. INCREMENTAL databases (everything
+// created since this change) take the cheap incremental path;
+// FULL needs nothing (space returns at each commit); legacy NONE
+// databases take the gated full VACUUM, which also migrates the
+// file to the DSN-requested INCREMENTAL mode. Every action is
+// logged — reclaiming space is an identifiable event, never a
+// silent one. Postgres is skipped (its own autovacuum owns this).
+func (s *IngestionService) reclaimSQLiteSpace(now time.Time) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	stats, err := s.repo.SQLiteSpaceStats()
+	if err != nil {
+		log.Printf("monitoring sqlite reclaim check failed err=%v", err)
+		return
+	}
+	if !stats.IsSQLite || stats.ReclaimableBytes() <= 0 {
+		return
+	}
+	switch stats.AutoVacuum {
+	case 2: // INCREMENTAL
+		if err := s.repo.IncrementalVacuumSQLite(stats.FreelistCount); err != nil {
+			log.Printf("monitoring sqlite reclaim failed mode=incremental_vacuum err=%v", err)
+			return
+		}
+		after, err := s.repo.SQLiteSpaceStats()
+		if err != nil {
+			log.Printf("monitoring sqlite reclaim mode=incremental_vacuum reclaimed_bytes<=%d (post-check failed err=%v)", stats.ReclaimableBytes(), err)
+			return
+		}
+		log.Printf("monitoring sqlite reclaim mode=incremental_vacuum reclaimed_bytes=%d freelist_pages_remaining=%d",
+			stats.ReclaimableBytes()-after.ReclaimableBytes(), after.FreelistCount)
+	case 0: // NONE (legacy database)
+		if stats.ReclaimableBytes() < sqliteFullVacuumMinReclaim {
+			return
+		}
+		if !s.lastFullVacuum.IsZero() && now.Sub(s.lastFullVacuum) < sqliteFullVacuumMinInterval {
+			return
+		}
+		if err := s.repo.VacuumSQLite(); err != nil {
+			log.Printf("monitoring sqlite reclaim failed mode=vacuum err=%v", err)
+			return
+		}
+		s.lastFullVacuum = now
+		log.Printf("monitoring sqlite reclaim mode=vacuum reclaimed_bytes>=%d freelist_pages=%d", stats.ReclaimableBytes(), stats.FreelistCount)
 	}
 }
 

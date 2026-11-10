@@ -99,6 +99,27 @@ func (c *limitConn) SyscallConn() (rc syscall.RawConn, err error) {
 	return
 }
 
+// CloseWrite forwards a half-close to the wrapped conn when it
+// supports one. Without it the embedded net.Conn hides the
+// underlying CloseWrite, Transport's half-close propagation
+// silently no-ops, and the peer's session parks with the FIN'd
+// leg in CLOSE-WAIT for the sibling direction's whole remaining
+// lifetime (package K census). Same shape as internal/net's
+// readWriteConn forwarding.
+func (c *limitConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errUnsupport
+}
+
+func (c *limitConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return errUnsupport
+}
+
 func (c *limitConn) Metadata() metadata.Metadata {
 	if md, ok := c.Conn.(metadata.Metadatable); ok {
 		return md.Metadata()

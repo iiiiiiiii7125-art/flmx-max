@@ -304,6 +304,15 @@ func Open(path string) (*Repository, error) {
 		return nil, err
 	}
 
+	// 包 K 的 auto_vacuum(INCREMENTAL) 不走 DSN _pragma：实测
+	// glebarez 驱动下 DSN 里的该 pragma 静默无效（文件头在
+	// pragma 生效前已落盘、读回恒 0），改在 Open 后显式落定，
+	// 见 ensureSQLiteIncrementalVacuum。
+	freshDB := false
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		freshDB = true
+	}
+
 	dsn := "file:" + path +
 		"?_pragma=busy_timeout(5000)" +
 		"&_pragma=journal_mode(WAL)" +
@@ -321,6 +330,10 @@ func Open(path string) (*Repository, error) {
 		return nil, err
 	}
 	sqlDB.SetMaxOpenConns(1)
+
+	if freshDB {
+		ensureSQLiteIncrementalVacuum(db)
+	}
 
 	if err := prepareSQLiteLegacyColumns(db); err != nil {
 		_ = sqlDB.Close()

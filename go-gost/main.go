@@ -186,6 +186,12 @@ func main() {
 	// 是同档位表的部署层兜底。
 	applyMemoryLimit()
 
+	// 宿主机累积面保底（hostguard.go，包 K）：conntrack 表/超时
+	// 收敛＋journald 上限。宿主机级的无界累积（表满溺亡、日志
+	// 涨满根盘）此前全仓零管理；启动自检覆盖面板内升级路径，
+	// 与内存软帽同为「先于业务」的启动防线。
+	applyHostGuards()
+
 	// 已被面板卸载（容器形态留有标记）：配置已清除，先于配置加载
 	// 拦截，空转等待人工删除容器。
 	if socket.AgentUninstalled() {

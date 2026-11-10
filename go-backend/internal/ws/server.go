@@ -257,6 +257,17 @@ type SystemInfo struct {
 	UDPConns         int64   `json:"udp_conns"`
 	NetInSpeed       int64   `json:"net_in_speed"`
 	NetOutSpeed      int64   `json:"net_out_speed"`
+	// ConntrackCount/ConntrackMax（包 K）：宿主机连接跟踪表用
+	// 量，加法字段，旧 agent 不发为 0。
+	ConntrackCount int64 `json:"conntrack_count"`
+	ConntrackMax   int64 `json:"conntrack_max"`
+	// agent 内存面（包 K 扩围）：进程 RSS/总内存/活跃会话/
+	// 预算拒绝累计，与 socket SystemInfo 同名字段镜像。
+	AgentRSSBytes       int64 `json:"agent_rss_bytes"`
+	MemTotalBytes       int64 `json:"mem_total_bytes"`
+	ActiveSessions      int64 `json:"active_sessions"`
+	BudgetRejectedTotal int64 `json:"budget_rejected_total"`
+	BudgetEvictedTotal  int64 `json:"budget_evicted_total"`
 }
 
 func (s *Server) SetNodeOnlineHook(fn func(nodeID int64)) {

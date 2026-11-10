@@ -80,6 +80,9 @@ func (h *Handler) StartBackgroundJobs() {
 	go h.runSubscriptionLoop(ctx)
 	h.jobsWG.Add(1)
 	go h.runRemoteSourceLoop(ctx)
+	// 包 K：面板本机磁盘自检（数据盘越阈走 disk_high 漏斗）。
+	h.jobsWG.Add(1)
+	go h.runPanelDiskCheckLoop(ctx)
 }
 
 func (h *Handler) StopBackgroundJobs() {

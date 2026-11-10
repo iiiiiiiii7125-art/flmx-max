@@ -377,6 +377,10 @@ func (w *WebSocketReporter) handleUninstallAgent(data interface{}, requestID str
 // flush, run the judged steps, persist + report the final state,
 // and only then cross the point of no return (container exit).
 func (w *WebSocketReporter) executeUninstall(ackCh chan bool, st *uninstallState) {
+	// 无论信号是否到达，本等待者退出等待即注销登记（包 K：
+	// 登记表不能只靠 signal 单点删除，连接中途断时无人 signal
+	// 就会永久滞留）。
+	defer w.releaseUninstallAck(st.RequestID)
 	flushed := false
 	select {
 	case flushed = <-ackCh:
@@ -413,6 +417,7 @@ func (w *WebSocketReporter) executeUninstall(ackCh chan bool, st *uninstallState
 // resendUninstallFinalAfterAck re-reports a stored final state
 // after a duplicate dispatch's ack has been flushed.
 func (w *WebSocketReporter) resendUninstallFinalAfterAck(ackCh chan bool, st *uninstallState) {
+	defer w.releaseUninstallAck(st.RequestID)
 	select {
 	case <-ackCh:
 	case <-time.After(uninstallAckWaitTimeout):

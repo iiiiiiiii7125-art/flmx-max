@@ -178,9 +178,11 @@ type Handler struct {
 	nodeRoutes *nodeRouteStore
 	// 延迟连续劣化告警的连击计数（node_latency_history.go）。
 	latencyAlerts *latencyAlertTracker
-	relayLatency  *relayLatencyStore
-	notifier      *notifier
-	bestExit      *bestExitManager
+	// 宿主机累积面越阈告警状态（resource_alert.go，包 K）。
+	resourceAlerts *resourceAlertTracker
+	relayLatency   *relayLatencyStore
+	notifier       *notifier
+	bestExit       *bestExitManager
 
 	// DA-6/DB-5：每节点 TcpPing
 	// 并发槽位（队列与执行共用超时预算，见 node_ping_slots.go）。
@@ -262,6 +264,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		nodeLatency:              newNodeLatencyStore(),
 		nodeRoutes:               newNodeRouteStore(),
 		latencyAlerts:            newLatencyAlertTracker(),
+		resourceAlerts:           newResourceAlertTracker(),
 		relayLatency:             newRelayLatencyStore(),
 		notifier:                 newNotifier(),
 		pingSlots:                newNodePingSlots(),
@@ -292,8 +295,19 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 			UDPConns:         info.UDPConns,
 			NetInSpeed:       info.NetInSpeed,
 			NetOutSpeed:      info.NetOutSpeed,
+			ConntrackCount:   info.ConntrackCount,
+			ConntrackMax:     info.ConntrackMax,
+			AgentRSSBytes:       info.AgentRSSBytes,
+			MemTotalBytes:       info.MemTotalBytes,
+			ActiveSessions:      info.ActiveSessions,
+			BudgetRejectedTotal: info.BudgetRejectedTotal,
+			BudgetEvictedTotal:  info.BudgetEvictedTotal,
 		}
 		h.metrics.RecordNodeMetric(nodeID, metricInfo)
+		// 包 K：累积面越阈判定与落库同源同点——每个指标样本都
+		// 过同一判定，不许有旁路样本绕过告警（与 kernel_error
+		// 单漏斗同口径，见 resource_alert.go）。
+		h.observeNodeResourceUsage(nodeID, metricInfo)
 	})
 	h.wsServer.SetUserAuthStateLookup(h.GetUserAuthState)
 	return h

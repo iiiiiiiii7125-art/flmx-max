@@ -99,6 +99,12 @@ func (d *wsDialer) Handshake(ctx context.Context, conn net.Conn, options ...dial
 
 	c, resp, err := dialer.DialContext(ctx, url.String(), d.md.header)
 	if err != nil {
+		// 握手失败时底层 conn 已由 gorilla 在 DialContext 内关
+		// 闭（v1.5.3 client.go 的 defer netConn.Close），但失败
+		// 响应体按 gorilla 契约归调用方所有，须在此关掉。
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
 		return nil, err
 	}
 	resp.Body.Close()

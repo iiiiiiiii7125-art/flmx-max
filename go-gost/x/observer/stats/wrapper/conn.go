@@ -88,6 +88,28 @@ func (c *conn) SyscallConn() (rc syscall.RawConn, err error) {
 	return
 }
 
+// CloseWrite forwards a half-close to the wrapped conn when it
+// supports one. Without this method the embedded net.Conn hides
+// the underlying CloseWrite, Transport's dst.(closeWriter)
+// assertion silently fails, and the end-of-stream signal never
+// reaches the peer: the sibling direction then parks on Read
+// with no bound and the FIN'd leg lingers in CLOSE-WAIT for the
+// sibling's whole remaining lifetime (package K census). Same
+// shape as internal/net's readWriteConn forwarding.
+func (c *conn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errUnsupport
+}
+
+func (c *conn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return errUnsupport
+}
+
 func (c *conn) Metadata() metadata.Metadata {
 	if md, ok := c.Conn.(metadata.Metadatable); ok {
 		return md.Metadata()

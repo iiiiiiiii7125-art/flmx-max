@@ -30,6 +30,7 @@ import (
 	"github.com/go-gost/x/bypass"
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/keepalive"
+	"github.com/go-gost/x/internal/sessionbudget"
 	"github.com/go-gost/x/internal/util/crypto"
 	"github.com/go-gost/x/internal/util/download"
 	"github.com/go-gost/x/kernel"
@@ -65,6 +66,22 @@ type SystemInfo struct {
 	UDPConns    int64   `json:"udp_conns"`
 	NetInSpeed  int64   `json:"net_in_speed"`
 	NetOutSpeed int64   `json:"net_out_speed"`
+	// ConntrackCount/ConntrackMax 是宿主机连接跟踪表用量（包
+	// K）：面板据此在用量越阈时告警（表满＝全包皆丢的溺亡前
+	// 兆）。加法字段：旧面板忽略未知字段；nf_conntrack 未加载
+	// 或旧 agent 不发时为 0，面板以 max<=0 判「无此面」不告警。
+	ConntrackCount int64 `json:"conntrack_count"`
+	ConntrackMax   int64 `json:"conntrack_max"`
+	// agent 内存面（包 K 扩围）：进程 RSS 与机器总内存（面板
+	// 以 RSS/总内存越阈告警——会话累积的大头在 Go 堆外，堆软
+	// 帽看不见，RSS 才是撞墙面）；活跃会话数与预算累计拒绝数
+	// 供告警文案与事后核查。加法字段，旧面板忽略、旧 agent
+	// 不发时为 0（面板以 total<=0 判「无此面」不告警）。
+	AgentRSSBytes       int64 `json:"agent_rss_bytes"`
+	MemTotalBytes       int64 `json:"mem_total_bytes"`
+	ActiveSessions      int64 `json:"active_sessions"`
+	BudgetRejectedTotal int64 `json:"budget_rejected_total"`
+	BudgetEvictedTotal  int64 `json:"budget_evicted_total"`
 }
 
 // NetworkStats 网络统计信息
@@ -230,18 +247,42 @@ type WebSocketReporter struct {
 	// UninstallAgent dispatches: the handler registers a waiter,
 	// routeCommand signals it after the response frame is written.
 	uninstallAckMu      sync.Mutex
-	uninstallAckWaiters map[string]chan bool
+	uninstallAckWaiters map[string]uninstallAckWaiter
 }
+
+// uninstallAckWaiter is one registered ack waiter. created lets
+// the registry bound itself (see registerUninstallAck).
+type uninstallAckWaiter struct {
+	ch      chan bool
+	created time.Time
+}
+
+// uninstallAckStaleAfter bounds a waiter's registry lifetime at
+// twice the consumer's wait timeout: a waiter whose response
+// frame was never written (connection died mid-dispatch) used to
+// stay registered forever — the registry's only delete was the
+// signal itself (package K census: the one confirmed
+// grow-only registry in the agent). Consumers additionally
+// release their own waiter when they stop waiting
+// (releaseUninstallAck in uninstall.go), so this sweep is the
+// backstop, not the primary cleanup.
+var uninstallAckStaleAfter = 2 * uninstallAckWaitTimeout
 
 // registerUninstallAck registers the ack-flush waiter for one
 // UninstallAgent dispatch (C4-G2 hard ordering, see uninstall.go).
 func (w *WebSocketReporter) registerUninstallAck(requestID string) chan bool {
 	ch := make(chan bool, 1)
+	now := time.Now()
 	w.uninstallAckMu.Lock()
 	if w.uninstallAckWaiters == nil {
-		w.uninstallAckWaiters = make(map[string]chan bool)
+		w.uninstallAckWaiters = make(map[string]uninstallAckWaiter)
 	}
-	w.uninstallAckWaiters[requestID] = ch
+	for id, waiter := range w.uninstallAckWaiters {
+		if now.Sub(waiter.created) > uninstallAckStaleAfter {
+			delete(w.uninstallAckWaiters, id)
+		}
+	}
+	w.uninstallAckWaiters[requestID] = uninstallAckWaiter{ch: ch, created: now}
 	w.uninstallAckMu.Unlock()
 	return ch
 }
@@ -250,14 +291,23 @@ func (w *WebSocketReporter) registerUninstallAck(requestID string) chan bool {
 // response frame; a no-op when no waiter is registered.
 func (w *WebSocketReporter) signalUninstallAck(requestID string, flushed bool) {
 	w.uninstallAckMu.Lock()
-	ch, ok := w.uninstallAckWaiters[requestID]
+	waiter, ok := w.uninstallAckWaiters[requestID]
 	if ok {
 		delete(w.uninstallAckWaiters, requestID)
 	}
 	w.uninstallAckMu.Unlock()
 	if ok {
-		ch <- flushed
+		waiter.ch <- flushed
 	}
+}
+
+// releaseUninstallAck unregisters a waiter whose consumer has
+// stopped waiting (signalled or timed out). Idempotent; a late
+// signal for the same requestID then finds no waiter and no-ops.
+func (w *WebSocketReporter) releaseUninstallAck(requestID string) {
+	w.uninstallAckMu.Lock()
+	delete(w.uninstallAckWaiters, requestID)
+	w.uninstallAckMu.Unlock()
 }
 
 var wsDial = func(dialer *websocket.Dialer, rawURL string) (*websocket.Conn, *http.Response, error) {
@@ -899,6 +949,24 @@ var connInfoCached ConnectionInfo
 var connInfoCachedAt int64
 var connInfoCachedMu sync.Mutex
 
+// lastHostGuardLogNano 是惰性再检失败行的限速点：收敛持续失
+// 败（如 /proc/sys 只读）时每个上报周期都会重试，日志至多每
+// 分钟一组，防守卫自己的日志成为新的增长面。
+var lastHostGuardLogNano atomic.Int64
+
+func logHostGuardResult(res hostGuardResult) {
+	if res.Failed {
+		now := time.Now().UnixNano()
+		last := lastHostGuardLogNano.Load()
+		if now-last < int64(time.Minute) || !lastHostGuardLogNano.CompareAndSwap(last, now) {
+			return
+		}
+	}
+	for _, line := range res.Lines {
+		fmt.Printf("[flmx] %s\n", line)
+	}
+}
+
 // collectSystemInfo 收集系统信息
 func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 	networkStats := getNetworkStats()
@@ -907,6 +975,18 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 	diskInfo := getDiskInfo()
 	loadInfo := getLoadInfo()
 	connInfo := getConnectionInfo()
+
+	// conntrack 用量（包 K）：随指标周期上报供面板越阈告警；
+	// 若模块在 agent 启动后才加载、max 仍是发行版默认值，惰
+	// 性补跑一次保底收敛（启动自检当时无面可收），收敛后重读
+	// 供本轮上报。
+	ct := ReadConntrackState()
+	if ConntrackBelowFloor(ct) {
+		if res := EnsureConntrackFloor(false); res.Changed || res.Failed {
+			logHostGuardResult(res)
+			ct = ReadConntrackState()
+		}
+	}
 
 	now := time.Now().UnixMilli()
 	var netInSpeed, netOutSpeed int64
@@ -936,6 +1016,16 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 		UDPConns:         connInfo.UDPConns,
 		NetInSpeed:       netInSpeed,
 		NetOutSpeed:      netOutSpeed,
+		ConntrackCount:   ct.Count,
+		ConntrackMax:     ct.Max,
+		// 内存面（包 K 扩围）：RSS 采样与会话计数都取自
+		// sessionbudget 的同一采样器/计数器，上报口径与准入
+		// 判定口径恒一致。
+		AgentRSSBytes:       sessionbudget.RSSBytes(),
+		MemTotalBytes:       sessionbudget.CurrentBudget().TotalRAM,
+		ActiveSessions:      sessionbudget.Active(),
+		BudgetRejectedTotal: sessionbudget.RejectedTotal(),
+		BudgetEvictedTotal:  sessionbudget.EvictedTotal(),
 	}
 }
 
