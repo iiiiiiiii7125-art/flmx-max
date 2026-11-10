@@ -366,6 +366,28 @@ check(
     : "资源缺失",
 );
 
+// ③ 附 favicon 资源（R2 遗留登记 ⑦，2026-11-10 挂靠本门资源环）：
+// W6 补了 public/favicon.ico 产物（F-W4-03）但全仓无门禁守它——
+// 产物被删或 index.html 的引用被扫荡都会静默退回浏览器默认图标
+// 404。本门资源环即产物类断言的既有挂靠点，只加最小两断言，
+// 不另立门禁框架：产物存在且体积正常、index.html 引导脚本的
+// 默认引用 '/favicon.ico' 在场（运行时由 app_favicon 配置覆盖、
+// 缺省回落此产物）。
+const faviconPath = join(root, "public/favicon.ico");
+
+check(
+  "资源环③附：public/favicon.ico 存在且体积 > 1KB",
+  existsSync(faviconPath) && statSync(faviconPath).size > 1024,
+  existsSync(faviconPath)
+    ? `实测 ${statSync(faviconPath).size} B`
+    : "资源缺失",
+);
+check(
+  "资源环③附：index.html 引用 /favicon.ico（缺省图标回落目标）",
+  read("index.html").includes("'/favicon.ico'"),
+  "index.html 未见 '/favicon.ico' 引用",
+);
+
 // ④ 设置/存储环（AST 结构断言）
 {
   const configSf = parseTsx("src/pages/config.tsx");
