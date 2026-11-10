@@ -349,11 +349,18 @@ func (r *Repository) SumConnlogDroppedByNodes(nodeIDs []int64) (int64, error) {
 		return 0, nil
 	}
 	var total int64
-	err := r.db.Model(&model.ConnlogNodeDropped{}).
-		Where("node_id IN ?", nodeIDs).
-		Select("COALESCE(SUM(dropped_total), 0)").
-		Scan(&total).Error
-	return total, err
+	for _, chunk := range chunkInt64IDs(nodeIDs) {
+		var sub int64
+		err := r.db.Model(&model.ConnlogNodeDropped{}).
+			Where("node_id IN ?", chunk).
+			Select("COALESCE(SUM(dropped_total), 0)").
+			Scan(&sub).Error
+		if err != nil {
+			return 0, err
+		}
+		total += sub
+	}
+	return total, nil
 }
 
 // ConnlogEntryNodeIDs 返回曾为某归属入站供过连接日志行的入口
