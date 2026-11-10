@@ -279,6 +279,13 @@ const REGISTRY = [
     calls: 1,
     consumers: ["src/pages/user.tsx"],
   },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/forward/delete",
+    apiFn: "deleteForward",
+    calls: 2,
+    consumers: ["src/pages/forward.tsx"],
+  },
 ];
 
 // GAP 登记册（2026-11-10 合并树逐点独立核实）：T-001 新增生产者中
@@ -301,14 +308,6 @@ const GAP_REGISTRY = [
     calls: 2,
     callers: [],
     gap: "无前端 API 封装、无任何调用面：UI 删隧道走 /tunnel/delete-with-forwards（data 通道 warnings 已消费），本端点的信封 warning 当前无 UI 消费面",
-  },
-  {
-    producer: "go-backend/internal/http/handler/mutations.go",
-    endpoint: "/forward/delete",
-    apiFn: "deleteForward",
-    calls: 2,
-    callers: ["src/pages/forward.tsx"],
-    gap: "T-001 白名单刷新失败 note：forward.tsx 常规删除成功只 toast 成功（同文件 .warning 读属 forceDeleteForward 调用点），warning 被丢弃",
   },
 ];
 
