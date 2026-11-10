@@ -83,3 +83,41 @@ func TestResourceAlertIgnoresAbsentSurfaces(t *testing.T) {
 		t.Fatalf("absent surfaces must never alert")
 	}
 }
+
+// 包 K 扩围：agent 内存面经 observeNodeResourceUsage 同一漏斗
+// 判定——total<=0 判无此面；RSS 占比越阈进入、回落解除。
+func TestResourceAlertAgentMemorySurface(t *testing.T) {
+	h := &Handler{resourceAlerts: newResourceAlertTracker()}
+	key := resourceAlertKey(3, "agent-memory")
+
+	// Old agent: no memory face at all.
+	h.observeNodeResourceUsage(3, metrics.SystemInfo{AgentRSSBytes: 900 << 20})
+	if h.resourceAlerts.isAlerted(key) {
+		t.Fatal("alerted without a memory total (old-agent shape)")
+	}
+	// 50% of RAM: below the line.
+	h.observeNodeResourceUsage(3, metrics.SystemInfo{AgentRSSBytes: 50 << 20, MemTotalBytes: 100 << 20})
+	if h.resourceAlerts.isAlerted(key) {
+		t.Fatal("alerted at 50% RSS")
+	}
+	// ECS1686 field shape (286MB / 457MB = 62.6%): still below.
+	h.observeNodeResourceUsage(3, metrics.SystemInfo{AgentRSSBytes: 286 << 20, MemTotalBytes: 457 << 20})
+	if h.resourceAlerts.isAlerted(key) {
+		t.Fatal("alerted at the field-observed 62.6% RSS")
+	}
+	// 85%: enters (dispatch fails against a nil repo and the
+	// rollback un-marks it asynchronously, so assert via decide
+	// on the same key instead: a subsequent exit-band sample
+	// must produce Exit, proving the Enter latched first).
+	h.observeNodeResourceUsage(3, metrics.SystemInfo{AgentRSSBytes: 85 << 20, MemTotalBytes: 100 << 20})
+	deadline := time.Now().Add(2 * time.Second)
+	for h.resourceAlerts.isAlerted(key) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond) // let the rollback land
+	}
+	if a := h.resourceAlerts.decide(key, 85); a != resourceActionEnter {
+		t.Fatalf("post-rollback decide = %d, want Enter (rollback must re-arm)", a)
+	}
+	if a := h.resourceAlerts.decide(key, 60); a != resourceActionExit {
+		t.Fatalf("decide at 60%% = %d, want Exit", a)
+	}
+}

@@ -106,6 +106,19 @@ func (h *Handler) observeNodeResourceUsage(nodeID int64, info metrics.SystemInfo
 			label, pct)
 		h.observeResourceSurface(nodeID, "disk", notifyEventDiskHigh, "节点磁盘用量过高", label, pct, msg)
 	}
+	// agent 内存面（包 K 扩围）：会话累积的大头（内核 socket
+	// 缓冲/栈/连接结构）在 Go 堆外，2.1.0 堆软帽看不见，进程
+	// RSS 才是撞墙面。判据＝RSS/机器总内存，与其余面同阈值；
+	// total<=0（旧 agent）判「无此面」。新版 agent 另有会话预
+	// 算准入在 75% 线拒新会话保整机，本告警是预算之外（旧
+	// agent、外部灌入压过预算口径时）的撞墙前预警。
+	if info.MemTotalBytes > 0 && info.AgentRSSBytes > 0 {
+		pct := float64(info.AgentRSSBytes) * 100 / float64(info.MemTotalBytes)
+		label := h.nodeLabel(nodeID)
+		msg := fmt.Sprintf("节点：%s\nagent 进程内存（RSS）：%.1f%%（%d MiB / %d MiB）\n活跃会话：%d，会话预算累计拒绝：%d，压力驱逐累计：%d\n会话内存的大头在 Go 堆外（内核缓冲与栈），堆软帽不会先触发；RSS 逼近整机内存将先 OOM 或拖垮全机。新版 agent 有按内存推导的会话预算准入（75%% 线拒新会话）与压力下驱逐最冷会话；若仍在涨，请人工核查净累积来源（自检: ss -tnp; ps -o rss= -p <agent pid>）。",
+			label, pct, info.AgentRSSBytes>>20, info.MemTotalBytes>>20, info.ActiveSessions, info.BudgetRejectedTotal, info.BudgetEvictedTotal)
+		h.observeResourceSurface(nodeID, "agent-memory", notifyEventAgentMemHigh, "节点内存用量过高", label, pct, msg)
+	}
 }
 
 // observeResourceSurface 是单面状态机：越阈进入→派发（失败回

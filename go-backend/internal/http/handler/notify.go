@@ -33,6 +33,7 @@ const (
 	// 机在 resource_alert.go，与 kernel_error 同走单漏斗。
 	notifyEventConntrackHigh = "conntrack_high"
 	notifyEventDiskHigh      = "disk_high"
+	notifyEventAgentMemHigh  = "agent_memory_high"
 	notifyEventNodeExpiry    = "node_expiry"
 	notifyEventLatencyBad    = "latency_bad"
 	notifyEventRouteChange   = "route_change"
