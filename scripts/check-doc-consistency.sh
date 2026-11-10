@@ -687,15 +687,15 @@ else
   note_ok "探活参数钉子：forward.md 拆除节含 180 秒 / 60 秒 / 6 次与 FLMX_KEEPALIVE"
 fi
 
-# 22b. nodes.md「节点分组（展示）」节在场且含「不参与订阅」限定句
-#      （防展示分组成员被后人写成订阅分组）。
-grp_sec=$(awk '/^## 节点分组（展示）/{f=1;next} /^## /{if(f)exit} f' "$NODES_MD")
+# 22b. nodes.md「节点展示分组」节在场且含「不参与订阅」限定句
+#      （防展示分组成员被后人写成订阅分组；B-03 合并后标题为「节点展示分组」，锚点随之改）。
+grp_sec=$(awk '/^## 节点展示分组/{f=1;next} /^## /{if(f)exit} f' "$NODES_MD")
 if [ -z "$grp_sec" ]; then
-  note_fail "节点分组钉子：nodes.md 找不到「## 节点分组（展示）」节（前提失效，请人工复核）"
+  note_fail "节点分组钉子：nodes.md 找不到「## 节点展示分组」节（前提失效，请人工复核）"
 elif ! printf '%s' "$grp_sec" | grep -Fq "不参与订阅"; then
   note_fail "节点分组钉子：nodes.md 分组节缺「不参与订阅」限定句"
 else
-  note_ok "节点分组钉子：nodes.md「节点分组（展示）」节在场且含「不参与订阅」"
+  note_ok "节点分组钉子：nodes.md「节点展示分组」节在场且含「不参与订阅」"
 fi
 
 # 22c. nodes.md 协议开关节含「屏蔽开关」且不含「监听是否开启」
