@@ -354,6 +354,84 @@ function tuneAnswer(bare: string, configData?: unknown) {
   return { code: 0, msg: "操作成功", data, ts: Date.now() };
 }
 
+/**
+ * Node swap (设置 Swap 对话框): node/swap-info 与 node/swap-set 由本
+ * 函数先于词表合成——种子面板没有真 agent，录制只能是失败包，而
+ * 「swap-set」按首词规则也不命中 WRITE_WORDS。内存态保存当前
+ * /swapfile 大小（种子 2 GB、已用 312 MB）：info 按契约形状回现状，
+ * set 回 before→after 并更新内存态，弹窗在演示里可完整走通；刷新
+ * 即还原（演示写边界，与全站一致，不落 localStorage）。
+ * Registered in scripts/demo/README.md.
+ */
+let demoSwap = { sizeMB: 2048, usedMB: 312 };
+
+function swapAnswer(bare: string, configData?: unknown) {
+  if (bare === "node/swap-info") {
+    const data = {
+      totalMB: demoSwap.sizeMB,
+      usedMB: demoSwap.usedMB,
+      entries:
+        demoSwap.sizeMB > 0
+          ? [
+              {
+                name: "/swapfile",
+                type: "file",
+                sizeMB: demoSwap.sizeMB,
+                usedMB: demoSwap.usedMB,
+              },
+            ]
+          : [],
+      diskFreeMB: 51200,
+      memTotalMB: 4096,
+      managedFilePresent: demoSwap.sizeMB > 0,
+    };
+
+    return { code: 0, msg: "操作成功", data, ts: Date.now() };
+  }
+  if (bare === "node/swap-set") {
+    let sizeGB = NaN;
+
+    try {
+      sizeGB = Number(
+        (
+          (typeof configData === "string"
+            ? JSON.parse(configData)
+            : configData) as { sizeGB?: unknown } | undefined
+        )?.sizeGB,
+      );
+    } catch {
+      sizeGB = NaN;
+    }
+    if (!Number.isInteger(sizeGB) || sizeGB < 1 || sizeGB > 32) {
+      return {
+        code: -1,
+        msg: "大小必须是 1–32 的整数 GB",
+        data: null,
+        ts: Date.now(),
+      };
+    }
+    const before = { totalMB: demoSwap.sizeMB, usedMB: demoSwap.usedMB };
+
+    demoSwap = {
+      sizeMB: sizeGB * 1024,
+      usedMB: Math.min(demoSwap.usedMB, sizeGB * 1024),
+    };
+
+    return {
+      code: 0,
+      msg: "操作成功",
+      data: {
+        before,
+        after: { totalMB: demoSwap.sizeMB, usedMB: demoSwap.usedMB },
+        sizeGB,
+      },
+      ts: Date.now(),
+    };
+  }
+
+  return null;
+}
+
 const parseBody = (body: unknown): Record<string, unknown> => {
   try {
     return (typeof body === "string" ? JSON.parse(body) : body) ?? {};
@@ -1351,6 +1429,9 @@ async function answer(config: InternalAxiosRequestConfig) {
   const tune = tuneAnswer(bare, config.data);
 
   if (tune) return tune;
+  const swap = swapAnswer(bare, config.data);
+
+  if (swap) return swap;
   const grp = demoGroupAnswer(bare, config.data, book);
 
   if (grp) {

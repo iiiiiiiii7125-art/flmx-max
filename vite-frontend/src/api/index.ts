@@ -1491,6 +1491,29 @@ export const setNodeRestartSchedule = (data: {
     data,
     { timeout: 60000 },
   );
+/** 节点 Swap 现状（面板经 agent 在节点本机查得）：总量/已用、条目明细、根盘可用与内存总量。 */
+export interface NodeSwapInfo {
+  totalMB: number;
+  usedMB: number;
+  entries: { name: string; type: string; sizeMB: number; usedMB: number }[];
+  diskFreeMB: number;
+  memTotalMB: number;
+  /** 节点上已有面板管理的 /swapfile：执行将把它的大小调整为所选值。 */
+  managedFilePresent: boolean;
+}
+export const getNodeSwapInfo = (nodeId: number) =>
+  Network.post<NodeSwapInfo>("/node/swap-info", { nodeId }, { timeout: 60000 });
+/** 一键设置 Swap 的执行回执：执行前后的总量/已用对照。 */
+export interface NodeSwapSetResult {
+  before: { totalMB: number; usedMB: number };
+  after: { totalMB: number; usedMB: number };
+  sizeGB: number;
+}
+export const setNodeSwap = (data: { nodeId: number; sizeGB: number }) =>
+  Network.post<NodeSwapSetResult>("/node/swap-set", data, {
+    // swapoff 须把在用页换入内存、fallocate 大文件在慢盘上也慢，给足时间。
+    timeout: 180000,
+  });
 /** 节点到各测试点最近 hours 小时的延迟趋势。 */
 export const getNodeLatencyHistory = (id: number, hours: number) =>
   Network.post<LatencyTrend>("/node/latency/history", { id, hours });

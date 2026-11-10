@@ -62,6 +62,7 @@ import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
 import { RestartScheduleModal } from "@/pages/node/restart-schedule-modal";
+import { SwapModal } from "@/pages/node/swap-modal";
 import {
   GroupCreateModal,
   GroupManageModal,
@@ -364,6 +365,7 @@ export default function NodePage({
   const [trendNode, setTrendNode] = useState<Node | null>(null);
   const [targetNodes, setTargetNodes] = useState<Node[]>([]);
   const [restartNode, setRestartNode] = useState<Node | null>(null);
+  const [swapNode, setSwapNode] = useState<Node | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
   const [batchResultModal, setBatchResultModal] =
@@ -1983,6 +1985,7 @@ export default function NodePage({
     openUpgradeModal,
     rollbackNode: handleRollbackNode,
     openTune: (node) => setTuneNode(node),
+    openSwap: (node) => setSwapNode(node),
     editNode: handleEdit,
     deleteNode: handleDelete,
     probeNode,
@@ -2009,6 +2012,7 @@ export default function NodePage({
       openUpgradeModal: delegate("openUpgradeModal"),
       rollbackNode: delegate("rollbackNode"),
       openTune: delegate("openTune"),
+      openSwap: delegate("openSwap"),
       editNode: delegate("editNode"),
       deleteNode: delegate("deleteNode"),
       probeNode: delegate("probeNode"),
@@ -2552,6 +2556,19 @@ export default function NodePage({
                           },
                         ]
                       : []),
+                    // 设置 Swap 同为 agent 本机操作（nftables 无 agent
+                    // 通道不显示）；现状拉取与执行都须 agent 在线，
+                    // 离线禁用（与升级/回退同口径）。
+                    ...(node.forwardMode !== "nftables"
+                      ? [
+                          {
+                            key: "swap",
+                            label: "设置 Swap",
+                            disabled: !online,
+                            onPress: () => setSwapNode(node),
+                          },
+                        ]
+                      : []),
                     {
                       key: "upgrade",
                       label: "升级",
@@ -2743,6 +2760,7 @@ export default function NodePage({
         onClose={() => setRestartNode(null)}
         onSaved={() => loadNodes({ silent: true })}
       />
+      <SwapModal node={swapNode} onClose={() => setSwapNode(null)} />
       <GroupManageModal
         counts={groupCounts}
         groups={knownGroups}

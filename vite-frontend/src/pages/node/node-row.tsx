@@ -44,6 +44,7 @@ export interface NodeRowActions {
   openUpgradeModal: (mode: "batch" | "single", nodeId?: number) => void;
   rollbackNode: (node: Node) => void;
   openTune: (node: Node) => void;
+  openSwap: (node: Node) => void;
   editNode: (node: Node) => void;
   deleteNode: (node: Node) => void;
   probeNode: (id: number) => void;
@@ -614,6 +615,23 @@ const NodeCardContent = memo(function NodeCardContent({
                     onPress={() => actions.openTune(node)}
                   >
                     调优
+                  </Button>
+                )}
+              {/* 设置 Swap 与调优同为 agent 本机操作：nftables 节点无
+                  agent 通道、点了必失败，故同样不渲染；离线时禁用
+                  （现状与执行都须 agent 在线）。 */}
+              {node.forwardMode !== "nftables" && (
+                  <Button
+                    className="min-h-8"
+                    color="primary"
+                    isDisabled={
+                      node.connectionStatus !== "online"
+                    }
+                    size="sm"
+                    variant="flat"
+                    onPress={() => actions.openSwap(node)}
+                  >
+                    Swap
                   </Button>
                 )}
               <Button
