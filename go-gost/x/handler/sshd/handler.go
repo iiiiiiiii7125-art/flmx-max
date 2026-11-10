@@ -19,6 +19,7 @@ import (
 	"github.com/go-gost/core/recorder"
 	xbypass "github.com/go-gost/x/bypass"
 	ctxvalue "github.com/go-gost/x/ctx"
+	"github.com/go-gost/x/internal/keepalive"
 	xnet "github.com/go-gost/x/internal/net"
 	"github.com/go-gost/x/internal/util/sniffing"
 	sshd_util "github.com/go-gost/x/internal/util/sshd"
@@ -242,7 +243,9 @@ func (h *forwardHandler) handleRemoteForward(ctx context.Context, conn *sshd_uti
 	log.Debugf("%s >> %s", conn.RemoteAddr(), addr)
 
 	// tie to the client connection
-	ln, err := net.Listen(network, addr)
+	lc := net.ListenConfig{}
+	keepalive.ApplyListenConfig(&lc)
+	ln, err := lc.Listen(context.Background(), network, addr)
 	if err != nil {
 		log.Error(err)
 		req.Reply(false, nil)

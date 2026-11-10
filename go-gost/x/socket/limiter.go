@@ -27,7 +27,9 @@ func createLimiter(req createLimiterRequest) error {
 		return errors.New("limiter " + name + " already exists")
 	}
 
-	return config.OnUpdate(func(c *config.Config) error {
+	// F-A01: snapshot + rollback discipline, see createChain.
+	originalConfig := config.Global()
+	err := config.OnUpdate(func(c *config.Config) error {
 		// R18-F03: 同名则替换（与 updateLimiter 同口径），不用无去重 append——
 		// 限流器已在配置中、但不在注册表里时，重复 AddLimiter 下发会把第二份
 		// 同名限流器写进配置并落盘、毒化 gost.json。配置里已有的多余同名副本
@@ -53,13 +55,32 @@ func createLimiter(req createLimiterRequest) error {
 		c.Limiters = kept
 		return nil
 	})
+	if err != nil {
+		registry.TrafficLimiterRegistry().Unregister(name)
+		restoreConfigSnapshot(originalConfig)
+		return err
+	}
+	return nil
 }
 
 func updateLimiter(req updateLimiterRequest) error {
 
+	// F-A02: name resolution mirrors updateChain — the wrapper field
+	// wins, the data's own name is the fallback; an empty result is
+	// rejected instead of registering an empty-named limiter.
 	name := strings.TrimSpace(req.Limiter)
+	if name == "" {
+		name = strings.TrimSpace(req.Data.Name)
+	}
+	if name == "" {
+		return errors.New("limiter name is required")
+	}
 
-	if registry.TrafficLimiterRegistry().IsRegistered(name) {
+	// F-A01: snapshot before Unregister closes the old runtime
+	// limiter; a persist failure restores config + re-parsed runtime.
+	originalConfig := config.Global()
+	hadRuntime := registry.TrafficLimiterRegistry().IsRegistered(name)
+	if hadRuntime {
 		registry.TrafficLimiterRegistry().Unregister(name)
 	}
 
@@ -68,10 +89,13 @@ func updateLimiter(req updateLimiterRequest) error {
 	v := parser.ParseTrafficLimiter(&req.Data)
 
 	if err := registry.TrafficLimiterRegistry().Register(name, v); err != nil {
+		if hadRuntime {
+			restoreTrafficLimiterRuntime(originalConfig, name)
+		}
 		return errors.New("limiter " + name + " already exists")
 	}
 
-	return config.OnUpdate(func(c *config.Config) error {
+	err := config.OnUpdate(func(c *config.Config) error {
 		found := false
 		for i := range c.Limiters {
 			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
@@ -90,17 +114,81 @@ func updateLimiter(req updateLimiterRequest) error {
 		}
 		return nil
 	})
+	if err != nil {
+		restoreConfigSnapshot(originalConfig)
+		registry.TrafficLimiterRegistry().Unregister(name)
+		if hadRuntime || limiterInConfig(originalConfig, name, false) {
+			restoreTrafficLimiterRuntime(originalConfig, name)
+		}
+		return err
+	}
+	return nil
+}
+
+// restoreTrafficLimiterRuntime re-parses the snapshot's limiter entry
+// back into the traffic limiter registry (F-A01 rollback).
+func restoreTrafficLimiterRuntime(snapshot *config.Config, name string) {
+	if snapshot == nil {
+		return
+	}
+	for _, lc := range snapshot.Limiters {
+		if lc == nil || lc.Name != name {
+			continue
+		}
+		entry := *lc
+		if err := registry.TrafficLimiterRegistry().Register(name, parser.ParseTrafficLimiter(&entry)); err != nil {
+			logger.Default().Errorf("rollback limiter %s: restore failed: %v", name, err)
+		}
+		return
+	}
+}
+
+// restoreConnLimiterRuntime is restoreTrafficLimiterRuntime for the
+// conn limiter registry.
+func restoreConnLimiterRuntime(snapshot *config.Config, name string) {
+	if snapshot == nil {
+		return
+	}
+	for _, lc := range snapshot.CLimiters {
+		if lc == nil || lc.Name != name {
+			continue
+		}
+		entry := *lc
+		if err := registry.ConnLimiterRegistry().Register(name, parser.ParseConnLimiter(&entry)); err != nil {
+			logger.Default().Errorf("rollback conn limiter %s: restore failed: %v", name, err)
+		}
+		return
+	}
+}
+
+func limiterInConfig(cfg *config.Config, name string, conn bool) bool {
+	if cfg == nil {
+		return false
+	}
+	entries := cfg.Limiters
+	if conn {
+		entries = cfg.CLimiters
+	}
+	for _, lc := range entries {
+		if lc != nil && lc.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func deleteLimiter(req deleteLimiterRequest) error {
 
 	name := strings.TrimSpace(req.Limiter)
 
-	if registry.TrafficLimiterRegistry().IsRegistered(name) {
+	// F-A01: snapshot + rollback discipline, see deleteChain.
+	originalConfig := config.Global()
+	hadRuntime := registry.TrafficLimiterRegistry().IsRegistered(name)
+	if hadRuntime {
 		registry.TrafficLimiterRegistry().Unregister(name)
 	}
 
-	return config.OnUpdate(func(c *config.Config) error {
+	err := config.OnUpdate(func(c *config.Config) error {
 		limiteres := c.Limiters
 		c.Limiters = nil
 		for _, s := range limiteres {
@@ -117,6 +205,14 @@ func deleteLimiter(req deleteLimiterRequest) error {
 		}
 		return nil
 	})
+	if err != nil {
+		restoreConfigSnapshot(originalConfig)
+		if hadRuntime {
+			restoreTrafficLimiterRuntime(originalConfig, name)
+		}
+		return err
+	}
+	return nil
 }
 
 type createLimiterRequest struct {
@@ -149,7 +245,9 @@ func createConnLimiter(req createLimiterRequest) error {
 		return errors.New("conn limiter " + name + " already exists")
 	}
 
-	return config.OnUpdate(func(c *config.Config) error {
+	// F-A01: snapshot + rollback discipline, see createChain.
+	originalConfig := config.Global()
+	err := config.OnUpdate(func(c *config.Config) error {
 		// R18-F03: 同名则替换（与 updateConnLimiter 同口径），不用无去重 append——
 		// 连接限流器已在配置中、但不在注册表里时，重复下发会把第二份同名项写进
 		// 配置并落盘、毒化 gost.json。配置里已有的多余同名副本一并清除。名字
@@ -175,22 +273,42 @@ func createConnLimiter(req createLimiterRequest) error {
 		c.CLimiters = kept
 		return nil
 	})
+	if err != nil {
+		registry.ConnLimiterRegistry().Unregister(name)
+		restoreConfigSnapshot(originalConfig)
+		return err
+	}
+	return nil
 }
 
 func updateConnLimiter(req updateLimiterRequest) error {
+	// F-A02: name resolution mirrors updateLimiter.
 	name := strings.TrimSpace(req.Limiter)
+	if name == "" {
+		name = strings.TrimSpace(req.Data.Name)
+	}
+	if name == "" {
+		return errors.New("limiter name is required")
+	}
 	req.Data.Name = name
-	if registry.ConnLimiterRegistry().IsRegistered(name) {
+
+	// F-A01: snapshot + rollback discipline, see updateLimiter.
+	originalConfig := config.Global()
+	hadRuntime := registry.ConnLimiterRegistry().IsRegistered(name)
+	if hadRuntime {
 		registry.ConnLimiterRegistry().Unregister(name)
 	}
 
 	v := parser.ParseConnLimiter(&req.Data)
 
 	if err := registry.ConnLimiterRegistry().Register(name, v); err != nil {
+		if hadRuntime {
+			restoreConnLimiterRuntime(originalConfig, name)
+		}
 		return errors.New("conn limiter " + name + " already exists")
 	}
 
-	return config.OnUpdate(func(c *config.Config) error {
+	err := config.OnUpdate(func(c *config.Config) error {
 		for i := range c.CLimiters {
 			// R19-F02: nil 项跳过并记日志（原样保留，清理只走启动自愈），不得 panic。
 			if c.CLimiters[i] == nil {
@@ -205,16 +323,28 @@ func updateConnLimiter(req updateLimiterRequest) error {
 		c.CLimiters = append(c.CLimiters, &req.Data)
 		return nil
 	})
+	if err != nil {
+		restoreConfigSnapshot(originalConfig)
+		registry.ConnLimiterRegistry().Unregister(name)
+		if hadRuntime || limiterInConfig(originalConfig, name, true) {
+			restoreConnLimiterRuntime(originalConfig, name)
+		}
+		return err
+	}
+	return nil
 }
 
 func deleteConnLimiter(req deleteLimiterRequest) error {
 	name := strings.TrimSpace(req.Limiter)
 
-	if registry.ConnLimiterRegistry().IsRegistered(name) {
+	// F-A01: snapshot + rollback discipline, see deleteChain.
+	originalConfig := config.Global()
+	hadRuntime := registry.ConnLimiterRegistry().IsRegistered(name)
+	if hadRuntime {
 		registry.ConnLimiterRegistry().Unregister(name)
 	}
 
-	return config.OnUpdate(func(c *config.Config) error {
+	err := config.OnUpdate(func(c *config.Config) error {
 		limiteres := c.CLimiters
 		c.CLimiters = nil
 		for _, s := range limiteres {
@@ -231,4 +361,12 @@ func deleteConnLimiter(req deleteLimiterRequest) error {
 		}
 		return nil
 	})
+	if err != nil {
+		restoreConfigSnapshot(originalConfig)
+		if hadRuntime {
+			restoreConnLimiterRuntime(originalConfig, name)
+		}
+		return err
+	}
+	return nil
 }

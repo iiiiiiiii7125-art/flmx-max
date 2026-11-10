@@ -57,7 +57,6 @@ type Manager struct {
 	restoreOnce sync.Once
 	instances   map[string]*instance
 	nft         *nftCounters
-
 }
 
 var (
@@ -236,11 +235,58 @@ func (m *Manager) allUserMarks() []int64 {
 	return ids
 }
 
+// pinnedSHA256 returns the expected SHA-256 for the binary a
+// Download describes, when that expectation is available locally
+// without any network fetch: the pinned digest keyed by the mapped
+// arch (Download.SHA256). Expectations that only exist remotely —
+// a checksum file (ChecksumURL) or a GitHub release asset digest
+// resolved by install() at download time — are NOT available here,
+// so callers with only those sources cannot re-verify an on-disk
+// binary in ensureBinary and keep the existence-skip below.
+func pinnedSHA256(d *Download) (string, bool) {
+	if d == nil || len(d.SHA256) == 0 {
+		return "", false
+	}
+	arch, err := resolveArch(d)
+	if err != nil {
+		return "", false
+	}
+	want := strings.ToLower(strings.TrimSpace(d.SHA256[arch]))
+	if !sha256HexPattern.MatchString(want) || len(want) != 64 {
+		return "", false
+	}
+	return want, true
+}
+
+// fileSHA256 itself is shared from geodata.go.
+
 // ensureBinary installs a binary into dir unless it is already there.
+//
+// C4 (low): an existing file is no longer trusted on existence
+// alone when a pinned expected SHA-256 is available (see
+// pinnedSHA256): it is re-hashed and a mismatch — or an unreadable
+// file — is treated as missing and falls through to install(),
+// which re-downloads, verifies and atomically swaps the whole
+// directory in as before. When no pinned expectation is available
+// for this Download (checksum-file-only or GitHub-digest-only
+// specs), the existence-skip is kept, because the expectation
+// cannot be established without a network fetch; those call faces
+// are the main and extra-binary calls in Apply, whose Downloads
+// may carry only ChecksumURL/GitHub sources.
 func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir string) (string, error) {
 	path := filepath.Join(dir, d.BinName)
 	if _, err := os.Stat(path); err == nil {
-		return path, nil
+		if want, ok := pinnedSHA256(d); ok {
+			if got, herr := fileSHA256(path); herr == nil && got == want {
+				return path, nil
+			} else {
+				inst.logs.add(fmt.Sprintf("[flmx] %s 已存在但 SHA256 复检不符，按缺失重装", label))
+			}
+		} else {
+			// No locally available expected SHA-256 (see above):
+			// keep the existence-skip for this call face.
+			return path, nil
+		}
 	}
 	inst.logs.add(fmt.Sprintf("[flmx] 安装 %s", label))
 	// RV2-03: anchor-corroboration degradations land in this
@@ -905,7 +951,7 @@ func (m *Manager) Status(logsFor string) Status {
 	m.mu.Unlock()
 	sort.Strings(types)
 
-	out := Status{Kernels: make([]State, 0, len(types))}
+	out := Status{Kernels: make([]State, 0, len(types)), Counters: make([]Counter, 0), Users: make([]UserCounter, 0)}
 	for _, t := range types {
 		out.Kernels = append(out.Kernels, m.state(t, t == logsFor))
 	}
@@ -919,8 +965,12 @@ func (m *Manager) Status(logsFor string) Status {
 		return out
 	}
 	out.NftAvailable = true
-	out.Counters = counters
-	out.Users = users
+	if counters != nil {
+		out.Counters = counters
+	}
+	if users != nil {
+		out.Users = users
+	}
 	out.Epoch = epoch
 	return out
 }

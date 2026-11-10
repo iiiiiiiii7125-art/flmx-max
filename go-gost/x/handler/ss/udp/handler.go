@@ -245,10 +245,20 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 				n, addr, err := readSSPacket(pc1, b[:], act, window)
 				if err != nil {
 					if isSSTimeout(err) {
-						timedOut.Store(true)
+						// F2-19 attribution: unwind (close both
+						// ends) either way, but only an armed AND
+						// fully stalled window may be labelled idle
+						// timeout (router/associate caliber). With
+						// the window off, readSSPacket has already
+						// passed a foreign timeout through verbatim;
+						// return it as-is.
 						pc1.Close()
 						pc2.Close()
-						return errSSRelayIdleTimeout
+						if window > 0 && act.stalled(window) {
+							timedOut.Store(true)
+							return errSSRelayIdleTimeout
+						}
+						return err
 					}
 					return err
 				}
@@ -292,10 +302,20 @@ func (h *ssuHandler) relayPacket(ctx context.Context, pc1, pc2 net.PacketConn, r
 				n, raddr, err := readSSPacket(pc2, b[:], act, window)
 				if err != nil {
 					if isSSTimeout(err) {
-						timedOut.Store(true)
+						// F2-19 attribution: unwind (close both
+						// ends) either way, but only an armed AND
+						// fully stalled window may be labelled idle
+						// timeout (router/associate caliber). With
+						// the window off, readSSPacket has already
+						// passed a foreign timeout through verbatim;
+						// return it as-is.
 						pc1.Close()
 						pc2.Close()
-						return errSSRelayIdleTimeout
+						if window > 0 && act.stalled(window) {
+							timedOut.Store(true)
+							return errSSRelayIdleTimeout
+						}
+						return err
 					}
 					return err
 				}

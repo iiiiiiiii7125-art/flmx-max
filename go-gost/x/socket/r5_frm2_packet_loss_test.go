@@ -89,7 +89,7 @@ func TestFRM2UdpPingFailureReportsPacketLoss100(t *testing.T) {
 		t.Skipf("本机 DNS 居然解析了 %s，无法构造解析失败场景", badHost)
 	}
 	w := &WebSocketReporter{}
-	resp, err := w.handleUdpPing(TcpPingRequest{
+	resp, err := w.handleUdpPing(context.Background(), TcpPingRequest{
 		IP: badHost, Port: 53, Count: 4, Timeout: 500,
 	})
 	if err != nil {

@@ -536,8 +536,8 @@ func parseCounters(raw []byte) ([]Counter, []UserCounter, error) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, nil, fmt.Errorf("解析 nft 计数失败: %v", err)
 	}
-	var counters []Counter
-	var users []UserCounter
+	counters := make([]Counter, 0)
+	users := make([]UserCounter, 0)
 	for _, item := range parsed.Nftables {
 		c := item.Counter
 		if c == nil || c.Table != nftTable {

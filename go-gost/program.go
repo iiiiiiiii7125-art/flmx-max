@@ -125,6 +125,18 @@ func (p *program) Start() (err error) {
 	return nil
 }
 
+// loopbackOnlyAddr rewrites a listen address to 127.0.0.1,
+// keeping its port (C2-F07). An address whose port cannot be
+// parsed falls back to the default profiling port on loopback
+// rather than risking an exposed bind.
+func loopbackOnlyAddr(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return "127.0.0.1:6060"
+	}
+	return net.JoinHostPort("127.0.0.1", port)
+}
+
 func (p *program) run(cfg *config.Config) (err error) {
 	defer func() {
 		if err != nil {
@@ -204,10 +216,18 @@ func (p *program) run(cfg *config.Config) (err error) {
 		if addr == "" {
 			addr = ":6060"
 		}
+		// C2-F07: the profiling server is net/http/pprof with no
+		// authentication — it must never be reachable off-host.
+		// Force loopback regardless of the configured host part
+		// (the default ":6060" binds every interface).
+		if forced := loopbackOnlyAddr(addr); forced != addr {
+			logger.Default().Warnf("profiling address %s forced to %s (pprof is unauthenticated, loopback only)", addr, forced)
+			addr = forced
+		}
 		s := &http.Server{
 			Addr: addr,
 		}
-		ln, err := net.Listen("tcp", addr)
+		ln, err := api_service.Listen("tcp", addr)
 		if err != nil {
 			return err
 		}

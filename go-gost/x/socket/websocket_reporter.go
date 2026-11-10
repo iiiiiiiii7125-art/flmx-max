@@ -29,6 +29,7 @@ import (
 
 	"github.com/go-gost/x/bypass"
 	"github.com/go-gost/x/config"
+	"github.com/go-gost/x/internal/keepalive"
 	"github.com/go-gost/x/internal/util/crypto"
 	"github.com/go-gost/x/internal/util/download"
 	"github.com/go-gost/x/kernel"
@@ -124,18 +125,27 @@ type CommandResponse struct {
 
 // TcpPingRequest TCP ping请求结构体
 type TcpPingRequest struct {
-	IP        string `json:"ip"`
-	Port      int    `json:"port"`
-	Count     int    `json:"count"`
-	Timeout   int    `json:"timeout"` // 超时时间(毫秒)
-	RequestId string `json:"requestId,omitempty"`
+	IP      string `json:"ip"`
+	Port    int    `json:"port"`
+	Count   int    `json:"count"`
+	Timeout int    `json:"timeout"` // 超时时间(毫秒)
+	// B-03: 此结构原有 RequestId 字段已删——面板从不把 requestId
+	// 放进 data（恒在命令信封 CommandMessage.RequestId 上），该
+	// 字段恒空、且 handler 把它抄进回包 data 的同名字段只会造成
+	// 「data 里有 requestId 但恒空」的幻影。回包的 RequestId 由
+	// routeCommand 用信封值统一盖章。
 }
 
 // TcpPingResponse TCP ping响应结构体
 type TcpPingResponse struct {
-	IP           string  `json:"ip"`
-	Port         int     `json:"port"`
-	Success      bool    `json:"success"`
+	IP      string `json:"ip"`
+	Port    int    `json:"port"`
+	Success bool   `json:"success"`
+	// Message 是 ErrorMessage 的同值镜像（B-05）：后端路径诊断
+	// 组装层读的是 message 键，agent 此前只有 errorMessage、
+	// 该读法恒落空走兜底。由 routeCommand 在分发后统一镜像，
+	// 两键同值、语义不变。
+	Message      string  `json:"message,omitempty"`
 	AverageTime  float64 `json:"averageTime"` // 平均连接时间(ms)
 	PacketLoss   float64 `json:"packetLoss"`  // 连接失败率(%)
 	ErrorMessage string  `json:"errorMessage,omitempty"`
@@ -161,11 +171,16 @@ type ServiceMonitorCheckRequest struct {
 // ServiceMonitorCheckResult node-executed check output.
 // CommandResponse.Success indicates command execution status.
 // Actual check success is represented by this struct.
+//
+// B-01: 原 StatusCode 字段已删——检查类型只有 tcp/icmp、无
+// http 检查，TCP/ICMP 没有状态码概念，该字段在 agent 侧从无
+// 赋值（恒因 omitempty 缺席），面板侧把它当可选真值消费是三向
+// 幻影（agent 声明、面板聚合、前端渲染都以为它存在）。HTTP
+// 状态码若将来要做，须先落 http 检查类型再加回字段。
 type ServiceMonitorCheckResult struct {
 	MonitorID    int64   `json:"monitorId"`
 	Success      bool    `json:"success"`
 	LatencyMs    float64 `json:"latencyMs"`
-	StatusCode   int     `json:"statusCode,omitempty"`
 	ErrorMessage string  `json:"errorMessage,omitempty"`
 }
 
@@ -211,6 +226,38 @@ type WebSocketReporter struct {
 	// plaintextCommandWarned ensures the D1-02 plaintext-command security
 	// warning is printed once per process, not per command.
 	plaintextCommandWarned atomic.Bool
+	// uninstallAckWaiters carries the C4-G2 ack-flush signal for
+	// UninstallAgent dispatches: the handler registers a waiter,
+	// routeCommand signals it after the response frame is written.
+	uninstallAckMu      sync.Mutex
+	uninstallAckWaiters map[string]chan bool
+}
+
+// registerUninstallAck registers the ack-flush waiter for one
+// UninstallAgent dispatch (C4-G2 hard ordering, see uninstall.go).
+func (w *WebSocketReporter) registerUninstallAck(requestID string) chan bool {
+	ch := make(chan bool, 1)
+	w.uninstallAckMu.Lock()
+	if w.uninstallAckWaiters == nil {
+		w.uninstallAckWaiters = make(map[string]chan bool)
+	}
+	w.uninstallAckWaiters[requestID] = ch
+	w.uninstallAckMu.Unlock()
+	return ch
+}
+
+// signalUninstallAck delivers the flush verdict for a dispatch's
+// response frame; a no-op when no waiter is registered.
+func (w *WebSocketReporter) signalUninstallAck(requestID string, flushed bool) {
+	w.uninstallAckMu.Lock()
+	ch, ok := w.uninstallAckWaiters[requestID]
+	if ok {
+		delete(w.uninstallAckWaiters, requestID)
+	}
+	w.uninstallAckMu.Unlock()
+	if ok {
+		ch <- flushed
+	}
 }
 
 var wsDial = func(dialer *websocket.Dialer, rawURL string) (*websocket.Conn, *http.Response, error) {
@@ -361,6 +408,16 @@ func (w *WebSocketReporter) connect() error {
 	}
 
 	candidates := buildWebSocketCandidates(w.addr, w.secret, w.version, cfg.Http, cfg.Tls, cfg.Socks, w.preferredWSScheme)
+	// C4（Go 核验自报，agent 侧）：握手 query 附带运行中二进制
+	// 本体的 SHA256。面板核验环此前只比自报版本串（声称值），
+	// 落库的期望资产哈希从不消费；带上 binSha 后面板可把「声称
+	// 版本」与「实际运行资产」对上（消费面在面板侧）。算不出
+	// 时不带，握手与旧形态一致。
+	if sha := runningBinarySHA(); sha != "" {
+		for i := range candidates {
+			candidates[i] += "&binSha=" + url.QueryEscape(sha)
+		}
+	}
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
@@ -405,8 +462,25 @@ func (w *WebSocketReporter) connect() error {
 	// 程活着」与「真的连回了面板」，本地唯一可信的信号就是连接
 	// 成功点在这里写下的时间戳（见 agentConnectedMarkerPath）。
 	markAgentPanelConnected(w.version)
+	// C4-G2: 补报未达的卸载终局（上次执行时连接断裂/进程中断
+	// 时状态文件里留下的未报终局或中断态）。
+	go w.flushPendingUninstallResult()
 	return nil
 }
+
+// runningBinarySHA returns the hex SHA256 of the running
+// executable, computed once per process (empty when unavailable).
+var runningBinarySHA = sync.OnceValue(func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	h, err := hashFileSHA256(exe)
+	if err != nil {
+		return ""
+	}
+	return h
+})
 
 // agentConnectedMarkerName 是回连证据标记的文件名，与二进制、
 // agent-upgrade.log 同目录（升级脚本按 binaryPath 锚定同目录）。
@@ -1501,7 +1575,7 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Type = "TcpPingResponse"
 		var tcpPingResult TcpPingResponse
 		tcpPingResult, err = w.handleTcpPing(ctx, cmd.Data)
-		response.Data = tcpPingResult
+		response.Data = stampPingResult(tcpPingResult, cmd.RequestId)
 		// needSaveConfig = false (默认值)
 
 	// 节点调优（第二代模型）：TuneStatus 读四面状态，Tune 带动作
@@ -1529,9 +1603,9 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 	// UDP Ping 诊断命令（只读，不需要保存配置）
 	case "UdpPing":
 		var udpPingResult TcpPingResponse
-		udpPingResult, err = w.handleUdpPing(cmd.Data)
+		udpPingResult, err = w.handleUdpPing(ctx, cmd.Data)
 		response.Type = "UdpPingResponse"
-		response.Data = udpPingResult
+		response.Data = stampPingResult(udpPingResult, cmd.RequestId)
 
 	// 路由追踪（只读，回程线路识别用）
 	case "Traceroute":
@@ -1570,11 +1644,11 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Type = "RollbackAgentResponse"
 		// needSaveConfig = false (默认值)
 
-	// 面板删除服务器时卸载 Agent（先回复，再异步卸载）；回执
-	// data 携带调优恢复预检 warnings（R2F2-D01），与
-	// RollbackAgent 的 data 回执同形态。
+	// 面板删除服务器时卸载 Agent（C4-G2：先回执、ack flush 后
+	// 才执行、终局另帧上报）；回执 data 携带调优恢复预检
+	// warnings（R2F2-D01），与 RollbackAgent 的 data 回执同形态。
 	case "UninstallAgent":
-		response.Data, err = w.handleUninstallAgent()
+		response.Data, err = w.handleUninstallAgent(cmd.Data, cmd.RequestId)
 		response.Type = "UninstallAgentResponse"
 		// needSaveConfig = false (默认值)
 
@@ -1597,7 +1671,14 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Message = "OK"
 	}
 
-	w.sendResponse(response)
+	sent := w.sendResponse(response)
+	if cmd.Type == "UninstallAgent" {
+		// C4-G2: the uninstall executor waits for this signal —
+		// destructive steps start only once the ack frame has
+		// actually been written to the socket (C2-F04 hard
+		// ordering, replacing the sleep-based bet).
+		w.signalUninstallAck(cmd.RequestId, sent)
+	}
 }
 
 // Service 命令处理函数
@@ -1644,6 +1725,19 @@ func (w *WebSocketReporter) handleUpdateService(data interface{}) error {
 	return updateServices(req)
 }
 
+// 对象不存在时的回执契约（F-A05，agent 侧成文）：
+//   - Delete* 全族（Service/Chains/Limiters/CLimiters）幂等：
+//     对象不存在也回成功。面板的清理路径（删隧道/删节点时对
+//     可能已不存在的对象补发删除）依赖此语义，改成报错会让清
+//     理整单失败。
+//   - Pause/Resume 严格：任一对象不存在整批拒绝，错误文本恒
+//     为 "service <name> not found"。面板目前靠英文子串
+//     "not found" 判定该情形——这两处及全命令族的 not-found
+//     类错误必须保留这一精确子串，直到面板改走结构化错误码
+//     （面板侧收口在其修复路）。
+//   - Update* 为 upsert：对象不在配置/注册表时按新建处理
+//     （面板的更新下发以已存在为前提，此语义与 createServices
+//     的替换口径一致），不回 not found。
 func (w *WebSocketReporter) handleDeleteService(data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -1686,6 +1780,32 @@ func (w *WebSocketReporter) handleResumeService(data interface{}) error {
 	return resumeServices(req)
 }
 
+// decodeUpdatePayload splits an update-command payload into its
+// name field and its data object (F-A02). The update contract is
+// the wrapper shape {"<nameKey>": "name", "data": {...}} — the
+// panel's only shape. The previous implementation "fell back" to
+// parsing a bare config object when wrapper parsing failed, but
+// decoding a bare object into the wrapper struct never fails (it
+// just yields empty fields), so the fallback was dead code and a
+// bare payload silently became an empty-named update. Shape is
+// now judged explicitly on the presence of the data key, and a
+// bare payload is rejected with the required shape named.
+func decodeUpdatePayload(jsonData []byte, nameKey string) (string, json.RawMessage, error) {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(jsonData, &probe); err != nil {
+		return "", nil, fmt.Errorf("解析更新请求失败: %v", err)
+	}
+	rawData, hasData := probe["data"]
+	if !hasData {
+		return "", nil, fmt.Errorf("更新命令须使用包装形状 {\"%s\": \"名称\", \"data\": {...}}，裸配置对象不受支持", nameKey)
+	}
+	name := ""
+	if rawName, ok := probe[nameKey]; ok {
+		_ = json.Unmarshal(rawName, &name)
+	}
+	return name, rawData, nil
+}
+
 // Chain 命令处理函数
 func (w *WebSocketReporter) handleAddChain(data interface{}) error {
 	jsonData, err := json.Marshal(data)
@@ -1693,8 +1813,14 @@ func (w *WebSocketReporter) handleAddChain(data interface{}) error {
 		return fmt.Errorf("序列化数据失败: %v", err)
 	}
 
+	// F-A03: duration 字符串归一化（链内 hop 的 reload 等字段）。
+	processedData, err := w.preprocessDurationFields(jsonData)
+	if err != nil {
+		return fmt.Errorf("预处理duration字段失败: %v", err)
+	}
+
 	var chainConfig config.ChainConfig
-	if err := json.Unmarshal(jsonData, &chainConfig); err != nil {
+	if err := json.Unmarshal(processedData, &chainConfig); err != nil {
 		return fmt.Errorf("解析链配置失败: %v", err)
 	}
 
@@ -1708,26 +1834,23 @@ func (w *WebSocketReporter) handleUpdateChain(data interface{}) error {
 		return fmt.Errorf("序列化数据失败: %v", err)
 	}
 
-	// 对于更新操作，Java端发送的格式可能是: {"chain": "name", "data": {...}}
-	var updateReq struct {
-		Chain string             `json:"chain"`
-		Data  config.ChainConfig `json:"data"`
+	processedData, err := w.preprocessDurationFields(jsonData)
+	if err != nil {
+		return fmt.Errorf("预处理duration字段失败: %v", err)
 	}
 
-	// 尝试解析为更新请求格式
-	if err := json.Unmarshal(jsonData, &updateReq); err != nil {
-		// 如果失败，可能是直接的ChainConfig，从name字段获取chain名称
-		var chainConfig config.ChainConfig
-		if err := json.Unmarshal(jsonData, &chainConfig); err != nil {
-			return fmt.Errorf("解析链配置失败: %v", err)
-		}
-		updateReq.Chain = chainConfig.Name
-		updateReq.Data = chainConfig
+	name, rawData, err := decodeUpdatePayload(processedData, "chain")
+	if err != nil {
+		return err
+	}
+	var chainConfig config.ChainConfig
+	if err := json.Unmarshal(rawData, &chainConfig); err != nil {
+		return fmt.Errorf("解析链配置失败: %v", err)
 	}
 
 	req := updateChainRequest{
-		Chain: updateReq.Chain,
-		Data:  updateReq.Data,
+		Chain: name,
+		Data:  chainConfig,
 	}
 	return updateChain(req)
 }
@@ -1761,8 +1884,14 @@ func (w *WebSocketReporter) handleAddLimiter(data interface{}) error {
 		return fmt.Errorf("序列化数据失败: %v", err)
 	}
 
+	// F-A03: LimiterConfig.Reload 等 duration 字段的字符串归一化。
+	processedData, err := w.preprocessDurationFields(jsonData)
+	if err != nil {
+		return fmt.Errorf("预处理duration字段失败: %v", err)
+	}
+
 	var limiterConfig config.LimiterConfig
-	if err := json.Unmarshal(jsonData, &limiterConfig); err != nil {
+	if err := json.Unmarshal(processedData, &limiterConfig); err != nil {
 		return fmt.Errorf("解析限流器配置失败: %v", err)
 	}
 
@@ -1776,26 +1905,24 @@ func (w *WebSocketReporter) handleUpdateLimiter(data interface{}) error {
 		return fmt.Errorf("序列化数据失败: %v", err)
 	}
 
-	// 对于更新操作，Java端发送的格式可能是: {"limiter": "name", "data": {...}}
-	var updateReq struct {
-		Limiter string               `json:"limiter"`
-		Data    config.LimiterConfig `json:"data"`
+	processedData, err := w.preprocessDurationFields(jsonData)
+	if err != nil {
+		return fmt.Errorf("预处理duration字段失败: %v", err)
 	}
 
-	// 尝试解析为更新请求格式
-	if err := json.Unmarshal(jsonData, &updateReq); err != nil {
-		// 如果失败，可能是直接的LimiterConfig，从name字段获取limiter名称
-		var limiterConfig config.LimiterConfig
-		if err := json.Unmarshal(jsonData, &limiterConfig); err != nil {
-			return fmt.Errorf("解析限流器配置失败: %v", err)
-		}
-		updateReq.Limiter = limiterConfig.Name
-		updateReq.Data = limiterConfig
+	// F-A02: 显式形状判定（见 decodeUpdatePayload）。
+	name, rawData, err := decodeUpdatePayload(processedData, "limiter")
+	if err != nil {
+		return err
+	}
+	var limiterConfig config.LimiterConfig
+	if err := json.Unmarshal(rawData, &limiterConfig); err != nil {
+		return fmt.Errorf("解析限流器配置失败: %v", err)
 	}
 
 	req := updateLimiterRequest{
-		Limiter: updateReq.Limiter,
-		Data:    updateReq.Data,
+		Limiter: name,
+		Data:    limiterConfig,
 	}
 	return updateLimiter(req)
 }
@@ -1828,8 +1955,13 @@ func (w *WebSocketReporter) handleAddCLimiter(data interface{}) error {
 		return fmt.Errorf("序列化数据失败: %v", err)
 	}
 
+	processedData, err := w.preprocessDurationFields(jsonData)
+	if err != nil {
+		return fmt.Errorf("预处理duration字段失败: %v", err)
+	}
+
 	var limiterConfig config.LimiterConfig
-	if err := json.Unmarshal(jsonData, &limiterConfig); err != nil {
+	if err := json.Unmarshal(processedData, &limiterConfig); err != nil {
 		return fmt.Errorf("解析限流器配置失败: %v", err)
 	}
 
@@ -1843,23 +1975,24 @@ func (w *WebSocketReporter) handleUpdateCLimiter(data interface{}) error {
 		return fmt.Errorf("序列化数据失败: %v", err)
 	}
 
-	var updateReq struct {
-		Limiter string               `json:"limiter"`
-		Data    config.LimiterConfig `json:"data"`
+	processedData, err := w.preprocessDurationFields(jsonData)
+	if err != nil {
+		return fmt.Errorf("预处理duration字段失败: %v", err)
 	}
 
-	if err := json.Unmarshal(jsonData, &updateReq); err != nil {
-		var limiterConfig config.LimiterConfig
-		if err := json.Unmarshal(jsonData, &limiterConfig); err != nil {
-			return fmt.Errorf("解析更新请求失败: %v", err)
-		}
-		updateReq.Limiter = limiterConfig.Name
-		updateReq.Data = limiterConfig
+	// F-A02: 显式形状判定（见 decodeUpdatePayload）。
+	name, rawData, err := decodeUpdatePayload(processedData, "limiter")
+	if err != nil {
+		return err
+	}
+	var limiterConfig config.LimiterConfig
+	if err := json.Unmarshal(rawData, &limiterConfig); err != nil {
+		return fmt.Errorf("解析限流器配置失败: %v", err)
 	}
 
 	req := updateLimiterRequest{
-		Limiter: updateReq.Limiter,
-		Data:    updateReq.Data,
+		Limiter: name,
+		Data:    limiterConfig,
 	}
 	return updateConnLimiter(req)
 }
@@ -2627,6 +2760,13 @@ func buildAgentRollbackScriptForCap(manager serviceManager, backupPath, binaryPa
 		agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetupFor(markerPath, capability, targetVersion), verdictFns, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
 }
 
+// agentVersionsEqual compares two agent version strings, tolerating
+// a leading "v" on either side (the panel sends "2.1.2", release
+// assets are tagged both ways across the upgrade paths).
+func agentVersionsEqual(a, b string) bool {
+	return strings.TrimPrefix(strings.TrimSpace(a), "v") == strings.TrimPrefix(strings.TrimSpace(b), "v")
+}
+
 // smokeTestAgentBinary verifies a downloaded binary actually executes on
 // this node (-V) before it is swapped in. A checksum proves integrity,
 // not executability (wrong-arch asset, corrupted UPX payload, libc
@@ -2926,6 +3066,10 @@ func upgradeDialContext(ctx context.Context, network, addr string) (net.Conn, er
 		return nil, err
 	}
 	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	// LBK census: keepalive stamp at the dialer construction point
+	// (upgrade downloads are long-lived transfers; the stamp only
+	// touches connection setup, never the copy loop).
+	keepalive.ApplyDialer(dialer)
 	var lastErr error
 	for _, ip := range ips {
 		dialIP := ip
@@ -3632,6 +3776,19 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 		staging.Discard()
 		return err
 	}
+	// C4-中：冒烟此前只判 -V 退出码——资产下错版本（仓库路径拼对
+	// 但资产本身是另一版）照样通过、换入后才暴露。现把 -V 自报
+	// 版本与命令目标版本比对，不符即中止：判的是将要落地的那个
+	// 文件本身，不是面板的声称。
+	probedVersion, perr := probeAgentBinaryVersion(tmpPath)
+	if perr != nil {
+		staging.Discard()
+		return fmt.Errorf("新版本二进制版本探测失败: %v", perr)
+	}
+	if !agentVersionsEqual(probedVersion, version) {
+		staging.Discard()
+		return fmt.Errorf("新版本二进制自报版本 %s 与升级目标版本 %s 不一致，已中止升级", probedVersion, version)
+	}
 	fmt.Println("✅ 新版本二进制冒烟测试通过")
 
 	// 备份旧版本（复制，不用 rename，因为可能正在运行）。
@@ -3815,26 +3972,29 @@ func updateLocalConfigJSON(httpVal int, tlsVal int, socksVal int) error {
 	return writeFileAtomic(path, data, mode)
 }
 
-// sendResponse 发送响应消息到服务端
-func (w *WebSocketReporter) sendResponse(response CommandResponse) {
+// sendResponse 发送响应消息到服务端。返回 true 表示帧已写出
+// socket（C4-G2：卸载流程用它判定 ack 是否真的 flush——写在
+// connMutex 内同步完成，返回 true 即对端可收，卸载执行体据此
+// 在 ack 之后才动自删类动作，取代原先的 sleep 1s 排序赌注）。
+func (w *WebSocketReporter) sendResponse(response CommandResponse) bool {
 	w.connMutex.Lock()
 	defer w.connMutex.Unlock()
 
 	if w.conn == nil || !w.connected {
 		fmt.Printf("❌ 无法发送响应：连接未建立\n")
-		return
+		return false
 	}
 
 	jsonData, err := json.Marshal(response)
 	if err != nil {
 		fmt.Printf("❌ 序列化响应失败: %v\n", err)
-		return
+		return false
 	}
 
 	messageData, err := w.encryptPayload(jsonData)
 	if err != nil {
 		fmt.Printf("❌ 无法发送响应: %v\n", err)
-		return
+		return false
 	}
 
 	// 检查消息大小，如果超过10MB则记录警告
@@ -3852,7 +4012,9 @@ func (w *WebSocketReporter) sendResponse(response CommandResponse) {
 	if err := w.conn.WriteMessage(websocket.TextMessage, messageData); err != nil {
 		fmt.Printf("❌ 发送响应失败: %v\n", err)
 		w.connected = false
+		return false
 	}
+	return true
 }
 
 // sendErrorResponse 发送解析前错误响应（R2-X2-02）。这类失败发生在
@@ -4237,6 +4399,27 @@ func tcpPingResolvedDenied(a netip.Addr) bool {
 }
 
 // handleTcpPing 处理TCP ping诊断命令
+// stampPingResult applies the two wire-level fixups shared by the
+// TcpPing/UdpPing results (族七 B-03/B-05): the result's RequestId
+// comes from the command envelope (the request payload has no
+// requestId field — B-03), and Message mirrors ErrorMessage for
+// consumers that read the message key (B-05).
+func stampPingResult(res TcpPingResponse, requestID string) TcpPingResponse {
+	res.RequestId = requestID
+	if res.Message == "" {
+		res.Message = res.ErrorMessage
+	}
+	return res
+}
+
+// latencyMsFloat converts a duration to fractional milliseconds
+// (B-06). The previous float64(d.Milliseconds()) truncated every
+// sub-millisecond measurement to 0 and every other value to whole
+// milliseconds, so fast LAN checks reported a fake 0ms.
+func latencyMsFloat(d time.Duration) float64 {
+	return float64(d.Nanoseconds()) / 1e6
+}
+
 func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{}) (TcpPingResponse, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -4255,7 +4438,6 @@ func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{})
 			Port:         req.Port,
 			Success:      false,
 			ErrorMessage: "无效的IP地址或主机名",
-			RequestId:    req.RequestId,
 		}, nil
 	}
 
@@ -4266,7 +4448,6 @@ func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{})
 			Port:         req.Port,
 			Success:      false,
 			ErrorMessage: "无效的端口号，范围应为1-65535",
-			RequestId:    req.RequestId,
 		}, nil
 	}
 
@@ -4280,7 +4461,6 @@ func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{})
 			Port:         req.Port,
 			Success:      false,
 			ErrorMessage: "目标地址不允许",
-			RequestId:    req.RequestId,
 		}, nil
 	}
 
@@ -4300,9 +4480,8 @@ func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{})
 	}
 
 	response := TcpPingResponse{
-		IP:        req.IP,
-		Port:      req.Port,
-		RequestId: req.RequestId,
+		IP:   req.IP,
+		Port: req.Port,
 	}
 
 	if err != nil {
@@ -4321,7 +4500,7 @@ func (w *WebSocketReporter) handleTcpPing(ctx context.Context, data interface{})
 	return response, nil
 }
 
-func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, error) {
+func (w *WebSocketReporter) handleUdpPing(ctx context.Context, data interface{}) (TcpPingResponse, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return TcpPingResponse{}, fmt.Errorf("序列化UDP ping数据失败: %v", err)
@@ -4338,7 +4517,6 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 			Port:         req.Port,
 			Success:      false,
 			ErrorMessage: "无效的IP地址或主机名",
-			RequestId:    req.RequestId,
 		}, nil
 	}
 
@@ -4348,7 +4526,6 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 			Port:         req.Port,
 			Success:      false,
 			ErrorMessage: "无效的端口号，范围应为1-65535",
-			RequestId:    req.RequestId,
 		}, nil
 	}
 
@@ -4361,18 +4538,27 @@ func (w *WebSocketReporter) handleUdpPing(data interface{}) (TcpPingResponse, er
 			Port:         req.Port,
 			Success:      false,
 			ErrorMessage: "目标地址不允许",
-			RequestId:    req.RequestId,
 		}, nil
 	}
 
 	req.Count, req.Timeout = clampPingParams(req.Count, req.Timeout)
 
-	avgTime, packetLoss, err := udpPingHost(req.IP, req.Port, req.Count, req.Timeout)
+	// B-07: the probe runs under the command's budget ctx, like
+	// TcpPing — previously it had no ctx at all and its worst case
+	// (count × per-attempt timeout + fixed sleeps) could overrun the
+	// panel's 30s command window, so the panel timed out and dropped
+	// a result the agent still produced later.
+	avgTime, packetLoss, err := udpPingHost(ctx, req.IP, req.Port, req.Count, req.Timeout)
+	if err != nil && ctx.Err() != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return TcpPingResponse{}, fmt.Errorf("UDP探测执行超时（含排队等待）")
+		}
+		return TcpPingResponse{}, fmt.Errorf("UDP探测已取消")
+	}
 
 	response := TcpPingResponse{
-		IP:        req.IP,
-		Port:      req.Port,
-		RequestId: req.RequestId,
+		IP:   req.IP,
+		Port: req.Port,
 	}
 
 	if err != nil {
@@ -4465,7 +4651,7 @@ func (w *WebSocketReporter) handleServiceMonitorCheck(data interface{}) (Service
 		if splitErr != nil {
 			res.Success = false
 			res.ErrorMessage = "无效的TCP目标"
-			res.LatencyMs = float64(time.Since(start).Milliseconds())
+			res.LatencyMs = latencyMsFloat(time.Since(start))
 			return res, nil
 		}
 		// R4X-008：拨号前硬拒子集复检（只取硬拒层；私网/回环/CGNAT
@@ -4478,7 +4664,7 @@ func (w *WebSocketReporter) handleServiceMonitorCheck(data interface{}) (Service
 			if resolvedAddrDenied(ip, hardDeniedIP) {
 				res.Success = false
 				res.ErrorMessage = "目标地址不允许"
-				res.LatencyMs = float64(time.Since(start).Milliseconds())
+				res.LatencyMs = latencyMsFloat(time.Since(start))
 				return res, nil
 			}
 		} else {
@@ -4490,21 +4676,26 @@ func (w *WebSocketReporter) handleServiceMonitorCheck(data interface{}) (Service
 				} else {
 					res.ErrorMessage = "目标主机无法解析"
 				}
-				res.LatencyMs = float64(time.Since(start).Milliseconds())
+				res.LatencyMs = latencyMsFloat(time.Since(start))
 				return res, nil
 			}
 			for _, ip := range ips {
 				if resolvedAddrDenied(ip, hardDeniedIP) {
 					res.Success = false
 					res.ErrorMessage = "目标地址不允许"
-					res.LatencyMs = float64(time.Since(start).Milliseconds())
+					res.LatencyMs = latencyMsFloat(time.Since(start))
 					return res, nil
 				}
 			}
 			dialTarget = net.JoinHostPort(ips[0].String(), port)
 		}
-		conn, dialErr := net.DialTimeout("tcp", dialTarget, timeout)
-		res.LatencyMs = float64(time.Since(start).Milliseconds())
+		// LBK census: dialer construction point carries the
+		// keepalive stamp (short-lived probe connection; the stamp
+		// closes the census, it does not change probe behaviour).
+		smcDialer := &net.Dialer{Timeout: timeout}
+		keepalive.ApplyDialer(smcDialer)
+		conn, dialErr := smcDialer.Dial("tcp", dialTarget)
+		res.LatencyMs = latencyMsFloat(time.Since(start))
 		if dialErr != nil {
 			res.Success = false
 			res.ErrorMessage = dialErr.Error()
@@ -4516,7 +4707,7 @@ func (w *WebSocketReporter) handleServiceMonitorCheck(data interface{}) (Service
 
 	case "icmp":
 		rtt, pingErr := icmpPing(target, timeout)
-		res.LatencyMs = float64(rtt.Milliseconds())
+		res.LatencyMs = latencyMsFloat(rtt)
 		if pingErr != nil {
 			res.Success = false
 			res.ErrorMessage = pingErr.Error()
@@ -4528,7 +4719,7 @@ func (w *WebSocketReporter) handleServiceMonitorCheck(data interface{}) (Service
 
 	res.Success = false
 	res.ErrorMessage = "未知错误"
-	res.LatencyMs = float64(time.Since(start).Milliseconds())
+	res.LatencyMs = latencyMsFloat(time.Since(start))
 	return res, nil
 }
 
@@ -4727,8 +4918,10 @@ func tcpPingHost(ctx context.Context, ip string, port int, count int, timeoutMs 
 		}
 		start := time.Now()
 
-		// 创建带超时的TCP连接
+		// 创建带超时的TCP连接（LBK census: 构造点盖探活章，
+		// 短连探针无行为副作用，仅收口普查）
 		dialer := net.Dialer{Timeout: timeout}
+		keepalive.ApplyDialer(&dialer)
 		conn, err := dialer.DialContext(ctx, "tcp", target)
 
 		elapsed := time.Since(start)
@@ -4772,7 +4965,7 @@ func tcpPingHost(ctx context.Context, ip string, port int, count int, timeoutMs 
 	return avgTime, packetLoss, nil
 }
 
-func udpPingHost(ip string, port int, count int, timeoutMs int) (float64, float64, error) {
+func udpPingHost(ctx context.Context, ip string, port int, count int, timeoutMs int) (float64, float64, error) {
 	var totalTime float64
 	var successCount int
 
@@ -4785,7 +4978,7 @@ func udpPingHost(ip string, port int, count int, timeoutMs int) (float64, float6
 		fmt.Printf("🔍 检测到域名，正在解析DNS...\n")
 		dnsStart := time.Now()
 
-		addrs, err := net.LookupHost(ip)
+		addrs, err := net.DefaultResolver.LookupHost(ctx, ip)
 		dnsDuration := time.Since(dnsStart)
 
 		if err != nil {
@@ -4819,12 +5012,26 @@ func udpPingHost(ip string, port int, count int, timeoutMs int) (float64, float6
 		return 0, 100.0, fmt.Errorf("解析UDP地址失败: %v", err)
 	}
 
+	// B-07: attempts run under the command budget ctx (mirrors
+	// tcpPingHost): a dial cut short by ctx is not counted as a
+	// loss, the inter-attempt sleep is interruptible, and when the
+	// budget runs out the attempts so far are the result.
+	attempts := 0
 	for i := 0; i < count; i++ {
+		if ctx.Err() != nil {
+			break
+		}
 		start := time.Now()
 
-		conn, err := net.DialTimeout("udp", addr.String(), timeout)
+		dialer := net.Dialer{Timeout: timeout}
+		conn, err := dialer.DialContext(ctx, "udp", addr.String())
 
 		elapsed := time.Since(start)
+
+		if err != nil && ctx.Err() != nil {
+			break
+		}
+		attempts++
 
 		if err != nil {
 			fmt.Printf("  第%d次UDP连接失败: %v (%.2fms)\n", i+1, err, elapsed.Seconds()*1000)
@@ -4836,16 +5043,24 @@ func udpPingHost(ip string, port int, count int, timeoutMs int) (float64, float6
 		}
 
 		if i < count-1 {
-			time.Sleep(100 * time.Millisecond)
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+			}
 		}
 	}
 
 	if successCount == 0 {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
 		return 0, 100.0, fmt.Errorf("所有UDP连接尝试都失败")
 	}
 
 	avgTime := totalTime / float64(successCount)
-	packetLoss := float64(count-successCount) / float64(count) * 100
+	packetLoss := float64(attempts-successCount) / float64(attempts) * 100
 
 	fmt.Printf("✅ UDP ping完成: 平均连接时间 %.2fms，失败率 %.1f%%\n", avgTime, packetLoss)
 
@@ -4869,48 +5084,82 @@ func isValidHostname(hostname string) bool {
 	return true
 }
 
-// preprocessDurationFields 预处理 JSON 数据中的 duration 字段
+// durationFieldKeys is the mechanical census of JSON key names whose
+// values land in time.Duration-typed fields of the config model
+// (config package: FailTimeout, Reload, Timeout, TTL, Validity —
+// grep 'time.Duration' in x/config). F-A03: the preprocessor used to
+// convert ONLY selector.failTimeout, so a panel sending "5s" for any
+// other duration field (e.g. LimiterConfig.Reload) failed the whole
+// command at typed decode with an opaque type error.
+var durationFieldKeys = map[string]bool{
+	"failTimeout": true,
+	"reload":      true,
+	"timeout":     true,
+	"ttl":         true,
+	"validity":    true,
+}
+
+// preprocessDurationFields 预处理 JSON 数据中的 duration 字段：
+// 把字符串形态的 duration 值（"5s"）转换为纳秒整数，使其能解码
+// 进 time.Duration 类型字段。F-A04：ParseDuration 失败不再静默
+// 保留原串（原串随后在类型化解码处以不点名的类型错误整单爆
+// 炸）——改为带字段路径的显式错误、整单拒绝。
 func (w *WebSocketReporter) preprocessDurationFields(jsonData []byte) ([]byte, error) {
 	var rawData interface{}
 	if err := json.Unmarshal(jsonData, &rawData); err != nil {
 		return nil, err
 	}
 
-	// 递归处理 duration 字段
-	processed := w.processDurationInData(rawData)
+	processed, err := processDurationInData(rawData, "")
+	if err != nil {
+		return nil, err
+	}
 
 	return json.Marshal(processed)
 }
 
-// processDurationInData 递归处理数据中的 duration 字段
-func (w *WebSocketReporter) processDurationInData(data interface{}) interface{} {
+// processDurationInData 递归处理数据中的 duration 字段。path 是
+// 当前节点的字段路径（仅用于错误点名）。metadata 子树豁免：
+// metadata 是自由形态的用户映射，其中的同名键不落在类型化
+// duration 字段上，不做转换、也不因不可解析而拒绝整单。
+func processDurationInData(data interface{}, path string) (interface{}, error) {
 	switch v := data.(type) {
 	case []interface{}:
-		// 处理数组
 		for i, item := range v {
-			v[i] = w.processDurationInData(item)
+			processed, err := processDurationInData(item, fmt.Sprintf("%s[%d]", path, i))
+			if err != nil {
+				return nil, err
+			}
+			v[i] = processed
 		}
-		return v
+		return v, nil
 	case map[string]interface{}:
-		// 处理对象
 		for key, value := range v {
-			if key == "selector" {
-				// 处理 selector 对象中的 failTimeout
-				if selectorObj, ok := value.(map[string]interface{}); ok {
-					if failTimeoutVal, exists := selectorObj["failTimeout"]; exists {
-						if failTimeoutStr, ok := failTimeoutVal.(string); ok {
-							// 将字符串格式的 duration 转换为纳秒数
-							if duration, err := time.ParseDuration(failTimeoutStr); err == nil {
-								selectorObj["failTimeout"] = int64(duration)
-							}
-						}
+			if key == "metadata" {
+				continue
+			}
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			if durationFieldKeys[key] {
+				if s, ok := value.(string); ok {
+					d, err := time.ParseDuration(s)
+					if err != nil {
+						return nil, fmt.Errorf("duration 字段 %s 的值 %q 无法解析: %v", childPath, s, err)
 					}
+					v[key] = int64(d)
+					continue
 				}
 			}
-			v[key] = w.processDurationInData(value)
+			processed, err := processDurationInData(value, childPath)
+			if err != nil {
+				return nil, err
+			}
+			v[key] = processed
 		}
-		return v
+		return v, nil
 	default:
-		return v
+		return data, nil
 	}
 }

@@ -28,9 +28,16 @@ func TestR9UninstallQueuesBehindBlockedMutation(t *testing.T) {
 	}
 	origRT, origK := uninstallRestoreTuning, uninstallKernels
 	origIC, origWD, origBP, origExit := uninstallInContainer, uninstallWorkingDir, uninstallBinaryPath, uninstallExit
+	origSP := uninstallStatePath
+	// C4-G2 状态文件跟随二进制路径落盘：本测试把二进制锚在共享
+	// 真实路径 /usr/local/bin/flux_agent，状态文件须一并钉进本
+	// 测试的临时目录——否则前一轮落盘的终局态会让后一轮误判为
+	// 重复下发、永不执行（R9-06 误报；2026-11-10 实证）。
+	uninstallStatePath = func() (string, error) { return filepath.Join(dir, "agent-uninstall.state.json"), nil }
 	defer func() {
 		uninstallRestoreTuning, uninstallKernels = origRT, origK
 		uninstallInContainer, uninstallWorkingDir, uninstallBinaryPath, uninstallExit = origIC, origWD, origBP, origExit
+		uninstallStatePath = origSP
 		uninstallStarted.Store(false)
 	}()
 	uninstallRestoreTuning = func() error { restored <- struct{}{}; return nil }

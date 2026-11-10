@@ -120,7 +120,7 @@ type UserCounter struct {
 type Status struct {
 	Kernels      []State       `json:"kernels"`
 	Counters     []Counter     `json:"counters"`
-	Users        []UserCounter `json:"users,omitempty"`
+	Users        []UserCounter `json:"users"`
 	Epoch        string        `json:"epoch"`
 	NftAvailable bool          `json:"nftAvailable"`
 	NftError     string        `json:"nftError,omitempty"`
