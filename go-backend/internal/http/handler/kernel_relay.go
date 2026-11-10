@@ -1024,7 +1024,16 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			userAssignments, _ = h.repo.ListUserInboundAssignments(userID)
+			assignments, assignErr := h.repo.ListUserInboundAssignments(userID)
+			if assignErr != nil {
+				// R3-MR-01：分配读失败不得装空集——空集会把该用户
+				// 的已分配入站全部过滤、渲染出一份空订阅当成功。
+				// 与上方 ListNodeInbounds 失败同口径回 500。
+				log.Printf("open subscription: list user inbound assignments failed user_id=%d err=%v", userID, assignErr)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			userAssignments = assignments
 			rows = filterInboundRowsByUserAssignments(rows, userAssignments)
 		}
 	}

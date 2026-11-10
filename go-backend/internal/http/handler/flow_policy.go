@@ -547,16 +547,6 @@ func (h *Handler) cleanOrphanedLimiters(nodeID int64, limiters []namedConfigItem
 	}
 }
 
-func (h *Handler) tunnelExists(tunnelID int64) bool {
-	ok, _ := h.repo.TunnelExists(tunnelID)
-	return ok
-}
-
-func (h *Handler) forwardExists(forwardID int64) bool {
-	ok, _ := h.repo.ForwardExists(forwardID)
-	return ok
-}
-
 func (h *Handler) sendDeleteOrphanedForwardService(nodeID int64, serviceName string) {
 	h.sendDeleteOrphanedForwardServices(nodeID, []string{serviceName})
 }
