@@ -1489,6 +1489,9 @@ export const setNodeRestartSchedule = (data: {
   enabled: number;
   time: string;
   jitterMinutes: number;
+  /** daily＝每天定时（默认）；interval＝按间隔，配合 intervalMinutes。 */
+  mode: string;
+  intervalMinutes: number;
 }) =>
   Network.post<{ pushed: boolean; pushError?: string }>(
     "/node/restart-schedule",

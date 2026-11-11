@@ -68,10 +68,12 @@ func TestKU9TerminalRelayHandlersCarryBindOptIn(t *testing.T) {
 }
 
 // udp 协议下 tunnelRelayMetadata 本为空集：修复前终端 handler 无
-// metadata 键，修复后必须恰好是 {bind:true}（新建而非合并残缺）。
+// metadata 键，修复后必须恰好是 {bind:true, reapRole:backstop}
+// （新建而非合并残缺；reapRole 是根治角色标记，全部段服务无条
+// 件携带）。
 func TestKU9UDPExitMetadataIsExactlyBind(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
-	want := map[string]interface{}{"bind": true}
+	want := map[string]interface{}{"bind": true, "reapRole": "backstop"}
 
 	localServices := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
 		tunnelRuntimeNode{NodeID: 5, Protocol: "udp", Port: 24001, ChainType: 3}, node, 1)

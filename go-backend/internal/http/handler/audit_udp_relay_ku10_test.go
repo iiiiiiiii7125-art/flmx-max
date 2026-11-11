@@ -103,10 +103,11 @@ func TestKU10LocalMultiHopChainHandlersCarryBind(t *testing.T) {
 	}
 
 	// udp 中段：tunnelRelayMetadata 本为空集，metadata 必须恰为
-	// {bind:true}（新建而非合并残缺，与出口同形态）。
+	// {bind:true, reapRole:backstop}（新建而非合并残缺，与出口同
+	// 形态；reapRole 是根治角色标记，全部段服务无条件携带）。
 	udpMiddle := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
 		tunnelRuntimeNode{NodeID: 11, Protocol: "udp", Port: 24101, ChainType: 2}, node, 1)
-	if got, want := ku9HandlerMetadata(t, udpMiddle[0]), map[string]interface{}{"bind": true}; !reflect.DeepEqual(got, want) {
+	if got, want := ku9HandlerMetadata(t, udpMiddle[0]), map[string]interface{}{"bind": true, "reapRole": "backstop"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("local udp middle metadata = %v, want %v", got, want)
 	}
 }

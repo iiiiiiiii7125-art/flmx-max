@@ -49,8 +49,17 @@ export interface Node {
   restartEnabled?: number; // 0 关 1 开
   restartTime?: string;
   restartJitterMinutes?: number;
+  /** 重启模式：daily＝每天 restartTime 触发（默认）；interval＝每 restartIntervalMinutes 分钟触发一次。 */
+  restartMode?: string;
+  restartIntervalMinutes?: number;
   /** 转发面会话无进展拆除阈值（秒，保险丝，默认关）：0＝不拆；>0 时只拆双向零流量满该秒数的会话。 */
   idleTimeoutSeconds?: number;
+  /** 入口判死窗口（秒，默认关）：0＝关；>0 时客户端方向零字节满该秒数且数据无人签收才拆。 */
+  edgeIdleTimeoutSeconds?: number;
+  /** 中途兜底窗口（秒，默认关）：0＝关；>0 时源头沉默满该秒数且服务器仅滴流才拆。 */
+  backstopIdleTimeoutSeconds?: number;
+  /** 兜底滴流速率上限（字节/秒）：0＝agent 默认（256）。 */
+  backstopTrickleBps?: number;
   status: number;
   forwardMode?: "agent" | "nftables";
   sshConfig?: {
@@ -101,6 +110,9 @@ export interface NodeForm {
   tls: number; // 0 关 1 开
   socks: number; // 0 关 1 开
   idleTimeoutSeconds: number; // 会话无进展拆除阈值（秒），0＝关闭（默认）
+  edgeIdleTimeoutSeconds: number; // 入口判死窗口（秒），0＝关闭（默认），推荐 ≥900
+  backstopIdleTimeoutSeconds: number; // 中途兜底窗口（秒），0＝关闭（默认），推荐 ≥3600
+  backstopTrickleBps: number; // 兜底滴流速率上限（字节/秒），0＝agent 默认（256）
 }
 
 export type NodeTab = "local";

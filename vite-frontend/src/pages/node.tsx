@@ -284,6 +284,9 @@ export default function NodePage({
     expiryTime: 0,
     renewalCycle: "",
     idleTimeoutSeconds: 0,
+    edgeIdleTimeoutSeconds: 0,
+    backstopIdleTimeoutSeconds: 0,
+    backstopTrickleBps: 0,
     serverHost: "",
     serverIpV4: "",
     serverIpV6: "",
@@ -938,6 +941,9 @@ export default function NodePage({
       expiryTime: node.expiryTime || 0,
       renewalCycle: node.renewalCycle || "",
       idleTimeoutSeconds: node.idleTimeoutSeconds || 0,
+      edgeIdleTimeoutSeconds: node.edgeIdleTimeoutSeconds || 0,
+      backstopIdleTimeoutSeconds: node.backstopIdleTimeoutSeconds || 0,
+      backstopTrickleBps: node.backstopTrickleBps || 0,
       serverHost: normalizedHost,
       serverIpV4: normalizedV4,
       serverIpV6: normalizedV6,
@@ -1522,6 +1528,10 @@ export default function NodePage({
                     expiryTime: form.expiryTime,
                     renewalCycle: form.renewalCycle,
                     idleTimeoutSeconds: form.idleTimeoutSeconds,
+                    edgeIdleTimeoutSeconds: form.edgeIdleTimeoutSeconds,
+                    backstopIdleTimeoutSeconds:
+                      form.backstopIdleTimeoutSeconds,
+                    backstopTrickleBps: form.backstopTrickleBps,
                     serverIp:
                       form.serverIpV4?.trim() ||
                       form.serverIpV6?.trim() ||
@@ -1566,6 +1576,9 @@ export default function NodePage({
       expiryTime: 0,
       renewalCycle: "",
       idleTimeoutSeconds: 0,
+      edgeIdleTimeoutSeconds: 0,
+      backstopIdleTimeoutSeconds: 0,
+      backstopTrickleBps: 0,
       serverHost: "",
       serverIpV4: "",
       serverIpV6: "",

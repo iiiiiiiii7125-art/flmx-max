@@ -767,6 +767,34 @@ func (r *Repository) UpdateNodeIdleTimeoutSeconds(nodeID int64, seconds int) err
 	return nil
 }
 
+// UpdateNodeReapSettings stores one node's zombie-session
+// root-cure settings as a single column set: the edge reaper
+// window, the mid-hop backstop window (both seconds, 0 =
+// disabled) and the backstop trickle ceiling (bytes/sec, 0 =
+// agent built-in default). Like UpdateNodeIdleTimeoutSeconds,
+// the panel is the authority and the values reach the agent as
+// service metadata at the next config generation for the node;
+// same not-found contract.
+func (r *Repository) UpdateNodeReapSettings(nodeID int64, edgeSeconds, backstopSeconds, trickleBps int) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", nodeID).
+		Updates(map[string]interface{}{
+			"edge_idle_timeout_seconds":     edgeSeconds,
+			"backstop_idle_timeout_seconds": backstopSeconds,
+			"backstop_trickle_bps":          trickleBps,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("节点不存在")
+	}
+	return nil
+}
+
 func (r *Repository) UpdateNodeExpiryReminderDismissed(nodeID int64, dismissed int) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")

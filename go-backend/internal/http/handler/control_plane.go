@@ -2257,6 +2257,36 @@ func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel 
 			// doc/guide/forward.md「会话无进展拆除」）。
 			ensureServiceMetadata(service)["idleTimeout"] = node.IdleTimeoutSeconds
 		}
+		// 根治两档窗口（秒）与兜底滴流上限（字节/秒）随同一通道
+		// 下发，agent 加载时收敛为全节点值（默认关）。
+		if node.EdgeIdleTimeoutSeconds > 0 {
+			ensureServiceMetadata(service)["edgeIdleTimeout"] = node.EdgeIdleTimeoutSeconds
+		}
+		if node.BackstopIdleTimeoutSeconds > 0 {
+			ensureServiceMetadata(service)["backstopIdleTimeout"] = node.BackstopIdleTimeoutSeconds
+		}
+		if node.BackstopTrickleBps > 0 {
+			ensureServiceMetadata(service)["backstopTrickleBps"] = node.BackstopTrickleBps
+		}
+		{
+			// 僵尸会话根治角色标记：本 builder 产出的服务（tcp/
+			// udp 一对）就是客户端直连的入口面——接受连接的对端
+			// 即真实客户端（NAT 只改写报文头、不终止 TCP，签收
+			// 证据仍属客户端），agent 只在此角色上启用「入口判
+			// 死」（客户端腿 TCP_INFO 证明数据无人签收才拆）。
+			// udp 一侧没有 TCP 套接字、判死天然不适用，标记仅为
+			// 角色口径统一，agent 侧对无 TCP 的会话不取证、不拆。
+			// 隧道段服务（tunnel_<id>）恒为 backstop（见
+			// buildTunnelChainServiceConfig）；内核入站/nftables
+			// 链头没有 gost 服务、不在此覆盖内。
+			handlerConfig := service["handler"].(map[string]interface{})
+			handlerMetadata, _ := handlerConfig["metadata"].(map[string]interface{})
+			if handlerMetadata == nil {
+				handlerMetadata = map[string]interface{}{}
+				handlerConfig["metadata"] = handlerMetadata
+			}
+			handlerMetadata["reapRole"] = "edge"
+		}
 		if mark := connlogEntryMetadata(connlogEntry, service["name"].(string)); mark != nil {
 			// 入站连接日志（U7）：托管中转的入口服务显式标记，
 			// agent 只对带标记的服务采集连接事件（见

@@ -14,6 +14,15 @@ func TestValidateRestartScheduleSetting(t *testing.T) {
 		{Enabled: true, Time: "00:00", JitterMinutes: 0},
 		{Enabled: false, Time: "23:59", JitterMinutes: 720},
 		{Enabled: true, Time: "19:05", JitterMinutes: 1},
+		// 模式面：显式 daily 与旧面板的空 mode 同义；interval 的
+		// 边界值（15 / 10080）与典型值合法。
+		{Enabled: true, Time: "04:00", JitterMinutes: 30, Mode: "daily"},
+		{Enabled: true, Time: "04:00", JitterMinutes: 30, Mode: "interval", IntervalMinutes: 15},
+		{Enabled: true, Time: "04:00", JitterMinutes: 30, Mode: "interval", IntervalMinutes: 120},
+		{Enabled: true, Time: "04:00", JitterMinutes: 720, Mode: "interval", IntervalMinutes: 10080},
+		// daily 模式不消费间隔字段，越界值不构成拒绝理由（面板侧
+		// 同口径）。
+		{Enabled: true, Time: "04:00", JitterMinutes: 30, Mode: "daily", IntervalMinutes: 0},
 	}
 	for _, s := range valid {
 		if err := validateRestartScheduleSetting(s); err != nil {
@@ -28,6 +37,10 @@ func TestValidateRestartScheduleSetting(t *testing.T) {
 		{Enabled: true, Time: "04:00:00", JitterMinutes: 30},
 		{Enabled: true, Time: "04:00", JitterMinutes: -1},
 		{Enabled: true, Time: "04:00", JitterMinutes: 721},
+		{Enabled: true, Time: "04:00", JitterMinutes: 30, Mode: "weekly"},
+		{Enabled: true, Time: "04:00", JitterMinutes: 30, Mode: "interval", IntervalMinutes: 0},
+		{Enabled: true, Time: "04:00", JitterMinutes: 30, Mode: "interval", IntervalMinutes: 14},
+		{Enabled: true, Time: "04:00", JitterMinutes: 30, Mode: "interval", IntervalMinutes: 10081},
 	}
 	for _, s := range invalid {
 		if err := validateRestartScheduleSetting(s); err == nil {
@@ -55,6 +68,40 @@ func TestRenderRestartTimerUnit(t *testing.T) {
 	}
 	if !strings.Contains(zero, "OnCalendar=*-*-* 00:00:00") {
 		t.Fatalf("timer unit missing midnight calendar:\n%s", zero)
+	}
+	// 显式 daily 与空 mode（旧面板）渲染逐字一致。
+	daily := renderRestartTimerUnit(restartScheduleSetting{Enabled: true, Time: "04:30", JitterMinutes: 30, Mode: "daily"})
+	if daily != body {
+		t.Fatalf("explicit daily mode must render the pre-mode unit:\n%s\n---\n%s", daily, body)
+	}
+	// interval 模式：单调触发、无 OnCalendar；抖动照旧以
+	// RandomizedDelaySec 呈现为上限延迟。
+	iv := renderRestartTimerUnit(restartScheduleSetting{
+		Enabled: true, Time: "04:30", JitterMinutes: 10, Mode: "interval", IntervalMinutes: 120,
+	})
+	for _, want := range []string{
+		"OnBootSec=120min",
+		"OnUnitActiveSec=120min",
+		"RandomizedDelaySec=600",
+		"Persistent=true",
+		"Unit=flmx-agent-restart.service",
+		"WantedBy=timers.target",
+	} {
+		if !strings.Contains(iv, want) {
+			t.Fatalf("interval timer unit missing %q:\n%s", want, iv)
+		}
+	}
+	if strings.Contains(iv, "OnCalendar") {
+		t.Fatalf("interval timer must not carry a calendar trigger:\n%s", iv)
+	}
+	ivZero := renderRestartTimerUnit(restartScheduleSetting{
+		Enabled: true, Time: "04:30", JitterMinutes: 0, Mode: "interval", IntervalMinutes: 60,
+	})
+	if strings.Contains(ivZero, "RandomizedDelaySec") {
+		t.Fatalf("zero jitter must omit RandomizedDelaySec in interval mode:\n%s", ivZero)
+	}
+	if !strings.Contains(ivZero, "OnBootSec=60min") || !strings.Contains(ivZero, "OnUnitActiveSec=60min") {
+		t.Fatalf("interval timer missing monotonic triggers:\n%s", ivZero)
 	}
 }
 
@@ -172,6 +219,69 @@ func TestApplyRestartScheduleEnableIdempotentThenDisable(t *testing.T) {
 	}
 }
 
+// fix/restart-interval：间隔模式经 apply 全程落地（单元内容＝
+// 渲染结果）、与 daily 互切时原子换写（同一对单元文件、不并存
+// 第二个 timer）、关闭删除。
+func TestApplyRestartScheduleIntervalAndModeSwitch(t *testing.T) {
+	calls := stubRestartScheduleEnv(t)
+	ctx := context.Background()
+	timerPath := filepath.Join(restartScheduleUnitDir, restartTimerUnitName)
+
+	iv := restartScheduleSetting{Enabled: true, Time: "04:00", JitterMinutes: 10, Mode: "interval", IntervalMinutes: 120}
+	if err := applyRestartSchedule(ctx, iv); err != nil {
+		t.Fatalf("enable interval: %v", err)
+	}
+	body, err := os.ReadFile(timerPath)
+	if err != nil {
+		t.Fatalf("timer unit not written: %v", err)
+	}
+	if string(body) != renderRestartTimerUnit(iv) {
+		t.Fatalf("interval timer content mismatch:\n%s", body)
+	}
+	if countCall(*calls, "enable --now "+restartTimerUnitName) != 1 {
+		t.Fatalf("expected one timer enable, got %v", *calls)
+	}
+	// 目录里只能有这一对单元（模式切换不留影子 timer）。
+	entries, err := os.ReadDir(restartScheduleUnitDir)
+	if err != nil {
+		t.Fatalf("read unit dir: %v", err)
+	}
+	unitFiles := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "flmx-agent-restart.") {
+			unitFiles++
+		}
+	}
+	if unitFiles != 2 {
+		t.Fatalf("expected exactly the service+timer pair, found %d unit files", unitFiles)
+	}
+
+	// 切回 daily：同一文件被换写为日历形态、reload 一次。
+	*calls = nil
+	daily := restartScheduleSetting{Enabled: true, Time: "03:15", JitterMinutes: 45}
+	if err := applyRestartSchedule(ctx, daily); err != nil {
+		t.Fatalf("switch to daily: %v", err)
+	}
+	body, err = os.ReadFile(timerPath)
+	if err != nil {
+		t.Fatalf("timer unit missing after switch: %v", err)
+	}
+	if string(body) != renderRestartTimerUnit(daily) || strings.Contains(string(body), "OnUnitActiveSec") {
+		t.Fatalf("daily switch must replace the timer content:\n%s", body)
+	}
+	if countCall(*calls, "daemon-reload") != 1 {
+		t.Fatalf("mode switch must daemon-reload once, got %v", *calls)
+	}
+
+	// 关闭：两件单元删除（与 daily 路径同一出口）。
+	if err := applyRestartSchedule(ctx, restartScheduleSetting{Enabled: false, Time: "03:15"}); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if _, err := os.Stat(timerPath); !os.IsNotExist(err) {
+		t.Fatalf("timer unit must be removed after disable")
+	}
+}
+
 func TestHandleSetRestartScheduleRejectsInvalid(t *testing.T) {
 	stubRestartScheduleEnv(t)
 	w := &WebSocketReporter{}
@@ -184,6 +294,18 @@ func TestHandleSetRestartScheduleRejectsInvalid(t *testing.T) {
 		"enabled": true, "time": "04:00", "jitterMinutes": 9999,
 	}); err == nil {
 		t.Fatal("out-of-range jitter must be rejected")
+	}
+	if err := w.handleSetRestartSchedule(map[string]interface{}{
+		"enabled": true, "time": "04:00", "jitterMinutes": 30,
+		"mode": "interval", "intervalMinutes": 5,
+	}); err == nil {
+		t.Fatal("below-floor interval must be rejected")
+	}
+	if err := w.handleSetRestartSchedule(map[string]interface{}{
+		"enabled": true, "time": "04:00", "jitterMinutes": 30,
+		"mode": "interval", "intervalMinutes": 120,
+	}); err != nil {
+		t.Fatalf("valid interval setting must apply: %v", err)
 	}
 	if err := w.handleSetRestartSchedule(map[string]interface{}{
 		"enabled": false, "time": "04:00", "jitterMinutes": 30,

@@ -13,48 +13,82 @@ import (
 
 func TestValidateRestartSchedule(t *testing.T) {
 	valid := []struct {
-		enabled int
-		time    string
-		jitter  int
+		enabled  int
+		mode     string
+		time     string
+		jitter   int
+		interval int
 	}{
-		{1, "04:00", 30},
-		{0, "00:00", 0},
-		{1, "23:59", 720},
+		{1, "daily", "04:00", 30, 60},
+		{0, "daily", "00:00", 0, 60},
+		{1, "daily", "23:59", 720, 60},
+		// 间隔模式：边界值与典型值；间隔在 daily 模式不判（此处
+		// 给 0 亦合法，daily 不消费该字段）。
+		{1, "interval", "04:00", 30, 15},
+		{1, "interval", "04:00", 30, 120},
+		{1, "interval", "04:00", 0, 10080},
+		{1, "daily", "04:00", 30, 0},
 	}
 	for _, c := range valid {
-		if err := validateRestartSchedule(c.enabled, c.time, c.jitter); err != nil {
+		if err := validateRestartSchedule(c.enabled, c.mode, c.time, c.jitter, c.interval); err != nil {
 			t.Fatalf("expected valid %+v, got %v", c, err)
 		}
 	}
 	invalid := []struct {
-		enabled int
-		time    string
-		jitter  int
+		enabled  int
+		mode     string
+		time     string
+		jitter   int
+		interval int
 	}{
-		{2, "04:00", 30},
-		{-1, "04:00", 30},
-		{1, "24:00", 30},
-		{1, "4:00", 30},
-		{1, "04:60", 30},
-		{1, "", 30},
-		{1, "04:00", -1},
-		{1, "04:00", 721},
+		{2, "daily", "04:00", 30, 60},
+		{-1, "daily", "04:00", 30, 60},
+		{1, "daily", "24:00", 30, 60},
+		{1, "daily", "4:00", 30, 60},
+		{1, "daily", "04:60", 30, 60},
+		{1, "daily", "", 30, 60},
+		{1, "daily", "04:00", -1, 60},
+		{1, "daily", "04:00", 721, 60},
+		{1, "weekly", "04:00", 30, 60},   // 未知模式
+		{1, "", "04:00", 30, 60},         // 空模式须先经 handler 归一，校验面不放行
+		{1, "interval", "04:00", 30, 14}, // 间隔低于下限
+		{1, "interval", "04:00", 30, 10081},
+		{1, "interval", "04:00", 30, 0},
+		{1, "interval", "04:00", 721, 120}, // 间隔模式下抖动边界照旧
 	}
 	for _, c := range invalid {
-		if err := validateRestartSchedule(c.enabled, c.time, c.jitter); err == nil {
+		if err := validateRestartSchedule(c.enabled, c.mode, c.time, c.jitter, c.interval); err == nil {
 			t.Fatalf("expected invalid %+v to be rejected", c)
 		}
 	}
 }
 
 func TestRestartSchedulePayloadShape(t *testing.T) {
-	p := restartSchedulePayload(1, "04:00", 30)
+	// daily 模式载荷必须与引入模式前逐字一致：恰好三键、无
+	// mode/intervalMinutes——旧 agent 读到的就是它认识的形状。
+	p := restartSchedulePayload(1, "daily", "04:00", 30, 60)
 	if p["enabled"] != true || p["time"] != "04:00" || p["jitterMinutes"] != 30 {
 		t.Fatalf("payload shape drifted: %v", p)
 	}
-	p = restartSchedulePayload(0, "04:00", 30)
+	if len(p) != 3 {
+		t.Fatalf("daily payload must carry exactly the pre-mode keys: %v", p)
+	}
+	// 存量空 mode 按 daily 读，载荷同样无新键。
+	p = restartSchedulePayload(1, "", "04:00", 30, 60)
+	if len(p) != 3 {
+		t.Fatalf("empty mode must render the daily payload: %v", p)
+	}
+	p = restartSchedulePayload(0, "daily", "04:00", 30, 60)
 	if p["enabled"] != false {
 		t.Fatalf("disabled must render enabled=false: %v", p)
+	}
+	// interval 模式在三键之外带 mode＋intervalMinutes。
+	p = restartSchedulePayload(1, "interval", "04:00", 30, 120)
+	if p["mode"] != "interval" || p["intervalMinutes"] != 120 {
+		t.Fatalf("interval payload must carry mode+intervalMinutes: %v", p)
+	}
+	if p["enabled"] != true || p["time"] != "04:00" || p["jitterMinutes"] != 30 {
+		t.Fatalf("interval payload must keep the base keys: %v", p)
 	}
 }
 
@@ -137,11 +171,14 @@ func TestNodeRestartScheduleSetRejects(t *testing.T) {
 	h := New(r, "test-secret")
 
 	cases := []map[string]interface{}{
-		{"id": 42, "enabled": 1, "time": "24:00", "jitterMinutes": 30},  // bad time
-		{"id": 42, "enabled": 1, "time": "04:00", "jitterMinutes": 721}, // jitter too large
-		{"id": 42, "enabled": 2, "time": "04:00", "jitterMinutes": 30},  // bad switch
-		{"id": 44, "enabled": 1, "time": "04:00", "jitterMinutes": 30},  // nftables node
-		{"id": 999, "enabled": 1, "time": "04:00", "jitterMinutes": 30}, // missing node
+		{"id": 42, "enabled": 1, "time": "24:00", "jitterMinutes": 30},                                               // bad time
+		{"id": 42, "enabled": 1, "time": "04:00", "jitterMinutes": 721},                                              // jitter too large
+		{"id": 42, "enabled": 2, "time": "04:00", "jitterMinutes": 30},                                               // bad switch
+		{"id": 44, "enabled": 1, "time": "04:00", "jitterMinutes": 30},                                               // nftables node
+		{"id": 999, "enabled": 1, "time": "04:00", "jitterMinutes": 30},                                              // missing node
+		{"id": 42, "enabled": 1, "time": "04:00", "jitterMinutes": 30, "mode": "weekly"},                             // unknown mode
+		{"id": 42, "enabled": 1, "time": "04:00", "jitterMinutes": 30, "mode": "interval", "intervalMinutes": 10},    // interval below floor
+		{"id": 42, "enabled": 1, "time": "04:00", "jitterMinutes": 30, "mode": "interval", "intervalMinutes": 10081}, // interval above ceiling
 	}
 	for i, body := range cases {
 		env := postRestartSchedule(t, h, body)
@@ -153,6 +190,60 @@ func TestNodeRestartScheduleSetRejects(t *testing.T) {
 	node, _ := r.GetNodeByID(42)
 	if node.RestartEnabled != 0 {
 		t.Fatalf("rejected writes must not persist: %+v", node)
+	}
+}
+
+// fix/restart-interval：间隔模式设置在离线节点上同样只落库待
+// 补发，模式与间隔分钟与开关一同持久化、回执回显。
+func TestNodeRestartScheduleSetIntervalPersists(t *testing.T) {
+	r, err := repo.Open(filepath.Join(t.TempDir(), "restart-interval.db"))
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	seedRestartNode(t, r, 43, "agent")
+	h := New(r, "test-secret")
+
+	env := postRestartSchedule(t, h, map[string]interface{}{
+		"id": 43, "enabled": 1, "time": "04:00", "jitterMinutes": 10,
+		"mode": "interval", "intervalMinutes": 120,
+	})
+	if env["code"].(float64) != 0 {
+		t.Fatalf("expected success envelope, got %v", env)
+	}
+	data := env["data"].(map[string]interface{})
+	if data["mode"] != "interval" || data["intervalMinutes"] != float64(120) {
+		t.Fatalf("receipt must echo mode+intervalMinutes, got %v", data)
+	}
+	node, err := r.GetNodeByID(43)
+	if err != nil || node == nil {
+		t.Fatalf("reload node: %v", err)
+	}
+	if node.RestartMode != "interval" || node.RestartIntervalMinutes != 120 {
+		t.Fatalf("interval setting not persisted: mode=%q interval=%d", node.RestartMode, node.RestartIntervalMinutes)
+	}
+	// 列表行透出新两字段（前端弹窗的回填消费面）。
+	items, err := r.ListNodes()
+	if err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+	for _, it := range items {
+		if id, _ := it["id"].(int64); id == 43 {
+			if it["restartMode"] != "interval" || it["restartIntervalMinutes"] != 120 {
+				t.Fatalf("list row must carry mode+interval: %v", it)
+			}
+		}
+	}
+	// 切回 daily 亦落库（模式是存量状态的一部分，不是缺省）。
+	env = postRestartSchedule(t, h, map[string]interface{}{
+		"id": 43, "enabled": 1, "time": "05:00", "jitterMinutes": 10, "mode": "daily",
+	})
+	if env["code"].(float64) != 0 {
+		t.Fatalf("switch back to daily must succeed, got %v", env)
+	}
+	node, _ = r.GetNodeByID(43)
+	if node.RestartMode != "daily" {
+		t.Fatalf("mode switch not persisted: %q", node.RestartMode)
 	}
 }
 
