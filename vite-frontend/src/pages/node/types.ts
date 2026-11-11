@@ -49,6 +49,9 @@ export interface Node {
   restartEnabled?: number; // 0 关 1 开
   restartTime?: string;
   restartJitterMinutes?: number;
+  /** 重启模式：daily＝每天 restartTime 触发（默认）；interval＝每 restartIntervalMinutes 分钟触发一次。 */
+  restartMode?: string;
+  restartIntervalMinutes?: number;
   /** 转发面会话无进展拆除阈值（秒，保险丝，默认关）：0＝不拆；>0 时只拆双向零流量满该秒数的会话。 */
   idleTimeoutSeconds?: number;
   status: number;

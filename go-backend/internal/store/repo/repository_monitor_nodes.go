@@ -45,16 +45,18 @@ func (r *Repository) SetNodesLatencyTargets(ids []int64, value string) error {
 // SetNodeRestartSchedule stores one node's scheduled agent-restart
 // setting (the panel is the authority; the agent mirrors it into a
 // systemd timer). Values are validated by the handler before they
-// reach this method; the update is a single-row write of the three
+// reach this method; the update is a single-row write of the five
 // columns so a partial state can never land.
-func (r *Repository) SetNodeRestartSchedule(id int64, enabled int, restartTime string, jitterMinutes int) error {
+func (r *Repository) SetNodeRestartSchedule(id int64, enabled int, restartTime string, jitterMinutes int, mode string, intervalMinutes int) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
 	return r.db.Model(&model.Node{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"restart_enabled":        enabled,
-		"restart_time":           restartTime,
-		"restart_jitter_minutes": jitterMinutes,
+		"restart_enabled":          enabled,
+		"restart_time":             restartTime,
+		"restart_jitter_minutes":   jitterMinutes,
+		"restart_mode":             mode,
+		"restart_interval_minutes": intervalMinutes,
 	}).Error
 }
 

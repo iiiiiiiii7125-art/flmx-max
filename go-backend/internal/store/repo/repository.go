@@ -1405,9 +1405,11 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			// 展示分组标签（纯展示；空＝未分组）。
 			"displayGroup": n.DisplayGroup,
 			// 定时重启 agent 服务的面板权威设置（默认关）。
-			"restartEnabled":       n.RestartEnabled,
-			"restartTime":          n.RestartTime,
-			"restartJitterMinutes": n.RestartJitterMinutes,
+			"restartEnabled":         n.RestartEnabled,
+			"restartTime":            n.RestartTime,
+			"restartJitterMinutes":   n.RestartJitterMinutes,
+			"restartMode":            n.RestartMode,
+			"restartIntervalMinutes": n.RestartIntervalMinutes,
 			// 定时重启下发结果（W8-R-C601 持久字段）：最近一次下
 			// 发尝试的状态／原因／时刻，刷新列表行可见。
 			"restartPushStatus": n.RestartPushStatus,
@@ -2446,6 +2448,8 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 		b.RestartEnabled = n.RestartEnabled
 		b.RestartTime = n.RestartTime
 		b.RestartJitterMinutes = n.RestartJitterMinutes
+		b.RestartMode = n.RestartMode
+		b.RestartIntervalMinutes = n.RestartIntervalMinutes
 		b.IdleTimeoutSeconds = n.IdleTimeoutSeconds
 		// O7-006：恢复后保留已忽略的到期提醒状态
 		b.ExpiryReminderDismissed = n.ExpiryReminderDismissed
@@ -3717,6 +3721,24 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 #%d（%q）的定时重启抖动 %d 分钟超出 0–720，已按默认 30 恢复", n.ID, n.Name, n.RestartJitterMinutes)
 			restartJitter = 30
 		}
+		// 重启模式＋间隔恢复面归一，镜像写面（mode {daily,interval}／
+		// 间隔 15–10080 分钟）。旧备份无此两字段（空/零）时按
+		// daily/60 静默回落，与存量未配置形态等价；带值越界逐项归一
+		// 并回执点名原值。
+		restartMode := n.RestartMode
+		if restartMode == "" {
+			restartMode = "daily"
+		} else if restartMode != "daily" && restartMode != "interval" {
+			rep.warnf("备份恢复：节点 #%d（%q）的定时重启模式 %q 无效，已按每天定时（daily）恢复", n.ID, n.Name, n.RestartMode)
+			restartMode = "daily"
+		}
+		restartInterval := n.RestartIntervalMinutes
+		if restartInterval == 0 {
+			restartInterval = 60
+		} else if restartInterval < 15 || restartInterval > 10080 {
+			rep.warnf("备份恢复：节点 #%d（%q）的定时重启间隔 %d 分钟超出 15–10080，已按默认 60 恢复", n.ID, n.Name, n.RestartIntervalMinutes)
+			restartInterval = 60
+		}
 		// 无进展拆除阈值恢复面归一，镜像写面 validateNodeIdleTimeoutSeconds
 		//（0–86400 秒，0＝关）。旧备份无此字段（零值）即关闭，与存量
 		// 未配置形态等价、静默；带值越界按关闭归一并回执点名原值——
@@ -3762,10 +3784,12 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			ForwardMode:    forwardMode,
 			DisplayGroup:   displayGroup,
 			// R2-E1-06：归一后的定时重启三字段落库。
-			RestartEnabled:       restartEnabled,
-			RestartTime:          restartTime,
-			RestartJitterMinutes: restartJitter,
-			IdleTimeoutSeconds:   idleTimeoutSeconds,
+			RestartEnabled:         restartEnabled,
+			RestartTime:            restartTime,
+			RestartJitterMinutes:   restartJitter,
+			RestartMode:            restartMode,
+			RestartIntervalMinutes: restartInterval,
+			IdleTimeoutSeconds:     idleTimeoutSeconds,
 			// O7-006：恢复后保留已忽略的到期提醒状态
 			ExpiryReminderDismissed: n.ExpiryReminderDismissed,
 		}
@@ -3774,7 +3798,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "extra_ips", "port", "interface_name", "version",
 				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
-				"inx", "latency_targets", "forward_mode", "display_group", "restart_enabled", "restart_time", "restart_jitter_minutes", "idle_timeout_seconds", "expiry_reminder_dismissed",
+				"inx", "latency_targets", "forward_mode", "display_group", "restart_enabled", "restart_time", "restart_jitter_minutes", "restart_mode", "restart_interval_minutes", "idle_timeout_seconds", "expiry_reminder_dismissed",
 			}),
 		}).Create(&item).Error
 		if err != nil {

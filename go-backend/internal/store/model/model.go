@@ -124,6 +124,12 @@ type Node struct {
 	RestartEnabled       int    `gorm:"column:restart_enabled;not null;default:0"`
 	RestartTime          string `gorm:"column:restart_time;type:varchar(5);not null;default:'04:00'"`
 	RestartJitterMinutes int    `gorm:"column:restart_jitter_minutes;not null;default:30"`
+	// 重启模式（fix/restart-interval）：daily＝每天 RestartTime
+	// 触发（存量行为，默认）；interval＝每 RestartIntervalMinutes
+	// 分钟触发一次（小内存节点攒积保险丝，用户 2026-11-12 令）。
+	// RestartMode 空串按 daily 读（存量行与旧备份的缺省）。
+	RestartMode            string `gorm:"column:restart_mode;type:varchar(10);not null;default:'daily'"`
+	RestartIntervalMinutes int    `gorm:"column:restart_interval_minutes;not null;default:60"`
 	// 定时重启下发结果（W8-R-C601 持久字段）：设置保存后下发
 	// agent 的实际结果，刷新列表行可见——此前失败只在当次回执
 	// 带 pushError，刷新即失。RestartPushStatus 取 pending（已保
@@ -867,6 +873,10 @@ type NodeBackup struct {
 	RestartEnabled       int    `json:"restartEnabled"`
 	RestartTime          string `json:"restartTime,omitempty"`
 	RestartJitterMinutes int    `json:"restartJitterMinutes,omitempty"`
+	// 重启模式＋间隔分钟随备份（fix/restart-interval）：旧备份无此
+	// 两字段时导入面按 daily/60 回落，与存量未配置形态等价。
+	RestartMode            string `json:"restartMode,omitempty"`
+	RestartIntervalMinutes int    `json:"restartIntervalMinutes,omitempty"`
 	// 转发面会话无进展拆除阈值（秒）随备份：旧备份无此字段时按
 	// 0（关闭）回落，与存量未配置形态等价（默认值即关闭，不会
 	// 因恢复旧备份而静默开启拆除）。
