@@ -40,6 +40,16 @@ import (
 	"github.com/vishvananda/netns"
 )
 
+// defaultMinHandlerRetries is the parse-time floor for the handler
+// router's retries (F-215-C): a single-candidate service gets at least
+// this many retries so a transient first-dial failure (refused/reset/
+// resolve failure) is absorbed inside Router.Dial instead of failing
+// the user's first connection. It only raises the panel-written value,
+// never lowers it, is derived only at parse time, and is not written
+// back to the config or service metadata. The listener router has no
+// such floor.
+const defaultMinHandlerRetries = 2
+
 func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 	if cfg.Listener == nil {
 		cfg.Listener = &config.ListenerConfig{}
@@ -335,7 +345,7 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 	}
 
 	routerOpts = []chain.RouterOption{
-		chain.RetriesRouterOption(cfg.Handler.Retries),
+		chain.RetriesRouterOption(max(cfg.Handler.Retries, defaultMinHandlerRetries)),
 		chain.TimeoutRouterOption(dialTimeout),
 		chain.InterfaceRouterOption(ifce),
 		chain.NetnsRouterOption(netnsOut),

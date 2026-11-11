@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"time"
 
@@ -65,6 +66,46 @@ func (r *Router) Options() *chain.RouterOptions {
 	return &r.options
 }
 
+// minAttemptSlice is the D1 merge floor: when the even share of the
+// remaining envelope drops below it, the current attempt takes the
+// whole remainder and is the last one.
+const minAttemptSlice = 300 * time.Millisecond
+
+// retryBackoff returns the sleep between attempts: 200ms after the
+// first failure, 400ms after the second and every later one, with
+// ±20% jitter so concurrent dials do not retry in lockstep.
+func retryBackoff(interval int) time.Duration {
+	base := 400 * time.Millisecond
+	if interval <= 0 {
+		base = 200 * time.Millisecond
+	}
+	return time.Duration(float64(base) * (0.8 + 0.4*rand.Float64()))
+}
+
+// sleepRetryBackoff sleeps for the interval's backoff, truncated to
+// the envelope time left before deadline (the backoff is charged to
+// the envelope, D1), and aborts early with the parent context's error
+// when the caller has given up (D6).
+func sleepRetryBackoff(parent context.Context, interval int, deadline time.Time) error {
+	d := retryBackoff(interval)
+	if !deadline.IsZero() {
+		if rem := time.Until(deadline); rem < d {
+			d = rem
+		}
+	}
+	if d < 0 {
+		d = 0
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-parent.Done():
+		return parent.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 func (r *Router) Dial(ctx context.Context, network, address string) (conn net.Conn, err error) {
 	host := address
 	if h, _, _ := net.SplitHostPort(address); h != "" {
@@ -111,15 +152,40 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 
 	log.Debugf("dial %s/%s", address, network)
 
+	parent := ctx
+
+	// D1 total envelope: all attempts and backoffs of this call share
+	// one deadline, t0+options.Timeout. Each attempt's cap is the
+	// remaining envelope divided by the remaining attempt count, so a
+	// fast failure carries its unused share forward.
+	var deadline time.Time
+	if r.options.Timeout > 0 {
+		deadline = time.Now().Add(r.options.Timeout)
+	}
+
 	// Nodes that fail an attempt join the exclude list for the next
 	// one (D3-04): without this, every retry re-selected the node
 	// that had just failed. The hop layer honours the list via
 	// ctxvalue.ExcludeNodesFromContext; any list the caller already
 	// supplied is kept and extended.
 	exclude := ctxvalue.ExcludeNodesFromContext(ctx)
+	// D2: the caller-supplied part of exclude is hard and is never
+	// stripped; entries this call appends itself (ownExclude, the
+	// tail beyond hardExclude) are advisory and may be peeled off by
+	// the fallback reselection in selectRoute.
+	hardExclude := append([]string(nil), exclude...)
 
 	for i := 0; i < count; i++ {
-		ctx := ctx
+		// D1/D6: a cancelled parent ends the call with the parent's
+		// error; an attempt's own timeout does not (parent still nil).
+		if perr := parent.Err(); perr != nil {
+			err = perr
+			return nil, err
+		}
+
+		last := i == count-1
+
+		ctx := parent
 		if len(exclude) > 0 {
 			ctx = ctxvalue.ContextWithExcludeNodes(ctx, exclude)
 		}
@@ -133,7 +199,20 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		// cancelOnCloseConn).
 		var cancel context.CancelFunc
 		if r.options.Timeout > 0 {
-			ctx, cancel = context.WithTimeout(ctx, r.options.Timeout)
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				if err == nil {
+					err = context.DeadlineExceeded
+				}
+				return nil, err
+			}
+			slice := remaining / time.Duration(count-i)
+			if slice < minAttemptSlice {
+				// Merge floor: take the whole remainder, last attempt.
+				slice = remaining
+				last = true
+			}
+			ctx, cancel = context.WithTimeout(ctx, slice)
 		}
 
 		buf := ctxvalue.BufferFromContext(ctx)
@@ -144,11 +223,25 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		var ipAddr string
 		ipAddr, err = xnet.Resolve(ctx, "ip", address, r.options.Resolver, r.options.HostMapper, log)
 		if err != nil {
+			// D3: a router-level resolve failure joins the retry
+			// loop with the same shape as a dial failure instead of
+			// breaking out of it.
 			log.Error(err)
 			if cancel != nil {
 				cancel()
 			}
-			break
+			if perr := parent.Err(); perr != nil {
+				err = perr
+				return nil, err
+			}
+			if last {
+				break
+			}
+			if serr := sleepRetryBackoff(parent, i, deadline); serr != nil {
+				err = serr
+				return nil, err
+			}
+			continue
 		}
 
 		// Dial-point re-validation (A02-001): whatever resolution
@@ -157,6 +250,8 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		// would resolve a second time), the guard validates the final
 		// target and pins hostnames to a validated IP literal, so the
 		// address that is connected to is the address that was judged.
+		// D6: a guard verdict is deterministic for this call, so it
+		// short-circuits ahead of all retry semantics.
 		if r.dialTargetGuard != nil {
 			ipAddr, err = r.dialTargetGuard(ctx, network, ipAddr)
 			if err != nil {
@@ -172,12 +267,32 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 			buf.Reset()
 		}
 
+		// D2 selectRoute: select with the full exclude list; if that
+		// yields no route and this call has advisory ownExclude
+		// entries, peel them off and reselect once with only the hard
+		// caller exclude. Multi-candidate attempts still see the full
+		// list first, so unfailed candidates stay preferred (D3-04).
+		fallbackUsed := false
+		selectRoute := func(ex []string) (chain.Route, context.Context) {
+			sctx := ctxvalue.ContextWithExcludeNodes(ctx, ex)
+			rt := r.options.Chain.Route(sctx, network, ipAddr, chain.WithHostRouteOption(address))
+			if (rt == nil || len(rt.Nodes()) == 0) && !fallbackUsed && len(exclude) > len(hardExclude) {
+				fallbackUsed = true
+				sctx = ctxvalue.ContextWithExcludeNodes(ctx, hardExclude)
+				rt = r.options.Chain.Route(sctx, network, ipAddr, chain.WithHostRouteOption(address))
+			}
+			return rt, sctx
+		}
+
 		var route chain.Route
+		routeCtx := ctx
 		if r.options.Chain != nil {
-			route = r.options.Chain.Route(ctx, network, ipAddr, chain.WithHostRouteOption(address))
+			route, routeCtx = selectRoute(exclude)
 			if route == nil || len(route.Nodes()) == 0 {
 				// Fail closed (D1-H4): a configured chain that yields no
 				// route must not fall back to a direct dial. Mirrors Bind.
+				// D6: still empty after the D2 fallback — no further
+				// attempts, the candidate set is genuinely empty.
 				err = emptyRouteError(r.options.Chain)
 				if cancel != nil {
 					cancel()
@@ -198,7 +313,7 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		if route == nil {
 			route = DefaultRoute
 		}
-		conn, err = route.Dial(ctx, network, ipAddr,
+		conn, err = route.Dial(routeCtx, network, ipAddr,
 			chain.InterfaceDialOption(r.options.IfceName),
 			chain.NetnsDialOption(r.options.Netns),
 			chain.SockOptsDialOption(r.options.SockOpts),
@@ -217,6 +332,17 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 			exclude = append(exclude, node.Name, node.Addr)
 		}
 		log.Errorf("route(retry=%d) %s", i, err)
+		if perr := parent.Err(); perr != nil {
+			err = perr
+			return nil, err
+		}
+		if last {
+			break
+		}
+		if serr := sleepRetryBackoff(parent, i, deadline); serr != nil {
+			err = serr
+			return nil, err
+		}
 	}
 
 	return
@@ -234,11 +360,33 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 
 	log.Debugf("bind on %s/%s", address, network)
 
+	parent := ctx
+
+	// D1 total envelope, same skeleton as dial: all attempts and
+	// backoffs share one deadline, t0+options.Timeout, and each
+	// attempt's cap is the remaining envelope over the remaining
+	// attempt count. (Listener routers do not read retries, so with
+	// the usual single attempt this is exactly today's behaviour.)
+	var deadline time.Time
+	if r.options.Timeout > 0 {
+		deadline = time.Now().Add(r.options.Timeout)
+	}
+
 	// Same retry-exclusion contract as dial (D3-04).
 	exclude := ctxvalue.ExcludeNodesFromContext(ctx)
+	// D2: caller-supplied exclude is hard; entries appended by this
+	// call itself are advisory (see dial).
+	hardExclude := append([]string(nil), exclude...)
 
 	for i := 0; i < count; i++ {
-		ctx := ctx
+		if perr := parent.Err(); perr != nil {
+			err = perr
+			return nil, err
+		}
+
+		last := i == count-1
+
+		ctx := parent
 		if len(exclude) > 0 {
 			ctx = ctxvalue.ContextWithExcludeNodes(ctx, exclude)
 		}
@@ -248,13 +396,43 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 		// exactly as long as the returned listener.
 		var cancel context.CancelFunc
 		if r.options.Timeout > 0 {
-			ctx, cancel = context.WithTimeout(ctx, r.options.Timeout)
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				if err == nil {
+					err = context.DeadlineExceeded
+				}
+				return nil, err
+			}
+			slice := remaining / time.Duration(count-i)
+			if slice < minAttemptSlice {
+				slice = remaining
+				last = true
+			}
+			ctx, cancel = context.WithTimeout(ctx, slice)
+		}
+
+		// D2 selectRoute, same contract as dial: full exclude first,
+		// one reselection with only the hard caller exclude when the
+		// first yields no route and ownExclude is non-empty.
+		fallbackUsed := false
+		selectRoute := func(ex []string) (chain.Route, context.Context) {
+			sctx := ctxvalue.ContextWithExcludeNodes(ctx, ex)
+			rt := r.options.Chain.Route(sctx, network, address)
+			if (rt == nil || len(rt.Nodes()) == 0) && !fallbackUsed && len(exclude) > len(hardExclude) {
+				fallbackUsed = true
+				sctx = ctxvalue.ContextWithExcludeNodes(ctx, hardExclude)
+				rt = r.options.Chain.Route(sctx, network, address)
+			}
+			return rt, sctx
 		}
 
 		var route chain.Route
+		routeCtx := ctx
 		if r.options.Chain != nil {
-			route = r.options.Chain.Route(ctx, network, address)
+			route, routeCtx = selectRoute(exclude)
 			if route == nil || len(route.Nodes()) == 0 {
+				// D6: still empty after the D2 fallback — fail
+				// closed immediately, no further attempts.
 				err = emptyRouteError(r.options.Chain)
 				if cancel != nil {
 					cancel()
@@ -275,7 +453,7 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 		if route == nil {
 			route = DefaultRoute
 		}
-		ln, err = route.Bind(ctx, network, address, opts...)
+		ln, err = route.Bind(routeCtx, network, address, opts...)
 		if err == nil {
 			if cancel != nil {
 				ln = &cancelOnCloseListener{Listener: ln, cancel: cancel}
@@ -289,6 +467,17 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 			exclude = append(exclude, node.Name, node.Addr)
 		}
 		log.Errorf("route(retry=%d) %s", i, err)
+		if perr := parent.Err(); perr != nil {
+			err = perr
+			return nil, err
+		}
+		if last {
+			break
+		}
+		if serr := sleepRetryBackoff(parent, i, deadline); serr != nil {
+			err = serr
+			return nil, err
+		}
 	}
 
 	return
