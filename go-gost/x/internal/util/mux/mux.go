@@ -146,3 +146,12 @@ func (c *streamConn) Write(b []byte) (n int, err error) {
 func (c *streamConn) Close() error {
 	return c.stream.Close()
 }
+
+// DeadlinePromoted reports that this conn's deadline setters are
+// promoted through the embedded net.Conn to the shared mux
+// session connection: a deadline armed "on the stream" actually
+// lands on the session socket and would disturb every sibling
+// stream. Per-session deadline consumers (Transport's post-EOF
+// drain bound) check this marker and leave such endpoints
+// unarmed.
+func (c *streamConn) DeadlinePromoted() bool { return true }

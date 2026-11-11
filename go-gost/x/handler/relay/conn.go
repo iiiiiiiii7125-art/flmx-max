@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"syscall"
 )
 
 type tcpConn struct {
@@ -19,14 +20,25 @@ func (c *tcpConn) Read(b []byte) (n int, err error) {
 }
 
 func (c *tcpConn) Write(b []byte) (n int, err error) {
-	n = len(b) // force byte length consistent
 	if c.wbuf.Len() > 0 {
+		// The cached response header rides ahead of b on the
+		// wire; only the flushed bytes that carried b count
+		// toward n. This used to report len(b) unconditionally
+		// ("force byte length consistent"): a flush that blocked
+		// to its deadline on a dead client and moved nothing
+		// still credited Transport's progress tracker with a
+		// full chunk, and io.CopyBuffer dropped the unwritten
+		// bytes believing they had been written. Report only
+		// what actually crossed.
+		headerLen := c.wbuf.Len()
 		c.wbuf.Write(b) // append the data to the cached header
-		_, err = c.wbuf.WriteTo(c.Conn)
-		return
+		written, werr := c.wbuf.WriteTo(c.Conn)
+		if n = int(written) - headerLen; n < 0 {
+			n = 0
+		}
+		return n, werr
 	}
-	_, err = c.Conn.Write(b)
-	return
+	return c.Conn.Write(b)
 }
 
 // flushHeader writes the cached response header to the wire now
@@ -70,6 +82,20 @@ func (c *tcpConn) CloseRead() error {
 		return cr.CloseRead()
 	}
 	return errHalfCloseNotSupported
+}
+
+var errSyscallConnNotSupported = errors.New("syscall conn not supported by the underlying connection")
+
+// SyscallConn forwards the raw socket to the wrapped conn. This
+// wrapper heads the relay session stack, so without the
+// forwarding the reaper's TCP_INFO probe and linger-0 teardown
+// (internal/net) cannot resolve through it and relay sessions
+// would silently lose both.
+func (c *tcpConn) SyscallConn() (syscall.RawConn, error) {
+	if sc, ok := c.Conn.(syscall.Conn); ok {
+		return sc.SyscallConn()
+	}
+	return nil, errSyscallConnNotSupported
 }
 
 type udpConn struct {

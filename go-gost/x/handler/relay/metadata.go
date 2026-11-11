@@ -20,6 +20,15 @@ type metadata struct {
 	hash        string
 	muxCfg      *mux.Config
 
+	// reapRole marks this service's sessions for the zombie
+	// reaper (internal/net): "backstop" for relay segment
+	// services. Relay legs never terminate the true client leg
+	// (their peer is always the previous hop), so the edge role
+	// does not live here — it belongs to client-facing forward
+	// services (handler/forward/local). Unknown/absent = no
+	// reaper tracking.
+	reapRole string
+
 	observerPeriod       time.Duration
 	observerResetTraffic bool
 
@@ -46,6 +55,7 @@ func (h *relayHandler) parseMetadata(md mdata.Metadata) (err error) {
 	h.md.enableBind = mdutil.GetBool(md, "bind")
 	h.md.noDelay = mdutil.GetBool(md, "nodelay")
 	h.md.hash = mdutil.GetString(md, "hash")
+	h.md.reapRole = mdutil.GetString(md, "reapRole")
 
 	h.md.muxCfg = &mux.Config{
 		Version:           mdutil.GetInt(md, "mux.version"),

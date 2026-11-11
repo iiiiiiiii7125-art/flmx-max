@@ -22,6 +22,7 @@ import (
 	sd_parser "github.com/go-gost/x/config/parsing/sd"
 	service_parser "github.com/go-gost/x/config/parsing/service"
 	"github.com/go-gost/x/internal/idle"
+	"github.com/go-gost/x/internal/reap"
 	"github.com/go-gost/x/registry"
 )
 
@@ -92,6 +93,7 @@ type loader struct{}
 func applyIdleWindow(cfg *config.Config) {
 	if cfg == nil {
 		idle.Set(0)
+		reap.Set(0, 0, 0)
 		return
 	}
 	metadatas := make([]map[string]any, 0, len(cfg.Services))
@@ -102,6 +104,9 @@ func applyIdleWindow(cfg *config.Config) {
 		metadatas = append(metadatas, svc.Metadata)
 	}
 	idle.Publish(metadatas)
+	// The reaper settings (internal/reap) publish through the
+	// same funnel and scan; see config.publishIdleWindow.
+	reap.Publish(metadatas)
 }
 
 func (l *loader) Load(cfg *config.Config) error {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-gost/x/internal/idle"
+	"github.com/go-gost/x/internal/reap"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -170,6 +171,7 @@ func OnUpdate(f func(c *Config) error) error {
 func publishIdleWindow(c *Config) {
 	if c == nil {
 		idle.Set(0)
+		reap.Set(0, 0, 0)
 		return
 	}
 	metadatas := make([]map[string]any, 0, len(c.Services))
@@ -180,6 +182,12 @@ func publishIdleWindow(c *Config) {
 		metadatas = append(metadatas, svc.Metadata)
 	}
 	idle.Publish(metadatas)
+	// The zombie-session reaper settings (internal/reap) ride the
+	// same two funnels and the same metadata scan, so a threshold
+	// the panel pushes into a running agent reaches the reaper at
+	// the same instant it reaches the idle window — the F-212-A
+	// lesson applies to them verbatim.
+	reap.Publish(metadatas)
 }
 
 type LogConfig struct {
