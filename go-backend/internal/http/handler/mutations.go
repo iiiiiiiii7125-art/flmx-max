@@ -709,6 +709,100 @@ func nodeIdleTimeoutFromReq(req map[string]interface{}) (seconds int, present bo
 	return seconds, true, nil
 }
 
+// --- 节点级僵尸会话根治两档（入口判死＋中途兜底，默认全关）---
+//
+// 与上方无进展拆除保险丝同链：面板是权威源，值随服务配置
+// metadata 下发 agent（edgeIdleTimeout / backstopIdleTimeout /
+// backstopTrickleBps），服务重建时生效。判据与生效面见
+// doc/guide/forward.md「会话无进展拆除」——入口判死看客户端腿的
+// 实际签收（TCP_INFO），中途兜底看源头沉默＋服务器滴流速率，
+// 都不是「静默即拆」，故与 connIdle/无进展窗口分开成独立字段。
+const minNodeReapWindowSeconds = 60
+
+// maxNodeBackstopTrickleBps 是兜底滴流速率上限的值域顶（字节/秒）。
+const maxNodeBackstopTrickleBps = 1000000
+
+// validateNodeReapWindowSeconds 是两档窗口共用的值域门（写面与
+// 恢复面共用同一口径，恢复面在 repo 层镜像）：0＝关闭，非零须
+// ≥60 秒——下限保证 agent 采样器（30 秒一拍、判死需连续多拍
+// 证据）的语义成立，过小的窗口没有可判的样本。
+func validateNodeReapWindowSeconds(seconds int, label string) error {
+	if seconds != 0 && seconds < minNodeReapWindowSeconds {
+		return fmt.Errorf("%s须为 0（关闭）或不小于 %d 秒", label, minNodeReapWindowSeconds)
+	}
+	return nil
+}
+
+func validateNodeBackstopTrickleBps(bps int) error {
+	if bps < 0 || bps > maxNodeBackstopTrickleBps {
+		return fmt.Errorf("兜底滴流速率上限须在 0–%d 字节/秒之间（0＝agent 默认）", maxNodeBackstopTrickleBps)
+	}
+	return nil
+}
+
+// nodeReapSettings 是根治三字段在请求面的一次解析结果，逐字段
+// 带 A2-04 presence 语义（absent＝保持存量），与
+// nodeIdleTimeoutFromReq 同形。
+type nodeReapSettings struct {
+	EdgeSeconds     int
+	EdgePresent     bool
+	BackstopSeconds int
+	BackstopPresent bool
+	TrickleBps      int
+	TricklePresent  bool
+}
+
+func (s nodeReapSettings) anyPresent() bool {
+	return s.EdgePresent || s.BackstopPresent || s.TricklePresent
+}
+
+// merged 把已提交字段覆到存量三元组上，未提交字段保值——更新面
+// 据此一次性落库与比对变更（repush 判定）。
+func (s nodeReapSettings) merged(curEdge, curBackstop, curTrickle int) (int, int, int) {
+	edge, backstop, trickle := curEdge, curBackstop, curTrickle
+	if s.EdgePresent {
+		edge = s.EdgeSeconds
+	}
+	if s.BackstopPresent {
+		backstop = s.BackstopSeconds
+	}
+	if s.TricklePresent {
+		trickle = s.TrickleBps
+	}
+	return edge, backstop, trickle
+}
+
+// nodeReapSettingsFromReq parses the optional edge/backstop
+// reap fields. Callers must have run presentNumericFieldInvalid
+// on the keys first (in-field but unparseable values are
+// rejected there, fail-closed), same contract as
+// nodeIdleTimeoutFromReq.
+func nodeReapSettingsFromReq(req map[string]interface{}) (nodeReapSettings, error) {
+	var out nodeReapSettings
+	if v, ok := req["edgeIdleTimeoutSeconds"]; ok {
+		out.EdgePresent = true
+		out.EdgeSeconds = asInt(v, 0)
+		if err := validateNodeReapWindowSeconds(out.EdgeSeconds, "入口判死窗口"); err != nil {
+			return out, err
+		}
+	}
+	if v, ok := req["backstopIdleTimeoutSeconds"]; ok {
+		out.BackstopPresent = true
+		out.BackstopSeconds = asInt(v, 0)
+		if err := validateNodeReapWindowSeconds(out.BackstopSeconds, "中途兜底窗口"); err != nil {
+			return out, err
+		}
+	}
+	if v, ok := req["backstopTrickleBps"]; ok {
+		out.TricklePresent = true
+		out.TrickleBps = asInt(v, 0)
+		if err := validateNodeBackstopTrickleBps(out.TrickleBps); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
 // normalizeNodeDisplayGroup 归一节点展示分组标签（纯展示功能，
 // 用户 2026-11-09 拍板）：去首尾空白后按列宽 varchar(100) 校验，
 // 与节点名称同口径；纯空白归为空（未分组）。
@@ -743,7 +837,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	// B04-003（R3 K4）：与 nodeUpdate 同口径——在场但不可解析的数值
 	// 字段 fail-closed 拒绝（FIX2-A 门此前唯独漏了创建面，expiryTime
 	// 传 "abc" 被静默套 0 = 到期时间丢失且回成功）。
-	for _, key := range []string{"http", "tls", "socks", "expiryTime", "idleTimeoutSeconds"} {
+	for _, key := range []string{"http", "tls", "socks", "expiryTime", "idleTimeoutSeconds", "edgeIdleTimeoutSeconds", "backstopIdleTimeoutSeconds", "backstopTrickleBps"} {
 		if presentNumericFieldInvalid(req, key) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
 			return
@@ -752,6 +846,11 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	idleTimeoutSeconds, idleTimeoutPresent, idleErr := nodeIdleTimeoutFromReq(req)
 	if idleErr != nil {
 		response.WriteJSON(w, response.ErrDefault(idleErr.Error()))
+		return
+	}
+	reapSettings, reapErr := nodeReapSettingsFromReq(req)
+	if reapErr != nil {
+		response.WriteJSON(w, response.ErrDefault(reapErr.Error()))
 		return
 	}
 	name := asString(req["name"])
@@ -881,6 +980,18 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if reapSettings.anyPresent() {
+		// 根治三字段与 idleTimeoutSeconds 同处置：整组一次落库，
+		// 失败补偿删除刚建节点，不留与请求不一致的半成品。
+		edge, backstop, trickle := reapSettings.merged(0, 0, 0)
+		if err := h.repo.UpdateNodeReapSettings(nodeID, edge, backstop, trickle); err != nil {
+			if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
+				log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
+			}
+			respondInternalError(w, "nodeCreate", err)
+			return
+		}
+	}
 	// 展示分组标签随创建落库（空标签即列默认空串、无需写）。失败
 	// 与 SSH 配置同处置：补偿删除刚建节点，不留半成品。
 	if displayGroup != "" {
@@ -923,7 +1034,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed，不落
 	// 库（expiryTime 旧口径静默套 0 = 清空到期，http/tls/socks 同族）。
-	for _, key := range []string{"http", "tls", "socks", "expiryTime", "idleTimeoutSeconds"} {
+	for _, key := range []string{"http", "tls", "socks", "expiryTime", "idleTimeoutSeconds", "edgeIdleTimeoutSeconds", "backstopIdleTimeoutSeconds", "backstopTrickleBps"} {
 		if presentNumericFieldInvalid(req, key) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
 			return
@@ -932,6 +1043,11 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	idleTimeoutSeconds, idleTimeoutPresent, idleErr := nodeIdleTimeoutFromReq(req)
 	if idleErr != nil {
 		response.WriteJSON(w, response.ErrDefault(idleErr.Error()))
+		return
+	}
+	reapSettings, reapErr := nodeReapSettingsFromReq(req)
+	if reapErr != nil {
+		response.WriteJSON(w, response.ErrDefault(reapErr.Error()))
 		return
 	}
 
@@ -1252,6 +1368,26 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			// 其重连时 onNodeOnline 按 DB 新值重布）。
 			log.Printf("node idle timeout updated node_id=%d seconds=%d operator_id=%d (runtime repush queued if online)",
 				id, idleTimeoutSeconds, idemUserID(r))
+			h.repushNodeRuntimeAfterSettingChange(id)
+		}
+	}
+	if reapSettings.anyPresent() {
+		// 根治三字段走同一条独立 setter＋重推漏斗（与
+		// idleTimeoutSeconds 同形）：整组按 presence 合并后一次
+		// 落库，合并值与存量任一不同才重推。
+		edge, backstop, trickle := reapSettings.merged(
+			currentNode.EdgeIdleTimeoutSeconds,
+			currentNode.BackstopIdleTimeoutSeconds,
+			currentNode.BackstopTrickleBps)
+		if err := h.repo.UpdateNodeReapSettings(id, edge, backstop, trickle); err != nil {
+			respondInternalError(w, "nodeUpdate", err)
+			return
+		}
+		if edge != currentNode.EdgeIdleTimeoutSeconds ||
+			backstop != currentNode.BackstopIdleTimeoutSeconds ||
+			trickle != currentNode.BackstopTrickleBps {
+			log.Printf("node reap settings updated node_id=%d edge=%d backstop=%d trickle_bps=%d operator_id=%d (runtime repush queued if online)",
+				id, edge, backstop, trickle, idemUserID(r))
 			h.repushNodeRuntimeAfterSettingChange(id)
 		}
 	}
@@ -8443,6 +8579,14 @@ func (h *Handler) buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnel
 	// 终端-only 口径（有 chain 即 forward、不查开关）已被真机
 	// 证伪，勿回退。
 	handlerMetadata["bind"] = true
+	// 僵尸会话根治角色标记：本 builder 产出的全部段服务（中段
+	// ChainType 2 与出口 ChainType 3）均为中途跳——其接受连接的
+	// 对端恒为上一跳 agent、看不见真实客户端的签收，agent 只在
+	// 此角色上启用「中途兜底」（源头沉默＋服务器滴流才拆）。入
+	// 口判死（edge）只标在客户端直连的转发服务上（见
+	// buildForwardServiceConfigs）；内核入站/nftables 链头没有
+	// gost 服务、不在此覆盖内。
+	handlerMetadata["reapRole"] = "backstop"
 	if len(handlerMetadata) > 0 {
 		handlerCfg["metadata"] = handlerMetadata
 	}
@@ -8473,6 +8617,18 @@ func (h *Handler) buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnel
 		// 加载配置时收敛为全节点窗口（默认关，见 doc/guide/
 		// forward.md「会话无进展拆除」）。
 		ensureServiceMetadata(service)["idleTimeout"] = node.IdleTimeoutSeconds
+	}
+	// 根治两档窗口（秒）与兜底滴流上限（字节/秒）随同一通道下
+	// 发，agent 加载时收敛为全节点值（默认关）；窗口键全节点统
+	// 一发布、由 handler 侧 reapRole 决定哪台机器上哪一档生效。
+	if node.EdgeIdleTimeoutSeconds > 0 {
+		ensureServiceMetadata(service)["edgeIdleTimeout"] = node.EdgeIdleTimeoutSeconds
+	}
+	if node.BackstopIdleTimeoutSeconds > 0 {
+		ensureServiceMetadata(service)["backstopIdleTimeout"] = node.BackstopIdleTimeoutSeconds
+	}
+	if node.BackstopTrickleBps > 0 {
+		ensureServiceMetadata(service)["backstopTrickleBps"] = node.BackstopTrickleBps
 	}
 	if chainNode.ChainType == 3 && strings.TrimSpace(node.InterfaceName) != "" {
 		ensureServiceMetadata(service)["interface"] = node.InterfaceName

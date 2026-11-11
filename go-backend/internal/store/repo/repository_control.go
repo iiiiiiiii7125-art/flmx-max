@@ -316,8 +316,11 @@ func nodeRecordFromModel(n *model.Node) *model.NodeRecord {
 		Status:        n.Status,
 		PortRange:     n.Port,
 		TCPListenAddr: n.TCPListenAddr, UDPListenAddr: n.UDPListenAddr,
-		ForwardMode:        defaultNodeForwardMode(n.ForwardMode),
-		IdleTimeoutSeconds: n.IdleTimeoutSeconds,
+		ForwardMode:                defaultNodeForwardMode(n.ForwardMode),
+		IdleTimeoutSeconds:         n.IdleTimeoutSeconds,
+		EdgeIdleTimeoutSeconds:     n.EdgeIdleTimeoutSeconds,
+		BackstopIdleTimeoutSeconds: n.BackstopIdleTimeoutSeconds,
+		BackstopTrickleBps:         n.BackstopTrickleBps,
 	}
 	if n.ServerIPV4.Valid {
 		rec.ServerIPv4 = strings.TrimSpace(n.ServerIPV4.String)

@@ -145,6 +145,17 @@ type Node struct {
 	// 重建时生效。与内核面 connIdle（Xray per-inbound）是两套
 	// 口径，故意不共用（同 FIX-1 transport 注释的既有裁定）。
 	IdleTimeoutSeconds int `gorm:"column:idle_timeout_seconds;not null;default:0"`
+	// 僵尸会话根治两档（秒，默认全关，随 IdleTimeoutSeconds 同一条
+	// metadata 通道下发）：EdgeIdleTimeoutSeconds＝入口判死窗口——
+	// 转发面会话在客户端方向零字节满该秒数、且入口腿 TCP_INFO 证
+	// 明数据无人签收（unacked/notsent/零窗口且 Bytes_acked 冻结）
+	// 时才拆；BackstopIdleTimeoutSeconds＝中途兜底窗口——源头沉默
+	// 满该秒数且服务器方向仅低速滴流（速率低于 BackstopTrickleBps）
+	// 时拆。BackstopTrickleBps＝兜底滴流速率上限（字节/秒，0＝用
+	// agent 内置默认 256）。三者均为保险丝，0＝关闭。
+	EdgeIdleTimeoutSeconds     int `gorm:"column:edge_idle_timeout_seconds;not null;default:0"`
+	BackstopIdleTimeoutSeconds int `gorm:"column:backstop_idle_timeout_seconds;not null;default:0"`
+	BackstopTrickleBps         int `gorm:"column:backstop_trickle_bps;not null;default:0"`
 }
 
 func (Node) TableName() string { return "node" }
@@ -881,6 +892,12 @@ type NodeBackup struct {
 	// 0（关闭）回落，与存量未配置形态等价（默认值即关闭，不会
 	// 因恢复旧备份而静默开启拆除）。
 	IdleTimeoutSeconds int `json:"idleTimeoutSeconds,omitempty"`
+	// 根治两档窗口与滴流上限随备份：旧备份无此三字段时按 0
+	// （关闭/默认）回落，与存量未配置形态等价，不会因恢复旧
+	// 备份而静默开启拆除。
+	EdgeIdleTimeoutSeconds     int `json:"edgeIdleTimeoutSeconds,omitempty"`
+	BackstopIdleTimeoutSeconds int `json:"backstopIdleTimeoutSeconds,omitempty"`
+	BackstopTrickleBps         int `json:"backstopTrickleBps,omitempty"`
 	// O7-006：恢复后保留已忽略的到期提醒状态
 	ExpiryReminderDismissed int `json:"expiryReminderDismissed,omitempty"`
 }
@@ -1197,6 +1214,11 @@ type NodeRecord struct {
 	// IdleTimeoutSeconds 是节点级无进展拆除阈值（秒，0＝关），
 	// 服务配置生成面据此注入 metadata。
 	IdleTimeoutSeconds int
+	// 根治两档窗口（秒）与兜底滴流上限（字节/秒），0＝关，
+	// 与 IdleTimeoutSeconds 同口径随服务 metadata 注入。
+	EdgeIdleTimeoutSeconds     int
+	BackstopIdleTimeoutSeconds int
+	BackstopTrickleBps         int
 }
 
 type ChainNodeRecord struct {
