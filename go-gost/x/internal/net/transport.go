@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/go-gost/core/common/bufpool"
@@ -176,6 +177,29 @@ func isTimeoutError(err error) bool {
 	return errors.As(err, &nerr) && nerr.Timeout()
 }
 
+// isResumableWake reports whether a timeout-class error may be
+// converted into a resumable deadline wake (errReadTimeout). One
+// timeout shape is provably NOT a wake: a kernel timeout verdict,
+// which carries syscall.ETIMEDOUT — the socket's own keepalive /
+// user-timeout machinery has already declared the peer dead, so
+// the leg will never move another byte. A genuine expiry of an
+// armed deadline instead reports os.ErrDeadlineExceeded, and
+// after re-arming the copy parks in the poller until data or the
+// new deadline, so resuming on it cannot spin. Converting an
+// ETIMEDOUT, by contrast, re-polls a dead socket whose failure
+// returns at once; with the idle window on, the stall judge keeps
+// the session "alive" for as long as the sibling direction moves
+// any byte, so the dead leg busy-loops for the whole session (the
+// window-on mirror of F-212-C, which gated only the window-off
+// case). A kernel verdict must therefore reach copyDirection
+// unconverted in both window states, so the session unwinds
+// whole. Every other timeout-class error stays convertible: the
+// stall judge remains the arbiter for shapes the wrapper cannot
+// tell apart from Transport's own wakes.
+func isResumableWake(err error) bool {
+	return isTimeoutError(err) && !errors.Is(err, syscall.ETIMEDOUT)
+}
+
 // copyDirection copies src -> dst until src is exhausted or fails.
 // A clean end propagates a half-close to dst; a hard failure closes
 // both endpoints so the sibling direction cannot park forever on a
@@ -260,7 +284,12 @@ var errReadTimeout = errors.New("transport: read deadline exceeded")
 // failure of that leg (F-212-C: a kernel keepalive verdict on a
 // silently dead peer returns ETIMEDOUT) and must reach
 // copyDirection unconverted, so the session unwinds whole instead
-// of "resuming" against a dead socket forever. The conversion is
+// of "resuming" against a dead socket forever. The same carve-out
+// applies with the window ON to the one timeout shape that is
+// provably not a wake — a kernel ETIMEDOUT verdict (see
+// isResumableWake): it converted too while the window was armed,
+// and the dead leg then spun against the stall judge for as long
+// as the sibling direction kept moving bytes. The conversion is
 // state-free and exact: a Go net.Conn Read/Write
 // that reports a timeout error has transferred no bytes (its
 // internal deadline abort is all-or-nothing), so a timed-out call
@@ -284,7 +313,7 @@ func (t *trackedRW) Read(p []byte) (int, error) {
 	if n > 0 {
 		t.act.touch()
 	}
-	if err != nil && t.act.timeout > 0 && isTimeoutError(err) {
+	if err != nil && t.act.timeout > 0 && isResumableWake(err) {
 		return n, errReadTimeout
 	}
 	return n, err
@@ -295,7 +324,7 @@ func (t *trackedRW) Write(p []byte) (int, error) {
 	if n > 0 {
 		t.act.touch()
 	}
-	if err != nil && t.act.timeout > 0 && isTimeoutError(err) {
+	if err != nil && t.act.timeout > 0 && isResumableWake(err) {
 		return n, errReadTimeout
 	}
 	return n, err
@@ -341,7 +370,7 @@ func (t *trackedRW) WriteTo(w io.Writer) (int64, error) {
 				if n > 0 {
 					t.act.touch()
 				}
-				if err != nil && t.act.timeout > 0 && isTimeoutError(err) {
+				if err != nil && t.act.timeout > 0 && isResumableWake(err) {
 					return n, errReadTimeout
 				}
 				return n, err
@@ -375,7 +404,7 @@ func (t *trackedRW) ReadFrom(r io.Reader) (int64, error) {
 				if n > 0 {
 					t.act.touch()
 				}
-				if err != nil && t.act.timeout > 0 && isTimeoutError(err) {
+				if err != nil && t.act.timeout > 0 && isResumableWake(err) {
 					return n, errReadTimeout
 				}
 				return n, err
