@@ -25,6 +25,12 @@ const (
 	MetricServiceHandlerErrorsCounter metrics.MetricName = "gost_service_handler_errors_total"
 	// Total chain connect errors. Labels: host, chain, node.
 	MetricChainErrorsCounter metrics.MetricName = "gost_chain_errors_total"
+	// Total sessions torn down by the zombie-session reaper.
+	// Labels: reason (edge|backstop), service.
+	MetricReapTotalCounter metrics.MetricName = "gost_reap_total"
+	// Number of sessions currently tracked by the reaper sampler.
+	// Labels: none.
+	MetricReapTrackedSessionsGauge metrics.MetricName = "gost_reap_tracked_sessions"
 )
 
 var (
