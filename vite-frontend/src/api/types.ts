@@ -352,6 +352,10 @@ export interface NodeMutationPayload {
   http?: number;
   tls?: number;
   socks?: number;
+  /** 僵尸会话根治三字段（presence 口径，未传保持现值）：判死/兜底窗口秒数与滴流上限字节/秒，0＝关/默认。 */
+  edgeIdleTimeoutSeconds?: number;
+  backstopIdleTimeoutSeconds?: number;
+  backstopTrickleBps?: number;
 }
 
 export interface NodeSshConfigApiItem {

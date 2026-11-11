@@ -652,6 +652,64 @@ export function NodeFormModal({
                       }))
                     }
                   />
+
+                  <Input
+                    description="僵尸会话根治（入口判死），默认关闭：填 0 表示不判死；填正整数（≥60，推荐 ≥900）表示仅当本节点的入口会话在客户端方向零字节满该秒数、且客户端腿数据无人签收（内核证明无读者）时才拆除。单纯静默不会被拆；在中途节点上填了不生效（判死只发生在客户端直连的入口面）"
+                    label="入口判死窗口（秒）"
+                    min={0}
+                    placeholder="0（关闭）"
+                    type="number"
+                    value={String(form.edgeIdleTimeoutSeconds)}
+                    variant="bordered"
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        edgeIdleTimeoutSeconds: Math.max(
+                          0,
+                          Math.floor(Number(e.target.value) || 0),
+                        ),
+                      }))
+                    }
+                  />
+
+                  <Input
+                    description="僵尸会话根治（中途兜底），默认关闭：填 0 表示不兜底；填正整数（≥60，推荐 ≥3600）表示中途节点上的隧道段会话在源头方向沉默满该秒数、且服务器方向仅以低于下方滴流上限的速率滴流时才拆除。下载/流媒体等持续流量速率远高于滴流，不受影响"
+                    label="中途兜底窗口（秒）"
+                    min={0}
+                    placeholder="0（关闭）"
+                    type="number"
+                    value={String(form.backstopIdleTimeoutSeconds)}
+                    variant="bordered"
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        backstopIdleTimeoutSeconds: Math.max(
+                          0,
+                          Math.floor(Number(e.target.value) || 0),
+                        ),
+                      }))
+                    }
+                  />
+
+                  <Input
+                    description="配合中途兜底窗口：服务器方向速率低于此值才算「滴流」。填 0 表示用 agent 内置默认 256 字节/秒；可填 1–1000000。调大更激进（可能误伤低速真实流），调小更保守"
+                    label="兜底滴流上限（字节/秒）"
+                    max={1000000}
+                    min={0}
+                    placeholder="0（默认 256）"
+                    type="number"
+                    value={String(form.backstopTrickleBps)}
+                    variant="bordered"
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        backstopTrickleBps: Math.max(
+                          0,
+                          Math.floor(Number(e.target.value) || 0),
+                        ),
+                      }))
+                    }
+                  />
                   {/* 屏蔽协议 */}
                   <div>
                     <div className="text-sm font-medium text-default-800 mb-2">
