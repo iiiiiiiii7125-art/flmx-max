@@ -86,6 +86,30 @@ func TestTCPInfoLoopbackConsumption(t *testing.T) {
 	}
 }
 
+// The probe resolves through the readWriteConn wrapper (its
+// SyscallConn delegates to the wrapped conn, not the r/w
+// transformer fields) — the shape the limiter/stats relay
+// accept stack takes.
+func TestTCPInfoProbeThroughReadWriteConn(t *testing.T) {
+	_, raw := tcpPair(t)
+	defer raw.Close()
+	wrapped := NewReadWriteConn(raw, raw, raw)
+	if p := tcpInfoProbe(wrapped); p == nil {
+		t.Fatal("tcpInfoProbe returned nil through readWriteConn, want a probe")
+	}
+	info, err := tcpInfoOf(wrapped)
+	if err != nil {
+		t.Fatalf("tcpInfoOf through readWriteConn: %v", err)
+	}
+	if info.State != tcpStateEstablished {
+		t.Fatalf("state = %d, want ESTABLISHED", info.State)
+	}
+	// Linger-0 must also resolve through the wrapper.
+	if !setLingerZero(wrapped) {
+		t.Fatal("setLingerZero returned false through readWriteConn")
+	}
+}
+
 // A conn whose chain exposes no SyscallConn resolves to a nil
 // probe: tracking stays armed but the edge judge never fires
 // (fail-safe for mux and wrapped stacks, F3 §3).

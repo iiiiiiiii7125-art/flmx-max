@@ -150,3 +150,15 @@ func (c *readWriteConn) CloseRead() error {
 	}
 	return errHalfCloseNotSupported
 }
+
+// SyscallConn forwards the raw socket of the wrapped conn (the
+// r/w fields of this wrapper are stream transformers, not the
+// fd path). Without it the reaper's TCP_INFO probe and linger-0
+// teardown cannot resolve through the wrapper stacks built on
+// NewReadWriteConn (limiter/stats relay accept path).
+func (c *readWriteConn) SyscallConn() (syscall.RawConn, error) {
+	if sc, ok := c.Conn.(syscall.Conn); ok {
+		return sc.SyscallConn()
+	}
+	return nil, errHalfCloseNotSupported
+}

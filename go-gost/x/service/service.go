@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/go-gost/core/admission"
@@ -643,6 +644,17 @@ func (c *detectConn) Read(b []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// SyscallConn forwards the raw socket to the wrapped conn: the
+// sniffing reader sits on the byte stream, not the fd path.
+// Without it the reaper's TCP_INFO probe and linger-0 teardown
+// (internal/net) cannot resolve through the service wrapper.
+func (c *detectConn) SyscallConn() (syscall.RawConn, error) {
+	if sc, ok := c.Conn.(syscall.Conn); ok {
+		return sc.SyscallConn()
+	}
+	return nil, errors.New("syscall conn not supported by the underlying connection")
 }
 
 func detectProtocol(data []byte, conn net.Conn) (blocked bool) {

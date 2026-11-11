@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"syscall"
 )
 
 type tcpConn struct {
@@ -81,6 +82,20 @@ func (c *tcpConn) CloseRead() error {
 		return cr.CloseRead()
 	}
 	return errHalfCloseNotSupported
+}
+
+var errSyscallConnNotSupported = errors.New("syscall conn not supported by the underlying connection")
+
+// SyscallConn forwards the raw socket to the wrapped conn. This
+// wrapper heads the relay session stack, so without the
+// forwarding the reaper's TCP_INFO probe and linger-0 teardown
+// (internal/net) cannot resolve through it and relay sessions
+// would silently lose both.
+func (c *tcpConn) SyscallConn() (syscall.RawConn, error) {
+	if sc, ok := c.Conn.(syscall.Conn); ok {
+		return sc.SyscallConn()
+	}
+	return nil, errSyscallConnNotSupported
 }
 
 type udpConn struct {
