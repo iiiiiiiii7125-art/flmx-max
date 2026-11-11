@@ -480,7 +480,7 @@ export function ConnLogModal({
                 该入站为{noDirectReason}，直连连接不会产生连接记录
                 {item?.external
                   ? "：导入节点不由面板部署，连接日志不在面板采集。"
-                  : "；中转入口的连接记录请在对应的入口入站的连接日志中查看。"}
+                  : "；经中转进入的连接由入口节点采集、归属到本入站，连接记录会显示在这里，目前暂无。"}
               </p>
             </div>
           ) : showOptInEmptyState ? (
