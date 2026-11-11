@@ -209,7 +209,7 @@ func (h *relayHandler) handleConnect(ctx context.Context, conn net.Conn, network
 
 	t := time.Now()
 	log.Infof("%s <-> %s", conn.RemoteAddr(), address)
-	xnet.Transport(conn, cc)
+	xnet.TransportScoped(conn, cc, xnet.Scope{Role: h.md.reapRole, Service: h.options.Service})
 	log.WithFields(map[string]any{
 		"duration": time.Since(t),
 	}).Infof("%s >-< %s", conn.RemoteAddr(), address)

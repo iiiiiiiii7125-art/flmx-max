@@ -255,7 +255,7 @@ func (h *forwardHandler) Handle(ctx context.Context, conn net.Conn, opts ...hand
 
 		cc = proxyproto.WrapClientConn(h.md.proxyProtocol, conn.RemoteAddr(), conn.LocalAddr(), cc)
 
-		if err := xnet.Transport(conn, cc); err != nil {
+		if err := xnet.TransportScoped(conn, cc, xnet.Scope{Role: h.md.reapRole, Service: h.options.Service}); err != nil {
 			if marker := target.Marker(); marker != nil {
 				marker.Mark()
 				h.options.Logger.Debugf("[handler.transport] transport failed, marked node=%s count=%d err=%v",

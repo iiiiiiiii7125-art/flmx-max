@@ -32,6 +32,12 @@ type metadata struct {
 	// 0 means use the total number of available nodes (try all nodes once).
 	// Default: 0 (try all available nodes)
 	maxRetries int
+
+	// reapRole marks this service's sessions for the zombie
+	// reaper (internal/net). This handler is client-facing: the
+	// accepted conn IS the true client leg, so "edge" lives
+	// here. Unknown/absent = no reaper tracking.
+	reapRole string
 }
 
 func (h *forwardHandler) parseMetadata(md mdata.Metadata) (err error) {
@@ -40,6 +46,7 @@ func (h *forwardHandler) parseMetadata(md mdata.Metadata) (err error) {
 		h.md.readTimeout = 15 * time.Second
 	}
 	h.md.proxyProtocol = mdutil.GetInt(md, "proxyProtocol")
+	h.md.reapRole = mdutil.GetString(md, "reapRole")
 
 	h.md.httpKeepalive = mdutil.GetBool(md, "http.keepalive")
 

@@ -58,17 +58,23 @@ func (l *tcpListener) Close() error {
 type tcpHandler struct {
 	session *mux.Session
 	options handler.Options
+	// reapRole is plumbed from the owning relay handler's
+	// metadata (bind.go): this handler's own Init receives no
+	// metadata. Entrypoint services are relay segments, so the
+	// role is "backstop" when set at all.
+	reapRole string
 }
 
-func newTCPHandler(session *mux.Session, opts ...handler.Option) handler.Handler {
+func newTCPHandler(session *mux.Session, reapRole string, opts ...handler.Option) handler.Handler {
 	options := handler.Options{}
 	for _, opt := range opts {
 		opt(&options)
 	}
 
 	return &tcpHandler{
-		session: session,
-		options: options,
+		session:  session,
+		options:  options,
+		reapRole: reapRole,
 	}
 }
 
@@ -113,7 +119,7 @@ func (h *tcpHandler) Handle(ctx context.Context, conn net.Conn, opts ...handler.
 
 	t := time.Now()
 	log.Debugf("%s <-> %s", conn.RemoteAddr(), cc.RemoteAddr())
-	xnet.Transport(conn, cc)
+	xnet.TransportScoped(conn, cc, xnet.Scope{Role: h.reapRole, Service: h.options.Service})
 	log.WithFields(map[string]any{"duration": time.Since(t)}).
 		Debugf("%s >-< %s", conn.RemoteAddr(), cc.RemoteAddr())
 	return nil

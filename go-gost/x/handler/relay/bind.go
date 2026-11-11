@@ -126,7 +126,7 @@ func (h *relayHandler) bindTCP(ctx context.Context, conn net.Conn, network, addr
 			"kind": "listener",
 		})),
 	)
-	epHandler := newTCPHandler(session,
+	epHandler := newTCPHandler(session, h.md.reapRole,
 		handler.ServiceOption(serviceName),
 		handler.LoggerOption(log.WithFields(map[string]any{
 			"kind": "handler",
