@@ -340,7 +340,12 @@ func TestRouterRetryMergeFloor(t *testing.T) {
 // G7⑥ Cancel transfer is unchanged under the retry engine: after a
 // failed attempt 1, attempt 2 succeeds — its context stays alive for
 // exactly as long as the returned conn and is cancelled when the conn
-// closes (cancelOnCloseConn, D3-07).
+// closes (cancelOnCloseConn, D3-07). Extended by AUDIT-R217 B-01: the
+// aliveness check crosses the successful attempt's slice boundary —
+// with E=2.4s/N=3 attempt 2's slice is ≈1.1s, so the check runs at
+// ≈1.6s into the call, past the slice but inside the envelope; the
+// context must still be alive there (promotion to the envelope
+// deadline), and Close must still cancel it.
 func TestRouterRetrySuccessCancelTransfersToConn(t *testing.T) {
 	node := corechain.NewNode("node-1", "192.0.2.1:8080")
 	client, server := net.Pipe()
@@ -351,7 +356,7 @@ func TestRouterRetrySuccessCancelTransfersToConn(t *testing.T) {
 		}
 		return client, nil
 	}}
-	r := retryTestRouter(&retryChainer{route: rt}, 5*time.Second, 1)
+	r := retryTestRouter(&retryChainer{route: rt}, 2400*time.Millisecond, 2)
 
 	conn, err := r.Dial(context.Background(), "tcp", "203.0.113.1:443")
 	if err != nil {
@@ -363,6 +368,15 @@ func TestRouterRetrySuccessCancelTransfersToConn(t *testing.T) {
 	okCtx := rt.ctxs[1]
 	if err := okCtx.Err(); err != nil {
 		t.Fatalf("successful attempt's context cancelled while its conn is open: %v", err)
+	}
+	// Cross the slice boundary: 300ms past attempt 2's own deadline,
+	// still inside the 2.4s envelope.
+	if wait := time.Until(rt.attempts[1].deadline) + 300*time.Millisecond; wait > 0 {
+		time.Sleep(wait)
+	}
+	if err := okCtx.Err(); err != nil {
+		t.Fatalf("successful attempt's context died at its slice (%v) while its conn is open: %v",
+			rt.attempts[1].slice(), err)
 	}
 	conn.Close()
 	if err := okCtx.Err(); err != context.Canceled {

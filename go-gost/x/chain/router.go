@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/go-gost/core/chain"
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/core/recorder"
+	"github.com/go-gost/core/selector"
 	ctxvalue "github.com/go-gost/x/ctx"
 	xnet "github.com/go-gost/x/internal/net"
 )
@@ -144,6 +146,183 @@ func (r *Router) record(ctx context.Context, name string, data []byte) error {
 	return nil
 }
 
+// attemptContext is a promotable attempt deadline context (B-01).
+// While the attempt is dialling, its deadline is the attempt slice,
+// so a blackhole attempt is still cut at the slice. When the attempt
+// succeeds, promote moves the deadline out to the envelope end: a
+// context-retaining transport built over the returned conn then
+// observes a context that lives until min(conn Close, envelope end)
+// instead of dying at the slice boundary (with N=3 the slice was a
+// third of the baseline's full-timeout context). Cancellation by the
+// owner (cancelOnCloseConn via the returned CancelFunc) and parent
+// cancellation behave exactly as with context.WithTimeout.
+type attemptContext struct {
+	parent context.Context
+	done   chan struct{}
+
+	mu         sync.Mutex
+	deadline   time.Time
+	err        error
+	timer      *time.Timer
+	stopParent func() bool
+}
+
+func newAttemptContext(parent context.Context, timeout time.Duration) (context.Context, *attemptContext, context.CancelFunc) {
+	c := &attemptContext{
+		parent:   parent,
+		done:     make(chan struct{}),
+		deadline: time.Now().Add(timeout),
+	}
+	c.timer = time.AfterFunc(timeout, func() { c.finish(context.DeadlineExceeded) })
+	c.stopParent = context.AfterFunc(parent, func() { c.finish(parent.Err()) })
+	return c, c, c.cancel
+}
+
+func (c *attemptContext) finish(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	c.err = err
+	close(c.done)
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	if c.stopParent != nil {
+		c.stopParent()
+	}
+}
+
+func (c *attemptContext) cancel() { c.finish(context.Canceled) }
+
+// promote extends the deadline to the given later time. It is a
+// no-op once the context has ended or when the new deadline is not
+// later than the current one.
+func (c *attemptContext) promote(deadline time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil || !deadline.After(c.deadline) {
+		return
+	}
+	c.deadline = deadline
+	c.timer.Stop()
+	c.timer = time.AfterFunc(time.Until(deadline), func() { c.finish(context.DeadlineExceeded) })
+}
+
+func (c *attemptContext) Deadline() (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deadline, true
+}
+
+func (c *attemptContext) Done() <-chan struct{} { return c.done }
+
+func (c *attemptContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *attemptContext) Value(key any) any { return c.parent.Value(key) }
+
+// markerJournal tracks the fail markers of every node this call may
+// dial, so the D2 fallback reselection can undo exactly the marks
+// this call itself added (A-01). The hop layer filters candidates
+// through FailFilter on those markers: when every candidate failed
+// earlier in this same call, peeling the advisory exclude list alone
+// still left every candidate filtered out, and the fallback died as
+// an empty route instead of redialling a failed candidate.
+//
+// A node's snapshot is taken at first sight — before the first
+// attempt that could mark it — which is equivalent to a snapshot at
+// the start of the call for every mark this call can make: marks are
+// only written by route dial/bind attempts, and every attempt's path
+// is observed before it runs. rollback restores the snapshots right
+// before a fallback reselection; settle, deferred to the end of the
+// call, re-applies this call's failure marks so the cross-connection
+// FailFilter state matches the pre-retry-engine semantics (a node
+// that failed attempts in this call ends marked once per failed
+// attempt; a node on the successful attempt's path is left to the
+// reset its own success already performed).
+type markerJournal struct {
+	snaps      map[selector.Marker]int64
+	failed     map[selector.Marker]int
+	succeeded  map[selector.Marker]bool
+	rolledBack bool
+}
+
+func newMarkerJournal() *markerJournal {
+	return &markerJournal{
+		snaps:     make(map[selector.Marker]int64),
+		failed:    make(map[selector.Marker]int),
+		succeeded: make(map[selector.Marker]bool),
+	}
+}
+
+func (j *markerJournal) observe(route chain.Route) {
+	for _, node := range routePath(route) {
+		if node == nil {
+			continue
+		}
+		if m := node.Marker(); m != nil {
+			if _, ok := j.snaps[m]; !ok {
+				j.snaps[m] = m.Count()
+			}
+		}
+	}
+}
+
+func (j *markerJournal) noteFailure(route chain.Route) {
+	seen := make(map[selector.Marker]bool)
+	for _, node := range routePath(route) {
+		if node == nil {
+			continue
+		}
+		if m := node.Marker(); m != nil && !seen[m] {
+			seen[m] = true
+			j.failed[m]++
+		}
+	}
+}
+
+func (j *markerJournal) noteSuccess(route chain.Route) {
+	for _, node := range routePath(route) {
+		if node == nil {
+			continue
+		}
+		if m := node.Marker(); m != nil {
+			j.succeeded[m] = true
+		}
+	}
+}
+
+func (j *markerJournal) rollback() {
+	for m, snap := range j.snaps {
+		if m.Count() != snap {
+			m.Reset()
+			for i := int64(0); i < snap; i++ {
+				m.Mark()
+			}
+		}
+	}
+	j.rolledBack = true
+}
+
+func (j *markerJournal) settle() {
+	if !j.rolledBack {
+		return
+	}
+	for m, fails := range j.failed {
+		if j.succeeded[m] {
+			continue
+		}
+		for target := j.snaps[m] + int64(fails); m.Count() < target; {
+			m.Mark()
+		}
+	}
+}
+
 func (r *Router) dial(ctx context.Context, network, address string, log logger.Logger) (conn net.Conn, err error) {
 	count := r.options.Retries + 1
 	if count <= 0 {
@@ -175,6 +354,12 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 	// the fallback reselection in selectRoute.
 	hardExclude := append([]string(nil), exclude...)
 
+	// A-01: journal the fail markers of every node this call dials;
+	// the D2 fallback rolls this call's own marks back before
+	// reselecting, and settle re-applies them when the call ends.
+	journal := newMarkerJournal()
+	defer journal.settle()
+
 	for i := 0; i < count; i++ {
 		// D1/D6: a cancelled parent ends the call with the parent's
 		// error; an attempt's own timeout does not (parent still nil).
@@ -197,7 +382,11 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		// over the conn observe its cancellation. Ownership of the
 		// cancel func therefore transfers to the conn (see
 		// cancelOnCloseConn).
+		// B-01: the attempt context is promotable — its deadline is
+		// the attempt slice while dialling, and is promoted to the
+		// envelope deadline on success (see attemptContext).
 		var cancel context.CancelFunc
+		var actx *attemptContext
 		if r.options.Timeout > 0 {
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
@@ -212,7 +401,7 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 				slice = remaining
 				last = true
 			}
-			ctx, cancel = context.WithTimeout(ctx, slice)
+			ctx, actx, cancel = newAttemptContext(ctx, slice)
 		}
 
 		buf := ctxvalue.BufferFromContext(ctx)
@@ -278,6 +467,13 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 			rt := r.options.Chain.Route(sctx, network, ipAddr, chain.WithHostRouteOption(address))
 			if (rt == nil || len(rt.Nodes()) == 0) && !fallbackUsed && len(exclude) > len(hardExclude) {
 				fallbackUsed = true
+				// A-01: peeling the exclude list is not enough on
+				// its own — the hop's FailFilter would still drop
+				// every candidate this call itself marked. Roll
+				// this call's marks back so the reselection sees
+				// the pre-call filter state; settle re-applies
+				// them when the call ends.
+				journal.rollback()
 				sctx = ctxvalue.ContextWithExcludeNodes(ctx, hardExclude)
 				rt = r.options.Chain.Route(sctx, network, ipAddr, chain.WithHostRouteOption(address))
 			}
@@ -313,6 +509,7 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		if route == nil {
 			route = DefaultRoute
 		}
+		journal.observe(route)
 		conn, err = route.Dial(routeCtx, network, ipAddr,
 			chain.InterfaceDialOption(r.options.IfceName),
 			chain.NetnsDialOption(r.options.Netns),
@@ -320,6 +517,12 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 			chain.LoggerDialOption(log),
 		)
 		if err == nil {
+			journal.noteSuccess(route)
+			if actx != nil {
+				// B-01: the successful attempt's context now lives
+				// to the envelope end (or conn Close, via cancel).
+				actx.promote(deadline)
+			}
 			if cancel != nil {
 				conn = cancelOnCloseConn(conn, cancel)
 			}
@@ -328,6 +531,7 @@ func (r *Router) dial(ctx context.Context, network, address string, log logger.L
 		if cancel != nil {
 			cancel()
 		}
+		journal.noteFailure(route)
 		for _, node := range routePath(route) {
 			exclude = append(exclude, node.Name, node.Addr)
 		}
@@ -378,6 +582,10 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 	// call itself are advisory (see dial).
 	hardExclude := append([]string(nil), exclude...)
 
+	// A-01 marker journal, same contract as dial.
+	journal := newMarkerJournal()
+	defer journal.settle()
+
 	for i := 0; i < count; i++ {
 		if perr := parent.Err(); perr != nil {
 			err = perr
@@ -394,7 +602,9 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 		// dial (D3-07): failed attempts release their context at the
 		// end of the iteration; a successful attempt's context lives
 		// exactly as long as the returned listener.
+		// B-01: promotable attempt context, same as dial.
 		var cancel context.CancelFunc
+		var actx *attemptContext
 		if r.options.Timeout > 0 {
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
@@ -408,7 +618,7 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 				slice = remaining
 				last = true
 			}
-			ctx, cancel = context.WithTimeout(ctx, slice)
+			ctx, actx, cancel = newAttemptContext(ctx, slice)
 		}
 
 		// D2 selectRoute, same contract as dial: full exclude first,
@@ -420,6 +630,9 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 			rt := r.options.Chain.Route(sctx, network, address)
 			if (rt == nil || len(rt.Nodes()) == 0) && !fallbackUsed && len(exclude) > len(hardExclude) {
 				fallbackUsed = true
+				// A-01: roll this call's own fail marks back so
+				// FailFilter does not veto the reselection (see dial).
+				journal.rollback()
 				sctx = ctxvalue.ContextWithExcludeNodes(ctx, hardExclude)
 				rt = r.options.Chain.Route(sctx, network, address)
 			}
@@ -453,8 +666,13 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 		if route == nil {
 			route = DefaultRoute
 		}
+		journal.observe(route)
 		ln, err = route.Bind(routeCtx, network, address, opts...)
 		if err == nil {
+			journal.noteSuccess(route)
+			if actx != nil {
+				actx.promote(deadline)
+			}
 			if cancel != nil {
 				ln = &cancelOnCloseListener{Listener: ln, cancel: cancel}
 			}
@@ -463,6 +681,7 @@ func (r *Router) Bind(ctx context.Context, network, address string, opts ...chai
 		if cancel != nil {
 			cancel()
 		}
+		journal.noteFailure(route)
 		for _, node := range routePath(route) {
 			exclude = append(exclude, node.Name, node.Addr)
 		}
