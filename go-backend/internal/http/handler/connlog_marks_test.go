@@ -69,6 +69,10 @@ func TestConnlogChainTargetsIncludeSplitProxy(t *testing.T) {
 	h := New(r, "unit-test-secret")
 
 	node := seedRelayTargetNode(t, r, "cl-split", "198.51.100.5")
+	// 新门控：入口标记只下发给采集开关开着的节点。
+	if err := r.UpdateNodeConnLogEnabled(node, 1); err != nil {
+		t.Fatal(err)
+	}
 	kern := seedChainKernel(t, r, node, kernel.TypeSingbox)
 	vless := func(port int) kernel.Inbound {
 		return kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: port,
@@ -111,8 +115,9 @@ func TestConnlogChainTargetsIncludeSplitProxy(t *testing.T) {
 
 // D-05 后端：connLogInbounds（agent 内核日志解析器的 opt-in
 // 名单）不得收永无直连记录的入站形态——被中转落地／链式目标／
-// 分流目标／导入入站的开关即使开着，其行也被 connlogEntries
-// 排除，交集恒空；只会白开日志级。直连与链式源／分流源是对照。
+// 分流目标／导入入站的开关即使开着（节点开关），其行也被
+// connlogEntries 排除，交集恒空；只会白开日志级。直连与链式源／
+// 分流源是对照。
 func TestConnlogOptInListExcludesNeverDirect(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/connlog-optin.db")
 	if err != nil {
@@ -123,6 +128,10 @@ func TestConnlogOptInListExcludesNeverDirect(t *testing.T) {
 	now := time.Now().UnixMilli()
 
 	node := seedRelayTargetNode(t, r, "cl-optin", "198.51.100.6")
+	// 新门控：名单只在节点开关开时生成（逐入站开关已撤）。
+	if err := r.UpdateNodeConnLogEnabled(node, 1); err != nil {
+		t.Fatal(err)
+	}
 	kern := seedChainKernel(t, r, node, kernel.TypeSingbox)
 	vless := func(port int) kernel.Inbound {
 		return kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: port,
@@ -143,9 +152,6 @@ func TestConnlogOptInListExcludesNeverDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := r.CreateInboundRelay(&model.NodeInboundRelay{InboundID: relayTarget.ID, ForwardID: 777, Name: "relay", Managed: 1, CreatedTime: now}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.DB().Exec(`UPDATE node_inbound SET conn_log_enabled = 1 WHERE kernel_id = ?`, kern.ID).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := r.DB().Exec(`UPDATE node_inbound SET source_id = 7 WHERE id = ?`, imported.ID).Error; err != nil {
@@ -248,6 +254,13 @@ func TestConnlogKernelPayloadEntryMarks(t *testing.T) {
 
 	front := seedRelayTargetNode(t, r, "cl-front", "198.51.100.1")
 	landing := seedRelayTargetNode(t, r, "cl-landing", "203.0.113.10")
+	// 新门控：两节点都开采集，否则标记断言在新门控下恒空。
+	if err := r.UpdateNodeConnLogEnabled(front, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.UpdateNodeConnLogEnabled(landing, 1); err != nil {
+		t.Fatal(err)
+	}
 	frontXray := seedChainKernel(t, r, front, kernel.TypeXray)
 	landingBox := seedChainKernel(t, r, landing, kernel.TypeSingbox)
 
@@ -323,7 +336,7 @@ func TestConnlogKernelPayloadEntryMarks(t *testing.T) {
 
 // 集成对账③：总开关 connlog_enabled 是三面下发的总门——关时
 // gost 入口集为空、KernelApply 的 connlogEntries 为空集、
-// connLogInbounds 不写键；恢复后三面回到拓扑/opt-in 现算结果。
+// connLogInbounds 不写键；恢复后三面回到拓扑/节点开关现算结果。
 // 不许只停一半。
 func TestConnlogMasterSwitchGatesAllMarkFaces(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/connlog-master.db")
@@ -341,7 +354,8 @@ func TestConnlogMasterSwitchGatesAllMarkFaces(t *testing.T) {
 	kern := seedChainKernel(t, r, node, kernel.TypeXray)
 	direct := seedChainInbound(t, r, kern, "cl-master-direct", kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 8443,
 		Security: kernel.Security{Type: kernel.SecurityNone}}, 0)
-	if err := r.DB().Exec(`UPDATE node_inbound SET conn_log_enabled = 1 WHERE id = ?`, direct.ID).Error; err != nil {
+	// 新门控：节点开关开（逐入站开关已撤），三面才随总开关翻转。
+	if err := r.UpdateNodeConnLogEnabled(node, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -359,7 +373,7 @@ func TestConnlogMasterSwitchGatesAllMarkFaces(t *testing.T) {
 			t.Fatal(err)
 		}
 		// D-04：渲染面与标记面同门——总开关关时下发的 Xray 配置
-		// 不开 access 日志（opt-in 开着也不升），开时才开。
+		// 不开 access 日志（节点开关开着也不升），开时才开。
 		files, _ := payload["files"].([]kernel.File)
 		if len(files) == 0 {
 			t.Fatalf("%s: payload has no rendered files", stage)

@@ -591,7 +591,14 @@ func (h *Handler) applyWhitelistedTarget(targetID int64) []string {
 		return nil
 	}
 	target, err := h.repo.GetNodeInbound(targetID)
-	if err != nil || target == nil || isExternalInbound(target) || target.RelayWhitelist != 1 {
+	if err != nil || target == nil || isExternalInbound(target) {
+		return nil
+	}
+	effective, _, werr := h.effectiveInboundWhitelist(*target)
+	if werr != nil {
+		return []string{fmt.Sprintf("出站节点「%s」的白名单下发失败: %v", target.Name, werr)}
+	}
+	if !effective {
 		return nil
 	}
 	if err := h.applyKernel(target.KernelID, false); err != nil {

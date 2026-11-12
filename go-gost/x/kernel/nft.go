@@ -356,6 +356,13 @@ type nftCounters struct {
 	statePath string
 	state     nftState
 	lastErr   string
+	// autoInstalled 表示本进程曾为白名单自动装上 nftables（供状态
+	// 上报区分“已安装”与“已自动安装”；进程重启后复位为 false，
+	// 此后 nft 在场即报“已安装”）。
+	autoInstalled bool
+	// installErr 是最近一次自动安装失败的原因（"" 表示无失败或
+	// 已恢复）；只由安装路径写，面板据此展示“安装失败＋原因”。
+	installErr string
 }
 
 func newNftCounters(baseDir string) *nftCounters {
@@ -414,6 +421,14 @@ type hopRulesError struct{ msg string }
 
 func (e *hopRulesError) Error() string { return e.msg }
 
+// installStatus 报告最近一次自动安装的结果（状态上报面）：本进
+// 程是否装过 nft、最近一次安装失败的原因（"" 表示无失败）。
+func (n *nftCounters) installStatus() (autoInstalled bool, installErr string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.autoInstalled, n.installErr
+}
+
 // sync rebuilds the whole table atomically: traffic counters and
 // inbound whitelists in one ruleset. Traffic counting alone is
 // best-effort (a node without nftables just loses its counters), but
@@ -426,11 +441,33 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 	defer n.mu.Unlock()
 	if err := nftAvailable(); err != nil {
 		if portsHaveWhitelist(ports) {
-			n.lastErr = "入站白名单需要 nftables: " + err.Error()
-			return fmt.Errorf("入站白名单需要 nftables: %v", err)
+			// 白名单在场且 nft 缺失：先尝试自动安装（用户已明
+			// 确不要手动装）。装不上才明错 fail-closed——错误
+			// 必含 nftables 与失败原因，面板原样展示；绝不静
+			// 默跳过（无规则放行即无保护运行）。
+			ctx, cancel := context.WithTimeout(context.Background(), nftInstallTimeout)
+			defer cancel()
+			installed, ierr := nftEnsureInstalled(ctx)
+			if ierr != nil {
+				n.installErr = ierr.Error()
+				n.autoInstalled = false
+				n.lastErr = ierr.Error()
+				return ierr
+			}
+			if installed {
+				n.autoInstalled = true
+				n.installErr = ""
+				log.Printf("nftables 已自动安装（入站白名单需要）")
+			}
+			// nft 现已可用，落到下方正常同步。
+		} else {
+			n.lastErr = "未安装 nftables，无法统计流量"
+			return nil
 		}
-		n.lastErr = "未安装 nftables，无法统计流量"
-		return nil
+	} else {
+		// nft 在场：清除陈旧的安装失败记录（上次失败后已由他
+		// 途装好，或本次无需安装）。
+		n.installErr = ""
 	}
 	rules := expandPorts(ports)
 	users = sortedUsers(users)

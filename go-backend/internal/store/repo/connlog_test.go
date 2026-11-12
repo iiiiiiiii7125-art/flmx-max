@@ -225,17 +225,24 @@ func TestConnlogListPaginationAndIPFilter(t *testing.T) {
 		}
 	}
 
-	page1, err := r.ListInboundConnLogs(10, "", 0, 2)
-	if err != nil || len(page1) != 2 || page1[0].ConnID != "b" || page1[1].ConnID != "c" {
-		t.Fatalf("page1 = (%v, %v), want [b c] newest first", page1, err)
+	// 节点视图按 entry_node_id 查：本节点 5 行全在集内，start_time
+	// 倒序（e 5000、d 4000、b 3000、c 2000、a 1000）。
+	page1, err := r.ListNodeConnLogs(1, "", 0, 2)
+	if err != nil || len(page1) != 2 || page1[0].ConnID != "e" || page1[1].ConnID != "d" {
+		t.Fatalf("page1 = (%v, %v), want [e d] newest first", page1, err)
 	}
-	page2, err := r.ListInboundConnLogs(10, "", 2, 2)
-	if err != nil || len(page2) != 1 || page2[0].ConnID != "a" {
-		t.Fatalf("page2 = (%v, %v), want [a]", page2, err)
+	page2, err := r.ListNodeConnLogs(1, "", 2, 2)
+	if err != nil || len(page2) != 2 || page2[0].ConnID != "b" || page2[1].ConnID != "c" {
+		t.Fatalf("page2 = (%v, %v), want [b c]", page2, err)
 	}
-	byIP, err := r.ListInboundConnLogs(10, "203.0.113.1", 0, 10)
-	if err != nil || len(byIP) != 2 || byIP[0].ConnID != "c" || byIP[1].ConnID != "a" {
-		t.Fatalf("ip filter = (%v, %v), want [c a] (exact match, other inbounds excluded)", byIP, err)
+	byIP, err := r.ListNodeConnLogs(1, "203.0.113.1", 0, 10)
+	if err != nil || len(byIP) != 4 || byIP[0].ConnID != "e" || byIP[1].ConnID != "d" || byIP[2].ConnID != "c" || byIP[3].ConnID != "a" {
+		t.Fatalf("ip filter = (%v, %v), want [e d c a] (exact match)", byIP, err)
+	}
+	// 他节点不在集内。
+	other, err := r.ListNodeConnLogs(2, "", 0, 10)
+	if err != nil || len(other) != 0 {
+		t.Fatalf("other node = (%v, %v), want []", other, err)
 	}
 }
 

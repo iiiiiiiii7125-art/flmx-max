@@ -803,6 +803,76 @@ func nodeReapSettingsFromReq(req map[string]interface{}) (nodeReapSettings, erro
 	return out, nil
 }
 
+// --- 节点级连接日志采集开关与节点级入站白名单（默认全关）---
+//
+// 与上方 idle/reap 同形：请求面解析＋presence 语义（absent＝
+// 保持存量／创建面默认关），落库走独立 setter，不膨胀
+// UpdateNode 的全字段签名。连接日志开关是唯一的采集门控
+// （总开关 AND 本开关）；白名单开关＋列表是逐入站白名单之上
+// 的覆盖层（开时全部入站生效本列表，关时逐入站照旧）。
+
+// nodeConnLogSettingsFromReq 解析可选的节点级连接日志开关
+// （connLogEnabled）。Bool 面用 asBool（bool 与 "1"/"true"/
+// "yes"/"0"/"false"/"no"）。
+func nodeConnLogSettingsFromReq(req map[string]interface{}) (enabled int, present bool) {
+	v, ok := req["connLogEnabled"]
+	if !ok {
+		return 0, false
+	}
+	if asBool(v, false) {
+		return 1, true
+	}
+	return 0, true
+}
+
+// nodeWhitelistSettingsFromReq 解析可选的节点级入站白名单开关
+// ＋列表（whitelistEnabled / whitelistExtra）。列表经
+// kernel.ParseAllowList 校验并归一（IP 与 CIDR、逗号分隔，非法
+// 条目整单拒绝）；开关关时列表仍校验——存量坏值不许借关开关
+// 悄悄落库。
+func nodeWhitelistSettingsFromReq(req map[string]interface{}) (enabled int, enabledPresent bool, extra string, extraPresent bool, err error) {
+	if v, ok := req["whitelistEnabled"]; ok {
+		enabledPresent = true
+		if asBool(v, false) {
+			enabled = 1
+		}
+	}
+	if v, ok := req["whitelistExtra"]; ok {
+		extraPresent = true
+		allow, perr := kernel.ParseAllowList(asString(v))
+		if perr != nil {
+			return 0, false, "", false, perr
+		}
+		extra = strings.Join(allow, ", ")
+	}
+	return enabled, enabledPresent, extra, extraPresent, nil
+}
+
+// whitelistReconcileFailureNote 把节点级白名单同步重下发的失败
+// 渲染成回执 warning（T-001 同口径）：离线/不在线类失败不算
+// （节点重连时按新值重布），只点名真失败的内核与原因；原因截
+// 断，避免 agent 的长错误撑爆回执。无真失败时返回 ""。
+func whitelistReconcileFailureNote(failures []kernelReconcileFailure) string {
+	var parts []string
+	for _, f := range failures {
+		if f.Err == nil {
+			continue
+		}
+		if strings.Contains(f.Err.Error(), "不在线") {
+			continue
+		}
+		if f.KernelType == "" {
+			parts = append(parts, "节点内核查询失败: "+truncate(f.Err.Error(), 200))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("内核「%s」白名单下发失败: %s", f.KernelType, truncate(f.Err.Error(), 200)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "白名单已保存，但部分内核下发失败（" + strings.Join(parts, "；") + "），请检查节点内核状态"
+}
+
 // normalizeNodeDisplayGroup 归一节点展示分组标签（纯展示功能，
 // 用户 2026-11-09 拍板）：去首尾空白后按列宽 varchar(100) 校验，
 // 与节点名称同口径；纯空白归为空（未分组）。
@@ -851,6 +921,12 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 	reapSettings, reapErr := nodeReapSettingsFromReq(req)
 	if reapErr != nil {
 		response.WriteJSON(w, response.ErrDefault(reapErr.Error()))
+		return
+	}
+	connLogEnabled, connLogPresent := nodeConnLogSettingsFromReq(req)
+	whitelistEnabled, whitelistEnabledPresent, whitelistExtra, whitelistExtraPresent, wlErr := nodeWhitelistSettingsFromReq(req)
+	if wlErr != nil {
+		response.WriteJSON(w, response.ErrDefault(wlErr.Error()))
 		return
 	}
 	name := asString(req["name"])
@@ -992,6 +1068,27 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// 节点级连接日志开关与白名单随创建落库（未提交即列默认关／
+	// 空，失败与上方同处置：补偿删除刚建节点）。创建时节点尚无
+	// 内核与运行面，无需重推——开关随首次内核下发／服务同步生效。
+	if connLogPresent {
+		if err := h.repo.UpdateNodeConnLogEnabled(nodeID, connLogEnabled); err != nil {
+			if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
+				log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
+			}
+			respondInternalError(w, "nodeCreate", err)
+			return
+		}
+	}
+	if whitelistEnabledPresent || whitelistExtraPresent {
+		if err := h.repo.UpdateNodeWhitelist(nodeID, whitelistEnabled, whitelistExtra); err != nil {
+			if _, _, delErr := h.deleteNodeByID(nodeID); delErr != nil {
+				log.Printf("node create compensation delete failed node_id=%d err=%v", nodeID, delErr)
+			}
+			respondInternalError(w, "nodeCreate", err)
+			return
+		}
+	}
 	// 展示分组标签随创建落库（空标签即列默认空串、无需写）。失败
 	// 与 SSH 配置同处置：补偿删除刚建节点，不留半成品。
 	if displayGroup != "" {
@@ -1048,6 +1145,12 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	reapSettings, reapErr := nodeReapSettingsFromReq(req)
 	if reapErr != nil {
 		response.WriteJSON(w, response.ErrDefault(reapErr.Error()))
+		return
+	}
+	connLogEnabled, connLogPresent := nodeConnLogSettingsFromReq(req)
+	whitelistEnabled, whitelistEnabledPresent, whitelistExtra, whitelistExtraPresent, wlErr := nodeWhitelistSettingsFromReq(req)
+	if wlErr != nil {
+		response.WriteJSON(w, response.ErrDefault(wlErr.Error()))
 		return
 	}
 
@@ -1391,6 +1494,43 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 			h.repushNodeRuntimeAfterSettingChange(id)
 		}
 	}
+	// 节点级连接日志开关：落库后真变更才重推——repush 让 agent
+	// 收到新开关（服务配置 metadata），内核重下发（reconcile）
+	// 让日志形态与名单收敛。开关只控采集，不删历史行。
+	if connLogPresent {
+		if err := h.repo.UpdateNodeConnLogEnabled(id, connLogEnabled); err != nil {
+			respondInternalError(w, "nodeUpdate", err)
+			return
+		}
+		if connLogEnabled != currentNode.ConnLogEnabled {
+			log.Printf("node connlog setting updated node_id=%d enabled=%d operator_id=%d (runtime repush queued if online)", id, connLogEnabled, idemUserID(r))
+			h.repushNodeRuntimeAfterSettingChange(id)
+			go h.reconcileNodeKernels(id)
+		}
+	}
+	// 节点级入站白名单：落库后真变更才同步重下发全部内核——
+	// 渲染时合并即继承：开→全部入站生效节点列表，关→逐入站照
+	// 旧。下发失败点名进回执（见尾部 whitelistFailures），更
+	// 新本身已落库；离线节点不算失败（重连时按新值重布）。
+	var whitelistFailures []kernelReconcileFailure
+	if whitelistEnabledPresent || whitelistExtraPresent {
+		newWhitelistEnabled := currentNode.WhitelistEnabled
+		if whitelistEnabledPresent {
+			newWhitelistEnabled = whitelistEnabled
+		}
+		newWhitelistExtra := currentNode.WhitelistExtra
+		if whitelistExtraPresent {
+			newWhitelistExtra = whitelistExtra
+		}
+		if err := h.repo.UpdateNodeWhitelist(id, newWhitelistEnabled, newWhitelistExtra); err != nil {
+			respondInternalError(w, "nodeUpdate", err)
+			return
+		}
+		if newWhitelistEnabled != currentNode.WhitelistEnabled || newWhitelistExtra != currentNode.WhitelistExtra {
+			log.Printf("node whitelist setting updated node_id=%d enabled=%d operator_id=%d", id, newWhitelistEnabled, idemUserID(r))
+			whitelistFailures = h.reconcileNodeKernelsCollect(id)
+		}
+	}
 	// 展示分组标签在主字段落库后单独落列（纯展示，不参与下方地
 	// 址变更重算面）。
 	if displayGroup != nil {
@@ -1456,6 +1596,11 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		// 口径一致，离线节点重连时 onNodeOnline 按新值重布）。
 		log.Printf("node address changed node_id=%d operator_id=%d (tunnel chain repush queued if online)", id, idemUserID(r))
 		h.repushNodeRuntimeAfterSettingChange(id)
+	}
+	// T-001：白名单同步重下发失败先行点名（见上方 whitelistFailures）。
+	if note := whitelistReconcileFailureNote(whitelistFailures); note != "" {
+		response.WriteJSON(w, response.OKWithWarning(nil, note))
+		return
 	}
 	// T-001：见上方 refreshFailed 收集。
 	if len(refreshFailed) > 0 {

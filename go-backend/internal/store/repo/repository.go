@@ -1421,9 +1421,19 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"edgeIdleTimeoutSeconds":     n.EdgeIdleTimeoutSeconds,
 			"backstopIdleTimeoutSeconds": n.BackstopIdleTimeoutSeconds,
 			"backstopTrickleBps":         n.BackstopTrickleBps,
-			"interfaceName":              nullableString(n.InterfaceName),
-			"sshConfig":                  sshConfigByNodeID[n.ID],
-			"upgradeVerification":        upgradeVerification,
+			// 节点级连接日志采集开关（0＝关，默认关）与节点级入站
+			// 白名单开关＋附加名单（0＝关，默认关）。
+			"connLogEnabled":   n.ConnLogEnabled,
+			"whitelistEnabled": n.WhitelistEnabled,
+			"whitelistExtra":   n.WhitelistExtra,
+			// nftables 状态（agent 上报的运行态）：""＝未知、installed
+			// ＝已安装、auto_installed＝已自动安装、failed＝自动安装
+			// 失败（原因见 nftablesError）。
+			"nftablesStatus":      n.NftablesStatus,
+			"nftablesError":       n.NftablesError,
+			"interfaceName":       nullableString(n.InterfaceName),
+			"sshConfig":           sshConfigByNodeID[n.ID],
+			"upgradeVerification": upgradeVerification,
 		})
 	}
 	return items, nil
@@ -2458,6 +2468,9 @@ func (r *Repository) exportNodes() ([]model.NodeBackup, error) {
 		b.EdgeIdleTimeoutSeconds = n.EdgeIdleTimeoutSeconds
 		b.BackstopIdleTimeoutSeconds = n.BackstopIdleTimeoutSeconds
 		b.BackstopTrickleBps = n.BackstopTrickleBps
+		b.ConnLogEnabled = n.ConnLogEnabled
+		b.WhitelistEnabled = n.WhitelistEnabled
+		b.WhitelistExtra = n.WhitelistExtra
 		// O7-006：恢复后保留已忽略的到期提醒状态
 		b.ExpiryReminderDismissed = n.ExpiryReminderDismissed
 		out = append(out, b)
@@ -3775,6 +3788,34 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 #%d（%q）的兜底滴流上限 %d 字节/秒超出 0–1000000，已按默认（0）恢复", n.ID, n.Name, n.BackstopTrickleBps)
 			backstopTrickleBps = 0
 		}
+		// 节点级连接日志开关恢复面归一：只认 0/1，越界按关闭归一
+		// 并回执点名原值——采集开关宁可关错不可开错；旧备份无此
+		// 字段（零值）即关闭、静默。
+		connLogEnabled := n.ConnLogEnabled
+		if connLogEnabled != 0 && connLogEnabled != 1 {
+			rep.warnf("备份恢复：节点 #%d（%q）的连接日志开关 %d 无效（须为 0 或 1），已按关闭（0）恢复", n.ID, n.Name, n.ConnLogEnabled)
+			connLogEnabled = 0
+		}
+		// 节点级白名单恢复面归一：开关只认 0/1；名单须过
+		// ParseAllowList，非法条目即整组按关闭归一并回执点名原
+		// 值——白名单开关宁可关错不可开错（关即逐入站设置照旧），
+		// 且坏名单不得静默落成“开着空名单”。旧备份无此二字段
+		// （零值／空）即关闭、静默。
+		whitelistEnabled := n.WhitelistEnabled
+		whitelistExtra := n.WhitelistExtra
+		if whitelistEnabled != 0 && whitelistEnabled != 1 {
+			rep.warnf("备份恢复：节点 #%d（%q）的白名单开关 %d 无效（须为 0 或 1），已按关闭（0）恢复", n.ID, n.Name, n.WhitelistEnabled)
+			whitelistEnabled = 0
+		}
+		if whitelistEnabled == 1 {
+			if allow, err := kernel.ParseAllowList(whitelistExtra); err != nil {
+				rep.warnf("备份恢复：节点 #%d（%q）的白名单 %q 无效（%v），已按关闭恢复", n.ID, n.Name, n.WhitelistExtra, err)
+				whitelistEnabled = 0
+				whitelistExtra = ""
+			} else {
+				whitelistExtra = strings.Join(allow, ", ")
+			}
+		}
 		// 展示分组标签恢复面归一，镜像写面（trim＋列宽 100）：旧备
 		// 份无此字段为空＝未分组、静默；带值越界者截断并回执点名
 		// 原值，与 B8-11 同口径。
@@ -3820,6 +3861,9 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			EdgeIdleTimeoutSeconds:     edgeIdleTimeoutSeconds,
 			BackstopIdleTimeoutSeconds: backstopIdleTimeoutSeconds,
 			BackstopTrickleBps:         backstopTrickleBps,
+			ConnLogEnabled:             connLogEnabled,
+			WhitelistEnabled:           whitelistEnabled,
+			WhitelistExtra:             whitelistExtra,
 			// O7-006：恢复后保留已忽略的到期提醒状态
 			ExpiryReminderDismissed: n.ExpiryReminderDismissed,
 		}
@@ -3828,7 +3872,7 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "remark", "expiry_time", "renewal_cycle", "secret", "server_ip", "server_ip_v4", "server_ip_v6", "extra_ips", "port", "interface_name", "version",
 				"http", "tls", "socks", "updated_time", "status", "tcp_listen_addr", "udp_listen_addr",
-				"inx", "latency_targets", "forward_mode", "display_group", "restart_enabled", "restart_time", "restart_jitter_minutes", "restart_mode", "restart_interval_minutes", "idle_timeout_seconds", "edge_idle_timeout_seconds", "backstop_idle_timeout_seconds", "backstop_trickle_bps", "expiry_reminder_dismissed",
+				"inx", "latency_targets", "forward_mode", "display_group", "restart_enabled", "restart_time", "restart_jitter_minutes", "restart_mode", "restart_interval_minutes", "idle_timeout_seconds", "edge_idle_timeout_seconds", "backstop_idle_timeout_seconds", "backstop_trickle_bps", "conn_log_enabled", "whitelist_enabled", "whitelist_extra", "expiry_reminder_dismissed",
 			}),
 		}).Create(&item).Error
 		if err != nil {

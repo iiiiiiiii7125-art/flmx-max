@@ -1,9 +1,8 @@
 package handler
 
 import (
-	"io"
+	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,53 +11,8 @@ import (
 	"go-backend/internal/store/repo"
 )
 
-// U5: connLogEnabled 在入站保存 API 的解码口径——在场才是指针非空
-// （更新时省略＝保持存量，见 inboundSave 的指针惯例），显式
-// true/false 都须原样到达落库赋值点。
-func TestDecodeInboundRequestConnLogEnabled(t *testing.T) {
-	decode := func(body string) (inboundRequest, map[string]bool) {
-		var req inboundRequest
-		present, err := decodeInboundRequest(io.NopCloser(strings.NewReader(body)), &req)
-		if err != nil {
-			t.Fatalf("decode %s: %v", body, err)
-		}
-		return req, present
-	}
-
-	req, present := decode(`{"name":"a","connLogEnabled":true}`)
-	if req.ConnLogEnabled == nil || !*req.ConnLogEnabled {
-		t.Fatalf("explicit true must decode to a non-nil true pointer, got %v", req.ConnLogEnabled)
-	}
-	if !present["connLogEnabled"] {
-		t.Fatal("presence map must carry connLogEnabled")
-	}
-
-	req, _ = decode(`{"name":"a","connLogEnabled":false}`)
-	if req.ConnLogEnabled == nil || *req.ConnLogEnabled {
-		t.Fatalf("explicit false must decode to a non-nil false pointer, got %v", req.ConnLogEnabled)
-	}
-
-	req, present = decode(`{"name":"a"}`)
-	if req.ConnLogEnabled != nil {
-		t.Fatal("omitted connLogEnabled must stay nil so updates keep the stored switch")
-	}
-	if present["connLogEnabled"] {
-		t.Fatal("presence map must not carry an omitted connLogEnabled")
-	}
-
-	// 落库赋值口径与 inboundSave 同形：指针非空才覆盖。
-	row := 0
-	if req.ConnLogEnabled != nil {
-		row = boolToInt(*req.ConnLogEnabled)
-	}
-	if row != 0 {
-		t.Fatal("omitted switch must not touch the stored value")
-	}
-}
-
-// seedU5Inbound 直接落一行入站（applyInboundToModel 不映射
-// ConnLogEnabled，故在建行前显式赋值），供 payload 名单断言用。
-func seedU5Inbound(t *testing.T, r *repo.Repository, k *model.NodeKernel, name string, port int, enabled, connLog bool, companionOf int64) *model.NodeInbound {
+// seedU5Inbound 直接落一行入站，供 payload 名单断言用。
+func seedU5Inbound(t *testing.T, r *repo.Repository, k *model.NodeKernel, name string, port int, enabled bool, companionOf int64) *model.NodeInbound {
 	t.Helper()
 	in := kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: port,
 		Security: kernel.Security{Type: kernel.SecurityNone}}
@@ -70,9 +24,6 @@ func seedU5Inbound(t *testing.T, r *repo.Repository, k *model.NodeKernel, name s
 	if enabled {
 		row.Enabled = 1
 	}
-	if connLog {
-		row.ConnLogEnabled = 1
-	}
 	if err := applyInboundToModel(in, &row); err != nil {
 		t.Fatal(err)
 	}
@@ -82,9 +33,32 @@ func seedU5Inbound(t *testing.T, r *repo.Repository, k *model.NodeKernel, name s
 	return &row
 }
 
-// U5↔U4 契约：KernelApply 载荷的 connLogInbounds 恰为渲染集中开启
-// 采集的非伴生入站——未开启、已停用、伴生三类都不得入列；无入选
-// 时键整体缺席（agent 解码为空集、采集器停用）。
+// payloadConfigJSON 从 KernelApply 载荷里取渲染出的 config.json 并解析。
+func payloadConfigJSON(t *testing.T, payload map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	files, ok := payload["files"].([]kernel.File)
+	if !ok {
+		t.Fatalf("files type = %T, want []kernel.File", payload["files"])
+	}
+	for _, f := range files {
+		if f.Name == "config.json" {
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(f.Content), &parsed); err != nil {
+				t.Fatalf("config.json invalid: %v", err)
+			}
+			return parsed
+		}
+	}
+	t.Fatal("config.json not in payload files")
+	return nil
+}
+
+// U5↔U4 契约（节点开关版）：KernelApply 载荷的 connLogInbounds 恰为
+// 渲染集中合格的入站——节点开关开时，启用、非伴生的直连入站全入
+// 列（逐入站开关已撤，采集门控只剩节点开关）；已停用、伴生两类
+// 不得入列；开关关时键整体缺席（agent 解码为空集、采集器停用）。
+// connlogEntries（直连入口标记）与日志形态（Xray access /
+// sing-box debug）受同一门控。
 func TestBuildKernelApplyPayloadConnLogInbounds(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/connlog-u5.db")
 	if err != nil {
@@ -96,12 +70,33 @@ func TestBuildKernelApplyPayloadConnLogInbounds(t *testing.T) {
 	node := seedRelayTargetNode(t, r, "u5-node", "198.51.100.30")
 	k := seedChainKernel(t, r, node, kernel.TypeXray)
 
-	optedIn := seedU5Inbound(t, r, k, "opted-in", 8443, true, true, 0)
-	seedU5Inbound(t, r, k, "plain", 8444, true, false, 0)
-	seedU5Inbound(t, r, k, "disabled-opted-in", 8445, false, true, 0)
-	seedU5Inbound(t, r, k, "companion", 8446, true, true, optedIn.ID)
+	first := seedU5Inbound(t, r, k, "first", 8443, true, 0)
+	plain := seedU5Inbound(t, r, k, "plain", 8444, true, 0)
+	seedU5Inbound(t, r, k, "disabled", 8445, false, 0)
+	seedU5Inbound(t, r, k, "companion", 8446, true, first.ID)
 
+	// 默认关（节点开关默认关）：名单与入口标记皆空，渲染回落。
 	payload, _, err := h.buildKernelApplyPayload(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["connLogInbounds"]; ok {
+		t.Fatalf("connLogInbounds must be absent when the node switch is off, got %v", payload["connLogInbounds"])
+	}
+	entries, ok := payload["connlogEntries"].([]map[string]interface{})
+	if !ok || len(entries) != 0 {
+		t.Fatalf("connlogEntries = %v, want empty when the node switch is off", payload["connlogEntries"])
+	}
+	if _, present := payloadConfigJSON(t, payload)["log"].(map[string]interface{})["access"]; present {
+		t.Fatal("node off: log.access must be absent (must not open the access log)")
+	}
+
+	// 只开节点开关（逐入站开关不存在）：两启用直连入站入列，
+	// 停用与伴生除外；入口标记与日志形态同步抬升。
+	if err := r.UpdateNodeConnLogEnabled(node, 1); err != nil {
+		t.Fatal(err)
+	}
+	payload, _, err = h.buildKernelApplyPayload(k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,17 +104,43 @@ func TestBuildKernelApplyPayloadConnLogInbounds(t *testing.T) {
 	if !ok {
 		t.Fatalf("connLogInbounds missing or wrong type: %T %v", payload["connLogInbounds"], payload["connLogInbounds"])
 	}
-	if want := []int64{optedIn.ID}; !reflect.DeepEqual(got, want) {
+	if want := []int64{first.ID, plain.ID}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("connLogInbounds = %v, want %v", got, want)
 	}
+	entries, ok = payload["connlogEntries"].([]map[string]interface{})
+	if !ok || len(entries) != 2 {
+		t.Fatalf("connlogEntries = %v, want the 2 direct entries", payload["connlogEntries"])
+	}
+	// access 路径是内核包的内部口径：只断言键存在且非空。
+	if got := payloadConfigJSON(t, payload)["log"].(map[string]interface{})["access"]; got == nil || got == "" {
+		t.Fatalf("node on: log.access = %v, want the access log open", got)
+	}
 
+	// sing-box 内核同门控：开关开时入列且升 debug；关时收敛。
 	k2 := seedChainKernel(t, r, node, kernel.TypeSingbox)
-	seedU5Inbound(t, r, k2, "plain-sb", 9443, true, false, 0)
+	sb := seedU5Inbound(t, r, k2, "plain-sb", 9443, true, 0)
 	payload2, _, err := h.buildKernelApplyPayload(k2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	got2, ok := payload2["connLogInbounds"].([]int64)
+	if !ok || !reflect.DeepEqual(got2, []int64{sb.ID}) {
+		t.Fatalf("singbox connLogInbounds = %v, want [%d]", payload2["connLogInbounds"], sb.ID)
+	}
+	if lvl := payloadConfigJSON(t, payload2)["log"].(map[string]interface{})["level"]; lvl != "debug" {
+		t.Fatalf("singbox node on: log.level = %v, want debug", lvl)
+	}
+	if err := r.UpdateNodeConnLogEnabled(node, 0); err != nil {
+		t.Fatal(err)
+	}
+	payload2, _, err = h.buildKernelApplyPayload(k2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := payload2["connLogInbounds"]; ok {
-		t.Fatalf("connLogInbounds must be absent when no inbound opted in, got %v", payload2["connLogInbounds"])
+		t.Fatalf("connLogInbounds must be absent when the node switch is off, got %v", payload2["connLogInbounds"])
+	}
+	if lvl := payloadConfigJSON(t, payload2)["log"].(map[string]interface{})["level"]; lvl != "warn" {
+		t.Fatalf("singbox node off: log.level = %v, want warn", lvl)
 	}
 }

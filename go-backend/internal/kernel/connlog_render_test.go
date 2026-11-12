@@ -9,11 +9,13 @@ import (
 )
 
 // U5（入站连接日志·面板渲染开关）渲染对照：
-//   - 未开启任何入站时，两栈生成配置必须与基线 golden 逐字节一致
+//   - 节点开关关时，两栈生成配置必须与基线 golden 逐字节一致
 //     （缺省零变化——存量节点配置 hash 不变、不被重下发）；
-//   - 开启任一入站后，生成配置与关闭态的 diff 恰为设计 §3.2/§3.3
+//   - 节点开关开时，生成配置与关闭态的 diff 恰为设计 §3.2/§3.3
 //     所列项（Xray: log.access；sing-box: log.level），无溢出改动；
-//   - 观察面是进程级的：开哪个入站、开几个，渲染结果相同。
+//   - 观察面是进程级的：只由节点开关（RenderOptions.ConnLogEnabled）
+//     决定，与入站集合无关——逐入站开关已撤，不再有“开哪个入站”
+//     的维度。
 
 // jsonDiffPaths 递归比较两个已解析 JSON 值，返回变化的叶子路径
 // （old/new 对）。仅供本文件对照断言用。
@@ -104,36 +106,34 @@ func diffKeys(diff map[string][2]interface{}) []string {
 }
 
 // TestConnLogRenderOffMatchesBaselineGolden 钉死缺省零变化：夹具入站
-// 全部未带 opt-in（零值），渲染必须逐字节命中基线既有 golden——与
-// TestRenderXrayGolden / TestRenderSingboxGolden 同一文件、同一口径，
-// 本测试是 U5 契约的显式登记点。
-// D-04：总开关关时渲染须回落——即使有入站开了 opt-in，
-// sing-box 也不升 debug、Xray 也不开 access 日志；总开关开时
-// 才按 opt-in 升。缺省 RenderOptions（总开关关）即回落态。
-func TestConnLogRenderMasterOffFallsBack(t *testing.T) {
+// 是普通入站（无逐入站开关——已撤），渲染必须逐字节命中基线既有
+// golden——与 TestRenderXrayGolden / TestRenderSingboxGolden 同一
+// 文件、同一口径，本测试是 U5 契约的显式登记点。
+// D-04：节点开关关时渲染须回落——sing-box 不升 debug、Xray 不开
+// access 日志；节点开关开时才升。缺省 RenderOptions（开关关）即
+// 回落态。
+func TestConnLogRenderNodeOffFallsBack(t *testing.T) {
 	t.Run("singbox", func(t *testing.T) {
-		on := phase3Inbounds(t)
-		on[0].ConnLogEnabled = true
-		offContent := renderContentWith(t, TypeSingbox, on, RenderOptions{})
+		inbounds := phase3Inbounds(t)
+		offContent := renderContentWith(t, TypeSingbox, inbounds, RenderOptions{})
 		if lvl := parseConfig(t, offContent)["log"].(map[string]interface{})["level"]; lvl != "warn" {
-			t.Fatalf("master off: log.level = %v, want warn (must not raise to debug)", lvl)
+			t.Fatalf("node off: log.level = %v, want warn (must not raise to debug)", lvl)
 		}
-		onContent := renderContentWith(t, TypeSingbox, on, RenderOptions{ConnLogEnabled: true})
+		onContent := renderContentWith(t, TypeSingbox, inbounds, RenderOptions{ConnLogEnabled: true})
 		if lvl := parseConfig(t, onContent)["log"].(map[string]interface{})["level"]; lvl != "debug" {
-			t.Fatalf("master on: log.level = %v, want debug", lvl)
+			t.Fatalf("node on: log.level = %v, want debug", lvl)
 		}
 	})
 
 	t.Run("xray", func(t *testing.T) {
-		on := goldenInbounds(t)
-		on[0].ConnLogEnabled = true
-		offContent := renderContentWith(t, TypeXray, on, RenderOptions{})
+		inbounds := goldenInbounds(t)
+		offContent := renderContentWith(t, TypeXray, inbounds, RenderOptions{})
 		if _, present := parseConfig(t, offContent)["log"].(map[string]interface{})["access"]; present {
-			t.Fatal("master off: log.access must be absent (must not open the access log)")
+			t.Fatal("node off: log.access must be absent (must not open the access log)")
 		}
-		onContent := renderContentWith(t, TypeXray, on, RenderOptions{ConnLogEnabled: true})
+		onContent := renderContentWith(t, TypeXray, inbounds, RenderOptions{ConnLogEnabled: true})
 		if got := parseConfig(t, onContent)["log"].(map[string]interface{})["access"]; got != connLogAccessPath {
-			t.Fatalf("master on: log.access = %v, want %q", got, connLogAccessPath)
+			t.Fatalf("node on: log.access = %v, want %q", got, connLogAccessPath)
 		}
 	})
 }
@@ -144,17 +144,17 @@ func TestConnLogRenderOffMatchesBaselineGolden(t *testing.T) {
 }
 
 func TestConnLogRenderOnDiffExact(t *testing.T) {
-	// D-04：本测试的「开」态须显式带总开关开（RenderOptions
-	// {ConnLogEnabled: true}）；缺省 opts（总开关关）下 opt-in
-	// 不升日志级，见 TestConnLogRenderMasterOffFallsBack。
-	masterOn := RenderOptions{ConnLogEnabled: true}
+	// D-04：本测试的「开」态须显式带节点开关开（RenderOptions
+	// {ConnLogEnabled: true}）；缺省 opts（开关关）下不升日志级，
+	// 见 TestConnLogRenderNodeOffFallsBack。开与关的唯一差别是
+	// opts——同一入站集合，逐入站开关已撤。
+	nodeOn := RenderOptions{ConnLogEnabled: true}
 	t.Run("xray", func(t *testing.T) {
 		off := goldenInbounds(t)
 		offContent := renderContent(t, TypeXray, off)
 
 		on := goldenInbounds(t)
-		on[0].ConnLogEnabled = true
-		onContent := renderContentWith(t, TypeXray, on, masterOn)
+		onContent := renderContentWith(t, TypeXray, on, nodeOn)
 
 		diff := map[string][2]interface{}{}
 		jsonDiffPaths(parseConfig(t, offContent), parseConfig(t, onContent), "", diff)
@@ -168,24 +168,15 @@ func TestConnLogRenderOnDiffExact(t *testing.T) {
 			t.Fatalf("log.loglevel = %v, want warning (access 开启不得抬错误日志级别)", lvl)
 		}
 
-		// 进程级语义：改开另一个入站、或全开，渲染与只开一个相同。
-		onLast := goldenInbounds(t)
-		onLast[len(onLast)-1].ConnLogEnabled = true
-		if got := renderContentWith(t, TypeXray, onLast, masterOn); got != onContent {
-			t.Fatal("xray connlog render must not depend on which inbound opted in")
-		}
-		onAll := goldenInbounds(t)
-		for i := range onAll {
-			onAll[i].ConnLogEnabled = true
-		}
-		if got := renderContentWith(t, TypeXray, onAll, masterOn); got != onContent {
-			t.Fatal("xray connlog render must not depend on how many inbounds opted in")
+		// 进程级语义：同一入站集合、同一开关，渲染幂等。
+		if got := renderContentWith(t, TypeXray, goldenInbounds(t), nodeOn); got != onContent {
+			t.Fatal("xray connlog render must be deterministic for the same inbounds and node switch")
 		}
 
 		offOut, _ := Render(TypeXray, goldenInbounds(t))
-		onOut, _ := RenderWith(TypeXray, on, masterOn)
+		onOut, _ := RenderWith(TypeXray, on, nodeOn)
 		if offOut.Hash == onOut.Hash {
-			t.Fatal("connlog opt-in must change the render hash so the kernel is re-applied")
+			t.Fatal("connlog node switch must change the render hash so the kernel is re-applied")
 		}
 	})
 
@@ -194,8 +185,7 @@ func TestConnLogRenderOnDiffExact(t *testing.T) {
 		offContent := renderContent(t, TypeSingbox, off)
 
 		on := phase3Inbounds(t)
-		on[0].ConnLogEnabled = true
-		onContent := renderContentWith(t, TypeSingbox, on, masterOn)
+		onContent := renderContentWith(t, TypeSingbox, on, nodeOn)
 
 		diff := map[string][2]interface{}{}
 		jsonDiffPaths(parseConfig(t, offContent), parseConfig(t, onContent), "", diff)
@@ -206,23 +196,14 @@ func TestConnLogRenderOnDiffExact(t *testing.T) {
 			t.Fatalf("log.level diff = %v, want warn -> debug", diff["log.level"])
 		}
 
-		onLast := phase3Inbounds(t)
-		onLast[len(onLast)-1].ConnLogEnabled = true
-		if got := renderContentWith(t, TypeSingbox, onLast, masterOn); got != onContent {
-			t.Fatal("singbox connlog render must not depend on which inbound opted in")
-		}
-		onAll := phase3Inbounds(t)
-		for i := range onAll {
-			onAll[i].ConnLogEnabled = true
-		}
-		if got := renderContentWith(t, TypeSingbox, onAll, masterOn); got != onContent {
-			t.Fatal("singbox connlog render must not depend on how many inbounds opted in")
+		if got := renderContentWith(t, TypeSingbox, phase3Inbounds(t), nodeOn); got != onContent {
+			t.Fatal("singbox connlog render must be deterministic for the same inbounds and node switch")
 		}
 
 		offOut, _ := Render(TypeSingbox, phase3Inbounds(t))
-		onOut, _ := RenderWith(TypeSingbox, on, masterOn)
+		onOut, _ := RenderWith(TypeSingbox, on, nodeOn)
 		if offOut.Hash == onOut.Hash {
-			t.Fatal("connlog opt-in must change the render hash so the kernel is re-applied")
+			t.Fatal("connlog node switch must change the render hash so the kernel is re-applied")
 		}
 	})
 }

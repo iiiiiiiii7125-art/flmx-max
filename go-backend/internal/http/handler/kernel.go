@@ -153,11 +153,6 @@ type inboundView struct {
 	// metered right now.
 	MeteringEnabled bool `json:"meteringEnabled"`
 	MeteringActive  bool `json:"meteringActive"`
-	// ConnLogEnabled is the per-inbound connection-log collection
-	// opt-in (design §4.5): while on, the inbound's kernel rendering
-	// carries the agent-side collection surface (sing-box debug log /
-	// Xray access log).
-	ConnLogEnabled bool `json:"connLogEnabled"`
 }
 
 // kernelSecurityView hides the self-signed private material and DNS API
@@ -203,9 +198,6 @@ type inboundRequest struct {
 	// MeteringEnabled is a pointer for the same reason: an edit that
 	// omits it keeps the SS subscription-metering switch as stored.
 	MeteringEnabled *bool `json:"meteringEnabled"`
-	// ConnLogEnabled is a pointer for the same reason: an edit that
-	// omits it keeps the connection-log collection opt-in as stored.
-	ConnLogEnabled *bool `json:"connLogEnabled"`
 }
 
 // ---- conversion ----
@@ -213,8 +205,8 @@ type inboundRequest struct {
 func inboundFromModel(row model.NodeInbound) (kernel.Inbound, error) {
 	in := kernel.Inbound{ID: row.ID, Protocol: row.Protocol, Listen: row.Listen, Port: row.Port,
 		AcceptProxyProtocol: row.AcceptProxyProtocol == 1, OutboundIPStrategy: row.OutboundIPStrategy,
-		ConnIdleSeconds: row.ConnIdleSeconds, ConnLogEnabled: row.ConnLogEnabled == 1,
-		Companion: row.CompanionOf > 0}
+		ConnIdleSeconds: row.ConnIdleSeconds,
+		Companion:       row.CompanionOf > 0}
 	if err := unmarshalOptional(row.Settings, &in.Settings); err != nil {
 		return in, fmt.Errorf("入站 %d settings 损坏: %v", row.ID, err)
 	}
@@ -429,12 +421,12 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		// F-021: 换版同样要过入站版本门（AnyTLS/ACME/ENC），不能把存量
 		// 入站降到其最低版本之下再靠下发失败暴露。
 		if err := h.checkKernelVersionGates(k.ID, info.Type, version); err != nil {
-		var ge *kernelVersionGateError
-		if errors.As(err, &ge) {
-			response.WriteJSON(w, response.ErrDefault(ge.msg))
-			return
-		}
-		respondInternalError(w, "kernelInstall", err)
+			var ge *kernelVersionGateError
+			if errors.As(err, &ge) {
+				response.WriteJSON(w, response.ErrDefault(ge.msg))
+				return
+			}
+			respondInternalError(w, "kernelInstall", err)
 			return
 		}
 	}
@@ -906,7 +898,6 @@ func (h *Handler) inboundList(w http.ResponseWriter, r *http.Request) {
 			ConnIdleSeconds:    row.ConnIdleSeconds,
 			MeteringEnabled:    row.MeteringEnabled == 1,
 			MeteringActive:     meteringActive[row.ID],
-			ConnLogEnabled:     row.ConnLogEnabled == 1,
 		}
 		v.ShareAddress = inboundShareAddress(&row, node)
 		if v.SplitRules == nil {
@@ -1121,15 +1112,15 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		}
 	} else {
 		if _, err := h.kernelNodeEligible(req.NodeID); err != nil {
-		if errors.Is(err, errKernelNodeNotFound) {
-			response.WriteJSON(w, response.ErrDefault("节点不存在"))
-			return
-		}
-		if errors.Is(err, errKernelNodeNftables) {
-			response.WriteJSON(w, response.ErrDefault("nftables 模式节点不支持部署内核"))
-			return
-		}
-		respondInternalError(w, "inboundSave", err)
+			if errors.Is(err, errKernelNodeNotFound) {
+				response.WriteJSON(w, response.ErrDefault("节点不存在"))
+				return
+			}
+			if errors.Is(err, errKernelNodeNftables) {
+				response.WriteJSON(w, response.ErrDefault("nftables 模式节点不支持部署内核"))
+				return
+			}
+			respondInternalError(w, "inboundSave", err)
 			return
 		}
 		var err error
@@ -1357,13 +1348,6 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// 用已定稿的内核形态 in 与落库行 row（与对账读到的形态一致）。
 	if req.MeteringEnabled != nil {
 		row.MeteringEnabled = boolToInt(*req.MeteringEnabled)
-	}
-	// 连接日志采集 opt-in（设计 §4.5）：无资格门——Xray 与 sing-box
-	// 两栈都有采集面；开关变化经下方 applyKernel 的渲染 hash 差异
-	// 自动触发重下发（开：sing-box 升 debug / Xray 开 access；关：
-	// 渲染回原状）。
-	if req.ConnLogEnabled != nil {
-		row.ConnLogEnabled = boolToInt(*req.ConnLogEnabled)
 	}
 	explicitMetering := req.MeteringEnabled != nil && *req.MeteringEnabled
 	if row.MeteringEnabled == 1 && !ssMeteringEligible(in) {
@@ -2210,6 +2194,10 @@ type agentKernelStatus struct {
 	Epoch        string               `json:"epoch"`
 	NftAvailable bool                 `json:"nftAvailable"`
 	NftError     string               `json:"nftError"`
+	// NftAutoInstalled reports that the agent installed nftables
+	// itself on this node (auto-install path); the panel stores
+	// it as node nftables_status=auto_installed.
+	NftAutoInstalled bool `json:"nftAutoInstalled,omitempty"`
 	// MissingLogsFor mirrors the agent's Status signal (F2-23):
 	// the requested kernel type has no instance on the node.
 	MissingLogsFor string `json:"missingLogsFor,omitempty"`
@@ -2254,12 +2242,13 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	if err != nil {
 		return nil, "", fmt.Errorf("查询入站链式归属失败: %w", err)
 	}
-	// 连接日志总开关（connlog_enabled）：关时 connlogEntries 恒
-	// 下发空集（清 agent 旧标记）、connLogInbounds 不写键，采
-	// 集全链停下（见 connlog_marks.go 的 connlogMasterEnabled）。
-	connlogMasterOn, err := h.connlogMasterEnabled()
+	// 连接日志节点开关（node.conn_log_enabled，默认关）：采集
+	// 门控 = 总开关 AND 本节点开关。关时 connlogEntries 恒下发
+	// 空集（清 agent 旧标记）、connLogInbounds 不写键，采集全
+	// 链停下（见 connlog_marks.go 的 connlogEnabledForNode）。
+	connlogOn, err := h.connlogEnabledForNode(k.NodeID)
 	if err != nil {
-		return nil, "", fmt.Errorf("查询连接日志总开关失败: %w", err)
+		return nil, "", fmt.Errorf("查询连接日志节点开关失败: %w", err)
 	}
 	inbounds := make([]kernel.Inbound, 0, len(rows))
 	connLogInbounds := make([]int64, 0, len(rows))
@@ -2343,8 +2332,9 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// （SourceID>0）——它们的行本就被 connlogEntries 排除，收进
 		// 名单只会白开日志级、交集恒空。名单为空时不写键——
 		// agent 解码为 nil 即空集、采集器随之停用，与「最后一个开关
-		// 关闭后采集收敛」同义。
-		if in.ConnLogEnabled && !in.Companion && connlogMasterOn &&
+		// 关闭后采集收敛」同义。逐入站开关已撤：节点开关开时渲染
+		// 集内全部合格入站都在名单内（采集门控只剩节点开关）。
+		if connlogOn && !in.Companion &&
 			!relayTargets[row.ID] && !chainTargets[row.ID] && row.SourceID == 0 {
 			connLogInbounds = append(connLogInbounds, in.ID)
 		}
@@ -2352,7 +2342,11 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		if lo, hi := in.HopRange(); lo > 0 {
 			port["hopFrom"], port["hopTo"] = lo, hi
 		}
-		if row.RelayWhitelist == 1 {
+		effWhitelist, effExtra, werr := h.effectiveInboundWhitelist(row)
+		if werr != nil {
+			return nil, "", werr
+		}
+		if effWhitelist {
 			// R3X-015：白名单的链式拨号节点查询失败则整单中止，不
 			// 下发少算拨号节点的白名单。
 			if chainIx == nil {
@@ -2362,7 +2356,11 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 				}
 				chainIx = loaded
 			}
-			allow, aerr := h.inboundAllowListIx(row, chainIx)
+			// 节点级覆盖时用节点列表替换逐入站附加名单再渲染
+			// （逐入站存量字段不动）；关时 effExtra 即逐入站值。
+			effRow := row
+			effRow.WhitelistExtra = effExtra
+			allow, aerr := h.inboundAllowListIx(effRow, chainIx)
 			if aerr != nil {
 				return nil, "", aerr
 			}
@@ -2373,7 +2371,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// 指向、且未声明「仅中转/白名单」面貌的入站，自身即客户
 		// 端入口（链式源入站同理：客户端连入的是它，出站指向只
 		// 作归属附加信息，不改变入口身份）。
-		if connlogMasterOn && row.CompanionOf == 0 && row.SourceID == 0 && !relayTargets[row.ID] && !chainTargets[row.ID] &&
+		if connlogOn && row.CompanionOf == 0 && row.SourceID == 0 && !relayTargets[row.ID] && !chainTargets[row.ID] &&
 			row.RelayOnly == 0 && row.RelayWhitelist == 0 {
 			connlogEntries = append(connlogEntries, map[string]interface{}{
 				"inboundId": row.ID,
@@ -2391,9 +2389,9 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		SingboxHTTPClient: !versionBelowStrict(k.Version, 1, 14),
 		SingboxSnell:      !versionBelowStrict(k.Version, 1, 14),
 		SingboxNaive:      !versionBelowStrict(k.Version, 1, 13),
-		// D-04：总开关实值进渲染——关时日志形态回落（不升
+		// D-04：节点开关实值进渲染——关时日志形态回落（不升
 		// debug／不开 access），与 connLogInbounds 的门同源。
-		ConnLogEnabled: connlogMasterOn,
+		ConnLogEnabled: connlogOn,
 	})
 	if err != nil {
 		return nil, "", err
@@ -3077,6 +3075,35 @@ func (h *Handler) reconcileNodeKernels(nodeID int64) {
 	h.pollNodeKernels(nodeID, true)
 }
 
+// kernelReconcileFailure 是单内核重下发的失败（供同步回执点名）。
+type kernelReconcileFailure struct {
+	KernelType string
+	Err        error
+}
+
+// reconcileNodeKernelsCollect 与 reconcileNodeKernels 同构，但
+// 收集每内核的下发失败并返回（供白名单开关翻转的同步回执用）：
+// install=true 只把面板等待放宽到 kernelApplyTimeout（5 分钟，
+// 覆盖 agent 侧的 nft 自动安装耗时），不强制重装。离线/不在线
+// 类失败由调用方过滤（见 nodeUpdate 的白名单回执），只把真失败
+// 点名进回执。
+func (h *Handler) reconcileNodeKernelsCollect(nodeID int64) []kernelReconcileFailure {
+	kernels, err := h.repo.ListNodeKernels(nodeID)
+	if err != nil {
+		return []kernelReconcileFailure{{KernelType: "", Err: err}}
+	}
+	var failures []kernelReconcileFailure
+	for _, k := range kernels {
+		if err := h.applyKernelWithMode(k.ID, true, nil, false); err != nil {
+			failures = append(failures, kernelReconcileFailure{KernelType: k.KernelType, Err: err})
+		}
+	}
+	// 与 reconcileNodeKernels 同口径收尾：轮询摄入计数与 nftables
+	// 状态，节点响应随即带上最新 nftablesStatus。
+	h.pollNodeKernels(nodeID, true)
+	return failures
+}
+
 // refreshNodeKernelStatus polls one node for kernel state and traffic.
 func (h *Handler) refreshNodeKernelStatus(nodeID int64) {
 	h.pollNodeKernels(nodeID, false)
@@ -3223,7 +3250,38 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 	}
 
 	h.ingestKernelCounters(nodeID, status, now)
+	h.ingestNodeNftablesStatus(nodeID, status)
 	return outcome
+}
+
+// ingestNodeNftablesStatus 把 agent 上报的 nftables 运行态写进
+// 节点行（供节点页白名单区展示）：NftError 非空 → failed（原因
+// 原文）；NftAutoInstalled → auto_installed；NftAvailable →
+// installed；三者皆无 → 未知（""，不写——从不把“没上报”当成
+// 失败）。只在状态变化时写，避免每分钟轮询写 churn。写失败只
+// 记日志，绝不让状态面摄入失败（best-effort）。
+func (h *Handler) ingestNodeNftablesStatus(nodeID int64, status agentKernelStatus) {
+	var state, errText string
+	switch {
+	case status.NftError != "":
+		state, errText = "failed", status.NftError
+	case status.NftAutoInstalled:
+		state, errText = "auto_installed", ""
+	case status.NftAvailable:
+		state, errText = "installed", ""
+	default:
+		return
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return
+	}
+	if node.NftablesStatus == state && node.NftablesError == errText {
+		return
+	}
+	if err := h.repo.UpdateNodeNftablesStatus(nodeID, state, errText); err != nil {
+		log.Printf("nftables status ingest failed node_id=%d err=%v", nodeID, err)
+	}
 }
 
 // ingestKernelCounters 把一次 KernelStatus 回读的计数面入账：订阅
@@ -3305,6 +3363,7 @@ func (h *Handler) settleKernelCountersAfterApply(nodeID int64) {
 		return
 	}
 	h.ingestKernelCountersMode(nodeID, status, time.Now().UnixMilli(), false)
+	h.ingestNodeNftablesStatus(nodeID, status)
 }
 
 // kernelStatusParallel 是内核状态轮询的单节点并发上限（D6-04）：旧实现

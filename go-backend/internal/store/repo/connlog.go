@@ -80,7 +80,7 @@ func (r *Repository) ResolveConnlogDisplayKeys(entryNodeID int64, entryKind, ent
 	}
 	switch entryKind {
 	case ConnlogEntryForward:
-		forwardID, ok := parseConnlogForwardServiceID(entryID)
+		forwardID, ok := ParseConnlogForwardServiceID(entryID)
 		if !ok {
 			return 0, 0
 		}
@@ -111,11 +111,11 @@ func (r *Repository) ResolveConnlogDisplayKeys(entryNodeID int64, entryKind, ent
 	return 0, 0
 }
 
-// parseConnlogForwardServiceID 从 forward 服务名取 forwardID：与
+// ParseConnlogForwardServiceID 从 forward 服务名取 forwardID：与
 // handler 的 parseFlowServiceIDs 同编码（<forwardID>_<userID>_<
 // userTunnelID>[_tcp|_udp]），此处只取首段。服务名是面板生成面
 // 的稳定编码，不是启发式猜测。
-func parseConnlogForwardServiceID(serviceName string) (int64, bool) {
+func ParseConnlogForwardServiceID(serviceName string) (int64, bool) {
 	base := strings.TrimSpace(serviceName)
 	base = strings.TrimSuffix(strings.TrimSuffix(base, "_tcp"), "_udp")
 	parts := strings.Split(base, "_")
@@ -378,11 +378,11 @@ func (r *Repository) ConnlogEntryNodeIDs(inboundID int64) ([]int64, error) {
 	return ids, err
 }
 
-// ListInboundConnLogs 是弹窗主查询：按归属键过滤、start_time 倒
-// 序（id 倒序兜底同毫秒稳定序），offset/limit 由 handler 按
-// current/size 换算（前端按 user.tsx 口径多取一条做探针）。ip
-// 非空时按 client_ip 精确匹配。
-func (r *Repository) ListInboundConnLogs(inboundID int64, ip string, offset, limit int) ([]model.InboundConnLog, error) {
+// ListNodeConnLogs 是节点连接日志主查询：按入口节点（entry_node_id，
+// 即“连到这台服务器”的口径）过滤、start_time 倒序（id 倒序兜底同
+// 毫秒稳定序），offset/limit 由 handler 换算。ip 非空时按 client_ip
+// 精确匹配。开关只控采集、不删历史行，故查询不过滤开关。
+func (r *Repository) ListNodeConnLogs(entryNodeID int64, ip string, offset, limit int) ([]model.InboundConnLog, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
@@ -392,13 +392,28 @@ func (r *Repository) ListInboundConnLogs(inboundID int64, ip string, offset, lim
 	if offset < 0 {
 		offset = 0
 	}
-	q := r.db.Where("display_inbound_id = ?", inboundID)
+	q := r.db.Where("entry_node_id = ?", entryNodeID)
 	if ip = strings.TrimSpace(ip); ip != "" {
 		q = q.Where("client_ip = ?", ip)
 	}
 	var rows []model.InboundConnLog
 	err := q.Order("start_time DESC, id DESC").Offset(offset).Limit(limit).Find(&rows).Error
 	return rows, err
+}
+
+// CountNodeConnLogs 是 ListNodeConnLogs 的总数口径（同一过滤条件，
+// 供节点端点 total 用）。
+func (r *Repository) CountNodeConnLogs(entryNodeID int64, ip string) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	q := r.db.Model(&model.InboundConnLog{}).Where("entry_node_id = ?", entryNodeID)
+	if ip = strings.TrimSpace(ip); ip != "" {
+		q = q.Where("client_ip = ?", ip)
+	}
+	var total int64
+	err := q.Count(&total).Error
+	return total, err
 }
 
 // PruneInboundConnLogsBefore 删除 start_time 早于 cutoffMs 的行
@@ -512,9 +527,9 @@ func (r *Repository) InterruptStaleOpenInboundConnLogs(startedBeforeMs int64) (i
 
 // ConnLogEnabledConfigKey 是入站连接日志功能的**总开关**设置键
 // （设计 §4.5）：gost 中转入口的采集无日志放大代价，随本开关走、
-// **默认开**（键缺失/被清空即开）。内核直连入站的采集另有入站级
-// opt-in（NodeInbound.ConnLogEnabled，默认关）逐个开启——本键不
-// 代管内核面，避免一次关开静默改变全网内核日志形态。
+// **默认开**（键缺失/被清空即开）。内核直连入站的采集另有节点级
+// 开关（Node.ConnLogEnabled，默认关）逐节点开启——本键不代管
+// 内核面，避免一次关开静默改变全网内核日志形态。
 //
 // 值域：规范形态 "true"/"false"（保存面
 // handler.normalizeAndValidateConfigValue 经

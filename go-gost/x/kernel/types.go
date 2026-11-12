@@ -149,6 +149,12 @@ type Status struct {
 	Epoch        string        `json:"epoch"`
 	NftAvailable bool          `json:"nftAvailable"`
 	NftError     string        `json:"nftError,omitempty"`
+	// NftAutoInstalled 表示本 agent 进程曾为白名单自动装上
+	// nftables（面板据此在节点页展示“已自动安装”，区别于装机
+	// 自带的“已安装”）。NftError 只承载最近一次自动安装失败
+	// 的原因——nft 单纯缺失（未尝试安装，如无白名单节点）不进
+	// 此字段，面板不得把它读成“安装失败”。
+	NftAutoInstalled bool `json:"nftAutoInstalled,omitempty"`
 	// MissingLogsFor names the kernel type a logs query asked for
 	// that has no instance on this node (F2-23). Kernels lists
 	// only installed kernels, so without this field "no such

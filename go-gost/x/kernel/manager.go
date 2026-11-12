@@ -1069,16 +1069,21 @@ func (m *Manager) Status(logsFor string) Status {
 			out.MissingLogsFor = logsFor
 		}
 	}
+	// nft 面状态随每次上报：NftError 只承载自动安装失败的原因
+	// （见 types.go），单纯缺失不进此字段。
+	if auto, ierr := m.nft.installStatus(); auto {
+		out.NftAutoInstalled = true
+	} else if ierr != "" {
+		out.NftError = ierr
+	}
+	out.NftAvailable = nftAvailable() == nil
 	if len(m.allPorts()) == 0 {
-		out.NftAvailable = nftAvailable() == nil
 		return out
 	}
 	counters, users, epoch, err := m.nft.read()
 	if err != nil {
-		out.NftError = err.Error()
 		return out
 	}
-	out.NftAvailable = true
 	if counters != nil {
 		out.Counters = counters
 	}

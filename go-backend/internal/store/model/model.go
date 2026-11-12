@@ -156,6 +156,22 @@ type Node struct {
 	EdgeIdleTimeoutSeconds     int `gorm:"column:edge_idle_timeout_seconds;not null;default:0"`
 	BackstopIdleTimeoutSeconds int `gorm:"column:backstop_idle_timeout_seconds;not null;default:0"`
 	BackstopTrickleBps         int `gorm:"column:backstop_trickle_bps;not null;default:0"`
+	// 节点级连接日志采集开关（默认关）：面板总开关开 AND 本开关
+	// 开，agent 才采集该节点的连接（直连入站的内核日志形态与
+	// 中转入口标记同受此门控）；只控采集，不删历史行。逐入站
+	// 开关已随按入站弹窗一并撤掉，本字段是唯一的采集门控。
+	ConnLogEnabled int `gorm:"column:conn_log_enabled;not null;default:0"`
+	// 节点级入站白名单开关＋附加名单（默认关）：开时该节点全部
+	// 入站的生效白名单为本名单（覆盖逐入站设置，逐入站存量字
+	// 段不动）；关时逐入站设置照旧。WhitelistExtra 为 IP/CIDR
+	// 逗号分隔串，写面经 kernel.ParseAllowList 校验并归一。
+	WhitelistEnabled int    `gorm:"column:whitelist_enabled;not null;default:0"`
+	WhitelistExtra   string `gorm:"column:whitelist_extra;type:text;not null;default:''"`
+	// nftables 状态（agent 上报的运行态，不进备份）：""＝未知／
+	// 未尝试、installed＝已安装、auto_installed＝本 agent 进程
+	// 自动装上、failed＝自动安装失败（原因见 NftablesError）。
+	NftablesStatus string `gorm:"column:nftables_status;type:varchar(20);not null;default:''"`
+	NftablesError  string `gorm:"column:nftables_error;type:text;not null;default:''"`
 }
 
 func (Node) TableName() string { return "node" }
@@ -677,10 +693,6 @@ type InboundBackup struct {
 	// ConnIdleSeconds is the per-inbound idle timeout (seconds) for
 	// Xray (policy.levels[].connIdle); 0 = unset (Xray default 300s).
 	ConnIdleSeconds int `json:"connIdleSeconds,omitempty"`
-	// ConnLogEnabled is the per-inbound connection-log collection
-	// opt-in (design §4.5); it rides the backup like the other inbound
-	// switches so a restored inbound keeps collecting.
-	ConnLogEnabled int `json:"connLogEnabled,omitempty"`
 }
 
 type RemoteSourceBackup struct {
@@ -898,6 +910,15 @@ type NodeBackup struct {
 	EdgeIdleTimeoutSeconds     int `json:"edgeIdleTimeoutSeconds,omitempty"`
 	BackstopIdleTimeoutSeconds int `json:"backstopIdleTimeoutSeconds,omitempty"`
 	BackstopTrickleBps         int `json:"backstopTrickleBps,omitempty"`
+	// 节点级连接日志采集开关随备份（默认关）：旧备份无此字段时
+	// 按 0 回落，与存量未配置形态等价，不会因恢复旧备份而静默
+	// 开启采集。
+	ConnLogEnabled int `json:"connLogEnabled,omitempty"`
+	// 节点级入站白名单开关＋附加名单随备份（默认关）：旧备份无
+	// 此二字段时按关／空回落，与存量未配置形态等价，不会因恢
+	// 复旧备份而静默开启白名单。
+	WhitelistEnabled int    `json:"whitelistEnabled,omitempty"`
+	WhitelistExtra   string `json:"whitelistExtra,omitempty"`
 	// O7-006：恢复后保留已忽略的到期提醒状态
 	ExpiryReminderDismissed int `json:"expiryReminderDismissed,omitempty"`
 }
@@ -1219,6 +1240,14 @@ type NodeRecord struct {
 	EdgeIdleTimeoutSeconds     int
 	BackstopIdleTimeoutSeconds int
 	BackstopTrickleBps         int
+	// ConnLogEnabled 是节点级连接日志采集开关（0＝关，默认关），
+	// 转发入口标记与内核下发面据此门控。
+	ConnLogEnabled int
+	// WhitelistEnabled/WhitelistExtra 是节点级入站白名单开关＋
+	// 附加名单（0＝关，默认关）：开时该节点全部入站的生效白名
+	// 单为本名单，关时逐入站设置照旧。
+	WhitelistEnabled int
+	WhitelistExtra   string
 }
 
 type ChainNodeRecord struct {

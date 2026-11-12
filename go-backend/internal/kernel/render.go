@@ -54,11 +54,11 @@ type RenderOptions struct {
 	// 分流 targets); the cronet-based naive outbound exists only in
 	// sing-box 1.13+ (R9X-005).
 	SingboxNaive bool
-	// ConnLogEnabled is the connection-log master switch
-	// (connlog_enabled): only when it is on does a per-inbound
-	// opt-in raise the kernel log shape (sing-box debug level,
-	// Xray access log). Off means the render falls back to the
-	// plain log shape even with opt-ins set — otherwise debug
+	// ConnLogEnabled is the connection-log node gate (master
+	// connlog_enabled AND the node's conn_log_enabled switch,
+	// default off): only when it is on does the kernel log shape
+	// rise (sing-box debug level, Xray access log). Off means the
+	// render falls back to the plain log shape — otherwise debug
 	// chatter floods the troubleshooting ring while collection
 	// itself is off (D-04). Fail-closed default: false.
 	ConnLogEnabled bool
@@ -105,20 +105,6 @@ func RenderWith(kernelType string, inbounds []Inbound, opts RenderOptions) (Rend
 	out.UserMarks = markedUsers(sorted)
 	out.Hash = hashRendered(out)
 	return out, nil
-}
-
-// anyConnLogEnabled reports whether any inbound in the render set
-// opted into connection-log collection (design §4.5). The observation
-// surfaces it gates (sing-box log level, Xray access log) are
-// per-process, so a single opted-in inbound turns them on for the
-// whole kernel render.
-func anyConnLogEnabled(inbounds []Inbound) bool {
-	for _, in := range inbounds {
-		if in.ConnLogEnabled {
-			return true
-		}
-	}
-	return false
 }
 
 func hashRendered(r Rendered) string {
