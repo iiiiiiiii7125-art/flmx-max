@@ -452,3 +452,17 @@ viewer's time zone (the node list's “本月网卡” figure).
 These are whole-machine NIC counters, a different metric from tunnel
 billing / subscription quota counters — the two never reconcile and must
 not be mixed.
+
+## GET /api/v1/node/connlog
+
+Query one node's connection log (admin only): rows are client connections
+observed at the entry machine — entry_node_id is the node the client
+connected to, so this is "who connected to this server, on which port".
+Query params: `nodeId` (required), optional `ip` (exact client-IP filter),
+`offset`, `limit` (default 50, max 200). Rows are newest first and carry the
+resolved `localPort` and `entryName` (direct inbound → its port and name;
+forward entry → the forward entry's port and name; unresolvable → `localPort`
+0 and the raw entry ID). Response data is a page object
+`{rows, total, enabled}` — `total` is the row count for this node under the
+same IP filter, `enabled` is the node's collection switch state (it only
+gates collection; it never deletes history rows).

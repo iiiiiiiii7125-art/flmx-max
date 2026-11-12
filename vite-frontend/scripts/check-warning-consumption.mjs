@@ -302,7 +302,9 @@ const REGISTRY = [
     producer: "go-backend/internal/http/handler/mutations.go",
     endpoint: "/node/update",
     apiFn: "updateNode",
-    calls: 1,
+    // 2 处：既有 refreshFailed 点名＋节点级白名单同步重下发失败点名
+    //（mutations.go nodeUpdate 内 whitelistReconcileFailureNote）。
+    calls: 2,
     consumers: ["src/pages/node.tsx"],
   },
   {

@@ -2029,6 +2029,10 @@ export default function NodePage({
 
         if (res.code !== 0) throw new Error(res.msg || "保存失败");
         toast.success(enabled ? "连接日志已开启" : "连接日志已关闭");
+        // T-001：白名单同步重下发失败时后端在信封 warning 里点名原因，须原样透出。
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
       } catch {
         setNodeList((list) =>
           list.map((n) =>
@@ -2072,6 +2076,10 @@ export default function NodePage({
 
         if (res.code !== 0) throw new Error(res.msg || "保存失败");
         toast.success(enabled ? "入站白名单已开启" : "入站白名单已关闭");
+        // T-001：白名单同步重下发失败时后端在信封 warning 里点名原因，须原样透出。
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
       } catch {
         setNodeList((list) =>
           list.map((n) =>
@@ -2122,6 +2130,10 @@ export default function NodePage({
           return next;
         });
         toast.success("已保存");
+        // T-001：白名单同步重下发失败时后端在信封 warning 里点名原因，须原样透出。
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
       } catch {
         setNodeList((list) =>
           list.map((n) =>
