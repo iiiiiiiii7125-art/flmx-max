@@ -1028,7 +1028,8 @@ export interface InboundShareEntry {
 
 /**
  * Query for GET /node/connlog: one page of a node's connection log,
- * newest first. The backend answers `{rows, total}`; `offset`/`limit`
+ * newest first. The backend answers
+ * `{rows, total, enabled, dropped, retentionDays}`; `offset`/`limit`
  * drive server-side paging (no size+1 probe).
  */
 export interface NodeConnLogQuery {
@@ -1066,6 +1067,13 @@ export interface NodeConnLogItem {
   status: "open" | "closed" | "interrupted" | string;
 }
 
+/**
+ * One page of a node's connection log. `enabled` is the server-side
+ * collection switch for this node (false = the modal shows the
+ * not-enabled state even when the list state is stale); `dropped` is
+ * the node's cumulative collector drop count and `retentionDays` the
+ * current retention window, both for the modal footer.
+ */
 export interface NodeConnLogData {
   rows: NodeConnLogItem[];
   total: number;

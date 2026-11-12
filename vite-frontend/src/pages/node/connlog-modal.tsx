@@ -81,17 +81,13 @@ export function NodeConnLogModal({
   node: Node | null;
   onClose: () => void;
 }) {
-  const [rows, setRows] = useState<NodeConnLogItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [dropped, setDropped] = useState<number | undefined>(undefined);
-  const [retentionDays, setRetentionDays] = useState<number | undefined>(
-    undefined,
-  );
-  // 服务端回的开关实值（data.enabled），用于兜底校验列表态：列表
-  // 态过期（他处改了开关、列表未刷新）时以服务端值为准（O-1）。
+  // Server-reported page metadata (O-1): `enabled` is the fallback
+  // for the not-enabled gate, `dropped`/`retentionDays` feed the
+  // footer (A-P2-1, same shape as the old per-inbound modal).
   const [serverEnabled, setServerEnabled] = useState<boolean | undefined>(
     undefined,
   );
+  const [dropped, setDropped] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ipInput, setIpInput] = useState("");
@@ -102,11 +98,13 @@ export function NodeConnLogModal({
   const nodeIdRef = useRef<number | null>(null);
   const queryRef = useRef({ ip: "", current: 1 });
 
-  const nodeId = node?.id ?? null;
-  const enabled = node?.connLogEnabled === true;
-  // 展示用“采集中”：列表态开且服务端未否定。服务端否定（列表态
-  // 过期）时按“未开启”展示，不拿旧行冒充采集中。
-  const isCollecting = enabled && serverEnabled !== false;
+  // List state is the primary gate; the server-reported `enabled` is
+  // the fallback — when the list is stale (another tab flipped the
+  // switch), a server `false` still shows the not-enabled state.
+  const listEnabled = node?.connLogEnabled === true;
+  const enabled = listEnabled && serverEnabled !== false;
+  // 展示用“采集中”：列表态开且服务端未否定（与 enabled 同值）。
+  const isCollecting = enabled;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const load = useCallback(async (pageOverride?: number, ipOverride?: string) => {
@@ -133,9 +131,9 @@ export function NodeConnLogModal({
         setError(res.msg || "获取连接日志失败");
         setRows([]);
         setTotal(0);
+        setServerEnabled(undefined);
         setDropped(undefined);
         setRetentionDays(undefined);
-        setServerEnabled(undefined);
 
         return;
       }
@@ -144,37 +142,44 @@ export function NodeConnLogModal({
       if (Array.isArray(data)) {
         setRows(data);
         setTotal(data.length);
+        setServerEnabled(undefined);
         setDropped(undefined);
         setRetentionDays(undefined);
-        setServerEnabled(undefined);
       } else if (data) {
-        setRows(Array.isArray(data.rows) ? data.rows : []);
-        setTotal(
-          typeof data.total === "number" ? data.total : data.rows?.length ?? 0,
-        );
-        setDropped(typeof data.dropped === "number" ? data.dropped : undefined);
-        setRetentionDays(
-          typeof data.retentionDays === "number" ? data.retentionDays : undefined,
-        );
         setServerEnabled(
           typeof data.enabled === "boolean" ? data.enabled : undefined,
         );
+        setDropped(
+          typeof data.dropped === "number" ? data.dropped : undefined,
+        );
+        setRetentionDays(
+          typeof data.retentionDays === "number"
+            ? data.retentionDays
+            : undefined,
+        );
+        if (data.enabled === false) {
+          // Server says collection is off: show the not-enabled state
+          // and don't display stale history rows.
+          setRows([]);
+          setTotal(0);
+        } else {
+          setRows(Array.isArray(data.rows) ? data.rows : []);
+          setTotal(
+            typeof data.total === "number"
+              ? data.total
+              : data.rows?.length ?? 0,
+          );
+        }
       } else {
-        setRows([]);
-        setTotal(0);
-        setDropped(undefined);
-        setRetentionDays(undefined);
-        setServerEnabled(undefined);
-      }
       setCurrent(cur);
     } catch {
       if (seqRef.current === seq) {
         setError("获取连接日志失败");
         setRows([]);
         setTotal(0);
+        setServerEnabled(undefined);
         setDropped(undefined);
         setRetentionDays(undefined);
-        setServerEnabled(undefined);
       }
     } finally {
       if (seqRef.current === seq) setLoading(false);
@@ -182,9 +187,16 @@ export function NodeConnLogModal({
   }, []);
 
   // Open / switch node: reset the query; load the first page only
-  // once the node's switch is on. Keyed on the id and the switch, so
-  // flipping the switch while the modal is open reloads (or clears).
+  // once the node's switch is on. Keyed on the id and the list
+  // switch, so flipping the switch while the modal is open reloads
+  // (or clears). The load is gated on the list switch (not the
+  // server-reported one) so a stale server `false` can't wedge the
+  // modal after the user turns the switch back on; the server value
+  // is refreshed by that load. Server values reset only when the
+  // node changes — a server `false` must survive a switch flip so
+  // the not-enabled state keeps showing.
   useEffect(() => {
+    const nodeChanged = nodeIdRef.current !== nodeId;
     nodeIdRef.current = nodeId;
     if (nodeId == null) {
       seqRef.current += 1;
@@ -200,8 +212,13 @@ export function NodeConnLogModal({
     setRetentionDays(undefined);
     setServerEnabled(undefined);
     setError(null);
-    if (enabled) void load(1, "");
-  }, [nodeId, enabled, load]);
+    if (nodeChanged) {
+      setServerEnabled(undefined);
+      setDropped(undefined);
+      setRetentionDays(undefined);
+    }
+    if (listEnabled) void load(1, "");
+  }, [nodeId, listEnabled, load]);
 
   // IP filter: debounce, then back to page 1 (user.tsx search pattern).
   useEffect(() => {
