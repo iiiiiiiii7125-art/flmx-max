@@ -302,9 +302,10 @@ const REGISTRY = [
     producer: "go-backend/internal/http/handler/mutations.go",
     endpoint: "/node/update",
     apiFn: "updateNode",
-    // 2 处：既有 refreshFailed 点名＋节点级白名单同步重下发失败点名
-    //（mutations.go nodeUpdate 内 whitelistReconcileFailureNote）。
-    calls: 2,
+    // 1 处：尾部唯一的 OKWithWarning（白名单同步、连接日志重下发、
+    // 改址刷新三处失败点名合并进同一回执，B-P3-1＋B-P3-2；此前
+    // 白名单与改址各一处共 2 处，合并后只剩 1 处）。
+    calls: 1,
     consumers: ["src/pages/node.tsx"],
   },
   {

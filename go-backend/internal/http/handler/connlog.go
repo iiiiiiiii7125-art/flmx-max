@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go-backend/internal/http/response"
+	"go-backend/internal/monitoring"
 	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
@@ -284,10 +285,14 @@ type connlogRowView struct {
 // 管理员专属（ensureAdminAccess，含真实客户端 IP 不对普通用户
 // 开放）。按入口节点（entry_node_id，即“连到这台服务器”的口
 // 径）查、start_time 倒序、offset/limit 分页；ip 非空时按
-// client_ip 精确匹配。响应为页对象 {rows, total, enabled}：rows
-// 为本页行（每行附解析出的 localPort 与 entryName），total 为该
-// 节点（同 ip 过滤）的总行数，enabled 为该节点的采集开关状态
-// （只控采集，不删历史行）。
+// client_ip 精确匹配。响应为页对象 {rows, total, enabled, dropped,
+// retentionDays}：rows 为本页行（每行附解析出的 localPort 与 entryName），
+// total 为该节点（同 ip 过滤）的总行数，enabled 为该节点的采集开关状态
+// （只控采集，不删历史行）；dropped 为该节点的累计采集丢弃数（入口机
+// 采集缓冲溢出时丢事件，页脚据此提示日志可能不完整）；retentionDays
+// 为当前保留期（面板配置 connlog_retention_days，默认 7 天）。页脚
+// 取数失败不拖垮主查询：dropped 回 0、保留期回默认（旧逐入站端点
+// 同口径）。
 func (h *Handler) nodeConnlog(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -339,10 +344,27 @@ func (h *Handler) nodeConnlog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	views := h.connlogNodeRowViews(rows)
+	// 页脚字段：dropped 为该节点的累计采集丢弃数、retentionDays
+	// 为当前保留期；取数失败不拖垮主查询（dropped 回 0、保留期
+	// 回默认，旧逐入站端点同口径）。
+	dropped := int64(0)
+	if total, err := h.repo.SumConnlogDroppedByNodes([]int64{nodeID}); err == nil {
+		dropped = total
+	} else {
+		log.Printf("connlog dropped sum failed node_id=%d err=%v (footer falls back to 0)", nodeID, err)
+	}
+	retentionDays := monitoring.DefaultConnlogRetentionDays
+	if cfg, err := h.repo.GetConfigsByNames([]string{monitoring.ConfigConnlogRetentionDays}); err == nil {
+		retentionDays = monitoring.ConnlogRetentionDaysFromConfigMap(cfg)
+	} else {
+		log.Printf("connlog retention read failed node_id=%d err=%v (footer falls back to default %d)", nodeID, err, retentionDays)
+	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"rows":    views,
-		"total":   total,
-		"enabled": node.ConnLogEnabled == 1,
+		"rows":          views,
+		"total":         total,
+		"enabled":       node.ConnLogEnabled == 1,
+		"dropped":       dropped,
+		"retentionDays": retentionDays,
 	}))
 }
 

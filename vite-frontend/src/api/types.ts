@@ -1069,6 +1069,12 @@ export interface NodeConnLogItem {
 export interface NodeConnLogData {
   rows: NodeConnLogItem[];
   total: number;
+  /** 节点采集开关实值（服务端）；弹窗以此兜底校验列表态。 */
+  enabled?: boolean;
+  /** 该节点累计采集丢弃数（入口机缓冲溢出时丢事件）；页脚据此提示日志可能不完整。 */
+  dropped?: number;
+  /** 当前保留期（天，面板配置 connlog_retention_days）。 */
+  retentionDays?: number;
 }
 
 export interface InboundRelayApiItem {

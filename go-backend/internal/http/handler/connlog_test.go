@@ -183,9 +183,11 @@ func TestConnlogIngestAuthAndValidation(t *testing.T) {
 }
 
 type connlogNodeQueryPage struct {
-	Rows    []connlogRowView `json:"rows"`
-	Total   int64            `json:"total"`
-	Enabled bool             `json:"enabled"`
+	Rows          []connlogRowView `json:"rows"`
+	Total         int64            `json:"total"`
+	Enabled       bool             `json:"enabled"`
+	Dropped       int64            `json:"dropped"`
+	RetentionDays int              `json:"retentionDays"`
 }
 
 func (rig *connlogTestRig) queryNode(t *testing.T, claims *auth.Claims, rawQuery string) (int, connlogNodeQueryPage) {
@@ -273,6 +275,11 @@ func TestConnlogNodeQueryPermissionsPaginationAndEnrichment(t *testing.T) {
 		t.Fatalf("ip filter rows = %v, want q1+q3 only", byIPPage.Rows)
 	}
 
+	// 页脚字段：无丢弃时 dropped 回 0、保留期回默认 7 天（A-P2-1）。
+	if page.Dropped != 0 || page.RetentionDays != 7 {
+		t.Fatalf("footer = (dropped=%d retentionDays=%d), want (0, 7)", page.Dropped, page.RetentionDays)
+	}
+
 	// 直连行：端口＋入站名如实解析。
 	_, landingPage := rig.queryNode(t, admin, fmt.Sprintf("nodeId=%d&offset=0&limit=10", rig.landingID))
 	if landingPage.Total != 1 || len(landingPage.Rows) != 1 {
@@ -332,6 +339,10 @@ func TestConnlogDroppedAccountingEndToEnd(t *testing.T) {
 	if code, page := rig.queryNode(t, admin, entryQ); code != 0 || page.Total != 1 || len(page.Rows) != 1 || page.Rows[0].StartTime != base {
 		t.Fatalf("node endpoint after ingest = (code=%d total=%d rows=%v), want [d1]", code, page.Total, page.Rows)
 	}
+	// 页脚字段：端点回的 dropped 与仓储汇总一致、保留期回默认 7 天（A-P2-1）。
+	if code, page := rig.queryNode(t, admin, entryQ); code != 0 || page.Dropped != 7 || page.RetentionDays != 7 {
+		t.Fatalf("node endpoint footer after ingest = (code=%d dropped=%d retentionDays=%d), want (0, 7, 7)", code, page.Dropped, page.RetentionDays)
+	}
 	if total, err := rig.r.SumConnlogDroppedByNodes([]int64{rig.entryID}); err != nil || total != 7 {
 		t.Fatalf("entry node dropped sum = (%d, %v), want 7 after the applied batch", total, err)
 	}
@@ -356,6 +367,9 @@ func TestConnlogDroppedAccountingEndToEnd(t *testing.T) {
 	}
 	if _, page := rig.queryNode(t, admin, entryQ); page.Total != 2 {
 		t.Fatalf("node endpoint total after second batch = %d, want 2", page.Total)
+	}
+	if _, page := rig.queryNode(t, admin, entryQ); page.Dropped != 10 {
+		t.Fatalf("node endpoint dropped after second batch = %d, want 10", page.Dropped)
 	}
 
 	// 落地节点自身从未供数：只含供数节点。

@@ -83,6 +83,15 @@ export function NodeConnLogModal({
 }) {
   const [rows, setRows] = useState<NodeConnLogItem[]>([]);
   const [total, setTotal] = useState(0);
+  const [dropped, setDropped] = useState<number | undefined>(undefined);
+  const [retentionDays, setRetentionDays] = useState<number | undefined>(
+    undefined,
+  );
+  // 服务端回的开关实值（data.enabled），用于兜底校验列表态：列表
+  // 态过期（他处改了开关、列表未刷新）时以服务端值为准（O-1）。
+  const [serverEnabled, setServerEnabled] = useState<boolean | undefined>(
+    undefined,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ipInput, setIpInput] = useState("");
@@ -95,6 +104,9 @@ export function NodeConnLogModal({
 
   const nodeId = node?.id ?? null;
   const enabled = node?.connLogEnabled === true;
+  // 展示用“采集中”：列表态开且服务端未否定。服务端否定（列表态
+  // 过期）时按“未开启”展示，不拿旧行冒充采集中。
+  const isCollecting = enabled && serverEnabled !== false;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const load = useCallback(async (pageOverride?: number, ipOverride?: string) => {
@@ -121,6 +133,9 @@ export function NodeConnLogModal({
         setError(res.msg || "获取连接日志失败");
         setRows([]);
         setTotal(0);
+        setDropped(undefined);
+        setRetentionDays(undefined);
+        setServerEnabled(undefined);
 
         return;
       }
@@ -129,14 +144,27 @@ export function NodeConnLogModal({
       if (Array.isArray(data)) {
         setRows(data);
         setTotal(data.length);
+        setDropped(undefined);
+        setRetentionDays(undefined);
+        setServerEnabled(undefined);
       } else if (data) {
         setRows(Array.isArray(data.rows) ? data.rows : []);
         setTotal(
           typeof data.total === "number" ? data.total : data.rows?.length ?? 0,
         );
+        setDropped(typeof data.dropped === "number" ? data.dropped : undefined);
+        setRetentionDays(
+          typeof data.retentionDays === "number" ? data.retentionDays : undefined,
+        );
+        setServerEnabled(
+          typeof data.enabled === "boolean" ? data.enabled : undefined,
+        );
       } else {
         setRows([]);
         setTotal(0);
+        setDropped(undefined);
+        setRetentionDays(undefined);
+        setServerEnabled(undefined);
       }
       setCurrent(cur);
     } catch {
@@ -144,6 +172,9 @@ export function NodeConnLogModal({
         setError("获取连接日志失败");
         setRows([]);
         setTotal(0);
+        setDropped(undefined);
+        setRetentionDays(undefined);
+        setServerEnabled(undefined);
       }
     } finally {
       if (seqRef.current === seq) setLoading(false);
@@ -165,6 +196,9 @@ export function NodeConnLogModal({
     setCurrent(1);
     setRows([]);
     setTotal(0);
+    setDropped(undefined);
+    setRetentionDays(undefined);
+    setServerEnabled(undefined);
     setError(null);
     if (enabled) void load(1, "");
   }, [nodeId, enabled, load]);
@@ -280,13 +314,13 @@ export function NodeConnLogModal({
             {node && (
               <div className="truncate text-xs font-semibold text-foreground">
                 连过这台服务器的 IP 与所连端口
-                {enabled ? "" : " · 当前未开启"}
+                {isCollecting ? "" : " · 当前未开启"}
               </div>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Button
-              isDisabled={!enabled}
+              isDisabled={!isCollecting}
               isLoading={loading}
               size="sm"
               variant="flat"
@@ -301,13 +335,13 @@ export function NodeConnLogModal({
           <Input
             aria-label="按客户端 IP 过滤"
             className="max-w-xs"
-            isDisabled={!enabled}
+            isDisabled={!isCollecting}
             placeholder="按客户端 IP 过滤"
             size="sm"
             value={ipInput}
             onChange={(e) => setIpInput(e.target.value)}
           />
-          {!enabled ? (
+          {!isCollecting ? (
             <div className="py-10 text-center">
               <p className="text-sm font-semibold">连接日志未开启</p>
               <p className="mx-auto mt-2 max-w-md text-xs font-semibold text-foreground">
@@ -453,7 +487,16 @@ export function NodeConnLogModal({
         </ModalBody>
         <ModalFooter className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-0.5 text-left text-xs font-semibold text-foreground">
-            <p>连接记录按保留策略定期清理</p>
+            <p>
+              {retentionDays != null
+                ? `连接记录保留 ${retentionDays} 天，超期或超量自动清理`
+                : "连接记录按保留策略定期清理"}
+            </p>
+            {dropped != null && dropped > 0 && (
+              <p className="text-warning-700">
+                本节点累计丢弃 {dropped} 条记录（清空连接行后归零）
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-3">
             {(rows.length > 0 || current > 1) && (

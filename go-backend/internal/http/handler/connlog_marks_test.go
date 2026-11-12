@@ -174,10 +174,14 @@ func TestConnlogOptInListExcludesNeverDirect(t *testing.T) {
 	}
 }
 
-// U7：入口集合只认 Managed=1 的 relay 行（托管口径）；集合在每
-// 次调用时按当前 DB 现算——relay 行删除后同一次查询立即收敛，
-// 这是「拓扑变更随重推自动更新、不留陈旧标记」的生成侧保证。
-func TestConnlogEntrySets_ManagedOnlyAndConverge(t *testing.T) {
+// U7：入口集合含全部 forward（D-P3-1）：托管中转行（不论 Managed）
+// 与全部现存 forward（有入口端口者）的并集——用户自建 forward 无
+// 托管中转行，仅凭“全部 forward”面才进采集；只收 Managed==1 会
+// 漏掉它们，与“连过这台服务器”的口径有落差。集合在每次调用时按
+// 当前 DB 现算——relay 行或端口行删除后同一次查询立即收敛，这
+// 是「拓扑变更随重推自动更新、不留陈旧标记」的生成侧保证。
+// relay-target 集（落地入站）仍只认 Managed==1（未动）。
+func TestConnlogEntrySets_AllForwardsAndConverge(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/connlog.db")
 	if err != nil {
 		t.Fatal(err)
@@ -194,13 +198,17 @@ func TestConnlogEntrySets_ManagedOnlyAndConverge(t *testing.T) {
 	if err := r.DB().Exec(`INSERT INTO node_inbound_relay(inbound_id, forward_id, name, share_host, managed, created_time) VALUES(102, 202, 'unmanaged', '', 0, ?)`, now).Error; err != nil {
 		t.Fatal(err)
 	}
+	// 用户自建 forward：有入口端口行、无托管中转行（D-P3-1）。
+	if err := r.DB().Create(&model.ForwardPort{ForwardID: 203, NodeID: 1, Port: 24444}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	forwards, err := h.connlogEntryForwardIDs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !forwards[201] || forwards[202] {
-		t.Fatalf("entry forwards = %v, want only 201", forwards)
+	if !forwards[201] || !forwards[202] || !forwards[203] {
+		t.Fatalf("entry forwards = %v, want 201, 202 and 203", forwards)
 	}
 	targets, err := h.connlogRelayTargetInboundIDs()
 	if err != nil {
@@ -219,6 +227,20 @@ func TestConnlogEntrySets_ManagedOnlyAndConverge(t *testing.T) {
 	}
 	if forwards[201] {
 		t.Fatal("stale entry mark: forward 201 still an entry after its relay was deleted")
+	}
+	if !forwards[202] || !forwards[203] {
+		t.Fatalf("entry forwards = %v, want 202 and 203 to survive relay 201 deletion", forwards)
+	}
+	// 自建 forward 的端口行删除后亦收敛。
+	if err := r.DB().Exec(`DELETE FROM forward_port WHERE forward_id = 203`).Error; err != nil {
+		t.Fatal(err)
+	}
+	forwards, err = h.connlogEntryForwardIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forwards[203] {
+		t.Fatal("stale entry mark: forward 203 still an entry after its port was deleted")
 	}
 	targets, err = h.connlogRelayTargetInboundIDs()
 	if err != nil {

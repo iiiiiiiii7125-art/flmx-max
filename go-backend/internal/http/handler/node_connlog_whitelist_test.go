@@ -240,6 +240,32 @@ func TestWhitelistReconcileFailureNote(t *testing.T) {
 	}
 }
 
+// TestConnlogReconcileFailureNote 钉连接日志开关翻转同步回执的点名
+// 口径（B-P3-2，与白名单同形）：离线类失败不算失败，真失败点名
+// 内核＋原因，文案须点名“连接日志”而非白名单。
+func TestConnlogReconcileFailureNote(t *testing.T) {
+	if got := connlogReconcileFailureNote([]kernelReconcileFailure{
+		{KernelType: "sing-box", Err: errors.New("节点不在线")},
+	}); got != "" {
+		t.Fatalf("offline failure must be filtered, got %q", got)
+	}
+	got := connlogReconcileFailureNote([]kernelReconcileFailure{
+		{KernelType: "sing-box", Err: errors.New("kernel apply failed: timeout")},
+		{KernelType: "xray", Err: errors.New("节点不在线")},
+	})
+	if !strings.Contains(got, "sing-box") || !strings.Contains(got, "连接日志") || !strings.Contains(got, "timeout") || strings.Contains(got, "xray") || strings.Contains(got, "白名单") {
+		t.Fatalf("note = %q, want sing-box + connlog reason only, no whitelist wording", got)
+	}
+	if got := connlogReconcileFailureNote([]kernelReconcileFailure{
+		{KernelType: "", Err: errors.New("db gone")},
+	}); !strings.Contains(got, "节点内核查询失败") {
+		t.Fatalf("empty-kernel failure note = %q, want the kernel-list failure named", got)
+	}
+	if got := connlogReconcileFailureNote(nil); got != "" {
+		t.Fatalf("no failures note = %q, want empty", got)
+	}
+}
+
 // TestIngestNodeNftablesStatus 钉 agent nftables 运行态的摄入与
 // 节点响应字段：失败点名原因、自动安装与已安装分态、未上报不写。
 func TestIngestNodeNftablesStatus(t *testing.T) {
