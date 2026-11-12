@@ -5,7 +5,9 @@ import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
+import { Input } from "@/shadcn-bridge/heroui/input";
 import { Progress } from "@/shadcn-bridge/heroui/progress";
+import { Switch } from "@/shadcn-bridge/heroui/switch";
 import { LatencyCell, probePoints } from "@/components/latency-cell";
 import { ListRow } from "@/components/page-kit";
 import { getConnectionStatusMeta } from "@/pages/node/display";
@@ -54,6 +56,10 @@ export interface NodeRowActions {
   showTrend: (node: Node) => void;
   openSheet: (id: number) => void;
   openMonitor?: (nodeId: number) => void;
+  openConnLog: (node: Node) => void;
+  toggleConnLog: (node: Node, enabled: boolean) => void;
+  toggleWhitelist: (node: Node, enabled: boolean) => void;
+  saveWhitelistExtra: (node: Node, value: string) => void;
 }
 
 interface NodeRowCommonProps {
@@ -69,6 +75,17 @@ interface NodeRowCommonProps {
   monthLabel: string | null;
   latencyPoolEmpty: boolean | null;
   probing: boolean;
+  /** 管理员才可见连接日志入口与开关（后端亦 enforcing；非管理员不渲染）。 */
+  showConnLog: boolean;
+  /** 该节点连接日志开关正在保存中，保存期间禁用开关防重复提交。 */
+  connLogSaving?: boolean;
+  /** 管理员才可见入站白名单开关与输入框（后端亦 enforcing；非管理员不渲染）。 */
+  showWhitelist: boolean;
+  /** 该节点白名单额外放行输入框的当前编辑文本（失焦/回车时保存）。 */
+  whitelistDraft: string;
+  onWhitelistDraftChange: (node: Node, value: string) => void;
+  /** 该节点白名单开关或额外列表正在保存中，保存期间禁用相关控件防重复提交。 */
+  whitelistSaving?: boolean;
 }
 
 export interface NodeCardRowProps extends NodeRowCommonProps {
@@ -260,6 +277,12 @@ const NodeCardContent = memo(function NodeCardContent({
   latencyPoolEmpty,
   probing,
   showMonitor,
+  showConnLog,
+  connLogSaving,
+  showWhitelist,
+  whitelistDraft,
+  onWhitelistDraftChange,
+  whitelistSaving,
   listeners,
 }: RowContentProps<NodeCardRowProps>) {
   const expiryMeta = getNodeExpiryMeta(
@@ -558,6 +581,80 @@ const NodeCardContent = memo(function NodeCardContent({
           </div>
 
         <div className="mt-auto space-y-3">
+          {/* 连接日志开关：按节点 opt-in，默认关。nftables 节点无 agent
+              通道、采集无从谈起，故不渲染（与调优/Swap 同口径）。 */}
+          {showConnLog && node.forwardMode !== "nftables" && (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-divider/80 px-3 py-2">
+              <span className="text-sm font-semibold">连接日志</span>
+              <span className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-foreground">
+                  {node.connLogEnabled === true ? "已开启" : "未开启"}
+                </span>
+                <Switch
+                  aria-label="连接日志开关"
+                  isDisabled={connLogSaving}
+                  isSelected={node.connLogEnabled === true}
+                  size="sm"
+                  onValueChange={(v) => actions.toggleConnLog(node, v)}
+                />
+              </span>
+            </div>
+          )}
+          {/* 入站白名单：节点级覆盖层，默认关。开时本节点全部入站只放行
+              中转机、本机与额外列表中的 IP/网段；逐入站白名单（入站表单）
+              保留不动，两层叠加生效。nftables 节点无 agent 通道，不渲染。 */}
+          {showWhitelist && node.forwardMode !== "nftables" && (
+            <div className="space-y-2 rounded-xl border border-divider/80 px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold">入站白名单</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-foreground">
+                    {node.whitelistEnabled === true ? "已开启" : "未开启"}
+                  </span>
+                  <Switch
+                    aria-label="入站白名单开关"
+                    isDisabled={whitelistSaving}
+                    isSelected={node.whitelistEnabled === true}
+                    size="sm"
+                    onValueChange={(v) => actions.toggleWhitelist(node, v)}
+                  />
+                </span>
+              </div>
+              {/* nftables 状态：后端上报的展示串，原样展示；字段缺失时不渲染。 */}
+              {node.nftablesStatus && (
+                <p className="text-xs font-semibold text-foreground">
+                  nftables：{node.nftablesStatus}
+                </p>
+              )}
+              {node.whitelistEnabled === true && (
+                <>
+                  <p className="text-xs font-semibold text-foreground">
+                    该节点全部入站只放行中转机、本机与列表中的 IP/网段。
+                  </p>
+                  <Input
+                    aria-label="白名单额外放行"
+                    description="中转机出口 IP 与节点地址不同时，在此补充；支持 IP 和网段，逗号分隔"
+                    isDisabled={whitelistSaving}
+                    label="额外放行"
+                    placeholder="203.0.113.9, 10.0.0.0/8"
+                    size="sm"
+                    value={whitelistDraft}
+                    variant="bordered"
+                    onBlur={() =>
+                      actions.saveWhitelistExtra(node, whitelistDraft)
+                    }
+                    onChange={(e) =>
+                      onWhitelistDraftChange(node, e.target.value)
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter")
+                        (e.target as HTMLInputElement).blur();
+                    }}
+                  />
+                </>
+              )}
+            </div>
+          )}
           {/* 操作按钮 */}
           <div className="space-y-1.5">
             <div className="grid grid-cols-3 gap-1.5">
@@ -652,6 +749,16 @@ const NodeCardContent = memo(function NodeCardContent({
               >
                 删除
               </Button>
+              {showConnLog && node.forwardMode !== "nftables" && (
+                <Button
+                  className="min-h-8"
+                  size="sm"
+                  variant="flat"
+                  onPress={() => actions.openConnLog(node)}
+                >
+                  连接日志
+                </Button>
+              )}
             </div>
             {/* CARDVIEW-RESTART：卡片视图此前没有任何打开详情 sheet
                 的入口，定时重启/测试点/安装命令等只存在于列表行点击
