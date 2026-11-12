@@ -47,6 +47,30 @@ func (h *Handler) connlogMasterEnabled() (bool, error) {
 	return repo.ConnLogEnabledFromConfigMap(cfg), nil
 }
 
+// connlogEnabledForNode 是单节点的采集门控：总开关 AND 该节点
+// 的节点级开关（node.conn_log_enabled，默认关）。节点开关是
+// 唯一的采集门控：关则该节点直连＋中转一律不采，开则全采；
+// 开则该节点全部入站的内核日志形态随之调整（sing-box 升
+// debug、Xray 开 access），直连入站连接被采集。任一查询失败
+// 返回错误（fail-closed，与总开关同口径）。
+func (h *Handler) connlogEnabledForNode(nodeID int64) (bool, error) {
+	masterOn, err := h.connlogMasterEnabled()
+	if err != nil {
+		return false, err
+	}
+	if !masterOn {
+		return false, nil
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil {
+		return false, err
+	}
+	if node == nil {
+		return false, nil
+	}
+	return node.ConnLogEnabled == 1, nil
+}
+
 // connlogEntryForwardIDs 返回被标为连接日志入口的 forward ID 集
 // （存在 Managed=1 的 NodeInboundRelay 行指向它）；总开关关时
 // 返回空集（见 connlogMasterEnabled）。

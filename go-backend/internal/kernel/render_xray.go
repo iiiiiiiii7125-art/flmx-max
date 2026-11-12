@@ -43,10 +43,9 @@ func renderXray(inbounds []Inbound, opts RenderOptions) (string, error) {
 	}
 	logCfg := obj{"loglevel": "warning"}
 	// Connection-log collection (design §3.2/§4.5): the access log
-	// opens only when the master switch is on and some inbound
-	// opted in (D-04: master off falls back to no access log even
-	// with opt-ins set).
-	if opts.ConnLogEnabled && anyConnLogEnabled(inbounds) {
+	// opens only when the node-level switch is on (opts.ConnLogEnabled:
+	// master AND node switch; off falls back to no access log).
+	if opts.ConnLogEnabled {
 		logCfg["access"] = connLogAccessPath
 	}
 	cfg := obj{

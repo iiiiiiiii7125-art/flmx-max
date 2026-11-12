@@ -41,9 +41,9 @@ func TestConnlogBootChangeInterruptsOpenRows(t *testing.T) {
 
 	// 首报只立基线，不结清。
 	svc.RecordNodeMetric(1, info)
-	assertStatus := func(connID, want string) {
+	assertStatus := func(connID string, nodeID int64, want string) {
 		t.Helper()
-		all, err := r.ListInboundConnLogs(0, "", 0, 10)
+		all, err := r.ListNodeConnLogs(nodeID, "", 0, 10)
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}
@@ -57,19 +57,19 @@ func TestConnlogBootChangeInterruptsOpenRows(t *testing.T) {
 		}
 		t.Fatalf("conn %s not found", connID)
 	}
-	assertStatus("boot-victim", repo.ConnlogStatusOpen)
+	assertStatus("boot-victim", 1, repo.ConnlogStatusOpen)
 
 	// 同 boot 再报：不动。
 	svc.RecordNodeMetric(1, info)
-	assertStatus("boot-victim", repo.ConnlogStatusOpen)
+	assertStatus("boot-victim", 1, repo.ConnlogStatusOpen)
 
 	// boot 被证明变化：该节点 open 行结清为 interrupted，
 	// end_time 为最后已知时刻（>0 且不晚于当前时刻），他节点不动。
 	info.BootID = "boot-b"
 	svc.RecordNodeMetric(1, info)
-	assertStatus("boot-victim", repo.ConnlogStatusInterrupted)
-	assertStatus("other-node", repo.ConnlogStatusOpen)
-	all, _ := r.ListInboundConnLogs(0, "", 0, 10)
+	assertStatus("boot-victim", 1, repo.ConnlogStatusInterrupted)
+	assertStatus("other-node", 2, repo.ConnlogStatusOpen)
+	all, _ := r.ListNodeConnLogs(1, "", 0, 10)
 	for i := range all {
 		if all[i].ConnID == "boot-victim" {
 			if all[i].EndTime <= 0 || all[i].EndTime > time.Now().UnixMilli() || all[i].DurationMs != 0 {
@@ -81,7 +81,7 @@ func TestConnlogBootChangeInterruptsOpenRows(t *testing.T) {
 	// 未证明的变化（新 boot 缺 id）：不结清。
 	seedOpenConnlogRow(t, r, 1, "unproven", time.Now().UnixMilli())
 	svc.RecordNodeMetric(1, SystemInfo{BytesReceived: 300, BytesTransmitted: 400})
-	assertStatus("unproven", repo.ConnlogStatusOpen)
+	assertStatus("unproven", 1, repo.ConnlogStatusOpen)
 }
 
 func TestConnlogPruneWiredIntoHourlyPrune(t *testing.T) {
@@ -100,7 +100,7 @@ func TestConnlogPruneWiredIntoHourlyPrune(t *testing.T) {
 	svc := NewIngestionService(r)
 	svc.pruneMetricsAt(now)
 
-	rows, err := r.ListInboundConnLogs(0, "", 0, 10)
+	rows, err := r.ListNodeConnLogs(1, "", 0, 10)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

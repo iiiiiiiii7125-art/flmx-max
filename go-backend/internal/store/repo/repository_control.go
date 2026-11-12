@@ -321,6 +321,9 @@ func nodeRecordFromModel(n *model.Node) *model.NodeRecord {
 		EdgeIdleTimeoutSeconds:     n.EdgeIdleTimeoutSeconds,
 		BackstopIdleTimeoutSeconds: n.BackstopIdleTimeoutSeconds,
 		BackstopTrickleBps:         n.BackstopTrickleBps,
+		ConnLogEnabled:             n.ConnLogEnabled,
+		WhitelistEnabled:           n.WhitelistEnabled,
+		WhitelistExtra:             n.WhitelistExtra,
 	}
 	if n.ServerIPV4.Valid {
 		rec.ServerIPv4 = strings.TrimSpace(n.ServerIPV4.String)

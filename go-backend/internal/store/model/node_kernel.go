@@ -85,14 +85,6 @@ type NodeInbound struct {
 	// companion inbound is materialized whenever an active share
 	// subscription sources this inbound.
 	MeteringEnabled int `gorm:"column:metering_enabled;not null;default:0"`
-	// ConnLogEnabled is the per-inbound connection-log collection
-	// opt-in (inbound connection log design §4.5): while on, this
-	// inbound's kernel rendering carries the observation surface the
-	// agent-side parser needs — sing-box log level is raised to debug,
-	// Xray gains an access log. Default off: rendering is byte-identical
-	// to the pre-feature output, so existing nodes keep their config
-	// hash and are not re-applied on upgrade.
-	ConnLogEnabled int `gorm:"column:conn_log_enabled;not null;default:0"`
 }
 
 func (NodeInbound) TableName() string { return "node_inbound" }

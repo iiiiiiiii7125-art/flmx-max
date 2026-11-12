@@ -26,7 +26,7 @@ type whitelistNftStub struct {
 func stubWhitelistNft(t *testing.T) *whitelistNftStub {
 	t.Helper()
 	s := &whitelistNftStub{available: true}
-	oldRunner, oldAvail := nftRunner, nftAvailable
+	oldRunner, oldAvail, oldInstall := nftRunner, nftAvailable, installRunner
 	nftRunner = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
 		switch {
@@ -50,7 +50,12 @@ func stubWhitelistNft(t *testing.T) *whitelistNftStub {
 		}
 		return nil
 	}
-	t.Cleanup(func() { nftRunner, nftAvailable = oldRunner, oldAvail })
+	// 自动安装桩：本文件断言的是 fail-closed，安装器不得在测试里
+	// 触碰真实包管理器——一律返回失败，让缺 nft 的用例走明错分支。
+	installRunner = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		return nil, fmt.Errorf("install disabled in test (stub): %s %s", name, strings.Join(args, " "))
+	}
+	t.Cleanup(func() { nftRunner, nftAvailable, installRunner = oldRunner, oldAvail, oldInstall })
 	return s
 }
 

@@ -62,6 +62,11 @@ func setupR215Red1(t *testing.T) *r215Red1Scenario {
 	frontID := seedRelayTargetNode(t, r, "front", "198.51.100.1")
 	exitAID := seedRelayTargetNode(t, r, "exit-a", "198.51.100.2")
 	landingID := seedRelayTargetNode(t, r, "landing", "203.0.113.10")
+	// 新门控：入口标记只下发给采集开关开着的入口节点——前置
+	// 节点开采集，否则本测试的标记断言在新门控下恒红。
+	if err := r.UpdateNodeConnLogEnabled(frontID, 1); err != nil {
+		t.Fatalf("enable front connlog: %v", err)
+	}
 	if err := r.DB().Exec(`UPDATE node SET status = 1`).Error; err != nil {
 		t.Fatalf("activate nodes: %v", err)
 	}
