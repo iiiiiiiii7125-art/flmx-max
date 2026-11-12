@@ -981,13 +981,6 @@ export interface InboundApiItem {
   meteringActive: boolean;
   /** Per-inbound idle timeout (seconds) for Xray (policy connIdle); 0 = unset (Xray default 300s), -1 = unlimited (renders as 31536000 = 365d). */
   connIdleSeconds: number;
-  /**
-   * Inbound connection-log opt-in for direct kernel collection (U5):
-   * when false, direct connections to this inbound are not recorded
-   * (relay-entry records are unaffected). Required: the backend list
-   * always carries the field (design §4.5).
-   */
-  connLogEnabled: boolean;
 }
 
 export interface InboundMutationPayload {
@@ -1020,8 +1013,6 @@ export interface InboundMutationPayload {
   enabled?: boolean;
   /** SS subscription metering switch; omitted keeps the stored value. */
   meteringEnabled?: boolean;
-  /** Connection-log collection opt-in; omitted keeps the stored value. */
-  connLogEnabled?: boolean;
   /** Per-inbound idle timeout (seconds) for Xray; 0 clears it (Xray default 300s), -1 = unlimited (renders as 31536000). */
   connIdleSeconds?: number;
 }
