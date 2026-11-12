@@ -463,6 +463,10 @@ Query params: `nodeId` (required), optional `ip` (exact client-IP filter),
 resolved `localPort` and `entryName` (direct inbound → its port and name;
 forward entry → the forward entry's port and name; unresolvable → `localPort`
 0 and the raw entry ID). Response data is a page object
-`{rows, total, enabled}` — `total` is the row count for this node under the
-same IP filter, `enabled` is the node's collection switch state (it only
-gates collection; it never deletes history rows).
+`{rows, total, enabled, dropped, retentionDays}` — `total` is the row count
+for this node under the same IP filter, `enabled` is the node's collection
+switch state (it only gates collection; it never deletes history rows),
+`dropped` is this node's cumulative collection drop count (the entry
+machine's collector buffer overflowed; a non-zero value means the log may
+be incomplete), `retentionDays` is the current retention period in days
+(panel config `connlog_retention_days`, default 7).

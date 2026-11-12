@@ -873,6 +873,32 @@ func whitelistReconcileFailureNote(failures []kernelReconcileFailure) string {
 	return "白名单已保存，但部分内核下发失败（" + strings.Join(parts, "；") + "），请检查节点内核状态"
 }
 
+// connlogReconcileFailureNote 把节点级连接日志开关翻转的内核重
+// 下发失败渲染成回执 warning（与 whitelistReconcileFailureNote
+// 同口径，B-P3-2）：离线/不在线类失败不算（节点重连时按新值重
+// 布），只点名真失败的内核与原因；原因截断，避免 agent 的长错
+// 误撑爆回执。无真失败时返回 ""。
+func connlogReconcileFailureNote(failures []kernelReconcileFailure) string {
+	var parts []string
+	for _, f := range failures {
+		if f.Err == nil {
+			continue
+		}
+		if strings.Contains(f.Err.Error(), "不在线") {
+			continue
+		}
+		if f.KernelType == "" {
+			parts = append(parts, "节点内核查询失败: "+truncate(f.Err.Error(), 200))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("内核「%s」连接日志下发失败: %s", f.KernelType, truncate(f.Err.Error(), 200)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "连接日志开关已保存，但部分内核下发失败（" + strings.Join(parts, "；") + "），请检查节点内核状态"
+}
+
 // normalizeNodeDisplayGroup 归一节点展示分组标签（纯展示功能，
 // 用户 2026-11-09 拍板）：去首尾空白后按列宽 varchar(100) 校验，
 // 与节点名称同口径；纯空白归为空（未分组）。
@@ -1496,7 +1522,13 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 节点级连接日志开关：落库后真变更才重推——repush 让 agent
 	// 收到新开关（服务配置 metadata），内核重下发（reconcile）
-	// 让日志形态与名单收敛。开关只控采集，不删历史行。
+	// 让日志形态与名单收敛。开关只控采集，不删历史行。重下发
+	// 走 Collect 同步回执（与白名单同形，B-P3-2）：异步静默会
+	// 让开关显示 ON、回执成功，而采集实际未生效——正是原始投
+	// 诉“还是看不见”的同族形态。下发失败点名进回执（见尾部
+	// connlogFailures）；更新本身已落库；离线节点不算失败
+	// （重连时按新值重布）。
+	var connlogFailures []kernelReconcileFailure
 	if connLogPresent {
 		if err := h.repo.UpdateNodeConnLogEnabled(id, connLogEnabled); err != nil {
 			respondInternalError(w, "nodeUpdate", err)
@@ -1505,7 +1537,7 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		if connLogEnabled != currentNode.ConnLogEnabled {
 			log.Printf("node connlog setting updated node_id=%d enabled=%d operator_id=%d (runtime repush queued if online)", id, connLogEnabled, idemUserID(r))
 			h.repushNodeRuntimeAfterSettingChange(id)
-			go h.reconcileNodeKernels(id)
+			connlogFailures = h.reconcileNodeKernelsCollect(id)
 		}
 	}
 	// 节点级入站白名单：落库后真变更才同步重下发全部内核——
@@ -1597,14 +1629,22 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 		log.Printf("node address changed node_id=%d operator_id=%d (tunnel chain repush queued if online)", id, idemUserID(r))
 		h.repushNodeRuntimeAfterSettingChange(id)
 	}
-	// T-001：白名单同步重下发失败先行点名（见上方 whitelistFailures）。
-	if note := whitelistReconcileFailureNote(whitelistFailures); note != "" {
-		response.WriteJSON(w, response.OKWithWarning(nil, note))
-		return
+	// T-001：三处失败点名合并进同一回执（B-P3-1＋B-P3-2）——
+	// 连接日志重下发、白名单同步重下发、改址刷新，任一失败都
+	// 点名；先 return 会遮蔽后一处（白名单 note 曾遮住改址刷
+	// 新失败）。无失败时回空成功。
+	var notes []string
+	if note := connlogReconcileFailureNote(connlogFailures); note != "" {
+		notes = append(notes, note)
 	}
-	// T-001：见上方 refreshFailed 收集。
+	if note := whitelistReconcileFailureNote(whitelistFailures); note != "" {
+		notes = append(notes, note)
+	}
 	if len(refreshFailed) > 0 {
-		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshFailureNote(refreshFailed)+"，请检查节点内核状态"))
+		notes = append(notes, whitelistRefreshFailureNote(refreshFailed)+"，请检查节点内核状态")
+	}
+	if len(notes) > 0 {
+		response.WriteJSON(w, response.OKWithWarning(nil, strings.Join(notes, "；")))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())

@@ -71,9 +71,14 @@ func (h *Handler) connlogEnabledForNode(nodeID int64) (bool, error) {
 	return node.ConnLogEnabled == 1, nil
 }
 
-// connlogEntryForwardIDs 返回被标为连接日志入口的 forward ID 集
-// （存在 Managed=1 的 NodeInboundRelay 行指向它）；总开关关时
-// 返回空集（见 connlogMasterEnabled）。
+// connlogEntryForwardIDs 返回被标为连接日志入口的 forward ID 集：
+// 托管中转行（NodeInboundRelay，全部行）与全部现存 forward（有
+// 入口端口者）的并集。用户自建 forward 无托管中转行，仅凭“全部
+// forward”面才进采集（D-P3-1）；只收 Managed==1 会漏掉它们，与
+// “连过这台服务器”的口径有落差。入口标记本身仍在控制面按跳 AND
+// 该跳节点的采集开关（见 control_plane.go 的 connlogEntry），故
+// 扩大入口集不改变“开关关则不采”的门控。总开关关时返回空集
+// （见 connlogMasterEnabled）。
 func (h *Handler) connlogEntryForwardIDs() (map[int64]bool, error) {
 	enabled, err := h.connlogMasterEnabled()
 	if err != nil {
@@ -88,9 +93,16 @@ func (h *Handler) connlogEntryForwardIDs() (map[int64]bool, error) {
 	}
 	ids := make(map[int64]bool, len(rels))
 	for _, rel := range rels {
-		if rel.Managed == 1 {
-			ids[rel.ForwardID] = true
-		}
+		ids[rel.ForwardID] = true
+	}
+	// 全部 forward 面：用户自建 forward 无托管中转行，凭其入口
+	// 端口行进集；无端口的 forward 无入口可标，不进集亦无影响。
+	allIDs, err := h.repo.ListForwardIDs()
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range allIDs {
+		ids[id] = true
 	}
 	return ids, nil
 }
