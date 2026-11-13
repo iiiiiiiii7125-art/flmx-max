@@ -18,6 +18,10 @@ import {
 } from "@/pages/node/helpers";
 import { NodeLiveStats } from "@/pages/node/node-live-stats";
 import {
+  trafficDownShare,
+  type NodeCardTags,
+} from "@/pages/node/card-tags";
+import {
   formatNodeRenewalTime,
   getNodeRenewalCycleLabel,
 } from "@/pages/node/renewal";
@@ -73,6 +77,10 @@ interface NodeRowCommonProps {
   monthIn?: number;
   monthOut?: number;
   monthLabel: string | null;
+  /** X06 恢复的节点卡片标签集（用户/分组/限速）的推导结果；null＝
+   * 标签清单尚未拉到（用户/限速两枚先不渲染，见 NodeCardTagChips），
+   * 分组芯片只读 node.displayGroup、不依赖它。 */
+  cardTags?: NodeCardTags | null;
   latencyPoolEmpty: boolean | null;
   probing: boolean;
   /** 管理员才可见连接日志入口与开关（后端亦 enforcing；非管理员不渲染）。 */
@@ -264,6 +272,97 @@ export function NodeUninstallStateChip({ node }: { node: Node }) {
   );
 }
 
+/**
+ * X06 恢复：节点卡片三标签（用户/分组/限速），卡片与列表两视图
+ * 共用同一组件——F-211-02 教训：只放卡片一面，默认列表视图即
+ * 看不见，等于没恢复。分组读 node.displayGroup（node/list 自
+ * 带）；用户/限速读推导结果 cardTags（口径见 card-tags.ts），
+ * 未拉到时两枚显示「—」而不是编 0/不限速。
+ */
+export function NodeCardTagChips({
+  node,
+  tags,
+}: {
+  node: Node;
+  tags?: NodeCardTags | null;
+}) {
+  const group = node.displayGroup?.trim();
+  const speedText =
+    tags == null
+      ? "限速 —"
+      : tags.speedLimitNames.length > 0
+        ? `限速：${tags.speedLimitNames.join("、")}`
+        : "不限速";
+  const speedTitle =
+    tags == null
+      ? "限速规则尚未加载"
+      : tags.speedLimitNames.length > 0
+        ? `本节点转发绑定的限速规则：${tags.speedLimitNames.join("、")}（仅统计已启用隧道上状态正常的转发）`
+        : "本节点转发未绑定限速规则（仅统计已启用隧道上状态正常的转发）";
+  return (
+    <div className="flex flex-wrap gap-1.5" data-node-card-tags="true">
+      <Chip
+        className="shrink-0 whitespace-nowrap"
+        size="sm"
+        title="经隧道使用本节点的用户（仅统计已启用隧道上状态正常的转发，按转发归属用户去重；订阅直连入站用户不在此数内）"
+        variant="flat"
+      >
+        {tags == null ? "用户 —" : `用户 ${tags.userCount} 人`}
+      </Chip>
+      <Chip
+        className="shrink-0 whitespace-nowrap"
+        size="sm"
+        title="展示分组（纯展示，不参与订阅、转发与选线）"
+        variant="flat"
+      >
+        {group ? `分组：${group}` : "未分组"}
+      </Chip>
+      <Chip
+        className="shrink-0 whitespace-nowrap"
+        size="sm"
+        title={speedTitle}
+        variant="flat"
+      >
+        {speedText}
+      </Chip>
+    </div>
+  );
+}
+
+/**
+ * X06 恢复：本月网卡流量进度条。节点无月度流量上限，条不是
+ * 「用量/上限」，而是上下行分段（下行蓝／上行绿，下行占比为
+ * 刻度；零流量不渲染，PORT-022 口径）。卡片与列表两视图共用。
+ */
+export function NodeTrafficProgressBar({
+  month,
+}: {
+  month?: [number, number];
+}) {
+  const share = trafficDownShare(month);
+  if (share === null) return null;
+  const upShare = 100 - share;
+  return (
+    <div className="space-y-1" data-traffic-progress="true">
+      <div
+        aria-label={`本月流量下行占比 ${share}%`}
+        aria-valuemax={100}
+        aria-valuemin={0}
+        aria-valuenow={share}
+        className="flex h-1.5 overflow-hidden rounded-full bg-default-100"
+        role="progressbar"
+        title={`本月流量：下行 ${share}%／上行 ${upShare}%（网卡口径，无月度上限）`}
+      >
+        <div
+          className="h-full bg-sky-500"
+          style={{ width: `${share}%` }}
+        />
+        <div className="h-full flex-1 bg-emerald-500" />
+      </div>
+    </div>
+  );
+}
+
 const NodeCardContent = memo(function NodeCardContent({
   node,
   actions,
@@ -273,6 +372,7 @@ const NodeCardContent = memo(function NodeCardContent({
   monthIn,
   monthOut,
   monthLabel,
+  cardTags,
   infoPlacement,
   latencyPoolEmpty,
   probing,
@@ -463,6 +563,10 @@ const NodeCardContent = memo(function NodeCardContent({
       </CardHeader>
 
       <CardBody className="pt-0 pb-3 md:pt-0 md:pb-3 flex-1 flex flex-col">
+        {/* X06 恢复：用户/分组/限速三标签（与列表视图共用同一组件）。 */}
+        <div className="mb-3">
+          <NodeCardTagChips node={node} tags={cardTags} />
+        </div>
         {/* 基础信息 */}
         <div className="space-y-2 mb-4">
           {node.expiryTime &&
@@ -551,6 +655,8 @@ const NodeCardContent = memo(function NodeCardContent({
                   </span>
                 </div>
               )}
+              {/* X06 恢复：本月流量上下行分段进度条（零流量不渲染）。 */}
+              <NodeTrafficProgressBar month={month} />
           </>
         </div>
 
@@ -824,6 +930,7 @@ const NodeListContent = memo(function NodeListContent({
   monthIn,
   monthOut,
   monthLabel,
+  cardTags,
   latencyPoolEmpty,
   probing,
   isDisplayFiltered,
@@ -885,11 +992,18 @@ const NodeListContent = memo(function NodeListContent({
       footer={
         <>
           <NodeUpgradeVerificationLine node={node} />
+          {/* X06 恢复：三标签与流量进度条与卡片视图同一组件、同一口径。 */}
+          <div className="mt-2">
+            <NodeCardTagChips node={node} tags={cardTags} />
+          </div>
           <NodeLiveStats
             info={node.systemInfo ?? null}
             month={month}
             variant="footer"
           />
+          <div className="mt-1">
+            <NodeTrafficProgressBar month={month} />
+          </div>
         </>
       }
       meta={meta.filter(Boolean).join(" · ")}

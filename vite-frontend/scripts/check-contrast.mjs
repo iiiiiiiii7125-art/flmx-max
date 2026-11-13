@@ -2534,6 +2534,7 @@ const SOLID_FILL_PINS_DEFAULT_100 = {
   "pages/inbound/inbound-form-modal.tsx": 1, // hover 态轨道填充
   "pages/node/monitor-view.tsx": 5,
   "pages/node/node-live-stats.tsx": 1,
+  "pages/node/node-row.tsx": 1, // X06 恢复的本月流量上下行分段进度条轨道
   "pages/node/tune-modal.tsx": 1,
   "pages/subscription/traffic-stats.tsx": 1,
   "pages/subscription.tsx": 1,
