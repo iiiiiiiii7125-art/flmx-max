@@ -2231,13 +2231,12 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	if err != nil {
 		return nil, "", err
 	}
-	// 入站连接日志（U7）：有托管中转指向的入站是落地、非直连
-	// 入口（见 connlog_marks.go）。查询失败整单中止——标错会让
-	// agent 把上一跳地址当客户端采集，与白名单查询失败同口径。
-	relayTargets, err := h.connlogRelayTargetInboundIDs()
-	if err != nil {
-		return nil, "", fmt.Errorf("查询入站中转归属失败: %w", err)
-	}
+	// 入站连接日志（U7）：中转落地入站亦采集（R2-D-P2-1）——
+	// 公开入站可同时收直连与中转落地，把“是中转落地目标”当作
+	// 整入站排除的理由不成立（曾致直连该入站的客户端连接全部
+	// 看不见）。中转落地腿会随之现一行（其客户端 IP 为上一跳
+	// 地址，见 connlog_marks.go），直连必须可见。链式目标仍
+	// 排除（见 connlogChainTargetInboundIDs）。
 	chainTargets, err := h.connlogChainTargetInboundIDs()
 	if err != nil {
 		return nil, "", fmt.Errorf("查询入站链式归属失败: %w", err)
@@ -2327,15 +2326,16 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// 只对名单内的入站 tag 产连接事件（ApplyRequest.connLogInbounds）。
 		// 名单只含渲染集内已开启采集的入站；伴生入站是系统派生监听、
 		// 非用户入口（设计 §2 形态 6），恒排除。永无直连记录的形态
-		// 同样排除——被中转落地（relayTargets）、链式目标与分流目标
-		// （chainTargets，D-01 后含 SplitProxy 目标）、导入入站
-		// （SourceID>0）——它们的行本就被 connlogEntries 排除，收进
-		// 名单只会白开日志级、交集恒空。名单为空时不写键——
-		// agent 解码为 nil 即空集、采集器随之停用，与「最后一个开关
-		// 关闭后采集收敛」同义。逐入站开关已撤：节点开关开时渲染
-		// 集内全部合格入站都在名单内（采集门控只剩节点开关）。
+		// 同样排除——链式目标与分流目标（chainTargets，D-01 后含
+		// SplitProxy 目标）、导入入站（SourceID>0）——它们的行本就
+		// 被 connlogEntries 排除，收进名单只会白开日志级、交集恒空。
+		// 中转落地入站不再排除（R2-D-P2-1）：公开入站可同时收直连
+		// 与中转落地，排除整入站会让直连记录一并丢失。名单为空时
+		// 不写键——agent 解码为 nil 即空集、采集器随之停用，与「最
+		// 后一个开关关闭后采集收敛」同义。逐入站开关已撤：节点开关
+		// 开时渲染集内全部合格入站都在名单内（采集门控只剩节点开关）。
 		if connlogOn && !in.Companion &&
-			!relayTargets[row.ID] && !chainTargets[row.ID] && row.SourceID == 0 {
+			!chainTargets[row.ID] && row.SourceID == 0 {
 			connLogInbounds = append(connLogInbounds, in.ID)
 		}
 		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
@@ -2367,11 +2367,14 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			port["allow"] = allow
 		}
 		ports = append(ports, port)
-		// U7 直连入口标记：渲染在册、非伴生、非导入、无托管中转
-		// 指向、且未声明「仅中转/白名单」面貌的入站，自身即客户
-		// 端入口（链式源入站同理：客户端连入的是它，出站指向只
-		// 作归属附加信息，不改变入口身份）。
-		if connlogOn && row.CompanionOf == 0 && row.SourceID == 0 && !relayTargets[row.ID] && !chainTargets[row.ID] &&
+		// U7 直连入口标记：渲染在册、非伴生、非导入、未声明「仅中
+		// 转/白名单」面貌的入站，自身即客户端入口（链式源入站同理：
+		// 客户端连入的是它，出站指向只作归属附加信息，不改变入口
+		// 身份）。中转落地入站亦在列（R2-D-P2-1）：公开入站可同时
+		// 收直连与中转落地，排除整入站会让直连记录一并丢失；中转
+		// 落地腿随之现一行（其客户端 IP 为上一跳地址，见
+		// connlog_marks.go），直连必须可见。
+		if connlogOn && row.CompanionOf == 0 && row.SourceID == 0 && !chainTargets[row.ID] &&
 			row.RelayOnly == 0 && row.RelayWhitelist == 0 {
 			connlogEntries = append(connlogEntries, map[string]interface{}{
 				"inboundId": row.ID,
