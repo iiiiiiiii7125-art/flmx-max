@@ -446,6 +446,10 @@ func (r *connlogReporter) cycle(ctx context.Context) {
 // 组批（先落盘后发送）。落盘失败返回 false 且不丢任何事件（新
 // 事件留在 stash、未 drain 的留在 ring）。调用方须持有 r.mu 且
 // r.spool 已就绪。
+//
+// CPU-S2：热路径落盘是增量 journal 追加（见 connlog_spool.go），
+// 每周期只写本周期增量，不全量重写 spool；journal 攒满
+// 1MB 时才 checkpoint 一次全量快照。落盘成功后才替换内存状态。
 func (r *connlogReporter) persistLocked() bool {
 	sp := r.spool
 	next := sp.state
@@ -455,9 +459,12 @@ func (r *connlogReporter) persistLocked() bool {
 	ringDropped := atomic.LoadInt64(&r.ringDropped)
 	next.Dropped += ringDropped
 	r.stash = append(r.stash, r.ring.Drain()...)
-	changed := false
+	// appended/dropHead/batch/droppedDelta 是本周期对 spool 状态
+	// 的全部变化，journal 记录与之一一对应（CPU-S2）。
+	var appended []ConnEvent
+	dropHead := 0
 	if len(r.stash) > 0 {
-		changed = true
+		appended = append(appended, r.stash...)
 		for _, ev := range r.stash {
 			next.Buffered = append(next.Buffered, ev)
 			switch ev.Type {
@@ -472,6 +479,7 @@ func (r *connlogReporter) persistLocked() bool {
 			}
 		}
 		if dropped := next.enforceCap(r.cfg.spoolMax); dropped > 0 {
+			dropHead += dropped
 			fmt.Printf("⚠️ 连接日志 spool 超上限 %d 字节，丢弃最旧 %d 条（计数随批上行）\n", r.cfg.spoolMax, dropped)
 		}
 	}
@@ -479,9 +487,14 @@ func (r *connlogReporter) persistLocked() bool {
 	// L1-01：Open 台账 TTL 清道夫（每周期跑一次，见
 	// sweepStaleOpen）。只结清超 TTL 的条目；新鲜的长会话
 	// 不受影响。清道夫追加的 close 事件同样受容量上限约束。
+	// 结清事件是追加事件的一部分（顺序在 stash 事件之后），
+	// 与队头丢弃一起进同一条 journal 记录。
+	sweepStart := len(next.Buffered)
 	if swept := next.sweepStaleOpen(r.cfg.openTTL, time.Now().UnixMilli()); swept > 0 {
-		changed = true
-		next.enforceCap(r.cfg.spoolMax)
+		appended = append(appended, next.Buffered[sweepStart:]...)
+		if dropped := next.enforceCap(r.cfg.spoolMax); dropped > 0 {
+			dropHead += dropped
+		}
 		fmt.Printf("🧹 连接日志：%d 条超 %v 未闭合的 open 连接已结清为 interrupted\n", swept, r.cfg.openTTL)
 	}
 
@@ -492,17 +505,29 @@ func (r *connlogReporter) persistLocked() bool {
 		r.bufferedSince = time.Time{}
 	}
 
+	var batch *connlogEnvelope
+	fromRetry := false
 	if next.Pending == nil {
-		if batch := r.formBatchLocked(&next); batch != nil {
-			next.Pending = batch
-			changed = true
+		fromRetry = len(next.Retry) > 0
+		if b := r.formBatchLocked(&next); b != nil {
+			batch = b
+			next.Pending = b
 		}
 	}
 
-	if !changed && next.Dropped == sp.state.Dropped {
+	// droppedDelta 是本周期 Dropped 的总增量：环缓冲丢弃＋队头
+	// 丢弃（enforceCap 已计入 next.Dropped）。
+	droppedDelta := ringDropped + int64(dropHead)
+	if len(appended) == 0 && dropHead == 0 && batch == nil && droppedDelta == 0 {
 		return true // 无变化，无需落盘。
 	}
-	if err := sp.save(next); err != nil {
+	if err := r.persistStateLocked(sp, &next, connlogJournalRecord{
+		DroppedDelta: droppedDelta,
+		Appended:     appended,
+		DropHead:     dropHead,
+		Batch:        batch,
+		FromRetry:    fromRetry,
+	}); err != nil {
 		// stash 原样保留（事件还在 r.stash 中，未进 state 副本的
 		// 正式状态），下周期以同一批事件重试落盘。
 		fmt.Printf("❌ 连接日志 spool 落盘失败: %v\n", err)
@@ -514,6 +539,40 @@ func (r *connlogReporter) persistLocked() bool {
 		atomic.AddInt64(&r.ringDropped, -ringDropped)
 	}
 	return true
+}
+
+// persistStateLocked 把 persistLocked 算好的 next 状态落盘（CPU-S2）：
+// 内存 spool 直接放行；磁盘 spool 优先 journal 追加（代价 ∝ 本
+// 周期增量），journal 攒满阈值才 checkpoint 全量快照。成功时
+// 调用方再把 sp.state 换成 next——落盘失败时内存状态不动。
+// next 以指针传入：journal 追加成功时其 JournalSeq 随之推进，
+// 调用方换状态后内存快照序号与 journal 序号保持一致。
+func (r *connlogReporter) persistStateLocked(sp *connlogSpool, next *connlogSpoolState, rec connlogJournalRecord) error {
+	if sp.path == "" {
+		return nil // 内存 spool：无落盘语义。
+	}
+	rec.Seq = sp.journalSeq + 1
+	line, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	if sp.journalBytes+int64(len(line)) > sp.journalMaxBytes {
+		// journal 攒满：checkpoint 全量快照（摊薄后单事件代价
+		// 有界），本周期增量直接进快照、不另写 journal 记录。
+		if err := sp.save(*next); err != nil {
+			return err
+		}
+		next.JournalSeq = sp.journalSeq
+		return nil
+	}
+	if err := sp.appendJournal(line); err != nil {
+		return err
+	}
+	next.JournalSeq = rec.Seq
+	sp.journalSeq = rec.Seq
+	sp.journalBytes += int64(len(line))
+	return nil
 }
 
 // formBatchLocked 按 §5.3 节奏决定是否组批：Retry 二分队列优先；

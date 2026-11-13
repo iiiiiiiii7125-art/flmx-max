@@ -1,12 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -30,6 +32,20 @@ import (
 //   - Open/OpenLastKnown 是 §4.6 结清台账：记录已见 open 未见
 //     close 的连接及其最后已知时刻，随 spool 一起落盘，进程换
 //     代时据此批量结清 interrupted。
+//   - CPU-S2：热路径落盘是增量 journal（快照＋WAL），不再每 tick
+//     全量重写。persistLocked 每周期只把本周期增量（新事件、
+//     队头丢弃、组批、丢弃计数）以一条记录追加进 <spool>.journal
+//     并 fsync，代价 ∝ 本周期增量、与 spool 总字节无关；快照文
+//     件只在 journal 攒满 1MB、或确认/自愈/启停等低频全量动作
+//     时才重写（称 checkpoint），摊薄后单事件落盘代价有界。
+//     快照带 JournalSeq（已入快照的最后一条 journal 序号），
+//     快照与 journal 截断之间的崩溃窗口靠序号去重——重放时
+//     跳过 seq <= JournalSeq 的旧记录；journal 尾部撕裂行
+//     （写一半即崩溃）直接丢弃，只丢未 fsync 的增量，不丢已
+//     确认落盘的数据。
+
+// connlogJournalMaxBytes 是 journal 攒满即 checkpoint 的阈值
+// （默认 1MB 增量才换一次 O(n) 全量快照）。
 
 // connlogEnvelope 是一个待确认批次的线上形态（§5.3：stream+
 // sequence+digest 游标幂等骨架；boot_id 与 dropped 随批附带）。
@@ -58,12 +74,42 @@ type connlogSpoolState struct {
 	// Dropped 累计采集丢弃数中尚未被面板确认收到过的部分（随批
 	// 上行、确认后扣减，§4.2）。
 	Dropped int64 `json:"dropped"`
+	// JournalSeq 是已入本快照的最后一条 journal 记录序号
+	// （CPU-S2）：重放时跳过 seq <= 此值的旧记录，快照写盘与
+	// journal 截断之间的崩溃不致双记。旧快照无此字段即为 0。
+	JournalSeq int64 `json:"journal_seq,omitempty"`
+}
+
+// connlogJournalRecord 是一条 journal 增量记录（CPU-S2）：
+// persistLocked 一个周期产生的全部状态变化都能表成它——
+// 追加事件（含 L1-01 清道夫结清的 close）、队头丢弃数、
+// 组批（Pending 信封全量，<=500 条有界）、丢弃计数增量。
+// 重放按「追加→队头丢→组批摘除」顺序执行，与 persistLocked
+// 内的原始顺序一致；Open 台账由追加事件本身推导（open 置入、
+// close 删出台账），与原始循环逐条同规则。
+type connlogJournalRecord struct {
+	Seq          int64            `json:"seq"`
+	DroppedDelta int64            `json:"dropped_delta,omitempty"`
+	Appended     []ConnEvent      `json:"appended,omitempty"`
+	DropHead     int              `json:"drop_head,omitempty"`
+	Batch        *connlogEnvelope `json:"batch,omitempty"`
+	FromRetry    bool             `json:"from_retry,omitempty"`
 }
 
 type connlogSpool struct {
 	path  string
 	state connlogSpoolState
+	// journalSeq 是已落盘（快照＋journal）的最后一条记录序号；
+	// journalBytes 是自上次 checkpoint 以来 journal 文件的字节
+	// 数（用于攒满即 checkpoint 的阈值判断）。
+	journalSeq   int64
+	journalBytes int64
+	// journalMaxBytes 是 journal 攒满即 checkpoint 的阈值；
+	// openConnlogSpool 置默认值，测试可调小以强制 checkpoint。
+	journalMaxBytes int64
 }
+
+const defaultConnlogJournalMaxBytes = 1 << 20 // 1MB 增量换一次全量快照
 
 var configuredConnlogSpool *connlogSpool
 
@@ -97,7 +143,7 @@ func ConfigureConnlogSpool(dir, identity string) error {
 }
 
 func openConnlogSpool(path string) (*connlogSpool, error) {
-	s := &connlogSpool{path: path}
+	s := &connlogSpool{path: path, journalMaxBytes: defaultConnlogJournalMaxBytes}
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err == nil {
@@ -112,11 +158,21 @@ func openConnlogSpool(path string) (*connlogSpool, error) {
 				return nil, errors.New("invalid pending connlog identity")
 			}
 			s.state.normalize()
+			// CPU-S2：重放快照之后落盘的 journal 增量（崩溃后续报
+			// 的唯一依据）。重放失败只告警不停机——快照本身完整，
+			// 丢的至多是快照后未 checkpoint 的增量，且痕迹可见。
+			s.journalSeq = s.state.JournalSeq
+			if n, rerr := s.replayJournal(); rerr != nil {
+				fmt.Printf("⚠️ 连接日志 journal 重放中断（已应用 %d 条，其后增量丢弃）: %v\n", n, rerr)
+			}
 			return s, nil
 		}
 		if !os.IsNotExist(err) {
 			return nil, err
 		}
+		// 快照不存在即全新一代：同名 stale journal（旧快照被隔离/
+		// 删除后残留）绝不能重放到新 stream 上，先行清除。
+		_ = os.Remove(s.journalPath())
 	}
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
@@ -130,6 +186,163 @@ func openConnlogSpool(path string) (*connlogSpool, error) {
 	return s, nil
 }
 
+// journalPath 返回 journal 文件路径（快照路径＋.journal 后缀，
+// 不以 .json 结尾，天然不入孤儿 spool 扫描）。
+func (s *connlogSpool) journalPath() string {
+	if s.path == "" {
+		return ""
+	}
+	return s.path + ".journal"
+}
+
+// replayJournal 把 journal 文件里的记录按序应用到 s.state（CPU-S2）：
+// 只应用 seq > 快照 JournalSeq 的记录；序号断档或中间行损坏即停
+// （其后记录可能依赖缺失的增量，不可再信）；尾部无换行残行是写
+// 一半即崩溃的撕裂行，直接丢弃。返回已应用条数与中断原因
+// （nil 表示读完整个文件、含无 journal 文件）。
+func (s *connlogSpool) replayJournal() (int, error) {
+	jpath := s.journalPath()
+	if jpath == "" {
+		return 0, nil
+	}
+	data, err := os.ReadFile(jpath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	s.journalBytes = int64(len(data))
+	applied := 0
+	rest := data
+	for len(rest) > 0 {
+		i := 0
+		for i < len(rest) && rest[i] != '\n' {
+			i++
+		}
+		if i == len(rest) {
+			// 尾部无换行残行：上一条记录写一半即崩溃，丢弃。
+			if len(bytes.TrimSpace(rest)) > 0 {
+				return applied, fmt.Errorf("journal 尾部撕裂行已丢弃（%d 字节未换行）", len(rest))
+			}
+			break
+		}
+		line := rest[:i]
+		rest = rest[i+1:]
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var rec connlogJournalRecord
+		if err := json.Unmarshal(line, &rec); err != nil {
+			return applied, fmt.Errorf("journal 第 %d 条损坏，停止重放: %w", applied+1, err)
+		}
+		if rec.Seq <= s.journalSeq {
+			continue // 已入快照（快照写盘与 journal 截断之间崩溃），跳过防双记。
+		}
+		if rec.Seq != s.journalSeq+1 {
+			return applied, fmt.Errorf("journal 序号断档：快照后应为 %d，实见 %d，停止重放", s.journalSeq+1, rec.Seq)
+		}
+		s.state.applyJournalRecord(&rec)
+		s.journalSeq = rec.Seq
+		applied++
+	}
+	return applied, nil
+}
+
+// applyJournalRecord 把一条 journal 记录应用到状态上（CPU-S2）：
+// 顺序与 persistLocked 原始顺序一致——追加事件（含 Open 台账
+// 推导）→队头丢弃→组批摘除。调用方保证序号连续。
+func (st *connlogSpoolState) applyJournalRecord(rec *connlogJournalRecord) {
+	st.Dropped += rec.DroppedDelta
+	for _, ev := range rec.Appended {
+		st.Buffered = append(st.Buffered, ev)
+		switch ev.Type {
+		case ConnEventOpen:
+			if st.Open == nil {
+				st.Open = make(map[string]ConnEvent)
+			}
+			if st.OpenLastKnown == nil {
+				st.OpenLastKnown = make(map[string]int64)
+			}
+			st.Open[ev.ConnID] = ev
+			if ev.StartMs > st.OpenLastKnown[ev.ConnID] {
+				st.OpenLastKnown[ev.ConnID] = ev.StartMs
+			}
+		case ConnEventClose:
+			delete(st.Open, ev.ConnID)
+			delete(st.OpenLastKnown, ev.ConnID)
+		}
+	}
+	if rec.DropHead > 0 {
+		if rec.DropHead >= len(st.Buffered) {
+			st.Buffered = nil
+		} else {
+			st.Buffered = st.Buffered[rec.DropHead:]
+		}
+	}
+	if rec.Batch != nil {
+		st.Pending = rec.Batch
+		if rec.FromRetry {
+			if len(st.Retry) > 0 {
+				st.Retry = st.Retry[1:]
+			}
+		} else if n := len(rec.Batch.Events); n > 0 {
+			if n >= len(st.Buffered) {
+				st.Buffered = nil
+			} else {
+				st.Buffered = st.Buffered[n:]
+			}
+		}
+	}
+}
+
+// appendJournal 把一条记录以单行追加进 journal 并 fsync（CPU-S2
+// 热路径，代价 ∝ 记录字节）：写盘/同步失败时把文件截回追加前
+// 的长度再报错——已写一半或未同步的记录绝不留在盘上，否则
+// 调用方按失败重试会双记。内存 spool（path 为空）无落盘语义。
+func (s *connlogSpool) appendJournal(line []byte) error {
+	jpath := s.journalPath()
+	if jpath == "" {
+		return nil
+	}
+	f, err := os.OpenFile(jpath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	oldSize, _ := f.Seek(0, io.SeekEnd)
+	if _, err := f.Write(line); err != nil {
+		f.Close()
+		_ = os.Truncate(jpath, oldSize)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Truncate(jpath, oldSize)
+		return err
+	}
+	return f.Close()
+}
+
+// truncateJournal 在 checkpoint 后清空 journal（CPU-S2）：快照已
+// 含全部状态，journal 归零。截断失败只告警——快照 JournalSeq
+// 已推进，重放会跳过旧记录，绝不双记。
+func (s *connlogSpool) truncateJournal() {
+	jpath := s.journalPath()
+	if jpath == "" {
+		return
+	}
+	f, err := os.OpenFile(jpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		fmt.Printf("⚠️ 连接日志 journal 截断失败（旧记录靠序号去重，不双记）: %v\n", err)
+		return
+	}
+	if err := f.Sync(); err != nil {
+		fmt.Printf("⚠️ 连接日志 journal 截断同步失败（旧记录靠序号去重，不双记）: %v\n", err)
+	}
+	f.Close()
+	s.journalBytes = 0
+}
+
 func (st *connlogSpoolState) normalize() {
 	if st.Open == nil {
 		st.Open = make(map[string]ConnEvent)
@@ -139,15 +352,26 @@ func (st *connlogSpoolState) normalize() {
 	}
 }
 
+// save 是 checkpoint（CPU-S2）：全量快照落盘＋journal 截断。
+// 只走低频路径（确认/自愈/启停/换代结清、journal 攒满）；热路
+// 径 persistLocked 走 appendJournal，不调 save。快照先写盘
+// （原子写＋fsync，JournalSeq 记为当前最后一条记录序号），
+// 再截 journal——两者之间崩溃时重放靠序号跳过旧记录，不双记。
+// 截断失败只告警不报错（快照本身已是完整新状态）。
 func (s *connlogSpool) save(state connlogSpoolState) error {
 	if s.path == "" {
 		return nil
 	} // 内存 spool（嵌入调用方/测试）：无落盘语义。
+	state.JournalSeq = s.journalSeq
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	return writeSeqFileAtomic(s.path, data)
+	if err := writeSeqFileAtomic(s.path, data); err != nil {
+		return err
+	}
+	s.truncateJournal()
+	return nil
 }
 
 // connlogEventSize 返回单个事件的序列化字节（len(json.Marshal(ev))+1
