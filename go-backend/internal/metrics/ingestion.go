@@ -115,6 +115,91 @@ func counterDeltaForBoot(prev, cur int64, prevBoot, curBoot string) int64 {
 	return 0
 }
 
+// ForgetNode 逐出单个节点在四张内存表里的全部残留键（L3-05）：
+// lastBytes/lastBoot/lastSeen/traffic。删节点漏斗
+// deleteNodeByIDAfterGuardsOutcome 在级联成功后调用；四表与
+// RecordNodeMetric/flushNodeMetrics 共用 nodeBufferMu，
+// 此处同锁串行。
+func (s *IngestionService) ForgetNode(nodeID int64) {
+	if s == nil {
+		return
+	}
+	s.nodeBufferMu.Lock()
+	keys, buckets := 0, 0
+	if _, ok := s.lastBytes[nodeID]; ok {
+		keys++
+	}
+	if _, ok := s.lastBoot[nodeID]; ok {
+		keys++
+	}
+	if _, ok := s.lastSeen[nodeID]; ok {
+		keys++
+	}
+	delete(s.lastBytes, nodeID)
+	delete(s.lastBoot, nodeID)
+	delete(s.lastSeen, nodeID)
+	for k := range s.traffic {
+		if k.node == nodeID {
+			delete(s.traffic, k)
+			buckets++
+		}
+	}
+	s.nodeBufferMu.Unlock()
+	// 删节点是稀有操作，逐节点记一行（keys/buckets 为删除前实有
+	// 的键数）：真机上内存表无别的观测面，本行即 ForgetNode 的
+	// 落地证据。
+	log.Printf("monitoring ingest forget node_id=%d keys=%d traffic_buckets=%d", nodeID, keys, buckets)
+}
+
+// evictDeletedNodeKeys 是 ForgetNode 的小时级兜底（L3-05）：
+// 漏斗之外删掉的节点（或漏斗调用前已残留的旧键）由 prune 轮
+// 按 DB 现存节点集逐出；查库失败只记日志、下轮重试，不动键。
+func (s *IngestionService) evictDeletedNodeKeys() {
+	if s == nil || s.repo == nil {
+		return
+	}
+	live, err := s.repo.ListNodeIDs()
+	if err != nil {
+		log.Printf("monitoring ingest evict failed op=list_nodes err=%v", err)
+		return
+	}
+	keep := make(map[int64]struct{}, len(live))
+	for _, id := range live {
+		keep[id] = struct{}{}
+	}
+	s.nodeBufferMu.Lock()
+	evicted := 0
+	for nodeID := range s.lastBytes {
+		if _, ok := keep[nodeID]; !ok {
+			delete(s.lastBytes, nodeID)
+			delete(s.lastBoot, nodeID)
+			delete(s.lastSeen, nodeID)
+			evicted++
+		}
+	}
+	// lastBoot/lastSeen 与 lastBytes 在 RecordNodeMetric 内同锁
+	// 同批写入，正常无孤键；仍各扫一遍，防未来写路径分叉后残留。
+	for nodeID := range s.lastBoot {
+		if _, ok := keep[nodeID]; !ok {
+			delete(s.lastBoot, nodeID)
+		}
+	}
+	for nodeID := range s.lastSeen {
+		if _, ok := keep[nodeID]; !ok {
+			delete(s.lastSeen, nodeID)
+		}
+	}
+	for k := range s.traffic {
+		if _, ok := keep[k.node]; !ok {
+			delete(s.traffic, k)
+		}
+	}
+	s.nodeBufferMu.Unlock()
+	if evicted > 0 {
+		log.Printf("monitoring ingest evict deleted_nodes=%d", evicted)
+	}
+}
+
 func (s *IngestionService) Start(ctx context.Context) {
 	flushTicker := time.NewTicker(s.flushInterval)
 	defer flushTicker.Stop()
@@ -361,7 +446,8 @@ func (s *IngestionService) pruneMetricsAt(now time.Time) {
 	if err := s.repo.PruneNodeTraffic(now.Add(-NodeTrafficRetention).UnixMilli()); err != nil {
 		log.Printf("monitoring prune failed op=node_traffic err=%v", err)
 	}
-	// 入站连接日志（设计 §5.2/§4.6③）：独立保留期（不随监控保留
+	// L3-05 兜底：逐出已删节点在四张内存表里的残留键。
+	s.evictDeletedNodeKeys()	// 入站连接日志（设计 §5.2/§4.6③）：独立保留期（不随监控保留
 	// 放大）＋每入站行数帽双限，另加 24h 僵尸 open 行清道夫。
 	connlogCutoff := now.Add(-time.Duration(s.connlogRetentionDaysFromConfig()) * 24 * time.Hour).UnixMilli()
 	if _, err := s.repo.PruneInboundConnLogsBefore(connlogCutoff); err != nil {
