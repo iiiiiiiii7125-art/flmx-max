@@ -60,6 +60,8 @@ export interface Node {
   whitelistExtra?: string;
   /** nftables 状态（后端上报的展示串，如“已安装/已自动安装/安装失败＋原因”；缺失时前端不展示、不崩溃）。 */
   nftablesStatus?: string;
+  /** nftables 安装失败原因（后端上报的原文；仅 status 为 failed 时非空，缺失/空串即无错误）。 */
+  nftablesError?: string;
   /** 转发面会话无进展拆除阈值（秒，保险丝，默认关）：0＝不拆；>0 时只拆双向零流量满该秒数的会话。 */
   idleTimeoutSeconds?: number;
   /** 入口判死窗口（秒，默认关）：0＝关；>0 时客户端方向零字节满该秒数且数据无人签收才拆。 */

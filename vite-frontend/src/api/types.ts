@@ -33,6 +33,8 @@ export interface NodeApiItem {
   whitelistExtra?: string;
   /** nftables 状态（后端上报的展示串，如“已安装/已自动安装/安装失败＋原因”；缺失时前端不展示、不崩溃）。 */
   nftablesStatus?: string;
+  /** nftables 安装失败原因（后端上报的原文；仅 status 为 failed 时非空，缺失/空串即无错误）。 */
+  nftablesError?: string;
   [key: string]: unknown;
 }
 

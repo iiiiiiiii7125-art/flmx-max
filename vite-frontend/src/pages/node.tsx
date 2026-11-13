@@ -3048,6 +3048,16 @@ export default function NodePage({
                         nftables：{node.nftablesStatus}
                       </p>
                     )}
+                    {/* 安装失败原因：失败且原因非空时随状态展示，事后仍可查（R3-C-P3-2）。 */}
+                    {node.nftablesStatus === "failed" &&
+                      node.nftablesError && (
+                        <p
+                          className="break-words text-xs font-semibold text-danger-700"
+                          title={node.nftablesError}
+                        >
+                          原因：{node.nftablesError}
+                        </p>
+                      )}
                     {node.whitelistEnabled === true && (
                       <>
                         <p className="text-xs font-semibold text-foreground">
