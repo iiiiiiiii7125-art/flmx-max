@@ -43,6 +43,9 @@ import {
   getNodeList,
   getNodeMonthTraffic,
   getInboundList,
+  getForwardList,
+  getTunnelList,
+  getSpeedLimitList,
   updateNode,
   deleteNode,
   getNodeInstallCommand,
@@ -123,6 +126,10 @@ import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { JwtUtil } from "@/utils/jwt";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
 import { Node, NodeForm, NodeFilterMode } from "@/pages/node/types";
+import {
+  computeNodeCardTags,
+  type NodeCardTags,
+} from "@/pages/node/card-tags";
 import {
   formatFlow,
   formatUptime,
@@ -246,6 +253,12 @@ export default function NodePage({
   const [monthTraffic, setMonthTraffic] = useState<
     Record<string, [number, number]>
   >({});
+  // X06 恢复：节点卡片三标签的推导结果（用户/限速；分组读节点行
+  // 本身）。null＝标签清单尚未拉到；只随非静默加载刷新——15 秒
+  // 静默轮询不重复拉转发/隧道/限速三张清单。
+  const [cardTags, setCardTags] = useState<Map<number, NodeCardTags> | null>(
+    null,
+  );
   const [nodeOrder, setNodeOrder] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   // IRL-3 同族（普查补入）：节点列表初始加载失败标记——空状态据此
@@ -480,6 +493,17 @@ export default function NodePage({
       })
       .catch(() => {});
 
+    // X06 恢复：标签清单（转发/隧道/限速）只随非静默加载与列表
+    // 并行发出，列表落定后再合成为逐节点标签；任一清单失败或乱
+    // 序返回时保持上一份标签，不拿半份覆盖（与月流量同口径）。
+    const tagListsPromise = silent
+      ? null
+      : Promise.all([
+          getForwardList(),
+          getTunnelList(),
+          getSpeedLimitList(),
+        ]).catch(() => null);
+
     try {
       const res = await getNodeList();
 
@@ -505,6 +529,29 @@ export default function NodePage({
             mergeNodeRealtimeState(node, previousById.get(node.id)),
           );
         });
+
+        tagListsPromise
+          ?.then((lists) => {
+            if (loadNodesSeqRef.current !== seq || !lists) {
+              return;
+            }
+            const [forwards, tunnels, speedLimits] = lists;
+            if (
+              forwards.code === 0 &&
+              tunnels.code === 0 &&
+              speedLimits.code === 0
+            ) {
+              setCardTags(
+                computeNodeCardTags(
+                  nodesData.map((n) => n.id),
+                  forwards.data ?? [],
+                  tunnels.data ?? [],
+                  speedLimits.data ?? [],
+                ),
+              );
+            }
+          })
+          .catch(() => {});
 
         // 优先使用数据库中的 inx 字段进行排序，否则回退到本地排序
         const hasDbOrdering = nodesData.some(
@@ -2541,6 +2588,7 @@ export default function NodePage({
       <NodeCardRow
         key={node.id}
         actions={rowActions}
+        cardTags={cardTags?.get(node.id) ?? null}
         infoPlacement={infoPopoverPlacement[node.id] ?? "left"}
         latencyPoolEmpty={latencyPoolEmpty}
         monthIn={month?.[0]}
@@ -2565,6 +2613,7 @@ export default function NodePage({
       <NodeListRow
         key={node.id}
         actions={rowActions}
+        cardTags={cardTags?.get(node.id) ?? null}
         isDisplayFiltered={isDisplayFiltered}
         latencyPoolEmpty={latencyPoolEmpty}
         monthIn={month?.[0]}
