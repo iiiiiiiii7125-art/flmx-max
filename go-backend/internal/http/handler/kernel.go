@@ -25,6 +25,12 @@ const (
 	kernelApplyTimeout   = 5 * time.Minute
 	kernelCommandTimeout = 20 * time.Second
 
+	// kernelVersionPrecheckBudget 是 H131-KVER 版本预检的单段总预算：
+	// 一次 tag 查询本应秒级返回，预算只防慢线拖垮安装请求；直连判
+	// 活且快时首试即命中，不存在的版本 1–2 秒内被拒，不再走到 agent
+	// 侧分钟级的 404 重试。
+	kernelVersionPrecheckBudget = 10 * time.Second
+
 	kernelStatusPending = "pending"
 	kernelStatusRunning = "running"
 	kernelStatusStopped = "stopped"
@@ -361,6 +367,118 @@ func (h *Handler) kernelNodeEligible(nodeID int64) (*model.Node, error) {
 	return node, nil
 }
 
+// kernelReleaseTagExists checks whether a concrete version exists as a
+// GitHub release tag for an open-list kernel (H131-KVER): without it a
+// typo version (9.9.9) sails through to the agent download, burns
+// minutes on 404 retries, and leaves a deformed Version row behind.
+// A 200 proves the version exists; a 404 from the DIRECT route proves
+// it does not — a proxy 404 is not authoritative (a mirror may 404 on
+// paths it does not serve), so it only counts as inconclusive and the
+// iteration continues. Any other outcome (network error, 403 rate
+// limit, 5xx, timeout) is inconclusive: the install proceeds and the
+// rollback below covers a later download failure, preserving the
+// offline-install tolerance (fixR2-A3). Returns (exists, determined);
+// determined=false means "could not tell".
+func kernelReleaseTagExists(info kernel.Info, version string) (exists bool, determined bool) {
+	tagURL := fmt.Sprintf("%s/repos/%s/releases/tags/v%s", githubAPIBase, info.ReleaseRepo, version)
+	_ = forEachGitHubRoute(kernelVersionPrecheckBudget, func(prefix string, attemptTimeout time.Duration) error {
+		ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, prefixURL(prefix, tagURL), nil)
+		if err != nil {
+			return err
+		}
+		resp, err := githubVersionFetchClientWithTimeout(attemptTimeout).Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		switch resp.StatusCode {
+		case http.StatusOK:
+			exists, determined = true, true
+			return nil
+		case http.StatusNotFound:
+			if prefix == "" {
+				exists, determined = false, true
+				return nil
+			}
+			return fmt.Errorf("release tag %s returned 404 via proxy %s", version, prefix)
+		default:
+			return fmt.Errorf("release tag %s returned HTTP %d", version, resp.StatusCode)
+		}
+	})
+	return exists, determined
+}
+
+// rollbackKernelInstallRecord undoes the version write kernelInstall made
+// before a failed apply (H131-KVER): an existing kernel goes back to its
+// previous Version — the download never landed, so the running binary is
+// still the old one, and leaving the new version in place would display
+// a version the node does not run. A row created by this install is
+// removed, but only when it still carries this install's version and
+// creation stamp and has no inbounds attached, so a concurrent
+// install's row or a row an admin has since built on is never deleted.
+// Status/last_error are left as the failure trace. Returns false when
+// nothing was rolled back.
+//
+// Callers must only invoke this for the error face (see
+// rollbackKernelInstallAfterFailure): a pending apply never reached
+// the agent, and its version write stands as the pending install
+// intent (R2-F2-A2/A3 — registration precedes dispatch).
+func rollbackKernelInstallRecord(r *repo.Repository, kernelID int64, existed bool, prevVersion string, prevUpdated, createdAt int64, version string) bool {
+	if existed {
+		if err := r.UpdateNodeKernelFields(kernelID, map[string]interface{}{
+			"version": prevVersion, "updated_time": prevUpdated,
+		}); err != nil {
+			log.Printf("kernel install rollback: restore version for kernel_id=%d failed: %v", kernelID, err)
+			return false
+		}
+		return true
+	}
+	cur, err := r.GetNodeKernel(kernelID)
+	if err != nil || cur == nil {
+		return false
+	}
+	if cur.CreatedTime != createdAt || cur.Version != version {
+		return false
+	}
+	if inbounds, err := r.ListNodeInboundsByKernel(kernelID); err != nil || len(inbounds) > 0 {
+		if err != nil {
+			log.Printf("kernel install rollback: list inbounds for kernel_id=%d failed: %v", kernelID, err)
+		}
+		return false
+	}
+	if err := r.DeleteNodeKernel(kernelID); err != nil {
+		log.Printf("kernel install rollback: delete kernel_id=%d failed: %v", kernelID, err)
+		return false
+	}
+	return true
+}
+
+// rollbackKernelInstallAfterFailure decides whether a failed install's
+// version write is rolled back (H131-KVER) and performs it. The
+// deciding signal is the status applyKernel left behind:
+//   - pending: dispatch never reached the agent (node offline) — the
+//     version write stands as the pending install intent, to be
+//     attempted again when the node comes back (R2-F2-A2/A3 pin this:
+//     registration precedes dispatch; the row keeps the requested or
+//     resolved version with the failure in last_error).
+//   - anything else (error, or a concurrent poll's running): the agent
+//     was reached and the attempt failed — download 404, config error,
+//     timeout — so the version the panel claims is not the version the
+//     node runs; roll it back.
+func (h *Handler) rollbackKernelInstallAfterFailure(kernelID int64, existed bool, prevVersion string, prevUpdated, createdAt int64, version string) bool {
+	cur, err := h.repo.GetNodeKernel(kernelID)
+	if err != nil || cur == nil {
+		return false
+	}
+	if cur.Status == kernelStatusPending {
+		return false
+	}
+	return rollbackKernelInstallRecord(h.repo, kernelID, existed, prevVersion, prevUpdated, createdAt, version)
+}
+
 func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 	// R8-T-01: kernelApplyTimeout is 300s; arm the write relief first.
 	extendWriteDeadline(w, kernelApplyWriteDeadline)
@@ -430,6 +548,22 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// H131-KVER: open-list kernels accept any well-formed version, so a
+	// typo (9.9.9) used to sail through to the agent download, burn
+	// minutes on 404 retries, and leave a deformed Version row behind.
+	// Precheck reachability before writing anything: a definitive
+	// non-existence is refused fast with no record written; an
+	// inconclusive check (offline panel, rate limit) lets the install
+	// proceed and the rollback below covers a later download failure.
+	// Closed-list kernels already reject unknown versions in
+	// ResolveVersion above; "latest" resolves through the release
+	// list in the block below.
+	if len(info.Versions) == 0 && info.ReleaseRepo != "" && version != "latest" {
+		if exists, determined := kernelReleaseTagExists(info, version); determined && !exists {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("版本 %s 不存在：%s 在 GitHub 上没有该版本的发布", version, info.Name)))
+			return
+		}
+	}
 	// R2-F2-A2: an open-list kernel must not be stored (or dispatched) as
 	// the literal "latest": the agent keys its binary directory by the
 	// version string and skips the download whenever a binary already
@@ -457,6 +591,15 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		} else {
 			version = concrete
 		}
+	}
+	// H131-KVER: snapshot the pre-write state so a failed apply can
+	// roll the version write back (see rollbackKernelInstallRecord).
+	existed := k != nil
+	prevVersion := ""
+	var prevUpdated int64
+	if existed {
+		prevVersion = k.Version
+		prevUpdated = k.UpdatedTime
 	}
 	if k == nil {
 		k = &model.NodeKernel{
@@ -494,6 +637,16 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.applyKernel(k.ID, true); err != nil {
+		// H131-KVER: when the agent was reached and the attempt failed,
+		// roll the version write back instead of leaving a version the
+		// node does not run. When dispatch never reached the agent the
+		// version write stands as the pending install intent, and the
+		// receipt keeps the established "registered, dispatch failed"
+		// wording (R2-F2-A2/A3).
+		if rolledBack := h.rollbackKernelInstallAfterFailure(k.ID, existed, prevVersion, prevUpdated, now, version); rolledBack {
+			response.WriteJSON(w, response.ErrDefault("内核安装失败: "+err.Error()+"（版本已回滚）"))
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault("内核已登记，但下发失败: "+err.Error()))
 		return
 	}
@@ -2240,7 +2393,7 @@ type agentKernelCounter struct {
 	// counters are converted to the payload layer with it). Zero when
 	// the agent predates the field; then bytes pass through unconverted.
 	Packets int64 `json:"packets,omitempty"`
-	Bytes   int64  `json:"bytes"`
+	Bytes   int64 `json:"bytes"`
 }
 
 type agentUserCounter struct {
