@@ -27,6 +27,39 @@ type GlobalTrafficManager struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	reportTicker   *time.Ticker
+
+	// 连续上报失败计数与下次重试时刻（CPU-S1 退避）：与 connlog
+	// reporter 的 failCount/retryAt 同口径（2s 起、翻倍、上限
+	// 30s），面板确认或三路拒收自愈即清零。只活在内存，进程重
+	// 启后待确认批次的年龄由 spool 的 PendingSince 接力。
+	failCount int
+	retryAt   time.Time
+}
+
+// CPU-S1 退避/死信/TTL 口径（测试可覆写变量值）：
+//   - 连续失败达 trafficMaxConsecutiveFailures 次，待确认批次死
+//     信隔离留证并释放 Pending（毒批次不再头堵全部上报）；
+//     按 5s tick＋2s..30s 退避，8 次约覆盖 130 秒连续断联——
+//     面板重启/发版在窗内不丢数，永久性失败（端点缺失等）
+//     约 2 分钟后有出口。
+//   - 待确认批次自创建起超过 trafficPendingTTL 未确认即死信，
+//     兜底三路拒收自愈循环（拒收不计入连续失败，failCount 够
+//     不到上限）导致的无限滞留。
+var (
+	trafficMaxConsecutiveFailures = 8
+	trafficPendingTTL             = time.Hour
+)
+
+// trafficReportBackoff 与 connlog cycle 同式：2s 起翻倍、上限 30s。
+func trafficReportBackoff(failCount int) time.Duration {
+	if failCount < 1 {
+		return 2 * time.Second
+	}
+	backoff := 2 * time.Second << min(failCount-1, 4)
+	if backoff > 30*time.Second {
+		backoff = 30 * time.Second
+	}
+	return backoff
 }
 
 // ServiceTraffic 单个服务的流量累积
@@ -167,11 +200,20 @@ func (m *GlobalTrafficManager) collectAndReport() {
 	if m.spool.state.Pending == nil {
 		return
 	}
+	pending := *m.spool.state.Pending
+	// TTL 兜底：待确认批次超龄即死信（先于退避门检查——退避中
+	// 到期也立即释放，不等下一发送窗口）。
+	if pendingSince := m.spool.state.PendingSince; pendingSince != 0 && time.Since(time.UnixMilli(pendingSince)) > trafficPendingTTL {
+		m.deadLetterPendingLocked(fmt.Sprintf("待确认批次超龄 %v", trafficPendingTTL))
+		return
+	}
+	if time.Now().Before(m.retryAt) {
+		return
+	}
 	ctx := m.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	pending := *m.spool.state.Pending
 	panelCursor, err := sendReliableTrafficReport(ctx, pending)
 	if err != nil {
 		var rejection trafficReportRejection
@@ -179,10 +221,24 @@ func (m *GlobalTrafficManager) collectAndReport() {
 			if recoverErr := m.spool.recoverRejected(rejection); recoverErr != nil {
 				fmt.Printf("❌ 流量批次自愈落盘失败: %v\n", recoverErr)
 			}
+			m.failCount = 0
+			m.retryAt = time.Time{}
+			return
 		}
-		fmt.Printf("❌ 全局流量上报失败: %v (批次: %d 个服务, stream=%s seq=%d)\n", err, len(pending.Items), pending.Stream, pending.Sequence)
+		m.failCount++
+		backoff := trafficReportBackoff(m.failCount)
+		m.retryAt = time.Now().Add(backoff)
+		fmt.Printf("❌ 全局流量上报失败: %v (批次: %d 个服务, stream=%s seq=%d)，连续失败 %d 次，%v 后重报\n", err, len(pending.Items), pending.Stream, pending.Sequence, m.failCount, backoff)
+		if m.failCount >= trafficMaxConsecutiveFailures {
+			m.deadLetterPendingLocked(fmt.Sprintf("连续上报失败 %d 次", m.failCount))
+		}
 		return
 	}
+	if m.failCount > 0 {
+		fmt.Printf("✅ 全局流量上报恢复（此前连续失败 %d 次）\n", m.failCount)
+	}
+	m.failCount = 0
+	m.retryAt = time.Time{}
 	// 面板已确认：清批次＋推进序号先落盘再替换内存状态（confirmAck）。
 	// 落盘失败时内存仍保留待确认批次，下个周期重发——面板对同
 	// stream+seq+同内容判重放回确认，不会重复入账。回执游标超
@@ -196,6 +252,29 @@ func (m *GlobalTrafficManager) collectAndReport() {
 	if rotated {
 		fmt.Printf("⚠️ 面板流量游标(%d)超前于本机序号(%d)：spool 状态疑似被外部回退（整机快照恢复/旧备份还原/整目录克隆），已切换新 stream %s 重新入账；本批已确认流量不重发，后续流量改走新 stream\n", panelCursor, pending.Sequence, m.spool.state.Stream)
 	}
+}
+
+// deadLetterPendingLocked 把当前待确认批次死信隔离并释放 Pending。
+// 调用方须持有 reportMu。隔离落盘失败时 Pending 原样保留、
+// failCount/retryAt 不动，下个发送窗口重试死信动作本身；成功
+// 时 failCount/retryAt 清零，新批次从干净状态起步。
+func (m *GlobalTrafficManager) deadLetterPendingLocked(reason string) {
+	if m.spool == nil || m.spool.state.Pending == nil {
+		return
+	}
+	pending := *m.spool.state.Pending
+	var total int64
+	for _, item := range pending.Items {
+		total += item.U + item.D
+	}
+	archive, err := m.spool.deadLetterPending(reason)
+	if err != nil {
+		fmt.Printf("❌ 流量死信隔离失败: %v (批次 stream=%s seq=%d 保留待下周期重试)\n", err, pending.Stream, pending.Sequence)
+		return
+	}
+	m.failCount = 0
+	m.retryAt = time.Time{}
+	fmt.Printf("⚠️ 流量批次死信隔离留证: %s（%s，%d 个服务、%d 字节未确认流量已丢弃计数随下批上行，Pending 已释放）\n", archive, reason, len(pending.Items), total)
 }
 
 // persistTraffic 把内存计数快照落盘进 spool：只有落盘成功才清零
@@ -217,6 +296,16 @@ func (m *GlobalTrafficManager) persistTraffic() error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// 升级前的旧 spool：待确认批次无创建时间戳，首次上报时补戳
+	// （只此一次），TTL 自补戳时起算。
+	if m.spool.state.Pending != nil && m.spool.state.PendingSince == 0 {
+		next := m.spool.state
+		next.PendingSince = time.Now().UnixMilli()
+		if err := m.spool.save(next); err != nil {
+			return err
+		}
+		m.spool.state = next
+	}
 	items := make([]TrafficReportItem, 0, len(m.serviceTraffic))
 	for name, traffic := range m.serviceTraffic {
 		traffic.mu.Lock()
@@ -240,7 +329,8 @@ func (m *GlobalTrafficManager) persistTraffic() error {
 			batchItems, next.Buffered = next.Buffered, nil
 		}
 		if len(batchItems) > 0 {
-			next.Pending = &trafficEnvelope{Stream: next.Stream, Sequence: next.Next, Items: batchItems}
+			next.Pending = &trafficEnvelope{Stream: next.Stream, Sequence: next.Next, Items: batchItems, DroppedBytes: next.DroppedBytes}
+			next.PendingSince = time.Now().UnixMilli()
 		}
 	}
 	if err := m.spool.save(next); err != nil {
