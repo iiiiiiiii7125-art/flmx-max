@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"sort"
@@ -32,6 +33,23 @@ func (h *Handler) inboundAllowList(row model.NodeInbound) ([]string, error) {
 }
 
 // inboundAllowListIx is inboundAllowList with the chain-dialer lookup
+// effectiveInboundWhitelist 返回入站的生效白名单（节点级覆盖
+// 层）：节点级白名单开 → 该节点全部入站生效 relayWhitelist=1、
+// whitelistExtra=节点级列表（逐入站存量字段不动，新入站渲染
+// 时合并即自动继承）；关 → 逐入站设置照旧。中转节点与本机照
+// 既有机制自动放行（见 inboundAllowListIx）。节点查询失败返
+// 回错误（fail-closed：半知状态下发白名单可能错放或错拦）。
+func (h *Handler) effectiveInboundWhitelist(row model.NodeInbound) (bool, string, error) {
+	node, err := h.repo.GetNodeByID(row.NodeID)
+	if err != nil {
+		return false, "", fmt.Errorf("查询节点 %d 白名单失败: %w", row.NodeID, err)
+	}
+	if node != nil && node.WhitelistEnabled == 1 {
+		return true, node.WhitelistExtra, nil
+	}
+	return row.RelayWhitelist == 1, row.WhitelistExtra, nil
+}
+
 // served from a shared snapshot when ix is non-nil (X04-001: kernel
 // apply rounds compute one allow list per whitelisted inbound and used
 // to reload the whole inbound table for each); a nil ix keeps the
@@ -430,12 +448,20 @@ func (h *Handler) refreshInboundWhitelists(inboundIDs []int64) []int64 {
 
 // refreshInboundWhitelist re-applies the kernel when the relay set of a
 // whitelisted inbound changed, so the allowed sources follow the relays.
-// It returns nil when the inbound is missing or not whitelisted (no-op)
-// or the re-apply succeeded, and the apply error otherwise; the failure
-// is also logged server-side (T-001).
+// It returns nil when the inbound is missing or its effective whitelist
+// is off (no-op) or the re-apply succeeded, and the apply error
+// otherwise; the failure is also logged server-side (T-001).
 func (h *Handler) refreshInboundWhitelist(inboundID int64) error {
 	row, err := h.repo.GetNodeInbound(inboundID)
-	if err != nil || row == nil || row.RelayWhitelist != 1 {
+	if err != nil || row == nil {
+		return nil
+	}
+	effective, _, werr := h.effectiveInboundWhitelist(*row)
+	if werr != nil {
+		log.Printf("whitelist refresh failed inbound_id=%d err=%v", inboundID, werr)
+		return werr
+	}
+	if !effective {
 		return nil
 	}
 	if err := h.applyKernel(row.KernelID, false); err != nil {

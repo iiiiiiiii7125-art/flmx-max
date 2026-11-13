@@ -169,6 +169,25 @@ func (r *Repository) ListForwardIDsByNode(nodeID int64) ([]int64, error) {
 	return ids, nil
 }
 
+// ListForwardIDs 返回全部现存转发的 ID 全集（任意状态，含暂停：
+// 暂停转发仍持有 forward_port 行）。连接日志入口集以此为
+// “全部 forward”面：用户自建 forward 无托管中转行，仅凭此面
+// 才进采集（D-P3-1）。
+func (r *Repository) ListForwardIDs() ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ids []int64
+	err := r.db.Model(&model.ForwardPort{}).
+		Select("DISTINCT forward_id").
+		Order("forward_id ASC").
+		Pluck("forward_id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // ListForwardPortsByNode 返回节点上全部现存转发占用的入口端口
 // （任意状态，含暂停：暂停转发仍持有 forward_port 行）。R2-038
 // 封禁集对账清扫以此为「有主端口」全集。
@@ -321,6 +340,9 @@ func nodeRecordFromModel(n *model.Node) *model.NodeRecord {
 		EdgeIdleTimeoutSeconds:     n.EdgeIdleTimeoutSeconds,
 		BackstopIdleTimeoutSeconds: n.BackstopIdleTimeoutSeconds,
 		BackstopTrickleBps:         n.BackstopTrickleBps,
+		ConnLogEnabled:             n.ConnLogEnabled,
+		WhitelistEnabled:           n.WhitelistEnabled,
+		WhitelistExtra:             n.WhitelistExtra,
 	}
 	if n.ServerIPV4.Valid {
 		rec.ServerIPv4 = strings.TrimSpace(n.ServerIPV4.String)

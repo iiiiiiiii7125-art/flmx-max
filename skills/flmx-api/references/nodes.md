@@ -38,11 +38,25 @@ list DTO deliberately omits the node `secret`:
       "forwardMode": "agent",
       "version": "1.9.9",
       "expiryReminderDismissed": 0,
+      "connLogEnabled": 0,
+      "whitelistEnabled": 0,
+      "whitelistExtra": "",
+      "nftablesStatus": "",
+      "nftablesError": "",
       "sshConfig": null
     }
   ]
 }
 ```
+
+The node-level connection log and whitelist fields are read-only in
+the list response: `connLogEnabled` / `whitelistEnabled` are 1/0
+(default 0 = off); `whitelistExtra` is the normalized IP/CIDR list
+(comma-separated, `""` when unset); `nftablesStatus` is the agent's
+reported nftables state — `""` = unknown / never attempted,
+`installed` = installed, `auto_installed` = installed automatically
+by the agent, `failed` = auto-install failed (the reason is in
+`nftablesError`, `""` when there is no failure).
 
 **Status Values:**
 - `0` = Offline
@@ -89,6 +103,9 @@ Create a new node.
 | tcpListenAddr | string | No | TCP listen address (default: "[::]") |
 | udpListenAddr | string | No | UDP listen address (default: "[::]") |
 | forwardMode | string | No | `"agent"` (default) or `"nftables"` |
+| connLogEnabled | number | No | Node connection-log collection switch (1/0, bool also accepted; default 0 = off; the panel master switch `connlog_enabled` is the global gate) |
+| whitelistEnabled | number | No | Node-level inbound whitelist switch (1/0, bool also accepted; default 0 = off; when on, the node list overrides the per-inbound whitelist settings of every inbound on the node) |
+| whitelistExtra | string | No | Extra allow list for the node-level whitelist: IPs and CIDRs, comma-separated (e.g. `203.0.113.9, 10.0.0.0/8`); validated and normalized on write, invalid entries reject the whole request |
 
 The panel generates the node secret itself at creation.
 
@@ -125,7 +142,10 @@ modes only).
 
 Update node configuration.
 
-**Request:** Same fields as create, with `id` field required.
+**Request:** Same fields as create, with `id` field required. This
+includes `connLogEnabled`, `whitelistEnabled` and `whitelistExtra`:
+all three are optional and applied only when present in the request
+(absent fields leave the stored value unchanged).
 
 ```json
 {
@@ -452,3 +472,21 @@ viewer's time zone (the node list's “本月网卡” figure).
 These are whole-machine NIC counters, a different metric from tunnel
 billing / subscription quota counters — the two never reconcile and must
 not be mixed.
+
+## GET /api/v1/node/connlog
+
+Query one node's connection log (admin only): rows are client connections
+observed at the entry machine — entry_node_id is the node the client
+connected to, so this is "who connected to this server, on which port".
+Query params: `nodeId` (required), optional `ip` (exact client-IP filter),
+`offset`, `limit` (default 50, max 200). Rows are newest first and carry the
+resolved `localPort` and `entryName` (direct inbound → its port and name;
+forward entry → the forward entry's port and name; unresolvable → `localPort`
+0 and the raw entry ID). Response data is a page object
+`{rows, total, enabled, dropped, retentionDays}` — `total` is the row count
+for this node under the same IP filter, `enabled` is the node's collection
+switch state (it only gates collection; it never deletes history rows),
+`dropped` is this node's cumulative collection drop count (the entry
+machine's collector buffer overflowed; a non-zero value means the log may
+be incomplete), `retentionDays` is the current retention period in days
+(panel config `connlog_retention_days`, default 7).

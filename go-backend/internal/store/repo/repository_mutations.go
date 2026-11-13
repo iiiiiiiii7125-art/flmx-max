@@ -767,6 +767,79 @@ func (r *Repository) UpdateNodeIdleTimeoutSeconds(nodeID int64, seconds int) err
 	return nil
 }
 
+// UpdateNodeConnLogEnabled stores one node's connection-log
+// collection switch (0 = off, 1 = on; default off). The panel is the
+// authority together with the master switch: collection for the node
+// runs only while both are on. The switch gates collection only and
+// never deletes history rows. Same not-found contract as
+// UpdateNodeIdleTimeoutSeconds.
+func (r *Repository) UpdateNodeConnLogEnabled(nodeID int64, enabled int) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", nodeID).
+		Update("conn_log_enabled", enabled)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("节点不存在")
+	}
+	return nil
+}
+
+// UpdateNodeWhitelist stores one node's inbound-whitelist override
+// as a single column set: the switch (0 = off, 1 = on; default off)
+// and the extra allow list (canonical "IP/CIDR, ..." string, "" =
+// none). While on, every inbound on the node enforces the node list
+// (per-inbound stored settings untouched); while off, per-inbound
+// settings apply unchanged. Same not-found contract as
+// UpdateNodeIdleTimeoutSeconds.
+func (r *Repository) UpdateNodeWhitelist(nodeID int64, enabled int, extra string) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", nodeID).
+		Updates(map[string]interface{}{
+			"whitelist_enabled": enabled,
+			"whitelist_extra":   extra,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("节点不存在")
+	}
+	return nil
+}
+
+// UpdateNodeNftablesStatus stores the agent-reported nftables state
+// for one node ("installed" / "auto_installed" / "failed" with the
+// reason in errText, "" = unknown). Runtime state, never a setting:
+// it is refreshed from the agent's KernelStatus reports and never
+// enters backups. Same not-found contract as
+// UpdateNodeIdleTimeoutSeconds.
+func (r *Repository) UpdateNodeNftablesStatus(nodeID int64, status, errText string) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", nodeID).
+		Updates(map[string]interface{}{
+			"nftables_status": status,
+			"nftables_error":  errText,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("节点不存在")
+	}
+	return nil
+}
+
 // UpdateNodeReapSettings stores one node's zombie-session
 // root-cure settings as a single column set: the edge reaper
 // window, the mid-hop backstop window (both seconds, 0 =

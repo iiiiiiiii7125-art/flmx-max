@@ -33,7 +33,9 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Alert } from "@/shadcn-bridge/heroui/alert";
+import { Input } from "@/shadcn-bridge/heroui/input";
 import { Progress } from "@/shadcn-bridge/heroui/progress";
+import { Switch } from "@/shadcn-bridge/heroui/switch";
 import {
   createNode,
   getConfigs,
@@ -62,6 +64,7 @@ import {
 import { LatencyTrendModal } from "@/components/latency-trend-modal";
 import { RouteModal } from "@/components/route-modal";
 import { LatencyTargetsModal } from "@/pages/node/latency-targets-modal";
+import { NodeConnLogModal } from "@/pages/node/connlog-modal";
 import { RestartScheduleModal } from "@/pages/node/restart-schedule-modal";
 import { SwapModal } from "@/pages/node/swap-modal";
 import {
@@ -232,6 +235,8 @@ export default function NodePage({
   onOpenMonitor?: (nodeId: number) => void;
 }) {
   const [nodeList, setNodeList] = useState<Node[]>([]);
+  // 连接日志入口与开关只对管理员可见（后端亦 enforcing；页面既有角色判断）。
+  const admin = isAdmin();
   // 各节点本月（浏览器时区）的网卡流量 {id: [入, 出]}：整机网卡计数，
   // 与隧道计费/订阅配额是两套口径，仅作节点维度参考，文案须带「网卡」分名。
   // 加载路径唯一化（P2）：loadNodes 同批拉取，P1 的 15 秒可见性轮询经
@@ -377,6 +382,17 @@ export default function NodePage({
   const [targetNodes, setTargetNodes] = useState<Node[]>([]);
   const [restartNode, setRestartNode] = useState<Node | null>(null);
   const [swapNode, setSwapNode] = useState<Node | null>(null);
+  const [connLogNodeId, setConnLogNodeId] = useState<number | null>(null);
+  const [connLogSavingIds, setConnLogSavingIds] = useState<
+    ReadonlySet<number>
+  >(new Set());
+  // 白名单额外放行输入框的编辑中文本（按节点 id；未编辑时取节点现值）。
+  const [whitelistDrafts, setWhitelistDrafts] = useState<
+    Record<number, string>
+  >({});
+  const [whitelistSavingIds, setWhitelistSavingIds] = useState<
+    ReadonlySet<number>
+  >(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
   const [batchResultModal, setBatchResultModal] =
@@ -1995,6 +2011,156 @@ export default function NodePage({
   const currentSearchKeyword = localSearchKeyword;
   const setCurrentSearchKeyword = setLocalSearchKeyword;
 
+  // 连接日志开关：按节点 opt-in，默认关。乐观更新本地列表、失败回滚；
+  // 调节点设置接口（updateNode 的 connLogEnabled，presence 口径）。
+  const handleToggleConnLog = useCallback(
+    async (node: Node, enabled: boolean) => {
+      const prev = node.connLogEnabled === true;
+
+      if (prev === enabled) return;
+      setConnLogSavingIds((s) => new Set(s).add(node.id));
+      setNodeList((list) =>
+        list.map((n) =>
+          n.id === node.id ? { ...n, connLogEnabled: enabled } : n,
+        ),
+      );
+      try {
+        const res = await updateNode({ id: node.id, connLogEnabled: enabled });
+
+        if (res.code !== 0) throw new Error(res.msg || "保存失败");
+        toast.success(enabled ? "连接日志已开启" : "连接日志已关闭");
+        // T-001：白名单同步重下发失败时后端在信封 warning 里点名原因，须原样透出。
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
+      } catch {
+        setNodeList((list) =>
+          list.map((n) =>
+            n.id === node.id ? { ...n, connLogEnabled: prev } : n,
+          ),
+        );
+        toast.error("保存失败");
+      } finally {
+        setConnLogSavingIds((s) => {
+          const next = new Set(s);
+
+          next.delete(node.id);
+
+          return next;
+        });
+      }
+    },
+    [],
+  );
+
+  // 入站白名单开关：节点级覆盖层，默认关。乐观更新本地列表、失败回滚；
+  // 调节点设置接口（updateNode 的 whitelistEnabled，presence 口径）。
+  // 关开关时不清空已存的额外列表（开关本身即门禁；清空会无故销毁用户
+  // 已填的列表，与入站表单「保存时清」不同——那是带显式保存的表单）。
+  const handleToggleWhitelist = useCallback(
+    async (node: Node, enabled: boolean) => {
+      const prev = node.whitelistEnabled === true;
+
+      if (prev === enabled) return;
+      setWhitelistSavingIds((s) => new Set(s).add(node.id));
+      setNodeList((list) =>
+        list.map((n) =>
+          n.id === node.id ? { ...n, whitelistEnabled: enabled } : n,
+        ),
+      );
+      try {
+        const res = await updateNode({
+          id: node.id,
+          whitelistEnabled: enabled,
+        });
+
+        if (res.code !== 0) throw new Error(res.msg || "保存失败");
+        toast.success(enabled ? "入站白名单已开启" : "入站白名单已关闭");
+        // T-001：白名单同步重下发失败时后端在信封 warning 里点名原因，须原样透出。
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
+      } catch {
+        setNodeList((list) =>
+          list.map((n) =>
+            n.id === node.id ? { ...n, whitelistEnabled: prev } : n,
+          ),
+        );
+        toast.error("保存失败");
+      } finally {
+        setWhitelistSavingIds((s) => {
+          const next = new Set(s);
+
+          next.delete(node.id);
+
+          return next;
+        });
+      }
+    },
+    [],
+  );
+
+  // 白名单额外放行：失焦/回车时保存。沿用入站表单的口径——前端只传
+  // 去掉首尾空白的字符串，不做 IP/CIDR 校验，后端保存时校验（入站
+  // 表单同款：presets.ts 只 trim，非法值由后端拦下）。
+  const handleSaveWhitelistExtra = useCallback(
+    async (node: Node, value: string) => {
+      const trimmed = value.trim();
+      const prev = node.whitelistExtra ?? "";
+
+      if (trimmed === prev.trim()) return;
+      setWhitelistSavingIds((s) => new Set(s).add(node.id));
+      setNodeList((list) =>
+        list.map((n) =>
+          n.id === node.id ? { ...n, whitelistExtra: trimmed } : n,
+        ),
+      );
+      try {
+        const res = await updateNode({
+          id: node.id,
+          whitelistExtra: trimmed,
+        });
+
+        if (res.code !== 0) throw new Error(res.msg || "保存失败");
+        setWhitelistDrafts((drafts) => {
+          const next = { ...drafts };
+
+          delete next[node.id];
+
+          return next;
+        });
+        toast.success("已保存");
+        // T-001：白名单同步重下发失败时后端在信封 warning 里点名原因，须原样透出。
+        if (res.warning) {
+          toast(res.warning, { icon: "⚠️", duration: 12000 });
+        }
+      } catch {
+        setNodeList((list) =>
+          list.map((n) =>
+            n.id === node.id ? { ...n, whitelistExtra: prev } : n,
+          ),
+        );
+        toast.error("保存失败");
+      } finally {
+        setWhitelistSavingIds((s) => {
+          const next = new Set(s);
+
+          next.delete(node.id);
+
+          return next;
+        });
+      }
+    },
+    [],
+  );
+
+  const handleWhitelistDraftChange = useCallback(
+    (node: Node, value: string) => {
+      setWhitelistDrafts((drafts) => ({ ...drafts, [node.id]: value }));
+    },
+    [],
+  );
+
   // Row callbacks bundled for the memoized row components: the actions
   // object itself never changes identity (it delegates through a ref to
   // the latest closures), so rows whose data did not change are skipped
@@ -2020,6 +2186,12 @@ export default function NodePage({
     showTrend: (node) => setTrendNode(node),
     openSheet: (id) => setSheetNodeId(id),
     openMonitor: onOpenMonitor,
+    openConnLog: (node) => setConnLogNodeId(node.id),
+    toggleConnLog: (node, enabled) => void handleToggleConnLog(node, enabled),
+    toggleWhitelist: (node, enabled) =>
+      void handleToggleWhitelist(node, enabled),
+    saveWhitelistExtra: (node, value) =>
+      void handleSaveWhitelistExtra(node, value),
   };
 
   const rowActions = useMemo<NodeRowActions>(() => {
@@ -2046,6 +2218,10 @@ export default function NodePage({
       showTrend: delegate("showTrend"),
       openSheet: delegate("openSheet"),
       openMonitor: (...args) => rowActionsRef.current?.openMonitor?.(...args),
+      openConnLog: delegate("openConnLog"),
+      toggleConnLog: delegate("toggleConnLog"),
+      toggleWhitelist: delegate("toggleWhitelist"),
+      saveWhitelistExtra: delegate("saveWhitelistExtra"),
     };
   }, []);
 
@@ -2375,6 +2551,14 @@ export default function NodePage({
         selectMode={selectMode}
         selected={selectedIds.has(node.id)}
         showMonitor={!!onOpenMonitor}
+        showConnLog={admin}
+        connLogSaving={connLogSavingIds.has(node.id)}
+        showWhitelist={admin}
+        whitelistDraft={
+          whitelistDrafts[node.id] ?? node.whitelistExtra ?? ""
+        }
+        onWhitelistDraftChange={handleWhitelistDraftChange}
+        whitelistSaving={whitelistSavingIds.has(node.id)}
         upgradeProgressEntry={upgradeProgress[node.id]}
       />
     ) : (
@@ -2390,6 +2574,14 @@ export default function NodePage({
         probing={probingIds.has(node.id)}
         selectMode={selectMode}
         selected={selectedIds.has(node.id)}
+        showConnLog={admin}
+        connLogSaving={connLogSavingIds.has(node.id)}
+        showWhitelist={admin}
+        whitelistDraft={
+          whitelistDrafts[node.id] ?? node.whitelistExtra ?? ""
+        }
+        onWhitelistDraftChange={handleWhitelistDraftChange}
+        whitelistSaving={whitelistSavingIds.has(node.id)}
         upgradeProgressEntry={upgradeProgress[node.id]}
       />
     );
@@ -2741,6 +2933,18 @@ export default function NodePage({
                           },
                         ]
                       : []),
+                    // 连接日志只对管理员开放（与卡片入口同口径）；
+                    // nftables 节点无 agent 通道、采集无从谈起，
+                    // 故不显示。
+                    ...(admin && node.forwardMode !== "nftables"
+                      ? [
+                          {
+                            key: "connlog",
+                            label: "连接日志",
+                            onPress: () => setConnLogNodeId(node.id),
+                          },
+                        ]
+                      : []),
                     {
                       key: "upgrade",
                       label: "升级",
@@ -2797,6 +3001,99 @@ export default function NodePage({
                     size="sm"
                     value={progress.percent}
                   />
+                )}
+                {admin && node.forwardMode !== "nftables" && (
+                  <div className="flex items-center justify-between gap-2 rounded-xl border border-divider/80 px-3 py-2">
+                    <span className="text-sm font-semibold">连接日志</span>
+                    <span className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-foreground">
+                        {node.connLogEnabled === true ? "已开启" : "未开启"}
+                      </span>
+                      <Switch
+                        aria-label="连接日志开关"
+                        isDisabled={connLogSavingIds.has(node.id)}
+                        isSelected={node.connLogEnabled === true}
+                        size="sm"
+                        onValueChange={(v) =>
+                          void handleToggleConnLog(node, v)
+                        }
+                      />
+                    </span>
+                  </div>
+                )}
+                {admin && node.forwardMode !== "nftables" && (
+                  <div className="space-y-2 rounded-xl border border-divider/80 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold">入站白名单</span>
+                      <span className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-foreground">
+                          {node.whitelistEnabled === true
+                            ? "已开启"
+                            : "未开启"}
+                        </span>
+                        <Switch
+                          aria-label="入站白名单开关"
+                          isDisabled={whitelistSavingIds.has(node.id)}
+                          isSelected={node.whitelistEnabled === true}
+                          size="sm"
+                          onValueChange={(v) =>
+                            void handleToggleWhitelist(node, v)
+                          }
+                        />
+                      </span>
+                    </div>
+                    {/* nftables 状态：后端上报的展示串，原样展示；字段缺失时不渲染。 */}
+                    {node.nftablesStatus && (
+                      <p className="text-xs font-semibold text-foreground">
+                        nftables：{node.nftablesStatus}
+                      </p>
+                    )}
+                    {/* 安装失败原因：失败且原因非空时随状态展示，事后仍可查（R3-C-P3-2）。 */}
+                    {node.nftablesStatus === "failed" &&
+                      node.nftablesError && (
+                        <p
+                          className="break-words text-xs font-semibold text-danger-700"
+                          title={node.nftablesError}
+                        >
+                          原因：{node.nftablesError}
+                        </p>
+                      )}
+                    {node.whitelistEnabled === true && (
+                      <>
+                        <p className="text-xs font-semibold text-foreground">
+                          该节点全部入站只放行中转机、本机与列表中的
+                          IP/网段。
+                        </p>
+                        <Input
+                          aria-label="白名单额外放行"
+                          description="中转机出口 IP 与节点地址不同时，在此补充；支持 IP 和网段，逗号分隔"
+                          isDisabled={whitelistSavingIds.has(node.id)}
+                          label="额外放行"
+                          placeholder="203.0.113.9, 10.0.0.0/8"
+                          size="sm"
+                          value={
+                            whitelistDrafts[node.id] ??
+                            node.whitelistExtra ??
+                            ""
+                          }
+                          variant="bordered"
+                          onBlur={(e) =>
+                            void handleSaveWhitelistExtra(
+                              node,
+                              e.target.value,
+                            )
+                          }
+                          onChange={(e) =>
+                            handleWhitelistDraftChange(node, e.target.value)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter")
+                              (e.target as HTMLInputElement).blur();
+                          }}
+                        />
+                      </>
+                    )}
+                  </div>
                 )}
                 {node.remark?.trim() && (
                   <p className="whitespace-pre-wrap break-all text-xs font-semibold text-foreground">
@@ -2931,6 +3228,10 @@ export default function NodePage({
         node={restartNode}
         onClose={() => setRestartNode(null)}
         onSaved={() => loadNodes({ silent: true })}
+      />
+      <NodeConnLogModal
+        node={nodeList.find((n) => n.id === connLogNodeId) ?? null}
+        onClose={() => setConnLogNodeId(null)}
       />
       <SwapModal node={swapNode} onClose={() => setSwapNode(null)} />
       <GroupManageModal

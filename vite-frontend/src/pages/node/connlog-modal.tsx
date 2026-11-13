@@ -1,14 +1,10 @@
-import type {
-  InboundApiItem,
-  InboundConnLogItem,
-  NodeApiItem,
-} from "@/api/types";
+import type { NodeConnLogItem } from "@/api/types";
+import type { Node } from "@/pages/node/types";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
-import { getInboundConnLog } from "@/api";
-import { describeInbound } from "@/pages/inbound/presets";
+import { getNodeConnLog } from "@/api";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Input } from "@/shadcn-bridge/heroui/input";
@@ -66,113 +62,153 @@ const formatDurationMs = (ms: number): string => {
   return `${days}天${hours % 24}小时`;
 };
 
-const isSessionKind = (row: InboundConnLogItem) =>
+const isSessionKind = (row: NodeConnLogItem) =>
   row.sessionKind === "udp_session" || row.sessionKind === "kernel_session";
 
 /**
- * Connection log of one inbound (design §5.4): records are collected on
- * the entry machine and attributed to this inbound by topology, so the
- * rows shown here are the entry agent's raw records — never merged
- * across machines. Xray rows are event-only by ruling (2026-11-10 (a)):
- * they carry IP + start time and the duration column stays "—".
+ * Connection log of one node: every client that connected to this
+ * server, with the local port it reached. Collection is per-node
+ * opt-in (default off): rows only exist after the node's switch is
+ * turned on and a connection has passed through. Rows are the node's
+ * own records — never merged across machines. Xray rows are
+ * event-only by ruling (2026-11-10 (a)): they carry IP + start time
+ * and the duration column stays "—".
  */
-export function ConnLogModal({
-  item,
-  nodes,
+export function NodeConnLogModal({
+  node,
   onClose,
 }: {
-  item: InboundApiItem | null;
-  nodes: NodeApiItem[];
+  node: Node | null;
   onClose: () => void;
 }) {
-  const [rows, setRows] = useState<InboundConnLogItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [ipInput, setIpInput] = useState("");
-  const [current, setCurrent] = useState(1);
-  const [hasNext, setHasNext] = useState(false);
+  const [rows, setRows] = useState<NodeConnLogItem[]>([]);
+  const [total, setTotal] = useState(0);
+  // Server-reported page metadata (O-1): `enabled` is the fallback
+  // for the not-enabled gate, `dropped`/`retentionDays` feed the
+  // footer (A-P2-1, same shape as the old per-inbound modal).
+  const [serverEnabled, setServerEnabled] = useState<boolean | undefined>(
+    undefined,
+  );
   const [dropped, setDropped] = useState<number | undefined>(undefined);
   const [retentionDays, setRetentionDays] = useState<number | undefined>(
     undefined,
   );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ipInput, setIpInput] = useState("");
+  const [current, setCurrent] = useState(1);
   const [now, setNow] = useState(() => Date.now());
 
   const seqRef = useRef(0);
-  const itemIdRef = useRef<number | null>(null);
+  const nodeIdRef = useRef<number | null>(null);
   const queryRef = useRef({ ip: "", current: 1 });
 
-  const nodeNameById = useMemo(
-    () => new Map(nodes.map((n) => [n.id, n.name])),
-    [nodes],
-  );
+  const nodeId = node?.id ?? null;
+  // List state is the primary gate; the server-reported `enabled` is
+  // the fallback — when the list is stale (another tab flipped the
+  // switch), a server `false` still shows the not-enabled state.
+  const listEnabled = node?.connLogEnabled === true;
+  const enabled = listEnabled && serverEnabled !== false;
+  // 展示用“采集中”：列表态开且服务端未否定（与 enabled 同值）。
+  const isCollecting = enabled;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  const load = useCallback(
-    async (pageOverride?: number, ipOverride?: string) => {
-      const inboundId = itemIdRef.current;
+  const load = useCallback(async (pageOverride?: number, ipOverride?: string) => {
+    const id = nodeIdRef.current;
 
-      if (inboundId == null) return;
-      const seq = (seqRef.current += 1);
-      const cur = pageOverride ?? queryRef.current.current;
-      const ip = (ipOverride ?? queryRef.current.ip).trim();
+    if (id == null) return;
+    const seq = (seqRef.current += 1);
+    const cur = pageOverride ?? queryRef.current.current;
+    const ip = (ipOverride ?? queryRef.current.ip).trim();
 
-      queryRef.current = { ip, current: cur };
-      setLoading(true);
-      setError(null);
-      try {
-        // size+1 探针（user.tsx 同口径）：多回的 1 条只判断还有下一页。
-        const res = await getInboundConnLog({
-          inboundId,
-          current: cur,
-          size: PAGE_SIZE + 1,
-          ...(ip ? { ip } : {}),
-        });
+    queryRef.current = { ip, current: cur };
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await getNodeConnLog({
+        nodeId: id,
+        offset: (cur - 1) * PAGE_SIZE,
+        limit: PAGE_SIZE,
+        ...(ip ? { ip } : {}),
+      });
 
-        if (seqRef.current !== seq) return;
-        if (res.code !== 0) {
-          setError(res.msg || "获取连接日志失败");
-          setRows([]);
-          setHasNext(false);
+      if (seqRef.current !== seq) return;
+      if (res.code !== 0) {
+        setError(res.msg || "获取连接日志失败");
+        setRows([]);
+        setTotal(0);
+        setServerEnabled(undefined);
+        setDropped(undefined);
+        setRetentionDays(undefined);
 
-          return;
-        }
-        const data = res.data;
-        let all: InboundConnLogItem[] = [];
-
-        if (Array.isArray(data)) {
-          all = data;
-          setDropped(undefined);
-          setRetentionDays(undefined);
-        } else if (data) {
-          all = Array.isArray(data.rows) ? data.rows : [];
-          setDropped(data.dropped);
-          setRetentionDays(data.retentionDays);
-        }
-        const next = all.length > PAGE_SIZE;
-
-        setHasNext(next);
-        setRows(next ? all.slice(0, PAGE_SIZE) : all);
-        setCurrent(cur);
-      } catch {
-        if (seqRef.current === seq) {
-          setError("获取连接日志失败");
-          setRows([]);
-          setHasNext(false);
-        }
-      } finally {
-        if (seqRef.current === seq) setLoading(false);
+        return;
       }
-    },
-    [],
-  );
+      const data = res.data;
 
-  const itemId = item?.id ?? null;
+      if (Array.isArray(data)) {
+        setRows(data);
+        setTotal(data.length);
+        setServerEnabled(undefined);
+        setDropped(undefined);
+        setRetentionDays(undefined);
+      } else if (data) {
+        setServerEnabled(
+          typeof data.enabled === "boolean" ? data.enabled : undefined,
+        );
+        setDropped(
+          typeof data.dropped === "number" ? data.dropped : undefined,
+        );
+        setRetentionDays(
+          typeof data.retentionDays === "number"
+            ? data.retentionDays
+            : undefined,
+        );
+        if (data.enabled === false) {
+          // Server says collection is off: show the not-enabled state
+          // and don't display stale history rows.
+          setRows([]);
+          setTotal(0);
+        } else {
+          setRows(Array.isArray(data.rows) ? data.rows : []);
+          setTotal(
+            typeof data.total === "number"
+              ? data.total
+              : data.rows?.length ?? 0,
+          );
+        }
+      } else {
+        setRows([]);
+        setTotal(0);
+        setServerEnabled(undefined);
+        setDropped(undefined);
+        setRetentionDays(undefined);
+      }
+      setCurrent(cur);
+    } catch {
+      if (seqRef.current === seq) {
+        setError("获取连接日志失败");
+        setRows([]);
+        setTotal(0);
+        setServerEnabled(undefined);
+        setDropped(undefined);
+        setRetentionDays(undefined);
+      }
+    } finally {
+      if (seqRef.current === seq) setLoading(false);
+    }
+  }, []);
 
-  // Open / switch inbound: reset the query and load the first page.
-  // Keyed on the id only, so a background list refresh handing us a new
-  // object for the same inbound does not reset the modal mid-reading.
+  // Open / switch node: reset the query and the server-reported
+  // values, then load the first page only once the node's switch is
+  // on. Keyed on the id and the list switch, so flipping the switch
+  // while the modal is open reloads (or clears). The load is gated
+  // on the list switch (not the server-reported one) so a stale
+  // server `false` can't wedge the modal after the user turns the
+  // switch back on; the reset above clears the stale value first
+  // and the load refreshes it.
   useEffect(() => {
-    itemIdRef.current = itemId;
-    if (itemId == null) {
+    nodeIdRef.current = nodeId;
+    if (nodeId == null) {
       seqRef.current += 1;
 
       return;
@@ -181,68 +217,40 @@ export function ConnLogModal({
     queryRef.current = { ip: "", current: 1 };
     setCurrent(1);
     setRows([]);
+    setTotal(0);
     setDropped(undefined);
     setRetentionDays(undefined);
+    setServerEnabled(undefined);
     setError(null);
-    void load(1, "");
-  }, [itemId, load]);
+    if (listEnabled) void load(1, "");
+  }, [nodeId, listEnabled, load]);
 
   // IP filter: debounce, then back to page 1 (user.tsx search pattern).
   useEffect(() => {
-    if (itemId == null) return;
+    if (nodeId == null || !enabled) return;
     if (ipInput.trim() === queryRef.current.ip) return;
     const timer = setTimeout(() => void load(1, ipInput), 300);
 
     return () => clearTimeout(timer);
-  }, [ipInput, itemId, load]);
+  }, [ipInput, nodeId, enabled, load]);
 
   // Live ticking durations for open rows.
   useEffect(() => {
-    if (itemId == null) return;
+    if (nodeId == null) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
 
     return () => window.clearInterval(timer);
-  }, [itemId]);
+  }, [nodeId]);
 
   const handlePageChange = (page: number) => {
-    if (page < 1 || page === current) return;
-    if (page > current && !hasNext) return;
+    if (page < 1 || page > totalPages || page === current) return;
     void load(page);
   };
 
   const hasEventOnly = rows.some((r) => r.sessionKind === "event_only");
   const hasSession = rows.some(isSessionKind);
-  // Direct kernel collection is opt-in (design §4.5); relay-entry
-  // records are collected regardless of the switch.
-  const directNotOptedIn = item?.connLogEnabled === false;
-  // D-05: these morphologies never produce direct records — the backend
-  // U7 entry list excludes them (kernel.go:2371), so the switch changes
-  // nothing for them. Relay landing covers live relays (relayCount)
-  // and dead ones (relayInvalidCount): the backend target set takes
-  // all managed relays, not only live ones. Chain targets are the
-  // fourth morphology but are not visible from this modal's props
-  // (item + nodes only, no inbound list), so they keep the generic
-  // empty state until a caller passes the list or a backend flag.
-  const noDirectRecords =
-    item != null &&
-    (item.relayOnly ||
-      item.relayCount > 0 ||
-      (item.relayInvalidCount ?? 0) > 0 ||
-      item.external);
-  const noDirectReason = item?.relayOnly
-    ? "仅中转入站"
-    : item != null &&
-        (item.relayCount > 0 || (item.relayInvalidCount ?? 0) > 0)
-      ? "中转落地目标"
-      : item?.external
-        ? "导入入站"
-        : null;
-  const showNoDirectEmptyState =
-    !loading && !error && rows.length === 0 && noDirectRecords;
-  const showOptInEmptyState =
-    !loading && !error && rows.length === 0 && directNotOptedIn;
 
-  const renderStatus = (row: InboundConnLogItem) => {
+  const renderStatus = (row: NodeConnLogItem) => {
     if (row.sessionKind === "event_only") {
       return (
         <Chip className="whitespace-nowrap" size="sm" variant="flat">
@@ -285,7 +293,7 @@ export function ConnLogModal({
     );
   };
 
-  const renderDuration = (row: InboundConnLogItem) => {
+  const renderDuration = (row: NodeConnLogItem) => {
     if (row.sessionKind === "event_only") return "—";
     if (row.status === "open") {
       return (
@@ -314,7 +322,7 @@ export function ConnLogModal({
 
   return (
     <Modal
-      isOpen={item !== null}
+      isOpen={node !== null}
       scrollBehavior="inside"
       size="xl"
       onClose={onClose}
@@ -323,19 +331,18 @@ export function ConnLogModal({
         <ModalHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="truncate text-base font-semibold">
-              连接日志{item ? ` - ${item.name}` : ""}
+              连接日志{node ? ` - ${node.name}` : ""}
             </div>
-            {item && (
+            {node && (
               <div className="truncate text-xs font-semibold text-foreground">
-                {item.external
-                  ? item.listen
-                  : `${item.nodeName} · ${describeInbound(item)} · 端口 ${item.port}`}
-                {" · 记录在入口节点采集，按拓扑归属到本入站"}
+                连过这台服务器的 IP 与所连端口
+                {isCollecting ? "" : " · 当前未开启"}
               </div>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Button
+              isDisabled={!isCollecting}
               isLoading={loading}
               size="sm"
               variant="flat"
@@ -350,12 +357,26 @@ export function ConnLogModal({
           <Input
             aria-label="按客户端 IP 过滤"
             className="max-w-xs"
+            isDisabled={!isCollecting}
             placeholder="按客户端 IP 过滤"
             size="sm"
             value={ipInput}
             onChange={(e) => setIpInput(e.target.value)}
           />
-          {loading && rows.length === 0 ? (
+          {!isCollecting ? (
+            <div className="py-10 text-center">
+              <p className="text-sm font-semibold">连接日志未开启</p>
+              <p className="mx-auto mt-2 max-w-md text-xs font-semibold text-foreground">
+                这台节点的连接日志开关是关着的，开关打开后才开始采集；有
+                客户端连入后，记录才会出现在这里。现在没有可查的记录，并
+                不是数据丢了。
+              </p>
+              <p className="mx-auto mt-2 max-w-md text-xs font-semibold text-foreground">
+                打开方法：节点卡片（或节点详情）里的「连接日志」开关打开
+                即可。
+              </p>
+            </div>
+          ) : loading && rows.length === 0 ? (
             <div className="flex justify-center py-10">
               <RefreshCw className="h-6 w-6 animate-spin" />
             </div>
@@ -387,14 +408,18 @@ export function ConnLogModal({
                 <TableHeader>
                   <TableColumn>状态</TableColumn>
                   <TableColumn>客户端 IP</TableColumn>
-                  <TableColumn>连接时间</TableColumn>
-                  <TableColumn>断开时间</TableColumn>
+                  <TableColumn>本地端口</TableColumn>
+                  <TableColumn>入口/入站名</TableColumn>
+                  <TableColumn>网络/会话类型</TableColumn>
+                  <TableColumn>连入时刻</TableColumn>
+                  <TableColumn>断开时刻</TableColumn>
                   <TableColumn>时长</TableColumn>
-                  <TableColumn>来源入口</TableColumn>
                 </TableHeader>
                 <TableBody>
-                  {rows.map((row) => (
-                    <TableRow key={row.id ?? row.connId}>
+                  {rows.map((row, index) => (
+                    <TableRow
+                      key={`${row.clientIp}:${row.clientPort ?? ""}:${row.startTime}:${index}`}
+                    >
                       <TableCell>{renderStatus(row)}</TableCell>
                       <TableCell>
                         <div className="font-mono text-sm">
@@ -406,6 +431,33 @@ export function ConnLogModal({
                             上一跳 {row.peerIp}
                           </div>
                         )}
+                      </TableCell>
+                      <TableCell>
+                        <span className="font-mono text-sm">
+                          {row.localPort ?? "—"}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm font-semibold">
+                          {row.entryName ?? "—"}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="flex items-center gap-1.5 whitespace-nowrap">
+                          <span className="font-mono text-sm">
+                            {row.network ?? "—"}
+                          </span>
+                          {isSessionKind(row) && (
+                            <Chip
+                              className="whitespace-nowrap"
+                              color="secondary"
+                              size="sm"
+                              variant="flat"
+                            >
+                              会话
+                            </Chip>
+                          )}
+                        </span>
                       </TableCell>
                       <TableCell>
                         <span className="font-mono text-sm">
@@ -428,34 +480,7 @@ export function ConnLogModal({
                           </>
                         )}
                       </TableCell>
-                      <TableCell>
-                        <span className="flex items-center gap-1.5 whitespace-nowrap">
-                          {renderDuration(row)}
-                          {isSessionKind(row) && (
-                            <Chip
-                              className="whitespace-nowrap"
-                              color="secondary"
-                              size="sm"
-                              variant="flat"
-                            >
-                              会话
-                            </Chip>
-                          )}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-sm font-semibold">
-                          {row.entryNodeName ??
-                            nodeNameById.get(row.entryNodeId) ??
-                            `节点 ${row.entryNodeId}`}
-                        </div>
-                        <div className="text-xs font-semibold text-foreground">
-                          {row.entryKind === "forward"
-                            ? "中转入口"
-                            : "直连入口"}
-                          {row.entryId ? ` · ${row.entryId}` : ""}
-                        </div>
-                      </TableCell>
+                      <TableCell>{renderDuration(row)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -473,41 +498,11 @@ export function ConnLogModal({
                 </p>
               )}
             </>
-          ) : showNoDirectEmptyState ? (
-            <div className="py-10 text-center">
-              <p className="text-sm font-semibold">该入站无直连连接记录</p>
-              <p className="mx-auto mt-2 max-w-md text-xs font-semibold text-foreground">
-                该入站为{noDirectReason}，直连连接不会产生连接记录
-                {item?.external
-                  ? "：导入节点不由面板部署，连接日志不在面板采集。"
-                  : "；经中转进入的连接由入口节点采集、归属到本入站，连接记录会显示在这里，目前暂无。"}
-              </p>
-            </div>
-          ) : showOptInEmptyState ? (
-            <div className="py-10 text-center">
-              <p className="text-sm font-semibold">直连连接日志尚未开启</p>
-              <div className="mx-auto mt-3 max-w-md space-y-1.5 text-left text-xs font-semibold text-foreground">
-                <p>
-                  直连到本入站的连接默认不记录。开启方法：关闭本弹窗 →
-                  点本入站的「编辑」 →
-                  在入站表单中找到「记录连接日志」开关并打开 →
-                  保存。开启后新连入的连接会被记录。
-                </p>
-                {item && item.relayCount > 0 && (
-                  <p>
-                    本入站的中转入口连接由入口节点自动记录、不受此开关影响，目前暂无记录。
-                  </p>
-                )}
-                {item && item.relayCount === 0 && (
-                  <p>本入站暂无中转入口，记录来源只有直连这一条。</p>
-                )}
-              </div>
-            </div>
           ) : (
             <div className="py-10 text-center">
               <p className="text-sm font-semibold">暂无连接记录</p>
               <p className="mx-auto mt-2 max-w-md text-xs font-semibold text-foreground">
-                有客户端连入后，连接记录会出现在这里：中转入口的连接由入口节点自动记录；直连连接需先在「编辑入站」中打开「记录连接日志」开关。
+                开关已开启，有客户端连入后，记录会出现在这里。
               </p>
             </div>
           )}
@@ -526,7 +521,7 @@ export function ConnLogModal({
             )}
           </div>
           <div className="flex items-center gap-3">
-            {(rows.length > 0 || current > 1) && (
+            {isCollecting && (rows.length > 0 || current > 1) && (
               <>
                 <Button
                   isDisabled={current <= 1 || loading}
@@ -537,10 +532,11 @@ export function ConnLogModal({
                   上一页
                 </Button>
                 <span className="text-sm font-medium text-foreground">
-                  第 {current} 页 · 本页 {rows.length} 条
+                  第 {current} / {totalPages} 页 · 本页 {rows.length} 条 · 共{" "}
+                  {total} 条
                 </span>
                 <Button
-                  isDisabled={!hasNext || loading}
+                  isDisabled={current >= totalPages || loading}
                   size="sm"
                   variant="flat"
                   onPress={() => handlePageChange(current + 1)}

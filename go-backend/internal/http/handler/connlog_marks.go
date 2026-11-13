@@ -15,12 +15,16 @@ import (
 //     connlogEntryID=<服务名>（即 §5.1 的 entry_id）。普通用户
 //     转发没有 relay 行，天然零标记。
 //   - 内核入站：KernelApply 载荷的 connlogEntries 列出「自身即
-//     入口」的入站（直连，或链式源入站）：被中转落地（有 relay
-//     行指向）、链式目标（被其他入站的 OutboundID 或分流规则的
-//     SplitProxy 目标指向，其连接对端是源入站所在机器）、计量伴生（CompanionOf>0）、导入
-//     来源（SourceID>0）以及 RelayOnly/RelayWhitelist 的入站都
-//     不在列——它们名下的连接对端是上一跳而非客户端，采下来
-//     是错数据。
+//     入口」的入站（直连，或链式源入站）：链式目标（被其他入站的
+//     OutboundID 或分流规则的 SplitProxy 目标指向，其连接对端是
+//     源入站所在机器）、计量伴生（CompanionOf>0）、导入来源
+//     （SourceID>0）以及 RelayOnly/RelayWhitelist 的入站都不在
+//     列——它们名下的连接对端是上一跳而非客户端，采下来是错数据。
+//     中转落地入站例外（R2-D-P2-1）：公开入站可同时收直连与中转
+//     落地，排除整入站会让直连记录一并丢失，故中转落地入站亦在
+//     列；代价是一条中转连接会现两行——forward 入口行（真实客户
+//     端 IP）与落地入站行（客户端 IP 为上一跳地址），属同一连接
+//     的两面，见 doc/guide/nodes.md 连接日志节。
 //
 // 两组集合都由当前 DB 拓扑在每次生成时现算，不落任何缓存：
 // 中转增删、链式改道后随下一次配置重推自动收敛，不留陈旧标记。
@@ -47,9 +51,43 @@ func (h *Handler) connlogMasterEnabled() (bool, error) {
 	return repo.ConnLogEnabledFromConfigMap(cfg), nil
 }
 
-// connlogEntryForwardIDs 返回被标为连接日志入口的 forward ID 集
-// （存在 Managed=1 的 NodeInboundRelay 行指向它）；总开关关时
-// 返回空集（见 connlogMasterEnabled）。
+// connlogEnabledForNode 是单节点的采集门控：总开关 AND 该节点
+// 的节点级开关（node.conn_log_enabled，默认关）。节点开关是
+// 唯一的采集门控：关则该节点直连＋中转一律不采，开则全采；
+// 开则该节点全部入站的内核日志形态随之调整（sing-box 升
+// debug、Xray 开 access），直连入站连接被采集。任一查询失败
+// 返回错误（fail-closed，与总开关同口径）。
+func (h *Handler) connlogEnabledForNode(nodeID int64) (bool, error) {
+	masterOn, err := h.connlogMasterEnabled()
+	if err != nil {
+		return false, err
+	}
+	if !masterOn {
+		return false, nil
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil {
+		return false, err
+	}
+	if node == nil {
+		return false, nil
+	}
+	return node.ConnLogEnabled == 1, nil
+}
+
+// connlogEntryForwardIDs 返回被标为连接日志入口的 forward ID 集：
+// 托管中转行（NodeInboundRelay，全部行）与全部现存 forward（有
+// 入口端口者）的并集。用户自建 forward 无托管中转行，仅凭“全部
+// forward”面才进采集（D-P3-1）；只收 Managed==1 会漏掉它们，与
+// “连过这台服务器”的口径有落差。入口标记本身仍在控制面按跳 AND
+// 该跳节点的采集开关（见 control_plane.go 的 connlogEntry），故
+// 扩大入口集不改变“开关关则不采”的门控。总开关关时返回空集
+// （见 connlogMasterEnabled）。
+// 两行口径（R2-D-P2-1／R2-P3-1）：中转落地入站亦在采集名单内，
+// 故一条中转连接会现两行——forward 入口行（真实客户端 IP）与
+// 落地入站行（客户端 IP 为上一跳地址）；直连该入站的连接只现
+// 入站行（真实客户端 IP）。agent 的采集器按 tag 收、无法区分
+// 中转腿与直连，故以此口径为准，不另行过滤。
 func (h *Handler) connlogEntryForwardIDs() (map[int64]bool, error) {
 	enabled, err := h.connlogMasterEnabled()
 	if err != nil {
@@ -64,26 +102,16 @@ func (h *Handler) connlogEntryForwardIDs() (map[int64]bool, error) {
 	}
 	ids := make(map[int64]bool, len(rels))
 	for _, rel := range rels {
-		if rel.Managed == 1 {
-			ids[rel.ForwardID] = true
-		}
+		ids[rel.ForwardID] = true
 	}
-	return ids, nil
-}
-
-// connlogRelayTargetInboundIDs 返回「有托管中转指向」的入站 ID
-// 集：这些入站是落地，其入口在中转入口机的 gost 服务上，自身
-// 不作直连入口标记。
-func (h *Handler) connlogRelayTargetInboundIDs() (map[int64]bool, error) {
-	rels, err := h.repo.ListNodeInboundRelays()
+	// 全部 forward 面：用户自建 forward 无托管中转行，凭其入口
+	// 端口行进集；无端口的 forward 无入口可标，不进集亦无影响。
+	allIDs, err := h.repo.ListForwardIDs()
 	if err != nil {
 		return nil, err
 	}
-	ids := make(map[int64]bool, len(rels))
-	for _, rel := range rels {
-		if rel.Managed == 1 {
-			ids[rel.InboundID] = true
-		}
+	for _, id := range allIDs {
+		ids[id] = true
 	}
 	return ids, nil
 }

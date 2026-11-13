@@ -5,6 +5,8 @@ import type {
   ForwardApiItem,
   NodeReleaseApiItem,
   NodeApiItem,
+  NodeConnLogData,
+  NodeConnLogQuery,
   SpeedLimitApiItem,
   TunnelBatchDeletePreviewApiData,
   TunnelBatchDeleteWithForwardsApiData,
@@ -49,8 +51,6 @@ import type {
   KernelApiItem,
   KernelStateApiData,
   InboundApiItem,
-  InboundConnLogData,
-  InboundConnLogQuery,
   InboundProbe,
   InboundMutationPayload,
   SplitRule,
@@ -214,6 +214,17 @@ export const getUserPackageInfo = () =>
 export const createNode = (data: NodeMutationPayload, idemKey?: string) =>
   Network.post("/node/create", data, { idemKey });
 export const getNodeList = () => Network.post<NodeApiItem[]>("/node/list");
+export const getNodeConnLog = (data: NodeConnLogQuery) => {
+  const params: Record<string, string> = {
+    nodeId: String(data.nodeId),
+    offset: String(data.offset ?? 0),
+    limit: String(data.limit ?? 20),
+  };
+
+  if (data.ip?.trim()) params.ip = data.ip.trim();
+
+  return Network.get<NodeConnLogData>("/node/connlog", params);
+};
 /**
  * 各节点本月（浏览器时区 1 号起）的网卡流量：{ 节点ID: [入, 出] }（字节）。
  * 这是整机网卡计数（含转发与系统自身流量），与隧道计费/订阅配额是两套口径，
@@ -998,8 +1009,6 @@ export const getKernelLogs = (id: number) =>
   Network.post<KernelStateApiData>("/kernel/logs", { id });
 export const getInboundList = () =>
   Network.post<InboundApiItem[]>("/inbound/list");
-export const getInboundConnLog = (data: InboundConnLogQuery) =>
-  Network.post<InboundConnLogData>("/inbound/connlog", data);
 export const createInbound = (data: InboundMutationPayload, idemKey?: string) =>
   // R8-T-01：保存末尾在内核未装版本时条件性继承 300s 内核应用预算，
   // 前端与 installKernel 同口径 ≥330s。

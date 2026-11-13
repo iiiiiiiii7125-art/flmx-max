@@ -281,22 +281,22 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 	})
 	h.wsServer.SetNodeMetricHook(func(nodeID int64, info ws.SystemInfo) {
 		metricInfo := metrics.SystemInfo{
-			Uptime:           info.Uptime,
-			BytesReceived:    info.BytesReceived,
-			BytesTransmitted: info.BytesTransmitted,
-			BootID:           info.BootID,
-			CPUUsage:         info.CPUUsage,
-			MemoryUsage:      info.MemoryUsage,
-			DiskUsage:        info.DiskUsage,
-			Load1:            info.Load1,
-			Load5:            info.Load5,
-			Load15:           info.Load15,
-			TCPConns:         info.TCPConns,
-			UDPConns:         info.UDPConns,
-			NetInSpeed:       info.NetInSpeed,
-			NetOutSpeed:      info.NetOutSpeed,
-			ConntrackCount:   info.ConntrackCount,
-			ConntrackMax:     info.ConntrackMax,
+			Uptime:              info.Uptime,
+			BytesReceived:       info.BytesReceived,
+			BytesTransmitted:    info.BytesTransmitted,
+			BootID:              info.BootID,
+			CPUUsage:            info.CPUUsage,
+			MemoryUsage:         info.MemoryUsage,
+			DiskUsage:           info.DiskUsage,
+			Load1:               info.Load1,
+			Load5:               info.Load5,
+			Load15:              info.Load15,
+			TCPConns:            info.TCPConns,
+			UDPConns:            info.UDPConns,
+			NetInSpeed:          info.NetInSpeed,
+			NetOutSpeed:         info.NetOutSpeed,
+			ConntrackCount:      info.ConntrackCount,
+			ConntrackMax:        info.ConntrackMax,
 			AgentRSSBytes:       info.AgentRSSBytes,
 			MemTotalBytes:       info.MemTotalBytes,
 			ActiveSessions:      info.ActiveSessions,
@@ -372,6 +372,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/user/logout", h.userLogout)
 	mux.HandleFunc("/api/v1/system-info/ticket", h.issueWSTicket)
 	mux.HandleFunc("/api/v1/node/list", h.nodeList)
+	mux.HandleFunc("/api/v1/node/connlog", h.nodeConnlog)
 	mux.HandleFunc("/api/v1/node/create", h.nodeCreate)
 	mux.HandleFunc("/api/v1/node/update", h.nodeUpdate)
 	mux.HandleFunc("/api/v1/node/delete", h.nodeDelete)
@@ -416,7 +417,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/kernel/control", h.kernelControl)
 	mux.HandleFunc("/api/v1/kernel/logs", h.kernelLogs)
 	mux.HandleFunc("/api/v1/inbound/list", h.inboundList)
-	mux.HandleFunc("/api/v1/inbound/connlog", h.inboundConnlog)
 	mux.HandleFunc("/api/v1/inbound/create", h.inboundCreate)
 	mux.HandleFunc("/api/v1/inbound/update", h.inboundUpdate)
 	mux.HandleFunc("/api/v1/inbound/delete", h.inboundDelete)

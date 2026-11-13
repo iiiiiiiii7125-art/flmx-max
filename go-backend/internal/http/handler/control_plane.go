@@ -444,6 +444,8 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 	// 入站连接日志（U7）：入口标记按当前拓扑现算（见
 	// connlog_marks.go）。查询失败即整单失败——带错标记下发会
 	// 让 agent 把上一跳当客户端采集，比同步失败更糟（fail-closed）。
+	// 节点开关在逐跳处再与之相与（见下服务组装处）：标记只下发
+	// 给采集开关开着的入口节点。
 	entryForwardIDs, err := h.connlogEntryForwardIDs()
 	if err != nil {
 		return nil, err
@@ -516,7 +518,9 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if err != nil {
 			return nil, err
 		}
-		services := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, strings.TrimSpace(fp.InIP), runtimeLimiters, connlogEntry)
+		// U7 入口标记：总开关（connlogEntry，拓扑面）AND 该跳
+		// 节点的采集开关——中转连接只由开关开着的入口节点采集。
+		services := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, strings.TrimSpace(fp.InIP), runtimeLimiters, connlogEntry && node.ConnLogEnabled == 1)
 		_, err = h.sendNodeCommand(node.ID, method, services, true, false)
 		if err == nil && (method == "UpdateService" || method == "AddService") {
 			// R17-B：UpdateService 成功即 agent 对这些服务名的注册确认
@@ -610,12 +614,13 @@ func (h *Handler) fallbackForwardPortToDefaultBind(forward *forwardRecord, tunne
 	}
 
 	time.Sleep(150 * time.Millisecond)
-	// U7：回退重建同样按当前拓扑现算入口标记，与主同步路径同口径。
+	// U7：回退重建同样按当前拓扑现算入口标记，与主同步路径同口径
+	// （总开关 AND 该入口节点的采集开关）。
 	entryForwardIDs, err := h.connlogEntryForwardIDs()
 	if err != nil {
 		return "", err
 	}
-	defaultServices := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, "", runtimeLimiters, entryForwardIDs[forward.ID])
+	defaultServices := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, "", runtimeLimiters, entryForwardIDs[forward.ID] && node.ConnLogEnabled == 1)
 	// R17-B：默认监听回退的 AddService 走幂等守卫；刚删过旧服务，
 	// freshAbsence=true（新鲜缺失证据），不得用旧确认跳过。
 	if _, err := h.guardedAddService(node.ID, defaultServices, "default-bind-fallback", true); err != nil {

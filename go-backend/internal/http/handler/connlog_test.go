@@ -93,9 +93,9 @@ func TestConnlogIngestAttributionAndReplay(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &ack); err != nil || ack.Cursor != 1 {
 		t.Fatalf("ack = %s (err %v), want cursor 1", rec.Body.String(), err)
 	}
-	rows, err := rig.r.ListInboundConnLogs(rig.inboundID, "", 0, 10)
+	rows, err := rig.r.ListNodeConnLogs(rig.entryID, "", 0, 10)
 	if err != nil || len(rows) != 1 {
-		t.Fatalf("attributed rows = (%v, %v), want exactly 1 under the landing inbound", rows, err)
+		t.Fatalf("attributed rows = (%v, %v), want exactly 1 under the entry node", rows, err)
 	}
 	row := rows[0]
 	if row.EntryNodeID != rig.entryID || row.ClientIP != "203.0.113.7" || row.Status != repo.ConnlogStatusClosed || row.DurationMs != 60_000 {
@@ -107,12 +107,13 @@ func TestConnlogIngestAttributionAndReplay(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("replay status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	if rows, _ := rig.r.ListInboundConnLogs(rig.inboundID, "", 0, 10); len(rows) != 1 {
+	if rows, _ := rig.r.ListNodeConnLogs(rig.entryID, "", 0, 10); len(rows) != 1 {
 		t.Fatalf("after replay rows = %d, want 1", len(rows))
 	}
 
 	// 入口节点谎报落地入站的 tag：归属校验不过 → 落未归属，
-	// 不挂到别人入站名下（事件本身不丢）。
+	// 不挂到别人入站名下（事件本身不丢）。入口节点视图仍见此
+	// 行（EntryNodeID 是上报节点），但其 DisplayInboundID 为 0。
 	events = fmt.Sprintf(`[
 		{"type":"open","connId":"c2","entryKind":"inbound","entryId":"in-%d","clientIp":"203.0.113.9","network":"tcp","sessionKind":"tcp_conn","startTime":%d}
 	]`, rig.inboundID, base+120_000)
@@ -120,12 +121,21 @@ func TestConnlogIngestAttributionAndReplay(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("foreign-tag ingest status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	if rows, _ := rig.r.ListInboundConnLogs(rig.inboundID, "", 0, 10); len(rows) != 1 {
-		t.Fatalf("foreign-tag event leaked into landing inbound: rows = %d, want still 1", len(rows))
+	rows, _ = rig.r.ListNodeConnLogs(rig.entryID, "", 0, 10)
+	if len(rows) != 2 {
+		t.Fatalf("entry node rows after foreign tag = %d, want 2 (c1 attributed + c2 unattributed)", len(rows))
 	}
-	unattributed, _ := rig.r.ListInboundConnLogs(0, "", 0, 10)
-	if len(unattributed) != 1 || unattributed[0].ConnID != "c2" {
-		t.Fatalf("unattributed rows = %v, want the c2 row under display 0", unattributed)
+	unattributed := 0
+	for _, r := range rows {
+		if r.DisplayInboundID == 0 {
+			unattributed++
+			if r.ConnID != "c2" {
+				t.Fatalf("unattributed row = %v, want c2", r)
+			}
+		}
+	}
+	if unattributed != 1 {
+		t.Fatalf("unattributed rows = %d, want exactly 1 (c2)", unattributed)
 	}
 
 	// 落地节点本人上报自己的入站 tag：平凡归属成立。
@@ -136,9 +146,13 @@ func TestConnlogIngestAttributionAndReplay(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("self inbound ingest status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	rows, _ = rig.r.ListInboundConnLogs(rig.inboundID, "", 0, 10)
-	if len(rows) != 2 || rows[0].ConnID != "c3" {
-		t.Fatalf("rows after self report = %v, want [c3 c1] newest first", rows)
+	rows, _ = rig.r.ListNodeConnLogs(rig.landingID, "", 0, 10)
+	if len(rows) != 1 || rows[0].ConnID != "c3" {
+		t.Fatalf("landing node rows after self report = %v, want [c3]", rows)
+	}
+	rows, _ = rig.r.ListNodeConnLogs(rig.entryID, "", 0, 10)
+	if len(rows) != 2 || rows[0].ConnID != "c2" {
+		t.Fatalf("entry node rows after self report = %v, want [c2 c1] newest first", rows)
 	}
 }
 
@@ -168,25 +182,27 @@ func TestConnlogIngestAuthAndValidation(t *testing.T) {
 	}
 }
 
-type connlogQueryPage struct {
+type connlogNodeQueryPage struct {
 	Rows          []connlogRowView `json:"rows"`
+	Total         int64            `json:"total"`
+	Enabled       bool             `json:"enabled"`
 	Dropped       int64            `json:"dropped"`
 	RetentionDays int              `json:"retentionDays"`
 }
 
-func (rig *connlogTestRig) query(t *testing.T, claims *auth.Claims, body string) (int, connlogQueryPage) {
+func (rig *connlogTestRig) queryNode(t *testing.T, claims *auth.Claims, rawQuery string) (int, connlogNodeQueryPage) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/inbound/connlog", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/node/connlog?"+rawQuery, nil)
 	if claims != nil {
 		ctx := context.WithValue(req.Context(), middleware.ClaimsContextKey, *claims)
 		req = req.WithContext(ctx)
 	}
 	rec := httptest.NewRecorder()
-	rig.h.inboundConnlog(rec, req)
+	rig.h.nodeConnlog(rec, req)
 	var envelope struct {
-		Code int              `json:"code"`
-		Msg  string           `json:"msg"`
-		Data connlogQueryPage `json:"data"`
+		Code int                  `json:"code"`
+		Msg  string               `json:"msg"`
+		Data connlogNodeQueryPage `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("query response not an envelope: %s", rec.Body.String())
@@ -194,9 +210,10 @@ func (rig *connlogTestRig) query(t *testing.T, claims *auth.Claims, body string)
 	return envelope.Code, envelope.Data
 }
 
-func TestConnlogQueryPermissionsAndPagination(t *testing.T) {
+func TestConnlogNodeQueryPermissionsPaginationAndEnrichment(t *testing.T) {
 	rig := newConnlogTestRig(t)
 	base := int64(1_700_000_000_000)
+	// 入口节点上报 forward 入口的三行（q1 tcp、q2 udp、q3 event_only）。
 	events := fmt.Sprintf(`[
 		{"type":"open","connId":"q1","entryKind":"forward","entryId":"77_2_3_tcp","clientIp":"203.0.113.7","network":"tcp","sessionKind":"tcp_conn","startTime":%d},
 		{"type":"open","connId":"q2","entryKind":"forward","entryId":"77_2_3_udp","clientIp":"203.0.113.8","network":"udp","sessionKind":"udp_session","startTime":%d},
@@ -205,16 +222,33 @@ func TestConnlogQueryPermissionsAndPagination(t *testing.T) {
 	if rec := rig.postBatch(t, rig.entrySec, 1, events); rec.Code != http.StatusOK {
 		t.Fatalf("seed ingest status = %d, body %s", rec.Code, rec.Body.String())
 	}
+	// 落地节点上报自己的直连入站一行：只开节点开关即被采集的
+	// 直连路径（逐入站开关不存在；payload 侧见
+	// connlog_u5_test.go）。
+	direct := fmt.Sprintf(`[{"type":"open","connId":"q4","entryKind":"inbound","entryId":"in-%d","clientIp":"203.0.113.11","network":"tcp","sessionKind":"tcp_conn","startTime":%d}]`, rig.inboundID, base+3000)
+	if rec := rig.postBatch(t, rig.landingSec, 1, direct); rec.Code != http.StatusOK {
+		t.Fatalf("direct ingest status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	// 无法解析的入口 tag（直插行，绕过摄入校验）：enrichment 回落格。
+	if err := rig.r.DB().Create(&model.InboundConnLog{EntryNodeID: rig.entryID, ConnID: "q5", EntryKind: repo.ConnlogEntryInbound, EntryID: "bogus", ClientIP: "203.0.113.99", Network: "tcp", SessionKind: "tcp_conn", StartTime: base + 500, Status: repo.ConnlogStatusOpen, CreatedTime: base}).Error; err != nil {
+		t.Fatalf("seed unparseable row: %v", err)
+	}
 
 	admin := &auth.Claims{Sub: "1", RoleID: 0}
 	user := &auth.Claims{Sub: "2", RoleID: 1}
 
-	body := fmt.Sprintf(`{"inboundId":%d,"current":1,"size":2}`, rig.inboundID)
-	code, page := rig.query(t, admin, body)
-	page1 := page.Rows
+	entryQ := fmt.Sprintf("nodeId=%d&offset=0&limit=2", rig.entryID)
+	code, page := rig.queryNode(t, admin, entryQ)
 	if code != 0 {
 		t.Fatalf("admin page1 code = %d, want 0", code)
 	}
+	if page.Total != 4 {
+		t.Fatalf("total = %d, want 4", page.Total)
+	}
+	if page.Enabled {
+		t.Fatal("enabled = true, want false (node switch defaults off)")
+	}
+	page1 := page.Rows
 	if len(page1) != 2 || page1[0].StartTime != base+2000 || page1[1].StartTime != base+1000 {
 		t.Fatalf("page1 order = %v, want newest first [q3 q2]", page1)
 	}
@@ -222,26 +256,59 @@ func TestConnlogQueryPermissionsAndPagination(t *testing.T) {
 	if page1[0].EndTime != nil || page1[0].DurationMs != nil || page1[0].Status != repo.ConnlogStatusOpen {
 		t.Fatalf("open row view = %+v, want null end/duration", page1[0])
 	}
+	// 转发入口无转发记录：端口 0、入口名回落原始 EntryID，不编造。
+	if page1[0].LocalPort != 0 || page1[0].EntryName != "77_2_3_tcp" {
+		t.Fatalf("forward row enrichment = (%d, %q), want (0, %q)", page1[0].LocalPort, page1[0].EntryName, "77_2_3_tcp")
+	}
 
-	body = fmt.Sprintf(`{"inboundId":%d,"current":2,"size":2}`, rig.inboundID)
-	_, page2p := rig.query(t, admin, body)
+	_, page2p := rig.queryNode(t, admin, fmt.Sprintf("nodeId=%d&offset=2&limit=2", rig.entryID))
 	page2 := page2p.Rows
-	if len(page2) != 1 || page2[0].StartTime != base {
-		t.Fatalf("page2 = %v, want [q1]", page2)
+	if len(page2) != 2 || page2[0].StartTime != base+500 || page2[1].StartTime != base {
+		t.Fatalf("page2 = %v, want [q5 q1]", page2)
+	}
+	if page2[0].LocalPort != 0 || page2[0].EntryName != "bogus" {
+		t.Fatalf("unparseable row enrichment = (%d, %q), want (0, %q)", page2[0].LocalPort, page2[0].EntryName, "bogus")
 	}
 
-	body = fmt.Sprintf(`{"inboundId":%d,"current":1,"size":10,"ip":"203.0.113.7"}`, rig.inboundID)
-	_, byIPPage := rig.query(t, admin, body)
-	byIP := byIPPage.Rows
-	if len(byIP) != 2 {
-		t.Fatalf("ip filter rows = %v, want q1+q3 only", byIP)
+	_, byIPPage := rig.queryNode(t, admin, fmt.Sprintf("nodeId=%d&offset=0&limit=10&ip=203.0.113.7", rig.entryID))
+	if byIPPage.Total != 2 || len(byIPPage.Rows) != 2 {
+		t.Fatalf("ip filter rows = %v, want q1+q3 only", byIPPage.Rows)
 	}
 
-	if code, _ := rig.query(t, user, body); code != 403 {
+	// 页脚字段：无丢弃时 dropped 回 0、保留期回默认 7 天（A-P2-1）。
+	if page.Dropped != 0 || page.RetentionDays != 7 {
+		t.Fatalf("footer = (dropped=%d retentionDays=%d), want (0, 7)", page.Dropped, page.RetentionDays)
+	}
+
+	// 直连行：端口＋入站名如实解析。
+	_, landingPage := rig.queryNode(t, admin, fmt.Sprintf("nodeId=%d&offset=0&limit=10", rig.landingID))
+	if landingPage.Total != 1 || len(landingPage.Rows) != 1 {
+		t.Fatalf("landing rows = %v, want [q4]", landingPage.Rows)
+	}
+	if landingPage.Rows[0].LocalPort != 443 || landingPage.Rows[0].EntryName != "land-in" {
+		t.Fatalf("direct row enrichment = (%d, %q), want (443, %q)", landingPage.Rows[0].LocalPort, landingPage.Rows[0].EntryName, "land-in")
+	}
+
+	// 开关只控采集，不删历史行：开后同查仍见全部行，enabled 翻 true。
+	if err := rig.r.UpdateNodeConnLogEnabled(rig.entryID, 1); err != nil {
+		t.Fatalf("enable node connlog: %v", err)
+	}
+	_, enabledPage := rig.queryNode(t, admin, entryQ)
+	if !enabledPage.Enabled || enabledPage.Total != 4 {
+		t.Fatalf("after enable page = (enabled=%v total=%d), want (true, 4)", enabledPage.Enabled, enabledPage.Total)
+	}
+
+	if code, _ := rig.queryNode(t, user, entryQ); code != 403 {
 		t.Fatalf("non-admin query code = %d, want 403", code)
 	}
-	if code, _ := rig.query(t, nil, body); code != 401 {
+	if code, _ := rig.queryNode(t, nil, entryQ); code != 401 {
 		t.Fatalf("anonymous query code = %d, want 401", code)
+	}
+	if code, _ := rig.queryNode(t, admin, "offset=0&limit=10"); code == 0 {
+		t.Fatal("missing nodeId must fail")
+	}
+	if code, _ := rig.queryNode(t, admin, "nodeId=999999&offset=0&limit=10"); code == 0 {
+		t.Fatal("unknown node must fail")
 	}
 }
 
@@ -254,11 +321,10 @@ func (rig *connlogTestRig) postBatchDropped(t *testing.T, secret string, sequenc
 	return rec
 }
 
-// 集成遗留定形：dropped 落库＋页脚汇总。批次被真正应用时才按
+// 集成遗留定形：dropped 落库＋仓库级汇总。批次被真正应用时才按
 // 上报节点入账一次；同批重放（agent 的 dropped 是未确认快照、
-// 会随重放再到）不得重复入账；查询响应是页对象，dropped 汇总
-// 「为本入站供数的入口节点」的累计、retentionDays 回当前口径。
-func TestConnlogDroppedFooterEndToEnd(t *testing.T) {
+// 会随重放再到）不得重复入账；节点端点返回该入口节点的行。
+func TestConnlogDroppedAccountingEndToEnd(t *testing.T) {
 	rig := newConnlogTestRig(t)
 	base := int64(1_700_000_100_000)
 	events := fmt.Sprintf(`[
@@ -269,22 +335,24 @@ func TestConnlogDroppedFooterEndToEnd(t *testing.T) {
 		t.Fatalf("ingest status = %d, body %s", rec.Code, rec.Body.String())
 	}
 	admin := &auth.Claims{Sub: "1", RoleID: 0}
-	body := fmt.Sprintf(`{"inboundId":%d,"current":1,"size":10}`, rig.inboundID)
-	_, page := rig.query(t, admin, body)
-	if page.Dropped != 7 {
-		t.Fatalf("footer dropped = %d, want 7 after the applied batch", page.Dropped)
+	entryQ := fmt.Sprintf("nodeId=%d&offset=0&limit=10", rig.entryID)
+	if code, page := rig.queryNode(t, admin, entryQ); code != 0 || page.Total != 1 || len(page.Rows) != 1 || page.Rows[0].StartTime != base {
+		t.Fatalf("node endpoint after ingest = (code=%d total=%d rows=%v), want [d1]", code, page.Total, page.Rows)
 	}
-	if page.RetentionDays != 7 {
-		t.Fatalf("footer retentionDays = %d, want the default 7", page.RetentionDays)
+	// 页脚字段：端点回的 dropped 与仓储汇总一致、保留期回默认 7 天（A-P2-1）。
+	if code, page := rig.queryNode(t, admin, entryQ); code != 0 || page.Dropped != 7 || page.RetentionDays != 7 {
+		t.Fatalf("node endpoint footer after ingest = (code=%d dropped=%d retentionDays=%d), want (0, 7, 7)", code, page.Dropped, page.RetentionDays)
+	}
+	if total, err := rig.r.SumConnlogDroppedByNodes([]int64{rig.entryID}); err != nil || total != 7 {
+		t.Fatalf("entry node dropped sum = (%d, %v), want 7 after the applied batch", total, err)
 	}
 
 	// 同批逐字节重放：ack 为 Replay，dropped 不得二次入账。
 	if rec := rig.postBatchDropped(t, rig.entrySec, 1, 7, events); rec.Code != http.StatusOK {
 		t.Fatalf("replay status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	_, page = rig.query(t, admin, body)
-	if page.Dropped != 7 {
-		t.Fatalf("footer dropped after replay = %d, want still 7 (no double booking)", page.Dropped)
+	if total, err := rig.r.SumConnlogDroppedByNodes([]int64{rig.entryID}); err != nil || total != 7 {
+		t.Fatalf("dropped sum after replay = (%d, %v), want still 7 (no double booking)", total, err)
 	}
 
 	// 下一批带新的未确认丢弃增量：应用后累计推进。
@@ -294,13 +362,17 @@ func TestConnlogDroppedFooterEndToEnd(t *testing.T) {
 	if rec := rig.postBatchDropped(t, rig.entrySec, 2, 3, events2); rec.Code != http.StatusOK {
 		t.Fatalf("second ingest status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	_, page = rig.query(t, admin, body)
-	if page.Dropped != 10 {
-		t.Fatalf("footer dropped after second batch = %d, want 10", page.Dropped)
+	if total, err := rig.r.SumConnlogDroppedByNodes([]int64{rig.entryID}); err != nil || total != 10 {
+		t.Fatalf("dropped sum after second batch = (%d, %v), want 10", total, err)
+	}
+	if _, page := rig.queryNode(t, admin, entryQ); page.Total != 2 {
+		t.Fatalf("node endpoint total after second batch = %d, want 2", page.Total)
+	}
+	if _, page := rig.queryNode(t, admin, entryQ); page.Dropped != 10 {
+		t.Fatalf("node endpoint dropped after second batch = %d, want 10", page.Dropped)
 	}
 
-	// 落地节点自身从未供数：其名下入站（此处借未归属查询不可
-	// 见，改查另一构造）——直接验 repo 汇总口径：只含供数节点。
+	// 落地节点自身从未供数：只含供数节点。
 	ids, err := rig.r.ConnlogEntryNodeIDs(rig.inboundID)
 	if err != nil || len(ids) != 1 || ids[0] != rig.entryID {
 		t.Fatalf("entry node ids = (%v, %v), want [entry node]", ids, err)

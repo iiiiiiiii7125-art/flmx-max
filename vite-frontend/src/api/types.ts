@@ -25,6 +25,16 @@ export interface NodeApiItem {
   socks?: number;
   interfaceName?: string | null;
   expiryReminderDismissed?: number;
+  /** 节点连接日志总开关（默认关）：关时本节点不采集连接记录。 */
+  connLogEnabled?: boolean;
+  /** 节点级入站白名单总开关（默认关）：开时本节点全部入站只放行中转机、本机与 whitelistExtra 中的 IP/网段。 */
+  whitelistEnabled?: boolean;
+  /** 节点级入站白名单额外放行：逗号分隔的 IP 与 CIDR（与入站表单 whitelistExtra 同口径）；关开关时保留不清空。 */
+  whitelistExtra?: string;
+  /** nftables 状态（后端上报的展示串，如“已安装/已自动安装/安装失败＋原因”；缺失时前端不展示、不崩溃）。 */
+  nftablesStatus?: string;
+  /** nftables 安装失败原因（后端上报的原文；仅 status 为 failed 时非空，缺失/空串即无错误）。 */
+  nftablesError?: string;
   [key: string]: unknown;
 }
 
@@ -356,6 +366,12 @@ export interface NodeMutationPayload {
   edgeIdleTimeoutSeconds?: number;
   backstopIdleTimeoutSeconds?: number;
   backstopTrickleBps?: number;
+  /** 节点连接日志总开关（presence 口径，未传保持现值）：默认关；开后新连接开始记录。 */
+  connLogEnabled?: boolean;
+  /** 节点级入站白名单总开关（presence 口径，未传保持现值）：默认关；开时本节点全部入站只放行中转机、本机与 whitelistExtra 中的 IP/网段。 */
+  whitelistEnabled?: boolean;
+  /** 节点级入站白名单额外放行（presence 口径，未传保持现值）：逗号分隔的 IP 与 CIDR（与入站表单 whitelistExtra 同口径）；关开关时保留不清空。 */
+  whitelistExtra?: string;
 }
 
 export interface NodeSshConfigApiItem {
@@ -967,13 +983,6 @@ export interface InboundApiItem {
   meteringActive: boolean;
   /** Per-inbound idle timeout (seconds) for Xray (policy connIdle); 0 = unset (Xray default 300s), -1 = unlimited (renders as 31536000 = 365d). */
   connIdleSeconds: number;
-  /**
-   * Inbound connection-log opt-in for direct kernel collection (U5):
-   * when false, direct connections to this inbound are not recorded
-   * (relay-entry records are unaffected). Required: the backend list
-   * always carries the field (design §4.5).
-   */
-  connLogEnabled: boolean;
 }
 
 export interface InboundMutationPayload {
@@ -1006,8 +1015,6 @@ export interface InboundMutationPayload {
   enabled?: boolean;
   /** SS subscription metering switch; omitted keeps the stored value. */
   meteringEnabled?: boolean;
-  /** Connection-log collection opt-in; omitted keeps the stored value. */
-  connLogEnabled?: boolean;
   /** Per-inbound idle timeout (seconds) for Xray; 0 clears it (Xray default 300s), -1 = unlimited (renders as 31536000). */
   connIdleSeconds?: number;
 }
@@ -1021,39 +1028,36 @@ export interface InboundShareEntry {
   surge: string;
 }
 
-/** Query for POST /inbound/connlog (design §5.3): one page of an
- * inbound's connection log, newest first. `size` follows the user.tsx
- * probe convention: the caller sends pageSize + 1 and slices the probe
- * row off to learn whether a next page exists. */
-export interface InboundConnLogQuery {
-  inboundId: number;
-  current: number;
-  size: number;
+/**
+ * Query for GET /node/connlog: one page of a node's connection log,
+ * newest first. The backend answers
+ * `{rows, total, enabled, dropped, retentionDays}`; `offset`/`limit`
+ * drive server-side paging (no size+1 probe).
+ */
+export interface NodeConnLogQuery {
+  nodeId: number;
   ip?: string;
+  offset?: number;
+  limit?: number;
 }
 
 /**
- * One connection-log row (design §5.1). Times are entry-machine epoch
- * milliseconds. `durationMs`/`endTime` stay empty while the connection
- * is open; `event_only` rows (Xray degradation, ruling 2026-11-10 (a))
- * never carry a duration.
+ * One node connection-log row. Times are epoch milliseconds on the
+ * collecting machine. `durationMs`/`endTime` stay empty while the
+ * connection is open; `event_only` rows (Xray degradation, ruling
+ * 2026-11-10 (a)) never carry a duration.
  */
-export interface InboundConnLogItem {
-  id: number;
-  connId: string;
-  /** Entry machine the record was collected on (panel session-derived). */
-  entryNodeId: number;
-  entryNodeName?: string;
-  /** forward = gost relay entry service; inbound = direct kernel entry. */
-  entryKind: "forward" | "inbound" | string;
-  /** Forward service name or inbound tag (`in-<ID>`). */
-  entryId: string;
+export interface NodeConnLogItem {
   clientIp: string;
   /** Raw previous hop, only when the stack exposes both addresses. */
-  peerIp?: string;
-  clientPort?: number;
-  network: "tcp" | "udp" | string;
-  sessionKind:
+  peerIp?: string | null;
+  clientPort?: number | null;
+  /** Local port the client connected to (parsed from the record). */
+  localPort?: number | null;
+  /** Entry service / inbound the connection arrived through. */
+  entryName?: string | null;
+  network?: "tcp" | "udp" | string;
+  sessionKind?:
     | "tcp_conn"
     | "udp_session"
     | "kernel_session"
@@ -1066,18 +1070,22 @@ export interface InboundConnLogItem {
 }
 
 /**
- * The query endpoint answers either a bare row array or a page object
- * carrying collection metadata; the modal normalizes both. `dropped`
- * is the entry node's lifetime discarded-event count (design §4.2),
- * shown in the footer whenever the backend provides it.
+ * One page of a node's connection log. `enabled` is the server-side
+ * collection switch for this node (false = the modal shows the
+ * not-enabled state even when the list state is stale); `dropped` is
+ * the node's cumulative collector drop count and `retentionDays` the
+ * current retention window, both for the modal footer.
  */
-export interface InboundConnLogPage {
-  rows: InboundConnLogItem[];
+export interface NodeConnLogData {
+  rows: NodeConnLogItem[];
+  total: number;
+  /** 节点采集开关实值（服务端）；弹窗以此兜底校验列表态。 */
+  enabled?: boolean;
+  /** 该节点累计采集丢弃数（入口机缓冲溢出时丢事件）；页脚据此提示日志可能不完整。 */
   dropped?: number;
+  /** 当前保留期（天，面板配置 connlog_retention_days）。 */
   retentionDays?: number;
 }
-
-export type InboundConnLogData = InboundConnLogItem[] | InboundConnLogPage;
 
 export interface InboundRelayApiItem {
   id: number;

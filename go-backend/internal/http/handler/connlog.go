@@ -8,11 +8,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/monitoring"
+	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
 
@@ -24,12 +26,13 @@ import (
 //     entry_node_id 只取自 secret 命中的节点行，绝不采信载荷。
 //     归属在摄入时按拓扑解析（repo.ResolveConnlogDisplayKeys），
 //     解析不出落未归属（0/0），不猜。
-//   - 查询 POST /api/v1/inbound/connlog：管理员专属
+//   - 查询 GET /api/v1/node/connlog：管理员专属
 //     （ensureAdminAccess，含真实客户端 IP 不对普通用户开放），
-//     按归属键过滤、start_time 倒序、current/size 分页——前端按
-//     user.tsx 口径多取一条（size+1）做探针，本端只按所给
-//     current/size 如实分页。响应为页对象 {rows, dropped,
-//     retentionDays}（页脚定形见 connlogPageObject）。不提供
+//     按入口节点（entry_node_id，即“连到这台服务器”的口径）
+//     过滤、start_time 倒序、offset/limit 分页；ip 非空时按
+//     client_ip 精确匹配。响应为页对象 {rows, total, enabled}：
+//     rows 附解析出的本地端口 localPort 与入口名 entryName，
+//     total 为总数，enabled 为该节点的采集开关状态。不提供
 //     任何跨机合并参数。
 
 const connlogMaxEventsPerBatch = 1000
@@ -270,60 +273,108 @@ type connlogRowView struct {
 	EndTime       *int64  `json:"endTime"`
 	DurationMs    *int64  `json:"durationMs"`
 	Status        string  `json:"status"`
+	// LocalPort 是客户端实际连到的本地端口（直连取入站端口，中转
+	// 取转发入口端口）；EntryName 是入口名（入站名／转发名）。
+	// 解析不出时 LocalPort=0、EntryName=原始 EntryID，绝不编造。
+	LocalPort int    `json:"localPort"`
+	EntryName string `json:"entryName"`
 }
 
-func (h *Handler) inboundConnlog(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+// nodeConnlog 是节点连接日志查询：
+// GET /api/v1/node/connlog?nodeId=&ip=&offset=&limit=。
+// 管理员专属（ensureAdminAccess，含真实客户端 IP 不对普通用户
+// 开放）。按入口节点（entry_node_id，即“连到这台服务器”的口
+// 径）查、start_time 倒序、offset/limit 分页；ip 非空时按
+// client_ip 精确匹配。响应为页对象 {rows, total, enabled, dropped,
+// retentionDays}：rows 为本页行（每行附解析出的 localPort 与 entryName），
+// total 为该节点（同 ip 过滤）的总行数，enabled 为该节点的采集开关状态
+// （只控采集，不删历史行）；dropped 为该节点的累计采集丢弃数（入口机
+// 采集缓冲溢出时丢事件，页脚据此提示日志可能不完整）；retentionDays
+// 为当前保留期（面板配置 connlog_retention_days，默认 7 天）。页脚
+// 取数失败不拖垮主查询：dropped 回 0、保留期回默认（旧逐入站端点
+// 同口径）。
+func (h *Handler) nodeConnlog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
 		return
 	}
 	if !h.ensureAdminAccess(w, r) {
 		return
 	}
-	var req struct {
-		InboundID int64  `json:"inboundId"`
-		Current   int    `json:"current"`
-		Size      int    `json:"size"`
-		IP        string `json:"ip"`
-	}
-	if err := decodeJSON(r.Body, &req); err != nil {
+	q := r.URL.Query()
+	nodeID, err := strconv.ParseInt(strings.TrimSpace(q.Get("nodeId")), 10, 64)
+	if err != nil || nodeID <= 0 {
 		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
 		return
 	}
-	if req.InboundID <= 0 {
-		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
-		return
-	}
-	current := req.Current
-	if current <= 0 {
-		current = 1
-	}
-	size := req.Size
-	if size <= 0 {
-		size = 50
-	}
-	if size > 200 {
-		size = 200
-	}
-	// (current-1)*size 溢出守卫与 userList 同口径：乘前判溢出，
-	// 超界即空页。
-	offset := int64(0)
-	if current > 1 {
-		if int64(current-1) > (int64(1)<<62)/int64(size) {
-			response.WriteJSON(w, response.OK(connlogPageObject([]connlogRowView{}, 0, monitoring.DefaultConnlogRetentionDays)))
-			return
-		}
-		offset = int64(current-1) * int64(size)
-	}
-	rows, err := h.repo.ListInboundConnLogs(req.InboundID, strings.TrimSpace(req.IP), int(offset), size)
+	node, err := h.repo.GetNodeByID(nodeID)
 	if err != nil {
 		// R2-F4-01 原始错误门：仓储错误原文只记服务端日志，
 		// 客户端回通用文案，不外泄存储层细节。
-		log.Printf("connlog query failed inbound_id=%d err=%v", req.InboundID, err)
+		log.Printf("connlog query failed node_id=%d err=%v", nodeID, err)
 		response.WriteJSON(w, response.ErrDefault("查询连接日志失败"))
 		return
 	}
+	if node == nil {
+		response.WriteJSON(w, response.ErrDefault("节点不存在"))
+		return
+	}
+	offset, _ := strconv.Atoi(strings.TrimSpace(q.Get("offset")))
+	if offset < 0 {
+		offset = 0
+	}
+	limit, _ := strconv.Atoi(strings.TrimSpace(q.Get("limit")))
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	ip := strings.TrimSpace(q.Get("ip"))
+	rows, err := h.repo.ListNodeConnLogs(nodeID, ip, offset, limit)
+	if err != nil {
+		log.Printf("connlog query failed node_id=%d err=%v", nodeID, err)
+		response.WriteJSON(w, response.ErrDefault("查询连接日志失败"))
+		return
+	}
+	total, err := h.repo.CountNodeConnLogs(nodeID, ip)
+	if err != nil {
+		log.Printf("connlog count failed node_id=%d err=%v", nodeID, err)
+		response.WriteJSON(w, response.ErrDefault("查询连接日志失败"))
+		return
+	}
+	views := h.connlogNodeRowViews(rows)
+	// 页脚字段：dropped 为该节点的累计采集丢弃数、retentionDays
+	// 为当前保留期；取数失败不拖垮主查询（dropped 回 0、保留期
+	// 回默认，旧逐入站端点同口径）。
+	dropped := int64(0)
+	if total, err := h.repo.SumConnlogDroppedByNodes([]int64{nodeID}); err == nil {
+		dropped = total
+	} else {
+		log.Printf("connlog dropped sum failed node_id=%d err=%v (footer falls back to 0)", nodeID, err)
+	}
+	retentionDays := monitoring.DefaultConnlogRetentionDays
+	if cfg, err := h.repo.GetConfigsByNames([]string{monitoring.ConfigConnlogRetentionDays}); err == nil {
+		retentionDays = monitoring.ConnlogRetentionDaysFromConfigMap(cfg)
+	} else {
+		log.Printf("connlog retention read failed node_id=%d err=%v (footer falls back to default %d)", nodeID, err, retentionDays)
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"rows":          views,
+		"total":         total,
+		"enabled":       node.ConnLogEnabled == 1,
+		"dropped":       dropped,
+		"retentionDays": retentionDays,
+	}))
+}
+
+// connlogNodeRowViews 把仓储行转成节点视图，逐行附 localPort 与
+// entryName。入站与转发端口按页缓存（同页同入口只查一次库）。
+func (h *Handler) connlogNodeRowViews(rows []model.InboundConnLog) []connlogRowView {
 	views := make([]connlogRowView, 0, len(rows))
+	inboundCache := make(map[int64]*model.NodeInbound)
+	forwardPortCache := make(map[int64][]model.ForwardPortRecord)
+	forwardNameCache := make(map[int64]string)
 	for i := range rows {
 		row := &rows[i]
 		view := connlogRowView{
@@ -346,7 +397,7 @@ func (h *Handler) inboundConnlog(w http.ResponseWriter, r *http.Request) {
 		// endTime 只在行已离开 open 态时给出（closed=真实断开、
 		// interrupted=最后已知时刻，读法由 status 区分）；
 		// durationMs 只在 closed 时给出——event_only 与
-		// interrupted 恒为 null，前端据此显「—」，不冒充时长。
+		// interrupted 恒为 null，前端据此显“—”，不冒充时长。
 		if row.Status != repo.ConnlogStatusOpen && row.EndTime > 0 {
 			end := row.EndTime
 			view.EndTime = &end
@@ -355,35 +406,76 @@ func (h *Handler) inboundConnlog(w http.ResponseWriter, r *http.Request) {
 			duration := row.DurationMs
 			view.DurationMs = &duration
 		}
+		view.LocalPort, view.EntryName = h.connlogRowLocalPort(row, inboundCache, forwardPortCache, forwardNameCache)
 		views = append(views, view)
 	}
-	// 页脚字段（设计 §5.4，集成定形）：响应是页对象而非裸数组
-	// ——rows 为本页行；dropped 为「曾为本入站供数的入口节点」
-	// 的累计采集丢弃（connlog_node_dropped 汇总，让采集丢数在
-	// 弹窗页脚可见、不静默）；retentionDays 为当前保留期。页
-	// 脚取数失败不拖垮主查询：dropped 回 0、保留期回默认。
-	dropped := int64(0)
-	if nodeIDs, err := h.repo.ConnlogEntryNodeIDs(req.InboundID); err == nil && len(nodeIDs) > 0 {
-		if total, err := h.repo.SumConnlogDroppedByNodes(nodeIDs); err == nil {
-			dropped = total
-		}
-	}
-	retentionDays := monitoring.DefaultConnlogRetentionDays
-	if cfg, err := h.repo.GetConfigsByNames([]string{monitoring.ConfigConnlogRetentionDays}); err == nil {
-		retentionDays = monitoring.ConnlogRetentionDaysFromConfigMap(cfg)
-	}
-	response.WriteJSON(w, response.OK(connlogPageObject(views, dropped, retentionDays)))
+	return views
 }
 
-// connlogPageObject 是连接日志查询的响应形态（页对象）：前端
-// 弹窗按 rows/dropped/retentionDays 消费，字段名是契约固定点。
-func connlogPageObject(rows []connlogRowView, dropped int64, retentionDays int) map[string]interface{} {
-	if rows == nil {
-		rows = []connlogRowView{}
-	}
-	return map[string]interface{}{
-		"rows":          rows,
-		"dropped":       dropped,
-		"retentionDays": retentionDays,
+// connlogRowLocalPort 解析一行的本地端口与入口名：直连入站取入站
+// 端口＋入站名，中转转发取转发在该入口节点上的端口＋转发名。端口
+// 与名字独立回落——任一解析不出时该项回落（0／原始 EntryID），
+// 另一项仍如实返回，绝不编造。
+func (h *Handler) connlogRowLocalPort(row *model.InboundConnLog, inboundCache map[int64]*model.NodeInbound, forwardPortCache map[int64][]model.ForwardPortRecord, forwardNameCache map[int64]string) (int, string) {
+	switch row.EntryKind {
+	case repo.ConnlogEntryInbound:
+		idText, ok := strings.CutPrefix(strings.TrimSpace(row.EntryID), "in-")
+		if !ok {
+			return 0, row.EntryID
+		}
+		inboundID, err := strconv.ParseInt(idText, 10, 64)
+		if err != nil || inboundID <= 0 {
+			return 0, row.EntryID
+		}
+		inbound, cached := inboundCache[inboundID]
+		if !cached {
+			var err error
+			inbound, err = h.repo.GetNodeInbound(inboundID)
+			if err != nil {
+				// R3-MR-01：读错记日志、不静默吞——回落仍是
+				// (0, 原始 EntryID)，行照常列出、不编造。
+				log.Printf("connlog enrichment failed inbound_id=%d err=%v (localPort/entryName fall back)", inboundID, err)
+			}
+			inboundCache[inboundID] = inbound
+		}
+		if inbound == nil {
+			return 0, row.EntryID
+		}
+		return inbound.Port, inbound.Name
+	case repo.ConnlogEntryForward:
+		forwardID, ok := repo.ParseConnlogForwardServiceID(row.EntryID)
+		if !ok {
+			return 0, row.EntryID
+		}
+		ports, cached := forwardPortCache[forwardID]
+		if !cached {
+			var err error
+			ports, err = h.repo.ListForwardPorts(forwardID)
+			if err != nil {
+				// R3-MR-01：读错记日志、不静默吞——端口回落 0，
+				// 名字仍按转发记录解析，不编造。
+				log.Printf("connlog enrichment failed forward_id=%d err=%v (localPort falls back to 0)", forwardID, err)
+			}
+			forwardPortCache[forwardID] = ports
+		}
+		port := 0
+		for _, p := range ports {
+			if p.NodeID == row.EntryNodeID {
+				port = p.Port
+				break
+			}
+		}
+		name, cached := forwardNameCache[forwardID]
+		if !cached {
+			if fwd, err := h.getForwardRecord(forwardID); err == nil && fwd != nil {
+				name = fwd.Name
+			} else {
+				name = row.EntryID
+			}
+			forwardNameCache[forwardID] = name
+		}
+		return port, name
+	default:
+		return 0, row.EntryID
 	}
 }
