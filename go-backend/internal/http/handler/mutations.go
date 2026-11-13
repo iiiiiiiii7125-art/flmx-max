@@ -1040,6 +1040,21 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// O1-002：直接用 CreateNode 返回的新 ID，不再按 name+serverIP 反查（并发 TOCTOU）。
+	// R-078：同名同 IP 唯一性——创建面此前无任何校验，两路并发
+	// nodeCreate 均 code 0 落库两行。单面板进程内以 nodeCreateMu
+	// 串行化「查重＋落库」临界区，命中即点名拒绝。
+	h.nodeCreateMu.Lock()
+	dup, dupErr := h.repo.NodeExistsByNameAndServerIP(name, serverIP, 0)
+	if dupErr != nil {
+		h.nodeCreateMu.Unlock()
+		respondInternalError(w, "nodeCreate", dupErr)
+		return
+	}
+	if dup {
+		h.nodeCreateMu.Unlock()
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("已存在同名同地址的节点（名称 %q，地址 %s），请勿重复创建", name, serverIP)))
+		return
+	}
 	nodeID, err := h.repo.CreateNode(
 		name,
 		nodeSecret,
@@ -1067,6 +1082,7 @@ func (h *Handler) nodeCreate(w http.ResponseWriter, r *http.Request) {
 		nullableText(extraIPs),
 		forwardMode,
 	)
+	h.nodeCreateMu.Unlock() // R-078：临界区止于落库，后续分步落库不在其内。
 	if err != nil {
 		respondInternalError(w, "nodeCreate", err)
 		return
@@ -1343,6 +1359,20 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	if _, ok := req["interfaceName"]; ok && len([]rune(asString(req["interfaceName"]))) > 200 {
 		response.WriteJSON(w, response.ErrDefault("网卡名称长度不能超过200个字符"))
 		return
+	}
+	// R-078 同族收口：改名/改地址使（名称，地址）落到另一已存节点
+	// 的对子上时拒绝，不留与 nodeCreate 同形的重名行。仅对子变
+	// 更时查（未变时放行，存量重名行上的无关编辑不连坐）。
+	if nodeName != currentNode.Name || serverIP != currentNode.ServerIP {
+		dup, dupErr := h.repo.NodeExistsByNameAndServerIP(nodeName, serverIP, id)
+		if dupErr != nil {
+			respondInternalError(w, "nodeUpdate", dupErr)
+			return
+		}
+		if dup {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("已存在同名同地址的节点（名称 %q，地址 %s），请勿重复创建", nodeName, serverIP)))
+			return
+		}
 	}
 	// 展示分组标签（纯展示）：presence 口径——未传保持现值、显式
 	// 传空＝脱组回未分组；归一与校验同 nodeCreate（含保留名拒绝，

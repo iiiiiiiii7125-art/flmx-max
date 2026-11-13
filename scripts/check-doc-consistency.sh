@@ -39,6 +39,9 @@
 #   8. 超时预算登记表 vs 产品代码（R8 T-GATE 常设门：转跑
 #      scripts/check-timeout-budgets.sh，前端超时/服务端放宽/后端界三层
 #      与 doc/audit/timeout-budgets.tsv 逐格对账，漂移点名失败）。
+#   8b. nginx 代理超时 vs 服务端写截止（N06 常设门：转跑
+#      scripts/check-nginx-timeouts.py，25 路按 nginx 最长匹配逐路
+#      对账，服务端值取自 write_deadline.go / gh_mirror.go 具名常量）。
 #   9. 安装脚本打印的文档站链接 vs doc 路由表（X05-001 常设门：
 #      panel_install.sh / install.sh 中本站 github.io 链接逐个按
 #      doc 结构 + cleanUrls 规则映射，映射不到即失败——成功提示曾
@@ -343,6 +346,18 @@ else
   sed 's/^/    /' /tmp/.timeout-budgets.out
 fi
 rm -f /tmp/.timeout-budgets.out
+
+# ── 8b. nginx 代理超时与服务端写截止对账（N06，AUDIT-HIST L7）：
+# 转跑 check-nginx-timeouts.py（25 路：N06 失配 13 条＋已对齐 12 条
+# 回归网）。服务端值取自 write_deadline.go / gh_mirror.go 具名常量，
+# 代理值按 nginx 最长匹配取 location 的 proxy 超时。
+if python3 scripts/check-nginx-timeouts.py > /tmp/.nginx-timeouts.out 2>&1; then
+  note_ok "nginx 代理超时与服务端写截止逐路对齐（$(grep -oP 'nginx-timeouts: OK \(\K[0-9]+' /tmp/.nginx-timeouts.out) 路）"
+else
+  note_fail "nginx 代理超时与服务端写截止失配（明细见下）"
+  sed 's/^/    /' /tmp/.nginx-timeouts.out
+fi
+rm -f /tmp/.nginx-timeouts.out
 
 # ── 9. 脚本文档站链接须命中 doc 路由表（X05-001）
 # 路由映射规则（cleanUrls=true、base=/flmx-max/）：站点根 → doc/index.md；

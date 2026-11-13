@@ -94,6 +94,14 @@ type Handler struct {
 	// 及同一键时在落库前同锁，避免并发下名单互相覆盖（lost-update）。
 	nodeGroupMu sync.Mutex
 
+	// R-078：nodeCreate（名称，serverIP）唯一性串行化。创建面此前
+	// 无同名同 IP 校验，两路并发创建均 code 0 落库两行、面板出现
+	// 不可区分的重名节点。单面板进程内以本锁串行化「查重＋落库」
+	// 临界区，命中即点名拒绝。未加 DB 唯一索引：存量库可能已有重
+	// 名行，AutoMigrate 建唯一索引会在升级时失败；进程内串行化覆
+	// 盖全部 nodeCreate 入口。
+	nodeCreateMu sync.Mutex
+
 	jobsMu      sync.Mutex
 	jobsCtx     context.Context
 	jobsCancel  context.CancelFunc
