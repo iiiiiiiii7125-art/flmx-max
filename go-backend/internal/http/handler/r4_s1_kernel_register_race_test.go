@@ -67,6 +67,8 @@ func TestR4S1KernelInstallConcurrentDoubleSubmit(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = r.Close() })
 	h := New(r, "unit-test-secret")
+	// H131-KVER：安装前预检走 tag 端点，桩 200 免真实网络探测。
+	stubReleaseTagAPI(t, map[string]int{"v1.12": http.StatusOK})
 	nodeID := seedRelayTargetNode(t, r, "r4s1-node", "192.0.2.44")
 	if err := r.DB().Exec(`UPDATE node SET status = 1 WHERE id = ?`, nodeID).Error; err != nil {
 		t.Fatal(err)

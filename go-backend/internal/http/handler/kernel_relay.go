@@ -893,20 +893,46 @@ func (h *Handler) removeInboundRelays(inboundID int64) {
 
 // ---- share links & subscription ----
 
+// firstVersionToken scans a reported version string for the first
+// whitespace-separated token that strictly parses as a dotted version
+// (PORT-043): kernel binaries report themselves as a full banner —
+// "Xray 26.11.9 (Xray, Penetrates Everything.) 676eaf6 (go1.27.3
+// linux/amd64)" or "sing-box version 1.14.4" — whose leading token is
+// not a version, so feeding the whole banner to parseVersionParts can
+// never succeed. Only a token that strictly parses counts; a string
+// with no version-shaped token yields nothing and the caller stays
+// fail-closed.
+func firstVersionToken(raw string) (string, bool) {
+	for _, tok := range strings.Fields(raw) {
+		tok = strings.TrimPrefix(tok, "v")
+		if _, err := parseVersionParts(tok); err == nil {
+			return tok, true
+		}
+	}
+	return "", false
+}
+
 // kernelSupportsPostQuantumReality reports whether a kernel can run the
-// X25519MLKEM768 Reality key exchange: Xray only, with an installed
-// version that parses and is at least 25.5.16 (the first Xray release
-// with ML-KEM-768 Reality support). An unknown or unparseable installed
-// version never qualifies — advertising PQ to a kernel that cannot do
-// it would break the handshake.
+// X25519MLKEM768 Reality key exchange: Xray only, with a version at
+// least 25.5.16 (the first Xray release with ML-KEM-768 Reality
+// support). The version is read from the agent-reported installed
+// banner first — it names the binary actually running — falling back
+// to the clean pinned Version when the banner carries no parseable
+// token. A version that cannot be established on either side never
+// qualifies — advertising PQ to a kernel that cannot do it would break
+// the handshake.
 func kernelSupportsPostQuantumReality(k *model.NodeKernel) bool {
 	if k == nil || k.KernelType != kernel.TypeXray {
 		return false
 	}
-	if _, err := parseVersionParts(k.InstalledVersion); err != nil {
+	version, ok := firstVersionToken(k.InstalledVersion)
+	if !ok {
+		version, ok = firstVersionToken(k.Version)
+	}
+	if !ok {
 		return false
 	}
-	return !versionBelowPadded(k.InstalledVersion, 25, 5, 16)
+	return !versionBelowPadded(version, 25, 5, 16)
 }
 
 // inboundEndpoints lists every address clients can use for the inbounds:
