@@ -17,9 +17,17 @@ import (
 // {mode, intervalMinutes}）；本文件把设置落成一对 systemd
 // 单元（flmx-agent-restart.service + .timer）持久化执行：
 //   - daily 模式：timer 的 OnCalendar 按节点本机时间每日触发；
-//   - interval 模式：timer 以 OnBootSec＋OnUnitActiveSec 每
-//     intervalMinutes 分钟触发——首次在开机/启用后一个间隔，
-//     停机错过的拍不补、不成簇；
+//   - interval 模式：timer 以 OnBootSec＋OnUnitActiveSec＋
+//     OnActiveSec 每 intervalMinutes 分钟触发——首次在开机/
+//     启用后一个间隔，停机错过的拍不补、不成簇；
+//   - OnActiveSec 是 interval 模式的再武装锚（T07）：仅
+//     OnBootSec＋OnUnitActiveSec 时，timer 停启一次后
+//     systemd 即将其置为 active (elapsed)、两路 next_elapse
+//     均为 0，永不再触发——死锁的根因是 OnUnitActiveSec 的
+//     下一拍只随被触发单元的激活重算，而激活它的唯一来源
+//     就是该 timer 自身。OnActiveSec 以 timer 自身激活时刻
+//     为锚，停启后必在一间隔内再触发一次，该次触发激活服
+//     务、随即由 OnUnitActiveSec 接管稳态节拍；
 //   - RandomizedDelaySec 承担随机抖动（两模式同口径，上限即
 //     抖动窗口：实际触发在名义时刻后 0..jitter 内均匀随机）；
 //   - service 是 oneshot，ExecStart 只做 systemctl restart 本机
@@ -102,10 +110,11 @@ func renderRestartServiceUnit(agentServiceName string) string {
 //
 // Daily mode keeps the exact pre-mode shape (OnCalendar).
 // Interval mode uses monotonic triggers: OnBootSec arms a fire
-// one interval after boot, and OnUnitActiveSec re-arms one
-// interval after each activation of the restarted service unit,
-// so the cadence holds at roughly one restart per interval while
-// the machine runs. Monotonic triggers never fire retroactively,
+// one interval after boot, OnUnitActiveSec re-arms one interval
+// after each activation of the restarted service unit, and
+// OnActiveSec re-arms one interval after each (re-)activation
+// of the timer unit itself — the T07 deadlock guard (see the
+// file header). Monotonic triggers never fire retroactively,
 // so downtime produces no catch-up burst.
 func renderRestartTimerUnit(s restartScheduleSetting) string {
 	body := "[Unit]\n" +
@@ -113,7 +122,8 @@ func renderRestartTimerUnit(s restartScheduleSetting) string {
 		"[Timer]\n"
 	if s.intervalMode() {
 		body += fmt.Sprintf("OnBootSec=%dmin\n", s.IntervalMinutes) +
-			fmt.Sprintf("OnUnitActiveSec=%dmin\n", s.IntervalMinutes)
+			fmt.Sprintf("OnUnitActiveSec=%dmin\n", s.IntervalMinutes) +
+			fmt.Sprintf("OnActiveSec=%dmin\n", s.IntervalMinutes)
 	} else {
 		body += "OnCalendar=*-*-* " + s.Time + ":00\n"
 	}
