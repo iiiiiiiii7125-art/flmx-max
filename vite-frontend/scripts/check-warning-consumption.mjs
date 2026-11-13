@@ -309,6 +309,16 @@ const REGISTRY = [
     consumers: ["src/pages/node.tsx"],
   },
   {
+    producer: "go-backend/internal/http/handler/connlog_readiness.go",
+    endpoint: "/node/connlog-repush",
+    apiFn: "repushNodeConnLogConfig",
+    // 1 处：运行配置已下发但内核重下发失败时点名进 warning
+    // （connlog 自愈 lane B）；消费端 connlog-modal.tsx 实读
+    // .warning 并拼进结果文案。
+    calls: 1,
+    consumers: ["src/pages/node/connlog-modal.tsx"],
+  },
+  {
     producer: "go-backend/internal/http/handler/mutations.go",
     endpoint: "/tunnel/user/remove",
     apiFn: "removeUserTunnel",
