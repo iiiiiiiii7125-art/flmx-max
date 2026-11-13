@@ -94,6 +94,14 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 			"stream": envelope.Stream, "sequence": envelope.Sequence, "error": reason,
 		})
 	}
+	// L3-01（SWEEP-CPU）：单批 Items 数上限（与 v1 / connlog
+	// 的 1000 对齐）。超限回 invalid_batch——不查 metas、不入
+	// 账、不推进游标，agent 按既有口径二分定位/拆分重报。
+	if len(envelope.Items) > flowUploadMaxItemsPerBatch {
+		log.Printf("flow upload v2 items over limit node_id=%d items=%d limit=%d", node.ID, len(envelope.Items), flowUploadMaxItemsPerBatch)
+		reject(http.StatusBadRequest, "invalid_batch")
+		return
+	}
 
 	now := time.Now()
 	metas, err := h.repo.GetFlowUploadForwardMetas(collectFlowUploadForwardIDs(envelope.Items))

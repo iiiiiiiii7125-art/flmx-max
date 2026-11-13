@@ -1694,6 +1694,16 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 			legacyBatchHash = hex.EncodeToString(sum[:])
 		}
 		if items != nil {
+			// L3-01（SWEEP-CPU）：单批 Items 数上限（与 v2 /
+			// connlog 的 1000 对齐）。10MB 体上限 alone 可装约
+			// 25 万条，超限整批拒收返非 ok——不入账、seq 未推
+			// 进，agent 保留批次拆分重报（与 metas 失败同口径）。
+			if len(items) > flowUploadMaxItemsPerBatch {
+				log.Printf("flow upload items over limit node_id=%d items=%d limit=%d", node.ID, len(items), flowUploadMaxItemsPerBatch)
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				_, _ = w.Write([]byte("error"))
+				return
+			}
 			now := time.Now()
 			// X-P3-31（V-08）：seq 改为「先只读校验、入账同 tx 推进」。
 			// 旧实现 CheckAndUpdateSeq 在入账前先行消费 seq：metas 失

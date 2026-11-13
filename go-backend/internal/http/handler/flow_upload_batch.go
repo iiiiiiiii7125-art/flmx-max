@@ -16,6 +16,19 @@ type flowPolicyTarget struct {
 	UserTunnelID int64
 }
 
+// L3-01（SWEEP-CPU）：流量上报单批 Items 数上限，与连接日志批
+// 上限 connlogMaxEventsPerBatch（1000）对齐——10MB 体上限 alone
+// 可装约 25 万条 item，解析/校验/聚合/摘要全随 Items 线性无界。
+// v1（flowUpload）与 v2（flowUploadV2）两路共用此值，超限整批
+// 拒收、agent 保留批次自行拆分重报。
+const flowUploadMaxItemsPerBatch = 1000
+
+// L3-01（SWEEP-CPU）：单批入账后孤儿清理的发令上限。孤儿按
+// distinct 服务名逐条发 DeleteService（每条 2–3 次 DB 读＋一次
+// 最长 6s 的节点命令），无界时会随 Items 线性放大；超限部分
+// 留待下一批——已删的孤儿不再上报，清理逐批推进，不丢项。
+const flowUploadMaxOrphanDeletesPerBatch = 100
+
 type flowUploadBatch struct {
 	flowDeltas     []repo.FlowUploadCounterDelta
 	quotaUsage     map[int64]int64
@@ -209,6 +222,16 @@ func (h *Handler) runFlowUploadSideEffects(nodeID int64, batch flowUploadBatch, 
 		serviceNames := make([]string, 0, len(batch.orphanServices))
 		for serviceName := range batch.orphanServices {
 			serviceNames = append(serviceNames, serviceName)
+		}
+		// L3-01：排序后取前 N（确定性顺序——同批重报不摇摆），
+		// 超限的孤儿留待后续批次：已删服务不再上报，清理逐批
+		// 推进；一次全量发令会把 6s 超时命令数随孤儿数放大。
+		sort.Strings(serviceNames)
+		if len(serviceNames) > flowUploadMaxOrphanDeletesPerBatch {
+			log.Printf("flow upload orphan cleanup capped node_id=%d orphans=%d cap=%d deferred=%d",
+				nodeID, len(serviceNames), flowUploadMaxOrphanDeletesPerBatch,
+				len(serviceNames)-flowUploadMaxOrphanDeletesPerBatch)
+			serviceNames = serviceNames[:flowUploadMaxOrphanDeletesPerBatch]
 		}
 		h.sendDeleteOrphanedForwardServices(nodeID, serviceNames)
 	}
