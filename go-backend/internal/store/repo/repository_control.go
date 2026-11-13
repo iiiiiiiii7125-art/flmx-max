@@ -210,6 +210,43 @@ func (r *Repository) ListForwardPortsByNode(nodeID int64) ([]int, error) {
 	return ports, nil
 }
 
+// ListForwardPortsByNodes 批量返回多节点各自的现存转发入口端口
+// （与 ListForwardPortsByNode 同口径：任意状态，含暂停；无行
+// 的节点不在 map 内）。nodeList 的打标对账用它一次性判断哪些
+// 节点有名下 forward——无 forward 的节点报 0 是真空态而非失配。
+func (r *Repository) ListForwardPortsByNodes(nodeIDs []int64) (map[int64][]int, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	out := make(map[int64][]int, len(nodeIDs))
+	if len(nodeIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		NodeID int64 `gorm:"column:node_id"`
+		Port   int   `gorm:"column:port"`
+	}
+	for _, chunk := range chunkInt64IDs(nodeIDs) {
+		var chunkRows []struct {
+			NodeID int64 `gorm:"column:node_id"`
+			Port   int   `gorm:"column:port"`
+		}
+		err := r.db.Model(&model.ForwardPort{}).
+			Where("forward_port.node_id IN ?", chunk).
+			Select("DISTINCT forward_port.node_id, forward_port.port").
+			Order("forward_port.node_id ASC, forward_port.port ASC").
+			Find(&chunkRows).Error
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, chunkRows...)
+	}
+	for _, row := range rows {
+		out[row.NodeID] = append(out[row.NodeID], row.Port)
+	}
+	return out, nil
+}
+
 func (r *Repository) ListForwardPorts(forwardID int64) ([]model.ForwardPortRecord, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")

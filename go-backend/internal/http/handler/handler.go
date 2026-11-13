@@ -174,6 +174,11 @@ type Handler struct {
 	externalProbes *externalProbeStore
 	// 节点延迟测试点测量结果缓存。
 	nodeLatency *nodeLatencyStore
+	// agent 上报的 connlog 打标数（connlog_mark.go）：每节点最
+	// 近一次 metric 心跳里 live 服务的打标转发数。内存态（同
+	// nodeLatency），离线即删、重启后一跳心跳即补。
+	connlogMarkMu     sync.Mutex
+	connlogMarkByNode map[int64]int64
 	// 节点回程路由追踪结果缓存。
 	nodeRoutes *nodeRouteStore
 	// 延迟连续劣化告警的连击计数（node_latency_history.go）。
@@ -262,6 +267,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		bestExit:                 newBestExitManager(),
 		externalProbes:           newExternalProbeStore(),
 		nodeLatency:              newNodeLatencyStore(),
+		connlogMarkByNode:        make(map[int64]int64),
 		nodeRoutes:               newNodeRouteStore(),
 		latencyAlerts:            newLatencyAlertTracker(),
 		resourceAlerts:           newResourceAlertTracker(),
@@ -277,6 +283,9 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 	// 成功重建确认。
 	h.wsServer.SetNodeOfflineHook(func(nodeID int64) {
 		h.invalidateAddServiceNode(nodeID)
+		// 离线即丢弃该节点的打标上报：断连 agent 的旧计数不是
+		// 其当前加载态的证据（connlog_mark.go）。
+		h.dropConnlogMark(nodeID)
 		h.notifyNodeOffline(nodeID)
 	})
 	h.wsServer.SetNodeMetricHook(func(nodeID int64, info ws.SystemInfo) {
@@ -304,6 +313,13 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 			BudgetEvictedTotal:  info.BudgetEvictedTotal,
 		}
 		h.metrics.RecordNodeMetric(nodeID, metricInfo)
+		// agent 上报的 connlog 打标数（lane C）：新 agent 每跳
+		// 心跳都带 live 服务的打标转发数；旧 agent 不发该字段
+		// （nil），此前状态不动、未报过即未知，绝不把「没报」
+		// 读成 0。
+		if info.ConnlogMarkedForwards != nil {
+			h.setConnlogMark(nodeID, *info.ConnlogMarkedForwards)
+		}
 		// 包 K：累积面越阈判定与落库同源同点——每个指标样本都
 		// 过同一判定，不许有旁路样本绕过告警（与 kernel_error
 		// 单漏斗同口径，见 resource_alert.go）。
@@ -373,6 +389,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/system-info/ticket", h.issueWSTicket)
 	mux.HandleFunc("/api/v1/node/list", h.nodeList)
 	mux.HandleFunc("/api/v1/node/connlog", h.nodeConnlog)
+	mux.HandleFunc("/api/v1/node/connlog-readiness", h.nodeConnlogReadiness)
+	mux.HandleFunc("/api/v1/node/connlog-repush", h.nodeConnlogRepush)
 	mux.HandleFunc("/api/v1/node/create", h.nodeCreate)
 	mux.HandleFunc("/api/v1/node/update", h.nodeUpdate)
 	mux.HandleFunc("/api/v1/node/delete", h.nodeDelete)
@@ -1000,6 +1018,7 @@ func (h *Handler) nodeList(w http.ResponseWriter, r *http.Request) {
 
 	h.attachNodeLatency(items)
 	h.attachNodeUninstallStates(items)
+	h.attachConnlogMarkStates(items)
 
 	response.WriteJSON(w, response.OK(items))
 }

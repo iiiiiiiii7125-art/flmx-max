@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/go-gost/x/registry"
 )
 
 // Inbound connection log (入站连接日志, design
@@ -175,6 +177,43 @@ func ConnLogEntryOption(entry bool, entryID string) Option {
 		opts.connLogEntry = entry
 		opts.connLogEntryID = entryID
 	}
+}
+
+// ConnLogEntry reports whether this service was built with the
+// panel's connlog entry mark (see ConnLogEntryOption). The mark
+// travels with the live service object, so a service rebuilt
+// without the mark reports false: the count below always reflects
+// the currently loaded config, never a config file on disk that
+// may not have been applied.
+func (s *defaultService) ConnLogEntry() bool {
+	if s == nil {
+		return false
+	}
+	return s.options.connLogEntry
+}
+
+// connLogEntryService is the read face CountConnLogEntryServices
+// needs: any registered service that can report its live mark.
+type connLogEntryService interface {
+	ConnLogEntry() bool
+}
+
+// CountConnLogEntryServices counts the currently registered
+// (loaded, running) services that carry the panel's connlog entry
+// mark. It reads the live in-memory service objects from the
+// service registry — the same objects Serve dispatches on — not a
+// config file, so a stale gost.json that was never applied cannot
+// inflate it, and a re-push that rebuilt the services is visible
+// on the next heartbeat. Services that do not expose a mark report
+// false and are not counted.
+func CountConnLogEntryServices() int {
+	n := 0
+	for _, svc := range registry.ServiceRegistry().GetAll() {
+		if s, ok := svc.(connLogEntryService); ok && s.ConnLogEntry() {
+			n++
+		}
+	}
+	return n
 }
 
 // connNetwork classifies an accepted connection as "tcp" or "udp"

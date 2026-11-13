@@ -490,3 +490,43 @@ switch state (it only gates collection; it never deletes history rows),
 machine's collector buffer overflowed; a non-zero value means the log may
 be incomplete), `retentionDays` is the current retention period in days
 (panel config `connlog_retention_days`, default 7).
+
+## GET /api/v1/node/connlog-readiness
+
+Readiness indicator for one node's connection log (admin only): tells
+whether the agent is actually collecting, not just whether the switch is
+on. Query param: `nodeId` (required). Response data:
+`{nodeId, agentVersion, agentSupport, agentMinVersion, masterEnabled,
+connLogEnabled, online, forwardMode, lastPush, lastRowAt, readiness,
+reason, reasons}`.
+`agentSupport` is `supported` (agent >= 2.1.5, the first version with the
+U1 collection hook), `unsupported` (agent too old — no re-push will ever
+produce rows), or `unknown` (version unparseable or missing, never
+treated as supported). `connLogEnabled` is the node switch as int 0/1
+(read with `=== 1`). `lastRowAt` is the newest row's start time in
+milliseconds, or null when the node has no rows — a row within the last
+24h is the only panel-side proof the agent is currently collecting.
+`lastPush` is always `{status:"unknown", pushedAt:null, source:"none"}`
+with a note: the panel does not persist runtime-config re-push results,
+so the last push time is honestly unknown rather than invented.
+`readiness` is `ready` (switch on and a row within 24h), `off` (master or
+node switch off), `not_ready` (a definite blocker: nftables forward mode,
+unsupported agent version, or offline), or `unknown` (cannot confirm
+either way); `reason` is the primary reason, `reasons` lists all that
+apply.
+
+## POST /api/v1/node/connlog-repush
+
+Force a synchronous re-push of one node's runtime config (admin only):
+same redeploy funnel the connlog toggle uses, but explicit and with an
+honest receipt. Body: `{nodeId}`. On success the response data is
+`{nodeId, redeployed:true, tunnelCount, forwardCount}` (code 0); a kernel
+re-push failure is reported as a `warning`, not a flipped success.
+Failures return code -1 and are never silent: nftables-mode nodes are
+rejected up front (no agent runtime config to push), offline nodes are
+rejected (nothing was sent; the node re-pushes automatically on
+reconnect), and a redeploy that the node does not confirm returns an
+explicit failure message. Use this when readiness says `not_ready` or
+`unknown` and the switch is on — it is the one-click fix for a stale
+agent config (an agent upgrade or restart alone only reloads the agent's
+local `gost.json` and does not fetch a fresh config).

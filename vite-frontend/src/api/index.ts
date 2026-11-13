@@ -7,6 +7,8 @@ import type {
   NodeApiItem,
   NodeConnLogData,
   NodeConnLogQuery,
+  NodeConnLogReadiness,
+  NodeConnLogRepushResult,
   SpeedLimitApiItem,
   TunnelBatchDeletePreviewApiData,
   TunnelBatchDeleteWithForwardsApiData,
@@ -225,6 +227,25 @@ export const getNodeConnLog = (data: NodeConnLogQuery) => {
 
   return Network.get<NodeConnLogData>("/node/connlog", params);
 };
+
+/**
+ * Node connection-log readiness: whether the agent is actually
+ * collecting on this node (GET /node/connlog-readiness).
+ */
+export const getNodeConnLogReadiness = (nodeId: number) =>
+  Network.get<NodeConnLogReadiness>("/node/connlog-readiness", {
+    nodeId: String(nodeId),
+  });
+
+/**
+ * Force a full runtime-config redeploy to one node (POST
+ * /node/connlog-repush). Synchronous: the envelope code is 0
+ * only when the redeploy itself reported success.
+ */
+export const repushNodeConnLogConfig = (nodeId: number) =>
+  Network.post<NodeConnLogRepushResult>("/node/connlog-repush", {
+    nodeId,
+  });
 /**
  * 各节点本月（浏览器时区 1 号起）的网卡流量：{ 节点ID: [入, 出] }（字节）。
  * 这是整机网卡计数（含转发与系统自身流量），与隧道计费/订阅配额是两套口径，

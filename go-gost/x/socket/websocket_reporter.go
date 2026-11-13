@@ -82,6 +82,16 @@ type SystemInfo struct {
 	ActiveSessions      int64 `json:"active_sessions"`
 	BudgetRejectedTotal int64 `json:"budget_rejected_total"`
 	BudgetEvictedTotal  int64 `json:"budget_evicted_total"`
+	// ConnlogMarkedForwards is the count of currently loaded
+	// (running) forward services carrying the panel's connlog
+	// entry mark, read off the live service registry at report
+	// time (service.CountConnLogEntryServices). The panel compares
+	// it with the node's desired connlog switch to detect a config
+	// push the agent never applied. Additive field, no omitempty:
+	// a new agent always sends it (0 is a real value — "mark
+	// absent"); an old agent omits it and the panel reads that as
+	// "unknown", never as 0.
+	ConnlogMarkedForwards int `json:"connlog_marked_forwards"`
 }
 
 // NetworkStats 网络统计信息
@@ -1026,6 +1036,9 @@ func (w *WebSocketReporter) collectSystemInfo() SystemInfo {
 		ActiveSessions:      sessionbudget.Active(),
 		BudgetRejectedTotal: sessionbudget.RejectedTotal(),
 		BudgetEvictedTotal:  sessionbudget.EvictedTotal(),
+		// Live mark state (lane C): counted off the running
+		// services at this instant, never off a config file.
+		ConnlogMarkedForwards: service.CountConnLogEntryServices(),
 	}
 }
 

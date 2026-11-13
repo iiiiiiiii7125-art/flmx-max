@@ -1271,10 +1271,20 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	}
 	defer h.finishNodeOnlineRedeploy(nodeID)
 
-	// A fresh agent needs a full restore.
+	// A fresh agent needs a full restore. The redeploy is the same
+	// guarded path the connlog toggle uses (retryNodeLocalRuntime →
+	// redeployLocalNodeRuntime): it re-reads the DB into every
+	// service and chain it rebuilds, so a mark enabled while the
+	// agent was away (or lost from its local gost.json by a restart
+	// / upgrade) lands here without any manual toggle. The hook
+	// fires once per WS session establishment, never on heartbeat
+	// or status polls. Success and failure are both logged with
+	// the node id — a skipped push must never read as silent success.
 	if !h.redeployLocalNodeRuntime(nodeID) {
+		log.Printf("node online redeploy failed node_id=%d (retry scheduled)", nodeID)
 		h.scheduleNodeLocalRuntimeRetry(nodeID)
 	} else {
+		log.Printf("node online redeploy succeeded node_id=%d", nodeID)
 		h.clearNodeLocalRuntimeRetry(nodeID)
 	}
 }
@@ -1490,6 +1500,24 @@ func (h *Handler) redeployLocalNodeRuntime(nodeID int64) bool {
 	// Collect forwards that failed independently (not skipped due to tunnel failure)
 	var failedForwards []failedForward
 
+	// Lane A (connlog repush on connect): the sync below turns an
+	// offline/timeout send into a warning and a nil error, so a push
+	// that never reached this node used to read as success — the
+	// caller cleared the retry queue and nothing ever retried it,
+	// leaving the agent on its stale gost.json (e.g. a connlog mark
+	// enabled while the node was unreachable never lands). Detect a
+	// skip of THIS node's own forward and report failure, so the
+	// caller schedules the 30s retry and logs it. A skip of a
+	// co-port node is not this redeploy's failure: that node's own
+	// reconnect redeploy owns it. Attribution is by node name (the
+	// warning carries the name, not the id); two nodes sharing a
+	// name can only cause an extra idempotent retry, never a miss.
+	nodeName := ""
+	if node, nerr := h.getNodeRecord(nodeID); nerr == nil && node != nil {
+		nodeName = strings.TrimSpace(node.Name)
+	}
+	var skippedForwardIDs []int64
+
 	for _, forwardID := range forwardIDs {
 		forward, getErr := h.getForwardRecord(forwardID)
 		if getErr != nil || forward == nil {
@@ -1498,18 +1526,52 @@ func (h *Handler) redeployLocalNodeRuntime(nodeID int64) bool {
 		if _, skipped := tunnelFailed[forward.TunnelID]; skipped {
 			continue
 		}
-		if err := h.syncForwardServices(forward, "UpdateService", true); err != nil {
+		warnings, err := h.syncForwardServicesWithWarnings(forward, "UpdateService", true)
+		if err != nil {
 			failedForwards = append(failedForwards, failedForward{id: forwardID, forward: forward, err: err})
 			fmt.Printf("post-upgrade redeploy: forward %d failed on node %d: %v\n", forwardID, nodeID, err)
-		} else {
-			// R21-X-02：重推成功后清理离线更新产生的失势 limiter（下
-			// 面 helper 内说明判定口径）。
-			h.deleteRedeployStaleRuleConnLimiter(forward, nodeID)
+			continue
 		}
+		if redeploySkippedOfflineForNode(warnings, nodeName) {
+			// The push never landed on this node: do NOT run the
+			// success-path stale-limiter cleanup (R21-X-02 is
+			// "only after a successful push"), and do NOT report
+			// success — the caller retries in 30s.
+			skippedForwardIDs = append(skippedForwardIDs, forwardID)
+			fmt.Printf("post-upgrade redeploy: forward %d skipped on node %d (node offline at push time), will retry\n", forwardID, nodeID)
+			continue
+		}
+		// R21-X-02：重推成功后清理离线更新产生的失势 limiter（下
+		// 面 helper 内说明判定口径）。
+		h.deleteRedeployStaleRuleConnLimiter(forward, nodeID)
 	}
 
-	// Retry failed items with exponential backoff (max 3 attempts)
-	return h.retryFailedRedeploys(nodeID, tunnelFailed, failedForwards)
+	// Retry failed items with exponential backoff (max 3 attempts).
+	// A skipped push is a failure too, but its retry is the caller's
+	// 30s schedule (scheduleNodeLocalRuntimeRetry), not this inline
+	// backoff: the inline retry replays the same sync, whose offline
+	// skip again reads as nil error and would "succeed".
+	ok := h.retryFailedRedeploys(nodeID, tunnelFailed, failedForwards)
+	if len(skippedForwardIDs) > 0 {
+		return false
+	}
+	return ok
+}
+
+// redeploySkippedOfflineForNode reports whether warnings contain the
+// offline-skip marker (control_plane.go offlineSkipWarningMarker) for
+// the named node. nodeName == "" (node record unreadable) matches any
+// skipped node: fail-closed toward retry rather than silent success.
+func redeploySkippedOfflineForNode(warnings []string, nodeName string) bool {
+	for _, w := range warnings {
+		if !strings.Contains(w, offlineSkipWarningMarker) {
+			continue
+		}
+		if nodeName == "" || strings.HasPrefix(w, "节点 "+nodeName+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 // deleteRedeployStaleRuleConnLimitersForTunnel 是 R21-X-02 的隧道重试补删：
