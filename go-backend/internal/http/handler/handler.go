@@ -373,6 +373,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/system-info/ticket", h.issueWSTicket)
 	mux.HandleFunc("/api/v1/node/list", h.nodeList)
 	mux.HandleFunc("/api/v1/node/connlog", h.nodeConnlog)
+	mux.HandleFunc("/api/v1/node/connlog-readiness", h.nodeConnlogReadiness)
+	mux.HandleFunc("/api/v1/node/connlog-repush", h.nodeConnlogRepush)
 	mux.HandleFunc("/api/v1/node/create", h.nodeCreate)
 	mux.HandleFunc("/api/v1/node/update", h.nodeUpdate)
 	mux.HandleFunc("/api/v1/node/delete", h.nodeDelete)
