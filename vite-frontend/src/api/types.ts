@@ -25,10 +25,10 @@ export interface NodeApiItem {
   socks?: number;
   interfaceName?: string | null;
   expiryReminderDismissed?: number;
-  /** 节点连接日志总开关（默认关）：关时本节点不采集连接记录。 */
-  connLogEnabled?: boolean;
-  /** 节点级入站白名单总开关（默认关）：开时本节点全部入站只放行中转机、本机与 whitelistExtra 中的 IP/网段。 */
-  whitelistEnabled?: boolean;
+  /** 节点连接日志总开关（默认关）：关时本节点不采集连接记录。后端列表下发 int（0 关 1 开），与 restartEnabled 同款，不得按 boolean 读——1 === true 恒假，刷新即现原形。 */
+  connLogEnabled?: number;
+  /** 节点级入站白名单总开关（默认关）：开时本节点全部入站只放行中转机、本机与 whitelistExtra 中的 IP/网段。后端列表下发 int（0 关 1 开），同款不得按 boolean 读。 */
+  whitelistEnabled?: number;
   /** 节点级入站白名单额外放行：逗号分隔的 IP 与 CIDR（与入站表单 whitelistExtra 同口径）；关开关时保留不清空。 */
   whitelistExtra?: string;
   /** nftables 状态（后端上报的展示串，如“已安装/已自动安装/安装失败＋原因”；缺失时前端不展示、不崩溃）。 */

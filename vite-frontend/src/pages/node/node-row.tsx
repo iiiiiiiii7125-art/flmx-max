@@ -588,12 +588,12 @@ const NodeCardContent = memo(function NodeCardContent({
               <span className="text-sm font-semibold">连接日志</span>
               <span className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-foreground">
-                  {node.connLogEnabled === true ? "已开启" : "未开启"}
+                  {node.connLogEnabled === 1 ? "已开启" : "未开启"}
                 </span>
                 <Switch
                   aria-label="连接日志开关"
                   isDisabled={connLogSaving}
-                  isSelected={node.connLogEnabled === true}
+                  isSelected={node.connLogEnabled === 1}
                   size="sm"
                   onValueChange={(v) => actions.toggleConnLog(node, v)}
                 />
@@ -609,12 +609,12 @@ const NodeCardContent = memo(function NodeCardContent({
                 <span className="text-sm font-semibold">入站白名单</span>
                 <span className="flex items-center gap-2">
                   <span className="text-xs font-semibold text-foreground">
-                    {node.whitelistEnabled === true ? "已开启" : "未开启"}
+                    {node.whitelistEnabled === 1 ? "已开启" : "未开启"}
                   </span>
                   <Switch
                     aria-label="入站白名单开关"
                     isDisabled={whitelistSaving}
-                    isSelected={node.whitelistEnabled === true}
+                    isSelected={node.whitelistEnabled === 1}
                     size="sm"
                     onValueChange={(v) => actions.toggleWhitelist(node, v)}
                   />
@@ -635,31 +635,48 @@ const NodeCardContent = memo(function NodeCardContent({
                   原因：{node.nftablesError}
                 </p>
               )}
-              {node.whitelistEnabled === true && (
+              {node.whitelistEnabled === 1 && (
                 <>
                   <p className="text-xs font-semibold text-foreground">
                     该节点全部入站只放行中转机、本机与列表中的 IP/网段。
                   </p>
-                  <Input
-                    aria-label="白名单额外放行"
-                    description="中转机出口 IP 与节点地址不同时，在此补充；支持 IP 和网段，逗号分隔"
-                    isDisabled={whitelistSaving}
-                    label="额外放行"
-                    placeholder="203.0.113.9, 10.0.0.0/8"
-                    size="sm"
-                    value={whitelistDraft}
-                    variant="bordered"
-                    onBlur={() =>
-                      actions.saveWhitelistExtra(node, whitelistDraft)
-                    }
-                    onChange={(e) =>
-                      onWhitelistDraftChange(node, e.target.value)
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter")
-                        (e.target as HTMLInputElement).blur();
-                    }}
-                  />
+                  <div className="flex items-end gap-2">
+                    <Input
+                      aria-label="白名单额外放行"
+                      className="min-w-0 flex-1"
+                      description="中转机出口 IP 与节点地址不同时，在此补充；支持 IP 和网段，逗号分隔"
+                      isDisabled={whitelistSaving}
+                      label="额外放行"
+                      placeholder="203.0.113.9, 10.0.0.0/8"
+                      size="sm"
+                      value={whitelistDraft}
+                      variant="bordered"
+                      onBlur={() =>
+                        actions.saveWhitelistExtra(node, whitelistDraft)
+                      }
+                      onChange={(e) =>
+                        onWhitelistDraftChange(node, e.target.value)
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter")
+                          (e.target as HTMLInputElement).blur();
+                      }}
+                    />
+                    <Button
+                      aria-label="确认保存白名单额外放行"
+                      className="mb-5 shrink-0"
+                      color="primary"
+                      isDisabled={whitelistSaving}
+                      isLoading={whitelistSaving}
+                      size="sm"
+                      variant="flat"
+                      onPress={() =>
+                        actions.saveWhitelistExtra(node, whitelistDraft)
+                      }
+                    >
+                      确认
+                    </Button>
+                  </div>
                 </>
               )}
             </div>
