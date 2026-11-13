@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -141,5 +142,186 @@ func TestConnlogQueuedBytesCoversPendingRetryBuffered(t *testing.T) {
 	}
 	if got := reloaded.queuedBytes(); got != want {
 		t.Fatalf("queuedBytes after reload = %d, want %d", got, want)
+	}
+}
+
+// 2.1.12 补测 L1：cap 小于 Pending+Retry 字节时，enforceCap 须
+// 停在 Buffered 耗尽——Pending/Retry 是已承诺批次不许丢，余量
+// 仍超上限是设计行为，不得为达标而动 Pending/Retry。
+func TestConnlogEnforceCapPendingRetryExceedCap(t *testing.T) {
+	pending := &connlogEnvelope{Stream: "teststream", Sequence: 1, Events: []ConnEvent{
+		testOpenEvent("p-1", 100), testCloseEvent("p-1", 100, 200),
+		testOpenEvent("p-2", 150), testCloseEvent("p-2", 150, 250),
+	}}
+	retry := [][]ConnEvent{
+		{testOpenEvent("r-1", 300), testCloseEvent("r-1", 300, 400)},
+		{testOpenEvent("r-2", 500)},
+	}
+	buffered := []ConnEvent{
+		testOpenEvent("b-1", 600),
+		testOpenEvent("b-2", 700), testCloseEvent("b-2", 700, 800),
+	}
+	st := connlogSpoolState{Pending: pending, Retry: retry, Buffered: buffered}
+
+	pendingRetryBytes := oracleBytes(t, pending.Events)
+	for _, g := range retry {
+		pendingRetryBytes += oracleBytes(t, g)
+	}
+	bufferedBytes := oracleBytes(t, buffered)
+	if total := st.queuedBytes(); total != pendingRetryBytes+bufferedBytes {
+		t.Fatalf("queuedBytes = %d, want %d (Pending+Retry+Buffered)", total, pendingRetryBytes+bufferedBytes)
+	}
+
+	// 上限定在 Pending+Retry 字节之下：即使 Buffered 全丢也
+	// 降不到上限以下。
+	capBytes := pendingRetryBytes - 1
+	dropped := st.enforceCap(capBytes)
+	if dropped != len(buffered) {
+		t.Fatalf("dropped = %d, want %d (all Buffered drained)", dropped, len(buffered))
+	}
+	if len(st.Buffered) != 0 {
+		t.Fatalf("len(Buffered) = %d, want 0", len(st.Buffered))
+	}
+	// Pending/Retry 原样保留：条数与内容都不动。
+	if len(st.Pending.Events) != len(pending.Events) {
+		t.Fatalf("len(Pending.Events) = %d, want %d", len(st.Pending.Events), len(pending.Events))
+	}
+	for i, ev := range st.Pending.Events {
+		if ev.ConnID != pending.Events[i].ConnID || ev.Type != pending.Events[i].Type {
+			t.Fatalf("Pending event %d changed: %+v", i, ev)
+		}
+	}
+	if len(st.Retry) != len(retry) {
+		t.Fatalf("len(Retry) = %d, want %d", len(st.Retry), len(retry))
+	}
+	for gi, g := range st.Retry {
+		if len(g) != len(retry[gi]) {
+			t.Fatalf("len(Retry[%d]) = %d, want %d", gi, len(g), len(retry[gi]))
+		}
+		for i, ev := range g {
+			if ev.ConnID != retry[gi][i].ConnID {
+				t.Fatalf("Retry[%d] event %d changed: %+v", gi, i, ev)
+			}
+		}
+	}
+	// 余量仍超上限，且恰等于 Pending+Retry 口径。
+	after := st.queuedBytes()
+	if after <= capBytes {
+		t.Fatalf("queuedBytes after cap = %d, want > %d (still over cap by design)", after, capBytes)
+	}
+	if after != pendingRetryBytes {
+		t.Fatalf("queuedBytes after cap = %d, want %d (Pending+Retry only)", after, pendingRetryBytes)
+	}
+	// Dropped 只计实际丢的条数。
+	if st.Dropped != int64(dropped) {
+		t.Fatalf("Dropped = %d, want %d", st.Dropped, dropped)
+	}
+	// Buffered 已空时重复调用不再丢，行为稳定。
+	if again := st.enforceCap(capBytes); again != 0 {
+		t.Fatalf("second enforceCap dropped %d, want 0", again)
+	}
+	if st.Dropped != int64(dropped) {
+		t.Fatalf("Dropped after second enforceCap = %d, want %d", st.Dropped, dropped)
+	}
+}
+
+// 2.1.12 补测 L2：ConnEvent.size 是 json:"-"——字节级断言落盘
+// JSON 里无 size 字段、加载后 size 回 0、首次 queuedBytes 惰性
+// 重算后与落盘前一致。
+func TestConnlogEventSizeRoundTrip(t *testing.T) {
+	evs := []ConnEvent{testOpenEvent("s-1", 100), testCloseEvent("s-1", 100, 200)}
+	st := connlogSpoolState{Buffered: evs}
+	before := st.queuedBytes() // 填充尺寸缓存
+	if st.Buffered[0].size <= 0 {
+		t.Fatalf("size not cached after queuedBytes")
+	}
+
+	data, err := json.Marshal(st)
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	// 字节级断言：落盘 JSON 里不得出现 size 字段（缓存已填充
+	// 的事件也一样——json:"-" 必须把它排除在线上/落盘格式外）。
+	if bytes.Contains(data, []byte(`"size"`)) {
+		t.Fatalf("spool JSON contains size field: %s", data)
+	}
+	line, err := json.Marshal(st.Buffered[0])
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	if bytes.Contains(line, []byte(`"size"`)) {
+		t.Fatalf("event JSON contains size field: %s", line)
+	}
+
+	var reloaded connlogSpoolState
+	if err := json.Unmarshal(data, &reloaded); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	// 加载后 size 回 0。
+	for i := range reloaded.Buffered {
+		if reloaded.Buffered[i].size != 0 {
+			t.Fatalf("reloaded event %d size = %d, want 0", i, reloaded.Buffered[i].size)
+		}
+	}
+	// 首次 queuedBytes 惰性重算后与落盘前一致，且与 oracle 独立
+	// 重算相等；重算后缓存已填充，再次调用稳定。
+	if got := reloaded.queuedBytes(); got != before {
+		t.Fatalf("queuedBytes after reload = %d, want %d", got, before)
+	}
+	if reloaded.Buffered[0].size <= 0 {
+		t.Fatalf("size not re-cached after queuedBytes on reload")
+	}
+	if again := reloaded.queuedBytes(); again != before {
+		t.Fatalf("queuedBytes not stable after reload: %d then %d", before, again)
+	}
+	if got := oracleBytes(t, reloaded.Buffered); got != before {
+		t.Fatalf("oracle after reload = %d, want %d", got, before)
+	}
+}
+
+// 2.1.12 补测 L3：Open 台账（§4.6 结清台账）不计入 spool 容量
+// 口径——它只是已见 open 未见 close 的连接备忘，同一条连接的
+// open 事件已在 Buffered（或 Pending/Retry）里计过一次；误纳
+// 会双倍计数，enforceCap 也会因此多丢事件。
+func TestConnlogQueuedBytesExcludesOpenLedger(t *testing.T) {
+	buffered := []ConnEvent{testOpenEvent("o-1", 100), testOpenEvent("o-2", 200)}
+	st := connlogSpoolState{
+		Buffered: buffered,
+		Open: map[string]ConnEvent{
+			"o-1": testOpenEvent("o-1", 100),
+			"o-2": testOpenEvent("o-2", 200),
+			"o-3": testOpenEvent("o-3", 300),
+		},
+		OpenLastKnown: map[string]int64{"o-1": 150, "o-2": 250, "o-3": 350},
+	}
+	want := oracleBytes(t, buffered)
+	if got := st.queuedBytes(); got != want {
+		t.Fatalf("queuedBytes = %d, want %d (Open ledger must not count)", got, want)
+	}
+
+	// 仅有 Open 台账的 spool 容量占用为 0。
+	onlyOpen := connlogSpoolState{
+		Open:          map[string]ConnEvent{"o-9": testOpenEvent("o-9", 900)},
+		OpenLastKnown: map[string]int64{"o-9": 950},
+	}
+	if got := onlyOpen.queuedBytes(); got != 0 {
+		t.Fatalf("queuedBytes with only Open ledger = %d, want 0", got)
+	}
+
+	// enforceCap 只按 Pending+Retry+Buffered 口径执行：Open 台
+	// 账原样保留，不因容量压力被丢。
+	st2 := st
+	dropped := st2.enforceCap(want - 1)
+	if dropped != 1 {
+		t.Fatalf("dropped = %d, want 1", dropped)
+	}
+	if len(st2.Open) != 3 {
+		t.Fatalf("enforceCap touched Open ledger: %d entries, want 3", len(st2.Open))
+	}
+	if _, ok := st2.Open["o-3"]; !ok {
+		t.Fatalf("Open ledger lost entry o-3")
+	}
+	if got := st2.queuedBytes(); got > want-1 {
+		t.Fatalf("queuedBytes after cap = %d, want <= %d", got, want-1)
 	}
 }
