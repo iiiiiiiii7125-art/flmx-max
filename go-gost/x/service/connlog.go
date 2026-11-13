@@ -89,6 +89,12 @@ type ConnEvent struct {
 	StartMs     int64  `json:"startTime"`            // connection start (entry-machine clock, milliseconds)
 	EndMs       int64  `json:"endTime,omitempty"`    // close time; for interrupted closes the last known moment
 	Status      string `json:"status,omitempty"`     // close events only: closed | interrupted
+	// size 缓存本事件的序列化字节（len(json.Marshal(ev))+1 换行），
+	// 供 spool 容量口径复用，避免每周期全量重 marshal（2.1.12：
+	// O(n²) 空转根因）。json:"-"：不进线上/落盘格式；事件字段建
+	// 成后不可变，缓存永不失效；落盘重载后为 0，下次量尺寸时惰
+	// 性重算一次。
+	size int64 `json:"-"`
 }
 
 // connRing is the bounded in-memory ring between the producers and
