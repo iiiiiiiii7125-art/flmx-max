@@ -332,6 +332,13 @@ func (h *Handler) listUserTunnelIDsByUser(userID int64) ([]int64, error) {
 	return h.repo.ListUserTunnelIDsByUser(userID)
 }
 
+// offlineSkipWarningMarker 是 syncForwardServicesWithWarnings 在某入口
+// 节点离线/超时、跳过该节点下发时写入 warnings 的标记文本（见下）。
+// redeployLocalNodeRuntime 用它识别“本节点被跳过”（须重试），与真正
+// 下发成功的 nil 错误区分——警告本身不改变返回值。标记文本与用户可
+// 见文案同一字符串，两处须同改。
+const offlineSkipWarningMarker = "不在线，已跳过下发"
+
 func (h *Handler) syncForwardServices(forward *forwardRecord, method string, allowFallbackAdd bool) error {
 	_, err := h.syncForwardServicesWithWarnings(forward, method, allowFallbackAdd)
 	return err
@@ -561,7 +568,7 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		// When a node is offline, skip it with a warning instead of failing.
 		// This lets users modify forward rules even when some entry nodes are down.
 		if err != nil && isNodeOfflineOrTimeoutError(err) {
-			warnings = append(warnings, fmt.Sprintf("节点 %s 不在线，已跳过下发", node.Name))
+			warnings = append(warnings, fmt.Sprintf("节点 %s %s", node.Name, offlineSkipWarningMarker))
 			continue
 		}
 		if err != nil {
