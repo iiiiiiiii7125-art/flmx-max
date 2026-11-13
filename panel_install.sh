@@ -1150,6 +1150,45 @@ caddyfile_without_site() {
   ' "$file"
 }
 
+# KR9-008-GLOBAL：把 Caddyfile 内容按「全局选项块 / 其余内容」切分
+# （stdin 读，$1 写全局块、$2 写其余内容）。Caddy 要求无地址键的
+# 全局块必须居文件首位；菜单 5 保留式重写时若把含全局块的保留内
+# 容整体附在新站点块之后，validate 即报 global configuration
+# must be first 而整单回滚。切分口径与 caddyfile_without_site
+# 同 brace-depth：顶层块以首行第一个 `{` 之前的地址段判别——
+# 地址段为空（首行即 `{` 起）即全局块；块外行（注释/空行）归其
+# 余内容。多个全局块（如手写重复）全数归入全局侧，validate 仍
+# 会按原规则失败回滚，不静默修掉。
+caddyfile_split_global_block() {
+  local global_out="$1" rest_out="$2"
+  awk -v g="$global_out" -v r="$rest_out" '
+    function flush_block(   dest) {
+      if (buf == "") return
+      dest = (first ~ /^[[:space:]]*\{/) ? g : r
+      printf "%s", buf > dest
+      buf = ""
+    }
+    {
+      line = $0
+      tmp = line; opens = gsub(/\{/, "{", tmp)
+      tmp = line; closes = gsub(/\}/, "}", tmp)
+      if (!inblock) {
+        if (opens > 0) {
+          first = line; buf = line "\n"; depth = opens - closes
+          if (depth <= 0) flush_block(); else inblock = 1
+        } else {
+          print line > r
+        }
+      } else {
+        buf = buf line "\n"
+        depth += opens - closes
+        if (depth <= 0) { flush_block(); inblock = 0 }
+      }
+    }
+    END { if (inblock) flush_block() }
+  '
+}
+
 # 抽出 Caddyfile 中「不反代到指定本机端口」的全部内容（卸载回收
 # 用）：按站点块切分（与 caddyfile_without_site 同 brace-depth 口
 # 径），块体内含 reverse_proxy 127.0.0.1:<port> 行的整块剔除、
@@ -1560,7 +1599,45 @@ setup_domain_proxy() {
   if [ -n "$caddyfile_bak" ]; then
     preserved_blocks=$(caddyfile_without_site "$caddyfile_bak" "$DOMAIN")
   fi
-  if ! cat > "$caddyfile" <<EOF
+  # KR9-008-GLOBAL：保留内容里的全局选项块必须仍居文件首位——
+  # 旧实现先写新站点块、再把保留内容整体附回文件尾，全局块落
+  # 在站点块之后，validate 报 global configuration must be
+  # first 而整单回滚。先把保留内容切成全局块与余部，写盘顺序改
+  # 为全局块 → 新站点块 → 其余保留内容；无全局块时顺序与旧实
+  # 现逐字一致。
+  local preserved_global="" preserved_rest=""
+  if [ -n "$preserved_blocks" ]; then
+    local _global_tmp _rest_tmp
+    _global_tmp=$(mktemp) || {
+      echo "❌ 创建临时文件失败，正在恢复写入前的配置..."
+      caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
+      return 1
+    }
+    _rest_tmp=$(mktemp) || {
+      rm -f "$_global_tmp"
+      echo "❌ 创建临时文件失败，正在恢复写入前的配置..."
+      caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
+      return 1
+    }
+    printf '%s\n' "$preserved_blocks" | caddyfile_split_global_block "$_global_tmp" "$_rest_tmp"
+    preserved_global=$(cat "$_global_tmp")
+    preserved_rest=$(cat "$_rest_tmp")
+    rm -f "$_global_tmp" "$_rest_tmp"
+  fi
+  if [ -n "$preserved_global" ]; then
+    if ! printf '%s\n' "$preserved_global" > "$caddyfile"; then
+      echo "❌ 写入 $caddyfile 失败，正在恢复写入前的配置..."
+      caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
+      return 1
+    fi
+  else
+    if ! : > "$caddyfile"; then
+      echo "❌ 写入 $caddyfile 失败，正在恢复写入前的配置..."
+      caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
+      return 1
+    fi
+  fi
+  if ! cat >> "$caddyfile" <<EOF
 $DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
     # §9.6 缓解（audit-max 裁定）：面板 WS 握手把 token 放在
@@ -1587,12 +1664,14 @@ EOF
     caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
     return 1
   fi
-  if [ -n "$preserved_blocks" ]; then
-    if ! printf '%s\n' "$preserved_blocks" >> "$caddyfile"; then
+  if [ -n "$preserved_rest" ]; then
+    if ! printf '%s\n' "$preserved_rest" >> "$caddyfile"; then
       echo "❌ 附回原有站点块失败，正在恢复写入前的配置..."
       caddy_restore_backup "$caddyfile" "$caddyfile_bak" || true
       return 1
     fi
+    echo "♻️ 已保留原配置中的其他站点块（订阅前置等配置不受本次修改影响）"
+  elif [ -n "$preserved_global" ]; then
     echo "♻️ 已保留原配置中的其他站点块（订阅前置等配置不受本次修改影响）"
   fi
 
