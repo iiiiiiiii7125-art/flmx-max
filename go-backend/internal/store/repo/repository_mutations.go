@@ -505,6 +505,30 @@ func (r *Repository) CreateNode(name, secret, serverIP string, serverIPV4, serve
 	return int64(node.ID), nil
 }
 
+// NodeExistsByNameAndServerIP reports whether a node with the same
+// (name, serverIP) pair already exists, optionally excluding one node
+// ID (nodeUpdate self-exclusion).
+//
+// R-078: nodeCreate had no such check, so two concurrent creates with
+// the same name and IP both returned code 0 and left two
+// indistinguishable nodes. nodeCreate serializes its
+// check-then-insert on Handler.nodeCreateMu; nodeUpdate checks when
+// the pair changes.
+func (r *Repository) NodeExistsByNameAndServerIP(name, serverIP string, excludeID int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("repository not initialized")
+	}
+	var count int64
+	q := r.db.Model(&model.Node{}).Where("name = ? AND server_ip = ?", name, serverIP)
+	if excludeID > 0 {
+		q = q.Where("id != ?", excludeID)
+	}
+	if err := q.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *Repository) GetNodeStatusFields(nodeID int64) (status, httpFlag, tlsFlag, socksFlag int, err error) {
 	if r == nil || r.db == nil {
 		return 0, 0, 0, 0, errors.New("repository not initialized")
