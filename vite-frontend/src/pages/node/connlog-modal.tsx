@@ -81,6 +81,8 @@ export function NodeConnLogModal({
   node: Node | null;
   onClose: () => void;
 }) {
+  const [rows, setRows] = useState<NodeConnLogItem[]>([]);
+  const [total, setTotal] = useState(0);
   // Server-reported page metadata (O-1): `enabled` is the fallback
   // for the not-enabled gate, `dropped`/`retentionDays` feed the
   // footer (A-P2-1, same shape as the old per-inbound modal).
@@ -88,6 +90,9 @@ export function NodeConnLogModal({
     undefined,
   );
   const [dropped, setDropped] = useState<number | undefined>(undefined);
+  const [retentionDays, setRetentionDays] = useState<number | undefined>(
+    undefined,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ipInput, setIpInput] = useState("");
@@ -98,6 +103,7 @@ export function NodeConnLogModal({
   const nodeIdRef = useRef<number | null>(null);
   const queryRef = useRef({ ip: "", current: 1 });
 
+  const nodeId = node?.id ?? null;
   // List state is the primary gate; the server-reported `enabled` is
   // the fallback — when the list is stale (another tab flipped the
   // switch), a server `false` still shows the not-enabled state.
@@ -171,6 +177,12 @@ export function NodeConnLogModal({
           );
         }
       } else {
+        setRows([]);
+        setTotal(0);
+        setServerEnabled(undefined);
+        setDropped(undefined);
+        setRetentionDays(undefined);
+      }
       setCurrent(cur);
     } catch {
       if (seqRef.current === seq) {
