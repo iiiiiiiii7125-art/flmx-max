@@ -1020,6 +1020,16 @@ func (h *Handler) inboundEndpoints(rows []model.NodeInbound) ([]kernel.Endpoint,
 		}
 		for _, rel := range byInbound[row.ID] {
 			if !rel.ForwardExists || rel.ForwardStatus != 1 {
+				// R-031：中转未就绪（转发不存在或未启用）时该中转端点
+				// 被跳过——跳过本身正确，但此前无声，订阅拉取缺端点
+				// 时管理员无从察觉；与本函数其余跳过分支同口径留日志。
+				log.Printf("inboundEndpoints: relay %q (relay %d, inbound %d, node %d) not ready (forwardExists=%v, forwardStatus=%d), skipping relay endpoints", rel.Name, rel.ID, row.ID, row.NodeID, rel.ForwardExists, rel.ForwardStatus)
+				continue
+			}
+			if len(rel.Entries) == 0 {
+				// R-032：隧道无入口（Entries 为空）时内层循环零次执行，
+				// 此前同样无声；与 R-031 同根，在此留日志。
+				log.Printf("inboundEndpoints: relay %q (relay %d, inbound %d, node %d) has no entries, skipping relay endpoints", rel.Name, rel.ID, row.ID, row.NodeID)
 				continue
 			}
 			for i, entry := range rel.Entries {
