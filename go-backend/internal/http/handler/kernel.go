@@ -2768,8 +2768,8 @@ func versionFloorExempt(version string) bool {
 // 见 versionFloorExempt。消费点全集已逐个分类：各接受-拒绝门、换版
 // 扫描、链路校验与渲染能力标志均走严格变体；宽松版仅余两处有意保
 // 留——xrayPrivateBlockWarning（纯警告面，R8-005 既定口径）与
-// kernelSupportsPostQuantumReality（parseVersionParts 前置严格把
-// 关、本就 fail-closed）。宽松版本体不动（其语义有既有钉死用例）。
+// kernelSupportsPostQuantumReality（先取 banner 内首个可解析版本
+// token、取不到即 fail-closed，PORT-043）。宽松版本体不动（其语义有既有钉死用例）。
 func versionBelowStrict(version string, major, minor int) bool {
 	if versionFloorExempt(version) {
 		return false
