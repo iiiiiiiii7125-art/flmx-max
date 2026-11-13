@@ -268,6 +268,13 @@ type SystemInfo struct {
 	ActiveSessions      int64 `json:"active_sessions"`
 	BudgetRejectedTotal int64 `json:"budget_rejected_total"`
 	BudgetEvictedTotal  int64 `json:"budget_evicted_total"`
+	// ConnlogMarkedForwards is the agent-reported count of
+	// currently loaded forward services carrying the connlog entry
+	// mark (nil = the agent did not report it: old agent, or no
+	// report yet). Pointer on purpose: a reported 0 means "mark
+	// absent" and is a mismatch when the node switch is on, while
+	// nil means "unknown" and must never be read as a mismatch.
+	ConnlogMarkedForwards *int64 `json:"connlog_marked_forwards,omitempty"`
 }
 
 func (s *Server) SetNodeOnlineHook(fn func(nodeID int64)) {
