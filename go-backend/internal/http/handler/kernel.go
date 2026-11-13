@@ -1348,6 +1348,18 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// 用已定稿的内核形态 in 与落库行 row（与对账读到的形态一致）。
 	if req.MeteringEnabled != nil {
 		row.MeteringEnabled = boolToInt(*req.MeteringEnabled)
+	} else if !update {
+		// S05 (AUDIT-HIST): a create that omits meteringEnabled
+		// defaults the switch ON when the inbound can carry metering
+		// (SS2022, no ShadowTLS front, direct-serving shape) — the
+		// API half of the frontend default-on. Explicit false still
+		// opts out; the eligibility/shape gates below silently turn
+		// an ineligible default back off (explicitMetering is false
+		// here, so nothing is refused). Updates never default: an
+		// omitted field keeps the stored switch.
+		if ssMeteringEligible(in) && ssMeteringShapeBlock(&row) == "" {
+			row.MeteringEnabled = 1
+		}
 	}
 	explicitMetering := req.MeteringEnabled != nil && *req.MeteringEnabled
 	if row.MeteringEnabled == 1 && !ssMeteringEligible(in) {
@@ -2178,7 +2190,11 @@ type agentKernelCounter struct {
 	InboundID int64  `json:"inboundId"`
 	Proto     string `json:"proto"`
 	Dir       string `json:"dir"`
-	Bytes     int64  `json:"bytes"`
+	// Packets is the packet count behind Bytes (FIX-029: realm IP-layer
+	// counters are converted to the payload layer with it). Zero when
+	// the agent predates the field; then bytes pass through unconverted.
+	Packets int64 `json:"packets,omitempty"`
+	Bytes   int64  `json:"bytes"`
 }
 
 type agentUserCounter struct {
@@ -2338,7 +2354,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			!chainTargets[row.ID] && row.SourceID == 0 {
 			connLogInbounds = append(connLogInbounds, in.ID)
 		}
-		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network()}
+		port := map[string]interface{}{"inboundId": in.ID, "port": in.Port, "network": in.Network(), "bind": in.Listen}
 		if lo, hi := in.HopRange(); lo > 0 {
 			port["hopFrom"], port["hopTo"] = lo, hi
 		}

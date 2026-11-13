@@ -55,6 +55,9 @@ type counterRule struct {
 	InboundID int64
 	Port      int
 	Proto     string
+	// Bind is the inbound's listen address (FIX-031); empty or
+	// wildcard means the rule stays unconditioned (see nftBindMatch).
+	Bind string
 }
 
 func (c counterRule) name(dir string) string {
@@ -72,7 +75,7 @@ func expandPorts(ports []Port) []counterRule {
 			if proto != "tcp" && proto != "udp" {
 				continue
 			}
-			r := counterRule{InboundID: p.InboundID, Port: p.Port, Proto: proto}
+			r := counterRule{InboundID: p.InboundID, Port: p.Port, Proto: proto, Bind: p.Bind}
 			if _, ok := seen[r]; ok {
 				continue
 			}
@@ -264,6 +267,30 @@ func writeSet(b *strings.Builder, name, typ string, elems []string) {
 	b.WriteString("\t}\n")
 }
 
+// nftBindMatch renders the address match for one bound counter rule
+// (FIX-031, AUDIT-HIST): packets to the same port on any other local
+// address were counted toward the bound inbound. dir "in" matches the
+// packet's destination (input chain), dir "out" its source (output
+// chain — replies leave from the bind address). A wildcard listen
+// ("", "0.0.0.0", "::") or an unparsable value matches every local
+// address, so it renders no condition and the rule is byte-identical
+// to the old port-only form. A specific IPv4 bind renders
+// "ip daddr/saddr X"; a specific IPv6 bind renders "ip6 daddr/saddr X".
+func nftBindMatch(bind, dir string) string {
+	ip := net.ParseIP(strings.TrimSpace(bind))
+	if ip == nil || ip.IsUnspecified() {
+		return ""
+	}
+	verb := "daddr"
+	if dir == "out" {
+		verb = "saddr"
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return fmt.Sprintf("ip %s %s", verb, ip4.String())
+	}
+	return fmt.Sprintf("ip6 %s %s", verb, ip.String())
+}
+
 // nftScript builds the atomic ruleset. Chains have policy accept and only
 // count, except that a port with a whitelist drops packets from sources not
 // on it (only that port; nothing else on the host is affected).
@@ -307,14 +334,24 @@ func nftScript(rules []counterRule, guards map[int64]allowGuard, hops []hopRule,
 		fmt.Fprintf(&b, "\t\tmeta nfproto ipv6 %s dport %d ip6 saddr != @allow6_%d drop\n", r.Proto, r.Port, r.InboundID)
 	}
 	for _, r := range rules {
-		fmt.Fprintf(&b, "\t\t%s dport %d counter name %s\n", r.Proto, r.Port, r.name("in"))
+		// FIX-031: a bound inbound's counter only matches traffic
+		// addressed to/from its BindIP; unbound rules are unchanged.
+		if m := nftBindMatch(r.Bind, "in"); m != "" {
+			fmt.Fprintf(&b, "\t\t%s %s dport %d counter name %s\n", m, r.Proto, r.Port, r.name("in"))
+		} else {
+			fmt.Fprintf(&b, "\t\t%s dport %d counter name %s\n", r.Proto, r.Port, r.name("in"))
+		}
 	}
 	for _, id := range users {
 		fmt.Fprintf(&b, "\t\tct mark 0x%08x counter name %s\n", userMarkBase|id, userCounterName("down", id))
 	}
 	b.WriteString("\t}\n\tchain output {\n\t\ttype filter hook output priority -150; policy accept;\n")
 	for _, r := range rules {
-		fmt.Fprintf(&b, "\t\t%s sport %d counter name %s\n", r.Proto, r.Port, r.name("out"))
+		if m := nftBindMatch(r.Bind, "out"); m != "" {
+			fmt.Fprintf(&b, "\t\t%s %s sport %d counter name %s\n", m, r.Proto, r.Port, r.name("out"))
+		} else {
+			fmt.Fprintf(&b, "\t\t%s sport %d counter name %s\n", r.Proto, r.Port, r.name("out"))
+		}
 	}
 	for _, id := range users {
 		fmt.Fprintf(&b, "\t\tmeta mark 0x%08x ct mark set meta mark counter name %s\n", userMarkBase|id, userCounterName("up", id))
@@ -544,9 +581,14 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 type nftListOutput struct {
 	Nftables []struct {
 		Counter *struct {
-			Name  string `json:"name"`
-			Table string `json:"table"`
-			Bytes int64  `json:"bytes"`
+			Name    string `json:"name"`
+			Table   string `json:"table"`
+			// Packets is the packet count of this counter. FIX-029
+			// (AUDIT-HIST): the panel converts realm nft counters
+			// from the IP layer to the payload layer, and that
+			// conversion needs packets as well as bytes.
+			Packets int64 `json:"packets"`
+			Bytes   int64 `json:"bytes"`
 		} `json:"counter"`
 	} `json:"nftables"`
 }
@@ -594,7 +636,7 @@ func parseCounters(raw []byte) ([]Counter, []UserCounter, error) {
 		if err != nil {
 			continue
 		}
-		counters = append(counters, Counter{InboundID: id, Proto: parts[2], Dir: parts[0], Bytes: c.Bytes})
+		counters = append(counters, Counter{InboundID: id, Proto: parts[2], Dir: parts[0], Packets: c.Packets, Bytes: c.Bytes})
 	}
 	return counters, users, nil
 }

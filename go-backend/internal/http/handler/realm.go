@@ -643,6 +643,45 @@ func (h *Handler) applyRealmCounters(nodeID int64, epoch string, counters []agen
 // 回头取同一 kernel 的 apply 锁（不可重入）必自锁；执法由 ≤60s
 // 后的周期轮询全量面按已入账累计补做（与 nftables drain/settle
 // 的同口径分工一致）。
+// realmPayloadHeaderBytes is the per-packet IP+transport header the
+// FIX-029 conversion strips from realm nft counters (IPv4-typical:
+// TCP 20 IP + 32 TCP with timestamps, UDP 20 IP + 8 UDP).
+//
+// Why: realm-phase forward traffic is counted by nft counters, which
+// count whole IP packets (headers included), while gost-phase traffic
+// is counted by gost itself at the payload layer. The same user bytes
+// therefore billed +16%/+11% on realm for one 2000-byte connection
+// (audit: 2320/2216 bytes over 6/4 packets) and ~+3.5% in bulk, versus
+// exactly 2000/2000 on gost. nft totals cannot yield payload bytes
+// exactly, but with the packet count the header part is
+// packets*header: 2320-6*52=2008 and 2216-4*52=2008 against the true
+// 2000 (+0.4%, the two SYN packets' extra 8 header bytes each), versus
+// +16%/+11% unconverted. The conversion runs on the cumulative sample
+// (before the baseline/delta math in accountForwardCounterSamples),
+// so baselines, epoch resets and settle rounds all stay consistent.
+// Residuals, documented not hidden: IPv6 headers are 20 bytes larger
+// (under-corrected by 20/packet on v6 realm flows), and retransmitted
+// segments are counted on the wire twice by any wire-level counter.
+// A sample with packets==0 (pre-fix agent) passes through unconverted.
+func realmPayloadHeaderBytes(proto string) int64 {
+	if strings.EqualFold(strings.TrimSpace(proto), "udp") {
+		return 28
+	}
+	return 52
+}
+
+// realmCounterPayload converts one cumulative realm nft counter sample
+// from the IP layer to the payload layer (FIX-029).
+func realmCounterPayload(c agentKernelCounter) int64 {
+	if c.Bytes <= 0 || c.Packets <= 0 {
+		return c.Bytes
+	}
+	if payload := c.Bytes - c.Packets*realmPayloadHeaderBytes(c.Proto); payload > 0 {
+		return payload
+	}
+	return 0
+}
+
 func (h *Handler) applyRealmCountersMode(nodeID int64, epoch string, counters []agentKernelCounter, now time.Time, enforce bool) {
 	samples := make([]runtimenft.CounterSample, 0, len(counters))
 	hashes := map[int64]string{}
@@ -657,7 +696,7 @@ func (h *Handler) applyRealmCountersMode(nodeID int64, epoch string, counters []
 		} else if c.Dir != "in" {
 			continue
 		}
-		samples = append(samples, runtimenft.CounterSample{ForwardID: fid, Direction: dir, Protocol: c.Proto, Bytes: uint64(c.Bytes)})
+		samples = append(samples, runtimenft.CounterSample{ForwardID: fid, Direction: dir, Protocol: c.Proto, Bytes: uint64(realmCounterPayload(c))})
 		// The agent's counters restart with its epoch.
 		hashes[fid] = "realm:" + epoch
 	}

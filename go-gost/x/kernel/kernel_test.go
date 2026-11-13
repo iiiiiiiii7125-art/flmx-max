@@ -205,7 +205,7 @@ func TestManagerLifecycle(t *testing.T) {
 	if !status.NftAvailable || len(status.Counters) != 2 || status.Epoch == "" {
 		t.Fatalf("status counters: %+v", status)
 	}
-	if status.Counters[0] != (Counter{InboundID: 7, Proto: "tcp", Dir: "in", Bytes: 1200}) {
+	if status.Counters[0] != (Counter{InboundID: 7, Proto: "tcp", Dir: "in", Packets: 3, Bytes: 1200}) {
 		t.Fatalf("counter parse: %+v", status.Counters[0])
 	}
 	if len(status.Kernels) != 1 || len(status.Kernels[0].Logs) == 0 {

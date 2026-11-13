@@ -309,7 +309,12 @@ export function emptyForm(
     outboundIpStrategy: "auto",
     splitRules: [],
     enabled: true,
-    meteringEnabled: false,
+    // S05 (AUDIT-HIST): subscription metering defaults ON for a new
+    // inbound. The old false default made every default-path SS2022
+    // inbound silently unmetered (subscription traffic stuck at 0/0,
+    // Issue B). toPayload still gates the value by eligibility, so a
+    // non-SS2022 form never sends true to the backend.
+    meteringEnabled: true,
     meteringActive: false,
     connIdleSeconds: "",
   };
@@ -664,7 +669,23 @@ export function toPayload(form: InboundForm): InboundMutationPayload {
     outboundIpStrategy: form.outboundIpStrategy,
     splitRules: splitPayload(form.splitRules),
     enabled: form.enabled,
-    meteringEnabled: form.meteringEnabled,
+    // S05 (AUDIT-HIST): the form defaults metering ON (emptyForm), but
+    // the switch may only reach the backend when this form can actually
+    // carry metering — SS2022, no ShadowTLS front, direct-serving
+    // shape (same predicate as the backend's ssMeteringEligible +
+    // ssMeteringShapeBlock). Without this gate the default-on would make
+    // every non-SS create send meteringEnabled=true and hit the backend's
+    // "explicitly enabled but ineligible" refusal.
+    meteringEnabled:
+      form.protocol === "shadowsocks" &&
+      form.method.startsWith("2022-") &&
+      form.securityType !== "shadowtls" &&
+      !form.relayOnly &&
+      !form.acceptProxyProtocol &&
+      !Number(form.outboundId) &&
+      form.splitRules.length === 0
+        ? form.meteringEnabled
+        : false,
     // "" sends 0 = unset (Xray default 300s); an explicit number sets it;
     // 0 is the legal clear value on Xray (148-P3-1); "-1" sends -1 =
     // unlimited (renders as 31536000). A non-Xray inbound
