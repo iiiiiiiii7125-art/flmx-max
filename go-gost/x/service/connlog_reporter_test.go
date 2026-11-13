@@ -208,7 +208,9 @@ func TestConnlogSpoolCapDropsOldestAndReportsCount(t *testing.T) {
 		c.openThrottle = time.Nanosecond
 	})
 	for i := 0; i < 10; i++ {
-		r.Enqueue(testOpenEvent(fmt.Sprintf("c%02d", i), int64(1000+i)))
+		// L1-01：fixture 用真实时间戳——远古 StartMs 会被 Open
+		// TTL 清道夫同周期结清，不再是「未闭合 open」。
+		r.Enqueue(testOpenEvent(fmt.Sprintf("c%02d", i), time.Now().UnixMilli()+int64(i)))
 	}
 	r.cycle(context.Background())
 
@@ -254,8 +256,12 @@ func TestConnlogBootChangeSettlesOpenAsInterrupted(t *testing.T) {
 		return 0, fmt.Errorf("panel down")
 	}}
 	r1 := newTestConnlogReporter(t, dir, sender1, &boot, nil)
-	r1.Enqueue(testOpenEvent("x1", 1000))
-	r1.Enqueue(testOpenEvent("x2", 2000))
+	// L1-01：fixture 用真实时间戳——远古 StartMs 会被 Open TTL
+	// 清道夫在 r1 周期内结清，r2 的换代结清将无条目可结。
+	start1 := time.Now().UnixMilli() - 2000
+	start2 := time.Now().UnixMilli() - 1000
+	r1.Enqueue(testOpenEvent("x1", start1))
+	r1.Enqueue(testOpenEvent("x2", start2))
 	r1.cycle(context.Background()) // 落盘进台账（纯 open 节流未组批也无妨）
 	if st := readSpoolStateFromDisk(t, dir); len(st.Open) != 2 {
 		t.Fatalf("台账应有 2 条未闭合, got %d", len(st.Open))
@@ -283,7 +289,7 @@ func TestConnlogBootChangeSettlesOpenAsInterrupted(t *testing.T) {
 	if settles[0].ConnID != "x1" || settles[1].ConnID != "x2" {
 		t.Fatalf("结清顺序应按起始时刻: got %s, %s", settles[0].ConnID, settles[1].ConnID)
 	}
-	if settles[0].EndMs != 1000 || settles[1].EndMs != 2000 {
+	if settles[0].EndMs != start1 || settles[1].EndMs != start2 {
 		t.Fatalf("interrupted 的 end 必须是最后已知时刻（=各自 start）, got %d / %d",
 			settles[0].EndMs, settles[1].EndMs)
 	}
@@ -378,7 +384,10 @@ func TestConnlogOpenThrottleAndClosePromptness(t *testing.T) {
 	r := newTestConnlogReporter(t, dir, sender, &boot, func(c *connlogConfig) {
 		c.openThrottle = time.Hour
 	})
-	r.Enqueue(testOpenEvent("c1", 1000))
+	// L1-01：fixture 用真实时间戳——远古 StartMs 会被 Open TTL
+	// 清道夫同周期结清，纯 open 节流分支将走不到。
+	start := time.Now().UnixMilli()
+	r.Enqueue(testOpenEvent("c1", start))
 	r.cycle(context.Background())
 	if len(sender.calls) != 0 {
 		t.Fatal("纯 open 未满节流窗口不应发送")
@@ -389,7 +398,7 @@ func TestConnlogOpenThrottleAndClosePromptness(t *testing.T) {
 		t.Fatal("节流窗口满后纯 open 批次应发送")
 	}
 
-	r.Enqueue(testCloseEvent("c1", 1000, 1500))
+	r.Enqueue(testCloseEvent("c1", start, start+500))
 	r.cycle(context.Background())
 	if len(sender.calls) != 2 {
 		t.Fatal("含 close 的批次应即时发送（不等节流窗口）")
@@ -471,5 +480,73 @@ func TestConnlogWireContract(t *testing.T) {
 	var rej connlogReportRejection
 	if !errors.As(err, &rej) || rej != connlogRejectionResetStream {
 		t.Fatalf("409 reset_stream 应判为拒绝, got %v", err)
+	}
+}
+
+// ---- L1-01: Open 台账 TTL 清道夫（Xray event_only 会话永无
+// close 事件，Open 条目须有界增长） ----
+
+func TestConnlogOpenTTLExpiresStaleEntries(t *testing.T) {
+	dir := t.TempDir()
+	boot := "boot-A"
+	sender := &fakeConnlogSender{}
+	now := time.Now().UnixMilli()
+	r := newTestConnlogReporter(t, dir, sender, &boot, func(c *connlogConfig) {
+		c.openTTL = 50 * time.Millisecond
+	})
+	// 1 小时前的 open：相对 50ms TTL 已过期，须在本周期结清。
+	staleStart := now - 3600*1000
+	r.Enqueue(testOpenEvent("old1", staleStart))
+	r.cycle(context.Background())
+	if st := readSpoolStateFromDisk(t, dir); len(st.Open) != 0 {
+		t.Fatalf("过期 open 应已结清出台账, 台账仍有 %d 条", len(st.Open))
+	}
+	// 结清事件随批上报：interrupted，end=最后已知时刻（=open 的 start）。
+	found := false
+	for _, c := range sender.calls {
+		for _, ev := range c.Events {
+			if ev.Type == ConnEventClose && ev.ConnID == "old1" {
+				found = true
+				if ev.Status != ConnStatusInterrupted {
+					t.Fatalf("结清状态 = %q, want interrupted", ev.Status)
+				}
+				if ev.EndMs != staleStart {
+					t.Fatalf("结清 end = %d, want 最后已知时刻 %d", ev.EndMs, staleStart)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("过期 open 的 interrupted close 未上报（各批: %+v）", sender.calls)
+	}
+}
+
+func TestConnlogOpenTTLKeepsFreshEntries(t *testing.T) {
+	dir := t.TempDir()
+	boot := "boot-A"
+	sender := &fakeConnlogSender{}
+	r := newTestConnlogReporter(t, dir, sender, &boot, func(c *connlogConfig) {
+		c.openTTL = time.Hour
+	})
+	r.Enqueue(testOpenEvent("fresh1", time.Now().UnixMilli()))
+	r.cycle(context.Background())
+	if st := readSpoolStateFromDisk(t, dir); len(st.Open) != 1 {
+		t.Fatalf("新鲜 open 应留在台账, got %d 条", len(st.Open))
+	}
+	if len(sender.calls) != 0 {
+		t.Fatalf("新鲜 open 不应产生结清上报, got %d 批", len(sender.calls))
+	}
+}
+
+func TestConnlogOpenTTLEnvOverride(t *testing.T) {
+	t.Setenv("FLMX_CONNLOG_OPEN_TTL", "90s")
+	r := newConnlogReporter(connlogConfig{})
+	if r.cfg.openTTL != 90*time.Second {
+		t.Fatalf("env TTL = %v, want 90s", r.cfg.openTTL)
+	}
+	t.Setenv("FLMX_CONNLOG_OPEN_TTL", "bogus")
+	r2 := newConnlogReporter(connlogConfig{})
+	if r2.cfg.openTTL != defaultConnlogOpenTTL {
+		t.Fatalf("无效 env TTL 应回退默认 24h, got %v", r2.cfg.openTTL)
 	}
 }

@@ -188,6 +188,48 @@ func (st *connlogSpoolState) queuedBytes() int64 {
 	return n
 }
 
+// sweepStaleOpen 结清超 TTL 未闭合的 Open 台账条目（L1-01）：
+// Xray event_only 会话永无 close 事件，Open 条目不靠本轮清理
+// 会永久占 spool 文件（约 270B/条），只在进程换代时结清。
+// 超 TTL（默认 24h，与面板侧 24h 僵尸 open 清道夫同口径）的
+// 条目在此结清为 interrupted 追加到 Buffered 尾部（其 open
+// 事件必在更早周期已入队，顺序上 open 先于 close），EndMs 取
+// 最后已知时刻，绝不以清扫时刻冒充断开时刻（§4.6 同纪律）。
+// 返回结清条数；ttl <= 0 时不扫。
+func (st *connlogSpoolState) sweepStaleOpen(ttl time.Duration, nowMs int64) int {
+	if ttl <= 0 || len(st.Open) == 0 {
+		return 0
+	}
+	ttlMs := ttl.Milliseconds()
+	swept := 0
+	for connID, openEv := range st.Open {
+		lastKnown := st.OpenLastKnown[connID]
+		if lastKnown <= 0 {
+			lastKnown = openEv.StartMs
+		}
+		if nowMs-lastKnown <= ttlMs {
+			continue
+		}
+		st.Buffered = append(st.Buffered, ConnEvent{
+			Type:        ConnEventClose,
+			ConnID:      connID,
+			EntryKind:   openEv.EntryKind,
+			EntryID:     openEv.EntryID,
+			ClientIP:    openEv.ClientIP,
+			ClientPort:  openEv.ClientPort,
+			Network:     openEv.Network,
+			SessionKind: openEv.SessionKind,
+			StartMs:     openEv.StartMs,
+			EndMs:       lastKnown,
+			Status:      ConnStatusInterrupted,
+		})
+		delete(st.Open, connID)
+		delete(st.OpenLastKnown, connID)
+		swept++
+	}
+	return swept
+}
+
 // enforceCap 在 state 副本上执行容量上限：只从 Buffered 头部丢
 // 最旧，丢弃数累加进 state.Dropped（随批上行）。Pending/Retry
 // 不动——它们是已组批承诺送达的事件。返回丢弃条数。

@@ -377,6 +377,10 @@ func (s *defaultService) Serve() error {
 		// a disabled master switch this costs one bool check.
 		connLog := s.options.connLogEntry && ConnLogEnabled()
 		var connLogStartMs int64
+		// clientGoneMs 是 C13 的客户端离开观测（见
+		// connlog_client_watch.go）：Handle 期间客户端断开
+		// 的时刻；未观测到时为 0，close 事件回退旧口径。
+		var clientGoneMs atomic.Int64
 		if connLog {
 			connLogStartMs = time.Now().UnixMilli()
 			EnqueueConnEvent(s.newConnEvent(
@@ -391,9 +395,13 @@ func (s *defaultService) Serve() error {
 
 			if connLog {
 				defer func() {
+					// close 的 EndMs 取 Handle 返回与客户端
+					// 离开二者之早（C13）：上游停滞时 handler
+					// 被重试死线钉住，客户端早断仍须记真实
+					// 时长，而非死线全长。
 					EnqueueConnEvent(s.newConnEvent(
 						ConnEventClose, sid, clientAddr, clientIP, conn,
-						connLogStartMs, time.Now().UnixMilli()))
+						connLogStartMs, connLogCloseEndMs(&clientGoneMs)))
 				}()
 			}
 
@@ -438,6 +446,17 @@ func (s *defaultService) Serve() error {
 
 			if needWrap.Load() {
 				conn = wrapConnPDetection(conn)
+			}
+
+			// C13：Handle 期间观测客户端离开（仅 TCP 入站、
+			// 仅 connlog 开时）。观测在 wrap 之后启动，使
+			// watcher 拿到最终的连接形态；只看对端 FIN，
+			// 不读字节、不改转发行为。done 在 close 事件
+			// defer 之后注册，故先于它执行。
+			if connLog && connNetwork(conn) == "tcp" {
+				watchDone := make(chan struct{})
+				defer close(watchDone)
+				go watchClientClose(conn, watchDone, &clientGoneMs)
 			}
 
 			if err := s.handler.Handle(ctx, conn); err != nil {

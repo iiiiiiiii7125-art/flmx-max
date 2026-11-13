@@ -325,3 +325,45 @@ func TestConnlogQueuedBytesExcludesOpenLedger(t *testing.T) {
 		t.Fatalf("queuedBytes after cap = %d, want <= %d", got, want-1)
 	}
 }
+
+// L1-01：sweepStaleOpen 只结清超 TTL 的 Open 条目；新鲜的长
+// 会话不受影响；结清事件是 interrupted、end=最后已知时刻。
+func TestConnlogSweepStaleOpen(t *testing.T) {
+	now := time.Now().UnixMilli()
+	staleStart := now - 25*3600*1000
+	freshStart := now - 60*1000
+	st := connlogSpoolState{
+		Open: map[string]ConnEvent{
+			"old":   testOpenEvent("old", staleStart),
+			"fresh": testOpenEvent("fresh", freshStart),
+		},
+		OpenLastKnown: map[string]int64{"old": staleStart, "fresh": freshStart},
+	}
+	if swept := st.sweepStaleOpen(24*time.Hour, now); swept != 1 {
+		t.Fatalf("swept = %d, want 1", swept)
+	}
+	if len(st.Open) != 1 {
+		t.Fatalf("Open 剩余 %d 条, want 1 (fresh)", len(st.Open))
+	}
+	if _, ok := st.Open["fresh"]; !ok {
+		t.Fatal("新鲜的 open 不应被结清")
+	}
+	if len(st.Buffered) != 1 {
+		t.Fatalf("Buffered 应追加 1 条结清 close, got %d", len(st.Buffered))
+	}
+	cls := st.Buffered[0]
+	if cls.ConnID != "old" || cls.Type != ConnEventClose || cls.Status != ConnStatusInterrupted {
+		t.Fatalf("结清事件 = %+v, want old 的 interrupted close", cls)
+	}
+	if cls.EndMs != staleStart || cls.StartMs != staleStart {
+		t.Fatalf("结清 end/start = %d/%d, want %d/%d", cls.EndMs, cls.StartMs, staleStart, staleStart)
+	}
+	// 再扫一次：无新过期，不再结清。
+	if swept := st.sweepStaleOpen(24*time.Hour, now); swept != 0 {
+		t.Fatalf("second sweep = %d, want 0", swept)
+	}
+	// ttl <= 0：不清道夫。
+	if swept := st.sweepStaleOpen(0, now); swept != 0 {
+		t.Fatalf("disabled sweep = %d, want 0", swept)
+	}
+}

@@ -35,6 +35,11 @@ const (
 	defaultConnlogBatchMaxEvents = 500        // 单批事件上限
 	defaultConnlogTick           = time.Second
 	defaultConnlogOpenThrottle   = 5 * time.Second // §5.3 open 批量节流（5s 级）
+	// defaultConnlogOpenTTL 是 Open 台账的存活上限（L1-01）：
+	// Xray event_only 会话永无 close 事件，超此 TTL 未闭合的
+	// Open 条目由清道夫结清为 interrupted，不再永久滞留。
+	// 24h 与面板侧 24h 僵尸 open 清道夫同口径。
+	defaultConnlogOpenTTL = 24 * time.Hour
 )
 
 // 面板对 connlog v2 上报的三路拒绝（与回执 JSON 的 error 字段对
@@ -147,6 +152,7 @@ type connlogConfig struct {
 	batchMax     int
 	tick         time.Duration
 	openThrottle time.Duration
+	openTTL      time.Duration // Open 台账存活上限（L1-01）；<=0 时取默认 24h
 	sendFn       func(ctx context.Context, b connlogEnvelope) (int64, error)
 	bootIDFn     func() string
 }
@@ -163,6 +169,18 @@ func (c *connlogConfig) applyDefaults() {
 	}
 	if c.openThrottle <= 0 {
 		c.openThrottle = defaultConnlogOpenThrottle
+	}
+	if c.openTTL <= 0 {
+		c.openTTL = defaultConnlogOpenTTL
+		// 部署侧覆盖（测试/验证用，如 FLMX_CONNLOG_OPEN_TTL=60s）：
+		// 须为 Go duration 串且 >0，否则回退默认并点名。
+		if v := strings.TrimSpace(os.Getenv("FLMX_CONNLOG_OPEN_TTL")); v != "" {
+			if d, err := time.ParseDuration(v); err == nil && d > 0 {
+				c.openTTL = d
+			} else {
+				fmt.Printf("⚠️ FLMX_CONNLOG_OPEN_TTL 无效 %q，已回退默认 24h: %v\n", v, err)
+			}
+		}
 	}
 	if c.sendFn == nil {
 		c.sendFn = sendConnlogBatch
@@ -456,6 +474,15 @@ func (r *connlogReporter) persistLocked() bool {
 		if dropped := next.enforceCap(r.cfg.spoolMax); dropped > 0 {
 			fmt.Printf("⚠️ 连接日志 spool 超上限 %d 字节，丢弃最旧 %d 条（计数随批上行）\n", r.cfg.spoolMax, dropped)
 		}
+	}
+
+	// L1-01：Open 台账 TTL 清道夫（每周期跑一次，见
+	// sweepStaleOpen）。只结清超 TTL 的条目；新鲜的长会话
+	// 不受影响。清道夫追加的 close 事件同样受容量上限约束。
+	if swept := next.sweepStaleOpen(r.cfg.openTTL, time.Now().UnixMilli()); swept > 0 {
+		changed = true
+		next.enforceCap(r.cfg.spoolMax)
+		fmt.Printf("🧹 连接日志：%d 条超 %v 未闭合的 open 连接已结清为 interrupted\n", swept, r.cfg.openTTL)
 	}
 
 	if len(next.Buffered) > 0 && r.bufferedSince.IsZero() {
