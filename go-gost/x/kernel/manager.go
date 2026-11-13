@@ -776,14 +776,18 @@ func (m *Manager) setErr(inst *instance, err error) {
 // set of an ApplyRequest: the per-inbound opt-in list
 // (ConnLogInbounds, unit U5) intersected with the panel's topology
 // qualification (ConnlogEntries, unit U7). An inbound is collected
-// only when BOTH lists name it — opt-in alone would let a relay
-// landing or chain target be collected if its switch were flipped
-// (its kernel log lines name the previous hop, not the client:
-// wrong data, not weak data), and topology alone would collect
-// inbounds the user never opted in (and whose rendering never
-// raised the log surface the parser feeds on). Resolved here, at
-// the point of use, from the one request that owns the instance,
-// so Apply and rollback can never disagree about the set.
+// only when BOTH lists name it — the opt-in list is the node's
+// collection gate (the node switch is the only switch; there is no
+// per-inbound switch anymore), and the topology list is the entry
+// qualification (a chain target's kernel log lines name the
+// previous hop, not the client: wrong data, not weak data). A relay
+// landing inbound IS named by both lists on purpose (R2-D-P2-1):
+// a public inbound can take direct connections as well as relay
+// landings, so excluding it would hide its direct records; its
+// relay leg shows one row whose client IP is the previous hop.
+// Resolved here, at the point of use, from the one request that
+// owns the instance, so Apply and rollback can never disagree
+// about the set.
 func connlogEffectiveOptIns(req ApplyRequest) []int64 {
 	if len(req.ConnLogInbounds) == 0 || len(req.ConnlogEntries) == 0 {
 		return nil
