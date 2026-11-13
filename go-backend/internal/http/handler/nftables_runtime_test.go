@@ -500,6 +500,36 @@ func TestValidateNftablesForwardRequestRejectsHostnameTarget(t *testing.T) {
 	}
 }
 
+// L2 (AUDIT-HIST 域外观察，总协调裁定)：nftables DNAT 到回环目标
+// （127.0.0.0/8、::1）的包在 route_localnet=0 的入口节点上被内核
+// 丢弃，转发建了也不通。建转发时直接拒收回环目标并点名；不静默
+// 改节点内核的 route_localnet。
+func TestValidateNftablesForwardRequestRejectsLoopbackTarget(t *testing.T) {
+	fixture := setupNftablesHandler(t)
+	h := fixture.handler
+	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-loopback", fixture.nodeID)
+	tunnel, err := h.getTunnelRecord(tunnelID)
+	if err != nil {
+		t.Fatalf("load tunnel: %v", err)
+	}
+
+	loopback := []string{"127.0.0.1:8080", "127.0.0.2:8080", "127.255.255.255:8080", "[::1]:8080"}
+	for _, target := range loopback {
+		if err := h.validateNftablesForwardRequest(tunnel, target, []int64{fixture.nodeID}); err == nil {
+			t.Fatalf("loopback target %q must be rejected", target)
+		} else if !strings.Contains(err.Error(), "回环") {
+			t.Fatalf("loopback rejection must name the loopback cause, got %q", err)
+		}
+	}
+
+	// 对照：局域网/公网目标仍放行。
+	for _, target := range []string{"192.168.22.10:8080", "203.0.113.9:8080", "8.8.8.8:53"} {
+		if err := h.validateNftablesForwardRequest(tunnel, target, []int64{fixture.nodeID}); err != nil {
+			t.Fatalf("non-loopback target %q must pass: %v", target, err)
+		}
+	}
+}
+
 func TestForwardDeleteReconcilesNftablesAfterDBDelete(t *testing.T) {
 	fixture := setupNftablesHandler(t)
 	h := fixture.handler

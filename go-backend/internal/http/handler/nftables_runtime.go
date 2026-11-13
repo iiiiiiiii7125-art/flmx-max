@@ -99,8 +99,18 @@ func (h *Handler) validateNftablesForwardRequest(tunnel *tunnelRecord, remoteAdd
 	if err != nil {
 		return err
 	}
-	if net.ParseIP(strings.Trim(strings.TrimSpace(target.Host), "[]")) == nil {
+	ip := net.ParseIP(strings.Trim(strings.TrimSpace(target.Host), "[]"))
+	if ip == nil {
 		return errors.New("nftables 节点仅支持 IP 目标地址")
+	}
+	// L2（AUDIT-HIST 域外观察，总协调裁定）：DNAT 到回环目标的包在
+	// 入口节点上命中规则后仍会被内核丢弃（route_localnet=0 时发往
+	// 127.0.0.0/8、::1 的 DNAT 包不走本地回环），转发建了也不通。
+	// 建转发时直接拒收回环目标并点名；不静默改节点内核的
+	// route_localnet（内核级副作用，不在面板转发职责内）。本函数
+	// 是创建/编辑 intake 与同步漏斗的共用口径，拒绝覆盖三面。
+	if ip.IsLoopback() {
+		return fmt.Errorf("nftables 转发目标不能是回环地址 %s：DNAT 到回环地址的流量会被入口节点内核丢弃（route_localnet 未开启），请改用节点的局域网或公网地址", target.Host)
 	}
 	return nil
 }
