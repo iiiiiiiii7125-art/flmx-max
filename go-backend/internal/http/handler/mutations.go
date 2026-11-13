@@ -9480,6 +9480,13 @@ func (h *Handler) deleteNodeByIDAfterGuardsOutcome(id int64, guard *nodeDeleteGu
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// R-140：级联删行成功即取消该节点待发离线定时器与告警态
+	// （forgetNode）。否则定时器到点时按 id 查库——id 被复用建新
+	// 节点后存在性检查通过，会对从未离线的新节点误发幽灵“节点掉
+	// 线”告警。本段是全部删节点入口的汇聚漏斗（单删/批删/创建补
+	// 偿/卸载完成），在此清一次即全集覆盖，与下方 metrics.ForgetNode
+	// 同口径。删除失败不走到这里：节点仍在，待发定时器必须保留。
+	h.forgetNode(id)
 	// C4-G2：记录删除即待卸载登记的生命周期终点（管理员不带卸
 	// 载的强制删除、清扫的 succeeded 收尾都经此漏斗），同点清
 	// 登记，不留孤儿行。强制删（failed/unconfirmed 登记被管理员
