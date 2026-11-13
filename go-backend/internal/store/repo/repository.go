@@ -1258,6 +1258,17 @@ func (r *Repository) ResetLocalNodeStatusesAtStartup() (int64, error) {
 	return res.RowsAffected, res.Error
 }
 
+// ListNodeIDs 返回全部节点 ID 集（L3-05 兜底清扫用：IngestionService
+// 的小时级 prune 按此集逐出已删节点的残留键）。
+func (r *Repository) ListNodeIDs() ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ids []int64
+	err := r.db.Model(&model.Node{}).Order("id ASC").Pluck("id", &ids).Error
+	return ids, err
+}
+
 // ListOnlineLocalNodeIDs 返回当前 status=1 的本地（非
 // nftables）节点 ID 集，与 ResetLocalNodeStatusesAtStartup 的
 // 复位谓词完全同形——供启动路径在复位前留快照（F2-02）。

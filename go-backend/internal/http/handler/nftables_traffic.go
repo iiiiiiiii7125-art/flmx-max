@@ -40,11 +40,28 @@ func (h *Handler) runNftablesTrafficCollectJob(now time.Time) {
 		log.Printf("nftables traffic collection failed op=list_nodes err=%v", err)
 		return
 	}
+	// L3-04：旧实现串行逐节点，每节点 SSH 最坏 15s，轮次时长 O(N)；
+	// N=16 最坏 240s＞30s tick，采集频率退化。节点间采集互不依赖
+	// （采集不取写锁、入账按节点串行，见 D18 与 lockNodeForwardAccounting），
+	// 改为有界并发，与内核状态轮询 kernelStatusParallel=8 同口径。
+	// 最坏轮次 ceil(N/8)×15s；单节点 SSH 挂死只拖住自己一个槽位，
+	// 不拖死整轮。ticker 丢 tick、不重叠的现状不变（jobs.go 的
+	// runNftablesTrafficCollectLoop 仍同步跑完本轮才等下一 tick）。
+	byID := make(map[int64]*model.NodeSSHConfig, len(nodes))
+	ids := make([]int64, 0, len(nodes))
 	for i := range nodes {
 		node := &nodes[i]
-		h.collectNftablesNodeTraffic(node.NodeID, &node.Config, now)
+		byID[node.NodeID] = &node.Config
+		ids = append(ids, node.NodeID)
 	}
+	runParallelNodeTasks(ids, nftablesTrafficCollectParallel, func(nodeID int64) {
+		h.collectNftablesNodeTraffic(nodeID, byID[nodeID], now)
+	})
 }
+
+// nftablesTrafficCollectParallel 是 nft 采集轮的单轮并发上限
+// （L3-04）：与内核状态轮询 kernelStatusParallel=8 同口径。
+const nftablesTrafficCollectParallel = 8
 
 func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) {
 	batch, metas, nowMs, quotaViews, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
