@@ -6756,6 +6756,65 @@ test_panel_menu5_rolls_back_on_validate_failure() (
     fail "R4B11-002: validate failure must be reported"
 )
 
+# KR9-008-GLOBAL：菜单 5 遇全局选项块即整单失败。旧实现先写新站点
+# 块、再把保留内容（含全局块）整体附回文件尾，全局块落在站点块之
+# 后，caddy validate 报 global configuration must be first 而回
+# 滚 EXIT=1。修法：保留内容切成全局块与余部，写盘顺序为全局块 →
+# 新站点块 → 其余保留内容。套件的 caddy() 桩默认恒返回 0，单靠
+# 退出码钉不住次序——本用例断言文件次序（全局块居首、恰一份），
+# 本机有真 caddy 时再把 validate 桩委托给真二进制、走真实校验；
+# 无真 caddy 时次序断言仍独立成立。旧代码对本次序断言必红（全
+# 局块在面板块之后）。
+test_panel_menu5_keeps_global_block_first() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local real_caddy=""
+  real_caddy=$(type -P caddy || true)
+  panel_caddyfile_fixture_env
+  if [[ -n "$real_caddy" ]]; then
+    caddy() {
+      if [[ "${1:-}" == "validate" ]]; then
+        "$real_caddy" "$@"
+        return $?
+      fi
+      return 0
+    }
+  fi
+  cat > "$CADDYFILE_PATH" <<'CF'
+{
+	admin off
+}
+
+old.example.com {
+	reverse_proxy 127.0.0.1:6366
+}
+CF
+
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "KR9-008-GLOBAL: menu 5 must succeed with a global options block present"
+  assert_equals "{" "$(grep -v '^[[:space:]]*$' "$CADDYFILE_PATH" | head -n 1 | tr -d '[:space:]')" \
+    "KR9-008-GLOBAL: the global block must stay first in the Caddyfile"
+  assert_equals "1" "$(grep -c 'admin off' "$CADDYFILE_PATH")" \
+    "KR9-008-GLOBAL: the global block must appear exactly once"
+  assert_equals "1" "$(grep -c '^panel.example.com {' "$CADDYFILE_PATH")" \
+    "KR9-008-GLOBAL: the panel block must appear exactly once"
+  grep -q '^old.example.com {' "$CADDYFILE_PATH" || \
+    fail "KR9-008-GLOBAL: the unrelated site block must be kept"
+  # 幂等：再跑一次菜单 5，全局块与面板块仍各恰一份、全局块仍居首。
+  setup_domain_proxy <<< "panel.example.com" >/dev/null || \
+    fail "KR9-008-GLOBAL: menu 5 re-run must succeed with a global options block present"
+  assert_equals "{" "$(grep -v '^[[:space:]]*$' "$CADDYFILE_PATH" | head -n 1 | tr -d '[:space:]')" \
+    "KR9-008-GLOBAL: the global block must stay first after a menu 5 re-run"
+  assert_equals "1" "$(grep -c 'admin off' "$CADDYFILE_PATH")" \
+    "KR9-008-GLOBAL: the global block must still appear exactly once after a re-run"
+  assert_equals "1" "$(grep -c '^panel.example.com {' "$CADDYFILE_PATH")" \
+    "KR9-008-GLOBAL: the panel block must still appear exactly once after a re-run"
+  if [[ -n "$real_caddy" ]]; then
+    "$real_caddy" validate --config "$CADDYFILE_PATH" >/dev/null 2>&1 || \
+      fail "KR9-008-GLOBAL: the resulting Caddyfile must pass real caddy validate"
+  fi
+)
+
 # R4B11-002（菜单 5 restart 腿）：restart 返回非 0 时不得被 set -e 在
 # is-active 检查前吞掉——必须回滚并落到 journalctl 日志指引分支。
 test_panel_menu5_restart_failure_rolls_back_with_guidance() (
@@ -12088,6 +12147,7 @@ test_systemd_starts_reset_failed_before_start
 test_rollback_restarts_service_from_failed_state
 test_panel_menu5_preserves_front_block_after_menu6
 test_panel_menu5_rolls_back_on_validate_failure
+test_panel_menu5_keeps_global_block_first
 test_panel_menu5_restart_failure_rolls_back_with_guidance
 test_panel_menu6_restart_failure_rolls_back_with_guidance
 test_panel_menu5_caddy_list_truncated_not_landed
