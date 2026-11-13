@@ -44,11 +44,11 @@ type connlogEnvelope struct {
 
 // connlogSpoolState 是 spool 文件的落盘形态。
 type connlogSpoolState struct {
-	Stream  string            `json:"stream"`
-	Next    int64             `json:"next"`
-	Pending *connlogEnvelope  `json:"pending,omitempty"`
+	Stream   string           `json:"stream"`
+	Next     int64            `json:"next"`
+	Pending  *connlogEnvelope `json:"pending,omitempty"`
 	Buffered []ConnEvent      `json:"buffered,omitempty"`
-	Retry   [][]ConnEvent     `json:"retry,omitempty"`
+	Retry    [][]ConnEvent    `json:"retry,omitempty"`
 	// Open 未闭合连接台账：conn_id → open 事件全量（结清时拼
 	// interrupted close 需要原始字段）；OpenLastKnown 为 conn_id
 	// → 最后已知时刻（毫秒），interrupted 的 end_time 只许取它。
@@ -150,12 +150,26 @@ func (s *connlogSpool) save(state connlogSpoolState) error {
 	return writeSeqFileAtomic(s.path, data)
 }
 
-// connlogEventsBytes 估算一组事件的序列化字节（容量口径）。
+// connlogEventSize 返回单个事件的序列化字节（len(json.Marshal(ev))+1
+// 换行），即 §4.2 容量口径的单条分量。尺寸缓存在事件自身的 size
+// 字段（json:"-"，不进线上/落盘格式）；事件建成后字段不可变，缓
+// 存永不失效。落盘重载的事件 size 为 0，首次量尺寸时惰性重算一
+// 次——此后每周期只做整数累加，不再重 marshal。
+func connlogEventSize(ev *ConnEvent) int64 {
+	if ev.size > 0 {
+		return ev.size
+	}
+	line, _ := json.Marshal(ev)
+	ev.size = int64(len(line)) + 1
+	return ev.size
+}
+
+// connlogEventsBytes 一组事件的序列化字节（容量口径）。首次调用
+// 为每个未缓存尺寸的事件各 marshal 一次；此后全为整数累加。
 func connlogEventsBytes(events []ConnEvent) int64 {
 	var n int64
-	for _, ev := range events {
-		line, _ := json.Marshal(ev)
-		n += int64(len(line)) + 1
+	for i := range events {
+		n += connlogEventSize(&events[i])
 	}
 	return n
 }
@@ -177,9 +191,15 @@ func (st *connlogSpoolState) queuedBytes() int64 {
 // enforceCap 在 state 副本上执行容量上限：只从 Buffered 头部丢
 // 最旧，丢弃数累加进 state.Dropped（随批上行）。Pending/Retry
 // 不动——它们是已组批承诺送达的事件。返回丢弃条数。
+//
+// 2.1.12：总量只算一次，丢弃时按已缓存的单条尺寸做减法。旧版每
+// 丢一条就把整个剩余 spool 全量重 marshal 一遍（O(n²)），73k 条
+// spool 下每周期烧掉一整个核。
 func (st *connlogSpoolState) enforceCap(maxBytes int64) int {
 	dropped := 0
-	for st.queuedBytes() > maxBytes && len(st.Buffered) > 0 {
+	total := st.queuedBytes()
+	for total > maxBytes && len(st.Buffered) > 0 {
+		total -= connlogEventSize(&st.Buffered[0])
 		st.Buffered = st.Buffered[1:]
 		dropped++
 	}
