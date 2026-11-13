@@ -198,17 +198,15 @@ export function NodeConnLogModal({
     }
   }, []);
 
-  // Open / switch node: reset the query; load the first page only
-  // once the node's switch is on. Keyed on the id and the list
-  // switch, so flipping the switch while the modal is open reloads
-  // (or clears). The load is gated on the list switch (not the
-  // server-reported one) so a stale server `false` can't wedge the
-  // modal after the user turns the switch back on; the server value
-  // is refreshed by that load. Server values reset only when the
-  // node changes — a server `false` must survive a switch flip so
-  // the not-enabled state keeps showing.
+  // Open / switch node: reset the query and the server-reported
+  // values, then load the first page only once the node's switch is
+  // on. Keyed on the id and the list switch, so flipping the switch
+  // while the modal is open reloads (or clears). The load is gated
+  // on the list switch (not the server-reported one) so a stale
+  // server `false` can't wedge the modal after the user turns the
+  // switch back on; the reset above clears the stale value first
+  // and the load refreshes it.
   useEffect(() => {
-    const nodeChanged = nodeIdRef.current !== nodeId;
     nodeIdRef.current = nodeId;
     if (nodeId == null) {
       seqRef.current += 1;
@@ -224,11 +222,6 @@ export function NodeConnLogModal({
     setRetentionDays(undefined);
     setServerEnabled(undefined);
     setError(null);
-    if (nodeChanged) {
-      setServerEnabled(undefined);
-      setDropped(undefined);
-      setRetentionDays(undefined);
-    }
     if (listEnabled) void load(1, "");
   }, [nodeId, listEnabled, load]);
 
@@ -528,7 +521,7 @@ export function NodeConnLogModal({
             )}
           </div>
           <div className="flex items-center gap-3">
-            {(rows.length > 0 || current > 1) && (
+            {isCollecting && (rows.length > 0 || current > 1) && (
               <>
                 <Button
                   isDisabled={current <= 1 || loading}
