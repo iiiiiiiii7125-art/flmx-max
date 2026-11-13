@@ -107,7 +107,7 @@ export function NodeConnLogModal({
   // List state is the primary gate; the server-reported `enabled` is
   // the fallback — when the list is stale (another tab flipped the
   // switch), a server `false` still shows the not-enabled state.
-  const listEnabled = node?.connLogEnabled === true;
+  const listEnabled = node?.connLogEnabled === 1;
   const enabled = listEnabled && serverEnabled !== false;
   // 展示用“采集中”：列表态开且服务端未否定（与 enabled 同值）。
   const isCollecting = enabled;

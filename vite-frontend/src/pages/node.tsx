@@ -2015,13 +2015,13 @@ export default function NodePage({
   // 调节点设置接口（updateNode 的 connLogEnabled，presence 口径）。
   const handleToggleConnLog = useCallback(
     async (node: Node, enabled: boolean) => {
-      const prev = node.connLogEnabled === true;
+      const prev = node.connLogEnabled === 1;
 
       if (prev === enabled) return;
       setConnLogSavingIds((s) => new Set(s).add(node.id));
       setNodeList((list) =>
         list.map((n) =>
-          n.id === node.id ? { ...n, connLogEnabled: enabled } : n,
+          n.id === node.id ? { ...n, connLogEnabled: enabled ? 1 : 0 } : n,
         ),
       );
       try {
@@ -2036,7 +2036,7 @@ export default function NodePage({
       } catch {
         setNodeList((list) =>
           list.map((n) =>
-            n.id === node.id ? { ...n, connLogEnabled: prev } : n,
+            n.id === node.id ? { ...n, connLogEnabled: prev ? 1 : 0 } : n,
           ),
         );
         toast.error("保存失败");
@@ -2059,13 +2059,13 @@ export default function NodePage({
   // 已填的列表，与入站表单「保存时清」不同——那是带显式保存的表单）。
   const handleToggleWhitelist = useCallback(
     async (node: Node, enabled: boolean) => {
-      const prev = node.whitelistEnabled === true;
+      const prev = node.whitelistEnabled === 1;
 
       if (prev === enabled) return;
       setWhitelistSavingIds((s) => new Set(s).add(node.id));
       setNodeList((list) =>
         list.map((n) =>
-          n.id === node.id ? { ...n, whitelistEnabled: enabled } : n,
+          n.id === node.id ? { ...n, whitelistEnabled: enabled ? 1 : 0 } : n,
         ),
       );
       try {
@@ -2083,7 +2083,7 @@ export default function NodePage({
       } catch {
         setNodeList((list) =>
           list.map((n) =>
-            n.id === node.id ? { ...n, whitelistEnabled: prev } : n,
+            n.id === node.id ? { ...n, whitelistEnabled: prev ? 1 : 0 } : n,
           ),
         );
         toast.error("保存失败");
@@ -3007,12 +3007,12 @@ export default function NodePage({
                     <span className="text-sm font-semibold">连接日志</span>
                     <span className="flex items-center gap-2">
                       <span className="text-xs font-semibold text-foreground">
-                        {node.connLogEnabled === true ? "已开启" : "未开启"}
+                        {node.connLogEnabled === 1 ? "已开启" : "未开启"}
                       </span>
                       <Switch
                         aria-label="连接日志开关"
                         isDisabled={connLogSavingIds.has(node.id)}
-                        isSelected={node.connLogEnabled === true}
+                        isSelected={node.connLogEnabled === 1}
                         size="sm"
                         onValueChange={(v) =>
                           void handleToggleConnLog(node, v)
@@ -3027,14 +3027,14 @@ export default function NodePage({
                       <span className="text-sm font-semibold">入站白名单</span>
                       <span className="flex items-center gap-2">
                         <span className="text-xs font-semibold text-foreground">
-                          {node.whitelistEnabled === true
+                          {node.whitelistEnabled === 1
                             ? "已开启"
                             : "未开启"}
                         </span>
                         <Switch
                           aria-label="入站白名单开关"
                           isDisabled={whitelistSavingIds.has(node.id)}
-                          isSelected={node.whitelistEnabled === true}
+                          isSelected={node.whitelistEnabled === 1}
                           size="sm"
                           onValueChange={(v) =>
                             void handleToggleWhitelist(node, v)
@@ -3058,39 +3058,61 @@ export default function NodePage({
                           原因：{node.nftablesError}
                         </p>
                       )}
-                    {node.whitelistEnabled === true && (
+                    {node.whitelistEnabled === 1 && (
                       <>
                         <p className="text-xs font-semibold text-foreground">
                           该节点全部入站只放行中转机、本机与列表中的
                           IP/网段。
                         </p>
-                        <Input
-                          aria-label="白名单额外放行"
-                          description="中转机出口 IP 与节点地址不同时，在此补充；支持 IP 和网段，逗号分隔"
-                          isDisabled={whitelistSavingIds.has(node.id)}
-                          label="额外放行"
-                          placeholder="203.0.113.9, 10.0.0.0/8"
-                          size="sm"
-                          value={
-                            whitelistDrafts[node.id] ??
-                            node.whitelistExtra ??
-                            ""
-                          }
-                          variant="bordered"
-                          onBlur={(e) =>
-                            void handleSaveWhitelistExtra(
-                              node,
-                              e.target.value,
-                            )
-                          }
-                          onChange={(e) =>
-                            handleWhitelistDraftChange(node, e.target.value)
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter")
-                              (e.target as HTMLInputElement).blur();
-                          }}
-                        />
+                        <div className="flex items-end gap-2">
+                          <Input
+                            aria-label="白名单额外放行"
+                            className="min-w-0 flex-1"
+                            description="中转机出口 IP 与节点地址不同时，在此补充；支持 IP 和网段，逗号分隔"
+                            isDisabled={whitelistSavingIds.has(node.id)}
+                            label="额外放行"
+                            placeholder="203.0.113.9, 10.0.0.0/8"
+                            size="sm"
+                            value={
+                              whitelistDrafts[node.id] ??
+                              node.whitelistExtra ??
+                              ""
+                            }
+                            variant="bordered"
+                            onBlur={(e) =>
+                              void handleSaveWhitelistExtra(
+                                node,
+                                e.target.value,
+                              )
+                            }
+                            onChange={(e) =>
+                              handleWhitelistDraftChange(node, e.target.value)
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter")
+                                (e.target as HTMLInputElement).blur();
+                            }}
+                          />
+                          <Button
+                            aria-label="确认保存白名单额外放行"
+                            className="mb-5 shrink-0"
+                            color="primary"
+                            isDisabled={whitelistSavingIds.has(node.id)}
+                            isLoading={whitelistSavingIds.has(node.id)}
+                            size="sm"
+                            variant="flat"
+                            onPress={() =>
+                              void handleSaveWhitelistExtra(
+                                node,
+                                whitelistDrafts[node.id] ??
+                                  node.whitelistExtra ??
+                                  "",
+                              )
+                            }
+                          >
+                            确认
+                          </Button>
+                        </div>
                       </>
                     )}
                   </div>
