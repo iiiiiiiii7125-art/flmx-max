@@ -1258,6 +1258,13 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	}
 	if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
 		releasePortAlloc()
+		// R-068：损坏行无法恢复时的 fail-closed 拒绝须点名该行，
+		// 不走吞文案的通用 Internal error。
+		var blocked *inboundConflictBlockedError
+		if errors.As(err, &blocked) {
+			response.WriteJSON(w, response.ErrDefault(blocked.msg))
+			return
+		}
 		respondInternalError(w, "inboundSave", err)
 		return
 	} else if msg != "" {
@@ -1514,6 +1521,33 @@ func inboundSpans(in kernel.Inbound) []portSpan {
 	return spans
 }
 
+// inboundConflictBlockedError 是 inboundPortConflict 的 fail-closed
+// 拒绝（R-068）：某损坏行的跳跃范围无法恢复时，新建/更新整单拒绝
+// 并点名该行；调用方以 errors.As 分流后原样回执，不走通用
+// Internal error（后者会吞掉行名，管理员无从自救）。
+type inboundConflictBlockedError struct{ msg string }
+
+func (e *inboundConflictBlockedError) Error() string { return e.msg }
+
+// damagedInboundHopConflict 从 inboundFromModel 失败的损坏行里恢复
+// 其端口跳跃范围（Settings JSON 可解析时）并与新建/更新的 spans
+// 比对。Settings 可解析时回 (冲突文案, true)——不重叠时文案为空串；
+// Settings 本身损坏到无法恢复时回 ("", false)，由调用方 fail-closed。
+func damagedInboundHopConflict(row model.NodeInbound, spans []portSpan) (string, bool) {
+	var in kernel.Inbound
+	if err := json.Unmarshal([]byte(row.Settings), &in.Settings); err != nil {
+		return "", false
+	}
+	for _, os := range inboundSpans(in)[1:] {
+		for _, sp := range spans {
+			if sp.overlaps(os) {
+				return fmt.Sprintf("%s 与入站「%s」的%s 冲突", sp, row.Name, os), true
+			}
+		}
+	}
+	return "", true
+}
+
 // inboundPortConflict describes the first clash between the ports an
 // inbound needs and what already runs on the node ("" when there is none).
 func (h *Handler) inboundPortConflict(nodeID int64, in kernel.Inbound, excludeInboundID int64) (string, error) {
@@ -1561,7 +1595,19 @@ func (h *Handler) inboundPortConflict(nodeID int64, in kernel.Inbound, excludeIn
 		}
 		other, err := inboundFromModel(row)
 		if err != nil {
-			continue
+			// R-068：损坏行不得跳过比对——跳跃范围只存在于 Settings
+			// JSON，本轮是跳跃范围之间唯一的冲突检查，旧 `continue`
+			// 使损坏行的跳跃范围永不参与比对（重叠仍放行创建，agent
+			// 端口跳跃重定向撞口）。Settings 可恢复时按其跳跃范围
+			// 继续比对（重叠报冲突、不重叠放行）；Settings 本身损坏
+			// 到无法恢复时 fail-closed，点名该行拒绝新建（不静默放行）。
+			if msg, ok := damagedInboundHopConflict(row, spans); ok {
+				if msg != "" {
+					return msg, nil
+				}
+				continue
+			}
+			return "", &inboundConflictBlockedError{msg: fmt.Sprintf("入站「%s」（ID %d）数据损坏，无法校验端口冲突：%v；请先修复或删除该入站后再创建", row.Name, row.ID, err)}
 		}
 		// Listen ports were checked by the query above; compare the rest.
 		for _, os := range inboundSpans(other)[1:] {
