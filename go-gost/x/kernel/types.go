@@ -58,6 +58,12 @@ type Port struct {
 	InboundID int64  `json:"inboundId"`
 	Port      int    `json:"port"`
 	Network   string `json:"network"` // "tcp", "udp" or "tcp,udp"
+	// Bind is the inbound's listen address (FIX-031): the nft counter
+	// rules for this port match only traffic to/from it, so packets to
+	// the same port on another local address are not attributed to
+	// this inbound. Empty or a wildcard ("0.0.0.0", "::") means the
+	// inbound listens everywhere and the rules stay unconditioned.
+	Bind string `json:"bind,omitempty"`
 	// Allow, when non-empty, restricts the port to these source CIDRs;
 	// every other packet to it is dropped. Absent or empty means no
 	// restriction (both ends of the guard chain key on len > 0).
@@ -131,7 +137,13 @@ type Counter struct {
 	InboundID int64  `json:"inboundId"`
 	Proto     string `json:"proto"`
 	Dir       string `json:"dir"` // "in" = client upload, "out" = client download
-	Bytes     int64  `json:"bytes"`
+	// Packets is the packet count behind Bytes (FIX-029: the panel
+	// needs it to strip per-packet headers off realm nft counters).
+	// Zero on agents that predate the field; the panel treats zero
+	// packets with nonzero bytes as "no packet data" and passes bytes
+	// through unconverted.
+	Packets int64 `json:"packets,omitempty"`
+	Bytes   int64 `json:"bytes"`
 }
 
 // UserCounter is one user's traffic in one direction ("up" = the user's

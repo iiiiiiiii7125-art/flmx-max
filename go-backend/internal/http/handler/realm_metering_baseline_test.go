@@ -42,12 +42,30 @@ type realmMeterMock struct {
 	tcpOut      int64
 	udpIn       int64
 	udpOut      int64
+	// FIX-029: packet counts behind the byte counts; zero means the
+	// agent predates the field (bytes pass through unconverted).
+	tcpInPkts  int64
+	tcpOutPkts int64
+	udpInPkts  int64
+	udpOutPkts int64
 }
 
 func (m *realmMeterMock) setTraffic(tcpIn, tcpOut, udpIn, udpOut int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.tcpIn, m.tcpOut, m.udpIn, m.udpOut = tcpIn, tcpOut, udpIn, udpOut
+}
+
+// setTrafficPackets replaces the byte counts with packet-carrying
+// samples (FIX-029): the audit's controlled realm flow — 2000 bytes
+// each way over 6/4 TCP packets — plus a UDP pair.
+func (m *realmMeterMock) setTrafficPackets(tcpIn, tcpInPkts, tcpOut, tcpOutPkts, udpIn, udpInPkts, udpOut, udpOutPkts int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tcpIn, m.tcpInPkts = tcpIn, tcpInPkts
+	m.tcpOut, m.tcpOutPkts = tcpOut, tcpOutPkts
+	m.udpIn, m.udpInPkts = udpIn, udpInPkts
+	m.udpOut, m.udpOutPkts = udpOut, udpOutPkts
 }
 
 func (m *realmMeterMock) calls() (apply, status int) {
@@ -131,6 +149,7 @@ func startRealmMeterMockNode(t *testing.T, baseURL, secret string, counterID int
 				mock.statusCalls++
 				applied, hash := mock.applied, mock.appliedHash
 				tcpIn, tcpOut, udpIn, udpOut := mock.tcpIn, mock.tcpOut, mock.udpIn, mock.udpOut
+				tcpInPkts, tcpOutPkts, udpInPkts, udpOutPkts := mock.tcpInPkts, mock.tcpOutPkts, mock.udpInPkts, mock.udpOutPkts
 				mock.mu.Unlock()
 				data := map[string]interface{}{
 					"kernels":      []map[string]interface{}{},
@@ -143,10 +162,10 @@ func startRealmMeterMockNode(t *testing.T, baseURL, secret string, counterID int
 						{"type": "realm", "running": true, "enabled": true, "version": kernel.RealmVersion, "configHash": hash},
 					}
 					data["counters"] = []map[string]interface{}{
-						{"inboundId": counterID, "proto": "tcp", "dir": "in", "bytes": tcpIn},
-						{"inboundId": counterID, "proto": "tcp", "dir": "out", "bytes": tcpOut},
-						{"inboundId": counterID, "proto": "udp", "dir": "in", "bytes": udpIn},
-						{"inboundId": counterID, "proto": "udp", "dir": "out", "bytes": udpOut},
+						{"inboundId": counterID, "proto": "tcp", "dir": "in", "bytes": tcpIn, "packets": tcpInPkts},
+						{"inboundId": counterID, "proto": "tcp", "dir": "out", "bytes": tcpOut, "packets": tcpOutPkts},
+						{"inboundId": counterID, "proto": "udp", "dir": "in", "bytes": udpIn, "packets": udpInPkts},
+						{"inboundId": counterID, "proto": "udp", "dir": "out", "bytes": udpOut, "packets": udpOutPkts},
 					}
 				}
 				resp["data"] = data
@@ -219,7 +238,6 @@ func TestRealmForwardTrafficAfterApplyIsCredited(t *testing.T) {
 	if _, found := baseline(); found {
 		t.Fatal("no realm baseline may exist before the kernel is applied")
 	}
-
 	// 普通下发路径（forward 创建/更新走的同一入口）：realm 内核下发，
 	// 此刻 agent 计数为 0。
 	_, statusBefore := mock.calls()
@@ -251,5 +269,79 @@ func TestRealmForwardTrafficAfterApplyIsCredited(t *testing.T) {
 	}
 	if got := mustHandlerCount(t, h, `SELECT COALESCE((SELECT daily_used_bytes FROM user_quota WHERE user_id = 1), 0)`); got != 1930 {
 		t.Fatalf("expected daily quota usage=1930, got %d", got)
+	}
+}
+
+// TestRealmForwardTrafficCountsPayloadLayer (FIX-029, AUDIT-HIST):
+// realm-phase traffic must bill at the same layer as gost-phase
+// traffic. The audit's controlled flow — exactly 2000 payload bytes
+// each way over one TCP connection — counted 2320 in / 2216 out on
+// realm (nft IP layer: 6/4 packets, headers included) versus exactly
+// 2000/2000 on gost (payload layer). With packet counts the panel
+// strips the per-packet headers (52 TCP / 28 UDP): 2320-6*52=2008,
+// 2216-4*52=2008, 128-2*28=72, 1000-10*28=720. The 8-byte residue per
+// TCP direction is the two SYN packets' extra header bytes, documented
+// on realmPayloadHeaderBytes — not a second bug.
+func TestRealmForwardTrafficCountsPayloadLayer(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/realm-payload.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "test-secret")
+
+	nodeID := seedRelayTargetNode(t, r, "entry-payload", "198.51.100.22")
+	tunnelID := seedTunnelForNftables(t, h, "realm-payload-tunnel", nodeID)
+	if err := r.DB().Exec(`UPDATE tunnel SET engine = 'realm', flow = 2 WHERE id = ?`, tunnelID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DB().Exec(`
+		INSERT INTO user_tunnel(user_id, tunnel_id, speed_id, num, flow, in_flow, out_flow, flow_reset_time, exp_time, status)
+		VALUES(1, ?, NULL, 99999, 99999, 0, 0, 1, 2727251700000, 1)
+	`, tunnelID).Error; err != nil {
+		t.Fatalf("seed user_tunnel: %v", err)
+	}
+	forward := seedForwardForNftables(t, h, tunnelID, nodeID, "1.1.1.1:443", 30008)
+
+	readFlow := func() (int64, int64) {
+		var flow struct{ InFlow, OutFlow int64 }
+		if err := r.DB().Raw(`SELECT in_flow, out_flow FROM forward WHERE id = ?`, forward.ID).Scan(&flow).Error; err != nil {
+			t.Fatal(err)
+		}
+		return flow.InFlow, flow.OutFlow
+	}
+
+	mock := &realmMeterMock{}
+	srv := httptest.NewServer(h.WebSocketHandler())
+	defer srv.Close()
+	stop := startRealmMeterMockNode(t, srv.URL, "entry-payload-secret", kernel.RealmCounterID(forward.ID), mock)
+	defer stop()
+	waitForCondition(t, 5*time.Second, func() bool { return h.wsServer.IsNodeOnline(nodeID) }, "mock node online")
+
+	if _, err := h.syncRealmNodes([]int64{nodeID}, nil); err != nil {
+		t.Fatalf("sync realm nodes: %v", err)
+	}
+
+	// The audit's exact controlled flow, as cumulative nft samples.
+	mock.setTrafficPackets(2320, 6, 2216, 4, 128, 2, 1000, 10)
+	h.refreshNodeKernelStatus(nodeID)
+	if inF, outF := readFlow(); inF != 2080 || outF != 2728 {
+		t.Fatalf("forward flow after first poll = %d/%d, want 2080/2728 (IP-layer bytes minus per-packet headers)", inF, outF)
+	}
+	if got := mustHandlerCount(t, h, `SELECT COALESCE((SELECT daily_used_bytes FROM user_quota WHERE user_id = 1), 0)`); got != 4808 {
+		t.Fatalf("expected daily quota usage=4808, got %d", got)
+	}
+
+	// Mutation guard: without packets the same bytes must pass through
+	// unconverted (pre-fix agent compat), so the conversion is proven
+	// to come from the packet counts, not from a scaled constant.
+	if got := realmCounterPayload(agentKernelCounter{Proto: "tcp", Dir: "in", Bytes: 2320, Packets: 0}); got != 2320 {
+		t.Fatalf("packets==0 must pass bytes through, got %d", got)
+	}
+	if got := realmCounterPayload(agentKernelCounter{Proto: "tcp", Dir: "in", Bytes: 2320, Packets: 6}); got != 2008 {
+		t.Fatalf("2320 bytes / 6 packets must convert to 2008, got %d", got)
+	}
+	if got := realmCounterPayload(agentKernelCounter{Proto: "udp", Dir: "out", Bytes: 1000, Packets: 10}); got != 720 {
+		t.Fatalf("1000 bytes / 10 UDP packets must convert to 720, got %d", got)
 	}
 }
