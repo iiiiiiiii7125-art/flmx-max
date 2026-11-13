@@ -75,13 +75,17 @@ func TestRenderRestartTimerUnit(t *testing.T) {
 		t.Fatalf("explicit daily mode must render the pre-mode unit:\n%s\n---\n%s", daily, body)
 	}
 	// interval 模式：单调触发、无 OnCalendar；抖动照旧以
-	// RandomizedDelaySec 呈现为上限延迟。
+	// RandomizedDelaySec 呈现为上限延迟。OnActiveSec 是 T07
+	// 再武装锚：仅 OnBootSec＋OnUnitActiveSec 时 timer 停启
+	// 一次即永久休眠（next_elapse=0），三路齐全才可在停启
+	// 后重触发；删掉任一路都须红。
 	iv := renderRestartTimerUnit(restartScheduleSetting{
 		Enabled: true, Time: "04:30", JitterMinutes: 10, Mode: "interval", IntervalMinutes: 120,
 	})
 	for _, want := range []string{
 		"OnBootSec=120min",
 		"OnUnitActiveSec=120min",
+		"OnActiveSec=120min",
 		"RandomizedDelaySec=600",
 		"Persistent=true",
 		"Unit=flmx-agent-restart.service",
@@ -100,7 +104,7 @@ func TestRenderRestartTimerUnit(t *testing.T) {
 	if strings.Contains(ivZero, "RandomizedDelaySec") {
 		t.Fatalf("zero jitter must omit RandomizedDelaySec in interval mode:\n%s", ivZero)
 	}
-	if !strings.Contains(ivZero, "OnBootSec=60min") || !strings.Contains(ivZero, "OnUnitActiveSec=60min") {
+	if !strings.Contains(ivZero, "OnBootSec=60min") || !strings.Contains(ivZero, "OnUnitActiveSec=60min") || !strings.Contains(ivZero, "OnActiveSec=60min") {
 		t.Fatalf("interval timer missing monotonic triggers:\n%s", ivZero)
 	}
 }
