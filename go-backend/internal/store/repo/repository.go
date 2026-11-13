@@ -7619,11 +7619,36 @@ func (r *Repository) GetLatestNodeMetric(nodeID int64) (*model.NodeMetric, error
 	return &m, nil
 }
 
+// pruneDeleteChunk 是指标类 prune 的单批删除行数（L3-03，
+// SWEEP-CPU）：与连接日志 prune 的 connlogDeleteChunk=1000 同口
+// 径。单条 DELETE 在停机追赶时一次可删百万行、长持 SQLite 写
+// 锁（MaxOpenConns(1)，全写串行）；分批删、每批一事务提交，
+// 中途崩溃后下次 prune 从剩余行续删，不丢不重。
+const pruneDeleteChunk = 1000
+
+// deleteRowsInBatches 按 whereClause 分批删表：每批最多
+// pruneDeleteChunk 行、各自提交；删满一批继续、不足一批即
+// 删净返回。table 与 whereClause 只取调用方传入的模型表名与
+// 内部常量条件，不含任何外部输入。
+func (r *Repository) deleteRowsInBatches(table, whereClause string, args ...interface{}) error {
+	for {
+		res := r.db.Exec(
+			"DELETE FROM "+table+" WHERE id IN (SELECT id FROM "+table+" WHERE "+whereClause+" LIMIT ?)",
+			append(args, pruneDeleteChunk)...)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected < pruneDeleteChunk {
+			return nil
+		}
+	}
+}
+
 func (r *Repository) PruneNodeMetrics(olderThanMs int64) error {
 	if r == nil || r.db == nil {
 		return nil
 	}
-	return r.db.Where("timestamp < ?", olderThanMs).Delete(&model.NodeMetric{}).Error
+	return r.deleteRowsInBatches((&model.NodeMetric{}).TableName(), "timestamp < ?", olderThanMs)
 }
 
 // AddNodeTraffic adds hourly node NIC traffic deltas to the rows,
@@ -7695,7 +7720,7 @@ func (r *Repository) PruneNodeTraffic(beforeMs int64) error {
 	if r == nil || r.db == nil {
 		return nil
 	}
-	return r.db.Where("hour < ?", beforeMs).Delete(&model.NodeTraffic{}).Error
+	return r.deleteRowsInBatches((&model.NodeTraffic{}).TableName(), "hour < ?", beforeMs)
 }
 
 func (r *Repository) InsertTunnelMetric(m *model.TunnelMetric) error {
@@ -7823,7 +7848,7 @@ func (r *Repository) PruneTunnelMetrics(olderThanMs int64) error {
 	if r == nil || r.db == nil {
 		return nil
 	}
-	return r.db.Where("timestamp < ?", olderThanMs).Delete(&model.TunnelMetric{}).Error
+	return r.deleteRowsInBatches((&model.TunnelMetric{}).TableName(), "timestamp < ?", olderThanMs)
 }
 
 func (r *Repository) ListServiceMonitors() ([]model.ServiceMonitor, error) {
@@ -8002,7 +8027,7 @@ func (r *Repository) PruneServiceMonitorResults(olderThanMs int64) error {
 	if r == nil || r.db == nil {
 		return nil
 	}
-	return r.db.Where("timestamp < ?", olderThanMs).Delete(&model.ServiceMonitorResult{}).Error
+	return r.deleteRowsInBatches((&model.ServiceMonitorResult{}).TableName(), "timestamp < ?", olderThanMs)
 }
 
 // inxAllocMu 与 inxAllocLast 是 NextIndex 的进程内发放台账

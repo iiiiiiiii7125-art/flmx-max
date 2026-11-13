@@ -30,9 +30,11 @@ func (r *Repository) ListNodeLatencySamples(nodeID, sinceMs int64) ([]model.Node
 }
 
 // PruneNodeLatencySamples deletes samples older than the cutoff.
+// L3-03（SWEEP-CPU）：与其它指标 prune 同口径分批删（每批 1000
+// 行、各自提交），停机追赶时不长持写锁。
 func (r *Repository) PruneNodeLatencySamples(olderThanMs int64) error {
 	if r == nil || r.db == nil {
 		return nil
 	}
-	return r.db.Where("created_time < ?", olderThanMs).Delete(&model.NodeLatencySample{}).Error
+	return r.deleteRowsInBatches((&model.NodeLatencySample{}).TableName(), "created_time < ?", olderThanMs)
 }
