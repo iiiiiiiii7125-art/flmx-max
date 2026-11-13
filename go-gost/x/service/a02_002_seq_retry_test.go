@@ -122,6 +122,8 @@ func TestCollectAndReportRetriesFrozenBatchWithSameSeq(t *testing.T) {
 	m.addServiceTraffic("svc-seq", 5, 5)
 
 	// 尝试 2：仍失败。必须同 stream、同 sequence、同字节。
+	// CPU-S1 退避：失败后须越过退避窗口才重发，测试直接放行窗口。
+	m.retryAt = time.Time{}
 	m.collectAndReport()
 	if len(*captured) != 2 {
 		t.Fatalf("expected 2 attempts, got %d", len(*captured))
@@ -132,6 +134,7 @@ func TestCollectAndReportRetriesFrozenBatchWithSameSeq(t *testing.T) {
 
 	// 尝试 3：成功确认。待确认批次清除，序号推进到 2。
 	failNext = false
+	m.retryAt = time.Time{}
 	m.collectAndReport()
 	if len(*captured) != 3 || (*captured)[2].raw != first.raw {
 		t.Fatalf("成功尝试应仍为同一批次原样重发: %+v", *captured)
@@ -196,6 +199,8 @@ func TestCollectAndReportNonOKResponseKeepsBatchFrozen(t *testing.T) {
 	}
 
 	m.collectAndReport()
+	// CPU-S1 退避：失败后须越过退避窗口才重发，测试直接放行窗口。
+	m.retryAt = time.Time{}
 	m.collectAndReport()
 	if len(*captured) != 2 || (*captured)[0].raw != (*captured)[1].raw {
 		t.Fatalf("非确认响应后重试必须原样重发, got %+v", *captured)
@@ -205,6 +210,7 @@ func TestCollectAndReportNonOKResponseKeepsBatchFrozen(t *testing.T) {
 	}
 
 	ack = true
+	m.retryAt = time.Time{}
 	m.collectAndReport()
 	if m.spool.state.Pending != nil {
 		t.Fatal("收到确认后待确认批次应清除")

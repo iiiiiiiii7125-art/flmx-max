@@ -29,20 +29,28 @@ import (
 // 序号只在同一 stream 内单调递进；面板备份恢复使游标回退时，
 // 经 reset_stream 换新 stream 原字节重报（见 recoverRejected）。
 
-// trafficEnvelope 是一个待确认批次的线上形态。
+// trafficEnvelope 是一个待确认批次的线上形态。DroppedBytes 是
+// 此前死信隔离的未确认字节累计（随本批上行、确认后扣减，与
+// connlog 信封的 Dropped 同口径；旧面板按未知字段忽略）。
 type trafficEnvelope struct {
-	Stream   string              `json:"stream"`
-	Sequence int64               `json:"sequence"`
-	Items    []TrafficReportItem `json:"items"`
+	Stream       string              `json:"stream"`
+	Sequence     int64               `json:"sequence"`
+	Items        []TrafficReportItem `json:"items"`
+	DroppedBytes int64               `json:"dropped_bytes,omitempty"`
 }
 
-// trafficSpoolState 是 spool 文件的落盘形态。
+// trafficSpoolState 是 spool 文件的落盘形态。PendingSince 是当
+// 前待确认批次的创建时间（Unix 毫秒，0 表示升级前的旧 spool、
+// 首次上报时补戳）；DroppedBytes 是死信隔离的未确认字节累计中
+// 尚未被面板确认收到过的部分（随批上行）。
 type trafficSpoolState struct {
-	Stream   string                `json:"stream"`
-	Next     int64                 `json:"next"`
-	Pending  *trafficEnvelope      `json:"pending,omitempty"`
-	Buffered []TrafficReportItem   `json:"buffered,omitempty"`
-	Retry    [][]TrafficReportItem `json:"retry,omitempty"`
+	Stream       string                `json:"stream"`
+	Next         int64                 `json:"next"`
+	Pending      *trafficEnvelope      `json:"pending,omitempty"`
+	Buffered     []TrafficReportItem   `json:"buffered,omitempty"`
+	Retry        [][]TrafficReportItem `json:"retry,omitempty"`
+	PendingSince int64                 `json:"pending_since,omitempty"`
+	DroppedBytes int64                 `json:"dropped_bytes,omitempty"`
 }
 
 type trafficSpool struct {
@@ -364,6 +372,13 @@ func (s *trafficSpool) confirmAck(panelCursor int64) (bool, error) {
 	}
 	next := s.state
 	next.Pending = nil
+	next.PendingSince = 0
+	if pending.DroppedBytes > 0 {
+		next.DroppedBytes -= pending.DroppedBytes
+		if next.DroppedBytes < 0 {
+			next.DroppedBytes = 0
+		}
+	}
 	rotated := false
 	if panelCursor > pending.Sequence {
 		var id [16]byte
@@ -429,6 +444,7 @@ func (s *trafficSpool) recoverRejected(reason trafficReportRejection) error {
 		}
 		fmt.Printf("⚠️ 流量批次已隔离留证: %s (%s)\n", archive, reason)
 		next.Pending = nil
+		next.PendingSince = 0
 	default:
 		return reason
 	}
@@ -437,4 +453,44 @@ func (s *trafficSpool) recoverRejected(reason trafficReportRejection) error {
 	}
 	s.state = next
 	return nil
+}
+
+// deadLetterPending 把当前待确认批次死信隔离：先把批次原字节写
+// 到隔离留证文件（与 recoverRejected 的隔离同名同形），再把其
+// 字节数计入 state.DroppedBytes（随下批上行），最后清 Pending
+// 释放头堵——序号不推进，下批沿用同一序号组批（面板未确认过该
+// 序号，无缺口；若面板实已入账而回执屡次丢失，新批到时按 behind
+// 只确认不入账、不双计）。任一步落盘失败即整次失败、Pending
+// 原样保留，下个周期重试死信动作本身，绝不无证丢字节。返回隔
+// 离留证路径。调用方须在连续失败达上限或待确认批次超龄时调用。
+func (s *trafficSpool) deadLetterPending(reason string) (string, error) {
+	pending := s.state.Pending
+	if pending == nil {
+		return "", nil
+	}
+	if s.path == "" {
+		return "", errors.New("cannot quarantine traffic without a spool path")
+	}
+	var droppedBytes int64
+	for _, item := range pending.Items {
+		droppedBytes += item.U + item.D
+	}
+	archive := fmt.Sprintf("%s.rejected-%s-%d.json", s.path, pending.Stream, pending.Sequence)
+	if err := saveTrafficArchive(archive, struct {
+		Reason       string           `json:"reason"`
+		DroppedBytes int64            `json:"dropped_bytes"`
+		Batch        *trafficEnvelope `json:"batch"`
+	}{reason, droppedBytes, pending}); err != nil {
+		return "", err
+	}
+	fmt.Printf("⚠️ 流量批次已死信隔离留证: %s (%s)\n", archive, reason)
+	next := s.state
+	next.Pending = nil
+	next.PendingSince = 0
+	next.DroppedBytes += droppedBytes
+	if err := s.save(next); err != nil {
+		return "", err
+	}
+	s.state = next
+	return archive, nil
 }
