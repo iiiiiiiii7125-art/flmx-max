@@ -1,10 +1,14 @@
-import type { NodeConnLogItem } from "@/api/types";
+import type { NodeConnLogItem, NodeConnLogReadiness } from "@/api/types";
 import type { Node } from "@/pages/node/types";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
-import { getNodeConnLog } from "@/api";
+import {
+  getNodeConnLog,
+  getNodeConnLogReadiness,
+  repushNodeConnLogConfig,
+} from "@/api";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Chip } from "@/shadcn-bridge/heroui/chip";
 import { Input } from "@/shadcn-bridge/heroui/input";
@@ -95,6 +99,17 @@ export function NodeConnLogModal({
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 就绪指示（lane B）：开关开 ≠ agent 已生效——版本、在线态与
+  // 最近上报记录共同决定 agent 是否真在采集；lastPush 恒为
+  // unknown（面板不持久化运行配置重推结果），"已生效"只以最近
+  // 记录为准，不拿下发回执冒充。
+  const [readiness, setReadiness] = useState<NodeConnLogReadiness | null>(
+    null,
+  );
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [repushLoading, setRepushLoading] = useState(false);
+  const [repushResult, setRepushResult] = useState<string | null>(null);
+  const [repushFailed, setRepushFailed] = useState(false);
   const [ipInput, setIpInput] = useState("");
   const [current, setCurrent] = useState(1);
   const [now, setNow] = useState(() => Date.now());
@@ -198,6 +213,59 @@ export function NodeConnLogModal({
     }
   }, []);
 
+  const loadReadiness = useCallback(async () => {
+    const id = nodeIdRef.current;
+
+    if (id == null) return;
+    setReadinessLoading(true);
+    try {
+      const res = await getNodeConnLogReadiness(id);
+
+      if (res.code === 0 && res.data) {
+        setReadiness(res.data);
+      } else {
+        setReadiness(null);
+      }
+    } catch {
+      setReadiness(null);
+    } finally {
+      setReadinessLoading(false);
+    }
+  }, []);
+
+  // 一键重新下发：同步整节点运行配置重推（与开关翻转同一漏
+  // 斗），回执成功才报成功；失败原样展示后端原因，绝不静默报
+  // 成功。成功后刷新就绪指示与记录列表，让"已生效"当场可验。
+  const handleRepush = useCallback(async () => {
+    const id = nodeIdRef.current;
+
+    if (id == null || repushLoading) return;
+    setRepushLoading(true);
+    setRepushResult(null);
+    setRepushFailed(false);
+    try {
+      const res = await repushNodeConnLogConfig(id);
+
+      if (res.code !== 0 || !res.data?.redeployed) {
+        setRepushFailed(true);
+        setRepushResult(res.msg || "重新下发失败");
+      } else {
+        setRepushFailed(false);
+        setRepushResult(
+          `重新下发成功：已重推 ${res.data.tunnelCount} 个隧道 / ${res.data.forwardCount} 个转发` +
+            (res.warning ? `；注意：${res.warning}` : ""),
+        );
+        await loadReadiness();
+        await load(1, "");
+      }
+    } catch {
+      setRepushFailed(true);
+      setRepushResult("重新下发失败：请求未完成");
+    } finally {
+      setRepushLoading(false);
+    }
+  }, [load, loadReadiness, repushLoading]);
+
   // Open / switch node: reset the query and the server-reported
   // values, then load the first page only once the node's switch is
   // on. Keyed on the id and the list switch, so flipping the switch
@@ -221,9 +289,13 @@ export function NodeConnLogModal({
     setDropped(undefined);
     setRetentionDays(undefined);
     setServerEnabled(undefined);
+    setReadiness(null);
+    setRepushResult(null);
+    setRepushFailed(false);
     setError(null);
+    void loadReadiness();
     if (listEnabled) void load(1, "");
-  }, [nodeId, listEnabled, load]);
+  }, [nodeId, listEnabled, load, loadReadiness]);
 
   // IP filter: debounce, then back to page 1 (user.tsx search pattern).
   useEffect(() => {
@@ -249,6 +321,19 @@ export function NodeConnLogModal({
 
   const hasEventOnly = rows.some((r) => r.sessionKind === "event_only");
   const hasSession = rows.some(isSessionKind);
+
+  // 就绪指示标题：开关开 ≠ 已生效——"已生效"只在已有记录上报
+  // 时才说（readiness === "ready"），其余态一律点名原因。
+  const readinessTitle =
+    readiness == null
+      ? null
+      : readiness.readiness === "ready"
+        ? "已开启，agent 已生效"
+        : readiness.readiness === "off"
+          ? "连接日志未开启"
+          : readiness.readiness === "not_ready"
+            ? "已开启，但 agent 未生效"
+            : "生效状态未知";
 
   const renderStatus = (row: NodeConnLogItem) => {
     if (row.sessionKind === "event_only") {
@@ -354,6 +439,78 @@ export function NodeConnLogModal({
           </div>
         </ModalHeader>
         <ModalBody>
+          {/* 就绪指示 + 一键重新下发（lane B）：开关开 ≠ agent 已
+              生效——版本过旧、节点离线或配置未下发时，开关显示 ON
+              也收不到记录。点“重新下发配置”即同步重推整节点运行
+              配置，成功后就绪指示与列表当场刷新。 */}
+          <div className="rounded-xl border border-divider/80 px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-semibold">生效状态</span>
+              <Button
+                isLoading={repushLoading}
+                size="sm"
+                variant="flat"
+                onPress={() => void handleRepush()}
+              >
+                重新下发配置
+              </Button>
+            </div>
+            {readinessLoading ? (
+              <p className="mt-1 text-xs font-semibold text-foreground">
+                正在检查生效状态…
+              </p>
+            ) : readiness && readinessTitle ? (
+              <>
+                <p className="mt-1">
+                  <Chip
+                    color={
+                      readiness.readiness === "ready"
+                        ? "success"
+                        : readiness.readiness === "off"
+                          ? "default"
+                          : readiness.readiness === "not_ready"
+                            ? "danger"
+                            : "warning"
+                    }
+                    size="sm"
+                    variant="flat"
+                  >
+                    {readinessTitle}
+                  </Chip>
+                </p>
+                {readiness.reason && (
+                  <p className="mt-1 text-xs font-semibold text-foreground">
+                    {readiness.reason}
+                  </p>
+                )}
+                {readiness.readiness === "ready" &&
+                  readiness.lastRowAt != null && (
+                    <p className="mt-1 text-xs font-semibold text-foreground">
+                      最近记录 {formatDateTime(readiness.lastRowAt)}
+                    </p>
+                  )}
+                {readiness.agentVersion && (
+                  <p className="mt-1 text-xs font-semibold text-foreground">
+                    agent {readiness.agentVersion}（连接日志需{" "}
+                    {readiness.agentMinVersion} 或更高）
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="mt-1 text-xs font-semibold text-foreground">
+                未能获取生效状态，可点“重新下发配置”重试。
+              </p>
+            )}
+            {repushResult && (
+              <p
+                className={`mt-1 text-xs font-semibold ${
+                  repushFailed ? "text-danger-700" : "text-foreground"
+                }`}
+              >
+                {repushResult}
+              </p>
+            )}
+          </div>
           <Input
             aria-label="按客户端 IP 过滤"
             className="max-w-xs"

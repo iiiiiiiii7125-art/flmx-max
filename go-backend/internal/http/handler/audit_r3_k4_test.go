@@ -157,6 +157,7 @@ func TestK4MethodGuardCensus(t *testing.T) {
 		"monitorPermissionList":              "读面（权限列表）",
 		"monitorAccessHandler":               "读面（GET-only 方法校验）",
 		"nodeConnlog":                        "读面（节点连接日志查询，GET-only 方法校验）",
+		"nodeConnlogReadiness":               "读面（节点连接日志就绪指示，GET-only 方法校验）",
 		"backupImportAutoBackup":             "读面（GET-only 方法校验，文件下载）",
 		"backupImportAutoBackupStatus":       "读面（GET-only 方法校验）",
 	}

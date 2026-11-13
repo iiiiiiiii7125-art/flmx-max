@@ -1087,6 +1087,56 @@ export interface NodeConnLogData {
   retentionDays?: number;
 }
 
+/**
+ * Readiness for GET /node/connlog-readiness: whether this node's
+ * connection log is actually collecting, not just switched on.
+ * `readiness` is ready (switch on + agent supported + online +
+ * rows already reported — rows are the only panel-side proof the
+ * agent is collecting) / off (master or node switch off) /
+ * not_ready (a definite blocker: nftables mode, agent too old,
+ * node offline) / unknown (agent version unknown, or no rows yet
+ * so effectiveness cannot be confirmed). `lastPush` is always
+ * unknown: the panel persists no record of runtime-config
+ * redeploy results, and the restart-schedule push fields must
+ * not be read as a runtime-push record. `connLogEnabled` is an
+ * int (0/1) from the backend — read it with === 1, never as a
+ * boolean.
+ */
+export interface NodeConnLogReadiness {
+  nodeId: number;
+  agentVersion: string;
+  agentSupport: "supported" | "unsupported" | "unknown" | string;
+  agentMinVersion: string;
+  masterEnabled: boolean;
+  connLogEnabled: number;
+  online: boolean;
+  forwardMode?: string;
+  lastPush: {
+    status: string;
+    pushedAt: number | null;
+    source: string;
+    note: string;
+  };
+  lastRowAt: number | null;
+  readiness: "ready" | "off" | "not_ready" | "unknown" | string;
+  reason: string;
+  reasons?: string[] | null;
+}
+
+/**
+ * Result of POST /node/connlog-repush: a synchronous full
+ * runtime redeploy of the node (same funnel the connlog toggle
+ * uses). `redeployed` is true only when the redeploy returned
+ * success; a failure comes back as a non-zero envelope code,
+ * never as a silent success.
+ */
+export interface NodeConnLogRepushResult {
+  nodeId: number;
+  redeployed: boolean;
+  tunnelCount: number;
+  forwardCount: number;
+}
+
 export interface InboundRelayApiItem {
   id: number;
   inboundId: number;
