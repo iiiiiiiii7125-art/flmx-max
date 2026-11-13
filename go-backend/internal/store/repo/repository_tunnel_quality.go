@@ -106,11 +106,13 @@ func (r *Repository) GetLatestTunnelQualities() ([]model.TunnelQuality, error) {
 
 // PruneTunnelQualityResults deletes quality results older than the given timestamp.
 // (Mirrors PruneServiceMonitorResults pattern.)
+// L3-03（SWEEP-CPU）同族：与其它指标 prune 同口径分批删（每批
+// 1000 行、各自提交），停机追赶时不长持写锁。
 func (r *Repository) PruneTunnelQualityResults(olderThanMs int64) error {
 	if r == nil || r.db == nil {
 		return nil
 	}
-	return r.db.Where("timestamp < ?", olderThanMs).Delete(&model.TunnelQuality{}).Error
+	return r.deleteRowsInBatches((&model.TunnelQuality{}).TableName(), "timestamp < ?", olderThanMs)
 }
 
 // ListEnabledTunnelIDs returns IDs of all tunnels with status=1.

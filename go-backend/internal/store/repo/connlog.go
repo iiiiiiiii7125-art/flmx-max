@@ -37,6 +37,16 @@ const (
 	ConnlogPerInboundRowCap = 50000
 
 	connlogDeleteChunk = 1000
+
+	// connlogUpsertChunkSize 是 ApplyConnlogStreamBatch 的单事务
+	// 事件上限（L3-02，SWEEP-CPU）：满批 1000 事件原先同 tx 内
+	// 逐事件 SELECT FOR UPDATE＋upsert（≈2000 语句），长持
+	// SQLite 写锁、多节点突发时串行排队。按 200 事件分 tx：每
+	// 事务持锁时长约降为 1/5，其余写者可在 chunk 之间插空；游
+	// 标只在末 chunk 的同 tx 内推进。分段提交的幂等性由 upsert
+	// 状态机保证：中途失败/崩溃时游标未推进，agent 同序号同摘
+	// 要重报会把未落段补齐、已落段原样确认，不重复入账。
+	connlogUpsertChunkSize = 200
 )
 
 // ConnlogEvent 是一条已归一的连接事件：采集键由上报会话定
@@ -129,10 +139,12 @@ func ParseConnlogForwardServiceID(serviceName string) (int64, bool) {
 	return forwardID, true
 }
 
-// ApplyConnlogStreamBatch 在单个事务内完成流游标判定＋事件
-// upsert：判定语义与 ApplyTrafficStreamAccounting 同口径（重放/
-// 落后返回 ack 无错误、冲突与缺口返回错误），入账内容换成连接
-// 事件。digest 是整批事件的摘要（handler 以规范 JSON 计算）。
+// ApplyConnlogStreamBatch 按 connlogUpsertChunkSize 分段应用事件：
+// 每 chunk 一个事务（游标行加锁校验＋事件 upsert），游标推进只
+// 在末 chunk 的同事务内完成。判定语义与单事务版同口径（重放/
+// 落后返回 ack 无错误、冲突与缺口返回错误）；中途 chunk 失败
+// 时已落段已提交、游标未推进，agent 重报同序号同摘要可续接
+// （upsert 状态机幂等），不会重复入账。
 func (r *Repository) ApplyConnlogStreamBatch(scope string, sequence int64, digest string, now time.Time, events []ConnlogEvent) (TrafficStreamAck, error) {
 	if r == nil || r.db == nil {
 		return TrafficStreamAck{}, errors.New("repository not initialized")
@@ -140,6 +152,38 @@ func (r *Repository) ApplyConnlogStreamBatch(scope string, sequence int64, diges
 	if scope == "" || len(scope) > 200 || sequence <= 0 || len(digest) != 64 {
 		return TrafficStreamAck{}, ErrTrafficStreamConflict
 	}
+	// 空批仍须走一次游标判定＋推进（调用方以空批探活/对齐游标
+	// 时，游标语义与旧单事务版一致）。
+	if len(events) == 0 {
+		return r.applyConnlogStreamChunk(scope, sequence, digest, now, nil, true)
+	}
+	var ack TrafficStreamAck
+	for start := 0; start < len(events); start += connlogUpsertChunkSize {
+		end := start + connlogUpsertChunkSize
+		if end > len(events) {
+			end = len(events)
+		}
+		chunkAck, err := r.applyConnlogStreamChunk(scope, sequence, digest, now, events[start:end], end == len(events))
+		if err != nil {
+			return TrafficStreamAck{}, err
+		}
+		// chunk 内发现重放/落后（并发同序号批次已先行推进游
+		// 标）：已落段与对方落段是同一批事件的幂等重应用，
+		// 直接按对方的游标确认，不再续写剩余 chunk。
+		if chunkAck.Replay || chunkAck.Behind {
+			return chunkAck, nil
+		}
+		ack = chunkAck
+	}
+	return ack, nil
+}
+
+// applyConnlogStreamChunk 应用一批次中的一段事件（一个事务）：
+// 游标行建行＋加锁、序号判定（重放/落后/缺口/冲突口径与旧单事
+// 务版一致）、逐事件 upsert；advanceCursor 为真（末 chunk）时
+// 同事务内推进游标并置 ack.Applied，非末 chunk 只落事件、不动
+// 游标。调用方（ApplyConnlogStreamBatch）负责分段与续接。
+func (r *Repository) applyConnlogStreamChunk(scope string, sequence int64, digest string, now time.Time, events []ConnlogEvent, advanceCursor bool) (TrafficStreamAck, error) {
 	ack := TrafficStreamAck{}
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
@@ -168,6 +212,9 @@ func (r *Repository) ApplyConnlogStreamBatch(scope string, sequence int64, diges
 			if err := upsertConnlogEventTx(tx, &events[i], nowMs); err != nil {
 				return err
 			}
+		}
+		if !advanceCursor {
+			return nil
 		}
 		if err := tx.Model(&TrafficStreamCursor{}).
 			Where("scope = ?", scope).

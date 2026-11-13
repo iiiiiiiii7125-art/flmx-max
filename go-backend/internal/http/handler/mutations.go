@@ -9496,6 +9496,13 @@ func (h *Handler) deleteNodeByIDAfterGuardsOutcome(id int64, guard *nodeDeleteGu
 	}
 	// port_alloc_lock 设计要求节点删除时清理锁表条目，此前无调用方。
 	repo.CleanupPortAllocLock(id)
+	// L3-05：删节点同时逐出 IngestionService 四张内存表
+	// （lastBytes/lastBoot/lastSeen/traffic）里的残留键。本段是
+	// 全部删节点入口的汇聚漏斗（单删/批删/创建补偿/卸载完成），
+	// 在此清一次即全集覆盖；nil-guard 供未走 New 构造的 Handler。
+	if h.metrics != nil {
+		h.metrics.ForgetNode(id)
+	}
 	// D2-05：删节点同时踢掉其 agent 的 WS 存量会话，否则幽灵会话
 	// 会无限存活、继续上报并被广播（secret 已随行删除也拦不住）。
 	if h.wsServer != nil {

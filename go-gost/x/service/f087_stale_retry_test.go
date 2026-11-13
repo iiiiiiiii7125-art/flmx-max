@@ -64,6 +64,8 @@ func TestCollectAndReportKeepsStaleEntryWhenReportFails(t *testing.T) {
 
 	// 第二轮：上报成功，待确认批次排空。
 	ack = true
+	// CPU-S1 退避：失败后须越过退避窗口才重发，测试直接放行窗口。
+	m.retryAt = time.Time{}
 	m.collectAndReport()
 	if m.spool.state.Pending != nil {
 		t.Fatal("上报成功后待确认批次应排空")

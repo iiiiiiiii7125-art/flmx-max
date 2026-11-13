@@ -36,6 +36,15 @@ type fakeNftablesManager struct {
 	clearHit       int
 	collectErr     error
 	collectHit     int
+	// collectDelay / collectDelayByHost 让测试模拟慢 SSH 节点（L3-04）：
+	// 延迟在锁外 sleep，fake 本身不得把并行采集串行化。
+	collectDelay       time.Duration
+	collectDelayByHost map[string]time.Duration
+	// collectErrByHost 让测试模拟单节点 SSH 失败（L3-04）。
+	collectErrByHost map[string]error
+	// collectCur/collectMax 记录 CollectCounters 的并发度（L3-04）。
+	collectCur     int
+	collectMax     int
 	counterSamples []runtimenft.CounterSample
 	lastConfig     runtimenft.SSHConfig
 	lastPlan       runtimenft.NodePlan
@@ -161,14 +170,43 @@ func (f *fakeNftablesManager) opList() []string {
 }
 
 func (f *fakeNftablesManager) CollectCounters(_ context.Context, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error) {
+	// 先快照、再在锁外 sleep：持锁 sleep 会把被测的并行采集
+	// 在 fake 层串行化，测不出真并发（L3-04）。
+	f.mu.Lock()
+	delay := f.collectDelay
+	if d, ok := f.collectDelayByHost[cfg.Host]; ok {
+		delay = d
+	}
+	err := f.collectErr
+	if e, ok := f.collectErrByHost[cfg.Host]; ok {
+		err = e
+	}
+	samples := f.counterSamples
+	f.collectCur++
+	if f.collectCur > f.collectMax {
+		f.collectMax = f.collectCur
+	}
+	f.mu.Unlock()
+
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.collectCur--
 	f.collectHit++
 	f.lastConfig = cfg
-	if f.collectErr != nil {
-		return nil, f.collectErr
+	if err != nil {
+		return nil, err
 	}
-	return f.counterSamples, nil
+	return samples, nil
+}
+
+func (f *fakeNftablesManager) collectMaxConcurrency() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.collectMax
 }
 
 func (f *fakeNftablesManager) reconcileCount() int {
