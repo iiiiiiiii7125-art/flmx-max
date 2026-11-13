@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-gost/core/handler"
 	"github.com/go-gost/core/metadata"
+	"github.com/go-gost/x/registry"
 	xlogger "github.com/go-gost/x/logger"
 )
 
@@ -312,4 +313,45 @@ func TestConnlogEnqueueOverflowCountsDropped(t *testing.T) {
 
 func connIDForIndex(i int) string {
 	return fmt.Sprintf("conn-%d", i)
+}
+
+// TestCountConnLogEntryServices pins the lane-C live-mark count:
+// only services registered with the connlog entry mark count, and
+// unregistering a marked service drops the count again. The count
+// is asserted as a delta so unrelated registrations elsewhere in
+// the package cannot skew it; the source of truth is the live
+// registry, never a config file.
+func TestCountConnLogEntryServices(t *testing.T) {
+	ln := newQueueListener(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 24004})
+	h := &gateHandler{}
+	mk := func(name string, entry bool) {
+		t.Helper()
+		opts := []Option{LoggerOption(xlogger.NewLogger())}
+		if entry {
+			opts = append(opts, ConnLogEntryOption(true, name))
+		}
+		svc := NewService(name, ln, h, opts...)
+		if err := registry.ServiceRegistry().Register(name, svc); err != nil {
+			t.Fatalf("register %s: %v", name, err)
+		}
+		t.Cleanup(func() { registry.ServiceRegistry().Unregister(name) })
+	}
+
+	suffix := time.Now().UnixNano()
+	marked := fmt.Sprintf("connlog-count-marked-%d", suffix)
+	plain := fmt.Sprintf("connlog-count-plain-%d", suffix)
+
+	base := CountConnLogEntryServices()
+	mk(marked, true)
+	if got := CountConnLogEntryServices(); got != base+1 {
+		t.Fatalf("after registering marked service: count = %d, want %d", got, base+1)
+	}
+	mk(plain, false)
+	if got := CountConnLogEntryServices(); got != base+1 {
+		t.Fatalf("after registering unmarked service: count = %d, want %d (unmarked must not count)", got, base+1)
+	}
+	registry.ServiceRegistry().Unregister(marked)
+	if got := CountConnLogEntryServices(); got != base {
+		t.Fatalf("after unregistering marked service: count = %d, want %d", got, base)
+	}
 }

@@ -183,11 +183,14 @@ func TestConnlogIngestAuthAndValidation(t *testing.T) {
 }
 
 type connlogNodeQueryPage struct {
-	Rows          []connlogRowView `json:"rows"`
-	Total         int64            `json:"total"`
-	Enabled       bool             `json:"enabled"`
-	Dropped       int64            `json:"dropped"`
-	RetentionDays int              `json:"retentionDays"`
+	Rows           []connlogRowView `json:"rows"`
+	Total          int64            `json:"total"`
+	Enabled        bool             `json:"enabled"`
+	Dropped        int64            `json:"dropped"`
+	RetentionDays  int              `json:"retentionDays"`
+	MarkedForwards *int64           `json:"markedForwards"`
+	MarkMismatch   bool             `json:"markMismatch"`
+	MarkWarning    string           `json:"markWarning"`
 }
 
 func (rig *connlogTestRig) queryNode(t *testing.T, claims *auth.Claims, rawQuery string) (int, connlogNodeQueryPage) {

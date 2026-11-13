@@ -58,6 +58,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_cascade_cleanup.go:loadNftPendingDeletesByForwardIDsTx": {"chunkInt64IDs", "FIX-CASCADE/E1-01：墓碑台账按 forward 集物化，已分块"},
 	"repository_cascade_cleanup.go:forwardIDsWithRemainingPortsTx":      {"chunkInt64IDs", "FIX-CASCADE/E1-11：受影响转发集的剩余端口判定，已分块"},
 	"connlog.go:SumConnlogDroppedByNodes":                               {"chunkInt64IDs", "弹窗页脚 dropped 汇总的入口节点集，按 inListChunkSize 分块求和（2.1.5 合流补登：INT215 集成引入时漏登记）"},
+	"repository_control.go:ListForwardPortsByNodes":                     {"chunkInt64IDs", "节点列表打标对账的节点集（lane C），按 inListChunkSize 分块"},
 
 	// —— 手工切片分块（[start:end] 窗口）——
 	"repository.go:exportForwardPortsBatch":       {"[start:end]", "整表转发口集，手工切片分块"},

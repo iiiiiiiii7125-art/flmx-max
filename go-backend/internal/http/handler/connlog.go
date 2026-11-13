@@ -286,13 +286,17 @@ type connlogRowView struct {
 // 开放）。按入口节点（entry_node_id，即“连到这台服务器”的口
 // 径）查、start_time 倒序、offset/limit 分页；ip 非空时按
 // client_ip 精确匹配。响应为页对象 {rows, total, enabled, dropped,
-// retentionDays}：rows 为本页行（每行附解析出的 localPort 与 entryName），
+// retentionDays, markedForwards, markMismatch, markWarning}：rows 为本页行（每行附解析出的 localPort 与 entryName），
 // total 为该节点（同 ip 过滤）的总行数，enabled 为该节点的采集开关状态
 // （只控采集，不删历史行）；dropped 为该节点的累计采集丢弃数（入口机
 // 采集缓冲溢出时丢事件，页脚据此提示日志可能不完整）；retentionDays
-// 为当前保留期（面板配置 connlog_retention_days，默认 7 天）。页脚
-// 取数失败不拖垮主查询：dropped 回 0、保留期回默认（旧逐入站端点
-// 同口径）。
+// 为当前保留期（面板配置 connlog_retention_days，默认 7 天）；
+// markedForwards 为 agent 上报的 live 打标转发数（null＝从未上报），
+// markMismatch 为开关开、名下有 forward、且 agent 正面报 0 的失配
+// verdict（名下无 forward 时报 0 是真空态，不判失配），markWarning
+// 在失配时为“配置未下发到 agent”、开关开但未上报时为未知提示、
+// 其余为空。页脚取数失败不拖垮主查询：dropped 回 0、保留期回默认
+// （旧逐入站端点同口径）。
 func (h *Handler) nodeConnlog(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -359,12 +363,36 @@ func (h *Handler) nodeConnlog(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Printf("connlog retention read failed node_id=%d err=%v (footer falls back to default %d)", nodeID, err, retentionDays)
 	}
+	// 打标对账（lane C）：desired（本节点开关）vs actual（agent
+	// 上报的 live 打标转发数）。markedForwards 为 null＝agent
+	// 从未上报（旧 agent／未连接），此时 markMismatch 恒 false、
+	// markWarning 诚实报未知；只有开关开、名下有 forward、且
+	// agent 正面报 0 时才判「配置未下发到 agent」，UI（lane B）
+	// 据此提示重推。名下无 forward 的节点报 0 是真空态而非失配
+	// （无物可标，重推亦无从改变），不判 mismatch、不告警。
+	// forward 查询失败时门保持敞开（沿用门前口径）并记日志：
+	// DB 错不许藏起一次真实失配。
+	marked, markReported := h.connlogMark(nodeID)
+	enabled := node.ConnLogEnabled == 1
+	hasForwards := true
+	if ports, err := h.repo.ListForwardPortsByNode(nodeID); err != nil {
+		log.Printf("connlog mark forward check failed node_id=%d err=%v (mismatch verdict falls back to ungated)", nodeID, err)
+	} else {
+		hasForwards = len(ports) > 0
+	}
+	var markedForwards interface{}
+	if markReported {
+		markedForwards = marked
+	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"rows":          views,
-		"total":         total,
-		"enabled":       node.ConnLogEnabled == 1,
-		"dropped":       dropped,
-		"retentionDays": retentionDays,
+		"rows":           views,
+		"total":          total,
+		"enabled":        enabled,
+		"dropped":        dropped,
+		"retentionDays":  retentionDays,
+		"markedForwards": markedForwards,
+		"markMismatch":   connlogMarkMismatch(enabled, marked, markReported, hasForwards),
+		"markWarning":    connlogMarkWarning(enabled, marked, markReported, hasForwards),
 	}))
 }
 

@@ -93,3 +93,47 @@ func TestListForwardPortsByNode(t *testing.T) {
 		t.Fatalf("node without forwards must yield no ports, got %v", ports)
 	}
 }
+
+// Lane C: the batch form of the same query (nodeList's mark gate):
+// one call, per-node sorted ports, nodes without forwards absent
+// from the map (not present with an empty slice).
+func TestListForwardPortsByNodes(t *testing.T) {
+	r, err := repo.Open(filepath.Join(t.TempDir(), "forward-ports-by-nodes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+
+	seed := []model.ForwardPort{
+		{ForwardID: 10, NodeID: 1, Port: 3002},
+		{ForwardID: 10, NodeID: 1, Port: 3001},
+		{ForwardID: 12, NodeID: 2, Port: 3003},
+	}
+	for i := range seed {
+		if err := r.DB().Create(&seed[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	byNode, err := r.ListForwardPortsByNodes([]int64{1, 2, 99})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byNode[1]) != 2 || byNode[1][0] != 3001 || byNode[1][1] != 3002 {
+		t.Fatalf("node 1 = %v, want sorted [3001 3002]", byNode[1])
+	}
+	if len(byNode[2]) != 1 || byNode[2][0] != 3003 {
+		t.Fatalf("node 2 = %v, want [3003]", byNode[2])
+	}
+	if _, ok := byNode[99]; ok {
+		t.Fatalf("node 99 must be absent from the map, got %v", byNode[99])
+	}
+
+	empty, err := r.ListForwardPortsByNodes(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("empty input must yield an empty map, got %v", empty)
+	}
+}
