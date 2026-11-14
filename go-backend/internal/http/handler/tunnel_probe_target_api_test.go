@@ -198,9 +198,12 @@ func setupProbeTargetTunnelHandler(t *testing.T) *Handler {
 	t.Cleanup(func() { _ = r.Close() })
 	h := New(r, "secret")
 	now := time.Now().UnixMilli()
+	// 探针夹具节点报当前 agent 版本：V1-01 版本门以 2.1.13 为界，
+	// 'v1' 不是真实 agent 版本串，会被版本门 fail-closed 拦在下发之前
+	//（引擎切换等多目标回合同用此节点）。
 	if err := r.DB().Exec(`
 		INSERT INTO node(id, name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
-		VALUES(10, 'entry-a', 'entry-secret', '10.0.0.1', '10.0.0.1', '', '30000-30010', '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0)
+		VALUES(10, 'entry-a', 'entry-secret', '10.0.0.1', '10.0.0.1', '', '30000-30010', '', '2.1.13', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0)
 	`, now, now).Error; err != nil {
 		t.Fatalf("insert node: %v", err)
 	}
