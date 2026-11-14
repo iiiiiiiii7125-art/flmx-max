@@ -754,6 +754,14 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault("内核已停用，请先启动"))
 			return
 		}
+		// NEW-V1-01：restart 同样触发 agent 侧 nft 同步，旧版 agent
+		// 会用明文表名重建共享表；与 KernelApply 同门，版本过旧
+		// 时拒绝并点名升级（remove/删节点清理路径必须放行，不设
+		// 此门）。
+		if err := h.requireNftIsolatedAgent(k.NodeID); err != nil {
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
 		unlock := lockKernelApply(k.ID)
 		_, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
 			"type": k.KernelType, "action": "restart",
@@ -3126,6 +3134,58 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 // applyKernel pushes the current configuration of a kernel to its node. An
 // offline node is not an error for persistence: the kernel stays pending and
 // is reconciled when the agent reconnects.
+// nftIsolatedAgentMinVersion 是 nft 表按安装隔离的首个 agent 版本
+// （F2-NFT-01，9742d6e2）。低于它的 agent 在 KernelApply 时用明文
+// 表名 flmx_kernel 重建共享表，会覆盖同机其他 agent 的计数与白名单
+// （NEW-V1-01：旧代码 agent 在面板重连重部署时重建共享表）。
+// 2.1.13 是 2.1.12 之后的第一个版本号——隔离修复随 2.1.12 之后的首
+// 个发布出货，而发布是累积的，所以任何 > 2.1.12 的 agent 版本都含
+// 隔离修复；阈值取 2.1.13 与该发布实际编号（2.1.13/2.2.0/…）均成
+// 立，因为不存在不含修复的 2.1.13。
+const nftIsolatedAgentMinVersion = "2.1.13"
+
+// agentSupportsNftIsolation 判定 agent 版本是否含 nft 表隔离（纯
+// 函数，供单测）：可解析且 >= 2.1.13 为支持；空串与不可解析形态
+// （dev 等）一律按不支持处理（fail-closed，与 connlogAgentSupport
+// 同口径）。调用方 requireNftIsolatedAgent 对空串（从未上报版本
+// 的离线节点）另行放行，由发送侧以“不在线”自然失败。
+func agentSupportsNftIsolation(raw string) bool {
+	normalised, ok := parseConnlogAgentVersion(raw)
+	if !ok {
+		return false
+	}
+	cmp, err := compareVersions(normalised, nftIsolatedAgentMinVersion)
+	if err != nil {
+		return false
+	}
+	return cmp >= 0
+}
+
+// requireNftIsolatedAgent 在内核下发前核对节点 agent 版本
+// （NEW-V1-01 过渡期门）：旧版 agent 的 KernelApply 会用明文表名
+// 重建共享 flmx_kernel 表，覆盖同机其他 agent 的计数与白名单。
+// 版本过旧时中止下发并点名升级（与自动卸载/定时重启的版本门同
+// 口径）；agent 升级后重连即自动重推。空串版本（从未上报——节点
+// 离线或未连接）不设此门，下发在发送侧以“不在线”失败，与既往
+// 口径一致。
+func (h *Handler) requireNftIsolatedAgent(nodeID int64) error {
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil {
+		return err
+	}
+	if node == nil {
+		return errors.New("节点不存在")
+	}
+	raw := strings.TrimSpace(node.Version.String)
+	if raw == "" {
+		return nil
+	}
+	if !agentSupportsNftIsolation(raw) {
+		return fmt.Errorf("agent 版本过旧（当前 %s，需 %s 或更高），内核下发会覆盖同机其他 agent 的 nft 表；请先升级 agent，升级后重连时将自动重推", raw, nftIsolatedAgentMinVersion)
+	}
+	return nil
+}
+
 func (h *Handler) applyKernel(kernelID int64, install bool) error {
 	return h.applyKernelWith(kernelID, install, nil)
 }
@@ -3154,6 +3214,12 @@ func (h *Handler) applyKernelWithMode(kernelID int64, install bool, realmOverrid
 	}
 	if k == nil {
 		return errors.New("内核不存在")
+	}
+	// NEW-V1-01：过渡期门——旧版 agent 的 KernelApply 会用明文表名
+	// 重建共享 flmx_kernel 表。版本过旧时中止下发（不改任何状态，
+	// 门在“latest”归一等写操作之前），并点名升级。
+	if err := h.requireNftIsolatedAgent(k.NodeID); err != nil {
+		return err
 	}
 	// R2-F2-A2: rows stored before "latest" was resolved at install time
 	// still carry the literal sentinel. Converge them here, at the
