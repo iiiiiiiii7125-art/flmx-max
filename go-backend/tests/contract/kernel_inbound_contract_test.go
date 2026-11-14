@@ -31,9 +31,11 @@ func kernelContractPost(t *testing.T, router http.Handler, token, path, body str
 func seedKernelNode(t *testing.T, r *repo.Repository, name string) int64 {
 	t.Helper()
 	now := time.Now().UnixMilli()
+	// 夹具节点报当前 agent 版本：V1-01 版本门与 DBL mark 门均以 2.1.13 为界，
+	// 'v1' 不是真实 agent 版本串，会被两门 fail-closed 拦在下发之前。
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
-		VALUES(?, ?, '203.0.113.10', '203.0.113.10', '', '30000-30010', '', 'v1', 0, 0, 0, ?, ?, 0, '[::]', '[::]', 0)
+		VALUES(?, ?, '203.0.113.10', '203.0.113.10', '', '30000-30010', '', '2.1.13', 0, 0, 0, ?, ?, 0, '[::]', '[::]', 0)
 	`, name, name+"-secret", now, now).Error; err != nil {
 		t.Fatalf("seed node: %v", err)
 	}

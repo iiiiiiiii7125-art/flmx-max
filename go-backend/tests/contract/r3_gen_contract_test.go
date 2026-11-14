@@ -19,9 +19,11 @@ import (
 func r3genNode(t *testing.T, r *repo.Repository, name, ip, portRange string) int64 {
 	t.Helper()
 	now := time.Now().UnixMilli()
+	// 夹具节点报当前 agent 版本：V1-01 版本门以 2.1.13 为界，
+	// 'v1' 不是真实 agent 版本串，会被版本门 fail-closed 拦在下发之前。
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
-		VALUES(?, ?, ?, ?, '', ?, '', 'v1', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0)
+		VALUES(?, ?, ?, ?, '', ?, '', '2.1.13', 1, 1, 1, ?, ?, 1, '[::]', '[::]', 0)
 	`, name, name+"-secret", ip, ip, portRange, now, now).Error; err != nil {
 		t.Fatalf("insert node %s: %v", name, err)
 	}
