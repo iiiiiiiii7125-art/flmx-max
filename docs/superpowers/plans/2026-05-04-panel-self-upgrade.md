@@ -863,6 +863,8 @@ import type {
 } from "@/api/types";
 ```
 
+> **注意：** 上面导入列表中的 `getAnnouncement`、`updateAnnouncement`、`AnnouncementData` 已随公告（站内）功能在 2.1.13 删除，不再导入；其余导入不受影响。
+
 - [ ] **Step 2: Run the frontend build to verify it fails**
 
 Run:
