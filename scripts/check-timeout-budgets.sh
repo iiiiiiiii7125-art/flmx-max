@@ -47,7 +47,7 @@ ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 ORIG_ROOT="$ROOT"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# ── /tmp 容量前提（R2-R4 G-R4-06）─────────────────────────────────
+# ── /tmp 容量前提（R2-R4 G-R4-06；R5-D-01）────────────────────────
 # 本门在 $TMPDIR 建影子树（剥注释后的 .go 实文件，约 14MB、约
 # 2000 文件）与多处提取临时文件；/tmp 满盘时 mktemp/写盘失败会以
 # 环境失败形态大声红、易误判为预算漂移（G1-3 前例：/tmp 95% 时
@@ -55,12 +55,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # 即前提失效 exit 2 明示、不以预算 FAIL 形态红。阈值可经环境变
 # 量覆盖（自检用）：FLMX_TMP_MIN_KB（默认 131072＝128MiB）、
 # FLMX_TMP_MIN_INODES（默认 4096）。
+# R5-D-01：btrfs 等不做 inode 记账的文件系统上报 itotal=0 /
+# iavail=0——0 是“无此维度”不是“已耗尽”，须跳过 inode 项而不是
+# 按阈值拦门（此前恒 exit 2，父门禁又不分 exit 码，全套 doc 门
+# 在磁盘 TMPDIR 下恒 FAIL）。仅当 itotal>0 且 iavail 为可读数字
+# 时才按阈值硬核；iavail 不可读同样视为未知跳过。
 TMP_CHECK_DIR="${TMPDIR:-/tmp}"
 TMP_MIN_KB="${FLMX_TMP_MIN_KB:-131072}"
 TMP_MIN_INODES="${FLMX_TMP_MIN_INODES:-4096}"
 tmp_avail_kb="$(df -k --output=avail "$TMP_CHECK_DIR" 2>/dev/null | tail -1 | tr -d ' ')"
+tmp_total_inodes="$(df --output=itotal "$TMP_CHECK_DIR" 2>/dev/null | tail -1 | tr -d ' ')"
 tmp_avail_inodes="$(df --output=iavail "$TMP_CHECK_DIR" 2>/dev/null | tail -1 | tr -d ' ')"
-if [ -z "$tmp_avail_kb" ] || [ -z "$tmp_avail_inodes" ]; then
+if [ -z "$tmp_avail_kb" ]; then
   echo "FAIL: 前提失效，无法读取 $TMP_CHECK_DIR 容量（df 失败），请人工复核"
   exit 2
 fi
@@ -68,7 +74,19 @@ if [ "$tmp_avail_kb" -lt "$TMP_MIN_KB" ]; then
   echo "FAIL: 前提失效，$TMP_CHECK_DIR 可用空间不足（${tmp_avail_kb}KB，低于阈值 ${TMP_MIN_KB}KB）：超时预算门需写入影子树与提取文件，满盘会导致误报式失败（G1-3 前例）；请清理 $TMP_CHECK_DIR 后复跑，不要按预算漂移处理"
   exit 2
 fi
-if [ "$tmp_avail_inodes" -lt "$TMP_MIN_INODES" ]; then
+inode_skip_reason=""
+case "$tmp_total_inodes" in
+  ""|*[!0-9]*) inode_skip_reason="itotal 不可读（${tmp_total_inodes:-空}）" ;;
+  0) inode_skip_reason="itotal=0（无 inode 记账，如 btrfs）" ;;
+esac
+if [ -z "$inode_skip_reason" ]; then
+  case "$tmp_avail_inodes" in
+    ""|*[!0-9]*) inode_skip_reason="iavail 不可读（${tmp_avail_inodes:-空}）" ;;
+  esac
+fi
+if [ -n "$inode_skip_reason" ]; then
+  echo "NOTE: $TMP_CHECK_DIR 跳过 inode 前置检查：$inode_skip_reason"
+elif [ "$tmp_avail_inodes" -lt "$TMP_MIN_INODES" ]; then
   echo "FAIL: 前提失效，$TMP_CHECK_DIR 可用 inode 不足（${tmp_avail_inodes} 个，低于阈值 ${TMP_MIN_INODES}）：请清理 $TMP_CHECK_DIR 后复跑，不要按预算漂移处理"
   exit 2
 fi
