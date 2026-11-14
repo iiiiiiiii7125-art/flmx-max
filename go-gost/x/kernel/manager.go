@@ -18,9 +18,15 @@ import (
 
 // defaultBaseDir is the script form's kernel root under the current
 // install layout. Legacy (pre-rename) installs keep their root via
-// the working-directory recognition in ResolveBaseDir instead of
+// the executable-directory recognition in ResolveBaseDir instead of
 // this constant.
 const defaultBaseDir = "/etc/flmx_agent/kernels"
+
+// legacyBaseDir is the pre-rename script form's kernel root
+// (/etc/flux_agent, mirroring legacyScriptLayoutDirName). It keeps
+// the plain nft table name (see nftTableForBaseDir) so a
+// not-yet-migrated legacy install does not orphan its live table.
+const legacyBaseDir = "/etc/flux_agent/kernels"
 
 // Install-layout directory names recognized by ResolveBaseDir's
 // script-form branch: the current generation and the legacy
@@ -84,6 +90,9 @@ var (
 	kernelContainerCgroupPath = "/proc/self/cgroup"
 	detectKernelContainer     = probeKernelContainer
 	kernelWorkDir             = os.Getwd
+	// kernelExePath is os.Executable, the seam ResolveBaseDir uses
+	// to learn the agent's own install directory (F2-NFT-01).
+	kernelExePath = os.Executable
 )
 
 func probeKernelContainer() bool {
@@ -112,16 +121,29 @@ func probeKernelContainer() bool {
 //     entrypoint pins the working directory to the mounted data
 //     directory that also holds config.json, so kernel binaries,
 //     state.json and geodata persist across container rebuilds
-//     instead of dying with the container's writable layer.
-//  3. In the script form, <working directory>/kernels when the
-//     working directory is a recognized install layout: the unit's
-//     WorkingDirectory is the install directory in both layout
-//     generations, so current installs root under /etc/flmx_agent
+//     instead of dying with the container's writable layer. A
+//     container whose working directory is unusable falls back to
+//     defaultBaseDir — never to the executable's directory, whose
+//     binary lives in the ephemeral image layer.
+//  3. In the script form, <directory of this agent's own
+//     executable>/kernels. The install identity is the binary's
+//     own location: the unit runs the binary out of its install
+//     directory, so current installs root under /etc/flmx_agent
 //     and not-yet-migrated legacy installs keep their existing
 //     /etc/flux_agent root (kernel state stays continuous across a
 //     panel-driven in-place upgrade; install.sh's migration moves
-//     the whole directory, root included).
-//  4. defaultBaseDir — the current layout's root.
+//     the whole directory, root included). Crucially, a second
+//     agent on the same host — a scratch install, a relocated
+//     install — roots under ITS OWN directory instead of falling
+//     through to the live install's root: before this, any agent
+//     whose working directory was not a recognized layout silently
+//     shared /etc/flmx_agent/kernels with the live agent and
+//     overwrote its binaries and state.json (F2-NFT-01).
+//  4. When the executable path cannot be resolved, the working
+//     directory is a recognized install layout after all: root
+//     under it (the pre-F2-NFT-01 rule, kept as a fallback so a
+//     degraded process still finds the canonical install).
+//  5. defaultBaseDir — the current layout's root.
 func ResolveBaseDir() string {
 	dir := strings.TrimSpace(os.Getenv("FLMX_KERNEL_DIR"))
 	if dir != "" {
@@ -131,7 +153,12 @@ func ResolveBaseDir() string {
 		if wd, err := kernelWorkDir(); err == nil && filepath.IsAbs(wd) {
 			return filepath.Join(wd, "kernels")
 		}
-	} else if wd, err := kernelWorkDir(); err == nil && filepath.IsAbs(wd) {
+		return defaultBaseDir
+	}
+	if exe, err := kernelExePath(); err == nil && filepath.IsAbs(exe) {
+		return filepath.Join(filepath.Dir(exe), "kernels")
+	}
+	if wd, err := kernelWorkDir(); err == nil && filepath.IsAbs(wd) {
 		switch filepath.Base(wd) {
 		case scriptLayoutDirName, legacyScriptLayoutDirName:
 			return filepath.Join(wd, "kernels")

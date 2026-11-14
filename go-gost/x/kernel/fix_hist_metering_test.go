@@ -12,7 +12,7 @@ import (
 // rules were port-only.
 func TestFix031BoundCounterRulesMatchBindIP(t *testing.T) {
 	ports := []Port{{InboundID: 133, Port: 25317, Network: "tcp,udp", Bind: "127.0.0.1"}}
-	script := nftScript(expandPorts(ports), expandGuards(ports), nil, nil)
+	script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), nil, nil)
 	for _, want := range []string{
 		"ip daddr 127.0.0.1 tcp dport 25317 counter name in_133_tcp",
 		"ip daddr 127.0.0.1 udp dport 25317 counter name in_133_udp",
@@ -34,7 +34,7 @@ func TestFix031BoundCounterRulesMatchBindIP(t *testing.T) {
 func TestFix031WildcardBindKeepsPortOnlyRules(t *testing.T) {
 	for _, bind := range []string{"", "0.0.0.0", "::"} {
 		ports := []Port{{InboundID: 134, Port: 25318, Network: "tcp", Bind: bind}}
-		script := nftScript(expandPorts(ports), expandGuards(ports), nil, nil)
+		script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), nil, nil)
 		if !strings.Contains(script, "\t\ttcp dport 25318 counter name in_134_tcp\n") {
 			t.Fatalf("bind %q must keep the bare port-only in rule:\n%s", bind, script)
 		}
@@ -49,7 +49,7 @@ func TestFix031WildcardBindKeepsPortOnlyRules(t *testing.T) {
 
 func TestFix031IPv6BindMatchesIP6(t *testing.T) {
 	ports := []Port{{InboundID: 135, Port: 25319, Network: "tcp", Bind: "::1"}}
-	script := nftScript(expandPorts(ports), expandGuards(ports), nil, nil)
+	script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), nil, nil)
 	for _, want := range []string{
 		"ip6 daddr ::1 tcp dport 25319 counter name in_135_tcp",
 		"ip6 saddr ::1 tcp sport 25319 counter name out_135_tcp",
@@ -69,7 +69,7 @@ func TestFix029ParseCountersCarriesPackets(t *testing.T) {
 		`{"counter":{"family":"inet","name":"in_42_tcp","table":"flmx_kernel","packets":6,"bytes":2320}},` +
 		`{"counter":{"family":"inet","name":"out_42_tcp","table":"flmx_kernel","packets":4,"bytes":2216}},` +
 		`{"counter":{"family":"inet","name":"in_43_udp","table":"flmx_kernel","bytes":56}}]}`)
-	counters, _, err := parseCounters(raw)
+	counters, _, err := parseCounters(raw, nftTable)
 	if err != nil {
 		t.Fatal(err)
 	}

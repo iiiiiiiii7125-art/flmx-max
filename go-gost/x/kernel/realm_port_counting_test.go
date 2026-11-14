@@ -57,6 +57,9 @@ func TestRealmPortCountersFlowThroughStatus(t *testing.T) {
 	}
 
 	rec.listOut = `{"nftables":[{"metainfo":{}},{"counter":{"family":"inet","name":"in_1099511627818_tcp","table":"flmx_kernel","packets":3,"bytes":1200}},{"counter":{"family":"inet","name":"out_1099511627818_tcp","table":"flmx_kernel","bytes":3400}},{"counter":{"family":"inet","name":"in_1099511627818_udp","table":"flmx_kernel","bytes":56}}]}`
+	// F2-NFT-01: the counters must come back under this manager's own
+	// table, not the shared name the fixture was written with.
+	rec.listOut = strings.ReplaceAll(rec.listOut, `"table":"flmx_kernel"`, `"table":"`+m.nft.tableName()+`"`)
 	status := m.Status("realm")
 	if !status.NftAvailable {
 		t.Fatalf("nft not available in status: %+v", status)

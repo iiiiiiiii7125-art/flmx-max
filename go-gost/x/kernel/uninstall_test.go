@@ -7,8 +7,11 @@ import (
 	"testing"
 )
 
-// Uninstall 必须删掉 agent 建的全部 nftables 表（主表、旧名表、
+// Uninstall 必须删掉 agent 建的全部 nftables 表（自己的主表、
 // 端口跳跃探针表）：这些表驻留在内核里，进程退出不会带走它们。
+// F2-NFT-01: 删表只删自己的——非 canonical 安装的卸载脚本不得
+// 提及共享表名（它可能是另一 agent 的 live 表）；canonical 安装
+// 的卸载仍删旧名表。
 func TestManagerUninstallRemovesAgentNftTables(t *testing.T) {
 	var script string
 	orig := nftRunner
@@ -18,8 +21,26 @@ func TestManagerUninstallRemovesAgentNftTables(t *testing.T) {
 	}
 	t.Cleanup(func() { nftRunner = orig })
 
+	// 非 canonical 安装（scratch/自定义目录）：只删自己的表＋探针表。
 	m := NewManager(t.TempDir())
 	if err := m.Uninstall(); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	for _, table := range []string{m.nft.tableName(), nftHopProbeTable} {
+		if !strings.Contains(script, "delete table inet "+table) {
+			t.Fatalf("uninstall script must delete table %s, got:\n%s", table, script)
+		}
+	}
+	for _, table := range []string{nftTable, legacyNFTTable} {
+		if strings.Contains(script, "delete table inet "+table+"\n") {
+			t.Fatalf("isolated uninstall script must not delete shared table %s, got:\n%s", table, script)
+		}
+	}
+
+	// Canonical 安装：主表＋旧名表＋探针表全删（旧行为不变）。
+	script = ""
+	mc := NewManager(defaultBaseDir)
+	if err := mc.Uninstall(); err != nil {
 		t.Fatalf("uninstall: %v", err)
 	}
 	for _, table := range []string{nftTable, legacyNFTTable, nftHopProbeTable} {

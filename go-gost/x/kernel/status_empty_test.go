@@ -27,7 +27,7 @@ func TestStatusEmptySerializesEmptyArrays(t *testing.T) {
 }
 
 func TestParseCountersEmptySerializesEmptyArrays(t *testing.T) {
-	counters, users, err := parseCounters([]byte(`{"nftables":[]}`))
+	counters, users, err := parseCounters([]byte(`{"nftables":[]}`), nftTable)
 	if err != nil {
 		t.Fatal(err)
 	}
