@@ -22,7 +22,10 @@ func newSubStoreTestHandler(t *testing.T) *Handler {
 		t.Fatalf("open repo: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	return &Handler{repo: r}
+	h := &Handler{repo: r}
+	// R5-B-03：测试结束停掉可能被懒启动的 notify 派发 worker。
+	t.Cleanup(func() { h.StopBackgroundJobs() })
+	return h
 }
 
 func resetSubStoreLimiterForTest() {

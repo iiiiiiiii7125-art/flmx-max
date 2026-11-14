@@ -79,7 +79,10 @@ func r2b2Open(t *testing.T) (*repo.Repository, *Handler) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	return r, New(r, "test-secret")
+	h := New(r, "test-secret")
+	// R5-B-03：测试结束停掉可能被懒启动的 notify 派发 worker。
+	t.Cleanup(func() { h.StopBackgroundJobs() })
+	return r, h
 }
 
 // --- R2X-004 新接入面 ---

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"log"
 
@@ -87,12 +88,21 @@ func (h *Handler) repushForwardRuntimeAfterImport(result *model.ImportResult, ba
 			}
 		}
 		// 2) 整节点转发重布（onNodeOnline 同款路径）。
+		// R5-B-01：真失败与待定分流——仅离线跳过时不记 failed、
+		// 不写「失败」，只提示重连后重推（重推本身未完成，该节
+		// 点仍进 attempted 以便调用方知晓）。
 		out.attempted = append(out.attempted, nodeID)
-		if !h.redeployLocalNodeRuntime(nodeID) {
+		if err := h.redeployLocalNodeRuntime(nodeID); err != nil {
+			if errors.Is(err, errRedeployPending) {
+				msg := fmt.Sprintf("备份恢复：节点 #%d 在重推时离线，本次重推未送达，节点重连后将再次全量重推", nodeID)
+				out.warnings = append(out.warnings, msg)
+				log.Printf("backupImport repush: node %d pending (offline skip)", nodeID)
+				continue
+			}
 			out.failed = append(out.failed, nodeID)
 			msg := fmt.Sprintf("备份恢复：节点 #%d 的转发重推失败，该节点上的转发数据面可能与数据库不一致，节点重连后将再次全量重推", nodeID)
 			out.warnings = append(out.warnings, msg)
-			log.Printf("backupImport repush: node %d failed", nodeID)
+			log.Printf("backupImport repush: node %d failed: %v", nodeID, err)
 		}
 	}
 	return out

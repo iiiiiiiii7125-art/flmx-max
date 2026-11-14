@@ -27,7 +27,10 @@ func newPanelsecHandler(t *testing.T) (*Handler, *repo.Repository) {
 		t.Fatalf("open repo: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	return New(r, "test-secret"), r
+	h := New(r, "test-secret")
+	// R5-B-03：测试结束停掉可能被懒启动的 notify 派发 worker。
+	t.Cleanup(func() { h.StopBackgroundJobs() })
+	return h, r
 }
 
 func dropTableForTest(t *testing.T, r *repo.Repository, table string) {

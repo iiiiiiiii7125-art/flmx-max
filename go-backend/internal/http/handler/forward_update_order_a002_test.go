@@ -28,6 +28,8 @@ func newForwardOrderTestEnv(t *testing.T) (*Handler, int64, int64) {
 	}
 	t.Cleanup(func() { _ = r.Close() })
 	h := New(r, "test-secret")
+	// R5-B-03：测试结束停掉可能被懒启动的 notify 派发 worker。
+	t.Cleanup(func() { h.StopBackgroundJobs() })
 	now := time.Now().UnixMilli()
 
 	userA, err := r.CreateUser("userA", "hash", 1, now+86400000, 1, 1, 100, 1, 0, now)

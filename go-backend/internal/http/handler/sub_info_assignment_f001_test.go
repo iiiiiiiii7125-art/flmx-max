@@ -60,6 +60,8 @@ func newSubInfoTestEnv(t *testing.T) *subInfoTestEnv {
 		legacyID:   mk("legacy", 1),
 		plainID:    mk("plain", 1),
 	}
+	// R5-B-03：测试结束停掉可能被懒启动的 notify 派发 worker。
+	t.Cleanup(func() { env.h.StopBackgroundJobs() })
 	sub, err := r.DefaultSubscription(now)
 	if err != nil {
 		t.Fatalf("default subscription: %v", err)

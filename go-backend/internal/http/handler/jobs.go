@@ -96,20 +96,26 @@ func (h *Handler) StopBackgroundJobs() {
 		return
 	}
 
+	// R5-B-03：派发 worker 可能在 jobs 启动前就被懒启动
+	// （ensureNotifyDispatcher 在 jobsCtx 为空时以 Background
+	// ctx 兜底），此时 jobsStarted 为 false、旧代码直接 return，
+	// worker 永远停不掉（旧 20m 超时 dump 里的大量 runNotifyWorker
+	// 即此物）。jobs 未启动时仍须落到 stopNotifyDispatcher；
+	// 未启动派发器时它即刻返回（cancel 为空、WG 计数为 0），
+	// 二次调用亦安全。
 	h.jobsMu.Lock()
-	if !h.jobsStarted {
-		h.jobsMu.Unlock()
-		return
-	}
+	started := h.jobsStarted
 	cancel := h.jobsCancel
 	h.jobsCancel = nil
 	h.jobsStarted = false
 	h.jobsMu.Unlock()
 
-	if cancel != nil {
-		cancel()
+	if started {
+		if cancel != nil {
+			cancel()
+		}
+		h.jobsWG.Wait()
 	}
-	h.jobsWG.Wait()
 	h.stopNotifyDispatcher()
 }
 

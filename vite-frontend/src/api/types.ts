@@ -1128,7 +1128,9 @@ export interface NodeConnLogReadiness {
  * runtime redeploy of the node (same funnel the connlog toggle
  * uses). `redeployed` is true only when the redeploy returned
  * success; a failure comes back as a non-zero envelope code,
- * never as a silent success.
+ * never as a silent success. A code 0 with `redeployed` false
+ * is queued pending (node offline at push time — see the
+ * envelope `warning`), not a failure (R5-B-01).
  */
 export interface NodeConnLogRepushResult {
   nodeId: number;

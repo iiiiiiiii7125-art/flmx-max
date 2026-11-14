@@ -579,6 +579,11 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateV6FederationRemoval(db); err != nil {
 			return err
 		}
+		// RM-ANN v1（2.1.13）: 公告功能整删的存量处置——删
+		// announcement 表（双后端同口径）。
+		if err := migrateV1AnnouncementTableRemoved(db); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -639,6 +644,12 @@ func autoMigrateAll(db *gorm.DB) error {
 	// （删远端节点及其级联、删五张联邦表、删 node 远端列）。
 	// 原 FIX-132 的 share relay 凭据回填随联邦功能一并下线。
 	if err := migrateV6FederationRemoval(db); err != nil {
+		return err
+	}
+
+	// RM-ANN v1（2.1.13）: 公告功能整删的存量处置——删
+	// announcement 表（新装库无表时直接记版本跳过）。
+	if err := migrateV1AnnouncementTableRemoved(db); err != nil {
 		return err
 	}
 

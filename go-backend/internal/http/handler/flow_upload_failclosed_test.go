@@ -32,7 +32,11 @@ func newF01Handler(t *testing.T) *Handler {
 	if err := r.DB().Create(&model.Node{ID: 1, Name: "f01-node", Secret: f01TestSecret, ServerIP: "127.0.0.1", Port: "30000", Status: 1}).Error; err != nil {
 		t.Fatal(err)
 	}
-	return &Handler{repo: r}
+	h := &Handler{repo: r}
+	// R5-B-03：同 newF02Handler，测试结束停掉可能被懒启动的
+	// notify 派发 worker（见 control_plane_activate_pending_test.go）。
+	t.Cleanup(func() { h.StopBackgroundJobs() })
+	return h
 }
 
 // seedF01Forward 建一条可入账的转发：隧道双向计费、ratio=1。

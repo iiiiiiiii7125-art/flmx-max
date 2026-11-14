@@ -1674,6 +1674,12 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		// F2-APPLY-01：确认待定不是失败——警告只说「已发出、正在确认」。
 		if errors.Is(err, errApplyConfirmPending) {
 			warnings = append([]string{"下发已发出，正在确认生效状态"}, warnings...)
+		} else if strings.Contains(err.Error(), "不在线") {
+			// F-R5-APPLY-01-OBS：干净停机（节点离线）不是下发失败——
+			// applyKernel 本身已把该情形归类为 pending（同谓词），
+			// 重连后 onNodeOnline 自动重推收敛；回执只说离线待重推，
+			// 绝不缀「下发失败」。
+			warnings = append([]string{"节点离线，下发待节点重连后自动重推"}, warnings...)
 		} else {
 			warnings = append([]string{"下发到节点失败: " + err.Error()}, warnings...)
 		}
