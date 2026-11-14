@@ -759,7 +759,10 @@ func notifyEmoji(event, title string) string {
 // App still travels in the webhook JSON payload.
 func notifyText(msg notifyMessage) string {
 	head := fmt.Sprintf("%s <b>%s</b>", notifyEmoji(msg.Event, msg.Title), html.EscapeString(msg.Title))
-	when := fmt.Sprintf("🕐 %s", time.UnixMilli(msg.Time).Format("2006-01-02 15:04:05 MST"))
+	// F3-NEW-04：页脚时区此前用 MST 缩写，面板时区 Asia/Shanghai 下
+	// 渲染为歧义的 "CST"（中国标准时间与美国中部标准时间同缩写）。
+	// 改用数字 UTC 偏移（+08:00），时区含义唯一。
+	when := fmt.Sprintf("🕐 %s", time.UnixMilli(msg.Time).Format("2006-01-02 15:04:05 -07:00"))
 	if strings.TrimSpace(msg.Message) == "" {
 		return head + "\n" + when
 	}

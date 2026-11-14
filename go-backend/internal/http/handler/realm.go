@@ -348,6 +348,12 @@ func (h *Handler) syncRealmNodes(nodeIDs []int64, override map[int64]bool) ([]st
 		}
 		install := k.InstalledVersion == ""
 		if err := h.applyKernelWith(k.ID, install, override); err != nil {
+			// F2-APPLY-01：确认待定不是失败也不是离线——先于离线/超时
+			// 归类分流，警告只说「已发出、正在确认」，下次 poll 收敛。
+			if errors.Is(err, errApplyConfirmPending) {
+				warnings = append(warnings, fmt.Sprintf("节点 %s 下发已发出，正在确认生效状态", h.nodeLabel(nodeID)))
+				continue
+			}
 			if isNodeOfflineOrTimeoutError(err) {
 				warnings = append(warnings, fmt.Sprintf("节点 %s 不在线，realm 配置待节点上线后下发", h.nodeLabel(nodeID)))
 				continue

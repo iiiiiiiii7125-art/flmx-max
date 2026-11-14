@@ -7,14 +7,16 @@ import (
 )
 
 // TestNotifyTextTemplate pins the HTML rendering of notifyText: emoji +
-// bold title, body lines as-is, clock footer. Time format is unchanged
-// from the old plain-text template.
+// bold title, body lines as-is, clock footer. The footer renders the
+// timestamp with a numeric UTC offset (F3-NEW-04): the old MST
+// abbreviation rendered "CST" under Asia/Shanghai, which is ambiguous
+// with US Central Standard Time.
 func TestNotifyTextTemplate(t *testing.T) {
 	when := time.Date(2026, 11, 14, 9, 30, 0, 0, time.UTC).UnixMilli()
 	// notifyText formats the timestamp in local time, so the expected
 	// footer must be rendered the same way — hardcoding UTC fails
 	// anywhere the local zone is not UTC.
-	whenStr := time.UnixMilli(when).Format("2006-01-02 15:04:05 MST")
+	whenStr := time.UnixMilli(when).Format("2006-01-02 15:04:05 -07:00")
 	cases := []struct {
 		name string
 		msg  notifyMessage

@@ -347,10 +347,23 @@ func (h *Handler) maybeDailyReport(now time.Time) {
 // dailyReportText 是纯计算（R2X-018）：返回日报文本与本次依据的入站
 // 累计快照，不写任何配置。快照的推进由 maybeDailyReport 在整条投递
 // 成功后统一完成。
+//
+// F3-NEW-02：此前各行只在有数时出现，缺行不说明原因——用户看到
+// 行数忽多忽少，无从分辨是「当日无此数据」还是「统计查询失败」。
+// 现对每个未列出的行补原因，统一缀在文末「未列出：行（原因）、…」
+// 一行；既有行的文案与数值一字不动。
 func (h *Handler) dailyReportText(now time.Time) (string, int64, bool) {
 	var lines []string
+	var omitted []string
+	omit := func(row, why string) {
+		omitted = append(omitted, row+"（"+why+"）")
+	}
 	if online, total, err := h.repo.CountNodesOnline(); err == nil && total > 0 {
 		lines = append(lines, fmt.Sprintf("节点在线：%d / %d", online, total))
+	} else if err != nil {
+		omit("节点在线", "节点统计查询失败")
+	} else {
+		omit("节点在线", "无节点")
 	}
 	if kernels, err := h.repo.ListNodeKernels(0); err == nil && len(kernels) > 0 {
 		bad := 0
@@ -360,6 +373,10 @@ func (h *Handler) dailyReportText(now time.Time) (string, int64, bool) {
 			}
 		}
 		lines = append(lines, fmt.Sprintf("内核出错：%d / %d", bad, len(kernels)))
+	} else if err != nil {
+		omit("内核出错", "内核列表查询失败")
+	} else {
+		omit("内核出错", "无内核记录")
 	}
 	if h.externalProbes != nil {
 		h.externalProbes.mu.RLock()
@@ -376,7 +393,11 @@ func (h *Handler) dailyReportText(now time.Time) (string, int64, bool) {
 		h.externalProbes.mu.RUnlock()
 		if checked > 0 {
 			lines = append(lines, fmt.Sprintf("导入节点连不上：%d / %d", down, checked))
+		} else {
+			omit("导入节点连不上", "无导入节点探针数据")
 		}
+	} else {
+		omit("导入节点连不上", "未配置导入节点探针")
 	}
 	var snapshot int64
 	var hasSnap bool
@@ -389,9 +410,15 @@ func (h *Handler) dailyReportText(now time.Time) (string, int64, bool) {
 			}
 		}
 		lines = append(lines, text)
+	} else {
+		omit("入站流量", "入站流量统计查询失败")
 	}
 	if flow, err := h.repo.SumStatisticsFlowSince(now.Add(-24 * time.Hour).UnixMilli()); err == nil && flow > 0 {
 		lines = append(lines, "转发流量（过去 24 小时）："+formatBytes(flow))
+	} else if err != nil {
+		omit("转发流量", "转发流量统计查询失败")
+	} else {
+		omit("转发流量", "过去 24 小时无转发流量")
 	}
 	// R35-G-001：日报披露当前日/月配额超额用户数（与 10 分钟轮询的
 	// warn/full 通知互补：日报是管理员每日必读的一次性汇总，超额用户
@@ -413,8 +440,14 @@ func (h *Handler) dailyReportText(now time.Time) (string, int64, bool) {
 			}
 			if over > 0 {
 				lines = append(lines, fmt.Sprintf("日/月配额超额用户：%d 名", over))
+			} else {
+				omit("日/月配额超额用户", "无超额用户")
 			}
+		} else {
+			omit("日/月配额超额用户", "配额统计查询失败")
 		}
+	} else {
+		omit("日/月配额超额用户", "用户列表查询失败")
 	}
 	if subs, err := h.repo.ListSubscriptions(); err == nil {
 		active, soon, total := 0, 0, 0
@@ -432,10 +465,21 @@ func (h *Handler) dailyReportText(now time.Time) (string, int64, bool) {
 		}
 		if total > 0 {
 			lines = append(lines, fmt.Sprintf("分享订阅：%d 个有效，%d 个 3 天内到期", active, soon))
+		} else {
+			omit("分享订阅", "无分享订阅")
 		}
+	} else {
+		omit("分享订阅", "订阅列表查询失败")
 	}
 	if len(lines) == 0 {
-		return "暂无数据", snapshot, hasSnap
+		text := "暂无数据"
+		if len(omitted) > 0 {
+			text += "\n未列出：" + strings.Join(omitted, "、")
+		}
+		return text, snapshot, hasSnap
+	}
+	if len(omitted) > 0 {
+		lines = append(lines, "未列出："+strings.Join(omitted, "、"))
 	}
 	return strings.Join(lines, "\n"), snapshot, hasSnap
 }
