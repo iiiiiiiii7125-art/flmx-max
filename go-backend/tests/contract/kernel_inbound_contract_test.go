@@ -89,8 +89,9 @@ func TestKernelInboundLifecycleContract(t *testing.T) {
 	create := kernelContractPost(t, router, admin, "/api/v1/inbound/create",
 		`{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"xray","name":"东京-Reality","protocol":"vless","port":443,
 		  "settings":{"flow":"xtls-rprx-vision"},"security":{"type":"reality","sni":"www.example.com"}}`)
-	if create.Code != 0 || !strings.Contains(create.Msg, "下发到节点失败") {
-		t.Fatalf("create should succeed with dispatch warning, got %+v", create)
+	// F-R5-APPLY-01-OBS: offline create is pending, not a failure — receipt names the auto-repush.
+	if create.Code != 0 || !strings.Contains(create.Msg, "节点离线，下发待节点重连后自动重推") {
+		t.Fatalf("create should succeed with offline-pending warning, got %+v", create)
 	}
 	inboundID := mustQueryInt64(t, r, `SELECT id FROM node_inbound WHERE kernel_id = ?`, kernelID)
 
