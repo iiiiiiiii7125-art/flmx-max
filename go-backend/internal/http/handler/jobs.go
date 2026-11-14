@@ -42,6 +42,12 @@ func (h *Handler) StartBackgroundJobs() {
 	// FIX-D（D6-07）：通知派发 worker 绑定 jobs ctx，随 jobs 一起停。
 	h.ensureNotifyDispatcher()
 
+	// Telegram 机器人菜单轮询（notify_bot.go）：仅在配置了 Telegram
+	// token＋chat 时才真正长轮询；未配置时循环内休眠等待，随 jobs
+	// 一起停。
+	h.jobsWG.Add(1)
+	go h.runTelegramBotLoop(ctx)
+
 	h.jobsWG.Add(1)
 	go h.runHourlyStatsLoop(ctx)
 	h.jobsWG.Add(1)

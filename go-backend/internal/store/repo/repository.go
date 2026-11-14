@@ -5712,6 +5712,21 @@ func (r *Repository) CreateStatisticsFlow(userID, flow, totalFlow int64, timeTex
 	}).Error
 }
 
+// SumStatisticsFlowsSince returns the total hourly flow increment
+// recorded in statistics_flow since the given time. Rows are per-user
+// hourly increments written by the statistics job, so the sum is the
+// panel-wide traffic since fromMs.
+func (r *Repository) SumStatisticsFlowsSince(fromMs int64) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("repository not initialized")
+	}
+	var total sql.NullInt64
+	if err := r.db.Model(&model.StatisticsFlow{}).Where("created_time >= ?", fromMs).Select("COALESCE(SUM(flow), 0)").Scan(&total).Error; err != nil {
+		return 0, err
+	}
+	return total.Int64, nil
+}
+
 // monthlyResetMoment is the most recent monthly reset moment at or
 // before now for reset day d (local time), clamped to the month's
 // length. This is the same algorithm (and clamping rule) as the
