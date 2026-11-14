@@ -3,12 +3,9 @@ import type { ForwardApiItem } from "@/api/types";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
-import {
-  getAnnouncement,
-  getUserPackageInfo,
-  type AnnouncementData,
-} from "@/api";
-import { getAdminFlag, getUserId } from "@/utils/session";
+import { getUserPackageInfo, type AnnouncementData } from "@/api";
+import { getAdminFlag } from "@/utils/session";
+import { useAnnouncement } from "@/pages/dashboard/use-announcement";
 
 export interface DashboardUserInfo {
   flow: number;
@@ -62,22 +59,6 @@ export interface DashboardStatisticsFlow {
 const DASHBOARD_POLL_INTERVAL_MS = 5000;
 const EXPIRATION_NOTIFICATION_STORAGE_KEY =
   "dashboard:last-expiration-notification";
-
-// R8-044：公告已读标记按用户分键——旧版全局单键
-// flmx_announcement_seen_time 让同一浏览器先后登录的两个账号共用
-// 已读状态，先登录者关掉弹窗后，后登录者看不到该版公告弹窗。
-// 现按 JWT 用户 ID 分键；取不到用户 ID（token 不可用）时回落旧键名
-// 保持原行为。旧键仅作回落名保留、不再被已识别用户读写，既有值
-// 不会引发错误（升级后各用户首次会重新看到当前版公告一次）。
-const ANNOUNCEMENT_SEEN_STORAGE_KEY = "flmx_announcement_seen_time";
-
-const announcementSeenStorageKey = (): string => {
-  const userId = getUserId();
-
-  return userId === null
-    ? ANNOUNCEMENT_SEEN_STORAGE_KEY
-    : `${ANNOUNCEMENT_SEEN_STORAGE_KEY}:${userId}`;
-};
 
 const buildExpirationNotificationKey = (
   userInfo: DashboardUserInfo,
@@ -237,10 +218,9 @@ export const useDashboardData = (): DashboardDataState => {
     DashboardStatisticsFlow[]
   >([]);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [announcement, setAnnouncement] = useState<AnnouncementData | null>(
-    null,
-  );
-  const [isAnnouncementModalOpen, setIsAnnouncementModalOpen] = useState(false);
+  // 公告横幅/弹窗：与管理员总览共用同一份逻辑（use-announcement.ts），
+  // U1-R2B3-01 抽出前这里曾内联同一段代码。
+  const announcementState = useAnnouncement();
   const isMountedRef = useRef(true);
   const packageRequestInFlightRef = useRef(false);
 
@@ -308,54 +288,6 @@ export const useDashboardData = (): DashboardDataState => {
     [applyPackageData],
   );
 
-  const loadAnnouncement = useCallback(async () => {
-    try {
-      const res = await getAnnouncement();
-
-      if (!isMountedRef.current) {
-        return;
-      }
-
-      if (res.code === 0 && res.data && res.data.enabled === 1) {
-        setAnnouncement(res.data);
-
-        try {
-          const storedTimeStr = localStorage.getItem(
-            announcementSeenStorageKey(),
-          );
-          const storedTime = storedTimeStr ? parseInt(storedTimeStr, 10) : 0;
-          const updateTime = res.data.update_time || 0;
-
-          if (updateTime > storedTime) {
-            setIsAnnouncementModalOpen(true);
-          }
-        } catch {
-          setIsAnnouncementModalOpen(true);
-        }
-      } else {
-        setAnnouncement(null);
-      }
-    } catch {
-      if (isMountedRef.current) {
-        setAnnouncement(null);
-      }
-    }
-  }, []);
-
-  const dismissAnnouncementModal = useCallback(() => {
-    setIsAnnouncementModalOpen(false);
-    if (announcement && announcement.update_time) {
-      try {
-        localStorage.setItem(
-          announcementSeenStorageKey(),
-          announcement.update_time.toString(),
-        );
-      } catch {
-        // Ignore localStorage write failures and keep the modal dismissed.
-      }
-    }
-  }, [announcement]);
-
   useEffect(() => {
     isMountedRef.current = true;
     const adminFlag = getAdminFlag();
@@ -363,12 +295,11 @@ export const useDashboardData = (): DashboardDataState => {
     setIsAdmin(adminFlag);
 
     void loadPackageData({ notifyOnError: true });
-    void loadAnnouncement();
 
     return () => {
       isMountedRef.current = false;
     };
-  }, [loadAnnouncement, loadPackageData]);
+  }, [loadPackageData]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -404,9 +335,6 @@ export const useDashboardData = (): DashboardDataState => {
     forwardList,
     statisticsFlows,
     isAdmin,
-    announcement,
-    isAnnouncementModalOpen,
-    setIsAnnouncementModalOpen,
-    dismissAnnouncementModal,
+    ...announcementState,
   };
 };
