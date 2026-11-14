@@ -1206,6 +1206,8 @@ Update the initial `useEffect` so it loads the new status alongside configs and 
   }, []);
 ```
 
+> **注意：** 上面代码块中的 `loadAnnouncement()` 已随公告（站内）功能在 2.1.13 删除，不再调用；其余加载项不受影响。
+
 Finally, extend `handleUpdateChannelChange` so changing the update channel clears stale release picks and refreshes the displayed status:
 
 ```tsx
