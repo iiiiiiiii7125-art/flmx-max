@@ -265,4 +265,17 @@ fi
 grep -q 'T019' "$TMP/var8.log" || { echo "FAIL: gate failed but did not name T019:"; cat "$TMP/var8.log"; exit 1; }
 echo "OK: variant caught, T019 named"
 cp "$ROOT/go-backend/internal/http/handler/node_tune.go" "$NT_GO"
+
+# ── G-R4-06 回归变体：/tmp 容量前提。阈值抬到不可能满足的值时，
+# 门必须以 exit 2 前提失效明示、且点名容量不足——不得以预算 FAIL
+# （exit 1）形态红（G1-3 前例：/tmp 95% 时 §8 单 FAIL 被误读为预
+# 算漂移）。正常阈值下的基线已由本文件首节覆盖。
+echo "== variant G-R4-06: unsatisfiable /tmp threshold must fail closed with exit 2, naming capacity =="
+FLMX_TMP_MIN_KB=999999999 bash "$GATE" "$MIR" > "$TMP/var9.log" 2>&1
+gate_rc=$?
+[ "$gate_rc" -eq 0 ] && { echo "FAIL: gate PASSED with an unsatisfiable /tmp threshold — precondition not enforced"; exit 1; }
+[ "$gate_rc" -eq 2 ] || { echo "FAIL: /tmp precondition failure must exit 2 (premise failure), got $gate_rc:"; cat "$TMP/var9.log"; exit 1; }
+grep -q '可用空间不足' "$TMP/var9.log" || { echo "FAIL: precondition failure does not name the capacity shortfall:"; cat "$TMP/var9.log"; exit 1; }
+grep -q '不要按预算漂移处理' "$TMP/var9.log" || { echo "FAIL: precondition failure does not disclaim the budget-drift reading:"; cat "$TMP/var9.log"; exit 1; }
+echo "OK: variant caught, /tmp precondition named with exit 2"
 echo "SELFTEST: PASS"

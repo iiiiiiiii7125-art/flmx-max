@@ -12955,6 +12955,37 @@ test_delete_self_multifactor_rejects_repo_line_only() (
   panel_script_file_is_self "$ROOT_DIR/panel_install.sh" || fail "W1-SELFCHECK: panel_install.sh itself must pass its own self check"
 )
 
+# F1-N2（R2-R4 G-R4-03）：report_compose_up_failure 双分支回归——
+# overlap 日志报池重叠＋改子网指引、不印重装指引；其余失败报拉取失
+# 败＋重装指引。旧实现两处 up 守卫一律报「常见原因是镜像拉取失败」，
+# 把池重叠冒充成拉取失败；本用例守分支条件与文案不被改回。
+test_report_compose_up_failure_branches() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local overlap_log pull_log out
+  overlap_log=$(mktemp)
+  pull_log=$(mktemp)
+
+  # 分支一：up 日志含 Pool overlaps → 报池重叠＋改子网指引，不印重装指引。
+  printf 'Error response from daemon: Pool overlaps with other one on this address space\n' > "$overlap_log"
+  out=$(report_compose_up_failure "$overlap_log" "面板" "，未打印成功信息与默认凭据。" 2>&1)
+  echo "$out" | grep -q "地址池重叠" || fail "F1-N2: overlap 日志应报池重叠"
+  echo "$out" | grep -q "子网冲突的改法" || fail "F1-N2: overlap 分支应给改子网指引"
+  echo "$out" | grep -q "不要强制重装" || fail "F1-N2: overlap 分支应明示不要强制重装"
+  echo "$out" | grep -q "PANEL_FORCE_REINSTALL=1" && fail "F1-N2: overlap 分支不得印重装指引"
+  echo "$out" | grep -q "镜像拉取失败" && fail "F1-N2: overlap 分支不得冒充拉取失败"
+
+  # 分支二：up 日志无 overlap → 报拉取失败＋重装指引，不报池重叠。
+  printf 'Error response from daemon: pull access denied, repository does not exist\n' > "$pull_log"
+  out=$(report_compose_up_failure "$pull_log" "面板" "，未打印成功信息与默认凭据。" 2>&1)
+  echo "$out" | grep -q "镜像拉取失败" || fail "F1-N2: 非 overlap 失败应报拉取失败"
+  echo "$out" | grep -q "PANEL_FORCE_REINSTALL=1" || fail "F1-N2: 非 overlap 分支应印重装指引"
+  echo "$out" | grep -q "地址池重叠" && fail "F1-N2: 拉取失败分支不得报池重叠"
+
+  rm -f "$overlap_log" "$pull_log"
+)
+
 test_upsert_env_var_literal_values_and_key_parity
 test_panel_version_gate_matches_go_semantics
 test_install_version_gate_matches_go_semantics
@@ -12971,5 +13002,6 @@ test_json_escape_and_config_addr_grammar
 test_install_uninstall_verdict_requires_poststate
 test_panel_uninstall_docker_branch_verifies_poststate
 test_delete_self_multifactor_rejects_repo_line_only
+test_report_compose_up_failure_branches
 
 echo "install script tests passed"

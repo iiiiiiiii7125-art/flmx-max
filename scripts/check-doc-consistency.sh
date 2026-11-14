@@ -7,6 +7,16 @@
 #   3. 技能包版本字面量三处一致（SKILL.md / package.json / doc/ai-skill.md 发布示例）
 #   4. install.md 维护菜单 vs panel_install.sh show_menu 实际菜单
 #   5. install.md Caddy 示例反代目标 vs 脚本刻意使用的 127.0.0.1
+#      （双侧，G-R4-04：反面查无 localhost、正反面查含 127.0.0.1、
+#      脚本侧查生成行——只查反面时示例整行被删仍全绿）。
+#   23. 本轮文档断言兜底（R2-R4 G-R4-02）：install.md 子网示例值、
+#      身份六键清单、notify.md 机器人菜单小节、upgrade.md:83
+#      V1-01 残留段——四处真值已人工核对通过，本节守「改动漂移即
+#      红」，每项双侧对账（文档声称 vs 模板/脚本/代码实值）。
+#   24. F1-N2 回归测试在场门（R2-R4 G-R4-03）：test-install-scripts-
+#      proxy.sh 须含 report_compose_up_failure 双分支回归测试且已
+#      在文件末尾的执行清单里注册——测试被删或漏注册即红（CI
+#      install-scripts job 跑本文件，测试本身即执行面）。
 #   6. [known-pending] 默认账号字面量：guide vs seed/脚本——F-064 属 §十一.4
 #      待产品决策，本项只报告、不计入失败（决策落地后应改为硬检查）；
 #      但任一侧提取为空属前提失效、点名硬红，不得伪装一致
@@ -276,8 +286,14 @@ else
 fi
 
 # ── 5. Caddy 示例：install.md 不得再写 reverse_proxy localhost（脚本刻意用 127.0.0.1 避免 IPv6 解析 502）
+# 双侧（G-R4-04）：反面查无 localhost、正反面查含 127.0.0.1、脚本侧
+# 查生成行——只查反面时，示例整行被删仍全绿（表象在场断言同族）。
 if grep -q "reverse_proxy localhost" doc/guide/install.md; then
   note_fail "install.md Caddy 示例仍写 reverse_proxy localhost，脚本口径为 127.0.0.1"
+elif ! grep -q "reverse_proxy 127\.0\.0\.1" doc/guide/install.md; then
+  note_fail "install.md Caddy 示例缺 reverse_proxy 127.0.0.1 正面断言（示例行被删亦须红，请人工复核）"
+elif ! grep -q "reverse_proxy 127\.0\.0\.1:" panel_install.sh; then
+  note_fail "panel_install.sh 未生成 reverse_proxy 127.0.0.1:端口（脚本侧反代目标漂移，请人工复核）"
 else
   note_ok "install.md Caddy 示例反代目标与脚本一致（127.0.0.1）"
 fi
@@ -623,6 +639,17 @@ for doc_file in doc/guide/getting-started.md doc/guide/install.md README.md; do
     note_ok "初始口令口径门：$doc_file 与随机播种口径一致"
   fi
 done
+# 双侧（G-R4-04）：文档口径须与 initial_admin.go 的随机播种实现对齐——
+# 只查文档时，实现改回固定口令仍全绿。代码侧断言：crypto/rand 导入
+# 在场且 generateInitialAdminPassword 内调 rand.Read。
+INIT_ADMIN_GO="go-backend/internal/store/repo/initial_admin.go"
+if ! grep -q '"crypto/rand"' "$INIT_ADMIN_GO"; then
+  note_fail "初始口令口径门：$INIT_ADMIN_GO 未导入 crypto/rand（随机播种实现漂移，请人工复核）"
+elif ! grep -q "rand\.Read" "$INIT_ADMIN_GO"; then
+  note_fail "初始口令口径门：$INIT_ADMIN_GO 未调用 rand.Read（随机播种实现漂移，请人工复核）"
+else
+  note_ok "初始口令口径门：initial_admin.go 以 crypto/rand 随机播种"
+fi
 
 # ── 19. 计量伴生端口口径门（FIX-DOC-R）：文案区间与代码面下发实参同为
 #    [20000, 60000)（F1-03 防复发）。
@@ -701,6 +728,21 @@ elif ! printf '%s' "$ka_sec" | grep -Fq "180 秒" \
 else
   note_ok "探活参数钉子：forward.md 拆除节含 180 秒 / 60 秒 / 6 次与 FLMX_KEEPALIVE"
 fi
+# 双侧（G-R4-04）：文档数字须与 keepalive.go 缺省常量机械对账——只查
+# 文档时，实现改值仍全绿。
+KA_GO="go-gost/x/internal/keepalive/keepalive.go"
+ka_idle=$(grep -oP 'DefaultIdle\s*=\s*\K[0-9]+' "$KA_GO" | head -1)
+ka_int=$(grep -oP 'DefaultInterval\s*=\s*\K[0-9]+' "$KA_GO" | head -1)
+ka_cnt=$(grep -oP 'DefaultCount\s*=\s*\K[0-9]+' "$KA_GO" | head -1)
+if [ -z "$ka_idle" ] || [ -z "$ka_int" ] || [ -z "$ka_cnt" ]; then
+  note_fail "探活参数钉子：keepalive.go 缺省常量提取为空（前提失效，请人工复核）"
+elif [ "$ka_idle" != "180" ] || [ "$ka_int" != "60" ] || [ "$ka_cnt" != "6" ]; then
+  note_fail "探活参数钉子：keepalive.go 缺省值漂移（idle=${ka_idle}s interval=${ka_int}s count=${ka_cnt}，文档登记 180/60/6）"
+elif ! grep -q "FLMX_KEEPALIVE" "$KA_GO"; then
+  note_fail "探活参数钉子：keepalive.go 未读 FLMX_KEEPALIVE 环境开关（文档登记该开关，请人工复核）"
+else
+  note_ok "探活参数钉子：keepalive.go 缺省值与文档一致（180/60/6，FLMX_KEEPALIVE 开关在场）"
+fi
 
 # 22b. nodes.md「节点展示分组」节在场且含「不参与订阅」限定句
 #      （防展示分组成员被后人写成订阅分组；B-03 合并后标题为「节点展示分组」，锚点随之改）。
@@ -711,6 +753,16 @@ elif ! printf '%s' "$grp_sec" | grep -Fq "不参与订阅"; then
   note_fail "节点分组钉子：nodes.md 分组节缺「不参与订阅」限定句"
 else
   note_ok "节点分组钉子：nodes.md「节点展示分组」节在场且含「不参与订阅」"
+fi
+# 双侧（G-R4-04）：「不参与订阅」须由订阅渲染面背书——DisplayGroup
+# 只许出现在节点 CRUD/展示路径，不得进入订阅渲染（share.go）。
+SHARE_GO_CHECK="go-backend/internal/kernel/share.go"
+if grep -q "DisplayGroup" "$SHARE_GO_CHECK"; then
+  note_fail "节点分组钉子：share.go 引用了 DisplayGroup（展示分组进入订阅渲染，与「不参与订阅」口径冲突）"
+elif ! grep -q "DisplayGroup" go-backend/internal/store/model/model.go; then
+  note_fail "节点分组钉子：model.go 无 DisplayGroup 字段（分组功能缺失时文档限定句无所指，请人工复核）"
+else
+  note_ok "节点分组钉子：DisplayGroup 未进入订阅渲染（share.go 零引用）"
 fi
 
 # 22c. nodes.md 协议开关节含「屏蔽开关」且不含「监听是否开启」
@@ -724,6 +776,18 @@ elif printf '%s' "$sw_sec" | grep -Fq "监听是否开启"; then
   note_fail "协议开关钉子：nodes.md 协议开关节出现「监听是否开启」（F2-13 反转复发）"
 else
   note_ok "协议开关钉子：nodes.md 协议开关节含「屏蔽开关」且无「监听是否开启」"
+fi
+# 双侧（G-R4-04）：「屏蔽开关」语义须由下发/应用面背书——面板经
+# SetProtocol 下发，agent 侧 handleSetProtocol（「设置屏蔽协议」）
+# 落盘 SetProtocolBlock。任一侧改名/改义即红。
+if ! grep -q '"SetProtocol"' go-backend/internal/http/handler/control_plane.go; then
+  note_fail "协议开关钉子：control_plane.go 未下发 SetProtocol 命令（下发面漂移，请人工复核）"
+elif ! grep -q "设置屏蔽协议" go-gost/x/socket/websocket_reporter.go; then
+  note_fail "协议开关钉子：websocket_reporter.go handleSetProtocol 缺「设置屏蔽协议」口径（应用面改义，请人工复核）"
+elif ! grep -q "func SetProtocolBlock" go-gost/x/service/service.go; then
+  note_fail "协议开关钉子：service.go 缺 SetProtocolBlock（屏蔽应用面漂移，请人工复核）"
+else
+  note_ok "协议开关钉子：SetProtocol 下发→屏蔽应用面一致"
 fi
 
 # 22d. 残留词零命中钉子：「远程节点」在 doc/index.md＋doc/guide/
@@ -741,6 +805,104 @@ elif [ -n "$snell_bad" ]; then
   note_fail "残留词钉子：guide/ 内 Snell 脱离导入/移除语境：$(printf '%s' "$snell_bad" | head -3 | tr '\n' ';')"
 else
   note_ok "残留词钉子：「远程节点」index＋guide 零命中、index.md Snell 零命中、guide/ 内 Snell 全在导入/移除语境"
+fi
+
+# ── 23. 本轮文档断言兜底（R2-R4 G-R4-02）：四处新增文档断言须有门禁——
+# install.md 子网示例、身份六键、notify.md 机器人菜单、upgrade.md:83
+# V1-01 残留段。真值已人工核对通过，本节守「改动漂移即红」，每项双侧
+# 对账（文档声称 vs 模板/脚本/代码实值）。
+
+# 23a. install.md「子网冲突的改法」示例子网：须与模板缺省不同（示例
+# 即缺省等于没改），且属 RFC1918 私网段 / ULA 段。F1-N1 前例：旧示例
+# 172.31.0.0/16 撞在用网络、fd00:dead:beee::/48 与他网同值。
+subnet_sec=$(awk '/子网冲突的改法/{f=1} /不要给已部署的实例改实例键/{if(f)exit} f' doc/guide/install.md)
+ex_v4=$(printf '%s' "$subnet_sec" | grep -oP '例如 `172\.[0-9.]+/[0-9]+`' | grep -oP '172\.[0-9.]+/[0-9]+' | head -1)
+ex_v6=$(printf '%s' "$subnet_sec" | grep -oP '例如 `fd00:[0-9a-f:]+/[0-9]+`' | grep -oP 'fd00:[0-9a-f:]+/[0-9]+' | head -1)
+def_v4=$(grep -oP -- '- subnet: \K172\.[0-9.]+/[0-9]+' docker-compose-v4.yml | head -1)
+def_v6=$(grep -oP -- '- subnet: \Kfd00:[0-9a-f:]+/[0-9]+' docker-compose-v6.yml | head -1)
+if [ -z "$ex_v4" ] || [ -z "$ex_v6" ] || [ -z "$def_v4" ] || [ -z "$def_v6" ]; then
+  note_fail "子网示例钉子：install.md 示例子网或模板缺省子网提取为空（示例 v4=${ex_v4:-空} v6=${ex_v6:-空}、缺省 v4=${def_v4:-空} v6=${def_v6:-空}，请人工复核）"
+elif [ "$ex_v4" = "$def_v4" ]; then
+  note_fail "子网示例钉子：install.md IPv4 示例 $ex_v4 与模板缺省相同（示例即缺省等于没改，F1-N1 复发）"
+elif [ "$ex_v6" = "$def_v6" ]; then
+  note_fail "子网示例钉子：install.md IPv6 示例 $ex_v6 与模板缺省相同（示例即缺省等于没改，F1-N1 复发）"
+elif ! printf '%s' "$ex_v4" | awk -F'[./]' '{ exit !($1==172 && $2>=16 && $2<=31) }'; then
+  note_fail "子网示例钉子：install.md IPv4 示例 $ex_v4 不在 RFC1918 172.16.0.0/12 内"
+elif ! printf '%s' "$ex_v6" | grep -q '^fd'; then
+  note_fail "子网示例钉子：install.md IPv6 示例 $ex_v6 不在 ULA fd00::/8 内"
+else
+  note_ok "子网示例钉子：install.md 示例子网与模板缺省不同（v4 $ex_v4 ≠ $def_v4、v6 $ex_v6 ≠ $def_v6），且属 RFC1918/ULA"
+fi
+
+# 23b. 身份六键：install.md 与 postgresql.md 的六键清单须彼此一致，
+# 且与脚本写入 .env 的六键、两模板引用的六键同一集合（F1-N3）。
+SIX_KEYS="PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER FLMX_SQLITE_VOLUME FLMX_POSTGRES_VOLUME FLMX_NETWORK"
+six_bad=""
+for k in $SIX_KEYS; do
+  grep -Fq "$k" doc/guide/install.md || six_bad="$six_bad install.md 缺 $k;"
+  grep -Fq "$k" doc/guide/postgresql.md || six_bad="$six_bad postgresql.md 缺 $k;"
+  grep -Fq "upsert_env_var .env $k " panel_install.sh || six_bad="$six_bad panel_install.sh 未写 $k;"
+  grep -Fq "\${$k:-" docker-compose-v4.yml || six_bad="$six_bad docker-compose-v4.yml 未引用 $k;"
+  grep -Fq "\${$k:-" docker-compose-v6.yml || six_bad="$six_bad docker-compose-v6.yml 未引用 $k;"
+done
+if [ -n "$six_bad" ]; then
+  note_fail "身份六键钉子：$six_bad"
+else
+  note_ok "身份六键钉子：两文档六键清单与脚本写入、两模板引用同一集合（6 键）"
+fi
+
+# 23c. notify.md「机器人菜单」小节：四个命令与三个按钮须与 notify_bot.go
+# 的注册命令、菜单键盘逐字一致（bac16c1a 新增小节，门禁曾无断言）。
+bot_sec=$(awk '/^### 机器人菜单/{f=1;next} /^## |^### /{if(f)exit} f' "$NOTIFY_MD")
+bot_bad=""
+for c in "/start" "/nodes" "/traffic" "/status"; do
+  printf '%s' "$bot_sec" | grep -Fq "$c" || bot_bad="$bot_bad 文档缺 $c;"
+  grep -Fq "\"command\": \"${c#/}\"" go-backend/internal/http/handler/notify_bot.go || bot_bad="$bot_bad 代码未注册 ${c#/};"
+done
+for b in "🖥 节点状态" "📊 流量" "ℹ️ 面板状态"; do
+  printf '%s' "$bot_sec" | grep -Fq "$b" || bot_bad="$bot_bad 文档缺按钮 $b;"
+  grep -Fq "$b" go-backend/internal/http/handler/notify_bot.go || bot_bad="$bot_bad 代码缺按钮 $b;"
+done
+if [ -z "$bot_sec" ]; then
+  note_fail "机器人菜单钉子：notify.md 找不到「### 机器人菜单」小节（前提失效，请人工复核）"
+elif [ -n "$bot_bad" ]; then
+  note_fail "机器人菜单钉子：$bot_bad"
+else
+  note_ok "机器人菜单钉子：notify.md 菜单小节与 notify_bot.go 注册命令/按钮一致（4 命令＋3 按钮）"
+fi
+
+# 23d. upgrade.md V1-01 残留段「多 agent 同机过渡期注意」：须含版本门
+# 阈值，且与 kernel.go 两处版本门常量同值（面板门 2.1.13 起拒旧 agent）。
+res_sec=$(awk '/多 agent 同机过渡期注意/{f=1} /^### /{if(f)exit} f' "$UPGRADE_MD")
+doc_ver=$(printf '%s' "$res_sec" | grep -oP '2\.[0-9]+\.[0-9]+' | sort -u | head -1)
+nft_ver=$(grep -oP 'nftIsolatedAgentMinVersion = "\K[0-9.]+' go-backend/internal/http/handler/kernel.go | head -1)
+mark_ver=$(grep -oP 'userMarkBaseMinVersion = "\K[0-9.]+' go-backend/internal/http/handler/kernel.go | head -1)
+if [ -z "$res_sec" ]; then
+  note_fail "V1-01 残留段钉子：upgrade.md 找不到「多 agent 同机过渡期注意」段（前提失效，请人工复核）"
+elif [ -z "$doc_ver" ] || [ -z "$nft_ver" ] || [ -z "$mark_ver" ]; then
+  note_fail "V1-01 残留段钉子：版本阈值提取为空（文档 ${doc_ver:-空}、nft 门 ${nft_ver:-空}、mark 门 ${mark_ver:-空}，请人工复核）"
+elif [ "$doc_ver" != "$nft_ver" ] || [ "$doc_ver" != "$mark_ver" ]; then
+  note_fail "V1-01 残留段钉子：文档版本 $doc_ver 与 kernel.go 版本门不一致（nft 门 $nft_ver、mark 门 $mark_ver）"
+else
+  note_ok "V1-01 残留段钉子：upgrade.md 残留段版本与 kernel.go 两处版本门一致（$doc_ver）"
+fi
+
+# ── 24. F1-N2 回归测试在场门（R2-R4 G-R4-03）：test-install-scripts-
+# proxy.sh 须含 report_compose_up_failure 双分支回归测试且已在文件
+# 末尾的执行清单里注册——测试被删或漏注册即红（CI install-scripts
+# job 跑本文件，测试本身即执行面）。
+R4_TEST="test_report_compose_up_failure_branches"
+r4_calls=$(grep -c "report_compose_up_failure" test-install-scripts-proxy.sh || true)
+if [ "$r4_calls" -lt 2 ]; then
+  note_fail "F1-N2 回归测试钉子：test-install-scripts-proxy.sh 内 report_compose_up_failure 调用少于 2 处（实数 $r4_calls，双分支回归测试缺失）"
+elif ! grep -q "Pool overlaps" test-install-scripts-proxy.sh; then
+  note_fail "F1-N2 回归测试钉子：测试内无 Pool overlaps 夹具（overlap 分支无输入）"
+elif ! grep -q "镜像拉取失败" test-install-scripts-proxy.sh; then
+  note_fail "F1-N2 回归测试钉子：测试内无「镜像拉取失败」断言（拉取失败分支无断言）"
+elif ! grep -q "^$R4_TEST$" test-install-scripts-proxy.sh; then
+  note_fail "F1-N2 回归测试钉子：$R4_TEST 未在文件末尾执行清单里注册（测试写了也不跑）"
+else
+  note_ok "F1-N2 回归测试钉子：report_compose_up_failure 双分支回归测试在场且已注册"
 fi
 
 echo "----"
