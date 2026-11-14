@@ -442,3 +442,87 @@ func TestConnlogMasterSwitchGatesAllMarkFaces(t *testing.T) {
 	}
 	assertFaces(true, "master back on")
 }
+
+// F2-WL-01 回归门：白名单不改变入口身份——逐入站白名单开后
+// 该入站仍是直连入口（connlogEntries 与 connLogInbounds 两面
+// 都在列），直连记录不丢；节点级白名单亦然。仅中转（RelayOnly）
+// 仍排除：其直连访问在构造上不可能。白名单只是 nft 层过滤，
+// 采集门控只有节点开关。
+func TestConnlogWhitelistedInboundKeepsEntryMark(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/connlog-wl.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+
+	node := seedRelayTargetNode(t, r, "cl-wl", "198.51.100.9")
+	if err := r.UpdateNodeConnLogEnabled(node, 1); err != nil {
+		t.Fatal(err)
+	}
+	kern := seedChainKernel(t, r, node, kernel.TypeSingbox)
+	vless := func(port int) kernel.Inbound {
+		return kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: port,
+			Security: kernel.Security{Type: kernel.SecurityNone}}
+	}
+	wl := seedChainInbound(t, r, kern, "cl-wl-listed", vless(8443), 0)
+	wl.RelayWhitelist = 1
+	wl.WhitelistExtra = "10.0.0.1"
+	if err := r.SaveNodeInbound(wl); err != nil {
+		t.Fatal(err)
+	}
+	plain := seedChainInbound(t, r, kern, "cl-wl-plain", vless(8444), 0)
+	relayOnly := seedChainInbound(t, r, kern, "cl-wl-relayonly", vless(8445), 0)
+	relayOnly.RelayOnly = 1
+	if err := r.SaveNodeInbound(relayOnly); err != nil {
+		t.Fatal(err)
+	}
+
+	entriesOf := func() (map[int64]string, []int64) {
+		t.Helper()
+		payload, _, err := h.buildKernelApplyPayload(kern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids, _ := payload["connLogInbounds"].([]int64)
+		return connlogEntryTags(payload), ids
+	}
+	inOptIns := func(ids []int64, id int64) bool {
+		for _, x := range ids {
+			if x == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 逐入站白名单开：仍是入口，两面都在列。
+	entries, optIns := entriesOf()
+	if entries[wl.ID] == "" {
+		t.Fatalf("whitelisted inbound lost its entry mark: %v", entries)
+	}
+	if !inOptIns(optIns, wl.ID) {
+		t.Fatalf("whitelisted inbound missing from connLogInbounds: %v", optIns)
+	}
+	// 对照：仅中转仍排除。
+	if _, bad := entries[relayOnly.ID]; bad {
+		t.Fatalf("relay-only inbound marked as entry: %v", entries)
+	}
+
+	// 节点级白名单开：全部入站仍是入口（与逐入站同口径）。
+	if err := r.UpdateNodeWhitelist(node, 1, "203.0.113.0/24"); err != nil {
+		t.Fatal(err)
+	}
+	entries, optIns = entriesOf()
+	for _, id := range []int64{wl.ID, plain.ID} {
+		if entries[id] == "" {
+			t.Fatalf("node-whitelist on: inbound %d lost its entry mark: %v", id, entries)
+		}
+		if !inOptIns(optIns, id) {
+			t.Fatalf("node-whitelist on: inbound %d missing from connLogInbounds: %v", id, optIns)
+		}
+	}
+	if _, bad := entries[relayOnly.ID]; bad {
+		t.Fatalf("node-whitelist on: relay-only inbound marked as entry: %v", entries)
+	}
+}

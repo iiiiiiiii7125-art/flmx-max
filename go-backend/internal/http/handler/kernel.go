@@ -2583,14 +2583,18 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		}
 		ports = append(ports, port)
 		// U7 直连入口标记：渲染在册、非伴生、非导入、未声明「仅中
-		// 转/白名单」面貌的入站，自身即客户端入口（链式源入站同理：
+		// 转」面貌的入站，自身即客户端入口（链式源入站同理：
 		// 客户端连入的是它，出站指向只作归属附加信息，不改变入口
 		// 身份）。中转落地入站亦在列（R2-D-P2-1）：公开入站可同时
 		// 收直连与中转落地，排除整入站会让直连记录一并丢失；中转
 		// 落地腿随之现一行（其客户端 IP 为上一跳地址，见
-		// connlog_marks.go），直连必须可见。
+		// connlog_marks.go），直连必须可见。白名单入站亦在列
+		// （F2-WL-01）：白名单只是 nft 层过滤（中转机／本机／额外
+		// 名单），不改变入口身份——额外名单本就是用户放行的直连
+		// 来源，其直连记录是真数据；中转腿按两行口径现行。采集
+		// 门控只有节点开关，白名单开与不开都不另设门。
 		if connlogOn && row.CompanionOf == 0 && row.SourceID == 0 && !chainTargets[row.ID] &&
-			row.RelayOnly == 0 && row.RelayWhitelist == 0 {
+			row.RelayOnly == 0 {
 			connlogEntries = append(connlogEntries, map[string]interface{}{
 				"inboundId": row.ID,
 				"tag":       in.Tag(),
