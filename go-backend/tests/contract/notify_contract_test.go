@@ -93,7 +93,8 @@ func TestNotifyTestEndpointContract(t *testing.T) {
 		t.Fatalf("test send: %+v", out)
 	}
 	if len(sink.telegram) != 1 || sink.paths[0] != "/bot123:abc/sendMessage" || sink.telegram[0]["chat_id"] != "42" ||
-		!strings.Contains(sink.telegram[0]["text"].(string), "测试通知") {
+		sink.telegram[0]["parse_mode"] != "HTML" ||
+		!strings.Contains(sink.telegram[0]["text"].(string), "<b>测试通知</b>") {
 		t.Fatalf("telegram call: %v %v", sink.paths, sink.telegram)
 	}
 	if len(sink.webhook) != 1 || sink.webhook[0]["event"] != "test" || sink.webhook[0]["title"] != "测试通知" {

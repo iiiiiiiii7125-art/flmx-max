@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net"
@@ -695,9 +696,41 @@ func (h *Handler) notifyTracked(event, title, message string, onDone func(notify
 	h.enqueueNotify(notifyJob{event: event, title: title, message: message, onDone: onDone})
 }
 
+// notifyEmoji picks the header emoji for a notification. Any title
+// containing "恢复" is a recovery and always gets 🟢; failures get 🔴,
+// threshold warnings ⚠️, and informational kinds (route_change, test,
+// daily_report) plus unknown events get ℹ️.
+func notifyEmoji(event, title string) string {
+	if strings.Contains(title, "恢复") {
+		return "🟢"
+	}
+	switch event {
+	case notifyEventNodeOffline, notifyEventNodeUpgradeFailed,
+		notifyEventInboundDown, notifyEventKernelError,
+		"backup", "backup_failed":
+		// "backup" has no live kind at this baseline (Gist backup was
+		// removed in 2.1.0); kept so a future backup failure renders 🔴.
+		return "🔴"
+	case notifyEventNodeExpiry, notifyEventLatencyBad, notifyEventUserQuota,
+		notifyEventConntrackHigh, notifyEventDiskHigh, notifyEventAgentMemHigh:
+		return "⚠️"
+	default:
+		return "ℹ️"
+	}
+}
+
+// notifyText renders a notification as Telegram HTML: emoji + bold title,
+// the body lines as-is, and a clock footer. Title and body are HTML-escaped
+// (node/user names are user-controlled) so they cannot break parsing or
+// inject tags. The [App] prefix of the old plain-text format is gone;
+// App still travels in the webhook JSON payload.
 func notifyText(msg notifyMessage) string {
-	return fmt.Sprintf("[%s] %s\n%s\n时间：%s", msg.App, msg.Title, msg.Message,
-		time.UnixMilli(msg.Time).Format("2006-01-02 15:04:05 MST"))
+	head := fmt.Sprintf("%s <b>%s</b>", notifyEmoji(msg.Event, msg.Title), html.EscapeString(msg.Title))
+	when := fmt.Sprintf("🕐 %s", time.UnixMilli(msg.Time).Format("2006-01-02 15:04:05 MST"))
+	if strings.TrimSpace(msg.Message) == "" {
+		return head + "\n" + when
+	}
+	return head + "\n" + html.EscapeString(msg.Message) + "\n" + when
 }
 
 func (n *notifier) sendTelegram(ctx context.Context, s notifySettings, msg notifyMessage) error {
@@ -708,6 +741,7 @@ func (n *notifier) sendTelegram(ctx context.Context, s notifySettings, msg notif
 	body, _ := json.Marshal(map[string]interface{}{
 		"chat_id":                  s.TelegramChatID,
 		"text":                     notifyText(msg),
+		"parse_mode":               "HTML",
 		"disable_web_page_preview": true,
 	})
 	var out struct {
