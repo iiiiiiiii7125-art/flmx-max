@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261114.01"
+SCRIPT_VERSION="20261114.02"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -4256,6 +4256,24 @@ panel_force_reinstall_data_gate() {
 }
 
 # 安装功能
+# F1-N2: `docker compose up` 失败的原因不止拉取失败——建网时子网
+# 与宿主机已有网络重叠也会失败（docker 报错含 Pool overlaps），
+# 旧实现两处 up 守卫都一律报「常见原因是镜像拉取失败」，把池重
+# 叠冒充成拉取失败。up 日志进临时文件，按是否含 overlap 分支报：
+# 重叠报池重叠＋改子网指引（强制重装修不好，不印重装指引）；
+# 其余失败仍报拉取失败＋重装指引。
+report_compose_up_failure() {
+  local log_file="$1" service_label="$2" tail="$3"
+  cat "$log_file"
+  if grep -qi "overlap" "$log_file"; then
+    echo "❌ 部署未完成：${service_label}容器启动失败（容器网络地址池重叠：新网络子网与宿主机已有网络重叠，改法见 doc/guide/install.md「子网冲突的改法」）${tail}"
+    echo "🔍 排查指引：先查宿主机已占用的子网（docker network ls，再逐个 docker network inspect 查 Subnet），按 install.md「子网冲突的改法」改部署目录 docker-compose.yml 里的子网后再 docker compose up -d；不要强制重装，强制重装修不好子网重叠。"
+  else
+    echo "❌ 部署未完成：${service_label}容器启动失败（常见原因是镜像拉取失败）${tail}"
+    print_force_reinstall_guidance
+  fi
+}
+
 install_panel() {
   echo "🚀 开始安装面板..."
 
@@ -4445,11 +4463,14 @@ EOF
 
   echo "🚀 启动 docker 服务..."
   if [[ "$DB_TYPE" == "postgres" ]]; then
-    if ! $DOCKER_CMD up -d postgres; then
-      echo "❌ 部署未完成：PostgreSQL 容器启动失败（常见原因是镜像拉取失败），已中止后续启动，未打印成功信息与默认凭据。"
-      print_force_reinstall_guidance
+    up_log=$(mktemp)
+    if ! $DOCKER_CMD up -d postgres >"$up_log" 2>&1; then
+      report_compose_up_failure "$up_log" "PostgreSQL " "，已中止后续启动，未打印成功信息与默认凭据。"
+      rm -f "$up_log"
       return 1
     fi
+    cat "$up_log"
+    rm -f "$up_log"
     # I-F1-06: PG 健康等待改与同函数后端支同形（守卫＋失败指引
     # 块）——旧实现裸调用，失败时只有等待函数自身的超时两行，无
     # 「部署未完成」宣告、无 logs 指引、无后续路径提示。
@@ -4461,11 +4482,14 @@ EOF
   fi
   # R9-03: up 失败旧实现靠 set -e 静默退出、零失败指引，留下的半
   # 成品状态也无回执点名出口。现显式守卫，失败即点名唯一出口。
-  if ! $DOCKER_CMD up -d backend frontend; then
-    echo "❌ 部署未完成：面板容器启动失败（常见原因是镜像拉取失败），未打印成功信息与默认凭据。"
-    print_force_reinstall_guidance
+  up_log=$(mktemp)
+  if ! $DOCKER_CMD up -d backend frontend >"$up_log" 2>&1; then
+    report_compose_up_failure "$up_log" "面板" "，未打印成功信息与默认凭据。"
+    rm -f "$up_log"
     return 1
   fi
+  cat "$up_log"
+  rm -f "$up_log"
 
   # R8-J-C: 完成块之前先过既有后端健康等待——更新（start_panel_
   # after_update）与迁移路径均有此把关，安装路径此前独缺，up -d 后
