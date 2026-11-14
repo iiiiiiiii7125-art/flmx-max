@@ -355,8 +355,18 @@ else
 fi
 
 # ── 8. 超时预算常设门（R8 T-GATE）：转跑 check-timeout-budgets.sh
-if bash scripts/check-timeout-budgets.sh > /tmp/.timeout-budgets.out 2>&1; then
+# R5-D-01：该脚本 exit 2 为前提失效（/tmp 容量、node/typescript
+# 缺失等），不是预算不一致——须按 exit 码分流：exit 2 报
+# PENDING 未核、不计 FAIL；仅 exit 1（漂移/缺格）才报 FAIL。
+# 此前不分 exit 码一律 note_fail，btrfs 上 inode 前置恒 exit 2
+# 致全套 doc 门在磁盘 TMPDIR 下恒 FAIL。
+bash scripts/check-timeout-budgets.sh > /tmp/.timeout-budgets.out 2>&1
+tb_rc=$?
+if [ "$tb_rc" -eq 0 ]; then
   note_ok "超时预算登记表与产品代码逐格一致（$(grep -oP 'timeout-budgets: \K[0-9]+' /tmp/.timeout-budgets.out) 格）"
+elif [ "$tb_rc" -eq 2 ]; then
+  echo "PENDING: 超时预算门前提失效（exit 2），预算一致性未核：$(grep -m1 '^FAIL: 前提失效' /tmp/.timeout-budgets.out | sed 's/^FAIL: 前提失效，//')；请按明细处理前提后复跑，不计 FAIL"
+  sed 's/^/    /' /tmp/.timeout-budgets.out
 else
   note_fail "超时预算登记表与产品代码不一致（明细见下）"
   sed 's/^/    /' /tmp/.timeout-budgets.out

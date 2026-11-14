@@ -261,8 +261,15 @@ grep -q "协议开关钉子" "$TMP/v17.log" && echo "OK: variant 17 caught and n
 cp "$ROOT/go-gost/x/service/service.go" "$MIR/go-gost/x/service/service.go"
 
 echo "== variant 18: subnet example drifts back to the template default must FAIL and name it (§23a) =="
-sed -i 's|例如 `172.29.0.0/16`|例如 `172.30.0.0/16`|' "$MIR/doc/guide/install.md"
-grep -q '例如 `172.30.0.0/16`' "$MIR/doc/guide/install.md" || {
+# 注意：示例值是文档值（a310aa5f 起为 172.27.0.0/16），写死旧值会随文档改值而漂移；
+# 故像 §23a 门一样动态提取当前示例与模板缺省，再把示例改回缺省。
+sec_v4=$(awk '/子网冲突的改法/{f=1} /不要给已部署的实例改实例键/{if(f)exit} f' "$MIR/doc/guide/install.md")
+cur_v4=$(printf '%s' "$sec_v4" | grep -oP '例如 `172\.[0-9.]+/[0-9]+`' | grep -oP '172\.[0-9.]+/[0-9]+' | head -1)
+def_v4=$(grep -oP -- '- subnet: \K172\.[0-9.]+/[0-9]+' "$MIR/docker-compose-v4.yml" | head -1)
+[ -n "$cur_v4" ] && [ -n "$def_v4" ] || {
+  echo "FAIL: variant 18 mutation did not land (subnet example anchor drifted)"; exit 1; }
+sed -i "s|例如 \`$cur_v4\`|例如 \`$def_v4\`|" "$MIR/doc/guide/install.md"
+grep -q "例如 \`$def_v4\`" "$MIR/doc/guide/install.md" || {
   echo "FAIL: variant 18 mutation did not land (subnet example anchor drifted)"; exit 1; }
 if run_gate "$TMP/v18.log"; then
   echo "FAIL: variant 18 was not caught"; exit 1
@@ -317,5 +324,13 @@ fi
 grep -q "F1-N2 回归测试钉子" "$TMP/v22.log" && echo "OK: variant 22 caught and named" || {
   echo "FAIL: variant 22 caught but the drift was not named"; sed 's/^/    /' "$TMP/v22.log"; exit 1; }
 cp "$ROOT/test-install-scripts-proxy.sh" "$MIR/test-install-scripts-proxy.sh"
+
+echo "== variant 23: timeout-budgets premise failure (exit 2) must PENDING, not FAIL (§8, R5-D-01) =="
+if FLMX_TMP_MIN_KB=999999999 run_gate "$TMP/v23.log"; then
+  grep -q "PENDING: 超时预算门前提失效" "$TMP/v23.log" && echo "OK: variant 23 PENDING, not FAIL" || {
+    echo "FAIL: variant 23 passed but no §8 PENDING line:"; sed 's/^/    /' "$TMP/v23.log"; exit 1; }
+else
+  echo "FAIL: variant 23 failed the gate — premise failure must PENDING, not FAIL:"; sed 's/^/    /' "$TMP/v23.log"; exit 1
+fi
 
 echo "SELFTEST PASS"

@@ -108,6 +108,10 @@ fi
 grep -q 'C113' "$TMP/var2.log" || { echo "FAIL: gate failed but did not name C113:"; cat "$TMP/var2.log"; exit 1; }
 grep -q 'B11-001' "$TMP/var2.log" || { echo "FAIL: gate failure does not cite the kernel-apply family rule (B11-001):"; cat "$TMP/var2.log"; exit 1; }
 echo "OK: variant caught, C113 named"
+# 恢复登记表：C113 是最后一个改表变体，后续变体不再复拷原表；
+# 不恢复则其 class/global 变异残留进镜像，R5-D-03b 之类要求
+# PASS 的后置变体会误判为门本身失败（2026-11-14 实证）。
+cp "$ROOT/doc/audit/timeout-budgets.tsv" "$MIR/doc/audit/timeout-budgets.tsv"
 
 # ── 修复轮 9（R9-23/24/25）提取器绑定变异：三构造在修复前提取
 # 输出与基线逐字相同、门全绿（I-C4-08/09/10 实证）；修复后必须
@@ -278,4 +282,45 @@ gate_rc=$?
 grep -q '可用空间不足' "$TMP/var9.log" || { echo "FAIL: precondition failure does not name the capacity shortfall:"; cat "$TMP/var9.log"; exit 1; }
 grep -q '不要按预算漂移处理' "$TMP/var9.log" || { echo "FAIL: precondition failure does not disclaim the budget-drift reading:"; cat "$TMP/var9.log"; exit 1; }
 echo "OK: variant caught, /tmp precondition named with exit 2"
+
+# ── R5-D-03 回归变体（一）：inode 阈值仍须硬核。阈值抬到不可能
+# 满足的值时，门必须以 exit 2 前提失效明示、且点名 inode 不足
+# ——与 KB 阈值同口径（G-R4-06）。TMPDIR 显式指 /dev/shm（tmpfs
+# 实报 inode 数）；外层 TMPDIR 若在 btrfs 磁盘上，itotal=0 会
+# 走跳过分支、变体不可判定，故此处不用外层 TMPDIR；/tmp 同为
+# tmpfs 但为各 lane 共享 512M，常被并行任务写满（空间腿先
+# 失败会掩盖 inode 腿），/dev/shm 空闲且同样实报 inode。
+echo "== variant R5-D-03a: unsatisfiable inode threshold must fail closed with exit 2, naming inodes =="
+TMPDIR=/dev/shm FLMX_TMP_MIN_INODES=999999999 bash "$GATE" "$MIR" > "$TMP/var10.log" 2>&1
+gate_rc=$?
+[ "$gate_rc" -eq 0 ] && { echo "FAIL: gate PASSED with an unsatisfiable inode threshold — precondition not enforced"; exit 1; }
+[ "$gate_rc" -eq 2 ] || { echo "FAIL: inode precondition failure must exit 2 (premise failure), got $gate_rc:"; cat "$TMP/var10.log"; exit 1; }
+grep -q '可用 inode 不足' "$TMP/var10.log" || { echo "FAIL: precondition failure does not name the inode shortfall:"; cat "$TMP/var10.log"; exit 1; }
+grep -q '不要按预算漂移处理' "$TMP/var10.log" || { echo "FAIL: precondition failure does not disclaim the budget-drift reading:"; cat "$TMP/var10.log"; exit 1; }
+echo "OK: variant caught, inode precondition named with exit 2"
+
+# ── R5-D-03 回归变体（二）：btrfs 形态（itotal=0/iavail=0）须
+# 跳过 inode 项、门继续跑到 PASS。df 输出以 PATH 前置的假 df
+# 垫片模拟（只垫 itotal/iavail 两次查询，其余调用透传真 df），
+# 不依赖本机真有 btrfs 挂载、CI 与沙箱同一判定。
+echo "== variant R5-D-03b: btrfs-like df (itotal=0/iavail=0) must skip the inode check and PASS =="
+mkdir -p "$TMP/fakebin"
+cat > "$TMP/fakebin/df" <<'DFEOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in
+    --output=itotal) printf 'Inodes\n0\n'; exit 0 ;;
+    --output=iavail) printf 'IFree\n0\n'; exit 0 ;;
+  esac
+done
+exec "${REAL_DF:-/usr/bin/df}" "$@"
+DFEOF
+chmod +x "$TMP/fakebin/df"
+export REAL_DF="$(command -v df)"
+PATH="$TMP/fakebin:$PATH" TMPDIR=/dev/shm bash "$GATE" "$MIR" > "$TMP/var11.log" 2>&1
+gate_rc=$?
+[ "$gate_rc" -eq 0 ] || { echo "FAIL: gate must PASS on btrfs-like df (inode check skipped), got $gate_rc:"; cat "$TMP/var11.log"; exit 1; }
+grep -q '跳过 inode 前置检查' "$TMP/var11.log" || { echo "FAIL: gate passed but did not name the inode skip:"; cat "$TMP/var11.log"; exit 1; }
+grep -q 'RESULT: PASS' "$TMP/var11.log" || { echo "FAIL: gate output lacks RESULT: PASS:"; cat "$TMP/var11.log"; exit 1; }
+echo "OK: variant caught, btrfs-like df skips inode check and PASSes"
 echo "SELFTEST: PASS"
