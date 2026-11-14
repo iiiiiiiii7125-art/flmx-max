@@ -11,6 +11,10 @@ import (
 // from the old plain-text template.
 func TestNotifyTextTemplate(t *testing.T) {
 	when := time.Date(2026, 11, 14, 9, 30, 0, 0, time.UTC).UnixMilli()
+	// notifyText formats the timestamp in local time, so the expected
+	// footer must be rendered the same way — hardcoding UTC fails
+	// anywhere the local zone is not UTC.
+	whenStr := time.UnixMilli(when).Format("2006-01-02 15:04:05 MST")
 	cases := []struct {
 		name string
 		msg  notifyMessage
@@ -19,22 +23,22 @@ func TestNotifyTextTemplate(t *testing.T) {
 		{
 			name: "node offline",
 			msg:  notifyMessage{Event: notifyEventNodeOffline, Title: "节点掉线", Message: "节点：香港-IX", Time: when, App: "FLMX"},
-			want: "🔴 <b>节点掉线</b>\n节点：香港-IX\n🕐 2026-11-14 09:30:00 UTC",
+			want: "🔴 <b>节点掉线</b>\n节点：香港-IX\n🕐 " + whenStr,
 		},
 		{
 			name: "test notification",
 			msg:  notifyMessage{Event: notifyEventTest, Title: "测试通知", Message: "收到这条消息说明通知配置正确。", Time: when, App: "FLMX"},
-			want: "ℹ️ <b>测试通知</b>\n收到这条消息说明通知配置正确。\n🕐 2026-11-14 09:30:00 UTC",
+			want: "ℹ️ <b>测试通知</b>\n收到这条消息说明通知配置正确。\n🕐 " + whenStr,
 		},
 		{
 			name: "multi-line body kept as-is",
 			msg:  notifyMessage{Event: notifyEventNodeExpiry, Title: "节点即将到期", Message: "节点：香港-IX\n到期：2026-12-01（剩余约 5 天）", Time: when, App: "FLMX"},
-			want: "⚠️ <b>节点即将到期</b>\n节点：香港-IX\n到期：2026-12-01（剩余约 5 天）\n🕐 2026-11-14 09:30:00 UTC",
+			want: "⚠️ <b>节点即将到期</b>\n节点：香港-IX\n到期：2026-12-01（剩余约 5 天）\n🕐 " + whenStr,
 		},
 		{
 			name: "empty body drops the middle line",
 			msg:  notifyMessage{Event: notifyEventNodeOffline, Title: "节点恢复在线", Message: "", Time: when, App: "FLMX"},
-			want: "🟢 <b>节点恢复在线</b>\n🕐 2026-11-14 09:30:00 UTC",
+			want: "🟢 <b>节点恢复在线</b>\n🕐 " + whenStr,
 		},
 	}
 	for _, tc := range cases {
