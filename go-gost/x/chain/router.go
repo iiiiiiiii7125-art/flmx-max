@@ -16,6 +16,7 @@ import (
 	"github.com/go-gost/core/selector"
 	ctxvalue "github.com/go-gost/x/ctx"
 	xnet "github.com/go-gost/x/internal/net"
+	xlogger "github.com/go-gost/x/logger"
 )
 
 // DialTargetGuard validates the resolved dial target immediately
@@ -56,7 +57,16 @@ func NewRouter(opts ...chain.RouterOption) *Router {
 	}
 
 	if r.options.Logger == nil {
-		r.options.Logger = logger.Default().WithFields(map[string]any{"kind": "router"})
+		// logger.Default() is nil until the host process registers one
+		// (gost's main does so at startup). A test or library caller
+		// that never called SetDefault must not panic here (R8-B-01):
+		// fall back to a no-op logger, preserving the configured
+		// logger whenever one was supplied.
+		if log := logger.Default(); log != nil {
+			r.options.Logger = log.WithFields(map[string]any{"kind": "router"})
+		} else {
+			r.options.Logger = xlogger.Nop()
+		}
 	}
 	return r
 }

@@ -8,6 +8,7 @@ import (
 	mdata "github.com/go-gost/core/metadata"
 	"github.com/go-gost/core/router"
 	tun_util "github.com/go-gost/x/internal/util/tun"
+	xlogger "github.com/go-gost/x/logger"
 	mdutil "github.com/go-gost/x/metadata/util"
 	"github.com/go-gost/x/registry"
 	xrouter "github.com/go-gost/x/router"
@@ -91,9 +92,16 @@ func (l *tunListener) parseMetadata(md mdata.Metadata) (err error) {
 	}
 
 	if config.Router == nil && len(l.routes) > 0 {
+		// Same nil-default guard as chain.NewRouter (R8-B-01): the
+		// LoggerOption argument is evaluated before NewRouter runs,
+		// so its own fallback cannot protect this call site.
+		log := logger.Default()
+		if log == nil {
+			log = xlogger.Nop()
+		}
 		config.Router = xrouter.NewRouter(
 			xrouter.RoutesOption(l.routes),
-			xrouter.LoggerOption(logger.Default().WithFields(map[string]any{
+			xrouter.LoggerOption(log.WithFields(map[string]any{
 				"kind":   "router",
 				"router": "@internal",
 			})),

@@ -12,6 +12,7 @@ import (
 	"github.com/go-gost/core/logger"
 	"github.com/go-gost/core/router"
 	"github.com/go-gost/x/internal/loader"
+	xlogger "github.com/go-gost/x/logger"
 )
 
 type options struct {
@@ -73,6 +74,17 @@ func NewRouter(opts ...Option) router.Router {
 	var options options
 	for _, opt := range opts {
 		opt(&options)
+	}
+
+	// reload() logs unconditionally, so a caller that omits
+	// LoggerOption (and no registered default logger) must not
+	// panic on a nil logger (R8-B-01).
+	if options.logger == nil {
+		if log := logger.Default(); log != nil {
+			options.logger = log
+		} else {
+			options.logger = xlogger.Nop()
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.TODO())
