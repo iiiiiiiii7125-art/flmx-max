@@ -37,7 +37,7 @@
 | 项 | 证据 | 结论 |
 |---|---|---|
 | O7-006 ExpiryReminderDismissed | model.go:657 struct 字段；repository.go:2266 导出、:2812 导入 | ✅ |
-| O7-007 announcement 备份 | repository.go:2437 `exportAnnouncements`，ExportAll:2059 / Import:2169 已接入 | ✅ |
+| O7-007 announcement 备份 | repository.go:2437 `exportAnnouncements`，ExportAll:2059 / Import:2169 已接入 | ✅（删除前状态；2.1.13 删除公告功能后 `exportAnnouncements` 已移除，本项不再适用） |
 | O7-008 monitor_permission 备份 | repository.go:2459 `exportMonitorPermissions`，:2066/:2176 已接入 | ✅ |
 | O7-009 版本校验 | repository.go:2543 `backup.Version != "1.0"` 拒绝导入 | ✅ |
 | O7-010 自动备份失败继续 | handler.go:1815：log 警告后继续导入（旧逻辑中断恢复） | ✅ |

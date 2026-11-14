@@ -263,11 +263,12 @@ func TestBackupRoundTripsNodeNullableFieldsStayNull(t *testing.T) {
 }
 
 // TestBackupRestoreKeepsZeroValuedFlags 覆盖与 BUG-A4-1 同根的备份侧变体：
-// Enabled/Managed 带 gorm `default:1` 的行（内核/入站/公告/监控/中转
+// Enabled/Managed 带 gorm `default:1` 的行（内核/入站/监控/中转
 // 关联），备份意图为 0 时旧导入在 INSERT 与 OnConflict 更新两个分支都
 // 被默认值吞成 1 —— 停用入站恢复后被静默启用正是 A4-1 的恢复版。
 // 基线实测（探针）：两分支、五类行全部 0 -> 1。修复以 restoreZeroValuedInt
 // 在 Create 后按意图显式写回 0，两分支一并覆盖。
+// 注：公告行已随公告功能在 2.1.13 删除，不再属于本测试的覆盖类别。
 func TestBackupRestoreKeepsZeroValuedFlags(t *testing.T) {
 	now := time.Now().UnixMilli()
 	source := openBackupRepo(t, "g2-flags-src.db")

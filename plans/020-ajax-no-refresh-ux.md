@@ -48,9 +48,9 @@
 
 #### 1. Dashboard traffic/statistics auto-refresh
 
-- Extract `loadPackageData()` and `loadAnnouncement()` in `vite-frontend/src/pages/dashboard/use-dashboard-data.ts` into stable callbacks so the hook can refresh data without re-running the whole mount sequence.
+- Extract `loadPackageData()` in `vite-frontend/src/pages/dashboard/use-dashboard-data.ts` into stable callbacks so the hook can refresh data without re-running the whole mount sequence.（`loadAnnouncement()` 已随公告功能在 2.1.13 删除。）
 - Add a 5-second polling loop for package, flow, and chart data returned by `getUserPackageInfo()`.
-- Keep announcement loading low-frequency or first-load only unless the API contract clearly expects live updates.
+- ~~Keep announcement loading low-frequency or first-load only unless the API contract clearly expects live updates.~~（公告功能已随 2.1.13 删除，本条不再适用。）
 - Pause polling when `document.visibilityState !== "visible"`, then trigger an immediate refresh when the tab becomes visible again.
 - Preserve current loading UX for first load, but use a silent refresh path for polling so the page does not flicker.
 

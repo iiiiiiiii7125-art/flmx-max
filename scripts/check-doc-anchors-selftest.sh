@@ -57,4 +57,12 @@ fi
 grep -q "目标文件不存在" "$TMP/v2.log" && echo "OK: variant 2 caught and named" || {
   echo "FAIL: variant 2 caught but the missing file was not named"; sed 's/^/    /' "$TMP/v2.log"; exit 1; }
 
+echo "== variant 3: unclosed link (R6-A-01 shape: full-width parens, no ASCII close) must FAIL and name it =="
+printf '\n见 [升级 - 下载校验](./upgrade.md#面板自升级的下载校验跨线路第二锚））。\n' >> "$DOC/a.md"
+if node "$GATE" "$DOC" > "$TMP/v3.log" 2>&1; then
+  echo "FAIL: variant 3 was not caught"; exit 1
+fi
+grep -q "未闭合" "$TMP/v3.log" && echo "OK: variant 3 caught and named" || {
+  echo "FAIL: variant 3 caught but the unclosed link was not named"; sed 's/^/    /' "$TMP/v3.log"; exit 1; }
+
 echo "SELFTEST PASS"

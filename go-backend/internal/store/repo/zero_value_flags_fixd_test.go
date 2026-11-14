@@ -12,7 +12,7 @@ import (
 // FIX-D（1.3.2 审计 B5/零值家族收口）：GORM `default:1` 列在 Create 时会把
 // 显式 0 当未设置丢弃、由列默认值 1 接管。1.3.1 只修了 NodeInbound 创建与
 // 五处备份恢复路径，本文件锁定其余创建路径：
-//   - A2-02 公告首次创建 enabled=0 被吞
+//   - A2-02 公告首次创建 enabled=0 被吞（用例已随公告功能在 2.1.13 删除，仅作历史记录）
 //   - A2-03 服务监控创建 enabled=0 被吞
 //   - A13-01 TunnelQuality.Success=0（失败记录）被吞、恒落库 1
 //   - NodeKernel 创建（与 NodeInbound 同族，仓库层一并收口）

@@ -18,7 +18,7 @@
 curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
 ```
 
-> 校验口径提示：这条手抄命令里脚本与它的 `.sha256` 校验文件经**同一条线路**取得，只做同源校验（单锚）；脚本运行起来之后，其首装与后续更新的下载会再经**第二条不同线路**复核校验值（双锚，口径见 [升级 - 面板自升级的下载校验](./upgrade.md#面板自升级的下载校验跨线路第二锚））。也就是说手抄的第一跳只有单锚、脚本接管后是双锚；介意第一跳线路可信度时，可参照 README 的跨线路取法、让脚本与校验文件分走两条线路取得后再比对，或在可信网络完成首次安装。`sha256sum -c` 失败时不要绕过校验强行执行。
+> 校验口径提示：这条手抄命令里脚本与它的 `.sha256` 校验文件经**同一条线路**取得，只做同源校验（单锚）；脚本运行起来之后，其首装与后续更新的下载会再经**第二条不同线路**复核校验值（双锚，口径见 [升级 - 面板自升级的下载校验](./upgrade.md#面板自升级的下载校验-跨线路第二锚)。也就是说手抄的第一跳只有单锚、脚本接管后是双锚；介意第一跳线路可信度时，可参照 README 的跨线路取法、让脚本与校验文件分走两条线路取得后再比对，或在可信网络完成首次安装。`sha256sum -c` 失败时不要绕过校验强行执行。
 
 **安装过程中会提示输入以下信息：**
 - **前端端口**: 默认为 `6366`

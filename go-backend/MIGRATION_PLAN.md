@@ -5,6 +5,8 @@
 **分支:** main (commit e5e22ba)
 **状态:** 基本完成（保留 4 处 PG 序列修复 DDL `Exec`）
 
+> 注：公告功能已随 2.1.13 完整删除（`announcement` 表由 rmann_v1 迁移删除，`GetAnnouncement`/`UpsertAnnouncement` 已移除）；本文中与公告相关的内容仅作历史记录。
+
 ---
 
 ## 一、现状分析
@@ -108,7 +110,7 @@
 | `peer_share` | `PeerShare` | token 唯一 |
 | `peer_share_runtime` | `PeerShareRuntime` | reservation_id, resource_key 唯一 |
 | `federation_tunnel_binding` | `FederationTunnelBinding` | 复合唯一索引 + resource_key 唯一 |
-| `announcement` | `Announcement` | |
+| `announcement` | `Announcement` | 已随 2.1.13 删除（仅作历史记录） |
 | `schema_version` | `SchemaVersion` | |
 
 ---
@@ -151,7 +153,7 @@
 |------|------|--------|------|
 | 3.1 | 用户查询：GetUserByUsername, GetUserByID, UsernameExists* 等 | ~5 | ✅ |
 | 3.2 | 配置查询：GetConfigByName, ListConfigs, UpsertConfig | ~3 | ✅ |
-| 3.3 | 公告查询：GetAnnouncement, UpsertAnnouncement | ~2 | ✅ |
+| 3.3 | 公告查询：GetAnnouncement, UpsertAnnouncement | ~2 | 已删（2.1.13 删除公告功能，函数已移除；✅ 为删除前状态） |
 | 3.4 | 节点查询：GetNodeBy*, ListNodes, UpdateNode* | ~6 | ✅ |
 | 3.5 | 隧道查询：ListTunnels, ListTunnelGroups 等 (含 chain_tunnel 关联) | ~5 | ✅ |
 | 3.6 | 转发查询：ListForwards, resolveForwardIngress | ~3 | ✅ |

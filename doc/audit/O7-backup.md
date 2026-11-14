@@ -55,6 +55,7 @@
 ### O7-007：`announcement` 表未备份
 - **文件**：`go-backend/internal/store/repo/repository.go:1982` (`ExportAll` 未导出 `announcement` 表)
 - **影响**：全量备份恢复后，系统公告丢失。需管理员重新发布。
+- **注（2.1.13）**：公告功能已完整删除，`announcement` 表由 rmann_v1 迁移删除；本项仅作历史记录，不再适用。
 
 ### O7-008：`monitor_permission` 表未备份
 - **文件**：`go-backend/internal/store/repo/repository.go:1982` (`ExportAll` 未导出 `monitor_permission` 表)
@@ -123,7 +124,7 @@ if err != nil {
 | GroupPermissionGrant | 6 | 6 | — | ✓ |
 | Subscription | 22 | 20 | AppliedActive(运行时), UpdatedTime | P3 |
 | UserInbound | 4 | 0 | **整表未备份** | P1 |
-| Announcement | 4 | 0 | 整表未备份 | P2 |
+| Announcement | 4 | 0 | 整表未备份（表已随 2.1.13 删除，本行仅作历史记录） | P2 |
 | MonitorPermission | 4 | 0 | 整表未备份 | P2 |
 
 ---

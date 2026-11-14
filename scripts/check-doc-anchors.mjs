@@ -110,5 +110,33 @@ for (const f of files) {
     }
   }
 }
+// 未闭合链接扫描（R6-A-01）：正文里出现 `](` 却没有 ASCII `)` 闭合时，
+// 上面的 linkRe 根本不计数、门禁对此失明（install.md:21 全角括号死链
+// 即此例）。逐行扫描（跳过围栏代码块）：任何不属于一次良构 `](...)`
+// 匹配的 `](` 均判 FAIL 并点名行号。
+let unclosed = 0;
+for (const f of files) {
+  const lines = readFileSync(f, "utf8").split("\n");
+  let inFence = false;
+  lines.forEach((line, i) => {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      return;
+    }
+    if (inFence) return;
+    let idx = line.indexOf("](");
+    while (idx >= 0) {
+      if (!/^\]\(([^)\s]+)\)/.test(line.slice(idx))) {
+        console.log(
+          `FAIL: ${basename(f)}:${i + 1} 未闭合的链接（缺少 ASCII ) 闭合）：${line.slice(Math.max(0, idx - 40), idx + 60).trim()}`,
+        );
+        unclosed++;
+      }
+      idx = line.indexOf("](", idx + 2);
+    }
+  });
+}
+bad += unclosed;
+
 console.log(`站内锚点对账：共 ${total} 条，失效 ${bad} 条`);
 process.exit(bad ? 1 : 0);

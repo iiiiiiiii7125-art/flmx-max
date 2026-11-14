@@ -54,7 +54,7 @@
 - [-] D1. `forward.tsx` 抽离：筛选条、列表视图、批量操作、详情弹窗
 - [-] D2. `tunnel.tsx` 抽离：表单区、列表区、排序区、诊断区
 - [-] D3. `node.tsx` 抽离：状态区、安装命令区、排序区、WebSocket 区
-- [ ] D4. `dashboard.tsx` 抽离：统计卡片、图表区、公告区、刷新逻辑
+- [ ] D4. `dashboard.tsx` 抽离：统计卡片、图表区、刷新逻辑（公告区已随 2.1.13 删除）
 
 ### Phase E - 体验与可访问性
 
@@ -71,7 +71,7 @@
 
 - [x] T51. `tunnel.tsx` 接入 `tunnel/form.ts`（默认值、表单校验、类型/流量展示）
 - [x] T52. 修复 `limit.tsx` 构建阻断问题（移除未使用 `Spinner` 导入）
-- [x] T53. `dashboard.tsx` 抽离公告区与指标卡公共组件（`dashboard/components/*`）
+- [x] T53. `dashboard.tsx` 抽离公告区与指标卡公共组件（`dashboard/components/*`）（历史任务：公告区已随 2.1.13 删除）
 - [x] T54. `dashboard.tsx` 管理员判定切换为 `session` 统一工具（`getAdminFlag`）
 - [x] T55. `admin.tsx` 接入 `useMobileBreakpoint` 收敛断点监听；`settings.tsx` 回填返回按钮 `aria-label`
 - [x] T56. 执行 `npm run build` + `npm run lint` 校验（lint 仅剩既有 `no-console` warning）

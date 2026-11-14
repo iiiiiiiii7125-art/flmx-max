@@ -58,7 +58,7 @@
 ### 本地存储键（无一存凭证：token 键为裸 "token"，站点缓存为 vite_config_）
 - 全部 flvx* 键改 flmx*；其中主题两键（`flvx:theme` 三处耦合含 index.html
   内联引导脚本、`flvx:active-theme` 含 context.tsx:123 字面量删除点）加
-  一次性回退读旧键，无感迁移；其余键（公告已读、入站/中转标签与分组）
+  一次性回退读旧键，无感迁移；其余键（入站/中转标签与分组；公告已读键已随公告功能在 2.1.13 删除）
   硬改，后果上限为偏好重置一次
 - 内部标识 `data-flvx-theme`（5 处耦合）与 `@keyframes flvx-scanline`
   原子同改
