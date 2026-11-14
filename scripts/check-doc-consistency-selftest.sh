@@ -201,4 +201,121 @@ grep -q "残留词钉子" "$TMP/v12.log" && echo "OK: variant 12 caught and name
   echo "FAIL: variant 12 caught but the drift was not named"; sed 's/^/    /' "$TMP/v12.log"; exit 1; }
 cp "$ROOT/doc/index.md" "$MIR/doc/index.md"
 
+# FIX-R4-GATES 扩围：变体 13–22 覆盖 G-R4-02/G-R4-03/G-R4-04 的新断
+# 言（§5 正面、§17/§22a–c 代码侧、§23 四项、§24 测试在场）。每
+# 变体只动一处、改坏后必须被对应节抓红并点名；变异落点断言防静
+# 默空转；变异后逐个还原本变体文件。
+echo "== variant 13: Caddy example line deleted must FAIL and name it (§5 positive side) =="
+sed -i '/reverse_proxy 127\.0\.0\.1:6366/d' "$MIR/doc/guide/install.md"
+grep -q "reverse_proxy 127" "$MIR/doc/guide/install.md" && {
+  echo "FAIL: variant 13 mutation did not land (Caddy example anchor drifted)"; exit 1; }
+if run_gate "$TMP/v13.log"; then
+  echo "FAIL: variant 13 was not caught"; exit 1
+fi
+grep -q "Caddy 示例缺" "$TMP/v13.log" && echo "OK: variant 13 caught and named" || {
+  echo "FAIL: variant 13 caught but the drift was not named"; sed 's/^/    /' "$TMP/v13.log"; exit 1; }
+cp "$ROOT/doc/guide/install.md" "$MIR/doc/guide/install.md"
+
+echo "== variant 14: initial_admin.go loses crypto/rand must FAIL and name it (§17 code side) =="
+sed -i '/"crypto\/rand"/d' "$MIR/go-backend/internal/store/repo/initial_admin.go"
+grep -q "crypto/rand" "$MIR/go-backend/internal/store/repo/initial_admin.go" && {
+  echo "FAIL: variant 14 mutation did not land (crypto/rand anchor drifted)"; exit 1; }
+if run_gate "$TMP/v14.log"; then
+  echo "FAIL: variant 14 was not caught"; exit 1
+fi
+grep -q "初始口令口径门" "$TMP/v14.log" && echo "OK: variant 14 caught and named" || {
+  echo "FAIL: variant 14 caught but the drift was not named"; sed 's/^/    /' "$TMP/v14.log"; exit 1; }
+cp "$ROOT/go-backend/internal/store/repo/initial_admin.go" "$MIR/go-backend/internal/store/repo/initial_admin.go"
+
+echo "== variant 15: keepalive DefaultIdle drifts 180->181 must FAIL and name it (§22a code side) =="
+sed -i 's/DefaultIdle     = 180 \* time.Second/DefaultIdle     = 181 * time.Second/' "$MIR/go-gost/x/internal/keepalive/keepalive.go"
+grep -q "DefaultIdle     = 181" "$MIR/go-gost/x/internal/keepalive/keepalive.go" || {
+  echo "FAIL: variant 15 mutation did not land (DefaultIdle anchor drifted)"; exit 1; }
+if run_gate "$TMP/v15.log"; then
+  echo "FAIL: variant 15 was not caught"; exit 1
+fi
+grep -q "探活参数钉子" "$TMP/v15.log" && echo "OK: variant 15 caught and named" || {
+  echo "FAIL: variant 15 caught but the drift was not named"; sed 's/^/    /' "$TMP/v15.log"; exit 1; }
+cp "$ROOT/go-gost/x/internal/keepalive/keepalive.go" "$MIR/go-gost/x/internal/keepalive/keepalive.go"
+
+echo "== variant 16: DisplayGroup reference lands in share.go must FAIL and name it (§22b code side) =="
+printf '// DisplayGroup: selftest mutation — subscription rendering must not read the display label\n' >> "$MIR/go-backend/internal/kernel/share.go"
+grep -q "DisplayGroup" "$MIR/go-backend/internal/kernel/share.go" || {
+  echo "FAIL: variant 16 mutation did not land"; exit 1; }
+if run_gate "$TMP/v16.log"; then
+  echo "FAIL: variant 16 was not caught"; exit 1
+fi
+grep -q "节点分组钉子" "$TMP/v16.log" && echo "OK: variant 16 caught and named" || {
+  echo "FAIL: variant 16 caught but the drift was not named"; sed 's/^/    /' "$TMP/v16.log"; exit 1; }
+cp "$ROOT/go-backend/internal/kernel/share.go" "$MIR/go-backend/internal/kernel/share.go"
+
+echo "== variant 17: SetProtocolBlock renamed must FAIL and name it (§22c code side) =="
+sed -i 's/func SetProtocolBlock/func SetProtoBlock/' "$MIR/go-gost/x/service/service.go"
+grep -q "func SetProtocolBlock" "$MIR/go-gost/x/service/service.go" && {
+  echo "FAIL: variant 17 mutation did not land (SetProtocolBlock anchor drifted)"; exit 1; }
+if run_gate "$TMP/v17.log"; then
+  echo "FAIL: variant 17 was not caught"; exit 1
+fi
+grep -q "协议开关钉子" "$TMP/v17.log" && echo "OK: variant 17 caught and named" || {
+  echo "FAIL: variant 17 caught but the drift was not named"; sed 's/^/    /' "$TMP/v17.log"; exit 1; }
+cp "$ROOT/go-gost/x/service/service.go" "$MIR/go-gost/x/service/service.go"
+
+echo "== variant 18: subnet example drifts back to the template default must FAIL and name it (§23a) =="
+sed -i 's|例如 `172.29.0.0/16`|例如 `172.30.0.0/16`|' "$MIR/doc/guide/install.md"
+grep -q '例如 `172.30.0.0/16`' "$MIR/doc/guide/install.md" || {
+  echo "FAIL: variant 18 mutation did not land (subnet example anchor drifted)"; exit 1; }
+if run_gate "$TMP/v18.log"; then
+  echo "FAIL: variant 18 was not caught"; exit 1
+fi
+grep -q "子网示例钉子" "$TMP/v18.log" && echo "OK: variant 18 caught and named" || {
+  echo "FAIL: variant 18 caught but the drift was not named"; sed 's/^/    /' "$TMP/v18.log"; exit 1; }
+cp "$ROOT/doc/guide/install.md" "$MIR/doc/guide/install.md"
+
+echo "== variant 19: identity key dropped from install.md must FAIL and name it (§23b) =="
+# 注意：PANEL_FRONTEND_CONTAINER 在 install.md:69 出现两次（六键清单
+# ＋同行自检 grep -cE 式），§23b 门是全文件 grep，故变异须用 /g
+# 全删、只删清单处门禁不红；落地断言同为全文件 grep，两者一致。
+sed -i 's/PANEL_FRONTEND_CONTAINER//g' "$MIR/doc/guide/install.md"
+grep -q "PANEL_FRONTEND_CONTAINER" "$MIR/doc/guide/install.md" && {
+  echo "FAIL: variant 19 mutation did not land (identity-key anchor drifted)"; exit 1; }
+if run_gate "$TMP/v19.log"; then
+  echo "FAIL: variant 19 was not caught"; exit 1
+fi
+grep -q "身份六键钉子" "$TMP/v19.log" && echo "OK: variant 19 caught and named" || {
+  echo "FAIL: variant 19 caught but the drift was not named"; sed 's/^/    /' "$TMP/v19.log"; exit 1; }
+cp "$ROOT/doc/guide/install.md" "$MIR/doc/guide/install.md"
+
+echo "== variant 20: bot menu loses /status must FAIL and name it (§23c) =="
+sed -i 's|、`/status` 得到同样的回答| 得到同样的回答|' "$MIR/doc/guide/notify.md"
+grep -q "/status" "$MIR/doc/guide/notify.md" && {
+  echo "FAIL: variant 20 mutation did not land (bot-menu anchor drifted)"; exit 1; }
+if run_gate "$TMP/v20.log"; then
+  echo "FAIL: variant 20 was not caught"; exit 1
+fi
+grep -q "机器人菜单钉子" "$TMP/v20.log" && echo "OK: variant 20 caught and named" || {
+  echo "FAIL: variant 20 caught but the drift was not named"; sed 's/^/    /' "$TMP/v20.log"; exit 1; }
+cp "$ROOT/doc/guide/notify.md" "$MIR/doc/guide/notify.md"
+
+echo "== variant 21: residual version drifts 2.1.13->2.1.12 must FAIL and name it (§23d) =="
+sed -i 's/2\.1\.13/2.1.12/g' "$MIR/doc/guide/upgrade.md"
+grep -q "2.1.13" "$MIR/doc/guide/upgrade.md" && {
+  echo "FAIL: variant 21 mutation did not land (residual version anchor drifted)"; exit 1; }
+if run_gate "$TMP/v21.log"; then
+  echo "FAIL: variant 21 was not caught"; exit 1
+fi
+grep -q "V1-01 残留段钉子" "$TMP/v21.log" && echo "OK: variant 21 caught and named" || {
+  echo "FAIL: variant 21 caught but the drift was not named"; sed 's/^/    /' "$TMP/v21.log"; exit 1; }
+cp "$ROOT/doc/guide/upgrade.md" "$MIR/doc/guide/upgrade.md"
+
+echo "== variant 22: F1-N2 regression test deregistered must FAIL and name it (§24) =="
+sed -i '/^test_report_compose_up_failure_branches$/d' "$MIR/test-install-scripts-proxy.sh"
+grep -q "^test_report_compose_up_failure_branches$" "$MIR/test-install-scripts-proxy.sh" && {
+  echo "FAIL: variant 22 mutation did not land (registration anchor drifted)"; exit 1; }
+if run_gate "$TMP/v22.log"; then
+  echo "FAIL: variant 22 was not caught"; exit 1
+fi
+grep -q "F1-N2 回归测试钉子" "$TMP/v22.log" && echo "OK: variant 22 caught and named" || {
+  echo "FAIL: variant 22 caught but the drift was not named"; sed 's/^/    /' "$TMP/v22.log"; exit 1; }
+cp "$ROOT/test-install-scripts-proxy.sh" "$MIR/test-install-scripts-proxy.sh"
+
 echo "SELFTEST PASS"

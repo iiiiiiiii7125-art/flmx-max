@@ -25,7 +25,13 @@ git config user.name selftest
 cat > panel_install.sh <<'EOF'
 #!/usr/bin/env bash
 SCRIPT_VERSION="20260101.01"
+PINNED_VERSION=""
 echo body-v1
+EOF
+cat > install.sh <<'EOF'
+#!/usr/bin/env bash
+PINNED_VERSION=""
+echo installer-v1
 EOF
 echo x > other.txt
 git add -A
@@ -62,5 +68,42 @@ if run_gate "$TMP/v3.log"; then
 else
   echo "FAIL: variant 3 should pass (body unchanged)"; sed 's/^/    /' "$TMP/v3.log"; exit 1
 fi
+
+# ── G-R4-05 下半：PINNED_VERSION 空占位断言。发版 sed 只认
+# ^PINNED_VERSION="" 锚点；占位在日常提交里被误填，sed 匹配不
+# 上、要等到发版 grep 才拦。变体 4/5 各填一个文件，必须 FAIL
+# 点名该文件。
+echo "== variant 4: PINNED_VERSION filled in panel_install.sh, must FAIL and name it =="
+sed -i 's|PINNED_VERSION=""|PINNED_VERSION="1.2.3"|' panel_install.sh
+git commit -qam "fill pinned placeholder in panel_install.sh"
+if run_gate "$TMP/v4.log"; then
+  echo "FAIL: variant 4 was not caught"; exit 1
+fi
+grep -q "PINNED_VERSION" "$TMP/v4.log" && grep -q "panel_install.sh" "$TMP/v4.log" && echo "OK: variant 4 caught and named" || {
+  echo "FAIL: variant 4 caught but the filled placeholder was not named"; sed 's/^/    /' "$TMP/v4.log"; exit 1; }
+
+echo "== variant 5: PINNED_VERSION filled in install.sh, must FAIL and name it =="
+sed -i 's|PINNED_VERSION="1.2.3"|PINNED_VERSION=""|' panel_install.sh
+sed -i 's|PINNED_VERSION=""|PINNED_VERSION="1.2.3"|' install.sh
+git commit -qam "fill pinned placeholder in install.sh"
+if run_gate "$TMP/v5.log"; then
+  echo "FAIL: variant 5 was not caught"; exit 1
+fi
+grep -q "PINNED_VERSION" "$TMP/v5.log" && grep -q "install.sh" "$TMP/v5.log" && echo "OK: variant 5 caught and named" || {
+  echo "FAIL: variant 5 caught but the filled placeholder was not named"; sed 's/^/    /' "$TMP/v5.log"; exit 1; }
+
+# ── G-R4-05：bump 门的 CI 接线断言。本门此前只在发版路径
+# （docker-build check-version）执行，PR 阶段改正文不 bump 全绿、
+# 到发版才拦。自检除脚本行为外另断言 ci-build.yml 含一个
+# script-version-bump 作业：全历史 checkout（fetch-depth: 0，
+# 否则 tag 缺失使本门 NOTE 放行、等于没接线）＋调用本脚本。
+# 接线被删即本自检先红（CI 的 gate-selftests job 跑本自检）。
+echo "== workflow wiring: ci-build.yml must run the bump gate on every push/PR =="
+CI_YML="$ROOT/.github/workflows/ci-build.yml"
+grep -q "script-version-bump" "$CI_YML" || { echo "FAIL: ci-build.yml has no script-version-bump job (G-R4-05)"; exit 1; }
+grep -q "check-script-version-bump.sh" "$CI_YML" || { echo "FAIL: ci-build.yml script-version-bump job does not call check-script-version-bump.sh (G-R4-05)"; exit 1; }
+awk '/script-version-bump:/{f=1} f && /fetch-depth: 0/{ok=1; exit} f && /^  [a-z-]+:/ && !/script-version-bump:/{exit} END{exit !ok}' "$CI_YML" || {
+  echo "FAIL: ci-build.yml script-version-bump job lacks fetch-depth: 0 (tags missing -> the gate NOTE-passes, unwired in effect)"; exit 1; }
+echo "OK: ci-build.yml wires the bump gate with full history"
 
 echo "SELFTEST PASS"

@@ -15,7 +15,12 @@
 # 版本序最大且为 HEAD 祖先者（无祖先时取版本序最大者）；HEAD_REF
 # 缺省 = HEAD。无任何候选 tag（首个发版）时 NOTE 放行。
 # docker-build 的 check-version 作业（fetch-depth: 0、tag 齐全）
-# 在发版路径上执行本门。
+# 在发版路径上执行本门。G-R4-05 下半：本门同时断言仓库树内
+# install.sh / panel_install.sh 的 PINNED_VERSION 保持空占位——
+# 发版时 docker-build 以 sed 注入版本号再 grep 兜底；占位若在
+# 日常提交里被误填，sed 匹配不上、要等到发版才拦。CI 路径上
+# 的本作业（ci-build script-version-bump）使两半都在日常提交
+# 即查。CI 路径的 wiring 断言见本门自检。
 set -u
 export LC_ALL=C
 cd "$(git rev-parse --show-toplevel)" || exit 1
@@ -29,6 +34,21 @@ git rev-parse --verify --quiet "$head_ref^{commit}" >/dev/null || {
   echo "FAIL  HEAD_REF「$head_ref」不可解析"
   exit 1
 }
+
+# G-R4-05 下半：PINNED_VERSION 空占位断言（树态，HEAD ref）。
+for f in install.sh panel_install.sh; do
+  line="$(git show "$head_ref:$f" 2>/dev/null | grep -m1 '^PINNED_VERSION=' || true)"
+  [ -n "$line" ] || {
+    echo "FAIL  $f 缺少 PINNED_VERSION 占位行（发版 sed 注入无锚点），fail-closed"
+    exit 1
+  }
+  val="$(printf '%s' "$line" | sed 's/^PINNED_VERSION=//; s/^"//; s/"$//')"
+  [ -z "$val" ] || {
+    echo "FAIL  $f 的 PINNED_VERSION 占位已被填值（\"$val\"）：仓库树内须保持空占位，发版 sed 才能注入版本号（G-R4-05）"
+    exit 1
+  }
+done
+echo "script-version-bump: PINNED_VERSION 占位在场且为空（install.sh / panel_install.sh）"
 
 if [ -z "$base_ref" ]; then
   cur_tag="$(git describe --tags --exact-match "$head_ref" 2>/dev/null || true)"
