@@ -474,15 +474,15 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 			// 补刷」成为可机械核查的不变量（与 delete 分支同形）。
 			// T-001：补偿刷新失败时错误须点名（%w 包装保持
 			// 调用方 err == / strings.Contains 判型）。
-			if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-				err = fmt.Errorf("%w；%s", err, whitelistRefreshFailureNote(failed))
+			if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+				err = fmt.Errorf("%w；%s", err, strings.Join(whitelistRefreshNotes(failed, pending), "；"))
 			}
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
 		// T-001：刷新失败进结果 warnings——删除本身已落库成功，
 		// 但内核仍按旧名单放行。
-		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-			result.Warnings = append(result.Warnings, whitelistRefreshFailureNote(failed))
+		if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+			result.Warnings = append(result.Warnings, whitelistRefreshNotes(failed, pending)...)
 		}
 		result.applyPendingOutcome(outcome)
 		return result, nil, nil
@@ -499,15 +499,15 @@ func (h *Handler) processTunnelDeleteWithForwards(tunnelID int64, action string,
 			// 齐 delete 分支；批量版经本函数逐隧道调用、同受覆盖。
 			// T-001：补偿刷新失败时错误须点名（%w 包装保持
 			// 调用方 err == / strings.Contains 判型）。
-			if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-				err = fmt.Errorf("%w；%s", err, whitelistRefreshFailureNote(failed))
+			if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+				err = fmt.Errorf("%w；%s", err, strings.Join(whitelistRefreshNotes(failed, pending), "；"))
 			}
 			return tunnelDeleteWithForwardsResult{}, nil, err
 		}
 		// T-001：刷新失败进结果 warnings——删除本身已落库成功，
 		// 但内核仍按旧名单放行。
-		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-			result.Warnings = append(result.Warnings, whitelistRefreshFailureNote(failed))
+		if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+			result.Warnings = append(result.Warnings, whitelistRefreshNotes(failed, pending)...)
 		}
 		result.applyPendingOutcome(outcome)
 		return result, nil, nil
@@ -587,8 +587,8 @@ func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int6
 		// T-001：补偿刷新失败进结果 warnings（单/批入口的
 		// failures 分支此前丢弃 result.Warnings，已同波补齐、
 		// 见两入口的 failures 处理）。
-		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-			result.Warnings = append(result.Warnings, whitelistRefreshFailureNote(failed))
+		if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+			result.Warnings = append(result.Warnings, whitelistRefreshNotes(failed, pending)...)
 		}
 		return result, failures, nil
 	}
@@ -603,15 +603,15 @@ func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int6
 		// applyKernel），否则 allow 停留在迁移后口径。
 		// T-001：补偿刷新失败时错误须点名（%w 包装保持
 		// 调用方 err == / strings.Contains 判型）。
-		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-			err = fmt.Errorf("%w；%s", err, whitelistRefreshFailureNote(failed))
+		if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+			err = fmt.Errorf("%w；%s", err, strings.Join(whitelistRefreshNotes(failed, pending), "；"))
 		}
 		return tunnelDeleteWithForwardsResult{}, nil, err
 	}
 	// T-001：刷新失败进结果 warnings——迁移与删除本身已落库
 	// 成功，但内核仍按旧名单放行。
-	if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-		result.Warnings = append(result.Warnings, whitelistRefreshFailureNote(failed))
+	if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+		result.Warnings = append(result.Warnings, whitelistRefreshNotes(failed, pending)...)
 	}
 	result.applyPendingOutcome(outcome)
 

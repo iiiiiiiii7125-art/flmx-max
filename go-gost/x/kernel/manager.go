@@ -23,9 +23,13 @@ import (
 const defaultBaseDir = "/etc/flmx_agent/kernels"
 
 // legacyBaseDir is the pre-rename script form's kernel root
-// (/etc/flux_agent, mirroring legacyScriptLayoutDirName). It keeps
-// the plain nft table name (see nftTableForBaseDir) so a
-// not-yet-migrated legacy install does not orphan its live table.
+// (/etc/flux_agent, mirroring legacyScriptLayoutDirName). It gets its
+// own nft table (flmx_kernel_legacy, see nftTableForBaseDir) so it
+// never shares one with the current root (F-R4-02). A not-yet-migrated
+// legacy install's pre-fix plain table lingers as stale counting
+// rules after the agent upgrades — harmless (counting-only, no
+// filtering; the agent reads only its own table) and gone once the
+// install is migrated or uninstalled.
 const legacyBaseDir = "/etc/flux_agent/kernels"
 
 // Install-layout directory names recognized by ResolveBaseDir's

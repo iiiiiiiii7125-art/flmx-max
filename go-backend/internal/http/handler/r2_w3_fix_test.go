@@ -38,9 +38,12 @@ func TestR2W3RefreshInboundWhitelistReturnsError(t *testing.T) {
 	if err := s.h.refreshInboundWhitelist(s.inboundID); err == nil {
 		t.Fatalf("refresh must fail after its kernel row is deleted")
 	}
-	failed := s.h.refreshInboundWhitelists([]int64{s.inboundID, s.inboundID})
+	failed, pending := s.h.refreshInboundWhitelists([]int64{s.inboundID, s.inboundID})
 	if len(failed) != 1 || failed[0] != s.inboundID {
 		t.Fatalf("refreshInboundWhitelists must return the failed id once, got %v", failed)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("refreshInboundWhitelists must return no pending ids, got %v", pending)
 	}
 }
 

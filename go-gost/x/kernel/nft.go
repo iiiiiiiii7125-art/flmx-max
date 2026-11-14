@@ -26,28 +26,39 @@ const nftTable = "flmx_kernel"
 // 避免旧表残留在节点内核中（仅计数残留，无转发影响，但保持干净）。
 const legacyNFTTable = "flvx_kernel"
 
+// legacyAgentNFTTable 是 legacy 代（/etc/flux_agent）agent 的计数
+// 表名（F-R4-02）：legacy 根与 current 根不得共享 plain 表，否则
+// 一方 sync 即清另一方计数器/白名单（F2-NFT-01 机制）。该表只由
+// legacy agent 自身同步与 current 代卸载时清理；current 代的常规
+// sync 不得碰它（legacy agent 活着时那是它的 live 表）。
+const legacyAgentNFTTable = "flmx_kernel_legacy"
+
 // nftTableForBaseDir derives this agent's nft table name from its
 // kernel root (F2-NFT-01): two agents on one host must never share a
 // table, because every sync deletes the table and rebuilds it from
 // the syncing agent's own ports — a second agent's sync used to wipe
 // the first agent's counters and whitelists, and its nft.json
-// fingerprint overwrote the first agent's. The canonical installs
-// keep the plain shared name so a single agent's behavior — and its
-// already-running table — does not change: the current script-form
-// root, the legacy pre-rename root, and the container form (whose
-// network namespace is private to the container anyway). Every other
-// root — a scratch install, a relocated install, a custom
-// FLMX_KERNEL_DIR — gets flmx_kernel_<first 8 hex of sha256(root)>:
-// stable across restarts (same root, same table), distinct per
-// install, and a valid nft identifier (20 chars, well under the name
-// limit).
+// fingerprint overwrote the first agent's. The current canonical
+// install keeps the plain shared name so a single agent's behavior —
+// and its already-running table — does not change, as does the
+// container form (whose network namespace is private to the container
+// anyway). The legacy pre-rename root gets its own fixed table
+// (F-R4-02): it used to share the plain name with the current root,
+// so a manually double-installed legacy+current pair wiped each
+// other on sync. Every other root — a scratch install, a relocated
+// install, a custom FLMX_KERNEL_DIR — gets
+// flmx_kernel_<first 8 hex of sha256(root)>: stable across restarts
+// (same root, same table), distinct per install, and a valid nft
+// identifier (20 chars, well under the name limit).
 func nftTableForBaseDir(baseDir string) string {
 	if detectKernelContainer() {
 		return nftTable
 	}
 	switch baseDir {
-	case defaultBaseDir, legacyBaseDir:
+	case defaultBaseDir:
 		return nftTable
+	case legacyBaseDir:
+		return legacyAgentNFTTable
 	}
 	return nftTable + "_" + hashString(baseDir)[:8]
 }
@@ -504,17 +515,20 @@ func (n *nftCounters) tableFingerprint(ctx context.Context) (string, error) {
 }
 
 // removeTables 删除 agent 建的全部 nftables 表（本 agent 自己的
-// 计数/白名单主表、改名前的旧表、端口跳跃探针表），供 agent 卸载时调用：表驻留在
-// 内核里，不随进程退出消失，必须在进程还活着时显式删掉。脚本沿用
-// nftScript 的「先建空表再删」惯例，表不存在时也不报错。
+// 计数/白名单主表、改名前的旧表、legacy 代的表、端口跳跃探针表），
+// 供 agent 卸载时调用：表驻留在内核里，不随进程退出消失，必须在
+// 进程还活着时显式删掉。脚本沿用 nftScript 的「先建空表再删」惯例，
+// 表不存在时也不报错。
 // F2-NFT-01: 只删自己的表——旧表仅 canonical owner 删（它可能
 // 是另一 agent 的 live 表）；探针表只在 -c 预检里出现、从不落
-// 地，删它对谁都是 no-op。
+// 地，删它对谁都是 no-op。F-R4-02：canonical 卸载一并清 legacy
+// 代的表（迁移收尾）；legacy agent 自身卸载只删自己的表，绝不
+// 碰 plain 表（那可能是 current 代的 live 表）。
 func (n *nftCounters) removeTables() error {
 	var b strings.Builder
 	tables := []string{n.tableName()}
 	if n.tableName() == nftTable {
-		tables = append(tables, legacyNFTTable)
+		tables = append(tables, legacyNFTTable, legacyAgentNFTTable)
 	}
 	tables = append(tables, nftHopProbeTable)
 	for _, table := range tables {

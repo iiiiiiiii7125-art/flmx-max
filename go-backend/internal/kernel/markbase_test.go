@@ -21,11 +21,11 @@ func TestUserMarkBaseForAgent(t *testing.T) {
 	if UserMarkBaseForAgent(75) != a {
 		t.Fatal("same node must get the same base")
 	}
-	// Layout: top byte 0x46, agent byte in bits 16-23, low 16 bits 0.
-	if a != 0x464B0000 {
-		t.Fatalf("node 75 base: got 0x%x, want 0x464B0000", a)
+	// Layout: top byte 0x47, agent byte in bits 16-23, low 16 bits 0.
+	if a != 0x474B0000 {
+		t.Fatalf("node 75 base: got 0x%x, want 0x474B0000", a)
 	}
-	if UserMarkBaseForAgent(0) != 0x46000000 {
+	if UserMarkBaseForAgent(0) != 0x47000000 {
 		t.Fatalf("node 0 base: got 0x%x", UserMarkBaseForAgent(0))
 	}
 	// Documented collision boundary: the agent byte is the node id's
@@ -38,19 +38,39 @@ func TestUserMarkBaseForAgent(t *testing.T) {
 	}
 }
 
+// F-R4-01: the per-agent base must never equal the legacy base. The old
+// formula 0x46000000 | (nodeID&0xff)<<16 minted 0x46560000 for node ids
+// ≡ 86 (mod 256) — exactly LegacyUserMarkBase — so a new agent on such
+// a node double-counted with every old agent on the host during the
+// transition. The per-agent tag is 0x47, disjoint from legacy by
+// construction; prove it over the whole byte space, not just 86.
+func TestUserMarkBaseForAgentNeverEqualsLegacy(t *testing.T) {
+	for b := int64(0); b < 256; b++ {
+		if got := UserMarkBaseForAgent(b); got == LegacyUserMarkBase {
+			t.Fatalf("node id low byte %d mints the legacy base 0x%x", b, got)
+		}
+	}
+	if got := UserMarkBaseForAgent(86); got != 0x47560000 {
+		t.Fatalf("node 86 base: got 0x%x, want 0x47560000", got)
+	}
+	if got := UserMarkBaseForAgent(86 + 256); got != 0x47560000 {
+		t.Fatalf("node 342 base: got 0x%x, want 0x47560000", got)
+	}
+}
+
 func TestUserMarkForAgent(t *testing.T) {
-	if got := UserMarkForAgent(0x464B0000, 7); got != 0x464B0007 {
-		t.Fatalf("per-agent mark: got 0x%x, want 0x464B0007", got)
+	if got := UserMarkForAgent(0x474B0000, 7); got != 0x474B0007 {
+		t.Fatalf("per-agent mark: got 0x%x, want 0x474B0007", got)
 	}
 	// Base 0 means legacy.
 	if got := UserMarkForAgent(0, 7); got != UserMark(7) || got != 0x46560007 {
 		t.Fatalf("base 0 must mean legacy: got 0x%x", got)
 	}
 	// Id bounds are base-independent.
-	if UserMarkForAgent(0x464B0000, 0) != 0 || UserMarkForAgent(0x464B0000, 0x10000) != 0 {
+	if UserMarkForAgent(0x474B0000, 0) != 0 || UserMarkForAgent(0x474B0000, 0x10000) != 0 {
 		t.Fatal("out-of-range ids must mint no mark")
 	}
-	if UserMarkForAgent(0x464B0000, 0xffff) != 0x464Bffff {
+	if UserMarkForAgent(0x474B0000, 0xffff) != 0x474Bffff {
 		t.Fatal("max id must fit")
 	}
 }
@@ -59,13 +79,17 @@ func TestUserFromMarkBothLayouts(t *testing.T) {
 	if got := UserFromMark(0x46560007); got != 7 {
 		t.Fatalf("legacy mark must decode: got %d", got)
 	}
-	if got := UserFromMark(0x464B0007); got != 7 {
+	if got := UserFromMark(0x474B0007); got != 7 {
 		t.Fatalf("per-agent mark must decode: got %d", got)
 	}
-	if got := UserFromMark(0x46010007); got != 7 {
+	if got := UserFromMark(0x47010007); got != 7 {
 		t.Fatalf("another agent byte must decode: got %d", got)
 	}
-	for _, m := range []int64{0x12345678, 0x47000007, 0x4656_0000_0007, 0} {
+	// The pre-fix 0x46 per-agent tag still decodes (transition).
+	if got := UserFromMark(0x464B0007); got != 7 {
+		t.Fatalf("pre-fix per-agent mark must still decode: got %d", got)
+	}
+	for _, m := range []int64{0x12345678, 0x48000007, 0x4656_0000_0007, 0} {
 		if got := UserFromMark(m); got != 0 {
 			t.Fatalf("foreign mark 0x%x must decode to 0, got %d", m, got)
 		}
@@ -120,8 +144,8 @@ func markOfXrayOutbound(t *testing.T, cfg map[string]interface{}, tag string) fl
 }
 
 func TestRenderPerAgentUserMark(t *testing.T) {
-	base := UserMarkBaseForAgent(75) // 0x464B0000
-	want := float64(0x464B0007)
+	base := UserMarkBaseForAgent(75) // 0x474B0000
+	want := float64(0x474B0007)
 	legacy := fmt.Sprint(0x46560007)
 
 	via := Endpoint{Host: "1.2.3.4", Port: 443, Direct: true, Proxy: Proxy{

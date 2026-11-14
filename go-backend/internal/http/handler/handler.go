@@ -3126,8 +3126,8 @@ func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *m
 	for _, pair := range result.RevokedUserTunnels {
 		// T-001：备份恢复面无回执可点名，刷新失败只记日志（内核
 		// 仍按旧名单放行，下次面板清扫/节点重连时收敛）。
-		if failed := h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID); len(failed) > 0 {
-			log.Printf("backup restore: revoked user-tunnel forward cleanup whitelist refresh failed user_id=%d tunnel_id=%d %s", pair.UserID, pair.TunnelID, whitelistRefreshFailureNote(failed))
+		if failed, pending := h.cleanupForwardsForUserTunnel(pair.UserID, pair.TunnelID); len(failed) > 0 || len(pending) > 0 {
+			log.Printf("backup restore: revoked user-tunnel forward cleanup whitelist refresh failed user_id=%d tunnel_id=%d %s %s", pair.UserID, pair.TunnelID, whitelistRefreshFailureNote(failed), whitelistRefreshPendingNote(pending))
 		}
 	}
 

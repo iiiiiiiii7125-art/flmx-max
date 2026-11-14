@@ -173,14 +173,22 @@ func singboxUsers(in Inbound) []interface{} {
 // install identical mark rules in their own nft tables, so the same
 // physical packets are counted once per agent and the panel books the
 // subscription N×. The per-agent layout keeps the user id in the low
-// 16 bits and spends bits 16-23 on the agent (bits 24-31 stay 0x46,
-// the "F" tag): mark = 0x46000000 | (agentByte << 16) | id, where
-// agentByte is the panel node id's low byte. Node ids are sequential,
-// so co-located agents (a handful per host, ids far below 256 apart)
-// always get distinct bases; a collision would need two co-located
-// nodes whose ids differ by exactly a multiple of 256, in which case
-// only those two nodes double-count each other (the old behaviour,
-// not a new failure mode).
+// 16 bits and spends bits 16-23 on the agent (bits 24-31 are the tag):
+// mark = 0x47000000 | (agentByte << 16) | id, where agentByte is the
+// panel node id's low byte. Node ids are sequential, so co-located
+// agents (a handful per host, ids far below 256 apart) always get
+// distinct bases; a collision would need two co-located nodes whose
+// ids differ by exactly a multiple of 256, in which case only those
+// two nodes double-count each other (the old behaviour, not a new
+// failure mode).
+//
+// F-R4-01: the per-agent tag is 0x47, NOT 0x46 — the old 0x46 tag made
+// the per-agent space contain the legacy base itself (node id ≡ 86
+// mod 256 minted 0x46560000 = LegacyUserMarkBase), so a new agent on
+// such a node double-counted with every old agent on the host during
+// the transition. The 0x47 space is disjoint from legacy by
+// construction, for every node id. The legacy base stays 0x46560000
+// for agents older than the per-agent rollout.
 const (
 	userMarkBase = 0x46560000
 	userMarkMax  = 0xffff
@@ -192,9 +200,10 @@ const (
 const LegacyUserMarkBase int64 = userMarkBase
 
 // UserMarkBaseForAgent returns the socket-mark base for one agent (one
-// panel node). 0x46000000 | ((nodeID & 0xff) << 16).
+// panel node). 0x47000000 | ((nodeID & 0xff) << 16) — the 0x47 tag
+// keeps the per-agent space disjoint from the legacy base (F-R4-01).
 func UserMarkBaseForAgent(nodeID int64) int64 {
-	return 0x46000000 | ((nodeID & 0xff) << 16)
+	return 0x47000000 | ((nodeID & 0xff) << 16)
 }
 
 // UserMarkForAgent is the socket mark of a user's traffic on one agent;
@@ -235,11 +244,14 @@ func UserMark(id int64) int64 {
 }
 
 // UserFromMark is the inverse of UserMark/UserMarkForAgent (0 for other
-// marks). Both layouts decode the same way: the top byte is 0x46 and
-// the user id sits in the low 16 bits (legacy 0x4656xxxx and per-agent
-// 0x46aaxxxx alike).
+// marks). Both layouts decode the same way: the user id sits in the low
+// 16 bits, and the top byte is 0x46 for legacy (0x4656xxxx) or 0x47
+// for per-agent (0x47aaxxxx) — the 0x46 tag also decodes pre-fix
+// per-agent marks from agents that have not re-applied yet, so a
+// panel upgrade never blinds in-flight counters.
 func UserFromMark(mark int64) int64 {
-	if mark>>24 != 0x46 {
+	top := mark >> 24
+	if top != 0x46 && top != 0x47 {
 		return 0
 	}
 	return mark & userMarkMax

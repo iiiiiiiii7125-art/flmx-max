@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -426,24 +427,31 @@ func (h *Handler) inboundIDsDialedByNodeIx(nodeID int64, ix *chainRefIndex) ([]i
 }
 
 // refreshInboundWhitelists refreshes each affected inbound once and
-// returns the IDs whose refresh failed (T-001): callers must surface
-// the failure in the triggering operation's receipt — a success receipt
-// issued while the kernel still enforces the pre-change allow list is
-// a false receipt (new relays cannot connect, deleted relays stay
-// allowed). Background callers without a receipt log the IDs instead.
-func (h *Handler) refreshInboundWhitelists(inboundIDs []int64) []int64 {
+// returns the IDs whose refresh failed and the IDs whose refresh is
+// still confirming (T-001): callers must surface the failure in the
+// triggering operation's receipt — a success receipt issued while the
+// kernel still enforces the pre-change allow list is a false receipt
+// (new relays cannot connect, deleted relays stay allowed). Background
+// callers without a receipt log the IDs instead.
+// F2-APPLY-01 同族：确认待定不是失败——pending 的入站单独归入
+// pending 列，下次 poll 收敛；绝不把它写进 failed 列、不得缀
+// 「刷新失败」。
+func (h *Handler) refreshInboundWhitelists(inboundIDs []int64) (failed, pending []int64) {
 	seen := make(map[int64]struct{}, len(inboundIDs))
-	var failed []int64
 	for _, inboundID := range inboundIDs {
 		if _, ok := seen[inboundID]; ok {
 			continue
 		}
 		seen[inboundID] = struct{}{}
 		if err := h.refreshInboundWhitelist(inboundID); err != nil {
+			if errors.Is(err, errApplyConfirmPending) {
+				pending = append(pending, inboundID)
+				continue
+			}
 			failed = append(failed, inboundID)
 		}
 	}
-	return failed
+	return failed, pending
 }
 
 // refreshInboundWhitelist re-applies the kernel when the relay set of a
@@ -483,4 +491,64 @@ func whitelistRefreshFailureNote(failed []int64) string {
 		ids = append(ids, strconv.FormatInt(id, 10))
 	}
 	return "白名单刷新失败（入站 " + strings.Join(ids, "、") + "），内核仍按旧名单放行"
+}
+
+// whitelistRefreshPendingNote renders the operator-facing note for
+// whitelist refreshes that were sent but are still confirming
+// (F2-APPLY-01 同族)：pending 不是失败——刷新已发出、正在确认，
+// 不得称「刷新失败」、不得断言「内核仍按旧名单放行」（pending
+// 已落地时该断言为假）。
+func whitelistRefreshPendingNote(pending []int64) string {
+	if len(pending) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(pending))
+	for _, id := range pending {
+		ids = append(ids, strconv.FormatInt(id, 10))
+	}
+	return "白名单刷新已发出，正在确认生效状态（入站 " + strings.Join(ids, "、") + "）"
+}
+
+// whitelistRefreshNoteForErr renders the refresh note for one inbound
+// from the refresh error itself (F2-APPLY-01 同族)：单点调用方
+// （inboundDelete 补偿刷新）按错误分流，不得把 pending 写成失败。
+func whitelistRefreshNoteForErr(id int64, err error) string {
+	if errors.Is(err, errApplyConfirmPending) {
+		return whitelistRefreshPendingNote([]int64{id})
+	}
+	return whitelistRefreshFailureNote([]int64{id})
+}
+
+// whitelistRefreshNotes renders the failure and pending refresh notes
+// for a pair of ID lists (F2-APPLY-01 同族)：失败与待定分开表述，
+// 待定不缀「刷新失败」。Failure first, then pending; empty when
+// both lists are empty.
+func whitelistRefreshNotes(failed, pending []int64) []string {
+	var notes []string
+	if note := whitelistRefreshFailureNote(failed); note != "" {
+		notes = append(notes, note)
+	}
+	if note := whitelistRefreshPendingNote(pending); note != "" {
+		notes = append(notes, note)
+	}
+	return notes
+}
+
+// whitelistRefreshWarning composes the failure + pending refresh notes
+// into one warning string for OKWithWarning receipts (F2-APPLY-01
+// 同族)：失败 note 带「请检查节点内核状态」尾缀，pending note
+// 单独成段、不缀失败。
+func whitelistRefreshWarning(failed, pending []int64) string {
+	warning := whitelistRefreshFailureNote(failed)
+	if warning != "" {
+		warning += "，请检查节点内核状态"
+	}
+	if note := whitelistRefreshPendingNote(pending); note != "" {
+		if warning != "" {
+			warning += "；" + note
+		} else {
+			warning = note
+		}
+	}
+	return warning
 }
