@@ -271,7 +271,7 @@ func xraySplitRoutes(in Inbound, levels map[int64]int, idleEmitted map[int64]boo
 				if err != nil {
 					return nil, nil, fmt.Errorf("入站 %d 第 %d 条分流: %v", in.ID, i+1, err)
 				}
-				ob["streamSettings"].(obj)["sockopt"] = obj{"mark": UserMark(id)}
+				ob["streamSettings"].(obj)["sockopt"] = obj{"mark": in.userMark(id)}
 				outbounds = append(outbounds, ob)
 			}
 			i := i
@@ -368,7 +368,7 @@ func singboxSplitRoutesWith(in Inbound, snell, naive bool) ([]interface{}, []int
 			for _, id := range users {
 				// A5-04：同 xray 侧——失败整单报错，不再静默少一个
 				// outbound 却仍生成引用它的规则（sing-box 整份拒绝）。
-				obs, err := singboxChainOutboundsWith(*r.Via, splitUserTag(in, i, id), UserMark(id), snell, naive)
+				obs, err := singboxChainOutboundsWith(*r.Via, splitUserTag(in, i, id), in.userMark(id), snell, naive)
 				if err != nil {
 					return nil, nil, nil, fmt.Errorf("入站 %d 第 %d 条分流: %v", in.ID, i+1, err)
 				}

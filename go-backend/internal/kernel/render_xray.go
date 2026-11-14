@@ -108,7 +108,7 @@ func renderXray(inbounds []Inbound, opts RenderOptions) (string, error) {
 	for _, id := range markedUsers(inbounds) {
 		tag := userOutboundTag(id)
 		outbounds = append(outbounds, obj{"protocol": "freedom", "tag": tag,
-			"streamSettings": obj{"sockopt": obj{"mark": UserMark(id)}}})
+			"streamSettings": obj{"sockopt": obj{"mark": UserMarkForAgent(opts.UserMarkBase, id)}}})
 		rules = append(rules, obj{"type": "field", "user": []string{User{ID: id}.Email()}, "outboundTag": tag})
 	}
 	cfg["outbounds"] = outbounds
@@ -208,13 +208,13 @@ func xrayConnIdleRoutes(inbounds []Inbound, levels map[int64]int, idleEmitted ma
 			"settings": obj{"userLevel": level}})
 		if in.UserCapable() {
 			for _, u := range in.Users {
-				if UserMark(u.ID) == 0 {
+				if in.userMark(u.ID) == 0 {
 					continue
 				}
 				utag := connIdleUserOutboundTag(in.ID, u.ID)
 				outbounds = append(outbounds, obj{"protocol": "freedom", "tag": utag,
 					"settings":       obj{"userLevel": level},
-					"streamSettings": obj{"sockopt": obj{"mark": UserMark(u.ID)}}})
+					"streamSettings": obj{"sockopt": obj{"mark": in.userMark(u.ID)}}})
 				if in.Via == nil {
 					rules = append(rules, obj{"type": "field", "inboundTag": []string{in.Tag()},
 						"user": []string{User{ID: u.ID}.Email()}, "outboundTag": utag})

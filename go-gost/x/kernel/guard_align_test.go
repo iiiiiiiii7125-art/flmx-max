@@ -48,15 +48,15 @@ func TestEmptyAllowClassificationMatchesRendering(t *testing.T) {
 		if reqNeedsNftGuard(req) {
 			t.Fatalf("%s: must not be classified as protected", name)
 		}
-		script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), nil, nil)
+		script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), nil, nil, 0)
 		if strings.Contains(script, "allow4_7") || strings.Contains(script, "allow6_7") ||
 			strings.Contains(script, "drop") {
 			t.Fatalf("%s: script must carry no guard for the port:\n%s", name, script)
 		}
 	}
 	// The two shapes must render byte-identical scripts.
-	a := nftScript(nftTable, expandPorts(shapes["absent"]), expandGuards(shapes["absent"]), nil, nil)
-	b := nftScript(nftTable, expandPorts(shapes["empty"]), expandGuards(shapes["empty"]), nil, nil)
+	a := nftScript(nftTable, expandPorts(shapes["absent"]), expandGuards(shapes["absent"]), nil, nil, 0)
+	b := nftScript(nftTable, expandPorts(shapes["empty"]), expandGuards(shapes["empty"]), nil, nil, 0)
 	if a != b {
 		t.Fatalf("absent and empty allow must render identical scripts:\n--- absent ---\n%s\n--- empty ---\n%s", a, b)
 	}
@@ -77,8 +77,8 @@ func TestEmptyAllowWireFormSameAsAbsent(t *testing.T) {
 	if portsHaveWhitelist(pa) != portsHaveWhitelist(pe) {
 		t.Fatal("wire forms must classify identically")
 	}
-	sa := nftScript(nftTable, expandPorts(pa), expandGuards(pa), nil, nil)
-	se := nftScript(nftTable, expandPorts(pe), expandGuards(pe), nil, nil)
+	sa := nftScript(nftTable, expandPorts(pa), expandGuards(pa), nil, nil, 0)
+	se := nftScript(nftTable, expandPorts(pe), expandGuards(pe), nil, nil, 0)
 	if sa != se {
 		t.Fatalf("wire forms must render identically:\n--- absent ---\n%s\n--- empty ---\n%s", sa, se)
 	}
@@ -93,7 +93,7 @@ func TestGuardScriptSeedSetUnchanged(t *testing.T) {
 	if !portsHaveWhitelist(ports) {
 		t.Fatal("seeded allow must be classified as whitelisted")
 	}
-	script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), nil, nil)
+	script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), nil, nil, 0)
 	for _, want := range []string{
 		"set allow4_7", "set allow6_7",
 		"127.0.0.0/8", "203.0.113.0/24", "::1/128",

@@ -62,6 +62,11 @@ type RenderOptions struct {
 	// chatter floods the troubleshooting ring while collection
 	// itself is off (D-04). Fail-closed default: false.
 	ConnLogEnabled bool
+	// UserMarkBase is the socket-mark base user marks are minted
+	// with (F2-DBL-01: per-agent base, so co-located agents count
+	// only their own kernels' traffic). 0 means the legacy
+	// host-global base.
+	UserMarkBase int64
 }
 
 // Render produces the kernel configuration for the given enabled inbounds.
@@ -75,6 +80,13 @@ func RenderWith(kernelType string, inbounds []Inbound, opts RenderOptions) (Rend
 	sorted := make([]Inbound, len(inbounds))
 	copy(sorted, inbounds)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	// F2-DBL-01: the per-agent mark base rides on every inbound so
+	// the chain/split renderers (which take no RenderOptions) mint
+	// the same marks as the direct outbounds. 0 keeps the legacy
+	// host-global base.
+	for i := range sorted {
+		sorted[i].UserMarkBase = opts.UserMarkBase
+	}
 	// 渲染期复检（与保存期 normalizeExtra 同口径）：指定出站 IP 策略的
 	// 入站，其 Extra 不得覆盖 tag/detour（S4）。
 	for _, in := range sorted {

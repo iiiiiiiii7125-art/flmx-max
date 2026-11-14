@@ -46,7 +46,7 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	// user's mark (see UserMark); the first outbound stays the default.
 	for _, id := range markedUsers(inbounds) {
 		tag := userOutboundTag(id)
-		outbounds = append(outbounds, obj{"type": "direct", "tag": tag, "routing_mark": UserMark(id)})
+		outbounds = append(outbounds, obj{"type": "direct", "tag": tag, "routing_mark": UserMarkForAgent(opts.UserMarkBase, id)})
 		rules = append(rules, obj{"auth_user": []string{User{ID: id}.Name()}, "outbound": tag})
 	}
 	cfg["outbounds"] = outbounds

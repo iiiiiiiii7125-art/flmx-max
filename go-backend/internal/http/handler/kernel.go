@@ -2426,6 +2426,30 @@ func remarshal(in interface{}, out interface{}) error {
 	return json.Unmarshal(b, out)
 }
 
+// userMarkBaseMinVersion 是 per-agent socket-mark base 落地的首个
+// agent 版本（F2-DBL-01）：低于它 agent 的 nft 规则只认 legacy base，
+// 面板给它渲染新 base 会让用户计数归零。R2 候选版是 2.1.12 之后的
+// 首个发版（>= 2.1.13），故门槛取 2.1.13；实际发版号更高时门仍
+// 成立（比较按版本大小，不按相等）。
+const userMarkBaseMinVersion = "2.1.13"
+
+// userMarkBaseForNode 是某节点的 socket-mark base：agent 版本达门
+// 槛用 per-agent base（节点 id 低字节作 agent 域，同机多 agent 各
+// 计各的），版本过旧/未知用 legacy base（旧行为：同机多 agent
+// 仍会多计，待 agent 升级后下一次下发自动切到 per-agent base）。
+// fail-closed 向旧行为：版本读不到绝不按新 base 渲染。
+func userMarkBaseForNode(nodeID int64, agentVersion string) int64 {
+	normalised, ok := parseConnlogAgentVersion(agentVersion)
+	if !ok {
+		return kernel.LegacyUserMarkBase
+	}
+	cmp, err := compareVersions(normalised, userMarkBaseMinVersion)
+	if err != nil || cmp < 0 {
+		return kernel.LegacyUserMarkBase
+	}
+	return kernel.UserMarkBaseForAgent(nodeID)
+}
+
 // buildKernelApplyPayload renders the kernel's enabled inbounds into the
 // KernelApply command body.
 func (h *Handler) buildKernelApplyPayload(k *model.NodeKernel) (map[string]interface{}, string, error) {
@@ -2606,6 +2630,16 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	// 形态的 URL / rule-set 引用），实际下载路线由 agent 侧内置候
 	// 选在下载处自行测速直选（KU4）。
 	proxy := ""
+	// F2-DBL-01：按节点算 socket-mark base（agent 版本达门槛用
+	// per-agent base，否则 legacy base），渲染与下发同源——内核
+	// 配置里的 mark 与 agent nft 规则的 mark 必须是同一个值，
+	// 否则用户计数归零。节点读不到时 fail-closed 用 legacy。
+	markBase := kernel.LegacyUserMarkBase // legacy；节点读到且版本达门槛才切 per-agent
+	if node, err := h.repo.GetNodeByID(k.NodeID); err == nil && node != nil {
+		markBase = userMarkBaseForNode(k.NodeID, node.Version.String)
+	} else if err != nil {
+		log.Printf("user mark base node lookup failed node_id=%d err=%v action=legacy_base", k.NodeID, err)
+	}
 	rendered, err := kernel.RenderWith(k.KernelType, inbounds, kernel.RenderOptions{
 		RuleSetMirror:     proxy,
 		SingboxHTTPClient: !versionBelowStrict(k.Version, 1, 14),
@@ -2614,6 +2648,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// D-04：节点开关实值进渲染——关时日志形态回落（不升
 		// debug／不开 access），与 connLogInbounds 的门同源。
 		ConnLogEnabled: connlogOn,
+		UserMarkBase:    markBase,
 	})
 	if err != nil {
 		return nil, "", err
@@ -2638,6 +2673,12 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	if len(rendered.UserMarks) > 0 {
 		payload["userMarks"] = rendered.UserMarks
 	}
+	// F2-DBL-01：agent 的 nft 用户计数规则按这个 base 造 mark；
+	// 与渲染进内核配置的 mark 同源（buildKernelApplyPayload 里
+	// 同一个 markBase 值），两边不一致用户计数归零。旧 agent
+	// 忽略该字段、继续用 legacy base（面板对旧 agent 渲染的
+	// 也是 legacy base，见 userMarkBaseForNode）。
+	payload["userMarkBase"] = markBase
 	if len(connLogInbounds) > 0 {
 		payload["connLogInbounds"] = connLogInbounds
 	}

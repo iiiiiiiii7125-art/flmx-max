@@ -31,7 +31,7 @@ func (in Inbound) countedUsers() []int64 {
 	}
 	var ids []int64
 	for _, u := range in.Users {
-		if UserMark(u.ID) != 0 {
+		if in.userMark(u.ID) != 0 {
 			ids = append(ids, u.ID)
 		}
 	}
@@ -156,7 +156,7 @@ func singboxChainRoutesWith(inbounds []Inbound, snell, naive bool) ([]interface{
 		}
 		for _, id := range in.countedUsers() {
 			tag := chainUserTag(in, id)
-			obs, err := singboxChainOutboundsWith(*in.Via, tag, UserMark(id), snell, naive)
+			obs, err := singboxChainOutboundsWith(*in.Via, tag, in.userMark(id), snell, naive)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 			}
@@ -208,7 +208,7 @@ func xrayChainRoutes(inbounds []Inbound, levels map[int64]int, idleEmitted map[i
 			if err != nil {
 				return nil, nil, fmt.Errorf("入站 %d: %v", in.ID, err)
 			}
-			ob["streamSettings"].(obj)["sockopt"] = obj{"mark": UserMark(id)}
+			ob["streamSettings"].(obj)["sockopt"] = obj{"mark": in.userMark(id)}
 			outbounds = append(outbounds, ob)
 			rules = append(rules, obj{"type": "field", "inboundTag": tags, "user": []string{User{ID: id}.Email()}, "outboundTag": tag})
 		}
