@@ -152,6 +152,9 @@ func (h *Handler) observeResourceSurface(nodeID int64, surface, event, title, la
 // 打断其静态证明。event 的合法取值只有四处调用点直传的三个常
 // 量；落到 default 属编程错误，记日志而不派发未知事件（旧形态
 // 会把任意字符串当事件发出，正是该门要防的形态）。
+// F3-NEW-01：三项事件在 notifyConfig 内跳过 notify_events 成员
+// 门、只认各自的独立开关（notify_<event>，缺键＝开）——取消任一
+// 单个事件永不关闭资源告警。
 func (h *Handler) dispatchResourceAlert(event, title, message string, onDone func(notifyOutcome)) {
 	switch event {
 	case notifyEventConntrackHigh:

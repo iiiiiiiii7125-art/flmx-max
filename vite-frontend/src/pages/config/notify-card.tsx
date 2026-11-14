@@ -61,6 +61,27 @@ const NOTIFY_EVENTS = [
 
 const ALL_EVENT_KEYS = NOTIFY_EVENTS.map((e) => e.key) as string[];
 
+// F3-NEW-01：三项资源告警的独立开关。它们不在上方 9 个事件复选框里，
+// 也不走 notify_events 列表——取消任一事件永不关闭资源告警。
+// 配置键缺席＝开（旧配置/新装默认开），显式 "false" 才关。
+const NOTIFY_RESOURCE_ALERTS = [
+  {
+    key: "notify_conntrack_high",
+    label: "连接跟踪表用量过高",
+    description: "节点 conntrack 表用量达 80% 时提醒，表满即全包丢弃，撞墙前预警",
+  },
+  {
+    key: "notify_disk_high",
+    label: "磁盘用量过高",
+    description: "节点或面板根盘用量达 80% 时提醒，盘满即服务崩溃，撞墙前预警",
+  },
+  {
+    key: "notify_agent_memory_high",
+    label: "agent 内存用量过高",
+    description: "节点 agent 进程内存用量达 80% 时提醒，撞墙前预警",
+  },
+] as const;
+
 interface NotifyCardProps {
   configs: Record<string, string>;
   originalConfigs: Record<string, string>;
@@ -277,6 +298,31 @@ export function NotifyCard({
                 key={e.key}
                 isSelected={selected.includes(e.key)}
                 onValueChange={(on) => toggleEvent(e.key, on)}
+              >
+                <div className="flex flex-col">
+                  <span className="text-sm">{e.label}</span>
+                  <span className="text-xs font-semibold text-foreground">
+                    {e.description}
+                  </span>
+                </div>
+              </Checkbox>
+            ))}
+          </div>
+        </Field>
+
+        <Divider />
+        <Field
+          description="独立开关，不受上方事件勾选影响——取消任一事件也不会关掉资源告警；缺省开启，建议保持开启"
+          label="资源告警"
+        >
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {NOTIFY_RESOURCE_ALERTS.map((e) => (
+              <Checkbox
+                key={e.key}
+                isSelected={configs[e.key] !== "false"}
+                onValueChange={(on) =>
+                  onChange(e.key, on ? "true" : "false")
+                }
               >
                 <div className="flex flex-col">
                   <span className="text-sm">{e.label}</span>

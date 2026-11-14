@@ -48,6 +48,12 @@ const (
 	notifyConfigTGChatID    = "notify_telegram_chat_id"
 	notifyConfigTGAPIBase   = "notify_telegram_api_base"
 	notifyConfigWebhookURL  = "notify_webhook_url"
+	// F3-NEW-01：三项资源告警的独立开关（与 notify_events 列表无关）。
+	// 缺键＝开（旧配置/新装默认开——撞墙前预警默认必须在）；
+	// 显式 "false" 才关；其他非法值按开处理（预警往开的方向失效）。
+	notifyConfigConntrackHigh = "notify_conntrack_high"
+	notifyConfigDiskHigh      = "notify_disk_high"
+	notifyConfigAgentMemHigh  = "notify_agent_memory_high"
 	defaultTelegramAPIBase  = "https://api.telegram.org"
 	notifySendTimeout       = 10 * time.Second
 	notifyExpiryWindow      = 3 * 24 * time.Hour
@@ -176,6 +182,23 @@ func (h *Handler) invalidateNotifyConfigCache() {
 	h.notifyCfgVals = nil
 }
 
+// resourceAlertConfigKey 把资源事件映射到它自己的独立开关。
+// F3-NEW-01：资源告警（conntrack/disk/agent-memory high）不走
+// notify_events 成员门——UI 的 9 个事件复选框里没有这三项，取消
+// 任一事件写回的 8 键串会把三项静默杀死。三项各有独立开关，
+// dispatch 只认自己的开关。
+func resourceAlertConfigKey(event string) (string, bool) {
+	switch event {
+	case notifyEventConntrackHigh:
+		return notifyConfigConntrackHigh, true
+	case notifyEventDiskHigh:
+		return notifyConfigDiskHigh, true
+	case notifyEventAgentMemHigh:
+		return notifyConfigAgentMemHigh, true
+	}
+	return "", false
+}
+
 // notifyConfig reads the saved settings; ok is false when notifications
 // are off or the event is not selected.
 func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
@@ -195,6 +218,16 @@ func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
 	}
 	if cfg[notifyConfigEnabled] != "true" || settings.empty() {
 		return settings, app, false
+	}
+	// F3-NEW-01：资源事件跳过 notify_events 成员门，只认自己的
+	// 独立开关（缺键＝开）。取消任一单个事件（写回 8 键串）或
+	// 全取消（"none"）都永不关闭资源告警；关资源告警只走三项
+	// 各自的开关或总开关。
+	if key, ok := resourceAlertConfigKey(event); ok {
+		if cfg[key] == "false" {
+			return settings, app, false
+		}
+		return settings, app, true
 	}
 	// 集成修正（integration fix）：事件选择（notify_events）每次现读
 	// 单行，不走 5s 缓存。理由：选择门是「发不发」的授权面——缓存
