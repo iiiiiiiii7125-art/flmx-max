@@ -1,5 +1,7 @@
 # Announcement Popup Notification Design
 
+> **注意：本文档描述的公告（站内）功能已随 2.1.13 删除（候选版 1e76851b），本文档仅作历史记录保留，不再代表现有功能。**
+
 ## Overview
 This feature implements a popup notification modal for important dashboard announcements to ensure users see them immediately, addressing GitHub Issue #169.
 

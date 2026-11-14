@@ -346,7 +346,7 @@ export default function ConfigPage() {
     useState<Record<string, string>>(initialConfigs);
   // R2-C3-01（IRL-3 同族）：配置初载失败必须留持久标记＋重试入口。
   // 只加标记、不禁保存：handleSave 只发 changedPayload 差异键，载失败
-  // 显空默认值也不会整表清零（与公告节全量保存的禁保存先例不同）。
+  // 显空默认值也不会整表清零。
   const [configsLoadFailed, setConfigsLoadFailed] = useState(false);
 
   const [exportTypes, setExportTypes] = useState<string[]>([]);

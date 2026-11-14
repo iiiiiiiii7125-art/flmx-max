@@ -1,5 +1,7 @@
 # Announcement Popup Notification Implementation Plan
 
+> **注意：本文档描述的公告（站内）功能已随 2.1.13 删除（候选版 1e76851b），本文档仅作历史记录保留，不再代表现有功能。**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a popup modal for announcements that automatically shows to users when a new or updated announcement is published.

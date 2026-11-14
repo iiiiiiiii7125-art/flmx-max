@@ -198,7 +198,7 @@ cat ~/.agents/skills/flmx-api/SKILL.md >> ~/.claude/CLAUDE.md
 | 订阅 | 增删改查、订阅源、按订阅分配、公开拉取、流量统计（`/api/v1/subscription/traffic`、`/api/v1/user/subscription/traffic`） |
 | 监控 | 节点/隧道指标、服务监控、监控权限 |
 | Passkey | 登录、注册、列表、删除 |
-| 系统 | 版本、存储、检查更新、面板自升级、公告、通知测试 |
+| 系统 | 版本、存储、检查更新、面板自升级、通知测试 |
 | 备份 | 导出/导入 |
 
 ## 安全提示
