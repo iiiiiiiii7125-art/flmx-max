@@ -1,6 +1,6 @@
 # 导入节点
 
-在 **落地** 页点击 **导入**，可以把不是面板部署的节点（脚本搭的、没装 agent 的机器、机场节点）加进来，用来对接中转和加入订阅。转换规则参考 Sub-Store：所有格式先转成 Mihomo（Clash Meta）节点格式保存，再按订阅格式输出，绝大多数参数会完整保留；少数只在 sing-box 原格式里有落点的字段没有对应搬运位置、转换时会丢弃，例如 Hysteria2 的 `up_mbps` / `down_mbps`、VLESS 的 `packet_encoding`。
+在 **落地** 页点击 **导入**，可以把不是面板部署的节点（脚本搭的、没装 agent 的机器、机场节点）加进来，用来对接中转和加入订阅。转换规则参考 Sub-Store：所有格式先转成 Mihomo（Clash Meta）节点格式保存，再按订阅格式输出，绝大多数参数会完整保留；Hysteria2 的 `up_mbps` / `down_mbps` 与 VLESS 的 `packet_encoding` 现已搬运保留（带宽存为 `up` / `down`，`packet_encoding` 回写 sing-box 的同名字段，往返不丢）。少数没有对应搬运位置的字段转换时仍会丢弃，例如 Snell 的 `mode`（仅 v6 的 `unshaped` 会保留，其余值不落库，节点本身不拒）。
 
 ## 支持的输入
 
