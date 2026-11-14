@@ -32,7 +32,7 @@ export default function MonitorPage() {
 }
 
 // 监控权限范围收窄（2026-11-01 用户拍板）后按 /monitor/access 分流：
-// 管理员走原总览（节点＋服务监控＋隧道，行为与收窄前一致）；被授予
+// 管理员不进总览：MonitorPage 入口即重定向 /node（原 AdminMonitorOverview 总览已删，AP-6），此处 admin 分支同样重定向，仅作探针报 admin 时的兜底；被授予
 // 监控权限的普通用户只看自己隧道的监控（TunnelMonitorView，数据由
 // 后端按可达隧道过滤），不渲染节点/服务区，也不再调用已收管理员的
 // 端点与节点实时流；无权限用户显示授权提示（h5 布局的同名 toast
