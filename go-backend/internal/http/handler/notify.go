@@ -1031,12 +1031,21 @@ func (h *Handler) notifyNodeOffline(nodeID int64) {
 // 发送失败时回滚标记并重排一次延迟重试（A7-03/BC-16：旧实现先标记后
 // 异步发送，通道短暂故障会把整段掉线告警永久吞掉）。title 区分首次
 // 掉线与面板重启后仍离线两种文案。节点标签取自 DB 行名（调用方语境）。
+// R-140 返工：从 map 删定时器时必须一并 Stop。直接派发（startup 检查
+// checkStartupOfflineNodes，不经过定时器回调）时 map 里可能仍有待发
+// 定时器；只删不 Stop 会把它逐成孤儿——随后删节点（forgetNode 查 map
+// 无定时器可停、却清掉了 offlineAlerted），孤儿定时器到点按复用节点
+// 名发幽灵告警。定时器回调自身触发本函数时 Stop 是空操作（已触发
+// 的定时器 Stop 返回 false），故此处 Stop 在所有调用路径都安全。
 func (h *Handler) dispatchNodeOfflineAlert(nodeID int64, title string) {
 	n := h.notifier
 	if n == nil {
 		return
 	}
 	n.mu.Lock()
+	if t := n.offlineTimers[nodeID]; t != nil {
+		t.Stop()
+	}
 	delete(n.offlineTimers, nodeID)
 	if n.offlineAlerted[nodeID] || (h.wsServer != nil && h.wsServer.IsNodeOnline(nodeID)) {
 		n.mu.Unlock()
