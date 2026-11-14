@@ -548,7 +548,10 @@ const agentConnectedMarkerName = "agent-connected.state"
 
 // agentConnectedMarkerPath 返回标记路径：运行中二进制所在目录
 // 下的 agent-connected.state。二进制路径取 os.Executable，与升
-// 级脚本换版的 binaryPath 是同一文件（脚本换的正是它）。
+// 级/回退脚本换版的 binaryPath 是同一文件——
+// resolveAgentBinaryPath 只返回本进程的可执行路径，永不兜底到
+// 另一份安装的路径（F-R2B-V2-05），故脚本轮询的标记正是本进程
+// 在每次连接成功后刷新的那一个；脚本换的正是它。
 func agentConnectedMarkerPath() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -2306,31 +2309,50 @@ func agentServiceNameFor(binaryPath string) string {
 	return agentInstallName
 }
 
-// resolveAgentBinaryPath locates the script-form install layout
-// this process belongs to, for the panel-driven upgrade/rollback
-// paths (they replace the binary in place and never move layouts):
+// resolveAgentBinaryPath returns the binary this process is running,
+// for the panel-driven upgrade/rollback paths (they replace the
+// binary in place and never move layouts). It anchors strictly to
+// the agent's OWN install: the running executable, when its name is
+// a recognized install name (current flmx_agent or legacy
+// flux_agent), wherever it lives — a scratch/manual copy upgrades
+// itself in place, never another install.
 //
-//  1. The running executable itself, when it sits in a recognized
-//     layout (<name>/<name> with a current or legacy install
-//     name) — exact for both generations, migrated or not.
-//  2. The first recognized layout present on disk, current name
-//     first — covers launches through a copied/symlinked binary.
-//  3. The current generation's path as the default: new installs
-//     are flmx-only, and a missing binary there degrades to the
-//     same "nothing to back up" behavior the fixed path had.
-func resolveAgentBinaryPath() string {
-	if exe, err := uninstallBinaryPath(); err == nil {
-		if name := filepath.Base(exe); isAgentInstallName(name) && filepath.Base(filepath.Dir(exe)) == name {
-			return exe
-		}
+// It NEVER falls back to another install's path. The previous
+// rule-2 scan (first recognized /etc layout on disk) let a
+// scratch/manual agent's panel upgrade replace the LIVE install's
+// binary, overwrite its .old/.old.meta and restart the live service
+// while the scratch agent never upgraded (F-R2B-V2-05). A binary
+// whose name is not recognized cannot be anchored to any install;
+// callers must refuse the operation with a clear error instead of
+// guessing a layout.
+func resolveAgentBinaryPath() (string, error) {
+	exe, err := uninstallBinaryPath()
+	if err != nil {
+		return "", fmt.Errorf("无法定位 agent 二进制: %v", err)
 	}
+	if !isAgentInstallName(filepath.Base(exe)) {
+		return "", fmt.Errorf("无法识别的 agent 安装：%s（面板升级/回退只支持 flmx_agent/flux_agent 安装）", exe)
+	}
+	return exe, nil
+}
+
+// agentInstallServiceManaged reports whether the running agent is
+// managed by an init service belonging to its own install.
+// install.sh only ever creates the /etc/<name>/<name> layouts
+// (INSTALL_DIR / LEGACY_INSTALL_DIR) with a unit of the same name,
+// so an executable at exactly that path is service-managed and the
+// layout service name belongs to it; any other path (scratch copy,
+// manual run) has no service of its own — restarting through the
+// layout service name would restart ANOTHER install's service
+// (F-R2B-V2-05). Such installs use the self-restart script variant,
+// which kills and relaunches only this process.
+func agentInstallServiceManaged(binaryPath string) bool {
 	for _, name := range []string{agentInstallName, legacyAgentInstallName} {
-		p := filepath.Join("/etc", name, name)
-		if _, err := os.Stat(p); err == nil {
-			return p
+		if binaryPath == filepath.Join("/etc", name, name) {
+			return true
 		}
 	}
-	return filepath.Join("/etc", agentInstallName, agentInstallName)
+	return false
 }
 
 // serviceManagerCommandsFor returns the stop/start/is-active shell
@@ -2868,6 +2890,156 @@ func buildAgentRollbackScriptForCap(manager serviceManager, backupPath, binaryPa
 	// 实际成功的回退；世代不可判同降级。
 	return fmt.Sprintf("%sexec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s%s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then echo 'rollback restart ok'; else echo 'rollback failed: restored agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
 		agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetupFor(markerPath, capability, targetVersion), verdictFns, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
+}
+
+// --- F-R2B-V2-05: self-managed installs (no init service of their own) ---
+//
+// A scratch/manual agent has no service: its binary lives outside the
+// /etc/<name>/<name> layouts install.sh creates, so no unit belongs
+// to it. Its upgrade/rollback must restart the process itself —
+// never the layout service name, which belongs to another install
+// (the live one). The self variant of the restart/rollback scripts
+// therefore stops and starts only this process (by PID) and judges
+// liveness by that PID, while the marker/reconnect verdict is the
+// same as the service variant (the marker lives next to the running
+// binary in both cases, and binaryPath IS the running executable).
+
+// agentSelfRestartContext is everything a self-restart script needs
+// to relaunch this process exactly as it was launched.
+type agentSelfRestartContext struct {
+	pid     int      // this process's PID (the one the script kills)
+	args    []string // os.Args[1:] (flags, re-applied verbatim)
+	workDir string   // process working directory (config.json lives here)
+}
+
+// captureAgentSelfRestartContext snapshots how this process was
+// launched. A multi-worker launch (" -- " in the args, see
+// go-gost/main.go) forks worker processes the script cannot restart
+// by PID, so it refuses rather than leaving orphan workers behind.
+func captureAgentSelfRestartContext() (*agentSelfRestartContext, error) {
+	if strings.Contains(strings.Join(os.Args[1:], "  "), " -- ") {
+		return nil, fmt.Errorf("多 worker 形态（参数含 \" -- \"）的 agent 无法由面板升级自重启，请用安装脚本升级")
+	}
+	workDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("无法确定 agent 工作目录: %v", err)
+	}
+	return &agentSelfRestartContext{pid: os.Getpid(), args: os.Args[1:], workDir: workDir}, nil
+}
+
+// agentSelfStartFunction renders flmx_start_agent, which relaunches
+// the agent binary exactly as this process was launched: same working
+// directory (config.json is loaded from there), same arguments,
+// detached (nohup + background so the script's exit does not take it
+// down), output appended to the upgrade log. The new process's PID
+// lands in $flmx_agent_pid for the liveness check.
+func agentSelfStartFunction(binaryPath, workDir string, args []string, logPath string) string {
+	q := tuneShellQuote
+	quoted := []string{q(binaryPath)}
+	for _, a := range args {
+		quoted = append(quoted, q(a))
+	}
+	return fmt.Sprintf("flmx_start_agent() { cd %s || return 1; nohup %s >>%s 2>&1 & flmx_agent_pid=$!; }",
+		q(workDir), strings.Join(quoted, " "), q(logPath))
+}
+
+// agentSelfHealthCheckFunction renders flmx_agent_health_ok for a
+// self-managed install: liveness is the relaunched process's own PID
+// ($flmx_agent_pid, set by flmx_start_agent), sampled twice 2s apart
+// — the same two-sample shape as the service variant's R4-N2 check,
+// minus the service queries (there is no service to ask).
+func agentSelfHealthCheckFunction() string {
+	return "flmx_agent_health_ok() { p1=$flmx_agent_pid; [ -n \"$p1\" ] && kill -0 \"$p1\" 2>/dev/null; sleep 2; p2=$flmx_agent_pid; [ -n \"$p2\" ] && kill -0 \"$p2\" 2>/dev/null && [ \"$p1\" = \"$p2\" ]; }"
+}
+
+// agentSelfStopSegment renders the shell that stops the previous
+// agent process (this process, by PID) and aborts the script with a
+// named failure if it will not die. The old binary must be dead
+// before the swap: swapping under a live old process would leave two
+// generations of the same node running side by side. On failure the
+// old process keeps running untouched — the upgrade simply aborts.
+func agentSelfStopSegment(pid int) string {
+	return fmt.Sprintf("kill %d 2>/dev/null; for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 %d 2>/dev/null || break; sleep 1; done; if kill -0 %d 2>/dev/null; then kill -9 %d 2>/dev/null; sleep 1; fi; if kill -0 %d 2>/dev/null; then echo 'agent upgrade stop failed: previous agent process %d did not exit, aborting upgrade'; exit 1; fi",
+		pid, pid, pid, pid, pid, pid)
+}
+
+// launchAgentSelfRestartScript launches a self-managed restart script
+// detached from this process (setsid): the script kills this process,
+// so it must not share this process's process group, and it must not
+// run in a systemd transient unit — a transient unit would kill the
+// freshly relaunched agent with the unit's cgroup when the script
+// exits. setsid (the OpenRC launcher shape) detaches the session
+// without any unit, so the relaunched agent survives the script.
+func launchAgentSelfRestartScript(script string) error {
+	return exec.Command("setsid", "/bin/sh", "-c", script).Start()
+}
+
+// buildAgentRestartScriptSelf builds the upgrade restart script for a
+// self-managed install (see agentInstallServiceManaged): no service
+// is stopped or started anywhere in it — only this process (by PID)
+// is killed and relaunched. The verdict surface (two-sample PID
+// liveness + marker reconnect + auto-rollback leg) mirrors the
+// service variant; only the process control differs. The legacy gost
+// cleanup segment is deliberately NOT rendered here: it stops a
+// service and deletes another install's files, which a self-managed
+// agent must never do.
+func buildAgentRestartScriptSelf(tmpPath, binaryPath, backupPath string, self *agentSelfRestartContext) (string, error) {
+	capability, targetVersion := probeAgentTargetMarkerCapability(tmpPath)
+	return buildAgentRestartScriptSelfCap(tmpPath, binaryPath, backupPath, self, capability, targetVersion)
+}
+
+func buildAgentRestartScriptSelfCap(tmpPath, binaryPath, backupPath string, self *agentSelfRestartContext, capability agentTargetMarkerCapability, targetVersion string) (string, error) {
+	dir := filepath.Dir(binaryPath)
+	logPath := filepath.Join(dir, "agent-upgrade.log")
+	markerPath := filepath.Join(dir, agentConnectedMarkerName)
+	verdictFns := agentSelfHealthCheckFunction() + "\n" +
+		agentReconnectCheckFunctionFor(markerPath, agentReconnectWindowSec, agentReconnectPollSec) + "\n" +
+		agentReconnectGateFunction()
+	// 自动回滚腿的回连门（目标＝备份＝当前世代，恒写标记）。
+	verdictFns += "\n" + agentRollbackReconnectGateFunction()
+	startFn := agentSelfStartFunction(binaryPath, self.workDir, self.args, logPath)
+
+	var b strings.Builder
+	// A4-V-07：停服前捕获标记可用性（gate setup），停服后（旧进
+	// 程已死、不可能再刷新标记）捕获回连判据的 since 时刻——此
+	// 后标记时间戳变新只能出自新进程。
+	fmt.Fprintf(&b, "%sexec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s%s; %s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); ",
+		agentUpgradeLogCapSegment(logPath), logPath, agentUpgradeGateSetupFor(markerPath, capability, targetVersion), verdictFns, startFn, agentSelfStopSegment(self.pid))
+	rollbackTmpTemplate := filepath.Join(dir, "."+filepath.Base(binaryPath)+".upgrade-rollback-XXXXXX")
+	// 主判活与回滚腿与服务版同口径：健康检查通过只说明进程活着，
+	// 新进程必须在 60s 内把回连标记刷新才许记 'agent upgrade
+	// restart ok'；活着但没回连与健康检查失败同路走自动回滚。
+	// 回滚腿先杀掉失败的新进程（杀不掉则留它运行、不换版）；换版
+	// 本身走与服务版相同的 staged copy＋cmp＋mv（F-RM-01/L2-02
+	// 同律：未证明完整的 staged 换版不得记成功）。
+	fmt.Fprintf(&b, "if mv %s %s; then flmx_start_agent; sleep 3; flmx_new_ok=0; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then flmx_new_ok=1; else echo 'agent upgrade failed: new agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'new agent failed health check'; fi; if [ \"$flmx_new_ok\" = \"1\" ]; then echo 'agent upgrade restart ok'; else echo 'rolling back to previous version'; if [ -f %s ]; then kill $flmx_agent_pid 2>/dev/null; for i in 1 2 3 4 5; do kill -0 $flmx_agent_pid 2>/dev/null || break; sleep 1; done; if kill -0 $flmx_agent_pid 2>/dev/null; then echo 'agent upgrade rollback aborted: new version still running (could not stop it)'; else flmx_reconnect_since=$(date +%%s); sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then flmx_start_agent; sleep 2; if flmx_agent_health_ok && flmx_agent_rb_reconnect_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; flmx_start_agent; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; flmx_start_agent; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
+		tmpPath, binaryPath, backupPath, rollbackTmpTemplate, backupPath, backupPath, binaryPath, tmpPath)
+	return b.String(), nil
+}
+
+// buildAgentRollbackScriptSelf builds the manual rollback script for
+// a self-managed install: same process-only control as the self
+// upgrade script (kill this process by PID, relaunch it), same
+// staged-copy swap and health+reconnect verdict as the service
+// variant.
+func buildAgentRollbackScriptSelf(backupPath, binaryPath string, self *agentSelfRestartContext) (string, error) {
+	capability, targetVersion := probeAgentTargetMarkerCapability(backupPath)
+	return buildAgentRollbackScriptSelfCap(backupPath, binaryPath, self, capability, targetVersion)
+}
+
+func buildAgentRollbackScriptSelfCap(backupPath, binaryPath string, self *agentSelfRestartContext, capability agentTargetMarkerCapability, targetVersion string) (string, error) {
+	dir := filepath.Dir(binaryPath)
+	logPath := filepath.Join(dir, "agent-upgrade.log")
+	markerPath := filepath.Join(dir, agentConnectedMarkerName)
+	verdictFns := agentSelfHealthCheckFunction() + "\n" +
+		agentReconnectCheckFunctionFor(markerPath, agentReconnectWindowSec, agentReconnectPollSec) + "\n" +
+		agentReconnectGateFunction()
+	startFn := agentSelfStartFunction(binaryPath, self.workDir, self.args, logPath)
+	tmpTemplate := filepath.Join(dir, "."+filepath.Base(binaryPath)+".rollback-XXXXXX")
+	// 判活与升级路径同口径（R4-N2 两次采样），避免 'rollback restart ok'
+	// 在 flap 窗口内误报；换版走 staged copy＋cmp＋mv（FRM3/FRM4 同律）。
+	return fmt.Sprintf("%sexec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s%s; %s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then flmx_start_agent; sleep 2; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then echo 'rollback restart ok'; else echo 'rollback failed: restored agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; flmx_start_agent; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
+		agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetupFor(markerPath, capability, targetVersion), verdictFns, startFn, agentSelfStopSegment(self.pid), tmpTemplate, backupPath, backupPath, binaryPath), nil
 }
 
 // agentVersionsEqual compares two agent version strings, tolerating
@@ -3760,12 +3932,30 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	w.sendUpgradeProgress("downloading", 0, "开始下载升级包...")
 	fmt.Printf("📦 开始下载升级包: %s\n", sanitizeWebSocketURL(downloadURL))
 
-	// 下载新版本二进制。落点是本进程所属的脚本安装布局（现行
-	// /etc/flmx_agent/flmx_agent 或存量 /etc/flux_agent/flux_agent）：
-	// 面板升级只换二进制、不动布局，存量节点在 install.sh 迁移
-	// 前必须仍能被面板升级/回退，故按实际布局双认（见
-	// resolveAgentBinaryPath）。
-	binaryPath := resolveAgentBinaryPath()
+	// 下载新版本二进制。落点是本进程所属的安装（现行
+	// /etc/flmx_agent/flmx_agent、存量 /etc/flux_agent/flux_agent，
+	// 或 scratch/手工运行的自有路径）：面板升级只换二进制、不动
+	// 布局，存量节点在 install.sh 迁移前必须仍能被面板升级/回退，
+	// 故按实际布局双认；F-R2B-V2-05：落点永远是本进程自己的二进
+	// 制，永不兜底到另一份安装的路径（见 resolveAgentBinaryPath）。
+	binaryPath, err := resolveAgentBinaryPath()
+	if err != nil {
+		return err
+	}
+	// F-R2B-V2-05: restart mode is decided up front (fail fast):
+	// a service-managed install restarts through its own unit, a
+	// self-managed install restarts only this process (see
+	// agentInstallServiceManaged). The self prerequisites are
+	// captured before the download so a doomed upgrade fails
+	// before any bytes are fetched.
+	serviceManaged := agentInstallServiceManaged(binaryPath)
+	var selfCtx *agentSelfRestartContext
+	if !serviceManaged {
+		selfCtx, err = captureAgentSelfRestartContext()
+		if err != nil {
+			return err
+		}
+	}
 	// L2-05: 暂存路径必须每次升级唯一。此前固定为 binaryPath +
 	// ".new"，进程被杀/断电绕过清理后，下一次升级（不同版本资产）
 	// 会被 FileTransfer.init 无条件收养旧断点：旧前缀＋新后缀跨
@@ -3958,19 +4148,34 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// 环境中运行（systemd-run transient unit / setsid 新会话），避免
 	// 停服务时把脚本自己一并杀掉；脚本内含启动失败自动回滚（本地闭环，
 	// 不依赖面板连接）。
-	manager, err := detectServiceManager()
-	if err != nil {
-		staging.Discard()
-		return err
-	}
-	script, err := buildAgentRestartScriptFor(manager, tmpPath, binaryPath, backupPath)
-	if err != nil {
-		staging.Discard()
-		return err
-	}
-	if err := launchAgentControlScript(manager, script); err != nil {
-		staging.Discard()
-		return fmt.Errorf("启动重启脚本失败: %v", err)
+	// F-R2B-V2-05: 服务管理安装走自有单元的服务版脚本；自有服务不
+	// 存在的安装（scratch/手工运行）走自重启版脚本，只杀、只起本
+	// 进程，永不碰布局服务名对应的另一份安装的服务。
+	if serviceManaged {
+		manager, err := detectServiceManager()
+		if err != nil {
+			staging.Discard()
+			return err
+		}
+		script, err := buildAgentRestartScriptFor(manager, tmpPath, binaryPath, backupPath)
+		if err != nil {
+			staging.Discard()
+			return err
+		}
+		if err := launchAgentControlScript(manager, script); err != nil {
+			staging.Discard()
+			return fmt.Errorf("启动重启脚本失败: %v", err)
+		}
+	} else {
+		script, err := buildAgentRestartScriptSelf(tmpPath, binaryPath, backupPath, selfCtx)
+		if err != nil {
+			staging.Discard()
+			return err
+		}
+		if err := launchAgentSelfRestartScript(script); err != nil {
+			staging.Discard()
+			return fmt.Errorf("启动重启脚本失败: %v", err)
+		}
 	}
 	// F-RM-01: 脚本已启动，暂存文件的所有权移交脚本——它 sleep＋
 	// 停服务之后才 mv，handler 返回后必须仍在。Close 自此为空操作，
@@ -3989,7 +4194,10 @@ func (w *WebSocketReporter) handleRollbackAgent(data interface{}) (map[string]in
 	if upgradeInContainer() {
 		return nil, fmt.Errorf("容器形态节点无法通过面板回退：请在面板的节点安装弹窗重新获取目标版本的 Docker/Compose 安装命令并在节点上重跑")
 	}
-	binaryPath := resolveAgentBinaryPath()
+	binaryPath, err := resolveAgentBinaryPath()
+	if err != nil {
+		return nil, err
+	}
 	backupPath := binaryPath + ".old"
 
 	// R6-05: the pre-flight decides whether the backup may be used
@@ -4003,17 +4211,33 @@ func (w *WebSocketReporter) handleRollbackAgent(data interface{}) (map[string]in
 
 	fmt.Println("🔄 开始回退到旧版本...")
 
-	// 执行回退脚本（与升级同一套 init 分发，A11-132-01）
-	manager, err := detectServiceManager()
-	if err != nil {
-		return nil, err
-	}
-	script, err := buildAgentRollbackScriptFor(manager, backupPath, binaryPath)
-	if err != nil {
-		return nil, err
-	}
-	if err := launchAgentControlScript(manager, script); err != nil {
-		return nil, fmt.Errorf("启动回退脚本失败: %v", err)
+	// 执行回退脚本（与升级同一套 init 分发，A11-132-01）。
+	// F-R2B-V2-05: 与升级同口径分流——服务管理安装走自有单元的
+	// 服务版脚本，自有服务不存在的安装走自重启版脚本。
+	if agentInstallServiceManaged(binaryPath) {
+		manager, err := detectServiceManager()
+		if err != nil {
+			return nil, err
+		}
+		script, err := buildAgentRollbackScriptFor(manager, backupPath, binaryPath)
+		if err != nil {
+			return nil, err
+		}
+		if err := launchAgentControlScript(manager, script); err != nil {
+			return nil, fmt.Errorf("启动回退脚本失败: %v", err)
+		}
+	} else {
+		selfCtx, err := captureAgentSelfRestartContext()
+		if err != nil {
+			return nil, err
+		}
+		script, err := buildAgentRollbackScriptSelf(backupPath, binaryPath, selfCtx)
+		if err != nil {
+			return nil, err
+		}
+		if err := launchAgentSelfRestartScript(script); err != nil {
+			return nil, fmt.Errorf("启动回退脚本失败: %v", err)
+		}
 	}
 
 	fmt.Println("🔄 回退脚本已启动, Agent 将在 1 秒后重启...")

@@ -190,7 +190,18 @@ func applyRestartSchedule(ctx context.Context, s restartScheduleSetting) error {
 	if InContainer() || !commandExists("systemctl") {
 		return fmt.Errorf("节点无 systemd，定时重启无法持久化（容器形态不支持）")
 	}
-	agentService := agentServiceNameFor(resolveAgentBinaryPath())
+	binaryPath, err := resolveAgentBinaryPath()
+	if err != nil {
+		return err
+	}
+	// F-R2B-V2-05: the timer restarts the layout service by name —
+	// only a service-managed install may arm it. A self-managed
+	// agent has no service of its own; arming the timer would
+	// restart another install's service on schedule.
+	if !agentInstallServiceManaged(binaryPath) {
+		return fmt.Errorf("定时重启需要 agent 运行在服务管理下（/etc/flmx_agent 或 /etc/flux_agent 安装），当前为手动运行的安装，无法定时重启")
+	}
+	agentService := agentServiceNameFor(binaryPath)
 	changed := false
 	for path, body := range map[string]string{
 		servicePath: renderRestartServiceUnit(agentService),
