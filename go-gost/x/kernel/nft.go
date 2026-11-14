@@ -26,6 +26,32 @@ const nftTable = "flmx_kernel"
 // 避免旧表残留在节点内核中（仅计数残留，无转发影响，但保持干净）。
 const legacyNFTTable = "flvx_kernel"
 
+// nftTableForBaseDir derives this agent's nft table name from its
+// kernel root (F2-NFT-01): two agents on one host must never share a
+// table, because every sync deletes the table and rebuilds it from
+// the syncing agent's own ports — a second agent's sync used to wipe
+// the first agent's counters and whitelists, and its nft.json
+// fingerprint overwrote the first agent's. The canonical installs
+// keep the plain shared name so a single agent's behavior — and its
+// already-running table — does not change: the current script-form
+// root, the legacy pre-rename root, and the container form (whose
+// network namespace is private to the container anyway). Every other
+// root — a scratch install, a relocated install, a custom
+// FLMX_KERNEL_DIR — gets flmx_kernel_<first 8 hex of sha256(root)>:
+// stable across restarts (same root, same table), distinct per
+// install, and a valid nft identifier (20 chars, well under the name
+// limit).
+func nftTableForBaseDir(baseDir string) string {
+	if detectKernelContainer() {
+		return nftTable
+	}
+	switch baseDir {
+	case defaultBaseDir, legacyBaseDir:
+		return nftTable
+	}
+	return nftTable + "_" + hashString(baseDir)[:8]
+}
+
 // nftRunner executes `nft` with a script on stdin (or arguments). It is a
 // variable so tests can capture scripts without root.
 var nftRunner = func(ctx context.Context, stdin string, args ...string) ([]byte, error) {
@@ -291,23 +317,31 @@ func nftBindMatch(bind, dir string) string {
 	return fmt.Sprintf("ip6 %s %s", verb, ip.String())
 }
 
-// nftScript builds the atomic ruleset. Chains have policy accept and only
-// count, except that a port with a whitelist drops packets from sources not
-// on it (only that port; nothing else on the host is affected).
+// nftScript builds the atomic ruleset for the given table. Chains
+// have policy accept and only count, except that a port with a
+// whitelist drops packets from sources not on it (only that port;
+// nothing else on the host is affected).
 //
 // Hop ranges are redirected before filtering, so counters and whitelists see
 // the inbound port. Only traffic addressed to this host is redirected; the
 // output hook covers clients running on the node itself.
-func nftScript(rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64) string {
+func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "table inet %s {}\n", nftTable)
-	fmt.Fprintf(&b, "delete table inet %s\n", nftTable)
-	fmt.Fprintf(&b, "table inet %s {}\n", legacyNFTTable)
-	fmt.Fprintf(&b, "delete table inet %s\n", legacyNFTTable)
+	fmt.Fprintf(&b, "table inet %s {}\n", table)
+	fmt.Fprintf(&b, "delete table inet %s\n", table)
+	if table == nftTable {
+		// Only the canonical owner cleans the pre-rename table:
+		// for any other agent it may be a different agent's live
+		// table (F2-NFT-01). The canonical agent's own syncs keep
+		// deleting it, so the legacy table still disappears once
+		// no pre-rename agent is left.
+		fmt.Fprintf(&b, "table inet %s {}\n", legacyNFTTable)
+		fmt.Fprintf(&b, "delete table inet %s\n", legacyNFTTable)
+	}
 	if len(rules) == 0 && len(users) == 0 {
 		return b.String()
 	}
-	fmt.Fprintf(&b, "table inet %s {\n", nftTable)
+	fmt.Fprintf(&b, "table inet %s {\n", table)
 	for _, r := range rules {
 		fmt.Fprintf(&b, "\tcounter %s {}\n", r.name("in"))
 		fmt.Fprintf(&b, "\tcounter %s {}\n", r.name("out"))
@@ -384,13 +418,17 @@ type nftState struct {
 	Content string `json:"content,omitempty"`
 }
 
-// nftCounters owns the flmx_kernel table (flvx_kernel is only ever
-// recognised and deleted, never counted). The epoch changes whenever
-// the table is rebuilt so the panel knows the counters restarted
+// nftCounters owns this agent's nft table (see nftTableForBaseDir:
+// the plain flmx_kernel name for the canonical installs, an
+// install-scoped name otherwise). The epoch changes whenever the
+// table is rebuilt so the panel knows the counters restarted
 // from zero.
 type nftCounters struct {
 	mu        sync.Mutex
 	statePath string
+	// table is this agent's own nft table. Empty (zero value) reads
+	// as the plain name so a bare &nftCounters{} stays usable.
+	table string
 	state     nftState
 	lastErr   string
 	// autoInstalled 表示本进程曾为白名单自动装上 nftables（供状态
@@ -403,11 +441,20 @@ type nftCounters struct {
 }
 
 func newNftCounters(baseDir string) *nftCounters {
-	n := &nftCounters{statePath: filepath.Join(baseDir, "nft.json")}
+	n := &nftCounters{statePath: filepath.Join(baseDir, "nft.json"), table: nftTableForBaseDir(baseDir)}
 	if b, err := os.ReadFile(n.statePath); err == nil {
 		_ = json.Unmarshal(b, &n.state)
 	}
 	return n
+}
+
+// tableName returns this counter's table, defaulting to the plain
+// name for a zero-value counter.
+func (n *nftCounters) tableName() string {
+	if n.table == "" {
+		return nftTable
+	}
+	return n.table
 }
 
 // counterValuesPattern matches the one volatile part of a rendered
@@ -422,20 +469,28 @@ var counterValuesPattern = regexp.MustCompile(`packets [0-9]+ bytes [0-9]+`)
 // table's rules, sets or structure change — no matter who changed
 // them — and stays stable while only traffic flows.
 func (n *nftCounters) tableFingerprint(ctx context.Context) (string, error) {
-	out, err := nftRunner(ctx, "", "list", "table", "inet", nftTable)
+	out, err := nftRunner(ctx, "", "list", "table", "inet", n.tableName())
 	if err != nil {
 		return "", err
 	}
 	return hashString(counterValuesPattern.ReplaceAllString(string(out), "packets # bytes #")), nil
 }
 
-// removeTables 删除 agent 建的全部 nftables 表（计数/白名单主表、
-// 改名前的旧表、端口跳跃探针表），供 agent 卸载时调用：表驻留在
+// removeTables 删除 agent 建的全部 nftables 表（本 agent 自己的
+// 计数/白名单主表、改名前的旧表、端口跳跃探针表），供 agent 卸载时调用：表驻留在
 // 内核里，不随进程退出消失，必须在进程还活着时显式删掉。脚本沿用
 // nftScript 的「先建空表再删」惯例，表不存在时也不报错。
+// F2-NFT-01: 只删自己的表——旧表仅 canonical owner 删（它可能
+// 是另一 agent 的 live 表）；探针表只在 -c 预检里出现、从不落
+// 地，删它对谁都是 no-op。
 func (n *nftCounters) removeTables() error {
 	var b strings.Builder
-	for _, table := range []string{nftTable, legacyNFTTable, nftHopProbeTable} {
+	tables := []string{n.tableName()}
+	if n.tableName() == nftTable {
+		tables = append(tables, legacyNFTTable)
+	}
+	tables = append(tables, nftHopProbeTable)
+	for _, table := range tables {
 		fmt.Fprintf(&b, "table inet %s {}\n", table)
 		fmt.Fprintf(&b, "delete table inet %s\n", table)
 	}
@@ -533,7 +588,7 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 		}
 	}
 
-	script := nftScript(rules, expandGuards(ports), hops, users)
+	script := nftScript(n.tableName(), rules, expandGuards(ports), hops, users)
 	sig := hashString(script)
 	hasContent := len(rules) > 0 || len(users) > 0
 	if sig == n.state.Signature {
@@ -602,15 +657,15 @@ func (n *nftCounters) read() ([]Counter, []UserCounter, string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := nftRunner(ctx, "", "-j", "list", "counters", "table", "inet", nftTable)
+	out, err := nftRunner(ctx, "", "-j", "list", "counters", "table", "inet", n.tableName())
 	if err != nil {
 		return nil, nil, "", err
 	}
-	counters, users, err := parseCounters(out)
+	counters, users, err := parseCounters(out, n.tableName())
 	return counters, users, n.state.Epoch, err
 }
 
-func parseCounters(raw []byte) ([]Counter, []UserCounter, error) {
+func parseCounters(raw []byte, table string) ([]Counter, []UserCounter, error) {
 	var parsed nftListOutput
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, nil, fmt.Errorf("解析 nft 计数失败: %v", err)
@@ -619,7 +674,7 @@ func parseCounters(raw []byte) ([]Counter, []UserCounter, error) {
 	users := make([]UserCounter, 0)
 	for _, item := range parsed.Nftables {
 		c := item.Counter
-		if c == nil || c.Table != nftTable {
+		if c == nil || c.Table != table {
 			continue
 		}
 		parts := strings.Split(c.Name, "_")

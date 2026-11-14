@@ -15,16 +15,17 @@ import (
 // inside the ephemeral container layer and lost every kernel binary
 // and state.json on each container rebuild.
 
-func stubKernelResolution(t *testing.T, inContainer bool, wd string, wdErr error) {
+func stubKernelResolution(t *testing.T, inContainer bool, wd string, wdErr error, exe string, exeErr error) {
 	t.Helper()
-	oldDetect, oldWD := detectKernelContainer, kernelWorkDir
+	oldDetect, oldWD, oldExe := detectKernelContainer, kernelWorkDir, kernelExePath
 	detectKernelContainer = func() bool { return inContainer }
 	kernelWorkDir = func() (string, error) { return wd, wdErr }
-	t.Cleanup(func() { detectKernelContainer, kernelWorkDir = oldDetect, oldWD })
+	kernelExePath = func() (string, error) { return exe, exeErr }
+	t.Cleanup(func() { detectKernelContainer, kernelWorkDir, kernelExePath = oldDetect, oldWD, oldExe })
 }
 
 func TestResolveBaseDirEnvOverrideWins(t *testing.T) {
-	stubKernelResolution(t, true, "/data", nil)
+	stubKernelResolution(t, true, "/data", nil, "/etc/flmx_agent/flmx_agent", nil)
 	t.Setenv("FLMX_KERNEL_DIR", "/pinned/kernels")
 	t.Setenv("FLVX_KERNEL_DIR", "/legacy/kernels")
 	if got := ResolveBaseDir(); got != "/pinned/kernels" {
@@ -40,7 +41,7 @@ func TestResolveBaseDirEnvOverrideWins(t *testing.T) {
 
 func TestResolveBaseDirContainerFallsBackToWorkDir(t *testing.T) {
 	t.Setenv("FLMX_KERNEL_DIR", "")
-	stubKernelResolution(t, true, "/etc/flmx_agent", nil)
+	stubKernelResolution(t, true, "/etc/flmx_agent", nil, "", errors.New("no exe"))
 	want := filepath.Join("/etc/flmx_agent", "kernels")
 	if got := ResolveBaseDir(); got != want {
 		t.Fatalf("container form must root kernels on the data directory, got %q want %q", got, want)
@@ -49,23 +50,46 @@ func TestResolveBaseDirContainerFallsBackToWorkDir(t *testing.T) {
 
 func TestResolveBaseDirScriptFormDefaultUnchanged(t *testing.T) {
 	t.Setenv("FLMX_KERNEL_DIR", "")
-	stubKernelResolution(t, false, "/anywhere", nil)
+	// Neither the executable nor the working directory names an
+	// install: the fallback is still the gold default root.
+	stubKernelResolution(t, false, "/anywhere", nil, "", errors.New("no exe"))
 	if got := ResolveBaseDir(); got != defaultBaseDir {
 		t.Fatalf("script form root changed: got %q want %q", got, defaultBaseDir)
+	}
+	stubKernelResolution(t, false, "/anywhere", nil, "relative/flmx_agent", nil)
+	if got := ResolveBaseDir(); got != defaultBaseDir {
+		t.Fatalf("relative executable path must fall back to the default root, got %q", got)
 	}
 	if defaultBaseDir != "/etc/flmx_agent/kernels" {
 		t.Fatalf("script form gold value drifted: %q", defaultBaseDir)
 	}
 }
 
-// 改名双认：脚本形态的工作目录就是安装目录（unit 的
-// WorkingDirectory），现行与存量两种布局名都锚到自身目录下的
-// kernels——存量节点经面板原地升级时内核状态不换根、不丢失，
-// install.sh 迁移整目录后新根随目录一并到达。
-func TestResolveBaseDirScriptFormLayoutWorkDir(t *testing.T) {
+// F2-NFT-01: the script form's install identity is the agent binary's
+// own directory, not the working directory. The unit runs the binary
+// out of its install directory, so both layout generations anchor to
+// their own kernels — and a second agent on the same host (scratch,
+// relocated) roots under ITS OWN directory instead of falling through
+// to the live install's root.
+func TestResolveBaseDirScriptFormExeDir(t *testing.T) {
 	t.Setenv("FLMX_KERNEL_DIR", "")
+	for _, exe := range []string{"/etc/flmx_agent/flmx_agent", "/etc/flux_agent/flux_agent"} {
+		// The working directory deliberately names nothing: the
+		// executable alone must decide.
+		stubKernelResolution(t, false, "/anywhere", nil, exe, nil)
+		want := filepath.Join(filepath.Dir(exe), "kernels")
+		if got := ResolveBaseDir(); got != want {
+			t.Fatalf("script form with exe %q must root at %q, got %q", exe, want, got)
+		}
+	}
+}
+
+func TestResolveBaseDirScriptFormWorkDirFallback(t *testing.T) {
+	t.Setenv("FLMX_KERNEL_DIR", "")
+	// The executable path is unresolvable: the working directory is
+	// a recognized install layout after all — root under it.
 	for _, wd := range []string{"/etc/flmx_agent", "/etc/flux_agent"} {
-		stubKernelResolution(t, false, wd, nil)
+		stubKernelResolution(t, false, wd, nil, "", errors.New("no exe"))
 		want := filepath.Join(wd, "kernels")
 		if got := ResolveBaseDir(); got != want {
 			t.Fatalf("script form in layout %q must root at %q, got %q", wd, want, got)
@@ -73,13 +97,32 @@ func TestResolveBaseDirScriptFormLayoutWorkDir(t *testing.T) {
 	}
 }
 
+// F2-NFT-01: the observed collision layout — a scratch agent whose
+// binary sits directly in its scratch directory, launched from that
+// directory (working directory names no layout). Before the fix it
+// resolved to /etc/flmx_agent/kernels and overwrote the live
+// agent's binaries and state.json.
+func TestResolveBaseDirScratchExeDirIsolated(t *testing.T) {
+	t.Setenv("FLMX_KERNEL_DIR", "")
+	for _, dir := range []string{"/root/scratch-nodeconnlog", "/root/scratch-r2b2-f2"} {
+		stubKernelResolution(t, false, dir, nil, filepath.Join(dir, "flmx_agent"), nil)
+		want := filepath.Join(dir, "kernels")
+		if got := ResolveBaseDir(); got != want {
+			t.Fatalf("scratch agent in %q must root at %q, got %q", dir, want, got)
+		}
+	}
+}
+
 func TestResolveBaseDirContainerBadWorkDirFallsBackToDefault(t *testing.T) {
 	t.Setenv("FLMX_KERNEL_DIR", "")
-	stubKernelResolution(t, true, "", errors.New("no cwd"))
+	// The executable names a real install, but the container branch
+	// must not consult it: a container with an unusable working
+	// directory falls back to the default root.
+	stubKernelResolution(t, true, "", errors.New("no cwd"), "/etc/flmx_agent/flmx_agent", nil)
 	if got := ResolveBaseDir(); got != defaultBaseDir {
 		t.Fatalf("unusable working directory must fall back to the default root, got %q", got)
 	}
-	stubKernelResolution(t, true, "relative/dir", nil)
+	stubKernelResolution(t, true, "relative/dir", nil, "/etc/flmx_agent/flmx_agent", nil)
 	if got := ResolveBaseDir(); got != defaultBaseDir {
 		t.Fatalf("relative working directory must fall back to the default root, got %q", got)
 	}
