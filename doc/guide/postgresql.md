@@ -120,7 +120,7 @@ cd <你的面板部署目录>
 
 ### 手动方式：按步骤迁移
 
-> 📌 **本节（及 §六、§七）命令里的容器名、卷名、网络名一律以部署目录 `.env` 的实际值为准**，不要照抄模板回退名。涉及的键共五个：`PANEL_BACKEND_CONTAINER`、`PANEL_POSTGRES_CONTAINER`、`FLMX_SQLITE_VOLUME`、`FLMX_POSTGRES_VOLUME`、`FLMX_NETWORK`。安装脚本部署的默认值依次是 `flmx-panel-backend`、`flmx-panel-postgres`、`flmx-sqlite-data`、`flmx-postgres-data`、`flmx-network`（多实例部署各名再带 `-<实例 id>` 后缀）。现行模板的回退名已与脚本默认同为 flmx 名；旧模板回退名（`flux-panel-backend`、`flux-panel-postgres`、`sqlite_data`、`postgres_data`、`gost-network`）只在用旧模板且 `.env` 没有写这些键的部署上成立——即改名前按 §三手工自备 `.env` 且未补这些键的情形；脚本安装的部署 `.env` 必然写有这五键，对这类部署照抄任何回退名只会得到 `No such container/volume/network`。自检：在部署目录执行 `grep -E '^(PANEL_BACKEND_CONTAINER|PANEL_POSTGRES_CONTAINER|FLMX_SQLITE_VOLUME|FLMX_POSTGRES_VOLUME|FLMX_NETWORK)=' .env`，五行齐全即以下各步先 `source .env` 再用变量的写法可直接用。
+> 📌 **本节（及 §六、§七）命令里的容器名、卷名、网络名一律以部署目录 `.env` 的实际值为准**，不要照抄模板回退名。涉及的键共六个：`PANEL_BACKEND_CONTAINER`、`PANEL_FRONTEND_CONTAINER`、`PANEL_POSTGRES_CONTAINER`、`FLMX_SQLITE_VOLUME`、`FLMX_POSTGRES_VOLUME`、`FLMX_NETWORK`。安装脚本部署的默认值依次是 `flmx-panel-backend`、`flmx-panel-frontend`、`flmx-panel-postgres`、`flmx-sqlite-data`、`flmx-postgres-data`、`flmx-network`（多实例部署各名再带 `-<实例 id>` 后缀）。现行模板的回退名已与脚本默认同为 flmx 名；旧模板回退名（`flux-panel-backend`、`vite-frontend`、`flux-panel-postgres`、`sqlite_data`、`postgres_data`、`gost-network`）只在用旧模板且 `.env` 没有写这些键的部署上成立——即改名前按 §三手工自备 `.env` 且未补这些键的情形；脚本安装的部署 `.env` 必然写有这六键，对这类部署照抄任何回退名只会得到 `No such container/volume/network`。自检：在部署目录执行 `grep -E '^(PANEL_BACKEND_CONTAINER|PANEL_FRONTEND_CONTAINER|PANEL_POSTGRES_CONTAINER|FLMX_SQLITE_VOLUME|FLMX_POSTGRES_VOLUME|FLMX_NETWORK)=' .env`，六行齐全即以下各步先 `source .env` 再用变量的写法可直接用。
 
 ### 1. 备份 SQLite 数据
 

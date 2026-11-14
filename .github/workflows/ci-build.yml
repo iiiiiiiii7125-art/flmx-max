@@ -192,6 +192,12 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      # G1: CI previously had no standalone `go vet` step — `go build`
+      # does not vet, and the implicit vet inside `go test` is not a
+      # substitute for an explicit gate. Vet the backend module here.
+      - name: Vet
+        run: go vet ./...
+
       - name: Build
         run: go build -v ./...
 
@@ -257,6 +263,16 @@ jobs:
 
       - name: Download dependencies
         run: go mod download
+
+      # G1: standalone `go vet` for the agent module (see backend job).
+      - name: Vet
+        run: go vet ./...
+
+      # G1: go-gost/x is a separate module — the parent ./... does not
+      # cover it. Vet it explicitly.
+      - name: Vet x module
+        working-directory: go-gost/x
+        run: go vet ./...
 
       - name: Build
         run: go build -v .
