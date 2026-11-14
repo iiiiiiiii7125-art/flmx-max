@@ -3,9 +3,8 @@ import type { ForwardApiItem } from "@/api/types";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
-import { getUserPackageInfo, type AnnouncementData } from "@/api";
+import { getUserPackageInfo } from "@/api";
 import { getAdminFlag } from "@/utils/session";
-import { useAnnouncement } from "@/pages/dashboard/use-announcement";
 
 export interface DashboardUserInfo {
   flow: number;
@@ -80,10 +79,6 @@ interface DashboardDataState {
   forwardList: DashboardForward[];
   statisticsFlows: DashboardStatisticsFlow[];
   isAdmin: boolean;
-  announcement: AnnouncementData | null;
-  isAnnouncementModalOpen: boolean;
-  setIsAnnouncementModalOpen: (isOpen: boolean) => void;
-  dismissAnnouncementModal: () => void;
 }
 
 const checkExpirationNotifications = (
@@ -218,9 +213,6 @@ export const useDashboardData = (): DashboardDataState => {
     DashboardStatisticsFlow[]
   >([]);
   const [isAdmin, setIsAdmin] = useState(false);
-  // 公告横幅/弹窗：与管理员总览共用同一份逻辑（use-announcement.ts），
-  // U1-R2B3-01 抽出前这里曾内联同一段代码。
-  const announcementState = useAnnouncement();
   const isMountedRef = useRef(true);
   const packageRequestInFlightRef = useRef(false);
 
@@ -335,6 +327,5 @@ export const useDashboardData = (): DashboardDataState => {
     forwardList,
     statisticsFlows,
     isAdmin,
-    ...announcementState,
   };
 };

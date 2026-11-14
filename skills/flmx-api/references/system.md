@@ -1,4 +1,4 @@
-# System / Announcement / Notify API
+# System / Notify API
 
 ## POST /api/v1/system/version
 
@@ -47,14 +47,6 @@ tickets. Usage: fetch a ticket, then open the socket as
 accepted — the `secret` query parameter remains only for the type=1
 agent/node channel. A disabled account or a stale/revoked token is
 answered with envelope `code` 401; non-POST methods with `code` 405.
-
-## GET /api/v1/announcement/get
-
-Current announcement (login required).
-
-## POST /api/v1/announcement/update
-
-Create / update the announcement (admin only). Content is Markdown.
 
 ## POST /api/v1/notify/test
 

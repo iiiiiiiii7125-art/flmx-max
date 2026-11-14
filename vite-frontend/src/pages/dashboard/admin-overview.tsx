@@ -27,9 +27,6 @@ import {
 } from "@/api";
 import { AnimatedPage } from "@/components/animated-page";
 import { PageLoadingState } from "@/components/page-state";
-import { AnnouncementBanner } from "@/pages/dashboard/components/announcement-banner";
-import { AnnouncementModal } from "@/pages/dashboard/components/announcement-modal";
-import { useAnnouncement } from "@/pages/dashboard/use-announcement";
 import { formatTraffic } from "@/utils/traffic";
 
 const DAY = 86400000;
@@ -246,15 +243,6 @@ export function AdminOverview() {
   const [inbounds, setInbounds] = useState<InboundApiItem[]>([]);
   const [relays, setRelays] = useState<InboundRelayApiItem[]>([]);
   const [subs, setSubs] = useState<SubscriptionItem[]>([]);
-  // 公告横幅/弹窗（U1-R2B3-01）：与普通用户总览共用同一份逻辑
-  // （use-announcement.ts），「关闭」只关本次、「不再提示」才写
-  // 已读键，按 JWT 用户 ID 分键——管理员与普通用户行为一致。
-  const {
-    announcement,
-    isAnnouncementModalOpen,
-    setIsAnnouncementModalOpen,
-    dismissAnnouncementModal,
-  } = useAnnouncement();
   // 任一路加载失败置位：失败前保留旧数据，但页面必须明示数据不完整，
   // 绝不能渲染成「空数据 + 一切正常」的假绿（A10-02）。
   const [loadError, setLoadError] = useState(false);
@@ -499,16 +487,6 @@ export function AdminOverview() {
           {" · 每 30 秒自动刷新"}
         </p>
       </div>
-
-      {announcement && <AnnouncementBanner announcement={announcement} />}
-      {announcement && (
-        <AnnouncementModal
-          announcement={announcement}
-          isOpen={isAnnouncementModalOpen}
-          onClose={() => setIsAnnouncementModalOpen(false)}
-          onDontShowAgain={dismissAnnouncementModal}
-        />
-      )}
 
       {loadError && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-warning-500/25 bg-warning-500/10 px-4 py-3 text-sm font-medium text-warning-700">

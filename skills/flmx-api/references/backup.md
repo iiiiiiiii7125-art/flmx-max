@@ -26,7 +26,6 @@ Backups are organized into 14 segment types (exact names, camelCase):
 - `inbounds` - Node kernels, inbounds, relay links and traffic counter
   baselines (restored as one unit)
 - `userInbounds` - Legacy per-inbound user assignments
-- `announcements` - Announcements
 - `monitorPermissions` - Monitoring permission grants
 - `userSubscriptions` - Subscription assignments
 - `serviceMonitors` - Service monitor definitions
@@ -198,7 +197,7 @@ exported file does not carry one):
 
 ```bash
 # Import all 14 segment types from a backup file
-jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","announcements","monitorPermissions","userSubscriptions","serviceMonitors","passkeys"]}' \
+jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","monitorPermissions","userSubscriptions","serviceMonitors","passkeys"]}' \
   backup-20260226.json > import-body.json
 
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/backup/import" \
@@ -217,7 +216,7 @@ curl -s -X POST "${SOURCE_URL}/api/v1/backup/export" \
   -d '{}' > migration.json
 
 # On target panel (add the types field as in the restore workflow)
-jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","announcements","monitorPermissions","userSubscriptions","serviceMonitors","passkeys"]}' \
+jq '. + {"types": ["users","nodes","tunnels","forwards","userTunnels","speedLimits","configs","inbounds","userInbounds","monitorPermissions","userSubscriptions","serviceMonitors","passkeys"]}' \
   migration.json > migration-import.json
 
 curl -s -X POST "${TARGET_URL}/api/v1/backup/import" \

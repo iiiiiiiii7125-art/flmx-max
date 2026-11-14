@@ -333,11 +333,6 @@ func validateBackupSectionBudgets(backup *model.BackupData, typeSet map[string]b
 			return err
 		}
 	}
-	if typeSet["announcements"] {
-		if err := check("announcements", len(backup.Announcements), maxImportSectionRows); err != nil {
-			return err
-		}
-	}
 	if typeSet["monitorPermissions"] {
 		if err := check("monitorPermissions", len(backup.MonitorPermissions), maxImportSectionRows); err != nil {
 			return err

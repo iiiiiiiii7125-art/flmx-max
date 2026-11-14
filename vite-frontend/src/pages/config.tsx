@@ -13,7 +13,6 @@ import toast from "react-hot-toast";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Input } from "@/shadcn-bridge/heroui/input";
-import { Textarea } from "@/shadcn-bridge/heroui/input";
 import { Spinner } from "@/shadcn-bridge/heroui/spinner";
 import { Divider } from "@/shadcn-bridge/heroui/divider";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
@@ -33,14 +32,11 @@ import {
   downloadImportAutoBackup,
   getImportAutoBackupStatus,
   type ImportAutoBackupStatus,
-  getAnnouncement,
-  updateAnnouncement,
   getStorageSummary,
   getSystemUpgradeVersion,
   getSystemUpgradeStatus,
   checkSystemUpgrade,
   runSystemUpgrade,
-  type AnnouncementData,
 } from "@/api";
 import { BackIcon, SettingsIcon } from "@/components/icons";
 import { NotifyCard } from "@/pages/config/notify-card";
@@ -259,7 +255,6 @@ const BACKUP_TYPE_OPTIONS = [
   { value: "inbounds", label: "内核与入站" },
   // 后端 ExportPartial/Import 早已支持，前端清单曾漏列致「全选」仍丢三表（F-026）。
   { value: "userInbounds", label: "用户入站分配" },
-  { value: "announcements", label: "公告" },
   { value: "monitorPermissions", label: "监控权限" },
   // B4/F-004/F-030：订阅分配与监控定义（后端本轮补齐备份，前端同步列出）。
   { value: "userSubscriptions", label: "订阅分配" },
@@ -391,15 +386,6 @@ export default function ConfigPage() {
     null,
   );
 
-  const [announcement, setAnnouncement] = useState<AnnouncementData>({
-    content: "",
-    enabled: 0,
-  });
-  const [announcementLoading, setAnnouncementLoading] = useState(true);
-  const [announcementSaving, setAnnouncementSaving] = useState(false);
-  // 公告加载失败标志：保存是全量提交，失败被装成空初值时保存即清空
-  // 线上公告（D5-02）——失败态只显示错误与重试，不渲染可保存的表单。
-  const [announcementLoadError, setAnnouncementLoadError] = useState(false);
   const updateChannel: UpdateReleaseChannel = getUpdateReleaseChannel();
   const [systemUpgradeInfo, setSystemUpgradeInfo] =
     useState<SystemUpgradeVersionApiData | null>(null);
@@ -631,7 +617,6 @@ export default function ConfigPage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       loadConfigs(initialConfigs);
-      loadAnnouncement();
       loadStorageSummary();
       void loadSystemUpgradeInfo();
       // 备份页加载即拉一次导入前自动备份快照状态，决定下载按钮是否出现
@@ -653,47 +638,6 @@ export default function ConfigPage() {
   useEffect(() => {
     return () => stopSystemUpgradePolling();
   }, []);
-
-  const loadAnnouncement = async () => {
-    setAnnouncementLoading(true);
-    setAnnouncementLoadError(false);
-    try {
-      const res = await getAnnouncement();
-
-      if (res.code === 0 && res.data) {
-        setAnnouncement(res.data);
-      } else {
-        setAnnouncementLoadError(true);
-      }
-    } catch {
-      setAnnouncementLoadError(true);
-    } finally {
-      setAnnouncementLoading(false);
-    }
-  };
-
-  const saveAnnouncement = async () => {
-    if (announcementLoadError) {
-      // 加载失败时表单是空初值，全量保存会清空线上公告（D5-02）
-      toast.error("公告加载失败，请先重试加载成功后再保存");
-
-      return;
-    }
-    setAnnouncementSaving(true);
-    try {
-      const res = await updateAnnouncement(announcement);
-
-      if (res.code === 0) {
-        toast.success("公告保存成功");
-      } else {
-        toast.error(res.msg || "保存失败");
-      }
-    } catch {
-      toast.error("保存公告失败，请重试");
-    } finally {
-      setAnnouncementSaving(false);
-    }
-  };
 
   const handleCheckSystemUpgrade = async () => {
     const channel = updateChannel;
@@ -2324,82 +2268,6 @@ export default function ConfigPage() {
           </div>
         </Card>
       )}
-
-      <Card className="mt-6 shadow-md">
-        <CardHeader className="pb-6">
-          <div className="flex justify-between items-center w-full">
-            <div>
-              <h2 className="text-xl font-semibold">公告管理</h2>
-              <p className="text-sm text-foreground">设置首页显示的公告内容</p>
-            </div>
-          </div>
-        </CardHeader>
-
-        <Divider />
-
-        <CardBody className="space-y-4 pt-8 md:pt-8">
-          {announcementLoading ? (
-            <div className="flex justify-center py-8">
-              <Spinner size="lg" />
-            </div>
-          ) : announcementLoadError ? (
-            <div className="space-y-3 py-4 text-center">
-              <p className="text-sm text-danger-700">
-                公告加载失败。为防止把空内容覆盖到线上公告，已禁止保存。
-              </p>
-              <Button size="sm" variant="flat" onPress={loadAnnouncement}>
-                重新加载
-              </Button>
-            </div>
-          ) : (
-            <>
-              <div className="space-y-2">
-                <Switch
-                  isSelected={announcement.enabled === 1}
-                  onValueChange={(checked) =>
-                    setAnnouncement({
-                      ...announcement,
-                      enabled: checked ? 1 : 0,
-                    })
-                  }
-                >
-                  <span className="text-sm text-foreground">
-                    {announcement.enabled === 1 ? "已启用" : "已禁用"}
-                  </span>
-                </Switch>
-                <p className="text-xs font-semibold text-foreground">
-                  启用后，公告将在首页顶部显示
-                </p>
-              </div>
-
-              <Textarea
-                label="公告内容"
-                minRows={4}
-                placeholder="支持 Markdown，例如：**加粗**、[链接](https://example.com)、- 列表"
-                value={announcement.content}
-                variant="bordered"
-                onChange={(e) =>
-                  setAnnouncement({ ...announcement, content: e.target.value })
-                }
-              />
-              <p className="text-xs font-semibold text-foreground">
-                公告支持 Markdown 语法，链接会在新标签页打开
-              </p>
-
-              <div className="flex justify-end mt-4 pt-4 border-t border-divider/50">
-                <Button
-                  color="primary"
-                  isLoading={announcementSaving}
-                  startContent={<SaveIcon className="w-4 h-4" />}
-                  onPress={saveAnnouncement}
-                >
-                  保存公告
-                </Button>
-              </div>
-            </>
-          )}
-        </CardBody>
-      </Card>
 
       {/* 备份与恢复 */}
       <Card className="mt-6 shadow-md">

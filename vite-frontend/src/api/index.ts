@@ -616,7 +616,6 @@ export interface BackupTypes {
   inbounds?: boolean;
   // 后端 ExportPartial/Import 早已支持，前端清单曾漏列（F-026）。
   userInbounds?: boolean;
-  announcements?: boolean;
   monitorPermissions?: boolean;
   // B4/F-004/F-030：订阅分配与监控定义。
   userSubscriptions?: boolean;
@@ -812,20 +811,6 @@ export const downloadImportAutoBackup = async () => {
   document.body.removeChild(link);
   window.URL.revokeObjectURL(url);
 };
-
-export interface AnnouncementData {
-  content: string;
-  enabled: number;
-  update_time?: number;
-}
-
-export const getAnnouncement = () =>
-  Network.get<AnnouncementData>("/announcement/get");
-export const updateAnnouncement = ({
-  content,
-  enabled,
-}: Pick<AnnouncementData, "content" | "enabled">) =>
-  Network.post("/announcement/update", { content, enabled });
 
 // 监控读接口统一 silent（A9-02）：无监控权限的 403 是权限模型的正常分支，
 // 各监控页都有本地 accessDenied/错误态呈现；若不静默，Network 全局提示会

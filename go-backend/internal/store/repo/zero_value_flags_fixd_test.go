@@ -28,52 +28,6 @@ func openZeroValueRepo(t *testing.T) *repo.Repository {
 	return r
 }
 
-func TestZeroValueAnnouncementFirstCreateDisabled(t *testing.T) {
-	r := openZeroValueRepo(t)
-	now := time.Now().UnixMilli()
-
-	if err := r.UpsertAnnouncement("hello", 0, now); err != nil {
-		t.Fatalf("upsert announcement: %v", err)
-	}
-	ann, err := r.GetAnnouncement()
-	if err != nil || ann == nil {
-		t.Fatalf("get announcement: %v (%v)", ann, err)
-	}
-	if ann.Enabled != 0 {
-		t.Fatalf("A2-02: first-create announcement with enabled=0 stored enabled=%d, want 0", ann.Enabled)
-	}
-
-	// 已有行更新路径（map 写）本来就能写 0/1，锁定不回退。
-	if err := r.UpsertAnnouncement("hello2", 1, now+1); err != nil {
-		t.Fatalf("upsert announcement 1: %v", err)
-	}
-	ann, _ = r.GetAnnouncement()
-	if ann == nil || ann.Enabled != 1 || ann.Content != "hello2" {
-		t.Fatalf("announcement update to enabled=1: %+v", ann)
-	}
-	if err := r.UpsertAnnouncement("hello3", 0, now+2); err != nil {
-		t.Fatalf("upsert announcement 0: %v", err)
-	}
-	ann, _ = r.GetAnnouncement()
-	if ann == nil || ann.Enabled != 0 {
-		t.Fatalf("announcement update to enabled=0: %+v", ann)
-	}
-}
-
-func TestZeroValueAnnouncementFirstCreateEnabled(t *testing.T) {
-	r := openZeroValueRepo(t)
-	now := time.Now().UnixMilli()
-	if err := r.UpsertAnnouncement("hi", 1, now); err != nil {
-		t.Fatalf("upsert announcement: %v", err)
-	}
-	ann, err := r.GetAnnouncement()
-	if err != nil || ann == nil {
-		t.Fatalf("get announcement: %v (%v)", ann, err)
-	}
-	if ann.Enabled != 1 {
-		t.Fatalf("first-create announcement with enabled=1 stored enabled=%d, want 1", ann.Enabled)
-	}
-}
 
 func TestZeroValueServiceMonitorCreateDisabled(t *testing.T) {
 	r := openZeroValueRepo(t)

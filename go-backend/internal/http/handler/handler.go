@@ -15,6 +15,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -532,8 +533,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/tunnel/user/tunnel", h.userTunnelVisibleList)
 	mux.HandleFunc("/api/v1/tunnel/user/list", h.userTunnelList)
 	mux.HandleFunc("/api/v1/open_api/sub_store", h.openAPISubStore)
-	mux.HandleFunc("/api/v1/announcement/get", h.getAnnouncement)
-	mux.HandleFunc("/api/v1/announcement/update", h.updateAnnouncement)
 
 	mux.HandleFunc("/api/v1/node/traffic/month", h.nodeTrafficMonth)
 	mux.HandleFunc("/api/v1/monitor/access", h.monitorAccessHandler)
@@ -2655,6 +2654,78 @@ func decodeJSONWithLimit(body io.ReadCloser, out interface{}, limit int64) error
 	return decoder.Decode(out)
 }
 
+// decodeBackupImportRequest 解码备份导入请求，对未知的顶层备份段容忍：
+// 旧版备份文件可能携带本版已不认识的段（随功能移除下线的段），这些键
+// 被丢弃并按名返回，由调用方在导入回执中披露；其余一律仍按
+// decodeJSONWithLimit 的严格口径拒绝（信封形态、嵌套未知字段）。
+// 返回的 dropped 按字典序排列；成功且无丢弃时返回 nil。
+func decodeBackupImportRequest(body io.ReadCloser, out *backupImportRequest, limit int64) ([]string, error) {
+	defer body.Close()
+	raw, err := io.ReadAll(http.MaxBytesReader(nil, body, limit))
+	if err != nil {
+		return nil, err
+	}
+	// 快径：严格解码，现行备份行为不变。
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err == nil {
+		return nil, nil
+	} else if unknownJSONFieldName(err) == "" {
+		return nil, err
+	}
+	// 慢径：存在未知字段。只有备份对象的未知顶层键才容忍（已移除
+	// 的段）；嵌套未知字段仍经下方严格重解码拒绝。
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil, err
+	}
+	known := backupImportKnownTopKeys()
+	var dropped []string
+	for k := range top {
+		if !known[k] {
+			dropped = append(dropped, k)
+		}
+	}
+	if len(dropped) == 0 {
+		// 未知字段在嵌套层：复现严格解码的原错误。
+		dec2 := json.NewDecoder(bytes.NewReader(raw))
+		dec2.DisallowUnknownFields()
+		return nil, dec2.Decode(out)
+	}
+	sort.Strings(dropped)
+	filtered := make(map[string]json.RawMessage, len(top)-len(dropped))
+	for k, v := range top {
+		if known[k] {
+			filtered[k] = v
+		}
+	}
+	fraw, err := json.Marshal(filtered)
+	if err != nil {
+		return nil, err
+	}
+	dec3 := json.NewDecoder(bytes.NewReader(fraw))
+	dec3.DisallowUnknownFields()
+	if err := dec3.Decode(out); err != nil {
+		return nil, err
+	}
+	return dropped, nil
+}
+
+// backupImportKnownTopKeys 返回备份导入请求可携带的顶层 JSON 键集：
+// "types" 与 BackupData 全部字段 tag（反射推导，与备份覆盖率普查同源）。
+func backupImportKnownTopKeys() map[string]bool {
+	known := map[string]bool{"types": true}
+	rt := reflect.TypeOf(model.BackupData{})
+	for i := 0; i < rt.NumField(); i++ {
+		tag := rt.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		known[strings.Split(tag, ",")[0]] = true
+	}
+	return known
+}
+
 func parseUserID(sub string) (int64, error) {
 	id, err := strconv.ParseInt(sub, 10, 64)
 	if err != nil || id <= 0 {
@@ -2936,7 +3007,10 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	// AUDIT-R22 (R5R22-001): 备份导入用 100MB 上限。面板备份（含数万用户/分配）
 	// 可达数十 MB，10MB 的通用上限会误拒合法备份。nginx 侧已放行 50m（SCR-002），
 	// 此处 100MB 与面板规模对齐；仍为有界值，防内存耗尽 DoS。
-	if err := decodeJSONWithLimit(r.Body, &req, 100<<20); err != nil {
+	// 解码对未知顶层备份段容忍（旧版备份携带的已移除功能段被丢弃、
+	// 按名披露，不阻断导入）；嵌套未知字段仍严格拒绝。
+	droppedSegments, err := decodeBackupImportRequest(r.Body, &req, 100<<20)
+	if err != nil {
 		// J-008：导入面其余失败统一为 -2；唯请求体解码失败的文案
 		// 「请求参数错误」按全局同文案口径用 ErrDefault（-1），与
 		// decodeJSON 全部调用点同码（R9-14）。
@@ -3045,6 +3119,11 @@ func (h *Handler) backupImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.runBackupImportTailHooks(result, &req.BackupData, req.Types)
+	// 已移除功能的旧备份段：解码时容忍丢弃的未知顶层段在此点名披露
+	// （与 repo 层 trio/peerShares/themes 的 ImportWarnings 同口径）。
+	for _, seg := range droppedSegments {
+		result.ImportWarnings = append(result.ImportWarnings, fmt.Sprintf("备份包含已移除功能的 %q 段，已忽略未恢复", seg))
+	}
 	// O7-010：快照生成失败只警告、不中断导入（见上）；警告随回执披露。
 	if snapshotErr != nil {
 		result.ImportWarnings = append(result.ImportWarnings, "导入前自动备份失败：未生成服务端快照，本次导入仍继续；如需回滚请使用此前的手动备份")
@@ -3155,70 +3234,4 @@ func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *m
 		result.RepushFailedNodeIDs = outcome.failed
 		result.ImportWarnings = append(result.ImportWarnings, outcome.warnings...)
 	}
-}
-
-func (h *Handler) getAnnouncement(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		response.WriteJSON(w, response.ErrDefault("请求失败"))
-		return
-	}
-
-	ann, err := h.repo.GetAnnouncement()
-	if err != nil {
-		respondInternalError(w, "getAnnouncement: GetAnnouncement failed", err)
-		return
-	}
-
-	if ann == nil {
-		response.WriteJSON(w, response.OK(map[string]interface{}{
-			"content":     "",
-			"enabled":     0,
-			"update_time": 0,
-		}))
-		return
-	}
-
-	updateTime := ann.CreatedTime
-	if ann.UpdatedTime.Valid {
-		updateTime = ann.UpdatedTime.Int64
-	}
-
-	response.WriteJSON(w, response.OK(map[string]interface{}{
-		"content":     ann.Content,
-		"enabled":     ann.Enabled,
-		"update_time": updateTime,
-	}))
-}
-
-func (h *Handler) updateAnnouncement(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		response.WriteJSON(w, response.ErrDefault("请求失败"))
-		return
-	}
-
-	var req struct {
-		Content string `json:"content"`
-		Enabled int    `json:"enabled"`
-	}
-	if err := decodeJSON(r.Body, &req); err != nil {
-		response.WriteJSON(w, response.ErrDefault("请求参数错误"))
-		return
-	}
-
-	now := time.Now().UnixMilli()
-	// F3-NEW-03：内容与开关均未变时不写库。Upsert 每次保存都写
-	// updated_time，前端按 update_time 判「新公告」，无改动保存
-	// 也会让横幅/弹窗重弹。读库失败或尚无公告时走原 Upsert 口径，
-	// 不把读失败静默成成功。
-	if cur, err := h.repo.GetAnnouncement(); err == nil && cur != nil &&
-		cur.Content == req.Content && cur.Enabled == req.Enabled {
-		response.WriteJSON(w, response.OKEmpty())
-		return
-	}
-	if err := h.repo.UpsertAnnouncement(req.Content, req.Enabled, now); err != nil {
-		respondInternalError(w, "updateAnnouncement", err)
-		return
-	}
-
-	response.WriteJSON(w, response.OKEmpty())
 }

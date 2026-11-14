@@ -21,7 +21,7 @@ import (
 var allBackupTypes = []string{
 	"users", "nodes", "tunnels", "forwards", "userTunnels", "speedLimits",
 	"configs", "inbounds",
-	"userInbounds", "announcements", "monitorPermissions",
+	"userInbounds", "monitorPermissions",
 	"userSubscriptions", "serviceMonitors", "passkeys",
 }
 
@@ -184,7 +184,6 @@ func TestBackupTableCoverage(t *testing.T) {
 		"vite_config":           "configs",
 		"user_inbound":          "userInbounds",
 		"user_subscription":     "userSubscriptions",
-		"announcement":          "announcements",
 		"monitor_permission":    "monitorPermissions",
 		"service_monitor":       "serviceMonitors",
 		"node_kernel":           "inbounds",

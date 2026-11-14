@@ -608,11 +608,10 @@ EOF_CLAIMS
     note_fail "技能包示例面门：doc-extract configkeys 提取为空（前提失效）"
   else
     # config.md 呈现键：反引号蛇形标识全集 + JSON 示例中行首
-    # "key": 形态；信封/通用字段白名单不计（update_time 是同文件
-    # announcement/get 的响应字段名，非配置键，同列豁免）。
+    # "key": 形态；信封/通用字段白名单不计。
     doc_config_keys=$( { grep -oP '`[a-z][a-z0-9_]+`' skills/flmx-api/references/config.md | tr -d '`';
                          grep -oP '^\s*"\K[a-z][a-z0-9_]+(?="\s*:)' skills/flmx-api/references/config.md; } | sort -u )
-    key_allow="code data enabled id msg name time ts value content update_time"
+    key_allow="code data enabled id msg name time ts value"
     key_bad=0
     for k in $doc_config_keys; do
       case " $key_allow " in *" $k "*) continue ;; esac

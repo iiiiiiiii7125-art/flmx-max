@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -12,15 +11,6 @@ import (
 // （code -2 + "Internal error"），批量回执的逐条失败原因同样净化
 // （"内部错误，请稍后重试"）；业务文案（转发不存在等）逐字不变。
 // 故障注入沿用 DROP TABLE 口径（原文含 "no such table"）。
-
-func TestRR4C1AnnouncementGetRepoErrorIsGeneric(t *testing.T) {
-	h, r := newPanelsecHandler(t)
-	dropTableForTest(t, r, "announcement")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/announcement/get", nil)
-	rec := httptest.NewRecorder()
-	h.getAnnouncement(rec, req)
-	assertGenericInternalError(t, rec)
-}
 
 func TestRR4C1GetConfigsRepoErrorIsGeneric(t *testing.T) {
 	h, r := newPanelsecHandler(t)

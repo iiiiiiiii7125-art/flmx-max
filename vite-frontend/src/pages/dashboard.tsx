@@ -19,8 +19,6 @@ import {
   ModalBody,
 } from "@/shadcn-bridge/heroui/modal";
 import { PageEmptyState, PageLoadingState } from "@/components/page-state";
-import { AnnouncementBanner } from "@/pages/dashboard/components/announcement-banner";
-import { AnnouncementModal } from "@/pages/dashboard/components/announcement-modal";
 import { FlowChartCard } from "@/pages/dashboard/components/flow-chart-card";
 import { MetricCard } from "@/pages/dashboard/components/metric-card";
 import { getAdminFlag, getSessionName } from "@/utils/session";
@@ -65,10 +63,6 @@ function UserDashboard() {
     forwardList,
     statisticsFlows,
     isAdmin,
-    announcement,
-    isAnnouncementModalOpen,
-    setIsAnnouncementModalOpen,
-    dismissAnnouncementModal,
   } = useDashboardData();
 
   const [addressModalOpen, setAddressModalOpen] = useState(false);
@@ -621,20 +615,6 @@ function UserDashboard() {
           </Dropdown>
         </div>
       </div>
-      {announcement && <AnnouncementBanner announcement={announcement} />}
-      {announcement && (
-        // AP-4（取代 R7-F5-03 的「关闭即落已读」）：「关闭」只关本次、
-        // 不落已读，下次进入仍会弹出（与按钮文案字面一致）；只有
-        // 「不再提示」才走 dismissAnnouncementModal 写已读键
-        // （按用户分键 flmx_announcement_seen_time:<userId>，R8-044）。
-        // 公告内容更新（update_time 变大）后仍会重新弹窗。
-        <AnnouncementModal
-          announcement={announcement}
-          isOpen={isAnnouncementModalOpen}
-          onClose={() => setIsAnnouncementModalOpen(false)}
-          onDontShowAgain={dismissAnnouncementModal}
-        />
-      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-px overflow-hidden rounded-lg border border-divider bg-divider mb-6 lg:mb-8">
         <MetricCard
           icon={

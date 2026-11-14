@@ -12,7 +12,7 @@ metadata:
 
 # FLMX API Operations
 
-Operate FLMX panel through REST API. Almost all endpoints use POST and return JSON with the `{code, msg, data, ts}` envelope; the exceptions are a few GET reads (monitoring, `announcement/get`, the pre-import snapshot download/status, the public subscription fetch) and the backup export/download endpoints, which return the raw backup JSON instead of an envelope.
+Operate FLMX panel through REST API. Almost all endpoints use POST and return JSON with the `{code, msg, data, ts}` envelope; the exceptions are a few GET reads (monitoring, the pre-import snapshot download/status, the public subscription fetch) and the backup export/download endpoints, which return the raw backup JSON instead of an envelope.
 
 > **Versioning:** this skill's version follows the FLMX product release line
 > (the skill version always equals the panel version). Releases use plain
@@ -149,7 +149,6 @@ User request → Check env vars → Auto-login if needed → Call API → Return
 | "监控权限" | `/api/v1/monitor/permission/assign` | [monitoring](references/monitoring.md) |
 | "Passkey 登录" / "注册 Passkey" | `/api/v1/user/passkey/login/begin` / `/api/v1/user/passkey/register/begin` | [passkeys](references/passkeys.md) |
 | "检查更新" / "面板升级" | `/api/v1/system/check-updates` / `/api/v1/system/upgrade` | [system](references/system.md) |
-| "修改公告" | `/api/v1/announcement/update` | [system](references/system.md) |
 | "节点调优" | `/api/v1/node/tune` | [nodes](references/nodes.md) |
 | "节点定时重启" / "定时重启 agent" | `/api/v1/node/restart-schedule` | [nodes](references/nodes.md) |
 | "回程路由" | `/api/v1/node/route` | [nodes](references/nodes.md) |
@@ -285,7 +284,7 @@ Non-admin users can only see/modify their own resources.
 | Subscriptions | CRUD, sources, user assignment, public fetch | [subscriptions.md](references/subscriptions.md) |
 | Monitoring | Node/tunnel metrics, service monitors, permissions | [monitoring.md](references/monitoring.md) |
 | Passkeys | WebAuthn login / register / list / delete | [passkeys.md](references/passkeys.md) |
-| System | Version, storage, self-upgrade, announcement, notify | [system.md](references/system.md) |
+| System | Version, storage, self-upgrade, notify | [system.md](references/system.md) |
 | Backup | Export/import | [backup.md](references/backup.md) |
 | Config | System settings | [config.md](references/config.md) |
 | Types | TypeScript interfaces | [types.md](references/types.md) |
@@ -295,7 +294,7 @@ Non-admin users can only see/modify their own resources.
 ## Critical Rules
 
 1. ⚠️ **NO "Bearer" prefix** - `Authorization: <token>`, NOT `Authorization: Bearer <token>`
-2. **POST by default** - List/get operations included; only the documented reads (monitoring, announcement/get, import-auto-backup, subscription fetch) use GET
+2. **POST by default** - List/get operations included; only the documented reads (monitoring, import-auto-backup, subscription fetch) use GET
 3. **code === 0 means success** - Any other value is an error
 4. **Traffic units**: User.flow is GB, inFlow/outFlow are bytes
 5. **Timestamps**: All timestamps are milliseconds since epoch

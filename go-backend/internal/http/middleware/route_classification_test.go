@@ -149,7 +149,6 @@ var routeClassification = []routeEntry{
 	pubNA("/error"), pubNA("/system-info"),
 
 	// ---- 管理员：requiresAdmin 前缀/精确清单 ----
-	adm("/api/v1/announcement/update"),
 	adm("/api/v1/api/v1/backup/export"),
 	adm("/api/v1/api/v1/backup/import"), adm("/api/v1/api/v1/backup/import-auto-backup"),
 	adm("/api/v1/api/v1/backup/import-auto-backup/status"), adm("/api/v1/api/v1/backup/restore"),
@@ -232,7 +231,6 @@ var routeClassification = []routeEntry{
 	admH("/api/v1/forward/force-delete"),
 
 	// ---- 普通用户：登录 + handler 本人/归属门 ----
-	usr("/api/v1/announcement/get"),
 	usr("/api/v1/config/list"),
 	usr("/api/v1/forward/batch-change-tunnel"), usr("/api/v1/forward/batch-delete"),
 	usr("/api/v1/forward/batch-pause"), usr("/api/v1/forward/batch-redeploy"),

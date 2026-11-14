@@ -911,7 +911,6 @@ const IMPORT_COUNT_KEYS = [
   "inboundNodeGroupsIgnored",
   "inboundTemplatesImported",
   "inboundLegacyUsersImported",
-  "announcementsImported",
   "monitorPermissionsImported",
   "userSubscriptionsImported",
   "serviceMonitorsImported",
@@ -1014,8 +1013,6 @@ function backupImportAnswer(
         ? Object.keys(req.configs).length
         : 0;
   if (on("userInbounds")) counts.userInboundsImported = len(req.userInbounds);
-  if (on("announcements"))
-    counts.announcementsImported = len(req.announcements);
   if (on("monitorPermissions"))
     counts.monitorPermissionsImported = len(req.monitorPermissions);
   if (on("userSubscriptions"))

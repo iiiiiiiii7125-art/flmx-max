@@ -50,7 +50,6 @@ const (
 
 type User = model.User
 type ViteConfig = model.ViteConfig
-type Announcement = model.Announcement
 type UserTunnelDetail = model.UserTunnelDetail
 type UserForwardDetail = model.UserForwardDetail
 type StatisticsFlow = model.StatisticsFlow
@@ -519,7 +518,6 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.UserTunnel{},
 		&model.MonitorPermission{},
 		&model.ViteConfig{},
-		&model.Announcement{},
 		&model.SchemaVersion{},
 		&model.NodeMetric{},
 		&model.NodeTraffic{},
@@ -993,53 +991,6 @@ func (r *Repository) ApplyConfigBatch(values map[string]string, deleteKeys []str
 		}
 		return nil
 	})
-}
-
-// ─── Announcement Queries ────────────────────────────────────────────
-
-func (r *Repository) GetAnnouncement() (*model.Announcement, error) {
-	if r == nil || r.db == nil {
-		return nil, errors.New("repository not initialized")
-	}
-	var ann model.Announcement
-	err := r.db.Order("id DESC").First(&ann).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &ann, nil
-}
-
-func (r *Repository) UpsertAnnouncement(content string, enabled int, now int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	var count int64
-	if err := r.db.Model(&model.Announcement{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count == 0 {
-		// A2-02（零值家族）：Announcement.Enabled 带 `default:1`，首建时
-		// 显式 enabled=0 会被 Create 当未设置丢弃、落库为 1——想首发
-		// 「停用」公告实际直接上线。仿 CreateNodeInbound（BUG-A4-1）
-		// 留意图、创建后写回。
-		ann := &model.Announcement{
-			Content: content, Enabled: enabled,
-			CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true},
-		}
-		if err := r.db.Create(ann).Error; err != nil {
-			return err
-		}
-		if enabled == 0 {
-			return r.db.Model(&model.Announcement{}).Where("id = ?", ann.ID).Update("enabled", 0).Error
-		}
-		return nil
-	}
-	return r.db.Model(&model.Announcement{}).Where("1=1").Updates(map[string]interface{}{
-		"content": content, "enabled": enabled, "updated_time": now,
-	}).Error
 }
 
 // ─── User Package Queries ────────────────────────────────────────────
@@ -2174,12 +2125,6 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 	}
 	backup.UserInbounds = userInbounds
 
-	// O7-007：导出 announcement 整表（公告）
-	announcements, err := r.exportAnnouncements()
-	if err != nil {
-		return nil, fmt.Errorf("export announcements failed: %w", err)
-	}
-	backup.Announcements = announcements
 
 	// O7-008：导出 monitor_permission 整表（监控权限）
 	monitorPermissions, err := r.exportMonitorPermissions()
@@ -2215,7 +2160,7 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 // validBackupTypes is the full set of top-level backup segment names
 // accepted by ExportPartial / Import (R13X-005). It must stay identical
 // to the frontend BACKUP_TYPE_VALUES list (vite-frontend config.tsx,
-// 14 values): any drift reopens the silent-ignore gap for API callers,
+// 13 values): any drift reopens the silent-ignore gap for API callers,
 // since the handler's non-empty check cannot catch an all-unknown list.
 // The group-trio segment names (tunnelGroups/userGroups/permissions)
 // were removed with the feature in 1.9.6: old backups carrying them
@@ -2224,7 +2169,7 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 var validBackupTypes = map[string]bool{
 	"users": true, "nodes": true, "tunnels": true, "forwards": true,
 	"userTunnels": true, "speedLimits": true, "configs": true,
-	"inbounds": true, "userInbounds": true, "announcements": true,
+	"inbounds": true, "userInbounds": true,
 	"monitorPermissions": true, "userSubscriptions": true,
 	"serviceMonitors": true, "passkeys": true,
 }
@@ -2334,7 +2279,7 @@ func (r *Repository) exportPartial(types []string) (*model.BackupData, error) {
 		}
 		backup.Inbounds = v
 	}
-	// O7-001/O7-007/O7-008：补齐 user_inbound/announcement/monitor_permission 三表
+	// O7-001/O7-008：补齐 user_inbound/monitor_permission 两表
 	// （O7-001 时 ExportPartial 遗漏，此处一并补上）
 	if typeSet["userInbounds"] {
 		v, err := r.exportUserInbounds()
@@ -2342,13 +2287,6 @@ func (r *Repository) exportPartial(types []string) (*model.BackupData, error) {
 			return nil, fmt.Errorf("export user inbounds failed: %w", err)
 		}
 		backup.UserInbounds = v
-	}
-	if typeSet["announcements"] {
-		v, err := r.exportAnnouncements()
-		if err != nil {
-			return nil, fmt.Errorf("export announcements failed: %w", err)
-		}
-		backup.Announcements = v
 	}
 	if typeSet["monitorPermissions"] {
 		v, err := r.exportMonitorPermissions()
@@ -2784,28 +2722,6 @@ func (r *Repository) exportServiceMonitors() ([]model.ServiceMonitorBackup, erro
 	return out, nil
 }
 
-// O7-007：导出 announcement 整表（公告备份）
-func (r *Repository) exportAnnouncements() ([]model.AnnouncementBackup, error) {
-	var rows []model.Announcement
-	if err := r.db.Order("id ASC").Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	out := make([]model.AnnouncementBackup, 0, len(rows))
-	for _, a := range rows {
-		b := model.AnnouncementBackup{
-			ID:          a.ID,
-			Content:     a.Content,
-			Enabled:     a.Enabled,
-			CreatedTime: a.CreatedTime,
-		}
-		if a.UpdatedTime.Valid {
-			b.UpdatedTime = a.UpdatedTime.Int64
-		}
-		out = append(out, b)
-	}
-	return out, nil
-}
-
 // O7-008：导出 monitor_permission 整表（监控权限备份）
 func (r *Repository) exportMonitorPermissions() ([]model.MonitorPermissionBackup, error) {
 	var rows []model.MonitorPermission
@@ -3221,14 +3137,6 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 				return fmt.Errorf("import user inbounds failed: %w", err)
 			}
 			result.UserInboundsImported = count
-		}
-		// O7-007：导入 announcement 表（公告）
-		if typeSet["announcements"] && len(backup.Announcements) > 0 {
-			count, err := importAnnouncements(tx, backup.Announcements, now)
-			if err != nil {
-				return fmt.Errorf("import announcements failed: %w", err)
-			}
-			result.AnnouncementsImported = count
 		}
 		// O7-008：导入 monitor_permission 表（监控权限）
 		if typeSet["monitorPermissions"] && len(backup.MonitorPermissions) > 0 {
@@ -4387,7 +4295,7 @@ func nullableBackupInt64(v *int64) int64 {
 // `default:1` (Enabled / Managed) whose backup intent is 0 is dropped
 // from the INSERT, and the conflict-update assignments reuse the insert
 // values, so the row lands as 1 on BOTH branches (disabled inbounds,
-// kernels, announcements and monitors came back enabled; unmanaged
+// kernels and monitors came back enabled; unmanaged
 // relays came back managed — W10 follow-up probe, both branches
 // reproduced). Reading the struct after Create cannot detect it —
 // GORM backfills the default into it — so the intent is captured by
@@ -5379,34 +5287,6 @@ func importServiceMonitors(tx *gorm.DB, rows []model.ServiceMonitorBackup, now i
 			return count, err
 		}
 		if err := restoreZeroValuedInt(tx, &model.ServiceMonitor{}, r.ID, "enabled", r.Enabled); err != nil {
-			return count, err
-		}
-		count++
-	}
-	return count, nil
-}
-
-// O7-007：导入 announcement 表（公告）
-func importAnnouncements(tx *gorm.DB, rows []model.AnnouncementBackup, now int64) (int, error) {
-	count := 0
-	for _, a := range rows {
-		item := model.Announcement{
-			ID:          a.ID,
-			Content:     a.Content,
-			Enabled:     a.Enabled,
-			CreatedTime: a.CreatedTime,
-			UpdatedTime: sql.NullInt64{Int64: now, Valid: true},
-		}
-		err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{
-				"content", "enabled", "updated_time",
-			}),
-		}).Create(&item).Error
-		if err != nil {
-			return count, err
-		}
-		if err := restoreZeroValuedInt(tx, &model.Announcement{}, a.ID, "enabled", a.Enabled); err != nil {
 			return count, err
 		}
 		count++

@@ -449,16 +449,6 @@ type ViteConfig struct {
 
 func (ViteConfig) TableName() string { return "vite_config" }
 
-type Announcement struct {
-	ID          int64         `gorm:"primaryKey;autoIncrement" json:"id"`
-	Content     string        `gorm:"type:text;not null" json:"content"`
-	Enabled     int           `gorm:"not null;default:1" json:"enabled"`
-	CreatedTime int64         `gorm:"column:created_time;not null" json:"created_time"`
-	UpdatedTime sql.NullInt64 `gorm:"column:updated_time" json:"updated_time,omitempty"`
-}
-
-func (Announcement) TableName() string { return "announcement" }
-
 type SchemaVersion struct {
 	Version int `gorm:"not null;default:0"`
 }
@@ -484,8 +474,6 @@ type BackupData struct {
 	Permissions  []PermissionBackup  `json:"permissions,omitempty"`
 	Configs      map[string]string   `json:"configs,omitempty"`
 	UserInbounds []UserInboundBackup `json:"userInbounds,omitempty"`
-	// O7-007：announcement 整表备份（公告丢失修复）
-	Announcements []AnnouncementBackup `json:"announcements,omitempty"`
 	// O7-008：monitor_permission 整表备份（监控权限丢失修复）
 	MonitorPermissions []MonitorPermissionBackup `json:"monitorPermissions,omitempty"`
 	// R2-E3-F02：passkey 整表备份（WebAuthn 公钥凭据，字段核验
@@ -826,15 +814,6 @@ type ServiceMonitorBackup struct {
 	UpdatedTime int64  `json:"updatedTime,omitempty"`
 }
 
-// AnnouncementBackup 是 O7-007 补齐的公告备份结构（字段对照 model.Announcement）。
-type AnnouncementBackup struct {
-	ID          int64  `json:"id"`
-	Content     string `json:"content"`
-	Enabled     int    `json:"enabled"`
-	CreatedTime int64  `json:"createdTime"`
-	UpdatedTime int64  `json:"updatedTime,omitempty"`
-}
-
 // MonitorPermissionBackup 是 O7-008 补齐的监控权限备份结构（字段对照 model.MonitorPermission）。
 type MonitorPermissionBackup struct {
 	ID          int64 `json:"id"`
@@ -1120,8 +1099,7 @@ type ImportResult struct {
 	InboundSnellInboundsDisabled int `json:"inboundSnellInboundsDisabled"`
 	InboundTemplatesImported     int `json:"inboundTemplatesImported"`
 	InboundLegacyUsersImported   int `json:"inboundLegacyUsersImported"`
-	// O7-007/O7-008：公告与监控权限导入计数
-	AnnouncementsImported      int `json:"announcementsImported"`
+	// O7-008：监控权限导入计数
 	MonitorPermissionsImported int `json:"monitorPermissionsImported"`
 	// R2-E3-F02：passkey 导入计数（用户不存在/凭据坏损的跳过行
 	// 走 SkippedRows["passkeys"] 回执点名计数）。

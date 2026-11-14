@@ -281,8 +281,6 @@ func TestBackupRestoreKeepsZeroValuedFlags(t *testing.T) {
 		  VALUES(41, 31, 1, 'g2-disabled', 'vless', '::', 24441, 0, ?, ?)`, []interface{}{now, now}},
 		{`INSERT INTO node_inbound_relay(id, inbound_id, forward_id, name, managed, created_time)
 		  VALUES(51, 41, 777, 'g2-relay', 0, ?)`, []interface{}{now}},
-		{`INSERT INTO announcement(id, content, enabled, created_time, updated_time)
-		  VALUES(61, 'g2-ann', 0, ?, ?)`, []interface{}{now, now}},
 		{`INSERT INTO service_monitor(id, name, type, target, interval_sec, timeout_sec, node_id, enabled, created_time, updated_time)
 		  VALUES(71, 'g2-mon', 'http', 'https://example.com', 30, 5, 0, 0, ?, ?)`, []interface{}{now, now}},
 	}
@@ -293,7 +291,7 @@ func TestBackupRestoreKeepsZeroValuedFlags(t *testing.T) {
 	}
 
 	dest := openBackupRepo(t, "g2-flags-dst.db")
-	readFlags := func(stage string) (ie, ke, rm, ae, me int64) {
+	readFlags := func(stage string) (ie, ke, rm, me int64) {
 		queries := []struct {
 			q string
 			p *int64
@@ -301,7 +299,6 @@ func TestBackupRestoreKeepsZeroValuedFlags(t *testing.T) {
 			{`SELECT enabled FROM node_inbound WHERE id = 41`, &ie},
 			{`SELECT enabled FROM node_kernel WHERE id = 31`, &ke},
 			{`SELECT managed FROM node_inbound_relay WHERE id = 51`, &rm},
-			{`SELECT enabled FROM announcement WHERE id = 61`, &ae},
 			{`SELECT enabled FROM service_monitor WHERE id = 71`, &me},
 		}
 		for _, qq := range queries {
@@ -312,10 +309,10 @@ func TestBackupRestoreKeepsZeroValuedFlags(t *testing.T) {
 		return
 	}
 	assertZero := func(stage string) {
-		ie, ke, rm, ae, me := readFlags(stage)
-		if ie != 0 || ke != 0 || rm != 0 || ae != 0 || me != 0 {
-			t.Fatalf("%s: zero-valued flags must survive restore, got inbound=%d kernel=%d relay=%d announcement=%d monitor=%d",
-				stage, ie, ke, rm, ae, me)
+		ie, ke, rm, me := readFlags(stage)
+		if ie != 0 || ke != 0 || rm != 0 || me != 0 {
+			t.Fatalf("%s: zero-valued flags must survive restore, got inbound=%d kernel=%d relay=%d monitor=%d",
+				stage, ie, ke, rm, me)
 		}
 	}
 
@@ -328,7 +325,6 @@ func TestBackupRestoreKeepsZeroValuedFlags(t *testing.T) {
 		`UPDATE node_inbound SET enabled = 1 WHERE id = 41`,
 		`UPDATE node_kernel SET enabled = 1 WHERE id = 31`,
 		`UPDATE node_inbound_relay SET managed = 1 WHERE id = 51`,
-		`UPDATE announcement SET enabled = 1 WHERE id = 61`,
 		`UPDATE service_monitor SET enabled = 1 WHERE id = 71`,
 	} {
 		if err := dest.DB().Exec(q).Error; err != nil {

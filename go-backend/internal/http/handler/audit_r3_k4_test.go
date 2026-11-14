@@ -140,7 +140,6 @@ func TestK4MethodGuardCensus(t *testing.T) {
 	exempt := map[string]string{
 		"systemUpgradeStatus":                "读面（升级状态查询）",
 		"openSubscription":                   "读面（公开订阅拉取）",
-		"getAnnouncement":                    "读面（公告读取）",
 		"errorPage":                          "静态错误页",
 		"flowTest":                           "静态探活",
 		"flowConfig":                         "agent 上报协议面（secret 鉴权，非管理 API 族）",

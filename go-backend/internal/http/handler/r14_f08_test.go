@@ -84,7 +84,7 @@ func TestR14F08BatchResumeDbWriteFailureReportsRealReason(t *testing.T) {
 	}
 }
 
-// A2-3（BC）：login / backupExport / updateAnnouncement 五处参数错误
+// A2-3（BC）：login / backupExport 四处参数错误
 // code=500 改为 ErrDefault（-1），与全仓 697 处口径一致。
 func TestR14F08ParamErrorsUseErrDefault(t *testing.T) {
 	r, err := repo.Open(t.TempDir() + "/r14f08-a23.db")
@@ -110,7 +110,6 @@ func TestR14F08ParamErrorsUseErrDefault(t *testing.T) {
 		{"login 空用户名", h.login, `{"username":"","password":"x"}`},
 		{"login 空密码", h.login, `{"username":"admin","password":""}`},
 		{"backupExport 非法 JSON", h.backupExport, `not json`},
-		{"updateAnnouncement 非法 JSON", h.updateAnnouncement, `not json`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

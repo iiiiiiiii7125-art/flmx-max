@@ -114,33 +114,6 @@ sensitive keys require admin).
 }
 ```
 
-## GET /api/v1/announcement/get
-
-Get the site announcement (login required).
-
-**Method:** GET
-
-**Response:**
-```json
-{
-  "code": 0,
-  "data": {
-    "content": "System maintenance scheduled for tonight",
-    "enabled": 1,
-    "update_time": 1706659200000
-  }
-}
-```
-
-## POST /api/v1/announcement/update
-
-Update the site announcement (admin only).
-
-**Request:**
-```json
-{"content": "New announcement message", "enabled": 1}
-```
-
 ---
 
 ## Common Configuration Keys
