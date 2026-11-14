@@ -70,7 +70,9 @@ func startInboundMeterMockNode(t *testing.T, baseURL, secret string, mock *inbou
 	q := u.Query()
 	q.Set("type", "1")
 	q.Set("secret", secret)
-	q.Set("version", "v1")
+	// 模拟节点报当前 agent 版本：V1-01 版本门以 2.1.13 为界，
+	// 'v1' 不是真实 agent 版本串，会被版本门 fail-closed 拦在下发之前。
+	q.Set("version", "2.1.13")
 	q.Set("http", "1")
 	q.Set("tls", "1")
 	q.Set("socks", "1")

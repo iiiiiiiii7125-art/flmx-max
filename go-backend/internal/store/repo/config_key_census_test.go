@@ -80,7 +80,10 @@ import (
 // authenticated table (50 → 51) — the node page's collapsed-section
 // list (JSON label array), read/written through the same config
 // channel as the order list.
-const configKeyRegistryBaseline = 51
+// F3-NEW-01: three resource-alert toggles join the policy table
+// (51 → 54: notify_conntrack_high / notify_disk_high /
+// notify_agent_memory_high).
+const configKeyRegistryBaseline = 54
 
 var configKeyShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 

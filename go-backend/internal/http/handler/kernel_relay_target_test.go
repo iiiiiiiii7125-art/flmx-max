@@ -12,9 +12,12 @@ import (
 func seedRelayTargetNode(t *testing.T, r *repo.Repository, name, ip string) int64 {
 	t.Helper()
 	now := time.Now().UnixMilli()
+	// 夹具节点报当前 agent 版本：V1-01 版本门与 DBL mark 门均以 2.1.13 为界，
+	// 'v1' 不是真实 agent 版本串，会被两门 fail-closed 拦在下发之前。
+	// （门禁自身的版本用例在 nft_isolation_gate_test.go 内显式改写版本，不受此影响。）
 	if err := r.DB().Exec(`
 		INSERT INTO node(name, secret, server_ip, server_ip_v4, server_ip_v6, port, interface_name, version, http, tls, socks, created_time, updated_time, status, tcp_listen_addr, udp_listen_addr, inx)
-		VALUES(?, ?, ?, ?, '', '30000-30010', '', 'v1', 0, 0, 0, ?, ?, 0, '[::]', '[::]', 0)`, name, name+"-secret", ip, ip, now, now).Error; err != nil {
+		VALUES(?, ?, ?, ?, '', '30000-30010', '', '2.1.13', 0, 0, 0, ?, ?, 0, '[::]', '[::]', 0)`, name, name+"-secret", ip, ip, now, now).Error; err != nil {
 		t.Fatal(err)
 	}
 	var id int64

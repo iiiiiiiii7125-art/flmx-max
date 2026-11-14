@@ -758,8 +758,12 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 		// 会用明文表名重建共享表；与 KernelApply 同门，版本过旧
 		// 时拒绝并点名升级（remove/删节点清理路径必须放行，不设
 		// 此门）。
+		// R2-F4-01：门禁错误含库内节点版本，不得原文回客户端；
+		// 详情记服务端日志，回执只给通用文案（须含“版本过旧”，
+		// 与 nft_isolation_gate_test.go 的 restart 断言一致）。
 		if err := h.requireNftIsolatedAgent(k.NodeID); err != nil {
-			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			log.Printf("kernelControl restart: node_id=%d blocked by nft version gate: %v", k.NodeID, err)
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("agent 版本过旧，需 %s 或更高；请先升级 agent，升级后重连时将自动重推", nftIsolatedAgentMinVersion)))
 			return
 		}
 		unlock := lockKernelApply(k.ID)
