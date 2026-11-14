@@ -108,6 +108,10 @@ type Handler struct {
 	jobsStarted bool
 	jobsWG      sync.WaitGroup
 
+	// startedAt 是面板进程启动时刻（New 构造时记录），供 Telegram
+	// 机器人 /status 的运行时间复用。
+	startedAt time.Time
+
 	// R2-038：事件型状态对账清扫的小时级门（维护轮每分钟跑，
 	// 清扫低频即可，见 state_sweep.go）。
 	stateSweepMu   sync.Mutex
@@ -254,6 +258,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 	h := &Handler{
 		repo:                     repo,
 		jwtSecret:                jwtSecret,
+		startedAt:                time.Now(),
 		wsServer:                 ws.NewServer(repo, jwtSecret),
 		metrics:                  metrics.NewIngestionService(repo),
 		healthCheck:              nil,
