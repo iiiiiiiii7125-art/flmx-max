@@ -1,7 +1,6 @@
 package socket
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -120,20 +119,36 @@ func TestBuildAgentUninstallScriptRejectsMixedLayouts(t *testing.T) {
 
 // resolveAgentBinaryPath 以本进程的可执行路径为准锚定布局：
 // 两个世代的自路径都必须原样命中（面板原地升级不换布局）。
+// F-R2B-V2-05：布局外的可执行路径（手工拷贝/ scratch 运行）锚
+// 定自身——永不兜底到另一份安装的路径；名字不可认时拒绝。
 func TestResolveAgentBinaryPathFromExecutable(t *testing.T) {
 	orig := uninstallBinaryPath
 	t.Cleanup(func() { uninstallBinaryPath = orig })
 	for _, exe := range []string{"/etc/flmx_agent/flmx_agent", "/etc/flux_agent/flux_agent"} {
 		uninstallBinaryPath = func() (string, error) { return exe, nil }
-		if got := resolveAgentBinaryPath(); got != exe {
+		got, err := resolveAgentBinaryPath()
+		if err != nil {
+			t.Fatalf("resolveAgentBinaryPath with exe %q: %v", exe, err)
+		}
+		if got != exe {
 			t.Fatalf("resolveAgentBinaryPath with exe %q = %q", exe, got)
 		}
 	}
-	// 布局外的可执行路径（如手工拷贝运行）：不得锚到布局外路径，
-	// 结果只能是某个受认布局路径。
+	// 布局外的可执行路径（如手工拷贝/ scratch 运行）：锚定自身，
+	// 不得兜底到 /etc 下另一份安装。
+	for _, exe := range []string{"/root/scratch-r2b2-v2/flmx_agent", "/root/scratch/flmx_agent/flmx_agent", "/opt/other/flmx_agent"} {
+		uninstallBinaryPath = func() (string, error) { return exe, nil }
+		got, err := resolveAgentBinaryPath()
+		if err != nil {
+			t.Fatalf("resolveAgentBinaryPath with exe %q: %v", exe, err)
+		}
+		if got != exe {
+			t.Fatalf("scratch executable must resolve to itself, got %q", got)
+		}
+	}
+	// 名字不可认的可执行路径：拒绝，不猜布局。
 	uninstallBinaryPath = func() (string, error) { return "/opt/other/tool", nil }
-	got := resolveAgentBinaryPath()
-	if filepath.Dir(got) == "/opt/other" || !isAgentInstallName(filepath.Base(got)) {
-		t.Fatalf("foreign executable must resolve to a recognized layout, got %q", got)
+	if _, err := resolveAgentBinaryPath(); err == nil {
+		t.Fatalf("foreign executable must be rejected, got no error")
 	}
 }

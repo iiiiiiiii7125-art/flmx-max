@@ -68,7 +68,13 @@ func TestHandleUpgradeAgentNonContainerEntryUnchanged(t *testing.T) {
 
 func TestHandleRollbackAgentNonContainerEntryUnchanged(t *testing.T) {
 	stubUpgradeInContainer(t, false)
-	if _, err := os.Stat("/etc/flux_agent/flux_agent.old"); !os.IsNotExist(err) {
+	// F-R2B-V2-05: the rollback entry resolves the agent's own
+	// binary; the test binary's name is not a recognized install
+	// name, so anchor the test at the canonical layout.
+	oldExe := uninstallBinaryPath
+	uninstallBinaryPath = func() (string, error) { return "/etc/flmx_agent/flmx_agent", nil }
+	t.Cleanup(func() { uninstallBinaryPath = oldExe })
+	if _, err := os.Stat("/etc/flmx_agent/flmx_agent.old"); !os.IsNotExist(err) {
 		t.Skip("a real backup file exists on this host; control case not applicable")
 	}
 	_, err := (&WebSocketReporter{}).handleRollbackAgent(nil)

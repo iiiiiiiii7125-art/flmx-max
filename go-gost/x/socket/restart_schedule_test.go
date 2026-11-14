@@ -146,6 +146,13 @@ func stubRestartScheduleEnv(t *testing.T) *[][2]string {
 	containerMarkerPath = filepath.Join(dir, "no-dockerenv")
 	containerCgroupPath = filepath.Join(dir, "no-cgroup")
 	t.Cleanup(func() { containerMarkerPath, containerCgroupPath = oldMarker, oldCgroup })
+
+	// F-R2B-V2-05: the enable path resolves the agent's own binary;
+	// the test binary's name is not a recognized install name, so
+	// anchor the tests at the canonical service-managed layout.
+	oldExe := uninstallBinaryPath
+	uninstallBinaryPath = func() (string, error) { return "/etc/flmx_agent/flmx_agent", nil }
+	t.Cleanup(func() { uninstallBinaryPath = oldExe })
 	return calls
 }
 
@@ -315,5 +322,30 @@ func TestHandleSetRestartScheduleRejectsInvalid(t *testing.T) {
 		"enabled": false, "time": "04:00", "jitterMinutes": 30,
 	}); err != nil {
 		t.Fatalf("valid disable must apply: %v", err)
+	}
+}
+
+// F-R2B-V2-05: a self-managed agent (scratch/manual run) has no
+// service of its own — arming the timer would schedule a restart of
+// the layout service name, i.e. another install's service. Enable
+// must refuse; disable (pure cleanup) must still work.
+func TestApplyRestartScheduleRefusesSelfManaged(t *testing.T) {
+	stubRestartScheduleEnv(t)
+	oldExe := uninstallBinaryPath
+	uninstallBinaryPath = func() (string, error) { return "/root/scratch/flmx_agent", nil }
+	t.Cleanup(func() { uninstallBinaryPath = oldExe })
+
+	ctx := context.Background()
+	s := restartScheduleSetting{Enabled: true, Time: "03:15", JitterMinutes: 45}
+	if err := applyRestartSchedule(ctx, s); err == nil {
+		t.Fatal("self-managed agent must refuse to arm the restart timer")
+	} else if !strings.Contains(err.Error(), "手动运行") {
+		t.Fatalf("refusal must name the manual-run install, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(restartScheduleUnitDir, restartTimerUnitName)); !os.IsNotExist(err) {
+		t.Fatal("refused enable must not write the timer unit")
+	}
+	if err := applyRestartSchedule(ctx, restartScheduleSetting{Enabled: false, Time: "03:15"}); err != nil {
+		t.Fatalf("disable must still apply for a self-managed agent: %v", err)
 	}
 }
