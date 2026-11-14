@@ -39,6 +39,42 @@ const (
 
 var kernelStatusInterval = 60 * time.Second
 
+// errApplyConfirmPending 是下发确认待定哨兵（F2-APPLY-01）：KernelApply
+// 的回执超时不等于下发失败——命令已发出、agent 可能已落地，面板须
+// 先向 agent 核实再生效状态。文案刻意不含「超时」二字，以免被
+// isNodeOfflineOrTimeoutError 一类「离线/超时」归类误判为节点不在线。
+// 调用方以 errors.Is 分流后按「已发出、正在确认」回执，不得前缀
+// 「下发失败」。
+var errApplyConfirmPending = errors.New("下发已发出，正在确认生效状态")
+
+// isKernelApplyTimeoutError 判断下发错误是否为「等回执超时」：命令
+// 本身已发出，只有回执没在预算内回来。SendCommand 的超时文本是
+// 「等待节点响应超时」；上下文超时的标准文本一并覆盖。
+func isKernelApplyTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "等待节点响应超时") ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+// verifyKernelApplyLanded 在 KernelApply 回执超时后向 agent 核实
+// 下发是否已落地（F2-APPLY-01）：复用周期 poll（refreshNodeKernelStatus）
+// 回读 agent 上报的 configHash，与本次下发的 hash 比对。回读失败或
+// hash 不符都只报「未证实」，不替 agent 宣称失败——下一次周期 poll
+// 会继续收敛状态。
+func (h *Handler) verifyKernelApplyLanded(k *model.NodeKernel, hash string) bool {
+	if h == nil || k == nil || hash == "" {
+		return false
+	}
+	h.refreshNodeKernelStatus(k.NodeID)
+	cur, err := h.repo.GetNodeKernel(k.ID)
+	if err != nil || cur == nil {
+		return false
+	}
+	return cur.AppliedHash == hash
+}
+
 // kernelApplyLocks serializes renders and dispatches per kernel so two edits
 // in quick succession cannot reach the agent out of order.
 //
@@ -637,6 +673,13 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.applyKernel(k.ID, true); err != nil {
+		// F2-APPLY-01：确认待定不是失败——版本登记保留（pending 态
+		// 不回滚，见 rollbackKernelInstallAfterFailure），回执只说
+		// 「已发出、正在确认」。
+		if errors.Is(err, errApplyConfirmPending) {
+			response.WriteJSON(w, response.ErrDefault("内核已登记，下发已发出，正在确认生效状态"))
+			return
+		}
 		// H131-KVER: when the agent was reached and the attempt failed,
 		// roll the version write back instead of leaving a version the
 		// node does not run. When dispatch never reached the agent the
@@ -738,6 +781,12 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.applyKernel(k.ID, false); err != nil {
+			// F2-APPLY-01：确认待定不是失败——启停状态已更新、下发已
+			// 发出，回执只说「正在确认」，不前缀「下发失败」。
+			if errors.Is(err, errApplyConfirmPending) {
+				response.WriteJSON(w, response.ErrDefault("已更新启停状态，下发已发出，正在确认生效状态"))
+				return
+			}
 			// B11-002：enabled 已先行落库（节点重连时按新状态对账生效），
 			// 与 kernelInstall 的部分成功口径对齐——回执必须明示状态已
 			// 更新、仅下发失败，不得只回原始错误让用户误判启停未生效。
@@ -1364,6 +1413,21 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
+	// F2-PORT-01：live socket 探针在锁前跑（R5R3-001：锁内禁网络
+	// 调用）。in.Port 锁前已定型（Normalize 不改端口；更新省略
+	// port 时已回填存量值）；Port==0 是自动选口、端口在锁内才定，
+	// 仍只走 DB。更新时减去旧入站自身的段，避免把自己的监听器
+	// 误判为占用。探针失败 fail-open（只记日志），DB 结论不变。
+	if in.Port != 0 {
+		spans := inboundSpans(in)
+		if oldIn != nil {
+			spans = subtractPortSpans(spans, inboundSpans(*oldIn))
+		}
+		if msg := h.checkLivePortsOccupied([]livePortProbeTarget{{NodeID: row.NodeID, Spans: spans}}); msg != "" {
+			response.WriteJSON(w, response.ErrDefault(msg))
+			return
+		}
+	}
 	// AUDIT-R3 (F2X-001): per-node 端口分配锁必须覆盖"选端口→冲突检查→入库"
 	// 整个临界区。R5-B4 把锁放在 CreateNodeInbound 内部，检查在锁外，
 	// 并发下两请求可挑中同一随机端口，一个撞唯一索引报裸 DB 错误。
@@ -1595,7 +1659,12 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		warnings = append(warnings, h.resyncManagedRelayRemoteAddrsForInbound(row.ID)...)
 	}
 	if err := h.applyKernel(k.ID, false); err != nil {
-		warnings = append([]string{"下发到节点失败: " + err.Error()}, warnings...)
+		// F2-APPLY-01：确认待定不是失败——警告只说「已发出、正在确认」。
+		if errors.Is(err, errApplyConfirmPending) {
+			warnings = append([]string{"下发已发出，正在确认生效状态"}, warnings...)
+		} else {
+			warnings = append([]string{"下发到节点失败: " + err.Error()}, warnings...)
+		}
 	}
 	if update {
 		warnings = append(warnings, h.applyChainReferrers(row.ID)...)
@@ -3193,6 +3262,25 @@ func (h *Handler) applyKernelWithMode(kernelID int64, install bool, realmOverrid
 	res, err := h.sendNodeCommandWithTimeout(k.NodeID, "KernelApply", payload, timeout, false, false)
 	now = time.Now().UnixMilli()
 	if err != nil {
+		// F2-APPLY-01：回执超时不等于下发失败——命令已发出，慢链路
+		// 上 agent 可能已落地、只是回执没赶上预算。先向 agent 核实
+		// 再定性，核实到落地按成功收尾，核实不到置 pending 待下次
+		// poll 收敛；两种情形都不写 error、不报「下发失败」。
+		if isKernelApplyTimeoutError(err) {
+			if h.verifyKernelApplyLanded(k, hash) {
+				// 落地已证实：poll 已把状态/applied_hash 落库，
+				// 此处只补成功路径的计数基线钉定。
+				if settleCounters && h.importTailBatchDepth.Load() == 0 {
+					h.settleKernelCountersAfterApply(k.NodeID)
+				}
+				return nil
+			}
+			h.observeKernelStatusTransition(*k, kernelStatusPending, errApplyConfirmPending.Error())
+			_ = h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
+				"status": kernelStatusPending, "last_error": errApplyConfirmPending.Error(), "updated_time": now,
+			})
+			return errApplyConfirmPending
+		}
 		status := kernelStatusError
 		if strings.Contains(err.Error(), "不在线") {
 			status = kernelStatusPending

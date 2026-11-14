@@ -3081,6 +3081,14 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F2-PORT-01：live 探针在无锁间隙跑（验证事务已回滚、提交段未
+	// 持锁）。只探显式端口：自动选口在提交段重定型，间隙探的值到
+	// 提交时已失效；创建无自身可排除。探针失败 fail-open。
+	if msg := h.checkLivePortsOccupied(tunnelLivePortTargetsFromRequest(req, entryNodeIDs, nil)); msg != "" {
+		response.WriteJSON(w, response.ErrDefault(msg))
+		return
+	}
+
 	// 提交段：全节点锁内重新 prepare 定型端口（验证段的选口结果不
 	// 跨段复用，避免锁外窗口被并发占用）。
 	releasePortLocks := acquireSortedPortLocks(tunnelRequestNodeIDs(req))
@@ -3756,6 +3764,20 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// 验证段内校验一致。
 	if err := h.testNftablesNodeCapabilities(nftPairs); err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
+	// F2-PORT-01：live 探针在无锁间隙跑。验证段定型的端口即最终端
+	// 口（提交段不再重定型），故全量探：入口 inPort＋全部段口；
+	// 本隧道已占的 (节点,端口) 跳过。forward 行读失败时入口不探
+	// （无法排除自身监听器，探了会误报），段口照常探。探针失败
+	// fail-open。
+	ownPorts, forwardOK := h.tunnelOwnLivePorts(id, oldChainRows)
+	inPort := asInt(req["inPort"], 0)
+	if !forwardOK {
+		inPort = 0
+	}
+	if msg := h.checkLivePortsOccupied(tunnelLivePortTargetsFromState(runtimeState, inPort, ownPorts)); msg != "" {
+		response.WriteJSON(w, response.ErrDefault(msg))
 		return
 	}
 	if oldTunnel.Type == 2 && typeVal != 2 {

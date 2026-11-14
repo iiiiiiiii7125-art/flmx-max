@@ -1770,6 +1770,12 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 		response.Type = cmd.Type + "Response"
 		response.Data, err = handleKernelCommandContext(ctx, cmd.Type, cmd.Data)
 
+	// F2-PORT-01：live socket 探针（只读）：面板问 agent 本机正在
+	// 监听的端口，补 DB 三源之外的占用判定。
+	case "CheckPortListening":
+		response.Type = "CheckPortListeningResponse"
+		response.Data, err = handleCheckPortListening(cmd.Data)
+
 	default:
 		err = fmt.Errorf("未知命令类型: %s", cmd.Type)
 		response.Type = "UnknownCommandResponse"

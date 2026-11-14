@@ -3206,6 +3206,15 @@ func (h *Handler) updateAnnouncement(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UnixMilli()
+	// F3-NEW-03：内容与开关均未变时不写库。Upsert 每次保存都写
+	// updated_time，前端按 update_time 判「新公告」，无改动保存
+	// 也会让横幅/弹窗重弹。读库失败或尚无公告时走原 Upsert 口径，
+	// 不把读失败静默成成功。
+	if cur, err := h.repo.GetAnnouncement(); err == nil && cur != nil &&
+		cur.Content == req.Content && cur.Enabled == req.Enabled {
+		response.WriteJSON(w, response.OKEmpty())
+		return
+	}
 	if err := h.repo.UpsertAnnouncement(req.Content, req.Enabled, now); err != nil {
 		respondInternalError(w, "updateAnnouncement", err)
 		return
