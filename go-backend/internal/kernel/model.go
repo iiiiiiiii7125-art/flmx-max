@@ -154,6 +154,18 @@ type Inbound struct {
 	// Split are the inbound's 分流 rules, tried before its default exit;
 	// targets resolved. Filled in when building a kernel config.
 	Split []SplitRule `json:"-"`
+	// UserMarkBase is the socket-mark base this render mints user marks
+	// with (F2-DBL-01: per-agent base, so co-located agents count only
+	// their own kernels' traffic). Set by RenderWith from
+	// RenderOptions.UserMarkBase; 0 means the legacy host-global base.
+	// Render-time only, never persisted.
+	UserMarkBase int64 `json:"-"`
+}
+
+// userMark is this inbound's socket mark for a user (0 when the id does
+// not fit the mark layout).
+func (in Inbound) userMark(id int64) int64 {
+	return UserMarkForAgent(in.UserMarkBase, id)
 }
 
 func (in Inbound) Tag() string {

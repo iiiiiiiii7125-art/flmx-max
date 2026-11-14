@@ -118,10 +118,15 @@ func expandPorts(ports []Port) []counterRule {
 	return rules
 }
 
-// Users' connections carry the socket mark userMarkBase|id (set by the
-// panel-rendered kernel config). Packets out with it are the user's upload;
-// the mark is copied to the connection so packets coming back count as the
-// download.
+// Users' connections carry the socket mark markBase|id (set by the
+// panel-rendered kernel config, markBase = the per-agent base the
+// panel sent in the KernelApply payload, falling back to the legacy
+// userMarkBase when the payload omits it). Packets out with it are
+// the user's upload; the mark is copied to the connection so packets
+// coming back count as the download. F2-DBL-01: the base is
+// per-agent (node id low byte in bits 16-23) so co-located agents
+// count only their own kernels' traffic instead of the same
+// packets N×.
 const (
 	userMarkBase = 0x46560000
 	userMarkMax  = 0xffff
@@ -325,7 +330,13 @@ func nftBindMatch(bind, dir string) string {
 // Hop ranges are redirected before filtering, so counters and whitelists see
 // the inbound port. Only traffic addressed to this host is redirected; the
 // output hook covers clients running on the node itself.
-func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64) string {
+//
+// markBase is the socket-mark base user marks are minted with
+// (F2-DBL-01, per-agent); 0 reads as the legacy userMarkBase.
+func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64, markBase int64) string {
+	if markBase == 0 {
+		markBase = userMarkBase
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {}\n", table)
 	fmt.Fprintf(&b, "delete table inet %s\n", table)
@@ -377,7 +388,7 @@ func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, h
 		}
 	}
 	for _, id := range users {
-		fmt.Fprintf(&b, "\t\tct mark 0x%08x counter name %s\n", userMarkBase|id, userCounterName("down", id))
+		fmt.Fprintf(&b, "\t\tct mark 0x%08x counter name %s\n", markBase|id, userCounterName("down", id))
 	}
 	b.WriteString("\t}\n\tchain output {\n\t\ttype filter hook output priority -150; policy accept;\n")
 	for _, r := range rules {
@@ -388,7 +399,7 @@ func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, h
 		}
 	}
 	for _, id := range users {
-		fmt.Fprintf(&b, "\t\tmeta mark 0x%08x ct mark set meta mark counter name %s\n", userMarkBase|id, userCounterName("up", id))
+		fmt.Fprintf(&b, "\t\tmeta mark 0x%08x ct mark set meta mark counter name %s\n", markBase|id, userCounterName("up", id))
 	}
 	b.WriteString("\t}\n")
 	if len(hops) > 0 {
@@ -429,8 +440,12 @@ type nftCounters struct {
 	// table is this agent's own nft table. Empty (zero value) reads
 	// as the plain name so a bare &nftCounters{} stays usable.
 	table string
-	state     nftState
-	lastErr   string
+	// markBase is the socket-mark base user marks are minted with
+	// (F2-DBL-01, per-agent). 0 reads as the legacy userMarkBase
+	// (old panel that does not send a base).
+	markBase    int64
+	state       nftState
+	lastErr     string
 	// autoInstalled 表示本进程曾为白名单自动装上 nftables（供状态
 	// 上报区分“已安装”与“已自动安装”；进程重启后复位为 false，
 	// 此后 nft 在场即报“已安装”）。
@@ -446,6 +461,18 @@ func newNftCounters(baseDir string) *nftCounters {
 		_ = json.Unmarshal(b, &n.state)
 	}
 	return n
+}
+
+// setMarkBase adopts the socket-mark base the panel sent in the
+// KernelApply payload. A zero base (old panel) is ignored — the
+// legacy base stays in force.
+func (n *nftCounters) setMarkBase(base int64) {
+	if base == 0 {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.markBase = base
 }
 
 // tableName returns this counter's table, defaulting to the plain
@@ -588,7 +615,7 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 		}
 	}
 
-	script := nftScript(n.tableName(), rules, expandGuards(ports), hops, users)
+	script := nftScript(n.tableName(), rules, expandGuards(ports), hops, users, n.markBase)
 	sig := hashString(script)
 	hasContent := len(rules) > 0 || len(users) > 0
 	if sig == n.state.Signature {

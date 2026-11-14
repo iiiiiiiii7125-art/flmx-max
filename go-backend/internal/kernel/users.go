@@ -168,15 +168,57 @@ func singboxUsers(in Inbound) []interface{} {
 // mark are the user's upload, packets back on the marked connection the
 // download. This works on official builds of both kernels (sing-box ships
 // without a per-user stats API).
+//
+// F2-DBL-01: the legacy base is host-global — two agents on one host
+// install identical mark rules in their own nft tables, so the same
+// physical packets are counted once per agent and the panel books the
+// subscription N×. The per-agent layout keeps the user id in the low
+// 16 bits and spends bits 16-23 on the agent (bits 24-31 stay 0x46,
+// the "F" tag): mark = 0x46000000 | (agentByte << 16) | id, where
+// agentByte is the panel node id's low byte. Node ids are sequential,
+// so co-located agents (a handful per host, ids far below 256 apart)
+// always get distinct bases; a collision would need two co-located
+// nodes whose ids differ by exactly a multiple of 256, in which case
+// only those two nodes double-count each other (the old behaviour,
+// not a new failure mode).
 const (
 	userMarkBase = 0x46560000
 	userMarkMax  = 0xffff
 )
 
+// LegacyUserMarkBase is the host-global socket-mark base used before
+// F2-DBL-01 (and still used for agents older than the per-agent-base
+// rollout): user marks are LegacyUserMarkBase | id.
+const LegacyUserMarkBase int64 = userMarkBase
+
+// UserMarkBaseForAgent returns the socket-mark base for one agent (one
+// panel node). 0x46000000 | ((nodeID & 0xff) << 16).
+func UserMarkBaseForAgent(nodeID int64) int64 {
+	return 0x46000000 | ((nodeID & 0xff) << 16)
+}
+
+// UserMarkForAgent is the socket mark of a user's traffic on one agent;
+// 0 when the id does not fit (id > MaxUserMarkID), and the user is then
+// not counted. base == 0 means the legacy host-global base (old agents
+// and renders that predate the per-agent layout).
+func UserMarkForAgent(base, id int64) int64 {
+	if id <= 0 || id > userMarkMax {
+		return 0
+	}
+	if base == 0 {
+		base = userMarkBase
+	}
+	return base | id
+}
+
 // MaxUserMarkID is the largest subscription (user) id the socket-mark
-// metering scheme can encode. The mark layout is mirrored by the
-// agent (go-gost/x/kernel carries the same constants), so widening
-// the id field is a coordinated two-sided protocol change — during a
+// metering scheme can encode. The mark layout used to be mirrored by the
+// agent (go-gost/x/kernel carried the same constants); since F2-DBL-01
+// the panel is authoritative — it renders the per-agent base into the
+// kernel config and sends the same base in the KernelApply payload, and
+// the agent's nft rules use the payload base (falling back to the legacy
+// base when the payload omits it, i.e. an older panel). Widening the id
+// field is still a coordinated two-sided protocol change: during a
 // mixed-version rollout the two sides would mint different marks and
 // miscount silently. Until such a change ships, ids above this limit
 // are guarded explicitly on the panel side (L4-08): the subscription
@@ -185,17 +227,19 @@ const (
 const MaxUserMarkID = userMarkMax
 
 // UserMark is the socket mark of the user's traffic; 0 when the id does not
-// fit (id > MaxUserMarkID), and the user is then not counted.
+// fit (id > MaxUserMarkID), and the user is then not counted. Legacy
+// host-global layout (0x46560000 | id); new renders use UserMarkForAgent
+// with the per-agent base.
 func UserMark(id int64) int64 {
-	if id <= 0 || id > userMarkMax {
-		return 0
-	}
-	return userMarkBase | id
+	return UserMarkForAgent(userMarkBase, id)
 }
 
-// UserFromMark is the inverse of UserMark (0 for other marks).
+// UserFromMark is the inverse of UserMark/UserMarkForAgent (0 for other
+// marks). Both layouts decode the same way: the top byte is 0x46 and
+// the user id sits in the low 16 bits (legacy 0x4656xxxx and per-agent
+// 0x46aaxxxx alike).
 func UserFromMark(mark int64) int64 {
-	if mark&^userMarkMax != userMarkBase {
+	if mark>>24 != 0x46 {
 		return 0
 	}
 	return mark & userMarkMax
@@ -210,7 +254,7 @@ func markedUsers(inbounds []Inbound) []int64 {
 			continue
 		}
 		for _, u := range in.Users {
-			if UserMark(u.ID) != 0 && !seen[u.ID] {
+			if in.userMark(u.ID) != 0 && !seen[u.ID] {
 				seen[u.ID] = true
 				ids = append(ids, u.ID)
 			}

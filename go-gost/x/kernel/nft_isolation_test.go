@@ -177,7 +177,7 @@ func TestTwoAgentsSyncWithoutSharingTable(t *testing.T) {
 
 func TestNftScriptIsolatedTableDeletesOnlyItself(t *testing.T) {
 	stubKernelResolution(t, false, "/anywhere", nil, "/root/scratch-a/flmx_agent", nil)
-	script := nftScript(nftTableForBaseDir("/root/scratch-a/kernels"), nil, nil, nil, nil)
+	script := nftScript(nftTableForBaseDir("/root/scratch-a/kernels"), nil, nil, nil, nil, 0)
 	if !strings.Contains(script, "delete table inet flmx_kernel_") {
 		t.Fatalf("isolated script must delete its own table: %s", script)
 	}

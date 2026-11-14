@@ -303,7 +303,7 @@ func TestSyncGuardReappliesWhenTableGone(t *testing.T) {
 func TestSyncGuardRearmsFingerprintForLegacyState(t *testing.T) {
 	stub := stubLiveTableNft(t)
 	dir := t.TempDir()
-	sig := hashString(nftScript(nftTableForBaseDir(dir), expandPorts(guardSyncPorts), expandGuards(guardSyncPorts), expandHops(guardSyncPorts), sortedUsers(nil)))
+	sig := hashString(nftScript(nftTableForBaseDir(dir), expandPorts(guardSyncPorts), expandGuards(guardSyncPorts), expandHops(guardSyncPorts), sortedUsers(nil), 0))
 	legacy := `{"signature":"` + sig + `","epoch":"legacy"}`
 	if err := os.WriteFile(filepath.Join(dir, "nft.json"), []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)

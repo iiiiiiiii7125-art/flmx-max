@@ -523,6 +523,11 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	// 进程快照无关（退避间隙 procs 不在运行，prev 仍是可回滚的好配置）。
 	prevGood := prev.req.Enabled && prev.req.Hash != "" && prev.req.Hash == inst.goodHash
 	inst.req = req
+	// F2-DBL-01：先采纳面板下发的 mark base，再跑 nft sync，
+	// 本次 sync 的用户计数规则就按新 base 造 mark（与内核配
+	// 置里的 mark 同源）。0（旧面板）时 setMarkBase 忽略，
+	// legacy base 继续生效。
+	m.nft.setMarkBase(req.UserMarkBase)
 	inst.binDir = binDir
 	inst.bins = bins
 	inst.err = ""
