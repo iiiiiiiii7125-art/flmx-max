@@ -88,3 +88,57 @@ func TestR140DeleteNodeNoGhostAlertOnIDReuse(t *testing.T) {
 		t.Fatalf("R-140: ghost offline alert for reused id: %v", msgs[0])
 	}
 }
+
+// TestR140StartupDispatchStopsPendingTimer 复现 V1b 真机定案的交错：
+// 面板重启后 90s startup 检查（runNotifyLoop 等一个宽限期后调
+// checkStartupOfflineNodes）直接派发告警——不经过定时器回调。
+// dispatchNodeOfflineAlert 只从 map 删定时器、不 Stop，待发定时器
+// 成孤儿；随后删节点（forgetNode 查 map 无定时器可停、却清掉了
+// offlineAlerted），孤儿定时器到点按复用节点名发幽灵告警。
+// 未修复时本测试必须红（3 条告警、含复用名幽灵告警）；修复后必须
+// 绿（2 条：启动检查派发的原节点名＋对照节点，复用名 0 条）。
+// 注意：测试里直接调 dispatchNodeOfflineAlert 模拟 startup 检查，
+// 因为 checkStartupOfflineNodes 在 wsServer 为 nil 的测试 handler
+// 里会直接返回（其入口守卫要求 wsServer 非空）。
+func TestR140StartupDispatchStopsPendingTimer(t *testing.T) {
+	old := nodeOfflineGrace
+	nodeOfflineGrace = 100 * time.Millisecond
+	t.Cleanup(func() { nodeOfflineGrace = old })
+	h, _, sent := setupNotifyHandler(t)
+	insertR140Node(t, h, 7, "r2-a-r140-orig")
+	insertR140Node(t, h, 8, "r2-a-r140-ctl")
+
+	// 两节点同时掉线、定时器同时待发（宽限期内）。
+	h.notifyNodeOffline(7)
+	h.notifyNodeOffline(8)
+	// 模拟 startup 检查直接派发 7 的告警（定时器回调尚未触发）。
+	h.dispatchNodeOfflineAlert(7, "节点掉线（面板重启后仍离线）")
+
+	// 删 7 并立即以同一 id 7 重建（新名）。
+	if _, _, err := h.deleteNodeByID(7); err != nil {
+		t.Fatalf("deleteNodeByID: %v", err)
+	}
+	insertR140Node(t, h, 7, "r2-a-r140-reuse")
+
+	// 等过宽限期：孤儿定时器若存活会在此窗口触发幽灵告警。
+	time.Sleep(400 * time.Millisecond)
+	msgs := sent()
+	if len(msgs) != 2 {
+		t.Fatalf("expected exactly 2 offline alerts (startup dispatch + control), got %d: %v", len(msgs), msgs)
+	}
+	var sawOrig, sawCtl bool
+	for _, m := range msgs {
+		if strings.Contains(m.Message, "r2-a-r140-reuse") {
+			t.Fatalf("R-140: ghost offline alert for reused id: %v", msgs)
+		}
+		if strings.Contains(m.Message, "r2-a-r140-orig") {
+			sawOrig = true
+		}
+		if strings.Contains(m.Message, "r2-a-r140-ctl") {
+			sawCtl = true
+		}
+	}
+	if !sawOrig || !sawCtl {
+		t.Fatalf("expected startup-dispatch alert for orig node and timer alert for control node, got: %v", msgs)
+	}
+}
