@@ -323,4 +323,30 @@ gate_rc=$?
 grep -q '跳过 inode 前置检查' "$TMP/var11.log" || { echo "FAIL: gate passed but did not name the inode skip:"; cat "$TMP/var11.log"; exit 1; }
 grep -q 'RESULT: PASS' "$TMP/var11.log" || { echo "FAIL: gate output lacks RESULT: PASS:"; cat "$TMP/var11.log"; exit 1; }
 echo "OK: variant caught, btrfs-like df skips inode check and PASSes"
+echo "== variant D-R7-02: duplicated cell ID must FAIL, naming the cell =="
+cp "$ROOT/doc/audit/timeout-budgets.tsv" "$MIR/doc/audit/timeout-budgets.tsv"
+python3 - "$MIR/doc/audit/timeout-budgets.tsv" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p).read().splitlines(keepends=True)
+hit = False
+for i, ln in enumerate(lines):
+    if ln.startswith('#') or ln.startswith('cell\t'):
+        continue
+    f = ln.rstrip('\n').split('\t')
+    if len(f) >= 2 and f[0] == 'C139' and f[1] == 'createNodeGroup':
+        f[0] = 'C100'
+        lines[i] = '\t'.join(f) + '\n'
+        hit = True
+assert hit, 'C139 createNodeGroup row not found in mirror registry'
+open(p, 'w').write(''.join(lines))
+PYEOF
+if bash "$GATE" "$MIR" > "$TMP/var12.log" 2>&1; then
+  echo "FAIL: gate PASSED on the duplicated-cell variant — cell reuse not caught"
+  exit 1
+fi
+grep -q 'C100' "$TMP/var12.log" || { echo "FAIL: gate failed but did not name C100:"; cat "$TMP/var12.log"; exit 1; }
+grep -q 'D-R7-02' "$TMP/var12.log" || { echo "FAIL: gate failure does not cite the cell-uniqueness rule (D-R7-02):"; cat "$TMP/var12.log"; exit 1; }
+echo "OK: variant caught, C100 named"
+
 echo "SELFTEST: PASS"

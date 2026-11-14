@@ -17,6 +17,10 @@
 #      proxy.sh 须含 report_compose_up_failure 双分支回归测试且已
 #      在文件末尾的执行清单里注册——测试被删或漏注册即红（CI
 #      install-scripts job 跑本文件，测试本身即执行面）。
+#   25. S05 前端计量默认开门（D-R7-01 常设门）：转跑
+#      scripts/check-hist-metering.sh——新建入站表单 emptyForm 须默认
+#      meteringEnabled=true 且 toPayload 须按 SS2022 适格性设防（Issue B
+#      根因面）；本门此前全仓无接线，在此转跑才有 CI 执行点。
 #   6. [known-pending] 默认账号字面量：guide vs seed/脚本——F-064 属 §十一.4
 #      待产品决策，本项只报告、不计入失败（决策落地后应改为硬检查）；
 #      但任一侧提取为空属前提失效、点名硬红，不得伪装一致
@@ -913,6 +917,31 @@ elif ! grep -q "^$R4_TEST$" test-install-scripts-proxy.sh; then
 else
   note_ok "F1-N2 回归测试钉子：report_compose_up_failure 双分支回归测试在场且已注册"
 fi
+
+# ── 25. S05 前端计量默认开门（D-R7-01 常设门）：转跑 check-hist-metering.sh
+# AUDIT-HIST S05：新建入站表单 emptyForm 须默认 meteringEnabled=true
+# （旧 false 默认致默认路径 SS2022 入站静默不计量、订阅流量 0/0，
+# Issue B 根因面），且 toPayload 须按 SS2022 适格性设防后才发送该
+# 开关。前端无测试基建，本门以 grep 断言钉死 presets.ts；后端一半
+# 由 Go 测试 TestS05CreateDefaultsMeteringOnForEligibleSS2022 兜底。
+# 本门此前存在但全仓无任何接线（bc70a117 未接线：未入 ci-build、
+# 未被本门转跑、run-checks 只枚举 .mjs），回归时 CI 无信号——故在
+# 此转跑（CI 前端 job 跑本门即跑到），变异自检见
+# scripts/check-hist-metering-selftest.sh（CI gate-selftests job）。
+# exit 码口径与 §8 同法：exit 2 为前提失效报 PENDING 不计 FAIL，
+# 仅 exit 1（漂移）报 FAIL。
+bash scripts/check-hist-metering.sh > /tmp/.hist-metering.out 2>&1
+hm_rc=$?
+if [ "$hm_rc" -eq 0 ]; then
+  note_ok "S05 前端计量默认开门（hist-metering）：emptyForm 计量默认开且 toPayload 设防"
+elif [ "$hm_rc" -eq 2 ]; then
+  echo "PENDING: S05 前端计量默认开门前提失效（exit 2），计量默认开未核：$(grep -m1 '^FAIL: 前提失效' /tmp/.hist-metering.out | sed 's/^FAIL: 前提失效，//')；请按明细处理前提后复跑，不计 FAIL"
+  sed 's/^/    /' /tmp/.hist-metering.out
+else
+  note_fail "S05 前端计量默认开门漂移（明细见下）"
+  sed 's/^/    /' /tmp/.hist-metering.out
+fi
+rm -f /tmp/.hist-metering.out
 
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
