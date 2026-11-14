@@ -157,6 +157,13 @@ var authenticatedConfigKeys = map[string]struct{}{
 	// 对非管理员按默认 sensitive 收口，管理员与后端直读不受影响）。
 	"notify_enabled":          {},
 	"notify_events":           {},
+	// F3-NEW-01：三项资源告警的独立开关（notify_conntrack_high /
+	// notify_disk_high / notify_agent_memory_high）。值域 true/false，
+	// 缺键＝开（撞墙前预警默认必须在）；与 notify_events 列表无关，
+	// 取消任一单个事件永不关闭资源告警。
+	"notify_conntrack_high":    {},
+	"notify_disk_high":         {},
+	"notify_agent_memory_high": {},
 	"notify_daily_hour":       {},
 	"notify_latency_loss_pct": {},
 	"notify_latency_ms":       {},
