@@ -31,19 +31,20 @@ func TestManagerUninstallRemovesAgentNftTables(t *testing.T) {
 			t.Fatalf("uninstall script must delete table %s, got:\n%s", table, script)
 		}
 	}
-	for _, table := range []string{nftTable, legacyNFTTable} {
+	for _, table := range []string{nftTable, legacyNFTTable, legacyAgentNFTTable} {
 		if strings.Contains(script, "delete table inet "+table+"\n") {
 			t.Fatalf("isolated uninstall script must not delete shared table %s, got:\n%s", table, script)
 		}
 	}
 
-	// Canonical 安装：主表＋旧名表＋探针表全删（旧行为不变）。
+	// Canonical 安装：主表＋旧名表＋legacy 代表＋探针表全删
+	// （F-R4-02：legacy 代的表由 canonical 卸载一并清）。
 	script = ""
 	mc := NewManager(defaultBaseDir)
 	if err := mc.Uninstall(); err != nil {
 		t.Fatalf("uninstall: %v", err)
 	}
-	for _, table := range []string{nftTable, legacyNFTTable, nftHopProbeTable} {
+	for _, table := range []string{nftTable, legacyNFTTable, legacyAgentNFTTable, nftHopProbeTable} {
 		if !strings.Contains(script, "delete table inet "+table) {
 			t.Fatalf("uninstall script must delete table %s, got:\n%s", table, script)
 		}

@@ -491,8 +491,8 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 			// 删转发的拨号地址无限驻留 allow。T-001：补偿刷新失败时
 			// 回执须点名（回执文案不变，仅失败时追加）。
 			refreshNote := ""
-			if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-				refreshNote = whitelistRefreshFailureNote(failed)
+			if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+				refreshNote = strings.Join(whitelistRefreshNotes(failed, pending), "；")
 			}
 			// R2-A01：与 tunnelDelete 同口径——披露错原样回执，原错只进日志；其余失败才泛化（T-001 note 随两支一并点名）。
 			respondForwardDeleteDisclosureErrorWithNote(w, "userDelete", tunnelID, err, refreshNote)
@@ -505,16 +505,16 @@ func (h *Handler) userDelete(w http.ResponseWriter, r *http.Request) {
 		// T-001：补偿刷新失败时回执须点名（否则已删转发的拨号地址
 		// 残留 allow 而回执只字不提）；成功刷新时回执保持 "Internal error" 原样。
 		refreshNote := ""
-		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-			refreshNote = whitelistRefreshFailureNote(failed)
+		if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+			refreshNote = strings.Join(whitelistRefreshNotes(failed, pending), "；")
 		}
 		respondInternalErrorWithNote(w, "userDelete: DeleteUserCascade failed", err, refreshNote)
 		return
 	}
 	// T-001：刷新失败进回执 warning——删除本身已落库成功，但内核
 	// 仍按旧名单放行。
-	if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshFailureNote(failed)+"，请检查节点内核状态"))
+	if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshWarning(failed, pending)))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -848,12 +848,17 @@ func nodeWhitelistSettingsFromReq(req map[string]interface{}) (enabled int, enab
 	return enabled, enabledPresent, extra, extraPresent, nil
 }
 
-// whitelistReconcileFailureNote 把节点级白名单同步重下发的失败
-// 渲染成回执 warning（T-001 同口径）：离线/不在线类失败不算
-// （节点重连时按新值重布），只点名真失败的内核与原因；原因截
-// 断，避免 agent 的长错误撑爆回执。无真失败时返回 ""。
-func whitelistReconcileFailureNote(failures []kernelReconcileFailure) string {
-	var parts []string
+// reconcileFailureNote 把一次节点级同步重下发的失败列表渲染成回执
+// warning（T-001 同口径）：离线/不在线类失败不算（节点重连时按
+// 新值重布），只点名真失败的内核与原因；原因截断，避免 agent 的
+// 长错误撑爆回执。saved 是已落库的动作（「白名单」/「连接日志
+// 开关」），kind 是下发物（「白名单」/「连接日志」）。
+// F2-APPLY-01 同族：确认待定不是失败——pending 的内核单独成段、
+// 措辞「下发已发出，正在确认生效状态」，不得缀「下发失败」；
+// 真失败与待定并存时两段都点名；全待定时不带「请检查节点内核
+// 状态」尾缀。无真失败、无待定时返回 ""。
+func reconcileFailureNote(failures []kernelReconcileFailure, saved, kind string) string {
+	var failed, pending []string
 	for _, f := range failures {
 		if f.Err == nil {
 			continue
@@ -861,16 +866,38 @@ func whitelistReconcileFailureNote(failures []kernelReconcileFailure) string {
 		if strings.Contains(f.Err.Error(), "不在线") {
 			continue
 		}
-		if f.KernelType == "" {
-			parts = append(parts, "节点内核查询失败: "+truncate(f.Err.Error(), 200))
+		if errors.Is(f.Err, errApplyConfirmPending) {
+			if f.KernelType == "" {
+				pending = append(pending, "节点内核下发已发出，正在确认生效状态")
+			} else {
+				pending = append(pending, fmt.Sprintf("内核「%s」%s下发已发出，正在确认生效状态", f.KernelType, kind))
+			}
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("内核「%s」白名单下发失败: %s", f.KernelType, truncate(f.Err.Error(), 200)))
+		if f.KernelType == "" {
+			failed = append(failed, "节点内核查询失败: "+truncate(f.Err.Error(), 200))
+			continue
+		}
+		failed = append(failed, fmt.Sprintf("内核「%s」%s下发失败: %s", f.KernelType, kind, truncate(f.Err.Error(), 200)))
 	}
-	if len(parts) == 0 {
+	switch {
+	case len(failed) > 0 && len(pending) > 0:
+		return saved + "已保存，但部分内核下发失败（" + strings.Join(failed, "；") + "），部分内核下发已发出，正在确认生效状态（" + strings.Join(pending, "；") + "），请检查节点内核状态"
+	case len(failed) > 0:
+		return saved + "已保存，但部分内核下发失败（" + strings.Join(failed, "；") + "），请检查节点内核状态"
+	case len(pending) > 0:
+		return saved + "已保存，下发已发出，正在确认生效状态（" + strings.Join(pending, "；") + "）"
+	default:
 		return ""
 	}
-	return "白名单已保存，但部分内核下发失败（" + strings.Join(parts, "；") + "），请检查节点内核状态"
+}
+
+// whitelistReconcileFailureNote 把节点级白名单同步重下发的失败
+// 渲染成回执 warning（T-001 同口径）：离线/不在线类失败不算
+// （节点重连时按新值重布），只点名真失败的内核与原因；原因截
+// 断，避免 agent 的长错误撑爆回执。无真失败时返回 ""。
+func whitelistReconcileFailureNote(failures []kernelReconcileFailure) string {
+	return reconcileFailureNote(failures, "白名单", "白名单")
 }
 
 // connlogReconcileFailureNote 把节点级连接日志开关翻转的内核重
@@ -879,24 +906,7 @@ func whitelistReconcileFailureNote(failures []kernelReconcileFailure) string {
 // 布），只点名真失败的内核与原因；原因截断，避免 agent 的长错
 // 误撑爆回执。无真失败时返回 ""。
 func connlogReconcileFailureNote(failures []kernelReconcileFailure) string {
-	var parts []string
-	for _, f := range failures {
-		if f.Err == nil {
-			continue
-		}
-		if strings.Contains(f.Err.Error(), "不在线") {
-			continue
-		}
-		if f.KernelType == "" {
-			parts = append(parts, "节点内核查询失败: "+truncate(f.Err.Error(), 200))
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("内核「%s」连接日志下发失败: %s", f.KernelType, truncate(f.Err.Error(), 200)))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "连接日志开关已保存，但部分内核下发失败（" + strings.Join(parts, "；") + "），请检查节点内核状态"
+	return reconcileFailureNote(failures, "连接日志开关", "连接日志")
 }
 
 // normalizeNodeDisplayGroup 归一节点展示分组标签（纯展示功能，
@@ -1629,14 +1639,14 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	// T-001：改址后白名单刷新失败进回执 warning——更新本身已落库
 	// 成功，但相关入站仍按旧拨号地址放行。
-	var refreshFailed []int64
+	var refreshFailed, refreshPending []int64
 	if addrChanged {
 		// R3X-015：拨号入站集查询失败不得静默当空集跳过刷新——记
 		// 错留痕（更新本身已落库，此面为刷新面而非删除守卫）。
 		if dialedIDs, derr := h.inboundIDsDialedByNode(id); derr != nil {
 			log.Printf("node update: dialed-inbound lookup failed node_id=%d err=%v (whitelist refresh skipped)", id, derr)
 		} else {
-			refreshFailed = h.refreshInboundWhitelists(dialedIDs)
+			refreshFailed, refreshPending = h.refreshInboundWhitelists(dialedIDs)
 		}
 		if nodeInbounds, err := h.repo.ListNodeInboundsByNode(id); err == nil {
 			for _, inbound := range nodeInbounds {
@@ -1672,6 +1682,9 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(refreshFailed) > 0 {
 		notes = append(notes, whitelistRefreshFailureNote(refreshFailed)+"，请检查节点内核状态")
+	}
+	if note := whitelistRefreshPendingNote(refreshPending); note != "" {
+		notes = append(notes, note)
 	}
 	if len(notes) > 0 {
 		response.WriteJSON(w, response.OKWithWarning(nil, strings.Join(notes, "；")))
@@ -1979,15 +1992,15 @@ func (h *Handler) nodeDelete(w http.ResponseWriter, r *http.Request) {
 		deleteResp["uninstall"] = "not_requested"
 		warning := "节点记录已删除，但本次未卸载该服务器上的 agent：agent 将残留在服务器上（其连接会被面板拒绝），请在服务器上手动卸载，或重新添加该节点后使用「同时卸载」删除"
 		// T-001：级联删后白名单刷新失败时警告须点名。
-		if nodeOutcome != nil && len(nodeOutcome.refreshFailed) > 0 {
-			warning += "；" + whitelistRefreshFailureNote(nodeOutcome.refreshFailed)
+		if nodeOutcome != nil && (len(nodeOutcome.refreshFailed) > 0 || len(nodeOutcome.refreshPending) > 0) {
+			warning += "；" + strings.Join(whitelistRefreshNotes(nodeOutcome.refreshFailed, nodeOutcome.refreshPending), "；")
 		}
 		response.WriteJSON(w, response.OKWithWarning(deleteResp, warning))
 		return
 	}
 	// T-001：同上（带 uninstall 的成功出口）。
-	if nodeOutcome != nil && len(nodeOutcome.refreshFailed) > 0 {
-		response.WriteJSON(w, response.OKWithWarning(deleteResp, whitelistRefreshFailureNote(nodeOutcome.refreshFailed)+"，请检查节点内核状态"))
+	if nodeOutcome != nil && (len(nodeOutcome.refreshFailed) > 0 || len(nodeOutcome.refreshPending) > 0) {
+		response.WriteJSON(w, response.OKWithWarning(deleteResp, whitelistRefreshWarning(nodeOutcome.refreshFailed, nodeOutcome.refreshPending)))
 		return
 	}
 	response.WriteJSON(w, response.OK(deleteResp))
@@ -2742,8 +2755,9 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 	seenReferrer := make(map[int64]struct{})
 	// T-001：各节点级联删后白名单刷新失败的入站 ID（去重后汇总
 	// 进下方 batchWarnings）。
-	var batchRefreshFailed []int64
+	var batchRefreshFailed, batchRefreshPending []int64
 	seenRefreshFailed := make(map[int64]struct{})
+	seenRefreshPending := make(map[int64]struct{})
 	// L4-03：唯一入口/出口点名同 funnel 汇总（同文案只报一次）。
 	var soleRoleWarnings []string
 	seenSoleRole := make(map[string]struct{})
@@ -2841,6 +2855,13 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 				seenRefreshFailed[inboundID] = struct{}{}
 				batchRefreshFailed = append(batchRefreshFailed, inboundID)
 			}
+			for _, inboundID := range nodeOutcome.refreshPending {
+				if _, dup := seenRefreshPending[inboundID]; dup {
+					continue
+				}
+				seenRefreshPending[inboundID] = struct{}{}
+				batchRefreshPending = append(batchRefreshPending, inboundID)
+			}
 		}
 		success++
 	}
@@ -2852,9 +2873,7 @@ func (h *Handler) nodeBatchDelete(w http.ResponseWriter, r *http.Request) {
 		batchWarnings = append(batchWarnings, "本次批量删除未卸载节点 agent：agent 将残留在对应服务器上，请手动卸载或重新添加节点后使用「同时卸载」删除")
 	}
 	// T-001：级联删后白名单刷新失败进批量回执 warnings。
-	if len(batchRefreshFailed) > 0 {
-		batchWarnings = append(batchWarnings, whitelistRefreshFailureNote(batchRefreshFailed))
-	}
+	batchWarnings = append(batchWarnings, whitelistRefreshNotes(batchRefreshFailed, batchRefreshPending)...)
 	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings, PendingCount: len(uninstallPendings), Pending: uninstallPendings, BrokenReferrers: brokenReferrers, SoleRoleWarnings: soleRoleWarnings, UninstallAckedCount: uninstallAckedCount, UninstallIssuedCount: uninstallIssuedCount, UninstallFailedCount: uninstallFailedCount, UninstallWarnings: uninstallWarnings, DeletedForwardCount: deletedForwardTotal}))
 }
 
@@ -3914,7 +3933,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// 逐个刷新白名单，否则新出口 IP 不在 allow 内（中转静默断）、旧
 	// 出口 IP 残留放行。提交已落库，此处刷新与后续成功分支无关。
 	// T-001：刷新失败汇入下方 respondTunnelUpdateOK 的 warnings。
-	refreshFailed := h.refreshInboundWhitelists(h.inboundIDsForTunnel(id))
+	refreshFailed, refreshPending := h.refreshInboundWhitelists(h.inboundIDsForTunnel(id))
 
 	// R2X-009：与白名单刷新同位置——以已落库的隧道态对名下 Managed
 	// relay 逐条重算 RemoteAddr，变更则落库 + 重下发，失败汇入
@@ -3933,9 +3952,7 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		warnings = append(warnings, entryPortSyncWarnings...)
 		warnings = append(warnings, entryCleanupWarnings...)
 		// T-001：白名单刷新失败进回执 warnings（见上方 refreshFailed）。
-		if len(refreshFailed) > 0 {
-			warnings = append(warnings, whitelistRefreshFailureNote(refreshFailed))
-		}
+		warnings = append(warnings, whitelistRefreshNotes(refreshFailed, refreshPending)...)
 		if len(warnings) > 0 {
 			response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"warnings": warnings}})
 			return
@@ -4551,8 +4568,8 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		// 否则回执称「未删除」而已删转发的拨号地址无限驻留 allow。
 		// T-001：补偿刷新失败时回执须点名。
 		refreshNote := ""
-		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-			refreshNote = whitelistRefreshFailureNote(failed)
+		if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+			refreshNote = strings.Join(whitelistRefreshNotes(failed, pending), "；")
 		}
 		// R2-A01：披露错原样回执（TestR19F01 三格），原错只进日志；其余失败才泛化（T-001 note 随两支一并点名）。
 		respondForwardDeleteDisclosureErrorWithNote(w, "tunnelDelete", id, err, refreshNote)
@@ -4567,8 +4584,8 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		// 不回滚。
 		// T-001：补偿刷新失败时回执须点名。
 		refreshNote := ""
-		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-			refreshNote = "；" + whitelistRefreshFailureNote(failed)
+		if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+			refreshNote = "；" + strings.Join(whitelistRefreshNotes(failed, pending), "；")
 		}
 		// 原错只进日志（仓储原文不回执），披露汇总＋记录保留说明＋T-001 note 组成回执。
 		log.Printf("tunnelDelete: delete tunnel row failed tunnel_id=%d err=%v", id, err)
@@ -4578,22 +4595,26 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 	// O3-001：删除后刷新受影响入站的白名单。
 	// T-001：刷新失败进回执 warning——删除本身已落库成功，但内核
 	// 仍按旧名单放行。
-	var refreshFailed []int64
+	var refreshFailed, refreshPending []int64
 	for _, inboundID := range affectedInboundIDs {
 		if err := h.refreshInboundWhitelist(inboundID); err != nil {
+			if errors.Is(err, errApplyConfirmPending) {
+				refreshPending = append(refreshPending, inboundID)
+				continue
+			}
 			refreshFailed = append(refreshFailed, inboundID)
 		}
 	}
 	// FIX-CASCADE（E1-01）：墓碑转发有终局/保留分流时回执点名
 	//（加法字段）；无墓碑时维持既有空回执形态不变。
 	if outcome != nil && (len(outcome.FinalizedPendingForwardIDs) > 0 || len(outcome.RetainedPendingForwardIDs) > 0) {
-		if len(refreshFailed) > 0 {
+		if len(refreshFailed) > 0 || len(refreshPending) > 0 {
 			response.WriteJSON(w, response.OKWithWarning(map[string]interface{}{
 				"pendingDeleteFinalizedCount": len(outcome.FinalizedPendingForwardIDs),
 				"pendingDeleteFinalizedIds":   outcome.FinalizedPendingForwardIDs,
 				"pendingDeleteRetainedCount":  len(outcome.RetainedPendingForwardIDs),
 				"pendingDeleteRetainedIds":    outcome.RetainedPendingForwardIDs,
-			}, whitelistRefreshFailureNote(refreshFailed)+"，请检查节点内核状态"))
+			}, whitelistRefreshWarning(refreshFailed, refreshPending)))
 			return
 		}
 		response.WriteJSON(w, response.OK(map[string]interface{}{
@@ -4604,8 +4625,8 @@ func (h *Handler) tunnelDelete(w http.ResponseWriter, r *http.Request) {
 		}))
 		return
 	}
-	if len(refreshFailed) > 0 {
-		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshFailureNote(refreshFailed)+"，请检查节点内核状态"))
+	if len(refreshFailed) > 0 || len(refreshPending) > 0 {
+		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshWarning(refreshFailed, refreshPending)))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -4738,16 +4759,18 @@ func (h *Handler) tunnelBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// O3-003：删除后刷新所有受影响入站的白名单。
 	// T-001：刷新失败进批量回执 warnings——删除本身已落库成功，
 	// 但内核仍按旧名单放行。
-	var refreshFailed []int64
+	var refreshFailed, refreshPending []int64
 	for inboundID := range seenInbound {
 		if err := h.refreshInboundWhitelist(inboundID); err != nil {
+			if errors.Is(err, errApplyConfirmPending) {
+				refreshPending = append(refreshPending, inboundID)
+				continue
+			}
 			refreshFailed = append(refreshFailed, inboundID)
 		}
 	}
 	var batchWarnings []string
-	if len(refreshFailed) > 0 {
-		batchWarnings = append(batchWarnings, whitelistRefreshFailureNote(refreshFailed))
-	}
+	batchWarnings = append(batchWarnings, whitelistRefreshNotes(refreshFailed, refreshPending)...)
 	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, PendingDeleteFinalizedCount: pendingFinalizedTotal, PendingDeleteRetainedCount: pendingRetainedTotal, Warnings: batchWarnings}))
 }
 
@@ -5127,13 +5150,13 @@ func (h *Handler) userTunnelRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	// T-001：转发清理后白名单刷新失败进回执 warning——授权已撤，
 	// 但内核仍按旧名单放行。
-	refreshFailed := h.cleanupForwardsForUserTunnel(userID, tunnelID)
+	refreshFailed, refreshPending := h.cleanupForwardsForUserTunnel(userID, tunnelID)
 	if err := h.repo.DeleteUserTunnel(id); err != nil {
 		respondInternalError(w, "userTunnelRemove delete", err)
 		return
 	}
-	if len(refreshFailed) > 0 {
-		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshFailureNote(refreshFailed)+"，请检查节点内核状态"))
+	if len(refreshFailed) > 0 || len(refreshPending) > 0 {
+		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshWarning(refreshFailed, refreshPending)))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -5944,12 +5967,12 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	// 漏斗收尾）对称。未切隧道的回滚不触发（allow 口径未变）。
 	// T-001：回滚后补刷失败时回执须点名（回滚后内核仍按尝试态的
 	// allow 下发）；闭包返回失败入站 ID，供三处失败返回点名。
-	rollbackAndRefreshWhitelist := func() []int64 {
+	rollbackAndRefreshWhitelist := func() (failed, pending []int64) {
 		h.rollbackForwardMutation(forward, oldPorts)
 		if tunnelChanged {
 			return h.refreshInboundWhitelists(tunnelSwitchInboundIDs)
 		}
-		return nil
+		return nil, nil
 	}
 	if err := h.repo.UpdateForward(id, name, tunnelID, remoteAddr, strategy, now, newSpeedID, maxConn, ipMaxConn, newIPSpeedID, proxyProtocol, proxyProtocolReceive, proxyProtocolSend); err != nil {
 		respondInternalError(w, "forwardUpdate: UpdateForward failed", err)
@@ -5963,30 +5986,30 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		err = h.replaceForwardPortsPreservingInIP(id, tunnelID, port, oldPorts)
 	}
 	if err != nil {
-		refreshFailed := rollbackAndRefreshWhitelist()
+		refreshFailed, refreshPending := rollbackAndRefreshWhitelist()
 		// 与 CreateForwardTx 同口径：端口占用冲突回友好原文，
 		// 其余仓储错误收口。
 		if errors.Is(err, repo.ErrPortInUse) {
 			refreshNote := ""
-			if len(refreshFailed) > 0 {
-				refreshNote = "；" + whitelistRefreshFailureNote(refreshFailed)
+			if len(refreshFailed) > 0 || len(refreshPending) > 0 {
+				refreshNote = "；" + strings.Join(whitelistRefreshNotes(refreshFailed, refreshPending), "；")
 			}
 			response.WriteJSON(w, response.Err(-2, err.Error()+refreshNote))
 			return
 		}
 		refreshNote := ""
-		if len(refreshFailed) > 0 {
-			refreshNote = whitelistRefreshFailureNote(refreshFailed)
+		if len(refreshFailed) > 0 || len(refreshPending) > 0 {
+			refreshNote = strings.Join(whitelistRefreshNotes(refreshFailed, refreshPending), "；")
 		}
 		respondInternalErrorWithNote(w, "forwardUpdate: replaceForwardPorts failed", err, refreshNote)
 		return
 	}
 	updatedForward, err := h.getForwardRecord(id)
 	if err != nil {
-		refreshFailed := rollbackAndRefreshWhitelist()
+		refreshFailed, refreshPending := rollbackAndRefreshWhitelist()
 		refreshNote := ""
-		if len(refreshFailed) > 0 {
-			refreshNote = whitelistRefreshFailureNote(refreshFailed)
+		if len(refreshFailed) > 0 || len(refreshPending) > 0 {
+			refreshNote = strings.Join(whitelistRefreshNotes(refreshFailed, refreshPending), "；")
 		}
 		respondInternalErrorWithNote(w, "forwardUpdate: getForwardRecord failed", err, refreshNote)
 		return
@@ -6011,10 +6034,10 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	syncWarnings, err := h.syncForwardServicesWithWarnings(updatedForward, "UpdateService", true, forward)
 	if err != nil {
 		// T-001：回滚后补刷失败时回执须点名。
-		refreshFailed := rollbackAndRefreshWhitelist()
+		refreshFailed, refreshPending := rollbackAndRefreshWhitelist()
 		refreshNote := ""
-		if len(refreshFailed) > 0 {
-			refreshNote = "；" + whitelistRefreshFailureNote(refreshFailed)
+		if len(refreshFailed) > 0 || len(refreshPending) > 0 {
+			refreshNote = "；" + strings.Join(whitelistRefreshNotes(refreshFailed, refreshPending), "；")
 		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()+refreshNote))
 		return
@@ -6041,8 +6064,8 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 	// 不静默）。普通编辑（未切隧道）不触发。
 	if tunnelChanged {
 		// T-001：切隧道后白名单刷新失败进回执 warnings（下方漏斗）。
-		if failed := h.refreshInboundWhitelists(tunnelSwitchInboundIDs); len(failed) > 0 {
-			warnings = append(warnings, whitelistRefreshFailureNote(failed))
+		if failed, pending := h.refreshInboundWhitelists(tunnelSwitchInboundIDs); len(failed) > 0 || len(pending) > 0 {
+			warnings = append(warnings, whitelistRefreshNotes(failed, pending)...)
 		}
 		warnings = append(warnings, h.resyncManagedRelayRemoteAddrForForward(id)...)
 	}
@@ -6120,8 +6143,8 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		// T-001：刷新失败进回执 warning——删除本身已落库成功，但
 		// 内核仍按旧名单放行。
-		if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-			response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshFailureNote(failed)+"，请检查节点内核状态"))
+		if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+			response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshWarning(failed, pending)))
 			return
 		}
 		response.WriteJSON(w, response.OKEmpty())
@@ -6133,8 +6156,8 @@ func (h *Handler) forwardDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// T-001：同上。
-	if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshFailureNote(failed)+"，请检查节点内核状态"))
+	if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshWarning(failed, pending)))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
@@ -6201,8 +6224,8 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// T-001：刷新失败进回执 warning——删除本身已落库成功，但内核
 	// 仍按旧名单放行；与下方 cleanupSkipped 警告合并发出。
-	var refreshFailed []int64
-	refreshFailed = h.refreshInboundWhitelists(affectedInboundIDs)
+	var refreshFailed, refreshPending []int64
+	refreshFailed, refreshPending = h.refreshInboundWhitelists(affectedInboundIDs)
 	isRealm := false
 	if tunnel, terr := h.getTunnelRecord(forward.TunnelID); terr == nil && tunnelIsRealm(tunnel) {
 		// realm renders from the database: the forward drops out on the
@@ -6242,16 +6265,16 @@ func (h *Handler) forwardForceDelete(w http.ResponseWriter, r *http.Request) {
 	// 此前只进服务端日志，调用方收到裸 OKEmpty 会以为节点侧已
 	// 清净；清理全数确认时维持原裸成功回执。
 	// T-001：白名单刷新失败同口径合并进警告（见上方 refreshFailed）。
-	if cleanupSkipped || oldPortsReadFailed || len(refreshFailed) > 0 {
+	if cleanupSkipped || oldPortsReadFailed || len(refreshFailed) > 0 || len(refreshPending) > 0 {
 		warning := ""
 		if cleanupSkipped || oldPortsReadFailed {
 			warning = "转发已强制删除，但部分节点侧规则清理未确认（节点不可达或对账失败），残留规则需人工确认清理：" + residueHint
 		}
-		if len(refreshFailed) > 0 {
+		for _, note := range whitelistRefreshNotes(refreshFailed, refreshPending) {
 			if warning != "" {
 				warning += "；"
 			}
-			warning += whitelistRefreshFailureNote(refreshFailed)
+			warning += note
 		}
 		response.WriteJSON(w, response.OKWithWarning(nil, warning))
 		return
@@ -6692,8 +6715,8 @@ func (h *Handler) forwardBatchDelete(w http.ResponseWriter, r *http.Request) {
 	// T-001：刷新失败进批量回执 warnings——删除本身已落库成功，
 	// 但内核仍按旧名单放行。
 	var batchWarnings []string
-	if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-		batchWarnings = append(batchWarnings, whitelistRefreshFailureNote(failed))
+	if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+		batchWarnings = append(batchWarnings, whitelistRefreshNotes(failed, pending)...)
 	}
 	response.WriteJSON(w, response.OK(batchOperationResult{
 		SuccessCount: s,
@@ -7158,11 +7181,11 @@ func (h *Handler) forwardBatchChangeTunnel(w http.ResponseWriter, r *http.Reques
 	}
 	// T-001：刷新失败进批量回执 warnings——换隧本身已落库成功，
 	// 但内核仍按旧名单放行。
-	if failed := h.refreshInboundWhitelists(changedInboundIDs); len(failed) > 0 {
-		batchWarnings = append(batchWarnings, whitelistRefreshFailureNote(failed))
+	if failed, pending := h.refreshInboundWhitelists(changedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+		batchWarnings = append(batchWarnings, whitelistRefreshNotes(failed, pending)...)
 	}
-	if failed := h.refreshInboundWhitelists(failedInboundIDs); len(failed) > 0 {
-		batchWarnings = append(batchWarnings, whitelistRefreshFailureNote(failed))
+	if failed, pending := h.refreshInboundWhitelists(failedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+		batchWarnings = append(batchWarnings, whitelistRefreshNotes(failed, pending)...)
 	}
 	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: batchWarnings}))
 }
@@ -9430,6 +9453,9 @@ type nodeDeleteOutcome struct {
 	deletedForwardIDs []int64
 	// T-001：级联删后白名单刷新失败的入站 ID（空＝全部成功）。
 	refreshFailed []int64
+	// F2-APPLY-01 同族：级联删后白名单刷新确认待定的入站 ID
+	//（空＝无待定）。待定不是失败，下次 poll 收敛。
+	refreshPending []int64
 }
 
 // deleteNodeByIDAfterGuards 是漏斗后段：数据面尽力清理 + DB 级联
@@ -9439,8 +9465,8 @@ type nodeDeleteOutcome struct {
 func (h *Handler) deleteNodeByIDAfterGuards(id int64, guard *nodeDeleteGuard) ([]nodeCrossReferrer, []string, error) {
 	refs, warnings, outcome, err := h.deleteNodeByIDAfterGuardsOutcome(id, guard)
 	// T-001：级联删后白名单刷新失败时警告随 warnings 上行。
-	if err == nil && outcome != nil && len(outcome.refreshFailed) > 0 {
-		warnings = append(warnings, whitelistRefreshFailureNote(outcome.refreshFailed))
+	if err == nil && outcome != nil && (len(outcome.refreshFailed) > 0 || len(outcome.refreshPending) > 0) {
+		warnings = append(warnings, whitelistRefreshNotes(outcome.refreshFailed, outcome.refreshPending)...)
 	}
 	return refs, warnings, err
 }
@@ -9540,7 +9566,7 @@ func (h *Handler) deleteNodeByIDAfterGuardsOutcome(id int64, guard *nodeDeleteGu
 	// R3X-017：级联删后统一刷新（漏斗收尾，见守卫段收集）。
 	// T-001：刷新失败的入站 ID 进 outcome，由各调用方点名回执
 	//（单删/批删）或记日志（后台清扫收尾）。
-	outcome.refreshFailed = h.refreshInboundWhitelists(guard.affectedInboundIDs)
+	outcome.refreshFailed, outcome.refreshPending = h.refreshInboundWhitelists(guard.affectedInboundIDs)
 	return guard.brokenReferrers, guard.soleRoleWarnings, outcome, nil
 }
 
@@ -10291,13 +10317,13 @@ func (h *Handler) syncUserMaxConnForwards(userID int64) ([]string, error) {
 // T-001：返回白名单刷新失败的入站 ID（空＝全部成功或无转发
 // 可删）；调用方须点名回执（userTunnelRemove）或记日志（备份
 // 恢复面无回执可点名）。
-func (h *Handler) cleanupForwardsForUserTunnel(userID, tunnelID int64) []int64 {
+func (h *Handler) cleanupForwardsForUserTunnel(userID, tunnelID int64) (failed, pending []int64) {
 	if userID <= 0 || tunnelID <= 0 {
-		return nil
+		return nil, nil
 	}
 	forwards, err := h.repo.ListForwardsByUserAndTunnel(userID, tunnelID)
 	if err != nil || len(forwards) == 0 {
-		return nil
+		return nil, nil
 	}
 	// R3X-016（E3-02）：本漏斗删转发此前从不刷新白名单——走共用漏斗，
 	// 删前按待删转发集收集受影响入站（已在 pending 的行不在本批终删

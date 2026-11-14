@@ -233,8 +233,8 @@ func (h *Handler) completeNodeUninstallDeletion(nodeID int64) {
 	}
 	// T-001：后台收尾无回执可点名，刷新失败只记日志（内核仍按
 	// 旧名单放行，下次面板清扫/节点重连时收敛）。
-	if outcome != nil && len(outcome.refreshFailed) > 0 {
-		log.Printf("node pending uninstall completion whitelist refresh failed node_id=%d %s", nodeID, whitelistRefreshFailureNote(outcome.refreshFailed))
+	if outcome != nil && (len(outcome.refreshFailed) > 0 || len(outcome.refreshPending) > 0) {
+		log.Printf("node pending uninstall completion whitelist refresh failed node_id=%d %s %s", nodeID, whitelistRefreshFailureNote(outcome.refreshFailed), whitelistRefreshPendingNote(outcome.refreshPending))
 	}
 	for _, entry := range broken {
 		log.Printf("node pending uninstall completion broke cross-node referrer node_id=%d referrer=%s", nodeID, entry.Display)

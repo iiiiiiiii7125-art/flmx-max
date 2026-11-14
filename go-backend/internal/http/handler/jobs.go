@@ -308,8 +308,8 @@ func (h *Handler) retryNftPendingDeletes(now time.Time) {
 		// T-001：后台任务无回执可进，刷新失败记日志留痕（内层
 		// refreshInboundWhitelist 已逐条记错，此处只记汇总）。
 		if finalized {
-			if failed := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 {
-				log.Printf("nftables pending-delete whitelist refresh failed inbound_ids=%v (kernel still enforces pre-change allow list)", failed)
+			if failed, pending := h.refreshInboundWhitelists(affectedInboundIDs); len(failed) > 0 || len(pending) > 0 {
+				log.Printf("nftables pending-delete whitelist refresh failed=%v pending=%v (failed: kernel still enforces pre-change allow list)", failed, pending)
 			}
 		}
 	}

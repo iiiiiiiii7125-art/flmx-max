@@ -1917,7 +1917,7 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		// 可能残留在 allow 中）。
 		refreshNote := ""
 		if rerr := h.refreshInboundWhitelist(id); rerr != nil {
-			refreshNote = whitelistRefreshFailureNote([]int64{id})
+			refreshNote = whitelistRefreshNoteForErr(id, rerr)
 		}
 		// R2-F4-01：与上方首检同口径，守卫查询的仓储错泛化
 		//（respondInternalErrorWithNote 兼带 T-001 刷新失败点名）。
@@ -1936,7 +1936,7 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		// T-001：同上，补偿刷新失败进回执。
 		refreshNote := ""
 		if rerr := h.refreshInboundWhitelist(id); rerr != nil {
-			refreshNote = "；" + whitelistRefreshFailureNote([]int64{id})
+			refreshNote = "；" + whitelistRefreshNoteForErr(id, rerr)
 		}
 		response.WriteJSON(w, response.ErrDefault(recheckMsg+refreshNote))
 		return
@@ -1951,7 +1951,7 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		// 点名；错误本体按 F4-01 泛化（respondInternalErrorWithNote）。
 		refreshNote := ""
 		if rerr := h.refreshInboundWhitelist(id); rerr != nil {
-			refreshNote = whitelistRefreshFailureNote([]int64{id})
+			refreshNote = whitelistRefreshNoteForErr(id, rerr)
 		}
 		respondInternalErrorWithNote(w, "inboundDelete", err, refreshNote)
 		return
@@ -1984,6 +1984,12 @@ func (h *Handler) inboundDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.applyKernel(row.KernelID, false); err != nil {
+		// F2-APPLY-01 同族：确认待定不是失败——删除已落库、下发
+		// 已发出，回执只说「正在确认」，不前缀「下发失败」。
+		if errors.Is(err, errApplyConfirmPending) {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已删除，下发已发出，正在确认生效状态", TS: time.Now().UnixMilli()})
+			return
+		}
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已删除，但下发到节点失败: " + err.Error(), TS: time.Now().UnixMilli()})
 		return
 	}
@@ -2218,10 +2224,21 @@ func (h *Handler) inboundBatchDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	msg := "操作成功"
+	// F2-APPLY-01 同族：批内任一内核确认待定不是失败——真失败
+	// 优先报（末个真失败为准，与旧口径一致），全待定时才报
+	// pending，绝不把「已发出、正在确认」写成「下发失败」。
+	pending := false
 	for _, kernelID := range kernelIDs {
 		if err := h.applyKernel(kernelID, false); err != nil {
+			if errors.Is(err, errApplyConfirmPending) {
+				pending = true
+				continue
+			}
 			msg = "已删除，但下发到节点失败: " + err.Error()
 		}
+	}
+	if msg == "操作成功" && pending {
+		msg = "已删除，下发已发出，正在确认生效状态"
 	}
 	for _, targetID := range targetIDs {
 		h.applyWhitelistedTarget(targetID)
@@ -2304,10 +2321,20 @@ func (h *Handler) inboundBatchToggle(w http.ResponseWriter, r *http.Request) {
 	// 启停原入站后同步伴生行启停（对账内部下发受影响内核）。
 	h.reconcileSSMetering()
 	msg := "操作成功"
+	// F2-APPLY-01 同族：批内真失败优先报，全待定时才报 pending
+	//（与 inboundBatchDelete 同口径）。
+	pending := false
 	for _, kernelID := range kernelIDs {
 		if err := h.applyKernel(kernelID, false); err != nil {
+			if errors.Is(err, errApplyConfirmPending) {
+				pending = true
+				continue
+			}
 			msg = "已保存，但下发到节点失败: " + err.Error()
 		}
+	}
+	if msg == "操作成功" && pending {
+		msg = "已保存，下发已发出，正在确认生效状态"
 	}
 	response.WriteJSON(w, response.R{
 		Code: 0,
@@ -2356,6 +2383,12 @@ func (h *Handler) inboundToggle(w http.ResponseWriter, r *http.Request) {
 	// 启停原入站后同步伴生行启停（对账内部下发受影响内核）。
 	h.reconcileSSMetering()
 	if err := h.applyKernel(row.KernelID, false); err != nil {
+		// F2-APPLY-01 同族：确认待定不是失败——启停已落库、下发
+		// 已发出，回执只说「正在确认」，不前缀「下发失败」。
+		if errors.Is(err, errApplyConfirmPending) {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，下发已发出，正在确认生效状态", TS: row.UpdatedTime})
+			return
+		}
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但下发到节点失败: " + err.Error(), TS: row.UpdatedTime})
 		return
 	}
@@ -2441,6 +2474,12 @@ func (h *Handler) inboundRegenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.applyKernel(k.ID, false); err != nil {
+		// F2-APPLY-01 同族：确认待定不是失败——凭据已轮换落库、
+		// 下发已发出，回执只说「正在确认」，不前缀「下发失败」。
+		if errors.Is(err, errApplyConfirmPending) {
+			response.WriteJSON(w, response.R{Code: 0, Msg: "已重新生成，下发已发出，正在确认生效状态", TS: row.UpdatedTime})
+			return
+		}
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已重新生成，但下发到节点失败: " + err.Error(), TS: row.UpdatedTime})
 		return
 	}

@@ -102,11 +102,12 @@ type ApplyRequest struct {
 	// with userMark(id); their traffic is counted per user.
 	UserMarks []int64 `json:"userMarks,omitempty"`
 	// UserMarkBase is the socket-mark base user marks are minted with
-	// (F2-DBL-01, per-agent: 0x46000000 | (nodeID&0xff)<<16). The
-	// panel renders the same base into the kernel config and sends
-	// it here so the agent's nft rules match the config's marks.
-	// 0 means the panel did not send one — the legacy base
-	// (0x46560000) stays in force.
+	// (F2-DBL-01, per-agent: 0x47000000 | (nodeID&0xff)<<16 — the
+	// 0x47 tag keeps the per-agent space disjoint from the legacy
+	// base, F-R4-01). The panel renders the same base into the kernel
+	// config and sends it here so the agent's nft rules match the
+	// config's marks. 0 means the panel did not send one — the
+	// legacy base (0x46560000) stays in force.
 	UserMarkBase int64 `json:"userMarkBase,omitempty"`
 	// GeoData are data files kept current next to the main binary (Xray's
 	// geosite.dat / geoip.dat).
@@ -272,11 +273,15 @@ func (r *ApplyRequest) validate() error {
 			return fmt.Errorf("非法用户标记: %d", id)
 		}
 	}
-	// F2-DBL-01：base 只许是合法布局（高字节 0x46、低 16 位全 0，
-	// 含 legacy 0x46560000 与 per-agent 0x46aaxxxx）；0 表示旧
-	// 面板未下发、用 legacy。其他值是面板 bug，不得静默接受
-	// （mark 错位会让用户计数归零或串户）。
-	if r.UserMarkBase != 0 && (r.UserMarkBase>>24 != 0x46 || r.UserMarkBase&userMarkMax != 0) {
+	// F2-DBL-01：base 只许是合法布局（高字节 0x46 legacy 或 0x47
+	// per-agent、低 16 位全 0，含 legacy 0x46560000 与 per-agent
+	// 0x47aaxxxx）；0 表示旧面板未下发、用 legacy。其他值是面板
+	// bug，不得静默接受（mark 错位会让用户计数归零或串户）。
+	// F-R4-01：0x47 是 per-agent 专属 tag——0x46 的 per-agent
+	// 空间本身含 legacy 基址（节点 id ≡ 86 时恰为 0x46560000），
+	// 旧 tag 的 per-agent 基址仍放行（老面板/未升级 agent 的
+	// 过渡态），但面板新渲染一律用 0x47。
+	if r.UserMarkBase != 0 && ((r.UserMarkBase>>24 != 0x46 && r.UserMarkBase>>24 != 0x47) || r.UserMarkBase&userMarkMax != 0) {
 		return fmt.Errorf("非法用户标记基址: 0x%x", r.UserMarkBase)
 	}
 	for _, id := range r.ConnLogInbounds {

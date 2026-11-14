@@ -11,7 +11,7 @@ import (
 func TestUserMarkBaseForNode(t *testing.T) {
 	legacy := kernel.LegacyUserMarkBase
 	perAgent := kernel.UserMarkBaseForAgent(75)
-	if legacy != 0x46560000 || perAgent != 0x464B0000 {
+	if legacy != 0x46560000 || perAgent != 0x474B0000 {
 		t.Fatalf("sanity: legacy 0x%x per-agent 0x%x", legacy, perAgent)
 	}
 	cases := []struct {

@@ -22,10 +22,60 @@ import (
 
 func TestNftTableForBaseDirCanonicalKeepsPlainName(t *testing.T) {
 	stubKernelResolution(t, false, "/anywhere", nil, "/etc/flmx_agent/flmx_agent", nil)
-	for _, base := range []string{defaultBaseDir, legacyBaseDir} {
-		if got := nftTableForBaseDir(base); got != nftTable {
-			t.Fatalf("canonical root %q must keep the plain table, got %q", base, got)
-		}
+	if got := nftTableForBaseDir(defaultBaseDir); got != nftTable {
+		t.Fatalf("current canonical root %q must keep the plain table, got %q", defaultBaseDir, got)
+	}
+}
+
+// F-R4-02: the legacy pre-rename root must NOT share the plain table
+// with the current root — a legacy agent and a current agent on one
+// host would otherwise wipe each other's counters/whitelists on sync
+// (F2-NFT-01 mechanism). The legacy root gets its own fixed table.
+func TestNftTableForBaseDirLegacyIsolated(t *testing.T) {
+	stubKernelResolution(t, false, "/anywhere", nil, "/etc/flux_agent/flux_agent", nil)
+	if got := nftTableForBaseDir(legacyBaseDir); got != "flmx_kernel_legacy" {
+		t.Fatalf("legacy root %q must get its own table, got %q", legacyBaseDir, got)
+	}
+	if nftTableForBaseDir(legacyBaseDir) == nftTableForBaseDir(defaultBaseDir) {
+		t.Fatal("legacy and current roots must not share a table")
+	}
+}
+
+// F-R4-02: legacy-vs-current sync isolation — one agent's sync must
+// not delete or rewrite the other generation's table. Temp-dir
+// counters stand in for the two installs (their real roots are
+// /etc paths whose state files the test must not touch); the table
+// names are the real derived ones.
+func TestLegacyAndCurrentAgentsDoNotShareNftTable(t *testing.T) {
+	stubKernelResolution(t, false, "/anywhere", nil, "/etc/flmx_agent/flmx_agent", nil)
+	stubFakeNftTables(t)
+	ctx := context.Background()
+
+	nCur := newNftCounters(filepath.Join(t.TempDir(), "cur", "kernels"))
+	nCur.table = nftTableForBaseDir(defaultBaseDir)
+	nLeg := newNftCounters(filepath.Join(t.TempDir(), "leg", "kernels"))
+	nLeg.table = nftTableForBaseDir(legacyBaseDir)
+	if nCur.tableName() == nLeg.tableName() {
+		t.Fatalf("legacy and current agents must get different tables, both %q", nCur.tableName())
+	}
+
+	portsCur := []Port{{InboundID: 901, Port: 18001, Network: "tcp,udp"}}
+	portsLeg := []Port{{InboundID: 902, Port: 18002, Network: "tcp"}}
+	if err := nCur.sync(portsCur, nil); err != nil {
+		t.Fatalf("current sync: %v", err)
+	}
+	fpCur, err := nCur.tableFingerprint(ctx)
+	if err != nil {
+		t.Fatalf("current table must exist after current sync: %v", err)
+	}
+	if err := nLeg.sync(portsLeg, nil); err != nil {
+		t.Fatalf("legacy sync: %v", err)
+	}
+	if fp, err := nCur.tableFingerprint(ctx); err != nil || fp != fpCur {
+		t.Fatalf("legacy sync changed the current table: fp=%q err=%v (was %q)", fp, err, fpCur)
+	}
+	if _, err := nLeg.tableFingerprint(ctx); err != nil {
+		t.Fatalf("legacy table must exist after legacy sync: %v", err)
 	}
 }
 
@@ -209,7 +259,7 @@ func TestRemoveTablesOnlyOwnTableForIsolatedAgent(t *testing.T) {
 	if !strings.Contains(script, "delete table inet "+n.tableName()+"\n") {
 		t.Fatalf("removeTables must delete its own table %q: %s", n.tableName(), script)
 	}
-	for _, bare := range []string{"delete table inet flmx_kernel\n", "delete table inet flvx_kernel\n"} {
+	for _, bare := range []string{"delete table inet flmx_kernel\n", "delete table inet flvx_kernel\n", "delete table inet flmx_kernel_legacy\n"} {
 		if strings.Contains(script, bare) {
 			t.Fatalf("isolated removeTables must not delete %q: %s", bare, script)
 		}
@@ -234,7 +284,7 @@ func TestRemoveTablesCanonicalDeletesLegacyToo(t *testing.T) {
 		t.Fatalf("removeTables: %v", err)
 	}
 	script := scripts[0]
-	for _, want := range []string{"delete table inet flmx_kernel\n", "delete table inet flvx_kernel\n", "delete table inet flmx_hop_probe\n"} {
+	for _, want := range []string{"delete table inet flmx_kernel\n", "delete table inet flvx_kernel\n", "delete table inet flmx_kernel_legacy\n", "delete table inet flmx_hop_probe\n"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("canonical removeTables must delete %q: %s", want, script)
 		}

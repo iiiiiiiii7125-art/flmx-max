@@ -472,28 +472,51 @@ func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User
 }
 
 // applyKernelsForInbounds pushes the kernels serving the given inbounds,
-// once each. Imported nodes have no kernel and are skipped.
+// once each. Imported nodes have no kernel and are skipped. When
+// several pushes fail, a real failure takes precedence over a
+// still-confirming one (F2-APPLY-01 同族)：pending 绝不能遮住真
+// 失败，真失败也绝不能把 pending 写成「下发失败」。
 func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 	seen := map[int64]bool{}
-	var firstErr error
+	var firstErr, firstPending error
 	for _, id := range ids {
 		row, err := h.repo.GetNodeInbound(id)
 		if err != nil || row == nil || isExternalInbound(row) || seen[row.KernelID] {
 			continue
 		}
 		seen[row.KernelID] = true
-		if err := h.applyKernel(row.KernelID, false); err != nil && firstErr == nil {
-			firstErr = err
+		if err := h.applyKernel(row.KernelID, false); err != nil {
+			if errors.Is(err, errApplyConfirmPending) {
+				if firstPending == nil {
+					firstPending = err
+				}
+				continue
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
-	return firstErr
+	if firstErr != nil {
+		return firstErr
+	}
+	return firstPending
 }
 
 // pushFailureMsg 把下发失败拼进成功回执 Msg 前的净化（RAW291）：
 // 仓储错误（repoError 标记，如 applyKernel 的 GetNodeKernel 读失败）
 // 只留固定前缀、原文只记日志；数据面下发错误（节点不在线、agent
 // 拒收）原样附后——那是管理员排查所需的诊断信息。
+// F2-APPLY-01 同族：确认待定不是失败——把「，但下发到节点失败」
+// 尾缀换成「，下发已发出，正在确认生效状态」；带后缀的文案
+// （「，后台将自动重试」）保留后缀。绝不把 pending 写成失败。
 func pushFailureMsg(prefix string, err error) string {
+	if errors.Is(err, errApplyConfirmPending) {
+		if i := strings.Index(prefix, "，但下发到节点失败"); i >= 0 {
+			return prefix[:i] + "，下发已发出，正在确认生效状态" + prefix[i+len("，但下发到节点失败"):]
+		}
+		return prefix + "，下发已发出，正在确认生效状态"
+	}
 	if isRepoError(err) {
 		log.Printf("push failure (storage): %v", err)
 		return prefix
@@ -1326,7 +1349,8 @@ func (h *Handler) subscriptionSave(w http.ResponseWriter, r *http.Request) {
 		warning += fb
 	}
 	if err := h.applyKernelsForInbounds(push); err != nil {
-		// 下发失败：不更新 AppliedActive，循环会重试；仅提示用户。
+		// 下发失败或确认待定：不更新 AppliedActive，循环会重试；
+		// 仅提示用户（pending 不是失败，见 pushFailureMsg）。
 		// RAW291：仓储原文经 pushFailureMsg 换成固定文案。
 		response.WriteJSON(w, response.R{Code: 0, Msg: pushFailureMsg("已保存，但下发到节点失败", err), Data: view, TS: time.Now().UnixMilli(), Warning: warning})
 		return

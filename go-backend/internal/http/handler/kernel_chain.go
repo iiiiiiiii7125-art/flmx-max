@@ -578,6 +578,12 @@ func (h *Handler) applyChainReferrersFromRefs(refs []model.NodeInbound) []string
 		}
 		seen[ref.KernelID] = true
 		if err := h.applyKernel(ref.KernelID, false); err != nil {
+			// F2-APPLY-01 同族：确认待定不是失败——出站已保存、
+			// 下发已发出，警告只说「正在确认」，不缀「下发失败」。
+			if errors.Is(err, errApplyConfirmPending) {
+				warnings = append(warnings, fmt.Sprintf("经它出站的「%s」下发已发出，正在确认生效状态", ref.Name))
+				continue
+			}
 			warnings = append(warnings, fmt.Sprintf("经它出站的「%s」下发失败: %v", ref.Name, err))
 		}
 	}
@@ -602,6 +608,11 @@ func (h *Handler) applyWhitelistedTarget(targetID int64) []string {
 		return nil
 	}
 	if err := h.applyKernel(target.KernelID, false); err != nil {
+		// F2-APPLY-01 同族：确认待定不是失败——白名单刷新已
+		// 发出、正在确认，不得缀「下发失败」。
+		if errors.Is(err, errApplyConfirmPending) {
+			return []string{fmt.Sprintf("出站节点「%s」的白名单下发已发出，正在确认生效状态", target.Name)}
+		}
 		return []string{fmt.Sprintf("出站节点「%s」的白名单下发失败: %v", target.Name, err)}
 	}
 	return nil
@@ -749,7 +760,13 @@ func (h *Handler) inboundSplitSave(w http.ResponseWriter, r *http.Request) {
 	h.reconcileSSMetering()
 	var warnings []string
 	if err := h.applyKernel(k.ID, false); err != nil {
-		warnings = append(warnings, "下发到节点失败: "+err.Error())
+		// F2-APPLY-01 同族：确认待定不是失败——分流已落库、下发
+		// 已发出，警告只说「正在确认」，不缀「下发失败」。
+		if errors.Is(err, errApplyConfirmPending) {
+			warnings = append(warnings, "下发已发出，正在确认生效状态")
+		} else {
+			warnings = append(warnings, "下发到节点失败: "+err.Error())
+		}
 	}
 	warnings = append(warnings, h.applyChangedTargets(prevTargets, *row)...)
 	if len(warnings) > 0 {
