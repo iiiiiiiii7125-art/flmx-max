@@ -230,6 +230,17 @@ func TestRealmForwardTrafficAfterApplyIsCredited(t *testing.T) {
 		return out, len(out) == 4
 	}
 
+	// R5-B-02：下发前「无基线」的前提检查必须放在节点上线之前。
+	// 节点一上线，onNodeOnline 的同步重推（realm 隧道经
+	// syncRealmNodes 建行＋下发）与异步 reconcileNodeKernels（下发
+	// ＋轮尾 poll）就可能抢在检查之前造出 realm:e1 四计数基线——
+	// 旧检查放在 waitForCondition 之后，满载调度一抖即翻红
+	// （suite-gate flake，非产品回归）。节点从未上线时没有任何
+	// 路径能下发/轮询，基线不可能存在，此处检查才是确定性的。
+	if _, found := baseline(); found {
+		t.Fatal("no realm baseline may exist before the kernel is applied")
+	}
+
 	// 节点先在线（与真机 Rig 同形态：节点长期在线、转发其后新建）。
 	mock := &realmMeterMock{}
 	srv := httptest.NewServer(h.WebSocketHandler())
@@ -237,9 +248,11 @@ func TestRealmForwardTrafficAfterApplyIsCredited(t *testing.T) {
 	stop := startRealmMeterMockNode(t, srv.URL, "entry-secret", kernel.RealmCounterID(forward.ID), mock)
 	defer stop()
 	waitForCondition(t, 5*time.Second, func() bool { return h.wsServer.IsNodeOnline(nodeID) }, "mock node online")
-	if _, found := baseline(); found {
-		t.Fatal("no realm baseline may exist before the kernel is applied")
-	}
+	// R5-B-02：上线后故意静置 1 秒，让 onNodeOnline 的同步重推与
+	// 异步对账先跑完——本测试的后续断言（下发必轮询、基线钉 0、
+	// 下发后流量入账）对「谁先下发」必须不敏感；静置后仍通过，
+	// 才算竞态真正闭合，而非靠调度侥幸。
+	time.Sleep(time.Second)
 	// 普通下发路径（forward 创建/更新走的同一入口）：realm 内核下发，
 	// 此刻 agent 计数为 0。
 	_, statusBefore := mock.calls()

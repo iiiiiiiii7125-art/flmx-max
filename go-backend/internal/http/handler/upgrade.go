@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1280,8 +1281,8 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	// fires once per WS session establishment, never on heartbeat
 	// or status polls. Success and failure are both logged with
 	// the node id — a skipped push must never read as silent success.
-	if !h.redeployLocalNodeRuntime(nodeID) {
-		log.Printf("node online redeploy failed node_id=%d (retry scheduled)", nodeID)
+	if err := h.redeployLocalNodeRuntime(nodeID); err != nil {
+		log.Printf("node online redeploy failed node_id=%d err=%v (retry scheduled)", nodeID, err)
 		h.scheduleNodeLocalRuntimeRetry(nodeID)
 	} else {
 		log.Printf("node online redeploy succeeded node_id=%d", nodeID)
@@ -1338,7 +1339,7 @@ func (h *Handler) retryNodeLocalRuntime(nodeID int64) {
 	h.nodeOnlineRedeploying[nodeID] = struct{}{}
 	h.upgradeMu.Unlock()
 	defer h.finishNodeOnlineRedeploy(nodeID)
-	if !h.redeployLocalNodeRuntime(nodeID) {
+	if err := h.redeployLocalNodeRuntime(nodeID); err != nil {
 		h.scheduleNodeLocalRuntimeRetry(nodeID)
 	} else {
 		h.clearNodeLocalRuntimeRetry(nodeID)
@@ -1472,20 +1473,28 @@ func (h *Handler) finishNodeOnlineRedeploy(nodeID int64) {
 	h.upgradeMu.Unlock()
 }
 
-func (h *Handler) redeployNodeRuntimeAfterUpgrade(nodeID int64) bool {
+func (h *Handler) redeployNodeRuntimeAfterUpgrade(nodeID int64) error {
 	return h.redeployLocalNodeRuntime(nodeID)
 }
 
-func (h *Handler) redeployLocalNodeRuntime(nodeID int64) bool {
+// errRedeployPending 是 redeployLocalNodeRuntime 的待定哨兵
+// （R5-B-01，同族 F1 的 errApplyConfirmPending 口径）：
+// 本轮无任何真实下发出错，但至少一条转发在下发时因节点离线被
+// 跳过（未送达），30 秒重试已排队、重推幂等——这是「待定」，
+// 不是失败。调用方须按 pending/失败分流回执，绝不把待定写成
+// 「重新下发失败」。
+var errRedeployPending = errors.New("重推未送达，已排队稍后自动重试")
+
+func (h *Handler) redeployLocalNodeRuntime(nodeID int64) error {
 	tunnelIDs, err := h.repo.ListActiveTunnelIDsByNode(nodeID)
 	if err != nil {
 		fmt.Printf("post-upgrade redeploy: list tunnels for node %d failed: %v\n", nodeID, err)
-		return false
+		return fmt.Errorf("redeploy: list tunnels for node %d: %w", nodeID, err)
 	}
 	forwardIDs, err := h.repo.ListForwardIDsByNode(nodeID)
 	if err != nil {
 		fmt.Printf("post-upgrade redeploy: list forwards for node %d failed: %v\n", nodeID, err)
-		return false
+		return fmt.Errorf("redeploy: list forwards for node %d: %w", nodeID, err)
 	}
 
 	// First pass: deploy everything
@@ -1551,11 +1560,16 @@ func (h *Handler) redeployLocalNodeRuntime(nodeID int64) bool {
 	// 30s schedule (scheduleNodeLocalRuntimeRetry), not this inline
 	// backoff: the inline retry replays the same sync, whose offline
 	// skip again reads as nil error and would "succeed".
-	ok := h.retryFailedRedeploys(nodeID, tunnelFailed, failedForwards)
-	if len(skippedForwardIDs) > 0 {
-		return false
+	// R5-B-01：真失败与待定分流——重试后仍失败是真失败；仅离线
+	// 跳过（无任何真实下发出错）是待定 errRedeployPending，调用
+	// 方按 pending 回执、绝不写成「下发失败」。
+	if !h.retryFailedRedeploys(nodeID, tunnelFailed, failedForwards) {
+		return errors.New("redeploy: tunnel/forward redeploy still failing after retries")
 	}
-	return ok
+	if len(skippedForwardIDs) > 0 {
+		return errRedeployPending
+	}
+	return nil
 }
 
 // redeploySkippedOfflineForNode reports whether warnings contain the

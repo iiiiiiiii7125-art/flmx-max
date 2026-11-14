@@ -234,8 +234,11 @@ export function NodeConnLogModal({
   }, []);
 
   // 一键重新下发：同步整节点运行配置重推（与开关翻转同一漏
-  // 斗），回执成功才报成功；失败原样展示后端原因，绝不静默报
-  // 成功。成功后刷新就绪指示与记录列表，让"已生效"当场可验。
+  // 斗）。三态回执（R5-B-01）：code!=0 是真失败，原样展示后端
+  // 原因；code==0 但 redeployed=false 是待定（节点离线、已排队
+  // 30 秒后自动重试），展示信封 warning 原文、绝不写「下发失
+  // 败」，也不当成功刷新；只有 redeployed=true 才报成功并刷新
+  // 就绪指示与记录列表，让"已生效"当场可验。
   const handleRepush = useCallback(async () => {
     const id = nodeIdRef.current;
 
@@ -246,9 +249,14 @@ export function NodeConnLogModal({
     try {
       const res = await repushNodeConnLogConfig(id);
 
-      if (res.code !== 0 || !res.data?.redeployed) {
+      if (res.code !== 0) {
         setRepushFailed(true);
         setRepushResult(res.msg || "重新下发失败");
+      } else if (!res.data?.redeployed) {
+        setRepushFailed(false);
+        setRepushResult(
+          res.warning || "重新下发已排队：节点离线，本次重推未送达，稍后自动重试",
+        );
       } else {
         setRepushFailed(false);
         setRepushResult(

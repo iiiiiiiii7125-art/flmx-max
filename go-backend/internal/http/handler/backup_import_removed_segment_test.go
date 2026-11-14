@@ -57,3 +57,37 @@ func TestBackupImportNestedUnknownFieldStillRejected(t *testing.T) {
 		t.Fatalf("nested unknown field: code=%d msg=%q, want -1 naming bogusField", code, msg)
 	}
 }
+
+// RM-ANN v1：含 announcements 段的旧备份在删表迁移后仍须容忍导入——
+// code=0、警告按名披露 "announcements"，不整单失败。删表迁移只动
+// 库表，不碰导入路径；本用例锁定该兼容不被迁移破坏。
+func TestBackupImportLegacyAnnouncementsSegmentIgnoredWithWarning(t *testing.T) {
+	h := r8NewHandler(t)
+
+	body := `{"version":"1.0","exportedAt":0,"types":["configs"],"configs":{},"announcements":[{"id":1,"content":"","enabled":0,"created_time":1,"updated_time":1}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backup/import", bytes.NewReader([]byte(body)))
+	rec := httptest.NewRecorder()
+	h.backupImport(rec, req)
+	var out struct {
+		Code int `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			ImportWarnings []string `json:"importWarnings"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rec.Body.String())
+	}
+	if out.Code != 0 {
+		t.Fatalf("import with legacy announcements segment: code=%d msg=%q, want 0", out.Code, out.Msg)
+	}
+	found := false
+	for _, w := range out.Data.ImportWarnings {
+		if strings.Contains(w, "announcements") && strings.Contains(w, "忽略") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dropped announcements segment must be disclosed in ImportWarnings, got %v", out.Data.ImportWarnings)
+	}
+}

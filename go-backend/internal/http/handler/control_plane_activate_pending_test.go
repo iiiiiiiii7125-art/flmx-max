@@ -33,7 +33,12 @@ func newF02Handler(t *testing.T) (*Handler, int64) {
 	if err := r.DB().Create(&fwd).Error; err != nil {
 		t.Fatal(err)
 	}
-	return &Handler{repo: r}, fwd.ID
+	h := &Handler{repo: r}
+	// R5-B-03：测试 handler 的 notify 派发 worker 须随测试结束停掉，
+	// 否则同进程后续测试的 goroutine 栈里一直残留（旧 20m 超时
+	// dump 的 runNotifyWorker 即此物）。
+	t.Cleanup(func() { h.StopBackgroundJobs() })
+	return h, fwd.ID
 }
 
 func f02NewForward(t *testing.T, h *Handler, name string) int64 {

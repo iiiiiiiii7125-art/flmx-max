@@ -453,3 +453,55 @@ func TestF1ApplyKernelsRealFailureBeatsPendingLate(t *testing.T) {
 		t.Fatalf("must not return pending when a real failure exists, got %v", err)
 	}
 }
+
+// F-R5-APPLY-01-OBS：干净停机（节点离线）时建入站，回执须说
+// 「节点离线，下发待节点重连后自动重推」，绝不缀「下发失败」；
+// 内核状态须为 pending（重连后 onNodeOnline 自动重推收敛）。
+// 与冻结（SIGSTOP）区分：冻结是「已发出、正在确认」，停机是
+// 「未送达、待重连」——两种待定各有其文案，互不冒充。
+func TestF1OfflineInboundCreateReceipt(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/f1-offline-create.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+
+	nodeID := seedRelayTargetNode(t, r, "f1-offline-node", "198.51.100.24")
+	// 干净停机形态：DB 记在线、agent 无 live 会话（与 F 路真机
+	// SIGTERM 观测一致——建入站时 send 直接报「节点不在线」）。
+	if err := r.DB().Exec(`UPDATE node SET status = 1 WHERE id = ?`, nodeID).Error; err != nil {
+		t.Fatal(err)
+	}
+	box := seedChainKernel(t, r, nodeID, kernel.TypeSingbox)
+	entry := seedChainInbound(t, r, box, "f1-offline-seed", kernel.Inbound{Protocol: kernel.ProtocolShadowsocks, Port: 8388}, 0)
+	old, err := inboundFromModel(*entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := inboundRequest{
+		NodeID: nodeID, KernelType: kernel.TypeSingbox, Name: "f1-offline-new",
+		Protocol: kernel.ProtocolShadowsocks, Settings: old.Settings, Security: old.Security,
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := callInboundSave(t, h, false, string(raw))
+	if out.Code != 0 {
+		t.Fatalf("offline create receipt code = %d, want 0 (body=%+v)", out.Code, out)
+	}
+	if out.Msg != "已保存，但节点离线，下发待节点重连后自动重推" {
+		t.Fatalf("offline create receipt msg = %q, want %q", out.Msg, "已保存，但节点离线，下发待节点重连后自动重推")
+	}
+	if strings.Contains(out.Msg, "下发失败") {
+		t.Fatalf("offline receipt must never say 下发失败: %q", out.Msg)
+	}
+	after, err := r.GetNodeKernel(box.ID)
+	if err != nil || after == nil {
+		t.Fatalf("reload kernel: %v", err)
+	}
+	if after.Status != kernelStatusPending {
+		t.Fatalf("offline kernel status = %q, want %q (reconnect converges)", after.Status, kernelStatusPending)
+	}
+}

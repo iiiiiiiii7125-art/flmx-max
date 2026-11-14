@@ -143,6 +143,8 @@ func newF2APPLY01Handler(t *testing.T, statusHash func() string) (*Handler, *rep
 		t.Fatal("fake agent did not come online")
 	}
 	h := New(r, "unit-test-secret")
+	// R5-B-03：测试结束停掉可能被懒启动的 notify 派发 worker。
+	t.Cleanup(func() { h.StopBackgroundJobs() })
 	h.wsServer = server
 	return h, r, k.ID
 }

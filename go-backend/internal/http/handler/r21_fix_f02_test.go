@@ -36,8 +36,8 @@ func TestR21F02RedeployAfterOfflineUpdateDeletesStaleLimiter(t *testing.T) {
 	want := fmt.Sprintf("rule_conn_limit_%d", forward.ID)
 	_ = r20F01ClearLimits(t, a, forward)
 
-	if ok := a.h.redeployLocalNodeRuntime(1); !ok {
-		t.Fatalf("redeployLocalNodeRuntime should succeed, got false")
+	if err := a.h.redeployLocalNodeRuntime(1); err != nil {
+		t.Fatalf("redeployLocalNodeRuntime should succeed, got %v", err)
 	}
 	if got := len(a.commandsOfType("UpdateService")); got == 0 {
 		t.Fatalf("expected UpdateService to be sent on redeploy")
@@ -69,8 +69,8 @@ func TestR21F02RedeployKeepsLimitsSendsNoDeleteCLimiters(t *testing.T) {
 	forward := seedR19F03Forward(t, a, 7, 0)
 	want := fmt.Sprintf("rule_conn_limit_%d", forward.ID)
 
-	if ok := a.h.redeployLocalNodeRuntime(1); !ok {
-		t.Fatalf("redeployLocalNodeRuntime should succeed, got false")
+	if err := a.h.redeployLocalNodeRuntime(1); err != nil {
+		t.Fatalf("redeployLocalNodeRuntime should succeed, got %v", err)
 	}
 	if cmds := r19F03DeleteCLimiterCommands(t, a); len(cmds) != 0 {
 		t.Fatalf("expected no DeleteCLimiters when limits are kept, got %+v", cmds)
@@ -160,8 +160,8 @@ func TestR21F02RedeployNeverLimitedForwardSendsNoopDelete(t *testing.T) {
 	forward := seedR19F03Forward(t, a, 0, 0)
 	want := fmt.Sprintf("rule_conn_limit_%d", forward.ID)
 
-	if ok := a.h.redeployLocalNodeRuntime(1); !ok {
-		t.Fatalf("redeployLocalNodeRuntime should succeed, got false")
+	if err := a.h.redeployLocalNodeRuntime(1); err != nil {
+		t.Fatalf("redeployLocalNodeRuntime should succeed, got %v", err)
 	}
 	cmds := r19F03DeleteCLimiterCommands(t, a)
 	if len(cmds) != 1 {

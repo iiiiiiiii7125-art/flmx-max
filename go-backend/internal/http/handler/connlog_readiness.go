@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -250,11 +251,13 @@ func (h *Handler) nodeConnlogReadiness(w http.ResponseWriter, r *http.Request) {
 // 布 redeployTunnelAndForwards＋逐转发 syncForwardServices，
 // 生成面按 DB 现值重算，含 connlog 入口标记），但与
 // repushNodeRuntimeAfterSettingChange 的异步静默口径不同：
-// 本端点同步等重推完成并原样返回成功/失败——重推返回 false
-// 即回 code -1，绝不报成功。离线/nftables 节点在重推前即显式
-// 拒绝（不碰 agent、不报成功，离线节点重连时 onNodeOnline
-// 按 DB 新值自动重布）。成功后补一次与开关翻转同形的内核重
-// 下发（reconcileNodeKernelsCollect），其失败只进 warning、
+// 本端点同步等重推完成并按三态返回（R5-B-01）：成功回 code 0；
+// 仅离线跳过（未送达、重试已排队）是待定，回 code 0＋排队提示
+// （redeployed:false），绝不报「重新下发失败」；真失败才回
+// code -1。离线/nftables 节点在重推前即显式拒绝（不碰 agent、
+// 不报成功，离线节点重连时 onNodeOnline 按 DB 新值自动重布）。
+// 成功后补一次与开关翻转同形的内核重下发
+// （reconcileNodeKernelsCollect），其失败只进 warning、
 // 不翻转已成功的重推回执；无内核的节点此步为空操作。
 // 注意：本端点不走 startNodeOnlineRedeploy 的 30 秒冷却门——
 // 那是重连风暴的节流门，手动重推是用户显式动作，冷却内点第
@@ -294,7 +297,7 @@ func (h *Handler) nodeConnlogRepush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 计数只作回执富集（重推成败由 redeployLocalNodeRuntime 的
-	// bool 定，不由计数定）：读错记日志、计数回 0，不挡重推、
+	// error 三态定，不由计数定）：读错记日志、计数回 0，不挡重推、
 	// 不冒充——此处须查错（R3-MR-01 登记门：读错静默吞即红）。
 	tunnelIDs, err := h.repo.ListActiveTunnelIDsByNode(req.NodeID)
 	if err != nil {
@@ -308,11 +311,23 @@ func (h *Handler) nodeConnlogRepush(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("node connlog repush requested node_id=%d tunnels=%d forwards=%d operator_id=%d",
 		req.NodeID, len(tunnelIDs), len(forwardIDs), idemUserID(r))
-	if ok := h.redeployLocalNodeRuntime(req.NodeID); !ok {
-		// 与 onNodeOnline 同口径：失败挂重试队列（30 秒后
-		// retryNodeLocalRuntime 再试），但本次回执如实报失败。
+	// R5-B-01：重推三态分流（同族 F1 的 pending/失败口径）——成功
+	// 走下方的 OK；仅离线跳过（未送达、重试已排队）是待定，回
+	// code 0＋排队提示，绝不写「重新下发失败」；真失败才回
+	// code -1。两种非成功情形都挂 30 秒重试队列。
+	if err := h.redeployLocalNodeRuntime(req.NodeID); err != nil {
 		h.scheduleNodeLocalRuntimeRetry(req.NodeID)
-		log.Printf("node connlog repush failed node_id=%d (runtime redeploy returned false; retry queued)", req.NodeID)
+		if errors.Is(err, errRedeployPending) {
+			log.Printf("node connlog repush pending node_id=%d (redeploy skipped offline; retry queued)", req.NodeID)
+			response.WriteJSON(w, response.OKWithWarning(map[string]interface{}{
+				"nodeId":       req.NodeID,
+				"redeployed":   false,
+				"tunnelCount":  len(tunnelIDs),
+				"forwardCount": len(forwardIDs),
+			}, "重新下发已排队：节点在下发时离线，本次重推未送达，30 秒后自动重试"))
+			return
+		}
+		log.Printf("node connlog repush failed node_id=%d err=%v (retry queued)", req.NodeID, err)
 		response.WriteJSON(w, response.ErrDefault("重新下发失败：节点未确认全部配置，请检查节点在线状态与面板日志，稍后可重试"))
 		return
 	}

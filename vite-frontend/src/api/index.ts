@@ -239,8 +239,10 @@ export const getNodeConnLogReadiness = (nodeId: number) =>
 
 /**
  * Force a full runtime-config redeploy to one node (POST
- * /node/connlog-repush). Synchronous: the envelope code is 0
- * only when the redeploy itself reported success.
+ * /node/connlog-repush). Synchronous tri-state receipt (R5-B-01):
+ * code 0 + redeployed true = success; code 0 + redeployed false
+ * + envelope warning = queued pending (node offline at push time,
+ * retry in 30s), never a failure; non-zero code = genuine failure.
  */
 export const repushNodeConnLogConfig = (nodeId: number) =>
   Network.post<NodeConnLogRepushResult>("/node/connlog-repush", {
