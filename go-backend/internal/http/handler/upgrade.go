@@ -1282,7 +1282,13 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	// or status polls. Success and failure are both logged with
 	// the node id — a skipped push must never read as silent success.
 	if err := h.redeployLocalNodeRuntime(nodeID); err != nil {
-		log.Printf("node online redeploy failed node_id=%d err=%v (retry scheduled)", nodeID, err)
+		// R6-B-01：待定不是失败——仅离线跳过（errRedeployPending）
+		// 时日志写 pending，绝不写成 failed；重试照常排队。
+		if errors.Is(err, errRedeployPending) {
+			log.Printf("node online redeploy pending node_id=%d err=%v (retry scheduled)", nodeID, err)
+		} else {
+			log.Printf("node online redeploy failed node_id=%d err=%v (retry scheduled)", nodeID, err)
+		}
 		h.scheduleNodeLocalRuntimeRetry(nodeID)
 	} else {
 		log.Printf("node online redeploy succeeded node_id=%d", nodeID)
@@ -1471,10 +1477,6 @@ func (h *Handler) finishNodeOnlineRedeploy(nodeID int64) {
 	h.upgradeMu.Lock()
 	delete(h.nodeOnlineRedeploying, nodeID)
 	h.upgradeMu.Unlock()
-}
-
-func (h *Handler) redeployNodeRuntimeAfterUpgrade(nodeID int64) error {
-	return h.redeployLocalNodeRuntime(nodeID)
 }
 
 // errRedeployPending 是 redeployLocalNodeRuntime 的待定哨兵
