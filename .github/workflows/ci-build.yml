@@ -116,6 +116,10 @@ jobs:
   # selftests here as direct runs, mirroring the agent-image pair in the
   # frontend job. A dedicated job keeps the ~160s timeout-budgets
   # selftest off the frontend job's critical path (it runs in parallel).
+  # D-R7-01 (same family): check-hist-metering.sh existed with a passing
+  # selftest but no execution point anywhere — its selftest joins this
+  # step, and the gate itself is wired into check-doc-consistency.sh §25
+  # (frontend job), so both the gate and its teeth are executed in CI.
   # The private-ranges script needs only bash + python3, but the
   # timeout-budgets gate extracts frontend values with the TypeScript
   # compiler API (scripts/timeout-fe-extract.mjs) and fails closed
@@ -127,7 +131,7 @@ jobs:
   # lands in this checkout's vite-frontend/node_modules) before
   # running the selftests.
   gate-selftests:
-    name: Gate Mutation Selftests (timeout budgets + private ranges)
+    name: Gate Mutation Selftests (timeout budgets + private ranges + hist metering)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -148,6 +152,7 @@ jobs:
         run: |
           bash scripts/check-private-ranges-selftest.sh
           bash scripts/check-timeout-budgets-selftest.sh
+          bash scripts/check-hist-metering-selftest.sh
 
       # A4-02: the remaining five root gates (workflow-pins,
       # contract-fields, doc-consistency, script-version-bump,

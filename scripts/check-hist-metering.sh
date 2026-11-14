@@ -24,7 +24,7 @@ ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 FILE="$ROOT/vite-frontend/src/pages/inbound/presets.ts"
 fail=0
 
-[ -f "$FILE" ] || { echo "FAIL: $FILE not found"; exit 2; }
+[ -f "$FILE" ] || { echo "FAIL: 前提失效，$FILE 不存在"; exit 2; }
 
 # Extract one top-level function body (from its export line to the next
 # closing brace at column 0) so assertions cannot be satisfied by a
@@ -38,7 +38,7 @@ func_body() {
 }
 
 EMPTY="$(func_body emptyForm)"
-[ -n "$EMPTY" ] || { echo "FAIL: emptyForm not found in $FILE"; exit 2; }
+[ -n "$EMPTY" ] || { echo "FAIL: 前提失效，$FILE 中未找到 emptyForm"; exit 2; }
 if printf '%s\n' "$EMPTY" | grep -q 'meteringEnabled: true,'; then
 	echo "OK: emptyForm defaults meteringEnabled to true"
 else
@@ -51,7 +51,7 @@ if printf '%s\n' "$EMPTY" | grep -q 'meteringEnabled: false,'; then
 fi
 
 PAYLOAD="$(func_body toPayload)"
-[ -n "$PAYLOAD" ] || { echo "FAIL: toPayload not found in $FILE"; exit 2; }
+[ -n "$PAYLOAD" ] || { echo "FAIL: 前提失效，$FILE 中未找到 toPayload"; exit 2; }
 if printf '%s\n' "$PAYLOAD" | grep -q 'form.protocol === "shadowsocks"' &&
 	printf '%s\n' "$PAYLOAD" | grep -q 'form.method.startsWith("2022-")' &&
 	printf '%s\n' "$PAYLOAD" | grep -q 'form.securityType !== "shadowtls"'; then

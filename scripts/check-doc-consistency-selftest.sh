@@ -40,6 +40,10 @@
 # FIX-212 W8 扩围：变体 9–12 覆盖 §22 四钉（探活参数、节点分组
 # 限定句、协议开关语义、残留词零命中），每钉一个变体、改坏文案
 # 必须被对应钉抓红并点名；变体 9–11 带变异落点断言防静默空转。
+# D-R7-01 扩围：变体 24 覆盖 §25（S05 前端计量默认开门转跑），
+# emptyForm 默认改回 false 必须被 §25 抓红并点名——证明转跑本身
+# 真实执行，不止子门自检（子门自检只证子门，§25 被拆线时本变体
+# 即绿、直接暴露接线丢失）。
 # FIX-GATE-CALIB 改钉（R2-GATE-02）：上文 55/153、59/149 均为历史
 # 标定记录（出处见各重标定提交），不再是变体 8 的写死锚点——变体
 # 8 改为运行时从镜像内 ci-build.yml 机械读现行标记值（其后标记又
@@ -332,5 +336,26 @@ if FLMX_TMP_MIN_KB=999999999 run_gate "$TMP/v23.log"; then
 else
   echo "FAIL: variant 23 failed the gate — premise failure must PENDING, not FAIL:"; sed 's/^/    /' "$TMP/v23.log"; exit 1
 fi
+
+echo "== variant 24: emptyForm metering default flips back to false must FAIL and name it (§25, D-R7-01) =="
+python3 - "$MIR/vite-frontend/src/pages/inbound/presets.ts" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+start = s.index("export function emptyForm(")
+end = s.index("\n}\n", start)
+body = s[start:end]
+assert "meteringEnabled: true," in body, "baseline shape changed"
+body = body.replace("meteringEnabled: true,", "meteringEnabled: false,", 1)
+open(p, "w").write(s[:start] + body + s[end:])
+PYEOF
+grep -q "meteringEnabled: false," "$MIR/vite-frontend/src/pages/inbound/presets.ts" || {
+  echo "FAIL: variant 24 mutation did not land (emptyForm default anchor drifted)"; exit 1; }
+if run_gate "$TMP/v24.log"; then
+  echo "FAIL: variant 24 was not caught"; exit 1
+fi
+grep -q "S05 前端计量默认开门" "$TMP/v24.log" && echo "OK: variant 24 caught and named" || {
+  echo "FAIL: variant 24 caught but the drift was not named"; sed 's/^/    /' "$TMP/v24.log"; exit 1; }
+cp "$ROOT/vite-frontend/src/pages/inbound/presets.ts" "$MIR/vite-frontend/src/pages/inbound/presets.ts"
 
 echo "SELFTEST PASS"

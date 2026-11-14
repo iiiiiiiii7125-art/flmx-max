@@ -192,6 +192,21 @@ for f in "$REG" "$FE_TS" "$FE_STREAM" "$FE_NET" "$APP_GO"; do
 done
 [ -d "$HANDLER_DIR" ] || { echo "FAIL: 前提失效，目录不存在：$HANDLER_DIR"; exit 2; }
 
+# ── cell 唯一性（D-R7-02）─────────────────────────────────────────────
+# 登记表 cell 列是审计结论按格引用的锚点：同一 cell 被两行共用时，
+# be_literal_anchor/be_component_check 按 cell 分派的断言会串位，
+# 且按 cell 引用结论时有歧义。C100/C101 曾被两行共用（分组 v2 行
+# 复用既有 ID：createNodeGroup/renameNodeGroup），本门此前不校验
+# 唯一性。任一重复即 FAIL 并点名该 cell 与共用它的调用点。
+DUP_CELLS="$(grep -v '^#' "$REG" | tail -n +2 | cut -f1 | sort | uniq -d)"
+if [ -n "$DUP_CELLS" ]; then
+  while IFS= read -r _dc; do
+    [ -n "$_dc" ] || continue
+    _dups="$(grep -v '^#' "$REG" | tail -n +2 | awk -F'\t' -v c="$_dc" '$1==c { print $2 }' | paste -sd, -)"
+    fail "登记表 cell ID 重复：$_dc 被多行共用（$_dups），cell 必须是每格唯一锚点（D-R7-02）"
+  done <<< "$DUP_CELLS"
+fi
+
 # ── 前端提取（修复轮 7，R7-26 / G-C4-09 机制处置）──────────────
 # 前端三面（index.ts 调用点普查＋公式助手参数、network.ts 默认
 # 值、diagnosis-stream 常量）旧实现为 grep/awk 文本首命中：顶部
