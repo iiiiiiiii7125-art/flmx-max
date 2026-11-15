@@ -576,10 +576,12 @@ func TestUserQuotaResetOfflineNodeDeferred(t *testing.T) {
 	if !strings.Contains(msg, "待节点上线后恢复") {
 		t.Fatalf("reset receipt msg = %q, want it to name the offline-node deferral", msg)
 	}
-	// The release path marks the row Active even though no agent was
-	// ever contacted — the receipt must disagree with the row, not echo it.
-	if st := mustQueryInt(t, r, `SELECT status FROM forward WHERE id = 1`); st != 1 {
-		t.Fatalf("forward status after release = %d, want 1 (release path marks Active)", st)
+	// F2 根治（quota_release_offline_f4_test.go）后：离线节点释放不再
+	// 把行标 Active——行保持暂停、留在待恢复清单由 backstop 在节点上线
+	// 后重试；回执的「待节点上线后恢复」与行态一致，不再是与行相悖的
+	// 收据层修正（F4 原断言“行标 Active”是根治前的旧行为前提）。
+	if st := mustQueryInt(t, r, `SELECT status FROM forward WHERE id = 1`); st != 0 {
+		t.Fatalf("forward status after release = %d, want 0 (still paused, never Active on offline node)", st)
 	}
 }
 

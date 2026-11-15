@@ -829,11 +829,31 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 			"failed":            result.Failed,
 		}
 		msg := fmt.Sprintf("配额已重置，但 %d 个转发未恢复（仍暂停），将自动重试", len(result.Failed))
+		// D-05（F4 收据层与 F2 根治并存）：reason=node_offline 的失败
+		// 同样是“待节点上线后恢复”——backstop 在节点上线后重试；文案
+		// 须点名延期恢复，不许只报“未恢复”。失败集仍完整携带
+		// reason=node_offline，deferredForwardIds 只记已标 Active 但
+		// 未证实的转发（上文复核），两类延期在文案里合并计数。
+		offlineFailed := 0
+		for _, f := range result.Failed {
+			if f.Reason == "node_offline" {
+				offlineFailed++
+			}
+		}
 		if len(deferredIDs) > 0 {
 			data["deferredForwardIds"] = deferredIDs
-			msg += fmt.Sprintf("；%d 个转发待节点上线后恢复", len(deferredIDs))
 		}
-		response.WriteJSON(w, response.OKWithWarning(data, msg))
+		if deferredTotal := len(deferredIDs) + offlineFailed; deferredTotal > 0 {
+			msg += fmt.Sprintf("；%d 个转发待节点上线后恢复", deferredTotal)
+		}
+		// D-05 收据层与 F2 根治并存：msg 与 warning 双通道同文——msg
+		// 须点名延期恢复（F4 的 D-05 回执口径，与 subscriptionResetTraffic
+		// 的「下发到节点失败」进 msg 同族）；warning 字段同步携带同一文
+		// 案（F2 的 OKWithWarning 形态＋warning 消费门），data 仍带
+		// failedForwardIds／failed（含 node_offline 原因）／deferredForwardIds。
+		receipt := response.OKWithWarning(data, msg)
+		receipt.Msg = msg
+		response.WriteJSON(w, receipt)
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
