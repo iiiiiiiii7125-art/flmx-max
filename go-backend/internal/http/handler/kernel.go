@@ -3842,6 +3842,15 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 	outcome := kernelPollOutcome{Reachable: true}
 
 	now := time.Now().UnixMilli()
+	// B-NEW（入站行计数器 epoch/基线时序丢增量）：计数面紧贴状态
+	// 解码后立即入账，再跑内核状态对账（重启探测/孤儿清理/drift
+	// 补推）。旧序把入账放在对账尾：孤儿清理每条 KernelControl
+	// 可吃满 20s 超时，apply→首样本窗口被拉大；入账只依赖
+	// status+now，与状态面对账无数据依赖，移到此处不改变对账
+	// 语义（对账读同一份 status；补推是异步 go 程，基线由下一轮
+	// 询钉定，见 FIX-BASELINE 注释）。
+	h.ingestKernelCounters(nodeID, status, now)
+	h.ingestNodeNftablesStatus(nodeID, status)
 	byType := make(map[string]agentKernelState, len(status.Kernels))
 	for _, s := range status.Kernels {
 		byType[s.Type] = s
@@ -3914,8 +3923,6 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 		_ = h.repo.UpdateNodeKernelFields(k.ID, fields)
 	}
 
-	h.ingestKernelCounters(nodeID, status, now)
-	h.ingestNodeNftablesStatus(nodeID, status)
 	return outcome
 }
 
@@ -3974,6 +3981,28 @@ func (h *Handler) ingestKernelCounters(nodeID int64, status agentKernelStatus, n
 // 「realm 不拥有入站」侥幸避开，FIX-BASELINE 扩面到入站内核后
 // 不能再靠侥幸）。同步/切断/执法由 ≤60s 后的周期轮询全量面补
 // 做，判据读的都是已入账累计值，不漏不重。
+// B-NEW（入站行计数器 epoch/基线时序丢增量）：同一 status 的全部
+// 计数面分两相入账，两相之间以「重建是否发生」为界。
+//
+// Phase A（纯记账，持 per-node 入账锁 nodeIngestLock）：入站、realm、
+// 用户三面只做样本记账，不触发任何副作用。记账面只做 repo DB 写，
+// 不取 kernel/nft 锁；锁内不调用 syncSubscriptions/执法尾。
+// Phase B（副作用，无锁）：syncSubscriptions 与 realm 执法尾——
+// 两者可触发 KernelApply→agent 重建 nft 表→新 epoch→settle 重定
+// 基线；它们跑在全部样本已对旧基线结算之后，故重建换代吞不掉
+// 本次样本。settle 口径（full=false）只跑 Phase A，与旧行为一致
+// （settle 在 apply 锁内执行，Phase B 的副作用面可回头取同一把
+// apply 锁，必自锁——见 applyRealmCountersMode 的 enforce=false
+// 注释）。
+//
+// 为什么必须这样分：旧序先算用户计数（含 syncSubscriptions，可
+// 触发 KernelApply→重建→新 epoch→settle 重定基线），后算入站计
+// 数；同一 status 的陈旧入站样本撞上新 epoch 基线即 delta 0（B
+// 路实测 7.3MB 全丢），且陈旧入站记账会把基线写回旧 epoch，使下
+// 一轮首个新 epoch 样本也 delta 0（原站 2MB 丢增量）。两相分
+// 隔后，记账与重建不再交错；per-node 锁另防两路摄入（轮询 poll
+// 与下发后 settle）并发交错。epoch 换代本身仍 delta 0（FIX2-A
+// 既定口径，不动）。
 func (h *Handler) ingestKernelCountersMode(nodeID int64, status agentKernelStatus, now int64, full bool) {
 	// A-低-6：无 nft 的节点无计数可采，早返本身不变；缺口标识由同
 	// 轮的 ingestNodeNftablesStatus 落 "missing"（nftables 模式节点），
@@ -3981,39 +4010,62 @@ func (h *Handler) ingestKernelCountersMode(nodeID int64, status agentKernelStatu
 	if !status.NftAvailable {
 		return
 	}
+	// ---- Phase A：纯记账（持 per-node 入账锁）----
+	nodeIngestMu := h.nodeIngestLock(nodeID)
+	nodeIngestMu.Lock()
+	var realmBatch *flowUploadBatch
+	var realmMetas map[int64]repo.FlowUploadForwardMeta
+	var realmNowMs int64
+	var realmQuotaViews map[int64]*model.UserQuotaView
 	if len(status.Users) > 0 {
-		if full {
-			h.applyUserCounters(nodeID, status.Epoch, status.Users, now)
-		} else if err := h.applyUserCounterSamples(nodeID, status.Epoch, status.Users, now); err != nil {
+		if err := h.applyUserCounterSamples(nodeID, status.Epoch, status.Users, now); err != nil {
 			log.Printf("subscription traffic apply failed node_id=%d err=%v", nodeID, err)
 		}
 	}
-	if len(status.Counters) == 0 {
+	if len(status.Counters) > 0 {
+		samples := make([]repo.InboundCounterSample, 0, len(status.Counters))
+		var realmCounters []agentKernelCounter
+		for _, c := range status.Counters {
+			// realm 转发端口的计数样本（InboundID = RealmCounterBase +
+			// forwardID）必须分流到 forward 入账链；落进入站样本会被当作
+			// 未知入站静默丢弃（仅剩 repo 层的 unaccounted warn 日志）。
+			if _, ok := kernel.RealmForwardID(c.InboundID); ok {
+				realmCounters = append(realmCounters, c)
+				continue
+			}
+			samples = append(samples, repo.InboundCounterSample{
+				InboundID: c.InboundID,
+				Protocol:  c.Proto,
+				Direction: c.Dir,
+				Epoch:     status.Epoch,
+				Bytes:     c.Bytes,
+			})
+		}
+		if err := h.repo.ApplyInboundCounterSamples(nodeID, samples, now); err != nil {
+			log.Printf("kernel traffic apply failed node_id=%d err=%v", nodeID, err)
+		}
+		if len(realmCounters) > 0 {
+			var err error
+			realmBatch, realmMetas, realmNowMs, realmQuotaViews, err = h.accountRealmCounters(nodeID, status.Epoch, realmCounters, time.UnixMilli(now))
+			if err != nil {
+				realmBatch = nil
+			}
+		}
+	}
+	nodeIngestMu.Unlock()
+	// ---- Phase B：副作用（无锁）----
+	if !full {
 		return
 	}
-	samples := make([]repo.InboundCounterSample, 0, len(status.Counters))
-	var realmCounters []agentKernelCounter
-	for _, c := range status.Counters {
-		// realm 转发端口的计数样本（InboundID = RealmCounterBase +
-		// forwardID）必须分流到 forward 入账链；落进入站样本会被当作
-		// 未知入站静默丢弃（仅剩 repo 层的 unaccounted warn 日志）。
-		if _, ok := kernel.RealmForwardID(c.InboundID); ok {
-			realmCounters = append(realmCounters, c)
-			continue
-		}
-		samples = append(samples, repo.InboundCounterSample{
-			InboundID: c.InboundID,
-			Protocol:  c.Proto,
-			Direction: c.Dir,
-			Epoch:     status.Epoch,
-			Bytes:     c.Bytes,
-		})
+	if len(status.Users) > 0 {
+		// syncSubscriptions 是全局同步（单参 now）：凭据同步/限额
+		// 切断/原站口令轮换，可经 applyKernelsForInbounds 触发
+		// KernelApply→重建→settle；跑在 Phase A 全部样本已结算
+		// 之后，故换代吞不掉本次样本。
+		h.syncSubscriptions(time.UnixMilli(now))
 	}
-	if err := h.repo.ApplyInboundCounterSamples(nodeID, samples, now); err != nil {
-		log.Printf("kernel traffic apply failed node_id=%d err=%v", nodeID, err)
-	}
-	if len(realmCounters) > 0 {
-		h.applyRealmCountersMode(nodeID, status.Epoch, realmCounters, time.UnixMilli(now), full)
+	if realmBatch != nil {
+		h.enforceRealmCounters(nodeID, realmBatch, realmMetas, realmNowMs, realmQuotaViews)
 	}
 }
 
@@ -4031,7 +4083,13 @@ func (h *Handler) ingestKernelCountersMode(nodeID int64, status agentKernelStatu
 func (h *Handler) settleKernelCountersAfterApply(nodeID int64) {
 	res, err := h.sendNodeCommandWithTimeout(nodeID, "KernelStatus", map[string]interface{}{}, kernelCommandTimeout, false, false)
 	if err != nil {
-		return // 节点刚离线等：周期轮询随后补建基线，退化为原行为
+		// B-NEW：settle 读失败此前静默返回——下发后基线未钉，首个
+		// 周期轮询（≤60s）前产生的流量会被首样本基线整段吞掉，
+		// 且无任何记录可查。周期轮询随后补建基线（退化为原行为），
+		// 但此处必须大声记一笔；不重试（下一轮询自愈；锁内重试会
+		// 给 apply 路径加时序行为）。
+		log.Printf("kernel settle status read failed node_id=%d err=%v (baseline not pinned; next poll rebuilds it)", nodeID, err)
+		return
 	}
 	var status agentKernelStatus
 	if err := remarshal(res.Data, &status); err != nil {

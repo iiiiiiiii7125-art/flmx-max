@@ -45,6 +45,12 @@ type inboundMeterMock struct {
 	tcpOut      int64
 	userUp      int64
 	userDown    int64
+	// B-NEW：可武装的 epoch 换代。nextEpoch 非空时，下一次
+	// KernelApply 把 epoch 翻到该值并把全部计数清零（模拟 agent
+	// 重建 nft 表：delete table 后计数器归零、新 epoch）。epoch
+	// 为空时 KernelStatus 默认报 "e1"。
+	epoch     string
+	nextEpoch string
 }
 
 func (m *inboundMeterMock) setTraffic(tcpIn, tcpOut, userUp, userDown int64) {
@@ -126,6 +132,13 @@ func startInboundMeterMockNode(t *testing.T, baseURL, secret string, mock *inbou
 				mock.applied = true
 				mock.appliedHash = body.Hash
 				mock.applyCalls++
+				// B-NEW：武装的换代在此次下发落地——agent 重建 nft
+				// 表，计数器归零、新 epoch；只翻一次。
+				if mock.nextEpoch != "" {
+					mock.epoch = mock.nextEpoch
+					mock.nextEpoch = ""
+					mock.tcpIn, mock.tcpOut, mock.userUp, mock.userDown = 0, 0, 0, 0
+				}
 				hash := mock.appliedHash
 				mock.mu.Unlock()
 				resp["data"] = map[string]interface{}{
@@ -138,11 +151,15 @@ func startInboundMeterMockNode(t *testing.T, baseURL, secret string, mock *inbou
 				applied, hash := mock.applied, mock.appliedHash
 				inboundID, userID := mock.inboundID, mock.userID
 				tcpIn, tcpOut, userUp, userDown := mock.tcpIn, mock.tcpOut, mock.userUp, mock.userDown
+				epoch := mock.epoch
+				if epoch == "" {
+					epoch = "e1"
+				}
 				mock.mu.Unlock()
 				data := map[string]interface{}{
 					"kernels":      []map[string]interface{}{},
 					"nftAvailable": true,
-					"epoch":        "e1",
+					"epoch":        epoch,
 					"counters":     []map[string]interface{}{},
 					"users":        []map[string]interface{}{},
 				}
