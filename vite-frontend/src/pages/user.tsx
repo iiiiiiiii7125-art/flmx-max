@@ -1085,6 +1085,12 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       if (response.code === 0) {
         toast.success("用户配额已重置");
+        // C-05/D-05：配额重置部分恢复时后端在信封 warning 里点名未恢复
+        // 转发（network.ts 合同：must be surfaced），须原样透出，不得只报
+        // 固定成功文案。
+        if (response.warning) {
+          toast(response.warning, { icon: "⚠️", duration: 12000 });
+        }
         await loadUsers(searchKeyword);
       } else {
         toast.error(response.msg || "重置用户配额失败");
