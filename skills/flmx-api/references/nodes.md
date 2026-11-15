@@ -473,6 +473,24 @@ These are whole-machine NIC counters, a different metric from tunnel
 billing / subscription quota counters — the two never reconcile and must
 not be mixed.
 
+## POST /api/v1/node/traffic/dropped
+
+Each node's cumulative dead-lettered traffic bytes (traffic audit A-中-1):
+bytes the agent quarantined after its spool batch went unconfirmed. This
+traffic never entered any flow counter — it is lost traffic, not billed
+traffic, and must not be mixed with tunnel billing / subscription quota
+counters. Nodes without dead letters are absent from the map (implicitly 0).
+
+**Request:** POST with an empty body.
+
+**Response:** `data` is a map of node ID to dropped bytes:
+```json
+{
+  "code": 0,
+  "data": {"1": 5244335}
+}
+```
+
 ## GET /api/v1/node/connlog
 
 Query one node's connection log (admin only): rows are client connections

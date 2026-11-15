@@ -1242,16 +1242,34 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 		endpoints = filtered
 	}
-	// A share subscription reports its own traffic and limit; the owner's
-	// reports the selected inbounds' traffic. The figures are the whole
-	// subscription's totals — the same ones the info nodes below show.
+	// B-L4: the Subscription-Userinfo figures differ by kind. A share
+	// subscription reports its own metered traffic and limit. A
+	// non-share subscription has no per-subscription attribution at
+	// all — agent counters are keyed by kernel user identity, share
+	// subscriptions get per-subscription identities (u{id} on the
+	// metering companion), while a non-share subscription's users
+	// connect with their own per-user credentials, the same credential
+	// serving every subscription assigned to that user — so its
+	// upload/download can only be the selected inbounds' totals, and
+	// two subscriptions sharing an inbound report the same figures.
+	// The header format carries no label, so the totals are labelled
+	// where the panel renders them (subscriptionView.usageInboundTotal)
+	// and the total is NOT the subscription's TrafficLimit: the server
+	// never enforces a non-share limit (subOverQuota/subActive/
+	// checkSubQuota/syncSubscriptions all read the subscription's own
+	// counters, which are never metered for non-share), so pairing the
+	// inbound total with that limit would let a client show the
+	// subscription as exhausted (used >= total) from a number that is
+	// not this subscription's usage. total=0 (unlimited) is the honest
+	// enforcement reality for non-share subscriptions.
 	var up, down, total int64
 	expire := sub.ExpireTime / 1000
 	if isShare(sub) {
 		up, down, total = sub.UploadBytes, sub.DownloadBytes, sub.TrafficLimit
 	} else {
-		// 非分享订阅：流量从入站汇总，总量取订阅的 TrafficLimit（0 表示不限量）
-		total = sub.TrafficLimit
+		// 非分享订阅：已用为所选入站行计数器之和（入站总量，非本订
+		// 阅独占）；总量恒 0（不限量），不配订阅的 TrafficLimit。
+		total = 0
 		want := map[int64]bool{}
 		for _, id := range h.subAllInboundIDs(sub, rows, nil) {
 			want[id] = true

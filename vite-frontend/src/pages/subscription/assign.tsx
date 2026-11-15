@@ -240,9 +240,11 @@ export default function SubscriptionAssignSection() {
                           </p>
                           <p className="text-xs font-semibold text-foreground">
                             {s.nodeCount} 个节点 ·{" "}
-                            {s.trafficLimit
-                              ? `限额 ${formatTraffic(s.trafficLimit)}（已用 ${formatTraffic(used)}）`
-                              : "不限流量"}
+                            {s.usageInboundTotal
+                              ? "不限流量（客户端已用为入站总量）"
+                              : s.trafficLimit
+                                ? `限额 ${formatTraffic(s.trafficLimit)}（已用 ${formatTraffic(used)}）`
+                                : "不限流量"}
                             {" · "}
                             {expiryText(s.expireTime)}
                           </p>

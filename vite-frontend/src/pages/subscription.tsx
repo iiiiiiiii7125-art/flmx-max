@@ -1122,7 +1122,11 @@ export default function SubscriptionPage() {
 
         return;
       }
-      toast.success(detail.overQuota ? "流量已重置，已恢复连接" : "流量已重置");
+      toast.success(
+        detail.overQuota
+          ? "流量已重置，已恢复连接，统计从本周期重新累计"
+          : "流量已重置，统计从本周期重新累计",
+      );
       setDetail(res.data);
       await load();
     } finally {
@@ -1222,6 +1226,11 @@ export default function SubscriptionPage() {
         </div>
         <div className="mt-1.5">
           <Usage compact s={s} />
+          {s.usageInboundTotal && (
+            <p className="mt-1 text-xs font-semibold text-foreground">
+              客户端订阅信息里的已用是所选入站的总流量（入站总量，非本订阅独占），共用同一入站的订阅显示相同数字；该数字不用于超限判定。
+            </p>
+          )}
         </div>
       </div>
       <div
@@ -1416,6 +1425,11 @@ export default function SubscriptionPage() {
                 <ModalBody className="space-y-3">
                   <div className="space-y-2 rounded-xl glass-inset p-3">
                     <Usage s={detail} />
+                    {detail.usageInboundTotal && (
+                      <p className="text-xs font-semibold text-foreground">
+                        客户端订阅信息里的已用是所选入站的总流量（入站总量，非本订阅独占），共用同一入站的订阅显示相同数字；该数字不用于超限判定。
+                      </p>
+                    )}
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold text-foreground">
                         {detail.overQuota

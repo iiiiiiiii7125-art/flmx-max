@@ -201,14 +201,16 @@ func TestSubscriptionContract(t *testing.T) {
 		if code, _, _ := sub(path); code != 200 {
 			t.Fatalf("after reset: %d", code)
 		}
-		// The hourly history keeps the traffic a reset zeroes.
+		// B-M2：重置后统计页不再计入重置前的流量——订阅行已用归
+		// 零，图表合计与末桶同为 0。小时行仍保留在库中（重置不
+		// 删历史），但起算时间之前的时段不在统计内。
 		for _, rg := range []string{"hour", "day", "month"} {
 			out = kernelContractPost(t, router, admin, "/api/v1/subscription/traffic", `{"id":`+jsonInt64(id)+`,"range":"`+rg+`","tzOffset":480}`)
 			v := out.Data.(map[string]interface{})
 			points := v["points"].([]interface{})
 			last := points[len(points)-1].(map[string]interface{})
-			if out.Code != 0 || valueAsInt(v["up"]) != 200 || valueAsInt(v["down"]) != 900 || valueAsInt(last["down"]) != 900 {
-				t.Fatalf("%s traffic: %+v", rg, out)
+			if out.Code != 0 || valueAsInt(v["up"]) != 0 || valueAsInt(v["down"]) != 0 || valueAsInt(last["down"]) != 0 {
+				t.Fatalf("%s traffic after reset: %+v", rg, out)
 			}
 		}
 

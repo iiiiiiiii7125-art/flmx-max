@@ -1419,6 +1419,27 @@ type ConnlogNodeDropped struct {
 
 func (ConnlogNodeDropped) TableName() string { return "connlog_node_dropped" }
 
+// TrafficNodeDropped is the panel-side cumulative count of traffic
+// bytes an entry node's agent dead-lettered before they could be
+// reported (traffic audit A-中-1): when a spool batch fails to be
+// confirmed 8 times in a row (~130s) or ages past its 1h TTL, the
+// agent quarantines the batch to a local archive and counts its
+// bytes into DroppedBytes, which rides the next v2 envelope as
+// dropped_bytes. The agent attaches its not-yet-acknowledged drop
+// total to every batch; the panel books the delta under the reporting
+// node exactly when the batch is applied (replays and behind
+// batches never double-book) — same contract as
+// ConnlogNodeDropped. Telemetry bookkeeping: NOT part of backups
+// (same ruling as inbound_conn_log).
+type TrafficNodeDropped struct {
+	ID           int64 `gorm:"primaryKey;autoIncrement" json:"id"`
+	NodeID       int64 `gorm:"column:node_id;not null;uniqueIndex" json:"nodeId"`
+	DroppedTotal int64 `gorm:"column:dropped_total;not null;default:0" json:"droppedTotal"`
+	UpdatedTime  int64 `gorm:"column:updated_time;not null;default:0" json:"updatedTime"`
+}
+
+func (TrafficNodeDropped) TableName() string { return "traffic_node_dropped" }
+
 type TunnelMetric struct {
 	ID int64 `gorm:"primaryKey;autoIncrement" json:"id"`
 	// FIX132-C（A3-S2）：(tunnel_id, node_id, timestamp) 的唯一性由

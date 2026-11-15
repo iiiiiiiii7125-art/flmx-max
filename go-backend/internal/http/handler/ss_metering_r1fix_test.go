@@ -153,10 +153,11 @@ func TestSSMeteringCompanionWriteGuards(t *testing.T) {
 	}
 }
 
-// F3 (C-02b): when reconcile recycles a companion, it must tear down
+// F3 (C-02b): when reconcile parks a companion, it must tear down
 // the companion's relays (including their materialized forwards)
 // exactly like the origin-delete path does — repo row deletion alone
-// leaves the forward behind.
+// leaves the forward behind. (B-L5: parking keeps the row; the relay
+// teardown invariant is unchanged.)
 func TestSSMeteringRecycleTearsDownCompanionRelays(t *testing.T) {
 	r, h, _, origin, sub := seedMeteringFixture(t)
 	h.reconcileSSMetering()
@@ -179,7 +180,9 @@ func TestSSMeteringRecycleTearsDownCompanionRelays(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Demand gone -> reconcile recycles the companion.
+	// Demand gone -> reconcile parks the companion (B-L5: row kept,
+	// disabled, port + PSK retained) and still tears down its relays
+	// and materialized forward (F3/C-02b invariant).
 	sub.Enabled = 0
 	sub.UpdatedTime = time.Now().UnixMilli()
 	if err := r.SaveSubscription(sub); err != nil {
@@ -187,14 +190,21 @@ func TestSSMeteringRecycleTearsDownCompanionRelays(t *testing.T) {
 	}
 	h.reconcileSSMetering()
 
-	if comp, _ := r.GetCompanionInbound(origin.ID); comp != nil {
-		t.Fatal("companion must be recycled")
+	parked, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || parked == nil {
+		t.Fatalf("companion must be parked (row retained) on demand loss, got %v %v", parked, err)
+	}
+	if parked.Enabled != 0 {
+		t.Fatal("parked companion must be disabled")
+	}
+	if parked.Port != comp.Port {
+		t.Fatalf("parking must keep the port, got %d want %d", parked.Port, comp.Port)
 	}
 	if rels, err := r.ListInboundRelays(comp.ID); err != nil || len(rels) != 0 {
 		t.Fatalf("companion relays must be gone, got %v (%v)", rels, err)
 	}
 	if fwd, err := h.getForwardRecord(forwardID); err == nil && fwd != nil {
-		t.Fatal("the recycled companion's materialized forward must be deleted, not left dangling")
+		t.Fatal("the parked companion's materialized forward must be deleted, not left dangling")
 	}
 }
 

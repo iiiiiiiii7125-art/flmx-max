@@ -1100,6 +1100,12 @@ export interface SubscriptionItem {
   /** L4-08：订阅 ID 超出 socket mark 计量编码上限时为 true——该订阅
    * 的流量永不计量、流量限额永不触发，须显式提示管理员。 */
   meteringUnsupported?: boolean;
+  /** B-L4：非分享订阅为 true——该订阅没有归属计量，订阅客户端
+   * （Subscription-Userinfo 头）显示的已用是所选入站的行计数器之和
+   * （入站总量，非本订阅独占），共用同一入站的订阅显示相同数字；
+   * 该数字不用于超限判定。本视图的 uploadBytes/downloadBytes 仍是
+   * 订阅自身计数（非分享恒 0），与客户端显示的入站总量是两个数。 */
+  usageInboundTotal?: boolean;
 }
 export interface SubscriptionDraft {
   id?: number;
@@ -1445,6 +1451,9 @@ export interface MySubscriptionItem {
   enabled: boolean;
   /** 删除墓碑滞留中（管理员已删除、节点凭据下发未完成）：链接已 404，页面呈「删除中」。 */
   pendingDelete: boolean;
+  /** B-L4：与管理员视图同口径——非分享订阅为 true，客户端显示的已用
+   * 是所选入站的总量（非本订阅独占）。 */
+  usageInboundTotal?: boolean;
 }
 export const getMySubscriptions = () =>
   Network.post<{ subscriptions: MySubscriptionItem[] }>(
