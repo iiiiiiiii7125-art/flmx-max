@@ -149,7 +149,7 @@ Diagnose forward connectivity (TCP ping to target).
 
 **Request:**
 ```json
-{"id": 1}
+{"forwardId": 1}
 ```
 
 **Response:** `data` is a per-hop results payload (same family as

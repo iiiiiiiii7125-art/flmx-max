@@ -84,7 +84,7 @@ func TestR7G01QuotaWriteEntryAndUnblock(t *testing.T) {
 		t.Fatalf("quota view: %v / %v", view, err)
 	}
 	if view.DailyLimitGB != 1<<33 || view.MonthlyLimitGB != 1<<34 {
-		t.Fatalf("persisted limits = %d/%d, want %d/%d", view.DailyLimitGB, view.MonthlyLimitGB, int64(1)<<33, int64(1)<<34)
+		t.Fatalf("persisted limits = %v/%v, want %d/%d", view.DailyLimitGB, view.MonthlyLimitGB, int64(1)<<33, int64(1)<<34)
 	}
 	reason, err := h.userQuotaBlockReason(userID, nowMs)
 	if err != nil {

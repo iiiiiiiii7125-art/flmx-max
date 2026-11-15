@@ -28,14 +28,18 @@ const userQuotaBytesPerGB int64 = 1024 * 1024 * 1024
 // over-range rows heal at consumption, no migration needed. Negative
 // inputs saturate symmetrically so a negative stored limit keeps its
 // "unlimited" (<= 0) reading on every face.
-func QuotaLimitBytes(limitGB int64) int64 {
-	if limitGB > math.MaxInt64/userQuotaBytesPerGB {
+// C-(6)③：限额以 GB 为单位的小数（0.01、1.5 均合法）。换算时截断
+// 到字节（0.01 GB → 10737418 B，误差不足 1 B）。
+func QuotaLimitBytes(limitGB float64) int64 {
+	// 饱和阈值先取整再转浮点：float64(math.MaxInt64) 会上舍到 2^63，
+	// 直接做浮点除会把 2^33 GB 的边界判错（见 R7-G-01）。
+	if limitGB > float64(math.MaxInt64/userQuotaBytesPerGB) {
 		return math.MaxInt64
 	}
-	if limitGB < math.MinInt64/userQuotaBytesPerGB {
+	if limitGB < float64(math.MinInt64/userQuotaBytesPerGB) {
 		return math.MinInt64
 	}
-	return limitGB * userQuotaBytesPerGB
+	return int64(limitGB * float64(userQuotaBytesPerGB))
 }
 
 type UserQuotaRelease struct {
@@ -198,7 +202,7 @@ func applyUserQuotaWindowRoll(q *model.UserQuota, now time.Time) bool {
 	return changed
 }
 
-func (r *Repository) SaveUserQuotaConfigTx(tx *gorm.DB, userID, dailyLimitGB, monthlyLimitGB int64, now int64) error {
+func (r *Repository) SaveUserQuotaConfigTx(tx *gorm.DB, userID int64, dailyLimitGB, monthlyLimitGB float64, now int64) error {
 	if tx == nil {
 		return errors.New("database unavailable")
 	}

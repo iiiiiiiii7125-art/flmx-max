@@ -488,6 +488,26 @@ func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User
 func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 	seen := map[int64]bool{}
 	var firstErr, firstPending error
+	// E-03: materialize the companion split before resolving which
+	// kernels to push. A companion still sitting on the origin's
+	// kernel (no reconnect / re-push has triggered the split yet)
+	// must move onto the companion kernel first, so this push serves
+	// it from the companion instance; otherwise the push only
+	// re-renders the main kernel with the companion still on it.
+	// Rows are collected once and reused below (one read per id).
+	rows := make([]*model.NodeInbound, 0, len(ids))
+	nodeIDs := map[int64]bool{}
+	for _, id := range ids {
+		row, err := h.repo.GetNodeInbound(id)
+		if err != nil || row == nil {
+			continue
+		}
+		rows = append(rows, row)
+		nodeIDs[row.NodeID] = true
+	}
+	for nodeID := range nodeIDs {
+		h.ensureCompanionKernel(nodeID)
+	}
 	compByOrigin := map[int64]*model.NodeInbound{}
 	if comps, err := h.repo.ListCompanionInbounds(); err != nil {
 		return markRepoError(err)
@@ -515,11 +535,7 @@ func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 			}
 		}
 	}
-	for _, id := range ids {
-		row, err := h.repo.GetNodeInbound(id)
-		if err != nil || row == nil {
-			continue
-		}
+	for _, row := range rows {
 		applyOne(row)
 		applyOne(compByOrigin[row.ID])
 	}

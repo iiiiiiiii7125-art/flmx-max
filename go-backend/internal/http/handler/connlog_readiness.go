@@ -340,8 +340,23 @@ func (h *Handler) nodeConnlogRepush(w http.ResponseWriter, r *http.Request) {
 		"tunnelCount":  len(tunnelIDs),
 		"forwardCount": len(forwardIDs),
 	}
-	if note := connlogReconcileFailureNote(failures); note != "" {
-		response.WriteJSON(w, response.OKWithWarning(data, "运行配置已下发；"+note))
+	// E-02: the repush succeeded but the companion split may still
+	// be absent because the agent is too old — say so in the receipt
+	// instead of reporting a clean redeploy: otherwise the admin sees
+	// redeployed:true with the companion still on the main kernel and
+	// no hint why. The note rides both the warning text (toasted by
+	// the frontend) and the data payload (for API consumers).
+	warning := connlogReconcileFailureNote(failures)
+	if note := h.companionSplitPendingReason(req.NodeID); note != "" {
+		data["companionSplitNote"] = note
+		if warning != "" {
+			warning += "；" + note
+		} else {
+			warning = note
+		}
+	}
+	if warning != "" {
+		response.WriteJSON(w, response.OKWithWarning(data, "运行配置已下发；"+warning))
 		return
 	}
 	response.WriteJSON(w, response.OK(data))

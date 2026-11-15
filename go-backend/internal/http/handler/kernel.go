@@ -128,6 +128,11 @@ type kernelView struct {
 	Enabled          bool   `json:"enabled"`
 	InboundCount     int    `json:"inboundCount"`
 	UpdatedTime      int64  `json:"updatedTime"`
+	// E-02: non-empty when enabled companions exist on this node but
+	// the split is inactive because the agent version is too old —
+	// the companions stay on this (main) kernel; see
+	// companionSplitPendingReason.
+	CompanionSplitNote string `json:"companionSplitNote,omitempty"`
 }
 
 type inboundView struct {
@@ -376,6 +381,12 @@ func (h *Handler) kernelViews(nodeID int64) ([]kernelView, error) {
 			Enabled:          k.Enabled == 1,
 			InboundCount:     counts[k.ID],
 			UpdatedTime:      k.UpdatedTime,
+		}
+		// E-02: the note rides the main sing-box row (the companion
+		// row itself is managed and never listed) so the node page
+		// shows why the split is absent.
+		if kernel.CanonicalKernelType(k.KernelType) == kernel.TypeSingbox {
+			v.CompanionSplitNote = h.companionSplitPendingReason(k.NodeID)
 		}
 		if node != nil {
 			v.NodeName = node.Name
@@ -3354,6 +3365,41 @@ func agentSupportsCompanionSplit(raw string) bool {
 		return false
 	}
 	return cmp >= 0
+}
+
+// companionSplitPendingReason reports why the companion split is
+// not active on a node that has enabled companions (E-02): the
+// agent version is known but below companionAgentMinVersion, so
+// companions stay on the main kernel (fail-closed, behavior
+// unchanged) with no visible trace anywhere. Empty means nothing
+// to report — split active, no enabled companions, or the version
+// is unknown (offline / never reported) so no version claim can
+// be made.
+func (h *Handler) companionSplitPendingReason(nodeID int64) string {
+	if _, active := h.companionKernelIDForNode(nodeID); active {
+		return ""
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(node.Version.String)
+	if _, ok := parseConnlogAgentVersion(raw); !ok {
+		return ""
+	}
+	if agentSupportsCompanionSplit(raw) {
+		return ""
+	}
+	comps, err := h.repo.ListCompanionInbounds()
+	if err != nil {
+		return ""
+	}
+	for i := range comps {
+		if comps[i].NodeID == nodeID && comps[i].Enabled == 1 {
+			return fmt.Sprintf("agent 版本 %s 未到 %s，伴生计量仍在主内核运行；请先升级 agent，升级后重连时分离将自动生效", raw, companionAgentMinVersion)
+		}
+	}
+	return ""
 }
 
 // companionKernelIDForNode returns the companion NodeKernel row id for a
