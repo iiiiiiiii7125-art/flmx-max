@@ -110,15 +110,46 @@ func TestSSMeteringReconcileLifecycle(t *testing.T) {
 		t.Fatalf("exactly one companion expected, got %d", len(all))
 	}
 
-	// Demand loss recycles the companion.
+	// Demand loss parks the companion (B-L5): the row survives with
+	// Enabled=0, keeping its port and identity PSK, and it stops
+	// serving — the F4 gate must not see it.
 	sub.Enabled = 0
 	sub.UpdatedTime = time.Now().UnixMilli()
 	if err := r.SaveSubscription(sub); err != nil {
 		t.Fatal(err)
 	}
 	h.reconcileSSMetering()
-	if comp, _ := r.GetCompanionInbound(origin.ID); comp != nil {
-		t.Fatal("companion must be recycled when no active share subscription demands it")
+	parked, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || parked == nil {
+		t.Fatalf("companion must be parked (row retained) on demand loss, got %v %v", parked, err)
+	}
+	if parked.Enabled != 0 {
+		t.Fatal("parked companion must be disabled")
+	}
+	parkedIn, _ := inboundFromModel(*parked)
+	if parked.ID != firstID || parked.Port != firstPort || parkedIn.Settings.Password != firstPSK {
+		t.Fatal("parking must keep the same row, port and identity PSK")
+	}
+	if got := h.companionInboundsByOrigin(); len(got) != 0 {
+		t.Fatalf("parked companion must not be retargetable, got %v", got)
+	}
+
+	// Demand back reactivates the very same endpoint.
+	sub.Enabled = 1
+	if err := r.SaveSubscription(sub); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcileSSMetering()
+	revived, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || revived == nil {
+		t.Fatalf("companion must revive on demand return: %v %v", revived, err)
+	}
+	revivedIn, _ := inboundFromModel(*revived)
+	if revived.ID != firstID || revived.Port != firstPort || revivedIn.Settings.Password != firstPSK {
+		t.Fatalf("reactivation must keep the same row, port and identity PSK, got id=%d port=%d", revived.ID, revived.Port)
+	}
+	if revived.Enabled != 1 {
+		t.Fatal("revived companion must be enabled")
 	}
 
 	// Demand back + switch off: still no companion.
@@ -133,6 +164,61 @@ func TestSSMeteringReconcileLifecycle(t *testing.T) {
 	h.reconcileSSMetering()
 	if comp, _ := r.GetCompanionInbound(origin.ID); comp != nil {
 		t.Fatal("companion must not exist while the switch is off")
+	}
+}
+
+// B-L5 conflict fallback: a parked companion whose port was taken by
+// hand must move to a fresh free port on reactivation — never
+// re-render into a collision — while keeping its identity PSK. (A
+// second inbound row on the same node+port is already forbidden by a
+// DB unique index, so the only hand-made collision is cross-table:
+// here a forward port squats the parked port.)
+func TestSSMeteringParkedPortConflictMoves(t *testing.T) {
+	r, h, _, origin, sub := seedMeteringFixture(t)
+	h.reconcileSSMetering()
+	comp, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must exist")
+	}
+	compIn, _ := inboundFromModel(*comp)
+	firstPort, firstPSK := comp.Port, compIn.Settings.Password
+
+	// Park it.
+	sub.Enabled = 0
+	sub.UpdatedTime = time.Now().UnixMilli()
+	if err := r.SaveSubscription(sub); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcileSSMetering()
+	if parked, _ := r.GetCompanionInbound(origin.ID); parked == nil || parked.Enabled != 0 {
+		t.Fatalf("companion must be parked, got %+v", parked)
+	}
+
+	// Squat the parked port with a hand-inserted forward port (the
+	// occupancy predicate would refuse this through the API).
+	if err := r.DB().Exec(`INSERT INTO forward_port (forward_id, node_id, port) VALUES (?, ?, ?)`, 9999, origin.NodeID, firstPort).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Demand back: reactivation must move, not collide.
+	sub.Enabled = 1
+	if err := r.SaveSubscription(sub); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcileSSMetering()
+	moved, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || moved == nil {
+		t.Fatalf("companion must revive: %v %v", moved, err)
+	}
+	if moved.Enabled != 1 {
+		t.Fatal("revived companion must be enabled")
+	}
+	if moved.Port == firstPort {
+		t.Fatalf("revived companion must move off the squatted port %d", firstPort)
+	}
+	movedIn, _ := inboundFromModel(*moved)
+	if movedIn.Settings.Password != firstPSK {
+		t.Fatal("a port move must keep the identity PSK")
 	}
 }
 
