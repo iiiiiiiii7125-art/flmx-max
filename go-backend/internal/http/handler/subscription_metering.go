@@ -37,6 +37,20 @@ import (
 // recycles them from the origins' metering switches and the active
 // share-subscription demand. They are hidden from inbound lists,
 // subscription sources and backups, and are never edited by hand.
+//
+// B-L5 port stability: a companion that merely lost demand (its
+// subscriptions were all disabled) is PARKED, not deleted — the row
+// stays with Enabled=0, keeping its port and its identity PSK, so
+// re-enabling the subscription revives the exact same endpoint
+// instead of handing clients a new random port and new credentials
+// on a dead one. Parking is safe because (a) the port-occupancy
+// predicate counts every inbound row regardless of Enabled, so no
+// other inbound/forward/tunnel can steal a parked companion's port
+// while it sleeps; (b) the kernel payload build and the F4 retarget
+// gate both skip Enabled!=1 rows, so a parked companion renders
+// nowhere and attracts no traffic. Deletion stays for the terminal
+// cases: origin gone, metering switch off, or the origin's shape no
+// longer supports metering.
 
 var meteringMu sync.Mutex
 var lastMeteringReconcile atomic.Int64
@@ -156,7 +170,7 @@ func (h *Handler) reconcileSSMetering() {
 	affected := map[int64]bool{}
 	for originID, comps := range companions {
 		origin, ok := origins[originID]
-		if !ok || !h.ssMeteringWanted(origin, demand) {
+		if !ok {
 			for _, c := range comps {
 				if h.deleteCompanionRow(&c) {
 					affected[c.KernelID] = true
@@ -164,13 +178,37 @@ func (h *Handler) reconcileSSMetering() {
 			}
 			continue
 		}
-		for _, extra := range comps[1:] {
-			if h.deleteCompanionRow(&extra) {
-				affected[extra.KernelID] = true
+		if h.ssMeteringWanted(origin, demand) {
+			for _, extra := range comps[1:] {
+				if h.deleteCompanionRow(&extra) {
+					affected[extra.KernelID] = true
+				}
 			}
+			if h.syncCompanion(origin, &comps[0], now) {
+				affected[comps[0].KernelID] = true
+			}
+			continue
 		}
-		if h.syncCompanion(origin, &comps[0], now) {
-			affected[comps[0].KernelID] = true
+		// Not wanted. B-L5: demand loss alone parks the companion
+		// (port + identity PSK retained, see parkCompanion) so a
+		// later re-enable revives the same endpoint; only the
+		// terminal states — switch off or a shape that can never be
+		// metered — delete the row outright.
+		if h.ssMeteringParkable(origin) {
+			for _, extra := range comps[1:] {
+				if h.deleteCompanionRow(&extra) {
+					affected[extra.KernelID] = true
+				}
+			}
+			if h.parkCompanion(&comps[0], now) {
+				affected[comps[0].KernelID] = true
+			}
+			continue
+		}
+		for _, c := range comps {
+			if h.deleteCompanionRow(&c) {
+				affected[c.KernelID] = true
+			}
 		}
 	}
 	for id, origin := range origins {
@@ -276,6 +314,25 @@ func (h *Handler) syncCompanion(origin, comp *model.NodeInbound, now int64) bool
 	}
 	desired.ID = comp.ID
 	desired.Port = comp.Port
+	// B-L5: a parked companion's port is reserved by the occupancy
+	// predicate (disabled rows still count), so it normally survives
+	// untouched — but a port taken by hand (direct DB edit, legacy
+	// duplicate) must not be re-rendered into a collision. Recheck
+	// before reactivation; on conflict fall through to a fresh free
+	// port and log the move. A failed pick leaves the row parked and
+	// retries on the next reconcile.
+	if msg, err := h.inboundPortConflict(comp.NodeID, desired, comp.ID); err != nil {
+		log.Printf("ss metering: sync companion %d of inbound %d: port check: %v", comp.ID, origin.ID, err)
+		return false
+	} else if msg != "" {
+		newPort, perr := h.pickFreeInboundPort(comp.NodeID, comp.ID)
+		if perr != nil {
+			log.Printf("ss metering: companion %d of inbound %d kept port %d is %s and no free port is available: %v", comp.ID, origin.ID, comp.Port, msg, perr)
+			return false
+		}
+		log.Printf("ss metering: companion %d of inbound %d kept port %d is %s; moved to %d", comp.ID, origin.ID, comp.Port, msg, newPort)
+		desired.Port = newPort
+	}
 	desired.Settings.Password = password
 	desired.Users = nil
 	desired.Via = nil
@@ -309,7 +366,7 @@ func (h *Handler) syncCompanion(origin, comp *model.NodeInbound, now int64) bool
 	// now persists the column.
 	if updated.Settings == comp.Settings && updated.Transport == comp.Transport &&
 		updated.Security == comp.Security && updated.Listen == comp.Listen &&
-		updated.Extra == comp.Extra && updated.OutboundIPStrategy == comp.OutboundIPStrategy &&
+		updated.Port == comp.Port && updated.Extra == comp.Extra && updated.OutboundIPStrategy == comp.OutboundIPStrategy &&
 		updated.ConnIdleSeconds == comp.ConnIdleSeconds &&
 		updated.Name == comp.Name && updated.Enabled == comp.Enabled &&
 		updated.ShareHost == comp.ShareHost && updated.ShareAddressMode == comp.ShareAddressMode &&
@@ -337,6 +394,46 @@ func (h *Handler) deleteCompanionRow(comp *model.NodeInbound) bool {
 		log.Printf("ss metering: delete companion %d of inbound %d: %v", comp.ID, comp.CompanionOf, err)
 		return false
 	}
+	return true
+}
+
+// ssMeteringParkable reports whether an origin that currently wants
+// no companion may want one again later: the metering switch is still
+// on and the origin is statically eligible. Demand loss is the only
+// non-terminal reason to have no companion, so only it parks; a
+// switched-off or shape-blocked origin deletes instead (an unreadable
+// origin row fails closed to deletion, the pre-B-L5 behavior).
+func (h *Handler) ssMeteringParkable(origin *model.NodeInbound) bool {
+	if origin == nil || origin.MeteringEnabled != 1 {
+		return false
+	}
+	in, err := inboundFromModel(*origin)
+	if err != nil {
+		return false
+	}
+	return ssMeteringStaticBlock(origin, in) == ""
+}
+
+// parkCompanion retires a companion that lost demand without
+// deleting it: the row stays with Enabled=0, keeping its port and
+// its identity PSK for a later reactivation (B-L5). The kernel
+// payload build skips disabled rows, so the next apply pulls the
+// listener off the agent; the companion's relays are torn down like
+// the delete path does (F3/C-02b — a parked companion must not leave
+// materialized forwards behind). Already-parked is a no-op (false).
+func (h *Handler) parkCompanion(comp *model.NodeInbound, now int64) bool {
+	if comp == nil || comp.Enabled == 0 {
+		return false
+	}
+	h.removeInboundRelays(comp.ID)
+	updated := *comp
+	updated.Enabled = 0
+	updated.UpdatedTime = now
+	if err := h.repo.SaveNodeInbound(&updated); err != nil {
+		log.Printf("ss metering: park companion %d of inbound %d: %v", comp.ID, comp.CompanionOf, err)
+		return false
+	}
+	log.Printf("ss metering: parked companion %d of inbound %d (port %d retained for reactivation)", comp.ID, comp.CompanionOf, comp.Port)
 	return true
 }
 
