@@ -838,7 +838,14 @@ func (h *Handler) controlForwardServices(forward *forwardRecord, commandType str
 
 		nodeHandled, lastNotFoundErr, err := h.controlForwardServicesOnNode(fp.NodeID, bases, commandType)
 		if err != nil {
-			if isNodeOfflineOrTimeoutError(err) {
+			// F4/C-05：离线/超时只许 PauseService 吞掉——数据面
+			// 已停、无流量可漏，DB 暂停态即权威态（暂停行不重推，
+			// 重连亦不复活）。ResumeService 吞掉即谎报成功：转发
+			// 被标 Active、从 PausedForwardIDs 摘除、agent 从未收
+			// 到 resume，且无重试载体（节点 14 全程离线时转发 29
+			// 0→1 即此例）。本循环除删除分支外只到 Pause/Resume，
+			// 故以 isPauseServiceCommand 划界即全集。
+			if isNodeOfflineOrTimeoutError(err) && isPauseServiceCommand(commandType) {
 				continue
 			}
 			return err

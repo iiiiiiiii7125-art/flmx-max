@@ -305,8 +305,15 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 		}
 		if err := h.controlForwardServices(forward, "ResumeService", false); err != nil {
 			// C-05 F2 (V6)：ResumeService 失败曾在此静默 continue。
-			log.Printf("quota release failed op=resume_failed forward_id=%d err=%v", forwardID, err)
-			result.Failed = append(result.Failed, quotaReleaseFailure{ForwardID: forwardID, Reason: "resume_failed", Detail: err.Error()})
+			// F4：离线/超时单独给 reason——命令根本没送达 agent，
+			// 转发必须保持暂停、留待 backstop 在节点上线后重试；
+			// ResumeService 幂等（未暂停即跳过），重试收敛。
+			reason := "resume_failed"
+			if isNodeOfflineOrTimeoutError(err) {
+				reason = "node_offline"
+			}
+			log.Printf("quota release failed op=resume_failed forward_id=%d reason=%s err=%v", forwardID, reason, err)
+			result.Failed = append(result.Failed, quotaReleaseFailure{ForwardID: forwardID, Reason: reason, Detail: err.Error()})
 			continue
 		}
 		// R5-B5 D15: 经 ActivateForwardIfNotPending（pending 已在循环顶过滤，
