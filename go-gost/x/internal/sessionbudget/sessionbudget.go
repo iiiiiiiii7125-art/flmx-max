@@ -331,6 +331,17 @@ func Track(c net.Conn, release func()) (net.Conn, func()) {
 			}
 		})
 	}
+	// F3-A4SS: a session wrapper must not silently drop
+	// net.PacketConn — the SS-UDP handler branches on it (native
+	// UDP vs UDP-over-TCP), and dropping it forced every native
+	// SS-UDP association down the TUN branch, where the raw
+	// datagram fails the SOCKS header parse ("bad address type")
+	// and the association dies with 0 bytes. A packet conn keeps
+	// its packet face; a stream conn keeps trackedConn, so the
+	// branch decision is unchanged for TCP.
+	if pc, ok := c.(net.PacketConn); ok {
+		return &trackedPacketConn{Conn: c, PacketConn: pc, s: s}, combined
+	}
 	return &trackedConn{Conn: c, s: s}, combined
 }
 
@@ -376,6 +387,91 @@ func (c *trackedConn) CloseRead() error {
 }
 
 func (c *trackedConn) SyscallConn() (syscall.RawConn, error) {
+	if sc, ok := c.Conn.(syscall.Conn); ok {
+		return sc.SyscallConn()
+	}
+	return nil, errHalfCloseUnsupported
+}
+
+// trackedPacketConn is the packet-face twin of trackedConn: it
+// stamps activity on packet movement exactly like trackedConn does
+// on stream movement. The overlapping methods (Close, LocalAddr,
+// RemoteAddr, deadlines) are forwarded explicitly — embedding both
+// net.Conn and net.PacketConn would leave those selectors
+// ambiguous.
+type trackedPacketConn struct {
+	net.Conn
+	net.PacketConn
+	s *session
+}
+
+func (c *trackedPacketConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.s.lastActivity.Store(defaultEnv.now().UnixNano())
+		c.s.bytesIn.Add(int64(n))
+	}
+	return n, err
+}
+
+func (c *trackedPacketConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.s.lastActivity.Store(defaultEnv.now().UnixNano())
+		c.s.bytesOut.Add(int64(n))
+	}
+	return n, err
+}
+
+func (c *trackedPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(b)
+	if n > 0 {
+		c.s.lastActivity.Store(defaultEnv.now().UnixNano())
+		c.s.bytesIn.Add(int64(n))
+	}
+	return n, addr, err
+}
+
+func (c *trackedPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	n, err := c.PacketConn.WriteTo(b, addr)
+	if n > 0 {
+		c.s.lastActivity.Store(defaultEnv.now().UnixNano())
+		c.s.bytesOut.Add(int64(n))
+	}
+	return n, err
+}
+
+func (c *trackedPacketConn) Close() error { return c.Conn.Close() }
+
+func (c *trackedPacketConn) LocalAddr() net.Addr { return c.Conn.LocalAddr() }
+
+func (c *trackedPacketConn) RemoteAddr() net.Addr { return c.Conn.RemoteAddr() }
+
+func (c *trackedPacketConn) SetDeadline(t time.Time) error { return c.Conn.SetDeadline(t) }
+
+func (c *trackedPacketConn) SetReadDeadline(t time.Time) error {
+	return c.Conn.SetReadDeadline(t)
+}
+
+func (c *trackedPacketConn) SetWriteDeadline(t time.Time) error {
+	return c.Conn.SetWriteDeadline(t)
+}
+
+func (c *trackedPacketConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return errHalfCloseUnsupported
+}
+
+func (c *trackedPacketConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return errHalfCloseUnsupported
+}
+
+func (c *trackedPacketConn) SyscallConn() (syscall.RawConn, error) {
 	if sc, ok := c.Conn.(syscall.Conn); ok {
 		return sc.SyscallConn()
 	}
