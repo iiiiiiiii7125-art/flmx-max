@@ -129,18 +129,38 @@ func TestC03PushAppliesCompanionKernel(t *testing.T) {
 	}
 }
 
-// Pre-split (companion shares the origin's kernel) the push must stay a
-// single apply — the expansion dedupes via KernelID, no double push.
-func TestC03PushDedupesPreSplitCompanion(t *testing.T) {
+// E-03 supersedes the old pre-split dedupe: a push no longer leaves
+// a pre-split companion on the main kernel — it materializes the
+// split first (companion moves onto the companion kernel) and applies
+// both kernels. The no-double-push property still holds: the two
+// applies target distinct kernels (deduped via KernelID).
+func TestC03PushMaterializesPreSplitCompanion(t *testing.T) {
 	a := newNodeSwapFakeAgent(t)
 	origin, _ := c03bSplitFixtureOnFakeAgent(t, a, false)
 
 	if err := a.h.applyKernelsForInbounds([]int64{origin.ID}); err != nil {
 		t.Fatalf("C-03 push: applyKernelsForInbounds must succeed, got %v", err)
 	}
+	after, err := a.h.repo.GetCompanionInbound(origin.ID)
+	if err != nil || after == nil {
+		t.Fatalf("C-03 push: companion must still exist: %v %v", after, err)
+	}
+	if after.KernelID == origin.KernelID {
+		t.Fatalf("C-03 push (E-03): pre-split companion must move off the main kernel %d on push, still on %d", origin.KernelID, after.KernelID)
+	}
 	types := c03bKernelApplyTypes(t, a)
-	if len(types) != 1 || types[0] != kernel.TypeSingbox {
-		t.Fatalf("C-03 push: pre-split companion must dedupe to one main KernelApply, got %v", types)
+	if len(types) != 2 {
+		t.Fatalf("C-03 push (E-03): pre-split push must apply both main and companion kernels, got %v", types)
+	}
+	want := map[string]bool{kernel.TypeSingbox: true, kernel.TypeSingboxCompanion: true}
+	for _, typ := range types {
+		if !want[typ] {
+			t.Fatalf("C-03 push (E-03): unexpected KernelApply type %q in %v", typ, types)
+		}
+		delete(want, typ)
+	}
+	if len(want) != 0 {
+		t.Fatalf("C-03 push (E-03): missing KernelApply types %v in %v", want, types)
 	}
 }
 

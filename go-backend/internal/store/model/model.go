@@ -363,9 +363,12 @@ type Tunnel struct {
 func (Tunnel) TableName() string { return "tunnel" }
 
 type UserQuota struct {
-	UserID           int64  `gorm:"column:user_id;primaryKey"`
-	DailyLimitGB     int64  `gorm:"column:daily_limit_gb;not null;default:0"`
-	MonthlyLimitGB   int64  `gorm:"column:monthly_limit_gb;not null;default:0"`
+	UserID           int64   `gorm:"column:user_id;primaryKey"`
+	// C-(6)③：限额以 GB 为单位的小数（0.01、1.5 均合法），不再只认
+	// 整数。SQLite 列仍为 INTEGER 亲和类型也能存 REAL 值；PostgreSQL
+	// 侧由 quota_decimal_v1 迁移把列改成 double precision。
+	DailyLimitGB     float64 `gorm:"column:daily_limit_gb;not null;default:0"`
+	MonthlyLimitGB   float64 `gorm:"column:monthly_limit_gb;not null;default:0"`
 	DailyUsedBytes   int64  `gorm:"column:daily_used_bytes;not null;default:0"`
 	MonthlyUsedBytes int64  `gorm:"column:monthly_used_bytes;not null;default:0"`
 	DayKey           int64  `gorm:"column:day_key;not null;default:0"`
@@ -772,9 +775,11 @@ type UserBackup struct {
 	FlowMiB         int64  `json:"flowMiB,omitempty"`
 	InFlow          int64  `json:"inFlow"`
 	OutFlow         int64  `json:"outFlow"`
-	FlowResetTime   int64  `json:"flowResetTime"`
-	DailyQuotaGB    int64  `json:"dailyQuotaGB,omitempty"`
-	MonthlyQuotaGB  int64  `json:"monthlyQuotaGB,omitempty"`
+	FlowResetTime   int64   `json:"flowResetTime"`
+	// C-(6)③：与 UserQuota 同口径的小数 GB；旧备份的整数值照常
+	// 解码为小数（JSON 数字进 float64 字段无损）。
+	DailyQuotaGB    float64 `json:"dailyQuotaGB,omitempty"`
+	MonthlyQuotaGB  float64 `json:"monthlyQuotaGB,omitempty"`
 	DisabledByQuota int    `json:"disabledByQuota,omitempty"`
 	QuotaDisabledAt int64  `json:"quotaDisabledAt,omitempty"`
 	// FIX132-C（D4-01）：配额已用量与暂停清单保真。旧备份无此四字段
@@ -1190,8 +1195,8 @@ type TunnelRecord struct {
 
 type UserQuotaView struct {
 	UserID           int64
-	DailyLimitGB     int64
-	MonthlyLimitGB   int64
+	DailyLimitGB     float64
+	MonthlyLimitGB   float64
 	DailyUsedBytes   int64
 	MonthlyUsedBytes int64
 	DayKey           int64

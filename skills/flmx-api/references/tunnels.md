@@ -56,7 +56,7 @@ Create a new tunnel.
 {
   "name": "JP-SG-Tunnel",
   "type": 1,
-  "flow": 1,
+  "flow": 2,
   "trafficRatio": 1,
   "status": 1,
   "ipPreference": "ipv4",
@@ -73,7 +73,7 @@ Create a new tunnel.
 |-------|------|----------|-------------|
 | name | string | Yes | Tunnel name |
 | type | number | Yes | 1=port forward, 2=tunnel forward |
-| flow | number | No | Traffic multiplier (default: 1) |
+| flow | number | No | Billing direction: 1=upload only, 2=bidirectional (default: 2) |
 | trafficRatio | number | No | Traffic ratio (default: 1) |
 | status | number | No | 1=active, 0=disabled (default: 1) |
 | ipPreference | string | No | "ipv4", "ipv6", or "" (both) |

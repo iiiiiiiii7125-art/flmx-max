@@ -168,12 +168,20 @@ func (h *Handler) reconcileSSMetering() {
 	}
 
 	affected := map[int64]bool{}
+	// E-03: nodes whose companions were touched this round, and the
+	// origin ids behind them — the split is ensured for these nodes
+	// below, before the apply loop, so a companion created or synced
+	// on a split-capable agent leaves the main kernel on this same
+	// beat instead of waiting for a reconnect / manual re-push.
+	touchedNodes := map[int64]bool{}
+	touchedOrigins := map[int64]bool{}
 	for originID, comps := range companions {
 		origin, ok := origins[originID]
 		if !ok {
 			for _, c := range comps {
 				if h.deleteCompanionRow(&c) {
 					affected[c.KernelID] = true
+					touchedNodes[c.NodeID] = true
 				}
 			}
 			continue
@@ -182,11 +190,15 @@ func (h *Handler) reconcileSSMetering() {
 			for _, extra := range comps[1:] {
 				if h.deleteCompanionRow(&extra) {
 					affected[extra.KernelID] = true
+					touchedNodes[origin.NodeID] = true
+					touchedOrigins[originID] = true
 				}
 			}
 			if h.syncCompanion(origin, &comps[0], now) {
 				affected[comps[0].KernelID] = true
 			}
+			touchedNodes[origin.NodeID] = true
+			touchedOrigins[originID] = true
 			continue
 		}
 		// Not wanted. B-L5: demand loss alone parks the companion
@@ -198,16 +210,22 @@ func (h *Handler) reconcileSSMetering() {
 			for _, extra := range comps[1:] {
 				if h.deleteCompanionRow(&extra) {
 					affected[extra.KernelID] = true
+					touchedNodes[origin.NodeID] = true
+					touchedOrigins[originID] = true
 				}
 			}
 			if h.parkCompanion(&comps[0], now) {
 				affected[comps[0].KernelID] = true
 			}
+			touchedNodes[origin.NodeID] = true
+			touchedOrigins[originID] = true
 			continue
 		}
 		for _, c := range comps {
 			if h.deleteCompanionRow(&c) {
 				affected[c.KernelID] = true
+				touchedNodes[origin.NodeID] = true
+				touchedOrigins[originID] = true
 			}
 		}
 	}
@@ -224,6 +242,47 @@ func (h *Handler) reconcileSSMetering() {
 			} else {
 				affected[origin.KernelID] = true
 			}
+			touchedNodes[origin.NodeID] = true
+			touchedOrigins[id] = true
+		}
+	}
+	// E-03: materialize the companion split for every node touched
+	// above. ensureCompanionKernel creates the companion kernel row
+	// (when the agent is new enough) and moves companions onto it;
+	// without this the split only happened on agent reconnect or a
+	// manual re-push, and a companion created here stayed on the
+	// main kernel until then. Old agents are untouched (the ensure
+	// is a no-op below companionAgentMinVersion, companions stay on
+	// the main kernel — E-02 surfaces that instead).
+	// The re-derive below only fires for origins whose companion
+	// actually MOVED: an unconditional re-derive would push both
+	// kernels on every beat even when nothing changed, breaking the
+	// reconcile's quiet-when-unchanged invariant (C-03).
+	before := map[int64]int64{}
+	for originID := range touchedOrigins {
+		if comp, err := h.repo.GetCompanionInbound(originID); err == nil && comp != nil {
+			before[originID] = comp.KernelID
+		}
+	}
+	for nodeID := range touchedNodes {
+		h.ensureCompanionKernel(nodeID)
+	}
+	// The ensure may have moved companions onto a brand-new
+	// companion kernel; for those origins push the companion kernel
+	// (its first apply) and the origin kernel the companions just
+	// left — even when the mutation above reported no change.
+	for originID := range touchedOrigins {
+		origin := origins[originID]
+		if origin == nil {
+			continue
+		}
+		comp, err := h.repo.GetCompanionInbound(originID)
+		if err != nil || comp == nil {
+			continue
+		}
+		if before[originID] != comp.KernelID {
+			affected[origin.KernelID] = true
+			affected[comp.KernelID] = true
 		}
 	}
 	for kernelID := range affected {

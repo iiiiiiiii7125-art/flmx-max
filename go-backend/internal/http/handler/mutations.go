@@ -83,10 +83,18 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 
 	// B02-001（FIX2-A 同族补齐）：与 userUpdate 同口径——在场但不可
 	// 解析的数值字段 fail-closed 报错、不落库。此前 create 面无此
-	// 守卫：配额传 "abc"/1.5 时 asInt64 静默回 0，而配额只在 >0 时
+	// 守卫：配额传 "abc" 时 asInt64 静默回 0，而配额只在 >0 时
 	// 才落行，等于「传了配额却不限额」且界面显示成功。
-	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn", "dailyQuotaGB", "monthlyQuotaGB"} {
+	// C-(6)③：配额两键是小数 GB（0.01、1.5 合法），用浮点守卫；
+	// 其余数值键仍只认整数。
+	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn"} {
 		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
+	for _, key := range []string{"dailyQuotaGB", "monthlyQuotaGB"} {
+		if presentFloatFieldInvalid(req, key) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
 			return
 		}
@@ -116,8 +124,8 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("流量重置日无效，仅允许 0-31（0 表示不自动重置）"))
 		return
 	}
-	dailyQuotaGB := asInt64(req["dailyQuotaGB"], 0)
-	monthlyQuotaGB := asInt64(req["monthlyQuotaGB"], 0)
+	dailyQuotaGB := asFloat(req["dailyQuotaGB"], 0)
+	monthlyQuotaGB := asFloat(req["monthlyQuotaGB"], 0)
 	if dailyQuotaGB < 0 || monthlyQuotaGB < 0 {
 		response.WriteJSON(w, response.ErrDefault("配额不能小于0"))
 		return
@@ -230,8 +238,16 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 
 	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed 报错、
 	// 不落库（同族全扫：含配额两键），不再静默套硬默认/旧值。
-	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn", "dailyQuotaGB", "monthlyQuotaGB"} {
+	// C-(6)③：配额两键是小数 GB（0.01、1.5 合法），用浮点守卫；
+	// 其余数值键仍只认整数。
+	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn"} {
 		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
+	for _, key := range []string{"dailyQuotaGB", "monthlyQuotaGB"} {
+		if presentFloatFieldInvalid(req, key) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
 			return
 		}
@@ -304,11 +320,11 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	// 旧实现主行先落库、配额段后失败，报错与落库事实不符
 	// （改名已生效却回「保存失败」）。配额单侧补齐的只读查询同理前移，
 	// 其读取失败也不再发生在主行写入之后。
-	var updateDailyQuotaGB, updateMonthlyQuotaGB int64
+	var updateDailyQuotaGB, updateMonthlyQuotaGB float64
 	hasUpdateQuota := hasDailyQuota || hasMonthlyQuota
 	if hasUpdateQuota {
-		updateDailyQuotaGB = asInt64(req["dailyQuotaGB"], 0)
-		updateMonthlyQuotaGB = asInt64(req["monthlyQuotaGB"], 0)
+		updateDailyQuotaGB = asFloat(req["dailyQuotaGB"], 0)
+		updateMonthlyQuotaGB = asFloat(req["monthlyQuotaGB"], 0)
 		if updateDailyQuotaGB < 0 || updateMonthlyQuotaGB < 0 {
 			response.WriteJSON(w, response.ErrDefault("配额不能小于0"))
 			return

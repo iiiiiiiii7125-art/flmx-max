@@ -108,6 +108,6 @@ func TestFix2BImportUsersWithoutQuotaSignalPreservesQuotaRow(t *testing.T) {
 		t.Fatalf("D4-11: existing quota row must survive a quota-less backup import: %v", err)
 	}
 	if q.DailyLimitGB != 5 || q.MonthlyLimitGB != 50 {
-		t.Fatalf("D4-11: quota limits = %d/%d, want 5/50", q.DailyLimitGB, q.MonthlyLimitGB)
+		t.Fatalf("D4-11: quota limits = %v/%v, want 5/50", q.DailyLimitGB, q.MonthlyLimitGB)
 	}
 }

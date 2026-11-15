@@ -590,6 +590,11 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateV1TunnelFlowBidiDefault(db); err != nil {
 			return err
 		}
+		// C-(6)③ v1（流量审计）: 用户配额限额整数 GB → 小数 GB
+		// （PostgreSQL 两列改 double precision；SQLite 仅记版本）。
+		if err := migrateV1QuotaDecimal(db); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -662,6 +667,12 @@ func autoMigrateAll(db *gorm.DB) error {
 	// C-01 v1（流量审计）: 存量隧道 Flow=1 一次性翻为双向 2
 	// （新建缺省已改 2；新装库无表时直接记版本跳过）。
 	if err := migrateV1TunnelFlowBidiDefault(db); err != nil {
+		return err
+	}
+
+	// C-(6)③ v1（流量审计）: 用户配额限额整数 GB → 小数 GB
+	// （PostgreSQL 两列改 double precision；SQLite 仅记版本）。
+	if err := migrateV1QuotaDecimal(db); err != nil {
 		return err
 	}
 
