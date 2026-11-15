@@ -194,6 +194,10 @@ type adapter struct {
 var adapters = map[string]adapter{
 	"xray":    {versionArgs: []string{"version"}},
 	"singbox": {versionArgs: []string{"version"}},
+	// singbox-companion runs the metering companions (C-03) as a
+	// second sing-box instance: same binary, separate instance key,
+	// so a companion Apply never restarts the main instance.
+	"singbox-companion": {versionArgs: []string{"version"}},
 	// realm runs the forwards of realm-engine tunnels.
 	"realm": {versionArgs: []string{"-v"}, fixFile: realmFixFile},
 }

@@ -12,6 +12,11 @@ import (
 const (
 	TypeXray    = "xray"
 	TypeSingbox = "singbox"
+	// TypeSingboxCompanion is the managed second sing-box instance
+	// that runs the metering companions (C-03). It is not an
+	// installable kernel: it lives outside the catalog (the install
+	// UI never offers it) and is resolved by Lookup's special case.
+	TypeSingboxCompanion = "singbox-companion"
 )
 
 const (
@@ -234,7 +239,34 @@ func Lookup(kernelType string) (Info, bool) {
 			return info, true
 		}
 	}
+	// C-03: the metering companion is a managed second sing-box
+	// instance, not an installable kernel — it lives outside the
+	// catalog so the install UI never offers it, but Lookup must
+	// resolve it for payload building and version gates. Relay stays
+	// false: the companion renders a plain sing-box config, never a
+	// realm payload.
+	if kernelType == normalizeKernelType(TypeSingboxCompanion) {
+		if info, ok := Lookup(TypeSingbox); ok {
+			info.Type = TypeSingboxCompanion
+			info.Name = "sing-box (companion)"
+			return info, true
+		}
+	}
 	return Info{}, false
+}
+
+// EffectiveType folds the managed companion type onto its render family:
+// a companion instance renders exactly like sing-box. All render-side
+// type comparisons (settings conditions, version gates, outbound-IP
+// policy) must use this, never the raw companion type — those checks
+// compare against TypeSingbox/TypeXray and would misjudge the
+// companion string (notably NormalizeOutboundIPStrategy, which rejects
+// a non-auto strategy for any other type).
+func EffectiveType(kernelType string) string {
+	if normalizeKernelType(kernelType) == normalizeKernelType(TypeSingboxCompanion) {
+		return TypeSingbox
+	}
+	return kernelType
 }
 
 // ComboSupported 只读判断 (协议, 传输, 安全层) 是否在该内核的 catalog 内，

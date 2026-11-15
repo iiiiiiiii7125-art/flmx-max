@@ -104,7 +104,7 @@ func RenderWith(kernelType string, inbounds []Inbound, opts RenderOptions) (Rend
 		}
 		out.Files = []File{{Name: "config.json", Content: content}}
 		out.Args = []string{"run", "-c", "{RUN_DIR}/config.json"}
-	case TypeSingbox:
+	case TypeSingbox, TypeSingboxCompanion:
 		content, err := renderSingbox(sorted, opts)
 		if err != nil {
 			return Rendered{}, err

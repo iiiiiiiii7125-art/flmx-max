@@ -216,7 +216,14 @@ func (h *Handler) reconcileSSMetering() {
 			continue
 		}
 		if h.ssMeteringWanted(origin, demand) && h.createCompanion(origin, now) {
-			affected[origin.KernelID] = true
+			// C-03: mark the NEW companion's kernel, not the origin's —
+			// after the split the companion lands on the companion
+			// kernel, and only applying that kernel serves it.
+			if comp, err := h.repo.GetCompanionInbound(id); err == nil && comp != nil {
+				affected[comp.KernelID] = true
+			} else {
+				affected[origin.KernelID] = true
+			}
 		}
 	}
 	for kernelID := range affected {
@@ -234,6 +241,15 @@ func (h *Handler) maybeReconcileSSMetering() {
 		return
 	}
 	h.reconcileSSMetering()
+}
+
+// companionKernelIDOr returns the companion kernel id for the origin's node
+// when the split is active, else the origin's own kernel id.
+func (h *Handler) companionKernelIDOr(origin *model.NodeInbound) int64 {
+	if id, ok := h.companionKernelIDForNode(origin.NodeID); ok {
+		return id
+	}
+	return origin.KernelID
 }
 
 // createCompanion materializes the companion row for an origin. The
@@ -271,7 +287,10 @@ func (h *Handler) createCompanion(origin *model.NodeInbound, now int64) bool {
 	in.AcceptProxyProtocol = false
 
 	row := model.NodeInbound{
-		KernelID:         origin.KernelID,
+		// C-03: when the split is active on this node the companion
+		// lands on the companion kernel; otherwise it inherits the
+		// origin's kernel (old-agent fallback, unchanged behavior).
+		KernelID:         h.companionKernelIDOr(origin),
 		NodeID:           origin.NodeID,
 		Name:             companionName(origin.Name),
 		Remark:           "SS 订阅计量伴生入站（系统管理，请勿编辑）",

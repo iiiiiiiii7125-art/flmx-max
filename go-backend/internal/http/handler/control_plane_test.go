@@ -72,8 +72,12 @@ func TestShouldTryLegacySingleService(t *testing.T) {
 }
 
 func TestShouldSelfHealForwardServiceControl(t *testing.T) {
-	if !shouldSelfHealForwardServiceControl("PauseService") {
-		t.Fatalf("PauseService should trigger self-heal")
+	// C-04: PauseService must NOT trigger self-heal — rebuilding a
+	// service the agent no longer knows binds an already-listening
+	// port (EADDRINUSE) while the forward keeps running. ResumeService
+	// keeps self-heal (rebuild is the resume intent itself).
+	if shouldSelfHealForwardServiceControl("PauseService") {
+		t.Fatalf("PauseService must not trigger self-heal (C-04)")
 	}
 	if !shouldSelfHealForwardServiceControl(" resumeService ") {
 		t.Fatalf("ResumeService should trigger self-heal")

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"time"
 )
 
 // F2-PORT-01：live socket 探针（面板侧）。
@@ -70,6 +71,82 @@ func (h *Handler) checkLivePortsOccupied(targets []livePortProbeTarget) string {
 		}
 	}
 	return ""
+}
+
+// probeForwardPortsOnNode asks the agent for the live state of the given
+// ports (C-04): listening sockets + established TCP connections per port.
+// Established is a *[]int: nil means the agent predates the `established`
+// field (2.1.13 agent) and only the listening state is verifiable;
+// non-nil (possibly empty) means the agent reported it.
+func (h *Handler) probeForwardPortsOnNode(nodeID int64, ports []int) (listening []int, established *[]int, err error) {
+	if len(ports) == 0 {
+		return nil, nil, nil
+	}
+	ranges := make([]map[string]interface{}, 0, len(ports))
+	for _, p := range ports {
+		if p <= 0 {
+			continue
+		}
+		ranges = append(ranges, map[string]interface{}{"lo": p, "hi": p})
+	}
+	if len(ranges) == 0 {
+		return nil, nil, nil
+	}
+	res, err := h.sendNodeCommandWithTimeout(nodeID, "CheckPortListening", map[string]interface{}{"ranges": ranges}, defaultNodeCommandTimeout, false, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	var probe struct {
+		Listening   []int  `json:"listening"`
+		Established *[]int `json:"established"`
+	}
+	if err := remarshal(res.Data, &probe); err != nil {
+		return nil, nil, fmt.Errorf("decode port probe response: %w", err)
+	}
+	return probe.Listening, probe.Established, nil
+}
+
+// verifyForwardPortsDeadOnNode is the load-bearing probe for a NotFound
+// pause (C-04): the agent knows no service under any candidate name, so
+// the port state is the only evidence. Silent (no listener, no
+// established connection) => already paused (true). Anything live =>
+// an orphan listener holds the port (false). Probe failure is an error
+// (fail-closed): nothing may be assumed dead.
+func (h *Handler) verifyForwardPortsDeadOnNode(nodeID int64, ports []int) (bool, error) {
+	listening, established, err := h.probeForwardPortsOnNode(nodeID, ports)
+	if err != nil {
+		return false, fmt.Errorf("暂停验证失败：节点 %s 端口探针失败: %w", h.nodeLabel(nodeID), err)
+	}
+	if len(listening) > 0 {
+		return false, nil
+	}
+	if established != nil && len(*established) > 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
+// verifyPausedPortsDead polls (up to ~3s) for the ports to go silent after
+// a successful PauseService (C-04): listener gone and no established
+// connections left. Probe failure is fail-open (log only): the pause
+// itself succeeded and the probe is a safety net, not a gate. An old
+// agent (no `established` field) verifies the listener only.
+func (h *Handler) verifyPausedPortsDead(nodeID int64, ports []int) error {
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		listening, established, err := h.probeForwardPortsOnNode(nodeID, ports)
+		if err != nil {
+			log.Printf("C-04 pause verify skipped node_id=%d err=%v", nodeID, err)
+			return nil
+		}
+		if len(listening) == 0 && (established == nil || len(*established) == 0) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("暂停后验证失败：节点 %s 端口仍在监听 %v / 仍有已建立连接 %v", h.nodeLabel(nodeID), listening, established)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // subtractPortSpans 从 spans 里减去 exclude 的区间（更新时排除

@@ -370,6 +370,12 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		"conn_idle_seconds": in.ConnIdleSeconds,
 		// SS 计量伴生标记与开关（伴生行由 reconcile 维护，原入站开关由
 		// inboundSave 写；同 BUG-A2-1 教训，赋值必须与白名单同步）。
+		// C-03: 同 BUG-A2-1 家族——伴生分裂迁移（ensureCompanionKernel /
+		// moveCompanionsToKernel）改既有行的 KernelID，此列不在白名单
+		// 时赋值被静默丢弃，迁移看似成功、伴生仍留在主内核上（测试
+		// TestC03EnsureCompanionKernelSplitsOnNewAgent 当场抓获）。
+		// 其余调用方先读行再写回，此处写回的即存量值，不变。
+		"kernel_id":        in.KernelID,
 		"companion_of":     in.CompanionOf,
 		"metering_enabled": in.MeteringEnabled,
 		"updated_time":     in.UpdatedTime,
