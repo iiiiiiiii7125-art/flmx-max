@@ -384,3 +384,114 @@ func TestEvictionLogsVictimIdentity(t *testing.T) {
 		t.Fatalf("victim age = %ds, want ~300s", age)
 	}
 }
+
+// --- Track + packet face (F3-A4SS) ---
+
+// fakePacketConn is a fakeConn that also implements
+// net.PacketConn, modelling the UDP listener's per-client session
+// conn as the service sees it (after the listener's own wrappers).
+type fakePacketConn struct {
+	fakeConn
+	local  net.Addr
+	remote net.Addr
+	rx     []byte
+	txMu   sync.Mutex
+	tx     [][]byte
+}
+
+func (c *fakePacketConn) LocalAddr() net.Addr  { return c.local }
+func (c *fakePacketConn) RemoteAddr() net.Addr { return c.remote }
+
+func (c *fakePacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	if c.closed.Load() {
+		return 0, nil, io.ErrClosedPipe
+	}
+	if len(c.rx) == 0 {
+		return 0, nil, io.EOF
+	}
+	n := copy(b, c.rx)
+	c.rx = c.rx[n:]
+	return n, c.remote, nil
+}
+
+func (c *fakePacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if c.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	c.txMu.Lock()
+	c.tx = append(c.tx, append([]byte(nil), b...))
+	c.txMu.Unlock()
+	return len(b), nil
+}
+
+func (c *fakePacketConn) SetDeadline(time.Time) error      { return nil }
+func (c *fakePacketConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *fakePacketConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestTrackPreservesPacketConn(t *testing.T) {
+	var rss atomic.Int64
+	resetStateForTest(t, 100<<20, &rss, false)
+	resetRegistryForTest()
+
+	rel, ok := TryAcquire()
+	if !ok {
+		t.Fatal("acquire refused")
+	}
+	raw := &fakePacketConn{
+		local:  &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 23456},
+		remote: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43780},
+		rx:     []byte("hello"),
+	}
+	tracked, combined := Track(raw, rel)
+	defer combined()
+
+	// F3-A4SS: the wrapper must keep the packet face — the SS-UDP
+	// handler branches on it, and losing it forced every native
+	// SS-UDP association down the TUN branch ("bad address type").
+	pc, ok := tracked.(net.PacketConn)
+	if !ok {
+		t.Fatal("Track dropped net.PacketConn: SS-UDP handler would take the UDP-over-TCP branch")
+	}
+	if got := tracked.RemoteAddr().String(); got != "127.0.0.1:43780" {
+		t.Fatalf("RemoteAddr = %s, want 127.0.0.1:43780", got)
+	}
+	n, addr, err := pc.ReadFrom(make([]byte, 16))
+	if err != nil || n != 5 || addr.String() != "127.0.0.1:43780" {
+		t.Fatalf("ReadFrom = %d, %v, %v; want 5, 127.0.0.1:43780, nil", n, addr, err)
+	}
+	if n, err := pc.WriteTo([]byte("world"), raw.remote); err != nil || n != 5 {
+		t.Fatalf("WriteTo = %d, %v; want 5, nil", n, err)
+	}
+	// Packet movement stamps activity and bytes like stream movement.
+	sessionsMu.Lock()
+	var s *session
+	for _, v := range sessions {
+		s = v
+	}
+	sessionsMu.Unlock()
+	if s.bytesIn.Load() != 5 || s.bytesOut.Load() != 5 {
+		t.Fatalf("bytesIn/bytesOut = %d/%d, want 5/5", s.bytesIn.Load(), s.bytesOut.Load())
+	}
+	if age := time.Since(time.Unix(0, s.lastActivity.Load())); age > time.Minute {
+		t.Fatalf("activity stamp age = %v after packet movement, want fresh", age)
+	}
+}
+
+func TestTrackKeepsStreamConnNonPacket(t *testing.T) {
+	var rss atomic.Int64
+	resetStateForTest(t, 100<<20, &rss, false)
+	resetRegistryForTest()
+
+	rel, ok := TryAcquire()
+	if !ok {
+		t.Fatal("acquire refused")
+	}
+	tracked, combined := Track(&fakeConn{}, rel)
+	defer combined()
+	// A stream-only conn must NOT gain a packet face: handlers
+	// branching on net.PacketConn (SS-UDP's UDP-over-TCP branch)
+	// rely on the assertion failing for TCP conns.
+	if _, ok := tracked.(net.PacketConn); ok {
+		t.Fatal("Track claims net.PacketConn for a stream-only conn")
+	}
+}
