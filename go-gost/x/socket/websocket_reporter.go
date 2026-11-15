@@ -2632,7 +2632,16 @@ func launchAgentControlScript(manager serviceManager, script string) error {
 	if err != nil {
 		return err
 	}
-	return exec.Command(name, args...).Start()
+	cmd := exec.Command(name, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// 低-9：Start 后必须有人 Wait，否则子进程退出后残留 defunct
+	// 僵尸。脚本是 detach 形态（systemd-run/setsid），父进程通常
+	// 活着，goroutine 在子进程退出时收尸；父进程先死时子进程由
+	// init 接管回收，两路都不留僵尸。
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // scriptStartCommand wraps the manager start command for the detached
@@ -2977,7 +2986,14 @@ func agentSelfStopSegment(pid int) string {
 // exits. setsid (the OpenRC launcher shape) detaches the session
 // without any unit, so the relaunched agent survives the script.
 func launchAgentSelfRestartScript(script string) error {
-	return exec.Command("setsid", "/bin/sh", "-c", script).Start()
+	cmd := exec.Command("setsid", "/bin/sh", "-c", script)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// 低-9：同 launchAgentControlScript，Start 后 goroutine 收尸，
+	// 防子进程退出后残留 defunct 僵尸。
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // buildAgentRestartScriptSelf builds the upgrade restart script for a

@@ -26,6 +26,7 @@ import (
 const (
 	notifyEventNodeOffline = "node_offline"
 	// A4-V-06：升级/回退下发后在核验窗口内未回连到目标版本。
+	notifyEventNftCollectFailed  = "nft_collect_failed"
 	notifyEventNodeUpgradeFailed = "node_upgrade_failed"
 	notifyEventInboundDown       = "inbound_down"
 	notifyEventKernelError       = "kernel_error"
@@ -92,7 +93,12 @@ type notifier struct {
 	mu             sync.Mutex
 	offlineTimers  map[int64]*time.Timer
 	offlineAlerted map[int64]bool
-	expiryAlerted  map[int64]int64
+	// nftCollectAlerted 记录已对当前连续失败 streak 发过一次告警的
+	// 节点（A-中-2）：告警只在越阈值时发一次；发送失败时回调清
+	// 掉标记，下一轮重试；采集恢复时清掉标记并忘掉指纹，以便下
+	// 一个 streak 再次告警（与 offlineAlerted 同口径）。
+	nftCollectAlerted map[int64]bool
+	expiryAlerted     map[int64]int64
 	// alerted holds keys of reminders already sent (traffic, expiry).
 	alerted map[string]bool
 	// recentSent 记录最近成功发送过的通知指纹与时间（O8-005），用于抑制
@@ -120,15 +126,16 @@ type notifier struct {
 
 func newNotifier() *notifier {
 	return &notifier{
-		offlineTimers:   make(map[int64]*time.Timer),
-		offlineAlerted:  make(map[int64]bool),
-		expiryAlerted:   make(map[int64]int64),
-		alerted:         make(map[string]bool),
-		recentSent:      make(map[string]time.Time),
-		inflight:        make(map[string]bool),
-		delivered:       make(map[string]map[string]time.Time),
-		recoveryTimers:  make(map[int64]*time.Timer),
-		recoveryPending: make(map[int64]bool),
+		offlineTimers:     make(map[int64]*time.Timer),
+		offlineAlerted:    make(map[int64]bool),
+		nftCollectAlerted: make(map[int64]bool),
+		expiryAlerted:     make(map[int64]int64),
+		alerted:           make(map[string]bool),
+		recentSent:        make(map[string]time.Time),
+		inflight:          make(map[string]bool),
+		delivered:         make(map[string]map[string]time.Time),
+		recoveryTimers:    make(map[int64]*time.Timer),
+		recoveryPending:   make(map[int64]bool),
 		// AUDIT-R26 (R5R26-001): 重定向目标同样走 validateNotifyURL 校验，
 		// 防 302/301 跳转到元数据地址绕过 LAD26-001 的 SSRF 控制。
 		// 同时限制最多 5 跳，防重定向环。
@@ -739,6 +746,7 @@ func notifyEmoji(event, title string) string {
 	}
 	switch event {
 	case notifyEventNodeOffline, notifyEventNodeUpgradeFailed,
+		notifyEventNftCollectFailed,
 		notifyEventInboundDown, notifyEventKernelError,
 		"backup", "backup_failed":
 		// "backup" has no live kind at this baseline (Gist backup was
@@ -994,6 +1002,7 @@ func (h *Handler) forgetNode(nodeID int64) {
 	}
 	delete(n.recoveryPending, nodeID)
 	delete(n.offlineAlerted, nodeID)
+	delete(n.nftCollectAlerted, nodeID)
 	delete(n.expiryAlerted, nodeID)
 }
 
@@ -1025,6 +1034,11 @@ func (h *Handler) pruneStaleNodeAlerts() {
 	for id := range n.offlineAlerted {
 		if !alive[id] {
 			delete(n.offlineAlerted, id)
+		}
+	}
+	for id := range n.nftCollectAlerted {
+		if !alive[id] {
+			delete(n.nftCollectAlerted, id)
 		}
 	}
 	for id := range n.expiryAlerted {
@@ -1074,6 +1088,63 @@ var notifyOfflineRetryDelay = time.Minute
 // notifyOnlineRetryDelay 是恢复通知发送失败后的重排间隔（R2X-017），
 // 与掉线向重排同款 1 分钟。
 var notifyOnlineRetryDelay = time.Minute
+
+// dispatchNftCollectFailedAlert sends the nft-collection-failed alert
+// (A-中-2) exactly once per failing streak: the caller only invokes it
+// on the threshold crossing (or a retry round while the mark is clear).
+// The mark is set before enqueueing and cleared on send failure so the
+// next round retries; a successful/suppressed send keeps the mark until
+// the collection recovers (see dispatchNftCollectRecoveredAlert). The
+// message body is the stable "节点：<label>" (same shape as the offline
+// alert) so the recovery can forget the fingerprint; the failure reason
+// lives on the node page (nftCollectLastError) and in the backend log.
+func (h *Handler) dispatchNftCollectFailedAlert(nodeID int64) {
+	n := h.notifier
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	if n.nftCollectAlerted[nodeID] {
+		n.mu.Unlock()
+		return
+	}
+	n.nftCollectAlerted[nodeID] = true
+	n.mu.Unlock()
+	label := h.nodeLabel(nodeID)
+	h.notifyTracked(notifyEventNftCollectFailed, "节点 nft 采集失败", "节点："+label, func(outcome notifyOutcome) {
+		if outcome != notifyOutcomeFailed {
+			return
+		}
+		n.mu.Lock()
+		delete(n.nftCollectAlerted, nodeID)
+		n.mu.Unlock()
+	})
+}
+
+// dispatchNftCollectRecoveredAlert sends the recovery notification after
+// a node's nft collection recovers from a failing streak, and forgets
+// the failure fingerprint so a later streak can alert again (same
+// event + same message body as the failure, title differs —
+// forgetEventMessage matches on event+message, A7-02 pattern).
+func (h *Handler) dispatchNftCollectRecoveredAlert(nodeID int64) {
+	n := h.notifier
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	if !n.nftCollectAlerted[nodeID] {
+		n.mu.Unlock()
+		return
+	}
+	delete(n.nftCollectAlerted, nodeID)
+	n.mu.Unlock()
+	label := h.nodeLabel(nodeID)
+	h.notifyTracked(notifyEventNftCollectFailed, "节点 nft 采集恢复", "节点："+label, func(outcome notifyOutcome) {
+		if outcome == notifyOutcomeSent || outcome == notifyOutcomeSuppressed {
+			h.notifier.forgetEventMessage(notifyEventNftCollectFailed, "节点："+label)
+		}
+	})
+}
 
 func (h *Handler) notifyNodeOffline(nodeID int64) {
 	n := h.notifier

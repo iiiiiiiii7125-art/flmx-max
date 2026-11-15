@@ -27,10 +27,12 @@ func TestForgetNodeDropsAllFourMaps(t *testing.T) {
 	svc := NewIngestionService(r)
 
 	// 两条上报才建 traffic 桶（首条只建基线）。
+	// A-低-5：两节点必须用不同 BootID——同 BootID 即同机，去重后
+	// 高 ID 节点不建桶，本测试的「两节点各有桶」前置即不成立。
 	svc.RecordNodeMetric(7, metricWithBytes(10, 1000, 2000, "boot-a"))
 	svc.RecordNodeMetric(7, metricWithBytes(20, 1500, 2600, "boot-a"))
-	svc.RecordNodeMetric(8, metricWithBytes(10, 1000, 2000, "boot-a"))
-	svc.RecordNodeMetric(8, metricWithBytes(20, 1500, 2600, "boot-a"))
+	svc.RecordNodeMetric(8, metricWithBytes(10, 1000, 2000, "boot-b"))
+	svc.RecordNodeMetric(8, metricWithBytes(20, 1500, 2600, "boot-b"))
 	if len(svc.traffic) == 0 {
 		t.Fatal("setup: expected traffic buckets for both nodes")
 	}
@@ -89,8 +91,10 @@ func TestEvictDeletedNodeKeysDropsStaleNodes(t *testing.T) {
 	svc.RecordNodeMetric(liveID, metricWithBytes(10, 1000, 2000, "boot-a"))
 	svc.RecordNodeMetric(liveID, metricWithBytes(20, 1500, 2600, "boot-a"))
 	// 7 号节点在 DB 中不存在：模拟已被删、键残留。
-	svc.RecordNodeMetric(7, metricWithBytes(10, 1000, 2000, "boot-a"))
-	svc.RecordNodeMetric(7, metricWithBytes(20, 1500, 2600, "boot-a"))
+	// A-低-5：7 号须用不同 BootID，否则与 live 节点同机去重后
+	// 根本不建 traffic 桶，扫掉桶的断言即空洞。
+	svc.RecordNodeMetric(7, metricWithBytes(10, 1000, 2000, "boot-b"))
+	svc.RecordNodeMetric(7, metricWithBytes(20, 1500, 2600, "boot-b"))
 
 	svc.evictDeletedNodeKeys()
 

@@ -839,6 +839,36 @@ func (r *Repository) UpdateNodeWhitelist(nodeID int64, enabled int, extra string
 	return nil
 }
 
+// UpdateNftCollectHealth stores one node's nft collection health
+// (A-中-2): state "" = never collected, "ok" = last round
+// succeeded, "failing" = consecutive failures reached the alert
+// threshold; failCount is the consecutive failure count, lastError
+// the latest failure reason (truncated by the caller), lastOKAt the
+// UnixMilli of the latest successful round (0 = never). Runtime
+// state, never a setting: refreshed by the 30s collection loop and
+// never enters backups. Same not-found contract as
+// UpdateNodeNftablesStatus.
+func (r *Repository) UpdateNftCollectHealth(nodeID int64, state string, failCount int, lastError string, lastOKAt int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", nodeID).
+		Updates(map[string]interface{}{
+			"nft_collect_state":      state,
+			"nft_collect_fail_count": failCount,
+			"nft_collect_last_error": lastError,
+			"nft_collect_last_ok_at": lastOKAt,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("节点不存在")
+	}
+	return nil
+}
+
 // UpdateNodeNftablesStatus stores the agent-reported nftables state
 // for one node ("installed" / "auto_installed" / "failed" with the
 // reason in errText, "" = unknown). Runtime state, never a setting:

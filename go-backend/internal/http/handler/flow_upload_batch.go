@@ -35,9 +35,58 @@ type flowUploadBatch struct {
 	policyTargets  []flowPolicyTarget
 	forwardTraffic map[int64]tunnelTrafficDelta
 	orphanServices map[string]struct{}
+	// dropped 是单批上报的丢弃台账（A-中-3）：每一类静默丢弃都按
+	// 条数＋字节数汇总，buildNodeFlowUploadBatch 每批打一行摘要
+	// 日志。丢弃本身是设计行为（见各 reason 的裁定注释），但静
+	// 默丢弃不是——管理员必须能从日志里看到每批丢了多少、为什么。
+	dropped flowDropStats
 	// seqAdvance X-P3-31：agent 上报路径设置——入账单事务提交时同
 	// tx 推进 seq；非上报路径（策略单条/内部调用）为 nil。
 	seqAdvance *repo.FlowSeqAdvance
+}
+
+// flowDropStats 是单批流量上报按原因汇总的丢弃计数（A-中-3）。
+// 各原因的裁定：
+//   - negative：负流量值，H-17 安全丢弃——负数会扣减计数器绕过配额。
+//   - emptyOrWebAPI：空服务名或面板自身 API 流量。web_api 是面板
+//     自己的 API 调用流量，无归属用户，按设计不计入任何用户账。
+//   - unparsed：服务名解析不成 <forward>_<user>_<tunnel>。直连入站
+//     与非转发服务的流量按设计不入用户/隧道账：无法归属到具体用
+//     户与隧道；整机总量仍由 NIC 计数（node_traffic）覆盖。
+//   - peerShare：联邦共享前缀 peer-share-。旧联邦协议，本地从不产
+//     生；上报到本面板即错路。
+//   - foreignForward：解析出的转发不属于本节点、或上报用户与转发
+//     属主不一致（跨节点误报/旧配置残留；属主节点收到同一批时入账）。
+type flowDropStats struct {
+	negativeItems       int
+	negativeBytes       int64
+	emptyOrWebAPIItems  int
+	emptyOrWebAPIBytes  int64
+	unparsedItems       int
+	unparsedBytes       int64
+	peerShareItems      int
+	peerShareBytes      int64
+	foreignForwardItems int
+	foreignForwardBytes int64
+}
+
+func (s flowDropStats) totalItems() int {
+	return s.negativeItems + s.emptyOrWebAPIItems + s.unparsedItems + s.peerShareItems + s.foreignForwardItems
+}
+
+// logSummary 打一行单批丢弃摘要（A-中-3）：无丢弃时不打，避免
+// 每批一条的日志噪音；有丢弃时一行写全五类条数与字节数。
+func (s flowDropStats) logSummary(nodeID int64) {
+	if s.totalItems() == 0 {
+		return
+	}
+	log.Printf("flow upload dropped node_id=%d items=%d negative=%d/%dB empty_or_webapi=%d/%dB unparsed=%d/%dB peer_share=%d/%dB foreign_forward=%d/%dB",
+		nodeID, s.totalItems(),
+		s.negativeItems, s.negativeBytes,
+		s.emptyOrWebAPIItems, s.emptyOrWebAPIBytes,
+		s.unparsedItems, s.unparsedBytes,
+		s.peerShareItems, s.peerShareBytes,
+		s.foreignForwardItems, s.foreignForwardBytes)
 }
 
 func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.FlowUploadForwardMeta) flowUploadBatch {
@@ -67,15 +116,27 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 	for _, item := range items {
 		// H-17: 丢弃负流量值。/flow/upload 仅凭节点 secret 鉴权，攻击者可伪造
 		// {"d":-N} 经 gorm.Expr("in_flow + ?", 负数) 直接扣减计数器，绕过配额。
+		// A-中-3：丢弃计入 batch.dropped（负值字节无意义，只计条数）。
 		if item.U < 0 || item.D < 0 {
+			batch.dropped.negativeItems++
 			continue
 		}
 		serviceName := strings.TrimSpace(item.N)
 		if serviceName == "" || serviceName == "web_api" {
+			// A-中-3 裁定：web_api 是面板自身 API 流量、空名无归属，
+			// 按设计不入任何用户账；丢弃计入 batch.dropped，见
+			// flowDropStats 的原因注释。
+			batch.dropped.emptyOrWebAPIItems++
+			batch.dropped.emptyOrWebAPIBytes += item.U + item.D
 			continue
 		}
 		forwardID, userID, userTunnelID, ok := parseFlowServiceIDs(serviceName)
 		if !ok {
+			// A-中-3 裁定：解析不成 <forward>_<user>_<tunnel> 的是
+			// 直连入站/非转发服务流量，按设计不入用户/隧道账（无法
+			// 归属）；整机总量仍由 NIC 计数覆盖。丢弃计入 batch.dropped。
+			batch.dropped.unparsedItems++
+			batch.dropped.unparsedBytes += item.U + item.D
 			continue
 		}
 		meta, exists := metas[forwardID]

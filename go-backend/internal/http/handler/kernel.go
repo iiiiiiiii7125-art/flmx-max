@@ -3727,6 +3727,10 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 // 失败）。只在状态变化时写，避免每分钟轮询写 churn。写失败只
 // 记日志，绝不让状态面摄入失败（best-effort）。
 func (h *Handler) ingestNodeNftablesStatus(nodeID int64, status agentKernelStatus) {
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return
+	}
 	var state, errText string
 	switch {
 	case status.NftError != "":
@@ -3736,11 +3740,15 @@ func (h *Handler) ingestNodeNftablesStatus(nodeID int64, status agentKernelStatu
 	case status.NftAvailable:
 		state, errText = "installed", ""
 	default:
-		return
-	}
-	node, err := h.repo.GetNodeByID(nodeID)
-	if err != nil || node == nil {
-		return
+		// A-低-6：agent 已明确上报本机无 nftables（NftAvailable=false
+		// 且无错误、未自动安装）。nftables 模式节点的订阅/realm 计数
+		// 全靠 nft 计数器，本态即计数缺口的明示——行内记 "missing"，
+		// 节点页据此解释「计数永不入账」。gost 模式节点无 nft 是正常
+		// 形态，其计费走 WS 上报，不记此态（否则满屏噪音）。
+		if defaultNodeForwardMode(node.ForwardMode) != "nftables" {
+			return
+		}
+		state, errText = "missing", "未安装 nftables，订阅／realm 计数不入账"
 	}
 	if node.NftablesStatus == state && node.NftablesError == errText {
 		return
@@ -3768,6 +3776,9 @@ func (h *Handler) ingestKernelCounters(nodeID int64, status agentKernelStatus, n
 // 不能再靠侥幸）。同步/切断/执法由 ≤60s 后的周期轮询全量面补
 // 做，判据读的都是已入账累计值，不漏不重。
 func (h *Handler) ingestKernelCountersMode(nodeID int64, status agentKernelStatus, now int64, full bool) {
+	// A-低-6：无 nft 的节点无计数可采，早返本身不变；缺口标识由同
+	// 轮的 ingestNodeNftablesStatus 落 "missing"（nftables 模式节点），
+	// 不在此处重复写态。
 	if !status.NftAvailable {
 		return
 	}
