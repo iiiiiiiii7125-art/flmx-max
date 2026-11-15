@@ -150,6 +150,9 @@ type userSubscriptionMineView struct {
 	// 「删除中」，与管理员列表 subscriptionView.PendingDelete 同口径
 	// ——此前用户侧无此字段，只看到订阅照常列出、链接 404 无提示。
 	PendingDelete bool `json:"pendingDelete"`
+	// UsageInboundTotal（B-L4）：与管理员视图同口径——非分享订阅为
+	// true，客户端显示的已用是所选入站的总量（非本订阅独占）。
+	UsageInboundTotal bool `json:"usageInboundTotal,omitempty"`
 }
 
 // userSubscriptionMine 返回当前登录用户被分配的订阅（任意登录用户，仅自己的）。
@@ -201,6 +204,7 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 			UploadBytes: v.UploadBytes, DownloadBytes: v.DownloadBytes,
 			TrafficLimit: v.TrafficLimit, TrafficSince: v.TrafficSince, ExpireTime: v.ExpireTime,
 			OverQuota: v.OverQuota, Enabled: v.Enabled, PendingDelete: v.PendingDelete,
+			UsageInboundTotal: v.UsageInboundTotal,
 		})
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{

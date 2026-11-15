@@ -794,6 +794,13 @@ type subscriptionView struct {
 	// 计量、TrafficLimit 永不触发，须对管理员显式可见，不许静默。
 	// 视图构建单点回填，列表/保存/详情同口径。
 	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
+	// UsageInboundTotal（B-L4）：非分享订阅为 true——该订阅没有归属
+	// 计量，订阅客户端（Subscription-Userinfo 头）显示的已用是所选
+	// 入站的行计数器之和（入站总量，非本订阅独占），共用同一入站的
+	// 订阅显示相同数字；该数字不用于超限判定。面板本视图的
+	// uploadBytes/downloadBytes 仍是订阅自身计数（非分享恒 0），与
+	// 客户端显示的入站总量是两个数，前端据此 flag 区分标注。
+	UsageInboundTotal bool `json:"usageInboundTotal,omitempty"`
 }
 
 // subFormatAlias resolves format aliases shared by the pull side
@@ -914,6 +921,7 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
 		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s),
 		MeteringUnsupported: isShare(s) && s.ID > kernel.MaxUserMarkID,
+		UsageInboundTotal:   !isShare(s),
 	}
 }
 
