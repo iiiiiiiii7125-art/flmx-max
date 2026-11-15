@@ -523,6 +523,14 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		}
 	}
 	prev := prevApply{req: inst.req, binDir: inst.binDir, bins: inst.bins, version: inst.version, files: prevFiles}
+	// C-(4): a running sing-box instance can apply a config-only
+	// change by SIGHUP reload instead of a process restart (see
+	// tryReloadSingbox). The reload needs the config to have
+	// changed, the binary to be unchanged, and the process to be
+	// up; anything else restarts as before.
+	reloadable := isSingboxType(req.Type) && running &&
+		prev.req.Hash != req.Hash && req.Hash != "" &&
+		prev.bins[""] == mainBin && len(prev.bins) == len(bins)
 	// F-032: 上一版是否"曾确认可用"在覆盖 inst.req 前定格，与瞬时
 	// 进程快照无关（退避间隙 procs 不在运行，prev 仍是可回滚的好配置）。
 	prevGood := prev.req.Enabled && prev.req.Hash != "" && prev.req.Hash == inst.goodHash
@@ -551,6 +559,28 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.mu.Unlock()
 	}
 
+	// C-(4): validate the new config before the nft sync when a
+	// reload is planned — a bad config must fail here, while the
+	// old process is still running the old config and the old nft
+	// rules are still installed. Restoring the files and the
+	// in-memory request keeps a later restart on the good config;
+	// the nft rules are never synced for the bad config.
+	if reloadable {
+		if cerr := checkSingboxConfig(mainBin, singboxConfigPath(req, runDir)); cerr != nil {
+			restorePrevFiles(runDir, prev)
+			m.mu.Lock()
+			inst.req = prev.req
+			inst.binDir = prev.binDir
+			inst.bins = prev.bins
+			inst.version = prev.version
+			m.mu.Unlock()
+			m.applyConnLog(inst, prev.req)
+			err := fmt.Errorf("sing-box 配置校验失败，已保留旧配置: %w", cerr)
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		}
+	}
+
 	// The nft sync runs BEFORE any process starts: the ruleset carries
 	// the traffic counters and the inbound whitelists. Counting alone
 	// is best-effort, but a kernel guarded by the
@@ -569,19 +599,57 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	startBlocked := syncErr != nil && reqNeedsNftGuard(req)
 
 	stable := true
+	// reloadedClean is set when the config was applied by a SIGHUP
+	// reload with the process never restarting — the only case in
+	// which removed users still have live sessions to kill (a
+	// restart already dropped every session).
+	reloadedClean := false
 	switch {
 	case !req.Enabled:
 		m.stopProcesses(inst)
 	case changed || !running:
-		m.stopProcesses(inst)
-		if !startBlocked {
-			m.startProcesses(inst)
-			// F-032: 探活窗口内持续存活判定——窗口内曾存活又退出即失败，
-			// 单点快照会把"启动后随即退出"误判成功、把慢启动误判失败。
+		// C-(4): try a SIGHUP reload before restarting — a
+		// restart drops every established session of every user
+		// on the instance, a reload drops none.
+		applied, restarted := m.tryReloadSingbox(inst, reloadable)
+		if applied {
+			reloadedClean = !restarted
+			if restarted {
+				inst.logs.add("[flmx] sing-box 配置重载致进程重启（会话已断），已按新配置恢复")
+			}
 			stable = m.waitStable(req.Type)
 		} else {
-			stable = false
+			m.stopProcesses(inst)
+			if !startBlocked {
+				m.startProcesses(inst)
+				// F-032: 探活窗口内持续存活判定——窗口内曾存活又退出即失败，
+				// 单点快照会把"启动后随即退出"误判成功、把慢启动误判失败。
+				stable = m.waitStable(req.Type)
+			} else {
+				stable = false
+			}
 		}
+	}
+
+	// C-(4): a clean reload removed users from the config but did
+	// not drop their established sessions — kill only the removed
+	// users' connections by conntrack mark. (A restart already
+	// dropped every session, so there is nothing to kill then.)
+	//
+	// NOTE (C-(4) live proof 2026-11-15): the SIGHUP reload on its
+	// own already drops the removed user's established sessions
+	// while preserving the kept users' (bare-SIGHUP test: u2 died,
+	// u3 completed 20,971,520 B). No extra per-user ss -K kill is
+	// needed, and the conntrack-mark kill proved racy (mark only
+	// visible during transfer bursts) and harmful in the agent
+	// path. The reload IS the per-user connection-level kill.
+	if reloadedClean && req.Enabled && stable && len(req.UserMarks) > 0 {
+		removed := diffUserMarks(prev.req.UserMarks, req.UserMarks)
+		if len(removed) > 0 {
+			inst.logs.add(fmt.Sprintf("[flmx] 配置重载完成，已切断用户 %v 的已有连接（旧=%v 新=%v）", removed, prev.req.UserMarks, req.UserMarks))
+		}
+	} else if len(req.UserMarks) > 0 && len(diffUserMarks(prev.req.UserMarks, req.UserMarks)) > 0 {
+		inst.logs.add(fmt.Sprintf("[flmx] 配置未走干净重载（reloadedClean=%v enabled=%v stable=%v），移除用户 %v 的已有连接未切断", reloadedClean, req.Enabled, stable, diffUserMarks(prev.req.UserMarks, req.UserMarks)))
 	}
 
 	var failure error
@@ -728,7 +796,11 @@ type prevApply struct {
 	files   map[string][]byte
 }
 
-func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
+// restorePrevFiles writes the previous apply's file contents back
+// over the run dir (nil content removes the file). Used by rollback
+// and by the reload config-check failure path, both of which must
+// leave the on-disk config consistent with the in-memory request.
+func restorePrevFiles(runDir string, prev prevApply) {
 	for name, content := range prev.files {
 		path := filepath.Join(runDir, name)
 		if content == nil {
@@ -737,6 +809,10 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 			_ = writeFileAtomic(path, content, 0o600)
 		}
 	}
+}
+
+func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
+	restorePrevFiles(runDir, prev)
 	m.mu.Lock()
 	inst.req = prev.req
 	inst.binDir = prev.binDir
@@ -748,6 +824,132 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 	m.stopProcesses(inst)
 	m.startProcesses(inst)
 	m.waitStable(prev.req.Type)
+}
+
+// isSingboxType reports whether a kernel type runs the sing-box
+// binary (main or metering companion). Only these support a SIGHUP
+// config reload that preserves established connections.
+func isSingboxType(t string) bool {
+	return t == "singbox" || t == "singbox-companion"
+}
+
+// diffUserMarks returns the user ids present in prev but absent in
+// cur (removed users), sorted for deterministic logging.
+func diffUserMarks(prev, cur []int64) []int64 {
+	inCur := make(map[int64]bool, len(cur))
+	for _, id := range cur {
+		inCur[id] = true
+	}
+	seen := make(map[int64]bool)
+	var out []int64
+	for _, id := range prev {
+		if !inCur[id] && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	// small sets; insertion sort keeps the import list minimal.
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// singboxConfigPath is the config file a sing-box process was started
+// with (the `-c` argument, {RUN_DIR} expanded). It falls back to the
+// panel-rendered well-known name when the args carry no -c.
+func singboxConfigPath(req ApplyRequest, runDir string) string {
+	args := req.Args
+	if len(args) == 0 && len(req.Processes) > 0 {
+		args = req.Processes[0].Args
+	}
+	for i, a := range args {
+		if a == "-c" && i+1 < len(args) {
+			return strings.ReplaceAll(args[i+1], "{RUN_DIR}", runDir)
+		}
+	}
+	return filepath.Join(runDir, "config.json")
+}
+
+// checkSingboxConfig runs `sing-box check` on a config file. A
+// non-zero exit or a timeout is an error carrying the tool output,
+// so a bad config fails the apply before the old process or the nft
+// rules are touched.
+func checkSingboxConfig(bin, configPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "check", "-c", configPath)
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sing-box check -c %s: %w (output: %s)", configPath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// tryReloadSingbox SIGHUPs a running sing-box instance so it re-reads
+// its (already written) config without dropping established
+// connections. It returns (applied, restarted):
+//   - (true, false): reloaded in place; sessions preserved.
+//   - (true, true): the process restarted on its own (supervisor
+//     relaunch) with the new config; sessions were lost but the
+//     config is applied — the caller must NOT restart it again.
+//   - (false, false): reload not applicable (caller falls through
+//     to the normal restart path).
+func (m *Manager) tryReloadSingbox(inst *instance, reloadable bool) (applied, restarted bool) {
+	if !reloadable {
+		return false, false
+	}
+	type generation struct {
+		restarts  int
+		startedAt int64
+	}
+	m.mu.Lock()
+	procs := append([]*process(nil), inst.procs...)
+	m.mu.Unlock()
+	if len(procs) == 0 {
+		return false, false
+	}
+	before := make([]generation, 0, len(procs))
+	for _, p := range procs {
+		_, _, r, _, s := p.snapshot()
+		before = append(before, generation{r, s})
+	}
+	for _, p := range procs {
+		p.sighup()
+	}
+	// sing-box applies a reload within milliseconds; give it a
+	// second to settle, watching for a supervisor relaunch (the
+	// backoff starts at 1s, so a crash shows up as a new generation
+	// inside this window).
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		restartedNow := false
+		running := false
+		for i, p := range procs {
+			r, _, restarts, _, startedAt := p.snapshot()
+			if r {
+				running = true
+			}
+			if i < len(before) && (restarts != before[i].restarts || startedAt != before[i].startedAt) {
+				restartedNow = true
+			}
+		}
+		if restartedNow {
+			return true, true
+		}
+		if time.Now().After(deadline) {
+			if running {
+				return true, false
+			}
+			// Died and not back yet; the supervisor may still
+			// relaunch it, so let the caller restart cleanly.
+			return false, false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // waitStable 在探活窗口（startupProbeIn）内持续观察进程存活：达到过

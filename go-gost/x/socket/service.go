@@ -430,9 +430,14 @@ func pauseKillAddr(svc service.Service, configAddr string) string {
 	return ""
 }
 
-// pauseKillNeeded reports whether the port currently has established TCP
-// connections (scan of /proc/net). A scan error returns true — the safe
-// side is to attempt the kill and fail loud if it cannot run.
+// pauseKillNeeded reports whether the port currently has live or
+// draining TCP connections (scan of /proc/net). A scan error returns
+// true — the safe side is to attempt the kill and fail loud if it
+// cannot run. A-NEW: the scan counts every live/draining state, not
+// just ESTABLISHED — a bulk relay flow is in FIN-WAIT-2/CLOSE-WAIT
+// by the time the pause lands, with megabytes still buffered in the
+// peer's Recv-Q, and counting only ESTABLISHED let the pause skip
+// the kill entirely.
 func pauseKillNeeded(addr string) (bool, error) {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -442,11 +447,11 @@ func pauseKillNeeded(addr string) (bool, error) {
 	if err != nil || p <= 0 {
 		return false, nil
 	}
-	est, err := scanProcNetEstablished(procNetDir, map[int]bool{p: true})
+	live, err := scanProcNetConnected(procNetDir, map[int]bool{p: true})
 	if err != nil {
 		return true, err
 	}
-	return len(est) > 0, nil
+	return len(live) > 0, nil
 }
 
 func pauseServices(req pauseServicesRequest) error {
@@ -545,6 +550,20 @@ func pauseServices(req pauseServicesRequest) error {
 				if err := kill.ForceClosePortConnections(killAddr); err != nil {
 					logger.Default().Errorf("pause services: failed to close connections on %s: %v", killAddr, err)
 					return fmt.Errorf("pause service %s: close connections on %s failed: %w", stp.name, killAddr, err)
+				}
+				// A-NEW: verify the kill landed. A bulk flow's
+				// sockets leave ESTABLISHED before the pause, and a
+				// kill that only matched ESTABLISHED used to report
+				// success while the download kept draining its
+				// buffered Recv-Q. Re-scan; one retry for a socket
+				// caught mid-transition, then fail loud so the panel
+				// retries instead of reporting a pause that did not
+				// disconnect.
+				if still, _ := pauseKillNeeded(killAddr); still {
+					_ = kill.ForceClosePortConnections(killAddr)
+					if still, _ := pauseKillNeeded(killAddr); still {
+						return fmt.Errorf("pause service %s: connections on %s still alive after close", stp.name, killAddr)
+					}
 				}
 			}
 		}
