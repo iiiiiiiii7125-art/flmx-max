@@ -7,6 +7,17 @@ import (
 	"strings"
 )
 
+// companionClashAPIAddr is the companion's sing-box Clash API listen
+// address (C-(4)). One companion instance per node, so one fixed
+// localhost port. Localhost-only, no secret: the agent and the
+// companion share the host, and any local root process can already
+// do anything; the API is never exposed on a public interface.
+// The agent closes a removed user's live connections through it
+// (DELETE /connections/<id> by auth_user rule) instead of
+// SIGHUP-reloading the whole instance (which drops every user's
+// sessions).
+const companionClashAPIAddr = "127.0.0.1:40900"
+
 func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	list := make([]interface{}, 0, len(inbounds))
 	acme := &acmeProviders{}
@@ -72,6 +83,17 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	// list (the IP policy pass reorders and appends rules) and the
 	// final outbound set.
 	guardSingboxDomainExits(cfg)
+	// C-(4): the companion exposes the Clash API (see
+	// companionClashAPIAddr). It merges into the experimental
+	// object if rule sets already put a cache_file there.
+	if opts.Companion {
+		exp, _ := cfg["experimental"].(obj)
+		if exp == nil {
+			exp = obj{}
+		}
+		exp["clash_api"] = obj{"external_controller": companionClashAPIAddr}
+		cfg["experimental"] = exp
+	}
 	return marshalConfig(cfg)
 }
 

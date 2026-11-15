@@ -2809,6 +2809,11 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// debug／不开 access），与 connLogInbounds 的门同源。
 		ConnLogEnabled: connlogOn,
 		UserMarkBase:    markBase,
+		// C-(4): the companion (raw type, before EffectiveType
+		// folded it to singbox) exposes the Clash API so the
+		// agent can close a removed user's live connections
+		// selectively.
+		Companion: k.KernelType == kernel.TypeSingboxCompanion,
 	})
 	if err != nil {
 		return nil, "", err
