@@ -339,11 +339,11 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
           </div>
           <p className="text-xs font-semibold text-foreground">
             统计口径与订阅「已用」一致：仅统计独立凭据协议（VLESS、VMess、Trojan、Hysteria2、TUIC
-            等）的流量；Shadowsocks、导入节点等共用凭据不计入。曲线为该订阅的合计流量，自本功能上线起记录
+            等）的流量；Shadowsocks、导入节点等共用凭据不计入。只统计上次重置流量之后的流量，重置前的时段不再计入合计
           </p>
           <p className="text-xs font-semibold text-foreground">
             订阅「已用」从本周期开始（{sinceDate}
-            ，订阅创建或上次重置流量时）累计，和这里所选的时间范围不同，两边的数不一定相等。
+            ，订阅创建或上次重置流量时）累计；这里合计的是所选时间范围内、本周期内的流量，所选范围完全覆盖本周期时两边相等。
           </p>
         </>
       )}

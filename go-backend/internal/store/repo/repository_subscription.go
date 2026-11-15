@@ -454,7 +454,12 @@ func (r *Repository) PurgeSubscriptionTraffic(beforeMs int64) error {
 	return r.db.Where("hour < ?", beforeMs).Delete(&model.SubscriptionTraffic{}).Error
 }
 
-// ResetSubscriptionTraffic zeroes a subscription's traffic.
+// ResetSubscriptionTraffic zeroes a subscription's traffic counters and
+// moves traffic_since to now. The hourly rows are deliberately kept:
+// the traffic chart clips them at traffic_since (B-M2), so the chart
+// totals match the zeroed counters while the history stays in the
+// database for retention/backup. Deleting rows here would also wipe
+// history on every monthly auto-reset.
 func (r *Repository) ResetSubscriptionTraffic(id int64, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")

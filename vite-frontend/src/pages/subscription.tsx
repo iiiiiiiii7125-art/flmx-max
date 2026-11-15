@@ -1122,7 +1122,11 @@ export default function SubscriptionPage() {
 
         return;
       }
-      toast.success(detail.overQuota ? "流量已重置，已恢复连接" : "流量已重置");
+      toast.success(
+        detail.overQuota
+          ? "流量已重置，已恢复连接，统计从本周期重新累计"
+          : "流量已重置，统计从本周期重新累计",
+      );
       setDetail(res.data);
       await load();
     } finally {
