@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// ForceClosePortConnections kills every established TCP connection whose
-// LOCAL port is addr's port (C-04). Pause semantics are "disconnect now,
-// uniformly": a connection that keeps draining after a pause is the filed
-// bug, not a drain window. The function is synchronous — it returns only
+// ForceClosePortConnections kills every TCP connection on addr's port
+// (C-04). Pause semantics are "disconnect now, uniformly": a
+// connection that keeps draining after a pause is the filed bug, not
+// a drain window. The function is synchronous — it returns only
 // after the kill mechanism ran — and it returns a real error when it
 // could not run. It used to always return nil (even when tcpkill was
 // missing or failed to start), so a pause could report success while
@@ -25,6 +25,22 @@ import (
 // dsniff) with a 2s window; the killer is reaped (Wait) so no zombie
 // is left behind (audit low-9). Both missing/failing is an error the
 // caller must surface and retry.
+//
+// A-NEW: the kill is two-sided and state-agnostic. The old filter
+// `ss -K state established ( sport = :PORT )` only matched the
+// relay-side socket while ESTABLISHED. A bulk relay flow leaves
+// ESTABLISHED before the pause lands (the relay closes downstream
+// once the upstream finishes, so the relay side is FIN-WAIT-2 and
+// the client side CLOSE-WAIT with megabytes still buffered in its
+// Recv-Q), and destroying the relay-side half-closed socket does
+// not touch the client's buffered socket — live proof: sport-only
+// kill left a 5 MB @ 50 kB/s download completing (exit 0, full
+// 5,242,880 B). The client's socket is the one holding the
+// undelivered data, and it is only reachable as `dport = :PORT`.
+// So ss -K runs on BOTH directions with no state qualifier, and
+// the kill count (sockets ss reported destroying) is the success
+// signal: a zero kill with a live scan behind it means the filter
+// missed, and the caller must fail loud rather than report success.
 func ForceClosePortConnections(addr string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -47,8 +63,8 @@ func ForceClosePortConnections(addr string) (err error) {
 		return fmt.Errorf("port %d out of range", port)
 	}
 
-	// Primary: ss -K (IPv4 + IPv6, synchronous).
-	if ssErr := killWithSS(port); ssErr == nil {
+	// Primary: ss -K (IPv4 + IPv6, synchronous, both directions).
+	if _, ssErr := killWithSS(port); ssErr == nil {
 		return nil
 	} else {
 		// Fallback: tcpkill (IPv4 only).
@@ -60,17 +76,50 @@ func ForceClosePortConnections(addr string) (err error) {
 	}
 }
 
-// killWithSS kills established TCP sockets whose local port is port via
-// `ss -K`. The filter matches both address families. A zero exit with
-// no match (nothing established) is success.
-func killWithSS(port int) error {
-	filter := fmt.Sprintf("( sport = :%d )", port)
-	cmd := exec.Command("ss", "-K", "state", "established", filter)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ss -K: %w (output: %s)", err, strings.TrimSpace(string(out)))
+// killWithSS kills TCP sockets on port via `ss -K` and returns how
+// many sockets ss reported destroying. Both directions are killed,
+// with no state qualifier:
+//
+//   - `sport = :PORT` — the relay/server side of each connection
+//     (the old filter's only target).
+//   - `dport = :PORT` — the peer/client side. This is the side
+//     holding undelivered buffered data once the relay has
+//     half-closed (FIN-WAIT-2/CLOSE-WAIT); destroying it discards
+//     the peer's Recv-Q, which is what actually stops a bulk
+//     download (live proof: dport kill made curl exit 56 with the
+//     file at 4,539,177/5,242,880 B, incomplete).
+//
+// No `state established` qualifier: bulk flows are typically in
+// FIN-WAIT-2/CLOSE-WAIT by the time the pause lands, and those are
+// exactly the sockets that must die. A zero exit with no match
+// (nothing on the port) is success with a zero count.
+func killWithSS(port int) (int, error) {
+	killed := 0
+	for _, dir := range []string{"sport", "dport"} {
+		filter := fmt.Sprintf("( %s = :%d )", dir, port)
+		cmd := exec.Command("ss", "-K", filter)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return killed, fmt.Errorf("ss -K %s: %w (output: %s)", dir, err, strings.TrimSpace(string(out)))
+		}
+		killed += countSSKilled(string(out))
 	}
-	return nil
+	return killed, nil
+}
+
+// countSSKilled counts the socket lines `ss -K` prints, one per
+// socket it destroyed. The header line ("Netid State Recv-Q ...")
+// never starts with a netid, so it is not counted; a zero kill
+// prints only the header.
+func countSSKilled(out string) int {
+	n := 0
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == "tcp" {
+			n++
+		}
+	}
+	return n
 }
 
 // killWithTcpkill kills established IPv4 connections on port via tcpkill.

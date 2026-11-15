@@ -162,13 +162,40 @@ func TestC04UpdateServicesPortConflictMarked(t *testing.T) {
 	}
 }
 
+// A-NEW: the pause must kill even when the socket is only in a
+// draining state (CLOSE_WAIT here — no ESTABLISHED row at all). The
+// old ESTABLISHED-only scan skipped the kill for such a socket and
+// the bulk download completed. The scan is driven by a /proc/net
+// fixture (procNetDir seam): the sandbox kernel rejects SOCK_DESTROY
+// (ss -K returns rc 0 with "RTNETLINK answers: Invalid argument"
+// and the socket survives), so a real ss cannot kill here — the
+// fake ss simulates the kill landing by clearing the fixture rows,
+// and the real kill is proven live on the test machine.
 func TestC04PauseServicesKillsViaSS(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "ss.log")
-	c04WriteFakeBin(t, dir, "ss", "#!/bin/sh\necho \"$@\" >> \""+logFile+"\"\nexit 0\n")
-	ln, _, port := c04EstablishedListener(t)
+	procDir := filepath.Join(dir, "procnet")
+	if err := os.Mkdir(procDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	const c04CloseWaitTCP = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:7293 00000000:0000 08 00000000:001786C1 00:00000000 00000000     0        0 12347 1 0000000000000000 100 0 0 10 0
+`
+	if err := os.WriteFile(filepath.Join(procDir, "tcp"), []byte(c04CloseWaitTCP), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(procDir, "tcp6"), []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldProcNetDir := procNetDir
+	procNetDir = procDir
+	t.Cleanup(func() { procNetDir = oldProcNetDir })
+
+	// Fake ss: log args, then simulate the kill landing by clearing
+	// the fixture rows (shell builtins only — PATH is restricted).
+	c04WriteFakeBin(t, dir, "ss", "#!/bin/sh\necho \"$@\" >> \""+logFile+"\"\n: > \""+filepath.Join(procDir, "tcp")+"\"\n: > \""+filepath.Join(procDir, "tcp6")+"\"\nexit 0\n")
 	name := "c04-pause-ss"
-	c04RegisterFixedAddrService(t, name, ln.Addr())
+	c04RegisterFixedAddrService(t, name, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 29331})
 	// Restrict PATH only for the pause itself.
 	t.Setenv("PATH", dir)
 
@@ -179,10 +206,45 @@ func TestC04PauseServicesKillsViaSS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ss was not invoked during pause: %v", err)
 	}
-	if !strings.Contains(string(b), fmt.Sprintf("sport = :%d", port)) {
-		t.Fatalf("ss args = %q, want sport filter for port %d", string(b), port)
+	if !strings.Contains(string(b), "sport = :29331") {
+		t.Fatalf("ss args = %q, want sport filter for port 29331", string(b))
+	}
+	if !strings.Contains(string(b), "dport = :29331") {
+		t.Fatalf("ss args = %q, want dport filter for port 29331 (A-NEW: the peer side holds the buffered data)", string(b))
 	}
 	c04AssertPaused(t, name)
+}
+
+// A-NEW: a kill that reports success but leaves the socket alive
+// must fail the pause loud (the old code trusted ss's exit code and
+// the download drained). The fake ss exits 0 without touching the
+// fixture, so the post-kill re-scan still sees the socket.
+func TestC04PauseServicesKillNotLandingIsError(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "ss.log")
+	procDir := filepath.Join(dir, "procnet")
+	if err := os.Mkdir(procDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	const c04EstablishedTCP = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:7293 00000000:0000 01 00000000:00000000 00:00000000 00000000     0        0 12347 1 0000000000000000 100 0 0 10 0
+`
+	if err := os.WriteFile(filepath.Join(procDir, "tcp"), []byte(c04EstablishedTCP), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldProcNetDir := procNetDir
+	procNetDir = procDir
+	t.Cleanup(func() { procNetDir = oldProcNetDir })
+
+	c04WriteFakeBin(t, dir, "ss", "#!/bin/sh\necho \"$@\" >> \""+logFile+"\"\nexit 0\n")
+	name := "c04-pause-noland"
+	c04RegisterFixedAddrService(t, name, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 29331})
+	t.Setenv("PATH", dir)
+
+	err := pauseServices(pauseServicesRequest{Services: []string{name}})
+	if err == nil || !strings.Contains(err.Error(), "still alive") {
+		t.Fatalf("pause with a kill that does not land must fail loud, got %v", err)
+	}
 }
 
 func TestC04PauseServicesKillFailureIsError(t *testing.T) {

@@ -130,6 +130,50 @@ func TestForceClosePortConnectionsUsesSSFirst(t *testing.T) {
 	}
 }
 
+// A-NEW: ss -K runs on BOTH directions with no state qualifier. The
+// old filter `state established ( sport = :PORT )` missed bulk relay
+// flows, whose sockets leave ESTABLISHED (FIN-WAIT-2/CLOSE-WAIT)
+// before the pause lands; the peer-side socket (dport) is the one
+// holding the undelivered buffered data.
+func TestForceClosePortConnectionsKillsBothDirections(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "ss.log")
+	c04WriteFakeBin(t, dir, "ss", "#!/bin/sh\necho \"$@\" >> \""+logFile+"\"\nexit 0\n")
+	t.Setenv("PATH", dir)
+	if err := ForceClosePortConnections("127.0.0.1:24510"); err != nil {
+		t.Fatalf("fake-ss kill: %v", err)
+	}
+	b, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("ss was not invoked: %v", err)
+	}
+	args := string(b)
+	if !strings.Contains(args, "sport = :24510") || !strings.Contains(args, "dport = :24510") {
+		t.Fatalf("ss args = %q, want -K on both sport and dport for 24510", args)
+	}
+	if strings.Contains(args, "established") {
+		t.Fatalf("ss args = %q, must not filter on state (bulk flows are FIN-WAIT-2/CLOSE-WAIT by pause time)", args)
+	}
+}
+
+// countSSKilled counts one line per socket ss -K reports destroying;
+// the header line is not a socket.
+func TestCountSSKilled(t *testing.T) {
+	header := "Netid State Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n"
+	if n := countSSKilled(header); n != 0 {
+		t.Fatalf("header only = %d, want 0", n)
+	}
+	out := header +
+		"tcp   ESTAB 0      0          127.0.0.1:45608    127.0.0.1:29340\n" +
+		"tcp   FIN-WAIT-2 0 0          [::ffff:127.0.0.1]:29331 [::ffff:127.0.0.1]:60292\n"
+	if n := countSSKilled(out); n != 2 {
+		t.Fatalf("two socket lines = %d, want 2", n)
+	}
+	if n := countSSKilled(""); n != 0 {
+		t.Fatalf("empty output = %d, want 0", n)
+	}
+}
+
 // tcpkill fallback: invoked with the port, runs its ~2s window, and is
 // reaped — no zombie left behind (audit low-9).
 func TestForceClosePortConnectionsTcpkillFallbackReaps(t *testing.T) {

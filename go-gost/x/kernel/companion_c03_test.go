@@ -19,7 +19,12 @@ import (
 
 const fakeSingboxKernel = `#!/bin/sh
 if [ "$1" = "version" ]; then echo "sing-box version 1.14.4 (fake)"; exit 0; fi
+if [ "$1" = "check" ]; then
+  if grep -q '"bad"' "$3" 2>/dev/null; then echo "invalid config"; exit 1; fi
+  exit 0
+fi
 echo "starting with $3"
+trap '' HUP
 exec sleep 300
 `
 
@@ -104,7 +109,8 @@ func TestCompanionApplyDoesNotRestartMainInstance(t *testing.T) {
 		t.Fatalf("downloads = %d, want 2 (each instance owns its binDir)", *downloads)
 	}
 
-	// Companion config change: companion restarts, main must not.
+	// Companion config change (C-(4)): the companion RELOADS, it
+	// must not restart — and the main instance must not move either.
 	st, err = m.Apply(c03ApplyRequest(srv, "singbox-companion", `{"c":2}`, true, 24600))
 	if err != nil || !st.Running {
 		t.Fatalf("apply companion v2: %+v %v", st, err)
@@ -112,16 +118,22 @@ func TestCompanionApplyDoesNotRestartMainInstance(t *testing.T) {
 	if pid, restarts := c03InstancePID(t, m, "singbox"); pid != mainPID || restarts != mainRestarts {
 		t.Fatalf("companion Apply restarted the main instance: pid %d->%d restarts %d->%d", mainPID, pid, mainRestarts, restarts)
 	}
-	if pid, _ := c03InstancePID(t, m, "singbox-companion"); pid == compPID {
-		t.Fatalf("companion Apply did not restart the companion instance (pid still %d)", pid)
+	compPID2, compRestarts2 := c03InstancePID(t, m, "singbox-companion")
+	if compPID2 != compPID {
+		t.Fatalf("companion Apply restarted the companion instance (pid %d->%d); a config change must reload, not restart", compPID, compPID2)
 	}
-	compPID, _ = c03InstancePID(t, m, "singbox-companion")
-	cfg, _ := os.ReadFile(filepath.Join(base, "singbox", "run", "config.json"))
+	_ = compRestarts2
+	cfg, _ := os.ReadFile(filepath.Join(base, "singbox-companion", "run", "config.json"))
+	if string(cfg) != `{"c":2}` {
+		t.Fatalf("companion config not updated by companion Apply: %q", cfg)
+	}
+	cfg, _ = os.ReadFile(filepath.Join(base, "singbox", "run", "config.json"))
 	if string(cfg) != `{"v":1}` {
 		t.Fatalf("main config changed by companion Apply: %q", cfg)
 	}
 
-	// Main config change: main restarts, companion must not.
+	// Main config change (C-(4)): the main instance RELOADS, it must
+	// not restart — and the companion must not move either.
 	st, err = m.Apply(c03ApplyRequest(srv, "singbox", `{"v":2}`, true, 24599))
 	if err != nil || !st.Running {
 		t.Fatalf("apply main v2: %+v %v", st, err)
@@ -129,9 +141,58 @@ func TestCompanionApplyDoesNotRestartMainInstance(t *testing.T) {
 	if pid, _ := c03InstancePID(t, m, "singbox-companion"); pid != compPID {
 		t.Fatalf("main Apply restarted the companion instance: pid %d->%d", compPID, pid)
 	}
+	mainPID2, _ := c03InstancePID(t, m, "singbox")
+	if mainPID2 != mainPID {
+		t.Fatalf("main Apply restarted the main instance (pid %d->%d); a config change must reload, not restart", mainPID, mainPID2)
+	}
+	cfg, _ = os.ReadFile(filepath.Join(base, "singbox", "run", "config.json"))
+	if string(cfg) != `{"v":2}` {
+		t.Fatalf("main config not updated by main Apply: %q", cfg)
+	}
 	cfg, _ = os.ReadFile(filepath.Join(base, "singbox-companion", "run", "config.json"))
 	if string(cfg) != `{"c":2}` {
 		t.Fatalf("companion config changed by main Apply: %q", cfg)
+	}
+}
+
+// C-(4): a config that fails `sing-box check` must fail the Apply
+// while the old process keeps running the old config — the bad
+// config is never synced to nft and never restarts the instance.
+func TestCompanionReloadRejectsBadConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as fake kernel")
+	}
+	stubNft(t)
+	srv, _ := serveSingboxKernel(t, zipWith(t, map[string]string{"sing-box": fakeSingboxKernel}))
+	base := t.TempDir()
+	m := NewManager(base)
+	defer m.Shutdown()
+
+	st, err := m.Apply(c03ApplyRequest(srv, "singbox", `{"v":1}`, true, 24599))
+	if err != nil || !st.Running {
+		t.Fatalf("apply main v1: %+v %v", st, err)
+	}
+	mainPID, mainRestarts := c03InstancePID(t, m, "singbox")
+
+	st, err = m.Apply(c03ApplyRequest(srv, "singbox", `{"bad":true}`, true, 24599))
+	if err == nil {
+		t.Fatalf("apply bad config must fail, got state %+v", st)
+	}
+	if pid, restarts := c03InstancePID(t, m, "singbox"); pid != mainPID || restarts != mainRestarts {
+		t.Fatalf("bad config restarted the instance: pid %d->%d restarts %d->%d", mainPID, pid, mainRestarts, restarts)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(base, "singbox", "run", "config.json"))
+	if string(cfg) != `{"v":1}` {
+		t.Fatalf("bad config overwrote the on-disk config: %q", cfg)
+	}
+	// A good config still applies afterwards.
+	st, err = m.Apply(c03ApplyRequest(srv, "singbox", `{"v":2}`, true, 24599))
+	if err != nil || !st.Running {
+		t.Fatalf("apply main v2 after bad config: %+v %v", st, err)
+	}
+	cfg, _ = os.ReadFile(filepath.Join(base, "singbox", "run", "config.json"))
+	if string(cfg) != `{"v":2}` {
+		t.Fatalf("config after recovery: %q, want {\"v\":2}", cfg)
 	}
 }
 
