@@ -157,6 +157,15 @@ type userSubscriptionMineView struct {
 	// 非分享订阅或 ID 越界的订阅流量永不计量、限额永不触发，
 	// 用户侧须显式提示「限额不生效」，不许只显示「已用 0／限额」。
 	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
+	// AppliedActive／MeteringStatus／MeteringReason／LastReportedAt／
+	// ZeroEndpointReason 与管理员 subscriptionView 同口径（D-02／
+	// D-03／D-06／C-08）：用户侧同样须看到下发实态、未计量原因、
+	// 新鲜度与零端点原因。
+	AppliedActive      int    `json:"appliedActive"`
+	MeteringStatus     string `json:"meteringStatus,omitempty"`
+	MeteringReason     string `json:"meteringReason,omitempty"`
+	LastReportedAt     int64  `json:"lastReportedAt,omitempty"`
+	ZeroEndpointReason string `json:"zeroEndpointReason,omitempty"`
 }
 
 // userSubscriptionMine 返回当前登录用户被分配的订阅（任意登录用户，仅自己的）。
@@ -198,11 +207,16 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 	// One F4 gate memo for the whole request (Y-01), as in the admin
 	// subscription list.
 	gateMemo := &companionGateMemo{}
-	items := make([]userSubscriptionMineView, 0, len(subs))
+	views := make([]subscriptionView, 0, len(subs))
 	for i := range subs {
 		var s *model.Subscription = &subs[i]
 		// 复用 subscriptionView 保证 path 与 nodeCount（中转过滤后）口径一致。
-		v := h.subscriptionViewForAssignmentsMemo(s, rows, now, mineReq.Format, nil, gateMemo)
+		views = append(views, h.subscriptionViewForAssignmentsMemo(s, rows, now, mineReq.Format, nil, gateMemo))
+	}
+	// D-06：回填各订阅计量计数最近上报时刻（批量一次）。
+	h.fillLastReportedAt(views)
+	items := make([]userSubscriptionMineView, 0, len(views))
+	for _, v := range views {
 		items = append(items, userSubscriptionMineView{
 			ID: v.ID, Name: v.Name, Path: v.Path, NodeCount: v.NodeCount,
 			UploadBytes: v.UploadBytes, DownloadBytes: v.DownloadBytes,
@@ -210,6 +224,9 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 			OverQuota: v.OverQuota, Enabled: v.Enabled, PendingDelete: v.PendingDelete,
 			UsageInboundTotal: v.UsageInboundTotal,
 			MeteringUnsupported: v.MeteringUnsupported,
+			AppliedActive: v.AppliedActive, MeteringStatus: v.MeteringStatus,
+			MeteringReason: v.MeteringReason, LastReportedAt: v.LastReportedAt,
+			ZeroEndpointReason: v.ZeroEndpointReason,
 		})
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{

@@ -77,6 +77,9 @@ interface NodeRowCommonProps {
   monthIn?: number;
   monthOut?: number;
   monthLabel: string | null;
+  /** D-06：本月网卡流量的新鲜度文案（最新小时桶陈旧／刷新失败时），
+   * 与 monthLabel 同源；NodeLiveStats 的月流量数旁亦须标注。 */
+  monthFreshness?: string | null;
   /** X06 恢复的节点卡片标签集（用户/分组/限速）的推导结果；null＝
    * 标签清单尚未拉到（用户/限速两枚先不渲染，见 NodeCardTagChips），
    * 分组芯片只读 node.displayGroup、不依赖它。 */
@@ -372,6 +375,7 @@ const NodeCardContent = memo(function NodeCardContent({
   monthIn,
   monthOut,
   monthLabel,
+  monthFreshness,
   cardTags,
   infoPlacement,
   latencyPoolEmpty,
@@ -672,6 +676,7 @@ const NodeCardContent = memo(function NodeCardContent({
             <NodeLiveStats
               info={node.systemInfo ?? null}
               month={month}
+              monthFreshness={monthFreshness}
               variant="card"
             />
             {showMonitor && actions.openMonitor && (
@@ -966,6 +971,7 @@ const NodeListContent = memo(function NodeListContent({
   monthIn,
   monthOut,
   monthLabel,
+  monthFreshness,
   cardTags,
   latencyPoolEmpty,
   probing,
@@ -1035,6 +1041,7 @@ const NodeListContent = memo(function NodeListContent({
           <NodeLiveStats
             info={node.systemInfo ?? null}
             month={month}
+            monthFreshness={monthFreshness}
             variant="footer"
           />
           <div className="mt-1">

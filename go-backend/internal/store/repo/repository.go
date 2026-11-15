@@ -2156,7 +2156,6 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 	}
 	backup.UserInbounds = userInbounds
 
-
 	// O7-008：导出 monitor_permission 整表（监控权限）
 	monitorPermissions, err := r.exportMonitorPermissions()
 	if err != nil {
@@ -7681,6 +7680,31 @@ func (r *Repository) NodeTrafficSince(fromMs int64) (map[int64][2]int64, error) 
 			cur[1] += b.OutBytes - b.OutBytes*pre/hourMs
 			out[b.NodeID] = cur
 		}
+	}
+	return out, nil
+}
+
+// NodeTrafficLastHour returns, per node id, the newest hourly bucket
+// (ms) present in node_traffic — the freshness source for the node
+// month-traffic numbers (D-06). node_traffic has no updated_time
+// column, so the newest bucket hour is the closest available signal;
+// a node whose newest bucket is hours old is reporting stale data.
+func (r *Repository) NodeTrafficLastHour() (map[int64]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rows []struct {
+		NodeID   int64
+		LastHour int64
+	}
+	if err := r.db.Model(&model.NodeTraffic{}).
+		Select("node_id, MAX(hour) AS last_hour").
+		Group("node_id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[int64]int64, len(rows))
+	for _, row := range rows {
+		out[row.NodeID] = row.LastHour
 	}
 	return out, nil
 }

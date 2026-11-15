@@ -249,12 +249,17 @@ export const repushNodeConnLogConfig = (nodeId: number) =>
     nodeId,
   });
 /**
- * 各节点本月（浏览器时区 1 号起）的网卡流量：{ 节点ID: [入, 出] }（字节）。
- * 这是整机网卡计数（含转发与系统自身流量），与隧道计费/订阅配额是两套口径，
- * 不可混称、不可互相核对。
+ * 各节点本月（浏览器时区 1 号起）的网卡流量与新鲜度。
+ * traffic: { 节点ID: [入, 出] }（字节）；这是整机网卡计数（含转发与
+ * 系统自身流量），与隧道计费/订阅配额是两套口径，不可混称、不可互相核对。
+ * lastHour: { 节点ID: 最新小时桶起点（毫秒） }——D-06 新鲜度；无桶的节点缺省。
  */
+export interface NodeMonthTraffic {
+  traffic: Record<string, [number, number]>;
+  lastHour: Record<string, number>;
+}
 export const getNodeMonthTraffic = () =>
-  Network.post<Record<string, [number, number]>>("/node/traffic/month", {
+  Network.post<NodeMonthTraffic>("/node/traffic/month", {
     tzOffset: -new Date().getTimezoneOffset(),
     // IANA 时区名（R4B10-001）：后端据此按 1 号当天的实际偏移取月初
     // 起点，DST 切换月不再偏移；tzOffset 保留作旧后端回落。
@@ -461,6 +466,19 @@ export const resetUserFlow = (data: { id: number; type: number }) =>
   Network.post("/user/reset", data);
 export const resetUserQuota = (data: UserQuotaResetPayload) =>
   Network.post("/user/quota/reset", data);
+
+/** D-07：当前登录者自己的配额用量（user/list 不含管理员行）；无配额行时为 null。 */
+export interface MyQuota {
+  userId: number;
+  dailyQuotaGB: number;
+  monthlyQuotaGB: number;
+  dailyUsedBytes: number;
+  monthlyUsedBytes: number;
+  disabledByQuota: number;
+  quotaDisabledAt: number;
+}
+export const getMyQuota = () =>
+  Network.post<MyQuota | null>("/user/quota/mine", {});
 
 // 网站配置相关接口
 export const getConfigs = () =>
@@ -1106,6 +1124,19 @@ export interface SubscriptionItem {
    * 该数字不用于超限判定。本视图的 uploadBytes/downloadBytes 仍是
    * 订阅自身计数（非分享恒 0），与客户端显示的入站总量是两个数。 */
   usageInboundTotal?: boolean;
+  /** D-02：上次推到内核的 active 态（0 未下发／1 已下发／-1 待同步）。
+   * 与计算值 active 对照才知道“已断开”是否真实落地。 */
+  appliedActive: number;
+  /** D-03：计量状态（仅分享订阅）："metered" 全源可计量、"partial"
+   * 部分源未计量、"unmetered" 全源未计量；meteringReason 为未计量／
+   * 部分计量时的原因。非分享订阅两字段均为空。 */
+  meteringStatus?: string;
+  meteringReason?: string;
+  /** D-06：计量计数最近上报时刻（毫秒；0＝从未上报）。 */
+  lastReportedAt?: number;
+  /** C-08：订阅启用且未过期未超限、但拉取为 0 个端点的原因；有端点
+   * 或停用／过期／超限时为空。 */
+  zeroEndpointReason?: string;
 }
 export interface SubscriptionDraft {
   id?: number;
@@ -1333,6 +1364,20 @@ export const testNotify = (data: {
 }) =>
   // R8-T-08：双通道最坏 (10+10)+3+(10+10)=43s，前端须 ≥50s。
   Network.post("/notify/test", data, { timeout: 50_000 });
+
+/** C-06：通知配置健康度——主开关已开但无可用通道时 usable 为 false，
+ * missing 列出缺失项；不返回任何密钥。 */
+export interface NotifyHealth {
+  enabled: boolean;
+  telegramTokenSet: boolean;
+  telegramChatIdSet: boolean;
+  webhookSet: boolean;
+  eventsSelected: boolean;
+  usable: boolean;
+  missing: string[];
+}
+export const getNotifyHealth = () =>
+  Network.post<NotifyHealth>("/notify/health", {});
 export const probeInbounds = (ids: number[] = []) =>
   Network.post<Record<string, InboundProbe>>(
     "/inbound/probe",
@@ -1456,6 +1501,13 @@ export interface MySubscriptionItem {
   usageInboundTotal?: boolean;
   /** C-07：该订阅流量永不计量、限额永不触发（非分享订阅或 ID 越界）时为 true——用户页须显式提示「限额不生效」。 */
   meteringUnsupported?: boolean;
+  /** D-02／D-03／D-06／C-08：与管理员 subscriptionView 同口径——下发
+   * 实态、计量状态与原因、计数最近上报时刻、零端点原因。 */
+  appliedActive: number;
+  meteringStatus?: string;
+  meteringReason?: string;
+  lastReportedAt?: number;
+  zeroEndpointReason?: string;
 }
 export const getMySubscriptions = () =>
   Network.post<{ subscriptions: MySubscriptionItem[] }>(
@@ -1474,6 +1526,8 @@ export interface SubTraffic {
   down: number;
   /** 已用流量起算时刻（毫秒）：订阅创建或上次重置流量之时。 */
   since: number;
+  /** D-06：计量计数最近上报时刻（毫秒；0＝从未上报）。 */
+  lastReportedAt?: number;
 }
 const trafficQuery = (id: number, range: SubTrafficRange) => ({
   id,

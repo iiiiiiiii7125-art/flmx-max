@@ -1173,6 +1173,12 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// C-08：保留未经过任何请求筛选的全量行——占位节点只在订阅本身
+	// 无任何产出时才渲染；?user=/?relay=/?inbound= 筛空与订阅自身
+	// 的中转范围筛空是筛选器的答案，须保持 F-080 空渲染（个性化拉
+	// 取计数 0、中转范围拉取不含直连节点，均由契约测试锁定）。
+	// 深拷贝：下方 ?inbound= 过滤用 rows[:0] 复用同一底层数组。
+	allRows := append([]model.NodeInbound(nil), rows...)
 	if only := r.URL.Query().Get("inbound"); only != "" {
 		id, _ := strconv.ParseInt(only, 10, 64)
 		filtered := rows[:0]
@@ -1300,6 +1306,14 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	var body, contentType string
 	if reason := subInactiveReason(sub, time.Now()); reason != "" {
 		body, contentType, err = kernel.Subscription(format, nil, kernel.SubOptions{Notices: []string{reason}})
+	} else if len(endpoints) == 0 && h.subYieldsNothing(sub, allRows) {
+		// C-08：订阅启用且未过期未超限、但自身无任何产出（无源／源全
+		// 失效）时，此前按所选格式渲染空体——客户端只看到空列表、无
+		// 任何原因。改走与停用／过期／超限相同的占位节点机制，原因按
+		// 成因逐级定。筛选器筛空时不进此分支（见上 allRows 注释）；
+		// F-080 的 200 语义不变：仍是 200 + 占位节点，客户端如实更
+		// 新、不保留旧列表。
+		body, contentType, err = kernel.Subscription(format, nil, kernel.SubOptions{Notices: []string{h.subZeroEndpointReason(sub, allRows, time.Now())}})
 	} else {
 		body, contentType, err = kernel.Subscription(format, endpoints, subOpts)
 	}

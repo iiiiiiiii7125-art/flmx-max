@@ -43,22 +43,22 @@ const (
 )
 
 const (
-	notifyConfigEnabled     = "notify_enabled"
-	notifyConfigEvents      = "notify_events"
-	notifyConfigTGToken     = "notify_telegram_bot_token"
-	notifyConfigTGChatID    = "notify_telegram_chat_id"
-	notifyConfigTGAPIBase   = "notify_telegram_api_base"
-	notifyConfigWebhookURL  = "notify_webhook_url"
+	notifyConfigEnabled    = "notify_enabled"
+	notifyConfigEvents     = "notify_events"
+	notifyConfigTGToken    = "notify_telegram_bot_token"
+	notifyConfigTGChatID   = "notify_telegram_chat_id"
+	notifyConfigTGAPIBase  = "notify_telegram_api_base"
+	notifyConfigWebhookURL = "notify_webhook_url"
 	// F3-NEW-01：三项资源告警的独立开关（与 notify_events 列表无关）。
 	// 缺键＝开（旧配置/新装默认开——撞墙前预警默认必须在）；
 	// 显式 "false" 才关；其他非法值按开处理（预警往开的方向失效）。
 	notifyConfigConntrackHigh = "notify_conntrack_high"
 	notifyConfigDiskHigh      = "notify_disk_high"
 	notifyConfigAgentMemHigh  = "notify_agent_memory_high"
-	defaultTelegramAPIBase  = "https://api.telegram.org"
-	notifySendTimeout       = 10 * time.Second
-	notifyExpiryWindow      = 3 * 24 * time.Hour
-	notifyInboundDownStreak = 2
+	defaultTelegramAPIBase    = "https://api.telegram.org"
+	notifySendTimeout         = 10 * time.Second
+	notifyExpiryWindow        = 3 * 24 * time.Hour
+	notifyInboundDownStreak   = 2
 	// O8-004：已过期超过该时长的条目不再补发到期通知。到期告警状态（expiryAlerted /
 	// alertOnce 键）只在内存中，面板重启后会把历史已过期的节点/用户/订阅再报一次；
 	// 加上这条下界后，重启只重报"刚到期"的，久已过期的直接跳过。
@@ -77,6 +77,48 @@ type notifySettings struct {
 
 func (s notifySettings) empty() bool {
 	return (s.TelegramToken == "" || s.TelegramChatID == "") && s.WebhookURL == ""
+}
+
+// notifyLogLastAt throttles repeated notify-configuration warnings
+// (C-06): dispatch runs on every event, so an unthrottled log would
+// spam once per event; with no log at all the misconfiguration is
+// invisible forever (the rehearsal panel sat 40 minutes with zero
+// notify rows and no trace).
+var (
+	notifyLogMu     sync.Mutex
+	notifyLogLastAt = map[string]time.Time{}
+)
+
+// logNotifyThrottled logs msg at most once per hour per key.
+func logNotifyThrottled(key, format string, args ...interface{}) {
+	notifyLogMu.Lock()
+	defer notifyLogMu.Unlock()
+	if time.Since(notifyLogLastAt[key]) < time.Hour {
+		return
+	}
+	notifyLogLastAt[key] = time.Now()
+	log.Printf(format, args...)
+}
+
+// notifyMisconfigured reports whether notifications are enabled but
+// have no usable channel (token/chat_id/webhook missing) — the C-06
+// silent-swallow case: dispatchNotify returns Disabled and nothing
+// is ever logged or shown. Deliberately off (master switch) is NOT
+// misconfiguration.
+func (h *Handler) notifyMisconfigured() bool {
+	cfg, err := h.cachedConfigs()
+	if err != nil {
+		return false
+	}
+	if cfg[notifyConfigEnabled] != "true" {
+		return false
+	}
+	settings := notifySettings{
+		TelegramToken:  strings.TrimSpace(cfg[notifyConfigTGToken]),
+		TelegramChatID: strings.TrimSpace(cfg[notifyConfigTGChatID]),
+		WebhookURL:     strings.TrimSpace(cfg[notifyConfigWebhookURL]),
+	}
+	return settings.empty()
 }
 
 type notifyMessage struct {
@@ -211,6 +253,9 @@ func resourceAlertConfigKey(event string) (string, bool) {
 func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
 	cfg, err := h.cachedConfigs()
 	if err != nil {
+		// C-06：配置读失败此前静默返回 Disabled——每次派发都无声丢弃。
+		// 节流记日志（每小时一次），不改 Disabled 语义。
+		logNotifyThrottled("config-read", "notify config read failed: %v", err)
 		return notifySettings{}, "", false
 	}
 	app := strings.TrimSpace(cfg["app_name"])
@@ -579,6 +624,12 @@ func (h *Handler) dispatchNotify(ctx context.Context, event, title, message stri
 	}
 	settings, app, ok := h.notifyConfig(event)
 	if !ok {
+		// C-06：主开关已开但无可用通道时，Disabled 是配置错误而不
+		// 是「用户不想收」——节流记日志（每小时一次），不改 Disabled
+		// 语义（状态机仍按已消费处理，不当作 Failed 重发）。
+		if h.notifyMisconfigured() {
+			logNotifyThrottled("misconfigured", "notify misconfigured: notifications enabled but no usable channel (telegram token/chat id or webhook missing); events are dropped")
+		}
 		return notifyOutcomeDisabled
 	}
 	fp := notifyFingerprint(event, title, message)
@@ -1408,4 +1459,58 @@ func (h *Handler) notifyTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
+}
+
+// notifyHealth reports whether saved notification settings can
+// actually deliver anything (C-06): the panel previously had no way
+// to see a misconfiguration — master on, token set, chat_id/webhook
+// missing — until events silently never arrived. No secrets are
+// returned, only presence booleans. Route is admin-only via the
+// /api/v1/notify/ middleware prefix.
+func (h *Handler) notifyHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	cfg, err := h.cachedConfigs()
+	if err != nil {
+		respondInternalError(w, "notifyHealth: config read failed", err)
+		return
+	}
+	settings := notifySettings{
+		TelegramToken:  strings.TrimSpace(cfg[notifyConfigTGToken]),
+		TelegramChatID: strings.TrimSpace(cfg[notifyConfigTGChatID]),
+		WebhookURL:     strings.TrimSpace(cfg[notifyConfigWebhookURL]),
+	}
+	enabled := cfg[notifyConfigEnabled] == "true"
+	eventsSelected := strings.TrimSpace(cfg[notifyConfigEvents]) != "none"
+	usable := enabled && !settings.empty() && eventsSelected
+	var missing []string
+	if enabled && settings.empty() {
+		// Either fill the missing Telegram half or set a webhook.
+		if settings.TelegramToken == "" {
+			missing = append(missing, "telegramToken")
+		}
+		if settings.TelegramChatID == "" {
+			missing = append(missing, "telegramChatId")
+		}
+		if settings.WebhookURL == "" {
+			missing = append(missing, "webhook")
+		}
+	}
+	if enabled && !eventsSelected {
+		missing = append(missing, "events")
+	}
+	if missing == nil {
+		missing = []string{}
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"enabled":           enabled,
+		"telegramTokenSet":  settings.TelegramToken != "",
+		"telegramChatIdSet": settings.TelegramChatID != "",
+		"webhookSet":        settings.WebhookURL != "",
+		"eventsSelected":    eventsSelected,
+		"usable":            usable,
+		"missing":           missing,
+	}))
 }

@@ -706,6 +706,41 @@ func quotaResetReason(scope string) string {
 	}
 }
 
+// userQuotaMine returns the caller's own quota view (D-07): ListUsers
+// filters role_id != 0, so an admin's own quota is invisible in the
+// user list — and on the rehearsal panel the only user_quota row IS
+// the admin's. The keys mirror ListUsers' quota keys so the frontend
+// reuses its normalization; no row → data null (no quota set).
+func (h *Handler) userQuotaMine(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	uid, _, err := userRoleFromRequest(r)
+	if err != nil || uid <= 0 {
+		response.WriteJSON(w, response.ErrDefault("未登录"))
+		return
+	}
+	view, err := h.repo.GetUserQuotaView(uid, time.Now())
+	if err != nil {
+		respondInternalError(w, "userQuotaMine: GetUserQuotaView failed", err)
+		return
+	}
+	if view == nil {
+		response.WriteJSON(w, response.OK(nil))
+		return
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"userId":           uid,
+		"dailyQuotaGB":     view.DailyLimitGB,
+		"monthlyQuotaGB":   view.MonthlyLimitGB,
+		"dailyUsedBytes":   view.DailyUsedBytes,
+		"monthlyUsedBytes": view.MonthlyUsedBytes,
+		"disabledByQuota":  view.DisabledByQuota,
+		"quotaDisabledAt":  view.DisabledAt,
+	}))
+}
+
 func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -750,12 +785,29 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 	}
 	nowMs := time.Now().UnixMilli()
 	result := h.applyUserQuotaRelease(release, nowMs)
+	// D-05（F4，收据层，适配 F2 根治）：F2 根治后 ResumeService 失败
+	// 不再标 Active，失败集已由 result.Failed 携带（含 node_offline
+	// 原因），F4 原“按行态复核计 failed”已由该失败集覆盖，不再重复
+	// 计。只保留 F4 的非覆盖部分——已标 Active 的转发须按入口节点
+	// 在线态复核：controlForwardServices 仍可能把离线/超时当成功吞
+	// 掉（live 实证：节点全程离线，reset 后行仍为 Active、agent 从
+	// 未收到 resume）。全部入口离线即恢复未证实，回执须如实写「待节
+	// 点上线后恢复」，不发「已恢复」通知；该转发不计入已恢复。
+	var deferredIDs []int64
+	if release != nil && release.UnblockUser {
+		for _, forwardID := range result.Resumed {
+			if h.forwardResumeUnconfirmed(forwardID) {
+				log.Printf("quota release unconfirmed op=node_offline forward_id=%d", forwardID)
+				deferredIDs = append(deferredIDs, forwardID)
+			}
+		}
+	}
 	// R35-G-001 对称面：手动重置解禁是「已恢复」事件（见 resetUserQuotaWindows）。
 	// C-05 F3：仅在全部转发恢复成功时发通知并报成功；部分失败时回执
 	// 如实点名仍暂停的转发（code 仍为 0：重置本身已完成，用量已清、
 	// 用户已解禁；失败的转发留在待恢复清单，由 backstop 每分钟重试）。
 	if release != nil && release.UnblockUser {
-		if len(result.Failed) == 0 {
+		if len(result.Failed) == 0 && len(deferredIDs) == 0 {
 			h.notifyUserQuotaRecovered(req.UserID, quotaResetReason(req.Scope))
 			response.WriteJSON(w, response.OKEmpty())
 			return
@@ -764,14 +816,50 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 		for _, f := range result.Failed {
 			failedIDs = append(failedIDs, f.ForwardID)
 		}
-		response.WriteJSON(w, response.OKWithWarning(map[string]interface{}{
-			"resumedForwardIds": result.Resumed,
+		// 未证实的“已恢复”不计入已恢复（D-05 收据层与 F2 根治并存）。
+		confirmedResumed := make([]int64, 0, len(result.Resumed))
+		for _, id := range result.Resumed {
+			if !slices.Contains(deferredIDs, id) {
+				confirmedResumed = append(confirmedResumed, id)
+			}
+		}
+		data := map[string]interface{}{
+			"resumedForwardIds": confirmedResumed,
 			"failedForwardIds":  failedIDs,
 			"failed":            result.Failed,
-		}, fmt.Sprintf("配额已重置，但 %d 个转发未恢复（仍暂停），将自动重试", len(result.Failed))))
+		}
+		msg := fmt.Sprintf("配额已重置，但 %d 个转发未恢复（仍暂停），将自动重试", len(result.Failed))
+		if len(deferredIDs) > 0 {
+			data["deferredForwardIds"] = deferredIDs
+			msg += fmt.Sprintf("；%d 个转发待节点上线后恢复", len(deferredIDs))
+		}
+		response.WriteJSON(w, response.OKWithWarning(data, msg))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
+}
+
+// forwardResumeUnconfirmed reports whether a forward marked Active after
+// a quota release could not have been resumed on any node: all of its
+// entry nodes are offline, so the resume never reached an agent (the
+// release path swallows offline errors and still marks the row Active).
+// Unknown state (no ports, port lookup error, no ws server) is NOT
+// unconfirmed — the status check above already covers the known-bad
+// cases, and this helper only fires on positive offline evidence.
+func (h *Handler) forwardResumeUnconfirmed(forwardID int64) bool {
+	if h == nil || h.wsServer == nil {
+		return false
+	}
+	ports, err := h.listForwardPorts(forwardID)
+	if err != nil || len(ports) == 0 {
+		return false
+	}
+	for _, p := range ports {
+		if h.wsServer.IsNodeOnline(p.NodeID) {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Handler) ensureUserForwardAllowedByQuota(userID int64, now int64) error {

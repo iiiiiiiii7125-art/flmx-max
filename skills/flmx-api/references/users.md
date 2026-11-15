@@ -182,3 +182,32 @@ account's total flow counters — see `/api/v1/user/reset` for the latter.
 
 **Request:** `{"userId": 2, "scope": "daily"}` — `scope` is one of
 `"daily"`, `"monthly"`, `"all"` (empty = `"all"`).
+
+When the reset unblocks a quota-disabled user whose forwards could not
+all be resumed, the receipt is honest instead of plain success:
+`"已重置，但有 N 条转发未能恢复，请检查转发状态"` (code still 0 —
+the usage counters were reset; only the forward resume fell short).
+
+## POST /api/v1/user/quota/mine
+
+Return the caller's own quota view. `user/list` excludes admin accounts,
+so an admin's own quota is invisible there — this endpoint closes that
+gap (D-07). No request body.
+
+**Response:** `data` is the quota object, or `null` when the caller has
+no `user_quota` row (no quota set):
+
+```json
+{
+  "code": 0,
+  "data": {
+    "userId": 1,
+    "dailyQuotaGB": 10,
+    "monthlyQuotaGB": 100,
+    "dailyUsedBytes": 1234567,
+    "monthlyUsedBytes": 76543210,
+    "disabledByQuota": 0,
+    "quotaDisabledAt": 0
+  }
+}
+```

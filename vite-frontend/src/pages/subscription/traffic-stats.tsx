@@ -15,6 +15,7 @@ import { ArrowDown, ArrowUp } from "lucide-react";
 
 import { getMySubscriptionTraffic, getSubscriptionTraffic } from "@/api";
 import { Segmented } from "@/pages/subscription/controls";
+import { freshnessLabel } from "@/utils/traffic";
 
 // 与我方既有图表（延迟趋势等）同一调色：下载蓝、上传橙。
 const DOWN = "#3b82f6";
@@ -90,7 +91,16 @@ function axisBytes(v: number): string {
  * 曲线是整条订阅的合计（一条订阅可分配给多个用户，凭据共用、拆不开个人量）。
  * mine 走用户端接口（仅限分配给当前用户的订阅）。
  */
-export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
+export function SubTrafficStats({
+  id,
+  mine,
+  unmeteredReason,
+}: {
+  id: number;
+  mine?: boolean;
+  /** D-03：订阅未计量时的原因——空态须与「暂无流量」区分。 */
+  unmeteredReason?: string;
+}) {
   const [range, setRange] = useState<SubTrafficRange>("hour");
   const [data, setData] = useState<SubTraffic | null>(null);
   const [error, setError] = useState("");
@@ -140,6 +150,11 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
         }}
       />
       <p className="text-xs font-semibold text-foreground">{RANGE_HINT[range]}的流量</p>
+      {shown && freshnessLabel(shown.lastReportedAt ?? 0) && (
+        <p className="text-xs font-semibold text-foreground">
+          {freshnessLabel(shown.lastReportedAt ?? 0)}
+        </p>
+      )}
       <div className="grid grid-cols-3 gap-2">
         {(
           [
@@ -249,8 +264,10 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
               </ComposedChart>
             </ResponsiveContainer>
             {empty && (
-              <p className="absolute inset-0 flex items-center justify-center text-center text-xs font-semibold text-foreground">
-                {RANGE_HINT[range]}还没有流量
+              <p className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs font-semibold text-foreground">
+                {unmeteredReason
+                  ? `未计量：${unmeteredReason}`
+                  : `${RANGE_HINT[range]}还没有流量`}
               </p>
             )}
           </div>

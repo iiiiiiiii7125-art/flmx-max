@@ -20,7 +20,7 @@ import {
   type InboundOriginFilter,
 } from "@/pages/inbound/group";
 import { useSubscriptionFrontURLs } from "@/utils/subscription-front";
-import { formatTraffic } from "@/utils/traffic";
+import { formatTraffic, freshnessLabel } from "@/utils/traffic";
 import { QrCodeButton } from "@/pages/inbound/share";
 import { panelOrigin } from "@/utils/panel-origin";
 import { SubTrafficStats } from "@/pages/subscription/traffic-stats";
@@ -414,9 +414,38 @@ export default function MySubscriptionPage() {
                       客户端订阅信息里的已用是所选入站的总流量（入站总量，非本订阅独占），共用同一入站的订阅显示相同数字；该数字不用于超限判定。
                     </p>
                   )}
+                  {s.overQuota && s.appliedActive === 0 && (
+                    <p className="text-xs font-semibold text-warning-700">
+                      流量已用完，凭据仍在节点上（截断下发未完成）
+                    </p>
+                  )}
+                  {s.overQuota && s.appliedActive === -1 && (
+                    <p className="text-xs font-semibold text-warning-700">
+                      流量已用完，下发待同步
+                    </p>
+                  )}
+                  {s.meteringStatus &&
+                    s.meteringStatus !== "metered" &&
+                    s.meteringReason && (
+                      <p className="text-xs font-semibold text-warning-700">
+                        未计量：{s.meteringReason}
+                      </p>
+                    )}
+                  {s.zeroEndpointReason && (
+                    <p className="text-xs font-semibold text-warning-700">
+                      {s.zeroEndpointReason}
+                    </p>
+                  )}
+                  {freshnessLabel(s.lastReportedAt ?? 0) && (
+                    <p className="text-xs font-semibold text-foreground">
+                      {freshnessLabel(s.lastReportedAt ?? 0)}
+                    </p>
+                  )}
                   <div className="rounded-lg glass-inset p-3">
                     <p className="text-xs font-semibold text-foreground mb-2 break-all select-all">
-                      {assignedUrl(s)}
+                      {inactiveReason
+                        ? `订阅${inactiveReason}，链接不可用`
+                        : assignedUrl(s)}
                     </p>
                     {formatButtons(`assigned-${s.id}`, s.name, (f) => assignedUrl(s, f), true, inactiveReason)}
                   </div>
@@ -436,7 +465,15 @@ export default function MySubscriptionPage() {
                     />
                   </button>
                   {expandedTrafficId === s.id && (
-                    <SubTrafficStats mine id={s.id} />
+                    <SubTrafficStats
+                      mine
+                      id={s.id}
+                      unmeteredReason={
+                        s.meteringStatus && s.meteringStatus !== "metered"
+                          ? s.meteringReason
+                          : undefined
+                      }
+                    />
                   )}
                 </CardBody>
               </Card>

@@ -437,6 +437,44 @@ func (r *Repository) ApplySubscriptionCounterSamples(nodeID int64, epoch string,
 
 // ListSubscriptionTraffic returns a subscription's hours from fromMs on,
 // oldest first.
+// LastSubscriptionCounterUpdates returns, per subscription id, the
+// newest SubscriptionCounter.UpdatedTime (ms) — i.e. when that
+// subscription's metering counters were last reported by an agent.
+// D-06: subscription views only carry TrafficSince (counting start),
+// so frozen numbers are indistinguishable from fresh ones; this is
+// the freshness source. Ids with no counter rows are absent (never
+// reported); callers treat absence as 0.
+func (r *Repository) LastSubscriptionCounterUpdates(ids []int64) (map[int64]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	out := make(map[int64]int64, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		SubscriptionID int64
+		UpdatedTime    int64
+	}
+	for _, chunk := range chunkInt64IDs(ids) {
+		var chunkRows []struct {
+			SubscriptionID int64
+			UpdatedTime    int64
+		}
+		if err := r.db.Model(&model.SubscriptionCounter{}).
+			Select("subscription_id, MAX(updated_time) AS updated_time").
+			Where("subscription_id IN ?", chunk).
+			Group("subscription_id").Scan(&chunkRows).Error; err != nil {
+			return nil, err
+		}
+		rows = append(rows, chunkRows...)
+	}
+	for _, row := range rows {
+		out[row.SubscriptionID] = row.UpdatedTime
+	}
+	return out, nil
+}
+
 func (r *Repository) ListSubscriptionTraffic(id, fromMs int64) ([]model.SubscriptionTraffic, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")

@@ -20,8 +20,20 @@ func TestNodeTrafficMonthContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	month := kernelContractPost(t, router, admin, "/api/v1/node/traffic/month", `{"tzOffset":480}`).Data.(map[string]interface{})
-	if v := month[jsonInt64(node)].([]interface{}); valueAsInt(v[0]) != 300 || valueAsInt(v[1]) != 200 {
+	// D-06: response is {"traffic": {id: [in, out]}, "lastHour": {id: ms}}.
+	traffic, ok := month["traffic"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("month traffic: missing traffic map: %v", month)
+	}
+	if v := traffic[jsonInt64(node)].([]interface{}); valueAsInt(v[0]) != 300 || valueAsInt(v[1]) != 200 {
 		t.Fatalf("month traffic: %v", month)
+	}
+	lastHour, ok := month["lastHour"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("month traffic: missing lastHour map: %v", month)
+	}
+	if valueAsInt(lastHour[jsonInt64(node)]) != int(hour) {
+		t.Fatalf("month traffic lastHour: %v, want %d", month, hour)
 	}
 	if out := kernelContractPost(t, router, user, "/api/v1/node/traffic/month", `{}`); out.Code == 0 {
 		t.Fatal("node traffic is for admins")

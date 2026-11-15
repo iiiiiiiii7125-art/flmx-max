@@ -52,6 +52,33 @@ answered with envelope `code` 401; non-POST methods with `code` 405.
 
 Send a test notification through the configured channel (admin only).
 
+## POST /api/v1/notify/health
+
+Report whether saved notification settings can actually deliver
+anything (admin only, no request body). A configuration where the
+master switch is on but no channel is usable (Telegram token/chat ID
+or webhook missing, or events set to `none`) silently drops every
+event — this endpoint surfaces it (C-06). No secrets are returned,
+only presence booleans.
+
+**Response:** `data` is:
+
+```json
+{
+  "enabled": true,
+  "telegramTokenSet": true,
+  "telegramChatIdSet": false,
+  "webhookSet": false,
+  "eventsSelected": true,
+  "usable": false,
+  "missing": ["telegramChatId", "webhook"]
+}
+```
+
+`usable` is false when the master switch is off, no channel is
+usable, or no events are selected. `missing` names the gaps only
+when the master switch is on (off is a deliberate state, not a gap).
+
 ## POST /api/v1/public/config/get
 
 Read a whitelisted public config value by name (no login; the only public config
