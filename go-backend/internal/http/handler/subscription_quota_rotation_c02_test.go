@@ -136,6 +136,61 @@ func TestRotateQuotaOriginPasswordsSkipsOwnSubscription(t *testing.T) {
 	}
 }
 
+// C-(5)：停用/过期分享订阅即使超限也不轮换原站口令——轮换只会逼
+// 全部共口令订阅重拉链接，而失活同步早已把凭据从节点撤下。
+// 对照：启用且未过期的超限分享订阅仍轮换（首测已覆）。
+func TestRotateQuotaOriginPasswordsSkipsDisabledAndExpired(t *testing.T) {
+	r, h, _, origin, sub := seedMeteringFixture(t)
+	now := time.Now()
+	yesterday := now.Add(-24 * time.Hour).UnixMilli()
+	if err := r.DB().Model(&model.Subscription{}).Where("id = ?", sub.ID).Updates(map[string]interface{}{
+		"traffic_limit": 1000, "upload_bytes": 3000, "download_bytes": 2000,
+		"traffic_since": yesterday,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	sub.TrafficLimit, sub.UploadBytes, sub.DownloadBytes, sub.TrafficSince = 1000, 3000, 2000, yesterday
+	var rows []model.NodeInbound
+
+	// 停用腿：Enabled=0。
+	disabled := *sub
+	disabled.Enabled = 0
+	if rotated := h.rotateQuotaOriginPasswords(&disabled, &rows, now); rotated {
+		t.Fatalf("disabled over-quota share sub must not rotate")
+	}
+	if got := c02InboundPassword(t, r, origin.ID); got != meteringSharedPW {
+		t.Fatalf("origin password changed for disabled sub: %q", got)
+	}
+	if fresh, err := r.GetSubscription(sub.ID); err != nil {
+		t.Fatal(err)
+	} else if fresh.QuotaRotatedAt != 0 {
+		t.Fatalf("quota_rotated_at = %d after disabled leg, want 0", fresh.QuotaRotatedAt)
+	}
+
+	// 过期腿：ExpireTime 一小时前（启用）。
+	expired := *sub
+	expired.ExpireTime = now.Add(-time.Hour).UnixMilli()
+	if rotated := h.rotateQuotaOriginPasswords(&expired, &rows, now); rotated {
+		t.Fatalf("expired over-quota share sub must not rotate")
+	}
+	if got := c02InboundPassword(t, r, origin.ID); got != meteringSharedPW {
+		t.Fatalf("origin password changed for expired sub: %q", got)
+	}
+	if fresh, err := r.GetSubscription(sub.ID); err != nil {
+		t.Fatal(err)
+	} else if fresh.QuotaRotatedAt != 0 {
+		t.Fatalf("quota_rotated_at = %d after expired leg, want 0", fresh.QuotaRotatedAt)
+	}
+
+	// 启用且未过期仍轮换（回路正控制）。
+	if rotated := h.rotateQuotaOriginPasswords(sub, &rows, now); !rotated {
+		t.Fatalf("enabled unexpired over-quota share sub must rotate")
+	}
+	if got := c02InboundPassword(t, r, origin.ID); got == meteringSharedPW {
+		t.Fatalf("origin password unchanged for enabled unexpired sub")
+	}
+}
+
 func c02InboundSettings(t *testing.T, r *repo.Repository, id int64) string {
 	t.Helper()
 	row, err := r.GetNodeInbound(id)
