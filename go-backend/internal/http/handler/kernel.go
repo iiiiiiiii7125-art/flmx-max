@@ -2571,11 +2571,12 @@ func remarshal(in interface{}, out interface{}) error {
 const userMarkBaseMinVersion = "2.1.13"
 
 // userMarkBaseForNode 是某节点的 socket-mark base：agent 版本达门
-// 槛用 per-agent base（节点 id 低字节作 agent 域，同机多 agent 各
-// 计各的），版本过旧/未知用 legacy base（旧行为：同机多 agent
+// 槛用 per-agent base（E-01：节点 secret 的 SHA-256 首字节作
+// agent 域，同机多 agent 各计各的，不同面板的同 id 节点也不再
+// 串扰），版本过旧/未知用 legacy base（旧行为：同机多 agent
 // 仍会多计，待 agent 升级后下一次下发自动切到 per-agent base）。
 // fail-closed 向旧行为：版本读不到绝不按新 base 渲染。
-func userMarkBaseForNode(nodeID int64, agentVersion string) int64 {
+func userMarkBaseForNode(nodeID int64, secret, agentVersion string) int64 {
 	normalised, ok := parseConnlogAgentVersion(agentVersion)
 	if !ok {
 		return kernel.LegacyUserMarkBase
@@ -2584,7 +2585,7 @@ func userMarkBaseForNode(nodeID int64, agentVersion string) int64 {
 	if err != nil || cmp < 0 {
 		return kernel.LegacyUserMarkBase
 	}
-	return kernel.UserMarkBaseForAgent(nodeID)
+	return kernel.UserMarkBaseForAgent(nodeID, secret)
 }
 
 // buildKernelApplyPayload renders the kernel's enabled inbounds into the
@@ -2778,13 +2779,13 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	// 形态的 URL / rule-set 引用），实际下载路线由 agent 侧内置候
 	// 选在下载处自行测速直选（KU4）。
 	proxy := ""
-	// F2-DBL-01：按节点算 socket-mark base（agent 版本达门槛用
+	// F2-DBL-01 / E-01：按节点算 socket-mark base（agent 版本达门槛用
 	// per-agent base，否则 legacy base），渲染与下发同源——内核
 	// 配置里的 mark 与 agent nft 规则的 mark 必须是同一个值，
 	// 否则用户计数归零。节点读不到时 fail-closed 用 legacy。
 	markBase := kernel.LegacyUserMarkBase // legacy；节点读到且版本达门槛才切 per-agent
 	if node, err := h.repo.GetNodeByID(k.NodeID); err == nil && node != nil {
-		markBase = userMarkBaseForNode(k.NodeID, node.Version.String)
+		markBase = userMarkBaseForNode(k.NodeID, node.Secret, node.Version.String)
 	} else if err != nil {
 		log.Printf("user mark base node lookup failed node_id=%d err=%v action=legacy_base", k.NodeID, err)
 	}

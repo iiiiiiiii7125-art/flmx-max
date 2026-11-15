@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sort"
 )
@@ -174,13 +175,31 @@ func singboxUsers(in Inbound) []interface{} {
 // physical packets are counted once per agent and the panel books the
 // subscription N×. The per-agent layout keeps the user id in the low
 // 16 bits and spends bits 16-23 on the agent (bits 24-31 are the tag):
-// mark = 0x47000000 | (agentByte << 16) | id, where agentByte is the
-// panel node id's low byte. Node ids are sequential, so co-located
-// agents (a handful per host, ids far below 256 apart) always get
-// distinct bases; a collision would need two co-located nodes whose
-// ids differ by exactly a multiple of 256, in which case only those
-// two nodes double-count each other (the old behaviour, not a new
-// failure mode).
+// mark = 0x47000000 | (agentByte << 16) | id.
+//
+// E-01: v1 derived agentByte from the panel node id's low byte, which
+// isolates nodes of one panel only — two panels' node 1 mint the
+// identical base, and the nftables input chain counts by ct mark
+// alone, so co-hosted panels counted each other's traffic into the
+// same subscription (live proof: 42,187,726B booked to a subscription
+// whose companion egress was 164B, enough phantom traffic to trip
+// the over-quota cutoff). v2 derives agentByte from the node's
+// secret instead — the first byte of SHA-256("flmx:user-mark-v2:"+
+// secret). The secret is a random 32-hex token generated once at
+// node creation and never reassigned, so it is a stable per-(panel,
+// node) identity the panel already knows at render time — no new
+// storage, no new protocol, no agent change. The tag stays 0x47, so
+// agents >= 2.1.13 adopt the new base verbatim the moment the panel
+// upgrades. What remains is a 1/256 pairwise random collision (two
+// secrets hashing to the same first byte), the same class F2-DBL-01
+// already accepted; the systematic collision — same node id on
+// different panels always colliding — is gone. During a mixed-panel
+// rollout a v2 node can collide with a not-yet-upgraded panel's v1
+// node only if H(secret) equals that node's id low byte (1/256 per
+// pair, only those two nodes); the agent surfaces such a collision
+// in its instance logs (nftables ruleset scan after sync) instead
+// of counting it silently. See UserMarkBaseForAgent for the
+// transition semantics and the rejected alternatives.
 //
 // F-R4-01: the per-agent tag is 0x47, NOT 0x46 — the old 0x46 tag made
 // the per-agent space contain the legacy base itself (node id ≡ 86
@@ -199,11 +218,46 @@ const (
 // rollout): user marks are LegacyUserMarkBase | id.
 const LegacyUserMarkBase int64 = userMarkBase
 
+// markBaseDomain separates the v2 derivation from any other hash of the
+// node secret: changing the domain (or the tag) mints a new mark space.
+const markBaseDomain = "flmx:user-mark-v2:"
+
 // UserMarkBaseForAgent returns the socket-mark base for one agent (one
-// panel node). 0x47000000 | ((nodeID & 0xff) << 16) — the 0x47 tag
-// keeps the per-agent space disjoint from the legacy base (F-R4-01).
-func UserMarkBaseForAgent(nodeID int64) int64 {
-	return 0x47000000 | ((nodeID & 0xff) << 16)
+// panel node): tag 0x47 with the first byte of
+// SHA-256("flmx:user-mark-v2:"+secret) in bits 16-23 (E-01). The
+// secret is the per-(panel,node) identity: two panels' nodes with the
+// same id mint different bases unless their secrets hash to the same
+// first byte (1/256 per pair). Empty secret falls back to the v1
+// derivation (node id low byte) — defensive only, production rows
+// always carry a secret. Transition: the new base lands on each
+// node's next KernelApply (agents reconnect and reconcile after a
+// panel upgrade, so the fleet re-renders with the v2 base — one
+// kernel restart per node; offline nodes on their next reconnect).
+// In that apply the nft table is rebuilt with new-mark rules and the
+// kernel configs re-render with the new routing_marks in the same
+// apply (nft sync runs before the kernel restart). In-flight
+// connections keep their old socket marks, so their remaining bytes
+// match no counter in the new table: tail loss bounded to pre-switch
+// connections' remaining bytes, never counted twice. Counts already
+// booked stay booked (no retroactive rewrite); the epoch/baseline
+// machinery re-baselines on the table rebuild.
+// Rejected: a new tag 0x48 with an agent-side validator change and a
+// >= 2.1.14 gate (transition-safe by construction, but delays the
+// fix for the whole fleet until every agent is manually upgraded —
+// the current-release 2.1.13 fleet would keep the defect); a layout
+// rework (fewer user-id bits) breaking MaxUserMarkID 65535; a stored
+// random byte per node (same 1/256 math + schema change; re-rolling
+// needs a feedback loop the panel cannot implement); FLMX_INSTANCE
+// (default panels share "", so two default panels would still
+// collide systematically); an agent-reported identity (install-root
+// hash / nft table name — agent change + panel storage + a
+// learn-before-first-render protocol for the same 8-bit math).
+func UserMarkBaseForAgent(nodeID int64, secret string) int64 {
+	if secret == "" {
+		return 0x47000000 | ((nodeID & 0xff) << 16)
+	}
+	sum := sha256.Sum256([]byte(markBaseDomain + secret))
+	return 0x47000000 | (int64(sum[0]) << 16)
 }
 
 // UserMarkForAgent is the socket mark of a user's traffic on one agent;
