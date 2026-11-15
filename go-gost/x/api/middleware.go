@@ -47,26 +47,22 @@ func mwBasicAuth(auther auth.Authenticator) gin.HandlerFunc {
 	}
 }
 
-// GlobalInterceptor 全局HTTP请求拦截器
+// GlobalInterceptor 全局HTTP请求拦截器。无有效 Basic 认证头的请求返回
+// 401 JSON（与 mwBasicAuth 同形），不再静默掐断连接：静默掐断让客户端
+// 只看到空回复、无法区分未认证与服务故障。
 func GlobalInterceptor() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 检查认证参数，如果没有认证就静默关闭
 		if !hasValidAuth(c) {
-			// 获取底层连接并直接关闭
-			if hijacker, ok := c.Writer.(http.Hijacker); ok {
-				if conn, _, err := hijacker.Hijack(); err == nil {
-					conn.Close() // 直接关闭连接，不发送任何数据
-					return
-				}
-			}
-
-			// 如果无法hijack连接，则中止请求但不返回响应
+			c.Writer.Header().Set("WWW-Authenticate", "Basic")
+			c.JSON(http.StatusUnauthorized, Response{
+				Code: http.StatusUnauthorized,
+				Msg:  "Unauthorized",
+			})
 			c.Abort()
 			return
 		}
 
 		c.Next()
-
 	}
 }
 

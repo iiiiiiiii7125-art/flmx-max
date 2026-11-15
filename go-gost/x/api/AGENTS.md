@@ -18,7 +18,7 @@ Gin-based management API for reading/writing config and controlling services at 
 
 ## CONVENTIONS
 - CORS is `AllowAllOrigins: true` (see `go-gost/x/api/api.go`).
-- Requests without a valid Basic `Authorization` header are silently dropped (connection hijack + close) by `GlobalInterceptor()`.
+- Requests without a valid Basic `Authorization` header get a 401 JSON answer (`WWW-Authenticate: Basic`) from `GlobalInterceptor()`; the old silent drop (connection hijack + close) was removed because clients only saw an empty reply.
 - Many operations mutate the in-memory config via `config.OnUpdate(...)` after starting/stopping services.
 
 ## COMMANDS
