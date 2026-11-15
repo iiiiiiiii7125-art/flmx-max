@@ -304,7 +304,7 @@ func TestR3SubTrafficWindowStartProration(t *testing.T) {
 		{Hour: utcHour(2026, 1, 31, 18), UploadBytes: 1001, DownloadBytes: 733},
 		{Hour: utcHour(2026, 1, 31, 19), UploadBytes: 100, DownloadBytes: 50},
 	}
-	view := subTraffic(hours, "day", now)
+	view := subTraffic(hours, "day", now, 0, 0, 0)
 	if view.Points[0].Up != 851 || view.Points[0].Down != 600 {
 		t.Fatalf("window-start bucket must count only the in-window share: %+v", view.Points[0])
 	}
@@ -318,7 +318,7 @@ func TestR3SubTrafficWindowStartProration(t *testing.T) {
 	hoursUTC := []model.SubscriptionTraffic{
 		{Hour: starts[0].UnixMilli(), UploadBytes: 1001, DownloadBytes: 733},
 	}
-	viewUTC := subTraffic(hoursUTC, "day", nowUTC)
+	viewUTC := subTraffic(hoursUTC, "day", nowUTC, 0, 0, 0)
 	if viewUTC.Points[0].Up != 1001 || viewUTC.Points[0].Down != 733 || viewUTC.Up != 1001 {
 		t.Fatalf("whole-hour zones must be byte-identical to the old result: %+v", viewUTC.Points[0])
 	}
