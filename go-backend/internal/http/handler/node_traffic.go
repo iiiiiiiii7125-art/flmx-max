@@ -52,3 +52,26 @@ func (h *Handler) nodeTrafficMonth(w http.ResponseWriter, r *http.Request) {
 	}
 	response.WriteJSON(w, response.OK(out))
 }
+
+// nodeTrafficDropped returns each node's cumulative dead-lettered
+// traffic bytes (traffic audit A-中-1), for the node list:
+// {"<id>": droppedBytes}. Nodes without dead letters are absent
+// (implicitly 0). This is lost traffic the agent quarantined after
+// its spool batch went unconfirmed — it never entered any flow
+// counter, and must not be mixed with billed traffic.
+func (h *Handler) nodeTrafficDropped(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	dropped, err := h.repo.ListTrafficNodeDropped()
+	if err != nil {
+		respondInternalError(w, "nodeTrafficDropped: ListTrafficNodeDropped failed", err)
+		return
+	}
+	out := make(map[string]int64, len(dropped))
+	for id, v := range dropped {
+		out[strconv.FormatInt(id, 10)] = v
+	}
+	response.WriteJSON(w, response.OK(out))
+}
