@@ -102,12 +102,13 @@ type ApplyRequest struct {
 	// with userMark(id); their traffic is counted per user.
 	UserMarks []int64 `json:"userMarks,omitempty"`
 	// UserMarkBase is the socket-mark base user marks are minted with
-	// (F2-DBL-01, per-agent: 0x47000000 | (nodeID&0xff)<<16 — the
-	// 0x47 tag keeps the per-agent space disjoint from the legacy
-	// base, F-R4-01). The panel renders the same base into the kernel
-	// config and sends it here so the agent's nft rules match the
-	// config's marks. 0 means the panel did not send one — the
-	// legacy base (0x46560000) stays in force.
+	// (F2-DBL-01, per-agent: 0x47000000 | agentByte<<16, agentByte =
+	// the first byte of SHA-256("flmx:user-mark-v2:"+node secret)
+	// since E-01 — the 0x47 tag keeps the per-agent space disjoint
+	// from the legacy base, F-R4-01). The panel renders the same
+	// base into the kernel config and sends it here so the agent's
+	// nft rules match the config's marks. 0 means the panel did not
+	// send one — the legacy base (0x46560000) stays in force.
 	UserMarkBase int64 `json:"userMarkBase,omitempty"`
 	// GeoData are data files kept current next to the main binary (Xray's
 	// geosite.dat / geoip.dat).

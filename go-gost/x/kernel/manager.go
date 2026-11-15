@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -565,6 +566,19 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	}
 	if syncErr != nil {
 		inst.logs.add("[flmx] 流量计数规则同步失败: " + syncErr.Error())
+	}
+	// E-01: the per-agent base is derived from the panel's node
+	// secret, so two panels' same-id nodes collide only when their
+	// secrets hash to the same first byte (1/256 per pair). Make
+	// that residual visible instead of silent: after a successful
+	// sync, scan the ruleset for our marks in other tables and log
+	// any hit (best-effort — a failed scan never blocks the apply).
+	if syncErr == nil {
+		for _, c := range m.nft.detectMarkCollision(m.allUserMarks()) {
+			msg := "[flmx] socket-mark 碰撞：" + c.String() + "——另一 agent/面板在用同一 mark，本节点与对方的订阅计数会互相串扰"
+			inst.logs.add(msg)
+			log.Printf("%s", msg)
+		}
 	}
 	startBlocked := syncErr != nil && reqNeedsNftGuard(req)
 

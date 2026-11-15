@@ -134,10 +134,11 @@ func expandPorts(ports []Port) []counterRule {
 // panel sent in the KernelApply payload, falling back to the legacy
 // userMarkBase when the payload omits it). Packets out with it are
 // the user's upload; the mark is copied to the connection so packets
-// coming back count as the download. F2-DBL-01: the base is
-// per-agent (node id low byte in bits 16-23) so co-located agents
-// count only their own kernels' traffic instead of the same
-// packets N×.
+// coming back count as the download. F2-DBL-01 / E-01: the base is
+// per-agent — the agent byte in bits 16-23 is the first byte of
+// SHA-256 of the node's secret, so co-located agents count only
+// their own kernels' traffic instead of the same packets N×, even
+// when two panels give their nodes the same id.
 const (
 	userMarkBase = 0x46560000
 	userMarkMax  = 0xffff
@@ -452,8 +453,9 @@ type nftCounters struct {
 	// as the plain name so a bare &nftCounters{} stays usable.
 	table string
 	// markBase is the socket-mark base user marks are minted with
-	// (F2-DBL-01, per-agent). 0 reads as the legacy userMarkBase
-	// (old panel that does not send a base).
+	// (F2-DBL-01, per-agent; E-01: derived by the panel from the
+	// node secret, adopted verbatim here). 0 reads as the legacy
+	// userMarkBase (old panel that does not send a base).
 	markBase    int64
 	state       nftState
 	lastErr     string
@@ -493,6 +495,102 @@ func (n *nftCounters) tableName() string {
 		return nftTable
 	}
 	return n.table
+}
+
+// markCollision is one of this agent's socket marks found in another
+// nft table: another agent (or panel) is minting the same mark, so
+// both agents count the same packets into the same subscription
+// (E-01). Only the table and the mark are named — no traffic data.
+type markCollision struct {
+	Table string
+	Mark  int64
+}
+
+func (c markCollision) String() string {
+	return fmt.Sprintf("mark 0x%08x in table %s", c.Mark, c.Table)
+}
+
+// markInRuleset matches a mark value in a rendered ruleset line:
+// "ct mark 0x47010002" (input chain) or "meta mark 0x47010002"
+// (output chain). nft prints marks in hex; the value is compared
+// numerically so padding differences cannot hide a collision.
+var markInRuleset = regexp.MustCompile(`mark 0x([0-9a-fA-F]+)`)
+
+// tableInRuleset matches a table header line: "table inet
+// flmx_kernel_abc12345 {".
+var tableInRuleset = regexp.MustCompile(`^table\s+\S+\s+(\S+)\s*\{`)
+
+// findMarkCollisions scans a `nft list ruleset` dump for this agent's
+// marks (markBase|id) in tables other than its own. It is pure and
+// table-driven so tests can feed canned ruleset output; the live
+// listing comes from detectMarkCollision. A line with no "mark 0x"
+// token (e.g. "ct mark set meta mark") cannot collide and is skipped.
+func findMarkCollisions(ruleset, ownTable string, marks map[int64]bool) []markCollision {
+	if len(marks) == 0 {
+		return nil
+	}
+	seen := map[markCollision]bool{}
+	var out []markCollision
+	table := ""
+	for _, line := range strings.Split(ruleset, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if m := tableInRuleset.FindStringSubmatch(trimmed); m != nil {
+			table = m[1]
+			continue
+		}
+		if table == "" || table == ownTable {
+			continue
+		}
+		for _, m := range markInRuleset.FindAllStringSubmatch(line, -1) {
+			v, err := strconv.ParseInt(m[1], 16, 64)
+			if err != nil || !marks[v] {
+				continue
+			}
+			c := markCollision{Table: table, Mark: v}
+			if !seen[c] {
+				seen[c] = true
+				out = append(out, c)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Table != out[j].Table {
+			return out[i].Table < out[j].Table
+		}
+		return out[i].Mark < out[j].Mark
+	})
+	return out
+}
+
+// detectMarkCollision lists the live ruleset and reports this agent's
+// marks in other tables. It only runs for per-agent bases (top byte
+// 0x47 — the 0x46 space also holds the legacy base itself, so a hit
+// there cannot distinguish a collision from legacy counting and
+// would be noise) and only when user marks exist. Best-effort: a
+// failed listing (nft missing, timeout) returns nil and never blocks
+// the apply that called it.
+func (n *nftCounters) detectMarkCollision(users []int64) []markCollision {
+	n.mu.Lock()
+	base := n.markBase
+	table := n.tableName()
+	n.mu.Unlock()
+	if base>>24 != 0x47 || len(users) == 0 {
+		return nil
+	}
+	marks := make(map[int64]bool, len(users))
+	for _, id := range sortedUsers(users) {
+		marks[base|id] = true
+	}
+	if len(marks) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := nftRunner(ctx, "", "list", "ruleset")
+	if err != nil {
+		return nil
+	}
+	return findMarkCollisions(string(out), table, marks)
 }
 
 // counterValuesPattern matches the one volatile part of a rendered
