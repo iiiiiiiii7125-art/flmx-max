@@ -855,6 +855,45 @@ func (h *Handler) controlForwardServices(forward *forwardRecord, commandType str
 			}
 		}
 
+		// C-04：PauseService 时服务不存在，不重建，验端口实态——
+		// 静默即本就已暂停（成功）；仍监听/仍有已建立连接即孤儿
+		// 监听者占口（精确冲突错）。探针 agent（>= 2.1.13）才走
+		// 此路；旧 agent 无探针命令，沿用自愈重建过渡路径（升级
+		// 后自动走探针路），自愈失败仍明错返回。
+		if !nodeHandled && lastNotFoundErr != nil && isPauseServiceCommand(commandType) {
+			if !h.nodeSupportsPortProbe(fp.NodeID) {
+				if healErr := h.syncForwardServices(forward, "UpdateService", true); healErr != nil {
+					return healErr
+				}
+				healed = true
+				nodeHandled, lastNotFoundErr, err = h.controlForwardServicesOnNode(fp.NodeID, bases, commandType)
+				if err != nil {
+					return err
+				}
+			} else {
+				dead, verr := h.verifyForwardPortsDeadOnNode(fp.NodeID, forwardPortsOfNode(ports, fp.NodeID))
+				if verr != nil {
+					// 探针是此处的唯一证据：探针失败 fail-closed，
+					// 不得假设已死（重试由调用方 backstop 承担）。
+					return verr
+				}
+				if !dead {
+					return fmt.Errorf("暂停转发失败：节点 %s 上转发端口 %v 仍在监听或仍有已建立连接（服务注册表无此服务，疑似孤儿监听者占用），未重建服务", h.nodeLabel(fp.NodeID), forwardPortsOfNode(ports, fp.NodeID))
+				}
+				// 端口已静默：暂停目标已达成，视为该节点已处理。
+				continue
+			}
+		}
+
+		// C-04：暂停命令成功后验端口确实已死（监听消失＋无已建立
+		// 连接）；探针失败只记日志 fail-open（暂停本身已成功，探
+		// 针是安全网不是门）。旧 agent 无探针命令，跳过验证。
+		if nodeHandled && isPauseServiceCommand(commandType) && h.nodeSupportsPortProbe(fp.NodeID) {
+			if verr := h.verifyPausedPortsDead(fp.NodeID, forwardPortsOfNode(ports, fp.NodeID)); verr != nil {
+				return verr
+			}
+		}
+
 		if nodeHandled {
 			continue
 		}
@@ -924,8 +963,45 @@ func deleteForwardServiceCandidates(bases []string, send func(name string) error
 }
 
 func shouldSelfHealForwardServiceControl(commandType string) bool {
+	// C-04：PauseService 永不自愈重建——暂停时服务不存在，说明 agent
+	// 侧注册表已丢该服务；重建会在已监听端口上 bind 撞 EADDRINUSE，
+	// 而转发继续跑（登记转发 168 两次失败）。PauseService 的
+	// NotFound 改走端口实态验证（见 controlForwardServices），旧
+	// agent（无探针命令）才沿用自愈过渡路径。ResumeService 保留自愈：
+	// 恢复时服务不存在，重建即恢复意图本身。
 	cmd := strings.ToLower(strings.TrimSpace(commandType))
-	return cmd == "pauseservice" || cmd == "resumeservice"
+	return cmd == "resumeservice"
+}
+
+// isPauseServiceCommand reports whether commandType is PauseService
+// (case/space-insensitive, same normalisation as shouldSelfHeal*).
+func isPauseServiceCommand(commandType string) bool {
+	return strings.EqualFold(strings.TrimSpace(commandType), "PauseService")
+}
+
+// nodeSupportsPortProbe 判定节点 agent 是否含 CheckPortListening
+// （C-04 暂停验证的命令，随 2.1.13 出）。版本读不到/不可解析一律
+// 按不支持处理（走旧自愈过渡路径，不引入新失败形态）。
+func (h *Handler) nodeSupportsPortProbe(nodeID int64) bool {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return false
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return false
+	}
+	return agentSupportsPortProbe(node.Version.String)
+}
+
+// forwardPortsOfNode returns the forward's ports on one node.
+func forwardPortsOfNode(ports []forwardPortRecord, nodeID int64) []int {
+	out := make([]int, 0, len(ports))
+	for _, fp := range ports {
+		if fp.NodeID == nodeID && fp.Port > 0 {
+			out = append(out, fp.Port)
+		}
+	}
+	return out
 }
 
 func (h *Handler) applyNodeProtocolChange(nodeID int64, httpVal, tlsVal, socksVal int) error {

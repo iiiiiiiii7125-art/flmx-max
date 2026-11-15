@@ -34,6 +34,11 @@ type checkPortListeningResponse struct {
 	Listening []int `json:"listening"`
 	TCP       []int `json:"tcp"`
 	UDP       []int `json:"udp"`
+	// Established 是各 TCP 表上处于 ESTABLISHED（st=01）态的端口
+	// （C-04：暂停验收须证“无已建立连接”，只看 LISTEN 会漏掉
+	// 已建立连接仍排干的情形）。恒 present（可为空集）；老面板
+	// 收到多一个字段无影响。
+	Established []int `json:"established"`
 }
 
 // parseProcNetListening 解析一份 /proc/net/{tcp,tcp6,udp,udp6} 内容，
@@ -106,6 +111,56 @@ func sortedPorts(set map[int]bool) []int {
 	return out
 }
 
+// parseProcNetEstablished 与 parseProcNetListening 同形，只认 TCP
+// ESTABLISHED（st=01）行——暂停验收的“已建立连接”面。TIME_WAIT
+// 等其它态不算（连接已死，只剩内核回收态）。
+func parseProcNetEstablished(content string, want map[int]bool) map[int]bool {
+	found := make(map[int]bool)
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		local := fields[1]
+		colon := strings.LastIndexByte(local, ':')
+		if colon < 0 {
+			continue
+		}
+		port64, err := strconv.ParseUint(local[colon+1:], 16, 32)
+		if err != nil {
+			continue
+		}
+		port := int(port64)
+		if !want[port] {
+			continue
+		}
+		if fields[3] != "01" {
+			continue
+		}
+		found[port] = true
+	}
+	return found
+}
+
+// scanProcNetEstablished 扫 tcp/tcp6 两张表，返回 want 内有
+// ESTABLISHED 连接的端口（升序）。缺失的表跳过；其他读错误返回 err。
+func scanProcNetEstablished(dir string, want map[int]bool) ([]int, error) {
+	seen := make(map[int]bool)
+	for _, name := range []string{"tcp", "tcp6"} {
+		b, rerr := os.ReadFile(filepath.Join(dir, name))
+		if rerr != nil {
+			if os.IsNotExist(rerr) {
+				continue
+			}
+			return nil, fmt.Errorf("读取 /proc/net/%s 失败: %w", name, rerr)
+		}
+		for p := range parseProcNetEstablished(string(b), want) {
+			seen[p] = true
+		}
+	}
+	return sortedPorts(seen), nil
+}
+
 func handleCheckPortListening(data interface{}) (interface{}, error) {
 	raw, err := json.Marshal(data)
 	if err != nil {
@@ -131,6 +186,10 @@ func handleCheckPortListening(data interface{}) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	establishedPorts, err := scanProcNetEstablished(procNetDir, want)
+	if err != nil {
+		return nil, err
+	}
 	union := make(map[int]bool, len(tcpPorts)+len(udpPorts))
 	for _, p := range tcpPorts {
 		union[p] = true
@@ -139,8 +198,9 @@ func handleCheckPortListening(data interface{}) (interface{}, error) {
 		union[p] = true
 	}
 	return checkPortListeningResponse{
-		Listening: sortedPorts(union),
-		TCP:       tcpPorts,
-		UDP:       udpPorts,
+		Listening:   sortedPorts(union),
+		TCP:         tcpPorts,
+		UDP:         udpPorts,
+		Established: establishedPorts,
 	}, nil
 }

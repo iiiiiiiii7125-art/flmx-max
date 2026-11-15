@@ -3303,6 +3303,30 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 // 立，因为不存在不含修复的 2.1.13。
 const nftIsolatedAgentMinVersion = "2.1.13"
 
+// portProbeAgentMinVersion 是 live 端口探针 CheckPortListening 的首个
+// agent 版本（F2-PORT-01，cac080bd，随 2.1.13 出货）。C-04 的暂停
+// 验证（NotFound 后验端口实态、成功后验端口已死）依赖该命令；低于
+// 它的 agent 走旧自愈重建过渡路径（见 controlForwardServices）。
+// 与 nftIsolatedAgentMinVersion 同值是巧合——两者同随 2.1.13 出，
+// 各自由自己的引入提交背书，不得合并为一个常量。
+const portProbeAgentMinVersion = "2.1.13"
+
+// agentSupportsPortProbe 判定 agent 版本是否含 CheckPortListening
+// （纯函数，供单测）：可解析且 >= 2.1.13 为支持；空串与不可解析形态
+// （dev 等）一律按不支持处理（fail-closed，与 agentSupportsNftIsolation
+// 同口径）。
+func agentSupportsPortProbe(raw string) bool {
+	normalised, ok := parseConnlogAgentVersion(raw)
+	if !ok {
+		return false
+	}
+	cmp, err := compareVersions(normalised, portProbeAgentMinVersion)
+	if err != nil {
+		return false
+	}
+	return cmp >= 0
+}
+
 // agentSupportsNftIsolation 判定 agent 版本是否含 nft 表隔离（纯
 // 函数，供单测）：可解析且 >= 2.1.13 为支持；空串与不可解析形态
 // （dev 等）一律按不支持处理（fail-closed，与 connlogAgentSupport
