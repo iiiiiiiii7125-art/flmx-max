@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -79,11 +80,35 @@ func TestCompanionRendersLikeSingbox(t *testing.T) {
 	if len(comp.Files) != 1 || comp.Files[0].Name != "config.json" {
 		t.Fatalf("companion files = %+v, want one config.json", comp.Files)
 	}
-	if comp.Files[0].Content != main.Files[0].Content {
-		t.Fatalf("companion config differs from sing-box config:\ncompanion: %s\nsing-box: %s", comp.Files[0].Content, main.Files[0].Content)
+	// C-(4): the companion differs from the main sing-box config in
+	// exactly one place — the Clash API (selective per-user kill).
+	// Everything else renders identically.
+	var mainCfg, compCfg map[string]interface{}
+	if err := json.Unmarshal([]byte(main.Files[0].Content), &mainCfg); err != nil {
+		t.Fatalf("parse sing-box config: %v", err)
 	}
-	if comp.Hash != main.Hash {
-		t.Fatalf("companion hash %q != sing-box hash %q", comp.Hash, main.Hash)
+	if err := json.Unmarshal([]byte(comp.Files[0].Content), &compCfg); err != nil {
+		t.Fatalf("parse companion config: %v", err)
+	}
+	if _, ok := mainCfg["experimental"]; ok {
+		t.Fatalf("sing-box config unexpectedly has experimental: %v", mainCfg["experimental"])
+	}
+	exp, ok := compCfg["experimental"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("companion config has no experimental section")
+	}
+	clash, ok := exp["clash_api"].(map[string]interface{})
+	if !ok || clash["external_controller"] != companionClashAPIAddr {
+		t.Fatalf("companion clash_api = %v, want external_controller %q", exp["clash_api"], companionClashAPIAddr)
+	}
+	delete(exp, "clash_api")
+	if len(exp) == 0 {
+		delete(compCfg, "experimental")
+	}
+	mainJSON, _ := json.Marshal(mainCfg)
+	compJSON, _ := json.Marshal(compCfg)
+	if string(mainJSON) != string(compJSON) {
+		t.Fatalf("companion config differs from sing-box config beyond the Clash API:\ncompanion: %s\nsing-box: %s", compJSON, mainJSON)
 	}
 	if strings.Join(comp.Args, " ") != "run -c {RUN_DIR}/config.json" {
 		t.Fatalf("companion args = %v, want sing-box run args", comp.Args)

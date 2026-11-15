@@ -59,6 +59,18 @@ type instance struct {
 	// kept across process relaunches so connection-id generations
 	// stay scoped per process launch.
 	connlog *connLogCollector
+	// tombstones are the auth_user names removed from the config
+	// whose live connections the sweeper keeps closing until the
+	// instance is reloaded or restarted (C-(4)): a removal-only
+	// change skips the SIGHUP reload (the reload drops every
+	// user's sessions), so the running config still admits these
+	// users and only the selective kill + sweeper enforces the
+	// removal. Re-adding a user clears its tombstone.
+	tombstones map[string]bool
+	// clashAddr is the companion's Clash API address
+	// (experimental.clash_api.external_controller) from the last
+	// applied config; "" when the API is not configured.
+	clashAddr string
 }
 
 // Manager owns every kernel instance on this agent. Apply/Control/Uninstall
@@ -70,6 +82,7 @@ type Manager struct {
 	applyMu     sync.Mutex
 	mu          sync.Mutex
 	restoreOnce sync.Once
+	sweepOnce   sync.Once
 	instances   map[string]*instance
 	nft         *nftCounters
 }
@@ -598,22 +611,84 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	}
 	startBlocked := syncErr != nil && reqNeedsNftGuard(req)
 
+	// C-(4): which users did this apply remove, and is the change
+	// removal-only (only the user list changed)? The diff is on the
+	// on-disk configs (previous files vs the just-written new ones).
+	removedUsers, addedUsers, userOnlyChange := m.applyUserDiff(req.Type, prev, runDir)
+	// Cache the companion's Clash API address from the new config
+	// for the selective kill and the tombstone sweeper.
+	clashAddr := ""
+	if isSingboxType(req.Type) {
+		if b, err := os.ReadFile(filepath.Join(runDir, "config.json")); err == nil {
+			clashAddr = clashAPIAddr(b)
+			m.mu.Lock()
+			inst.clashAddr = clashAddr
+			m.mu.Unlock()
+		}
+	}
+	// C-(4): a removal-only change is a candidate for skipping the
+	// SIGHUP reload — the reload drops every user's sessions (live
+	// proof 2026-11-15), so it cannot be the per-user kill. The
+	// candidate is confirmed only if the selective kill below can
+	// actually reach the companion's Clash API; otherwise the
+	// reload stays (the removal is still enforced, at the cost of
+	// the pre-existing reload blast radius).
+	skipReloadCandidate := isSingboxType(req.Type) && req.Enabled && running && reloadable &&
+		userOnlyChange && len(removedUsers) > 0 && len(addedUsers) == 0
+	skipReload := false
+	if skipReloadCandidate {
+		if clashAddr == "" {
+			inst.logs.add(fmt.Sprintf("[flmx] 伴生未配置 Clash API，用户 %v 的已有连接无法连接级关闭，改走配置重载", removedUsers))
+		} else if closed, err := closeClashUserConnections(clashAddr, removedUsers); err != nil {
+			inst.logs.add(fmt.Sprintf("[flmx] 用户 %v 的已有连接连接级关闭失败（%v），改走配置重载", removedUsers, err))
+		} else {
+			skipReload = true
+			inst.logs.add(fmt.Sprintf("[flmx] 已连接级关闭用户 %v 的已有连接 %d 条，未重载配置（其他用户会话保留）", removedUsers, closed))
+			// Tombstone the removed users: the running config still
+			// admits them, so the sweeper keeps closing any they
+			// open again until a reload/restart refreshes it.
+			m.mu.Lock()
+			if inst.tombstones == nil {
+				inst.tombstones = make(map[string]bool)
+			}
+			for _, u := range removedUsers {
+				inst.tombstones[u] = true
+			}
+			m.mu.Unlock()
+			m.startSweeperOnce()
+		}
+	}
+
 	stable := true
 	// reloadedClean is set when the config was applied by a SIGHUP
-	// reload with the process never restarting — the only case in
-	// which removed users still have live sessions to kill (a
-	// restart already dropped every session).
+	// reload with the process never restarting. A reload drops
+	// every user's established sessions (C-(4) live proof
+	// 2026-11-15) — it is not a per-user kill — so a removal-only
+	// change skips it (skipReload above) and the removed users are
+	// enforced selectively instead.
 	reloadedClean := false
+	// configRefreshed is set when the running process now has the
+	// new config (reload or restart): the tombstones are then spent
+	// and cleared below.
+	configRefreshed := false
 	switch {
 	case !req.Enabled:
 		m.stopProcesses(inst)
+		m.stopProcesses(inst)
+	case skipReload:
+		// Removal-only: the selective kill + sweeper already
+		// enforce it; the process keeps running the old config
+		// untouched, so the kept users' sessions are preserved.
+		// stable stays true.
 	case changed || !running:
 		// C-(4): try a SIGHUP reload before restarting — a
 		// restart drops every established session of every user
-		// on the instance, a reload drops none.
+		// on the instance, and a reload drops them too (it
+		// re-creates the shared inbound/outbound/router).
 		applied, restarted := m.tryReloadSingbox(inst, reloadable)
 		if applied {
 			reloadedClean = !restarted
+			configRefreshed = true
 			if restarted {
 				inst.logs.add("[flmx] sing-box 配置重载致进程重启（会话已断），已按新配置恢复")
 			}
@@ -622,6 +697,7 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 			m.stopProcesses(inst)
 			if !startBlocked {
 				m.startProcesses(inst)
+				configRefreshed = true
 				// F-032: 探活窗口内持续存活判定——窗口内曾存活又退出即失败，
 				// 单点快照会把"启动后随即退出"误判成功、把慢启动误判失败。
 				stable = m.waitStable(req.Type)
@@ -631,26 +707,43 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		}
 	}
 
-	// C-(4): a clean reload removed users from the config but did
-	// not drop their established sessions — kill only the removed
-	// users' connections by conntrack mark. (A restart already
-	// dropped every session, so there is nothing to kill then.)
-	//
-	// NOTE (C-(4) live proof 2026-11-15): the SIGHUP reload on its
-	// own already drops the removed user's established sessions
-	// while preserving the kept users' (bare-SIGHUP test: u2 died,
-	// u3 completed 20,971,520 B). No extra per-user ss -K kill is
-	// needed, and the conntrack-mark kill proved racy (mark only
-	// visible during transfer bursts) and harmful in the agent
-	// path. The reload IS the per-user connection-level kill.
-	if reloadedClean && req.Enabled && stable && len(req.UserMarks) > 0 {
+	// C-(4): how the removed users' live sessions were handled.
+	// A SIGHUP reload drops EVERY user's established sessions
+	// (live proof 2026-11-15: bare SIGHUP closed both u2's and
+	// u3's upstreams within seconds; which download then
+	// "survived" was a buffer race, not a selective kill). The
+	// reload is therefore not a per-user kill: a removal-only
+	// change skips it and closes the removed users' connections
+	// selectively through the companion's Clash API (skipReload
+	// above, already logged). A reload/restart drops every
+	// session, so there is nothing selective to do then.
+	if skipReload {
+		// Already logged at kill time; the tombstone sweeper
+		// keeps enforcing it until a reload/restart.
+	} else if reloadedClean && req.Enabled && stable && len(req.UserMarks) > 0 {
 		removed := diffUserMarks(prev.req.UserMarks, req.UserMarks)
 		if len(removed) > 0 {
-			inst.logs.add(fmt.Sprintf("[flmx] 配置重载完成，已切断用户 %v 的已有连接（旧=%v 新=%v）", removed, prev.req.UserMarks, req.UserMarks))
+			inst.logs.add(fmt.Sprintf("[flmx] 配置重载完成，用户 %v 已从配置移除（重载同时断开了本实例全部用户的已有连接，见 C-(4)）", removed))
 		}
 	} else if len(req.UserMarks) > 0 && len(diffUserMarks(prev.req.UserMarks, req.UserMarks)) > 0 {
 		inst.logs.add(fmt.Sprintf("[flmx] 配置未走干净重载（reloadedClean=%v enabled=%v stable=%v），移除用户 %v 的已有连接未切断", reloadedClean, req.Enabled, stable, diffUserMarks(prev.req.UserMarks, req.UserMarks)))
 	}
+	// Reconcile the tombstones: a reload/restart (or a stop) makes
+	// the in-memory config fresh, so the tombstones are spent; a
+	// re-added user is live again and leaves the set.
+	m.mu.Lock()
+	if !req.Enabled || configRefreshed {
+		inst.tombstones = nil
+	} else if len(inst.tombstones) > 0 {
+		if b, err := os.ReadFile(filepath.Join(runDir, "config.json")); err == nil {
+			if live, err := singboxUsers(b); err == nil {
+				for _, u := range live {
+					delete(inst.tombstones, u)
+				}
+			}
+		}
+	}
+	m.mu.Unlock()
 
 	var failure error
 	confirmed := true
@@ -739,6 +832,92 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		}
 	}
 	return m.state(req.Type, false), failure
+}
+
+// applyUserDiff diffs the previous and the just-written sing-box
+// configs (auth_user names) and reports which users were removed,
+// which were added, and whether the change is user-only (nothing
+// but the user list and its derived outbounds/rules changed).
+// Non-sing-box types and first applies report no diff.
+func (m *Manager) applyUserDiff(kernelType string, prev prevApply, runDir string) (removed, added []string, userOnly bool) {
+	if !isSingboxType(kernelType) {
+		return nil, nil, false
+	}
+	oldConfig, ok := prev.files["config.json"]
+	if !ok || len(oldConfig) == 0 {
+		return nil, nil, false
+	}
+	newConfig, err := os.ReadFile(filepath.Join(runDir, "config.json"))
+	if err != nil || len(newConfig) == 0 {
+		return nil, nil, false
+	}
+	removed, err = removedSingboxUsers(oldConfig, newConfig)
+	if err != nil {
+		return nil, nil, false
+	}
+	added, err = addedSingboxUsers(oldConfig, newConfig)
+	if err != nil {
+		return nil, nil, false
+	}
+	userOnly, err = isUserOnlySingboxChange(oldConfig, newConfig)
+	if err != nil {
+		return nil, nil, false
+	}
+	return removed, added, userOnly
+}
+
+// tombstoneSweepInterval is how often the sweeper re-closes a
+// tombstoned user's new connections (C-(4)).
+const tombstoneSweepInterval = 2 * time.Second
+
+// startSweeperOnce starts the tombstone sweeper goroutine (once per
+// Manager lifetime). It ticks every tombstoneSweepInterval and, for
+// each instance with tombstones, closes any live connection admitted
+// as a tombstoned user. It does no work (and no HTTP call) when
+// there is nothing tombstoned.
+func (m *Manager) startSweeperOnce() {
+	m.sweepOnce.Do(func() {
+		go m.sweepTombstonesLoop()
+	})
+}
+
+func (m *Manager) sweepTombstonesLoop() {
+	for {
+		time.Sleep(tombstoneSweepInterval)
+		m.mu.Lock()
+		type target struct {
+			kernelType string
+			addr       string
+			users      []string
+		}
+		var targets []target
+		for kernelType, inst := range m.instances {
+			if len(inst.tombstones) == 0 || inst.clashAddr == "" {
+				continue
+			}
+			users := make([]string, 0, len(inst.tombstones))
+			for u := range inst.tombstones {
+				users = append(users, u)
+			}
+			targets = append(targets, target{kernelType, inst.clashAddr, users})
+		}
+		m.mu.Unlock()
+		for _, t := range targets {
+			closed, err := closeClashUserConnections(t.addr, t.users)
+			if err != nil {
+				// The companion may be mid-restart; the next tick
+				// retries. Do not spam the log every 2s.
+				continue
+			}
+			if closed > 0 {
+				m.mu.Lock()
+				if inst := m.instances[t.kernelType]; inst != nil {
+					inst.logs.add(fmt.Sprintf("[flmx] 兜底关闭已移除用户 %v 的新建连接 %d 条", t.users, closed))
+				}
+				m.mu.Unlock()
+			}
+		}
+	}
 }
 
 // pruneStaleBinDirs enforces the kernel binary retention policy
