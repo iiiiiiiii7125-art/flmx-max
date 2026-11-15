@@ -1445,6 +1445,8 @@ export interface MySubscriptionItem {
   enabled: boolean;
   /** 删除墓碑滞留中（管理员已删除、节点凭据下发未完成）：链接已 404，页面呈「删除中」。 */
   pendingDelete: boolean;
+  /** C-07：该订阅流量永不计量、限额永不触发（非分享订阅或 ID 越界）时为 true——用户页须显式提示「限额不生效」。 */
+  meteringUnsupported?: boolean;
 }
 export const getMySubscriptions = () =>
   Network.post<{ subscriptions: MySubscriptionItem[] }>(

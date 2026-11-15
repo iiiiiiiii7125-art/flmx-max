@@ -402,9 +402,11 @@ export default function MySubscriptionPage() {
                     <span className="text-xs font-semibold text-foreground">{s.nodeCount} 个节点</span>
                   </div>
                   <p className="text-xs font-semibold text-foreground">
-                    {s.trafficLimit > 0
-                      ? `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} / ${formatTraffic(s.trafficLimit)}`
-                      : `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} · 不限流量`}
+                    {s.meteringUnsupported && s.trafficLimit > 0
+                      ? `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} · 限额不生效（该订阅不计量）`
+                      : s.trafficLimit > 0
+                        ? `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} / ${formatTraffic(s.trafficLimit)}`
+                        : `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} · 不限流量`}
                     {s.expireTime > 0 ? ` · ${dateText(s.expireTime)} 到期` : ""}
                   </p>
                   <div className="rounded-lg glass-inset p-3">

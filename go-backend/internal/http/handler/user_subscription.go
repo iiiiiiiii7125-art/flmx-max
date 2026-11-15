@@ -150,6 +150,10 @@ type userSubscriptionMineView struct {
 	// 「删除中」，与管理员列表 subscriptionView.PendingDelete 同口径
 	// ——此前用户侧无此字段，只看到订阅照常列出、链接 404 无提示。
 	PendingDelete bool `json:"pendingDelete"`
+	// MeteringUnsupported（C-07）：与 subscriptionView 同口径——
+	// 非分享订阅或 ID 越界的订阅流量永不计量、限额永不触发，
+	// 用户侧须显式提示「限额不生效」，不许只显示「已用 0／限额」。
+	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
 }
 
 // userSubscriptionMine 返回当前登录用户被分配的订阅（任意登录用户，仅自己的）。
@@ -201,6 +205,7 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 			UploadBytes: v.UploadBytes, DownloadBytes: v.DownloadBytes,
 			TrafficLimit: v.TrafficLimit, TrafficSince: v.TrafficSince, ExpireTime: v.ExpireTime,
 			OverQuota: v.OverQuota, Enabled: v.Enabled, PendingDelete: v.PendingDelete,
+			MeteringUnsupported: v.MeteringUnsupported,
 		})
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{

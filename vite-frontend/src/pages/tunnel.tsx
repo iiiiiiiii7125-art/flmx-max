@@ -3681,9 +3681,11 @@ export default function TunnelPage() {
                               }
                             }}
                           >
-                            <SelectItem key="1">单向计算（仅上传）</SelectItem>
+                            <SelectItem key="1">
+                              单向计算（仅上传，下载不计入配额）
+                            </SelectItem>
                             <SelectItem key="2">
-                              双向计算（上传+下载）
+                              双向计算（上传+下载均计入配额）
                             </SelectItem>
                           </Select>
 

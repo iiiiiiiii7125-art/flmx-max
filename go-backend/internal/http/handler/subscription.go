@@ -526,6 +526,88 @@ func pushFailureMsg(prefix string, err error) string {
 
 // syncSubscriptions pushes credential changes for share subscriptions
 // whose active state differs from what the kernels last received.
+// C-02（流量审计）：超限分享订阅的原站共享口令轮换。
+//
+// 只撤伴生用户不够：原站共享口令仍在分发（直连端点无 live 伴生时
+// 回退原站、中转端点恒指原站、已分发链接在客户端缓存），超限后
+// 原站继续服务且不再计数。超限跃迁时把该订阅全部 SS 原站的共享
+// 口令轮换为新口令（SS2022 按方法生成合法长度 PSK，其余走随机
+// 口令），落库后由同一轮同步的 kernel 下发带上去。
+//
+// 幂等键：QuotaRotatedAt 与 subTrafficSince 比较——本计费回合
+// 已轮换过则跳过；流量重置使 TrafficSince 前进，下一回合可再
+// 轮换；部署时已超限的存量订阅 stamp=0，首次同步即轮换。任一
+// 原站落库失败时不打戳，下轮重试（已轮换的原站会被再轮一次，
+// 无害）。返回本轮是否轮换了至少一个原站——轮换过即须强制走
+// 一次 kernel 下发（哪怕 AppliedActive 已是 0），否则新口令
+// 到不了内核。
+//
+// 不在范围：非 SS 原站（逐用户 UUID，撤用户即生效）、外部入站
+// （KernelID=0，无内核可推）、伴生本体（只轮原站）；停用/过期
+// 导致的失活不轮换（爆炸半径：每次停用/过期都换共享口令，
+// 全部共用该口令的订阅都要重拉链接——残留，另案处理）。
+func (h *Handler) rotateQuotaOriginPasswords(s *model.Subscription, rows *[]model.NodeInbound, now time.Time) bool {
+	if !isShare(s) || !subOverQuota(s) {
+		return false
+	}
+	if s.QuotaRotatedAt >= subTrafficSince(s) {
+		return false
+	}
+	if *rows == nil {
+		loaded, err := h.repo.ListNodeInbounds()
+		if err != nil {
+			log.Printf("subscription %d over quota: cannot list inbounds for origin password rotation: %v", s.ID, err)
+			return false
+		}
+		*rows = loaded
+	}
+	byID := make(map[int64]*model.NodeInbound, len(*rows))
+	for i := range *rows {
+		byID[(*rows)[i].ID] = &(*rows)[i]
+	}
+	rotated, failed := false, false
+	for _, id := range subInboundIDs(s, *rows) {
+		row := byID[id]
+		if row == nil || row.CompanionOf > 0 || isExternalInbound(row) || row.Protocol != kernel.ProtocolShadowsocks {
+			continue
+		}
+		in, err := inboundFromModel(*row)
+		if err != nil {
+			log.Printf("subscription %d over quota: origin inbound %d settings unparsable, password not rotated: %v", s.ID, row.ID, err)
+			failed = true
+			continue
+		}
+		in.Settings.Password = kernel.ShadowsocksPassword(in.Settings.Method)
+		if err := applyInboundToModel(in, row); err != nil {
+			log.Printf("subscription %d over quota: origin inbound %d password rotation failed to serialize: %v", s.ID, row.ID, err)
+			failed = true
+			continue
+		}
+		if err := h.repo.SaveNodeInbound(row); err != nil {
+			log.Printf("subscription %d over quota: origin inbound %d rotated password failed to persist: %v", s.ID, row.ID, err)
+			failed = true
+			continue
+		}
+		rotated = true
+		log.Printf("subscription %d over quota: rotated shared password of origin inbound %d (node %d)", s.ID, row.ID, row.NodeID)
+	}
+	if rotated && !failed {
+		s.QuotaRotatedAt = now.UnixMilli()
+		// C-02 live 补：已截断（AppliedActive 已是 0）的存量超限
+		// 订阅，下发失败时下轮不再重试——active==AppliedActive
+		// 直接 continue，新口令只落库、到不了内核。沿用
+		// R5R8-001 的 -1 停放：AppliedActive=-1 使 active !=
+		// AppliedActive 恒成立，sync 循环每轮重试下发直至成功
+		// （成功后由下发块写回 active）；轮换戳已打，下轮不
+		// 再轮换、无口令 churn。
+		s.AppliedActive = -1
+		if err := h.repo.SaveSubscription(s); err != nil {
+			log.Printf("subscription %d: failed to record quota rotation stamp: %v", s.ID, err)
+		}
+	}
+	return rotated
+}
+
 func (h *Handler) syncSubscriptions(now time.Time) {
 	subSyncMu.Lock()
 	defer subSyncMu.Unlock()
@@ -565,8 +647,15 @@ func (h *Handler) syncSubscriptions(now time.Time) {
 				}
 			}
 		}
+		// C-02：超限分享订阅的原站共享口令必须失效。轮换过即强制
+		// 走一次下发（哪怕 AppliedActive 已是 0），否则新口令
+		// 到不了内核；轮换时 AppliedActive 已停放为 -1（R5R8-001
+		// 同款），下发失败时 -1 保留、下轮 active != AppliedActive
+		// 恒成立而重试（口令不重复轮换）；下发成功后由下发块写回
+		// active（见 F7X-001）。
+		rotated := h.rotateQuotaOriginPasswords(s, &rows, now)
 		active := boolToInt(isShare(s) && subActive(s, now))
-		if active == s.AppliedActive {
+		if active == s.AppliedActive && !rotated {
 			continue
 		}
 		if rows == nil {
@@ -792,7 +881,10 @@ type subscriptionView struct {
 	// MeteringUnsupported（L4-08）：订阅 ID 超出 socket mark 计量
 	// 编码上限（kernel.MaxUserMarkID）时为 true——该订阅的流量永不
 	// 计量、TrafficLimit 永不触发，须对管理员显式可见，不许静默。
-	// 视图构建单点回填，列表/保存/详情同口径。
+	// C-07：非分享（个人）订阅同样永不计量——其计数只由分享订阅
+	// 的 kernel 用户样本写，个人订阅的 UploadBytes/DownloadBytes
+	// 恒为 0，TrafficLimit 永不触发；视图构建单点回填，列表/
+	// 保存/详情同口径。
 	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
 }
 
@@ -913,7 +1005,8 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
 		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s),
-		MeteringUnsupported: isShare(s) && s.ID > kernel.MaxUserMarkID,
+		// C-07：非分享订阅永不计量（见 MeteringUnsupported 字段注释）。
+		MeteringUnsupported: !isShare(s) || s.ID > kernel.MaxUserMarkID,
 	}
 }
 
