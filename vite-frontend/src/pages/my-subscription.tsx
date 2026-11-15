@@ -414,14 +414,29 @@ export default function MySubscriptionPage() {
                       客户端订阅信息里的已用是所选入站的总流量（入站总量，非本订阅独占），共用同一入站的订阅显示相同数字；该数字不用于超限判定。
                     </p>
                   )}
-                  {s.overQuota && s.appliedActive === 0 && (
+                  {s.overQuota && s.appliedActive === 1 && (
                     <p className="text-xs font-semibold text-warning-700">
                       流量已用完，凭据仍在节点上（截断下发未完成）
+                    </p>
+                  )}
+                  {s.overQuota && s.appliedActive === 0 && (
+                    <p className="text-xs font-semibold text-warning-700">
+                      流量已用完，已从节点上断开
                     </p>
                   )}
                   {s.overQuota && s.appliedActive === -1 && (
                     <p className="text-xs font-semibold text-warning-700">
                       流量已用完，下发待同步
+                    </p>
+                  )}
+                  {!s.overQuota && !s.pendingDelete && s.enabled && !expired && s.appliedActive === 0 && (
+                    <p className="text-xs font-semibold text-warning-700">
+                      待下发
+                    </p>
+                  )}
+                  {!s.overQuota && !s.pendingDelete && s.enabled && !expired && s.appliedActive === -1 && (
+                    <p className="text-xs font-semibold text-warning-700">
+                      下发待同步
                     </p>
                   )}
                   {s.meteringStatus &&

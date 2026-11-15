@@ -125,9 +125,9 @@ function expiryLabel(ms: number): string {
 function appliedStateLabel(s: SubscriptionItem): string {
   const since = `${toDateInput(s.trafficSince)} 起的上传 + 下载合计`;
   if (s.overQuota) {
-    if (s.appliedActive === 1) return "流量已用完，已从节点上断开";
+    if (s.appliedActive === 1) return "流量已用完，凭据仍在节点上（截断下发未完成）";
     if (s.appliedActive === -1) return "流量已用完，下发待同步";
-    return "流量已用完，凭据仍在节点上（截断下发未完成）";
+    return "流量已用完，已从节点上断开";
   }
   if (!s.active && s.appliedActive === 1) {
     return "已停用／已过期，但凭据仍在节点上";
