@@ -1454,6 +1454,8 @@ export interface MySubscriptionItem {
   /** B-L4：与管理员视图同口径——非分享订阅为 true，客户端显示的已用
    * 是所选入站的总量（非本订阅独占）。 */
   usageInboundTotal?: boolean;
+  /** C-07：该订阅流量永不计量、限额永不触发（非分享订阅或 ID 越界）时为 true——用户页须显式提示「限额不生效」。 */
+  meteringUnsupported?: boolean;
 }
 export const getMySubscriptions = () =>
   Network.post<{ subscriptions: MySubscriptionItem[] }>(

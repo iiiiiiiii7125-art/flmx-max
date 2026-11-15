@@ -585,6 +585,11 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateV1AnnouncementTableRemoved(db); err != nil {
 			return err
 		}
+		// C-01 v1（流量审计）: 存量隧道 Flow=1 一次性翻为双向 2
+		// （新建缺省已改 2；双后端同口径执行）。
+		if err := migrateV1TunnelFlowBidiDefault(db); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -651,6 +656,12 @@ func autoMigrateAll(db *gorm.DB) error {
 	// RM-ANN v1（2.1.13）: 公告功能整删的存量处置——删
 	// announcement 表（新装库无表时直接记版本跳过）。
 	if err := migrateV1AnnouncementTableRemoved(db); err != nil {
+		return err
+	}
+
+	// C-01 v1（流量审计）: 存量隧道 Flow=1 一次性翻为双向 2
+	// （新建缺省已改 2；新装库无表时直接记版本跳过）。
+	if err := migrateV1TunnelFlowBidiDefault(db); err != nil {
 		return err
 	}
 

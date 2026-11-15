@@ -117,7 +117,9 @@ export const createTunnelFormDefaults = () => {
     inNodeId: [],
     outNodeId: [],
     chainNodes: [],
-    flow: 1,
+    // C-01（流量审计）：新建隧道计费缺省双向（2）——配额按总量计，
+    // 下载须计入；单向（1，仅上传）仍可显式选。
+    flow: 2,
     trafficRatio: 1.0,
     forwardMode: "agent",
     engine: "",

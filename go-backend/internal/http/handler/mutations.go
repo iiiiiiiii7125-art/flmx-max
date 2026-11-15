@@ -2956,7 +2956,10 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	typeVal := asInt(req["type"], 1)
-	flow := asInt64(req["flow"], 1)
+	// C-01（流量审计）：新建隧道计费缺省为双向（2）。旧缺省 1
+	// 只计上传，下载全不扣配额（实测 1.49GB 下载仅涨 2697B），
+	// 配额是总量上限，缺省必须按总量计；单向仍可显式选 1。
+	flow := asInt64(req["flow"], 2)
 	status := asInt(req["status"], 1)
 	trafficRatio := asFloat(req["trafficRatio"], 1.0)
 	// R11X-008/009：写入面补校验——TrafficRatio ∈ [0,100]、Flow ∈

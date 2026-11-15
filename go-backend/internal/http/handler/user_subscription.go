@@ -153,6 +153,10 @@ type userSubscriptionMineView struct {
 	// UsageInboundTotal（B-L4）：与管理员视图同口径——非分享订阅为
 	// true，客户端显示的已用是所选入站的总量（非本订阅独占）。
 	UsageInboundTotal bool `json:"usageInboundTotal,omitempty"`
+	// MeteringUnsupported（C-07）：与 subscriptionView 同口径——
+	// 非分享订阅或 ID 越界的订阅流量永不计量、限额永不触发，
+	// 用户侧须显式提示「限额不生效」，不许只显示「已用 0／限额」。
+	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
 }
 
 // userSubscriptionMine 返回当前登录用户被分配的订阅（任意登录用户，仅自己的）。
@@ -205,6 +209,7 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 			TrafficLimit: v.TrafficLimit, TrafficSince: v.TrafficSince, ExpireTime: v.ExpireTime,
 			OverQuota: v.OverQuota, Enabled: v.Enabled, PendingDelete: v.PendingDelete,
 			UsageInboundTotal: v.UsageInboundTotal,
+			MeteringUnsupported: v.MeteringUnsupported,
 		})
 	}
 	response.WriteJSON(w, response.OK(map[string]interface{}{
