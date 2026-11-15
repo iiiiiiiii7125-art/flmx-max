@@ -11,6 +11,7 @@ import (
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/loader"
 	"github.com/go-gost/x/internal/plugin"
+	xlogger "github.com/go-gost/x/logger"
 	"github.com/go-gost/x/registry"
 )
 
@@ -43,11 +44,20 @@ func ParseBypass(cfg *config.BypassConfig) bypass.Bypass {
 		}
 	}
 
+	// logger.Default() is nil until the host process registers one
+	// (gost's main does so at startup). A caller that never called
+	// SetDefault must not panic here (R9-B-01): fall back to a
+	// no-op logger.
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
+
 	opts := []xbypass.Option{
 		xbypass.MatchersOption(cfg.Matchers),
 		xbypass.WhitelistOption(cfg.Reverse || cfg.Whitelist),
 		xbypass.ReloadPeriodOption(cfg.Reload),
-		xbypass.LoggerOption(logger.Default().WithFields(map[string]any{
+		xbypass.LoggerOption(log.WithFields(map[string]any{
 			"kind":   "bypass",
 			"bypass": cfg.Name,
 		})),

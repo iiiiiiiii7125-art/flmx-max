@@ -15,6 +15,7 @@ import (
 	xrate "github.com/go-gost/x/limiter/rate"
 	xtraffic "github.com/go-gost/x/limiter/traffic"
 	traffic_plugin "github.com/go-gost/x/limiter/traffic/plugin"
+	xlogger "github.com/go-gost/x/logger"
 )
 
 func ParseTrafficLimiter(cfg *config.LimiterConfig) (lim traffic.TrafficLimiter) {
@@ -77,10 +78,19 @@ func ParseTrafficLimiter(cfg *config.LimiterConfig) (lim traffic.TrafficLimiter)
 			loader.TimeoutHTTPLoaderOption(cfg.HTTP.Timeout),
 		)))
 	}
+	// logger.Default() is nil until the host process registers one
+	// (gost's main does so at startup). A caller that never called
+	// SetDefault must not panic here (R9-B-01): fall back to a
+	// no-op logger.
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
+
 	opts = append(opts,
 		xtraffic.LimitsOption(cfg.Limits...),
 		xtraffic.ReloadPeriodOption(cfg.Reload),
-		xtraffic.LoggerOption(logger.Default().WithFields(map[string]any{
+		xtraffic.LoggerOption(log.WithFields(map[string]any{
 			"kind":    "limiter",
 			"limiter": cfg.Name,
 		})),
@@ -125,10 +135,16 @@ func ParseConnLimiter(cfg *config.LimiterConfig) (lim conn.ConnLimiter) {
 			loader.TimeoutHTTPLoaderOption(cfg.HTTP.Timeout),
 		)))
 	}
+	// Same nil-default guard as ParseTrafficLimiter above (R9-B-01).
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
+
 	opts = append(opts,
 		xconn.LimitsOption(cfg.Limits...),
 		xconn.ReloadPeriodOption(cfg.Reload),
-		xconn.LoggerOption(logger.Default().WithFields(map[string]any{
+		xconn.LoggerOption(log.WithFields(map[string]any{
 			"kind":    "limiter",
 			"limiter": cfg.Name,
 		})),
@@ -173,10 +189,16 @@ func ParseRateLimiter(cfg *config.LimiterConfig) (lim rate.RateLimiter) {
 			loader.TimeoutHTTPLoaderOption(cfg.HTTP.Timeout),
 		)))
 	}
+	// Same nil-default guard as ParseTrafficLimiter above (R9-B-01).
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
+
 	opts = append(opts,
 		xrate.LimitsOption(cfg.Limits...),
 		xrate.ReloadPeriodOption(cfg.Reload),
-		xrate.LoggerOption(logger.Default().WithFields(map[string]any{
+		xrate.LoggerOption(log.WithFields(map[string]any{
 			"kind":    "limiter",
 			"limiter": cfg.Name,
 		})),

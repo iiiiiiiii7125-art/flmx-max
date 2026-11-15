@@ -11,6 +11,7 @@ import (
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/loader"
 	"github.com/go-gost/x/internal/plugin"
+	xlogger "github.com/go-gost/x/logger"
 	"github.com/go-gost/x/registry"
 )
 
@@ -52,10 +53,19 @@ func ParseAuther(cfg *config.AutherConfig) auth.Authenticator {
 		m[user.Username] = user.Password
 	}
 
+	// logger.Default() is nil until the host process registers one
+	// (gost's main does so at startup). A caller that never called
+	// SetDefault must not panic here (R9-B-01): fall back to a
+	// no-op logger.
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
+
 	opts := []xauth.Option{
 		xauth.AuthsOption(m),
 		xauth.ReloadPeriodOption(cfg.Reload),
-		xauth.LoggerOption(logger.Default().WithFields(map[string]any{
+		xauth.LoggerOption(log.WithFields(map[string]any{
 			"kind":   "auther",
 			"auther": cfg.Name,
 		})),
@@ -85,13 +95,18 @@ func ParseAutherFromAuth(au *config.AuthConfig) auth.Authenticator {
 	if au == nil || au.Username == "" {
 		return nil
 	}
+	// Same nil-default guard as ParseAuther above (R9-B-01).
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
 	return xauth.NewAuthenticator(
 		xauth.AuthsOption(
 			map[string]string{
 				au.Username: au.Password,
 			},
 		),
-		xauth.LoggerOption(logger.Default().WithFields(map[string]any{
+		xauth.LoggerOption(log.WithFields(map[string]any{
 			"kind": "auther",
 		})),
 	)

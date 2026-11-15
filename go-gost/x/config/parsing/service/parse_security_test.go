@@ -4,15 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-gost/core/logger"
 	"github.com/go-gost/x/config"
-	xlogger "github.com/go-gost/x/logger"
 )
 
-func init() {
-	// ParseService 需要默认 logger，否则 log.WithFields 空指针 panic
-	logger.SetDefault(xlogger.Nop())
-}
+// R9-B-01: the init() that used to SetDefault(Nop) here is gone on
+// purpose — ParseService now falls back to a no-op logger in product
+// code when no default is registered, so the tests must run on the
+// real nil-default path (see service_logger_test.go).
 
 // S-01/S-03: 面板纳管的 agent 必须拒绝 service shell hook（preUp/postUp/preDown/postDown）。
 // 这些键经 /bin/sh -c 以 root 执行，经面板命令或联邦 peer 下发即为远程 root RCE。

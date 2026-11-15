@@ -9,6 +9,7 @@ import (
 	"github.com/go-gost/core/resolver"
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/plugin"
+	xlogger "github.com/go-gost/x/logger"
 	"github.com/go-gost/x/registry"
 	xresolver "github.com/go-gost/x/resolver"
 	resolver_plugin "github.com/go-gost/x/resolver/plugin"
@@ -58,10 +59,19 @@ func ParseResolver(cfg *config.ResolverConfig) (resolver.Resolver, error) {
 		})
 	}
 
+	// logger.Default() is nil until the host process registers one
+	// (gost's main does so at startup). A caller that never called
+	// SetDefault must not panic here (R9-B-01): fall back to a
+	// no-op logger.
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
+
 	return xresolver.NewResolver(
 		nameservers,
 		xresolver.LoggerOption(
-			logger.Default().WithFields(map[string]any{
+			log.WithFields(map[string]any{
 				"kind":     "resolver",
 				"resolver": cfg.Name,
 			}),

@@ -11,6 +11,7 @@ import (
 	ingress_plugin "github.com/go-gost/x/ingress/plugin"
 	"github.com/go-gost/x/internal/loader"
 	"github.com/go-gost/x/internal/plugin"
+	xlogger "github.com/go-gost/x/logger"
 )
 
 func ParseIngress(cfg *config.IngressConfig) ingress.Ingress {
@@ -53,10 +54,19 @@ func ParseIngress(cfg *config.IngressConfig) ingress.Ingress {
 			Endpoint: rule.Endpoint,
 		})
 	}
+	// logger.Default() is nil until the host process registers one
+	// (gost's main does so at startup). A caller that never called
+	// SetDefault must not panic here (R9-B-01): fall back to a
+	// no-op logger.
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
+
 	opts := []xingress.Option{
 		xingress.RulesOption(rules),
 		xingress.ReloadPeriodOption(cfg.Reload),
-		xingress.LoggerOption(logger.Default().WithFields(map[string]any{
+		xingress.LoggerOption(log.WithFields(map[string]any{
 			"kind":    "ingress",
 			"ingress": cfg.Name,
 		})),

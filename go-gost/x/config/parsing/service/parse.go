@@ -32,6 +32,7 @@ import (
 	"github.com/go-gost/x/internal/connlog"
 	tls_util "github.com/go-gost/x/internal/util/tls"
 	cache_limiter "github.com/go-gost/x/limiter/traffic/cache"
+	xlogger "github.com/go-gost/x/logger"
 	"github.com/go-gost/x/metadata"
 	mdutil "github.com/go-gost/x/metadata/util"
 	xstats "github.com/go-gost/x/observer/stats"
@@ -66,6 +67,13 @@ func ParseService(cfg *config.ServiceConfig) (service.Service, error) {
 	}
 
 	log := logger.Default()
+	if log == nil {
+		// logger.Default() is nil until the host process registers
+		// one (gost's main does so at startup). A caller that never
+		// called SetDefault must not panic on the WithFields below
+		// (R9-B-01): fall back to a no-op logger.
+		log = xlogger.Nop()
+	}
 	if loggers := logger_parser.List(cfg.Logger, cfg.Loggers...); len(loggers) > 0 {
 		log = logger.LoggerGroup(loggers...)
 	}
