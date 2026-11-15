@@ -15,7 +15,7 @@ func TestNftScriptPerAgentMarkBase(t *testing.T) {
 	// Node 75 base, user 7: mark 0x474b0007 must appear in both the
 	// download (ct mark) and upload (meta mark) rules; the legacy
 	// mark must appear nowhere.
-	s := nftScript(nftTable, nil, nil, nil, []int64{7}, 0x474B0000)
+	s := nftScript(nftTable, nil, nil, nil, []int64{7}, 0x474B0000, nil)
 	if !strings.Contains(s, "ct mark 0x474b0007") {
 		t.Fatalf("download rule must use the per-agent mark:\n%s", s)
 	}
@@ -28,7 +28,7 @@ func TestNftScriptPerAgentMarkBase(t *testing.T) {
 
 	// Same user, node 76 base: a different mark — the two agents'
 	// tables no longer match the same packets.
-	s2 := nftScript(nftTable, nil, nil, nil, []int64{7}, 0x474C0000)
+	s2 := nftScript(nftTable, nil, nil, nil, []int64{7}, 0x474C0000, nil)
 	if !strings.Contains(s2, "0x474c0007") {
 		t.Fatalf("node 76 mark:\n%s", s2)
 	}
@@ -37,7 +37,7 @@ func TestNftScriptPerAgentMarkBase(t *testing.T) {
 	}
 
 	// Base 0 (old panel) keeps the legacy mark.
-	s0 := nftScript(nftTable, nil, nil, nil, []int64{7}, 0)
+	s0 := nftScript(nftTable, nil, nil, nil, []int64{7}, 0, nil)
 	if !strings.Contains(s0, "0x46560007") {
 		t.Fatalf("base 0 must keep the legacy mark:\n%s", s0)
 	}

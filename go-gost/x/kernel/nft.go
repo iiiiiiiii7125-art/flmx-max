@@ -159,6 +159,22 @@ func sortedUsers(ids []int64) []int64 {
 	return out
 }
 
+// tombstoneUserID maps a tombstoned auth_user name ("u<N>", see
+// User.Name in the panel) back to its user id, for the nft reject
+// rule (V-D). Names that do not match the shape are not blocked at
+// the nft layer — the sweeper still closes them by name — so a bad
+// shape must never break the render.
+func tombstoneUserID(name string) (int64, bool) {
+	if !strings.HasPrefix(name, "u") {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(name[1:], 10, 64)
+	if err != nil || id <= 0 || id > userMarkMax {
+		return 0, false
+	}
+	return id, true
+}
+
 // hopRule redirects a UDP port range to an inbound port (port hopping).
 type hopRule struct {
 	From, To, Port int
@@ -345,7 +361,14 @@ func nftBindMatch(bind, dir string) string {
 //
 // markBase is the socket-mark base user marks are minted with
 // (F2-DBL-01, per-agent); 0 reads as the legacy userMarkBase.
-func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64, markBase int64) string {
+// nftScript renders the whole table (delete + recreate) from the
+// desired state. blocked are tombstoned user ids (V-D): their marks
+// are rejected first in the output chain, so a new outbound dial
+// admitted by a still-running old config dies at the handshake
+// instead of draining through the sweeper's graceful close. blocked
+// is expected sorted and deduplicated (sync does that via
+// sortedUsers), like users.
+func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64, markBase int64, blocked []int64) string {
 	if markBase == 0 {
 		markBase = userMarkBase
 	}
@@ -361,7 +384,7 @@ func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, h
 		fmt.Fprintf(&b, "table inet %s {}\n", legacyNFTTable)
 		fmt.Fprintf(&b, "delete table inet %s\n", legacyNFTTable)
 	}
-	if len(rules) == 0 && len(users) == 0 {
+	if len(rules) == 0 && len(users) == 0 && len(blocked) == 0 {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "table inet %s {\n", table)
@@ -403,6 +426,18 @@ func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, h
 		fmt.Fprintf(&b, "\t\tct mark 0x%08x counter name %s\n", markBase|id, userCounterName("down", id))
 	}
 	b.WriteString("\t}\n\tchain output {\n\t\ttype filter hook output priority -150; policy accept;\n")
+	// V-D: a tombstoned user's new outbound dial dies here, at the
+	// handshake — the running config still admits them (a
+	// removal-only change skips the reload), so without this the
+	// sweeper's graceful close is the only enforcement and a fast
+	// transfer finishes before it. Bare `reject` is protocol-aware
+	// (TCP RST for TCP, ICMP for UDP); the rules sit first so
+	// blocked traffic is never counted and its conntrack mark is
+	// never set. An already-established connection of a tombstoned
+	// user dies here too, as a backstop to the Clash API close.
+	for _, id := range blocked {
+		fmt.Fprintf(&b, "\t\tmeta mark 0x%08x reject\n", markBase|id)
+	}
 	for _, r := range rules {
 		if m := nftBindMatch(r.Bind, "out"); m != "" {
 			fmt.Fprintf(&b, "\t\t%s %s sport %d counter name %s\n", m, r.Proto, r.Port, r.name("out"))
@@ -667,7 +702,7 @@ func (n *nftCounters) installStatus() (autoInstalled bool, installErr string) {
 // whitelist in play, a missing nft binary or a failed ruleset load
 // is a hard error so the caller can refuse to run the kernel
 // unguarded.
-func (n *nftCounters) sync(ports []Port, users []int64) error {
+func (n *nftCounters) sync(ports []Port, users []int64, blocked []int64) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := nftAvailable(); err != nil {
@@ -702,6 +737,7 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 	}
 	rules := expandPorts(ports)
 	users = sortedUsers(users)
+	blocked = sortedUsers(blocked)
 	hops := expandHops(ports)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -727,9 +763,9 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 		}
 	}
 
-	script := nftScript(n.tableName(), rules, expandGuards(ports), hops, users, n.markBase)
+	script := nftScript(n.tableName(), rules, expandGuards(ports), hops, users, n.markBase, blocked)
 	sig := hashString(script)
-	hasContent := len(rules) > 0 || len(users) > 0
+	hasContent := len(rules) > 0 || len(users) > 0 || len(blocked) > 0
 	if sig == n.state.Signature {
 		if !hasContent {
 			n.lastErr = ""

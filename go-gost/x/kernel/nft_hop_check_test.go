@@ -50,7 +50,7 @@ func TestSyncSkipsRejectedHopRule(t *testing.T) {
 	logs := captureLog(t)
 
 	n := newNftCounters(t.TempDir())
-	if err := n.sync(hopPorts(), nil); err != nil {
+	if err := n.sync(hopPorts(), nil, nil); err != nil {
 		t.Fatalf("sync must succeed when only one hop rule is rejected: %v", err)
 	}
 	if len(rec.scripts) != 1 {
@@ -79,7 +79,7 @@ func TestSyncAllHopRulesRejected(t *testing.T) {
 	captureLog(t)
 
 	n := newNftCounters(t.TempDir())
-	err := n.sync(hopPorts(), nil)
+	err := n.sync(hopPorts(), nil, nil)
 	if err == nil {
 		t.Fatal("sync must report an error when every hop rule is rejected")
 	}
@@ -107,7 +107,7 @@ func TestSyncAllHopRulesAccepted(t *testing.T) {
 	logs := captureLog(t)
 
 	n := newNftCounters(t.TempDir())
-	if err := n.sync(hopPorts(), nil); err != nil {
+	if err := n.sync(hopPorts(), nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(rec.scripts) != 1 {

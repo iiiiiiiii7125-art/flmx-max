@@ -66,7 +66,9 @@ type instance struct {
 	// change skips the SIGHUP reload (the reload drops every
 	// user's sessions), so the running config still admits these
 	// users and only the selective kill + sweeper enforces the
-	// removal. Re-adding a user clears its tombstone.
+	// removal — plus the nft reject rule for their marks (V-D),
+	// which is what makes the removal airtight for fast new
+	// connections. Re-adding a user clears its tombstone.
 	tombstones map[string]bool
 	// clashAddr is the companion's Clash API address
 	// (experimental.clash_api.external_controller) from the last
@@ -289,6 +291,30 @@ func (m *Manager) allUserMarks() []int64 {
 	return ids
 }
 
+// allBlockedUserMarks derives the nft desired state for tombstoned
+// users (V-D): a removed user's mark is rejected in the output
+// chain, so a new connection admitted by the still-running old
+// config dies at the handshake instead of draining through the 2s
+// sweeper's graceful close. Only enabled instances contribute; a
+// tombstone whose name does not parse to a user id is skipped here
+// (the sweeper still closes it by name).
+func (m *Manager) allBlockedUserMarks() []int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []int64
+	for _, inst := range m.instances {
+		if !inst.req.Enabled {
+			continue
+		}
+		for name := range inst.tombstones {
+			if id, ok := tombstoneUserID(name); ok {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
 // pinnedSHA256 returns the expected SHA-256 for the binary a
 // Download describes, when that expectation is available locally
 // without any network fetch: the pinned digest keyed by the mapped
@@ -413,7 +439,7 @@ func (m *Manager) stopGuardedInstances(cur *instance, syncErr error) bool {
 // content-verified, so a table flushed or rewritten out-of-band is
 // rebuilt here instead of the restart silently running unguarded.
 func (m *Manager) syncGuardBeforeRestart() error {
-	gate, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks()))
+	gate, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks()))
 	return gate
 }
 
@@ -595,39 +621,15 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		}
 	}
 
-	// The nft sync runs BEFORE any process starts: the ruleset carries
-	// the traffic counters and the inbound whitelists. Counting alone
-	// is best-effort, but a kernel guarded by the
-	// ruleset (reqNeedsNftGuard) must never listen while its rules are
-	// not installed, so a failed sync blocks its start outright.
-	syncErr, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks()))
-	if hopNote != "" {
-		// R2-F2-E02: the main ruleset is in place; only port hopping
-		// is ineffective. Name it as what it is — never as a guard
-		// sync failure — and let the kernel start.
-		inst.logs.add("[flmx] " + hopNote)
-	}
-	if syncErr != nil {
-		inst.logs.add("[flmx] 流量计数规则同步失败: " + syncErr.Error())
-	}
-	// E-01: the per-agent base is derived from the panel's node
-	// secret, so two panels' same-id nodes collide only when their
-	// secrets hash to the same first byte (1/256 per pair). Make
-	// that residual visible instead of silent: after a successful
-	// sync, scan the ruleset for our marks in other tables and log
-	// any hit (best-effort — a failed scan never blocks the apply).
-	if syncErr == nil {
-		for _, c := range m.nft.detectMarkCollision(m.allUserMarks()) {
-			msg := "[flmx] socket-mark 碰撞：" + c.String() + "——另一 agent/面板在用同一 mark，本节点与对方的订阅计数会互相串扰"
-			inst.logs.add(msg)
-			log.Printf("%s", msg)
-		}
-	}
-	startBlocked := syncErr != nil && reqNeedsNftGuard(req)
-
-	// C-(4): which users did this apply remove, and is the change
+	// C-(4)/V-D: which users did this apply remove, and is the change
 	// removal-only (only the user list changed)? The diff is on the
 	// on-disk configs (previous files vs the just-written new ones).
+	// This runs BEFORE the nft sync below — and after the config
+	// validation above, so a bad config never kills anything — so
+	// the tombstones it creates are already in the render: the nft
+	// reject rule for a tombstoned mark must land in the SAME table
+	// rebuild as the truncation, or a fast new connection completes
+	// before the next rebuild (V-D live proof 2026-11-16).
 	removedUsers, addedUsers, userOnlyChange := m.applyUserDiff(req.Type, prev, runDir)
 	// Cache the companion's Clash API address from the new config
 	// for the selective kill and the tombstone sweeper.
@@ -660,7 +662,10 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 			inst.logs.add(fmt.Sprintf("[flmx] 已连接级关闭用户 %v 的已有连接 %d 条，未重载配置（其他用户会话保留）", removedUsers, closed))
 			// Tombstone the removed users: the running config still
 			// admits them, so the sweeper keeps closing any they
-			// open again until a reload/restart refreshes it.
+			// open again until a reload/restart refreshes it — and
+			// the nft sync below rejects their new dials at the
+			// handshake (V-D), which is what makes the removal
+			// airtight for fast transfers.
 			m.mu.Lock()
 			if inst.tombstones == nil {
 				inst.tombstones = make(map[string]bool)
@@ -672,6 +677,55 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 			m.startSweeperOnce()
 		}
 	}
+	// V-D: a re-added user is live again — clear it from the
+	// tombstones BEFORE the sync, so the rebuild does not carry a
+	// reject rule for a user the new config admits. The reconcile
+	// after the switch repeats this; doing it here is what makes
+	// the render correct.
+	m.mu.Lock()
+	if len(inst.tombstones) > 0 {
+		if b, err := os.ReadFile(filepath.Join(runDir, "config.json")); err == nil {
+			if live, err := singboxUsers(b); err == nil {
+				for _, u := range live {
+					delete(inst.tombstones, u)
+				}
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	// The nft sync runs BEFORE any process starts: the ruleset carries
+	// the traffic counters and the inbound whitelists. Counting alone
+	// is best-effort, but a kernel guarded by the
+	// ruleset (reqNeedsNftGuard) must never listen while its rules are
+	// not installed, so a failed sync blocks its start outright.
+	// V-D: the sync renders the tombstones created above as reject
+	// rules, so the truncation and its data-plane enforcement land
+	// in one rebuild.
+	syncErr, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks()))
+	if hopNote != "" {
+		// R2-F2-E02: the main ruleset is in place; only port hopping
+		// is ineffective. Name it as what it is — never as a guard
+		// sync failure — and let the kernel start.
+		inst.logs.add("[flmx] " + hopNote)
+	}
+	if syncErr != nil {
+		inst.logs.add("[flmx] 流量计数规则同步失败: " + syncErr.Error())
+	}
+	// E-01: the per-agent base is derived from the panel's node
+	// secret, so two panels' same-id nodes collide only when their
+	// secrets hash to the same first byte (1/256 per pair). Make
+	// that residual visible instead of silent: after a successful
+	// sync, scan the ruleset for our marks in other tables and log
+	// any hit (best-effort — a failed scan never blocks the apply).
+	if syncErr == nil {
+		for _, c := range m.nft.detectMarkCollision(m.allUserMarks()) {
+			msg := "[flmx] socket-mark 碰撞：" + c.String() + "——另一 agent/面板在用同一 mark，本节点与对方的订阅计数会互相串扰"
+			inst.logs.add(msg)
+			log.Printf("%s", msg)
+		}
+	}
+	startBlocked := syncErr != nil && reqNeedsNftGuard(req)
 
 	stable := true
 	// reloadedClean is set when the config was applied by a SIGHUP
@@ -690,10 +744,10 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.stopProcesses(inst)
 		m.stopProcesses(inst)
 	case skipReload:
-		// Removal-only: the selective kill + sweeper already
-		// enforce it; the process keeps running the old config
-		// untouched, so the kept users' sessions are preserved.
-		// stable stays true.
+		// Removal-only: the selective kill + sweeper + nft reject
+		// already enforce it; the process keeps running the old
+		// config untouched, so the kept users' sessions are
+		// preserved. stable stays true.
 	case changed || !running:
 		// C-(4): try a SIGHUP reload before restarting — a
 		// restart drops every established session of every user
@@ -732,8 +786,9 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	// above, already logged). A reload/restart drops every
 	// session, so there is nothing selective to do then.
 	if skipReload {
-		// Already logged at kill time; the tombstone sweeper
-		// keeps enforcing it until a reload/restart.
+		// Already logged at kill time; the tombstone sweeper and
+		// the nft reject rule keep enforcing it until a
+		// reload/restart.
 	} else if reloadedClean && req.Enabled && stable && len(req.UserMarks) > 0 {
 		removed := diffUserMarks(prev.req.UserMarks, req.UserMarks)
 		if len(removed) > 0 {
@@ -1371,7 +1426,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		m.persist()
 		// A hop-only failure does not make the removal fail: the
 		// remaining ruleset synced fine (R2-F2-E02).
-		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks())); err != nil {
+		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks())); err != nil {
 			return State{Type: kernelType}, err
 		}
 		return State{Type: kernelType}, nil
@@ -1398,7 +1453,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		// the table is gone entirely — so the guard goes back in
 		// after stopping and before starting, and a failed sync
 		// leaves the kernel stopped instead of running unguarded.
-		if err, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks())); err != nil {
+		if err, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks())); err != nil {
 			ferr := nftGuardFailure(inst.req, err)
 			m.setErr(inst, ferr)
 			return m.state(kernelType, false), ferr
@@ -1431,7 +1486,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		// Keep the rules in lockstep with the lifecycle: stopping a
 		// kernel must leave none of its rules behind. A sync failure
 		// here is surfaced, not swallowed.
-		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks())); err != nil {
+		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks())); err != nil {
 			return m.state(kernelType, false), err
 		}
 	}
