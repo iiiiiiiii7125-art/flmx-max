@@ -103,6 +103,17 @@ type Handler struct {
 	// 盖全部 nodeCreate 入口。
 	nodeCreateMu sync.Mutex
 
+	// B-NEW（入站行计数器 epoch/基线时序丢增量）：同一节点内核计数
+	// 摄入的 per-node 串行化锁。ingestKernelCountersMode 的 Phase A
+	//（入站/realm/用户三面纯记账）全程持锁，Phase B（syncSubscriptions
+	// 与执法尾，可触发 KernelApply→换代→settle 重定基线）无锁；另
+	// 外两路摄入（轮询 poll 与下发后 settle）同走 ingest，故同一
+	// 节点的两次摄入不可能在记账中途被对方触发的重建换代截断。
+	// 记账面只做 repo DB 写，不取 kernel/nft 锁；副作用面从不持本
+	// 锁，故无锁序环。
+	nodeIngestMu    sync.Mutex
+	nodeIngestLocks map[int64]*sync.Mutex
+
 	jobsMu      sync.Mutex
 	jobsCtx     context.Context
 	jobsCancel  context.CancelFunc
@@ -345,6 +356,22 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 
 func (h *Handler) WebSocketHandler() http.Handler {
 	return h.wsServer
+}
+
+// nodeIngestLock 返回同一节点内核计数摄入的 per-node 串行化锁
+// （B-NEW）。惰性初始化，与 nftAutoPending 同范式。
+func (h *Handler) nodeIngestLock(nodeID int64) *sync.Mutex {
+	h.nodeIngestMu.Lock()
+	defer h.nodeIngestMu.Unlock()
+	if h.nodeIngestLocks == nil {
+		h.nodeIngestLocks = make(map[int64]*sync.Mutex)
+	}
+	mu, ok := h.nodeIngestLocks[nodeID]
+	if !ok {
+		mu = &sync.Mutex{}
+		h.nodeIngestLocks[nodeID] = mu
+	}
+	return mu
 }
 
 func (h *Handler) GetUserAuthState(userID int64) (*auth.UserAuthState, error) {
