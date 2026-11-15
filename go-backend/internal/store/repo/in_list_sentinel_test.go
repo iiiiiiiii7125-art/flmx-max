@@ -39,6 +39,7 @@ type inListSiteClass struct {
 var inListSiteRegistry = map[string]inListSiteClass{
 	// —— 分块（chunkInt64IDs）——
 	"repository_subscription.go:LastSubscriptionCounterUpdates":                {"chunkInt64IDs", "F4/D-06：订阅列表页当前页订阅 id 集，按 inListChunkSize 分块求 MAX(updated_time)"},
+	"repository.go:LatestNodeMetricTimes":                                       {"chunkInt64IDs", "F5/A-低-6：节点列表 stale 打标的节点集，按 inListChunkSize 分块求 MAX(timestamp)（集成补登：F5 引入时漏登记，repo 门红）"},
 	"repository.go:ListNodes":                                           {"chunkInt64IDs", "整表节点集，T2-NEW-01 已分块"},
 	"repository_upgrade_verify.go:ListVisibleNodeUpgradeVerifications":  {"chunkInt64IDs", "整表节点集（升级核验可见行），A4-V-06 已分块"},
 	"repository.go:ListForwards":                                        {"chunkInt64IDs", "整表转发集，已分块"},
