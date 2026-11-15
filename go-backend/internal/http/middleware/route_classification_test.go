@@ -185,6 +185,7 @@ var routeClassification = []routeEntry{
 	adm("/api/v1/node/rollback"), adm("/api/v1/node/route"),
 	adm("/api/v1/node/route/probe"), adm("/api/v1/node/swap-info"),
 	adm("/api/v1/node/swap-set"), adm("/api/v1/node/traffic/month"),
+	adm("/api/v1/node/traffic/dropped"),
 	adm("/api/v1/node/tune"), adm("/api/v1/node/update"),
 	adm("/api/v1/node/update-order"), adm("/api/v1/node/upgrade"),
 	adm("/api/v1/notify/test"),

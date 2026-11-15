@@ -42,6 +42,12 @@ type flowUploadV2Envelope struct {
 	Stream   string     `json:"stream"`
 	Sequence int64      `json:"sequence"`
 	Items    []flowItem `json:"items"`
+	// DroppedBytes 是 agent 侧死信隔离的未确认字节累计中尚未被面
+	// 板确认收到过的部分（流量审计 A-中-1）：agent 随本批上行，
+	// 面板在批次 Applied 时作增量入账（traffic_node_dropped），
+	// 重放/落后批次不重复入账。旧 agent 不发本字段，按 0 处理，
+	// 不得拒收旧版上报。
+	DroppedBytes int64 `json:"dropped_bytes"`
 }
 
 func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +99,14 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"stream": envelope.Stream, "sequence": envelope.Sequence, "error": reason,
 		})
+	}
+	// A-中-1：死信字节为负只可能来自损坏/伪造的发送方——整批拒
+	// 收回 invalid_batch（agent 按既有口径二分定位/隔离留证，
+	// 死信累计仍在 spool 里随下批上行，不丢数）。
+	if envelope.DroppedBytes < 0 {
+		log.Printf("flow upload v2 negative dropped_bytes node_id=%d dropped_bytes=%d", node.ID, envelope.DroppedBytes)
+		reject(http.StatusBadRequest, "invalid_batch")
+		return
 	}
 	// L3-01（SWEEP-CPU）：单批 Items 数上限（与 v1 / connlog
 	// 的 1000 对齐）。超限回 invalid_batch——不查 metas、不入
@@ -182,6 +196,21 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 	case ack.Replay:
 		log.Printf("flow upload v2 ack not booked node_id=%d stream=%s sequence=%d cursor=%d items=%d bytes=%d class=replay_exact content_match=digest",
 			node.ID, envelope.Stream, envelope.Sequence, ack.Cursor, len(envelope.Items), batchBytes)
+	}
+	// A-中-1：死信入账（与 connlog 的 dropped_report 同口径）。
+	// 随批报上行的是「尚未被面板确认」的死信快照——同一数值会
+	// 随后续批次反复出现，直到某批被真正应用、agent 才把它从待
+	// 确认计数里扣掉。故面板只在 ack.Applied 时把本批数值作增量
+	// 入账（traffic_node_dropped 按节点累计），重放/落后批次不
+	// 重复入账；入账失败只记日志：批报本身已提交，不能因簿记失
+	// 败判整批失败。日志行是死信量的 grep 可查落点。
+	if envelope.DroppedBytes > 0 {
+		log.Printf("flow upload v2 dropped_bytes_report node_id=%d dropped_bytes=%d applied=%v", node.ID, envelope.DroppedBytes, ack.Applied)
+		if ack.Applied {
+			if err := h.repo.AddTrafficNodeDropped(node.ID, envelope.DroppedBytes, now.UnixMilli()); err != nil {
+				log.Printf("flow upload v2 dropped_bytes persist failed node_id=%d err=%v", node.ID, err)
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {

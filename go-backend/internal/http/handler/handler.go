@@ -535,6 +535,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/open_api/sub_store", h.openAPISubStore)
 
 	mux.HandleFunc("/api/v1/node/traffic/month", h.nodeTrafficMonth)
+	mux.HandleFunc("/api/v1/node/traffic/dropped", h.nodeTrafficDropped)
 	mux.HandleFunc("/api/v1/monitor/access", h.monitorAccessHandler)
 	mux.HandleFunc("/api/v1/monitor/nodes/", h.monitorNodeMetricsHandler)
 	mux.HandleFunc("/api/v1/monitor/nodes", h.monitorNodeListHandler)
