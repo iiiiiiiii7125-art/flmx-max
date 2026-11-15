@@ -232,3 +232,50 @@
 ### 回归测试
 - repo + handler 层：重置后 PausedForwardIDs 保留、逐项恢复后逐项清除、V4 否决记日志且回执
   含失败、通知仅在全恢复时发、backstop 覆盖未超限待恢复用户。
+
+## 跟进修（2026-11-15，完工前追加）
+
+### F4 移交：离线节点释放谎报 Active（C-05 释放路径机制，45ed3c3b 未覆盖）
+- 核查结论：**未覆盖**。C-05 的 V6 只看到 `controlForwardServices` 的返回值，而
+  非删除分支（control_plane.go:839 循环）对离线/超时错全部命令一律 `continue` 吞掉、
+  返回 nil——V6 根本看不到离线错，随即 `ActivateForwardIfNotPending` 把行标 Active，
+  Resumed 清单又把它从 PausedForwardIDs 摘除，无重试载体。F4 真机实证：节点 14 全程
+  离线，reset 后转发 29 由 0→1，agent 从未收到 resume。离线错文本：ws/server.go:993
+  `errors.New("节点不在线")`，`shouldDeferTunnelRuntimeApplyError`（mutations.go:8589）
+  命中该串 → `isNodeOfflineOrTimeoutError` 为真，吞没成立。
+- 同机制全集（ResumeService 调用方，均在控制函数返回值上推进 DB 状态）：user_quota.go:306
+  释放、mutations.go:6477 手动恢复、mutations.go:6837 批量恢复（serviceCmd）。PauseService
+  四处调用方（flow_policy.go:307、user_quota.go:176、mutations.go:6356、
+  control_plane.go:600 syncForwardServicesWithWarnings 尾部保暂停）**不是**同向受害者：
+  暂停＋离线 → nil → 标 status=0 即期望态（数据面已停、暂停行不重推）。
+- nft 分支已 fail-closed：`reconcileNodeWithTimeout` 离线返回 false → Failed
+  （reconcile_timeout），无此缺口。
+- 根治（745eee19）：吞没只许 PauseService（`isPauseServiceCommand` 划界，本循环除删除
+  分支外只到 Pause/Resume，故即全集）；ResumeService 离线/超时明错返回；V6 离线单列
+  reason `node_offline`。重试收敛性：agent `resumeServices` 未暂停即跳过（幂等），
+  backstop 每分钟重跑同一释放函数；重连重推（redeployLocalNodeRuntime，ListForwardIDsByNode
+  无状态过滤）是第二重收敛、不是替代——行标 Active 期间 DB 仍说谎、回执仍错、清单已摘，
+  故根治不可省。同族先例：删除分支 S-04 收集 offlineNodes 返 `nodeOfflineError`；
+  syncForwardServicesWithWarnings 离线写警告标记、重连重推视跳过为失败重试（Lane A）。
+- 回归测试（quota_release_offline_f4_test.go）：离线节点 ResumeService 明错“不在线”且
+  agent 零命令、PauseService 仍吞；释放路径 Failed[node_offline]、行保持 status=0、
+  PausedForwardIDs 保留、ListPendingQuotaReleases 仍列该用户、agent 零 ResumeService。
+
+### C-03 跟进：订阅凭据推送够不到伴生内核（C-03 分离引入的回归）
+- 真机实证：q-sub1 禁用后伴生配置仍列两用户（u1/u2）、文件 mtime 不变、agent 日志无
+  `singbox-companion` KernelApply；主内核已重推（同 hash）。根因：`subInboundIDs`
+  只滤原入站（CompanionOf==0），`syncSubscriptions` 经 `applyKernelsForInbounds`
+  只推原入站内核；分离前伴生同住主内核、免费重渲染，分离后够不到。
+- 同机制全集：`applyKernelsForInbounds` 调用方共五处——syncSubscriptions:579（禁用/启用/
+  超限状态同步）、subscriptionSave:1351、respondAfterSubPush:1366、
+  completePendingSubscriptionDelete:1427、rotateSubscriptionCredentials:1498——五路
+  皆只传原入站 ID，皆须伴生内核。
+- 根治：在 `applyKernelsForInbounds` 内把每个原入站扩展到其伴生内核（一次
+  `ListCompanionInbounds` 建表；伴生行同样过 external/seen 去重；分离前伴生与原入站
+  同 KernelID、去重后仍单次下发）。伴生列表读失败 fail-closed（markRepoError），与
+  R3-MR-01“下发集不可知不得空转成功”同口径。`reconcileSSMetering` 不覆盖本缺口：
+  其 dirty-check 只比行内存字段、不含渲染期 users，订阅禁用时 clean 不推（测试钉死）。
+- 回归测试（subscription_companion_push_c03_test.go）：推原入站下发主＋伴生两 KernelApply；
+  分离前去重为一次；禁用双订阅之一后 syncSubscriptions 推伴生内核、新渲染含幸存订阅
+  的派生 uPSK（SSUserPSK）、不含已禁用订阅的 uPSK、AppliedActive 归 0。注意：渲染的
+  SS2022 用户口令是派生 uPSK，不是订阅口令原文，断言须算 SSUserPSK。

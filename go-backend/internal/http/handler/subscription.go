@@ -476,13 +476,31 @@ func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User
 // several pushes fail, a real failure takes precedence over a
 // still-confirming one (F2-APPLY-01 同族)：pending 绝不能遮住真
 // 失败，真失败也绝不能把 pending 写成「下发失败」。
+// C-03 split follow-up: companion inbounds carry the rendered users
+// (activeUsersByInbound remaps origin users onto the companion), so a
+// credential push that only applies origin kernels leaves the companion
+// serving stale credentials after disable/delete/rotate — the exact
+// regression the split introduced (pre-split the companion lived on
+// the origin's kernel and was re-rendered for free). Every origin is
+// therefore expanded to its companion's kernel here, once for all
+// callers (sync loop, save, delete, rotate); a pre-split companion
+// shares the origin's KernelID and dedupes via `seen`.
 func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 	seen := map[int64]bool{}
 	var firstErr, firstPending error
-	for _, id := range ids {
-		row, err := h.repo.GetNodeInbound(id)
-		if err != nil || row == nil || isExternalInbound(row) || seen[row.KernelID] {
-			continue
+	compByOrigin := map[int64]*model.NodeInbound{}
+	if comps, err := h.repo.ListCompanionInbounds(); err != nil {
+		return markRepoError(err)
+	} else {
+		for i := range comps {
+			if _, ok := compByOrigin[comps[i].CompanionOf]; !ok {
+				compByOrigin[comps[i].CompanionOf] = &comps[i]
+			}
+		}
+	}
+	applyOne := func(row *model.NodeInbound) {
+		if row == nil || isExternalInbound(row) || seen[row.KernelID] {
+			return
 		}
 		seen[row.KernelID] = true
 		if err := h.applyKernel(row.KernelID, false); err != nil {
@@ -490,12 +508,20 @@ func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 				if firstPending == nil {
 					firstPending = err
 				}
-				continue
+				return
 			}
 			if firstErr == nil {
 				firstErr = err
 			}
 		}
+	}
+	for _, id := range ids {
+		row, err := h.repo.GetNodeInbound(id)
+		if err != nil || row == nil {
+			continue
+		}
+		applyOne(row)
+		applyOne(compByOrigin[row.ID])
 	}
 	if firstErr != nil {
 		return firstErr
