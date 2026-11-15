@@ -12,6 +12,7 @@ import (
 	hosts_plugin "github.com/go-gost/x/hosts/plugin"
 	"github.com/go-gost/x/internal/loader"
 	"github.com/go-gost/x/internal/plugin"
+	xlogger "github.com/go-gost/x/logger"
 )
 
 func ParseHostMapper(cfg *config.HostsConfig) hosts.HostMapper {
@@ -58,10 +59,19 @@ func ParseHostMapper(cfg *config.HostsConfig) hosts.HostMapper {
 			IP:       ip,
 		})
 	}
+	// logger.Default() is nil until the host process registers one
+	// (gost's main does so at startup). A caller that never called
+	// SetDefault must not panic here (R9-B-01): fall back to a
+	// no-op logger.
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
+
 	opts := []xhosts.Option{
 		xhosts.MappingsOption(mappings),
 		xhosts.ReloadPeriodOption(cfg.Reload),
-		xhosts.LoggerOption(logger.Default().WithFields(map[string]any{
+		xhosts.LoggerOption(log.WithFields(map[string]any{
 			"kind":  "hosts",
 			"hosts": cfg.Name,
 		})),

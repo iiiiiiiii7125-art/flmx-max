@@ -10,6 +10,7 @@ import (
 	"github.com/go-gost/x/config"
 	"github.com/go-gost/x/internal/loader"
 	"github.com/go-gost/x/internal/plugin"
+	xlogger "github.com/go-gost/x/logger"
 	xrouter "github.com/go-gost/x/router"
 	router_plugin "github.com/go-gost/x/router/plugin"
 )
@@ -68,10 +69,19 @@ func ParseRouter(cfg *config.RouterConfig) router.Router {
 			Gateway: route.Gateway,
 		})
 	}
+	// logger.Default() is nil until the host process registers one
+	// (gost's main does so at startup). A caller that never called
+	// SetDefault must not panic here (R9-B-01): fall back to a
+	// no-op logger.
+	log := logger.Default()
+	if log == nil {
+		log = xlogger.Nop()
+	}
+
 	opts := []xrouter.Option{
 		xrouter.RoutesOption(routes),
 		xrouter.ReloadPeriodOption(cfg.Reload),
-		xrouter.LoggerOption(logger.Default().WithFields(map[string]any{
+		xrouter.LoggerOption(log.WithFields(map[string]any{
 			"kind":   "router",
 			"router": cfg.Name,
 		})),

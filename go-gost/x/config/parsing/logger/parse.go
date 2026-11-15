@@ -44,7 +44,11 @@ func ParseLogger(cfg *config.LoggerConfig) logger.Logger {
 			os.MkdirAll(filepath.Dir(cfg.Log.Output), 0755)
 			f, err := os.OpenFile(cfg.Log.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 			if err != nil {
-				logger.Default().Warn(err)
+				// Same nil-default guard as R9-B-01: only warn when
+				// a default logger is registered.
+				if log := logger.Default(); log != nil {
+					log.Warn(err)
+				}
 			} else {
 				out = f
 			}
