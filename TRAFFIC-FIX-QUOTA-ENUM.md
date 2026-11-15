@@ -60,6 +60,61 @@
 - 真机：测试机上慢速滴灌见证走**另一订阅/入站**，触发一订阅截断（伴生用户移除），见证不断流；
   伴生端口新连接应被拒/旧伴生会话按截断语义处理。
 
+### 实施注记（复核结论，2026-11-15；只读核查，非推测）
+- agent 实例按 req.Type 分键（manager.go `m.instances[req.Type]`、runDir/binDir 均按 type）——
+  伴生 Apply 天然不碰主实例。`adapters` 项是必需的：`ApplyRequest.validate()`（types.go:229）
+  拒一切不在 adapters 内的 Type；manager.go:548 版本探测读 `adapters[req.Type].versionArgs`。
+  伴生实例用自己 type 的 binDir（`ensureBinary` 会把同款 sing-box 再下载一份；无 binDir 共享特判，
+  实例间完全独立）。
+- 面板 catalog：**不**进 `Catalog()`（否则安装 UI 会列出伴生内核）。改为 `Lookup` 特判：
+  归一化后 `singboxcompanion` 返回 singbox Info 的克隆（Type 覆写为 `singbox-companion`，
+  Relay=false——故不走 `buildRealmApplyPayload`；Download 复用 singbox）。`CanonicalKernelType`
+  经 Lookup 亦得伴生类型。`Info.Relay` 不复用（见原注记）。
+- `EffectiveType(kernelType)`（伴生→singbox）：渲染侧一切 `!= TypeSingbox` / `!= TypeXray`
+  比较都须用它，否则伴生类型被误判——实锤地雷：`NormalizeOutboundIPStrategy`（egress.go:30）
+  对非 auto 策略 + 非 Xray/singbox 类型直接报错，而伴生行会从源入站镜像 OutboundIPStrategy，
+  且 `RenderWith` 逐入站调 `ValidateOutboundIPExtra`；另 model.go:351 ACME、:378 idle、:392
+  proxy-protocol、:400 encryption、`kernelVersionGate` AnyTLS 分支、`validateOutboundIPVersion`
+  1.12 门。今日伴生皆 SS-only、无上述字段，行为上全是 no-op，但归一化把不变量写死。
+  `ComboSupported` 经 Lookup 特判已通，无需另改。`RenderWith` 仍加显式
+  `case TypeSingbox, TypeSingboxCompanion:`（唯一生产调用方是 buildKernelApplyPayloadWith:2769，
+  会传 effective type；显式 case 供直接调用与测试）。
+- `buildKernelApplyPayloadWith`：payload 的 `"type"` 字段保持 `k.KernelType` 原文（agent 实例键）；
+  `originEnabled` 改为 `ListNodeInboundsByNode(k.NodeID)` 全节点建表（伴生 kernel 的 rows 里
+  无源入站，同 kernel 建表必空——即原注记的 bug）；`RenderWith`/三处复检传 effective type。
+- `kernelViews`（kernel.go:340）：过滤伴生行，不进 UI 内核列表（counts 已跳过 CompanionOf>0 入站）。
+- 迁移（版本门控、旧 agent 回退）：`ensureCompanionKernel(nodeID)` 挂在 `reconcileNodeKernels`
+  循环之前——节点有已启用伴生、agent ≥ 伴生门版本（暂定 2.1.14，发版号定下后复核常量；
+  常量形态沿用 `agentSupportsNftIsolation` / `agentSupportsPortProbe`）且无伴生 NodeKernel 行时，
+  建行（Version 取主 sing-box 行）并把全部伴生行 KernelID 移过去；随后循环按
+  `ListNodeKernels` 的 `node_id ASC, id ASC` 顺序先主后伴生 Apply（端口交接顺序；迁移本身
+  造成一次主重启——端口须在进程间搬家，一次性、可接受，此后主变更永不碰伴生）。旧 agent 不建行、
+  伴生留在主配置（行为不变，非回归）；升级后下次 reconcile 执行分离。
+  `createCompanion`（subscription_metering.go:206）按“分裂是否已激活”（伴生行存在）选 KernelID；
+  `reconcileSSMetering` 新建分支须标记**新建伴生行**的 KernelID（重读 `GetCompanionInbound`），
+  而非源入站的（同步/删除分支已标伴生自身 KernelID，分区安全）。`syncCompanion` 的 dirty-check
+  不含 KernelID——迁移须显式搬，不依赖 sync。
+  主 sing-box 内核删除时连带删伴生 NodeKernel 行——已实现：`removeCompanionKernel`
+  （kernel.go，remove 流程 `DeleteNodeKernel` 成功后调用；仅主 sing-box 类型触发；
+  先向 agent 下发伴生类型 remove、再删伴生行——删行级联其伴生入站；下发失败时按主流程
+  同口径登记孤儿重查标记）。
+- `checkKernelVersionGates` 内 naive 扫描的 `kernelType == kernel.TypeSingbox` 比较亦传
+  effective type（伴生无出站目标，今日 no-op）。
+- 分区安全已核：`reconcileSSMetering` 的 meteringActive 经 `kernelByID` + `kernelConfigApplied`
+  （后者调 `buildKernelApplyPayload(k)`，随 (3) 修复而通）；`connlogChainTargetInboundIDs`
+  全节点查（ListNodeInbounds）；`pollNodeKernels` 已核对齐：agent 的 `Manager.Status`
+  （manager.go:1083）按 `m.instances` 键上报类型——伴生实例上报 `singbox-companion`，
+  与 DB 行 `KernelType` 同值，故 `known` 集含伴生、hash 追踪与 drift 补推均通；DB 行已删而
+  agent 仍在跑伴生实例时，孤儿逻辑会下发 remove 收敛。
+- **实施中抓获：`SaveNodeInbound` 白名单漏 `kernel_id`（BUG-A2-1 同族再现）**——该方法用
+  显式列白名单（repository_kernel.go:340），`kernel_id` 不在其中；迁移的 KernelID 赋值被
+  静默丢弃，两路测试当场抓获（`TestC03CompanionPayloadPartition`：主配置仍含伴生端口；
+  `TestC03EnsureCompanionKernelSplitsOnNewAgent`：伴生仍在主内核 1 上）。修法：白名单加
+  `"kernel_id": in.KernelID`（同 inx/outbound_ip_strategy/conn_idle_seconds 前例；
+  其余调用方先读行再写回，写回即存量值，不变）。
+- gofmt 注：`kernel.go:2796` 的 `UserMarkBase` 对齐差一空格是**基线已存**（HEAD 即然），
+  非本次改动，不顺手改。
+
 ## C-04（中）配额暂停可连续失败，失败期转发继续跑
 
 ### 失败全集（实测根因，C lane 会话 2026-11-15 12:49:58/12:50:03 UTC，彩排面板）
@@ -112,6 +167,34 @@
 ### 回归测试
 - 面板 control-command 单测 + agent pause 单测：NotFound 暂停不重建、端口冲突明错、
   已静默即成功、暂停后端口死且无僵尸 tcpkill、IPv6 连接亦断。
+
+### 实施注记（2026-11-15；提交 601c5733）
+- `ForceClosePortConnections` 重写：同步、有真实错误；首选 `ss -K state established
+  '( sport = :PORT )'`（IPv4+IPv6，`Run()` 回收）；回退 `tcpkill -i any port N`（仅 IPv4）
+  2 秒窗口后 Kill + **Wait() 回收**（杀 low-9 僵尸）。两者皆败 → 报错并点名两者。
+  **真机实证**：测试机上 spaced 形式杀已建立连接，客户端得 ECONNRESET（104）；沙箱
+  netns 受限，`ss -K` 只能列不能杀（RTNETLINK Invalid argument）——沙箱杀连接不可验，
+  以假 ss 测试调度逻辑、真机验真杀。
+- `pauseServices` 阶段 2：kill 目标取 live `Addr()`（`pauseKillAddr`：live 端口优先，
+  覆盖配置 `:0` 临时端口；无可用端口则跳过）；Close 前取值；仅当 `/proc/net` 扫描到该端口有
+  ESTABLISHED 连接时才调 killer（`pauseKillNeeded`；扫描失败按有连接处理、严格尝试），
+  无连接时跳过——R19 的 `:0` 服务即此形，killer 缺失也不得拖垮本可成功的暂停。
+  kill 失败即返回错误（不回滚：重注册撞 ErrDup；Close/kill 跨重试幂等）。
+  全量 socket 包曾打坏两路 R19 测试（`TestR19F02PauseServicesNil` /
+  `TestR19F02ResumeServicesNil`，配置 `:0` 触发旧版 port 0 报错）——上述两改修好。
+- `updateServices` 创建失败带 `port_conflict:` 标记（保留底层 bind 原文）。
+- `CheckPortListening` 回包加 `Established []int`（恒 present；`parseProcNetEstablished` /
+  `scanProcNetEstablished` 只认 TCP st=01）。
+- 面板：`shouldSelfHealForwardServiceControl` 只留 ResumeService；NotFound 暂停分支——
+  agent ≥2.1.13（`agentSupportsPortProbe`，CheckPortListening 随 2.1.13 出，cac080bd）
+  时 `verifyForwardPortsDeadOnNode` 验端口（静默即成功不重建；仍监听/有已建立连接即明错；
+  探针本身失败则 fail-closed）；旧 agent 走 legacy 自愈重建（过渡态）。暂停成功后
+  `verifyPausedPortsDead`（~3s 轮询）验端口已死，失败即明错，探针失败则 fail-open（仅记日志）。
+  三档降级：2.1.14+ agent 监听+已建立双验；2.1.13 仅监听（无 established 字段时跳过）；
+  2.1.13 前 legacy 自愈。`portProbeAgentMinVersion = "2.1.13"` 与
+  `nftIsolatedAgentMinVersion` 同值是巧合，各自由引入提交背书，不合并。
+- 配额路径本身（第 5 项）经读码确认无需改动：`applyUserQuotaBlock` 已增量执法（失败转发不进
+  pausedSet、DisabledByQuota 保留，下次对账重触发）。
 
 ## C-05＝D-01（中）重置用户配额转发不恢复还报“已恢复”
 

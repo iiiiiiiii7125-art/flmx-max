@@ -355,6 +355,10 @@ func (h *Handler) kernelViews(nodeID int64) ([]kernelView, error) {
 	nodes := make(map[int64]*model.Node)
 	views := make([]kernelView, 0, len(kernels))
 	for _, k := range kernels {
+		// C-03: the companion kernel is managed, never user-facing.
+		if kernel.CanonicalKernelType(k.KernelType) == kernel.TypeSingboxCompanion {
+			continue
+		}
 		node, ok := nodes[k.NodeID]
 		if !ok {
 			node, _ = h.repo.GetNodeByID(k.NodeID)
@@ -913,6 +917,13 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			respondInternalError(w, "kernelControl", err)
 			return
 		}
+		// C-03: deleting the main sing-box kernel orphans the companion
+		// instance (its origins are gone with the cascade, so it would
+		// render an empty config forever). Remove the companion kernel
+		// with it: agent-side remove + row delete (which cascades the
+		// companion inbounds). Best-effort — a failed agent remove is
+		// covered by the orphan-recheck mark below.
+		h.removeCompanionKernel(k)
 		// FIX-CASCADE（E1-09 子形态 b）：走到这里且 dispatchErr 非
 		// 空，只可能是 Force 强删（下发未确认、agent 侧内核可能
 		// 仍在运行）。登记孤儿重查标记：周期轮询把该节点并入轮询
@@ -2623,12 +2634,23 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	// origin is disabled (or gone), the companion must not keep serving
 	// previously distributed metering links. This render-time gate is
 	// the hard invariant; reconcile's Enabled mirroring is bookkeeping.
-	originEnabled := make(map[int64]bool, len(rows))
-	for _, row := range rows {
+	// C-03: the gate is node-wide, not per-kernel — after the split the
+	// companion kernel's rows are companions only, so a same-kernel map
+	// would be empty and every companion would be skipped.
+	originEnabled := make(map[int64]bool)
+	nodeRows, err := h.repo.ListNodeInboundsByNode(k.NodeID)
+	if err != nil {
+		return nil, "", fmt.Errorf("查询节点入站失败: %w", err)
+	}
+	for _, row := range nodeRows {
 		if row.CompanionOf == 0 {
 			originEnabled[row.ID] = row.Enabled == 1
 		}
 	}
+	// C-03: render-side type comparisons use the companion's render
+	// family (sing-box); the payload's "type" field below keeps the raw
+	// kernel type — that is the agent's instance key.
+	renderType := kernel.EffectiveType(k.KernelType)
 	// X04-001：白名单入站的链式拨号集共用一份全表快照，首个白名单
 	// 入站时懒加载——旧实现逐入站经 chainDialerNodeIDs 重载全表。
 	var chainIx *chainRefIndex
@@ -2644,16 +2666,16 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			return nil, "", err
 		}
 		// 下发前复检：组合必须在内核 catalog 内，历史脏数据不得被渲染层静默降级。
-		if !kernel.ComboSupported(k.KernelType, in.Protocol, in.Transport.Type, in.Security.Type) {
+		if !kernel.ComboSupported(renderType, in.Protocol, in.Transport.Type, in.Security.Type) {
 			return nil, "", fmt.Errorf("入站「%s」的协议组合（%s / %s / %s）与内核 %s 不匹配，已拒绝下发，请修正或删除该入站", row.Name, in.Protocol, in.Transport.Type, in.Security.Type, k.KernelType)
 		}
 		// 下发前复检（Settings 级条件字段）：ENC×内核、空闲超时×内核、
 		// Vision×组合不在三元组与版本门内，存量毒行不得经渲染面静默
 		// 降级或带病下发（R4-C2C-02）；谓词与创建面 Normalize 同源。
-		if err := kernel.CheckSettingsConditions(k.KernelType, &in); err != nil {
+		if err := kernel.CheckSettingsConditions(renderType, &in); err != nil {
 			return nil, "", fmt.Errorf("入站「%s」的设置与内核 %s 不匹配：%v，已拒绝下发，请修正或删除该入站", row.Name, k.KernelType, err)
 		}
-		if msg := kernelVersionGate(k.KernelType, k.Version, &in); msg != "" {
+		if msg := kernelVersionGate(renderType, k.Version, &in); msg != "" {
 			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
 		if in.UserCapable() {
@@ -2667,22 +2689,22 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		}
 		// R2X-007 下发面：存量脏组合（保存期未拦）在下发期同判——任一
 		// Via/分流目标带 ENC 且拨号内核 Xray <25.9.5，整单拒绝。
-		if msg := encDialGate(k.KernelType, k.Version, in.Via); msg != "" {
+		if msg := encDialGate(renderType, k.Version, in.Via); msg != "" {
 			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
 		for _, rule := range in.Split {
-			if msg := encDialGate(k.KernelType, k.Version, rule.Via); msg != "" {
+			if msg := encDialGate(renderType, k.Version, rule.Via); msg != "" {
 				return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 			}
 		}
 		// R9X-005 下发面：存量脏组合（保存期未拦）在下发期同判——任一
 		// Via/分流目标为 Naive 且拨号内核 sing-box <1.13，整单点名拒绝
 		//（与保存期 CheckChainWith 同点口径，仿 encDialGate 形态）。
-		if msg := naiveDialGate(k.KernelType, k.Version, in.Via); msg != "" {
+		if msg := naiveDialGate(renderType, k.Version, in.Via); msg != "" {
 			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
 		for _, rule := range in.Split {
-			if msg := naiveDialGate(k.KernelType, k.Version, rule.Via); msg != "" {
+			if msg := naiveDialGate(renderType, k.Version, rule.Via); msg != "" {
 				return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 			}
 		}
@@ -2766,7 +2788,7 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	} else if err != nil {
 		log.Printf("user mark base node lookup failed node_id=%d err=%v action=legacy_base", k.NodeID, err)
 	}
-	rendered, err := kernel.RenderWith(k.KernelType, inbounds, kernel.RenderOptions{
+	rendered, err := kernel.RenderWith(renderType, inbounds, kernel.RenderOptions{
 		RuleSetMirror:     proxy,
 		SingboxHTTPClient: !versionBelowStrict(k.Version, 1, 14),
 		SingboxSnell:      !versionBelowStrict(k.Version, 1, 14),
@@ -3263,13 +3285,13 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		if err != nil {
 			continue
 		}
-		if msg := kernelVersionGate(kernelType, version, &in); msg != "" {
+		if msg := kernelVersionGate(kernel.EffectiveType(kernelType), version, &in); msg != "" {
 			return &kernelVersionGateError{msg: fmt.Sprintf("入站 %s 与目标版本不兼容：%s，不能安装 %s", row.Name, msg, version)}
 		}
 		// R9X-005：经 Naive 节点出站（链式/分流目标）的入站同样要求
 		// sing-box 1.13+；目标入站不在本内核上，gate 看不到，须单独
 		// 扫描。
-		if kernelType == kernel.TypeSingbox && versionBelowStrict(version, 1, 13) {
+		if kernel.EffectiveType(kernelType) == kernel.TypeSingbox && versionBelowStrict(version, 1, 13) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowIsNaive(t) {
 					return &kernelVersionGateError{msg: fmt.Sprintf("入站 %s 经 Naive 节点 %s 出站，需要 sing-box 1.13 及以上，不能安装 %s", row.Name, t.Name, version)}
@@ -3310,6 +3332,153 @@ const nftIsolatedAgentMinVersion = "2.1.13"
 // 与 nftIsolatedAgentMinVersion 同值是巧合——两者同随 2.1.13 出，
 // 各自由自己的引入提交背书，不得合并为一个常量。
 const portProbeAgentMinVersion = "2.1.13"
+
+// companionAgentMinVersion 是伴生实例分离（C-03）的首个 agent 版本：
+// 伴生 Apply 的 Type "singbox-companion" 须 agent 的 adapters 认得，
+// 旧 agent 会报“不支持的内核类型”。暂定 2.1.14——下个发版号定下后
+// 复核此常量（与 nftIsolatedAgentMinVersion / portProbeAgentMinVersion
+// 同形态，各自由自己的引入版本背书）。
+const companionAgentMinVersion = "2.1.14"
+
+// agentSupportsCompanionSplit 判定 agent 版本是否含伴生实例分离
+// （纯函数，供单测）：可解析且 >= 2.1.14 为支持；空串与不可解析形态
+// 一律按不支持处理（fail-closed——旧 agent 上伴生留在主配置内，
+// 行为不变；分裂只发生在新 agent 节点上）。
+func agentSupportsCompanionSplit(raw string) bool {
+	normalised, ok := parseConnlogAgentVersion(raw)
+	if !ok {
+		return false
+	}
+	cmp, err := compareVersions(normalised, companionAgentMinVersion)
+	if err != nil {
+		return false
+	}
+	return cmp >= 0
+}
+
+// companionKernelIDForNode returns the companion NodeKernel row id for a
+// node, if the split is active there (the row exists). The split is
+// active iff the row exists — that is the single source of truth, so
+// createCompanion, reconcileSSMetering and the migration all agree.
+func (h *Handler) companionKernelIDForNode(nodeID int64) (int64, bool) {
+	k, err := h.repo.GetNodeKernelByType(nodeID, kernel.TypeSingboxCompanion)
+	if err != nil || k == nil {
+		return 0, false
+	}
+	return k.ID, true
+}
+
+// ensureCompanionKernel performs the one-time companion split for a node:
+// when the node has enabled companions and its agent understands the
+// companion instance, create the companion NodeKernel row (version tracks
+// the node's main sing-box kernel) and move every companion inbound's
+// KernelID onto it. It only does DB work; the caller's apply loop pushes
+// main first (frees the ports) then companion (binds them) —
+// ListNodeKernels orders id ASC, and the companion row is newer.
+// Old agents never get the row: companions stay on the main kernel and
+// behave exactly as before. Idempotent: a second call finds the row and
+// only moves stragglers.
+func (h *Handler) ensureCompanionKernel(nodeID int64) {
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return
+	}
+	if !agentSupportsCompanionSplit(node.Version.String) {
+		return
+	}
+	if _, active := h.companionKernelIDForNode(nodeID); active {
+		h.moveCompanionsToKernel(nodeID)
+		return
+	}
+	companions, err := h.repo.ListCompanionInbounds()
+	if err != nil {
+		log.Printf("companion split: list companions node_id=%d: %v", nodeID, err)
+		return
+	}
+	var nodeCompanions []model.NodeInbound
+	for _, c := range companions {
+		if c.NodeID == nodeID && c.Enabled == 1 {
+			nodeCompanions = append(nodeCompanions, c)
+		}
+	}
+	if len(nodeCompanions) == 0 {
+		return
+	}
+	main, err := h.repo.GetNodeKernelByType(nodeID, kernel.TypeSingbox)
+	if err != nil || main == nil {
+		log.Printf("companion split: no main sing-box kernel node_id=%d", nodeID)
+		return
+	}
+	now := time.Now().UnixMilli()
+	comp := &model.NodeKernel{
+		NodeID:      nodeID,
+		KernelType:  kernel.TypeSingboxCompanion,
+		Version:     main.Version,
+		Status:      kernelStatusPending,
+		Enabled:     1,
+		CreatedTime: now,
+		UpdatedTime: now,
+	}
+	if err := h.repo.CreateNodeKernel(comp); err != nil {
+		log.Printf("companion split: create companion kernel node_id=%d: %v", nodeID, err)
+		return
+	}
+	h.moveCompanionsToKernel(nodeID)
+	log.Printf("companion split: node_id=%d companion kernel %d created, %d companion(s) moved", nodeID, comp.ID, len(nodeCompanions))
+}
+
+// moveCompanionsToKernel moves every companion inbound on the node onto
+// the companion kernel row (no-op when the split is not active).
+func (h *Handler) moveCompanionsToKernel(nodeID int64) {
+	compID, active := h.companionKernelIDForNode(nodeID)
+	if !active {
+		return
+	}
+	companions, err := h.repo.ListCompanionInbounds()
+	if err != nil {
+		log.Printf("companion split: list companions for move node_id=%d: %v", nodeID, err)
+		return
+	}
+	now := time.Now().UnixMilli()
+	for _, c := range companions {
+		if c.NodeID != nodeID || c.KernelID == compID {
+			continue
+		}
+		updated := c
+		updated.KernelID = compID
+		updated.UpdatedTime = now
+		if err := h.repo.SaveNodeInbound(&updated); err != nil {
+			log.Printf("companion split: move companion %d node_id=%d: %v", c.ID, nodeID, err)
+		}
+	}
+}
+
+// removeCompanionKernel removes the companion kernel alongside a deleted
+// main sing-box kernel (see the remove flow). No-op for other kernel
+// types and when no companion row exists.
+func (h *Handler) removeCompanionKernel(k *model.NodeKernel) {
+	if k == nil || kernel.CanonicalKernelType(k.KernelType) != kernel.TypeSingbox {
+		return
+	}
+	comp, err := h.repo.GetNodeKernelByType(k.NodeID, kernel.TypeSingboxCompanion)
+	if err != nil || comp == nil {
+		return
+	}
+	unlock := lockKernelApply(comp.ID)
+	_, dispatchErr := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
+		"type": kernel.TypeSingboxCompanion, "action": "remove",
+	}, kernelCommandTimeout, false, true)
+	unlock()
+	if derr := h.repo.DeleteNodeKernel(comp.ID); derr != nil {
+		log.Printf("companion split: delete companion kernel %d after main remove: %v", comp.ID, derr)
+		return
+	}
+	if dispatchErr != nil {
+		if merr := h.repo.MarkKernelOrphanRecheck(k.NodeID, kernel.TypeSingboxCompanion, time.Now().UnixMilli()); merr != nil {
+			log.Printf("companion split: orphan recheck mark failed node_id=%d kernel=%s err=%v", k.NodeID, kernel.TypeSingboxCompanion, merr)
+		}
+	}
+}
 
 // agentSupportsPortProbe 判定 agent 版本是否含 CheckPortListening
 // （纯函数，供单测）：可解析且 >= 2.1.13 为支持；空串与不可解析形态
@@ -3546,6 +3715,10 @@ func truncate(s string, n int) string {
 // reconcileNodeKernels re-applies every kernel of a node, e.g. after the agent
 // reconnects. The agent skips work when the config hash is unchanged.
 func (h *Handler) reconcileNodeKernels(nodeID int64) {
+	// C-03: split the companions onto their own instance before the
+	// apply loop lists the kernels, so this round already pushes main
+	// first (frees the ports) then companion (binds them).
+	h.ensureCompanionKernel(nodeID)
 	kernels, err := h.repo.ListNodeKernels(nodeID)
 	if err != nil {
 		return
@@ -3578,6 +3751,8 @@ type kernelReconcileFailure struct {
 // 类失败由调用方过滤（见 nodeUpdate 的白名单回执），只把真失败
 // 点名进回执。
 func (h *Handler) reconcileNodeKernelsCollect(nodeID int64) []kernelReconcileFailure {
+	// C-03: same split hook as reconcileNodeKernels (see there).
+	h.ensureCompanionKernel(nodeID)
 	kernels, err := h.repo.ListNodeKernels(nodeID)
 	if err != nil {
 		return []kernelReconcileFailure{{KernelType: "", Err: err}}
