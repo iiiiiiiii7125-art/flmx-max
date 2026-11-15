@@ -459,6 +459,37 @@ func (r *Repository) MarkUserQuotaDisabled(userID int64, pausedForwardIDs []int6
 	return nil
 }
 
+// AppendUserQuotaPausedForwardIDs unions forward IDs into the quota recovery
+// list (C-(1)): flow-stopped forwards must be recoverable by a later quota
+// reset / backstop, like quota-paused ones. Transactional read-modify-write,
+// so a concurrent release removal cannot resurrect removed IDs. A missing
+// quota row is created (a user with flow limits but no quota usage yet still
+// needs a recovery carrier); the row carries zero limits, i.e. unlimited,
+// so its mere existence never blocks anything. The handler serializes this
+// against quota enforcement under the per-user enforcement lock.
+func (r *Repository) AppendUserQuotaPausedForwardIDs(userID int64, ids []int64, now time.Time) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	if userID <= 0 || len(ids) == 0 {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		q, err := r.loadOrCreateUserQuotaTx(tx, userID, now)
+		if err != nil {
+			return err
+		}
+		merged := joinPausedForwardIDs(append(append([]int64{}, parsePausedForwardIDs(q.PausedForwardIDs)...), ids...))
+		if merged == q.PausedForwardIDs {
+			return nil
+		}
+		return tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
+			"paused_forward_ids": merged,
+			"updated_time":       now.UnixMilli(),
+		}).Error
+	})
+}
+
 // UpdateUserQuotaPausedForwardIDs 只更新恢复依据列表与时间戳，不
 // 触碰 disabled_by_quota/disabled_at（FIX2-A V2-01 增量执法用：
 // 重试暂停失败的转发时保留首次禁用时刻，只扩/收恢复依据）。

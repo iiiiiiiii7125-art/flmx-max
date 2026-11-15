@@ -103,7 +103,14 @@ func (h *Handler) enforceFlowPolicies(userID int64, userTunnelID int64) {
 	now := time.Now().UnixMilli()
 
 	if h.shouldPauseUser(userID, now) {
-		h.pauseUserForwards(userID, now)
+		paused := h.pauseUserForwards(userID, now)
+		// C-(1)：流停的转发须进配额恢复清单，否则配额重置/回补无从
+		// 恢复它们（“重置成功但转发仍停”）。只记流量超限所致的
+		// 暂停——过期/停用账号的暂停归过期面管，不进清单（否则
+		// backstop 会对已过期账号每分钟重试恢复）。
+		if h.userFlowStopAttributable(userID, now) {
+			h.recordFlowStoppedForwards(userID, paused)
+		}
 	}
 
 	policy, err := h.getUserTunnelPolicy(userTunnelID)
@@ -112,8 +119,39 @@ func (h *Handler) enforceFlowPolicies(userID int64, userTunnelID int64) {
 	}
 
 	if shouldPauseUserTunnel(policy, now) {
-		h.pauseUserTunnelForwards(policy.UserID, policy.TunnelID, now)
+		paused := h.pauseUserTunnelForwards(policy.UserID, policy.TunnelID, now)
+		if userTunnelFlowStopAttributable(policy, now) {
+			h.recordFlowStoppedForwards(policy.UserID, paused)
+		}
 	}
+}
+
+// userFlowStopAttributable reports whether a user-level pause is
+// attributable to the traffic flow limit (as opposed to expiry or
+// disable): only then does the pause belong in the quota recovery
+// list (C-(1)). shouldPauseUser conflates the three reasons, so the
+// flow-only predicate is evaluated separately here.
+func (h *Handler) userFlowStopAttributable(userID int64, now int64) bool {
+	user, err := h.repo.GetUserByID(userID)
+	if err != nil || user == nil {
+		return false
+	}
+	if user.Status != 1 || (user.ExpTime > 0 && user.ExpTime <= now) {
+		return false
+	}
+	flowLimit := flowLimitBytes(user.Flow, user.FlowMiB)
+	return flowLimit > 0 && flowLimit <= saturatingFlowSum(user.InFlow, user.OutFlow)
+}
+
+// userTunnelFlowStopAttributable is the tunnel-grant half of
+// userFlowStopAttributable (C-(1)): flow-limit pause on an active,
+// unexpired grant.
+func userTunnelFlowStopAttributable(policy *userTunnelPolicy, now int64) bool {
+	if policy == nil || policy.Status != 1 || (policy.ExpTime > 0 && policy.ExpTime <= now) {
+		return false
+	}
+	flowLimit := flowLimitBytes(policy.Flow, policy.FlowMiB)
+	return flowLimit > 0 && flowLimit <= saturatingFlowSum(policy.InFlow, policy.OutFlow)
 }
 
 func (h *Handler) ensureUserTunnelForwardAllowed(userID int64, tunnelID int64, now int64) error {
@@ -268,27 +306,36 @@ func (h *Handler) getUserTunnelPolicy(userTunnelID int64) (*userTunnelPolicy, er
 	}, nil
 }
 
-func (h *Handler) pauseUserForwards(userID int64, now int64) {
+func (h *Handler) pauseUserForwards(userID int64, now int64) []int64 {
 	forwards, err := h.listActiveForwardsByUser(userID)
 	if err != nil {
-		return
+		return nil
 	}
-	h.pauseForwardRecords(forwards, now)
+	return h.pauseForwardRecords(forwards, now)
 }
 
-func (h *Handler) pauseUserTunnelForwards(userID int64, tunnelID int64, now int64) {
+func (h *Handler) pauseUserTunnelForwards(userID int64, tunnelID int64, now int64) []int64 {
 	forwards, err := h.listActiveForwardsByUserTunnel(userID, tunnelID)
 	if err != nil {
-		return
+		return nil
 	}
-	h.pauseForwardRecords(forwards, now)
+	return h.pauseForwardRecords(forwards, now)
 }
 
-func (h *Handler) pauseForwardRecords(forwards []forwardRecord, now int64) {
+// pauseForwardRecords pauses the given forwards on the data plane and
+// flips their rows to paused. It returns the IDs whose data-plane pause
+// actually landed (gost PauseService ok, or nft reconcile ok): a row
+// whose status write failed afterwards is still paused in reality, so
+// it stays in the returned set — the recovery list must carry it, or
+// no release/backstop would ever resume it (C-(1)). IDs whose pause
+// failed (service error / reconcile gap / mixed nft state) are excluded:
+// they are still running and must not enter the recovery list.
+func (h *Handler) pauseForwardRecords(forwards []forwardRecord, now int64) []int64 {
 	// R5-B3 D1-002: 配额超限的 nft 转发必须真正移除规则。原实现只调了 gost 的
 	// controlForwardServices，nft 规则残留导致继续产生流量、继续扣配额。
 	// R1: 按入口节点聚合，每节点只 reconcile 一次，每节点 30s 总超时，
 	// 超时记 gap 并继续下一节点；不无限阻塞采集循环。
+	paused := make([]int64, 0, len(forwards))
 	nftGroups := make(map[int64][]int64)
 	for i := range forwards {
 		forward := &forwards[i]
@@ -308,6 +355,7 @@ func (h *Handler) pauseForwardRecords(forwards []forwardRecord, now int64) {
 			log.Printf("quota pause failed op=dplane forward_id=%d err=%v", forward.ID, err)
 			continue
 		}
+		paused = append(paused, forward.ID)
 		if err := h.repo.UpdateForwardStatus(forward.ID, model.ForwardStatusPaused, now); err != nil {
 			log.Printf("quota pause failed op=db_write forward_id=%d err=%v", forward.ID, err)
 		}
@@ -324,12 +372,14 @@ func (h *Handler) pauseForwardRecords(forwards []forwardRecord, now int64) {
 			log.Printf("quota pause gap node_id=%d forward_ids=%v reason=reconcile_timeout_or_error ALERT=db_state_may_diverge", nodeID, ids)
 			continue
 		}
+		paused = append(paused, ids...)
 		for _, id := range ids {
 			if err := h.repo.UpdateForwardStatus(id, model.ForwardStatusPaused, now); err != nil {
 				log.Printf("quota pause failed op=db_write_after_reconcile forward_id=%d err=%v", id, err)
 			}
 		}
 	}
+	return paused
 }
 
 // reconcileNodeWithTimeout 按节点执行一次带总超时的 reconcile（R1）。

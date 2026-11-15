@@ -230,6 +230,27 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 	}
 }
 
+// recordFlowStoppedForwards unions flow-stopped forward IDs into the user's
+// quota recovery list (C-(1)). The flow-stop path used to only flip forward
+// status, so a later quota reset had no carrier for those forwards and the
+// backstop never revisited them ("reset succeeded but the forward stays
+// stopped"). The write runs under the per-user enforcement lock so it cannot
+// lose a concurrent quota-enforcement update of the same list (FIX2-A V2-02
+// lost-update family); the repo call itself is a transactional union, and
+// a missing quota row is created there. A record failure only logs: the
+// forward stays paused and the next enforcement round retries the record
+// (the pause itself already landed).
+func (h *Handler) recordFlowStoppedForwards(userID int64, forwardIDs []int64) {
+	if h == nil || h.repo == nil || userID <= 0 || len(forwardIDs) == 0 {
+		return
+	}
+	unlock := h.lockUserQuotaEnforcement(userID)
+	defer unlock()
+	if err := h.repo.AppendUserQuotaPausedForwardIDs(userID, forwardIDs, time.Now()); err != nil {
+		log.Printf("flow stop record failed user_id=%d forward_ids=%v err=%v action=retry_on_next_enforcement", userID, forwardIDs, err)
+	}
+}
+
 // quotaReleaseFailure is one forward that could not be resumed by a quota
 // release (C-05 F2). Reason is a short op code; Detail carries the veto
 // error for the receipt and the log.
@@ -782,6 +803,18 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondInternalError(w, "userQuotaReset: ResetUserQuotaUsage failed", err)
 		return
+	}
+	// C-(1)：手动重置即使未解禁（用户从未被配额封停、只有流停转发待恢复），
+	// 也须尝试待恢复清单——否则这批转发只剩分钟级 backstop，且回执对它们
+	// 只字不提。ResetUserQuotaUsage 只在解禁时才填 ForwardIDs，此处从当前
+	// 行重读清单补齐；仍超限时释放会在配额门逐条否决、回执如实点名。
+	if release != nil && !release.UnblockUser {
+		if view, vErr := h.repo.GetUserQuotaView(req.UserID, time.Now()); vErr == nil && view != nil {
+			if ids := parseQuotaPausedForwardIDs(view.PausedForwardIDs); len(ids) > 0 {
+				release.UnblockUser = true
+				release.ForwardIDs = ids
+			}
+		}
 	}
 	nowMs := time.Now().UnixMilli()
 	result := h.applyUserQuotaRelease(release, nowMs)

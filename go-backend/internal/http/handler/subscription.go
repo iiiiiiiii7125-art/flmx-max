@@ -571,9 +571,17 @@ func pushFailureMsg(prefix string, err error) string {
 // 不在范围：非 SS 原站（逐用户 UUID，撤用户即生效）、外部入站
 // （KernelID=0，无内核可推）、伴生本体（只轮原站）；停用/过期
 // 导致的失活不轮换（爆炸半径：每次停用/过期都换共享口令，
-// 全部共用该口令的订阅都要重拉链接——残留，另案处理）。
+// 全部共用该口令的订阅都要重拉链接——C-(5)：下方的 Enabled/过期
+// 门即此口径的实现，注释与代码曾分叉，见 subscription.md:114/139）。
 func (h *Handler) rotateQuotaOriginPasswords(s *model.Subscription, rows *[]model.NodeInbound, now time.Time) bool {
 	if !isShare(s) || !subOverQuota(s) {
+		return false
+	}
+	// C-(5)：停用/过期订阅不轮换——失活同步已把凭据从节点撤下，
+	// 再换共享口令无任何截断收益，只会逼全部共口令订阅重拉链接。
+	// 注意 subActive 不能直接作门：它含 !subOverQuota，与本函数
+	// 的超限前提恒互斥；此处只取它的 Enabled+未过期两项。
+	if s.Enabled != 1 || (s.ExpireTime > 0 && s.ExpireTime <= now.UnixMilli()) {
 		return false
 	}
 	if s.QuotaRotatedAt >= subTrafficSince(s) {

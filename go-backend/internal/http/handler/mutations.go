@@ -384,7 +384,27 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	// G-UPDATE-01：与同函数 syncUserMaxConnForwards（:415-419）同口径——
 	// 隧道限额同步失败即上抛，不再只记日志回成功（否则用户行是新值、
 	// 全部 user_tunnel 行仍是旧限额，且前端无任何信号）。
-	if err := h.repo.PropagateUserFlowToTunnels(id, flow, num, expTime, flowResetTime, flowMiB); err != nil {
+	// C-(6)①：只传播本次显式传入的字段——隧道授权可独立设置限额
+	// （userTunnelUpdate），未传字段不得覆写隧道行的现值。旧实现
+	// 每次用户编辑都把五项全量覆写，仅改 dailyQuotaGB 也会把隧道
+	// flowMiB 5→0、flow 打回用户值。
+	prop := repo.UserFlowPropagation{}
+	if _, ok := req["flow"]; ok {
+		prop.Flow = &flow
+	}
+	if _, ok := req["flowMiB"]; ok {
+		prop.FlowMiB = &flowMiB
+	}
+	if _, ok := req["num"]; ok {
+		prop.Num = &num
+	}
+	if _, ok := req["expTime"]; ok {
+		prop.ExpTime = &expTime
+	}
+	if _, ok := req["flowResetTime"]; ok {
+		prop.FlowResetTime = &flowResetTime
+	}
+	if err := h.repo.PropagateUserFlowToTunnels(id, prop); err != nil {
 		respondInternalError(w, fmt.Sprintf("userUpdate: propagate user flow to tunnels failed user_id=%d", id), err)
 		return
 	}

@@ -296,19 +296,47 @@ func (r *Repository) SunsetLegacyUserPassword(userID int64, currentHash string, 
 	return res.RowsAffected > 0, nil
 }
 
-func (r *Repository) PropagateUserFlowToTunnels(userID int64, flow int64, num int, expTime, flowResetTime int64, flowMiB ...int64) error {
+// UserFlowPropagation carries the user-level flow fields one update wants
+// mirrored onto the user's tunnel grants. Nil fields are left alone:
+// tunnel grants may carry their own values (set via userTunnelUpdate),
+// and an unrelated user edit (e.g. only dailyQuotaGB) must not wipe them
+// (C-(6)①: the old all-fields-always overwrite turned a quota-only edit
+// into flowMiB 5→0 on every grant). The caller passes pointers only for
+// fields present in the request.
+type UserFlowPropagation struct {
+	Flow          *int64
+	FlowMiB       *int64
+	Num           *int
+	ExpTime       *int64
+	FlowResetTime *int64
+}
+
+func (r *Repository) PropagateUserFlowToTunnels(userID int64, p UserFlowPropagation) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	updates := make(map[string]interface{}, 5)
+	if p.Flow != nil {
+		updates["flow"] = *p.Flow
+	}
+	if p.FlowMiB != nil {
+		updates["flow_mib"] = *p.FlowMiB
+	}
+	if p.Num != nil {
+		updates["num"] = *p.Num
+	}
+	if p.ExpTime != nil {
+		updates["exp_time"] = *p.ExpTime
+	}
+	if p.FlowResetTime != nil {
+		updates["flow_reset_time"] = *p.FlowResetTime
+	}
+	if len(updates) == 0 {
+		return nil
+	}
 	return r.db.Model(&model.UserTunnel{}).
 		Where("user_id = ?", userID).
-		Updates(map[string]interface{}{
-			"flow":            flow,
-			"flow_mib":        optionalFlowMiB(flowMiB),
-			"num":             num,
-			"exp_time":        expTime,
-			"flow_reset_time": flowResetTime,
-		}).Error
+		Updates(updates).Error
 }
 
 func (r *Repository) DeleteUserCascade(userID int64) error {

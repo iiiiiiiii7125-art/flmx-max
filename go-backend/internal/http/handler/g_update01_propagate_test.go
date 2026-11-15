@@ -89,3 +89,46 @@ func TestGUpdate01PropagateSuccessStillUpdatesTunnel(t *testing.T) {
 		t.Fatalf("tunnel quota must follow user flow: user flow=%d, tunnel flow=%d", u.Flow, tunnelFlow)
 	}
 }
+
+// C-(6)①：仅改 dailyQuotaGB 时隧道授权行五项全不动——旧实现把用户
+// 行合并后的 flow/flow_mib/num/exp_time/flow_reset_time 全量覆写到
+// 隧道行，仅改配额也把 flowMiB 5→0（夹具行 512→0）。
+func TestGUpdate01DailyQuotaOnlyLeavesTunnelFlow(t *testing.T) {
+	h, r, userID := gUpdateFixture(t)
+	res := postJSONToHandler(t, h.userUpdate, map[string]interface{}{
+		"id": userID, "user": "gupd-user", "dailyQuotaGB": 10,
+	})
+	if code, msg := decodeEnvelopeGUpdate(t, res); code != 0 {
+		t.Fatalf("dailyQuotaGB-only update must succeed, got code=%d msg=%s", code, msg)
+	}
+	var row struct {
+		Flow, FlowMiB, Num, ExpTime, FlowResetTime int64
+	}
+	if err := r.DB().Raw(`SELECT flow, flow_mib, num, exp_time, flow_reset_time FROM user_tunnel WHERE user_id = ?`, userID).Row().Scan(&row.Flow, &row.FlowMiB, &row.Num, &row.ExpTime, &row.FlowResetTime); err != nil {
+		t.Fatalf("read user_tunnel: %v", err)
+	}
+	if row.Flow != 5 || row.FlowMiB != 512 || row.Num != 3 || row.FlowResetTime != 7 {
+		t.Fatalf("tunnel grant must be untouched by a quota-only edit: got flow=%d flow_mib=%d num=%d flow_reset_time=%d, want 5/512/3/7", row.Flow, row.FlowMiB, row.Num, row.FlowResetTime)
+	}
+}
+
+// C-(6)① 字段级传播：只传 flow 时只改隧道 flow，flow_mib 保持原值。
+func TestGUpdate01FlowOnlyLeavesTunnelFlowMiB(t *testing.T) {
+	h, r, userID := gUpdateFixture(t)
+	res := postJSONToHandler(t, h.userUpdate, map[string]interface{}{
+		"id": userID, "user": "gupd-user", "flow": 200,
+	})
+	if code, msg := decodeEnvelopeGUpdate(t, res); code != 0 {
+		t.Fatalf("flow-only update must succeed, got code=%d msg=%s", code, msg)
+	}
+	var flow, flowMiB int64
+	if err := r.DB().Raw(`SELECT flow, flow_mib FROM user_tunnel WHERE user_id = ?`, userID).Row().Scan(&flow, &flowMiB); err != nil {
+		t.Fatalf("read user_tunnel: %v", err)
+	}
+	if flow != 200 {
+		t.Fatalf("tunnel flow must follow supplied flow: got %d, want 200", flow)
+	}
+	if flowMiB != 512 {
+		t.Fatalf("tunnel flow_mib must keep its own value when flowMiB not supplied: got %d, want 512", flowMiB)
+	}
+}
