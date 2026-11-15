@@ -61,14 +61,14 @@ func TestLegacyAndCurrentAgentsDoNotShareNftTable(t *testing.T) {
 
 	portsCur := []Port{{InboundID: 901, Port: 18001, Network: "tcp,udp"}}
 	portsLeg := []Port{{InboundID: 902, Port: 18002, Network: "tcp"}}
-	if err := nCur.sync(portsCur, nil); err != nil {
+	if err := nCur.sync(portsCur, nil, nil); err != nil {
 		t.Fatalf("current sync: %v", err)
 	}
 	fpCur, err := nCur.tableFingerprint(ctx)
 	if err != nil {
 		t.Fatalf("current table must exist after current sync: %v", err)
 	}
-	if err := nLeg.sync(portsLeg, nil); err != nil {
+	if err := nLeg.sync(portsLeg, nil, nil); err != nil {
 		t.Fatalf("legacy sync: %v", err)
 	}
 	if fp, err := nCur.tableFingerprint(ctx); err != nil || fp != fpCur {
@@ -183,7 +183,7 @@ func TestTwoAgentsSyncWithoutSharingTable(t *testing.T) {
 
 	portsA := []Port{{InboundID: 901, Port: 18001, Network: "tcp,udp"}}
 	portsB := []Port{{InboundID: 902, Port: 18002, Network: "tcp"}}
-	if err := nA.sync(portsA, nil); err != nil {
+	if err := nA.sync(portsA, nil, nil); err != nil {
 		t.Fatalf("A sync: %v", err)
 	}
 	fpA, err := nA.tableFingerprint(ctx)
@@ -193,7 +193,7 @@ func TestTwoAgentsSyncWithoutSharingTable(t *testing.T) {
 	if _, ok := f.tables[nftTable]; ok {
 		t.Fatal("A sync must not create the shared plain table")
 	}
-	if err := nB.sync(portsB, nil); err != nil {
+	if err := nB.sync(portsB, nil, nil); err != nil {
 		t.Fatalf("B sync: %v", err)
 	}
 	// B's sync must leave A's table exactly as it was.
@@ -208,7 +208,7 @@ func TestTwoAgentsSyncWithoutSharingTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("B fingerprint: %v", err)
 	}
-	if err := nA.sync(append(portsA, Port{InboundID: 903, Port: 18003, Network: "tcp"}), nil); err != nil {
+	if err := nA.sync(append(portsA, Port{InboundID: 903, Port: 18003, Network: "tcp"}), nil, nil); err != nil {
 		t.Fatalf("A re-sync: %v", err)
 	}
 	if fp, err := nB.tableFingerprint(ctx); err != nil || fp != fpB {
@@ -227,7 +227,7 @@ func TestTwoAgentsSyncWithoutSharingTable(t *testing.T) {
 
 func TestNftScriptIsolatedTableDeletesOnlyItself(t *testing.T) {
 	stubKernelResolution(t, false, "/anywhere", nil, "/root/scratch-a/flmx_agent", nil)
-	script := nftScript(nftTableForBaseDir("/root/scratch-a/kernels"), nil, nil, nil, nil, 0)
+	script := nftScript(nftTableForBaseDir("/root/scratch-a/kernels"), nil, nil, nil, nil, 0, nil)
 	if !strings.Contains(script, "delete table inet flmx_kernel_") {
 		t.Fatalf("isolated script must delete its own table: %s", script)
 	}
@@ -368,7 +368,7 @@ func TestLiveTwoAgentsDoNotShareNftTable(t *testing.T) {
 
 	portsA := []Port{{InboundID: 901, Port: 18001, Network: "tcp,udp"}}
 	portsB := []Port{{InboundID: 902, Port: 18002, Network: "tcp"}}
-	if err := nA.sync(portsA, nil); err != nil {
+	if err := nA.sync(portsA, nil, nil); err != nil {
 		t.Fatalf("A sync: %v", err)
 	}
 	fpA, err := nA.tableFingerprint(ctx)
@@ -378,7 +378,7 @@ func TestLiveTwoAgentsDoNotShareNftTable(t *testing.T) {
 	if fp, err := live.tableFingerprint(ctx); err != nil || fp != fpLive0 {
 		t.Fatalf("A sync changed the live table: fp=%q err=%v (was %q)", fp, err, fpLive0)
 	}
-	if err := nB.sync(portsB, nil); err != nil {
+	if err := nB.sync(portsB, nil, nil); err != nil {
 		t.Fatalf("B sync: %v", err)
 	}
 	if fp, err := nA.tableFingerprint(ctx); err != nil || fp != fpA {
@@ -388,7 +388,7 @@ func TestLiveTwoAgentsDoNotShareNftTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("B table must exist after B sync: %v", err)
 	}
-	if err := nA.sync(append(portsA, Port{InboundID: 903, Port: 18003, Network: "tcp"}), nil); err != nil {
+	if err := nA.sync(append(portsA, Port{InboundID: 903, Port: 18003, Network: "tcp"}), nil, nil); err != nil {
 		t.Fatalf("A re-sync: %v", err)
 	}
 	if fp, err := nB.tableFingerprint(ctx); err != nil || fp != fpB {
