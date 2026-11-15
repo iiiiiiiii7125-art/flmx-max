@@ -100,7 +100,7 @@ const KINDS: Record<
   },
   subflow: {
     label: (n) => `${n} 个分享订阅流量快用完`,
-    hint: "用到 90% 以上；用完后自动断开",
+    hint: "用到 90% 以上；用完后下发断开",
     path: "/subscription",
   },
   subexpire: {

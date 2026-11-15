@@ -253,8 +253,19 @@ func (h *Handler) checkSubQuota(s *model.Subscription) {
 	case used >= limit:
 		if h.notifier.alertOnce(key + "full") {
 			h.notifier.alertOnce(key + "warn")
-			h.notifyTracked(notifyEventUserQuota, "分享订阅流量已用完，已断开",
-				fmt.Sprintf("订阅：%s\n已用：%s / %s", s.Name, formatBytes(used), formatBytes(limit)),
+			// D-02：标题不得断言「已断开」——凭据是否真从节点撤下
+			// 取决于 AppliedActive（下发实态），计数越界本身只说明
+			// 应断开：AppliedActive 为 1 时凭据仍在节点上、截断下发
+			// 在途；为 0 时已撤下；为 -1 时待同步。
+			applied := "下发待同步，请稍后确认"
+			switch s.AppliedActive {
+			case 1:
+				applied = "凭据仍在节点上，正在下发断开"
+			case 0:
+				applied = "凭据已从节点撤下"
+			}
+			h.notifyTracked(notifyEventUserQuota, "分享订阅流量已用完",
+				fmt.Sprintf("订阅：%s\n已用：%s / %s\n%s", s.Name, formatBytes(used), formatBytes(limit), applied),
 				func(outcome notifyOutcome) {
 					if outcome == notifyOutcomeFailed {
 						h.notifier.unalert(key+"full", key+"warn")

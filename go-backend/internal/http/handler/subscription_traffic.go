@@ -58,6 +58,10 @@ type subTrafficView struct {
 	// counting (creation or last reset); the chart marks it so the
 	// "used" figure and the chart range are not compared directly.
 	Since int64 `json:"since"`
+	// LastReportedAt is the newest SubscriptionCounter update (ms;
+	// 0 = never reported) — D-06 freshness for the graph: without it
+	// a frozen chart is indistinguishable from a fresh one.
+	LastReportedAt int64 `json:"lastReportedAt,omitempty"`
 }
 
 // subTrafficBuckets returns the bucket starts of a range ending at now:
@@ -176,6 +180,10 @@ func (h *Handler) respondSubTraffic(w http.ResponseWriter, s *model.Subscription
 	}
 	view := subTraffic(hours, req.Range, now)
 	view.Since = subTrafficSince(s)
+	// D-06：回填计数最近上报时刻（0＝从未上报），图表据此显示新鲜度。
+	if updates, err := h.repo.LastSubscriptionCounterUpdates([]int64{s.ID}); err == nil {
+		view.LastReportedAt = updates[s.ID]
+	}
 	response.WriteJSON(w, response.OK(view))
 }
 

@@ -19,9 +19,12 @@ func nodeTrafficMonthStart(now time.Time, loc *time.Location) time.Time {
 
 // nodeTrafficMonth returns each node's NIC traffic since the 1st of
 // this month in the viewer's time zone, for the node list:
-// {"<id>": [in, out]}. These are whole-machine NIC counters from
-// node_traffic — a different metric from tunnel billing / subscription
-// quota counters; the two never reconcile and must not be mixed in UI.
+// {"traffic": {"<id>": [in, out]}, "lastHour": {"<id>": <ms>}}.
+// lastHour is the newest hourly bucket per node (D-06 freshness; the
+// table has no updated_time column). These are whole-machine NIC
+// counters from node_traffic — a different metric from tunnel billing /
+// subscription quota counters; the two never reconcile and must not be
+// mixed in UI.
 func (h *Handler) nodeTrafficMonth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -50,5 +53,15 @@ func (h *Handler) nodeTrafficMonth(w http.ResponseWriter, r *http.Request) {
 	for id, v := range traffic {
 		out[strconv.FormatInt(id, 10)] = v
 	}
-	response.WriteJSON(w, response.OK(out))
+	// D-06：最新桶时刻（取失败时留空、不阻断流量返回，新鲜度为建议性）。
+	lastHour := make(map[string]int64)
+	if lh, lerr := h.repo.NodeTrafficLastHour(); lerr == nil {
+		for id, v := range lh {
+			lastHour[strconv.FormatInt(id, 10)] = v
+		}
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"traffic":  out,
+		"lastHour": lastHour,
+	}))
 }

@@ -49,7 +49,7 @@ import {
   ModalHeader,
 } from "@/shadcn-bridge/heroui/modal";
 import { Switch } from "@/shadcn-bridge/heroui/switch";
-import { formatTraffic } from "@/utils/traffic";
+import { formatTraffic, freshnessLabel } from "@/utils/traffic";
 import { SUB_CLIENTS } from "@/pages/subscription/clients";
 import { Segmented } from "@/pages/subscription/controls";
 import { SubscriptionTemplatesModal } from "@/pages/subscription/templates";
@@ -117,6 +117,24 @@ function expiryLabel(ms: number): string {
   if (days <= 0) return `${toDateInput(ms)} 已过期`;
 
   return `${toDateInput(ms)} 到期 · 剩 ${days} 天`;
+}
+
+/** D-02：订阅的断开／下发实态文案——计数算出的 active/overQuota
+ * 只说明「应断开」，凭据是否真在节点上看 appliedActive（下发实态）：
+ * 1 已下发、0 未下发、-1 待同步。 */
+function appliedStateLabel(s: SubscriptionItem): string {
+  const since = `${toDateInput(s.trafficSince)} 起的上传 + 下载合计`;
+  if (s.overQuota) {
+    if (s.appliedActive === 1) return "流量已用完，已从节点上断开";
+    if (s.appliedActive === -1) return "流量已用完，下发待同步";
+    return "流量已用完，凭据仍在节点上（截断下发未完成）";
+  }
+  if (!s.active && s.appliedActive === 1) {
+    return "已停用／已过期，但凭据仍在节点上";
+  }
+  if (s.active && s.appliedActive === 0) return `待下发 · ${since}`;
+  if (s.appliedActive === -1) return `下发待同步 · ${since}`;
+  return since;
 }
 
 /** Used / limit of a subscription, with a bar when it has a limit. */
@@ -537,7 +555,7 @@ function Editor({
               ))}
             </div>
             <p className="text-xs font-semibold text-foreground">
-              {draft.expire ? "到期当天 23:59 后断开" : "留空表示永不过期"}
+              {draft.expire ? "到期当天 23:59 后失效，下发断开" : "留空表示永不过期"}
             </p>
           </div>
           <div className="space-y-1">
@@ -592,7 +610,7 @@ function Editor({
             </div>
             <p className="text-xs font-semibold text-foreground">
               上传 +
-              下载合计，用完自动断开；在落地节点上按用户统计，仅支持多用户协议
+              下载合计，用完后下发断开；在落地节点上按用户统计，仅支持多用户协议
             </p>
           </div>
         </Section>
@@ -1122,7 +1140,18 @@ export default function SubscriptionPage() {
 
         return;
       }
-      toast.success(detail.overQuota ? "流量已重置，已恢复连接" : "流量已重置");
+      // D-05：回执已含下发结果——后端下发失败时 msg 即点名失败，不凭
+      // 重置前状态断言「已恢复」；成功时按返回视图的 active+appliedActive
+      // 判定是否真恢复。
+      if (res.msg && res.msg.includes("下发到节点失败")) {
+        toast.error(res.msg);
+      } else {
+        toast.success(
+          detail.overQuota && res.data.active && res.data.appliedActive === 1
+            ? "流量已重置，已恢复连接"
+            : "流量已重置",
+        );
+      }
       setDetail(res.data);
       await load();
     } finally {
@@ -1159,7 +1188,10 @@ export default function SubscriptionPage() {
 
   if (loading) return <PageLoadingState message="正在加载..." />;
 
-  const card = (s: SubscriptionRow) => (
+  const card = (s: SubscriptionRow) => {
+    // D-06：列表行流量数的新鲜度（1 小时内新鲜不标注）。
+    const freshness = freshnessLabel(s.lastReportedAt ?? 0);
+    return (
     <div
       key={s.id}
       className="glass-card flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-white/40"
@@ -1188,6 +1220,26 @@ export default function SubscriptionPage() {
           {s.meteringUnsupported && (
             <Chip color="warning" size="sm" variant="flat">
               流量永不计量
+            </Chip>
+          )}
+          {s.meteringStatus === "unmetered" && s.meteringReason && (
+            <Chip
+              color="warning"
+              size="sm"
+              variant="flat"
+              title={s.meteringReason}
+            >
+              未计量
+            </Chip>
+          )}
+          {s.meteringStatus === "partial" && s.meteringReason && (
+            <Chip
+              color="warning"
+              size="sm"
+              variant="flat"
+              title={s.meteringReason}
+            >
+              部分未计量
             </Chip>
           )}
           {s.pendingDelete ? (
@@ -1223,6 +1275,14 @@ export default function SubscriptionPage() {
         <div className="mt-1.5">
           <Usage compact s={s} />
         </div>
+        {s.zeroEndpointReason && (
+          <div className="truncate text-xs font-semibold text-warning-700">
+            {s.zeroEndpointReason}
+          </div>
+        )}
+        {freshness && (
+          <div className="text-xs font-semibold text-foreground">{freshness}</div>
+        )}
       </div>
       <div
         className="flex shrink-0 items-center gap-2"
@@ -1232,7 +1292,9 @@ export default function SubscriptionPage() {
         <Button
           isIconOnly
           aria-label={`复制 ${s.name} 的订阅链接`}
+          isDisabled={!s.active}
           size="sm"
+          title={s.active ? undefined : "订阅未启用，链接不可用"}
           variant="flat"
           onPress={() => copyText(url(s), "订阅链接已复制")}
         >
@@ -1247,7 +1309,8 @@ export default function SubscriptionPage() {
         />
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <AnimatedPage className="space-y-5 px-3 py-6 lg:px-6">
@@ -1369,7 +1432,7 @@ export default function SubscriptionPage() {
               </Card>
             ) : (
               <p className="rounded-xl border border-dashed border-divider px-3 py-4 text-center text-xs font-semibold text-foreground">
-                每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后自动断开
+                每个订阅一个链接，有独立凭据：可以设到期和流量上限，停用后下发断开
               </p>
             )
           ) : (
@@ -1418,9 +1481,7 @@ export default function SubscriptionPage() {
                     <Usage s={detail} />
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold text-foreground">
-                        {detail.overQuota
-                          ? "流量已用完，已从节点上断开"
-                          : `${toDateInput(detail.trafficSince)} 起的上传 + 下载合计`}
+                        {appliedStateLabel(detail)}
                       </span>
                       <Button
                         isDisabled={
@@ -1434,16 +1495,43 @@ export default function SubscriptionPage() {
                         重置流量
                       </Button>
                     </div>
+                    {detail.meteringStatus &&
+                      detail.meteringStatus !== "metered" &&
+                      detail.meteringReason && (
+                        <p className="text-xs font-semibold text-warning-700">
+                          未计量：{detail.meteringReason}
+                        </p>
+                      )}
+                    {detail.zeroEndpointReason && (
+                      <p className="text-xs font-semibold text-warning-700">
+                        {detail.zeroEndpointReason}
+                      </p>
+                    )}
+                    {freshnessLabel(detail.lastReportedAt ?? 0) && (
+                      <p className="text-xs font-semibold text-foreground">
+                        {freshnessLabel(detail.lastReportedAt ?? 0)}
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <h3 className="text-sm font-semibold">流量统计</h3>
-                    <SubTrafficStats id={detail.id} />
+                    <SubTrafficStats
+                      id={detail.id}
+                      unmeteredReason={
+                        detail.meteringStatus &&
+                        detail.meteringStatus !== "metered"
+                          ? detail.meteringReason
+                          : undefined
+                      }
+                    />
                   </div>
                   <div className="flex gap-2">
                     <Button
                       className="flex-1"
                       color="primary"
+                      isDisabled={!detail.active}
                       startContent={<Copy className="h-4 w-4" />}
+                      title={detail.active ? undefined : "订阅未启用，链接不可用"}
                       variant="flat"
                       onPress={() => copyText(url(detail), "订阅链接已复制")}
                     >
@@ -1456,7 +1544,9 @@ export default function SubscriptionPage() {
                           : "显示订阅二维码"
                       }
                       color={qrDetailId === detail.id ? "primary" : "default"}
+                      isDisabled={!detail.active}
                       isIconOnly
+                      title={detail.active ? undefined : "订阅未启用，链接不可用"}
                       variant="flat"
                       onPress={() =>
                         setQrDetailId(
@@ -1486,12 +1576,17 @@ export default function SubscriptionPage() {
                       return (
                         <div
                           key={c.key}
-                          className="relative flex h-14 items-center rounded-xl border border-divider transition-colors hover:bg-white/40"
+                          className={`relative flex h-14 items-center rounded-xl border border-divider transition-colors hover:bg-white/40 ${detail.active ? "" : "opacity-50"}`}
                         >
                           <button
                             className="h-full min-w-0 flex-1 truncate pl-3 pr-9 text-left text-sm font-medium"
+                            disabled={!detail.active}
                             title={
-                              c.importURL ? `导入到 ${c.label}` : "复制通用订阅"
+                              detail.active
+                                ? c.importURL
+                                  ? `导入到 ${c.label}`
+                                  : "复制通用订阅"
+                                : "订阅未启用，链接不可用"
                             }
                             type="button"
                             onClick={open}
@@ -1501,6 +1596,7 @@ export default function SubscriptionPage() {
                           <button
                             aria-label={`复制 ${c.label} 订阅链接`}
                             className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-foreground hover:bg-white/40 hover:text-foreground"
+                            disabled={!detail.active}
                             type="button"
                             onClick={() =>
                               copyText(link, `${c.label} 订阅已复制`)
@@ -1513,7 +1609,9 @@ export default function SubscriptionPage() {
                     })}
                   </div>
                   <p className="text-center text-xs font-semibold text-foreground">
-                    点客户端直接导入，右侧按钮复制链接
+                    {detail.active
+                      ? "点客户端直接导入，右侧按钮复制链接"
+                      : "订阅未启用，链接不可用"}
                   </p>
                   {detail.sharedIds.length > 0 && (
                     <p className="text-xs font-semibold text-warning-700">

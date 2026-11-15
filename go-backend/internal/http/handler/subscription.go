@@ -563,6 +563,10 @@ func (h *Handler) syncSubscriptions(now time.Time) {
 					// 再越界被 30 分钟指纹窗抑制（R3X-030 同根变体）。
 					h.notifier.forgetSubQuotaFlow(s.Name)
 				}
+			} else {
+				// D-05：月度自动重置失败此前静默——订阅流量被悄悄留
+				// 到下月，管理员在任何面都看不到。记日志，下轮重试。
+				log.Printf("subscription %d: monthly traffic reset failed, will retry: %v", s.ID, err)
 			}
 		}
 		active := boolToInt(isShare(s) && subActive(s, now))
@@ -794,6 +798,26 @@ type subscriptionView struct {
 	// 计量、TrafficLimit 永不触发，须对管理员显式可见，不许静默。
 	// 视图构建单点回填，列表/保存/详情同口径。
 	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
+	// AppliedActive 是上次推到内核的 active 态（0 未下发／1 已下发／
+	// -1 待同步），与计算值 Active 对照才知道“已断开”是否真实落地
+	// （D-02）：Active 为真而 AppliedActive 为 0/-1 时凭据尚未下发，
+	// Active 为假而 AppliedActive 为 1 时凭据仍在节点上。
+	AppliedActive int `json:"appliedActive"`
+	// MeteringStatus 是本订阅的计量状态（D-03，仅分享订阅）：
+	// "metered" 全源可计量、"partial" 部分源未计量、"unmetered" 全源
+	// 未计量；MeteringReason 为未计量／部分计量时的原因（首个 distinct
+	// 成因）。非分享订阅不适用，两字段均为空。
+	MeteringStatus string `json:"meteringStatus,omitempty"`
+	MeteringReason string `json:"meteringReason,omitempty"`
+	// LastReportedAt 是本订阅计量计数最近一次上报的时刻（毫秒，
+	// SubscriptionCounter.UpdatedTime 的最大值；0＝从未上报）。
+	// 订阅视图只有 TrafficSince（计数起点）时数字会静默冻结，
+	// D-06 要求流量数旁给出新鲜度。由调用方回填（批量查一次）。
+	LastReportedAt int64 `json:"lastReportedAt,omitempty"`
+	// ZeroEndpointReason 是本订阅当前渲染 0 个端点的原因（C-08）：
+	// 订阅启用且未过期未超限、但拉取为空时才有值；停用／过期／超限
+	// 走占位节点自带原因，本字段为空。
+	ZeroEndpointReason string `json:"zeroEndpointReason,omitempty"`
 }
 
 // subFormatAlias resolves format aliases shared by the pull side
@@ -855,6 +879,187 @@ func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []m
 	return h.subscriptionViewForAssignmentsMemo(s, rows, now, format, assignments, nil)
 }
 
+// subSourcesGone reports whether a subscription explicitly selected
+// inbounds/sources but none of them still exist — as opposed to having
+// selected nothing at all. subInboundIDs silently drops unknown ids,
+// so callers that need the distinction must check the raw selection.
+func subSourcesGone(s *model.Subscription) bool {
+	return s.SourceAll == 0 && (len(parseIDList(s.InboundIDs)) > 0 || len(parseIDList(s.SourceIDs)) > 0)
+}
+
+// subMeteringSourceReason 报告一个分享订阅源不能产生计量流量的原因
+// （"" 表示该源可计量）：导入节点共用凭据；SS 共享凭据源无生效伴生
+// 时按开关／资格／形态／下发逐级定因。与视图 shared 判定同口径，
+// 另把解析失败的入站也判为未计量（shared 判定静默将其当作可计量）。
+func subMeteringSourceReason(row *model.NodeInbound, liveCompanion bool) string {
+	if isExternalInbound(row) {
+		return "导入节点共用凭据，不计量"
+	}
+	in, err := inboundFromModel(*row)
+	if err != nil {
+		return "入站配置无法解析，不计量"
+	}
+	if in.SupportsUsers() {
+		return ""
+	}
+	if liveCompanion {
+		return ""
+	}
+	if row.MeteringEnabled != 1 {
+		return "计量开关已关，不计量"
+	}
+	if !ssMeteringEligible(in) {
+		if in.Security.Type == kernel.SecurityShadowTLS {
+			return "ShadowTLS 前置入站，不计量"
+		}
+		return "非 SS2022 入站，不计量"
+	}
+	if block := ssMeteringShapeBlock(row); block != "" {
+		return block
+	}
+	return "伴生入站未下发到节点，不计量"
+}
+
+// subMeteringStatus 是分享订阅的计量状态（D-03）：全源可计量返回
+// ("metered", "")；全源未计量返回 ("unmetered", 首个 distinct 成因)；
+// 部分源未计量返回 ("partial", "其中 N 个源未计量（成因）")。非分享
+// 订阅不适用，返回 ("", "")。ID 超限（meteringUnsupported）为订阅级
+// 永久不计量，优先于源级成因。
+func (h *Handler) subMeteringStatus(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo) (string, string) {
+	if !isShare(s) {
+		return "", ""
+	}
+	if s.ID > kernel.MaxUserMarkID {
+		return "unmetered", "订阅 ID 超出计量编码上限，流量永不计量"
+	}
+	ids := h.subAllInboundIDs(s, rows, memo)
+	if len(ids) == 0 {
+		if subSourcesGone(s) {
+			return "unmetered", "所选入站均不存在，流量不计量"
+		}
+		return "unmetered", "未选择任何入站，流量不计量"
+	}
+	byID := make(map[int64]model.NodeInbound, len(rows))
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	companions := h.companionsByOrigin(memo)
+	seenReason := map[string]bool{}
+	var firstReason string
+	unmetered := 0
+	for _, id := range ids {
+		row := byID[id]
+		if row.CompanionOf > 0 {
+			continue
+		}
+		_, live := companions[id]
+		if reason := subMeteringSourceReason(&row, live); reason != "" {
+			unmetered++
+			if !seenReason[reason] {
+				seenReason[reason] = true
+				if firstReason == "" {
+					firstReason = reason
+				}
+			}
+		}
+	}
+	if unmetered == 0 {
+		return "metered", ""
+	}
+	if unmetered == len(ids) {
+		return "unmetered", firstReason
+	}
+	return "partial", fmt.Sprintf("其中 %d 个源未计量（%s）", unmetered, firstReason)
+}
+
+// subYieldsNothing reports whether a subscription yields no endpoints
+// even before any view filtering: its source rows (from the full row
+// set) build zero endpoints through inboundEndpoints. The subscription's
+// own relay scope (lines/relayIds) and request filters (?user=/?relay=/
+// ?inbound=) are NOT applied here — their empty results are the filter's
+// answer, not a broken subscription, and must keep the F-080 empty
+// render (relay scope must render no node URIs; FIX2-B personalized
+// pull counts 0 for unassigned users).
+func (h *Handler) subYieldsNothing(s *model.Subscription, rows []model.NodeInbound) bool {
+	ids := subInboundIDs(s, rows)
+	if len(ids) == 0 {
+		return true
+	}
+	want := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	selected := make([]model.NodeInbound, 0, len(ids))
+	for _, row := range rows {
+		if want[row.ID] && row.CompanionOf == 0 {
+			selected = append(selected, row)
+		}
+	}
+	endpoints, _ := h.inboundEndpoints(selected)
+	return len(endpoints) == 0
+}
+
+// subZeroEndpointReason 报告订阅当前渲染 0 个端点的原因（C-08，
+// 仅行级判定，不查节点／中转视图）：停用／过期／超限走占位节点自带
+// 原因，本函数返回 ""；源为空／全缺／全停用／全仅中转或仅本机监听
+// 时点名；源本身能产出端点、却被订阅的中转范围筛空时点名范围原因
+// （无范围时落到通用原因——伴生凭据不可推导等深层成因已在服务端
+// 日志留痕）。
+func (h *Handler) subZeroEndpointReason(s *model.Subscription, rows []model.NodeInbound, now time.Time) string {
+	if subInactiveReason(s, now) != "" {
+		return ""
+	}
+	ids := h.subAllInboundIDs(s, rows, nil)
+	if len(ids) == 0 {
+		if subSourcesGone(s) {
+			return "所选入站均不存在，拉取为空"
+		}
+		if s.SourceAll == 1 && len(rows) == 0 {
+			return "系统中没有任何入站，拉取为空"
+		}
+		return "该订阅未选择任何入站，拉取为空"
+	}
+	// 源本身能产出端点、渲染却为空：中转范围筛空。无范围时落到通用
+	// 原因——此时只剩伴生凭据不可推导（F5/C-03）一种可能，通用原因
+	// 已覆盖。
+	if h != nil && h.repo != nil && !h.subYieldsNothing(s, rows) {
+		pipe := parsePipeline(s.Options)
+		if pipe.Lines != "" || len(pipe.RelayIDs) > 0 {
+			return "按订阅的中转范围筛选后无可用节点，拉取为空"
+		}
+	}
+	byID := make(map[int64]model.NodeInbound, len(rows))
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	var present []model.NodeInbound
+	for _, id := range ids {
+		if row, ok := byID[id]; ok && row.CompanionOf == 0 {
+			present = append(present, row)
+		}
+	}
+	if len(present) == 0 {
+		return "所选入站均不存在，拉取为空"
+	}
+	allDisabled := true
+	allRelayOnly := true
+	for _, row := range present {
+		if row.Enabled == 1 {
+			allDisabled = false
+		}
+		if row.RelayOnly != 1 && !isLoopbackListen(row.Listen) {
+			allRelayOnly = false
+		}
+	}
+	if allDisabled {
+		return "所选入站均已停用，拉取为空"
+	}
+	if allRelayOnly {
+		return "所选入站均为仅中转或仅本机监听，且其中转未就绪，拉取为空"
+	}
+	return "该订阅当前没有可用节点（中转未就绪、分享地址无效或格式过滤），请检查入站与中转状态"
+}
+
 func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, assignments []repo.UserInboundAssignment, memo *companionGateMemo) subscriptionView {
 	if memo == nil {
 		memo = &companionGateMemo{}
@@ -906,6 +1111,11 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	if len(assignments) > 0 {
 		endpoints = filterEndpointsByUserAssignments(endpoints, assignments)
 	}
+	meteringStatus, meteringReason := h.subMeteringStatus(s, rows, memo)
+	var zeroEndpointReason string
+	if len(endpoints) == 0 {
+		zeroEndpointReason = h.subZeroEndpointReason(s, rows, now)
+	}
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
 		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, SharedIDs: shared, Options: pipe,
@@ -914,6 +1124,31 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
 		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s),
 		MeteringUnsupported: isShare(s) && s.ID > kernel.MaxUserMarkID,
+		AppliedActive:       s.AppliedActive,
+		MeteringStatus:      meteringStatus,
+		MeteringReason:      meteringReason,
+		ZeroEndpointReason:  zeroEndpointReason,
+	}
+}
+
+// fillLastReportedAt backfills LastReportedAt for views built in this
+// request (one batched query over subscription_counter; a query failure
+// leaves 0 = unknown and never fails the response — freshness is
+// advisory, the counters themselves are authoritative).
+func (h *Handler) fillLastReportedAt(views []subscriptionView) {
+	if h == nil || h.repo == nil || len(views) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(views))
+	for i := range views {
+		ids = append(ids, views[i].ID)
+	}
+	updates, err := h.repo.LastSubscriptionCounterUpdates(ids)
+	if err != nil {
+		return
+	}
+	for i := range views {
+		views[i].LastReportedAt = updates[views[i].ID]
 	}
 }
 
@@ -962,6 +1197,9 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 			items[i].IsDefault = items[i].ID == def.ID
 		}
 	}
+	// D-06：回填各订阅计量计数最近上报时刻（批量一次），列表／详情
+	// 的流量数旁据此显示新鲜度。
+	h.fillLastReportedAt(items)
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"items": items,
 	}))
@@ -1589,7 +1827,19 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 		respondInternalError(w, "subscriptionResetTraffic", err)
 		return
 	}
-	response.WriteJSON(w, response.OK(h.subscriptionView(s, rows, now, "")))
+	view := h.subscriptionView(s, rows, now, "")
+	views := []subscriptionView{view}
+	h.fillLastReportedAt(views)
+	view = views[0]
+	// D-05：重置回执须含下发结果。syncSubscriptions 失败只记日志，
+	// 以往回执仍是「操作成功」——以 AppliedActive 实态与期望值对照
+	// （保存路径 :1355-1365 的 pushFailureMsg 范例同口径）：分享订阅
+	// 且当前应启用时 AppliedActive 须为 1，否则凭据未落地。
+	if expectedApplied := boolToInt(isShare(s) && subActive(s, now)); s.AppliedActive != expectedApplied {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败，后台将自动重试", Data: view, TS: time.Now().UnixMilli()})
+		return
+	}
+	response.WriteJSON(w, response.OK(view))
 }
 
 type subPreviewItem struct {

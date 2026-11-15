@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
-import { testNotify } from "@/api";
+import { getNotifyHealth, testNotify } from "@/api";
+import type { NotifyHealth } from "@/api";
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Card, CardBody, CardHeader } from "@/shadcn-bridge/heroui/card";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
@@ -119,6 +120,33 @@ export function NotifyCard({
   const [testing, setTesting] = useState(false);
   const testInFlightRef = useRef(false);
   const enabled = configs.notify_enabled === "true";
+  // C-06：通知健康度（按已保存的配置检查）——凭据字段写-only，表单
+  // 永远看不到已保存值，前端算不出通道是否可用，须问后端。configs
+  // 变化时防抖重查（保存后父级重载 configs 即刷新警告）。
+  const [health, setHealth] = useState<NotifyHealth | null>(null);
+  const [healthFailed, setHealthFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const timer = setTimeout(() => {
+      getNotifyHealth()
+        .then((res) => {
+          if (!active) return;
+          if (res.code === 0 && res.data) {
+            setHealth(res.data);
+            setHealthFailed(false);
+          } else {
+            setHealthFailed(true);
+          }
+        })
+        .catch(() => {
+          if (active) setHealthFailed(true);
+        });
+    }, 300);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [configs]);
   const rawEvents = (configs.notify_events ?? "").trim();
   // Empty means every event, so new installs get all of them.
   const selected = rawEvents
@@ -254,6 +282,33 @@ export function NotifyCard({
             </span>
           </div>
         </Field>
+
+        {/* C-06：主开关已开但无可用通道时，事件会被静默丢弃——按已保存
+          的配置检查并在此警告（凭据字段写-only，表单看不到已保存值）。 */}
+        {enabled && health && !health.usable && (
+          <p className="rounded-xl bg-warning-50 px-3 py-2 text-xs font-semibold text-warning-700">
+            通知已开启但无法投递（按已保存的配置检查）：缺少
+            {health.missing
+              .map((m) =>
+                m === "telegramToken"
+                  ? "Telegram Bot Token"
+                  : m === "telegramChatId"
+                    ? "Telegram Chat ID"
+                    : m === "webhook"
+                      ? "Webhook 地址"
+                      : m === "events"
+                        ? "通知事件（当前全不选）"
+                        : m,
+              )
+              .join("、")}
+            ，事件将被静默丢弃。请补全后保存。
+          </p>
+        )}
+        {enabled && healthFailed && (
+          <p className="rounded-xl bg-warning-50 px-3 py-2 text-xs font-semibold text-warning-700">
+            通知健康度检查失败，无法确认通道是否可用。
+          </p>
+        )}
 
         <Divider />
         <Field
