@@ -741,6 +741,42 @@ const NodeCardContent = memo(function NodeCardContent({
                   原因：{node.nftablesError}
                 </p>
               )}
+              {/* nftables 缺失（A-低-6）：agent 已确认本机无 nftables，仅 nftables 模式节点记此态；订阅／realm 计数永不入账。 */}
+              {node.nftablesStatus === "missing" && (
+                <p className="break-words text-xs font-semibold text-danger-700">
+                  {node.nftablesError ||
+                    "未安装 nftables，订阅／realm 计数不入账"}
+                </p>
+              )}
+              {/* nft 采集健康（A-中-2）：连续失败有次数时显示，越阈值（failing）为红、阈值内为黄；原因见 title 与正文。 */}
+              {(node.nftCollectFailCount ?? 0) > 0 && (
+                <p
+                  className={
+                    node.nftCollectState === "failing"
+                      ? "break-words text-xs font-semibold text-danger-700"
+                      : "break-words text-xs font-semibold text-warning-700"
+                  }
+                  title={node.nftCollectLastError || undefined}
+                >
+                  nft 采集连续失败 ×{node.nftCollectFailCount}
+                  {node.nftCollectLastError
+                    ? `：${node.nftCollectLastError}`
+                    : ""}
+                </p>
+              )}
+              {/* 指标陈旧（A-低-6）：5 分钟无新指标行，累计数可能停在旧值。 */}
+              {node.metricStale && (
+                <p className="break-words text-xs font-semibold text-warning-700">
+                  数据陈旧：最近指标上报超过 5 分钟，累计数可能停在旧值
+                </p>
+              )}
+              {/* 同机 NIC 共享（A-低-5）：与所列节点共用整机网卡计数，本月流量只计一次。 */}
+              {node.nicSharedWith && node.nicSharedWith.length > 0 && (
+                <p className="text-xs font-semibold text-foreground">
+                  与节点 {node.nicSharedWith.join("、")}
+                  共用网卡计数（本月流量只计一次）
+                </p>
+              )}
               {node.whitelistEnabled === 1 && (
                 <>
                   <p className="text-xs font-semibold text-foreground">

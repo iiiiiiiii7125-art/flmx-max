@@ -51,6 +51,10 @@ func ForceClosePortConnections(addr string) (err error) {
 				fmt.Printf("⚠️ 终止 tcpkill 失败: %v\n", err)
 			}
 		}
+		// 低-9：Kill 后必须 Wait，否则已杀的 tcpkill 子进程残留
+		// 为 defunct 僵尸（父进程不收尸，init 不会接管仍有父的
+		// 孩子）。Wait 在 Kill 后立即返回（子进程已死）。
+		_ = cmd.Wait()
 	}()
 
 	fmt.Printf("✅ 正在断开端口 %d 上的所有连接...\n", port)

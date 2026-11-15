@@ -260,6 +260,43 @@ func clampNonNegativeI(v int64) int64 {
 	return v
 }
 
+// nicSharedStaleAfter 是同机 NIC 去重的失活窗口（A-低-5）：与该
+// BootID 关联的另一节点最后一次上报超过此窗口未见，即视为已失活，
+// 本节点接管计数；窗口内则只记最低节点 ID 的那一份。5 分钟＝
+// 10 倍上报间隔（30s），既容忍单轮抖动，又不让失活交接拖过一
+// 个窗口以上。
+const nicSharedStaleAfter = 5 * time.Minute
+
+// shouldCountNicTrafficLocked reports whether this node's NIC delta
+// should be accumulated this round (A-低-5). Caller holds
+// nodeBufferMu. Two agents on one machine each report the machine's
+// whole NIC counters; without dedupe the month total counts the same
+// bytes once per agent. BootID is the machine key (same proof
+// standard as counterDeltaForBoot: both sides must carry an id): a
+// live peer — same non-empty BootID, last seen within
+// nicSharedStaleAfter — makes only the lowest node ID count. Empty
+// BootID (old agent) never dedupes: unproven sharing is not sharing.
+// Losers still advance their baseline (lastBytes/lastBoot/lastSeen)
+// and metric rows, so a stale primary hands over cleanly with at most
+// one window lost and never a double count.
+func (s *IngestionService) shouldCountNicTrafficLocked(nodeID int64, bootID string, nowMs int64) bool {
+	if bootID == "" {
+		return true
+	}
+	for otherID, otherBoot := range s.lastBoot {
+		if otherID == nodeID || otherBoot != bootID {
+			continue
+		}
+		if s.lastSeen[otherID] < nowMs-int64(nicSharedStaleAfter/time.Millisecond) {
+			continue
+		}
+		if otherID < nodeID {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	// C3-05：agent 上报值先消毒再落库。此前 uint64→int64 在
 	// ≥2⁶³ 处直接回绕为负、百分比/速度/连接数原样存储——伪造
@@ -300,7 +337,7 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	s.nodeBuffer = append(s.nodeBuffer, m)
 	shouldFlush := len(s.nodeBuffer) >= 200
 	// The first report after a panel restart only sets the baseline.
-	if prev, ok := s.lastBytes[nodeID]; ok {
+	if prev, ok := s.lastBytes[nodeID]; ok && s.shouldCountNicTrafficLocked(nodeID, info.BootID, m.Timestamp) {
 		k := trafficKey{nodeID, m.Timestamp - m.Timestamp%int64(time.Hour/time.Millisecond)}
 		t := s.traffic[k]
 		// SAT2: flush 窗口内的缓冲合并是 AddNodeTraffic 落库前的合并

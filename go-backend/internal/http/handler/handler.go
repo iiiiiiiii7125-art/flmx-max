@@ -1031,6 +1031,8 @@ func (h *Handler) nodeList(w http.ResponseWriter, r *http.Request) {
 	h.attachNodeLatency(items)
 	h.attachNodeUninstallStates(items)
 	h.attachConnlogMarkStates(items)
+	h.attachNodeMetricStaleness(items)
+	h.attachNodeNicShared(items)
 
 	response.WriteJSON(w, response.OK(items))
 }

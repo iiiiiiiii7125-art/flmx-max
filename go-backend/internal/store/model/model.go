@@ -169,9 +169,21 @@ type Node struct {
 	WhitelistExtra   string `gorm:"column:whitelist_extra;type:text;not null;default:''"`
 	// nftables 状态（agent 上报的运行态，不进备份）：""＝未知／
 	// 未尝试、installed＝已安装、auto_installed＝本 agent 进程
-	// 自动装上、failed＝自动安装失败（原因见 NftablesError）。
+	// 自动装上、failed＝自动安装失败（原因见 NftablesError）、
+	// missing＝agent 已确认本机无 nftables（仅 nftables 模式节点；
+	// gost 模式无 nft 是正常形态，不记此态——见
+	// ingestNodeNftablesStatus）。
 	NftablesStatus string `gorm:"column:nftables_status;type:varchar(20);not null;default:''"`
 	NftablesError  string `gorm:"column:nftables_error;type:text;not null;default:''"`
+	// nft 采集健康（A-中-2，面板周期 SSH 采集的失败态，不进备份）：
+	// State ""＝未采集过、"ok"＝最近一次采集成功、"failing"＝连续
+	// 失败已达阈值（nftCollectFailAlertThreshold）；FailCount 为
+	// 连续失败次数、LastError 为最近一次失败原因原文、LastOKAt 为
+	// 最近一次成功采集的 UnixMilli。
+	NftCollectState     string `gorm:"column:nft_collect_state;type:varchar(16);not null;default:''"`
+	NftCollectFailCount int    `gorm:"column:nft_collect_fail_count;not null;default:0"`
+	NftCollectLastError string `gorm:"column:nft_collect_last_error;type:varchar(500);not null;default:''"`
+	NftCollectLastOKAt  int64  `gorm:"column:nft_collect_last_ok_at;not null;default:0"`
 }
 
 func (Node) TableName() string { return "node" }

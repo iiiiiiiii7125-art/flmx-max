@@ -63,11 +63,99 @@ func (h *Handler) runNftablesTrafficCollectJob(now time.Time) {
 // （L3-04）：与内核状态轮询 kernelStatusParallel=8 同口径。
 const nftablesTrafficCollectParallel = 8
 
-func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) {
-	batch, metas, nowMs, quotaViews, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
-	if err != nil || batch == nil {
+// nftCollectFailAlertThreshold 是 nft 采集失败的告警阈值（A-中-2）：
+// 采集每 30 秒一轮，连续失败 3 轮（90 秒）即在节点行记 failing
+// 并发一次告警；单轮抖动（一次 SSH  hiccup）不惊动管理员。
+const nftCollectFailAlertThreshold = 3
+
+// nftCollectLastErrorMaxLen 是节点行最近一次采集失败原因的截断长
+// 度（A-中-2）：SSH 失败原文可能很长，行内只留首段可读部分。
+const nftCollectLastErrorMaxLen = 500
+
+// recordNftCollectFailure records one failed periodic nft collection
+// round for nodeID (A-中-2): consecutive failure count +1, state flips
+// to "failing" at the threshold, last error kept verbatim (truncated).
+// The alert fires exactly on the threshold crossing; later rounds of
+// the same streak stay silent (the node row already says failing).
+// Rounds discarded because a newer apply is in flight
+// (errDiscardedDueToApplying) are NOT failures and must never call
+// this — their samples are re-collected by the next round.
+func (h *Handler) recordNftCollectFailure(nodeID int64, err error) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
 		return
 	}
+	node, rerr := h.repo.GetNodeByID(nodeID)
+	if rerr != nil || node == nil {
+		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, rerr)
+		return
+	}
+	failCount := node.NftCollectFailCount + 1
+	state := node.NftCollectState
+	if failCount >= nftCollectFailAlertThreshold {
+		state = "failing"
+	}
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	if len(errText) > nftCollectLastErrorMaxLen {
+		errText = errText[:nftCollectLastErrorMaxLen]
+	}
+	if uerr := h.repo.UpdateNftCollectHealth(nodeID, state, failCount, errText, node.NftCollectLastOKAt); uerr != nil {
+		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+		return
+	}
+	if failCount == nftCollectFailAlertThreshold {
+		h.dispatchNftCollectFailedAlert(nodeID)
+	}
+}
+
+// recordNftCollectSuccess records one successful periodic nft
+// collection round for nodeID (A-中-2): on transition (from failing,
+// from never-collected, or from a non-empty failure streak) it resets
+// the streak and stamps LastOKAt — steady-state successes write
+// nothing, so LastOKAt reads as "healthy since <time>". A recovery
+// from a failing streak also sends the recovery notification.
+func (h *Handler) recordNftCollectSuccess(nodeID int64, nowMs int64) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return
+	}
+	if node.NftCollectState == "ok" && node.NftCollectFailCount == 0 && node.NftCollectLastError == "" {
+		return
+	}
+	wasFailing := node.NftCollectState == "failing"
+	if uerr := h.repo.UpdateNftCollectHealth(nodeID, "ok", 0, "", nowMs); uerr != nil {
+		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+		return
+	}
+	if wasFailing {
+		h.dispatchNftCollectRecoveredAlert(nodeID)
+	}
+}
+
+func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) {
+	batch, metas, nowMs, quotaViews, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
+	if err != nil {
+		// A-中-2：采集失败必须在节点侧可见（节点行健康态＋越阈
+		// 值告警），不止后端日志一行。
+		h.recordNftCollectFailure(nodeID, err)
+		return
+	}
+	if batch == nil {
+		// 无增量本轮：nowMs>0 是采集成功的空轮（基线已推进）；
+		// nowMs==0 是丢弃轮（accountNftablesNodeTrafficCtx 在
+		// applying 丢弃时回 0）——丢弃既非成功也非失败，其样本
+		// 由下轮补回，健康态不动。
+		if nowMs > 0 {
+			h.recordNftCollectSuccess(nodeID, nowMs)
+		}
+		return
+	}
+	h.recordNftCollectSuccess(nodeID, nowMs)
 	h.recordTunnelMetricsFromForwardBatch(nodeID, batch.forwardTraffic, metas, nowMs)
 	for userID, quota := range quotaViews {
 		h.enforceUserQuotaIfNeeded(userID, quota)
@@ -156,7 +244,7 @@ func (h *Handler) accountNftablesNodeTrafficCtx(ctx context.Context, nodeID int6
 		hashes[binding.ForwardID] = ruleHash
 	}
 
-	boundSamples := filterNftCounterSamplesWithBinding(samples, hashes)
+	boundSamples := filterNftCounterSamplesWithBinding(nodeID, samples, hashes)
 	return h.accountForwardCounterSamples(nodeID, boundSamples, hashes, now)
 }
 
@@ -412,16 +500,30 @@ func filterOutNftDeltasMissingMeta(deltas []nftTrafficDelta, newStates []repo.Nf
 	return keptDeltas, keptStates
 }
 
-func filterNftCounterSamplesWithBinding(samples []runtimenft.CounterSample, hashes map[int64]string) []runtimenft.CounterSample {
+// filterNftCounterSamplesWithBinding drops counter samples whose
+// forward has no applied binding (A-中-3): without an applied binding
+// the sample cannot be attributed to a live rule, so it is skipped.
+// The skip is logged once per call when >0 — an unbound sample usually
+// means a rule was removed while its counters were still reporting,
+// which the admin should be able to see instead of silently losing.
+func filterNftCounterSamplesWithBinding(nodeID int64, samples []runtimenft.CounterSample, hashes map[int64]string) []runtimenft.CounterSample {
 	if len(samples) == 0 || len(hashes) == 0 {
+		if len(samples) > 0 {
+			log.Printf("nft counter samples dropped node_id=%d samples=%d reason=no_applied_binding", nodeID, len(samples))
+		}
 		return nil
 	}
 	filtered := make([]runtimenft.CounterSample, 0, len(samples))
+	dropped := 0
 	for _, sample := range samples {
 		if _, ok := hashes[sample.ForwardID]; !ok {
+			dropped++
 			continue
 		}
 		filtered = append(filtered, sample)
+	}
+	if dropped > 0 {
+		log.Printf("nft counter samples dropped node_id=%d samples=%d reason=no_applied_binding", nodeID, dropped)
 	}
 	return filtered
 }
@@ -445,17 +547,25 @@ func buildNftCounterDeltas(nodeID int64, samples []runtimenft.CounterSample, old
 
 	stateInputs := make([]repo.NftCounterStateInput, 0, len(samples))
 	deltaByForward := make(map[int64]nftTrafficDelta)
+	// A-中-3：畸形样本丢弃计数——方向/协议不在枚举内、字节数溢出
+	// int64 的样本无法入账；每轮一行摘要日志（无丢弃不打）。计数
+	// 器重置（sample.Bytes < oldBytes）不在此列：那是已登记的
+	// M-004 已知局限（基线推进、不计费），不是畸形丢弃。
+	droppedBadDirection, droppedBadProtocol, droppedOversize := 0, 0, 0
 	for _, sample := range samples {
 		direction := strings.ToLower(strings.TrimSpace(sample.Direction))
 		if direction != runtimenft.CounterDirectionToTarget && direction != runtimenft.CounterDirectionFromTarget {
+			droppedBadDirection++
 			continue
 		}
 
 		protocol := strings.ToLower(strings.TrimSpace(sample.Protocol))
 		if protocol != "tcp" && protocol != "udp" {
+			droppedBadProtocol++
 			continue
 		}
 		if sample.Bytes > uint64(math.MaxInt64) || sample.Packets > uint64(math.MaxInt64) {
+			droppedOversize++
 			continue
 		}
 		ruleHash := strings.TrimSpace(hashes[sample.ForwardID])
@@ -528,6 +638,11 @@ func buildNftCounterDeltas(nodeID int64, samples []runtimenft.CounterSample, old
 			continue
 		}
 		deltas = append(deltas, delta)
+	}
+	if droppedBadDirection+droppedBadProtocol+droppedOversize > 0 {
+		log.Printf("nft counter samples dropped node_id=%d samples=%d bad_direction=%d bad_protocol=%d oversize=%d",
+			nodeID, droppedBadDirection+droppedBadProtocol+droppedOversize,
+			droppedBadDirection, droppedBadProtocol, droppedOversize)
 	}
 	return deltas, stateInputs
 }

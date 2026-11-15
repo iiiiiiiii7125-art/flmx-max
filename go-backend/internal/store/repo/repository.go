@@ -1401,9 +1401,17 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"whitelistExtra":   n.WhitelistExtra,
 			// nftables 状态（agent 上报的运行态）：""＝未知、installed
 			// ＝已安装、auto_installed＝已自动安装、failed＝自动安装
-			// 失败（原因见 nftablesError）。
-			"nftablesStatus":      n.NftablesStatus,
-			"nftablesError":       n.NftablesError,
+			// 失败（原因见 nftablesError）、missing＝agent 已确认本
+			// 机无 nftables（仅 nftables 模式节点）。
+			"nftablesStatus": n.NftablesStatus,
+			"nftablesError":  n.NftablesError,
+			// nft 采集健康（A-中-2，面板周期 SSH 采集的失败态）：
+			// ""＝未采集过、"ok"＝最近一次采集成功、"failing"＝
+			// 连续失败已达阈值（原因见 nftCollectLastError）。
+			"nftCollectState":     n.NftCollectState,
+			"nftCollectFailCount": n.NftCollectFailCount,
+			"nftCollectLastError": n.NftCollectLastError,
+			"nftCollectLastOkAt":  n.NftCollectLastOKAt,
 			"interfaceName":       nullableString(n.InterfaceName),
 			"sshConfig":           sshConfigByNodeID[n.ID],
 			"upgradeVerification": upgradeVerification,
@@ -7534,6 +7542,39 @@ func (r *Repository) GetLatestNodeMetric(nodeID int64) (*model.NodeMetric, error
 		return nil, err
 	}
 	return &m, nil
+}
+
+// LatestNodeMetricTimes returns each given node's latest NodeMetric
+// timestamp (UnixMilli) in one query; nodes without any metric row
+// are absent from the map (A-低-6: a missing key means "never
+// reported", which is stale by definition, not "zero traffic").
+func (r *Repository) LatestNodeMetricTimes(nodeIDs []int64) (map[int64]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	out := make(map[int64]int64, len(nodeIDs))
+	if len(nodeIDs) == 0 {
+		return out, nil
+	}
+	type row struct {
+		NodeID int64 `gorm:"column:node_id"`
+		Latest int64 `gorm:"column:latest"`
+	}
+	var rows []row
+	for _, chunk := range chunkInt64IDs(nodeIDs) {
+		var part []row
+		if err := r.db.Table("node_metric").
+			Select("node_id, MAX(timestamp) AS latest").
+			Where("node_id IN ?", chunk).
+			Group("node_id").Scan(&part).Error; err != nil {
+			return nil, err
+		}
+		rows = append(rows, part...)
+	}
+	for _, row := range rows {
+		out[row.NodeID] = row.Latest
+	}
+	return out, nil
 }
 
 // pruneDeleteChunk 是指标类 prune 的单批删除行数（L3-03，

@@ -369,10 +369,12 @@ func TestNodeTrafficBootKeyedDeltas(t *testing.T) {
 	rec(7, "boot-a", 150, 80)   // +50/+30
 	rec(7, "boot-a", 60, 40)    // second same-boot regression: +0
 	// Node 8 reboots between reports: the regression is proven.
-	rec(8, "boot-a", 1000, 500) // baseline
-	rec(8, "boot-a", 1600, 900) // +600/+400
-	rec(8, "boot-b", 100, 50)   // boot changed: counts in full +100/+50
-	rec(8, "boot-b", 200, 90)   // +100/+40
+	// A-低-5：8 号须用与 7 号不同的 BootID——同 BootID 即同机，
+	// 去重后 8 号的增量会被 7 号（更低 ID）吞掉。
+	rec(8, "boot-c", 1000, 500) // baseline
+	rec(8, "boot-c", 1600, 900) // +600/+400
+	rec(8, "boot-d", 100, 50)   // boot changed: counts in full +100/+50
+	rec(8, "boot-d", 200, 90)   // +100/+40
 	totals := map[int64][2]int64{}
 	for k, v := range s.traffic {
 		t := totals[k.node]
@@ -385,5 +387,53 @@ func TestNodeTrafficBootKeyedDeltas(t *testing.T) {
 	}
 	if got := totals[8]; got != [2]int64{800, 490} {
 		t.Fatalf("reboot traffic = %v, want [800 490]", got)
+	}
+}
+
+// A-低-5: two agents on one machine (same BootID) each report the
+// machine's whole NIC counters; only the lowest node ID's delta
+// counts. A loser still advances its baseline, so when the winner
+// goes stale (>5 min without a report) the loser takes over without
+// double-counting or losing more than one window. Empty BootID (old
+// agent) never dedupes.
+func TestNodeTrafficSharedBootIDDedupes(t *testing.T) {
+	s := NewIngestionService(nil)
+	rec := func(node int64, boot string, in, out uint64) {
+		s.RecordNodeMetric(node, SystemInfo{BootID: boot, BytesReceived: in, BytesTransmitted: out})
+	}
+	totals := func() map[int64][2]int64 {
+		out := map[int64][2]int64{}
+		for k, v := range s.traffic {
+			cur := out[k.node]
+			cur[0] += v[0]
+			cur[1] += v[1]
+			out[k.node] = cur
+		}
+		return out
+	}
+
+	rec(1, "boot-x", 1000, 500)  // baseline
+	rec(2, "boot-x", 1000, 500)  // baseline (same machine)
+	rec(1, "boot-x", 3000, 1500) // winner: +2000/+1000
+	rec(2, "boot-x", 3000, 1500) // loser: +0 (same bytes, other agent)
+	if got := totals(); got[1] != [2]int64{2000, 1000} || got[2] != [2]int64{0, 0} {
+		t.Fatalf("shared-boot traffic = %v, want node1=[2000 1000] node2=[0 0]", got)
+	}
+
+	// Winner goes stale: force its lastSeen 10 min back; the loser
+	// takes over on its next report.
+	s.lastSeen[1] = time.Now().Add(-10 * time.Minute).UnixMilli()
+	rec(2, "boot-x", 4000, 2000) // +1000/+500 counted now
+	if got := totals(); got[2] != [2]int64{1000, 500} {
+		t.Fatalf("after handover node2 traffic = %v, want [1000 500]", got[2])
+	}
+
+	// Empty BootID never dedupes: nodes 5 and 6 both count in full.
+	rec(5, "", 1000, 500)
+	rec(6, "", 1000, 500)
+	rec(5, "", 2000, 1000)
+	rec(6, "", 2000, 1000)
+	if got := totals(); got[5] != [2]int64{1000, 500} || got[6] != [2]int64{1000, 500} {
+		t.Fatalf("empty-boot traffic = %v, want node5=[1000 500] node6=[1000 500]", got)
 	}
 }

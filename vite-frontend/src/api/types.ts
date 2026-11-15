@@ -35,6 +35,20 @@ export interface NodeApiItem {
   nftablesStatus?: string;
   /** nftables 安装失败原因（后端上报的原文；仅 status 为 failed 时非空，缺失/空串即无错误）。 */
   nftablesError?: string;
+  /** nft 采集健康（A-中-2）：""＝未采集过、"ok"＝最近一轮成功、"failing"＝连续失败已达阈值。 */
+  nftCollectState?: string;
+  /** nft 采集连续失败次数（A-中-2）：>0 时节点页显示失败 streak，原因见 nftCollectLastError。 */
+  nftCollectFailCount?: number;
+  /** nft 采集最近一次失败原因原文（A-中-2）。 */
+  nftCollectLastError?: string;
+  /** nft 采集最近一次成功（恢复／首次）的 UnixMilli（A-中-2）。 */
+  nftCollectLastOkAt?: number;
+  /** 节点最近一次指标上报的 UnixMilli（A-低-6）：0＝从未上报。 */
+  lastMetricAt?: number;
+  /** 指标是否陈旧（A-低-6）：5 分钟无新指标行即为真，累计数可能停在旧值。 */
+  metricStale?: boolean;
+  /** 与本节点共用整机网卡计数的其他节点 ID（A-低-5）：同机多 agent 时本月流量只计一次。 */
+  nicSharedWith?: number[];
   [key: string]: unknown;
 }
 
