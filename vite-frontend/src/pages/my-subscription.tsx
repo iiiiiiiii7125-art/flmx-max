@@ -407,6 +407,11 @@ export default function MySubscriptionPage() {
                       : `${dateText(s.trafficSince)} 起已用 ${formatTraffic(used)} · 不限流量`}
                     {s.expireTime > 0 ? ` · ${dateText(s.expireTime)} 到期` : ""}
                   </p>
+                  {s.usageInboundTotal && (
+                    <p className="text-xs font-semibold text-foreground">
+                      客户端订阅信息里的已用是所选入站的总流量（入站总量，非本订阅独占），共用同一入站的订阅显示相同数字；该数字不用于超限判定。
+                    </p>
+                  )}
                   <div className="rounded-lg glass-inset p-3">
                     <p className="text-xs font-semibold text-foreground mb-2 break-all select-all">
                       {assignedUrl(s)}
