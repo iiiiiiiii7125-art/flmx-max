@@ -76,12 +76,13 @@ func TestNFTScriptBlockedUserReject(t *testing.T) {
 func TestAllBlockedUserMarks(t *testing.T) {
 	m := &Manager{instances: map[string]*instance{}, nft: &nftCounters{}}
 	m.instances["sing-box"] = &instance{
-		req:        ApplyRequest{Enabled: true},
-		tombstones: map[string]bool{"u2": true, "u5": true, "bogus": true},
+		req:          ApplyRequest{Enabled: true},
+		tombstones:   map[string]bool{"u9": true}, // sweeper-only, never rendered (R4B-01)
+		blockedMarks: map[string]bool{"u2": true, "u5": true, "bogus": true},
 	}
 	m.instances["xray"] = &instance{
-		req:        ApplyRequest{Enabled: false},
-		tombstones: map[string]bool{"u9": true},
+		req:          ApplyRequest{Enabled: false},
+		blockedMarks: map[string]bool{"u9": true},
 	}
 	got := m.allBlockedUserMarks()
 	// Enabled instance contributes u2 and u5; the unparseable name

@@ -70,6 +70,20 @@ type instance struct {
 	// which is what makes the removal airtight for fast new
 	// connections. Re-adding a user clears its tombstone.
 	tombstones map[string]bool
+	// blockedMarks is the durable half of the tombstone (R4B-01):
+	// the auth_user names whose nft reject rule must stay in the
+	// table while the truncation is active. Unlike tombstones it
+	// is NOT spent when the running config is refreshed — the
+	// panel still shows the truncation active (applied=0), and a
+	// table rebuild after a reload/restart would otherwise
+	// silently drop the reject while the panel believes it
+	// enforced. It leaves only when the user is live in the
+	// config again or the instance is disabled/removed, and it
+	// is persisted to blocked.json beside state.json so an agent
+	// restart cannot lose it either. The sweeper never reads
+	// this map: after a restart the running config is fresh and
+	// there is nothing for the sweeper to close.
+	blockedMarks map[string]bool
 	// clashAddr is the companion's Clash API address
 	// (experimental.clash_api.external_controller) from the last
 	// applied config; "" when the API is not configured.
@@ -232,19 +246,45 @@ func (m *Manager) restore() {
 		fmt.Printf("⚠️ 内核状态文件损坏: %v\n", err)
 		return
 	}
+	// R4B-01: load the durable reject set BEFORE re-applying: every
+	// confirmed Apply persists, and a persist with the still-empty
+	// in-memory set would overwrite blocked.json before it is read
+	// (live R4B-01d: agent restart came back with blocked.json={}).
+	blocked := m.loadBlockedMarks()
 	for _, req := range reqs {
 		if _, err := m.Apply(req); err != nil {
 			fmt.Printf("⚠️ 恢复内核 %s 失败: %v\n", req.Type, err)
 		}
+	}
+	// The re-apply above cannot recreate the durable reject half —
+	// its user diff sees no removal — so install the loaded set now
+	// and render it at once instead of waiting for the next verify
+	// tick. The final persist rewrites blocked.json: the Apply loop
+	// may have persisted an empty set while the marks were still
+	// unloaded.
+	if m.installBlockedMarks(blocked) {
+		if err := m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks()); err != nil {
+			log.Printf("[flmx] 持久墓碑恢复后规则同步失败: %v（下轮自检重试）", err)
+		}
+		m.persist()
 	}
 }
 
 func (m *Manager) persist() {
 	m.mu.Lock()
 	reqs := make([]ApplyRequest, 0, len(m.instances))
-	for _, inst := range m.instances {
+	blocked := make(map[string][]string)
+	for typ, inst := range m.instances {
 		if inst.req.Type != "" {
 			reqs = append(reqs, inst.req)
+		}
+		if len(inst.blockedMarks) > 0 {
+			names := make([]string, 0, len(inst.blockedMarks))
+			for name := range inst.blockedMarks {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			blocked[typ] = names
 		}
 	}
 	m.mu.Unlock()
@@ -257,6 +297,92 @@ func (m *Manager) persist() {
 		return
 	}
 	_ = writeFileAtomic(m.statePath(), b, 0o600)
+	m.writeBlockedMarks(blocked)
+}
+
+// blockedMarksPath is the durable nft-reject set (R4B-01), beside
+// state.json: kernel type -> tombstoned auth_user names whose
+// reject rule must survive a config refresh and an agent restart.
+func (m *Manager) blockedMarksPath() string {
+	return filepath.Join(m.baseDir, "blocked.json")
+}
+
+// writeBlockedMarks persists the durable reject set (R4B-01).
+// Always rewritten, even when empty, so a cleared set cannot
+// resurrect from a stale file after a restart.
+func (m *Manager) writeBlockedMarks(blocked map[string][]string) {
+	if blocked == nil {
+		blocked = make(map[string][]string)
+	}
+	b, err := json.Marshal(blocked)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(m.baseDir, 0o700); err != nil {
+		return
+	}
+	_ = writeFileAtomic(m.blockedMarksPath(), b, 0o600)
+}
+
+// loadBlockedMarks reads the durable reject set (R4B-01) without
+// touching instances, so restore() can load it before the re-apply
+// loop: a missing file is a fresh agent (nil), a corrupt file is
+// logged and treated as empty (nil).
+func (m *Manager) loadBlockedMarks() map[string][]string {
+	b, err := os.ReadFile(m.blockedMarksPath())
+	if err != nil {
+		return nil
+	}
+	var blocked map[string][]string
+	if err := json.Unmarshal(b, &blocked); err != nil {
+		log.Printf("[flmx] 持久墓碑文件损坏，已忽略: %v", err)
+		return nil
+	}
+	return blocked
+}
+
+// installBlockedMarks installs a loaded durable reject set into the
+// (re-applied) instances. Names live in the on-disk config again are
+// pruned (the user was re-added while the agent was down); the
+// sweeper half is deliberately NOT restored — the re-applied config
+// is fresh, so there is nothing for the sweeper to close. Reports
+// whether any mark survived.
+func (m *Manager) installBlockedMarks(blocked map[string][]string) bool {
+	if len(blocked) == 0 {
+		return false
+	}
+	m.mu.Lock()
+	for typ, names := range blocked {
+		inst := m.instances[typ]
+		if inst == nil || len(names) == 0 {
+			continue
+		}
+		if inst.blockedMarks == nil {
+			inst.blockedMarks = make(map[string]bool)
+		}
+		for _, name := range names {
+			inst.blockedMarks[name] = true
+		}
+	}
+	for typ, inst := range m.instances {
+		if len(inst.blockedMarks) > 0 {
+			pruneLiveTombstones(inst, m.runDir(typ))
+		}
+	}
+	m.mu.Unlock()
+	return len(m.allBlockedUserMarks()) > 0
+}
+
+// restoreBlockedMarks reloads the durable reject set (R4B-01) into
+// the current instances. Names live in the on-disk config again are
+// pruned (the user was re-added while the agent was down); the
+// sweeper half is deliberately NOT restored — the re-applied config
+// is fresh, so there is nothing for the sweeper to close. Reports
+// whether any mark survived. A missing file is a fresh agent
+// (nothing to restore); a corrupt file is logged and treated as
+// empty.
+func (m *Manager) restoreBlockedMarks() bool {
+	return m.installBlockedMarks(m.loadBlockedMarks())
 }
 
 // allPorts and allUserMarks derive the nft desired state. Only
@@ -292,13 +418,17 @@ func (m *Manager) allUserMarks() []int64 {
 	return ids
 }
 
-// allBlockedUserMarks derives the nft desired state for tombstoned
-// users (V-D): a removed user's mark is rejected in the output
-// chain, so a new connection admitted by the still-running old
-// config dies at the handshake instead of draining through the 2s
-// sweeper's graceful close. Only enabled instances contribute; a
-// tombstone whose name does not parse to a user id is skipped here
-// (the sweeper still closes it by name).
+// allBlockedUserMarks derives the nft desired state for
+// truncated users (V-D): a removed user's mark is rejected in the
+// output chain, so a new connection admitted by the still-running
+// old config dies at the handshake instead of draining through the
+// 2s sweeper's graceful close. It reads the durable reject half
+// (blockedMarks, R4B-01), not the transient sweeper half
+// (tombstones): the reject must survive a config refresh and an
+// agent restart, while the sweeper is spent by both. Only enabled
+// instances contribute; a blocked name that does not parse to a
+// user id is skipped here (the sweeper still closes it by name
+// while its half lives).
 func (m *Manager) allBlockedUserMarks() []int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -307,13 +437,59 @@ func (m *Manager) allBlockedUserMarks() []int64 {
 		if !inst.req.Enabled {
 			continue
 		}
-		for name := range inst.tombstones {
+		for name := range inst.blockedMarks {
 			if id, ok := tombstoneUserID(name); ok {
 				ids = append(ids, id)
 			}
 		}
 	}
 	return ids
+}
+
+// pruneLiveTombstones drops any tombstoned/blocked user that is
+// live in the on-disk config again — a re-added user must not stay
+// rejected. Both halves are pruned (R4B-01). A missing or
+// unparsable config keeps the sets as-is (fail-closed: keep
+// blocking). Callers hold m.mu.
+func pruneLiveTombstones(inst *instance, runDir string) {
+	if len(inst.tombstones) == 0 && len(inst.blockedMarks) == 0 {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(runDir, "config.json"))
+	if err != nil {
+		return
+	}
+	live, err := singboxUsers(b)
+	if err != nil {
+		return
+	}
+	for _, u := range live {
+		delete(inst.tombstones, u)
+		delete(inst.blockedMarks, u)
+	}
+}
+
+// reconcileTombstones settles the two halves of a removal after an
+// Apply (R4B-01). The sweeper half (tombstones) is spent once the
+// running config is fresh — a reload/restart drops every session,
+// so the sweeper has nothing left to close. The nft-reject half
+// (blockedMarks) is NOT spent on refresh: the panel still shows
+// the truncation active (applied=0), and a later table rebuild
+// would otherwise silently drop the reject while the panel
+// believes it enforced. Blocked marks leave only when the user is
+// live in the config again or the instance is disabled.
+func (m *Manager) reconcileTombstones(inst *instance, req ApplyRequest, configRefreshed bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !req.Enabled {
+		inst.tombstones = nil
+		inst.blockedMarks = nil
+		return
+	}
+	if configRefreshed {
+		inst.tombstones = nil
+	}
+	pruneLiveTombstones(inst, m.runDir(req.Type))
 }
 
 // pinnedSHA256 returns the expected SHA-256 for the binary a
@@ -755,13 +931,21 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 			// open again until a reload/restart refreshes it — and
 			// the nft sync below rejects their new dials at the
 			// handshake (V-D), which is what makes the removal
-			// airtight for fast transfers.
+			// airtight for fast transfers. The reject half
+			// (blockedMarks, R4B-01) is recorded alongside the
+			// sweeper half: it outlives the refresh and is
+			// persisted, so a later table rebuild cannot silently
+			// drop the reject while the truncation is active.
 			m.mu.Lock()
 			if inst.tombstones == nil {
 				inst.tombstones = make(map[string]bool)
 			}
+			if inst.blockedMarks == nil {
+				inst.blockedMarks = make(map[string]bool)
+			}
 			for _, u := range removedUsers {
 				inst.tombstones[u] = true
+				inst.blockedMarks[u] = true
 			}
 			m.mu.Unlock()
 			m.startSweeperOnce()
@@ -771,17 +955,10 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	// tombstones BEFORE the sync, so the rebuild does not carry a
 	// reject rule for a user the new config admits. The reconcile
 	// after the switch repeats this; doing it here is what makes
-	// the render correct.
+	// the render correct. Both halves are pruned (R4B-01): a
+	// re-added user must not stay in the durable reject set.
 	m.mu.Lock()
-	if len(inst.tombstones) > 0 {
-		if b, err := os.ReadFile(filepath.Join(runDir, "config.json")); err == nil {
-			if live, err := singboxUsers(b); err == nil {
-				for _, u := range live {
-					delete(inst.tombstones, u)
-				}
-			}
-		}
-	}
+	pruneLiveTombstones(inst, runDir)
 	m.mu.Unlock()
 
 	// The nft sync runs BEFORE any process starts: the ruleset carries
@@ -887,22 +1064,11 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	} else if len(req.UserMarks) > 0 && len(diffUserMarks(prev.req.UserMarks, req.UserMarks)) > 0 {
 		inst.logs.add(fmt.Sprintf("[flmx] 配置未走干净重载（reloadedClean=%v enabled=%v stable=%v），移除用户 %v 的已有连接未切断", reloadedClean, req.Enabled, stable, diffUserMarks(prev.req.UserMarks, req.UserMarks)))
 	}
-	// Reconcile the tombstones: a reload/restart (or a stop) makes
-	// the in-memory config fresh, so the tombstones are spent; a
-	// re-added user is live again and leaves the set.
-	m.mu.Lock()
-	if !req.Enabled || configRefreshed {
-		inst.tombstones = nil
-	} else if len(inst.tombstones) > 0 {
-		if b, err := os.ReadFile(filepath.Join(runDir, "config.json")); err == nil {
-			if live, err := singboxUsers(b); err == nil {
-				for _, u := range live {
-					delete(inst.tombstones, u)
-				}
-			}
-		}
-	}
-	m.mu.Unlock()
+	// Reconcile the tombstones (see reconcileTombstones): a
+	// reload/restart spends the sweeper half, but the durable
+	// reject half stays until the user is re-added or the
+	// instance is disabled (R4B-01).
+	m.reconcileTombstones(inst, req, configRefreshed)
 
 	var failure error
 	confirmed := true
