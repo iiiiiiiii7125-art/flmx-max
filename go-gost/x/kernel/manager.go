@@ -1624,6 +1624,15 @@ func (m *Manager) Shutdown() {
 		}(inst)
 	}
 	wg.Wait()
+	// R2C-02：优雅退出回收自家 nft 表——只删自己的表（removeTables
+	// 的 legacy 清理分支会动活着的 legacy agent 的表，退出路径不
+	// 得碰；Uninstall 仍走 removeTables 全量清理）。失败只记日志、
+	// 不阻塞退出；下次启动 sync 即重建该表。
+	if m.nft != nil {
+		if err := m.nft.removeOwnTable(); err != nil {
+			log.Printf("agent shutdown nft reclaim failed table=%s err=%v", m.nft.tableName(), err)
+		}
+	}
 }
 
 func detectVersion(bin string, args []string) string {

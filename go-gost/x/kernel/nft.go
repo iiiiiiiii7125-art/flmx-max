@@ -491,9 +491,9 @@ type nftCounters struct {
 	// (F2-DBL-01, per-agent; E-01: derived by the panel from the
 	// node secret, adopted verbatim here). 0 reads as the legacy
 	// userMarkBase (old panel that does not send a base).
-	markBase    int64
-	state       nftState
-	lastErr     string
+	markBase int64
+	state    nftState
+	lastErr  string
 	// autoInstalled 表示本进程曾为白名单自动装上 nftables（供状态
 	// 上报区分“已安装”与“已自动安装”；进程重启后复位为 false，
 	// 此后 nft 在场即报“已安装”）。
@@ -674,6 +674,22 @@ func (n *nftCounters) removeTables() error {
 	return err
 }
 
+// removeOwnTable deletes only this agent's own nft table (R2C-02):
+// the graceful-exit reclaim. Unlike removeTables it never touches
+// the legacy tables — a live legacy agent's table must survive a
+// current-agent restart — and never the hop probe table. The table
+// is rebuilt from scratch by the next sync anyway, and the panel's
+// nft collection only polls online nodes, so no consumer can still
+// read this table after exit. Kill -9 / crash exits cannot run this;
+// residue from unclean exits still needs an operator sweep.
+func (n *nftCounters) removeOwnTable() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	script := fmt.Sprintf("table inet %s {}\ndelete table inet %s\n", n.tableName(), n.tableName())
+	_, err := nftRunner(ctx, script, "-f", "-")
+	return err
+}
+
 // hopRulesError reports that every port-hop rule was rejected by the
 // kernel (typically an old kernel without nft_fib) while the main
 // ruleset — traffic counters and inbound whitelists — was applied
@@ -811,8 +827,8 @@ func (n *nftCounters) sync(ports []Port, users []int64, blocked []int64) error {
 type nftListOutput struct {
 	Nftables []struct {
 		Counter *struct {
-			Name    string `json:"name"`
-			Table   string `json:"table"`
+			Name  string `json:"name"`
+			Table string `json:"table"`
 			// Packets is the packet count of this counter. FIX-029
 			// (AUDIT-HIST): the panel converts realm nft counters
 			// from the IP layer to the payload layer, and that

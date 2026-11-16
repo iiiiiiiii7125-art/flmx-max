@@ -1275,12 +1275,17 @@ export default function SubscriptionPage() {
         </div>
         <div className="mt-1.5">
           <Usage compact s={s} />
-          {s.usageInboundTotal && (
-            <p className="mt-1 text-xs font-semibold text-foreground">
-              客户端订阅信息里的已用是所选入站的总流量（入站总量，非本订阅独占），共用同一入站的订阅显示相同数字；该数字不用于超限判定。
-            </p>
-          )}
         </div>
+        {/*
+          D-N1：列表行补下发实态文案（与详情同口径的 appliedStateLabel）。
+          默认态（在用且已下发）只是一句“…起的上传 + 下载合计”，与
+          Usage 行重复、不渲染；只在超限／未激活／未下发／待同步时
+          显示——即 D-02 修复在主管理视图上缺的那一行。 */}
+        {(s.overQuota || !s.active || s.appliedActive !== 1) && (
+          <div className="truncate text-xs font-semibold text-foreground">
+            {appliedStateLabel(s)}
+          </div>
+        )}
         {s.zeroEndpointReason && (
           <div className="truncate text-xs font-semibold text-warning-700">
             {s.zeroEndpointReason}
@@ -1485,11 +1490,6 @@ export default function SubscriptionPage() {
                 <ModalBody className="space-y-3">
                   <div className="space-y-2 rounded-xl glass-inset p-3">
                     <Usage s={detail} />
-                    {detail.usageInboundTotal && (
-                      <p className="text-xs font-semibold text-foreground">
-                        客户端订阅信息里的已用是所选入站的总流量（入站总量，非本订阅独占），共用同一入站的订阅显示相同数字；该数字不用于超限判定。
-                      </p>
-                    )}
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold text-foreground">
                         {appliedStateLabel(detail)}

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -183,5 +185,33 @@ func TestRealmEngineSwitchConverges(t *testing.T) {
 	}
 	if payload["enabled"] != false || len(payload["ports"].([]map[string]interface{})) != 0 {
 		t.Fatalf("realm payload after switch-back should be idle: %v", payload)
+	}
+}
+
+// TestAccountRealmCountersBadSamplesWarn (R2A-5)：realm 计数样本的负值／
+// 非法方向不得静默丢弃——与入站面同口径按转发聚合 warn。非 realm 入站
+// （RealmForwardID 不解析）是正常过滤，不计入、不打日志。
+func TestAccountRealmCountersBadSamplesWarn(t *testing.T) {
+	h := &Handler{}
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(old)
+
+	fid := kernel.RealmCounterID(7)
+	_, _, _, _, err := h.accountRealmCounters(1, "e1", []agentKernelCounter{
+		{InboundID: fid, Proto: "tcp", Dir: "in", Bytes: -5},
+		{InboundID: fid, Proto: "tcp", Dir: "sideways", Bytes: 50},
+		{InboundID: 123, Proto: "tcp", Dir: "in", Bytes: 100},
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("accountRealmCounters: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "realm counter sample negative") || !strings.Contains(out, "forward_id=7") {
+		t.Fatalf("expected negative-bytes realm warn for forward 7, log = %q", out)
+	}
+	if !strings.Contains(out, "realm counter sample bad_direction") || !strings.Contains(out, "forward_id=7") {
+		t.Fatalf("expected illegal-direction realm warn for forward 7, log = %q", out)
 	}
 }

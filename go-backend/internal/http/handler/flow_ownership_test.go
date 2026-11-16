@@ -95,6 +95,9 @@ func TestBuildNodeFlowUploadBatchDropStats(t *testing.T) {
 		{N: "peer-share-abc", U: 10, D: 10},
 		{N: "70_1_0_tcp", U: 120, D: 80},
 		{N: "71_1_0_tcp", U: 50, D: 40},
+		// R2A-1：孤儿服务（转发 999 已删、agent 残留上报 u40/d40）：
+		// 字节须入丢弃台账并进单批摘要，清理集本身不动。
+		{N: "999_2_1", U: 40, D: 40},
 	}, metas)
 
 	if batch.dropped.peerShareItems != 1 || batch.dropped.peerShareBytes != 20 {
@@ -102,6 +105,12 @@ func TestBuildNodeFlowUploadBatchDropStats(t *testing.T) {
 	}
 	if batch.dropped.foreignForwardItems != 1 || batch.dropped.foreignForwardBytes != 200 {
 		t.Fatalf("foreign-forward items=%d bytes=%d, want 1/200", batch.dropped.foreignForwardItems, batch.dropped.foreignForwardBytes)
+	}
+	if batch.dropped.orphanItems != 1 || batch.dropped.orphanBytes != 80 {
+		t.Fatalf("orphan items=%d bytes=%d, want 1/80", batch.dropped.orphanItems, batch.dropped.orphanBytes)
+	}
+	if len(batch.orphanServices) != 1 {
+		t.Fatalf("orphanServices = %v, want 1 entry (999_2_1)", batch.orphanServices)
 	}
 	if len(batch.flowDeltas) != 1 || batch.flowDeltas[0].ForwardID != 71 {
 		t.Fatalf("expected 1 flow delta for local forward 71, got %+v", batch.flowDeltas)
@@ -111,6 +120,7 @@ func TestBuildNodeFlowUploadBatchDropStats(t *testing.T) {
 		"flow upload dropped node_id=1",
 		"peer_share=1/20B",
 		"foreign_forward=1/200B",
+		"orphan=1/80B",
 	} {
 		if !strings.Contains(logged, want) {
 			t.Fatalf("summary log must contain %q, got:\n%s", want, logged)

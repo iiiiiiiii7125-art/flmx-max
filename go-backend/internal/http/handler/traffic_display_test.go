@@ -204,6 +204,32 @@ func TestSubMeteringStatus(t *testing.T) {
 			memo:   &companionGateMemo{loaded: true, byOrigin: map[int64]kernel.Inbound{3: {}}},
 			status: "metered", reason: "",
 		},
+		{
+			// D-OBS-01：截断进行中（超限且已有计数）伴生重建，
+			// 伴生未下发是瞬态——徽标不翻未计量。
+			name:   "share over quota with counts keeps metered while companion rebuilding",
+			sub:    &model.Subscription{ID: 16, Name: "s", Kind: model.SubscriptionShare, Enabled: 1, SourceAll: 1, TrafficLimit: 100, UploadBytes: 60, DownloadBytes: 60},
+			rows:   []model.NodeInbound{ssOn},
+			memo:   noCompanions,
+			status: "metered", reason: "",
+		},
+		{
+			// D-OBS-01 对照：未超限时伴生缺失仍如实报未计量，
+			// 抑制只在截断进行中生效。
+			name:   "share not over quota with counts still unmetered without companion",
+			sub:    &model.Subscription{ID: 17, Name: "s", Kind: model.SubscriptionShare, Enabled: 1, SourceAll: 1, TrafficLimit: 1000, UploadBytes: 60, DownloadBytes: 60},
+			rows:   []model.NodeInbound{ssOn},
+			memo:   noCompanions,
+			status: "unmetered", reason: "伴生入站未下发到节点，不计量",
+		},
+		{
+			// D-OBS-01：多源时被抑制的伴生成因不进 partial 文案。
+			name:   "share over quota mixed sources suppressed companion reason stays metered",
+			sub:    &model.Subscription{ID: 18, Name: "s", Kind: model.SubscriptionShare, Enabled: 1, SourceAll: 1, TrafficLimit: 100, UploadBytes: 60, DownloadBytes: 60},
+			rows:   []model.NodeInbound{vless, ssOn},
+			memo:   noCompanions,
+			status: "metered", reason: "",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -413,9 +439,9 @@ func TestNotifyHealth(t *testing.T) {
 		return out.Data
 	}
 	cases := []struct {
-		name   string
-		config map[string]string
-		usable bool
+		name    string
+		config  map[string]string
+		usable  bool
 		missing []string
 	}{
 		{

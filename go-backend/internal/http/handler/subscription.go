@@ -940,13 +940,6 @@ type subscriptionView struct {
 	// 恒为 0，TrafficLimit 永不触发；视图构建单点回填，列表/
 	// 保存/详情同口径。
 	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
-	// UsageInboundTotal（B-L4）：非分享订阅为 true——该订阅没有归属
-	// 计量，订阅客户端（Subscription-Userinfo 头）显示的已用是所选
-	// 入站的行计数器之和（入站总量，非本订阅独占），共用同一入站的
-	// 订阅显示相同数字；该数字不用于超限判定。面板本视图的
-	// uploadBytes/downloadBytes 仍是订阅自身计数（非分享恒 0），与
-	// 客户端显示的入站总量是两个数，前端据此 flag 区分标注。
-	UsageInboundTotal bool `json:"usageInboundTotal,omitempty"`
 	// AppliedActive 是上次推到内核的 active 态（0 未下发／1 已下发／
 	// -1 待同步），与计算值 Active 对照才知道“已断开”是否真实落地
 	// （D-02）：Active 为真而 AppliedActive 为 0/-1 时凭据尚未下发，
@@ -1036,6 +1029,11 @@ func subSourcesGone(s *model.Subscription) bool {
 	return s.SourceAll == 0 && (len(parseIDList(s.InboundIDs)) > 0 || len(parseIDList(s.SourceIDs)) > 0)
 }
 
+// reasonCompanionNotLive 是 subMeteringSourceReason 的伴生未下发
+// 成因；D-OBS-01：截断进行中伴生重建时该成因是瞬态，
+// subMeteringStatus 对已有计数的超限订阅抑制它，不翻未计量徽标。
+const reasonCompanionNotLive = "伴生入站未下发到节点，不计量"
+
 // subMeteringSourceReason 报告一个分享订阅源不能产生计量流量的原因
 // （"" 表示该源可计量）：导入节点共用凭据；SS 共享凭据源无生效伴生
 // 时按开关／资格／形态／下发逐级定因。与视图 shared 判定同口径，
@@ -1066,14 +1064,15 @@ func subMeteringSourceReason(row *model.NodeInbound, liveCompanion bool) string 
 	if block := ssMeteringShapeBlock(row); block != "" {
 		return block
 	}
-	return "伴生入站未下发到节点，不计量"
+	return reasonCompanionNotLive
 }
 
 // subMeteringStatus 是分享订阅的计量状态（D-03）：全源可计量返回
 // ("metered", "")；全源未计量返回 ("unmetered", 首个 distinct 成因)；
 // 部分源未计量返回 ("partial", "其中 N 个源未计量（成因）")。非分享
 // 订阅不适用，返回 ("", "")。ID 超限（meteringUnsupported）为订阅级
-// 永久不计量，优先于源级成因。
+// 永久不计量，优先于源级成因。D-OBS-01 例外：超限且已有计数的订阅，
+// 伴生未下发成因视为截断重建中的瞬态、不计未计量。
 func (h *Handler) subMeteringStatus(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo) (string, string) {
 	if !isShare(s) {
 		return "", ""
@@ -1103,6 +1102,15 @@ func (h *Handler) subMeteringStatus(s *model.Subscription, rows []model.NodeInbo
 		}
 		_, live := companions[id]
 		if reason := subMeteringSourceReason(&row, live); reason != "" {
+			// D-OBS-01：截断进行中（超限且已有计数）伴生重建，
+			// 伴生未下发只是瞬态——该源不计未计量，徽标不翻
+			// unmetered（已用数旁挂“未计量”易误读为全程未计）。
+			// 其余成因（开关关／形态不符／下发阻塞）照常计；
+			// 非超限时伴生缺失仍如实报未计量。本路径无“伴生重
+			// 建中”的独立信号，超限即截断进行中的信号。
+			if reason == reasonCompanionNotLive && subOverQuota(s) && subUsed(s) > 0 {
+				continue
+			}
 			unmetered++
 			if !seenReason[reason] {
 				seenReason[reason] = true
@@ -1276,7 +1284,6 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		// F4 分支的旧谓词 isShare(s) && s.ID > MaxUserMarkID 在此作废——
 		// 它漏掉了非分享订阅（C-07 的修法），以 F1 的新谓词为准。
 		MeteringUnsupported: !isShare(s) || s.ID > kernel.MaxUserMarkID,
-		UsageInboundTotal:   !isShare(s),
 		AppliedActive:       s.AppliedActive,
 		MeteringStatus:      meteringStatus,
 		MeteringReason:      meteringReason,

@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"errors"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,6 +132,22 @@ func TestRecordNftCollectSuccessSteadyStateNoWrite(t *testing.T) {
 	node := collectHealthOf(t, r, 1)
 	if node.NftCollectLastOKAt != base {
 		t.Fatalf("steady-state success must not rewrite lastOKAt: got %d want %d", node.NftCollectLastOKAt, base)
+	}
+}
+
+// TestRecordNftCollectSuccessLookupFailureIsLogged pins R2A-4: a
+// success-recording call for a node that no longer exists (deleted
+// between collection and success-recording) must leave a log line
+// naming the node id instead of returning silently.
+func TestRecordNftCollectSuccessLookupFailureIsLogged(t *testing.T) {
+	_, h := openCollectHealthRepo(t)
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(old)
+	h.recordNftCollectSuccess(99999, time.Now().UnixMilli())
+	if !strings.Contains(buf.String(), "nft collect success lookup failed node_id=99999") {
+		t.Fatalf("missing lookup-failure log line, got %q", buf.String())
 	}
 }
 
