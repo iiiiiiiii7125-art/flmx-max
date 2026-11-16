@@ -580,6 +580,31 @@ func TestSystemUpgradeVersionDataSurfacesLookupFailureReason(t *testing.T) {
 	}
 }
 
+// R3-E-01 回归：候选版面板（当前版本 2.1.14-cand）查更新时，
+// HasUpdate 比较须剥 -cand 后缀再比，否则 compareVersions 严格
+// 解析失败、恒报无更新。
+func TestSystemUpgradeVersionDataCandCurrentSeesUpdate(t *testing.T) {
+	cases := []struct {
+		name    string
+		current string
+		latest  string
+		want    bool
+	}{
+		{"cand current below latest", "2.1.13-cand", "2.1.14", true},
+		{"cand current equals latest", "2.1.14-cand", "2.1.14", false},
+		{"cand latest above formal current", "2.1.14", "2.1.15-cand", true},
+		{"formal versions unchanged", "2.1.13", "2.1.14", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := systemUpgradeVersionResponse(tc.current, releaseChannelStable, tc.latest, nil, systemUpgradeCapabilityData{})
+			if data.HasUpdate != tc.want {
+				t.Fatalf("systemUpgradeVersionResponse(current=%q, latest=%q).HasUpdate = %v, want %v", tc.current, tc.latest, data.HasUpdate, tc.want)
+			}
+		})
+	}
+}
+
 func TestHelperRunArgsCarryComposeProject(t *testing.T) {
 	exec := &systemUpgradeExecutor{deployDir: "/opt/flvx-panel", backendContainer: "flux-panel-backend", composeProject: "root"}
 	args, err := exec.buildHelperRunArgs("sha256:abc", "helper")
