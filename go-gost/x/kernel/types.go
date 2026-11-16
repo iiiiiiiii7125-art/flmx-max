@@ -170,6 +170,11 @@ type Status struct {
 	Epoch        string        `json:"epoch"`
 	NftAvailable bool          `json:"nftAvailable"`
 	NftError     string        `json:"nftError,omitempty"`
+	// NftReadError 承载最近一次 nft 计数读取失败的原因（R3A-NEW-1：
+	// 表被删/不可读时 read() 出错）。与 NftError（自动安装失败）
+	// 分开：读错必须随每次上报带给面板置 failing＋告警，而安装
+	// 失败是另一回事；空表示最近一次读取成功（或无端口可读）。
+	NftReadError string `json:"nftReadError,omitempty"`
 	// NftAutoInstalled 表示本 agent 进程曾为白名单自动装上
 	// nftables（面板据此在节点页展示“已自动安装”，区别于装机
 	// 自带的“已安装”）。NftError 只承载最近一次自动安装失败
