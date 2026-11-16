@@ -2,6 +2,8 @@ package kernel
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,9 +15,9 @@ func TestClashRuleUser(t *testing.T) {
 		"auth_user=u2 => route(flmx-u2)":   "u2",
 		"auth_user=u10 => route(flmx-u10)": "u10",
 		"auth_user=u1 => route(flmx-u1)":   "u1",
-		"direct":                            "",
-		"":                                  "",
-		"auth_user= => route(flmx-u)":       "",
+		"direct":                           "",
+		"":                                 "",
+		"auth_user= => route(flmx-u)":      "",
 	}
 	for rule, want := range cases {
 		if got := clashRuleUser(rule); got != want {
@@ -25,9 +27,9 @@ func TestClashRuleUser(t *testing.T) {
 }
 
 func TestClashAPIAddr(t *testing.T) {
-	withAPI := `{"experimental":{"clash_api":{"external_controller":"127.0.0.1:40900"}}}`
-	if got := clashAPIAddr([]byte(withAPI)); got != "127.0.0.1:40900" {
-		t.Fatalf("clashAPIAddr = %q, want 127.0.0.1:40900", got)
+	withAPI := `{"experimental":{"clash_api":{"external_controller":"127.0.0.1:41234"}}}`
+	if got := clashAPIAddr([]byte(withAPI)); got != "127.0.0.1:41234" {
+		t.Fatalf("clashAPIAddr = %q, want 127.0.0.1:41234", got)
 	}
 	for _, noAPI := range []string{`{}`, `{"experimental":{}}`, `not json`, ``} {
 		if got := clashAPIAddr([]byte(noAPI)); got != "" {
@@ -139,5 +141,150 @@ func TestCloseClashUserConnections(t *testing.T) {
 	closed, err = closeClashUserConnections("", []string{"u2"})
 	if err != nil || closed != 0 {
 		t.Fatalf("empty addr: closed=%d err=%v, want 0/nil", closed, err)
+	}
+}
+
+func holdPort(t *testing.T, port int) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("hold port %d: %v", port, err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	return ln
+}
+
+// R2C-01: the agent resolves the companion's effective Clash API port.
+// A running instance is sticky; a fresh (re)start prefers the previous
+// port, then the rendered port, then scans the range.
+func TestResolveClashAPIAddr(t *testing.T) {
+	// Empty rendered address means no Clash API is configured.
+	if got, err := resolveClashAPIAddr("", "", false); err != nil || got != "" {
+		t.Fatalf("empty rendered: got=%q err=%v, want empty/nil", got, err)
+	}
+	// Sticky: a running instance keeps its port even when the panel
+	// rendered a different one — and even when that port is busy
+	// (it is busy because WE hold it).
+	holdPort(t, 41101)
+	if got, err := resolveClashAPIAddr("127.0.0.1:41100", "127.0.0.1:41101", true); err != nil || got != "127.0.0.1:41101" {
+		t.Fatalf("sticky: got=%q err=%v, want 127.0.0.1:41101", got, err)
+	}
+	// Fresh start prefers the previously used port when it is free.
+	if got, err := resolveClashAPIAddr("127.0.0.1:41102", "127.0.0.1:41103", false); err != nil || got != "127.0.0.1:41103" {
+		t.Fatalf("fresh prev free: got=%q err=%v, want 127.0.0.1:41103", got, err)
+	}
+	// Fresh start falls through to the rendered port when the
+	// previous port is busy.
+	holdPort(t, 41103)
+	if got, err := resolveClashAPIAddr("127.0.0.1:41102", "127.0.0.1:41103", false); err != nil || got != "127.0.0.1:41102" {
+		t.Fatalf("fresh prev busy: got=%q err=%v, want 127.0.0.1:41102", got, err)
+	}
+	// Fresh start scans upward from the rendered port when it is busy.
+	holdPort(t, 41110)
+	holdPort(t, 41111)
+	if got, err := resolveClashAPIAddr("127.0.0.1:41110", "", false); err != nil || got != "127.0.0.1:41112" {
+		t.Fatalf("scan: got=%q err=%v, want 127.0.0.1:41112", got, err)
+	}
+	// A rendered port outside the range (the old 40900 from an older
+	// panel) is never kept: the result is always inside the range.
+	if got, err := resolveClashAPIAddr("127.0.0.1:40900", "", false); err != nil {
+		t.Fatalf("old 40900: err=%v", err)
+	} else if port, ok := clashAPIPort(got); !ok || !inClashAPIPortRange(port) || port == 40900 {
+		t.Fatalf("old 40900: got=%q, want an in-range port", got)
+	}
+	// A running instance with no previous address probes the rendered
+	// port (free here).
+	if got, err := resolveClashAPIAddr("127.0.0.1:41104", "", true); err != nil || got != "127.0.0.1:41104" {
+		t.Fatalf("running no prev: got=%q err=%v, want 127.0.0.1:41104", got, err)
+	}
+}
+
+// R2C-01: rewriting the Clash API address changes only that address.
+func TestRewriteClashAPIAddr(t *testing.T) {
+	src := `{"experimental":{"clash_api":{"external_controller":"127.0.0.1:40900"}},"inbounds":[]}`
+	out, err := rewriteClashAPIAddr([]byte(src), "127.0.0.1:41234")
+	if err != nil {
+		t.Fatalf("rewriteClashAPIAddr: %v", err)
+	}
+	if got := clashAPIAddr(out); got != "127.0.0.1:41234" {
+		t.Fatalf("rewritten addr = %q, want 127.0.0.1:41234", got)
+	}
+	var got, want map[string]interface{}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("parse rewritten: %v", err)
+	}
+	if err := json.Unmarshal([]byte(src), &want); err != nil {
+		t.Fatalf("parse source: %v", err)
+	}
+	delete(got["experimental"].(map[string]interface{}), "clash_api")
+	delete(want["experimental"].(map[string]interface{}), "clash_api")
+	gj, _ := json.Marshal(got)
+	wj, _ := json.Marshal(want)
+	if string(gj) != string(wj) {
+		t.Fatalf("rewrite changed more than the address:\n%s\n%s", gj, wj)
+	}
+	// Missing experimental section is created.
+	out, err = rewriteClashAPIAddr([]byte(`{"inbounds":[]}`), "127.0.0.1:41234")
+	if err != nil {
+		t.Fatalf("rewriteClashAPIAddr (no experimental): %v", err)
+	}
+	if got := clashAPIAddr(out); got != "127.0.0.1:41234" {
+		t.Fatalf("rewritten addr = %q, want 127.0.0.1:41234", got)
+	}
+	// Invalid JSON errors.
+	if _, err := rewriteClashAPIAddr([]byte(`not json`), "127.0.0.1:41234"); err == nil {
+		t.Fatalf("rewriteClashAPIAddr (invalid JSON) = nil error, want error")
+	}
+}
+
+func withClashAPI(t *testing.T, configJSON, addr string) string {
+	t.Helper()
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	if addr == "" {
+		delete(cfg, "experimental")
+	} else {
+		cfg["experimental"] = map[string]interface{}{"clash_api": map[string]interface{}{"external_controller": addr}}
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	return string(b)
+}
+
+// R2C-01: the Clash API address is not user state — configs differing
+// only by it (or by its presence) normalize equal, so a port change
+// alone never turns a user-only change into a reload.
+func TestNormalizeSingboxConfigStripsClashAPI(t *testing.T) {
+	old := withClashAPI(t, clashTestOldConfig, "127.0.0.1:41100")
+	newSameUsers := withClashAPI(t, clashTestOldConfig, "127.0.0.1:41101")
+	userOnly, err := isUserOnlySingboxChange([]byte(old), []byte(newSameUsers))
+	if err != nil || !userOnly {
+		t.Fatalf("port-only change: userOnly=%v err=%v, want true", userOnly, err)
+	}
+	noAPI := withClashAPI(t, clashTestOldConfig, "")
+	userOnly, err = isUserOnlySingboxChange([]byte(old), []byte(noAPI))
+	if err != nil || !userOnly {
+		t.Fatalf("API presence change: userOnly=%v err=%v, want true", userOnly, err)
+	}
+	// A user removal plus a port change is still user-only.
+	newRemoved := withClashAPI(t, clashTestNewConfig, "127.0.0.1:41101")
+	userOnly, err = isUserOnlySingboxChange([]byte(old), []byte(newRemoved))
+	if err != nil || !userOnly {
+		t.Fatalf("removal + port change: userOnly=%v err=%v, want true", userOnly, err)
+	}
+	// A non-user change is still not user-only.
+	var cfg map[string]interface{}
+	if err := json.Unmarshal([]byte(clashTestOldConfig), &cfg); err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	cfg["outbounds"] = []interface{}{map[string]interface{}{"type": "direct", "tag": "other"}}
+	b, _ := json.Marshal(cfg)
+	userOnly, err = isUserOnlySingboxChange([]byte(old), b)
+	if err != nil || userOnly {
+		t.Fatalf("outbound change: userOnly=%v err=%v, want false", userOnly, err)
 	}
 }
