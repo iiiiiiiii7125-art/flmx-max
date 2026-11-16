@@ -51,8 +51,7 @@ Create a new forward.
   "tunnelId": 1,
   "remoteAddr": "192.168.1.100:80",
   "strategy": "fifo",
-  "inPort": 0,
-  "speedId": 0
+  "inPort": 0
 }
 ```
 
@@ -65,7 +64,7 @@ Create a new forward.
 | remoteAddr | string | Yes | Target address(es), comma-separated for load balancing |
 | strategy | string | No | One of "fifo", "round", "rand", "hash" (default: "fifo"); anything else is rejected |
 | inPort | number | No | Entry port (0 = auto-assign) |
-| speedId | number | No | Speed limit rule ID (0 = no limit) |
+| speedId | number | No | Speed limit rule ID (0 = no limit). Admin-only: ordinary users are rejected whenever the key is present, even with value 0 — omit it unless you are an admin. |
 
 **Strategy:**
 - `fifo` = First target only
@@ -90,15 +89,14 @@ The assigned entry port is **not** in the response; read it back from
 
 Update forward settings.
 
-**Request:** Same as create, with `id` field required.
+**Request:** Same as create, with `id` field required. (`speedId` is admin-only — see create.)
 
 ```json
 {
   "id": 1,
   "name": "my-web-server-updated",
   "remoteAddr": "192.168.1.100:8080",
-  "strategy": "round",
-  "speedId": 2
+  "strategy": "round"
 }
 ```
 

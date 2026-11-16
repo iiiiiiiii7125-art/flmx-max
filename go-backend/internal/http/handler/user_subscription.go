@@ -150,9 +150,6 @@ type userSubscriptionMineView struct {
 	// 「删除中」，与管理员列表 subscriptionView.PendingDelete 同口径
 	// ——此前用户侧无此字段，只看到订阅照常列出、链接 404 无提示。
 	PendingDelete bool `json:"pendingDelete"`
-	// UsageInboundTotal（B-L4）：与管理员视图同口径——非分享订阅为
-	// true，客户端显示的已用是所选入站的总量（非本订阅独占）。
-	UsageInboundTotal bool `json:"usageInboundTotal,omitempty"`
 	// MeteringUnsupported（C-07）：与 subscriptionView 同口径——
 	// 非分享订阅或 ID 越界的订阅流量永不计量、限额永不触发，
 	// 用户侧须显式提示「限额不生效」，不许只显示「已用 0／限额」。
@@ -222,9 +219,8 @@ func (h *Handler) userSubscriptionMine(w http.ResponseWriter, r *http.Request) {
 			UploadBytes: v.UploadBytes, DownloadBytes: v.DownloadBytes,
 			TrafficLimit: v.TrafficLimit, TrafficSince: v.TrafficSince, ExpireTime: v.ExpireTime,
 			OverQuota: v.OverQuota, Enabled: v.Enabled, PendingDelete: v.PendingDelete,
-			UsageInboundTotal: v.UsageInboundTotal,
 			MeteringUnsupported: v.MeteringUnsupported,
-			AppliedActive: v.AppliedActive, MeteringStatus: v.MeteringStatus,
+			AppliedActive:       v.AppliedActive, MeteringStatus: v.MeteringStatus,
 			MeteringReason: v.MeteringReason, LastReportedAt: v.LastReportedAt,
 			ZeroEndpointReason: v.ZeroEndpointReason,
 		})

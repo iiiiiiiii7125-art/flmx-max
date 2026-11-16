@@ -1,8 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"math"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,6 +305,47 @@ func TestBuildNftFlowUploadBatchSkipsQuotaOverflow(t *testing.T) {
 	}
 	if _, ok := batch.forwardTraffic[21]; ok {
 		t.Fatalf("expected quota-overflowing delta to be skipped from raw traffic")
+	}
+}
+
+// TestBuildNftFlowUploadBatchOverflowDiscardsAreLogged (R2A-3)：
+// buildNftFlowUploadBatch 的三处溢出 continue 须留日志（M-006
+// 同口径）。(a) 双向合计溢出、(b) 用户 quota 合计溢出各钉一行；
+// (c) 同转发多 delta 合并溢出分支被 (b) 与顶部 raw 检查严格遮蔽、
+// 实践中不可达，其日志行只作防御，不在此钉（见实现注释）。
+func TestBuildNftFlowUploadBatchOverflowDiscardsAreLogged(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	// (a) 双向合计溢出：scaledIn(MaxInt64) + scaledOut(1) 回绕。
+	batch := buildNftFlowUploadBatch([]nftTrafficDelta{
+		{ForwardID: 20, BytesIn: math.MaxInt64, BytesOut: 1},
+	}, map[int64]repo.FlowUploadForwardMeta{
+		20: {ForwardID: 20, UserID: 2, UserTunnelID: 10, TrafficRatio: 1, TunnelFlow: 2},
+	})
+	if len(batch.flowDeltas) != 0 {
+		t.Fatalf("expected overflowing scaled sum to be skipped, got %#v", batch.flowDeltas)
+	}
+	if !strings.Contains(buf.String(), "nftables quota overflow discard forward_id=20 scaled_in=9223372036854775807 scaled_out=1") {
+		t.Fatalf("scaled-sum overflow discard must be logged, got:\n%s", buf.String())
+	}
+
+	// (b) 用户 quota 合计溢出：转发 20 先把用户 quota 顶满 MaxInt64，
+	// 转发 21 再入 1 字节即溢出。
+	buf.Reset()
+	batch = buildNftFlowUploadBatch([]nftTrafficDelta{
+		{ForwardID: 20, BytesIn: math.MaxInt64, BytesOut: 0},
+		{ForwardID: 21, BytesIn: 1, BytesOut: 0},
+	}, map[int64]repo.FlowUploadForwardMeta{
+		20: {ForwardID: 20, UserID: 2, UserTunnelID: 10, TrafficRatio: 1, TunnelFlow: 1},
+		21: {ForwardID: 21, UserID: 2, UserTunnelID: 10, TrafficRatio: 1, TunnelFlow: 1},
+	})
+	if len(batch.flowDeltas) != 1 || batch.flowDeltas[0].ForwardID != 20 {
+		t.Fatalf("expected only non-overflowing quota delta, got %#v", batch.flowDeltas)
+	}
+	if !strings.Contains(buf.String(), "nftables quota overflow discard forward_id=21 user_id=2 quota_delta=1") {
+		t.Fatalf("quota overflow discard must be logged, got:\n%s", buf.String())
 	}
 }
 

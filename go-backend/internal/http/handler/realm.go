@@ -698,20 +698,36 @@ func realmCounterPayload(c agentKernelCounter) int64 {
 func (h *Handler) accountRealmCounters(nodeID int64, epoch string, counters []agentKernelCounter, now time.Time) (*flowUploadBatch, map[int64]repo.FlowUploadForwardMeta, int64, map[int64]*model.UserQuotaView, error) {
 	samples := make([]runtimenft.CounterSample, 0, len(counters))
 	hashes := map[int64]string{}
+	// R2A-5：负值／非法方向样本此前静默 continue，与入站面
+	// applyInboundCounterChunk 同口径按转发聚合 warn，绝不静默。
+	// !ok（非 realm 入站）是正常过滤，不计入。
+	negative := map[int64]int64{}
+	badDirection := map[int64]int64{}
 	for _, c := range counters {
 		fid, ok := kernel.RealmForwardID(c.InboundID)
-		if !ok || c.Bytes < 0 {
+		if !ok {
+			continue
+		}
+		if c.Bytes < 0 {
+			negative[fid]++
 			continue
 		}
 		dir := runtimenft.CounterDirectionToTarget
 		if c.Dir == "out" {
 			dir = runtimenft.CounterDirectionFromTarget
 		} else if c.Dir != "in" {
+			badDirection[fid]++
 			continue
 		}
 		samples = append(samples, runtimenft.CounterSample{ForwardID: fid, Direction: dir, Protocol: c.Proto, Bytes: uint64(realmCounterPayload(c))})
 		// The agent's counters restart with its epoch.
 		hashes[fid] = "realm:" + epoch
+	}
+	for fid, n := range negative {
+		log.Printf("realm counter sample negative op=negative_bytes node_id=%d forward_id=%d samples=%d action=dropped", nodeID, fid, n)
+	}
+	for fid, n := range badDirection {
+		log.Printf("realm counter sample bad_direction op=illegal_direction node_id=%d forward_id=%d samples=%d action=dropped", nodeID, fid, n)
 	}
 	if len(samples) == 0 {
 		return nil, nil, 0, nil, nil

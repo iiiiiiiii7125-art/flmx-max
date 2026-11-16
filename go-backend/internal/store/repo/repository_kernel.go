@@ -605,6 +605,10 @@ func applyInboundCounterChunk(tx *gorm.DB, nodeID int64, ordered []InboundCounte
 		download := make(map[int64]int64)
 		unaccounted := make(map[int64]int64)
 		foreign := make(map[int64]int64)
+		// R2A-5：负值／非法方向样本此前静默 continue，与
+		// unaccounted／foreign 同口径按入站聚合 warn，绝不静默。
+		negative := make(map[int64]int64)
+		badDirection := make(map[int64]int64)
 		for _, s := range ordered {
 			owner, ok := known[s.InboundID]
 			if !ok {
@@ -623,9 +627,14 @@ func applyInboundCounterChunk(tx *gorm.DB, nodeID int64, ordered []InboundCounte
 				continue
 			}
 			if s.Bytes < 0 {
+				// R2A-5：负字节样本按入站聚合 warn（方向非法同下）。
+				// 方向原值不记日志（攻击者可控字符串，防日志注入）。
+				negative[s.InboundID]++
 				continue
 			}
 			if s.Direction != "in" && s.Direction != "out" {
+				// R2A-5：非法方向样本按入站聚合 warn。
+				badDirection[s.InboundID]++
 				continue
 			}
 			// R2X-033：与订阅管线同形——无基线 / epoch 变化只
@@ -673,6 +682,12 @@ func applyInboundCounterChunk(tx *gorm.DB, nodeID int64, ordered []InboundCounte
 		}
 		for id, n := range foreign {
 			log.Printf("kernel traffic sample foreign op=foreign_inbound node_id=%d inbound_id=%d samples=%d action=dropped", nodeID, id, n)
+		}
+		for id, n := range negative {
+			log.Printf("kernel traffic sample negative op=negative_bytes node_id=%d inbound_id=%d samples=%d action=dropped", nodeID, id, n)
+		}
+		for id, n := range badDirection {
+			log.Printf("kernel traffic sample bad_direction op=illegal_direction node_id=%d inbound_id=%d samples=%d action=dropped", nodeID, id, n)
 		}
 		for id := range known {
 			up, down := upload[id], download[id]

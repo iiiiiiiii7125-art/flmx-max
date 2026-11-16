@@ -3647,22 +3647,36 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 UDP 监听地址（节点 #%d）格式非法，已回落默认 [::]，恢复后请在节点设置中重新填写", n.ID)
 			udpListenAddr = "[::]"
 		}
-		// B3-01（导入面）：节点 secret 字符集门，镜像生成面
+		// B3-01（导入面）+ E-01-RES：节点 secret 字符集门，镜像生成面
 		// nodeSecretCharset（^[0-9a-f]{32}$，randomToken(16) 契
 		// 约）。安装命令构造把 secret 插值进以 root 执行的
 		// shell 命令，恢复面此前原样落库任意字符串——含空格/
 		// 引号/命令替换的 secret 即命令注入（生成面已以
 		// validateNodeSecretForInstall 点名拒收该值 + 构造器引
-		// 用纵深）。恢复面同口径拒收该值：不落库、清空 +
-		// warning 点名节点与处置（绝不回显 secret 原文），节点
-		// 行本身保留（整行跳过会连带误伤同批隧道/转发段，与本
-		// 函数 ServerIP 清空先例同理）；恢复后管理员
-		// 重置 secret 即可，与生成面拒绝文案的指引一致。空
-		// secret 与清空后状态等价，不重复回执。
+		// 用纵深）。恢复面同口径拒收该值：不落库、warning 点名
+		// 节点与处置（绝不回显 secret 原文），节点行本身保留
+		// （整行跳过会连带误伤同批隧道/转发段，与本函数 ServerIP
+		// 清空先例同理）。E-01-RES：拒收／空 secret 不再清空落
+		// 库——空 secret 会使 UserMarkBaseForAgent 回落 v1 mark
+		// 派生（跨面板同 mark 碰撞，E-01），恢复时现场重发一枚
+		// 新 secret（randomToken，32 位小写十六进制），恢复后
+		// 的节点恒满足生成契约，安装／重装直接以新 secret 为
+		// 准，无需管理员重置。随机源失败 fail-closed：整单回滚，
+		// 绝不落全零／空 secret（X-P3-14 同口径）。
 		secret := n.Secret
 		if secret != "" && !importedNodeSecretCharset.MatchString(secret) {
-			rep.warnf("备份恢复：节点 #%d（%q）的 secret 不符合生成契约字符集（32 位小写十六进制），已清空未恢复，恢复后请在节点设置中重置 secret", n.ID, n.Name)
+			rep.warnf("备份恢复：节点 #%d（%q）的 secret 不符合生成契约字符集（32 位小写十六进制），已作废并现场重发新 secret", n.ID, n.Name)
 			secret = ""
+		}
+		if secret == "" {
+			if n.Secret == "" {
+				rep.warnf("备份恢复：节点 #%d（%q）的 secret 为空，已现场重发新 secret", n.ID, n.Name)
+			}
+			fresh, err := randomToken()
+			if err != nil {
+				return count, err
+			}
+			secret = fresh
 		}
 		// B8-11：RenewalCycle/ForwardMode 归一镜像写面——此前原
 		// 样落库：周期集外值使到期提醒计算落默认分支，转发模式

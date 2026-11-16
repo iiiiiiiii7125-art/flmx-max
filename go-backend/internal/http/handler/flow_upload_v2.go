@@ -84,12 +84,17 @@ func (h *Handler) flowUploadV2(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, err := readAndDecryptFlowBody(r.Body, secret)
 	if err != nil {
+		// R2A-2：v1 同类 400 有日志、v2 此处此前静默；只记
+		// node_id＋err，绝不记请求体原文（体含上报流量原文）。
+		log.Printf("flow upload v2 invalid body node_id=%d err=%v", node.ID, err)
 		http.Error(w, "invalid traffic body", http.StatusBadRequest)
 		return
 	}
 	var envelope flowUploadV2Envelope
 	if json.Unmarshal([]byte(raw), &envelope) != nil || envelope.Items == nil ||
 		envelope.Sequence <= 0 || !validFlowStreamID(envelope.Stream) {
+		// R2A-2：同上，信封/序列非法亦记一行（只记 node_id）。
+		log.Printf("flow upload v2 invalid upload node_id=%d", node.ID)
 		http.Error(w, "invalid traffic upload", http.StatusBadRequest)
 		return
 	}

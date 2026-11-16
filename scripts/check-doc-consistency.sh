@@ -114,6 +114,14 @@
 #      示例键）除信封白名单外必须全部 ∈ doc-extract configkeys
 #      给出的 config_policy 分类键并集——虚构键（如旧文档的
 #      site_name）即红。无 go 时两面同 §10 口径 PENDING 显式未核。
+#   26. 技能包例文形态门（E-05-NEW-1/2 常设门）：tunnels.md
+#      tunnel/create 例文的 inNodeId/outNodeId 须为含 nodeId 的对象
+#      （裸数字会被后端 asMapSlice 静默丢弃致“入口不能为空”，面板
+#      B live 复现）；forwards.md forward/create 例文不得含 speedId
+#      （普通用户在场即拒，面板 B live 复现），字段表须标 admin-only。
+#   27. 内核视图字段对齐门（E-02 常设门）：后端 kernelView 新增字段
+#      须同步前端 KernelApiItem 类型与一处渲染点——companionSplitNote
+#      三侧同在，后端加字段而前端无类型／无渲染即红。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -942,6 +950,55 @@ else
   sed 's/^/    /' /tmp/.hist-metering.out
 fi
 rm -f /tmp/.hist-metering.out
+
+# ── 26. 技能包例文形态门（E-05-NEW-1/2 常设门）
+# E-05-NEW-1：tunnels.md tunnel/create 例文的 inNodeId/outNodeId 项须
+# 为含 nodeId 的对象——后端 asMapSlice 静默丢弃非对象项，照抄裸数字
+# 例文必得“入口不能为空”（面板 B live 复现）。双侧：文档侧查无裸
+# 数字项且例文含 nodeId 对象；代码侧查 asMapSlice 的对象守卫仍在
+# （机制锚点，防实现改直通后文档反成错口径）。
+TUN_MD="skills/flmx-api/references/tunnels.md"
+if grep -Eq '"(in|out|chain)NodeId": \[[0-9]' "$TUN_MD"; then
+  note_fail "E-05-NEW-1：tunnels.md 仍有裸数字节点 id 例文（in/out/chainNodeId 项须为含 nodeId 的对象）"
+elif ! grep -Fq '"inNodeId": [{"nodeId": 3}]' "$TUN_MD" \
+     || ! grep -Fq '"outNodeId": [{"nodeId": 4}]' "$TUN_MD" \
+     || ! grep -Fq '"inNodeId":[{"nodeId":1}]' "$TUN_MD" \
+     || ! grep -Fq '"outNodeId":[{"nodeId":2}]' "$TUN_MD"; then
+  note_fail "E-05-NEW-1：tunnels.md tunnel/create 例文缺 nodeId 对象项（create JSON 与 assign curl 各一处）"
+elif ! grep -Fq 'func asMapSlice' go-backend/internal/http/handler/mutations.go \
+     || ! grep -Fq 'if m, ok := it.(map[string]interface{}); ok {' go-backend/internal/http/handler/mutations.go; then
+  note_fail "E-05-NEW-1：mutations.go 的 asMapSlice 对象守卫不在场（前提失效，请人工复核）"
+else
+  note_ok "E-05-NEW-1：tunnels.md 例文节点项均为 nodeId 对象，asMapSlice 对象守卫在场"
+fi
+# E-05-NEW-2：forwards.md forward/create 例文不得含 speedId——普通
+# 用户只要键在场（任意值，含 0）即被拒“普通用户无法设置限速规则”
+# （面板 B live 复现）；字段表须标 admin-only。双侧：文档侧查例文
+# 无 speedId 且字段表标 admin-only；代码侧查拒绝锚点仍在。
+FWD_MD="skills/flmx-api/references/forwards.md"
+if grep -Fq '"speedId"' "$FWD_MD" && ! grep -Fq 'Admin-only' "$FWD_MD"; then
+  note_fail "E-05-NEW-2：forwards.md 含 speedId 却未标 admin-only（前提失效，请人工复核）"
+elif grep -Eq '"speedId": [0-9]' "$FWD_MD"; then
+  note_fail "E-05-NEW-2：forwards.md 例文仍含 speedId（普通用户照抄即拒）"
+elif ! grep -Fq 'if speedIDVal, ok := req["speedId"]; ok && speedIDVal != nil {' go-backend/internal/http/handler/mutations.go \
+     || ! grep -Fq '普通用户无法设置限速规则' go-backend/internal/http/handler/mutations.go; then
+  note_fail "E-05-NEW-2：mutations.go 的 speedId 普通用户拒绝锚点不在场（前提失效，请人工复核）"
+else
+  note_ok "E-05-NEW-2：forwards.md 例文无 speedId 且标 admin-only，普通用户拒绝锚点在场"
+fi
+
+# ── 27. 内核视图字段对齐门（E-02 常设门）
+# 后端 kernelView 新增字段须同步前端 KernelApiItem 类型与一处渲染点：
+# companionSplitNote 三侧同在——后端只发不显（节点页永不显示）即红。
+if ! grep -Fq 'CompanionSplitNote string' go-backend/internal/http/handler/kernel.go; then
+  note_fail "E-02：kernel.go 的 kernelView 缺 companionSplitNote 字段（前提失效，请人工复核）"
+elif ! grep -Fq 'companionSplitNote?: string' vite-frontend/src/api/types.ts; then
+  note_fail "E-02：KernelApiItem 缺 companionSplitNote 字段（后端已发、前端类型未同步）"
+elif ! grep -Fq 'k.companionSplitNote' vite-frontend/src/pages/inbound/kernel-panel.tsx; then
+  note_fail "E-02：节点页内核行无 companionSplitNote 渲染点（类型已同步、页面仍不显示）"
+else
+  note_ok "E-02：companionSplitNote 后端字段／前端类型／节点页渲染三侧同在"
+fi
 
 echo "----"
 if [ "$FAIL" -eq 0 ]; then

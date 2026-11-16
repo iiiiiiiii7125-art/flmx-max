@@ -122,6 +122,10 @@ func (h *Handler) recordNftCollectSuccess(nodeID int64, nowMs int64) {
 	}
 	node, err := h.repo.GetNodeByID(nodeID)
 	if err != nil || node == nil {
+		// R2A-4：查库失败静默返回会使采集成功路径的静默丢失无法
+		// 定位（健康态写不进、也不留日志）；只记 node_id＋err，
+		// 不记节点配置原文。
+		log.Printf("nft collect success lookup failed node_id=%d err=%v", nodeID, err)
 		return
 	}
 	if node.NftCollectState == "ok" && node.NftCollectFailCount == 0 && node.NftCollectLastError == "" {
@@ -696,17 +700,24 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 				continue
 			}
 			if scaledIn > math.MaxInt64-scaledOut {
+				// R2A-3：与本函数其余溢出 continue 同口径（M-006），
+				// 丢弃须留行，否则双向合计溢出的整条丢弃无迹可查。
+				log.Printf("nftables quota overflow discard forward_id=%d scaled_in=%d scaled_out=%d", delta.ForwardID, scaledIn, scaledOut)
 				continue
 			}
 			quotaDelta = scaledIn + scaledOut
 		}
 		if batch.quotaUsage[meta.UserID] > math.MaxInt64-quotaDelta {
+			// R2A-3：用户 quota 合计溢出丢弃须留行（M-006 同口径）。
+			log.Printf("nftables quota overflow discard forward_id=%d user_id=%d quota_delta=%d", delta.ForwardID, meta.UserID, quotaDelta)
 			continue
 		}
 
 		flowIdx, flowExists := flowSeen[delta.ForwardID]
 		if flowExists && (batch.flowDeltas[flowIdx].InFlow > math.MaxInt64-scaledIn || batch.flowDeltas[flowIdx].OutFlow > math.MaxInt64-scaledOut ||
 			batch.flowDeltas[flowIdx].RawInFlow > math.MaxInt64-delta.BytesIn || batch.flowDeltas[flowIdx].RawOutFlow > math.MaxInt64-delta.BytesOut) {
+			// R2A-3：同转发多 delta 合并溢出丢弃须留行（M-006 同口径）。
+			log.Printf("nftables flow delta overflow discard forward_id=%d scaled_in=%d scaled_out=%d bytes_in=%d bytes_out=%d", delta.ForwardID, scaledIn, scaledOut, delta.BytesIn, delta.BytesOut)
 			continue
 		}
 

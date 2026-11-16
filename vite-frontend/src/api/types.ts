@@ -838,6 +838,9 @@ export interface KernelApiItem {
   enabled: boolean;
   inboundCount: number;
   updatedTime: number;
+  /** E-02：伴生拆分未落地的原因（仅主 sing-box 行携带；后端
+   * kernel/list 填充，前端此前无此字段、节点页永不显示）。 */
+  companionSplitNote?: string;
 }
 
 export interface KernelStateApiData {

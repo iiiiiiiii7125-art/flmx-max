@@ -57,6 +57,9 @@ type flowUploadBatch struct {
 //     生；上报到本面板即错路。
 //   - foreignForward：解析出的转发不属于本节点、或上报用户与转发
 //     属主不一致（跨节点误报/旧配置残留；属主节点收到同一批时入账）。
+//   - orphan：解析出的转发已不在本节点（已删转发的残留上报；面板
+//     回 DeleteService 后 agent 停报）。与 foreignForward 的区别是
+//     归属查询本身无此转发（metas 缺项），而非属主不一致。
 type flowDropStats struct {
 	negativeItems       int
 	negativeBytes       int64
@@ -68,25 +71,28 @@ type flowDropStats struct {
 	peerShareBytes      int64
 	foreignForwardItems int
 	foreignForwardBytes int64
+	orphanItems         int
+	orphanBytes         int64
 }
 
 func (s flowDropStats) totalItems() int {
-	return s.negativeItems + s.emptyOrWebAPIItems + s.unparsedItems + s.peerShareItems + s.foreignForwardItems
+	return s.negativeItems + s.emptyOrWebAPIItems + s.unparsedItems + s.peerShareItems + s.foreignForwardItems + s.orphanItems
 }
 
 // logSummary 打一行单批丢弃摘要（A-中-3）：无丢弃时不打，避免
-// 每批一条的日志噪音；有丢弃时一行写全五类条数与字节数。
+// 每批一条的日志噪音；有丢弃时一行写全六类条数与字节数。
 func (s flowDropStats) logSummary(nodeID int64) {
 	if s.totalItems() == 0 {
 		return
 	}
-	log.Printf("flow upload dropped node_id=%d items=%d negative=%d/%dB empty_or_webapi=%d/%dB unparsed=%d/%dB peer_share=%d/%dB foreign_forward=%d/%dB",
+	log.Printf("flow upload dropped node_id=%d items=%d negative=%d/%dB empty_or_webapi=%d/%dB unparsed=%d/%dB peer_share=%d/%dB foreign_forward=%d/%dB orphan=%d/%dB",
 		nodeID, s.totalItems(),
 		s.negativeItems, s.negativeBytes,
 		s.emptyOrWebAPIItems, s.emptyOrWebAPIBytes,
 		s.unparsedItems, s.unparsedBytes,
 		s.peerShareItems, s.peerShareBytes,
-		s.foreignForwardItems, s.foreignForwardBytes)
+		s.foreignForwardItems, s.foreignForwardBytes,
+		s.orphanItems, s.orphanBytes)
 }
 
 func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.FlowUploadForwardMeta) flowUploadBatch {
@@ -141,6 +147,12 @@ func (h *Handler) buildFlowUploadBatch(items []flowItem, metas map[int64]repo.Fl
 		}
 		meta, exists := metas[forwardID]
 		if !exists {
+			// R2A-1：孤儿服务（转发已删、agent 残留上报）此前只进
+			// orphanServices 清理集、字节不入丢弃台账，单批摘要
+			// 里 80B 级孤儿无影无踪；现按 R2A-1 计入 dropped（与
+			// 其余五类同口径），清理集本身不动。
+			batch.dropped.orphanItems++
+			batch.dropped.orphanBytes += item.U + item.D
 			batch.orphanServices[serviceName] = struct{}{}
 			continue
 		}
