@@ -167,7 +167,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/forward/create" \
   -d '{
     "name": "web-cluster",
     "tunnelId": 1,
-    "remoteAddr": "10.0.0.1:80,10.0.0.2:80,10.0.0.3:80",
+    "remoteAddr": "203.0.113.100:80,203.0.113.101:80,203.0.113.102:80",
     "strategy": "round"
   }' | jq '.'
 

@@ -126,6 +126,10 @@
 #      的原子交换（只在替换件落盘验证后才换旧二进制）与离线重装
 #      本地缓存安装包口径，须与 install.go 的 swapBinDir／
 #      restoreInterruptedSwap／lookup+storeArchiveCache 三锚点同在。
+#   29. 请求体例文地址门（R4D-01 常设门）：forward/create 类请求体
+#      例文与 ai-skill.md 对话例的 remoteAddr／目标地址不得为私网
+#      地址（普通用户照抄即 403 "resolves to internal IP"）；auth.md
+#      的 list 响应回显（R4D-02 已裁定非问题）排除在外。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -1034,6 +1038,27 @@ elif ! grep -Fq 'func swapBinDir' go-gost/x/kernel/install.go \
   note_fail "C NEW-2：install.go 缺原子交换/中断恢复/安装包缓存锚点（前提失效，请人工复核）"
 else
   note_ok "C NEW-2：nodes.md 原子交换＋离线缓存安装包口径与 install.go 三锚点同在"
+fi
+
+# ── 29. 请求体例文地址门（R4D-01 常设门）
+# forward/create 类请求体例文与 ai-skill.md 对话例的目标地址不得为
+# 私网地址——普通用户照抄即 403 "resolves to internal IP"（R3-E-LOW-03
+# 只改了 192.168.1.100 三处，漏了 10.0.0.1 三处＋对话例两处）。
+# auth.md:196 的 10.0.0.1 是 list 响应回显（R4D-02 已裁定非问题），
+# 本门排除该行；docs/superpowers/plans 下历史方案的测试夹具不在本门
+# 范围内（非用户照抄面）。双侧：文档侧查例文无私网地址；代码侧查
+# IsSafeRemoteAddr 守卫仍在（mutations.go create/update 两处调用）。
+PRIV_IP_RE='(10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)'
+BAD_REMOTE=$(grep -rn -E "\"remoteAddr\": \"[^\"]*${PRIV_IP_RE}" skills/flmx-api/references/ doc/ai-skill.md 2>/dev/null | grep -v 'skills/flmx-api/references/auth.md' || true)
+BAD_DIALOG=$(grep -n -E "(转发到|目标地址) ?${PRIV_IP_RE}" doc/ai-skill.md || true)
+if [ -n "$BAD_REMOTE" ]; then
+  note_fail "R4D-01：请求体例文 remoteAddr 仍含私网地址（照抄即 403）：$(echo "$BAD_REMOTE" | head -3 | tr '\n' ';')"
+elif [ -n "$BAD_DIALOG" ]; then
+  note_fail "R4D-01：ai-skill.md 对话例目标地址仍为私网地址（经 skill 调用同机制 403）：$(echo "$BAD_DIALOG" | head -3 | tr '\n' ';')"
+elif [ "$(grep -c 'IsSafeRemoteAddr(remoteAddr)' go-backend/internal/http/handler/mutations.go)" -lt 2 ]; then
+  note_fail "R4D-01：mutations.go 的 IsSafeRemoteAddr 守卫不足两处（create/update 各一处；前提失效，请人工复核）"
+else
+  note_ok "R4D-01：请求体例文 remoteAddr 与 ai-skill 对话例目标地址均无私网地址，IsSafeRemoteAddr 守卫两处在场"
 fi
 
 echo "----"
