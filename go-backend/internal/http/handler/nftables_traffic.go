@@ -72,6 +72,16 @@ const nftCollectFailAlertThreshold = 3
 // 度（A-中-2）：SSH 失败原文可能很长，行内只留首段可读部分。
 const nftCollectLastErrorMaxLen = 500
 
+// nftWsReadErrorPrefix marks a failure streak recorded by the WS
+// kernel-table path (R3A-NEW-1): the SSH forward-table path and the
+// WS kernel-table path read DIFFERENT tables (flmx vs flmx_kernel_*),
+// so their failures are independent — an SSH success must not clear
+// a streak the WS table caused, and a WS success must not clear one
+// the SSH table caused. The prefix on LastError is the provenance;
+// recordNftCollectSuccess skips WS-prefixed streaks, and
+// recordNftWsCollectSuccess only clears WS-prefixed ones.
+const nftWsReadErrorPrefix = "agent nft 计数读取失败："
+
 // recordNftCollectFailure records one failed periodic nft collection
 // round for nodeID (A-中-2): consecutive failure count +1, state flips
 // to "failing" at the threshold, last error kept verbatim (truncated).
@@ -128,7 +138,41 @@ func (h *Handler) recordNftCollectSuccess(nodeID int64, nowMs int64) {
 		log.Printf("nft collect success lookup failed node_id=%d err=%v", nodeID, err)
 		return
 	}
+	if strings.HasPrefix(node.NftCollectLastError, nftWsReadErrorPrefix) {
+		// R3A-NEW-1：WS 路的 streak 只由 WS 路自己清（见
+		// recordNftWsCollectSuccess）——SSH 采集成功不能把仍缺失
+		// 的 agent 表判成已恢复，否则共享 streak 永不到阈值、
+		// 告警永不发。
+		return
+	}
 	if node.NftCollectState == "ok" && node.NftCollectFailCount == 0 && node.NftCollectLastError == "" {
+		return
+	}
+	wasFailing := node.NftCollectState == "failing"
+	if uerr := h.repo.UpdateNftCollectHealth(nodeID, "ok", 0, "", nowMs); uerr != nil {
+		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+		return
+	}
+	if wasFailing {
+		h.dispatchNftCollectRecoveredAlert(nodeID)
+	}
+}
+
+// recordNftWsCollectSuccess clears a WS-path nft failure streak
+// (R3A-NEW-1): only when the current streak carries the WS prefix —
+// an SSH-caused streak is left for the SSH path to clear, and a
+// steady state (no WS streak) writes nothing. Mirrors
+// recordNftCollectSuccess including the recovery notification.
+func (h *Handler) recordNftWsCollectSuccess(nodeID int64, nowMs int64) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		log.Printf("nft collect success lookup failed node_id=%d err=%v", nodeID, err)
+		return
+	}
+	if !strings.HasPrefix(node.NftCollectLastError, nftWsReadErrorPrefix) {
 		return
 	}
 	wasFailing := node.NftCollectState == "failing"

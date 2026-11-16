@@ -711,6 +711,16 @@ func (n *nftCounters) installStatus() (autoInstalled bool, installErr string) {
 	return n.autoInstalled, n.installErr
 }
 
+// hasAppliedState reports whether this agent has ever applied a table
+// (the signature in nft.json survives restarts). The periodic verify
+// loop only guards a table that exists by design — a fresh agent
+// that never applied anything has nothing to rebuild.
+func (n *nftCounters) hasAppliedState() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.state.Signature != ""
+}
+
 // sync rebuilds the whole table atomically: traffic counters and
 // inbound whitelists in one ruleset. Traffic counting alone is
 // best-effort (a node without nftables just loses its counters), but
@@ -781,12 +791,7 @@ func (n *nftCounters) sync(ports []Port, users []int64, blocked []int64) error {
 
 	script := nftScript(n.tableName(), rules, expandGuards(ports), hops, users, n.markBase, blocked)
 	sig := hashString(script)
-	hasContent := len(rules) > 0 || len(users) > 0 || len(blocked) > 0
 	if sig == n.state.Signature {
-		if !hasContent {
-			n.lastErr = ""
-			return nil
-		}
 		// The signature only proves what this process last tried to
 		// install. The table lives in the kernel, outside the agent:
 		// it can be flushed or rewritten by other tools while guarded
@@ -796,6 +801,13 @@ func (n *nftCounters) sync(ports []Port, users []int64, blocked []int64) error {
 		// anything else — missing table, unreadable table, tampered
 		// content, or a state file predating fingerprints — falls
 		// through to a full re-apply below.
+		//
+		// R3A-NEW-1/C NEW-1: the check runs even when the desired
+		// ruleset is empty. The old early return for !hasContent
+		// read a deleted table as "consistent", so sync() never
+		// rebuilt it while read() kept failing on the missing
+		// table; the (possibly empty) table must exist for read()
+		// to succeed.
 		if n.state.Content != "" {
 			if fp, err := n.tableFingerprint(ctx); err == nil && fp == n.state.Content {
 				n.lastErr = ""

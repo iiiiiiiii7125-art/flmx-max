@@ -218,6 +218,7 @@ func (m *Manager) Restore() {
 		m.restore()
 		m.startGeoUpdater()
 		m.startRuleSetUpdater()
+		m.startNftVerifyLoop()
 	})
 }
 
@@ -431,6 +432,61 @@ func (m *Manager) stopGuardedInstances(cur *instance, syncErr error) bool {
 		m.setErr(e.inst, nftGuardFailure(e.req, syncErr))
 	}
 	return curGuarded
+}
+
+// nftVerifyFirstCheck / nftVerifyInterval 是 agent 表自检的节拍
+// （R3A-NEW-1/C NEW-1）：首检在启动后不久、其后每 60 秒一轮，
+// 与面板 KernelStatus 轮询同量级；单轮只是一次 `nft list table`，
+// 表正常时零日志。
+const (
+	nftVerifyFirstCheck = 10 * time.Second
+	nftVerifyInterval   = 60 * time.Second
+)
+
+// startNftVerifyLoop 周期复核 live nft 表（R3A-NEW-1/C NEW-1）：
+// 表驻留在内核里、不归本进程所有，可被带外删除；只靠 Apply 时的
+// sync，下发之间表丢了 agent 自己永远发现不了，计量静默冻结到
+// 下一次配置变更。自检跑的就是 Apply 用的 content-verified
+// sync，缺表/内容漂移即原地重建；重建失败大声记日志，并经
+// Status NftReadError 持续上报面板、直至下轮重试成功。
+func (m *Manager) startNftVerifyLoop() {
+	go func() {
+		time.Sleep(nftVerifyFirstCheck)
+		for {
+			m.verifyNftTable()
+			time.Sleep(nftVerifyInterval)
+		}
+	}()
+}
+
+// verifyNftTable 跑一轮 content-verified sync。表正常时零日志；
+// 表缺失/不可读时先点名、再重建、重建成功再报一行（恢复可见）；
+// 重建失败大声记错、不停内核（计数缺失本身是 best-effort，
+// 停内核是另一回事，见 Apply 的 guard 口径），下轮重试。
+func (m *Manager) verifyNftTable() {
+	if !m.nft.hasAppliedState() {
+		return
+	}
+	// 预检只为在日志里点名“缺表重建”：sync 本身是权威判定，
+	// 任何不匹配都会重建，预检读不到也不影响重建。
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, fpErr := m.nft.tableFingerprint(ctx)
+	if fpErr != nil {
+		log.Printf("[flmx] nft 表缺失或不可读（%v），正在重建", fpErr)
+	}
+	if err := m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks()); err != nil {
+		if _, hopNote := isolateHopSync(err); hopNote != "" {
+			// 仅 hop 规则被拒：主规则集已落地，不是表缺失。
+			log.Printf("[flmx] nft 表自检：端口跳跃未生效（%s）", hopNote)
+			return
+		}
+		log.Printf("[flmx] nft 表自检重建失败: %v（下轮重试；计量与截断在此期间缺失）", err)
+		return
+	}
+	if fpErr != nil {
+		log.Printf("[flmx] nft 表缺失已重建")
+	}
 }
 
 // syncGuardBeforeRestart re-runs the full ruleset sync ahead of an
@@ -1614,7 +1670,10 @@ func (m *Manager) Status(logsFor string) Status {
 		}
 	}
 	// nft 面状态随每次上报：NftError 只承载自动安装失败的原因
-	// （见 types.go），单纯缺失不进此字段。
+	// （见 types.go），单纯缺失不进此字段；计数读取失败走
+	// NftReadError（R3A-NEW-1），面板据此置 failing＋告警——旧实现
+	// 在此静默返回空计数，表丢后计量冻结而面板无从区分“无流量”
+	// 与“表丢了”。
 	if auto, ierr := m.nft.installStatus(); auto {
 		out.NftAutoInstalled = true
 	} else if ierr != "" {
@@ -1626,6 +1685,7 @@ func (m *Manager) Status(logsFor string) Status {
 	}
 	counters, users, epoch, err := m.nft.read()
 	if err != nil {
+		out.NftReadError = truncateNftErr(err.Error())
 		return out
 	}
 	if counters != nil {

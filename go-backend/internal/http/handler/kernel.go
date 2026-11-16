@@ -2557,6 +2557,12 @@ type agentKernelStatus struct {
 	Epoch        string               `json:"epoch"`
 	NftAvailable bool                 `json:"nftAvailable"`
 	NftError     string               `json:"nftError"`
+	// NftReadError carries the agent's last nft counter-read failure
+	// (R3A-NEW-1: table deleted or unreadable). Empty means the last
+	// read succeeded; unlike NftError (auto-install failure) it is
+	// set on every read failure so the panel can mark the node
+	// failing, alert, and re-push the kernels that own the table.
+	NftReadError string `json:"nftReadError"`
 	// NftAutoInstalled reports that the agent installed nftables
 	// itself on this node (auto-install path); the panel stores
 	// it as node nftables_status=auto_installed.
@@ -3909,6 +3915,30 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 	// 询钉定，见 FIX-BASELINE 注释）。
 	h.ingestKernelCounters(nodeID, status, now)
 	h.ingestNodeNftablesStatus(nodeID, status)
+	// R3A-NEW-1/C NEW-1：agent 计数表丢失的 WS 面——表丢时 agent
+	// 的 ConfigHash 不变，drift 对账看不出；ingest 又静默跳过空
+	// 计数，故此处单独处理：记一轮采集失败（与 SSH 路共用阈值＋
+	// 告警，见 nftables_traffic.go 的来源前缀口径），并把已确认
+	// 的内核重推一次（agent Apply 即 content-verified sync，缺表
+	// 即重建；agent 自身的 60 秒自检环是第一层，此处是面板侧第
+	// 二层）。读错消失时由 recordNftWsCollectSuccess 只清 WS 纹
+	// 的 streak，SSH 路的 streak 不受影响。
+	if status.NftReadError != "" {
+		h.recordNftCollectFailure(nodeID, errors.New(nftWsReadErrorPrefix+status.NftReadError))
+		log.Printf("kernel nft table unreadable node_id=%d err=%v (counters frozen; re-applying kernels)", nodeID, status.NftReadError)
+		for _, k := range kernels {
+			if k.AppliedHash != k.ConfigHash || k.ConfigHash == "" {
+				continue
+			}
+			go func(id int64) {
+				if err := h.applyKernelWithMode(id, false, nil, false); err != nil {
+					log.Printf("kernel nft table re-apply failed kernel_id=%d err=%v", id, err)
+				}
+			}(k.ID)
+		}
+	} else {
+		h.recordNftWsCollectSuccess(nodeID, now)
+	}
 	byType := make(map[string]agentKernelState, len(status.Kernels))
 	for _, s := range status.Kernels {
 		byType[s.Type] = s
@@ -3986,7 +4016,9 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 
 // ingestNodeNftablesStatus 把 agent 上报的 nftables 运行态写进
 // 节点行（供节点页白名单区展示）：NftError 非空 → failed（原因
-// 原文）；NftAutoInstalled → auto_installed；NftAvailable →
+// 原文）；NftReadError 非空 → failed（agent 计数表丢/不可读，
+// R3A-NEW-1：与安装失败分开，但同样是“表不在”的明示）；
+// NftAutoInstalled → auto_installed；NftAvailable →
 // installed；三者皆无 → 未知（""，不写——从不把“没上报”当成
 // 失败）。只在状态变化时写，避免每分钟轮询写 churn。写失败只
 // 记日志，绝不让状态面摄入失败（best-effort）。
@@ -3999,6 +4031,8 @@ func (h *Handler) ingestNodeNftablesStatus(nodeID int64, status agentKernelStatu
 	switch {
 	case status.NftError != "":
 		state, errText = "failed", status.NftError
+	case status.NftReadError != "":
+		state, errText = "failed", status.NftReadError
 	case status.NftAutoInstalled:
 		state, errText = "auto_installed", ""
 	case status.NftAvailable:
