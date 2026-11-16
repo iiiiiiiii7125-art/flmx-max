@@ -259,9 +259,17 @@ export function NodeConnLogModal({
         );
       } else {
         setRepushFailed(false);
+        // §27：回执 note 以结构化字段为准——后端把 note 同时塞进
+        // warning 文本与 data.companionSplitNote；此处只在 warning
+        // 未含该 note 时才另附一次，绝不重复显示同一句话。
+        const splitNote = res.data?.companionSplitNote;
+        const noteShown = splitNote && res.warning
+          ? res.warning.includes(splitNote)
+          : false;
         setRepushResult(
           `重新下发成功：已重推 ${res.data.tunnelCount} 个隧道 / ${res.data.forwardCount} 个转发` +
-            (res.warning ? `；注意：${res.warning}` : ""),
+            (res.warning ? `；注意：${res.warning}` : "") +
+            (splitNote && !noteShown ? `；${splitNote}` : ""),
         );
         await loadReadiness();
         await load(1, "");

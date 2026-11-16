@@ -25,7 +25,7 @@ List forwards. Non-admin users see only their own forwards.
       "name": "my-web-server",
       "inIp": "",
       "inPort": 10001,
-      "remoteAddr": "192.168.1.100:80",
+      "remoteAddr": "203.0.113.100:80",
       "strategy": "fifo",
       "status": 1,
       "inFlow": 1073741824,
@@ -49,7 +49,7 @@ Create a new forward.
 {
   "name": "my-web-server",
   "tunnelId": 1,
-  "remoteAddr": "192.168.1.100:80",
+  "remoteAddr": "203.0.113.100:80",
   "strategy": "fifo",
   "inPort": 0
 }
@@ -73,8 +73,16 @@ Create a new forward.
 - `hash` = Source-IP hash (sticky)
 
 **Remote Address Format:**
-- Single: `192.168.1.100:80`
-- Multiple: `192.168.1.100:80,192.168.1.101:80,192.168.1.102:80`
+- Single: `203.0.113.100:80`
+- Multiple: `203.0.113.100:80,203.0.113.101:80,203.0.113.102:80`
+
+> Intranet targets are NOT copy-pasteable for ordinary users: the
+> panel's SSRF guard (`IsSafeRemoteAddr`) rejects private/loopback/
+> link-local targets with **403** for non-admin callers unless an
+> admin has enabled `allow_local_remote_addr`. Admins are exempt.
+> The examples above use TEST-NET-3 documentation addresses
+> (`203.0.113.0/24`, RFC 5737) so they pass the guard's format
+> checks — substitute your real public target before sending.
 
 **Response:** success envelope with no `data` — or, when the panel has
 something to flag (e.g. a port adjustment), `data` is `{"warnings": [...]}`.
@@ -95,7 +103,7 @@ Update forward settings.
 {
   "id": 1,
   "name": "my-web-server-updated",
-  "remoteAddr": "192.168.1.100:8080",
+  "remoteAddr": "203.0.113.100:8080",
   "strategy": "round"
 }
 ```

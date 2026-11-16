@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -130,7 +131,7 @@ func TestSSMeteringReconcileLifecycle(t *testing.T) {
 	if parked.ID != firstID || parked.Port != firstPort || parkedIn.Settings.Password != firstPSK {
 		t.Fatal("parking must keep the same row, port and identity PSK")
 	}
-	if got := h.companionInboundsByOrigin(); len(got) != 0 {
+	if got, _ := h.companionInboundsByOrigin(); len(got) != 0 {
 		t.Fatalf("parked companion must not be retargetable, got %v", got)
 	}
 
@@ -516,5 +517,89 @@ func TestSSMeteringGateClosedFailsClosed(t *testing.T) {
 	personal.UUID = "u-personal"
 	if eps := h.subEndpoints(&personal, rows); len(eps) != 1 || eps[0].Inbound.ID != origin.ID || eps[0].Port != origin.Port {
 		t.Fatalf("non-share subscription must keep serving the origin endpoint, got %d endpoints", len(eps))
+	}
+}
+
+// TestSSMeteringCompanionListErrorFailsClosed (R3-E-LOW-01): when the
+// companion list itself is unreadable (DB error), the render side
+// cannot tell metering-managed origins from never-managed ones —
+// every direct SS endpoint of a share subscription is dropped
+// instead of falling back to the unmetered origin.
+//
+// The branch is proven with a fault-injected memo (a memo that
+// already carries the load error): endpoints still build normally
+// against the open DB, so a zero result can only come from the
+// fail-closed drop — never from a broken render pipeline. The
+// closed-DB cell then proves the real ListCompanionInbounds failure
+// surfaces as that same memo error.
+func TestSSMeteringCompanionListErrorFailsClosed(t *testing.T) {
+	r, h, _, origin, sub := seedMeteringFixture(t)
+	rows, err := r.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blindMemo := &companionGateMemo{
+		loaded: true, loadErr: errors.New("companion list unreadable (test fault)"),
+		rowLoaded: true, rowErr: errors.New("companion list unreadable (test fault)"),
+	}
+
+	// Cell 1: origin without a companion row — normally served, but
+	// with the list unreadable the render side is blind and must
+	// drop it rather than assume "never metered".
+	if eps := h.subEndpoints(sub, rows); len(eps) != 1 {
+		t.Fatalf("control: origin without a companion row must serve one endpoint, got %d", len(eps))
+	}
+	if eps := h.subEndpointsMemo(sub, rows, blindMemo); len(eps) != 0 {
+		t.Fatalf("unreadable companion list must render no share endpoint, got %d (port %d)", len(eps), eps[0].Port)
+	}
+
+	// Cell 2: the same blind memo leaves a non-share subscription
+	// untouched — it keeps serving the origin, which also proves
+	// the render pipeline still builds endpoints (cell 1 is not a
+	// vacuous pass through a broken pipeline).
+	personal := *sub
+	personal.ID = sub.ID + 1000
+	personal.Kind = "personal"
+	personal.Token = strings.Repeat("f", 32)
+	personal.UUID = "u-personal"
+	if eps := h.subEndpointsMemo(&personal, rows, blindMemo); len(eps) != 1 || eps[0].Inbound.ID != origin.ID || eps[0].Port != origin.Port {
+		t.Fatalf("non-share subscription must keep serving the origin endpoint, got %d endpoints", len(eps))
+	}
+
+	// Cell 3: origin owns a live companion row (reconciled + acked
+	// before the fault) — the companion endpoint must not be served
+	// either: with the list unreadable the render side cannot prove
+	// the companion is live.
+	r2, h2, k2, origin2, sub2 := seedMeteringFixture(t)
+	h2.reconcileSSMetering()
+	comp, err := r2.GetCompanionInbound(origin2.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must exist")
+	}
+	rows2, err := r2.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	markKernelApplied(t, r2, h2, k2)
+	if eps := h2.subEndpoints(sub2, rows2); len(eps) != 1 || eps[0].Inbound.ID != comp.ID {
+		t.Fatalf("control: gate-open share subscription must render the companion endpoint, got %d endpoints", len(eps))
+	}
+	if eps := h2.subEndpointsMemo(sub2, rows2, blindMemo); len(eps) != 0 {
+		t.Fatalf("unreadable companion list must render no share endpoint even with a live companion, got %d", len(eps))
+	}
+
+	// Cell 4: the real fault — a closed repo DB makes both helpers
+	// report the error (the memo error above is what a live
+	// ListCompanionInbounds failure produces), and the share render
+	// drops to zero.
+	_ = r2.Close()
+	if _, err := h2.companionsByOrigin(nil); err == nil {
+		t.Fatal("companionsByOrigin must report the closed-DB error, got nil")
+	}
+	if _, err := h2.companionRowOrigins(nil); err == nil {
+		t.Fatal("companionRowOrigins must report the closed-DB error, got nil")
+	}
+	if eps := h2.subEndpoints(sub2, rows2); len(eps) != 0 {
+		t.Fatalf("closed-DB share render must yield no endpoint, got %d", len(eps))
 	}
 }

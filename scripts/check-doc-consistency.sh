@@ -1000,6 +1000,20 @@ else
   note_ok "E-02：companionSplitNote 后端字段／前端类型／节点页渲染三侧同在"
 fi
 
+# ── 27b. repush 回执 note 对齐门（R3-E-LOW-02 常设门）
+# 与 27 同一字段的另一条面：connlog-repush 回执 data.companionSplitNote
+# 同样须三侧同在——后端只发、前端类型无字段或连接日志弹窗不读该字段
+# 即红（此前只有后端单测断言，前端可静默丢 note）。
+if ! grep -Fq 'data["companionSplitNote"]' go-backend/internal/http/handler/connlog_readiness.go; then
+  note_fail "R3-E-LOW-02：connlog-repush 回执未带 companionSplitNote 字段（前提失效，请人工复核）"
+elif ! grep -A20 'interface NodeConnLogRepushResult' vite-frontend/src/api/types.ts | grep -Fq 'companionSplitNote?: string'; then
+  note_fail "R3-E-LOW-02：NodeConnLogRepushResult 缺 companionSplitNote 字段（后端已发、前端类型未同步）"
+elif ! grep -Fq 'data?.companionSplitNote' vite-frontend/src/pages/node/connlog-modal.tsx; then
+  note_fail "R3-E-LOW-02：连接日志弹窗未读回执 companionSplitNote（类型已同步、页面仍不显示）"
+else
+  note_ok "R3-E-LOW-02：repush 回执 companionSplitNote 后端字段／前端类型／弹窗渲染三侧同在"
+fi
+
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
   echo "RESULT: PASS（known-pending 项不计失败）"

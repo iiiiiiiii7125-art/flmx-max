@@ -793,8 +793,18 @@ func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInb
 	endpoints, _ := h.inboundEndpoints(selected)
 	if s != nil && isShare(s) {
 		ku := kernelUser(s)
-		companions := h.companionsByOrigin(memo)
-		rowOrigins := h.companionRowOrigins(memo)
+		companions, compErr := h.companionsByOrigin(memo)
+		rowOrigins, rowErr := h.companionRowOrigins(memo)
+		// R3-E-LOW-01: the companion list is unreadable — the render
+		// side cannot tell metering-managed origins from origins
+		// that never had a companion row, so every direct SS origin
+		// fails closed below instead of serving unmetered. Relay
+		// endpoints keep flowing (relay traffic is structurally
+		// unmetered) and non-SS protocols are unaffected.
+		gateBlind := compErr != nil || rowErr != nil
+		if gateBlind {
+			log.Printf("subscription %d: drop direct SS endpoints: companion list unreadable (companions=%v rowOrigins=%v)", s.ID, compErr, rowErr)
+		}
 		kept := endpoints[:0]
 		for i := range endpoints {
 			e := endpoints[i]
@@ -815,6 +825,10 @@ func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInb
 			// (legitimate non-metered SS).
 			if e.Direct && e.Proxy == nil && e.RelayID == 0 &&
 				e.Inbound.Protocol == kernel.ProtocolShadowsocks {
+				if gateBlind {
+					log.Printf("subscription %d: drop origin endpoint of inbound %d: companion list unreadable (fail closed)", s.ID, e.Inbound.ID)
+					continue
+				}
 				if comp, ok := companions[e.Inbound.ID]; ok {
 					e.CompanionOf = e.Inbound.ID
 					e.Inbound = comp
@@ -1104,7 +1118,12 @@ func (h *Handler) subMeteringStatus(s *model.Subscription, rows []model.NodeInbo
 	for _, r := range rows {
 		byID[r.ID] = r
 	}
-	companions := h.companionsByOrigin(memo)
+	// A load error leaves companions nil: every SS origin then reads
+	// as "companion not live" and the badge errs toward unmetered —
+	// the safe display direction (it never claims metering that
+	// cannot be confirmed). Endpoint serving itself fails closed in
+	// subEndpointsForIDs (R3-E-LOW-01).
+	companions, _ := h.companionsByOrigin(memo)
 	seenReason := map[string]bool{}
 	var firstReason string
 	unmetered := 0
@@ -1244,7 +1263,10 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	}
 	shared := []int64{}
 	if isShare(s) {
-		companions := h.companionsByOrigin(memo)
+		// Load errors leave companions nil (see the metering-status
+		// path above); the render side still fails closed in
+		// subEndpointsForIDs (R3-E-LOW-01).
+		companions, _ := h.companionsByOrigin(memo)
 		for _, id := range ids {
 			row := byID[id]
 			if isExternalInbound(&row) {
