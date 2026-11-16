@@ -2562,7 +2562,17 @@ type agentKernelStatus struct {
 	// read succeeded; unlike NftError (auto-install failure) it is
 	// set on every read failure so the panel can mark the node
 	// failing, alert, and re-push the kernels that own the table.
+	// R4C-02: a node that never had nftables reports no read error
+	// at all (see NftNotInstalled) — a read error here means "a
+	// table we had is gone".
 	NftReadError string `json:"nftReadError"`
+	// NftNotInstalled mirrors the agent's Status signal (R4C-02):
+	// the node never had nftables (no binary, no table ever built).
+	// Missing counters are the designed shape for such a node, not
+	// a failure — the panel must not mark it failing, alert, or
+	// re-push kernels for this signal. It wins over NftReadError
+	// when both are set.
+	NftNotInstalled bool `json:"nftNotInstalled,omitempty"`
 	// NftAutoInstalled reports that the agent installed nftables
 	// itself on this node (auto-install path); the panel stores
 	// it as node nftables_status=auto_installed.
@@ -3922,8 +3932,10 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 	// 的内核重推一次（agent Apply 即 content-verified sync，缺表
 	// 即重建；agent 自身的 60 秒自检环是第一层，此处是面板侧第
 	// 二层）。读错消失时由 recordNftWsCollectSuccess 只清 WS 纹
-	// 的 streak，SSH 路的 streak 不受影响。
-	if status.NftReadError != "" {
+	// 的 streak，SSH 路的 streak 不受影响。R4C-02：NftNotInstalled
+	//（从未装 nft）优先于 NftReadError——该信号不记失败、不重
+	// 推、不告警，只走成功分支清 WS streak（若有）。
+	if status.NftReadError != "" && !status.NftNotInstalled {
 		h.recordNftCollectFailure(nodeID, errors.New(nftWsReadErrorPrefix+status.NftReadError))
 		log.Printf("kernel nft table unreadable node_id=%d err=%v (counters frozen; re-applying kernels)", nodeID, status.NftReadError)
 		for _, k := range kernels {
@@ -4018,10 +4030,12 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 // 节点行（供节点页白名单区展示）：NftError 非空 → failed（原因
 // 原文）；NftReadError 非空 → failed（agent 计数表丢/不可读，
 // R3A-NEW-1：与安装失败分开，但同样是“表不在”的明示）；
-// NftAutoInstalled → auto_installed；NftAvailable →
-// installed；三者皆无 → 未知（""，不写——从不把“没上报”当成
-// 失败）。只在状态变化时写，避免每分钟轮询写 churn。写失败只
-// 记日志，绝不让状态面摄入失败（best-effort）。
+// NftNotInstalled 优先于 NftReadError（R4C-02：从未装 nft 不是
+// 失败，落到默认分支的 missing）；NftAutoInstalled →
+// auto_installed；NftAvailable → installed；三者皆无 → 未知
+// （""，不写——从不把“没上报”当成失败）。只在状态变化时写，
+// 避免每分钟轮询写 churn。写失败只记日志，绝不让状态面摄入失
+// 败（best-effort）。
 func (h *Handler) ingestNodeNftablesStatus(nodeID int64, status agentKernelStatus) {
 	node, err := h.repo.GetNodeByID(nodeID)
 	if err != nil || node == nil {
@@ -4031,7 +4045,7 @@ func (h *Handler) ingestNodeNftablesStatus(nodeID int64, status agentKernelStatu
 	switch {
 	case status.NftError != "":
 		state, errText = "failed", status.NftError
-	case status.NftReadError != "":
+	case status.NftReadError != "" && !status.NftNotInstalled:
 		state, errText = "failed", status.NftReadError
 	case status.NftAutoInstalled:
 		state, errText = "auto_installed", ""

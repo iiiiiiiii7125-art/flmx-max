@@ -41,6 +41,28 @@ type kernelNotifyMock struct {
 	lastHash    string
 	applyCalls  int
 	statusCalls int
+	// R4C-02: programmable nft surface of the KernelStatus reply
+	// (zero values reproduce the historical mock: nftAvailable
+	// false, no read error, not not-installed).
+	nftAvailable    bool
+	nftReadError    string
+	nftNotInstalled bool
+	// reportHash, when set, overrides the configHash the mock
+	// reports for its kernel (default: lastHash from the last
+	// KernelApply).
+	reportHash string
+}
+
+func (m *kernelNotifyMock) setNft(available bool, readErr string, notInstalled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nftAvailable, m.nftReadError, m.nftNotInstalled = available, readErr, notInstalled
+}
+
+func (m *kernelNotifyMock) setReportHash(hash string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reportHash = hash
 }
 
 func (m *kernelNotifyMock) setApply(mode, errText string) {
@@ -164,14 +186,20 @@ func startKernelNotifyMockNode(t *testing.T, baseURL, secret string, mock *kerne
 				mock.statusCalls++
 				mode := mock.reportMode
 				data := map[string]interface{}{
-					"kernels":      []map[string]interface{}{},
-					"nftAvailable": false,
-					"epoch":        "e1",
-					"counters":     []map[string]interface{}{},
-					"users":        []map[string]interface{}{},
+					"kernels":         []map[string]interface{}{},
+					"nftAvailable":    mock.nftAvailable,
+					"nftReadError":    mock.nftReadError,
+					"nftNotInstalled": mock.nftNotInstalled,
+					"epoch":           "e1",
+					"counters":        []map[string]interface{}{},
+					"users":           []map[string]interface{}{},
 				}
 				if mode != "none" {
-					data["kernels"] = []map[string]interface{}{mock.stateLocked(mock.lastHash)}
+					hash := mock.lastHash
+					if mock.reportHash != "" {
+						hash = mock.reportHash
+					}
+					data["kernels"] = []map[string]interface{}{mock.stateLocked(hash)}
 				}
 				mock.mu.Unlock()
 				resp["data"] = data
