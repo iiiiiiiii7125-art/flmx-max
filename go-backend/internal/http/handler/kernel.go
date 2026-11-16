@@ -2794,9 +2794,13 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	// per-agent base，否则 legacy base），渲染与下发同源——内核
 	// 配置里的 mark 与 agent nft 规则的 mark 必须是同一个值，
 	// 否则用户计数归零。节点读不到时 fail-closed 用 legacy。
+	// R2C-01：同站按节点密钥派生伴生 Clash API 口（41000–41999）；
+	// 节点读不到时口为 0，渲染省略该块（agent 回退重载，计量不受影响）。
 	markBase := kernel.LegacyUserMarkBase // legacy；节点读到且版本达门槛才切 per-agent
+	clashAPIPort := 0
 	if node, err := h.repo.GetNodeByID(k.NodeID); err == nil && node != nil {
 		markBase = userMarkBaseForNode(k.NodeID, node.Secret, node.Version.String)
+		clashAPIPort = kernel.ClashAPIPortForSecret(node.Secret)
 	} else if err != nil {
 		log.Printf("user mark base node lookup failed node_id=%d err=%v action=legacy_base", k.NodeID, err)
 	}
@@ -2808,7 +2812,9 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// D-04：节点开关实值进渲染——关时日志形态回落（不升
 		// debug／不开 access），与 connLogInbounds 的门同源。
 		ConnLogEnabled: connlogOn,
-		UserMarkBase:    markBase,
+		UserMarkBase:   markBase,
+		// R2C-01: per-agent companion Clash API port (0 = omit).
+		ClashAPIPort: clashAPIPort,
 		// C-(4): the companion (raw type, before EffectiveType
 		// folded it to singbox) exposes the Clash API so the
 		// agent can close a removed user's live connections

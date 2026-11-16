@@ -599,6 +599,18 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.mu.Unlock()
 	}
 
+	// R2C-01: resolve the companion's effective Clash API port and
+	// rewrite the just-written config to carry it, BEFORE validation
+	// and the user diff below (see resolveCompanionClashAddr).
+	if isSingboxType(req.Type) {
+		if addr, changed, err := m.resolveCompanionClashAddr(prev, runDir, running); err != nil {
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		} else if changed {
+			inst.logs.add(fmt.Sprintf("[flmx] 伴生 Clash API 口已调整为 %s（下发口被占或不在新范围）", addr))
+		}
+	}
+
 	// C-(4): validate the new config before the nft sync when a
 	// reload is planned — a bad config must fail here, while the
 	// old process is still running the old config and the old nft
@@ -908,6 +920,48 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 // which were added, and whether the change is user-only (nothing
 // but the user list and its derived outbounds/rules changed).
 // Non-sing-box types and first applies report no diff.
+// resolveCompanionClashAddr decides the Clash API address the
+// companion will actually listen on and rewrites the just-written
+// config.json to carry it (R2C-01). It returns the resolved address
+// and whether the file was rewritten; "" with changed=false means
+// there is no Clash API configured (not a companion) or the rendered
+// address already stands. The caller invokes this BEFORE config
+// validation and the user diff: a rewrite after the diff would make
+// a user-only change look like a config change and send it down the
+// reload path (C-(4) blast radius), and a rewrite after the kill
+// would point the kill at a port the running instance does not
+// listen on.
+func (m *Manager) resolveCompanionClashAddr(prev prevApply, runDir string, running bool) (string, bool, error) {
+	cfgPath := filepath.Join(runDir, "config.json")
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return "", false, nil
+	}
+	rendered := clashAPIAddr(b)
+	if rendered == "" {
+		return "", false, nil
+	}
+	prevAddr := ""
+	if old, ok := prev.files["config.json"]; ok {
+		prevAddr = clashAPIAddr(old)
+	}
+	addr, err := resolveClashAPIAddr(rendered, prevAddr, running)
+	if err != nil {
+		return "", false, err
+	}
+	if addr == rendered {
+		return addr, false, nil
+	}
+	nb, err := rewriteClashAPIAddr(b, addr)
+	if err != nil {
+		return "", false, err
+	}
+	if err := writeFileAtomic(cfgPath, nb, 0o600); err != nil {
+		return "", false, err
+	}
+	return addr, true, nil
+}
+
 func (m *Manager) applyUserDiff(kernelType string, prev prevApply, runDir string) (removed, added []string, userOnly bool) {
 	if !isSingboxType(kernelType) {
 		return nil, nil, false

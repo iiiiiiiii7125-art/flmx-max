@@ -71,6 +71,12 @@ type RenderOptions struct {
 	// is the companion instance (TypeSingboxCompanion): only the
 	// companion exposes the Clash API (C-(4) selective kill).
 	Companion bool
+	// ClashAPIPort is the companion's Clash API listen port (R2C-01:
+	// per-agent, derived from the node secret — see
+	// ClashAPIPortForSecret). 0 means not configured: the render
+	// omits the Clash API block and the agent falls back to a config
+	// reload for user removals (metering unaffected).
+	ClashAPIPort int
 }
 
 // Render produces the kernel configuration for the given enabled inbounds.

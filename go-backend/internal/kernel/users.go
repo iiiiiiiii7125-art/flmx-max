@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"sort"
 )
@@ -258,6 +259,42 @@ func UserMarkBaseForAgent(nodeID int64, secret string) int64 {
 	}
 	sum := sha256.Sum256([]byte(markBaseDomain + secret))
 	return 0x47000000 | (int64(sum[0]) << 16)
+}
+
+// clashAPIPortDomain separates the Clash API port derivation from any
+// other hash of the node secret: changing the domain mints a new port
+// space, the same discipline as markBaseDomain.
+const clashAPIPortDomain = "flmx:clash-api-v1:"
+
+// companionClashAPIPortMin/Max bound the per-agent Clash API port
+// range (R2C-01). 40900 is deliberately outside it: the old fixed
+// port is gone — never rendered by the panel, never chosen by the
+// agent for a new instance. The agent mirrors this range in
+// go-gost/x/kernel (clashapi.go); the two must stay in sync.
+const (
+	companionClashAPIPortMin = 41000
+	companionClashAPIPortMax = 41999
+)
+
+// ClashAPIPortForSecret derives the companion's Clash API listen port
+// for one agent (one panel node) from the node's secret: the first two
+// bytes of SHA-256("flmx:clash-api-v1:"+secret), mapped into
+// 41000-41999. Same pattern as UserMarkBaseForAgent — stable per
+// (panel,node), no new storage, the panel already knows the secret at
+// render time — but with 16 bits of entropy (1000 ports, 1/1000
+// pairwise collision), and the agent's sticky/probe fallback makes
+// even that residual conflict-free in practice: a busy rendered port
+// is reallocated at (re)start, never failed silently. Empty secret
+// returns 0 (not configured): the render omits the Clash API block
+// and the agent falls back to a config reload for user removals —
+// fail-closed, metering unaffected. Production rows always carry a
+// secret.
+func ClashAPIPortForSecret(secret string) int {
+	if secret == "" {
+		return 0
+	}
+	sum := sha256.Sum256([]byte(clashAPIPortDomain + secret))
+	return companionClashAPIPortMin + int(binary.BigEndian.Uint16(sum[0:2])%1000)
 }
 
 // UserMarkForAgent is the socket mark of a user's traffic on one agent;

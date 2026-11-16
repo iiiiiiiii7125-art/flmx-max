@@ -73,7 +73,9 @@ func TestCompanionRendersLikeSingbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render sing-box: %v", err)
 	}
-	comp, err := Render(TypeSingboxCompanion, []Inbound{in})
+	// R2C-01: the companion's Clash API port is per-agent (passed in
+	// RenderOptions); the render must carry exactly that port.
+	comp, err := RenderWith(TypeSingboxCompanion, []Inbound{in}, RenderOptions{ClashAPIPort: 41234})
 	if err != nil {
 		t.Fatalf("render companion: %v", err)
 	}
@@ -98,8 +100,8 @@ func TestCompanionRendersLikeSingbox(t *testing.T) {
 		t.Fatalf("companion config has no experimental section")
 	}
 	clash, ok := exp["clash_api"].(map[string]interface{})
-	if !ok || clash["external_controller"] != companionClashAPIAddr {
-		t.Fatalf("companion clash_api = %v, want external_controller %q", exp["clash_api"], companionClashAPIAddr)
+	if !ok || clash["external_controller"] != "127.0.0.1:41234" {
+		t.Fatalf("companion clash_api = %v, want external_controller %q", exp["clash_api"], "127.0.0.1:41234")
 	}
 	delete(exp, "clash_api")
 	if len(exp) == 0 {

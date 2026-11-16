@@ -31,7 +31,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -54,7 +56,7 @@ type clashConnectionsReply struct {
 }
 
 // clashAPIAddr extracts the companion's Clash API address
-// (experimental.clash_api.external_controller, e.g. "127.0.0.1:40900")
+// (experimental.clash_api.external_controller, e.g. "127.0.0.1:41234")
 // from a rendered sing-box config. Empty means the API is not configured.
 func clashAPIAddr(configJSON []byte) string {
 	var cfg struct {
@@ -68,6 +70,131 @@ func clashAPIAddr(configJSON []byte) string {
 		return ""
 	}
 	return cfg.Experimental.ClashAPI.ExternalController
+}
+
+// companionClashAPIPortMin/Max bound the per-agent Clash API port
+// range (R2C-01). The panel mirrors this range in
+// go-backend/internal/kernel (ClashAPIPortForSecret); the two must
+// stay in sync. 40900 — the old fixed port — is deliberately outside
+// it: it is never rendered by the new panel and never chosen by the
+// agent for a new instance. A running instance that already listens
+// on 40900 keeps it until its next (re)start (sticky rule in
+// resolveClashAPIAddr), when it is reallocated from this range.
+const (
+	companionClashAPIPortMin = 41000
+	companionClashAPIPortMax = 41999
+)
+
+// clashAPIPort extracts the port from a "host:port" address; ok is
+// false when the address does not parse or the port is out of range.
+func clashAPIPort(addr string) (int, bool) {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, false
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, false
+	}
+	return port, true
+}
+
+// inClashAPIPortRange reports whether port is inside the per-agent
+// Clash API range.
+func inClashAPIPortRange(port int) bool {
+	return port >= companionClashAPIPortMin && port <= companionClashAPIPortMax
+}
+
+// clashPortFree probes whether a Clash API port is free on this host
+// by briefly listening on it. The probe-then-close window is tiny;
+// if two agents race into it, the loser fails loudly at sing-box
+// bind and picks a different port on the next apply (the winner now
+// holds it) — never silently.
+func clashPortFree(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
+}
+
+// rewriteClashAPIAddr returns a copy of a rendered sing-box config
+// with experimental.clash_api.external_controller set to addr
+// (creating the experimental/clash_api objects if absent). The
+// re-marshal uses the same shape as the panel's render, so only the
+// address changes.
+func rewriteClashAPIAddr(configJSON []byte, addr string) ([]byte, error) {
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		return nil, err
+	}
+	exp, _ := cfg["experimental"].(map[string]interface{})
+	if exp == nil {
+		exp = map[string]interface{}{}
+	}
+	clash, _ := exp["clash_api"].(map[string]interface{})
+	if clash == nil {
+		clash = map[string]interface{}{}
+	}
+	clash["external_controller"] = addr
+	exp["clash_api"] = clash
+	cfg["experimental"] = exp
+	return json.MarshalIndent(cfg, "", "  ")
+}
+
+// resolveClashAPIAddr decides the Clash API address a companion will
+// actually listen on. rendered is the address the panel rendered for
+// this agent; prevAddr is the address the previously applied config
+// carried ("" on first apply); running reports whether the instance
+// is currently up.
+//
+//   - A running instance keeps the port it already listens on
+//     (sticky): rewriting it under a live process would point the
+//     selective kill at a port nothing — or something else —
+//     listens on. The port only moves when the instance is
+//     (re)started.
+//   - A fresh (re)start prefers the previously used port (stable
+//     across agent restarts), then the rendered port, then scans the
+//     range from the rendered port upward (wrapping) for the first
+//     free port. A rendered port outside the range (e.g. the old
+//     40900 from an older panel) is never kept: the scan starts at
+//     the range floor.
+//   - The returned address is always 127.0.0.1:<port> (loopback
+//     only); a rendered non-loopback host is not honoured.
+//   - "" rendered means no Clash API is configured; "" is returned
+//     and the caller must not rewrite anything.
+func resolveClashAPIAddr(rendered, prevAddr string, running bool) (string, error) {
+	if rendered == "" {
+		return "", nil
+	}
+	if running && prevAddr != "" {
+		return prevAddr, nil
+	}
+	for _, cand := range []string{prevAddr, rendered} {
+		if cand == "" {
+			continue
+		}
+		port, ok := clashAPIPort(cand)
+		if !ok || !inClashAPIPortRange(port) {
+			continue
+		}
+		if clashPortFree(port) {
+			return fmt.Sprintf("127.0.0.1:%d", port), nil
+		}
+	}
+	start := companionClashAPIPortMin
+	if port, ok := clashAPIPort(rendered); ok && inClashAPIPortRange(port) {
+		start = port
+	}
+	size := companionClashAPIPortMax - companionClashAPIPortMin + 1
+	for i := 0; i < size; i++ {
+		port := companionClashAPIPortMin + (start-companionClashAPIPortMin+i)%size
+		if clashPortFree(port) {
+			return fmt.Sprintf("127.0.0.1:%d", port), nil
+		}
+	}
+	return "", fmt.Errorf("no free Clash API port in %d-%d", companionClashAPIPortMin, companionClashAPIPortMax)
 }
 
 // clashRuleUser parses a sing-box Clash API connection rule of the form
@@ -270,6 +397,18 @@ func normalizeSingboxConfig(configJSON []byte) ([]byte, error) {
 				kept = append(kept, raw)
 			}
 			route["rules"] = kept
+		}
+	}
+	// R2C-01: the Clash API address is an agent-local operational
+	// detail, not user state — two configs differing only by it
+	// normalize equal. The Apply-time rewrite already aligns it
+	// with the running instance; this makes the classification
+	// robust if they ever disagree (a port change alone must never
+	// turn a user-only change into a reload).
+	if exp, ok := cfg["experimental"].(map[string]interface{}); ok {
+		delete(exp, "clash_api")
+		if len(exp) == 0 {
+			delete(cfg, "experimental")
 		}
 	}
 	return json.Marshal(cfg)
