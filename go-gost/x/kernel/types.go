@@ -174,7 +174,15 @@ type Status struct {
 	// 表被删/不可读时 read() 出错）。与 NftError（自动安装失败）
 	// 分开：读错必须随每次上报带给面板置 failing＋告警，而安装
 	// 失败是另一回事；空表示最近一次读取成功（或无端口可读）。
+	// R4C-02：从未装过 nft（无二进制、也从未建表）不进此字段，
+	// 走下面的 NftNotInstalled——读错在此只表示“曾有表可读，
+	// 现在读不到了”。
 	NftReadError string `json:"nftReadError,omitempty"`
+	// NftNotInstalled 表示本机从未装过 nftables（无二进制、也
+	// 从未建表，R4C-02）：计数缺失是既定形态、不是故障，面板
+	// 不得据此置 failing、告警或重推内核；与 NftReadError 互斥
+	// ——曾建表后丢二进制仍走 NftReadError（回归信号）。
+	NftNotInstalled bool `json:"nftNotInstalled,omitempty"`
 	// NftAutoInstalled 表示本 agent 进程曾为白名单自动装上
 	// nftables（面板据此在节点页展示“已自动安装”，区别于装机
 	// 自带的“已安装”）。NftError 只承载最近一次自动安装失败

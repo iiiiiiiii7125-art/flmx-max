@@ -1695,7 +1695,9 @@ func (m *Manager) Status(logsFor string) Status {
 	// （见 types.go），单纯缺失不进此字段；计数读取失败走
 	// NftReadError（R3A-NEW-1），面板据此置 failing＋告警——旧实现
 	// 在此静默返回空计数，表丢后计量冻结而面板无从区分“无流量”
-	// 与“表丢了”。
+	// 与“表丢了”。R4C-02：从未装过 nft（无二进制、也从未建表）
+	// 时读错不是表丢失，走独立的 NftNotInstalled 非 failing 信
+	// 号（见下）；曾建表后丢二进制仍是回归，照旧进 NftReadError。
 	if auto, ierr := m.nft.installStatus(); auto {
 		out.NftAutoInstalled = true
 	} else if ierr != "" {
@@ -1707,6 +1709,14 @@ func (m *Manager) Status(logsFor string) Status {
 	}
 	counters, users, epoch, err := m.nft.read()
 	if err != nil {
+		// R4C-02：无二进制且从未建表——本机根本无计数可读，
+		// 按设计只丢计数，不进 NftReadError（否则面板每轮置
+		// failing＋重推内核）；曾建表后丢二进制是回归，照旧
+		// 进 NftReadError（面板的表丢失自愈路径仍在）。
+		if nftAvailable() != nil && !m.nft.hasAppliedState() {
+			out.NftNotInstalled = true
+			return out
+		}
 		out.NftReadError = truncateNftErr(err.Error())
 		return out
 	}
