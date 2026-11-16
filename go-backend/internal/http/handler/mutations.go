@@ -1742,9 +1742,8 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 // before any write; apply then performs the single write, whose
 // only remaining failure mode is a repository error.
 type nodeSSHConfigPlan struct {
-	delete bool
-	noop   bool
-	input  repo.NftSSHConfigInput
+	noop  bool
+	input repo.NftSSHConfigInput
 }
 
 // nodeSSHConfigError 是节点 SSH 配置校验的定型失败：文案由请求
@@ -1776,8 +1775,20 @@ func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{},
 	if nodeID <= 0 {
 		return nil, &nodeSSHConfigError{msg: "节点ID不能为空"}
 	}
+	// R5A-01：模式切换不得静默删除 SSH 配置。切到 agent 只是让
+	// 采集改走 agent 上报，配置本身仍是该节点的属性：采集枚举
+	// （ListNftablesNodesForCollection）只取 forward_mode =
+	// nftables 的节点，保留的行在 agent 模式下是惰性的，切回
+	// nftables 即恢复采集，不会双采也不会误采。旧口径在此直接
+	// 删行，而切回时更新路径 preserveSecrets=true 且模式切换请求
+	// 本身不带 sshConfig 整段，V2-06 守卫直接 return nil“整段
+	// 不动”——行已被删，不动就是永远删了，全程无报错无提示，
+	// 节点静默脱离 SSH 采集集。删行分支自 v1.0.0（2026-10-18）
+	// 就有，V2-06 守卫自 2026-10-21；最近才频繁踩到是因为
+	// nftables 模式拦装内核（code -1）逼大家走“agent 装内核再
+	// 切回”——即用户唯一真实的切换场景。
 	if forwardMode != "nftables" {
-		return &nodeSSHConfigPlan{delete: true}, nil
+		return &nodeSSHConfigPlan{noop: true}, nil
 	}
 	// V2-06：部分更新（preserveSecrets=true）未带 sshConfig 整段时
 	// 整段不动——旧实现仍会用请求值重建并 upsert，其中 port 被
@@ -1902,9 +1913,6 @@ func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{},
 func (h *Handler) applyNodeSSHConfig(nodeID int64, plan *nodeSSHConfigPlan, now int64) error {
 	if plan == nil || plan.noop {
 		return nil
-	}
-	if plan.delete {
-		return h.repo.DeleteNodeSSHConfig(nodeID)
 	}
 	return h.repo.UpsertNodeSSHConfig(nodeID, plan.input, now)
 }

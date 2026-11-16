@@ -1632,7 +1632,11 @@ export default function NodePage({
                     udpListenAddr: form.udpListenAddr,
                     interfaceName: form.interfaceName,
                     forwardMode: form.forwardMode,
-                    sshConfig,
+                    // R5A-01：切到 agent 模式提交的 sshConfig 为 null，
+                    // 但后端会保留已存配置；列表本地态须沿用旧值，
+                    // 否则切回 nftables 再打开表单时 SSH 字段为空、
+                    // 保留的配置不可见（须重填）。
+                    sshConfig: sshConfig ?? n.sshConfig,
                     http: form.http,
                     tls: form.tls,
                     socks: form.socks,
