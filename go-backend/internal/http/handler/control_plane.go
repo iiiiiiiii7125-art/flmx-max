@@ -661,7 +661,7 @@ func (h *Handler) rebindForwardServiceOnSelfOccupiedPort(forward *forwardRecord,
 		return err
 	}
 	if conflict != nil {
-		// L9 观察 2：三源判重命中的未必是转发，按来源措辞（助手在
+		// L9 观察 2：四源判重命中的未必是转发，按来源措辞（助手在
 		// mutations.go），不误报「已被其他转发占用」。
 		return errors.New(forwardPortConflictMessage(node, port, conflict))
 	}

@@ -55,23 +55,52 @@ func TestR5FEL4RelayForwardNodeReadFailClosedSentinel(t *testing.T) {
 		t.Fatalf("validation loop getNodeRecord call not found")
 	}
 	branch := body[loop:]
-	if idx := strings.Index(branch, "validateRemoteNodePort"); idx > 0 {
-		branch = branch[:idx]
-	}
-	// 剥注释行后判定（注释里出现 continue 一词不算代码分支）。
-	var code strings.Builder
+	// L4-02 守卫收紧为节点读错分支本身：PortAlloc Fix C 把
+	// createRelayForward 改成换口重试循环后，函数尾部合法地出现
+	// continue（换口重试）——旧「全尾无 continue」是误杀重试循环的
+	// 粗粒度代理。真正要守的是：节点记录读失败的分支必须 fail-closed
+	// 返回，不得以 continue/break 跳过该节点的校验。括号配对抽出
+	// nodeErr 分支体再判定，并补查 break（旧检查漏了它：break 同样
+	// 会跳过剩余节点校验后继续落库）。先剥注释行（注释里出现
+	// continue/break 一词不算代码分支；注释含括号时也不干扰配对）。
+	var stripped strings.Builder
 	for _, line := range strings.Split(branch, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "//") {
 			continue
 		}
-		code.WriteString(line)
-		code.WriteString("\n")
+		stripped.WriteString(line)
+		stripped.WriteString("\n")
 	}
-	if strings.Contains(code.String(), "continue") {
-		t.Fatalf("L4-02 regression: createRelayForward still skips port validation on node read failure:\n%s", branch)
+	code := stripped.String()
+	cond := strings.Index(code, "if nodeErr != nil {")
+	if cond < 0 {
+		t.Fatalf("nodeErr branch not found")
 	}
-	if !strings.Contains(code.String(), "return 0, nodeErr") {
-		t.Fatalf("L4-02: createRelayForward must fail closed with return 0, nodeErr, got:\n%s", branch)
+	depth := 0
+	end := -1
+	for i := cond; i < len(code); i++ {
+		switch code[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		t.Fatalf("nodeErr branch brace unbalanced")
+	}
+	block := code[cond:end]
+	if strings.Contains(block, "continue") || strings.Contains(block, "break") {
+		t.Fatalf("L4-02 regression: createRelayForward skips port validation on node read failure:\n%s", block)
+	}
+	if !strings.Contains(block, "return 0, nodeErr") {
+		t.Fatalf("L4-02: createRelayForward must fail closed with return 0, nodeErr, got:\n%s", block)
 	}
 }
 
@@ -328,7 +357,7 @@ func TestR5FEL9ConflictMessageBySource(t *testing.T) {
 		t.Fatalf("L9 obs2: inbound occupancy must be attributed to the inbound, got %q", err.Error())
 	}
 
-	// 纯函数面：三源措辞逐一核对。
+	// 纯函数面：四源措辞逐一核对。
 	cases := []struct {
 		source string
 		want   string
@@ -336,6 +365,7 @@ func TestR5FEL9ConflictMessageBySource(t *testing.T) {
 		{repo.PortSourceForward, "已被其他转发占用"},
 		{repo.PortSourceInbound, "已被入站"},
 		{repo.PortSourceChain, "链路段占用"},
+		{repo.PortSourceCompanion, "伴生 Clash API"},
 	}
 	for _, c := range cases {
 		msg := forwardPortConflictMessage(node, 1000, &repo.ForwardPortConflict{Source: c.source, Name: "x"})

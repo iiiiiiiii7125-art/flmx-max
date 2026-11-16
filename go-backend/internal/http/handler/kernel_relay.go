@@ -712,72 +712,120 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 			return 0, relayCreateErr(err)
 		}
 	}
-	port := inPort
-	if port <= 0 {
-		picked, pickErr := h.pickTunnelPort(tunnel.ID)
-		if pickErr != nil {
-			return 0, relayCreateErr(pickErr)
+	// PortAlloc Fix B/C：选口＋预检＋探针＋落库＋下发走换口重试循环
+	// （与 forwardCreate 的 createForwardWithPortRetry 同口径）。
+	// 撞口信号（DB 预检占用 / live 探针命中 / 锁内复检 ErrPortInUse /
+	// 下发绑口失败）只对自动口换口重试、显式口原样失败；其余失败
+	// （规格错、配额哨兵、仓储错、取行失败、非绑口下发错）立即回。
+	auto := inPort <= 0
+	tried := make(map[int]bool)
+	var lastErr error
+	for attempt := 0; attempt < forwardPortRetryAttempts; attempt++ {
+		port := inPort
+		if auto {
+			picked, pickErr := h.pickTunnelPortExcluding(tunnel.ID, tried)
+			if pickErr != nil {
+				return 0, relayCreateErr(pickErr)
+			}
+			port = picked
 		}
-		port = picked
-	}
-	if port <= 0 || port > 65535 {
-		return 0, relayCreateErr(errors.New("没有可用的入口端口"))
-	}
-	for _, nodeID := range entryNodes {
-		node, nodeErr := h.getNodeRecord(nodeID)
-		if nodeErr != nil {
-			// L4-02：与 forwardCreate/Update 的 validateForwardEntryNodes
-			// 同口径 fail-closed——节点记录读失败不得 continue 跳过该
-			// 节点的端口规格校验后仍落库（占用面虽有
-			// CreateForwardTx 锁内三源复检兜底，规格面无兜底）。
-			// getNodeRecord 的错误恒为已标记仓储错（其源头已标），
-			// 回执走泛化即正确分类，故此处不经 relayCreateErr 定型。
-			return 0, nodeErr
+		if port <= 0 || port > 65535 {
+			return 0, relayCreateErr(errors.New("没有可用的入口端口"))
 		}
-		if err := validateLocalNodePort(node, port); err != nil {
-			return 0, relayCreateErr(err)
+		// 预检：规格错立即回（自动口在规格内恒成立）；占用错换口重试。
+		// L4-02：节点记录读失败 fail-closed，不得跳过该节点校验。
+		precheckFailed := false
+		for _, nodeID := range entryNodes {
+			node, nodeErr := h.getNodeRecord(nodeID)
+			if nodeErr != nil {
+				// L4-02：与 forwardCreate/Update 的 validateForwardEntryNodes
+				// 同口径 fail-closed——节点记录读失败不得 continue 跳过该
+				// 节点的端口规格校验后仍落库（占用面虽有
+				// CreateForwardTx 锁内四源复检兜底，规格面无兜底）。
+				// getNodeRecord 的错误恒为已标记仓储错（其源头已标），
+				// 回执走泛化即正确分类，故此处不经 relayCreateErr 定型。
+				return 0, nodeErr
+			}
+			if err := validateLocalNodePort(node, port); err != nil {
+				return 0, relayCreateErr(err)
+			}
+			if err := h.validateForwardPortAvailability(node, port, 0); err != nil {
+				if isRepoError(err) {
+					return 0, err
+				}
+				lastErr = err
+				if !auto {
+					return 0, relayCreateErr(err)
+				}
+				tried[port] = true
+				precheckFailed = true
+				break
+			}
 		}
-		if err := h.validateForwardPortAvailability(node, port, 0); err != nil {
-			return 0, relayCreateErr(err)
+		if precheckFailed {
+			continue
 		}
-	}
+		// live 探针：只探自动口（与 forwardCreate 同口径）。
+		if auto {
+			if msg := h.probeForwardEntryPortLive(entryNodes, port); msg != "" {
+				lastErr = errors.New(msg)
+				tried[port] = true
+				continue
+			}
+		}
 
-	now := time.Now().UnixMilli()
-	userName := h.repo.GetUsernameByID(userID)
-	if userName == "" {
-		userName = "admin"
-	}
-	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnel.ID, remoteAddr, "fifo", now,
-		h.repo.NextIndex("forward"), entryNodes, port, "", nil, 0, 0, nil, 0, 0, proxyProtocolSend)
-	if err != nil {
-		// R3-GEN-01：配额/占用哨兵在此定型（带与 forwardCreate 对同
-		// 一仓储哨兵的既有分流码：配额 -1、占用 -2，msg 取哨兵原文）；
-		// 其余仓储失败标记后上抛、回执泛化。
-		if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
-			return 0, &relayCreateError{code: -1, msg: err.Error()}
+		now := time.Now().UnixMilli()
+		userName := h.repo.GetUsernameByID(userID)
+		if userName == "" {
+			userName = "admin"
 		}
-		if errors.Is(err, repo.ErrPortInUse) {
-			return 0, &relayCreateError{code: -2, msg: err.Error()}
+		forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnel.ID, remoteAddr, "fifo", now,
+			h.repo.NextIndex("forward"), entryNodes, port, "", nil, 0, 0, nil, 0, 0, proxyProtocolSend)
+		if err != nil {
+			// R3-GEN-01：配额/占用哨兵在此定型（带与 forwardCreate 对同
+			// 一仓储哨兵的既有分流码：配额 -1、占用 -2，msg 取哨兵原文）；
+			// 其余仓储失败标记后上抛、回执泛化。
+			if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
+				return 0, &relayCreateError{code: -1, msg: err.Error()}
+			}
+			if errors.Is(err, repo.ErrPortInUse) {
+				lastErr = err
+				if !auto {
+					return 0, &relayCreateError{code: -2, msg: err.Error()}
+				}
+				tried[port] = true
+				continue
+			}
+			return 0, markRepoError(err)
 		}
-		return 0, markRepoError(err)
-	}
-	created, err := h.getForwardRecord(forwardID)
-	if err != nil {
-		_ = h.deleteForwardByID(forwardID)
-		return 0, relayCreateErr(err)
-	}
-	if isNftTunnel {
-		if err := h.reconcileNftablesNodeByRequest(entryNodes[0]); err != nil {
+		created, err := h.getForwardRecord(forwardID)
+		if err != nil {
 			_ = h.deleteForwardByID(forwardID)
+			return 0, relayCreateErr(err)
+		}
+		if isNftTunnel {
+			if err := h.reconcileNftablesNodeByRequest(entryNodes[0]); err != nil {
+				_ = h.deleteForwardByID(forwardID)
+				return 0, relayCreateErr(err)
+			}
+			return forwardID, nil
+		}
+		if err := h.syncForwardServices(created, "UpdateService", true); err != nil {
+			_ = h.deleteForwardByID(forwardID)
+			if auto && isBindAddressInUseError(err) {
+				lastErr = err
+				tried[port] = true
+				continue
+			}
 			return 0, relayCreateErr(err)
 		}
 		return forwardID, nil
 	}
-	if err := h.syncForwardServices(created, "UpdateService", true); err != nil {
-		_ = h.deleteForwardByID(forwardID)
-		return 0, relayCreateErr(err)
+	// 耗尽：末次碰撞错按既有分流回（占用 -2，其余 -1）。
+	if errors.Is(lastErr, repo.ErrPortInUse) {
+		return 0, &relayCreateError{code: -2, msg: lastErr.Error()}
 	}
-	return forwardID, nil
+	return 0, relayCreateErr(lastErr)
 }
 
 // removeForwardWithServices mirrors forwardDelete for a forward the panel

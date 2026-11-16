@@ -21,7 +21,7 @@ import (
 //     创建的随机口径重挑，并经回执 warnings 提示。
 //   - P01-001 撞口面：本地自动选口、显式指定、入站创建都必须看见
 //     统一占用集并避开/拒绝（联邦预留源已随共享板块于 2.1.0 整删，
-//     占用集收敛为转发/链路段/入站三源，repo 层 K9 格同口径）。
+//     占用集收敛为转发/链路段/入站/伴生 Clash API 四源，repo 层 K9 格同口径）。
 
 func seedK9Node(t *testing.T, r *repo.Repository, id int64, name, ip, portSpec string) {
 	t.Helper()

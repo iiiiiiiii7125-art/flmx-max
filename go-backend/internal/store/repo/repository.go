@@ -3107,7 +3107,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		// B4-02 残面：转发端口替换集全集预判（见
 		// predictImportedForwardPortReplacements）——在 tunnels
 		// 段之前算定（链路面复检要用），供 tunnels/forwards 两段
-		// 的行内三源复检作转发排除集；成员资格与备份内声明顺序
+		// 的行内四源复检作转发排除集；成员资格与备份内声明顺序
 		// 无关。users 段已在本点之前落库，用户存在性是终态。
 		forwardReplaceIDs := map[int64]bool{}
 		if typeSet["forwards"] && len(backup.Forwards) > 0 {
@@ -4278,7 +4278,7 @@ func (r *Repository) importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, no
 				rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的端口 %d 不在 1-65535 之间，已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.Port)
 				continue
 			}
-			// B4-02 残面：链路声明口落库前三源占用复检（与转发面
+			// B4-02 残面：链路声明口落库前四源占用复检（与转发面
 			// R1-03-M2 同型）——预检排除集按备份 ID 全集组装，
 			// 被行门跳过的转发其存量端口行在导入后存活，链路声明
 			// 与之同节点同口时预检放行、此前落库无门，可跨表双
@@ -4583,7 +4583,7 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 	// rep.skip("forwardPorts") 调用点都须同步累计对应分计数，
 	// 否则汇总条数与合计数对不上。
 	var portsSkippedMissingNode, portsSkippedBadInIP, portsSkippedBadPort int
-	// R1-03-M2：端口行落库前三源占用＋节点端口范围复检的状态。
+	// R1-03-M2：端口行落库前四源占用＋节点端口范围复检的状态。
 	// 恢复前预检（precheckBackupPortConflicts）按整单排除集判重，
 	// 存在盲区：被本单跳过的转发（策略/零目标等门）与 ForwardPorts
 	// 为 nil 的转发，其存量端口行被预检排除、却在导入后原样存
@@ -4854,7 +4854,7 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 					}
 					inIP = stripped
 				}
-				// R1-03-M2：落库前三源占用＋节点端口范围复检（预
+				// R1-03-M2：落库前四源占用＋节点端口范围复检（预
 				// 检盲区收口，状态定义见函数前段）。占用走统一谓
 				// 词 NodePortOccupantTx、排除集仅含尚未处理的备
 				// 份转发；范围内判走节点 Port 规格集合语义（与写

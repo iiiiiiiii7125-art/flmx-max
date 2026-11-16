@@ -282,9 +282,9 @@ func (r *Repository) HasOtherForwardOnNodePort(nodeID int64, port int, currentFo
 }
 
 func (r *Repository) HasOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, port int, currentForwardID int64) (bool, error) {
-	// P01-001：三源占用知识收敛到统一谓词 NodePortOccupiedTx
+	// P01-001：四源占用知识收敛到统一谓词 NodePortOccupiedTx
 	// （repository_port_occupancy.go）。本函数只做 forward 视角的
-	// 排除适配：排除自己这条转发，其余三源（入站/链路/联邦有效
+	// 排除适配：排除自己这条转发，其余三源（入站/链路/伴生 Clash API）
 	// 预留）全部计入——O2-003 与 X-P2-13 的纳入结论由统一谓词承载。
 	var excl PortExclusions
 	if currentForwardID != 0 {

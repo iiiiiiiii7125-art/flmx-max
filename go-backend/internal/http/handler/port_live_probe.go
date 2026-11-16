@@ -9,7 +9,7 @@ import (
 
 // F2-PORT-01：live socket 探针（面板侧）。
 //
-// DB 三源（forward_port / node_inbound / chain_tunnel）看不到节点
+// DB 统一谓词（forward_port / node_inbound / chain_tunnel＋伴生 Clash API 派生口）看不到节点
 // 本机上 DB 之外的监听端口（手动服务、旧部署残留、非面板进程）。
 // 保存入站/隧道显式端口前，先问 agent 扫一遍 /proc/net
 // （CheckPortListening 命令，见 go-gost/x/socket/port_listening.go），
@@ -147,6 +147,23 @@ func (h *Handler) verifyPausedPortsDead(nodeID int64, ports []int) error {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// probeForwardEntryPortLive 探入口端口在各入口节点的 live 监听态
+// （PortAlloc Fix B）：转发/中转创建的自动选口在 DB 判重通过后、
+// 落库前再问一遍 agent——DB 看不到的本机监听（手动服务、漂移后
+// 的伴生口、旧部署残留）在此拦截。只探自动选口：显式口沿用既有
+// 口径（DB 预检＋下发绑口为终判），探针误报不得新增拒绝面。
+// fail-open：探针失败（离线/旧 agent/超时）回 ""，调用方沿用 DB 结论。
+func (h *Handler) probeForwardEntryPortLive(entryNodes []int64, port int) string {
+	if port <= 0 || len(entryNodes) == 0 {
+		return ""
+	}
+	byNode := make(map[int64][]portSpan, len(entryNodes))
+	for _, nid := range entryNodes {
+		byNode[nid] = []portSpan{{lo: port, hi: port, what: "入口端口"}}
+	}
+	return h.checkLivePortsOccupied(livePortTargetsFromMap(byNode))
 }
 
 // subtractPortSpans 从 spans 里减去 exclude 的区间（更新时排除

@@ -1329,7 +1329,7 @@ func (r *Repository) pickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int
 		return 0, errors.New("节点端口已满，无可用端口")
 	}
 
-	// P01-001：已用集走统一三源谓词 UsedPortsOnNodeTx。此前这里手写
+	// P01-001：已用集走统一四源谓词 UsedPortsOnNodeTx。此前这里手写
 	// 三源（chain/forward/inbound），漏联邦有效预留口：随机选口能挑中
 	// 分享运行时正在用的口，同节点同口双分配、后下发方绑口失败。
 	// 排除口径不变：仅排除本隧道自身链路行（更新沿用/重挑时不被
@@ -1836,7 +1836,7 @@ func lockPortAllocForEntries(entries []struct {
 }
 
 // replaceForwardPortsTx 是 ReplaceForwardPorts 的事务内核心：删旧口、
-// 锁内三源占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
+// 锁内四源占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
 // 窗口，旧端口已在本事务内删除、自占用天然排除）、插入新口。
 func (r *Repository) replaceForwardPortsTx(tx *gorm.DB, forwardID int64, entries []struct {
 	NodeID int64
@@ -1990,7 +1990,7 @@ func (r *Repository) GetUsedPortsOnNodeAsMap(nodeID int64) (map[int]bool, error)
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
-	// P01-001：三源已用集收敛到统一谓词 UsedPortsOnNodeTx，本函数只做
+	// P01-001：四源已用集收敛到统一谓词 UsedPortsOnNodeTx，本函数只做
 	// map[int]struct{} → map[int]bool 的形状适配。B4/F-013（入站口纳入
 	// 自动选口排除集）与 X-P2-13（联邦有效预留口纳入）的结论由统一
 	// 谓词承载；external 入站行 node_id=0 天然不在本节点集合内。
@@ -2149,7 +2149,7 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 				return ErrUserTunnelForwardNumExceeded
 			}
 		}
-		// B4/F-013: 锁内三源复检（同 ReplaceForwardPorts）。handler 预检
+		// B4/F-013: 锁内四源复检（同 ReplaceForwardPorts）。handler 预检
 		// 在锁外，跨表并发（入站/隧道创建）可穿透窗口双占用落库。
 		for _, nodeID := range uniqueEntryNodeIDs {
 			occupied, err := r.HasOtherForwardOnNodePortTx(tx, nodeID, port, 0)

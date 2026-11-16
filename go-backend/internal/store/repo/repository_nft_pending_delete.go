@@ -242,8 +242,8 @@ func (r *Repository) FindOtherForwardOnNodePort(nodeID int64, port int, currentF
 // caller's tx (补充 B: no second global query — that is the C-001 pattern).
 //
 // P01-001: WHICH source occupies the port is decided by the unified
-// three-source predicate (NodePortOccupantTx, same check order
-// forward → inbound → chain); this function only fetches the
+// four-source predicate (NodePortOccupantTx, same check order
+// forward → inbound → chain → companion); this function only fetches the
 // winning source's display details. The per-source history — B4/F-013
 // (inbound invisible to the forward precheck), O2-003 (chain_tunnel)
 // — is carried by the unified predicate, so a future source lands in
@@ -322,6 +322,10 @@ func (r *Repository) FindOtherForwardOnNodePortTx(tx *gorm.DB, nodeID int64, por
 			_ = tx.Model(&model.Tunnel{}).Select("name").Where("id = ?", ct.TunnelID).Scan(&tunnelName).Error
 			return &ForwardPortConflict{ForwardID: ct.ID, Name: tunnelName, Status: 1, Source: PortSourceChain}, nil
 		}
+	case PortSourceCompanion:
+		// P1-01：伴生 Clash API 口无 DB 行可取详情——派生口即占用
+		// 本身，点名即可；ForwardID 恒 0（无可删/可改的实体）。
+		return &ForwardPortConflict{ForwardID: 0, Name: "伴生 Clash API", Status: 1, Source: PortSourceCompanion}, nil
 	}
 	return nil, nil
 }
