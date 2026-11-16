@@ -122,6 +122,10 @@
 #   27. 内核视图字段对齐门（E-02 常设门）：后端 kernelView 新增字段
 #      须同步前端 KernelApiItem 类型与一处渲染点——companionSplitNote
 #      三侧同在，后端加字段而前端无类型／无渲染即红。
+#   28. 内核安装原子交换＋离线缓存门（C NEW-2 常设门）：nodes.md
+#      的原子交换（只在替换件落盘验证后才换旧二进制）与离线重装
+#      本地缓存安装包口径，须与 install.go 的 swapBinDir／
+#      restoreInterruptedSwap／lookup+storeArchiveCache 三锚点同在。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -998,6 +1002,24 @@ elif ! grep -Fq 'k.companionSplitNote' vite-frontend/src/pages/inbound/kernel-pa
   note_fail "E-02：节点页内核行无 companionSplitNote 渲染点（类型已同步、页面仍不显示）"
 else
   note_ok "E-02：companionSplitNote 后端字段／前端类型／节点页渲染三侧同在"
+fi
+
+# ── 28. 内核安装原子交换＋离线缓存门（C NEW-2 常设门）
+# nodes.md 称重启/重部署/升级只在替换件落盘验证后才换旧二进制、
+# 安装失败旧内核在位、离线重装用本地缓存；代码侧三锚点同在——
+# 原子交换 swapBinDir、中断恢复 restoreInterruptedSwap、缓存
+# lookup/storeArchiveCache——任一不在场即红（文档反成错口径）。
+if ! grep -Fq '原子交换' doc/guide/nodes.md; then
+  note_fail "C NEW-2：nodes.md 缺内核安装原子交换口径（重启/重部署只在替换件落盘验证后才换旧二进制）"
+elif ! grep -Fq '本地已验安装包缓存' doc/guide/nodes.md; then
+  note_fail "C NEW-2：nodes.md 缺离线重装本地缓存安装包口径"
+elif ! grep -Fq 'func swapBinDir' go-gost/x/kernel/install.go \
+     || ! grep -Fq 'func restoreInterruptedSwap' go-gost/x/kernel/install.go \
+     || ! grep -Fq 'func lookupArchiveCache' go-gost/x/kernel/install.go \
+     || ! grep -Fq 'func storeArchiveCache' go-gost/x/kernel/install.go; then
+  note_fail "C NEW-2：install.go 缺原子交换/中断恢复/安装包缓存锚点（前提失效，请人工复核）"
+else
+  note_ok "C NEW-2：nodes.md 原子交换＋离线缓存安装包口径与 install.go 三锚点同在"
 fi
 
 echo "----"

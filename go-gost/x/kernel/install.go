@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -678,7 +681,22 @@ func install(d *Download, binDir string, note func(string)) error {
 	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
 	defer cancel()
 
-	if d.GitHub != nil && (strings.Contains(url, "{VERSION}") || url == "" || (want == "" && sumURL == "")) {
+	// C NEW-2: 本地安装包缓存——同地址资产此前已下载校验过时，
+	// 直接用缓存解压，不走网络（重启 Restore、重部署、升级回滚
+	// 的离线重装就靠它）。键为归一化直连地址；{VERSION} 未解析
+	// 时无稳定键，跳过缓存走正常路径。缓存只与已验摘要绑定，
+	// 信任等级与已装二进制的存在跳过（C4）相同。
+	var cachedSrc string
+	if !strings.Contains(url, "{VERSION}") && url != "" {
+		if p, ok := lookupArchiveCache(binDir, d, directForm(url)); ok {
+			cachedSrc = p
+			if note != nil {
+				note("使用本地缓存的安装包，跳过下载")
+			}
+		}
+	}
+
+	if cachedSrc == "" && d.GitHub != nil && (strings.Contains(url, "{VERSION}") || url == "" || (want == "" && sumURL == "")) {
 		ghURL, digest, err := resolveGitHub(ctx, d.GitHub, arch, note)
 		if err != nil {
 			return err
@@ -688,7 +706,7 @@ func install(d *Download, binDir string, note func(string)) error {
 	if strings.Contains(url, "{VERSION}") || url == "" {
 		return fmt.Errorf("下载地址不完整")
 	}
-	if want == "" && sumURL == "" {
+	if cachedSrc == "" && want == "" && sumURL == "" {
 		return fmt.Errorf("没有可用的 SHA256 校验值，拒绝安装")
 	}
 
@@ -702,68 +720,78 @@ func install(d *Download, binDir string, note func(string)) error {
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 
-	// KU4 (1.7.7): 面板下发的地址可能带镜像前缀——先归一化为直连
-	// 形式，路由由本次安装的测速计划决定（二进制与校验两腿共用
-	// 一次探测，不逐文件重测）。探针目标优先校验文件（小且内容
-	// 可验），没有校验文件时以资产地址本身作轻量探针。
-	url = directForm(url)
-	sumURL = directForm(sumURL)
-	var plan *download.Plan
-	if sumURL != "" {
-		plan = download.NewPlan(ctx, sumURL, checksumProbe, panelExtraRoutes()...)
-	} else {
-		plan = download.NewPlan(ctx, url, assetProbe, panelExtraRoutes()...)
-	}
+	if cachedSrc == "" {
+		// KU4 (1.7.7): 面板下发的地址可能带镜像前缀——先归一化为直连
+		// 形式，路由由本次安装的测速计划决定（二进制与校验两腿共用
+		// 一次探测，不逐文件重测）。探针目标优先校验文件（小且内容
+		// 可验），没有校验文件时以资产地址本身作轻量探针。
+		url = directForm(url)
+		sumURL = directForm(sumURL)
+		var plan *download.Plan
+		if sumURL != "" {
+			plan = download.NewPlan(ctx, sumURL, checksumProbe, panelExtraRoutes()...)
+		} else {
+			plan = download.NewPlan(ctx, url, assetProbe, panelExtraRoutes()...)
+		}
 
-	// 校验先行（round-5 L2-03）：want 在本体下载之前总是已知——
-	// 钉死哈希 / API digest 已在上方定下，只剩 sumURL 形态，此处
-	// 先把校验文件拉回来（腿内内容校验＋跨线路锚复核，L2-04 /
-	// L2-08）。此前本体下完才比对：一条线路给出「完整但错误」的
-	// 内容即整单失败、其余线路永不尝试。
-	if want == "" {
-		var sb strings.Builder
-		winner, err := fetchRanked(ctx, plan, sumURL, 64<<10, validateChecksumContent, &sb)
-		if err != nil {
-			return fmt.Errorf("获取校验文件失败: %v", err)
-		}
-		var ok bool
-		if want, ok = parseChecksum(sb.String()); !ok {
-			return fmt.Errorf("校验文件中没有 SHA256")
-		}
-		if err := corroborateAnchorDigest(ctx, winner, sumURL, func(actx context.Context, alt *download.Plan) (string, error) {
-			var altSB strings.Builder
-			if _, err := fetchRanked(actx, alt, sumURL, 64<<10, validateChecksumContent, &altSB); err != nil {
-				return "", err
+		// 校验先行（round-5 L2-03）：want 在本体下载之前总是已知——
+		// 钉死哈希 / API digest 已在上方定下，只剩 sumURL 形态，此处
+		// 先把校验文件拉回来（腿内内容校验＋跨线路锚复核，L2-04 /
+		// L2-08）。此前本体下完才比对：一条线路给出「完整但错误」的
+		// 内容即整单失败、其余线路永不尝试。
+		if want == "" {
+			var sb strings.Builder
+			winner, err := fetchRanked(ctx, plan, sumURL, 64<<10, validateChecksumContent, &sb)
+			if err != nil {
+				return fmt.Errorf("获取校验文件失败: %v", err)
 			}
-			altWant, ok := parseChecksum(altSB.String())
-			if !ok {
-				return "", fmt.Errorf("校验文件中没有 SHA256")
+			var ok bool
+			if want, ok = parseChecksum(sb.String()); !ok {
+				return fmt.Errorf("校验文件中没有 SHA256")
 			}
-			return altWant, nil
-		}, want, note); err != nil {
+			if err := corroborateAnchorDigest(ctx, winner, sumURL, func(actx context.Context, alt *download.Plan) (string, error) {
+				var altSB strings.Builder
+				if _, err := fetchRanked(actx, alt, sumURL, 64<<10, validateChecksumContent, &altSB); err != nil {
+					return "", err
+				}
+				altWant, ok := parseChecksum(altSB.String())
+				if !ok {
+					return "", fmt.Errorf("校验文件中没有 SHA256")
+				}
+				return altWant, nil
+			}, want, note); err != nil {
+				return err
+			}
+		}
+
+		// 本体下载走可续传的共享 transfer（download.FileTransfer，
+		// 1.7.12）：一条线路中途失败时已落盘字节保留，下一线路以
+		// Range 续传，不再每腿从 0 重下（慢节点在整程预算内被首腿
+		// 涓流饿死的修复口径，与 agent 自升级同源）。哈希由 transfer
+		// 持续累计，并在每条腿内与 want 比对（L2-03，与 geodata 的
+		// 腿内比对同口径）：某条线路下完但组装哈希不符时丢弃断点
+		// （Reset），由下一线路从 0 重下，而不是整单失败。
+		transfer := download.NewFileTransfer(tmp.Name(), maxDownloadBytes, 0o600)
+		if _, err := download.TryPlan(plan, url, func(route download.Route, u string) error {
+			if err := fetchFileResume(ctx, transfer, u); err != nil {
+				return err
+			}
+			if got := transfer.Sum(); got != want {
+				_ = transfer.Reset()
+				return fmt.Errorf("SHA256 校验失败: 期望 %s, 实际 %s（本线路作废，换线重下）", want, got)
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
+		storeArchiveCache(binDir, d, directForm(url), tmp.Name(), want)
 	}
 
-	// 本体下载走可续传的共享 transfer（download.FileTransfer，
-	// 1.7.12）：一条线路中途失败时已落盘字节保留，下一线路以
-	// Range 续传，不再每腿从 0 重下（慢节点在整程预算内被首腿
-	// 涓流饿死的修复口径，与 agent 自升级同源）。哈希由 transfer
-	// 持续累计，并在每条腿内与 want 比对（L2-03，与 geodata 的
-	// 腿内比对同口径）：某条线路下完但组装哈希不符时丢弃断点
-	// （Reset），由下一线路从 0 重下，而不是整单失败。
-	transfer := download.NewFileTransfer(tmp.Name(), maxDownloadBytes, 0o600)
-	if _, err := download.TryPlan(plan, url, func(route download.Route, u string) error {
-		if err := fetchFileResume(ctx, transfer, u); err != nil {
-			return err
-		}
-		if got := transfer.Sum(); got != want {
-			_ = transfer.Reset()
-			return fmt.Errorf("SHA256 校验失败: 期望 %s, 实际 %s（本线路作废，换线重下）", want, got)
-		}
-		return nil
-	}); err != nil {
-		return err
+	// srcPath 是本次解压的来源：缓存命中时为缓存文件，否则为刚
+	// 下载的临时文件。下载失败在交换之前返回，旧二进制不动。
+	srcPath := tmp.Name()
+	if cachedSrc != "" {
+		srcPath = cachedSrc
 	}
 
 	staging := binDir + ".staging"
@@ -775,11 +803,11 @@ func install(d *Download, binDir string, note func(string)) error {
 
 	switch d.Archive {
 	case "zip":
-		err = extractZip(tmp.Name(), staging)
+		err = extractZip(srcPath, staging)
 	case "tar.gz":
-		err = extractTarGz(tmp.Name(), staging)
+		err = extractTarGz(srcPath, staging)
 	default:
-		err = copyFile(tmp.Name(), filepath.Join(staging, d.BinName), 0o755)
+		err = copyFile(srcPath, filepath.Join(staging, d.BinName), 0o755)
 	}
 	if err != nil {
 		return err
@@ -791,8 +819,159 @@ func install(d *Download, binDir string, note func(string)) error {
 	if err := os.Chmod(bin, 0o755); err != nil {
 		return err
 	}
-	_ = os.RemoveAll(binDir)
-	return os.Rename(staging, binDir)
+	// C NEW-2: 原子交换——旧目录先改名旁置（.old），新目录改名落位
+	// 成功后才删旧目录；落位失败时把旧目录改回来。旧实现先删旧
+	// 目录再改名，两步之间崩溃或改名失败即零内核。
+	return swapBinDir(binDir, staging)
+}
+
+// swapBinDir atomically replaces the live binary directory with the
+// staged one (C NEW-2): the old directory is renamed aside to
+// <binDir>.old first and only removed after the staged directory is
+// in place; a failed rename-in restores the old directory. A crash
+// between the two renames leaves the old binary recoverable under
+// .old (see restoreInterruptedSwap, called from ensureBinary before
+// any install). This mirrors the .bak swap geodata.go and rulesets.go
+// already use for single files.
+func swapBinDir(binDir, staging string) error {
+	backup := binDir + ".old"
+	if _, err := os.Stat(binDir); err == nil {
+		// Only drop a stale backup when the live dir exists: when
+		// the live dir is missing the backup IS the last good copy
+		// (a previous swap crashed between the two renames).
+		_ = os.RemoveAll(backup)
+		if err := os.Rename(binDir, backup); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(staging, binDir); err != nil {
+		_ = os.Rename(backup, binDir)
+		return err
+	}
+	_ = os.RemoveAll(backup)
+	return nil
+}
+
+// restoreInterruptedSwap recovers a binary directory lost to a swap
+// interrupted between its two renames (C NEW-2): when the live dir
+// is absent but <dir>.old still holds the binary, move it back.
+// A present (even partial) live dir is never clobbered.
+func restoreInterruptedSwap(dir, binName string) bool {
+	if _, err := os.Stat(filepath.Join(dir, binName)); err == nil {
+		return false
+	}
+	if _, err := os.Stat(dir); err == nil {
+		return false
+	}
+	backup := dir + ".old"
+	if _, err := os.Stat(filepath.Join(backup, binName)); err != nil {
+		return false
+	}
+	return os.Rename(backup, dir) == nil
+}
+
+// archiveCacheDir is where verified kernel archives are kept for
+// offline reinstalls: <base>/cache/<type>, a sibling of the whole
+// type tree (not under it) so neither pruneStaleBinDirs nor a
+// whole-tree removal (Control remove, or the C NEW-2 incident's
+// tree wipe) can take the cache with it.
+func archiveCacheDir(binDir string) string {
+	typeDir := filepath.Dir(filepath.Dir(binDir))
+	return filepath.Join(filepath.Dir(typeDir), "cache", filepath.Base(typeDir))
+}
+
+func archiveCacheExt(archive string) string {
+	switch archive {
+	case "zip":
+		return ".zip"
+	case "tar.gz":
+		return ".tar.gz"
+	default:
+		return ".bin"
+	}
+}
+
+// archiveCachePath keys a cached archive by the normalized direct
+// download address (C NEW-2): the same release asset always maps to
+// the same file, whatever the mirror prefix or checksum route was.
+func archiveCachePath(binDir string, d *Download, url string) string {
+	sum := sha256.Sum256([]byte(url))
+	return filepath.Join(archiveCacheDir(binDir), d.BinName+"-"+hex.EncodeToString(sum[:])[:16]+archiveCacheExt(d.Archive))
+}
+
+// lookupArchiveCache returns the cached archive for url when it is
+// present and still hashes to the digest recorded beside it at
+// store time (C NEW-2). A corrupt entry is removed and treated as
+// a miss, never trusted.
+func lookupArchiveCache(binDir string, d *Download, url string) (string, bool) {
+	p := archiveCachePath(binDir, d, url)
+	want, err := os.ReadFile(p + ".sha256")
+	if err != nil {
+		return "", false
+	}
+	got, err := fileSHA256(p)
+	if err != nil || strings.TrimSpace(string(want)) != got {
+		_ = os.Remove(p)
+		_ = os.Remove(p + ".sha256")
+		return "", false
+	}
+	return p, true
+}
+
+// storeArchiveCache keeps a verified archive for offline reinstalls
+// (C NEW-2). Best-effort: any failure is swallowed — the live
+// install already succeeded. The copy is hash-verified before its
+// sidecar is written, so a half-written entry can never be trusted.
+func storeArchiveCache(binDir string, d *Download, url, src, want string) {
+	if want == "" {
+		return
+	}
+	dir := archiveCacheDir(binDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	p := archiveCachePath(binDir, d, url)
+	if err := copyFile(src, p, 0o600); err != nil {
+		return
+	}
+	if got, err := fileSHA256(p); err != nil || got != want {
+		_ = os.Remove(p)
+		return
+	}
+	_ = os.WriteFile(p+".sha256", []byte(want+"\n"), 0o600)
+	pruneArchiveCache(dir)
+}
+
+// pruneArchiveCache keeps the newest 3 archives per cache dir
+// (best-effort). Kernel archives are ~10-25MB each; the bound keeps
+// offline reinstalls working for the current and previous versions
+// without letting the cache grow without limit on small nodes.
+func pruneArchiveCache(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type archFile struct {
+		name string
+		mod  time.Time
+	}
+	var files []archFile
+	for _, e := range entries {
+		if e.IsDir() || strings.HasSuffix(e.Name(), ".sha256") {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			files = append(files, archFile{e.Name(), info.ModTime()})
+		}
+	}
+	if len(files) <= 3 {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
+	for _, f := range files[3:] {
+		_ = os.Remove(filepath.Join(dir, f.name))
+		_ = os.Remove(filepath.Join(dir, f.name+".sha256"))
+	}
 }
 
 // entryName flattens archive paths ("sing-box-1.2-linux-amd64/sing-box") to

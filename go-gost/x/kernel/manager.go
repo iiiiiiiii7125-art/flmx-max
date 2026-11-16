@@ -354,18 +354,37 @@ func pinnedSHA256(d *Download) (string, bool) {
 // cannot be established without a network fetch; those call faces
 // are the main and extra-binary calls in Apply, whose Downloads
 // may carry only ChecksumURL/GitHub sources.
+// binaryUsable reports whether the binary at path is present and,
+// when a pinned SHA-256 is available, hashes to it (C4). A mismatch
+// — or an unreadable file — is treated as missing and falls through
+// to install().
+func binaryUsable(inst *instance, label string, d *Download, path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	if want, ok := pinnedSHA256(d); ok {
+		if got, herr := fileSHA256(path); herr == nil && got == want {
+			return true
+		}
+		inst.logs.add(fmt.Sprintf("[flmx] %s 已存在但 SHA256 复检不符，按缺失重装", label))
+		return false
+	}
+	// No locally available expected SHA-256 (see pinnedSHA256):
+	// keep the existence-skip for this call face.
+	return true
+}
+
 func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir string) (string, error) {
 	path := filepath.Join(dir, d.BinName)
-	if _, err := os.Stat(path); err == nil {
-		if want, ok := pinnedSHA256(d); ok {
-			if got, herr := fileSHA256(path); herr == nil && got == want {
-				return path, nil
-			} else {
-				inst.logs.add(fmt.Sprintf("[flmx] %s 已存在但 SHA256 复检不符，按缺失重装", label))
-			}
-		} else {
-			// No locally available expected SHA-256 (see above):
-			// keep the existence-skip for this call face.
+	if binaryUsable(inst, label, d, path) {
+		return path, nil
+	}
+	// C NEW-2: 上一次安装若在原子交换的两步改名之间崩溃，活目录
+	// 缺失、旧二进制在 <dir>.old 里。先恢复它再复检（哈希不符仍
+	// 重装）；恢复失败才走安装，重启永不直面零内核态。
+	if _, err := os.Stat(path); err != nil && restoreInterruptedSwap(dir, d.BinName) {
+		inst.logs.add(fmt.Sprintf("[flmx] %s 发现未完成的原子交换，已从备份恢复旧二进制", label))
+		if binaryUsable(inst, label, d, path) {
 			return path, nil
 		}
 	}
@@ -375,6 +394,9 @@ func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir st
 	// kernel — not only in the agent's stdout.
 	note := func(msg string) { inst.logs.add("[flmx] " + msg) }
 	if err := install(d, dir, note); err != nil {
+		// C NEW-2: 安装失败时旧二进制仍在位（install 只在替换件
+		// 落盘验证后才交换），点名保留、不留零内核态。
+		inst.logs.add(fmt.Sprintf("[flmx] 安装 %s 失败，保留现有二进制: %v", label, err))
 		return "", fmt.Errorf("安装 %s 失败: %v", label, err)
 	}
 	inst.logs.add(fmt.Sprintf("[flmx] %s 安装完成", label))
