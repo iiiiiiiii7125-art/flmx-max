@@ -89,9 +89,13 @@ func TestPollNodeKernelsNotInstalledSkipsFailureAndReapply(t *testing.T) {
 	if applyAfter != applyBefore {
 		t.Fatalf("not-installed polls re-pushed kernels: applyCalls %d -> %d, want unchanged", applyBefore, applyAfter)
 	}
+	// Merged semantics (R4C-01 + R4C-02): a successful poll stamps
+	// the row "ok" on first success (steady-state successes write
+	// nothing after that); the requirement here is no failure
+	// recorded — count 0, no alert, no re-push.
 	node := collectHealthOf(t, r, nodeID)
-	if node.NftCollectFailCount != 0 || node.NftCollectState != "" {
-		t.Fatalf("not-installed polls: count=%d state=%q, want 0/\"\"", node.NftCollectFailCount, node.NftCollectState)
+	if node.NftCollectFailCount != 0 || node.NftCollectState != "ok" {
+		t.Fatalf("not-installed polls: count=%d state=%q, want 0/\"ok\"", node.NftCollectFailCount, node.NftCollectState)
 	}
 	if nftCollectAlerted(h, nodeID) {
 		t.Fatal("not-installed polls must not fire the nft collect alert")
@@ -108,8 +112,8 @@ func TestPollNodeKernelsNotInstalledSkipsFailureAndReapply(t *testing.T) {
 		t.Fatalf("pure not-installed polls re-pushed kernels: applyCalls %d -> %d, want unchanged", applyBefore, applyAfter)
 	}
 	node = collectHealthOf(t, r, nodeID)
-	if node.NftCollectFailCount != 0 || node.NftCollectState != "" {
-		t.Fatalf("pure not-installed polls: count=%d state=%q, want 0/\"\"", node.NftCollectFailCount, node.NftCollectState)
+	if node.NftCollectFailCount != 0 || node.NftCollectState != "ok" {
+		t.Fatalf("pure not-installed polls: count=%d state=%q, want 0/\"ok\"", node.NftCollectFailCount, node.NftCollectState)
 	}
 }
 
