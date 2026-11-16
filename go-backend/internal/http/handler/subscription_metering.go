@@ -575,20 +575,30 @@ type companionGateMemo struct {
 	// instead (see companionRowOrigins).
 	rowOrigins map[int64]bool
 	rowLoaded  bool
+	// loadErr / rowErr remember a companion-list load failure so one
+	// request does not retry (and re-log) it per consultation. A
+	// failed load is NOT "no companions": the render side must fail
+	// closed for every direct SS origin instead of serving the
+	// unmetered origin (R3-E-LOW-01) — a nil map alone cannot carry
+	// that distinction.
+	loadErr error
+	rowErr  error
 }
 
 // companionsByOrigin returns the live-companion map, evaluating the
 // F4 gate at most once per memo. A nil memo evaluates fresh, exactly
-// like companionInboundsByOrigin.
-func (h *Handler) companionsByOrigin(memo *companionGateMemo) map[int64]kernel.Inbound {
+// like companionInboundsByOrigin. A load error is returned alongside
+// the (nil) map: callers that render endpoints must fail closed on
+// it (R3-E-LOW-01), never read a nil map as "no companions".
+func (h *Handler) companionsByOrigin(memo *companionGateMemo) (map[int64]kernel.Inbound, error) {
 	if memo != nil && memo.loaded {
-		return memo.byOrigin
+		return memo.byOrigin, memo.loadErr
 	}
-	out := h.companionInboundsByOrigin()
+	out, err := h.companionInboundsByOrigin()
 	if memo != nil {
-		memo.byOrigin, memo.loaded = out, true
+		memo.byOrigin, memo.loaded, memo.loadErr = out, true, err
 	}
-	return out
+	return out, err
 }
 
 // companionRowOrigins returns the origin ids that own a metering
@@ -597,39 +607,44 @@ func (h *Handler) companionsByOrigin(memo *companionGateMemo) map[int64]kernel.I
 // marks its origin as metering-managed: demand can return on the next
 // reconcile beat, and until the reactivated companion is live the
 // origin must not serve share subscriptions unmetered.
-func (h *Handler) companionRowOrigins(memo *companionGateMemo) map[int64]bool {
+// A load error is returned alongside the (nil) set: the render side
+// must fail closed on it (R3-E-LOW-01), never read a nil set as "no
+// origin owns a companion row".
+func (h *Handler) companionRowOrigins(memo *companionGateMemo) (map[int64]bool, error) {
 	if memo != nil && memo.rowLoaded {
-		return memo.rowOrigins
+		return memo.rowOrigins, memo.rowErr
 	}
 	comps, err := h.repo.ListCompanionInbounds()
 	if err != nil {
 		log.Printf("ss metering: list companions for row origins: %v", err)
-		return nil
+		if memo != nil {
+			memo.rowOrigins, memo.rowLoaded, memo.rowErr = nil, true, err
+		}
+		return nil, err
 	}
 	out := make(map[int64]bool, len(comps))
 	for _, c := range comps {
 		out[c.CompanionOf] = true
 	}
 	if memo != nil {
-		memo.rowOrigins, memo.rowLoaded = out, true
+		memo.rowOrigins, memo.rowLoaded, memo.rowErr = out, true, nil
 	}
-	return out
+	return out, nil
 }
 
 // companionInboundsByOrigin maps origin inbound ids to their live
 // companions' kernel form, for subscription endpoint retargeting:
 // enabled companions whose kernel config the node agent has actually
 // applied (F4/B-03 — a companion that merely exists in the DB is not
-// listening anywhere yet). Errors degrade to no retargeting; the
-// render side must then fail closed for metering-managed origins
-// (B-VD-NEW: never serve the unmetered origin in place of a
-// not-live companion) and keep serving origins that never had a
-// companion row.
-func (h *Handler) companionInboundsByOrigin() map[int64]kernel.Inbound {
+// listening anywhere yet). A load error is returned alongside the
+// (nil) map: the render side must fail closed for metering-managed
+// origins on it (R3-E-LOW-01) and keep serving origins that never had
+// a companion row only when the list was actually read.
+func (h *Handler) companionInboundsByOrigin() (map[int64]kernel.Inbound, error) {
 	comps, err := h.repo.ListCompanionInbounds()
 	if err != nil {
 		log.Printf("ss metering: list companions: %v", err)
-		return nil
+		return nil, err
 	}
 	appliedByKernel := make(map[int64]bool)
 	checkedKernel := make(map[int64]bool)
@@ -655,5 +670,5 @@ func (h *Handler) companionInboundsByOrigin() map[int64]kernel.Inbound {
 		}
 		out[c.CompanionOf] = in
 	}
-	return out
+	return out, nil
 }

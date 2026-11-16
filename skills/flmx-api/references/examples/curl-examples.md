@@ -156,7 +156,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/forward/create" \
   -d '{
     "name": "my-web-server",
     "tunnelId": 1,
-    "remoteAddr": "192.168.1.100:80",
+    "remoteAddr": "203.0.113.100:80",
     "strategy": "fifo"
   }' | jq '.'
 

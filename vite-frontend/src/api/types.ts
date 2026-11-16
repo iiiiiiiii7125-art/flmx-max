@@ -1154,6 +1154,15 @@ export interface NodeConnLogRepushResult {
   redeployed: boolean;
   tunnelCount: number;
   forwardCount: number;
+  /**
+   * Why the companion split may still be absent after a successful
+   * repush (e.g. agent too old): the backend sets this whenever the
+   * note is non-empty, and the connlog modal renders it next to the
+   * receipt (§27 gate: backend field / type / render must stay in
+   * sync — the note also rides the envelope warning text, but the
+   * typed field is the durable surface).
+   */
+  companionSplitNote?: string;
 }
 
 export interface InboundRelayApiItem {
