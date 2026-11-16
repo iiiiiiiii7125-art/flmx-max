@@ -897,6 +897,36 @@ func (r *Repository) UpdateNftCollectHealth(nodeID int64, state string, failCoun
 	return nil
 }
 
+// UpdateNftCollectHealthPaths stores one node's nft collection health
+// including the per-path streak contributions (R4C-01): sshCount /
+// wsCount are the not-yet-recovered failure rounds of the SSH / WS
+// path within the current streak. Same not-found contract as
+// UpdateNftCollectHealth; one UPDATE for all six columns so the
+// displayed streak and its composition never diverge. Callers are
+// the three record functions in handler/nftables_traffic.go.
+func (r *Repository) UpdateNftCollectHealthPaths(nodeID int64, state string, failCount int, lastError string, lastOKAt int64, sshCount, wsCount int) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", nodeID).
+		Updates(map[string]interface{}{
+			"nft_collect_state":          state,
+			"nft_collect_fail_count":     failCount,
+			"nft_collect_last_error":     lastError,
+			"nft_collect_last_ok_at":     lastOKAt,
+			"nft_collect_ssh_fail_count": sshCount,
+			"nft_collect_ws_fail_count":  wsCount,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("节点不存在")
+	}
+	return nil
+}
+
 // UpdateNodeNftablesStatus stores the agent-reported nftables state
 // for one node ("installed" / "auto_installed" / "failed" with the
 // reason in errText, "" = unknown). Runtime state, never a setting:

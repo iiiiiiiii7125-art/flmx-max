@@ -72,14 +72,18 @@ const nftCollectFailAlertThreshold = 3
 // 度（A-中-2）：SSH 失败原文可能很长，行内只留首段可读部分。
 const nftCollectLastErrorMaxLen = 500
 
-// nftWsReadErrorPrefix marks a failure streak recorded by the WS
+// nftWsReadErrorPrefix marks a failure recorded by the WS
 // kernel-table path (R3A-NEW-1): the SSH forward-table path and the
 // WS kernel-table path read DIFFERENT tables (flmx vs flmx_kernel_*),
-// so their failures are independent — an SSH success must not clear
-// a streak the WS table caused, and a WS success must not clear one
-// the SSH table caused. The prefix on LastError is the provenance;
-// recordNftCollectSuccess skips WS-prefixed streaks, and
-// recordNftWsCollectSuccess only clears WS-prefixed ones.
+// so their failures are independent signals sharing one health row.
+// The prefix on the error text is only the provenance of that one
+// failure round — the streak's composition is stored durably in
+// NftCollectSshFailCount / NftCollectWsFailCount (R4C-01): a success
+// on one path clears only that path's contribution, and the streak
+// clears fully only when both contributions reach zero. Judging the
+// whole streak by the latest error's prefix (the pre-R4C-01 code)
+// lost mixed streaks: a WS success cleared SSH failures and sent a
+// false "采集恢复".
 const nftWsReadErrorPrefix = "agent nft 计数读取失败："
 
 // recordNftCollectFailure records one failed periodic nft collection
@@ -87,9 +91,12 @@ const nftWsReadErrorPrefix = "agent nft 计数读取失败："
 // to "failing" at the threshold, last error kept verbatim (truncated).
 // The alert fires exactly on the threshold crossing; later rounds of
 // the same streak stay silent (the node row already says failing).
-// Rounds discarded because a newer apply is in flight
-// (errDiscardedDueToApplying) are NOT failures and must never call
-// this — their samples are re-collected by the next round.
+// The failure also increments the contributing path's own streak
+// count (R4C-01): the WS path's errors carry nftWsReadErrorPrefix,
+// anything else counts as the SSH path. Rounds discarded because a
+// newer apply is in flight (errDiscardedDueToApplying) are NOT
+// failures and must never call this — their samples are re-collected
+// by the next round.
 func (h *Handler) recordNftCollectFailure(nodeID int64, err error) {
 	if h == nil || h.repo == nil || nodeID <= 0 {
 		return
@@ -100,6 +107,12 @@ func (h *Handler) recordNftCollectFailure(nodeID int64, err error) {
 		return
 	}
 	failCount := node.NftCollectFailCount + 1
+	sshCount, wsCount := node.NftCollectSshFailCount, node.NftCollectWsFailCount
+	if err != nil && strings.HasPrefix(err.Error(), nftWsReadErrorPrefix) {
+		wsCount++
+	} else {
+		sshCount++
+	}
 	state := node.NftCollectState
 	if failCount >= nftCollectFailAlertThreshold {
 		state = "failing"
@@ -111,7 +124,7 @@ func (h *Handler) recordNftCollectFailure(nodeID int64, err error) {
 	if len(errText) > nftCollectLastErrorMaxLen {
 		errText = errText[:nftCollectLastErrorMaxLen]
 	}
-	if uerr := h.repo.UpdateNftCollectHealth(nodeID, state, failCount, errText, node.NftCollectLastOKAt); uerr != nil {
+	if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, state, failCount, errText, node.NftCollectLastOKAt, sshCount, wsCount); uerr != nil {
 		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
 		return
 	}
@@ -121,11 +134,16 @@ func (h *Handler) recordNftCollectFailure(nodeID int64, err error) {
 }
 
 // recordNftCollectSuccess records one successful periodic nft
-// collection round for nodeID (A-中-2): on transition (from failing,
-// from never-collected, or from a non-empty failure streak) it resets
-// the streak and stamps LastOKAt — steady-state successes write
-// nothing, so LastOKAt reads as "healthy since <time>". A recovery
-// from a failing streak also sends the recovery notification.
+// collection round for nodeID (A-中-2, R4C-01): it clears only the
+// SSH contribution of the current streak. The row clears fully (state
+// ok, count 0, LastError empty, LastOKAt stamped, recovery
+// notification if it was failing) only when no WS contribution
+// remains; otherwise the row is left otherwise untouched — the WS
+// table is still missing and the streak is still failing. The SSH
+// contribution is zeroed even in that case, so a later WS success
+// can finish the clear instead of deadlocking against a streak the
+// WS prefix used to guard. Steady-state successes write nothing, so
+// LastOKAt reads as "healthy since <time>".
 func (h *Handler) recordNftCollectSuccess(nodeID int64, nowMs int64) {
 	if h == nil || h.repo == nil || nodeID <= 0 {
 		return
@@ -138,18 +156,22 @@ func (h *Handler) recordNftCollectSuccess(nodeID int64, nowMs int64) {
 		log.Printf("nft collect success lookup failed node_id=%d err=%v", nodeID, err)
 		return
 	}
-	if strings.HasPrefix(node.NftCollectLastError, nftWsReadErrorPrefix) {
-		// R3A-NEW-1：WS 路的 streak 只由 WS 路自己清（见
-		// recordNftWsCollectSuccess）——SSH 采集成功不能把仍缺失
-		// 的 agent 表判成已恢复，否则共享 streak 永不到阈值、
-		// 告警永不发。
-		return
-	}
 	if node.NftCollectState == "ok" && node.NftCollectFailCount == 0 && node.NftCollectLastError == "" {
 		return
 	}
+	if node.NftCollectWsFailCount > 0 {
+		// R4C-01：streak 里还有 WS 路的失败未恢复——SSH 成功只
+		// 解决自己这路，不清行、不发恢复通知；SSH 计数归零后
+		// 待 WS 路自己恢复时再整条清除。
+		if node.NftCollectSshFailCount > 0 {
+			if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, node.NftCollectState, node.NftCollectFailCount, node.NftCollectLastError, node.NftCollectLastOKAt, 0, node.NftCollectWsFailCount); uerr != nil {
+				log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+			}
+		}
+		return
+	}
 	wasFailing := node.NftCollectState == "failing"
-	if uerr := h.repo.UpdateNftCollectHealth(nodeID, "ok", 0, "", nowMs); uerr != nil {
+	if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, "ok", 0, "", nowMs, 0, 0); uerr != nil {
 		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
 		return
 	}
@@ -158,11 +180,13 @@ func (h *Handler) recordNftCollectSuccess(nodeID int64, nowMs int64) {
 	}
 }
 
-// recordNftWsCollectSuccess clears a WS-path nft failure streak
-// (R3A-NEW-1): only when the current streak carries the WS prefix —
-// an SSH-caused streak is left for the SSH path to clear, and a
-// steady state (no WS streak) writes nothing. Mirrors
-// recordNftCollectSuccess including the recovery notification.
+// recordNftWsCollectSuccess clears the WS contribution of a WS-path
+// nft failure streak (R3A-NEW-1, R4C-01): it zeroes only the WS
+// count. The row clears fully (mirroring recordNftCollectSuccess
+// including the recovery notification) only when no SSH contribution
+// remains; a mixed streak stays failing with its count and alert
+// mark untouched until the SSH path itself recovers. Steady-state
+// successes write nothing.
 func (h *Handler) recordNftWsCollectSuccess(nodeID int64, nowMs int64) {
 	if h == nil || h.repo == nil || nodeID <= 0 {
 		return
@@ -172,11 +196,22 @@ func (h *Handler) recordNftWsCollectSuccess(nodeID int64, nowMs int64) {
 		log.Printf("nft collect success lookup failed node_id=%d err=%v", nodeID, err)
 		return
 	}
-	if !strings.HasPrefix(node.NftCollectLastError, nftWsReadErrorPrefix) {
+	if node.NftCollectState == "ok" && node.NftCollectFailCount == 0 && node.NftCollectLastError == "" {
+		return
+	}
+	if node.NftCollectSshFailCount > 0 {
+		// R4C-01：streak 里还有 SSH 路的失败未恢复——WS 成功只
+		// 解决自己这路，不清行、不发恢复通知；WS 计数归零后
+		// 待 SSH 路自己恢复时再整条清除。
+		if node.NftCollectWsFailCount > 0 {
+			if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, node.NftCollectState, node.NftCollectFailCount, node.NftCollectLastError, node.NftCollectLastOKAt, node.NftCollectSshFailCount, 0); uerr != nil {
+				log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+			}
+		}
 		return
 	}
 	wasFailing := node.NftCollectState == "failing"
-	if uerr := h.repo.UpdateNftCollectHealth(nodeID, "ok", 0, "", nowMs); uerr != nil {
+	if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, "ok", 0, "", nowMs, 0, 0); uerr != nil {
 		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
 		return
 	}

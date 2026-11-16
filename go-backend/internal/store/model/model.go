@@ -179,11 +179,22 @@ type Node struct {
 	// State ""＝未采集过、"ok"＝最近一次采集成功、"failing"＝连续
 	// 失败已达阈值（nftCollectFailAlertThreshold）；FailCount 为
 	// 连续失败次数、LastError 为最近一次失败原因原文、LastOKAt 为
-	// 最近一次成功采集的 UnixMilli。
-	NftCollectState     string `gorm:"column:nft_collect_state;type:varchar(16);not null;default:''"`
-	NftCollectFailCount int    `gorm:"column:nft_collect_fail_count;not null;default:0"`
-	NftCollectLastError string `gorm:"column:nft_collect_last_error;type:varchar(500);not null;default:''"`
-	NftCollectLastOKAt  int64  `gorm:"column:nft_collect_last_ok_at;not null;default:0"`
+	// 最近一次成功采集的 UnixMilli。SshFailCount/WsFailCount 为
+	// 当前 streak 内 SSH 路／WS 路各自尚未恢复的失败轮数
+	// （R4C-01，分路计数）：SSH 路（30 秒轮）与 WS 路（60 秒
+	// 轮）是独立信号、共用一条 streak；任一路成功只清该路计数，
+	// streak 在两路计数均归零时才整体清除。只凭 LastError 前缀
+	// 判来源会丢混合 streak 的组成（最后一次失败是哪路、前面的
+	// 就是哪路），WS 成功即误清 SSH 的失败、误报恢复。存量行
+	// 升级时两计数为 0：首个成功即按旧口径整条清除（一次性、仅
+	// 限升级窗口内已在 streak 中的行）；首个失败轮即重建正确组
+	// 成。运行态，不进备份。
+	NftCollectState        string `gorm:"column:nft_collect_state;type:varchar(16);not null;default:''"`
+	NftCollectFailCount    int    `gorm:"column:nft_collect_fail_count;not null;default:0"`
+	NftCollectLastError    string `gorm:"column:nft_collect_last_error;type:varchar(500);not null;default:''"`
+	NftCollectLastOKAt     int64  `gorm:"column:nft_collect_last_ok_at;not null;default:0"`
+	NftCollectSshFailCount int    `gorm:"column:nft_collect_ssh_fail_count;not null;default:0"`
+	NftCollectWsFailCount  int    `gorm:"column:nft_collect_ws_fail_count;not null;default:0"`
 }
 
 func (Node) TableName() string { return "node" }
