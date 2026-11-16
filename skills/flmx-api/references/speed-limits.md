@@ -97,7 +97,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/forward/create" \
   -d '{
     "name": "limited-forward",
     "tunnelId": 1,
-    "remoteAddr": "10.0.0.1:80",
+    "remoteAddr": "203.0.113.100:80",
     "speedId": 1
   }'
 ```
