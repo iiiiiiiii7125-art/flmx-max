@@ -567,6 +567,14 @@ func (h *Handler) kernelConfigApplied(k *model.NodeKernel) bool {
 type companionGateMemo struct {
 	byOrigin map[int64]kernel.Inbound
 	loaded   bool
+	// rowOrigins marks every origin that owns a metering companion
+	// row in any state (live, parked, or awaiting its first apply).
+	// A row's mere existence marks its origin as metering-managed:
+	// share-subscription endpoints for such an origin must never fall
+	// back to the unmetered origin (B-VD-NEW) — they fail closed
+	// instead (see companionRowOrigins).
+	rowOrigins map[int64]bool
+	rowLoaded  bool
 }
 
 // companionsByOrigin returns the live-companion map, evaluating the
@@ -583,13 +591,40 @@ func (h *Handler) companionsByOrigin(memo *companionGateMemo) map[int64]kernel.I
 	return out
 }
 
+// companionRowOrigins returns the origin ids that own a metering
+// companion row in any state, memoized per request alongside the live
+// map. A parked row (Enabled=0, kept for reactivation per B-L5) still
+// marks its origin as metering-managed: demand can return on the next
+// reconcile beat, and until the reactivated companion is live the
+// origin must not serve share subscriptions unmetered.
+func (h *Handler) companionRowOrigins(memo *companionGateMemo) map[int64]bool {
+	if memo != nil && memo.rowLoaded {
+		return memo.rowOrigins
+	}
+	comps, err := h.repo.ListCompanionInbounds()
+	if err != nil {
+		log.Printf("ss metering: list companions for row origins: %v", err)
+		return nil
+	}
+	out := make(map[int64]bool, len(comps))
+	for _, c := range comps {
+		out[c.CompanionOf] = true
+	}
+	if memo != nil {
+		memo.rowOrigins, memo.rowLoaded = out, true
+	}
+	return out
+}
+
 // companionInboundsByOrigin maps origin inbound ids to their live
 // companions' kernel form, for subscription endpoint retargeting:
 // enabled companions whose kernel config the node agent has actually
 // applied (F4/B-03 — a companion that merely exists in the DB is not
-// listening anywhere yet). Errors degrade to no retargeting — the
-// origin endpoints are then served shared, exactly as before this
-// feature.
+// listening anywhere yet). Errors degrade to no retargeting; the
+// render side must then fail closed for metering-managed origins
+// (B-VD-NEW: never serve the unmetered origin in place of a
+// not-live companion) and keep serving origins that never had a
+// companion row.
 func (h *Handler) companionInboundsByOrigin() map[int64]kernel.Inbound {
 	comps, err := h.repo.ListCompanionInbounds()
 	if err != nil {

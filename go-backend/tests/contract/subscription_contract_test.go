@@ -24,6 +24,15 @@ func TestSubscriptionContract(t *testing.T) {
 		`{"nodeId":`+jsonInt64(landing)+`,"kernelType":"xray","name":"东京 VLESS","protocol":"vless","port":443,"settings":{"flow":"xtls-rprx-vision"},"security":{"type":"reality"}}`)
 	ss := seedInboundOnNode(t, router, r, admin, landing,
 		`{"nodeId":`+jsonInt64(landing)+`,"kernelType":"xray","name":"香港 SS","protocol":"shadowsocks","port":8388}`)
+	// A second SS inbound with metering explicitly off: it keeps
+	// serving its origin endpoint, so the scope/preview assertions
+	// below still exercise a direct SS node. The metering-on SS above
+	// renders nothing until its companion is applied (B-VD-NEW
+	// fail-closed) — its nodeCount contribution is 0 here, and a
+	// regression to the origin fallback would make it 3.
+	ssDirect := seedInboundOnNode(t, router, r, admin, landing,
+		`{"nodeId":`+jsonInt64(landing)+`,"kernelType":"xray","name":"香港 SS 直出","protocol":"shadowsocks","port":8389,"meteringEnabled":false}`)
+	_ = ssDirect // only its creation matters; the scope assertions use it by sourceAll
 	var ownerSettings struct {
 		UUID string `json:"uuid"`
 	}
@@ -51,6 +60,10 @@ func TestSubscriptionContract(t *testing.T) {
 	}
 	def := items[0].(map[string]interface{})
 	info := kernelContractPost(t, router, admin, "/api/v1/inbound/sub/info", `{}`).Data.(map[string]interface{})
+	// B-VD-NEW: nodeCount 2 is the VLESS plus the metering-off SS;
+	// the metering-on SS renders nothing while its companion is
+	// unapplied (fail closed, no origin fallback). A regression to
+	// the origin fallback would count it and make this 3.
 	if info["path"] != def["path"] || valueAsInt(def["nodeCount"]) != 2 {
 		t.Fatalf("legacy info must point at the default subscription: %v vs %v", info, def)
 	}
@@ -99,10 +112,13 @@ func TestSubscriptionContract(t *testing.T) {
 			t.Fatalf("removed option keys must be ignored on save: %+v", out)
 		}
 		// 预览：节点名原样（name == original），无处理改名、无丢弃。
+		// 3 项是 VLESS、计量伴生未下发的 SS（预览草案无 Kind，不走
+		// 分享订阅的改指/熔断，按源站原样列出，仅展示、无凭据）
+		// 与计量关闭的 SS 直出；dropped 只计流水线过滤。
 		prev := kernelContractPost(t, router, admin, "/api/v1/subscription/preview",
 			`{"sourceAll":true,"options":{}}`).Data.(map[string]interface{})
 		pi := prev["items"].([]interface{})
-		if len(pi) != 2 || valueAsInt(prev["dropped"]) != 0 {
+		if len(pi) != 3 || valueAsInt(prev["dropped"]) != 0 {
 			t.Fatalf("preview: %v", prev)
 		}
 		for _, it := range pi {

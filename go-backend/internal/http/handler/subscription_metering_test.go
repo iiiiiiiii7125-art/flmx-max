@@ -451,3 +451,70 @@ func TestSSMeteringPayloadGate(t *testing.T) {
 		t.Fatal("a disabled origin's companion must not render")
 	}
 }
+
+// B-VD-NEW: when the F4 gate is closed for a metering-managed origin
+// (companion row exists but the agent has not acked the current
+// config — e.g. the window right after a truncation dispatch rotates
+// passwords), a share subscription must render NO endpoint for that
+// origin, not the unmetered origin endpoint. A link fetched in that
+// window is static config and would escape metering permanently.
+func TestSSMeteringGateClosedFailsClosed(t *testing.T) {
+	r, h, k, origin, sub := seedMeteringFixture(t)
+	rows, err := r.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Control 1: no companion row at all (reconcile never ran) — a
+	// never-metered origin keeps serving the origin endpoint.
+	if eps := h.subEndpoints(sub, rows); len(eps) != 1 || eps[0].Inbound.ID != origin.ID || eps[0].Port != origin.Port {
+		t.Fatalf("origin without a companion row must keep serving the origin endpoint, got %d endpoints", len(eps))
+	}
+
+	h.reconcileSSMetering()
+	comp, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must exist")
+	}
+	rows, err = r.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Gate closed: the companion exists but the agent never acked
+	// (no applied hash) — the share endpoint must be dropped, not
+	// served from the origin.
+	if eps := h.subEndpoints(sub, rows); len(eps) != 0 {
+		t.Fatalf("gate-closed share subscription must render no endpoint, got %d (port %d)", len(eps), eps[0].Port)
+	}
+
+	// Control 2: gate open (agent acked) — the endpoint is retargeted
+	// to the companion, as before.
+	markKernelApplied(t, r, h, k)
+	if eps := h.subEndpoints(sub, rows); len(eps) != 1 || eps[0].Inbound.ID != comp.ID || eps[0].Port != comp.Port {
+		t.Fatalf("gate-open share subscription must render exactly the companion endpoint, got %d endpoints", len(eps))
+	}
+
+	// Control 3: parked companion (Enabled=0, kept for reactivation
+	// per B-L5) still marks the origin as metering-managed — the
+	// endpoint stays dropped until the companion is live again.
+	comp.Enabled = 0
+	if err := r.SaveNodeInbound(comp); err != nil {
+		t.Fatal(err)
+	}
+	if eps := h.subEndpoints(sub, rows); len(eps) != 0 {
+		t.Fatalf("parked-companion share subscription must render no endpoint, got %d", len(eps))
+	}
+
+	// Control 4: a non-share subscription is untouched by the
+	// fail-closed — it keeps serving the origin even with the gate
+	// closed and the companion parked.
+	personal := *sub
+	personal.ID = sub.ID + 1000
+	personal.Kind = "personal"
+	personal.Token = strings.Repeat("f", 32)
+	personal.UUID = "u-personal"
+	if eps := h.subEndpoints(&personal, rows); len(eps) != 1 || eps[0].Inbound.ID != origin.ID || eps[0].Port != origin.Port {
+		t.Fatalf("non-share subscription must keep serving the origin endpoint, got %d endpoints", len(eps))
+	}
+}
