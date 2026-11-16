@@ -141,12 +141,13 @@ func TestSubMeteringStatus(t *testing.T) {
 			Enabled: 1, SourceAll: sourceAll, InboundIDs: inboundIDs}
 	}
 	cases := []struct {
-		name   string
-		sub    *model.Subscription
-		rows   []model.NodeInbound
-		memo   *companionGateMemo
-		status string
-		reason string
+		name      string
+		sub       *model.Subscription
+		rows      []model.NodeInbound
+		memo      *companionGateMemo
+		endpoints []kernel.Endpoint
+		status    string
+		reason    string
 	}{
 		{
 			name:   "own subscription not applicable",
@@ -233,7 +234,121 @@ func TestSubMeteringStatus(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			status, reason := h.subMeteringStatus(c.sub, c.rows, c.memo)
+			status, reason := h.subMeteringStatus(c.sub, c.rows, c.memo, c.endpoints)
+			if status != c.status || reason != c.reason {
+				t.Fatalf("got (%q, %q) want (%q, %q)", status, reason, c.status, c.reason)
+			}
+		})
+	}
+}
+
+// R4A-01 endpoint fixtures: a dispatched direct endpoint retargeted to
+// its metering companion, and a relay endpoint that still points at the
+// origin (shared password, structurally unmetered).
+func r4a01DirectEndpoint(originID int64) kernel.Endpoint {
+	return kernel.Endpoint{Direct: true, CompanionOf: originID, Inbound: trafficSS2022()}
+}
+
+func r4a01RelayEndpoint(originID int64) kernel.Endpoint {
+	in := trafficSS2022()
+	in.ID = originID
+	return kernel.Endpoint{RelayID: 7, Inbound: in}
+}
+
+func TestSubMeteringStatusRelayEndpoints(t *testing.T) {
+	h := &Handler{}
+	ssOn := trafficDisplayRow(t, 3, trafficSS2022(), func(r *model.NodeInbound) { r.MeteringEnabled = 1 })
+	vless := trafficDisplayRow(t, 1, kernel.Inbound{Protocol: kernel.ProtocolVLESS, Port: 443,
+		Security: kernel.Security{Type: kernel.SecurityReality}}, nil)
+	vlessIn := kernel.Inbound{ID: 1, Protocol: kernel.ProtocolVLESS, Port: 443,
+		Security: kernel.Security{Type: kernel.SecurityReality}}
+	liveCompanion := &companionGateMemo{loaded: true, byOrigin: map[int64]kernel.Inbound{3: {}}}
+	noCompanions := &companionGateMemo{loaded: true, byOrigin: map[int64]kernel.Inbound{}}
+	share := func(id int64, sourceAll int, inboundIDs string) *model.Subscription {
+		return &model.Subscription{ID: id, Name: "s", Kind: model.SubscriptionShare,
+			Enabled: 1, SourceAll: sourceAll, InboundIDs: inboundIDs}
+	}
+	cases := []struct {
+		name      string
+		sub       *model.Subscription
+		rows      []model.NodeInbound
+		memo      *companionGateMemo
+		endpoints []kernel.Endpoint
+		status    string
+		reason    string
+	}{
+		{
+			// R4A-01 repro shape: one SS origin, live companion,
+			// direct (metered) + relay (unmetered) endpoints.
+			name:      "share ss direct plus relay endpoint is partial",
+			sub:       share(19, 1, ""),
+			rows:      []model.NodeInbound{ssOn},
+			memo:      liveCompanion,
+			endpoints: []kernel.Endpoint{r4a01DirectEndpoint(3), r4a01RelayEndpoint(3)},
+			status:    "partial",
+			reason:    "其中 1 个源未计量（中转端点不计量）",
+		},
+		{
+			// Relay-only scope (lines=relay): only the relay path is
+			// dispatched, so the whole subscription is unmetered.
+			name:      "share ss relay-only endpoint is unmetered",
+			sub:       share(20, 1, ""),
+			rows:      []model.NodeInbound{ssOn},
+			memo:      liveCompanion,
+			endpoints: []kernel.Endpoint{r4a01RelayEndpoint(3)},
+			status:    "unmetered",
+			reason:    "中转端点不计量",
+		},
+		{
+			// Direct-only dispatches stay metered: the fix must not
+			// flip subscriptions with no relay path.
+			name:      "share ss direct-only endpoint stays metered",
+			sub:       share(21, 1, ""),
+			rows:      []model.NodeInbound{ssOn},
+			memo:      liveCompanion,
+			endpoints: []kernel.Endpoint{r4a01DirectEndpoint(3)},
+			status:    "metered",
+			reason:    "",
+		},
+		{
+			// Non-SS relay endpoints keep metering: the per-user
+			// identity (VLESS UUID) survives the relay via auth_user,
+			// so only SS relay endpoints are unmetered.
+			name:      "share vless relay endpoint stays metered",
+			sub:       share(22, 1, ""),
+			rows:      []model.NodeInbound{vless},
+			memo:      noCompanions,
+			endpoints: []kernel.Endpoint{{Direct: true, Inbound: vlessIn}, {RelayID: 7, Inbound: vlessIn}},
+			status:    "metered",
+			reason:    "",
+		},
+		{
+			// D-OBS-01 suppression covers the direct leg only: while
+			// the companion rebuilds, the relay leg is live and
+			// unmetered, so the badge must not stay metered.
+			name: "share ss relay endpoint overrides companion-rebuilding suppression",
+			sub:  &model.Subscription{ID: 23, Name: "s", Kind: model.SubscriptionShare, Enabled: 1, SourceAll: 1, TrafficLimit: 100, UploadBytes: 60, DownloadBytes: 60},
+			rows: []model.NodeInbound{ssOn},
+			memo: noCompanions,
+			endpoints: []kernel.Endpoint{r4a01RelayEndpoint(3)},
+			status:    "unmetered",
+			reason:    "中转端点不计量",
+		},
+		{
+			// Mixed sources: a metered VLESS origin plus an SS origin
+			// dispatched relay-only.
+			name:      "share mixed sources one relay-only one metered is partial",
+			sub:       share(24, 1, ""),
+			rows:      []model.NodeInbound{vless, ssOn},
+			memo:      liveCompanion,
+			endpoints: []kernel.Endpoint{{Direct: true, Inbound: vlessIn}, r4a01RelayEndpoint(3)},
+			status:    "partial",
+			reason:    "其中 1 个源未计量（中转端点不计量）",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			status, reason := h.subMeteringStatus(c.sub, c.rows, c.memo, c.endpoints)
 			if status != c.status || reason != c.reason {
 				t.Fatalf("got (%q, %q) want (%q, %q)", status, reason, c.status, c.reason)
 			}

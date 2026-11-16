@@ -975,7 +975,9 @@ type subscriptionView struct {
 	// MeteringStatus 是本订阅的计量状态（D-03，仅分享订阅）：
 	// "metered" 全源可计量、"partial" 部分源未计量、"unmetered" 全源
 	// 未计量；MeteringReason 为未计量／部分计量时的原因（首个 distinct
-	// 成因）。非分享订阅不适用，两字段均为空。
+	// 成因）。非分享订阅不适用，两字段均为空。R4A-01：徽标按实际下
+	// 发端点算——SS 源存在中转端点即 partial／unmetered（中转端点不
+	// 计量），直连伴生端点仍报 metered；非 SS 源的中转端点仍计量。
 	MeteringStatus string `json:"meteringStatus,omitempty"`
 	MeteringReason string `json:"meteringReason,omitempty"`
 	// LastReportedAt 是本订阅计量计数最近一次上报的时刻（毫秒，
@@ -1094,13 +1096,53 @@ func subMeteringSourceReason(row *model.NodeInbound, liveCompanion bool) string 
 	return reasonCompanionNotLive
 }
 
+// reasonRelayEndpoint 是中转端点未计量的成因（R4A-01）：中转端点走
+// 原站共用口令、完全不计量（doc/guide/subscription.md 亦有披露）。
+const reasonRelayEndpoint = "中转端点不计量"
+
+// hasUnmeteredRelayEndpoint 报告下发端点里是否有该源的中转端点
+// （R4A-01）：中转落在原站上用的是共用口令、没有按用户身份，
+// 原站的按用户计数器永远看不到这路流量。只影响 Shadowsocks 源——
+// 原生按用户协议（VLESS/Trojan/VMess/Hy2/TUIC/AnyTLS/Naive）把
+// 按订阅身份带过中转（内核按 auth_user 归属、走该用户的 mark
+// 出站），其中转端点仍计量。endpoints 为 nil 表示调用方没有端点
+// 证据，退回源级判定。
+func hasUnmeteredRelayEndpoint(endpoints []kernel.Endpoint, originID int64) bool {
+	for _, e := range endpoints {
+		if e.RelayID == 0 || e.CompanionOf != 0 || e.Inbound.Protocol != kernel.ProtocolShadowsocks {
+			continue
+		}
+		if e.Inbound.ID == originID {
+			return true
+		}
+	}
+	return false
+}
+
+// hasMeteredDirectEndpoint 报告下发端点里是否有该源的已计量直连
+// 端点：直连 SS 端点被改指到计量伴生（CompanionOf）。用于区分
+// 部分计量源（直连＋中转）与全未计量源（只有中转）。
+func hasMeteredDirectEndpoint(endpoints []kernel.Endpoint, originID int64) bool {
+	for _, e := range endpoints {
+		if e.RelayID != 0 || !e.Direct || e.CompanionOf != originID {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // subMeteringStatus 是分享订阅的计量状态（D-03）：全源可计量返回
 // ("metered", "")；全源未计量返回 ("unmetered", 首个 distinct 成因)；
 // 部分源未计量返回 ("partial", "其中 N 个源未计量（成因）")。非分享
 // 订阅不适用，返回 ("", "")。ID 超限（meteringUnsupported）为订阅级
 // 永久不计量，优先于源级成因。D-OBS-01 例外：超限且已有计数的订阅，
-// 伴生未下发成因视为截断重建中的瞬态、不计未计量。
-func (h *Handler) subMeteringStatus(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo) (string, string) {
+// 伴生未下发成因视为截断重建中的瞬态、不计未计量。R4A-01：按实际
+// 下发端点算——endpoints 为 nil 时退回源级判定；非 nil 时，SS 源
+// 下发了中转端点即未计量（直连伴生也在则为部分计量），中转端点不
+// 计量是结构性的（共用口令）；非 SS 源的中转端点仍计量（按用户身
+// 份归属），不影响徽标。
+func (h *Handler) subMeteringStatus(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo, endpoints []kernel.Endpoint) (string, string) {
 	if !isShare(s) {
 		return "", ""
 	}
@@ -1126,14 +1168,39 @@ func (h *Handler) subMeteringStatus(s *model.Subscription, rows []model.NodeInbo
 	companions, _ := h.companionsByOrigin(memo)
 	seenReason := map[string]bool{}
 	var firstReason string
+	recordReason := func(reason string) {
+		if !seenReason[reason] {
+			seenReason[reason] = true
+			if firstReason == "" {
+				firstReason = reason
+			}
+		}
+	}
 	unmetered := 0
+	partial := 0
 	for _, id := range ids {
 		row := byID[id]
 		if row.CompanionOf > 0 {
 			continue
 		}
 		_, live := companions[id]
-		if reason := subMeteringSourceReason(&row, live); reason != "" {
+		reason := subMeteringSourceReason(&row, live)
+		// R4A-01：源本身可计量（或伴生瞬态重建中）但下发了中转端
+		// 点时，中转那路流量结构性不计量——直连伴生也在则该源为
+		// 部分计量，否则为全未计量。D-OBS-01 的抑制只覆盖直连腿；
+		// 中转腿是真实在跑的未计量路径，不随抑制一并抹掉。
+		if reason == "" || (reason == reasonCompanionNotLive && subOverQuota(s) && subUsed(s) > 0) {
+			if hasUnmeteredRelayEndpoint(endpoints, id) {
+				if hasMeteredDirectEndpoint(endpoints, id) {
+					partial++
+				} else {
+					unmetered++
+				}
+				recordReason(reasonRelayEndpoint)
+				continue
+			}
+		}
+		if reason != "" {
 			// D-OBS-01：截断进行中（超限且已有计数）伴生重建，
 			// 伴生未下发只是瞬态——该源不计未计量，徽标不翻
 			// unmetered（已用数旁挂“未计量”易误读为全程未计）。
@@ -1144,21 +1211,16 @@ func (h *Handler) subMeteringStatus(s *model.Subscription, rows []model.NodeInbo
 				continue
 			}
 			unmetered++
-			if !seenReason[reason] {
-				seenReason[reason] = true
-				if firstReason == "" {
-					firstReason = reason
-				}
-			}
+			recordReason(reason)
 		}
 	}
-	if unmetered == 0 {
+	if unmetered == 0 && partial == 0 {
 		return "metered", ""
 	}
-	if unmetered == len(ids) {
+	if unmetered == len(ids) && partial == 0 {
 		return "unmetered", firstReason
 	}
-	return "partial", fmt.Sprintf("其中 %d 个源未计量（%s）", unmetered, firstReason)
+	return "partial", fmt.Sprintf("其中 %d 个源未计量（%s）", unmetered+partial, firstReason)
 }
 
 // subYieldsNothing reports whether a subscription yields no endpoints
@@ -1303,7 +1365,7 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	if len(assignments) > 0 {
 		endpoints = filterEndpointsByUserAssignments(endpoints, assignments)
 	}
-	meteringStatus, meteringReason := h.subMeteringStatus(s, rows, memo)
+	meteringStatus, meteringReason := h.subMeteringStatus(s, rows, memo, endpoints)
 	var zeroEndpointReason string
 	if len(endpoints) == 0 {
 		zeroEndpointReason = h.subZeroEndpointReason(s, rows, now)
