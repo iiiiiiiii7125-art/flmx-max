@@ -794,6 +794,7 @@ func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInb
 	if s != nil && isShare(s) {
 		ku := kernelUser(s)
 		companions := h.companionsByOrigin(memo)
+		rowOrigins := h.companionRowOrigins(memo)
 		kept := endpoints[:0]
 		for i := range endpoints {
 			e := endpoints[i]
@@ -803,12 +804,24 @@ func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInb
 			// iPSK:uPSK password. Relay endpoints keep pointing at
 			// the origin — the relay forwards land on the origin's
 			// port, with the shared password, as before.
-			if len(companions) > 0 && e.Direct && e.Proxy == nil && e.RelayID == 0 &&
+			// B-VD-NEW: an origin that owns a companion row but has
+			// no live companion right now (gate closed — the agent
+			// has not acked the current config, e.g. mid-truncation
+			// after a password rotation) fails closed: the endpoint
+			// is dropped instead of falling back to the unmetered
+			// origin. A link fetched in that window is static config
+			// and would escape metering permanently. Origins that
+			// never had a companion row keep serving the origin
+			// (legitimate non-metered SS).
+			if e.Direct && e.Proxy == nil && e.RelayID == 0 &&
 				e.Inbound.Protocol == kernel.ProtocolShadowsocks {
 				if comp, ok := companions[e.Inbound.ID]; ok {
 					e.CompanionOf = e.Inbound.ID
 					e.Inbound = comp
 					e.Port = comp.Port
+				} else if rowOrigins[e.Inbound.ID] {
+					log.Printf("subscription %d: drop origin endpoint of inbound %d: metering companion not live (fail closed)", s.ID, e.Inbound.ID)
+					continue
 				}
 			}
 			if e.Proxy == nil {

@@ -265,19 +265,14 @@ func TestSSMeteringRetargetRequiresAppliedConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No agent in the harness: never applied -> pulls keep serving
-	// the origin endpoint with the shared password.
+	// No agent in the harness: never applied -> B-VD-NEW fail closed:
+	// pulls render NO endpoint for the metering-managed origin
+	// instead of falling back to the unmetered origin (a link fetched
+	// in that window is static config and would escape metering
+	// permanently).
 	eps := h.subEndpoints(sub, rows)
-	if len(eps) != 1 {
-		t.Fatalf("exactly one endpoint expected, got %d", len(eps))
-	}
-	ep := eps[0]
-	if ep.Inbound.ID != origin.ID || ep.CompanionOf != 0 || ep.Port != origin.Port {
-		t.Fatalf("unapplied companion must not be retargeted: id=%d port=%d companionOf=%d",
-			ep.Inbound.ID, ep.Port, ep.CompanionOf)
-	}
-	if ep.Inbound.Settings.Password != meteringSharedPW {
-		t.Fatal("fallback endpoint must carry the origin's shared password")
+	if len(eps) != 0 {
+		t.Fatalf("unapplied companion must fail closed with no endpoint, got %d (port %d)", len(eps), eps[0].Port)
 	}
 	if meteringActiveOf(t, h, origin.ID) {
 		t.Fatal("badge must not claim metering before the companion config is applied")
@@ -290,7 +285,7 @@ func TestSSMeteringRetargetRequiresAppliedConfig(t *testing.T) {
 	if len(eps) != 1 {
 		t.Fatalf("exactly one endpoint expected, got %d", len(eps))
 	}
-	ep = eps[0]
+	ep := eps[0]
 	if ep.Inbound.ID != comp.ID || ep.CompanionOf != origin.ID || ep.Port != comp.Port {
 		t.Fatalf("applied companion must be retargeted: id=%d port=%d companionOf=%d",
 			ep.Inbound.ID, ep.Port, ep.CompanionOf)
