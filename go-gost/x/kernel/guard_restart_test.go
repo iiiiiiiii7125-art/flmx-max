@@ -235,26 +235,26 @@ var guardSyncPorts = []Port{{InboundID: 7, Port: 443, Network: "tcp"}}
 func TestSyncGuardReappliesWhenTableContentTampered(t *testing.T) {
 	stub := stubLiveTableNft(t)
 	n := newNftCounters(t.TempDir())
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stub.loads != 1 {
 		t.Fatalf("first sync must apply once, got %d loads", stub.loads)
 	}
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stub.loads != 1 {
 		t.Fatalf("unchanged content must short-circuit, got %d loads", stub.loads)
 	}
 	stub.tampered = true
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stub.loads != 2 {
 		t.Fatalf("tampered table content must force a re-apply, got %d loads", stub.loads)
 	}
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stub.loads != 2 {
@@ -267,11 +267,11 @@ func TestSyncGuardReappliesWhenTableContentTampered(t *testing.T) {
 func TestSyncGuardIgnoresCounterValueChanges(t *testing.T) {
 	stub := stubLiveTableNft(t)
 	n := newNftCounters(t.TempDir())
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	stub.packets = 987654
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stub.loads != 1 {
@@ -285,11 +285,11 @@ func TestSyncGuardIgnoresCounterValueChanges(t *testing.T) {
 func TestSyncGuardReappliesWhenTableGone(t *testing.T) {
 	stub := stubLiveTableNft(t)
 	n := newNftCounters(t.TempDir())
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	stub.gone = true
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stub.loads != 2 {
@@ -303,19 +303,19 @@ func TestSyncGuardReappliesWhenTableGone(t *testing.T) {
 func TestSyncGuardRearmsFingerprintForLegacyState(t *testing.T) {
 	stub := stubLiveTableNft(t)
 	dir := t.TempDir()
-	sig := hashString(nftScript(nftTableForBaseDir(dir), expandPorts(guardSyncPorts), expandGuards(guardSyncPorts), expandHops(guardSyncPorts), sortedUsers(nil), 0))
+	sig := hashString(nftScript(nftTableForBaseDir(dir), expandPorts(guardSyncPorts), expandGuards(guardSyncPorts), expandHops(guardSyncPorts), sortedUsers(nil), 0, nil))
 	legacy := `{"signature":"` + sig + `","epoch":"legacy"}`
 	if err := os.WriteFile(filepath.Join(dir, "nft.json"), []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	n := newNftCounters(dir)
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stub.loads != 1 {
 		t.Fatalf("legacy state must re-apply once to arm the fingerprint, got %d loads", stub.loads)
 	}
-	if err := n.sync(guardSyncPorts, nil); err != nil {
+	if err := n.sync(guardSyncPorts, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if stub.loads != 1 {

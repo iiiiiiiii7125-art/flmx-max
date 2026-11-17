@@ -28,14 +28,18 @@ const userQuotaBytesPerGB int64 = 1024 * 1024 * 1024
 // over-range rows heal at consumption, no migration needed. Negative
 // inputs saturate symmetrically so a negative stored limit keeps its
 // "unlimited" (<= 0) reading on every face.
-func QuotaLimitBytes(limitGB int64) int64 {
-	if limitGB > math.MaxInt64/userQuotaBytesPerGB {
+// C-(6)③：限额以 GB 为单位的小数（0.01、1.5 均合法）。换算时截断
+// 到字节（0.01 GB → 10737418 B，误差不足 1 B）。
+func QuotaLimitBytes(limitGB float64) int64 {
+	// 饱和阈值先取整再转浮点：float64(math.MaxInt64) 会上舍到 2^63，
+	// 直接做浮点除会把 2^33 GB 的边界判错（见 R7-G-01）。
+	if limitGB > float64(math.MaxInt64/userQuotaBytesPerGB) {
 		return math.MaxInt64
 	}
-	if limitGB < math.MinInt64/userQuotaBytesPerGB {
+	if limitGB < float64(math.MinInt64/userQuotaBytesPerGB) {
 		return math.MinInt64
 	}
-	return limitGB * userQuotaBytesPerGB
+	return int64(limitGB * float64(userQuotaBytesPerGB))
 }
 
 type UserQuotaRelease struct {
@@ -198,7 +202,7 @@ func applyUserQuotaWindowRoll(q *model.UserQuota, now time.Time) bool {
 	return changed
 }
 
-func (r *Repository) SaveUserQuotaConfigTx(tx *gorm.DB, userID, dailyLimitGB, monthlyLimitGB int64, now int64) error {
+func (r *Repository) SaveUserQuotaConfigTx(tx *gorm.DB, userID int64, dailyLimitGB, monthlyLimitGB float64, now int64) error {
 	if tx == nil {
 		return errors.New("database unavailable")
 	}
@@ -459,6 +463,37 @@ func (r *Repository) MarkUserQuotaDisabled(userID int64, pausedForwardIDs []int6
 	return nil
 }
 
+// AppendUserQuotaPausedForwardIDs unions forward IDs into the quota recovery
+// list (C-(1)): flow-stopped forwards must be recoverable by a later quota
+// reset / backstop, like quota-paused ones. Transactional read-modify-write,
+// so a concurrent release removal cannot resurrect removed IDs. A missing
+// quota row is created (a user with flow limits but no quota usage yet still
+// needs a recovery carrier); the row carries zero limits, i.e. unlimited,
+// so its mere existence never blocks anything. The handler serializes this
+// against quota enforcement under the per-user enforcement lock.
+func (r *Repository) AppendUserQuotaPausedForwardIDs(userID int64, ids []int64, now time.Time) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	if userID <= 0 || len(ids) == 0 {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		q, err := r.loadOrCreateUserQuotaTx(tx, userID, now)
+		if err != nil {
+			return err
+		}
+		merged := joinPausedForwardIDs(append(append([]int64{}, parsePausedForwardIDs(q.PausedForwardIDs)...), ids...))
+		if merged == q.PausedForwardIDs {
+			return nil
+		}
+		return tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
+			"paused_forward_ids": merged,
+			"updated_time":       now.UnixMilli(),
+		}).Error
+	})
+}
+
 // UpdateUserQuotaPausedForwardIDs 只更新恢复依据列表与时间戳，不
 // 触碰 disabled_by_quota/disabled_at（FIX2-A V2-01 增量执法用：
 // 重试暂停失败的转发时保留首次禁用时刻，只扩/收恢复依据）。
@@ -481,6 +516,83 @@ func (r *Repository) UpdateUserQuotaPausedForwardIDs(userID int64, pausedForward
 		return errors.New("user quota row not found")
 	}
 	return nil
+}
+
+// RemoveUserQuotaPausedForwardIDs 从恢复依据列表中删除已处理（恢复成功或
+// 已无恢复意义）的转发 ID（C-05 F1）：重置/滚动只清用量与禁用标志，
+// 列表本身由释放路径按逐转发结果逐项清除——恢复依据在成功恢复前不得清除。
+// 事务内读-改-写：并发执法追加的新 ID 不会被本次清除误删。行不存在时
+// 视为无待恢复项，返回 nil（幂等 no-op）。
+func (r *Repository) RemoveUserQuotaPausedForwardIDs(userID int64, remove []int64, now time.Time) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	if userID <= 0 {
+		return errors.New("user id is required")
+	}
+	if len(remove) == 0 {
+		return nil
+	}
+	drop := make(map[int64]struct{}, len(remove))
+	for _, id := range remove {
+		if id > 0 {
+			drop[id] = struct{}{}
+		}
+	}
+	if len(drop) == 0 {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var q model.UserQuota
+		err := tx.Where("user_id = ?", userID).First(&q).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		kept := make([]int64, 0, len(parsePausedForwardIDs(q.PausedForwardIDs)))
+		changed := false
+		for _, id := range parsePausedForwardIDs(q.PausedForwardIDs) {
+			if _, ok := drop[id]; ok {
+				changed = true
+				continue
+			}
+			kept = append(kept, id)
+		}
+		if !changed {
+			return nil
+		}
+		return tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
+			"paused_forward_ids": joinPausedForwardIDs(kept),
+			"updated_time":       now.UnixMilli(),
+		}).Error
+	})
+}
+
+// ListPendingQuotaReleases 列出待重试的配额释放（C-05 F4）：已解禁
+// （disabled_by_quota=0）但恢复依据列表仍非空、且当前未再超限的用户。
+// 仍超限的用户归执法 backstop（reconcileUserQuotaEnforcement）管，不在此列。
+func (r *Repository) ListPendingQuotaReleases(now time.Time) ([]UserQuotaRelease, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rows []model.UserQuota
+	if err := r.db.Where("disabled_by_quota = 0 AND paused_forward_ids != ''").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	releases := make([]UserQuotaRelease, 0, len(rows))
+	for _, row := range rows {
+		if userQuotaExceeded(normalizeUserQuotaView(cloneUserQuotaView(row), now)) {
+			continue
+		}
+		ids := parsePausedForwardIDs(row.PausedForwardIDs)
+		if len(ids) == 0 {
+			continue
+		}
+		releases = append(releases, UserQuotaRelease{UserID: row.UserID, UnblockUser: true, ForwardIDs: ids})
+	}
+	return releases, nil
 }
 
 func (r *Repository) ResetUserQuotaUsage(userID int64, scope string, now time.Time) (*UserQuotaRelease, error) {
@@ -520,7 +632,11 @@ func (r *Repository) ResetUserQuotaUsage(userID int64, scope string, now time.Ti
 			release.ForwardIDs = parsePausedForwardIDs(q.PausedForwardIDs)
 			q.DisabledByQuota = 0
 			q.DisabledAt = 0
-			q.PausedForwardIDs = ""
+			// C-05 F1：恢复依据（PausedForwardIDs）此时不得清除——
+			// 它是 applyUserQuotaRelease 的待恢复清单；只有逐转发
+			// 恢复成功（或确认无恢复意义）后，才由释放路径经
+			// RemoveUserQuotaPausedForwardIDs 逐项删除。旧实现在此
+			// 同事务清表，释放失败即永久丢失恢复依据、又照发“已恢复”。
 		}
 		return tx.Model(&model.UserQuota{}).Where("user_id = ?", userID).Updates(map[string]interface{}{
 			"daily_used_bytes":   q.DailyUsedBytes,
@@ -559,7 +675,8 @@ func (r *Repository) RollUserQuotaWindows(now time.Time) ([]UserQuotaRelease, er
 				release.ForwardIDs = parsePausedForwardIDs(q.PausedForwardIDs)
 				q.DisabledByQuota = 0
 				q.DisabledAt = 0
-				q.PausedForwardIDs = ""
+				// C-05 F1（与 ResetUserQuotaUsage 同口径）：恢复依据
+				// 保留到释放路径逐项清除，不在此处同事务清表。
 				changed = true
 			}
 			if !changed {

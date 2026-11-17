@@ -12,6 +12,7 @@ import (
 	"github.com/go-gost/core/handler"
 	"github.com/go-gost/core/logger"
 	md "github.com/go-gost/core/metadata"
+	"github.com/go-gost/core/observer/stats"
 	"github.com/go-gost/core/recorder"
 	ctxvalue "github.com/go-gost/x/ctx"
 	"github.com/go-gost/x/internal/idle"
@@ -20,6 +21,8 @@ import (
 	"github.com/go-gost/x/internal/util/relay"
 	"github.com/go-gost/x/internal/util/ss"
 	rate_limiter "github.com/go-gost/x/limiter/rate"
+	xstats "github.com/go-gost/x/observer/stats"
+	stats_wrapper "github.com/go-gost/x/observer/stats/wrapper"
 	xrecorder "github.com/go-gost/x/recorder"
 	"github.com/go-gost/x/registry"
 	"github.com/shadowsocks/go-shadowsocks2/core"
@@ -101,15 +104,24 @@ func (h *ssuHandler) Handle(ctx context.Context, conn net.Conn, opts ...handler.
 	})
 
 	log.Infof("%s <> %s", conn.RemoteAddr(), conn.LocalAddr())
+
+	// Per-association byte counters, filled into ro by the defer
+	// below. See the WrapPacketConn call after pc is built.
+	pStats := xstats.Stats{}
+
 	defer func() {
 		if err != nil {
 			ro.Err = err.Error()
 		}
+		ro.InputBytes = pStats.Get(stats.KindInputBytes)
+		ro.OutputBytes = pStats.Get(stats.KindOutputBytes)
 		ro.Duration = time.Since(start)
 		ro.Record(ctx, h.recorder.Recorder)
 
 		log.WithFields(map[string]any{
-			"duration": time.Since(start),
+			"duration":    time.Since(start),
+			"inputBytes":  ro.InputBytes,
+			"outputBytes": ro.OutputBytes,
 		}).Infof("%s >< %s", conn.RemoteAddr(), conn.LocalAddr())
 	}()
 
@@ -131,6 +143,21 @@ func (h *ssuHandler) Handle(ctx context.Context, conn net.Conn, opts ...handler.
 		// UDP over TCP
 		pc = relay.UDPTunServerConn(conn)
 	}
+
+	// A-低-4 same-family gap (F3-A4SS): neither PacketConn leg was
+	// ever wrapped with stats, so ro recorded 0 bytes for every
+	// SS-UDP association, while SS-TCP wraps its conn
+	// (handler/ss/handler.go) and SOCKS5-UDP wraps its client leg
+	// (handler/socks/v5/udp.go) the same pStats→ro way. Wrap
+	// exactly the client-facing leg: the upstream leg (cc below)
+	// stays unwrapped, so each payload byte is counted once —
+	// wrapping it too would count every byte a second time.
+	// ReadFrom counts as input (client→remote), WriteTo as output
+	// (remote→client), the same direction caliber as every other
+	// handler's ro. Counts are payload bytes as returned by this
+	// leg's ReadFrom/WriteTo (cipher and SOCKS UDP header sit
+	// below the wrapper), not wire bytes.
+	pc = stats_wrapper.WrapPacketConn(pc, &pStats)
 
 	// obtain a udp connection
 	var buf bytes.Buffer

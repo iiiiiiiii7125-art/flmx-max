@@ -217,6 +217,7 @@ func TestBackupTableCoverage(t *testing.T) {
 		"statistics_flow":           "流量统计时序，非配置数据",
 		"inbound_conn_log":          "入站连接日志时序，非配置数据（connlog_retention_days 天保留＋每入站行数帽，agent 持续重报重建；设计口径不进备份）",
 		"connlog_node_dropped":      "连接日志采集丢弃计数的节点累计，运行时遥测簿记（agent 随批报上行重建；设计口径不进备份）",
+		"traffic_node_dropped":     "流量死信字节的节点累计，运行时遥测簿记（agent 随批报上行重建；设计口径不进备份）",
 		"node_metric":               "监控遥测时序",
 		"node_traffic":              "节点网卡流量遥测时序，非配置数据（400 天保留，上报持续重建）",
 		"node_latency_sample":       "延迟探测遥测时序，非配置数据（7 天保留，探测自动重建）",

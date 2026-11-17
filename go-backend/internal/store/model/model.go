@@ -169,9 +169,32 @@ type Node struct {
 	WhitelistExtra   string `gorm:"column:whitelist_extra;type:text;not null;default:''"`
 	// nftables 状态（agent 上报的运行态，不进备份）：""＝未知／
 	// 未尝试、installed＝已安装、auto_installed＝本 agent 进程
-	// 自动装上、failed＝自动安装失败（原因见 NftablesError）。
+	// 自动装上、failed＝自动安装失败（原因见 NftablesError）、
+	// missing＝agent 已确认本机无 nftables（仅 nftables 模式节点；
+	// gost 模式无 nft 是正常形态，不记此态——见
+	// ingestNodeNftablesStatus）。
 	NftablesStatus string `gorm:"column:nftables_status;type:varchar(20);not null;default:''"`
 	NftablesError  string `gorm:"column:nftables_error;type:text;not null;default:''"`
+	// nft 采集健康（A-中-2，面板周期 SSH 采集的失败态，不进备份）：
+	// State ""＝未采集过、"ok"＝最近一次采集成功、"failing"＝连续
+	// 失败已达阈值（nftCollectFailAlertThreshold）；FailCount 为
+	// 连续失败次数、LastError 为最近一次失败原因原文、LastOKAt 为
+	// 最近一次成功采集的 UnixMilli。SshFailCount/WsFailCount 为
+	// 当前 streak 内 SSH 路／WS 路各自尚未恢复的失败轮数
+	// （R4C-01，分路计数）：SSH 路（30 秒轮）与 WS 路（60 秒
+	// 轮）是独立信号、共用一条 streak；任一路成功只清该路计数，
+	// streak 在两路计数均归零时才整体清除。只凭 LastError 前缀
+	// 判来源会丢混合 streak 的组成（最后一次失败是哪路、前面的
+	// 就是哪路），WS 成功即误清 SSH 的失败、误报恢复。存量行
+	// 升级时两计数为 0：首个成功即按旧口径整条清除（一次性、仅
+	// 限升级窗口内已在 streak 中的行）；首个失败轮即重建正确组
+	// 成。运行态，不进备份。
+	NftCollectState        string `gorm:"column:nft_collect_state;type:varchar(16);not null;default:''"`
+	NftCollectFailCount    int    `gorm:"column:nft_collect_fail_count;not null;default:0"`
+	NftCollectLastError    string `gorm:"column:nft_collect_last_error;type:varchar(500);not null;default:''"`
+	NftCollectLastOKAt     int64  `gorm:"column:nft_collect_last_ok_at;not null;default:0"`
+	NftCollectSshFailCount int    `gorm:"column:nft_collect_ssh_fail_count;not null;default:0"`
+	NftCollectWsFailCount  int    `gorm:"column:nft_collect_ws_fail_count;not null;default:0"`
 }
 
 func (Node) TableName() string { return "node" }
@@ -351,9 +374,12 @@ type Tunnel struct {
 func (Tunnel) TableName() string { return "tunnel" }
 
 type UserQuota struct {
-	UserID           int64  `gorm:"column:user_id;primaryKey"`
-	DailyLimitGB     int64  `gorm:"column:daily_limit_gb;not null;default:0"`
-	MonthlyLimitGB   int64  `gorm:"column:monthly_limit_gb;not null;default:0"`
+	UserID           int64   `gorm:"column:user_id;primaryKey"`
+	// C-(6)③：限额以 GB 为单位的小数（0.01、1.5 均合法），不再只认
+	// 整数。SQLite 列仍为 INTEGER 亲和类型也能存 REAL 值；PostgreSQL
+	// 侧由 quota_decimal_v1 迁移把列改成 double precision。
+	DailyLimitGB     float64 `gorm:"column:daily_limit_gb;not null;default:0"`
+	MonthlyLimitGB   float64 `gorm:"column:monthly_limit_gb;not null;default:0"`
 	DailyUsedBytes   int64  `gorm:"column:daily_used_bytes;not null;default:0"`
 	MonthlyUsedBytes int64  `gorm:"column:monthly_used_bytes;not null;default:0"`
 	DayKey           int64  `gorm:"column:day_key;not null;default:0"`
@@ -760,9 +786,11 @@ type UserBackup struct {
 	FlowMiB         int64  `json:"flowMiB,omitempty"`
 	InFlow          int64  `json:"inFlow"`
 	OutFlow         int64  `json:"outFlow"`
-	FlowResetTime   int64  `json:"flowResetTime"`
-	DailyQuotaGB    int64  `json:"dailyQuotaGB,omitempty"`
-	MonthlyQuotaGB  int64  `json:"monthlyQuotaGB,omitempty"`
+	FlowResetTime   int64   `json:"flowResetTime"`
+	// C-(6)③：与 UserQuota 同口径的小数 GB；旧备份的整数值照常
+	// 解码为小数（JSON 数字进 float64 字段无损）。
+	DailyQuotaGB    float64 `json:"dailyQuotaGB,omitempty"`
+	MonthlyQuotaGB  float64 `json:"monthlyQuotaGB,omitempty"`
 	DisabledByQuota int    `json:"disabledByQuota,omitempty"`
 	QuotaDisabledAt int64  `json:"quotaDisabledAt,omitempty"`
 	// FIX132-C（D4-01）：配额已用量与暂停清单保真。旧备份无此四字段
@@ -1178,8 +1206,8 @@ type TunnelRecord struct {
 
 type UserQuotaView struct {
 	UserID           int64
-	DailyLimitGB     int64
-	MonthlyLimitGB   int64
+	DailyLimitGB     float64
+	MonthlyLimitGB   float64
 	DailyUsedBytes   int64
 	MonthlyUsedBytes int64
 	DayKey           int64
@@ -1418,6 +1446,27 @@ type ConnlogNodeDropped struct {
 }
 
 func (ConnlogNodeDropped) TableName() string { return "connlog_node_dropped" }
+
+// TrafficNodeDropped is the panel-side cumulative count of traffic
+// bytes an entry node's agent dead-lettered before they could be
+// reported (traffic audit A-中-1): when a spool batch fails to be
+// confirmed 8 times in a row (~130s) or ages past its 1h TTL, the
+// agent quarantines the batch to a local archive and counts its
+// bytes into DroppedBytes, which rides the next v2 envelope as
+// dropped_bytes. The agent attaches its not-yet-acknowledged drop
+// total to every batch; the panel books the delta under the reporting
+// node exactly when the batch is applied (replays and behind
+// batches never double-book) — same contract as
+// ConnlogNodeDropped. Telemetry bookkeeping: NOT part of backups
+// (same ruling as inbound_conn_log).
+type TrafficNodeDropped struct {
+	ID           int64 `gorm:"primaryKey;autoIncrement" json:"id"`
+	NodeID       int64 `gorm:"column:node_id;not null;uniqueIndex" json:"nodeId"`
+	DroppedTotal int64 `gorm:"column:dropped_total;not null;default:0" json:"droppedTotal"`
+	UpdatedTime  int64 `gorm:"column:updated_time;not null;default:0" json:"updatedTime"`
+}
+
+func (TrafficNodeDropped) TableName() string { return "traffic_node_dropped" }
 
 type TunnelMetric struct {
 	ID int64 `gorm:"primaryKey;autoIncrement" json:"id"`

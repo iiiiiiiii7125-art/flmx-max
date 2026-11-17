@@ -333,6 +333,16 @@ const REGISTRY = [
     calls: 2,
     consumers: ["src/pages/forward.tsx"],
   },
+  {
+    producer: "go-backend/internal/http/handler/user_quota.go",
+    endpoint: "/user/quota/reset",
+    apiFn: "resetUserQuota",
+    // 1 处：C-05 配额释放部分恢复时回 warning（failedForwardIds＋
+    // node_offline 原因／待节点上线后恢复的 deferredForwardIds）。
+    // 消费端 user.tsx handleQuotaReset 实读 .warning 并以 ⚠️ toast 透出。
+    calls: 1,
+    consumers: ["src/pages/user.tsx"],
+  },
 ];
 
 // GAP 登记册（2026-11-10 合并树逐点独立核实）：T-001 新增生产者中

@@ -187,6 +187,26 @@ jobs:
         working-directory: ./go-gost
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.version=${{ needs.check-version.outputs.version }}" -o gost-arm64
 
+      - name: Assert stamped version (E-04)
+        working-directory: ./go-gost
+        env:
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          # E-04: the -X main.version stamp is injected by the two build
+          # steps above (its value is the release tag, via
+          # check-version). Read it back from the freshly built binaries
+          # before they are compressed and uploaded, so a build that
+          # silently loses the stamp (a broken ldflags line, a hand-built
+          # product bypassing CI — the traffic-fix-integrate string that
+          # the panel's version gates rejected in V3/V4) fails here
+          # instead of shipping a version the panel refuses to serve.
+          # The assertion runs BEFORE UPX on purpose: arm64 cannot
+          # execute on this runner, and `go version -m` cannot read the
+          # build info of a UPX-packed binary; UPX is lossless, so a
+          # stamp verified here survives compression unchanged.
+          ./gost-amd64 -V | grep -F "gost ${VERSION} "
+          go version -m gost-arm64 | grep -F "main.version=${VERSION}"
+
       - name: Compress with UPX
         working-directory: ./go-gost
         run: |

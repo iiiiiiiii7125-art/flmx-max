@@ -59,7 +59,9 @@ import {
   getMonitorPermissionList,
   assignMonitorPermission,
   removeMonitorPermission,
+  getMyQuota,
 } from "@/api";
+import type { MyQuota } from "@/api";
 import {
   EditIcon,
   DeleteIcon,
@@ -215,6 +217,10 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
   // R2-C3-01（IRL-3 同族）：用户列表初载失败必须留持久标记＋重试入口，
   // 不得再按空列表渲染（与 node.tsx nodesLoadFailed 同款纪律）。
   const [usersLoadFailed, setUsersLoadFailed] = useState(false);
+  // D-07：管理员本人配额（user/list 不含管理员行，须单独取）。
+  // null = 未设置配额行；failed = 本次加载失败（与未设置区分）。
+  const [adminQuota, setAdminQuota] = useState<MyQuota | null>(null);
+  const [adminQuotaFailed, setAdminQuotaFailed] = useState(false);
   const [searchKeyword, setSearchKeyword] = useLocalStorageState(
     "user-search-keyword",
     "",
@@ -546,11 +552,26 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
   }, []);
 
   // 生命周期
+  const loadAdminQuota = useCallback(async () => {
+    try {
+      const res = await getMyQuota();
+      if (res.code === 0) {
+        setAdminQuota(res.data ?? null);
+        setAdminQuotaFailed(false);
+      } else {
+        setAdminQuotaFailed(true);
+      }
+    } catch {
+      setAdminQuotaFailed(true);
+    }
+  }, []);
+
   useEffect(() => {
     void loadTunnels();
     void loadSpeedLimits();
     void loadMonitorPermissions();
-  }, [loadMonitorPermissions, loadSpeedLimits, loadTunnels]);
+    void loadAdminQuota();
+  }, [loadAdminQuota, loadMonitorPermissions, loadSpeedLimits, loadTunnels]);
 
   useEffect(() => {
     if (searchDebounceRef.current) {
@@ -1064,6 +1085,12 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
 
       if (response.code === 0) {
         toast.success("用户配额已重置");
+        // C-05/D-05：配额重置部分恢复时后端在信封 warning 里点名未恢复
+        // 转发（network.ts 合同：must be surfaced），须原样透出，不得只报
+        // 固定成功文案。
+        if (response.warning) {
+          toast(response.warning, { icon: "⚠️", duration: 12000 });
+        }
         await loadUsers(searchKeyword);
       } else {
         toast.error(response.msg || "重置用户配额失败");
@@ -1235,6 +1262,39 @@ export default function UserPage({ embedded = false }: { embedded?: boolean }) {
             新增
           </Button>
         </div>
+      </div>
+
+      {/* D-07：管理员本人配额——user/list 不含管理员行，此前在用户
+        列表页完全看不见（彩排面板唯一 user_quota 行就是管理员本人）。 */}
+      <div className="mb-4 rounded-xl border border-divider px-3 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-sm font-semibold">管理员配额（本人）</span>
+          {adminQuotaFailed ? (
+            <span className="text-xs font-semibold text-danger-700">
+              加载失败
+            </span>
+          ) : !adminQuota ? (
+            <span className="text-xs font-semibold text-foreground">
+              未设置配额
+            </span>
+          ) : adminQuota.disabledByQuota ? (
+            <span className="text-xs font-semibold text-danger-700">
+              已因超限停用
+            </span>
+          ) : null}
+        </div>
+        {adminQuota && (
+          <div className="mt-1 flex flex-wrap gap-x-6 gap-y-0.5 text-xs font-semibold">
+            <span>
+              日配额：{formatFlow(adminQuota.dailyUsedBytes ?? 0)} /{" "}
+              {formatQuotaLimit(adminQuota.dailyQuotaGB)}
+            </span>
+            <span>
+              月配额：{formatFlow(adminQuota.monthlyUsedBytes ?? 0)} /{" "}
+              {formatQuotaLimit(adminQuota.monthlyQuotaGB)}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* 用户列表 */}

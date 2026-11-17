@@ -37,6 +37,20 @@ import (
 // recycles them from the origins' metering switches and the active
 // share-subscription demand. They are hidden from inbound lists,
 // subscription sources and backups, and are never edited by hand.
+//
+// B-L5 port stability: a companion that merely lost demand (its
+// subscriptions were all disabled) is PARKED, not deleted — the row
+// stays with Enabled=0, keeping its port and its identity PSK, so
+// re-enabling the subscription revives the exact same endpoint
+// instead of handing clients a new random port and new credentials
+// on a dead one. Parking is safe because (a) the port-occupancy
+// predicate counts every inbound row regardless of Enabled, so no
+// other inbound/forward/tunnel can steal a parked companion's port
+// while it sleeps; (b) the kernel payload build and the F4 retarget
+// gate both skip Enabled!=1 rows, so a parked companion renders
+// nowhere and attracts no traffic. Deletion stays for the terminal
+// cases: origin gone, metering switch off, or the origin's shape no
+// longer supports metering.
 
 var meteringMu sync.Mutex
 var lastMeteringReconcile atomic.Int64
@@ -154,23 +168,65 @@ func (h *Handler) reconcileSSMetering() {
 	}
 
 	affected := map[int64]bool{}
+	// E-03: nodes whose companions were touched this round, and the
+	// origin ids behind them — the split is ensured for these nodes
+	// below, before the apply loop, so a companion created or synced
+	// on a split-capable agent leaves the main kernel on this same
+	// beat instead of waiting for a reconnect / manual re-push.
+	touchedNodes := map[int64]bool{}
+	touchedOrigins := map[int64]bool{}
 	for originID, comps := range companions {
 		origin, ok := origins[originID]
-		if !ok || !h.ssMeteringWanted(origin, demand) {
+		if !ok {
 			for _, c := range comps {
 				if h.deleteCompanionRow(&c) {
 					affected[c.KernelID] = true
+					touchedNodes[c.NodeID] = true
 				}
 			}
 			continue
 		}
-		for _, extra := range comps[1:] {
-			if h.deleteCompanionRow(&extra) {
-				affected[extra.KernelID] = true
+		if h.ssMeteringWanted(origin, demand) {
+			for _, extra := range comps[1:] {
+				if h.deleteCompanionRow(&extra) {
+					affected[extra.KernelID] = true
+					touchedNodes[origin.NodeID] = true
+					touchedOrigins[originID] = true
+				}
 			}
+			if h.syncCompanion(origin, &comps[0], now) {
+				affected[comps[0].KernelID] = true
+			}
+			touchedNodes[origin.NodeID] = true
+			touchedOrigins[originID] = true
+			continue
 		}
-		if h.syncCompanion(origin, &comps[0], now) {
-			affected[comps[0].KernelID] = true
+		// Not wanted. B-L5: demand loss alone parks the companion
+		// (port + identity PSK retained, see parkCompanion) so a
+		// later re-enable revives the same endpoint; only the
+		// terminal states — switch off or a shape that can never be
+		// metered — delete the row outright.
+		if h.ssMeteringParkable(origin) {
+			for _, extra := range comps[1:] {
+				if h.deleteCompanionRow(&extra) {
+					affected[extra.KernelID] = true
+					touchedNodes[origin.NodeID] = true
+					touchedOrigins[originID] = true
+				}
+			}
+			if h.parkCompanion(&comps[0], now) {
+				affected[comps[0].KernelID] = true
+			}
+			touchedNodes[origin.NodeID] = true
+			touchedOrigins[originID] = true
+			continue
+		}
+		for _, c := range comps {
+			if h.deleteCompanionRow(&c) {
+				affected[c.KernelID] = true
+				touchedNodes[origin.NodeID] = true
+				touchedOrigins[originID] = true
+			}
 		}
 	}
 	for id, origin := range origins {
@@ -178,7 +234,55 @@ func (h *Handler) reconcileSSMetering() {
 			continue
 		}
 		if h.ssMeteringWanted(origin, demand) && h.createCompanion(origin, now) {
+			// C-03: mark the NEW companion's kernel, not the origin's —
+			// after the split the companion lands on the companion
+			// kernel, and only applying that kernel serves it.
+			if comp, err := h.repo.GetCompanionInbound(id); err == nil && comp != nil {
+				affected[comp.KernelID] = true
+			} else {
+				affected[origin.KernelID] = true
+			}
+			touchedNodes[origin.NodeID] = true
+			touchedOrigins[id] = true
+		}
+	}
+	// E-03: materialize the companion split for every node touched
+	// above. ensureCompanionKernel creates the companion kernel row
+	// (when the agent is new enough) and moves companions onto it;
+	// without this the split only happened on agent reconnect or a
+	// manual re-push, and a companion created here stayed on the
+	// main kernel until then. Old agents are untouched (the ensure
+	// is a no-op below companionAgentMinVersion, companions stay on
+	// the main kernel — E-02 surfaces that instead).
+	// The re-derive below only fires for origins whose companion
+	// actually MOVED: an unconditional re-derive would push both
+	// kernels on every beat even when nothing changed, breaking the
+	// reconcile's quiet-when-unchanged invariant (C-03).
+	before := map[int64]int64{}
+	for originID := range touchedOrigins {
+		if comp, err := h.repo.GetCompanionInbound(originID); err == nil && comp != nil {
+			before[originID] = comp.KernelID
+		}
+	}
+	for nodeID := range touchedNodes {
+		h.ensureCompanionKernel(nodeID)
+	}
+	// The ensure may have moved companions onto a brand-new
+	// companion kernel; for those origins push the companion kernel
+	// (its first apply) and the origin kernel the companions just
+	// left — even when the mutation above reported no change.
+	for originID := range touchedOrigins {
+		origin := origins[originID]
+		if origin == nil {
+			continue
+		}
+		comp, err := h.repo.GetCompanionInbound(originID)
+		if err != nil || comp == nil {
+			continue
+		}
+		if before[originID] != comp.KernelID {
 			affected[origin.KernelID] = true
+			affected[comp.KernelID] = true
 		}
 	}
 	for kernelID := range affected {
@@ -196,6 +300,15 @@ func (h *Handler) maybeReconcileSSMetering() {
 		return
 	}
 	h.reconcileSSMetering()
+}
+
+// companionKernelIDOr returns the companion kernel id for the origin's node
+// when the split is active, else the origin's own kernel id.
+func (h *Handler) companionKernelIDOr(origin *model.NodeInbound) int64 {
+	if id, ok := h.companionKernelIDForNode(origin.NodeID); ok {
+		return id
+	}
+	return origin.KernelID
 }
 
 // createCompanion materializes the companion row for an origin. The
@@ -233,7 +346,10 @@ func (h *Handler) createCompanion(origin *model.NodeInbound, now int64) bool {
 	in.AcceptProxyProtocol = false
 
 	row := model.NodeInbound{
-		KernelID:         origin.KernelID,
+		// C-03: when the split is active on this node the companion
+		// lands on the companion kernel; otherwise it inherits the
+		// origin's kernel (old-agent fallback, unchanged behavior).
+		KernelID:         h.companionKernelIDOr(origin),
 		NodeID:           origin.NodeID,
 		Name:             companionName(origin.Name),
 		Remark:           "SS 订阅计量伴生入站（系统管理，请勿编辑）",
@@ -276,6 +392,25 @@ func (h *Handler) syncCompanion(origin, comp *model.NodeInbound, now int64) bool
 	}
 	desired.ID = comp.ID
 	desired.Port = comp.Port
+	// B-L5: a parked companion's port is reserved by the occupancy
+	// predicate (disabled rows still count), so it normally survives
+	// untouched — but a port taken by hand (direct DB edit, legacy
+	// duplicate) must not be re-rendered into a collision. Recheck
+	// before reactivation; on conflict fall through to a fresh free
+	// port and log the move. A failed pick leaves the row parked and
+	// retries on the next reconcile.
+	if msg, err := h.inboundPortConflict(comp.NodeID, desired, comp.ID); err != nil {
+		log.Printf("ss metering: sync companion %d of inbound %d: port check: %v", comp.ID, origin.ID, err)
+		return false
+	} else if msg != "" {
+		newPort, perr := h.pickFreeInboundPort(comp.NodeID, comp.ID)
+		if perr != nil {
+			log.Printf("ss metering: companion %d of inbound %d kept port %d is %s and no free port is available: %v", comp.ID, origin.ID, comp.Port, msg, perr)
+			return false
+		}
+		log.Printf("ss metering: companion %d of inbound %d kept port %d is %s; moved to %d", comp.ID, origin.ID, comp.Port, msg, newPort)
+		desired.Port = newPort
+	}
 	desired.Settings.Password = password
 	desired.Users = nil
 	desired.Via = nil
@@ -309,7 +444,7 @@ func (h *Handler) syncCompanion(origin, comp *model.NodeInbound, now int64) bool
 	// now persists the column.
 	if updated.Settings == comp.Settings && updated.Transport == comp.Transport &&
 		updated.Security == comp.Security && updated.Listen == comp.Listen &&
-		updated.Extra == comp.Extra && updated.OutboundIPStrategy == comp.OutboundIPStrategy &&
+		updated.Port == comp.Port && updated.Extra == comp.Extra && updated.OutboundIPStrategy == comp.OutboundIPStrategy &&
 		updated.ConnIdleSeconds == comp.ConnIdleSeconds &&
 		updated.Name == comp.Name && updated.Enabled == comp.Enabled &&
 		updated.ShareHost == comp.ShareHost && updated.ShareAddressMode == comp.ShareAddressMode &&
@@ -337,6 +472,46 @@ func (h *Handler) deleteCompanionRow(comp *model.NodeInbound) bool {
 		log.Printf("ss metering: delete companion %d of inbound %d: %v", comp.ID, comp.CompanionOf, err)
 		return false
 	}
+	return true
+}
+
+// ssMeteringParkable reports whether an origin that currently wants
+// no companion may want one again later: the metering switch is still
+// on and the origin is statically eligible. Demand loss is the only
+// non-terminal reason to have no companion, so only it parks; a
+// switched-off or shape-blocked origin deletes instead (an unreadable
+// origin row fails closed to deletion, the pre-B-L5 behavior).
+func (h *Handler) ssMeteringParkable(origin *model.NodeInbound) bool {
+	if origin == nil || origin.MeteringEnabled != 1 {
+		return false
+	}
+	in, err := inboundFromModel(*origin)
+	if err != nil {
+		return false
+	}
+	return ssMeteringStaticBlock(origin, in) == ""
+}
+
+// parkCompanion retires a companion that lost demand without
+// deleting it: the row stays with Enabled=0, keeping its port and
+// its identity PSK for a later reactivation (B-L5). The kernel
+// payload build skips disabled rows, so the next apply pulls the
+// listener off the agent; the companion's relays are torn down like
+// the delete path does (F3/C-02b — a parked companion must not leave
+// materialized forwards behind). Already-parked is a no-op (false).
+func (h *Handler) parkCompanion(comp *model.NodeInbound, now int64) bool {
+	if comp == nil || comp.Enabled == 0 {
+		return false
+	}
+	h.removeInboundRelays(comp.ID)
+	updated := *comp
+	updated.Enabled = 0
+	updated.UpdatedTime = now
+	if err := h.repo.SaveNodeInbound(&updated); err != nil {
+		log.Printf("ss metering: park companion %d of inbound %d: %v", comp.ID, comp.CompanionOf, err)
+		return false
+	}
+	log.Printf("ss metering: parked companion %d of inbound %d (port %d retained for reactivation)", comp.ID, comp.CompanionOf, comp.Port)
 	return true
 }
 
@@ -392,34 +567,84 @@ func (h *Handler) kernelConfigApplied(k *model.NodeKernel) bool {
 type companionGateMemo struct {
 	byOrigin map[int64]kernel.Inbound
 	loaded   bool
+	// rowOrigins marks every origin that owns a metering companion
+	// row in any state (live, parked, or awaiting its first apply).
+	// A row's mere existence marks its origin as metering-managed:
+	// share-subscription endpoints for such an origin must never fall
+	// back to the unmetered origin (B-VD-NEW) — they fail closed
+	// instead (see companionRowOrigins).
+	rowOrigins map[int64]bool
+	rowLoaded  bool
+	// loadErr / rowErr remember a companion-list load failure so one
+	// request does not retry (and re-log) it per consultation. A
+	// failed load is NOT "no companions": the render side must fail
+	// closed for every direct SS origin instead of serving the
+	// unmetered origin (R3-E-LOW-01) — a nil map alone cannot carry
+	// that distinction.
+	loadErr error
+	rowErr  error
 }
 
 // companionsByOrigin returns the live-companion map, evaluating the
 // F4 gate at most once per memo. A nil memo evaluates fresh, exactly
-// like companionInboundsByOrigin.
-func (h *Handler) companionsByOrigin(memo *companionGateMemo) map[int64]kernel.Inbound {
+// like companionInboundsByOrigin. A load error is returned alongside
+// the (nil) map: callers that render endpoints must fail closed on
+// it (R3-E-LOW-01), never read a nil map as "no companions".
+func (h *Handler) companionsByOrigin(memo *companionGateMemo) (map[int64]kernel.Inbound, error) {
 	if memo != nil && memo.loaded {
-		return memo.byOrigin
+		return memo.byOrigin, memo.loadErr
 	}
-	out := h.companionInboundsByOrigin()
+	out, err := h.companionInboundsByOrigin()
 	if memo != nil {
-		memo.byOrigin, memo.loaded = out, true
+		memo.byOrigin, memo.loaded, memo.loadErr = out, true, err
 	}
-	return out
+	return out, err
+}
+
+// companionRowOrigins returns the origin ids that own a metering
+// companion row in any state, memoized per request alongside the live
+// map. A parked row (Enabled=0, kept for reactivation per B-L5) still
+// marks its origin as metering-managed: demand can return on the next
+// reconcile beat, and until the reactivated companion is live the
+// origin must not serve share subscriptions unmetered.
+// A load error is returned alongside the (nil) set: the render side
+// must fail closed on it (R3-E-LOW-01), never read a nil set as "no
+// origin owns a companion row".
+func (h *Handler) companionRowOrigins(memo *companionGateMemo) (map[int64]bool, error) {
+	if memo != nil && memo.rowLoaded {
+		return memo.rowOrigins, memo.rowErr
+	}
+	comps, err := h.repo.ListCompanionInbounds()
+	if err != nil {
+		log.Printf("ss metering: list companions for row origins: %v", err)
+		if memo != nil {
+			memo.rowOrigins, memo.rowLoaded, memo.rowErr = nil, true, err
+		}
+		return nil, err
+	}
+	out := make(map[int64]bool, len(comps))
+	for _, c := range comps {
+		out[c.CompanionOf] = true
+	}
+	if memo != nil {
+		memo.rowOrigins, memo.rowLoaded, memo.rowErr = out, true, nil
+	}
+	return out, nil
 }
 
 // companionInboundsByOrigin maps origin inbound ids to their live
 // companions' kernel form, for subscription endpoint retargeting:
 // enabled companions whose kernel config the node agent has actually
 // applied (F4/B-03 — a companion that merely exists in the DB is not
-// listening anywhere yet). Errors degrade to no retargeting — the
-// origin endpoints are then served shared, exactly as before this
-// feature.
-func (h *Handler) companionInboundsByOrigin() map[int64]kernel.Inbound {
+// listening anywhere yet). A load error is returned alongside the
+// (nil) map: the render side must fail closed for metering-managed
+// origins on it (R3-E-LOW-01) and keep serving origins that never had
+// a companion row only when the list was actually read.
+func (h *Handler) companionInboundsByOrigin() (map[int64]kernel.Inbound, error) {
 	comps, err := h.repo.ListCompanionInbounds()
 	if err != nil {
 		log.Printf("ss metering: list companions: %v", err)
-		return nil
+		return nil, err
 	}
 	appliedByKernel := make(map[int64]bool)
 	checkedKernel := make(map[int64]bool)
@@ -445,5 +670,5 @@ func (h *Handler) companionInboundsByOrigin() map[int64]kernel.Inbound {
 		}
 		out[c.CompanionOf] = in
 	}
-	return out
+	return out, nil
 }

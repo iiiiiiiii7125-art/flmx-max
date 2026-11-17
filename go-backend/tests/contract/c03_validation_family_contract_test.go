@@ -24,7 +24,8 @@ func c03AdminToken(t *testing.T, secret string) string {
 }
 
 // B02-001：user/create 对不可解析的数值字段（配额尤甚）必须报错
-// 不落库；合法配额必须真落 user_quota 行。
+// 不落库；合法配额必须真落 user_quota 行。小数 GB 自 C-(6)③ 起为
+// 合法配额（F2-F），仅不可解析的值才拒绝。
 func TestC03UserCreateBadNumericRejected(t *testing.T) {
 	secret := "c03-secret"
 	router, r := setupContractRouter(t, secret)
@@ -35,7 +36,6 @@ func TestC03UserCreateBadNumericRejected(t *testing.T) {
 		body map[string]interface{}
 	}{
 		{"quota-string", map[string]interface{}{"user": "c03-badquota", "pwd": "secret1", "dailyQuotaGB": "abc"}},
-		{"quota-float", map[string]interface{}{"user": "c03-badquota2", "pwd": "secret1", "monthlyQuotaGB": 1.5}},
 		{"num-string", map[string]interface{}{"user": "c03-badnum", "pwd": "secret1", "num": "many"}},
 	} {
 		out := requestContractEnvelope(t, router, admin, "/api/v1/user/create", tc.body)
@@ -45,6 +45,17 @@ func TestC03UserCreateBadNumericRejected(t *testing.T) {
 		if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM user WHERE user = ?`, tc.body["user"]); n != 0 {
 			t.Fatalf("%s: rejected create must not persist a user row, got %d", tc.name, n)
 		}
+	}
+
+	// 小数配额合法（C-(6)③，F2-F）：monthlyQuotaGB 1.5 必须创建成功且真落库。
+	dout := requestContractEnvelope(t, router, admin, "/api/v1/user/create",
+		map[string]interface{}{"user": "c03-decimalquota", "pwd": "secret1", "monthlyQuotaGB": 1.5})
+	if dout.Code != 0 {
+		t.Fatalf("decimal quota create must succeed: %+v", dout)
+	}
+	duid := mustQueryInt64(t, r, `SELECT id FROM user WHERE user = 'c03-decimalquota'`)
+	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM user_quota WHERE user_id = ?`, duid); n != 1 {
+		t.Fatalf("decimal quota must persist exactly one user_quota row, got %d", n)
 	}
 
 	// 合法配额：创建成功且配额行真落库（旧 bug 是静默不落库）。

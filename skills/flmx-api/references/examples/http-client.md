@@ -75,7 +75,7 @@ create_forward() {
     }" | jq '.'
 }
 
-# Usage: ./create-forward.sh "my-web" 1 "192.168.1.100:80"
+# Usage: ./create-forward.sh "my-web" 1 "203.0.113.100:80"
 create_forward "$@"
 ```
 
@@ -590,7 +590,7 @@ func Example() {
 		fmt.Printf("Node: %v (status: %v)\n", node["name"], node["status"])
 	}
 	
-	if err := client.CreateForward("my-forward", 1, "192.168.1.100:80"); err != nil {
+	if err := client.CreateForward("my-forward", 1, "203.0.113.100:80"); err != nil {
 		fmt.Println("Error:", err)
 		return
 	}

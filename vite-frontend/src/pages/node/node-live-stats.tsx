@@ -53,11 +53,14 @@ function Meter({ label, value }: { label: string; value?: number }) {
 export function NodeLiveStats({
   info,
   month,
+  monthFreshness,
   variant,
 }: {
   info: NodeSystemInfo | null;
   /** This month's [in, out] bytes from the node's NIC counters. */
   month?: [number, number];
+  /** D-06：月流量数的新鲜度文案（陈旧／刷新失败时），与 month 同源。 */
+  monthFreshness?: string | null;
   variant: "row" | "footer" | "card";
 }) {
   const up = info ? (info.netOutSpeed ?? info.uploadSpeed) : undefined;
@@ -114,6 +117,11 @@ export function NodeLiveStats({
                 {split}
               </span>
             </div>
+            {month && monthFreshness && (
+              <div className="text-[10px] font-semibold text-foreground">
+                {monthFreshness}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -139,6 +147,11 @@ export function NodeLiveStats({
           <span className="font-semibold">{total}</span>
         </div>
         <div className="text-[10px] font-semibold text-foreground">{split || "—"}</div>
+        {month && monthFreshness && (
+          <div className="text-[10px] font-semibold text-foreground">
+            {monthFreshness}
+          </div>
+        )}
       </div>
     </div>
   );

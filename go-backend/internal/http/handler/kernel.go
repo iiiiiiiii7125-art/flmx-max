@@ -128,6 +128,11 @@ type kernelView struct {
 	Enabled          bool   `json:"enabled"`
 	InboundCount     int    `json:"inboundCount"`
 	UpdatedTime      int64  `json:"updatedTime"`
+	// E-02: non-empty when enabled companions exist on this node but
+	// the split is inactive because the agent version is too old —
+	// the companions stay on this (main) kernel; see
+	// companionSplitPendingReason.
+	CompanionSplitNote string `json:"companionSplitNote,omitempty"`
 }
 
 type inboundView struct {
@@ -355,6 +360,10 @@ func (h *Handler) kernelViews(nodeID int64) ([]kernelView, error) {
 	nodes := make(map[int64]*model.Node)
 	views := make([]kernelView, 0, len(kernels))
 	for _, k := range kernels {
+		// C-03: the companion kernel is managed, never user-facing.
+		if kernel.CanonicalKernelType(k.KernelType) == kernel.TypeSingboxCompanion {
+			continue
+		}
 		node, ok := nodes[k.NodeID]
 		if !ok {
 			node, _ = h.repo.GetNodeByID(k.NodeID)
@@ -372,6 +381,12 @@ func (h *Handler) kernelViews(nodeID int64) ([]kernelView, error) {
 			Enabled:          k.Enabled == 1,
 			InboundCount:     counts[k.ID],
 			UpdatedTime:      k.UpdatedTime,
+		}
+		// E-02: the note rides the main sing-box row (the companion
+		// row itself is managed and never listed) so the node page
+		// shows why the split is absent.
+		if kernel.CanonicalKernelType(k.KernelType) == kernel.TypeSingbox {
+			v.CompanionSplitNote = h.companionSplitPendingReason(k.NodeID)
 		}
 		if node != nil {
 			v.NodeName = node.Name
@@ -913,6 +928,13 @@ func (h *Handler) kernelControl(w http.ResponseWriter, r *http.Request) {
 			respondInternalError(w, "kernelControl", err)
 			return
 		}
+		// C-03: deleting the main sing-box kernel orphans the companion
+		// instance (its origins are gone with the cascade, so it would
+		// render an empty config forever). Remove the companion kernel
+		// with it: agent-side remove + row delete (which cascades the
+		// companion inbounds). Best-effort — a failed agent remove is
+		// covered by the orphan-recheck mark below.
+		h.removeCompanionKernel(k)
 		// FIX-CASCADE（E1-09 子形态 b）：走到这里且 dispatchErr 非
 		// 空，只可能是 Force 强删（下发未确认、agent 侧内核可能
 		// 仍在运行）。登记孤儿重查标记：周期轮询把该节点并入轮询
@@ -2535,6 +2557,22 @@ type agentKernelStatus struct {
 	Epoch        string               `json:"epoch"`
 	NftAvailable bool                 `json:"nftAvailable"`
 	NftError     string               `json:"nftError"`
+	// NftReadError carries the agent's last nft counter-read failure
+	// (R3A-NEW-1: table deleted or unreadable). Empty means the last
+	// read succeeded; unlike NftError (auto-install failure) it is
+	// set on every read failure so the panel can mark the node
+	// failing, alert, and re-push the kernels that own the table.
+	// R4C-02: a node that never had nftables reports no read error
+	// at all (see NftNotInstalled) — a read error here means "a
+	// table we had is gone".
+	NftReadError string `json:"nftReadError"`
+	// NftNotInstalled mirrors the agent's Status signal (R4C-02):
+	// the node never had nftables (no binary, no table ever built).
+	// Missing counters are the designed shape for such a node, not
+	// a failure — the panel must not mark it failing, alert, or
+	// re-push kernels for this signal. It wins over NftReadError
+	// when both are set.
+	NftNotInstalled bool `json:"nftNotInstalled,omitempty"`
 	// NftAutoInstalled reports that the agent installed nftables
 	// itself on this node (auto-install path); the panel stores
 	// it as node nftables_status=auto_installed.
@@ -2560,11 +2598,12 @@ func remarshal(in interface{}, out interface{}) error {
 const userMarkBaseMinVersion = "2.1.13"
 
 // userMarkBaseForNode 是某节点的 socket-mark base：agent 版本达门
-// 槛用 per-agent base（节点 id 低字节作 agent 域，同机多 agent 各
-// 计各的），版本过旧/未知用 legacy base（旧行为：同机多 agent
+// 槛用 per-agent base（E-01：节点 secret 的 SHA-256 首字节作
+// agent 域，同机多 agent 各计各的，不同面板的同 id 节点也不再
+// 串扰），版本过旧/未知用 legacy base（旧行为：同机多 agent
 // 仍会多计，待 agent 升级后下一次下发自动切到 per-agent base）。
 // fail-closed 向旧行为：版本读不到绝不按新 base 渲染。
-func userMarkBaseForNode(nodeID int64, agentVersion string) int64 {
+func userMarkBaseForNode(nodeID int64, secret, agentVersion string) int64 {
 	normalised, ok := parseConnlogAgentVersion(agentVersion)
 	if !ok {
 		return kernel.LegacyUserMarkBase
@@ -2573,7 +2612,7 @@ func userMarkBaseForNode(nodeID int64, agentVersion string) int64 {
 	if err != nil || cmp < 0 {
 		return kernel.LegacyUserMarkBase
 	}
-	return kernel.UserMarkBaseForAgent(nodeID)
+	return kernel.UserMarkBaseForAgent(nodeID, secret)
 }
 
 // buildKernelApplyPayload renders the kernel's enabled inbounds into the
@@ -2623,12 +2662,23 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	// origin is disabled (or gone), the companion must not keep serving
 	// previously distributed metering links. This render-time gate is
 	// the hard invariant; reconcile's Enabled mirroring is bookkeeping.
-	originEnabled := make(map[int64]bool, len(rows))
-	for _, row := range rows {
+	// C-03: the gate is node-wide, not per-kernel — after the split the
+	// companion kernel's rows are companions only, so a same-kernel map
+	// would be empty and every companion would be skipped.
+	originEnabled := make(map[int64]bool)
+	nodeRows, err := h.repo.ListNodeInboundsByNode(k.NodeID)
+	if err != nil {
+		return nil, "", fmt.Errorf("查询节点入站失败: %w", err)
+	}
+	for _, row := range nodeRows {
 		if row.CompanionOf == 0 {
 			originEnabled[row.ID] = row.Enabled == 1
 		}
 	}
+	// C-03: render-side type comparisons use the companion's render
+	// family (sing-box); the payload's "type" field below keeps the raw
+	// kernel type — that is the agent's instance key.
+	renderType := kernel.EffectiveType(k.KernelType)
 	// X04-001：白名单入站的链式拨号集共用一份全表快照，首个白名单
 	// 入站时懒加载——旧实现逐入站经 chainDialerNodeIDs 重载全表。
 	var chainIx *chainRefIndex
@@ -2644,16 +2694,16 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 			return nil, "", err
 		}
 		// 下发前复检：组合必须在内核 catalog 内，历史脏数据不得被渲染层静默降级。
-		if !kernel.ComboSupported(k.KernelType, in.Protocol, in.Transport.Type, in.Security.Type) {
+		if !kernel.ComboSupported(renderType, in.Protocol, in.Transport.Type, in.Security.Type) {
 			return nil, "", fmt.Errorf("入站「%s」的协议组合（%s / %s / %s）与内核 %s 不匹配，已拒绝下发，请修正或删除该入站", row.Name, in.Protocol, in.Transport.Type, in.Security.Type, k.KernelType)
 		}
 		// 下发前复检（Settings 级条件字段）：ENC×内核、空闲超时×内核、
 		// Vision×组合不在三元组与版本门内，存量毒行不得经渲染面静默
 		// 降级或带病下发（R4-C2C-02）；谓词与创建面 Normalize 同源。
-		if err := kernel.CheckSettingsConditions(k.KernelType, &in); err != nil {
+		if err := kernel.CheckSettingsConditions(renderType, &in); err != nil {
 			return nil, "", fmt.Errorf("入站「%s」的设置与内核 %s 不匹配：%v，已拒绝下发，请修正或删除该入站", row.Name, k.KernelType, err)
 		}
-		if msg := kernelVersionGate(k.KernelType, k.Version, &in); msg != "" {
+		if msg := kernelVersionGate(renderType, k.Version, &in); msg != "" {
 			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
 		if in.UserCapable() {
@@ -2667,22 +2717,22 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		}
 		// R2X-007 下发面：存量脏组合（保存期未拦）在下发期同判——任一
 		// Via/分流目标带 ENC 且拨号内核 Xray <25.9.5，整单拒绝。
-		if msg := encDialGate(k.KernelType, k.Version, in.Via); msg != "" {
+		if msg := encDialGate(renderType, k.Version, in.Via); msg != "" {
 			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
 		for _, rule := range in.Split {
-			if msg := encDialGate(k.KernelType, k.Version, rule.Via); msg != "" {
+			if msg := encDialGate(renderType, k.Version, rule.Via); msg != "" {
 				return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 			}
 		}
 		// R9X-005 下发面：存量脏组合（保存期未拦）在下发期同判——任一
 		// Via/分流目标为 Naive 且拨号内核 sing-box <1.13，整单点名拒绝
 		//（与保存期 CheckChainWith 同点口径，仿 encDialGate 形态）。
-		if msg := naiveDialGate(k.KernelType, k.Version, in.Via); msg != "" {
+		if msg := naiveDialGate(renderType, k.Version, in.Via); msg != "" {
 			return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 		}
 		for _, rule := range in.Split {
-			if msg := naiveDialGate(k.KernelType, k.Version, rule.Via); msg != "" {
+			if msg := naiveDialGate(renderType, k.Version, rule.Via); msg != "" {
 				return nil, "", fmt.Errorf("入站「%s」与内核版本不兼容：%s，已拒绝下发", row.Name, msg)
 			}
 		}
@@ -2756,17 +2806,21 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 	// 形态的 URL / rule-set 引用），实际下载路线由 agent 侧内置候
 	// 选在下载处自行测速直选（KU4）。
 	proxy := ""
-	// F2-DBL-01：按节点算 socket-mark base（agent 版本达门槛用
+	// F2-DBL-01 / E-01：按节点算 socket-mark base（agent 版本达门槛用
 	// per-agent base，否则 legacy base），渲染与下发同源——内核
 	// 配置里的 mark 与 agent nft 规则的 mark 必须是同一个值，
 	// 否则用户计数归零。节点读不到时 fail-closed 用 legacy。
+	// R2C-01：同站按节点密钥派生伴生 Clash API 口（41000–41999）；
+	// 节点读不到时口为 0，渲染省略该块（agent 回退重载，计量不受影响）。
 	markBase := kernel.LegacyUserMarkBase // legacy；节点读到且版本达门槛才切 per-agent
+	clashAPIPort := 0
 	if node, err := h.repo.GetNodeByID(k.NodeID); err == nil && node != nil {
-		markBase = userMarkBaseForNode(k.NodeID, node.Version.String)
+		markBase = userMarkBaseForNode(k.NodeID, node.Secret, node.Version.String)
+		clashAPIPort = kernel.ClashAPIPortForSecret(node.Secret)
 	} else if err != nil {
 		log.Printf("user mark base node lookup failed node_id=%d err=%v action=legacy_base", k.NodeID, err)
 	}
-	rendered, err := kernel.RenderWith(k.KernelType, inbounds, kernel.RenderOptions{
+	rendered, err := kernel.RenderWith(renderType, inbounds, kernel.RenderOptions{
 		RuleSetMirror:     proxy,
 		SingboxHTTPClient: !versionBelowStrict(k.Version, 1, 14),
 		SingboxSnell:      !versionBelowStrict(k.Version, 1, 14),
@@ -2774,7 +2828,14 @@ func (h *Handler) buildKernelApplyPayloadWith(k *model.NodeKernel, realmOverride
 		// D-04：节点开关实值进渲染——关时日志形态回落（不升
 		// debug／不开 access），与 connLogInbounds 的门同源。
 		ConnLogEnabled: connlogOn,
-		UserMarkBase:    markBase,
+		UserMarkBase:   markBase,
+		// R2C-01: per-agent companion Clash API port (0 = omit).
+		ClashAPIPort: clashAPIPort,
+		// C-(4): the companion (raw type, before EffectiveType
+		// folded it to singbox) exposes the Clash API so the
+		// agent can close a removed user's live connections
+		// selectively.
+		Companion: k.KernelType == kernel.TypeSingboxCompanion,
 	})
 	if err != nil {
 		return nil, "", err
@@ -3263,13 +3324,13 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 		if err != nil {
 			continue
 		}
-		if msg := kernelVersionGate(kernelType, version, &in); msg != "" {
+		if msg := kernelVersionGate(kernel.EffectiveType(kernelType), version, &in); msg != "" {
 			return &kernelVersionGateError{msg: fmt.Sprintf("入站 %s 与目标版本不兼容：%s，不能安装 %s", row.Name, msg, version)}
 		}
 		// R9X-005：经 Naive 节点出站（链式/分流目标）的入站同样要求
 		// sing-box 1.13+；目标入站不在本内核上，gate 看不到，须单独
 		// 扫描。
-		if kernelType == kernel.TypeSingbox && versionBelowStrict(version, 1, 13) {
+		if kernel.EffectiveType(kernelType) == kernel.TypeSingbox && versionBelowStrict(version, 1, 13) {
 			for _, id := range outboundTargets(row) {
 				if t, err := h.repo.GetNodeInbound(id); err == nil && t != nil && h.inboundRowIsNaive(t) {
 					return &kernelVersionGateError{msg: fmt.Sprintf("入站 %s 经 Naive 节点 %s 出站，需要 sing-box 1.13 及以上，不能安装 %s", row.Name, t.Name, version)}
@@ -3302,6 +3363,212 @@ func (h *Handler) checkKernelVersionGates(kernelID int64, kernelType, version st
 // 隔离修复；阈值取 2.1.13 与该发布实际编号（2.1.13/2.2.0/…）均成
 // 立，因为不存在不含修复的 2.1.13。
 const nftIsolatedAgentMinVersion = "2.1.13"
+
+// portProbeAgentMinVersion 是 live 端口探针 CheckPortListening 的首个
+// agent 版本（F2-PORT-01，cac080bd，随 2.1.13 出货）。C-04 的暂停
+// 验证（NotFound 后验端口实态、成功后验端口已死）依赖该命令；低于
+// 它的 agent 走旧自愈重建过渡路径（见 controlForwardServices）。
+// 与 nftIsolatedAgentMinVersion 同值是巧合——两者同随 2.1.13 出，
+// 各自由自己的引入提交背书，不得合并为一个常量。
+const portProbeAgentMinVersion = "2.1.13"
+
+// companionAgentMinVersion 是伴生实例分离（C-03）的首个 agent 版本：
+// 伴生 Apply 的 Type "singbox-companion" 须 agent 的 adapters 认得，
+// 旧 agent 会报“不支持的内核类型”。暂定 2.1.14——下个发版号定下后
+// 复核此常量（与 nftIsolatedAgentMinVersion / portProbeAgentMinVersion
+// 同形态，各自由自己的引入版本背书）。
+const companionAgentMinVersion = "2.1.14"
+
+// agentSupportsCompanionSplit 判定 agent 版本是否含伴生实例分离
+// （纯函数，供单测）：可解析且 >= 2.1.14 为支持；空串与不可解析形态
+// 一律按不支持处理（fail-closed——旧 agent 上伴生留在主配置内，
+// 行为不变；分裂只发生在新 agent 节点上）。
+func agentSupportsCompanionSplit(raw string) bool {
+	normalised, ok := parseConnlogAgentVersion(raw)
+	if !ok {
+		return false
+	}
+	cmp, err := compareVersions(normalised, companionAgentMinVersion)
+	if err != nil {
+		return false
+	}
+	return cmp >= 0
+}
+
+// companionSplitPendingReason reports why the companion split is
+// not active on a node that has enabled companions (E-02): the
+// agent version is known but below companionAgentMinVersion, so
+// companions stay on the main kernel (fail-closed, behavior
+// unchanged) with no visible trace anywhere. Empty means nothing
+// to report — split active, no enabled companions, or the version
+// is unknown (offline / never reported) so no version claim can
+// be made.
+func (h *Handler) companionSplitPendingReason(nodeID int64) string {
+	if _, active := h.companionKernelIDForNode(nodeID); active {
+		return ""
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(node.Version.String)
+	if _, ok := parseConnlogAgentVersion(raw); !ok {
+		return ""
+	}
+	if agentSupportsCompanionSplit(raw) {
+		return ""
+	}
+	comps, err := h.repo.ListCompanionInbounds()
+	if err != nil {
+		return ""
+	}
+	for i := range comps {
+		if comps[i].NodeID == nodeID && comps[i].Enabled == 1 {
+			return fmt.Sprintf("agent 版本 %s 未到 %s，伴生计量仍在主内核运行；请先升级 agent，升级后重连时分离将自动生效", raw, companionAgentMinVersion)
+		}
+	}
+	return ""
+}
+
+// companionKernelIDForNode returns the companion NodeKernel row id for a
+// node, if the split is active there (the row exists). The split is
+// active iff the row exists — that is the single source of truth, so
+// createCompanion, reconcileSSMetering and the migration all agree.
+func (h *Handler) companionKernelIDForNode(nodeID int64) (int64, bool) {
+	k, err := h.repo.GetNodeKernelByType(nodeID, kernel.TypeSingboxCompanion)
+	if err != nil || k == nil {
+		return 0, false
+	}
+	return k.ID, true
+}
+
+// ensureCompanionKernel performs the one-time companion split for a node:
+// when the node has enabled companions and its agent understands the
+// companion instance, create the companion NodeKernel row (version tracks
+// the node's main sing-box kernel) and move every companion inbound's
+// KernelID onto it. It only does DB work; the caller's apply loop pushes
+// main first (frees the ports) then companion (binds them) —
+// ListNodeKernels orders id ASC, and the companion row is newer.
+// Old agents never get the row: companions stay on the main kernel and
+// behave exactly as before. Idempotent: a second call finds the row and
+// only moves stragglers.
+func (h *Handler) ensureCompanionKernel(nodeID int64) {
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return
+	}
+	if !agentSupportsCompanionSplit(node.Version.String) {
+		return
+	}
+	if _, active := h.companionKernelIDForNode(nodeID); active {
+		h.moveCompanionsToKernel(nodeID)
+		return
+	}
+	companions, err := h.repo.ListCompanionInbounds()
+	if err != nil {
+		log.Printf("companion split: list companions node_id=%d: %v", nodeID, err)
+		return
+	}
+	var nodeCompanions []model.NodeInbound
+	for _, c := range companions {
+		if c.NodeID == nodeID && c.Enabled == 1 {
+			nodeCompanions = append(nodeCompanions, c)
+		}
+	}
+	if len(nodeCompanions) == 0 {
+		return
+	}
+	main, err := h.repo.GetNodeKernelByType(nodeID, kernel.TypeSingbox)
+	if err != nil || main == nil {
+		log.Printf("companion split: no main sing-box kernel node_id=%d", nodeID)
+		return
+	}
+	now := time.Now().UnixMilli()
+	comp := &model.NodeKernel{
+		NodeID:      nodeID,
+		KernelType:  kernel.TypeSingboxCompanion,
+		Version:     main.Version,
+		Status:      kernelStatusPending,
+		Enabled:     1,
+		CreatedTime: now,
+		UpdatedTime: now,
+	}
+	if err := h.repo.CreateNodeKernel(comp); err != nil {
+		log.Printf("companion split: create companion kernel node_id=%d: %v", nodeID, err)
+		return
+	}
+	h.moveCompanionsToKernel(nodeID)
+	log.Printf("companion split: node_id=%d companion kernel %d created, %d companion(s) moved", nodeID, comp.ID, len(nodeCompanions))
+}
+
+// moveCompanionsToKernel moves every companion inbound on the node onto
+// the companion kernel row (no-op when the split is not active).
+func (h *Handler) moveCompanionsToKernel(nodeID int64) {
+	compID, active := h.companionKernelIDForNode(nodeID)
+	if !active {
+		return
+	}
+	companions, err := h.repo.ListCompanionInbounds()
+	if err != nil {
+		log.Printf("companion split: list companions for move node_id=%d: %v", nodeID, err)
+		return
+	}
+	now := time.Now().UnixMilli()
+	for _, c := range companions {
+		if c.NodeID != nodeID || c.KernelID == compID {
+			continue
+		}
+		updated := c
+		updated.KernelID = compID
+		updated.UpdatedTime = now
+		if err := h.repo.SaveNodeInbound(&updated); err != nil {
+			log.Printf("companion split: move companion %d node_id=%d: %v", c.ID, nodeID, err)
+		}
+	}
+}
+
+// removeCompanionKernel removes the companion kernel alongside a deleted
+// main sing-box kernel (see the remove flow). No-op for other kernel
+// types and when no companion row exists.
+func (h *Handler) removeCompanionKernel(k *model.NodeKernel) {
+	if k == nil || kernel.CanonicalKernelType(k.KernelType) != kernel.TypeSingbox {
+		return
+	}
+	comp, err := h.repo.GetNodeKernelByType(k.NodeID, kernel.TypeSingboxCompanion)
+	if err != nil || comp == nil {
+		return
+	}
+	unlock := lockKernelApply(comp.ID)
+	_, dispatchErr := h.sendNodeCommandWithTimeout(k.NodeID, "KernelControl", map[string]interface{}{
+		"type": kernel.TypeSingboxCompanion, "action": "remove",
+	}, kernelCommandTimeout, false, true)
+	unlock()
+	if derr := h.repo.DeleteNodeKernel(comp.ID); derr != nil {
+		log.Printf("companion split: delete companion kernel %d after main remove: %v", comp.ID, derr)
+		return
+	}
+	if dispatchErr != nil {
+		if merr := h.repo.MarkKernelOrphanRecheck(k.NodeID, kernel.TypeSingboxCompanion, time.Now().UnixMilli()); merr != nil {
+			log.Printf("companion split: orphan recheck mark failed node_id=%d kernel=%s err=%v", k.NodeID, kernel.TypeSingboxCompanion, merr)
+		}
+	}
+}
+
+// agentSupportsPortProbe 判定 agent 版本是否含 CheckPortListening
+// （纯函数，供单测）：可解析且 >= 2.1.13 为支持；空串与不可解析形态
+// （dev 等）一律按不支持处理（fail-closed，与 agentSupportsNftIsolation
+// 同口径）。
+func agentSupportsPortProbe(raw string) bool {
+	normalised, ok := parseConnlogAgentVersion(raw)
+	if !ok {
+		return false
+	}
+	cmp, err := compareVersions(normalised, portProbeAgentMinVersion)
+	if err != nil {
+		return false
+	}
+	return cmp >= 0
+}
 
 // agentSupportsNftIsolation 判定 agent 版本是否含 nft 表隔离（纯
 // 函数，供单测）：可解析且 >= 2.1.13 为支持；空串与不可解析形态
@@ -3522,6 +3789,10 @@ func truncate(s string, n int) string {
 // reconcileNodeKernels re-applies every kernel of a node, e.g. after the agent
 // reconnects. The agent skips work when the config hash is unchanged.
 func (h *Handler) reconcileNodeKernels(nodeID int64) {
+	// C-03: split the companions onto their own instance before the
+	// apply loop lists the kernels, so this round already pushes main
+	// first (frees the ports) then companion (binds them).
+	h.ensureCompanionKernel(nodeID)
 	kernels, err := h.repo.ListNodeKernels(nodeID)
 	if err != nil {
 		return
@@ -3554,6 +3825,8 @@ type kernelReconcileFailure struct {
 // 类失败由调用方过滤（见 nodeUpdate 的白名单回执），只把真失败
 // 点名进回执。
 func (h *Handler) reconcileNodeKernelsCollect(nodeID int64) []kernelReconcileFailure {
+	// C-03: same split hook as reconcileNodeKernels (see there).
+	h.ensureCompanionKernel(nodeID)
 	kernels, err := h.repo.ListNodeKernels(nodeID)
 	if err != nil {
 		return []kernelReconcileFailure{{KernelType: "", Err: err}}
@@ -3643,6 +3916,41 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 	outcome := kernelPollOutcome{Reachable: true}
 
 	now := time.Now().UnixMilli()
+	// B-NEW（入站行计数器 epoch/基线时序丢增量）：计数面紧贴状态
+	// 解码后立即入账，再跑内核状态对账（重启探测/孤儿清理/drift
+	// 补推）。旧序把入账放在对账尾：孤儿清理每条 KernelControl
+	// 可吃满 20s 超时，apply→首样本窗口被拉大；入账只依赖
+	// status+now，与状态面对账无数据依赖，移到此处不改变对账
+	// 语义（对账读同一份 status；补推是异步 go 程，基线由下一轮
+	// 询钉定，见 FIX-BASELINE 注释）。
+	h.ingestKernelCounters(nodeID, status, now)
+	h.ingestNodeNftablesStatus(nodeID, status)
+	// R3A-NEW-1/C NEW-1：agent 计数表丢失的 WS 面——表丢时 agent
+	// 的 ConfigHash 不变，drift 对账看不出；ingest 又静默跳过空
+	// 计数，故此处单独处理：记一轮采集失败（与 SSH 路共用阈值＋
+	// 告警，见 nftables_traffic.go 的来源前缀口径），并把已确认
+	// 的内核重推一次（agent Apply 即 content-verified sync，缺表
+	// 即重建；agent 自身的 60 秒自检环是第一层，此处是面板侧第
+	// 二层）。读错消失时由 recordNftWsCollectSuccess 只清 WS 纹
+	// 的 streak，SSH 路的 streak 不受影响。R4C-02：NftNotInstalled
+	//（从未装 nft）优先于 NftReadError——该信号不记失败、不重
+	// 推、不告警，只走成功分支清 WS streak（若有）。
+	if status.NftReadError != "" && !status.NftNotInstalled {
+		h.recordNftCollectFailure(nodeID, errors.New(nftWsReadErrorPrefix+status.NftReadError))
+		log.Printf("kernel nft table unreadable node_id=%d err=%v (counters frozen; re-applying kernels)", nodeID, status.NftReadError)
+		for _, k := range kernels {
+			if k.AppliedHash != k.ConfigHash || k.ConfigHash == "" {
+				continue
+			}
+			go func(id int64) {
+				if err := h.applyKernelWithMode(id, false, nil, false); err != nil {
+					log.Printf("kernel nft table re-apply failed kernel_id=%d err=%v", id, err)
+				}
+			}(k.ID)
+		}
+	} else {
+		h.recordNftWsCollectSuccess(nodeID, now)
+	}
 	byType := make(map[string]agentKernelState, len(status.Kernels))
 	for _, s := range status.Kernels {
 		byType[s.Type] = s
@@ -3715,32 +4023,44 @@ func (h *Handler) pollNodeKernels(nodeID int64, evenIfNone bool) kernelPollOutco
 		_ = h.repo.UpdateNodeKernelFields(k.ID, fields)
 	}
 
-	h.ingestKernelCounters(nodeID, status, now)
-	h.ingestNodeNftablesStatus(nodeID, status)
 	return outcome
 }
 
 // ingestNodeNftablesStatus 把 agent 上报的 nftables 运行态写进
 // 节点行（供节点页白名单区展示）：NftError 非空 → failed（原因
-// 原文）；NftAutoInstalled → auto_installed；NftAvailable →
-// installed；三者皆无 → 未知（""，不写——从不把“没上报”当成
-// 失败）。只在状态变化时写，避免每分钟轮询写 churn。写失败只
-// 记日志，绝不让状态面摄入失败（best-effort）。
+// 原文）；NftReadError 非空 → failed（agent 计数表丢/不可读，
+// R3A-NEW-1：与安装失败分开，但同样是“表不在”的明示）；
+// NftNotInstalled 优先于 NftReadError（R4C-02：从未装 nft 不是
+// 失败，落到默认分支的 missing）；NftAutoInstalled →
+// auto_installed；NftAvailable → installed；三者皆无 → 未知
+// （""，不写——从不把“没上报”当成失败）。只在状态变化时写，
+// 避免每分钟轮询写 churn。写失败只记日志，绝不让状态面摄入失
+// 败（best-effort）。
 func (h *Handler) ingestNodeNftablesStatus(nodeID int64, status agentKernelStatus) {
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return
+	}
 	var state, errText string
 	switch {
 	case status.NftError != "":
 		state, errText = "failed", status.NftError
+	case status.NftReadError != "" && !status.NftNotInstalled:
+		state, errText = "failed", status.NftReadError
 	case status.NftAutoInstalled:
 		state, errText = "auto_installed", ""
 	case status.NftAvailable:
 		state, errText = "installed", ""
 	default:
-		return
-	}
-	node, err := h.repo.GetNodeByID(nodeID)
-	if err != nil || node == nil {
-		return
+		// A-低-6：agent 已明确上报本机无 nftables（NftAvailable=false
+		// 且无错误、未自动安装）。nftables 模式节点的订阅/realm 计数
+		// 全靠 nft 计数器，本态即计数缺口的明示——行内记 "missing"，
+		// 节点页据此解释「计数永不入账」。gost 模式节点无 nft 是正常
+		// 形态，其计费走 WS 上报，不记此态（否则满屏噪音）。
+		if defaultNodeForwardMode(node.ForwardMode) != "nftables" {
+			return
+		}
+		state, errText = "missing", "未安装 nftables，订阅／realm 计数不入账"
 	}
 	if node.NftablesStatus == state && node.NftablesError == errText {
 		return
@@ -3767,43 +4087,91 @@ func (h *Handler) ingestKernelCounters(nodeID int64, status agentKernelStatus, n
 // 「realm 不拥有入站」侥幸避开，FIX-BASELINE 扩面到入站内核后
 // 不能再靠侥幸）。同步/切断/执法由 ≤60s 后的周期轮询全量面补
 // 做，判据读的都是已入账累计值，不漏不重。
+// B-NEW（入站行计数器 epoch/基线时序丢增量）：同一 status 的全部
+// 计数面分两相入账，两相之间以「重建是否发生」为界。
+//
+// Phase A（纯记账，持 per-node 入账锁 nodeIngestLock）：入站、realm、
+// 用户三面只做样本记账，不触发任何副作用。记账面只做 repo DB 写，
+// 不取 kernel/nft 锁；锁内不调用 syncSubscriptions/执法尾。
+// Phase B（副作用，无锁）：syncSubscriptions 与 realm 执法尾——
+// 两者可触发 KernelApply→agent 重建 nft 表→新 epoch→settle 重定
+// 基线；它们跑在全部样本已对旧基线结算之后，故重建换代吞不掉
+// 本次样本。settle 口径（full=false）只跑 Phase A，与旧行为一致
+// （settle 在 apply 锁内执行，Phase B 的副作用面可回头取同一把
+// apply 锁，必自锁——见 applyRealmCountersMode 的 enforce=false
+// 注释）。
+//
+// 为什么必须这样分：旧序先算用户计数（含 syncSubscriptions，可
+// 触发 KernelApply→重建→新 epoch→settle 重定基线），后算入站计
+// 数；同一 status 的陈旧入站样本撞上新 epoch 基线即 delta 0（B
+// 路实测 7.3MB 全丢），且陈旧入站记账会把基线写回旧 epoch，使下
+// 一轮首个新 epoch 样本也 delta 0（原站 2MB 丢增量）。两相分
+// 隔后，记账与重建不再交错；per-node 锁另防两路摄入（轮询 poll
+// 与下发后 settle）并发交错。epoch 换代本身仍 delta 0（FIX2-A
+// 既定口径，不动）。
 func (h *Handler) ingestKernelCountersMode(nodeID int64, status agentKernelStatus, now int64, full bool) {
+	// A-低-6：无 nft 的节点无计数可采，早返本身不变；缺口标识由同
+	// 轮的 ingestNodeNftablesStatus 落 "missing"（nftables 模式节点），
+	// 不在此处重复写态。
 	if !status.NftAvailable {
 		return
 	}
+	// ---- Phase A：纯记账（持 per-node 入账锁）----
+	nodeIngestMu := h.nodeIngestLock(nodeID)
+	nodeIngestMu.Lock()
+	var realmBatch *flowUploadBatch
+	var realmMetas map[int64]repo.FlowUploadForwardMeta
+	var realmNowMs int64
+	var realmQuotaViews map[int64]*model.UserQuotaView
 	if len(status.Users) > 0 {
-		if full {
-			h.applyUserCounters(nodeID, status.Epoch, status.Users, now)
-		} else if err := h.applyUserCounterSamples(nodeID, status.Epoch, status.Users, now); err != nil {
+		if err := h.applyUserCounterSamples(nodeID, status.Epoch, status.Users, now); err != nil {
 			log.Printf("subscription traffic apply failed node_id=%d err=%v", nodeID, err)
 		}
 	}
-	if len(status.Counters) == 0 {
+	if len(status.Counters) > 0 {
+		samples := make([]repo.InboundCounterSample, 0, len(status.Counters))
+		var realmCounters []agentKernelCounter
+		for _, c := range status.Counters {
+			// realm 转发端口的计数样本（InboundID = RealmCounterBase +
+			// forwardID）必须分流到 forward 入账链；落进入站样本会被当作
+			// 未知入站静默丢弃（仅剩 repo 层的 unaccounted warn 日志）。
+			if _, ok := kernel.RealmForwardID(c.InboundID); ok {
+				realmCounters = append(realmCounters, c)
+				continue
+			}
+			samples = append(samples, repo.InboundCounterSample{
+				InboundID: c.InboundID,
+				Protocol:  c.Proto,
+				Direction: c.Dir,
+				Epoch:     status.Epoch,
+				Bytes:     c.Bytes,
+			})
+		}
+		if err := h.repo.ApplyInboundCounterSamples(nodeID, samples, now); err != nil {
+			log.Printf("kernel traffic apply failed node_id=%d err=%v", nodeID, err)
+		}
+		if len(realmCounters) > 0 {
+			var err error
+			realmBatch, realmMetas, realmNowMs, realmQuotaViews, err = h.accountRealmCounters(nodeID, status.Epoch, realmCounters, time.UnixMilli(now))
+			if err != nil {
+				realmBatch = nil
+			}
+		}
+	}
+	nodeIngestMu.Unlock()
+	// ---- Phase B：副作用（无锁）----
+	if !full {
 		return
 	}
-	samples := make([]repo.InboundCounterSample, 0, len(status.Counters))
-	var realmCounters []agentKernelCounter
-	for _, c := range status.Counters {
-		// realm 转发端口的计数样本（InboundID = RealmCounterBase +
-		// forwardID）必须分流到 forward 入账链；落进入站样本会被当作
-		// 未知入站静默丢弃（仅剩 repo 层的 unaccounted warn 日志）。
-		if _, ok := kernel.RealmForwardID(c.InboundID); ok {
-			realmCounters = append(realmCounters, c)
-			continue
-		}
-		samples = append(samples, repo.InboundCounterSample{
-			InboundID: c.InboundID,
-			Protocol:  c.Proto,
-			Direction: c.Dir,
-			Epoch:     status.Epoch,
-			Bytes:     c.Bytes,
-		})
+	if len(status.Users) > 0 {
+		// syncSubscriptions 是全局同步（单参 now）：凭据同步/限额
+		// 切断/原站口令轮换，可经 applyKernelsForInbounds 触发
+		// KernelApply→重建→settle；跑在 Phase A 全部样本已结算
+		// 之后，故换代吞不掉本次样本。
+		h.syncSubscriptions(time.UnixMilli(now))
 	}
-	if err := h.repo.ApplyInboundCounterSamples(nodeID, samples, now); err != nil {
-		log.Printf("kernel traffic apply failed node_id=%d err=%v", nodeID, err)
-	}
-	if len(realmCounters) > 0 {
-		h.applyRealmCountersMode(nodeID, status.Epoch, realmCounters, time.UnixMilli(now), full)
+	if realmBatch != nil {
+		h.enforceRealmCounters(nodeID, realmBatch, realmMetas, realmNowMs, realmQuotaViews)
 	}
 }
 
@@ -3821,7 +4189,13 @@ func (h *Handler) ingestKernelCountersMode(nodeID int64, status agentKernelStatu
 func (h *Handler) settleKernelCountersAfterApply(nodeID int64) {
 	res, err := h.sendNodeCommandWithTimeout(nodeID, "KernelStatus", map[string]interface{}{}, kernelCommandTimeout, false, false)
 	if err != nil {
-		return // 节点刚离线等：周期轮询随后补建基线，退化为原行为
+		// B-NEW：settle 读失败此前静默返回——下发后基线未钉，首个
+		// 周期轮询（≤60s）前产生的流量会被首样本基线整段吞掉，
+		// 且无任何记录可查。周期轮询随后补建基线（退化为原行为），
+		// 但此处必须大声记一笔；不重试（下一轮询自愈；锁内重试会
+		// 给 apply 路径加时序行为）。
+		log.Printf("kernel settle status read failed node_id=%d err=%v (baseline not pinned; next poll rebuilds it)", nodeID, err)
+		return
 	}
 	var status agentKernelStatus
 	if err := remarshal(res.Data, &status); err != nil {

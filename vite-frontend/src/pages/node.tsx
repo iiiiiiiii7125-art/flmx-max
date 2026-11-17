@@ -107,6 +107,7 @@ import { CARD_GRID } from "@/components/info-card";
 import { ViewModeToggle, useViewMode } from "@/components/view-mode";
 import { NodeTuneModal } from "@/pages/node/tune-modal";
 import { copyWithToast } from "@/utils/clipboard";
+import { freshnessLabel } from "@/utils/traffic";
 import {
   formatNodeRenewalTime,
   getNodeRenewalCycleLabel,
@@ -253,6 +254,12 @@ export default function NodePage({
   const [monthTraffic, setMonthTraffic] = useState<
     Record<string, [number, number]>
   >({});
+  // D-06：各节点月流量最新小时桶起点（毫秒）与本次刷新失败标记。
+  // lastHour 缺省＝该节点无桶；failed 时列表仍显示上一份快照并标明。
+  const [monthTrafficLastHour, setMonthTrafficLastHour] = useState<
+    Record<string, number>
+  >({});
+  const [monthTrafficFailed, setMonthTrafficFailed] = useState(false);
   // X06 恢复：节点卡片三标签的推导结果（用户/限速；分组读节点行
   // 本身）。null＝标签清单尚未拉到；只随非静默加载刷新——15 秒
   // 静默轮询不重复拉转发/隧道/限速三张清单。
@@ -479,19 +486,27 @@ export default function NodePage({
       setLoading(true);
     }
 
-    // 本月网卡流量与列表同批刷新；失败静默（展示位留空，不影响列表）。
-    // 与主请求共用同一 seq 守卫（R3-D-01）：旁路请求乱序返回时旧
-    // 快照不得覆盖新值。
+    // 本月网卡流量与列表同批刷新；失败须留标记（D-06：此前静默 catch，
+    // 旧值一直显示、看不出已停更）。与主请求共用同一 seq 守卫（R3-D-01）：
+    // 旁路请求乱序返回时旧快照不得覆盖新值。
     getNodeMonthTraffic()
       .then((r) => {
         if (loadNodesSeqRef.current !== seq) {
           return;
         }
         if (r.code === 0 && r.data) {
-          setMonthTraffic(r.data);
+          setMonthTraffic(r.data.traffic ?? {});
+          setMonthTrafficLastHour(r.data.lastHour ?? {});
+          setMonthTrafficFailed(false);
+        } else {
+          setMonthTrafficFailed(true);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (loadNodesSeqRef.current === seq) {
+          setMonthTrafficFailed(true);
+        }
+      });
 
     // X06 恢复：标签清单（转发/隧道/限速）只随非静默加载与列表
     // 并行发出，列表落定后再合成为逐节点标签；任一清单失败或乱
@@ -789,7 +804,15 @@ export default function NodePage({
   // 格式化流量
 
   // 本月网卡流量文案（↓入 ↑出）：无数据（远程/联邦节点不上报本机，
-  // 或本月尚无累计）返回 null，展示位留空。
+  // 或本月尚无累计）返回 null，展示位留空。D-06：附新鲜度（最新小时桶
+  // 超 1 小时未更新时标注）与刷新失败标记（失败时显示的是上一份快照）。
+  const monthFreshnessText = (nodeId: number): string | null => {
+    if (!monthTraffic[String(nodeId)]) {
+      return null;
+    }
+    if (monthTrafficFailed) return "月流量刷新失败，可能陈旧";
+    return freshnessLabel(monthTrafficLastHour[String(nodeId)] ?? 0);
+  };
   const monthTrafficText = (nodeId: number): string | null => {
     const t = monthTraffic[String(nodeId)];
 
@@ -797,7 +820,9 @@ export default function NodePage({
       return null;
     }
 
-    return `↓${formatFlow(t[0])} ↑${formatFlow(t[1])}`;
+    const fresh = monthFreshnessText(nodeId);
+    const base = `↓${formatFlow(t[0])} ↑${formatFlow(t[1])}`;
+    return fresh ? `${base} · ${fresh}` : base;
   };
 
   // IPv4/IPv6 格式验证（仅用于判定地址族）
@@ -1607,7 +1632,11 @@ export default function NodePage({
                     udpListenAddr: form.udpListenAddr,
                     interfaceName: form.interfaceName,
                     forwardMode: form.forwardMode,
-                    sshConfig,
+                    // R5A-01：切到 agent 模式提交的 sshConfig 为 null，
+                    // 但后端会保留已存配置；列表本地态须沿用旧值，
+                    // 否则切回 nftables 再打开表单时 SSH 字段为空、
+                    // 保留的配置不可见（须重填）。
+                    sshConfig: sshConfig ?? n.sshConfig,
                     http: form.http,
                     tls: form.tls,
                     socks: form.socks,
@@ -2593,6 +2622,7 @@ export default function NodePage({
         latencyPoolEmpty={latencyPoolEmpty}
         monthIn={month?.[0]}
         monthLabel={monthTrafficText(node.id)}
+        monthFreshness={monthFreshnessText(node.id)}
         monthOut={month?.[1]}
         node={node}
         probing={probingIds.has(node.id)}
@@ -2618,6 +2648,7 @@ export default function NodePage({
         latencyPoolEmpty={latencyPoolEmpty}
         monthIn={month?.[0]}
         monthLabel={monthTrafficText(node.id)}
+        monthFreshness={monthFreshnessText(node.id)}
         monthOut={month?.[1]}
         node={node}
         probing={probingIds.has(node.id)}
@@ -2793,6 +2824,13 @@ export default function NodePage({
           }
           variant="flat"
         />
+      )}
+
+      {/* D-06：月流量刷新失败时留持久标记（失败不装空、无数据也不装正常）。 */}
+      {!loading && monthTrafficFailed && (
+        <p className="mb-3 rounded-xl bg-warning-50 px-3 py-2 text-xs font-semibold text-warning-700">
+          本月网卡流量刷新失败，显示的是上次成功加载的数据，可能陈旧。
+        </p>
       )}
 
       {loading ? (
@@ -3107,6 +3145,42 @@ export default function NodePage({
                           原因：{node.nftablesError}
                         </p>
                       )}
+                    {/* nftables 缺失（A-低-6）：agent 已确认本机无 nftables，仅 nftables 模式节点记此态；订阅／realm 计数永不入账。 */}
+                    {node.nftablesStatus === "missing" && (
+                      <p className="break-words text-xs font-semibold text-danger-700">
+                        {node.nftablesError ||
+                          "未安装 nftables，订阅／realm 计数不入账"}
+                      </p>
+                    )}
+                    {/* nft 采集健康（A-中-2）：连续失败有次数时显示，越阈值（failing）为红、阈值内为黄；原因见 title 与正文。 */}
+                    {(node.nftCollectFailCount ?? 0) > 0 && (
+                      <p
+                        className={
+                          node.nftCollectState === "failing"
+                            ? "break-words text-xs font-semibold text-danger-700"
+                            : "break-words text-xs font-semibold text-warning-700"
+                        }
+                        title={node.nftCollectLastError || undefined}
+                      >
+                        nft 采集连续失败 ×{node.nftCollectFailCount}
+                        {node.nftCollectLastError
+                          ? `：${node.nftCollectLastError}`
+                          : ""}
+                      </p>
+                    )}
+                    {/* 指标陈旧（A-低-6）：5 分钟无新指标行，累计数可能停在旧值。 */}
+                    {node.metricStale && (
+                      <p className="break-words text-xs font-semibold text-warning-700">
+                        数据陈旧：最近指标上报超过 5 分钟，累计数可能停在旧值
+                      </p>
+                    )}
+                    {/* 同机 NIC 共享（A-低-5）：与所列节点共用整机网卡计数，本月流量只计一次。 */}
+                    {node.nicSharedWith && node.nicSharedWith.length > 0 && (
+                      <p className="text-xs font-semibold text-foreground">
+                        与节点 {node.nicSharedWith.join("、")}
+                        共用网卡计数（本月流量只计一次）
+                      </p>
+                    )}
                     {node.whitelistEnabled === 1 && (
                       <>
                         <p className="text-xs font-semibold text-foreground">

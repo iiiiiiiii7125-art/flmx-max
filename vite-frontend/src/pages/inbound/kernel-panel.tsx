@@ -346,6 +346,11 @@ export function KernelPanel({
               配置尚未同步，节点上线后自动下发
             </p>
           )}
+          {k.companionSplitNote && (
+            <p className="mt-1 text-xs font-semibold text-warning-700">
+              {k.companionSplitNote}
+            </p>
+          )}
         </div>
         <Chip color={st.color} size="sm" variant="flat">
           {st.label}

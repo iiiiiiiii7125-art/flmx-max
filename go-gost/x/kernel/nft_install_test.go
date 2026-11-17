@@ -272,7 +272,7 @@ func TestNftSyncAutoInstallsForWhitelist(t *testing.T) {
 	scripts := stubSyncNft(t, s)
 	n := newNftCounters(t.TempDir())
 	ports := []Port{{InboundID: 7, Port: 443, Network: "tcp", Allow: []string{"203.0.113.0/24"}}}
-	if err := n.sync(ports, nil); err != nil {
+	if err := n.sync(ports, nil, nil); err != nil {
 		t.Fatalf("sync with auto-installable nft must succeed, got %v", err)
 	}
 	if !s.avail {
@@ -293,7 +293,7 @@ func TestNftSyncInstallFailureFailsClosed(t *testing.T) {
 	scripts := stubSyncNft(t, s)
 	n := newNftCounters(t.TempDir())
 	ports := []Port{{InboundID: 7, Port: 443, Network: "tcp", Allow: []string{"203.0.113.0/24"}}}
-	err := n.sync(ports, nil)
+	err := n.sync(ports, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "nftables 自动安装失败") || !strings.Contains(err.Error(), "Unable to fetch") {
 		t.Fatalf("sync with failing install must fail naming nftables + cause, got %v", err)
 	}
@@ -312,7 +312,7 @@ func TestNftSyncNoWhitelistDoesNotInstall(t *testing.T) {
 	stubSyncNft(t, s)
 	n := newNftCounters(t.TempDir())
 	ports := []Port{{InboundID: 7, Port: 443, Network: "tcp"}}
-	if err := n.sync(ports, nil); err != nil {
+	if err := n.sync(ports, nil, nil); err != nil {
 		t.Fatalf("sync without whitelist must stay best-effort, got %v", err)
 	}
 	if len(s.calls) != 0 {

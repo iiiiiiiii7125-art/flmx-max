@@ -58,6 +58,10 @@ type subTrafficView struct {
 	// counting (creation or last reset); the chart marks it so the
 	// "used" figure and the chart range are not compared directly.
 	Since int64 `json:"since"`
+	// LastReportedAt is the newest SubscriptionCounter update (ms;
+	// 0 = never reported) — D-06 freshness for the graph: without it
+	// a frozen chart is indistinguishable from a fresh one.
+	LastReportedAt int64 `json:"lastReportedAt,omitempty"`
 }
 
 // subTrafficBuckets returns the bucket starts of a range ending at now:
@@ -100,7 +104,27 @@ func subTrafficBuckets(rangeKey string, now time.Time) []time.Time {
 // applies to its boundary bucket (BC-12) — instead of the whole row
 // landing in the first bucket. Only the display is affected; stored
 // buckets and the cumulative counters are untouched.
-func subTraffic(hours []model.SubscriptionTraffic, rangeKey string, now time.Time) subTrafficView {
+//
+// B-M2: sinceMs is the subscription's traffic_since (creation or last
+// reset). The effective floor is max(window start, sinceMs), so rows
+// predating the reset contribute nothing — the chart totals match the
+// subscription's "used" counters, per doc/guide/subscription.md
+// ("起算之前的时段不在统计内"). Hourly rows stay in the database:
+// the monthly auto-reset flows through the same ResetSubscriptionTraffic,
+// and deleting rows there would wipe the 12-month history every month.
+//
+// The reset hour itself is exact, not a minute-share estimate: the
+// subscription's counters (rowUp/rowDown) are the true post-since
+// totals and are booked in the same transaction as the buckets (#88),
+// so the reset hour's post-reset share is rowTotal minus the sum of
+// the whole buckets after the reset hour. A minute-share split would
+// undercount bursty traffic (e.g. 50MB in 30s right after a reset
+// would mostly read as pre-reset) and would leave most of the reset
+// hour visible when the reset lands early in the hour — the exact
+// complaint of B-M2. Rows after the reset hour keep the existing
+// minute-share treatment at bucket/window boundaries (R3-C-01/BC-12);
+// only the reset hour is overridden.
+func subTraffic(hours []model.SubscriptionTraffic, rangeKey string, now time.Time, sinceMs, rowUp, rowDown int64) subTrafficView {
 	if rangeKey != "day" && rangeKey != "month" {
 		rangeKey = "hour"
 	}
@@ -123,33 +147,79 @@ func subTraffic(hours []model.SubscriptionTraffic, rangeKey string, now time.Tim
 		ends[last] = starts[last].Add(time.Hour).UnixMilli()
 	}
 	const hourMs = int64(time.Hour / time.Millisecond)
+	// B-M2: floor is the later of the window start and the reset instant.
+	effStart := view.Points[0].Time
+	if sinceMs > effStart {
+		effStart = sinceMs
+	}
+	// B-M2 exact reset-hour share: the reset hour's post-reset bytes
+	// are the counters minus the whole buckets after that hour.
+	var resetHour int64 = -1
+	var exactUp, exactDown int64
+	if sinceMs > 0 {
+		resetHour = sinceMs - sinceMs%hourMs
+		var afterUp, afterDown int64
+		for _, h := range hours {
+			if h.Hour > resetHour {
+				afterUp += h.UploadBytes
+				afterDown += h.DownloadBytes
+			}
+		}
+		exactUp = max(0, rowUp-afterUp)
+		exactDown = max(0, rowDown-afterDown)
+	}
 	b := 0
 	for _, h := range hours {
 		rowStart, rowEnd := h.Hour, h.Hour+hourMs
-		if rowEnd <= view.Points[0].Time || rowStart >= ends[last] {
+		if rowEnd <= effStart || rowStart >= ends[last] {
 			continue
 		}
 		for b+1 < len(starts) && ends[b] <= rowStart {
 			b++
 		}
-		upLeft, downLeft := h.UploadBytes, h.DownloadBytes
-		if pre := view.Points[0].Time - rowStart; pre > 0 {
-			// 窗外份额先行扣除（R3-C-01，余量法）：一小时行至多
-			// 横跨窗口起点一次，扣除后余量即窗内份额，后续分桶
-			// 逻辑（首桶取余量）自动精确。窗口内跨桶行的分摊
-			// 不受影响，总量在窗内守恒。
-			upLeft -= h.UploadBytes * pre / hourMs
-			downLeft -= h.DownloadBytes * pre / hourMs
+		// B-M2: the reset hour counts its exact post-reset share;
+		// every other row keeps the remainder-method treatment.
+		// The exact share covers [sinceMs, rowEnd), so a window
+		// start inside that interval deducts proportionally to
+		// that interval — not to the full hour.
+		valUp, valDown := h.UploadBytes, h.DownloadBytes
+		isResetHour := h.Hour == resetHour
+		spanMs := hourMs
+		if isResetHour {
+			valUp, valDown = exactUp, exactDown
+			spanMs = rowEnd - sinceMs
+		}
+		upLeft, downLeft := valUp, valDown
+		if pre := effStart - rowStart; pre > 0 {
+			if isResetHour {
+				if preSince := effStart - sinceMs; preSince > 0 {
+					upLeft -= valUp * preSince / spanMs
+					downLeft -= valDown * preSince / spanMs
+				}
+			} else {
+				// 窗外/重置前份额先行扣除（R3-C-01，余量法）：一小时行至多
+				// 横跨窗口起点一次，扣除后余量即窗内份额，后续分桶
+				// 逻辑（首桶取余量）自动精确。窗口内跨桶行的分摊
+				// 不受影响，总量在窗内守恒。
+				upLeft -= h.UploadBytes * pre / hourMs
+				downLeft -= h.DownloadBytes * pre / hourMs
+			}
 		}
 		for j := b; j < len(starts) && view.Points[j].Time < rowEnd; j++ {
-			overlap := min(rowEnd, ends[j]) - max(rowStart, view.Points[j].Time)
+			// B-M2: a bucket starting before the reset instant only
+			// counts from the reset instant on.
+			from := max(rowStart, view.Points[j].Time)
+			if from < effStart {
+				from = effStart
+			}
+			overlap := min(rowEnd, ends[j]) - from
 			if overlap <= 0 {
 				continue
 			}
 			up, down := upLeft, downLeft // last overlapped bucket: remainder
 			if j+1 < len(starts) && view.Points[j+1].Time < rowEnd {
-				up = h.UploadBytes * overlap / hourMs
-				down = h.DownloadBytes * overlap / hourMs
+				up = valUp * overlap / spanMs
+				down = valDown * overlap / spanMs
 				upLeft -= up
 				downLeft -= down
 			}
@@ -174,8 +244,12 @@ func (h *Handler) respondSubTraffic(w http.ResponseWriter, s *model.Subscription
 		respondInternalError(w, "respondSubTraffic: ListSubscriptionTraffic failed", err)
 		return
 	}
-	view := subTraffic(hours, req.Range, now)
+	view := subTraffic(hours, req.Range, now, subTrafficSince(s), s.UploadBytes, s.DownloadBytes)
 	view.Since = subTrafficSince(s)
+	// D-06：回填计数最近上报时刻（0＝从未上报），图表据此显示新鲜度。
+	if updates, err := h.repo.LastSubscriptionCounterUpdates([]int64{s.ID}); err == nil {
+		view.LastReportedAt = updates[s.ID]
+	}
 	response.WriteJSON(w, response.OK(view))
 }
 

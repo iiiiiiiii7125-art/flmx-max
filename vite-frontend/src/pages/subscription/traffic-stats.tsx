@@ -15,6 +15,7 @@ import { ArrowDown, ArrowUp } from "lucide-react";
 
 import { getMySubscriptionTraffic, getSubscriptionTraffic } from "@/api";
 import { Segmented } from "@/pages/subscription/controls";
+import { freshnessLabel } from "@/utils/traffic";
 
 // 与我方既有图表（延迟趋势等）同一调色：下载蓝、上传橙。
 const DOWN = "#3b82f6";
@@ -90,7 +91,16 @@ function axisBytes(v: number): string {
  * 曲线是整条订阅的合计（一条订阅可分配给多个用户，凭据共用、拆不开个人量）。
  * mine 走用户端接口（仅限分配给当前用户的订阅）。
  */
-export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
+export function SubTrafficStats({
+  id,
+  mine,
+  unmeteredReason,
+}: {
+  id: number;
+  mine?: boolean;
+  /** D-03：订阅未计量时的原因——空态须与「暂无流量」区分。 */
+  unmeteredReason?: string;
+}) {
   const [range, setRange] = useState<SubTrafficRange>("hour");
   const [data, setData] = useState<SubTraffic | null>(null);
   const [error, setError] = useState("");
@@ -140,6 +150,11 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
         }}
       />
       <p className="text-xs font-semibold text-foreground">{RANGE_HINT[range]}的流量</p>
+      {shown && freshnessLabel(shown.lastReportedAt ?? 0) && (
+        <p className="text-xs font-semibold text-foreground">
+          {freshnessLabel(shown.lastReportedAt ?? 0)}
+        </p>
+      )}
       <div className="grid grid-cols-3 gap-2">
         {(
           [
@@ -249,8 +264,10 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
               </ComposedChart>
             </ResponsiveContainer>
             {empty && (
-              <p className="absolute inset-0 flex items-center justify-center text-center text-xs font-semibold text-foreground">
-                {RANGE_HINT[range]}还没有流量
+              <p className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs font-semibold text-foreground">
+                {unmeteredReason
+                  ? `未计量：${unmeteredReason}`
+                  : `${RANGE_HINT[range]}还没有流量`}
               </p>
             )}
           </div>
@@ -338,12 +355,14 @@ export function SubTrafficStats({ id, mine }: { id: number; mine?: boolean }) {
             )}
           </div>
           <p className="text-xs font-semibold text-foreground">
-            统计口径与订阅「已用」一致：仅统计独立凭据协议（VLESS、VMess、Trojan、Hysteria2、TUIC
-            等）的流量；Shadowsocks、导入节点等共用凭据不计入。曲线为该订阅的合计流量，自本功能上线起记录
+            统计口径与订阅「已用」一致：独立凭据协议（VLESS、VMess、Trojan、Hysteria2、TUIC
+            等）按订阅计量；Shadowsocks 2022 入站开启「按订阅计量」后，新拉取的配置改走计量伴生入口并计量，未开启、或为
+            ShadowTLS 前置／仅中转／带链式出口／已配置分流／开启 PROXY
+            协议的入站，以及导入节点、开启前已分发的旧链接与经中转到达的端点，不计入。只统计上次重置流量之后的流量，重置前的时段不再计入合计。曲线为该订阅的合计流量，自本功能上线起记录
           </p>
           <p className="text-xs font-semibold text-foreground">
             订阅「已用」从本周期开始（{sinceDate}
-            ，订阅创建或上次重置流量时）累计，和这里所选的时间范围不同，两边的数不一定相等。
+            ，订阅创建或上次重置流量时）累计；这里合计的是所选时间范围内、本周期内的流量，所选范围完全覆盖本周期时两边相等。
           </p>
         </>
       )}

@@ -67,6 +67,16 @@ type RenderOptions struct {
 	// only their own kernels' traffic). 0 means the legacy
 	// host-global base.
 	UserMarkBase int64
+	// Companion is set by RenderWith when the kernel being rendered
+	// is the companion instance (TypeSingboxCompanion): only the
+	// companion exposes the Clash API (C-(4) selective kill).
+	Companion bool
+	// ClashAPIPort is the companion's Clash API listen port (R2C-01:
+	// per-agent, derived from the node secret — see
+	// ClashAPIPortForSecret). 0 means not configured: the render
+	// omits the Clash API block and the agent falls back to a config
+	// reload for user removals (metering unaffected).
+	ClashAPIPort int
 }
 
 // Render produces the kernel configuration for the given enabled inbounds.
@@ -87,6 +97,14 @@ func RenderWith(kernelType string, inbounds []Inbound, opts RenderOptions) (Rend
 	for i := range sorted {
 		sorted[i].UserMarkBase = opts.UserMarkBase
 	}
+	// C-(4): only the companion instance exposes the Clash API
+	// (selective per-user connection kill); the main sing-box
+	// config is unchanged. OR (not assign): the handler sets
+	// Companion from the raw kernel type, because by the time
+	// RenderWith runs the type has been folded to sing-box by
+	// EffectiveType; a direct caller passing the raw companion
+	// type sets it here instead.
+	opts.Companion = opts.Companion || kernelType == TypeSingboxCompanion
 	// 渲染期复检（与保存期 normalizeExtra 同口径）：指定出站 IP 策略的
 	// 入站，其 Extra 不得覆盖 tag/detour（S4）。
 	for _, in := range sorted {
@@ -104,7 +122,7 @@ func RenderWith(kernelType string, inbounds []Inbound, opts RenderOptions) (Rend
 		}
 		out.Files = []File{{Name: "config.json", Content: content}}
 		out.Args = []string{"run", "-c", "{RUN_DIR}/config.json"}
-	case TypeSingbox:
+	case TypeSingbox, TypeSingboxCompanion:
 		content, err := renderSingbox(sorted, opts)
 		if err != nil {
 			return Rendered{}, err

@@ -370,6 +370,12 @@ func (r *Repository) SaveNodeInbound(in *model.NodeInbound) error {
 		"conn_idle_seconds": in.ConnIdleSeconds,
 		// SS 计量伴生标记与开关（伴生行由 reconcile 维护，原入站开关由
 		// inboundSave 写；同 BUG-A2-1 教训，赋值必须与白名单同步）。
+		// C-03: 同 BUG-A2-1 家族——伴生分裂迁移（ensureCompanionKernel /
+		// moveCompanionsToKernel）改既有行的 KernelID，此列不在白名单
+		// 时赋值被静默丢弃，迁移看似成功、伴生仍留在主内核上（测试
+		// TestC03EnsureCompanionKernelSplitsOnNewAgent 当场抓获）。
+		// 其余调用方先读行再写回，此处写回的即存量值，不变。
+		"kernel_id":        in.KernelID,
 		"companion_of":     in.CompanionOf,
 		"metering_enabled": in.MeteringEnabled,
 		"updated_time":     in.UpdatedTime,
@@ -447,7 +453,7 @@ func (r *Repository) ListNodeInboundsByNode(nodeID int64) ([]model.NodeInbound, 
 // NodePortRangeOccupant reports what listens on any port in [lo, hi] of a
 // node: an inbound, a forward or a tunnel
 // ("" when free). P01-001: the occupancy knowledge lives in the unified
-// three-source predicate (NodePortRangeOccupancyTx); this function only
+// four-source predicate (NodePortRangeOccupancyTx); this function only
 // maps sources to display names, keeping the historical precedence
 // (inbound → forward → tunnel, with the companion special case).
 func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInboundID int64) (string, error) {
@@ -478,6 +484,10 @@ func (r *Repository) NodePortRangeOccupant(nodeID int64, lo, hi int, excludeInbo
 		return "转发", nil
 	case occ.Sources[PortSourceChain]:
 		return "隧道", nil
+	case occ.Sources[PortSourceCompanion]:
+		// P1-01：伴生 Clash API 派生口——agent 常驻监听，无行可点名，
+		// 报来源即可。
+		return "伴生 Clash API", nil
 	}
 	return "", nil
 }
@@ -599,6 +609,10 @@ func applyInboundCounterChunk(tx *gorm.DB, nodeID int64, ordered []InboundCounte
 		download := make(map[int64]int64)
 		unaccounted := make(map[int64]int64)
 		foreign := make(map[int64]int64)
+		// R2A-5：负值／非法方向样本此前静默 continue，与
+		// unaccounted／foreign 同口径按入站聚合 warn，绝不静默。
+		negative := make(map[int64]int64)
+		badDirection := make(map[int64]int64)
 		for _, s := range ordered {
 			owner, ok := known[s.InboundID]
 			if !ok {
@@ -617,9 +631,14 @@ func applyInboundCounterChunk(tx *gorm.DB, nodeID int64, ordered []InboundCounte
 				continue
 			}
 			if s.Bytes < 0 {
+				// R2A-5：负字节样本按入站聚合 warn（方向非法同下）。
+				// 方向原值不记日志（攻击者可控字符串，防日志注入）。
+				negative[s.InboundID]++
 				continue
 			}
 			if s.Direction != "in" && s.Direction != "out" {
+				// R2A-5：非法方向样本按入站聚合 warn。
+				badDirection[s.InboundID]++
 				continue
 			}
 			// R2X-033：与订阅管线同形——无基线 / epoch 变化只
@@ -667,6 +686,12 @@ func applyInboundCounterChunk(tx *gorm.DB, nodeID int64, ordered []InboundCounte
 		}
 		for id, n := range foreign {
 			log.Printf("kernel traffic sample foreign op=foreign_inbound node_id=%d inbound_id=%d samples=%d action=dropped", nodeID, id, n)
+		}
+		for id, n := range negative {
+			log.Printf("kernel traffic sample negative op=negative_bytes node_id=%d inbound_id=%d samples=%d action=dropped", nodeID, id, n)
+		}
+		for id, n := range badDirection {
+			log.Printf("kernel traffic sample bad_direction op=illegal_direction node_id=%d inbound_id=%d samples=%d action=dropped", nodeID, id, n)
 		}
 		for id := range known {
 			up, down := upload[id], download[id]

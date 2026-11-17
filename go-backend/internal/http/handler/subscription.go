@@ -476,13 +476,51 @@ func (h *Handler) rawActiveUsersByInbound(now time.Time) map[int64][]kernel.User
 // several pushes fail, a real failure takes precedence over a
 // still-confirming one (F2-APPLY-01 同族)：pending 绝不能遮住真
 // 失败，真失败也绝不能把 pending 写成「下发失败」。
+// C-03 split follow-up: companion inbounds carry the rendered users
+// (activeUsersByInbound remaps origin users onto the companion), so a
+// credential push that only applies origin kernels leaves the companion
+// serving stale credentials after disable/delete/rotate — the exact
+// regression the split introduced (pre-split the companion lived on
+// the origin's kernel and was re-rendered for free). Every origin is
+// therefore expanded to its companion's kernel here, once for all
+// callers (sync loop, save, delete, rotate); a pre-split companion
+// shares the origin's KernelID and dedupes via `seen`.
 func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 	seen := map[int64]bool{}
 	var firstErr, firstPending error
+	// E-03: materialize the companion split before resolving which
+	// kernels to push. A companion still sitting on the origin's
+	// kernel (no reconnect / re-push has triggered the split yet)
+	// must move onto the companion kernel first, so this push serves
+	// it from the companion instance; otherwise the push only
+	// re-renders the main kernel with the companion still on it.
+	// Rows are collected once and reused below (one read per id).
+	rows := make([]*model.NodeInbound, 0, len(ids))
+	nodeIDs := map[int64]bool{}
 	for _, id := range ids {
 		row, err := h.repo.GetNodeInbound(id)
-		if err != nil || row == nil || isExternalInbound(row) || seen[row.KernelID] {
+		if err != nil || row == nil {
 			continue
+		}
+		rows = append(rows, row)
+		nodeIDs[row.NodeID] = true
+	}
+	for nodeID := range nodeIDs {
+		h.ensureCompanionKernel(nodeID)
+	}
+	compByOrigin := map[int64]*model.NodeInbound{}
+	if comps, err := h.repo.ListCompanionInbounds(); err != nil {
+		return markRepoError(err)
+	} else {
+		for i := range comps {
+			if _, ok := compByOrigin[comps[i].CompanionOf]; !ok {
+				compByOrigin[comps[i].CompanionOf] = &comps[i]
+			}
+		}
+	}
+	applyOne := func(row *model.NodeInbound) {
+		if row == nil || isExternalInbound(row) || seen[row.KernelID] {
+			return
 		}
 		seen[row.KernelID] = true
 		if err := h.applyKernel(row.KernelID, false); err != nil {
@@ -490,12 +528,16 @@ func (h *Handler) applyKernelsForInbounds(ids []int64) error {
 				if firstPending == nil {
 					firstPending = err
 				}
-				continue
+				return
 			}
 			if firstErr == nil {
 				firstErr = err
 			}
 		}
+	}
+	for _, row := range rows {
+		applyOne(row)
+		applyOne(compByOrigin[row.ID])
 	}
 	if firstErr != nil {
 		return firstErr
@@ -526,6 +568,96 @@ func pushFailureMsg(prefix string, err error) string {
 
 // syncSubscriptions pushes credential changes for share subscriptions
 // whose active state differs from what the kernels last received.
+// C-02（流量审计）：超限分享订阅的原站共享口令轮换。
+//
+// 只撤伴生用户不够：原站共享口令仍在分发（直连端点无 live 伴生时
+// 回退原站、中转端点恒指原站、已分发链接在客户端缓存），超限后
+// 原站继续服务且不再计数。超限跃迁时把该订阅全部 SS 原站的共享
+// 口令轮换为新口令（SS2022 按方法生成合法长度 PSK，其余走随机
+// 口令），落库后由同一轮同步的 kernel 下发带上去。
+//
+// 幂等键：QuotaRotatedAt 与 subTrafficSince 比较——本计费回合
+// 已轮换过则跳过；流量重置使 TrafficSince 前进，下一回合可再
+// 轮换；部署时已超限的存量订阅 stamp=0，首次同步即轮换。任一
+// 原站落库失败时不打戳，下轮重试（已轮换的原站会被再轮一次，
+// 无害）。返回本轮是否轮换了至少一个原站——轮换过即须强制走
+// 一次 kernel 下发（哪怕 AppliedActive 已是 0），否则新口令
+// 到不了内核。
+//
+// 不在范围：非 SS 原站（逐用户 UUID，撤用户即生效）、外部入站
+// （KernelID=0，无内核可推）、伴生本体（只轮原站）；停用/过期
+// 导致的失活不轮换（爆炸半径：每次停用/过期都换共享口令，
+// 全部共用该口令的订阅都要重拉链接——C-(5)：下方的 Enabled/过期
+// 门即此口径的实现，注释与代码曾分叉，见 subscription.md:114/139）。
+func (h *Handler) rotateQuotaOriginPasswords(s *model.Subscription, rows *[]model.NodeInbound, now time.Time) bool {
+	if !isShare(s) || !subOverQuota(s) {
+		return false
+	}
+	// C-(5)：停用/过期订阅不轮换——失活同步已把凭据从节点撤下，
+	// 再换共享口令无任何截断收益，只会逼全部共口令订阅重拉链接。
+	// 注意 subActive 不能直接作门：它含 !subOverQuota，与本函数
+	// 的超限前提恒互斥；此处只取它的 Enabled+未过期两项。
+	if s.Enabled != 1 || (s.ExpireTime > 0 && s.ExpireTime <= now.UnixMilli()) {
+		return false
+	}
+	if s.QuotaRotatedAt >= subTrafficSince(s) {
+		return false
+	}
+	if *rows == nil {
+		loaded, err := h.repo.ListNodeInbounds()
+		if err != nil {
+			log.Printf("subscription %d over quota: cannot list inbounds for origin password rotation: %v", s.ID, err)
+			return false
+		}
+		*rows = loaded
+	}
+	byID := make(map[int64]*model.NodeInbound, len(*rows))
+	for i := range *rows {
+		byID[(*rows)[i].ID] = &(*rows)[i]
+	}
+	rotated, failed := false, false
+	for _, id := range subInboundIDs(s, *rows) {
+		row := byID[id]
+		if row == nil || row.CompanionOf > 0 || isExternalInbound(row) || row.Protocol != kernel.ProtocolShadowsocks {
+			continue
+		}
+		in, err := inboundFromModel(*row)
+		if err != nil {
+			log.Printf("subscription %d over quota: origin inbound %d settings unparsable, password not rotated: %v", s.ID, row.ID, err)
+			failed = true
+			continue
+		}
+		in.Settings.Password = kernel.ShadowsocksPassword(in.Settings.Method)
+		if err := applyInboundToModel(in, row); err != nil {
+			log.Printf("subscription %d over quota: origin inbound %d password rotation failed to serialize: %v", s.ID, row.ID, err)
+			failed = true
+			continue
+		}
+		if err := h.repo.SaveNodeInbound(row); err != nil {
+			log.Printf("subscription %d over quota: origin inbound %d rotated password failed to persist: %v", s.ID, row.ID, err)
+			failed = true
+			continue
+		}
+		rotated = true
+		log.Printf("subscription %d over quota: rotated shared password of origin inbound %d (node %d)", s.ID, row.ID, row.NodeID)
+	}
+	if rotated && !failed {
+		s.QuotaRotatedAt = now.UnixMilli()
+		// C-02 live 补：已截断（AppliedActive 已是 0）的存量超限
+		// 订阅，下发失败时下轮不再重试——active==AppliedActive
+		// 直接 continue，新口令只落库、到不了内核。沿用
+		// R5R8-001 的 -1 停放：AppliedActive=-1 使 active !=
+		// AppliedActive 恒成立，sync 循环每轮重试下发直至成功
+		// （成功后由下发块写回 active）；轮换戳已打，下轮不
+		// 再轮换、无口令 churn。
+		s.AppliedActive = -1
+		if err := h.repo.SaveSubscription(s); err != nil {
+			log.Printf("subscription %d: failed to record quota rotation stamp: %v", s.ID, err)
+		}
+	}
+	return rotated
+}
+
 func (h *Handler) syncSubscriptions(now time.Time) {
 	subSyncMu.Lock()
 	defer subSyncMu.Unlock()
@@ -563,10 +695,21 @@ func (h *Handler) syncSubscriptions(now time.Time) {
 					// 再越界被 30 分钟指纹窗抑制（R3X-030 同根变体）。
 					h.notifier.forgetSubQuotaFlow(s.Name)
 				}
+			} else {
+				// D-05：月度自动重置失败此前静默——订阅流量被悄悄留
+				// 到下月，管理员在任何面都看不到。记日志，下轮重试。
+				log.Printf("subscription %d: monthly traffic reset failed, will retry: %v", s.ID, err)
 			}
 		}
+		// C-02：超限分享订阅的原站共享口令必须失效。轮换过即强制
+		// 走一次下发（哪怕 AppliedActive 已是 0），否则新口令
+		// 到不了内核；轮换时 AppliedActive 已停放为 -1（R5R8-001
+		// 同款），下发失败时 -1 保留、下轮 active != AppliedActive
+		// 恒成立而重试（口令不重复轮换）；下发成功后由下发块写回
+		// active（见 F7X-001）。
+		rotated := h.rotateQuotaOriginPasswords(s, &rows, now)
 		active := boolToInt(isShare(s) && subActive(s, now))
-		if active == s.AppliedActive {
+		if active == s.AppliedActive && !rotated {
 			continue
 		}
 		if rows == nil {
@@ -650,7 +793,18 @@ func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInb
 	endpoints, _ := h.inboundEndpoints(selected)
 	if s != nil && isShare(s) {
 		ku := kernelUser(s)
-		companions := h.companionsByOrigin(memo)
+		companions, compErr := h.companionsByOrigin(memo)
+		rowOrigins, rowErr := h.companionRowOrigins(memo)
+		// R3-E-LOW-01: the companion list is unreadable — the render
+		// side cannot tell metering-managed origins from origins
+		// that never had a companion row, so every direct SS origin
+		// fails closed below instead of serving unmetered. Relay
+		// endpoints keep flowing (relay traffic is structurally
+		// unmetered) and non-SS protocols are unaffected.
+		gateBlind := compErr != nil || rowErr != nil
+		if gateBlind {
+			log.Printf("subscription %d: drop direct SS endpoints: companion list unreadable (companions=%v rowOrigins=%v)", s.ID, compErr, rowErr)
+		}
 		kept := endpoints[:0]
 		for i := range endpoints {
 			e := endpoints[i]
@@ -660,12 +814,28 @@ func (h *Handler) subEndpointsForIDs(s *model.Subscription, rows []model.NodeInb
 			// iPSK:uPSK password. Relay endpoints keep pointing at
 			// the origin — the relay forwards land on the origin's
 			// port, with the shared password, as before.
-			if len(companions) > 0 && e.Direct && e.Proxy == nil && e.RelayID == 0 &&
+			// B-VD-NEW: an origin that owns a companion row but has
+			// no live companion right now (gate closed — the agent
+			// has not acked the current config, e.g. mid-truncation
+			// after a password rotation) fails closed: the endpoint
+			// is dropped instead of falling back to the unmetered
+			// origin. A link fetched in that window is static config
+			// and would escape metering permanently. Origins that
+			// never had a companion row keep serving the origin
+			// (legitimate non-metered SS).
+			if e.Direct && e.Proxy == nil && e.RelayID == 0 &&
 				e.Inbound.Protocol == kernel.ProtocolShadowsocks {
+				if gateBlind {
+					log.Printf("subscription %d: drop origin endpoint of inbound %d: companion list unreadable (fail closed)", s.ID, e.Inbound.ID)
+					continue
+				}
 				if comp, ok := companions[e.Inbound.ID]; ok {
 					e.CompanionOf = e.Inbound.ID
 					e.Inbound = comp
 					e.Port = comp.Port
+				} else if rowOrigins[e.Inbound.ID] {
+					log.Printf("subscription %d: drop origin endpoint of inbound %d: metering companion not live (fail closed)", s.ID, e.Inbound.ID)
+					continue
 				}
 			}
 			if e.Proxy == nil {
@@ -792,8 +962,33 @@ type subscriptionView struct {
 	// MeteringUnsupported（L4-08）：订阅 ID 超出 socket mark 计量
 	// 编码上限（kernel.MaxUserMarkID）时为 true——该订阅的流量永不
 	// 计量、TrafficLimit 永不触发，须对管理员显式可见，不许静默。
-	// 视图构建单点回填，列表/保存/详情同口径。
+	// C-07：非分享（个人）订阅同样永不计量——其计数只由分享订阅
+	// 的 kernel 用户样本写，个人订阅的 UploadBytes/DownloadBytes
+	// 恒为 0，TrafficLimit 永不触发；视图构建单点回填，列表/
+	// 保存/详情同口径。
 	MeteringUnsupported bool `json:"meteringUnsupported,omitempty"`
+	// AppliedActive 是上次推到内核的 active 态（0 未下发／1 已下发／
+	// -1 待同步），与计算值 Active 对照才知道“已断开”是否真实落地
+	// （D-02）：Active 为真而 AppliedActive 为 0/-1 时凭据尚未下发，
+	// Active 为假而 AppliedActive 为 1 时凭据仍在节点上。
+	AppliedActive int `json:"appliedActive"`
+	// MeteringStatus 是本订阅的计量状态（D-03，仅分享订阅）：
+	// "metered" 全源可计量、"partial" 部分源未计量、"unmetered" 全源
+	// 未计量；MeteringReason 为未计量／部分计量时的原因（首个 distinct
+	// 成因）。非分享订阅不适用，两字段均为空。R4A-01：徽标按实际下
+	// 发端点算——SS 源存在中转端点即 partial／unmetered（中转端点不
+	// 计量），直连伴生端点仍报 metered；非 SS 源的中转端点仍计量。
+	MeteringStatus string `json:"meteringStatus,omitempty"`
+	MeteringReason string `json:"meteringReason,omitempty"`
+	// LastReportedAt 是本订阅计量计数最近一次上报的时刻（毫秒，
+	// SubscriptionCounter.UpdatedTime 的最大值；0＝从未上报）。
+	// 订阅视图只有 TrafficSince（计数起点）时数字会静默冻结，
+	// D-06 要求流量数旁给出新鲜度。由调用方回填（批量查一次）。
+	LastReportedAt int64 `json:"lastReportedAt,omitempty"`
+	// ZeroEndpointReason 是本订阅当前渲染 0 个端点的原因（C-08）：
+	// 订阅启用且未过期未超限、但拉取为空时才有值；停用／过期／超限
+	// 走占位节点自带原因，本字段为空。
+	ZeroEndpointReason string `json:"zeroEndpointReason,omitempty"`
 }
 
 // subFormatAlias resolves format aliases shared by the pull side
@@ -855,6 +1050,267 @@ func (h *Handler) subscriptionViewForAssignments(s *model.Subscription, rows []m
 	return h.subscriptionViewForAssignmentsMemo(s, rows, now, format, assignments, nil)
 }
 
+// subSourcesGone reports whether a subscription explicitly selected
+// inbounds/sources but none of them still exist — as opposed to having
+// selected nothing at all. subInboundIDs silently drops unknown ids,
+// so callers that need the distinction must check the raw selection.
+func subSourcesGone(s *model.Subscription) bool {
+	return s.SourceAll == 0 && (len(parseIDList(s.InboundIDs)) > 0 || len(parseIDList(s.SourceIDs)) > 0)
+}
+
+// reasonCompanionNotLive 是 subMeteringSourceReason 的伴生未下发
+// 成因；D-OBS-01：截断进行中伴生重建时该成因是瞬态，
+// subMeteringStatus 对已有计数的超限订阅抑制它，不翻未计量徽标。
+const reasonCompanionNotLive = "伴生入站未下发到节点，不计量"
+
+// subMeteringSourceReason 报告一个分享订阅源不能产生计量流量的原因
+// （"" 表示该源可计量）：导入节点共用凭据；SS 共享凭据源无生效伴生
+// 时按开关／资格／形态／下发逐级定因。与视图 shared 判定同口径，
+// 另把解析失败的入站也判为未计量（shared 判定静默将其当作可计量）。
+func subMeteringSourceReason(row *model.NodeInbound, liveCompanion bool) string {
+	if isExternalInbound(row) {
+		return "导入节点共用凭据，不计量"
+	}
+	in, err := inboundFromModel(*row)
+	if err != nil {
+		return "入站配置无法解析，不计量"
+	}
+	if in.SupportsUsers() {
+		return ""
+	}
+	if liveCompanion {
+		return ""
+	}
+	if row.MeteringEnabled != 1 {
+		return "计量开关已关，不计量"
+	}
+	if !ssMeteringEligible(in) {
+		if in.Security.Type == kernel.SecurityShadowTLS {
+			return "ShadowTLS 前置入站，不计量"
+		}
+		return "非 SS2022 入站，不计量"
+	}
+	if block := ssMeteringShapeBlock(row); block != "" {
+		return block
+	}
+	return reasonCompanionNotLive
+}
+
+// reasonRelayEndpoint 是中转端点未计量的成因（R4A-01）：中转端点走
+// 原站共用口令、完全不计量（doc/guide/subscription.md 亦有披露）。
+const reasonRelayEndpoint = "中转端点不计量"
+
+// hasUnmeteredRelayEndpoint 报告下发端点里是否有该源的中转端点
+// （R4A-01）：中转落在原站上用的是共用口令、没有按用户身份，
+// 原站的按用户计数器永远看不到这路流量。只影响 Shadowsocks 源——
+// 原生按用户协议（VLESS/Trojan/VMess/Hy2/TUIC/AnyTLS/Naive）把
+// 按订阅身份带过中转（内核按 auth_user 归属、走该用户的 mark
+// 出站），其中转端点仍计量。endpoints 为 nil 表示调用方没有端点
+// 证据，退回源级判定。
+func hasUnmeteredRelayEndpoint(endpoints []kernel.Endpoint, originID int64) bool {
+	for _, e := range endpoints {
+		if e.RelayID == 0 || e.CompanionOf != 0 || e.Inbound.Protocol != kernel.ProtocolShadowsocks {
+			continue
+		}
+		if e.Inbound.ID == originID {
+			return true
+		}
+	}
+	return false
+}
+
+// hasMeteredDirectEndpoint 报告下发端点里是否有该源的已计量直连
+// 端点：直连 SS 端点被改指到计量伴生（CompanionOf）。用于区分
+// 部分计量源（直连＋中转）与全未计量源（只有中转）。
+func hasMeteredDirectEndpoint(endpoints []kernel.Endpoint, originID int64) bool {
+	for _, e := range endpoints {
+		if e.RelayID != 0 || !e.Direct || e.CompanionOf != originID {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// subMeteringStatus 是分享订阅的计量状态（D-03）：全源可计量返回
+// ("metered", "")；全源未计量返回 ("unmetered", 首个 distinct 成因)；
+// 部分源未计量返回 ("partial", "其中 N 个源未计量（成因）")。非分享
+// 订阅不适用，返回 ("", "")。ID 超限（meteringUnsupported）为订阅级
+// 永久不计量，优先于源级成因。D-OBS-01 例外：超限且已有计数的订阅，
+// 伴生未下发成因视为截断重建中的瞬态、不计未计量。R4A-01：按实际
+// 下发端点算——endpoints 为 nil 时退回源级判定；非 nil 时，SS 源
+// 下发了中转端点即未计量（直连伴生也在则为部分计量），中转端点不
+// 计量是结构性的（共用口令）；非 SS 源的中转端点仍计量（按用户身
+// 份归属），不影响徽标。
+func (h *Handler) subMeteringStatus(s *model.Subscription, rows []model.NodeInbound, memo *companionGateMemo, endpoints []kernel.Endpoint) (string, string) {
+	if !isShare(s) {
+		return "", ""
+	}
+	if s.ID > kernel.MaxUserMarkID {
+		return "unmetered", "订阅 ID 超出计量编码上限，流量永不计量"
+	}
+	ids := h.subAllInboundIDs(s, rows, memo)
+	if len(ids) == 0 {
+		if subSourcesGone(s) {
+			return "unmetered", "所选入站均不存在，流量不计量"
+		}
+		return "unmetered", "未选择任何入站，流量不计量"
+	}
+	byID := make(map[int64]model.NodeInbound, len(rows))
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	// A load error leaves companions nil: every SS origin then reads
+	// as "companion not live" and the badge errs toward unmetered —
+	// the safe display direction (it never claims metering that
+	// cannot be confirmed). Endpoint serving itself fails closed in
+	// subEndpointsForIDs (R3-E-LOW-01).
+	companions, _ := h.companionsByOrigin(memo)
+	seenReason := map[string]bool{}
+	var firstReason string
+	recordReason := func(reason string) {
+		if !seenReason[reason] {
+			seenReason[reason] = true
+			if firstReason == "" {
+				firstReason = reason
+			}
+		}
+	}
+	unmetered := 0
+	partial := 0
+	for _, id := range ids {
+		row := byID[id]
+		if row.CompanionOf > 0 {
+			continue
+		}
+		_, live := companions[id]
+		reason := subMeteringSourceReason(&row, live)
+		// R4A-01：源本身可计量（或伴生瞬态重建中）但下发了中转端
+		// 点时，中转那路流量结构性不计量——直连伴生也在则该源为
+		// 部分计量，否则为全未计量。D-OBS-01 的抑制只覆盖直连腿；
+		// 中转腿是真实在跑的未计量路径，不随抑制一并抹掉。
+		if reason == "" || (reason == reasonCompanionNotLive && subOverQuota(s) && subUsed(s) > 0) {
+			if hasUnmeteredRelayEndpoint(endpoints, id) {
+				if hasMeteredDirectEndpoint(endpoints, id) {
+					partial++
+				} else {
+					unmetered++
+				}
+				recordReason(reasonRelayEndpoint)
+				continue
+			}
+		}
+		if reason != "" {
+			// D-OBS-01：截断进行中（超限且已有计数）伴生重建，
+			// 伴生未下发只是瞬态——该源不计未计量，徽标不翻
+			// unmetered（已用数旁挂“未计量”易误读为全程未计）。
+			// 其余成因（开关关／形态不符／下发阻塞）照常计；
+			// 非超限时伴生缺失仍如实报未计量。本路径无“伴生重
+			// 建中”的独立信号，超限即截断进行中的信号。
+			if reason == reasonCompanionNotLive && subOverQuota(s) && subUsed(s) > 0 {
+				continue
+			}
+			unmetered++
+			recordReason(reason)
+		}
+	}
+	if unmetered == 0 && partial == 0 {
+		return "metered", ""
+	}
+	if unmetered == len(ids) && partial == 0 {
+		return "unmetered", firstReason
+	}
+	return "partial", fmt.Sprintf("其中 %d 个源未计量（%s）", unmetered+partial, firstReason)
+}
+
+// subYieldsNothing reports whether a subscription yields no endpoints
+// even before any view filtering: its source rows (from the full row
+// set) build zero endpoints through inboundEndpoints. The subscription's
+// own relay scope (lines/relayIds) and request filters (?user=/?relay=/
+// ?inbound=) are NOT applied here — their empty results are the filter's
+// answer, not a broken subscription, and must keep the F-080 empty
+// render (relay scope must render no node URIs; FIX2-B personalized
+// pull counts 0 for unassigned users).
+func (h *Handler) subYieldsNothing(s *model.Subscription, rows []model.NodeInbound) bool {
+	ids := subInboundIDs(s, rows)
+	if len(ids) == 0 {
+		return true
+	}
+	want := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	selected := make([]model.NodeInbound, 0, len(ids))
+	for _, row := range rows {
+		if want[row.ID] && row.CompanionOf == 0 {
+			selected = append(selected, row)
+		}
+	}
+	endpoints, _ := h.inboundEndpoints(selected)
+	return len(endpoints) == 0
+}
+
+// subZeroEndpointReason 报告订阅当前渲染 0 个端点的原因（C-08，
+// 仅行级判定，不查节点／中转视图）：停用／过期／超限走占位节点自带
+// 原因，本函数返回 ""；源为空／全缺／全停用／全仅中转或仅本机监听
+// 时点名；源本身能产出端点、却被订阅的中转范围筛空时点名范围原因
+// （无范围时落到通用原因——伴生凭据不可推导等深层成因已在服务端
+// 日志留痕）。
+func (h *Handler) subZeroEndpointReason(s *model.Subscription, rows []model.NodeInbound, now time.Time) string {
+	if subInactiveReason(s, now) != "" {
+		return ""
+	}
+	ids := h.subAllInboundIDs(s, rows, nil)
+	if len(ids) == 0 {
+		if subSourcesGone(s) {
+			return "所选入站均不存在，拉取为空"
+		}
+		if s.SourceAll == 1 && len(rows) == 0 {
+			return "系统中没有任何入站，拉取为空"
+		}
+		return "该订阅未选择任何入站，拉取为空"
+	}
+	// 源本身能产出端点、渲染却为空：中转范围筛空。无范围时落到通用
+	// 原因——此时只剩伴生凭据不可推导（F5/C-03）一种可能，通用原因
+	// 已覆盖。
+	if h != nil && h.repo != nil && !h.subYieldsNothing(s, rows) {
+		pipe := parsePipeline(s.Options)
+		if pipe.Lines != "" || len(pipe.RelayIDs) > 0 {
+			return "按订阅的中转范围筛选后无可用节点，拉取为空"
+		}
+	}
+	byID := make(map[int64]model.NodeInbound, len(rows))
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	var present []model.NodeInbound
+	for _, id := range ids {
+		if row, ok := byID[id]; ok && row.CompanionOf == 0 {
+			present = append(present, row)
+		}
+	}
+	if len(present) == 0 {
+		return "所选入站均不存在，拉取为空"
+	}
+	allDisabled := true
+	allRelayOnly := true
+	for _, row := range present {
+		if row.Enabled == 1 {
+			allDisabled = false
+		}
+		if row.RelayOnly != 1 && !isLoopbackListen(row.Listen) {
+			allRelayOnly = false
+		}
+	}
+	if allDisabled {
+		return "所选入站均已停用，拉取为空"
+	}
+	if allRelayOnly {
+		return "所选入站均为仅中转或仅本机监听，且其中转未就绪，拉取为空"
+	}
+	return "该订阅当前没有可用节点（中转未就绪、分享地址无效或格式过滤），请检查入站与中转状态"
+}
+
 func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows []model.NodeInbound, now time.Time, format string, assignments []repo.UserInboundAssignment, memo *companionGateMemo) subscriptionView {
 	if memo == nil {
 		memo = &companionGateMemo{}
@@ -869,7 +1325,10 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	}
 	shared := []int64{}
 	if isShare(s) {
-		companions := h.companionsByOrigin(memo)
+		// Load errors leave companions nil (see the metering-status
+		// path above); the render side still fails closed in
+		// subEndpointsForIDs (R3-E-LOW-01).
+		companions, _ := h.companionsByOrigin(memo)
 		for _, id := range ids {
 			row := byID[id]
 			if isExternalInbound(&row) {
@@ -906,6 +1365,11 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 	if len(assignments) > 0 {
 		endpoints = filterEndpointsByUserAssignments(endpoints, assignments)
 	}
+	meteringStatus, meteringReason := h.subMeteringStatus(s, rows, memo, endpoints)
+	var zeroEndpointReason string
+	if len(endpoints) == 0 {
+		zeroEndpointReason = h.subZeroEndpointReason(s, rows, now)
+	}
 	return subscriptionView{
 		ID: s.ID, Name: s.Name, Kind: s.Kind, Token: s.Token, Path: "/api/v1/open_api/sub/" + s.Token,
 		SourceAll: s.SourceAll == 1, InboundIDs: selected, SourceIDs: sourceIDs, SharedIDs: shared, Options: pipe,
@@ -913,7 +1377,35 @@ func (h *Handler) subscriptionViewForAssignmentsMemo(s *model.Subscription, rows
 		NodeCount:   kernel.SubscriptionNodeCount(format, endpoints, countOpts),
 		UploadBytes: s.UploadBytes, DownloadBytes: s.DownloadBytes, TrafficLimit: s.TrafficLimit,
 		ResetDay: s.ResetDay, TrafficSince: subTrafficSince(s), OverQuota: subOverQuota(s),
-		MeteringUnsupported: isShare(s) && s.ID > kernel.MaxUserMarkID,
+		// C-07：非分享订阅永不计量（见 MeteringUnsupported 字段注释）。
+		// F4 分支的旧谓词 isShare(s) && s.ID > MaxUserMarkID 在此作废——
+		// 它漏掉了非分享订阅（C-07 的修法），以 F1 的新谓词为准。
+		MeteringUnsupported: !isShare(s) || s.ID > kernel.MaxUserMarkID,
+		AppliedActive:       s.AppliedActive,
+		MeteringStatus:      meteringStatus,
+		MeteringReason:      meteringReason,
+		ZeroEndpointReason:  zeroEndpointReason,
+	}
+}
+
+// fillLastReportedAt backfills LastReportedAt for views built in this
+// request (one batched query over subscription_counter; a query failure
+// leaves 0 = unknown and never fails the response — freshness is
+// advisory, the counters themselves are authoritative).
+func (h *Handler) fillLastReportedAt(views []subscriptionView) {
+	if h == nil || h.repo == nil || len(views) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(views))
+	for i := range views {
+		ids = append(ids, views[i].ID)
+	}
+	updates, err := h.repo.LastSubscriptionCounterUpdates(ids)
+	if err != nil {
+		return
+	}
+	for i := range views {
+		views[i].LastReportedAt = updates[views[i].ID]
 	}
 }
 
@@ -962,6 +1454,9 @@ func (h *Handler) subscriptionList(w http.ResponseWriter, r *http.Request) {
 			items[i].IsDefault = items[i].ID == def.ID
 		}
 	}
+	// D-06：回填各订阅计量计数最近上报时刻（批量一次），列表／详情
+	// 的流量数旁据此显示新鲜度。
+	h.fillLastReportedAt(items)
 	response.WriteJSON(w, response.OK(map[string]interface{}{
 		"items": items,
 	}))
@@ -1589,7 +2084,19 @@ func (h *Handler) subscriptionResetTraffic(w http.ResponseWriter, r *http.Reques
 		respondInternalError(w, "subscriptionResetTraffic", err)
 		return
 	}
-	response.WriteJSON(w, response.OK(h.subscriptionView(s, rows, now, "")))
+	view := h.subscriptionView(s, rows, now, "")
+	views := []subscriptionView{view}
+	h.fillLastReportedAt(views)
+	view = views[0]
+	// D-05：重置回执须含下发结果。syncSubscriptions 失败只记日志，
+	// 以往回执仍是「操作成功」——以 AppliedActive 实态与期望值对照
+	// （保存路径 :1355-1365 的 pushFailureMsg 范例同口径）：分享订阅
+	// 且当前应启用时 AppliedActive 须为 1，否则凭据未落地。
+	if expectedApplied := boolToInt(isShare(s) && subActive(s, now)); s.AppliedActive != expectedApplied {
+		response.WriteJSON(w, response.R{Code: 0, Msg: "已重置，但下发到节点失败，后台将自动重试", Data: view, TS: time.Now().UnixMilli()})
+		return
+	}
+	response.WriteJSON(w, response.OK(view))
 }
 
 type subPreviewItem struct {

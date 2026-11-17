@@ -661,7 +661,7 @@ func (h *Handler) rebindForwardServiceOnSelfOccupiedPort(forward *forwardRecord,
 		return err
 	}
 	if conflict != nil {
-		// L9 观察 2：三源判重命中的未必是转发，按来源措辞（助手在
+		// L9 观察 2：四源判重命中的未必是转发，按来源措辞（助手在
 		// mutations.go），不误报「已被其他转发占用」。
 		return errors.New(forwardPortConflictMessage(node, port, conflict))
 	}
@@ -838,7 +838,14 @@ func (h *Handler) controlForwardServices(forward *forwardRecord, commandType str
 
 		nodeHandled, lastNotFoundErr, err := h.controlForwardServicesOnNode(fp.NodeID, bases, commandType)
 		if err != nil {
-			if isNodeOfflineOrTimeoutError(err) {
+			// F4/C-05：离线/超时只许 PauseService 吞掉——数据面
+			// 已停、无流量可漏，DB 暂停态即权威态（暂停行不重推，
+			// 重连亦不复活）。ResumeService 吞掉即谎报成功：转发
+			// 被标 Active、从 PausedForwardIDs 摘除、agent 从未收
+			// 到 resume，且无重试载体（节点 14 全程离线时转发 29
+			// 0→1 即此例）。本循环除删除分支外只到 Pause/Resume，
+			// 故以 isPauseServiceCommand 划界即全集。
+			if isNodeOfflineOrTimeoutError(err) && isPauseServiceCommand(commandType) {
 				continue
 			}
 			return err
@@ -852,6 +859,45 @@ func (h *Handler) controlForwardServices(forward *forwardRecord, commandType str
 			nodeHandled, lastNotFoundErr, err = h.controlForwardServicesOnNode(fp.NodeID, bases, commandType)
 			if err != nil {
 				return err
+			}
+		}
+
+		// C-04：PauseService 时服务不存在，不重建，验端口实态——
+		// 静默即本就已暂停（成功）；仍监听/仍有已建立连接即孤儿
+		// 监听者占口（精确冲突错）。探针 agent（>= 2.1.13）才走
+		// 此路；旧 agent 无探针命令，沿用自愈重建过渡路径（升级
+		// 后自动走探针路），自愈失败仍明错返回。
+		if !nodeHandled && lastNotFoundErr != nil && isPauseServiceCommand(commandType) {
+			if !h.nodeSupportsPortProbe(fp.NodeID) {
+				if healErr := h.syncForwardServices(forward, "UpdateService", true); healErr != nil {
+					return healErr
+				}
+				healed = true
+				nodeHandled, lastNotFoundErr, err = h.controlForwardServicesOnNode(fp.NodeID, bases, commandType)
+				if err != nil {
+					return err
+				}
+			} else {
+				dead, verr := h.verifyForwardPortsDeadOnNode(fp.NodeID, forwardPortsOfNode(ports, fp.NodeID))
+				if verr != nil {
+					// 探针是此处的唯一证据：探针失败 fail-closed，
+					// 不得假设已死（重试由调用方 backstop 承担）。
+					return verr
+				}
+				if !dead {
+					return fmt.Errorf("暂停转发失败：节点 %s 上转发端口 %v 仍在监听或仍有已建立连接（服务注册表无此服务，疑似孤儿监听者占用），未重建服务", h.nodeLabel(fp.NodeID), forwardPortsOfNode(ports, fp.NodeID))
+				}
+				// 端口已静默：暂停目标已达成，视为该节点已处理。
+				continue
+			}
+		}
+
+		// C-04：暂停命令成功后验端口确实已死（监听消失＋无已建立
+		// 连接）；探针失败只记日志 fail-open（暂停本身已成功，探
+		// 针是安全网不是门）。旧 agent 无探针命令，跳过验证。
+		if nodeHandled && isPauseServiceCommand(commandType) && h.nodeSupportsPortProbe(fp.NodeID) {
+			if verr := h.verifyPausedPortsDead(fp.NodeID, forwardPortsOfNode(ports, fp.NodeID)); verr != nil {
+				return verr
 			}
 		}
 
@@ -924,8 +970,45 @@ func deleteForwardServiceCandidates(bases []string, send func(name string) error
 }
 
 func shouldSelfHealForwardServiceControl(commandType string) bool {
+	// C-04：PauseService 永不自愈重建——暂停时服务不存在，说明 agent
+	// 侧注册表已丢该服务；重建会在已监听端口上 bind 撞 EADDRINUSE，
+	// 而转发继续跑（登记转发 168 两次失败）。PauseService 的
+	// NotFound 改走端口实态验证（见 controlForwardServices），旧
+	// agent（无探针命令）才沿用自愈过渡路径。ResumeService 保留自愈：
+	// 恢复时服务不存在，重建即恢复意图本身。
 	cmd := strings.ToLower(strings.TrimSpace(commandType))
-	return cmd == "pauseservice" || cmd == "resumeservice"
+	return cmd == "resumeservice"
+}
+
+// isPauseServiceCommand reports whether commandType is PauseService
+// (case/space-insensitive, same normalisation as shouldSelfHeal*).
+func isPauseServiceCommand(commandType string) bool {
+	return strings.EqualFold(strings.TrimSpace(commandType), "PauseService")
+}
+
+// nodeSupportsPortProbe 判定节点 agent 是否含 CheckPortListening
+// （C-04 暂停验证的命令，随 2.1.13 出）。版本读不到/不可解析一律
+// 按不支持处理（走旧自愈过渡路径，不引入新失败形态）。
+func (h *Handler) nodeSupportsPortProbe(nodeID int64) bool {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return false
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		return false
+	}
+	return agentSupportsPortProbe(node.Version.String)
+}
+
+// forwardPortsOfNode returns the forward's ports on one node.
+func forwardPortsOfNode(ports []forwardPortRecord, nodeID int64) []int {
+	out := make([]int, 0, len(ports))
+	for _, fp := range ports {
+		if fp.NodeID == nodeID && fp.Port > 0 {
+			out = append(out, fp.Port)
+		}
+	}
+	return out
 }
 
 func (h *Handler) applyNodeProtocolChange(nodeID int64, httpVal, tlsVal, socksVal int) error {

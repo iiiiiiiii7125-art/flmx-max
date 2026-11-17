@@ -438,6 +438,8 @@ func (h *Handler) runResetAndExpiryJob(now time.Time) {
 
 	h.resetMonthlyFlow(now)
 	h.resetUserQuotaWindows(now)
+	// C-05 F4：已解禁但释放失败的待恢复清单在此重试（分钟级维护轮）。
+	h.reconcilePendingQuotaReleases(now)
 	h.reconcileUserQuotaEnforcement(now)
 	h.disableExpiredUsers(now.UnixMilli())
 	h.disableExpiredUserTunnels(now.UnixMilli())

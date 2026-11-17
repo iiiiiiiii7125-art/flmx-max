@@ -26,6 +26,7 @@ import (
 const (
 	notifyEventNodeOffline = "node_offline"
 	// A4-V-06：升级/回退下发后在核验窗口内未回连到目标版本。
+	notifyEventNftCollectFailed  = "nft_collect_failed"
 	notifyEventNodeUpgradeFailed = "node_upgrade_failed"
 	notifyEventInboundDown       = "inbound_down"
 	notifyEventKernelError       = "kernel_error"
@@ -42,22 +43,22 @@ const (
 )
 
 const (
-	notifyConfigEnabled     = "notify_enabled"
-	notifyConfigEvents      = "notify_events"
-	notifyConfigTGToken     = "notify_telegram_bot_token"
-	notifyConfigTGChatID    = "notify_telegram_chat_id"
-	notifyConfigTGAPIBase   = "notify_telegram_api_base"
-	notifyConfigWebhookURL  = "notify_webhook_url"
+	notifyConfigEnabled    = "notify_enabled"
+	notifyConfigEvents     = "notify_events"
+	notifyConfigTGToken    = "notify_telegram_bot_token"
+	notifyConfigTGChatID   = "notify_telegram_chat_id"
+	notifyConfigTGAPIBase  = "notify_telegram_api_base"
+	notifyConfigWebhookURL = "notify_webhook_url"
 	// F3-NEW-01：三项资源告警的独立开关（与 notify_events 列表无关）。
 	// 缺键＝开（旧配置/新装默认开——撞墙前预警默认必须在）；
 	// 显式 "false" 才关；其他非法值按开处理（预警往开的方向失效）。
 	notifyConfigConntrackHigh = "notify_conntrack_high"
 	notifyConfigDiskHigh      = "notify_disk_high"
 	notifyConfigAgentMemHigh  = "notify_agent_memory_high"
-	defaultTelegramAPIBase  = "https://api.telegram.org"
-	notifySendTimeout       = 10 * time.Second
-	notifyExpiryWindow      = 3 * 24 * time.Hour
-	notifyInboundDownStreak = 2
+	defaultTelegramAPIBase    = "https://api.telegram.org"
+	notifySendTimeout         = 10 * time.Second
+	notifyExpiryWindow        = 3 * 24 * time.Hour
+	notifyInboundDownStreak   = 2
 	// O8-004：已过期超过该时长的条目不再补发到期通知。到期告警状态（expiryAlerted /
 	// alertOnce 键）只在内存中，面板重启后会把历史已过期的节点/用户/订阅再报一次；
 	// 加上这条下界后，重启只重报"刚到期"的，久已过期的直接跳过。
@@ -78,6 +79,48 @@ func (s notifySettings) empty() bool {
 	return (s.TelegramToken == "" || s.TelegramChatID == "") && s.WebhookURL == ""
 }
 
+// notifyLogLastAt throttles repeated notify-configuration warnings
+// (C-06): dispatch runs on every event, so an unthrottled log would
+// spam once per event; with no log at all the misconfiguration is
+// invisible forever (the rehearsal panel sat 40 minutes with zero
+// notify rows and no trace).
+var (
+	notifyLogMu     sync.Mutex
+	notifyLogLastAt = map[string]time.Time{}
+)
+
+// logNotifyThrottled logs msg at most once per hour per key.
+func logNotifyThrottled(key, format string, args ...interface{}) {
+	notifyLogMu.Lock()
+	defer notifyLogMu.Unlock()
+	if time.Since(notifyLogLastAt[key]) < time.Hour {
+		return
+	}
+	notifyLogLastAt[key] = time.Now()
+	log.Printf(format, args...)
+}
+
+// notifyMisconfigured reports whether notifications are enabled but
+// have no usable channel (token/chat_id/webhook missing) — the C-06
+// silent-swallow case: dispatchNotify returns Disabled and nothing
+// is ever logged or shown. Deliberately off (master switch) is NOT
+// misconfiguration.
+func (h *Handler) notifyMisconfigured() bool {
+	cfg, err := h.cachedConfigs()
+	if err != nil {
+		return false
+	}
+	if cfg[notifyConfigEnabled] != "true" {
+		return false
+	}
+	settings := notifySettings{
+		TelegramToken:  strings.TrimSpace(cfg[notifyConfigTGToken]),
+		TelegramChatID: strings.TrimSpace(cfg[notifyConfigTGChatID]),
+		WebhookURL:     strings.TrimSpace(cfg[notifyConfigWebhookURL]),
+	}
+	return settings.empty()
+}
+
 type notifyMessage struct {
 	Event   string `json:"event"`
 	Title   string `json:"title"`
@@ -92,7 +135,12 @@ type notifier struct {
 	mu             sync.Mutex
 	offlineTimers  map[int64]*time.Timer
 	offlineAlerted map[int64]bool
-	expiryAlerted  map[int64]int64
+	// nftCollectAlerted 记录已对当前连续失败 streak 发过一次告警的
+	// 节点（A-中-2）：告警只在越阈值时发一次；发送失败时回调清
+	// 掉标记，下一轮重试；采集恢复时清掉标记并忘掉指纹，以便下
+	// 一个 streak 再次告警（与 offlineAlerted 同口径）。
+	nftCollectAlerted map[int64]bool
+	expiryAlerted     map[int64]int64
 	// alerted holds keys of reminders already sent (traffic, expiry).
 	alerted map[string]bool
 	// recentSent 记录最近成功发送过的通知指纹与时间（O8-005），用于抑制
@@ -120,15 +168,16 @@ type notifier struct {
 
 func newNotifier() *notifier {
 	return &notifier{
-		offlineTimers:   make(map[int64]*time.Timer),
-		offlineAlerted:  make(map[int64]bool),
-		expiryAlerted:   make(map[int64]int64),
-		alerted:         make(map[string]bool),
-		recentSent:      make(map[string]time.Time),
-		inflight:        make(map[string]bool),
-		delivered:       make(map[string]map[string]time.Time),
-		recoveryTimers:  make(map[int64]*time.Timer),
-		recoveryPending: make(map[int64]bool),
+		offlineTimers:     make(map[int64]*time.Timer),
+		offlineAlerted:    make(map[int64]bool),
+		nftCollectAlerted: make(map[int64]bool),
+		expiryAlerted:     make(map[int64]int64),
+		alerted:           make(map[string]bool),
+		recentSent:        make(map[string]time.Time),
+		inflight:          make(map[string]bool),
+		delivered:         make(map[string]map[string]time.Time),
+		recoveryTimers:    make(map[int64]*time.Timer),
+		recoveryPending:   make(map[int64]bool),
 		// AUDIT-R26 (R5R26-001): 重定向目标同样走 validateNotifyURL 校验，
 		// 防 302/301 跳转到元数据地址绕过 LAD26-001 的 SSRF 控制。
 		// 同时限制最多 5 跳，防重定向环。
@@ -204,6 +253,9 @@ func resourceAlertConfigKey(event string) (string, bool) {
 func (h *Handler) notifyConfig(event string) (notifySettings, string, bool) {
 	cfg, err := h.cachedConfigs()
 	if err != nil {
+		// C-06：配置读失败此前静默返回 Disabled——每次派发都无声丢弃。
+		// 节流记日志（每小时一次），不改 Disabled 语义。
+		logNotifyThrottled("config-read", "notify config read failed: %v", err)
 		return notifySettings{}, "", false
 	}
 	app := strings.TrimSpace(cfg["app_name"])
@@ -572,6 +624,12 @@ func (h *Handler) dispatchNotify(ctx context.Context, event, title, message stri
 	}
 	settings, app, ok := h.notifyConfig(event)
 	if !ok {
+		// C-06：主开关已开但无可用通道时，Disabled 是配置错误而不
+		// 是「用户不想收」——节流记日志（每小时一次），不改 Disabled
+		// 语义（状态机仍按已消费处理，不当作 Failed 重发）。
+		if h.notifyMisconfigured() {
+			logNotifyThrottled("misconfigured", "notify misconfigured: notifications enabled but no usable channel (telegram token/chat id or webhook missing); events are dropped")
+		}
 		return notifyOutcomeDisabled
 	}
 	fp := notifyFingerprint(event, title, message)
@@ -739,6 +797,7 @@ func notifyEmoji(event, title string) string {
 	}
 	switch event {
 	case notifyEventNodeOffline, notifyEventNodeUpgradeFailed,
+		notifyEventNftCollectFailed,
 		notifyEventInboundDown, notifyEventKernelError,
 		"backup", "backup_failed":
 		// "backup" has no live kind at this baseline (Gist backup was
@@ -994,6 +1053,7 @@ func (h *Handler) forgetNode(nodeID int64) {
 	}
 	delete(n.recoveryPending, nodeID)
 	delete(n.offlineAlerted, nodeID)
+	delete(n.nftCollectAlerted, nodeID)
 	delete(n.expiryAlerted, nodeID)
 }
 
@@ -1025,6 +1085,11 @@ func (h *Handler) pruneStaleNodeAlerts() {
 	for id := range n.offlineAlerted {
 		if !alive[id] {
 			delete(n.offlineAlerted, id)
+		}
+	}
+	for id := range n.nftCollectAlerted {
+		if !alive[id] {
+			delete(n.nftCollectAlerted, id)
 		}
 	}
 	for id := range n.expiryAlerted {
@@ -1074,6 +1139,63 @@ var notifyOfflineRetryDelay = time.Minute
 // notifyOnlineRetryDelay 是恢复通知发送失败后的重排间隔（R2X-017），
 // 与掉线向重排同款 1 分钟。
 var notifyOnlineRetryDelay = time.Minute
+
+// dispatchNftCollectFailedAlert sends the nft-collection-failed alert
+// (A-中-2) exactly once per failing streak: the caller only invokes it
+// on the threshold crossing (or a retry round while the mark is clear).
+// The mark is set before enqueueing and cleared on send failure so the
+// next round retries; a successful/suppressed send keeps the mark until
+// the collection recovers (see dispatchNftCollectRecoveredAlert). The
+// message body is the stable "节点：<label>" (same shape as the offline
+// alert) so the recovery can forget the fingerprint; the failure reason
+// lives on the node page (nftCollectLastError) and in the backend log.
+func (h *Handler) dispatchNftCollectFailedAlert(nodeID int64) {
+	n := h.notifier
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	if n.nftCollectAlerted[nodeID] {
+		n.mu.Unlock()
+		return
+	}
+	n.nftCollectAlerted[nodeID] = true
+	n.mu.Unlock()
+	label := h.nodeLabel(nodeID)
+	h.notifyTracked(notifyEventNftCollectFailed, "节点 nft 采集失败", "节点："+label, func(outcome notifyOutcome) {
+		if outcome != notifyOutcomeFailed {
+			return
+		}
+		n.mu.Lock()
+		delete(n.nftCollectAlerted, nodeID)
+		n.mu.Unlock()
+	})
+}
+
+// dispatchNftCollectRecoveredAlert sends the recovery notification after
+// a node's nft collection recovers from a failing streak, and forgets
+// the failure fingerprint so a later streak can alert again (same
+// event + same message body as the failure, title differs —
+// forgetEventMessage matches on event+message, A7-02 pattern).
+func (h *Handler) dispatchNftCollectRecoveredAlert(nodeID int64) {
+	n := h.notifier
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	if !n.nftCollectAlerted[nodeID] {
+		n.mu.Unlock()
+		return
+	}
+	delete(n.nftCollectAlerted, nodeID)
+	n.mu.Unlock()
+	label := h.nodeLabel(nodeID)
+	h.notifyTracked(notifyEventNftCollectFailed, "节点 nft 采集恢复", "节点："+label, func(outcome notifyOutcome) {
+		if outcome == notifyOutcomeSent || outcome == notifyOutcomeSuppressed {
+			h.notifier.forgetEventMessage(notifyEventNftCollectFailed, "节点："+label)
+		}
+	})
+}
 
 func (h *Handler) notifyNodeOffline(nodeID int64) {
 	n := h.notifier
@@ -1337,4 +1459,58 @@ func (h *Handler) notifyTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
+}
+
+// notifyHealth reports whether saved notification settings can
+// actually deliver anything (C-06): the panel previously had no way
+// to see a misconfiguration — master on, token set, chat_id/webhook
+// missing — until events silently never arrived. No secrets are
+// returned, only presence booleans. Route is admin-only via the
+// /api/v1/notify/ middleware prefix.
+func (h *Handler) notifyHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	cfg, err := h.cachedConfigs()
+	if err != nil {
+		respondInternalError(w, "notifyHealth: config read failed", err)
+		return
+	}
+	settings := notifySettings{
+		TelegramToken:  strings.TrimSpace(cfg[notifyConfigTGToken]),
+		TelegramChatID: strings.TrimSpace(cfg[notifyConfigTGChatID]),
+		WebhookURL:     strings.TrimSpace(cfg[notifyConfigWebhookURL]),
+	}
+	enabled := cfg[notifyConfigEnabled] == "true"
+	eventsSelected := strings.TrimSpace(cfg[notifyConfigEvents]) != "none"
+	usable := enabled && !settings.empty() && eventsSelected
+	var missing []string
+	if enabled && settings.empty() {
+		// Either fill the missing Telegram half or set a webhook.
+		if settings.TelegramToken == "" {
+			missing = append(missing, "telegramToken")
+		}
+		if settings.TelegramChatID == "" {
+			missing = append(missing, "telegramChatId")
+		}
+		if settings.WebhookURL == "" {
+			missing = append(missing, "webhook")
+		}
+	}
+	if enabled && !eventsSelected {
+		missing = append(missing, "events")
+	}
+	if missing == nil {
+		missing = []string{}
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"enabled":           enabled,
+		"telegramTokenSet":  settings.TelegramToken != "",
+		"telegramChatIdSet": settings.TelegramChatID != "",
+		"webhookSet":        settings.WebhookURL != "",
+		"eventsSelected":    eventsSelected,
+		"usable":            usable,
+		"missing":           missing,
+	}))
 }

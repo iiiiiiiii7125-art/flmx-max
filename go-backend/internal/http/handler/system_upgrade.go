@@ -471,17 +471,32 @@ func parseVersionParts(v string) ([]int, error) {
 	return parts, nil
 }
 
+// stripVersionSuffixForCompare 剥比较用的版本后缀（R3-E-01）：
+// 只剥文档化的 "-cand" 后缀（upgrade.md "候选版版本号的比较规则"：
+// 2.1.14-cand 即 2.1.14）。注意不是门禁侧 parseConnlogAgentVersion
+// 的全量剥离（"-"/"+" 后任意后缀）：升级比较驱动防降级与落地核验，
+// 把 dev 构建误判为正式版是实害——"2.1.0-dev.int8" 必须继续提取
+// 失败、fail-closed（见 TestUpgradeVerifyTargetMatches 的钉死用例）。
+// 其他粘连后缀（-beta1、+build 等）同样不剥，维持 R4-N1 的严格口径。
+func stripVersionSuffixForCompare(v string) string {
+	return strings.TrimSuffix(v, "-cand")
+}
+
 // extractLeadingSemver 从「上报型版本串」中提取首段语义版本（R4-N1）。
 // node.version 存的是 agent 握手上报的 fullVersion，形如
 // "1.3.0 (debian/amd64)"（go-gost/main.go 口径：版本 + 空格 + 括号内
 // 的发行版/架构）；联邦对端自述的面板版本同属这一类。这类被比较的
 // 存量/上报值不能直接套 compareVersions 的严格语义——后缀不是版本
-// 的一部分：先取首个空白前的段，再对该段做严格解析。无空白分隔的
-// 粘连后缀（如 "1.3.2-beta1"）、无数字段、空串一律提取失败，调用
-// 方维持 fail-closed。用户输入的目标版本不走本函数（各入口已有
-// 格式校验 + compareVersions 严格把关）。"dev" 原样透传，保留
-// compareVersions 的 dev 口径；各调用方对 dev 的既有豁免（联邦警
-// 告）/门控（bypass fail-closed）语义不经本函数改变。
+// 的一部分：先取首个空白前的段，再剥文档化的 "-cand" 后缀
+// （R3-E-01：2.1.14-cand 按 2.1.14 计，与 upgrade.md 候选版规则
+// 一致；此前粘连后缀一律提取失败，致候选版 agent 的升级比较恒报
+// 「无法比较」、落地校验永不匹配），然后对基段做严格解析。其他
+// 粘连后缀（-beta1、-dev.int8、+build 等）仍提取失败——dev 构建
+// 不得误判为正式版落地（见 TestUpgradeVerifyTargetMatches）。无数字
+// 段、空段、空串仍提取失败，调用方维持 fail-closed。用户输入的目标
+// 版本不走本函数（各入口已有格式校验 + compareVersions 严格把关）。
+// "dev" 原样透传，保留 compareVersions 的 dev 口径；各调用方对 dev
+// 的既有豁免（联邦警告）/门控（bypass fail-closed）语义不经本函数改变。
 func extractLeadingSemver(v string) (string, bool) {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -495,6 +510,7 @@ func extractLeadingSemver(v string) (string, bool) {
 		head = v[:i]
 	}
 	head = strings.TrimPrefix(head, "v")
+	head = stripVersionSuffixForCompare(head)
 	if _, err := parseVersionParts(head); err != nil {
 		return "", false
 	}
@@ -511,6 +527,16 @@ func compareWithReportedVersion(target, reported string) (int, error) {
 		return 0, fmt.Errorf("reported version %q has no leading semantic version", reported)
 	}
 	return compareVersions(target, rep)
+}
+
+// comparePanelUpgradeVersions 比较面板自升级的目标版本与当前版本
+// （R3-E-01，纯函数，供单测）：当前版本是面板自报（FLMX_VERSION /
+// 部署镜像 tag），可能带 -cand 后缀——先剥 -cand 后缀再比；目标侧
+// 是用户输入/发行列表版本，走 compareVersions 严格语义不变（与
+// compareWithReportedVersion 的目标侧口径一致）。其他粘连后缀不剥，
+// dev 构建不得误判为正式版（见 TestUpgradeVerifyTargetMatches）。
+func comparePanelUpgradeVersions(target, current string) (int, error) {
+	return compareVersions(strings.TrimPrefix(target, "v"), stripVersionSuffixForCompare(strings.TrimPrefix(current, "v")))
 }
 
 // compareVersions 比较两个版本号（如 "1.0.7"）。
@@ -3103,9 +3129,11 @@ func decodeSystemUpgradeRequest(r *http.Request, req *systemUpgradeRequest) erro
 func systemUpgradeVersionResponse(current, channel, latest string, lookupErr error, capability systemUpgradeCapabilityData) systemUpgradeVersionData {
 	// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
 	// A11-132-06：版本不可比（解析失败）时 fail-closed，不报有更新。
+	// R3-E-01：比较前剥 -cand 后缀，否则候选版
+	// 面板恒收不到更新提示。
 	hasUpdate := false
 	if latest != "" {
-		if cmp, err := compareVersions(latest, current); err == nil && cmp > 0 {
+		if cmp, err := compareVersions(stripVersionSuffixForCompare(latest), stripVersionSuffixForCompare(current)); err == nil && cmp > 0 {
 			hasUpdate = true
 		}
 	}
@@ -3178,7 +3206,8 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 		if channel == releaseChannelStable {
 			if tag, ferr := resolveLatestTagByRedirect(); ferr == nil && releaseChannelFromTag(tag) == channel {
 				hasUpdate := false
-				if cmp, cerr := compareVersions(tag, current); cerr == nil && cmp > 0 {
+				// R3-E-01：比较前剥 -cand 后缀。
+				if cmp, cerr := compareVersions(stripVersionSuffixForCompare(tag), stripVersionSuffixForCompare(current)); cerr == nil && cmp > 0 {
 					hasUpdate = true
 				}
 				response.WriteJSON(w, response.OK(systemUpgradeCheckData{
@@ -3203,9 +3232,11 @@ func (h *Handler) systemCheckUpdates(w http.ResponseWriter, r *http.Request) {
 	}
 	// O9-004：语义版本比较（旧逻辑字符串相等：1.0.10 与 1.0.9 会误判、降级也会误报"有更新"）
 	// A11-132-06：版本不可比（解析失败）时 fail-closed，不报有更新。
+	// R3-E-01：比较前剥 -cand 后缀，否则候选版
+	// 面板恒收不到更新提示。
 	hasUpdate := false
 	if latest != "" {
-		if cmp, err := compareVersions(latest, current); err == nil && cmp > 0 {
+		if cmp, err := compareVersions(stripVersionSuffixForCompare(latest), stripVersionSuffixForCompare(current)); err == nil && cmp > 0 {
 			hasUpdate = true
 		}
 	}
@@ -3291,8 +3322,10 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	// U1-005：比较前剥离 "v" 前缀（与节点侧 upgrade.go 一致），避免手填 v1.0.10 被误判降级
 	currentVer := currentPanelVersion()
 	// A11-132-06：不可比版本 fail-closed 拒绝（旧实现把解析失败的段按 0
-	// 计，构造版本号可绕过这道防降级比较）。
-	cmp, cmpErr := compareVersions(strings.TrimPrefix(version, "v"), strings.TrimPrefix(currentVer, "v"))
+	// 计，构造版本号可绕过这道防降级比较）。当前版本经
+	// comparePanelUpgradeVersions 归一：面板自报可能带 -cand 后缀
+	// （R3-E-01），剥后缀后按基版本比；目标侧严格语义不变。
+	cmp, cmpErr := comparePanelUpgradeVersions(version, currentVer)
 	if cmpErr != nil {
 		log.Printf("systemUpgrade: 版本不可比较，拒绝升级：%v", cmpErr)
 		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("版本号 %s 或当前版本 %s 无法比较，已拒绝升级: %v", version, currentVer, cmpErr)))

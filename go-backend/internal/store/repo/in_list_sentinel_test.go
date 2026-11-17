@@ -38,6 +38,8 @@ type inListSiteClass struct {
 // 增删点位只须改此处，门禁以此处为准（W8 对账）。
 var inListSiteRegistry = map[string]inListSiteClass{
 	// —— 分块（chunkInt64IDs）——
+	"repository_subscription.go:LastSubscriptionCounterUpdates":                {"chunkInt64IDs", "F4/D-06：订阅列表页当前页订阅 id 集，按 inListChunkSize 分块求 MAX(updated_time)"},
+	"repository.go:LatestNodeMetricTimes":                                       {"chunkInt64IDs", "F5/A-低-6：节点列表 stale 打标的节点集，按 inListChunkSize 分块求 MAX(timestamp)（集成补登：F5 引入时漏登记，repo 门红）"},
 	"repository.go:ListNodes":                                           {"chunkInt64IDs", "整表节点集，T2-NEW-01 已分块"},
 	"repository_upgrade_verify.go:ListVisibleNodeUpgradeVerifications":  {"chunkInt64IDs", "整表节点集（升级核验可见行），A4-V-06 已分块"},
 	"repository.go:ListForwards":                                        {"chunkInt64IDs", "整表转发集，已分块"},
@@ -58,6 +60,7 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_cascade_cleanup.go:loadNftPendingDeletesByForwardIDsTx": {"chunkInt64IDs", "FIX-CASCADE/E1-01：墓碑台账按 forward 集物化，已分块"},
 	"repository_cascade_cleanup.go:forwardIDsWithRemainingPortsTx":      {"chunkInt64IDs", "FIX-CASCADE/E1-11：受影响转发集的剩余端口判定，已分块"},
 	"connlog.go:SumConnlogDroppedByNodes":                               {"chunkInt64IDs", "弹窗页脚 dropped 汇总的入口节点集，按 inListChunkSize 分块求和（2.1.5 合流补登：INT215 集成引入时漏登记）"},
+	"traffic_dropped.go:SumTrafficNodeDroppedByNodes":                   {"chunkInt64IDs", "节点流量页 dropped 汇总的节点集，按 inListChunkSize 分块求和（流量审计 A-中-1）"},
 	"repository_control.go:ListForwardPortsByNodes":                     {"chunkInt64IDs", "节点列表打标对账的节点集（lane C），按 inListChunkSize 分块"},
 
 	// —— 手工切片分块（[start:end] 窗口）——
@@ -66,16 +69,16 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_flow.go:MapForwardIDsToTunnelIDs": {"[start:end]", "整表转发集，手工切片分块"},
 
 	// —— 代码字面量小清单（构造上有界）——
-	"repository.go:seedData":                                {"", "字面量 3 元品牌名清单"},
-	"repository.go:ensurePostgresIDDefaults":                {"", "字面量 2 元类型名清单"},
-	"repository.go:ListEnabledServiceMonitors":              {"", "字面量 2 元协议清单"},
-	"repository.go:importServiceMonitorLimits":              {"", "字面量 7 元服务监控限值配置键清单"},
-	"repository_subscription.go:migrateSubscriptions":       {"", "字面量 5 元旧配置键清单"},
-	"repository.go:migrateRemoveGistConfigKeys":             {"", "已下线 Gist 配置键清单已提升为 repo 包级单点 retiredConfigKeysList（config_policy.go），本函数与备份恢复过滤同源消费（R2-E3-F03）"},
-	"repository_mutations.go:ListSoleSegmentTunnelsForNode": {"", "字面量 2 元链路段角色清单（入口/出口，L4-03）"},
-	"repository_upgrade_verify.go:SupersedeNodeUpgradeVerification": {"", "字面量 2 元核验状态清单（pending/failed 未结态，LB-03）"},
+	"repository.go:seedData":                                              {"", "字面量 3 元品牌名清单"},
+	"repository.go:ensurePostgresIDDefaults":                              {"", "字面量 2 元类型名清单"},
+	"repository.go:ListEnabledServiceMonitors":                            {"", "字面量 2 元协议清单"},
+	"repository.go:importServiceMonitorLimits":                            {"", "字面量 7 元服务监控限值配置键清单"},
+	"repository_subscription.go:migrateSubscriptions":                     {"", "字面量 5 元旧配置键清单"},
+	"repository.go:migrateRemoveGistConfigKeys":                           {"", "已下线 Gist 配置键清单已提升为 repo 包级单点 retiredConfigKeysList（config_policy.go），本函数与备份恢复过滤同源消费（R2-E3-F03）"},
+	"repository_mutations.go:ListSoleSegmentTunnelsForNode":               {"", "字面量 2 元链路段角色清单（入口/出口，L4-03）"},
+	"repository_upgrade_verify.go:SupersedeNodeUpgradeVerification":       {"", "字面量 2 元核验状态清单（pending/failed 未结态，LB-03）"},
 	"repository_node_pending_uninstall.go:TransitionNodePendingUninstall": {"", "字面量 1–3 元待卸载前驱状态清单（issued/acked/unconfirmed，C4-G2 四态转移；全调用方均为代码字面量）"},
-	"repository_mutations.go:DeleteNodeCascadeWithOutcome":  {"", "字面量 2 元节点归属动态键清单（pending_realm_settle:<id> / kernel_orphan_recheck:<id>，FIX-CASCADE/E1-05）"},
+	"repository_mutations.go:DeleteNodeCascadeWithOutcome":                {"", "字面量 2 元节点归属动态键清单（pending_realm_settle:<id> / kernel_orphan_recheck:<id>，FIX-CASCADE/E1-05）"},
 
 	// —— 子查询形（IN (?) 传 *gorm.DB，不展开变量）——
 	"repository_mutations.go:DeleteUserCascade": {"", "forwardIDs/userTunnelIDs 为 Select 子查询，X01 A 集已核"},

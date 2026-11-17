@@ -1,7 +1,9 @@
 package repo
 
 import (
+	"errors"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -700,16 +702,26 @@ func TestImportNodeSecretCharsetGate(t *testing.T) {
 		}
 		return n.Secret
 	}
-	for _, id := range []int64{71, 72, 74, 75} {
-		if got := readSecret(id); got != "" {
-			t.Fatalf("node %d secret = %q, want \"\" (refused at the import face)", id, got)
+	// E-01-RES：拒收／空 secret 不再清空落库——恢复时现场重发新
+	// secret；恢复后的每个节点恒满足生成契约 ^[0-9a-f]{32}$，
+	// 空 secret 永不落库（UserMarkBaseForAgent 不再回落 v1）。
+	secretCharset := regexp.MustCompile(`^[0-9a-f]{32}$`)
+	seen := map[string]int64{}
+	for _, id := range []int64{71, 72, 73, 74, 75} {
+		got := readSecret(id)
+		if !secretCharset.MatchString(got) {
+			t.Fatalf("node %d secret = %q, want 32 lowercase hex (E-01-RES: restored node must always satisfy the generation contract)", id, got)
 		}
+		if prev, dup := seen[got]; dup {
+			t.Fatalf("node %d secret duplicates node %d minted secret (fresh secrets must be distinct)", id, prev)
+		}
+		seen[got] = id
 	}
 	if got := readSecret(73); got != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("node 73 secret = %q, want verbatim 32-hex", got)
 	}
 	warnText := strings.Join(result.ImportWarnings, "\n")
-	for _, want := range []string{"inject-quote", "inject-subst", "upper", "重置 secret"} {
+	for _, want := range []string{"inject-quote", "inject-subst", "upper", "empty", "现场重发新 secret"} {
 		if !strings.Contains(warnText, want) {
 			t.Fatalf("receipt must name %q, warnings=%v", want, result.ImportWarnings)
 		}
@@ -718,6 +730,37 @@ func TestImportNodeSecretCharsetGate(t *testing.T) {
 		if strings.Contains(warnText, leak) {
 			t.Fatalf("receipt must never echo the refused secret value (%q), warnings=%v", leak, result.ImportWarnings)
 		}
+	}
+}
+
+// E-01-RES：随机源失败时恢复 fail-closed——整单回滚，绝不落
+// 全零／空 secret（X-P3-14 同口径）。
+func TestImportNodeSecretMintRandFailureFailClosed(t *testing.T) {
+	dst, err := Open(filepath.Join(t.TempDir(), "dst.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	orig := cryptoRandRead
+	cryptoRandRead = func([]byte) (int, error) { return 0, errors.New("rand boom") }
+	defer func() { cryptoRandRead = orig }()
+
+	backup := &model.BackupData{
+		Version: "1.0",
+		Nodes: []model.NodeBackup{
+			{ID: 81, Name: "needs-mint", Secret: "", ServerIP: "192.0.2.81", Status: 1},
+		},
+	}
+	if _, err := dst.Import(backup, []string{"nodes"}); err == nil {
+		t.Fatalf("Import must fail when the secret mint random source fails, never store a zero/empty secret")
+	}
+	var n int64
+	if err := dst.db.Model(&model.Node{}).Where("id = ?", 81).Count(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("failed import must roll back, node 81 rows = %d, want 0", n)
 	}
 }
 

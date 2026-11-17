@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -110,15 +111,46 @@ func TestSSMeteringReconcileLifecycle(t *testing.T) {
 		t.Fatalf("exactly one companion expected, got %d", len(all))
 	}
 
-	// Demand loss recycles the companion.
+	// Demand loss parks the companion (B-L5): the row survives with
+	// Enabled=0, keeping its port and identity PSK, and it stops
+	// serving — the F4 gate must not see it.
 	sub.Enabled = 0
 	sub.UpdatedTime = time.Now().UnixMilli()
 	if err := r.SaveSubscription(sub); err != nil {
 		t.Fatal(err)
 	}
 	h.reconcileSSMetering()
-	if comp, _ := r.GetCompanionInbound(origin.ID); comp != nil {
-		t.Fatal("companion must be recycled when no active share subscription demands it")
+	parked, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || parked == nil {
+		t.Fatalf("companion must be parked (row retained) on demand loss, got %v %v", parked, err)
+	}
+	if parked.Enabled != 0 {
+		t.Fatal("parked companion must be disabled")
+	}
+	parkedIn, _ := inboundFromModel(*parked)
+	if parked.ID != firstID || parked.Port != firstPort || parkedIn.Settings.Password != firstPSK {
+		t.Fatal("parking must keep the same row, port and identity PSK")
+	}
+	if got, _ := h.companionInboundsByOrigin(); len(got) != 0 {
+		t.Fatalf("parked companion must not be retargetable, got %v", got)
+	}
+
+	// Demand back reactivates the very same endpoint.
+	sub.Enabled = 1
+	if err := r.SaveSubscription(sub); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcileSSMetering()
+	revived, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || revived == nil {
+		t.Fatalf("companion must revive on demand return: %v %v", revived, err)
+	}
+	revivedIn, _ := inboundFromModel(*revived)
+	if revived.ID != firstID || revived.Port != firstPort || revivedIn.Settings.Password != firstPSK {
+		t.Fatalf("reactivation must keep the same row, port and identity PSK, got id=%d port=%d", revived.ID, revived.Port)
+	}
+	if revived.Enabled != 1 {
+		t.Fatal("revived companion must be enabled")
 	}
 
 	// Demand back + switch off: still no companion.
@@ -133,6 +165,61 @@ func TestSSMeteringReconcileLifecycle(t *testing.T) {
 	h.reconcileSSMetering()
 	if comp, _ := r.GetCompanionInbound(origin.ID); comp != nil {
 		t.Fatal("companion must not exist while the switch is off")
+	}
+}
+
+// B-L5 conflict fallback: a parked companion whose port was taken by
+// hand must move to a fresh free port on reactivation — never
+// re-render into a collision — while keeping its identity PSK. (A
+// second inbound row on the same node+port is already forbidden by a
+// DB unique index, so the only hand-made collision is cross-table:
+// here a forward port squats the parked port.)
+func TestSSMeteringParkedPortConflictMoves(t *testing.T) {
+	r, h, _, origin, sub := seedMeteringFixture(t)
+	h.reconcileSSMetering()
+	comp, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must exist")
+	}
+	compIn, _ := inboundFromModel(*comp)
+	firstPort, firstPSK := comp.Port, compIn.Settings.Password
+
+	// Park it.
+	sub.Enabled = 0
+	sub.UpdatedTime = time.Now().UnixMilli()
+	if err := r.SaveSubscription(sub); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcileSSMetering()
+	if parked, _ := r.GetCompanionInbound(origin.ID); parked == nil || parked.Enabled != 0 {
+		t.Fatalf("companion must be parked, got %+v", parked)
+	}
+
+	// Squat the parked port with a hand-inserted forward port (the
+	// occupancy predicate would refuse this through the API).
+	if err := r.DB().Exec(`INSERT INTO forward_port (forward_id, node_id, port) VALUES (?, ?, ?)`, 9999, origin.NodeID, firstPort).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Demand back: reactivation must move, not collide.
+	sub.Enabled = 1
+	if err := r.SaveSubscription(sub); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcileSSMetering()
+	moved, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || moved == nil {
+		t.Fatalf("companion must revive: %v %v", moved, err)
+	}
+	if moved.Enabled != 1 {
+		t.Fatal("revived companion must be enabled")
+	}
+	if moved.Port == firstPort {
+		t.Fatalf("revived companion must move off the squatted port %d", firstPort)
+	}
+	movedIn, _ := inboundFromModel(*moved)
+	if movedIn.Settings.Password != firstPSK {
+		t.Fatal("a port move must keep the identity PSK")
 	}
 }
 
@@ -363,5 +450,156 @@ func TestSSMeteringPayloadGate(t *testing.T) {
 	raw, _ = json.Marshal(payload)
 	if strings.Contains(string(raw), upsk) {
 		t.Fatal("a disabled origin's companion must not render")
+	}
+}
+
+// B-VD-NEW: when the F4 gate is closed for a metering-managed origin
+// (companion row exists but the agent has not acked the current
+// config — e.g. the window right after a truncation dispatch rotates
+// passwords), a share subscription must render NO endpoint for that
+// origin, not the unmetered origin endpoint. A link fetched in that
+// window is static config and would escape metering permanently.
+func TestSSMeteringGateClosedFailsClosed(t *testing.T) {
+	r, h, k, origin, sub := seedMeteringFixture(t)
+	rows, err := r.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Control 1: no companion row at all (reconcile never ran) — a
+	// never-metered origin keeps serving the origin endpoint.
+	if eps := h.subEndpoints(sub, rows); len(eps) != 1 || eps[0].Inbound.ID != origin.ID || eps[0].Port != origin.Port {
+		t.Fatalf("origin without a companion row must keep serving the origin endpoint, got %d endpoints", len(eps))
+	}
+
+	h.reconcileSSMetering()
+	comp, err := r.GetCompanionInbound(origin.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must exist")
+	}
+	rows, err = r.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Gate closed: the companion exists but the agent never acked
+	// (no applied hash) — the share endpoint must be dropped, not
+	// served from the origin.
+	if eps := h.subEndpoints(sub, rows); len(eps) != 0 {
+		t.Fatalf("gate-closed share subscription must render no endpoint, got %d (port %d)", len(eps), eps[0].Port)
+	}
+
+	// Control 2: gate open (agent acked) — the endpoint is retargeted
+	// to the companion, as before.
+	markKernelApplied(t, r, h, k)
+	if eps := h.subEndpoints(sub, rows); len(eps) != 1 || eps[0].Inbound.ID != comp.ID || eps[0].Port != comp.Port {
+		t.Fatalf("gate-open share subscription must render exactly the companion endpoint, got %d endpoints", len(eps))
+	}
+
+	// Control 3: parked companion (Enabled=0, kept for reactivation
+	// per B-L5) still marks the origin as metering-managed — the
+	// endpoint stays dropped until the companion is live again.
+	comp.Enabled = 0
+	if err := r.SaveNodeInbound(comp); err != nil {
+		t.Fatal(err)
+	}
+	if eps := h.subEndpoints(sub, rows); len(eps) != 0 {
+		t.Fatalf("parked-companion share subscription must render no endpoint, got %d", len(eps))
+	}
+
+	// Control 4: a non-share subscription is untouched by the
+	// fail-closed — it keeps serving the origin even with the gate
+	// closed and the companion parked.
+	personal := *sub
+	personal.ID = sub.ID + 1000
+	personal.Kind = "personal"
+	personal.Token = strings.Repeat("f", 32)
+	personal.UUID = "u-personal"
+	if eps := h.subEndpoints(&personal, rows); len(eps) != 1 || eps[0].Inbound.ID != origin.ID || eps[0].Port != origin.Port {
+		t.Fatalf("non-share subscription must keep serving the origin endpoint, got %d endpoints", len(eps))
+	}
+}
+
+// TestSSMeteringCompanionListErrorFailsClosed (R3-E-LOW-01): when the
+// companion list itself is unreadable (DB error), the render side
+// cannot tell metering-managed origins from never-managed ones —
+// every direct SS endpoint of a share subscription is dropped
+// instead of falling back to the unmetered origin.
+//
+// The branch is proven with a fault-injected memo (a memo that
+// already carries the load error): endpoints still build normally
+// against the open DB, so a zero result can only come from the
+// fail-closed drop — never from a broken render pipeline. The
+// closed-DB cell then proves the real ListCompanionInbounds failure
+// surfaces as that same memo error.
+func TestSSMeteringCompanionListErrorFailsClosed(t *testing.T) {
+	r, h, _, origin, sub := seedMeteringFixture(t)
+	rows, err := r.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blindMemo := &companionGateMemo{
+		loaded: true, loadErr: errors.New("companion list unreadable (test fault)"),
+		rowLoaded: true, rowErr: errors.New("companion list unreadable (test fault)"),
+	}
+
+	// Cell 1: origin without a companion row — normally served, but
+	// with the list unreadable the render side is blind and must
+	// drop it rather than assume "never metered".
+	if eps := h.subEndpoints(sub, rows); len(eps) != 1 {
+		t.Fatalf("control: origin without a companion row must serve one endpoint, got %d", len(eps))
+	}
+	if eps := h.subEndpointsMemo(sub, rows, blindMemo); len(eps) != 0 {
+		t.Fatalf("unreadable companion list must render no share endpoint, got %d (port %d)", len(eps), eps[0].Port)
+	}
+
+	// Cell 2: the same blind memo leaves a non-share subscription
+	// untouched — it keeps serving the origin, which also proves
+	// the render pipeline still builds endpoints (cell 1 is not a
+	// vacuous pass through a broken pipeline).
+	personal := *sub
+	personal.ID = sub.ID + 1000
+	personal.Kind = "personal"
+	personal.Token = strings.Repeat("f", 32)
+	personal.UUID = "u-personal"
+	if eps := h.subEndpointsMemo(&personal, rows, blindMemo); len(eps) != 1 || eps[0].Inbound.ID != origin.ID || eps[0].Port != origin.Port {
+		t.Fatalf("non-share subscription must keep serving the origin endpoint, got %d endpoints", len(eps))
+	}
+
+	// Cell 3: origin owns a live companion row (reconciled + acked
+	// before the fault) — the companion endpoint must not be served
+	// either: with the list unreadable the render side cannot prove
+	// the companion is live.
+	r2, h2, k2, origin2, sub2 := seedMeteringFixture(t)
+	h2.reconcileSSMetering()
+	comp, err := r2.GetCompanionInbound(origin2.ID)
+	if err != nil || comp == nil {
+		t.Fatal("companion must exist")
+	}
+	rows2, err := r2.ListNodeInbounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	markKernelApplied(t, r2, h2, k2)
+	if eps := h2.subEndpoints(sub2, rows2); len(eps) != 1 || eps[0].Inbound.ID != comp.ID {
+		t.Fatalf("control: gate-open share subscription must render the companion endpoint, got %d endpoints", len(eps))
+	}
+	if eps := h2.subEndpointsMemo(sub2, rows2, blindMemo); len(eps) != 0 {
+		t.Fatalf("unreadable companion list must render no share endpoint even with a live companion, got %d", len(eps))
+	}
+
+	// Cell 4: the real fault — a closed repo DB makes both helpers
+	// report the error (the memo error above is what a live
+	// ListCompanionInbounds failure produces), and the share render
+	// drops to zero.
+	_ = r2.Close()
+	if _, err := h2.companionsByOrigin(nil); err == nil {
+		t.Fatal("companionsByOrigin must report the closed-DB error, got nil")
+	}
+	if _, err := h2.companionRowOrigins(nil); err == nil {
+		t.Fatal("companionRowOrigins must report the closed-DB error, got nil")
+	}
+	if eps := h2.subEndpoints(sub2, rows2); len(eps) != 0 {
+		t.Fatalf("closed-DB share render must yield no endpoint, got %d", len(eps))
 	}
 }

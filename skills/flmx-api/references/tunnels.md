@@ -29,9 +29,9 @@ IDs:
       "inIp": "",
       "probeTargetHost": "",
       "probeTargetPort": 0,
-      "inNodeId": [{"id": 1, "name": "HK-Node-1"}],
+      "inNodeId": [{"nodeId": 1, "chainType": 1, "inx": 0}],
       "chainNodes": [],
-      "outNodeId": [{"id": 2, "name": "US-Node-1"}],
+      "outNodeId": [{"nodeId": 2, "chainType": 3, "inx": 0}],
       "createdTime": 1706659200000
     }
   ]
@@ -56,14 +56,14 @@ Create a new tunnel.
 {
   "name": "JP-SG-Tunnel",
   "type": 1,
-  "flow": 1,
+  "flow": 2,
   "trafficRatio": 1,
   "status": 1,
   "ipPreference": "ipv4",
   "inIp": "",
-  "inNodeId": [3],
+  "inNodeId": [{"nodeId": 3}],
   "chainNodeId": [],
-  "outNodeId": [4]
+  "outNodeId": [{"nodeId": 4}]
 }
 ```
 
@@ -73,15 +73,15 @@ Create a new tunnel.
 |-------|------|----------|-------------|
 | name | string | Yes | Tunnel name |
 | type | number | Yes | 1=port forward, 2=tunnel forward |
-| flow | number | No | Traffic multiplier (default: 1) |
+| flow | number | No | Billing direction: 1=upload only, 2=bidirectional (default: 2) |
 | trafficRatio | number | No | Traffic ratio (default: 1) |
 | status | number | No | 1=active, 0=disabled (default: 1) |
 | ipPreference | string | No | "ipv4", "ipv6", or "" (both) |
 | engine | string | No | Forwarding engine: "" / "gost" (panel forwarder, default) or "realm" (see below) |
 | inIp | string | No | Custom entry IP |
-| inNodeId | number[] | Yes | Entry node IDs |
-| chainNodeId | number[] | No | Chain/relay node IDs |
-| outNodeId | number[] | Yes | Exit node IDs |
+| inNodeId | ChainTunnel[] | Yes | Entry nodes — objects with `nodeId` (required); optional `protocol`, `strategy`, `chainType`, `inx`, `connectIp`. Bare numbers are silently dropped by the backend ("入口不能为空"). |
+| chainNodeId | ChainTunnel[] | No | Chain/relay nodes — same object shape as `inNodeId`. |
+| outNodeId | ChainTunnel[] | Yes | Exit nodes — same object shape as `inNodeId`. |
 
 **Tunnel Types:**
 - `1` = Port Forward: Simple port-to-port forwarding
@@ -310,7 +310,7 @@ Update user-tunnel assignment settings.
 curl -s -X POST "${FLMX_BASE_URL}/api/v1/tunnel/create" \
   -H "Authorization: ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Test-Tunnel","type":1,"inNodeId":[1],"outNodeId":[2]}' > /dev/null
+  -d '{"name":"Test-Tunnel","type":1,"inNodeId":[{"nodeId":1}],"outNodeId":[{"nodeId":2}]}' > /dev/null
 
 TUNNEL_ID=$(curl -s -X POST "${FLMX_BASE_URL}/api/v1/tunnel/list" \
   -H "Authorization: ${TOKEN}" \

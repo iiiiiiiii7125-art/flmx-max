@@ -8,12 +8,13 @@ import (
 	"go-backend/internal/store/model"
 )
 
-// Round 2 K9 / P01-001：统一三源谓词的行为枚举——每一种占用源
+// Round 2 K9 / P01-001：统一四源谓词的行为枚举——每一种占用源
 // （forward_port / node_inbound / chain_tunnel）都必须被每一个
 // 选口/判重点位看见。此前隧道选口、隧道显式口谓词、入站 occupant、
 // 备份预检四面手写集合、口径不一，可同节点同口双分配。本测试按
 // 源 × 点位逐格断言，任一面再漏一源即红。
-// （原第四源 peer_share_runtime 联邦预留已随 DEV-RM-SHARE 删除。）
+// （第四源为伴生 Clash API 派生口，见 TestK9UnifiedOccupancySeesCompanionSource；
+// 原 peer_share_runtime 联邦预留已随 DEV-RM-SHARE 删除。）
 //
 // 点位全集（与 port_occupancy_sentinel_test.go 的源码清单对应）：
 //   - NodePortOccupantTx / NodePortOccupiedTx（统一谓词本体）
@@ -222,6 +223,125 @@ func TestK9UnifiedOccupancyExclusions(t *testing.T) {
 			t.Fatalf("free in-spec port must be reusable, got %v err=%v", reusable, err)
 		}
 	})
+}
+
+// PortAlloc Fix A：伴生 Clash API 口（41000–41999，按节点 secret 派生、
+// DB 无行）是统一谓词的第四源。节点 secret "s" 的派生口为 41001
+// （ClashAPIPortForSecret("s")）。本用例按源 × 点位逐格断言，
+// 与 TestK9UnifiedOccupancySeesAllSources 同口径。
+func TestK9UnifiedOccupancySeesCompanionSource(t *testing.T) {
+	r := openCascadeRepo(t, "k9-occ-companion.db")
+	now := time.Now().UnixMilli()
+	// 节点规格含派生口 41001 与邻口 41002。
+	createRow(t, r, &model.Node{ID: k9NodeID, Name: "n1", Secret: "s", ServerIP: "10.0.0.1", Port: "41001-41002", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	db := r.DB()
+	const companionPort = 41001
+
+	source, err := r.NodePortOccupantTx(db, k9NodeID, companionPort, PortExclusions{})
+	if err != nil {
+		t.Fatalf("NodePortOccupantTx: %v", err)
+	}
+	if source != PortSourceCompanion {
+		t.Fatalf("P01-001: occupant source = %q, want %q (companion Clash API port)", source, PortSourceCompanion)
+	}
+	// 邻口空闲：派生谓词不得多占。
+	if source, err := r.NodePortOccupantTx(db, k9NodeID, companionPort+1, PortExclusions{}); err != nil || source != "" {
+		t.Fatalf("P01-001: neighbour port occupant = %q, %v; want free", source, err)
+	}
+
+	if occ, err := r.HasOtherForwardOnNodePortTx(db, k9NodeID, companionPort, 0); err != nil || !occ {
+		t.Fatalf("P01-001: HasOtherForwardOnNodePortTx = %v, %v; want occupied", occ, err)
+	}
+	if occ, err := r.NodePortOccupiedForTunnelTx(db, k9NodeID, companionPort, 0); err != nil || !occ {
+		t.Fatalf("P01-001: NodePortOccupiedForTunnelTx = %v, %v; want occupied", occ, err)
+	}
+	// 伴生口无行可排除：排除本隧道后仍占。
+	if occ, err := r.NodePortOccupiedForTunnelTx(db, k9NodeID, companionPort, 700); err != nil || !occ {
+		t.Fatalf("P01-001: companion port must stay occupied when excluding a tunnel, got occ=%v err=%v", occ, err)
+	}
+
+	set, err := r.UsedPortsOnNodeTx(db, k9NodeID, PortExclusions{})
+	if err != nil {
+		t.Fatalf("UsedPortsOnNodeTx: %v", err)
+	}
+	if _, ok := set[companionPort]; !ok {
+		t.Fatalf("P01-001: UsedPortsOnNodeTx must contain companion port %d", companionPort)
+	}
+	if _, ok := set[companionPort+1]; ok {
+		t.Fatalf("P01-001: UsedPortsOnNodeTx must not contain free port %d", companionPort+1)
+	}
+	asMap, err := r.GetUsedPortsOnNodeAsMap(k9NodeID)
+	if err != nil {
+		t.Fatalf("GetUsedPortsOnNodeAsMap: %v", err)
+	}
+	if !asMap[companionPort] {
+		t.Fatalf("P01-001: GetUsedPortsOnNodeAsMap must contain companion port %d", companionPort)
+	}
+	listed, err := r.ListUsedPortsOnNode(k9NodeID)
+	if err != nil {
+		t.Fatalf("ListUsedPortsOnNode: %v", err)
+	}
+	found := false
+	for _, p := range listed {
+		if p == companionPort {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("P01-001: ListUsedPortsOnNode must contain companion port %d", companionPort)
+	}
+
+	// 选口：规格首口即伴生口，顺序选口必须避开它。
+	picked, err := r.PickNodePortTx(db, k9NodeID, map[int64]int{}, 0)
+	if err != nil {
+		t.Fatalf("PickNodePortTx: %v", err)
+	}
+	if picked != companionPort+1 {
+		t.Fatalf("P01-001: PickNodePortTx = %d, want %d (must avoid companion port %d)", picked, companionPort+1, companionPort)
+	}
+	for i := 0; i < 8; i++ {
+		picked, err := r.PickRandomNodePortTx(db, k9NodeID, map[int64]int{}, 0)
+		if err != nil {
+			t.Fatalf("PickRandomNodePortTx: %v", err)
+		}
+		if picked == companionPort {
+			t.Fatalf("P01-001: PickRandomNodePortTx handed out companion port %d", companionPort)
+		}
+	}
+
+	name, err := r.NodePortRangeOccupant(k9NodeID, companionPort, companionPort, 0)
+	if err != nil {
+		t.Fatalf("NodePortRangeOccupant: %v", err)
+	}
+	if name != "伴生 Clash API" {
+		t.Fatalf("P01-001: NodePortRangeOccupant = %q, want %q", name, "伴生 Clash API")
+	}
+
+	conflict, err := r.FindOtherForwardOnNodePort(k9NodeID, companionPort, 0)
+	if err != nil {
+		t.Fatalf("FindOtherForwardOnNodePort: %v", err)
+	}
+	if conflict == nil || conflict.Source != PortSourceCompanion {
+		t.Fatalf("P01-001: FindOtherForwardOnNodePort = %+v, want source %q", conflict, PortSourceCompanion)
+	}
+	if conflict.Name != "伴生 Clash API" {
+		t.Fatalf("P01-001: companion conflict name = %q, want %q", conflict.Name, "伴生 Clash API")
+	}
+
+	// P01-002 沿用判定：伴生口对任意隧道都不可沿用。
+	reusable, err := r.TunnelChainPortReusableTx(db, k9NodeID, companionPort, 424242)
+	if err != nil {
+		t.Fatalf("TunnelChainPortReusableTx: %v", err)
+	}
+	if reusable {
+		t.Fatalf("P01-002: companion port must not be reusable by another tunnel")
+	}
+
+	// 空 secret 节点无派生口：不得多占。
+	createRow(t, r, &model.Node{ID: 2, Name: "n2", Secret: "", ServerIP: "10.0.0.2", Port: "41001-41002", CreatedTime: now, UpdatedTime: sql.NullInt64{Int64: now, Valid: true}})
+	if source, err := r.NodePortOccupantTx(db, 2, companionPort, PortExclusions{}); err != nil || source != "" {
+		t.Fatalf("P01-001: empty-secret node must have no companion port, got occupant %q err=%v", source, err)
+	}
 }
 
 // P01-003：隧道列表（详情同源组装）回吐链路段与出口段端口；

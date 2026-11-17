@@ -36,7 +36,7 @@ func TestRealmPortCountersFlowThroughStatus(t *testing.T) {
 	}
 
 	nc := newNftCounters(t.TempDir())
-	if err := nc.sync(ports, nil); err != nil {
+	if err := nc.sync(ports, nil, nil); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(rec.scripts) == 0 {

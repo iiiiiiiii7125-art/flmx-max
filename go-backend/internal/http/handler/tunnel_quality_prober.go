@@ -179,20 +179,48 @@ func (p *tunnelQualityProber) loop() {
 		return
 	}
 
+	// OBS-1: consecutive all-failed rounds back off exponentially
+	// (capped at tunnelQualityBackoffMax). Against dead egress each
+	// round burns ~2s DNS + 5s dial timeout per probe and the agent
+	// log fills with probe noise; without backoff the loop re-fires
+	// every ~7s (1s interval + ~6s round). A vacuous round
+	// (disabled / no tunnels / re-entrant skip) sends no probes, so
+	// it neither grows nor resets the streak.
+	failStreak := 0
+	applyRound := func() {
+		probed, succeeded := p.probeAll()
+		switch {
+		case probed == 0:
+			// Vacuous round: no probes sent, streak unchanged.
+		case succeeded == 0:
+			failStreak++
+			log.Printf("tunnel_quality_prober: probe round failed (0/%d tunnels succeeded); backing off to %s", probed, p.backoffDelay(failStreak))
+		default:
+			if failStreak > 0 {
+				log.Printf("tunnel_quality_prober: probe round recovered after %d failed rounds; backoff reset", failStreak)
+			}
+			failStreak = 0
+		}
+	}
+
 	// Run once immediately
-	p.probeAll()
+	applyRound()
 
 	for {
-		timer := time.NewTimer(p.probeInterval())
+		timer := time.NewTimer(p.backoffDelay(failStreak))
 		select {
 		case <-p.ctx.Done():
 			stopAndDrainTunnelQualityTimer(timer)
 			return
 		case <-p.wake:
 			stopAndDrainTunnelQualityTimer(timer)
+			// A config change invalidates the failure streak: the
+			// target or interval may have changed, so the next round
+			// runs on the fresh schedule, not the backed-off one.
+			failStreak = 0
 			continue
 		case <-timer.C:
-			p.probeAll()
+			applyRound()
 			p.maybePrune()
 		}
 	}
@@ -296,7 +324,33 @@ func (p *tunnelQualityProber) maybePrune() {
 	}
 }
 
-func (p *tunnelQualityProber) probeAll() {
+// tunnelQualityBackoffMax caps the probe failure backoff (OBS-1):
+// after nine consecutive all-failed rounds at the default 1s
+// interval the loop waits 5 minutes between rounds instead of
+// hammering a dead egress every ~7s.
+const tunnelQualityBackoffMax = 5 * time.Minute
+
+// backoffDelay is the loop's next sleep: the configured interval
+// doubled per consecutive all-failed round, capped. It deliberately
+// does NOT feed pendingFreshWindow, which keeps deriving from the
+// configured interval — best-exit confirmation windows must not
+// stretch with the outage backoff.
+func (p *tunnelQualityProber) backoffDelay(failStreak int) time.Duration {
+	base := p.probeInterval()
+	if failStreak <= 0 {
+		return base
+	}
+	d := base
+	for i := 0; i < failStreak; i++ {
+		d *= 2
+		if d >= tunnelQualityBackoffMax {
+			return tunnelQualityBackoffMax
+		}
+	}
+	return d
+}
+
+func (p *tunnelQualityProber) probeAll() (probed, succeeded int) {
 	if !p.isEnabled() {
 		return
 	}
@@ -333,6 +387,7 @@ func (p *tunnelQualityProber) probeAll() {
 	if len(tunnelIDs) == 0 {
 		return
 	}
+	probed = len(tunnelIDs)
 
 	// D6-02：开启轮内缓存（节点记录去重 + IP 偏好整轮批量预取）。
 	p.beginProbeRound(tunnelIDs)
@@ -363,6 +418,17 @@ func (p *tunnelQualityProber) probeAll() {
 	// R3-B07-001：整轮耗时落盘供下一轮的新鲜度窗口推导（只有真正
 	// 跑完探测的轮才记录，前置早退不覆盖估计）。
 	atomic.StoreInt64(&p.lastRoundDurationNs, time.Since(roundStart).Nanoseconds())
+	// OBS-1：本轮成败按本轮快照计——只有时间戳落在本轮内且
+	// Success 的快照才算成功；旧轮残留的成功快照不得把失败轮
+	// 认作成功（否则退避永不触发）。
+	for _, tid := range tunnelIDs {
+		if v, ok := p.cache.Load(tid); ok {
+			if snap, ok := v.(*tunnelQualitySnapshot); ok && snap.Success && snap.Timestamp >= roundStart.UnixMilli() {
+				succeeded++
+			}
+		}
+	}
+	return
 }
 
 // pendingFreshWindow 推导最优出口确认新鲜度窗口（R3-B07-001）。

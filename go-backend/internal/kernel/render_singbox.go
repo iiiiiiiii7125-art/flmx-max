@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+// renderSingbox renders a sing-box kernel config. The companion's
+// Clash API listen address is per-agent (R2C-01): RenderOptions
+// carries the port derived from the node secret (see
+// ClashAPIPortForSecret), and the agent reallocates at (re)start if
+// the rendered port is busy — so two agents on one host no longer
+// share one fixed port. The old fixed 40900 is gone: it is never
+// rendered and never chosen for a new instance.
 func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	list := make([]interface{}, 0, len(inbounds))
 	acme := &acmeProviders{}
@@ -72,6 +79,25 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	// list (the IP policy pass reorders and appends rules) and the
 	// final outbound set.
 	guardSingboxDomainExits(cfg)
+	// C-(4): the companion exposes the Clash API so the agent can
+	// close a removed user's live connections selectively (DELETE
+	// /connections/<id> by auth_user rule) instead of SIGHUP-
+	// reloading the whole instance (which drops every user's
+	// sessions). Localhost-only, no secret: the agent and the
+	// companion share the host, and any local root process can already
+	// do anything; the API is never exposed on a public interface.
+	// It merges into the experimental object if rule sets already
+	// put a cache_file there. R2C-01: the port is per-agent (see
+	// ClashAPIPort); port 0 omits the block — fail-closed, the agent
+	// falls back to reload for removals.
+	if opts.Companion && opts.ClashAPIPort != 0 {
+		exp, _ := cfg["experimental"].(obj)
+		if exp == nil {
+			exp = obj{}
+		}
+		exp["clash_api"] = obj{"external_controller": fmt.Sprintf("127.0.0.1:%d", opts.ClashAPIPort)}
+		cfg["experimental"] = exp
+	}
 	return marshalConfig(cfg)
 }
 

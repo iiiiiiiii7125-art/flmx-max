@@ -74,7 +74,7 @@
 }
 ```
 
-- `event`：`node_offline`、`node_upgrade_failed`（节点升级/回退下发后超时未回连到目标版本）、`inbound_down`、`kernel_error`、`node_expiry`、`user_quota`、`daily_report`、`latency_bad`（延迟/丢包异常与恢复）、`route_change`（回程线路变化）、`conntrack_high`（节点连接跟踪表用量达 80%）、`disk_high`（节点或面板磁盘用量达 80%）、`agent_memory_high`（节点 agent 内存用量达 80%），测试消息是 `test`
+- `event`：`node_offline`、`node_upgrade_failed`（节点升级/回退下发后超时未回连到目标版本）、`nft_collect_failed`（节点 nft 流量采集连续失败 3 轮约 90 秒，恢复时再发一次）、`inbound_down`、`kernel_error`、`node_expiry`、`user_quota`、`daily_report`、`latency_bad`（延迟/丢包异常与恢复）、`route_change`（回程线路变化）、`conntrack_high`（节点连接跟踪表用量达 80%）、`disk_high`（节点或面板磁盘用量达 80%）、`agent_memory_high`（节点 agent 内存用量达 80%），测试消息是 `test`
 - `text`：与 Telegram 共用同一 HTML 渲染的完整文本——emoji ＋ `<b>标题</b>` ＋ 正文 ＋ `🕐` 数字时区偏移页脚（旧纯文本格式的 `[FLMX]` 前缀已去掉，也没有单独的 `时间：… UTC` 行，时间在 `🕐` 页脚里）。直接转发给企业微信、钉钉、Bark、Server 酱等纯文本渠道时，对方会原样收到 `<b>` 标签；需要纯文本时先去掉 HTML 标签，或改用 `message` 字段自己拼
 - `time`：毫秒级 Unix 时间戳（数字，不是格式化字符串）；带时区的格式化时间在 `text` 字段里
 - 返回 2xx 视为发送成功

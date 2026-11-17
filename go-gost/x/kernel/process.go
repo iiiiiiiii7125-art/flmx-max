@@ -285,6 +285,15 @@ func (p *process) signal(sig syscall.Signal) {
 	signalGroup(cmd.Process.Pid, sig)
 }
 
+// sighup asks the process to reload its configuration in place.
+// sing-box re-reads its config file on SIGHUP without dropping
+// established connections (C-(4)); other kernels ignore it or
+// treat it as a restart signal, so only the manager calls this for
+// sing-box types. A no-op when the process is not running.
+func (p *process) sighup() {
+	p.signal(syscall.SIGHUP)
+}
+
 func (p *process) snapshot() (running bool, pid, restarts int, lastErr string, startedAt int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

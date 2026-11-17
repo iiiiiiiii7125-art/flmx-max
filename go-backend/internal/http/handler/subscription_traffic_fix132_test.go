@@ -25,7 +25,7 @@ func TestSubTrafficKolkataDayBoundarySplit(t *testing.T) {
 		// UTC 19:00–20:00 完整落在 3/2。
 		{Hour: utcHour(2026, 3, 1, 19), DownloadBytes: 10},
 	}
-	day := subTraffic(hours, "day", now)
+	day := subTraffic(hours, "day", now, 0, 0, 0)
 	if len(day.Points) != 30 {
 		t.Fatalf("points: %d", len(day.Points))
 	}
@@ -84,7 +84,7 @@ func TestSubTrafficDSTBucketStarts(t *testing.T) {
 	hours := []model.SubscriptionTraffic{
 		{Hour: time.Date(2026, 3, 1, 16, 0, 0, 0, time.UTC).UnixMilli(), DownloadBytes: 42}, // 本地 3/2 00:00
 	}
-	day := subTraffic(hours, "day", nowCST)
+	day := subTraffic(hours, "day", nowCST, 0, 0, 0)
 	if day.Points[29].Down != 42 || day.Down != 42 {
 		t.Fatalf("whole-hour zones must be unaffected: %+v", day.Points[29])
 	}

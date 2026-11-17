@@ -114,6 +114,22 @@
 #      示例键）除信封白名单外必须全部 ∈ doc-extract configkeys
 #      给出的 config_policy 分类键并集——虚构键（如旧文档的
 #      site_name）即红。无 go 时两面同 §10 口径 PENDING 显式未核。
+#   26. 技能包例文形态门（E-05-NEW-1/2 常设门）：tunnels.md
+#      tunnel/create 例文的 inNodeId/outNodeId 须为含 nodeId 的对象
+#      （裸数字会被后端 asMapSlice 静默丢弃致“入口不能为空”，面板
+#      B live 复现）；forwards.md forward/create 例文不得含 speedId
+#      （普通用户在场即拒，面板 B live 复现），字段表须标 admin-only。
+#   27. 内核视图字段对齐门（E-02 常设门）：后端 kernelView 新增字段
+#      须同步前端 KernelApiItem 类型与一处渲染点——companionSplitNote
+#      三侧同在，后端加字段而前端无类型／无渲染即红。
+#   28. 内核安装原子交换＋离线缓存门（C NEW-2 常设门）：nodes.md
+#      的原子交换（只在替换件落盘验证后才换旧二进制）与离线重装
+#      本地缓存安装包口径，须与 install.go 的 swapBinDir／
+#      restoreInterruptedSwap／lookup+storeArchiveCache 三锚点同在。
+#   29. 请求体例文地址门（R4D-01 常设门）：forward/create 类请求体
+#      例文与 ai-skill.md 对话例的 remoteAddr／目标地址不得为私网
+#      地址（普通用户照抄即 403 "resolves to internal IP"）；auth.md
+#      的 list 响应回显（R4D-02 已裁定非问题）排除在外。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -942,6 +958,108 @@ else
   sed 's/^/    /' /tmp/.hist-metering.out
 fi
 rm -f /tmp/.hist-metering.out
+
+# ── 26. 技能包例文形态门（E-05-NEW-1/2 常设门）
+# E-05-NEW-1：tunnels.md tunnel/create 例文的 inNodeId/outNodeId 项须
+# 为含 nodeId 的对象——后端 asMapSlice 静默丢弃非对象项，照抄裸数字
+# 例文必得“入口不能为空”（面板 B live 复现）。双侧：文档侧查无裸
+# 数字项且例文含 nodeId 对象；代码侧查 asMapSlice 的对象守卫仍在
+# （机制锚点，防实现改直通后文档反成错口径）。
+TUN_MD="skills/flmx-api/references/tunnels.md"
+if grep -Eq '"(in|out|chain)NodeId": \[[0-9]' "$TUN_MD"; then
+  note_fail "E-05-NEW-1：tunnels.md 仍有裸数字节点 id 例文（in/out/chainNodeId 项须为含 nodeId 的对象）"
+elif ! grep -Fq '"inNodeId": [{"nodeId": 3}]' "$TUN_MD" \
+     || ! grep -Fq '"outNodeId": [{"nodeId": 4}]' "$TUN_MD" \
+     || ! grep -Fq '"inNodeId":[{"nodeId":1}]' "$TUN_MD" \
+     || ! grep -Fq '"outNodeId":[{"nodeId":2}]' "$TUN_MD"; then
+  note_fail "E-05-NEW-1：tunnels.md tunnel/create 例文缺 nodeId 对象项（create JSON 与 assign curl 各一处）"
+elif ! grep -Fq 'func asMapSlice' go-backend/internal/http/handler/mutations.go \
+     || ! grep -Fq 'if m, ok := it.(map[string]interface{}); ok {' go-backend/internal/http/handler/mutations.go; then
+  note_fail "E-05-NEW-1：mutations.go 的 asMapSlice 对象守卫不在场（前提失效，请人工复核）"
+else
+  note_ok "E-05-NEW-1：tunnels.md 例文节点项均为 nodeId 对象，asMapSlice 对象守卫在场"
+fi
+# E-05-NEW-2：forwards.md forward/create 例文不得含 speedId——普通
+# 用户只要键在场（任意值，含 0）即被拒“普通用户无法设置限速规则”
+# （面板 B live 复现）；字段表须标 admin-only。双侧：文档侧查例文
+# 无 speedId 且字段表标 admin-only；代码侧查拒绝锚点仍在。
+FWD_MD="skills/flmx-api/references/forwards.md"
+if grep -Fq '"speedId"' "$FWD_MD" && ! grep -Fq 'Admin-only' "$FWD_MD"; then
+  note_fail "E-05-NEW-2：forwards.md 含 speedId 却未标 admin-only（前提失效，请人工复核）"
+elif grep -Eq '"speedId": [0-9]' "$FWD_MD"; then
+  note_fail "E-05-NEW-2：forwards.md 例文仍含 speedId（普通用户照抄即拒）"
+elif ! grep -Fq 'if speedIDVal, ok := req["speedId"]; ok && speedIDVal != nil {' go-backend/internal/http/handler/mutations.go \
+     || ! grep -Fq '普通用户无法设置限速规则' go-backend/internal/http/handler/mutations.go; then
+  note_fail "E-05-NEW-2：mutations.go 的 speedId 普通用户拒绝锚点不在场（前提失效，请人工复核）"
+else
+  note_ok "E-05-NEW-2：forwards.md 例文无 speedId 且标 admin-only，普通用户拒绝锚点在场"
+fi
+
+# ── 27. 内核视图字段对齐门（E-02 常设门）
+# 后端 kernelView 新增字段须同步前端 KernelApiItem 类型与一处渲染点：
+# companionSplitNote 三侧同在——后端只发不显（节点页永不显示）即红。
+if ! grep -Fq 'CompanionSplitNote string' go-backend/internal/http/handler/kernel.go; then
+  note_fail "E-02：kernel.go 的 kernelView 缺 companionSplitNote 字段（前提失效，请人工复核）"
+elif ! grep -Fq 'companionSplitNote?: string' vite-frontend/src/api/types.ts; then
+  note_fail "E-02：KernelApiItem 缺 companionSplitNote 字段（后端已发、前端类型未同步）"
+elif ! grep -Fq 'k.companionSplitNote' vite-frontend/src/pages/inbound/kernel-panel.tsx; then
+  note_fail "E-02：节点页内核行无 companionSplitNote 渲染点（类型已同步、页面仍不显示）"
+else
+  note_ok "E-02：companionSplitNote 后端字段／前端类型／节点页渲染三侧同在"
+fi
+
+# ── 27b. repush 回执 note 对齐门（R3-E-LOW-02 常设门）
+# 与 27 同一字段的另一条面：connlog-repush 回执 data.companionSplitNote
+# 同样须三侧同在——后端只发、前端类型无字段或连接日志弹窗不读该字段
+# 即红（此前只有后端单测断言，前端可静默丢 note）。
+if ! grep -Fq 'data["companionSplitNote"]' go-backend/internal/http/handler/connlog_readiness.go; then
+  note_fail "R3-E-LOW-02：connlog-repush 回执未带 companionSplitNote 字段（前提失效，请人工复核）"
+elif ! grep -A20 'interface NodeConnLogRepushResult' vite-frontend/src/api/types.ts | grep -Fq 'companionSplitNote?: string'; then
+  note_fail "R3-E-LOW-02：NodeConnLogRepushResult 缺 companionSplitNote 字段（后端已发、前端类型未同步）"
+elif ! grep -Fq 'data?.companionSplitNote' vite-frontend/src/pages/node/connlog-modal.tsx; then
+  note_fail "R3-E-LOW-02：连接日志弹窗未读回执 companionSplitNote（类型已同步、页面仍不显示）"
+else
+  note_ok "R3-E-LOW-02：repush 回执 companionSplitNote 后端字段／前端类型／弹窗渲染三侧同在"
+fi
+
+# ── 28. 内核安装原子交换＋离线缓存门（C NEW-2 常设门）
+# nodes.md 称重启/重部署/升级只在替换件落盘验证后才换旧二进制、
+# 安装失败旧内核在位、离线重装用本地缓存；代码侧三锚点同在——
+# 原子交换 swapBinDir、中断恢复 restoreInterruptedSwap、缓存
+# lookup/storeArchiveCache——任一不在场即红（文档反成错口径）。
+if ! grep -Fq '原子交换' doc/guide/nodes.md; then
+  note_fail "C NEW-2：nodes.md 缺内核安装原子交换口径（重启/重部署只在替换件落盘验证后才换旧二进制）"
+elif ! grep -Fq '本地已验安装包缓存' doc/guide/nodes.md; then
+  note_fail "C NEW-2：nodes.md 缺离线重装本地缓存安装包口径"
+elif ! grep -Fq 'func swapBinDir' go-gost/x/kernel/install.go \
+     || ! grep -Fq 'func restoreInterruptedSwap' go-gost/x/kernel/install.go \
+     || ! grep -Fq 'func lookupArchiveCache' go-gost/x/kernel/install.go \
+     || ! grep -Fq 'func storeArchiveCache' go-gost/x/kernel/install.go; then
+  note_fail "C NEW-2：install.go 缺原子交换/中断恢复/安装包缓存锚点（前提失效，请人工复核）"
+else
+  note_ok "C NEW-2：nodes.md 原子交换＋离线缓存安装包口径与 install.go 三锚点同在"
+fi
+
+# ── 29. 请求体例文地址门（R4D-01 常设门）
+# forward/create 类请求体例文与 ai-skill.md 对话例的目标地址不得为
+# 私网地址——普通用户照抄即 403 "resolves to internal IP"（R3-E-LOW-03
+# 只改了 192.168.1.100 三处，漏了 10.0.0.1 三处＋对话例两处）。
+# auth.md:196 的 10.0.0.1 是 list 响应回显（R4D-02 已裁定非问题），
+# 本门排除该行；docs/superpowers/plans 下历史方案的测试夹具不在本门
+# 范围内（非用户照抄面）。双侧：文档侧查例文无私网地址；代码侧查
+# IsSafeRemoteAddr 守卫仍在（mutations.go create/update 两处调用）。
+PRIV_IP_RE='(10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+)'
+BAD_REMOTE=$(grep -rn -E "\"remoteAddr\": \"[^\"]*${PRIV_IP_RE}" skills/flmx-api/references/ doc/ai-skill.md 2>/dev/null | grep -v 'skills/flmx-api/references/auth.md' || true)
+BAD_DIALOG=$(grep -n -E "(转发到|目标地址) ?${PRIV_IP_RE}" doc/ai-skill.md || true)
+if [ -n "$BAD_REMOTE" ]; then
+  note_fail "R4D-01：请求体例文 remoteAddr 仍含私网地址（照抄即 403）：$(echo "$BAD_REMOTE" | head -3 | tr '\n' ';')"
+elif [ -n "$BAD_DIALOG" ]; then
+  note_fail "R4D-01：ai-skill.md 对话例目标地址仍为私网地址（经 skill 调用同机制 403）：$(echo "$BAD_DIALOG" | head -3 | tr '\n' ';')"
+elif [ "$(grep -c 'IsSafeRemoteAddr(remoteAddr)' go-backend/internal/http/handler/mutations.go)" -lt 2 ]; then
+  note_fail "R4D-01：mutations.go 的 IsSafeRemoteAddr 守卫不足两处（create/update 各一处；前提失效，请人工复核）"
+else
+  note_ok "R4D-01：请求体例文 remoteAddr 与 ai-skill 对话例目标地址均无私网地址，IsSafeRemoteAddr 守卫两处在场"
+fi
 
 echo "----"
 if [ "$FAIL" -eq 0 ]; then

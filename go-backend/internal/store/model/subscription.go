@@ -54,11 +54,20 @@ type Subscription struct {
 	// traffic reset. Additive column (default 0); readers fall back
 	// TrafficSince -> TrafficResetTime -> CreatedTime when it is 0
 	// (pre-existing rows), so no data backfill is needed.
-	TrafficSince int64  `gorm:"column:traffic_since;not null;default:0"`
-	Remark       string `gorm:"type:text;not null;default:''"`
-	Inx          int    `gorm:"not null;default:0"`
-	CreatedTime  int64  `gorm:"column:created_time;not null"`
-	UpdatedTime  int64  `gorm:"column:updated_time;not null"`
+	TrafficSince int64 `gorm:"column:traffic_since;not null;default:0"`
+	// QuotaRotatedAt is when the origin shared passwords were last
+	// rotated for an over-quota episode (unix ms; 0 = never). C-02:
+	// cutting off a share subscription must also invalidate the
+	// origin shared password, or already-distributed links keep
+	// serving unmetered. The stamp is compared against
+	// subTrafficSince, so a traffic reset (which advances
+	// TrafficSince) re-arms rotation for the next episode.
+	// Additive column (default 0); no backfill needed.
+	QuotaRotatedAt int64  `gorm:"column:quota_rotated_at;not null;default:0"`
+	Remark         string `gorm:"type:text;not null;default:''"`
+	Inx            int    `gorm:"not null;default:0"`
+	CreatedTime    int64  `gorm:"column:created_time;not null"`
+	UpdatedTime    int64  `gorm:"column:updated_time;not null"`
 }
 
 func (Subscription) TableName() string { return "subscription" }

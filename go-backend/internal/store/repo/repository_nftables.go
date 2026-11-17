@@ -135,13 +135,6 @@ func (r *Repository) GetNodeSSHConfigTx(tx *gorm.DB, nodeID int64) (*model.NodeS
 	return &cfg, nil
 }
 
-func (r *Repository) DeleteNodeSSHConfig(nodeID int64) error {
-	if r == nil || r.db == nil {
-		return errors.New("repository not initialized")
-	}
-	return r.db.Where("node_id = ?", nodeID).Delete(&model.NodeSSHConfig{}).Error
-}
-
 func (r *Repository) UpsertNftRuleBinding(input NftRuleBindingInput, now int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")

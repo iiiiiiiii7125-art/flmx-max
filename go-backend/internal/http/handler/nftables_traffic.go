@@ -63,11 +63,182 @@ func (h *Handler) runNftablesTrafficCollectJob(now time.Time) {
 // （L3-04）：与内核状态轮询 kernelStatusParallel=8 同口径。
 const nftablesTrafficCollectParallel = 8
 
-func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) {
-	batch, metas, nowMs, quotaViews, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
-	if err != nil || batch == nil {
+// nftCollectFailAlertThreshold 是 nft 采集失败的告警阈值（A-中-2）：
+// 采集每 30 秒一轮，连续失败 3 轮（90 秒）即在节点行记 failing
+// 并发一次告警；单轮抖动（一次 SSH  hiccup）不惊动管理员。
+const nftCollectFailAlertThreshold = 3
+
+// nftCollectLastErrorMaxLen 是节点行最近一次采集失败原因的截断长
+// 度（A-中-2）：SSH 失败原文可能很长，行内只留首段可读部分。
+const nftCollectLastErrorMaxLen = 500
+
+// nftWsReadErrorPrefix marks a failure recorded by the WS
+// kernel-table path (R3A-NEW-1): the SSH forward-table path and the
+// WS kernel-table path read DIFFERENT tables (flmx vs flmx_kernel_*),
+// so their failures are independent signals sharing one health row.
+// The prefix on the error text is only the provenance of that one
+// failure round — the streak's composition is stored durably in
+// NftCollectSshFailCount / NftCollectWsFailCount (R4C-01): a success
+// on one path clears only that path's contribution, and the streak
+// clears fully only when both contributions reach zero. Judging the
+// whole streak by the latest error's prefix (the pre-R4C-01 code)
+// lost mixed streaks: a WS success cleared SSH failures and sent a
+// false "采集恢复".
+const nftWsReadErrorPrefix = "agent nft 计数读取失败："
+
+// recordNftCollectFailure records one failed periodic nft collection
+// round for nodeID (A-中-2): consecutive failure count +1, state flips
+// to "failing" at the threshold, last error kept verbatim (truncated).
+// The alert fires exactly on the threshold crossing; later rounds of
+// the same streak stay silent (the node row already says failing).
+// The failure also increments the contributing path's own streak
+// count (R4C-01): the WS path's errors carry nftWsReadErrorPrefix,
+// anything else counts as the SSH path. Rounds discarded because a
+// newer apply is in flight (errDiscardedDueToApplying) are NOT
+// failures and must never call this — their samples are re-collected
+// by the next round.
+func (h *Handler) recordNftCollectFailure(nodeID int64, err error) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
 		return
 	}
+	node, rerr := h.repo.GetNodeByID(nodeID)
+	if rerr != nil || node == nil {
+		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, rerr)
+		return
+	}
+	failCount := node.NftCollectFailCount + 1
+	sshCount, wsCount := node.NftCollectSshFailCount, node.NftCollectWsFailCount
+	if err != nil && strings.HasPrefix(err.Error(), nftWsReadErrorPrefix) {
+		wsCount++
+	} else {
+		sshCount++
+	}
+	state := node.NftCollectState
+	if failCount >= nftCollectFailAlertThreshold {
+		state = "failing"
+	}
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	if len(errText) > nftCollectLastErrorMaxLen {
+		errText = errText[:nftCollectLastErrorMaxLen]
+	}
+	if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, state, failCount, errText, node.NftCollectLastOKAt, sshCount, wsCount); uerr != nil {
+		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+		return
+	}
+	if failCount == nftCollectFailAlertThreshold {
+		h.dispatchNftCollectFailedAlert(nodeID)
+	}
+}
+
+// recordNftCollectSuccess records one successful periodic nft
+// collection round for nodeID (A-中-2, R4C-01): it clears only the
+// SSH contribution of the current streak. The row clears fully (state
+// ok, count 0, LastError empty, LastOKAt stamped, recovery
+// notification if it was failing) only when no WS contribution
+// remains; otherwise the row is left otherwise untouched — the WS
+// table is still missing and the streak is still failing. The SSH
+// contribution is zeroed even in that case, so a later WS success
+// can finish the clear instead of deadlocking against a streak the
+// WS prefix used to guard. Steady-state successes write nothing, so
+// LastOKAt reads as "healthy since <time>".
+func (h *Handler) recordNftCollectSuccess(nodeID int64, nowMs int64) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		// R2A-4：查库失败静默返回会使采集成功路径的静默丢失无法
+		// 定位（健康态写不进、也不留日志）；只记 node_id＋err，
+		// 不记节点配置原文。
+		log.Printf("nft collect success lookup failed node_id=%d err=%v", nodeID, err)
+		return
+	}
+	if node.NftCollectState == "ok" && node.NftCollectFailCount == 0 && node.NftCollectLastError == "" {
+		return
+	}
+	if node.NftCollectWsFailCount > 0 {
+		// R4C-01：streak 里还有 WS 路的失败未恢复——SSH 成功只
+		// 解决自己这路，不清行、不发恢复通知；SSH 计数归零后
+		// 待 WS 路自己恢复时再整条清除。
+		if node.NftCollectSshFailCount > 0 {
+			if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, node.NftCollectState, node.NftCollectFailCount, node.NftCollectLastError, node.NftCollectLastOKAt, 0, node.NftCollectWsFailCount); uerr != nil {
+				log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+			}
+		}
+		return
+	}
+	wasFailing := node.NftCollectState == "failing"
+	if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, "ok", 0, "", nowMs, 0, 0); uerr != nil {
+		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+		return
+	}
+	if wasFailing {
+		h.dispatchNftCollectRecoveredAlert(nodeID)
+	}
+}
+
+// recordNftWsCollectSuccess clears the WS contribution of a WS-path
+// nft failure streak (R3A-NEW-1, R4C-01): it zeroes only the WS
+// count. The row clears fully (mirroring recordNftCollectSuccess
+// including the recovery notification) only when no SSH contribution
+// remains; a mixed streak stays failing with its count and alert
+// mark untouched until the SSH path itself recovers. Steady-state
+// successes write nothing.
+func (h *Handler) recordNftWsCollectSuccess(nodeID int64, nowMs int64) {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return
+	}
+	node, err := h.repo.GetNodeByID(nodeID)
+	if err != nil || node == nil {
+		log.Printf("nft collect success lookup failed node_id=%d err=%v", nodeID, err)
+		return
+	}
+	if node.NftCollectState == "ok" && node.NftCollectFailCount == 0 && node.NftCollectLastError == "" {
+		return
+	}
+	if node.NftCollectSshFailCount > 0 {
+		// R4C-01：streak 里还有 SSH 路的失败未恢复——WS 成功只
+		// 解决自己这路，不清行、不发恢复通知；WS 计数归零后
+		// 待 SSH 路自己恢复时再整条清除。
+		if node.NftCollectWsFailCount > 0 {
+			if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, node.NftCollectState, node.NftCollectFailCount, node.NftCollectLastError, node.NftCollectLastOKAt, node.NftCollectSshFailCount, 0); uerr != nil {
+				log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+			}
+		}
+		return
+	}
+	wasFailing := node.NftCollectState == "failing"
+	if uerr := h.repo.UpdateNftCollectHealthPaths(nodeID, "ok", 0, "", nowMs, 0, 0); uerr != nil {
+		log.Printf("nft collect health record failed node_id=%d err=%v", nodeID, uerr)
+		return
+	}
+	if wasFailing {
+		h.dispatchNftCollectRecoveredAlert(nodeID)
+	}
+}
+
+func (h *Handler) collectNftablesNodeTraffic(nodeID int64, cfgModel *model.NodeSSHConfig, now time.Time) {
+	batch, metas, nowMs, quotaViews, err := h.accountNftablesNodeTraffic(nodeID, cfgModel, now)
+	if err != nil {
+		// A-中-2：采集失败必须在节点侧可见（节点行健康态＋越阈
+		// 值告警），不止后端日志一行。
+		h.recordNftCollectFailure(nodeID, err)
+		return
+	}
+	if batch == nil {
+		// 无增量本轮：nowMs>0 是采集成功的空轮（基线已推进）；
+		// nowMs==0 是丢弃轮（accountNftablesNodeTrafficCtx 在
+		// applying 丢弃时回 0）——丢弃既非成功也非失败，其样本
+		// 由下轮补回，健康态不动。
+		if nowMs > 0 {
+			h.recordNftCollectSuccess(nodeID, nowMs)
+		}
+		return
+	}
+	h.recordNftCollectSuccess(nodeID, nowMs)
 	h.recordTunnelMetricsFromForwardBatch(nodeID, batch.forwardTraffic, metas, nowMs)
 	for userID, quota := range quotaViews {
 		h.enforceUserQuotaIfNeeded(userID, quota)
@@ -156,7 +327,7 @@ func (h *Handler) accountNftablesNodeTrafficCtx(ctx context.Context, nodeID int6
 		hashes[binding.ForwardID] = ruleHash
 	}
 
-	boundSamples := filterNftCounterSamplesWithBinding(samples, hashes)
+	boundSamples := filterNftCounterSamplesWithBinding(nodeID, samples, hashes)
 	return h.accountForwardCounterSamples(nodeID, boundSamples, hashes, now)
 }
 
@@ -412,16 +583,30 @@ func filterOutNftDeltasMissingMeta(deltas []nftTrafficDelta, newStates []repo.Nf
 	return keptDeltas, keptStates
 }
 
-func filterNftCounterSamplesWithBinding(samples []runtimenft.CounterSample, hashes map[int64]string) []runtimenft.CounterSample {
+// filterNftCounterSamplesWithBinding drops counter samples whose
+// forward has no applied binding (A-中-3): without an applied binding
+// the sample cannot be attributed to a live rule, so it is skipped.
+// The skip is logged once per call when >0 — an unbound sample usually
+// means a rule was removed while its counters were still reporting,
+// which the admin should be able to see instead of silently losing.
+func filterNftCounterSamplesWithBinding(nodeID int64, samples []runtimenft.CounterSample, hashes map[int64]string) []runtimenft.CounterSample {
 	if len(samples) == 0 || len(hashes) == 0 {
+		if len(samples) > 0 {
+			log.Printf("nft counter samples dropped node_id=%d samples=%d reason=no_applied_binding", nodeID, len(samples))
+		}
 		return nil
 	}
 	filtered := make([]runtimenft.CounterSample, 0, len(samples))
+	dropped := 0
 	for _, sample := range samples {
 		if _, ok := hashes[sample.ForwardID]; !ok {
+			dropped++
 			continue
 		}
 		filtered = append(filtered, sample)
+	}
+	if dropped > 0 {
+		log.Printf("nft counter samples dropped node_id=%d samples=%d reason=no_applied_binding", nodeID, dropped)
 	}
 	return filtered
 }
@@ -445,17 +630,25 @@ func buildNftCounterDeltas(nodeID int64, samples []runtimenft.CounterSample, old
 
 	stateInputs := make([]repo.NftCounterStateInput, 0, len(samples))
 	deltaByForward := make(map[int64]nftTrafficDelta)
+	// A-中-3：畸形样本丢弃计数——方向/协议不在枚举内、字节数溢出
+	// int64 的样本无法入账；每轮一行摘要日志（无丢弃不打）。计数
+	// 器重置（sample.Bytes < oldBytes）不在此列：那是已登记的
+	// M-004 已知局限（基线推进、不计费），不是畸形丢弃。
+	droppedBadDirection, droppedBadProtocol, droppedOversize := 0, 0, 0
 	for _, sample := range samples {
 		direction := strings.ToLower(strings.TrimSpace(sample.Direction))
 		if direction != runtimenft.CounterDirectionToTarget && direction != runtimenft.CounterDirectionFromTarget {
+			droppedBadDirection++
 			continue
 		}
 
 		protocol := strings.ToLower(strings.TrimSpace(sample.Protocol))
 		if protocol != "tcp" && protocol != "udp" {
+			droppedBadProtocol++
 			continue
 		}
 		if sample.Bytes > uint64(math.MaxInt64) || sample.Packets > uint64(math.MaxInt64) {
+			droppedOversize++
 			continue
 		}
 		ruleHash := strings.TrimSpace(hashes[sample.ForwardID])
@@ -529,6 +722,11 @@ func buildNftCounterDeltas(nodeID int64, samples []runtimenft.CounterSample, old
 		}
 		deltas = append(deltas, delta)
 	}
+	if droppedBadDirection+droppedBadProtocol+droppedOversize > 0 {
+		log.Printf("nft counter samples dropped node_id=%d samples=%d bad_direction=%d bad_protocol=%d oversize=%d",
+			nodeID, droppedBadDirection+droppedBadProtocol+droppedOversize,
+			droppedBadDirection, droppedBadProtocol, droppedOversize)
+	}
 	return deltas, stateInputs
 }
 
@@ -581,17 +779,24 @@ func buildNftFlowUploadBatch(deltas []nftTrafficDelta, metas map[int64]repo.Flow
 				continue
 			}
 			if scaledIn > math.MaxInt64-scaledOut {
+				// R2A-3：与本函数其余溢出 continue 同口径（M-006），
+				// 丢弃须留行，否则双向合计溢出的整条丢弃无迹可查。
+				log.Printf("nftables quota overflow discard forward_id=%d scaled_in=%d scaled_out=%d", delta.ForwardID, scaledIn, scaledOut)
 				continue
 			}
 			quotaDelta = scaledIn + scaledOut
 		}
 		if batch.quotaUsage[meta.UserID] > math.MaxInt64-quotaDelta {
+			// R2A-3：用户 quota 合计溢出丢弃须留行（M-006 同口径）。
+			log.Printf("nftables quota overflow discard forward_id=%d user_id=%d quota_delta=%d", delta.ForwardID, meta.UserID, quotaDelta)
 			continue
 		}
 
 		flowIdx, flowExists := flowSeen[delta.ForwardID]
 		if flowExists && (batch.flowDeltas[flowIdx].InFlow > math.MaxInt64-scaledIn || batch.flowDeltas[flowIdx].OutFlow > math.MaxInt64-scaledOut ||
 			batch.flowDeltas[flowIdx].RawInFlow > math.MaxInt64-delta.BytesIn || batch.flowDeltas[flowIdx].RawOutFlow > math.MaxInt64-delta.BytesOut) {
+			// R2A-3：同转发多 delta 合并溢出丢弃须留行（M-006 同口径）。
+			log.Printf("nftables flow delta overflow discard forward_id=%d scaled_in=%d scaled_out=%d bytes_in=%d bytes_out=%d", delta.ForwardID, scaledIn, scaledOut, delta.BytesIn, delta.BytesOut)
 			continue
 		}
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +60,34 @@ type instance struct {
 	// kept across process relaunches so connection-id generations
 	// stay scoped per process launch.
 	connlog *connLogCollector
+	// tombstones are the auth_user names removed from the config
+	// whose live connections the sweeper keeps closing until the
+	// instance is reloaded or restarted (C-(4)): a removal-only
+	// change skips the SIGHUP reload (the reload drops every
+	// user's sessions), so the running config still admits these
+	// users and only the selective kill + sweeper enforces the
+	// removal — plus the nft reject rule for their marks (V-D),
+	// which is what makes the removal airtight for fast new
+	// connections. Re-adding a user clears its tombstone.
+	tombstones map[string]bool
+	// blockedMarks is the durable half of the tombstone (R4B-01):
+	// the auth_user names whose nft reject rule must stay in the
+	// table while the truncation is active. Unlike tombstones it
+	// is NOT spent when the running config is refreshed — the
+	// panel still shows the truncation active (applied=0), and a
+	// table rebuild after a reload/restart would otherwise
+	// silently drop the reject while the panel believes it
+	// enforced. It leaves only when the user is live in the
+	// config again or the instance is disabled/removed, and it
+	// is persisted to blocked.json beside state.json so an agent
+	// restart cannot lose it either. The sweeper never reads
+	// this map: after a restart the running config is fresh and
+	// there is nothing for the sweeper to close.
+	blockedMarks map[string]bool
+	// clashAddr is the companion's Clash API address
+	// (experimental.clash_api.external_controller) from the last
+	// applied config; "" when the API is not configured.
+	clashAddr string
 }
 
 // Manager owns every kernel instance on this agent. Apply/Control/Uninstall
@@ -70,6 +99,7 @@ type Manager struct {
 	applyMu     sync.Mutex
 	mu          sync.Mutex
 	restoreOnce sync.Once
+	sweepOnce   sync.Once
 	instances   map[string]*instance
 	nft         *nftCounters
 }
@@ -202,6 +232,7 @@ func (m *Manager) Restore() {
 		m.restore()
 		m.startGeoUpdater()
 		m.startRuleSetUpdater()
+		m.startNftVerifyLoop()
 	})
 }
 
@@ -215,19 +246,45 @@ func (m *Manager) restore() {
 		fmt.Printf("⚠️ 内核状态文件损坏: %v\n", err)
 		return
 	}
+	// R4B-01: load the durable reject set BEFORE re-applying: every
+	// confirmed Apply persists, and a persist with the still-empty
+	// in-memory set would overwrite blocked.json before it is read
+	// (live R4B-01d: agent restart came back with blocked.json={}).
+	blocked := m.loadBlockedMarks()
 	for _, req := range reqs {
 		if _, err := m.Apply(req); err != nil {
 			fmt.Printf("⚠️ 恢复内核 %s 失败: %v\n", req.Type, err)
 		}
+	}
+	// The re-apply above cannot recreate the durable reject half —
+	// its user diff sees no removal — so install the loaded set now
+	// and render it at once instead of waiting for the next verify
+	// tick. The final persist rewrites blocked.json: the Apply loop
+	// may have persisted an empty set while the marks were still
+	// unloaded.
+	if m.installBlockedMarks(blocked) {
+		if err := m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks()); err != nil {
+			log.Printf("[flmx] 持久墓碑恢复后规则同步失败: %v（下轮自检重试）", err)
+		}
+		m.persist()
 	}
 }
 
 func (m *Manager) persist() {
 	m.mu.Lock()
 	reqs := make([]ApplyRequest, 0, len(m.instances))
-	for _, inst := range m.instances {
+	blocked := make(map[string][]string)
+	for typ, inst := range m.instances {
 		if inst.req.Type != "" {
 			reqs = append(reqs, inst.req)
+		}
+		if len(inst.blockedMarks) > 0 {
+			names := make([]string, 0, len(inst.blockedMarks))
+			for name := range inst.blockedMarks {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			blocked[typ] = names
 		}
 	}
 	m.mu.Unlock()
@@ -240,6 +297,92 @@ func (m *Manager) persist() {
 		return
 	}
 	_ = writeFileAtomic(m.statePath(), b, 0o600)
+	m.writeBlockedMarks(blocked)
+}
+
+// blockedMarksPath is the durable nft-reject set (R4B-01), beside
+// state.json: kernel type -> tombstoned auth_user names whose
+// reject rule must survive a config refresh and an agent restart.
+func (m *Manager) blockedMarksPath() string {
+	return filepath.Join(m.baseDir, "blocked.json")
+}
+
+// writeBlockedMarks persists the durable reject set (R4B-01).
+// Always rewritten, even when empty, so a cleared set cannot
+// resurrect from a stale file after a restart.
+func (m *Manager) writeBlockedMarks(blocked map[string][]string) {
+	if blocked == nil {
+		blocked = make(map[string][]string)
+	}
+	b, err := json.Marshal(blocked)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(m.baseDir, 0o700); err != nil {
+		return
+	}
+	_ = writeFileAtomic(m.blockedMarksPath(), b, 0o600)
+}
+
+// loadBlockedMarks reads the durable reject set (R4B-01) without
+// touching instances, so restore() can load it before the re-apply
+// loop: a missing file is a fresh agent (nil), a corrupt file is
+// logged and treated as empty (nil).
+func (m *Manager) loadBlockedMarks() map[string][]string {
+	b, err := os.ReadFile(m.blockedMarksPath())
+	if err != nil {
+		return nil
+	}
+	var blocked map[string][]string
+	if err := json.Unmarshal(b, &blocked); err != nil {
+		log.Printf("[flmx] 持久墓碑文件损坏，已忽略: %v", err)
+		return nil
+	}
+	return blocked
+}
+
+// installBlockedMarks installs a loaded durable reject set into the
+// (re-applied) instances. Names live in the on-disk config again are
+// pruned (the user was re-added while the agent was down); the
+// sweeper half is deliberately NOT restored — the re-applied config
+// is fresh, so there is nothing for the sweeper to close. Reports
+// whether any mark survived.
+func (m *Manager) installBlockedMarks(blocked map[string][]string) bool {
+	if len(blocked) == 0 {
+		return false
+	}
+	m.mu.Lock()
+	for typ, names := range blocked {
+		inst := m.instances[typ]
+		if inst == nil || len(names) == 0 {
+			continue
+		}
+		if inst.blockedMarks == nil {
+			inst.blockedMarks = make(map[string]bool)
+		}
+		for _, name := range names {
+			inst.blockedMarks[name] = true
+		}
+	}
+	for typ, inst := range m.instances {
+		if len(inst.blockedMarks) > 0 {
+			pruneLiveTombstones(inst, m.runDir(typ))
+		}
+	}
+	m.mu.Unlock()
+	return len(m.allBlockedUserMarks()) > 0
+}
+
+// restoreBlockedMarks reloads the durable reject set (R4B-01) into
+// the current instances. Names live in the on-disk config again are
+// pruned (the user was re-added while the agent was down); the
+// sweeper half is deliberately NOT restored — the re-applied config
+// is fresh, so there is nothing for the sweeper to close. Reports
+// whether any mark survived. A missing file is a fresh agent
+// (nothing to restore); a corrupt file is logged and treated as
+// empty.
+func (m *Manager) restoreBlockedMarks() bool {
+	return m.installBlockedMarks(m.loadBlockedMarks())
 }
 
 // allPorts and allUserMarks derive the nft desired state. Only
@@ -273,6 +416,80 @@ func (m *Manager) allUserMarks() []int64 {
 		ids = append(ids, inst.req.UserMarks...)
 	}
 	return ids
+}
+
+// allBlockedUserMarks derives the nft desired state for
+// truncated users (V-D): a removed user's mark is rejected in the
+// output chain, so a new connection admitted by the still-running
+// old config dies at the handshake instead of draining through the
+// 2s sweeper's graceful close. It reads the durable reject half
+// (blockedMarks, R4B-01), not the transient sweeper half
+// (tombstones): the reject must survive a config refresh and an
+// agent restart, while the sweeper is spent by both. Only enabled
+// instances contribute; a blocked name that does not parse to a
+// user id is skipped here (the sweeper still closes it by name
+// while its half lives).
+func (m *Manager) allBlockedUserMarks() []int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []int64
+	for _, inst := range m.instances {
+		if !inst.req.Enabled {
+			continue
+		}
+		for name := range inst.blockedMarks {
+			if id, ok := tombstoneUserID(name); ok {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
+// pruneLiveTombstones drops any tombstoned/blocked user that is
+// live in the on-disk config again — a re-added user must not stay
+// rejected. Both halves are pruned (R4B-01). A missing or
+// unparsable config keeps the sets as-is (fail-closed: keep
+// blocking). Callers hold m.mu.
+func pruneLiveTombstones(inst *instance, runDir string) {
+	if len(inst.tombstones) == 0 && len(inst.blockedMarks) == 0 {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(runDir, "config.json"))
+	if err != nil {
+		return
+	}
+	live, err := singboxUsers(b)
+	if err != nil {
+		return
+	}
+	for _, u := range live {
+		delete(inst.tombstones, u)
+		delete(inst.blockedMarks, u)
+	}
+}
+
+// reconcileTombstones settles the two halves of a removal after an
+// Apply (R4B-01). The sweeper half (tombstones) is spent once the
+// running config is fresh — a reload/restart drops every session,
+// so the sweeper has nothing left to close. The nft-reject half
+// (blockedMarks) is NOT spent on refresh: the panel still shows
+// the truncation active (applied=0), and a later table rebuild
+// would otherwise silently drop the reject while the panel
+// believes it enforced. Blocked marks leave only when the user is
+// live in the config again or the instance is disabled.
+func (m *Manager) reconcileTombstones(inst *instance, req ApplyRequest, configRefreshed bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !req.Enabled {
+		inst.tombstones = nil
+		inst.blockedMarks = nil
+		return
+	}
+	if configRefreshed {
+		inst.tombstones = nil
+	}
+	pruneLiveTombstones(inst, m.runDir(req.Type))
 }
 
 // pinnedSHA256 returns the expected SHA-256 for the binary a
@@ -313,18 +530,37 @@ func pinnedSHA256(d *Download) (string, bool) {
 // cannot be established without a network fetch; those call faces
 // are the main and extra-binary calls in Apply, whose Downloads
 // may carry only ChecksumURL/GitHub sources.
+// binaryUsable reports whether the binary at path is present and,
+// when a pinned SHA-256 is available, hashes to it (C4). A mismatch
+// — or an unreadable file — is treated as missing and falls through
+// to install().
+func binaryUsable(inst *instance, label string, d *Download, path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	if want, ok := pinnedSHA256(d); ok {
+		if got, herr := fileSHA256(path); herr == nil && got == want {
+			return true
+		}
+		inst.logs.add(fmt.Sprintf("[flmx] %s 已存在但 SHA256 复检不符，按缺失重装", label))
+		return false
+	}
+	// No locally available expected SHA-256 (see pinnedSHA256):
+	// keep the existence-skip for this call face.
+	return true
+}
+
 func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir string) (string, error) {
 	path := filepath.Join(dir, d.BinName)
-	if _, err := os.Stat(path); err == nil {
-		if want, ok := pinnedSHA256(d); ok {
-			if got, herr := fileSHA256(path); herr == nil && got == want {
-				return path, nil
-			} else {
-				inst.logs.add(fmt.Sprintf("[flmx] %s 已存在但 SHA256 复检不符，按缺失重装", label))
-			}
-		} else {
-			// No locally available expected SHA-256 (see above):
-			// keep the existence-skip for this call face.
+	if binaryUsable(inst, label, d, path) {
+		return path, nil
+	}
+	// C NEW-2: 上一次安装若在原子交换的两步改名之间崩溃，活目录
+	// 缺失、旧二进制在 <dir>.old 里。先恢复它再复检（哈希不符仍
+	// 重装）；恢复失败才走安装，重启永不直面零内核态。
+	if _, err := os.Stat(path); err != nil && restoreInterruptedSwap(dir, d.BinName) {
+		inst.logs.add(fmt.Sprintf("[flmx] %s 发现未完成的原子交换，已从备份恢复旧二进制", label))
+		if binaryUsable(inst, label, d, path) {
 			return path, nil
 		}
 	}
@@ -334,6 +570,9 @@ func (m *Manager) ensureBinary(inst *instance, label string, d *Download, dir st
 	// kernel — not only in the agent's stdout.
 	note := func(msg string) { inst.logs.add("[flmx] " + msg) }
 	if err := install(d, dir, note); err != nil {
+		// C NEW-2: 安装失败时旧二进制仍在位（install 只在替换件
+		// 落盘验证后才交换），点名保留、不留零内核态。
+		inst.logs.add(fmt.Sprintf("[flmx] 安装 %s 失败，保留现有二进制: %v", label, err))
 		return "", fmt.Errorf("安装 %s 失败: %v", label, err)
 	}
 	inst.logs.add(fmt.Sprintf("[flmx] %s 安装完成", label))
@@ -393,13 +632,68 @@ func (m *Manager) stopGuardedInstances(cur *instance, syncErr error) bool {
 	return curGuarded
 }
 
+// nftVerifyFirstCheck / nftVerifyInterval 是 agent 表自检的节拍
+// （R3A-NEW-1/C NEW-1）：首检在启动后不久、其后每 60 秒一轮，
+// 与面板 KernelStatus 轮询同量级；单轮只是一次 `nft list table`，
+// 表正常时零日志。
+const (
+	nftVerifyFirstCheck = 10 * time.Second
+	nftVerifyInterval   = 60 * time.Second
+)
+
+// startNftVerifyLoop 周期复核 live nft 表（R3A-NEW-1/C NEW-1）：
+// 表驻留在内核里、不归本进程所有，可被带外删除；只靠 Apply 时的
+// sync，下发之间表丢了 agent 自己永远发现不了，计量静默冻结到
+// 下一次配置变更。自检跑的就是 Apply 用的 content-verified
+// sync，缺表/内容漂移即原地重建；重建失败大声记日志，并经
+// Status NftReadError 持续上报面板、直至下轮重试成功。
+func (m *Manager) startNftVerifyLoop() {
+	go func() {
+		time.Sleep(nftVerifyFirstCheck)
+		for {
+			m.verifyNftTable()
+			time.Sleep(nftVerifyInterval)
+		}
+	}()
+}
+
+// verifyNftTable 跑一轮 content-verified sync。表正常时零日志；
+// 表缺失/不可读时先点名、再重建、重建成功再报一行（恢复可见）；
+// 重建失败大声记错、不停内核（计数缺失本身是 best-effort，
+// 停内核是另一回事，见 Apply 的 guard 口径），下轮重试。
+func (m *Manager) verifyNftTable() {
+	if !m.nft.hasAppliedState() {
+		return
+	}
+	// 预检只为在日志里点名“缺表重建”：sync 本身是权威判定，
+	// 任何不匹配都会重建，预检读不到也不影响重建。
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, fpErr := m.nft.tableFingerprint(ctx)
+	if fpErr != nil {
+		log.Printf("[flmx] nft 表缺失或不可读（%v），正在重建", fpErr)
+	}
+	if err := m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks()); err != nil {
+		if _, hopNote := isolateHopSync(err); hopNote != "" {
+			// 仅 hop 规则被拒：主规则集已落地，不是表缺失。
+			log.Printf("[flmx] nft 表自检：端口跳跃未生效（%s）", hopNote)
+			return
+		}
+		log.Printf("[flmx] nft 表自检重建失败: %v（下轮重试；计量与截断在此期间缺失）", err)
+		return
+	}
+	if fpErr != nil {
+		log.Printf("[flmx] nft 表缺失已重建")
+	}
+}
+
 // syncGuardBeforeRestart re-runs the full ruleset sync ahead of an
 // internal restart (geodata / rule-set refresh, supervisor relaunch)
 // that brings processes back up outside Apply/Control. The sync is
 // content-verified, so a table flushed or rewritten out-of-band is
 // rebuilt here instead of the restart silently running unguarded.
 func (m *Manager) syncGuardBeforeRestart() error {
-	gate, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks()))
+	gate, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks()))
 	return gate
 }
 
@@ -523,6 +817,14 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		}
 	}
 	prev := prevApply{req: inst.req, binDir: inst.binDir, bins: inst.bins, version: inst.version, files: prevFiles}
+	// C-(4): a running sing-box instance can apply a config-only
+	// change by SIGHUP reload instead of a process restart (see
+	// tryReloadSingbox). The reload needs the config to have
+	// changed, the binary to be unchanged, and the process to be
+	// up; anything else restarts as before.
+	reloadable := isSingboxType(req.Type) && running &&
+		prev.req.Hash != req.Hash && req.Hash != "" &&
+		prev.bins[""] == mainBin && len(prev.bins) == len(bins)
 	// F-032: 上一版是否"曾确认可用"在覆盖 inst.req 前定格，与瞬时
 	// 进程快照无关（退避间隙 procs 不在运行，prev 仍是可回滚的好配置）。
 	prevGood := prev.req.Enabled && prev.req.Hash != "" && prev.req.Hash == inst.goodHash
@@ -551,12 +853,123 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		m.mu.Unlock()
 	}
 
+	// R2C-01: resolve the companion's effective Clash API port and
+	// rewrite the just-written config to carry it, BEFORE validation
+	// and the user diff below (see resolveCompanionClashAddr).
+	if isSingboxType(req.Type) {
+		if addr, changed, err := m.resolveCompanionClashAddr(prev, runDir, running); err != nil {
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		} else if changed {
+			inst.logs.add(fmt.Sprintf("[flmx] 伴生 Clash API 口已调整为 %s（下发口被占或不在新范围）", addr))
+		}
+	}
+
+	// C-(4): validate the new config before the nft sync when a
+	// reload is planned — a bad config must fail here, while the
+	// old process is still running the old config and the old nft
+	// rules are still installed. Restoring the files and the
+	// in-memory request keeps a later restart on the good config;
+	// the nft rules are never synced for the bad config.
+	if reloadable {
+		if cerr := checkSingboxConfig(mainBin, singboxConfigPath(req, runDir)); cerr != nil {
+			restorePrevFiles(runDir, prev)
+			m.mu.Lock()
+			inst.req = prev.req
+			inst.binDir = prev.binDir
+			inst.bins = prev.bins
+			inst.version = prev.version
+			m.mu.Unlock()
+			m.applyConnLog(inst, prev.req)
+			err := fmt.Errorf("sing-box 配置校验失败，已保留旧配置: %w", cerr)
+			m.setErr(inst, err)
+			return m.state(req.Type, false), err
+		}
+	}
+
+	// C-(4)/V-D: which users did this apply remove, and is the change
+	// removal-only (only the user list changed)? The diff is on the
+	// on-disk configs (previous files vs the just-written new ones).
+	// This runs BEFORE the nft sync below — and after the config
+	// validation above, so a bad config never kills anything — so
+	// the tombstones it creates are already in the render: the nft
+	// reject rule for a tombstoned mark must land in the SAME table
+	// rebuild as the truncation, or a fast new connection completes
+	// before the next rebuild (V-D live proof 2026-11-16).
+	removedUsers, addedUsers, userOnlyChange := m.applyUserDiff(req.Type, prev, runDir)
+	// Cache the companion's Clash API address from the new config
+	// for the selective kill and the tombstone sweeper.
+	clashAddr := ""
+	if isSingboxType(req.Type) {
+		if b, err := os.ReadFile(filepath.Join(runDir, "config.json")); err == nil {
+			clashAddr = clashAPIAddr(b)
+			m.mu.Lock()
+			inst.clashAddr = clashAddr
+			m.mu.Unlock()
+		}
+	}
+	// C-(4): a removal-only change is a candidate for skipping the
+	// SIGHUP reload — the reload drops every user's sessions (live
+	// proof 2026-11-15), so it cannot be the per-user kill. The
+	// candidate is confirmed only if the selective kill below can
+	// actually reach the companion's Clash API; otherwise the
+	// reload stays (the removal is still enforced, at the cost of
+	// the pre-existing reload blast radius).
+	skipReloadCandidate := isSingboxType(req.Type) && req.Enabled && running && reloadable &&
+		userOnlyChange && len(removedUsers) > 0 && len(addedUsers) == 0
+	skipReload := false
+	if skipReloadCandidate {
+		if clashAddr == "" {
+			inst.logs.add(fmt.Sprintf("[flmx] 伴生未配置 Clash API，用户 %v 的已有连接无法连接级关闭，改走配置重载", removedUsers))
+		} else if closed, err := closeClashUserConnections(clashAddr, removedUsers); err != nil {
+			inst.logs.add(fmt.Sprintf("[flmx] 用户 %v 的已有连接连接级关闭失败（%v），改走配置重载", removedUsers, err))
+		} else {
+			skipReload = true
+			inst.logs.add(fmt.Sprintf("[flmx] 已连接级关闭用户 %v 的已有连接 %d 条，未重载配置（其他用户会话保留）", removedUsers, closed))
+			// Tombstone the removed users: the running config still
+			// admits them, so the sweeper keeps closing any they
+			// open again until a reload/restart refreshes it — and
+			// the nft sync below rejects their new dials at the
+			// handshake (V-D), which is what makes the removal
+			// airtight for fast transfers. The reject half
+			// (blockedMarks, R4B-01) is recorded alongside the
+			// sweeper half: it outlives the refresh and is
+			// persisted, so a later table rebuild cannot silently
+			// drop the reject while the truncation is active.
+			m.mu.Lock()
+			if inst.tombstones == nil {
+				inst.tombstones = make(map[string]bool)
+			}
+			if inst.blockedMarks == nil {
+				inst.blockedMarks = make(map[string]bool)
+			}
+			for _, u := range removedUsers {
+				inst.tombstones[u] = true
+				inst.blockedMarks[u] = true
+			}
+			m.mu.Unlock()
+			m.startSweeperOnce()
+		}
+	}
+	// V-D: a re-added user is live again — clear it from the
+	// tombstones BEFORE the sync, so the rebuild does not carry a
+	// reject rule for a user the new config admits. The reconcile
+	// after the switch repeats this; doing it here is what makes
+	// the render correct. Both halves are pruned (R4B-01): a
+	// re-added user must not stay in the durable reject set.
+	m.mu.Lock()
+	pruneLiveTombstones(inst, runDir)
+	m.mu.Unlock()
+
 	// The nft sync runs BEFORE any process starts: the ruleset carries
 	// the traffic counters and the inbound whitelists. Counting alone
 	// is best-effort, but a kernel guarded by the
 	// ruleset (reqNeedsNftGuard) must never listen while its rules are
 	// not installed, so a failed sync blocks its start outright.
-	syncErr, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks()))
+	// V-D: the sync renders the tombstones created above as reject
+	// rules, so the truncation and its data-plane enforcement land
+	// in one rebuild.
+	syncErr, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks()))
 	if hopNote != "" {
 		// R2-F2-E02: the main ruleset is in place; only port hopping
 		// is ineffective. Name it as what it is — never as a guard
@@ -566,23 +979,96 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	if syncErr != nil {
 		inst.logs.add("[flmx] 流量计数规则同步失败: " + syncErr.Error())
 	}
+	// E-01: the per-agent base is derived from the panel's node
+	// secret, so two panels' same-id nodes collide only when their
+	// secrets hash to the same first byte (1/256 per pair). Make
+	// that residual visible instead of silent: after a successful
+	// sync, scan the ruleset for our marks in other tables and log
+	// any hit (best-effort — a failed scan never blocks the apply).
+	if syncErr == nil {
+		for _, c := range m.nft.detectMarkCollision(m.allUserMarks()) {
+			msg := "[flmx] socket-mark 碰撞：" + c.String() + "——另一 agent/面板在用同一 mark，本节点与对方的订阅计数会互相串扰"
+			inst.logs.add(msg)
+			log.Printf("%s", msg)
+		}
+	}
 	startBlocked := syncErr != nil && reqNeedsNftGuard(req)
 
 	stable := true
+	// reloadedClean is set when the config was applied by a SIGHUP
+	// reload with the process never restarting. A reload drops
+	// every user's established sessions (C-(4) live proof
+	// 2026-11-15) — it is not a per-user kill — so a removal-only
+	// change skips it (skipReload above) and the removed users are
+	// enforced selectively instead.
+	reloadedClean := false
+	// configRefreshed is set when the running process now has the
+	// new config (reload or restart): the tombstones are then spent
+	// and cleared below.
+	configRefreshed := false
 	switch {
 	case !req.Enabled:
 		m.stopProcesses(inst)
-	case changed || !running:
 		m.stopProcesses(inst)
-		if !startBlocked {
-			m.startProcesses(inst)
-			// F-032: 探活窗口内持续存活判定——窗口内曾存活又退出即失败，
-			// 单点快照会把"启动后随即退出"误判成功、把慢启动误判失败。
+	case skipReload:
+		// Removal-only: the selective kill + sweeper + nft reject
+		// already enforce it; the process keeps running the old
+		// config untouched, so the kept users' sessions are
+		// preserved. stable stays true.
+	case changed || !running:
+		// C-(4): try a SIGHUP reload before restarting — a
+		// restart drops every established session of every user
+		// on the instance, and a reload drops them too (it
+		// re-creates the shared inbound/outbound/router).
+		applied, restarted := m.tryReloadSingbox(inst, reloadable)
+		if applied {
+			reloadedClean = !restarted
+			configRefreshed = true
+			if restarted {
+				inst.logs.add("[flmx] sing-box 配置重载致进程重启（会话已断），已按新配置恢复")
+			}
 			stable = m.waitStable(req.Type)
 		} else {
-			stable = false
+			m.stopProcesses(inst)
+			if !startBlocked {
+				m.startProcesses(inst)
+				configRefreshed = true
+				// F-032: 探活窗口内持续存活判定——窗口内曾存活又退出即失败，
+				// 单点快照会把"启动后随即退出"误判成功、把慢启动误判失败。
+				stable = m.waitStable(req.Type)
+			} else {
+				stable = false
+			}
 		}
 	}
+
+	// C-(4): how the removed users' live sessions were handled.
+	// A SIGHUP reload drops EVERY user's established sessions
+	// (live proof 2026-11-15: bare SIGHUP closed both u2's and
+	// u3's upstreams within seconds; which download then
+	// "survived" was a buffer race, not a selective kill). The
+	// reload is therefore not a per-user kill: a removal-only
+	// change skips it and closes the removed users' connections
+	// selectively through the companion's Clash API (skipReload
+	// above, already logged). A reload/restart drops every
+	// session, so there is nothing selective to do then.
+	if skipReload {
+		// Already logged at kill time; the tombstone sweeper and
+		// the nft reject rule keep enforcing it until a
+		// reload/restart.
+	} else if reloadedClean && req.Enabled && stable && len(req.UserMarks) > 0 {
+		removed := diffUserMarks(prev.req.UserMarks, req.UserMarks)
+		if len(removed) > 0 {
+			inst.logs.add(fmt.Sprintf("[flmx] 配置重载完成，用户 %v 已从配置移除（重载同时断开了本实例全部用户的已有连接，见 C-(4)）", removed))
+		}
+	} else if len(req.UserMarks) > 0 && len(diffUserMarks(prev.req.UserMarks, req.UserMarks)) > 0 {
+		inst.logs.add(fmt.Sprintf("[flmx] 配置未走干净重载（reloadedClean=%v enabled=%v stable=%v），移除用户 %v 的已有连接未切断", reloadedClean, req.Enabled, stable, diffUserMarks(prev.req.UserMarks, req.UserMarks)))
+	}
+	// Reconcile the tombstones (see reconcileTombstones): a
+	// reload/restart spends the sweeper half, but the durable
+	// reject half stays until the user is re-added or the
+	// instance is disabled (R4B-01).
+	m.reconcileTombstones(inst, req, configRefreshed)
 
 	var failure error
 	confirmed := true
@@ -673,6 +1159,134 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	return m.state(req.Type, false), failure
 }
 
+// applyUserDiff diffs the previous and the just-written sing-box
+// configs (auth_user names) and reports which users were removed,
+// which were added, and whether the change is user-only (nothing
+// but the user list and its derived outbounds/rules changed).
+// Non-sing-box types and first applies report no diff.
+// resolveCompanionClashAddr decides the Clash API address the
+// companion will actually listen on and rewrites the just-written
+// config.json to carry it (R2C-01). It returns the resolved address
+// and whether the file was rewritten; "" with changed=false means
+// there is no Clash API configured (not a companion) or the rendered
+// address already stands. The caller invokes this BEFORE config
+// validation and the user diff: a rewrite after the diff would make
+// a user-only change look like a config change and send it down the
+// reload path (C-(4) blast radius), and a rewrite after the kill
+// would point the kill at a port the running instance does not
+// listen on.
+func (m *Manager) resolveCompanionClashAddr(prev prevApply, runDir string, running bool) (string, bool, error) {
+	cfgPath := filepath.Join(runDir, "config.json")
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return "", false, nil
+	}
+	rendered := clashAPIAddr(b)
+	if rendered == "" {
+		return "", false, nil
+	}
+	prevAddr := ""
+	if old, ok := prev.files["config.json"]; ok {
+		prevAddr = clashAPIAddr(old)
+	}
+	addr, err := resolveClashAPIAddr(rendered, prevAddr, running)
+	if err != nil {
+		return "", false, err
+	}
+	if addr == rendered {
+		return addr, false, nil
+	}
+	nb, err := rewriteClashAPIAddr(b, addr)
+	if err != nil {
+		return "", false, err
+	}
+	if err := writeFileAtomic(cfgPath, nb, 0o600); err != nil {
+		return "", false, err
+	}
+	return addr, true, nil
+}
+
+func (m *Manager) applyUserDiff(kernelType string, prev prevApply, runDir string) (removed, added []string, userOnly bool) {
+	if !isSingboxType(kernelType) {
+		return nil, nil, false
+	}
+	oldConfig, ok := prev.files["config.json"]
+	if !ok || len(oldConfig) == 0 {
+		return nil, nil, false
+	}
+	newConfig, err := os.ReadFile(filepath.Join(runDir, "config.json"))
+	if err != nil || len(newConfig) == 0 {
+		return nil, nil, false
+	}
+	removed, err = removedSingboxUsers(oldConfig, newConfig)
+	if err != nil {
+		return nil, nil, false
+	}
+	added, err = addedSingboxUsers(oldConfig, newConfig)
+	if err != nil {
+		return nil, nil, false
+	}
+	userOnly, err = isUserOnlySingboxChange(oldConfig, newConfig)
+	if err != nil {
+		return nil, nil, false
+	}
+	return removed, added, userOnly
+}
+
+// tombstoneSweepInterval is how often the sweeper re-closes a
+// tombstoned user's new connections (C-(4)).
+const tombstoneSweepInterval = 2 * time.Second
+
+// startSweeperOnce starts the tombstone sweeper goroutine (once per
+// Manager lifetime). It ticks every tombstoneSweepInterval and, for
+// each instance with tombstones, closes any live connection admitted
+// as a tombstoned user. It does no work (and no HTTP call) when
+// there is nothing tombstoned.
+func (m *Manager) startSweeperOnce() {
+	m.sweepOnce.Do(func() {
+		go m.sweepTombstonesLoop()
+	})
+}
+
+func (m *Manager) sweepTombstonesLoop() {
+	for {
+		time.Sleep(tombstoneSweepInterval)
+		m.mu.Lock()
+		type target struct {
+			kernelType string
+			addr       string
+			users      []string
+		}
+		var targets []target
+		for kernelType, inst := range m.instances {
+			if len(inst.tombstones) == 0 || inst.clashAddr == "" {
+				continue
+			}
+			users := make([]string, 0, len(inst.tombstones))
+			for u := range inst.tombstones {
+				users = append(users, u)
+			}
+			targets = append(targets, target{kernelType, inst.clashAddr, users})
+		}
+		m.mu.Unlock()
+		for _, t := range targets {
+			closed, err := closeClashUserConnections(t.addr, t.users)
+			if err != nil {
+				// The companion may be mid-restart; the next tick
+				// retries. Do not spam the log every 2s.
+				continue
+			}
+			if closed > 0 {
+				m.mu.Lock()
+				if inst := m.instances[t.kernelType]; inst != nil {
+					inst.logs.add(fmt.Sprintf("[flmx] 兜底关闭已移除用户 %v 的新建连接 %d 条", t.users, closed))
+				}
+				m.mu.Unlock()
+			}
+		}
+	}
+}
+
 // pruneStaleBinDirs enforces the kernel binary retention policy
 // (R6-09): under <base>/<type>/bin, only the directories in keep
 // survive; every other directory — a superseded version's main bin
@@ -728,7 +1342,11 @@ type prevApply struct {
 	files   map[string][]byte
 }
 
-func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
+// restorePrevFiles writes the previous apply's file contents back
+// over the run dir (nil content removes the file). Used by rollback
+// and by the reload config-check failure path, both of which must
+// leave the on-disk config consistent with the in-memory request.
+func restorePrevFiles(runDir string, prev prevApply) {
 	for name, content := range prev.files {
 		path := filepath.Join(runDir, name)
 		if content == nil {
@@ -737,6 +1355,10 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 			_ = writeFileAtomic(path, content, 0o600)
 		}
 	}
+}
+
+func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
+	restorePrevFiles(runDir, prev)
 	m.mu.Lock()
 	inst.req = prev.req
 	inst.binDir = prev.binDir
@@ -748,6 +1370,132 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 	m.stopProcesses(inst)
 	m.startProcesses(inst)
 	m.waitStable(prev.req.Type)
+}
+
+// isSingboxType reports whether a kernel type runs the sing-box
+// binary (main or metering companion). Only these support a SIGHUP
+// config reload that preserves established connections.
+func isSingboxType(t string) bool {
+	return t == "singbox" || t == "singbox-companion"
+}
+
+// diffUserMarks returns the user ids present in prev but absent in
+// cur (removed users), sorted for deterministic logging.
+func diffUserMarks(prev, cur []int64) []int64 {
+	inCur := make(map[int64]bool, len(cur))
+	for _, id := range cur {
+		inCur[id] = true
+	}
+	seen := make(map[int64]bool)
+	var out []int64
+	for _, id := range prev {
+		if !inCur[id] && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	// small sets; insertion sort keeps the import list minimal.
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// singboxConfigPath is the config file a sing-box process was started
+// with (the `-c` argument, {RUN_DIR} expanded). It falls back to the
+// panel-rendered well-known name when the args carry no -c.
+func singboxConfigPath(req ApplyRequest, runDir string) string {
+	args := req.Args
+	if len(args) == 0 && len(req.Processes) > 0 {
+		args = req.Processes[0].Args
+	}
+	for i, a := range args {
+		if a == "-c" && i+1 < len(args) {
+			return strings.ReplaceAll(args[i+1], "{RUN_DIR}", runDir)
+		}
+	}
+	return filepath.Join(runDir, "config.json")
+}
+
+// checkSingboxConfig runs `sing-box check` on a config file. A
+// non-zero exit or a timeout is an error carrying the tool output,
+// so a bad config fails the apply before the old process or the nft
+// rules are touched.
+func checkSingboxConfig(bin, configPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "check", "-c", configPath)
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sing-box check -c %s: %w (output: %s)", configPath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// tryReloadSingbox SIGHUPs a running sing-box instance so it re-reads
+// its (already written) config without dropping established
+// connections. It returns (applied, restarted):
+//   - (true, false): reloaded in place; sessions preserved.
+//   - (true, true): the process restarted on its own (supervisor
+//     relaunch) with the new config; sessions were lost but the
+//     config is applied — the caller must NOT restart it again.
+//   - (false, false): reload not applicable (caller falls through
+//     to the normal restart path).
+func (m *Manager) tryReloadSingbox(inst *instance, reloadable bool) (applied, restarted bool) {
+	if !reloadable {
+		return false, false
+	}
+	type generation struct {
+		restarts  int
+		startedAt int64
+	}
+	m.mu.Lock()
+	procs := append([]*process(nil), inst.procs...)
+	m.mu.Unlock()
+	if len(procs) == 0 {
+		return false, false
+	}
+	before := make([]generation, 0, len(procs))
+	for _, p := range procs {
+		_, _, r, _, s := p.snapshot()
+		before = append(before, generation{r, s})
+	}
+	for _, p := range procs {
+		p.sighup()
+	}
+	// sing-box applies a reload within milliseconds; give it a
+	// second to settle, watching for a supervisor relaunch (the
+	// backoff starts at 1s, so a crash shows up as a new generation
+	// inside this window).
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		restartedNow := false
+		running := false
+		for i, p := range procs {
+			r, _, restarts, _, startedAt := p.snapshot()
+			if r {
+				running = true
+			}
+			if i < len(before) && (restarts != before[i].restarts || startedAt != before[i].startedAt) {
+				restartedNow = true
+			}
+		}
+		if restartedNow {
+			return true, true
+		}
+		if time.Now().After(deadline) {
+			if running {
+				return true, false
+			}
+			// Died and not back yet; the supervisor may still
+			// relaunch it, so let the caller restart cleanly.
+			return false, false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // waitStable 在探活窗口（startupProbeIn）内持续观察进程存活：达到过
@@ -976,7 +1724,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		m.persist()
 		// A hop-only failure does not make the removal fail: the
 		// remaining ruleset synced fine (R2-F2-E02).
-		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks())); err != nil {
+		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks())); err != nil {
 			return State{Type: kernelType}, err
 		}
 		return State{Type: kernelType}, nil
@@ -1003,7 +1751,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		// the table is gone entirely — so the guard goes back in
 		// after stopping and before starting, and a failed sync
 		// leaves the kernel stopped instead of running unguarded.
-		if err, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks())); err != nil {
+		if err, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks())); err != nil {
 			ferr := nftGuardFailure(inst.req, err)
 			m.setErr(inst, ferr)
 			return m.state(kernelType, false), ferr
@@ -1036,7 +1784,7 @@ func (m *Manager) Control(kernelType, action string) (State, error) {
 		// Keep the rules in lockstep with the lifecycle: stopping a
 		// kernel must leave none of its rules behind. A sync failure
 		// here is surfaced, not swallowed.
-		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks())); err != nil {
+		if err, _ := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks())); err != nil {
 			return m.state(kernelType, false), err
 		}
 	}
@@ -1110,7 +1858,12 @@ func (m *Manager) Status(logsFor string) Status {
 		}
 	}
 	// nft 面状态随每次上报：NftError 只承载自动安装失败的原因
-	// （见 types.go），单纯缺失不进此字段。
+	// （见 types.go），单纯缺失不进此字段；计数读取失败走
+	// NftReadError（R3A-NEW-1），面板据此置 failing＋告警——旧实现
+	// 在此静默返回空计数，表丢后计量冻结而面板无从区分“无流量”
+	// 与“表丢了”。R4C-02：从未装过 nft（无二进制、也从未建表）
+	// 时读错不是表丢失，走独立的 NftNotInstalled 非 failing 信
+	// 号（见下）；曾建表后丢二进制仍是回归，照旧进 NftReadError。
 	if auto, ierr := m.nft.installStatus(); auto {
 		out.NftAutoInstalled = true
 	} else if ierr != "" {
@@ -1122,6 +1875,15 @@ func (m *Manager) Status(logsFor string) Status {
 	}
 	counters, users, epoch, err := m.nft.read()
 	if err != nil {
+		// R4C-02：无二进制且从未建表——本机根本无计数可读，
+		// 按设计只丢计数，不进 NftReadError（否则面板每轮置
+		// failing＋重推内核）；曾建表后丢二进制是回归，照旧
+		// 进 NftReadError（面板的表丢失自愈路径仍在）。
+		if nftAvailable() != nil && !m.nft.hasAppliedState() {
+			out.NftNotInstalled = true
+			return out
+		}
+		out.NftReadError = truncateNftErr(err.Error())
 		return out
 	}
 	if counters != nil {
@@ -1174,6 +1936,15 @@ func (m *Manager) Shutdown() {
 		}(inst)
 	}
 	wg.Wait()
+	// R2C-02：优雅退出回收自家 nft 表——只删自己的表（removeTables
+	// 的 legacy 清理分支会动活着的 legacy agent 的表，退出路径不
+	// 得碰；Uninstall 仍走 removeTables 全量清理）。失败只记日志、
+	// 不阻塞退出；下次启动 sync 即重建该表。
+	if m.nft != nil {
+		if err := m.nft.removeOwnTable(); err != nil {
+			log.Printf("agent shutdown nft reclaim failed table=%s err=%v", m.nft.tableName(), err)
+		}
+	}
 }
 
 func detectVersion(bin string, args []string) string {

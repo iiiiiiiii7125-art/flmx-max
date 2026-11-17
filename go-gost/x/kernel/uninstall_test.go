@@ -64,3 +64,60 @@ func TestManagerUninstallPropagatesNftError(t *testing.T) {
 		t.Fatal("expected the nft error to propagate")
 	}
 }
+
+// R2C-02：优雅退出回收自家 nft 表——只删自己的表，legacy 表与探针
+// 表不动（legacy agent 活着时那是它的 live 表；探针表按需重建）。
+func TestManagerShutdownRemovesOwnNftTable(t *testing.T) {
+	var scripts []string
+	orig := nftRunner
+	nftRunner = func(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+		scripts = append(scripts, stdin)
+		return nil, nil
+	}
+	t.Cleanup(func() { nftRunner = orig })
+
+	// 非 canonical 安装：只删自己的后缀表。
+	m := NewManager(t.TempDir())
+	m.Shutdown()
+	if len(scripts) != 1 {
+		t.Fatalf("shutdown must run exactly one nft script, got %d", len(scripts))
+	}
+	script := scripts[0]
+	if !strings.Contains(script, "delete table inet "+m.nft.tableName()) {
+		t.Fatalf("shutdown script must delete own table %q, got:\n%s", m.nft.tableName(), script)
+	}
+	for _, table := range []string{nftTable, legacyNFTTable, legacyAgentNFTTable, nftHopProbeTable} {
+		if strings.Contains(script, "delete table inet "+table+"\n") {
+			t.Fatalf("shutdown script must not delete %q, got:\n%s", table, script)
+		}
+	}
+
+	// Canonical 安装：删 plain 主表，legacy 表仍不动。
+	scripts = nil
+	mc := NewManager(defaultBaseDir)
+	mc.Shutdown()
+	if len(scripts) != 1 {
+		t.Fatalf("canonical shutdown must run exactly one nft script, got %d", len(scripts))
+	}
+	script = scripts[0]
+	if !strings.Contains(script, "delete table inet "+nftTable+"\n") {
+		t.Fatalf("canonical shutdown script must delete %q, got:\n%s", nftTable, script)
+	}
+	for _, table := range []string{legacyNFTTable, legacyAgentNFTTable, nftHopProbeTable} {
+		if strings.Contains(script, "delete table inet "+table+"\n") {
+			t.Fatalf("canonical shutdown script must not delete %q, got:\n%s", table, script)
+		}
+	}
+}
+
+// R2C-02：nft 回收失败不得阻塞退出——Shutdown 无返回值，失败只记日志。
+func TestManagerShutdownToleratesNftError(t *testing.T) {
+	orig := nftRunner
+	nftRunner = func(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+		return nil, errors.New("nft unavailable")
+	}
+	t.Cleanup(func() { nftRunner = orig })
+
+	m := NewManager(t.TempDir())
+	m.Shutdown() // must not panic or hang
+}

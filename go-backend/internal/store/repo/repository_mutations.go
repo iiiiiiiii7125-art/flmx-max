@@ -296,19 +296,47 @@ func (r *Repository) SunsetLegacyUserPassword(userID int64, currentHash string, 
 	return res.RowsAffected > 0, nil
 }
 
-func (r *Repository) PropagateUserFlowToTunnels(userID int64, flow int64, num int, expTime, flowResetTime int64, flowMiB ...int64) error {
+// UserFlowPropagation carries the user-level flow fields one update wants
+// mirrored onto the user's tunnel grants. Nil fields are left alone:
+// tunnel grants may carry their own values (set via userTunnelUpdate),
+// and an unrelated user edit (e.g. only dailyQuotaGB) must not wipe them
+// (C-(6)①: the old all-fields-always overwrite turned a quota-only edit
+// into flowMiB 5→0 on every grant). The caller passes pointers only for
+// fields present in the request.
+type UserFlowPropagation struct {
+	Flow          *int64
+	FlowMiB       *int64
+	Num           *int
+	ExpTime       *int64
+	FlowResetTime *int64
+}
+
+func (r *Repository) PropagateUserFlowToTunnels(userID int64, p UserFlowPropagation) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")
 	}
+	updates := make(map[string]interface{}, 5)
+	if p.Flow != nil {
+		updates["flow"] = *p.Flow
+	}
+	if p.FlowMiB != nil {
+		updates["flow_mib"] = *p.FlowMiB
+	}
+	if p.Num != nil {
+		updates["num"] = *p.Num
+	}
+	if p.ExpTime != nil {
+		updates["exp_time"] = *p.ExpTime
+	}
+	if p.FlowResetTime != nil {
+		updates["flow_reset_time"] = *p.FlowResetTime
+	}
+	if len(updates) == 0 {
+		return nil
+	}
 	return r.db.Model(&model.UserTunnel{}).
 		Where("user_id = ?", userID).
-		Updates(map[string]interface{}{
-			"flow":            flow,
-			"flow_mib":        optionalFlowMiB(flowMiB),
-			"num":             num,
-			"exp_time":        expTime,
-			"flow_reset_time": flowResetTime,
-		}).Error
+		Updates(updates).Error
 }
 
 func (r *Repository) DeleteUserCascade(userID int64) error {
@@ -839,6 +867,66 @@ func (r *Repository) UpdateNodeWhitelist(nodeID int64, enabled int, extra string
 	return nil
 }
 
+// UpdateNftCollectHealth stores one node's nft collection health
+// (A-中-2): state "" = never collected, "ok" = last round
+// succeeded, "failing" = consecutive failures reached the alert
+// threshold; failCount is the consecutive failure count, lastError
+// the latest failure reason (truncated by the caller), lastOKAt the
+// UnixMilli of the latest successful round (0 = never). Runtime
+// state, never a setting: refreshed by the 30s collection loop and
+// never enters backups. Same not-found contract as
+// UpdateNodeNftablesStatus.
+func (r *Repository) UpdateNftCollectHealth(nodeID int64, state string, failCount int, lastError string, lastOKAt int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", nodeID).
+		Updates(map[string]interface{}{
+			"nft_collect_state":      state,
+			"nft_collect_fail_count": failCount,
+			"nft_collect_last_error": lastError,
+			"nft_collect_last_ok_at": lastOKAt,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("节点不存在")
+	}
+	return nil
+}
+
+// UpdateNftCollectHealthPaths stores one node's nft collection health
+// including the per-path streak contributions (R4C-01): sshCount /
+// wsCount are the not-yet-recovered failure rounds of the SSH / WS
+// path within the current streak. Same not-found contract as
+// UpdateNftCollectHealth; one UPDATE for all six columns so the
+// displayed streak and its composition never diverge. Callers are
+// the three record functions in handler/nftables_traffic.go.
+func (r *Repository) UpdateNftCollectHealthPaths(nodeID int64, state string, failCount int, lastError string, lastOKAt int64, sshCount, wsCount int) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	res := r.db.Model(&model.Node{}).
+		Where("id = ?", nodeID).
+		Updates(map[string]interface{}{
+			"nft_collect_state":          state,
+			"nft_collect_fail_count":     failCount,
+			"nft_collect_last_error":     lastError,
+			"nft_collect_last_ok_at":     lastOKAt,
+			"nft_collect_ssh_fail_count": sshCount,
+			"nft_collect_ws_fail_count":  wsCount,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errors.New("节点不存在")
+	}
+	return nil
+}
+
 // UpdateNodeNftablesStatus stores the agent-reported nftables state
 // for one node ("installed" / "auto_installed" / "failed" with the
 // reason in errText, "" = unknown). Runtime state, never a setting:
@@ -1241,7 +1329,7 @@ func (r *Repository) pickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int
 		return 0, errors.New("节点端口已满，无可用端口")
 	}
 
-	// P01-001：已用集走统一三源谓词 UsedPortsOnNodeTx。此前这里手写
+	// P01-001：已用集走统一四源谓词 UsedPortsOnNodeTx。此前这里手写
 	// 三源（chain/forward/inbound），漏联邦有效预留口：随机选口能挑中
 	// 分享运行时正在用的口，同节点同口双分配、后下发方绑口失败。
 	// 排除口径不变：仅排除本隧道自身链路行（更新沿用/重挑时不被
@@ -1748,7 +1836,7 @@ func lockPortAllocForEntries(entries []struct {
 }
 
 // replaceForwardPortsTx 是 ReplaceForwardPorts 的事务内核心：删旧口、
-// 锁内三源占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
+// 锁内四源占用复检（B4/F-013；handler 预检在锁外存在「先查后写」
 // 窗口，旧端口已在本事务内删除、自占用天然排除）、插入新口。
 func (r *Repository) replaceForwardPortsTx(tx *gorm.DB, forwardID int64, entries []struct {
 	NodeID int64
@@ -1902,7 +1990,7 @@ func (r *Repository) GetUsedPortsOnNodeAsMap(nodeID int64) (map[int]bool, error)
 	if r == nil || r.db == nil {
 		return nil, errors.New("repository not initialized")
 	}
-	// P01-001：三源已用集收敛到统一谓词 UsedPortsOnNodeTx，本函数只做
+	// P01-001：四源已用集收敛到统一谓词 UsedPortsOnNodeTx，本函数只做
 	// map[int]struct{} → map[int]bool 的形状适配。B4/F-013（入站口纳入
 	// 自动选口排除集）与 X-P2-13（联邦有效预留口纳入）的结论由统一
 	// 谓词承载；external 入站行 node_id=0 天然不在本节点集合内。
@@ -2061,7 +2149,7 @@ func (r *Repository) CreateForwardTx(userID int64, userName, name string, tunnel
 				return ErrUserTunnelForwardNumExceeded
 			}
 		}
-		// B4/F-013: 锁内三源复检（同 ReplaceForwardPorts）。handler 预检
+		// B4/F-013: 锁内四源复检（同 ReplaceForwardPorts）。handler 预检
 		// 在锁外，跨表并发（入站/隧道创建）可穿透窗口双占用落库。
 		for _, nodeID := range uniqueEntryNodeIDs {
 			occupied, err := r.HasOtherForwardOnNodePortTx(tx, nodeID, port, 0)

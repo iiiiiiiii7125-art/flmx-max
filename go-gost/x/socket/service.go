@@ -3,8 +3,11 @@ package socket
 import (
 	"errors"
 	"fmt"
+	"net"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-gost/core/logger"
@@ -119,6 +122,20 @@ func createServices(req createServicesRequest) error {
 	return nil
 }
 
+// isAddrInUseError reports whether err is a bind EADDRINUSE (listener
+// port already held by another process). The error may arrive as a
+// wrapped syscall error or flattened into text by the config parser,
+// so both forms are recognised.
+func isAddrInUseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	return strings.Contains(err.Error(), "address already in use")
+}
+
 func updateServices(req updateServicesRequest) error {
 
 	if len(req.Data) == 0 {
@@ -165,12 +182,21 @@ func updateServices(req updateServicesRequest) error {
 		// 2. 解析新服务配置。
 		svc, err := parser.ParseService(serviceConfig)
 		if err != nil {
+			// C-04：端口冲突须可与其它创建失败区分——面板侧据此判定
+			// 孤儿监听者占口，而不是把一切创建失败都当作“服务不存
+			// 在”去自愈重建（自愈重建撞同一端口是登记转发 168 的
+			// 两次 PauseService 失败根因）。标记进错误文本
+			// （port_conflict:），其余内容不变。
+			createErr := err
+			if isAddrInUseError(err) {
+				createErr = fmt.Errorf("port_conflict: %w", err)
+			}
 			rollbackErr := restoreServiceRuntime(name, oldConfig)
 			rollbackErr = errors.Join(rollbackErr, rollbackServiceReplacements(changedServices))
 			if rollbackErr != nil {
-				return fmt.Errorf("create service %s failed: %v; restore previous service failed: %w", name, err, rollbackErr)
+				return fmt.Errorf("create service %s failed: %v; restore previous service failed: %w", name, createErr, rollbackErr)
 			}
-			return errors.New("create service " + name + " failed: " + err.Error())
+			return errors.New("create service " + name + " failed: " + createErr.Error())
 		}
 
 		// 3. 注册并启动新服务。
@@ -385,6 +411,49 @@ func deleteServices(req deleteServicesRequest) error {
 	return nil
 }
 
+// pauseKillAddr resolves the address whose established connections a pause
+// must kill: the service's live listener address when it names a concrete
+// port (covers ephemeral :0 configs, where the config Addr carries no usable
+// port), else the configured address, else "" (no known port — nothing to
+// kill). Call before Close(): a closed listener's Addr is unreliable.
+func pauseKillAddr(svc service.Service, configAddr string) string {
+	if svc != nil {
+		if addr := svc.Addr(); addr != nil {
+			if _, p, err := net.SplitHostPort(addr.String()); err == nil && p != "" && p != "0" {
+				return addr.String()
+			}
+		}
+	}
+	if _, p, err := net.SplitHostPort(configAddr); err == nil && p != "" && p != "0" {
+		return configAddr
+	}
+	return ""
+}
+
+// pauseKillNeeded reports whether the port currently has live or
+// draining TCP connections (scan of /proc/net). A scan error returns
+// true — the safe side is to attempt the kill and fail loud if it
+// cannot run. A-NEW: the scan counts every live/draining state, not
+// just ESTABLISHED — a bulk relay flow is in FIN-WAIT-2/CLOSE-WAIT
+// by the time the pause lands, with megabytes still buffered in the
+// peer's Recv-Q, and counting only ESTABLISHED let the pause skip
+// the kill entirely.
+func pauseKillNeeded(addr string) (bool, error) {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return true, nil
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= 0 {
+		return false, nil
+	}
+	live, err := scanProcNetConnected(procNetDir, map[int]bool{p: true})
+	if err != nil {
+		return true, err
+	}
+	return len(live) > 0, nil
+}
+
 func pauseServices(req pauseServicesRequest) error {
 
 	if len(req.Services) == 0 {
@@ -461,11 +530,42 @@ func pauseServices(req pauseServicesRequest) error {
 		}
 
 		// 暂停服务
+		// C-04：kill 目标取服务实际监听的端口——配置 Addr 可能为 :0
+		// （临时端口），live 服务经 Addr() 知道真实绑定端口；先在
+		// Close() 之前取值（Close 后 listener 地址不可靠）。
+		killAddr := pauseKillAddr(stp.service, serviceConfig.Addr)
 		stp.service.Close()
 
-		// 强制断开端口的所有连接
-		if serviceConfig.Addr != "" {
-			_ = kill.ForceClosePortConnections(serviceConfig.Addr)
+		// 强制断开端口的所有连接（C-04：失败即明错——返回错误令
+		// 面板重试；旧实现以 `_ =` 丢弃，tcpkill 缺失/失败时暂停
+		// 谎报成功、已建立连接排干约 2 分钟）。无已建立连接时不调
+		// 用 killer：无物可杀，且 killer 缺失/沙箱受限时不得把本
+		// 可成功的暂停拖垮（R19 的 :0 服务即此形）。扫描失败时按
+		// 有连接处理（严格侧：尝试 kill，失败即明错）。
+		// 此处不回滚已暂停的服务：回滚重注册撞 ErrDup（已关闭的
+		// 服务仍在注册表内），且重试收敛——Close 与 kill 跨重试
+		// 幂等，下一轮重跑整批。
+		if killAddr != "" {
+			if needed, _ := pauseKillNeeded(killAddr); needed {
+				if err := kill.ForceClosePortConnections(killAddr); err != nil {
+					logger.Default().Errorf("pause services: failed to close connections on %s: %v", killAddr, err)
+					return fmt.Errorf("pause service %s: close connections on %s failed: %w", stp.name, killAddr, err)
+				}
+				// A-NEW: verify the kill landed. A bulk flow's
+				// sockets leave ESTABLISHED before the pause, and a
+				// kill that only matched ESTABLISHED used to report
+				// success while the download kept draining its
+				// buffered Recv-Q. Re-scan; one retry for a socket
+				// caught mid-transition, then fail loud so the panel
+				// retries instead of reporting a pause that did not
+				// disconnect.
+				if still, _ := pauseKillNeeded(killAddr); still {
+					_ = kill.ForceClosePortConnections(killAddr)
+					if still, _ := pauseKillNeeded(killAddr); still {
+						return fmt.Errorf("pause service %s: connections on %s still alive after close", stp.name, killAddr)
+					}
+				}
+			}
 		}
 
 		// 记录已暂停的服务

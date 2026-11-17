@@ -134,10 +134,11 @@ func expandPorts(ports []Port) []counterRule {
 // panel sent in the KernelApply payload, falling back to the legacy
 // userMarkBase when the payload omits it). Packets out with it are
 // the user's upload; the mark is copied to the connection so packets
-// coming back count as the download. F2-DBL-01: the base is
-// per-agent (node id low byte in bits 16-23) so co-located agents
-// count only their own kernels' traffic instead of the same
-// packets N×.
+// coming back count as the download. F2-DBL-01 / E-01: the base is
+// per-agent — the agent byte in bits 16-23 is the first byte of
+// SHA-256 of the node's secret, so co-located agents count only
+// their own kernels' traffic instead of the same packets N×, even
+// when two panels give their nodes the same id.
 const (
 	userMarkBase = 0x46560000
 	userMarkMax  = 0xffff
@@ -156,6 +157,22 @@ func sortedUsers(ids []int64) []int64 {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
+}
+
+// tombstoneUserID maps a tombstoned auth_user name ("u<N>", see
+// User.Name in the panel) back to its user id, for the nft reject
+// rule (V-D). Names that do not match the shape are not blocked at
+// the nft layer — the sweeper still closes them by name — so a bad
+// shape must never break the render.
+func tombstoneUserID(name string) (int64, bool) {
+	if !strings.HasPrefix(name, "u") {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(name[1:], 10, 64)
+	if err != nil || id <= 0 || id > userMarkMax {
+		return 0, false
+	}
+	return id, true
 }
 
 // hopRule redirects a UDP port range to an inbound port (port hopping).
@@ -344,7 +361,14 @@ func nftBindMatch(bind, dir string) string {
 //
 // markBase is the socket-mark base user marks are minted with
 // (F2-DBL-01, per-agent); 0 reads as the legacy userMarkBase.
-func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64, markBase int64) string {
+// nftScript renders the whole table (delete + recreate) from the
+// desired state. blocked are tombstoned user ids (V-D): their marks
+// are rejected first in the output chain, so a new outbound dial
+// admitted by a still-running old config dies at the handshake
+// instead of draining through the sweeper's graceful close. blocked
+// is expected sorted and deduplicated (sync does that via
+// sortedUsers), like users.
+func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, hops []hopRule, users []int64, markBase int64, blocked []int64) string {
 	if markBase == 0 {
 		markBase = userMarkBase
 	}
@@ -360,7 +384,7 @@ func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, h
 		fmt.Fprintf(&b, "table inet %s {}\n", legacyNFTTable)
 		fmt.Fprintf(&b, "delete table inet %s\n", legacyNFTTable)
 	}
-	if len(rules) == 0 && len(users) == 0 {
+	if len(rules) == 0 && len(users) == 0 && len(blocked) == 0 {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "table inet %s {\n", table)
@@ -402,6 +426,18 @@ func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, h
 		fmt.Fprintf(&b, "\t\tct mark 0x%08x counter name %s\n", markBase|id, userCounterName("down", id))
 	}
 	b.WriteString("\t}\n\tchain output {\n\t\ttype filter hook output priority -150; policy accept;\n")
+	// V-D: a tombstoned user's new outbound dial dies here, at the
+	// handshake — the running config still admits them (a
+	// removal-only change skips the reload), so without this the
+	// sweeper's graceful close is the only enforcement and a fast
+	// transfer finishes before it. Bare `reject` is protocol-aware
+	// (TCP RST for TCP, ICMP for UDP); the rules sit first so
+	// blocked traffic is never counted and its conntrack mark is
+	// never set. An already-established connection of a tombstoned
+	// user dies here too, as a backstop to the Clash API close.
+	for _, id := range blocked {
+		fmt.Fprintf(&b, "\t\tmeta mark 0x%08x reject\n", markBase|id)
+	}
 	for _, r := range rules {
 		if m := nftBindMatch(r.Bind, "out"); m != "" {
 			fmt.Fprintf(&b, "\t\t%s %s sport %d counter name %s\n", m, r.Proto, r.Port, r.name("out"))
@@ -452,11 +488,12 @@ type nftCounters struct {
 	// as the plain name so a bare &nftCounters{} stays usable.
 	table string
 	// markBase is the socket-mark base user marks are minted with
-	// (F2-DBL-01, per-agent). 0 reads as the legacy userMarkBase
-	// (old panel that does not send a base).
-	markBase    int64
-	state       nftState
-	lastErr     string
+	// (F2-DBL-01, per-agent; E-01: derived by the panel from the
+	// node secret, adopted verbatim here). 0 reads as the legacy
+	// userMarkBase (old panel that does not send a base).
+	markBase int64
+	state    nftState
+	lastErr  string
 	// autoInstalled 表示本进程曾为白名单自动装上 nftables（供状态
 	// 上报区分“已安装”与“已自动安装”；进程重启后复位为 false，
 	// 此后 nft 在场即报“已安装”）。
@@ -493,6 +530,102 @@ func (n *nftCounters) tableName() string {
 		return nftTable
 	}
 	return n.table
+}
+
+// markCollision is one of this agent's socket marks found in another
+// nft table: another agent (or panel) is minting the same mark, so
+// both agents count the same packets into the same subscription
+// (E-01). Only the table and the mark are named — no traffic data.
+type markCollision struct {
+	Table string
+	Mark  int64
+}
+
+func (c markCollision) String() string {
+	return fmt.Sprintf("mark 0x%08x in table %s", c.Mark, c.Table)
+}
+
+// markInRuleset matches a mark value in a rendered ruleset line:
+// "ct mark 0x47010002" (input chain) or "meta mark 0x47010002"
+// (output chain). nft prints marks in hex; the value is compared
+// numerically so padding differences cannot hide a collision.
+var markInRuleset = regexp.MustCompile(`mark 0x([0-9a-fA-F]+)`)
+
+// tableInRuleset matches a table header line: "table inet
+// flmx_kernel_abc12345 {".
+var tableInRuleset = regexp.MustCompile(`^table\s+\S+\s+(\S+)\s*\{`)
+
+// findMarkCollisions scans a `nft list ruleset` dump for this agent's
+// marks (markBase|id) in tables other than its own. It is pure and
+// table-driven so tests can feed canned ruleset output; the live
+// listing comes from detectMarkCollision. A line with no "mark 0x"
+// token (e.g. "ct mark set meta mark") cannot collide and is skipped.
+func findMarkCollisions(ruleset, ownTable string, marks map[int64]bool) []markCollision {
+	if len(marks) == 0 {
+		return nil
+	}
+	seen := map[markCollision]bool{}
+	var out []markCollision
+	table := ""
+	for _, line := range strings.Split(ruleset, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if m := tableInRuleset.FindStringSubmatch(trimmed); m != nil {
+			table = m[1]
+			continue
+		}
+		if table == "" || table == ownTable {
+			continue
+		}
+		for _, m := range markInRuleset.FindAllStringSubmatch(line, -1) {
+			v, err := strconv.ParseInt(m[1], 16, 64)
+			if err != nil || !marks[v] {
+				continue
+			}
+			c := markCollision{Table: table, Mark: v}
+			if !seen[c] {
+				seen[c] = true
+				out = append(out, c)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Table != out[j].Table {
+			return out[i].Table < out[j].Table
+		}
+		return out[i].Mark < out[j].Mark
+	})
+	return out
+}
+
+// detectMarkCollision lists the live ruleset and reports this agent's
+// marks in other tables. It only runs for per-agent bases (top byte
+// 0x47 — the 0x46 space also holds the legacy base itself, so a hit
+// there cannot distinguish a collision from legacy counting and
+// would be noise) and only when user marks exist. Best-effort: a
+// failed listing (nft missing, timeout) returns nil and never blocks
+// the apply that called it.
+func (n *nftCounters) detectMarkCollision(users []int64) []markCollision {
+	n.mu.Lock()
+	base := n.markBase
+	table := n.tableName()
+	n.mu.Unlock()
+	if base>>24 != 0x47 || len(users) == 0 {
+		return nil
+	}
+	marks := make(map[int64]bool, len(users))
+	for _, id := range sortedUsers(users) {
+		marks[base|id] = true
+	}
+	if len(marks) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := nftRunner(ctx, "", "list", "ruleset")
+	if err != nil {
+		return nil
+	}
+	return findMarkCollisions(string(out), table, marks)
 }
 
 // counterValuesPattern matches the one volatile part of a rendered
@@ -541,6 +674,22 @@ func (n *nftCounters) removeTables() error {
 	return err
 }
 
+// removeOwnTable deletes only this agent's own nft table (R2C-02):
+// the graceful-exit reclaim. Unlike removeTables it never touches
+// the legacy tables — a live legacy agent's table must survive a
+// current-agent restart — and never the hop probe table. The table
+// is rebuilt from scratch by the next sync anyway, and the panel's
+// nft collection only polls online nodes, so no consumer can still
+// read this table after exit. Kill -9 / crash exits cannot run this;
+// residue from unclean exits still needs an operator sweep.
+func (n *nftCounters) removeOwnTable() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	script := fmt.Sprintf("table inet %s {}\ndelete table inet %s\n", n.tableName(), n.tableName())
+	_, err := nftRunner(ctx, script, "-f", "-")
+	return err
+}
+
 // hopRulesError reports that every port-hop rule was rejected by the
 // kernel (typically an old kernel without nft_fib) while the main
 // ruleset — traffic counters and inbound whitelists — was applied
@@ -562,6 +711,16 @@ func (n *nftCounters) installStatus() (autoInstalled bool, installErr string) {
 	return n.autoInstalled, n.installErr
 }
 
+// hasAppliedState reports whether this agent has ever applied a table
+// (the signature in nft.json survives restarts). The periodic verify
+// loop only guards a table that exists by design — a fresh agent
+// that never applied anything has nothing to rebuild.
+func (n *nftCounters) hasAppliedState() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.state.Signature != ""
+}
+
 // sync rebuilds the whole table atomically: traffic counters and
 // inbound whitelists in one ruleset. Traffic counting alone is
 // best-effort (a node without nftables just loses its counters), but
@@ -569,7 +728,7 @@ func (n *nftCounters) installStatus() (autoInstalled bool, installErr string) {
 // whitelist in play, a missing nft binary or a failed ruleset load
 // is a hard error so the caller can refuse to run the kernel
 // unguarded.
-func (n *nftCounters) sync(ports []Port, users []int64) error {
+func (n *nftCounters) sync(ports []Port, users []int64, blocked []int64) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := nftAvailable(); err != nil {
@@ -604,6 +763,7 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 	}
 	rules := expandPorts(ports)
 	users = sortedUsers(users)
+	blocked = sortedUsers(blocked)
 	hops := expandHops(ports)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -629,14 +789,9 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 		}
 	}
 
-	script := nftScript(n.tableName(), rules, expandGuards(ports), hops, users, n.markBase)
+	script := nftScript(n.tableName(), rules, expandGuards(ports), hops, users, n.markBase, blocked)
 	sig := hashString(script)
-	hasContent := len(rules) > 0 || len(users) > 0
 	if sig == n.state.Signature {
-		if !hasContent {
-			n.lastErr = ""
-			return nil
-		}
 		// The signature only proves what this process last tried to
 		// install. The table lives in the kernel, outside the agent:
 		// it can be flushed or rewritten by other tools while guarded
@@ -646,6 +801,13 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 		// anything else — missing table, unreadable table, tampered
 		// content, or a state file predating fingerprints — falls
 		// through to a full re-apply below.
+		//
+		// R3A-NEW-1/C NEW-1: the check runs even when the desired
+		// ruleset is empty. The old early return for !hasContent
+		// read a deleted table as "consistent", so sync() never
+		// rebuilt it while read() kept failing on the missing
+		// table; the (possibly empty) table must exist for read()
+		// to succeed.
 		if n.state.Content != "" {
 			if fp, err := n.tableFingerprint(ctx); err == nil && fp == n.state.Content {
 				n.lastErr = ""
@@ -677,8 +839,8 @@ func (n *nftCounters) sync(ports []Port, users []int64) error {
 type nftListOutput struct {
 	Nftables []struct {
 		Counter *struct {
-			Name    string `json:"name"`
-			Table   string `json:"table"`
+			Name  string `json:"name"`
+			Table string `json:"table"`
 			// Packets is the packet count of this counter. FIX-029
 			// (AUDIT-HIST): the panel converts realm nft counters
 			// from the IP layer to the payload layer, and that

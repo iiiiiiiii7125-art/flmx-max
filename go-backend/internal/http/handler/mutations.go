@@ -83,10 +83,18 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 
 	// B02-001（FIX2-A 同族补齐）：与 userUpdate 同口径——在场但不可
 	// 解析的数值字段 fail-closed 报错、不落库。此前 create 面无此
-	// 守卫：配额传 "abc"/1.5 时 asInt64 静默回 0，而配额只在 >0 时
+	// 守卫：配额传 "abc" 时 asInt64 静默回 0，而配额只在 >0 时
 	// 才落行，等于「传了配额却不限额」且界面显示成功。
-	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn", "dailyQuotaGB", "monthlyQuotaGB"} {
+	// C-(6)③：配额两键是小数 GB（0.01、1.5 合法），用浮点守卫；
+	// 其余数值键仍只认整数。
+	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn"} {
 		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
+	for _, key := range []string{"dailyQuotaGB", "monthlyQuotaGB"} {
+		if presentFloatFieldInvalid(req, key) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
 			return
 		}
@@ -116,8 +124,8 @@ func (h *Handler) userCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("流量重置日无效，仅允许 0-31（0 表示不自动重置）"))
 		return
 	}
-	dailyQuotaGB := asInt64(req["dailyQuotaGB"], 0)
-	monthlyQuotaGB := asInt64(req["monthlyQuotaGB"], 0)
+	dailyQuotaGB := asFloat(req["dailyQuotaGB"], 0)
+	monthlyQuotaGB := asFloat(req["monthlyQuotaGB"], 0)
 	if dailyQuotaGB < 0 || monthlyQuotaGB < 0 {
 		response.WriteJSON(w, response.ErrDefault("配额不能小于0"))
 		return
@@ -230,8 +238,16 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 
 	// FIX2-A（V2-07）：在场但不可解析的数值字段 fail-closed 报错、
 	// 不落库（同族全扫：含配额两键），不再静默套硬默认/旧值。
-	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn", "dailyQuotaGB", "monthlyQuotaGB"} {
+	// C-(6)③：配额两键是小数 GB（0.01、1.5 合法），用浮点守卫；
+	// 其余数值键仍只认整数。
+	for _, key := range []string{"flow", "num", "expTime", "flowResetTime", "status", "maxConn"} {
 		if presentNumericFieldInvalid(req, key) {
+			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
+			return
+		}
+	}
+	for _, key := range []string{"dailyQuotaGB", "monthlyQuotaGB"} {
+		if presentFloatFieldInvalid(req, key) {
 			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("%s 参数无效", key)))
 			return
 		}
@@ -304,11 +320,11 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	// 旧实现主行先落库、配额段后失败，报错与落库事实不符
 	// （改名已生效却回「保存失败」）。配额单侧补齐的只读查询同理前移，
 	// 其读取失败也不再发生在主行写入之后。
-	var updateDailyQuotaGB, updateMonthlyQuotaGB int64
+	var updateDailyQuotaGB, updateMonthlyQuotaGB float64
 	hasUpdateQuota := hasDailyQuota || hasMonthlyQuota
 	if hasUpdateQuota {
-		updateDailyQuotaGB = asInt64(req["dailyQuotaGB"], 0)
-		updateMonthlyQuotaGB = asInt64(req["monthlyQuotaGB"], 0)
+		updateDailyQuotaGB = asFloat(req["dailyQuotaGB"], 0)
+		updateMonthlyQuotaGB = asFloat(req["monthlyQuotaGB"], 0)
 		if updateDailyQuotaGB < 0 || updateMonthlyQuotaGB < 0 {
 			response.WriteJSON(w, response.ErrDefault("配额不能小于0"))
 			return
@@ -384,7 +400,27 @@ func (h *Handler) userUpdate(w http.ResponseWriter, r *http.Request) {
 	// G-UPDATE-01：与同函数 syncUserMaxConnForwards（:415-419）同口径——
 	// 隧道限额同步失败即上抛，不再只记日志回成功（否则用户行是新值、
 	// 全部 user_tunnel 行仍是旧限额，且前端无任何信号）。
-	if err := h.repo.PropagateUserFlowToTunnels(id, flow, num, expTime, flowResetTime, flowMiB); err != nil {
+	// C-(6)①：只传播本次显式传入的字段——隧道授权可独立设置限额
+	// （userTunnelUpdate），未传字段不得覆写隧道行的现值。旧实现
+	// 每次用户编辑都把五项全量覆写，仅改 dailyQuotaGB 也会把隧道
+	// flowMiB 5→0、flow 打回用户值。
+	prop := repo.UserFlowPropagation{}
+	if _, ok := req["flow"]; ok {
+		prop.Flow = &flow
+	}
+	if _, ok := req["flowMiB"]; ok {
+		prop.FlowMiB = &flowMiB
+	}
+	if _, ok := req["num"]; ok {
+		prop.Num = &num
+	}
+	if _, ok := req["expTime"]; ok {
+		prop.ExpTime = &expTime
+	}
+	if _, ok := req["flowResetTime"]; ok {
+		prop.FlowResetTime = &flowResetTime
+	}
+	if err := h.repo.PropagateUserFlowToTunnels(id, prop); err != nil {
 		respondInternalError(w, fmt.Sprintf("userUpdate: propagate user flow to tunnels failed user_id=%d", id), err)
 		return
 	}
@@ -1706,9 +1742,8 @@ func (h *Handler) nodeUpdate(w http.ResponseWriter, r *http.Request) {
 // before any write; apply then performs the single write, whose
 // only remaining failure mode is a repository error.
 type nodeSSHConfigPlan struct {
-	delete bool
-	noop   bool
-	input  repo.NftSSHConfigInput
+	noop  bool
+	input repo.NftSSHConfigInput
 }
 
 // nodeSSHConfigError 是节点 SSH 配置校验的定型失败：文案由请求
@@ -1740,8 +1775,20 @@ func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{},
 	if nodeID <= 0 {
 		return nil, &nodeSSHConfigError{msg: "节点ID不能为空"}
 	}
+	// R5A-01：模式切换不得静默删除 SSH 配置。切到 agent 只是让
+	// 采集改走 agent 上报，配置本身仍是该节点的属性：采集枚举
+	// （ListNftablesNodesForCollection）只取 forward_mode =
+	// nftables 的节点，保留的行在 agent 模式下是惰性的，切回
+	// nftables 即恢复采集，不会双采也不会误采。旧口径在此直接
+	// 删行，而切回时更新路径 preserveSecrets=true 且模式切换请求
+	// 本身不带 sshConfig 整段，V2-06 守卫直接 return nil“整段
+	// 不动”——行已被删，不动就是永远删了，全程无报错无提示，
+	// 节点静默脱离 SSH 采集集。删行分支自 v1.0.0（2026-10-18）
+	// 就有，V2-06 守卫自 2026-10-21；最近才频繁踩到是因为
+	// nftables 模式拦装内核（code -1）逼大家走“agent 装内核再
+	// 切回”——即用户唯一真实的切换场景。
 	if forwardMode != "nftables" {
-		return &nodeSSHConfigPlan{delete: true}, nil
+		return &nodeSSHConfigPlan{noop: true}, nil
 	}
 	// V2-06：部分更新（preserveSecrets=true）未带 sshConfig 整段时
 	// 整段不动——旧实现仍会用请求值重建并 upsert，其中 port 被
@@ -1866,9 +1913,6 @@ func (h *Handler) resolveNodeSSHConfig(nodeID int64, req map[string]interface{},
 func (h *Handler) applyNodeSSHConfig(nodeID int64, plan *nodeSSHConfigPlan, now int64) error {
 	if plan == nil || plan.noop {
 		return nil
-	}
-	if plan.delete {
-		return h.repo.DeleteNodeSSHConfig(nodeID)
 	}
 	return h.repo.UpsertNodeSSHConfig(nodeID, plan.input, now)
 }
@@ -2956,7 +3000,10 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	typeVal := asInt(req["type"], 1)
-	flow := asInt64(req["flow"], 1)
+	// C-01（流量审计）：新建隧道计费缺省为双向（2）。旧缺省 1
+	// 只计上传，下载全不扣配额（实测 1.49GB 下载仅涨 2697B），
+	// 配额是总量上限，缺省必须按总量计；单向仍可显式选 1。
+	flow := asInt64(req["flow"], 2)
 	status := asInt(req["status"], 1)
 	trafficRatio := asFloat(req["trafficRatio"], 1.0)
 	// R11X-008/009：写入面补校验——TrafficRatio ∈ [0,100]、Flow ∈
@@ -3846,6 +3893,17 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// P1-03（PortAlloc Fix D）：提交段复检入口 inPort（与段口
+		// finalPortNodes 复检同口径，堵验证段之后被并发占用的窗口；
+		// 本隧道名下转发已在谓词内排除，提交现口恒通过，无副作用）。
+		if err := h.validateTunnelEntryInPortTx(tx, req, runtimeState, id); err != nil {
+			if isRepoError(err) {
+				// R2-F4-01：-2 码道即系统错，标记后由分支守卫泛化。
+				return markRepoError(err), -2
+			}
+			return err, 0
+		}
+
 		// B06-001：提交段复检改名重名（与 create 的 InsertTunnelTx
 		// 事务内复检同形，防验证段之后并发改入同名）。F1：复检必须
 		// 走本事务句柄（TunnelNameExistsTx）——池版走 r.db 另取连接，
@@ -4280,7 +4338,7 @@ func (h *Handler) cleanupTunnelForwardRuntimesOnRemovedEntryNodes(tunnelID int64
 	return warnings
 }
 
-// forwardPortConflictMessage 按统一三源谓词给出的占用来源措辞
+// forwardPortConflictMessage 按统一四源谓词给出的占用来源措辞
 // （L9 观察 2）：入站/链路段占用不得误报为「已被其他转发
 // 占用」——归因错误会让排障找错对象。conflict 为 nil（来源不可知）
 // 时退回不点名的「已被占用」。
@@ -4298,6 +4356,8 @@ func forwardPortConflictMessage(node *nodeRecord, port int, conflict *repo.Forwa
 				return fmt.Sprintf("节点 %s 端口 %d 已被隧道 %s 的链路段占用", node.Name, port, name)
 			}
 			return fmt.Sprintf("节点 %s 端口 %d 已被隧道链路段占用", node.Name, port)
+		case repo.PortSourceCompanion:
+			return fmt.Sprintf("节点 %s 端口 %d 已被伴生 Clash API 占用", node.Name, port)
 		}
 	}
 	return fmt.Sprintf("节点 %s 端口 %d 已被其他转发占用", node.Name, port)
@@ -5328,6 +5388,105 @@ func (h *Handler) userTunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	response.WriteJSON(w, response.OKEmpty())
 }
 
+// forwardPortRetryAttempts 是转发自动选口的换口重试上限（PortAlloc
+// Fix C）。P3 实测：占住 9 口后 7 次自动创建 0 次成功——选口盲区
+// 撞上即死，无重试。5 次足够覆盖零星碰撞；池子真空时 pick 本身
+// 先报「无公共可用端口」，不进循环。
+const forwardPortRetryAttempts = 5
+
+// createForwardWithPortRetry 是转发创建的端口相关段：选口 → DB 预检 →
+// live 探针 → 落库（锁内复检）→ 取行 → 下发。撞口信号有三处，皆只
+// 对自动口换口重试、显式口原样失败：
+//   - DB 预检/锁内复检报占用（validateForwardEntryNodes / ErrPortInUse）；
+//   - live 探针命中本机监听（DB 看不到的口，Fix B）；
+//   - 下发绑口失败（isBindAddressInUseError）。
+//
+// 耗尽后回末次碰撞错；其余失败（配额哨兵、仓储错、取行失败、
+// 非绑口下发错）立即回，不重试。错误分类沿用 forwardCreate 原口径：
+// 配额哨兵与 ErrPortInUse 原样回（调用方分流 -2/默认码），其余事务
+// 错与取行失败标记为仓储错（调用方判内部错误），预检/探针/下发错
+// 原样回默认码。releaseQuota 在每次 CreateForwardTx 返回后调用
+// （幂等），与原「落库后即放」同窗。
+func (h *Handler) createForwardWithPortRetry(userID int64, userName, name string, tunnelID int64, remoteAddr, strategy string, now int64, inx int, entryNodes []int64, explicitPort int, inIp string, speedID interface{}, maxConn, ipMaxConn int, ipSpeedID interface{}, proxyProtocol, proxyProtocolReceive, proxyProtocolSend int, releaseQuota func()) (int64, []string, error) {
+	auto := explicitPort <= 0
+	tried := make(map[int]bool)
+	var lastErr error
+	for attempt := 0; attempt < forwardPortRetryAttempts; attempt++ {
+		port := explicitPort
+		if auto {
+			picked, pickErr := h.pickTunnelPortExcluding(tunnelID, tried)
+			if pickErr != nil {
+				return 0, nil, pickErr
+			}
+			port = picked
+		}
+		// DB 预检：自动口在规格内恒成立，失败即占用（或仓储错）。
+		if err := h.validateForwardEntryNodes(entryNodes, port, 0); err != nil {
+			if isRepoError(err) {
+				return 0, nil, err
+			}
+			lastErr = err
+			if !auto {
+				return 0, nil, err
+			}
+			tried[port] = true
+			continue
+		}
+		// live 探针：DB 看不到的本机监听在此拦截（fail-open）。只探自动
+		// 口：显式口沿用既有口径（DB 预检＋下发绑口为终判），探针误报
+		// 不得新增拒绝面。
+		if auto {
+			if msg := h.probeForwardEntryPortLive(entryNodes, port); msg != "" {
+				lastErr = errors.New(msg)
+				tried[port] = true
+				continue
+			}
+		}
+		forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnelID, remoteAddr, strategy, now, inx, entryNodes, port, inIp, speedID, maxConn, ipMaxConn, ipSpeedID, proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
+		if releaseQuota != nil {
+			releaseQuota()
+		}
+		if err != nil {
+			// F2-05：事务内条数复检命中——与锁外预检同文案回执。
+			if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
+				return 0, nil, err
+			}
+			if errors.Is(err, repo.ErrPortInUse) {
+				lastErr = err
+				if !auto {
+					return 0, nil, err
+				}
+				tried[port] = true
+				continue
+			}
+			// 其余事务错误（含 DB 约束原文）标记后由调用方收口为内部错误。
+			return 0, nil, markRepoError(err)
+		}
+		createdForward, err := h.getForwardRecord(forwardID)
+		if err != nil {
+			// E5-S1：与 sync 失败分支及孪生 createRelayForward 的取行
+			// 失败分支同形——补一行补偿删除，避免「创建失败」回执下
+			// 新建行残留。
+			_ = h.deleteForwardByID(forwardID)
+			return 0, nil, markRepoError(err)
+		}
+		// A4-002：与 forwardUpdate 同形——同步告警（realm 限速/连接数不生效、
+		// gost 绑 IP 回退、节点离线跳过）必须回传前端。
+		createWarnings, err := h.syncForwardServicesWithWarnings(createdForward, "UpdateService", true)
+		if err != nil {
+			_ = h.deleteForwardByID(forwardID)
+			if auto && isBindAddressInUseError(err) {
+				lastErr = err
+				tried[port] = true
+				continue
+			}
+			return 0, nil, err
+		}
+		return forwardID, createWarnings, nil
+	}
+	return 0, nil, lastErr
+}
+
 func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	if !requirePost(w, r) {
 		return
@@ -5484,20 +5643,11 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.Err(-2, err.Error()))
 		return
 	}
-	port := asInt(req["inPort"], 0)
-	if port <= 0 {
-		picked, pickErr := h.pickTunnelPort(tunnelID)
-		if pickErr != nil {
-			if respondInternalIfRepoError(w, "forwardCreate: pickTunnelPort failed", pickErr) {
-				return
-			}
-			response.WriteJSON(w, response.ErrDefault(pickErr.Error()))
-			return
-		}
-		port = picked
-	}
-	// O2-001：端口范围校验，防止 inPort=99999 等非法值绕过前端直接写入 DB
-	if port < 1 || port > 65535 {
+	// O2-001：端口范围校验，防止 inPort=99999 等非法值绕过前端直接写入 DB。
+	// 自动口（inPort<=0）在换口重试循环内由 pickTunnelPortExcluding 选出，
+	// 其候选集已钳到 1-65535，不再单检。
+	explicitPort := asInt(req["inPort"], 0)
+	if explicitPort != 0 && (explicitPort < 1 || explicitPort > 65535) {
 		response.WriteJSON(w, response.Err(-1, "端口必须在 1-65535 范围内"))
 		return
 	}
@@ -5550,13 +5700,6 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("多入口隧道的转发不支持自定义监听IP"))
 		return
 	}
-	if err := h.validateForwardEntryNodes(entryNodes, port, 0); err != nil {
-		if respondInternalIfRepoError(w, "forwardCreate: validateForwardEntryNodes failed", err) {
-			return
-		}
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
 	strategy := strings.TrimSpace(defaultString(asString(req["strategy"]), "fifo"))
 	// R4-F4-02：策略合法集校验（合法集为 kernel 单点判，update/恢复
 	// 面共用）；校验对修剪后的最终落库值做，存 " fifo " 一类带空白
@@ -5592,8 +5735,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 	proxyProtocolReceive := asInt(req["proxyProtocolReceive"], 0)
 	proxyProtocolSend := asInt(req["proxyProtocolSend"], proxyProtocol)
 
-	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnelID, remoteAddr, strategy, now, inx, entryNodes, port, inIp, nullableInt(speedID), maxConn, ipMaxConn, nullableInt(ipSpeedID), proxyProtocol, proxyProtocolReceive, proxyProtocolSend)
-	releaseQuota()
+	// PortAlloc Fix B/C：选口＋预检＋探针＋落库＋下发走换口重试循环
+	// （createForwardWithPortRetry）。显式口不重试，沿用原口径。
+	_, createWarnings, err := h.createForwardWithPortRetry(userID, userName, name, tunnelID, remoteAddr, strategy, now, inx, entryNodes, explicitPort, inIp, nullableInt(speedID), maxConn, ipMaxConn, nullableInt(ipSpeedID), proxyProtocol, proxyProtocolReceive, proxyProtocolSend, releaseQuota)
 	if err != nil {
 		// F2-05：事务内条数复检命中——与锁外预检同文案回执。
 		if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
@@ -5606,24 +5750,9 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.Err(-2, err.Error()))
 			return
 		}
-		respondInternalError(w, "forwardCreate: CreateForwardTx failed", err)
-		return
-	}
-	createdForward, err := h.getForwardRecord(forwardID)
-	if err != nil {
-		// E5-S1（同型补齐，不计关闭数）：与下方 sync 失败分支及孪生
-		// createRelayForward 的取行失败分支同形——补一行补偿删除，
-		// 避免「创建失败」回执下新建行残留。
-		_ = h.deleteForwardByID(forwardID)
-		respondInternalError(w, "forwardCreate: getForwardRecord failed", err)
-		return
-	}
-	// A4-002：与 forwardUpdate 同形——同步告警（realm 限速/连接数不生效、
-	// gost 绑 IP 回退、节点离线跳过）必须回传前端，原实现丢弃 warnings
-	// 恒 OKEmpty，创建路径的告警分支在前端成死代码。
-	createWarnings, err := h.syncForwardServicesWithWarnings(createdForward, "UpdateService", true)
-	if err != nil {
-		_ = h.deleteForwardByID(forwardID)
+		if respondInternalIfRepoError(w, "forwardCreate: createForwardWithPortRetry failed", err) {
+			return
+		}
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
@@ -7865,6 +7994,58 @@ func (h *Handler) prepareDetachedSegmentPorts(tx *gorm.DB, req map[string]interf
 	return nil
 }
 
+// validateTunnelEntryInPortTx 是隧道入口 inPort 的 DB 三检（P1-03，
+// PortAlloc Fix D）：此前创建/更新只对它做 live 探针，无 DB 校验
+// ——撞 DB 已占口时探针测不出（对方未必在监听），要到下发 bind 才
+// 失败。口径与段口显式口一致（范围＋规格＋跨表占用）；更新时排除
+// 本隧道名下转发的现口（入口监听器就是它，不排除会把现口误判为
+// 占用）。未提交 inPort（0）即跳过。调用方须在事务内调（与段口
+// 复检同口径），仓储错已标记。
+func (h *Handler) validateTunnelEntryInPortTx(tx *gorm.DB, req map[string]interface{}, state *tunnelCreateState, excludeTunnelID int64) error {
+	inPort := asInt(req["inPort"], 0)
+	if inPort <= 0 {
+		return nil
+	}
+	if inPort > 65535 {
+		return tunnelValidationErrorf("端口 %d 超出有效范围 1-65535", inPort)
+	}
+	if state == nil || len(state.InNodes) == 0 {
+		return nil
+	}
+	var excl repo.PortExclusions
+	if excludeTunnelID > 0 {
+		excl.TunnelIDs = []int64{excludeTunnelID}
+		forwards, err := h.repo.ListForwardsByTunnelTx(tx, excludeTunnelID)
+		if err != nil {
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return markRepoError(err)
+		}
+		for _, f := range forwards {
+			excl.ForwardIDs = append(excl.ForwardIDs, f.ID)
+		}
+	}
+	for _, inNode := range state.InNodes {
+		node := state.Nodes[inNode.NodeID]
+		if node == nil {
+			continue
+		}
+		if err := validateLocalNodePort(node, inPort); err != nil {
+			return tunnelValidationErrorMsg(err.Error())
+		}
+		source, err := h.repo.NodePortOccupantTx(tx, inNode.NodeID, inPort, excl)
+		if err != nil {
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return markRepoError(err)
+		}
+		if source != "" {
+			// L9 观察 2：按占用来源措辞（伴生 Clash API 等无行来源
+			// 也须点名），不得笼统报「已被其他转发占用」。
+			return tunnelValidationErrorMsg(forwardPortConflictMessage(node, inPort, &repo.ForwardPortConflict{Source: source}))
+		}
+	}
+	return nil
+}
+
 func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface{}, tunnelType int, excludeTunnelID int64) (*tunnelCreateState, error) {
 	state := &tunnelCreateState{
 		Type:         tunnelType,
@@ -7993,7 +8174,7 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 		// 解析这些行的端口：更新时省略 port 的行在落库兜底被随机重
 		// 挑（与 P01-002「缺省沿用现口、重挑必回执警示」口径不符，
 		// 且无任何 PortChanges 记录）。在此解析（缺省沿用/重挑
-		// ＋记录，显式口过范围＋三源占用两检、规格检豁免），
+		// ＋记录，显式口过范围＋四源占用两检、规格检豁免），
 		// 结果经 SegmentPorts 回写请求后落库。
 		if err := h.prepareDetachedSegmentPorts(tx, req, state, excludeTunnelID); err != nil {
 			return nil, err
@@ -8087,6 +8268,13 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 				return nil, err
 			}
 		}
+	}
+
+	// P1-03（PortAlloc Fix D）：入口 inPort 与段口同口径过 DB 三检。
+	// 本函数在创建/更新的验证段与创建的提交段各跑一次，更新的提交
+	// 段另在 tunnelUpdate 内复检（与段口 finalPortNodes 复检同形）。
+	if err := h.validateTunnelEntryInPortTx(tx, req, state, excludeTunnelID); err != nil {
+		return nil, err
 	}
 
 	// F-UDP-4：段协议同时充当链服务的 listener 类型与上一跳的
@@ -9676,6 +9864,13 @@ func (h *Handler) tunnelEntryNodeIDs(tunnelID int64) ([]int64, error) {
 // 甚至在 10000 恰好可用时歪打正着。现在区分失败原因并显式返回错误，
 // 由各调用方按自身上下文报错，绝不编造端口。
 func (h *Handler) pickTunnelPort(tunnelID int64) (int, error) {
+	return h.pickTunnelPortExcluding(tunnelID, nil)
+}
+
+// pickTunnelPortExcluding 与 pickTunnelPort 同口径，但把 exclude 里的
+// 已试端口从公共可用集里剔掉——换口重试时不得把刚撞过的口再挑回来
+// （PortAlloc Fix C：小规格下随机重挑会反复撞同一口）。
+func (h *Handler) pickTunnelPortExcluding(tunnelID int64, exclude map[int]bool) (int, error) {
 	entryNodes, err := h.tunnelEntryNodeIDs(tunnelID)
 	if err != nil {
 		// C1-01：本函数的其余失败均为自著业务文案或记日志跳过，唯
@@ -9744,6 +9939,17 @@ func (h *Handler) pickTunnelPort(tunnelID int64) (int, error) {
 
 	if evaluated == 0 {
 		return 0, errors.New("无法获取入口节点的端口范围或占用情况")
+	}
+	// 剔掉已试端口：DB 已用集在 pick 时已扣过，exclude 只含本轮
+	// 已撞过的口；剔完为空即无公共可用端口（与原口径同文案）。
+	if len(exclude) > 0 {
+		kept := commonAvailable[:0]
+		for _, p := range commonAvailable {
+			if !exclude[p] {
+				kept = append(kept, p)
+			}
+		}
+		commonAvailable = kept
 	}
 	if len(commonAvailable) == 0 {
 		return 0, errors.New("入口节点间无公共可用端口（端口范围无交集，或交集端口已被占用）")

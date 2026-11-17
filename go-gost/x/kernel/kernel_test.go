@@ -314,7 +314,7 @@ func TestParseChecksum(t *testing.T) {
 }
 
 func TestNftScriptOnlyCounts(t *testing.T) {
-	script := nftScript(nftTable, expandPorts([]Port{{InboundID: 2, Port: 80, Network: "tcp,udp"}, {InboundID: 1, Port: 443, Network: "tcp"}}), nil, nil, nil, 0)
+	script := nftScript(nftTable, expandPorts([]Port{{InboundID: 2, Port: 80, Network: "tcp,udp"}, {InboundID: 1, Port: 443, Network: "tcp"}}), nil, nil, nil, 0, nil)
 	for _, bad := range []string{"drop", "reject", "policy drop"} {
 		if strings.Contains(script, bad) {
 			t.Fatalf("counting table must never filter: %s", script)
@@ -357,7 +357,7 @@ func TestNftScriptWhitelist(t *testing.T) {
 		{InboundID: 1, Port: 443, Network: "tcp", Allow: []string{"127.0.0.0/8", "::1/128", "198.51.100.7/32", "127.0.0.1/32"}},
 		{InboundID: 2, Port: 8388, Network: "tcp,udp"},
 	}
-	script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), expandHops(ports), nil, 0)
+	script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), expandHops(ports), nil, 0, nil)
 	for _, want := range []string{
 		"set allow4_1 {",
 		"elements = { 127.0.0.0/8, 127.0.0.1/32, 198.51.100.7/32 }",
@@ -571,7 +571,7 @@ func TestNftScriptPortHopping(t *testing.T) {
 		{InboundID: 3, Port: 443, Network: "udp", HopFrom: 20000, HopTo: 30000, Allow: []string{"127.0.0.0/8"}},
 		{InboundID: 4, Port: 8443, Network: "udp"},
 	}
-	script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), expandHops(ports), nil, 0)
+	script := nftScript(nftTable, expandPorts(ports), expandGuards(ports), expandHops(ports), nil, 0, nil)
 	for _, want := range []string{
 		"type nat hook prerouting priority -100;",
 		"type nat hook output priority -100;",
@@ -584,7 +584,7 @@ func TestNftScriptPortHopping(t *testing.T) {
 	if strings.Count(script, "redirect") != 2 {
 		t.Fatalf("only the hopping inbound is redirected (once per hook):\n%s", script)
 	}
-	if strings.Contains(nftScript(nftTable, expandPorts(ports[1:]), nil, expandHops(ports[1:]), nil, 0), "hop_") {
+	if strings.Contains(nftScript(nftTable, expandPorts(ports[1:]), nil, expandHops(ports[1:]), nil, 0, nil), "hop_") {
 		t.Fatal("no hop chains without hop ranges")
 	}
 	if _, err := exec.LookPath("nft"); err == nil && os.Geteuid() == 0 {
@@ -615,7 +615,7 @@ func TestNftScriptUserMarks(t *testing.T) {
 	if len(users) != 2 || users[0] != 7 {
 		t.Fatalf("users: %v", users)
 	}
-	script := nftScript(nftTable, expandPorts(ports), nil, nil, users, 0)
+	script := nftScript(nftTable, expandPorts(ports), nil, nil, users, 0, nil)
 	for _, want := range []string{
 		"counter uup_7 {}", "counter udown_9 {}",
 		"meta mark 0x46560007 ct mark set meta mark counter name uup_7",

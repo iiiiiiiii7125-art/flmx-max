@@ -524,6 +524,7 @@ func autoMigrateAll(db *gorm.DB) error {
 		&model.NodeLatencySample{},
 		&model.InboundConnLog{},
 		&model.ConnlogNodeDropped{},
+		&model.TrafficNodeDropped{},
 		&model.TunnelMetric{},
 		&model.ServiceMonitor{},
 		&model.ServiceMonitorResult{},
@@ -582,6 +583,16 @@ func autoMigrateAll(db *gorm.DB) error {
 		// RM-ANN v1（2.1.13）: 公告功能整删的存量处置——删
 		// announcement 表（双后端同口径）。
 		if err := migrateV1AnnouncementTableRemoved(db); err != nil {
+			return err
+		}
+		// C-01 v1（流量审计）: 存量隧道 Flow=1 一次性翻为双向 2
+		// （新建缺省已改 2；双后端同口径执行）。
+		if err := migrateV1TunnelFlowBidiDefault(db); err != nil {
+			return err
+		}
+		// C-(6)③ v1（流量审计）: 用户配额限额整数 GB → 小数 GB
+		// （PostgreSQL 两列改 double precision；SQLite 仅记版本）。
+		if err := migrateV1QuotaDecimal(db); err != nil {
 			return err
 		}
 		return nil
@@ -650,6 +661,18 @@ func autoMigrateAll(db *gorm.DB) error {
 	// RM-ANN v1（2.1.13）: 公告功能整删的存量处置——删
 	// announcement 表（新装库无表时直接记版本跳过）。
 	if err := migrateV1AnnouncementTableRemoved(db); err != nil {
+		return err
+	}
+
+	// C-01 v1（流量审计）: 存量隧道 Flow=1 一次性翻为双向 2
+	// （新建缺省已改 2；新装库无表时直接记版本跳过）。
+	if err := migrateV1TunnelFlowBidiDefault(db); err != nil {
+		return err
+	}
+
+	// C-(6)③ v1（流量审计）: 用户配额限额整数 GB → 小数 GB
+	// （PostgreSQL 两列改 double precision；SQLite 仅记版本）。
+	if err := migrateV1QuotaDecimal(db); err != nil {
 		return err
 	}
 
@@ -1401,9 +1424,17 @@ func (r *Repository) ListNodes() ([]map[string]interface{}, error) {
 			"whitelistExtra":   n.WhitelistExtra,
 			// nftables 状态（agent 上报的运行态）：""＝未知、installed
 			// ＝已安装、auto_installed＝已自动安装、failed＝自动安装
-			// 失败（原因见 nftablesError）。
-			"nftablesStatus":      n.NftablesStatus,
-			"nftablesError":       n.NftablesError,
+			// 失败（原因见 nftablesError）、missing＝agent 已确认本
+			// 机无 nftables（仅 nftables 模式节点）。
+			"nftablesStatus": n.NftablesStatus,
+			"nftablesError":  n.NftablesError,
+			// nft 采集健康（A-中-2，面板周期 SSH 采集的失败态）：
+			// ""＝未采集过、"ok"＝最近一次采集成功、"failing"＝
+			// 连续失败已达阈值（原因见 nftCollectLastError）。
+			"nftCollectState":     n.NftCollectState,
+			"nftCollectFailCount": n.NftCollectFailCount,
+			"nftCollectLastError": n.NftCollectLastError,
+			"nftCollectLastOkAt":  n.NftCollectLastOKAt,
 			"interfaceName":       nullableString(n.InterfaceName),
 			"sshConfig":           sshConfigByNodeID[n.ID],
 			"upgradeVerification": upgradeVerification,
@@ -2135,7 +2166,6 @@ func (r *Repository) exportAll() (*model.BackupData, error) {
 		return nil, fmt.Errorf("export user inbounds failed: %w", err)
 	}
 	backup.UserInbounds = userInbounds
-
 
 	// O7-008：导出 monitor_permission 整表（监控权限）
 	monitorPermissions, err := r.exportMonitorPermissions()
@@ -3077,7 +3107,7 @@ func (r *Repository) Import(backup *model.BackupData, types []string) (*model.Im
 		// B4-02 残面：转发端口替换集全集预判（见
 		// predictImportedForwardPortReplacements）——在 tunnels
 		// 段之前算定（链路面复检要用），供 tunnels/forwards 两段
-		// 的行内三源复检作转发排除集；成员资格与备份内声明顺序
+		// 的行内四源复检作转发排除集；成员资格与备份内声明顺序
 		// 无关。users 段已在本点之前落库，用户存在性是终态。
 		forwardReplaceIDs := map[int64]bool{}
 		if typeSet["forwards"] && len(backup.Forwards) > 0 {
@@ -3617,22 +3647,36 @@ func importNodes(tx *gorm.DB, nodes []model.NodeBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：节点 UDP 监听地址（节点 #%d）格式非法，已回落默认 [::]，恢复后请在节点设置中重新填写", n.ID)
 			udpListenAddr = "[::]"
 		}
-		// B3-01（导入面）：节点 secret 字符集门，镜像生成面
+		// B3-01（导入面）+ E-01-RES：节点 secret 字符集门，镜像生成面
 		// nodeSecretCharset（^[0-9a-f]{32}$，randomToken(16) 契
 		// 约）。安装命令构造把 secret 插值进以 root 执行的
 		// shell 命令，恢复面此前原样落库任意字符串——含空格/
 		// 引号/命令替换的 secret 即命令注入（生成面已以
 		// validateNodeSecretForInstall 点名拒收该值 + 构造器引
-		// 用纵深）。恢复面同口径拒收该值：不落库、清空 +
-		// warning 点名节点与处置（绝不回显 secret 原文），节点
-		// 行本身保留（整行跳过会连带误伤同批隧道/转发段，与本
-		// 函数 ServerIP 清空先例同理）；恢复后管理员
-		// 重置 secret 即可，与生成面拒绝文案的指引一致。空
-		// secret 与清空后状态等价，不重复回执。
+		// 用纵深）。恢复面同口径拒收该值：不落库、warning 点名
+		// 节点与处置（绝不回显 secret 原文），节点行本身保留
+		// （整行跳过会连带误伤同批隧道/转发段，与本函数 ServerIP
+		// 清空先例同理）。E-01-RES：拒收／空 secret 不再清空落
+		// 库——空 secret 会使 UserMarkBaseForAgent 回落 v1 mark
+		// 派生（跨面板同 mark 碰撞，E-01），恢复时现场重发一枚
+		// 新 secret（randomToken，32 位小写十六进制），恢复后
+		// 的节点恒满足生成契约，安装／重装直接以新 secret 为
+		// 准，无需管理员重置。随机源失败 fail-closed：整单回滚，
+		// 绝不落全零／空 secret（X-P3-14 同口径）。
 		secret := n.Secret
 		if secret != "" && !importedNodeSecretCharset.MatchString(secret) {
-			rep.warnf("备份恢复：节点 #%d（%q）的 secret 不符合生成契约字符集（32 位小写十六进制），已清空未恢复，恢复后请在节点设置中重置 secret", n.ID, n.Name)
+			rep.warnf("备份恢复：节点 #%d（%q）的 secret 不符合生成契约字符集（32 位小写十六进制），已作废并现场重发新 secret", n.ID, n.Name)
 			secret = ""
+		}
+		if secret == "" {
+			if n.Secret == "" {
+				rep.warnf("备份恢复：节点 #%d（%q）的 secret 为空，已现场重发新 secret", n.ID, n.Name)
+			}
+			fresh, err := randomToken()
+			if err != nil {
+				return count, err
+			}
+			secret = fresh
 		}
 		// B8-11：RenewalCycle/ForwardMode 归一镜像写面——此前原
 		// 样落库：周期集外值使到期提醒计算落默认分支，转发模式
@@ -4234,7 +4278,7 @@ func (r *Repository) importTunnels(tx *gorm.DB, tunnels []model.TunnelBackup, no
 				rep.warnf("备份恢复：隧道 #%d（%q）的链路 #%d 的端口 %d 不在 1-65535 之间，已跳过该链路行未恢复", t.ID, t.Name, ct.ID, *ct.Port)
 				continue
 			}
-			// B4-02 残面：链路声明口落库前三源占用复检（与转发面
+			// B4-02 残面：链路声明口落库前四源占用复检（与转发面
 			// R1-03-M2 同型）——预检排除集按备份 ID 全集组装，
 			// 被行门跳过的转发其存量端口行在导入后存活，链路声明
 			// 与之同节点同口时预检放行、此前落库无门，可跨表双
@@ -4539,7 +4583,7 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 	// rep.skip("forwardPorts") 调用点都须同步累计对应分计数，
 	// 否则汇总条数与合计数对不上。
 	var portsSkippedMissingNode, portsSkippedBadInIP, portsSkippedBadPort int
-	// R1-03-M2：端口行落库前三源占用＋节点端口范围复检的状态。
+	// R1-03-M2：端口行落库前四源占用＋节点端口范围复检的状态。
 	// 恢复前预检（precheckBackupPortConflicts）按整单排除集判重，
 	// 存在盲区：被本单跳过的转发（策略/零目标等门）与 ForwardPorts
 	// 为 nil 的转发，其存量端口行被预检排除、却在导入后原样存
@@ -4810,7 +4854,7 @@ func (r *Repository) importForwards(tx *gorm.DB, forwards []model.ForwardBackup,
 					}
 					inIP = stripped
 				}
-				// R1-03-M2：落库前三源占用＋节点端口范围复检（预
+				// R1-03-M2：落库前四源占用＋节点端口范围复检（预
 				// 检盲区收口，状态定义见函数前段）。占用走统一谓
 				// 词 NodePortOccupantTx、排除集仅含尚未处理的备
 				// 份转发；范围内判走节点 Port 规格集合语义（与写
@@ -7536,6 +7580,39 @@ func (r *Repository) GetLatestNodeMetric(nodeID int64) (*model.NodeMetric, error
 	return &m, nil
 }
 
+// LatestNodeMetricTimes returns each given node's latest NodeMetric
+// timestamp (UnixMilli) in one query; nodes without any metric row
+// are absent from the map (A-低-6: a missing key means "never
+// reported", which is stale by definition, not "zero traffic").
+func (r *Repository) LatestNodeMetricTimes(nodeIDs []int64) (map[int64]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	out := make(map[int64]int64, len(nodeIDs))
+	if len(nodeIDs) == 0 {
+		return out, nil
+	}
+	type row struct {
+		NodeID int64 `gorm:"column:node_id"`
+		Latest int64 `gorm:"column:latest"`
+	}
+	var rows []row
+	for _, chunk := range chunkInt64IDs(nodeIDs) {
+		var part []row
+		if err := r.db.Table("node_metric").
+			Select("node_id, MAX(timestamp) AS latest").
+			Where("node_id IN ?", chunk).
+			Group("node_id").Scan(&part).Error; err != nil {
+			return nil, err
+		}
+		rows = append(rows, part...)
+	}
+	for _, row := range rows {
+		out[row.NodeID] = row.Latest
+	}
+	return out, nil
+}
+
 // pruneDeleteChunk 是指标类 prune 的单批删除行数（L3-03，
 // SWEEP-CPU）：与连接日志 prune 的 connlogDeleteChunk=1000 同口
 // 径。单条 DELETE 在停机追赶时一次可删百万行、长持 SQLite 写
@@ -7628,6 +7705,31 @@ func (r *Repository) NodeTrafficSince(fromMs int64) (map[int64][2]int64, error) 
 			cur[1] += b.OutBytes - b.OutBytes*pre/hourMs
 			out[b.NodeID] = cur
 		}
+	}
+	return out, nil
+}
+
+// NodeTrafficLastHour returns, per node id, the newest hourly bucket
+// (ms) present in node_traffic — the freshness source for the node
+// month-traffic numbers (D-06). node_traffic has no updated_time
+// column, so the newest bucket hour is the closest available signal;
+// a node whose newest bucket is hours old is reporting stale data.
+func (r *Repository) NodeTrafficLastHour() (map[int64]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var rows []struct {
+		NodeID   int64
+		LastHour int64
+	}
+	if err := r.db.Model(&model.NodeTraffic{}).
+		Select("node_id, MAX(hour) AS last_hour").
+		Group("node_id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[int64]int64, len(rows))
+	for _, row := range rows {
+		out[row.NodeID] = row.LastHour
 	}
 	return out, nil
 }

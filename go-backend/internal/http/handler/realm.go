@@ -14,6 +14,7 @@ import (
 	"go-backend/internal/kernel"
 	runtimenft "go-backend/internal/runtime/nftables"
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 	"gorm.io/gorm"
 )
 
@@ -688,36 +689,59 @@ func realmCounterPayload(c agentKernelCounter) int64 {
 	return 0
 }
 
-func (h *Handler) applyRealmCountersMode(nodeID int64, epoch string, counters []agentKernelCounter, now time.Time, enforce bool) {
+// accountRealmCounters 把 realm 转发的内核计数样本换算并入账（纯记账，
+// 不执行执法尾），返回执法尾所需的入账结果。B-NEW（入站行计数器
+// epoch/基线时序丢增量）：ingestKernelCountersMode 的 Phase A 在
+// per-node 入账锁内只做记账（入站/realm/用户三面），执法尾与
+// syncSubscriptions 一并移到 Phase B；如此任一面的样本都在重建
+// 前对旧基线结算，不会被同次摄入内触发的 KernelApply 换代吞掉。
+func (h *Handler) accountRealmCounters(nodeID int64, epoch string, counters []agentKernelCounter, now time.Time) (*flowUploadBatch, map[int64]repo.FlowUploadForwardMeta, int64, map[int64]*model.UserQuotaView, error) {
 	samples := make([]runtimenft.CounterSample, 0, len(counters))
 	hashes := map[int64]string{}
+	// R2A-5：负值／非法方向样本此前静默 continue，与入站面
+	// applyInboundCounterChunk 同口径按转发聚合 warn，绝不静默。
+	// !ok（非 realm 入站）是正常过滤，不计入。
+	negative := map[int64]int64{}
+	badDirection := map[int64]int64{}
 	for _, c := range counters {
 		fid, ok := kernel.RealmForwardID(c.InboundID)
-		if !ok || c.Bytes < 0 {
+		if !ok {
+			continue
+		}
+		if c.Bytes < 0 {
+			negative[fid]++
 			continue
 		}
 		dir := runtimenft.CounterDirectionToTarget
 		if c.Dir == "out" {
 			dir = runtimenft.CounterDirectionFromTarget
 		} else if c.Dir != "in" {
+			badDirection[fid]++
 			continue
 		}
 		samples = append(samples, runtimenft.CounterSample{ForwardID: fid, Direction: dir, Protocol: c.Proto, Bytes: uint64(realmCounterPayload(c))})
 		// The agent's counters restart with its epoch.
 		hashes[fid] = "realm:" + epoch
 	}
+	for fid, n := range negative {
+		log.Printf("realm counter sample negative op=negative_bytes node_id=%d forward_id=%d samples=%d action=dropped", nodeID, fid, n)
+	}
+	for fid, n := range badDirection {
+		log.Printf("realm counter sample bad_direction op=illegal_direction node_id=%d forward_id=%d samples=%d action=dropped", nodeID, fid, n)
+	}
 	if len(samples) == 0 {
+		return nil, nil, 0, nil, nil
+	}
+	return h.accountForwardCounterSamples(nodeID, samples, hashes, now)
+}
+
+// enforceRealmCounters 是 realm 计数入账后的执法尾：指标、配额强制
+// 与流量策略在入账落库后同批执行，与采集路径
+// （collectNftablesNodeTraffic）同口径。
+func (h *Handler) enforceRealmCounters(nodeID int64, batch *flowUploadBatch, metas map[int64]repo.FlowUploadForwardMeta, nowMs int64, quotaViews map[int64]*model.UserQuotaView) {
+	if batch == nil {
 		return
 	}
-	batch, metas, nowMs, quotaViews, err := h.accountForwardCounterSamples(nodeID, samples, hashes, now)
-	if err != nil || batch == nil {
-		return
-	}
-	if !enforce {
-		return
-	}
-	// 与采集路径（collectNftablesNodeTraffic）相同的执法尾：指标、配额
-	// 强制与流量策略在入账落库后同批执行。
 	h.recordTunnelMetricsFromForwardBatch(nodeID, batch.forwardTraffic, metas, nowMs)
 	for userID, quota := range quotaViews {
 		h.enforceUserQuotaIfNeeded(userID, quota)
@@ -728,4 +752,15 @@ func (h *Handler) applyRealmCountersMode(nodeID int64, epoch string, counters []
 		}
 		h.enforceFlowPolicies(target.UserID, target.UserTunnelID)
 	}
+}
+
+func (h *Handler) applyRealmCountersMode(nodeID int64, epoch string, counters []agentKernelCounter, now time.Time, enforce bool) {
+	batch, metas, nowMs, quotaViews, err := h.accountRealmCounters(nodeID, epoch, counters, now)
+	if err != nil || batch == nil {
+		return
+	}
+	if !enforce {
+		return
+	}
+	h.enforceRealmCounters(nodeID, batch, metas, nowMs, quotaViews)
 }

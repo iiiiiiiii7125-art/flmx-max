@@ -110,7 +110,7 @@ func TestEXPExportAndListsBeyondSQLiteVariableLimit(t *testing.T) {
 		t.Fatalf("sentinel quota view missing among %d views", len(views))
 	}
 	if sv.DailyLimitGB != 7 || sv.MonthlyLimitGB != 70 {
-		t.Fatalf("sentinel quota = %d/%d GB, want 7/70", sv.DailyLimitGB, sv.MonthlyLimitGB)
+		t.Fatalf("sentinel quota = %v/%v GB, want 7/70", sv.DailyLimitGB, sv.MonthlyLimitGB)
 	}
 
 	// 2) 备份导出（T2 失败本体）：必须成功、行数与库一致、id 升序
@@ -138,7 +138,7 @@ func TestEXPExportAndListsBeyondSQLiteVariableLimit(t *testing.T) {
 		t.Fatalf("sentinel user %d missing from export", sentinel.ID)
 	}
 	if exportedSentinel.User != "expbulk000123" || exportedSentinel.DailyQuotaGB != 7 || exportedSentinel.MonthlyQuotaGB != 70 {
-		t.Fatalf("exported sentinel = {%q %d %d}, want {expbulk000123 7 70}",
+		t.Fatalf("exported sentinel = {%q %v %v}, want {expbulk000123 7 70}",
 			exportedSentinel.User, exportedSentinel.DailyQuotaGB, exportedSentinel.MonthlyQuotaGB)
 	}
 

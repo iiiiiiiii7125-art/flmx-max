@@ -185,9 +185,10 @@ var routeClassification = []routeEntry{
 	adm("/api/v1/node/rollback"), adm("/api/v1/node/route"),
 	adm("/api/v1/node/route/probe"), adm("/api/v1/node/swap-info"),
 	adm("/api/v1/node/swap-set"), adm("/api/v1/node/traffic/month"),
+	adm("/api/v1/node/traffic/dropped"),
 	adm("/api/v1/node/tune"), adm("/api/v1/node/update"),
 	adm("/api/v1/node/update-order"), adm("/api/v1/node/upgrade"),
-	adm("/api/v1/notify/test"),
+	adm("/api/v1/notify/test"), adm("/api/v1/notify/health"),
 	adm("/api/v1/speed-limit/create"), adm("/api/v1/speed-limit/delete"),
 	adm("/api/v1/speed-limit/list"), adm("/api/v1/speed-limit/update"),
 	adm("/api/v1/subscription/delete"),
@@ -252,6 +253,7 @@ var routeClassification = []routeEntry{
 	usr("/api/v1/user/passkey/register/begin"), usr("/api/v1/user/passkey/register/finish"),
 	usr("/api/v1/user-inbound/mine"),
 	usr("/api/v1/user-subscription/mine"),
+	usr("/api/v1/user/quota/mine"),
 }
 
 // regCallSite 是整树普查到的一处 .Handle/.HandleFunc 调用点

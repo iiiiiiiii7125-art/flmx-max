@@ -7,54 +7,70 @@ import (
 	"testing"
 )
 
-// F2-DBL-01: per-agent socket-mark base — two agents on one host must
-// mint different marks for the same subscription, so the same physical
-// packets are counted once, not once per agent.
+// E-01: the per-agent socket-mark base is derived from the node's
+// secret, not the node id — two panels' node 1 must mint different
+// bases, or their nftables tables count each other's traffic into
+// the same subscription.
 
 func TestUserMarkBaseForAgent(t *testing.T) {
-	// Node ids are sequential; co-located agents (a handful per
-	// host) get distinct bases.
-	a, b := UserMarkBaseForAgent(75), UserMarkBaseForAgent(76)
+	// Same node id, different secrets (two panels' node 1): the
+	// E-01 property — different bases.
+	a := UserMarkBaseForAgent(1, "0123456789abcdef0123456789abcdef")
+	b := UserMarkBaseForAgent(1, "fedcba9876543210fedcba9876543210")
 	if a == b {
-		t.Fatalf("distinct nodes must get distinct bases: %x vs %x", a, b)
+		t.Fatalf("same node id on different panels must get different bases: %x vs %x", a, b)
 	}
-	if UserMarkBaseForAgent(75) != a {
-		t.Fatal("same node must get the same base")
+	// Pinned literals (SHA-256("flmx:user-mark-v2:"+secret), first byte).
+	if a != 0x47170000 {
+		t.Fatalf("secret A base: got 0x%x, want 0x47170000", a)
+	}
+	if b != 0x477a0000 {
+		t.Fatalf("secret B base: got 0x%x, want 0x477a0000", b)
+	}
+	// Determinism: same (node, secret) mints the same base.
+	if UserMarkBaseForAgent(1, "0123456789abcdef0123456789abcdef") != a {
+		t.Fatal("same node and secret must get the same base")
+	}
+	// The node id no longer moves the base: the secret is the identity.
+	if UserMarkBaseForAgent(75, "0123456789abcdef0123456789abcdef") != a {
+		t.Fatal("same secret must mint the same base regardless of node id")
 	}
 	// Layout: top byte 0x47, agent byte in bits 16-23, low 16 bits 0.
-	if a != 0x474B0000 {
-		t.Fatalf("node 75 base: got 0x%x, want 0x474B0000", a)
+	if a&0xffff != 0 || a>>24 != 0x47 {
+		t.Fatalf("base layout: got 0x%x", a)
 	}
-	if UserMarkBaseForAgent(0) != 0x47000000 {
-		t.Fatalf("node 0 base: got 0x%x", UserMarkBaseForAgent(0))
+	// Empty secret falls back to the v1 derivation (node id low
+	// byte) — defensive only, production rows always carry a secret.
+	if got := UserMarkBaseForAgent(75, ""); got != 0x474B0000 {
+		t.Fatalf("empty secret must fall back to v1: got 0x%x, want 0x474B0000", got)
 	}
-	// Documented collision boundary: the agent byte is the node id's
-	// low byte, so ids 256 apart share a base. That needs two
-	// co-located nodes with ids exactly 256 apart — and even then
-	// only those two double-count (the old behaviour), never the
-	// whole host.
-	if UserMarkBaseForAgent(256) != UserMarkBaseForAgent(0) {
-		t.Fatal("node ids 256 apart must share a base (low byte only)")
+	if UserMarkBaseForAgent(256, "") != UserMarkBaseForAgent(0, "") {
+		t.Fatal("empty-secret fallback: node ids 256 apart must share a base (low byte only)")
 	}
 }
 
-// F-R4-01: the per-agent base must never equal the legacy base. The old
-// formula 0x46000000 | (nodeID&0xff)<<16 minted 0x46560000 for node ids
-// ≡ 86 (mod 256) — exactly LegacyUserMarkBase — so a new agent on such
-// a node double-counted with every old agent on the host during the
-// transition. The per-agent tag is 0x47, disjoint from legacy by
-// construction; prove it over the whole byte space, not just 86.
+// F-R4-01 / E-01: the per-agent base must never equal the legacy base.
+// The 0x47 tag is disjoint from legacy by construction, for every
+// agent byte — prove it over the whole byte space (v1 fallback) and
+// for a set of v2 secrets.
 func TestUserMarkBaseForAgentNeverEqualsLegacy(t *testing.T) {
 	for b := int64(0); b < 256; b++ {
-		if got := UserMarkBaseForAgent(b); got == LegacyUserMarkBase {
-			t.Fatalf("node id low byte %d mints the legacy base 0x%x", b, got)
+		if got := UserMarkBaseForAgent(b, ""); got == LegacyUserMarkBase {
+			t.Fatalf("empty-secret fallback, node id low byte %d mints the legacy base 0x%x", b, got)
 		}
 	}
-	if got := UserMarkBaseForAgent(86); got != 0x47560000 {
-		t.Fatalf("node 86 base: got 0x%x, want 0x47560000", got)
+	for _, secret := range []string{
+		"0123456789abcdef0123456789abcdef",
+		"fedcba9876543210fedcba9876543210",
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"11111111111111111111111111111111",
+	} {
+		if got := UserMarkBaseForAgent(1, secret); got == LegacyUserMarkBase {
+			t.Fatalf("secret %q mints the legacy base 0x%x", secret, got)
+		}
 	}
-	if got := UserMarkBaseForAgent(86 + 256); got != 0x47560000 {
-		t.Fatalf("node 342 base: got 0x%x, want 0x47560000", got)
+	if got := UserMarkBaseForAgent(86, ""); got != 0x47560000 {
+		t.Fatalf("node 86 fallback base: got 0x%x, want 0x47560000", got)
 	}
 }
 
@@ -144,8 +160,8 @@ func markOfXrayOutbound(t *testing.T, cfg map[string]interface{}, tag string) fl
 }
 
 func TestRenderPerAgentUserMark(t *testing.T) {
-	base := UserMarkBaseForAgent(75) // 0x474B0000
-	want := float64(0x474B0007)
+	base := UserMarkBaseForAgent(75, "0123456789abcdef0123456789abcdef") // 0x47170000
+	want := float64(0x47170007)
 	legacy := fmt.Sprint(0x46560007)
 
 	via := Endpoint{Host: "1.2.3.4", Port: 443, Direct: true, Proxy: Proxy{

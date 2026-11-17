@@ -149,7 +149,10 @@ export function PageToolbar({
   const actions = (more ?? []).filter(Boolean);
 
   return (
-    <div className="mb-3 flex items-center gap-2">
+    // R7-B：窄屏下换行不断行裁切——按钮多到一行放不下时折到下一
+    // 行，保证每个按钮（含「全部展开」）完整可见、可达；宽屏下一
+    // 行放得下时布局与原来完全一致。
+    <div className="mb-3 flex flex-wrap items-center gap-2">
       {onSearch && (
         <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl bg-content1 px-3 sm:max-w-xs">
           <Search className="h-4 w-4 shrink-0 text-foreground" />

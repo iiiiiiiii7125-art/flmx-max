@@ -3,6 +3,7 @@ package repo
 import (
 	"errors"
 
+	"go-backend/internal/kernel"
 	"go-backend/internal/store/model"
 
 	"gorm.io/gorm"
@@ -10,8 +11,9 @@ import (
 
 // P01-001（Round 2 K9）：节点端口占用知识的唯一实现。
 //
-// 节点端口空间由三张表共享：forward_port（转发入口口）、node_inbound
-// （内核入站口）、chain_tunnel（隧道链路段/出口段口，port>0 才算）。
+// 节点端口空间由三张表共享（forward_port、node_inbound、
+// chain_tunnel）加一个派生源：伴生 Clash API 口（41000–41999，
+// 按节点 secret 由 ClashAPIPortForSecret 派生，DB 无行）。
 //
 // 现在全部选口/判重点位一律走本文件的入口：
 //   - 点判重：NodePortOccupantTx / NodePortOccupiedTx
@@ -24,9 +26,10 @@ import (
 // 端口占用来源标识（与 FindOtherForwardOnNodePortTx 的
 // ForwardPortConflict.Source 取值一致，勿改字符串）。
 const (
-	PortSourceForward = "forward"
-	PortSourceInbound = "inbound"
-	PortSourceChain   = "chain_tunnel"
+	PortSourceForward   = "forward"
+	PortSourceInbound   = "inbound"
+	PortSourceChain     = "chain_tunnel"
+	PortSourceCompanion = "companion"
 )
 
 // PortExclusions 描述判重时要排除的「自己人」行：转发按 forward_id、
@@ -132,7 +135,7 @@ func pluckPortsNotExcludedTx(base func() *gorm.DB, idColumn string, exclIDs []in
 }
 
 // NodePortOccupantTx 返回占用 (nodeID, port) 的来源（"" 表示空闲）。
-// 检查顺序 forward → inbound → chain → peer，与
+// 检查顺序 forward → inbound → chain → companion，与
 // FindOtherForwardOnNodePortTx 的报告优先级一致；多源同占（降级态）
 // 时按此序报第一源。
 func (r *Repository) NodePortOccupantTx(tx *gorm.DB, nodeID int64, port int, excl PortExclusions) (string, error) {
@@ -173,7 +176,31 @@ func (r *Repository) NodePortOccupantTx(tx *gorm.DB, nodeID int64, port int, exc
 		return PortSourceChain, nil
 	}
 
+	// P1-01（PortAlloc Fix A）：伴生 Clash API 口（第四源，DB 无行）
+	// ——按节点 secret 派生的 41000–41999 段内一口，agent 侧常驻监听。
+	// 此前统一谓词看不到它，自动选口会抽中它、下发 bind 失败。
+	// 派生口是面板的唯一认知：agent 重启漂移后的实际口由 live 探针
+	// （转发/中转创建）兜底。
+	if companionClashAPIPortTx(tx, nodeID) == port {
+		return PortSourceCompanion, nil
+	}
+
 	return "", nil
+}
+
+// companionClashAPIPortTx 取节点伴生 Clash API 的派生口：
+// ClashAPIPortForSecret(node.Secret)。secret 为空或节点不存在时回
+// 0（无派生口，不占）。只读 node.secret 一列；查不到不报错——调用
+// 方的节点存在性校验在别处。
+func companionClashAPIPortTx(tx *gorm.DB, nodeID int64) int {
+	if tx == nil || nodeID <= 0 {
+		return 0
+	}
+	var node model.Node
+	if err := tx.Select("secret").Where("id = ?", nodeID).First(&node).Error; err != nil {
+		return 0
+	}
+	return kernel.ClashAPIPortForSecret(node.Secret)
 }
 
 // NodePortOccupiedTx 是 NodePortOccupantTx 的布尔形。
@@ -185,10 +212,10 @@ func (r *Repository) NodePortOccupiedTx(tx *gorm.DB, nodeID int64, port int, exc
 	return source != "", nil
 }
 
-// UsedPortsOnNodeTx 返回节点上全部已占用端口的集合（三源，含排除）。
+// UsedPortsOnNodeTx 返回节点上全部已占用端口的集合（四源，含排除）。
 // 全部自动选口（隧道 pick、转发 pick）都以本集合为判重
 // 依据，不再各自拼装。
-// ListUsedPortsOnNode 返回节点上已被三源占用的端口清单
+// ListUsedPortsOnNode 返回节点上已被四源占用的端口清单
 // （UsedPortsOnNodeTx 的列表形）。原寄居于已删的联邦 repo 文件，
 // 因属统一占用谓词的消费面而随 DEV-RM-SHARE 迁回本文件，实现未动。
 func (r *Repository) ListUsedPortsOnNode(nodeID int64) ([]int, error) {
@@ -241,6 +268,12 @@ func (r *Repository) UsedPortsOnNodeTx(tx *gorm.DB, nodeID int64, excl PortExclu
 	}
 	add(chainPorts)
 
+	// P1-01：伴生 Clash API 派生口（第四源，无行可排除）——常驻监听，
+	// 选口须避开。
+	if cp := companionClashAPIPortTx(tx, nodeID); cp > 0 {
+		used[cp] = struct{}{}
+	}
+
 	return used, nil
 }
 
@@ -263,7 +296,7 @@ type PortRangeOccupancy struct {
 	InboundCompanion bool
 }
 
-// NodePortRangeOccupancyTx 返回区间内各来源的占用情况（三源）。
+// NodePortRangeOccupancyTx 返回区间内各来源的占用情况（四源）。
 func (r *Repository) NodePortRangeOccupancyTx(tx *gorm.DB, nodeID int64, lo, hi int, excl PortExclusions) (*PortRangeOccupancy, error) {
 	if tx == nil {
 		return nil, errors.New("database unavailable")
@@ -308,12 +341,17 @@ func (r *Repository) NodePortRangeOccupancyTx(tx *gorm.DB, nodeID int64, lo, hi 
 		occ.Sources[PortSourceChain] = true
 	}
 
+	// P1-01：伴生 Clash API 派生口落入区间即第四源占用。
+	if cp := companionClashAPIPortTx(tx, nodeID); cp > 0 && cp >= lo && cp <= hi {
+		occ.Sources[PortSourceCompanion] = true
+	}
+
 	return occ, nil
 }
 
 // TunnelChainPortReusableTx 判断隧道现有非入口段口在更新时能否沿用
 // （P01-002）：口仍落在节点端口规格内（与 pickNodePortTx 的候选集
-// 同口径），且统一三源判重（排除本隧道自身链路行）下未被他人占用。
+// 同口径），且统一四源判重（排除本隧道自身链路行）下未被他人占用。
 // 节点不存在按不可沿用处理（后续流程会以「节点不存在」报错）。
 func (r *Repository) TunnelChainPortReusableTx(tx *gorm.DB, nodeID int64, port int, tunnelID int64) (bool, error) {
 	if tx == nil {

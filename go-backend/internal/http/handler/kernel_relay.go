@@ -712,72 +712,120 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 			return 0, relayCreateErr(err)
 		}
 	}
-	port := inPort
-	if port <= 0 {
-		picked, pickErr := h.pickTunnelPort(tunnel.ID)
-		if pickErr != nil {
-			return 0, relayCreateErr(pickErr)
+	// PortAlloc Fix B/C：选口＋预检＋探针＋落库＋下发走换口重试循环
+	// （与 forwardCreate 的 createForwardWithPortRetry 同口径）。
+	// 撞口信号（DB 预检占用 / live 探针命中 / 锁内复检 ErrPortInUse /
+	// 下发绑口失败）只对自动口换口重试、显式口原样失败；其余失败
+	// （规格错、配额哨兵、仓储错、取行失败、非绑口下发错）立即回。
+	auto := inPort <= 0
+	tried := make(map[int]bool)
+	var lastErr error
+	for attempt := 0; attempt < forwardPortRetryAttempts; attempt++ {
+		port := inPort
+		if auto {
+			picked, pickErr := h.pickTunnelPortExcluding(tunnel.ID, tried)
+			if pickErr != nil {
+				return 0, relayCreateErr(pickErr)
+			}
+			port = picked
 		}
-		port = picked
-	}
-	if port <= 0 || port > 65535 {
-		return 0, relayCreateErr(errors.New("没有可用的入口端口"))
-	}
-	for _, nodeID := range entryNodes {
-		node, nodeErr := h.getNodeRecord(nodeID)
-		if nodeErr != nil {
-			// L4-02：与 forwardCreate/Update 的 validateForwardEntryNodes
-			// 同口径 fail-closed——节点记录读失败不得 continue 跳过该
-			// 节点的端口规格校验后仍落库（占用面虽有
-			// CreateForwardTx 锁内三源复检兜底，规格面无兜底）。
-			// getNodeRecord 的错误恒为已标记仓储错（其源头已标），
-			// 回执走泛化即正确分类，故此处不经 relayCreateErr 定型。
-			return 0, nodeErr
+		if port <= 0 || port > 65535 {
+			return 0, relayCreateErr(errors.New("没有可用的入口端口"))
 		}
-		if err := validateLocalNodePort(node, port); err != nil {
-			return 0, relayCreateErr(err)
+		// 预检：规格错立即回（自动口在规格内恒成立）；占用错换口重试。
+		// L4-02：节点记录读失败 fail-closed，不得跳过该节点校验。
+		precheckFailed := false
+		for _, nodeID := range entryNodes {
+			node, nodeErr := h.getNodeRecord(nodeID)
+			if nodeErr != nil {
+				// L4-02：与 forwardCreate/Update 的 validateForwardEntryNodes
+				// 同口径 fail-closed——节点记录读失败不得 continue 跳过该
+				// 节点的端口规格校验后仍落库（占用面虽有
+				// CreateForwardTx 锁内四源复检兜底，规格面无兜底）。
+				// getNodeRecord 的错误恒为已标记仓储错（其源头已标），
+				// 回执走泛化即正确分类，故此处不经 relayCreateErr 定型。
+				return 0, nodeErr
+			}
+			if err := validateLocalNodePort(node, port); err != nil {
+				return 0, relayCreateErr(err)
+			}
+			if err := h.validateForwardPortAvailability(node, port, 0); err != nil {
+				if isRepoError(err) {
+					return 0, err
+				}
+				lastErr = err
+				if !auto {
+					return 0, relayCreateErr(err)
+				}
+				tried[port] = true
+				precheckFailed = true
+				break
+			}
 		}
-		if err := h.validateForwardPortAvailability(node, port, 0); err != nil {
-			return 0, relayCreateErr(err)
+		if precheckFailed {
+			continue
 		}
-	}
+		// live 探针：只探自动口（与 forwardCreate 同口径）。
+		if auto {
+			if msg := h.probeForwardEntryPortLive(entryNodes, port); msg != "" {
+				lastErr = errors.New(msg)
+				tried[port] = true
+				continue
+			}
+		}
 
-	now := time.Now().UnixMilli()
-	userName := h.repo.GetUsernameByID(userID)
-	if userName == "" {
-		userName = "admin"
-	}
-	forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnel.ID, remoteAddr, "fifo", now,
-		h.repo.NextIndex("forward"), entryNodes, port, "", nil, 0, 0, nil, 0, 0, proxyProtocolSend)
-	if err != nil {
-		// R3-GEN-01：配额/占用哨兵在此定型（带与 forwardCreate 对同
-		// 一仓储哨兵的既有分流码：配额 -1、占用 -2，msg 取哨兵原文）；
-		// 其余仓储失败标记后上抛、回执泛化。
-		if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
-			return 0, &relayCreateError{code: -1, msg: err.Error()}
+		now := time.Now().UnixMilli()
+		userName := h.repo.GetUsernameByID(userID)
+		if userName == "" {
+			userName = "admin"
 		}
-		if errors.Is(err, repo.ErrPortInUse) {
-			return 0, &relayCreateError{code: -2, msg: err.Error()}
+		forwardID, err := h.repo.CreateForwardTx(userID, userName, name, tunnel.ID, remoteAddr, "fifo", now,
+			h.repo.NextIndex("forward"), entryNodes, port, "", nil, 0, 0, nil, 0, 0, proxyProtocolSend)
+		if err != nil {
+			// R3-GEN-01：配额/占用哨兵在此定型（带与 forwardCreate 对同
+			// 一仓储哨兵的既有分流码：配额 -1、占用 -2，msg 取哨兵原文）；
+			// 其余仓储失败标记后上抛、回执泛化。
+			if errors.Is(err, repo.ErrForwardNumExceeded) || errors.Is(err, repo.ErrUserTunnelForwardNumExceeded) {
+				return 0, &relayCreateError{code: -1, msg: err.Error()}
+			}
+			if errors.Is(err, repo.ErrPortInUse) {
+				lastErr = err
+				if !auto {
+					return 0, &relayCreateError{code: -2, msg: err.Error()}
+				}
+				tried[port] = true
+				continue
+			}
+			return 0, markRepoError(err)
 		}
-		return 0, markRepoError(err)
-	}
-	created, err := h.getForwardRecord(forwardID)
-	if err != nil {
-		_ = h.deleteForwardByID(forwardID)
-		return 0, relayCreateErr(err)
-	}
-	if isNftTunnel {
-		if err := h.reconcileNftablesNodeByRequest(entryNodes[0]); err != nil {
+		created, err := h.getForwardRecord(forwardID)
+		if err != nil {
 			_ = h.deleteForwardByID(forwardID)
+			return 0, relayCreateErr(err)
+		}
+		if isNftTunnel {
+			if err := h.reconcileNftablesNodeByRequest(entryNodes[0]); err != nil {
+				_ = h.deleteForwardByID(forwardID)
+				return 0, relayCreateErr(err)
+			}
+			return forwardID, nil
+		}
+		if err := h.syncForwardServices(created, "UpdateService", true); err != nil {
+			_ = h.deleteForwardByID(forwardID)
+			if auto && isBindAddressInUseError(err) {
+				lastErr = err
+				tried[port] = true
+				continue
+			}
 			return 0, relayCreateErr(err)
 		}
 		return forwardID, nil
 	}
-	if err := h.syncForwardServices(created, "UpdateService", true); err != nil {
-		_ = h.deleteForwardByID(forwardID)
-		return 0, relayCreateErr(err)
+	// 耗尽：末次碰撞错按既有分流回（占用 -2，其余 -1）。
+	if errors.Is(lastErr, repo.ErrPortInUse) {
+		return 0, &relayCreateError{code: -2, msg: lastErr.Error()}
 	}
-	return forwardID, nil
+	return 0, relayCreateErr(lastErr)
 }
 
 // removeForwardWithServices mirrors forwardDelete for a forward the panel
@@ -1173,6 +1221,12 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// C-08：保留未经过任何请求筛选的全量行——占位节点只在订阅本身
+	// 无任何产出时才渲染；?user=/?relay=/?inbound= 筛空与订阅自身
+	// 的中转范围筛空是筛选器的答案，须保持 F-080 空渲染（个性化拉
+	// 取计数 0、中转范围拉取不含直连节点，均由契约测试锁定）。
+	// 深拷贝：下方 ?inbound= 过滤用 rows[:0] 复用同一底层数组。
+	allRows := append([]model.NodeInbound(nil), rows...)
 	if only := r.URL.Query().Get("inbound"); only != "" {
 		id, _ := strconv.ParseInt(only, 10, 64)
 		filtered := rows[:0]
@@ -1242,27 +1296,13 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 		}
 		endpoints = filtered
 	}
-	// A share subscription reports its own traffic and limit; the owner's
-	// reports the selected inbounds' traffic. The figures are the whole
-	// subscription's totals — the same ones the info nodes below show.
+	// B-L4-NEW：kind=own 在产品路径上不存在——save 强制 share、
+	// 启动迁移全量转 share，Userinfo 头的非分享分支是死代码。
+	// 订阅恒按自身计量计数与 TrafficLimit 上报；手工造 own 行
+	// 的防御仍在 isShare 各守卫（本分支之外不碰）。
 	var up, down, total int64
 	expire := sub.ExpireTime / 1000
-	if isShare(sub) {
-		up, down, total = sub.UploadBytes, sub.DownloadBytes, sub.TrafficLimit
-	} else {
-		// 非分享订阅：流量从入站汇总，总量取订阅的 TrafficLimit（0 表示不限量）
-		total = sub.TrafficLimit
-		want := map[int64]bool{}
-		for _, id := range h.subAllInboundIDs(sub, rows, nil) {
-			want[id] = true
-		}
-		for _, row := range rows {
-			if want[row.ID] {
-				up += row.UploadBytes
-				down += row.DownloadBytes
-			}
-		}
-	}
+	up, down, total = sub.UploadBytes, sub.DownloadBytes, sub.TrafficLimit
 
 	// F-080: 不再对"端点为 0"单设 503。此前同一"无可用节点"状态有两种
 	// 语义：端点 0 个返回 503，端点被目标格式全过滤却返回 200 空体。
@@ -1282,6 +1322,14 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 	var body, contentType string
 	if reason := subInactiveReason(sub, time.Now()); reason != "" {
 		body, contentType, err = kernel.Subscription(format, nil, kernel.SubOptions{Notices: []string{reason}})
+	} else if len(endpoints) == 0 && h.subYieldsNothing(sub, allRows) {
+		// C-08：订阅启用且未过期未超限、但自身无任何产出（无源／源全
+		// 失效）时，此前按所选格式渲染空体——客户端只看到空列表、无
+		// 任何原因。改走与停用／过期／超限相同的占位节点机制，原因按
+		// 成因逐级定。筛选器筛空时不进此分支（见上 allRows 注释）；
+		// F-080 的 200 语义不变：仍是 200 + 占位节点，客户端如实更
+		// 新、不保留旧列表。
+		body, contentType, err = kernel.Subscription(format, nil, kernel.SubOptions{Notices: []string{h.subZeroEndpointReason(sub, allRows, time.Now())}})
 	} else {
 		body, contentType, err = kernel.Subscription(format, endpoints, subOpts)
 	}

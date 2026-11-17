@@ -34,6 +34,19 @@ export function flowLimitBytes(flowGB: number, flowMiB?: number): number {
   return flowLimitMiB(flowGB, flowMiB) * MIB;
 }
 
+/** D-06：流量数的新鲜度文案。ms 为计数最近上报时刻（毫秒；0＝从未
+ * 上报）。返回 null 表示无需标注（1 小时内算新鲜）；超过 2 小时标陈旧。 */
+export function freshnessLabel(ms: number): string | null {
+  if (!ms) return "从未上报";
+  const age = Date.now() - ms;
+  if (age < 60 * 60 * 1000) return null;
+  if (age < 2 * 60 * 60 * 1000) {
+    return `数据截至 ${new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  const hours = Math.floor(age / (60 * 60 * 1000));
+  return `数据陈旧（${hours} 小时前更新）`;
+}
+
 export function formatFlowLimit(flowGB: number, flowMiB?: number): string {
   if (flowGB === 99999 && !flowMiB) return "无限制";
   // R10X-006（K-001）：后端 R9X-001 后 0 读作不限额；精确限额（经

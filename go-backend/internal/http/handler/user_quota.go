@@ -230,9 +230,51 @@ func (h *Handler) enforceUserQuotaIfNeeded(userID int64, quota *model.UserQuotaV
 	}
 }
 
-func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int64) {
-	if h == nil || h.repo == nil || release == nil || release.UserID <= 0 || !release.UnblockUser {
+// recordFlowStoppedForwards unions flow-stopped forward IDs into the user's
+// quota recovery list (C-(1)). The flow-stop path used to only flip forward
+// status, so a later quota reset had no carrier for those forwards and the
+// backstop never revisited them ("reset succeeded but the forward stays
+// stopped"). The write runs under the per-user enforcement lock so it cannot
+// lose a concurrent quota-enforcement update of the same list (FIX2-A V2-02
+// lost-update family); the repo call itself is a transactional union, and
+// a missing quota row is created there. A record failure only logs: the
+// forward stays paused and the next enforcement round retries the record
+// (the pause itself already landed).
+func (h *Handler) recordFlowStoppedForwards(userID int64, forwardIDs []int64) {
+	if h == nil || h.repo == nil || userID <= 0 || len(forwardIDs) == 0 {
 		return
+	}
+	unlock := h.lockUserQuotaEnforcement(userID)
+	defer unlock()
+	if err := h.repo.AppendUserQuotaPausedForwardIDs(userID, forwardIDs, time.Now()); err != nil {
+		log.Printf("flow stop record failed user_id=%d forward_ids=%v err=%v action=retry_on_next_enforcement", userID, forwardIDs, err)
+	}
+}
+
+// quotaReleaseFailure is one forward that could not be resumed by a quota
+// release (C-05 F2). Reason is a short op code; Detail carries the veto
+// error for the receipt and the log.
+type quotaReleaseFailure struct {
+	ForwardID int64  `json:"forwardId"`
+	Reason    string `json:"reason"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// userQuotaReleaseResult is the per-forward outcome of applyUserQuotaRelease
+// (C-05 F2). Resumed forwards were brought back; Failed forwards stay in
+// the pending-resume list (PausedForwardIDs) for the retry backstop;
+// Dropped forwards can never resume (record gone / pending-delete) and are
+// removed from the list so the backstop does not churn on them forever.
+type userQuotaReleaseResult struct {
+	Resumed []int64
+	Failed  []quotaReleaseFailure
+	Dropped []int64
+}
+
+func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int64) userQuotaReleaseResult {
+	var result userQuotaReleaseResult
+	if h == nil || h.repo == nil || release == nil || release.UserID <= 0 || !release.UnblockUser {
+		return result
 	}
 	// R5-B3 D1-002: 配额恢复时 nft 转发也要加回规则（原实现只调了 gost 路径）。
 	// 按节点聚合恢复，一节点一次 reconcile。
@@ -240,12 +282,17 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 	for _, forwardID := range release.ForwardIDs {
 		forward, err := h.getForwardRecord(forwardID)
 		if err != nil || forward == nil {
+			// C-05 F2 (V1)：旧实现无日志静默跳过。行已不存在，永无恢复
+			// 意义——记日志并从待恢复清单摘除，不作失败。
+			log.Printf("quota release failed op=forward_not_found forward_id=%d err=%v", forwardID, err)
+			result.Dropped = append(result.Dropped, forwardID)
 			continue
 		}
 		// R5-B5 D15: pending-delete 行不得被配额释放复活（删除流程由 pending
 		// 机制接管）。注意：不得在 getForwardRecord 全局过滤（会破坏清理任务）。
 		if isForwardPendingDelete(forward) {
 			log.Printf("quota release skipped op=pending_delete forward_id=%d", forwardID)
+			result.Dropped = append(result.Dropped, forwardID)
 			continue
 		}
 		// R3 B08-001：配额释放是自动恢复面，同样受隧道禁用门约束——
@@ -253,9 +300,15 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 		// 不得被配额窗口滚动连带激活（与恢复/批量恢复/重部署同口径）。
 		if err := h.ensureTunnelEnabledForForward(forward.TunnelID); err != nil {
 			log.Printf("quota release skipped op=tunnel_not_enabled forward_id=%d err=%v", forwardID, err)
+			result.Failed = append(result.Failed, quotaReleaseFailure{ForwardID: forwardID, Reason: "tunnel_not_enabled", Detail: err.Error()})
 			continue
 		}
 		if err := h.ensureUserTunnelForwardAllowed(forward.UserID, forward.TunnelID, now); err != nil {
+			// C-05 F2 (V4)：登记点——隧道流量门否决曾在此静默 continue，
+			// agent 侧 ResumeService 命令数为 0，用户只看到“已恢复”。
+			// 否决须记日志、进失败集、留待重试。
+			log.Printf("quota release failed op=tunnel_traffic_gate forward_id=%d err=%v", forwardID, err)
+			result.Failed = append(result.Failed, quotaReleaseFailure{ForwardID: forwardID, Reason: "tunnel_traffic_gate", Detail: err.Error()})
 			continue
 		}
 		nftMode, entryNodeIDs, modeErr := h.tunnelUsesNftables(forward.TunnelID)
@@ -265,23 +318,42 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 			// 编辑隧道去掉 nft/多余入口，记日志不静默。
 			if err := h.rejectMixedNftForwardState(forward.TunnelID, nftMode, entryNodeIDs); err != nil {
 				log.Printf("quota release skipped op=mixed_nft_state forward_id=%d err=%v", forwardID, err)
+				result.Failed = append(result.Failed, quotaReleaseFailure{ForwardID: forwardID, Reason: "mixed_nft_state", Detail: err.Error()})
 				continue
 			}
 			nftGroups[entryNodeIDs[0]] = append(nftGroups[entryNodeIDs[0]], forward)
 			continue
 		}
 		if err := h.controlForwardServices(forward, "ResumeService", false); err != nil {
+			// C-05 F2 (V6)：ResumeService 失败曾在此静默 continue。
+			// F4：离线/超时单独给 reason——命令根本没送达 agent，
+			// 转发必须保持暂停、留待 backstop 在节点上线后重试；
+			// ResumeService 幂等（未暂停即跳过），重试收敛。
+			reason := "resume_failed"
+			if isNodeOfflineOrTimeoutError(err) {
+				reason = "node_offline"
+			}
+			log.Printf("quota release failed op=resume_failed forward_id=%d reason=%s err=%v", forwardID, reason, err)
+			result.Failed = append(result.Failed, quotaReleaseFailure{ForwardID: forwardID, Reason: reason, Detail: err.Error()})
 			continue
 		}
 		// R5-B5 D15: 经 ActivateForwardIfNotPending（pending 已在循环顶过滤，
 		// 此处为纵深防御）。
 		if err := h.ActivateForwardIfNotPending(forwardID, now); err != nil {
 			log.Printf("quota release failed op=db_write forward_id=%d err=%v", forwardID, err)
+			// 服务已恢复、仅状态写失败：留待 backstop 重试（ResumeService
+			// 与 Activate 均为幂等），不计入已恢复。
+			result.Failed = append(result.Failed, quotaReleaseFailure{ForwardID: forwardID, Reason: "db_write", Detail: err.Error()})
+			continue
 		}
+		result.Resumed = append(result.Resumed, forwardID)
 	}
 	for nodeID, forwards := range nftGroups {
 		if !h.reconcileNodeWithTimeout(nodeID, nil, forwards, 30*time.Second) {
 			log.Printf("quota release gap node_id=%d reason=reconcile_timeout_or_error", nodeID)
+			for _, forward := range forwards {
+				result.Failed = append(result.Failed, quotaReleaseFailure{ForwardID: forward.ID, Reason: "reconcile_timeout"})
+			}
 			continue
 		}
 		for _, forward := range forwards {
@@ -289,7 +361,46 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 			// 此处为纵深防御）。
 			if err := h.ActivateForwardIfNotPending(forward.ID, now); err != nil {
 				log.Printf("quota release failed op=db_write_after_reconcile forward_id=%d err=%v", forward.ID, err)
+				result.Failed = append(result.Failed, quotaReleaseFailure{ForwardID: forward.ID, Reason: "db_write_after_reconcile", Detail: err.Error()})
+				continue
 			}
+			result.Resumed = append(result.Resumed, forward.ID)
+		}
+	}
+	// C-05 F1：只有已恢复（或已确认无恢复意义）的 ID 才从待恢复清单摘除；
+	// 失败的保留，待 backstop 重试。清除写失败仅记日志——已恢复的转发
+	// 下一轮 backstop 会再走一次幂等 ResumeService，不会丢恢复。
+	cleared := append(append([]int64{}, result.Resumed...), result.Dropped...)
+	if len(cleared) > 0 {
+		if err := h.repo.RemoveUserQuotaPausedForwardIDs(release.UserID, cleared, time.UnixMilli(now)); err != nil {
+			log.Printf("quota release failed op=clear_pending_list user_id=%d err=%v", release.UserID, err)
+		}
+	}
+	return result
+}
+
+// reconcilePendingQuotaReleases is the retry backstop for quota releases
+// that failed after the user was unblocked (C-05 F4). A reset/rolled user
+// is no longer over quota, so reconcileUserQuotaEnforcement never revisits
+// them; without this their forwards would stay paused forever with no
+// trace. Runs in the same minute maintenance round. A release that fully
+// succeeds here fires the recovery notice the original reset/roll withheld.
+func (h *Handler) reconcilePendingQuotaReleases(now time.Time) {
+	if h == nil || h.repo == nil {
+		return
+	}
+	releases, err := h.repo.ListPendingQuotaReleases(now)
+	if err != nil {
+		log.Printf("quota release reconcile failed op=list err=%v", err)
+		return
+	}
+	nowMs := now.UnixMilli()
+	for i := range releases {
+		result := h.applyUserQuotaRelease(&releases[i], nowMs)
+		if len(result.Failed) == 0 && len(releases[i].ForwardIDs) > 0 {
+			h.notifyUserQuotaRecovered(releases[i].UserID, "配额已恢复")
+		} else if len(result.Failed) > 0 {
+			log.Printf("quota release retry pending user_id=%d failed=%d resumed=%d", releases[i].UserID, len(result.Failed), len(result.Resumed))
 		}
 	}
 }
@@ -335,12 +446,17 @@ func (h *Handler) resetUserQuotaWindows(now time.Time) {
 	}
 	nowMs := now.UnixMilli()
 	for i := range releases {
-		h.applyUserQuotaRelease(&releases[i], nowMs)
+		result := h.applyUserQuotaRelease(&releases[i], nowMs)
 		// R35-G-001 对称面：窗口滚动解禁是「已恢复」事件，与超额通知
 		// 成对——否则管理员只收到超额、不知何时恢复。每真实解禁一条，
 		// 通知通道的指纹去重吸收 30 分钟内的同文案重复。
-		if releases[i].UnblockUser {
+		// C-05 F3：仅在全部转发恢复成功时发“已恢复”；部分失败的留待
+		// backstop（reconcilePendingQuotaReleases）重试并在补齐时发通知，
+		// 不得先报恢复。
+		if releases[i].UnblockUser && len(result.Failed) == 0 {
 			h.notifyUserQuotaRecovered(releases[i].UserID, "配额窗口已滚动")
+		} else if len(result.Failed) > 0 {
+			log.Printf("quota release partial user_id=%d failed=%d resumed=%d action=retry_backstop", releases[i].UserID, len(result.Failed), len(result.Resumed))
 		}
 	}
 }
@@ -611,6 +727,41 @@ func quotaResetReason(scope string) string {
 	}
 }
 
+// userQuotaMine returns the caller's own quota view (D-07): ListUsers
+// filters role_id != 0, so an admin's own quota is invisible in the
+// user list — and on the rehearsal panel the only user_quota row IS
+// the admin's. The keys mirror ListUsers' quota keys so the frontend
+// reuses its normalization; no row → data null (no quota set).
+func (h *Handler) userQuotaMine(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	uid, _, err := userRoleFromRequest(r)
+	if err != nil || uid <= 0 {
+		response.WriteJSON(w, response.ErrDefault("未登录"))
+		return
+	}
+	view, err := h.repo.GetUserQuotaView(uid, time.Now())
+	if err != nil {
+		respondInternalError(w, "userQuotaMine: GetUserQuotaView failed", err)
+		return
+	}
+	if view == nil {
+		response.WriteJSON(w, response.OK(nil))
+		return
+	}
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"userId":           uid,
+		"dailyQuotaGB":     view.DailyLimitGB,
+		"monthlyQuotaGB":   view.MonthlyLimitGB,
+		"dailyUsedBytes":   view.DailyUsedBytes,
+		"monthlyUsedBytes": view.MonthlyUsedBytes,
+		"disabledByQuota":  view.DisabledByQuota,
+		"quotaDisabledAt":  view.DisabledAt,
+	}))
+}
+
 func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -653,13 +804,115 @@ func (h *Handler) userQuotaReset(w http.ResponseWriter, r *http.Request) {
 		respondInternalError(w, "userQuotaReset: ResetUserQuotaUsage failed", err)
 		return
 	}
+	// C-(1)：手动重置即使未解禁（用户从未被配额封停、只有流停转发待恢复），
+	// 也须尝试待恢复清单——否则这批转发只剩分钟级 backstop，且回执对它们
+	// 只字不提。ResetUserQuotaUsage 只在解禁时才填 ForwardIDs，此处从当前
+	// 行重读清单补齐；仍超限时释放会在配额门逐条否决、回执如实点名。
+	if release != nil && !release.UnblockUser {
+		if view, vErr := h.repo.GetUserQuotaView(req.UserID, time.Now()); vErr == nil && view != nil {
+			if ids := parseQuotaPausedForwardIDs(view.PausedForwardIDs); len(ids) > 0 {
+				release.UnblockUser = true
+				release.ForwardIDs = ids
+			}
+		}
+	}
 	nowMs := time.Now().UnixMilli()
-	h.applyUserQuotaRelease(release, nowMs)
-	// R35-G-001 对称面：手动重置解禁是「已恢复」事件（见 resetUserQuotaWindows）。
+	result := h.applyUserQuotaRelease(release, nowMs)
+	// D-05（F4，收据层，适配 F2 根治）：F2 根治后 ResumeService 失败
+	// 不再标 Active，失败集已由 result.Failed 携带（含 node_offline
+	// 原因），F4 原“按行态复核计 failed”已由该失败集覆盖，不再重复
+	// 计。只保留 F4 的非覆盖部分——已标 Active 的转发须按入口节点
+	// 在线态复核：controlForwardServices 仍可能把离线/超时当成功吞
+	// 掉（live 实证：节点全程离线，reset 后行仍为 Active、agent 从
+	// 未收到 resume）。全部入口离线即恢复未证实，回执须如实写「待节
+	// 点上线后恢复」，不发「已恢复」通知；该转发不计入已恢复。
+	var deferredIDs []int64
 	if release != nil && release.UnblockUser {
-		h.notifyUserQuotaRecovered(req.UserID, quotaResetReason(req.Scope))
+		for _, forwardID := range result.Resumed {
+			if h.forwardResumeUnconfirmed(forwardID) {
+				log.Printf("quota release unconfirmed op=node_offline forward_id=%d", forwardID)
+				deferredIDs = append(deferredIDs, forwardID)
+			}
+		}
+	}
+	// R35-G-001 对称面：手动重置解禁是「已恢复」事件（见 resetUserQuotaWindows）。
+	// C-05 F3：仅在全部转发恢复成功时发通知并报成功；部分失败时回执
+	// 如实点名仍暂停的转发（code 仍为 0：重置本身已完成，用量已清、
+	// 用户已解禁；失败的转发留在待恢复清单，由 backstop 每分钟重试）。
+	if release != nil && release.UnblockUser {
+		if len(result.Failed) == 0 && len(deferredIDs) == 0 {
+			h.notifyUserQuotaRecovered(req.UserID, quotaResetReason(req.Scope))
+			response.WriteJSON(w, response.OKEmpty())
+			return
+		}
+		failedIDs := make([]int64, 0, len(result.Failed))
+		for _, f := range result.Failed {
+			failedIDs = append(failedIDs, f.ForwardID)
+		}
+		// 未证实的“已恢复”不计入已恢复（D-05 收据层与 F2 根治并存）。
+		confirmedResumed := make([]int64, 0, len(result.Resumed))
+		for _, id := range result.Resumed {
+			if !slices.Contains(deferredIDs, id) {
+				confirmedResumed = append(confirmedResumed, id)
+			}
+		}
+		data := map[string]interface{}{
+			"resumedForwardIds": confirmedResumed,
+			"failedForwardIds":  failedIDs,
+			"failed":            result.Failed,
+		}
+		msg := fmt.Sprintf("配额已重置，但 %d 个转发未恢复（仍暂停），将自动重试", len(result.Failed))
+		// D-05（F4 收据层与 F2 根治并存）：reason=node_offline 的失败
+		// 同样是“待节点上线后恢复”——backstop 在节点上线后重试；文案
+		// 须点名延期恢复，不许只报“未恢复”。失败集仍完整携带
+		// reason=node_offline，deferredForwardIds 只记已标 Active 但
+		// 未证实的转发（上文复核），两类延期在文案里合并计数。
+		offlineFailed := 0
+		for _, f := range result.Failed {
+			if f.Reason == "node_offline" {
+				offlineFailed++
+			}
+		}
+		if len(deferredIDs) > 0 {
+			data["deferredForwardIds"] = deferredIDs
+		}
+		if deferredTotal := len(deferredIDs) + offlineFailed; deferredTotal > 0 {
+			msg += fmt.Sprintf("；%d 个转发待节点上线后恢复", deferredTotal)
+		}
+		// D-05 收据层与 F2 根治并存：msg 与 warning 双通道同文——msg
+		// 须点名延期恢复（F4 的 D-05 回执口径，与 subscriptionResetTraffic
+		// 的「下发到节点失败」进 msg 同族）；warning 字段同步携带同一文
+		// 案（F2 的 OKWithWarning 形态＋warning 消费门），data 仍带
+		// failedForwardIds／failed（含 node_offline 原因）／deferredForwardIds。
+		receipt := response.OKWithWarning(data, msg)
+		receipt.Msg = msg
+		response.WriteJSON(w, receipt)
+		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
+}
+
+// forwardResumeUnconfirmed reports whether a forward marked Active after
+// a quota release could not have been resumed on any node: all of its
+// entry nodes are offline, so the resume never reached an agent (the
+// release path swallows offline errors and still marks the row Active).
+// Unknown state (no ports, port lookup error, no ws server) is NOT
+// unconfirmed — the status check above already covers the known-bad
+// cases, and this helper only fires on positive offline evidence.
+func (h *Handler) forwardResumeUnconfirmed(forwardID int64) bool {
+	if h == nil || h.wsServer == nil {
+		return false
+	}
+	ports, err := h.listForwardPorts(forwardID)
+	if err != nil || len(ports) == 0 {
+		return false
+	}
+	for _, p := range ports {
+		if h.wsServer.IsNodeOnline(p.NodeID) {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Handler) ensureUserForwardAllowedByQuota(userID int64, now int64) error {

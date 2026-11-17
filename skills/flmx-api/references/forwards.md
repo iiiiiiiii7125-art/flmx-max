@@ -25,7 +25,7 @@ List forwards. Non-admin users see only their own forwards.
       "name": "my-web-server",
       "inIp": "",
       "inPort": 10001,
-      "remoteAddr": "192.168.1.100:80",
+      "remoteAddr": "203.0.113.100:80",
       "strategy": "fifo",
       "status": 1,
       "inFlow": 1073741824,
@@ -49,10 +49,9 @@ Create a new forward.
 {
   "name": "my-web-server",
   "tunnelId": 1,
-  "remoteAddr": "192.168.1.100:80",
+  "remoteAddr": "203.0.113.100:80",
   "strategy": "fifo",
-  "inPort": 0,
-  "speedId": 0
+  "inPort": 0
 }
 ```
 
@@ -65,7 +64,7 @@ Create a new forward.
 | remoteAddr | string | Yes | Target address(es), comma-separated for load balancing |
 | strategy | string | No | One of "fifo", "round", "rand", "hash" (default: "fifo"); anything else is rejected |
 | inPort | number | No | Entry port (0 = auto-assign) |
-| speedId | number | No | Speed limit rule ID (0 = no limit) |
+| speedId | number | No | Speed limit rule ID (0 = no limit). Admin-only: ordinary users are rejected whenever the key is present, even with value 0 — omit it unless you are an admin. |
 
 **Strategy:**
 - `fifo` = First target only
@@ -74,8 +73,16 @@ Create a new forward.
 - `hash` = Source-IP hash (sticky)
 
 **Remote Address Format:**
-- Single: `192.168.1.100:80`
-- Multiple: `192.168.1.100:80,192.168.1.101:80,192.168.1.102:80`
+- Single: `203.0.113.100:80`
+- Multiple: `203.0.113.100:80,203.0.113.101:80,203.0.113.102:80`
+
+> Intranet targets are NOT copy-pasteable for ordinary users: the
+> panel's SSRF guard (`IsSafeRemoteAddr`) rejects private/loopback/
+> link-local targets with **403** for non-admin callers unless an
+> admin has enabled `allow_local_remote_addr`. Admins are exempt.
+> The examples above use TEST-NET-3 documentation addresses
+> (`203.0.113.0/24`, RFC 5737) so they pass the guard's format
+> checks — substitute your real public target before sending.
 
 **Response:** success envelope with no `data` — or, when the panel has
 something to flag (e.g. a port adjustment), `data` is `{"warnings": [...]}`.
@@ -90,15 +97,14 @@ The assigned entry port is **not** in the response; read it back from
 
 Update forward settings.
 
-**Request:** Same as create, with `id` field required.
+**Request:** Same as create, with `id` field required. (`speedId` is admin-only — see create.)
 
 ```json
 {
   "id": 1,
   "name": "my-web-server-updated",
-  "remoteAddr": "192.168.1.100:8080",
-  "strategy": "round",
-  "speedId": 2
+  "remoteAddr": "203.0.113.100:8080",
+  "strategy": "round"
 }
 ```
 
@@ -149,7 +155,7 @@ Diagnose forward connectivity (TCP ping to target).
 
 **Request:**
 ```json
-{"id": 1}
+{"forwardId": 1}
 ```
 
 **Response:** `data` is a per-hop results payload (same family as
@@ -228,7 +234,7 @@ curl -s -X POST "${FLMX_BASE_URL}/api/v1/forward/create" \
   -d '{
     "name": "web-cluster",
     "tunnelId": 1,
-    "remoteAddr": "10.0.0.1:80,10.0.0.2:80,10.0.0.3:80",
+    "remoteAddr": "203.0.113.100:80,203.0.113.101:80,203.0.113.102:80",
     "strategy": "round"
   }'
 ```

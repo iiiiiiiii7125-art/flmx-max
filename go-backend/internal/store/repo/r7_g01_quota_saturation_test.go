@@ -19,7 +19,7 @@ import (
 func TestR7G01QuotaLimitBytesSaturation(t *testing.T) {
 	cases := []struct {
 		name string
-		in   int64
+		in   float64
 		want int64
 	}{
 		{"zero", 0, 0},
@@ -34,7 +34,7 @@ func TestR7G01QuotaLimitBytesSaturation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := QuotaLimitBytes(tc.in); got != tc.want {
-				t.Fatalf("QuotaLimitBytes(%d) = %d, want %d", tc.in, got, tc.want)
+				t.Fatalf("QuotaLimitBytes(%v) = %d, want %d", tc.in, got, tc.want)
 			}
 		})
 	}

@@ -411,3 +411,45 @@ func TestGostScalingBoundaryDoesNotPersistNegativeTotals(t *testing.T) {
 		t.Fatalf("expected forward in_flow to stay 0 for discarded 2^63 cell, got %d", got)
 	}
 }
+
+// TestBuildFlowUploadBatchDropStats pins the A-中-3 drop ledger: every
+// silently-skipped item class is counted (items + bytes) in
+// batch.dropped, while the valid item still books normally. Negative
+// items count items only (their byte values are meaningless).
+func TestBuildFlowUploadBatchDropStats(t *testing.T) {
+	h := &Handler{}
+	metas := map[int64]repo.FlowUploadForwardMeta{
+		20: {
+			ForwardID:    20,
+			UserID:       2,
+			UserTunnelID: 10,
+			TunnelID:     1,
+			TrafficRatio: 1,
+			TunnelFlow:   3,
+		},
+	}
+
+	batch := h.buildFlowUploadBatch([]flowItem{
+		{N: "20_2_10", U: -5, D: 10},      // negative (H-17)
+		{N: "", U: 1, D: 2},               // empty name
+		{N: "web_api", U: 3, D: 4},        // panel's own API traffic
+		{N: "direct-inbound", U: 5, D: 6}, // unparsed: direct inbound
+		{N: "20_2_10", U: 70, D: 50},      // valid
+	}, metas)
+
+	if batch.dropped.negativeItems != 1 {
+		t.Fatalf("negative items=%d, want 1", batch.dropped.negativeItems)
+	}
+	if batch.dropped.emptyOrWebAPIItems != 2 || batch.dropped.emptyOrWebAPIBytes != 10 {
+		t.Fatalf("empty/web_api items=%d bytes=%d, want 2/10", batch.dropped.emptyOrWebAPIItems, batch.dropped.emptyOrWebAPIBytes)
+	}
+	if batch.dropped.unparsedItems != 1 || batch.dropped.unparsedBytes != 11 {
+		t.Fatalf("unparsed items=%d bytes=%d, want 1/11", batch.dropped.unparsedItems, batch.dropped.unparsedBytes)
+	}
+	if batch.dropped.totalItems() != 4 {
+		t.Fatalf("total dropped items=%d, want 4", batch.dropped.totalItems())
+	}
+	if len(batch.flowDeltas) != 1 {
+		t.Fatalf("expected 1 flow delta for the valid item, got %d", len(batch.flowDeltas))
+	}
+}
