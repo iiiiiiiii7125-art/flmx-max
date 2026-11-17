@@ -24,6 +24,12 @@ await call(tok, "POST", "kernel/capabilities");
 // warns "[demo] not recorded" and the config walk fails. Record the seed
 // panel's honest answer (no import has run, so no snapshot exists).
 await call(tok, "GET", "backup/import-auto-backup/status");
+// 740c0d66 (D-07/C-06): the user page shows the admin's own quota on
+// mount and the config page's notify card polls notification health on
+// mount; without direct recordings the demo adapter warns "[demo] not
+// recorded" and the CI walk fails on admin #/user and #/config.
+await call(tok, "POST", "user/quota/mine", {});
+await call(tok, "POST", "notify/health", {});
 const nodes = (await call(tok, "POST", "node/list")).data;
 // R5X-007: the node page calls this unconditionally on mount; without a
 // recording the demo adapter warns "[demo] not recorded" and CI fails.
