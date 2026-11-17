@@ -425,7 +425,10 @@ export function NodeConnLogModal({
     <Modal
       isOpen={node !== null}
       scrollBehavior="inside"
-      size="xl"
+      // R7-B：8 列表格自然宽约 950px，xl（768px）装不下、「断开」
+      // 列会被裁在弹窗右缘；改 2xl（1024px）后桌面端整表可见，
+      // 窄屏下仍由表格自身的横向滚动兜底（横滑后「断开」完整可见）。
+      size="2xl"
       onClose={onClose}
     >
       <ModalContent>
