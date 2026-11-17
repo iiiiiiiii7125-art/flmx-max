@@ -1211,20 +1211,34 @@ export default function SubscriptionPage() {
         className={`h-2 w-2 shrink-0 rounded-full ${s.active ? "bg-success" : "bg-default-300"}`}
       />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="truncate font-medium">{s.name}</span>
+        {/* R7-A：390px 下标题行拥挤——徽标换行、标题截断。徽标不换行
+            不收缩（shrink-0 + whitespace-nowrap，先例见 connlog-modal），
+            间距收紧 gap-1.5 → gap-1，标题 min-w-0 后 ellipsis 收尾。 */}
+        <div className="flex items-center gap-1">
+          <span className="min-w-0 truncate font-medium">{s.name}</span>
           {s.isDefault && (
-            <Chip color="primary" size="sm" variant="flat">
+            <Chip
+              className="shrink-0 whitespace-nowrap px-1.5"
+              color="primary"
+              size="sm"
+              variant="flat"
+            >
               默认 · 个人链接
             </Chip>
           )}
           {s.meteringUnsupported && (
-            <Chip color="warning" size="sm" variant="flat">
+            <Chip
+              className="shrink-0 whitespace-nowrap px-1.5"
+              color="warning"
+              size="sm"
+              variant="flat"
+            >
               流量永不计量
             </Chip>
           )}
           {s.meteringStatus === "unmetered" && s.meteringReason && (
             <Chip
+              className="shrink-0 whitespace-nowrap px-1.5"
               color="warning"
               size="sm"
               variant="flat"
@@ -1235,6 +1249,7 @@ export default function SubscriptionPage() {
           )}
           {s.meteringStatus === "partial" && s.meteringReason && (
             <Chip
+              className="shrink-0 whitespace-nowrap px-1.5"
               color="warning"
               size="sm"
               variant="flat"
@@ -1244,16 +1259,30 @@ export default function SubscriptionPage() {
             </Chip>
           )}
           {s.pendingDelete ? (
-            <Chip color="warning" size="sm" variant="flat">
+            <Chip
+              className="shrink-0 whitespace-nowrap px-1.5"
+              color="warning"
+              size="sm"
+              variant="flat"
+            >
               删除中
             </Chip>
           ) : !s.enabled ? (
-            <Chip size="sm" variant="flat">
+            <Chip
+              className="shrink-0 whitespace-nowrap px-1.5"
+              size="sm"
+              variant="flat"
+            >
               已停用
             </Chip>
           ) : (
             !s.active && (
-              <Chip color="danger" size="sm" variant="flat">
+              <Chip
+                className="shrink-0 whitespace-nowrap px-1.5"
+                color="danger"
+                size="sm"
+                variant="flat"
+              >
                 {s.overQuota ? "流量用完" : "已过期"}
               </Chip>
             )
