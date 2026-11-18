@@ -304,6 +304,249 @@ func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRec
 	return net.JoinHostPort(host, port), nil
 }
 
+// shadowTLSRelayUDPWarningText is the warning shown when a ShadowTLS-
+// fronted Shadowsocks inbound is used as a relay/forward landing. The
+// public face of such an inbound is a shadowtls v3 inbound (TCP-only
+// TLS handshake + detour) and its Shadowsocks backend only listens on
+// 127.0.0.1 (see singboxShadowTLSFront and Inbound.Network), so UDP
+// sent to the public port is silently dropped: TCP relaying works, UDP
+// traffic such as games never reaches the exit. The panel warns instead
+// of opening a public UDP bypass for the backend — that would expose an
+// undisguised Shadowsocks face on the camouflage port.
+func shadowTLSRelayUDPWarningText(row *model.NodeInbound) string {
+	return fmt.Sprintf("入站「%s」是 ShadowTLS 前置的 Shadowsocks 入站：公网口只接受 TCP，UDP 会被静默丢弃；经此入站转发的 UDP 流量（如游戏）无法到达出口，请改用不带 ShadowTLS 的 SS2022 入站", row.Name)
+}
+
+// shadowTLSShadowsocksInboundWarning reports whether a stored inbound
+// row is a ShadowTLS-fronted Shadowsocks inbound (the UDP-drop shape
+// above). A row whose settings cannot be parsed is not such an inbound
+// for this purpose — it is already handled by the inbound validation
+// paths, and a warning lookup must never fail a sync (fail-open).
+func shadowTLSShadowsocksInboundWarning(row *model.NodeInbound) (string, bool) {
+	if row == nil {
+		return "", false
+	}
+	in, err := inboundFromModel(*row)
+	if err != nil {
+		return "", false
+	}
+	if in.Protocol != kernel.ProtocolShadowsocks || in.Security.Type != kernel.SecurityShadowTLS {
+		return "", false
+	}
+	return shadowTLSRelayUDPWarningText(row), true
+}
+
+// shadowTLSUDPWarningsForForward returns the ShadowTLS UDP-drop
+// warning for a forward that reaches a ShadowTLS-fronted Shadowsocks
+// inbound, through either reference shape:
+//   - a managed relay landing on the inbound (the DB-linked shape), or
+//   - a plain forward whose RemoteAddr dials the inbound's public
+//     host:port directly (matched on port plus the landing node's
+//     addresses, its concrete listen IP, or loopback when the forward
+//     enters on the landing node itself).
+//
+// Either way the forward's UDP leg is forwarded as raw datagrams to a
+// port with no UDP socket, so it is silently dropped. A domain-form
+// RemoteAddr is deliberately not matched (no DNS resolution in the
+// sync path); the relay shape above is exact and covers the panel's
+// own managed references. Lookups are advisory: a repository failure
+// only logs and yields no warning, so the sync itself is never failed
+// by this check.
+func (h *Handler) shadowTLSUDPWarningsForForward(forward *forwardRecord) []string {
+	if h == nil || forward == nil {
+		return nil
+	}
+	seen := make(map[int64]struct{})
+	var warnings []string
+	addInbound := func(row *model.NodeInbound) {
+		if row == nil {
+			return
+		}
+		if _, ok := seen[row.ID]; ok {
+			return
+		}
+		seen[row.ID] = struct{}{}
+		if warning, ok := shadowTLSShadowsocksInboundWarning(row); ok {
+			warnings = append(warnings, warning)
+		}
+	}
+	rels, err := h.repo.ListNodeInboundRelays()
+	if err != nil {
+		log.Printf("shadowtls relay warning: list relays failed: %v", err)
+	} else {
+		for _, rel := range rels {
+			if rel.ForwardID != forward.ID || rel.Managed != 1 {
+				continue
+			}
+			row, err := h.repo.GetNodeInbound(rel.InboundID)
+			if err != nil || row == nil {
+				continue
+			}
+			addInbound(row)
+		}
+	}
+	shadowInbounds, err := h.shadowTLSShadowsocksInbounds()
+	if err != nil {
+		log.Printf("shadowtls relay warning: list inbounds failed: %v", err)
+		return warnings
+	}
+	if len(shadowInbounds) == 0 {
+		return warnings
+	}
+	var entryNodeIDs map[int64]bool
+	nodes := make(map[int64]*model.Node)
+	for _, target := range splitRemoteTargets(forward.RemoteAddr) {
+		for i := range shadowInbounds {
+			in := &shadowInbounds[i]
+			if _, port, err := parseTargetAddress(target); err != nil || port != in.Port {
+				continue
+			}
+			node, ok := nodes[in.NodeID]
+			if !ok {
+				var nodeErr error
+				node, nodeErr = h.repo.GetNodeByID(in.NodeID)
+				if nodeErr != nil {
+					// 读失败只丢地址匹配（Listen 面仍可判定），警告
+					// 本身是建议性的，不因此阻断同步。
+					log.Printf("shadowtls relay warning: get node %d failed: %v", in.NodeID, nodeErr)
+					node = nil
+				}
+				nodes[in.NodeID] = node
+			}
+			if entryNodeIDs == nil {
+				entryNodeIDs = make(map[int64]bool)
+				if ports, err := h.listForwardPorts(forward.ID); err == nil {
+					for _, fp := range ports {
+						entryNodeIDs[fp.NodeID] = true
+					}
+				}
+			}
+			if targetDialsInbound(target, in, node, entryNodeIDs) {
+				addInbound(in)
+			}
+		}
+	}
+	return warnings
+}
+
+// shadowTLSShadowsocksInbounds returns the stored ShadowTLS-fronted
+// Shadowsocks inbound rows (the UDP-drop shape).
+func (h *Handler) shadowTLSShadowsocksInbounds() ([]model.NodeInbound, error) {
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.NodeInbound, 0, len(rows))
+	for i := range rows {
+		if _, ok := shadowTLSShadowsocksInboundWarning(&rows[i]); ok {
+			out = append(out, rows[i])
+		}
+	}
+	return out, nil
+}
+
+// targetDialsInbound reports whether one RemoteAddr target
+// (host:port) dials inbound in's public port. The host must match the
+// landing node's addresses, the inbound's concrete listen IP, or be
+// loopback with the forward entering on the landing node itself
+// (entryNodeIDs); a hostname is never matched (no DNS here).
+func targetDialsInbound(target string, in *model.NodeInbound, node *model.Node, entryNodeIDs map[int64]bool) bool {
+	host, port, err := parseTargetAddress(target)
+	if err != nil || port != in.Port {
+		return false
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return entryNodeIDs[in.NodeID]
+	}
+	if strings.EqualFold(host, "localhost") {
+		return entryNodeIDs[in.NodeID]
+	}
+	if node != nil {
+		for _, cand := range []string{strings.TrimSpace(node.ServerIP), strings.TrimSpace(node.ServerIPV4.String), strings.TrimSpace(node.ServerIPV6.String)} {
+			if cand != "" && strings.EqualFold(strings.Trim(cand, "[]"), host) {
+				return true
+			}
+		}
+	}
+	if listen := strings.TrimSpace(in.Listen); listen != "" {
+		if ip := net.ParseIP(strings.Trim(listen, "[]")); ip != nil && !ip.IsUnspecified() && !ip.IsLoopback() && strings.EqualFold(strings.Trim(listen, "[]"), host) {
+			return true
+		}
+	}
+	return false
+}
+
+// shadowTLSRelayWarningsForInbound returns the ShadowTLS UDP-drop
+// warning for an inbound that is currently referenced as a landing:
+// either by a live managed relay, or by a plain forward dialing its
+// public host:port (see targetDialsInbound). An inbound with no live
+// reference is not warned: its UDP limitation only bites once
+// something points at it, and relay/forward creation re-checks at
+// that point.
+func (h *Handler) shadowTLSRelayWarningsForInbound(inboundID int64) []string {
+	if h == nil || inboundID <= 0 {
+		return nil
+	}
+	row, err := h.repo.GetNodeInbound(inboundID)
+	if err != nil || row == nil {
+		return nil
+	}
+	warning, ok := shadowTLSShadowsocksInboundWarning(row)
+	if !ok {
+		return nil
+	}
+	views, err := h.repo.ListInboundRelays(inboundID)
+	if err != nil {
+		log.Printf("shadowtls relay warning: list inbound relays failed: %v", err)
+		return nil
+	}
+	for _, v := range views {
+		if v.Managed == 1 && v.ForwardExists {
+			return []string{warning}
+		}
+	}
+	ids, err := h.repo.ListForwardIDs()
+	if err != nil {
+		log.Printf("shadowtls relay warning: list forward ids failed: %v", err)
+		return nil
+	}
+	node, nodeErr := h.repo.GetNodeByID(row.NodeID)
+	if nodeErr != nil {
+		// 读失败只丢地址匹配（Listen 面仍可判定），警告本身是
+		// 建议性的，不因此阻断保存回执。
+		log.Printf("shadowtls relay warning: get node %d failed: %v", row.NodeID, nodeErr)
+		node = nil
+	}
+	for _, id := range ids {
+		fwd, err := h.getForwardRecord(id)
+		if err != nil || fwd == nil {
+			continue
+		}
+		var entryNodeIDs map[int64]bool
+		for _, target := range splitRemoteTargets(fwd.RemoteAddr) {
+			if _, port, err := parseTargetAddress(target); err != nil || port != row.Port {
+				continue
+			}
+			if entryNodeIDs == nil {
+				entryNodeIDs = make(map[int64]bool)
+				if ports, err := h.listForwardPorts(fwd.ID); err == nil {
+					for _, fp := range ports {
+						entryNodeIDs[fp.NodeID] = true
+					}
+				}
+			}
+			if targetDialsInbound(target, row, node, entryNodeIDs) {
+				return []string{warning}
+			}
+		}
+	}
+	return nil
+}
+
 // validateTunnelRelayExits re-runs the landing-exit rule for every
 // inbound relayed through a tunnel against a prospective exit set
 // (X-P2-4 ①: tunnelUpdate 校验段——新出口集违反「出口为落地必须单出口」
@@ -674,6 +917,12 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	if err := h.refreshInboundWhitelist(row.ID); err != nil {
 		warnings = append(warnings, whitelistRefreshFailureNote([]int64{row.ID})+"，请检查节点内核状态")
 	}
+	// FIX-UDP-ENTRY (a)：本中转的落地入站若是 ShadowTLS 前置的
+	// SS 入站，其公网口 UDP 会被静默丢弃——创建回执须点名（经
+	// OKWithWarning 的 warning 字段，前端中转弹窗已逐条 toast）。
+	// createRelayForward 内的首次同步走丢 warnings 的薄封装，故
+	// 在此显式补算，不能只依赖 syncForwardServicesWithWarnings。
+	warnings = append(warnings, h.shadowTLSRelayWarningsForInbound(row.ID)...)
 	if len(warnings) > 0 {
 		response.WriteJSON(w, response.OKWithWarning(map[string]interface{}{"id": rel.ID, "forwardId": forwardID}, strings.Join(warnings, "；")))
 		return
