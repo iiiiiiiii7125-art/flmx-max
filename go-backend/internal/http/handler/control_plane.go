@@ -2410,7 +2410,13 @@ func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel 
 		if protocol == "udp" {
 			listenerMetadata := map[string]interface{}{
 				"keepAlive": true,
-				"ttl":       "30s",
+				// UDP session idle TTL 5m: the pool reaps only after
+				// two ticks, so the effective window is (5m, 10m];
+				// 30s reaped sessions after 30-60s of bidirectional
+				// silence. Aligned with internal/net/udp DefaultTTL
+				// and with sing-box udp_timeout / Xray connIdle
+				// defaults (both 300s).
+				"ttl": "300s",
 			}
 			service["listener"].(map[string]interface{})["metadata"] = listenerMetadata
 		}

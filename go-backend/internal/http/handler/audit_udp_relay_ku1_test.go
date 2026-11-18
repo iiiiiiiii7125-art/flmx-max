@@ -38,8 +38,8 @@ func ku1AssertUDPListenerKeepAlive(t *testing.T, surface string, service map[str
 	if metadata["keepAlive"] != true {
 		t.Fatalf("%s: udp listener must carry keepAlive=true (F-UDP-1), got %v", surface, metadata)
 	}
-	if metadata["ttl"] != "30s" {
-		t.Fatalf("%s: udp listener ttl must be 30s (forward _udp 口径), got %v", surface, metadata)
+	if metadata["ttl"] != "300s" {
+		t.Fatalf("%s: udp listener ttl must be 300s (forward _udp 口径), got %v", surface, metadata)
 	}
 }
 

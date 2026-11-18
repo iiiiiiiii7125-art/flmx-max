@@ -143,7 +143,7 @@ func buildForwardService(t *testing.T, name, proto string, listenPort, targetPor
 	}`, name, listenPort, proto, proto, targetPort)
 	if proto == "udp" {
 		raw = strings.Replace(raw, `"listener": {"type": "udp"}`,
-			`"listener": {"type": "udp", "metadata": {"keepAlive": true, "ttl": "30s"}}`, 1)
+			`"listener": {"type": "udp", "metadata": {"keepAlive": true, "ttl": "300s"}}`, 1)
 	}
 	var cfg config.ServiceConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {

@@ -9274,11 +9274,11 @@ func buildTunnelListenerConfig(protocol, kcpKey string, tier kcpMemTier, fecOff 
 		// 自毁，后续帧被监听侧新建会话当 Request 头解析、报 bad
 		// version（专项定案，自引入即不合）。与
 		// buildForwardServiceConfigs 的 _udp 口径逐字一致
-		// （keepAlive:true + ttl 30s）。本地链中段/出口与联邦
+		// （keepAlive:true + ttl 300s）。本地链中段/出口与联邦
 		// middle/exit 共用本 builder，一处收口覆盖全部会话型形态。
 		listener["metadata"] = map[string]interface{}{
 			"keepAlive": true,
-			"ttl":       "30s",
+			"ttl":       "300s",
 		}
 	}
 	if isKCPTunnelProtocol(protocol) {

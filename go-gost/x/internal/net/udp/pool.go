@@ -15,7 +15,18 @@ import (
 // own, so the convergence has to happen here and in NewListener
 // (D3-01): a TTL of zero used to reach time.NewTicker in the
 // idleCheck goroutine, whose panic killed the whole agent.
-const DefaultTTL = 30 * time.Second
+//
+// 5m, not 30s: the pool reaps a session silent in BOTH directions
+// only after two ticks, so the effective window is (TTL, 2*TTL]
+// — 30s reaped after 30-60s of silence, which cuts long idle gaps
+// (e.g. game login/character-select) mid-session. 5m aligns with
+// the downstream kernels' own UDP idle defaults (sing-box
+// udp_timeout 5m; Xray level-0 connIdle 300s), so no shorter
+// timeout downstream re-cuts what the entry now keeps alive; an
+// idle session holds no buffers (only its ~8KiB receive channel),
+// and the session budget's pressure eviction still bounds the
+// parked-session count under memory pressure.
+const DefaultTTL = 5 * time.Minute
 
 type connPool struct {
 	m      sync.Map
