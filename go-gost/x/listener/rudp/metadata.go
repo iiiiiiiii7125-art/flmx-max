@@ -8,7 +8,12 @@ import (
 )
 
 const (
-	defaultTTL            = 30 * time.Second
+	// 5m: same UDP session idle TTL as listener/udp and
+	// internal/net/udp DefaultTTL (see there for the rationale);
+	// this ttl is forwarded via chain Bind to the relay/socks
+	// bindUDP listener pool, so it must match the entry TTL or
+	// rudp-routed sessions get cut first.
+	defaultTTL            = 5 * time.Minute
 	defaultReadBufferSize = 8192
 	defaultReadQueueSize  = 1024
 	defaultBacklog        = 128

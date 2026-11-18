@@ -253,7 +253,7 @@ func (r *Relay) Run(ctx context.Context) (err error) {
 	// pre-F07 unbounded behaviour and returns only on an endpoint
 	// error or close. Note the layers below the relay keep their
 	// own budgets: the UDP listener/bind session pool reaps a
-	// session silent in BOTH directions after its TTL (30s panel
+	// session silent in BOTH directions after its TTL (300s panel
 	// default) regardless of this window.
 	window := idle.Resolve(r.idleTimeout)
 

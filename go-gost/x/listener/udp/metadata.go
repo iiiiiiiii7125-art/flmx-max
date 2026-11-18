@@ -9,7 +9,13 @@ import (
 )
 
 const (
-	defaultTTL = 30 * time.Second
+	// 5m: UDP session idle TTL, aligned with DefaultTTL in
+	// internal/net/udp (effective reap window (TTL, 2*TTL] via the
+	// pool's two-tick idle rule) and with the downstream kernels'
+	// UDP idle defaults (sing-box udp_timeout 5m; Xray connIdle
+	// 300s). 30s reaped sessions after 30-60s of bidirectional
+	// silence, cutting long idle gaps mid-game.
+	defaultTTL = 5 * time.Minute
 	// The read buffer must hold a whole maximum-size datagram: a
 	// smaller buffer makes the kernel silently discard the tail of
 	// oversized datagrams before any consumer can see them (F-UDP-5).

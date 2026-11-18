@@ -12,12 +12,16 @@ import (
 // Before the fix, NewListener with TTL 0 crashed the test binary
 // from that goroutine; newConnPool(0) panicked the same way.
 
-// defaultTTL below is the 30s value the listener metadata parsers
-// (listener/udp, listener/rudp) have always defaulted to; the pool
-// must converge on the same value.
-const defaultTTL = 30 * time.Second
+// defaultTTL below is the 5m value the listener metadata parsers
+// (listener/udp, listener/rudp) now default to; the pool
+// must converge on the same value. It is derived from DefaultTTL
+// (not a second literal) so the two cannot drift apart again.
+const defaultTTL = DefaultTTL
 
 func TestConnPoolNonPositiveTTLFallsBackToDefault(t *testing.T) {
+	if DefaultTTL != 5*time.Minute {
+		t.Fatalf("DefaultTTL = %v, want 5m (UDP session idle TTL, aligned with the panel-generated ttl and the downstream kernels' 300s UDP idle defaults)", DefaultTTL)
+	}
 	for _, ttl := range []time.Duration{0, -time.Second, -time.Hour} {
 		p := newConnPool(ttl)
 		if p.ttl != defaultTTL {
