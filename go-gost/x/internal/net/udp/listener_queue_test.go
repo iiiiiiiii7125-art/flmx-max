@@ -81,6 +81,22 @@ func TestListenerZeroGapBurstAbsorbed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListenPacket: %v", err)
 	}
+	// The burst is fired zero-gap while the test goroutine holds
+	// the CPU, so under a loaded scheduler listenLoop may not run
+	// until the sender has finished: the datagrams then sit in
+	// the kernel socket buffer (rmem_default 212KiB here — about
+	// 238 small datagrams), and anything past it is dropped by
+	// the kernel before listenLoop ever sees it. That drop is
+	// not the session receive queue under test (cap 1024, never
+	// near full at 300 datagrams); give the kernel buffer room
+	// for the whole burst so the test measures the app queue.
+	// Best effort: if the raise is refused the test keeps its
+	// old behaviour instead of failing on setup.
+	if uc, ok := pc.(*net.UDPConn); ok {
+		if err := uc.SetReadBuffer(1 << 20); err != nil {
+			t.Logf("SetReadBuffer(1MiB): %v (continuing with default socket buffer)", err)
+		}
+	}
 	ln := NewListener(pc, &ListenConfig{
 		Addr:           pc.LocalAddr(),
 		ReadBufferSize: 2048,
