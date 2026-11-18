@@ -2342,7 +2342,14 @@ func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel 
 		if runtimeLimiters.TrafficLimiter != "" {
 			service["limiter"] = runtimeLimiters.TrafficLimiter
 		}
-		if proxyProtocolReceive > 0 {
+		// L1（Fix-1）：PROXY 协议只写给 TCP 服务。UDP 服务一旦带
+		// proxyProtocol，forward handler 拨号后即把 PROXY 头写进
+		// 已拨连接、成为 UDP 首个 relay 帧；Xray 的
+		// acceptProxyProtocol 是 TCP 流选项，UDP 面不解析，该帧
+		// 在 SS 入站做 AEAD 认证失败而丢弃（每 30 秒会话重建即
+		// 丢首包）。接收侧同理：UDP listener 根本不读
+		// ProxyProtocol 选项，写上也是死配置，故两档一并只给 TCP。
+		if protocol == "tcp" && proxyProtocolReceive > 0 {
 			serviceMetadata := ensureServiceMetadata(service)
 			serviceMetadata["proxyProtocol"] = proxyProtocolReceive
 		}
@@ -2391,7 +2398,9 @@ func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel 
 				serviceMetadata[k] = v
 			}
 		}
-		if proxyProtocolSend > 0 {
+		// L1（Fix-1）：见上方接收侧注释——UDP 服务不得带
+		// proxyProtocol，发送侧只写给 TCP 服务。
+		if protocol == "tcp" && proxyProtocolSend > 0 {
 			handlerConfig := service["handler"].(map[string]interface{})
 			if handlerConfig["metadata"] == nil {
 				handlerConfig["metadata"] = map[string]interface{}{}

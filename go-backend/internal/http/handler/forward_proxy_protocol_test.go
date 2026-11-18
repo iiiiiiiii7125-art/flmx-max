@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,9 +40,6 @@ func TestBuildForwardServiceConfigsAppliesProxyProtocolReceiveAndSendIndependent
 		if serviceMetadata["interface"] != "eth0" {
 			t.Fatalf("expected interface metadata eth0, got %v", serviceMetadata["interface"])
 		}
-		if serviceMetadata["proxyProtocol"] != 1 {
-			t.Fatalf("expected service proxyProtocol 1 for receive mode, got %v", serviceMetadata["proxyProtocol"])
-		}
 
 		handlerConfig, ok := service["handler"].(map[string]interface{})
 		if !ok {
@@ -51,8 +49,23 @@ func TestBuildForwardServiceConfigsAppliesProxyProtocolReceiveAndSendIndependent
 		if !ok {
 			t.Fatalf("expected handler metadata map, got %T", handlerConfig["metadata"])
 		}
-		if handlerMetadata["proxyProtocol"] != 2 {
-			t.Fatalf("expected handler proxyProtocol 2, got %v", handlerMetadata["proxyProtocol"])
+
+		// L1（Fix-1）：PROXY 协议只属于 TCP 服务——TCP 两档保留，
+		// UDP 两档都不得出现（UDP 首包会被 PROXY 头污染）。
+		if strings.HasSuffix(service["name"].(string), "_tcp") {
+			if serviceMetadata["proxyProtocol"] != 1 {
+				t.Fatalf("expected service proxyProtocol 1 for receive mode on tcp, got %v", serviceMetadata["proxyProtocol"])
+			}
+			if handlerMetadata["proxyProtocol"] != 2 {
+				t.Fatalf("expected handler proxyProtocol 2 on tcp, got %v", handlerMetadata["proxyProtocol"])
+			}
+		} else {
+			if _, ok := serviceMetadata["proxyProtocol"]; ok {
+				t.Fatalf("udp service must not carry proxyProtocol: %v", serviceMetadata)
+			}
+			if _, ok := handlerMetadata["proxyProtocol"]; ok {
+				t.Fatalf("udp handler must not carry proxyProtocol: %v", handlerMetadata)
+			}
 		}
 	}
 }
@@ -91,8 +104,61 @@ func TestBuildForwardServiceConfigsKeepsLegacyProxyProtocolAsSend(t *testing.T) 
 		if !ok {
 			t.Fatalf("expected handler metadata map, got %T", handlerConfig["metadata"])
 		}
+		// L1（Fix-1）：legacy proxyProtocol 只作 TCP 发送档。
+		if strings.HasSuffix(service["name"].(string), "_tcp") {
+			if handlerMetadata["proxyProtocol"] != 2 {
+				t.Fatalf("expected legacy proxyProtocol to send version 2 on tcp, got %v", handlerMetadata["proxyProtocol"])
+			}
+		} else if _, ok := handlerMetadata["proxyProtocol"]; ok {
+			t.Fatalf("udp handler must not carry legacy proxyProtocol: %v", handlerMetadata)
+		}
+	}
+}
+
+// TestBuildForwardServiceConfigsProxyProtocolTCPOnly 是 L1 的差集门：
+// 无论收/发档如何组合，生成的 UDP 服务在服务 metadata 与 handler
+// metadata 两层都不得出现 proxyProtocol 键，TCP 服务则原样保留。
+func TestBuildForwardServiceConfigsProxyProtocolTCPOnly(t *testing.T) {
+	forward := &forwardRecord{
+		ID:                   1,
+		UserID:               2,
+		TunnelID:             3,
+		RemoteAddr:           "1.1.1.1:443",
+		Strategy:             "fifo",
+		ProxyProtocolReceive: 1,
+		ProxyProtocolSend:    2,
+	}
+	node := &nodeRecord{
+		TCPListenAddr: "0.0.0.0",
+		UDPListenAddr: "0.0.0.0",
+	}
+
+	services := buildForwardServiceConfigs("1_2_3", forward, &tunnelRecord{Type: 2}, node, 4001, "", forwardRuntimeLimiters{}, false)
+	if len(services) != 2 {
+		t.Fatalf("expected 2 services, got %d", len(services))
+	}
+	for _, service := range services {
+		name, _ := service["name"].(string)
+		serviceMetadata, _ := service["metadata"].(map[string]interface{})
+		handlerConfig, _ := service["handler"].(map[string]interface{})
+		handlerMetadata, _ := handlerConfig["metadata"].(map[string]interface{})
+		if strings.HasSuffix(name, "_udp") {
+			if _, ok := serviceMetadata["proxyProtocol"]; ok {
+				t.Fatalf("udp service %q must not carry service proxyProtocol: %v", name, serviceMetadata)
+			}
+			if _, ok := handlerMetadata["proxyProtocol"]; ok {
+				t.Fatalf("udp service %q must not carry handler proxyProtocol: %v", name, handlerMetadata)
+			}
+			continue
+		}
+		if !strings.HasSuffix(name, "_tcp") {
+			t.Fatalf("unexpected service name %q", name)
+		}
+		if serviceMetadata["proxyProtocol"] != 1 {
+			t.Fatalf("tcp service must keep receive proxyProtocol 1, got %v", serviceMetadata["proxyProtocol"])
+		}
 		if handlerMetadata["proxyProtocol"] != 2 {
-			t.Fatalf("expected legacy proxyProtocol to send version 2, got %v", handlerMetadata["proxyProtocol"])
+			t.Fatalf("tcp service must keep send proxyProtocol 2, got %v", handlerMetadata["proxyProtocol"])
 		}
 	}
 }
