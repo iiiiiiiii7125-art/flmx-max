@@ -370,6 +370,11 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 	// 静默丢弃——警告随本函数的既有 warnings 回执通道上行（各
 	// 分支在下方分别并入），不静默、不阻断同步。
 	shadowWarnings := h.shadowTLSUDPWarningsForForward(forward)
+	// FIX-UDP-FIX5 (R1)：PROXY 发送侧守卫——send>0 且目标可解析
+	// 到接不住 PROXY 头的入站时，警告随同一通道上行（创建/更新/
+	// 中转内同步三面共用本漏斗，一处并入即全覆盖）；只警告、不
+	// 改值、不阻断同步，见 proxyProtocolSendWarningsForForward。
+	proxyWarnings := h.proxyProtocolSendWarningsForForward(forward)
 	nftMode, entryNodeIDs, err := h.tunnelUsesNftables(forward.TunnelID)
 	if err != nil {
 		return nil, err
@@ -402,6 +407,7 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 			warnings = append(warnings, "nftables 模式不支持限速和连接数限制，这些设置不生效")
 		}
 		warnings = append(warnings, shadowWarnings...)
+		warnings = append(warnings, proxyWarnings...)
 		if err := h.syncNftablesNode(entryNodeIDs[0]); err != nil {
 			return warnings, err
 		}
@@ -409,7 +415,7 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 	}
 	if tunnelIsRealm(tunnel) {
 		realmWarnings, realmErr := h.syncRealmForward(forward, nil)
-		return append(shadowWarnings, realmWarnings...), realmErr
+		return append(append(shadowWarnings, proxyWarnings...), realmWarnings...), realmErr
 	}
 	ports, err := h.listForwardPorts(forward.ID)
 	if err != nil {
@@ -418,7 +424,7 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 	if len(ports) == 0 {
 		return nil, errors.New("转发入口端口不存在")
 	}
-	warnings := append([]string{}, shadowWarnings...)
+	warnings := append(append([]string{}, shadowWarnings...), proxyWarnings...)
 
 	// Resolve user tunnel first so runtime service name can carry the real user_tunnel id.
 	userTunnelID, utLimiterID, utSpeed, err := h.resolveUserTunnelAndLimiter(forward.UserID, forward.TunnelID)
@@ -2352,9 +2358,12 @@ func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel 
 		// proxyProtocol，forward handler 拨号后即把 PROXY 头写进
 		// 已拨连接、成为 UDP 首个 relay 帧；Xray 的
 		// acceptProxyProtocol 是 TCP 流选项，UDP 面不解析，该帧
-		// 在 SS 入站做 AEAD 认证失败而丢弃（每 30 秒会话重建即
-		// 丢首包）。接收侧同理：UDP listener 根本不读
-		// ProxyProtocol 选项，写上也是死配置，故两档一并只给 TCP。
+		// 在 SS 入站做 AEAD 认证失败而丢弃（直连 SS 腿上头是独立
+		// 数据报，只丢该头数据报；经隧道链时头字节进入已建好的
+		// relay TCP 流、成为首帧前的垃圾字节，首帧被污染——是否
+		// 吃掉游戏首包取决于 FUDP 帧解析容错，未验）。接收侧同
+		// 理：UDP listener 根本不读 ProxyProtocol 选项，写上也
+		// 是死配置，故两档一并只给 TCP。
 		if protocol == "tcp" && proxyProtocolReceive > 0 {
 			serviceMetadata := ensureServiceMetadata(service)
 			serviceMetadata["proxyProtocol"] = proxyProtocolReceive

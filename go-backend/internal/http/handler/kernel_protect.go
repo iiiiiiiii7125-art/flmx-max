@@ -16,7 +16,9 @@ import (
 )
 
 // relayProxyProtocolVersion is what relay forwards send when the inbound
-// wants the real client address. v1 is accepted by every kernel we support.
+// wants the real client address. Whether the landing actually accepts it
+// is decided per inbound by relayProxyProtocolSendForInbound (FIX-UDP-FIX5
+// R1: SS inbounds and non-Xray kernels do not accept it — sending breaks TCP).
 const relayProxyProtocolVersion = 1
 
 var loopbackAllow = []string{"127.0.0.0/8", "::1/128"}
@@ -200,16 +202,33 @@ func resolveAllowHost(host string) []string {
 
 // syncRelayProxyProtocol makes every managed relay forward of an inbound send
 // (or stop sending) PROXY protocol to match the inbound setting.
+// FIX-UDP-FIX5 (R1)：want 不再只看 AcceptProxyProtocol==1——对方接
+// 不住 PROXY 头时（SS 入站、或非 Xray 内核）发了即断 TCP，见
+// relayProxyProtocolSendForInbound；接不住时 want 置 0（已置 send=1
+// 的存量中转转发随之清回 0，不留死配置），并把警告带进返回的
+// warnings（入站保存回执“已保存，但…”点名）。无存续托管中转时
+// 不警告：此时什么都没拦下，中转创建时另行校验。
 func (h *Handler) syncRelayProxyProtocol(row model.NodeInbound) []string {
 	want := 0
+	suppressedWarning := ""
 	if row.AcceptProxyProtocol == 1 {
-		want = relayProxyProtocolVersion
+		want, suppressedWarning = h.relayProxyProtocolSendForInbound(&row)
 	}
 	relays, err := h.repo.ListInboundRelays(row.ID)
 	if err != nil {
 		return []string{err.Error()}
 	}
 	var problems []string
+	hasManaged := false
+	for _, rel := range relays {
+		if rel.Managed == 1 && rel.ForwardExists {
+			hasManaged = true
+			break
+		}
+	}
+	if suppressedWarning != "" && hasManaged {
+		problems = append(problems, suppressedWarning)
+	}
 	for _, rel := range relays {
 		if !rel.ForwardExists || rel.Managed != 1 {
 			continue
