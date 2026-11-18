@@ -1710,6 +1710,12 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 		warnings = append(warnings, h.applyChainReferrers(row.ID)...)
 	}
 	warnings = append(warnings, h.applyChangedTargets(prevTargets, row)...)
+	// FIX-UDP-ENTRY (a)：本次保存后该入站若是 ShadowTLS 前置的
+	// SS 入站、且名下已有存续中转或有转发直接拨其公网口，其公
+	// 网口 UDP 会被静默丢弃——随本函数既有的 warnings 回执
+	// （“已保存，但…”）点名；无引用的入站不警告（中转/转发创
+	// 建时另行校验）。
+	warnings = append(warnings, h.shadowTLSRelayWarningsForInbound(row.ID)...)
 	if len(warnings) > 0 {
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"id": row.ID}})
 		return

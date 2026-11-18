@@ -366,6 +366,10 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 	if err != nil {
 		return nil, err
 	}
+	// FIX-UDP-ENTRY (a)：ShadowTLS 前置 SS 入站作中转落地时 UDP
+	// 静默丢弃——警告随本函数的既有 warnings 回执通道上行（各
+	// 分支在下方分别并入），不静默、不阻断同步。
+	shadowWarnings := h.shadowTLSUDPWarningsForForward(forward)
 	nftMode, entryNodeIDs, err := h.tunnelUsesNftables(forward.TunnelID)
 	if err != nil {
 		return nil, err
@@ -397,13 +401,15 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if ineffective {
 			warnings = append(warnings, "nftables 模式不支持限速和连接数限制，这些设置不生效")
 		}
+		warnings = append(warnings, shadowWarnings...)
 		if err := h.syncNftablesNode(entryNodeIDs[0]); err != nil {
 			return warnings, err
 		}
 		return warnings, nil
 	}
 	if tunnelIsRealm(tunnel) {
-		return h.syncRealmForward(forward, nil)
+		realmWarnings, realmErr := h.syncRealmForward(forward, nil)
+		return append(shadowWarnings, realmWarnings...), realmErr
 	}
 	ports, err := h.listForwardPorts(forward.ID)
 	if err != nil {
@@ -412,7 +418,7 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 	if len(ports) == 0 {
 		return nil, errors.New("转发入口端口不存在")
 	}
-	warnings := make([]string, 0)
+	warnings := append([]string{}, shadowWarnings...)
 
 	// Resolve user tunnel first so runtime service name can carry the real user_tunnel id.
 	userTunnelID, utLimiterID, utSpeed, err := h.resolveUserTunnelAndLimiter(forward.UserID, forward.TunnelID)

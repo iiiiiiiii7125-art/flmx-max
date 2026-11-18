@@ -437,6 +437,14 @@ func singboxInbounds(in Inbound, acme *acmeProviders) ([]interface{}, error) {
 
 // singboxShadowTLSFront returns the public shadowtls v3 inbound and the
 // loopback backend (a Shadowsocks inbound) it detours to.
+//
+// No UDP face is opened here on purpose: the front is TCP-only and the
+// backend listens on 127.0.0.1, so UDP sent to the public port is
+// silently dropped (see Inbound.Network). Opening a public UDP listener
+// for the backend on the same port would expose an undisguised
+// Shadowsocks face on the camouflage port and weaken the ShadowTLS
+// disguise, so the panel warns instead of bypassing — see
+// shadowTLSUDPWarningsForForward in the HTTP handler.
 func singboxShadowTLSFront(in Inbound, backend obj) ([]interface{}, error) {
 	backendTag := singboxShadowTLSBackendTag(in)
 	front := obj{
