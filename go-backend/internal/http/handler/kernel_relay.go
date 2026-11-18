@@ -547,6 +547,163 @@ func (h *Handler) shadowTLSRelayWarningsForInbound(inboundID int64) []string {
 	return nil
 }
 
+// FIX-UDP-FIX5 (R1)：PROXY 发送侧目标能力守卫。转发把 PROXY 协议
+// 头打向一个不解析它的入站时，头字节成为目标协议载荷的前缀、TCP
+// 握手即断——总验实测：ProxyProtocolSend=1 打向 SS 入站时 TCP 0/50，
+// sing-box 与 Xray 双内核一致。目标能否接 PROXY 只看三点：协议、
+// 对方 AcceptProxyProtocol、对方所在内核——sing-box 渲染根本不带
+// 任何 PROXY 选项（render_singbox.go 全文无 proxy 字段），只有 Xray
+// 才在 streamSettings 置 acceptProxyProtocol；SS 入站即使 Xray 置了
+// 该选项也不解析头（SS 载荷按 AEAD 认证，头字节即认证失败）。
+// 守卫形态取警告（Fix-3 的 ShadowTLS 警告通道同口径），不拦截保存：
+// 目标解析对直连拨号形是 IP/端口启发式匹配（域名目标无法匹配、无
+// DNS 解析面），且用户可能先在转发侧置位、再去入站侧开接收——警告
+// 点名不断序；面板自己推导出的 send（托管中转）则不同，见
+// relayProxyProtocolSendForInbound：推导出的死配置面板不得写。
+//
+// proxyProtocolSendTargetCheck 判定一发 PROXY 头能否被 row 接住。
+// ok=false 时 cause 说明拦在哪、fix 说明怎么改。行损坏或内核查不
+// 到时 fail-open（ok=true）：损坏行走入站校验面，内核未知时不凭空
+// 断言——判定只能证否，不能证伪时不误报。
+func proxyProtocolSendTargetCheck(row *model.NodeInbound, kernelType string) (ok bool, cause, fix string) {
+	if row == nil {
+		return true, "", ""
+	}
+	in, err := inboundFromModel(*row)
+	if err != nil {
+		return true, "", ""
+	}
+	if in.Protocol == kernel.ProtocolShadowsocks {
+		return false, "Shadowsocks 入站不解析 PROXY 协议头",
+			"关闭发送侧的 PROXY 发送（proxyProtocolSend）"
+	}
+	if !in.AcceptProxyProtocol {
+		return false, "未开启获取真实 IP（PROXY protocol）",
+			"先在该入站开启获取真实 IP，或关闭发送侧的 PROXY 发送"
+	}
+	if kernelType != "" && kernel.CanonicalKernelType(kernelType) != kernel.TypeXray {
+		return false, fmt.Sprintf("所在内核是 %s，不支持 PROXY 协议接收", kernelType),
+			"将该入站所在内核切到 Xray，或关闭发送侧的 PROXY 发送"
+	}
+	return true, "", ""
+}
+
+// kernelTypeForInbound 返回入站所在内核的登记类型；KernelID 缺失
+// 或读失败时返回 ""（调用方按未知处理，见上 fail-open）。
+func (h *Handler) kernelTypeForInbound(row *model.NodeInbound) string {
+	if h == nil || row == nil || row.KernelID <= 0 {
+		return ""
+	}
+	k, err := h.repo.GetNodeKernel(row.KernelID)
+	if err != nil || k == nil {
+		return ""
+	}
+	return k.KernelType
+}
+
+// proxyProtocolSendWarningsForForward 返回一条转发上 PROXY 发送侧
+// 的守卫警告：send>0 且目标可解析到接不住 PROXY 头的入站时点名。
+// 目标解析复用 ShadowTLS 警告的两形（托管中转行精确关联；直连拨
+// 号按 targetDialsInbound 的端口＋落地节点地址匹配），域名目标不
+// 匹配、无引用不警告。仓储读失败只记日志、不阻断同步（建议性检查）。
+func (h *Handler) proxyProtocolSendWarningsForForward(forward *forwardRecord) []string {
+	if h == nil || forward == nil {
+		return nil
+	}
+	_, send := normalizeForwardProxyProtocol(forward.ProxyProtocol, forward.ProxyProtocolReceive, forward.ProxyProtocolSend)
+	if send <= 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{})
+	var warnings []string
+	addInbound := func(row *model.NodeInbound) {
+		if row == nil {
+			return
+		}
+		if _, ok := seen[row.ID]; ok {
+			return
+		}
+		seen[row.ID] = struct{}{}
+		if ok, cause, fix := proxyProtocolSendTargetCheck(row, h.kernelTypeForInbound(row)); ok {
+			return
+		} else {
+			warnings = append(warnings, fmt.Sprintf("转发「%s」开启了 PROXY 发送，但目标入站「%s」%s，TCP 连接会断开；请%s", forward.Name, row.Name, cause, fix))
+		}
+	}
+	rels, err := h.repo.ListNodeInboundRelays()
+	if err != nil {
+		log.Printf("proxy-send guard: list relays failed: %v", err)
+	} else {
+		for _, rel := range rels {
+			if rel.ForwardID != forward.ID || rel.Managed != 1 {
+				continue
+			}
+			row, err := h.repo.GetNodeInbound(rel.InboundID)
+			if err != nil || row == nil {
+				continue
+			}
+			addInbound(row)
+		}
+	}
+	rows, err := h.repo.ListNodeInbounds()
+	if err != nil {
+		log.Printf("proxy-send guard: list inbounds failed: %v", err)
+		return warnings
+	}
+	if len(rows) == 0 {
+		return warnings
+	}
+	nodes := make(map[int64]*model.Node)
+	var entryNodeIDs map[int64]bool
+	for _, target := range splitRemoteTargets(forward.RemoteAddr) {
+		for i := range rows {
+			in := &rows[i]
+			if _, port, err := parseTargetAddress(target); err != nil || port != in.Port {
+				continue
+			}
+			node, ok := nodes[in.NodeID]
+			if !ok {
+				var nodeErr error
+				node, nodeErr = h.repo.GetNodeByID(in.NodeID)
+				if nodeErr != nil {
+					log.Printf("proxy-send guard: get node %d failed: %v", in.NodeID, nodeErr)
+					node = nil
+				}
+				nodes[in.NodeID] = node
+			}
+			if entryNodeIDs == nil {
+				entryNodeIDs = make(map[int64]bool)
+				if ports, err := h.listForwardPorts(forward.ID); err == nil {
+					for _, fp := range ports {
+						entryNodeIDs[fp.NodeID] = true
+					}
+				}
+			}
+			if targetDialsInbound(target, in, node, entryNodeIDs) {
+				addInbound(in)
+			}
+		}
+	}
+	return warnings
+}
+
+// relayProxyProtocolSendForInbound 决定托管中转转发可向 row 发送的
+// PROXY 版本：对方接得住才发 relayProxyProtocolVersion，否则发 0
+// 并附警告。用户在转发上显式置 send 时面板只警告不改值（见上），
+// 但这里的 send 是面板按 AcceptProxyProtocol 推导出的——推导出
+// 已知必断的配置再写进去，等于面板亲手造死中转，故拦住不写、只
+// 警告；真实 IP 经此入站无法传递是警告的另一半事实。Accept 未开
+// 时 send=0、无警告（常态）。
+func (h *Handler) relayProxyProtocolSendForInbound(row *model.NodeInbound) (int, string) {
+	if row == nil || row.AcceptProxyProtocol != 1 {
+		return 0, ""
+	}
+	if ok, cause, fix := proxyProtocolSendTargetCheck(row, h.kernelTypeForInbound(row)); !ok {
+		return 0, fmt.Sprintf("入站「%s」已开启获取真实 IP，但%s：中转转发不会向其发送 PROXY 协议头（否则 TCP 会断开），真实 IP 无法经此入站传递；请%s", row.Name, cause, fix)
+	}
+	return relayProxyProtocolVersion, ""
+}
+
 // validateTunnelRelayExits re-runs the landing-exit rule for every
 // inbound relayed through a tunnel against a prospective exit set
 // (X-P2-4 ①: tunnelUpdate 校验段——新出口集违反「出口为落地必须单出口」
@@ -863,10 +1020,11 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ppSend := 0
-	if row.AcceptProxyProtocol == 1 {
-		ppSend = relayProxyProtocolVersion
-	}
+	// FIX-UDP-FIX5 (R1)：ppSend 不再只看 AcceptProxyProtocol==1——
+	// 对方接不住 PROXY 头时（SS 入站、或非 Xray 内核）发了即断
+	// TCP，见 relayProxyProtocolSendForInbound；接不住时 send 置 0
+	// 并把警告带进下方回执，不写死配置。
+	ppSend, ppWarning := h.relayProxyProtocolSendForInbound(row)
 	forwardID, err := h.createRelayForward(userID, name, tunnel, remoteAddr, req.InPort, ppSend)
 	if err != nil {
 		// R3-GEN-01：定型分流回执（createRelayForward 已在源头把可
@@ -923,6 +1081,12 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	// createRelayForward 内的首次同步走丢 warnings 的薄封装，故
 	// 在此显式补算，不能只依赖 syncForwardServicesWithWarnings。
 	warnings = append(warnings, h.shadowTLSRelayWarningsForInbound(row.ID)...)
+	// FIX-UDP-FIX5 (R1)：接不住 PROXY 头的入站上开 Accept 时，本
+	// 中转的 send 已被上文置 0——警告随回执点名（真实 IP 传不过
+	// 去），不静默。
+	if ppWarning != "" {
+		warnings = append(warnings, ppWarning)
+	}
 	if len(warnings) > 0 {
 		response.WriteJSON(w, response.OKWithWarning(map[string]interface{}{"id": rel.ID, "forwardId": forwardID}, strings.Join(warnings, "；")))
 		return
