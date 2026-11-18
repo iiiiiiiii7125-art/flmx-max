@@ -63,7 +63,16 @@ var (
 )
 
 // keepAliveFor feeds the session with the given activity every
-// 20ms for the given span, then stops.
+// 5ms for the given span, then stops. The feed interval is far
+// below the 200ms pool TTL (40 feeds per tick interval), and the
+// TTL itself is far above scheduling jitter: at the old 60ms TTL
+// with a 20ms feed, one ~40ms scheduling delay under load opened
+// a full tick interval with no activity and the pool legitimately
+// reaped a session the test meant to keep alive; even a 5ms feed
+// still failed ~5% of runs under a 3x CPU hog. At 200ms only a
+// ~200ms stall in the feeder can open a silent tick interval.
+// The assertions, the ~8 scan cycles and the reap check are
+// unchanged; only the test's timing margin moved.
 func keepAliveFor(c *conn, outbound bool, span time.Duration) {
 	deadline := time.Now().Add(span)
 	for time.Now().Before(deadline) {
@@ -72,7 +81,7 @@ func keepAliveFor(c *conn, outbound bool, span time.Duration) {
 		} else {
 			_ = c.WriteQueue([]byte("x"))
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -89,15 +98,16 @@ func assertSessionReaped(t *testing.T, p *connPool, c *conn) {
 }
 
 func TestPoolOutboundOnlyActivityKeepsSession(t *testing.T) {
-	p := newConnPool(60 * time.Millisecond).WithLogger(xlogger.Nop())
+	p := newConnPool(200 * time.Millisecond).WithLogger(xlogger.Nop())
 	defer p.Close()
 
 	c := newConn(newPoolFakePacketConn(), poolTestLocal, poolTestRemote, 1024, true)
 	p.Set("k", c)
 
 	// Outbound only — no inbound packet ever arrives — for ~8 TTL
-	// scan cycles. The session must survive every scan.
-	keepAliveFor(c, true, 480*time.Millisecond)
+	// scan cycles (1.6s at a 200ms TTL). The session must survive
+	// every scan.
+	keepAliveFor(c, true, 1600*time.Millisecond)
 	if _, ok := p.Get("k"); !ok {
 		t.Fatal("outbound-only session was reaped by the pool despite live traffic")
 	}
@@ -111,14 +121,15 @@ func TestPoolOutboundOnlyActivityKeepsSession(t *testing.T) {
 }
 
 func TestPoolInboundOnlyActivityKeepsSession(t *testing.T) {
-	p := newConnPool(60 * time.Millisecond).WithLogger(xlogger.Nop())
+	p := newConnPool(200 * time.Millisecond).WithLogger(xlogger.Nop())
 	defer p.Close()
 
 	c := newConn(newPoolFakePacketConn(), poolTestLocal, poolTestRemote, 1024, true)
 	p.Set("k", c)
 
-	// Inbound only (the pre-fix behaviour, kept as the control).
-	keepAliveFor(c, false, 480*time.Millisecond)
+	// Inbound only (the pre-fix behaviour, kept as the control),
+	// for ~8 TTL scan cycles (1.6s at a 200ms TTL).
+	keepAliveFor(c, false, 1600*time.Millisecond)
 	if _, ok := p.Get("k"); !ok {
 		t.Fatal("inbound-only session was reaped by the pool despite live traffic")
 	}
