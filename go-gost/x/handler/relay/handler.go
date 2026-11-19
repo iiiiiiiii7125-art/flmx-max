@@ -65,6 +65,16 @@ func (h *relayHandler) Init(md md.Metadata) (err error) {
 		return err
 	}
 
+	// One line per relay service at startup/reload so a deployed
+	// build's pacing state is visible in the agent log.
+	if h.options.Logger != nil {
+		if h.md.udpEgressPacing > 0 {
+			h.options.Logger.Infof("relay: udp egress pacing %s per datagram", h.md.udpEgressPacing)
+		} else {
+			h.options.Logger.Infof("relay: udp egress pacing disabled")
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
 
