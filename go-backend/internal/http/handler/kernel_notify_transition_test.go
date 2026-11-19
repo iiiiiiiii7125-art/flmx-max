@@ -33,14 +33,18 @@ import (
 //   - apply/drift/rearm 用例在修复前必须 FAIL（0 事件）、修复后 PASS。
 
 type kernelNotifyMock struct {
-	mu          sync.Mutex
-	applyMode   string // "ok" | "errorState" | "fail"
-	applyErr    string
-	reportMode  string // "running" | "error" | "none"
-	reportErr   string
-	lastHash    string
-	applyCalls  int
-	statusCalls int
+	mu        sync.Mutex
+	applyMode string // "ok" | "errorState" | "fail"
+	applyErr  string
+	// applyVersion overrides the version string the mock reports in
+	// its KernelApply reply (default "v25.1.1"); fork F3 tests set it
+	// to a sing-box banner to prove the panel-side version check.
+	applyVersion string
+	reportMode   string // "running" | "error" | "none"
+	reportErr    string
+	lastHash     string
+	applyCalls   int
+	statusCalls  int
 	// R4C-02: programmable nft surface of the KernelStatus reply
 	// (zero values reproduce the historical mock: nftAvailable
 	// false, no read error, not not-installed).
@@ -69,6 +73,12 @@ func (m *kernelNotifyMock) setApply(mode, errText string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.applyMode, m.applyErr = mode, errText
+}
+
+func (m *kernelNotifyMock) setApplyVersion(v string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.applyVersion = v
 }
 
 func (m *kernelNotifyMock) setReport(mode, errText string) {
@@ -164,6 +174,10 @@ func startKernelNotifyMockNode(t *testing.T, baseURL, secret string, mock *kerne
 				mock.applyCalls++
 				mock.lastHash = body.Hash
 				mode, aerr := mock.applyMode, mock.applyErr
+				ver := mock.applyVersion
+				if ver == "" {
+					ver = "v25.1.1"
+				}
 				hash := mock.lastHash
 				mock.mu.Unlock()
 				switch mode {
@@ -173,12 +187,12 @@ func startKernelNotifyMockNode(t *testing.T, baseURL, secret string, mock *kerne
 				case "errorState":
 					resp["data"] = map[string]interface{}{
 						"type": "xray", "running": false, "enabled": true, "pid": 0, "startedAt": 0,
-						"version": "v25.1.1", "configHash": hash, "error": aerr,
+						"version": ver, "configHash": hash, "error": aerr,
 					}
 				default:
 					resp["data"] = map[string]interface{}{
 						"type": "xray", "running": true, "enabled": true, "pid": 4242, "startedAt": 1,
-						"version": "v25.1.1", "configHash": hash,
+						"version": ver, "configHash": hash,
 					}
 				}
 			case "KernelStatus":

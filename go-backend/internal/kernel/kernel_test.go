@@ -302,12 +302,20 @@ func TestResolveDownload(t *testing.T) {
 
 	sb, _ := Lookup(TypeSingbox)
 	sl, err := ResolveDownload(sb, "latest", "")
-	if err != nil || !strings.Contains(sl["url"].(string), "{VERSION}") || sl["github"].(map[string]interface{})["repo"] != "SagerNet/sing-box" {
+	if err != nil || !strings.Contains(sl["url"].(string), "{VERSION}") || sl["github"].(map[string]interface{})["repo"] != SingboxForkRepo {
 		t.Fatalf("sing-box latest must defer to the agent: %v %v", sl, err)
 	}
 	sv, _ := ResolveDownload(sb, "1.12.8", "")
-	if sv["url"] != "https://github.com/SagerNet/sing-box/releases/download/v1.12.8/sing-box-1.12.8-linux-{ARCH}.tar.gz" || sv["github"].(map[string]interface{})["tag"] != "v1.12.8" {
+	if sv["url"] != "https://github.com/"+SingboxForkRepo+"/releases/download/v1.12.8/sing-box-1.12.8-linux-{ARCH}.tar.gz" || sv["github"].(map[string]interface{})["tag"] != "v1.12.8" {
 		t.Fatalf("sing-box pinned version: %v", sv)
+	}
+	// Fork 构建：默认源是 fork 仓，tag 与资产名带 -flmx1 后缀。
+	sf, err := ResolveDownload(sb, SingboxForkVersion, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sf["url"] != "https://github.com/"+SingboxForkRepo+"/releases/download/v1.14.4-flmx1/sing-box-1.14.4-flmx1-linux-{ARCH}.tar.gz" || sf["github"].(map[string]interface{})["tag"] != "v1.14.4-flmx1" {
+		t.Fatalf("sing-box fork version: %v", sf)
 	}
 
 }

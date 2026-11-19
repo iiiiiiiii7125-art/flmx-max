@@ -28,6 +28,15 @@ func TestVersionBelowStrictUnits(t *testing.T) {
 		{"1.14.0.5", false},     // 第四段起为发行后缀、按家族契约忽略（与三段/补段严格变体一致）
 		{"1.14.0.5-rc1", false}, // 第四段带后缀同为发行后缀、不消费，达下限放行（R6-06 补钉）
 		{"1.13.0.5-rc1", true},  // 前两段低于下限，第四段带后缀不改变判定、仍拒（R6-06 补钉）
+		// Fork 格：只剥 "-flmx<数字>" 后缀（1.14.4-flmx1 按 1.14.4
+		// 计），其余后缀仍 fail-closed。
+		{"1.14.4-flmx1", false},    // fork 构建达 1.14 门
+		{"v1.14.4-flmx1", false},   // v 前缀 + fork 后缀同判
+		{"1.14.4-flmx", false},     // 裸 -flmx 后缀同剥
+		{"1.14.4-rc1", true},       // -rc1 仍被拒
+		{"1.14.4-flmx1-rc1", true}, // 复合后缀不在白名单内，仍被拒
+		{"1.14.3-flmx1", false},    // 剥后缀后 1.14.3 仍达 1.14 两段门
+		{"1.13.9-flmx1", true},     // 剥后缀后数值仍低于下限，仍拒
 		{"latest", false},
 		{"", false},
 		{" 1.13 ", true}, // TrimSpace 后数值比较
@@ -51,6 +60,8 @@ func TestVersionBelow3StrictUnits(t *testing.T) {
 		{"25.9.4.9", true},      // 四段按前三段，低于下限
 		{"25.9.5.1-rc1", false}, // 第四段带后缀不消费，恰达下限放行（R6-06 补钉）
 		{"25.9.4.9-rc1", true},  // 第四段带后缀不消费，低于下限仍拒（R6-06 补钉）
+		{"25.9.5-flmx1", false}, // fork 后缀剥离口径与两段变体一致
+		{"25.9.5-rc1", true},    // -rc1 仍被拒
 		{"latest", false},
 		{"", false},
 	} {
@@ -73,6 +84,8 @@ func TestVersionBelowPaddedStrictUnits(t *testing.T) {
 		{"25.6.8.9", false},     // 四段按前三段
 		{"25.6.8.9-rc1", false}, // 第四段带后缀不消费，恰达下限放行（R6-06 补钉）
 		{"25.6.7.9-rc1", true},  // 第四段带后缀不消费，低于下限仍拒（R6-06 补钉）
+		{"25.6.8-flmx1", false}, // fork 后缀剥离口径与两段/三段变体一致
+		{"25.6.8-rc1", true},    // -rc1 仍被拒
 		{"latest", false},
 		{"", false},
 	} {
