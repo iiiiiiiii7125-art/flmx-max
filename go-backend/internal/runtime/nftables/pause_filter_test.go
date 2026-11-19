@@ -217,7 +217,7 @@ func TestManagerSetBlockedUnsupportedRunner(t *testing.T) {
 func TestManagerClearAlsoClearsBlocks(t *testing.T) {
 	runner := &blockingRunner{}
 	manager := NewManager(runner)
-	if err := manager.Clear(context.Background(), SSHConfig{}); err != nil {
+	if err := manager.Clear(context.Background(), SSHConfig{}, false); err != nil {
 		t.Fatalf("Clear: %v", err)
 	}
 	if len(runner.scripts) != 1 {
@@ -231,7 +231,7 @@ func TestManagerClearAlsoClearsBlocks(t *testing.T) {
 func TestManagerClearPropagatesClearBlocksError(t *testing.T) {
 	runner := &blockingRunner{clearBlocksErr: errors.New("delete table failed")}
 	manager := NewManager(runner)
-	if err := manager.Clear(context.Background(), SSHConfig{}); err == nil {
+	if err := manager.Clear(context.Background(), SSHConfig{}, false); err == nil {
 		t.Fatalf("expected ClearBlocks error to propagate")
 	}
 }

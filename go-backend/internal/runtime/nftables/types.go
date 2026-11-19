@@ -29,7 +29,22 @@ type Rule struct {
 
 type NodePlan struct {
 	NodeID int64
-	Rules  []Rule
+	// InstanceID is this panel install's instance key (FLMX_INSTANCE;
+	// "" is the default instance). It selects the nft table the plan
+	// renders into (see TableNameForInstance): two panels sharing a
+	// node must not render into the same table. Zero value reads as
+	// the default instance, never the plain table.
+	InstanceID string
+	// MigratePlainTables is the B-01 ownership proof for the one-shot
+	// upgrade migration (see buildApplyCommand): true only when this
+	// panel install has previously applied nft rules to this node
+	// successfully (a persisted nft_rule_binding row exists — the
+	// panel-side analogue of the agent's persisted signature). The
+	// handler sets it from the DB; the runtime never invents it.
+	// False (zero value) means "no proof": a plain table on the node
+	// must be left alone, it may be another panel's live table.
+	MigratePlainTables bool
+	Rules              []Rule
 }
 
 type SSHConfig struct {

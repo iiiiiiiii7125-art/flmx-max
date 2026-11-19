@@ -45,7 +45,7 @@ func (m *blockingNftablesManager) Reconcile(_ context.Context, cfg runtimenft.SS
 	return runtimenft.ApplyResult{NodeID: plan.NodeID, Script: "table inet flvx {}", Hashes: runtimenft.PlanHashes(plan)}, nil
 }
 
-func (m *blockingNftablesManager) Clear(_ context.Context, _ runtimenft.SSHConfig) error {
+func (m *blockingNftablesManager) Clear(_ context.Context, _ runtimenft.SSHConfig, _ bool) error {
 	return nil
 }
 

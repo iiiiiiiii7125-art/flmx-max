@@ -41,7 +41,7 @@ func (pcIntNftPassthrough) Reconcile(_ context.Context, _ runtimenft.SSHConfig, 
 	return runtimenft.ApplyResult{NodeID: plan.NodeID, Script: "table inet flvx {}", Hashes: runtimenft.PlanHashes(plan)}, nil
 }
 
-func (pcIntNftPassthrough) Clear(_ context.Context, _ runtimenft.SSHConfig) error {
+func (pcIntNftPassthrough) Clear(_ context.Context, _ runtimenft.SSHConfig, _ bool) error {
 	return nil
 }
 

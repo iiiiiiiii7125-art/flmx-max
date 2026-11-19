@@ -135,8 +135,8 @@ func (m *failFirstReconcileManager) Reconcile(ctx context.Context, cfg runtimenf
 	return m.inner.Reconcile(ctx, cfg, plan)
 }
 
-func (m *failFirstReconcileManager) Clear(ctx context.Context, cfg runtimenft.SSHConfig) error {
-	return m.inner.Clear(ctx, cfg)
+func (m *failFirstReconcileManager) Clear(ctx context.Context, cfg runtimenft.SSHConfig, migratePlain bool) error {
+	return m.inner.Clear(ctx, cfg, migratePlain)
 }
 
 func (m *failFirstReconcileManager) CollectCounters(ctx context.Context, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error) {

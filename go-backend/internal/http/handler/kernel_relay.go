@@ -972,29 +972,46 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// W3/IRL-3（后端半）：中转创建去重闸——同一入站经同一隧道到同一
-	// 落地目标的中转已存在时点名拒绝，不再建第二条。此前本面无任何
-	// 查重，前端双击/重复提交（或不带 Idempotency-Key 的直调）即建出
+	// 落地目标、且入口端口也相同的中转已存在时点名拒绝，不再建第二条。
+	// 此前本面无任何查重，前端双击/重复提交（或不带 Idempotency-Key 的直调）即建出
 	// 两条同入站同目标中转及两条转发与两份服务。口径：托管
-	// （Managed=1）且转发仍存续的中转行，(隧道, 落地目标) 全等才算
+	// （Managed=1）且转发仍存续的中转行，(隧道, 落地目标, 入口端口) 全等才算
 	// 重复；同隧道不同出口集（多出口变体走 relayTargetWithExits 的
-	// 创建面不在本端点）算出的目标不同、不误杀。查重失败 fail-closed
+	// 创建面不在本端点）算出的目标不同、不误杀；同隧道同目标、入口端口
+	// 不同是用户要的多条中转，放行。自动选口（InPort<=0）时闸跑在选口
+	// 之前、尚无端口可比，故跳过本闸：选口本就排除已用端口，落库又有
+	// CreateForwardTx 的逐节点端口锁＋锁内复检＋forward_port 唯一索引
+	// 兜底，撞口换口重试，不会与既有中转落到同一端口。查重失败 fail-closed
 	// 中止创建（与本仓去重门同口径：查不了就不写）。
-	existingRelays, err := h.repo.ListInboundRelays(row.ID)
-	if err != nil {
-		respondInternalError(w, "inboundRelayCreate", err)
-		return
-	}
-	for _, rel := range existingRelays {
-		if rel.Managed != 1 || !rel.ForwardExists {
-			continue
-		}
-		fwd, ferr := h.getForwardRecord(rel.ForwardID)
-		if ferr != nil || fwd == nil {
-			continue
-		}
-		if fwd.TunnelID == tunnel.ID && fwd.RemoteAddr == remoteAddr {
-			response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("该入站已建有经同一隧道到相同落地目标的中转「%s」，请勿重复创建", rel.Name)))
+	if req.InPort > 0 {
+		existingRelays, err := h.repo.ListInboundRelays(row.ID)
+		if err != nil {
+			respondInternalError(w, "inboundRelayCreate", err)
 			return
+		}
+		for _, rel := range existingRelays {
+			if rel.Managed != 1 || !rel.ForwardExists {
+				continue
+			}
+			fwd, ferr := h.getForwardRecord(rel.ForwardID)
+			if ferr != nil || fwd == nil {
+				continue
+			}
+			if fwd.TunnelID != tunnel.ID || fwd.RemoteAddr != remoteAddr {
+				continue
+			}
+			// 转发的入口端口在 forward_port 行上（多入口节点同口）：
+			// 任一行与本次请求的端口相同即算重复。
+			ports, perr := h.repo.ListForwardPorts(rel.ForwardID)
+			if perr != nil || len(ports) == 0 {
+				continue
+			}
+			for _, p := range ports {
+				if p.Port == req.InPort {
+					response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("该入站已建有经同一隧道到相同落地目标的中转「%s」，请勿重复创建", rel.Name)))
+					return
+				}
+			}
 		}
 	}
 

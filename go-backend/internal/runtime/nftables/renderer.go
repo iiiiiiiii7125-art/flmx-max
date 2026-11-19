@@ -9,16 +9,40 @@ import (
 	"strings"
 )
 
-// 改名过渡：表名由 flvx 改为 flmx。runner 的应用脚本会同时删除 legacy
-// 表，避免旧表残留在内核中继续生效（转发/计数双份）。
+// 改名过渡：表名由 flvx 改为 flmx，旧 plain 名只在升级迁移里删
+// （见 buildApplyCommand 的首建门控）。当前表名按面板实例隔离
+// （P1-1）：同机多面板、或面板与同源项目共管同一节点时，plain
+// 名 flmx 会让后下发的一方删建前一方的整张转发/计数表。
 const (
-	tableName       = "flmx"
+	// plainTableName 是隔离前的 plain 表名；新表不再用它，只在
+	// 迁移时清理。
+	plainTableName = "flmx"
+	// legacyTableName 是改名前的表名；同样只在迁移时清理。
 	legacyTableName = "flvx"
 )
 
+// TableNameForInstance derives this panel install's nft table name
+// from its instance key (FLMX_INSTANCE; "" is the default
+// instance): flmx_<first 8 hex of sha256(instance)>. Stable across
+// restarts (same instance, same table), distinct per instance, and
+// a valid nft identifier. The default instance hashes to the fixed
+// name flmx_e3b0c442 (sha256("") = e3b0c442...).
+func TableNameForInstance(instance string) string {
+	sum := sha256.Sum256([]byte(instance))
+	return "flmx_" + hex.EncodeToString(sum[:])[:8]
+}
+
+// TableName returns the nft table this plan renders into. A plan
+// without an instance key (zero value, old callers) renders into
+// the default instance's table, never the plain name.
+func (p NodePlan) TableName() string {
+	return TableNameForInstance(p.InstanceID)
+}
+
 func RenderTable(plan NodePlan) string {
+	table := plan.TableName()
 	var b strings.Builder
-	b.WriteString("table inet " + tableName + " {\n")
+	b.WriteString("table inet " + table + " {\n")
 	b.WriteString("  chain prerouting {\n")
 	b.WriteString("    type nat hook prerouting priority dstnat; policy accept;\n")
 	for _, rule := range sortedRules(plan.Rules) {
@@ -34,13 +58,17 @@ func RenderTable(plan NodePlan) string {
 			bindMatch = fmt.Sprintf("%s daddr %s ", fam, ip)
 		}
 		for _, protocol := range normalizedProtocols(rule.Protocols) {
-			b.WriteString(fmt.Sprintf("    %s %sdport %d counter dnat %sto %s comment %q\n",
-				protocol,
+			// R-B01-01：L3 匹配（ip daddr）必须在 L4 匹配（tcp/udp dport）
+			// 之前——nft 要求按协议栈顺序写，`tcp ip daddr …` 报
+			// `syntax error, unexpected ip`。bindMatch 为空时渲染与
+			// 之前完全一致（`tcp dport …`）。
+			b.WriteString(fmt.Sprintf("    %s%s dport %d counter dnat %sto %s comment %q\n",
 				bindMatch,
+				protocol,
 				rule.InPort,
 				dnatFamily,
 				formatDNATTarget(rule.TargetHost, rule.TargetPort),
-				counterComment(rule.ForwardID, CounterDirectionDNAT, protocol),
+				counterComment(table, rule.ForwardID, CounterDirectionDNAT, protocol),
 			))
 		}
 	}
@@ -48,7 +76,7 @@ func RenderTable(plan NodePlan) string {
 	b.WriteString("  chain postrouting {\n")
 	b.WriteString("    type nat hook postrouting priority srcnat; policy accept;\n")
 	if len(plan.Rules) > 0 {
-		b.WriteString("    masquerade comment \"" + tableName + " masquerade\"\n")
+		b.WriteString("    masquerade comment \"" + table + " masquerade\"\n")
 	}
 	b.WriteString("  }\n\n")
 	b.WriteString("  chain forward {\n")
@@ -74,7 +102,7 @@ func RenderTable(plan NodePlan) string {
 				targetHost,
 				protocol,
 				rule.TargetPort,
-				counterComment(rule.ForwardID, CounterDirectionToTarget, protocol),
+				counterComment(table, rule.ForwardID, CounterDirectionToTarget, protocol),
 			))
 			b.WriteString(fmt.Sprintf("    meta l4proto %s ct original proto-dst %d %s%s saddr %s %s sport %d counter comment %q\n",
 				protocol,
@@ -84,7 +112,7 @@ func RenderTable(plan NodePlan) string {
 				targetHost,
 				protocol,
 				rule.TargetPort,
-				counterComment(rule.ForwardID, CounterDirectionFromTarget, protocol),
+				counterComment(table, rule.ForwardID, CounterDirectionFromTarget, protocol),
 			))
 		}
 	}
@@ -150,8 +178,8 @@ func ValidatePlan(plan NodePlan) error {
 	return nil
 }
 
-func counterComment(forwardID int64, direction, protocol string) string {
-	return fmt.Sprintf("%s forward:%d %s %s", tableName, forwardID, direction, protocol)
+func counterComment(table string, forwardID int64, direction, protocol string) string {
+	return fmt.Sprintf("%s forward:%d %s %s", table, forwardID, direction, protocol)
 }
 
 func RuleHash(rule Rule) string {
