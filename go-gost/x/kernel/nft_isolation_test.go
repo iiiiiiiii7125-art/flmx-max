@@ -20,10 +20,20 @@ import (
 // binary's own directory (ResolveBaseDir) and the table name follows
 // the root (nftTableForBaseDir).
 
-func TestNftTableForBaseDirCanonicalKeepsPlainName(t *testing.T) {
+func TestNftTableForBaseDirCanonicalIsolated(t *testing.T) {
 	stubKernelResolution(t, false, "/anywhere", nil, "/etc/flmx_agent/flmx_agent", nil)
-	if got := nftTableForBaseDir(defaultBaseDir); got != nftTable {
-		t.Fatalf("current canonical root %q must keep the plain table, got %q", defaultBaseDir, got)
+	got := nftTableForBaseDir(defaultBaseDir)
+	if got == nftTable {
+		t.Fatalf("current canonical root %q must not use the plain table, got %q", defaultBaseDir, got)
+	}
+	if !strings.HasPrefix(got, nftTable+"_") || len(got) != len(nftTable)+1+8 {
+		t.Fatalf("canonical table must be flmx_kernel_<8 hex>: %q", got)
+	}
+	if again := nftTableForBaseDir(defaultBaseDir); again != got {
+		t.Fatalf("table derivation must be stable: %q vs %q", again, got)
+	}
+	if got == nftTableForBaseDir(legacyBaseDir) {
+		t.Fatal("canonical and legacy roots must not share a table")
 	}
 }
 
@@ -79,12 +89,20 @@ func TestLegacyAndCurrentAgentsDoNotShareNftTable(t *testing.T) {
 	}
 }
 
-func TestNftTableForBaseDirContainerKeepsPlainName(t *testing.T) {
+func TestNftTableForBaseDirContainerIsolated(t *testing.T) {
 	stubKernelResolution(t, true, "/data", nil, "/usr/local/bin/flmx_agent", nil)
-	for _, base := range []string{"/data/kernels", "/other/kernels"} {
-		if got := nftTableForBaseDir(base); got != nftTable {
-			t.Fatalf("container form root %q must keep the plain table, got %q", base, got)
+	a := nftTableForBaseDir("/data/kernels")
+	b := nftTableForBaseDir("/other/kernels")
+	for _, got := range []string{a, b} {
+		if got == nftTable {
+			t.Fatalf("container form root must not use the plain table, got %q", got)
 		}
+		if !strings.HasPrefix(got, nftTable+"_") || len(got) != len(nftTable)+1+8 {
+			t.Fatalf("container table must be flmx_kernel_<8 hex>: %q", got)
+		}
+	}
+	if a == b {
+		t.Fatalf("different container roots must get different tables: %q", a)
 	}
 }
 
@@ -277,17 +295,44 @@ func TestRemoveTablesCanonicalDeletesLegacyToo(t *testing.T) {
 	t.Cleanup(func() { nftRunner = oldRunner })
 
 	n := newNftCounters(defaultBaseDir)
-	if n.tableName() != nftTable {
-		t.Fatalf("canonical counter must use the plain table, got %q", n.tableName())
+	n.state = nftState{}
+	if n.tableName() == nftTable {
+		t.Fatalf("canonical counter must not use the plain table, got %q", n.tableName())
 	}
 	if err := n.removeTables(); err != nil {
 		t.Fatalf("removeTables: %v", err)
 	}
 	script := scripts[0]
-	for _, want := range []string{"delete table inet flmx_kernel\n", "delete table inet flvx_kernel\n", "delete table inet flmx_kernel_legacy\n", "delete table inet flmx_hop_probe\n"} {
+	for _, want := range []string{"delete table inet " + n.tableName() + "\n", "delete table inet flvx_kernel\n", "delete table inet flmx_kernel_legacy\n", "delete table inet flmx_hop_probe\n"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("canonical removeTables must delete %q: %s", want, script)
 		}
+	}
+	if strings.Contains(script, "delete table inet flmx_kernel\n") {
+		t.Fatalf("fresh canonical removeTables must not delete the plain table: %s", script)
+	}
+}
+
+// P1-1: a canonical install upgraded from the pre-fix build still
+// owns its old plain table (a persisted pre-fix signature proves
+// it), so uninstall deletes it; a fresh install never owned one.
+func TestRemoveTablesCanonicalWithOldStateDeletesPlainTable(t *testing.T) {
+	stubKernelResolution(t, false, "/anywhere", nil, "/etc/flmx_agent/flmx_agent", nil)
+	var scripts []string
+	oldRunner := nftRunner
+	nftRunner = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+		scripts = append(scripts, stdin)
+		return nil, nil
+	}
+	t.Cleanup(func() { nftRunner = oldRunner })
+
+	n := newNftCounters(defaultBaseDir)
+	n.state = nftState{Signature: "pre-fix", Epoch: "old"}
+	if err := n.removeTables(); err != nil {
+		t.Fatalf("removeTables: %v", err)
+	}
+	if !strings.Contains(scripts[0], "delete table inet flmx_kernel\n") {
+		t.Fatalf("upgraded canonical removeTables must delete its old plain table: %s", scripts[0])
 	}
 }
 
@@ -312,7 +357,7 @@ func TestParseCountersIgnoresOtherTables(t *testing.T) {
 // own executable path is a scratch install — ResolveBaseDir must root
 // under that directory, and two counters rooted at different
 // installs must sync into two different kernel tables while the live
-// agent's flmx_kernel table stays byte-identical (fingerprint with
+// agent's table stays byte-identical (fingerprint with
 // counter values masked). Cleanup removes both test tables.
 func TestLiveTwoAgentsDoNotShareNftTable(t *testing.T) {
 	if os.Getenv("FLMX_LIVE_NFT") != "1" {
@@ -342,7 +387,7 @@ func TestLiveTwoAgentsDoNotShareNftTable(t *testing.T) {
 	live := newNftCounters(defaultBaseDir)
 	fpLive0, err := live.tableFingerprint(ctx)
 	if err != nil {
-		t.Fatalf("live flmx_kernel table must exist before the test: %v", err)
+		t.Fatalf("live agent table must exist before the test: %v", err)
 	}
 
 	dirB := filepath.Join(t.TempDir(), "kernels")
@@ -396,5 +441,132 @@ func TestLiveTwoAgentsDoNotShareNftTable(t *testing.T) {
 	}
 	if fp, err := live.tableFingerprint(ctx); err != nil || fp != fpLive0 {
 		t.Fatalf("syncs changed the live table: fp=%q err=%v (was %q)", fp, err, fpLive0)
+	}
+}
+
+// P1-1 upgrade migration: the first post-upgrade sync of an install
+// that previously applied with the plain table removes its own old
+// plain tables (flmx_kernel, flvx_kernel) in the same atomic script
+// that builds its new hashed table, records the migration in
+// nft.json, and never touches a plain table again.
+
+func TestSyncMigratesPlainTablesOnce(t *testing.T) {
+	stubKernelResolution(t, false, "/anywhere", nil, "/etc/flmx_agent/flmx_agent", nil)
+	f := stubFakeNftTables(t)
+	ctx := context.Background()
+
+	// The pre-fix plain tables, as the old build left them.
+	f.tables[nftTable] = "table inet flmx_kernel {\n}\n"
+	f.tables[legacyNFTTable] = "table inet flvx_kernel {\n}\n"
+	n := &nftCounters{
+		statePath: filepath.Join(t.TempDir(), "nft.json"),
+		baseDir:   defaultBaseDir,
+		table:     nftTableForBaseDir(defaultBaseDir),
+		state:     nftState{Signature: "pre-fix", Epoch: "old"},
+	}
+	ports := []Port{{InboundID: 901, Port: 18001, Network: "tcp,udp"}}
+	if err := n.sync(ports, nil, nil); err != nil {
+		t.Fatalf("migrating sync: %v", err)
+	}
+	for _, plain := range []string{nftTable, legacyNFTTable} {
+		if _, ok := f.tables[plain]; ok {
+			t.Fatalf("migrating sync must delete the pre-fix plain table %q", plain)
+		}
+	}
+	if _, err := n.tableFingerprint(ctx); err != nil {
+		t.Fatalf("hashed table must exist after migrating sync: %v", err)
+	}
+	if !n.state.Migrated {
+		t.Fatal("state must record the migration after the migrating sync")
+	}
+
+	// A plain table that shows up later (another install's live
+	// table, or a re-created one) must survive later syncs: the
+	// migration runs once. Force a real re-apply with a changed
+	// ruleset so the early return cannot mask a second delete.
+	f.tables[nftTable] = "table inet flmx_kernel {\n}\n"
+	if err := n.sync(append(ports, Port{InboundID: 902, Port: 18002, Network: "tcp"}), nil, nil); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	if _, ok := f.tables[nftTable]; !ok {
+		t.Fatal("second sync must not delete a plain table again")
+	}
+	if _, err := n.tableFingerprint(ctx); err != nil {
+		t.Fatalf("hashed table must still exist after second sync: %v", err)
+	}
+}
+
+// A fresh install has no persisted signature, so a plain table on
+// the host cannot be its own: the sync must leave it alone.
+func TestSyncSkipsMigrationForFreshInstall(t *testing.T) {
+	stubKernelResolution(t, false, "/anywhere", nil, "/etc/flmx_agent/flmx_agent", nil)
+	f := stubFakeNftTables(t)
+
+	f.tables[nftTable] = "table inet flmx_kernel {\n}\n"
+	f.tables[legacyNFTTable] = "table inet flvx_kernel {\n}\n"
+	n := &nftCounters{
+		statePath: filepath.Join(t.TempDir(), "nft.json"),
+		baseDir:   defaultBaseDir,
+		table:     nftTableForBaseDir(defaultBaseDir),
+	}
+	if err := n.sync([]Port{{InboundID: 901, Port: 18001, Network: "tcp,udp"}}, nil, nil); err != nil {
+		t.Fatalf("fresh sync: %v", err)
+	}
+	for _, plain := range []string{nftTable, legacyNFTTable} {
+		if _, ok := f.tables[plain]; !ok {
+			t.Fatalf("fresh sync must not delete the plain table %q", plain)
+		}
+	}
+	if !n.state.Migrated {
+		t.Fatal("fresh install must record that there is nothing to migrate")
+	}
+}
+
+// The legacy root never owned a plain table (its table was always
+// flmx_kernel_legacy), so its syncs must not touch the plain
+// tables even with a pre-fix signature on disk.
+func TestSyncSkipsMigrationForLegacyRoot(t *testing.T) {
+	stubKernelResolution(t, false, "/anywhere", nil, "/etc/flux_agent/flux_agent", nil)
+	f := stubFakeNftTables(t)
+
+	f.tables[nftTable] = "table inet flmx_kernel {\n}\n"
+	n := &nftCounters{
+		statePath: filepath.Join(t.TempDir(), "nft.json"),
+		baseDir:   legacyBaseDir,
+		table:     nftTableForBaseDir(legacyBaseDir),
+		state:     nftState{Signature: "pre-fix", Epoch: "old"},
+	}
+	if err := n.sync([]Port{{InboundID: 901, Port: 18001, Network: "tcp"}}, nil, nil); err != nil {
+		t.Fatalf("legacy sync: %v", err)
+	}
+	if _, ok := f.tables[nftTable]; !ok {
+		t.Fatal("legacy sync must not delete the plain table")
+	}
+	if _, err := n.tableFingerprint(context.Background()); err != nil {
+		t.Fatalf("legacy table must exist after legacy sync: %v", err)
+	}
+}
+
+// The container form used the plain table pre-fix too, so a
+// container install with a pre-fix signature migrates as well.
+func TestSyncMigratesPlainTablesInContainer(t *testing.T) {
+	stubKernelResolution(t, true, "/data", nil, "/usr/local/bin/flmx_agent", nil)
+	f := stubFakeNftTables(t)
+
+	f.tables[nftTable] = "table inet flmx_kernel {\n}\n"
+	n := &nftCounters{
+		statePath: filepath.Join(t.TempDir(), "nft.json"),
+		baseDir:   "/data/kernels",
+		table:     nftTableForBaseDir("/data/kernels"),
+		state:     nftState{Signature: "pre-fix", Epoch: "old"},
+	}
+	if err := n.sync([]Port{{InboundID: 901, Port: 18001, Network: "tcp"}}, nil, nil); err != nil {
+		t.Fatalf("container migrating sync: %v", err)
+	}
+	if _, ok := f.tables[nftTable]; ok {
+		t.Fatal("container migrating sync must delete the pre-fix plain table")
+	}
+	if !n.state.Migrated {
+		t.Fatal("state must record the migration after the container migrating sync")
 	}
 }

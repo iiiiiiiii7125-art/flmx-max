@@ -3,7 +3,7 @@ package nftables
 import "testing"
 
 func TestParseCounterCommentAcceptsValidToTargetTCP(t *testing.T) {
-	sample, ok := ParseCounterComment("flmx forward:42 to-target tcp")
+	sample, ok := ParseCounterComment("flmx_e3b0c442 forward:42 to-target tcp", "flmx_e3b0c442")
 	if !ok {
 		t.Fatal("expected comment to parse")
 	}
@@ -15,7 +15,7 @@ func TestParseCounterCommentAcceptsValidToTargetTCP(t *testing.T) {
 }
 
 func TestParseCounterCommentRejectsDNAT(t *testing.T) {
-	if sample, ok := ParseCounterComment("flmx forward:42 dnat tcp"); ok {
+	if sample, ok := ParseCounterComment("flmx_e3b0c442 forward:42 dnat tcp", "flmx_e3b0c442"); ok {
 		t.Fatalf("expected dnat comment to be rejected, got %+v", sample)
 	}
 }
@@ -26,10 +26,10 @@ func TestParseCounterSamplesParsesForwardBillableCounters(t *testing.T) {
 			{"metainfo": {"json_schema_version": 1}},
 			{"rule": {
 				"family": "inet",
-				"table": "flmx",
+				"table": "flmx_e3b0c442",
 				"chain": "forward",
 				"handle": 10,
-				"comment": "flmx forward:42 to-target tcp",
+				"comment": "flmx_e3b0c442 forward:42 to-target tcp",
 				"expr": [
 					{"match": {"left": {"payload": {"protocol": "ip", "field": "daddr"}}, "op": "==", "right": "198.51.100.20"}},
 					{"counter": {"packets": 7, "bytes": 4096}}
@@ -37,20 +37,20 @@ func TestParseCounterSamplesParsesForwardBillableCounters(t *testing.T) {
 			}},
 			{"rule": {
 				"family": "inet",
-				"table": "flmx",
+				"table": "flmx_e3b0c442",
 				"chain": "forward",
 				"handle": 11,
-				"comment": "flmx forward:42 from-target udp",
+				"comment": "flmx_e3b0c442 forward:42 from-target udp",
 				"expr": [
 					{"counter": {"packets": 9, "bytes": 8192}}
 				]
 			}},
 			{"rule": {
 				"family": "inet",
-				"table": "flmx",
+				"table": "flmx_e3b0c442",
 				"chain": "prerouting",
 				"handle": 12,
-				"comment": "flmx forward:42 dnat tcp",
+				"comment": "flmx_e3b0c442 forward:42 dnat tcp",
 				"expr": [
 					{"counter": {"packets": 100, "bytes": 65536}}
 				]
@@ -58,7 +58,7 @@ func TestParseCounterSamplesParsesForwardBillableCounters(t *testing.T) {
 		]
 	}`)
 
-	samples, err := ParseCounterSamples(raw)
+	samples, err := ParseCounterSamples(raw, "flmx_e3b0c442")
 	if err != nil {
 		t.Fatalf("ParseCounterSamples: %v", err)
 	}
@@ -81,9 +81,9 @@ func TestParseCounterSamplesUsesRuleLevelComment(t *testing.T) {
 	raw := []byte(`{
 		"nftables": [
 			{"rule": {
-				"table": "flmx",
+				"table": "flmx_e3b0c442",
 				"chain": "forward",
-				"comment": "flmx forward:77 to-target udp",
+				"comment": "flmx_e3b0c442 forward:77 to-target udp",
 				"expr": [
 					{"counter": {"packets": 3, "bytes": 2048}}
 				]
@@ -91,7 +91,7 @@ func TestParseCounterSamplesUsesRuleLevelComment(t *testing.T) {
 		]
 	}`)
 
-	samples, err := ParseCounterSamples(raw)
+	samples, err := ParseCounterSamples(raw, "flmx_e3b0c442")
 	if err != nil {
 		t.Fatalf("ParseCounterSamples: %v", err)
 	}
@@ -114,17 +114,17 @@ func TestParseCounterSamplesUsesExprLevelComment(t *testing.T) {
 	raw := []byte(`{
 		"nftables": [
 			{"rule": {
-				"table": "flmx",
+				"table": "flmx_e3b0c442",
 				"chain": "forward",
 				"expr": [
 					{"counter": {"packets": 4, "bytes": 3072}},
-					{"comment": "flmx forward:78 from-target tcp"}
+					{"comment": "flmx_e3b0c442 forward:78 from-target tcp"}
 				]
 			}}
 		]
 	}`)
 
-	samples, err := ParseCounterSamples(raw)
+	samples, err := ParseCounterSamples(raw, "flmx_e3b0c442")
 	if err != nil {
 		t.Fatalf("ParseCounterSamples: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestParseCounterSamplesUsesExprLevelComment(t *testing.T) {
 }
 
 func TestParseCounterSamplesMalformedJSONReturnsError(t *testing.T) {
-	if _, err := ParseCounterSamples([]byte(`{"nftables": [`)); err == nil {
+	if _, err := ParseCounterSamples([]byte(`{"nftables": [`), "flmx_e3b0c442"); err == nil {
 		t.Fatal("expected malformed JSON error")
 	}
 }
@@ -153,16 +153,16 @@ func TestParseCounterSamplesMalformedRuleJSONReturnsError(t *testing.T) {
 	raw := []byte(`{
 		"nftables": [
 			{"rule": {
-				"table": "flmx",
+				"table": "flmx_e3b0c442",
 				"chain": "forward",
-				"comment": "flmx forward:42 to-target tcp",
+				"comment": "flmx_e3b0c442 forward:42 to-target tcp",
 				"expr": [
 					{"counter": {"packets": "bad", "bytes": 4096}}
 				]
 			}}
 		]
 	}`)
-	if _, err := ParseCounterSamples(raw); err == nil {
+	if _, err := ParseCounterSamples(raw, "flmx_e3b0c442"); err == nil {
 		t.Fatal("expected malformed rule JSON error")
 	}
 }

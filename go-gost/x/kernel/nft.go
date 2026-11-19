@@ -34,30 +34,31 @@ const legacyNFTTable = "flvx_kernel"
 const legacyAgentNFTTable = "flmx_kernel_legacy"
 
 // nftTableForBaseDir derives this agent's nft table name from its
-// kernel root (F2-NFT-01): two agents on one host must never share a
-// table, because every sync deletes the table and rebuilds it from
-// the syncing agent's own ports — a second agent's sync used to wipe
-// the first agent's counters and whitelists, and its nft.json
-// fingerprint overwrote the first agent's. The current canonical
-// install keeps the plain shared name so a single agent's behavior —
-// and its already-running table — does not change, as does the
-// container form (whose network namespace is private to the container
-// anyway). The legacy pre-rename root gets its own fixed table
-// (F-R4-02): it used to share the plain name with the current root,
-// so a manually double-installed legacy+current pair wiped each
-// other on sync. Every other root — a scratch install, a relocated
-// install, a custom FLMX_KERNEL_DIR — gets
-// flmx_kernel_<first 8 hex of sha256(root)>: stable across restarts
-// (same root, same table), distinct per install, and a valid nft
-// identifier (20 chars, well under the name limit).
+// kernel root (F2-NFT-01, P1-1): two agents on one host must never
+// share a table, because every sync deletes the table and rebuilds
+// it from the syncing agent's own ports — a second agent's sync
+// used to wipe the first agent's counters and whitelists, and its
+// nft.json fingerprint overwrote the first agent's.
+//
+// Every root gets flmx_kernel_<first 8 hex of sha256(root)>: stable
+// across restarts (same root, same table), distinct per install,
+// and a valid nft identifier (20 chars, well under the name limit).
+// The canonical root used to keep the plain shared name — that was
+// the hole: any same-lineage install at the same canonical root
+// (a second panel's agent, an un-upgraded foreign fork) shared the
+// table with us, so one side's sync wiped the other's counters and
+// whitelists. The container form gets a hash too: its network
+// namespace is private in the normal case, but a host-network
+// container shares the host namespace, and uniformity leaves no
+// plain-named table behind for old logic to delete and rebuild.
+// The legacy pre-rename root keeps its own fixed table
+// (F-R4-02): it is already install-scoped (no other root maps to
+// it), and it is the live table of a possibly still-running
+// legacy-generation agent — renaming it would strand that agent's
+// counters and force a choice between orphaning its table and
+// deleting a live table, so the name stays.
 func nftTableForBaseDir(baseDir string) string {
-	if detectKernelContainer() {
-		return nftTable
-	}
-	switch baseDir {
-	case defaultBaseDir:
-		return nftTable
-	case legacyBaseDir:
+	if baseDir == legacyBaseDir {
 		return legacyAgentNFTTable
 	}
 	return nftTable + "_" + hashString(baseDir)[:8]
@@ -375,15 +376,6 @@ func nftScript(table string, rules []counterRule, guards map[int64]allowGuard, h
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {}\n", table)
 	fmt.Fprintf(&b, "delete table inet %s\n", table)
-	if table == nftTable {
-		// Only the canonical owner cleans the pre-rename table:
-		// for any other agent it may be a different agent's live
-		// table (F2-NFT-01). The canonical agent's own syncs keep
-		// deleting it, so the legacy table still disappears once
-		// no pre-rename agent is left.
-		fmt.Fprintf(&b, "table inet %s {}\n", legacyNFTTable)
-		fmt.Fprintf(&b, "delete table inet %s\n", legacyNFTTable)
-	}
 	if len(rules) == 0 && len(users) == 0 && len(blocked) == 0 {
 		return b.String()
 	}
@@ -474,16 +466,28 @@ type nftState struct {
 	// files written before the fingerprint existed; the next apply
 	// re-arms it.
 	Content string `json:"content,omitempty"`
+	// Migrated records that the pre-fix plain tables (flmx_kernel,
+	// flvx_kernel) have been dealt with: true after any successful
+	// apply by this build — either the one-shot migration ran, or
+	// this install never owned a plain table (fresh install, or a
+	// root whose table never changed). A pre-fix state file has no
+	// field, so it reads false and the first post-upgrade sync
+	// migrates (see needsTableMigration).
+	Migrated bool `json:"migrated,omitempty"`
 }
 
 // nftCounters owns this agent's nft table (see nftTableForBaseDir:
-// the plain flmx_kernel name for the canonical installs, an
-// install-scoped name otherwise). The epoch changes whenever the
-// table is rebuilt so the panel knows the counters restarted
-// from zero.
+// flmx_kernel_<hash> per install root, flmx_kernel_legacy for the
+// legacy root). The epoch changes whenever the table is rebuilt so
+// the panel knows the counters restarted from zero.
 type nftCounters struct {
 	mu        sync.Mutex
 	statePath string
+	// baseDir is this agent's kernel root. It decides whether this
+	// install ever owned a shared plain table (hadPlainTable) and
+	// hence whether the upgrade migration and the uninstall legacy
+	// cleanup apply; an empty baseDir (zero value) owns none.
+	baseDir string
 	// table is this agent's own nft table. Empty (zero value) reads
 	// as the plain name so a bare &nftCounters{} stays usable.
 	table string
@@ -504,11 +508,48 @@ type nftCounters struct {
 }
 
 func newNftCounters(baseDir string) *nftCounters {
-	n := &nftCounters{statePath: filepath.Join(baseDir, "nft.json"), table: nftTableForBaseDir(baseDir)}
+	n := &nftCounters{statePath: filepath.Join(baseDir, "nft.json"), baseDir: baseDir, table: nftTableForBaseDir(baseDir)}
 	if b, err := os.ReadFile(n.statePath); err == nil {
 		_ = json.Unmarshal(b, &n.state)
 	}
 	return n
+}
+
+// hadPlainTable reports whether this install's pre-fix table was a
+// shared plain name (flmx_kernel): the canonical root, or any root
+// in the container form (the pre-fix container branch returned the
+// plain name for every root). Only such an install can own the
+// residual plain tables the upgrade migration removes; a scratch,
+// relocated, or legacy-root install never had one, so its syncs
+// must never touch them — they may be another agent's live table
+// (F2-NFT-01).
+func (n *nftCounters) hadPlainTable() bool {
+	return n.baseDir == defaultBaseDir || detectKernelContainer()
+}
+
+// needsTableMigration reports whether this sync must run the
+// one-shot upgrade migration (delete the pre-fix plain tables
+// flmx_kernel and flvx_kernel): only an install that previously
+// applied with the old code (a persisted signature exists — a
+// fresh install has none, so a plain table on the host cannot be
+// ours) and previously owned a plain table. After any successful
+// apply the state records Migrated, so the migration runs at most
+// once; a failed apply leaves the flag clear and the next sync
+// retries.
+func (n *nftCounters) needsTableMigration() bool {
+	return !n.state.Migrated && n.state.Signature != "" && n.hadPlainTable()
+}
+
+// legacyPlainTableCleanupScript deletes the pre-fix plain tables
+// (this install's own old tables) with the usual create-empty-
+// then-delete idiom, so missing tables are a no-op. It is prepended
+// to the sync script by sync(), never rendered on its own.
+func legacyPlainTableCleanupScript() string {
+	var b strings.Builder
+	for _, table := range []string{nftTable, legacyNFTTable} {
+		fmt.Fprintf(&b, "table inet %s {}\ndelete table inet %s\n", table, table)
+	}
+	return b.String()
 }
 
 // setMarkBase adopts the socket-mark base the panel sent in the
@@ -652,16 +693,21 @@ func (n *nftCounters) tableFingerprint(ctx context.Context) (string, error) {
 // 供 agent 卸载时调用：表驻留在内核里，不随进程退出消失，必须在
 // 进程还活着时显式删掉。脚本沿用 nftScript 的「先建空表再删」惯例，
 // 表不存在时也不报错。
-// F2-NFT-01: 只删自己的表——旧表仅 canonical owner 删（它可能
-// 是另一 agent 的 live 表）；探针表只在 -c 预检里出现、从不落
-// 地，删它对谁都是 no-op。F-R4-02：canonical 卸载一并清 legacy
-// 代的表（迁移收尾）；legacy agent 自身卸载只删自己的表，绝不
-// 碰 plain 表（那可能是 current 代的 live 表）。
+// F2-NFT-01: 只删自己的表——旧表仅曾拥有 plain 表的安装（canonical
+// 根或容器形态，见 hadPlainTable）删（对其他安装，它可能是另一
+// agent 的 live 表）；plain 主表本身也只在升级迁移从未跑过、且有
+// 旧签名的安装上删（那是本安装自己的旧表），全新安装绝不碰它。
+// F-R4-02：canonical 卸载一并清 legacy 代的表（迁移收尾）；legacy
+// agent 自身卸载只删自己的表，绝不碰 plain 表（那可能是 current
+// 代的 live 表）。
 func (n *nftCounters) removeTables() error {
 	var b strings.Builder
 	tables := []string{n.tableName()}
-	if n.tableName() == nftTable {
+	if n.hadPlainTable() {
 		tables = append(tables, legacyNFTTable, legacyAgentNFTTable)
+		if !n.state.Migrated && n.state.Signature != "" {
+			tables = append(tables, nftTable)
+		}
 	}
 	tables = append(tables, nftHopProbeTable)
 	for _, table := range tables {
@@ -815,7 +861,16 @@ func (n *nftCounters) sync(ports []Port, users []int64, blocked []int64) error {
 			}
 		}
 	}
-	if _, err := nftRunner(ctx, script, "-f", "-"); err != nil {
+	// P1-1 升级迁移：首次升级后同步随同一条 nft 脚本删掉本安装自己
+	// 的旧 plain 表（见 needsTableMigration）。迁移行不进签名：
+	// 下次同步渲染的脚本与本次相同、无迁移行，签名才能命中并走
+	// 上面的 early return，否则每次同步都会重建表、计数归零。
+	migrating := n.needsTableMigration()
+	applyScript := script
+	if migrating {
+		applyScript = legacyPlainTableCleanupScript() + script
+	}
+	if _, err := nftRunner(ctx, applyScript, "-f", "-"); err != nil {
 		n.lastErr = err.Error()
 		return err
 	}
@@ -824,7 +879,11 @@ func (n *nftCounters) sync(ports []Port, users []int64, blocked []int64) error {
 	// Content empty; the next sync then re-applies once and retries
 	// the capture — degraded, never wrongly trusted.
 	content, _ := n.tableFingerprint(ctx)
-	n.state = nftState{Signature: sig, Epoch: newEpoch(), Content: content}
+	// Migrated is true after any successful apply by this build:
+	// either the migration just ran, or this install never owned a
+	// plain table (fresh install, or a root whose table never
+	// changed) — either way there is nothing left to migrate.
+	n.state = nftState{Signature: sig, Epoch: newEpoch(), Content: content, Migrated: true}
 	if b, err := json.Marshal(n.state); err == nil {
 		_ = writeFileAtomic(n.statePath, b, 0o600)
 	}
