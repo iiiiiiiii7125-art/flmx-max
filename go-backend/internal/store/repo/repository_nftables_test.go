@@ -120,6 +120,53 @@ func TestNftablesNodeModeSSHConfigAndBindingPersistence(t *testing.T) {
 	}
 }
 
+// B-01: the ownership proof is "any binding row for the node".
+// It is false before any successful apply, true once a binding is
+// written, and false again after the binding is deleted — with no
+// schema change (the existing nft_rule_binding table is the proof).
+func TestHasNftRuleBindingsForNode(t *testing.T) {
+	r, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer r.Close()
+
+	now := time.Now().UnixMilli()
+	if _, err := r.CreateNode(
+		"nft-node", "secret", "203.0.113.10", nil, nil, "10000-20000",
+		nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "[::]", "[::]", 1, nil, "nftables",
+	); err != nil {
+		t.Fatalf("CreateNode: %v", err)
+	}
+	nodes, err := r.ListNodes()
+	if err != nil {
+		t.Fatalf("ListNodes: %v", err)
+	}
+	nodeID := nodes[0]["id"].(int64)
+
+	if got, err := r.HasNftRuleBindingsForNode(nodeID); err != nil || got {
+		t.Fatalf("expected no proof before any apply, got %v err %v", got, err)
+	}
+	if got, err := r.HasNftRuleBindingsForNode(nodeID + 1000); err != nil || got {
+		t.Fatalf("expected no proof for an unknown node, got %v err %v", got, err)
+	}
+	if err := r.UpsertNftRuleBinding(NftRuleBindingInput{
+		ForwardID: 42, NodeID: nodeID, InPort: 24000, Protocols: "tcp,udp",
+		TargetAddr: "198.51.100.20:443", RuleHash: "hash-a", Status: "applied",
+	}, now); err != nil {
+		t.Fatalf("UpsertNftRuleBinding: %v", err)
+	}
+	if got, err := r.HasNftRuleBindingsForNode(nodeID); err != nil || !got {
+		t.Fatalf("expected proof after a successful apply, got %v err %v", got, err)
+	}
+	if err := r.DeleteNftRuleBindingsByForward(42); err != nil {
+		t.Fatalf("DeleteNftRuleBindingsByForward: %v", err)
+	}
+	if got, err := r.HasNftRuleBindingsForNode(nodeID); err != nil || got {
+		t.Fatalf("expected no proof after the binding is deleted, got %v err %v", got, err)
+	}
+}
+
 func TestNftablesNodeSSHConfigSurvivesRepositoryReopen(t *testing.T) {
 	tests := []struct {
 		name string

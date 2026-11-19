@@ -191,6 +191,29 @@ func (r *Repository) ListNftRuleBindingsByNode(nodeID int64) ([]model.NftRuleBin
 	return rows, err
 }
 
+// HasNftRuleBindingsForNode reports whether this panel install has
+// ever successfully applied nft rules to the node (B-01 ownership
+// proof for the plain-table upgrade migration): binding rows are
+// written only on the successful-Reconcile path, so any row proves
+// a past successful apply by this install — the panel-side analogue
+// of the agent's persisted signature. No new column is needed; the
+// existing nft_rule_binding table is the proof. A row later marked
+// "error" still proves a past success (error marking only updates
+// a row a successful apply created). A read error returns false
+// plus the error: callers log it by name and proceed without
+// migration (agent parity: an unreadable state file also reads as
+// no signature, never as a reason to fail the sync — R3B).
+func (r *Repository) HasNftRuleBindingsForNode(nodeID int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("repository not initialized")
+	}
+	var count int64
+	if err := r.db.Model(&model.NftRuleBinding{}).Where("node_id = ?", nodeID).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *Repository) DeleteNftRuleBindingsByForward(forwardID int64) error {
 	if r == nil || r.db == nil {
 		return errors.New("repository not initialized")

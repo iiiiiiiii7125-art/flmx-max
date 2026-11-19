@@ -274,7 +274,7 @@ func New(repo *repo.Repository, jwtSecret string) *Handler {
 		wsServer:                 ws.NewServer(repo, jwtSecret),
 		metrics:                  metrics.NewIngestionService(repo),
 		healthCheck:              nil,
-		nftablesManager:          newSerializedNftManager(runtimenft.NewManager(nil)),
+		nftablesManager:          newSerializedNftManager(runtimenft.NewManagerWithInstance(nil, panelInstanceID())),
 		nftAutoPending:           make(map[int64]bool),
 		nftAutoQueue:             make(chan int64, 64),
 		nftAutoFail:              make(map[int64]*nftAutoFailState),

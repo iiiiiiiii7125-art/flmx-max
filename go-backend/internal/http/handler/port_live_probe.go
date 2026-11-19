@@ -20,8 +20,14 @@ import (
 // 判占用，绝不因探针失败拒单。探针只在锁外/事务外跑：
 //   - 入站保存：锁前（R5R3-001：锁内禁网络调用）；
 //   - 隧道创建/更新：验证事务回滚后、提交段持锁前的无锁间隙。
-// 自动选口（入站 Port==0、隧道未指定段口）探针时端口未定，仍只
-// 走 DB（见各调用点注释）。
+// 自动选口的探针口径（F2-PORT-01 P0-2）：
+//   - 入站 Port==0：inboundSave 的 pick→probe→锁内复检循环里定口后探活，
+//     命中换口重试（上限 5 次）；
+//   - 隧道创建自动段口：验证段定型即最终端口（提交段复用定型值＋锁内
+//     DB 复检），间隙探活、命中换口重试（上限 5 次）；
+//   - 隧道更新自动段口：验证段定型即最终端口，间隙全量探（命中即拒，
+//     不重挑——更新面既有口径，本轮不动）。
+// 探针只探已定型的口：未定型的口（转发创建前、隧道创建验证段之前）仍只走 DB。
 
 // livePortProbeTarget 是一台节点上待探的端口段集。
 type livePortProbeTarget struct {
@@ -204,7 +210,8 @@ func livePortTargetsFromMap(byNode map[int64][]portSpan) []livePortProbeTarget {
 
 // tunnelLivePortTargetsFromRequest 从隧道请求里取显式端口：入口
 // inPort（各入口节点同值）＋出/链段逐项的 port。未指定（0）的不
-// 探：创建的提交段会重定型，间隙探的值到提交时已失效。
+// 探：自动段口由创建面的 probeTunnelAutoSegmentPortsLive 另行探活
+// （命中可换口重挑，本函数只做一次拦截、无重试位）。
 // own 是本隧道已占的 (节点→端口) 集，命中的跳过（更新时排除自身）。
 func tunnelLivePortTargetsFromRequest(req map[string]interface{}, entryNodeIDs []int64, own map[int64]map[int]bool) []livePortProbeTarget {
 	byNode := make(map[int64][]portSpan)

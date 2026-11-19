@@ -27,15 +27,17 @@ type fakeNftablesManager struct {
 	testErr      error
 	reconcileErr error
 	reconcileHit int
+	// clearMigrate records the B-01 proof flag of the last Clear call.
+	clearMigrate bool
 	// reconcileHook runs inside Reconcile (after the hit is counted) so
 	// tests can simulate a race that lands mid-reconcile (R14-F08 A4-001:
 	// a concurrent delete marking the forward pending between the
 	// data-plane success and the DB write).
-	reconcileHook  func()
-	clearErr       error
-	clearHit       int
-	collectErr     error
-	collectHit     int
+	reconcileHook func()
+	clearErr      error
+	clearHit      int
+	collectErr    error
+	collectHit    int
 	// collectDelay / collectDelayByHost 让测试模拟慢 SSH 节点（L3-04）：
 	// 延迟在锁外 sleep，fake 本身不得把并行采集串行化。
 	collectDelay       time.Duration
@@ -93,10 +95,11 @@ func (f *fakeNftablesManager) Reconcile(_ context.Context, cfg runtimenft.SSHCon
 	}, nil
 }
 
-func (f *fakeNftablesManager) Clear(context.Context, runtimenft.SSHConfig) error {
+func (f *fakeNftablesManager) Clear(_ context.Context, _ runtimenft.SSHConfig, migratePlain bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.clearHit++
+	f.clearMigrate = migratePlain
 	return f.clearErr
 }
 
@@ -385,10 +388,70 @@ func TestNodeNftablesClearEndpointClearsBindings(t *testing.T) {
 	if manager.clearHit != 1 {
 		t.Fatalf("expected clear once, got %d", manager.clearHit)
 	}
+	// B-01: the seeded binding is the ownership proof, so Clear
+	// must carry the migration permission.
+	if !manager.clearMigrate {
+		t.Fatal("expected Clear to carry the plain-table migration proof when a binding exists")
+	}
 	if bindings, err := fixture.handler.repo.ListNftRuleBindingsByNode(fixture.nodeID); err != nil {
 		t.Fatalf("list bindings after clear: %v", err)
 	} else if len(bindings) != 0 {
 		t.Fatalf("expected bindings to be cleared, got %+v", bindings)
+	}
+}
+
+// B-01: the sync plan carries the plain-table migration proof
+// exactly when this install has a persisted nft_rule_binding for
+// the node (i.e. it previously applied nft rules there); without
+// one the plan must not migrate, so a foreign live plain table
+// survives the first post-upgrade Reconcile. Clear follows the
+// same rule.
+func TestSyncNftablesNodePlainMigrationProofFromBindings(t *testing.T) {
+	fixture := setupNftablesHandler(t)
+	h := fixture.handler
+	seedNftablesSSHConfig(t, h, fixture.nodeID)
+	tunnelID := seedTunnelForNftables(t, h, "nft-tunnel-migration-proof", fixture.nodeID)
+	forward := seedForwardForNftables(t, h, tunnelID, fixture.nodeID, "203.0.113.9:8080", 20000)
+	manager := &fakeNftablesManager{}
+	h.nftablesManager = newSerializedNftManager(manager)
+
+	// No binding yet: this install never applied to the node.
+	if err := h.syncNftablesNode(fixture.nodeID); err != nil {
+		t.Fatalf("sync without proof: %v", err)
+	}
+	if manager.lastPlan.MigratePlainTables {
+		t.Fatal("plan must not migrate plain tables without a binding (foreign live table)")
+	}
+
+	// A binding (written only after a successful apply) is the proof.
+	now := time.Now().UnixMilli()
+	if err := h.repo.UpsertNftRuleBinding(repo.NftRuleBindingInput{
+		ForwardID:  forward.ID,
+		NodeID:     fixture.nodeID,
+		InPort:     20000,
+		Protocols:  "tcp",
+		TargetAddr: "203.0.113.9:8080",
+		Status:     runtimenft.StatusApplied,
+		RuleHash:   "hash-proof",
+	}, now); err != nil {
+		t.Fatalf("seed binding: %v", err)
+	}
+	if err := h.syncNftablesNode(fixture.nodeID); err != nil {
+		t.Fatalf("sync with proof: %v", err)
+	}
+	if !manager.lastPlan.MigratePlainTables {
+		t.Fatal("plan must migrate plain tables once a binding proves prior apply")
+	}
+
+	// Clear without any binding must not migrate either.
+	if err := h.repo.DeleteNftRuleBindingsByForward(forward.ID); err != nil {
+		t.Fatalf("delete binding: %v", err)
+	}
+	if err := h.clearNftablesNode(fixture.nodeID); err != nil {
+		t.Fatalf("clear without proof: %v", err)
+	}
+	if manager.clearMigrate {
+		t.Fatal("Clear must not migrate plain tables without a binding")
 	}
 }
 

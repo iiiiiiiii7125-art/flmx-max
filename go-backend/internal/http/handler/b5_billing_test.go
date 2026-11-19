@@ -180,10 +180,10 @@ type blockingClearManager struct {
 	once         sync.Once
 }
 
-func (f *blockingClearManager) Clear(ctx context.Context, cfg runtimenft.SSHConfig) error {
+func (f *blockingClearManager) Clear(ctx context.Context, cfg runtimenft.SSHConfig, migratePlain bool) error {
 	f.once.Do(func() { close(f.clearStarted) })
 	<-f.clearRelease
-	return f.fakeNftablesManager.Clear(ctx, cfg)
+	return f.fakeNftablesManager.Clear(ctx, cfg, migratePlain)
 }
 
 // TestSerializedClearMarksApplyingAndBumpsGenerationF020: Clear 执行
@@ -197,7 +197,7 @@ func TestSerializedClearMarksApplyingAndBumpsGenerationF020(t *testing.T) {
 	gen0 := m.GetGeneration(9)
 
 	clearDone := make(chan error, 1)
-	go func() { clearDone <- m.Clear(context.Background(), 9, cfg) }()
+	go func() { clearDone <- m.Clear(context.Background(), 9, cfg, false) }()
 	<-inner.clearStarted // Clear 已进入临界区（持有 per-node 锁）
 
 	if !m.IsApplying(9) {
@@ -229,11 +229,11 @@ func (f *orderRecordingManager) CollectCounters(ctx context.Context, cfg runtime
 	return f.fakeNftablesManager.CollectCounters(ctx, cfg)
 }
 
-func (f *orderRecordingManager) Clear(ctx context.Context, cfg runtimenft.SSHConfig) error {
+func (f *orderRecordingManager) Clear(ctx context.Context, cfg runtimenft.SSHConfig, migratePlain bool) error {
 	f.mu.Lock()
 	f.order = append(f.order, "clear")
 	f.mu.Unlock()
-	return f.fakeNftablesManager.Clear(ctx, cfg)
+	return f.fakeNftablesManager.Clear(ctx, cfg, migratePlain)
 }
 
 // TestClearNftablesNodeDrainsCountersFirstF020: 手动 Clear 前必须先

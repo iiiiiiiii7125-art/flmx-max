@@ -33,17 +33,74 @@ func binDirNames(t *testing.T, binRoot string) []string {
 	return names
 }
 
+func TestIsManagedBinDirName(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		// Main version dirs FLMX creates.
+		{"1.0.0", true},
+		{"1.14.4-flmx1", true},
+		{"2.9.6", true},
+		{"v1.3.3", true},
+		{"latest", true},
+		// FLMX's own swap leftovers keep their old behaviour.
+		{"1.0.0.old", true},
+		{"1.0.0.staging", true},
+		// Extra dirs FLMX creates ("extra-"+Name+"-"+Version).
+		{"extra-geo-1", true},
+		{"extra-geo-1.0.0", true},
+		{"extra-shadow-tls-0.2.25", true},
+		{"extra-my-geo-1.0.0", true},
+		// Foreign / user data: never prunable.
+		{"backup", false},
+		{"my-stuff", false},
+		{"data", false},
+		{"gost", false},
+		{"1.0.0_old", false},
+		{"extra-geo", false},
+		{"extra--1.0.0", false},
+		{"extra-geo-", false},
+		{"extra-geo-1..0", false},
+		{"extra-geo..x-1.0.0", false},
+		{"a..b", false},
+		{"-1.0.0", false},
+		{".1.0.0", false},
+		{"1", false},
+		{"2024", false},
+		{"", false},
+		{"extra-", false},
+	}
+	for _, tc := range cases {
+		if got := isManagedBinDirName(tc.name); got != tc.want {
+			t.Errorf("isManagedBinDirName(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestPruneStaleBinDirsKeepsCurrentAndPreviousGenerations(t *testing.T) {
 	base := t.TempDir()
 	m := NewManager(base)
 	binRoot := filepath.Join(base, "xray", "bin")
-	gens := []string{"1.0.0", "2.0.0", "3.0.0", "extra-geo-1", "extra-geo-2"}
+	gens := []string{"1.0.0", "2.0.0", "3.0.0", "extra-geo-1", "extra-geo-2", "v0.9.0"}
 	for _, g := range gens {
 		dir := filepath.Join(binRoot, g)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "payload"), []byte(g), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Foreign directories under the shared bin root: not FLMX
+	// version dirs, must survive the sweep untouched (P1-2 guard).
+	foreign := []string{"backup", "my-stuff", "data", "1.0.0_old", "extra-geo", "extra--1.0.0"}
+	for _, f := range foreign {
+		dir := filepath.Join(binRoot, f)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "payload"), []byte(f), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,11 +119,11 @@ func TestPruneStaleBinDirsKeepsCurrentAndPreviousGenerations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
-	if len(removed) != 2 || removed[0] != "1.0.0" || removed[1] != "extra-geo-1" {
-		t.Fatalf("removed = %v, want [1.0.0 extra-geo-1]", removed)
+	if len(removed) != 3 || removed[0] != "1.0.0" || removed[1] != "extra-geo-1" || removed[2] != "v0.9.0" {
+		t.Fatalf("removed = %v, want [1.0.0 extra-geo-1 v0.9.0]", removed)
 	}
 	got := binDirNames(t, binRoot)
-	want := []string{"2.0.0", "3.0.0", "extra-geo-2"}
+	want := []string{"1.0.0_old", "2.0.0", "3.0.0", "backup", "data", "extra--1.0.0", "extra-geo", "extra-geo-2", "my-stuff"}
 	if len(got) != len(want) {
 		t.Fatalf("remaining dirs = %v, want %v", got, want)
 	}

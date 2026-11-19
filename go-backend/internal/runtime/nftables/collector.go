@@ -14,9 +14,9 @@ type CounterSample struct {
 	Packets   uint64
 }
 
-func ParseCounterComment(comment string) (CounterSample, bool) {
+func ParseCounterComment(comment, table string) (CounterSample, bool) {
 	parts := strings.Split(comment, " ")
-	if len(parts) != 4 || parts[0] != tableName {
+	if len(parts) != 4 || parts[0] != table {
 		return CounterSample{}, false
 	}
 	if !strings.HasPrefix(parts[1], "forward:") {
@@ -42,7 +42,7 @@ func ParseCounterComment(comment string) (CounterSample, bool) {
 	}, true
 }
 
-func ParseCounterSamples(raw []byte) ([]CounterSample, error) {
+func ParseCounterSamples(raw []byte, table string) ([]CounterSample, error) {
 	var doc nftListTable
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, err
@@ -58,11 +58,11 @@ func ParseCounterSamples(raw []byte) ([]CounterSample, error) {
 		if err := json.Unmarshal(ruleRaw, &rule); err != nil {
 			return nil, err
 		}
-		if rule.Table != tableName || rule.Chain != "forward" {
+		if rule.Table != table || rule.Chain != "forward" {
 			continue
 		}
 
-		sample, ok, err := parseCounterRule(rule)
+		sample, ok, err := parseCounterRule(rule, table)
 		if err != nil {
 			return nil, err
 		}
@@ -90,7 +90,7 @@ type nftCounter struct {
 	Packets uint64 `json:"packets"`
 }
 
-func parseCounterRule(rule nftCounterRule) (CounterSample, bool, error) {
+func parseCounterRule(rule nftCounterRule, table string) (CounterSample, bool, error) {
 	var (
 		counter    nftCounter
 		hasCounter bool
@@ -115,7 +115,7 @@ func parseCounterRule(rule nftCounterRule) (CounterSample, bool, error) {
 		return CounterSample{}, false, nil
 	}
 
-	sample, ok := ParseCounterComment(comment)
+	sample, ok := ParseCounterComment(comment, table)
 	if !ok {
 		return CounterSample{}, false, nil
 	}

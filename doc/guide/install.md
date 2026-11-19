@@ -191,6 +191,32 @@ wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest
 - **旧式 gost 形态的清理同样守卫**：安装/更新时脚本还会检查机器上有没有更老形态的 gost 式 agent（`gost.service` ＋ `/etc/gost` 落位）。它与旧谱系面板的 agent 完全同形、仅凭落位无法区分归属，故同样先比对 `/etc/gost/config.json` 的 `addr`：与本面板地址（或现装 agent 的地址）一致才清理；不一致或读不到时**跳过清理并在输出中明示**（以 `ℹ️ 已跳过旧式 gost 安装的清理` 开头），安装/更新本身不受影响。解法同上（交互确认或 `FLMX_AGENT_TAKEOVER=1`）。
 - **自检**：动手前先看节点机上现有 agent 连的是谁：`grep -o '"addr"[^,]*' /etc/flmx_agent/config.json`（改名前装的节点看 `/etc/flux_agent/config.json`，旧式形态看 `/etc/gost/config.json`），输出的地址与本面板地址一致才属同一面板。安装被守卫拒绝后，再看 `systemctl status flmx_agent`（或 `rc-service flmx_agent status`；旧槽节点看 `flux_agent`）与上述配置文件未被改动，即守卫按预期工作。
 
+### 与同类面板共存：装前预检
+
+往一台已经装有其他面板（或另一套 FLMX 面板）agent 的节点机上装 agent 之前，先跑一遍下面的预检命令——只读，不改任何东西。面板只在自己的库内判重，另一套面板占用的端口它看不见，撞上了只能装前查出来。
+
+**能改的与不能改的**：
+
+- **面板端口可以改**：前端默认 `6366`、后端默认 `6365`，安装时输入别的端口即可；同机第二套面板必须把两端端口都改开（见上文「同机多面板共存」一节）。
+- **agent 默认槽固定**：脚本形态固定占目录 `/etc/flmx_agent`、服务 `flmx_agent`（systemd 单元文件 `/etc/systemd/system/flmx_agent.service`，Alpine/OpenRC 为 `/etc/init.d/flmx_agent`），不要手工挪。例外只有两处：改名前装的旧槽（`/etc/flux_agent`、`flux_agent`）和带实例键的容器形态 agent（`/etc/flmx_agent-<实例键>`，见上文派生命名表）。
+- **旧式 gost 槽**：更老形态的 agent 占 `/etc/gost`、服务 `gost.service`；归属判定与清理口径见上一节。
+- **伴生 Clash API 口段固定**：`41000–41999`（面板与 agent 双侧同值，按节点密钥派生）；段内具体是哪个口不固定——派生口被占时 agent 在重启/重建时自动换一个段内空闲口，运行中的实例保持原口。旧固定口 `40900` 已退役，新实例不再用。转发、入站、隧道入口也不要选进这个段。
+- **转发入口不要重叠**：同一台节点机上，两套面板/两个 agent 的转发、入站、隧道入口端口不能撞——一个端口同一时间只能被一个监听者占用。面板建转发/隧道时用统一的四源谓词判重（转发/入站/隧道/伴生口），但只覆盖本面板自己的库；跨面板的冲突它拦不住，只能装前查。
+- **nft 表名按安装根派生、不是任意一个固定名**：默认脚本形态（内核根 `/etc/flmx_agent/kernels`）与容器形态都用 `flmx_kernel_<该根路径 sha256 前 8 位十六进制>`，不再用 plain `flmx_kernel`；改名前旧根（`/etc/flux_agent/kernels`）用 `flmx_kernel_legacy`；自定义 `FLMX_KERNEL_DIR` 或挪位安装的根同样按路径哈希。旧名 `flvx_kernel` 与 plain `flmx_kernel` 只在一次性升级迁移时删（升级后首次成功同步，且该 agent 此前确有成功下发的旧签名、曾拥有 plain 表；迁移后即记已迁移，此后同步不再删），卸载时另行清理；平时同步不碰它们。面板侧 nftables 模式另有一张暂停/配额表 `flmx_quota`。所以预检时不要只查一张表，把 `flmx_*` 的表全列出来比对。
+
+**粘贴即用的预检命令**（只读；没有 systemd 或 nft 的机器对应行只打印一行提示，不报错退出）：
+
+```bash
+echo '== 监听端口 =='; ss -tulnp 2>/dev/null || echo 'ss 不可用'
+echo '== agent / 旧式 gost 落位 =='; ls -lad /etc/flmx_agent /etc/flux_agent /etc/gost 2>&1
+echo '== 相关 systemd 单元 =='; systemctl list-units --all 'flmx_agent*' 'flux_agent*' 'gost*' 2>/dev/null || echo '无 systemd 或查询失败'
+echo '== nft 表 =='; nft list tables 2>/dev/null || echo 'nft 未安装或无权限（需 root）'
+```
+
+其中 `ss -tulnp` 覆盖 TCP 与 UDP（任务书所说的 `ss -tlnp` 只看 TCP；转发含 UDP 入口，故多看 `-u`）。
+
+**怎么读结果**：监听端口里出现 `6365`/`6366`（或你改过的面板端口）说明该机已有面板在跑；`/etc/flmx_agent` 或 `/etc/flux_agent` 存在说明已有 agent——再按上一节查它 `config.json` 里的 `addr` 归属；`/etc/gost` 存在说明有旧式 gost 形态；`flmx_kernel*` / `flmx_quota` 表存在说明已有 agent 或面板侧 nft 规则在用这台机器。以上任一项命中，都不要直接装：先按上一节做归属判定，或把端口/实例错开。
+
 ### 内核目录覆盖（FLMX_KERNEL_DIR）
 
 agent 把各内核的二进制、`state.json` 等状态文件与 geodata 都放在一个**内核状态根目录**下。默认不用设置：脚本形态是 `/etc/flmx_agent/kernels`（改名前装的节点迁移前为 `/etc/flux_agent/kernels`），容器形态由镜像把该目录钉在数据卷上（容器重建不丢内核状态）。要改到别的目录，用 agent 进程的环境变量 `FLMX_KERNEL_DIR=<绝对路径>` 覆盖（旧名 `FLVX_KERNEL_DIR` 的双读已于 2.0.0 退场，不再识别）。

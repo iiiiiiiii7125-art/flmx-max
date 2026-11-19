@@ -32,12 +32,12 @@ func (f *blockingFakeManager) Reconcile(ctx context.Context, cfg runtimenft.SSHC
 	return res, err
 }
 
-func (f *blockingFakeManager) Clear(ctx context.Context, cfg runtimenft.SSHConfig) error {
+func (f *blockingFakeManager) Clear(ctx context.Context, cfg runtimenft.SSHConfig, migratePlain bool) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, "clear-start")
 	f.mu.Unlock()
 	time.Sleep(f.delay)
-	err := f.fakeNftablesManager.Clear(ctx, cfg)
+	err := f.fakeNftablesManager.Clear(ctx, cfg, migratePlain)
 	f.mu.Lock()
 	f.calls = append(f.calls, "clear-end")
 	f.mu.Unlock()
@@ -102,7 +102,7 @@ func TestDirectManagerCallSerialized(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = m.Clear(context.Background(), 99, cfg)
+		_ = m.Clear(context.Background(), 99, cfg, false)
 	}()
 	go func() {
 		defer wg.Done()
