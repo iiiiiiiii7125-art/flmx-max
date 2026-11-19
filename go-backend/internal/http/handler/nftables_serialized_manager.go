@@ -153,7 +153,7 @@ func (m *serializedNftManager) Reconcile(ctx context.Context, nodeID int64, cfg 
 	return m.inner.Reconcile(ctx, cfg, plan)
 }
 
-func (m *serializedNftManager) Clear(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig) error {
+func (m *serializedNftManager) Clear(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig, migratePlain bool) error {
 	mu := m.lockFor(nodeID)
 	mu.Lock()
 	defer m.unlockFor(nodeID, mu)
@@ -171,7 +171,7 @@ func (m *serializedNftManager) Clear(ctx context.Context, nodeID int64, cfg runt
 		delete(m.applying, nodeID)
 		m.mu.Unlock()
 	}()
-	return m.inner.Clear(ctx, cfg)
+	return m.inner.Clear(ctx, cfg, migratePlain)
 }
 
 // SetBlocked 切换暂停过滤表中的端口封禁状态。它是节点 nft 状态的写

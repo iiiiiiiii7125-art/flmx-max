@@ -23,7 +23,10 @@ import (
 type nftablesRuntimeManager interface {
 	Test(ctx context.Context, cfg runtimenft.SSHConfig) error
 	Reconcile(ctx context.Context, cfg runtimenft.SSHConfig, plan runtimenft.NodePlan) (runtimenft.ApplyResult, error)
-	Clear(ctx context.Context, cfg runtimenft.SSHConfig) error
+	// Clear drops the node's nft state. migratePlain carries the
+	// B-01 ownership proof (see buildNftablesNodePlanWithOverrides):
+	// only with proof may the one-shot plain-table migration run.
+	Clear(ctx context.Context, cfg runtimenft.SSHConfig, migratePlain bool) error
 	CollectCounters(ctx context.Context, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error)
 	SetBlocked(ctx context.Context, cfg runtimenft.SSHConfig, port int, blocked bool) error
 	ListBlockedPorts(ctx context.Context, cfg runtimenft.SSHConfig) ([]int, error)
@@ -403,6 +406,23 @@ func (h *Handler) buildNftablesNodePlanWithOverrides(nodeID int64, exclude map[i
 			})
 		}
 	}
+	// B-01 归属证明：只有本面板曾对该节点成功下发过 nft 规则
+	// （nft_rule_binding 行存在——写面只在 Reconcile 成功后），
+	// 升级迁移才可删 plain 表；无证明时节点上的 plain 表可能是
+	// 另一套面板的 live 表，绝不能碰。无需新列：现成的绑定表即
+	// 证明（agent 侧同等物是 nft.json 里的持久化签名）。证明读
+	// 失败时按 agent 侧同款口径处理：读不到签名即无证明、只记
+	// 日志点名、不阻塞本次下发（R3-MR-01：读失败绝不当作空集
+	// 静默跳过，但 R3B 亦定：绑定读失败不得让同步本身失败）。
+	// 代价是窄窗口残留：若读失败恰发生在升级后首次同步、且本
+	// 安装自己的旧 plain 表仍在，它会被孤儿化（隔离表已建、迁
+	// 移窗口关闭）；该表需运维手工清理，见 B-01 回头看登记。
+	owned, err := h.repo.HasNftRuleBindingsForNode(nodeID)
+	if err != nil {
+		log.Printf("nftables sync: plain-table migration proof read failed, migration skipped node_id=%d err=%v", nodeID, err)
+		owned = false
+	}
+	plan.MigratePlainTables = owned
 	return plan, cfg, nil
 }
 
@@ -642,7 +662,16 @@ func (h *Handler) clearNftablesNode(nodeID int64) error {
 	// 内部记 M-005 gap 告警，不阻塞 Clear（可用性优先口径与 sync
 	// 路径相同）。旧实现直接 Clear，最近一周期流量随清表静默丢失。
 	h.drainNftCountersBeforeReconcile(nodeID, cfgModel, time.Now())
-	if err := h.nftablesManager.Clear(context.Background(), nodeID, sshCfg); err != nil {
+	// B-01：Clear 与 Reconcile 共用 buildApplyCommand 的迁移门控，
+	// 同样须持归属证明才可删 plain 表。先读证明再清表；读失败
+	// 只记日志点名、按无证明清表（与 sync 路径同款 agent 平行
+	// 口径：读不到签名即无证明，不阻塞本次操作）。
+	owned, err := h.repo.HasNftRuleBindingsForNode(nodeID)
+	if err != nil {
+		log.Printf("nftables clear: plain-table migration proof read failed, migration skipped node_id=%d err=%v", nodeID, err)
+		owned = false
+	}
+	if err := h.nftablesManager.Clear(context.Background(), nodeID, sshCfg, owned); err != nil {
 		return err
 	}
 	bindings, listErr := h.repo.ListNftRuleBindingsByNode(nodeID)

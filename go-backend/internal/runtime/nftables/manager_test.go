@@ -8,17 +8,19 @@ import (
 )
 
 type fakeRunner struct {
-	scripts     []string
-	tables      []string
-	err         error
-	testErr     error
-	listJSON    []byte
-	listJSONErr error
+	scripts      []string
+	tables       []string
+	migrateFlags []bool
+	err          error
+	testErr      error
+	listJSON     []byte
+	listJSONErr  error
 }
 
-func (f *fakeRunner) ApplyScript(ctx context.Context, cfg SSHConfig, table, script string) error {
+func (f *fakeRunner) ApplyScript(ctx context.Context, cfg SSHConfig, table, script string, migratePlain bool) error {
 	f.scripts = append(f.scripts, script)
 	f.tables = append(f.tables, table)
+	f.migrateFlags = append(f.migrateFlags, migratePlain)
 	return f.err
 }
 
@@ -52,6 +54,28 @@ func TestManagerReconcileAppliesRenderedScript(t *testing.T) {
 	if result.NodeID != 7 || result.Hashes[42] == "" {
 		t.Fatalf("unexpected result: %+v", result)
 	}
+	if len(runner.migrateFlags) != 1 || runner.migrateFlags[0] {
+		t.Fatalf("Reconcile without proof must not migrate, got flags %v", runner.migrateFlags)
+	}
+}
+
+// B-01: Reconcile forwards the plan's ownership proof to the
+// runner; the runtime never invents it.
+func TestManagerReconcileForwardsPlainMigrationProof(t *testing.T) {
+	runner := &fakeRunner{}
+	manager := NewManager(runner)
+	plan := NodePlan{
+		NodeID:             7,
+		MigratePlainTables: true,
+		Rules:              []Rule{{ForwardID: 42, InPort: 24000, TargetHost: "198.51.100.20", TargetPort: 443, Protocols: []string{"tcp"}}},
+	}
+
+	if _, err := manager.Reconcile(context.Background(), SSHConfig{Host: "203.0.113.10", Port: 22, Username: "root"}, plan); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(runner.migrateFlags) != 1 || !runner.migrateFlags[0] {
+		t.Fatalf("Reconcile must forward the proof, got flags %v", runner.migrateFlags)
+	}
 }
 
 func TestManagerReconcileReturnsRunnerError(t *testing.T) {
@@ -68,7 +92,7 @@ func TestManagerClearAppliesEmptyTable(t *testing.T) {
 	runner := &fakeRunner{}
 	manager := NewManager(runner)
 
-	if err := manager.Clear(context.Background(), SSHConfig{Host: "203.0.113.10", Port: 22, Username: "root"}); err != nil {
+	if err := manager.Clear(context.Background(), SSHConfig{Host: "203.0.113.10", Port: 22, Username: "root"}, true); err != nil {
 		t.Fatalf("Clear: %v", err)
 	}
 	if len(runner.scripts) != 1 {
@@ -76,6 +100,9 @@ func TestManagerClearAppliesEmptyTable(t *testing.T) {
 	}
 	if strings.Contains(runner.scripts[0], "masquerade comment") {
 		t.Fatalf("empty table should not include masquerade:\n%s", runner.scripts[0])
+	}
+	if len(runner.migrateFlags) != 1 || !runner.migrateFlags[0] {
+		t.Fatalf("Clear must forward the proof, got flags %v", runner.migrateFlags)
 	}
 }
 
@@ -138,7 +165,7 @@ func TestManagerMethodsRequireInitializedRunner(t *testing.T) {
 		t.Fatalf("expected not initialized error from nil manager Reconcile, got %v", err)
 	}
 
-	if err := nilManager.Clear(context.Background(), cfg); err == nil || err.Error() != expected.Error() {
+	if err := nilManager.Clear(context.Background(), cfg, false); err == nil || err.Error() != expected.Error() {
 		t.Fatalf("expected not initialized error from nil manager Clear, got %v", err)
 	}
 
@@ -155,7 +182,7 @@ func TestManagerMethodsRequireInitializedRunner(t *testing.T) {
 		t.Fatalf("expected not initialized error from Reconcile, got %v", err)
 	}
 
-	if err := manager.Clear(context.Background(), cfg); err == nil || err.Error() != expected.Error() {
+	if err := manager.Clear(context.Background(), cfg, false); err == nil || err.Error() != expected.Error() {
 		t.Fatalf("expected not initialized error from Clear, got %v", err)
 	}
 
@@ -209,7 +236,7 @@ func TestManagerUsesInstanceTable(t *testing.T) {
 		t.Fatalf("expected 1 sample from the instance table, got %+v", samples)
 	}
 
-	if err := manager.Clear(context.Background(), cfg); err != nil {
+	if err := manager.Clear(context.Background(), cfg, false); err != nil {
 		t.Fatalf("Clear: %v", err)
 	}
 	if len(runner.tables) != 3 || runner.tables[2] != "flmx_16477688" {
