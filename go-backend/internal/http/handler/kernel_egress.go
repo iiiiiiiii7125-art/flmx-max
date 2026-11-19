@@ -42,6 +42,7 @@ func versionBelowPaddedStrict(version string, major, minor, patch int) bool {
 	if versionFloorExempt(version) {
 		return false
 	}
+	version = stripForkVersionSuffixForCompare(version)
 	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
 	nums := [3]int{}
 	for i := 0; i < len(parts) && i < 3; i++ {

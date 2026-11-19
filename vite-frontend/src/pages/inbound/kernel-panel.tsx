@@ -53,7 +53,9 @@ interface Props {
 }
 
 function shortVersion(v: string): string {
-  const m = v.match(/\d+\.\d+\.\d+/);
+  // Fork 构建带 "-flmx1" 后缀（1.14.4-flmx1）：后缀须保留，否则
+  // fork 与上游 1.14.4 显示相同、无法区分。
+  const m = v.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/);
 
   return m ? m[0] : v;
 }

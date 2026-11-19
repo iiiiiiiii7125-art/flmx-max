@@ -39,6 +39,10 @@ func TestFixR2A2ResolveLatestSkipsPrerelease(t *testing.T) {
 	}
 }
 
+// F5（fork 落地）：sing-box 安装入口拒绝字面 "latest"——fork 仓后续
+// 再发 tag 时 latest 会漂离已核实的 1.14.4-flmx1。原 A2 语义（latest
+// 解析为具体版本落库）仍由 TestFixR2A2ResolveLatestSkipsPrerelease
+// 与 Xray 的 A3 回退用例覆盖；sing-box 入口只接受具体版本。
 func TestFixR2A2KernelInstallLatestStoresConcrete(t *testing.T) {
 	stubReleasesAPI(t, fixR2A2ReleasesPayload)
 	resetKernelVersionCache(t)
@@ -55,26 +59,34 @@ func TestFixR2A2KernelInstallLatestStoresConcrete(t *testing.T) {
 	if err := r.UpdateNodeKernelFields(k.ID, map[string]interface{}{"installed_version": "1.14.2"}); err != nil {
 		t.Fatal(err)
 	}
-	// 节点离线，下发必然失败（回执为下发失败面），但落库版本必须在
-	// 下发前就已收敛为具体版本——修复前此处恒为 "latest"。
-	_, _ = postKernelInstall(t, h, nodeID, kernel.TypeSingbox, "latest")
+	// sing-box 的 latest 安装在写记录前即被拒绝，存量行纹丝不动。
+	code, msg := postKernelInstall(t, h, nodeID, kernel.TypeSingbox, "latest")
+	if code == 0 {
+		t.Fatal("sing-box install of \"latest\" must be refused (F5)")
+	}
+	if !strings.Contains(msg, "不支持 latest") {
+		t.Fatalf("refusal must name the latest rejection, got %q", msg)
+	}
 	after, err := r.GetNodeKernel(k.ID)
 	if err != nil || after == nil {
 		t.Fatalf("reload kernel: %v", err)
 	}
-	if after.Version != "1.14.3" {
-		t.Fatalf("installing \"latest\" must store the resolved concrete version 1.14.3, stored %q", after.Version)
+	if after.Version != "latest" {
+		t.Fatalf("refused install must not rewrite the stored version, stored %q", after.Version)
 	}
 
-	// 新装路径同口径：无存量行时以 "latest" 安装，落库具体版本。
+	// 新装路径同口径：无存量行时以 "latest" 安装同样被拒、不建行。
 	node2 := seedRelayTargetNode(t, r, "fixa2-node2", "198.51.100.22")
-	_, _ = postKernelInstall(t, h, node2, kernel.TypeSingbox, "latest")
-	k2, err := r.GetNodeKernelByType(node2, kernel.TypeSingbox)
-	if err != nil || k2 == nil {
-		t.Fatalf("reload created kernel: %v", err)
+	code, _ = postKernelInstall(t, h, node2, kernel.TypeSingbox, "latest")
+	if code == 0 {
+		t.Fatal("fresh sing-box install of \"latest\" must be refused (F5)")
 	}
-	if k2.Version != "1.14.3" {
-		t.Fatalf("fresh install of \"latest\" must store 1.14.3, stored %q", k2.Version)
+	k2, err := r.GetNodeKernelByType(node2, kernel.TypeSingbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k2 != nil {
+		t.Fatalf("refused fresh install must not create a kernel row, got %+v", k2)
 	}
 }
 
@@ -91,13 +103,14 @@ func TestFixR2A2ApplyKernelConvergesStoredLatest(t *testing.T) {
 	nodeID := seedRelayTargetNode(t, r, "fixa2-apply-node", "198.51.100.23")
 	k := seedB8Kernel(t, r, nodeID, kernel.TypeSingbox, "latest")
 	// 节点离线：apply 本身会失败，但版本收敛发生在下发之前。
+	// F5：sing-box 的存量 "latest" 行钉死到 fork 版，不再跟随 release 列表。
 	_ = h.applyKernel(k.ID, false)
 	after, err := r.GetNodeKernel(k.ID)
 	if err != nil || after == nil {
 		t.Fatalf("reload kernel: %v", err)
 	}
-	if after.Version != "1.14.3" {
-		t.Fatalf("apply must converge a stored \"latest\" to the concrete 1.14.3 before dispatch, stored %q", after.Version)
+	if after.Version != kernel.SingboxForkVersion {
+		t.Fatalf("apply must converge a stored sing-box \"latest\" to the fork version %s before dispatch, stored %q", kernel.SingboxForkVersion, after.Version)
 	}
 }
 
@@ -143,6 +156,10 @@ func stubReleasesAPIFailing(t *testing.T) {
 }
 
 func TestFixR2A3InstallLatestFallsBackWhenListUnreachable(t *testing.T) {
+	// F5：本用例的回退语义改由 Xray 覆盖——sing-box 入口已拒绝字面
+	// latest（见 TestFixR2A2KernelInstallLatestStoresConcrete），
+	// 通用回退机制（列表不可达存字面 "latest"、由 agent 在下载期
+	// 自行解析）本身不变。
 	stubReleasesAPIFailing(t)
 	resetKernelVersionCache(t)
 	r, err := repo.Open(t.TempDir() + "/fixa3.db")
@@ -155,11 +172,11 @@ func TestFixR2A3InstallLatestFallsBackWhenListUnreachable(t *testing.T) {
 	// 新装：列表不可达不得拒装——行必须落库、版本存字面 "latest"
 	// （节点离线使回执走下发失败面，但登记先于下发完成）。
 	nodeID := seedRelayTargetNode(t, r, "fixa3-node", "198.51.100.51")
-	_, msg := postKernelInstall(t, h, nodeID, kernel.TypeSingbox, "latest")
+	_, msg := postKernelInstall(t, h, nodeID, kernel.TypeXray, "latest")
 	if strings.Contains(msg, "无法解析最新版本") {
 		t.Fatalf("unreachable release list must not refuse the install, got refusal %q", msg)
 	}
-	k, err := r.GetNodeKernelByType(nodeID, kernel.TypeSingbox)
+	k, err := r.GetNodeKernelByType(nodeID, kernel.TypeXray)
 	if err != nil || k == nil {
 		t.Fatalf("fallback install must persist the kernel row: %v", err)
 	}
@@ -169,8 +186,8 @@ func TestFixR2A3InstallLatestFallsBackWhenListUnreachable(t *testing.T) {
 
 	// 存量具体版本行重装 "latest"：同样回退落行，不拒装。
 	node2 := seedRelayTargetNode(t, r, "fixa3-node2", "198.51.100.52")
-	k2 := seedB8Kernel(t, r, node2, kernel.TypeSingbox, "1.14.2")
-	_, msg = postKernelInstall(t, h, node2, kernel.TypeSingbox, "latest")
+	k2 := seedB8Kernel(t, r, node2, kernel.TypeXray, "25.1.1")
+	_, msg = postKernelInstall(t, h, node2, kernel.TypeXray, "latest")
 	if strings.Contains(msg, "无法解析最新版本") {
 		t.Fatalf("fallback reinstall must not be refused either, got %q", msg)
 	}

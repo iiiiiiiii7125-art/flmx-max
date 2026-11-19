@@ -569,6 +569,13 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestedLatest := version == "latest"
+	// F5：sing-box（主核与伴生同族）拒绝字面 latest——fork 仓后续再发
+	// tag 时 latest 会漂离已核实的 1.14.4-flmx1；fork 安装只接受具体
+	// 版本，由调用方点名。Xray 等其余内核仍走下方的 latest 解析。
+	if requestedLatest && kernel.EffectiveType(info.Type) == kernel.TypeSingbox {
+		response.WriteJSON(w, response.ErrDefault(fmt.Sprintf("sing-box 只支持安装具体版本（当前 fork 版 %s），不支持 latest，请选择具体版本", kernel.SingboxForkVersion)))
+		return
+	}
 	// Kernels with a closed version list store the concrete version
 	// so the binary directory and protocol checks agree with what is pinned.
 	resolved, err := kernel.ResolveVersion(info, version)
@@ -708,10 +715,31 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("内核已登记，但下发失败: "+err.Error()))
 		return
 	}
+	// Fork 伴生同步：主核换版成功后把伴生行同升到同一版本并立即下发，
+	// 否则伴生实例继续跑旧二进制（旧队列 64）。伴生行经同一安装入口
+	// （Lookup 的 singbox-companion 特例共用 sing-box 下载信息），
+	// 下发失败只记警告、不推翻主核已成功的安装；伴生行版本登记保留
+	// 为待安装意图，随下次对账重试。
+	companionWarning := ""
+	if info.Type == kernel.TypeSingbox {
+		h.syncCompanionKernelVersion(req.NodeID, version)
+		if comp, cerr := h.repo.GetNodeKernelByType(req.NodeID, kernel.TypeSingboxCompanion); cerr == nil && comp != nil {
+			if cerr := h.applyKernel(comp.ID, true); cerr != nil {
+				companionWarning = fmt.Sprintf("伴生内核同步到 %s 失败：%s（主内核已安装，伴生仍为旧版，将在下次对账时重试）", version, cerr.Error())
+			}
+		}
+	}
 	// R2-F2-A2: re-installing the version the node already runs must not
 	// read as a silent success — the agent keeps the existing binary, so
 	// name the fact on the envelope.
 	warning := sameVersionInstallWarning(requestedLatest, prevInstalled, version)
+	if companionWarning != "" {
+		if warning != "" {
+			warning += "；" + companionWarning
+		} else {
+			warning = companionWarning
+		}
+	}
 	if w := latestFallbackWarning(latestFellBack); w != "" {
 		if warning != "" {
 			warning += "；" + w
@@ -3161,10 +3189,36 @@ func versionFloorExempt(version string) bool {
 // 留——xrayPrivateBlockWarning（纯警告面，R8-005 既定口径）与
 // kernelSupportsPostQuantumReality（先取 banner 内首个可解析版本
 // token、取不到即 fail-closed，PORT-043）。宽松版本体不动（其语义有既有钉死用例）。
+// Fork 例外：三严格变体入口先经 stripForkVersionSuffixForCompare
+// 剥 "-flmx<数字>" 后缀（1.14.4-flmx1 按 1.14.4 计），其余后缀
+// （如 -rc1）仍原样进入纯数字校验、fail-closed。
+// forkVersionSuffixPattern 是严格比较器唯一认可的版本后缀：fork
+// 构建的 "-flmx<数字>"（如 1.14.4-flmx1）。口径与 system_upgrade.go
+// 的 stripVersionSuffixForCompare（只剥文档化的 "-cand"）同族——
+// 只剥白名单后缀，其余后缀一律不动、随后由纯数字段校验 fail-closed
+// 拒绝（"-rc1" 仍被拒，见 TestVersionBelowStrictUnits 的 fork 格）。
+// 宽松版（versionBelow / versionBelow3 / versionBelowPadded）一字不动。
+var forkVersionSuffixPattern = regexp.MustCompile(`^-flmx[0-9A-Za-z]*$`)
+
+// stripForkVersionSuffixForCompare 剥比较用的 fork 版本后缀：
+// "1.14.4-flmx1" -> "1.14.4"。非 fork 后缀原样返回，调用方的纯数字
+// 段校验随即把它判为低于下限（fail-closed）。
+func stripForkVersionSuffixForCompare(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		if forkVersionSuffixPattern.MatchString(v[i:]) {
+			return v[:i]
+		}
+	}
+	return v
+}
+
 func versionBelowStrict(version string, major, minor int) bool {
 	if versionFloorExempt(version) {
 		return false
 	}
+	version = stripForkVersionSuffixForCompare(version)
 	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
 	if len(parts) < 2 {
 		return true
@@ -3192,6 +3246,7 @@ func versionBelow3Strict(version string, major, minor, patch int) bool {
 	if versionFloorExempt(version) {
 		return false
 	}
+	version = stripForkVersionSuffixForCompare(version)
 	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
 	if len(parts) < 3 {
 		return true
@@ -3448,6 +3503,26 @@ func (h *Handler) companionKernelIDForNode(nodeID int64) (int64, bool) {
 	return k.ID, true
 }
 
+// syncCompanionKernelVersion 把伴生行的版本登记同步到目标版本（主核
+// 版本）：伴生行与主核跑同一二进制，版本登记不一致即意味着伴生实例
+// 仍在跑旧构建。只写登记，不下发；下发由调用方（kernelInstall 的
+// 换版收尾、reconcile 的 apply 循环）完成。latest/空串不参与同步——
+// 收敛发生在 apply 入口。
+func (h *Handler) syncCompanionKernelVersion(nodeID int64, version string) {
+	if version == "" || versionFloorExempt(version) {
+		return
+	}
+	comp, err := h.repo.GetNodeKernelByType(nodeID, kernel.TypeSingboxCompanion)
+	if err != nil || comp == nil || comp.Version == version {
+		return
+	}
+	if err := h.repo.UpdateNodeKernelFields(comp.ID, map[string]interface{}{
+		"version": version, "updated_time": time.Now().UnixMilli(),
+	}); err != nil {
+		log.Printf("companion split: sync companion version node_id=%d: %v", nodeID, err)
+	}
+}
+
 // ensureCompanionKernel performs the one-time companion split for a node:
 // when the node has enabled companions and its agent understands the
 // companion instance, create the companion NodeKernel row (version tracks
@@ -3467,6 +3542,13 @@ func (h *Handler) ensureCompanionKernel(nodeID int64) {
 		return
 	}
 	if _, active := h.companionKernelIDForNode(nodeID); active {
+		// Fork 伴生同步：主核换版后伴生行须同升——只在创建时快照主核
+		// 版本会留一个跑旧二进制（旧队列 64）的伴生实例。行已存在
+		// 时同样同步版本，实际下发由调用方的 apply 循环（或
+		// kernelInstall 的换版收尾）完成。
+		if main, err := h.repo.GetNodeKernelByType(nodeID, kernel.TypeSingbox); err == nil && main != nil {
+			h.syncCompanionKernelVersion(nodeID, main.Version)
+		}
 		h.moveCompanionsToKernel(nodeID)
 		return
 	}
@@ -3618,6 +3700,28 @@ func (h *Handler) requireNftIsolatedAgent(nodeID int64) error {
 	return nil
 }
 
+// kernelApplyVersionMismatch 是 F3 的安装面实测版本校验（纯函数，
+// 供单测）：安装下发（install=true）回执后，agent 上报的实测版本
+// 必须包含请求版本，否则 fork 构建输出 "dev" 也会静默报成功。
+// 只约束 sing-box 同族（fork 落地对象）；其余内核与非安装下发
+// （配置重推/对账）不在此校验内。reported 为空同样判不一致——
+// 实测版本探不到时不得按成功确认。返回空串表示通过。
+func kernelApplyVersionMismatch(kernelType, requested, reported string) string {
+	if kernel.EffectiveType(kernelType) != kernel.TypeSingbox {
+		return ""
+	}
+	if versionFloorExempt(requested) {
+		return ""
+	}
+	if reported == "" {
+		return fmt.Sprintf("内核实测版本为空，与请求版本 %s 不一致，安装未确认", requested)
+	}
+	if strings.Contains(reported, requested) {
+		return ""
+	}
+	return fmt.Sprintf("内核实测版本 %q 与请求版本 %s 不一致（疑似错误构建），安装未确认", reported, requested)
+}
+
 func (h *Handler) applyKernel(kernelID int64, install bool) error {
 	return h.applyKernelWith(kernelID, install, nil)
 }
@@ -3661,7 +3765,15 @@ func (h *Handler) applyKernelWithMode(kernelID int64, install bool, realmOverrid
 	// config pushes must not break because GitHub is unreachable — and
 	// is logged by name; kernelInstall remains the loud surface.
 	if versionFloorExempt(k.Version) && k.Version != "" {
-		if info, ok := kernel.Lookup(k.KernelType); ok && len(info.Versions) == 0 {
+		// F5：sing-box 的存量 "latest" 行钉死到已核实的 fork 版，不再
+		// 跟随 fork 仓的 release 列表漂移；其余内核仍走 release 列表。
+		if kernel.EffectiveType(k.KernelType) == kernel.TypeSingbox {
+			if uerr := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
+				"version": kernel.SingboxForkVersion, "updated_time": time.Now().UnixMilli(),
+			}); uerr == nil {
+				k.Version = kernel.SingboxForkVersion
+			}
+		} else if info, ok := kernel.Lookup(k.KernelType); ok && len(info.Versions) == 0 {
 			if concrete, rerr := resolveLatestConcreteVersion(info); rerr == nil {
 				if uerr := h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
 					"version": concrete, "updated_time": time.Now().UnixMilli(),
@@ -3723,6 +3835,19 @@ func (h *Handler) applyKernelWithMode(kernelID int64, install bool, realmOverrid
 
 	var state agentKernelState
 	_ = remarshal(res.Data, &state)
+	// F3：安装下发回执后校验实测版本——fork 构建若输出 "dev"（或
+	// 旧版二进制）须在此明错，不写 installed_version、不确认成功；
+	// kernelInstall 的失败分支随即把版本登记回滚（见
+	// rollbackKernelInstallAfterFailure：本路径落 error 态即回滚）。
+	if install {
+		if msg := kernelApplyVersionMismatch(k.KernelType, k.Version, state.Version); msg != "" {
+			h.observeKernelStatusTransition(*k, kernelStatusError, msg)
+			_ = h.repo.UpdateNodeKernelFields(k.ID, map[string]interface{}{
+				"status": kernelStatusError, "last_error": msg, "updated_time": now,
+			})
+			return errors.New(msg)
+		}
+	}
 	newStatus := kernelStateStatus(state, k.Enabled == 1)
 	h.observeKernelStatusTransition(*k, newStatus, state.Error)
 	fields := map[string]interface{}{

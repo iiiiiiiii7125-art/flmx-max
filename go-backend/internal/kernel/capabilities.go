@@ -9,6 +9,18 @@ import (
 	"strings"
 )
 
+// SingboxForkRepo 是 sing-box 的 FLMX fork 仓库：上游 SagerNet/sing-box
+// 的入站返回包队列只有 64，200 包零间隔突发会静默丢包；fork 把队列
+// 扩到 1024（1.14.4-flmx1）。面板侧全部 sing-box 默认面（下载 URL、
+// GitHub 锚定、版本列表）都以该常量为准，不再分叉写仓名；上游仓仅
+// 在 gh_mirror allowlist 里保留作回退，不作默认。
+const SingboxForkRepo = "iiiiiiiii7125-art/sing-box"
+
+// SingboxForkVersion 是当前唯一经核实的 fork 构建版本：fork 仓的
+// v1.14.4-flmx1 tag。latest 哨兵不得漂向它之外的 tag（见
+// kernelInstall 的 sing-box latest 拒绝与 apply 期的存量收敛钉死）。
+const SingboxForkVersion = "1.14.4-flmx1"
+
 const (
 	TypeXray    = "xray"
 	TypeSingbox = "singbox"
@@ -117,13 +129,16 @@ var xrayDownload = &Download{
 }
 
 // sing-box publishes no checksum files; the agent verifies against the
-// GitHub release asset digest.
+// GitHub release asset digest. The default source is the FLMX fork
+// (SingboxForkRepo), whose 1.14.4-flmx1 build carries the enlarged
+// inbound return-packet queue; upstream SagerNet/sing-box is retained
+// only in the gh_mirror allowlist as a fallback, never as the default.
 var singboxDownload = &Download{
-	URL:         "https://github.com/SagerNet/sing-box/releases/download/v{VERSION}/sing-box-{VERSION}-linux-{ARCH}.tar.gz",
+	URL:         "https://github.com/" + SingboxForkRepo + "/releases/download/v{VERSION}/sing-box-{VERSION}-linux-{ARCH}.tar.gz",
 	Archive:     "tar.gz",
 	BinName:     "sing-box",
 	ArchMap:     map[string]string{"amd64": "amd64", "arm64": "arm64", "arm": "armv7", "386": "386"},
-	GitHubRepo:  "SagerNet/sing-box",
+	GitHubRepo:  SingboxForkRepo,
 	GitHubAsset: "sing-box-{VERSION}-linux-{ARCH}.tar.gz",
 	Mirrorable:  true,
 }
@@ -162,7 +177,7 @@ var catalog = []Info{
 		Type:        TypeSingbox,
 		Name:        "sing-box",
 		Implemented: true,
-		ReleaseRepo: "SagerNet/sing-box",
+		ReleaseRepo: SingboxForkRepo,
 		CertModes:   []string{"self", "file", "acme"},
 		Download:    singboxDownload,
 		Protocols: []ProtocolCap{

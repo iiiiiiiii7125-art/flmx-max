@@ -198,6 +198,44 @@ func TestC03EnsureCompanionKernelSplitsOnNewAgent(t *testing.T) {
 	}
 }
 
+// TestC03EnsureCompanionKernelSyncsVersionOnMainUpgrade：主核换版后
+// 伴生行须同升——只在创建时快照主核版本会留一个跑旧二进制（旧队列
+// 64）的伴生实例；行已存在时 ensure 同样同步版本登记。
+func TestC03EnsureCompanionKernelSyncsVersionOnMainUpgrade(t *testing.T) {
+	r, h, node, main, _, _ := c03SplitFixture(t, "2.1.14")
+	h.ensureCompanionKernel(node)
+	compKernel, err := r.GetNodeKernelByType(node, kernel.TypeSingboxCompanion)
+	if err != nil || compKernel == nil {
+		t.Fatalf("companion kernel row must exist: %v", compKernel)
+	}
+	// 主核换到 fork 版、伴生行仍为旧版，ensure 须把伴生行同升。
+	if err := r.UpdateNodeKernelFields(main.ID, map[string]interface{}{
+		"version": kernel.SingboxForkVersion, "updated_time": time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.UpdateNodeKernelFields(compKernel.ID, map[string]interface{}{
+		"version": "1.14.3", "updated_time": time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.ensureCompanionKernel(node)
+	after, err := r.GetNodeKernelByType(node, kernel.TypeSingboxCompanion)
+	if err != nil || after == nil {
+		t.Fatalf("companion kernel row must survive: %v", err)
+	}
+	if after.Version != kernel.SingboxForkVersion {
+		t.Fatalf("companion kernel version must track the upgraded main (%q), got %q", kernel.SingboxForkVersion, after.Version)
+	}
+	kernels, err := r.ListNodeKernels(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kernels) != 2 {
+		t.Fatalf("sync must not create a second companion row, got %d kernel rows", len(kernels))
+	}
+}
+
 // TestC03EnsureCompanionKernelSkipsOldAgent pins the fallback: on a
 // pre-2.1.14 agent no companion row is created and the companion stays
 // on the main kernel, behaving exactly as before the split.

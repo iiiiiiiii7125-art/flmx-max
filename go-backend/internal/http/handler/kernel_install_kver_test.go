@@ -47,13 +47,17 @@ func stubReleaseTagAPI(t *testing.T, statuses map[string]int) string {
 }
 
 func TestKernelReleaseTagExists(t *testing.T) {
-	stubReleaseTagAPI(t, map[string]int{"v1.14.4": http.StatusOK, "v5.5.5": http.StatusInternalServerError})
+	stubReleaseTagAPI(t, map[string]int{"v1.14.4": http.StatusOK, "v1.14.4-flmx1": http.StatusOK, "v5.5.5": http.StatusInternalServerError})
 	info, ok := kernel.Lookup(kernel.TypeSingbox)
 	if !ok {
 		t.Fatal("sing-box info missing")
 	}
 	if exists, determined := kernelReleaseTagExists(info, "1.14.4"); !determined || !exists {
 		t.Fatalf("1.14.4: got exists=%v determined=%v, want true/true", exists, determined)
+	}
+	// Fork tag：预检走 fork 仓（ReleaseRepo 已换仓），v1.14.4-flmx1 须存在。
+	if exists, determined := kernelReleaseTagExists(info, "1.14.4-flmx1"); !determined || !exists {
+		t.Fatalf("1.14.4-flmx1: got exists=%v determined=%v, want true/true", exists, determined)
 	}
 	if exists, determined := kernelReleaseTagExists(info, "9.9.9"); !determined || exists {
 		t.Fatalf("9.9.9: got exists=%v determined=%v, want false/true", exists, determined)
@@ -159,6 +163,44 @@ func TestKernelInstallKeepsVersionWhenApplyNeverReachesAgentKVER(t *testing.T) {
 	}
 	if after.LastError == "" {
 		t.Fatal("failure trace must stay in last_error")
+	}
+}
+
+// Fork 版同口径：1.14.4-flmx1 经 fork 仓预检存在，离线节点上版本
+// 写保留为待安装意图（pending），不回滚。
+func TestKernelInstallForkVersionStoresOnOfflineNodeKVER(t *testing.T) {
+	stubReleaseTagAPI(t, map[string]int{"v1.14.4-flmx1": http.StatusOK})
+	r, err := repo.Open(t.TempDir() + "/kver-fork.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+
+	nodeID := seedRelayTargetNode(t, r, "kver-fork", "198.51.100.26")
+	k := seedB8Kernel(t, r, nodeID, kernel.TypeSingbox, "1.14.4")
+	if err := r.UpdateNodeKernelFields(k.ID, map[string]interface{}{
+		"installed_version": "sing-box version 1.14.4", "status": kernelStatusRunning,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, msg := postKernelInstall(t, h, nodeID, kernel.TypeSingbox, "1.14.4-flmx1")
+	if code == 0 {
+		t.Fatal("install on an offline node must fail at apply")
+	}
+	if !strings.Contains(msg, "内核已登记") {
+		t.Fatalf("pending install must keep the registered-failure receipt, got %q", msg)
+	}
+	after, err := r.GetNodeKernel(k.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != "1.14.4-flmx1" {
+		t.Fatalf("pending install must keep the fork version as intent, got %q", after.Version)
+	}
+	if after.Status != kernelStatusPending {
+		t.Fatalf("offline apply must leave status pending, got %q", after.Status)
 	}
 }
 
