@@ -100,7 +100,12 @@ func ProbeHostKeyFingerprint(ctx context.Context, cfg SSHConfig) (string, error)
 }
 
 type Runner interface {
-	ApplyScript(ctx context.Context, cfg SSHConfig, table, script string) error
+	// ApplyScript applies script to table. migratePlain permits the
+	// one-shot upgrade migration (see buildApplyCommand): it must be
+	// true only when the caller holds proof this install previously
+	// owned the node's plain tables — never merely because the
+	// isolated table does not exist yet.
+	ApplyScript(ctx context.Context, cfg SSHConfig, table, script string, migratePlain bool) error
 	Test(ctx context.Context, cfg SSHConfig) error
 	ListTableJSON(ctx context.Context, cfg SSHConfig, table string) ([]byte, error)
 }
@@ -142,8 +147,8 @@ func buildCapabilityCheckCommand(nft, probeName string) string {
 		"fi"
 }
 
-func (r *SSHRunner) ApplyScript(ctx context.Context, cfg SSHConfig, table, script string) error {
-	command := buildApplyCommand(nftBinary(cfg), table, script)
+func (r *SSHRunner) ApplyScript(ctx context.Context, cfg SSHConfig, table, script string, migratePlain bool) error {
+	command := buildApplyCommand(nftBinary(cfg), table, script, migratePlain)
 	return r.run(ctx, cfg, command)
 }
 
@@ -152,13 +157,29 @@ func (r *SSHRunner) ApplyScript(ctx context.Context, cfg SSHConfig, table, scrip
 // script is loaded, with a validation pass that preserves the
 // active rules on failure.
 //
-// P1-1 upgrade migration: the pre-isolation plain tables (flmx,
-// flvx) are deleted only when the isolated table does not exist
-// yet — i.e. on the first apply after the upgrade. Afterwards the
-// isolated table exists, so the gate never fires again and a plain
-// table that shows up later (another panel's live table) is left
-// alone instead of being wiped on every reconcile.
-func buildApplyCommand(nft, table, script string) string {
+// B-01 upgrade migration: the pre-isolation plain tables (flmx,
+// flvx) are deleted only when BOTH hold — the isolated table does
+// not exist yet (first apply after the upgrade) AND the caller
+// holds ownership proof (migratePlain: this install previously
+// applied nft rules to this node, persisted as nft_rule_binding
+// rows — the panel-side analogue of the agent's persisted
+// signature in needsTableMigration). The P1-1 gate checked only
+// the first half, so an upgraded panel's first Reconcile deleted
+// another panel's live plain table on a co-managed node. After a
+// successful apply the isolated table exists, so the gate never
+// fires again and the migration runs at most once; a failed apply
+// leaves the isolated table missing and the next sync retries.
+func buildApplyCommand(nft, table, script string, migratePlain bool) string {
+	migration := ""
+	if migratePlain {
+		migration = "else\n" +
+			"  if " + nft + " list table inet " + plainTableName + " >/dev/null 2>&1; then\n" +
+			"    printf '%s\\n' 'delete table inet " + plainTableName + "' >> \"$batch\"\n" +
+			"  fi\n" +
+			"  if " + nft + " list table inet " + legacyTableName + " >/dev/null 2>&1; then\n" +
+			"    printf '%s\\n' 'delete table inet " + legacyTableName + "' >> \"$batch\"\n" +
+			"  fi\n"
+	}
 	return "set -eu\n" +
 		"tmp=$(mktemp /tmp/flmx-nft-XXXXXX.nft)\n" +
 		"batch=$(mktemp /tmp/flmx-nft-batch-XXXXXX.nft) || { rm -f \"$tmp\"; exit 1; }\n" +
@@ -170,13 +191,7 @@ func buildApplyCommand(nft, table, script string) string {
 		": > \"$batch\"\n" +
 		"if " + nft + " list table inet " + table + " >/dev/null 2>&1; then\n" +
 		"  printf '%s\\n' 'delete table inet " + table + "' >> \"$batch\"\n" +
-		"else\n" +
-		"  if " + nft + " list table inet " + plainTableName + " >/dev/null 2>&1; then\n" +
-		"    printf '%s\\n' 'delete table inet " + plainTableName + "' >> \"$batch\"\n" +
-		"  fi\n" +
-		"  if " + nft + " list table inet " + legacyTableName + " >/dev/null 2>&1; then\n" +
-		"    printf '%s\\n' 'delete table inet " + legacyTableName + "' >> \"$batch\"\n" +
-		"  fi\n" +
+		migration +
 		"fi\n" +
 		"cat \"$tmp\" >> \"$batch\"\n" +
 		"if ! " + nft + " -c -f \"$batch\"; then\n" +

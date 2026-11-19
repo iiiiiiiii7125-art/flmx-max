@@ -66,18 +66,24 @@ func (m *Manager) Reconcile(ctx context.Context, cfg SSHConfig, plan NodePlan) (
 		Script: RenderTable(plan),
 		Hashes: PlanHashes(plan),
 	}
-	if err := m.runner.ApplyScript(ctx, cfg, plan.TableName(), result.Script); err != nil {
+	if err := m.runner.ApplyScript(ctx, cfg, plan.TableName(), result.Script, plan.MigratePlainTables); err != nil {
 		return ApplyResult{}, err
 	}
 	return result, nil
 }
 
-func (m *Manager) Clear(ctx context.Context, cfg SSHConfig) error {
+func (m *Manager) Clear(ctx context.Context, cfg SSHConfig, migratePlain bool) error {
 	if err := m.ensureInitialized(); err != nil {
 		return err
 	}
 	script := RenderTable(NodePlan{InstanceID: m.instance})
-	if err := m.runner.ApplyScript(ctx, cfg, m.tableName(), script); err != nil {
+	// B-01: Clear shares buildApplyCommand's migration gate with
+	// Reconcile, so it takes the same ownership proof from the
+	// caller (the handler, from nft_rule_binding rows). Without
+	// proof Clear deletes only this install's isolated table; a
+	// plain table left behind is residue, but deleting it unproven
+	// is exactly the bug this gate closes.
+	if err := m.runner.ApplyScript(ctx, cfg, m.tableName(), script, migratePlain); err != nil {
 		return err
 	}
 	// 节点清理同时删除暂停过滤表：封禁端口随表释放，否则端口被新
