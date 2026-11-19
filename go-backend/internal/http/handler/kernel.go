@@ -757,6 +757,15 @@ func (h *Handler) kernelInstall(w http.ResponseWriter, r *http.Request) {
 			warning = w
 		}
 	}
+	// 发现 1：显式装上游构建（回滚）同样点名在回执上，见
+	// singboxUpstreamInstallWarning。
+	if w := singboxUpstreamInstallWarning(info.Type, version); w != "" {
+		if warning != "" {
+			warning += "；" + w
+		} else {
+			warning = w
+		}
+	}
 	if warning != "" {
 		response.WriteJSON(w, response.OKWithWarning(nil, warning))
 		return
@@ -2917,6 +2926,12 @@ type kernelVersionItem struct {
 	Version     string `json:"version"`
 	Prerelease  bool   `json:"prerelease"`
 	PublishedAt string `json:"publishedAt,omitempty"`
+	// Source, sing-box only: "fork" for a FLMX fork build
+	// (1.14.4-flmx1) or "upstream" for the rollback release
+	// (1.14.4) — the two share a base version and are otherwise
+	// indistinguishable in the picker (发现 1). Other kernels
+	// have no fork build and leave this empty.
+	Source string `json:"source,omitempty"`
 }
 
 // kernelVersionFetchCall 是一次进行中的内核版本抓取（singleflight
@@ -2988,18 +3003,80 @@ func kernelReleaseVersions(info kernel.Info) ([]kernelVersionItem, error) {
 
 // sameVersionInstallWarning names a no-op reinstall on the success
 // envelope (R2-F2-A2): the node already runs the requested version, so
-// the agent keeps the existing binary and nothing was downloaded. The
-// Contains match on InstalledVersion is the same caliber the apply
-// timeout check uses. Returns "" when the install actually changes
-// (or first installs) the version.
+// the agent keeps the existing binary and nothing was downloaded.
+// Returns "" when the install actually changes (or first installs)
+// the version.
+//
+// 发现 2：InstalledVersion 是 agent 上报的 banner（"sing-box
+// version 1.14.4-flmx1 linux/amd64"），须先取其版本 token 再比；
+// 且必须精确比较、fork 后缀计入版本身份——旧实现
+// strings.Contains(prevInstalled, version) 把子串当相等：已装
+// fork 1.14.4-flmx1 时换装上游 1.14.4 会命中，回执谎报"已安装该
+// 版本 1.14.4，本次未重新下载"，实际已下载并降级。底版与后缀按
+// 严格比较器的口径分别剥离比较（stripForkVersionSuffixForCompare）：
+// 底版相同、后缀不同（fork↔上游任一方向）都不是同一版本。
 func sameVersionInstallWarning(requestedLatest bool, prevInstalled, version string) string {
-	if prevInstalled == "" || version == "" || !strings.Contains(prevInstalled, version) {
+	if prevInstalled == "" || version == "" || !sameInstalledVersion(prevInstalled, version) {
 		return ""
 	}
 	if requestedLatest {
 		return fmt.Sprintf("已是最新版 %s，无需更新", version)
 	}
 	return fmt.Sprintf("已安装该版本 %s，本次未重新下载", version)
+}
+
+// sameInstalledVersion reports whether the previously installed
+// version names exactly the version being installed: the version
+// token of each side (banner-tolerant) must agree on both the base
+// version and the -flmx* suffix, so a fork build and its upstream
+// base are different versions in either direction.
+func sameInstalledVersion(prevInstalled, version string) bool {
+	if strings.EqualFold(strings.TrimSpace(prevInstalled), "latest") &&
+		strings.EqualFold(strings.TrimSpace(version), "latest") {
+		return true
+	}
+	prev, ok := installedVersionToken(prevInstalled)
+	if !ok {
+		return false
+	}
+	want, ok := installedVersionToken(version)
+	if !ok {
+		return false
+	}
+	return stripForkVersionSuffixForCompare(prev) == stripForkVersionSuffixForCompare(want) &&
+		forkVersionSuffix(prev) == forkVersionSuffix(want)
+}
+
+// forkVersionSuffix returns the -flmx* suffix of a version token
+// ("" when the token is not a fork build).
+func forkVersionSuffix(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexByte(v, '-'); i >= 0 && forkVersionSuffixPattern.MatchString(v[i:]) {
+		return v[i:]
+	}
+	return ""
+}
+
+// installedVersionTokenPattern 是 banner 内版本 token 的形态：
+// 数字点分段加可选后缀（"1.14.4-flmx1"、"26.11.9"、
+// "1.14.4-rc1"），与 kernelVersionEntryPattern 的单段文法同源，
+// 但只取 token、不做安装合法性判定。
+var installedVersionTokenPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:-[0-9A-Za-z.-]+)?$`)
+
+// installedVersionToken scans a reported version string for its
+// version token: a bare version passes through, a full banner
+// ("sing-box version 1.14.4-flmx1 linux/amd64", "Xray 26.11.9
+// (Xray, ...)") yields the token. No version-shaped token yields
+// false — the caller then treats the install as a change, never
+// as a no-op.
+func installedVersionToken(raw string) (string, bool) {
+	for _, tok := range strings.Fields(raw) {
+		if installedVersionTokenPattern.MatchString(tok) {
+			return strings.TrimPrefix(tok, "v"), true
+		}
+	}
+	return "", false
 }
 
 // latestFallbackWarning names an install that fell back to storing the
@@ -3124,6 +3201,19 @@ func (h *Handler) kernelVersions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
+	}
+	// 发现 1：sing-box 的版本列表同时含 fork 构建（1.14.4-flmx1）
+	// 与回滚用的上游构建（1.14.4），须在列表里标注来源，否则
+	// 两者在下拉框里无法区分、误选即静默降级。回滚路本身保留，
+	// 只做显式化。其余内核无 fork 构建，不标注。
+	if kernel.EffectiveType(info.Type) == kernel.TypeSingbox {
+		for i := range items {
+			if kernel.IsForkVersion(items[i].Version) {
+				items[i].Source = "fork"
+			} else {
+				items[i].Source = "upstream"
+			}
+		}
 	}
 	response.WriteJSON(w, response.OK(items))
 }
@@ -3304,6 +3394,22 @@ const xrayPrivateBlockVersion = "26.5.9"
 // envelope warning 通道下发，前端必须展示），文档口径见 faq.md。
 // 返回空串表示无需提示（非 Xray / 版本达标 / latest / 不可解析，
 // 与 versionBelow3 既有语义一致）。
+// singboxUpstreamInstallWarning names an explicit install of a
+// non-fork (upstream) sing-box build on the success envelope
+// (发现 1)：回滚用的上游构建（如 1.14.4）不含 fork 的入站返回包
+// 队列修复（64），200 包突发会丢包。回滚路保留、安装继续，只
+// 是回执必须点名——否则换版全程绿灯、用户无从知道节点已离开
+// 修好的 fork 版。fork 构建与非 sing-box 内核返回 ""。
+func singboxUpstreamInstallWarning(kernelType, version string) string {
+	if kernel.EffectiveType(kernelType) != kernel.TypeSingbox {
+		return ""
+	}
+	if versionFloorExempt(version) || kernel.IsForkVersion(version) {
+		return ""
+	}
+	return fmt.Sprintf("警告：已安装上游构建 %s（非 fork 版，无入站返回包队列修复，200 包突发可能丢包）；如需队列修复请安装 fork 版 %s", version, kernel.SingboxForkVersion)
+}
+
 func xrayPrivateBlockWarning(kernelType, version string) string {
 	if kernelType != kernel.TypeXray || !versionBelow3(version, 26, 5, 9) {
 		return ""
@@ -3706,6 +3812,10 @@ func (h *Handler) requireNftIsolatedAgent(nodeID int64) error {
 // 只约束 sing-box 同族（fork 落地对象）；其余内核与非安装下发
 // （配置重推/对账）不在此校验内。reported 为空同样判不一致——
 // 实测版本探不到时不得按成功确认。返回空串表示通过。
+// 上游请求口径（发现 1）：请求上游版（如 1.14.4）时实测含请求串
+// 即通过，fork 实测同样通过（fork 满足上游请求）；上游构建本身
+// 的告警不在此函数内——F3 返回非空即判安装失败，警告不能走这
+// 条通道，由安装回执的 singboxUpstreamInstallWarning 负责点名。
 func kernelApplyVersionMismatch(kernelType, requested, reported string) string {
 	if kernel.EffectiveType(kernelType) != kernel.TypeSingbox {
 		return ""

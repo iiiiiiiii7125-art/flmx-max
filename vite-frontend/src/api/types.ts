@@ -792,6 +792,8 @@ export interface KernelInfo {
   relay?: boolean;
   protocols: KernelProtocolCap[] | null;
   versions?: string[];
+  /** F-LB-01：开放版本列表内核的安装框默认版本（sing-box 为 fork 版）；无此字段时默认 latest。 */
+  defaultVersion?: string;
   /** 后端无 omitempty：未配置时下发 null 而非缺失（F-144）。 */
   certModes?: string[] | null;
 }

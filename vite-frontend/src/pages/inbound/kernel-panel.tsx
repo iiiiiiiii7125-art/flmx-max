@@ -60,6 +60,23 @@ function shortVersion(v: string): string {
   return m ? m[0] : v;
 }
 
+function releaseLabel(r: {
+  version: string;
+  prerelease: boolean;
+  source?: string;
+}): string {
+  // 发现 1：版本列表须标注来源——fork 构建与回滚用的上游构建底版
+  // 相同（1.14.4-flmx1 / 1.14.4），来源由后端 /kernel/versions
+  // 下发，前端只渲染、不写死版本号。
+  const base = r.prerelease ? `${r.version}（预发布）` : r.version;
+
+  if (r.source === "fork") return `${base}（fork 构建）`;
+
+  if (r.source === "upstream") return `${base}（上游构建）`;
+
+  return base;
+}
+
 export function KernelPanel({
   caps,
   kernels,
@@ -72,7 +89,7 @@ export function KernelPanel({
   const [sheetFor, setSheetFor] = useState<number | null>(null);
   const [releases, setReleases] = useState<{
     type: string;
-    items: { version: string; prerelease: boolean }[];
+    items: { version: string; prerelease: boolean; source?: string }[];
     error: string;
   } | null>(null);
   const [customVersion, setCustomVersion] = useState(false);
@@ -110,12 +127,21 @@ export function KernelPanel({
   // X-P2-2：被跨内核引用守卫拦下时，后端回传的引用方入站名清单。
   const [removeReferrers, setRemoveReferrers] = useState<string[]>([]);
 
+  // F-LB-01：安装框默认版本取后端 caps 的 defaultVersion（sing-box
+  // 为 fork 版），再取封闭列表首项，最后才落 latest——sing-box 无
+  // 封闭列表、latest 又会被后端拒绝，默认 latest 等于让用户先撞
+  // 一次拒绝。Xray 无 defaultVersion，仍默认 latest，不受影响。
+  const defaultVersionFor = (kernelType: string) =>
+    caps?.kernels.find((k) => k.type === kernelType)?.defaultVersion ??
+    caps?.kernels.find((k) => k.type === kernelType)?.versions?.[0] ??
+    "latest";
+
   useEffect(() => {
     if (!installRequest) return;
     setInstallForm({
       nodeId: String(installRequest.nodeId),
       kernelType: installRequest.kernelType,
-      version: "latest",
+      version: defaultVersionFor(installRequest.kernelType),
     });
     setInstallOpen(true);
     onInstallRequestHandled();
@@ -131,9 +157,7 @@ export function KernelPanel({
     setInstallForm({
       nodeId: nodeId ? String(nodeId) : "",
       kernelType,
-      version:
-        caps?.kernels.find((k) => k.type === kernelType)?.versions?.[0] ??
-        "latest",
+      version: defaultVersionFor(kernelType),
     });
     setInstallOpen(true);
   };
@@ -571,10 +595,9 @@ export function KernelPanel({
                       setInstallForm((p) => ({
                         ...p,
                         kernelType: String(Array.from(keys)[0] ?? "xray"),
-                        version:
-                          caps?.kernels.find(
-                            (k) => k.type === String(Array.from(keys)[0]),
-                          )?.versions?.[0] ?? "latest",
+                        version: defaultVersionFor(
+                          String(Array.from(keys)[0] ?? "xray"),
+                        ),
                       }))
                     }
                   >
@@ -617,7 +640,11 @@ export function KernelPanel({
                     <>
                       {releaseItems.length > 0 && (
                         <Select
-                          description="最新版出问题时可以选旧版本；预发布版不建议使用"
+                          description={
+                            installForm.kernelType === "singbox"
+                              ? "fork 构建含入站返回包队列修复；上游构建无此修复，200 包突发可能丢包"
+                              : "最新版出问题时可以选旧版本；预发布版不建议使用"
+                          }
                           label="版本"
                           selectedKeys={[
                             customVersion
@@ -646,15 +673,9 @@ export function KernelPanel({
                             ...releaseItems.map((r) => (
                               <SelectItem
                                 key={r.version}
-                                textValue={
-                                  r.prerelease
-                                    ? `${r.version}（预发布）`
-                                    : r.version
-                                }
+                                textValue={releaseLabel(r)}
                               >
-                                {r.prerelease
-                                  ? `${r.version}（预发布）`
-                                  : r.version}
+                                {releaseLabel(r)}
                               </SelectItem>
                             )),
                             <SelectItem key="custom" textValue="手动输入…">

@@ -16,6 +16,23 @@ import (
 // 在 gh_mirror allowlist 里保留作回退，不作默认。
 const SingboxForkRepo = "iiiiiiiii7125-art/sing-box"
 
+// singboxForkSuffixPattern 是 fork 构建的版本后缀（1.14.4-flmx1）：
+// 与 handler 的 forkVersionSuffixPattern 同口径（白名单后缀），
+// 仅用于区分 fork 构建与上游构建，不参与版本高低比较。
+var singboxForkSuffixPattern = regexp.MustCompile(`^-flmx[0-9A-Za-z]*$`)
+
+// IsForkVersion reports whether a concrete sing-box version names a
+// FLMX fork build (发现 1)：fork 构建带 "-flmx*" 后缀
+// （1.14.4-flmx1）；裸底版（1.14.4）是回滚用的上游构建，不含入站
+// 返回包队列修复。latest/空串不是具体构建，返回 false。
+func IsForkVersion(version string) bool {
+	v := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(version), "v"))
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		return singboxForkSuffixPattern.MatchString(v[i:])
+	}
+	return false
+}
+
 // SingboxForkVersion 是当前唯一经核实的 fork 构建版本：fork 仓的
 // v1.14.4-flmx1 tag。latest 哨兵不得漂向它之外的 tag（见
 // kernelInstall 的 sing-box latest 拒绝与 apply 期的存量收敛钉死）。
@@ -100,6 +117,14 @@ type Info struct {
 	// Versions, when set, is the closed list of installable versions (the
 	// first is the default); otherwise any version or "latest" is allowed.
 	Versions []string `json:"versions,omitempty"`
+	// DefaultVersion, when set, is the version the install form
+	// defaults to for an open-list kernel (F-LB-01): sing-box has no
+	// closed list, so the picker cannot take versions[0] — without
+	// this the form falls back to the literal "latest", which the
+	// install endpoint refuses for sing-box. The value is the
+	// verified fork build, never "latest"; kernels without a
+	// default keep the "latest" fallback.
+	DefaultVersion string `json:"defaultVersion,omitempty"`
 	// ReleaseRepo is the GitHub repository whose releases list the
 	// installable versions when Versions is empty.
 	ReleaseRepo string `json:"-"`
@@ -174,12 +199,13 @@ var catalog = []Info{
 		},
 	},
 	{
-		Type:        TypeSingbox,
-		Name:        "sing-box",
-		Implemented: true,
-		ReleaseRepo: SingboxForkRepo,
-		CertModes:   []string{"self", "file", "acme"},
-		Download:    singboxDownload,
+		Type:           TypeSingbox,
+		Name:           "sing-box",
+		Implemented:    true,
+		ReleaseRepo:    SingboxForkRepo,
+		DefaultVersion: SingboxForkVersion,
+		CertModes:      []string{"self", "file", "acme"},
+		Download:       singboxDownload,
 		Protocols: []ProtocolCap{
 			{Protocol: ProtocolHysteria2, Transports: []TransportCap{{Type: TransportQUIC, Securities: []string{SecurityTLS}}}},
 			{Protocol: ProtocolTUIC, Transports: []TransportCap{{Type: TransportQUIC, Securities: []string{SecurityTLS}}}},
