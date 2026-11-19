@@ -1011,7 +1011,13 @@ export const getKernelList = (nodeId?: number) =>
 // R8-T-03：冷缓存后端界 60s（双腿各 30s 客户端），前端须 ≥90s。
 export const getKernelVersions = (kernelType: string) =>
   Network.post<
-    { version: string; prerelease: boolean; publishedAt?: string }[]
+    {
+      version: string;
+      prerelease: boolean;
+      publishedAt?: string;
+      /** 发现 1：sing-box 专属，fork 构建为 "fork"，回滚用的上游构建为 "upstream"。 */
+      source?: string;
+    }[]
   >("/kernel/versions", { kernelType }, { timeout: 90_000 });
 
 export const installKernel = (data: {
