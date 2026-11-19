@@ -1027,6 +1027,10 @@ test_panel_install_env_carries_trusted_proxies_entry() (
   docker_ipv6_usable() { return 1; }
   get_public_ip() { echo "203.0.113.1"; }
   docker() {
+    # 预检存在性探针按夹具实况作答：本夹具未搭任何容器，plain
+    # docker inspect <容器名> 一律报不存在；-f 属性读与 volume
+    # inspect 保持原样（卷名/挂载点是夹具喂给安装流程的数据）。
+    if [[ "$1" == "inspect" && "$2" != "-f" ]]; then return 1; fi
     case " $* " in
       *" --services "*) printf 'backend\nfrontend\n' ;;
       *" volume inspect "*) printf '%s' "$FXD_TEST_VOLMOUNT" ;;
@@ -4521,6 +4525,10 @@ test_install_panel_refuses_existing_deployment() (
   docker_ipv6_usable() { return 1; }
   get_public_ip() { echo "203.0.113.1"; }
   docker() {
+    # 预检存在性探针按夹具实况作答：本夹具未搭任何容器，plain
+    # docker inspect <容器名> 一律报不存在；-f 属性读与 volume
+    # inspect 保持原样（卷名/挂载点是夹具喂给安装流程的数据）。
+    if [[ "$1" == "inspect" && "$2" != "-f" ]]; then return 1; fi
     case " $* " in
       *" --services "*) printf 'backend\nfrontend\n' ;;
     esac
@@ -4584,6 +4592,10 @@ test_install_panel_waits_for_backend_health() (
   docker_ipv6_usable() { return 1; }
   get_public_ip() { echo "203.0.113.1"; }
   docker() {
+    # 预检存在性探针按夹具实况作答：本夹具未搭任何容器，plain
+    # docker inspect <容器名> 一律报不存在；-f 属性读与 volume
+    # inspect 保持原样（卷名/挂载点是夹具喂给安装流程的数据）。
+    if [[ "$1" == "inspect" && "$2" != "-f" ]]; then return 1; fi
     case " $* " in
       *" --services "*) printf 'backend\nfrontend\n' ;;
     esac
@@ -4665,6 +4677,10 @@ test_install_panel_prints_generated_initial_admin_password() (
   docker_ipv6_usable() { return 1; }
   get_public_ip() { echo "203.0.113.1"; }
   docker() {
+    # 预检存在性探针按夹具实况作答：本夹具未搭任何容器，plain
+    # docker inspect <容器名> 一律报不存在；-f 属性读与 volume
+    # inspect 保持原样（卷名/挂载点是夹具喂给安装流程的数据）。
+    if [[ "$1" == "inspect" && "$2" != "-f" ]]; then return 1; fi
     case " $* " in
       *" --services "*) printf 'backend\nfrontend\n' ;;
       *" volume inspect "*) printf '%s' "$FXD_TEST_VOLMOUNT" ;;
@@ -4767,6 +4783,10 @@ test_install_panel_up_failure_names_force_reinstall() (
   docker_ipv6_usable() { return 1; }
   get_public_ip() { echo "203.0.113.1"; }
   docker() {
+    # 预检存在性探针按夹具实况作答：本夹具未搭任何容器，plain
+    # docker inspect <容器名> 一律报不存在；-f 属性读与 volume
+    # inspect 保持原样（卷名/挂载点是夹具喂给安装流程的数据）。
+    if [[ "$1" == "inspect" && "$2" != "-f" ]]; then return 1; fi
     case " $* " in
       *" --services "*) printf 'backend\nfrontend\n' ;;
       *" up "*) return 1 ;;
@@ -4825,6 +4845,10 @@ test_install_panel_postgres_health_failure_has_guidance() (
   docker_ipv6_usable() { return 1; }
   get_public_ip() { echo "203.0.113.1"; }
   docker() {
+    # 预检存在性探针按夹具实况作答：本夹具未搭任何容器，plain
+    # docker inspect <容器名> 一律报不存在；-f 属性读与 volume
+    # inspect 保持原样（卷名/挂载点是夹具喂给安装流程的数据）。
+    if [[ "$1" == "inspect" && "$2" != "-f" ]]; then return 1; fi
     case " $* " in
       *" --services "*) printf 'backend\nfrontend\n' ;;
     esac
@@ -8401,6 +8425,10 @@ test_panel_install_guards_single_file_and_backups() (
   docker_ipv6_usable() { return 1; }
   get_public_ip() { echo "203.0.113.1"; }
   docker() {
+    # 预检存在性探针按夹具实况作答：本夹具未搭任何容器，plain
+    # docker inspect <容器名> 一律报不存在；-f 属性读与 volume
+    # inspect 保持原样（卷名/挂载点是夹具喂给安装流程的数据）。
+    if [[ "$1" == "inspect" && "$2" != "-f" ]]; then return 1; fi
     case " $* " in
       *" --services "*) printf 'backend\nfrontend\n' ;;
     esac
@@ -11334,6 +11362,10 @@ test_install_panel_force_reinstall_data_gate() (
   PROXY_ENABLED="false"
 
   gate_docker() {
+    # 同 F-049 夹具：未搭容器时 plain inspect 报不存在（预检存在
+    # 性探针）；volume inspect 与 -f 属性读保持原样（卷名/挂载点
+    # 是夹具喂给安装流程的数据）。
+    if [[ "$1" == "inspect" && "$2" != "-f" ]]; then return 1; fi
     case "$1" in
       volume)
         case "$2" in
@@ -11461,6 +11493,8 @@ configure_docker_ipv6() { return 0; }
 docker_ipv6_usable() { return 1; }
 get_public_ip() { echo "203.0.113.1"; }
 docker() {
+  # 同父用例：未搭容器时 plain inspect 报不存在（预检存在性探针）。
+  if [[ "$1" == "inspect" && "$2" != "-f" ]]; then return 1; fi
   case "$1" in
     volume)
       case "$2" in
