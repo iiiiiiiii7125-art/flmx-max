@@ -4274,6 +4274,168 @@ report_compose_up_failure() {
   fi
 }
 
+# P0-1 安装时冲突检测：端口探活、目标容器名占用、/opt/flmx-panel
+# 既有部署点名。调用点在 install_panel 内 get_config_params 之后、
+# 下载 Compose 之前（端口此时已知，尚未写 .env/落盘，拒绝不留任何
+# 改动）。探活口径：ss -tlnp 优先（带进程信息）；ss 不在时退到
+# /proc/net/tcp 与 tcp6 的 LISTEN 态解析（只证占用、点不出进程名）。
+# 占用者点名：先查 docker ps 的端口映射（容器名＋镜像），再取 ss
+# 的 users 字段；两者都拿不到时如实报“未知进程”，不编一个名字。
+# /opt/flmx-panel 只作点名提示：部署目录是当前目录，该路径只是
+# caddy 端口回查的候选 .env 位置；另一目录的既有部署本身不构成冲
+# 突（共存场景），只有端口/容器名撞上才挡。
+# 本目录自家强制重装（PANEL_FORCE_REINSTALL=1 且当前目录属本面
+# 板）时，目标容器与端口被自家占用是预期状态，compose up 原地重
+# 建，不挡（F-049 守卫已在前面把关）。
+panel_port_listener_text() {
+  local port="$1" hex
+  if command -v ss >/dev/null 2>&1; then
+    ss -tlnp 2>/dev/null | grep -E ":$port[[:space:]]" || true
+    return 0
+  fi
+  hex=$(printf '%04X' "$port" 2>/dev/null || true)
+  [[ -n "$hex" ]] || return 0
+  awk -v h="$hex" '$2 ~ (":"h"$") && $4 == "0A" {print}' /proc/net/tcp /proc/net/tcp6 2>/dev/null || true
+  return 0
+}
+
+panel_port_is_listening() {
+  [[ -n "$(panel_port_listener_text "$1" || true)" ]]
+}
+
+# 占用某端口的容器（docker ps 端口映射口径），形如“名 (镜像)”；
+# 无则空。
+panel_port_container_owners() {
+  local port="$1"
+  docker ps --format '{{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null \
+    | awk -v p=":$port->" 'index($0, p) {print $1 " (" $2 ")"}' || true
+}
+
+# 占用描述：容器优先，否则 ss 进程字段，否则如实报未知。
+panel_port_listener_owner() {
+  local port="$1" owners text proc
+  owners=$(panel_port_container_owners "$port" || true)
+  if [[ -n "$owners" ]]; then
+    printf '容器 %s' "$(printf '%s' "$owners" | tr '\n' ' ')"
+    return 0
+  fi
+  text=$(panel_port_listener_text "$port" || true)
+  proc=$(printf '%s' "$text" | grep -o 'users:(([^)]*))' | head -n 1 || true)
+  if [[ -n "$proc" ]]; then
+    printf '%s' "$proc"
+    return 0
+  fi
+  printf '未知进程（ss 未显示进程信息：可能无权查看或 ss 不可用）'
+}
+
+# 从起始端口向上找第一个空闲端口，跳过 $2（另一端口的已定值）。
+panel_find_free_port() {
+  local candidate="$1" exclude="${2:-}" guard=0
+  while (( candidate <= 65535 && guard < 10000 )); do
+    guard=$((guard + 1))
+    if [[ "$candidate" != "$exclude" ]] && ! panel_port_is_listening "$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+    candidate=$((candidate + 1))
+  done
+  return 1
+}
+
+panel_preflight_install_conflicts() {
+  local backend_container frontend_container
+  backend_container="${NEW_PANEL_BACKEND_CONTAINER}$(panel_instance_suffix)"
+  frontend_container="${NEW_PANEL_FRONTEND_CONTAINER}$(panel_instance_suffix)"
+
+  if [[ "$(pwd -P)" != "/opt/flmx-panel" && ( -f /opt/flmx-panel/.env || -f /opt/flmx-panel/docker-compose.yml ) ]]; then
+    echo "ℹ️ /opt/flmx-panel 下已有另一套面板部署文件（本次安装目录为当前目录，不动它；只有端口或容器名撞上时才需处理）"
+  fi
+
+  local own_force_reinstall=""
+  if [[ "${PANEL_FORCE_REINSTALL:-}" == "1" ]] && is_own_panel_deploy_dir .; then
+    own_force_reinstall=1
+  fi
+
+  local conflicts="" name_conflicts=""
+  local label port owner
+  for label in "后端:$BACKEND_PORT" "前端:$FRONTEND_PORT"; do
+    port="${label#*:}"
+    label="${label%%:*}"
+    if panel_port_is_listening "$port"; then
+      owner=$(panel_port_listener_owner "$port" || true)
+      if [[ -n "$own_force_reinstall" ]]; then
+        case " $owner " in
+          *"$backend_container"*|*"$frontend_container"*)
+            echo "ℹ️ ${label}端口 $port 正被自家容器占用（强制重装，原地重建）"
+            continue
+            ;;
+        esac
+      fi
+      conflicts="$conflicts
+❌ ${label}端口 $port 已被占用（占用者：$owner）"
+    fi
+  done
+
+  local cname cimage cstatus
+  for cname in "$backend_container" "$frontend_container"; do
+    if docker inspect "$cname" >/dev/null 2>&1; then
+      cimage=$(docker inspect -f '{{.Config.Image}}' "$cname" 2>/dev/null || true)
+      cstatus=$(docker inspect -f '{{.State.Status}}' "$cname" 2>/dev/null || true)
+      if [[ -n "$own_force_reinstall" ]]; then
+        echo "ℹ️ 容器 $cname 已存在（${cstatus:-未知状态}，强制重装，原地重建）"
+        continue
+      fi
+      name_conflicts="$name_conflicts
+❌ 容器名 $cname 已存在（镜像：${cimage:-未知}，状态：${cstatus:-未知}）"
+    fi
+  done
+
+  if [[ -z "$conflicts" && -z "$name_conflicts" ]]; then
+    echo "✅ 安装预检通过：后端端口 $BACKEND_PORT、前端端口 $FRONTEND_PORT 空闲，目标容器名未被占用"
+    return 0
+  fi
+  echo "❌ 安装预检发现冲突，安装未开始（未写任何文件）："
+  [[ -n "$conflicts" ]] && printf '%s\n' "$conflicts"
+  [[ -n "$name_conflicts" ]] && printf '%s\n' "$name_conflicts"
+  if [[ -n "$name_conflicts" ]]; then
+    echo "   换端口修不了容器名占用（新部署仍会以同名建容器而失败）：请改用不同实例安装（FLMX_INSTANCE=<实例 id>，容器名随实例派生），或先删掉上述容器，或回到它所属的部署目录用菜单「2. 更新面板」/ PANEL_FORCE_REINSTALL=1 重装。"
+    return 1
+  fi
+  if [[ ! -t 0 ]]; then
+    echo "   当前为非交互终端，已中止。请先释放上述端口，或在交互终端重跑并选「自动换端口」；自家部署重装请用 PANEL_FORCE_REINSTALL=1。"
+    return 1
+  fi
+  local choice="" new_backend="" new_frontend=""
+  echo "   请选择："
+  echo "   1) 自动换端口继续安装（为被占用的端口自动改用空闲端口）"
+  echo "   2) 退出"
+  read -p "   请输入选项 (1-2): " choice || choice=""
+  if [[ "$choice" != "1" ]]; then
+    echo "❌ 已按选择退出安装，未做任何修改。"
+    return 1
+  fi
+  if panel_port_is_listening "$BACKEND_PORT"; then
+    new_backend=$(panel_find_free_port "$((10#$BACKEND_PORT + 1))" "$FRONTEND_PORT" || true)
+    if [[ -z "$new_backend" ]]; then
+      echo "❌ 未找到空闲后端端口，安装中止"
+      return 1
+    fi
+    echo "🔀 后端端口 $BACKEND_PORT → $new_backend（原端口被占用）"
+    BACKEND_PORT="$new_backend"
+  fi
+  if panel_port_is_listening "$FRONTEND_PORT"; then
+    new_frontend=$(panel_find_free_port "$((10#$FRONTEND_PORT + 1))" "$BACKEND_PORT" || true)
+    if [[ -z "$new_frontend" ]]; then
+      echo "❌ 未找到空闲前端端口，安装中止"
+      return 1
+    fi
+    echo "🔀 前端端口 $FRONTEND_PORT → $new_frontend（原端口被占用）"
+    FRONTEND_PORT="$new_frontend"
+  fi
+  echo "✅ 已自动换端口：后端 $BACKEND_PORT、前端 $FRONTEND_PORT，继续安装"
+  return 0
+}
+
 install_panel() {
   echo "🚀 开始安装面板..."
 
@@ -4355,6 +4517,10 @@ install_panel() {
   # set -e 在本函数内失效，裸调用会带着非法端口与空密钥继续下载、
   # 写 .env，直到 compose up 才失败并误导向强制重装指引。
   get_config_params || return 1
+
+  # P0-1 安装时冲突检测：端口探活、目标容器名、/opt/flmx-panel 既有
+  # 部署点名；撞上时点名占用者并给“自动换端口/退出”选择（见函数头注）。
+  panel_preflight_install_conflicts || return 1
 
   echo "🔽 下载必要文件..."
   # F-052: 选版时机后移——主机有 IPv6 地址不等于 Docker 能用 IPv6。

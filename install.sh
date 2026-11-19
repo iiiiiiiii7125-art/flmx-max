@@ -1481,6 +1481,12 @@ guard_agent_dir_ownership() {
     echo "⚠️ FLMX_AGENT_TAKEOVER=1：按显式确认接管 $guard_dir（原连接地址：${old_addr:-未知}）"
     return 0
   fi
+  # P0-1: --force（或 FLMX_AGENT_FORCE_REINSTALL=1）与 TAKEOVER 同效，
+  # 都是运维显式确认接管的开关；无显式确认时异属 agent 仍走下方拒绝。
+  if [[ "${FLMX_AGENT_FORCE_REINSTALL:-}" == "1" ]]; then
+    echo "⚠️ --force：按显式确认接管 $guard_dir（原连接地址：${old_addr:-未知}）"
+    return 0
+  fi
   echo "⚠️ $guard_dir 已存在一个 agent，其连接地址为 ${old_addr:-无法读取}，与本次面板地址 ${SERVER_ADDR:-未提供} 不一致。"
   echo "   （地址比对已做 JSON 转义归一化，写法差异不会造成误判。）"
   echo "   它可能属于其他面板；继续安装会覆写它的配置、把它改连到本面板，本脚本不会未经确认这样做。"
@@ -1533,6 +1539,50 @@ guard_agent_dir_ownership_menu() {
   fi
   echo "❌ ${action}终止：未改动 $guard_dir 中的任何文件。"
   echo "   如确认该 agent 属于本面板，请在交互终端重跑并在提示时确认，或设置 FLMX_AGENT_TAKEOVER=1 后重试。"
+  return 1
+}
+
+# P0-1 安装时冲突检测：/etc/flmx_agent 足迹与 flmx_agent.service
+# 残留。调用点在 install_flmx_agent 内 check_and_install_tcpkill
+# 之后、ensure_service_manager 之前（下载、停服、写文件之前）。
+# 裁决（任务书字面“目录已存在即拒、除非 --force”与既有设计不符，
+# 见头注）：install_flmx_agent 本就是面板一键安装的重装路径（面板
+# 生成命令为 ./install.sh -a … -s …，不带 --force；函数内另有防降
+# 级门、备份与回滚），同面板重装（config 的 addr 与本次 SERVER_ADDR
+# 相等）必须放行，否则所有存量节点的一键重装都会断；异属/无法判
+# 定归属的存量由上游 guard_agent_dir_ownership 拒绝（交互确认或
+# TAKEOVER/--force 才放行），这里不再重复拦截。本函数只补守卫看
+# 不到的缺口：服务文件残留而目录无足迹（陈旧服务）——直接装会静
+# 默覆写该服务文件，无 --force 即拒；目录有足迹且确认为同面板时
+# 只留一行重装提示。
+guard_agent_reinstall_conflict() {
+  local has_footprint="" service_file=""
+  agent_dir_has_agent "$INSTALL_DIR" && has_footprint=1
+  if [[ -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" ]]; then
+    service_file="$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
+  elif [[ -f "$FLMX_AGENT_OPENRC_SERVICE_FILE" ]]; then
+    service_file="$FLMX_AGENT_OPENRC_SERVICE_FILE"
+  fi
+  if [[ -z "$has_footprint" && -z "$service_file" ]]; then
+    return 0
+  fi
+  if [[ -n "$has_footprint" ]]; then
+    local old_addr
+    old_addr=$(agent_config_addr "$INSTALL_DIR")
+    if [[ -n "$old_addr" && -n "${SERVER_ADDR:-}" && "$old_addr" == "${SERVER_ADDR}" ]]; then
+      echo "ℹ️ 检测到本面板的旧 agent（$INSTALL_DIR，连接地址一致），按重装继续。"
+    fi
+    # 足迹在但归属非同面板：上游 guard_agent_dir_ownership 已放行
+    # （交互确认或 TAKEOVER/--force）才到这里，不再重复拦截。
+    return 0
+  fi
+  if [[ "${FLMX_AGENT_FORCE_REINSTALL:-}" == "1" ]]; then
+    echo "⚠️ --force：按显式确认覆盖陈旧服务文件 $service_file（$INSTALL_DIR 下无 agent 足迹）"
+    return 0
+  fi
+  echo "❌ 检测到陈旧的 flmx_agent 服务文件 $service_file，但 $INSTALL_DIR 下无 agent（服务残留：目录已被删或从未装完）。"
+  echo "   直接安装会覆写该服务文件。请先人工确认并清理（systemctl disable --now flmx_agent 后删除服务文件，或走卸载流程），或确认无误后显式加 --force 重装："
+  echo "   ./install.sh --force -a \"<面板地址>\" -s \"<密钥>\"（或 FLMX_AGENT_FORCE_REINSTALL=1 ./install.sh -a ... -s ...）"
   return 1
 }
 
@@ -2407,6 +2457,41 @@ get_config_params() {
   fi
 }
 
+# P0-1: 显式 --force 长选项（getopts 不支持长选项，先手动摘除再
+# 交给 getopts；等价环境变量 FLMX_AGENT_FORCE_REINSTALL=1，供自动
+# 化场景使用，与面板侧 PANEL_FORCE_REINSTALL=1 同族）。--force 只
+# 是“确认覆盖存量”的显式开关：陈旧服务文件、异属 agent 接管（与
+# FLMX_AGENT_TAKEOVER=1 同效）都要凭它才放行；同面板重装本就放行。
+FLMX_AGENT_FORCE_REINSTALL="${FLMX_AGENT_FORCE_REINSTALL:-}"
+# 只在命令行确实出现 --force 时才重建 "$@"（无 --force 时不动位置
+# 参数：测试套件以 source 方式载入本脚本，$@ 属于调用方，不得清掉）。
+_force_has_force=""
+for _force_arg in "$@"; do
+  if [[ "$_force_arg" == "--force" ]]; then _force_has_force=1; break; fi
+done
+if [[ -n "$_force_has_force" ]]; then
+  _force_args=()
+  _force_seen_dashdash=""
+  for _force_arg in "$@"; do
+    if [[ -z "$_force_seen_dashdash" ]]; then
+      case "$_force_arg" in
+        --) _force_seen_dashdash=1; _force_args+=("$_force_arg") ;;
+        --force) FLMX_AGENT_FORCE_REINSTALL=1 ;;
+        *) _force_args+=("$_force_arg") ;;
+      esac
+    else
+      _force_args+=("$_force_arg")
+    fi
+  done
+  if [[ "${#_force_args[@]}" -gt 0 ]]; then
+    set -- "${_force_args[@]}"
+  else
+    set --
+  fi
+  unset _force_args _force_seen_dashdash
+fi
+unset _force_has_force _force_arg
+
 # 解析命令行参数
 while getopts "a:s:" opt; do
   case $opt in
@@ -2492,6 +2577,8 @@ install_flmx_agent() {
 
   # 检查并安装 tcpkill
   check_and_install_tcpkill
+  # P0-1 安装时冲突检测：/etc/flmx_agent 足迹与服务文件残留。
+  guard_agent_reinstall_conflict || return 1
   ensure_service_manager || return 1
 
   mkdir -p "$INSTALL_DIR"
