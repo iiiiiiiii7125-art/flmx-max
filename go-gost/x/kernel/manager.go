@@ -1287,20 +1287,101 @@ func (m *Manager) sweepTombstonesLoop() {
 	}
 }
 
+// isManagedBinDirName reports whether a directory name under
+// <base>/<type>/bin is one FLMX itself can create, and therefore
+// the only kind pruneStaleBinDirs may remove. The two creation
+// sites are Apply in this file: the main binary directory is named
+// exactly req.Version (binDir), and each extra binary directory is
+// named "extra-"+Name+"-"+Version. Two shapes follow:
+//
+//   - main: "latest" (the unresolved sentinel validate() defaults
+//     an empty version to), or a strict version shape — an optional
+//     "v" prefix, a leading digit, only [0-9A-Za-z.-], at least one
+//     dot, no "..". Real kernel versions are numeric semver
+//     ("1.0.0", "1.14.4-flmx1", "2.9.6"); the deliberate strictness
+//     is the point: the loose validate-time pattern also matches
+//     bare words like "backup", so reusing it would leave a foreign
+//     directory of that name prunable. A version that fails this
+//     shape can still be installed and kept (the keep set is
+//     consulted before this guard) — it just never gets pruned,
+//     which fails closed toward leaking disk, not deleting data.
+//     FLMX's own swap leftovers ("1.0.0.old", "1.0.0.staging")
+//     still match and are pruned as before.
+//   - extra: the "extra-" prefix is FLMX's own namespace, so the
+//     version part reuses the validate-time pattern
+//     (safeVersionPattern, no "..") and the name part reuses
+//     safeName — exactly what validate() enforces on Extras. Any
+//     "-" split with a valid name on the left and a valid version
+//     on the right proves FLMX could have created the name; the
+//     guard only needs that boolean, not the true split.
+//
+// A same-shape collision (another program storing a "1.2.3" dir
+// under this bin root) cannot be told apart by name; keeping the
+// roots apart is the P0 conflict-detection lane's job, this guard
+// is the second line of defence.
+func isManagedBinDirName(name string) bool {
+	if name == "latest" || isVersionDirName(name) {
+		return true
+	}
+	if !strings.HasPrefix(name, "extra-") {
+		return false
+	}
+	rest := name[len("extra-"):]
+	for i := 0; i < len(rest); i++ {
+		if rest[i] != '-' {
+			continue
+		}
+		version := rest[i+1:]
+		if safeName(rest[:i]) && safeVersionPattern.MatchString(version) && !strings.Contains(version, "..") {
+			return true
+		}
+	}
+	return false
+}
+
+// isVersionDirName is the strict shape of a main kernel version
+// directory name: optional "v" prefix, leading digit, only
+// [0-9A-Za-z.-], at least one dot, no "..", at most 40 chars (the
+// validate-time length bound).
+func isVersionDirName(name string) bool {
+	if len(name) == 0 || len(name) > 40 || strings.Contains(name, "..") || !strings.Contains(name, ".") {
+		return false
+	}
+	v := name
+	if v[0] == 'v' || v[0] == 'V' {
+		v = v[1:]
+	}
+	if len(v) == 0 || v[0] < '0' || v[0] > '9' {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '.' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // pruneStaleBinDirs enforces the kernel binary retention policy
 // (R6-09): under <base>/<type>/bin, only the directories in keep
-// survive; every other directory — a superseded version's main bin
-// dir or an extra's versioned dir, each carrying its own geodata
-// copy — is removed. Before this, install only ever replaced the
-// same-version directory and nothing enumerated the version dirs,
-// so every successful version change left one more generation on
-// disk forever, recoverable only by uninstalling the whole kernel.
-// The working set the code actually reads is two generations: the
-// current one (Apply/Restore) and the previous one (the intra-Apply
-// rollback source); anything older has no reader. Non-directory
-// entries are left alone. Removal is best-effort: every entry is
-// attempted, the first error is returned, and the caller logs it
-// without failing the apply.
+// survive; every other FLMX version directory — a superseded
+// version's main bin dir or an extra's versioned dir, each carrying
+// its own geodata copy — is removed. Before this, install only ever
+// replaced the same-version directory and nothing enumerated the
+// version dirs, so every successful version change left one more
+// generation on disk forever, recoverable only by uninstalling the
+// whole kernel. The working set the code actually reads is two
+// generations: the current one (Apply/Restore) and the previous one
+// (the intra-Apply rollback source); anything older has no reader.
+// Non-directory entries are left alone. P1-2 coexistence guard:
+// only names FLMX itself can create (see isManagedBinDirName) are
+// prunable — anything else under the bin root (another program's
+// directory, user data) is left alone, so a shared root can never
+// lose foreign data to this sweep. Removal is best-effort: every
+// entry is attempted, the first error is returned, and the caller
+// logs it without failing the apply.
 func (m *Manager) pruneStaleBinDirs(kernelType string, keep map[string]bool) ([]string, error) {
 	binRoot := filepath.Join(m.baseDir, kernelType, "bin")
 	entries, err := os.ReadDir(binRoot)
@@ -1314,6 +1395,9 @@ func (m *Manager) pruneStaleBinDirs(kernelType string, keep map[string]bool) ([]
 	var firstErr error
 	for _, e := range entries {
 		if !e.IsDir() {
+			continue
+		}
+		if !isManagedBinDirName(e.Name()) {
 			continue
 		}
 		dir := filepath.Join(binRoot, e.Name())
