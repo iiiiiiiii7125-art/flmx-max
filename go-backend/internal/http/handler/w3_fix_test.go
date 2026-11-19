@@ -197,8 +197,9 @@ func joinIDs(ids []int64) string {
 	return strings.Join(parts, ",")
 }
 
-// IRL-3（后端半）：同一入站经同一隧道到同一目标的第二次创建（不同
-// 幂等键、不同入口端口）必须被去重闸点名拒绝，只落一条中转。
+// IRL-3（后端半）：同一入站经同一隧道到同一目标的中转，入口端口
+// 不同是两条合法中转（必须都建出来）；入口端口相同才是重复创建，
+// 即使换幂等键也必须被去重闸点名拒绝；同幂等键重放回放首次结果。
 func TestW3RelayCreateDuplicateGate(t *testing.T) {
 	r, h := r2b2Open(t)
 	if _, err := r.CreateUser("admin", "hash", 0, time.Now().Add(24*time.Hour).UnixMilli(), 1, 1, 100, 1, 0, time.Now().UnixMilli()); err != nil {
@@ -217,23 +218,62 @@ func TestW3RelayCreateDuplicateGate(t *testing.T) {
 	if err := r.DB().Create(inbound).Error; err != nil {
 		t.Fatal(err)
 	}
+	decode := func(t *testing.T, body string) (int, string, int64) {
+		t.Helper()
+		var env struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				ID        int64 `json:"id"`
+				ForwardID int64 `json:"forwardId"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(body), &env); err != nil {
+			t.Fatalf("decode relay create response: %v (%s)", err, body)
+		}
+		return env.Code, env.Msg, env.Data.ForwardID
+	}
+	relayRows := func() int {
+		return mustQueryInt(t, r, `SELECT COUNT(*) FROM node_inbound_relay WHERE inbound_id = ?`, inbound.ID)
+	}
 	first := map[string]interface{}{"inboundId": inbound.ID, "tunnelId": tunnelID, "inPort": 30007, "name": "w3-relay"}
 	b1 := r2b2AuthPost(t, h.inboundRelayCreate, "/api/v1/inbound/relay/create", first, "w3-relay-key-1")
 	r2b2AssertCode0(t, "relay create first", b1)
+	// 不同入口端口的第二次创建必须成功，落两条中转。
 	second := map[string]interface{}{"inboundId": inbound.ID, "tunnelId": tunnelID, "inPort": 30008, "name": "w3-relay-again"}
 	b2 := r2b2AuthPost(t, h.inboundRelayCreate, "/api/v1/inbound/relay/create", second, "w3-relay-key-2")
-	var env struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
+	r2b2AssertCode0(t, "relay create second port", b2)
+	if n := relayRows(); n != 2 {
+		t.Fatalf("relay rows = %d, want 2 (different entry ports are distinct relays)", n)
 	}
-	if err := json.Unmarshal([]byte(b2), &env); err != nil {
-		t.Fatalf("decode second create response: %v (%s)", err, b2)
+	// 同端口、换幂等键的第三次创建必须被去重闸点名拒绝，不落第三条。
+	third := map[string]interface{}{"inboundId": inbound.ID, "tunnelId": tunnelID, "inPort": 30008, "name": "w3-relay-dup"}
+	b3 := r2b2AuthPost(t, h.inboundRelayCreate, "/api/v1/inbound/relay/create", third, "w3-relay-key-3")
+	if code, msg, _ := decode(t, b3); code == 0 || !strings.Contains(msg, "请勿重复创建") {
+		t.Fatalf("same-port relay create must be rejected naming the gate, got %s", b3)
 	}
-	if env.Code == 0 || !strings.Contains(env.Msg, "请勿重复创建") {
-		t.Fatalf("duplicate relay create must be rejected naming the gate, got %s", b2)
+	if n := relayRows(); n != 2 {
+		t.Fatalf("relay rows = %d, want 2 after rejected duplicate", n)
 	}
-	if n := mustQueryInt(t, r, `SELECT COUNT(*) FROM node_inbound_relay WHERE inbound_id = ?`, inbound.ID); n != 1 {
-		t.Fatalf("relay rows = %d, want 1", n)
+	// 同幂等键重放首次请求：回放首次结果，不新建。
+	bReplay := r2b2AuthPost(t, h.inboundRelayCreate, "/api/v1/inbound/relay/create", first, "w3-relay-key-1")
+	if bReplay != b1 {
+		t.Fatalf("same idempotency key must replay the first response:\n%s\n%s", b1, bReplay)
+	}
+	if n := relayRows(); n != 2 {
+		t.Fatalf("relay rows = %d, want 2 after idempotency replay", n)
+	}
+	// 自动选口（不带 inPort）：闸跳过、选口避开已用端口，须成功且端口不同。
+	auto := map[string]interface{}{"inboundId": inbound.ID, "tunnelId": tunnelID, "name": "w3-relay-auto"}
+	bAuto := r2b2AuthPost(t, h.inboundRelayCreate, "/api/v1/inbound/relay/create", auto, "w3-relay-key-4")
+	r2b2AssertCode0(t, "relay create auto port", bAuto)
+	if _, _, autoForwardID := decode(t, bAuto); autoForwardID <= 0 {
+		t.Fatalf("auto-port create must return a forwardId, got %s", bAuto)
+	} else if p := mustQueryInt(t, r, `SELECT MIN(port) FROM forward_port WHERE forward_id = ?`, autoForwardID); p == 30007 || p == 30008 {
+		t.Fatalf("auto-port create picked an in-use port: %d", p)
+	}
+	if n := relayRows(); n != 3 {
+		t.Fatalf("relay rows = %d, want 3 after auto-port create", n)
 	}
 }
 
