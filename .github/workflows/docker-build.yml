@@ -506,6 +506,26 @@ jobs:
           done
           cd -
 
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # F-119: Node 版本统一为 22（与出厂 Dockerfile、deploy-docs、
+          # ci-build 对齐）。
+          node-version: '22'
+
+      - name: Build skill package tarball
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          # R2-C4-01（原 npm 断言的延续）：发版提交须先把三处版本字面量
+          # bump 到待发版本；tarball 文件名取自 package.json，版本不
+          # 对即红，绝不发出贴错版本标签的包。
+          PKG_VERSION=$(node -p "require('./skills/flmx-api/package.json').version")
+          test "$PKG_VERSION" = "$VERSION"
+          (cd skills/flmx-api && npm pack --pack-destination ../../artifacts)
+          test -f "./artifacts/flmx-skill-api-${VERSION}.tgz"
+          tar tzf "./artifacts/flmx-skill-api-${VERSION}.tgz" | grep -q '^package/SKILL.md$'
+          (cd ./artifacts && sha256sum "flmx-skill-api-${VERSION}.tgz" > "flmx-skill-api-${VERSION}.tgz.sha256")
+
       - name: Verify release installer on Alpine OpenRC
         run: docker run --rm -v "$PWD:/workspace:ro" alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f sh /workspace/test-install-scripts-alpine.sh /workspace/artifacts/install.sh
 
@@ -606,6 +626,10 @@ jobs:
           (cd ./artifacts && sha256sum docker-compose-v6.yml > docker-compose-v6.yml.sha256)
           gh release upload "${VERSION}" ./artifacts/docker-compose-v4.yml.sha256 --clobber
           gh release upload "${VERSION}" ./artifacts/docker-compose-v6.yml.sha256 --clobber
+
+          echo "📤 上传技能包..."
+          gh release upload "${VERSION}" ./artifacts/flmx-skill-api-${VERSION}.tgz --clobber
+          gh release upload "${VERSION}" ./artifacts/flmx-skill-api-${VERSION}.tgz.sha256 --clobber
 
           echo "✅ Release ${VERSION} 创建完成"
 
