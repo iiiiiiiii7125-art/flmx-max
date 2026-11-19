@@ -29,6 +29,10 @@ type metadata struct {
 	// reaper tracking.
 	reapRole string
 
+	// udpEgressPacing spaces the exit leg's UDP writes to the
+	// dialed target (see pacing.go). Zero disables pacing.
+	udpEgressPacing time.Duration
+
 	observerPeriod       time.Duration
 	observerResetTraffic bool
 
@@ -56,6 +60,7 @@ func (h *relayHandler) parseMetadata(md mdata.Metadata) (err error) {
 	h.md.noDelay = mdutil.GetBool(md, "nodelay")
 	h.md.hash = mdutil.GetString(md, "hash")
 	h.md.reapRole = mdutil.GetString(md, "reapRole")
+	h.md.udpEgressPacing = resolveUDPEgressPacing(md)
 
 	h.md.muxCfg = &mux.Config{
 		Version:           mdutil.GetInt(md, "mux.version"),

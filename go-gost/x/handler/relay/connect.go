@@ -114,6 +114,18 @@ func (h *relayHandler) handleConnect(ctx context.Context, conn net.Conn, network
 	}
 	defer cc.Close()
 
+	// Exit-leg UDP pacing (Fix-P2): only the dialed-target
+	// writes are spaced, only for UDP, only on this terminal
+	// leg. Middle legs go through handleForward, TCP legs
+	// never reach this branch, and reads are never paced.
+	if h.md.udpEgressPacing > 0 {
+		switch network {
+		case "udp", "udp4", "udp6":
+			cc = xnet.NewPacedConn(cc, h.md.udpEgressPacing)
+			log.Debugf("udp egress pacing %s", h.md.udpEgressPacing)
+		}
+	}
+
 	if h.md.noDelay {
 		if _, err := resp.WriteTo(conn); err != nil {
 			log.Error(err)
