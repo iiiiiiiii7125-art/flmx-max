@@ -22,8 +22,10 @@ func TestRenderTableBindIPRestrictsDNAT(t *testing.T) {
 		}},
 	})
 	for _, want := range []string{
-		`tcp ip daddr 192.0.2.10 dport 24000 counter dnat ip to 198.51.100.20:443`,
-		`udp ip daddr 192.0.2.10 dport 24000 counter dnat ip to 198.51.100.20:443`,
+		// R-B01-01：ip daddr 必须在 tcp/udp dport 之前，旧期望
+		// `tcp ip daddr …` 是 nft 语法错（unexpected ip）。
+		`ip daddr 192.0.2.10 tcp dport 24000 counter dnat ip to 198.51.100.20:443`,
+		`ip daddr 192.0.2.10 udp dport 24000 counter dnat ip to 198.51.100.20:443`,
 		`ct original ip daddr 192.0.2.10`,
 	} {
 		if !strings.Contains(script, want) {
@@ -44,7 +46,8 @@ func TestRenderTableBindIPv6(t *testing.T) {
 			Protocols:  []string{"tcp"},
 		}},
 	})
-	if !strings.Contains(script, `tcp ip6 daddr 2001:db8::10 dport 24001`) {
+	// R-B01-01：ip6 daddr 同样在 tcp dport 之前。
+	if !strings.Contains(script, `ip6 daddr 2001:db8::10 tcp dport 24001`) {
 		t.Fatalf("A4-005: expected ip6 daddr match for v6 bind IP:\n%s", script)
 	}
 }
