@@ -1297,14 +1297,22 @@ func (r *Repository) CreateChainTunnelTx(tx *gorm.DB, tunnelID int64, chainType 
 }
 
 func (r *Repository) PickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int64]int, excludeTunnelID int64) (int, error) {
-	return r.pickNodePortTx(tx, nodeID, allocated, excludeTunnelID, false)
+	return r.pickNodePortTx(tx, nodeID, allocated, excludeTunnelID, false, nil)
 }
 
 func (r *Repository) PickRandomNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int64]int, excludeTunnelID int64) (int, error) {
-	return r.pickNodePortTx(tx, nodeID, allocated, excludeTunnelID, true)
+	return r.pickNodePortTx(tx, nodeID, allocated, excludeTunnelID, true, nil)
 }
 
-func (r *Repository) pickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int64]int, excludeTunnelID int64, randomPick bool) (int, error) {
+// PickRandomNodePortExcludingTx 与 PickRandomNodePortTx 同口径，但把
+// exclude 里的已试端口从候选集里剔掉——F2-PORT-01 P0-2：隧道创建
+// 间隙 live 探针命中后换口重挑时，不得把刚撞过的口再挑回来
+// （与 handler 的 pickTunnelPortExcluding 同理）。
+func (r *Repository) PickRandomNodePortExcludingTx(tx *gorm.DB, nodeID int64, allocated map[int64]int, excludeTunnelID int64, exclude map[int]bool) (int, error) {
+	return r.pickNodePortTx(tx, nodeID, allocated, excludeTunnelID, true, exclude)
+}
+
+func (r *Repository) pickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int64]int, excludeTunnelID int64, randomPick bool, excludePorts map[int]bool) (int, error) {
 	if tx == nil {
 		return 0, errors.New("database unavailable")
 	}
@@ -1346,6 +1354,9 @@ func (r *Repository) pickNodePortTx(tx *gorm.DB, nodeID int64, allocated map[int
 	var available []int
 	for _, candidate := range candidates {
 		if candidate <= 0 {
+			continue
+		}
+		if excludePorts[candidate] {
 			continue
 		}
 		if _, ok := used[candidate]; ok {

@@ -3061,9 +3061,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 	// 节点的端口锁 + 一个长事务——SQLite 单连接下慢响应让全站 DB
 	// 排队，且入口/链式节点根本不在锁内，违背 port_alloc_lock「锁内
 	// 禁止网络调用」的自述约束。现在：1) 验证段（无锁、throwaway
-	// 事务 prepare+校验后回滚）；2) 提交段（锁覆盖入/出/链全部节点，
-	// 事务内重新 prepare 定型端口后建隧道+链路，提交即释锁）；
-	// 3) applyTunnelRuntime 在锁外下发运行时。
+	// 事务 prepare+校验后回滚）；2) 间隙（无锁无事务：SSH 能力校验
+	// ＋ live 探针，其中自动段口探活命中即换口重挑）；3) 提交段（锁
+	// 覆盖入/出/链全部节点，复用验证段定型的端口、事务内只做 DB 复
+	// 检后建隧道+链路，提交即释锁）；
+	// 4) applyTunnelRuntime 在锁外下发运行时。
 	validationTx := h.repo.BeginTx()
 	if validationTx.Error != nil {
 		respondInternalError(w, "tunnelCreate", validationTx.Error)
@@ -3147,16 +3149,42 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F2-PORT-01 P0-2：自动段口活探针＋换口重试（创建）。验证段定型
+	// 的自动段口即提交段的最终端口（提交段不再重定型，与更新面同
+	// 口径），故间隙探的值到提交时仍有效；命中 live 监听时换口重挑
+	// （上限 5 次），探针失败 fail-open（回落 DB，不拒单）。显式口
+	// 仍由下方探针一次拦截、命中即拒。
+	if err := h.probeTunnelAutoSegmentPortsLive(runtimeState, req); err != nil {
+		// R3-GEN-03 同形：仓储错先守卫泛化（含选口耗尽等已标记
+		// 错，与 prepare 内选口失败口径一致）；定型碰撞文案
+		// （探针命中耗尽）原文回。
+		if respondInternalIfRepoError(w, "tunnelCreate: probe auto segment ports failed", err) {
+			return
+		}
+		var ve *tunnelValidationError
+		if errors.As(err, &ve) {
+			response.WriteJSON(w, response.ErrDefault(ve.msg))
+			return
+		}
+		respondInternalError(w, "tunnelCreate: probe auto segment ports failed", err)
+		return
+	}
+
 	// F2-PORT-01：live 探针在无锁间隙跑（验证事务已回滚、提交段未
-	// 持锁）。只探显式端口：自动选口在提交段重定型，间隙探的值到
-	// 提交时已失效；创建无自身可排除。探针失败 fail-open。
+	// 持锁）。只探显式端口（自动段口已由上方循环探过）；创建无自身
+	// 可排除。探针失败 fail-open。
 	if msg := h.checkLivePortsOccupied(tunnelLivePortTargetsFromRequest(req, entryNodeIDs, nil)); msg != "" {
 		response.WriteJSON(w, response.ErrDefault(msg))
 		return
 	}
 
-	// 提交段：全节点锁内重新 prepare 定型端口（验证段的选口结果不
-	// 跨段复用，避免锁外窗口被并发占用）。
+	// 提交段：复用验证段定型的 runtimeState（F2-PORT-01 P0-2，与更新面
+	// 同口径：验证段定型即最终端口，提交段不再重定型——间隙 live 探针
+	// 探的正是这批口，重定型会让探针值失效）。锁外窗口的并发占用由
+	// 下方锁内 DB 复检（recheckTunnelCreatePortsTx：段口占用＋入口
+	// inPort 三检）拦截，与更新面 finalPortNodes 复检同形；其余定型
+	// 校验（策略/协议/显式口范围与占用）是 req 与验证段 DB 态的纯函
+	// 数，两段结果一致，不重复跑。
 	releasePortLocks := acquireSortedPortLocks(tunnelRequestNodeIDs(req))
 	tx := h.repo.BeginTx()
 	if tx.Error != nil {
@@ -3164,8 +3192,7 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		respondInternalError(w, "tunnelCreate", tx.Error)
 		return
 	}
-	runtimeState, err = h.prepareTunnelCreateState(tx, req, typeVal, 0)
-	if err != nil {
+	if err := h.recheckTunnelCreatePortsTx(tx, runtimeState, req); err != nil {
 		tx.Rollback()
 		releasePortLocks()
 		// BOXFIX：同验证段口径（见上）——prepare 错误走定型分流。
@@ -8271,8 +8298,9 @@ func (h *Handler) prepareTunnelCreateState(tx *gorm.DB, req map[string]interface
 	}
 
 	// P1-03（PortAlloc Fix D）：入口 inPort 与段口同口径过 DB 三检。
-	// 本函数在创建/更新的验证段与创建的提交段各跑一次，更新的提交
-	// 段另在 tunnelUpdate 内复检（与段口 finalPortNodes 复检同形）。
+	// 本函数在创建/更新的验证段各跑一次；更新的提交段另在
+	// tunnelUpdate 内复检（与段口 finalPortNodes 复检同形），创建的
+	// 提交段由 recheckTunnelCreatePortsTx 复检（含本三检）。
 	if err := h.validateTunnelEntryInPortTx(tx, req, state, excludeTunnelID); err != nil {
 		return nil, err
 	}
@@ -8479,6 +8507,212 @@ func validateTunnelConnectIPConstraints(req map[string]interface{}) error {
 	}
 
 	return nil
+}
+
+// tunnelAutoSegmentPort 是验证段定型的一个自动段口：请求未指定端口
+// （port<=0）由 prepare 经 PickRandomNodePortTx 定型，落在
+// state.SegmentPorts 里（type-2 经 OutNodes/ChainHops 同步一份，
+// type-1 游离段只在 SegmentPorts 里）。
+type tunnelAutoSegmentPort struct {
+	key    tunnelChainPortKey
+	nodeID int64
+	port   int
+}
+
+// tunnelAutoSegmentPorts 从验证段定型态里取出全部自动段口：
+// SegmentPorts 的键（chainType, inx, nodeID）与请求槽位一一对应，
+// 请求槽位未指定端口的即自动口。显式口不在此列（间隙另有探针一次拦截）。
+func tunnelAutoSegmentPorts(state *tunnelCreateState, req map[string]interface{}) []tunnelAutoSegmentPort {
+	if state == nil || req == nil {
+		return nil
+	}
+	var auto []tunnelAutoSegmentPort
+	for idx, item := range asMapSlice(req["outNodeId"]) {
+		if asInt(item["port"], 0) > 0 {
+			continue
+		}
+		nodeID := asInt64(item["nodeId"], 0)
+		if nodeID <= 0 {
+			continue
+		}
+		key := tunnelChainPortKey{chainType: 3, inx: idx + 1, nodeID: nodeID}
+		if port, ok := state.SegmentPorts[key]; ok && port > 0 {
+			auto = append(auto, tunnelAutoSegmentPort{key: key, nodeID: nodeID, port: port})
+		}
+	}
+	for hopIdx, hopRaw := range asAnySlice(req["chainNodes"]) {
+		for _, item := range asMapSlice(hopRaw) {
+			if asInt(item["port"], 0) > 0 {
+				continue
+			}
+			nodeID := asInt64(item["nodeId"], 0)
+			if nodeID <= 0 {
+				continue
+			}
+			key := tunnelChainPortKey{chainType: 2, inx: hopIdx + 1, nodeID: nodeID}
+			if port, ok := state.SegmentPorts[key]; ok && port > 0 {
+				auto = append(auto, tunnelAutoSegmentPort{key: key, nodeID: nodeID, port: port})
+			}
+		}
+	}
+	return auto
+}
+
+// retargetTunnelSegmentPort 把定型态里 (nodeID, oldPort) 的全部段口
+// 改指 newPort：SegmentPorts＋OutNodes/ChainHops 须同步（提交段
+// applyTunnelPortsToRequest 与运行时装配各读一份）。同节点同口的
+// 段共享一个口（prepare 的 allocated 口径），一并改指。
+func retargetTunnelSegmentPort(state *tunnelCreateState, nodeID int64, oldPort, newPort int) {
+	if state == nil || oldPort <= 0 || newPort <= 0 {
+		return
+	}
+	for key, port := range state.SegmentPorts {
+		if key.nodeID == nodeID && port == oldPort {
+			state.SegmentPorts[key] = newPort
+		}
+	}
+	for i := range state.OutNodes {
+		if state.OutNodes[i].NodeID == nodeID && state.OutNodes[i].Port == oldPort {
+			state.OutNodes[i].Port = newPort
+		}
+	}
+	for hi := range state.ChainHops {
+		for i := range state.ChainHops[hi] {
+			if state.ChainHops[hi][i].NodeID == nodeID && state.ChainHops[hi][i].Port == oldPort {
+				state.ChainHops[hi][i].Port = newPort
+			}
+		}
+	}
+}
+
+// repickTunnelSegmentPort 为一个被 live 探针命中的自动段口重挑新口：
+// 排除已试口（PickRandomNodePortExcludingTx），其余与创建选口同口
+// 径（节点端口池＋统一四源占用）。throwaway 事务、只读即回滚。
+func (h *Handler) repickTunnelSegmentPort(nodeID int64, tried map[int]bool) (int, error) {
+	tx := h.repo.BeginTx()
+	if tx.Error != nil {
+		return 0, markRepoError(tx.Error)
+	}
+	defer tx.Rollback()
+	port, err := h.repo.PickRandomNodePortExcludingTx(tx, nodeID, map[int64]int{}, 0, tried)
+	if err != nil {
+		// R2-F4-01：仓储直通，标记后由调用方守卫泛化（与
+		// resolveTunnelSegmentPort 的选口失败口径一致）。
+		return 0, markRepoError(err)
+	}
+	return port, nil
+}
+
+// probeTunnelAutoSegmentPortsLive 探验证段定型的自动段口的 live 监听态
+// （F2-PORT-01 P0-2，创建面）：与转发创建的 probeForwardEntryPortLive
+// 同机制（CheckPortListening 问 agent 扫节点 /proc/net），只探自动
+// 口、命中即换口重试（上限 forwardPortRetryAttempts 次）。探针失败
+// fail-open（离线/旧 agent/超时只记日志、沿用 DB 结论，不拒单）；
+// 5 次仍撞回末次碰撞文案（tunnelValidationError，原文回）；选口
+// 耗尽等仓储错已标记、由调用方守卫泛化。
+func (h *Handler) probeTunnelAutoSegmentPortsLive(state *tunnelCreateState, req map[string]interface{}) error {
+	auto := tunnelAutoSegmentPorts(state, req)
+	if len(auto) == 0 {
+		return nil
+	}
+	tried := make(map[int64]map[int]bool)
+	var lastHit string
+	for attempt := 0; attempt < forwardPortRetryAttempts; attempt++ {
+		byNode := make(map[int64][]int)
+		for _, seg := range auto {
+			byNode[seg.nodeID] = append(byNode[seg.nodeID], seg.port)
+		}
+		seenHit := make(map[int64]map[int]bool)
+		var hits []tunnelAutoSegmentPort
+		for nodeID, ports := range byNode {
+			listening, _, err := h.probeForwardPortsOnNode(nodeID, ports)
+			if err != nil {
+				log.Printf("F2-PORT-01 live port probe skipped node_id=%d err=%v", nodeID, err)
+				continue
+			}
+			for _, p := range listening {
+				for _, seg := range auto {
+					if seg.nodeID != nodeID || seg.port != p {
+						continue
+					}
+					if seenHit[nodeID] == nil {
+						seenHit[nodeID] = make(map[int]bool)
+					}
+					if seenHit[nodeID][p] {
+						continue
+					}
+					seenHit[nodeID][p] = true
+					hits = append(hits, seg)
+				}
+			}
+		}
+		if len(hits) == 0 {
+			return nil
+		}
+		for _, hit := range hits {
+			lastHit = fmt.Sprintf("节点 %s 端口 %d 已被节点上其他进程占用", h.nodeLabel(hit.nodeID), hit.port)
+			if tried[hit.nodeID] == nil {
+				tried[hit.nodeID] = make(map[int]bool)
+			}
+			tried[hit.nodeID][hit.port] = true
+		}
+		if attempt == forwardPortRetryAttempts-1 {
+			break
+		}
+		for _, hit := range hits {
+			newPort, err := h.repickTunnelSegmentPort(hit.nodeID, tried[hit.nodeID])
+			if err != nil {
+				return err
+			}
+			retargetTunnelSegmentPort(state, hit.nodeID, hit.port, newPort)
+			for i := range auto {
+				if auto[i].nodeID == hit.nodeID && auto[i].port == hit.port {
+					auto[i].port = newPort
+				}
+			}
+		}
+	}
+	if lastHit == "" {
+		return nil
+	}
+	return tunnelValidationErrorMsg(lastHit)
+}
+
+// recheckTunnelCreatePortsTx 是创建提交段的锁内 DB 复检（与更新面
+// finalPortNodes 复检同形）：验证段定型的全部段口（OutNodes/
+// ChainHops/SegmentPorts，含游离段口）逐口过跨表占用；入口 inPort
+// 过 DB 三检（validateTunnelEntryInPortTx）。live 占用已在间隙探
+// 过，此处只复检 DB 面，堵验证段之后被并发占用的窗口。命中回
+// tunnelValidationError（原文回），仓储错已标记。
+func (h *Handler) recheckTunnelCreatePortsTx(tx *gorm.DB, state *tunnelCreateState, req map[string]interface{}) error {
+	if state == nil {
+		return nil
+	}
+	finalPortNodes := append([]tunnelRuntimeNode{}, state.OutNodes...)
+	for _, hop := range state.ChainHops {
+		finalPortNodes = append(finalPortNodes, hop...)
+	}
+	for key, port := range state.SegmentPorts {
+		finalPortNodes = append(finalPortNodes, tunnelRuntimeNode{NodeID: key.nodeID, Port: port})
+	}
+	for _, n := range finalPortNodes {
+		if n.Port <= 0 {
+			continue
+		}
+		node := state.Nodes[n.NodeID]
+		if node == nil {
+			continue
+		}
+		occupied, err := h.repo.NodePortOccupiedForTunnelTx(tx, n.NodeID, n.Port, 0)
+		if err != nil {
+			// R2-F4-01：仓储直通，标记后由调用方守卫泛化。
+			return markRepoError(err)
+		}
+		if occupied {
+			return tunnelValidationErrorf("节点 %s 端口 %d 已被占用", node.Name, n.Port)
+		}
+	}
+	return h.validateTunnelEntryInPortTx(tx, req, state, 0)
 }
 
 func applyTunnelPortsToRequest(req map[string]interface{}, state *tunnelCreateState) {
