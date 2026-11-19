@@ -349,21 +349,20 @@ func stubVersionListUnreachable(t *testing.T) *atomic.Int32 {
 }
 
 func TestPhase3KernelsContract(t *testing.T) {
-	// fixR2-A4 密封：下行 singbox 空版本安装断言落库字面 "latest"，
-	// 只在版本列表不可达（A3 回退）时成立，必须与环境网络解耦。
-	listHits := stubVersionListUnreachable(t)
+	// F5（fork 落地）：sing-box 安装只接受具体版本，空版本（latest）
+	// 入口即拒；此处点名 fork 版 1.14.4-flmx1，落库即该版本。空版本
+	// 离线回退（列表不可达存字面 "latest"）的覆盖改由 Xray 侧承担
+	// （fixR2-A3，见 TestFixR2A3InstallLatestFallsBackWhenListUnreachable），
+	// 本用例不再密封版本列表。
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
 	admin, _ := auth.GenerateToken(1, "admin@user", 0, secret)
 	nodeID := seedKernelNode(t, r, "landing")
 
 	// Offline node: kernels are registered, versions resolved.
-	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"singbox"}`)
-	if got := mustQueryString(t, r, `SELECT version FROM node_kernel WHERE kernel_type = 'singbox'`); got != "latest" {
+	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+jsonInt64(nodeID)+`,"kernelType":"singbox","version":"1.14.4-flmx1"}`)
+	if got := mustQueryString(t, r, `SELECT version FROM node_kernel WHERE kernel_type = 'singbox'`); got != "1.14.4-flmx1" {
 		t.Fatalf("sing-box version: %q", got)
-	}
-	if listHits.Load() == 0 {
-		t.Fatal("version list fetch never reached the sealed stub; seal broken (fixR2-A4)")
 	}
 
 	create := func(body string) (int64, string) {
@@ -429,10 +428,12 @@ func TestPhase3KernelsContract(t *testing.T) {
 }
 
 func TestACMEAndNaiveContract(t *testing.T) {
-	// fixR2-A4 密封：本用例两处空版本安装的落库版本决定 ACME 版本门
-	// 判定路径（字面 "latest" 走豁免、具体版本走严格比较）——未密封
-	// 时 CI 侧实际消费真实列表内容（解析出的 latest 须 ≥1.14 才过
-	// 门），与 TestPhase3KernelsContract 同族，一并密封为不可达。
+	// fixR2-A4 密封：Xray 空版本安装仍走 latest 解析，落库版本随
+	// 环境翻转（沙箱不可达走 A3 回退存字面 "latest"，CI 可达则解
+	// 析为具体版本），故密封为不可达。sing-box 一侧按 F5 点名 fork
+	// 版 1.14.4-flmx1，不再走空版本安装：ACME 版本门对该具体版本
+	// 走严格比较（1.14.4-flmx1 ≥ 1.14，过门），旧节点 1.12.0 仍被
+	// 严格比较挡在 1.14 门外。
 	listHits := stubVersionListUnreachable(t)
 	secret := "contract-jwt-secret"
 	router, r := setupContractRouter(t, secret)
@@ -440,7 +441,7 @@ func TestACMEAndNaiveContract(t *testing.T) {
 	nodeID := seedKernelNode(t, r, "landing")
 	oldNode := seedKernelNode(t, r, "old")
 	n, o := jsonInt64(nodeID), jsonInt64(oldNode)
-	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+n+`,"kernelType":"singbox"}`)
+	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+n+`,"kernelType":"singbox","version":"1.14.4-flmx1"}`)
 	kernelContractPost(t, router, admin, "/api/v1/kernel/install", `{"nodeId":`+n+`,"kernelType":"xray"}`)
 	if listHits.Load() == 0 {
 		t.Fatal("version list fetch never reached the sealed stub; seal broken (fixR2-A4)")
