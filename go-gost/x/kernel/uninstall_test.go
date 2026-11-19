@@ -37,17 +37,24 @@ func TestManagerUninstallRemovesAgentNftTables(t *testing.T) {
 		}
 	}
 
-	// Canonical 安装：主表＋旧名表＋legacy 代表＋探针表全删
-	// （F-R4-02：legacy 代的表由 canonical 卸载一并清）。
+	// Canonical 安装：主表（现为安装隔离的后缀名）＋旧名表＋legacy
+	// 代表＋探针表全删（F-R4-02：legacy 代的表由 canonical 卸载一并
+	// 清）；plain 主表只在升级迁移从未跑过的安装上删（见
+	// TestRemoveTablesCanonicalWithOldStateDeletesPlainTable），全新
+	// 安装的卸载绝不碰它——它可能是另一 agent 的 live 表。
 	script = ""
 	mc := NewManager(defaultBaseDir)
+	mc.nft.state = nftState{}
 	if err := mc.Uninstall(); err != nil {
 		t.Fatalf("uninstall: %v", err)
 	}
-	for _, table := range []string{nftTable, legacyNFTTable, legacyAgentNFTTable, nftHopProbeTable} {
+	for _, table := range []string{mc.nft.tableName(), legacyNFTTable, legacyAgentNFTTable, nftHopProbeTable} {
 		if !strings.Contains(script, "delete table inet "+table) {
 			t.Fatalf("uninstall script must delete table %s, got:\n%s", table, script)
 		}
+	}
+	if strings.Contains(script, "delete table inet "+nftTable+"\n") {
+		t.Fatalf("fresh canonical uninstall must not delete the plain table %s, got:\n%s", nftTable, script)
 	}
 }
 
@@ -92,7 +99,7 @@ func TestManagerShutdownRemovesOwnNftTable(t *testing.T) {
 		}
 	}
 
-	// Canonical 安装：删 plain 主表，legacy 表仍不动。
+	// Canonical 安装：删自己的后缀主表，legacy 表仍不动。
 	scripts = nil
 	mc := NewManager(defaultBaseDir)
 	mc.Shutdown()
@@ -100,8 +107,8 @@ func TestManagerShutdownRemovesOwnNftTable(t *testing.T) {
 		t.Fatalf("canonical shutdown must run exactly one nft script, got %d", len(scripts))
 	}
 	script = scripts[0]
-	if !strings.Contains(script, "delete table inet "+nftTable+"\n") {
-		t.Fatalf("canonical shutdown script must delete %q, got:\n%s", nftTable, script)
+	if !strings.Contains(script, "delete table inet "+mc.nft.tableName()+"\n") {
+		t.Fatalf("canonical shutdown script must delete %q, got:\n%s", mc.nft.tableName(), script)
 	}
 	for _, table := range []string{legacyNFTTable, legacyAgentNFTTable, nftHopProbeTable} {
 		if strings.Contains(script, "delete table inet "+table+"\n") {

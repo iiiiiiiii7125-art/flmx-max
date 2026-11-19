@@ -100,9 +100,9 @@ func ProbeHostKeyFingerprint(ctx context.Context, cfg SSHConfig) (string, error)
 }
 
 type Runner interface {
-	ApplyScript(ctx context.Context, cfg SSHConfig, script string) error
+	ApplyScript(ctx context.Context, cfg SSHConfig, table, script string) error
 	Test(ctx context.Context, cfg SSHConfig) error
-	ListTableJSON(ctx context.Context, cfg SSHConfig) ([]byte, error)
+	ListTableJSON(ctx context.Context, cfg SSHConfig, table string) ([]byte, error)
 }
 
 type SSHRunner struct {
@@ -129,7 +129,7 @@ func buildCapabilityCheckCommand(nft, probeName string) string {
 			Protocols:  []string{"tcp", "udp"},
 		}},
 	})
-	script = strings.Replace(script, "table inet "+tableName+" {", "table inet "+probeName+" {", 1)
+	script = strings.Replace(script, "table inet "+TableNameForInstance("")+" {", "table inet "+probeName+" {", 1)
 	return "set -eu\n" +
 		"command -v nft >/dev/null 2>&1\n" +
 		nft + " --version >/dev/null 2>&1\n" +
@@ -142,12 +142,23 @@ func buildCapabilityCheckCommand(nft, probeName string) string {
 		"fi"
 }
 
-func (r *SSHRunner) ApplyScript(ctx context.Context, cfg SSHConfig, script string) error {
-	command := buildApplyCommand(nftBinary(cfg), script)
+func (r *SSHRunner) ApplyScript(ctx context.Context, cfg SSHConfig, table, script string) error {
+	command := buildApplyCommand(nftBinary(cfg), table, script)
 	return r.run(ctx, cfg, command)
 }
 
-func buildApplyCommand(nft, script string) string {
+// buildApplyCommand builds the atomic replacement batch: the new
+// table (if it already exists) is deleted first, then the rendered
+// script is loaded, with a validation pass that preserves the
+// active rules on failure.
+//
+// P1-1 upgrade migration: the pre-isolation plain tables (flmx,
+// flvx) are deleted only when the isolated table does not exist
+// yet — i.e. on the first apply after the upgrade. Afterwards the
+// isolated table exists, so the gate never fires again and a plain
+// table that shows up later (another panel's live table) is left
+// alone instead of being wiped on every reconcile.
+func buildApplyCommand(nft, table, script string) string {
 	return "set -eu\n" +
 		"tmp=$(mktemp /tmp/flmx-nft-XXXXXX.nft)\n" +
 		"batch=$(mktemp /tmp/flmx-nft-batch-XXXXXX.nft) || { rm -f \"$tmp\"; exit 1; }\n" +
@@ -156,14 +167,16 @@ func buildApplyCommand(nft, script string) string {
 		"}\n" +
 		"trap cleanup EXIT\n" +
 		"cat > \"$tmp\" <<'EOF'\n" + script + "\nEOF\n" +
-		// 改名过渡：新表与 legacy 表（flvx）谁存在就先删谁，再整体加载新表，
-		// 避免改名后旧表残留在内核中与新表双份生效。
 		": > \"$batch\"\n" +
-		"if " + nft + " list table inet " + tableName + " >/dev/null 2>&1; then\n" +
-		"  printf '%s\\n' 'delete table inet " + tableName + "' >> \"$batch\"\n" +
-		"fi\n" +
-		"if " + nft + " list table inet " + legacyTableName + " >/dev/null 2>&1; then\n" +
-		"  printf '%s\\n' 'delete table inet " + legacyTableName + "' >> \"$batch\"\n" +
+		"if " + nft + " list table inet " + table + " >/dev/null 2>&1; then\n" +
+		"  printf '%s\\n' 'delete table inet " + table + "' >> \"$batch\"\n" +
+		"else\n" +
+		"  if " + nft + " list table inet " + plainTableName + " >/dev/null 2>&1; then\n" +
+		"    printf '%s\\n' 'delete table inet " + plainTableName + "' >> \"$batch\"\n" +
+		"  fi\n" +
+		"  if " + nft + " list table inet " + legacyTableName + " >/dev/null 2>&1; then\n" +
+		"    printf '%s\\n' 'delete table inet " + legacyTableName + "' >> \"$batch\"\n" +
+		"  fi\n" +
 		"fi\n" +
 		"cat \"$tmp\" >> \"$batch\"\n" +
 		"if ! " + nft + " -c -f \"$batch\"; then\n" +
@@ -173,8 +186,8 @@ func buildApplyCommand(nft, script string) string {
 		nft + " -f \"$batch\""
 }
 
-func (r *SSHRunner) ListTableJSON(ctx context.Context, cfg SSHConfig) ([]byte, error) {
-	return r.runOutput(ctx, cfg, nftBinary(cfg)+" -j list table inet "+tableName)
+func (r *SSHRunner) ListTableJSON(ctx context.Context, cfg SSHConfig, table string) ([]byte, error) {
+	return r.runOutput(ctx, cfg, nftBinary(cfg)+" -j list table inet "+table)
 }
 
 func (r *SSHRunner) run(ctx context.Context, cfg SSHConfig, command string) error {

@@ -29,7 +29,13 @@ type Rule struct {
 
 type NodePlan struct {
 	NodeID int64
-	Rules  []Rule
+	// InstanceID is this panel install's instance key (FLMX_INSTANCE;
+	// "" is the default instance). It selects the nft table the plan
+	// renders into (see TableNameForInstance): two panels sharing a
+	// node must not render into the same table. Zero value reads as
+	// the default instance, never the plain table.
+	InstanceID string
+	Rules      []Rule
 }
 
 type SSHConfig struct {

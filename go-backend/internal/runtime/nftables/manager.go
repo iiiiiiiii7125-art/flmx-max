@@ -7,13 +7,33 @@ import (
 
 type Manager struct {
 	runner Runner
+	// instance is this panel install's instance key (FLMX_INSTANCE;
+	// "" is the default instance). It selects the nft table for the
+	// plan-less operations (CollectCounters, Clear); Reconcile takes
+	// the table from the plan, which the handler fills with the same
+	// key, so the two always agree in production.
+	instance string
 }
 
 func NewManager(runner Runner) *Manager {
+	return NewManagerWithInstance(runner, "")
+}
+
+// NewManagerWithInstance builds a Manager for a non-default panel
+// instance; the handler passes panelInstanceID() here.
+func NewManagerWithInstance(runner Runner, instance string) *Manager {
 	if runner == nil {
 		runner = NewSSHRunner()
 	}
-	return &Manager{runner: runner}
+	return &Manager{runner: runner, instance: instance}
+}
+
+// tableName returns this panel install's nft table.
+func (m *Manager) tableName() string {
+	if m == nil {
+		return TableNameForInstance("")
+	}
+	return TableNameForInstance(m.instance)
 }
 
 func (m *Manager) Test(ctx context.Context, cfg SSHConfig) error {
@@ -46,7 +66,7 @@ func (m *Manager) Reconcile(ctx context.Context, cfg SSHConfig, plan NodePlan) (
 		Script: RenderTable(plan),
 		Hashes: PlanHashes(plan),
 	}
-	if err := m.runner.ApplyScript(ctx, cfg, result.Script); err != nil {
+	if err := m.runner.ApplyScript(ctx, cfg, plan.TableName(), result.Script); err != nil {
 		return ApplyResult{}, err
 	}
 	return result, nil
@@ -56,8 +76,8 @@ func (m *Manager) Clear(ctx context.Context, cfg SSHConfig) error {
 	if err := m.ensureInitialized(); err != nil {
 		return err
 	}
-	script := RenderTable(NodePlan{})
-	if err := m.runner.ApplyScript(ctx, cfg, script); err != nil {
+	script := RenderTable(NodePlan{InstanceID: m.instance})
+	if err := m.runner.ApplyScript(ctx, cfg, m.tableName(), script); err != nil {
 		return err
 	}
 	// 节点清理同时删除暂停过滤表：封禁端口随表释放，否则端口被新
@@ -74,11 +94,12 @@ func (m *Manager) CollectCounters(ctx context.Context, cfg SSHConfig) ([]Counter
 	if err := m.ensureInitialized(); err != nil {
 		return nil, err
 	}
-	raw, err := m.runner.ListTableJSON(ctx, cfg)
+	table := m.tableName()
+	raw, err := m.runner.ListTableJSON(ctx, cfg, table)
 	if err != nil {
 		return nil, err
 	}
-	return ParseCounterSamples(raw)
+	return ParseCounterSamples(raw, table)
 }
 
 func (m *Manager) ensureInitialized() error {
