@@ -58,9 +58,13 @@ func RenderTable(plan NodePlan) string {
 			bindMatch = fmt.Sprintf("%s daddr %s ", fam, ip)
 		}
 		for _, protocol := range normalizedProtocols(rule.Protocols) {
-			b.WriteString(fmt.Sprintf("    %s %sdport %d counter dnat %sto %s comment %q\n",
-				protocol,
+			// R-B01-01：L3 匹配（ip daddr）必须在 L4 匹配（tcp/udp dport）
+			// 之前——nft 要求按协议栈顺序写，`tcp ip daddr …` 报
+			// `syntax error, unexpected ip`。bindMatch 为空时渲染与
+			// 之前完全一致（`tcp dport …`）。
+			b.WriteString(fmt.Sprintf("    %s%s dport %d counter dnat %sto %s comment %q\n",
 				bindMatch,
+				protocol,
 				rule.InPort,
 				dnatFamily,
 				formatDNATTarget(rule.TargetHost, rule.TargetPort),
