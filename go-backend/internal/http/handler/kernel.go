@@ -1486,9 +1486,10 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	}
 	// F2-PORT-01：live socket 探针在锁前跑（R5R3-001：锁内禁网络
 	// 调用）。in.Port 锁前已定型（Normalize 不改端口；更新省略
-	// port 时已回填存量值）；Port==0 是自动选口、端口在锁内才定，
-	// 仍只走 DB。更新时减去旧入站自身的段，避免把自己的监听器
-	// 误判为占用。探针失败 fail-open（只记日志），DB 结论不变。
+	// port 时已回填存量值）；Port==0 是自动选口，端口在下方
+	// pick→probe→锁内复检循环里定（见 P0-2）。更新时减去旧入站
+	// 自身的段，避免把自己的监听器误判为占用。探针失败 fail-open
+	// （只记日志），DB 结论不变。
 	if in.Port != 0 {
 		spans := inboundSpans(in)
 		if oldIn != nil {
@@ -1505,59 +1506,95 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// R5R3-001: 锁在 DB 写入后立即显式释放，不用 defer——defer 会穿越
 	// 下游 applyKernel 等网络调用（最长 5min 超时），违反"锁内禁止网络调用"。
 	// 注意：临界区内每个提前返回前都必须先释放（Release 即 Unlock，不可双释放）。
-	portAllocMu := repo.AcquirePortAllocLock(row.NodeID)
-	releasePortAlloc := func() { repo.ReleasePortAllocLock(portAllocMu) }
-	if in.Port == 0 {
-		port, err := h.pickFreeInboundPort(row.NodeID, row.ID)
-		if err != nil {
+	// F2-PORT-01 P0-2：自动选口（Port==0，创建路径；更新省略 port 已在
+	// 上方回填存量值）走 pick→probe→锁内复检循环，与转发创建的
+	// createForwardWithPortRetry 同口径。选口本身是锁外 DB 读（与转发
+	// 选口同形）；探针是网络调用，只能在锁外跑（R5R3-001），命中即把
+	// 该口记入 tried 换口重试（上限 forwardPortRetryAttempts 次）；
+	// 探针失败 fail-open（probeForwardEntryPortLive 回 ""），沿用 DB
+	// 结论。锁内 inboundPortConflict 复检仍是最终权威：探活到落库
+	// 之间的窗口被并发占用的口在此拦截，自动口同样换口重试（而非
+	// 直接报错）；显式口保持原口径（一次复检、命中即拒）。循环以
+	// 锁内复检通过 break，持锁进入下方入库段；耗尽回末次碰撞文案。
+	autoPick := in.Port == 0
+	triedInboundPorts := make(map[int]bool)
+	var lastInboundPortErr error
+	var prevTargets []int64
+	var releasePortAlloc func()
+	pickedClean := false
+	for attempt := 0; attempt < forwardPortRetryAttempts; attempt++ {
+		if autoPick {
+			port, pickErr := h.pickFreeInboundPortExcluding(row.NodeID, row.ID, triedInboundPorts)
+			if pickErr != nil {
+				if errors.Is(pickErr, errNoFreeInboundPort) {
+					response.WriteJSON(w, response.ErrDefault("未找到可用端口，请手动指定"))
+					return
+				}
+				respondInternalError(w, "inboundSave", pickErr)
+				return
+			}
+			if msg := h.probeForwardEntryPortLive([]int64{row.NodeID}, port); msg != "" {
+				lastInboundPortErr = errors.New(msg)
+				triedInboundPorts[port] = true
+				continue
+			}
+			in.Port = port
+		}
+		portAllocMu := repo.AcquirePortAllocLock(row.NodeID)
+		releasePortAlloc = func() { repo.ReleasePortAllocLock(portAllocMu) }
+		if err := kernel.Normalize(k.KernelType, &in); err != nil {
 			releasePortAlloc()
-			if errors.Is(err, errNoFreeInboundPort) {
-				response.WriteJSON(w, response.ErrDefault("未找到可用端口，请手动指定"))
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		if msg := kernelVersionGate(k.KernelType, k.Version, &in); msg != "" {
+			releasePortAlloc()
+			response.WriteJSON(w, response.ErrDefault(msg))
+			return
+		}
+		// F2-N2-01：链式/分流目标的字面 IP 族冲突校验读 row.OutboundIPStrategy
+		// （validateChainVersion），而本单新策略此时只在 in 上——applyInboundToModel
+		// 在校验之后才落 row，同单收紧会被存量旧策略放行、落库后渲染期把链式
+		// 出站判 unreachable 静默丢流量（同单放宽则被旧策略误拒）。校验前先把
+		// 经 Normalize 的本单策略同步进 row，与 inboundSplitSave（先写 row
+		// 再校验）口径对齐。更新未携带策略时 in 即存量值，同步为恒等、无副作用。
+		row.OutboundIPStrategy = in.OutboundIPStrategy
+		prevTargets = outboundTargets(row)
+		if err := h.setInboundRouting(&row, k.KernelType, k.Version, req.OutboundID, req.SplitRules); err != nil {
+			releasePortAlloc()
+			// R2-A01：链式校验定型失败原样回（TestFixA／TestR2B6），仓储故障才泛化。
+			respondChainValidationError(w, "inboundSave", err)
+			return
+		}
+		if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
+			releasePortAlloc()
+			// R-068：损坏行无法恢复时的 fail-closed 拒绝须点名该行，
+			// 不走吞文案的通用 Internal error。
+			var blocked *inboundConflictBlockedError
+			if errors.As(err, &blocked) {
+				response.WriteJSON(w, response.ErrDefault(blocked.msg))
 				return
 			}
 			respondInternalError(w, "inboundSave", err)
 			return
-		}
-		in.Port = port
-	}
-	if err := kernel.Normalize(k.KernelType, &in); err != nil {
-		releasePortAlloc()
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
-	}
-	if msg := kernelVersionGate(k.KernelType, k.Version, &in); msg != "" {
-		releasePortAlloc()
-		response.WriteJSON(w, response.ErrDefault(msg))
-		return
-	}
-	// F2-N2-01：链式/分流目标的字面 IP 族冲突校验读 row.OutboundIPStrategy
-	// （validateChainVersion），而本单新策略此时只在 in 上——applyInboundToModel
-	// 在校验之后才落 row，同单收紧会被存量旧策略放行、落库后渲染期把链式
-	// 出站判 unreachable 静默丢流量（同单放宽则被旧策略误拒）。校验前先把
-	// 经 Normalize 的本单策略同步进 row，与 inboundSplitSave（先写 row
-	// 再校验）口径对齐。更新未携带策略时 in 即存量值，同步为恒等、无副作用。
-	row.OutboundIPStrategy = in.OutboundIPStrategy
-	prevTargets := outboundTargets(row)
-	if err := h.setInboundRouting(&row, k.KernelType, k.Version, req.OutboundID, req.SplitRules); err != nil {
-		releasePortAlloc()
-		// R2-A01：链式校验定型失败原样回（TestFixA／TestR2B6），仓储故障才泛化。
-		respondChainValidationError(w, "inboundSave", err)
-		return
-	}
-	if msg, err := h.inboundPortConflict(row.NodeID, in, row.ID); err != nil {
-		releasePortAlloc()
-		// R-068：损坏行无法恢复时的 fail-closed 拒绝须点名该行，
-		// 不走吞文案的通用 Internal error。
-		var blocked *inboundConflictBlockedError
-		if errors.As(err, &blocked) {
-			response.WriteJSON(w, response.ErrDefault(blocked.msg))
+		} else if msg != "" {
+			releasePortAlloc()
+			if autoPick {
+				lastInboundPortErr = errors.New(msg)
+				triedInboundPorts[in.Port] = true
+				continue
+			}
+			response.WriteJSON(w, response.ErrDefault(msg))
 			return
 		}
-		respondInternalError(w, "inboundSave", err)
-		return
-	} else if msg != "" {
-		releasePortAlloc()
-		response.WriteJSON(w, response.ErrDefault(msg))
+		pickedClean = true
+		break
+	}
+	if !pickedClean {
+		if lastInboundPortErr == nil {
+			lastInboundPortErr = errNoFreeInboundPort
+		}
+		response.WriteJSON(w, response.ErrDefault(lastInboundPortErr.Error()))
 		return
 	}
 
@@ -1768,7 +1805,17 @@ func boolToInt(b bool) int {
 }
 
 func (h *Handler) pickFreeInboundPort(nodeID, excludeInboundID int64) (int, error) {
+	return h.pickFreeInboundPortExcluding(nodeID, excludeInboundID, nil)
+}
+
+// pickFreeInboundPortExcluding 与 pickFreeInboundPort 同口径，但把
+// exclude 里的已试端口从候选集里剔掉——换口重试时不得把刚撞过的口
+// 再挑回来（与 pickTunnelPortExcluding 同理，F2-PORT-01 P0-2）。
+func (h *Handler) pickFreeInboundPortExcluding(nodeID, excludeInboundID int64, exclude map[int]bool) (int, error) {
 	return pickFreePortWithFallback(20000, 60000, func(port int) (bool, error) {
+		if exclude[port] {
+			return true, nil
+		}
 		msg, err := h.inboundPortConflict(nodeID, kernel.Inbound{Port: port}, excludeInboundID)
 		return msg != "", err
 	})
