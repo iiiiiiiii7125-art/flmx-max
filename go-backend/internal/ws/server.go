@@ -928,6 +928,20 @@ var agentPreParseErrorTypes = map[string]bool{
 	"ParseError":      true,
 }
 
+// sanitizeAgentLogText 是 agent 文本进日志前的统一脱敏口径（R18-C4-04）：
+// 换行/回车折空格（防日志注入伪造行），按 256 rune 截断——与
+// agentPreParseErrorReason（R2-X2-02）的既有口径共用，卸载路径
+// 三处日志点（handleUninstallResult 的 warnings 与失败原因、
+// serveUninstalledNode 的 warnings 与失败消息）与预解析错误
+// 口径均走它。注意：这只管日志面，入库/回显的原因原文不动。
+func sanitizeAgentLogText(s string) string {
+	text := strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
+	if r := []rune(text); len(r) > 256 {
+		text = string(r[:256]) + "…"
+	}
+	return text
+}
+
 // agentPreParseErrorReason 为 R2-X2-02 的日志侧关联口径：仅当消息
 // 类型属解析前错误五型时，提取其 message 并做日志安全化（换行折
 // 空格、防日志注入；按 256 rune 截断）。非五型或无 message 时返回
@@ -942,11 +956,7 @@ func agentPreParseErrorReason(msgType, msg string) (string, bool) {
 	if err := json.Unmarshal([]byte(msg), &body); err != nil || body.Message == "" {
 		return "", false
 	}
-	reason := strings.NewReplacer("\r", " ", "\n", " ").Replace(body.Message)
-	if r := []rune(reason); len(r) > 256 {
-		reason = string(r[:256]) + "…"
-	}
-	return reason, true
+	return sanitizeAgentLogText(body.Message), true
 }
 
 func looksLikeSystemInfoMessage(msg string) bool {
