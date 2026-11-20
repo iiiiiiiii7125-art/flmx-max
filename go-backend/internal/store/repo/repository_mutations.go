@@ -1140,6 +1140,21 @@ func (r *Repository) DeleteNodeCascadeWithOutcome(nodeID int64) (*NodeCascadeOut
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.NodeTraffic{}).Error; err != nil {
 			return err
 		}
+		// R18-C1-04: 连接日志遥测三表。inbound_conn_log 行虽受
+		// 保留期 prune 兜底，但删节点后即无查询入口，留着只占
+		// 保留期；connlog_node_dropped / traffic_node_dropped
+		// 是累计计数器、无任何保留期或清扫，不清则每删一个节点
+		// 永久多两行。entry_node_id 归属入口节点（“连到这台服务
+		// 器”的口径），与 ListNodeConnLogs 一致。
+		if err := tx.Where("entry_node_id = ?", nodeID).Delete(&model.InboundConnLog{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.ConnlogNodeDropped{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", nodeID).Delete(&model.TrafficNodeDropped{}).Error; err != nil {
+			return err
+		}
 		// C-008: 订阅计数器。
 		if err := tx.Where("node_id = ?", nodeID).Delete(&model.SubscriptionCounter{}).Error; err != nil {
 			return err

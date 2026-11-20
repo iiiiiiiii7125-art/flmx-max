@@ -463,8 +463,25 @@ func (r *Repository) CountNodeConnLogs(entryNodeID int64, ip string) (int64, err
 	return total, err
 }
 
-// PruneInboundConnLogsBefore 删除 start_time 早于 cutoffMs 的行
+// HasRecentConnlogRows 报告该节点在 sinceMs 之后是否有新行入库
+// （按面板 created_time 判定，R18-C5-03 “已关仍有行到达”探测的
+// 读面：开关关后仍有行到达，说明 agent 仍持旧配置上报）。
+func (r *Repository) HasRecentConnlogRows(entryNodeID, sinceMs int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("repository not initialized")
+	}
+	var total int64
+	err := r.db.Model(&model.InboundConnLog{}).
+		Where("entry_node_id = ? AND created_time > ?", entryNodeID, sinceMs).
+		Count(&total).Error
+	return total > 0, err
+}
+
+// PruneInboundConnLogsBefore 删除 created_time 早于 cutoffMs 的行
 // （保留天数限，设计 §5.2）。分批删防长事务锁表。返回删除行数。
+// R18-C5-02：按面板摄入时刻 created_time（面板时钟，可信）而非
+// agent 声称的 start_time 执行——时钟偏移的未来行否则永不满足
+// 剪枝条件，保留期名存实亡。start_time 只用于展示与时长计算。
 func (r *Repository) PruneInboundConnLogsBefore(cutoffMs int64) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
@@ -472,7 +489,7 @@ func (r *Repository) PruneInboundConnLogsBefore(cutoffMs int64) (int64, error) {
 	var total int64
 	for {
 		res := r.db.Exec(
-			"DELETE FROM inbound_conn_log WHERE id IN (SELECT id FROM inbound_conn_log WHERE start_time < ? LIMIT ?)",
+			"DELETE FROM inbound_conn_log WHERE id IN (SELECT id FROM inbound_conn_log WHERE created_time < ? LIMIT ?)",
 			cutoffMs, connlogDeleteChunk)
 		if res.Error != nil {
 			return total, res.Error
@@ -485,9 +502,11 @@ func (r *Repository) PruneInboundConnLogsBefore(cutoffMs int64) (int64, error) {
 }
 
 // PruneInboundConnLogsOverCap 执行每入站行数帽（设计 §5.2）：按
-// display_inbound_id 分组（含未归属的 0 桶），每组只保留 start_
+// display_inbound_id 分组（含未归属的 0 桶），每组只保留 created_
 // time 最新（同刻 id 最大）的 cap 行，最旧先清。单独成函数供
 // prune 与测试直调。返回删除行数。
+// R18-C5-02：保留“最新”按面板 created_time 而非 agent start_time
+// 排序——未来 start 的行否则被当成最新保留、把合法行挤出帽。
 func (r *Repository) PruneInboundConnLogsOverCap(cap int) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
@@ -516,7 +535,7 @@ func (r *Repository) PruneInboundConnLogsOverCap(cap int) (int64, error) {
 				chunk = excess
 			}
 			res := r.db.Exec(
-				"DELETE FROM inbound_conn_log WHERE id IN (SELECT id FROM inbound_conn_log WHERE display_inbound_id = ? ORDER BY start_time ASC, id ASC LIMIT ?)",
+				"DELETE FROM inbound_conn_log WHERE id IN (SELECT id FROM inbound_conn_log WHERE display_inbound_id = ? ORDER BY created_time ASC, id ASC LIMIT ?)",
 				g.DisplayInboundID, chunk)
 			if res.Error != nil {
 				return total, res.Error
@@ -556,12 +575,14 @@ func (r *Repository) InterruptOpenInboundConnLogs(nodeID, lastKnownMs int64) (in
 // §4.6③）：open 超过时限仍无 close 的行置 interrupted，end_time
 // 取行自身的 created_time（面板摄入 open 事件的时刻——该连接在
 // 那一刻确证存在，是最后已知时刻）。返回结清行数。
+// R18-C5-02：超龄判定按 created_time（面板时钟）而非 agent
+// start_time——未来 start 的 open 行否则永不被清道夫扫到。
 func (r *Repository) InterruptStaleOpenInboundConnLogs(startedBeforeMs int64) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("repository not initialized")
 	}
 	res := r.db.Model(&model.InboundConnLog{}).
-		Where("status = ? AND start_time < ?", ConnlogStatusOpen, startedBeforeMs).
+		Where("status = ? AND created_time < ?", ConnlogStatusOpen, startedBeforeMs).
 		Updates(map[string]interface{}{
 			"status":   ConnlogStatusInterrupted,
 			"end_time": gorm.Expr("created_time"),

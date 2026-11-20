@@ -18,6 +18,8 @@ func TestC306FlushFailureRequeuesWindow(t *testing.T) {
 	}
 	defer r.Close()
 	svc := NewIngestionService(r)
+	// R18-C4-02：基线+增长同节点快速序列，间隔置 0（不测限流）。
+	svc.minMetricIntervalMs = 0
 
 	base := SystemInfo{Uptime: 10, BytesReceived: 1000, BytesTransmitted: 2000}
 	svc.RecordNodeMetric(3, base) // 基线

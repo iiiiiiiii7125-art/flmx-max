@@ -102,6 +102,12 @@ func TestConnlogReadinessStates(t *testing.T) {
 	admin := &auth.Claims{Sub: "1", RoleID: 0}
 	user := &auth.Claims{Sub: "2", RoleID: 1}
 
+	// R18-C5-03：rig 默认开节点开关（摄入测试的前置条件），本测试
+	// 先显式关掉以覆盖初始 off 态。
+	if err := rig.r.UpdateNodeConnLogEnabled(rig.entryID, 0); err != nil {
+		t.Fatalf("disable connlog: %v", err)
+	}
+
 	// 未登录 401、普通用户 403。
 	if code, _ := rig.callReadiness(t, nil, rig.entryID); code != 401 {
 		t.Fatalf("anonymous readiness code = %d, want 401", code)

@@ -137,7 +137,7 @@ func (s *Server) handleUninstallResult(nodeID int64, msg string) {
 	}
 	for _, text := range envelope.Data.Warnings {
 		if strings.TrimSpace(text) != "" {
-			log.Printf("node %d agent uninstall warning: %s", nodeID, text)
+			log.Printf("node %d agent uninstall warning: %s", nodeID, sanitizeAgentLogText(text))
 		}
 	}
 	now := time.Now()
@@ -169,7 +169,7 @@ func (s *Server) handleUninstallResult(nodeID int64, msg string) {
 		log.Printf("websocket: UninstallResult failure transition failed node_id=%d won=%v err=%v", nodeID, won, terr)
 		return
 	}
-	log.Printf("node %d agent reported uninstall failure: %s", nodeID, reason)
+	log.Printf("node %d agent reported uninstall failure: %s", nodeID, sanitizeAgentLogText(reason))
 }
 
 // serveUninstalledNode 处理「服务器已删、agent 当时离线」的重连：
@@ -234,12 +234,12 @@ func (s *Server) serveUninstalledNode(w http.ResponseWriter, r *http.Request, se
 			// 单，R2F2-D01）逐条进日志：重连路径没有用户回执可
 			// 挂，日志是这条路径唯一的披露面。
 			for _, text := range uninstallReplyWarnings(resp.Data) {
-				log.Printf("deleted node %q: agent uninstall warning: %s", pending.NodeName, text)
+				log.Printf("deleted node %q: agent uninstall warning: %s", pending.NodeName, sanitizeAgentLogText(text))
 			}
 		case strings.Contains(resp.Message, "未知命令"):
 			log.Printf("deleted node %q: agent is too old to uninstall itself; remove it manually on the server", pending.NodeName)
 		default:
-			log.Printf("deleted node %q: agent uninstall failed: %s", pending.NodeName, resp.Message)
+			log.Printf("deleted node %q: agent uninstall failed: %s", pending.NodeName, sanitizeAgentLogText(resp.Message))
 			return true
 		}
 		_ = s.repo.DeleteNodeUninstall(secret)

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go-backend/internal/store/model"
 	"go-backend/internal/store/repo"
 )
 
@@ -37,6 +38,8 @@ func TestConnlogBootChangeInterruptsOpenRows(t *testing.T) {
 	seedOpenConnlogRow(t, r, 2, "other-node", now-60_000)
 
 	svc := NewIngestionService(r)
+	// R18-C4-02：同节点 boot 变化序列模拟，间隔置 0（不测限流）。
+	svc.minMetricIntervalMs = 0
 	info := SystemInfo{BootID: "boot-a", BytesReceived: 100, BytesTransmitted: 200}
 
 	// 首报只立基线，不结清。
@@ -94,8 +97,19 @@ func TestConnlogPruneWiredIntoHourlyPrune(t *testing.T) {
 	now := time.Now()
 	oldStart := now.Add(-8 * 24 * time.Hour).UnixMilli()
 	freshStart := now.Add(-time.Hour).UnixMilli()
-	seedOpenConnlogRow(t, r, 1, "old-row", oldStart)
-	seedOpenConnlogRow(t, r, 1, "fresh-row", freshStart)
+	// R18-C5-02：保留期按面板摄入时刻 created_time 执行，故直接写
+	// 行并显式给 CreatedTime——经摄入 seeding 的行 created_time
+	// 恒为 now，测不出时间剪枝。start_time 与 created_time 在此
+	// 同值（正常时钟下的行），断言口径与改前一致。
+	seed := []model.InboundConnLog{
+		{EntryNodeID: 1, ConnID: "old-row", DisplayInboundID: 10, ClientIP: "203.0.113.7", StartTime: oldStart, CreatedTime: oldStart, Status: repo.ConnlogStatusOpen},
+		{EntryNodeID: 1, ConnID: "fresh-row", DisplayInboundID: 10, ClientIP: "203.0.113.7", StartTime: freshStart, CreatedTime: freshStart, Status: repo.ConnlogStatusOpen},
+	}
+	for i := range seed {
+		if err := r.DB().Create(&seed[i]).Error; err != nil {
+			t.Fatalf("seed %s: %v", seed[i].ConnID, err)
+		}
+	}
 
 	svc := NewIngestionService(r)
 	svc.pruneMetricsAt(now)

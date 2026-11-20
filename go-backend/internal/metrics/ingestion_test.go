@@ -81,18 +81,25 @@ func TestRecordNodeMetricAutoFlush(t *testing.T) {
 		DiskUsage:   30.0,
 	}
 
+	// R18-C4-02：逐节点最小接受间隔 1 秒——同一节点连发 250 帧
+	// 只会被接受 1 帧。本测试测的是“缓冲满 200 即自动 flush”，
+	// 故用 250 个不同节点各发一帧（每节点首帧恒被接受）。
 	for i := 0; i < 250; i++ {
-		svc.RecordNodeMetric(1, info)
+		svc.RecordNodeMetric(int64(i+1), info)
 	}
 
 	time.Sleep(100 * time.Millisecond)
 
-	metrics, err := r.GetNodeMetrics(1, time.Now().UnixMilli()-60000, time.Now().UnixMilli()+1000)
-	if err != nil {
-		t.Fatalf("get metrics: %v", err)
+	total := 0
+	for i := 1; i <= 250; i++ {
+		metrics, err := r.GetNodeMetrics(int64(i), time.Now().UnixMilli()-60000, time.Now().UnixMilli()+1000)
+		if err != nil {
+			t.Fatalf("get metrics: %v", err)
+		}
+		total += len(metrics)
 	}
-	if len(metrics) < 200 {
-		t.Fatalf("expected at least 200 metrics after auto-flush, got %d", len(metrics))
+	if total < 200 {
+		t.Fatalf("expected at least 200 metrics after auto-flush, got %d", total)
 	}
 }
 
@@ -141,6 +148,10 @@ func TestGetLatestMetric(t *testing.T) {
 	defer r.Close()
 
 	svc := NewIngestionService(r)
+	// R18-C4-02：本测试模拟同节点快速序列（两次上报只隔 5ms），
+	// 不测限流本身，故把最小接受间隔置 0；限流由
+	// TestRecordNodeMetricPerNodeRateLimit 以默认值覆盖。
+	svc.minMetricIntervalMs = 0
 
 	now := time.Now().UnixMilli()
 
@@ -184,6 +195,8 @@ func TestGetMetricsWithTimeRange(t *testing.T) {
 	defer r.Close()
 
 	svc := NewIngestionService(r)
+	// R18-C4-02：同上，同节点快速序列不测限流，间隔置 0。
+	svc.minMetricIntervalMs = 0
 
 	now := time.Now().UnixMilli()
 
@@ -336,6 +349,8 @@ func TestZeroValues(t *testing.T) {
 // proven reboots are covered by TestNodeTrafficBootKeyedDeltas).
 func TestNodeTrafficFromCounters(t *testing.T) {
 	s := NewIngestionService(nil)
+	// R18-C4-02：同节点计数器序列模拟，间隔置 0（不测限流）。
+	s.minMetricIntervalMs = 0
 	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 1000, BytesTransmitted: 500})
 	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 1600, BytesTransmitted: 900})
 	s.RecordNodeMetric(7, SystemInfo{BytesReceived: 100, BytesTransmitted: 50})
@@ -359,6 +374,8 @@ func TestNodeTrafficFromCounters(t *testing.T) {
 // subtraction under every boot state.
 func TestNodeTrafficBootKeyedDeltas(t *testing.T) {
 	s := NewIngestionService(nil)
+	// R18-C4-02：同节点计数器序列模拟，间隔置 0（不测限流）。
+	s.minMetricIntervalMs = 0
 	rec := func(node int64, boot string, in, out uint64) {
 		s.RecordNodeMetric(node, SystemInfo{BootID: boot, BytesReceived: in, BytesTransmitted: out})
 	}
@@ -398,6 +415,8 @@ func TestNodeTrafficBootKeyedDeltas(t *testing.T) {
 // agent) never dedupes.
 func TestNodeTrafficSharedBootIDDedupes(t *testing.T) {
 	s := NewIngestionService(nil)
+	// R18-C4-02：同节点计数器序列模拟，间隔置 0（不测限流）。
+	s.minMetricIntervalMs = 0
 	rec := func(node int64, boot string, in, out uint64) {
 		s.RecordNodeMetric(node, SystemInfo{BootID: boot, BytesReceived: in, BytesTransmitted: out})
 	}

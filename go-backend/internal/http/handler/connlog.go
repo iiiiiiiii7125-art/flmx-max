@@ -37,6 +37,14 @@ import (
 
 const connlogMaxEventsPerBatch = 1000
 
+// connlogMaxFutureSkew 是 R18-C5-02 摄入侧未来方向容差：事件的
+// StartTime/EndTime 超出面板时间此值即整批拒收（invalid_batch）。
+// 1 小时远大于正常时钟漂移（分钟级），又远小于可绕过保留期剪枝
+// 的偏移（天级）。只约束未来方向：spool/断线重放会产生旧事件，
+// 过去方向无害（剪枝改按面板 created_time 后旧事件只会被正常
+// 清理，不会挤占合法行），故过去时间一律放行。
+const connlogMaxFutureSkew = time.Hour
+
 type connlogEvent struct {
 	Type        string `json:"type"`
 	ConnID      string `json:"connId"`
@@ -109,7 +117,25 @@ func (h *Handler) flowConnlogV2(w http.ResponseWriter, r *http.Request) {
 			"stream": envelope.Stream, "sequence": envelope.Sequence, "error": reason,
 		})
 	}
-	if err := validateConnlogEvents(envelope.Events); err != nil {
+	// R18-C5-03：摄入侧执法采集开关（总开关 AND 节点开关）。只靠
+	// 标记下发侧执法时，离线/重推丢失窗口内旧标记 agent 的上报会
+	// 照单入库，违背“关则不采”的承诺。查询失败 fail-closed 拒收
+	// 503（与标记下发面“查询失败整单中止”同口径）；开关关时整批
+	// 拒收并回专用错误码 collection_disabled（409，与
+	// invalid_batch 区分，避免 agent 二分误判为批次非法；不认此
+	// 码的旧 agent 按普通失败保留批次、退避重报，不丢数据）。
+	enabled, err := h.connlogEnabledForNode(node.ID)
+	if err != nil {
+		log.Printf("connlog upload switch check failed node_id=%d err=%v", node.ID, err)
+		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !enabled {
+		log.Printf("connlog upload rejected node_id=%d class=collection_disabled", node.ID)
+		reject(http.StatusConflict, "collection_disabled")
+		return
+	}
+	if err := validateConnlogEvents(envelope.Events, time.Now()); err != nil {
 		log.Printf("connlog upload invalid batch node_id=%d err=%v", node.ID, err)
 		reject(http.StatusBadRequest, "invalid_batch")
 		return
@@ -201,9 +227,18 @@ func (h *Handler) flowConnlogV2(w http.ResponseWriter, r *http.Request) {
 // invalid_batch 供 agent 二分定位，与 flow v2 同口径）。每条事件
 // 必须自带全字段：close 事件在 open 丢失时要能独立建行，故字段
 // 校验不因 type 放宽（仅 open 强制 startTime/clientIp，close 强
-// 制 endTime）。
-func validateConnlogEvents(events []connlogEvent) error {
+// 制 endTime）。now 为面板当前时间：StartTime/EndTime 超出
+// now+connlogMaxFutureSkew 即拒收（R18-C5-02，未来方向的时钟
+// 偏移会绕过保留期剪枝、挤占行数帽）。
+func validateConnlogEvents(events []connlogEvent, now time.Time) error {
+	futureLimit := now.Add(connlogMaxFutureSkew).UnixMilli()
 	for i, ev := range events {
+		if ev.StartTime > 0 && ev.StartTime > futureLimit {
+			return fmt.Errorf("event %d: startTime too far in the future", i)
+		}
+		if ev.EndTime > 0 && ev.EndTime > futureLimit {
+			return fmt.Errorf("event %d: endTime too far in the future", i)
+		}
 		if len(ev.ConnID) == 0 || len(ev.ConnID) > 64 {
 			return fmt.Errorf("event %d: connId length out of range", i)
 		}
