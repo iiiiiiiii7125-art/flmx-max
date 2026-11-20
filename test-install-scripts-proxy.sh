@@ -6829,11 +6829,44 @@ test_openrc_install_writes_logrotate_config() (
     fail "GARBAGE-A2: uninstall must remove the OpenRC service file"
 )
 
+# R18-A3-03：OpenRC 服务文件写失败不得被吞掉。旧实现 cat 失败后仍
+# 走 chmod 与恒返回 0 的 logrotate 写入，函数报成功、服务实际未
+# 落盘。本用例把服务文件路径指到一个已存在的目录（cat 必败），
+# 断言 write_flmx_agent_service 返回非零且点名失败；另以正常路径
+# 回归一次（旧代码亦绿，防修过头）。
+test_openrc_service_write_failure_is_reported() (
+  set -euo pipefail
+  local work
+  work=$(mktemp -d)
+  SERVICE_MANAGER="openrc"
+  load_script_without_main "$ROOT_DIR/install.sh"
+  INSTALL_DIR="$work/agent"
+  mkdir -p "$INSTALL_DIR"
+  FLMX_AGENT_LOGROTATE_FILE="$work/logrotate.d/flmx_agent"
+  ensure_service_manager() { :; }
+
+  # 臂 1：服务文件路径是目录，cat 必败 → 函数须非零且点名。
+  mkdir -p "$work/blocked.initd"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$work/blocked.initd"
+  local rc="0" out
+  out=$(write_flmx_agent_service 2>&1) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "R18-A3-03: a failed OpenRC service write must not report success"
+  [[ "$out" == *"写入 OpenRC 服务文件失败"* ]] || \
+    fail "R18-A3-03: the failure must name the service file (got: $out)"
+
+  # 臂 2：正常路径仍能写出（回归臂）。
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$work/flmx.initd"
+  write_flmx_agent_service || fail "R18-A3-03: a healthy OpenRC service write must still succeed"
+  [[ -f "$work/flmx.initd" ]] || fail "R18-A3-03: the service file must exist after a healthy write"
+  rm -rf "$work"
+)
+
 test_preserve_compose_networks_keeps_existing_subnet
 test_preserve_compose_networks_no_subnet_existing
 test_activate_panel_update_files_preserves_subnet
 test_cleanup_old_panel_images_after_update_targets_only_old_tag
 test_openrc_install_writes_logrotate_config
+test_openrc_service_write_failure_is_reported
 test_get_deployed_panel_version_parses_image_tag
 test_update_panel_crosschecks_deployed_image_version
 test_install_flmx_agent_keeps_service_when_download_fails

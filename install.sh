@@ -1783,7 +1783,10 @@ EOF
       ;;
     openrc)
       mkdir -p "$(dirname "$FLMX_AGENT_OPENRC_SERVICE_FILE")"
-      cat > "$FLMX_AGENT_OPENRC_SERVICE_FILE" <<EOF
+      # R18-A3-03：服务文件写入失败不得被吞掉——旧实现 cat 失败后
+      # 仍走 chmod 与恒返回 0 的 logrotate 写入，函数报成功、服务
+      # 实际未落盘，后续启动才以误导性根因收场。写失败即点名返回。
+      if ! cat > "$FLMX_AGENT_OPENRC_SERVICE_FILE" <<EOF
 #!/sbin/openrc-run
 
 name="flmx_agent"
@@ -1801,7 +1804,11 @@ depend() {
   need net
 }
 EOF
-      chmod +x "$FLMX_AGENT_OPENRC_SERVICE_FILE"
+      then
+        echo "❌ 写入 OpenRC 服务文件失败: $FLMX_AGENT_OPENRC_SERVICE_FILE" >&2
+        return 1
+      fi
+      chmod +x "$FLMX_AGENT_OPENRC_SERVICE_FILE" || { echo "❌ 设置 OpenRC 服务文件可执行权限失败: $FLMX_AGENT_OPENRC_SERVICE_FILE" >&2; return 1; }
       write_flmx_agent_logrotate_config
       ;;
   esac
