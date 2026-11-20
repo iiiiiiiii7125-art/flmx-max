@@ -1819,6 +1819,19 @@ func (r *Repository) DeleteForwardCascade(forwardID int64) error {
 	})
 }
 
+// DeleteForwardCascadeKeepNftLedger 与 DeleteForwardCascade 同口径，
+// 唯独保留 NftPendingDelete 台账行（R18-B4-03）：强制删除的 nft 转发
+// 须留住重试载体，使 60s 待删重试环仍能收敛残留的 DNAT 规则；重试点
+// 成功后由重试环经 deleteForwardByID 清掉台账行。
+func (r *Repository) DeleteForwardCascadeKeepNftLedger(forwardID int64) error {
+	if r == nil || r.db == nil {
+		return errors.New("repository not initialized")
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		return deleteForwardCascadeSetTxKeepLedger(tx, []int64{forwardID}, true)
+	})
+}
+
 // lockPortAllocForEntries 按 nodeID 升序获取 entries 涉及节点的
 // per-node 端口分配锁（去重、逆序释放），供端口替换类写路径共用。
 func lockPortAllocForEntries(entries []struct {

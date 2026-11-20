@@ -1351,7 +1351,8 @@ func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("中转不存在"))
 		return
 	}
-	if err := h.removeRelay(rel, req.Force); err != nil {
+	warning, err := h.removeRelay(rel, req.Force)
+	if err != nil {
 		// R5X-004(d)：非 force 路径 removeForwardWithServices 先删
 		// 转发行、后做 nft reconcile——reconcile 失败时转发已删
 		// （ForwardExists 转假、该 relay 应即刻掉出 allow 计算）而
@@ -1371,15 +1372,28 @@ func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// T-001：刷新失败进回执 warning——删除本身已落库成功，但内核
-	// 仍按旧名单放行。
+	// 仍按旧名单放行；与 removeRelay 的强制删除残留警告合并发出。
 	if err := h.refreshInboundWhitelist(rel.InboundID); err != nil {
-		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshFailureNote([]int64{rel.InboundID})+"，请检查节点内核状态"))
+		refreshNote := whitelistRefreshFailureNote([]int64{rel.InboundID}) + "，请检查节点内核状态"
+		if warning != "" {
+			warning += "；" + refreshNote
+		} else {
+			warning = refreshNote
+		}
+	}
+	if warning != "" {
+		response.WriteJSON(w, response.OKWithWarning(nil, warning))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
-func (h *Handler) removeRelay(rel *model.NodeInboundRelay, force bool) error {
+// removeRelay deletes a managed relay's forward and the relay row.
+// It returns a warning string when the force path deleted the DB rows
+// while some data-plane cleanup stayed unconfirmed (R18-B4-03); the
+// caller surfaces it in the receipt instead of a bare success.
+func (h *Handler) removeRelay(rel *model.NodeInboundRelay, force bool) (string, error) {
+	warning := ""
 	if rel.Managed == 1 {
 		if fwd, err := h.getForwardRecord(rel.ForwardID); err == nil && fwd != nil {
 			if err := h.removeForwardWithServices(fwd); err != nil {
@@ -1388,19 +1402,78 @@ func (h *Handler) removeRelay(rel *model.NodeInboundRelay, force bool) error {
 					// 此稀有 DB 故障情形不带强制删除提示）；其余失败
 					// 定型为 relayDeleteError 携带「可强制删除」出路。
 					if isRepoError(err) {
-						return err
+						return "", err
 					}
-					return &relayDeleteError{msg: fmt.Sprintf("删除中转转发失败: %v（可强制删除）", err)}
+					return "", &relayDeleteError{msg: fmt.Sprintf("删除中转转发失败: %v（可强制删除）", err)}
 				}
-				_ = h.deleteForwardByID(fwd.ID)
+				warning = h.forceRemoveRelayForward(fwd)
 			}
 		}
 	}
 	if err := h.repo.DeleteInboundRelay(rel.ID); err != nil {
 		// R3-GEN-02②：仓储直通先标记，回执点守卫泛化。
-		return markRepoError(err)
+		return "", markRepoError(err)
 	}
-	return nil
+	return warning, nil
+}
+
+// forceRemoveRelayForward is the R18-B4-03 force path for a managed
+// relay forward whose normal removal failed: delete the DB row, but
+// never wipe the retry carrier, and best-effort clean the data plane
+// before returning. It returns the residue warning for the receipt
+// ("" when everything was confirmed clean).
+func (h *Handler) forceRemoveRelayForward(fwd *forwardRecord) string {
+	var notes []string
+	// 1. Snapshot the entry nodes and ports before the DB row disappears.
+	ports, portsErr := h.listForwardPorts(fwd.ID)
+	if portsErr != nil {
+		log.Printf("relay force delete: list forward ports failed forward_id=%d err=%v", fwd.ID, portsErr)
+	}
+	// 2. nft: register the pending-delete ledger BEFORE the DB delete
+	// and keep it through the cascade, so the 60s retry loop can still
+	// converge the DNAT rule after the forward row is gone.
+	keepLedger := false
+	if nftMode, nftNodes, modeErr := h.tunnelUsesNftables(fwd.TunnelID); modeErr != nil {
+		log.Printf("relay force delete: tunnel mode check failed forward_id=%d err=%v", fwd.ID, modeErr)
+		notes = append(notes, "隧道模式无法确认，数据面清理未执行")
+	} else if nftMode && len(nftNodes) > 0 {
+		keepLedger = true
+		if merr := h.repo.MarkForwardPendingDelete(fwd.ID, nftNodes[0], time.Now()); merr != nil {
+			log.Printf("relay force delete: mark pending delete failed forward_id=%d err=%v", fwd.ID, merr)
+			notes = append(notes, "nft 待删台账登记失败，残留规则须人工确认清理")
+		}
+	}
+	// 3. Delete the DB row (ledger-preserving for nft).
+	var derr error
+	if keepLedger {
+		derr = h.repo.DeleteForwardCascadeKeepNftLedger(fwd.ID)
+	} else {
+		derr = h.deleteForwardByID(fwd.ID)
+	}
+	if derr != nil {
+		log.Printf("relay force delete: DB delete failed forward_id=%d err=%v", fwd.ID, derr)
+		notes = append(notes, "转发数据库记录删除失败，请检查面板日志")
+	}
+	// 4. Best-effort data-plane cleanup per entry node (mode-aware:
+	// gost DeleteService, nft reconcile, realm re-render). Failures
+	// are named per node; the nft ledger (when kept) lets the retry
+	// loop converge them, the gost/realm residue waits for the agent
+	// reconnect reconcile.
+	nodeIDs := forwardPortNodeIDs(ports)
+	if len(nodeIDs) == 0 {
+		if entryIDs, terr := h.tunnelEntryNodeIDs(fwd.TunnelID); terr == nil {
+			nodeIDs = entryIDs
+		}
+	}
+	for _, nodeID := range nodeIDs {
+		if serr := h.deleteForwardServicesOnNodeBatch(fwd, nodeID); serr != nil {
+			notes = append(notes, fmt.Sprintf("节点 %s 数据面清理未确认：%v", h.nodeLabel(nodeID), serr))
+		}
+	}
+	if len(notes) == 0 {
+		return ""
+	}
+	return "中转已强制删除，但部分节点侧规则清理未确认（残留规则需人工确认清理）：" + strings.Join(notes, "；")
 }
 
 // removeInboundRelays deletes the forwards the panel created for an inbound.
@@ -1411,8 +1484,10 @@ func (h *Handler) removeInboundRelays(inboundID int64) {
 	}
 	for _, rel := range rels {
 		rel := rel.NodeInboundRelay
-		if err := h.removeRelay(&rel, true); err != nil {
+		if warning, err := h.removeRelay(&rel, true); err != nil {
 			log.Printf("relay cleanup failed relay_id=%d err=%v", rel.ID, err)
+		} else if warning != "" {
+			log.Printf("relay cleanup left residue relay_id=%d warning=%s", rel.ID, warning)
 		}
 	}
 }
