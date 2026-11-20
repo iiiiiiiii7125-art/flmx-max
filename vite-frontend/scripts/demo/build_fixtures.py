@@ -204,7 +204,7 @@ if violations:
 # only exceptions are the per-cell whitelist below: intentional
 # recordings of an honest failure answer, enumerated one cell at a
 # time as (book, path, canonical request key, code, msg), sourced
-# from the R9-J §2.1 full-set scan (13 cells, R9-J-fixtures-full-
+# from the R9-J §2.1 full-set scan (11 cells, R9-J-fixtures-full-
 # probe.log). Adding or removing a cell requires a per-cell reason
 # recorded in the comment above that entry; whole-class exemptions
 # (by path alone, by code alone, by msg alone) are FORBIDDEN. The

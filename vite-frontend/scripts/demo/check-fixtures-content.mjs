@@ -24,7 +24,7 @@
 //
 // R9 BINFRA (J O-1 通则, R9-X-verdicts §4) adds a universal recorded-
 // code gate below: EVERY recorded response in EVERY book must carry
-// res.code === 0, except the per-cell whitelist (13 cells, sourced
+// res.code === 0, except the per-cell whitelist (11 cells, sourced
 // from the R9-J §2.1 full-set scan). Adding or removing a cell
 // requires a per-cell reason recorded next to the entry in
 // build_fixtures.py's CODE_WHITELIST — whole-class exemptions (by
@@ -80,7 +80,7 @@ const VERSION_LIST_TYPES = ["xray", "singbox"];
 // canonical request key, code, msg]. The per-cell reasons live in
 // build_fixtures.py's CODE_WHITELIST comments; the two lists must
 // stay cell-for-cell equal. Cells: admin config/get 配置不存在 ×3,
-// user config/get 配置不存在 ×4, user-book 403 permission probes ×6.
+// user config/get 配置不存在 ×4, user-book 403 permission probes ×4.
 const CODE_WHITELIST = [
   ["admin", "config/get", '{"name":"forward_group_collapsed_map"}', -1, "配置不存在"],
   ["admin", "config/get", '{"name":"forward_group_order_map"}', -1, "配置不存在"],
