@@ -1694,8 +1694,28 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			userAssignments = assignments
-			rows = filterInboundRowsByUserAssignments(rows, userAssignments)
+			// R18-B2-01：先查订阅模型分配——被分配了本订阅的用户
+			// 直接放行全量（与不带 ?user= 的分配卡片链接同口径；
+			// token 本身已是凭据，订阅分配即授权）。只有未被分配
+			// 本订阅的用户才走旧入站分配过滤。分配读失败同样
+			// fail-closed 回 500，不得装「未分配」继续。
+			assignedSub := false
+			if subIDs, subErr := h.repo.ListUserSubscriptionIDs(userID); subErr != nil {
+				log.Printf("open subscription: list user subscription ids failed user_id=%d err=%v", userID, subErr)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			} else {
+				for _, id := range subIDs {
+					if id == sub.ID {
+						assignedSub = true
+						break
+					}
+				}
+			}
+			if !assignedSub {
+				userAssignments = assignments
+				rows = filterInboundRowsByUserAssignments(rows, userAssignments)
+			}
 		} else {
 			// A-02 (AUDIT-R215): ?user= 在场但不是正整数时 fail-closed——
 			// 不得丢弃 userFilter、按裸 token 出全量。与已签名用户零分配
