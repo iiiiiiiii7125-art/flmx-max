@@ -196,7 +196,7 @@ func (s *Server) serveUninstalledNode(w http.ResponseWriter, r *http.Request, se
 
 	crypto, _ := security.NewAESCrypto(secret)
 	requestID := fmt.Sprintf("uninstall_%d", time.Now().UnixNano())
-	payload, err := json.Marshal(map[string]interface{}{"type": "UninstallAgent", "data": nil, "requestId": requestID})
+	payload, err := json.Marshal(map[string]interface{}{"type": "UninstallAgent", "data": nil, "requestId": requestID, "timestamp": time.Now().UnixMilli()})
 	if err != nil {
 		return true
 	}

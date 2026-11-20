@@ -1363,6 +1363,29 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 					w.sendErrorResponse("DecryptError", fmt.Sprintf("解密失败: %v", err), "")
 					return
 				}
+				// R18-D1-01: the wrapper timestamp checked above is
+				// unauthenticated plaintext — it only pre-screens
+				// obviously stale frames before decryption. The
+				// authoritative timestamp lives INSIDE the AES-GCM
+				// payload (the panel puts it in rawCmd): an envelope
+				// without one is rejected fail-closed, and a stale
+				// inner timestamp cannot be revived by rewriting
+				// the outer one — so a captured envelope stays dead
+				// once its requestId claim expires, instead of
+				// replayable forever.
+				var innerEnvelope struct {
+					Timestamp int64 `json:"timestamp"`
+				}
+				if err := json.Unmarshal(decryptedData, &innerEnvelope); err != nil || innerEnvelope.Timestamp == 0 {
+					fmt.Printf("❌ 拒绝加密命令: 缺少内层时间戳\n")
+					w.sendErrorResponse("MissingInnerTimestamp", "加密命令缺少内层时间戳（面板版本过旧或信封被篡改），拒绝执行", "")
+					return
+				}
+				if err := validateEncryptedTimestamp(innerEnvelope.Timestamp, time.Now()); err != nil {
+					fmt.Printf("❌ 拒绝加密命令: %v\n", err)
+					w.sendErrorResponse("StaleTimestamp", err.Error(), "")
+					return
+				}
 				message = decryptedData
 				wasEncrypted = true
 			} else {
@@ -3090,9 +3113,65 @@ func smokeTestAgentBinary(path, wantVersion string) error {
 	return nil
 }
 
+// compareAgentVersions compares two agent version strings ("2.1.18",
+// optional leading "v", trailing build metadata ignored). It mirrors
+// the panel's compareVersions calibre: "dev" sorts below every
+// release, and an unparsable side fails closed with an error instead
+// of a guessed ordering.
 // normalizeAgentVersion strips the optional "v" prefix so a panel
 // version ("2.1.3") and a binary banner ("v2.1.3" / "2.1.3") compare
 // equal in the smoke test and rollback pre-flight.
+func compareAgentVersions(target, current string) (int, error) {
+	t := strings.TrimPrefix(strings.TrimSpace(target), "v")
+	c := strings.TrimPrefix(strings.TrimSpace(current), "v")
+	if t == "dev" && c == "dev" {
+		return 0, nil
+	}
+	if t == "dev" {
+		return -1, nil
+	}
+	if c == "dev" {
+		return 1, nil
+	}
+	tt, ok := parseLeadingVersionTriple(t)
+	if !ok {
+		return 0, fmt.Errorf("目标版本号 %q 无法解析", target)
+	}
+	ct, ok := parseLeadingVersionTriple(c)
+	if !ok {
+		return 0, fmt.Errorf("当前版本号 %q 无法解析", current)
+	}
+	for i := 0; i < 3; i++ {
+		if tt[i] < ct[i] {
+			return -1, nil
+		}
+		if tt[i] > ct[i] {
+			return 1, nil
+		}
+	}
+	return 0, nil
+}
+
+// checkUpgradeAgentVersionDirection enforces the upgrade direction on
+// the agent (R18-D1-01): the target must not be below the running
+// version. The panel-side gate (upgrade.go, O9-005) never runs on a
+// replayed envelope, so the agent is the last line against a
+// downgrade to a known-vulnerable build. An unknown running version
+// ("" — e.g. a test reporter) does not block, matching the panel's
+// calibre; anything else uncomparable fails closed.
+func checkUpgradeAgentVersionDirection(target, current string) error {
+	if strings.TrimSpace(current) == "" {
+		return nil
+	}
+	cmp, err := compareAgentVersions(target, current)
+	if err != nil {
+		return fmt.Errorf("目标版本 %s 与当前版本 %s 无法比较，已拒绝升级: %v", target, current, err)
+	}
+	if cmp < 0 {
+		return fmt.Errorf("目标版本 %s 低于当前运行版本 %s，已拒绝。如确需降级请使用节点回滚功能。", target, current)
+	}
+	return nil
+}
 func normalizeAgentVersion(v string) string {
 	return strings.TrimPrefix(strings.TrimSpace(v), "v")
 }
@@ -3938,6 +4017,13 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	}
 	if !agentVersionRe.MatchString(version) {
 		return fmt.Errorf("S-02: 版本号格式无效: %s", version)
+	}
+	// R18-D1-01: agent-side upgrade-direction gate — the panel's
+	// O9-005 check never runs on a replayed envelope, so a captured
+	// UpgradeAgent command must not be able to downgrade the node
+	// to a known-vulnerable build. Runs before any download.
+	if err := checkUpgradeAgentVersionDirection(version, w.version); err != nil {
+		return err
 	}
 	expectedSha256 := strings.TrimSpace(req.ExpectedSha256)
 	if expectedSha256 != "" && !isSHA256Hex(expectedSha256) {
