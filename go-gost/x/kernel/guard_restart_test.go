@@ -106,7 +106,7 @@ func TestApplyRollbackStillRunsWhenPrevGuardedAndSyncOK(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a shell script as fake kernel")
 	}
-	stubWhitelistNft(t)
+	stub := stubWhitelistNft(t)
 	m := NewManager(t.TempDir())
 	t.Cleanup(m.Shutdown)
 	marker := filepath.Join(t.TempDir(), "starts")
@@ -131,6 +131,62 @@ func TestApplyRollbackStillRunsWhenPrevGuardedAndSyncOK(t *testing.T) {
 	cfg, _ := os.ReadFile(filepath.Join(m.runDir("xray"), "config.json"))
 	if string(cfg) != "cfg-v1" {
 		t.Fatalf("rollback must restore the previous files, config = %q", cfg)
+	}
+	// R18-D3-01: the rollback must re-sync the nft table against
+	// the rolled-back request — Apply already synced the v2 rules
+	// (no whitelist) before the new config failed, so without a
+	// re-sync the v1 process would run unguarded until the verify
+	// loop rebuilds the table. The last applied script must carry
+	// v1's whitelist (allow4 set + drop rule).
+	if len(stub.scripts) == 0 {
+		t.Fatal("expected at least one nft script to be applied")
+	}
+	last := stub.scripts[len(stub.scripts)-1]
+	if !strings.Contains(last, "203.0.113.0/24") || !strings.Contains(last, "@allow4_7") {
+		t.Fatalf("rollback must re-apply the previous whitelist rules, last script:\n%s", last)
+	}
+	if !strings.Contains(last, "drop") {
+		t.Fatalf("rollback script must carry the whitelist drop rule, last script:\n%s", last)
+	}
+}
+
+// R18-D3-01 (failure leg): the rollback re-sync itself fails — a
+// guarded previous config must not be left running unguarded: the
+// just-restored kernel is stopped again and Apply fails closed
+// with the guard error.
+func TestApplyRollbackResyncFailureStopsGuardedKernel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as fake kernel")
+	}
+	stub := stubWhitelistNft(t)
+	stub.failLoadAfter = 2 // v1 + v2 syncs succeed; the rollback re-sync fails
+	m := NewManager(t.TempDir())
+	t.Cleanup(m.Shutdown)
+	marker := filepath.Join(t.TempDir(), "starts")
+	placeCrashKernel(t, m, "xray", "9.9.9", "xray", marker)
+
+	v1 := whitelistRequest("xray", "9.9.9", "xray", "cfg-v1", []string{"203.0.113.0/24"})
+	if st, err := m.Apply(v1); err != nil || !st.Running {
+		t.Fatalf("v1 apply: state=%+v err=%v", st, err)
+	}
+
+	v2 := whitelistRequest("xray", "9.9.9", "xray", `{"crash":true}`, nil)
+	st, err := m.Apply(v2)
+	if err == nil || !strings.Contains(err.Error(), "白名单") {
+		t.Fatalf("rollback with a failing guard re-sync must fail closed with the guard error, got state=%+v err=%v", st, err)
+	}
+	if st.Running {
+		t.Fatal("kernel must stay down when the rollback cannot re-install its guard rules")
+	}
+	cfg, _ := os.ReadFile(filepath.Join(m.runDir("xray"), "config.json"))
+	if string(cfg) != "cfg-v1" {
+		t.Fatalf("rollback must still restore the previous files, config = %q", cfg)
+	}
+	if got := countMarkerLines(t, marker, "start-ok"); got != 2 {
+		t.Fatalf("rollback must have restarted the previous config once before the guard failure stopped it, got %d working starts", got)
+	}
+	if len(stub.scripts) != 2 {
+		t.Fatalf("the failing re-sync must not append a script, got %d applied scripts", len(stub.scripts))
 	}
 }
 
