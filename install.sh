@@ -3392,8 +3392,13 @@ uninstall_flmx_agent_host_cleanup() {
     echo "ℹ️ 未找到 nft 命令，跳过 nft 表清理（如曾建表，表会残留至宿主机重启，或装回 nftables 后人工删除）: $FLMX_AGENT_NFT_TABLES"
   fi
 
+  # R18-A3-06：失败数进返回码——旧实现恒 return 0，调用方无法把
+  # 宿主清理失败计入完成判决，nft 删表失败等残留照样印
+  # 「✅ 卸载完成」。清理本身仍尽力而为：各步失败只计数、不中
+  # 断后续项，返回码只影响终局判决。
   if [[ "$failures" -gt 0 ]]; then
     echo "⚠️ 宿主清理有 ${failures} 项未完成（见上 ⚠️ 行），其余卸载步骤继续执行"
+    return 1
   fi
   return 0
 }
@@ -3582,8 +3587,13 @@ uninstall_flmx_agent() {
   # 是最需要补跑的形态——旧实现以 -d 门控、该形态整集跳过却仍
   # 报「卸载完成」；函数内各步均以存在才处理，目录缺失时目录内
   # 步骤自然空转。
-  uninstall_flmx_agent_host_cleanup "$INSTALL_DIR"
-  uninstall_flmx_agent_host_cleanup "$LEGACY_INSTALL_DIR"
+  # R18-A3-06：宿主清理失败计入完成判决（与 R2-P2-04 日志面同
+  # 口径）——旧实现 host_cleanup 恒回 0，nft 删表失败、队列备份
+  # 丢失等宿主残留不影响「✅ 卸载完成」。清理本身仍尽力而为：
+  # 失败只计数、不中断后续删除步骤。
+  local uninstall_failures=0
+  uninstall_flmx_agent_host_cleanup "$INSTALL_DIR" || uninstall_failures=$((uninstall_failures + 1))
+  uninstall_flmx_agent_host_cleanup "$LEGACY_INSTALL_DIR" || uninstall_failures=$((uninstall_failures + 1))
 
   # 删除服务文件
   if [[ -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$FLMX_AGENT_OPENRC_SERVICE_FILE" || -d "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d" ]]; then
@@ -3598,7 +3608,6 @@ uninstall_flmx_agent() {
   # R2-P2-04：OpenRC 日志面（logrotate 配置＋两代日志本体与轮
   # 转件）——在安装目录之外，单独清理（逐项点名见函数内）；其
   # 失败计数并入下方完成判决，不再被恒回 0 吞掉。
-  local uninstall_failures=0
   remove_flmx_agent_log_files || uninstall_failures=$((uninstall_failures + 1))
 
   # 删除安装目录
@@ -3638,7 +3647,7 @@ uninstall_flmx_agent() {
     uninstall_failures=$((uninstall_failures + 1))
   fi
   if [[ "$uninstall_failures" -gt 0 ]]; then
-    echo "❌ 卸载未完全完成：以下对象未能删除：${leftover:-（见上日志面 ⚠️ 行）}，请人工处理后重跑卸载"
+    echo "❌ 卸载未完全完成：以下对象未能删除：${leftover:-（见上 ⚠️ 行）}，请人工处理后重跑卸载"
     return 1
   fi
 

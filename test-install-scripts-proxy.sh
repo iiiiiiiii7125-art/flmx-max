@@ -2913,6 +2913,12 @@ test_uninstall_flmx_agent_menu_guard_pass_forms() (
   SERVER_ADDR=""
 
   systemctl() { return 0; }
+  # R18-A3-06：完成判决现计入宿主清理失败——本用例测的是归属守
+  # 卫放行形态，不测宿主清理，故把宿主清理后端（nft/iptables）
+  # 桩成确定性成功/无动作（与邻近卸载用例同做法），否则沙箱的
+  # nft（无 NET_ADMIN）会把判决翻成 1、掩盖守卫本身的断言。
+  nft() { cat >/dev/null; return 0; }
+  iptables() { return 1; }
 
   # TAKEOVER + 常规确认 y → 卸载执行、目录删除、输出含留痕
   INSTALL_DIR=$(mktemp -d)
@@ -2947,6 +2953,10 @@ INSTALL_DIR="$GUARD_TEST_DIR"
 FLMX_AGENT_SYSTEMD_SERVICE_FILE="$GUARD_TEST_DIR/flmx_agent.service"
 SERVICE_MANAGER="systemd"
 SERVER_ADDR=""
+# R18-A3-06：pty 侧同上——桩掉宿主清理后端，守卫断言不受沙箱
+# nft（无 NET_ADMIN）影响。
+nft() { cat >/dev/null; return 0; }
+iptables() { return 1; }
 flmx_agent_service_exists() { return 1; }
 uninstall_flmx_agent
 STUBEOF
@@ -3606,7 +3616,14 @@ test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent() (
   local rc="0" out
   out=$(mktemp)
   printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
-  assert_equals "0" "$rc" "R6-02: nft failure must not fail the whole uninstall"
+  # R18-A3-06：宿主清理失败计入完成判决——旧断言 rc==0 钉的是
+  # 恒回 0 的旧行为；清理本身仍尽力执行到底，只是不再印
+  # 「✅ 卸载完成」。
+  assert_equals "1" "$rc" "R18-A3-06: nft failure must fail the uninstall verdict"
+  grep -q '卸载未完全完成' "$out" || fail "R18-A3-06: nft failure must be reported in the final verdict"
+  if grep -q '✅ 卸载完成' "$out"; then
+    fail "R18-A3-06: must not print the success receipt when host cleanup failed"
+  fi
   [[ ! -d "$INSTALL_DIR" ]] || fail "R6-02: install dir should still be removed when nft cleanup fails"
   [[ ! -e "$FLMX_TUNING_SYSCTL_CONF" ]] || fail "R6-02: other cleanup items should still run when nft fails"
   [[ ! -e "$FLMX_TUNING_KERNEL_CONF" ]] || fail "R6-02: gen-2 kernel conf should still be removed when nft fails"
@@ -3625,11 +3642,58 @@ test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent() (
   fi
 )
 
+# R18-A3-06：host_cleanup 的返回码契约——有失败项回 1、无失败
+# 回 0（旧实现恒回 0，调用方无法把宿主清理失败计入完成判决）。
+# 直接调用，不走整条卸载流程。
+test_uninstall_flmx_agent_host_cleanup_reports_failures_r18_a3_06() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$work/sysctl.d/99-network-performance.conf"
+  FLMX_TUNING_GAI_CONF="$work/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$work/gai.conf.bak"
+  FLMX_PROC_SYS_DIR="$work/proc/sys"
+  mkdir -p "$INSTALL_DIR/tcpfit" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")"
+
+  systemctl() { return 0; }
+  nft() { cat >/dev/null; return 0; }
+  iptables() { return 1; }
+
+  # 只有整形脚本、没有整形前队列备份：清理失败 1 项，回 1。
+  echo '#!/bin/bash' > "$INSTALL_DIR/tcpfit/shape.sh"
+  local rc="0" out
+  out=$(mktemp)
+  uninstall_flmx_agent_host_cleanup >"$out" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A3-06: host cleanup with a lost queue backup must return 1"
+  grep -q '宿主清理有 1 项未完成' "$out" || fail "R18-A3-06: host cleanup must disclose the failure count"
+
+  # 恢复干净态：删掉整形脚本后再跑，回 0、无 ⚠️ 行。
+  rm -f "$INSTALL_DIR/tcpfit/shape.sh"
+  rc="0"
+  uninstall_flmx_agent_host_cleanup >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R18-A3-06: host cleanup on a clean state must return 0"
+  if grep -q '⚠️' "$out"; then
+    fail "R18-A3-06: host cleanup on a clean state should report no failures"
+  fi
+)
+
 # R2F2-D01：整形前队列备份丢失（只有 shape.sh、没有
 # original-qdisc.sh）时脚本卸载的口径——队列整形明确点名未能恢
 # 复（不假装已恢复），但 sysctl 原值仍按 tuning-backup.json 写
-# 回、宿主调优文件集仍删净、卸载整体成功。与面板连带自卸载的
-# agent 侧同场景同口径（go-gost/x/socket 的 cleanup/preflight）。
+# 回、宿主调优文件集仍删净；卸载整体以失败收尾（R18-A3-06：宿
+# 主清理失败计入完成判决，不再印「✅ 卸载完成」）。与面板连带
+# 自卸载的 agent 侧同场景同口径（go-gost/x/socket 的
+# cleanup/preflight：失败步骤→终局失败）。
 test_uninstall_flmx_agent_host_cleanup_queue_backup_lost() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -3683,7 +3747,13 @@ JSON
   local rc="0" out
   out=$(mktemp)
   printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
-  assert_equals "0" "$rc" "R2F2-D01: uninstall with a lost queue backup should still succeed"
+  # R18-A3-06：队列备份丢失是宿主清理失败，须进完成判决——旧断
+  # 言 rc==0 钉的是恒回 0 的旧行为；清理本身仍尽力执行到底。
+  assert_equals "1" "$rc" "R18-A3-06: uninstall with a lost queue backup must report failure in the verdict"
+  grep -q '卸载未完全完成' "$out" || fail "R18-A3-06: lost queue backup must be reported in the final verdict"
+  if grep -q '✅ 卸载完成' "$out"; then
+    fail "R18-A3-06: must not print the success receipt when host cleanup failed"
+  fi
   grep -q '找不到整形前的队列备份' "$out" || \
     fail "R2F2-D01: the unrestorable queue shaping must be named in the receipt"
   [[ ! -d "$INSTALL_DIR" ]] || fail "R2F2-D01: install dir should be removed"
@@ -3856,7 +3926,13 @@ test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_corrupt() (
 
   local rc="0" out
   out=$(uninstall_flmx_agent_host_cleanup 2>&1) || rc="$?"
-  assert_equals "0" "$rc" "J9-01: host cleanup with a corrupt snapshot should still succeed"
+  # R18-A3-06：快照损坏是计数的清理失败（其余键未能回退、只落
+  # 了三项标题默认值），须回 1——旧断言 rc==0 钉的是恒回 0 的
+  # 旧行为；清理本身仍执行到底（默认值已落盘、快照已删除、不可
+  # 恢复键已点名）。
+  assert_equals "1" "$rc" "R18-A3-06: host cleanup with a corrupt snapshot must return 1"
+  [[ "$out" == *"宿主清理有 1 项未完成"* ]] || \
+    fail "R18-A3-06: corrupt snapshot must be disclosed as a counted failure: $out"
   assert_equals "cubic" "$(cat "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control")" \
     "J9-01: corrupt snapshot should fall back to the cubic headline default"
   assert_equals "pfifo_fast" "$(cat "$FLMX_PROC_SYS_DIR/net/core/default_qdisc")" \
@@ -13566,6 +13642,7 @@ test_panel_small_host_swap_boundary_exactly_512mib
 test_panel_small_host_swap_rolls_back_on_build_failure
 test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent
 test_uninstall_flmx_agent_host_cleanup_queue_backup_lost
+test_uninstall_flmx_agent_host_cleanup_reports_failures_r18_a3_06
 test_uninstall_flmx_agent_host_cleanup_restores_kernel_snapshot
 test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_missing
 test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_corrupt
