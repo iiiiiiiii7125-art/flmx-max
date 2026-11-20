@@ -122,7 +122,7 @@ func TestArchiveCacheRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	storeArchiveCache(binDir, d, "https://example.invalid/sing-box-1.14.4.tar.gz", src, want)
-	got, ok := lookupArchiveCache(binDir, d, "https://example.invalid/sing-box-1.14.4.tar.gz")
+	got, ok := lookupArchiveCache(binDir, d, "https://example.invalid/sing-box-1.14.4.tar.gz", want)
 	if !ok {
 		t.Fatal("刚存入的缓存必须命中")
 	}
@@ -133,7 +133,7 @@ func TestArchiveCacheRoundTrip(t *testing.T) {
 	if err := os.WriteFile(got, []byte("tampered"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := lookupArchiveCache(binDir, d, "https://example.invalid/sing-box-1.14.4.tar.gz"); ok {
+	if _, ok := lookupArchiveCache(binDir, d, "https://example.invalid/sing-box-1.14.4.tar.gz", want); ok {
 		t.Fatal("篡改后的缓存不得命中")
 	}
 	if _, err := os.Stat(got); !os.IsNotExist(err) {
@@ -321,5 +321,38 @@ func TestEnsureBinaryRestoredMismatchFailsLoudKeepingOld(t *testing.T) {
 	got, rerr := os.ReadFile(filepath.Join(dir, "sing-box"))
 	if rerr != nil || string(got) != "tampered" {
 		t.Fatalf("重装失败后恢复的旧二进制必须在位，实际 (%q, %v)", got, rerr)
+	}
+}
+
+// R18-D3-05: a cache entry is only a hit when its recorded digest
+// matches the digest the current install wants. A self-consistent
+// but stale entry (same URL, different pinned digest) must miss.
+func TestArchiveCacheRejectsStaleDigest(t *testing.T) {
+	base := t.TempDir()
+	binDir := filepath.Join(base, "singbox", "bin", "1.14.4")
+	archive := []byte("fake-archive-bytes")
+	sum := sha256.Sum256(archive)
+	want := hex.EncodeToString(sum[:])
+	d := &Download{BinName: "sing-box", Archive: "tar.gz"}
+	src := filepath.Join(base, "src.tar.gz")
+	if err := os.WriteFile(src, archive, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	url := "https://example.invalid/sing-box-1.14.4.tar.gz"
+	storeArchiveCache(binDir, d, url, src, want)
+	otherSum := sha256.Sum256([]byte("other-digest"))
+	other := hex.EncodeToString(otherSum[:])
+	if _, ok := lookupArchiveCache(binDir, d, url, other); ok {
+		t.Fatal("a cache entry recorded for another digest must miss when the install wants a different digest")
+	}
+	// The stale entry must survive the miss (it is self-consistent;
+	// only a corrupt entry is purged) and still hit for its own digest.
+	if _, ok := lookupArchiveCache(binDir, d, url, want); !ok {
+		t.Fatal("the same entry must still hit when the install wants its recorded digest")
+	}
+	// No want at all (digest resolved later, e.g. GitHub/sumURL
+	// flows): the old self-consistency behavior is kept.
+	if _, ok := lookupArchiveCache(binDir, d, url, ""); !ok {
+		t.Fatal("an empty want must keep the self-consistency hit")
 	}
 }

@@ -688,7 +688,7 @@ func install(d *Download, binDir string, note func(string)) error {
 	// 信任等级与已装二进制的存在跳过（C4）相同。
 	var cachedSrc string
 	if !strings.Contains(url, "{VERSION}") && url != "" {
-		if p, ok := lookupArchiveCache(binDir, d, directForm(url)); ok {
+		if p, ok := lookupArchiveCache(binDir, d, directForm(url), want); ok {
 			cachedSrc = p
 			if note != nil {
 				note("使用本地缓存的安装包，跳过下载")
@@ -902,17 +902,28 @@ func archiveCachePath(binDir string, d *Download, url string) string {
 // lookupArchiveCache returns the cached archive for url when it is
 // present and still hashes to the digest recorded beside it at
 // store time (C NEW-2). A corrupt entry is removed and treated as
-// a miss, never trusted.
-func lookupArchiveCache(binDir string, d *Download, url string) (string, bool) {
+// a miss, never trusted. When want is non-empty (the install's
+// pinned digest, known before the lookup), a hit additionally
+// requires the recorded digest to equal want (R18-D3-05): a
+// self-consistent entry recorded for a different digest is stale
+// for this install and must miss — the old code checked only
+// self-consistency and would have installed it. An empty want
+// (digest resolved later, e.g. sumURL / GitHub flows) keeps the
+// self-consistency behavior. A want mismatch is a miss, not
+// corruption: the entry is left in place.
+func lookupArchiveCache(binDir string, d *Download, url string, want string) (string, bool) {
 	p := archiveCachePath(binDir, d, url)
-	want, err := os.ReadFile(p + ".sha256")
+	recorded, err := os.ReadFile(p + ".sha256")
 	if err != nil {
 		return "", false
 	}
 	got, err := fileSHA256(p)
-	if err != nil || strings.TrimSpace(string(want)) != got {
+	if err != nil || strings.TrimSpace(string(recorded)) != got {
 		_ = os.Remove(p)
 		_ = os.Remove(p + ".sha256")
+		return "", false
+	}
+	if want != "" && !strings.EqualFold(strings.TrimSpace(string(recorded)), want) {
 		return "", false
 	}
 	return p, true
