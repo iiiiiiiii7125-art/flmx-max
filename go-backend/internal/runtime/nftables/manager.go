@@ -36,7 +36,7 @@ func NewManagerWithInstance(runner Runner, instance string) *Manager {
 // installs without an identity on file).
 func NewManagerWithInstall(runner Runner, instance, installID string) *Manager {
 	if runner == nil {
-		runner = NewSSHRunner()
+		runner = NewSSHRunnerWithInstall(instance, installID)
 	}
 	return &Manager{runner: runner, instance: instance, installID: installID}
 }

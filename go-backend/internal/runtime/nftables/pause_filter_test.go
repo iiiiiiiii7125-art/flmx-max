@@ -12,7 +12,7 @@ import (
 func TestRenderPauseTableDropsEstablishedFlows(t *testing.T) {
 	table := RenderPauseTable()
 	for _, want := range []string{
-		"table inet flmx_quota {",
+		"table inet flmx_quota_e3b0c442 {",
 		"set blocked_ports { type inet_service; }",
 		"chain incoming {",
 		"type filter hook prerouting priority -110; policy accept;",
@@ -37,13 +37,13 @@ func TestRenderPauseTableDropsEstablishedFlows(t *testing.T) {
 }
 
 func TestBuildSetBlockedCommandBlockCreatesTableAndAddsPort(t *testing.T) {
-	cmd := buildSetBlockedCommand("nft", 20000, true)
+	cmd := buildSetBlockedCommand("nft", PauseTableNameForInstance(""), 20000, true)
 	for _, want := range []string{
-		"if ! nft list table inet flmx_quota >/dev/null 2>&1; then",
+		"if ! nft list table inet flmx_quota_e3b0c442 >/dev/null 2>&1; then",
 		"nft -f - <<'EOF'",
-		"table inet flmx_quota {",
+		"table inet flmx_quota_e3b0c442 {",
 		"ct original proto-dst @blocked_ports drop",
-		"nft add element inet flmx_quota blocked_ports '{ 20000 }'",
+		"nft add element inet flmx_quota_e3b0c442 blocked_ports '{ 20000 }'",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("block command missing %q:\n%s", want, cmd)
@@ -53,33 +53,33 @@ func TestBuildSetBlockedCommandBlockCreatesTableAndAddsPort(t *testing.T) {
 		t.Fatalf("block command must not delete elements:\n%s", cmd)
 	}
 	// 建表必须排在加元素之前。
-	if strings.Index(cmd, "table inet flmx_quota {") > strings.Index(cmd, "nft add element") {
+	if strings.Index(cmd, "table inet flmx_quota_e3b0c442 {") > strings.Index(cmd, "nft add element") {
 		t.Fatalf("table creation must precede element add:\n%s", cmd)
 	}
 }
 
 func TestBuildSetBlockedCommandUnblockDeletesOnlyExistingPort(t *testing.T) {
-	cmd := buildSetBlockedCommand("nft", 20001, false)
+	cmd := buildSetBlockedCommand("nft", PauseTableNameForInstance(""), 20001, false)
 	for _, want := range []string{
-		"if nft list table inet flmx_quota >/dev/null 2>&1; then",
-		"if nft get element inet flmx_quota blocked_ports '{ 20001 }' >/dev/null 2>&1; then",
-		"nft delete element inet flmx_quota blocked_ports '{ 20001 }'",
+		"if nft list table inet flmx_quota_e3b0c442 >/dev/null 2>&1; then",
+		"if nft get element inet flmx_quota_e3b0c442 blocked_ports '{ 20001 }' >/dev/null 2>&1; then",
+		"nft delete element inet flmx_quota_e3b0c442 blocked_ports '{ 20001 }'",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("unblock command missing %q:\n%s", want, cmd)
 		}
 	}
 	// 恢复路径不建表、不加元素：无表/无元素时安静成功，规则清零不残留。
-	if strings.Contains(cmd, "add element") || strings.Contains(cmd, "table inet flmx_quota {") {
+	if strings.Contains(cmd, "add element") || strings.Contains(cmd, "table inet flmx_quota_e3b0c442 {") {
 		t.Fatalf("unblock command must not create the table or add elements:\n%s", cmd)
 	}
 }
 
 func TestBuildClearBlocksCommandDeletesWholeTable(t *testing.T) {
-	cmd := buildClearBlocksCommand("nft")
+	cmd := buildClearBlocksCommand("nft", PauseTableNameForInstance(""))
 	for _, want := range []string{
-		"if nft list table inet flmx_quota >/dev/null 2>&1; then",
-		"nft delete table inet flmx_quota",
+		"if nft list table inet flmx_quota_e3b0c442 >/dev/null 2>&1; then",
+		"nft delete table inet flmx_quota_e3b0c442",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("clear-blocks command missing %q:\n%s", want, cmd)
@@ -125,17 +125,17 @@ func (f *blockingRunner) ListBlockedPorts(_ context.Context, _ SSHConfig) ([]int
 }
 
 func TestBuildListBlockedPortsCommand(t *testing.T) {
-	cmd := buildListBlockedPortsCommand("nft")
+	cmd := buildListBlockedPortsCommand("nft", PauseTableNameForInstance(""))
 	for _, want := range []string{
-		"if nft list table inet flmx_quota >/dev/null 2>&1; then",
-		"nft -j list set inet flmx_quota blocked_ports",
+		"if nft list table inet flmx_quota_e3b0c442 >/dev/null 2>&1; then",
+		"nft -j list set inet flmx_quota_e3b0c442 blocked_ports",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("list blocked ports command missing %q:\n%s", want, cmd)
 		}
 	}
 	// 读面不得改动集合：不建表、不增删元素。
-	for _, bad := range []string{"add element", "delete element", "table inet flmx_quota {"} {
+	for _, bad := range []string{"add element", "delete element", "table inet flmx_quota_e3b0c442 {"} {
 		if strings.Contains(cmd, bad) {
 			t.Fatalf("list command must not mutate the set (%q):\n%s", bad, cmd)
 		}
