@@ -255,10 +255,20 @@ func (c *Checker) runChecks(ctx context.Context) {
 
 	reportIntervalMs := int64(serviceMonitorReportInterval / time.Millisecond)
 
+	// R18-B11-03：轮次在全部 worker 完成前不算结束——此前 defer 在
+	// runChecks 返回（派生完 worker 即返回）时就把 checking 标志清
+	// 零，守卫只串行化了微秒级的分发循环，下一轮可在本轮 worker
+	// 仍在跑时分发，并发拨号数可达 2 × WorkerLimit。现等本轮
+	// worker 全部完成后再返回（defer 随之清标志）；关机取消时不等
+	// ——ctx.Done 即提前返回，关机时延与修前一致（在途检查仍挂在
+	// c.wg 上由 Stop() 接管，见 R18-B11-04 纪要）。
+	roundWG := sync.WaitGroup{}
 	for i := 0; i < workerLimit; i++ {
 		c.wg.Add(1)
+		roundWG.Add(1)
 		go func() {
 			defer c.wg.Done()
+			defer roundWG.Done()
 			for {
 				select {
 				case <-ctx.Done():
@@ -300,6 +310,15 @@ func (c *Checker) runChecks(ctx context.Context) {
 				}
 			}
 		}()
+	}
+	roundDone := make(chan struct{})
+	go func() {
+		roundWG.Wait()
+		close(roundDone)
+	}()
+	select {
+	case <-roundDone:
+	case <-ctx.Done():
 	}
 }
 
