@@ -2061,7 +2061,9 @@ upsert_env_var() {
 # \n \r \t \\ \" \$ 转义、未知转义保留两字符，单引号不展开），
 # 引号未闭合宽容回退原文；未引号时在「# 位于首位或前为空白」处
 # 截断注释再 TrimSpace（abc#def 的 # 保留）。两点有意不跟
-# Compose：不做 $ 变量展开（与 Go 面同口径）。
+# Compose：不做 $ 变量展开（与 Go 面同口径）；安全相关键的 $ 由
+# panel_reject_env_dollar_values 在读面前 fail-closed 拒绝
+# （R18-A2-04），不静默展开。
 parse_env_file_value() {
   local v="$1"
   v="${v#"${v%%[![:space:]]*}"}"
@@ -2147,6 +2149,34 @@ get_env_var() {
   if [[ "$found" == "1" ]]; then
     printf '%s' "$result"
   fi
+}
+
+# 安全相关键的 $ 探测（R18-A2-04，D-4 (b) fail-closed）：Compose
+# 对未引号/双引号 .env 值做 $ 插值（${VAR}/$VAR/${VAR:-default}），
+# 而脚本与 Go 面按字面读；读面分家会让数据门
+# （panel_force_reinstall_data_gate）把展开后的真卷判成「无数据
+# 卷有数据」，强制重装可覆写 .env、轮换 PG 口令、晾置真数据卷。
+# 探测面是 get_env_var 的解析值（与 Go 面 findEnvDollarValue 同
+# 口径）：双引号 \$ 转义已展开为字面 $、单引号字面 $ 同样落在此
+# 处——合法的卷/网络/容器/项目名只许 [A-Za-z0-9_.-]、端口只许数
+# 字，任一解析值含 $ 即为未展开的插值写法或非法字面量，两面统
+# 一在读面前 fail-closed 拒绝并点名改写法，不静默展开（Compose
+# 兼容展开放后续，见 D-4 (a)）。FLMX_INSTANCE 不在列：其值过白
+# 名单正则才进实例后缀，含 $ 的值直接落默认实例、无误读；DB_TYPE
+# 不在列：模式键、非资源名，本发现口径之外。非安全键（口令/密钥
+# 等）的值含 $ 合法，不探测。
+panel_reject_env_dollar_values() {
+  local file="${1:-.env}"
+  local key value
+  for key in FLMX_SQLITE_VOLUME FLMX_POSTGRES_VOLUME FLMX_NETWORK COMPOSE_PROJECT_NAME PANEL_BACKEND_CONTAINER PANEL_FRONTEND_CONTAINER PANEL_POSTGRES_CONTAINER BACKEND_PORT FRONTEND_PORT; do
+    value=$(get_env_var "$key" "$file" || true)
+    case "$value" in
+      *'$'*)
+        echo "❌ .env 的 $key 含 \$（值为 $value）：该键不做 \$ 变量展开，请把 $key 改写为字面值（去掉 \${...}/\$VAR 写法，直接写真实的卷/网络/容器名或端口号）后重试" >&2
+        return 1
+        ;;
+    esac
+  done
 }
 
 # .env 原始读值（严格面专用）：行选择与 get_env_var 同口径（逐
@@ -2829,6 +2859,9 @@ print_initial_admin_credentials() {
 # 键，含网络/项目键）；卷键在两 scope 下同口径——只凭实读挂
 # 载写值，无实读不写（A2-03），缺省 scope 另加点名提示。
 panel_pin_missing_resource_keys() {
+  # R18-A2-04：脚本面规划入口——安全相关键含 $ 即中止，毒化值不
+  # 得进入钉键/改写/期望值（与 Go 面 pinLegacyResourceNames 同门）。
+  panel_reject_env_dollar_values || return 1
   local backend_container="$1" postgres_container="$2" pin_scope="${3:-}"
   local sqlite_key sqlite_volume=""
   sqlite_key=$(get_env_var FLMX_SQLITE_VOLUME || true)
@@ -2994,6 +3027,9 @@ apply_panel_identity_rename() {
     return 0
   fi
   [[ -f .env ]] || return 0
+  # R18-A2-04：改名读容器键，毒化值不得进入改名判定（与 Go 面
+  # applyIdentityRename 同门）。
+  panel_reject_env_dollar_values || return 1
   local suffix
   suffix=$(panel_instance_suffix)
   local new_backend="${NEW_PANEL_BACKEND_CONTAINER}${suffix}"
@@ -4488,6 +4524,9 @@ print_force_reinstall_guidance() {
 # 不加任何摩擦、照常直行。本步在守卫内两文件备份之后调用：
 # 中止时备份已在、.env/compose 未动，恢复路径现成。
 panel_force_reinstall_data_gate() {
+  # R18-A2-04：安全相关键含 $ 即中止——读到的卷名若是未展开的
+  # ${...} 字面量，门会把真卷判成无数据而放行强制重装。
+  panel_reject_env_dollar_values || return 1
   local suffix candidates="" candidate
   suffix=$(panel_instance_suffix)
   candidates=""
@@ -4644,6 +4683,8 @@ panel_find_free_port() {
 }
 
 panel_preflight_install_conflicts() {
+  # R18-A2-04：预检读容器名/端口，毒化值不得进入占用判定。
+  panel_reject_env_dollar_values || return 1
   local backend_container frontend_container
   backend_container="${NEW_PANEL_BACKEND_CONTAINER}$(panel_instance_suffix)"
   frontend_container="${NEW_PANEL_FRONTEND_CONTAINER}$(panel_instance_suffix)"
@@ -4757,6 +4798,10 @@ install_panel() {
   # 作拒绝；守卫统一走 panel_assert_instance_id_valid——除环境
   # 变量形态外，当前目录 .env 的形态一并查（旧实现只查前者）。
   panel_assert_instance_id_valid . || return 1
+
+  # R18-A2-04：安装入口先过 $ 守卫——后续归属判定/数据门/预检
+  # 全读安全相关键，毒化值不得进入任一分支。
+  panel_reject_env_dollar_values || return 1
 
   # 共存守卫（C2-01）：当前目录已有部署文件且明确属于他人（Compose
   # 的 image 行无一引用本面板镜像，或 .env 声明的后端名不属于本面
@@ -5067,6 +5112,9 @@ update_panel() {
     return 1
   }
   resolve_panel_deployment || return 1
+  # R18-A2-04：更新入口先过 $ 守卫（此刻已 cd 到部署目录，.env
+  # 即部署 .env）——后续校验/钉键/改名全读安全相关键。
+  panel_reject_env_dollar_values || return 1
   # A2-08：实例 id 硬守卫——部署 .env/环境变量的非法 id 不得沿
   # 读路径回落口径静默按默认实例继续更新。
   panel_assert_instance_id_valid || return 1
@@ -5356,6 +5404,10 @@ migrate_to_postgres() {
     echo "❌ 未找到 .env 文件，请先安装面板"
     return 1
   fi
+
+  # R18-A2-04：迁移入口先过 $ 守卫（迁移按 cwd .env 工作）——后
+  # 续钉键/卷名读取全读安全相关键。
+  panel_reject_env_dollar_values || return 1
 
   # 共存守卫（C2-01＋AI-02）：迁移要按名停容器、按名挂数据卷，归属
   # 必须在任何下载/写入之前先定。旧实现守卫排在下方「缺 Compose 先

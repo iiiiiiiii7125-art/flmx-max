@@ -1485,6 +1485,11 @@ const (
 	envKeyPostgresVolume = "FLMX_POSTGRES_VOLUME"
 	envKeyNetwork        = "FLMX_NETWORK"
 	envKeyComposeProject = "COMPOSE_PROJECT_NAME"
+	// envKeyBackendPort / envKeyFrontendPort 只用于 $ 探测键表
+	// （envDollarSensitiveKeys）：规划面不消费端口，列入是为与脚
+	// 本面守卫的键表逐字同口径。
+	envKeyBackendPort  = "BACKEND_PORT"
+	envKeyFrontendPort = "FRONTEND_PORT"
 	// envKeyPanelPostgresContainer 是部署 .env 中 PG 容器名的身份
 	// 键（脚本 write_new_panel_identity 落盘同名键）：定位旧 PG 容
 	// 器时优先取部署自带声明，其次按 Compose 项目+服务标签查找。
@@ -1550,6 +1555,13 @@ var errAccidentStateVolume = fmt.Errorf("疑似事故态：实读卷为模板新
 // 败），只有探针实证「确定不在」才按无证据照常钉键。
 var errAccidentProbeFailed = fmt.Errorf("事故态门证据探针失败，无法排除旧名卷含有真实数据")
 
+// errEnvDollarInterpolation 是 fail-closed 哨兵（R18-A2-04，D-4
+// (b)）：部署 .env 的安全相关键含 $——Compose 会对未引号/双引号
+// 值做插值展开，而规划面按字面读，读面分家会让数据门误判；合法
+// 的卷/网络/容器/项目名与端口不可能含 $，故遇 $ 即中止升级且不
+// 动任何文件（与脚本面 panel_reject_env_dollar_values 同门）。
+var errEnvDollarInterpolation = fmt.Errorf(".env 安全相关键含 $（未展开的变量插值写法）")
+
 // dockerResourceNamePattern 是 Docker 卷/网络名的合法形态（名称必
 // 以字母数字开头，其后为字母数字与 _ . -）：inspect 实读值不合此
 // 式视为未读到，不钉入 .env。
@@ -1572,8 +1584,10 @@ type envKeyValue struct {
 // 值后行尾注释）会被当成含引号/注释的真值，规划与 Compose 的
 // 运行时解析分歧，升级后卷名门必然误判、健康升级被假回滚。
 // 两点有意不跟：不做 $ 变量展开（规划面只需卷名等字面值，与
-// Compose 的插值是两个层面）；引号未闭合时 Compose 整场报
-// 错，此处宽容回退原文，不让一行怪值污染其余键的规划。
+// Compose 的插值是两个层面）；安全相关键的 $ 由 findEnvDollarValue
+// 在规划入口 fail-closed 拒绝（R18-A2-04），不静默展开；引号未
+// 闭合时 Compose 整场报错，此处宽容回退原文，不让一行怪值污染其
+// 余键的规划。
 func parseEnvFileValues(data []byte) map[string]string {
 	values := make(map[string]string)
 	for _, line := range strings.Split(string(data), "\n") {
@@ -1657,6 +1671,39 @@ func expandEnvDoubleQuotedEscapes(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// envDollarSensitiveKeys 是 $ 探测的键表（R18-A2-04，D-4 (b)）：
+// 规划面按字面读的资源身份键——卷名、网络名、项目名、容器名、端
+// 口。与脚本面 panel_reject_env_dollar_values 的键表逐字同口径，
+// 两面任一改动须同步另一面。FLMX_INSTANCE 不在列：其值过白名单
+// 正则才进实例后缀，含 $ 的值直接落默认实例、无误读；DB_TYPE
+// 不在列：模式键、非资源名，本发现口径之外；口令/密钥等非安全
+// 键的值含 $ 合法，不探测。
+var envDollarSensitiveKeys = []string{
+	envKeySQLiteVolume,
+	envKeyPostgresVolume,
+	envKeyNetwork,
+	envKeyComposeProject,
+	envKeyPanelBackendContainer,
+	envKeyPanelFrontendContainer,
+	envKeyPanelPostgresContainer,
+	envKeyBackendPort,
+	envKeyFrontendPort,
+}
+
+// findEnvDollarValue 在已解析的 .env 键值表里探测安全相关键的 $
+// 残留，返回首个含 $ 的键与值。探测面是 parseEnvFileValues 的解
+// 析值：双引号 \$ 转义已展开为字面 $、单引号字面 $ 同样落在此处
+// ——合法的卷/网络/容器/项目名与端口不可能含 $，两种形态都须拒
+// 绝，不必再分转义与插值；空值与缺键不触发。
+func findEnvDollarValue(env map[string]string) (key, value string, ok bool) {
+	for _, key := range envDollarSensitiveKeys {
+		if v, present := env[key]; present && strings.Contains(v, "$") {
+			return key, v, true
+		}
+	}
+	return "", "", false
 }
 
 // applyEnvPins 把 pins 钉进 .env 内容并返回新内容（纯函数）：同名
@@ -1856,6 +1903,11 @@ type resourcePinPlan struct {
 // 旧后端不存在（全新安装形态）时不钉卷、不报错、期望值为空。
 func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) (resourcePinPlan, error) {
 	plan := resourcePinPlan{pins: make([]envKeyValue, 0, 4)}
+	// R18-A2-04：规划入口先过 $ 门——毒化值不得进入钉键/改写/期
+	// 望值（与脚本面 panel_pin_missing_resource_keys 同门）。
+	if key, value, ok := findEnvDollarValue(env); ok {
+		return plan, fmt.Errorf("%w：部署 .env 的 %s 含 $（值为 %q）：该键不做 $ 变量展开，请把 %s 改写为字面值（去掉 ${...}/$VAR 写法，直接写真实的卷/网络/容器名或端口号）后重试升级", errEnvDollarInterpolation, key, value, key)
+	}
 	expected := env[envKeySQLiteVolume]
 	switch {
 	case expected == "":
@@ -2354,6 +2406,11 @@ func (e *systemUpgradeExecutor) applyIdentityRename(ctx context.Context) error {
 		return fmt.Errorf("读取部署 .env 失败: %v", err)
 	}
 	env := parseEnvFileValues(data)
+	// R18-A2-04：改名规划入口先过 $ 门——毒化容器名不得进入改名
+	// 判定（与脚本面 apply_panel_identity_rename 同门）。
+	if key, value, ok := findEnvDollarValue(env); ok {
+		return fmt.Errorf("%w：部署 .env 的 %s 含 $（值为 %q）：该键不做 $ 变量展开，请把 %s 改写为字面值（去掉 ${...}/$VAR 写法，直接写真实的卷/网络/容器名或端口号）后重试升级", errEnvDollarInterpolation, key, value, key)
+	}
 	if !identityRenameEnabled(env) {
 		return nil
 	}

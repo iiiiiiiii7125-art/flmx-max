@@ -167,6 +167,85 @@ EOF
   grep -q '^FLMX_POSTGRES_VOLUME=flmx-postgres-data$' "$dir3/.env" || fail "A2-01R: the live-read postgres volume must be pinned once the gate clears"
 )
 
+# D4-A2-04（R18-A2-04）：.env 安全相关键遇 $ 即 fail-closed——
+# Compose 对未引号/双引号值做 $ 插值，脚本与 Go 面按字面读，读面
+# 分家会让数据门把展开后的真卷判成「无数据卷有数据」。变异自测：
+# 毒化必拒、干净必过、旧代码红新代码绿。四幕：① pin 遇毒化卷键
+# 中止、.env 逐字未动；② 数据门遇毒化卷键中止（旧代码：字面卷
+# 名查无此卷、门放行 rc=0）；③ 守卫直测：端口/容器键毒化必拒、
+# 单引号字面 $ 同拒、口令含 $ 不触发、干净必过；④ 干净 pin 照常
+# 通过、卷键不被改写。
+test_panel_env_dollar_rejected_fail_closed() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  # ① pin 遇毒化卷键：中止、点名、.env 逐字未动
+  local dir1 rc
+  dir1=$(mktemp -d)
+  cat > "$dir1/.env" <<'EOF'
+DB_TYPE=sqlite
+FLMX_SQLITE_VOLUME=${MY_VOL:-sqlite_data}
+EOF
+  cp "$dir1/.env" "$dir1/.env.orig"
+  rc="0"
+  ( cd "$dir1" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "D4-A2-04: pinning must abort when FLMX_SQLITE_VOLUME carries an unexpanded \$ interpolation"
+  grep -q 'FLMX_SQLITE_VOLUME' "$dir1/pin.log" || fail "D4-A2-04: the pin abort must name the offending key"
+  grep -q '变量展开' "$dir1/pin.log" || fail "D4-A2-04: the pin abort must name the interpolation cause"
+  cmp -s "$dir1/.env" "$dir1/.env.orig" || fail "D4-A2-04: .env must be byte-identical when the \$ gate aborts pinning"
+
+  # ② 数据门遇毒化卷键：中止（旧代码：字面卷名查无此卷即判无数据、放行）
+  local dir2
+  dir2=$(mktemp -d)
+  cat > "$dir2/.env" <<'EOF'
+DB_TYPE=sqlite
+FLMX_SQLITE_VOLUME=${MY_VOL:-sqlite_data}
+EOF
+  rc="0"
+  ( cd "$dir2" && panel_force_reinstall_data_gate > gate.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "D4-A2-04: the data gate must abort when the volume key carries an unexpanded \$ interpolation"
+  grep -q 'FLMX_SQLITE_VOLUME' "$dir2/gate.log" || fail "D4-A2-04: the data-gate abort must name the offending key"
+
+  # ③ 守卫直测：端口/容器毒化必拒，单引号字面 $ 同拒，口令 $ 不触发，干净必过
+  local dir3
+  dir3=$(mktemp -d)
+  printf 'BACKEND_PORT=${P}\nFLMX_SQLITE_VOLUME=sqlite_data\n' > "$dir3/.env"
+  rc="0"
+  ( cd "$dir3" && panel_reject_env_dollar_values > guard.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "D4-A2-04: a \$ in BACKEND_PORT must be rejected"
+  grep -q 'BACKEND_PORT' "$dir3/guard.log" || fail "D4-A2-04: the guard must name BACKEND_PORT"
+  printf "PANEL_BACKEND_CONTAINER='\${C}'\nFLMX_SQLITE_VOLUME=sqlite_data\n" > "$dir3/.env"
+  rc="0"
+  ( cd "$dir3" && panel_reject_env_dollar_values > guard.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "D4-A2-04: even a single-quoted literal \$ in a container key must be rejected (no legal resource name contains \$)"
+  printf 'FLMX_SQLITE_VOLUME=sqlite_data\nPOSTGRES_PASSWORD=%s\n' 'p$$w0rd' > "$dir3/.env"
+  ( cd "$dir3" && panel_reject_env_dollar_values > guard.log 2>&1 ) || fail "D4-A2-04: \$ in a password value must not trip the guard"
+  printf 'FLMX_SQLITE_VOLUME=sqlite_data\nFLMX_POSTGRES_VOLUME=postgres_data\nFLMX_NETWORK=gost-network\nCOMPOSE_PROJECT_NAME=flmx-panel\nPANEL_BACKEND_CONTAINER=flmx-panel-backend\nPANEL_FRONTEND_CONTAINER=flmx-panel-frontend\nPANEL_POSTGRES_CONTAINER=flmx-panel-postgres\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\n' > "$dir3/.env"
+  ( cd "$dir3" && panel_reject_env_dollar_values > guard.log 2>&1 ) || fail "D4-A2-04: a clean .env must pass the guard"
+
+  # ④ 干净 pin 照常通过、卷键不被改写
+  local dir4
+  dir4=$(mktemp -d)
+  cat > "$dir4/.env" <<'EOF'
+DB_TYPE=sqlite
+FLMX_SQLITE_VOLUME=custom_sqlite
+EOF
+  docker() {
+    if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+      case "$3" in
+        *"/app/data"*) printf '%s' "custom_sqlite" ;;
+        *) printf '' ;;
+      esac
+      return 0
+    fi
+    return 1
+  }
+  rc="0"
+  ( cd "$dir4" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "D4-A2-04: pinning a clean .env must proceed"
+  grep -q '^FLMX_SQLITE_VOLUME=custom_sqlite$' "$dir4/.env" || fail "D4-A2-04: the clean sqlite volume key must survive pinning verbatim"
+)
+
 # A2-02（audit-max）：升级后卷自检补 PG 面——旧实现只有
 # verify_panel_update_sqlite_volume，PG 部署重建后挂到模板缺省空
 # 卷（flmx-postgres-data）时健康检查与 SQLite 自检双过、照报更新
@@ -13802,6 +13881,7 @@ test_install_probe_route_uses_channel_tag_grammar
 test_install_panel_route_gates_and_watchdog
 test_install_panel_force_reinstall_data_gate
 test_panel_pin_accident_gate_unknown_mount_aborts
+test_panel_env_dollar_rejected_fail_closed
 test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key
 test_panel_download_routed_total_budget
