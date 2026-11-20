@@ -25,6 +25,29 @@ the status endpoint.
 
 Self-upgrade status.
 
+## POST /api/v1/system/gh-cache/purge
+
+Purge one version's GitHub-mirror tag asset cache (admin only). Use
+it after a tag is moved or re-cut: the mirror caches tag assets for
+24 hours, and a poisoned entry would otherwise keep serving the old
+hash until expiry (R18-B8-01). The version must pass the redirect-tag
+check — an invalid version is rejected and nothing is deleted
+(fail-closed). A version with no cached files answers `removed: 0`
+without error.
+
+**Request:** `{"version": "2.1.18"}`
+
+**Response:** `data` carries the version and how many cached files
+were actually removed:
+
+```json
+{"version": "2.1.18", "removed": 6}
+```
+
+Clearing failures (invalid version, disk error) answer envelope
+`code` -2 instead of silently reporting success. Non-POST methods
+and non-admin callers are rejected.
+
 ## POST /api/v1/system-info/ticket
 
 Issue the short-lived ticket the browser realtime WebSocket handshake
