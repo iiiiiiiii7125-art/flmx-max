@@ -116,3 +116,38 @@ func TestD1R18EnvelopeWithoutInnerTimestampRejected(t *testing.T) {
 		t.Fatalf("envelope without an inner timestamp must be rejected, got %+v", resp)
 	}
 }
+
+// R18-R2-D1-03: the two post-decrypt rejections above used to carry
+// an empty requestId, so the panel's tryResolvePending dropped the
+// frame and the caller waited out the full command timeout (up to
+// 300s for upgrades) before seeing a generic timeout. Decryption
+// already succeeded at that point, so the requestId is right there
+// in the decrypted payload — the rejection must carry it, and the
+// caller must be woken at once with the named reason.
+func TestD1R18InnerRejectionCarriesRequestID(t *testing.T) {
+	reporter, panel := newD1TestReporter(t)
+	now := time.Now()
+
+	// MissingInnerTimestamp: no inner timestamp at all.
+	reporter.handleReceivedMessage(websocket.TextMessage,
+		d1R18Envelope(t, CommandMessage{Type: "TuneStatus", RequestId: "r18-no-inner-2"}, now, false, now))
+	resp := d1ReadResponse(t, panel)
+	if resp.Type != "MissingInnerTimestamp" || resp.Success {
+		t.Fatalf("envelope without an inner timestamp must be rejected, got %+v", resp)
+	}
+	if resp.RequestId != "r18-no-inner-2" {
+		t.Fatalf("MissingInnerTimestamp rejection must carry the requestId, got %+v", resp)
+	}
+
+	// StaleTimestamp (inner): stale inner timestamp, fresh outer one.
+	staleInner := now.Add(-(commandReplayWindow + time.Minute))
+	reporter.handleReceivedMessage(websocket.TextMessage,
+		d1R18Envelope(t, CommandMessage{Type: "TuneStatus", RequestId: "r18-stale-inner-1"}, staleInner, true, now))
+	resp = d1ReadResponse(t, panel)
+	if resp.Type != "StaleTimestamp" || resp.Success {
+		t.Fatalf("envelope with a stale inner timestamp must be rejected, got %+v", resp)
+	}
+	if resp.RequestId != "r18-stale-inner-1" {
+		t.Fatalf("StaleTimestamp rejection must carry the requestId, got %+v", resp)
+	}
+}

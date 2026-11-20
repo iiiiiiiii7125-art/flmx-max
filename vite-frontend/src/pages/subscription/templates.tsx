@@ -8,7 +8,7 @@ import type {
   TemplateRuleCategoryItem,
 } from "@/api";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { Copy, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
@@ -36,7 +36,10 @@ import { Segmented } from "@/pages/subscription/controls";
 import {
   TemplateBuilderForm,
   builderFromPreset,
+  builderGroupFilterConflicts,
   builderGroupNameConflicts,
+  builderRecipeConflicts,
+  builderRuleConflicts,
 } from "@/pages/subscription/template-builder";
 
 export const TEMPLATE_KIND_LABELS: Record<SubTemplateKind, string> = {
@@ -232,12 +235,38 @@ export function SubscriptionTemplatesModal({
     rotateIdemKey,
   );
 
-  // R18-E2-05：构建器模式下的组名冲突（与 TemplateBuilderForm 行内
-  // 标红同一口径、同一函数），保存按钮据此禁用，save() 内再兜底一次。
-  const builderGroupConflicts =
+  // R18-E2-05 / R18-R2-E2-01：构建器模式下的配方冲突（与
+  // TemplateBuilderForm 行内标红同一口径、同一函数）：组名、过滤
+  // 条件、规则行与配方级问题。保存按钮据此禁用，save() 内再兜底一次。
+  // 四路口径一致，任一路有问题都拦下后端必拒的配方。
+  const builderCatalogKeys = useMemo(
+    () => new Set(catalog.map((c) => c.key)),
+    [catalog],
+  );
+  const builderConflicts =
     edit?.mode === "builder" && edit.builder
-      ? builderGroupNameConflicts(edit.builder)
+      ? {
+          names: builderGroupNameConflicts(edit.builder),
+          filters: builderGroupFilterConflicts(edit.builder),
+          rules: builderRuleConflicts(edit.builder, builderCatalogKeys),
+          recipe: builderRecipeConflicts(edit.builder),
+        }
       : null;
+  const builderConflictMessage = builderConflicts
+    ? [
+        ...builderConflicts.recipe,
+        ...builderConflicts.names.values(),
+        ...builderConflicts.filters.values(),
+        ...builderConflicts.rules.values(),
+      ][0]
+    : undefined;
+  const builderHasConflicts = Boolean(
+    builderConflicts &&
+      (builderConflicts.names.size > 0 ||
+        builderConflicts.filters.size > 0 ||
+        builderConflicts.rules.size > 0 ||
+        builderConflicts.recipe.length > 0),
+  );
 
   const save = async () => {
     const d = draft();
@@ -248,9 +277,8 @@ export function SubscriptionTemplatesModal({
 
       return;
     }
-    if (builderGroupConflicts && builderGroupConflicts.size > 0) {
-      toast.error([...builderGroupConflicts.values()][0]);
-
+    if (builderConflictMessage) {
+      toast.error(builderConflictMessage);
       return;
     }
     setBusy(true);
@@ -677,18 +705,16 @@ export function SubscriptionTemplatesModal({
                   >
                     返回列表
                   </Button>
-                  {/* R18-E2-05：组名冲突未解时保存禁用，原因见行内标红。 */}
-                  {builderGroupConflicts && builderGroupConflicts.size > 0 && (
+                  {/* R18-E2-05：配方冲突未解时保存禁用，原因见行内标红。 */}
+                  {builderHasConflicts && (
                     <span className="text-xs font-semibold text-danger-700">
-                      策略组名有冲突，请按上方标红修改后再保存
+                      构建器配方有问题，请按上方标红修改后再保存
                     </span>
                   )}
                   <Button
                     color="primary"
-                    isDisabled={
-                      !!builderGroupConflicts && builderGroupConflicts.size > 0
-                    }
                     isLoading={busy}
+                    isDisabled={builderHasConflicts}
                     onPress={save}
                   >
                     保存模板

@@ -383,6 +383,21 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 	if downloaded {
 		t.LastFetch = now
 	}
+	// R18-R2-B6-01（R18-B6-02 保存腿）：与 refreshTemplate 同口径——
+	// 模板在下载/生成窗口内被删时，Save() 的 upsert 会把已删模板
+	// 复活（最长 20s 的下载窗口）。落库前复核仍在：已被删则拒
+	// 绝保存并点名；仓储读错则 fail-closed，不在未知状态下落库。
+	// 残留的复核→保存微秒级 TOCTOU 与刷新腿同口径接受（见复审
+	// R18-R2-B6-01 的未立案观察）。新建（req.ID == 0）无行可复核。
+	if req.ID > 0 {
+		if existing, err := h.repo.GetSubscriptionTemplate(req.ID); err != nil {
+			respondInternalError(w, "subscriptionTemplateSave", err)
+			return
+		} else if existing == nil {
+			response.WriteJSON(w, response.ErrDefault("模板已被删除"))
+			return
+		}
+	}
 	if err := h.repo.SaveSubscriptionTemplate(t); err != nil {
 		respondInternalError(w, "subscriptionTemplateSave", err)
 		return

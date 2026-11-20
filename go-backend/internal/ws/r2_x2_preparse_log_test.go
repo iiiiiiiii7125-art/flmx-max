@@ -6,7 +6,7 @@ import (
 )
 
 // R2-X2-02: the panel-side log correlation for agent pre-parse error
-// receipts. Only the closed set of five pre-parse types may surface
+// receipts. Only the closed set of six pre-parse types may surface
 // their (sanitized) message in the drop-path log; everything else
 // keeps the type-only discipline of D2-02.
 func TestAgentPreParseErrorReason(t *testing.T) {
