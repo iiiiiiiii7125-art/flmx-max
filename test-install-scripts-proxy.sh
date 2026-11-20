@@ -7344,20 +7344,35 @@ test_uninstall_removes_custom_kernel_dir() (
   FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
   printf '[Service]\nExecStart=%s/flmx_agent\n' "$INSTALL_DIR" > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
   mkdir -p "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d"
-  local kdir="$work/custom-kernels"
-  mkdir -p "$kdir"
-  printf '{}' > "$kdir/state.json"
-  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$kdir" > "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+  # R18-A3-01: 正例夹具须落在黑名单前缀之外——mktemp 在 /tmp、$HOME
+  # 也在名单内，都不可用。/data 是审计建议的可删前缀之一；建目录要
+  # 特权：root 直接建，非 root 走 sudo -n（CI runner 免密 sudo）；
+  # 两者皆无时只跳过正例并明示（沿用本套件 root 门 skip 先例），拒
+  # 绝形态仍全程断言。
+  local kbase="/data/flmx-a3-test-$$-$RANDOM" kdir="" kbase_sudo=""
+  if mkdir -p "$kbase" 2>/dev/null; then
+    :
+  elif command -v sudo >/dev/null 2>&1 && sudo -n mkdir -p "$kbase" 2>/dev/null; then
+    kbase_sudo="sudo -n"
+  else
+    echo "skip: custom kernel dir positive case needs a non-blacklisted fixture dir (root or passwordless sudo to create /data)"
+  fi
 
   local rc="0" out
   out=$(mktemp)
-  rc="0"
-  printf 'y\n' | uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
-  assert_equals "0" "$rc" "R2-F7-I02: uninstall with a custom kernel dir should succeed"
-  [[ ! -d "$INSTALL_DIR" ]] || fail "R2-F7-I02: install dir should be removed"
-  [[ ! -d "$kdir" ]] || fail "R2-F7-I02: custom kernel dir should be removed on uninstall"
-  grep -q "custom-kernels" "$out" || \
-    fail "R2-F7-I02: uninstall output should name the custom kernel dir"
+  if [[ -n "$kbase_sudo" || -d "$kbase" ]]; then
+    kdir="$kbase/custom-kernels"
+    if [[ -n "$kbase_sudo" ]]; then sudo -n mkdir -p "$kdir"; else mkdir -p "$kdir"; fi
+    printf '{}' > "$kdir/state.json"
+    printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$kdir" > "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+    rc="0"
+    printf 'y\n' | uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
+    assert_equals "0" "$rc" "R2-F7-I02: uninstall with a custom kernel dir should succeed"
+    [[ ! -d "$INSTALL_DIR" ]] || fail "R2-F7-I02: install dir should be removed"
+    [[ ! -d "$kdir" ]] || fail "R2-F7-I02: custom kernel dir should be removed on uninstall"
+    grep -q "custom-kernels" "$out" || \
+      fail "R2-F7-I02: uninstall output should name the custom kernel dir"
+  fi
 
   # 拒绝形态：单元内指向系统目录 → 不删、点名披露、卸载仍成功
   INSTALL_DIR="$work/agent2"
@@ -7370,6 +7385,44 @@ test_uninstall_removes_custom_kernel_dir() (
   assert_equals "0" "$rc" "R2-F7-I02: uninstall should still succeed when the kernel dir value is refused"
   grep -q "不自动清理" "$out" || \
     fail "R2-F7-I02: refused kernel dir value should be disclosed, not silently skipped"
+  if [[ -d "$kbase" ]]; then
+    if [[ -n "$kbase_sudo" ]]; then sudo -n rm -rf "$kbase"; else rm -rf "$kbase"; fi
+  fi
+)
+
+# R18-A3-01: resolve_custom_kernel_dir 必须以前缀匹配拦系统目录子
+# 目录——/etc/nginx、/var/lib/docker、/home/<用户>、/root/.cache、
+# /opt/<应用> 等一律不得置 CUSTOM_KERNEL_DIR（旧实现只比精确顶级
+# 名，这些值全部放行、卸载时 rm -rf 整棵树）。正例对照：黑名单前
+# 缀之外的目录仍被接受。只读断言，不创建/不删除任何系统路径（被
+# 拒值仅写进临时单元文件，不落盘到该路径）。
+test_resolve_custom_kernel_dir_rejects_system_subdirs() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  mkdir -p "$INSTALL_DIR"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
+  LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
+  mkdir -p "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d"
+
+  local bad_dir
+  for bad_dir in /etc /etc/nginx /var/lib/docker /home/ops /root/.cache /opt/app /; do
+    printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$bad_dir" > "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+    CUSTOM_KERNEL_DIR="sentinel"
+    resolve_custom_kernel_dir >/dev/null 2>&1
+    assert_equals "" "$CUSTOM_KERNEL_DIR" "R18-A3-01: FLMX_KERNEL_DIR=$bad_dir must not be accepted for uninstall cleanup"
+  done
+
+  # 正例：黑名单前缀之外的目录仍被接受（该路径不存在也可断言：目
+  # 录不存在时痕迹检查跳过、直接接受；真实目录的端到端删除由
+  # test_uninstall_removes_custom_kernel_dir 的正例覆盖）。
+  local kdir="/data/flmx-a3-resolve-$$"
+  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$kdir" > "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+  resolve_custom_kernel_dir >/dev/null 2>&1
+  assert_equals "$kdir" "$CUSTOM_KERNEL_DIR" "R18-A3-01: a non-system custom kernel dir must still be accepted"
 )
 
 # R2-F7-02: 首装 get_config_params 校验失败（非法端口）必须在下载与
@@ -12332,6 +12385,7 @@ test_main_delete_self_only_on_success
 test_panel_main_delete_self_only_on_success
 test_install_uninstall_cancel_keeps_script
 test_uninstall_removes_custom_kernel_dir
+test_resolve_custom_kernel_dir_rejects_system_subdirs
 test_install_panel_invalid_port_aborts_before_download
 test_main_requires_root
 test_script_secret_surfaces_closed

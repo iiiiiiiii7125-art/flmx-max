@@ -3403,7 +3403,8 @@ configured_kernel_dir() {
 # R2-F7-I02: 判定自定义内核目录是否随卸载清理，结果写入全局
 # CUSTOM_KERNEL_DIR（空＝不单独清理）。调用点在 uninstall_flmx_agent
 # 已通过归属守卫之后（归属确认前提）；目录值来自 agent 自己的服务
-# 定义，仍须过形态校验：绝对路径、至少两级、不在系统目录名单内、
+# 定义，仍须过形态校验：绝对路径、至少两级、不在系统目录名单内
+# （目录本身或其任一祖先在名单内即拒绝，R18-A3-01）、
 # 不是安装目录或其默认内核子目录（那两处随安装目录一并删除）。配
 # 置值形态不可确认时不删、点名披露请人工确认——宁可留痕不误删。
 # 目录非空且找不到任何内核状态痕迹（state.json 或子目录）时同理。
@@ -3423,8 +3424,11 @@ resolve_custom_kernel_dir() {
       return 0
       ;;
   esac
+  # R18-A3-01: 前缀匹配——目录本身或其任一祖先在系统目录名单内即
+  # 拒绝。旧实现只比精确相等，/etc/nginx、/var/lib/docker、/home/<用
+  # 户> 等子目录一律放行、卸载时可被 rm -rf。
   case "$dir" in
-    /etc|/usr|/var|/bin|/sbin|/lib|/lib64|/boot|/dev|/proc|/sys|/run|/home|/root|/opt|/srv|/mnt|/media|/tmp)
+    /|/etc|/etc/*|/usr|/usr/*|/var|/var/*|/bin|/bin/*|/sbin|/sbin/*|/lib|/lib/*|/lib64|/lib64/*|/boot|/boot/*|/dev|/dev/*|/proc|/proc/*|/sys|/sys/*|/run|/run/*|/home|/home/*|/root|/root/*|/opt|/opt/*|/srv|/srv/*|/mnt|/mnt/*|/media|/media/*|/tmp|/tmp/*)
       echo "⚠️ FLMX_KERNEL_DIR 指向系统目录（$dir），卸载不自动清理，请人工确认"
       return 0
       ;;
