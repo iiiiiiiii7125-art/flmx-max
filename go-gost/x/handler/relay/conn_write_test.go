@@ -119,3 +119,56 @@ func TestTCPConnWriteHeaderPartialFlush(t *testing.T) {
 		t.Fatalf("wire bytes = %q, want %q", got, "HDRh")
 	}
 }
+
+// OPEN-4: this udpConn kept the same forged count the tcpConn
+// twin was fixed for (pre-set n = len(b), returned whatever the
+// flush did). A failed header flush or a failed length-prefix
+// write must report 0, and a successful flush must count only
+// the frame payload — the 2-byte prefix and the cached response
+// header are not payload.
+
+func TestUDPConnWriteHeaderFlushFailureReportsZero(t *testing.T) {
+	fake := &scriptedWriteConn{writeFn: func(p []byte) (int, error) {
+		return 0, errWriteFake
+	}}
+	c := &udpConn{Conn: fake}
+	c.wbuf.WriteString("HDR")
+	n, err := c.Write([]byte("hello"))
+	if !errors.Is(err, errWriteFake) {
+		t.Fatalf("Write error = %v, want the underlying error propagated", err)
+	}
+	if n != 0 {
+		t.Fatalf("Write n = %d, want 0: header flush failed, no frame byte crossed", n)
+	}
+}
+
+func TestUDPConnWriteHeaderFlushCountsPayloadOnly(t *testing.T) {
+	fake := &scriptedWriteConn{}
+	fake.writeFn = func(p []byte) (int, error) {
+		return fake.written.Write(p)
+	}
+	c := &udpConn{Conn: fake}
+	c.wbuf.WriteString("HDR")
+	n, err := c.Write([]byte("hello"))
+	if err != nil || n != 5 {
+		t.Fatalf("Write = (%d, %v), want (5, nil): only payload bytes count", n, err)
+	}
+	// Wire form: cached header + 2-byte length prefix + payload.
+	if got := fake.written.Bytes(); !bytes.Equal(got, []byte{'H', 'D', 'R', 0, 5, 'h', 'e', 'l', 'l', 'o'}) {
+		t.Fatalf("wire bytes = %q, want header + length-prefixed hello", got)
+	}
+}
+
+func TestUDPConnWriteLengthPrefixFailureReportsZero(t *testing.T) {
+	fake := &scriptedWriteConn{writeFn: func(p []byte) (int, error) {
+		return 0, errWriteFake
+	}}
+	c := &udpConn{Conn: fake}
+	n, err := c.Write([]byte("hello"))
+	if !errors.Is(err, errWriteFake) {
+		t.Fatalf("Write error = %v, want the underlying error propagated", err)
+	}
+	if n != 0 {
+		t.Fatalf("Write n = %d, want 0: length prefix never crossed, the frame did not go out", n)
+	}
+}

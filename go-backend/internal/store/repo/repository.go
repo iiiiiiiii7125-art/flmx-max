@@ -787,12 +787,30 @@ func IsAdminBootstrapRequired() bool {
 
 func seedData(db *gorm.DB) {
 	var adminCount int64
-	if err := db.Model(&model.User{}).Where("id = ?", 1).Count(&adminCount).Error; err == nil && adminCount == 0 {
+	// OPEN-16: a failed existence check used to silently skip
+	// seeding — no log, no adminBootstrapRequired — leaving a
+	// deployment with no admin and no visible trace. A check that
+	// cannot run is not "admin exists": fail closed to the
+	// human-intervention path instead of assuming the count was 0
+	// (which would attempt a seed) or non-zero (which would skip
+	// it silently).
+	adminCountErr := db.Model(&model.User{}).Where("id = ?", 1).Count(&adminCount).Error
+	if adminCountErr != nil {
+		adminBootstrapRequired = true
+		log.Printf("ERROR: seed skipped: cannot verify admin user (id=1 user count query failed: %v). "+
+			"面板管理员状态未知，需人工处理（不得自动提权）。", adminCountErr)
+	} else if adminCount == 0 {
 		// R5-B4C: 补建前检查用户名是否被占用（防改名后撞唯一约束）。
 		// B02-003/K10: 占用检查按折叠口径——存量有 Admin@User 变体时
 		// 同样视为占用（补建会撞 v1/v5 唯一索引），走人工处理路径。
-		nameCount, _ := usernameFoldCount(db, "admin@user", 0)
-		if nameCount > 0 {
+		nameCount, nameErr := usernameFoldCount(db, "admin@user", 0)
+		if nameErr != nil {
+			// OPEN-16: 同上——占用检查跑不起来时不得把 nameCount
+			// 的零值当成「未占用」去补建，同样走人工处理路径。
+			adminBootstrapRequired = true
+			log.Printf("ERROR: seed skipped: cannot verify admin username availability (username fold count failed: %v). "+
+				"面板管理员状态未知，需人工处理（不得自动提权）。", nameErr)
+		} else if nameCount > 0 {
 			// 修正 A：不得静默跳过。ERROR 日志 + API 状态可见。
 			adminBootstrapRequired = true
 			log.Printf("ERROR: seed skipped: id=1 missing and username admin@user already taken. " +
@@ -5388,6 +5406,16 @@ func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup,
 	return count, nil
 }
 
+// validImportedCredential reports whether an unmarshalled backup
+// credential can ever be used at login (OPEN-17): WebAuthn needs
+// both the credential ID (to find it) and the public key (to verify
+// the assertion). A `{}` credential unmarshals cleanly with both
+// empty and would otherwise land as a dead row — and, via the
+// OnConflict on id, could overwrite a good row with the same id.
+func validImportedCredential(credential webauthn.Credential) bool {
+	return len(credential.ID) > 0 && len(credential.PublicKey) > 0
+}
+
 // importPasskeys 恢复 passkey 段（R2-E3-F02）：按 user 归属落库，
 // 同 id 行按备份内容更新（整表段「备份为准」的既有恢复语义）。
 // 用户不存在的行跳过并计入 SkippedRows["passkeys"]（回执点名计
@@ -5409,6 +5437,14 @@ func importPasskeys(tx *gorm.DB, rows []model.PasskeyBackup, rep *importReport) 
 		if err := json.Unmarshal([]byte(p.CredentialJSON), &credential); err != nil {
 			rep.skip("passkeys")
 			rep.warnf("备份恢复：用户 #%d 的 passkey %q 凭据数据无法解析，已跳过未恢复", p.UserID, p.ID)
+			continue
+		}
+		if !validImportedCredential(credential) {
+			// OPEN-17: 凭据 ID 或公钥为空的凭据在登录面永不可用
+			// （空 ID 找不到、空公钥验不过），与无法解析的行同
+			// 口径跳过并逐行点名，不让死凭据落库或覆盖同 id 好行。
+			rep.skip("passkeys")
+			rep.warnf("备份恢复：用户 #%d 的 passkey %q 凭据 ID 或公钥为空，已跳过未恢复", p.UserID, p.ID)
 			continue
 		}
 		item := model.Passkey{

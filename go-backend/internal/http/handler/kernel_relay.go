@@ -279,14 +279,17 @@ func (h *Handler) relayTargetWithExits(row *model.NodeInbound, tunnel *tunnelRec
 			// 不进文案，见 relayValidationError）。
 			return "", &relayValidationError{msg: "落地节点不存在"}
 		}
-		host = strings.TrimSpace(node.ServerIP)
-		if v4 := strings.TrimSpace(node.ServerIPV4.String); host == "" && v4 != "" {
-			host = v4
-		}
-		// O3-002：IPv4 为空时回退尝试 IPv6，避免纯 IPv6 节点无法做端口转发
-		if v6 := strings.TrimSpace(node.ServerIPV6.String); host == "" && v6 != "" {
-			host = v6
-		}
+		// OPEN-13: resolve the landing host through the inbound's
+		// share-address mode instead of always preferring the
+		// node's IPv4: with mode ipv6 on a dual-stack node whose
+		// IPv4 is unreachable from the entry, the old code dialed
+		// the dead IPv4 and the relay failed. auto keeps the old
+		// ServerIP -> v4 -> v6 order; ipv4/ipv6 pick that family;
+		// custom uses the configured share host. An empty result
+		// falls through to the existing "没有可用地址" refusal
+		// below (save-time validateShareAddress already refuses
+		// ipv6/custom modes without an address).
+		host = inboundShareAddress(row, node)
 	}
 	if host == "" {
 		return "", &relayValidationError{msg: "落地节点没有可用地址"}

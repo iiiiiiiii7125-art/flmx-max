@@ -113,3 +113,58 @@ func TestRelayTargetTunnelThroughIX(t *testing.T) {
 		t.Fatalf("port forwards reach the landing node from the entry: %v %v", dialers, err)
 	}
 }
+
+// OPEN-13: relayTarget ignored the inbound's share-address mode and
+// always dialed the landing node's IPv4 first. With mode ipv6 on a
+// dual-stack node whose IPv4 is unreachable from the entry, the relay
+// dialed the dead IPv4 and failed. The target must follow the mode:
+// ipv6 dials the v6 address, custom dials the configured share host,
+// auto keeps the old ServerIP -> v4 -> v6 order, and a mode with no
+// usable address refuses instead of silently falling back to the
+// wrong family.
+func TestRelayTargetRespectsShareAddressMode(t *testing.T) {
+	r, err := repo.Open(t.TempDir() + "/relay-target-share.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	h := New(r, "unit-test-secret")
+
+	front := seedRelayTargetNode(t, r, "front-s", "198.51.100.1")
+	ix := seedRelayTargetNode(t, r, "ix-s", "198.51.100.2")
+	landing := seedRelayTargetNode(t, r, "landing-s", "203.0.113.10")
+	if err := r.DB().Exec(`UPDATE node SET server_ip_v6 = ? WHERE id = ?`, "2001:db8::10", landing).Error; err != nil {
+		t.Fatal(err)
+	}
+	v4only := seedRelayTargetNode(t, r, "landing-v4only", "203.0.113.11")
+
+	viaIX := &tunnelRecord{ID: seedRelayTargetTunnel(t, r, "via-ix-s", front, 31010, ix), Type: 2}
+
+	cases := []struct {
+		name    string
+		row     *model.NodeInbound
+		want    string
+		wantErr string
+	}{
+		{"ipv6 mode dials the v6 address, not the dead v4", &model.NodeInbound{NodeID: landing, Listen: "::", Port: 443, ShareAddressMode: "ipv6"}, "[2001:db8::10]:443", ""},
+		{"ipv4 mode dials the v4 address", &model.NodeInbound{NodeID: landing, Listen: "::", Port: 443, ShareAddressMode: "ipv4"}, "203.0.113.10:443", ""},
+		{"custom mode dials the configured share host", &model.NodeInbound{NodeID: landing, Listen: "::", Port: 443, ShareAddressMode: "custom", ShareHost: "share.example.com"}, "share.example.com:443", ""},
+		{"auto mode keeps the old ServerIP-first order", &model.NodeInbound{NodeID: landing, Listen: "::", Port: 443, ShareAddressMode: "auto"}, "203.0.113.10:443", ""},
+		{"unset mode keeps the old ServerIP-first order", &model.NodeInbound{NodeID: landing, Listen: "::", Port: 443}, "203.0.113.10:443", ""},
+		{"ipv6 mode with no v6 address refuses, never falls back to v4", &model.NodeInbound{NodeID: v4only, Listen: "::", Port: 443, ShareAddressMode: "ipv6"}, "", "落地节点没有可用地址"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := h.relayTarget(tc.row, viaIX)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error %q, got %q %v", tc.wantErr, got, err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("got %q %v, want %q", got, err, tc.want)
+			}
+		})
+	}
+}

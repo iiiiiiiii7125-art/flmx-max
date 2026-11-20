@@ -74,19 +74,26 @@ func (c *tcpConn) flushHeader() error {
 }
 
 func (c *tcpConn) Write(b []byte) (n int, err error) {
-	n = len(b) // force byte length consistent
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.wbuf != nil && c.wbuf.Len() > 0 {
+		// OPEN-4: only the payload bytes that actually crossed
+		// count toward n; the cached request header is not
+		// payload. The old code pre-set n = len(b) and returned
+		// it whatever the flush did, crediting Transport's
+		// progress tracker with a full write on a failed flush
+		// (and io.CopyBuffer dropped bytes it believed written).
+		headerLen := c.wbuf.Len()
 		c.wbuf.Write(b) // append the data to the cached header
-		_, err = c.Conn.Write(c.wbuf.Bytes())
+		written, werr := c.Conn.Write(c.wbuf.Bytes())
 		c.wbuf.Reset()
-		return
+		if n = written - headerLen; n < 0 {
+			n = 0
+		}
+		return n, werr
 	}
-	_, err = c.Conn.Write(b)
-	return
+	return c.Conn.Write(b)
 }
 
 var errHalfCloseNotSupported = errors.New("half-close not supported by the underlying connection")
@@ -169,25 +176,31 @@ func (c *udpConn) Write(b []byte) (n int, err error) {
 		return
 	}
 
-	n = len(b)
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.wbuf != nil && c.wbuf.Len() > 0 {
+		// OPEN-4: only the flushed bytes that carried this
+		// frame count toward n; the 2-byte length prefix and
+		// the cached request header are not payload. The old
+		// code pre-set n = len(b) and returned it whatever the
+		// flush did, crediting a full packet on a failed write.
+		headerLen := c.wbuf.Len() + 2
 		var bb [2]byte
 		binary.BigEndian.PutUint16(bb[:], uint16(len(b)))
 		c.wbuf.Write(bb[:])
 		c.wbuf.Write(b) // append the data to the cached header
-		_, err = c.wbuf.WriteTo(c.Conn)
-		return
+		written, werr := c.wbuf.WriteTo(c.Conn)
+		if n = int(written) - headerLen; n < 0 {
+			n = 0
+		}
+		return n, werr
 	}
 
 	var bb [2]byte
 	binary.BigEndian.PutUint16(bb[:], uint16(len(b)))
-	_, err = c.Conn.Write(bb[:])
-	if err != nil {
-		return
+	if _, err = c.Conn.Write(bb[:]); err != nil {
+		return 0, err
 	}
 	return c.Conn.Write(b)
 }

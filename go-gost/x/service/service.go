@@ -312,100 +312,129 @@ func (s *defaultService) Serve() error {
 			s.setState(StateReady)
 		}
 
-		// R18-C5-01: the raw previous-hop peer, captured BEFORE
-		// the first RemoteAddr() call folds any PROXY header
-		// into the address — unwrapping through the listener
-		// wrappers down to the underlying connection (a
-		// proxyproto.Conn's Raw() is its TCP peer; without PROXY
-		// the innermost conn is the peer itself). It is only
-		// recorded when it differs from the final client IP, so
-		// direct connections stay wire-identical.
-		peerIP := rawPeerIP(conn)
-
-		clientAddr := conn.RemoteAddr().String()
-		if ca, ok := conn.(xnet.ClientAddr); ok {
-			if addr := ca.ClientAddr(); addr != nil {
-				clientAddr = addr.String()
-			}
-		}
-		clientIP := clientAddr
-		if h, _, _ := net.SplitHostPort(clientAddr); h != "" {
-			clientIP = h
-		}
-
-		sid := xid.New().String()
-		ctx := ctxvalue.ContextWithSid(ctx, ctxvalue.Sid(sid))
-		ctx = ctxvalue.ContextWithClientAddr(ctx, ctxvalue.ClientAddr(clientAddr))
-		ctx = ctxvalue.ContextWithHash(ctx, &ctxvalue.Hash{Source: clientIP})
-
-		log := s.options.logger.WithFields(map[string]any{
-			"sid": sid,
-		})
-
-		for _, rec := range s.options.recorders {
-			if rec.Record == recorder.RecorderServiceClientAddress {
-				if err := rec.Recorder.Record(ctx, []byte(clientIP)); err != nil {
-					s.recordErrs.NoteDetail(fmt.Sprintf("record %s: %v", rec.Record, err))
-				}
-				break
-			}
-		}
-		// 包 K 会话预算（与上面的地址 ACL 不同：这是整机资源
-		// 准入）——RSS/会话数越过按 RAM 推导的预算线时拒新会话、
-		// 保住存量与整机，先于 ACL 执行（风暴时不做无谓功）。
-		releaseSession, admitted := sessionbudget.TryAcquire()
-		if !admitted {
-			conn.Close()
-			if sessionbudget.RejectLogDue() {
-				b := sessionbudget.CurrentBudget()
-				log.Warnf("session budget: refusing new session from %s (active=%d/%d rss=%d/%d rejected_total=%d)",
-					clientAddr, sessionbudget.Active(), b.MaxSessions,
-					sessionbudget.RSSBytes(), b.MaxRSSBytes, sessionbudget.RejectedTotal())
-			}
-			continue
-		}
-		// 登记进压力驱逐名册并接活动时钟：包裹 conn 的字节流
-		// 动更新会话活跃时刻，release 合并注销与计数归还。
-		conn, releaseSession = sessionbudget.Track(conn, releaseSession)
-
-		if s.options.admission != nil &&
-			!s.options.admission.Admit(ctx, clientAddr) {
-			releaseSession()
-			conn.Close()
-			log.Debugf("admission: %s is denied", clientAddr)
-			continue
-		}
-
-		// Connlog (U1, connlog.go): on entry services, an admitted
-		// connection emits its open event here — clientAddr/sid are
-		// final at this point and a PROXY-protocol listener has
-		// already folded the real client address into RemoteAddr —
-		// and the paired close event from the connection goroutine
-		// below, where Handle's return is the deterministic close
-		// point. peerIP was captured above, before the fold, and
-		// is recorded only when it differs from the client IP
-		// (R18-C5-01), so a PROXY claim stays auditable against
-		// the raw peer. Admission denials above never reach this
-		// point and stay unrecorded (design §3.1). For non-entry
-		// services or a disabled master switch this costs one
-		// bool check.
-		connLog := s.options.connLogEntry && ConnLogEnabled()
-		var connLogStartMs int64
-		// clientGoneMs 是 C13 的客户端离开观测（见
-		// connlog_client_watch.go）：Handle 期间客户端断开
-		// 的时刻；未观测到时为 0，close 事件回退旧口径。
-		var clientGoneMs atomic.Int64
-		if connLog {
-			connLogStartMs = time.Now().UnixMilli()
-			EnqueueConnEvent(s.newConnEvent(
-				ConnEventOpen, sid, clientAddr, clientIP, peerIP, conn, connLogStartMs, 0))
-		}
-
+		// OPEN-1: the accept loop does no per-connection work
+		// at all. A proxyproto.Listener reads the PROXY header
+		// lazily: the first RemoteAddr() call folds the header
+		// and waits up to the listener's ReadHeaderTimeout (10s)
+		// for a client that connected but sends nothing — and
+		// that call used to run inline here, so one silent
+		// client stalled every later Accept for up to 10s, and
+		// several silent clients stacked. Everything that can
+		// touch the connection (peer capture, address fold,
+		// session budget, admission, connlog open) now runs in
+		// the connection goroutine; the loop only Accepts. A
+		// flood of silent clients now costs one goroutine each,
+		// each bounded by the same 10s header deadline, instead
+		// of the entry itself.
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
-			defer releaseSession()
+			// releaseSession is acquired below, after the
+			// address fold; the deferred closure reads the
+			// variable at return time, so the early returns
+			// below still release. (A plain `defer
+			// releaseSession()` would evaluate the still-nil
+			// value when the goroutine starts.) The release
+			// itself is idempotent (sessionbudget sync.Once),
+			// so the explicit release on the admission-denial
+			// path below is safe against this defer.
+			var releaseSession func()
+			defer func() {
+				if releaseSession != nil {
+					releaseSession()
+				}
+			}()
+
+			// R18-C5-01: the raw previous-hop peer, captured BEFORE
+			// the first RemoteAddr() call folds any PROXY header
+			// into the address — unwrapping through the listener
+			// wrappers down to the underlying connection (a
+			// proxyproto.Conn's Raw() is its TCP peer; without PROXY
+			// the innermost conn is the peer itself). It is only
+			// recorded when it differs from the final client IP, so
+			// direct connections stay wire-identical.
+			peerIP := rawPeerIP(conn)
+
+			clientAddr := conn.RemoteAddr().String()
+			if ca, ok := conn.(xnet.ClientAddr); ok {
+				if addr := ca.ClientAddr(); addr != nil {
+					clientAddr = addr.String()
+				}
+			}
+			clientIP := clientAddr
+			if h, _, _ := net.SplitHostPort(clientAddr); h != "" {
+				clientIP = h
+			}
+
+			sid := xid.New().String()
+			ctx := ctxvalue.ContextWithSid(ctx, ctxvalue.Sid(sid))
+			ctx = ctxvalue.ContextWithClientAddr(ctx, ctxvalue.ClientAddr(clientAddr))
+			ctx = ctxvalue.ContextWithHash(ctx, &ctxvalue.Hash{Source: clientIP})
+
+			log := s.options.logger.WithFields(map[string]any{
+				"sid": sid,
+			})
+
+			for _, rec := range s.options.recorders {
+				if rec.Record == recorder.RecorderServiceClientAddress {
+					if err := rec.Recorder.Record(ctx, []byte(clientIP)); err != nil {
+						s.recordErrs.NoteDetail(fmt.Sprintf("record %s: %v", rec.Record, err))
+					}
+					break
+				}
+			}
+			// 包 K 会话预算（与上面的地址 ACL 不同：这是整机资源
+			// 准入）——RSS/会话数越过按 RAM 推导的预算线时拒新会话、
+			// 保住存量与整机，先于 ACL 执行（风暴时不做无谓功）。
+			releaseSession, admitted := sessionbudget.TryAcquire()
+			if !admitted {
+				conn.Close()
+				if sessionbudget.RejectLogDue() {
+					b := sessionbudget.CurrentBudget()
+					log.Warnf("session budget: refusing new session from %s (active=%d/%d rss=%d/%d rejected_total=%d)",
+						clientAddr, sessionbudget.Active(), b.MaxSessions,
+						sessionbudget.RSSBytes(), b.MaxRSSBytes, sessionbudget.RejectedTotal())
+				}
+				return
+			}
+			// 登记进压力驱逐名册并接活动时钟：包裹 conn 的字节流
+			// 动更新会话活跃时刻，release 合并注销与计数归还。
+			conn, releaseSession = sessionbudget.Track(conn, releaseSession)
+
+			if s.options.admission != nil &&
+				!s.options.admission.Admit(ctx, clientAddr) {
+				releaseSession()
+				conn.Close()
+				log.Debugf("admission: %s is denied", clientAddr)
+				return
+			}
+
+			// Connlog (U1, connlog.go): on entry services, an admitted
+			// connection emits its open event in this goroutine —
+			// clientAddr/sid are final at this point and a
+			// PROXY-protocol listener has already folded the real
+			// client address into RemoteAddr — and the paired close
+			// event from the deferred close below, where Handle's
+			// return is the deterministic close point. peerIP was
+			// captured above, before the fold, and is recorded only
+			// when it differs from the client IP (R18-C5-01), so a
+			// PROXY claim stays auditable against the raw peer.
+			// Admission denials above never reach this point and
+			// stay unrecorded (design §3.1). For non-entry
+			// services or a disabled master switch this costs one
+			// bool check.
+			connLog := s.options.connLogEntry && ConnLogEnabled()
+			var connLogStartMs int64
+			// clientGoneMs 是 C13 的客户端离开观测（见
+			// connlog_client_watch.go）：Handle 期间客户端断开
+			// 的时刻；未观测到时为 0，close 事件回退旧口径。
+			var clientGoneMs atomic.Int64
+			if connLog {
+				connLogStartMs = time.Now().UnixMilli()
+				EnqueueConnEvent(s.newConnEvent(
+					ConnEventOpen, sid, clientAddr, clientIP, peerIP, conn, connLogStartMs, 0))
+			}
 
 			if connLog {
 				defer func() {

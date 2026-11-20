@@ -1790,6 +1790,11 @@ func (h *Handler) inboundSave(w http.ResponseWriter, r *http.Request, update boo
 	// （“已保存，但…”）点名；无引用的入站不警告（中转/转发创
 	// 建时另行校验）。
 	warnings = append(warnings, h.shadowTLSRelayWarningsForInbound(row.ID)...)
+	// OPEN-3：PROXY 开关开着但白名单没开时，直连客户端可伪造
+	// PROXY 头、污染连接日志里的客户端 IP——保存回执点名。
+	if w := acceptProxyProtocolSpoofWarning(row); w != "" {
+		warnings = append(warnings, w)
+	}
 	if len(warnings) > 0 {
 		response.WriteJSON(w, response.R{Code: 0, Msg: "已保存，但" + strings.Join(warnings, "；"), TS: now, Data: map[string]interface{}{"id": row.ID}})
 		return
