@@ -1031,6 +1031,17 @@ func (p *tunnelQualityProber) probeBestExitOwners(tunnelID int64, inNodes []chai
 			nodeMap[exit.NodeID] = node
 		}
 	}
+	// R18-R2-F1-01: the reorder re-renders this owner's chain, so
+	// it needs the owner's full dialer group (the owners list
+	// itself: every owner dials the same exits) for the dialer
+	// gate — without it a verified dialer is re-rendered legacy
+	// and pushed over the running verified chain.
+	ownerIDs := make([]int64, 0, len(owners))
+	for _, owner := range owners {
+		if owner.NodeID > 0 {
+			ownerIDs = append(ownerIDs, owner.NodeID)
+		}
+	}
 	for _, owner := range owners {
 		if nodeMap[owner.NodeID] == nil {
 			continue
@@ -1041,7 +1052,7 @@ func (p *tunnelQualityProber) probeBestExitOwners(tunnelID int64, inNodes []chai
 		decision := p.handler.bestExit.observeScores(key, scores, time.Now())
 		if decision.Switch {
 			now := time.Now()
-			if err := p.handler.applyBestExitChainOrder(tunnelID, owner.NodeID, outNodes, decision.Scores, ipPreference); err != nil {
+			if err := p.handler.applyBestExitChainOrder(tunnelID, owner.NodeID, outNodes, decision.Scores, ipPreference, ownerIDs); err != nil {
 				log.Printf("best_exit: switch apply failed tunnel=%d owner=%d exit=%d err=%v", tunnelID, owner.NodeID, decision.ExitNodeID, err)
 				p.handler.bestExit.recordApplyFailure(key, decision.ExitNodeID, now)
 				continue

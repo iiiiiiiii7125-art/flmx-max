@@ -304,18 +304,72 @@ func (h *Handler) tunnelTLSReadyForState(state *tunnelCreateState) (map[int64]bo
 	return h.tunnelTLSReadyMap(ids), nil
 }
 
+// tunnelTLSReadyMapErr reads the ready set for a batch of nodes in
+// one query. Unlike tunnelTLSReadyMap it reports a DB error to the
+// caller instead of failing open to an empty set: a caller that is
+// about to push a re-rendered chain (best-exit reorder) must be
+// able to tell "no node is ready" apart from "the read failed" —
+// the latter must refuse the push, or a DB blip would downgrade a
+// verified leg to a legacy dialer against a verified listener.
+func (h *Handler) tunnelTLSReadyMapErr(nodeIDs []int64) (map[int64]bool, error) {
+	if h == nil || h.repo == nil || len(nodeIDs) == 0 {
+		return map[int64]bool{}, nil
+	}
+	return h.repo.ListNodeTunnelTLSReady(nodeIDs)
+}
+
 // tunnelTLSReadyMap reads the ready set for a batch of nodes in one
 // query. On a DB error it returns an empty map (fail-open to legacy
 // rendering) and logs — a DB blip must never flip a segment to
 // verified, and must never break a deploy.
 func (h *Handler) tunnelTLSReadyMap(nodeIDs []int64) map[int64]bool {
-	if h == nil || h.repo == nil || len(nodeIDs) == 0 {
-		return map[int64]bool{}
-	}
-	ready, err := h.repo.ListNodeTunnelTLSReady(nodeIDs)
+	ready, err := h.tunnelTLSReadyMapErr(nodeIDs)
 	if err != nil {
 		log.Printf("tunnel-tls: 读取节点证书就绪态失败，保持旧渲染: %v", err)
 		return map[int64]bool{}
 	}
 	return ready
+}
+
+// bestExitReorderWouldDowngrade reports whether rendering a
+// best-exit reorder with the current ready set could downgrade a
+// leg that is currently verified. A leg owner→target is currently
+// verified only if, at deploy time, the owner, the target, and
+// every sibling dialer of that target were all ready — which
+// implies every one of them was issued certificates (a Ready=1 row
+// exists only after an issue ack). So a leg is at risk exactly
+// when all of its gate dependencies were previously issued but any
+// of them is not ready now: the re-render would come out legacy
+// while the peer listener is still verified, and the legacy dialer
+// would be rejected for lack of a client certificate. A leg with a
+// never-issued member was legacy at deploy (its listener never
+// flipped), so rendering it legacy again is consistent and safe.
+func (h *Handler) bestExitReorderWouldDowngrade(ownerNodeID int64, targets []tunnelRuntimeNode, tunnelProtocol string, dialerGroup []int64, tlsReady map[int64]bool) bool {
+	if h == nil || len(targets) == 0 {
+		return false
+	}
+	for _, target := range targets {
+		if !isVerifiedTLSTunnelProtocol(effectiveSegmentProtocol(target.Protocol, tunnelProtocol)) {
+			continue
+		}
+		deps := make([]int64, 0, len(dialerGroup)+2)
+		deps = append(deps, ownerNodeID, target.NodeID)
+		deps = append(deps, dialerGroup...)
+		allIssued := true
+		for _, id := range deps {
+			if !h.nodeTunnelTLSWasIssued(id) {
+				allIssued = false
+				break
+			}
+		}
+		if !allIssued {
+			continue
+		}
+		for _, id := range deps {
+			if !tlsReady[id] {
+				return true
+			}
+		}
+	}
+	return false
 }
