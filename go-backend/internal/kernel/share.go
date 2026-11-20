@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"regexp"
@@ -528,6 +529,12 @@ func singboxOutbound(e Endpoint) (map[string]interface{}, bool) {
 			tls["reality"] = r
 		}
 		if e.selfSigned() {
+			// R18-C2-01 (D-2, warn-only): sing-box 出站 TLS 没有
+			// pinnedPeerCertSha256 这类服务端证书钉选字段，自签目标
+			// 只能以跳过证书校验的方式拨通。以下渲染一字不改
+			// （既有自签链路不断）；拒绝渲染（fail-closed）列入
+			// 下个大版本。每次渲染都打一条警告，让降级可见而非静默。
+			log.Printf("kernel: WARNING sing-box 出站「%s」拨向自签目标 %s，渲染 tls.insecure=true：跳过 TLS 证书校验，目标真实性不受验证，路径上的中间人可冒充目标（下个大版本将改为拒绝渲染；建议给目标入站换可信证书或改用 Xray 内核）", e.Name, hostPort(e.Host, e.Port))
 			tls["insecure"] = true
 		}
 		o["tls"] = tls

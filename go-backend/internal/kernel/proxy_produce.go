@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"sort"
 	"strconv"
@@ -558,6 +559,12 @@ func proxySingbox(e Endpoint) ([]map[string]interface{}, bool) {
 			t["server_name"] = sni
 		}
 		if p.flag("skip-cert-verify") {
+			// R18-C2-01 (D-2, warn-only)：与 singboxOutbound 自签分支
+			// 同根的次要点——导入节点自带 skip-cert-verify 标志，
+			// sing-box 面只能原样渲染 tls.insecure=true。渲染一字
+			// 不改；拒绝渲染（fail-closed）列入下个大版本。每次
+			// 渲染都打一条警告，让降级可见而非静默。
+			log.Printf("kernel: WARNING sing-box 出站「%s」拨向导入目标 %s，渲染 tls.insecure=true：导入节点要求跳过 TLS 证书校验，目标真实性不受验证，路径上的中间人可冒充目标（下个大版本将改为拒绝渲染；建议改用可信证书目标或 Xray 内核）", e.Name, hostPort(e.Host, e.Port))
 			t["insecure"] = true
 		}
 		if alpn := p.strs("alpn"); len(alpn) > 0 {
