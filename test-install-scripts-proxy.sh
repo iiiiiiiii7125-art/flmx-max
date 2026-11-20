@@ -963,6 +963,78 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log() (
   assert_equals "1" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "§9.6: only the panel block may carry the secret filter; the menu 6 block must not gain one"
 )
 
+# R18-A2-01：前后端端口相同必须在三处都被拒绝——安装输入
+# （get_config_params）、更新 .env（validate_panel_update_
+# environment）、安装预检（panel_preflight_install_conflicts，
+# 第二道防线）。旧实现三处都只验各自范围，同值空闲时一路通过、
+# 最后一步 compose bind 才失败。
+test_panel_equal_frontend_backend_ports_rejected() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work rc="0" out
+  work=$(mktemp -d)
+
+  # 安装输入：两端口同值 7000 → 拒绝，文案点名两键相同。
+  get_config_params <<< $'7000\n7000\n' >"$work/install-equal.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-01: install input with equal frontend/backend ports must be rejected"
+  grep -q '相同' "$work/install-equal.log" || fail "R18-A2-01: the install rejection must name the equal ports"
+
+  # 前导零同值（07000 与 7000）同样拒绝——字符串比对会漏过。
+  rc="0"
+  get_config_params <<< $'07000\n7000\n' >"$work/install-equal-zero.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-01: leading-zero equal ports (07000 vs 7000) must be rejected"
+
+  # 安装输入正控制：不同端口照常通过（读到数据库选择后以默认
+  # SQLite 完成），端口值逐字保留。
+  rc="0"
+  get_config_params <<< $'6366\n6365\n1\n' >"$work/install-ok.log" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-01: distinct ports must still pass install input"
+  assert_equals "6366" "$FRONTEND_PORT" "R18-A2-01: distinct frontend port must be kept"
+  assert_equals "6365" "$BACKEND_PORT" "R18-A2-01: distinct backend port must be kept"
+)
+
+test_panel_update_equal_ports_rejected() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work rc="0"
+  work=$(mktemp -d)
+  cd "$work"
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=7000\nFRONTEND_PORT=7000\nDB_TYPE=sqlite\n' > .env
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > docker-compose.yml
+  # compose 校验桩：若执行到该步即证明相等性检查漏过，本例必红。
+  run_panel_compose() { touch "$work/compose-called"; return 0; }
+  validate_panel_update_environment >"$work/update-equal.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-01: update with equal ports in .env must be rejected"
+  grep -q '相同' "$work/update-equal.log" || fail "R18-A2-01: the update rejection must name the equal ports"
+  [[ ! -e "$work/compose-called" ]] || fail "R18-A2-01: the equal-port rejection must happen before compose config validation"
+
+  # 更新正控制：不同端口照常通过（走到桩化的 compose 校验）。
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=7000\nFRONTEND_PORT=7001\nDB_TYPE=sqlite\n' > .env
+  rc="0"
+  validate_panel_update_environment >"$work/update-ok.log" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-01: distinct ports must still pass update validation"
+)
+
+test_panel_preflight_equal_ports_rejected() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  BACKEND_PORT=7000
+  FRONTEND_PORT=7000
+  unset PANEL_FORCE_REINSTALL FLMX_INSTANCE
+  # 两端口皆空闲：ss 无输出、docker ps 无输出——旧实现两次探活
+  # 都通过，本例必红。
+  ss() { return 0; }
+  docker() { return 0; }
+  local rc="0" out
+  out=$(panel_preflight_install_conflicts 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-01: preflight with equal ports must be rejected even when both ports are free"
+  [[ "$out" == *"相同"* ]] || fail "R18-A2-01: the preflight rejection must name the equal ports, got: $out"
+  [[ "$out" != *"自动换端口"* ]] || fail "R18-A2-01: equal ports must not fall through to the port-swap offer"
+)
+
 # A2-04 附带钉格（XC-1 指出）：A2-04 本体（.env 读取与 Compose
 # 语义一致）已在他路修好，但 CRLF 形态此前无套件断言——Windows
 # 编辑过的 .env 若把 \r 带进取值，实例 id/DB 类型等比较会整体
@@ -13260,5 +13332,8 @@ test_install_uninstall_verdict_requires_poststate
 test_panel_uninstall_docker_branch_verifies_poststate
 test_delete_self_multifactor_rejects_repo_line_only
 test_report_compose_up_failure_branches
+test_panel_equal_frontend_backend_ports_rejected
+test_panel_update_equal_ports_rejected
+test_panel_preflight_equal_ports_rejected
 
 echo "install script tests passed"

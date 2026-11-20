@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.04"
+SCRIPT_VERSION="20261120.05"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -3108,6 +3108,13 @@ validate_panel_update_environment() {
     return 1
   fi
 
+  # R18-A2-01：与安装路径 get_config_params 同律——两端口相等即
+  # 拒绝（数值比较，前导零同值不漏过）。
+  if (( 10#$backend_port == 10#$frontend_port )); then
+    echo "❌ BACKEND_PORT 与 FRONTEND_PORT 相同（均为 $backend_port）：两端口必须不同，更新终止"
+    return 1
+  fi
+
   configured_db_type=$(get_env_var "DB_TYPE" || true)
   normalized_db_type=$(normalize_db_type "$configured_db_type")
   if [[ -n "$normalized_db_type" && "$normalized_db_type" != "sqlite" && "$normalized_db_type" != "postgres" ]]; then
@@ -4193,6 +4200,17 @@ get_config_params() {
     fi
   done
 
+  # R18-A2-01：两端口相等即拒绝——预检只查“是否被监听”，两端口
+  # 取同一值且空闲时两次都通过，安装在最后一步 compose bind 才
+  # 失败、报错远离输入点。数值比较（前导零输入如 07000 与 7000
+  # 同值，字符串比对会漏过）；更新路径
+  # validate_panel_update_environment 与预检
+  # panel_preflight_install_conflicts 各有一道同律断言。
+  if (( 10#$FRONTEND_PORT == 10#$BACKEND_PORT )); then
+    echo "❌ 前端端口与后端端口相同（均为 $FRONTEND_PORT）：两端口必须不同"
+    return 1
+  fi
+
   echo "请选择数据库类型："
   echo "1. SQLite（默认）"
   echo "2. PostgreSQL"
@@ -4396,6 +4414,15 @@ panel_preflight_install_conflicts() {
   local backend_container frontend_container
   backend_container="${NEW_PANEL_BACKEND_CONTAINER}$(panel_instance_suffix)"
   frontend_container="${NEW_PANEL_FRONTEND_CONTAINER}$(panel_instance_suffix)"
+
+  # R18-A2-01：自冲突第二道防线——两端口相等时监听检查两次都
+  # 通过，换端口分支也修不了（panel_find_free_port 只能换被占用
+  # 的端口），在此直接拒绝并点名两键。数值比较（前导零同值不漏
+  # 过）；调用方 get_config_params 已先验范围，此处只补相等性。
+  if (( 10#$BACKEND_PORT == 10#$FRONTEND_PORT )); then
+    echo "❌ 前端端口与后端端口相同（均为 $BACKEND_PORT）：两端口必须不同，安装未开始（未写任何文件）"
+    return 1
+  fi
 
   if [[ "$(pwd -P)" != "/opt/flmx-panel" && ( -f /opt/flmx-panel/.env || -f /opt/flmx-panel/docker-compose.yml ) ]]; then
     echo "ℹ️ /opt/flmx-panel 下已有另一套面板部署文件（本次安装目录为当前目录，不动它；只有端口或容器名撞上时才需处理）"
