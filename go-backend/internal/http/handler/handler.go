@@ -3243,6 +3243,11 @@ func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *m
 		go func() {
 			nodeIDs, err := h.repo.ListKernelNodeIDs()
 			if err != nil {
+				// R18-B9-03：读节点列表失败不得静默丢弃整轮重推——
+				// goroutine 在回执发出后才跑，失败进不了回执，至少
+				// 须记日志，否则在线节点静默跑旧内核配置至重连，
+				// 与转发重推 R13X-001 的披露口径分裂。
+				log.Printf("backup restore: kernel repush skipped, list kernel nodes failed: %v (kernels keep pre-import config until nodes reconnect)", err)
 				return
 			}
 			for _, nodeID := range nodeIDs {
