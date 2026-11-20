@@ -3346,7 +3346,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		// R18-B4-01：apply 内被跳过的节点（离线/超时）不在
 		// applyErr 里——隧道已落库成功，但这些节点缺整条链/服务。
 		// 跳过须进回执警告并排期重试，不得裸成功。
-		if warnings := h.handleTunnelRuntimeSkipped(runtimeState); len(warnings) > 0 {
+		// R18-R2-F1-03：同口径——未完成证书下发的节点所涉 TLS 段
+		// 以未验证方式建成，也须进回执警告，不得静默。
+		warnings := h.handleTunnelRuntimeSkipped(runtimeState)
+		warnings = append(warnings, h.tunnelTLSLegacyWarnings(runtimeState)...)
+		if len(warnings) > 0 {
 			response.WriteJSON(w, response.OKWithWarning(nil, strings.Join(warnings, "；")))
 			return
 		}
@@ -4117,6 +4121,9 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// 在线节点的超时分叉在失败重推前无人认领；成功/defer 分支
 		// 的警告经下方 respondTunnelUpdateOK 闭包带出。
 		tunnelRuntimeWarnings = h.handleTunnelRuntimeSkipped(runtimeState)
+		// R18-R2-F1-03：未完成证书下发的节点所涉 TLS 段以未验证
+		// 方式建成——与跳过警告同通道进回执，不得静默。
+		tunnelRuntimeWarnings = append(tunnelRuntimeWarnings, h.tunnelTLSLegacyWarnings(runtimeState)...)
 		if applyErr != nil {
 			updateProtocol := "tls"
 			if len(runtimeState.InNodes) > 0 && strings.TrimSpace(runtimeState.InNodes[0].Protocol) != "" {
@@ -7799,6 +7806,14 @@ type tunnelCreateState struct {
 	// receipt and get a retry instead of silently diverging the
 	// data plane. Callers drain it via handleTunnelRuntimeSkipped.
 	SkippedNodes []tunnelRuntimeSkippedNode
+	// TLSLegacyNodes records the nodes whose tunnel certificates
+	// could not be distributed during this apply (never issued
+	// before, still not ready after the ensure attempt), so their
+	// TLS segments render legacy (unverified). Populated by
+	// tunnelTLSReadyForState; create/update receipts surface them
+	// via tunnelTLSLegacyWarnings (R18-R2-F1-03) instead of
+	// silently building an unverified chain.
+	TLSLegacyNodes []tunnelTLSLegacyNode
 }
 
 // tunnelRuntimeSkippedNode is one node whose tunnel runtime
