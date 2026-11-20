@@ -200,6 +200,24 @@ func resolveAllowHost(host string) []string {
 	return out
 }
 
+// acceptProxyProtocolSpoofWarning reports the ClientIP-forgery
+// exposure of a PROXY-protocol inbound without a relay whitelist
+// (OPEN-3): Xray's acceptProxyProtocol is a per-inbound boolean
+// with no source allowlist upstream, and the panel's RelayOnly is
+// advertisement-level only — a direct client can still reach the
+// port and send a forged PROXY header, and the claimed IP then
+// lands in the panel connlog as the client IP (agent parses the
+// Xray access-log line). The whitelist is the network enforcement
+// that keeps direct clients off the port; without it, saving warns
+// instead of refusing — the operator may knowingly run an open
+// relay face, but must not discover the forgery from the logs.
+func acceptProxyProtocolSpoofWarning(row model.NodeInbound) string {
+	if row.AcceptProxyProtocol == 1 && row.RelayWhitelist == 0 {
+		return "已开启获取真实客户端 IP（PROXY protocol）但未开启中转白名单：Xray 不校验 PROXY 头来源，直连客户端可伪造连接日志中的客户端 IP；建议开启中转白名单，仅允许中转节点直连本端口"
+	}
+	return ""
+}
+
 // syncRelayProxyProtocol makes every managed relay forward of an inbound send
 // (or stop sending) PROXY protocol to match the inbound setting.
 // FIX-UDP-FIX5 (R1)：want 不再只看 AcceptProxyProtocol==1——对方接

@@ -374,3 +374,39 @@ func TestInboundRelayCreateSuppressesProxySend(t *testing.T) {
 		t.Fatalf("relay forward to SS must not carry ProxyProtocolSend, got %d", fwd.ProxyProtocolSend)
 	}
 }
+
+// OPEN-3: Xray's acceptProxyProtocol has no source allowlist and
+// the panel's RelayOnly is advertisement-level only, so a
+// PROXY-protocol inbound without a relay whitelist lets any direct
+// client forge the ClientIP recorded in the connlog. Saving such an
+// inbound warns (it does not refuse — the operator may knowingly
+// run an open relay face) so the exposure is disclosed at save
+// time, not discovered from the logs.
+func TestAcceptProxyProtocolSpoofWarning(t *testing.T) {
+	cases := []struct {
+		name string
+		row  model.NodeInbound
+		want bool
+	}{
+		{"pp on, whitelist off warns", model.NodeInbound{AcceptProxyProtocol: 1, RelayWhitelist: 0}, true},
+		{"pp on, whitelist on is quiet", model.NodeInbound{AcceptProxyProtocol: 1, RelayWhitelist: 1}, false},
+		{"pp off, whitelist off is quiet", model.NodeInbound{AcceptProxyProtocol: 0, RelayWhitelist: 0}, false},
+		{"pp off, whitelist on is quiet", model.NodeInbound{AcceptProxyProtocol: 0, RelayWhitelist: 1}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := acceptProxyProtocolSpoofWarning(tc.row)
+			if tc.want && got == "" {
+				t.Fatal("pp on without a relay whitelist must warn, got empty")
+			}
+			if tc.want {
+				if !strings.Contains(got, "白名单") || !strings.Contains(got, "伪造") {
+					t.Fatalf("warning must name the whitelist and the forgery, got %q", got)
+				}
+			}
+			if !tc.want && got != "" {
+				t.Fatalf("must not warn, got %q", got)
+			}
+		})
+	}
+}
