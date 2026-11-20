@@ -79,6 +79,8 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 2. **后端启动日志**：日志只点名文件路径、不记录密码本身。查看命令：`docker logs flmx-panel-backend 2>&1 | grep "initial admin password"`（容器名按实际部署替换），输出会给出一次性文件的完整路径。
 3. **数据卷里的一次性文件**：文件名为 `initial-admin-password.txt`，容器内路径 `/app/data/initial-admin-password.txt`（权限 0600）。在宿主机上先查后端容器实际挂载的数据卷名：<span v-pre>`docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' flmx-panel-backend`</span>；再查该卷的宿主机挂载点：<span v-pre>`docker volume inspect -f '{{.Mountpoint}}' <上一步的卷名>`</span>；最后读 `<挂载点>/initial-admin-password.txt` 即为首登密码。若数据目录不可写（例如漏挂数据卷），后端会改落到可执行文件同级目录或系统临时目录并照常建号，启动日志会点名实际落点路径——以日志为准。
 
+面板日志走标准输出（stdout），由容器运行时收集（`docker logs <后端/前端容器名>` 查看）；`LOG_DIR` 不是面板的有效配置，设置它不会让日志落盘。
+
 **用环境变量指定初始密码（可选）**：在部署目录 `.env` 里设置 `FLMX_ADMIN_PASSWORD=<自选值>` 后再安装（随版 Compose 模板已透传该变量），播种即采用该值、不再生成随机密码也不落一次性文件。该值同样只用于首次登录；已完成播种的部署再改这个变量不会改变现有管理员密码，可在首登改密后把该行从 `.env` 删除。
 
 ::: warning
@@ -301,18 +303,19 @@ sudo systemctl restart caddy
         - "127.0.0.1:6366:80"
   ```
   其中 `!override` 不可省略（省略时新旧两条映射会叠加、宿主端口必然冲突），且需要 Docker Compose 2.20 及以上。保存后在部署目录执行 `docker compose up -d frontend` 生效；自检：`docker compose ps` 里 frontend 的端口应显示为 `127.0.0.1:6366->80`，且从外网直接访问 `http://<服务器IP>:6366` 应不通、经域名访问正常。该 override 文件独立于 `docker-compose.yml`，脚本更新替换主 compose 文件时不会动它。
-- **反代开启访问日志时，先脱敏 query 再落盘**：面板的节点实时连接（`/system-info`）与流量上报（`/flow/*`）把凭据放在 URL 的 query 里——两类凭据共用同一个 `secret` 参数：节点上报时它的值是节点密钥，浏览器打开节点实时连接时它的值是登录 JWT（有效期 7 天）；并不存在单独的 `token` 参数。面板自身的请求日志只记路径、不记 query，但反代的访问日志默认记录完整 URL，开启后这些凭据会以明文写入日志文件，拿到日志即拿到可用凭据。脚本菜单 5 生成的 Caddyfile 已自带过滤式 `log` 块（filter 编码删 `secret` 查询键、JSON 封装、写入 Caddy 默认输出目标），菜单部署已达标、无需另行处理；Caddy 默认不记录请求日志（站点块没有 `log` 指令即不记），手动部署自行启用时在站点块里用 filter 编码删掉 `secret` 这个 query 键（示例里顺带删的 `token` 是防御性冗余：当前没有接口用它传凭据，多删无害，防将来新增面漏网）：
+- **反代开启访问日志时，先脱敏 query 再落盘**：面板的节点实时连接（`/system-info`）与流量上报（`/flow/*`）把凭据放在 URL 的 query 里——两类凭据共用同一个 `secret` 参数：节点上报时它的值是节点密钥，浏览器打开节点实时连接时它的值是登录 JWT（有效期 7 天）；并不存在单独的 `token` 参数。面板自身的请求日志只记路径、不记 query，但反代的访问日志默认记录完整 URL，开启后这些凭据会以明文写入日志文件，拿到日志即拿到可用凭据。脚本菜单 5 生成的 Caddyfile 已自带过滤式 `log` 块（filter 编码删 `secret` 与 `pwd` 两个查询键、JSON 封装、写入 Caddy 默认输出目标），菜单部署已达标、无需另行处理；Caddy 默认不记录请求日志（站点块没有 `log` 指令即不记），手动部署自行启用时在站点块里用 filter 编码删掉 `secret` 与 `pwd` 这两个 query 键（示例里顺带删的 `token` 是防御性冗余：当前没有接口用它传凭据，多删无害，防将来新增面漏网）：
   ```txt
   log {
       format filter {
           request>uri query {
               delete secret
+              delete pwd
               delete token
           }
       }
   }
   ```
-  改完先 `caddy validate --config /etc/caddy/Caddyfile` 校验、再重启 Caddy，自检：在日志文件里执行 `grep -c 'secret=' <日志文件>` 应为 0。用 nginx 时同理：默认 `combined` 格式的 `$request` 含完整 URL，不要对面板站点使用含 `$request`、`$request_uri` 或 `$args` 的日志格式——或直接 `access_log off;`，或定义只记不带 query 的 `$uri` 的格式并引用它：
+  改完先 `caddy validate --config /etc/caddy/Caddyfile` 校验、再重启 Caddy，自检：在日志文件里执行 `grep -c 'secret=' <日志文件>` 与 `grep -c 'pwd=' <日志文件>` 均应为 0。用 nginx 时同理：默认 `combined` 格式的 `$request` 含完整 URL，不要对面板站点使用含 `$request`、`$request_uri` 或 `$args` 的日志格式——或直接 `access_log off;`，或定义只记不带 query 的 `$uri` 的格式并引用它：
   ```nginx
   log_format panel_no_query '$remote_addr - $remote_user [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
   access_log /var/log/nginx/panel.access.log panel_no_query;

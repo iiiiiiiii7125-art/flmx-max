@@ -255,10 +255,20 @@ func (c *Checker) runChecks(ctx context.Context) {
 
 	reportIntervalMs := int64(serviceMonitorReportInterval / time.Millisecond)
 
+	// R18-B11-03：轮次在全部 worker 完成前不算结束——此前 defer 在
+	// runChecks 返回（派生完 worker 即返回）时就把 checking 标志清
+	// 零，守卫只串行化了微秒级的分发循环，下一轮可在本轮 worker
+	// 仍在跑时分发，并发拨号数可达 2 × WorkerLimit。现等本轮
+	// worker 全部完成后再返回（defer 随之清标志）；关机取消时不等
+	// ——ctx.Done 即提前返回，关机时延与修前一致（在途检查仍挂在
+	// c.wg 上由 Stop() 接管，见 R18-B11-04 纪要）。
+	roundWG := sync.WaitGroup{}
 	for i := 0; i < workerLimit; i++ {
 		c.wg.Add(1)
+		roundWG.Add(1)
 		go func() {
 			defer c.wg.Done()
+			defer roundWG.Done()
 			for {
 				select {
 				case <-ctx.Done():
@@ -270,10 +280,18 @@ func (c *Checker) runChecks(ctx context.Context) {
 					ts := time.Now().UnixMilli()
 					result := c.executeCheck(&m, ts, limits)
 
-					// Always update in-memory cache for real-time reads
+					// R18-B11-02：写缓存须与 RunOnce 同式时间戳守卫——
+					// 旧代码无条件覆盖，调度轮可把手动执行的新结果
+					// 覆盖回陈旧的调度结果（RunOnce 侧守卫是单边的）。
+					// lastRun 同理只向前推进，不被旧时间戳回拨
+					//（回拨会让该监控被提前再次调度）。
 					c.mu.Lock()
-					c.latestResults[m.ID] = result
-					c.lastRun[m.ID] = result.Timestamp
+					if existing := c.latestResults[m.ID]; existing == nil || existing.Timestamp <= result.Timestamp {
+						c.latestResults[m.ID] = result
+					}
+					if result.Timestamp > c.lastRun[m.ID] {
+						c.lastRun[m.ID] = result.Timestamp
+					}
 					delete(c.inFlight, m.ID)
 
 					// Only write to DB every 30s per monitor
@@ -292,6 +310,15 @@ func (c *Checker) runChecks(ctx context.Context) {
 				}
 			}
 		}()
+	}
+	roundDone := make(chan struct{})
+	go func() {
+		roundWG.Wait()
+		close(roundDone)
+	}()
+	select {
+	case <-roundDone:
+	case <-ctx.Done():
 	}
 }
 
