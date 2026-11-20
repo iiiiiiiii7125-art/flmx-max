@@ -167,6 +167,165 @@ EOF
   grep -q '^FLMX_POSTGRES_VOLUME=flmx-postgres-data$' "$dir3/.env" || fail "A2-01R: the live-read postgres volume must be pinned once the gate clears"
 )
 
+# R18-A2-10：钉键“有键改写”分支的事故态门——键在但与实读不一
+# 致时旧实现无条件以实挂卷改写 .env；在跑容器本身挂错卷（真库
+# 在键卷里，现挂空的新缺省卷）时改写即把事故态正式化。七幕
+# （SQLite 五幕＋PG 两幕），docker 桩与 A2-01R 同形：卷存在性
+# 以 FIXTURE_VOLROOT/<卷名> 目录在位为准，挂载点仅
+# FIXTURE_MOUNT_OK=1 时可读；容器挂载实读由
+# FIXTURE_SQLITE_VOLUME/FIXTURE_POSTGRES_VOLUME 给定。
+test_panel_pin_keyed_rewrite_accident_gate_r18_a2_10() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  pin_keyed_docker() {
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        if [[ "$3" == "-f" ]]; then
+          [[ "${FIXTURE_MOUNT_OK:-}" == "1" ]] || return 1
+          [[ -d "$FIXTURE_VOLROOT/$5" ]] || return 1
+          printf '%s' "$FIXTURE_VOLROOT/$5"
+          return 0
+        fi
+        [[ -d "$FIXTURE_VOLROOT/$3" ]] || return 1
+        return 0
+      fi
+      if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+        case "$3" in
+          *"/app/data"*) printf '%s' "${FIXTURE_SQLITE_VOLUME:-}" ;;
+          *"/var/lib/postgresql/data"*) printf '%s' "${FIXTURE_POSTGRES_VOLUME:-}" ;;
+          *) printf '' ;;
+        esac
+        return 0
+      fi
+      # docker inspect <容器>（PG L5 格的容器在场判定）恒在场。
+      return 0
+    }
+  }
+
+  # ① SQLite：键卷含库、实挂新缺省空卷 → 中止、键逐字未动。
+  local dir1
+  dir1=$(mktemp -d)
+  cat > "$dir1/.env" <<'EOF'
+DB_TYPE=sqlite
+FLMX_SQLITE_VOLUME=sqlite_data
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  FIXTURE_VOLROOT="$dir1/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  : > "$FIXTURE_VOLROOT/sqlite_data/gost.db"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  local rc="0"
+  ( cd "$dir1" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-10: keyed rewrite must abort when the key volume holds the DB and the live mount is the empty new-default volume"
+  grep -q '资源键改写中止' "$dir1/pin.log" || fail "R18-A2-10: the keyed-rewrite abort must be named in the pin output"
+  grep -q '^FLMX_SQLITE_VOLUME=sqlite_data$' "$dir1/.env" || fail "R18-A2-10: the sqlite key must survive verbatim when the keyed-rewrite gate aborts"
+
+  # ② SQLite：挂载点不可读（未知）→ 中止。
+  local dir2
+  dir2=$(mktemp -d)
+  cp "$dir1/.env" "$dir2/.env"
+  FIXTURE_VOLROOT="$dir2/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  : > "$FIXTURE_VOLROOT/sqlite_data/gost.db"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK=""
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  rc="0"
+  ( cd "$dir2" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-10: keyed rewrite must abort when the volume mountpoints are unreadable (unknown must not read as empty)"
+  grep -q '无法确认' "$dir2/pin.log" || fail "R18-A2-10: the unknown-state abort must name that the volume content could not be determined"
+  grep -q '^FLMX_SQLITE_VOLUME=sqlite_data$' "$dir2/.env" || fail "R18-A2-10: the sqlite key must survive verbatim on the unknown-state abort"
+
+  # ③ SQLite：实挂卷已证含库（键陈旧）→ 放行改写。
+  local dir3
+  dir3=$(mktemp -d)
+  cp "$dir1/.env" "$dir3/.env"
+  FIXTURE_VOLROOT="$dir3/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  : > "$FIXTURE_VOLROOT/flmx-sqlite-data/gost.db"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir3" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R18-A2-10: keyed rewrite must proceed when the live-mounted volume provably holds the DB"
+  grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir3/.env" || fail "R18-A2-10: the sqlite key must be rewritten to the live mount once the gate clears"
+
+  # ④ SQLite：键卷已证空（键指向空卷）→ 放行改写。
+  local dir4
+  dir4=$(mktemp -d)
+  cp "$dir1/.env" "$dir4/.env"
+  FIXTURE_VOLROOT="$dir4/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir4" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R18-A2-10: keyed rewrite must proceed when the key volume is provably empty"
+  grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir4/.env" || fail "R18-A2-10: the sqlite key must be rewritten to the live mount when the key volume is empty"
+
+  # ⑤ SQLite：键卷不存在 → 无数据可护，放行改写。
+  local dir5
+  dir5=$(mktemp -d)
+  cat > "$dir5/.env" <<'EOF'
+DB_TYPE=sqlite
+FLMX_SQLITE_VOLUME=gone_volume
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  FIXTURE_VOLROOT="$dir5/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir5" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R18-A2-10: keyed rewrite must proceed when the key volume does not exist (nonexistent is not unknown)"
+  grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir5/.env" || fail "R18-A2-10: the sqlite key must be rewritten to the live mount when the key volume is gone"
+
+  # ⑥ PG：键卷含 PG_VERSION、实挂新缺省空卷 → 中止、键逐字未动。
+  local dir6
+  dir6=$(mktemp -d)
+  cat > "$dir6/.env" <<'EOF'
+DB_TYPE=postgres
+FLMX_SQLITE_VOLUME=custom_sqlite
+FLMX_POSTGRES_VOLUME=postgres_data
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  FIXTURE_VOLROOT="$dir6/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/postgres_data" "$FIXTURE_VOLROOT/flmx-postgres-data"
+  : > "$FIXTURE_VOLROOT/postgres_data/PG_VERSION"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="custom_sqlite"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  rc="0"
+  ( cd "$dir6" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-10: PG keyed rewrite must abort when the key volume holds PG data and the live mount is the empty new-default volume"
+  grep -q '资源键改写中止' "$dir6/pin.log" || fail "R18-A2-10: the PG keyed-rewrite abort must be named in the pin output"
+  grep -q '^FLMX_POSTGRES_VOLUME=postgres_data$' "$dir6/.env" || fail "R18-A2-10: the postgres key must survive verbatim when the keyed-rewrite gate aborts"
+
+  # ⑦ PG：实挂卷已证含库 → 放行改写。
+  local dir7
+  dir7=$(mktemp -d)
+  cp "$dir6/.env" "$dir7/.env"
+  FIXTURE_VOLROOT="$dir7/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/postgres_data" "$FIXTURE_VOLROOT/flmx-postgres-data"
+  : > "$FIXTURE_VOLROOT/flmx-postgres-data/PG_VERSION"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="custom_sqlite"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  ( cd "$dir7" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R18-A2-10: PG keyed rewrite must proceed when the live-mounted volume provably holds the data"
+  grep -q '^FLMX_POSTGRES_VOLUME=flmx-postgres-data$' "$dir7/.env" || fail "R18-A2-10: the postgres key must be rewritten to the live mount once the gate clears"
+)
+
 # D4-A2-04（R18-A2-04）：.env 安全相关键遇 $ 即 fail-closed——
 # Compose 对未引号/双引号值做 $ 插值，脚本与 Go 面按字面读，读面
 # 分家会让数据门把展开后的真卷判成「无数据卷有数据」。变异自测：
@@ -14080,6 +14239,7 @@ test_install_probe_route_uses_channel_tag_grammar
 test_install_panel_route_gates_and_watchdog
 test_install_panel_force_reinstall_data_gate
 test_panel_pin_accident_gate_unknown_mount_aborts
+test_panel_pin_keyed_rewrite_accident_gate_r18_a2_10
 test_panel_env_dollar_rejected_fail_closed
 test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key

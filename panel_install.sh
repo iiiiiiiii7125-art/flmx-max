@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.14"
+SCRIPT_VERSION="20261121.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -2837,6 +2837,13 @@ print_initial_admin_credentials() {
 # 卷上、真库还在旧卷，只可能是 1.9.8 式事故后未救援的部署；此
 # 时钉键会把事故态正式化、后续自检也以错卷为期望。故 fail-
 # closed 中止并点名两卷与人工钉键方法，由人确认数据所在再钉。
+# 有键改写事故态门（R18-A2-10）：上门的谓词只覆盖缺键形态；有
+# 键＋实读与键不一致时旧实现同样无条件以实挂卷改写——在跑容器
+# 本身挂错卷（真库在键卷里，现挂空的新缺省卷）时改写即把事故
+# 态正式化。故有键分支加同谓词门：实挂恰为新缺省名、键卷存在
+# 且含真实数据（或内容未知）、实挂卷为空（或未知）时中止点名；
+# 其余形态仍以实读为准改写。Go 面 planLegacyResourcePins 的
+# corrections 分支同谓词同处置。
 # PG 格（R1-01-M1 补齐）：同谓词镜像到 PG 卷——无键＋PG 容器实
 # 挂 flmx-postgres-data、且旧名卷 postgres_data 存在并含
 # PG_VERSION（真实 PG 数据目录标记）→ 同标准中止点名。面×卷
@@ -2868,6 +2875,32 @@ panel_pin_missing_resource_keys() {
   sqlite_volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$backend_container" 2>/dev/null || true)
   if [[ -n "$sqlite_key" ]]; then
     if [[ -n "$sqlite_volume" && "$sqlite_volume" != "$sqlite_key" ]]; then
+      # R18-A2-10：有键改写分支的事故态门——无键分支的 A2-01 门
+      # 只覆盖缺键形态；有键时旧实现同样无条件以实挂卷改写 .env
+      # 键。若在跑容器本身挂错卷（真库在 .env 键所指卷里，现挂
+      # 空的新缺省卷），改写即把事故态正式化，且后续自检期望值
+      # 同源于刚改的值、必然通过。故与无键门同谓词：实挂恰为新
+      # 缺省名、键卷存在且含真实数据（或内容未知）、实挂卷为空
+      # （或未知）时 fail-closed 中止点名、请人工确认；其余形态
+      # 仍按现行「实读为准」改写。键卷不存在时无数据可护，直接
+      # 放行改写（panel_volume_file_state 对不存在卷回 2「未
+      # 知」，故先以 docker volume inspect 判存在性，不把「卷
+      # 不存在」误作「内容未知」）。
+      if [[ "$sqlite_volume" == "flmx-sqlite-data$(panel_instance_suffix)" ]] \
+        && docker volume inspect "$sqlite_key" >/dev/null 2>&1; then
+        local sqlite_key_state=0 sqlite_mounted_state=0
+        panel_volume_file_state "$sqlite_key" gost.db || sqlite_key_state=$?
+        panel_volume_file_state "$sqlite_volume" gost.db || sqlite_mounted_state=$?
+        if [[ ("$sqlite_key_state" == "0" || "$sqlite_key_state" == "2") && ("$sqlite_mounted_state" == "1" || "$sqlite_mounted_state" == "2") ]]; then
+          if [[ "$sqlite_key_state" == "0" && "$sqlite_mounted_state" == "1" ]]; then
+            echo "❌ 资源键改写中止：.env 已有 FLMX_SQLITE_VOLUME=$sqlite_key，但在跑后端实际挂载的数据卷是新模板缺省名 $sqlite_volume，且键卷 $sqlite_key 含有 gost.db、现行卷内无 gost.db——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时以实读改写会把事故态正式化。"
+          else
+            echo "❌ 资源键改写中止：.env 已有 FLMX_SQLITE_VOLUME=$sqlite_key，但在跑后端实际挂载的数据卷是新模板缺省名 $sqlite_volume，而键卷 $sqlite_key 或现行卷 $sqlite_volume 的挂载点不可读，无法确认其中是否存有真库 gost.db——按未知处理，不冒「无数据」之名改写正式化可能的事故态。"
+          fi
+          echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在键卷 → 保持 FLMX_SQLITE_VOLUME=$sqlite_key；数据确在现行卷 → FLMX_SQLITE_VOLUME=$sqlite_volume。"
+          return 1
+        fi
+      fi
       echo "⚠️ 资源键冲突：.env 的 FLMX_SQLITE_VOLUME=$sqlite_key 与在跑后端 $backend_container 实际挂载的数据卷 $sqlite_volume 不一致；以实读为准改写为 $sqlite_volume（数据以实读为准，旧值不保留）"
       upsert_env_var .env FLMX_SQLITE_VOLUME "$sqlite_volume" || return 1
     fi
@@ -2919,6 +2952,26 @@ panel_pin_missing_resource_keys() {
   fi
   if [[ -n "$postgres_key" ]]; then
     if [[ -n "$postgres_volume" && "$postgres_volume" != "$postgres_key" ]]; then
+      # R18-A2-10：PG 格有键改写分支的事故态门，与 SQLite 格同
+      # 谓词同处置（实挂恰为新缺省名、键卷存在且含 PG_VERSION
+      # 或内容未知、实挂卷为空或未知时中止；其余形态以实读为准
+      # 改写）。PG bind 形态（实读为空）已由上文 R1-01-L5 中止
+      # 格覆盖，本格只认命名卷实挂。
+      if [[ "$postgres_volume" == "flmx-postgres-data$(panel_instance_suffix)" ]] \
+        && docker volume inspect "$postgres_key" >/dev/null 2>&1; then
+        local postgres_key_state=0 postgres_mounted_state=0
+        panel_volume_file_state "$postgres_key" PG_VERSION || postgres_key_state=$?
+        panel_volume_file_state "$postgres_volume" PG_VERSION || postgres_mounted_state=$?
+        if [[ ("$postgres_key_state" == "0" || "$postgres_key_state" == "2") && ("$postgres_mounted_state" == "1" || "$postgres_mounted_state" == "2") ]]; then
+          if [[ "$postgres_key_state" == "0" && "$postgres_mounted_state" == "1" ]]; then
+            echo "❌ 资源键改写中止：.env 已有 FLMX_POSTGRES_VOLUME=$postgres_key，但在跑 PostgreSQL 容器实际挂载的数据卷是新模板缺省名 $postgres_volume，且键卷 $postgres_key 含有 PG_VERSION（真实 PostgreSQL 数据目录）、现行卷内无 PG_VERSION——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时以实读改写会把事故态正式化。"
+          else
+            echo "❌ 资源键改写中止：.env 已有 FLMX_POSTGRES_VOLUME=$postgres_key，但在跑 PostgreSQL 容器实际挂载的数据卷是新模板缺省名 $postgres_volume，而键卷 $postgres_key 或现行卷 $postgres_volume 的挂载点不可读，无法确认其中是否存有 PG_VERSION（真实 PostgreSQL 数据目录）——按未知处理，不冒「无数据」之名改写正式化可能的事故态。"
+          fi
+          echo "   请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重跑：数据在键卷 → 保持 FLMX_POSTGRES_VOLUME=$postgres_key；数据确在现行卷 → FLMX_POSTGRES_VOLUME=$postgres_volume。"
+          return 1
+        fi
+      fi
       echo "⚠️ 资源键冲突：.env 的 FLMX_POSTGRES_VOLUME=$postgres_key 与在跑 PostgreSQL 容器 $postgres_container 实际挂载的数据卷 $postgres_volume 不一致；以实读为准改写为 $postgres_volume（数据以实读为准，旧值不保留）"
       upsert_env_var .env FLMX_POSTGRES_VOLUME "$postgres_volume" || return 1
     fi
