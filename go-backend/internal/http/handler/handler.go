@@ -2691,7 +2691,22 @@ func decodeJSONWithLimit(body io.ReadCloser, out interface{}, limit int64) error
 	defer body.Close()
 	decoder := json.NewDecoder(http.MaxBytesReader(nil, body, limit))
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(out)
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	// OPEN-11: a single Decode never looks past the first value,
+	// so a body like `{...} garbage` or `{...}{...}` decoded
+	// cleanly while the tail was silently dropped. A second
+	// Decode must hit EOF (trailing whitespace is fine); anything
+	// else means the body carries data this handler never sees.
+	var extra interface{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("decodeJSON: trailing data after JSON value")
+		}
+		return err
+	}
+	return nil
 }
 
 // decodeBackupImportRequest 解码备份导入请求，对未知的顶层备份段容忍：
