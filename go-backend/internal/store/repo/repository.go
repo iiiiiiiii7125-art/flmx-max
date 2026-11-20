@@ -562,6 +562,11 @@ func autoMigrateAll(db *gorm.DB) error {
 		if err := migrateV2NodeInboundPartialUnique(db); err != nil {
 			return err
 		}
+		// R5-B4 v3（R18-C1-01）: chain_tunnel 唯一索引转部分索引
+		// （WHERE port > 0），存量全量索引显式 DROP + CREATE 转换。
+		if err := migrateV3ChainTunnelPartialUnique(db); err != nil {
+			return err
+		}
 		// C12 v4（X04）: 转发查询面普通索引（双后端同口径执行）。
 		if err := migrateC12V4ForwardLookupIndexes(db); err != nil {
 			return err
@@ -631,6 +636,12 @@ func autoMigrateAll(db *gorm.DB) error {
 	// R5-B4 v2（B4/F-003）: node_inbound 唯一索引转部分索引
 	// （WHERE kernel_id > 0），存量全量索引显式 DROP + CREATE 转换。
 	if err := migrateV2NodeInboundPartialUnique(db); err != nil {
+		return err
+	}
+
+	// R5-B4 v3（R18-C1-01）: chain_tunnel 唯一索引转部分索引
+	// （WHERE port > 0），存量全量索引显式 DROP + CREATE 转换。
+	if err := migrateV3ChainTunnelPartialUnique(db); err != nil {
 		return err
 	}
 
