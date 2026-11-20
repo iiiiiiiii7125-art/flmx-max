@@ -69,6 +69,24 @@ func (e Endpoint) selfSigned() bool {
 	return e.Inbound.Security.Type == SecurityTLS && e.Inbound.Security.CertMode == CertModeSelf
 }
 
+// warnSkipCertVerifyRender logs the D-2 downgrade warning for a render
+// path that emits a skip-verification flag (R18-R2-C2-01): share links,
+// Clash YAML, Surge / Loon / QX lines. Before this fix only the two
+// sing-box JSON paths warned, so doc/guide/nodes.md:127's "每次渲染…
+// 都会打一条警告" was false for the other sites. The warning names the
+// artefact, the rendered flag verbatim, and the target address;
+// rendering itself is unchanged (warn-only — refusing to render is
+// scheduled for the next major version, per D-2 decision (b)).
+// NOTE: count-only callers (sub_count.go) run the same renderers, so
+// a warning may also fire while counting a subscription — same as the
+// two sing-box sites since d51d91da. Loon/QX renders of panel inbounds
+// additionally pass through the Clash intermediate (endpointProxy),
+// so those emit the Clash warning too; both name the same target.
+func warnSkipCertVerifyRender(format, renderedFlag, name, target, targetKind string) {
+	log.Printf("kernel: WARNING %s「%s」拨向%s目标 %s，渲染 %s：跳过 TLS 证书校验，目标真实性不受验证，路径上的中间人可冒充目标（下个大版本将改为拒绝渲染；建议给目标入站换可信证书或改用 Xray 内核）",
+		format, name, targetKind, target, renderedFlag)
+}
+
 func hostPort(host string, port int) string {
 	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
 }
@@ -121,6 +139,8 @@ func ShareURI(e Endpoint) (string, bool) {
 				v["alpn"] = strings.Join(in.Security.ALPN, ",")
 			}
 			if e.selfSigned() {
+				// R18-R2-C2-01：VMess 分享链接同样渲染跳过校验，须警告。
+				warnSkipCertVerifyRender("VMess 分享链接", "allowInsecure=1", e.Name, hostPort(e.Host, e.Port), "自签")
 				v["allowInsecure"] = "1"
 			}
 		}
@@ -146,6 +166,8 @@ func ShareURI(e Endpoint) (string, bool) {
 		q := url.Values{}
 		q.Set("sni", in.Security.SNI)
 		if e.selfSigned() {
+			// R18-R2-C2-01：Hysteria2 分享链接同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("Hysteria2 分享链接", "insecure=1", e.Name, hostPort(e.Host, e.Port), "自签")
 			q.Set("insecure", "1")
 		}
 		if lo, hi := e.hopRange(); lo > 0 {
@@ -160,6 +182,8 @@ func ShareURI(e Endpoint) (string, bool) {
 		q.Set("sni", in.Security.SNI)
 		q.Set("udp_relay_mode", "native")
 		if e.selfSigned() {
+			// R18-R2-C2-01：TUIC 分享链接同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("TUIC 分享链接", "allow_insecure=1", e.Name, hostPort(e.Host, e.Port), "自签")
 			q.Set("allow_insecure", "1")
 		}
 		return fmt.Sprintf("tuic://%s:%s@%s?%s#%s", in.Settings.UUID, url.PathEscape(in.Settings.Password),
@@ -177,6 +201,8 @@ func ShareURI(e Endpoint) (string, bool) {
 		q := url.Values{}
 		q.Set("sni", in.Security.SNI)
 		if e.selfSigned() {
+			// R18-R2-C2-01：AnyTLS 分享链接同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("AnyTLS 分享链接", "insecure=1、allowInsecure=1", e.Name, hostPort(e.Host, e.Port), "自签")
 			q.Set("insecure", "1")
 			q.Set("allowInsecure", "1")
 		}
@@ -223,6 +249,8 @@ func addSecurityQuery(q url.Values, e Endpoint) {
 			q.Set("alpn", strings.Join(sec.ALPN, ","))
 		}
 		if e.selfSigned() {
+			// R18-R2-C2-01：VLESS/Trojan 分享链接同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("VLESS/Trojan 分享链接", "allowInsecure=1", e.Name, hostPort(e.Host, e.Port), "自签")
 			q.Set("allowInsecure", "1")
 		}
 	}
@@ -352,6 +380,8 @@ func clashProxy(e Endpoint, mihomo bool) (yamlNode, bool) {
 			p = append(p, yamlField{"reality-opts", ro})
 		}
 		if e.selfSigned() {
+			// R18-R2-C2-01：Clash 配置同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("Clash 配置", "skip-cert-verify: true", e.Name, hostPort(e.Host, e.Port), "自签")
 			p = append(p, yamlField{"skip-cert-verify", true})
 		}
 	}
@@ -572,6 +602,8 @@ func SurgeLine(e Endpoint) (string, bool) {
 	tlsTail := func() []string {
 		t := []string{"sni=" + surgeEscape(in.Security.SNI)}
 		if e.selfSigned() {
+			// R18-R2-C2-01：Surge 行同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("Surge 配置行", "skip-cert-verify=true", e.Name, hostPort(e.Host, e.Port), "自签")
 			t = append(t, "skip-cert-verify=true")
 		}
 		return t
@@ -619,6 +651,8 @@ func SurgeLine(e Endpoint) (string, bool) {
 		}
 		parts = append(parts, "sni="+surgeEscape(in.Security.SNI))
 		if e.selfSigned() {
+			// R18-R2-C2-01：Surge 行同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("Surge 配置行", "skip-cert-verify=true", e.Name, hostPort(e.Host, e.Port), "自签")
 			parts = append(parts, "skip-cert-verify=true")
 		}
 	}
@@ -949,6 +983,8 @@ func clashQUICFamily(e Endpoint) yamlNode {
 	}
 	p = append(p, yamlField{"sni", in.Security.SNI})
 	if e.selfSigned() {
+		// R18-R2-C2-01：Clash QUIC 族配置同样渲染跳过校验，须警告。
+		warnSkipCertVerifyRender("Clash 配置", "skip-cert-verify: true", e.Name, hostPort(e.Host, e.Port), "自签")
 		p = append(p, yamlField{"skip-cert-verify", true})
 	}
 	return p

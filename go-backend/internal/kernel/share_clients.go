@@ -164,6 +164,8 @@ func loonLine(p Proxy) (string, bool) {
 	}
 	tlsTail := func() {
 		if p.flag("skip-cert-verify") {
+			// R18-R2-C2-01：导入 Loon 行同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("Loon 配置行", "skip-cert-verify=true", p.str("name"), hostPort(p.str("server"), p.num("port")), "导入")
 			add("skip-cert-verify=true")
 		}
 		if ro := p.sub("reality-opts"); len(ro) > 0 {
@@ -358,6 +360,8 @@ func qxLine(p Proxy) (string, bool) {
 	}
 	verify := func() {
 		if p.flag("skip-cert-verify") {
+			// R18-R2-C2-01：导入 QX 行同样渲染跳过校验（tls-verification=false），须警告。
+			warnSkipCertVerifyRender("QX 配置行", "tls-verification=false", p.str("name"), hostPort(p.str("server"), p.num("port")), "导入")
 			add("tls-verification=false")
 		} else {
 			add("tls-verification=true")

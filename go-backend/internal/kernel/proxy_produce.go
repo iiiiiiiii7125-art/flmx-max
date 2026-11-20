@@ -82,6 +82,8 @@ func proxyURI(e Endpoint) (string, bool) {
 				v["alpn"] = strings.Join(alpn, ",")
 			}
 			if p.flag("skip-cert-verify") {
+				// R18-R2-C2-01：导入 VMess（Reality）分享链接同样渲染跳过校验，须警告。
+				warnSkipCertVerifyRender("VMess 分享链接", "allowInsecure=1", e.Name, hostPort(e.Host, e.Port), "导入")
 				v["allowInsecure"] = "1"
 			}
 			v["pbk"] = ro.str("public-key")
@@ -102,6 +104,8 @@ func proxyURI(e Endpoint) (string, bool) {
 				v["alpn"] = strings.Join(alpn, ",")
 			}
 			if p.flag("skip-cert-verify") {
+				// R18-R2-C2-01：导入 VMess 分享链接同样渲染跳过校验，须警告。
+				warnSkipCertVerifyRender("VMess 分享链接", "allowInsecure=1", e.Name, hostPort(e.Host, e.Port), "导入")
 				v["allowInsecure"] = "1"
 			}
 		}
@@ -181,6 +185,8 @@ func proxyURI(e Endpoint) (string, bool) {
 				q.Set("alpn", strings.Join(alpn, ","))
 			}
 			if p.flag("skip-cert-verify") {
+				// R18-R2-C2-01：导入 VLESS/Trojan 分享链接同样渲染跳过校验，须警告。
+				warnSkipCertVerifyRender("VLESS/Trojan 分享链接", "allowInsecure=1", e.Name, hostPort(e.Host, e.Port), "导入")
 				q.Set("allowInsecure", "1")
 			}
 		}
@@ -194,6 +200,8 @@ func proxyURI(e Endpoint) (string, bool) {
 		q := url.Values{}
 		setIf(q, "sni", p.serverName())
 		if p.flag("skip-cert-verify") {
+			// R18-R2-C2-01：导入 Hysteria2 分享链接同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("Hysteria2 分享链接", "insecure=1", e.Name, hostPort(e.Host, e.Port), "导入")
 			q.Set("insecure", "1")
 		}
 		setIf(q, "obfs", p.str("obfs"))
@@ -234,6 +242,8 @@ func proxyURI(e Endpoint) (string, bool) {
 			q.Set("alpn", strings.Join(alpn, ","))
 		}
 		if p.flag("skip-cert-verify") {
+			// R18-R2-C2-01：导入 TUIC 分享链接同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("TUIC 分享链接", "allow_insecure=1", e.Name, hostPort(e.Host, e.Port), "导入")
 			q.Set("allow_insecure", "1")
 		}
 		if p.flag("disable-sni") {
@@ -250,6 +260,8 @@ func proxyURI(e Endpoint) (string, bool) {
 		setIf(q, "sni", p.serverName())
 		setIf(q, "fp", p.str("client-fingerprint"))
 		if p.flag("skip-cert-verify") {
+			// R18-R2-C2-01：导入 AnyTLS 分享链接同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("AnyTLS 分享链接", "insecure=1", e.Name, hostPort(e.Host, e.Port), "导入")
 			q.Set("insecure", "1")
 		}
 		return "anytls://" + url.PathEscape(p.str("password")) + "@" + hp + "/?" + q.Encode() + frag, true
@@ -534,6 +546,11 @@ func proxyClashFor(e Endpoint, mihomo bool) (yamlNode, bool) {
 			v = p.str("encryption")
 		}
 		node = append(node, yamlField{k, v})
+	}
+	// R18-R2-C2-01：导入 Clash YAML 经通用键透传渲染 skip-cert-verify
+	//（无显式分支），不补判断即静默——实际下发该标志时警告。
+	if p.flag("skip-cert-verify") {
+		warnSkipCertVerifyRender("Clash 配置", "skip-cert-verify: true", e.Name, hostPort(e.Host, e.Port), "导入")
 	}
 	return node, true
 }
@@ -871,6 +888,8 @@ func proxySurge(e Endpoint) (string, bool) {
 			parts = append(parts, "sni="+surgeEscape(sni))
 		}
 		if p.flag("skip-cert-verify") {
+			// R18-R2-C2-01：导入 Surge 行同样渲染跳过校验，须警告。
+			warnSkipCertVerifyRender("Surge 配置行", "skip-cert-verify=true", e.Name, hostPort(e.Host, e.Port), "导入")
 			parts = append(parts, "skip-cert-verify=true")
 		}
 	}
