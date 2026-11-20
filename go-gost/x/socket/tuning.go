@@ -1094,16 +1094,28 @@ func restoreNICRings(ctx context.Context, snap *tuneKernelSnapshot) ([]string, b
 // clear-to-0 (TL-03) and is named in one consolidated warning,
 // so the fallback stays loud instead of silent. A queue that no
 // longer exists is skipped: there is nothing to write.
-func restoreRPS(snap *tuneKernelSnapshot) []string {
+// The second return reports whether every queue was fully
+// restored; a write failure keeps the snapshot alive for a retry,
+// same as the sysctl and ring legs (R18-R2-D2-01 — the RPS leg
+// used to run after the snapshot was consumed, so a failed RPS
+// write lost the operator mask on retry). An unreadable net dir
+// is a hard failure; a missing one means there are no queues to
+// restore.
+func restoreRPS(snap *tuneKernelSnapshot) ([]string, bool) {
 	ifaces, err := listTuneInterfaces()
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, true
+		}
+		return []string{fmt.Sprintf("枚举网卡失败，RPS 未能恢复: %v", err)}, false
 	}
 	var warnings []string
 	var fallback []string
+	ok := true
 	write := func(path, value string) {
 		if err := tuneWriteSysFile(path, value); err != nil {
 			warnings = append(warnings, fmt.Sprintf("回退 %s 失败: %v", path, err))
+			ok = false
 		}
 	}
 	for _, iface := range ifaces {
@@ -1138,7 +1150,7 @@ func restoreRPS(snap *tuneKernelSnapshot) []string {
 	if len(fallback) > 0 {
 		warnings = append(warnings, fmt.Sprintf("以下队列无调优前 RPS 记录，已清零（运维掩码未恢复）: %s", strings.Join(fallback, ", ")))
 	}
-	return warnings
+	return warnings, ok
 }
 
 // --- rollback --------------------------------------------------------------
@@ -1181,10 +1193,10 @@ func rollbackTuning(ctx context.Context) []string {
 	_, statErr := os.Stat(tuneKernelConfPath)
 	kernelConfPresent := statErr == nil
 	// 1. Files: new model + first-generation leftovers. The
-	// snapshot is consumed in steps 3–4 below, not here: it must
-	// survive until step 3 has read it, and only goes away once
-	// both the sysctl and the ring restores fully succeeded
-	// (R18-D2-04) — a partial restore keeps it for a retry.
+	// snapshot is consumed in steps 3–4 and 6 below, not here: it must
+	// survive until step 3 has read it, and only goes away once the
+	// sysctl, the ring, and the RPS restores all fully succeeded
+	// (R18-D2-04, R18-R2-D2-01) — a partial restore keeps it for a retry.
 	removeTuneFile(tuneKernelConfPath, &warnings)
 	removeTuneFile(tuneLimitsConfPath, &warnings)
 	removeTuneFile(tuneBBRConfPath, &warnings)
@@ -1218,22 +1230,31 @@ func rollbackTuning(ctx context.Context) []string {
 	warnings = append(warnings, sysctlWarnings...)
 	// 4. NIC ring sizes back to the snapshot's per-interface
 	// originals: face ④'s runtime-only write set, restorable only
-	// from the same record step 3 just read. The snapshot is
-	// deleted only when both restores fully succeeded (R18-D2-04);
-	// a partial failure keeps it so a later rollback can retry.
+	// from the same record step 3 just read.
 	ringWarnings, ringsOK := restoreNICRings(ctx, snap)
 	warnings = append(warnings, ringWarnings...)
-	if sysctlOK && ringsOK {
+	// 6. Per-queue steering off: rps_cpus and rps_flow_cnt are a
+	// pair — apply sets both, rollback restores both from the
+	// snapshot when recorded, else clears both (TL-03). This leg
+	// runs BEFORE the snapshot is consumed (R18-R2-D2-01): it used
+	// to run after consumption, so an RPS write failure lost the
+	// operator mask on retry. The snapshot is deleted only when
+	// all three restores fully succeeded (R18-D2-04); a partial
+	// failure keeps it so a later rollback can retry. The sysctl
+	// leg already names the retained snapshot when it fails, so
+	// the note below is only added when the RPS leg is the one
+	// keeping it.
+	rpsWarnings, rpsOK := restoreRPS(snap)
+	warnings = append(warnings, rpsWarnings...)
+	if sysctlOK && ringsOK && rpsOK {
 		if err := os.Remove(tuneKernelSnapshotPath); err != nil && !os.IsNotExist(err) {
 			warnings = append(warnings, fmt.Sprintf("删除调优前快照失败: %v", err))
 		}
+	} else if sysctlOK && ringsOK {
+		warnings = append(warnings, fmt.Sprintf("调优前快照已保留（%s），部分 RPS 队列未能回退，可重试回滚", tuneKernelSnapshotPath))
 	}
 	// 5. MSS clamp rule.
 	tuneMSSClampRemove(ctx)
-	// 6. Per-queue steering off: rps_cpus and rps_flow_cnt are a
-	// pair — apply sets both, rollback restores both from the
-	// snapshot when recorded, else clears both (TL-03).
-	warnings = append(warnings, restoreRPS(snap)...)
 	// 7. Reload whatever conf files remain (other tools' settings).
 	if commandExists("sysctl") {
 		_, _ = tuneCommand(ctx, "sysctl", "--system")

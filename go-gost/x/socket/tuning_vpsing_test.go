@@ -610,6 +610,64 @@ func TestRollbackRestoresRPSMasksFromSnapshot(t *testing.T) {
 	}
 }
 
+// TestRollbackKeepsSnapshotWhenRPSRestoreFails is the R18-R2-D2-01
+// gate: the D2-04 consumption gate covered only the sysctl and ring
+// legs, while the RPS restore ran after the snapshot was already
+// deleted — an RPS write failure lost the operator mask on retry.
+// The RPS leg now joins the gate: a failed RPS write keeps the
+// snapshot, and a retry after the failure clears consumes it.
+func TestRollbackKeepsSnapshotWhenRPSRestoreFails(t *testing.T) {
+	fakeProcSys(t, "reno cubic bbr")
+	stubTuneCommands(t, map[string]bool{})
+	q := filepath.Join(tuneNetDir, "eth0", "queues", "rx-0")
+	if err := os.MkdirAll(q, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(q, "rps_cpus"), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(q, "rps_flow_cnt"), []byte("123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyNICTuning(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Break the rps_cpus write: replace the file with a directory,
+	// so the restore write fails even as root (a chmod would not).
+	cpusPath := filepath.Join(q, "rps_cpus")
+	if err := os.Remove(cpusPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cpusPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	warnings := rollbackTuning(context.Background())
+	joined := strings.Join(warnings, "\n")
+	if !strings.Contains(joined, "rps_cpus") || !strings.Contains(joined, "快照已保留") {
+		t.Fatalf("warnings = %v, want the failed RPS write named plus the snapshot-retained note", warnings)
+	}
+	if _, err := os.Stat(tuneKernelSnapshotPath); err != nil {
+		t.Fatalf("snapshot must survive a failed RPS restore for a retry, stat: %v", err)
+	}
+	// Retry with the write working: the operator mask restores and
+	// the snapshot is consumed.
+	if err := os.RemoveAll(cpusPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cpusPath, []byte("ff\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if warnings := rollbackTuning(context.Background()); len(warnings) != 0 {
+		t.Fatalf("retry rollback warnings = %v, want none", warnings)
+	}
+	if b, _ := os.ReadFile(cpusPath); strings.TrimSpace(string(b)) != "1" {
+		t.Fatalf("rps_cpus after retry = %q, want operator mask 1", b)
+	}
+	if _, err := os.Stat(tuneKernelSnapshotPath); !os.IsNotExist(err) {
+		t.Fatal("snapshot must be consumed once the restore fully succeeds")
+	}
+}
+
 // TestKernelSnapshotFailSafe covers the TL-02 fail-safe contract:
 // a damaged or missing snapshot never fails silently — rollback
 // restores the scripted headline defaults, names every unrestored

@@ -376,3 +376,36 @@ func TestApplyRestartScheduleRemovesServiceWhenTimerWriteFails(t *testing.T) {
 		}
 	}
 }
+
+// R18-R2-D2-04: the D2-08 rollback deleted the service file
+// unconditionally when the timer write failed — including a
+// pre-existing service unit with different (heterogeneous)
+// content, e.g. a previous version's rendering. A failed setting
+// change must restore the old bytes, not dismantle a previously
+// working schedule; only a service file this apply created may be
+// removed again.
+func TestApplyRestartScheduleRestoresExistingServiceWhenTimerWriteFails(t *testing.T) {
+	stubRestartScheduleEnv(t)
+	setting := restartScheduleSetting{Enabled: true, Time: "04:00", JitterMinutes: 0}
+	dir := restartScheduleUnitDir
+	oldContent := "[Unit]\nDescription=OLD restart service\n\n[Service]\nType=oneshot\nExecStart=/bin/systemctl restart flux_agent.service\n"
+	servicePath := filepath.Join(dir, restartServiceUnitName)
+	if err := os.WriteFile(servicePath, []byte(oldContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Block the timer write: its path is a directory.
+	if err := os.MkdirAll(filepath.Join(dir, restartTimerUnitName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := applyRestartSchedule(context.Background(), setting)
+	if err == nil {
+		t.Fatal("apply must fail when the timer path is a directory")
+	}
+	b, err := os.ReadFile(servicePath)
+	if err != nil {
+		t.Fatalf("failed apply must not delete the pre-existing service unit: %v", err)
+	}
+	if string(b) != oldContent {
+		t.Fatalf("failed apply must restore the pre-existing service unit byte for byte, got:\n%s", b)
+	}
+}

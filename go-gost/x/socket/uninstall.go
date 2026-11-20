@@ -242,7 +242,16 @@ type uninstallState struct {
 	Reason     string                `json:"reason,omitempty"`
 	AckFlushed bool                  `json:"ackFlushed"`
 	Reported   bool                  `json:"reported"`
-	UpdatedAt  string                `json:"updatedAt"`
+	// PanelAddr / PanelSecret carry the panel endpoint + node secret
+	// across an external restart (R18-R2-D2-02): the wipe deletes
+	// config.json, so a restarted container holds no credentials to
+	// reconnect with — without these the stored final state could
+	// never be re-reported. Same 0600 file that already holds the
+	// uninstall record; empty for states stored before the fix (or
+	// from a no-secret reporter), which simply idle as before.
+	PanelAddr   string `json:"panelAddr,omitempty"`
+	PanelSecret string `json:"panelSecret,omitempty"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 // uninstallOutcome is the judged result of one execution pass.
@@ -378,6 +387,14 @@ func (w *WebSocketReporter) handleUninstallAgent(data interface{}, requestID str
 		RequestID: requestID,
 		State:     "acked",
 	}
+	// R18-R2-D2-02: capture the panel credentials BEFORE any
+	// destructive step — the wipe deletes config.json, so only the
+	// state file (next to the binary, outside the wiped data dir)
+	// can carry them across an external restart. Empty when the
+	// reporter was built without an address (local no-secret
+	// form); the restart path then just idles as before.
+	st.PanelAddr = w.addr
+	st.PanelSecret = w.secret
 	// 终局意图先落盘再执行任何自删类动作（「能报必报」的地基：
 	// 进程在执行中死掉，重连补报靠这份状态收敛为 failed）。
 	saveUninstallState(st)
@@ -586,6 +603,67 @@ func (w *WebSocketReporter) flushPendingUninstallResult() {
 	if w.reportUninstallFinal(st) {
 		st.Reported = true
 		saveUninstallState(st)
+	}
+}
+
+// FlushPendingUninstallAfterRestart makes one bounded attempt to
+// deliver a stored-but-unreported uninstall final state after the
+// process was restarted by an external cause (R18-R2-D2-02:
+// host reboot, `docker restart`, OOM kill during the D2-03 wait).
+// The restarted process holds no config.json (wiped) and no live
+// connection; the panel address + secret persisted in the state
+// file are the only credentials it has. It dials once with those
+// credentials and lets the normal reconnect flush deliver the
+// stored state (final, or interrupted → failed/interrupted).
+//
+// It returns true when the stored state is now reported. It never
+// loops: at most one dial + one flush, capped by timeout, and it
+// never blocks the caller past timeout — a timed-out attempt may
+// still complete in the background, but it never retries. A state
+// stored before the fix (no credentials), an already-reported
+// state, or an unknown state returns false immediately without
+// dialing.
+func FlushPendingUninstallAfterRestart(timeout time.Duration) bool {
+	st, ok := loadUninstallState()
+	if !ok || st.Reported || st.PanelAddr == "" || st.PanelSecret == "" {
+		return false
+	}
+	switch st.State {
+	case "succeeded", "failed", "acked", "executing":
+	default:
+		return false
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	done := make(chan bool, 1)
+	go func() {
+		w := NewWebSocketReporter("", st.PanelSecret)
+		w.addr = st.PanelAddr
+		w.secret = st.PanelSecret
+		if err := w.connect(); err != nil {
+			fmt.Printf("⚠️ 重启后卸载终局补报连接面板失败: %v\n", err)
+			done <- false
+			return
+		}
+		defer w.Stop()
+		// connect() already spawned the reconnect flush; wait for
+		// it to mark the stored state reported.
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			if cur, ok := loadUninstallState(); ok && cur.Reported {
+				done <- true
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		done <- false
+	}()
+	select {
+	case ok := <-done:
+		return ok
+	case <-time.After(timeout):
+		return false
 	}
 }
 

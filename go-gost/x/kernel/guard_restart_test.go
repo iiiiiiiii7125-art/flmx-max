@@ -182,8 +182,8 @@ func TestApplyRollbackResyncFailureStopsGuardedKernel(t *testing.T) {
 	if string(cfg) != "cfg-v1" {
 		t.Fatalf("rollback must still restore the previous files, config = %q", cfg)
 	}
-	if got := countMarkerLines(t, marker, "start-ok"); got != 2 {
-		t.Fatalf("rollback must have restarted the previous config once before the guard failure stopped it, got %d working starts", got)
+	if got := countMarkerLines(t, marker, "start-ok"); got != 1 {
+		t.Fatalf("rollback must never start the guarded previous config when the pre-start re-sync fails (R18-R2-D3-02), got %d working starts", got)
 	}
 	if len(stub.scripts) != 2 {
 		t.Fatalf("the failing re-sync must not append a script, got %d applied scripts", len(stub.scripts))

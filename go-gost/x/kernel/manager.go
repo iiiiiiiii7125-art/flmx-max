@@ -1502,8 +1502,15 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) error 
 	// The rolled-back request owns collection posture again.
 	m.applyConnLog(inst, prev.req)
 	m.stopProcesses(inst)
-	m.startProcesses(inst)
-	m.waitStable(prev.req.Type)
+	// R18-R2-D3-02: the ruleset re-sync runs BEFORE the restored
+	// processes start — same order as Apply and
+	// syncGuardBeforeRestart. Syncing after startProcesses +
+	// waitStable left the guarded previous config listening under
+	// the NEW request's rules for the whole probe window
+	// (typical ~1.5s, up to ~11.5s on a slow-restoring kernel).
+	// A guarded rollback target whose rules cannot be installed
+	// is never started at all; the processes are already stopped
+	// here, so a guard failure just returns without starting.
 	// R18-D3-01: the nft table still carries the NEW request's rules
 	// (Apply synced them before the new config failed to start).
 	// Re-sync against the rolled-back request now — otherwise a
@@ -1517,19 +1524,20 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) error 
 		if reqNeedsNftGuard(prev.req) {
 			// Same calibre as Apply's startBlocked: a guarded
 			// kernel must never listen while its rules are not
-			// installed — stop the just-restored processes and
-			// report the guard failure.
-			log.Printf("[flmx] 回滚后 nft 规则重同步失败，已停止刚恢复的受保护内核: %v", syncErr)
+			// installed — report the guard failure without
+			// starting the just-restored processes.
+			log.Printf("[flmx] 回滚前 nft 规则重同步失败，受保护内核保持停止: %v", syncErr)
 			guardErr := nftGuardFailure(prev.req, syncErr)
 			m.setErr(inst, guardErr)
-			m.stopProcesses(inst)
 			return guardErr
 		}
 		// Counting alone is best-effort: log it and let the
 		// verify loop rebuild the table.
-		log.Printf("[flmx] 回滚后 nft 规则重同步失败（计数缺失，下轮自检重建）: %v", syncErr)
-		inst.logs.add("[flmx] 回滚后流量计数规则重同步失败: " + syncErr.Error())
+		log.Printf("[flmx] 回滚前 nft 规则重同步失败（计数缺失，下轮自检重建）: %v", syncErr)
+		inst.logs.add("[flmx] 回滚前流量计数规则重同步失败: " + syncErr.Error())
 	}
+	m.startProcesses(inst)
+	m.waitStable(prev.req.Type)
 	return nil
 }
 

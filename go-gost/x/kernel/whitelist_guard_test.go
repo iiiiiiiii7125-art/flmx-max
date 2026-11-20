@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Inbound whitelist fail-closed tests. A whitelisted port is only
@@ -22,6 +23,10 @@ type whitelistNftStub struct {
 	tableGone     bool // "list table" fails even after a successful load
 	available     bool
 	scripts       []string
+	// scriptTimes records when each applied script landed, in the
+	// same order as scripts (R18-R2-D3-02: proves a re-sync
+	// happened before — not after — the process it guards).
+	scriptTimes []time.Time
 }
 
 func stubWhitelistNft(t *testing.T) *whitelistNftStub {
@@ -36,6 +41,7 @@ func stubWhitelistNft(t *testing.T) *whitelistNftStub {
 				return nil, errors.New("nft load failed (stub)")
 			}
 			s.scripts = append(s.scripts, stdin)
+			s.scriptTimes = append(s.scriptTimes, time.Now())
 			return nil, nil
 		case strings.HasPrefix(joined, "list table"):
 			if s.tableGone || len(s.scripts) == 0 {
