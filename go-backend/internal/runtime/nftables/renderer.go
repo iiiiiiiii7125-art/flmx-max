@@ -221,12 +221,47 @@ func isStrictHostnameLabel(label string) bool {
 	return true
 }
 
+// ValidateBindIPTargetFamily rejects a BindIP/target pair whose
+// address families differ (R18-C3-03): v6 BindIP + v4 target (or
+// the reverse) renders `ip6 daddr … dnat ip to …`, which nft
+// refuses with `conflicting protocols: ip6 vs. ip` — and because
+// the whole node sync is one nft batch, a single such forward
+// froze the entire node's sync. Either side without a parseable
+// family (empty BindIP, hostname BindIP/target) cannot be judged
+// and is skipped: hostname BindIP is R18-C3-04, out of scope here.
+func ValidateBindIPTargetFamily(bindIP, targetHost string) error {
+	bindFamily, bindIPNorm, ok := bindIPFamilyIP(bindIP)
+	if !ok {
+		return nil
+	}
+	targetFamily := nftAddressFamily(targetHost)
+	if targetFamily == "" {
+		return nil
+	}
+	if bindFamily == targetFamily {
+		return nil
+	}
+	bindName := "IPv4"
+	targetName := "IPv4"
+	if bindFamily == "ip6" {
+		bindName = "IPv6"
+	}
+	if targetFamily == "ip6" {
+		targetName = "IPv6"
+	}
+	return fmt.Errorf("nftables 监听IP %s（%s）与目标地址 %s（%s）地址族不一致：nft 会以 conflicting protocols 拒绝整批规则，请把监听IP与目标地址改为同一地址族", bindIPNorm, bindName, strings.Trim(strings.TrimSpace(targetHost), "[]"), targetName)
+}
+
 // ValidatePlan 校验计划内每条规则的 TargetHost（C3-01），错误点名
 // 出错的转发 ID。Manager.Reconcile 在渲染与下发之前调用，非法计划
 // 整单拒绝、脚本不下发节点。
 func ValidatePlan(plan NodePlan) error {
 	for _, rule := range plan.Rules {
 		if err := ValidateTargetHost(rule.TargetHost); err != nil {
+			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
+		}
+		// R18-C3-03：BindIP 与目标地址族混用整单拒绝（见上）。
+		if err := ValidateBindIPTargetFamily(rule.BindIP, rule.TargetHost); err != nil {
 			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
 		}
 	}

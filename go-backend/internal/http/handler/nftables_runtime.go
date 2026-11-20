@@ -88,7 +88,23 @@ func (h *Handler) tunnelUsesNftables(tunnelID int64) (bool, []int64, error) {
 	return false, entryNodeIDs, nil
 }
 
-func (h *Handler) validateNftablesForwardRequest(tunnel *tunnelRecord, remoteAddr string, entryNodeIDs []int64) error {
+// effectiveNftBindIP resolves the BindIP the intake family check
+// must judge (R18-C3-03): an explicitly submitted inIp wins,
+// otherwise the forward's stored per-port inIp — editing only the
+// target must not slip past the intake while a v6 inIp stays stored.
+func effectiveNftBindIP(req map[string]interface{}, oldPorts []forwardPortRecord) string {
+	if raw, ok := req["inIp"]; ok {
+		return strings.TrimSpace(asString(raw))
+	}
+	for _, fp := range oldPorts {
+		if s := strings.TrimSpace(fp.InIP); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func (h *Handler) validateNftablesForwardRequest(tunnel *tunnelRecord, remoteAddr string, entryNodeIDs []int64, bindIP string) error {
 	if tunnel == nil {
 		return errors.New("隧道不存在")
 	}
@@ -105,6 +121,14 @@ func (h *Handler) validateNftablesForwardRequest(tunnel *tunnelRecord, remoteAdd
 	ip := net.ParseIP(strings.Trim(strings.TrimSpace(target.Host), "[]"))
 	if ip == nil {
 		return errors.New("nftables 节点仅支持 IP 目标地址")
+	}
+	// R18-C3-03：监听IP 与目标地址族混用（v6 inIp + v4 目标或
+	// 反之）渲染出的规则集会被 nft 以 conflicting protocols 整批
+	// 拒绝，一条这样的转发会把整节点 sync 永久冻住。intake 在此
+	// 拒收；无 BindIP 在手的调用点传 ""，由渲染层 ValidatePlan
+	// 兜底（恢复/导入面同样过该门）。
+	if err := runtimenft.ValidateBindIPTargetFamily(bindIP, target.Host); err != nil {
+		return err
 	}
 	// L2（AUDIT-HIST 域外观察，总协调裁定）：DNAT 到回环目标的包在
 	// 入口节点上命中规则后仍会被内核丢弃（route_localnet=0 时发往
@@ -381,7 +405,10 @@ func (h *Handler) buildNftablesNodePlanWithOverrides(nodeID int64, exclude map[i
 		if len(entryNodeIDs) != 1 || entryNodeIDs[0] != nodeID {
 			continue
 		}
-		if err := h.validateNftablesForwardRequest(tunnel, forward.RemoteAddr, entryNodeIDs); err != nil {
+		// R18-C3-03：此处 BindIP 按端口行才有（见下方 fp.InIP），
+		// 逐转发校验时无值可传，传 ""；混用族由渲染层 ValidatePlan
+		// 在 Reconcile 前整单拦截并点名转发。
+		if err := h.validateNftablesForwardRequest(tunnel, forward.RemoteAddr, entryNodeIDs, ""); err != nil {
 			return runtimenft.NodePlan{}, nil, err
 		}
 		ports, err := h.listForwardPorts(forward.ID)

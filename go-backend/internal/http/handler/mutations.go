@@ -5727,8 +5727,11 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		respondInternalError(w, "forwardCreate: tunnelUsesNftables failed", err)
 		return
 	}
+	// R18-C3-03：intake 的族一致性校验要提交的 inIp；此处先读，
+	// 下方剥离/校验复用同一值（不再重读）。
+	inIp := strings.TrimSpace(asString(req["inIp"]))
 	if isNftTunnel {
-		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes); err != nil {
+		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes, inIp); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
@@ -5747,7 +5750,7 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	inIp := strings.TrimSpace(asString(req["inIp"]))
+	inIp = strings.TrimSpace(asString(req["inIp"]))
 	// R30-FIX-F01：intake 剥离含 :port 的 inIp（与 buildTunnelInIP
 	// 同口径复用 stripShareHostPort，R25 口径）。节点显式字段含
 	// :port 时前端下拉会原样提交该值；不剥离则原值落库，下发层
@@ -5938,7 +5941,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isNftTunnel {
-		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes); err != nil {
+		// R18-C3-03：intake 按生效监听IP 校验族一致：显式提交的
+		// inIp 优先，否则用存量端口行的 inIp（只改目标时不得漏检）。
+		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes, effectiveNftBindIP(req, oldPorts)); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}

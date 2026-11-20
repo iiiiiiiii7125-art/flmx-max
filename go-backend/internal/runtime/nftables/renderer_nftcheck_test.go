@@ -44,9 +44,10 @@ func TestRenderTablePassesNftCheck(t *testing.T) {
 		{
 			// 注意：v6 用例必须用 v6 目标地址——v6 BindIP + v4 目标的
 			// 混用组合渲染出的 `ip6 daddr … dnat ip to …` 会被 nft
-			// 以 `conflicting protocols: ip6 vs. ip` 拒绝，那是
-			// A4-005 混用族组合的另一处独立缺陷（不在 R-B01-01
-			// “渲染顺序一行”范围内，已另行上报），不能由本门覆盖。
+			// 以 `conflicting protocols: ip6 vs. ip` 拒绝；该组合
+			// 已由 R18-C3-03 在 intake（validateNftablesForward-
+			// Request）与渲染（ValidatePlan）双点拦截，见
+			// fix_c3_03_test.go，本门只覆盖合法的同族组合。
 			name: "with-bind-ipv6",
 			plan: NodePlan{
 				NodeID: 10,
