@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.12"
+SCRIPT_VERSION="20261120.13"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -5533,6 +5533,12 @@ migrate_to_postgres() {
         fi
       done
     fi
+    # R18-A2-13：预处理在实况数据卷内建的 gost-migrate.db（全库
+    # 副本）只在成功路径清理；失败回滚经本函数时不删，残留会撑
+    # 大后续备份（下次 backup_sqlite_for_update 整目录拷走）。
+    # 与成功路径同命令、同样 || true 兜底（卷/镜像异常不推翻
+    # 回滚本身）。
+    docker run --rm -v "$sqlite_volume":/sqlite "$FLMX_MIGRATE_ALPINE_IMAGE" rm -f /sqlite/gost-migrate.db 2>/dev/null || true
   }
 
   # PG 三键是切换凭据面：任一写入失败即以快照回写 .env 后中止

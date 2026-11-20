@@ -1021,16 +1021,19 @@ test_panel_migrate_images_pinned_to_digest() (
   assert_equals "dimitri/pgloader:v3.6.7@sha256:d29ea680cf1aaaf7269690a922dd69167567b91b35e9c48a0b54a99cef96c0ed" \
     "$FLMX_MIGRATE_PGLOADER_IMAGE" "R18-A2-02: the pgloader migration image must be pinned to the verified digest"
 
-  # 6 处 docker run 逐行核：每行须引用两常量之一（常量自带 digest），
+  # 8 处 docker run 逐行核：每行须引用两常量之一（常量自带 digest），
   # 不得出现字面未钉选镜像名。
   local run_lines bad
   run_lines=$(grep -n 'docker run -' "$ROOT_DIR/panel_install.sh")
   [[ -n "$run_lines" ]] || fail "R18-A2-02: no docker run lines found in panel_install.sh (premise failure)"
   bad=$(printf '%s\n' "$run_lines" | grep -v 'FLMX_MIGRATE_\(ALPINE\|PGLOADER\)_IMAGE' || true)
   [[ -z "$bad" ]] || fail "R18-A2-02: docker run lines must use the pinned image constants, unpinned: $bad"
-  # 计数：迁移 docker run 恰 6 处，新增调用点而不钉选即红（计数漂移
-  # 本身也是信号，改计数时须同步钉选新调用点）。
-  assert_equals "6" "$(printf '%s\n' "$run_lines" | grep -c .)" "R18-A2-02: panel_install.sh must have exactly 6 docker run call sites"
+  # 计数：迁移 docker run 恰 8 处，新增调用点而不钉选即红（计数漂移
+  # 本身也是信号，改计数时须同步钉选新调用点）。第 7 处是 R18-A2-05
+  # 的回滚 SQLite 恢复（wipe-then-copy），第 8 处是 R18-A2-13 在
+  # migrate_restore_snapshot 末尾补的 gost-migrate.db 清理（与成功
+  # 路径同命令、同常量）。
+  assert_equals "8" "$(printf '%s\n' "$run_lines" | grep -c .)" "R18-A2-02: panel_install.sh must have exactly 8 docker run call sites"
   if printf '%s\n' "$run_lines" | grep -q 'pgloader:latest'; then
     fail "R18-A2-02: dimitri/pgloader:latest must not appear as a docker run image"
   fi
@@ -8744,6 +8747,71 @@ test_panel_migrate_postgres_rollbacks() (
   [[ ! -e .env.pre-postgres-migration ]] || fail "L2-02: successful migration must delete the env snapshot"
 )
 
+# R18-A2-13：迁移失败时 gost-migrate.db（全库副本）残留在实况
+# 数据卷内——旧实现只在成功路径清理，回滚口 migrate_restore_
+# snapshot 不删，残留会撑大后续备份。pgloader 失败一幕：夹具卷
+# 预置 gost.db 与 gost-migrate.db，docker 桩只执行单命令清理
+# 载荷（行尾锚 ` rm -f /sqlite/gost-migrate.db`；预处理/对账的
+# sh -c 载荷内含同串但不在行尾，不误执行），断言回滚后副本已
+# 删、源库未动；旧实现回滚不清理，本例必红。
+test_panel_migrate_rollback_cleans_gost_migrate_db() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cd "$work"
+  printf 'JWT_SECRET=<redacted>\nDB_TYPE=sqlite\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\n' > .env
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > docker-compose.yml
+  cp .env env-original
+  mkdir -p "$work/vol" "$work/flags"
+  printf 'live-db' > "$work/vol/gost.db"
+  printf 'migrate-copy' > "$work/vol/gost-migrate.db"
+  FIXTURE_FLAGS="$work/flags"
+  FIXTURE_VOL="$work/vol"
+
+  check_docker() { DOCKER_CMD="fixture_compose"; return 0; }
+  fixture_compose() {
+    case "$*" in
+      "down") [[ ! -f "$FIXTURE_FLAGS/down-fail" ]] ;;
+      "up -d postgres backend frontend") [[ ! -f "$FIXTURE_FLAGS/final-up-fail" ]] ;;
+      *) return 0 ;;
+    esac
+  }
+  docker() {
+    case "$1" in
+      ps)
+        printf '%s\n' "flux-panel-postgres" "flux-panel-backend" "vite-frontend"
+        return 0
+        ;;
+      inspect)
+        case "$*" in
+          *Health.Status*) printf 'healthy\n' ;;
+        esac
+        return 0
+        ;;
+    esac
+    case "$*" in
+      *" rm -f /sqlite/gost-migrate.db")
+        rm -f "$FIXTURE_VOL/gost-migrate.db"
+        return 0
+        ;;
+      *pgloader*) [[ ! -f "$FIXTURE_FLAGS/pgloader-fail" ]] ;;
+      *) return 0 ;;
+    esac
+  }
+  sleep() { :; }
+
+  : > "$work/flags/pgloader-fail"
+  local rc="0"
+  migrate_to_postgres >"$work/act.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-13: pgloader failure must fail the migration"
+  [[ ! -e "$work/vol/gost-migrate.db" ]] || fail "R18-A2-13: rollback must remove gost-migrate.db from the live data volume"
+  [[ -f "$work/vol/gost.db" ]] || fail "R18-A2-13: rollback must not touch the live gost.db"
+  diff -q env-original .env >/dev/null || fail "R18-A2-13: pgloader failure must restore .env from the snapshot"
+  rm -rf "$work"
+)
+
 # R3-F7-01: 迁移的健康等待必须按部署 .env 的身份名查容器——旧实
 # 现只把后端/前端名读进 local、PG 名从未自 .env 读过，两等待函数
 # 从全局重导恒落 DEFAULT 旧名（flux-panel-*），flmx 命名部署在 PG
@@ -13034,6 +13102,7 @@ test_install_script_download_resumes_across_routes
 test_install_script_resolve_budget_enforced
 test_install_script_uppercase_sha256_accepted
 test_panel_migrate_postgres_rollbacks
+test_panel_migrate_rollback_cleans_gost_migrate_db
 test_panel_migrate_waits_use_deployment_container_names
 test_panel_ownership_predicates_matrix
 test_panel_resolve_refuses_foreign_panel_deployment
