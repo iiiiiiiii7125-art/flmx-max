@@ -1107,6 +1107,11 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log() (
   setup_subscription_front_domain <<< "sub.example.com" >/dev/null || \
     fail "§9.6: the menu 6 run should succeed"
   assert_equals "2" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "R18-A2-12: both the panel block and the menu 6 block must carry the secret filter"
+
+  # R18-R2-B1-01 / R18-B1-02：sub_store 弃用 GET 窗口的口令走 pwd
+  # 查询串（Sunset 2027-01-17），菜单 5/6 两处 filter 只删 secret
+  # 时 pwd 明文进 Caddy 日志；两处须同删 pwd，全文件应出现两次。
+  assert_equals "2" "$(grep -c 'delete pwd' "$CADDYFILE_PATH")" "R18-B1-02: both the panel block and the menu 6 block must delete the pwd query parameter from the access log"
 )
 
 # R18-A2-03：迁移的 gost.db.bak 必须是 0600 的全库副本——旧实现

@@ -1719,12 +1719,16 @@ $DOMAIN {
     # 会在下方 validate 环节明确失败并回滚，不会静默带病生
     # 效）。注：log 指令同时启用该站点的访问日志（JSON 输出
     # 到 Caddy 默认日志目标），这是本缓解的既定形态。
+    # R18-B1-02：同删 pwd——sub_store 弃用 GET 窗口的口令走
+    # ?pwd= 查询串（Sunset 2027-01-17），只删 secret 时口令
+    # 明文进 Caddy 日志。
     log {
         format filter {
             wrap json
             fields {
                 request>uri query {
                     delete secret
+                    delete pwd
                 }
             }
         }
@@ -1860,12 +1864,15 @@ $SUB_DOMAIN {
     # 到同一前端，面板 WS 握手可经该域名到达，secret 查询参数
     # 须同样从访问日志中删除（老版本 Caddy 会在下方 validate
     # 环节明确失败并回滚，不会静默带病生效）。
+    # R18-B1-02：同删 pwd（与菜单 5 同口径，sub_store ?pwd=
+    # 口令同样经此域名到达）。
     log {
         format filter {
             wrap json
             fields {
                 request>uri query {
                     delete secret
+                    delete pwd
                 }
             }
         }
