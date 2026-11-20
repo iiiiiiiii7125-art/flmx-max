@@ -2142,6 +2142,12 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 		Options: string(options)}
 	source := h.subRenderEndpoints(draft, rows)
 	opts := req.Options.options()
+	// R18-B5-01：预览的 formatSkipped 与列表 NodeCount 同口径——
+	// sing-box 1.14+ 含 Snell 导入、1.13+ 含 Naive；不置这两旗时
+	// 预览会把受支持的 Snell/Naive 节点误报为 sing-box 不支持。
+	// ApplySubOptions/FilterEndpoints 只用 Lines/RelayIDs，不受此影响。
+	opts.SingboxSnell = true
+	opts.SingboxNaive = true
 	result := kernel.ApplySubOptions(source, opts)
 	items := make([]subPreviewItem, 0, len(result))
 	for _, e := range result {
