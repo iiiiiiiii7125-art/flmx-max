@@ -964,11 +964,16 @@ func captureRPS() (map[string]tuneRPSQueueSnapshot, []string) {
 // The snapshot file is consumed (deleted) only when the restore
 // fully succeeds (R18-D2-04): on a partial failure it is retained
 // so a later rollback can retry the values that refused the
-// write, and the retention is reported as a warning. The parsed
-// snapshot is returned (nil when none was usable) so the caller
-// can restore the ring sizes from the same record; consumed is
-// false when the file must be kept, true when it is safe to
-// delete (or there was no file at all).
+// write, and the retention is reported as a warning. Two paths
+// do not retain: a snapshot proven unusable by a failed parse is
+// consumed per the TL-02 fail-safe contract (nothing in it can
+// ever be restored, and the footprint must not linger), and a
+// file that cannot be read at all is retained — its content is
+// unknown, so destroying it could discard a recoverable record.
+// The parsed snapshot is returned (nil when none was usable) so
+// the caller can restore the ring sizes from the same record;
+// consumed is false when the file must be kept, true when it is
+// safe to delete (or there was no file at all).
 func restoreKernelSysctls(kernelConfPresent bool) ([]string, *tuneKernelSnapshot, bool) {
 	// The memory-dependent buffer keys vary per machine; the set
 	// itself does not, so any buffer size yields the full key set.
@@ -1007,7 +1012,9 @@ func restoreKernelSysctls(kernelConfPresent bool) ([]string, *tuneKernelSnapshot
 	var snap tuneKernelSnapshot
 	if jerr := json.Unmarshal(raw, &snap); jerr != nil || snap.Values == nil {
 		writeDefaults()
-		return []string{fmt.Sprintf("调优前快照损坏（%v），以下 sysctl 键未能回退（仍为调优值）: %s", jerr, strings.Join(unrestored(), ", "))}, nil, false
+		// Proven unusable: consume per the TL-02 fail-safe
+		// contract (see TestKernelSnapshotFailSafe/corrupt).
+		return []string{fmt.Sprintf("调优前快照损坏（%v），以下 sysctl 键未能回退（仍为调优值）: %s", jerr, strings.Join(unrestored(), ", "))}, nil, true
 	}
 	absent := make(map[string]bool, len(snap.Absent))
 	for _, k := range snap.Absent {
