@@ -422,6 +422,12 @@ func (e swapEnv) restoreActiveNote(wasActive bool) string {
 func (e swapEnv) restoreFromBackup(backedUp bool, wasActive bool) string {
 	_ = os.Remove(e.filePath) // 清掉未完成的新文件（尽力）
 	if !backedUp {
+		if wasActive {
+			// R18-D2-13: 旧 Swap 已在重建前被 swapoff 关闭，
+			// 又没有备份文件可恢复——机器此刻无 Swap 生效，
+			// "保持执行前状态" 是假话。
+			return "旧 Swap 已关闭且无文件可恢复，当前无 Swap 生效，请人工重建"
+		}
 		return "已清理未完成的 Swap 文件，机器保持执行前状态"
 	}
 	if err := os.Rename(e.backupPath, e.filePath); err != nil {
