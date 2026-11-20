@@ -121,10 +121,7 @@ export function TemplateBuilderForm({
     () => builderRuleConflicts(value, catalogKeys),
     [value, catalogKeys],
   );
-  const recipeConflicts = useMemo(
-    () => builderRecipeConflicts(value),
-    [value],
-  );
+  const recipeConflicts = useMemo(() => builderRecipeConflicts(value), [value]);
   const picked = useMemo(
     () =>
       new Map(

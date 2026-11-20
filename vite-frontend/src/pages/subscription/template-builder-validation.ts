@@ -37,7 +37,7 @@ const BUILDER_RESERVED_GROUP_NAMES = new Set([
   "reject",
 ]);
 
-const BUILDER_GROUP_NAME_FORBIDDEN = ",=\r\n[]{}#\"\\";
+const BUILDER_GROUP_NAME_FORBIDDEN = ',=\r\n[]{}#"\\';
 
 const BUILDER_PRESETS = new Set(["custom", "minimal", "balanced", "full"]);
 
@@ -57,17 +57,21 @@ export function builderGroupNameConflicts(
 ): Map<number, string> {
   const conflicts = new Map<number, string>();
   const seen = new Set<string>();
+
   builder.groups.forEach((g, i) => {
     if (g.name === "") {
       conflicts.set(i, "组名不能为空");
+
       return;
     }
     if (g.name !== g.name.trim()) {
       conflicts.set(i, `组名「${g.name}」首尾不能有空格，后端会拒绝保存`);
+
       return;
     }
     if ([...g.name].length > 50) {
       conflicts.set(i, `组名「${g.name}」最多 50 字，后端会拒绝保存`);
+
       return;
     }
     if ([...g.name].some((ch) => BUILDER_GROUP_NAME_FORBIDDEN.includes(ch))) {
@@ -75,18 +79,22 @@ export function builderGroupNameConflicts(
         i,
         '组名不能包含 , = [ ] { } # " \\ 或换行符，后端会拒绝保存',
       );
+
       return;
     }
     if (BUILDER_RESERVED_GROUP_NAMES.has(g.name)) {
       conflicts.set(i, `组名「${g.name}」是保留名，后端会拒绝保存`);
+
       return;
     }
     if (seen.has(g.name)) {
       conflicts.set(i, `组名「${g.name}」重复，后端会拒绝保存`);
+
       return;
     }
     seen.add(g.name);
   });
+
   return conflicts;
 }
 
@@ -100,25 +108,25 @@ export function builderGroupFilterConflicts(
   builder: TemplateBuilder,
 ): Map<number, string> {
   const conflicts = new Map<number, string>();
+
   builder.groups.forEach((g, i) => {
     if (utf8Length(g.filter) > 200) {
       conflicts.set(i, "节点过滤条件最多 200 字节，后端会拒绝保存");
+
       return;
     }
     if (/[,\r\n]/.test(g.filter)) {
       conflicts.set(i, "节点过滤条件不能包含逗号或换行，后端会拒绝保存");
+
       return;
     }
     try {
-      // eslint-disable-next-line no-new
       new RegExp(g.filter);
     } catch {
-      conflicts.set(
-        i,
-        `策略组「${g.name}」的正则表达式无效，后端会拒绝保存`,
-      );
+      conflicts.set(i, `策略组「${g.name}」的正则表达式无效，后端会拒绝保存`);
     }
   });
+
   return conflicts;
 }
 
@@ -132,6 +140,7 @@ export function builderGroupFilterConflicts(
  */
 export function builderRecipeConflicts(builder: TemplateBuilder): string[] {
   const problems: string[] = [];
+
   if (builder.version !== 1) {
     problems.push("不支持的规则编辑器版本");
   }
@@ -153,9 +162,11 @@ export function builderRecipeConflicts(builder: TemplateBuilder): string[] {
     "DIRECT",
     "REJECT",
   ]);
+
   if (!targets.has(builder.final) || builder.final === "REJECT") {
     problems.push("兜底去向请选择节点选择、策略组或直连");
   }
+
   return problems;
 }
 
@@ -174,17 +185,18 @@ function isValidBuilderDomain(s: string): boolean {
       return false;
     }
   }
+
   return true;
 }
 
 function isValidIPv4(ip: string): boolean {
   const parts = ip.split(".");
+
   if (parts.length !== 4) {
     return false;
   }
-  return parts.every(
-    (p) => /^(0|[1-9]\d*)$/.test(p) && Number(p) <= 255,
-  );
+
+  return parts.every((p) => /^(0|[1-9]\d*)$/.test(p) && Number(p) <= 255);
 }
 
 function isValidIPv6(ip: string): boolean {
@@ -195,15 +207,16 @@ function isValidIPv6(ip: string): boolean {
     return true;
   }
   const halves = ip.split("::");
+
   if (halves.length > 2) {
     return false;
   }
-  const checkGroups = (
-    groups: string[],
-  ): { ok: boolean; count: number } => {
+  const checkGroups = (groups: string[]): { ok: boolean; count: number } => {
     let count = groups.length;
+
     for (let i = 0; i < groups.length; i++) {
       const g = groups[i];
+
       if (g.includes(".")) {
         // Embedded IPv4 occupies two groups and must be last.
         if (i !== groups.length - 1 || !isValidIPv4(g)) {
@@ -214,37 +227,46 @@ function isValidIPv6(ip: string): boolean {
         return { ok: false, count: 0 };
       }
     }
+
     return { ok: true, count };
   };
   const left = halves[0] === "" ? [] : halves[0].split(":");
+
   if (halves.length === 1) {
     const checked = checkGroups(left);
+
     return checked.ok && checked.count === 8;
   }
   const right = halves[1] === "" ? [] : halves[1].split(":");
   const checkedLeft = checkGroups(left);
   const checkedRight = checkGroups(right);
+
   if (!checkedLeft.ok || !checkedRight.ok) {
     return false;
   }
+
   // "::" must compress at least one group.
   return checkedLeft.count + checkedRight.count <= 7;
 }
 
 function isValidCIDR(s: string): boolean {
   const slash = s.lastIndexOf("/");
+
   if (slash <= 0) {
     return false;
   }
   const ip = s.slice(0, slash);
   const bits = s.slice(slash + 1);
+
   if (!/^\d+$/.test(bits)) {
     return false;
   }
   const n = Number(bits);
+
   if (ip.includes(":")) {
     return n <= 128 && isValidIPv6(ip);
   }
+
   return n <= 32 && isValidIPv4(ip);
 }
 
@@ -268,15 +290,18 @@ export function builderRuleConflicts(
     "REJECT",
   ]);
   const seenCategories = new Set<string>();
+
   builder.rules.forEach((r, i) => {
     if (!targets.has(r.target)) {
       conflicts.set(i, `第 ${i + 1} 条规则的策略组不存在：${r.target}`);
+
       return;
     }
     switch (r.type) {
       case "category": {
         if (!catalogKeys.has(r.value) || seenCategories.has(r.value)) {
           conflicts.set(i, `规则分类不存在或重复：${r.value}`);
+
           return;
         }
         seenCategories.add(r.value);
@@ -289,6 +314,7 @@ export function builderRuleConflicts(
             i,
             `第 ${i + 1} 条规则请填写域名（不带协议、路径或通配符）`,
           );
+
           return;
         }
         break;
@@ -300,6 +326,7 @@ export function builderRuleConflicts(
           /[,\r\n \t"\\]/.test(r.value)
         ) {
           conflicts.set(i, `第 ${i + 1} 条规则的域名关键词无效`);
+
           return;
         }
         break;
@@ -307,6 +334,7 @@ export function builderRuleConflicts(
       case "ip_cidr": {
         if (!isValidCIDR(r.value)) {
           conflicts.set(i, `第 ${i + 1} 条规则请填写有效的 IPv4 / IPv6 CIDR`);
+
           return;
         }
         break;
@@ -316,5 +344,6 @@ export function builderRuleConflicts(
       }
     }
   });
+
   return conflicts;
 }

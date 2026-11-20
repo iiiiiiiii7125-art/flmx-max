@@ -279,6 +279,7 @@ export function SubscriptionTemplatesModal({
     }
     if (builderConflictMessage) {
       toast.error(builderConflictMessage);
+
       return;
     }
     setBusy(true);
@@ -713,8 +714,8 @@ export function SubscriptionTemplatesModal({
                   )}
                   <Button
                     color="primary"
-                    isLoading={busy}
                     isDisabled={builderHasConflicts}
+                    isLoading={busy}
                     onPress={save}
                   >
                     保存模板
