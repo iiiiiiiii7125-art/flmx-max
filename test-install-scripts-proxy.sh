@@ -726,6 +726,13 @@ test_panel_explicit_version_format_validated() (
   check_docker() { DOCKER_CMD="true"; }
   resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
   validate_panel_update_environment() { :; }
+  # R18-A2-08 回归修（L2-12）：update_panel 新增的两道门（实例
+  # id 守卫与更新端口预检）在全打桩夹具里无桩、无 .env 可读——预
+  # 检读不到端口即 return 1，夹具在真正断言之前就失败；两门各有
+  # 专属用例覆盖（A2-08 实例守卫 / 更新预检四用例），此处只桩到
+  # 放行，不削弱生产门禁语义。
+  panel_assert_instance_id_valid() { return 0; }
+  panel_preflight_update_port_conflicts() { return 0; }
   get_current_db_type() { echo "sqlite"; }
   get_deployed_panel_version() { return 1; }
   resolve_latest_release_tag() { echo "9.9.9"; }
@@ -4386,6 +4393,13 @@ test_update_panel_downloads_without_prompt() (
   validate_panel_update_environment() {
     calls+=" validate-current"
   }
+  # R18-A2-08 回归修（L2-12）：update_panel 新增的两道门（实例
+  # id 守卫与更新端口预检）在全打桩夹具里无桩、无 .env 可读——预
+  # 检读不到端口即 return 1，夹具在真正断言之前就失败；两门各有
+  # 专属用例覆盖（A2-08 实例守卫 / 更新预检四用例），此处只桩到
+  # 放行，不削弱生产门禁语义。
+  panel_assert_instance_id_valid() { return 0; }
+  panel_preflight_update_port_conflicts() { return 0; }
 
   get_current_db_type() {
     echo "sqlite"
@@ -4455,6 +4469,13 @@ test_update_panel_backup_failure_names_force_reinstall_only_when_container_missi
   check_docker() { DOCKER_CMD="true"; }
   resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
   validate_panel_update_environment() { :; }
+  # R18-A2-08 回归修（L2-12）：update_panel 新增的两道门（实例
+  # id 守卫与更新端口预检）在全打桩夹具里无桩、无 .env 可读——预
+  # 检读不到端口即 return 1，夹具在真正断言之前就失败；两门各有
+  # 专属用例覆盖（A2-08 实例守卫 / 更新预检四用例），此处只桩到
+  # 放行，不削弱生产门禁语义。
+  panel_assert_instance_id_valid() { return 0; }
+  panel_preflight_update_port_conflicts() { return 0; }
   get_current_db_type() { echo "sqlite"; }
   resolve_latest_release_tag() { echo "v-test"; }
   download_panel_update_compose() { UPDATE_COMPOSE_CANDIDATE="candidate"; }
@@ -6729,7 +6750,7 @@ test_update_panel_crosschecks_deployed_image_version() (
   local calls=""
   local deploy_dir
   deploy_dir=$(mktemp -d)
-  printf 'FLMX_VERSION=1.0.0\nJWT_SECRET=x\n' > "$deploy_dir/.env"
+  printf 'FLMX_VERSION=1.0.0\nJWT_SECRET=x\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\n' > "$deploy_dir/.env"
   printf 'services: {}\n' > "$deploy_dir/docker-compose.yml"
 
   docker() {
@@ -6744,6 +6765,11 @@ test_update_panel_crosschecks_deployed_image_version() (
   }
   ask_proxy_config() { PROXY_ENABLED="false"; }
   validate_panel_update_environment() { :; }
+  # R18-A2-08 回归修（L2-12 同根）：本夹具 cd 进部署目录、但
+  # .env 无端口，真实预检读不到端口即 return 1，更新在预检就失
+  # 败、降级判定从未被走到（空过）；补端口并把监听探活桩为空闲，
+  # 让真实预检放行、降级判定真正被执行。
+  panel_port_is_listening() { return 1; }
   get_current_db_type() { echo "sqlite"; }
   resolve_latest_release_tag() { echo "1.5.0"; }
   download_panel_update_compose() { calls+=" download"; }
@@ -9647,6 +9673,13 @@ test_panel_update_honors_version_priority_chain() (
   check_docker() { DOCKER_CMD="true"; }
   resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
   validate_panel_update_environment() { :; }
+  # R18-A2-08 回归修（L2-12）：update_panel 新增的两道门（实例
+  # id 守卫与更新端口预检）在全打桩夹具里无桩、无 .env 可读——预
+  # 检读不到端口即 return 1，夹具在真正断言之前就失败；两门各有
+  # 专属用例覆盖（A2-08 实例守卫 / 更新预检四用例），此处只桩到
+  # 放行，不削弱生产门禁语义。
+  panel_assert_instance_id_valid() { return 0; }
+  panel_preflight_update_port_conflicts() { return 0; }
   get_current_db_type() { echo "sqlite"; }
   get_deployed_panel_version() { return 1; }
   resolve_latest_release_tag() { echo "9.9.9"; }
