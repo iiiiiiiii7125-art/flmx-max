@@ -373,6 +373,39 @@ jobs:
         working-directory: go-gost/x
         run: go test -short -timeout 30m ./...
 
+  # R18-R2-C3-02（C3-07）：nft -c 语义腿（TestRenderTablePassesNftCheck /
+  # TestRenderTableMixedFamilyRejectedByNftCheck）只在有 netlink 的
+  # 环境才真跑；上面的全量 job 在无特权容器里跑，语义类恒跳过
+  # （COVERAGE GAP），改动渲染族组合的回归拦不住。本 job 在 VM
+  # runner 上装 nftables、把测试二进制以 root 跑并置
+  # FLMX_REQUIRE_NFT_CHECK=1——该变量下 nft 缺失或 netlink 不可
+  # 用即硬失败、绝不以 SKIP 假装通过；job 红即语义门没跑起来。
+  # 测试机等价命令（升级前置检查）：
+  #   FLMX_REQUIRE_NFT_CHECK=1 go test ./internal/runtime/nftables/ -run 'TestRenderTablePassesNftCheck|TestRenderTableMixedFamilyRejectedByNftCheck' -v
+  # （测试机上须以 root 跑、且装有 nftables；沙箱无 netlink，该
+  # 命令在沙箱恒硬失败——这是门在起作用，不是测试坏了。）
+  nft-semantic:
+    name: nft -c Semantic Gate (FLMX_REQUIRE_NFT_CHECK=1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: go-backend/go.sum
+
+      - name: Install nftables
+        run: sudo apt-get update && sudo apt-get install -y nftables
+
+      - name: Build nftables test binary
+        working-directory: go-backend
+        run: go test -c ./internal/runtime/nftables/ -o /tmp/nftables.test
+
+      - name: Run nft -c semantic tests as root
+        run: sudo FLMX_REQUIRE_NFT_CHECK=1 /tmp/nftables.test -test.run 'TestRenderTablePassesNftCheck|TestRenderTableMixedFamilyRejectedByNftCheck' -test.v
+
   # X02-002（审计闭环 Round 1 / C17）：tests/e2e 此前无任何 CI 接入，
   # 且默认账号与后端 seed 不一致（admin_user 不是用户名、必然登录失败），
   # 整套 42 条用例实际零回归保护。本 job 跑 API 子集（-m api，不起
