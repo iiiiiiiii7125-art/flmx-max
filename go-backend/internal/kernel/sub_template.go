@@ -1110,7 +1110,10 @@ func singboxTemplateProfile(content string, endpoints []Endpoint, opts SubOption
 		}
 		picked, err := singboxFilter(g["filter"], names)
 		if err != nil {
-			return "", err
+			// R18-B6-01：坏过滤正则渲染侧 fail-open 到全部节点，与
+			// Mihomo expandedGroup / Surge 同口径——一个写错的正则
+			// 不得让整条订阅 400；检查预览仍经 FilterError 点名。
+			picked = names
 		}
 		var out []interface{}
 		for _, m := range members {
