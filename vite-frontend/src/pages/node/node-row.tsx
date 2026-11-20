@@ -251,7 +251,7 @@ export function NodeRestartPushLine({
   if (node.restartPushStatus === "failed") {
     const reason = node.restartPushError?.trim();
     return (
-      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold">
         <span className="font-semibold text-danger-700">
           定时重启下发失败
         </span>
@@ -282,7 +282,7 @@ export function NodeRestartPushLine({
   }
   if (node.restartEnabled === 1 && !node.restartPushStatus) {
     return (
-      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold">
         <span className="font-semibold text-warning-700">
           定时重启已启用，但下发状态未知
         </span>
