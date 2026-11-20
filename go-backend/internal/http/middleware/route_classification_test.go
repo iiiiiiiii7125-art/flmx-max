@@ -201,7 +201,7 @@ var routeClassification = []routeEntry{
 	adm("/api/v1/subscription/template/delete"), adm("/api/v1/subscription/template/list"),
 	adm("/api/v1/subscription/template/refresh"), adm("/api/v1/subscription/template/save"),
 	adm("/api/v1/subscription/traffic"),
-	adm("/api/v1/system/check-updates"), adm("/api/v1/system/storage"),
+	adm("/api/v1/system/check-updates"), adm("/api/v1/system/gh-cache/purge"), adm("/api/v1/system/storage"),
 	adm("/api/v1/system/upgrade"), adm("/api/v1/system/upgrade/status"),
 	adm("/api/v1/system/version"),
 	adm("/api/v1/tunnel/batch-delete"), adm("/api/v1/tunnel/batch-delete-preview"),
