@@ -9190,32 +9190,44 @@ func noteTunnelRuntimeSkipped(state *tunnelCreateState, nodeID int64, reason, de
 // tunnelRuntimeSkippedWarning renders one skipped node for a
 // receipt: it names the node, the cause and the retry, so the
 // operator can tell a deferred node from a healthy one.
-func tunnelRuntimeSkippedWarning(s tunnelRuntimeSkippedNode) string {
+// retryQueued is scheduleNodeLocalRuntimeRetry's verdict: false
+// means the node already exhausted its automatic retries
+// (R18-F3-02), and the receipt must say so instead of promising a
+// retry. The queued branch no longer names "30 秒": with backoff
+// the delay is 30s only on the first streak.
+func tunnelRuntimeSkippedWarning(s tunnelRuntimeSkippedNode, retryQueued bool) string {
 	cause := "不在线"
 	if s.Reason == "timeout" {
 		cause = "下发超时"
 	}
-	return fmt.Sprintf("节点「%s」%s，已跳过隧道运行时下发，已排期 30 秒后重试", s.Name, cause)
+	if !retryQueued {
+		return fmt.Sprintf("节点「%s」%s，已跳过隧道运行时下发，自动重试已达上限，需人工处理", s.Name, cause)
+	}
+	return fmt.Sprintf("节点「%s」%s，已跳过隧道运行时下发，已排期自动重试", s.Name, cause)
 }
 
 // handleTunnelRuntimeSkipped drains the skips apply recorded on
-// state: every skipped node gets the 30s local-runtime retry
+// state: every skipped node gets the local-runtime retry carrier
 // (scheduleNodeLocalRuntimeRetry — the same carrier the reconnect
 // path uses, so an online node whose command timed out is
 // re-pushed without waiting for a reconnect) and one warning line
 // per node for the caller's receipt. Receipt-less callers
 // (background redeploy) ignore the returned warnings; the log line
-// from noteTunnelRuntimeSkipped is the record there.
+// from noteTunnelRuntimeSkipped is the record there. A node that
+// already exhausted its retries (R18-F3-02) gets no new queue, and
+// its warning says needs-manual-attention instead of promising a
+// retry.
 func (h *Handler) handleTunnelRuntimeSkipped(state *tunnelCreateState) []string {
 	if state == nil || len(state.SkippedNodes) == 0 {
 		return nil
 	}
 	warnings := make([]string, 0, len(state.SkippedNodes))
 	for _, s := range state.SkippedNodes {
+		queued := false
 		if h != nil {
-			h.scheduleNodeLocalRuntimeRetry(s.NodeID)
+			queued = h.scheduleNodeLocalRuntimeRetry(s.NodeID)
 		}
-		warnings = append(warnings, tunnelRuntimeSkippedWarning(s))
+		warnings = append(warnings, tunnelRuntimeSkippedWarning(s, queued))
 	}
 	return warnings
 }

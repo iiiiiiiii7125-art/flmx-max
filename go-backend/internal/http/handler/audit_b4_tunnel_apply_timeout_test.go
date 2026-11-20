@@ -93,7 +93,7 @@ func TestAuditB4TunnelApplyOnlineTimeoutRetries(t *testing.T) {
 		t.Fatalf("offline exit must be skipped as offline, got %+v", byNode[22])
 	}
 	// Drain the skips exactly as tunnelCreate/tunnelUpdate do:
-	// warnings for the receipt + the 30s retry per node.
+	// warnings for the receipt + the automatic retry per node.
 	warnings := h.handleTunnelRuntimeSkipped(state)
 	joined := strings.Join(warnings, "；")
 	if !strings.Contains(joined, "b4-silent-entry") || !strings.Contains(joined, "下发超时") {
@@ -106,6 +106,6 @@ func TestAuditB4TunnelApplyOnlineTimeoutRetries(t *testing.T) {
 	// offline one — this is the finding's crux: before the fix an
 	// online node's command timeout had no retry at all.
 	if missing := b4RetryQueued(t, h, 21, 22); len(missing) > 0 {
-		t.Fatalf("skipped nodes must get the 30s retry queued, missing nodes %v", missing)
+		t.Fatalf("skipped nodes must get the automatic retry queued, missing nodes %v", missing)
 	}
 }

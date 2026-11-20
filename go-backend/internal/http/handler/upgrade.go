@@ -1309,6 +1309,9 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 		} else {
 			log.Printf("node online redeploy failed node_id=%d err=%v (retry scheduled)", nodeID, err)
 		}
+		// R18-F3-02 (M-3): 失败计数（pending 不计）+ 退避排队；
+		// 达上限后 schedule 不再重排、转需人工。
+		h.noteNodeLocalRuntimeRetryFailure(nodeID, err)
 		h.scheduleNodeLocalRuntimeRetry(nodeID)
 	} else {
 		log.Printf("node online redeploy succeeded node_id=%d", nodeID)
@@ -1316,19 +1319,87 @@ func (h *Handler) onNodeOnline(nodeID int64) {
 	}
 }
 
-// Local retries are separate from reconnect reconciliation: a failed local
-// forward must not cause every listener to be replayed every 30 seconds.
-func (h *Handler) scheduleNodeLocalRuntimeRetry(nodeID int64) {
+// nodeLocalRuntimeRetryFailState tracks consecutive local-runtime
+// redeploy failures for one node (R18-F3-02, M-3). It mirrors the nft
+// auto-reconcile guard (nftAutoFailState).
+type nodeLocalRuntimeRetryFailState struct {
+	failures int
+	gaveUp   bool
+}
+
+// nodeLocalRuntimeRetryMaxFailures caps the automatic retry streak:
+// at this many consecutive failures the node stops being re-queued
+// and is escalated to needs-manual-redeploy (same bound as
+// nftAutoReconcileMaxFailures).
+const nodeLocalRuntimeRetryMaxFailures = 10
+
+// nodeLocalRuntimeRetryBackoff returns the wait before the next
+// automatic retry after failures consecutive failures: 30s → 5m →
+// 15m → 60m (capped).
+func nodeLocalRuntimeRetryBackoff(failures int) time.Duration {
+	switch {
+	case failures <= 1:
+		return nodeOnlineRedeployCooldown
+	case failures == 2:
+		return 5 * time.Minute
+	case failures == 3:
+		return 15 * time.Minute
+	default:
+		return time.Hour
+	}
+}
+
+// noteNodeLocalRuntimeRetryFailure records one failed redeploy for
+// nodeID. errRedeployPending (node offline / skipped) is a deferral,
+// not a failure, and never counts. On reaching the cap the node is
+// marked gave up with exactly one action=needs_manual_redeploy line
+// (transition only); later failures stay silent on that line.
+func (h *Handler) noteNodeLocalRuntimeRetryFailure(nodeID int64, err error) {
+	if h == nil || nodeID <= 0 || err == nil || errors.Is(err, errRedeployPending) {
+		return
+	}
 	h.upgradeMu.Lock()
 	defer h.upgradeMu.Unlock()
+	if h.nodeLocalRuntimeRetryFail == nil {
+		h.nodeLocalRuntimeRetryFail = make(map[int64]*nodeLocalRuntimeRetryFailState)
+	}
+	st, ok := h.nodeLocalRuntimeRetryFail[nodeID]
+	if !ok {
+		st = &nodeLocalRuntimeRetryFailState{}
+		h.nodeLocalRuntimeRetryFail[nodeID] = st
+	}
+	st.failures++
+	if st.failures >= nodeLocalRuntimeRetryMaxFailures && !st.gaveUp {
+		st.gaveUp = true
+		log.Printf("node local runtime retry exhausted node_id=%d failures=%d last_error=%q action=needs_manual_redeploy", nodeID, st.failures, err.Error())
+		return
+	}
+	log.Printf("node local runtime retry failed node_id=%d failures=%d backoff=%s err=%v", nodeID, st.failures, nodeLocalRuntimeRetryBackoff(st.failures), err)
+}
+
+// Local retries are separate from reconnect reconciliation: a failed local
+// forward must not cause every listener to be replayed every 30 seconds.
+func (h *Handler) scheduleNodeLocalRuntimeRetry(nodeID int64) bool {
+	h.upgradeMu.Lock()
+	defer h.upgradeMu.Unlock()
+	// R18-F3-02 (M-3): 达上限后停止自动重排。新的直接重推尝试
+	// （重连、connlog 重推、变更重下发）仍可成功并经
+	// clearNodeLocalRuntimeRetry 清零状态。
+	if st := h.nodeLocalRuntimeRetryFail[nodeID]; st != nil && st.gaveUp {
+		return false
+	}
 	if h.nodeLocalRuntimeRetryQueued == nil {
 		h.nodeLocalRuntimeRetryQueued = make(map[int64]struct{})
 	}
 	if _, queued := h.nodeLocalRuntimeRetryQueued[nodeID]; queued {
-		return
+		return true
 	}
 	h.nodeLocalRuntimeRetryQueued[nodeID] = struct{}{}
-	time.AfterFunc(nodeOnlineRedeployCooldown, func() {
+	delay := nodeLocalRuntimeRetryBackoff(0)
+	if st := h.nodeLocalRuntimeRetryFail[nodeID]; st != nil {
+		delay = nodeLocalRuntimeRetryBackoff(st.failures)
+	}
+	time.AfterFunc(delay, func() {
 		h.upgradeMu.Lock()
 		_, queued := h.nodeLocalRuntimeRetryQueued[nodeID]
 		delete(h.nodeLocalRuntimeRetryQueued, nodeID)
@@ -1338,11 +1409,14 @@ func (h *Handler) scheduleNodeLocalRuntimeRetry(nodeID int64) {
 		}
 		h.retryNodeLocalRuntime(nodeID)
 	})
+	return true
 }
 
 func (h *Handler) clearNodeLocalRuntimeRetry(nodeID int64) {
 	h.upgradeMu.Lock()
 	delete(h.nodeLocalRuntimeRetryQueued, nodeID)
+	// R18-F3-02: 成功即清零失败计数与需人工态。
+	delete(h.nodeLocalRuntimeRetryFail, nodeID)
 	h.upgradeMu.Unlock()
 }
 
@@ -1366,6 +1440,9 @@ func (h *Handler) retryNodeLocalRuntime(nodeID int64) {
 	h.upgradeMu.Unlock()
 	defer h.finishNodeOnlineRedeploy(nodeID)
 	if err := h.redeployLocalNodeRuntime(nodeID); err != nil {
+		// R18-F3-02 (M-3): 失败计数（pending 不计）+ 退避排队；
+		// 达上限后 schedule 不再重排、转需人工。
+		h.noteNodeLocalRuntimeRetryFailure(nodeID, err)
 		h.scheduleNodeLocalRuntimeRetry(nodeID)
 	} else {
 		h.clearNodeLocalRuntimeRetry(nodeID)

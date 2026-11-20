@@ -316,6 +316,9 @@ func (h *Handler) nodeConnlogRepush(w http.ResponseWriter, r *http.Request) {
 	// code 0＋排队提示，绝不写「重新下发失败」；真失败才回
 	// code -1。两种非成功情形都挂 30 秒重试队列。
 	if err := h.redeployLocalNodeRuntime(req.NodeID); err != nil {
+		// R18-F3-02 (M-3): 失败计数（pending 不计）+ 退避排队；
+		// 达上限后 schedule 不再重排、转需人工。
+		h.noteNodeLocalRuntimeRetryFailure(req.NodeID, err)
 		h.scheduleNodeLocalRuntimeRetry(req.NodeID)
 		if errors.Is(err, errRedeployPending) {
 			log.Printf("node connlog repush pending node_id=%d (redeploy skipped offline; retry queued)", req.NodeID)

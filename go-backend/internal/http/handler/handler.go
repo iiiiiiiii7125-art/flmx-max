@@ -197,6 +197,10 @@ type Handler struct {
 	nodeOnlineRedeployQueued    map[int64]struct{}
 	nodeOnlineRedeploying       map[int64]struct{}
 	nodeLocalRuntimeRetryQueued map[int64]struct{}
+	// R18-F3-02 (M-3): 节点本地运行时重试的逐节点失败态，与 nft
+	// 自动对账守卫（nftAutoFail）同模式：退避升级 + 连续失败达
+	// 上限转需人工（停止自动重排）。零值可用（惰性初始化）。
+	nodeLocalRuntimeRetryFail map[int64]*nodeLocalRuntimeRetryFailState
 
 	// R17-B：AddService 幂等守卫状态（add_service_guard.go）。
 	// 确认集只由 agent 成功响应建立、无 TTL；零值可用（惰性初始化）。
