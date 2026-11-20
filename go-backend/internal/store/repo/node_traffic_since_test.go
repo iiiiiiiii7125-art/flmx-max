@@ -64,3 +64,30 @@ func TestNodeTrafficSinceProratesBoundaryBucket(t *testing.T) {
 		t.Fatalf("aligned node3 = %v, want %v", got[3], want)
 	}
 }
+
+// R18-F2-01：NodeTrafficSince 的边界桶分钟份额先乘后除：3TB 的桶
+// ×3599999ms 溢出 int64 回绕，边界桶份额变成负数/错值。3TB 桶在
+// fromMs = 桶起点 +3599999ms 时应只计 833334（3e12 −
+// 3e12·3599999/3600000），旧代码下该断言失败。
+func TestNodeTrafficSinceHugeBoundaryBucketR18F201(t *testing.T) {
+	r, err := Open(t.TempDir() + "/node-traffic-f201.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	const hourMs = int64(time.Hour / time.Millisecond)
+	bucket := time.Date(2026, 10, 31, 18, 0, 0, 0, time.UTC).UnixMilli()
+	rows := []model.NodeTraffic{
+		{NodeID: 1, Hour: bucket, InBytes: 3e12, OutBytes: 3e12},
+	}
+	if err := r.AddNodeTraffic(rows); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.NodeTrafficSince(bucket + hourMs - 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := [2]int64{833334, 833334}; got[1] != want {
+		t.Fatalf("node1 = %v, want %v", got[1], want)
+	}
+}

@@ -6,6 +6,7 @@ import (
 
 	"go-backend/internal/http/response"
 	"go-backend/internal/store/model"
+	"go-backend/internal/store/repo"
 )
 
 // Subscription traffic history: hourly rows (model.SubscriptionTraffic)
@@ -193,16 +194,16 @@ func subTraffic(hours []model.SubscriptionTraffic, rangeKey string, now time.Tim
 		if pre := effStart - rowStart; pre > 0 {
 			if isResetHour {
 				if preSince := effStart - sinceMs; preSince > 0 {
-					upLeft -= valUp * preSince / spanMs
-					downLeft -= valDown * preSince / spanMs
+					upLeft -= repo.MulDivSaturating(valUp, preSince, spanMs)
+					downLeft -= repo.MulDivSaturating(valDown, preSince, spanMs)
 				}
 			} else {
 				// 窗外/重置前份额先行扣除（R3-C-01，余量法）：一小时行至多
 				// 横跨窗口起点一次，扣除后余量即窗内份额，后续分桶
 				// 逻辑（首桶取余量）自动精确。窗口内跨桶行的分摊
 				// 不受影响，总量在窗内守恒。
-				upLeft -= h.UploadBytes * pre / hourMs
-				downLeft -= h.DownloadBytes * pre / hourMs
+				upLeft -= repo.MulDivSaturating(h.UploadBytes, pre, hourMs)
+				downLeft -= repo.MulDivSaturating(h.DownloadBytes, pre, hourMs)
 			}
 		}
 		for j := b; j < len(starts) && view.Points[j].Time < rowEnd; j++ {
@@ -218,8 +219,8 @@ func subTraffic(hours []model.SubscriptionTraffic, rangeKey string, now time.Tim
 			}
 			up, down := upLeft, downLeft // last overlapped bucket: remainder
 			if j+1 < len(starts) && view.Points[j+1].Time < rowEnd {
-				up = valUp * overlap / spanMs
-				down = valDown * overlap / spanMs
+				up = repo.MulDivSaturating(valUp, overlap, spanMs)
+				down = repo.MulDivSaturating(valDown, overlap, spanMs)
 				upLeft -= up
 				downLeft -= down
 			}

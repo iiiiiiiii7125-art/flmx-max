@@ -8,13 +8,65 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exec bash "$0" "$@"
   fi
 
-  if [ -f /etc/alpine-release ] && command -v apk >/dev/null 2>&1; then
+  # R18-A3-09: 受限网络的无 bash Alpine 上，apk 直连失败时用显式
+  # 代理环境变量重试一次。sudo/doas 默认清环境变量（env_reset），
+  # 代理变量不经 `sudo env VAR=...` / `doas env VAR=...` 透传就到
+  # 不了 apk——这是旧实现无代理路径的真缺口；root 直跑时环境本就
+  # 透传，重试无害。SERVER_ADDR 派生的代理不可行：derive_panel_prefix
+  # 产出的是下载镜像前缀（…/api/v1/open_api/gh），不是 forward
+  # proxy，不能用作 http_proxy——故只认用户显式设置的代理变量。
+  # FLMX_ALPINE_RELEASE_FILE 只为测试夹具改指临时文件（与
+  # FLMX_SWAP_FILE 等既有模式同形），生产缺省 /etc/alpine-release。
+  FLMX_ALPINE_RELEASE_FILE="${FLMX_ALPINE_RELEASE_FILE:-/etc/alpine-release}"
+
+  # apk_with_proxy_retry <提权前缀> <apk 命令...>：提权前缀为空
+  # （root 直跑）、sudo 或 doas。先直跑一次（无代理环境也能装的
+  # 机器不受影响）；失败且任一代理变量在位时，把已设置的代理变
+  # 量用 env 显式透传再跑一次——env 必须放在 sudo/doas 之后，否
+  # 则 env_reset 会清掉。无代理变量时不重试，直接回 1。
+  # POSIX sh（dash）:不用 local（引导期全局 _apk_* 即可），不用数
+  # 组；代理值不含空白，_apk_proxy_env 的分词即 VAR=val 分隔，
+  # set -f 挡住路径展开。
+  apk_with_proxy_retry() {
+    _apk_prefix="$1"
+    shift
+    # 首跑不重定向：沿用旧实现向用户展示 apk 进度/报错；只有
+    # 代理重试才静默（其失败由末尾统一文案覆盖）。
+    if [ -n "$_apk_prefix" ]; then
+      if "$_apk_prefix" "$@"; then
+        return 0
+      fi
+    else
+      if "$@"; then
+        return 0
+      fi
+    fi
+    _apk_proxy_env=""
+    [ -n "${http_proxy:-}" ] && _apk_proxy_env="$_apk_proxy_env http_proxy=$http_proxy"
+    [ -n "${HTTP_PROXY:-}" ] && _apk_proxy_env="$_apk_proxy_env HTTP_PROXY=$HTTP_PROXY"
+    [ -n "${https_proxy:-}" ] && _apk_proxy_env="$_apk_proxy_env https_proxy=$https_proxy"
+    [ -n "${HTTPS_PROXY:-}" ] && _apk_proxy_env="$_apk_proxy_env HTTPS_PROXY=$HTTPS_PROXY"
+    [ -n "$_apk_proxy_env" ] || return 1
+    set -f
+    if [ -n "$_apk_prefix" ]; then
+      # shellcheck disable=SC2086
+      "$_apk_prefix" env $_apk_proxy_env "$@" >/dev/null 2>&1
+    else
+      # shellcheck disable=SC2086
+      env $_apk_proxy_env "$@" >/dev/null 2>&1
+    fi
+    _apk_rc=$?
+    set +f
+    return "$_apk_rc"
+  }
+
+  if [ -f "$FLMX_ALPINE_RELEASE_FILE" ] && command -v apk >/dev/null 2>&1; then
     if [ "$(id -u)" -eq 0 ]; then
-      apk add --no-cache bash
+      apk_with_proxy_retry "" apk add --no-cache bash
     elif command -v sudo >/dev/null 2>&1; then
-      sudo apk add --no-cache bash
+      apk_with_proxy_retry sudo apk add --no-cache bash
     elif command -v doas >/dev/null 2>&1; then
-      doas apk add --no-cache bash
+      apk_with_proxy_retry doas apk add --no-cache bash
     else
       echo "❌ Alpine 安装需要 root 权限，或已配置 sudo/doas。" >&2
       exit 1
@@ -24,6 +76,7 @@ if [ -z "${BASH_VERSION:-}" ]; then
     # 先验在位、点名缺失的包与人工装法（回执与结果一致）。
     if ! command -v bash >/dev/null 2>&1; then
       echo "❌ Alpine 安装 bash 失败，请先手动执行 apk add --no-cache bash 后重跑" >&2
+      echo "   如在受限网络：请设置 http_proxy / https_proxy（或大写 HTTP_PROXY / HTTPS_PROXY）后重跑；经 sudo/doas 安装时脚本会把这些变量透传给 apk。" >&2
       exit 1
     fi
 
@@ -3392,8 +3445,13 @@ uninstall_flmx_agent_host_cleanup() {
     echo "ℹ️ 未找到 nft 命令，跳过 nft 表清理（如曾建表，表会残留至宿主机重启，或装回 nftables 后人工删除）: $FLMX_AGENT_NFT_TABLES"
   fi
 
+  # R18-A3-06：失败数进返回码——旧实现恒 return 0，调用方无法把
+  # 宿主清理失败计入完成判决，nft 删表失败等残留照样印
+  # 「✅ 卸载完成」。清理本身仍尽力而为：各步失败只计数、不中
+  # 断后续项，返回码只影响终局判决。
   if [[ "$failures" -gt 0 ]]; then
     echo "⚠️ 宿主清理有 ${failures} 项未完成（见上 ⚠️ 行），其余卸载步骤继续执行"
+    return 1
   fi
   return 0
 }
@@ -3582,8 +3640,13 @@ uninstall_flmx_agent() {
   # 是最需要补跑的形态——旧实现以 -d 门控、该形态整集跳过却仍
   # 报「卸载完成」；函数内各步均以存在才处理，目录缺失时目录内
   # 步骤自然空转。
-  uninstall_flmx_agent_host_cleanup "$INSTALL_DIR"
-  uninstall_flmx_agent_host_cleanup "$LEGACY_INSTALL_DIR"
+  # R18-A3-06：宿主清理失败计入完成判决（与 R2-P2-04 日志面同
+  # 口径）——旧实现 host_cleanup 恒回 0，nft 删表失败、队列备份
+  # 丢失等宿主残留不影响「✅ 卸载完成」。清理本身仍尽力而为：
+  # 失败只计数、不中断后续删除步骤。
+  local uninstall_failures=0
+  uninstall_flmx_agent_host_cleanup "$INSTALL_DIR" || uninstall_failures=$((uninstall_failures + 1))
+  uninstall_flmx_agent_host_cleanup "$LEGACY_INSTALL_DIR" || uninstall_failures=$((uninstall_failures + 1))
 
   # 删除服务文件
   if [[ -f "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" || -f "$FLMX_AGENT_OPENRC_SERVICE_FILE" || -d "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d" ]]; then
@@ -3598,7 +3661,6 @@ uninstall_flmx_agent() {
   # R2-P2-04：OpenRC 日志面（logrotate 配置＋两代日志本体与轮
   # 转件）——在安装目录之外，单独清理（逐项点名见函数内）；其
   # 失败计数并入下方完成判决，不再被恒回 0 吞掉。
-  local uninstall_failures=0
   remove_flmx_agent_log_files || uninstall_failures=$((uninstall_failures + 1))
 
   # 删除安装目录
@@ -3638,7 +3700,7 @@ uninstall_flmx_agent() {
     uninstall_failures=$((uninstall_failures + 1))
   fi
   if [[ "$uninstall_failures" -gt 0 ]]; then
-    echo "❌ 卸载未完全完成：以下对象未能删除：${leftover:-（见上日志面 ⚠️ 行）}，请人工处理后重跑卸载"
+    echo "❌ 卸载未完全完成：以下对象未能删除：${leftover:-（见上 ⚠️ 行）}，请人工处理后重跑卸载"
     return 1
   fi
 

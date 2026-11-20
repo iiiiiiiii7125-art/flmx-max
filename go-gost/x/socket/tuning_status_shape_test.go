@@ -76,8 +76,11 @@ func TestTuneStatusWireShapeCanonical(t *testing.T) {
 		t.Errorf("seeded faces should be off, got %v", faces)
 	}
 
-	// Flip the live values the faces derive from: the canonical
+	// Flip the values the faces derive from: the canonical
 	// fields must track the flat ones in the "on" direction too.
+	// R18-D2-11: live values alone no longer flip the faces — the
+	// panel's footprint must be in place too, so the "on" state
+	// here writes both the live values and the footprints.
 	writeSys := func(key, value string) {
 		p := sysctlPath(key)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -90,6 +93,16 @@ func TestTuneStatusWireShapeCanonical(t *testing.T) {
 	writeSys("net.ipv4.tcp_congestion_control", "bbr")
 	writeSys("net.core.default_qdisc", "fq")
 	writeSys("net.core.rps_sock_flow_entries", "32768")
+	writeFile := func(path, content string) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(tuneBBRConfPath, tuneBBRConfBody)
+	writeFile(tuneRPSScriptPath, tuneRPSScript([]string{"eth0"}, "f"))
 	m = assertShape(t)
 	faces := m["faces"].(map[string]interface{})
 	if faces["bbr"] != true || faces["nic"] != true {

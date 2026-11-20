@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/bits"
 	"net"
 	"net/netip"
 	"net/url"
@@ -150,6 +151,38 @@ func saturatingAddInt64(a, b int64) int64 {
 // must saturate by the same rule instead of wrapping first.
 func SaturatingAddInt64(a, b int64) int64 {
 	return saturatingAddInt64(a, b)
+}
+
+// mulDivSaturating computes floor(v*m/d) for byte counts without the
+// intermediate v*m overflowing int64 (R18-F2-01). The traffic charts
+// multiplied first: a single hour bucket over ~2.56TB (the 3.6e6 ms
+// overlap multiplier) wrapped the product, and the charts showed
+// negative or wildly wrong buckets while the stored counters stayed
+// correct. 128-bit multiply + saturating divide keeps the exact
+// floored share; a corrupt non-positive input yields 0, never a
+// negative share.
+func mulDivSaturating(v, m, d int64) int64 {
+	if v <= 0 || m <= 0 || d <= 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(uint64(v), uint64(m))
+	if hi >= uint64(d) {
+		// The quotient needs more than 64 bits: saturate.
+		return math.MaxInt64
+	}
+	q, _ := bits.Div64(hi, lo, uint64(d))
+	if q > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(q)
+}
+
+// MulDivSaturating is mulDivSaturating for the subscription traffic
+// chart in the handler package: it takes the same minute-share cuts
+// as NodeTrafficSince below, so both sides saturate by the same rule
+// instead of wrapping first.
+func MulDivSaturating(v, m, d int64) int64 {
+	return mulDivSaturating(v, m, d)
 }
 
 // saturatingCounterIncrExpr builds the SQL expression `column + delta`
@@ -7802,8 +7835,8 @@ func (r *Repository) NodeTrafficSince(fromMs int64) (map[int64][2]int64, error) 
 		pre := fromMs - bucketStart
 		for _, b := range boundary {
 			cur := out[b.NodeID]
-			cur[0] += b.InBytes - b.InBytes*pre/hourMs
-			cur[1] += b.OutBytes - b.OutBytes*pre/hourMs
+			cur[0] += b.InBytes - mulDivSaturating(b.InBytes, pre, hourMs)
+			cur[1] += b.OutBytes - mulDivSaturating(b.OutBytes, pre, hourMs)
 			out[b.NodeID] = cur
 		}
 	}

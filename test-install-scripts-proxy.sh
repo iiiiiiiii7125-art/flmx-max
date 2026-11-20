@@ -167,6 +167,165 @@ EOF
   grep -q '^FLMX_POSTGRES_VOLUME=flmx-postgres-data$' "$dir3/.env" || fail "A2-01R: the live-read postgres volume must be pinned once the gate clears"
 )
 
+# R18-A2-10：钉键“有键改写”分支的事故态门——键在但与实读不一
+# 致时旧实现无条件以实挂卷改写 .env；在跑容器本身挂错卷（真库
+# 在键卷里，现挂空的新缺省卷）时改写即把事故态正式化。七幕
+# （SQLite 五幕＋PG 两幕），docker 桩与 A2-01R 同形：卷存在性
+# 以 FIXTURE_VOLROOT/<卷名> 目录在位为准，挂载点仅
+# FIXTURE_MOUNT_OK=1 时可读；容器挂载实读由
+# FIXTURE_SQLITE_VOLUME/FIXTURE_POSTGRES_VOLUME 给定。
+test_panel_pin_keyed_rewrite_accident_gate_r18_a2_10() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  pin_keyed_docker() {
+    docker() {
+      if [[ "$1" == "volume" && "$2" == "inspect" ]]; then
+        if [[ "$3" == "-f" ]]; then
+          [[ "${FIXTURE_MOUNT_OK:-}" == "1" ]] || return 1
+          [[ -d "$FIXTURE_VOLROOT/$5" ]] || return 1
+          printf '%s' "$FIXTURE_VOLROOT/$5"
+          return 0
+        fi
+        [[ -d "$FIXTURE_VOLROOT/$3" ]] || return 1
+        return 0
+      fi
+      if [[ "$1" == "inspect" && "$2" == "-f" ]]; then
+        case "$3" in
+          *"/app/data"*) printf '%s' "${FIXTURE_SQLITE_VOLUME:-}" ;;
+          *"/var/lib/postgresql/data"*) printf '%s' "${FIXTURE_POSTGRES_VOLUME:-}" ;;
+          *) printf '' ;;
+        esac
+        return 0
+      fi
+      # docker inspect <容器>（PG L5 格的容器在场判定）恒在场。
+      return 0
+    }
+  }
+
+  # ① SQLite：键卷含库、实挂新缺省空卷 → 中止、键逐字未动。
+  local dir1
+  dir1=$(mktemp -d)
+  cat > "$dir1/.env" <<'EOF'
+DB_TYPE=sqlite
+FLMX_SQLITE_VOLUME=sqlite_data
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  FIXTURE_VOLROOT="$dir1/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  : > "$FIXTURE_VOLROOT/sqlite_data/gost.db"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  local rc="0"
+  ( cd "$dir1" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-10: keyed rewrite must abort when the key volume holds the DB and the live mount is the empty new-default volume"
+  grep -q '资源键改写中止' "$dir1/pin.log" || fail "R18-A2-10: the keyed-rewrite abort must be named in the pin output"
+  grep -q '^FLMX_SQLITE_VOLUME=sqlite_data$' "$dir1/.env" || fail "R18-A2-10: the sqlite key must survive verbatim when the keyed-rewrite gate aborts"
+
+  # ② SQLite：挂载点不可读（未知）→ 中止。
+  local dir2
+  dir2=$(mktemp -d)
+  cp "$dir1/.env" "$dir2/.env"
+  FIXTURE_VOLROOT="$dir2/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  : > "$FIXTURE_VOLROOT/sqlite_data/gost.db"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK=""
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  rc="0"
+  ( cd "$dir2" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-10: keyed rewrite must abort when the volume mountpoints are unreadable (unknown must not read as empty)"
+  grep -q '无法确认' "$dir2/pin.log" || fail "R18-A2-10: the unknown-state abort must name that the volume content could not be determined"
+  grep -q '^FLMX_SQLITE_VOLUME=sqlite_data$' "$dir2/.env" || fail "R18-A2-10: the sqlite key must survive verbatim on the unknown-state abort"
+
+  # ③ SQLite：实挂卷已证含库（键陈旧）→ 放行改写。
+  local dir3
+  dir3=$(mktemp -d)
+  cp "$dir1/.env" "$dir3/.env"
+  FIXTURE_VOLROOT="$dir3/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  : > "$FIXTURE_VOLROOT/flmx-sqlite-data/gost.db"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir3" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R18-A2-10: keyed rewrite must proceed when the live-mounted volume provably holds the DB"
+  grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir3/.env" || fail "R18-A2-10: the sqlite key must be rewritten to the live mount once the gate clears"
+
+  # ④ SQLite：键卷已证空（键指向空卷）→ 放行改写。
+  local dir4
+  dir4=$(mktemp -d)
+  cp "$dir1/.env" "$dir4/.env"
+  FIXTURE_VOLROOT="$dir4/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data" "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir4" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R18-A2-10: keyed rewrite must proceed when the key volume is provably empty"
+  grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir4/.env" || fail "R18-A2-10: the sqlite key must be rewritten to the live mount when the key volume is empty"
+
+  # ⑤ SQLite：键卷不存在 → 无数据可护，放行改写。
+  local dir5
+  dir5=$(mktemp -d)
+  cat > "$dir5/.env" <<'EOF'
+DB_TYPE=sqlite
+FLMX_SQLITE_VOLUME=gone_volume
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  FIXTURE_VOLROOT="$dir5/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
+  FIXTURE_POSTGRES_VOLUME=""
+  ( cd "$dir5" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R18-A2-10: keyed rewrite must proceed when the key volume does not exist (nonexistent is not unknown)"
+  grep -q '^FLMX_SQLITE_VOLUME=flmx-sqlite-data$' "$dir5/.env" || fail "R18-A2-10: the sqlite key must be rewritten to the live mount when the key volume is gone"
+
+  # ⑥ PG：键卷含 PG_VERSION、实挂新缺省空卷 → 中止、键逐字未动。
+  local dir6
+  dir6=$(mktemp -d)
+  cat > "$dir6/.env" <<'EOF'
+DB_TYPE=postgres
+FLMX_SQLITE_VOLUME=custom_sqlite
+FLMX_POSTGRES_VOLUME=postgres_data
+COMPOSE_PROJECT_NAME=kept_project
+EOF
+  FIXTURE_VOLROOT="$dir6/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/postgres_data" "$FIXTURE_VOLROOT/flmx-postgres-data"
+  : > "$FIXTURE_VOLROOT/postgres_data/PG_VERSION"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="custom_sqlite"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  rc="0"
+  ( cd "$dir6" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-10: PG keyed rewrite must abort when the key volume holds PG data and the live mount is the empty new-default volume"
+  grep -q '资源键改写中止' "$dir6/pin.log" || fail "R18-A2-10: the PG keyed-rewrite abort must be named in the pin output"
+  grep -q '^FLMX_POSTGRES_VOLUME=postgres_data$' "$dir6/.env" || fail "R18-A2-10: the postgres key must survive verbatim when the keyed-rewrite gate aborts"
+
+  # ⑦ PG：实挂卷已证含库 → 放行改写。
+  local dir7
+  dir7=$(mktemp -d)
+  cp "$dir6/.env" "$dir7/.env"
+  FIXTURE_VOLROOT="$dir7/volroot"
+  mkdir -p "$FIXTURE_VOLROOT/postgres_data" "$FIXTURE_VOLROOT/flmx-postgres-data"
+  : > "$FIXTURE_VOLROOT/flmx-postgres-data/PG_VERSION"
+  pin_keyed_docker
+  FIXTURE_MOUNT_OK="1"
+  FIXTURE_SQLITE_VOLUME="custom_sqlite"
+  FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
+  ( cd "$dir7" && panel_pin_missing_resource_keys backend-c pg-c > pin.log 2>&1 ) || \
+    fail "R18-A2-10: PG keyed rewrite must proceed when the live-mounted volume provably holds the data"
+  grep -q '^FLMX_POSTGRES_VOLUME=flmx-postgres-data$' "$dir7/.env" || fail "R18-A2-10: the postgres key must be rewritten to the live mount once the gate clears"
+)
+
 # D4-A2-04（R18-A2-04）：.env 安全相关键遇 $ 即 fail-closed——
 # Compose 对未引号/双引号值做 $ 插值，脚本与 Go 面按字面读，读面
 # 分家会让数据门把展开后的真卷判成「无数据卷有数据」。变异自测：
@@ -2970,6 +3129,12 @@ test_uninstall_flmx_agent_menu_guard_pass_forms() (
   SERVER_ADDR=""
 
   systemctl() { return 0; }
+  # R18-A3-06：完成判决现计入宿主清理失败——本用例测的是归属守
+  # 卫放行形态，不测宿主清理，故把宿主清理后端（nft/iptables）
+  # 桩成确定性成功/无动作（与邻近卸载用例同做法），否则沙箱的
+  # nft（无 NET_ADMIN）会把判决翻成 1、掩盖守卫本身的断言。
+  nft() { cat >/dev/null; return 0; }
+  iptables() { return 1; }
 
   # TAKEOVER + 常规确认 y → 卸载执行、目录删除、输出含留痕
   INSTALL_DIR=$(mktemp -d)
@@ -3004,6 +3169,10 @@ INSTALL_DIR="$GUARD_TEST_DIR"
 FLMX_AGENT_SYSTEMD_SERVICE_FILE="$GUARD_TEST_DIR/flmx_agent.service"
 SERVICE_MANAGER="systemd"
 SERVER_ADDR=""
+# R18-A3-06：pty 侧同上——桩掉宿主清理后端，守卫断言不受沙箱
+# nft（无 NET_ADMIN）影响。
+nft() { cat >/dev/null; return 0; }
+iptables() { return 1; }
 flmx_agent_service_exists() { return 1; }
 uninstall_flmx_agent
 STUBEOF
@@ -3663,7 +3832,14 @@ test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent() (
   local rc="0" out
   out=$(mktemp)
   printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
-  assert_equals "0" "$rc" "R6-02: nft failure must not fail the whole uninstall"
+  # R18-A3-06：宿主清理失败计入完成判决——旧断言 rc==0 钉的是
+  # 恒回 0 的旧行为；清理本身仍尽力执行到底，只是不再印
+  # 「✅ 卸载完成」。
+  assert_equals "1" "$rc" "R18-A3-06: nft failure must fail the uninstall verdict"
+  grep -q '卸载未完全完成' "$out" || fail "R18-A3-06: nft failure must be reported in the final verdict"
+  if grep -q '✅ 卸载完成' "$out"; then
+    fail "R18-A3-06: must not print the success receipt when host cleanup failed"
+  fi
   [[ ! -d "$INSTALL_DIR" ]] || fail "R6-02: install dir should still be removed when nft cleanup fails"
   [[ ! -e "$FLMX_TUNING_SYSCTL_CONF" ]] || fail "R6-02: other cleanup items should still run when nft fails"
   [[ ! -e "$FLMX_TUNING_KERNEL_CONF" ]] || fail "R6-02: gen-2 kernel conf should still be removed when nft fails"
@@ -3682,11 +3858,58 @@ test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent() (
   fi
 )
 
+# R18-A3-06：host_cleanup 的返回码契约——有失败项回 1、无失败
+# 回 0（旧实现恒回 0，调用方无法把宿主清理失败计入完成判决）。
+# 直接调用，不走整条卸载流程。
+test_uninstall_flmx_agent_host_cleanup_reports_failures_r18_a3_06() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  SERVICE_MANAGER="systemd"
+  SERVER_ADDR=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  FLMX_TUNING_SYSCTL_CONF="$work/sysctl.d/99-flmx-tuning.conf"
+  FLMX_TUNING_SYSCTL_CONF_LEGACY="$work/sysctl.d/99-flvx-tuning.conf"
+  FLMX_TUNING_BBR_MODULE_FILE="$work/modules-load.d/flmx-bbr.conf"
+  FLMX_TUNING_QDISC_UNIT_FILE="$work/systemd/flmx-tuning-qdisc.service"
+  FLMX_TUNING_KERNEL_CONF="$work/sysctl.d/99-network-performance.conf"
+  FLMX_TUNING_GAI_CONF="$work/gai.conf"
+  FLMX_TUNING_GAI_BACKUP="$work/gai.conf.bak"
+  FLMX_PROC_SYS_DIR="$work/proc/sys"
+  mkdir -p "$INSTALL_DIR/tcpfit" "$(dirname "$FLMX_TUNING_SYSCTL_CONF")"
+
+  systemctl() { return 0; }
+  nft() { cat >/dev/null; return 0; }
+  iptables() { return 1; }
+
+  # 只有整形脚本、没有整形前队列备份：清理失败 1 项，回 1。
+  echo '#!/bin/bash' > "$INSTALL_DIR/tcpfit/shape.sh"
+  local rc="0" out
+  out=$(mktemp)
+  uninstall_flmx_agent_host_cleanup >"$out" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A3-06: host cleanup with a lost queue backup must return 1"
+  grep -q '宿主清理有 1 项未完成' "$out" || fail "R18-A3-06: host cleanup must disclose the failure count"
+
+  # 恢复干净态：删掉整形脚本后再跑，回 0、无 ⚠️ 行。
+  rm -f "$INSTALL_DIR/tcpfit/shape.sh"
+  rc="0"
+  uninstall_flmx_agent_host_cleanup >"$out" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R18-A3-06: host cleanup on a clean state must return 0"
+  if grep -q '⚠️' "$out"; then
+    fail "R18-A3-06: host cleanup on a clean state should report no failures"
+  fi
+)
+
 # R2F2-D01：整形前队列备份丢失（只有 shape.sh、没有
 # original-qdisc.sh）时脚本卸载的口径——队列整形明确点名未能恢
 # 复（不假装已恢复），但 sysctl 原值仍按 tuning-backup.json 写
-# 回、宿主调优文件集仍删净、卸载整体成功。与面板连带自卸载的
-# agent 侧同场景同口径（go-gost/x/socket 的 cleanup/preflight）。
+# 回、宿主调优文件集仍删净；卸载整体以失败收尾（R18-A3-06：宿
+# 主清理失败计入完成判决，不再印「✅ 卸载完成」）。与面板连带
+# 自卸载的 agent 侧同场景同口径（go-gost/x/socket 的
+# cleanup/preflight：失败步骤→终局失败）。
 test_uninstall_flmx_agent_host_cleanup_queue_backup_lost() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -3740,7 +3963,13 @@ JSON
   local rc="0" out
   out=$(mktemp)
   printf 'y\n' | FLMX_AGENT_TAKEOVER="1" uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
-  assert_equals "0" "$rc" "R2F2-D01: uninstall with a lost queue backup should still succeed"
+  # R18-A3-06：队列备份丢失是宿主清理失败，须进完成判决——旧断
+  # 言 rc==0 钉的是恒回 0 的旧行为；清理本身仍尽力执行到底。
+  assert_equals "1" "$rc" "R18-A3-06: uninstall with a lost queue backup must report failure in the verdict"
+  grep -q '卸载未完全完成' "$out" || fail "R18-A3-06: lost queue backup must be reported in the final verdict"
+  if grep -q '✅ 卸载完成' "$out"; then
+    fail "R18-A3-06: must not print the success receipt when host cleanup failed"
+  fi
   grep -q '找不到整形前的队列备份' "$out" || \
     fail "R2F2-D01: the unrestorable queue shaping must be named in the receipt"
   [[ ! -d "$INSTALL_DIR" ]] || fail "R2F2-D01: install dir should be removed"
@@ -3913,7 +4142,13 @@ test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_corrupt() (
 
   local rc="0" out
   out=$(uninstall_flmx_agent_host_cleanup 2>&1) || rc="$?"
-  assert_equals "0" "$rc" "J9-01: host cleanup with a corrupt snapshot should still succeed"
+  # R18-A3-06：快照损坏是计数的清理失败（其余键未能回退、只落
+  # 了三项标题默认值），须回 1——旧断言 rc==0 钉的是恒回 0 的
+  # 旧行为；清理本身仍执行到底（默认值已落盘、快照已删除、不可
+  # 恢复键已点名）。
+  assert_equals "1" "$rc" "R18-A3-06: host cleanup with a corrupt snapshot must return 1"
+  [[ "$out" == *"宿主清理有 1 项未完成"* ]] || \
+    fail "R18-A3-06: corrupt snapshot must be disclosed as a counted failure: $out"
   assert_equals "cubic" "$(cat "$FLMX_PROC_SYS_DIR/net/ipv4/tcp_congestion_control")" \
     "J9-01: corrupt snapshot should fall back to the cubic headline default"
   assert_equals "pfifo_fast" "$(cat "$FLMX_PROC_SYS_DIR/net/core/default_qdisc")" \
@@ -4031,6 +4266,125 @@ test_install_script_bootstraps_bash_for_alpine() (
 
   grep -Fq 'apk add --no-cache bash' "$ROOT_DIR/install.sh" || \
     fail "install.sh should bootstrap Bash through apk on Alpine"
+)
+
+# R18-A3-09：Alpine bootstrap 代理重试夹具。造一个最小 PATH 环境：
+# fakebin{apk,sudo} + minbin{id 假脚本、env/chmod 软链}，真实 bash
+# 不在 PATH 内；bootstrap.sh 为 install.sh 引导块抽取（H1-05 注释
+# 之前）。apk 首调失败、次调成功并“安装”一个 fake bash（导出
+# BASH_VERSION，二次 exec 后引导块跳过、正常退出）；apk_mode=
+# always-fail 时恒失败。回显夹具目录。
+alpine_proxy_fixture() (
+  local id_uid="$1" apk_mode="${2:-retry}"
+  local work
+  work=$(mktemp -d)
+  local fakebin="$work/fakebin" minbin="$work/minbin"
+  mkdir -p "$fakebin" "$minbin"
+  ln -s "$(command -v env)" "$minbin/env"
+  ln -s "$(command -v chmod)" "$minbin/chmod"
+  printf '#!/bin/sh\necho %s\n' "$id_uid" > "$minbin/id"
+  chmod +x "$minbin/id"
+  # sudo 模拟 env_reset：清掉 4 个代理变量再执行参数；`sudo env
+  # VAR=... apk` 形态下内层 env 会把变量作为参数重新设上。
+  cat > "$fakebin/sudo" <<'SUDO_EOF'
+#!/bin/sh
+exec env -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY "$@"
+SUDO_EOF
+  chmod +x "$fakebin/sudo"
+  cat > "$fakebin/apk" <<APK_EOF
+#!/bin/sh
+printf 'call http_proxy=%s https_proxy=%s args=%s\n' "\${http_proxy:-unset}" "\${https_proxy:-unset}" "\$*" >> "$work/apk-calls.log"
+calls=0
+while IFS= read -r _l; do calls=\$((calls + 1)); done < "$work/apk-calls.log"
+if [ "$apk_mode" = "always-fail" ]; then
+  exit 1
+fi
+if [ "\$calls" -le 1 ]; then
+  exit 1
+fi
+cat > "$fakebin/bash" <<'BASH_EOF'
+#!/bin/sh
+BASH_VERSION="5.2-fake"
+export BASH_VERSION
+exec /bin/sh "\$@"
+BASH_EOF
+chmod +x "$fakebin/bash"
+exit 0
+APK_EOF
+  chmod +x "$fakebin/apk"
+  : > "$work/apk-calls.log"
+  : > "$work/alpine-release"
+  sed -n '1,/^# H1-05/p' "$ROOT_DIR/install.sh" | head -n -1 > "$work/bootstrap.sh"
+  echo "$work"
+)
+
+# R18-A3-09：sudo 分支——首跑经 sudo（env_reset  stripped 代理变
+# 量）失败，重试经 `sudo env VAR=... apk` 透传代理后成功；全程
+# 不碰真实 apk/bash。
+test_install_script_bootstraps_bash_for_alpine_proxy_retry() (
+  set -euo pipefail
+  local work
+  work=$(alpine_proxy_fixture 1000 retry)
+
+  local rc="0" out
+  out=$(env -u BASH_VERSION FLMX_ALPINE_RELEASE_FILE="$work/alpine-release" \
+    http_proxy="http://proxy.example:8080" https_proxy="http://proxy.example:8080" \
+    PATH="$work/fakebin:$work/minbin" /bin/sh "$work/bootstrap.sh" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A3-09: sudo-branch apk retry with proxy must install bash"
+  assert_equals "2" "$(wc -l < "$work/apk-calls.log" | tr -d ' ')" \
+    "R18-A3-09: apk must be called exactly twice (direct, then proxy retry)"
+  grep -q '^call http_proxy=unset' "$work/apk-calls.log" || \
+    fail "R18-A3-09: first apk call must not see the proxy (sudo strips it): $(cat "$work/apk-calls.log")"
+  grep -q '^call http_proxy=http://proxy.example:8080' "$work/apk-calls.log" || \
+    fail "R18-A3-09: retry apk call must see the proxy variable: $(cat "$work/apk-calls.log")"
+  [[ -x "$work/fakebin/bash" ]] || fail "R18-A3-09: retry must install bash"
+)
+
+# R18-A3-09：root 直跑分支——首跑已带代理变量仍失败时同样重试，
+# 不因“直跑透传本就生效”而放弃第二次机会。
+test_install_script_bootstraps_bash_for_alpine_proxy_retry_root() (
+  set -euo pipefail
+  local work
+  work=$(alpine_proxy_fixture 0 retry)
+
+  local rc="0" out
+  out=$(env -u BASH_VERSION FLMX_ALPINE_RELEASE_FILE="$work/alpine-release" \
+    http_proxy="http://proxy.example:8080" https_proxy="http://proxy.example:8080" \
+    PATH="$work/fakebin:$work/minbin" /bin/sh "$work/bootstrap.sh" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A3-09: root-branch apk retry with proxy must install bash"
+  assert_equals "2" "$(wc -l < "$work/apk-calls.log" | tr -d ' ')" \
+    "R18-A3-09: apk must be called exactly twice on the root branch too"
+  grep -q '^call http_proxy=http://proxy.example:8080' "$work/apk-calls.log" || \
+    fail "R18-A3-09: root-branch retry apk call must see the proxy variable: $(cat "$work/apk-calls.log")"
+  [[ -x "$work/fakebin/bash" ]] || fail "R18-A3-09: retry must install bash"
+)
+
+# R18-A3-09：apk 恒失败——退出 1、失败文案点名代理变量、且只重试
+# 一次；无代理变量时不重试（只跑一次）。
+test_install_script_bootstraps_bash_for_alpine_proxy_failure() (
+  set -euo pipefail
+  local work
+  work=$(alpine_proxy_fixture 1000 always-fail)
+
+  local rc="0" out
+  out=$(env -u BASH_VERSION FLMX_ALPINE_RELEASE_FILE="$work/alpine-release" \
+    http_proxy="http://proxy.example:8080" https_proxy="http://proxy.example:8080" \
+    PATH="$work/fakebin:$work/minbin" /bin/sh "$work/bootstrap.sh" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A3-09: apk that always fails must exit 1"
+  assert_equals "2" "$(wc -l < "$work/apk-calls.log" | tr -d ' ')" \
+    "R18-A3-09: apk must be retried exactly once with proxy set"
+  [[ "$out" == *"http_proxy"* && "$out" == *"https_proxy"* ]] || \
+    fail "R18-A3-09: failure message must name the proxy variables: $out"
+
+  : > "$work/apk-calls.log"
+  rc="0"
+  # 无代理变量时不重试：须显式 unset（运行环境本身可能带代理变量）。
+  out=$(env -u BASH_VERSION -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY \
+    FLMX_ALPINE_RELEASE_FILE="$work/alpine-release" \
+    PATH="$work/fakebin:$work/minbin" /bin/sh "$work/bootstrap.sh" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A3-09: apk that always fails must exit 1 without proxy too"
+  assert_equals "1" "$(wc -l < "$work/apk-calls.log" | tr -d ' ')" \
+    "R18-A3-09: apk must not be retried when no proxy variable is set"
 )
 
 test_install_flmx_agent_uses_openrc() (
@@ -13678,6 +14032,7 @@ test_panel_small_host_swap_boundary_exactly_512mib
 test_panel_small_host_swap_rolls_back_on_build_failure
 test_uninstall_flmx_agent_host_cleanup_partial_failure_and_idempotent
 test_uninstall_flmx_agent_host_cleanup_queue_backup_lost
+test_uninstall_flmx_agent_host_cleanup_reports_failures_r18_a3_06
 test_uninstall_flmx_agent_host_cleanup_restores_kernel_snapshot
 test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_missing
 test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_corrupt
@@ -13685,6 +14040,9 @@ test_install_flmx_agent_writes_json_safe_config
 test_write_flmx_agent_config_creates_0600
 test_install_flmx_agent_config_preserves_protocol_counts
 test_install_script_bootstraps_bash_for_alpine
+test_install_script_bootstraps_bash_for_alpine_proxy_retry
+test_install_script_bootstraps_bash_for_alpine_proxy_retry_root
+test_install_script_bootstraps_bash_for_alpine_proxy_failure
 test_install_flmx_agent_uses_openrc
 test_remove_flmx_agent_service_uses_openrc
 test_cleanup_legacy_gost_installation_removes_service_and_binary
@@ -13994,6 +14352,7 @@ test_install_probe_route_uses_channel_tag_grammar
 test_install_panel_route_gates_and_watchdog
 test_install_panel_force_reinstall_data_gate
 test_panel_pin_accident_gate_unknown_mount_aborts
+test_panel_pin_keyed_rewrite_accident_gate_r18_a2_10
 test_panel_env_dollar_rejected_fail_closed
 test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key

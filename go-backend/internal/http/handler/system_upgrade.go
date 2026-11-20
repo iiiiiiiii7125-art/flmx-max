@@ -1832,6 +1832,22 @@ type resourceNameInspect struct {
 	// 为真、确定不在则为假）。
 	sqliteLegacyVolumeProbeErr   error
 	postgresLegacyVolumeProbeErr error
+	// sqliteKeyVolumeHasDB / sqliteMountedVolumeHasDB 是有键改
+	// 写事故态门（R18-A2-10）的双卷证据：键卷（.env
+	// FLMX_SQLITE_VOLUME 所指）与实挂卷是否各含 gost.db；两
+	// ProbeErr 字段同上为通道失败（未知）。PG 格四字段同形，
+	// 证据文件为 PG_VERSION。探针只在门前件（有键＋实挂恰为
+	// 新缺省名＋与键不同）成立时采集；未采集时四值皆零值，规
+	// 划段按「两卷皆无证据」放行改写（与无证据时钉键的既有口
+	// 径一致）。
+	sqliteKeyVolumeHasDB         bool
+	sqliteKeyVolumeProbeErr      error
+	sqliteMountedVolumeHasDB     bool
+	sqliteMountedVolumeProbeErr  error
+	postgresKeyVolumeHasData     bool
+	postgresKeyVolumeProbeErr    error
+	postgresMountedVolumeHasData bool
+	postgresMountedVolumeProbeErr error
 	// pgContainerFound 为旧 PG 容器已定位成功：卷实读为空时据此
 	// 区分「容器不在场」与「在场但挂载读空（bind 等）」，供
 	// R1-01-L5 的 PG bind 中止判定。
@@ -1897,6 +1913,13 @@ type resourcePinPlan struct {
 // 成立但证据探针通道失败时证据状态为未知——按
 // errAccidentProbeFailed 中止并点名探针失败，不把未知当无证
 // 据放行（与脚本面 panel_volume_file_state 未知态同处置）。
+// 有键改写分支的事故态门（R18-A2-10）：键在但与实读不一致时
+// 旧实现同样无条件以实读改写——在跑容器本身挂错卷时改写即把
+// 事故态正式化。故 corrections 分支加同谓词门：实挂恰为新缺省
+// 名＋键卷含真实数据（或探针未知）＋实挂卷为空（或探针未知）
+// 时中止；键卷已证空或实挂卷已证含库时无事故可证，仍以实读为
+// 准改写。双卷证据由 inspectLegacyResourceNames 在门前件成立
+// 时采集。
 // 实读为空时的键信任（R1-01-L5，仅 PG 格）：PG 模式、PG 卷键
 // 已有值、旧 PG 容器已定位且其挂载 inspect 成功但卷名为空
 // （bind 挂载）时，键值无从核对——此形态下脚本面逐字信键、重
@@ -1938,6 +1961,28 @@ func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) (re
 			expected = insp.sqliteVolume
 		}
 	case insp.backendExists && insp.sqliteVolume != "" && insp.sqliteVolume != expected:
+		// R18-A2-10：有键改写分支的事故态门——键在但与实读不
+		// 一致时，旧实现无条件以实读改写；若在跑容器本身挂错
+		// 卷（真库在键卷里，现挂空的新缺省卷），改写即把事故
+		// 态正式化。故与无键门同谓词：实挂恰为新缺省名＋键卷
+		// 含真实数据（或探针未知）＋实挂卷为空（或探针未知）
+		// 时 fail-closed 中止点名；其余形态仍按「实读为准」改写。
+		if insp.sqliteVolume == newSQLiteDataVolume+panelInstanceSuffix(env) {
+			keyCleared := !insp.sqliteKeyVolumeHasDB && insp.sqliteKeyVolumeProbeErr == nil
+			mountedCleared := insp.sqliteMountedVolumeHasDB && insp.sqliteMountedVolumeProbeErr == nil
+			switch {
+			case keyCleared || mountedCleared:
+				// 无事故可证：键卷已证空，或实挂卷已证含库——
+				// 改写仍以实读为准。
+			case insp.sqliteKeyVolumeHasDB && insp.sqliteKeyVolumeProbeErr == nil && !insp.sqliteMountedVolumeHasDB && insp.sqliteMountedVolumeProbeErr == nil:
+				return plan, fmt.Errorf("%w：部署 .env 已有 %s=%s，但在跑后端实际挂载的数据卷是模板新缺省卷 %s，且键卷 %s 含有 gost.db、现行卷内无 gost.db——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时以实读改写会把事故态正式化。请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重试升级：数据在键卷 → 保持 %s=%s；数据确在现行卷 → %s=%s",
+					errAccidentStateVolume, envKeySQLiteVolume, expected, insp.sqliteVolume, expected,
+					envKeySQLiteVolume, expected, envKeySQLiteVolume, insp.sqliteVolume)
+			default:
+				return plan, fmt.Errorf("%w：部署 .env 已有 %s=%s，但在跑后端实际挂载的数据卷是模板新缺省卷 %s，事故态门需确认键卷 %s 与现行卷 %s 是否含有 gost.db，但证据探针执行失败（键卷探针：%v；现行卷探针：%v），无法排除「真库在键卷」的事故形态，此时以实读改写可能把事故态正式化。请先修复探针通道（docker 可用、后端镜像可读）后重试，或人工确认数据所在卷后在 .env 中显式钉入正确卷名再重试",
+					errAccidentProbeFailed, envKeySQLiteVolume, expected, insp.sqliteVolume, expected, insp.sqliteVolume, insp.sqliteKeyVolumeProbeErr, insp.sqliteMountedVolumeProbeErr)
+			}
+		}
 		plan.corrections = append(plan.corrections, envKeyValue{envKeySQLiteVolume, insp.sqliteVolume})
 		expected = insp.sqliteVolume
 	}
@@ -1984,6 +2029,26 @@ func planLegacyResourcePins(env map[string]string, insp resourceNameInspect) (re
 				errPGVolumeUndetermined, envKeyPostgresVolume, legacyPostgresDataVolume)
 		}
 	case insp.pgVolume != "" && insp.pgVolume != pgExpected:
+		// R18-A2-10：PG 格有键改写分支的事故态门，与 SQLite 格
+		// 同谓词同处置（证据文件为 PG_VERSION）。PG bind 形态
+		// （实读为空）已由上文 R1-01-L5 中止格覆盖，本格只认命
+		// 名卷实挂。
+		if insp.pgVolume == newPostgresDataVolume+panelInstanceSuffix(env) {
+			keyCleared := !insp.postgresKeyVolumeHasData && insp.postgresKeyVolumeProbeErr == nil
+			mountedCleared := insp.postgresMountedVolumeHasData && insp.postgresMountedVolumeProbeErr == nil
+			switch {
+			case keyCleared || mountedCleared:
+				// 无事故可证：键卷已证空，或实挂卷已证含库——
+				// 改写仍以实读为准。
+			case insp.postgresKeyVolumeHasData && insp.postgresKeyVolumeProbeErr == nil && !insp.postgresMountedVolumeHasData && insp.postgresMountedVolumeProbeErr == nil:
+				return plan, fmt.Errorf("%w：部署 .env 已有 %s=%s，但在跑 PostgreSQL 容器实际挂载的数据卷是模板新缺省卷 %s，且键卷 %s 含有 PG_VERSION（真实 PostgreSQL 数据目录）、现行卷内无 PG_VERSION——该部署可能正处在「挂新空卷、真库在旧卷」的事故形态，此时以实读改写会把事故态正式化。请人工确认数据所在卷后，在 .env 中显式钉入正确卷名再重试升级：数据在键卷 → 保持 %s=%s；数据确在现行卷 → %s=%s",
+					errAccidentStateVolume, envKeyPostgresVolume, pgExpected, insp.pgVolume, pgExpected,
+					envKeyPostgresVolume, pgExpected, envKeyPostgresVolume, insp.pgVolume)
+			default:
+				return plan, fmt.Errorf("%w：部署 .env 已有 %s=%s，但在跑 PostgreSQL 容器实际挂载的数据卷是模板新缺省卷 %s，事故态门需确认键卷 %s 与现行卷 %s 是否含有 PG_VERSION，但证据探针执行失败（键卷探针：%v；现行卷探针：%v），无法排除「真库在键卷」的事故形态，此时以实读改写可能把事故态正式化。请先修复探针通道（docker 可用、后端镜像可读）后重试，或人工确认数据所在卷后在 .env 中显式钉入正确卷名再重试",
+					errAccidentProbeFailed, envKeyPostgresVolume, pgExpected, insp.pgVolume, pgExpected, insp.pgVolume, insp.postgresKeyVolumeProbeErr, insp.postgresMountedVolumeProbeErr)
+			}
+		}
 		plan.corrections = append(plan.corrections, envKeyValue{envKeyPostgresVolume, insp.pgVolume})
 		pgExpected = insp.pgVolume
 	}
@@ -2087,6 +2152,18 @@ func (e *systemUpgradeExecutor) inspectLegacyResourceNames(ctx context.Context, 
 	}
 	if env[envKeyPostgresVolume] == "" && insp.pgVolume == newPostgresDataVolume+suffix {
 		insp.postgresLegacyVolumeHasData, insp.postgresLegacyVolumeProbeErr = e.dockerVolumeFileExists(ctx, legacyPostgresDataVolume, "PG_VERSION")
+	}
+	// R18-A2-10：有键改写分支的同谓词门——有键＋实挂恰为新缺
+	// 省名＋与键不同时，改写前同样须确认键卷与实挂卷的真库证
+	// 据，否则挂错卷的事故态会被改写正式化。两卷证据各花一次
+	// 探针；探针通道失败同样由规划段 fail-closed。
+	if env[envKeySQLiteVolume] != "" && insp.backendExists && insp.sqliteVolume == newSQLiteDataVolume+suffix && insp.sqliteVolume != env[envKeySQLiteVolume] {
+		insp.sqliteKeyVolumeHasDB, insp.sqliteKeyVolumeProbeErr = e.dockerVolumeFileExists(ctx, env[envKeySQLiteVolume], "gost.db")
+		insp.sqliteMountedVolumeHasDB, insp.sqliteMountedVolumeProbeErr = e.dockerVolumeFileExists(ctx, insp.sqliteVolume, "gost.db")
+	}
+	if env[envKeyPostgresVolume] != "" && insp.pgVolume == newPostgresDataVolume+suffix && insp.pgVolume != env[envKeyPostgresVolume] {
+		insp.postgresKeyVolumeHasData, insp.postgresKeyVolumeProbeErr = e.dockerVolumeFileExists(ctx, env[envKeyPostgresVolume], "PG_VERSION")
+		insp.postgresMountedVolumeHasData, insp.postgresMountedVolumeProbeErr = e.dockerVolumeFileExists(ctx, insp.pgVolume, "PG_VERSION")
 	}
 	return insp
 }

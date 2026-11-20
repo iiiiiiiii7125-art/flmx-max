@@ -97,9 +97,37 @@ func buildDiagRequest(family byte) []byte {
 }
 
 func sockDiagDump(family byte) ([]uint32, error) {
+	// R18-D2-14: a busy node packs hundreds of inet_diag_msg into
+	// a single netlink datagram, and the old fixed 64KB buffer
+	// silently truncated it — the parse then failed the whole RTT
+	// leg. Each attempt restarts the dump from scratch (a truncated
+	// datagram is consumed and cannot be re-read), with a bigger
+	// buffer; only when even 4MB is too small does the leg report
+	// "too many samples" instead of a misleading truncation error.
+	for _, bufSize := range sockDiagBufSizes {
+		rtts, truncated, err := sockDiagDumpOnce(family, bufSize)
+		if err != nil {
+			return nil, err
+		}
+		if !truncated {
+			return rtts, nil
+		}
+	}
+	return nil, fmt.Errorf("sock_diag 响应过大（单数据报超过 %d 字节），样本过多", sockDiagBufSizes[len(sockDiagBufSizes)-1])
+}
+
+// sockDiagBufSizes is the retry ladder for one dump (R18-D2-14):
+// 256KB, 1MB, 4MB.
+var sockDiagBufSizes = []int{256 << 10, 1 << 20, 4 << 20}
+
+// sockDiagRecvfrom is unix.Recvfrom as a variable so tests can stage
+// a truncated-then-complete dump without a live kernel (R18-D2-14).
+var sockDiagRecvfrom = unix.Recvfrom
+
+func sockDiagDumpOnce(family byte, bufSize int) (rtts []uint32, truncated bool, err error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_INET_DIAG)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer unix.Close(fd)
 	// Bound the dump read: a kernel that never sends NLMSG_DONE must
@@ -108,23 +136,29 @@ func sockDiagDump(family byte) ([]uint32, error) {
 	_ = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: 5})
 
 	if err := unix.Sendto(fd, buildDiagRequest(family), 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	var rtts []uint32
-	buf := make([]byte, 64<<10)
+	buf := make([]byte, bufSize)
 	done := false
 	for !done {
-		n, _, err := unix.Recvfrom(fd, buf, 0)
+		// MSG_TRUNC: the return value is the datagram's true
+		// length even when it does not fit the buffer, so a
+		// truncated datagram is detected instead of being parsed
+		// as garbage (R18-D2-14).
+		n, _, err := sockDiagRecvfrom(fd, buf, unix.MSG_TRUNC)
 		if err != nil {
-			return nil, err
+			return nil, false, err
+		}
+		if n > len(buf) {
+			return nil, true, nil
 		}
 		off := 0
 		for off+16 <= n {
 			length := int(binary.LittleEndian.Uint32(buf[off : off+4]))
 			msgType := binary.LittleEndian.Uint16(buf[off+4 : off+6])
 			if length < 16 || off+length > n {
-				return nil, fmt.Errorf("sock_diag 响应截断")
+				return nil, false, fmt.Errorf("sock_diag 响应截断")
 			}
 			payload := buf[off+16 : off+length]
 			switch msgType {
@@ -133,7 +167,7 @@ func sockDiagDump(family byte) ([]uint32, error) {
 			case unix.NLMSG_ERROR:
 				if len(payload) >= 4 {
 					if code := int32(binary.LittleEndian.Uint32(payload[0:4])); code != 0 {
-						return nil, fmt.Errorf("sock_diag 内核错误 %d", -code)
+						return nil, false, fmt.Errorf("sock_diag 内核错误 %d", -code)
 					}
 				}
 			case sockDiagByFamily:
@@ -144,7 +178,7 @@ func sockDiagDump(family byte) ([]uint32, error) {
 			off += (length + 3) &^ 3
 		}
 	}
-	return rtts, nil
+	return rtts, false, nil
 }
 
 // extractTCPRTT pulls the smoothed RTT (µs) out of one inet_diag_msg
