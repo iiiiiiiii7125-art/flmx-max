@@ -1612,11 +1612,16 @@ write_flmx_agent_config() {
       fi
     done
   fi
-  printf '{\n  "addr": "%s",\n  "secret": "%s"%s%s\n}\n' \
+  # R18-A3-08：配置文件含密钥，须以 0600 落盘。旧实现先以进程 umask
+  # 建文件（常为 644）、之后才 chmod 600，窗口期内密钥全机可读。
+  # 现写时 umask 077（新建即 0600），再显式 chmod 600 覆盖已存在
+  # 的宽权限旧文件（重定向不改已存在文件的权限位）。
+  ( umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"%s%s\n}\n' \
     "$(json_escape "$SERVER_ADDR")" \
     "$(json_escape "$SECRET")" \
     "$proxy_json" \
-    "$counts_json" > "$path"
+    "$counts_json" > "$path" ) || return 1
+  chmod 600 "$path" || return 1
 }
 
 ensure_service_manager() {

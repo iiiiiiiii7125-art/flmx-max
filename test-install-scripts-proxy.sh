@@ -3312,6 +3312,38 @@ EOF
     fail "systemd service should disable transparent huge pages for the Go heap"
 )
 
+# R18-A3-08：config.json 含密钥，须以 0600 落盘。旧实现先以进程
+# umask 建文件（常为 644）、之后才 chmod 600，窗口期内密钥全机
+# 可读。本用例在宽 umask（022）下直调 write_flmx_agent_config：
+# 新建与重写已存在的 644 旧文件都须为 0600。旧代码上两臂均为
+# 644，必红。
+test_write_flmx_agent_config_creates_0600() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  mkdir -p "$INSTALL_DIR"
+  SERVER_ADDR="panel.example.com:443"
+  printf -v SECRET '%s' 'k9f3x7'
+  PROXY_ENABLED=""
+  PROXY_URL=""
+
+  # 臂 1：宽 umask 下新建仍为 0600。
+  ( umask 022; write_flmx_agent_config "$INSTALL_DIR/config.json" )
+  assert_equals "600" "$(stat -c %a "$INSTALL_DIR/config.json")" \
+    "R18-A3-08: config.json must be created 0600 even under a permissive umask"
+
+  # 臂 2：已存在的 644 旧文件重写后收紧为 0600。
+  chmod 644 "$INSTALL_DIR/config.json"
+  ( umask 022; write_flmx_agent_config "$INSTALL_DIR/config.json" )
+  assert_equals "600" "$(stat -c %a "$INSTALL_DIR/config.json")" \
+    "R18-A3-08: rewriting an existing config must tighten it to 0600"
+  grep -Fq '"secret": "k9f3x7"' "$INSTALL_DIR/config.json" || \
+    fail "R18-A3-08: the rewritten config must still carry the secret"
+  rm -rf "$work"
+)
+
 test_install_script_bootstraps_bash_for_alpine() (
   set -euo pipefail
 
@@ -12558,6 +12590,7 @@ test_uninstall_flmx_agent_host_cleanup_restores_kernel_snapshot
 test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_missing
 test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_corrupt
 test_install_flmx_agent_writes_json_safe_config
+test_write_flmx_agent_config_creates_0600
 test_install_flmx_agent_config_preserves_protocol_counts
 test_install_script_bootstraps_bash_for_alpine
 test_install_flmx_agent_uses_openrc
