@@ -270,10 +270,18 @@ func (c *Checker) runChecks(ctx context.Context) {
 					ts := time.Now().UnixMilli()
 					result := c.executeCheck(&m, ts, limits)
 
-					// Always update in-memory cache for real-time reads
+					// R18-B11-02：写缓存须与 RunOnce 同式时间戳守卫——
+					// 旧代码无条件覆盖，调度轮可把手动执行的新结果
+					// 覆盖回陈旧的调度结果（RunOnce 侧守卫是单边的）。
+					// lastRun 同理只向前推进，不被旧时间戳回拨
+					//（回拨会让该监控被提前再次调度）。
 					c.mu.Lock()
-					c.latestResults[m.ID] = result
-					c.lastRun[m.ID] = result.Timestamp
+					if existing := c.latestResults[m.ID]; existing == nil || existing.Timestamp <= result.Timestamp {
+						c.latestResults[m.ID] = result
+					}
+					if result.Timestamp > c.lastRun[m.ID] {
+						c.lastRun[m.ID] = result.Timestamp
+					}
 					delete(c.inFlight, m.ID)
 
 					// Only write to DB every 30s per monitor
