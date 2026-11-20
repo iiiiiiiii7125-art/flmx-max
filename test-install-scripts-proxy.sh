@@ -7512,6 +7512,37 @@ test_main_requires_root() (
   assert_equals "1" "$rc" "R4B11-004: main must fail fast when not run as root"
 )
 
+# R18-A1-02：panel main 的 root 检查须在自更新之前。旧顺序非 root
+# 调用者先等自更新走完联网预算（断网时数分钟）才被拒绝；新顺序
+# 0 秒 fail-fast，且自更新不被触发（桩函数留痕断言）。EUID 只读、
+# root 环境下跳过功能臂（与 test_main_requires_root 同口径）；
+# 文档臂（install.md 登记 SELF_UPDATE_SKIP 逃生口）与环境无关、
+# 始终执行。
+test_panel_main_root_check_precedes_self_update() (
+  set -euo pipefail
+  grep -Fq 'SELF_UPDATE_SKIP=1' "$ROOT_DIR/doc/guide/install.md" || \
+    fail "R18-A1-02: install.md must document the SELF_UPDATE_SKIP=1 escape hatch"
+  if [[ $EUID -eq 0 ]]; then
+    echo "skip: test_panel_main_root_check_precedes_self_update needs a non-root environment"
+    return 0
+  fi
+  local work file marker rc out
+  work=$(mktemp -d)
+  marker="$work/self-update-ran"
+  file="$work/panel-main.sh"
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/panel_install.sh" > "$file"
+  cat >> "$file" <<STUBEOF
+self_update_check() { touch "$marker"; }
+main
+STUBEOF
+  rc="0"; out=$(SELF_UPDATE_SKIP= bash "$file" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A1-02: panel main must fail fast for non-root"
+  [[ ! -f "$marker" ]] || fail "R18-A1-02: self-update must not run before the root check"
+  [[ "$out" == *"需要 root 权限运行"* ]] || \
+    fail "R18-A1-02: non-root refusal must name the root requirement"
+  rm -rf "$work"
+)
+
 # R4B11-006: 交互式密钥读取必须关回显；迁移 PG 口令不得再作为
 # docker run 的 pgloader 进程参数出现（改走只读挂载的命令文件）。
 test_script_secret_surfaces_closed() (
@@ -12415,6 +12446,7 @@ test_uninstall_removes_custom_kernel_dir
 test_resolve_custom_kernel_dir_rejects_system_subdirs
 test_install_panel_invalid_port_aborts_before_download
 test_main_requires_root
+test_panel_main_root_check_precedes_self_update
 test_script_secret_surfaces_closed
 test_ensure_compose_trusted_proxy_hops_injects_mapping_form
 test_ensure_compose_trusted_proxy_hops_keeps_existing_line

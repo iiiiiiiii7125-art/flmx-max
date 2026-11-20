@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.04"
+SCRIPT_VERSION="20261120.05"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -5826,21 +5826,23 @@ panel_acquire_run_lock() {
 
 # 主逻辑
 main() {
+  # F-125: 前置 root 检查。非 root 运行会在 apt/systemctl/docker 写操作
+  # 处中途失败、留下半成品（已下载的 compose、改了一半的 daemon.json），
+  # 这里在任何落盘动作之前 fail-fast。R18-A1-02：本检查须在自更新之
+  # 前——root 检查是纯本地判断、零成本；旧顺序先跑自更新（断网时可
+  # 耗尽数分钟联网预算）才拒绝非 root 调用，fail-fast 被架空。
+  if [[ $EUID -ne 0 ]]; then
+    echo "❌ panel_install.sh 需要 root 权限运行（涉及 Docker 与系统配置写入）"
+    echo "   请使用 root 用户或 sudo 重新执行"
+    exit 1
+  fi
+
   # F-006: 自更新检查放在 main 入口（自更新依赖 resolve_version /
   # 路由助手 / download_verified，均已在上文定义）。放在 main 内
   # 而非顶层还有一层考虑：测试夹具以「截断到 main 之前 + source」方式
   # 加载本脚本的函数，顶层调用会误入夹具；main 不会被夹具调用。
   if [ "${SELF_UPDATE_SKIP:-}" != "1" ]; then
     self_update_check "$@"
-  fi
-
-  # F-125: 前置 root 检查。非 root 运行会在 apt/systemctl/docker 写操作
-  # 处中途失败、留下半成品（已下载的 compose、改了一半的 daemon.json），
-  # 这里在任何落盘动作之前 fail-fast。
-  if [[ $EUID -ne 0 ]]; then
-    echo "❌ panel_install.sh 需要 root 权限运行（涉及 Docker 与系统配置写入）"
-    echo "   请使用 root 用户或 sudo 重新执行"
-    exit 1
   fi
 
   # A2-07：进程锁——在任何落盘动作之前取得（自更新已先行完
