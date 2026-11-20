@@ -33,6 +33,17 @@ else
   fi
 fi
 
+# ── R18-A5-03: go-backend/patch.py is a stale change script — its
+# anchors partly still match a refactored tree, so re-running it injects
+# a duplicate ensureConnLimiterOnNode, an undefined cLimiterName and a
+# 9-arg buildForwardServiceConfigs call. The change it used to carry
+# already exists in evolved form in the tree; the script must not exist.
+if [ -e go-backend/patch.py ]; then
+  note_fail "R18-A5-03: go-backend/patch.py still present (stale change script, re-running breaks the build)"
+else
+  note_ok "R18-A5-03: go-backend/patch.py absent"
+fi
+
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
   echo "RESULT: PASS"
