@@ -148,20 +148,93 @@ def browser_type_launch_args():
     }
 
 
+@pytest.fixture(scope="function")
+def browser(browser_type, browser_type_launch_args):
+    """Fresh browser per test (overrides pytest-playwright's session one).
+
+    A single browser process accumulates memory over the suite's 21
+    heavy page loads (unminified dev bundles, one fresh context per
+    test): late in a run page loads degrade past every timeout and the
+    browser process itself has been observed dying mid-run (SIGILL/CFI
+    crash in the sandbox probe). A per-test browser keeps each test
+    isolated and bounds that growth; the launch cost (~1s per test)
+    is small next to the page loads.
+    """
+    b = browser_type.launch(**browser_type_launch_args)
+    yield b
+    b.close()
+
+
 @pytest.fixture(scope="session")
-def browser_context_args():
-    """Browser context arguments."""
-    return {
+def admin_storage_state(tmp_path_factory, browser_type, browser_type_launch_args, authenticated_api, frontend_url) -> str:
+    """One logged-in browser session, reused by marked browser tests.
+
+    The suite performs ~20 logins in ~2 min against the backend's
+    10/min login IP bucket, so per-test form logins get 429'd mid-run
+    — LoginPage.login retries, but they only sometimes outlast the
+    60s window (run 11 green, runs 10/12 not). Log in once via the UI,
+    save the storage state, and let marked classes reuse it: the only
+    UI logins left are this one plus test_auth's own flows. Requesting
+    authenticated_api runs the session bootstrap first, so the admin
+    password is E2E_ADMIN_PASSWORD by the time we log in. The token
+    is minted after any earlier logout revocation (the fixture is
+    instantiated lazily at the first marked test, which runs after
+    test_auth), so it is not caught by the TokensRevokedBefore
+    watermark.
+    """
+    from pages import LoginPage
+
+    state_path = tmp_path_factory.mktemp("e2e-login") / "admin-storage-state.json"
+    browser = browser_type.launch(**browser_type_launch_args)
+    try:
+        context = browser.new_context(viewport={"width": 1280, "height": 720}, locale="zh-CN")
+        page = context.new_page()
+        page.set_default_timeout(30000)
+        login_page = LoginPage(page, frontend_url)
+        login_page.goto()
+        if not login_page.login(ADMIN_USER, E2E_ADMIN_PASSWORD):
+            raise RuntimeError(
+                f"storage-state login failed: {login_page.last_login_error}"
+            )
+        context.storage_state(path=str(state_path))
+        return str(state_path)
+    finally:
+        browser.close()
+
+
+@pytest.fixture
+def browser_context_args(request):
+    """Browser context arguments.
+
+    Tests marked reuse_login get a context restored from the
+    session's logged-in storage state (see admin_storage_state), so
+    they start authenticated without a per-test form login; every
+    other test gets a fresh logged-out context. The storage state is
+    only instantiated for marked tests (getfixturevalue), so API-only
+    runs never launch a browser.
+    """
+    args = {
         "viewport": {"width": 1280, "height": 720},
         "locale": "zh-CN",
     }
+    if request.node.get_closest_marker("reuse_login"):
+        args["storage_state"] = request.getfixturevalue("admin_storage_state")
+    return args
 
 
 @pytest.fixture
 def page(context: BrowserContext) -> Generator[Page, None, None]:
-    """Create a new page with standard settings."""
+    """Create a new page with standard settings.
+
+    30s default timeout: page loads go through the Vite dev server,
+    whose on-demand transforms are slow under load (shared CI runners
+    and this sandbox alike) — the previous 10s made goto/networkidle
+    flake late in a run, long after the app itself had loaded. The
+    per-test pytest-timeout (60s, pyproject addopts) still bounds
+    every test, so a genuinely hung page still fails fast.
+    """
     p = context.new_page()
-    p.set_default_timeout(10000)
+    p.set_default_timeout(30000)
     yield p
     p.close()
 
@@ -209,9 +282,49 @@ def authenticated_api(backend_url: str, server_info: dict) -> Generator[APIClien
 @pytest.fixture
 def test_user(authenticated_api: APIClient) -> Generator[TestUser, None, None]:
     """Create a test user for the test."""
+    _refresh_admin_token_if_revoked(authenticated_api)
     user = TestUser.create_test_user(authenticated_api)
+    _resolve_test_user_id(authenticated_api, user)
     yield user
     user.cleanup()
+
+
+def _refresh_admin_token_if_revoked(api_client: APIClient) -> None:
+    """Re-login the session API client if its token was revoked.
+
+    A browser logout test revokes every token issued before the logout
+    (TokensRevokedBefore watermark, E1-02), including this session
+    client's token minted at bootstrap — later fixture creates then
+    fail with 401 and the user UI shows an empty list. Probe with a
+    cheap authenticated call; on 401 re-login directly with the
+    post-bootstrap password (one attempt, rate-limit-aware).
+    """
+    probe = api_client.post("/user/package")
+    if probe.get("code") != 401:
+        return
+    response = _login_wait_rate_limit(api_client, DEFAULT_ADMIN_USER, E2E_ADMIN_PASSWORD)
+    if response.get("code") != 0:
+        raise RuntimeError(f"E2E admin re-login failed: {response}")
+
+
+def _resolve_test_user_id(api_client: APIClient, user: TestUser) -> None:
+    """Fill in TestUser.user_id so cleanup() can actually delete it.
+
+    /user/create returns code 0 with no data/id, so create_test_user
+    leaves user_id None and cleanup() is a no-op — test users then
+    accumulate and a later create of the same username fails as a
+    duplicate (the test still passes on the leftover row, for the
+    wrong reason). Resolve the id from /user/list instead.
+    """
+    if user.user_id is not None:
+        return
+    listing = api_client.post("/user/list")
+    if listing.get("code") != 0:
+        return
+    for item in listing.get("data") or []:
+        if item.get("user") == user.username:
+            user.user_id = item.get("id")
+            return
 
 
 @pytest.fixture

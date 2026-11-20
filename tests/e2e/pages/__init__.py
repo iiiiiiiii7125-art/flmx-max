@@ -2,6 +2,7 @@
 Page Object Models for FLVX E2E tests.
 """
 
+import time
 from typing import Optional
 
 from playwright.sync_api import Page, Locator, expect
@@ -34,35 +35,105 @@ class LoginPage(BasePage):
 
     def __init__(self, page: Page, base_url: str):
         super().__init__(page, base_url)
-        self.username_input: Locator = page.locator('input[placeholder="请输入用户名"]')
-        self.password_input: Locator = page.locator('input[placeholder="请输入密码"]')
-        self.login_button: Locator = page.locator('button:has-text("登录")')
-        self.error_toast: Locator = page.locator('[data-testid="toast-error"], .toast-error')
+        # Login form is English (vite-frontend/src/pages/index.tsx):
+        # placeholders "admin@user" / "••••••••", button "Sign In".
+        # The old Chinese placeholder selectors matched nothing, so every
+        # LoginPage.login call failed at the fill step before any
+        # assertion was reached (found while verifying R18-R2-A5-01:
+        # the two seed tests never got as far as the /change-password
+        # assertion the re-audit predicted).
+        self.username_input: Locator = page.locator('input[placeholder="admin@user"]')
+        self.password_input: Locator = page.locator('input[placeholder="••••••••"]')
+        self.login_button: Locator = page.locator('button:has-text("Sign In")')
+        # Error toasts are react-hot-toast (vite-frontend/src/pages/
+        # index.tsx calls toast.error(...)); the library renders every
+        # toast with role="status" (error toasts live 4s). The old
+        # '[role="alert"], .toast' selector matched nothing.
+        self.error_toast: Locator = page.locator('[role="status"]')
+        # Last login failure, for the fixture assert message: a bare
+        # False hides whether the POST was rejected (error toast) or the
+        # app never navigated (still on the login page with no toast).
+        self.last_login_error: str = ""
 
     def goto(self):
         """Navigate to login page."""
         self.navigate("/")
 
     def login(self, username: str, password: str) -> bool:
-        """Perform login action."""
-        self.username_input.fill(username)
-        self.password_input.fill(password)
-        self.login_button.click()
+        """Perform login action.
 
-        try:
-            self.page.wait_for_url("**/dashboard**", timeout=5000)
-            return True
-        except Exception:
-            try:
-                self.page.wait_for_url("**/change-password**", timeout=2000)
+        Retries on the login rate limit (429 "请求过于频繁"): the
+        suite performs ~20 logins in ~2 min against the backend's
+        10/min IP bucket (login_rate_limit.go: the 11th attempt in a
+        60s window is rejected; WriteJSON always answers HTTP 200, so
+        the rejection is only visible as the toast), so a login can be
+        rejected even with correct credentials — that is what killed
+        test_navigate_to_user_page in full-suite runs. The landing
+        wait polls URL + toast so a rejected attempt fails fast
+        (~1s) instead of burning the whole wait; retries sleep 20s
+        (three attempts cover any 60s window: a rejection lands at
+        most ~40s after window start at suite pace). Worst case fits
+        the 60s per-test timeout: goto + 2s + 20s + 2s + 20s + ~3s.
+        """
+        for attempt in range(3):
+            self.username_input.fill(username)
+            self.password_input.fill(password)
+            self.login_button.click()
+            outcome = self._wait_for_landing(timeout_ms=15000 if attempt == 0 else 10000)
+            if outcome in ("dashboard", "change-password"):
+                self.last_login_error = ""
                 return True
-            except Exception:
-                return False
+            if outcome == "rate-limit" and attempt < 2:
+                self.last_login_error = (
+                    f"url={self.page.url} toast=rate-limit (retry {attempt + 2}/3 after 20s)"
+                )
+                self.page.wait_for_timeout(20000)
+                continue
+            toast = self.get_error_message() or "(no error toast)"
+            self.last_login_error = f"url={self.page.url} toast={toast}"
+            return False
+        toast = self.get_error_message() or "(no error toast)"
+        self.last_login_error = f"url={self.page.url} toast={toast}"
+        return False
+
+    def _wait_for_landing(self, timeout_ms: int) -> str:
+        """Poll for the post-login landing.
+
+        Returns "dashboard" / "change-password" on navigation,
+        "rate-limit" if the 429 toast appears, "toast" for any other
+        error toast, "timeout" otherwise. Polling (instead of
+        wait_for_url with the default 'load' wait) also keeps a slow
+        subresource (e.g. the hanging Google Fonts request) from
+        failing a login whose POST already succeeded.
+        """
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            url = self.page.url
+            if "/dashboard" in url:
+                return "dashboard"
+            if "/change-password" in url:
+                return "change-password"
+            # The backend writes "请求过于频繁，请稍后再试" for 429, but the
+            # login page surfaces its own wording ("登录尝试过于频繁，
+            # 请稍后再试", index.tsx) — match the shared substring.
+            if self.page.locator("text=过于频繁").count() > 0:
+                return "rate-limit"
+            if self._error_toast_visible():
+                return "toast"
+            if time.monotonic() >= deadline:
+                return "timeout"
+            self.page.wait_for_timeout(300)
+
+    def _error_toast_visible(self) -> bool:
+        try:
+            return self.error_toast.first.is_visible()
+        except Exception:
+            return False
 
     def get_error_message(self) -> Optional[str]:
         """Get error message if present."""
         try:
-            toast = self.page.locator('[role="alert"], .toast').first
+            toast = self.error_toast.first
             if toast.is_visible():
                 return toast.text_content()
         except Exception:

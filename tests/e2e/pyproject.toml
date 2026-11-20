@@ -35,6 +35,7 @@ markers = [
     "auth: Test requires authentication",
     "slow: Slow running test",
     "api: API-only test (no browser needed)",
+    "reuse_login: Reuse one logged-in browser session for the class (storage state)",
 ]
 addopts = "-v --tb=short"
 timeout = 60

@@ -7,20 +7,27 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from pages import DashboardPage, LoginPage
-from utils.api_client import ADMIN_USER
 
 
 @pytest.mark.e2e
+@pytest.mark.reuse_login
 class TestDashboard:
     """Dashboard E2E tests."""
 
     @pytest.fixture(autouse=True)
-    def login(self, page: Page, frontend_url: str, browser_admin_password: str):
-        """Login before each test."""
+    def login(self, page: Page, frontend_url: str):
+        """Start authenticated via the reused storage state (reuse_login).
+
+        The class does no per-test form login: the suite's ~20 logins
+        in ~2 min hit the backend's 10/min login bucket, so form
+        logins get 429'd mid-run. goto("/") redirects an authenticated
+        session to /dashboard (LoginRoute); if the state is stale the
+        wait times out and the test fails loudly instead of silently
+        running logged out.
+        """
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        result = login_page.login(ADMIN_USER, browser_admin_password)
-        assert result, "Login should succeed with valid credentials"
+        page.wait_for_url("**/dashboard**", timeout=15000, wait_until="commit")
 
     def test_login_redirects_to_dashboard(self, page: Page, frontend_url: str):
         """Test that login with a changed admin password redirects to dashboard."""
@@ -91,16 +98,24 @@ class TestDashboard:
 
 
 @pytest.mark.e2e
+@pytest.mark.reuse_login
 class TestNavigation:
     """Navigation E2E tests."""
 
     @pytest.fixture(autouse=True)
-    def login(self, page: Page, frontend_url: str, browser_admin_password: str):
-        """Login before each test."""
+    def login(self, page: Page, frontend_url: str):
+        """Start authenticated via the reused storage state (reuse_login).
+
+        The class does no per-test form login: the suite's ~20 logins
+        in ~2 min hit the backend's 10/min login bucket, so form
+        logins get 429'd mid-run. goto("/") redirects an authenticated
+        session to /dashboard (LoginRoute); if the state is stale the
+        wait times out and the test fails loudly instead of silently
+        running logged out.
+        """
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        result = login_page.login(ADMIN_USER, browser_admin_password)
-        assert result, "Login should succeed with valid credentials"
+        page.wait_for_url("**/dashboard**", timeout=15000, wait_until="commit")
 
     def test_navigate_to_user_page(self, page: Page, frontend_url: str):
         """Test navigation to user management page."""

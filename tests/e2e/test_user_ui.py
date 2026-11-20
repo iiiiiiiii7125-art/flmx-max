@@ -7,21 +7,25 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from pages import LoginPage, UserPage
-from utils.api_client import ADMIN_USER
 
 
 @pytest.mark.e2e
 @pytest.mark.slow
+@pytest.mark.reuse_login
 class TestUserManagementUI:
     """User management UI E2E tests."""
 
     @pytest.fixture(autouse=True)
-    def login(self, page: Page, frontend_url: str, browser_admin_password: str):
-        """Login before each test."""
+    def login(self, page: Page, frontend_url: str):
+        """Start authenticated via the reused storage state (reuse_login).
+
+        See test_dashboard.py: per-test form logins hit the backend's
+        10/min login bucket and get 429'd mid-run. goto("/") redirects
+        an authenticated session to /dashboard (LoginRoute).
+        """
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        result = login_page.login(ADMIN_USER, browser_admin_password)
-        assert result, "Login should succeed with valid credentials"
+        page.wait_for_url("**/dashboard**", timeout=15000, wait_until="commit")
 
     def test_user_page_loads(self, page: Page, frontend_url: str):
         """Test that user management page loads."""
