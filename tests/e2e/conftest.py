@@ -101,6 +101,61 @@ def get_server_info() -> dict:
     }
 
 
+@pytest.fixture
+def browser_admin_password(authenticated_api: APIClient) -> str:
+    """Effective admin password for browser login.
+
+    Requesting authenticated_api runs the session bootstrap once, so by
+    the time a browser test logs in the admin password is
+    E2E_ADMIN_PASSWORD (not the seed) and requirePasswordChange is
+    false — browser login therefore lands on /dashboard. This keeps
+    browser tests deterministic regardless of run order: a bare seed
+    login would land on /change-password on a fresh server but on
+    /dashboard once any api test has bootstrapped.
+    """
+    return E2E_ADMIN_PASSWORD
+
+
+@pytest.fixture
+def seed_password_admin(authenticated_api: APIClient) -> Generator[str, None, None]:
+    """Temporarily restore the seed admin password for one browser test.
+
+    The backend treats the stored password as "default" when its hash
+    matches the injected seed candidate (isStoredDefaultPassword), so
+    changing the password back to the seed re-arms requirePasswordChange
+    and the next browser login lands on /change-password. Teardown
+    restores E2E_ADMIN_PASSWORD and re-logs the session API client in,
+    so later tests are unaffected. updatePassword bumps
+    PasswordChangedAt, which stales the old token — hence the re-logins
+    (same pattern as bootstrap_admin_client).
+    """
+    change = authenticated_api.post(
+        "/user/updatePassword",
+        {
+            "newUsername": DEFAULT_ADMIN_USER,
+            "currentPassword": E2E_ADMIN_PASSWORD,
+            "newPassword": DEFAULT_ADMIN_PASSWORD,
+            "confirmPassword": DEFAULT_ADMIN_PASSWORD,
+        },
+    )
+    assert change.get("code") == 0, f"reset admin password to seed failed: {change}"
+    relogin = _login_wait_rate_limit(authenticated_api, DEFAULT_ADMIN_USER, DEFAULT_ADMIN_PASSWORD)
+    assert relogin.get("code") == 0, f"re-login with seed password failed: {relogin}"
+    yield DEFAULT_ADMIN_PASSWORD
+    restore = authenticated_api.post(
+        "/user/updatePassword",
+        {
+            "newUsername": DEFAULT_ADMIN_USER,
+            "currentPassword": DEFAULT_ADMIN_PASSWORD,
+            "newPassword": E2E_ADMIN_PASSWORD,
+            "confirmPassword": E2E_ADMIN_PASSWORD,
+        },
+    )
+    assert restore.get("code") == 0, f"restore E2E admin password failed: {restore}"
+    relogin = _login_wait_rate_limit(authenticated_api, DEFAULT_ADMIN_USER, E2E_ADMIN_PASSWORD)
+    assert relogin.get("code") == 0, f"re-login with E2E password failed: {relogin}"
+
+
 @pytest.fixture(scope="session")
 def server_info() -> dict:
     """Server configuration info."""

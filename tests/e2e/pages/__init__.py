@@ -76,7 +76,11 @@ class DashboardPage(BasePage):
     def __init__(self, page: Page, base_url: str):
         super().__init__(page, base_url)
         self.sidebar: Locator = page.locator("nav, [data-testid='sidebar']")
-        self.logout_button: Locator = page.locator('button:has-text("退出"), [data-testid="logout"]')
+        # The real <button> lives on /profile (profile.tsx). The
+        # dashboard's own "退出登录" is a DropdownItem and the sidebar
+        # entry is a div with onClick — neither is a <button>, so a
+        # button: selector must not be used against those pages.
+        self.logout_button: Locator = page.locator('button:has-text("退出登录")')
 
     def goto(self):
         """Navigate to dashboard."""

@@ -138,8 +138,10 @@ class TestAPIConfig:
     def test_get_single_config(self, authenticated_api: APIClient):
         """Test getting a single config."""
         response = authenticated_api.post("/config/get", {"name": "app_name"})
-        if response["code"] == 0:
-            assert "value" in response["data"]
+        # app_name is a seeded config (always present); a non-zero code
+        # must fail here, not silently skip the assertions below.
+        assert response["code"] == 0, f"config/get app_name failed: {response}"
+        assert "value" in response["data"]
 
 
 @pytest.mark.api

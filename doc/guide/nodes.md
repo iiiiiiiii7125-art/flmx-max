@@ -17,7 +17,7 @@
 | 内核 | 版本 | 说明 |
 |------|------|------|
 | Xray | 默认最新版，可指定 | 从 GitHub Release 下载，用 GitHub 接口返回的资产摘要（digest）校验，不用 Release 附带的校验文件 |
-| sing-box | 默认最新版，可指定 | 从 GitHub Release 下载，用 Release 资产的 SHA256 校验 |
+| sing-box | 默认 fork 版 `1.14.4-flmx1`（含 UDP 队列修复），可指定 | 从 GitHub Release 下载，用 Release 资产的 SHA256 校验；上游版仍可选，但缺该修复 |
 
 一台节点可以同时安装多个内核，内核按节点分组显示。点击内核可以启停、重启、查看日志、更换版本或卸载；节点重启后内核会自动恢复运行。
 

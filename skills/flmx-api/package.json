@@ -27,10 +27,6 @@
     "url": "https://github.com/iiiiiiiii7125-art/flmx-max/issues"
   },
   "homepage": "https://github.com/iiiiiiiii7125-art/flmx-max/tree/main/skills/flmx-api#readme",
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org"
-  },
   "opencode": {
     "skill": true,
     "installTo": "~/.agents/skills/flmx-api"

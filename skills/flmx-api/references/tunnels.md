@@ -101,6 +101,14 @@ from `/api/v1/tunnel/list` if you need its ID):
 {"code": 0, "msg": "操作成功"}
 ```
 
+**Multiple relay lines:** one tunnel can serve several relay lines to
+the same landing target, one per entry port (dedup key: inbound,
+tunnel, landing target, entry port — see `inbounds.md`,
+`POST /api/v1/inbound/relay/create`). A same-entry-port duplicate is
+rejected ("请勿重复创建"); replaying with the same `Idempotency-Key`
+returns the first response unchanged; omitting `inPort` auto-picks an
+unused port.
+
 ## POST /api/v1/tunnel/update
 
 Update tunnel configuration.

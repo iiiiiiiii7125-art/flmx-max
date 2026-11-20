@@ -95,6 +95,15 @@ List relay lines (tunnel forwards) attached to an inbound.
 
 Attach a relay line to an inbound via a tunnel.
 
+Multiple relay lines may attach the same tunnel to the same landing
+target, as long as each uses a different entry port: the dedup gate
+keys on (inbound, tunnel, landing target, entry port). Creating a
+second line on the same entry port is rejected (the response names the
+gate: "请勿重复创建") and creates nothing. Replaying the same request
+with the same `Idempotency-Key` returns the first response unchanged
+without creating a duplicate. Omitting `inPort` (auto port) skips the
+gate and picks an unused port.
+
 ## POST /api/v1/inbound/relay/delete
 
 Remove a relay line from an inbound.
