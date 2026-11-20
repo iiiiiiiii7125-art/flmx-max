@@ -670,6 +670,9 @@ func TestKernelSnapshotWriteFailure(t *testing.T) {
 
 // TestKernelSnapshotRestoreWriteFailure: individual keys that
 // refuse the restore write are named; the rest still restore.
+// R18-D2-04: a partial restore must NOT consume the snapshot —
+// it is retained (and named) so a later rollback can retry the
+// failed key; once every write lands, the snapshot goes away.
 func TestKernelSnapshotRestoreWriteFailure(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	stubTuneCommands(t, map[string]bool{})
@@ -685,11 +688,27 @@ func TestKernelSnapshotRestoreWriteFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { tuneWrite = oldWrite })
 	warnings := rollbackTuning(context.Background())
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "tcp_ecn") {
-		t.Fatalf("warnings = %v, want one naming the failed key", warnings)
+	if len(warnings) != 2 || !strings.Contains(warnings[0], "tcp_ecn") ||
+		!strings.Contains(warnings[1], "快照已保留") {
+		t.Fatalf("warnings = %v, want the failed key named plus the snapshot-retained note", warnings)
 	}
 	if v, _ := readSysctl("net.core.somaxconn"); v == "65535" {
 		t.Fatal("other keys must still restore when one write fails")
+	}
+	if _, err := os.Stat(tuneKernelSnapshotPath); err != nil {
+		t.Fatalf("snapshot must survive a partial restore for a retry, stat: %v", err)
+	}
+	// Retry with writes working: the failed key restores and the
+	// snapshot is consumed.
+	tuneWrite = oldWrite
+	if warnings := rollbackTuning(context.Background()); len(warnings) != 0 {
+		t.Fatalf("retry rollback warnings = %v, want none", warnings)
+	}
+	if _, err := os.Stat(tuneKernelSnapshotPath); !os.IsNotExist(err) {
+		t.Fatal("snapshot must be consumed once the restore fully succeeds")
+	}
+	if v, _ := readSysctl("net.ipv4.tcp_ecn"); v != "0" {
+		t.Fatalf("tcp_ecn after retry = %q, want the snapshot value 0", v)
 	}
 }
 
