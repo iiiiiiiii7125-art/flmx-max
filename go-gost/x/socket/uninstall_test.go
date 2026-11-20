@@ -300,10 +300,15 @@ func stubUninstallHooksWithDataDir(t *testing.T, binaryPath, dataDir string, inC
 	origWorkingDir := uninstallWorkingDir
 	origDetect, origLaunch := uninstallDetectManager, uninstallLaunchScript
 	origHostCleanup := uninstallHostTuningCleanup
+	origSwapCleanup := uninstallManagedSwapCleanup
 	uninstallRestoreTuning = func() error { s.order = append(s.order, "restore"); return nil }
 	uninstallHostTuningCleanup = func() hostTuningCleanupReport {
 		s.order = append(s.order, "hostcleanup")
 		return hostTuningCleanupReport{}
+	}
+	uninstallManagedSwapCleanup = func() swapCleanupReport {
+		s.order = append(s.order, "swap")
+		return swapCleanupReport{}
 	}
 	uninstallKernels = func() error { s.order = append(s.order, "kernels"); return nil }
 	uninstallExit = func(code int) { s.exit = code }
@@ -323,17 +328,18 @@ func stubUninstallHooksWithDataDir(t *testing.T, binaryPath, dataDir string, inC
 		uninstallWorkingDir = origWorkingDir
 		uninstallDetectManager, uninstallLaunchScript = origDetect, origLaunch
 		uninstallHostTuningCleanup = origHostCleanup
+		uninstallManagedSwapCleanup = origSwapCleanup
 	})
 	return s
 }
 
 // 原生形态全流程顺序：先恢复调优、紧接着清宿主调优文件、再清
-// 内核/nft、最后启动卸载脚本；进程本身不直接退出（由脚本停服务
-// 带走）。
+// 托管 Swap、再清内核/nft、最后启动卸载脚本；进程本身不直接
+// 退出（由脚本停服务带走）。
 func TestRunAgentUninstallNativeOrder(t *testing.T) {
 	s := stubUninstallHooks(t, "/etc/flux_agent/flux_agent", false)
 	runAgentUninstall()
-	if strings.Join(s.order, ",") != "restore,hostcleanup,kernels,launch" {
+	if strings.Join(s.order, ",") != "restore,hostcleanup,swap,kernels,launch" {
 		t.Fatalf("unexpected step order: %v", s.order)
 	}
 	if s.manager != serviceManagerSystemd {

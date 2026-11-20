@@ -252,7 +252,7 @@ func TestAssessUninstallTuningAnnouncesFootprint(t *testing.T) {
 
 // 全流程：恢复接缝报错时，runAgentUninstall 仍走完宿主清理与
 // 内核清理并启动卸载脚本（卸载不因恢复失败中断），顺序为
-// restore → hostcleanup → kernels → launch。
+// restore → hostcleanup → swap → kernels → launch。
 func TestRunAgentUninstallContinuesPastRestoreFailure(t *testing.T) {
 	s := stubUninstallHooks(t, "/etc/flux_agent/flux_agent", false)
 	origRestore := uninstallRestoreTuning
@@ -263,7 +263,7 @@ func TestRunAgentUninstallContinuesPastRestoreFailure(t *testing.T) {
 	t.Cleanup(func() { uninstallRestoreTuning = origRestore })
 
 	runAgentUninstall()
-	if strings.Join(s.order, ",") != "restore,hostcleanup,kernels,launch" {
+	if strings.Join(s.order, ",") != "restore,hostcleanup,swap,kernels,launch" {
 		t.Fatalf("unexpected step order after restore failure: %v", s.order)
 	}
 }

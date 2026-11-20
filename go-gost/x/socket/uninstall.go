@@ -63,6 +63,19 @@ var (
 	uninstallHostTuningCleanup = cleanupHostTuningFiles
 	uninstallTuningPreflight   = assessUninstallTuning
 	uninstallLegacyFootprint   = legacyGostFootprintPresent
+	// 托管 Swap 清理与回执预检（R18-D2-02）：清理与预告经
+	// swapEnv 整替，单测不触真实 /swapfile 与 /etc/fstab。
+	// swapoff 可能把数 GB 换出页压回内存，预算给 10 分钟（与面
+	// 板 SwapSet 命令预算同口径），超时即上下文取消、swapoff
+	// 进程随之终止，步骤按失败点名。
+	uninstallManagedSwapCleanup = func() swapCleanupReport {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		return realSwapEnv().cleanupManagedSwap(ctx)
+	}
+	uninstallSwapPreflight = func() []string {
+		return realSwapEnv().assessManagedSwap().warnings()
+	}
 )
 
 // agentDataDir 返回数据目录，即 config.json 所在目录：主程序以
@@ -366,8 +379,14 @@ func (w *WebSocketReporter) handleUninstallAgent(data interface{}, requestID str
 		"uninstallKey": key,
 		"state":        "acked",
 	}
-	if warnings := uninstallTuningPreflight().warnings(); len(warnings) > 0 {
-		respData["warnings"] = warnings
+	// 回执预告处置范围：调优回退/宿主文件（既有）＋托管 Swap
+	// （R18-D2-02：把删除还是保留、保留的原因在执行前点名，
+	// 面板随删除回执透传给用户，不得被纯成功吞掉）。
+	var ackWarnings []string
+	ackWarnings = append(ackWarnings, uninstallTuningPreflight().warnings()...)
+	ackWarnings = append(ackWarnings, uninstallSwapPreflight()...)
+	if len(ackWarnings) > 0 {
+		respData["warnings"] = ackWarnings
 	}
 	go w.executeUninstall(ackCh, st)
 	return respData, nil
@@ -571,6 +590,28 @@ func runAgentUninstallSteps() (outcome uninstallOutcome) {
 		outcome.addStep("cleanup-host-tuning-files", fmt.Errorf("以下宿主调优文件未能删除：%s", strings.Join(cleanup.Failed, "、")))
 	} else {
 		outcome.addStep("cleanup-host-tuning-files", nil)
+	}
+	// 托管 Swap 清理（R18-D2-02）：只认 fstab 规范行的面板托管
+	// /swapfile，删前先过 swapoff 安全校验；不安全或归属不明
+	// 时保留并披露（Skipped，步骤判成功），只有真正删不掉才
+	// 判失败。容器形态不走这里：容器 agent 管不了宿主机 Swap，
+	// 其 /swapfile 路径也不在宿主机命名空间内。
+	if !uninstallInContainer() {
+		swapRep := uninstallManagedSwapCleanup()
+		for _, item := range swapRep.Removed {
+			fmt.Printf("🧹 删除托管 Swap: %s\n", item)
+		}
+		for _, item := range swapRep.Skipped {
+			fmt.Printf("⚠️ 跳过删除托管 Swap: %s\n", item)
+		}
+		for _, item := range swapRep.Failed {
+			fmt.Printf("⚠️ 删除托管 Swap 失败: %s\n", item)
+		}
+		if len(swapRep.Failed) > 0 {
+			outcome.addStep("cleanup-managed-swap", fmt.Errorf("以下托管 Swap 未能删除：%s", strings.Join(swapRep.Failed, "、")))
+		} else {
+			outcome.addStep("cleanup-managed-swap", nil)
+		}
 	}
 	kernelsErr := uninstallKernels()
 	outcome.addStep("uninstall-kernels", kernelsErr)
