@@ -409,7 +409,7 @@ func TestRollbackRemovesWholeFootprint(t *testing.T) {
 	}
 	q := filepath.Join(tuneNetDir, "eth0", "queues", "rx-0")
 	_ = os.MkdirAll(q, 0o755)
-	_ = os.WriteFile(filepath.Join(q, "rps_cpus"), []byte("f\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(q, "rps_cpus"), []byte("1\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(q, "rps_flow_cnt"), []byte("4096\n"), 0o644)
 	// Live tuned values.
 	_ = writeSysctl("net.ipv4.tcp_congestion_control", "bbr")
@@ -418,12 +418,16 @@ func TestRollbackRemovesWholeFootprint(t *testing.T) {
 
 	warnings := rollbackTuning(context.Background())
 	// No snapshot was captured in this scenario (footprint planted
-	// by hand), so exactly one fail-safe warning must name the
-	// unrestored keys (TL-02) — silence here would be the defect.
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "未能回退") ||
+	// by hand), so exactly two fail-safe warnings must name the
+	// unrestored keys (TL-02) and the queues whose RPS masks fell
+	// back to the historical clear-to-0 (R18-D2-05) — silence here
+	// would be the defect.
+	if len(warnings) != 2 || !strings.Contains(warnings[0], "未能回退") ||
 		!strings.Contains(warnings[0], "net.core.somaxconn") ||
-		!strings.Contains(warnings[0], "net.ipv4.tcp_fastopen") {
-		t.Fatalf("rollback warnings = %v, want one fail-safe naming unrestored keys", warnings)
+		!strings.Contains(warnings[0], "net.ipv4.tcp_fastopen") ||
+		!strings.Contains(warnings[1], "RPS") ||
+		!strings.Contains(warnings[1], "eth0/rx-0") {
+		t.Fatalf("rollback warnings = %v, want the fail-safe naming unrestored keys plus the RPS fallback naming eth0/rx-0", warnings)
 	}
 	for _, f := range files {
 		if _, err := os.Stat(f); !os.IsNotExist(err) {
@@ -547,6 +551,59 @@ func TestKernelSnapshotRollbackRestoresExact(t *testing.T) {
 	// not to a hard-coded 0.
 	if got, _ := readSysctl("net.core.rps_sock_flow_entries"); got != "16384" {
 		t.Fatalf("rps_sock_flow_entries after rollback = %q, want snapshot value 16384", got)
+	}
+	if _, err := os.Stat(tuneKernelSnapshotPath); !os.IsNotExist(err) {
+		t.Fatal("snapshot must be consumed by rollback")
+	}
+}
+
+// TestRollbackRestoresRPSMasksFromSnapshot is the R18-D2-05
+// gate: apply-nic overwrites rps_cpus / rps_flow_cnt with the
+// all-core mask and 4096, and rollback must write the pre-apply
+// values back from the snapshot — before the fix it wrote 0,
+// erasing an operator mask that was never captured.
+func TestRollbackRestoresRPSMasksFromSnapshot(t *testing.T) {
+	fakeProcSys(t, "reno cubic bbr")
+	stubTuneCommands(t, map[string]bool{})
+	q := filepath.Join(tuneNetDir, "eth0", "queues", "rx-0")
+	if err := os.MkdirAll(q, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(q, "rps_cpus"), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(q, "rps_flow_cnt"), []byte("123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := applyNICTuning(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The snapshot recorded the pre-apply masks.
+	raw, err := os.ReadFile(tuneKernelSnapshotPath)
+	if err != nil {
+		t.Fatalf("apply-nic must leave a snapshot: %v", err)
+	}
+	var snap tuneKernelSnapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.RPS["eth0/rx-0"]; got.CPUs != "1" || got.FlowCnt != "123" {
+		t.Fatalf("snapshot RPS for eth0/rx-0 = %+v, want {1 123}", got)
+	}
+	// Apply overwrote both files.
+	if b, _ := os.ReadFile(filepath.Join(q, "rps_cpus")); strings.TrimSpace(string(b)) == "1" {
+		t.Fatal("apply-nic must overwrite rps_cpus with the steering mask")
+	}
+	// Rollback restores the operator values exactly, with no
+	// fallback warning, and consumes the snapshot.
+	if warnings := rollbackTuning(context.Background()); len(warnings) != 0 {
+		t.Fatalf("rollback warnings = %v, want none", warnings)
+	}
+	if b, _ := os.ReadFile(filepath.Join(q, "rps_cpus")); strings.TrimSpace(string(b)) != "1" {
+		t.Fatalf("rps_cpus after rollback = %q, want operator mask 1", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(q, "rps_flow_cnt")); strings.TrimSpace(string(b)) != "123" {
+		t.Fatalf("rps_flow_cnt after rollback = %q, want operator value 123", b)
 	}
 	if _, err := os.Stat(tuneKernelSnapshotPath); !os.IsNotExist(err) {
 		t.Fatal("snapshot must be consumed by rollback")
