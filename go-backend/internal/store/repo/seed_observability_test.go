@@ -46,3 +46,59 @@ func TestSeedDataLogsSeedingActions(t *testing.T) {
 		t.Fatalf("seedData on an initialized database must not log any seeding action, got log: %q", got)
 	}
 }
+
+// OPEN-16: seedData silently skipped seeding when the id=1 admin
+// count query failed — no log, no adminBootstrapRequired — leaving a
+// deployment with no admin and no visible trace. The check must fail
+// closed: a query that cannot run sets the human-intervention flag
+// and logs an ERROR naming the failure. The users table is dropped
+// after Open (which seeds the admin) so the count query fails.
+func TestSeedDataCountErrorFailsClosed(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(oldOut)
+
+	r, err := Open(filepath.Join(t.TempDir(), "seed-observe-err.db"))
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer r.Close()
+
+	if err := r.db.Exec(`DROP TABLE "user"`).Error; err != nil {
+		t.Fatalf("drop user table: %v", err)
+	}
+
+	oldFlag := adminBootstrapRequired
+	defer func() { adminBootstrapRequired = oldFlag }()
+	adminBootstrapRequired = false
+
+	buf.Reset()
+	seedData(r.db)
+	if !adminBootstrapRequired {
+		t.Fatal("a failed admin count query must set adminBootstrapRequired (fail closed), flag stayed false")
+	}
+	if got := buf.String(); !strings.Contains(got, "ERROR: seed skipped") || !strings.Contains(got, "count query failed") {
+		t.Fatalf("a failed admin count query must log an ERROR naming the failure, got log: %q", got)
+	}
+}
+
+// OPEN-16 (fold-count half): the usernameFoldCount error used to be
+// discarded (`nameCount, _ := ...`), so a failed occupancy check
+// read as "not taken" and seedInitialAdmin ran. The helper itself
+// surfaces the error; seedData now treats it as fail-closed like the
+// admin count above (same pattern, same flag + ERROR log).
+func TestUsernameFoldCountSurfacesError(t *testing.T) {
+	r, err := Open(filepath.Join(t.TempDir(), "seed-observe-fold-err.db"))
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	defer r.Close()
+
+	if err := r.db.Exec(`DROP TABLE "user"`).Error; err != nil {
+		t.Fatalf("drop user table: %v", err)
+	}
+	if _, err := usernameFoldCount(r.db, "admin@user", 0); err == nil {
+		t.Fatal("usernameFoldCount on a missing user table must return an error, got nil")
+	}
+}

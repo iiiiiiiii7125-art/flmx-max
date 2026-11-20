@@ -787,12 +787,30 @@ func IsAdminBootstrapRequired() bool {
 
 func seedData(db *gorm.DB) {
 	var adminCount int64
-	if err := db.Model(&model.User{}).Where("id = ?", 1).Count(&adminCount).Error; err == nil && adminCount == 0 {
+	// OPEN-16: a failed existence check used to silently skip
+	// seeding — no log, no adminBootstrapRequired — leaving a
+	// deployment with no admin and no visible trace. A check that
+	// cannot run is not "admin exists": fail closed to the
+	// human-intervention path instead of assuming the count was 0
+	// (which would attempt a seed) or non-zero (which would skip
+	// it silently).
+	adminCountErr := db.Model(&model.User{}).Where("id = ?", 1).Count(&adminCount).Error
+	if adminCountErr != nil {
+		adminBootstrapRequired = true
+		log.Printf("ERROR: seed skipped: cannot verify admin user (id=1 user count query failed: %v). "+
+			"面板管理员状态未知，需人工处理（不得自动提权）。", adminCountErr)
+	} else if adminCount == 0 {
 		// R5-B4C: 补建前检查用户名是否被占用（防改名后撞唯一约束）。
 		// B02-003/K10: 占用检查按折叠口径——存量有 Admin@User 变体时
 		// 同样视为占用（补建会撞 v1/v5 唯一索引），走人工处理路径。
-		nameCount, _ := usernameFoldCount(db, "admin@user", 0)
-		if nameCount > 0 {
+		nameCount, nameErr := usernameFoldCount(db, "admin@user", 0)
+		if nameErr != nil {
+			// OPEN-16: 同上——占用检查跑不起来时不得把 nameCount
+			// 的零值当成「未占用」去补建，同样走人工处理路径。
+			adminBootstrapRequired = true
+			log.Printf("ERROR: seed skipped: cannot verify admin username availability (username fold count failed: %v). "+
+				"面板管理员状态未知，需人工处理（不得自动提权）。", nameErr)
+		} else if nameCount > 0 {
 			// 修正 A：不得静默跳过。ERROR 日志 + API 状态可见。
 			adminBootstrapRequired = true
 			log.Printf("ERROR: seed skipped: id=1 missing and username admin@user already taken. " +
