@@ -4052,6 +4052,125 @@ test_install_script_bootstraps_bash_for_alpine() (
     fail "install.sh should bootstrap Bash through apk on Alpine"
 )
 
+# R18-A3-09：Alpine bootstrap 代理重试夹具。造一个最小 PATH 环境：
+# fakebin{apk,sudo} + minbin{id 假脚本、env/chmod 软链}，真实 bash
+# 不在 PATH 内；bootstrap.sh 为 install.sh 引导块抽取（H1-05 注释
+# 之前）。apk 首调失败、次调成功并“安装”一个 fake bash（导出
+# BASH_VERSION，二次 exec 后引导块跳过、正常退出）；apk_mode=
+# always-fail 时恒失败。回显夹具目录。
+alpine_proxy_fixture() (
+  local id_uid="$1" apk_mode="${2:-retry}"
+  local work
+  work=$(mktemp -d)
+  local fakebin="$work/fakebin" minbin="$work/minbin"
+  mkdir -p "$fakebin" "$minbin"
+  ln -s "$(command -v env)" "$minbin/env"
+  ln -s "$(command -v chmod)" "$minbin/chmod"
+  printf '#!/bin/sh\necho %s\n' "$id_uid" > "$minbin/id"
+  chmod +x "$minbin/id"
+  # sudo 模拟 env_reset：清掉 4 个代理变量再执行参数；`sudo env
+  # VAR=... apk` 形态下内层 env 会把变量作为参数重新设上。
+  cat > "$fakebin/sudo" <<'SUDO_EOF'
+#!/bin/sh
+exec env -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY "$@"
+SUDO_EOF
+  chmod +x "$fakebin/sudo"
+  cat > "$fakebin/apk" <<APK_EOF
+#!/bin/sh
+printf 'call http_proxy=%s https_proxy=%s args=%s\n' "\${http_proxy:-unset}" "\${https_proxy:-unset}" "\$*" >> "$work/apk-calls.log"
+calls=0
+while IFS= read -r _l; do calls=\$((calls + 1)); done < "$work/apk-calls.log"
+if [ "$apk_mode" = "always-fail" ]; then
+  exit 1
+fi
+if [ "\$calls" -le 1 ]; then
+  exit 1
+fi
+cat > "$fakebin/bash" <<'BASH_EOF'
+#!/bin/sh
+BASH_VERSION="5.2-fake"
+export BASH_VERSION
+exec /bin/sh "\$@"
+BASH_EOF
+chmod +x "$fakebin/bash"
+exit 0
+APK_EOF
+  chmod +x "$fakebin/apk"
+  : > "$work/apk-calls.log"
+  : > "$work/alpine-release"
+  sed -n '1,/^# H1-05/p' "$ROOT_DIR/install.sh" | head -n -1 > "$work/bootstrap.sh"
+  echo "$work"
+)
+
+# R18-A3-09：sudo 分支——首跑经 sudo（env_reset  stripped 代理变
+# 量）失败，重试经 `sudo env VAR=... apk` 透传代理后成功；全程
+# 不碰真实 apk/bash。
+test_install_script_bootstraps_bash_for_alpine_proxy_retry() (
+  set -euo pipefail
+  local work
+  work=$(alpine_proxy_fixture 1000 retry)
+
+  local rc="0" out
+  out=$(env -u BASH_VERSION FLMX_ALPINE_RELEASE_FILE="$work/alpine-release" \
+    http_proxy="http://proxy.example:8080" https_proxy="http://proxy.example:8080" \
+    PATH="$work/fakebin:$work/minbin" /bin/sh "$work/bootstrap.sh" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A3-09: sudo-branch apk retry with proxy must install bash"
+  assert_equals "2" "$(wc -l < "$work/apk-calls.log" | tr -d ' ')" \
+    "R18-A3-09: apk must be called exactly twice (direct, then proxy retry)"
+  grep -q '^call http_proxy=unset' "$work/apk-calls.log" || \
+    fail "R18-A3-09: first apk call must not see the proxy (sudo strips it): $(cat "$work/apk-calls.log")"
+  grep -q '^call http_proxy=http://proxy.example:8080' "$work/apk-calls.log" || \
+    fail "R18-A3-09: retry apk call must see the proxy variable: $(cat "$work/apk-calls.log")"
+  [[ -x "$work/fakebin/bash" ]] || fail "R18-A3-09: retry must install bash"
+)
+
+# R18-A3-09：root 直跑分支——首跑已带代理变量仍失败时同样重试，
+# 不因“直跑透传本就生效”而放弃第二次机会。
+test_install_script_bootstraps_bash_for_alpine_proxy_retry_root() (
+  set -euo pipefail
+  local work
+  work=$(alpine_proxy_fixture 0 retry)
+
+  local rc="0" out
+  out=$(env -u BASH_VERSION FLMX_ALPINE_RELEASE_FILE="$work/alpine-release" \
+    http_proxy="http://proxy.example:8080" https_proxy="http://proxy.example:8080" \
+    PATH="$work/fakebin:$work/minbin" /bin/sh "$work/bootstrap.sh" 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A3-09: root-branch apk retry with proxy must install bash"
+  assert_equals "2" "$(wc -l < "$work/apk-calls.log" | tr -d ' ')" \
+    "R18-A3-09: apk must be called exactly twice on the root branch too"
+  grep -q '^call http_proxy=http://proxy.example:8080' "$work/apk-calls.log" || \
+    fail "R18-A3-09: root-branch retry apk call must see the proxy variable: $(cat "$work/apk-calls.log")"
+  [[ -x "$work/fakebin/bash" ]] || fail "R18-A3-09: retry must install bash"
+)
+
+# R18-A3-09：apk 恒失败——退出 1、失败文案点名代理变量、且只重试
+# 一次；无代理变量时不重试（只跑一次）。
+test_install_script_bootstraps_bash_for_alpine_proxy_failure() (
+  set -euo pipefail
+  local work
+  work=$(alpine_proxy_fixture 1000 always-fail)
+
+  local rc="0" out
+  out=$(env -u BASH_VERSION FLMX_ALPINE_RELEASE_FILE="$work/alpine-release" \
+    http_proxy="http://proxy.example:8080" https_proxy="http://proxy.example:8080" \
+    PATH="$work/fakebin:$work/minbin" /bin/sh "$work/bootstrap.sh" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A3-09: apk that always fails must exit 1"
+  assert_equals "2" "$(wc -l < "$work/apk-calls.log" | tr -d ' ')" \
+    "R18-A3-09: apk must be retried exactly once with proxy set"
+  [[ "$out" == *"http_proxy"* && "$out" == *"https_proxy"* ]] || \
+    fail "R18-A3-09: failure message must name the proxy variables: $out"
+
+  : > "$work/apk-calls.log"
+  rc="0"
+  # 无代理变量时不重试：须显式 unset（运行环境本身可能带代理变量）。
+  out=$(env -u BASH_VERSION -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY \
+    FLMX_ALPINE_RELEASE_FILE="$work/alpine-release" \
+    PATH="$work/fakebin:$work/minbin" /bin/sh "$work/bootstrap.sh" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A3-09: apk that always fails must exit 1 without proxy too"
+  assert_equals "1" "$(wc -l < "$work/apk-calls.log" | tr -d ' ')" \
+    "R18-A3-09: apk must not be retried when no proxy variable is set"
+)
+
 test_install_flmx_agent_uses_openrc() (
   set -euo pipefail
   load_script_without_main "$ROOT_DIR/install.sh"
@@ -13650,6 +13769,9 @@ test_install_flmx_agent_writes_json_safe_config
 test_write_flmx_agent_config_creates_0600
 test_install_flmx_agent_config_preserves_protocol_counts
 test_install_script_bootstraps_bash_for_alpine
+test_install_script_bootstraps_bash_for_alpine_proxy_retry
+test_install_script_bootstraps_bash_for_alpine_proxy_retry_root
+test_install_script_bootstraps_bash_for_alpine_proxy_failure
 test_install_flmx_agent_uses_openrc
 test_remove_flmx_agent_service_uses_openrc
 test_cleanup_legacy_gost_installation_removes_service_and_binary
