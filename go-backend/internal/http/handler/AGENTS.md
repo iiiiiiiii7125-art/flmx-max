@@ -1,22 +1,24 @@
 # BACKEND HTTP HANDLER KNOWLEDGE BASE
 
-**Generated:** 2026-11-08
-**Base commit:** e5a83bf1 (int-wave-20261107 tip at generation time)
-**Branch context:** int-wave-20261107 integration line; the latest
-release tag in this repository is 2.0.0
+**Note:** this file is a hand-maintained orientation note, not a generated
+snapshot — it deliberately states no generation date, base commit or
+release tag, and no file counts: the last snapshot's values (generated
+2026-11-08, base e5a83bf1, latest tag 2.0.0, 75 non-test files) all
+drifted. For the current release line see the root `AGENTS.md`; count
+files with `ls` when a number is needed.
 
 ## OVERVIEW
 HTTP request handlers for FLMX Admin API. Core business logic layer.
 **Stack:** Go 1.25, net/http, GORM via Repository pattern.
 
 ## STRUCTURE
-The package holds 75 non-test Go files (plus the test files alongside
+The package holds the handler Go files (plus the test files alongside
 them), split by functional area. The largest hubs:
 
 ```
 handler/
 ├── handler.go              # Main Handler struct, route registration, login/captcha, job scheduling
-├── mutations.go            # CRUD for users, tunnels, forwards (~10258 LOC — the central mutation hub)
+├── mutations.go            # CRUD for users, tunnels, forwards (the central mutation hub)
 ├── control_plane.go        # Node control plane API, diagnosis assembly
 ├── kernel*.go              # Inbound/kernel config generation (kernel, chain, egress, external, relay, probe, protect, share address)
 ├── monitoring.go           # Monitoring: node/service/tunnel-quality access control and queries
@@ -41,7 +43,7 @@ handler/
 
 ## CONVENTIONS
 - Inherits from parent: GORM via Repository pattern, JWT in Authorization header.
-- Large files expected (`mutations.go` ~10258 LOC - central mutation hub).
+- Large files expected (`mutations.go` is the central mutation hub).
 - Uses `repo.Repository` for DB access via `h.repo.XXX()` methods.
 - Handlers never call `repo.DB()` directly — all queries go through Repository methods.
 - Domain-driven file split: one file per functional area (jobs, monitoring, etc.).
