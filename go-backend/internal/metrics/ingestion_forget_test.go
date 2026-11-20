@@ -16,8 +16,9 @@ func metricWithBytes(uptime, in, out uint64, boot string) SystemInfo {
 	}
 }
 
-// L3-05：ForgetNode 必须清掉四张表（lastBytes/lastBoot/lastSeen/
-// traffic）在该节点上的全部残留键，且不动其他节点。
+// L3-05：ForgetNode 必须清掉六张表（lastBytes/lastBoot/lastSeen/
+// traffic/lastMetricAt/metricDropped，R18-C4-02 补后两张）在该节点
+// 上的全部残留键，且不动其他节点。
 func TestForgetNodeDropsAllFourMaps(t *testing.T) {
 	r, err := repo.Open(":memory:")
 	if err != nil {
@@ -25,6 +26,8 @@ func TestForgetNodeDropsAllFourMaps(t *testing.T) {
 	}
 	defer r.Close()
 	svc := NewIngestionService(r)
+	// R18-C4-02：同节点快速序列模拟，间隔置 0（不测限流）。
+	svc.minMetricIntervalMs = 0
 
 	// 两条上报才建 traffic 桶（首条只建基线）。
 	// A-低-5：两节点必须用不同 BootID——同 BootID 即同机，去重后
@@ -47,6 +50,12 @@ func TestForgetNodeDropsAllFourMaps(t *testing.T) {
 	}
 	if _, ok := svc.lastSeen[7]; ok {
 		t.Fatal("ForgetNode left lastSeen[7]")
+	}
+	if _, ok := svc.lastMetricAt[7]; ok {
+		t.Fatal("ForgetNode left lastMetricAt[7]")
+	}
+	if _, ok := svc.metricDropped[7]; ok {
+		t.Fatal("ForgetNode left metricDropped[7]")
 	}
 	for k := range svc.traffic {
 		if k.node == 7 {
@@ -82,6 +91,8 @@ func TestEvictDeletedNodeKeysDropsStaleNodes(t *testing.T) {
 	}
 	defer r.Close()
 	svc := NewIngestionService(r)
+	// R18-C4-02：同节点快速序列模拟，间隔置 0（不测限流）。
+	svc.minMetricIntervalMs = 0
 
 	now := time.Now().UnixMilli()
 	liveID, err := r.CreateNode("keep-node", "secret-keep", "198.51.100.10", nil, nil, "1000-65535", nil, nil, nil, nil, nil, 0, 0, 0, now, 1, "", "", 1, nil, "")

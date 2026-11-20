@@ -37,6 +37,8 @@ func TestConnlogBootChangeInterruptsOpenRows(t *testing.T) {
 	seedOpenConnlogRow(t, r, 2, "other-node", now-60_000)
 
 	svc := NewIngestionService(r)
+	// R18-C4-02：同节点 boot 变化序列模拟，间隔置 0（不测限流）。
+	svc.minMetricIntervalMs = 0
 	info := SystemInfo{BootID: "boot-a", BytesReceived: 100, BytesTransmitted: 200}
 
 	// 首报只立基线，不结清。

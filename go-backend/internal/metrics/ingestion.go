@@ -58,6 +58,20 @@ type IngestionService struct {
 	nodeBufferMu  sync.Mutex
 	flushInterval time.Duration
 
+	// lastMetricAt 是每节点上一条被接受的指标帧的面板时刻
+	// （R18-C4-02 逐节点最小接受间隔的记账）；metricDropped
+	// 是每节点因超速被丢弃的帧数（只计数、不落库，供排障）。
+	// 与 lastBytes/lastBoot/lastSeen/traffic 共用 nodeBufferMu。
+	lastMetricAt  map[int64]int64
+	metricDropped map[int64]int64
+
+	// minMetricIntervalMs 是逐节点最小接受间隔（毫秒，R18-C4-02）。
+	// 生产恒走 NewIngestionService 的默认值；仅模拟同节点快速
+	// 序列的既有测试把它置 0（不测限流本身，限流由
+	// TestRecordNodeMetricPerNodeRateLimit 以默认值覆盖）。
+	// 与 flushInterval 同为服务内可调时序。
+	minMetricIntervalMs int64
+
 	// lastBytes is each node's last NIC byte counters (in, out);
 	// node_traffic accumulates what they grew by, per hour, until the
 	// next flush. These are whole-machine NIC counters — not tunnel
@@ -85,6 +99,9 @@ func NewIngestionService(repo *repo.Repository) *IngestionService {
 		lastBoot:      map[int64]string{},
 		lastSeen:      map[int64]int64{},
 		traffic:       map[trafficKey][2]int64{},
+		lastMetricAt:  map[int64]int64{},
+		metricDropped: map[int64]int64{},
+		minMetricIntervalMs: metricMinIntervalMs,
 	}
 }
 
@@ -115,9 +132,9 @@ func counterDeltaForBoot(prev, cur int64, prevBoot, curBoot string) int64 {
 	return 0
 }
 
-// ForgetNode 逐出单个节点在四张内存表里的全部残留键（L3-05）：
-// lastBytes/lastBoot/lastSeen/traffic。删节点漏斗
-// deleteNodeByIDAfterGuardsOutcome 在级联成功后调用；四表与
+// ForgetNode 逐出单个节点在六张内存表里的全部残留键（L3-05）：
+// lastBytes/lastBoot/lastSeen/traffic/lastMetricAt/metricDropped。删节点漏斗
+// deleteNodeByIDAfterGuardsOutcome 在级联成功后调用；六表与
 // RecordNodeMetric/flushNodeMetrics 共用 nodeBufferMu，
 // 此处同锁串行。
 func (s *IngestionService) ForgetNode(nodeID int64) {
@@ -135,9 +152,17 @@ func (s *IngestionService) ForgetNode(nodeID int64) {
 	if _, ok := s.lastSeen[nodeID]; ok {
 		keys++
 	}
+	if _, ok := s.lastMetricAt[nodeID]; ok {
+		keys++
+	}
+	if _, ok := s.metricDropped[nodeID]; ok {
+		keys++
+	}
 	delete(s.lastBytes, nodeID)
 	delete(s.lastBoot, nodeID)
 	delete(s.lastSeen, nodeID)
+	delete(s.lastMetricAt, nodeID)
+	delete(s.metricDropped, nodeID)
 	for k := range s.traffic {
 		if k.node == nodeID {
 			delete(s.traffic, k)
@@ -189,6 +214,17 @@ func (s *IngestionService) evictDeletedNodeKeys() {
 			delete(s.lastSeen, nodeID)
 		}
 	}
+	for nodeID := range s.lastMetricAt {
+		if _, ok := keep[nodeID]; !ok {
+			delete(s.lastMetricAt, nodeID)
+			delete(s.metricDropped, nodeID)
+		}
+	}
+	for nodeID := range s.metricDropped {
+		if _, ok := keep[nodeID]; !ok {
+			delete(s.metricDropped, nodeID)
+		}
+	}
 	for k := range s.traffic {
 		if _, ok := keep[k.node]; !ok {
 			delete(s.traffic, k)
@@ -225,6 +261,11 @@ func (s *IngestionService) Start(ctx context.Context) {
 // 随之放大）。
 var lastInvalidMetricLogNano atomic.Int64
 
+// lastDroppedMetricLogNano / lastBufferOverflowLogNano 是 R18-C4-02
+// 两路丢弃日志的限速点（与 C3-05 同口径：全进程至多每分钟一条）。
+var lastDroppedMetricLogNano atomic.Int64
+var lastBufferOverflowLogNano atomic.Int64
+
 func logInvalidMetricThrottled(nodeID int64, reason string) {
 	now := time.Now().UnixNano()
 	last := lastInvalidMetricLogNano.Load()
@@ -232,6 +273,28 @@ func logInvalidMetricThrottled(nodeID int64, reason string) {
 		return
 	}
 	log.Printf("monitoring ingest rejected node_id=%d reason=%s", nodeID, reason)
+}
+
+// logDroppedMetricThrottled 记一次逐节点超速丢弃（R18-C4-02）：
+// 只报节点与累计丢弃数，不逐帧打日志。
+func logDroppedMetricThrottled(nodeID, droppedTotal int64) {
+	now := time.Now().UnixNano()
+	last := lastDroppedMetricLogNano.Load()
+	if now-last < int64(time.Minute) || !lastDroppedMetricLogNano.CompareAndSwap(last, now) {
+		return
+	}
+	log.Printf("monitoring ingest dropped node_id=%d reason=metric_rate_limit dropped_total=%d", nodeID, droppedTotal)
+}
+
+// logBufferOverflowThrottled 记一次 nodeBuffer 溢出丢最旧
+// （R18-C4-02），与 flush 失败回填帽（C3-06）同口径点名。
+func logBufferOverflowThrottled(dropped, cap int) {
+	now := time.Now().UnixNano()
+	last := lastBufferOverflowLogNano.Load()
+	if now-last < int64(time.Minute) || !lastBufferOverflowLogNano.CompareAndSwap(last, now) {
+		return
+	}
+	log.Printf("monitoring ingest node buffer overflow dropped_oldest=%d cap=%d", dropped, cap)
 }
 
 // clampPercent 把百分比量钳到 [0,100]；NaN 归 0（agent 上报的
@@ -297,6 +360,29 @@ func (s *IngestionService) shouldCountNicTrafficLocked(nodeID int64, bootID stri
 	return true
 }
 
+// metricMinIntervalMs 是 R18-C4-02 逐节点最小接受间隔：正常
+// agent 每 5 秒才报一帧（websocket_reporter.go 的
+// defaultMetricReportInterval），1 秒间隔对正常上报无损；低于
+// 间隔的帧直接丢弃计数，不落库、不推进 NIC 基线（下一条被接受
+// 的帧的差分仍覆盖整段，不丢流量）。
+const metricMinIntervalMs = 1000
+
+// maxNodeBufferMetrics 是 R18-C4-02 的 nodeBuffer 长度帽：与 flush
+// 失败回填帽 maxRequeuedMetrics（C3-06）同值同口径，超限丢最旧
+// 并计数点名；冲刷跟不上时内存不再随洪泛帧增长。
+const maxNodeBufferMetrics = 5000
+
+// trimNodeBufferLocked 把 nodeBuffer 修到帽内（丢最旧），返回丢弃
+// 条数。调用方须持 nodeBufferMu。
+func (s *IngestionService) trimNodeBufferLocked() int {
+	if len(s.nodeBuffer) <= maxNodeBufferMetrics {
+		return 0
+	}
+	dropped := len(s.nodeBuffer) - maxNodeBufferMetrics
+	s.nodeBuffer = s.nodeBuffer[dropped:]
+	return dropped
+}
+
 func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	// C3-05：agent 上报值先消毒再落库。此前 uint64→int64 在
 	// ≥2⁶³ 处直接回绕为负、百分比/速度/连接数原样存储——伪造
@@ -334,7 +420,21 @@ func (s *IngestionService) RecordNodeMetric(nodeID int64, info SystemInfo) {
 	}
 
 	s.nodeBufferMu.Lock()
+	// R18-C4-02：逐节点最小接受间隔。超速帧直接丢弃计数——不
+	// 入缓冲、不推进 lastBytes/lastBoot/lastSeen 基线（下一条被
+	// 接受的帧的差分仍覆盖整段），更不触发 boot 结清判定。
+	if last, ok := s.lastMetricAt[nodeID]; ok && m.Timestamp-last < s.minMetricIntervalMs {
+		s.metricDropped[nodeID]++
+		dropped := s.metricDropped[nodeID]
+		s.nodeBufferMu.Unlock()
+		logDroppedMetricThrottled(nodeID, dropped)
+		return
+	}
+	s.lastMetricAt[nodeID] = m.Timestamp
 	s.nodeBuffer = append(s.nodeBuffer, m)
+	if dropped := s.trimNodeBufferLocked(); dropped > 0 {
+		logBufferOverflowThrottled(dropped, maxNodeBufferMetrics)
+	}
 	shouldFlush := len(s.nodeBuffer) >= 200
 	// The first report after a panel restart only sets the baseline.
 	if prev, ok := s.lastBytes[nodeID]; ok && s.shouldCountNicTrafficLocked(nodeID, info.BootID, m.Timestamp) {
