@@ -30,7 +30,12 @@ import (
 // 重启口径一致）。超时三层：SwapInfo 只读快查给 30s；SwapSet 要
 // 在慢盘上 fallocate/dd 写满数 GB、mkswap、swapon，给 10 分钟命令
 // 界（登记于 doc/audit/timeout-budgets.tsv P006），写截止由
-// nodeSwapSetWriteDeadline 在其外层加余量。
+// nodeSwapSetWriteDeadline 在其外层加余量。OPEN-7：SwapSet 的 10
+// 分钟只是面板等回执的预算——agent 侧 SwapSet 走 mutation 队列、
+// 用进程级 ctx，不设超时，面板停止等待后 agent 仍会执行到底；
+// 故等回执超时后立即再拉一次 SwapInfo（30s，600+30=630 仍在 660s
+// 写截止内）按复查到的实际状态回执，而不是只报超时（见
+// reconcileSwapSetTimeout，F2-APPLY-01 同款「超时后核实是否落地」）。
 
 const (
 	nodeSwapInfoCommand = "SwapInfo"
@@ -88,16 +93,126 @@ func (h *Handler) nodeSwapLookup(w http.ResponseWriter, nodeID int64) (node *mod
 	return node, false
 }
 
-// nodeSwapCommandError 把命令腿错误翻成回执：agent 版本过旧（命令
-// 未知）给升级指引；其余（节点不在线、等待超时、agent 结构化业务
-// 错误如空间不足/风险拒绝）原文透传——这些文案是给用户看的处置
+// nodeSwapCommandMessage 把命令腿错误翻成给用户看的回执文案：agent
+// 版本过旧（命令未知）给升级指引；其余（节点不在线、等待超时、agent
+// 结构化业务错误如空间不足/风险拒绝）原文透传——这些文案是给用户看的处置
 // 信息，不是内部错误。
-func nodeSwapCommandError(w http.ResponseWriter, cmdErr error) {
+func nodeSwapCommandMessage(cmdErr error) string {
 	msg := cmdErr.Error()
 	if strings.Contains(msg, "未知命令类型") {
 		msg = "节点 agent 版本过旧，不支持一键设置 Swap，请先升级节点 Agent"
 	}
-	response.WriteJSON(w, response.Err(-2, msg))
+	return msg
+}
+
+// nodeSwapCommandError 把命令腿错误翻成回执（文案见 nodeSwapCommandMessage）。
+func nodeSwapCommandError(w http.ResponseWriter, cmdErr error) {
+	response.WriteJSON(w, response.Err(-2, nodeSwapCommandMessage(cmdErr)))
+}
+
+// isNodeSwapSetTimeoutError 判断 SwapSet 错误是否为「等回执超时」：
+// SendCommand 的超时文本是「等待节点响应超时」（与 kernel.go 的
+// isKernelApplyTimeoutError 同口径）。只有这个错误才触发超时后复查——
+// 命令本身已发出、agent 侧仍在执行，超时不等于失败；其他错误
+// （不在线、agent 业务拒绝等）是 agent 或通道自己的 verdict，
+// 复查只会读到同一个失败状态，不复查、原文回执。
+func isNodeSwapSetTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "等待节点响应超时")
+}
+
+// nodeSwapReconcileInfoTimeout 是超时后复查腿（SwapInfo）的预算。
+// 包级变量只为测试注入短预算（D2-02 同款包级变量先例）；生产值
+// 即 nodeSwapInfoTimeout。
+var nodeSwapReconcileInfoTimeout = nodeSwapInfoTimeout
+
+// swapSetReconcileState 是超时后复查读到的最小状态子集：只取判断
+// 「是否已按目标启用」所需的字段，其余现状只进回执文案。
+type swapSetReconcileState struct {
+	totalMB       int64
+	fileSizeMB    int64
+	managedActive bool
+}
+
+func swapInfoNumber(m map[string]interface{}, key string) int64 {
+	if v, ok := m[key].(float64); ok {
+		return int64(v)
+	}
+	return 0
+}
+
+// parseSwapSetReconcileState 从 SwapInfo 的 data（map 口径）里解析
+// 复查状态：缺字段一律按零值读——缺证据时绝不能判「已完成」
+// （fail-closed：完成须有文件尺寸＋在用条目双重实证）。
+func parseSwapSetReconcileState(data map[string]interface{}) swapSetReconcileState {
+	var st swapSetReconcileState
+	if data == nil {
+		return st
+	}
+	st.totalMB = swapInfoNumber(data, "totalMB")
+	st.fileSizeMB = swapInfoNumber(data, "fileSizeMB")
+	if entries, ok := data["entries"].([]interface{}); ok {
+		for _, e := range entries {
+			em, ok := e.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if name, _ := em["name"].(string); name == "/swapfile" {
+				st.managedActive = true
+				break
+			}
+		}
+	}
+	return st
+}
+
+// reconcileSwapSetTimeout 在 SwapSet 等回执超时后复查节点实际状态
+// （OPEN-7，F2-APPLY-01 同款「超时后核实是否落地」）：SwapSet 走
+// agent mutation 队列、用进程级 ctx，面板 600s 停止等待后 agent
+// 仍会执行到底——超时回执丢了，但设置可能已完成、仍在执行或已
+// 恢复原状；只报「等待节点响应超时」会让用户把已生效的设置当成
+// 失败重做一次（重复 swapoff/重建）。复查腿是 SwapInfo（30s，
+// 600+30=630 仍在 660s 写截止内），只读现状、与在途 SwapSet 无锁
+// 冲突。返回值是 HTTP 回执二元组（code 0 不出现：复查拿不到
+// before/after 对照，成功态也按 -2 回执、文案写明已核实的实际
+// 状态——前端 code 0 要求 before/after 齐全，见 R3-NODE-02，
+// 绝不为凑形状编造 before）。
+func (h *Handler) reconcileSwapSetTimeout(nodeID int64, sizeGB int) (code int, msg string) {
+	targetMB := int64(sizeGB) * 1024
+	res, cmdErr := h.sendNodeCommandWithTimeout(nodeID, nodeSwapInfoCommand, nil, nodeSwapReconcileInfoTimeout, false, false)
+	if cmdErr != nil {
+		return -2, fmt.Sprintf("设置 Swap 等待超时，复查节点现状失败（%s），实际状态未知，请稍后用 SwapInfo 刷新确认", nodeSwapCommandMessage(cmdErr))
+	}
+	st := parseSwapSetReconcileState(res.Data)
+	if st.managedActive && st.fileSizeMB == targetMB {
+		return -2, fmt.Sprintf("设置 Swap 已完成（复查确认）：/swapfile 已按 %d GB 启用，全机 Swap 总量 %d MB；本次回执等待超时——agent 在面板停止等待后继续执行并完成了设置，超时不代表失败。请刷新现状确认", sizeGB, st.totalMB)
+	}
+	if st.fileSizeMB == targetMB {
+		// 文件已建到目标大小、但 /proc/swaps 里还没有它：在 fallocate/dd
+		// 与 swapon 之间的收尾窗口，或 swapon 刚失败、agent 还没恢复。
+		return -2, fmt.Sprintf("设置 Swap 等待超时，复查节点现状：/swapfile 文件已建到 %d GB、但尚未启用（可能仍在执行收尾），请稍后用 SwapInfo 刷新确认；当前全机 Swap 总量 %d MB", sizeGB, st.totalMB)
+	}
+	return -2, fmt.Sprintf("设置 Swap 等待超时，复查节点现状：当前 /swapfile 为 %d MB，未达到目标 %d GB（可能仍在执行，或已恢复原状），请稍后用 SwapInfo 刷新确认；当前全机 Swap 总量 %d MB", st.fileSizeMB, sizeGB, st.totalMB)
+}
+
+// executeNodeSwapSet 下发 SwapSet 并返回 HTTP 回执三元组
+// （code/msg/data）：成功原样透传 agent 的 before/after；非超时
+// 错误按 nodeSwapCommandMessage 回执；等回执超时则走
+// reconcileSwapSetTimeout 按复查到的实际状态回执。timeout 参数
+// 只为测试注入短预算，生产调用方一律传 nodeSwapSetTimeout。
+func (h *Handler) executeNodeSwapSet(nodeID int64, sizeGB int, timeout time.Duration) (code int, msg string, data map[string]interface{}) {
+	res, cmdErr := h.sendNodeCommandWithTimeout(nodeID, nodeSwapSetCommand,
+		map[string]interface{}{"sizeGB": sizeGB}, timeout, false, false)
+	if cmdErr == nil {
+		return 0, "", res.Data
+	}
+	if isNodeSwapSetTimeoutError(cmdErr) {
+		code, msg := h.reconcileSwapSetTimeout(nodeID, sizeGB)
+		return code, msg, nil
+	}
+	return -2, nodeSwapCommandMessage(cmdErr), nil
 }
 
 // nodeSwapInfo 回节点当前 swap 现状（全机口径总量＋逐条目＋磁盘
@@ -153,11 +268,10 @@ func (h *Handler) nodeSwapSet(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("node swap set requested node_id=%d size_gb=%d operator_id=%d",
 		req.NodeID, req.SizeGB, idemUserID(r))
-	res, cmdErr := h.sendNodeCommandWithTimeout(req.NodeID, nodeSwapSetCommand,
-		map[string]interface{}{"sizeGB": req.SizeGB}, nodeSwapSetTimeout, false, false)
-	if cmdErr != nil {
-		nodeSwapCommandError(w, cmdErr)
+	code, msg, data := h.executeNodeSwapSet(req.NodeID, req.SizeGB, nodeSwapSetTimeout)
+	if code != 0 {
+		response.WriteJSON(w, response.Err(code, msg))
 		return
 	}
-	response.WriteJSON(w, response.OK(res.Data))
+	response.WriteJSON(w, response.OK(data))
 }
