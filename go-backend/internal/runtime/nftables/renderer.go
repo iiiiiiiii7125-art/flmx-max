@@ -252,12 +252,35 @@ func ValidateBindIPTargetFamily(bindIP, targetHost string) error {
 	return fmt.Errorf("nftables 监听IP %s（%s）与目标地址 %s（%s）地址族不一致：nft 会以 conflicting protocols 拒绝整批规则，请把监听IP与目标地址改为同一地址族", bindIPNorm, bindName, strings.Trim(strings.TrimSpace(targetHost), "[]"), targetName)
 }
 
+// ValidateBindIP rejects a BindIP that is not an IP literal
+// (R18-C3-04): bindIPFamilyIP silently drops hostname BindIPs and
+// the DNAT rule then renders with no daddr restriction, so a
+// forward the admin believed bound to one address listens on all
+// addresses (fail-open). Empty BindIP is the wildcard form and
+// passes; IP literals (plain, bracketed IPv6, host:port with an IP
+// host) pass. A hostname must be rejected, never silently widened.
+func ValidateBindIP(bindIP string) error {
+	trimmed := strings.TrimSpace(bindIP)
+	if trimmed == "" {
+		return nil
+	}
+	if _, _, ok := bindIPFamilyIP(trimmed); ok {
+		return nil
+	}
+	return fmt.Errorf("nftables 监听IP %q 不是 IP 地址：主机名形式的监听IP会被渲染层静默丢弃、转发退化为全地址监听，请填写节点 IP 地址或留空（留空即监听全部地址）", trimmed)
+}
+
 // ValidatePlan 校验计划内每条规则的 TargetHost（C3-01），错误点名
 // 出错的转发 ID。Manager.Reconcile 在渲染与下发之前调用，非法计划
 // 整单拒绝、脚本不下发节点。
 func ValidatePlan(plan NodePlan) error {
 	for _, rule := range plan.Rules {
 		if err := ValidateTargetHost(rule.TargetHost); err != nil {
+			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
+		}
+		// R18-C3-04：主机名 BindIP 整单拒绝（见上）——渲染层会
+		// 静默丢弃它，转发退化为全地址监听，绝不能放行下发。
+		if err := ValidateBindIP(rule.BindIP); err != nil {
 			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
 		}
 		// R18-C3-03：BindIP 与目标地址族混用整单拒绝（见上）。
