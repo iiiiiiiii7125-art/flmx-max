@@ -196,6 +196,7 @@ wget -O install.sh https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest
 - **伴生 Clash API 口段固定**：`41000–41999`（面板与 agent 双侧同值，按节点密钥派生）；段内具体是哪个口不固定——派生口被占时 agent 在重启/重建时自动换一个段内空闲口，运行中的实例保持原口。旧固定口 `40900` 已退役，新实例不再用。转发、入站、隧道入口也不要选进这个段。
 - **转发入口不要重叠**：同一台节点机上，两套面板/两个 agent 的转发、入站、隧道入口端口不能撞——一个端口同一时间只能被一个监听者占用。面板建转发/隧道时用统一的四源谓词判重（转发/入站/隧道/伴生口），但只覆盖本面板自己的库；跨面板的冲突它拦不住，只能装前查。
 - **nft 表名按安装根派生、不是任意一个固定名**：默认脚本形态（内核根 `/etc/flmx_agent/kernels`）与容器形态都用 `flmx_kernel_<该根路径 sha256 前 8 位十六进制>`，不再用 plain `flmx_kernel`；改名前旧根（`/etc/flux_agent/kernels`）用 `flmx_kernel_legacy`；自定义 `FLMX_KERNEL_DIR` 或挪位安装的根同样按路径哈希。旧名 `flvx_kernel` 与 plain `flmx_kernel` 只在一次性升级迁移时删（升级后首次成功同步，且该 agent 此前确有成功下发的旧签名、曾拥有 plain 表；迁移后即记已迁移，此后同步不再删），卸载时另行清理；平时同步不碰它们。面板侧 nftables 模式的主表同样按安装隔离：`flmx_<sha256(实例键 | 安装身份)前 8 位十六进制>`（与 agent 侧同口径；安装身份未配置时回落为只按实例键派生，默认实例为 `flmx_e3b0c442`）；另有一张暂停/配额表 `flmx_quota_<同一安装哈希>`。plain 面板表 `flmx`/`flvx` 也只在升级迁移时删，且须持归属证明（本面板曾对该节点成功下发过 nft 规则）——无证明时节点上的 plain 表可能是另一套面板的 live 表，绝不能碰。所以预检时不要只查一张表，把 `flmx_*` 的表全列出来比对。
+  - **既有部署补隔离身份**：安装身份（`FLMX_INSTALL_ID`）只在新装时写入部署 `.env`，此前已部署的面板升级时由升级路径自动补发——脚本选「更新面板」或面板内升级均可，`.env` 无该键时生成一个 UUID 落盘，键已存在时绝不重写。补发后下次同步起用隔离表名：新表由同步按库内规则全量重建，转发与计数不断；旧的 `flmx_e3b0c442` / `flmx_quota_e3b0c442` 表会留在节点上作残留，**不要直接删**——它可能仍是另一套未升级面板的 live 表；等共管该节点的面板全部升级并切走后，再按 `nft list tables` 核对、无面板再用该表时手工删除。手工补键亦可：在部署目录的 `.env` 追加一行 `FLMX_INSTALL_ID=<uuid>`（`uuidgen` 或 `cat /proc/sys/kernel/random/uuid` 取值，小写），然后重启后端（`docker compose up -d backend`）。**切勿改动已有键值**：改键等于换表名，旧表成孤儿、规则须由同步重建；键值非法（含空格等）时面板按无身份回落旧口径，删掉该行后重新更新即可补发。
 
 **粘贴即用的预检命令**（只读；没有 systemd 或 nft 的机器对应行只打印一行提示，不报错退出）：
 
@@ -208,7 +209,7 @@ echo '== nft 表 =='; nft list tables 2>/dev/null || echo 'nft 未安装或无�
 
 其中 `ss -tulnp` 覆盖 TCP 与 UDP（任务书所说的 `ss -tlnp` 只看 TCP；转发含 UDP 入口，故多看 `-u`）。
 
-**怎么读结果**：监听端口里出现 `6365`/`6366`（或你改过的面板端口）说明该机已有面板在跑；`/etc/flmx_agent` 或 `/etc/flux_agent` 存在说明已有 agent——再按上一节查它 `config.json` 里的 `addr` 归属；`/etc/gost` 存在说明有旧式 gost 形态；`flmx_kernel*` / `flmx_quota` 表存在说明已有 agent 或面板侧 nft 规则在用这台机器。以上任一项命中，都不要直接装：先按上一节做归属判定，或把端口/实例错开。
+**怎么读结果**：监听端口里出现 `6365`/`6366`（或你改过的面板端口）说明该机已有面板在跑；`/etc/flmx_agent` 或 `/etc/flux_agent` 存在说明已有 agent——再按上一节查它 `config.json` 里的 `addr` 归属；`/etc/gost` 存在说明有旧式 gost 形态；`flmx_kernel*` / `flmx_quota*` 表存在说明已有 agent 或面板侧 nft 规则在用这台机器。以上任一项命中，都不要直接装：先按上一节做归属判定，或把端口/实例错开。
 
 ### 内核目录覆盖（FLMX_KERNEL_DIR）
 

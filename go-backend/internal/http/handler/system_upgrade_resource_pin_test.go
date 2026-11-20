@@ -358,8 +358,17 @@ func TestPinLegacyResourceNamesNoBackendPasses(t *testing.T) {
 		t.Fatalf("expected = %q, want empty when nothing to record", expected)
 	}
 	data, _ := os.ReadFile(envPath)
-	if string(data) != original {
-		t.Fatalf(".env must be untouched, got %q", data)
+	// R18-R2-C3-01：无后端时资源名无从钉、期望值仍为空，但安装
+	// 身份照常补发——身份是部署的属性、不是容器的属性，下次
+	// 启动即用；除补发的一行外 .env 其余内容一字不动。
+	env := parseEnvFileValues(data)
+	id := strings.TrimSpace(env[envKeyInstallID])
+	if id == "" || !validInstallID(id) {
+		t.Fatalf(".env must gain a valid install identity even with no backend, got %q", data)
+	}
+	rest := strings.Replace(string(data), envKeyInstallID+"="+id+"\n", "", 1)
+	if rest != original {
+		t.Fatalf(".env must be untouched apart from the backfilled identity, got %q", data)
 	}
 }
 
