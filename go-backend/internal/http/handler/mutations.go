@@ -5298,9 +5298,15 @@ func (h *Handler) userTunnelRemove(w http.ResponseWriter, r *http.Request) {
 	// T-001：转发清理后白名单刷新失败进回执 warning——授权已撤，
 	// 但内核仍按旧名单放行。
 	refreshFailed, refreshPending := h.cleanupForwardsForUserTunnel(userID, tunnelID)
+	// R18-B2-02：转发已清、行删失败不得只报泛化 "Internal error"——
+	// 删行幂等，先重试一次（瞬时锁/繁忙可自愈）；仍失败则点名部分
+	// 完成（转发已清理、授权行还在），请用户重试。
 	if err := h.repo.DeleteUserTunnel(id); err != nil {
-		respondInternalError(w, "userTunnelRemove delete", err)
-		return
+		if err := h.repo.DeleteUserTunnel(id); err != nil {
+			log.Printf("userTunnelRemove: auth row delete failed twice id=%d err=%v", id, err)
+			response.WriteJSON(w, response.ErrDefault("转发已清理，授权行删除失败，请重试"))
+			return
+		}
 	}
 	if len(refreshFailed) > 0 || len(refreshPending) > 0 {
 		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshWarning(refreshFailed, refreshPending)))
