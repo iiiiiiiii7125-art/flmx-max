@@ -1102,6 +1102,11 @@ export default function TunnelPage() {
             duration: 5000,
           });
         });
+        // R18-B4-01：隧道创建时被跳过的节点（离线/超时）以后端信封
+        // warning 点名，须与 data.warnings 同形透出，不得丢弃。
+        if (response.warning) {
+          toast(response.warning, { icon: "⚠️", duration: 12000 });
+        }
         toast.success(isEdit ? "更新成功" : "创建成功");
         setModalOpen(false);
         await refreshTunnelList(false);

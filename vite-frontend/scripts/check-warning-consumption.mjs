@@ -321,6 +321,18 @@ const REGISTRY = [
   },
   {
     producer: "go-backend/internal/http/handler/mutations.go",
+    endpoint: "/tunnel/create",
+    apiFn: "createTunnel",
+    // 1 处：R18-B4-01——apply 内被跳过的节点（离线/超时）不在
+    // applyErr 里，隧道已落库成功但这些节点缺整条链/服务；跳过
+    // 须进信封 warning 并排期重试，不得裸成功。消费端
+    // tunnel.tsx 创建成功分支实读 response.warning 并以 ⚠️
+    // toast 透出（与 data.warnings 同形）。
+    calls: 1,
+    consumers: ["src/pages/tunnel.tsx"],
+  },
+  {
+    producer: "go-backend/internal/http/handler/mutations.go",
     endpoint: "/tunnel/user/remove",
     apiFn: "removeUserTunnel",
     calls: 1,
