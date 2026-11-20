@@ -1096,8 +1096,13 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		} else if prevGood {
 			// The previous config is known-good: keep the node serving
 			// on it instead of leaving it down.
-			m.rollback(inst, runDir, prev)
-			if m.state(req.Type, false).Running {
+			if rollbackErr := m.rollback(inst, runDir, prev); rollbackErr != nil {
+				// R18-D3-01: the rolled-back config could not be
+				// re-guarded, so it was stopped again — fail closed
+				// with the guard error, same calibre as startBlocked.
+				failure = rollbackErr
+				m.setErr(inst, failure)
+			} else if m.state(req.Type, false).Running {
 				failure = fmt.Errorf("新配置无法启动，已恢复上一次的配置: %s", failed)
 				m.setErr(inst, failure)
 				confirmed = true
@@ -1441,7 +1446,7 @@ func restorePrevFiles(runDir string, prev prevApply) {
 	}
 }
 
-func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
+func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) error {
 	restorePrevFiles(runDir, prev)
 	m.mu.Lock()
 	inst.req = prev.req
@@ -1454,6 +1459,33 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) {
 	m.stopProcesses(inst)
 	m.startProcesses(inst)
 	m.waitStable(prev.req.Type)
+	// R18-D3-01: the nft table still carries the NEW request's rules
+	// (Apply synced them before the new config failed to start).
+	// Re-sync against the rolled-back request now — otherwise a
+	// guarded previous config runs unguarded until the verify loop
+	// rebuilds the table up to 60s later.
+	syncErr, hopNote := isolateHopSync(m.nft.sync(m.allPorts(), m.allUserMarks(), m.allBlockedUserMarks()))
+	if hopNote != "" {
+		inst.logs.add("[flmx] " + hopNote)
+	}
+	if syncErr != nil {
+		if reqNeedsNftGuard(prev.req) {
+			// Same calibre as Apply's startBlocked: a guarded
+			// kernel must never listen while its rules are not
+			// installed — stop the just-restored processes and
+			// report the guard failure.
+			log.Printf("[flmx] 回滚后 nft 规则重同步失败，已停止刚恢复的受保护内核: %v", syncErr)
+			guardErr := nftGuardFailure(prev.req, syncErr)
+			m.setErr(inst, guardErr)
+			m.stopProcesses(inst)
+			return guardErr
+		}
+		// Counting alone is best-effort: log it and let the
+		// verify loop rebuild the table.
+		log.Printf("[flmx] 回滚后 nft 规则重同步失败（计数缺失，下轮自检重建）: %v", syncErr)
+		inst.logs.add("[flmx] 回滚后流量计数规则重同步失败: " + syncErr.Error())
+	}
+	return nil
 }
 
 // isSingboxType reports whether a kernel type runs the sing-box

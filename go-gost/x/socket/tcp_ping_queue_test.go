@@ -49,9 +49,20 @@ func readPanelResponse(t *testing.T, panel *websocket.Conn, out any) {
 // encryptAsPanel wraps a command the way the real panel does (D1-01):
 // commands to a secret-configured agent travel in an AES envelope with
 // a millisecond timestamp; plaintext frames are rejected at the gate.
+// R18-D1-01: the timestamp lives INSIDE the AES-GCM payload (the
+// authoritative one); the wrapper timestamp is only a pre-screen.
 func encryptAsPanel(t *testing.T, cmd CommandMessage) []byte {
 	t.Helper()
 	raw, err := json.Marshal(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatal(err)
+	}
+	obj["timestamp"] = time.Now().UnixMilli()
+	raw, err = json.Marshal(obj)
 	if err != nil {
 		t.Fatal(err)
 	}

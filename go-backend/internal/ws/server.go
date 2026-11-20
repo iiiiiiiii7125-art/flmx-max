@@ -1013,6 +1013,12 @@ func (s *Server) SendCommandContext(ctx context.Context, nodeID int64, cmdType s
 		"type":      cmdType,
 		"data":      data,
 		"requestId": requestID,
+		// R18-D1-01: the authoritative command timestamp lives
+		// INSIDE the AES-GCM payload — the agent validates this
+		// field after decryption. The wrapper's outer timestamp
+		// below is only a pre-screen and must never be trusted
+		// for replay defence.
+		"timestamp": time.Now().UnixMilli(),
 	}
 	// DB-5：TcpPing 附带面板侧超时预算，
 	// 新 agent 据此在节点侧排队/放弃；老 agent 忽略未知字段照常工作。

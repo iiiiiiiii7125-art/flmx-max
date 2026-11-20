@@ -106,13 +106,19 @@ func TestValidateSwapSizeGB(t *testing.T) {
 }
 
 func TestCheckSwapCapacity(t *testing.T) {
-	// 恰好达标（可用 == 目标＋预留）放行。
+	// 恰好达标（磁盘剩余 == 目标＋预留）放行。
 	if err := checkSwapCapacity(2048+256, 0, 2); err != nil {
 		t.Fatalf("exact fit must pass: %v", err)
 	}
-	// 现有 /swapfile 占量计入可用。
-	if err := checkSwapCapacity(1000, 1024+256+24, 2); err != nil {
-		t.Fatalf("existing file space must count: %v", err)
+	// R18-D2-01：现有 /swapfile 占量在重建期间仍占盘，不计入可用。
+	// 磁盘剩余 1000MB、已有 2GB 文件时调到 2GB 必须拒绝（旧谓词
+	// 1000+2048=3048 ≥ 2304 会放行，随后在 swapoff 之后 ENOSPC）。
+	if err := checkSwapCapacity(1000, 2048, 2); err == nil {
+		t.Fatalf("existing file space must not count toward capacity")
+	}
+	// 磁盘剩余本身达标时，已有文件大小不影响放行。
+	if err := checkSwapCapacity(2048+256, 2048, 2); err != nil {
+		t.Fatalf("sufficient disk free must pass regardless of existing file: %v", err)
 	}
 	// 差 1MB 拒绝，且错误带全部关键数字。
 	err := checkSwapCapacity(2048+255, 0, 2)
@@ -536,13 +542,14 @@ func TestSwapInfoFileSizeMBStates(t *testing.T) {
 }
 
 // TestCheckSwapCapacityBoundaryMirror 与前端预检 CDP 边界格共用
-// 一组数字（在盘未启用文件 1024MB、目标 2GB、需求 2304MB）：
-// diskFree 1280 → 可用恰达需求放行；1279 → 差 1MB 拒绝。
+// 一组数字（目标 2GB、需求 2304MB）：R18-D2-01 起只认真实磁盘剩余，
+// 现有文件占量不再计入——diskFree 2304 → 恰达需求放行；2303 →
+// 差 1MB 拒绝（在盘未启用文件 1024MB 的大小不影响边界）。
 func TestCheckSwapCapacityBoundaryMirror(t *testing.T) {
-	if err := checkSwapCapacity(1280, 1024, 2); err != nil {
+	if err := checkSwapCapacity(2304, 1024, 2); err != nil {
 		t.Fatalf("exact boundary must pass: %v", err)
 	}
-	err := checkSwapCapacity(1279, 1024, 2)
+	err := checkSwapCapacity(2303, 1024, 2)
 	if err == nil {
 		t.Fatalf("1MB below boundary must be rejected")
 	}

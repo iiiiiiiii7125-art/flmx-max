@@ -65,8 +65,9 @@ type swapInfoReply struct {
 	ManagedFilePresent bool            `json:"managedFilePresent"`
 	// FileSizeMB 是 /swapfile 在磁盘上的实际文件大小（stat 口径，
 	// MB 向下取整）；文件不在盘为 0。与启用状态无关——在盘未启用
-	// 也回真实大小：SwapSet 容量校验把这块占量计入可用（重建时
-	// 释放），前端预检须凭此字段逐字镜像同一谓词（R3-NODE-01）。
+	// 也回真实大小。R18-D2-01：这块占量在重建期间仍占盘，不计入
+	// SwapSet 容量校验的可用（只认真实磁盘剩余）；前端预检须凭此
+	// 字段逐字镜像同一谓词（R3-NODE-01）。
 	FileSizeMB int64 `json:"fileSizeMB"`
 }
 
@@ -214,14 +215,18 @@ func validateSwapSizeGB(sizeGB int) error {
 	return nil
 }
 
-// checkSwapCapacity 判磁盘是否装得下目标：现有 /swapfile 的占量
-// 在重建时会被释放，计入可用；目标之外另留 swapReserveMB 预留。
+// checkSwapCapacity 判磁盘是否装得下目标：重建时旧文件只是改名
+// 备份、仍占盘，新文件再整块 fallocate，峰值占用是旧+新——旧文件
+// 占量绝不能计入可用；只认真实磁盘剩余，目标之外另留 swapReserveMB
+// 预留。（R18-D2-01：旧谓词把旧文件占量计入可用，面板预检放行的
+// 调整会在 swapoff 之后因 ENOSPC 失败。）existingFileMB 只用于
+// 报错文案，不参与可用计算。
 func checkSwapCapacity(diskFreeMB int64, existingFileMB int64, sizeGB int) error {
 	needMB := int64(sizeGB)*1024 + swapReserveMB
-	availMB := diskFreeMB + existingFileMB
+	availMB := diskFreeMB
 	if availMB < needMB {
-		return fmt.Errorf("磁盘空间不足：设置 %d GB Swap 需要至少 %d MB 可用（目标 %d MB＋预留 %d MB），当前可用 %d MB（磁盘剩余 %d MB＋现有 /swapfile 占用 %d MB）",
-			sizeGB, needMB, int64(sizeGB)*1024, swapReserveMB, availMB, diskFreeMB, existingFileMB)
+		return fmt.Errorf("磁盘空间不足：设置 %d GB Swap 需要至少 %d MB 磁盘剩余（目标 %d MB＋预留 %d MB），当前磁盘剩余 %d MB（现有 /swapfile 占用 %d MB 在重建期间仍占盘，不计入可用）",
+			sizeGB, needMB, int64(sizeGB)*1024, swapReserveMB, availMB, existingFileMB)
 	}
 	return nil
 }

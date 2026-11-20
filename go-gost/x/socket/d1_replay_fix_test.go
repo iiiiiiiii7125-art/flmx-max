@@ -23,6 +23,17 @@ func d1EncryptEnvelope(t *testing.T, cmd CommandMessage) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// R18-D1-01: the test envelope carries the inner timestamp the
+	// real panel now puts inside the AES-GCM payload.
+	var obj map[string]interface{}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatal(err)
+	}
+	obj["timestamp"] = time.Now().UnixMilli()
+	raw, err = json.Marshal(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
 	aes, err := crypto.NewAESCrypto(d1FixTestSecret)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +97,7 @@ func TestD1SeenCommandIDsClaimSemantics(t *testing.T) {
 		t.Fatal("duplicate claim inside the window must be rejected")
 	}
 	if !set.claim("a", now.Add(commandReplayWindow+time.Second)) {
-		t.Fatal("claim after the window must be fresh again (the envelope itself would be stale by then)")
+		t.Fatal("claim after the window must be fresh again (the envelope itself is stale by then: its inner timestamp is inside the AES-GCM payload and cannot be rewritten, R18-D1-01)")
 	}
 	if !set.claim("", now) || !set.claim("", now) {
 		t.Fatal("empty requestIds cannot be deduped and must always pass")

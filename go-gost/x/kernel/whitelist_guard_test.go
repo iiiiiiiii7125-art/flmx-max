@@ -17,10 +17,11 @@ import (
 // running.
 
 type whitelistNftStub struct {
-	failLoad  bool // script loads ("-f -") fail
-	tableGone bool // "list table" fails even after a successful load
-	available bool
-	scripts   []string
+	failLoad      bool // script loads ("-f -") fail
+	failLoadAfter int  // fail script loads once this many loads already succeeded (0 = disabled)
+	tableGone     bool // "list table" fails even after a successful load
+	available     bool
+	scripts       []string
 }
 
 func stubWhitelistNft(t *testing.T) *whitelistNftStub {
@@ -31,7 +32,7 @@ func stubWhitelistNft(t *testing.T) *whitelistNftStub {
 		joined := strings.Join(args, " ")
 		switch {
 		case joined == "-f -":
-			if s.failLoad {
+			if s.failLoad || (s.failLoadAfter > 0 && len(s.scripts) >= s.failLoadAfter) {
 				return nil, errors.New("nft load failed (stub)")
 			}
 			s.scripts = append(s.scripts, stdin)
