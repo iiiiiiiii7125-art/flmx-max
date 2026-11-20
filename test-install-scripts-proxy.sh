@@ -713,11 +713,17 @@ test_panel_explicit_version_format_validated() (
   assert_equals "1.9.9" "$out" "A1-03: the stable version must pass through verbatim"
   # v 前缀与开发哨兵值放行（panel_version_cmp 剥 v 比较；套件
   # 定版夹具以 v-test 为既定输入、多个既有更新/装机用例依赖其
-  # 流过版本链）：逐字透传，不在此改写。本校验守注入面（穿
-  # 越/空白/元字符），不守版本语义。
+  # 流过版本链）：本校验守注入面（穿越/空白/元字符），不守版本
+  # 语义；M-2 归一化在 resolve_version 内做——v+数字剥为裸 tag，
+  # v-test 等哨兵值仍逐字透传。
   VERSION='v1.9.9' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
   out=$(resolve_version) || fail "A1-03: a v-prefixed version must pass (the prefix is cosmetic to the version grammar)"
-  assert_equals "v1.9.9" "$out" "A1-03: the v-prefixed version must pass through verbatim"
+  assert_equals "1.9.9" "$out" "M-2: the v-prefixed version must be normalized to the bare tag"
+  VERSION='v2.1.18' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  out=$(resolve_version) || fail "M-2: resolve_version must accept v2.1.18"
+  assert_equals "2.1.18" "$out" "M-2: v2.1.18 must resolve to the bare tag"
+  set_compose_urls_by_version "$out"
+  assert_equals "https://github.com/${REPO}/releases/download/2.1.18/docker-compose-v4.yml" "$DOCKER_COMPOSEV4_URL" "M-2: compose download URL for a v-prefixed version must use the bare tag"
   VERSION='v-test' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
   out=$(resolve_version) || fail "A1-03: the suite's pinned-version sentinel v-test must pass (standing fixture contract)"
   assert_equals "v-test" "$out" "A1-03: the sentinel version must pass through verbatim"
@@ -738,6 +744,16 @@ test_panel_explicit_version_format_validated() (
   start_panel_after_update() { return 0; }
   verify_panel_update_sqlite_volume() { return 0; }
   check_ipv6_support() { return 1; }
+  # M-2 成功路径打桩：update_panel 成功走完须经的其余宿主步一律
+  # 桩掉（swap 检查不碰本机；身份/卷名/网络对账/旧镜像清理只断言
+  # 走到，不碰部署）。
+  ensure_small_host_swap() { return 0; }
+  panel_assert_instance_id_valid() { return 0; }
+  get_env_var() { return 1; }
+  apply_panel_identity_rename() { return 0; }
+  panel_sqlite_volume_name() { echo "panel_sqlite_test"; }
+  panel_reconcile_network_label() { return 0; }
+  cleanup_old_panel_images_after_update() { return 0; }
 
   PULL_MARKER=$(mktemp)
   local log
@@ -748,6 +764,15 @@ test_panel_explicit_version_format_validated() (
   [[ "$rc" != "0" ]] || fail "A1-03: update_panel must reject a malformed explicit version"
   grep -q '格式非法' "$log" || fail "A1-03: the update rejection must name the format problem"
   [[ ! -s "$PULL_MARKER" ]] || fail "A1-03: no image pull may happen with a malformed version"
+
+  # M-2：update 链第二入口同律归一化——v 前缀目标版本须以裸 tag
+  # 进 compose 下载地址（并走完更新、走到镜像拉取）。
+  : > "$PULL_MARKER"
+  VERSION='v1.9.9' FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  log=$(mktemp)
+  update_panel >"$log" 2>&1 || fail "M-2: update_panel must accept a v-prefixed target version"
+  [[ -s "$PULL_MARKER" ]] || fail "M-2: the update must reach image pull with a v-prefixed target version"
+  assert_equals "https://github.com/${REPO}/releases/download/1.9.9/docker-compose-v4.yml" "$DOCKER_COMPOSEV4_URL" "M-2: update compose URL must use the bare tag"
 )
 
 # A1-04（audit-max）：路线探测的 tag 文法与版本解析器对齐——旧

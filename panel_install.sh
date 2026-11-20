@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.04"
+SCRIPT_VERSION="20261120.05"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -623,8 +623,10 @@ resolve_latest_release_tag() {
 # 义：首字符须为字母或数字，其余仅含字母/数字/点/连字符——
 # 穿越（../）、空白、;、$()、引号等形态一律拒绝；稳定版、显
 # 式预发布（-rc/-beta，J-02 既定支持面）、带 v 前缀与开发哨
-# 兵值（套件定版夹具的 v-test 为既定输入）都放行，版本是否
-# 存在由下载/拉取环节 fail-closed 回答。API 解析出的 tag 由
+# 兵值（套件定版夹具的 v-test 为既定输入）都放行；v+数字在
+# resolve_version / update_panel 归一化为裸 tag（M-2，仓库 tag
+# 无 v 前缀），其余值原样通过，版本是否存在由下载/拉取环节
+# fail-closed 回答。API 解析出的 tag 由
 # 解析侧的渠道文法把关（release_tag_pattern），不在此列。
 panel_validate_explicit_version() {
   [[ "$1" =~ ^[0-9A-Za-z][0-9A-Za-z.-]*$ ]] || return 1
@@ -634,6 +636,19 @@ panel_validate_explicit_version() {
   [[ "$1" != *".."* ]] || return 1
   (( ${#1} <= 40 )) || return 1
   return 0
+}
+
+# M-2：显式版本归一化——仓库 tag 全为裸数字，v 前缀只是写法习
+# 惯；原样拼 URL 会得到 releases/download/v2.1.18/... 必然 404。
+# 只剥 v+数字（如 v2.1.18 → 2.1.18），其余值（v-test 等哨兵值、
+# 预发布后缀）原样通过。调用方在格式校验通过后、拼 URL 或镜像
+# tag 前调用；resolve_version 与 update_panel 两入口同律。
+panel_normalize_explicit_version() {
+  if [[ "$1" =~ ^v[0-9] ]]; then
+    echo "${1#v}"
+  else
+    echo "$1"
+  fi
 }
 
 resolve_version() {
@@ -653,6 +668,9 @@ resolve_version() {
       echo "❌ 环境变量 $explicit_source 指定的版本号格式非法：$explicit（须以字母或数字开头、仅含字母/数字/点/连字符，如 1.9.9 或 1.9.9-rc.1）" >&2
       return 1
     fi
+    # M-2：显式值归一化（与 update_panel 第二入口同律），见
+    # panel_normalize_explicit_version 头注。
+    explicit="$(panel_normalize_explicit_version "$explicit")"
     echo "$explicit"
     return 0
   fi
@@ -4848,6 +4866,11 @@ update_panel() {
     echo "❌ 环境变量 $target_source 指定的版本号格式非法：$LATEST_VERSION（须以字母或数字开头、仅含字母/数字/点/连字符，如 1.9.9 或 1.9.9-rc.1），更新终止"
     return 1
   fi
+  # M-2：更新链第二入口同律归一化——LATEST_VERSION 随后进
+  # set_compose_urls_by_version（compose 下载 URL）与 FLMX_VERSION
+  #（镜像 tag；两者均为裸 tag 形态，:v2.1.18 镜像亦不存在）。
+  # 防降级比较 panel_version_gate_cmp 本就剥 v，归一化后口径一致。
+  LATEST_VERSION="$(panel_normalize_explicit_version "$LATEST_VERSION")"
   # 防降级与 Go 面 compareVersions 同口径（A11-132-06）：经
   # panel_version_gate_cmp 判定，两侧皆非空而不可比（带粘连后
   # 缀的低版本如目标 2.1.1-rc1 对现行 2.1.2）即 fail-closed 拒
