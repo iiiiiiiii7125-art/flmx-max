@@ -284,8 +284,18 @@ func TestRemoveTablesOnlyOwnTableForIsolatedAgent(t *testing.T) {
 	}
 }
 
+// R18-C3-06 (M-4): this test pins the MIGRATION-CLEANUP
+// scenario — a canonical uninstall with NO live legacy agent
+// deletes the leftover flmx_kernel_legacy table. It must not be
+// read as "uninstall always deletes the legacy table": when a
+// legacy agent is still running, its table is live and
+// TestRemoveTablesSkipsLegacyTableWhenLegacyAgentAlive (fix_c3_06)
+// requires removeTables to leave it alone.
 func TestRemoveTablesCanonicalDeletesLegacyToo(t *testing.T) {
 	stubKernelResolution(t, false, "/anywhere", nil, "/etc/flmx_agent/flmx_agent", nil)
+	oldAlive := legacyAgentAlive
+	legacyAgentAlive = func() bool { return false }
+	t.Cleanup(func() { legacyAgentAlive = oldAlive })
 	var scripts []string
 	oldRunner := nftRunner
 	nftRunner = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
