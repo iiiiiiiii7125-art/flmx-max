@@ -255,6 +255,17 @@ func isValidAgentVersion(v string) bool {
 	return agentVersionRe.MatchString(v)
 }
 
+// normalizeAgentVersion strips the optional leading "v" so the panel
+// compares, preheats and dispatches one canonical form (R18-B8-04 /
+// M-2). The repo publishes bare-number tags only, so a "v"-prefixed
+// version passed verbatim used to 404 at preheat (the expected-hash
+// anchor was silently lost) and again at the agent download, while
+// the comparison in the same handler already stripped the "v".
+// Callers normalize once at the entry, right after isValidAgentVersion.
+func normalizeAgentVersion(v string) string {
+	return strings.TrimPrefix(strings.TrimSpace(v), "v")
+}
+
 // C-01：重定向解析出的 tag 会进入 nodeInstall 的 shell 命令
 // （VERSION=%s 无引号拼接），生产处必须校验字符集：只允
 // [0-9A-Za-z.-]，拒一切 shell 元字符（; $ 空格 | 等）。
@@ -587,6 +598,11 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R18-B8-04 (M-2): 入口统一归一化——比较、预热、下发、核验
+	// 记录此后全走裸 tag 形态。下游的 TrimPrefix 是防御性容忍，
+	// 归一化后恒为 no-op。
+	version = normalizeAgentVersion(version)
+
 	// O9-005：目标版本低于节点当前版本时拒绝升级（防误降级；有意降级请用独立的
 	// nodeRollback 接口）。节点版本未知（未上报）时不拦截。
 	nodeArch := ""
@@ -742,6 +758,10 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("版本号格式无效"))
 		return
 	}
+
+	// R18-B8-04 (M-2): 与单节点升级同口径，入口统一归一化——整批
+	// 预热与各节点下发全走裸 tag 形态。
+	version = normalizeAgentVersion(version)
 
 	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version。
 	// 1.7.7（KU5）：与单节点升级同口径停发 proxyUrl（agent 自行测速
