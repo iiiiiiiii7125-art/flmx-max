@@ -863,6 +863,10 @@ test_panel_explicit_version_format_validated() (
   activate_panel_update_files() { return 0; }
   start_panel_after_update() { return 0; }
   verify_panel_update_sqlite_volume() { return 0; }
+  # R18-R2-A2-01：重建前卷内容预检是 update_panel 的新门——本夹
+  # 具无 docker 桩、无真实卷，桩到放行（其生产语义由 A2-09 与
+  # R18-R2-A2-01 专属用例覆盖）。
+  verify_panel_update_sqlite_volume_before_rebuild() { return 0; }
   check_ipv6_support() { return 1; }
   # M-2 成功路径打桩：update_panel 成功走完须经的其余宿主步一律
   # 桩掉（swap 检查不碰本机；身份/卷名/网络对账/旧镜像清理只断言
@@ -4605,6 +4609,14 @@ test_update_panel_downloads_without_prompt() (
     calls+=" activate"
   }
 
+  # R18-R2-A2-01：重建前卷内容预检是 update_panel 在激活/改名
+  # 之后、重建之前的新步——顺序钉子须把它钉在 start 之前（本夹
+  # 具无 docker 桩、无真实卷，内容判定本身由 A2-09/R18-R2-A2-01
+  # 专属用例覆盖，此处只钉顺序）。
+  verify_panel_update_sqlite_volume_before_rebuild() {
+    calls+=" preverify"
+  }
+
   start_panel_after_update() {
     calls+=" start"
   }
@@ -4622,9 +4634,9 @@ test_update_panel_downloads_without_prompt() (
     "$DOCKER_COMPOSEV4_URL" \
     "update_panel should build the canonical compose URL"
   assert_equals \
-    " resolve validate-current download validate-new backup pull pin activate start verify" \
+    " resolve validate-current download validate-new backup pull pin activate preverify start verify" \
     "$calls" \
-    "update_panel should validate, back up, pull, and pin resource keys before activating the update, then verify the mounted volume after starting"
+    "update_panel should validate, back up, pull, and pin resource keys before activating the update, then verify the volume contents before rebuilding, then verify the mounted volume after starting"
 )
 
 # R9-03（菜单 2 面）: 更新前备份失败时回执必须点名中止；且仅当后
@@ -10019,6 +10031,10 @@ test_panel_update_honors_version_priority_chain() (
   activate_panel_update_files() { return 0; }
   start_panel_after_update() { return 0; }
   verify_panel_update_sqlite_volume() { return 0; }
+  # R18-R2-A2-01：重建前卷内容预检是 update_panel 的新门——本夹
+  # 具无 docker 桩、无真实卷，桩到放行（其生产语义由 A2-09 与
+  # R18-R2-A2-01 专属用例覆盖）。
+  verify_panel_update_sqlite_volume_before_rebuild() { return 0; }
   check_ipv6_support() { return 1; }
 
   local log
@@ -11165,6 +11181,49 @@ test_panel_update_sqlite_volume_check_rejects_same_name_empty_volume() (
   out=$(verify_panel_update_sqlite_volume "sqlite_data" 2>&1) || rc="$?"
   assert_equals "1" "$rc" "R18-A2-09: the sqlite volume self-check must fail when the same-named volume holds no gost.db"
   [[ "$out" == *"gost.db"* ]] || fail "R18-A2-09: the failure must name the missing gost.db, got: $out"
+  rm -rf "$dir"
+)
+
+# R18-R2-A2-01：A2-09 的内容检查原在重建之后，生产时序下无效——
+# 同名空卷更新时新后端先启动播种（卷内凭空出现 gost.db）、健康
+# 通过、事后检查恒过，更新报成功、面板跑在空库上。本用例复现完
+# 整生产时序：同名空卷夹具走全程 update_panel，播种由
+# start_panel_after_update 的桩建模（重建 up 后、健康等待前在卷
+# 内建 gost.db，与真实后端 repo.Open → autoMigrate/seedData 同
+# 时序）。旧实现下更新报成功（本例必红）；新实现在重建前即被卷
+# 内容自检拦下：更新判失败并回滚、.env 逐字恢复、新后端永不启动
+# （卷内仍无 gost.db、.rebuilt 标记未出现）。
+test_panel_update_rejects_same_name_empty_volume_before_rebuild() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  FIXTURE_SQLITE_VOL_EMPTY=1 setup_rename_update_fixture "$dir" "current"
+  cp -p "$dir/.env" "$dir/env.pristine"
+  # 生产播种桩：新后端首次启动即在空卷上建库播种，随后才健康。
+  start_panel_after_update() {
+    local db_type="$1"
+    if [[ "$db_type" == "postgres" ]]; then
+      run_panel_compose up -d postgres || return 1
+      wait_for_postgres_healthy || return 1
+    fi
+    run_panel_compose up -d --force-recreate --remove-orphans backend frontend || return 1
+    [[ -e "$FIXTURE_SQLITE_VOLDIR/gost.db" ]] || : > "$FIXTURE_SQLITE_VOLDIR/gost.db"
+    wait_for_backend_healthy
+  }
+  VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  local rc="0"
+  update_panel >"$dir/update.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-R2-A2-01: update of a same-named empty sqlite volume must fail, not report success"
+  grep -q '更新前卷内容自检失败' "$dir/update.log" || fail "R18-R2-A2-01: the pre-rebuild volume content check must be named in the update output"
+  grep -q 'gost.db' "$dir/update.log" || fail "R18-R2-A2-01: the failure must name the missing gost.db"
+  grep -q '已恢复更新前版本' "$dir/update.log" || fail "R18-R2-A2-01: the aborted update must roll back"
+  if grep -q '更新完成' "$dir/update.log"; then
+    fail "R18-R2-A2-01: the update must not report success on a same-named empty volume"
+  fi
+  [[ ! -e "$FIXTURE_SQLITE_VOLDIR/gost.db" ]] || fail "R18-R2-A2-01: the new backend must never have started and seeded the empty volume"
+  [[ ! -e "$dir/.rebuilt" ]] || fail "R18-R2-A2-01: the rebuild must never have started"
+  diff -q "$dir/env.pristine" "$dir/.env" >/dev/null || fail "R18-R2-A2-01: rollback must restore the pre-update .env verbatim"
   rm -rf "$dir"
 )
 
@@ -13649,6 +13708,7 @@ test_panel_update_rename_health_failure_rolls_back
 test_panel_update_volume_check_rolls_back_on_mismatch
 test_panel_update_volume_check_existing_key_path
 test_panel_update_sqlite_volume_check_rejects_same_name_empty_volume
+test_panel_update_rejects_same_name_empty_volume_before_rebuild
 test_panel_update_pins_keys_without_rename
 test_panel_migrate_placeholder_password_sentinels
 test_panel_migrate_volume_split_and_rollback_cleanup

@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.14"
+SCRIPT_VERSION="20261121.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -4234,6 +4234,27 @@ rollback_panel_update() {
   wait_for_backend_healthy
 }
 
+# R18-R2-A2-01：重建前卷内容预检——事后自检 verify_panel_update_
+# sqlite_volume 的内容腿在重建后才跑，新后端一启动即在空卷上播
+# 种 gost.db（repo.Open → autoMigrate/seedData 在健康探针通过之
+# 前完成），事后检查恒过、同名空卷更新照报成功。本函数只验内容
+# （卷名比对仍由事后自检做：重建前期望卷即钉键后的有效卷名；PG
+# 部署不验 gost.db，与事后自检同口径）。调用点在 update_panel
+# 的重建之前，失败即 fail-closed 中止更新（新后端永不启动）。
+verify_panel_update_sqlite_volume_before_rebuild() {
+  local expected="$1"
+  local db_type
+  db_type=$(get_current_db_type || true)
+  if [[ "$db_type" == "postgres" ]]; then
+    return 0
+  fi
+  if ! panel_volume_file_exists "$expected" gost.db; then
+    echo "❌ 更新前卷内容自检失败：卷 $expected 内未见 gost.db（不像真实 SQLite 数据目录，可能挂到了同名的空卷/异属卷），本次更新中止（新后端未启动）" >&2
+    return 1
+  fi
+  return 0
+}
+
 # 升级后卷名自检：重建后的后端容器在 /app/data 实际挂载的卷名必
 # 须与重建前定格的有效卷名一致。健康检查只证明新进程活着，不证
 # 明挂的是原来的卷——模板回退名已翻新（flmx-sqlite-data），无键
@@ -5323,6 +5344,22 @@ update_panel() {
   local update_expected_postgres_volume=""
   if [[ "$CURRENT_DB_TYPE" == "postgres" ]]; then
     update_expected_postgres_volume=$(panel_postgres_volume_name)
+  fi
+
+  # R18-R2-A2-01：A2-09 的卷内容检查原在重建之后——新后端一启
+  # 动即在空卷上播种 gost.db，事后检查恒过、同名空卷更新照报
+  # 成功。检查前移到重建之前（verify_panel_update_sqlite_volume_
+  # before_rebuild）：此刻期望卷仍是旧后端的数据卷，卷内无
+  # gost.db 即 fail-closed 中止更新（新后端永不启动播种）。失败
+  # 走统一回滚口（此时新文件已激活、改名已毕，只恢复配置；重建
+  # 未开始，数据库无需恢复）。
+  if ! verify_panel_update_sqlite_volume_before_rebuild "$update_expected_sqlite_volume"; then
+    if rollback_panel_update "$CURRENT_DB_TYPE"; then
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
+    else
+      echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
+    fi
+    return 1
   fi
 
   # NETLABEL-211：重建前先对存量网络标签对账（旧世代模板建的网
