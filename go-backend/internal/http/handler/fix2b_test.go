@@ -203,10 +203,13 @@ func TestFix2BMineNodeCountMatchesIndependentPull(t *testing.T) {
 			t.Fatalf("B10-001: mine nodeCount user %d = %d, want 2 (independent-link count)", userID, got)
 		}
 	}
-	// FIX2-B 原语义守恒：个性化拉取仍按入站分配过滤。
-	for userID, want := range map[int64]int{2: 1, 3: 0, 4: 0} {
+	// R18-B2-01：个性化拉取不再只按旧入站分配过滤——被分配了本
+	// 订阅的用户直接放行全量（与不带 ?user= 的分配卡片链接同口
+	// 径），故三名用户都等于独立链接数；旧口径 {2:1, 3:0, 4:0}
+	// 是被修的缺陷，不再守恒。
+	for userID, want := range map[int64]int{2: 2, 3: 2, 4: 2} {
 		if got := personalizedPullCount(userID); got != want {
-			t.Fatalf("personalized pull count user %d = %d, want %d (FIX2-B pull semantics)", userID, got, want)
+			t.Fatalf("personalized pull count user %d = %d, want %d (R18-B2-01 pull semantics)", userID, got, want)
 		}
 	}
 }
