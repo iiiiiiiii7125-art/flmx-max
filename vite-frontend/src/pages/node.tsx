@@ -141,6 +141,7 @@ import {
 import {
   NodeCardRow,
   NodeListRow,
+  NodeRestartPushLine,
   NodeUninstallStateChip,
   type NodeRowActions,
 } from "@/pages/node/node-row";
@@ -2252,6 +2253,7 @@ export default function NodePage({
     rollbackNode: handleRollbackNode,
     openTune: (node) => setTuneNode(node),
     openSwap: (node) => setSwapNode(node),
+    openRestartSchedule: (node) => setRestartNode(node),
     editNode: handleEdit,
     deleteNode: handleDelete,
     probeNode,
@@ -2285,6 +2287,7 @@ export default function NodePage({
       rollbackNode: delegate("rollbackNode"),
       openTune: delegate("openTune"),
       openSwap: delegate("openSwap"),
+      openRestartSchedule: delegate("openRestartSchedule"),
       editNode: delegate("editNode"),
       deleteNode: delegate("deleteNode"),
       probeNode: delegate("probeNode"),
@@ -2928,6 +2931,35 @@ export default function NodePage({
                     [
                       "卸载状态",
                       <NodeUninstallStateChip key="uninstall" node={node} />,
+                    ],
+                  ] as Array<[string, React.ReactNode]>)
+                : []),
+              // R18-E2-01：定时重启下发结果行——failed/pending/未知
+              // 常驻呈现（与列表/卡片同一组件 NodeRestartPushLine，
+              // 条件与该组件同口径）；applied 时写已启用的时刻口径，
+              // 不再只凭 restartEnabled 渲染「已启用」。
+              ...(node.restartEnabled === 1 ||
+              node.restartPushStatus === "failed"
+                ? ([
+                    [
+                      "定时重启",
+                      node.restartPushStatus === "failed" ||
+                      (node.restartPushStatus === "pending" &&
+                        node.restartEnabled === 1) ||
+                      (node.restartEnabled === 1 &&
+                        !node.restartPushStatus) ? (
+                        <NodeRestartPushLine
+                          key="restart-push"
+                          node={node}
+                          onRepush={() => setRestartNode(node)}
+                        />
+                      ) : (
+                        `已启用（${
+                          node.restartMode === "interval"
+                            ? `每 ${node.restartIntervalMinutes ?? 60} 分钟`
+                            : `每天 ${node.restartTime || "04:00"}`
+                        }）`
+                      ),
                     ],
                   ] as Array<[string, React.ReactNode]>)
                 : []),

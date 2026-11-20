@@ -51,6 +51,8 @@ export interface NodeRowActions {
   rollbackNode: (node: Node) => void;
   openTune: (node: Node) => void;
   openSwap: (node: Node) => void;
+  /** R18-E2-01：打开定时重启弹窗（下发失败行的“重新下发”入口）。 */
+  openRestartSchedule: (node: Node) => void;
   editNode: (node: Node) => void;
   deleteNode: (node: Node) => void;
   probeNode: (id: number) => void;
@@ -220,6 +222,84 @@ function NodeUpgradeVerificationLine({ node }: { node: Node }) {
       <div className="mt-1 text-xs font-semibold text-warning-700">
         {verification.kind === "rollback" ? "回退已下发" : "升级已下发"}
         ：等待节点以 {verification.targetVersion} 回连核验
+      </div>
+    );
+  }
+  return null;
+}
+
+/**
+ * R18-E2-01: scheduled-restart push result line, shared by the card
+ * and list row variants (same F-211-02 lesson as
+ * NodeUpgradeVerificationLine: one component, both views). The list
+ * used to render nothing but the panel-side setting, so a failed push
+ * still looked "enabled" after the modal closed. failed always renders
+ * — the node's real state differs from the panel setting whether the
+ * push was an enable or a disable; pending renders while the schedule
+ * is enabled (waiting for the node to come online); an enabled
+ * schedule with no push result on record (legacy rows predating the
+ * push-result fields) renders as unknown, never as a quiet "enabled";
+ * applied and absent render nothing.
+ */
+export function NodeRestartPushLine({
+  node,
+  onRepush,
+}: {
+  node: Node;
+  onRepush: (node: Node) => void;
+}) {
+  if (node.restartPushStatus === "failed") {
+    const reason = node.restartPushError?.trim();
+    return (
+      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <span className="font-semibold text-danger-700">
+          定时重启下发失败
+        </span>
+        {reason && (
+          <span
+            className="min-w-0 truncate font-semibold text-danger-700"
+            title={reason}
+          >
+            {reason}
+          </span>
+        )}
+        <button
+          className="shrink-0 font-semibold text-primary underline underline-offset-2"
+          type="button"
+          onClick={() => onRepush(node)}
+        >
+          重新下发
+        </button>
+      </div>
+    );
+  }
+  if (node.restartPushStatus === "pending" && node.restartEnabled === 1) {
+    return (
+      <div className="mt-1 text-xs font-semibold text-warning-700">
+        定时重启待下发：等节点上线后自动推送
+      </div>
+    );
+  }
+  if (node.restartEnabled === 1 && !node.restartPushStatus) {
+    return (
+      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <span className="font-semibold text-warning-700">
+          定时重启已启用，但下发状态未知
+        </span>
+        <button
+          className="shrink-0 font-semibold text-primary underline underline-offset-2"
+          type="button"
+          onClick={() => onRepush(node)}
+        >
+          重新下发
+        </button>
+      </div>
+    );
+  }
+  if (node.restartPushStatus && node.restartPushStatus !== "applied") {
+    return (
+      <div className="mt-1 text-xs font-semibold text-warning-700">
+        定时重启下发状态：{node.restartPushStatus}
       </div>
     );
   }
@@ -621,6 +701,11 @@ const NodeCardContent = memo(function NodeCardContent({
                 </span>
               </div>
               <NodeUpgradeVerificationLine node={node} />
+              {/* R18-E2-01：定时重启下发结果行（failed/pending/未知均常驻，applied 不渲染）。 */}
+              <NodeRestartPushLine
+                node={node}
+                onRepush={actions.openRestartSchedule}
+              />
               {upgradeProgressEntry &&
                 upgradeProgressEntry.percent < 100 && (
                   <div className="mt-1">
@@ -1034,6 +1119,11 @@ const NodeListContent = memo(function NodeListContent({
       footer={
         <>
           <NodeUpgradeVerificationLine node={node} />
+          {/* R18-E2-01：定时重启下发结果行（与卡片视图同一组件、同一口径）。 */}
+          <NodeRestartPushLine
+            node={node}
+            onRepush={actions.openRestartSchedule}
+          />
           {/* X06 恢复：三标签与流量进度条与卡片视图同一组件、同一口径。 */}
           <div className="mt-2">
             <NodeCardTagChips node={node} tags={cardTags} />
