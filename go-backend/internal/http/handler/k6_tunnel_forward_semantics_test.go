@@ -81,6 +81,16 @@ func k6WarningsJoined(env k9Envelope) string {
 // "must not warn" assertions below only cover non-skip warnings
 // (e.g. port repicks). A single warning string may itself join
 // several lines with "；", so both separators are split.
+//
+// R18-R2-F1-03 (9249d21b) adds a second non-port warning class to
+// the same receipt: an offline node whose TLS segments render
+// unverified ("…以未验证方式建成…"). That warning is deliberate
+// product behaviour — the receipt must name unverified nodes — so
+// it is excluded here on the same terms as the runtime-skip class;
+// the B06-001 assertions keep meaning "no port warning". Coverage
+// of the F1-03 warning itself lives in R1-04's own tests
+// (TestTunnelTLSLegacyWarningsNameNodesAndImpact and the receipt
+// tests in audit_r18_r2_f1_03_receipt_test.go), not here.
 func k6WarningsWithoutRuntimeSkips(env k9Envelope) string {
 	warnings, _ := env.Data["warnings"].([]interface{})
 	parts := make([]string, 0, len(warnings))
@@ -91,7 +101,8 @@ func k6WarningsWithoutRuntimeSkips(env k9Envelope) string {
 		}
 		for _, seg := range strings.Split(s, "；") {
 			seg = strings.TrimSpace(seg)
-			if seg == "" || strings.Contains(seg, "已跳过隧道运行时下发") {
+			if seg == "" || strings.Contains(seg, "已跳过隧道运行时下发") ||
+				strings.Contains(seg, "以未验证方式建成") {
 				continue
 			}
 			parts = append(parts, seg)
