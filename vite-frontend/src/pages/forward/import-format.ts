@@ -237,7 +237,14 @@ const splitConcatenatedJsonObjectSpans = (input: string): JsonObjectSpan[] => {
     }
 
     if (char === "}") {
-      depth -= 1;
+      // R18-E2-04: never let depth go negative. A stray `}` (common
+      // when pasting from an export file or chat log) used to drive
+      // depth to -1, after which the next `{` only raised it back to
+      // 0 without setting start — every following valid object lost
+      // its span and the whole import failed. Clamp at 0 so a stray
+      // brace acts as a separator and recovery resumes at the next
+      // object.
+      depth = Math.max(0, depth - 1);
       if (depth === 0 && start >= 0) {
         result.push({ chunk: input.slice(start, i + 1), start, end: i + 1 });
         start = -1;

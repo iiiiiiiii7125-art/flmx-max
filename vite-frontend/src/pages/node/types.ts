@@ -52,6 +52,15 @@ export interface Node {
   /** 重启模式：daily＝每天 restartTime 触发（默认）；interval＝每 restartIntervalMinutes 分钟触发一次。 */
   restartMode?: string;
   restartIntervalMinutes?: number;
+  /** 定时重启下发结果（后端 node/list 透出，R18-E2-01）：pending＝
+   * 已保存未下发（离线保存，等节点上线补发）/applied＝agent 已确认
+   * /failed＝下发失败（原因见 restartPushError）；restartPushedAt
+   * 为最近一次下发尝试的 UnixMilli。只凭 restartEnabled 渲染
+   * 「已启用」会撒谎——failed 时计时器根本没落到节点；空串只剩
+   * 存量旧行（下发结果字段上线前已开启的节点），按未知处理。 */
+  restartPushStatus?: string;
+  restartPushError?: string;
+  restartPushedAt?: number;
   /** 节点连接日志总开关（默认关）：关时本节点不采集连接记录；开后新连接开始记录。后端列表下发 int（0 关 1 开），与 restartEnabled 同款，不得按 boolean 读——1 === true 恒假，刷新即现原形。 */
   connLogEnabled?: number;
   /** 节点级入站白名单总开关（默认关）：开时本节点全部入站只放行中转机、本机与 whitelistExtra 中的 IP/网段。后端列表下发 int（0 关 1 开），同款不得按 boolean 读。 */

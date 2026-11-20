@@ -22,11 +22,47 @@ import {
 const PRESET_GB = [1, 2, 4, 8];
 const MAX_CUSTOM_GB = 32;
 
-/** MB → 人读：满 1 GB 用 GB（整数不带小数），否则 MB 原值。 */
+/** MB → 人读：满 1 GB 用 GB（整数不带小数），否则 MB 原值。非有限/
+ * 负数不渲染成 “NaN MB”/“-5 MB”，按未上报处理（R18-E2-02 纵深）。 */
 const formatMB = (mb: number): string =>
-  mb >= 1024
-    ? `${Number((mb / 1024).toFixed(1))} GB`
-    : `${Math.round(mb)} MB`;
+  !Number.isFinite(mb) || mb < 0
+    ? "—"
+    : mb >= 1024
+      ? `${Number((mb / 1024).toFixed(1))} GB`
+      : `${Math.round(mb)} MB`;
+
+/** R18-E2-02：swap-info 回执形状校验，与 set 回执同款（R3-NODE-02）。
+ * 数值字段须为有限 number、entries 每项 sizeMB/usedMB 须为有限
+ * number，否则按加载失败处理——残缺响应不得放行执行（shortMB 为
+ * NaN 时 `shortMB > 0` 恒假，确认按钮会放行未知磁盘空间下的
+ * /swapfile 改动）。fileSizeMB 例外：旧版 agent 回执无此字段，按
+ * 0 计是既有存量约定（其 SwapSet 本就不可用、会回版本过旧指引），
+ * 缺失不断言失败；但一旦出现必须为有限 number，否则同样拒收。 */
+const isSwapInfoShapeOk = (data: unknown): data is NodeSwapInfo => {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Partial<NodeSwapInfo>;
+  const finite = (v: unknown): v is number =>
+    typeof v === "number" && Number.isFinite(v);
+  if (
+    !finite(d.totalMB) ||
+    !finite(d.usedMB) ||
+    !finite(d.diskFreeMB) ||
+    !finite(d.memTotalMB) ||
+    !Array.isArray(d.entries)
+  ) {
+    return false;
+  }
+  if (d.fileSizeMB !== undefined && !finite(d.fileSizeMB)) {
+    return false;
+  }
+  return d.entries.every(
+    (e) =>
+      !!e &&
+      typeof e === "object" &&
+      finite((e as { sizeMB?: unknown }).sizeMB) &&
+      finite((e as { usedMB?: unknown }).usedMB),
+  );
+};
 
 /**
  * 节点页「设置 Swap」（用户 2026-11-10 令）：弹窗打开经 agent 拉节点
@@ -67,12 +103,7 @@ export function SwapModal({
       const res = await getNodeSwapInfo(node.id);
 
       if (seqRef.current !== seq) return;
-      if (
-        res.code === 0 &&
-        res.data &&
-        typeof res.data.totalMB === "number" &&
-        Array.isArray(res.data.entries)
-      ) {
+      if (res.code === 0 && res.data && isSwapInfoShapeOk(res.data)) {
         setInfo(res.data);
       } else {
         setInfo(null);

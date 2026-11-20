@@ -140,15 +140,20 @@ func (h *Handler) fetchTemplate(ctx context.Context, url string) (string, error)
 // takes the subscriptions using it down.
 func (h *Handler) refreshTemplate(ctx context.Context, t *model.SubscriptionTemplate) error {
 	now := time.Now().UnixMilli()
-	t.LastFetch = now
 	body, err := h.fetchTemplate(ctx, t.SourceURL)
 	if err == nil {
 		_, err = kernel.CheckTemplate(t.Kind, body, nil)
 	}
 	if err != nil {
+		// R18-F3-01: a failed refresh must not advance LastFetch —
+		// only a success stamps "last fetched". Advancing it here
+		// silently postpones the next automatic retry by a whole
+		// interval, because refreshDueTemplates gates on LastFetch
+		// alone. The error is still recorded, and the last good
+		// content is kept.
 		t.LastError = truncate(err.Error(), 500)
 	} else {
-		t.Content, t.LastError, t.UpdatedTime = body, "", now
+		t.Content, t.LastError, t.UpdatedTime, t.LastFetch = body, "", now, now
 	}
 	// R18-B6-02：删除与刷新竞态——模板在下载/校验期间被删时，
 	// Save() 的 upsert 会把已删模板复活。落库前复核仍在：已被删

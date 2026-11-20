@@ -36,6 +36,7 @@ import { Segmented } from "@/pages/subscription/controls";
 import {
   TemplateBuilderForm,
   builderFromPreset,
+  builderGroupNameConflicts,
 } from "@/pages/subscription/template-builder";
 
 export const TEMPLATE_KIND_LABELS: Record<SubTemplateKind, string> = {
@@ -224,11 +225,22 @@ export function SubscriptionTemplatesModal({
     rotateIdemKey,
   );
 
+  // R18-E2-05：构建器模式下的组名冲突（与 TemplateBuilderForm 行内
+  // 标红同一口径、同一函数），保存按钮据此禁用，save() 内再兜底一次。
+  const builderGroupConflicts =
+    edit?.mode === "builder" && edit.builder
+      ? builderGroupNameConflicts(edit.builder)
+      : null;
+
   const save = async () => {
     const d = draft();
     if (!d) return;
     if (!d.name.trim()) {
       toast.error("请填写模板名称");
+      return;
+    }
+    if (builderGroupConflicts && builderGroupConflicts.size > 0) {
+      toast.error([...builderGroupConflicts.values()][0]);
       return;
     }
     setBusy(true);
@@ -640,7 +652,22 @@ export function SubscriptionTemplatesModal({
                   >
                     返回列表
                   </Button>
-                  <Button color="primary" isLoading={busy} onPress={save}>
+                  {/* R18-E2-05：组名冲突未解时保存禁用，原因见行内标红。 */}
+                  {builderGroupConflicts &&
+                    builderGroupConflicts.size > 0 && (
+                      <span className="text-xs font-semibold text-danger-700">
+                        策略组名有冲突，请按上方标红修改后再保存
+                      </span>
+                    )}
+                  <Button
+                    color="primary"
+                    isLoading={busy}
+                    isDisabled={
+                      !!builderGroupConflicts &&
+                      builderGroupConflicts.size > 0
+                    }
+                    onPress={save}
+                  >
                     保存模板
                   </Button>
                 </>

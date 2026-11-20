@@ -175,6 +175,11 @@ type attemptContext struct {
 	err        error
 	timer      *time.Timer
 	stopParent func() bool
+	// gen identifies the current slice timer: a timer callback only
+	// finishes the context while its generation still matches, so a
+	// callback that fired for an already-replaced slice cannot kill
+	// a context promote has just extended (R18-D4-01).
+	gen uint64
 }
 
 func newAttemptContext(parent context.Context, timeout time.Duration) (context.Context, *attemptContext, context.CancelFunc) {
@@ -183,14 +188,22 @@ func newAttemptContext(parent context.Context, timeout time.Duration) (context.C
 		done:     make(chan struct{}),
 		deadline: time.Now().Add(timeout),
 	}
-	c.timer = time.AfterFunc(timeout, func() { c.finish(context.DeadlineExceeded) })
+	// Publish timer/stopParent under c.mu: both callbacks take c.mu
+	// before reading them, so a callback that fires during (or just
+	// after) construction can only observe the fully initialised
+	// struct. Without this, arming the timer before stopParent is
+	// assigned leaves the two unsynchronised (-race flags it even
+	// though the timer cannot fire before the assignment in practice).
+	c.mu.Lock()
+	c.timer = time.AfterFunc(timeout, func() { c.finishTimer(0, context.DeadlineExceeded) })
 	c.stopParent = context.AfterFunc(parent, func() { c.finish(parent.Err()) })
+	c.mu.Unlock()
 	return c, c, c.cancel
 }
 
-func (c *attemptContext) finish(err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// finishLocked ends the context with err unless it already ended.
+// The caller must hold c.mu.
+func (c *attemptContext) finishLocked(err error) {
 	if c.err != nil {
 		return
 	}
@@ -202,6 +215,27 @@ func (c *attemptContext) finish(err error) {
 	if c.stopParent != nil {
 		c.stopParent()
 	}
+}
+
+func (c *attemptContext) finish(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.finishLocked(err)
+}
+
+// finishTimer is the slice-timer callback. It applies only when gen
+// still matches the current timer generation: a callback that fired
+// for a slice promote has already replaced — and that may be blocked
+// on c.mu while promote runs — must not finish the context nor stop
+// the replacement timer (R18-D4-01). Parent cancellation and cancel()
+// go through finish and always win, regardless of generation.
+func (c *attemptContext) finishTimer(gen uint64, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if gen != c.gen {
+		return
+	}
+	c.finishLocked(err)
 }
 
 func (c *attemptContext) cancel() { c.finish(context.Canceled) }
@@ -217,7 +251,9 @@ func (c *attemptContext) promote(deadline time.Time) {
 	}
 	c.deadline = deadline
 	c.timer.Stop()
-	c.timer = time.AfterFunc(time.Until(deadline), func() { c.finish(context.DeadlineExceeded) })
+	c.gen++
+	gen := c.gen
+	c.timer = time.AfterFunc(time.Until(deadline), func() { c.finishTimer(gen, context.DeadlineExceeded) })
 }
 
 func (c *attemptContext) Deadline() (time.Time, bool) {

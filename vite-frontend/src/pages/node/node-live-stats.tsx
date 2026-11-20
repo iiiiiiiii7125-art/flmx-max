@@ -2,7 +2,10 @@ import type { NodeSystemInfo } from "@/pages/node/system-info";
 
 import { ArrowDown, ArrowUp } from "lucide-react";
 
+// R18-E2-03 纵深：非有限/负数按未上报处理（源头 system-info.ts 已
+// 钳制 agent 上报值；此处再兜住 NIC 月累计等其它来源的越界值）。
 function bytes(v: number): string {
+  if (!Number.isFinite(v) || v < 0) return "—";
   const units = ["B", "K", "M", "G", "T", "P"];
   let i = 0;
 
@@ -19,19 +22,25 @@ function tone(v: number): string {
 }
 
 function Meter({ label, value }: { label: string; value?: number }) {
+  // R18-E2-03：百分比只在 0–100 内显示，非有限值按未上报处理
+  // （“—”、不画条）；宽度早已钳制，数字此前没有。
+  const shown =
+    value !== undefined && Number.isFinite(value)
+      ? Math.min(100, Math.max(0, value))
+      : undefined;
   return (
     <div className="min-w-0 space-y-1">
       <div className="flex items-baseline justify-between gap-1 text-[11px] font-semibold leading-none">
         <span className="text-foreground">{label}</span>
         <span className="font-mono font-semibold">
-          {value === undefined ? "—" : `${Math.round(value)}%`}
+          {shown === undefined ? "—" : `${Math.round(shown)}%`}
         </span>
       </div>
       <div className="h-1 overflow-hidden rounded-full bg-default-100">
-        {value !== undefined && (
+        {shown !== undefined && (
           <div
-            className={`h-full rounded-full ${tone(value)}`}
-            style={{ width: `${Math.min(100, Math.max(2, value))}%` }}
+            className={`h-full rounded-full ${tone(shown)}`}
+            style={{ width: `${Math.max(2, shown)}%` }}
           />
         )}
       </div>

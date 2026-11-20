@@ -133,3 +133,36 @@ test("convertNyItemToForwardInput keeps null inPort for auto assignment", () => 
     strategy: "fifo",
   });
 });
+
+test("parseNyFormatData recovers objects after a stray closing brace", () => {
+  const input =
+    '}{"dest":["1.1.1.1:1000"],"listen_port":3000,"name":"A"} {"dest":["3.3.3.3:4000"],"listen_port":5000,"name":"B"}';
+
+  const result = parseNyFormatData(input);
+
+  // Both objects recover; the stray brace itself is still counted as
+  // a failure entry in input order (E2-02 counting promise), not
+  // silently dropped and not blocking the objects after it.
+  assert.equal(result.length, 3);
+  assert.equal(result[0].line, "}");
+  assert.match(result[0].error || "", /无法解析/);
+  assert.equal(result[1].error, undefined);
+  assert.equal(result[2].error, undefined);
+  assert.equal(result[1].parsed?.name, "A");
+  assert.equal(result[2].parsed?.name, "B");
+});
+
+test("parseNyFormatData recovers the second object after an interleaved stray brace", () => {
+  const input =
+    '{"dest":["1.1.1.1:1000"],"listen_port":3000,"name":"A"} } {"dest":["3.3.3.3:4000"],"listen_port":5000,"name":"B"}';
+
+  const result = parseNyFormatData(input);
+
+  assert.equal(result.length, 3);
+  assert.equal(result[0].error, undefined);
+  assert.equal(result[0].parsed?.name, "A");
+  assert.equal(result[1].line, "}");
+  assert.match(result[1].error || "", /无法解析/);
+  assert.equal(result[2].error, undefined);
+  assert.equal(result[2].parsed?.name, "B");
+});
