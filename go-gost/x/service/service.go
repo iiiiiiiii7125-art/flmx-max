@@ -312,6 +312,16 @@ func (s *defaultService) Serve() error {
 			s.setState(StateReady)
 		}
 
+		// R18-C5-01: the raw previous-hop peer, captured BEFORE
+		// the first RemoteAddr() call folds any PROXY header
+		// into the address — unwrapping through the listener
+		// wrappers down to the underlying connection (a
+		// proxyproto.Conn's Raw() is its TCP peer; without PROXY
+		// the innermost conn is the peer itself). It is only
+		// recorded when it differs from the final client IP, so
+		// direct connections stay wire-identical.
+		peerIP := rawPeerIP(conn)
+
 		clientAddr := conn.RemoteAddr().String()
 		if ca, ok := conn.(xnet.ClientAddr); ok {
 			if addr := ca.ClientAddr(); addr != nil {
@@ -372,9 +382,13 @@ func (s *defaultService) Serve() error {
 		// already folded the real client address into RemoteAddr —
 		// and the paired close event from the connection goroutine
 		// below, where Handle's return is the deterministic close
-		// point. Admission denials above never reach this point and
-		// stay unrecorded (design §3.1). For non-entry services or
-		// a disabled master switch this costs one bool check.
+		// point. peerIP was captured above, before the fold, and
+		// is recorded only when it differs from the client IP
+		// (R18-C5-01), so a PROXY claim stays auditable against
+		// the raw peer. Admission denials above never reach this
+		// point and stay unrecorded (design §3.1). For non-entry
+		// services or a disabled master switch this costs one
+		// bool check.
 		connLog := s.options.connLogEntry && ConnLogEnabled()
 		var connLogStartMs int64
 		// clientGoneMs 是 C13 的客户端离开观测（见
@@ -384,7 +398,7 @@ func (s *defaultService) Serve() error {
 		if connLog {
 			connLogStartMs = time.Now().UnixMilli()
 			EnqueueConnEvent(s.newConnEvent(
-				ConnEventOpen, sid, clientAddr, clientIP, conn, connLogStartMs, 0))
+				ConnEventOpen, sid, clientAddr, clientIP, peerIP, conn, connLogStartMs, 0))
 		}
 
 		wg.Add(1)
@@ -400,7 +414,7 @@ func (s *defaultService) Serve() error {
 					// 被重试死线钉住，客户端早断仍须记真实
 					// 时长，而非死线全长。
 					EnqueueConnEvent(s.newConnEvent(
-						ConnEventClose, sid, clientAddr, clientIP, conn,
+						ConnEventClose, sid, clientAddr, clientIP, peerIP, conn,
 						connLogStartMs, connLogCloseEndMs(&clientGoneMs)))
 				}()
 			}

@@ -99,6 +99,17 @@ func (c *limitConn) SyscallConn() (rc syscall.RawConn, err error) {
 	return
 }
 
+// Raw returns the underlying connection (R18-C5-01): it lets the
+// service layer reach the proxyproto.Conn underneath the wrapper
+// chain to record the raw peer (PeerIP) for the connection log,
+// without the wrappers having to know about PROXY at all.
+func (c *limitConn) Raw() net.Conn {
+	if r, ok := c.Conn.(interface{ Raw() net.Conn }); ok {
+		return r.Raw()
+	}
+	return c.Conn
+}
+
 // CloseWrite forwards a half-close to the wrapped conn when it
 // supports one. Without it the embedded net.Conn hides the
 // underlying CloseWrite, Transport's half-close propagation

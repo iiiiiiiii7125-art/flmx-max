@@ -539,9 +539,16 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if err != nil {
 			return nil, err
 		}
+		// R18-C5-01：本入口的 PROXY 接收 allowlist 按面板已知拓扑
+		// 现算；receive 开着但 allowlist 为空时接收不启用
+		// （fail-closed），警告进回执、不静默。
+		proxyAllowlist := h.proxyProtocolReceiveAllowlistForForward(forward, node, fp.Port)
+		if receive, _ := normalizeForwardProxyProtocol(forward.ProxyProtocol, forward.ProxyProtocolReceive, forward.ProxyProtocolSend); receive > 0 && len(proxyAllowlist) == 0 {
+			warnings = append(warnings, proxyProtocolReceiveDisabledWarning(forward.Name))
+		}
 		// U7 入口标记：总开关（connlogEntry，拓扑面）AND 该跳
 		// 节点的采集开关——中转连接只由开关开着的入口节点采集。
-		services := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, strings.TrimSpace(fp.InIP), runtimeLimiters, connlogEntry && node.ConnLogEnabled == 1)
+		services := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, strings.TrimSpace(fp.InIP), runtimeLimiters, connlogEntry && node.ConnLogEnabled == 1, proxyAllowlist)
 		_, err = h.sendNodeCommand(node.ID, method, services, true, false)
 		if err == nil && (method == "UpdateService" || method == "AddService") {
 			// R17-B：UpdateService 成功即 agent 对这些服务名的注册确认
@@ -641,7 +648,10 @@ func (h *Handler) fallbackForwardPortToDefaultBind(forward *forwardRecord, tunne
 	if err != nil {
 		return "", err
 	}
-	defaultServices := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, "", runtimeLimiters, entryForwardIDs[forward.ID] && node.ConnLogEnabled == 1)
+	// R18-C5-01：回退重建同样按当前拓扑现算 PROXY 接收 allowlist，
+	// 与主同步路径同口径（为空即不启用接收）。
+	proxyAllowlist := h.proxyProtocolReceiveAllowlistForForward(forward, node, fp.Port)
+	defaultServices := buildForwardServiceConfigs(serviceBase, forward, tunnel, node, fp.Port, "", runtimeLimiters, entryForwardIDs[forward.ID] && node.ConnLogEnabled == 1, proxyAllowlist)
 	// R17-B：默认监听回退的 AddService 走幂等守卫；刚删过旧服务，
 	// freshAbsence=true（新鲜缺失证据），不得用旧确认跳过。
 	if _, err := h.guardedAddService(node.ID, defaultServices, "default-bind-fallback", true); err != nil {
@@ -658,6 +668,12 @@ func (h *Handler) fallbackForwardPortToDefaultBind(forward *forwardRecord, tunne
 	// 已成功，不得因告警留痕失败把同步判失败。
 	if werr := h.repo.UpdateForwardPortBindWarning(forward.ID, node.ID, fp.Port, warning); werr != nil {
 		log.Printf("forward bind fallback warning persist failed forward_id=%d node_id=%d port=%d: %v", forward.ID, node.ID, fp.Port, werr)
+	}
+	// R18-C5-01：回退重建的 PROXY 接收同样 fail-closed——
+	// allowlist 为空时接收未启用，警告附在本次回执后（不进上
+	// 方持久化的绑定回退告警，那是另一回事）。
+	if receive, _ := normalizeForwardProxyProtocol(forward.ProxyProtocol, forward.ProxyProtocolReceive, forward.ProxyProtocolSend); receive > 0 && len(proxyAllowlist) == 0 {
+		warning += "；" + proxyProtocolReceiveDisabledWarning(forward.Name)
 	}
 	return warning, nil
 }
@@ -2301,7 +2317,7 @@ func compactErrorMessage(msg string) string {
 	return strings.Join(strings.Fields(strings.ToLower(msg)), "")
 }
 
-func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel *tunnelRecord, node *nodeRecord, port int, bindIP string, runtimeLimiters forwardRuntimeLimiters, connlogEntry bool) []map[string]interface{} {
+func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel *tunnelRecord, node *nodeRecord, port int, bindIP string, runtimeLimiters forwardRuntimeLimiters, connlogEntry bool, proxyProtocolAllowlist []string) []map[string]interface{} {
 	protocols := []string{"tcp", "udp"}
 	services := make([]map[string]interface{}, 0, 2)
 	targets := splitRemoteTargets(forward.RemoteAddr)
@@ -2366,9 +2382,27 @@ func buildForwardServiceConfigs(baseName string, forward *forwardRecord, tunnel 
 		// 吃掉游戏首包取决于 FUDP 帧解析容错，未验）。接收侧同
 		// 理：UDP listener 根本不读 ProxyProtocol 选项，写上也
 		// 是死配置，故两档一并只给 TCP。
-		if protocol == "tcp" && proxyProtocolReceive > 0 {
+		// R18-C5-01：PROXY 接收只在 allowlist 非空时才装配。
+		// proxyProtocolAllowlist 是调用方按面板已知拓扑现算的
+		// 可信发送方（见 proxyProtocolReceiveAllowlistForForward）；
+		// 为空表示没有面板已知的可信发送方——此时装配 receive
+		// 等于让任意直连客户端伪造日志里的“真实客户端 IP”，故
+		// fail-closed：不写 proxyProtocol（agent 侧不解析 PROXY
+		// 头），调用方另以警告告知管理员。非空时 allowlist 随
+		// 服务 metadata 与 listener metadata 一并下发，agent 侧
+		// 以 Lax 白名单策略执行（白名单外发来的头直接忽略、按
+		// 真实对端记日志，连接本身不受影响）。
+		if protocol == "tcp" && proxyProtocolReceive > 0 && len(proxyProtocolAllowlist) > 0 {
 			serviceMetadata := ensureServiceMetadata(service)
 			serviceMetadata["proxyProtocol"] = proxyProtocolReceive
+			serviceMetadata["proxyProtocolAllowlist"] = proxyProtocolAllowlist
+			listenerConfig := service["listener"].(map[string]interface{})
+			listenerMetadata, _ := listenerConfig["metadata"].(map[string]interface{})
+			if listenerMetadata == nil {
+				listenerMetadata = map[string]interface{}{}
+				listenerConfig["metadata"] = listenerMetadata
+			}
+			listenerMetadata["proxyProtocolAllowlist"] = proxyProtocolAllowlist
 		}
 		if node.IdleTimeoutSeconds > 0 {
 			// 节点级无进展拆除阈值（秒）随服务 metadata 下发，
@@ -2478,6 +2512,132 @@ func normalizeForwardProxyProtocol(legacy, receive, send int) (int, int) {
 		send = legacy
 	}
 	return receive, send
+}
+
+// proxyProtocolReceiveDisabledWarning 是 PROXY 接收被 fail-closed
+// 弃用时进回执 warnings 的文案：点名转发、说明原因（没有面板
+// 已知的可信发送方）与后果（接收未启用、伪造不再可能）。
+func proxyProtocolReceiveDisabledWarning(forwardName string) string {
+	return fmt.Sprintf("转发「%s」开启了 PROXY 接收，但未找到面板已知的可信 PROXY 发送方，已不启用接收，直连客户端无法伪造日志中的真实 IP", forwardName)
+}
+
+// proxyProtocolEntryTargetMatches reports whether one RemoteAddr
+// target (host:port) dials the given forward entry (node, port),
+// mirroring targetDialsInbound's matching rules: the host must be
+// one of the entry node's addresses, or loopback with the sender's
+// entry running on this node (senderEntryNodeIDs). A hostname is
+// never matched (no DNS here). The second return value reports a
+// loopback match, whose dial originates on this node itself.
+func proxyProtocolEntryTargetMatches(target string, node *nodeRecord, port int, senderEntryNodeIDs map[int64]bool) (matched bool, loopback bool) {
+	host, targetPort, err := parseTargetAddress(target)
+	if err != nil || targetPort != port {
+		return false, false
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return false, false
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return senderEntryNodeIDs[node.ID], true
+	}
+	if strings.EqualFold(host, "localhost") {
+		return senderEntryNodeIDs[node.ID], true
+	}
+	if node != nil {
+		for _, cand := range []string{strings.TrimSpace(node.ServerIP), strings.TrimSpace(node.ServerIPv4), strings.TrimSpace(node.ServerIPv6)} {
+			if cand != "" && strings.EqualFold(strings.Trim(cand, "[]"), host) {
+				return true, false
+			}
+		}
+	}
+	return false, false
+}
+
+// proxyProtocolReceiveAllowlistForForward derives the trusted
+// PROXY senders for one forward entry (node, port) from the
+// panel-known topology (R18-C5-01): a forward counts as a sender
+// only when its send side is on AND one of its RemoteAddr targets
+// dials this entry. Each such sender contributes the IPs of the
+// nodes its entry services run on — the dial originates there —
+// plus a loopback literal when the matching target was loopback
+// (the dial then originates on this node itself). Hostnames never
+// match, and a sender with no usable node IPs contributes
+// nothing. The list is sorted and deduplicated. An empty result
+// means "no trusted sender is known": the caller must not arm
+// PROXY receive at all (fail-closed). A repository read failure
+// also yields empty (fail-closed) and is only logged.
+func (h *Handler) proxyProtocolReceiveAllowlistForForward(forward *forwardRecord, node *nodeRecord, port int) []string {
+	if h == nil || h.repo == nil || forward == nil || node == nil || port <= 0 {
+		return nil
+	}
+	if receive, _ := normalizeForwardProxyProtocol(forward.ProxyProtocol, forward.ProxyProtocolReceive, forward.ProxyProtocolSend); receive <= 0 {
+		return nil
+	}
+	items, err := h.repo.ListForwards()
+	if err != nil {
+		log.Printf("proxy-protocol receive allowlist: list forwards failed forward_id=%d: %v", forward.ID, err)
+		return nil
+	}
+	allowed := make(map[string]struct{})
+	for _, item := range items {
+		senderID := asInt64(item["id"], 0)
+		if senderID <= 0 || senderID == forward.ID {
+			continue
+		}
+		if asInt(item["proxyProtocolSend"], 0) <= 0 {
+			continue
+		}
+		if strings.TrimSpace(asString(item["remoteAddr"])) == "" {
+			continue
+		}
+		ports, err := h.listForwardPorts(senderID)
+		if err != nil || len(ports) == 0 {
+			continue
+		}
+		senderEntryNodeIDs := make(map[int64]bool, len(ports))
+		for _, fp := range ports {
+			if fp.NodeID > 0 {
+				senderEntryNodeIDs[fp.NodeID] = true
+			}
+		}
+		matched := false
+		loopback := false
+		for _, target := range splitRemoteTargets(asString(item["remoteAddr"])) {
+			if m, lb := proxyProtocolEntryTargetMatches(target, node, port, senderEntryNodeIDs); m {
+				matched = true
+				if lb {
+					loopback = true
+				}
+			}
+		}
+		if !matched {
+			continue
+		}
+		if loopback {
+			allowed["127.0.0.1"] = struct{}{}
+			allowed["::1"] = struct{}{}
+		}
+		for entryNodeID := range senderEntryNodeIDs {
+			rec, err := h.getNodeRecord(entryNodeID)
+			if err != nil || rec == nil {
+				continue
+			}
+			for _, cand := range []string{rec.ServerIP, rec.ServerIPv4, rec.ServerIPv6} {
+				if ip := net.ParseIP(strings.Trim(strings.TrimSpace(cand), "[]")); ip != nil {
+					allowed[ip.String()] = struct{}{}
+				}
+			}
+		}
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(allowed))
+	for ip := range allowed {
+		out = append(out, ip)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func processServerAddress(serverAddr string) string {

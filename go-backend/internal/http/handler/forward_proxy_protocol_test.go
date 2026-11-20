@@ -27,7 +27,11 @@ func TestBuildForwardServiceConfigsAppliesProxyProtocolReceiveAndSendIndependent
 		UDPListenAddr: "0.0.0.0",
 	}
 
-	services := buildForwardServiceConfigs("1_2_3", forward, tunnel, node, 4001, "", forwardRuntimeLimiters{}, false)
+	// R18-C5-01：receive 只在 allowlist 非空时装配——此处以
+	// 可信发送方 203.0.113.5 入表，TCP 服务保留 receive 并带
+	// allowlist（服务 metadata 与 listener metadata 两处）；
+	// 无 allowlist 时见 TestAuditC5ProxyProtocolReceiveNoAllowlistDropsReceive。
+	services := buildForwardServiceConfigs("1_2_3", forward, tunnel, node, 4001, "", forwardRuntimeLimiters{}, false, []string{"203.0.113.5"})
 	if len(services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(services))
 	}
@@ -56,12 +60,23 @@ func TestBuildForwardServiceConfigsAppliesProxyProtocolReceiveAndSendIndependent
 			if serviceMetadata["proxyProtocol"] != 1 {
 				t.Fatalf("expected service proxyProtocol 1 for receive mode on tcp, got %v", serviceMetadata["proxyProtocol"])
 			}
+			if allow, _ := serviceMetadata["proxyProtocolAllowlist"].([]string); len(allow) != 1 || allow[0] != "203.0.113.5" {
+				t.Fatalf("expected service proxyProtocolAllowlist [203.0.113.5], got %v", serviceMetadata["proxyProtocolAllowlist"])
+			}
+			listenerConfig, _ := service["listener"].(map[string]interface{})
+			listenerMetadata, _ := listenerConfig["metadata"].(map[string]interface{})
+			if allow, _ := listenerMetadata["proxyProtocolAllowlist"].([]string); len(allow) != 1 || allow[0] != "203.0.113.5" {
+				t.Fatalf("expected listener proxyProtocolAllowlist [203.0.113.5], got %v", listenerMetadata["proxyProtocolAllowlist"])
+			}
 			if handlerMetadata["proxyProtocol"] != 2 {
 				t.Fatalf("expected handler proxyProtocol 2 on tcp, got %v", handlerMetadata["proxyProtocol"])
 			}
 		} else {
 			if _, ok := serviceMetadata["proxyProtocol"]; ok {
 				t.Fatalf("udp service must not carry proxyProtocol: %v", serviceMetadata)
+			}
+			if _, ok := serviceMetadata["proxyProtocolAllowlist"]; ok {
+				t.Fatalf("udp service must not carry proxyProtocolAllowlist: %v", serviceMetadata)
 			}
 			if _, ok := handlerMetadata["proxyProtocol"]; ok {
 				t.Fatalf("udp handler must not carry proxyProtocol: %v", handlerMetadata)
@@ -85,7 +100,7 @@ func TestBuildForwardServiceConfigsKeepsLegacyProxyProtocolAsSend(t *testing.T) 
 		UDPListenAddr: "0.0.0.0",
 	}
 
-	services := buildForwardServiceConfigs("1_2_3", forward, tunnel, node, 4001, "", forwardRuntimeLimiters{}, false)
+	services := buildForwardServiceConfigs("1_2_3", forward, tunnel, node, 4001, "", forwardRuntimeLimiters{}, false, nil)
 	if len(services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(services))
 	}
@@ -133,7 +148,10 @@ func TestBuildForwardServiceConfigsProxyProtocolTCPOnly(t *testing.T) {
 		UDPListenAddr: "0.0.0.0",
 	}
 
-	services := buildForwardServiceConfigs("1_2_3", forward, &tunnelRecord{Type: 2}, node, 4001, "", forwardRuntimeLimiters{}, false)
+	// R18-C5-01：receive=1 时 allowlist 非空才保留 receive（此处
+	// 以可信发送方 203.0.113.5 入表）；allowlist 为空的反例见
+	// TestAuditC5ProxyProtocolReceiveNoAllowlistDropsReceive。
+	services := buildForwardServiceConfigs("1_2_3", forward, &tunnelRecord{Type: 2}, node, 4001, "", forwardRuntimeLimiters{}, false, []string{"203.0.113.5"})
 	if len(services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(services))
 	}
@@ -146,6 +164,9 @@ func TestBuildForwardServiceConfigsProxyProtocolTCPOnly(t *testing.T) {
 			if _, ok := serviceMetadata["proxyProtocol"]; ok {
 				t.Fatalf("udp service %q must not carry service proxyProtocol: %v", name, serviceMetadata)
 			}
+			if _, ok := serviceMetadata["proxyProtocolAllowlist"]; ok {
+				t.Fatalf("udp service %q must not carry service proxyProtocolAllowlist: %v", name, serviceMetadata)
+			}
 			if _, ok := handlerMetadata["proxyProtocol"]; ok {
 				t.Fatalf("udp service %q must not carry handler proxyProtocol: %v", name, handlerMetadata)
 			}
@@ -156,6 +177,9 @@ func TestBuildForwardServiceConfigsProxyProtocolTCPOnly(t *testing.T) {
 		}
 		if serviceMetadata["proxyProtocol"] != 1 {
 			t.Fatalf("tcp service must keep receive proxyProtocol 1, got %v", serviceMetadata["proxyProtocol"])
+		}
+		if allow, _ := serviceMetadata["proxyProtocolAllowlist"].([]string); len(allow) != 1 || allow[0] != "203.0.113.5" {
+			t.Fatalf("tcp service must carry proxyProtocolAllowlist [203.0.113.5], got %v", serviceMetadata["proxyProtocolAllowlist"])
 		}
 		if handlerMetadata["proxyProtocol"] != 2 {
 			t.Fatalf("tcp service must keep send proxyProtocol 2, got %v", handlerMetadata["proxyProtocol"])
