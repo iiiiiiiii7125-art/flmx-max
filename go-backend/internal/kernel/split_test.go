@@ -114,8 +114,12 @@ func TestSplitSingboxWithChain(t *testing.T) {
 	if u := sets[2].(map[string]interface{})["url"].(string); !strings.Contains(u, "sing-geoip/rule-set/geoip-cn.srs") {
 		t.Fatalf("geoip rule set: %s", u)
 	}
-	if cfg["experimental"] == nil || first["http_client"] != "rule-set" || cfg["http_clients"] == nil {
-		t.Fatal("rule sets need the cache file and an explicit HTTP client")
+	// OPEN-8: rule sets still need an explicit HTTP client, but no
+	// cache file — the agent localizes the remote rule sets before
+	// sing-box sees them, so experimental.cache_file is dead config
+	// and must not be rendered.
+	if cfg["experimental"] != nil || first["http_client"] != "rule-set" || cfg["http_clients"] == nil {
+		t.Fatal("rule sets need an explicit HTTP client and no cache file")
 	}
 }
 

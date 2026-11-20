@@ -61,10 +61,17 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	// or counted user still needs the private-range guard below.
 	route := obj{"rules": singboxGuardRules(rules), "final": "direct"}
 	if defs := singboxRuleSets(sets, opts); len(defs) > 0 {
-		// sing-box downloads the 分流 rule sets itself and keeps them in
-		// the cache file across restarts.
+		// OPEN-8: the rule sets are rendered as "remote" here,
+		// but the agent localizes them before sing-box ever sees
+		// them (localizeSingboxRuleSets downloads + validates the
+		// SRS and rewrites the definitions to "local"), so no
+		// remote rule set survives into the running config and
+		// experimental.cache_file — which only persists remote
+		// rule-set downloads — is dead config. It is not rendered
+		// (the old comment claimed sing-box itself downloads the
+		// rule sets and keeps them in the cache file; that has not
+		// been true since the agent-side localization landed).
 		route["rule_set"] = defs
-		cfg["experimental"] = obj{"cache_file": obj{"enabled": true, "path": "cache.db"}}
 		if opts.SingboxHTTPClient {
 			cfg["http_clients"] = []interface{}{obj{"tag": ruleSetHTTPClient}}
 		}
@@ -86,8 +93,7 @@ func renderSingbox(inbounds []Inbound, opts RenderOptions) (string, error) {
 	// sessions). Localhost-only, no secret: the agent and the
 	// companion share the host, and any local root process can already
 	// do anything; the API is never exposed on a public interface.
-	// It merges into the experimental object if rule sets already
-	// put a cache_file there. R2C-01: the port is per-agent (see
+	// It creates the experimental object when needed. R2C-01: the port is per-agent (see
 	// ClashAPIPort); port 0 omits the block — fail-closed, the agent
 	// falls back to reload for removals.
 	if opts.Companion && opts.ClashAPIPort != 0 {
