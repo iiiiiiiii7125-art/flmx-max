@@ -974,14 +974,18 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// W3/IRL-3（后端半）：中转创建去重闸——同一入站经同一隧道到同一
-	// 落地目标、且入口端口也相同的中转已存在时点名拒绝，不再建第二条。
-	// 此前本面无任何查重，前端双击/重复提交（或不带 Idempotency-Key 的直调）即建出
-	// 两条同入站同目标中转及两条转发与两份服务。口径：托管
-	// （Managed=1）且转发仍存续的中转行，(隧道, 落地目标, 入口端口) 全等才算
-	// 重复；同隧道不同出口集（多出口变体走 relayTargetWithExits 的
-	// 创建面不在本端点）算出的目标不同、不误杀；同隧道同目标、入口端口
-	// 不同是用户要的多条中转，放行。自动选口（InPort<=0）时闸跑在选口
+	// W3/IRL-3（后端半）：中转创建去重闸——同一入站经同一隧道、且
+	// 入口端口也相同的中转已存在时点名拒绝，不再建第二条。此前本面
+	// 无任何查重，前端双击/重复提交（或不带 Idempotency-Key 的直调）
+	// 即建出两条同入站同目标中转及两条转发与两份服务。口径：托管
+	// （Managed=1）且转发仍存续的中转行，(隧道, 入站, 入口端口) 全
+	// 等才算重复。R18-B4-05：去重键与落地地址无关——落地节点的地址
+	// 会变（IP 迁移/重解析），旧实现拿转发 RemoteAddr 字符串比对，
+	// 地址一变闸就认不出同一条中转；同隧道同入口端口本就只能有一
+	// 条转发（forward_port 唯一索引兜底），地址不同不是另一条中转。
+	// 同隧道不同出口集（多出口变体走 relayTargetWithExits 的创建面
+	// 不在本端点）算出的目标不同、不误杀；同隧道同目标、入口端口不同
+	// 是用户要的多条中转，放行。自动选口（InPort<=0）时闸跑在选口
 	// 之前、尚无端口可比，故跳过本闸：选口本就排除已用端口，落库又有
 	// CreateForwardTx 的逐节点端口锁＋锁内复检＋forward_port 唯一索引
 	// 兜底，撞口换口重试，不会与既有中转落到同一端口。查重失败 fail-closed
@@ -1000,7 +1004,7 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 			if ferr != nil || fwd == nil {
 				continue
 			}
-			if fwd.TunnelID != tunnel.ID || fwd.RemoteAddr != remoteAddr {
+			if fwd.TunnelID != tunnel.ID {
 				continue
 			}
 			// 转发的入口端口在 forward_port 行上（多入口节点同口）：
@@ -1240,13 +1244,20 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 		}
 		if isNftTunnel {
 			if err := h.reconcileNftablesNodeByRequest(entryNodes[0]); err != nil {
-				_ = h.deleteForwardByID(forwardID)
+				// R18-B4-02：同 createForwardWithPortRetry——补偿先清
+				// 数据面再删库，残留写进返回错误。
+				if compErr := h.compensateFailedForwardCreate(created); compErr != nil {
+					err = fmt.Errorf("%w；创建失败补偿清理未完成：%v", err, compErr)
+				}
 				return 0, relayCreateErr(err)
 			}
 			return forwardID, nil
 		}
 		if err := h.syncForwardServices(created, "UpdateService", true); err != nil {
-			_ = h.deleteForwardByID(forwardID)
+			// R18-B4-02：同上。
+			if compErr := h.compensateFailedForwardCreate(created); compErr != nil {
+				err = fmt.Errorf("%w；创建失败补偿清理未完成：%v", err, compErr)
+			}
 			if auto && isBindAddressInUseError(err) {
 				lastErr = err
 				tried[port] = true
@@ -1290,6 +1301,45 @@ func (h *Handler) removeForwardWithServices(forward *forwardRecord) error {
 	return nil
 }
 
+// compensateFailedForwardCreate removes a just-created forward whose
+// sync failed, clearing already-pushed data-plane services first
+// (R18-B4-02): a bare deleteForwardByID leaves live services on nodes
+// that already received UpdateService, with no DB record left to clean
+// them up. removeForwardWithServices deletes the services first; because
+// it aborts on the first hard per-node error, a per-node best-effort
+// sweep (mode-aware: gost DeleteService, nft reconcile, realm re-render)
+// follows any failure so a node later in port order is not skipped.
+// Only then do we fall back to a DB-only delete, logging the residue and
+// reporting it so the caller can name the affected nodes in the failure
+// receipt. A nil error means the forward is fully gone, services included.
+func (h *Handler) compensateFailedForwardCreate(fwd *forwardRecord) error {
+	if fwd == nil {
+		return errors.New("invalid forward compensation context")
+	}
+	if err := h.removeForwardWithServices(fwd); err == nil {
+		return nil
+	} else {
+		firstErr := err
+		var sweepErrs []string
+		if ports, perr := h.listForwardPorts(fwd.ID); perr != nil {
+			log.Printf("create compensation: list forward ports failed forward_id=%d err=%v", fwd.ID, perr)
+		} else {
+			for _, nodeID := range forwardPortNodeIDs(ports) {
+				if serr := h.deleteForwardServicesOnNodeBatch(fwd, nodeID); serr != nil {
+					sweepErrs = append(sweepErrs, fmt.Sprintf("节点 %s: %v", h.nodeLabel(nodeID), serr))
+				}
+			}
+		}
+		if derr := h.deleteForwardByID(fwd.ID); derr != nil {
+			return fmt.Errorf("data-plane cleanup failed: %v; per-node sweep: %v; DB delete also failed: %w", firstErr, strings.Join(sweepErrs, "; "), derr)
+		}
+		if len(sweepErrs) > 0 {
+			return fmt.Errorf("data-plane cleanup failed: %v; per-node sweep left residue: %s", firstErr, strings.Join(sweepErrs, "; "))
+		}
+		return fmt.Errorf("data-plane cleanup failed: %w", firstErr)
+	}
+}
+
 func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.ErrDefault("请求失败"))
@@ -1308,7 +1358,8 @@ func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {
 		response.WriteJSON(w, response.ErrDefault("中转不存在"))
 		return
 	}
-	if err := h.removeRelay(rel, req.Force); err != nil {
+	warning, err := h.removeRelay(rel, req.Force)
+	if err != nil {
 		// R5X-004(d)：非 force 路径 removeForwardWithServices 先删
 		// 转发行、后做 nft reconcile——reconcile 失败时转发已删
 		// （ForwardExists 转假、该 relay 应即刻掉出 allow 计算）而
@@ -1328,15 +1379,28 @@ func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// T-001：刷新失败进回执 warning——删除本身已落库成功，但内核
-	// 仍按旧名单放行。
+	// 仍按旧名单放行；与 removeRelay 的强制删除残留警告合并发出。
 	if err := h.refreshInboundWhitelist(rel.InboundID); err != nil {
-		response.WriteJSON(w, response.OKWithWarning(nil, whitelistRefreshFailureNote([]int64{rel.InboundID})+"，请检查节点内核状态"))
+		refreshNote := whitelistRefreshFailureNote([]int64{rel.InboundID}) + "，请检查节点内核状态"
+		if warning != "" {
+			warning += "；" + refreshNote
+		} else {
+			warning = refreshNote
+		}
+	}
+	if warning != "" {
+		response.WriteJSON(w, response.OKWithWarning(nil, warning))
 		return
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
 
-func (h *Handler) removeRelay(rel *model.NodeInboundRelay, force bool) error {
+// removeRelay deletes a managed relay's forward and the relay row.
+// It returns a warning string when the force path deleted the DB rows
+// while some data-plane cleanup stayed unconfirmed (R18-B4-03); the
+// caller surfaces it in the receipt instead of a bare success.
+func (h *Handler) removeRelay(rel *model.NodeInboundRelay, force bool) (string, error) {
+	warning := ""
 	if rel.Managed == 1 {
 		if fwd, err := h.getForwardRecord(rel.ForwardID); err == nil && fwd != nil {
 			if err := h.removeForwardWithServices(fwd); err != nil {
@@ -1345,19 +1409,78 @@ func (h *Handler) removeRelay(rel *model.NodeInboundRelay, force bool) error {
 					// 此稀有 DB 故障情形不带强制删除提示）；其余失败
 					// 定型为 relayDeleteError 携带「可强制删除」出路。
 					if isRepoError(err) {
-						return err
+						return "", err
 					}
-					return &relayDeleteError{msg: fmt.Sprintf("删除中转转发失败: %v（可强制删除）", err)}
+					return "", &relayDeleteError{msg: fmt.Sprintf("删除中转转发失败: %v（可强制删除）", err)}
 				}
-				_ = h.deleteForwardByID(fwd.ID)
+				warning = h.forceRemoveRelayForward(fwd)
 			}
 		}
 	}
 	if err := h.repo.DeleteInboundRelay(rel.ID); err != nil {
 		// R3-GEN-02②：仓储直通先标记，回执点守卫泛化。
-		return markRepoError(err)
+		return "", markRepoError(err)
 	}
-	return nil
+	return warning, nil
+}
+
+// forceRemoveRelayForward is the R18-B4-03 force path for a managed
+// relay forward whose normal removal failed: delete the DB row, but
+// never wipe the retry carrier, and best-effort clean the data plane
+// before returning. It returns the residue warning for the receipt
+// ("" when everything was confirmed clean).
+func (h *Handler) forceRemoveRelayForward(fwd *forwardRecord) string {
+	var notes []string
+	// 1. Snapshot the entry nodes and ports before the DB row disappears.
+	ports, portsErr := h.listForwardPorts(fwd.ID)
+	if portsErr != nil {
+		log.Printf("relay force delete: list forward ports failed forward_id=%d err=%v", fwd.ID, portsErr)
+	}
+	// 2. nft: register the pending-delete ledger BEFORE the DB delete
+	// and keep it through the cascade, so the 60s retry loop can still
+	// converge the DNAT rule after the forward row is gone.
+	keepLedger := false
+	if nftMode, nftNodes, modeErr := h.tunnelUsesNftables(fwd.TunnelID); modeErr != nil {
+		log.Printf("relay force delete: tunnel mode check failed forward_id=%d err=%v", fwd.ID, modeErr)
+		notes = append(notes, "隧道模式无法确认，数据面清理未执行")
+	} else if nftMode && len(nftNodes) > 0 {
+		keepLedger = true
+		if merr := h.repo.MarkForwardPendingDelete(fwd.ID, nftNodes[0], time.Now()); merr != nil {
+			log.Printf("relay force delete: mark pending delete failed forward_id=%d err=%v", fwd.ID, merr)
+			notes = append(notes, "nft 待删台账登记失败，残留规则须人工确认清理")
+		}
+	}
+	// 3. Delete the DB row (ledger-preserving for nft).
+	var derr error
+	if keepLedger {
+		derr = h.repo.DeleteForwardCascadeKeepNftLedger(fwd.ID)
+	} else {
+		derr = h.deleteForwardByID(fwd.ID)
+	}
+	if derr != nil {
+		log.Printf("relay force delete: DB delete failed forward_id=%d err=%v", fwd.ID, derr)
+		notes = append(notes, "转发数据库记录删除失败，请检查面板日志")
+	}
+	// 4. Best-effort data-plane cleanup per entry node (mode-aware:
+	// gost DeleteService, nft reconcile, realm re-render). Failures
+	// are named per node; the nft ledger (when kept) lets the retry
+	// loop converge them, the gost/realm residue waits for the agent
+	// reconnect reconcile.
+	nodeIDs := forwardPortNodeIDs(ports)
+	if len(nodeIDs) == 0 {
+		if entryIDs, terr := h.tunnelEntryNodeIDs(fwd.TunnelID); terr == nil {
+			nodeIDs = entryIDs
+		}
+	}
+	for _, nodeID := range nodeIDs {
+		if serr := h.deleteForwardServicesOnNodeBatch(fwd, nodeID); serr != nil {
+			notes = append(notes, fmt.Sprintf("节点 %s 数据面清理未确认：%v", h.nodeLabel(nodeID), serr))
+		}
+	}
+	if len(notes) == 0 {
+		return ""
+	}
+	return "中转已强制删除，但部分节点侧规则清理未确认（残留规则需人工确认清理）：" + strings.Join(notes, "；")
 }
 
 // removeInboundRelays deletes the forwards the panel created for an inbound.
@@ -1368,8 +1491,10 @@ func (h *Handler) removeInboundRelays(inboundID int64) {
 	}
 	for _, rel := range rels {
 		rel := rel.NodeInboundRelay
-		if err := h.removeRelay(&rel, true); err != nil {
+		if warning, err := h.removeRelay(&rel, true); err != nil {
 			log.Printf("relay cleanup failed relay_id=%d err=%v", rel.ID, err)
+		} else if warning != "" {
+			log.Printf("relay cleanup left residue relay_id=%d warning=%s", rel.ID, warning)
 		}
 	}
 }
@@ -1697,8 +1822,28 @@ func (h *Handler) openSubscription(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			userAssignments = assignments
-			rows = filterInboundRowsByUserAssignments(rows, userAssignments)
+			// R18-B2-01：先查订阅模型分配——被分配了本订阅的用户
+			// 直接放行全量（与不带 ?user= 的分配卡片链接同口径；
+			// token 本身已是凭据，订阅分配即授权）。只有未被分配
+			// 本订阅的用户才走旧入站分配过滤。分配读失败同样
+			// fail-closed 回 500，不得装「未分配」继续。
+			assignedSub := false
+			if subIDs, subErr := h.repo.ListUserSubscriptionIDs(userID); subErr != nil {
+				log.Printf("open subscription: list user subscription ids failed user_id=%d err=%v", userID, subErr)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			} else {
+				for _, id := range subIDs {
+					if id == sub.ID {
+						assignedSub = true
+						break
+					}
+				}
+			}
+			if !assignedSub {
+				userAssignments = assignments
+				rows = filterInboundRowsByUserAssignments(rows, userAssignments)
+			}
 		} else {
 			// A-02 (AUDIT-R215): ?user= 在场但不是正整数时 fail-closed——
 			// 不得丢弃 userFilter、按裸 token 出全量。与已签名用户零分配

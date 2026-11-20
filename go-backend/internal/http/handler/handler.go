@@ -1087,7 +1087,76 @@ func (h *Handler) tunnelList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.attachBestExitStates(items)
+	h.attachOrphanTunnelFlags(items)
 	response.WriteJSON(w, response.OK(items))
+}
+
+// attachOrphanTunnelFlags marks list items whose tunnels lost nodes to
+// the v6 federation-removal migration (R18-B7-01). The todo key is
+// advisory: a read/parse failure logs and leaves the list unflagged
+// rather than failing the list call.
+func (h *Handler) attachOrphanTunnelFlags(items []map[string]interface{}) {
+	cfg, err := h.repo.GetConfigByName(repo.RMShareOrphanTunnelsKey)
+	if err != nil || cfg == nil {
+		if err != nil {
+			log.Printf("tunnelList: orphan-tunnel flag read failed: %v", err)
+		}
+		return
+	}
+	var ids []int64
+	if err := json.Unmarshal([]byte(cfg.Value), &ids); err != nil {
+		log.Printf("tunnelList: orphan-tunnel flag parse failed: %v", err)
+		return
+	}
+	orphaned := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		orphaned[id] = true
+	}
+	for _, item := range items {
+		if id, ok := item["id"].(int64); ok && orphaned[id] {
+			item["orphanedByFederationRemoval"] = true
+		}
+	}
+}
+
+// clearOrphanTunnelFlag removes one tunnel from the v6 orphan-todo key
+// after the admin handled it: a successful redeploy proves entry nodes
+// exist again (the entry gate now fail-closes), and a delete removes
+// the tunnel. The key itself is deleted once empty. Failures only
+// log: the flag is advisory and must never fail a redeploy or delete.
+func (h *Handler) clearOrphanTunnelFlag(tunnelID int64) {
+	cfg, err := h.repo.GetConfigByName(repo.RMShareOrphanTunnelsKey)
+	if err != nil || cfg == nil {
+		if err != nil {
+			log.Printf("orphan-tunnel flag clear failed for tunnel %d: read: %v", tunnelID, err)
+		}
+		return
+	}
+	var ids []int64
+	if err := json.Unmarshal([]byte(cfg.Value), &ids); err != nil {
+		log.Printf("orphan-tunnel flag clear failed for tunnel %d: parse: %v", tunnelID, err)
+		return
+	}
+	kept := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id != tunnelID {
+			kept = append(kept, id)
+		}
+	}
+	if len(kept) == 0 {
+		if err := h.repo.DeleteConfig(repo.RMShareOrphanTunnelsKey); err != nil {
+			log.Printf("orphan-tunnel flag clear failed for tunnel %d: delete key: %v", tunnelID, err)
+		}
+		return
+	}
+	value, err := json.Marshal(kept)
+	if err != nil {
+		log.Printf("orphan-tunnel flag clear failed for tunnel %d: marshal: %v", tunnelID, err)
+		return
+	}
+	if err := h.repo.UpsertConfig(repo.RMShareOrphanTunnelsKey, string(value), time.Now().UnixMilli()); err != nil {
+		log.Printf("orphan-tunnel flag clear failed for tunnel %d: write: %v", tunnelID, err)
+	}
 }
 
 func (h *Handler) forwardList(w http.ResponseWriter, r *http.Request) {

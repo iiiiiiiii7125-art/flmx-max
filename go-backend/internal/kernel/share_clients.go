@@ -124,7 +124,8 @@ func loonList(endpoints []Endpoint, opts SubOptions) string {
 }
 
 func loonName(p Proxy) string {
-	return strings.NewReplacer(",", " ", "=", " ", "\n", " ").Replace(p.str("name"))
+	// R18-B5-02：名称里的 \r 同样劈行（值转义器 loonEscape 早有 \r，此处补齐）。
+	return strings.NewReplacer(",", " ", "=", " ", "\n", " ", "\r", " ").Replace(p.str("name"))
 }
 
 var loonSSCiphers = toSet([]string{"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
@@ -480,6 +481,7 @@ func qxLine(p Proxy) (string, bool) {
 	default:
 		return "", false
 	}
-	tag := strings.NewReplacer(",", " ", "\n", " ").Replace(p.str("name"))
+	// R18-B5-02：tag 里的 \r 同样劈行（值转义器 qxEscape 早有 \r，此处补齐）。
+	tag := strings.NewReplacer(",", " ", "\n", " ", "\r", " ").Replace(p.str("name"))
 	return kind + "=" + strings.Join(append(parts, "tag="+tag), ", "), true
 }

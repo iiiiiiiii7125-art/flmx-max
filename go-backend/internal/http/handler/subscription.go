@@ -2141,7 +2141,20 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 	draft := &model.Subscription{SourceAll: boolToInt(req.SourceAll), InboundIDs: formatIDList(ids), SourceIDs: formatIDList(req.SourceIDs),
 		Options: string(options)}
 	source := h.subRenderEndpoints(draft, rows)
+	// R18-B5-03：total 须计流水线前的端点集——subRenderEndpoints 已
+	// 过了一遍 FilterEndpoints，ApplySubOptions 再过同一遍，故
+	// len(source)-len(items) 恒为 0。用一份除 Options 为空外完全相同
+	// 的草稿重算未过滤集（空流水线不过滤）；items 与 formatSkipped
+	// 仍用过滤后的 source，不变。
+	totalDraft := &model.Subscription{SourceAll: draft.SourceAll, InboundIDs: draft.InboundIDs, SourceIDs: draft.SourceIDs, Options: "{}"}
+	total := len(h.subRenderEndpoints(totalDraft, rows))
 	opts := req.Options.options()
+	// R18-B5-01：预览的 formatSkipped 与列表 NodeCount 同口径——
+	// sing-box 1.14+ 含 Snell 导入、1.13+ 含 Naive；不置这两旗时
+	// 预览会把受支持的 Snell/Naive 节点误报为 sing-box 不支持。
+	// ApplySubOptions/FilterEndpoints 只用 Lines/RelayIDs，不受此影响。
+	opts.SingboxSnell = true
+	opts.SingboxNaive = true
 	result := kernel.ApplySubOptions(source, opts)
 	items := make([]subPreviewItem, 0, len(result))
 	for _, e := range result {
@@ -2154,8 +2167,8 @@ func (h *Handler) subscriptionPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := map[string]interface{}{
 		"items":   items,
-		"total":   len(source),
-		"dropped": len(source) - len(items),
+		"total":   total,
+		"dropped": total - len(items),
 	}
 	// W3/P-003：按格式点名略过——某些协议/格式组合在某些投递格式里
 	// 无表达（如 Snell 进不了 Surge），此前列表 NodeCount 静默变小、

@@ -150,6 +150,14 @@ func (h *Handler) refreshTemplate(ctx context.Context, t *model.SubscriptionTemp
 	} else {
 		t.Content, t.LastError, t.UpdatedTime = body, "", now
 	}
+	// R18-B6-02：删除与刷新竞态——模板在下载/校验期间被删时，
+	// Save() 的 upsert 会把已删模板复活。落库前复核仍在：已被删
+	// 则不写库、点名返回（手动刷新面原样回给用户；后台循环只记日志）。
+	if existing, err := h.repo.GetSubscriptionTemplate(t.ID); err != nil {
+		return markRepoError(err)
+	} else if existing == nil {
+		return errText("模板已被删除")
+	}
 	if saveErr := h.repo.SaveSubscriptionTemplate(t); saveErr != nil {
 		// RAW291：仓储直通错误标 repoError，调用点 guard 后
 		// 改走通用文案；fetch/校验失败为固定文案不经此标记。
@@ -303,6 +311,7 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
+	req.SourceURL = strings.TrimSpace(req.SourceURL)
 	if req.Name == "" || len([]rune(req.Name)) > 100 {
 		response.WriteJSON(w, response.ErrDefault("请填写名称（最多 100 个字）"))
 		return
@@ -324,12 +333,23 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	content, err := req.content(r.Context(), h)
-	if err != nil {
-		// RAW291 Type C：同 subscriptionTemplateCheck 的 content()
-		// 口径，只产 errText 固定校验文案，原样回。
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
+	// R18-B6-04：同址更新只改元数据时不再重下载——上游挂了也能改
+	// 名，且不静默拉入远端内容变化；换址/新建仍下载；CheckTemplate
+	// 校验照常对（复用的）内容跑。LastFetch 只在真正下载时重打。
+	var content string
+	var err error
+	downloaded := false
+	if req.ID > 0 && req.Builder == nil && req.SourceURL != "" && req.SourceURL == t.SourceURL {
+		content = t.Content
+	} else {
+		content, err = req.content(r.Context(), h)
+		if err != nil {
+			// RAW291 Type C：同 subscriptionTemplateCheck 的 content()
+			// 口径，只产 errText 固定校验文案，原样回。
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		downloaded = req.Builder == nil && req.SourceURL != ""
 	}
 	if _, err := kernel.CheckTemplate(req.Kind, content, nil); err != nil {
 		// RAW291 Type C：kernel.CheckTemplate 校验错误，文本源于
@@ -355,7 +375,7 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 		t.BuilderConfig = string(raw)
 	}
 	t.LastError = ""
-	if t.SourceURL != "" {
+	if downloaded {
 		t.LastFetch = now
 	}
 	if err := h.repo.SaveSubscriptionTemplate(t); err != nil {
@@ -383,7 +403,12 @@ func (h *Handler) subscriptionTemplateRefresh(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.refreshTemplate(r.Context(), t); err != nil {
-		respondInternalError(w, "subscriptionTemplateRefresh", err)
+		// R18-B6-03：刷新失败分流——仓储错才走通用文案；上游下载/
+		// 校验失败是固定文案，原样回给用户才知道为什么没刷成。
+		if respondInternalIfRepoError(w, "subscriptionTemplateRefresh", err) {
+			return
+		}
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	response.WriteJSON(w, response.OK(templateView(t, h.templateUsage()[t.ID])))

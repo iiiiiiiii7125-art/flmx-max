@@ -860,7 +860,8 @@ func proxySurge(e Endpoint) (string, bool) {
 	if !validImportedProxyFields(p, ssFaceClash) {
 		return "", false
 	}
-	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ").Replace(e.Name)
+	// R18-B5-02：名称里的 \r 同样劈行（值转义器 surgeEscape 早有 \r，此处补齐）。
+	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ", "\r", " ").Replace(e.Name)
 	// host 与 SurgeLine 同口径过 surgeEscape（F-A-01/C-01 纵深防御）。
 	host := surgeEscape(strings.Trim(e.Host, "[]"))
 	port := strconv.Itoa(e.Port)

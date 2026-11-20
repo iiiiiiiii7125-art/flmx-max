@@ -93,6 +93,14 @@ func prunePausedForwardIDsTx(tx *gorm.DB, deletedIDs []int64) error {
 // 与单删一致：先物化 relay id 集清授权，再删 relay 本行，最后删
 // Forward 本行并摘除配额暂停清单。
 func deleteForwardCascadeSetTx(tx *gorm.DB, forwardIDs []int64) error {
+	return deleteForwardCascadeSetTxKeepLedger(tx, forwardIDs, false)
+}
+
+// deleteForwardCascadeSetTxKeepLedger 与 deleteForwardCascadeSetTx
+// 同口径，唯 keepNftLedger=true 时保留 NftPendingDelete 行
+// （R18-B4-03：强制删除的 nft 转发须留住待删台账，否则 60s 重试环
+// 永远扫不到它，DNAT 规则无限期残留）。
+func deleteForwardCascadeSetTxKeepLedger(tx *gorm.DB, forwardIDs []int64, keepNftLedger bool) error {
 	if len(forwardIDs) == 0 {
 		return nil
 	}
@@ -102,8 +110,10 @@ func deleteForwardCascadeSetTx(tx *gorm.DB, forwardIDs []int64) error {
 	if err := deleteByIDSliceInChunksTx(tx, &model.NftRuleBinding{}, "forward_id", forwardIDs); err != nil {
 		return err
 	}
-	if err := deleteByIDSliceInChunksTx(tx, &model.NftPendingDelete{}, "forward_id", forwardIDs); err != nil {
-		return err
+	if !keepNftLedger {
+		if err := deleteByIDSliceInChunksTx(tx, &model.NftPendingDelete{}, "forward_id", forwardIDs); err != nil {
+			return err
+		}
 	}
 	if err := deleteByIDSliceInChunksTx(tx, &model.ForwardPort{}, "forward_id", forwardIDs); err != nil {
 		return err

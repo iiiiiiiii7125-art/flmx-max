@@ -13,9 +13,10 @@ import (
 )
 
 // A-02 (AUDIT-R215): ?user= 在场但非法时 fail-closed——解析失败或
-// <=0 不得丢弃 userFilter、按裸 token 出全量，改为 200 空节点列表
-// （与已签名用户零分配同口径）。合法有签名无分配 → 空列表；合法
-// 有分配 → 过滤后列表；无 ?user= → 裸 token 全量不变。
+// <=0 不得丢弃 userFilter、按裸 token 出全量，改为 200 空节点列表。
+// R18-B2-01：合法有签名且有订阅分配 → 按订阅分配放行全量（不论有无
+// 入站分配）；只有未被分配本订阅的用户才走入站分配过滤；无 ?user= →
+// 裸 token 全量不变。
 func TestR215OpenSubscriptionInvalidUserFailClosed(t *testing.T) {
 	h, r, ids := subFixture(t)
 	token := strings.Repeat("7", 32)
@@ -76,16 +77,25 @@ func TestR215OpenSubscriptionInvalidUserFailClosed(t *testing.T) {
 		}
 	}
 
-	// 合法有签名无分配 → 200 空列表（既有口径守卫）。
+	// R18-B2-01：用户 3 只有订阅分配、无入站分配 → 个人链接按订阅
+	// 分配放行全量（与不带 ?user= 的分配卡片链接同口径），不再
+	// 被空入站分配集筛成 0 节点。
 	sig3 := h.subURLSigForToken(token, 3)
-	if n, code, body := pullCount(fmt.Sprintf("/api/v1/open_api/sub/%s?format=base64&user=3&sig=%s", token, sig3)); n != 0 || code != 200 {
-		t.Fatalf("signed user without assignments pull = %d nodes code=%d body=%s, want 0/200", n, code, body)
+	if n, code, body := pullCount(fmt.Sprintf("/api/v1/open_api/sub/%s?format=base64&user=3&sig=%s", token, sig3)); n != 4 || code != 200 {
+		t.Fatalf("signed subscription-only user pull = %d nodes code=%d body=%s, want 4/200", n, code, body)
 	}
 
-	// 合法有签名有分配 → 只出 hk-1 的 1 个直连端点。
+	// 合法有签名、既无订阅分配又无入站分配 → 200 空列表（既有口径守卫）。
+	sig4 := h.subURLSigForToken(token, 4)
+	if n, code, body := pullCount(fmt.Sprintf("/api/v1/open_api/sub/%s?format=base64&user=4&sig=%s", token, sig4)); n != 0 || code != 200 {
+		t.Fatalf("signed user without any assignment pull = %d nodes code=%d body=%s, want 0/200", n, code, body)
+	}
+
+	// R18-B2-01：用户 2 既有订阅分配又有入站分配 → 订阅分配即授权，
+	// 跳过入站分配过滤，出全量 4 节点（不再只出 hk-1）。
 	sig2 := h.subURLSigForToken(token, 2)
-	if n, code, body := pullCount(fmt.Sprintf("/api/v1/open_api/sub/%s?format=base64&user=2&sig=%s", token, sig2)); n != 1 || code != 200 {
-		t.Fatalf("signed user with hk-1 assignment pull = %d nodes code=%d body=%s, want 1/200", n, code, body)
+	if n, code, body := pullCount(fmt.Sprintf("/api/v1/open_api/sub/%s?format=base64&user=2&sig=%s", token, sig2)); n != 4 || code != 200 {
+		t.Fatalf("signed user with subscription assignment pull = %d nodes code=%d body=%s, want 4/200", n, code, body)
 	}
 
 	// 合法值无签名仍 403（既有 IDOR 门不变）。
