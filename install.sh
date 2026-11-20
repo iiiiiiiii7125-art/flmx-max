@@ -891,7 +891,8 @@ resolve_latest_release_tag() {
 # 的 ${REPO} 指向任意 GitHub 仓库的 Release，且 .sha256 由同一拼出
 # URL 派生、校验自洽不构成防线（LIVE-A S5 实证）。现统一校验：
 # 稳定渠道只接受可选 v 前缀的纯点分数字（集合不超出 latest 稳定
-# 渠道正则）；dev/beta 渠道接受与 latest 同集的数字开头 tag；两渠
+# 渠道正则）；v 前缀在 resolve_version 归一化为裸 tag（R18-A3-11），
+# 此处只把关字符集与穿越形态，不改写值；dev/beta 渠道接受与 latest 同集的数字开头 tag；两渠
 # 道共同硬拒 /、?、#、%、反斜杠、空白与 ".." 子串——凡能改变 URL
 # 指向或逃出版本路径段的字符一律不许进入拼接。
 version_value_format_ok() {
@@ -923,8 +924,15 @@ resolve_version() {
   fi
   if [[ -n "$explicit_source" ]]; then
     if ! version_value_format_ok "$explicit"; then
-      echo "❌ 版本号格式不合法（来自 $explicit_source）：\"$explicit\"。只接受形如 1.9.9 / v1.9.9 的纯点分数字版本（dev/beta 渠道可带 -dev 等后缀）；含 /、..、?、# 等能改变下载地址的字符一律拒绝（A3-02）" >&2
+      echo "❌ 版本号格式不合法（来自 $explicit_source）：\"$explicit\"。只接受形如 1.9.9 的纯点分数字版本（v 前缀可写，会归一化为裸 tag，如 v1.9.9 → 1.9.9，因仓库 tag 无 v 前缀；dev/beta 渠道可带 -dev 等后缀）；含 /、..、?、# 等能改变下载地址的字符一律拒绝（A3-02）" >&2
       return 1
+    fi
+    # R18-A3-11 (M-2): 显式值归一化——仓库 tag 全为裸数字，v 前缀
+    # 只是写法习惯；原样回显会拼出 releases/download/v2.1.18/...
+    # 必然 404。只剥 v+数字（校验已保证 v 后必为数字，此处为
+    # 防御性收窄；与 panel_version_cmp 的 ${1#v} 同口径）。
+    if [[ "$explicit" =~ ^v[0-9] ]]; then
+      explicit="${explicit#v}"
     fi
     echo "$explicit"
     return 0

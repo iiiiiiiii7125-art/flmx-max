@@ -55,11 +55,11 @@ func TestAuditB4TunnelCreateOfflineNodesWarnAndRetry(t *testing.T) {
 			t.Fatalf("receipt warning must name skipped node %q, got warning=%q", name, env.Warning)
 		}
 	}
-	if !strings.Contains(env.Warning, "30 秒后重试") {
-		t.Fatalf("receipt warning must state the 30s retry, got warning=%q", env.Warning)
+	if !strings.Contains(env.Warning, "自动重试") {
+		t.Fatalf("receipt warning must state the automatic retry, got warning=%q", env.Warning)
 	}
 	if missing := b4RetryQueued(t, h, 10, 11, 12); len(missing) > 0 {
-		t.Fatalf("skipped nodes must get the 30s retry queued, missing nodes %v", missing)
+		t.Fatalf("skipped nodes must get the automatic retry queued, missing nodes %v", missing)
 	}
 	if _, _, count := k9TunnelRow(t, h, "b4-offline"); count != 1 {
 		t.Fatalf("tunnel must be persisted despite the skips, got %d rows", count)
@@ -85,10 +85,10 @@ func TestAuditB4TunnelUpdateOfflineNodesWarnAndRetry(t *testing.T) {
 			t.Fatalf("update receipt warnings must name skipped node %q, got %q", name, joined)
 		}
 	}
-	if !strings.Contains(joined, "30 秒后重试") {
-		t.Fatalf("update receipt warnings must state the 30s retry, got %q", joined)
+	if !strings.Contains(joined, "自动重试") {
+		t.Fatalf("update receipt warnings must state the automatic retry, got %q", joined)
 	}
 	if missing := b4RetryQueued(t, h, 10, 11, 12); len(missing) > 0 {
-		t.Fatalf("skipped nodes must get the 30s retry queued, missing nodes %v", missing)
+		t.Fatalf("skipped nodes must get the automatic retry queued, missing nodes %v", missing)
 	}
 }

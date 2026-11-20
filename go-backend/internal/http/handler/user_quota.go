@@ -379,6 +379,98 @@ func (h *Handler) applyUserQuotaRelease(release *repo.UserQuotaRelease, now int6
 	return result
 }
 
+// quotaReleaseFailState tracks consecutive backstop failures for one
+// user (R18-F2-02, M-3). It mirrors the nft auto-reconcile guard
+// (nftAutoFailState): escalating backoff, and after
+// quotaReleaseMaxConsecutiveFailures the release is marked
+// needs-admin instead of being retried every minute forever.
+type quotaReleaseFailState struct {
+	failures    int
+	nextAllowed int64 // UnixMilli; backstop attempts before this are skipped
+	needsAdmin  bool
+}
+
+// quotaReleaseMaxConsecutiveFailures caps the backstop retry streak:
+// at this many consecutive failures the release is escalated to
+// needs-admin (same bound as nftAutoReconcileMaxFailures).
+const quotaReleaseMaxConsecutiveFailures = 10
+
+// quotaReleaseBackoff returns the wait before the next backstop
+// attempt after failures consecutive failures: 1m → 5m → 15m → 60m
+// (capped).
+func quotaReleaseBackoff(failures int) time.Duration {
+	switch {
+	case failures <= 1:
+		return time.Minute
+	case failures == 2:
+		return 5 * time.Minute
+	case failures == 3:
+		return 15 * time.Minute
+	default:
+		return time.Hour
+	}
+}
+
+// quotaReleaseRetryDue reports whether the backstop may attempt a
+// release for userID at now. Inside the backoff window the attempt
+// is skipped silently (the failure was already logged when
+// recorded). needsAdmin does NOT block attempts: the flag only marks
+// the escalation, and attempts continue at the 60m cap so a cleared
+// cause still recovers without manual action — stopping entirely
+// would leave the row stuck until an admin reset.
+func (h *Handler) quotaReleaseRetryDue(userID int64, now time.Time) bool {
+	if h == nil || userID <= 0 {
+		return false
+	}
+	h.quotaReleaseFailMu.Lock()
+	defer h.quotaReleaseFailMu.Unlock()
+	st := h.quotaReleaseFail[userID]
+	if st == nil {
+		return true
+	}
+	return !now.Before(time.UnixMilli(st.nextAllowed))
+}
+
+// recordQuotaReleaseFailure records one failed backstop attempt for
+// userID and arms the next backoff window. The per-round pending
+// line keeps its old shape (plus failures/backoff); on reaching the
+// cap exactly one action=needs_admin line is logged (transition only).
+func (h *Handler) recordQuotaReleaseFailure(userID int64, failed, resumed int, now time.Time) {
+	if h == nil || userID <= 0 {
+		return
+	}
+	h.quotaReleaseFailMu.Lock()
+	defer h.quotaReleaseFailMu.Unlock()
+	if h.quotaReleaseFail == nil {
+		h.quotaReleaseFail = make(map[int64]*quotaReleaseFailState)
+	}
+	st, ok := h.quotaReleaseFail[userID]
+	if !ok {
+		st = &quotaReleaseFailState{}
+		h.quotaReleaseFail[userID] = st
+	}
+	st.failures++
+	backoff := quotaReleaseBackoff(st.failures)
+	st.nextAllowed = now.Add(backoff).UnixMilli()
+	log.Printf("quota release retry pending user_id=%d failed=%d resumed=%d failures=%d backoff=%s", userID, failed, resumed, st.failures, backoff)
+	if st.failures >= quotaReleaseMaxConsecutiveFailures && !st.needsAdmin {
+		st.needsAdmin = true
+		log.Printf("quota release needs admin user_id=%d failures=%d failed=%d action=needs_admin", userID, st.failures, failed)
+	}
+}
+
+// clearQuotaReleaseFailure drops the backstop failure state for
+// userID after a fully successful release (or when there is nothing
+// left to resume).
+func (h *Handler) clearQuotaReleaseFailure(userID int64) {
+	if h == nil || userID <= 0 {
+		return
+	}
+	h.quotaReleaseFailMu.Lock()
+	delete(h.quotaReleaseFail, userID)
+	h.quotaReleaseFailMu.Unlock()
+}
+
 // reconcilePendingQuotaReleases is the retry backstop for quota releases
 // that failed after the user was unblocked (C-05 F4). A reset/rolled user
 // is no longer over quota, so reconcileUserQuotaEnforcement never revisits
@@ -396,11 +488,21 @@ func (h *Handler) reconcilePendingQuotaReleases(now time.Time) {
 	}
 	nowMs := now.UnixMilli()
 	for i := range releases {
+		userID := releases[i].UserID
+		// R18-F2-02 (M-3): 退避窗口内跳过本次尝试——永久被否决的
+		// 释放不再每分钟重试；达上限后转需人工态（仍按 60m 上限
+		// 探活，原因清除后自动恢复，见 quotaReleaseRetryDue）。
+		if !h.quotaReleaseRetryDue(userID, now) {
+			continue
+		}
 		result := h.applyUserQuotaRelease(&releases[i], nowMs)
 		if len(result.Failed) == 0 && len(releases[i].ForwardIDs) > 0 {
-			h.notifyUserQuotaRecovered(releases[i].UserID, "配额已恢复")
+			h.clearQuotaReleaseFailure(userID)
+			h.notifyUserQuotaRecovered(userID, "配额已恢复")
 		} else if len(result.Failed) > 0 {
-			log.Printf("quota release retry pending user_id=%d failed=%d resumed=%d", releases[i].UserID, len(result.Failed), len(result.Resumed))
+			h.recordQuotaReleaseFailure(userID, len(result.Failed), len(result.Resumed), now)
+		} else {
+			h.clearQuotaReleaseFailure(userID)
 		}
 	}
 }

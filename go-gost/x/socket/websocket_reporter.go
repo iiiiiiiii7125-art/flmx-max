@@ -3104,8 +3104,10 @@ func buildAgentRollbackScriptSelfCap(backupPath, binaryPath string, self *agentS
 }
 
 // agentVersionsEqual compares two agent version strings, tolerating
-// a leading "v" on either side (the panel sends "2.1.2", release
-// assets are tagged both ways across the upgrade paths).
+// a leading "v" on either side. Comparison only: the repo publishes
+// bare-number tags only (R18-D1-02), so download URLs are always built
+// from the normalized form; this tolerance exists because a panel
+// request or a binary banner may still carry the prefix.
 func agentVersionsEqual(a, b string) bool {
 	return strings.TrimPrefix(strings.TrimSpace(a), "v") == strings.TrimPrefix(strings.TrimSpace(b), "v")
 }
@@ -3974,6 +3976,19 @@ func (s *upgradeStaging) Close() {
 // rollback handlers, mirroring uninstallInContainer.
 var upgradeInContainer = InContainer
 
+// agentUpgradeRepo is the release repository for agent downloads
+// (S-02: compile-time constant, the panel must never supply a URL).
+// agentUpgradeDownloadBase builds the canonical release-download base
+// URL for a target version. R18-D1-02 (M-2): the version is normalized
+// (leading "v" stripped) because the repo publishes bare-number tags
+// only — zero "v*" tags — so a "v"-prefixed version spliced verbatim
+// used to 404 on every route and burn the download budget.
+const agentUpgradeRepo = "iiiiiiiii7125-art/flmx-max"
+
+func agentUpgradeDownloadBase(version string) string {
+	return "https://github.com/" + agentUpgradeRepo + "/releases/download/" + normalizeAgentVersion(version) + "/"
+}
+
 func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// R2-004: the container form has no binary at the script layout
 	// path and no service manager — panel-driven upgrade can never
@@ -3990,8 +4005,6 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	}
 
 	// S-02: Agent 只接受 version 参数，不再接受面板传入的任意 URL
-	// 仓库路径为编译期常量，防止面板指定任意下载源
-	const agentRepo = "iiiiiiiii7125-art/flmx-max"
 	var agentVersionRe = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+$`)
 
 	var req struct {
@@ -4034,6 +4047,10 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	if !agentVersionRe.MatchString(version) {
 		return fmt.Errorf("S-02: 版本号格式无效: %s", version)
 	}
+	// R18-D1-02 (M-2): normalize at the entry so every downstream use
+	// (direction gate, download URL, checksum URL, smoke-test target)
+	// sees the canonical bare-number form.
+	version = normalizeAgentVersion(version)
 	// R18-D1-01: agent-side upgrade-direction gate — the panel's
 	// O9-005 check never runs on a replayed envelope, so a captured
 	// UpgradeAgent command must not be able to downgrade the node
@@ -4049,7 +4066,7 @@ func (w *WebSocketReporter) handleUpgradeAgent(data interface{}) error {
 	// S-02: Agent 本地用固定仓库 + 严格校验的版本号拼 URL（直连形态）。
 	// 实际下载线路在下方测速后按排名逐条构造（<候选>/<直连地址>），
 	// 路径仍由固定仓库+已校验版本号构造；完整性由 SHA256 兜底。
-	base := fmt.Sprintf("https://github.com/%s/releases/download/%s/", agentRepo, version)
+	base := agentUpgradeDownloadBase(version)
 	downloadURL := base + "gost-" + runtime.GOARCH
 	checksumURL := base + "gost-" + runtime.GOARCH + ".sha256"
 
