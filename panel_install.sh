@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.02"
+SCRIPT_VERSION="20261120.03"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -3810,6 +3810,34 @@ compose_hops_injection_problem() {
   ' "$1"
 }
 
+# R18-C4-01: 新装 .env 的 FLMX_TRUSTED_PROXIES 按本次部署实际使用
+# 的 compose 网络子网预填（与 networks 段同一来源；改过子网的部署
+# 按改后值填）。只认 networks 段内的 "- subnet:" 行、逐条校验 CIDR
+# 形态（IPv4/IPv6 字面 + /前缀长），非法条目与 0.0.0.0/0、::/0 跳
+# 过；抽不到合法子网时输出空串、调用方留空并告警（不捏造默认值、
+# 不阻断安装）。
+# 用法：panel_compose_network_subnets <compose文件>；输出逗号分隔子网或空。
+panel_compose_network_subnets() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  awk '
+    /^networks:/ { in_net=1; next }
+    in_net && /^[^[:space:]#]/ { in_net=0 }
+    in_net && /- subnet:/ {
+      sub(/.*- subnet:[[:space:]]*/, "")
+      sub(/[[:space:]]*#.*$/, "")
+      sub(/[[:space:]]+$/, "")
+      if ($0 == "0.0.0.0/0" || $0 == "::/0") next
+      if ($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/ || $0 ~ /^[0-9A-Fa-f:]*:[0-9A-Fa-f:]*\/[0-9]+$/) {
+        if (n > 0) printf ","
+        printf "%s", $0
+        n++
+      }
+    }
+    END { if (n > 0) printf "\n" }
+  ' "$file"
+}
+
 # R6-L8-F-01：脚本默认拓扑是 Caddy → 前端端口 → 前端 nginx → 后端，
 # 链上共两跳，后端的可信代理跳数必须为 2；缺失时登录限流键会收敛
 # 到前端网关条目、全站共用一桶（未认证者可持续锁死全站登录）。
@@ -4574,6 +4602,18 @@ install_panel() {
   ensure_compose_trusted_proxy_hops docker-compose.yml || true
   echo "✅ 文件准备完成"
 
+  # R18-C4-01: 新装默认 FLMX_TRUSTED_PROXIES 不再留空——按本次部署
+  # 实际使用的 Compose 网络子网预填（与 docker-compose.yml 的
+  # networks 段同一来源），否则全站访客共用一个登录限流桶。抽不
+  # 到合法子网时留空并告警，装完按 .env 内指引手工填。
+  local trusted_proxies
+  trusted_proxies=$(panel_compose_network_subnets docker-compose.yml)
+  if [[ -z "$trusted_proxies" ]]; then
+    echo "⚠️ 未能从 docker-compose.yml 读到网络子网，FLMX_TRUSTED_PROXIES 留空：所有访客将共用一个登录限流桶，装完请按 .env 内指引手工填入转发者所在子网并重启后端"
+  else
+    echo "🌐 已按本次部署的 Compose 网络子网预填 FLMX_TRUSTED_PROXIES=$trusted_proxies"
+  fi
+
   if ! cat > .env <<EOF
 JWT_SECRET=$JWT_SECRET
 FRONTEND_PORT=$FRONTEND_PORT
@@ -4581,8 +4621,9 @@ BACKEND_PORT=$BACKEND_PORT
 FLMX_VERSION=$RESOLVED_VERSION
 # 可信代理名单 FLMX_TRUSTED_PROXIES（逗号分隔的 CIDR 名单）：
 # 后端据此决定是否采信反代传来的 X-Forwarded-For 以取得真实
-# 客户端 IP（登录限流、按 IP 的审计都以这个 IP 分桶）。默认
-# 空＝只信回环来源、不采信任何转发头。
+# 客户端 IP（登录限流、按 IP 的审计都以这个 IP 分桶）。新装时
+# 脚本已按本次部署的 Compose 网络子网（networks 段）预填；留空
+# ＝只信回环来源、不采信任何转发头。
 # 何时填：标准部署里后端经前端容器转发，不填时后端只看得到
 # 前端容器 IP——所有访客共用一个限流桶：一人狂刷登录会连累
 # 全体被限流，审计记录里的来源 IP 也全是同一个容器地址。凡
@@ -4603,7 +4644,7 @@ FLMX_VERSION=$RESOLVED_VERSION
 # 自检：换一个网络（如手机流量）登录一次面板，再看登录记
 # 录或后端日志中这条登录的客户端 IP：是新网络的公网 IP 即
 # 已生效；若仍是 172.30.x 的容器地址，就是子网没填对。
-FLMX_TRUSTED_PROXIES=
+FLMX_TRUSTED_PROXIES=$trusted_proxies
 
 DB_TYPE=$DB_TYPE
 DATABASE_URL=$DATABASE_URL

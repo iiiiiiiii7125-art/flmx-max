@@ -1018,7 +1018,7 @@ test_panel_install_env_carries_trusted_proxies_entry() (
   }
   get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
   download_verified() {
-    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\nnetworks:\n  gost-network:\n    ipam:\n      config:\n        - subnet: 172.30.0.0/16\n' > "$2"
     return 0
   }
   wait_for_backend_healthy() { return 0; }
@@ -1044,7 +1044,7 @@ test_panel_install_env_carries_trusted_proxies_entry() (
   ( cd "$work" && install_panel >/dev/null 2>&1 ) || rc="$?"
   assert_equals "0" "$rc" "C4-01 follow-up: install_panel should succeed in the fixture"
   [[ -f "$work/.env" ]] || fail "C4-01 follow-up: install must generate .env"
-  grep -q '^FLMX_TRUSTED_PROXIES=$' "$work/.env" || fail "C4-01 follow-up: the generated .env must carry FLMX_TRUSTED_PROXIES, empty by default (loopback-only trust)"
+  grep -q '^FLMX_TRUSTED_PROXIES=172.30.0.0/16$' "$work/.env" || fail "R18-C4-01: the generated .env must prefill FLMX_TRUSTED_PROXIES from the compose network subnet (172.30.0.0/16), not leave it empty"
   grep -q '转发者所在子网' "$work/.env" || fail "C4-01 follow-up: the guidance must name what to fill (the frontend container subnet CIDR)"
   grep -q '172.30.0.0/16' "$work/.env" || fail "C4-01 follow-up: the guidance must give the shipped template subnet as the concrete example"
   grep -q '共享' "$work/.env" || fail "C4-01 follow-up: the guidance must state the shared-bucket consequence of leaving it empty"
@@ -1065,6 +1065,33 @@ test_shipped_compose_templates_carry_trusted_proxies_passthrough() (
     assert_equals "1" "$(grep -cF 'FLMX_TRUSTED_PROXIES: ${FLMX_TRUSTED_PROXIES:-}' "$ROOT_DIR/$tpl")" \
       "C4-01: $tpl must carry the passthrough line exactly once"
   done
+)
+
+# R18-C4-01（helper 半）：panel_compose_network_subnets 只认 networks
+# 段内的子网——随版 v4 模板抽出 172.30.0.0/16、v6 模板抽出双子网
+# （逗号分隔）；无 networks 段、缺文件、0.0.0.0/0 一律输出空（调用
+# 方留空并告警，绝不预填过宽范围）。
+test_panel_compose_network_subnets_prefills_from_template() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  assert_equals "172.30.0.0/16" "$(panel_compose_network_subnets "$ROOT_DIR/docker-compose-v4.yml")" \
+    "R18-C4-01: v4 template subnet must be extracted for the trusted-proxies prefill"
+  assert_equals "172.30.0.0/16,fd00:dead:beef::/48" "$(panel_compose_network_subnets "$ROOT_DIR/docker-compose-v6.yml")" \
+    "R18-C4-01: v6 template subnets must both be extracted for the trusted-proxies prefill"
+
+  local work f
+  work=$(mktemp -d)
+  f="$work/no-networks.yml"
+  printf 'services:\n  backend:\n    image: example/backend:9.9.9\n' > "$f"
+  assert_equals "" "$(panel_compose_network_subnets "$f")" \
+    "R18-C4-01: a compose file without a networks section must yield an empty prefill"
+  assert_equals "" "$(panel_compose_network_subnets "$work/missing.yml")" \
+    "R18-C4-01: a missing compose file must yield an empty prefill"
+  f="$work/wide.yml"
+  printf 'networks:\n  gost-network:\n    ipam:\n      config:\n        - subnet: 0.0.0.0/0\n' > "$f"
+  assert_equals "" "$(panel_compose_network_subnets "$f")" \
+    "R18-C4-01: 0.0.0.0/0 must never be prefilled as a trusted proxy range"
 )
 
 test_install_script_respects_disabled_proxy() (
@@ -12664,6 +12691,7 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log
 test_env_var_reading_crlf_shape
 test_panel_install_env_carries_trusted_proxies_entry
 test_shipped_compose_templates_carry_trusted_proxies_passthrough
+test_panel_compose_network_subnets_prefills_from_template
 
 
 # FIX2/D-05（节点审计 D 路）：install.sh 的 probe_route 与

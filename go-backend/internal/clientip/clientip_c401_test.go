@@ -43,3 +43,21 @@ func TestC401InvalidEntriesGrantNoTrust(t *testing.T) {
 		t.Fatalf("invalid config entries must grant no trust, got %v", got)
 	}
 }
+
+// R18-C4-01: 启动告警的判定依据——名单为空时解析结果为空，配置
+// 后返回对应 CIDR；全非法条目同样视为空（后端已逐条记日志跳过）。
+func TestC401TrustedProxyCIDRsEmptyByDefault(t *testing.T) {
+	t.Setenv("FLMX_TRUSTED_PROXIES", "")
+	if got := TrustedProxyCIDRs(); len(got) != 0 {
+		t.Fatalf("empty FLMX_TRUSTED_PROXIES must parse to no CIDRs, got %v", got)
+	}
+	t.Setenv("FLMX_TRUSTED_PROXIES", "172.30.0.0/16")
+	got := TrustedProxyCIDRs()
+	if len(got) != 1 || got[0].String() != "172.30.0.0/16" {
+		t.Fatalf("configured FLMX_TRUSTED_PROXIES must parse to 172.30.0.0/16, got %v", got)
+	}
+	t.Setenv("FLMX_TRUSTED_PROXIES", "not-a-cidr, 999.1.1.1/8")
+	if got := TrustedProxyCIDRs(); len(got) != 0 {
+		t.Fatalf("all-invalid FLMX_TRUSTED_PROXIES must parse to no CIDRs, got %v", got)
+	}
+}

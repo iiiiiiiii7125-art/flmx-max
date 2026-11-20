@@ -67,6 +67,13 @@ func TrustedProxyHops() int {
 	return n
 }
 
+// TrustedProxyCIDRs 返回解析后的 FLMX_TRUSTED_PROXIES 名单（供启动
+// 告警等调用方判断名单是否为空；非法条目已被 trustedProxyCIDRs
+// 跳过并记日志）。R18-C4-01。
+func TrustedProxyCIDRs() []*net.IPNet {
+	return trustedProxyCIDRs()
+}
+
 // FromRequest 按可信代理链口径解析请求的客户端 IP（限流键来源）。
 // 解析不出（RemoteAddr 本身非法）时返回 nil，调用方须自行
 // fail-closed 处理（见 RateLimitKey / UnresolvedKey）。

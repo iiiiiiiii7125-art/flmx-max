@@ -27,16 +27,7 @@ curl -L https://github.com/iiiiiiiii7125-art/flmx-max/releases/latest/download/p
 
 脚本会自动检测系统是否支持 IPv6，并自动配置 Docker 的 IPv6 支持。
 
-**安装后必做：登记可信代理子网**：新装生成的部署目录 `.env` 里
-`FLMX_TRUSTED_PROXIES` 默认是空的——此时后端只采信回环来源的
-`X-Forwarded-For`，经前端容器进来的登录在后端眼里全是同一个容器
-IP、共用一个登录限流桶（一人连续输错密码会把全体正常登录连带限
-流，登录记录里的来源 IP 也全是同一个容器地址）。装完后立即在部署
-目录 `.env` 里写 `FLMX_TRUSTED_PROXIES=<转发者所在子网>`（照缺省
-部署即 `172.30.0.0/16`；改过子网的用 `docker network inspect` 查在
-用子网按实际填），再执行 `docker compose up -d backend` 重建后端
-生效。完整口径（跳数、填法、自检）见下文「登录限流与可信代理跳
-数」一节。存量部署同样按该节核对，升级不会替你补填这个值。
+**安装后核对：可信代理子网已预填**：新装时脚本按本次部署的 Compose 网络子网（缺省 `172.30.0.0/16`）把 `FLMX_TRUSTED_PROXIES` 预填进部署目录 `.env`，后端据此采信前端容器传来的 `X-Forwarded-For`、按访客真实 IP 限流。装完后核对一行：`docker exec <后端容器> printenv FLMX_TRUSTED_PROXIES` 能打印出子网即生效；打印为空（脚本未能从 compose 读到子网时留空并告警、后端启动日志也会打 `FLMX_TRUSTED_PROXIES is empty` 警告）才需手工在部署目录 `.env` 里写 `FLMX_TRUSTED_PROXIES=<转发者所在子网>`（照缺省部署即 `172.30.0.0/16`；改过子网的用 `docker network inspect` 查在用子网按实际填），再执行 `docker compose up -d backend` 重建后端生效。完整口径（跳数、填法、自检）见下文「登录限流与可信代理跳数」一节。存量部署同样按该节核对，升级不会替你补填这个值。
 
 ### 同机多面板共存（FLMX_INSTANCE）
 

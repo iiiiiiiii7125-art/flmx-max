@@ -14,6 +14,7 @@ import (
 	_ "time/tzdata"
 
 	"go-backend/internal/app"
+	"go-backend/internal/clientip"
 	"go-backend/internal/config"
 	"go-backend/internal/http/handler"
 )
@@ -38,6 +39,12 @@ func main() {
 	// R5-B2 A-001: 登录限流 XFF 解析的可信跳数（默认 1；脚本默认拓扑为
 	// Caddy→前端→后端共两跳，必须显式设为 2，见 doc/guide/install.md）。
 	log.Printf("proxy trust: FLMX_TRUSTED_PROXY_HOPS=%d (login XFF parsed right-to-left)", handler.TrustedProxyHops())
+	// R18-C4-01: FLMX_TRUSTED_PROXIES 为空时后端 RemoteAddr 恒为前端
+	// 容器 IP、XFF 被忽略，全站访客共用一个登录限流桶（一人刷满、
+	// 全体 429）。启动时明确告警，让错配可被日志发现。
+	if len(clientip.TrustedProxyCIDRs()) == 0 {
+		log.Printf("warning: FLMX_TRUSTED_PROXIES is empty: all visitors share one rate-limit bucket (login XFF is ignored; set it to the proxy subnet, e.g. 172.30.0.0/16)")
+	}
 
 	a, err := app.New(cfg)
 	if err != nil {
