@@ -26,14 +26,14 @@
 
 > 节点 agent 升级侧有同一套第二锚口径，其期望哈希由面板预热下发，见下文「GitHub 镜像代理（面板源分发）」的「升级完整性」一条。
 
-### 升级前数据库快照：SQLite 有，PostgreSQL 没有（面板内升级）
+### 升级前数据库快照：SQLite 与 PostgreSQL 都有（面板内升级）
 
-面板内升级在重建容器前会不会留一份数据库快照，按数据库形态分：
+面板内升级在重建容器前会留一份数据库快照，按数据库形态分：
 
-- **SQLite 形态：有。** 升级发起回执与升级状态里的字段 `snapshotPath` 会点名快照的相对路径（形态为 `backups/panel-update-<目标版本>-<时间戳>`，位于面板部署目录下），helper 在停旧后端后、重建前把数据卷整目录复制到该路径，按最近 3 份轮换。快照只备不自动恢复：升级出问题需要回退数据时，按回执点名的路径人工恢复。
-- **PostgreSQL 形态：没有。** 面板内升级对 PostgreSQL **不做升级前数据库快照**（文件级备份与失败时按旧定义重建容器的回滚照常，但那不是数据库快照，数据卷本身不被复制）。发起回执与升级状态里会显式带字段 `pgSnapshotDeferred: true` 点名这一事实，同时 `snapshotPath` 为空——**空不代表快照在别处，只是没有**。需要升级前数据库备份的 PostgreSQL 部署，请改走下面的脚本升级（脚本更新的整包备份含 `pg_dump` 导出），或升级前自行在面板里下载一份数据备份（网站配置 → 数据备份与恢复 → 下载备份）。
+- **SQLite 形态：有。** 升级发起回执与升级状态里的字段 `snapshotPath` 会点名快照的相对路径（形态为 `backups/panel-update-<目标版本>-<时间戳>`，位于面板部署目录下），helper 在停旧后端后、重建前把数据卷整目录复制到该路径下的 `sqlite/` 子目录，按最近 3 份轮换。快照只备不自动恢复：升级出问题需要回退数据时，按回执点名的路径人工恢复。
+- **PostgreSQL 形态：有（R18-B8-03 补齐）。** helper 在停旧后端**前**对在跑的 PostgreSQL 容器做 `pg_dump` 只读导出，落到快照目录下的 `postgres/postgres.sql`，按最近 3 份轮换；`snapshotPath` 同口径点名。导出是只读的，不动现库。`pg_dump` 失败（容器定位不到、库名/用户名对不上、转储为空等）时升级**硬中止**：未停任何服务、未重建任何容器，面板保持旧版本可用，回执点名失败原因。升级失败回滚时，helper 在重建旧容器前先用该快照原地恢复数据库（断开连接后 DROP/CREATE + 回灌）；恢复失败时回滚记为 `rollback_failed`（不谎报成功），日志点名快照路径供人工恢复。旧版本升级留下的状态文件里仍可能有 `pgSnapshotDeferred: true`（那次升级确实无快照），新发起的升级不再产生该标记。
 
-**自检**：升级完成后在部署目录看状态文件 `.flmx_upgrade_status.json`：SQLite 形态应有非空的 `snapshotPath` 且该目录真实存在（`ls backups/` 可见同名目录）；PostgreSQL 形态应有 `"pgSnapshotDeferred": true` 且无 `snapshotPath`。两个字段都缺失时，说明这次升级不是经面板内升级发起的（或状态文件已被后续升级覆盖）。
+**自检**：升级完成后在部署目录看状态文件 `.flmx_upgrade_status.json`：两种形态都应有非空的 `snapshotPath` 且该目录真实存在（`ls backups/` 可见同名目录；PostgreSQL 形态下 `ls backups/panel-update-*/postgres/postgres.sql` 应见非空转储文件）。`snapshotPath` 缺失时，说明这次升级不是经面板内升级发起的（或状态文件已被后续升级覆盖）。
 
 ## 脚本升级
 

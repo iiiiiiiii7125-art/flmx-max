@@ -105,15 +105,21 @@ type systemUpgradeExecutor struct {
 	// PG 型先 up postgres 同形态）。
 	recreatePostgres bool
 	// snapshotPath 是升级前 DB 快照的部署内相对路径
-	// （backups/panel-update-<版本>-<时间戳>，仅 SQLite 模式）：
-	// 透传 helper 在停旧后端后、重建前落盘，状态文件与发起回执
-	// 据此点名。为空表示本次无快照（PG 模式切出，见
-	// pgSnapshotDeferred）。
+	// （backups/panel-update-<版本>-<时间戳>，两模式同口径）：
+	// 透传 helper 在停旧后端后（SQLite）或停旧后端前（PG，
+	// pg_dump 只读导出）落盘，状态文件与发起回执据此点名。
+	// 为空表示本次无快照（.env 读不到等极罕见情形，见
+	// prepareUpgradeSnapshot）。
 	snapshotPath string
-	// pgSnapshotDeferred 表示 PG 模式的 DB 快照切出未落（见
-	// prepareUpgradeSnapshot 的切出登记）：helper 仅在日志中点
-	// 名跳过，状态/回执不报快照路径。
-	pgSnapshotDeferred bool
+	// pgSnapshotContainer/User/DB 是 PG 模式下 pg_dump 快照与回
+	// 滚恢复的目标身份（R18-B8-03/D-5）：容器名由
+	// locatePostgresContainer 定格（改名场景下取在跑的旧名容
+	// 器，不取刚改写的键值），库名/用户名取 .env、缺失时回退容
+	// 器环境、再缺失回退模板缺省 flmx_panel（与脚本面
+	// backup_postgres_for_update 同口径）。SQLite 模式恒为空。
+	pgSnapshotContainer string
+	pgSnapshotUser      string
+	pgSnapshotDB        string
 	// composeProject is the Compose project the running containers belong
 	// to. It need not match the deploy directory's name (e.g. installed
 	// from /root, deployed in /opt/flvx-panel); without it Compose would
@@ -201,13 +207,14 @@ type systemUpgradeRunData struct {
 	HelperContainer string `json:"helperContainer"`
 	BackendImageID  string `json:"backendImageId"`
 	Message         string `json:"message"`
-	// SnapshotPath 点名本次升级的 DB 快照相对路径（SQLite 模式；
-	// helper 在重建前落盘于此）。PG 模式快照切出时为空。
+	// SnapshotPath 点名本次升级的 DB 快照相对路径（两模式同口
+	// 径；PG 模式为 pg_dump 转储所在目录，helper 在停旧后端前
+	// 落盘于此）。快照未安排时为空。
 	SnapshotPath string `json:"snapshotPath,omitempty"`
-	// PgSnapshotDeferred（B7-03 披露半）：PG 模式下升级前 DB 快
-	// 照未落盘（切出待后续批次），回执必须显式点名，不得以
-	// snapshotPath 为空让运维误以为已有快照兜底。与状态面的同
-	// 名字段同口径；SQLite 模式恒 false 不出现。
+	// PgSnapshotDeferred（B7-03 遗留字段，仅兼容旧状态文件与旧
+	// 前端）：2.1.18 及更早的 PG 模式升级无快照时置 true；自
+	// R18-B8-03 起 PG 模式亦落快照，新发起的升级恒为 false、
+	// 不再出现。保留字段名使旧状态文件仍可解析。
 	PgSnapshotDeferred bool `json:"pgSnapshotDeferred,omitempty"`
 }
 
@@ -223,13 +230,13 @@ type systemUpgradeStatusData struct {
 	// R8-003：发起本次升级时的第二锚降级点名（单锚降级时非空）；由发起
 	// 路径写入、helper 终态回写时原样保留，状态端点据此透出。
 	AnchorNote string `json:"anchorNote,omitempty"`
-	// SnapshotPath 点名本次升级的 DB 快照相对路径（SQLite 模式）；
-	// 由发起路径写入、helper 终态回写时原样保留（与 AnchorNote
-	// 同形态）。无快照（PG 模式切出）时为空。
+	// SnapshotPath 点名本次升级的 DB 快照相对路径（两模式同口
+	// 径）；由发起路径写入、helper 终态回写时原样保留（与
+	// AnchorNote 同形态）。无快照时为空。
 	SnapshotPath string `json:"snapshotPath,omitempty"`
-	// PgSnapshotDeferred（B7-03 披露半）：PG 模式快照切出的显式
-	// 标记，与回执面同名字段同口径；helper 终态回写时经
-	// FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED 环境变量原样保留。
+	// PgSnapshotDeferred（B7-03 遗留字段，仅兼容旧状态文件）：
+	// 2.1.18 及更早的 PG 模式升级无快照时置 true；自 R18-B8-03
+	// 起 PG 模式亦落快照，新发起的升级恒为 false。
 	PgSnapshotDeferred bool `json:"pgSnapshotDeferred,omitempty"`
 }
 
@@ -724,17 +731,87 @@ write_status() {
   if [ -n "${SNAPSHOT_TAKEN:-}" ]; then
     snapshot_field=", \"snapshotPath\": \"${FLMX_UPGRADE_SNAPSHOT_DIR}\""
   fi
-  # B7-03：PG 快照切出标记同形态保留进终态（面板侧透传 env 为
-  # 1 时写 pgSnapshotDeferred: true），否则终态会把发起态的披
-  # 露冲掉、运维在结果面又看不到「本次无升级前快照」。
-  deferred_field=""
-  if [ "${FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED:-}" = "1" ]; then
-    deferred_field=", \"pgSnapshotDeferred\": true"
-  fi
-  printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"%s%s%s}\n' \
-    "$1" "${FLMX_UPGRADE_VERSION:-}" "${FLMX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$anchor_field" "$snapshot_field" "$deferred_field" > "$STATUS_FILE.tmp"
+  printf '{"inProgress": %s, "version": "%s", "startedAt": "%s", "result": "%s", "finishedAt": "%s"%s%s}\n' \
+    "$1" "${FLMX_UPGRADE_VERSION:-}" "${FLMX_UPGRADE_STARTED_AT:-}" "$2" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$anchor_field" "$snapshot_field" > "$STATUS_FILE.tmp"
   chmod 600 "$STATUS_FILE.tmp" 2>/dev/null || true
   mv -f "$STATUS_FILE.tmp" "$STATUS_FILE"
+}
+
+# R18-B8-03：PG 快照恢复——回滚重建旧容器前，用本次升级落盘的
+# pg_dump 转储把数据库原地恢复到升级前状态（否则快照只是摆设，
+# 新后端已执行的前向迁移无法还原）。
+# 仅在本次升级确已落盘 PG 快照（SNAPSHOT_TAKEN 由快照段成功后置
+# 位）且转储文件在场时执行；files 回滚（pull/快照/对账失败，新
+# 后端从未启动、库未动）不经过此处，数据库分毫不动。恢复在当前
+# PG 容器上原地进行（按 compose 实读当前容器名，改名场景下可能
+# 是新名；PG 容器全程不换卷，绝不另起第二个 PG 容器）：先停旧
+# 后端断开连接，再等 PG 就绪、清掉残留连接、DROP/CREATE 后用
+# psql 回灌转储（docker exec 进 PG 容器走本地信任，与快照段同
+# 口径，无密码进出）。恢复失败不静默：置 pg_restore_failed=1，
+# 容器仍按旧定义重建，但终态写 rollback_failed 并点名人工按快
+# 照路径恢复，绝不以 rolled_back 谎报数据库已还原。
+restore_pg_snapshot() {
+  pg_restore_failed=0
+  if [ -z "${SNAPSHOT_TAKEN:-}" ] || [ -z "${FLMX_UPGRADE_PG_CONTAINER:-}" ] || [ -z "${FLMX_UPGRADE_SNAPSHOT_DIR:-}" ]; then
+    return 0
+  fi
+  dump_file="$PANEL_DEPLOY_DIR/$FLMX_UPGRADE_SNAPSHOT_DIR/postgres/postgres.sql"
+  if [ ! -f "$dump_file" ]; then
+    return 0
+  fi
+  log "从升级前 PG 快照恢复数据库: $FLMX_UPGRADE_SNAPSHOT_DIR/postgres/postgres.sql（容器 $FLMX_UPGRADE_PG_CONTAINER、数据库 $FLMX_UPGRADE_PG_DB）"
+  pg_container=$(docker compose ps -a postgres --format '{{.Name}}' 2>/dev/null | head -n 1 || true)
+  if [ -z "$pg_container" ]; then
+    pg_container="$FLMX_UPGRADE_PG_CONTAINER"
+  fi
+  if [ "$(docker inspect -f '{{.State.Running}}' "$pg_container" 2>/dev/null || true)" != "true" ]; then
+    log "PG 容器未在运行，拉起后恢复快照: $pg_container"
+    if ! docker compose up -d postgres >> "$LOGFILE" 2>&1; then
+      log "错误: PG 快照恢复失败：无法拉起 PG 容器（$pg_container），数据库仍为迁移后状态，请按快照路径人工恢复：$FLMX_UPGRADE_SNAPSHOT_DIR/postgres/postgres.sql"
+      pg_restore_failed=1
+      return 0
+    fi
+    pg_container=$(docker compose ps -a postgres --format '{{.Name}}' 2>/dev/null | head -n 1 || true)
+    if [ -z "$pg_container" ]; then
+      pg_container="$FLMX_UPGRADE_PG_CONTAINER"
+    fi
+  fi
+  ready=0
+  i=0
+  while [ "$i" -lt 30 ]; do
+    if docker exec "$pg_container" pg_isready -U "$FLMX_UPGRADE_PG_USER" -d postgres >> "$LOGFILE" 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 2
+    i=$((i + 1))
+  done
+  if [ "$ready" -ne 1 ]; then
+    log "错误: PG 快照恢复失败：PG 容器（$pg_container）60 秒内未就绪，数据库仍为迁移后状态，请按快照路径人工恢复：$FLMX_UPGRADE_SNAPSHOT_DIR/postgres/postgres.sql"
+    pg_restore_failed=1
+    return 0
+  fi
+  docker compose stop backend >> "$LOGFILE" 2>&1 || true
+  restore_ok=1
+  if ! docker exec "$pg_container" psql -U "$FLMX_UPGRADE_PG_USER" -d postgres -v ON_ERROR_STOP=1 -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$FLMX_UPGRADE_PG_DB' AND pid <> pg_backend_pid();" >> "$LOGFILE" 2>&1; then
+    restore_ok=0
+  fi
+  if [ "$restore_ok" -eq 1 ] && ! docker exec "$pg_container" psql -U "$FLMX_UPGRADE_PG_USER" -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE \"$FLMX_UPGRADE_PG_DB\";" >> "$LOGFILE" 2>&1; then
+    restore_ok=0
+  fi
+  if [ "$restore_ok" -eq 1 ] && ! docker exec "$pg_container" psql -U "$FLMX_UPGRADE_PG_USER" -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$FLMX_UPGRADE_PG_DB\";" >> "$LOGFILE" 2>&1; then
+    restore_ok=0
+  fi
+  if [ "$restore_ok" -eq 1 ] && ! docker exec -i "$pg_container" psql -U "$FLMX_UPGRADE_PG_USER" -d "$FLMX_UPGRADE_PG_DB" -v ON_ERROR_STOP=1 < "$dump_file" >> "$LOGFILE" 2>&1; then
+    restore_ok=0
+  fi
+  if [ "$restore_ok" -ne 1 ]; then
+    log "错误: PG 快照恢复失败：数据库仍为迁移后状态，旧容器仍按恢复后的配置重建，但本次回滚不记为成功；请按快照路径人工恢复：$FLMX_UPGRADE_SNAPSHOT_DIR/postgres/postgres.sql（psql -U $FLMX_UPGRADE_PG_USER -d $FLMX_UPGRADE_PG_DB -f 该文件）"
+    pg_restore_failed=1
+    return 0
+  fi
+  log "PG 数据库已从升级前快照恢复: $FLMX_UPGRADE_SNAPSHOT_DIR/postgres/postgres.sql"
+  return 0
 }
 
 # O9-002：失败时自动恢复备份文件
@@ -770,9 +847,17 @@ rollback() {
   if ! reconcile_network_label; then
     log "警告: 回滚前网络标签对账被前置拒绝（原因见上），仍尝试按恢复后的配置重建旧容器"
   fi
+  # R18-B8-03：先恢复 PG 快照再重建旧后端——旧后端一旦启动即对库
+  # 执行迁移，必须在它起来之前把库还原到升级前状态。
+  restore_pg_snapshot
   if docker compose up -d --force-recreate --remove-orphans $UPGRADE_SERVICES >> "$LOGFILE" 2>&1 && wait_backend_healthy && wait_frontend_healthy; then
-    write_status "false" "rolled_back"
-    log "回滚完成：旧容器已按恢复后的配置重建并通过健康检查（.bak 保留）"
+    if [ "${pg_restore_failed:-0}" = "1" ]; then
+      write_status "false" "rollback_failed"
+      log "错误: 回滚重建旧容器成功，但 PG 数据库快照恢复失败（原因见上），数据库仍为迁移后状态，请按快照路径人工恢复（.bak 已保留）"
+    else
+      write_status "false" "rolled_back"
+      log "回滚完成：旧容器已按恢复后的配置重建并通过健康检查（.bak 保留）"
+    fi
   else
     write_status "false" "rollback_failed"
     log "错误: 回滚重建旧容器或健康检查失败，请立即手动处理（.bak 已保留）"
@@ -1040,6 +1125,42 @@ fi
 log "等待旧容器释放资源..."
 sleep 3
 
+# DB 快照（R18-B8-03，PG 模式，面板侧以 FLMX_UPGRADE_PG_CONTAINER
+# 等透传快照身份时启用）：停旧后端前，对在跑 PG 容器做 pg_dump
+# 只读导出到部署目录快照目录的 postgres/postgres.sql（与脚本
+# 面 backup_postgres_for_update 同口径：docker exec 进 PG 容器
+# 走本地信任，无密码进出；库名/用户名取 .env，缺失时回退容器
+# 环境、再缺失回退模板缺省 flmx_panel，由面板侧定格后透传）。
+# pg_dump 自带事务一致性，导出期间旧后端无需停——快照是只读
+# 导出，不动现库。任一步失败＝中止升级：此时新容器尚未创建、
+# 旧后端仍在运行，rollback files 恢复已替换的 compose/.env 即
+# 可收口（快照失败不得静默跳过后照常升级），面板保持旧版本可
+# 用。转储非空且含标准头才算成功；随后按 mtime 保留最近 3 份
+# panel-update-*（与 SQLite 段同口径，两面备份同目录同 glob 一
+# 并轮换）。
+if [ -n "${FLMX_UPGRADE_PG_CONTAINER:-}" ]; then
+  SNAPSHOT_DIR="$PANEL_DEPLOY_DIR/$FLMX_UPGRADE_SNAPSHOT_DIR"
+  PG_SNAPSHOT_FILE="$SNAPSHOT_DIR/postgres/postgres.sql"
+  log "创建升级前 PG 数据库快照: $FLMX_UPGRADE_SNAPSHOT_DIR/postgres/postgres.sql（pg_dump 容器 $FLMX_UPGRADE_PG_CONTAINER、用户 $FLMX_UPGRADE_PG_USER、数据库 $FLMX_UPGRADE_PG_DB；只读导出，不动现库）"
+  pg_snapshot_ok=1
+  mkdir -p "$SNAPSHOT_DIR/postgres" || pg_snapshot_ok=0
+  if [ "$pg_snapshot_ok" -eq 1 ] && ! docker exec "$FLMX_UPGRADE_PG_CONTAINER" pg_dump -U "$FLMX_UPGRADE_PG_USER" "$FLMX_UPGRADE_PG_DB" > "$PG_SNAPSHOT_FILE" 2>>"$LOGFILE"; then
+    pg_snapshot_ok=0
+  fi
+  if [ "$pg_snapshot_ok" -eq 1 ] && { [ ! -s "$PG_SNAPSHOT_FILE" ] || ! grep -q "PostgreSQL database dump" "$PG_SNAPSHOT_FILE"; }; then
+    pg_snapshot_ok=0
+  fi
+  if [ "$pg_snapshot_ok" -ne 1 ]; then
+    rm -f "$PG_SNAPSHOT_FILE"
+    log "错误: PG 数据库快照（pg_dump）失败，中止升级：未停任何服务、未重建任何容器，面板保持旧版本可用（pg_dump 目标：容器 $FLMX_UPGRADE_PG_CONTAINER、用户 $FLMX_UPGRADE_PG_USER、数据库 $FLMX_UPGRADE_PG_DB；请核对部署 .env 的 POSTGRES_USER/POSTGRES_DB 与该容器实际初始化的库名/用户名是否一致）"
+    rollback files
+    exit 1
+  fi
+  ls -dt "$PANEL_DEPLOY_DIR"/backups/panel-update-* 2>/dev/null | tail -n +4 | while IFS= read -r old_backup; do
+    rm -rf "$old_backup" 2>/dev/null || true
+  done
+  SNAPSHOT_TAKEN=1
+  log "PG 数据库快照完成: $FLMX_UPGRADE_SNAPSHOT_DIR/postgres/postgres.sql"
 # DB 快照（1.9.9，SQLite 模式，面板侧以 FLMX_UPGRADE_SNAPSHOT_DIR
 # 透传部署内相对路径时启用）：停旧后端后、重建前，把数据卷整目
 # 录复制到部署目录的快照目录 sqlite/ 子目录（整目录口径与脚本
@@ -1051,10 +1172,7 @@ sleep 3
 # 不得静默跳过后照常升级）。快照只备不自动恢复，恢复由人工按
 # 状态文件点名的路径执行。源目录经 --volumes-from 与后端同挂
 # 载、恒为 /app/data（FLMX_UPGRADE_DATA_DIR 仅供测试覆盖）。
-if [ -n "${FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED:-}" ]; then
-  log "PostgreSQL 模式：DB 快照未随面板内升级落地（切出登记项），本次升级不创建 DB 快照"
-fi
-if [ -n "${FLMX_UPGRADE_SNAPSHOT_DIR:-}" ]; then
+elif [ -n "${FLMX_UPGRADE_SNAPSHOT_DIR:-}" ]; then
   SNAPSHOT_DIR="$PANEL_DEPLOY_DIR/$FLMX_UPGRADE_SNAPSHOT_DIR"
   DATA_DIR="${FLMX_UPGRADE_DATA_DIR:-/app/data}"
   log "创建升级前 DB 快照: $FLMX_UPGRADE_SNAPSHOT_DIR"
@@ -1302,9 +1420,15 @@ func (e *systemUpgradeExecutor) buildHelperRunArgs(imageID, helperName string) (
 		args = append(args,
 			"-e", snapshotDirEnvKey+"="+e.snapshotPath)
 	}
-	if e.pgSnapshotDeferred {
+	// PG 快照身份（R18-B8-03）：三元组齐全时一并透传，helper
+	// 按值执行 pg_dump 与回滚恢复；任一缺失即不透传、helper
+	// 按无 PG 快照走 SQLite/无快照分支（Go 面定格失败时升级
+	// 已在同步段 fail-closed 中止，不会走到这里）。
+	if e.pgSnapshotContainer != "" {
 		args = append(args,
-			"-e", pgSnapshotDeferredEnvKey+"=1")
+			"-e", pgSnapshotContainerEnvKey+"="+e.pgSnapshotContainer,
+			"-e", pgSnapshotUserEnvKey+"="+e.pgSnapshotUser,
+			"-e", pgSnapshotDBEnvKey+"="+e.pgSnapshotDB)
 	}
 	return append(args,
 		"--entrypoint", "/bin/sh", imageID,
@@ -1365,6 +1489,15 @@ const (
 	// 键（脚本 write_new_panel_identity 落盘同名键）：定位旧 PG 容
 	// 器时优先取部署自带声明，其次按 Compose 项目+服务标签查找。
 	envKeyPanelPostgresContainer = "PANEL_POSTGRES_CONTAINER"
+	// envKeyPostgresUser/DB 是部署 .env 中 PG 库名/用户名的键：
+	// PG 快照身份的首选来源（脚本面 backup_postgres_for_update
+	// 同口径先读 .env）。
+	envKeyPostgresUser = "POSTGRES_USER"
+	envKeyPostgresDB   = "POSTGRES_DB"
+	// defaultPostgresSnapshotIdentity 是 PG 库名/用户名缺键时的
+	// 回退值（脚本面 backup_postgres_for_update 同口径：先实读
+	// PG 容器环境，再回退现行模板缺省 flmx_panel）。
+	defaultPostgresSnapshotIdentity = "flmx_panel"
 	// expectedSQLiteVolumeEnvKey 是透传 helper 的期望数据卷名键：
 	// helper 重建后实读新后端挂载卷与之比对，不一致即回滚。
 	expectedSQLiteVolumeEnvKey = "FLMX_EXPECTED_SQLITE_VOLUME"
@@ -2097,10 +2230,15 @@ const (
 
 	// 透传 helper 的改名/快照环境键（仅非缺省时透传，helper 侧
 	// 缺失即按缺省行为，与 expectedSQLiteVolumeEnvKey 同形态）。
-	removePGContainerEnvKey  = "FLMX_UPGRADE_REMOVE_PG_CONTAINER"
-	upgradeServicesEnvKey    = "FLMX_UPGRADE_SERVICES"
-	snapshotDirEnvKey        = "FLMX_UPGRADE_SNAPSHOT_DIR"
-	pgSnapshotDeferredEnvKey = "FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED"
+	removePGContainerEnvKey = "FLMX_UPGRADE_REMOVE_PG_CONTAINER"
+	upgradeServicesEnvKey   = "FLMX_UPGRADE_SERVICES"
+	snapshotDirEnvKey       = "FLMX_UPGRADE_SNAPSHOT_DIR"
+	// pgSnapshot*EnvKey 是 PG 快照段的身份透传（R18-B8-03）：
+	// 容器/用户/数据库三元组由 prepareUpgradeSnapshot 定格后
+	// 一并透传，helper 只按值执行 pg_dump/psql，不再解析 .env。
+	pgSnapshotContainerEnvKey = "FLMX_UPGRADE_PG_CONTAINER"
+	pgSnapshotUserEnvKey      = "FLMX_UPGRADE_PG_USER"
+	pgSnapshotDBEnvKey        = "FLMX_UPGRADE_PG_DB"
 	// upgradeDataDirEnvKey 仅供测试覆盖快照源目录；生产恒不设、
 	// helper 缺省 /app/data。
 	upgradeDataDirEnvKey = "FLMX_UPGRADE_DATA_DIR"
@@ -2254,27 +2392,27 @@ func (e *systemUpgradeExecutor) applyIdentityRename(ctx context.Context) error {
 }
 
 // prepareUpgradeSnapshot 在启动 helper 前定格本次升级的 DB 快照
-// 安排（仅 SQLite 模式，路 3 INV-7 对 Go 面的补齐）：快照目录
-// 名由目标版本与当前 UTC 时刻派生（backups/panel-update-<版本>-
+// 安排（路 3 INV-7 对 Go 面的补齐 + R18-B8-03 的 PG 补齐）：快照
+// 目录名由目标版本与当前 UTC 时刻派生（backups/panel-update-<版本>-
 // <时间戳>，与脚本面 create_panel_update_backup 的
 // panel-update-<时间戳> 同族命名；K=3 按 mtime 轮换亦同口径，
-// 由 helper 落盘时执行），经环境变量透传 helper 在停旧后端后、
-// 重建前整目录复制数据卷；状态文件与发起回执以相对路径点名。
+// 由 helper 落盘时执行），经环境变量透传 helper 落盘；状态文件
+// 与发起回执以相对路径点名。
+//
+// SQLite 模式：helper 在停旧后端后、重建前整目录复制数据卷。
 // 快照只备不自动恢复（恢复由人工按点名路径执行，与脚本面回滚
 // 不恢复 DB 备份的口径一致）。
 //
-// PG 模式切出登记（本批不落，只落 SQLite 子项）：脚本面 PG 快
-// 照是宿主机上对在跑 PG 容器直接 pg_dump；面板内 helper 若同
-// 做，须在 shell 内再解析 PG 容器定位与 POSTGRES_* 凭据/
-// DATABASE_URL 形态并处理转储一致性，工具链与失败面显著大于
-// SQLite 的整目录复制；且 PG 模式下数据卷不被本次升级写
-// （helper 至多重建 PG 容器；卷名由钉键保障——PG 模式无键且
-// 实读不到卷名时升级前 fail-closed 中止、重建后 helper 实读
-// PG 卷挂载比对，见 planLegacyResourcePins 与 helper 的 PG 数
-// 据卷校验段），风险敞口与 SQLite 面不对等。故 PG 子项以
-// pgSnapshotDeferred 标记＋helper 日志点名切出，待后续批次按
-// 同一 backups/ 口径补齐。
-func (e *systemUpgradeExecutor) prepareUpgradeSnapshot(version string) {
+// PG 模式（R18-B8-03）：helper 在停旧后端前对在跑 PG 容器做
+// pg_dump 只读导出（落 <快照目录>/postgres/postgres.sql），失
+// 败即 fail-closed 中止升级；回滚时用该转储原地恢复数据库。
+// 本函数定格快照身份三元组（容器/用户/数据库，见
+// resolvePgSnapshotIdentity）：容器定位不到、或库名/用户名含
+// shell/SQL 插值不安全字符时返回错误——调用方在同步段恢复已
+// 替换的文件并以明确回执中止升级，此时容器分毫未动、面板保持
+// 旧版本可用。快照本身是只读导出，不动现库；SQLite 面行为不
+// 变（本函数 SQLite 分支与旧实现逐行一致）。
+func (e *systemUpgradeExecutor) prepareUpgradeSnapshot(ctx context.Context, version string) error {
 	data, err := os.ReadFile(e.envPath())
 	if err != nil {
 		// .env 此刻已由前序步骤反复读写成功，读失败极罕见；按
@@ -2284,11 +2422,98 @@ func (e *systemUpgradeExecutor) prepareUpgradeSnapshot(version string) {
 		data = nil
 	}
 	if isPostgresMode(parseEnvFileValues(data)) {
-		e.pgSnapshotDeferred = true
-		return
+		env := parseEnvFileValues(data)
+		located := e.locatePostgresContainer(ctx, env, e.composeProject)
+		inspected := map[string]string{}
+		if located != "" {
+			inspected[envKeyPostgresUser] = e.dockerInspectContainerEnvValue(ctx, located, envKeyPostgresUser)
+			inspected[envKeyPostgresDB] = e.dockerInspectContainerEnvValue(ctx, located, envKeyPostgresDB)
+		}
+		identity, err := resolvePgSnapshotIdentity(env, located, inspected)
+		if err != nil {
+			return err
+		}
+		e.pgSnapshotContainer = identity.container
+		e.pgSnapshotUser = identity.user
+		e.pgSnapshotDB = identity.db
+		name := "panel-update-" + version + "-" + time.Now().UTC().Format("20060102-150405")
+		e.snapshotPath = "backups/" + name
+		return nil
 	}
 	name := "panel-update-" + version + "-" + time.Now().UTC().Format("20060102-150405")
 	e.snapshotPath = "backups/" + name
+	return nil
+}
+
+// pgSnapshotIdentity 是 PG 快照/恢复的目标身份三元组。
+type pgSnapshotIdentity struct {
+	container string
+	user      string
+	db        string
+}
+
+// pgSnapshotNamePattern 是 PG 库名/用户名进 shell 与 SQL 插值的
+// 安全字符集：helper 把 user/db 原样拼进 `pg_dump -U` / `psql
+// -d` / `DROP DATABASE "<db>"`，字符集外的值须在 Go 面
+// fail-closed 拒绝，不得下发到 shell（存量值 flmx_panel、
+// flux_panel、postgres 均在集内；自定义名若含集外字符，报错
+// 会点名请运维改名或走脚本升级）。
+var pgSnapshotNamePattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+// resolvePgSnapshotIdentity 定格 PG 快照身份（纯函数，便于单测）：
+//   - 容器：取定位到的在跑 PG 容器（locatePostgresContainer：
+//     .env 声明名存在性校验 + Compose 项目/服务标签回退；改名
+//     场景下声明键已是新名、在跑容器仍是旧名，必须取定位结果
+//     而非声明值）。定位不到即 fail-closed 报错——没有可信的
+//     pg_dump 目标时不得无快照升级。
+//   - 库名/用户名：.env 优先，缺失回退 PG 容器环境实读值，再缺
+//     失回退模板缺省 flmx_panel（与脚本面
+//     backup_postgres_for_update 同序）；字符集外即报错。
+func resolvePgSnapshotIdentity(env map[string]string, locatedContainer string, inspectedEnv map[string]string) (pgSnapshotIdentity, error) {
+	if err := validateBackendContainerName(locatedContainer); err != nil {
+		return pgSnapshotIdentity{}, fmt.Errorf("PG 数据库快照无法定位在跑的 PostgreSQL 容器（.env 的 %s 缺失/不指向在跑容器且按 Compose 项目也找不到 postgres 服务容器），无法在升级前做 pg_dump 快照，已中止升级：请确认 PG 容器在跑且 .env 的 %s 正确，或走脚本升级", envKeyPanelPostgresContainer, envKeyPanelPostgresContainer)
+	}
+	identity := pgSnapshotIdentity{container: locatedContainer}
+	for _, field := range []struct {
+		key   string
+		value *string
+	}{
+		{envKeyPostgresUser, &identity.user},
+		{envKeyPostgresDB, &identity.db},
+	} {
+		v := strings.TrimSpace(env[field.key])
+		if v == "" {
+			v = strings.TrimSpace(inspectedEnv[field.key])
+		}
+		if v == "" {
+			v = defaultPostgresSnapshotIdentity
+		}
+		if !pgSnapshotNamePattern.MatchString(v) {
+			return pgSnapshotIdentity{}, fmt.Errorf("PG 数据库快照身份不合法：%s=%q 含快照命令不接受的字符（只允许字母、数字、下划线），已中止升级：请把 .env 的 %s 改为合法库名/用户名，或走脚本升级", field.key, v, field.key)
+		}
+		*field.value = v
+	}
+	return identity, nil
+}
+
+// dockerInspectContainerEnvValue 实读容器 Config.Env 中指定键的
+// 值（与 dockerInspectComposeProject 同形态的 inspect 通道）：
+// 读不到返回空串，调用方按回退序处理。
+func (e *systemUpgradeExecutor) dockerInspectContainerEnvValue(ctx context.Context, container, key string) string {
+	if validateBackendContainerName(container) != nil || key == "" {
+		return ""
+	}
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "-f",
+		`{{range .Config.Env}}{{println .}}{{end}}`, container).Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(line), "="); ok && k == key {
+			return v
+		}
+	}
+	return ""
 }
 
 func (e *systemUpgradeExecutor) backupFile(path string) (string, error) {
@@ -3424,16 +3649,23 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	exec.upgradeStartedAt = time.Now().UTC().Format(time.RFC3339)
 	// R8-003：降级点名随状态落盘并透传 helper，状态轮询面同步透出。
 	exec.upgradeAnchorNote = anchorNote
-	// DB 快照安排定格（SQLite 模式点名快照相对路径，状态与回执
-	// 据此透出；PG 模式切出标记，见 prepareUpgradeSnapshot）。
-	exec.prepareUpgradeSnapshot(version)
+	// DB 快照安排定格（两模式同口径点名快照相对路径，状态与回
+	// 执据此透出；PG 模式定格失败时 fail-closed 中止升级，见
+	// prepareUpgradeSnapshot——此时容器分毫未动，只恢复已替换
+	// 的 compose/.env，面板保持旧版本可用）。
+	if err := exec.prepareUpgradeSnapshot(r.Context(), version); err != nil {
+		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
+			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
+		}
+		response.WriteJSON(w, response.Err(-2, "定格升级前数据库快照失败: "+err.Error()))
+		return
+	}
 	if err := exec.writeUpgradeStatus(systemUpgradeStatusData{
-		InProgress:         true,
-		Version:            version,
-		StartedAt:          exec.upgradeStartedAt,
-		AnchorNote:         anchorNote,
-		SnapshotPath:       exec.snapshotPath,
-		PgSnapshotDeferred: exec.pgSnapshotDeferred,
+		InProgress:   true,
+		Version:      version,
+		StartedAt:    exec.upgradeStartedAt,
+		AnchorNote:   anchorNote,
+		SnapshotPath: exec.snapshotPath,
 	}); err != nil {
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
@@ -3448,14 +3680,13 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// U1-003：helper 未启动成功，立即解除落盘的「升级中」状态，避免永久拦截后续升级。
 		_ = exec.writeUpgradeStatus(systemUpgradeStatusData{
-			InProgress:         false,
-			Version:            version,
-			StartedAt:          exec.upgradeStartedAt,
-			Result:             "helper_start_failed",
-			FinishedAt:         time.Now().UTC().Format(time.RFC3339),
-			AnchorNote:         anchorNote,
-			SnapshotPath:       exec.snapshotPath,
-			PgSnapshotDeferred: exec.pgSnapshotDeferred,
+			InProgress:   false,
+			Version:      version,
+			StartedAt:    exec.upgradeStartedAt,
+			Result:       "helper_start_failed",
+			FinishedAt:   time.Now().UTC().Format(time.RFC3339),
+			AnchorNote:   anchorNote,
+			SnapshotPath: exec.snapshotPath,
 		})
 		if restoreErr := exec.restoreUpgradeBackups(composePath, envPath); restoreErr != nil {
 			err = fmt.Errorf("%v; 回滚失败: %v", err, restoreErr)
@@ -3469,14 +3700,13 @@ func (h *Handler) systemUpgrade(w http.ResponseWriter, r *http.Request) {
 		message += "（" + anchorNote + "）"
 	}
 	response.WriteJSON(w, response.OK(systemUpgradeRunData{
-		Version:            version,
-		Channel:            channel,
-		ComposeAsset:       composeAsset,
-		HelperContainer:    helperContainer,
-		BackendImageID:     imageID,
-		Message:            message,
-		SnapshotPath:       exec.snapshotPath,
-		PgSnapshotDeferred: exec.pgSnapshotDeferred,
+		Version:         version,
+		Channel:         channel,
+		ComposeAsset:    composeAsset,
+		HelperContainer: helperContainer,
+		BackendImageID:  imageID,
+		Message:         message,
+		SnapshotPath:    exec.snapshotPath,
 	}))
 }
 
