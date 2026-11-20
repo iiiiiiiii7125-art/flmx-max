@@ -2711,6 +2711,17 @@ func decodeBackupImportRequest(body io.ReadCloser, out *backupImportRequest, lim
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err == nil {
+		// R18-B9-05：快径此前只解第一个 JSON 值即返回，尾部垃圾
+		// （拼接/损坏备份）被静默丢弃；与慢径 Unmarshal 的严格口
+		// 径对齐：尾部除空白外不得再有内容。第二值是合法 JSON
+		// 时明文报错；其余尾部内容按解码错原样返回。
+		var extra json.RawMessage
+		if err := dec.Decode(&extra); err != io.EOF {
+			if err == nil {
+				return nil, errors.New("备份文件尾部存在多余数据")
+			}
+			return nil, err
+		}
 		return nil, nil
 	} else if unknownJSONFieldName(err) == "" {
 		return nil, err
