@@ -402,4 +402,24 @@ grep -q "R18-A4-02" "$TMP/v26.log" && echo "OK: variant 26 caught and named" || 
   echo "FAIL: variant 26 caught but the drift was not named"; sed 's/^/    /' "$TMP/v26.log"; exit 1; }
 cp "$ROOT/.github/workflows/docker-build.yml" "$MIR/.github/workflows/docker-build.yml"
 
+echo "== variant 27: proxy suite gains an unregistered test must FAIL and name it (§32, R18-A4-04) =="
+python3 - "$MIR/test-install-scripts-proxy.sh" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = 'echo "install script tests passed"'
+assert anchor in s, "baseline shape changed"
+assert 'test_selftest_never_runs' not in s, "ghost test already present"
+ghost = 'test_selftest_never_runs() (\n  :\n)\n\n'
+open(p, "w").write(s.replace(anchor, ghost + anchor, 1))
+PYEOF
+grep -q 'test_selftest_never_runs' "$MIR/test-install-scripts-proxy.sh" || {
+  echo "FAIL: variant 27 mutation did not land (ghost test anchor drifted)"; exit 1; }
+if run_gate "$TMP/v27.log"; then
+  echo "FAIL: variant 27 was not caught"; exit 1
+fi
+grep -q "R18-A4-04" "$TMP/v27.log" && grep -q "test_selftest_never_runs" "$TMP/v27.log" && echo "OK: variant 27 caught and named" || {
+  echo "FAIL: variant 27 caught but the drift was not named"; sed 's/^/    /' "$TMP/v27.log"; exit 1; }
+cp "$ROOT/test-install-scripts-proxy.sh" "$MIR/test-install-scripts-proxy.sh"
+
 echo "SELFTEST PASS"

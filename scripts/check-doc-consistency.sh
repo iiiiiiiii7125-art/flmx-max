@@ -1109,6 +1109,41 @@ else
   note_ok "R18-A4-02：发版 Release notes Quick Install 4 条命令均先下 .sha256 再 sha256sum -c"
 fi
 
+# ── 32. proxy 套件测试注册普查门（R18-A4-04 常设门）：机械提取
+# test-install-scripts-proxy.sh 的测试函数定义集（行首 test_…()，
+# 含 () ( 与 () { 两种形态）与裸调用集（行首 test_…、文件内各段
+# 执行清单），定义未调用 / 调用未定义 / 重复定义任一差集非空即
+# FAIL 并点名。手写清单漏注册即静默不跑，本门是唯一机械防线
+# （§24 的 F1-N2 钉子只守单个测试）。
+A4_SUITE="test-install-scripts-proxy.sh"
+if [ ! -f "$A4_SUITE" ]; then
+  note_fail "R18-A4-04：proxy 套件测试注册普查前提失效（$A4_SUITE 缺失，请人工复核）"
+else
+  a4_census_tmp=$(mktemp -d)
+  grep -oE '^test_[a-z_0-9]+ *\(\)' "$A4_SUITE" | sed 's/ *()$//' | sort > "$a4_census_tmp/defs" || true
+  grep -oE '^test_[a-z_0-9]+$' "$A4_SUITE" | sort > "$a4_census_tmp/calls" || true
+  a4_n_defs=$(wc -l < "$a4_census_tmp/defs" | tr -d ' ')
+  a4_n_calls=$(wc -l < "$a4_census_tmp/calls" | tr -d ' ')
+  a4_def_dup=$(uniq -d "$a4_census_tmp/defs" | tr '\n' ' ')
+  a4_call_dup=$(uniq -d "$a4_census_tmp/calls" | tr '\n' ' ')
+  a4_unrun=$(comm -23 "$a4_census_tmp/defs" "$a4_census_tmp/calls" | tr '\n' ' ')
+  a4_undef=$(comm -13 "$a4_census_tmp/defs" "$a4_census_tmp/calls" | tr '\n' ' ')
+  if [ "$a4_n_defs" -eq 0 ]; then
+    note_fail "R18-A4-04：proxy 套件测试注册普查前提失效（定义提取为空，提取式漂移，请人工复核）"
+  elif [ -n "$a4_def_dup" ]; then
+    note_fail "R18-A4-04：proxy 套件有重复定义的测试函数：$a4_def_dup"
+  elif [ -n "$a4_call_dup" ]; then
+    note_fail "R18-A4-04：proxy 套件有重复调用的测试函数：$a4_call_dup"
+  elif [ -n "$a4_unrun" ]; then
+    note_fail "R18-A4-04：proxy 套件有定义未调用的测试（写了也不跑）：$a4_unrun"
+  elif [ -n "$a4_undef" ]; then
+    note_fail "R18-A4-04：proxy 套件有调用未定义的测试：$a4_undef"
+  else
+    note_ok "R18-A4-04：proxy 套件测试定义与调用普查一致（定义 $a4_n_defs 个＝调用 $a4_n_calls 个，无重复/漏注册）"
+  fi
+  rm -rf "$a4_census_tmp"
+fi
+
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
   echo "RESULT: PASS（known-pending 项不计失败）"
