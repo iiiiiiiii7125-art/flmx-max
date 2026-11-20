@@ -314,7 +314,9 @@ func ensureConntrackFloor(env *hostGuardEnv, verbose bool) hostGuardResult {
 }
 
 // writeFileIfChanged 仅在内容不同（或文件缺失）时落盘，返回是
-// 否实写。目录不存在时创建。
+// 否实写。目录不存在时创建。落盘走 writeFileAtomic（R18-D2-10）：
+// 直接 os.WriteFile 会在满盘或崩溃时留半写文件，持久化配置
+// （conntrack 保底、journald drop-in）必须一次成形。
 func writeFileIfChanged(path, content string) (bool, error) {
 	if existing, err := os.ReadFile(path); err == nil && string(existing) == content {
 		return false, nil
@@ -324,7 +326,7 @@ func writeFileIfChanged(path, content string) (bool, error) {
 			return false, err
 		}
 	}
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := writeFileAtomic(path, []byte(content), 0644); err != nil {
 		return false, err
 	}
 	return true, nil
