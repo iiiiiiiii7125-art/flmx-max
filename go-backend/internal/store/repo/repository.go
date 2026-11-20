@@ -2833,6 +2833,32 @@ func clampImportedCounter(rep *importReport, label, field string, v int64) int64
 	return 0
 }
 
+// clampImportedLimit 是 R18-B9-01 的恢复面限额门：流量上限
+// （flow/flowMiB）、转发数上限（num）、连接数上限（maxConn）在任何
+// 写面都不得为负（mutations.go O5-005/O5-006、parseTrafficLimit），
+// 负值在消费面 >0 门控下静默等价无限制。恢复面按转发段 B8-06 同形
+// 取钳 0 + warning（不丢整行）：0 在消费面同为无限制，与负值的实
+// 际生效形态等价，只把存储值拉回合法域；与写面拒收口径的差异在此
+// 注明（恢复面不因单个字段丢弃整行）。
+func clampImportedLimit(rep *importReport, label, field string, v int64) int64 {
+	if v >= 0 {
+		return v
+	}
+	rep.warnf("备份恢复：%s 的限额 %s=%d 含负值，已按 0（无限制）恢复", label, field, v)
+	return 0
+}
+
+// clampImportedQuotaGB 是 R18-B9-01 的恢复面配额门
+// （clampImportedLimit 的 float64 版，日/月配额以小数 GB 计）：
+// 负值钳 0 + warning。
+func clampImportedQuotaGB(rep *importReport, label, field string, v float64) float64 {
+	if v >= 0 {
+		return v
+	}
+	rep.warnf("备份恢复：%s 的配额 %s=%v 含负值，已按 0（无限制）恢复", label, field, v)
+	return 0
+}
+
 func (rep *importReport) addRevoked(pairs []RevokedUserTunnelPair) {
 	if rep == nil {
 		return
@@ -3297,6 +3323,17 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 			rep.warnf("备份恢复：用户 #%d（%q）的 status=%d 不在合法枚举 {0,1} 内，已跳过该行未恢复", u.ID, u.User, u.Status)
 			continue
 		}
+		// R18-B9-01：flowResetTime 合法域 0-31 门（与 importUserTunnels
+		// 的 R7-G-02 门及写面 O5-008 同口径）——越界值整行跳过 +
+		// 点名警告，不静默原样落库。越界值经 monthlyFlowDue/
+		// monthlyResetMoment 会把月重置日偷改为月末（>31）或使月
+		// 重置永不触发（<0）。与限额字段不同，重置日是排程而非数
+		// 量，无法安全地钳为某一合法日，故不钳制、直接跳行。
+		if u.FlowResetTime < 0 || u.FlowResetTime > 31 {
+			rep.skip("users")
+			rep.warnf("备份恢复：用户 #%d（%q）的 flowResetTime=%d 不在合法范围 0-31 内，已跳过该行未恢复", u.ID, u.User, u.FlowResetTime)
+			continue
+		}
 		pwdHash, status, err := normalizeImportedUserPassword(u.Pwd, u.Status)
 		if err != nil {
 			return count, err
@@ -3309,26 +3346,31 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 			passwordChangedAt = now
 		}
 		userLabel := fmt.Sprintf("用户 #%d（%q）", u.ID, username)
+		// R18-B9-01：负值限额钳 0（见 clampImportedLimit 注释）。
+		flow := clampImportedLimit(rep, userLabel, "flow", u.Flow)
+		flowMiB := clampImportedLimit(rep, userLabel, "flowMiB", u.FlowMiB)
+		num := clampImportedLimit(rep, userLabel, "num", int64(u.Num))
+		maxConn := clampImportedLimit(rep, userLabel, "maxConn", int64(u.MaxConn))
 		item := model.User{
 			ID:            u.ID,
 			User:          username,
 			Pwd:           pwdHash,
 			RoleID:        u.RoleID,
 			ExpTime:       u.ExpTime,
-			Flow:          u.Flow,
-			FlowMiB:       u.FlowMiB,
+			Flow:          flow,
+			FlowMiB:       flowMiB,
 			InFlow:        clampImportedCounter(rep, userLabel, "inFlow", u.InFlow),
 			OutFlow:       clampImportedCounter(rep, userLabel, "outFlow", u.OutFlow),
 			FlowResetTime: u.FlowResetTime,
 			// R11X-005: restored counters count from the import
 			// moment (backup format carries no reset marker).
 			FlowLastResetTime: now,
-			Num:               u.Num,
+			Num:               int(num),
 			CreatedTime:       u.CreatedTime,
 			UpdatedTime:       sql.NullInt64{Int64: now, Valid: true},
 			Status:            status,
 			PasswordChangedAt: passwordChangedAt,
-			MaxConn:           u.MaxConn,
+			MaxConn:           int(maxConn),
 		}
 		// R5-B4C: 备份导入查重。重名时明确报错，不静默覆盖。
 		if err := ensureUsernameAvailable(tx, username, u.ID); err != nil {
@@ -3380,10 +3422,14 @@ func importUsers(tx *gorm.DB, users []model.UserBackup, now int64, rep *importRe
 			// 用量会让日/月配额判定在积累等量真实流量前恒假）。
 			dailyUsed = clampImportedCounter(rep, userLabel, "dailyUsedBytes", dailyUsed)
 			monthlyUsed = clampImportedCounter(rep, userLabel, "monthlyUsedBytes", monthlyUsed)
+			// R18-B9-01：日/月配额负值钳 0（与写面
+			// dailyQuotaGB/monthlyQuotaGB < 0 拒收同谓词；0 表无限制）。
+			dailyQuotaGB := clampImportedQuotaGB(rep, userLabel, "dailyQuotaGB", u.DailyQuotaGB)
+			monthlyQuotaGB := clampImportedQuotaGB(rep, userLabel, "monthlyQuotaGB", u.MonthlyQuotaGB)
 			quotaItem := model.UserQuota{
 				UserID:           u.ID,
-				DailyLimitGB:     u.DailyQuotaGB,
-				MonthlyLimitGB:   u.MonthlyQuotaGB,
+				DailyLimitGB:     dailyQuotaGB,
+				MonthlyLimitGB:   monthlyQuotaGB,
 				DailyUsedBytes:   dailyUsed,
 				MonthlyUsedBytes: monthlyUsed,
 				DayKey:           dayKey,
@@ -4964,14 +5010,21 @@ func importUserTunnels(tx *gorm.DB, userTunnels []model.UserTunnelBackup, now in
 			rep.warnf("备份恢复：用户隧道授权 #%d 的 flowResetTime=%d 不在合法范围 0-31 内，已跳过该行未恢复", ut.ID, ut.FlowResetTime)
 			continue
 		}
+		// R18-B9-01：负值限额钳 0 + warning（与 importUsers 及转发段
+		// B8-06 同形，不丢整行；FlowResetTime 越界仍走上方 R7-G-02
+		// 整行跳过门，排程字段不钳制）。
+		utLabel := fmt.Sprintf("用户隧道授权 #%d", ut.ID)
+		utNum := clampImportedLimit(rep, utLabel, "num", int64(ut.Num))
+		utFlow := clampImportedLimit(rep, utLabel, "flow", ut.Flow)
+		utFlowMiB := clampImportedLimit(rep, utLabel, "flowMiB", ut.FlowMiB)
 		item := model.UserTunnel{
 			ID:            ut.ID,
 			UserID:        ut.UserID,
 			TunnelID:      ut.TunnelID,
 			SpeedID:       sql.NullInt64{Int64: ut.SpeedID, Valid: ut.SpeedID > 0},
-			Num:           ut.Num,
-			Flow:          ut.Flow,
-			FlowMiB:       ut.FlowMiB,
+			Num:           int(utNum),
+			Flow:          utFlow,
+			FlowMiB:       utFlowMiB,
 			InFlow:        clampImportedCounter(rep, fmt.Sprintf("用户隧道授权 #%d", ut.ID), "inFlow", ut.InFlow),
 			OutFlow:       clampImportedCounter(rep, fmt.Sprintf("用户隧道授权 #%d", ut.ID), "outFlow", ut.OutFlow),
 			FlowResetTime: ut.FlowResetTime,

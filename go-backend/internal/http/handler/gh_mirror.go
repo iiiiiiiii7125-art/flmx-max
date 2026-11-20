@@ -46,8 +46,8 @@ const (
 	// 期望哈希信任根不再永久中毒；过期后下载失败仍按
 	// ghMirrorMaxStaleAge 的年龄上限 stale 回退，不额外放宽。
 	ghMirrorFreshTagRelease = 24 * time.Hour
-	ghMirrorLatest   = 10 * time.Minute
-	ghMirrorServeFor = 30 * time.Minute
+	ghMirrorLatest          = 10 * time.Minute
+	ghMirrorServeFor        = 30 * time.Minute
 	// F-137：下载失败时 stale 回退的年龄上限。tag 下的 release 文件
 	// 按 ghMirrorFreshTagRelease（24h）刷新，不受此限之外的永久
 	// 效力；此限只约束 API/raw/latest 这类可变内容与过期 tag 资产
