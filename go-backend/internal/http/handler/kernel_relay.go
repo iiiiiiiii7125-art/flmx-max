@@ -971,14 +971,18 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// W3/IRL-3（后端半）：中转创建去重闸——同一入站经同一隧道到同一
-	// 落地目标、且入口端口也相同的中转已存在时点名拒绝，不再建第二条。
-	// 此前本面无任何查重，前端双击/重复提交（或不带 Idempotency-Key 的直调）即建出
-	// 两条同入站同目标中转及两条转发与两份服务。口径：托管
-	// （Managed=1）且转发仍存续的中转行，(隧道, 落地目标, 入口端口) 全等才算
-	// 重复；同隧道不同出口集（多出口变体走 relayTargetWithExits 的
-	// 创建面不在本端点）算出的目标不同、不误杀；同隧道同目标、入口端口
-	// 不同是用户要的多条中转，放行。自动选口（InPort<=0）时闸跑在选口
+	// W3/IRL-3（后端半）：中转创建去重闸——同一入站经同一隧道、且
+	// 入口端口也相同的中转已存在时点名拒绝，不再建第二条。此前本面
+	// 无任何查重，前端双击/重复提交（或不带 Idempotency-Key 的直调）
+	// 即建出两条同入站同目标中转及两条转发与两份服务。口径：托管
+	// （Managed=1）且转发仍存续的中转行，(隧道, 入站, 入口端口) 全
+	// 等才算重复。R18-B4-05：去重键与落地地址无关——落地节点的地址
+	// 会变（IP 迁移/重解析），旧实现拿转发 RemoteAddr 字符串比对，
+	// 地址一变闸就认不出同一条中转；同隧道同入口端口本就只能有一
+	// 条转发（forward_port 唯一索引兜底），地址不同不是另一条中转。
+	// 同隧道不同出口集（多出口变体走 relayTargetWithExits 的创建面
+	// 不在本端点）算出的目标不同、不误杀；同隧道同目标、入口端口不同
+	// 是用户要的多条中转，放行。自动选口（InPort<=0）时闸跑在选口
 	// 之前、尚无端口可比，故跳过本闸：选口本就排除已用端口，落库又有
 	// CreateForwardTx 的逐节点端口锁＋锁内复检＋forward_port 唯一索引
 	// 兜底，撞口换口重试，不会与既有中转落到同一端口。查重失败 fail-closed
@@ -997,7 +1001,7 @@ func (h *Handler) inboundRelayCreate(w http.ResponseWriter, r *http.Request) {
 			if ferr != nil || fwd == nil {
 				continue
 			}
-			if fwd.TunnelID != tunnel.ID || fwd.RemoteAddr != remoteAddr {
+			if fwd.TunnelID != tunnel.ID {
 				continue
 			}
 			// 转发的入口端口在 forward_port 行上（多入口节点同口）：
