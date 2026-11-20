@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.07"
+SCRIPT_VERSION="20261120.08"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -3592,6 +3592,103 @@ backup_postgres_for_update() {
   fi
 }
 
+# 更新回滚的数据库恢复面（R18-A2-05）：create_panel_update_backup
+# 采集的数据库备份（postgres.sql / sqlite/ 目录）此前只被采集、
+# 从未被回滚消费——新版本后端启动时已执行前向 schema 迁移、随后
+# 健康检查失败时，旧容器跑在新 schema 上，迁移含改名/删列等非后
+# 向兼容变更即持续不可用，直到操作员手工恢复数据库。两恢复函数
+# 由 rollback_panel_update 在“重建已开始”时调用（见该处门控）：
+# 恢复失败即回滚失败（不带病拉起旧后端），备份保留、人工恢复法
+# 在回执中点名。
+
+# 停容器（恢复前防写入）：容器不存在即无须停（返回 0）；在册而
+# 停失败即返回 1——不得在活写者眼皮底下替换数据库文件。
+panel_stop_container_if_present() {
+  local target="$1"
+  [[ -n "$target" ]] || return 1
+  if ! docker inspect "$target" >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! docker stop -t 30 "$target" >/dev/null 2>&1; then
+    echo "❌ 恢复数据库前停止容器 $target 失败（容器在册但停不下来），本次回滚中止、数据库未动；备份保留在 $UPDATE_BACKUP_DIR，请人工处理后重试"
+    return 1
+  fi
+  return 0
+}
+
+# SQLite 恢复：停后端后，把备份目录整体拷回数据卷（先清卷内旧
+# 内容再拷——新版本可能已在卷内留下前向迁移后的 gost.db/-wal 与
+# 新文件，只覆盖同名文件会残留新版 -wal，SQLite 下次打开即把旧
+# 库与新版 WAL 混用）。备份须含 gost.db（缺失即 fail-closed，
+# 卷一字不动）；卷名由调用方传入（update_panel 在重建前定格的钉
+# 键后有效卷名，见 UPDATE_ROLLBACK_SQLITE_VOLUME——备份 .env 是
+# 钉键前的、无键时不能再从恢复后的 .env 推导）。文件模式随备份
+# 原样（cp -a，不另改权：该模式即备份时刻的运行模式）。
+restore_sqlite_for_update() {
+  local backup_dir="$1" volume="$2"
+  local backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  if [[ ! -f "$backup_dir/gost.db" ]]; then
+    echo "❌ 更新备份 $backup_dir 中缺少 gost.db，无法恢复 SQLite 数据库（卷未动；备份保留，请人工恢复：停后端后把该目录拷回数据卷 $volume）"
+    return 1
+  fi
+  if [[ -z "$volume" ]]; then
+    echo "❌ 未给出 SQLite 数据卷名，无法恢复数据库（卷未动；备份保留在 $backup_dir，请人工恢复）"
+    return 1
+  fi
+  panel_stop_container_if_present "$backend_container" || return 1
+  if ! docker run --rm -v "$volume":/data -v "$backup_dir":/backup "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c 'rm -rf /data/* /data/.[!.]* /data/..?* 2>/dev/null; cp -a /backup/. /data/'; then
+    echo "❌ SQLite 数据库回滚恢复失败（备份 $backup_dir 未能拷回卷 $volume，卷内可能为新旧混合态；备份保留，请人工恢复后重跑更新）"
+    return 1
+  fi
+  echo "↩️ 已恢复更新前 SQLite 数据库（备份：$backup_dir，卷：$volume）"
+  return 0
+}
+
+# PostgreSQL 恢复：停后端后，删库重建再以备份的 pg_dump 导入。
+# 库名/用户名口径与 backup_postgres_for_update 一致（.env 键优先、
+# 缺键实读容器环境、仍无回退模板缺省 flmx_panel）；连接串不走
+# 命令行（psql 与 pg_dump 同走容器内本地信任认证，不拼口令）。
+# 库名/用户名须过标识符合法性（进 SQL 双引号标识符，非法即拒）。
+restore_postgres_for_update() {
+  local backup_file="$1"
+  local postgres_db postgres_user pg_container backend_container
+  if [[ ! -s "$backup_file" ]]; then
+    echo "❌ 更新备份 $backup_file 缺失或为空，无法恢复 PostgreSQL 数据库（库未动；备份保留，请人工恢复：停后端后 psql < $backup_file）"
+    return 1
+  fi
+  postgres_db=$(get_env_var "POSTGRES_DB" || true)
+  postgres_user=$(get_env_var "POSTGRES_USER" || true)
+  pg_container="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
+  backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  if [[ -z "$postgres_db" ]]; then
+    postgres_db=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$pg_container" 2>/dev/null | sed -n 's/^POSTGRES_DB=//p' | head -n 1 || true)
+  fi
+  if [[ -z "$postgres_user" ]]; then
+    postgres_user=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$pg_container" 2>/dev/null | sed -n 's/^POSTGRES_USER=//p' | head -n 1 || true)
+  fi
+  postgres_db=${postgres_db:-flmx_panel}
+  postgres_user=${postgres_user:-flmx_panel}
+  if [[ ! "$postgres_db" =~ ^[A-Za-z_][A-Za-z0-9_]*$ || ! "$postgres_user" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "❌ PostgreSQL 库名/用户名非法（$postgres_db/$postgres_user，仅允许字母/数字/下划线且首字符非数字），拒绝恢复数据库（库未动；备份保留在 $backup_file，请人工恢复）"
+    return 1
+  fi
+  panel_stop_container_if_present "$backend_container" || return 1
+  if ! docker exec "$pg_container" psql -U "$postgres_user" -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$postgres_db\";" >/dev/null 2>&1; then
+    echo "❌ PostgreSQL 数据库回滚恢复失败（DROP DATABASE $postgres_db 未成；库未动，备份保留在 $backup_file，请人工恢复）"
+    return 1
+  fi
+  if ! docker exec "$pg_container" psql -U "$postgres_user" -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$postgres_db\";" >/dev/null 2>&1; then
+    echo "❌ PostgreSQL 数据库回滚恢复失败（CREATE DATABASE $postgres_db 未成；库已被删、备份保留在 $backup_file，请人工导入恢复：psql -U $postgres_user -d $postgres_db < $backup_file）"
+    return 1
+  fi
+  if ! docker exec -i "$pg_container" psql -U "$postgres_user" -d "$postgres_db" -v ON_ERROR_STOP=1 < "$backup_file" >/dev/null 2>&1; then
+    echo "❌ PostgreSQL 数据库回滚恢复失败（备份 $backup_file 导入未成；库为空库态，备份保留，请人工导入恢复：psql -U $postgres_user -d $postgres_db < $backup_file）"
+    return 1
+  fi
+  echo "↩️ 已恢复更新前 PostgreSQL 数据库（备份：$backup_file，库：$postgres_db）"
+  return 0
+}
+
 create_panel_update_backup() {
   local db_type="$1"
   local timestamp
@@ -4016,6 +4113,22 @@ rollback_panel_update() {
   if [[ "$db_type" == "postgres" ]]; then
     run_panel_compose up -d postgres || return 1
     wait_for_postgres_healthy || return 1
+  fi
+  # R18-A2-05：重建已开始时恢复数据库——新版本后端可能已启动并对
+  # 数据库做了前向 schema 迁移，只恢复配置会让旧容器跑在新 schema
+  # 上（迁移含改名/删列等非后向兼容变更即持续不可用）。恢复失败即
+  # 回滚失败（不带病拉起旧后端），备份保留、人工恢复法在恢复函数
+  # 的回执中点名。重建前的失败（激活/改名/网络标签）由 update_panel
+  # 的 PANEL_UPDATE_REBUILD_STARTED 门控跳过：新版本从未启动、数据
+  # 库未被触及，沿用既有纯配置回滚。
+  if [[ "${PANEL_UPDATE_REBUILD_STARTED:-}" == "1" ]]; then
+    if [[ "$db_type" == "postgres" ]]; then
+      restore_postgres_for_update "$UPDATE_BACKUP_DIR/postgres.sql" || return 1
+    else
+      restore_sqlite_for_update "$UPDATE_BACKUP_DIR/sqlite" "${UPDATE_ROLLBACK_SQLITE_VOLUME:-$(panel_sqlite_volume_name)}" || return 1
+    fi
+  else
+    echo "ℹ️ 本次失败发生在新版本重建之前，数据库未被新版本触及，无需恢复数据库"
   fi
   run_panel_compose up -d --force-recreate --remove-orphans backend frontend || return 1
   wait_for_backend_healthy
@@ -4831,6 +4944,12 @@ update_panel() {
   echo "🎯 本次更新目标：部署目录：$PANEL_DEPLOY_DIR，后端容器：${PANEL_BACKEND_CONTAINER:-未知}"
   validate_panel_update_environment || return 1
 
+  # R18-A2-05：回滚口状态复位——同进程内多次 update_panel 调用
+  # （套件同子 shell 两幕）不得把上一次的重建标记与回滚卷带到下
+  # 一次；本次的标记在重建前置位、回滚卷在钉键后定格（见下）。
+  PANEL_UPDATE_REBUILD_STARTED=""
+  UPDATE_ROLLBACK_SQLITE_VOLUME=""
+
   CURRENT_DB_TYPE=$(get_current_db_type)
   echo "🗄️ 当前数据库类型：$CURRENT_DB_TYPE"
 
@@ -4978,7 +5097,7 @@ update_panel() {
 
   if ! activate_panel_update_files; then
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -4992,7 +5111,7 @@ update_panel() {
   if ! apply_panel_identity_rename; then
     echo "❌ 身份改名写入失败，更新已中止"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -5006,6 +5125,11 @@ update_panel() {
   # 后 .env 与容器都已是新态，事后追认无从分辨挂错没挂错。
   local update_expected_sqlite_volume
   update_expected_sqlite_volume=$(panel_sqlite_volume_name)
+  # R18-A2-05：回滚恢复数据库的目标卷——钉键后的有效卷名（与自检
+  # 期望同源）。备份 .env 是钉键前的（可能无键），回滚时不能再从
+  # 恢复后的 .env 推导卷名（无键回退 sqlite_data 会指错卷），故在
+  # 此定格进全局供 rollback_panel_update 使用。
+  UPDATE_ROLLBACK_SQLITE_VOLUME="$update_expected_sqlite_volume"
   # A2-02：PG 部署同点定格 PG 卷期望（口径同上：重建前取，事后
   # 追认无从分辨），自检在 SQLite 自检之后并列执行。
   local update_expected_postgres_volume=""
@@ -5020,7 +5144,7 @@ update_panel() {
   if ! panel_reconcile_network_label; then
     echo "🛑 存量网络标签对账未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -5028,10 +5152,13 @@ update_panel() {
   fi
 
   echo "🚀 原地重建更新后的服务..."
+  # R18-A2-05：自此新版本后端可能启动并前向迁移数据库，回滚必须
+  # 恢复数据库（见 rollback_panel_update 的门控）。
+  PANEL_UPDATE_REBUILD_STARTED=1
   if ! start_panel_after_update "$CURRENT_DB_TYPE"; then
     echo "🛑 新版本启动失败"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -5041,7 +5168,7 @@ update_panel() {
   if ! verify_panel_update_sqlite_volume "$update_expected_sqlite_volume"; then
     echo "🛑 升级后卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -5053,7 +5180,7 @@ update_panel() {
   if [[ "$CURRENT_DB_TYPE" == "postgres" ]] && ! verify_panel_update_postgres_volume "$update_expected_postgres_volume"; then
     echo "🛑 升级后 PG 卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi

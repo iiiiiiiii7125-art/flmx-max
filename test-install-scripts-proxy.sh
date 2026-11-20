@@ -9974,6 +9974,11 @@ YAML
     UPDATE_BACKUP_DIR="$FIXTURE_DIR/backup"
     mkdir -p "$UPDATE_BACKUP_DIR"
     cp -p "$FIXTURE_DIR/.env" "$FIXTURE_DIR/docker-compose.yml" "$UPDATE_BACKUP_DIR/"
+    # R18-A2-05：真实备份恒含数据库备份——回滚恢复以它为源，夹具
+    # 须同契约建 sqlite/gost.db，否则回滚的数据库恢复在夹具里恒
+    # 以“备份缺失”失败。
+    mkdir -p "$UPDATE_BACKUP_DIR/sqlite"
+    : > "$UPDATE_BACKUP_DIR/sqlite/gost.db"
   }
   pull_panel_update_images() { return 0; }
 }
@@ -10094,6 +10099,205 @@ test_panel_update_volume_check_rolls_back_on_mismatch() (
   grep -q 'sqlite_data' "$dir/update.log" || fail "FIX199-B: the self-check failure must name the expected recorded volume"
   grep -q '已恢复更新前版本' "$dir/update.log" || fail "FIX199-B: a self-check failure must roll back to the pre-update version"
   diff -q "$dir/env.pristine" "$dir/.env" >/dev/null || fail "FIX199-B: rollback after a self-check failure must restore the pre-update .env verbatim"
+)
+
+# R18-A2-05 回滚数据库恢复夹具（SQLite）：卷内为新版本迁移后内容
+# （gost.db 已前向迁移＋残留新版 -wal），备份为更新前内容；docker
+# 桩把恢复拷卷的 -v 映射改写到夹具目录后实际执行，compose/健康/
+# 网络标签桩只记调用。夹具根目录记 ROLLBACK_FIXTURE_DIR、调用记
+# 录记 ROLLBACK_CALL_LOG。调用方置 UPDATE_BACKUP_DIR、PANEL_*_
+# CONTAINER、PANEL_UPDATE_REBUILD_STARTED 后调 rollback_panel_update。
+setup_rollback_sqlite_fixture() {
+  ROLLBACK_FIXTURE_DIR=$(mktemp -d)
+  local work="$ROLLBACK_FIXTURE_DIR"
+  mkdir -p "$work/vol" "$work/backup/sqlite"
+  printf 'PRE-UPDATE-DB' > "$work/backup/sqlite/gost.db"
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=sqlite\n' > "$work/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$work/docker-compose.yml"
+  cp -p "$work/.env" "$work/backup/.env"
+  cp -p "$work/docker-compose.yml" "$work/backup/docker-compose.yml"
+  printf 'MIGRATED-DB' > "$work/vol/gost.db"
+  printf 'stale-wal' > "$work/vol/gost.db-wal"
+  ROLLBACK_CALL_LOG="$work/calls.log"
+  : > "$ROLLBACK_CALL_LOG"
+
+  docker() {
+    case "$1" in
+      inspect) return 0 ;;
+      stop)
+        printf 'stop %s\n' "$*" >> "$ROLLBACK_CALL_LOG"
+        return 0
+        ;;
+      run)
+        local payload="${!#}"
+        payload=$(printf '%s' "$payload" | sed -e "s|/data/|$ROLLBACK_FIXTURE_DIR/vol/|g" -e "s|/backup/|$ROLLBACK_FIXTURE_DIR/backup/sqlite/|g")
+        printf 'docker-run-restore\n' >> "$ROLLBACK_CALL_LOG"
+        sh -c "$payload"
+        ;;
+      ps)
+        printf '%s\n' "flmx-panel-backend" "flmx-panel-frontend"
+        return 0
+        ;;
+    esac
+    return 0
+  }
+  run_panel_compose() {
+    printf 'compose %s\n' "$*" >> "$ROLLBACK_CALL_LOG"
+    return 0
+  }
+  panel_reconcile_network_label() { return 0; }
+  wait_for_backend_healthy() { return 0; }
+}
+
+# R18-A2-05：更新回滚必须恢复数据库——新版本后端启动时已执行前
+# 向 schema 迁移、随后健康检查失败时，只恢复配置会让旧容器跑在
+# 新 schema 上。本例以卷/备份双夹具直验 rollback_panel_update：
+# 卷内为迁移后内容、备份为更新前内容，回滚后卷内容必须回到备份
+# 态、陈旧 -wal 须清掉；旧实现不恢复数据库，本例必红。
+test_panel_update_rollback_restores_sqlite_database() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  setup_rollback_sqlite_fixture
+
+  cd "$ROLLBACK_FIXTURE_DIR"
+  UPDATE_BACKUP_DIR="$ROLLBACK_FIXTURE_DIR/backup"
+  PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+  PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
+  PANEL_DEPLOY_DIR="$ROLLBACK_FIXTURE_DIR"
+  PANEL_UPDATE_REBUILD_STARTED=1
+  UPDATE_ROLLBACK_SQLITE_VOLUME="fixture-sqlite-vol"
+
+  rollback_panel_update "sqlite" >"$ROLLBACK_FIXTURE_DIR/rollback.log" 2>&1 || \
+    fail "R18-A2-05: rollback after a rebuild must succeed when the backup is intact"
+  assert_equals "PRE-UPDATE-DB" "$(cat "$ROLLBACK_FIXTURE_DIR/vol/gost.db")" \
+    "R18-A2-05: rollback must restore the volume database from the update backup"
+  [[ ! -e "$ROLLBACK_FIXTURE_DIR/vol/gost.db-wal" ]] || \
+    fail "R18-A2-05: rollback must clear the migrated -wal left by the new version"
+  grep -q '已恢复更新前 SQLite 数据库' "$ROLLBACK_FIXTURE_DIR/rollback.log" || \
+    fail "R18-A2-05: the database restore must be named in the rollback output"
+  # 顺序：先停后端、再拷卷、最后拉起——不得在活写者眼皮底下换库。
+  local stop_line run_line up_line
+  stop_line=$(grep -n '^stop ' "$ROLLBACK_CALL_LOG" | head -n 1 | cut -d: -f1)
+  run_line=$(grep -n '^docker-run-restore$' "$ROLLBACK_CALL_LOG" | head -n 1 | cut -d: -f1)
+  up_line=$(grep -n '^compose up' "$ROLLBACK_CALL_LOG" | head -n 1 | cut -d: -f1)
+  [[ -n "$stop_line" && -n "$run_line" && -n "$up_line" ]] || \
+    fail "R18-A2-05: rollback must stop the backend, restore the volume, then relaunch (log: $(cat "$ROLLBACK_CALL_LOG"))"
+  [[ "$stop_line" -lt "$run_line" && "$run_line" -lt "$up_line" ]] || \
+    fail "R18-A2-05: rollback order must be stop < restore < relaunch"
+  rm -rf "$ROLLBACK_FIXTURE_DIR"
+)
+
+# R18-A2-05（PG 面）：回滚必须把 postgres.sql 备份导回数据库——
+# 删库重建再导入，停后端在先、拉起在后；旧实现不恢复数据库，本
+# 例必红。
+test_panel_update_rollback_restores_postgres_database() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/backup"
+  printf 'PRE-UPDATE-PG-DUMP\n' > "$work/backup/postgres.sql"
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=postgres\nPOSTGRES_DB=flmx_panel\nPOSTGRES_USER=flmx_panel\nPOSTGRES_PASSWORD=test-pg-pass\nDATABASE_URL=postgresql://flmx_panel:test-pg-pass@postgres:5432/flmx_panel?sslmode=disable\n' > "$work/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$work/docker-compose.yml"
+  cp -p "$work/.env" "$work/backup/.env"
+  cp -p "$work/docker-compose.yml" "$work/backup/docker-compose.yml"
+  printf 'MIGRATED-PG-DB' > "$work/pgdb"
+  local call_log="$work/calls.log"
+  : > "$call_log"
+
+  cd "$work"
+  UPDATE_BACKUP_DIR="$work/backup"
+  PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+  PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
+  PANEL_DEPLOY_DIR="$work"
+  PANEL_UPDATE_REBUILD_STARTED=1
+
+  docker() {
+    case "$1" in
+      inspect) return 0 ;;
+      stop)
+        printf 'stop %s\n' "$*" >> "$call_log"
+        return 0
+        ;;
+      exec)
+        # psql 仿真：-c DROP 清库、-c CREATE 空操作、无 -c 即自 stdin 导入。
+        if [[ "$*" == *'DROP DATABASE'* ]]; then
+          printf 'drop\n' >> "$call_log"
+          : > "$work/pgdb"
+          return 0
+        fi
+        if [[ "$*" == *'CREATE DATABASE'* ]]; then
+          printf 'create\n' >> "$call_log"
+          return 0
+        fi
+        printf 'import\n' >> "$call_log"
+        cat > "$work/pgdb"
+        return 0
+        ;;
+      ps)
+        printf '%s\n' "flmx-panel-backend" "flmx-panel-frontend" "flmx-panel-postgres"
+        return 0
+        ;;
+    esac
+    return 0
+  }
+  run_panel_compose() {
+    printf 'compose %s\n' "$*" >> "$call_log"
+    return 0
+  }
+  panel_reconcile_network_label() { return 0; }
+  wait_for_postgres_healthy() { return 0; }
+  wait_for_backend_healthy() { return 0; }
+
+  rollback_panel_update "postgres" >"$work/rollback.log" 2>&1 || \
+    fail "R18-A2-05: postgres rollback after a rebuild must succeed when the backup is intact"
+  assert_equals "PRE-UPDATE-PG-DUMP" "$(cat "$work/pgdb")" \
+    "R18-A2-05: rollback must restore the postgres database from the update backup"
+  grep -q '已恢复更新前 PostgreSQL 数据库' "$work/rollback.log" || \
+    fail "R18-A2-05: the postgres database restore must be named in the rollback output"
+  local stop_line drop_line import_line up_line
+  stop_line=$(grep -n '^stop ' "$call_log" | head -n 1 | cut -d: -f1)
+  drop_line=$(grep -n '^drop$' "$call_log" | head -n 1 | cut -d: -f1)
+  import_line=$(grep -n '^import$' "$call_log" | head -n 1 | cut -d: -f1)
+  up_line=$(grep -n '^compose up -d --force-recreate' "$call_log" | head -n 1 | cut -d: -f1)
+  [[ -n "$stop_line" && -n "$drop_line" && -n "$import_line" && -n "$up_line" ]] || \
+    fail "R18-A2-05: postgres rollback must stop, drop/import, then relaunch (log: $(cat "$call_log"))"
+  [[ "$stop_line" -lt "$drop_line" && "$drop_line" -lt "$import_line" && "$import_line" -lt "$up_line" ]] || \
+    fail "R18-A2-05: postgres rollback order must be stop < drop/import < relaunch"
+  rm -rf "$work"
+)
+
+# R18-A2-05 门控面：重建前的失败（激活/改名/网络标签）新版本从
+# 未启动、数据库未被触及，回滚须跳过数据库恢复、沿用既有纯配置
+# 回滚——卷内容一字不动、也不得多一次拷卷调用。
+test_panel_update_rollback_skips_db_restore_before_rebuild() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  setup_rollback_sqlite_fixture
+
+  cd "$ROLLBACK_FIXTURE_DIR"
+  UPDATE_BACKUP_DIR="$ROLLBACK_FIXTURE_DIR/backup"
+  PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+  PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
+  PANEL_DEPLOY_DIR="$ROLLBACK_FIXTURE_DIR"
+  PANEL_UPDATE_REBUILD_STARTED=""
+  UPDATE_ROLLBACK_SQLITE_VOLUME="fixture-sqlite-vol"
+
+  rollback_panel_update "sqlite" >"$ROLLBACK_FIXTURE_DIR/rollback.log" 2>&1 || \
+    fail "R18-A2-05: rollback before any rebuild must succeed"
+  assert_equals "MIGRATED-DB" "$(cat "$ROLLBACK_FIXTURE_DIR/vol/gost.db")" \
+    "R18-A2-05: rollback before a rebuild must leave the untouched database alone"
+  [[ -e "$ROLLBACK_FIXTURE_DIR/vol/gost.db-wal" ]] || \
+    fail "R18-A2-05: rollback before a rebuild must not touch the volume at all"
+  grep -q '无需恢复数据库' "$ROLLBACK_FIXTURE_DIR/rollback.log" || \
+    fail "R18-A2-05: the skipped database restore must be named in the rollback output"
+  grep -q '^docker-run-restore$' "$ROLLBACK_CALL_LOG" && \
+    fail "R18-A2-05: rollback before a rebuild must not invoke the volume restore"
+  rm -rf "$ROLLBACK_FIXTURE_DIR"
 )
 
 # FIX199-B: 升级后卷名自检·已有键路径两幕——身份键已是现行名、
@@ -13412,5 +13616,8 @@ test_panel_update_equal_ports_rejected
 test_panel_preflight_equal_ports_rejected
 test_panel_migrate_images_pinned_to_digest
 test_panel_migrate_backup_copy_is_0600
+test_panel_update_rollback_restores_sqlite_database
+test_panel_update_rollback_restores_postgres_database
+test_panel_update_rollback_skips_db_restore_before_rebuild
 
 echo "install script tests passed"
