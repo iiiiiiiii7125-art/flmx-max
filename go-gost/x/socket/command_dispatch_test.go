@@ -33,6 +33,7 @@ func TestMutationCommandsAreSerialized(t *testing.T) {
 		"AddLimiters", "UpdateLimiters", "DeleteLimiters",
 		"AddCLimiters", "UpdateCLimiters", "DeleteCLimiters",
 		"SetProtocol", "SetRestartSchedule", "SwapSet", "UpgradeAgent", "RollbackAgent", "UninstallAgent",
+		"TunnelTLSIssue",
 	}
 	for _, command := range mutations {
 		if !isMutationCommand(command) {
@@ -47,7 +48,7 @@ func TestMutationCommandsAreSerialized(t *testing.T) {
 }
 
 func TestReadOnlyCommandsRemainBoundedAsync(t *testing.T) {
-	for _, command := range []string{"TcpPing", "UdpPing", "ServiceMonitorCheck", "SwapInfo"} {
+	for _, command := range []string{"TcpPing", "UdpPing", "ServiceMonitorCheck", "SwapInfo", "TunnelTLSStatus"} {
 		if isMutationCommand(command) {
 			t.Fatalf("expected %s to remain a read-only command", command)
 		}

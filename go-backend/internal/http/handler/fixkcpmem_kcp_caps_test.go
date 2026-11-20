@@ -111,7 +111,7 @@ func TestFixKCPMemChainTierWiring(t *testing.T) {
 	// 两面 metadata 逐字同源（同节点对同隧道两端一致）。
 	h := &Handler{jwtSecret: fixkTestSecret}
 	node := &nodeRecord{ID: 2, ServerIPv4: "10.0.0.2"}
-	svcs := h.buildTunnelChainServiceConfig(42, tunnelRuntimeNode{NodeID: 2, Protocol: "kcp", Port: 24001, ChainType: 3}, node, 1)
+	svcs := h.buildTunnelChainServiceConfig(42, tunnelRuntimeNode{NodeID: 2, Protocol: "kcp", Port: 24001, ChainType: 3}, node, 1, nil, nil)
 	if len(svcs) != 1 {
 		t.Fatalf("expected one service, got %d", len(svcs))
 	}
@@ -121,7 +121,7 @@ func TestFixKCPMemChainTierWiring(t *testing.T) {
 	}
 	chain, err := h.buildTunnelChainConfig(42, 1,
 		[]tunnelRuntimeNode{{NodeID: 2, Protocol: "kcp", Port: 24001, ConnectIP: "10.0.0.2"}},
-		map[int64]*nodeRecord{1: {ID: 1, ServerIPv4: "10.0.0.1"}, 2: node}, "")
+		map[int64]*nodeRecord{1: {ID: 1, ServerIPv4: "10.0.0.1"}, 2: node}, "", nil, []int64{1})
 	if err != nil {
 		t.Fatalf("build chain: %v", err)
 	}

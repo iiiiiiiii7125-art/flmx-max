@@ -45,17 +45,17 @@ func ku1AssertUDPListenerKeepAlive(t *testing.T, surface string, service map[str
 
 func TestKU1TunnelListenerConfigUDPKeepAlive(t *testing.T) {
 	ku1AssertUDPListenerKeepAlive(t, "buildTunnelListenerConfig(udp)",
-		map[string]interface{}{"listener": buildTunnelListenerConfig("udp", "", kcpTierSmall, false)})
+		map[string]interface{}{"listener": buildTunnelListenerConfig("udp", "", kcpTierSmall, false, nil)})
 	ku1AssertUDPListenerKeepAlive(t, "buildTunnelListenerConfig(UDP)",
-		map[string]interface{}{"listener": buildTunnelListenerConfig("UDP", "", kcpTierSmall, false)})
+		map[string]interface{}{"listener": buildTunnelListenerConfig("UDP", "", kcpTierSmall, false, nil)})
 
 	for _, protocol := range []string{"tcp", "tls", "mtls", "mtcp", "ws", "wss", "mws", "mwss"} {
-		listener := buildTunnelListenerConfig(protocol, "", kcpTierSmall, false)
+		listener := buildTunnelListenerConfig(protocol, "", kcpTierSmall, false, nil)
 		if _, hasMetadata := listener["metadata"]; hasMetadata {
 			t.Fatalf("protocol %s must not gain listener metadata, got %v", protocol, listener)
 		}
 	}
-	kcp := buildTunnelListenerConfig("kcp", "", kcpTierSmall, false)
+	kcp := buildTunnelListenerConfig("kcp", "", kcpTierSmall, false, nil)
 	kcpMetadata, _ := kcp["metadata"].(map[string]interface{})
 	if kcpMetadata == nil || kcpMetadata["kcp.mode"] != "fast3" {
 		t.Fatalf("kcp listener metadata must be preserved, got %v", kcp)
@@ -76,7 +76,7 @@ func TestKU1UDPGenerationSurfaceEnumeration(t *testing.T) {
 		chainType := chainType
 		surfaces[map[int]string{2: "本地链中段服务", 3: "本地链出口服务"}[chainType]] = func() map[string]interface{} {
 			chain := tunnelRuntimeNode{NodeID: 5, Protocol: "udp", Port: 24001, ChainType: chainType}
-			services := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99, chain, node, 1)
+			services := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99, chain, node, 1, nil, nil)
 			if len(services) != 1 {
 				t.Fatalf("chain type %d: expected 1 service, got %d", chainType, len(services))
 			}
@@ -116,7 +116,7 @@ func TestKU1ChainServiceListenAddrByProtocol(t *testing.T) {
 	}
 	for _, tc := range cases {
 		chain := tunnelRuntimeNode{NodeID: 5, Protocol: tc.protocol, Port: 24001, ChainType: 3}
-		services := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99, chain, node, 1)
+		services := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99, chain, node, 1, nil, nil)
 		if len(services) != 1 {
 			t.Fatalf("protocol %s: expected 1 service, got %d", tc.protocol, len(services))
 		}

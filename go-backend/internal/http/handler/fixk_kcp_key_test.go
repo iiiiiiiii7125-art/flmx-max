@@ -52,8 +52,8 @@ func TestFixKKCPBuildersCarryDerivedKey(t *testing.T) {
 	if err != nil || key == "" {
 		t.Fatalf("tunnelKCPKey: key=%q err=%v", key, err)
 	}
-	dialerMD := fixkKCPMetadata(t, buildTunnelDialerConfig("kcp", key, kcpTierSmall, false))
-	listenerMD := fixkKCPMetadata(t, buildTunnelListenerConfig("kcp", key, kcpTierSmall, false))
+	dialerMD := fixkKCPMetadata(t, buildTunnelDialerConfig("kcp", key, kcpTierSmall, false, nil))
+	listenerMD := fixkKCPMetadata(t, buildTunnelListenerConfig("kcp", key, kcpTierSmall, false, nil))
 	// 两端逐字同源（整份 metadata 相等，含 key/crypt）。
 	if !reflect.DeepEqual(dialerMD, listenerMD) {
 		t.Fatalf("dialer/listener metadata drift:\n dialer=%v\n listener=%v", dialerMD, listenerMD)

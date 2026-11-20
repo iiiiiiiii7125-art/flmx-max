@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"go-backend/internal/config"
 	"go-backend/internal/http/response"
 	"go-backend/internal/kernel"
 	"go-backend/internal/security"
@@ -8873,6 +8874,18 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 	if state.Type != 2 {
 		return createdChains, createdServices, nil
 	}
+	// R18-F1-01 (D-3): distribute tunnel certificates to every node
+	// of this tunnel before rendering, then gate the render on the
+	// resulting ready set. ensure() never fails the deploy for a
+	// node that was never issued certificates (those segments keep
+	// the legacy form); it fails the deploy fail-closed only when a
+	// previously-issued node still has no certificate after the
+	// re-issue attempt — nothing is pushed in that case, so the
+	// running chain keeps its last-good config.
+	tlsReady, err := h.tunnelTLSReadyForState(state)
+	if err != nil {
+		return createdChains, createdServices, err
+	}
 
 	for _, inNode := range state.InNodes {
 		targets := state.OutNodes
@@ -8881,7 +8894,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 		} else {
 			targets = h.orderBestExitTargets(state.TunnelID, inNode.NodeID, targets)
 		}
-		chainData, err := h.buildTunnelChainConfig(state.TunnelID, inNode.NodeID, targets, state.Nodes, state.IPPreference, state.TunnelProtocol)
+		chainData, err := h.buildTunnelChainConfig(state.TunnelID, inNode.NodeID, targets, state.Nodes, state.IPPreference, tlsReady, tunnelRuntimeNodeIDs(state.InNodes), state.TunnelProtocol)
 		if err != nil {
 			return createdChains, createdServices, err
 		}
@@ -8908,7 +8921,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 				noteTunnelRuntimeSkipped(state, chainNode.NodeID, "offline", "节点状态为离线", "转发链/服务")
 				continue
 			}
-			chainData, err := h.buildTunnelChainConfig(state.TunnelID, chainNode.NodeID, nextTargets, state.Nodes, state.IPPreference, state.TunnelProtocol)
+			chainData, err := h.buildTunnelChainConfig(state.TunnelID, chainNode.NodeID, nextTargets, state.Nodes, state.IPPreference, tlsReady, tunnelRuntimeNodeIDs(hop), state.TunnelProtocol)
 			if err != nil {
 				return createdChains, createdServices, err
 			}
@@ -8921,7 +8934,13 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 			}
 			createdChains = append(createdChains, chainNode.NodeID)
 
-			serviceData := h.buildTunnelChainServiceConfig(state.TunnelID, chainNode, state.Nodes[chainNode.NodeID], len(nextTargets), state.TunnelProtocol)
+			// R18-F1-01: this listener's dialers are the entry
+			// nodes (first hop) or the previous hop's nodes.
+			dialerIDs := tunnelRuntimeNodeIDs(state.InNodes)
+			if i > 0 {
+				dialerIDs = tunnelRuntimeNodeIDs(state.ChainHops[i-1])
+			}
+			serviceData := h.buildTunnelChainServiceConfig(state.TunnelID, chainNode, state.Nodes[chainNode.NodeID], len(nextTargets), tlsReady, dialerIDs, state.TunnelProtocol)
 			if err := h.addTunnelServiceOnNodeWithMode(chainNode.NodeID, state.TunnelID, serviceData, upsert); err != nil {
 				if reason, ok := deferTunnelRuntimeApplyReason(err); ok {
 					noteTunnelRuntimeSkipped(state, chainNode.NodeID, reason, err.Error(), "服务")
@@ -8939,7 +8958,13 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 			noteTunnelRuntimeSkipped(state, outNode.NodeID, "offline", "节点状态为离线", "服务")
 			continue
 		}
-		serviceData := h.buildTunnelChainServiceConfig(state.TunnelID, outNode, state.Nodes[outNode.NodeID], 1, state.TunnelProtocol)
+		// R18-F1-01: the exit listener's dialers are the entry
+		// nodes (no middle hops) or the last hop's nodes.
+		dialerIDs := tunnelRuntimeNodeIDs(state.InNodes)
+		if n := len(state.ChainHops); n > 0 {
+			dialerIDs = tunnelRuntimeNodeIDs(state.ChainHops[n-1])
+		}
+		serviceData := h.buildTunnelChainServiceConfig(state.TunnelID, outNode, state.Nodes[outNode.NodeID], 1, tlsReady, dialerIDs, state.TunnelProtocol)
 		if err := h.addTunnelServiceOnNodeWithMode(outNode.NodeID, state.TunnelID, serviceData, upsert); err != nil {
 			if reason, ok := deferTunnelRuntimeApplyReason(err); ok {
 				noteTunnelRuntimeSkipped(state, outNode.NodeID, reason, err.Error(), "服务")
@@ -8987,7 +9012,19 @@ func (h *Handler) applyBestExitChainOrder(tunnelID, ownerNodeID int64, outNodes 
 			nodes[target.NodeID] = node
 		}
 	}
-	chainData, err := h.buildTunnelChainConfig(tunnelID, ownerNodeID, targets, nodes, ipPreference)
+	// R18-F1-01: best-exit reorder re-renders only the dialer; gate
+	// it on the current ready set (pure DB read, no distribution —
+	// the next full redeploy picks up newly-ready nodes). The dialer
+	// group is unknown here (the listener's dialers are the tunnel's
+	// full entry group, not just this owner), so the group is nil and
+	// the dialer never flips to verified on a reorder — flipping it
+	// on both-endpoints-ready alone could point a verified dialer at
+	// a still-legacy listener and break the leg.
+	tlsIDs := []int64{ownerNodeID}
+	for _, t := range targets {
+		tlsIDs = append(tlsIDs, t.NodeID)
+	}
+	chainData, err := h.buildTunnelChainConfig(tunnelID, ownerNodeID, targets, nodes, ipPreference, h.tunnelTLSReadyMap(tlsIDs), nil)
 	if err != nil {
 		log.Printf("best_exit: build chain failed tunnel=%d owner=%d err=%v", tunnelID, ownerNodeID, err)
 		return err
@@ -9300,7 +9337,7 @@ func (h *Handler) tunnelKCPKey(tunnelID int64, tunnelProtocol string, segmentPro
 	return key, nil
 }
 
-func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string, stateProtocol ...string) (map[string]interface{}, error) {
+func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string, tlsReady map[int64]bool, dialerGroup []int64, stateProtocol ...string) (map[string]interface{}, error) {
 	fromNode := nodes[fromNodeID]
 	if fromNode == nil {
 		return nil, errors.New("节点不存在")
@@ -9338,6 +9375,28 @@ func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targe
 			return nil, errors.New("节点端口不能为空")
 		}
 		protocol := effectiveSegmentProtocol(target.Protocol, tunnelProtocol)
+		// R18-F1-01 (D-3) migration gate, per segment: this dialer
+		// leg renders verified TLS only when the segment protocol is
+		// TLS-family AND this dialer, its target, and every other
+		// node that dials the same target are TLS-ready (certs
+		// distributed + verified). The dialer must mirror the
+		// listener's flip predicate exactly: the listener flips
+		// only when it AND all its dialers are ready (a verified
+		// listener requires client certificates, so one legacy
+		// dialer would be rejected). Checking only both endpoints
+		// would point a verified dialer at a still-legacy listener
+		// — the peer presents a random self-signed certificate,
+		// verification fails, and the leg breaks. dialerGroup is
+		// the full set of nodes that dial these targets (the
+		// siblings of fromNode, including fromNode); an empty or
+		// unknown group never flips the dialer. Any other
+		// combination keeps the legacy form (no "tls" key). The
+		// two ends flip together, one segment at a time, so a
+		// running chain never breaks mid-migration.
+		var dialerTLS map[string]interface{}
+		if isVerifiedTLSTunnelProtocol(protocol) && tlsReady[fromNodeID] && tlsReady[target.NodeID] && len(dialerGroup) > 0 && allTunnelTLSReady(tlsReady, dialerGroup) {
+			dialerTLS = tunnelTLSDialerConfig(target.NodeID)
+		}
 		connector := map[string]interface{}{
 			"type": "relay",
 		}
@@ -9348,7 +9407,7 @@ func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targe
 			"name":      fmt.Sprintf("node_%d", idx+1),
 			"addr":      processServerAddress(fmt.Sprintf("%s:%d", host, port)),
 			"connector": connector,
-			"dialer":    buildTunnelDialerConfig(protocol, kcpKey, fromTier, fecOff),
+			"dialer":    buildTunnelDialerConfig(protocol, kcpKey, fromTier, fecOff, dialerTLS),
 		})
 	}
 
@@ -9390,7 +9449,7 @@ func runtimeStrategyForTargets(owner tunnelRuntimeNode, targets []tunnelRuntimeN
 	return runtimeTunnelStrategy(strategy)
 }
 
-func (h *Handler) buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, node *nodeRecord, nextHopCandidateCount int, stateProtocol ...string) []map[string]interface{} {
+func (h *Handler) buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnelRuntimeNode, node *nodeRecord, nextHopCandidateCount int, tlsReady map[int64]bool, dialerNodeIDs []int64, stateProtocol ...string) []map[string]interface{} {
 	if node == nil {
 		return nil
 	}
@@ -9447,7 +9506,19 @@ func (h *Handler) buildTunnelChainServiceConfig(tunnelID int64, chainNode tunnel
 		"addr":    processServerAddress(net.JoinHostPort(strings.Trim(stripListenAddrPort(nodeListenAddrForProtocol(node, protocol)), "[]"), strconv.Itoa(chainNode.Port))),
 		"handler": handlerCfg,
 		// FIX-KCPMEM（P1-04）：监听面按本节点（node.ID）内存档位。
-		"listener": buildTunnelListenerConfig(protocol, kcpKey, kcpTierOrDefault(h.kcpTiersForNodes(node.ID), node.ID), kcpFecOff(h.kcpFecMode())),
+		// R18-F1-01（D-3）migration gate, per listener: this
+		// listener renders verified TLS only when the segment
+		// protocol is TLS-family AND this node is TLS-ready AND
+		// every node that dials this listener is TLS-ready. The
+		// last clause is load-bearing: a verified listener
+		// requires client certificates, so a single legacy dialer
+		// would be rejected and its chain leg would break. The
+		// caller passes the dialer set (entry nodes for the first
+		// hop, previous-hop nodes otherwise); an unknown (empty)
+		// dialer set never flips the listener. chainNode.NodeID
+		// is the listener identity (the node the dialers target);
+		// node is its record.
+		"listener": buildTunnelListenerConfig(protocol, kcpKey, kcpTierOrDefault(h.kcpTiersForNodes(node.ID), node.ID), kcpFecOff(h.kcpFecMode()), tunnelTLSListenerConfigFor(tlsReady, chainNode.NodeID, dialerNodeIDs, protocol)),
 	}
 	if chainNode.ChainType == 2 {
 		service["handler"].(map[string]interface{})["chain"] = fmt.Sprintf("chains_%d", tunnelID)
@@ -9582,6 +9653,84 @@ func isTLSTunnelProtocol(protocol string) bool {
 	return strings.EqualFold(strings.TrimSpace(defaultString(protocol, "tls")), "tls")
 }
 
+// isVerifiedTLSTunnelProtocol reports whether a tunnel segment
+// protocol carries its traffic over TLS and therefore takes part in
+// the R18-F1-01 verified-TLS scheme: tls/mtls (raw TLS) and wss/mwss
+// (TLS-wrapped WebSocket). tcp/udp/kcp/ws/mws/mtcp carry no TLS and
+// never get a TLS block, even on TLS-ready nodes. Note the existing
+// isTLSTunnelProtocol is narrower (tls only); do not reuse it here.
+func isVerifiedTLSTunnelProtocol(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "tls", "mtls", "wss", "mwss":
+		return true
+	default:
+		return false
+	}
+}
+
+// tunnelTLSDialerConfig returns the verified-TLS block for a dialer
+// that dials targetNodeID: verify the peer against the panel CA,
+// present this node's own certificate (verified listeners require a
+// client certificate — gost LoadServerConfig sets
+// RequireAndVerifyClientCert whenever a CA is configured), and pin
+// the peer identity to the target node's stable server name
+// (node-<id>.flmx.internal) instead of its possibly-changing IP.
+func tunnelTLSDialerConfig(targetNodeID int64) map[string]interface{} {
+	ca, cert, key := tunnelTLSAgentPaths()
+	return map[string]interface{}{
+		"secure":     true,
+		"caFile":     ca,
+		"certFile":   cert,
+		"keyFile":    key,
+		"serverName": config.TunnelTLSNodeServerName(targetNodeID),
+	}
+}
+
+// tunnelTLSListenerConfig returns the verified-TLS block for a
+// listener: serve this node's certificate and require + verify a
+// client certificate against the panel CA. With this block the
+// listener no longer falls back to BuildDefaultTLSConfig's random
+// self-signed certificate.
+func tunnelTLSListenerConfig() map[string]interface{} {
+	ca, cert, key := tunnelTLSAgentPaths()
+	return map[string]interface{}{
+		"certFile": cert,
+		"keyFile":  key,
+		"caFile":   ca,
+	}
+}
+
+// tunnelTLSListenerConfigFor applies the listener migration gate
+// and returns the verified-TLS block, or nil for the legacy form.
+// Verified rendering requires: a TLS-family segment protocol, the
+// listener node TLS-ready, and every dialer of this listener
+// TLS-ready. An empty dialer set means "unknown dialers" and never
+// flips the listener (fail-closed toward legacy).
+func tunnelTLSListenerConfigFor(tlsReady map[int64]bool, listenerNodeID int64, dialerNodeIDs []int64, protocol string) map[string]interface{} {
+	if !isVerifiedTLSTunnelProtocol(protocol) {
+		return nil
+	}
+	if listenerNodeID <= 0 || !tlsReady[listenerNodeID] {
+		return nil
+	}
+	if len(dialerNodeIDs) == 0 || !allTunnelTLSReady(tlsReady, dialerNodeIDs) {
+		return nil
+	}
+	return tunnelTLSListenerConfig()
+}
+
+// allTunnelTLSReady reports whether every node in ids is TLS-ready
+// (nil/empty ready map reads as not ready; a zero node id is never
+// ready — it has no certificate identity).
+func allTunnelTLSReady(ready map[int64]bool, ids []int64) bool {
+	for _, id := range ids {
+		if id <= 0 || !ready[id] {
+			return false
+		}
+	}
+	return true
+}
+
 // kcpCryptAlgorithm 是 KCP 段下发的加密算法（K1-01 修复）：
 // kcp-go 的 BlockCrypt 支持集里 aes-256 是最稳妥的强档——其
 // pbkdf2(key, salt) 派生恰好输出 32 字节，aes/aes-128/aes-192
@@ -9646,9 +9795,18 @@ func tunnelKCPMetadata(kcpKey string, tier kcpMemTier, fecOff bool) map[string]i
 	return metadata
 }
 
-func buildTunnelDialerConfig(protocol, kcpKey string, tier kcpMemTier, fecOff bool) map[string]interface{} {
+// buildTunnelDialerConfig renders one tunnel dialer. tlsCfg is the
+// verified-TLS block (tunnelTLSDialerConfig) when this segment is
+// gated to verified TLS, nil for the legacy form (no "tls" key — the
+// agent then loads the dialer unverified, exactly as before this
+// change). The gate lives in buildTunnelChainConfig; this builder
+// only attaches what it is given.
+func buildTunnelDialerConfig(protocol, kcpKey string, tier kcpMemTier, fecOff bool, tlsCfg map[string]interface{}) map[string]interface{} {
 	dialer := map[string]interface{}{
 		"type": protocol,
+	}
+	if len(tlsCfg) > 0 {
+		dialer["tls"] = tlsCfg
 	}
 	if isKCPTunnelProtocol(protocol) {
 		dialer["metadata"] = tunnelKCPMetadata(kcpKey, tier, fecOff)
@@ -9656,9 +9814,19 @@ func buildTunnelDialerConfig(protocol, kcpKey string, tier kcpMemTier, fecOff bo
 	return dialer
 }
 
-func buildTunnelListenerConfig(protocol, kcpKey string, tier kcpMemTier, fecOff bool) map[string]interface{} {
+// buildTunnelListenerConfig renders one tunnel listener. tlsCfg is
+// the verified-TLS block (tunnelTLSListenerConfig) when this listener
+// is gated to verified TLS, nil for the legacy form (no "tls" key —
+// the agent then falls back to its random self-signed default
+// certificate, exactly as before this change). The gate lives in
+// buildTunnelChainServiceConfig; this builder only attaches what it
+// is given.
+func buildTunnelListenerConfig(protocol, kcpKey string, tier kcpMemTier, fecOff bool, tlsCfg map[string]interface{}) map[string]interface{} {
 	listener := map[string]interface{}{
 		"type": protocol,
+	}
+	if len(tlsCfg) > 0 {
+		listener["tls"] = tlsCfg
 	}
 	if strings.EqualFold(strings.TrimSpace(protocol), "udp") {
 		// F-UDP-1: relay 是会话型协议，落在 UDP listener 上必须显式
