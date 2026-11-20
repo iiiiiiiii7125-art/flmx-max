@@ -90,7 +90,14 @@ type ProtocolCap struct {
 // {ARCH} are substituted by the agent; ArchMap translates GOARCH to the
 // release asset naming of the kernel project.
 type Download struct {
-	URL         string            `json:"url"`
+	URL string `json:"url"`
+	// R18-C2-02：LatestURL/ChecksumURL/LatestSum 是历史遗留字段，
+	// 不得使用——downloadSpec 的 default 分支已 fail-closed，任何
+	// 未配 Pinned 或 GitHubRepo 的 Download 均拒绝生成 spec，设置
+	// 这三个字段也不会再产生 checksumUrl 锚。字段本身保留（不删）
+	// 只是为了不改 Download 的序列化形态；GeoFile 的 ChecksumURL
+	//（split.go）是另一结构（GeoData 同源单锚残留，见 §八①），
+	// 不受本条影响。
 	LatestURL   string            `json:"latestUrl"`
 	ChecksumURL string            `json:"checksumUrl"`
 	LatestSum   string            `json:"latestChecksumUrl"`
@@ -500,13 +507,14 @@ func downloadSpec(d *Download, version, proxy string) (map[string]interface{}, e
 		}
 		spec["github"] = gh
 	default:
-		url, sum := d.LatestURL, d.LatestSum
-		if !latest {
-			url = strings.ReplaceAll(d.URL, "{VERSION}", version)
-			sum = strings.ReplaceAll(d.ChecksumURL, "{VERSION}", version)
-		}
-		spec["url"] = mirror(url)
-		spec["checksumUrl"] = mirror(sum)
+		// R18-C2-02：此前 default 分支按 URL+ChecksumURL 生成
+		// 单锚 checksumUrl spec——与本体同源的校验文件，一条线路
+		// 即可投放自洽的伪造（二进制、校验文件）对，退回旧审计
+		// C2-02 已修复的弱锚形态。该分支在现有 catalog 上是死代码
+		//（三个 Download 全部走 Pinned 或 GitHubRepo），但一旦被
+		// 未来新增的内核复用即悄悄退化，故 fail-closed：未配完整
+		// 性锚的 Download 一律拒绝生成 spec，不再发出 checksumUrl。
+		return nil, fmt.Errorf("内核下载未配置完整性锚（需 Pinned 或 GitHubRepo），拒绝生成 spec")
 	}
 	return spec, nil
 }

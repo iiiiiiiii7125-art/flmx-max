@@ -59,3 +59,28 @@ func TestFixB6EveryKernelSpecHasStrongAnchor(t *testing.T) {
 		}
 	}
 }
+
+// R18-C2-02：downloadSpec 的 default 分支是死代码，一旦被复用即发出
+// 单锚 checksumUrl（与本体同源的校验文件，一条线路即可投放自洽的
+// 伪造（二进制、校验文件）对，退回旧审计 C2-02 已修复的弱锚形态）。
+// 修法：default 分支 fail-closed——未配 Pinned 或 GitHubRepo 的
+// Download 一律拒绝生成 spec，不再发出 checksumUrl。
+// 回归钉：构造仅含 URL（+ChecksumURL）的 Download 调 downloadSpec；
+// 旧代码回含 checksumUrl 的 spec、err=nil——必红；修后返回错误——变绿。
+func TestR18C202DownloadSpecWithoutAnchorFailsClosed(t *testing.T) {
+	for _, d := range []*Download{
+		{URL: "https://example.com/x-{VERSION}.zip"},
+		{URL: "https://example.com/x-{VERSION}.zip", ChecksumURL: "https://example.com/x-{VERSION}.zip.sha256"},
+		{URL: "https://example.com/x-{VERSION}.zip", LatestURL: "https://example.com/x-latest.zip", LatestSum: "https://example.com/x-latest.zip.sha256"},
+	} {
+		spec, err := downloadSpec(d, "1.2.3", "")
+		if err == nil {
+			t.Fatalf("downloadSpec must fail closed for an unanchored Download, got spec=%v", spec)
+		}
+		if spec != nil {
+			if _, weak := spec["checksumUrl"]; weak {
+				t.Fatalf("unanchored Download must never yield a checksumUrl spec, got %v", spec)
+			}
+		}
+	}
+}
