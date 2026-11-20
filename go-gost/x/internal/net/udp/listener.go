@@ -126,6 +126,14 @@ func NewListener(conn net.PacketConn, cfg *ListenConfig) net.Listener {
 	if cfg.Backlog <= 0 {
 		cfg.Backlog = DefaultBacklog
 	}
+	if cfg.ReadBufferSize <= 0 {
+		// R18-D4-04: same defaulting as TTL/queue/backlog above. A
+		// zero buffer makes listenLoop read every datagram into a
+		// zero-length slice, silently discarding the whole payload
+		// with no error; MaxDatagramSize is the established default
+		// (listener/udp metadata).
+		cfg.ReadBufferSize = MaxDatagramSize
+	}
 
 	ln := &listener{
 		conn:    conn,
