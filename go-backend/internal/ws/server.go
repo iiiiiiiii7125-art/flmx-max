@@ -873,11 +873,15 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 				// 进实时广播。未知类型一律不广播（旧 default 全量广播是
 				// fail-open：未来新增 agent 上行类型会自动进入 monitor
 				// 可见集）。只记类型名，不记原文（原文可能含敏感数据）。
-				// R2-X2-02 例外：agent 解析前错误五型是封闭诊断集且多半
-				// 无 requestId 可挂靠（加密信封三型的 requestId 在未解
-				// 密内层、构造上不可得），其 message 是面板侧唯一能拿到
-				// 失败明示原因的通道——仅对这五型记下经单行化＋截断的
-				// message，仍不广播、不改 fail-closed。
+				// R2-X2-02 例外：agent 解析前错误六型是封闭诊断集，
+				// 其中解密前即失败的型（DecryptError / NoDecryptor /
+				// 解密前外层 StaleTimestamp 预筛）无 requestId 可挂靠
+				// （requestId 在未解密内层、构造上不可得），其 message
+				// 是面板侧唯一能拿到失败明示原因的通道——仅对这六型
+				// 记下经单行化＋截断的 message，仍不广播、不改
+				// fail-closed。解密后的内层拒绝（MissingInnerTimestamp
+				// / StaleTimestamp，R18-R2-D1-03）已带 requestId，
+				// 走 tryResolvePending 精确结清，不到这里。
 				// F2-05：在记日志之外，把该帧按连接关联到本节点最早
 				// 的在途命令并以点名真因结清——等待方不再等满泛化
 				// 超时才知道是时钟偏差/解密失败。
@@ -918,14 +922,17 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request, nodeID int64
 
 // agentPreParseErrorTypes 是 agent 在命令解析前即失败时回的封闭
 // 错误型集（go-gost/x/socket/websocket_reporter.go 的 sendErrorResponse
-// 调用点全集）。这五型的 message 由 agent 本地错误值生成，是诊断
-// 信息而非命令载荷。
+// 调用点全集）。这六型的 message 由 agent 本地错误值生成，是诊断
+// 信息而非命令载荷。R18-R2-D1-02：D1-01 新增的第六型
+// MissingInnerTimestamp 在此补齐，否则旧面板升新 agent 后面板
+// 的结构化原因映射漏掉它，日志侧走不到命名分支。
 var agentPreParseErrorTypes = map[string]bool{
-	"StaleTimestamp":  true,
-	"DecryptError":    true,
-	"NoDecryptor":     true,
-	"DecompressError": true,
-	"ParseError":      true,
+	"StaleTimestamp":        true,
+	"DecryptError":          true,
+	"NoDecryptor":           true,
+	"DecompressError":       true,
+	"ParseError":            true,
+	"MissingInnerTimestamp": true,
 }
 
 // sanitizeAgentLogText 是 agent 文本进日志前的统一脱敏口径（R18-C4-04）：
@@ -943,8 +950,8 @@ func sanitizeAgentLogText(s string) string {
 }
 
 // agentPreParseErrorReason 为 R2-X2-02 的日志侧关联口径：仅当消息
-// 类型属解析前错误五型时，提取其 message 并做日志安全化（换行折
-// 空格、防日志注入；按 256 rune 截断）。非五型或无 message 时返回
+// 类型属解析前错误六型时，提取其 message 并做日志安全化（换行折
+// 空格、防日志注入；按 256 rune 截断）。非六型或无 message 时返回
 // false，调用方维持只记类型名的既有口径。
 func agentPreParseErrorReason(msgType, msg string) (string, bool) {
 	if !agentPreParseErrorTypes[msgType] {
@@ -1199,11 +1206,14 @@ func (s *Server) failPendingForNode(nodeID int64, message string) {
 
 // failOldestPendingForNode 只结清该节点最早的一条在途命令
 // （F2-05）：agent 的解析前拒绝帧构造上不带 requestId（拒绝发
-// 生在解密/解析内层之前），无法精确认领是哪条命令被拒；命令
-// 按发送顺序被 agent 接收处理，最早在途者即最可能的被拒者。
-// 以真因结清它，等待方立即拿到点名原因，不再等满超时只见泛
-// 化文案；其余在途命令不受影响（它们已被 agent 正常解析）。
-// requestId 形如 <nodeID>_<unixnano>，以纳秒后缀定序。
+// 生在解密之前，requestId 在未解密内层、不可得），无法精确认领
+// 是哪条命令被拒；命令按发送顺序被 agent 接收处理，最早在途者
+// 即最可能的被拒者。解密后的内层拒绝（MissingInnerTimestamp /
+// StaleTimestamp，R18-R2-D1-03）已带 requestId，走 tryResolvePending
+// 精确结清，不到这里。以真因结清它，等待方立即拿到点名原因，
+// 不再等满超时只见泛化文案；其余在途命令不受影响（它们已被
+// agent 正常解析）。requestId 形如 <nodeID>_<unixnano>，以纳秒
+// 后缀定序。
 func (s *Server) failOldestPendingForNode(nodeID int64, message string) bool {
 	if s == nil {
 		return false
@@ -1241,9 +1251,9 @@ func (s *Server) failOldestPendingForNode(nodeID int64, message string) bool {
 	return true
 }
 
-// agentPreParseErrorCommandReason 把 agent 解析前错误五型映射
+// agentPreParseErrorCommandReason 把 agent 解析前错误六型映射
 // 为对等待方的点名结清文案（F2-05）：型别即真因（时钟偏差/
-// 解密失败等），附带 agent 自带 message 的安全化摘要。非五型
+// 解密失败等），附带 agent 自带 message 的安全化摘要。非六型
 // 返回 false。
 func agentPreParseErrorCommandReason(msgType, msg string) (string, bool) {
 	var base string
@@ -1258,6 +1268,12 @@ func agentPreParseErrorCommandReason(msgType, msg string) (string, bool) {
 		base = "节点拒绝命令：命令解压失败（DecompressError）"
 	case "ParseError":
 		base = "节点拒绝命令：命令帧解析失败（ParseError）"
+	case "MissingInnerTimestamp":
+		// R18-R2-D1-02：面板版本过旧（发不出内层时间戳）是本型
+		// 的首要成因，点名升级顺序；顺序门（upgrade.go）本应
+		// 在下发前拦住先升 agent，本分支是旧面板绕过门禁
+		// （如脚本直装新 agent）后的兜底诊断。
+		base = "节点拒绝命令：面板版本过旧（MissingInnerTimestamp），请先升级面板后重试"
 	default:
 		return "", false
 	}

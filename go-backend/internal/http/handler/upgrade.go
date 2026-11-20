@@ -584,6 +584,34 @@ func resolveLatestReleaseByChannel(channel string) (string, error) {
 	return "", fmt.Errorf("未找到%s版本号", releaseChannelLabel(normalizedChannel))
 }
 
+// checkAgentUpgradePanelCompatibility 是节点 agent 升级的顺序门
+// （R18-R2-D1-02）：自 D1-01 起新 agent 一刀切拒绝无内层时间戳
+// 的加密命令，而内层时间戳只有新面板才发。旧面板先把 agent 升
+// 到高于面板自身的版本，agent 重启连回后每条管理命令都被回
+// MissingInnerTimestamp，管理通道全死（转发面不受影响，节点在
+// 面板上仍显示在线、指标新鲜，只表现为每个管理命令都失败），
+// 直到面板升级才恢复。upgrade.md 只规定了面板升级顺序，从未
+// 拦住“先升 agent”这条路——这道门在下发前拦住它并点名原因。
+// 口径：目标版本高于面板版本即拒绝；相等或更低放行（老 agent
+// 收新面板的信封走外层时间戳校验，未知字段忽略，兼容）。
+// 面板版本为 "dev"（FLMX_VERSION 未设、源码直跑）时无法比出不
+// 兼容：dev 面板由源码现建，内层时间戳代码在树内，即放行；
+// 面板版本不可解析时 fail-closed 拒绝并点名请确认面板版本。
+func checkAgentUpgradePanelCompatibility(targetVersion string) error {
+	panel := currentPanelVersion()
+	if panel == "dev" {
+		return nil
+	}
+	cmp, err := compareVersions(targetVersion, panel)
+	if err != nil {
+		return fmt.Errorf("当前面板版本 %q 无法比较，已拒绝升级节点 agent，请先确认面板版本后再试", panel)
+	}
+	if cmp > 0 {
+		return fmt.Errorf("目标 agent 版本 %s 高于当前面板版本 %s：新版 agent 要求面板先升级（否则新 agent 会拒绝旧面板的全部管理命令），请先把面板升级到 %s 或更高版本，再升级节点 agent", targetVersion, panel, targetVersion)
+	}
+	return nil
+}
+
 func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	// R8-T-04: upgradeTimeout is 300s; the global 120s write cap
 	// truncated every slow upgrade's response.
@@ -634,6 +662,13 @@ func (h *Handler) nodeUpgrade(w http.ResponseWriter, r *http.Request) {
 	// 记录此后全走裸 tag 形态。下游的 TrimPrefix 是防御性容忍，
 	// 归一化后恒为 no-op。
 	version = normalizeAgentVersion(version)
+
+	// R18-R2-D1-02：顺序门——目标高于面板版本即拒绝下发（见
+	// checkAgentUpgradePanelCompatibility），在预热/派发之前。
+	if err := checkAgentUpgradePanelCompatibility(version); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 
 	// O9-005：目标版本低于节点当前版本时拒绝升级（防误降级；有意降级请用独立的
 	// nodeRollback 接口）。节点版本未知（未上报）时不拦截。
@@ -794,6 +829,13 @@ func (h *Handler) nodeBatchUpgrade(w http.ResponseWriter, r *http.Request) {
 	// R18-B8-04 (M-2): 与单节点升级同口径，入口统一归一化——整批
 	// 预热与各节点下发全走裸 tag 形态。
 	version = normalizeAgentVersion(version)
+
+	// R18-R2-D1-02：顺序门（与单节点升级同口径）——整批在派发前
+	// 一次拒绝，不逐节点报同一条原因。
+	if err := checkAgentUpgradePanelCompatibility(version); err != nil {
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		return
+	}
 
 	// S-02: 面板不再发送 downloadUrl/checksumURL，只发送 version。
 	// 1.7.7（KU5）：与单节点升级同口径停发 proxyUrl（agent 自行测速
