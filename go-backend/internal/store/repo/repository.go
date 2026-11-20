@@ -5406,6 +5406,16 @@ func importMonitorPermissions(tx *gorm.DB, rows []model.MonitorPermissionBackup,
 	return count, nil
 }
 
+// validImportedCredential reports whether an unmarshalled backup
+// credential can ever be used at login (OPEN-17): WebAuthn needs
+// both the credential ID (to find it) and the public key (to verify
+// the assertion). A `{}` credential unmarshals cleanly with both
+// empty and would otherwise land as a dead row — and, via the
+// OnConflict on id, could overwrite a good row with the same id.
+func validImportedCredential(credential webauthn.Credential) bool {
+	return len(credential.ID) > 0 && len(credential.PublicKey) > 0
+}
+
 // importPasskeys 恢复 passkey 段（R2-E3-F02）：按 user 归属落库，
 // 同 id 行按备份内容更新（整表段「备份为准」的既有恢复语义）。
 // 用户不存在的行跳过并计入 SkippedRows["passkeys"]（回执点名计
@@ -5427,6 +5437,14 @@ func importPasskeys(tx *gorm.DB, rows []model.PasskeyBackup, rep *importReport) 
 		if err := json.Unmarshal([]byte(p.CredentialJSON), &credential); err != nil {
 			rep.skip("passkeys")
 			rep.warnf("备份恢复：用户 #%d 的 passkey %q 凭据数据无法解析，已跳过未恢复", p.UserID, p.ID)
+			continue
+		}
+		if !validImportedCredential(credential) {
+			// OPEN-17: 凭据 ID 或公钥为空的凭据在登录面永不可用
+			// （空 ID 找不到、空公钥验不过），与无法解析的行同
+			// 口径跳过并逐行点名，不让死凭据落库或覆盖同 id 好行。
+			rep.skip("passkeys")
+			rep.warnf("备份恢复：用户 #%d 的 passkey %q 凭据 ID 或公钥为空，已跳过未恢复", p.UserID, p.ID)
 			continue
 		}
 		item := model.Passkey{
