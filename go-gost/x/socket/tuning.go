@@ -182,8 +182,11 @@ func tuneOutputTail(s string) string {
 func tuneShellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 
 // writeFileAtomic replaces path in one step, so a full disk or a crash
-// never leaves a half-written file behind.
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+// never leaves a half-written file behind. Variable form (same
+// signature and behavior) so tests can inject a write failure,
+// like the other tuning seams (tuneCommand, tuneLookPath,
+// tuneWrite).
+var writeFileAtomic = func(path string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
