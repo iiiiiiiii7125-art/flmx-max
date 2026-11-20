@@ -456,6 +456,260 @@ func (e swapEnv) convergeFstabFile() error {
 	return writeFileAtomic(e.fstabPath, []byte(next), 0o644)
 }
 
+// --- 卸载托管 Swap（R18-D2-02） -------------------------------------------
+//
+// 面板自卸载须一并处理面板托管的 /swapfile，否则卸载后节点上仍
+// 残留最高 32GB 的 swap 文件、fstab 行还在、swap 甚至继续生效，
+// 而面板上已无该节点、无删除入口。处置取严格口径：
+//   - 托管认定只认规范 fstab 行「<file> none swap sw 0 0」（面板
+//     SwapSet 与装机脚本写入的唯一形态）；无规范行但在用/在盘
+//     的 /swapfile 疑似人工或他方创建，一律保留并披露，不删；
+//   - 删除前先做 swapoff 安全校验（与 SwapSet 同口径：已用量大
+//     于可用内存、或可用内存读不到时不 swapoff），不安全时保留
+//     并披露，步骤判成功（Skipped）；
+//   - 顺序先断持久化（删 fstab 行）、再 swapoff、再删文件：任
+//     一步失败时失败文案须与机器实况一致，绝不谎报已删。
+// 容器形态不管理宿主机 Swap（SwapSet 同为拒绝），清理与预检都
+// 直接跳过。
+
+// swapCleanupReport 是托管 Swap 清理的逐项结果，口径与
+// hostTuningCleanupReport 同形：Removed 已删除、Skipped 因归属
+// 或安全守卫跳过（条目内含原因）、Failed 删除失败（条目内含原
+// 因与当前实际状态）。
+type swapCleanupReport struct {
+	Removed []string
+	Skipped []string
+	Failed  []string
+}
+
+// isCanonicalManagedFstabLine 判一行 fstab 是否为托管文件的规范
+// 条目行：六字段逐字等于「<file> none swap sw 0 0」。注释行、
+// 非规范参数行（defaults 等）、他方条目一律不算——写出规范行
+// 的只有面板 SwapSet 与装机脚本，别的形态都按非托管保留。
+func isCanonicalManagedFstabLine(line string, filePath string) bool {
+	f := strings.Fields(line)
+	return len(f) == 6 && f[0] == filePath && f[1] == "none" && f[2] == "swap" && f[3] == "sw" && f[4] == "0" && f[5] == "0"
+}
+
+// removeManagedFstabLines 从 fstab 内容里删掉全部规范托管行，
+// 其他行（注释、其他文件系统、非规范 swap 行、他方 swap 条目）
+// 逐字保留、顺序不变。无规范行时返回原内容、不改动。
+func removeManagedFstabLines(content string, filePath string) (string, bool) {
+	if !strings.Contains(content, filePath) {
+		return content, false
+	}
+	body := strings.TrimSuffix(content, "\n")
+	var lines []string
+	if body != "" {
+		lines = strings.Split(body, "\n")
+	}
+	out := make([]string, 0, len(lines))
+	removed := false
+	for _, line := range lines {
+		if isCanonicalManagedFstabLine(line, filePath) {
+			removed = true
+			continue
+		}
+		out = append(out, line)
+	}
+	if !removed {
+		return content, false
+	}
+	if len(out) == 0 {
+		return "", true
+	}
+	return strings.Join(out, "\n") + "\n", true
+}
+
+// managedFstabLinePresent 只读判定 fstab 是否含规范托管行；
+// fstab 不存在即无托管行，其他读错误如实返回（归属无法确认时
+// 调用方须按保留处理，不得当作无托管行删除）。
+func (e swapEnv) managedFstabLinePresent() (bool, error) {
+	content, err := os.ReadFile(e.fstabPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		if isCanonicalManagedFstabLine(line, e.filePath) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// removeManagedFstabLine 删掉 fstab 里的规范托管行（内容不变时
+// 不写盘）。fstab 不存在即无行可删。
+func (e swapEnv) removeManagedFstabLine() error {
+	content, err := os.ReadFile(e.fstabPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	next, changed := removeManagedFstabLines(string(content), e.filePath)
+	if !changed {
+		return nil
+	}
+	return writeFileAtomic(e.fstabPath, []byte(next), 0o644)
+}
+
+// swapUninstallAssessment 是卸载前对托管 Swap 的只读评估，供
+// ack 回执预告处置范围（将删除 / 将保留及原因）。
+type swapUninstallAssessment struct {
+	InContainer   bool
+	Managed       bool // fstab 含规范托管行
+	FilePresent   bool
+	Active        bool
+	FileSizeMB    int64
+	UsedMB        int64
+	MemAvailMB    int64
+	MemAvailOK    bool
+	SwapoffUnsafe bool // 在用且已用量大于可用内存
+	ReadErr       error
+}
+
+// assessManagedSwap 只读评估托管 Swap 现状，不动任何状态。容器
+// 形态直接返回 InContainer（宿主机 Swap 不归容器 agent 管）。
+func (e swapEnv) assessManagedSwap() swapUninstallAssessment {
+	var a swapUninstallAssessment
+	if e.inContainer() {
+		a.InContainer = true
+		return a
+	}
+	st, err := e.readState()
+	if err != nil {
+		a.ReadErr = err
+		return a
+	}
+	a.FilePresent = st.fileOnDisk
+	a.FileSizeMB = st.fileSizeMB
+	if st.managed != nil {
+		a.Active = true
+		a.UsedMB = st.managed.UsedMB
+	}
+	a.MemAvailMB = st.memAvailMB
+	a.MemAvailOK = st.memAvailOK
+	if a.Active && a.UsedMB > 0 && a.MemAvailOK {
+		a.SwapoffUnsafe = swapoffUnsafe(a.UsedMB, a.MemAvailMB)
+	}
+	managed, ferr := e.managedFstabLinePresent()
+	if ferr != nil {
+		a.ReadErr = ferr
+		return a
+	}
+	a.Managed = managed
+	return a
+}
+
+// warnings 把评估结论渲染成 ack 回执 warnings：无托管 Swap 时
+// 为空（回执保持既有形态）；其余情形各一条，点名将删除还是将
+// 保留、以及保留的原因与数字。
+func (a swapUninstallAssessment) warnings() []string {
+	if a.InContainer {
+		return nil
+	}
+	if a.ReadErr != nil {
+		return []string{fmt.Sprintf("卸载无法确认节点 Swap 状态（%v），将保留 /swapfile 与 fstab 行，请人工处理", a.ReadErr)}
+	}
+	if !a.Managed {
+		if !a.Active && !a.FilePresent {
+			return nil
+		}
+		return []string{fmt.Sprintf("检测到 /swapfile 在用或在盘（在盘约 %d MB），但 /etc/fstab 无面板托管行（/swapfile none swap sw 0 0），疑似人工或他方创建，卸载将保留，请人工处理", a.FileSizeMB)}
+	}
+	if a.Active && a.UsedMB > 0 {
+		if !a.MemAvailOK {
+			return []string{fmt.Sprintf("托管 Swap /swapfile 已用 %d MB，但无法读取当前可用内存（MemAvailable 缺失），不能确认 swapoff 是否安全，卸载将保留 /swapfile 与 fstab 行，请人工处理", a.UsedMB)}
+		}
+		if a.SwapoffUnsafe {
+			return []string{fmt.Sprintf("托管 Swap /swapfile 已用 %d MB，超过当前可用内存 %d MB，此时 swapoff 会把换出页压回内存，卸载将保留 /swapfile 与 fstab 行，请先降低内存占用或在低峰期重试", a.UsedMB, a.MemAvailMB)}
+		}
+	}
+	if a.FilePresent {
+		return []string{fmt.Sprintf("卸载将删除托管 Swap /swapfile（在盘约 %d MB）并删除其 /etc/fstab 托管行", a.FileSizeMB)}
+	}
+	return []string{"卸载将删除 /etc/fstab 中的托管 Swap 行（/swapfile 文件已不在盘）"}
+}
+
+// cleanupManagedSwap 执行托管 Swap 清理（卸载步骤用）。顺序：
+// 先断持久化（删 fstab 规范行）→ 删陈旧备份 → swapoff（如在
+// 用）→ 删文件。任一步失败即停，失败条目写明当前实际状态与人
+// 工补法；归属不明或 swapoff 不安全时保留并进 Skipped（步骤判
+// 成功，不阻塞卸载）。
+func (e swapEnv) cleanupManagedSwap(ctx context.Context) swapCleanupReport {
+	var rep swapCleanupReport
+	if e.inContainer() {
+		rep.Skipped = append(rep.Skipped, "容器形态无法管理宿主机 Swap，/swapfile 与 fstab 行保留")
+		return rep
+	}
+	st, err := e.readState()
+	if err != nil {
+		rep.Skipped = append(rep.Skipped, fmt.Sprintf("无法读取 Swap 状态（%v），不能确认 swapoff 是否安全，/swapfile 与 fstab 行保留，请人工处理", err))
+		return rep
+	}
+	managed, ferr := e.managedFstabLinePresent()
+	if ferr != nil {
+		rep.Skipped = append(rep.Skipped, fmt.Sprintf("无法读取 /etc/fstab（%v），不能确认托管归属，/swapfile 与 fstab 行保留，请人工处理", ferr))
+		return rep
+	}
+	if !managed {
+		if st.managed != nil || st.fileOnDisk {
+			state := "在盘未启用"
+			if st.managed != nil {
+				state = "正在启用"
+			}
+			rep.Skipped = append(rep.Skipped, fmt.Sprintf("/swapfile %s（在盘约 %d MB），但 /etc/fstab 无面板托管行（%s none swap sw 0 0），疑似人工或他方创建，卸载保留，请人工处理", state, st.fileSizeMB, e.filePath))
+		}
+		return rep
+	}
+	// 托管形态：swapoff 安全校验（与 SwapSet 同口径）。
+	if st.managed != nil && st.managed.UsedMB > 0 {
+		if !st.memAvailOK {
+			rep.Skipped = append(rep.Skipped, fmt.Sprintf("托管 Swap /swapfile 已用 %d MB，但无法读取当前可用内存（MemAvailable 缺失），不能确认 swapoff 是否安全，/swapfile 与 fstab 行保留，请人工处理", st.managed.UsedMB))
+			return rep
+		}
+		if swapoffUnsafe(st.managed.UsedMB, st.memAvailMB) {
+			rep.Skipped = append(rep.Skipped, fmt.Sprintf("托管 Swap /swapfile 已用 %d MB，超过当前可用内存 %d MB，此时 swapoff 会把换出页压回内存，/swapfile 与 fstab 行保留，请先降低内存占用或在低峰期重试", st.managed.UsedMB, st.memAvailMB))
+			return rep
+		}
+	}
+	// 1) 先断持久化：fstab 失败时文件与在用状态一字未动。
+	if err := e.removeManagedFstabLine(); err != nil {
+		rep.Failed = append(rep.Failed, fmt.Sprintf("删除 /etc/fstab 托管行失败（%v）；/swapfile 未动，机器状态未改变，请人工处理", err))
+		return rep
+	}
+	rep.Removed = append(rep.Removed, fmt.Sprintf("%s 中的托管行（%s none swap sw 0 0）", e.fstabPath, e.filePath))
+	// 2) 陈旧备份（SwapSet 崩溃残留，从不启用）：一并清理。
+	if _, err := os.Stat(e.backupPath); err == nil {
+		if err := os.Remove(e.backupPath); err != nil {
+			rep.Failed = append(rep.Failed, fmt.Sprintf("删除旧 Swap 备份 %s 失败（%v）；fstab 托管行已删，Swap 仍在用、文件仍在盘，请人工处理", e.backupPath, err))
+			return rep
+		}
+		rep.Removed = append(rep.Removed, e.backupPath)
+	}
+	// 3) 在用则 swapoff：失败即停，文件不动（删启用中的文件
+	// 是未定义行为，绝不能越过失败继续）。
+	if st.managed != nil {
+		if _, err := e.run(ctx, "swapoff", e.filePath); err != nil {
+			rep.Failed = append(rep.Failed, fmt.Sprintf("关闭 Swap 失败（%v）；fstab 托管行已删，/swapfile 仍在启用中且文件仍在盘，请人工执行 swapoff %s 后删除文件", err, e.filePath))
+			return rep
+		}
+	}
+	// 4) 删文件。
+	if st.fileOnDisk {
+		if err := os.Remove(e.filePath); err != nil {
+			rep.Failed = append(rep.Failed, fmt.Sprintf("删除 Swap 文件 %s 失败（%v）；Swap 已关闭、fstab 托管行已删，请人工删除该文件", e.filePath, err))
+			return rep
+		}
+		rep.Removed = append(rep.Removed, e.filePath)
+	}
+	return rep
+}
+
 // --- 命令分发 -----------------------------------------------------------
 
 func handleSwapCommand(cmdType string, data interface{}) (interface{}, error) {
