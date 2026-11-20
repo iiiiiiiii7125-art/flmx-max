@@ -720,18 +720,22 @@ func tuneRPSUnitBody() string {
 }
 
 // persistNICSteering installs the oneshot unit that reapplies face ④
-// at boot. Without systemd (container form) the steering still
-// applies now but does not survive a reboot; that is reported.
+// at boot. The RPS script itself is written unconditionally: it is
+// face ④'s footprint (R18-D2-11 — TuneStatus reads it), so a
+// container/no-systemd node the panel tuned at runtime still has a
+// record of the applied steering. Only the unit + enable need
+// systemd; without it the steering still applies now but does not
+// survive a reboot; that is reported.
 func persistNICSteering(ctx context.Context, ifaces []string, mask string) []string {
-	if InContainer() || !commandExists("systemctl") {
-		return []string{"无 systemd，网卡多队列未持久化（重启后失效）"}
-	}
 	var warnings []string
 	if err := os.MkdirAll(filepath.Dir(tuneRPSScriptPath), 0o755); err != nil {
 		return append(warnings, fmt.Sprintf("写入 RPS 脚本失败: %v", err))
 	}
 	if err := writeFileAtomic(tuneRPSScriptPath, []byte(tuneRPSScript(ifaces, mask)), 0o755); err != nil {
 		return append(warnings, fmt.Sprintf("写入 RPS 脚本失败: %v", err))
+	}
+	if InContainer() || !commandExists("systemctl") {
+		return append(warnings, "无 systemd，网卡多队列未持久化（重启后失效）")
 	}
 	if err := os.MkdirAll(filepath.Dir(tuneRPSUnitPath), 0o755); err != nil {
 		return append(warnings, fmt.Sprintf("写入 RPS 服务失败: %v", err))
@@ -1255,10 +1259,16 @@ type tuneFaces struct {
 	NIC    bool `json:"nic"`
 }
 
-// tuneStatus is the TuneStatus reply: the four faces as booleans
-// (detected exactly the way the reference script's menu detects
-// them), the live headline values, and the agent process's own
+// tuneStatus is the TuneStatus reply: the four faces as booleans,
+// the live headline values, and the agent process's own
 // nofile summary.
+//
+// Faces are footprint + live (R18-D2-11): BBR/NIC count as tuned
+// only when the panel's own footprint is in place (the BBR conf /
+// the RPS script) AND the value is actually in effect. Live-value
+// inference alone misreported "tuned" whenever another tool set
+// the same values, and a footprint the kernel cannot honor (BBR
+// unavailable) read as tuned while the live value disagreed.
 //
 // The reply carries two shapes additively: the original flat
 // fields (ipv4Priority / congestionControl / ...) and the
@@ -1283,18 +1293,69 @@ type tuneStatus struct {
 	Qdisc              string           `json:"qdisc"`
 }
 
+// tuneConfHasSysctlLine reports whether the sysctl conf file at path
+// carries the panel's own "key = value" line (R18-D2-11): a conf the
+// panel wrote, not a live value another tool may have set. Lines are
+// matched on the parsed key/value pair (whitespace-tolerant);
+// comments and other keys do not count.
+func tuneConfHasSysctlLine(path, key, value string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(k) == key && strings.TrimSpace(v) == value {
+			return true
+		}
+	}
+	return false
+}
+
+// tuneBBRFootprintPresent is face ②'s footprint (R18-D2-11): the BBR
+// line in either conf the panel writes for it — 10-bbr.conf (face ②
+// itself) or 99-network-performance.conf (face ③ writes the same
+// two keys). A live congestion_control of bbr set by another tool
+// leaves no such footprint and must not read as "tuned".
+func tuneBBRFootprintPresent() bool {
+	return tuneConfHasSysctlLine(tuneBBRConfPath, "net.ipv4.tcp_congestion_control", "bbr") ||
+		tuneConfHasSysctlLine(tuneKernelConfPath, "net.ipv4.tcp_congestion_control", "bbr")
+}
+
+// tuneNICFootprintPresent is face ④'s footprint (R18-D2-11): the RPS
+// boot script persistNICSteering writes on every NIC apply
+// (systemd or not — without systemd the unit is skipped but the
+// script still records what was applied; rollback/uninstall remove
+// it). A live rps_sock_flow_entries of 32768 set by another tool
+// leaves no such footprint and must not read as "tuned".
+func tuneNICFootprintPresent() bool {
+	_, err := os.Stat(tuneRPSScriptPath)
+	return err == nil
+}
+
 func readTuneStatus() tuneStatus {
 	var st tuneStatus
 	if b, err := os.ReadFile(tuneGaiConfPath); err == nil {
 		st.IPv4Priority = gaiPrecedenceActive(string(b))
 	}
 	st.CongestionControl, _ = readSysctl("net.ipv4.tcp_congestion_control")
-	st.BBR = st.CongestionControl == "bbr"
+	// R18-D2-11: BBR/NIC are footprint + live, not live inference
+	// alone — another tool setting bbr / 32768 must not make the
+	// panel report "tuned", and a footprint whose value the kernel
+	// cannot honor must not read as in effect.
+	st.BBR = tuneBBRFootprintPresent() && st.CongestionControl == "bbr"
 	st.DefaultQdisc, _ = readSysctl("net.core.default_qdisc")
 	if v, ok := readSysctl("net.core.rps_sock_flow_entries"); ok {
 		st.RPSSockFlowEntries, _ = strconv.ParseInt(v, 10, 64)
 	}
-	st.NIC = st.RPSSockFlowEntries == 32768
+	st.NIC = tuneNICFootprintPresent() && st.RPSSockFlowEntries == 32768
 	if _, err := os.Stat(tuneKernelConfPath); err == nil {
 		st.Kernel = true
 	}
