@@ -12,6 +12,7 @@
     "build": "tsc && vite build",
     "lint": "eslint --fix",
     "preview": "vite preview",
+    "test": "node --experimental-strip-types --test src/pages/forward/import-format.test.ts",
     "check:sensitive-keys": "node scripts/check-sensitive-keys.mjs",
     "check:tunnel-quality-switch": "node scripts/check-tunnel-quality-switch.mjs",
     "check:pure-enc-preset": "node scripts/check-pure-enc-preset.mjs",

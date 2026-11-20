@@ -27,7 +27,9 @@ React dashboard for FLMX. rolldown-vite + TypeScript + Tailwind v4 + shadcn/radi
 
 - Don't add `Bearer` prefix to auth header.
 - Don't reintroduce `@heroui/*` or `@nextui-org/*` packages.
-- Don't add frontend tests (no test infrastructure).
+- Don't add frontend tests (no test infrastructure) — sole exception:
+  the minimal `node:test` runner for `src/pages/forward/import-format.test.ts`
+  only (R18-E2-06 / D-7); no vitest/jest.
 - Don't remove `tailwind-theme.pcss` import.
 
 ## Commands
