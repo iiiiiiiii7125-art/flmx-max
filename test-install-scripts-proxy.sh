@@ -1348,6 +1348,127 @@ test_panel_preflight_force_reinstall_refuses_foreign_container() (
   rm -rf "$dir"
 )
 
+# R18-A2-08 更新端口预检夹具：.env 供 get_env_var 读端口；ss 桩
+# 按 UPDATE_PREFLIGHT_BUSY_PORTS 输出监听行；docker ps 桩输出
+# UPDATE_PREFLIGHT_PS_FILE 的内容。自家容器名由调用方置
+# PANEL_BACKEND_CONTAINER / PANEL_FRONTEND_CONTAINER。
+setup_update_preflight_fixture() {
+  local dir="$1"
+  mkdir -p "$dir"
+  printf 'BACKEND_PORT=6365\nFRONTEND_PORT=6366\n' > "$dir/.env"
+  UPDATE_PREFLIGHT_PS_FILE="$dir/ps.txt"
+  : > "$UPDATE_PREFLIGHT_PS_FILE"
+  UPDATE_PREFLIGHT_BUSY_PORTS=""
+  PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+
+  ss() {
+    local p
+    for p in $UPDATE_PREFLIGHT_BUSY_PORTS; do
+      printf 'LISTEN 0 4096 0.0.0.0:%s 0.0.0.0:* users:(("docker-proxy",pid=123,fd=4))\n' "$p"
+    done
+    return 0
+  }
+  docker() {
+    case "$1" in
+      ps) cat "$UPDATE_PREFLIGHT_PS_FILE" 2>/dev/null || true; return 0 ;;
+    esac
+    return 0
+  }
+}
+
+test_panel_update_preflight_refuses_foreign_port_owner() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_update_preflight_fixture "$dir"
+  cd "$dir"
+  UPDATE_PREFLIGHT_BUSY_PORTS="6365"
+  printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp" > "$UPDATE_PREFLIGHT_PS_FILE"
+  local rc="0" out
+  out=$(panel_preflight_update_port_conflicts 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-08: update preflight must refuse when the backend port is held by a foreign container"
+  [[ "$out" == *"other-panel-backend"* ]] || fail "R18-A2-08: the refusal must name the foreign container, got: $out"
+  [[ "$out" == *"更新不自动换端口"* ]] || fail "R18-A2-08: the refusal must say the update does not swap ports, got: $out"
+  rm -rf "$dir"
+)
+
+test_panel_update_preflight_passes_own_and_free_ports() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_update_preflight_fixture "$dir"
+  cd "$dir"
+  UPDATE_PREFLIGHT_BUSY_PORTS="6365"
+  printf '%s\n' "flmx-panel-backend ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$UPDATE_PREFLIGHT_PS_FILE"
+  local rc="0" out
+  out=$(panel_preflight_update_port_conflicts 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-08: update preflight must pass when the backend port is held by the own container"
+  [[ "$out" == *"自家容器占用"* ]] || fail "R18-A2-08: the own-container pass must be named, got: $out"
+
+  UPDATE_PREFLIGHT_BUSY_PORTS=""
+  : > "$UPDATE_PREFLIGHT_PS_FILE"
+  rc="0"
+  out=$(panel_preflight_update_port_conflicts 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-08: update preflight must pass when both ports are free"
+  rm -rf "$dir"
+)
+
+test_panel_update_preflight_refuses_unknown_owner() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_update_preflight_fixture "$dir"
+  cd "$dir"
+  UPDATE_PREFLIGHT_BUSY_PORTS="6365"
+  # ss 行无 users 字段：占用者无法确认，fail-closed 中止。
+  ss() {
+    printf 'LISTEN 0 4096 0.0.0.0:6365 0.0.0.0:*\n'
+    return 0
+  }
+  local rc="0" out
+  out=$(panel_preflight_update_port_conflicts 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-08: update preflight must refuse when the port owner cannot be identified"
+  [[ "$out" == *"未知进程"* ]] || fail "R18-A2-08: the refusal must say the owner is unknown, got: $out"
+  rm -rf "$dir"
+)
+
+test_panel_update_aborts_before_backup_on_foreign_port_owner() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_rename_update_fixture "$dir" "current"
+  cd "$dir"
+  # 占用形态：后端 6365 被别家容器占；前端空闲。rename 夹具的
+  # docker 桩只答裸名、点不出占用者，本例重定义 docker/ss 承接
+  # 预检面；流程在预检中止，此后不触 docker inspect，故重定义
+  # 桩只需 ps 一支。
+  ss() {
+    printf 'LISTEN 0 4096 0.0.0.0:6365 0.0.0.0:* users:(("docker-proxy",pid=123,fd=4))\n'
+    return 0
+  }
+  docker() {
+    case "$1" in
+      ps) printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp"; return 0 ;;
+    esac
+    return 0
+  }
+  panel_port_is_listening() {
+    [[ "$1" == "6365" ]]
+  }
+  local rc="0" out
+  out=$(update_panel 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-08: update must abort when the backend port is held by a foreign container"
+  [[ "$out" == *"other-panel-backend"* ]] || fail "R18-A2-08: the abort must name the foreign container, got: $out"
+  [[ "$out" == *"更新不自动换端口"* ]] || fail "R18-A2-08: the abort must say the update does not swap ports, got: $out"
+  [[ ! -e "$dir/backup" ]] || fail "R18-A2-08: the abort must happen before the update backup is created"
+  rm -rf "$dir"
+)
+
 # A2-04 附带钉格（XC-1 指出）：A2-04 本体（.env 读取与 Compose
 # 语义一致）已在他路修好，但 CRLF 形态此前无套件断言——Windows
 # 编辑过的 .env 若把 \r 带进取值，实例 id/DB 类型等比较会整体
@@ -10194,6 +10315,9 @@ EOF
     cd "$FIXTURE_DIR"
   }
   validate_panel_update_environment() { :; }
+  # R18-A2-08：更新预检的探活桩——本夹具不建模真实监听面，恒答
+  # 空闲；占用形态由各用例自备 ss/docker 桩（见 A2-08 用例）。
+  panel_port_is_listening() { return 1; }
   get_current_db_type() { echo "sqlite"; }
   get_deployed_panel_version() { return 1; }
   resolve_latest_release_tag() { echo "1.9.8"; }
@@ -13859,6 +13983,10 @@ test_panel_preflight_refuses_on_choice_two
 test_panel_preflight_container_name_conflict_points_to_instance
 test_panel_preflight_force_reinstall_allows_own_container
 test_panel_preflight_force_reinstall_refuses_foreign_container
+test_panel_update_preflight_refuses_foreign_port_owner
+test_panel_update_preflight_passes_own_and_free_ports
+test_panel_update_preflight_refuses_unknown_owner
+test_panel_update_aborts_before_backup_on_foreign_port_owner
 test_panel_migrate_images_pinned_to_digest
 test_panel_migrate_backup_copy_is_0600
 test_panel_update_rollback_restores_sqlite_database

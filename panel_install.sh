@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.09"
+SCRIPT_VERSION="20261120.10"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -4937,6 +4937,41 @@ get_deployed_panel_version() {
   printf '%s' "$tag"
 }
 
+# R18-A2-08：更新路径的只读端口预检——安装有、更新无的不对称。
+# 在备份之前检查 BACKEND_PORT/FRONTEND_PORT 是否被占用：端口空
+# 闲、或占用者为自家后端/前端容器（逐 token 精确匹配，R18-A2-07
+# 同律）时放行；被非自家占用时点名并中止——不自动换端口，更新
+# 改端口会改变访问地址，须由操作员显式决定；占用者不明时
+# fail-closed 中止。端口读数缺失/非法同样中止（validate 已先行
+# 校验，本函数独立调用时亦须自守）。
+panel_preflight_update_port_conflicts() {
+  local backend_port frontend_port
+  backend_port=$(get_env_var BACKEND_PORT || true)
+  frontend_port=$(get_env_var FRONTEND_PORT || true)
+  if [[ ! "$backend_port" =~ ^[0-9]+$ ]] || [[ ! "$frontend_port" =~ ^[0-9]+$ ]]; then
+    echo "❌ 更新端口预检失败：.env 的 BACKEND_PORT/FRONTEND_PORT 读数缺失或非法（后端：${backend_port:-空}，前端：${frontend_port:-空}），更新终止"
+    return 1
+  fi
+  local backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  local frontend_container="${PANEL_FRONTEND_CONTAINER:-$NEW_PANEL_FRONTEND_CONTAINER}"
+  local label port owner
+  for label in "后端:$backend_port" "前端:$frontend_port"; do
+    port="${label#*:}"
+    label="${label%%:*}"
+    if panel_port_is_listening "$port"; then
+      if panel_port_owned_by "$port" "$backend_container" "$frontend_container"; then
+        echo "ℹ️ ${label}端口 $port 正被自家容器占用（更新原地重建）"
+        continue
+      fi
+      owner=$(panel_port_listener_owner "$port" || true)
+      echo "❌ ${label}端口 $port 已被占用（占用者：${owner:-未知}），更新终止：请先释放该端口，或确认占用者身份后再更新（更新不自动换端口）"
+      return 1
+    fi
+  done
+  echo "✅ 更新端口预检通过：后端端口 $backend_port、前端端口 $frontend_port 未被非自家占用"
+  return 0
+}
+
 update_panel() {
   echo "🔄 开始更新面板..."
 
@@ -4958,6 +4993,10 @@ update_panel() {
   # 后缀上），与卸载确认同口径（B2-04）。
   echo "🎯 本次更新目标：部署目录：$PANEL_DEPLOY_DIR，后端容器：${PANEL_BACKEND_CONTAINER:-未知}"
   validate_panel_update_environment || return 1
+
+  # R18-A2-08：更新路径的只读端口预检——备份之前先确认两端口未
+  # 被非自家占用；被占即点名中止，不自动换端口。
+  panel_preflight_update_port_conflicts || return 1
 
   # R18-A2-05：回滚口状态复位——同进程内多次 update_panel 调用
   # （套件同子 shell 两幕）不得把上一次的重建标记与回滚卷带到下
