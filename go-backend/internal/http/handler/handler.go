@@ -184,6 +184,11 @@ type Handler struct {
 	// FIX2-A（V2-01/V2-02）：配额执法 per-user 串行化锁。
 	quotaEnforceMu    sync.Mutex
 	quotaEnforceLocks map[int64]*sync.Mutex
+	// R18-F2-02 (M-3): 配额释放 backstop 的逐用户失败态，与 nft
+	// 自动对账守卫（nftables_reconcile_guard.go 的 nftAutoFail）
+	// 同模式：退避升级 + 连续失败达上限转需人工。零值可用（惰性初始化）。
+	quotaReleaseFailMu sync.Mutex
+	quotaReleaseFail   map[int64]*quotaReleaseFailState
 	// FIX2-A（V2-08）：转发计数入账 per-node 串行化锁（基线读→差分
 	// →落库整段），防 settle/周期/重连多路轮询以同一旧基线重复差分。
 	nodeAccountingMu            sync.Mutex
