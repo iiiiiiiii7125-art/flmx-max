@@ -142,7 +142,7 @@ func TestBuildTunnelChainServiceConfig_ReapMetadata(t *testing.T) {
 	}
 	for _, chainType := range []int{2, 3} {
 		services := h.buildTunnelChainServiceConfig(99,
-			tunnelRuntimeNode{NodeID: 5, Protocol: "tls", Port: 24001, ChainType: chainType}, node, 1)
+			tunnelRuntimeNode{NodeID: 5, Protocol: "tls", Port: 24001, ChainType: chainType}, node, 1, nil, nil)
 		if len(services) != 1 {
 			t.Fatalf("chainType %d: expected 1 service, got %d", chainType, len(services))
 		}
@@ -160,7 +160,7 @@ func TestBuildTunnelChainServiceConfig_ReapMetadata(t *testing.T) {
 
 	nodeOff := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	services := h.buildTunnelChainServiceConfig(99,
-		tunnelRuntimeNode{NodeID: 5, Protocol: "tls", Port: 24001, ChainType: 2}, nodeOff, 1)
+		tunnelRuntimeNode{NodeID: 5, Protocol: "tls", Port: 24001, ChainType: 2}, nodeOff, 1, nil, nil)
 	svc := services[0]
 	if md, ok := svc["metadata"].(map[string]interface{}); ok {
 		for _, key := range []string{"edgeIdleTimeout", "backstopIdleTimeout", "backstopTrickleBps"} {

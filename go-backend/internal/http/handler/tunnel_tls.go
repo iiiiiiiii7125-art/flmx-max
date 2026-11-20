@@ -200,6 +200,70 @@ func (h *Handler) ensureNodeTunnelTLSReady(nodeID int64) bool {
 	return true
 }
 
+// tunnelRuntimeNodeIDs returns the node IDs of a runtime node list
+// (duplicates collapsed, order preserved).
+func tunnelRuntimeNodeIDs(nodes []tunnelRuntimeNode) []int64 {
+	seen := make(map[int64]bool, len(nodes))
+	ids := make([]int64, 0, len(nodes))
+	for _, n := range nodes {
+		if n.NodeID > 0 && !seen[n.NodeID] {
+			seen[n.NodeID] = true
+			ids = append(ids, n.NodeID)
+		}
+	}
+	return ids
+}
+
+// tunnelTLSReadyForState runs the certificate distribution ensure
+// for every node of a tunnel deploy and returns the ready set the
+// render gate reads. It sends no commands at all when the tunnel
+// uses no TLS-family segment (non-TLS tunnels never need
+// certificates), and a failed ensure for one node only keeps that
+// node's segments legacy — it never fails the deploy.
+func (h *Handler) tunnelTLSReadyForState(state *tunnelCreateState) map[int64]bool {
+	if h == nil || state == nil || state.Type != 2 {
+		return map[int64]bool{}
+	}
+	var ids []int64
+	seen := make(map[int64]bool)
+	add := func(nodes []tunnelRuntimeNode) {
+		for _, id := range tunnelRuntimeNodeIDs(nodes) {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	add(state.InNodes)
+	for _, hop := range state.ChainHops {
+		add(hop)
+	}
+	add(state.OutNodes)
+	usesTLS := isVerifiedTLSTunnelProtocol(state.TunnelProtocol)
+	if !usesTLS {
+		groups := [][]tunnelRuntimeNode{state.InNodes, state.OutNodes}
+		groups = append(groups, state.ChainHops...)
+		for _, group := range groups {
+			for _, n := range group {
+				if isVerifiedTLSTunnelProtocol(effectiveSegmentProtocol(n.Protocol, state.TunnelProtocol)) {
+					usesTLS = true
+					break
+				}
+			}
+			if usesTLS {
+				break
+			}
+		}
+	}
+	if !usesTLS {
+		return map[int64]bool{}
+	}
+	for _, id := range ids {
+		h.ensureNodeTunnelTLSReady(id)
+	}
+	return h.tunnelTLSReadyMap(ids)
+}
+
 // tunnelTLSReadyMap reads the ready set for a batch of nodes in one
 // query. On a DB error it returns an empty map (fail-open to legacy
 // rendering) and logs — a DB blip must never flip a segment to

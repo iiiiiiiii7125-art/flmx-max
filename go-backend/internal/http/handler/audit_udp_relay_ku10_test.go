@@ -38,14 +38,14 @@ func TestKU10AllChainRoleRelayHandlersCarryBind(t *testing.T) {
 		faces := map[string]map[string]interface{}{}
 
 		localMiddle := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
-			tunnelRuntimeNode{NodeID: 5, Protocol: protocol, Port: 24001, ChainType: 2}, node, 1)
+			tunnelRuntimeNode{NodeID: 5, Protocol: protocol, Port: 24001, ChainType: 2}, node, 1, nil, nil)
 		if len(localMiddle) != 1 {
 			t.Fatalf("protocol %s: expected 1 local middle service, got %d", protocol, len(localMiddle))
 		}
 		faces["local middle (ChainType 2)"] = localMiddle[0]
 
 		localExit := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
-			tunnelRuntimeNode{NodeID: 6, Protocol: protocol, Port: 24003, ChainType: 3}, node, 1)
+			tunnelRuntimeNode{NodeID: 6, Protocol: protocol, Port: 24003, ChainType: 3}, node, 1, nil, nil)
 		if len(localExit) != 1 {
 			t.Fatalf("protocol %s: expected 1 local exit service, got %d", protocol, len(localExit))
 		}
@@ -86,7 +86,7 @@ func TestKU10LocalMultiHopChainHandlersCarryBind(t *testing.T) {
 			{"exit", tunnelRuntimeNode{NodeID: 13, Protocol: protocol, Port: 24103, ChainType: 3}, 1, false},
 		}
 		for _, hop := range hops {
-			services := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99, hop.chainNode, node, hop.nextCount)
+			services := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99, hop.chainNode, node, hop.nextCount, nil, nil)
 			if len(services) != 1 {
 				t.Fatalf("protocol %s hop %s: expected 1 service, got %d", protocol, hop.name, len(services))
 			}
@@ -106,7 +106,7 @@ func TestKU10LocalMultiHopChainHandlersCarryBind(t *testing.T) {
 	// {bind:true, reapRole:backstop}（新建而非合并残缺，与出口同
 	// 形态；reapRole 是根治角色标记，全部段服务无条件携带）。
 	udpMiddle := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
-		tunnelRuntimeNode{NodeID: 11, Protocol: "udp", Port: 24101, ChainType: 2}, node, 1)
+		tunnelRuntimeNode{NodeID: 11, Protocol: "udp", Port: 24101, ChainType: 2}, node, 1, nil, nil)
 	if got, want := ku9HandlerMetadata(t, udpMiddle[0]), map[string]interface{}{"bind": true, "reapRole": "backstop"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("local udp middle metadata = %v, want %v", got, want)
 	}
@@ -118,7 +118,7 @@ func TestKU10LocalMultiHopChainHandlersCarryBind(t *testing.T) {
 func TestKU10LocalMiddleBindMergesWithMuxMetadata(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	localMiddle := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
-		tunnelRuntimeNode{NodeID: 5, Protocol: "tls", Port: 24001, ChainType: 2}, node, 1)
+		tunnelRuntimeNode{NodeID: 5, Protocol: "tls", Port: 24001, ChainType: 2}, node, 1, nil, nil)
 	if len(localMiddle) != 1 {
 		t.Fatalf("expected 1 local middle service, got %d", len(localMiddle))
 	}

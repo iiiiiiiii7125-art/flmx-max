@@ -44,7 +44,7 @@ func TestComboSS2022TunnelRelayGeneration(t *testing.T) {
 	// no connector metadata whatsoever.
 	chainCfg, err := h.buildTunnelChainConfig(99, 1,
 		[]tunnelRuntimeNode{{NodeID: 2, Protocol: "tcp", Port: 24001, ChainType: 3, Strategy: "round", ConnectIP: "203.0.113.10"}},
-		map[int64]*nodeRecord{1: entry, 2: landing}, "", "tcp")
+		map[int64]*nodeRecord{1: entry, 2: landing}, "", nil, "tcp")
 	if err != nil {
 		t.Fatalf("build chain config: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestComboSS2022TunnelRelayGeneration(t *testing.T) {
 	// Exit service on the landing node: relay handler with bind,
 	// no chain (terminal), tcp listener.
 	exitServices := h.buildTunnelChainServiceConfig(99,
-		tunnelRuntimeNode{NodeID: 2, Protocol: "tcp", Port: 24001, ChainType: 3}, landing, 1, "tcp")
+		tunnelRuntimeNode{NodeID: 2, Protocol: "tcp", Port: 24001, ChainType: 3}, landing, 1, nil, nil, "tcp")
 	if len(exitServices) != 1 {
 		t.Fatalf("expected 1 exit service, got %d", len(exitServices))
 	}
@@ -94,7 +94,7 @@ func TestComboSS2022TunnelRelayGeneration(t *testing.T) {
 	// Middle shape (same builder, ChainType 2) must carry the
 	// chain on its relay handler.
 	middleServices := h.buildTunnelChainServiceConfig(99,
-		tunnelRuntimeNode{NodeID: 2, Protocol: "tcp", Port: 24002, ChainType: 2}, landing, 1, "tcp")
+		tunnelRuntimeNode{NodeID: 2, Protocol: "tcp", Port: 24002, ChainType: 2}, landing, 1, nil, nil, "tcp")
 	if len(middleServices) != 1 {
 		t.Fatalf("expected 1 middle service, got %d", len(middleServices))
 	}

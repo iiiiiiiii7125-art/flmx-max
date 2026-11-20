@@ -56,7 +56,7 @@ func TestKU9TerminalRelayHandlersCarryBindOptIn(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	for _, protocol := range []string{"tcp", "tls", "mtls", "mtcp", "kcp", "udp", "ws", "wss"} {
 		localServices := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
-			tunnelRuntimeNode{NodeID: 5, Protocol: protocol, Port: 24001, ChainType: 3}, node, 1)
+			tunnelRuntimeNode{NodeID: 5, Protocol: protocol, Port: 24001, ChainType: 3}, node, 1, nil, nil)
 		if len(localServices) != 1 {
 			t.Fatalf("protocol %s: expected 1 local exit service, got %d", protocol, len(localServices))
 		}
@@ -76,7 +76,7 @@ func TestKU9UDPExitMetadataIsExactlyBind(t *testing.T) {
 	want := map[string]interface{}{"bind": true, "reapRole": "backstop"}
 
 	localServices := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
-		tunnelRuntimeNode{NodeID: 5, Protocol: "udp", Port: 24001, ChainType: 3}, node, 1)
+		tunnelRuntimeNode{NodeID: 5, Protocol: "udp", Port: 24001, ChainType: 3}, node, 1, nil, nil)
 	if got := ku9HandlerMetadata(t, localServices[0]); !reflect.DeepEqual(got, want) {
 		t.Fatalf("local udp exit metadata = %v, want %v", got, want)
 	}
@@ -86,7 +86,7 @@ func TestKU9UDPExitMetadataIsExactlyBind(t *testing.T) {
 func TestKU9TLSExitBindMergesWithMuxMetadata(t *testing.T) {
 	node := &nodeRecord{TCPListenAddr: "192.0.2.1", UDPListenAddr: "192.0.2.2"}
 	localServices := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainServiceConfig(99,
-		tunnelRuntimeNode{NodeID: 5, Protocol: "tls", Port: 24001, ChainType: 3}, node, 1)
+		tunnelRuntimeNode{NodeID: 5, Protocol: "tls", Port: 24001, ChainType: 3}, node, 1, nil, nil)
 	metadata := ku9HandlerMetadata(t, localServices[0])
 	if metadata["bind"] != true {
 		t.Fatalf("tls exit must carry bind=true, got %v", metadata)
@@ -109,7 +109,7 @@ func TestKU9NonRelaySurfacesHaveNoBind(t *testing.T) {
 	for _, protocol := range []string{"udp", "tls"} {
 		localChain, err := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainConfig(99, 1,
 			[]tunnelRuntimeNode{{NodeID: 2, Protocol: protocol, Port: 24001, ConnectIP: "10.0.0.2"}},
-			map[int64]*nodeRecord{1: fromNode, 2: targetNode}, "")
+			map[int64]*nodeRecord{1: fromNode, 2: targetNode}, "", nil)
 		if err != nil {
 			t.Fatalf("protocol %s: build local chain: %v", protocol, err)
 		}
