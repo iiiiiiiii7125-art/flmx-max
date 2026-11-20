@@ -141,21 +141,29 @@ func (c *udpConn) Write(b []byte) (n int, err error) {
 		return
 	}
 
-	n = len(b)
+	// OPEN-4: the tcpConn twin was fixed to report only what
+	// actually crossed; this udpConn kept the same forged count
+	// (pre-set n = len(b), returned whatever the flush did).
+	// Only the flushed bytes that carried this frame count
+	// toward n; the 2-byte length prefix and the cached
+	// response header are not payload.
 	if c.wbuf.Len() > 0 {
+		headerLen := c.wbuf.Len() + 2
 		var bb [2]byte
 		binary.BigEndian.PutUint16(bb[:], uint16(len(b)))
 		c.wbuf.Write(bb[:])
 		c.wbuf.Write(b) // append the data to the cached header
-		_, err = c.wbuf.WriteTo(c.Conn)
-		return
+		written, werr := c.wbuf.WriteTo(c.Conn)
+		if n = int(written) - headerLen; n < 0 {
+			n = 0
+		}
+		return n, werr
 	}
 
 	var bb [2]byte
 	binary.BigEndian.PutUint16(bb[:], uint16(len(b)))
-	_, err = c.Conn.Write(bb[:])
-	if err != nil {
-		return
+	if _, err = c.Conn.Write(bb[:]); err != nil {
+		return 0, err
 	}
 	return c.Conn.Write(b)
 }
