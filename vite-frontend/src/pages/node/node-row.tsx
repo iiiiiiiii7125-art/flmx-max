@@ -264,7 +264,7 @@ export function NodeRestartPushLine({
           </span>
         )}
         <button
-          className="shrink-0 font-semibold text-primary underline underline-offset-2"
+          className="shrink-0 font-semibold text-primary-700 underline underline-offset-2"
           type="button"
           onClick={() => onRepush(node)}
         >
@@ -287,7 +287,7 @@ export function NodeRestartPushLine({
           定时重启已启用，但下发状态未知
         </span>
         <button
-          className="shrink-0 font-semibold text-primary underline underline-offset-2"
+          className="shrink-0 font-semibold text-primary-700 underline underline-offset-2"
           type="button"
           onClick={() => onRepush(node)}
         >
