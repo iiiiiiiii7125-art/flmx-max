@@ -24,8 +24,42 @@ const toInteger = (value: string | number | undefined): number => {
   return Number.parseInt(String(value ?? 0), 10) || 0;
 };
 
-const toFloat = (value: string | number | undefined): number => {
-  return Number.parseFloat(String(value ?? 0)) || 0;
+// R18-E2-03：agent 上报的实时数值是节点方自述、未经校验的，越界值
+// 不得直通渲染（cpu 500% / InfinityP / -5B）。百分比钳到 0–100，
+// load 与速率/计数钳到 ≥0；非有限值按缺失处理（undefined→隐藏，
+// 不伪造 0——伪造的 0 还会遮住 netIn/OutSpeed 的派生回退，见下）。
+const toFiniteNumber = (
+  value: string | number | undefined,
+): number | undefined => {
+  const v =
+    typeof value === "number"
+      ? value
+      : Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(v) ? v : undefined;
+};
+
+const clampPercent = (
+  value: string | number | undefined,
+): number | undefined => {
+  const v = toFiniteNumber(value);
+  if (v === undefined) return undefined;
+  return Math.min(100, Math.max(0, v));
+};
+
+const clampNonNegative = (
+  value: string | number | undefined,
+): number | undefined => {
+  const v = toFiniteNumber(value);
+  if (v === undefined) return undefined;
+  return Math.max(0, v);
+};
+
+const clampNonNegativeInt = (
+  value: string | number | undefined,
+): number | undefined => {
+  const v = toFiniteNumber(value);
+  if (v === undefined) return undefined;
+  return Math.max(0, Math.trunc(v));
 };
 
 const parseRawSystemInfo = (messageData: unknown): RawSystemInfo | null => {
@@ -135,30 +169,41 @@ export const buildNodeSystemInfo = (
   }
 
   return {
-    cpuUsage: raw.cpu_usage === undefined ? undefined : toFloat(raw.cpu_usage),
+    cpuUsage: raw.cpu_usage === undefined ? undefined : clampPercent(raw.cpu_usage),
     memoryUsage:
-      raw.memory_usage === undefined ? undefined : toFloat(raw.memory_usage),
+      raw.memory_usage === undefined
+        ? undefined
+        : clampPercent(raw.memory_usage),
     uploadTraffic,
     downloadTraffic,
     uploadSpeed,
     downloadSpeed,
     uptime,
-    diskUsage: raw.disk_usage === undefined ? undefined : toFloat(raw.disk_usage),
+    diskUsage:
+      raw.disk_usage === undefined ? undefined : clampPercent(raw.disk_usage),
     // Same undefined-preserving rule as the usage figures above
     // (A-F-02 family): a snapshot that omits a key leaves it undefined
     // instead of fabricating 0 — consumers read these through ?? chains
     // (e.g. netOutSpeed ?? derived uploadSpeed), so a fabricated 0
     // would also shadow the derived fallback.
-    load1: raw.load1 === undefined ? undefined : toFloat(raw.load1),
-    load5: raw.load5 === undefined ? undefined : toFloat(raw.load5),
-    load15: raw.load15 === undefined ? undefined : toFloat(raw.load15),
-    tcpConns: raw.tcp_conns === undefined ? undefined : toInteger(raw.tcp_conns),
-    udpConns: raw.udp_conns === undefined ? undefined : toInteger(raw.udp_conns),
+    load1: raw.load1 === undefined ? undefined : clampNonNegative(raw.load1),
+    load5: raw.load5 === undefined ? undefined : clampNonNegative(raw.load5),
+    load15: raw.load15 === undefined ? undefined : clampNonNegative(raw.load15),
+    tcpConns:
+      raw.tcp_conns === undefined
+        ? undefined
+        : clampNonNegativeInt(raw.tcp_conns),
+    udpConns:
+      raw.udp_conns === undefined
+        ? undefined
+        : clampNonNegativeInt(raw.udp_conns),
     netInSpeed:
-      raw.net_in_speed === undefined ? undefined : toInteger(raw.net_in_speed),
+      raw.net_in_speed === undefined
+        ? undefined
+        : clampNonNegative(raw.net_in_speed),
     netOutSpeed:
       raw.net_out_speed === undefined
         ? undefined
-        : toInteger(raw.net_out_speed),
+        : clampNonNegative(raw.net_out_speed),
   };
 };
