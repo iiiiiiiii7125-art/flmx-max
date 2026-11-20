@@ -467,13 +467,17 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 	}
 	stubNft(t)
 	main := []byte("#!/bin/sh\nif [ \"$1\" = \"version\" ]; then echo 'sing-box version 1.12.0'; exit 0; fi\necho \"main $2\"\nexec sleep 300\n")
-	extra := []byte("#!/bin/sh\necho \"front $*\"\nexec sleep 300\n")
+	extraFor := func(version string) []byte {
+		return []byte("#!/bin/sh\necho \"front " + version + " $*\"\nexec sleep 300\n")
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/main.zip":
 			_, _ = w.Write(zipWith(t, map[string]string{"sing-box": string(main)}))
-		case "/front":
-			_, _ = w.Write(extra)
+		default:
+			if strings.HasPrefix(r.URL.Path, "/front-") {
+				_, _ = w.Write(extraFor(strings.TrimPrefix(r.URL.Path, "/front-")))
+			}
 		}
 	}))
 	defer srv.Close()
@@ -486,6 +490,7 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 	resp.Body.Close()
 	arch := map[string]string{runtime.GOARCH: "test"}
 
+	extraVersion := "0.2.25"
 	mk := func(withFront bool, hash string) ApplyRequest {
 		req := ApplyRequest{
 			Type: "singbox", Version: "1.12.0",
@@ -498,7 +503,7 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 			Hash: hash, Enabled: true,
 		}
 		if withFront {
-			req.Extras = []ExtraBinary{{Name: "shadow-tls", Version: "0.2.25", Download: &Download{URL: srv.URL + "/front", Archive: "raw", BinName: "shadow-tls", ArchMap: arch, SHA256: map[string]string{"test": sha(extra)}}}}
+			req.Extras = []ExtraBinary{{Name: "shadow-tls", Version: extraVersion, Download: &Download{URL: srv.URL + "/front-" + extraVersion, Archive: "raw", BinName: "shadow-tls", ArchMap: arch, SHA256: map[string]string{"test": sha(extraFor(extraVersion))}}}}
 			req.Processes = append(req.Processes, ProcessSpec{Name: "stls-2", Bin: "shadow-tls", Args: []string{"--v3", "server"}})
 		}
 		return req
@@ -514,10 +519,23 @@ func TestManagerMultiProcessWithExtra(t *testing.T) {
 		t.Fatalf("state: %+v", st)
 	}
 	logs := strings.Join(m.Status("singbox").Kernels[0].Logs, "\n")
-	for _, want := range []string{"[sb-1] main ", "[sb-2] main ", "[stls-2] front --v3 server"} {
+	for _, want := range []string{"[sb-1] main ", "[sb-2] main ", "[stls-2] front 0.2.25 --v3 server"} {
 		if !strings.Contains(logs, want) {
 			t.Fatalf("missing %q in logs:\n%s", want, logs)
 		}
+	}
+	// R18-D3-06: bumping only the extra's version — same hash,
+	// same main binary, same bin count — must restart the extra
+	// process onto the new path. The old predicate compared only
+	// the bin count and never noticed.
+	extraVersion = "0.2.26"
+	st, err = m.Apply(mk(true, "h1"))
+	if err != nil || !st.Running {
+		t.Fatalf("reapply with bumped extra: %+v %v", st, err)
+	}
+	logs = strings.Join(m.Status("singbox").Kernels[0].Logs, "\n")
+	if !strings.Contains(logs, "[stls-2] front 0.2.26 --v3 server") {
+		t.Fatalf("the extra process must restart onto the 0.2.26 binary, logs:\n%s", logs)
 	}
 	// Dropping the front process restarts with two processes only.
 	st, err = m.Apply(mk(false, "h2"))

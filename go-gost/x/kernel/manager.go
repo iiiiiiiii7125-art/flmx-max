@@ -755,6 +755,23 @@ func (m *Manager) restartAfterRestore(inst *instance, kernelType, what string) b
 	return true
 }
 
+// sameBins reports whether two binary maps name the same binaries
+// at the same paths (R18-D3-06): comparing only the map length
+// let an extra-binary path change slip through — same hash, same
+// main binary, same count, but a different extra version on disk,
+// so the extra process was never restarted onto the new path.
+func sameBins(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}
+
 // Apply installs (if needed), writes the configuration and makes the
 // processes match req.Enabled. Unchanged running kernels are left alone.
 func (m *Manager) Apply(req ApplyRequest) (State, error) {
@@ -837,7 +854,7 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		}
 	}
 	m.mu.Lock()
-	changed := inst.req.Hash != req.Hash || inst.bins[""] != mainBin || len(inst.bins) != len(bins)
+	changed := inst.req.Hash != req.Hash || inst.bins[""] != mainBin || !sameBins(inst.bins, bins)
 	running := len(inst.procs) > 0
 	for _, p := range inst.procs {
 		if r, _, _, _, _ := p.snapshot(); !r {
@@ -852,7 +869,7 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	// up; anything else restarts as before.
 	reloadable := isSingboxType(req.Type) && running &&
 		prev.req.Hash != req.Hash && req.Hash != "" &&
-		prev.bins[""] == mainBin && len(prev.bins) == len(bins)
+		prev.bins[""] == mainBin && sameBins(prev.bins, bins)
 	// F-032: 上一版是否"曾确认可用"在覆盖 inst.req 前定格，与瞬时
 	// 进程快照无关（退避间隙 procs 不在运行，prev 仍是可回滚的好配置）。
 	prevGood := prev.req.Enabled && prev.req.Hash != "" && prev.req.Hash == inst.goodHash
