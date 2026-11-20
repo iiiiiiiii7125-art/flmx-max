@@ -44,7 +44,7 @@ func TestComboSS2022TunnelRelayGeneration(t *testing.T) {
 	// no connector metadata whatsoever.
 	chainCfg, err := h.buildTunnelChainConfig(99, 1,
 		[]tunnelRuntimeNode{{NodeID: 2, Protocol: "tcp", Port: 24001, ChainType: 3, Strategy: "round", ConnectIP: "203.0.113.10"}},
-		map[int64]*nodeRecord{1: entry, 2: landing}, "", nil, "tcp")
+		map[int64]*nodeRecord{1: entry, 2: landing}, "", nil, []int64{1}, "tcp")
 	if err != nil {
 		t.Fatalf("build chain config: %v", err)
 	}

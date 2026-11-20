@@ -234,6 +234,176 @@ func TestEnsureNodeTunnelTLSReadyOfflineStaysLegacy(t *testing.T) {
 	}
 }
 
+// dialerTLSBlockOf extracts the "tls" block of one dialer leg from a
+// chain config (nil when the leg renders legacy, i.e. no "tls" key).
+func dialerTLSBlockOf(t *testing.T, chainCfg map[string]interface{}, idx int) map[string]interface{} {
+	t.Helper()
+	hops, ok := chainCfg["hops"].([]map[string]interface{})
+	if !ok || len(hops) == 0 {
+		t.Fatalf("chain has no hops: %#v", chainCfg)
+	}
+	nodes, ok := hops[0]["nodes"].([]map[string]interface{})
+	if !ok || idx < 0 || idx >= len(nodes) {
+		t.Fatalf("chain has no node %d: %#v", idx, chainCfg)
+	}
+	dialer, _ := nodes[idx]["dialer"].(map[string]interface{})
+	if dialer == nil {
+		t.Fatalf("node %d has no dialer: %#v", idx, nodes[idx])
+	}
+	tls, _ := dialer["tls"].(map[string]interface{})
+	return tls
+}
+
+// listenerTLSBlockOf extracts the "tls" block of a chain service
+// listener (nil when the listener renders legacy).
+func listenerTLSBlockOf(t *testing.T, services []map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	listener, _ := services[0]["listener"].(map[string]interface{})
+	if listener == nil {
+		t.Fatalf("service has no listener: %#v", services[0])
+	}
+	tls, _ := listener["tls"].(map[string]interface{})
+	return tls
+}
+
+// TestTunnelTLSDialerFlipsOnlyWhenWholeDialerGroupReady (R18-F1-01
+// C3): a dialer leg renders verified TLS only when the target
+// listener will flip too — i.e. every node dialing that listener is
+// ready, not just the two endpoints. A verified dialer pointed at a
+// still-legacy listener fails the handshake (random self-signed peer
+// cert), so both-endpoints-ready alone must keep the leg legacy.
+func TestTunnelTLSDialerFlipsOnlyWhenWholeDialerGroupReady(t *testing.T) {
+	h := &Handler{jwtSecret: "unit-test-secret"}
+	nodes := map[int64]*nodeRecord{
+		1: {ID: 1, TCPListenAddr: "192.0.2.1"},
+		2: {ID: 2, TCPListenAddr: "192.0.2.2"},
+		3: {ID: 3, TCPListenAddr: "192.0.2.3"},
+	}
+	targets := []tunnelRuntimeNode{{NodeID: 2, Protocol: "tls", Port: 24001, ConnectIP: "192.0.2.2"}}
+	ready := map[int64]bool{1: true, 2: true}
+
+	cfg, err := h.buildTunnelChainConfig(99, 1, targets, nodes, "", ready, []int64{1, 2}, "tls")
+	if err != nil {
+		t.Fatalf("build chain: %v", err)
+	}
+	tlsBlock := dialerTLSBlockOf(t, cfg, 0)
+	if tlsBlock == nil {
+		t.Fatal("dialer must render verified TLS when the whole dialer group is ready")
+	}
+	if tlsBlock["secure"] != true || tlsBlock["caFile"] != "tls/ca.pem" ||
+		tlsBlock["certFile"] != "tls/node-cert.pem" || tlsBlock["keyFile"] != "tls/node-key.pem" ||
+		tlsBlock["serverName"] != "node-2.flmx.internal" {
+		t.Fatalf("dialer tls block = %v, want secure/caFile/certFile/keyFile/serverName for node 2", tlsBlock)
+	}
+
+	// Same endpoints ready, but a sibling dialer (node 3) of the same
+	// listener is not ready: the listener stays legacy, so the dialer
+	// must stay legacy too.
+	cfg, err = h.buildTunnelChainConfig(99, 1, targets, nodes, "", ready, []int64{1, 2, 3}, "tls")
+	if err != nil {
+		t.Fatalf("build chain: %v", err)
+	}
+	if got := dialerTLSBlockOf(t, cfg, 0); got != nil {
+		t.Fatalf("dialer must stay legacy when a sibling dialer is not ready, got tls=%v", got)
+	}
+
+	// Unknown dialer group never flips the dialer.
+	cfg, err = h.buildTunnelChainConfig(99, 1, targets, nodes, "", ready, nil, "tls")
+	if err != nil {
+		t.Fatalf("build chain: %v", err)
+	}
+	if got := dialerTLSBlockOf(t, cfg, 0); got != nil {
+		t.Fatalf("dialer must stay legacy when the dialer group is unknown, got tls=%v", got)
+	}
+
+	// Non-TLS-family segments never get a tls block, even fully ready.
+	tcpTargets := []tunnelRuntimeNode{{NodeID: 2, Protocol: "tcp", Port: 24001, ConnectIP: "192.0.2.2"}}
+	cfg, err = h.buildTunnelChainConfig(99, 1, tcpTargets, nodes, "", ready, []int64{1, 2}, "tcp")
+	if err != nil {
+		t.Fatalf("build chain: %v", err)
+	}
+	if got := dialerTLSBlockOf(t, cfg, 0); got != nil {
+		t.Fatalf("tcp dialer must never carry a tls block, got tls=%v", got)
+	}
+}
+
+// TestTunnelTLSListenerFlipsOnlyWhenAllDialersReady (R18-F1-01 C3):
+// a listener renders verified TLS only when it AND every node that
+// dials it are ready — a verified listener requires client
+// certificates, so one legacy dialer would be rejected and its leg
+// would break.
+func TestTunnelTLSListenerFlipsOnlyWhenAllDialersReady(t *testing.T) {
+	h := &Handler{jwtSecret: "unit-test-secret"}
+	node := &nodeRecord{ID: 2, TCPListenAddr: "192.0.2.2", UDPListenAddr: "192.0.2.2"}
+	chainNode := tunnelRuntimeNode{NodeID: 2, Protocol: "tls", Port: 24001, ChainType: 2}
+
+	svcs := h.buildTunnelChainServiceConfig(99, chainNode, node, 1, map[int64]bool{1: true, 2: true, 3: true}, []int64{1, 3}, "tls")
+	tlsBlock := listenerTLSBlockOf(t, svcs)
+	if tlsBlock == nil {
+		t.Fatal("listener must render verified TLS when it and all its dialers are ready")
+	}
+	if tlsBlock["certFile"] != "tls/node-cert.pem" || tlsBlock["keyFile"] != "tls/node-key.pem" || tlsBlock["caFile"] != "tls/ca.pem" {
+		t.Fatalf("listener tls block = %v, want certFile/keyFile/caFile", tlsBlock)
+	}
+
+	svcs = h.buildTunnelChainServiceConfig(99, chainNode, node, 1, map[int64]bool{1: true, 2: true}, []int64{1, 3}, "tls")
+	if got := listenerTLSBlockOf(t, svcs); got != nil {
+		t.Fatalf("listener must stay legacy when one dialer is not ready, got tls=%v", got)
+	}
+
+	svcs = h.buildTunnelChainServiceConfig(99, chainNode, node, 1, map[int64]bool{1: true, 2: true, 3: true}, nil, "tls")
+	if got := listenerTLSBlockOf(t, svcs); got != nil {
+		t.Fatalf("listener must stay legacy when its dialer set is unknown, got tls=%v", got)
+	}
+}
+
+// TestTunnelTLSSegmentEndsFlipTogether (R18-F1-01 C3): the two ends
+// of one leg flip as a unit. With a sibling dialer not ready, the
+// dialer AND the listener both stay legacy; with all ready, both
+// render verified TLS. A mixed state in either direction breaks the
+// leg (verified dialer vs self-signed listener, or legacy dialer vs
+// client-cert-requiring listener).
+func TestTunnelTLSSegmentEndsFlipTogether(t *testing.T) {
+	h := &Handler{jwtSecret: "unit-test-secret"}
+	nodes := map[int64]*nodeRecord{
+		1: {ID: 1, TCPListenAddr: "192.0.2.1"},
+		2: {ID: 2, TCPListenAddr: "192.0.2.2"},
+		3: {ID: 3, TCPListenAddr: "192.0.2.3"},
+	}
+	targets := []tunnelRuntimeNode{{NodeID: 2, Protocol: "tls", Port: 24001, ConnectIP: "192.0.2.2"}}
+	listenerNode := nodes[2]
+	chainNode := tunnelRuntimeNode{NodeID: 2, Protocol: "tls", Port: 24001, ChainType: 2}
+
+	partial := map[int64]bool{1: true, 2: true}
+	cfg, err := h.buildTunnelChainConfig(99, 1, targets, nodes, "", partial, []int64{1, 2, 3}, "tls")
+	if err != nil {
+		t.Fatalf("build chain: %v", err)
+	}
+	svcs := h.buildTunnelChainServiceConfig(99, chainNode, listenerNode, 1, partial, []int64{1, 3}, "tls")
+	if got := dialerTLSBlockOf(t, cfg, 0); got != nil {
+		t.Fatalf("partial ready: dialer must stay legacy, got tls=%v", got)
+	}
+	if got := listenerTLSBlockOf(t, svcs); got != nil {
+		t.Fatalf("partial ready: listener must stay legacy, got tls=%v", got)
+	}
+
+	full := map[int64]bool{1: true, 2: true, 3: true}
+	cfg, err = h.buildTunnelChainConfig(99, 1, targets, nodes, "", full, []int64{1, 2, 3}, "tls")
+	if err != nil {
+		t.Fatalf("build chain: %v", err)
+	}
+	svcs = h.buildTunnelChainServiceConfig(99, chainNode, listenerNode, 1, full, []int64{1, 3}, "tls")
+	if got := dialerTLSBlockOf(t, cfg, 0); got == nil {
+		t.Fatal("full ready: dialer must render verified TLS")
+	}
+	if got := listenerTLSBlockOf(t, svcs); got == nil {
+		t.Fatal("full ready: listener must render verified TLS")
+	}
+}
+
 // TestTunnelTLSAgentPathsMatchContract pins the agent-relative render
 // paths; the agent resolves the same relative paths under its
 // workdir (go-gost/x/socket/tunnel_tls.go tunnelTLSPathsForRender).

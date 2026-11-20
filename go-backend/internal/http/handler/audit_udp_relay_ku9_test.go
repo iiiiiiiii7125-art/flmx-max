@@ -109,7 +109,7 @@ func TestKU9NonRelaySurfacesHaveNoBind(t *testing.T) {
 	for _, protocol := range []string{"udp", "tls"} {
 		localChain, err := (&Handler{jwtSecret: "ku-regression-secret"}).buildTunnelChainConfig(99, 1,
 			[]tunnelRuntimeNode{{NodeID: 2, Protocol: protocol, Port: 24001, ConnectIP: "10.0.0.2"}},
-			map[int64]*nodeRecord{1: fromNode, 2: targetNode}, "", nil)
+			map[int64]*nodeRecord{1: fromNode, 2: targetNode}, "", nil, []int64{1})
 		if err != nil {
 			t.Fatalf("protocol %s: build local chain: %v", protocol, err)
 		}

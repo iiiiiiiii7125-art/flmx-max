@@ -8808,7 +8808,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 		} else {
 			targets = h.orderBestExitTargets(state.TunnelID, inNode.NodeID, targets)
 		}
-		chainData, err := h.buildTunnelChainConfig(state.TunnelID, inNode.NodeID, targets, state.Nodes, state.IPPreference, tlsReady, state.TunnelProtocol)
+		chainData, err := h.buildTunnelChainConfig(state.TunnelID, inNode.NodeID, targets, state.Nodes, state.IPPreference, tlsReady, tunnelRuntimeNodeIDs(state.InNodes), state.TunnelProtocol)
 		if err != nil {
 			return createdChains, createdServices, err
 		}
@@ -8833,7 +8833,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 			if node != nil && node.Status != 1 {
 				continue
 			}
-			chainData, err := h.buildTunnelChainConfig(state.TunnelID, chainNode.NodeID, nextTargets, state.Nodes, state.IPPreference, tlsReady, state.TunnelProtocol)
+			chainData, err := h.buildTunnelChainConfig(state.TunnelID, chainNode.NodeID, nextTargets, state.Nodes, state.IPPreference, tlsReady, tunnelRuntimeNodeIDs(hop), state.TunnelProtocol)
 			if err != nil {
 				return createdChains, createdServices, err
 			}
@@ -8922,12 +8922,17 @@ func (h *Handler) applyBestExitChainOrder(tunnelID, ownerNodeID int64, outNodes 
 	}
 	// R18-F1-01: best-exit reorder re-renders only the dialer; gate
 	// it on the current ready set (pure DB read, no distribution —
-	// the next full redeploy picks up newly-ready nodes).
+	// the next full redeploy picks up newly-ready nodes). The dialer
+	// group is unknown here (the listener's dialers are the tunnel's
+	// full entry group, not just this owner), so the group is nil and
+	// the dialer never flips to verified on a reorder — flipping it
+	// on both-endpoints-ready alone could point a verified dialer at
+	// a still-legacy listener and break the leg.
 	tlsIDs := []int64{ownerNodeID}
 	for _, t := range targets {
 		tlsIDs = append(tlsIDs, t.NodeID)
 	}
-	chainData, err := h.buildTunnelChainConfig(tunnelID, ownerNodeID, targets, nodes, ipPreference, h.tunnelTLSReadyMap(tlsIDs))
+	chainData, err := h.buildTunnelChainConfig(tunnelID, ownerNodeID, targets, nodes, ipPreference, h.tunnelTLSReadyMap(tlsIDs), nil)
 	if err != nil {
 		log.Printf("best_exit: build chain failed tunnel=%d owner=%d err=%v", tunnelID, ownerNodeID, err)
 		return err
@@ -9168,7 +9173,7 @@ func (h *Handler) tunnelKCPKey(tunnelID int64, tunnelProtocol string, segmentPro
 	return key, nil
 }
 
-func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string, tlsReady map[int64]bool, stateProtocol ...string) (map[string]interface{}, error) {
+func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targets []tunnelRuntimeNode, nodes map[int64]*nodeRecord, ipPreference string, tlsReady map[int64]bool, dialerGroup []int64, stateProtocol ...string) (map[string]interface{}, error) {
 	fromNode := nodes[fromNodeID]
 	if fromNode == nil {
 		return nil, errors.New("节点不存在")
@@ -9208,16 +9213,24 @@ func (h *Handler) buildTunnelChainConfig(tunnelID int64, fromNodeID int64, targe
 		protocol := effectiveSegmentProtocol(target.Protocol, tunnelProtocol)
 		// R18-F1-01 (D-3) migration gate, per segment: this dialer
 		// leg renders verified TLS only when the segment protocol is
-		// TLS-family AND both endpoint nodes are TLS-ready (certs
-		// distributed + verified). Any other combination keeps the
-		// legacy form (no "tls" key) — in particular a verified
-		// dialer is never rendered against a listener that has not
-		// yet received its certificate, and a legacy dialer is never
-		// pointed at a listener that already requires client
-		// certificates. The two ends flip together, one segment at
-		// a time, so a running chain never breaks mid-migration.
+		// TLS-family AND this dialer, its target, and every other
+		// node that dials the same target are TLS-ready (certs
+		// distributed + verified). The dialer must mirror the
+		// listener's flip predicate exactly: the listener flips
+		// only when it AND all its dialers are ready (a verified
+		// listener requires client certificates, so one legacy
+		// dialer would be rejected). Checking only both endpoints
+		// would point a verified dialer at a still-legacy listener
+		// — the peer presents a random self-signed certificate,
+		// verification fails, and the leg breaks. dialerGroup is
+		// the full set of nodes that dial these targets (the
+		// siblings of fromNode, including fromNode); an empty or
+		// unknown group never flips the dialer. Any other
+		// combination keeps the legacy form (no "tls" key). The
+		// two ends flip together, one segment at a time, so a
+		// running chain never breaks mid-migration.
 		var dialerTLS map[string]interface{}
-		if isVerifiedTLSTunnelProtocol(protocol) && tlsReady[fromNodeID] && tlsReady[target.NodeID] {
+		if isVerifiedTLSTunnelProtocol(protocol) && tlsReady[fromNodeID] && tlsReady[target.NodeID] && len(dialerGroup) > 0 && allTunnelTLSReady(tlsReady, dialerGroup) {
 			dialerTLS = tunnelTLSDialerConfig(target.NodeID)
 		}
 		connector := map[string]interface{}{
