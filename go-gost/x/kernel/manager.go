@@ -1535,7 +1535,12 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) error 
 
 // isSingboxType reports whether a kernel type runs the sing-box
 // binary (main or metering companion). Only these support a SIGHUP
-// config reload that preserves established connections.
+// config reload — a config-only change needs no process restart.
+// The reload does NOT preserve established connections: sing-box
+// drops every user's sessions on reload (C-(4) live proof,
+// 2026-11-15 test machine; see clashapi.go). That is why a
+// removal-only change may skip the reload and use selective kill
+// + tombstone instead.
 func isSingboxType(t string) bool {
 	return t == "singbox" || t == "singbox-companion"
 }
@@ -1597,9 +1602,15 @@ func checkSingboxConfig(bin, configPath string) error {
 }
 
 // tryReloadSingbox SIGHUPs a running sing-box instance so it re-reads
-// its (already written) config without dropping established
-// connections. It returns (applied, restarted):
-//   - (true, false): reloaded in place; sessions preserved.
+// its (already written) config without a process restart — same PID,
+// no supervisor relaunch, no startup cost. It does NOT preserve
+// sessions: sing-box drops every user's established connections on
+// reload (C-(4) live proof, 2026-11-15 test machine; see clashapi.go),
+// so user-level removal still uses selective kill + tombstone, and a
+// removal-only change may skip the reload entirely.
+// It returns (applied, restarted):
+//   - (true, false): reloaded in place; the process was not
+//     restarted, but sessions were dropped.
 //   - (true, true): the process restarted on its own (supervisor
 //     relaunch) with the new config; sessions were lost but the
 //     config is applied — the caller must NOT restart it again.
