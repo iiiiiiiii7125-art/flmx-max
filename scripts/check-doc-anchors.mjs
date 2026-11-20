@@ -79,10 +79,11 @@ for (const f of files) {
     const target = m[1];
     if (/^(https?:|mailto:)/.test(target)) continue;
     const hashIdx = target.indexOf("#");
-    if (hashIdx < 0) continue;
-    const pathPart = target.slice(0, hashIdx);
-    const anchor = decodeURIComponent(target.slice(hashIdx + 1));
-    if (!anchor) continue;
+    // R18-A4-03：无锚链接也要验目标文件。旧实现 hashIdx < 0 时
+    // 直接 continue，指向不存在文件的纯文件链接（如 [文
+    // 档](nope.md)）从未被计数、从未被验，门禁对此失明。本函数
+    // 先解目标文件并验存在，通过后再按有无锚点分流。
+    const pathPart = hashIdx < 0 ? target : target.slice(0, hashIdx);
     let targetFile = f;
     if (pathPart) {
       const clean = pathPart.replace(/^\//, "").replace(/\.html$/, ".md");
@@ -101,6 +102,9 @@ for (const f of files) {
       bad++;
       continue;
     }
+    if (hashIdx < 0) continue;
+    const anchor = decodeURIComponent(target.slice(hashIdx + 1));
+    if (!anchor) continue;
     const ids = idSets.get(targetFile) || headingsOf(targetFile);
     if (!ids.has(anchor)) {
       console.log(

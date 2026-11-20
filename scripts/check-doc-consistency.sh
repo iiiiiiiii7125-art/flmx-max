@@ -1153,6 +1153,58 @@ elif [[ "$V6_ANCHOR" != "$V6_PREFIX" ]]; then
   note_fail "R18-A2-11：panel_install.sh 的 v6 判别锚 $V6_ANCHOR 与 docker-compose-v6.yml 的 IPv6 子网前缀 $V6_PREFIX 不一致"
 else
   note_ok "R18-A2-11：v6 判别锚与 docker-compose-v6.yml 的 IPv6 子网前缀一致（$V6_ANCHOR）"
+# ── 34. 发版 Release notes Quick Install 校验门（R18-A4-02 常设门）：
+# docker-build.yml 的 create-release 作业在 --notes 里印 4 条 Quick
+# Install 命令（定版 ×2、latest ×2）；每条须先下同名 .sha256 再
+# sha256sum -c、失败即中止，与 README 的校验纪律同形。只下载即执
+# 行是未校验路径（Release 资产被换即投毒），故逐条计数点名。
+A4_WF=".github/workflows/docker-build.yml"
+a4_p_cmds=$(grep -cF 'panel_install.sh -o panel_install.sh' "$A4_WF" || true)
+a4_p_ok=$(grep -cF 'sha256sum -c panel_install.sh.sha256' "$A4_WF" || true)
+a4_n_cmds=$(grep -cF 'install.sh -o install.sh' "$A4_WF" || true)
+a4_n_ok=$(grep -cF 'sha256sum -c install.sh.sha256' "$A4_WF" || true)
+if [ "$a4_p_cmds" -ne 2 ] || [ "$a4_n_cmds" -ne 2 ]; then
+  note_fail "R18-A4-02：发版 Release notes Quick Install 命令前提失效（面板 $a4_p_cmds 条、节点 $a4_n_cmds 条，期望各 2 条，请人工复核）"
+elif [ "$a4_p_ok" -ne 2 ] || [ "$a4_n_ok" -ne 2 ]; then
+  note_fail "R18-A4-02：发版 Release notes Quick Install 有未校验 sha256 的安装命令（面板校验 $a4_p_ok/2 条、节点校验 $a4_n_ok/2 条），与 README 校验纪律打架"
+else
+  note_ok "R18-A4-02：发版 Release notes Quick Install 4 条命令均先下 .sha256 再 sha256sum -c"
+fi
+
+# ── 35. proxy 套件测试注册普查门（R18-A4-04 常设门）：机械提取
+# test-install-scripts-proxy.sh 的测试函数定义集（行首 test_…()，
+# 含 () ( 与 () { 两种形态）与裸调用集（行首 test_…、文件内各段
+# 执行清单），定义未调用 / 调用未定义 / 重复定义任一差集非空即
+# FAIL 并点名。手写清单漏注册即静默不跑，本门是唯一机械防线
+# （§24 的 F1-N2 钉子只守单个测试）。
+A4_SUITE="test-install-scripts-proxy.sh"
+if [ ! -f "$A4_SUITE" ]; then
+  note_fail "R18-A4-04：proxy 套件测试注册普查前提失效（$A4_SUITE 缺失，请人工复核）"
+else
+  a4_census_tmp=$(mktemp -d)
+  grep -oE '^test_[a-z_0-9]+ *\(\)' "$A4_SUITE" | sed 's/ *()$//' | sort > "$a4_census_tmp/defs" || true
+  grep -oE '^test_[a-z_0-9]+$' "$A4_SUITE" | sort > "$a4_census_tmp/calls" || true
+  a4_n_defs=$(wc -l < "$a4_census_tmp/defs" | tr -d ' ')
+  a4_n_calls=$(wc -l < "$a4_census_tmp/calls" | tr -d ' ')
+  a4_def_dup=$(uniq -d "$a4_census_tmp/defs" | tr '\n' ' ')
+  a4_call_dup=$(uniq -d "$a4_census_tmp/calls" | tr '\n' ' ')
+  a4_unrun=$(comm -23 "$a4_census_tmp/defs" "$a4_census_tmp/calls" | tr '\n' ' ')
+  a4_undef=$(comm -13 "$a4_census_tmp/defs" "$a4_census_tmp/calls" | tr '\n' ' ')
+  if [ "$a4_n_defs" -eq 0 ]; then
+    note_fail "R18-A4-04：proxy 套件测试注册普查前提失效（定义提取为空，提取式漂移，请人工复核）"
+  elif [ -n "$a4_def_dup" ]; then
+    note_fail "R18-A4-04：proxy 套件有重复定义的测试函数：$a4_def_dup"
+  elif [ -n "$a4_call_dup" ]; then
+    note_fail "R18-A4-04：proxy 套件有重复调用的测试函数：$a4_call_dup"
+  elif [ -n "$a4_unrun" ]; then
+    note_fail "R18-A4-04：proxy 套件有定义未调用的测试（写了也不跑）：$a4_unrun"
+  elif [ -n "$a4_undef" ]; then
+    note_fail "R18-A4-04：proxy 套件有调用未定义的测试：$a4_undef"
+  else
+    note_ok "R18-A4-04：proxy 套件测试定义与调用普查一致（定义 $a4_n_defs 个＝调用 $a4_n_calls 个，无重复/漏注册）"
+  fi
+  rm -rf "$a4_census_tmp"
+fi
 fi
 
 echo "----"

@@ -439,6 +439,40 @@ test_panel_installer_script_curl_uses_timeouts() (
   grep -q -- '--max-time' "$log" || fail "A1-02: the installer-script curl must carry --max-time"
   grep -q -- '--speed-limit' "$log" || fail "A1-02: the installer-script curl must carry the stall watchdog (--speed-limit/--speed-time)"
   grep -q -- '--retry' "$log" || fail "A1-02: the installer-script curl must carry --retry"
+  grep -q -- '--retry-max-time' "$log" || fail "R18-A1-03: the installer-script curl must cap total retry time (--retry-max-time 120, single-leg 120s is not a total bound)"
+)
+
+# R18-A1-09：预算 env 须为非负整数秒。旧实现把 FLMX_*_BUDGET_SECONDS
+# 直接算进 $(( ))：写成 240s 时算术求值报错、set -e 杀死整个安装
+# 脚本且无点名。功能臂：FLMX_RESOLVE_BUDGET_SECONDS=240s 时解析
+# 入口须点名失败、不得裸炸；助手臂：非法值必拒、合法值回显、
+# 前导零按十进制计；静态臂：下载入口同样走助手（两处算术点同口
+# 径）。旧代码上助手不存在、解析裸炸，必红。
+test_panel_budget_seconds_rejects_non_numeric() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local out rc="0"
+  out=$(FLMX_RESOLVE_BUDGET_SECONDS="240s" resolve_latest_release_tag 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A1-09: resolve must fail on a non-numeric budget"
+  [[ "$out" == *"FLMX_RESOLVE_BUDGET_SECONDS"* ]] || \
+    fail "R18-A1-09: the budget failure must name FLMX_RESOLVE_BUDGET_SECONDS (got: $out)"
+  [[ "$out" == *"取值非法"* ]] || \
+    fail "R18-A1-09: the budget failure must say the value is invalid"
+
+  assert_equals "120" "$(panel_budget_seconds "120" "FLMX_RESOLVE_BUDGET_SECONDS")" \
+    "R18-A1-09: a numeric budget must pass through"
+  assert_equals "120" "$(panel_budget_seconds "0120" "FLMX_RESOLVE_BUDGET_SECONDS")" \
+    "R18-A1-09: leading zeros must count as decimal, not octal"
+  assert_equals "0" "$(panel_budget_seconds "0" "FLMX_RESOLVE_BUDGET_SECONDS")" \
+    "R18-A1-09: zero must pass through (0 means exhausted per A1-01, not invalid)"
+  panel_budget_seconds "240s" "FLMX_RESOLVE_BUDGET_SECONDS" >/dev/null 2>&1 && \
+    fail "R18-A1-09: 240s must be rejected"
+  panel_budget_seconds "" "FLMX_RESOLVE_BUDGET_SECONDS" >/dev/null 2>&1 && \
+    fail "R18-A1-09: an empty budget must be rejected"
+
+  grep -q 'panel_budget_seconds "${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}"' "$ROOT_DIR/panel_install.sh" || \
+    fail "R18-A1-09: the download entry must validate its budget through the same helper"
 )
 
 # A2-05（audit-max）：菜单 5 保留式写入不得整块删除共享站点——
@@ -3818,6 +3852,38 @@ EOF
   assert_equals "$expected" "$actual" "install_flmx_agent should JSON-escape config values"
   grep -Fqx 'Environment=GODEBUG=disablethp=1' "$FLMX_AGENT_SYSTEMD_SERVICE_FILE" || \
     fail "systemd service should disable transparent huge pages for the Go heap"
+)
+
+# R18-A3-08：config.json 含密钥，须以 0600 落盘。旧实现先以进程
+# umask 建文件（常为 644）、之后才 chmod 600，窗口期内密钥全机
+# 可读。本用例在宽 umask（022）下直调 write_flmx_agent_config：
+# 新建与重写已存在的 644 旧文件都须为 0600。旧代码上两臂均为
+# 644，必红。
+test_write_flmx_agent_config_creates_0600() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  mkdir -p "$INSTALL_DIR"
+  SERVER_ADDR="panel.example.com:443"
+  printf -v SECRET '%s' 'k9f3x7'
+  PROXY_ENABLED=""
+  PROXY_URL=""
+
+  # 臂 1：宽 umask 下新建仍为 0600。
+  ( umask 022; write_flmx_agent_config "$INSTALL_DIR/config.json" )
+  assert_equals "600" "$(stat -c %a "$INSTALL_DIR/config.json")" \
+    "R18-A3-08: config.json must be created 0600 even under a permissive umask"
+
+  # 臂 2：已存在的 644 旧文件重写后收紧为 0600。
+  chmod 644 "$INSTALL_DIR/config.json"
+  ( umask 022; write_flmx_agent_config "$INSTALL_DIR/config.json" )
+  assert_equals "600" "$(stat -c %a "$INSTALL_DIR/config.json")" \
+    "R18-A3-08: rewriting an existing config must tighten it to 0600"
+  grep -Fq '"secret": "k9f3x7"' "$INSTALL_DIR/config.json" || \
+    fail "R18-A3-08: the rewritten config must still carry the secret"
+  rm -rf "$work"
 )
 
 test_install_script_bootstraps_bash_for_alpine() (
@@ -7356,11 +7422,44 @@ test_openrc_install_writes_logrotate_config() (
     fail "GARBAGE-A2: uninstall must remove the OpenRC service file"
 )
 
+# R18-A3-03：OpenRC 服务文件写失败不得被吞掉。旧实现 cat 失败后仍
+# 走 chmod 与恒返回 0 的 logrotate 写入，函数报成功、服务实际未
+# 落盘。本用例把服务文件路径指到一个已存在的目录（cat 必败），
+# 断言 write_flmx_agent_service 返回非零且点名失败；另以正常路径
+# 回归一次（旧代码亦绿，防修过头）。
+test_openrc_service_write_failure_is_reported() (
+  set -euo pipefail
+  local work
+  work=$(mktemp -d)
+  SERVICE_MANAGER="openrc"
+  load_script_without_main "$ROOT_DIR/install.sh"
+  INSTALL_DIR="$work/agent"
+  mkdir -p "$INSTALL_DIR"
+  FLMX_AGENT_LOGROTATE_FILE="$work/logrotate.d/flmx_agent"
+  ensure_service_manager() { :; }
+
+  # 臂 1：服务文件路径是目录，cat 必败 → 函数须非零且点名。
+  mkdir -p "$work/blocked.initd"
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$work/blocked.initd"
+  local rc="0" out
+  out=$(write_flmx_agent_service 2>&1) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "R18-A3-03: a failed OpenRC service write must not report success"
+  [[ "$out" == *"写入 OpenRC 服务文件失败"* ]] || \
+    fail "R18-A3-03: the failure must name the service file (got: $out)"
+
+  # 臂 2：正常路径仍能写出（回归臂）。
+  FLMX_AGENT_OPENRC_SERVICE_FILE="$work/flmx.initd"
+  write_flmx_agent_service || fail "R18-A3-03: a healthy OpenRC service write must still succeed"
+  [[ -f "$work/flmx.initd" ]] || fail "R18-A3-03: the service file must exist after a healthy write"
+  rm -rf "$work"
+)
+
 test_preserve_compose_networks_keeps_existing_subnet
 test_preserve_compose_networks_no_subnet_existing
 test_activate_panel_update_files_preserves_subnet
 test_cleanup_old_panel_images_after_update_targets_only_old_tag
 test_openrc_install_writes_logrotate_config
+test_openrc_service_write_failure_is_reported
 test_get_deployed_panel_version_parses_image_tag
 test_update_panel_crosschecks_deployed_image_version
 test_install_flmx_agent_keeps_service_when_download_fails
@@ -8073,12 +8172,46 @@ test_main_requires_root() (
   assert_equals "1" "$rc" "R4B11-004: main must fail fast when not run as root"
 )
 
+# R18-A1-02：panel main 的 root 检查须在自更新之前。旧顺序非 root
+# 调用者先等自更新走完联网预算（断网时数分钟）才被拒绝；新顺序
+# 0 秒 fail-fast，且自更新不被触发（桩函数留痕断言）。EUID 只读、
+# root 环境下跳过功能臂（与 test_main_requires_root 同口径）；
+# 文档臂（install.md 登记 SELF_UPDATE_SKIP 逃生口）与环境无关、
+# 始终执行。
+test_panel_main_root_check_precedes_self_update() (
+  set -euo pipefail
+  grep -Fq 'SELF_UPDATE_SKIP=1' "$ROOT_DIR/doc/guide/install.md" || \
+    fail "R18-A1-02: install.md must document the SELF_UPDATE_SKIP=1 escape hatch"
+  if [[ $EUID -eq 0 ]]; then
+    echo "skip: test_panel_main_root_check_precedes_self_update needs a non-root environment"
+    return 0
+  fi
+  local work file marker rc out
+  work=$(mktemp -d)
+  marker="$work/self-update-ran"
+  file="$work/panel-main.sh"
+  sed '/^# 执行主函数$/,$d' "$ROOT_DIR/panel_install.sh" > "$file"
+  cat >> "$file" <<STUBEOF
+self_update_check() { touch "$marker"; }
+main
+STUBEOF
+  rc="0"; out=$(SELF_UPDATE_SKIP= bash "$file" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A1-02: panel main must fail fast for non-root"
+  [[ ! -f "$marker" ]] || fail "R18-A1-02: self-update must not run before the root check"
+  [[ "$out" == *"需要 root 权限运行"* ]] || \
+    fail "R18-A1-02: non-root refusal must name the root requirement"
+  rm -rf "$work"
+)
+
 # R4B11-006: 交互式密钥读取必须关回显；迁移 PG 口令不得再作为
 # docker run 的 pgloader 进程参数出现（改走只读挂载的命令文件）。
 test_script_secret_surfaces_closed() (
   set -euo pipefail
-  grep -Fq 'read -s -p "密钥: "' "$ROOT_DIR/install.sh" || \
+  grep -Fq 'read -r -s -p "密钥: "' "$ROOT_DIR/install.sh" || \
     fail "R4B11-006: interactive secret prompt must use read -s"
+  if grep -Fq 'read -s -p "密钥: "' "$ROOT_DIR/install.sh"; then
+    fail "R18-A3-05: the secret prompt must carry -r, or backslashes in a typed secret are eaten"
+  fi
   if grep -Fq 'read -p "密钥: "' "$ROOT_DIR/install.sh"; then
     fail "R4B11-006: the echoing secret prompt must not remain"
   fi
@@ -8089,6 +8222,26 @@ test_script_secret_surfaces_closed() (
     fail "R4B11-006: pgloader should receive its target via the mounted command file"
   grep -Fq 'chmod 600 "$pgloader_load_file"' "$ROOT_DIR/panel_install.sh" || \
     fail "R4B11-006: the pgloader command file must be created with 0600 permissions"
+)
+
+# R18-A3-05：交互输入的密钥含反斜杠不得被吃掉。旧实现 read 缺 -r，
+# 手工输入的密钥含反斜杠时被 read 的转义处理吃掉，落盘的密钥与用
+# 户输入不符、节点连不上且无从察觉。本用例以重定向 stdin 喂入含
+# 反斜杠的地址与密钥，走真实 get_config_params，断言逐字保留。
+# 旧代码上两处反斜杠都被吃掉，必红。
+test_get_config_params_preserves_backslashes() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work input
+  work=$(mktemp -d)
+  input="$work/input"
+  printf '%s\n%s\n' 'panel.example.com\8443' 'sec\ret\key' > "$input"
+  SERVER_ADDR=""
+  SECRET=""
+  get_config_params < "$input" || fail "R18-A3-05: get_config_params must accept redirected input"
+  assert_equals 'panel.example.com\8443' "$SERVER_ADDR" "R18-A3-05: a backslash in the address must survive interactive input"
+  assert_equals 'sec\ret\key' "$SECRET" "R18-A3-05: a backslash in the secret must survive interactive input"
+  rm -rf "$work"
 )
 
 # F-R4-01: pgloader 命令文件的 LOAD DATABASE 语句必须以分号终止——
@@ -8295,6 +8448,77 @@ test_install_script_routes_panel_first_when_panel_alive() (
   assert_equals "1" "${#DOWNLOAD_ROUTES[@]}" "panel-alive: routes should be exactly the panel route"
   assert_equals "https://panel.example.com:8443/api/v1/open_api/gh" "${DOWNLOAD_ROUTES[0]}" "panel-alive: the only route should be the derived panel prefix"
   assert_equals "3" "$ROUTES_STAGE" "panel-alive: stage should be 3 (panel-exclusive, extendable)"
+)
+
+# R18-A3-02：菜单安装须先读面板地址、再解析版本。旧顺序
+# ensure_download_url_initialized 先跑版本解析：解析子 shell 内
+# 建路线表时 SERVER_ADDR 仍为空、面板源分支被跳过；仅面板可达
+# 的受限网络里直连与代理全败、解析失败，装机在问到地址之前就中
+# 止（-a 路径下地址早已就绪、解析能走面板源，本可成功）。本用例
+# 以菜单形态（SERVER_ADDR 与 SECRET 均空）走真实
+# install_flmx_agent：get_config_params 桩供入面板地址；curl 桩
+# 只让面板线路成功（其余一律 22），解析/建表/复核全走真实函数，
+# 下载桩在父 shell 重建路线表后即败；断言路线表首条为面板源前
+# 缀且日志出现「面板源」。旧代码上解析即败、表为空，必红。
+test_install_flmx_agent_menu_reads_panel_addr_before_routes() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  VERSION="" FLMX_VERSION="" PINNED_VERSION=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  mkdir -p "$INSTALL_DIR"
+  SERVICE_MANAGER="systemd"
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  SERVER_ADDR=""
+  SECRET=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  get_config_params() {
+    SERVER_ADDR="wss://panel.example.com:8443"
+    SECRET="test-secret"
+  }
+  ensure_small_host_swap() { :; }
+  ensure_alpine_runtime_dependencies() { :; }
+  guard_agent_dir_ownership() { :; }
+  agent_dir_has_agent() { return 1; }
+  check_and_install_tcpkill() { :; }
+  guard_agent_reinstall_conflict() { :; }
+  ensure_service_manager() { :; }
+  download_agent_binary() { ensure_download_routes; return 1; }
+
+  # 仅面板可达：含 panel.example.com 的请求按 -w 形态供数，
+  # 其余一律失败（直连/代理全死，还原受限网络）。
+  curl() {
+    case "$*" in
+      *panel.example.com*) ;;
+      *) return 22 ;;
+    esac
+    case "$*" in
+      *'%{time_total} %{url_effective}'*)
+        printf '0.050 https://github.com/%s/releases/tag/9.9.9' "$REPO"
+        ;;
+      *'%{http_code} %{size_download} %{time_total}'*)
+        printf '206 262144 0.500000'
+        ;;
+      *'%{url_effective}'*)
+        printf 'https://github.com/%s/releases/tag/9.9.9' "$REPO"
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  local rc="0" log
+  log="$work/install.log"
+  install_flmx_agent >"$log" 2>&1 </dev/null || rc="$?"
+  assert_equals "1" "$rc" "R18-A3-02: install must stop when the (stubbed) download fails"
+  grep -q "面板源" "$log" || fail "R18-A3-02: menu install on a panel-only network must reach the panel source (route line missing)"
+  assert_equals "https://panel.example.com:8443/api/v1/open_api/gh" "${DOWNLOAD_ROUTES[0]:-}" \
+    "R18-A3-02: menu install must build the route table after reading the panel address, so the panel source ranks first"
+  rm -rf "$work"
 )
 
 # 面板源分发（install.sh）：面板线路探不通 -> 原样回退既有流程：
@@ -13204,6 +13428,7 @@ test_install_script_routes_rank_proxies_when_direct_dead
 test_install_script_download_failover_extends_routes
 test_derive_panel_prefix_table
 test_install_script_routes_panel_first_when_panel_alive
+test_install_flmx_agent_menu_reads_panel_addr_before_routes
 test_install_script_routes_panel_dead_falls_back
 test_panel_install_routes_direct_needs_throughput_gate
 test_install_script_panel_route_extends_on_download_failure
@@ -13266,6 +13491,7 @@ test_uninstall_flmx_agent_host_cleanup_restores_kernel_snapshot
 test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_missing
 test_uninstall_flmx_agent_host_cleanup_kernel_snapshot_corrupt
 test_install_flmx_agent_writes_json_safe_config
+test_write_flmx_agent_config_creates_0600
 test_install_flmx_agent_config_preserves_protocol_counts
 test_install_script_bootstraps_bash_for_alpine
 test_install_flmx_agent_uses_openrc
@@ -13316,7 +13542,9 @@ test_uninstall_removes_custom_kernel_dir
 test_resolve_custom_kernel_dir_rejects_system_subdirs
 test_install_panel_invalid_port_aborts_before_download
 test_main_requires_root
+test_panel_main_root_check_precedes_self_update
 test_script_secret_surfaces_closed
+test_get_config_params_preserves_backslashes
 test_ensure_compose_trusted_proxy_hops_injects_mapping_form
 test_ensure_compose_trusted_proxy_hops_keeps_existing_line
 test_ensure_compose_trusted_proxy_hops_list_form
@@ -13578,6 +13806,7 @@ test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key
 test_panel_download_routed_total_budget
 test_panel_installer_script_curl_uses_timeouts
+test_panel_budget_seconds_rejects_non_numeric
 test_panel_caddy_source_fetches_use_timeouts
 test_panel_caddyfile_without_site_keeps_shared_addresses
 test_panel_uninstall_without_docker_cleans_full_residual_set

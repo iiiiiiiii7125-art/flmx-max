@@ -582,20 +582,20 @@ jobs:
 
           **Panel (安装此版本 ${VERSION}):**
           \`\`\`bash
-          curl -L https://github.com/${{ github.repository }}/releases/download/${VERSION}/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+          curl -L https://github.com/${{ github.repository }}/releases/download/${VERSION}/panel_install.sh -o panel_install.sh && curl -L https://github.com/${{ github.repository }}/releases/download/${VERSION}/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
           \`\`\`
 
           **Node (安装此版本 ${VERSION}):**
           \`\`\`bash
-          curl -L https://github.com/${{ github.repository }}/releases/download/${VERSION}/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+          curl -L https://github.com/${{ github.repository }}/releases/download/${VERSION}/install.sh -o install.sh && curl -L https://github.com/${{ github.repository }}/releases/download/${VERSION}/install.sh.sha256 -o install.sh.sha256 && sha256sum -c install.sh.sha256 && chmod +x install.sh && ./install.sh
           \`\`\`
 
           **安装最新版:**
           \`\`\`bash
           # 面板端
-          curl -L https://github.com/${{ github.repository }}/releases/latest/download/panel_install.sh -o panel_install.sh && chmod +x panel_install.sh && ./panel_install.sh
+          curl -L https://github.com/${{ github.repository }}/releases/latest/download/panel_install.sh -o panel_install.sh && curl -L https://github.com/${{ github.repository }}/releases/latest/download/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256 && chmod +x panel_install.sh && ./panel_install.sh
           # 节点端
-          curl -L https://github.com/${{ github.repository }}/releases/latest/download/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+          curl -L https://github.com/${{ github.repository }}/releases/latest/download/install.sh -o install.sh && curl -L https://github.com/${{ github.repository }}/releases/latest/download/install.sh.sha256 -o install.sh.sha256 && sha256sum -c install.sh.sha256 && chmod +x install.sh && ./install.sh
           \`\`\`" \
             --repo ${{ github.repository }}
           fi

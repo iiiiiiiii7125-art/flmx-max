@@ -426,4 +426,42 @@ grep -q "R18-A2-11" "$TMP/v28.log" && echo "OK: variant 28 caught and named" || 
   echo "FAIL: variant 28 caught but the drift was not named"; sed 's/^/    /' "$TMP/v28.log"; exit 1; }
 cp "$ROOT/docker-compose-v6.yml" "$MIR/docker-compose-v6.yml"
 
+echo "== variant 29: Quick Install drops its sha256 check must FAIL and name it (§34, R18-A4-02) =="
+python3 - "$MIR/.github/workflows/docker-build.yml" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = " && curl -L https://github.com/${{ github.repository }}/releases/download/${VERSION}/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256"
+assert old in s, "baseline shape changed"
+open(p, "w").write(s.replace(old, "", 1))
+PYEOF
+[ "$(grep -c 'sha256sum -c panel_install.sh.sha256' "$MIR/.github/workflows/docker-build.yml")" = "1" ] || {
+  echo "FAIL: variant 29 mutation did not land (exactly one panel check must remain)"; exit 1; }
+if run_gate "$TMP/v29.log"; then
+  echo "FAIL: variant 29 was not caught"; exit 1
+fi
+grep -q "R18-A4-02" "$TMP/v29.log" && echo "OK: variant 26 caught and named" || {
+  echo "FAIL: variant 29 caught but the drift was not named"; sed 's/^/    /' "$TMP/v29.log"; exit 1; }
+cp "$ROOT/.github/workflows/docker-build.yml" "$MIR/.github/workflows/docker-build.yml"
+
+echo "== variant 30: proxy suite gains an unregistered test must FAIL and name it (§35, R18-A4-04) =="
+python3 - "$MIR/test-install-scripts-proxy.sh" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = 'echo "install script tests passed"'
+assert anchor in s, "baseline shape changed"
+assert 'test_selftest_never_runs' not in s, "ghost test already present"
+ghost = 'test_selftest_never_runs() (\n  :\n)\n\n'
+open(p, "w").write(s.replace(anchor, ghost + anchor, 1))
+PYEOF
+grep -q 'test_selftest_never_runs' "$MIR/test-install-scripts-proxy.sh" || {
+  echo "FAIL: variant 30 mutation did not land (ghost test anchor drifted)"; exit 1; }
+if run_gate "$TMP/v30.log"; then
+  echo "FAIL: variant 30 was not caught"; exit 1
+fi
+grep -q "R18-A4-04" "$TMP/v30.log" && grep -q "test_selftest_never_runs" "$TMP/v30.log" && echo "OK: variant 27 caught and named" || {
+  echo "FAIL: variant 30 caught but the drift was not named"; sed 's/^/    /' "$TMP/v30.log"; exit 1; }
+cp "$ROOT/test-install-scripts-proxy.sh" "$MIR/test-install-scripts-proxy.sh"
+
 echo "SELFTEST PASS"

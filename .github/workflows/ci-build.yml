@@ -168,6 +168,9 @@ jobs:
           bash scripts/check-private-ranges-selftest.sh
           bash scripts/check-timeout-budgets-selftest.sh
           bash scripts/check-hist-metering-selftest.sh
+          # R18-A4-01: the alpine suite host gate selftest runs the
+          # gate against fake host roots only; safe on any host.
+          FLMX_ALPINE_SUITE_SELFTEST=1 sh test-install-scripts-alpine.sh
 
       # A4-02: the remaining five root gates (workflow-pins,
       # contract-fields, doc-consistency, script-version-bump,

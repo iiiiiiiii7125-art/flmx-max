@@ -1620,11 +1620,16 @@ write_flmx_agent_config() {
       fi
     done
   fi
-  printf '{\n  "addr": "%s",\n  "secret": "%s"%s%s\n}\n' \
+  # R18-A3-08：配置文件含密钥，须以 0600 落盘。旧实现先以进程 umask
+  # 建文件（常为 644）、之后才 chmod 600，窗口期内密钥全机可读。
+  # 现写时 umask 077（新建即 0600），再显式 chmod 600 覆盖已存在
+  # 的宽权限旧文件（重定向不改已存在文件的权限位）。
+  ( umask 077; printf '{\n  "addr": "%s",\n  "secret": "%s"%s%s\n}\n' \
     "$(json_escape "$SERVER_ADDR")" \
     "$(json_escape "$SECRET")" \
     "$proxy_json" \
-    "$counts_json" > "$path"
+    "$counts_json" > "$path" ) || return 1
+  chmod 600 "$path" || return 1
 }
 
 ensure_service_manager() {
@@ -1791,7 +1796,10 @@ EOF
       ;;
     openrc)
       mkdir -p "$(dirname "$FLMX_AGENT_OPENRC_SERVICE_FILE")"
-      cat > "$FLMX_AGENT_OPENRC_SERVICE_FILE" <<EOF
+      # R18-A3-03：服务文件写入失败不得被吞掉——旧实现 cat 失败后
+      # 仍走 chmod 与恒返回 0 的 logrotate 写入，函数报成功、服务
+      # 实际未落盘，后续启动才以误导性根因收场。写失败即点名返回。
+      if ! cat > "$FLMX_AGENT_OPENRC_SERVICE_FILE" <<EOF
 #!/sbin/openrc-run
 
 name="flmx_agent"
@@ -1809,7 +1817,11 @@ depend() {
   need net
 }
 EOF
-      chmod +x "$FLMX_AGENT_OPENRC_SERVICE_FILE"
+      then
+        echo "❌ 写入 OpenRC 服务文件失败: $FLMX_AGENT_OPENRC_SERVICE_FILE" >&2
+        return 1
+      fi
+      chmod +x "$FLMX_AGENT_OPENRC_SERVICE_FILE" || { echo "❌ 设置 OpenRC 服务文件可执行权限失败: $FLMX_AGENT_OPENRC_SERVICE_FILE" >&2; return 1; }
       write_flmx_agent_logrotate_config
       ;;
   esac
@@ -2448,13 +2460,15 @@ get_config_params() {
     echo "请输入配置参数："
     
     if [[ -z "$SERVER_ADDR" ]]; then
-      read -p "服务器地址: " SERVER_ADDR
+      read -r -p "服务器地址: " SERVER_ADDR
     fi
     
     if [[ -z "$SECRET" ]]; then
       # R4B11-006: 密钥读取关回显（-s），避免明文留在终端回显/
       # 录屏/滚动回溯中；-s 不回显换行，读完补一个换行保持版面。
-      read -s -p "密钥: " SECRET
+      # R18-A3-05：-r 关转义——缺 -r 时手工输入的密钥含反斜杠会
+      # 被吃掉，落盘的密钥与用户输入不符。
+      read -r -s -p "密钥: " SECRET
       echo ""
     fi
     
@@ -2566,9 +2580,14 @@ install_flmx_agent() {
   # 失败一律 return 而非 exit：main 以 rc 分流 delete_self（失败
   # 保留脚本并点名），函数内 exit 会绕过该分流、用户得不到「脚本
   # 已保留可重试」的回执（下同）。
-  ensure_download_url_initialized || return 1
-
+  # R18-A3-02：先问配置、再解析版本。ensure_download_url_initialized
+  # 经 resolve_latest_release_tag 建路线表时用 SERVER_ADDR 派生面板
+  # 源；旧顺序菜单路径下 SERVER_ADDR 仍为空、面板源分支被跳过，
+  # 仅面板可达的受限网络里版本解析直接失败、装机在问到地址之前
+  # 就中止（-a 路径下地址早已就绪、解析能走面板源，本可成功）。
   get_config_params || return 1
+
+  ensure_download_url_initialized || return 1
 
   # 共存守卫（C2-02）：在下载、停服、写文件之前先判定既有 agent 的
   # 归属；不属于本面板时终止，不留任何改动。

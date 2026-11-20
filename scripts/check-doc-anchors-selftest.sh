@@ -65,4 +65,12 @@ fi
 grep -q "未闭合" "$TMP/v3.log" && echo "OK: variant 3 caught and named" || {
   echo "FAIL: variant 3 caught but the unclosed link was not named"; sed 's/^/    /' "$TMP/v3.log"; exit 1; }
 
+echo "== variant 4: unanchored link to a missing file (R18-A4-03) must FAIL and name it =="
+printf '\n见 [缺失页](gone.md)。\n' >> "$DOC/a.md"
+if node "$GATE" "$DOC" > "$TMP/v4.log" 2>&1; then
+  echo "FAIL: variant 4 was not caught"; exit 1
+fi
+grep -q "目标文件不存在" "$TMP/v4.log" && grep -q "gone.md" "$TMP/v4.log" && echo "OK: variant 4 caught and named" || {
+  echo "FAIL: variant 4 caught but the missing file was not named"; sed 's/^/    /' "$TMP/v4.log"; exit 1; }
+
 echo "SELFTEST PASS"

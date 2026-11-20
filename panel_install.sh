@@ -579,6 +579,31 @@ extend_download_routes() {
   return 1
 }
 
+# R18-A1-09：预算 env 校验。${FLMX_RESOLVE_BUDGET_SECONDS} /
+# ${FLMX_DOWNLOAD_BUDGET_SECONDS} 直接算进 $(( )) 时，写成 240s
+# 会让算术求值报错、set -e 杀死整个安装脚本且无点名。本函数前置
+# 校验、非法即点名失败（fail-closed），不静默回落缺省——回落会掩
+# 盖运维的显式配置错误；缺省值由调用方 :- 给出。返回值以 10#
+# 归一化（"0120" 按十进制 120 计，不掉进 $(( )) 的八进制陷阱）；
+# 超过 18 位数字同样拒收（int64 算术已不可靠，当天写成这值本就
+# 会在算术处炸掉，点名失败只比裸炸多一句根因）。0 合法——按 A1-01
+# 口径 0 即预算耗尽（deadline 即现在，下载入口随即以“下载总预算”
+# 点名失败），不得当非法拒掉。
+panel_budget_seconds() {
+  local raw="$1" name="$2"
+  case "$raw" in
+    ''|*[!0-9]*)
+      echo "❌ $name 取值非法：\"${raw}\"，须为非负整数秒" >&2
+      return 1
+      ;;
+  esac
+  if (( ${#raw} > 18 )); then
+    echo "❌ $name 取值非法：\"${raw}\"，位数超出算术安全范围" >&2
+    return 1
+  fi
+  printf '%s' "$((10#$raw))"
+}
+
 resolve_latest_release_tag() {
   local effective_url tag api_tag latest_url api_url tag_pattern
 
@@ -597,7 +622,9 @@ resolve_latest_release_tag() {
   # 可调）——旧实现每路线重定向法 30s＋API 法 30s 串行，11 线路＋
   # extend 一轮可达 11 分钟以上且无上限。逐次尝试按剩余预算收紧
   # --max-time，耗尽即整轮失败返回。
-  local resolve_deadline=$(( $(date +%s) + ${FLMX_RESOLVE_BUDGET_SECONDS:-120} ))
+  local resolve_budget
+  resolve_budget=$(panel_budget_seconds "${FLMX_RESOLVE_BUDGET_SECONDS:-120}" "FLMX_RESOLVE_BUDGET_SECONDS") || return 1
+  local resolve_deadline=$(( $(date +%s) + resolve_budget ))
   ensure_download_routes
   local prefix remain max_time
   while :; do
@@ -867,11 +894,14 @@ run_verified_installer_script() {
   fi
   local tmp actual rc
   tmp=$(mktemp) || return 1
-  # A1-02：与 download_verified 同套看门狗（L2-11 口径）——旧实
-  # 现裸 curl 无超时/重试，get.docker.com 连通后停滞（TCP 开、
-  # 零/涓流字节）时本函数永不返回，install_docker 的包管理器
-  # 兜底永不触发、首装无限挂死。脚本体积小，总界取 120s。
-  if ! curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 120 "$url" -o "$tmp"; then
+  # R18-A1-03：与 download_verified 同套看门狗（L2-11 口径）——旧实
+  # 现 --max-time 120 只管单次尝试，--retry 2 可把一腿拖到约 364s，
+  # 注释「总界取 120s」与实现不符。现拼 panel_retry_max_args 120
+  # 生成的 --retry-max-time 120（curl <7.66 时自动回退为空组），
+  # 单次 120s、重试总计 120s。
+  local -a retry_max_args=()
+  mapfile -t retry_max_args < <(panel_retry_max_args 120)
+  if ! curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 120 "${retry_max_args[@]}" "$url" -o "$tmp"; then
     rm -f "$tmp"
     echo "⚠️ 安装脚本下载失败: $url"
     return 1
@@ -3430,7 +3460,9 @@ download_verified_routed() {
   local url="$1"
   local dest="$2"
   ensure_download_routes
-  local deadline=$(( $(date +%s) + ${FLMX_DOWNLOAD_BUDGET_SECONDS:-240} ))
+  local download_budget
+  download_budget=$(panel_budget_seconds "${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}" "FLMX_DOWNLOAD_BUDGET_SECONDS") || return 1
+  local deadline=$(( $(date +%s) + download_budget ))
   local prefix
   while :; do
     for prefix in "${DOWNLOAD_ROUTES[@]}"; do
@@ -6128,21 +6160,23 @@ panel_acquire_run_lock() {
 
 # 主逻辑
 main() {
+  # F-125: 前置 root 检查。非 root 运行会在 apt/systemctl/docker 写操作
+  # 处中途失败、留下半成品（已下载的 compose、改了一半的 daemon.json），
+  # 这里在任何落盘动作之前 fail-fast。R18-A1-02：本检查须在自更新之
+  # 前——root 检查是纯本地判断、零成本；旧顺序先跑自更新（断网时可
+  # 耗尽数分钟联网预算）才拒绝非 root 调用，fail-fast 被架空。
+  if [[ $EUID -ne 0 ]]; then
+    echo "❌ panel_install.sh 需要 root 权限运行（涉及 Docker 与系统配置写入）"
+    echo "   请使用 root 用户或 sudo 重新执行"
+    exit 1
+  fi
+
   # F-006: 自更新检查放在 main 入口（自更新依赖 resolve_version /
   # 路由助手 / download_verified，均已在上文定义）。放在 main 内
   # 而非顶层还有一层考虑：测试夹具以「截断到 main 之前 + source」方式
   # 加载本脚本的函数，顶层调用会误入夹具；main 不会被夹具调用。
   if [ "${SELF_UPDATE_SKIP:-}" != "1" ]; then
     self_update_check "$@"
-  fi
-
-  # F-125: 前置 root 检查。非 root 运行会在 apt/systemctl/docker 写操作
-  # 处中途失败、留下半成品（已下载的 compose、改了一半的 daemon.json），
-  # 这里在任何落盘动作之前 fail-fast。
-  if [[ $EUID -ne 0 ]]; then
-    echo "❌ panel_install.sh 需要 root 权限运行（涉及 Docker 与系统配置写入）"
-    echo "   请使用 root 用户或 sudo 重新执行"
-    exit 1
   fi
 
   # A2-07：进程锁——在任何落盘动作之前取得（自更新已先行完
