@@ -1614,21 +1614,29 @@ func (m *Manager) tryReloadSingbox(inst *instance, reloadable bool) (applied, re
 	}
 }
 
-// waitStable 在探活窗口（startupProbeIn）内持续观察进程存活：达到过
-// Running 后在窗口内退出即判失败；全程未 Running 也判失败。窗口长度
-// 与旧的单次 Sleep 一致，不增加 Apply/Control 时延（F-032）。
+// waitStable 在探活窗口内持续观察进程存活：外层窗口
+// （startupProbeIn）等首次 Running，见到后还需持续存活
+// startupSteadyFor 才判稳定；见到后在稳态窗口内退出即判失败，
+// 全程未 Running 也判失败。慢启动内核有 10 秒外层窗口可等，
+// 常见快启动仍约 1.5 秒返回，启动即崩的内核也仍被立刻判失败
+// （R18-D3-03，F-032）。
 func (m *Manager) waitStable(kernelType string) bool {
 	deadline := time.Now().Add(startupProbeIn)
-	seenRunning := false
+	var steadyDeadline time.Time
 	for {
 		running := m.state(kernelType, false).Running
 		if running {
-			seenRunning = true
-		} else if seenRunning {
+			if steadyDeadline.IsZero() {
+				steadyDeadline = time.Now().Add(startupSteadyFor)
+			}
+			if !time.Now().Before(steadyDeadline) {
+				return true
+			}
+		} else if !steadyDeadline.IsZero() {
+			// Seen Running, then exited before holding steady.
 			return false
-		}
-		if !time.Now().Before(deadline) {
-			return seenRunning && running
+		} else if !time.Now().Before(deadline) {
+			return false
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

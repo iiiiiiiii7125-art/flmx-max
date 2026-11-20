@@ -13,13 +13,23 @@ import (
 )
 
 const (
-	logRingSize    = 200
-	maxLogLineLen  = 500
-	stopGrace      = 5 * time.Second
-	stopHardLimit  = 30 * time.Second
-	maxBackoff     = 60 * time.Second
-	stableAfter    = 60 * time.Second
-	startupProbeIn = 1500 * time.Millisecond
+	logRingSize   = 200
+	maxLogLineLen = 500
+	stopGrace     = 5 * time.Second
+	stopHardLimit = 30 * time.Second
+	maxBackoff    = 60 * time.Second
+	stableAfter   = 60 * time.Second
+	// startupProbeIn is the outer window waitStable allows for the
+	// first Running sighting. A slow-but-healthy kernel (cold
+	// page-in of a large binary on a slow disk) needs seconds to
+	// exec; the old 1.5s window judged it failed and rolled it
+	// back (R18-D3-03).
+	startupProbeIn = 10 * time.Second
+	// startupSteadyFor is the continuous-Running time a kernel
+	// must hold after first being seen before waitStable calls it
+	// stable. It keeps the common case fast (~1.5s) and still
+	// rejects a kernel that dies right after launching.
+	startupSteadyFor = 1500 * time.Millisecond
 )
 
 // ansiEscape matches terminal colour sequences; shadow-tls and sing-box
