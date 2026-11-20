@@ -2447,13 +2447,15 @@ get_config_params() {
     echo "请输入配置参数："
     
     if [[ -z "$SERVER_ADDR" ]]; then
-      read -p "服务器地址: " SERVER_ADDR
+      read -r -p "服务器地址: " SERVER_ADDR
     fi
     
     if [[ -z "$SECRET" ]]; then
       # R4B11-006: 密钥读取关回显（-s），避免明文留在终端回显/
       # 录屏/滚动回溯中；-s 不回显换行，读完补一个换行保持版面。
-      read -s -p "密钥: " SECRET
+      # R18-A3-05：-r 关转义——缺 -r 时手工输入的密钥含反斜杠会
+      # 被吃掉，落盘的密钥与用户输入不符。
+      read -r -s -p "密钥: " SECRET
       echo ""
     fi
     

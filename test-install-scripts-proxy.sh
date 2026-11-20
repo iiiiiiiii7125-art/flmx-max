@@ -7614,8 +7614,11 @@ STUBEOF
 # docker run 的 pgloader 进程参数出现（改走只读挂载的命令文件）。
 test_script_secret_surfaces_closed() (
   set -euo pipefail
-  grep -Fq 'read -s -p "密钥: "' "$ROOT_DIR/install.sh" || \
+  grep -Fq 'read -r -s -p "密钥: "' "$ROOT_DIR/install.sh" || \
     fail "R4B11-006: interactive secret prompt must use read -s"
+  if grep -Fq 'read -s -p "密钥: "' "$ROOT_DIR/install.sh"; then
+    fail "R18-A3-05: the secret prompt must carry -r, or backslashes in a typed secret are eaten"
+  fi
   if grep -Fq 'read -p "密钥: "' "$ROOT_DIR/install.sh"; then
     fail "R4B11-006: the echoing secret prompt must not remain"
   fi
@@ -7626,6 +7629,26 @@ test_script_secret_surfaces_closed() (
     fail "R4B11-006: pgloader should receive its target via the mounted command file"
   grep -Fq 'chmod 600 "$pgloader_load_file"' "$ROOT_DIR/panel_install.sh" || \
     fail "R4B11-006: the pgloader command file must be created with 0600 permissions"
+)
+
+# R18-A3-05：交互输入的密钥含反斜杠不得被吃掉。旧实现 read 缺 -r，
+# 手工输入的密钥含反斜杠时被 read 的转义处理吃掉，落盘的密钥与用
+# 户输入不符、节点连不上且无从察觉。本用例以重定向 stdin 喂入含
+# 反斜杠的地址与密钥，走真实 get_config_params，断言逐字保留。
+# 旧代码上两处反斜杠都被吃掉，必红。
+test_get_config_params_preserves_backslashes() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  local work input
+  work=$(mktemp -d)
+  input="$work/input"
+  printf '%s\n%s\n' 'panel.example.com\8443' 'sec\ret\key' > "$input"
+  SERVER_ADDR=""
+  SECRET=""
+  get_config_params < "$input" || fail "R18-A3-05: get_config_params must accept redirected input"
+  assert_equals 'panel.example.com\8443' "$SERVER_ADDR" "R18-A3-05: a backslash in the address must survive interactive input"
+  assert_equals 'sec\ret\key' "$SECRET" "R18-A3-05: a backslash in the secret must survive interactive input"
+  rm -rf "$work"
 )
 
 # F-R4-01: pgloader 命令文件的 LOAD DATABASE 语句必须以分号终止——
@@ -12587,6 +12610,7 @@ test_install_panel_invalid_port_aborts_before_download
 test_main_requires_root
 test_panel_main_root_check_precedes_self_update
 test_script_secret_surfaces_closed
+test_get_config_params_preserves_backslashes
 test_ensure_compose_trusted_proxy_hops_injects_mapping_form
 test_ensure_compose_trusted_proxy_hops_keeps_existing_line
 test_ensure_compose_trusted_proxy_hops_list_form
