@@ -281,8 +281,16 @@ func writeFIFO(t *testing.T, path string, value any) {
 // an AES-GCM envelope keyed by sha256(secret) with a millisecond
 // timestamp. The agent rejects plaintext command frames whenever a
 // secret is configured, so this fake panel must speak the envelope.
+// R18-D1-01: the authoritative timestamp lives INSIDE the AES-GCM
+// payload — the agent rejects envelopes without an inner timestamp
+// fail-closed (the wrapper's outer timestamp is only a pre-screen).
+// This helper therefore stamps the inner value exactly like the
+// panel's sendCommand (go-backend/internal/ws/server.go) does.
 func encryptCommand(t *testing.T, value map[string]any) map[string]any {
 	t.Helper()
+	if _, ok := value["timestamp"]; !ok {
+		value["timestamp"] = time.Now().UnixMilli()
+	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
