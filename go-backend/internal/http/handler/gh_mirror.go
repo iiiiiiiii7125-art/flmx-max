@@ -336,6 +336,18 @@ func parseGHMirrorPath(rest, rawQuery string) (*ghMirrorUpstream, error) {
 	return nil, fmt.Errorf("只能下载面板用到的 GitHub 仓库文件")
 }
 
+// R18-B10-02：公开镜像端点不得把上游 Go 原始错误文本直出给未鉴权
+// 调用方——ghMirrorLatestTag/ghMirrorDownload 的错误链直通原始
+// *url.Error（含完整上游 URL 与拨号/TLS 细节），会泄漏面板出口侧
+// 的运维信息，且与“未鉴权面错误不得原文直出”的既有纪律
+//（respondInternalError / TestUnauthenticatedRawErrorGate）不一致。
+// 上游失败只回固定文案，原始错误只记服务端日志。解析失败的 404
+// 本就是固定文案（“只能下载面板用到的 GitHub 仓库文件”），不在此列。
+func ghMirrorUpstreamUnavailable(w http.ResponseWriter, err error) {
+	log.Printf("gh_mirror: GitHub 上游暂时不可达：%v", err)
+	http.Error(w, "GitHub 上游暂时不可达", http.StatusBadGateway)
+}
+
 func (h *Handler) githubMirror(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -367,7 +379,7 @@ func (h *Handler) githubMirror(w http.ResponseWriter, r *http.Request) {
 		tag := up.file
 		if tag == "" {
 			if tag, err = ghMirrorLatestTag(up.repo, ""); err != nil {
-				http.Error(w, err.Error(), http.StatusBadGateway)
+				ghMirrorUpstreamUnavailable(w, err)
 				return
 			}
 			// 像 GitHub 一样指向 tag 页面，跟随重定向的客户端最终落在
@@ -382,7 +394,7 @@ func (h *Handler) githubMirror(w http.ResponseWriter, r *http.Request) {
 	if up.latest {
 		tag, err := ghMirrorLatestTag(up.repo, up.file)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			ghMirrorUpstreamUnavailable(w, err)
 			return
 		}
 		up.url = ghMirrorBases.github + "/" + up.repo + "/releases/download/" + tag + "/" + up.file
@@ -393,7 +405,7 @@ func (h *Handler) githubMirror(w http.ResponseWriter, r *http.Request) {
 
 	path, err := ghMirrorFetch(up)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		ghMirrorUpstreamUnavailable(w, err)
 		return
 	}
 	f, err := os.Open(path)
