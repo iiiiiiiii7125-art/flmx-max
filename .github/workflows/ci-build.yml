@@ -78,6 +78,14 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: bash scripts/check-doc-consistency.sh
 
+      # W2-03 (R18-A5-02/03/05): skill/e2e mechanical gates — the
+      # npm-install ban, the stale patch.py absence check and the e2e
+      # assertion-hygiene greps. Own script so the gates stay runnable
+      # without the full doc gate; folding them in is a follow-up.
+      - name: Check skill/e2e gates
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/check-skill-e2e-gates.sh
+
       # AG-03: the agent image tool set is an exec dependency of the
       # container form; dropping a package stays green everywhere
       # else and only breaks on real machines. Gate + mutation

