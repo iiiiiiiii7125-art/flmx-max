@@ -128,6 +128,7 @@ export function SubscriptionTemplatesModal({
       listSettled.status === "fulfilled" ? listSettled.value : null;
     const catRes = catSettled.status === "fulfilled" ? catSettled.value : null;
     const subRes = subSettled.status === "fulfilled" ? subSettled.value : null;
+
     if (listRes && listRes.code === 0) {
       setItems(listRes.data ?? []);
       setItemsLoadFailed(false);
@@ -141,6 +142,7 @@ export function SubscriptionTemplatesModal({
       !subRes ||
       subRes.code !== 0 ||
       !subRes.data;
+
     setAuxLoadFailed(auxFailed);
     if (catRes && catRes.code === 0) setCatalog(catRes.data ?? []);
     if (subRes && subRes.code === 0 && subRes.data)
@@ -185,6 +187,7 @@ export function SubscriptionTemplatesModal({
       name: edit.name,
       kind: edit.kind,
     };
+
     if (edit.mode === "builder") {
       if (!edit.builder) return null;
       d.builder = edit.builder;
@@ -193,11 +196,13 @@ export function SubscriptionTemplatesModal({
     } else {
       d.content = edit.content;
     }
+
     return d;
   };
 
   const runCheck = async () => {
     const d = draft();
+
     if (!d) return;
     setBusy(true);
     try {
@@ -205,8 +210,10 @@ export function SubscriptionTemplatesModal({
         ...d,
         subscriptionId: checkSub || undefined,
       });
+
       if (res.code !== 0 || !res.data) {
         toast.error(res.msg || "检查失败");
+
         return;
       }
       setCheck(res.data);
@@ -234,20 +241,25 @@ export function SubscriptionTemplatesModal({
 
   const save = async () => {
     const d = draft();
+
     if (!d) return;
     if (!d.name.trim()) {
       toast.error("请填写模板名称");
+
       return;
     }
     if (builderGroupConflicts && builderGroupConflicts.size > 0) {
       toast.error([...builderGroupConflicts.values()][0]);
+
       return;
     }
     setBusy(true);
     try {
       const res = await saveSubscriptionTemplate(d, d.id ? undefined : idemKey);
+
       if (res.code !== 0) {
         toast.error(res.msg || "保存失败");
+
         return;
       }
       if (!d.id) rotateIdemKey();
@@ -264,8 +276,10 @@ export function SubscriptionTemplatesModal({
     setBusy(true);
     try {
       const res = await refreshSubscriptionTemplate(t.id);
+
       if (res.code !== 0 || !res.data) {
         toast.error(res.msg || "刷新失败");
+
         return;
       }
       if (res.data.lastError)
@@ -285,8 +299,10 @@ export function SubscriptionTemplatesModal({
         kind: t.kind,
         content: t.content,
       });
+
       if (res.code !== 0) {
         toast.error(res.msg || "复制失败");
+
         return;
       }
       toast.success("已复制为本地模板");
@@ -300,8 +316,10 @@ export function SubscriptionTemplatesModal({
     setBusy(true);
     try {
       const res = await deleteSubscriptionTemplate(t.id);
+
       if (res.code !== 0) {
         toast.error(res.msg || "删除失败");
+
         return;
       }
       toast.success("模板已删除");
@@ -331,7 +349,8 @@ export function SubscriptionTemplatesModal({
               {!edit && (
                 <div className="space-y-3">
                   <p className="text-xs font-semibold text-foreground">
-                    用自己的 Mihomo / sing-box / Surge 配置作骨架下发订阅，面板只把节点填进策略组。
+                    用自己的 Mihomo / sing-box / Surge
+                    配置作骨架下发订阅，面板只把节点填进策略组。
                     网址模板每天自动刷新一次，失败继续用上次内容。在订阅编辑的「订阅模板」一节里给客户端选用模板。
                   </p>
                   {auxLoadFailed && (
@@ -367,18 +386,25 @@ export function SubscriptionTemplatesModal({
                     >
                       <div className="min-w-40 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold">{t.name}</span>
+                          <span className="text-sm font-semibold">
+                            {t.name}
+                          </span>
                           <Chip size="sm" variant="flat">
                             {TEMPLATE_KIND_LABELS[t.kind]}
                           </Chip>
                           <Chip size="sm" variant="flat">
-                            {t.builder ? "选择规则" : t.sourceUrl ? "网址" : "源码"}
+                            {t.builder
+                              ? "选择规则"
+                              : t.sourceUrl
+                                ? "网址"
+                                : "源码"}
                           </Chip>
                         </div>
                         <p className="text-xs font-semibold text-foreground">
                           {t.groups} 个策略组（{t.autoGroups} 个自动收节点）·{" "}
                           {t.rules} 条规则 · {t.usedBy} 个订阅在用
-                          {t.sourceUrl && t.lastFetch > 0 &&
+                          {t.sourceUrl &&
+                            t.lastFetch > 0 &&
                             ` · 上次刷新 ${new Date(t.lastFetch).toLocaleString()}`}
                         </p>
                         {t.lastError && (
@@ -426,9 +452,7 @@ export function SubscriptionTemplatesModal({
                         isDisabled={t.usedBy > 0}
                         size="sm"
                         title={
-                          t.usedBy > 0
-                            ? "有订阅在用，先在订阅里换掉"
-                            : "删除"
+                          t.usedBy > 0 ? "有订阅在用，先在订阅里换掉" : "删除"
                         }
                         variant="light"
                         onPress={() => remove(t)}
@@ -590,7 +614,10 @@ export function SubscriptionTemplatesModal({
                       )}
                     </div>
                     {check?.summary.warnings.map((w) => (
-                      <p key={w} className="text-xs font-semibold text-warning-700">
+                      <p
+                        key={w}
+                        className="text-xs font-semibold text-warning-700"
+                      >
                         {w}
                       </p>
                     ))}
@@ -615,9 +642,7 @@ export function SubscriptionTemplatesModal({
                     ))}
                     {check && edit.mode === "builder" && (
                       <details className="text-sm">
-                        <summary className="cursor-pointer">
-                          生成的配置
-                        </summary>
+                        <summary className="cursor-pointer">生成的配置</summary>
                         <Textarea
                           readOnly
                           className="mt-1 font-mono text-xs"
@@ -653,19 +678,17 @@ export function SubscriptionTemplatesModal({
                     返回列表
                   </Button>
                   {/* R18-E2-05：组名冲突未解时保存禁用，原因见行内标红。 */}
-                  {builderGroupConflicts &&
-                    builderGroupConflicts.size > 0 && (
-                      <span className="text-xs font-semibold text-danger-700">
-                        策略组名有冲突，请按上方标红修改后再保存
-                      </span>
-                    )}
+                  {builderGroupConflicts && builderGroupConflicts.size > 0 && (
+                    <span className="text-xs font-semibold text-danger-700">
+                      策略组名有冲突，请按上方标红修改后再保存
+                    </span>
+                  )}
                   <Button
                     color="primary"
-                    isLoading={busy}
                     isDisabled={
-                      !!builderGroupConflicts &&
-                      builderGroupConflicts.size > 0
+                      !!builderGroupConflicts && builderGroupConflicts.size > 0
                     }
+                    isLoading={busy}
                     onPress={save}
                   >
                     保存模板

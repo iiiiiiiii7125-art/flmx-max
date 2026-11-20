@@ -28,6 +28,7 @@ function Meter({ label, value }: { label: string; value?: number }) {
     value !== undefined && Number.isFinite(value)
       ? Math.min(100, Math.max(0, value))
       : undefined;
+
   return (
     <div className="min-w-0 space-y-1">
       <div className="flex items-baseline justify-between gap-1 text-[11px] font-semibold leading-none">
@@ -106,7 +107,9 @@ export function NodeLiveStats({
         {meters}
         <div className="grid grid-cols-2 divide-x divide-divider rounded-lg py-1.5 text-[11px] font-semibold tabular-nums">
           <div className="min-w-0 px-2.5">
-            <div className="text-[10px] font-semibold text-foreground">网速</div>
+            <div className="text-[10px] font-semibold text-foreground">
+              网速
+            </div>
             <div className="flex flex-wrap items-center gap-x-2 font-medium">
               <span className="flex items-center gap-1 whitespace-nowrap">
                 {upIcon}
@@ -119,7 +122,9 @@ export function NodeLiveStats({
             </div>
           </div>
           <div className="min-w-0 px-2.5" title={split}>
-            <div className="text-[10px] font-semibold text-foreground">本月流量（网卡）</div>
+            <div className="text-[10px] font-semibold text-foreground">
+              本月流量（网卡）
+            </div>
             <div className="flex flex-wrap items-baseline gap-x-1.5">
               <span className="font-semibold">{total}</span>
               <span className="whitespace-nowrap text-[10px] font-semibold text-foreground">
@@ -152,10 +157,14 @@ export function NodeLiveStats({
       </div>
       <div className="w-28 space-y-0.5 leading-tight tabular-nums">
         <div className="flex items-baseline gap-1.5 text-[11px] font-semibold">
-          <span className="text-[10px] font-semibold text-foreground">本月（网卡）</span>
+          <span className="text-[10px] font-semibold text-foreground">
+            本月（网卡）
+          </span>
           <span className="font-semibold">{total}</span>
         </div>
-        <div className="text-[10px] font-semibold text-foreground">{split || "—"}</div>
+        <div className="text-[10px] font-semibold text-foreground">
+          {split || "—"}
+        </div>
         {month && monthFreshness && (
           <div className="text-[10px] font-semibold text-foreground">
             {monthFreshness}

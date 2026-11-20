@@ -127,10 +127,7 @@ import { useIdemKey, useRotateIdemKeyOnCreateOpen } from "@/hooks/useIdemKey";
 import { JwtUtil } from "@/utils/jwt";
 import { loadStoredOrder, saveOrder } from "@/utils/order-storage";
 import { Node, NodeForm, NodeFilterMode } from "@/pages/node/types";
-import {
-  computeNodeCardTags,
-  type NodeCardTags,
-} from "@/pages/node/card-tags";
+import { computeNodeCardTags, type NodeCardTags } from "@/pages/node/card-tags";
 import {
   formatFlow,
   formatUptime,
@@ -404,9 +401,9 @@ export default function NodePage({
   const [restartNode, setRestartNode] = useState<Node | null>(null);
   const [swapNode, setSwapNode] = useState<Node | null>(null);
   const [connLogNodeId, setConnLogNodeId] = useState<number | null>(null);
-  const [connLogSavingIds, setConnLogSavingIds] = useState<
-    ReadonlySet<number>
-  >(new Set());
+  const [connLogSavingIds, setConnLogSavingIds] = useState<ReadonlySet<number>>(
+    new Set(),
+  );
   // 白名单额外放行输入框的编辑中文本（按节点 id；未编辑时取节点现值）。
   const [whitelistDrafts, setWhitelistDrafts] = useState<
     Record<number, string>
@@ -552,6 +549,7 @@ export default function NodePage({
               return;
             }
             const [forwards, tunnels, speedLimits] = lists;
+
             if (
               forwards.code === 0 &&
               tunnels.code === 0 &&
@@ -812,6 +810,7 @@ export default function NodePage({
       return null;
     }
     if (monthTrafficFailed) return "月流量刷新失败，可能陈旧";
+
     return freshnessLabel(monthTrafficLastHour[String(nodeId)] ?? 0);
   };
   const monthTrafficText = (nodeId: number): string | null => {
@@ -823,6 +822,7 @@ export default function NodePage({
 
     const fresh = monthFreshnessText(nodeId);
     const base = `↓${formatFlow(t[0])} ↑${formatFlow(t[1])}`;
+
     return fresh ? `${base} · ${fresh}` : base;
   };
 
@@ -1618,8 +1618,7 @@ export default function NodePage({
                     renewalCycle: form.renewalCycle,
                     idleTimeoutSeconds: form.idleTimeoutSeconds,
                     edgeIdleTimeoutSeconds: form.edgeIdleTimeoutSeconds,
-                    backstopIdleTimeoutSeconds:
-                      form.backstopIdleTimeoutSeconds,
+                    backstopIdleTimeoutSeconds: form.backstopIdleTimeoutSeconds,
                     backstopTrickleBps: form.backstopTrickleBps,
                     serverIp:
                       form.serverIpV4?.trim() ||
@@ -2400,6 +2399,7 @@ export default function NodePage({
   const collapseAllGroups = () => {
     if (!groupSections) return;
     const rendered = groupSections.map((section) => section.label);
+
     void saveCollapsedGroups([
       ...collapsedGroups,
       ...rendered.filter((label) => !collapsedGroups.includes(label)),
@@ -2459,7 +2459,9 @@ export default function NodePage({
             toast(res.warning, { icon: "⚠️", duration: 12000 });
           }
         } catch {
-          toast.error("删除分组后折叠状态保存失败，服务端可能仍保留该分组的折叠记录");
+          toast.error(
+            "删除分组后折叠状态保存失败，服务端可能仍保留该分组的折叠记录",
+          );
         }
       })();
     },
@@ -2621,51 +2623,47 @@ export default function NodePage({
         key={node.id}
         actions={rowActions}
         cardTags={cardTags?.get(node.id) ?? null}
+        connLogSaving={connLogSavingIds.has(node.id)}
         infoPlacement={infoPopoverPlacement[node.id] ?? "left"}
         latencyPoolEmpty={latencyPoolEmpty}
+        monthFreshness={monthFreshnessText(node.id)}
         monthIn={month?.[0]}
         monthLabel={monthTrafficText(node.id)}
-        monthFreshness={monthFreshnessText(node.id)}
         monthOut={month?.[1]}
         node={node}
         probing={probingIds.has(node.id)}
         selectMode={selectMode}
         selected={selectedIds.has(node.id)}
-        showMonitor={!!onOpenMonitor}
         showConnLog={admin}
-        connLogSaving={connLogSavingIds.has(node.id)}
+        showMonitor={!!onOpenMonitor}
         showWhitelist={admin}
-        whitelistDraft={
-          whitelistDrafts[node.id] ?? node.whitelistExtra ?? ""
-        }
-        onWhitelistDraftChange={handleWhitelistDraftChange}
-        whitelistSaving={whitelistSavingIds.has(node.id)}
         upgradeProgressEntry={upgradeProgress[node.id]}
+        whitelistDraft={whitelistDrafts[node.id] ?? node.whitelistExtra ?? ""}
+        whitelistSaving={whitelistSavingIds.has(node.id)}
+        onWhitelistDraftChange={handleWhitelistDraftChange}
       />
     ) : (
       <NodeListRow
         key={node.id}
         actions={rowActions}
         cardTags={cardTags?.get(node.id) ?? null}
+        connLogSaving={connLogSavingIds.has(node.id)}
         isDisplayFiltered={isDisplayFiltered}
         latencyPoolEmpty={latencyPoolEmpty}
+        monthFreshness={monthFreshnessText(node.id)}
         monthIn={month?.[0]}
         monthLabel={monthTrafficText(node.id)}
-        monthFreshness={monthFreshnessText(node.id)}
         monthOut={month?.[1]}
         node={node}
         probing={probingIds.has(node.id)}
         selectMode={selectMode}
         selected={selectedIds.has(node.id)}
         showConnLog={admin}
-        connLogSaving={connLogSavingIds.has(node.id)}
         showWhitelist={admin}
-        whitelistDraft={
-          whitelistDrafts[node.id] ?? node.whitelistExtra ?? ""
-        }
-        onWhitelistDraftChange={handleWhitelistDraftChange}
-        whitelistSaving={whitelistSavingIds.has(node.id)}
         upgradeProgressEntry={upgradeProgress[node.id]}
+        whitelistDraft={whitelistDrafts[node.id] ?? node.whitelistExtra ?? ""}
+        whitelistSaving={whitelistSavingIds.has(node.id)}
+        onWhitelistDraftChange={handleWhitelistDraftChange}
       />
     );
   };
@@ -2946,8 +2944,7 @@ export default function NodePage({
                       node.restartPushStatus === "failed" ||
                       (node.restartPushStatus === "pending" &&
                         node.restartEnabled === 1) ||
-                      (node.restartEnabled === 1 &&
-                        !node.restartPushStatus) ? (
+                      (node.restartEnabled === 1 && !node.restartPushStatus) ? (
                         <NodeRestartPushLine
                           key="restart-push"
                           node={node}
@@ -3133,9 +3130,7 @@ export default function NodePage({
                         isDisabled={connLogSavingIds.has(node.id)}
                         isSelected={node.connLogEnabled === 1}
                         size="sm"
-                        onValueChange={(v) =>
-                          void handleToggleConnLog(node, v)
-                        }
+                        onValueChange={(v) => void handleToggleConnLog(node, v)}
                       />
                     </span>
                   </div>
@@ -3146,9 +3141,7 @@ export default function NodePage({
                       <span className="text-sm font-semibold">入站白名单</span>
                       <span className="flex items-center gap-2">
                         <span className="text-xs font-semibold text-foreground">
-                          {node.whitelistEnabled === 1
-                            ? "已开启"
-                            : "未开启"}
+                          {node.whitelistEnabled === 1 ? "已开启" : "未开启"}
                         </span>
                         <Switch
                           aria-label="入站白名单开关"
@@ -3168,15 +3161,14 @@ export default function NodePage({
                       </p>
                     )}
                     {/* 安装失败原因：失败且原因非空时随状态展示，事后仍可查（R3-C-P3-2）。 */}
-                    {node.nftablesStatus === "failed" &&
-                      node.nftablesError && (
-                        <p
-                          className="break-words text-xs font-semibold text-danger-700"
-                          title={node.nftablesError}
-                        >
-                          原因：{node.nftablesError}
-                        </p>
-                      )}
+                    {node.nftablesStatus === "failed" && node.nftablesError && (
+                      <p
+                        className="break-words text-xs font-semibold text-danger-700"
+                        title={node.nftablesError}
+                      >
+                        原因：{node.nftablesError}
+                      </p>
+                    )}
                     {/* nftables 缺失（A-低-6）：agent 已确认本机无 nftables，仅 nftables 模式节点记此态；订阅／realm 计数永不入账。 */}
                     {node.nftablesStatus === "missing" && (
                       <p className="break-words text-xs font-semibold text-danger-700">
@@ -3216,8 +3208,7 @@ export default function NodePage({
                     {node.whitelistEnabled === 1 && (
                       <>
                         <p className="text-xs font-semibold text-foreground">
-                          该节点全部入站只放行中转机、本机与列表中的
-                          IP/网段。
+                          该节点全部入站只放行中转机、本机与列表中的 IP/网段。
                         </p>
                         <div className="flex items-end gap-2">
                           <Input

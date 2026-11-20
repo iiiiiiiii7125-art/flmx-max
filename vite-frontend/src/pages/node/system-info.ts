@@ -32,9 +32,8 @@ const toFiniteNumber = (
   value: string | number | undefined,
 ): number | undefined => {
   const v =
-    typeof value === "number"
-      ? value
-      : Number.parseFloat(String(value ?? ""));
+    typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+
   return Number.isFinite(v) ? v : undefined;
 };
 
@@ -42,7 +41,9 @@ const clampPercent = (
   value: string | number | undefined,
 ): number | undefined => {
   const v = toFiniteNumber(value);
+
   if (v === undefined) return undefined;
+
   return Math.min(100, Math.max(0, v));
 };
 
@@ -50,7 +51,9 @@ const clampNonNegative = (
   value: string | number | undefined,
 ): number | undefined => {
   const v = toFiniteNumber(value);
+
   if (v === undefined) return undefined;
+
   return Math.max(0, v);
 };
 
@@ -58,7 +61,9 @@ const clampNonNegativeInt = (
   value: string | number | undefined,
 ): number | undefined => {
   const v = toFiniteNumber(value);
+
   if (v === undefined) return undefined;
+
   return Math.max(0, Math.trunc(v));
 };
 
@@ -144,9 +149,7 @@ export const buildNodeSystemInfo = (
       ? (previous?.downloadTraffic ?? 0)
       : toInteger(raw.bytes_received);
   const uptime =
-    raw.uptime === undefined
-      ? (previous?.uptime ?? 0)
-      : toInteger(raw.uptime);
+    raw.uptime === undefined ? (previous?.uptime ?? 0) : toInteger(raw.uptime);
 
   let uploadSpeed = 0;
   let downloadSpeed = 0;
@@ -169,7 +172,8 @@ export const buildNodeSystemInfo = (
   }
 
   return {
-    cpuUsage: raw.cpu_usage === undefined ? undefined : clampPercent(raw.cpu_usage),
+    cpuUsage:
+      raw.cpu_usage === undefined ? undefined : clampPercent(raw.cpu_usage),
     memoryUsage:
       raw.memory_usage === undefined
         ? undefined
