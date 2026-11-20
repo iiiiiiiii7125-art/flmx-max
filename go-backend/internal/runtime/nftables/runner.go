@@ -143,14 +143,37 @@ func (r *SSHRunner) Test(ctx context.Context, cfg SSHConfig) error {
 }
 
 func buildCapabilityCheckCommand(nft, probeName string) string {
+	// R18-C3-09：探针须覆盖 BindIP 渲染形态（v4 与 v6 各一，与
+	// TestRenderTablePassesNftCheck 的用例集对齐）——此前探针无
+	// BindIP 规则，某节点内核/nft 拒绝 BindIP 形态时测连通照样通
+	// 过，问题只在第一次带 BindIP 的真实 sync 才暴露（此时转发
+	// 已落库）。探针只跑 nft -c，不下发任何规则。
 	script := RenderTable(NodePlan{
-		Rules: []Rule{{
-			ForwardID:  1,
-			InPort:     12345,
-			TargetHost: "192.0.2.1",
-			TargetPort: 443,
-			Protocols:  []string{"tcp", "udp"},
-		}},
+		Rules: []Rule{
+			{
+				ForwardID:  1,
+				InPort:     12345,
+				TargetHost: "192.0.2.1",
+				TargetPort: 443,
+				Protocols:  []string{"tcp", "udp"},
+			},
+			{
+				ForwardID:  2,
+				InPort:     12346,
+				BindIP:     "192.0.2.10",
+				TargetHost: "192.0.2.1",
+				TargetPort: 443,
+				Protocols:  []string{"tcp", "udp"},
+			},
+			{
+				ForwardID:  3,
+				InPort:     12347,
+				BindIP:     "2001:db8::10",
+				TargetHost: "2001:db8::20",
+				TargetPort: 8443,
+				Protocols:  []string{"tcp"},
+			},
+		},
 	})
 	script = strings.Replace(script, "table inet "+TableNameForInstance("")+" {", "table inet "+probeName+" {", 1)
 	return "set -eu\n" +

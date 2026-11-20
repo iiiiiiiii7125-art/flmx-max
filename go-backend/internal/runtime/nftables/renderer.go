@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"sort"
 	"strings"
@@ -139,6 +140,10 @@ func RenderTable(plan NodePlan) string {
 	for _, rule := range sortedRules(plan.Rules) {
 		family := nftAddressFamily(rule.TargetHost)
 		if family == "" {
+			// R18-C3-05：纵深——ValidatePlan 已拒主机名目标，此
+			// 分支只在绕过 ValidatePlan 直接渲染时可达；跳过计数
+			// 时点名转发 ID，绝不静默丢计数。
+			log.Printf("nftables render: forward %d target %q is not an IP literal, forward-chain counting rules skipped", rule.ForwardID, rule.TargetHost)
 			continue
 		}
 		targetHost := strings.Trim(strings.TrimSpace(rule.TargetHost), "[]")
@@ -252,6 +257,24 @@ func ValidateBindIPTargetFamily(bindIP, targetHost string) error {
 	return fmt.Errorf("nftables 监听IP %s（%s）与目标地址 %s（%s）地址族不一致：nft 会以 conflicting protocols 拒绝整批规则，请把监听IP与目标地址改为同一地址族", bindIPNorm, bindName, strings.Trim(strings.TrimSpace(targetHost), "[]"), targetName)
 }
 
+// ValidateBindIP rejects a BindIP that is not an IP literal
+// (R18-C3-04): bindIPFamilyIP silently drops hostname BindIPs and
+// the DNAT rule then renders with no daddr restriction, so a
+// forward the admin believed bound to one address listens on all
+// addresses (fail-open). Empty BindIP is the wildcard form and
+// passes; IP literals (plain, bracketed IPv6, host:port with an IP
+// host) pass. A hostname must be rejected, never silently widened.
+func ValidateBindIP(bindIP string) error {
+	trimmed := strings.TrimSpace(bindIP)
+	if trimmed == "" {
+		return nil
+	}
+	if _, _, ok := bindIPFamilyIP(trimmed); ok {
+		return nil
+	}
+	return fmt.Errorf("nftables 监听IP %q 不是 IP 地址：主机名形式的监听IP会被渲染层静默丢弃、转发退化为全地址监听，请填写节点 IP 地址或留空（留空即监听全部地址）", trimmed)
+}
+
 // ValidatePlan 校验计划内每条规则的 TargetHost（C3-01），错误点名
 // 出错的转发 ID。Manager.Reconcile 在渲染与下发之前调用，非法计划
 // 整单拒绝、脚本不下发节点。
@@ -260,7 +283,21 @@ func ValidatePlan(plan NodePlan) error {
 		if err := ValidateTargetHost(rule.TargetHost); err != nil {
 			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
 		}
-		// R18-C3-03：BindIP 与目标地址族混用整单拒绝（见上）。
+		// R18-C3-04：主机名 BindIP 整单拒绝（见上）——渲染层会
+		// 静默丢弃它，转发退化为全地址监听，绝不能放行下发。
+		if err := ValidateBindIP(rule.BindIP); err != nil {
+			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
+		}
+		// R18-C3-05：主机名目标整单拒绝——ValidateTargetHost 放行
+		// 主机名、DNAT 照常下发，但 forward 链按族跳过该规则、流
+		// 量全程不计量。intake（validateNftablesForwardRequest）
+		// 本就只接受 IP 目标，渲染层须同口径，绝不一面放行、一面
+		// 静默丢计数。走到这里时 TargetHost 已过 ValidateTarget-
+		// Host，故无族即严格主机名。
+		if nftAddressFamily(rule.TargetHost) == "" {
+			return fmt.Errorf("转发 %d: nftables 目标地址 %q 不是 IP 地址：主机名目标无法生成 forward 链计数规则，流量将不被计量，请填写目标 IP 地址", rule.ForwardID, strings.Trim(strings.TrimSpace(rule.TargetHost), "[]"))
+		}
+		// R18-C3-03：BindIP 与目标地址族混用整单拒绝。
 		if err := ValidateBindIPTargetFamily(rule.BindIP, rule.TargetHost); err != nil {
 			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
 		}

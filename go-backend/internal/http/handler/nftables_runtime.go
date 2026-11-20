@@ -122,6 +122,13 @@ func (h *Handler) validateNftablesForwardRequest(tunnel *tunnelRecord, remoteAdd
 	if ip == nil {
 		return errors.New("nftables 节点仅支持 IP 目标地址")
 	}
+	// R18-C3-04：主机名形式的监听IP（inIp）整单拒收——渲染层会
+	// 静默丢弃它，转发退化为全地址监听（fail-open）。无 BindIP
+	// 在手的调用点传 ""，由渲染层 ValidatePlan 兜底（恢复/导入
+	// 面同样过该门）。
+	if err := runtimenft.ValidateBindIP(bindIP); err != nil {
+		return err
+	}
 	// R18-C3-03：监听IP 与目标地址族混用（v6 inIp + v4 目标或
 	// 反之）渲染出的规则集会被 nft 以 conflicting protocols 整批
 	// 拒绝，一条这样的转发会把整节点 sync 永久冻住。intake 在此

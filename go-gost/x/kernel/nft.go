@@ -29,9 +29,58 @@ const legacyNFTTable = "flvx_kernel"
 // legacyAgentNFTTable 是 legacy 代（/etc/flux_agent）agent 的计数
 // 表名（F-R4-02）：legacy 根与 current 根不得共享 plain 表，否则
 // 一方 sync 即清另一方计数器/白名单（F2-NFT-01 机制）。该表只由
-// legacy agent 自身同步与 current 代卸载时清理；current 代的常规
-// sync 不得碰它（legacy agent 活着时那是它的 live 表）。
+// legacy agent 自身同步；current 代的常规 sync 不得碰它（legacy
+// agent 活着时那是它的 live 表），卸载时也只在确认无 legacy
+// agent 存活后才清理（R18-C3-06/M-4：先判存活再删表）。
 const legacyAgentNFTTable = "flmx_kernel_legacy"
+
+// legacyAgentDir 是 legacy 代 agent 的安装根（/etc/flux_agent，
+// legacyBaseDir 的父目录）：在其下执行二进制的进程即存活的
+// legacy 代 agent。
+const legacyAgentDir = "/etc/flux_agent"
+
+// legacyAgentProcRoot 是存活探测扫描的 /proc 根；测试可指向伪造
+// 的进程树。生产上恒为 /proc。
+var legacyAgentProcRoot = "/proc"
+
+// legacyAgentAlive 报告是否有 legacy 代 agent 进程正在运行；
+// removeTables 在删 flmx_kernel_legacy 前先问它。它是变量，
+// 测试可注入确定性的存活/死亡，不依赖本机进程状态。
+var legacyAgentAlive = func() bool { return legacyAgentRunning() }
+
+// legacyAgentRunning 扫描 /proc：任一进程的 exe 指向
+// legacyAgentDir 下、或其命令行含该路径，即 legacy 代 agent 存
+// 活。读不到 /proc（或权限不足无法判断）时按存活处理
+// fail-closed：删一张可能仍是 live 的白名单表，远比卸载后留一
+// 张残留表严重（残留表可由运维扫除，白名单窗口却是暴露期）。
+// 非 Linux 上无 /proc，读失败同样按存活处理——nft 本就只在
+// Linux 上有意义，卸载路径上宁可留表、不删他方 live 表。
+func legacyAgentRunning() bool {
+	entries, err := os.ReadDir(legacyAgentProcRoot)
+	if err != nil {
+		return true
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if pid, err := strconv.Atoi(e.Name()); err != nil || pid <= 0 {
+			continue
+		}
+		pdir := filepath.Join(legacyAgentProcRoot, e.Name())
+		if exe, err := os.Readlink(filepath.Join(pdir, "exe")); err == nil {
+			if exe == legacyAgentDir || strings.HasPrefix(exe, legacyAgentDir+"/") {
+				return true
+			}
+		}
+		if cmd, err := os.ReadFile(filepath.Join(pdir, "cmdline")); err == nil {
+			if strings.Contains(string(cmd), legacyAgentDir+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // nftTableForBaseDir derives this agent's nft table name from its
 // kernel root (F2-NFT-01, P1-1): two agents on one host must never
@@ -702,14 +751,23 @@ func (n *nftCounters) tableFingerprint(ctx context.Context) (string, error) {
 // 根或容器形态，见 hadPlainTable）删（对其他安装，它可能是另一
 // agent 的 live 表）；plain 主表本身也只在升级迁移从未跑过、且有
 // 旧签名的安装上删（那是本安装自己的旧表），全新安装绝不碰它。
-// F-R4-02：canonical 卸载一并清 legacy 代的表（迁移收尾）；legacy
-// agent 自身卸载只删自己的表，绝不碰 plain 表（那可能是 current
-// 代的 live 表）。
+// F-R4-02：canonical 卸载一并清 legacy 代的表（迁移收尾）——但
+// 只在确认无 legacy 代 agent 存活后（R18-C3-06/M-4）：legacy
+// agent 活着时 flmx_kernel_legacy 是它的 live 表，删了它的入站
+// 白名单在窗口内失效；存活时跳过该表并在卸载输出中点名，残留
+// 表待 legacy agent 自身卸载或运维扫除。legacy agent 自身卸载
+// 只删自己的表，绝不碰 plain 表（那可能是 current 代的 live 表）。
 func (n *nftCounters) removeTables() error {
 	var b strings.Builder
 	tables := []string{n.tableName()}
 	if n.hadPlainTable() {
-		tables = append(tables, legacyNFTTable, legacyAgentNFTTable)
+		tables = append(tables, legacyNFTTable)
+		// R18-C3-06/M-4：先判 legacy agent 是否存活再删表。
+		if legacyAgentAlive() {
+			log.Printf("agent uninstall: legacy agent still running, keeping its live table %s (remove it after the legacy agent is uninstalled)", legacyAgentNFTTable)
+		} else {
+			tables = append(tables, legacyAgentNFTTable)
+		}
 		if !n.state.Migrated && n.state.Signature != "" {
 			tables = append(tables, nftTable)
 		}
