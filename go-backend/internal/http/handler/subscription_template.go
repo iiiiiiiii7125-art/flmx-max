@@ -391,7 +391,12 @@ func (h *Handler) subscriptionTemplateRefresh(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.refreshTemplate(r.Context(), t); err != nil {
-		respondInternalError(w, "subscriptionTemplateRefresh", err)
+		// R18-B6-03：刷新失败分流——仓储错才走通用文案；上游下载/
+		// 校验失败是固定文案，原样回给用户才知道为什么没刷成。
+		if respondInternalIfRepoError(w, "subscriptionTemplateRefresh", err) {
+			return
+		}
+		response.WriteJSON(w, response.ErrDefault(err.Error()))
 		return
 	}
 	response.WriteJSON(w, response.OK(templateView(t, h.templateUsage()[t.ID])))
