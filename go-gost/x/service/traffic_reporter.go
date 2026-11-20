@@ -155,6 +155,10 @@ func buildReportURLCandidates(addr string, secret string) (upload []string, conf
 		scheme = "https"
 	}
 
+	// C4-05 + OPEN-2 (merged): same query-secret note as the WS dial
+	// side (see doc/guide/install.md, "反向代理" section) — these two
+	// upload/config URLs, and the connlog v2 URL rewritten from the
+	// upload URL, must move to the X-FLMX-Node-Secret header together.
 	upload = []string{
 		scheme + "://" + normalizedAddr + "/flow/upload?secret=" + secret,
 	}

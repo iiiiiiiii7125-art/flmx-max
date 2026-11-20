@@ -592,6 +592,11 @@ func buildWebSocketCandidates(addr string, secret string, version string, http i
 		normalizedAddr = strings.TrimSpace(addr)
 	}
 
+	// C4-05 + OPEN-2 (merged): the node secret still travels in the URL
+	// query; staged migration to the X-FLMX-Node-Secret header is
+	// recorded in doc/guide/install.md ("反向代理" section) — send both
+	// header and query once the panel accepts the header, and drop the
+	// query here only after the panel has dropped query support.
 	query := "/system-info?type=1&secret=" + url.QueryEscape(secret) + "&version=" + url.QueryEscape(version) +
 		"&http=" + strconv.Itoa(http) + "&tls=" + strconv.Itoa(tls) + "&socks=" + strconv.Itoa(socks)
 

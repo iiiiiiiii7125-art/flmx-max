@@ -67,7 +67,9 @@ func connlogBatchDigest(events []ConnEvent) string {
 }
 
 // connlogReportURL 把 v1 上报候选 URL 改写为 connlog v2 端点，
-// 只替换尾段路径（与 reliableReportURL 同纪律）。
+// 只替换尾段路径（与 reliableReportURL 同纪律）。query 原样跟随——
+// 节点 secret 仍在 query 里（C4-05 + OPEN-2 已合并，迁移法见
+// doc/guide/install.md「反向代理」节；改头时与上报 URL 一并改）。
 func connlogReportURL(parsed *url.URL) {
 	if strings.HasSuffix(parsed.Path, "/flow/upload") {
 		parsed.Path = strings.TrimSuffix(parsed.Path, "/flow/upload") + "/flow/connlog/v2"

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -27,7 +28,11 @@ type nodeSwapFakeAgent struct {
 	h        *Handler
 	mu       sync.Mutex
 	commands []cleanupAgentCommand
-	reply    func(command cleanupAgentCommand) (success bool, message string, data map[string]interface{})
+	// dropReplyTypes 命中的命令只记录、不回执——用于模拟面板等回执
+	// 超时（OPEN-7）：SwapSet 发出后 agent 侧继续执行，但回执永不
+	// 到达，面板须走超时后复查。
+	dropReplyTypes map[string]bool
+	reply          func(command cleanupAgentCommand) (success bool, message string, data map[string]interface{})
 }
 
 func newNodeSwapFakeAgent(t *testing.T) *nodeSwapFakeAgent {
@@ -97,8 +102,12 @@ func newNodeSwapFakeAgent(t *testing.T) *nodeSwapFakeAgent {
 			}
 			a.mu.Lock()
 			a.commands = append(a.commands, command)
+			drop := a.dropReplyTypes != nil && a.dropReplyTypes[command.Type]
 			reply := a.reply
 			a.mu.Unlock()
+			if drop {
+				continue
+			}
 			success, message, data := reply(command)
 			resp := map[string]interface{}{
 				"type":      command.Type,
@@ -323,5 +332,166 @@ func TestCheckNodeSwapCapacityMirror(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("capacity error must carry %q: %v", want, err)
 		}
+	}
+}
+
+// --- OPEN-7：SwapSet 等回执超时后按复查到的实际状态回执 ------------
+//
+// 背景：SwapSet 走 agent mutation 队列、用进程级 ctx，面板 600s 停止
+// 等待后 agent 仍会执行到底——只报「等待节点响应超时」会让用户把
+// 已生效的设置当成失败重做一次。executeNodeSwapSet 在超时后立即
+// 再拉一次 SwapInfo（复查腿），按实际状态回执。
+
+// swapInfoDataForReconcile 拼一份 SwapInfo 回执 data：fileSizeMB 是
+// /swapfile 在盘文件大小（stat 口径），entries 是 /proc/swaps 行。
+func swapInfoDataForReconcile(t *testing.T, fileSizeMB int64, managedActive bool) map[string]interface{} {
+	t.Helper()
+	var entries []interface{}
+	if managedActive {
+		// 在用条目 2047MB 是真实内核口径：2GiB 文件经 mkswap 去头后
+		// /proc/swaps 报 2097148 KiB、向下取整 2047MB——复查判定
+		// 绝不能拿条目 sizeMB 与目标 2048 精确比对。
+		entries = append(entries, map[string]interface{}{"name": "/swapfile", "type": "file", "sizeMB": float64(2047), "usedMB": float64(0)})
+	}
+	return map[string]interface{}{
+		"totalMB": float64(2048), "usedMB": float64(0),
+		"entries":    entries,
+		"diskFreeMB": float64(5000), "memTotalMB": float64(8000),
+		"managedFilePresent": true, "fileSizeMB": float64(fileSizeMB),
+	}
+}
+
+func TestNodeSwapSetTimeoutReconcilesCompleted(t *testing.T) {
+	a := newNodeSwapFakeAgent(t)
+	a.dropReplyTypes = map[string]bool{"SwapSet": true}
+	a.reply = func(command cleanupAgentCommand) (bool, string, map[string]interface{}) {
+		if command.Type == "SwapInfo" {
+			return true, "", swapInfoDataForReconcile(t, 2048, true)
+		}
+		return true, "", nil
+	}
+	code, msg, data := a.h.executeNodeSwapSet(1, 2, 200*time.Millisecond)
+	if code == 0 || data != nil {
+		t.Fatalf("reconciled completion must not be code 0 (no before/after pair to render), got code=%d data=%v", code, data)
+	}
+	for _, want := range []string{"已完成", "2 GB", "2048"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("completion receipt must carry %q, got %q", want, msg)
+		}
+	}
+	if cmds := a.commandsOfType("SwapSet"); len(cmds) != 1 {
+		t.Fatalf("expected exactly one SwapSet command, got %d", len(cmds))
+	}
+	if cmds := a.commandsOfType("SwapInfo"); len(cmds) != 1 {
+		t.Fatalf("timeout must trigger exactly one SwapInfo reconcile, got %d", len(cmds))
+	}
+}
+
+func TestNodeSwapSetTimeoutReconcilesNotLanded(t *testing.T) {
+	a := newNodeSwapFakeAgent(t)
+	a.dropReplyTypes = map[string]bool{"SwapSet": true}
+	a.reply = func(command cleanupAgentCommand) (bool, string, map[string]interface{}) {
+		if command.Type == "SwapInfo" {
+			// 旧 1GB 文件仍在用：设置未落地（仍在执行，或已恢复原状）。
+			return true, "", swapInfoDataForReconcile(t, 1024, true)
+		}
+		return true, "", nil
+	}
+	code, msg, _ := a.h.executeNodeSwapSet(1, 2, 200*time.Millisecond)
+	if code != -2 {
+		t.Fatalf("not-landed reconcile must be code -2, got %d", code)
+	}
+	for _, want := range []string{"未达到目标", "1024", "2 GB"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("not-landed receipt must carry %q, got %q", want, msg)
+		}
+	}
+	if cmds := a.commandsOfType("SwapInfo"); len(cmds) != 1 {
+		t.Fatalf("timeout must trigger exactly one SwapInfo reconcile, got %d", len(cmds))
+	}
+}
+
+func TestNodeSwapSetTimeoutReconcilesFileBuiltNotActive(t *testing.T) {
+	a := newNodeSwapFakeAgent(t)
+	a.dropReplyTypes = map[string]bool{"SwapSet": true}
+	a.reply = func(command cleanupAgentCommand) (bool, string, map[string]interface{}) {
+		if command.Type == "SwapInfo" {
+			// 文件已建到目标大小、但 /proc/swaps 里还没有它：在
+			// fallocate/dd 与 swapon 之间的收尾窗口。
+			return true, "", swapInfoDataForReconcile(t, 2048, false)
+		}
+		return true, "", nil
+	}
+	code, msg, _ := a.h.executeNodeSwapSet(1, 2, 200*time.Millisecond)
+	if code != -2 {
+		t.Fatalf("file-built-not-active reconcile must be code -2, got %d", code)
+	}
+	for _, want := range []string{"尚未启用", "2 GB"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("file-built receipt must carry %q, got %q", want, msg)
+		}
+	}
+}
+
+func TestNodeSwapSetTimeoutReconcileFailsUnknown(t *testing.T) {
+	a := newNodeSwapFakeAgent(t)
+	a.dropReplyTypes = map[string]bool{"SwapSet": true, "SwapInfo": true}
+	old := nodeSwapReconcileInfoTimeout
+	nodeSwapReconcileInfoTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { nodeSwapReconcileInfoTimeout = old })
+	code, msg, _ := a.h.executeNodeSwapSet(1, 2, 200*time.Millisecond)
+	if code != -2 {
+		t.Fatalf("failed reconcile must be code -2, got %d", code)
+	}
+	for _, want := range []string{"复查节点现状失败", "状态未知"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("unknown-state receipt must carry %q, got %q", want, msg)
+		}
+	}
+}
+
+func TestNodeSwapSetNonTimeoutDoesNotReconcile(t *testing.T) {
+	a := newNodeSwapFakeAgent(t)
+	// 节点 2 离线：SwapSet 腿立即报「节点不在线」，不是超时——
+	// 不复查、原文回执，且全程不发 SwapInfo。
+	code, msg, _ := a.h.executeNodeSwapSet(2, 2, 200*time.Millisecond)
+	if code != -2 || !strings.Contains(msg, "不在线") {
+		t.Fatalf("offline node must answer with the command-channel wording, got code=%d msg=%q", code, msg)
+	}
+	if cmds := a.commandsOfType("SwapInfo"); len(cmds) != 0 {
+		t.Fatalf("non-timeout error must not trigger a reconcile, got %d SwapInfo commands", len(cmds))
+	}
+}
+
+func TestIsNodeSwapSetTimeoutError(t *testing.T) {
+	if !isNodeSwapSetTimeoutError(errors.New("等待节点响应超时")) {
+		t.Fatalf("exact timeout text must match")
+	}
+	if isNodeSwapSetTimeoutError(nil) {
+		t.Fatalf("nil must not match")
+	}
+	if isNodeSwapSetTimeoutError(errors.New("节点不在线")) {
+		t.Fatalf("offline error must not match")
+	}
+	if isNodeSwapSetTimeoutError(errors.New("设置 Swap 失败（校验磁盘空间）: 磁盘空间不足")) {
+		t.Fatalf("agent business error must not match")
+	}
+}
+
+func TestParseSwapSetReconcileState(t *testing.T) {
+	if st := parseSwapSetReconcileState(nil); st != (swapSetReconcileState{}) {
+		t.Fatalf("nil data must parse to the zero state, got %+v", st)
+	}
+	st := parseSwapSetReconcileState(swapInfoDataForReconcile(t, 2048, true))
+	if !st.managedActive || st.fileSizeMB != 2048 || st.totalMB != 2048 {
+		t.Fatalf("full data must parse managedActive/fileSizeMB/totalMB, got %+v", st)
+	}
+	// 只有非托管条目时不得判托管在用。
+	other := map[string]interface{}{
+		"totalMB": float64(1024), "fileSizeMB": float64(0),
+		"entries": []interface{}{map[string]interface{}{"name": "/dev/sda2", "type": "partition", "sizeMB": float64(1024)}},
+	}
+	if st := parseSwapSetReconcileState(other); st.managedActive {
+		t.Fatalf("non-managed entry must not count as managedActive, got %+v", st)
 	}
 }
