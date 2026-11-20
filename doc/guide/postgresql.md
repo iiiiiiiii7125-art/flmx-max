@@ -179,6 +179,8 @@ rm -f /tmp/flmx-migrate.load
 
 #### 迁移被 `release_legacy_family` 堵住时（1.3.2 及更早版本的库）
 
+> ⚠️ **前置条件——dump 必须取自面板首次跑 v6 迁移之前**：2.1.0 起面板首次启动会执行 v6 迁移、直接删掉 `peer_share_resource` 整表（联邦功能已移除）。只有在该迁移跑过**之前**取的 dump 里才有这张表，下面的 `sed` 替换才有东西可改。如果面板已经在 2.1.0+ 上启动过、表已被删掉，本节不适用——不要试图重建这张表再跑替换；迁移会直接跳过缺失的表，按正常流程迁移即可。
+
 1.3.2 及更早版本的 SQLite 库里，`peer_share_resource` 表的 `release_legacy_family` 列是 `numeric` 类型、默认值 `false`。pgloader 按 numeric 翻译该默认值时生成 `default 'false'`，PostgreSQL 拒绝建表并报：
 
 ```
