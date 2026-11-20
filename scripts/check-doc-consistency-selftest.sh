@@ -56,6 +56,11 @@
 # R18-A2-11 扩围：变体 28 覆盖 §33（v6 判别锚对账门），
 # docker-compose-v6.yml 的 IPv6 子网改值后必须被 §33 抓红并点
 # 名 R18-A2-11。
+# R18-R2-A4-01/R18-R2-A2-02 扩围：变体 31 覆盖 §33+§34 双重漂移
+# （R18-R2-A4-01/R18-R2-A2-02），docker-compose-v6.yml 子网与
+# docker-build.yml 面板校验同时改坏后必须两门同报 R18-A2-11 与
+# R18-A4-02，且 §35 的 note 行仍在（旧实现把 §34/§35 嵌进 §33
+# 的 else，§33 一红即静默跳过两门；单点变异测不到）。
 # FIX-GATE-CALIB 改钉（R2-GATE-02）：上文 55/153、59/149 均为历史
 # 标定记录（出处见各重标定提交），不再是变体 8 的写死锚点——变体
 # 8 改为运行时从镜像内 ci-build.yml 机械读现行标记值（其后标记又
@@ -463,5 +468,29 @@ fi
 grep -q "R18-A4-04" "$TMP/v30.log" && grep -q "test_selftest_never_runs" "$TMP/v30.log" && echo "OK: variant 27 caught and named" || {
   echo "FAIL: variant 30 caught but the drift was not named"; sed 's/^/    /' "$TMP/v30.log"; exit 1; }
 cp "$ROOT/test-install-scripts-proxy.sh" "$MIR/test-install-scripts-proxy.sh"
+
+echo "== variant 31: v6 subnet AND Quick Install check drift together must FAIL and name both (§33+§34, R18-R2-A4-01/R18-R2-A2-02) =="
+sed -i 's/fd00:dead:beef::\/48/fd00:dead:beee::\/48/' "$MIR/docker-compose-v6.yml"
+grep -q 'fd00:dead:beee::/48' "$MIR/docker-compose-v6.yml" || {
+  echo "FAIL: variant 31 mutation did not land (v6 subnet anchor drifted)"; exit 1; }
+python3 - "$MIR/.github/workflows/docker-build.yml" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = " && curl -L https://github.com/${{ github.repository }}/releases/download/${VERSION}/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256"
+assert old in s, "baseline shape changed"
+open(p, "w").write(s.replace(old, "", 1))
+PYEOF
+[ "$(grep -c 'sha256sum -c panel_install.sh.sha256' "$MIR/.github/workflows/docker-build.yml")" = "1" ] || {
+  echo "FAIL: variant 31 mutation did not land (exactly one panel check must remain)"; exit 1; }
+if run_gate "$TMP/v31.log"; then
+  echo "FAIL: variant 31 was not caught"; exit 1
+fi
+grep -q "R18-A2-11" "$TMP/v31.log" && grep -q "R18-A4-02" "$TMP/v31.log" && echo "OK: variant 31 caught and named both" || {
+  echo "FAIL: variant 31 caught but one drift was not named"; sed 's/^/    /' "$TMP/v31.log"; exit 1; }
+grep -q "R18-A4-04" "$TMP/v31.log" || {
+  echo "FAIL: variant 31: §35 did not run (R18-A4-04 note missing — §34/§35 still nested under §33?)"; sed 's/^/    /' "$TMP/v31.log"; exit 1; }
+cp "$ROOT/docker-compose-v6.yml" "$MIR/docker-compose-v6.yml"
+cp "$ROOT/.github/workflows/docker-build.yml" "$MIR/.github/workflows/docker-build.yml"
 
 echo "SELFTEST PASS"

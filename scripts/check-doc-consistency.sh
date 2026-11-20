@@ -1153,6 +1153,7 @@ elif [[ "$V6_ANCHOR" != "$V6_PREFIX" ]]; then
   note_fail "R18-A2-11：panel_install.sh 的 v6 判别锚 $V6_ANCHOR 与 docker-compose-v6.yml 的 IPv6 子网前缀 $V6_PREFIX 不一致"
 else
   note_ok "R18-A2-11：v6 判别锚与 docker-compose-v6.yml 的 IPv6 子网前缀一致（$V6_ANCHOR）"
+fi
 # ── 34. 发版 Release notes Quick Install 校验门（R18-A4-02 常设门）：
 # docker-build.yml 的 create-release 作业在 --notes 里印 4 条 Quick
 # Install 命令（定版 ×2、latest ×2）；每条须先下同名 .sha256 再
@@ -1204,7 +1205,6 @@ else
     note_ok "R18-A4-04：proxy 套件测试定义与调用普查一致（定义 $a4_n_defs 个＝调用 $a4_n_calls 个，无重复/漏注册）"
   fi
   rm -rf "$a4_census_tmp"
-fi
 fi
 
 echo "----"
