@@ -727,6 +727,34 @@ func (m *Manager) restartGuardError(inst *instance) error {
 	return m.syncGuardBeforeRestart()
 }
 
+// restartAfterRestore restarts the kernel after a geodata /
+// rule-set restore (R18-D3-04): the pre-fix code started the
+// processes and logged "已恢复原来的文件" without ever checking
+// whether the restored files actually run — a kernel that crashes
+// on the restored files too was reported as recovered while it
+// was down. Returns true only when the kernel is stable again.
+// On a guard failure the kernel stays stopped (already logged);
+// on an unstable restart the failure is recorded on the instance
+// (surfaced in State.Error) instead of the misleading recovery
+// line.
+func (m *Manager) restartAfterRestore(inst *instance, kernelType, what string) bool {
+	m.stopProcesses(inst)
+	if err := m.restartGuardError(inst); err != nil {
+		// The restore-restart is gated too (A-03): the processes
+		// are already stopped here, so a failed sync leaves the
+		// guarded kernel down — the same fail-closed end state
+		// as Control start.
+		m.logGeo(kernelType, "恢复原文件后 nft 规则同步失败，受保护内核保持停止: "+err.Error())
+		return false
+	}
+	m.startProcesses(inst)
+	if !m.waitStable(kernelType) {
+		m.setErr(inst, fmt.Errorf("新的%s无法启动内核，恢复原文件后内核仍无法启动", what))
+		return false
+	}
+	return true
+}
+
 // Apply installs (if needed), writes the configuration and makes the
 // processes match req.Enabled. Unchanged running kernels are left alone.
 func (m *Manager) Apply(req ApplyRequest) (State, error) {

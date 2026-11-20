@@ -638,3 +638,141 @@ func TestSwapRuleSetsSkipsRestartWhenGuardSyncFails(t *testing.T) {
 		t.Fatalf("the skipped restart must be logged on the instance, logs:\n%s", logs)
 	}
 }
+
+// placeDataCrashKernel pre-installs a fake kernel that crashes
+// when the data file at dataPath contains NEW, or when the
+// crashFlag file exists — so a test can model a restore that
+// fails too: the new data crashes the kernel, and the restored
+// old data crashes it as well once the flag is planted.
+func placeDataCrashKernel(t *testing.T, m *Manager, kernelType, version, binName, marker, dataPath, crashFlag string) {
+	t.Helper()
+	binDir := m.binDir(kernelType, version)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"version\" ] || [ \"$1\" = \"-v\" ]; then echo \"" + kernelType + " " + version + " (fake)\"; exit 0; fi\n" +
+		"echo start >> \"" + marker + "\"\n" +
+		"if grep -q NEW \"" + dataPath + "\" 2>/dev/null; then echo \"bad data\"; exit 1; fi\n" +
+		"if [ -f \"" + crashFlag + "\" ]; then echo \"crash flag\"; exit 1; fi\n" +
+		"exec sleep 300\n"
+	bin := filepath.Join(binDir, binName)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// R18-D3-04: the restore restart after a failed geodata refresh
+// was never probed — the code logged "已恢复原来的文件" even
+// when the restored files could not start the kernel either.
+// With the crash flag planted (restored old data crashes too),
+// the swap must record the failure on the instance and must not
+// log the recovery line.
+func TestSwapGeoFilesProbesRestoreRestart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as fake kernel")
+	}
+	stubWhitelistNft(t)
+	m := NewManager(t.TempDir())
+	t.Cleanup(m.Shutdown)
+	marker := filepath.Join(t.TempDir(), "starts")
+	crashFlag := filepath.Join(t.TempDir(), "force-crash")
+	binDir := m.binDir("xray", "9.9.9")
+	geoPath := filepath.Join(binDir, "geosite.dat")
+	placeDataCrashKernel(t, m, "xray", "9.9.9", "xray", marker, geoPath, crashFlag)
+
+	req := whitelistRequest("xray", "9.9.9", "xray", "cfg-v1", []string{"203.0.113.0/24"})
+	if st, err := m.Apply(req); err != nil || !st.Running {
+		t.Fatalf("apply: state=%+v err=%v", st, err)
+	}
+	if err := os.WriteFile(geoPath, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(geoPath+".new", []byte("NEW"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// From here on every launch crashes — including the launch
+	// on the restored old file.
+	if err := os.WriteFile(crashFlag, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.swapGeoFiles(geoJob{kernelType: "xray", binDir: binDir}, []string{"geosite.dat"})
+
+	b, err := os.ReadFile(geoPath)
+	if err != nil || string(b) != "old" {
+		t.Fatalf("the geo file must be restored to the old content, got %q err=%v", b, err)
+	}
+	m.mu.Lock()
+	inst := m.instances["xray"]
+	m.mu.Unlock()
+	if inst.err == "" {
+		t.Fatal("the failed restore restart must be recorded on the instance (State.Error)")
+	}
+	logs := strings.Join(inst.logs.tail(20), "\n")
+	if !strings.Contains(logs, "仍无法启动") {
+		t.Fatalf("the restore failure must be logged, logs:\n%s", logs)
+	}
+	if strings.Contains(logs, "已恢复原来的文件") {
+		t.Fatalf("the misleading recovery line must not be logged when the restore restart fails, logs:\n%s", logs)
+	}
+}
+
+// R18-D3-04, rule-set side: same shape as the geodata test —
+// the restored rule sets crash the kernel too, so the swap must
+// record the failure instead of logging the recovery line.
+func TestSwapRuleSetsProbesRestoreRestart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as fake kernel")
+	}
+	stubWhitelistNft(t)
+	m := NewManager(t.TempDir())
+	t.Cleanup(m.Shutdown)
+	marker := filepath.Join(t.TempDir(), "starts")
+	crashFlag := filepath.Join(t.TempDir(), "force-crash")
+	dir := filepath.Join(m.runDir("singbox"), ruleSetDirName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := &remoteRuleSet{tag: "geo", directURL: "https://example.invalid/geo.srs"}
+	path := s.localPath(dir)
+	placeDataCrashKernel(t, m, "singbox", "1.0.0", "sing-box", marker, path, crashFlag)
+
+	req := whitelistRequest("singbox", "1.0.0", "sing-box", "cfg-v1", []string{"203.0.113.0/24"})
+	if st, err := m.Apply(req); err != nil || !st.Running {
+		t.Fatalf("apply: state=%+v err=%v", st, err)
+	}
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".new", []byte("NEW"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(crashFlag, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	job := ruleSetJob{kernelType: "singbox", configHash: req.Hash, dir: dir, sets: []*remoteRuleSet{s}}
+	m.swapRuleSets(job, []*remoteRuleSet{s})
+
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "old" {
+		t.Fatalf("the rule-set file must be restored to the old content, got %q err=%v", b, err)
+	}
+	m.mu.Lock()
+	inst := m.instances["singbox"]
+	m.mu.Unlock()
+	if inst.err == "" {
+		t.Fatal("the failed restore restart must be recorded on the instance (State.Error)")
+	}
+	logs := strings.Join(inst.logs.tail(20), "\n")
+	if !strings.Contains(logs, "仍无法启动") {
+		t.Fatalf("the restore failure must be logged, logs:\n%s", logs)
+	}
+	if strings.Contains(logs, "已恢复原来的文件") {
+		t.Fatalf("the misleading recovery line must not be logged when the restore restart fails, logs:\n%s", logs)
+	}
+}

@@ -284,17 +284,9 @@ func (m *Manager) swapGeoFiles(job geoJob, staged []string) {
 						_ = os.Remove(path)
 					}
 				}
-				m.stopProcesses(inst)
-				if err := m.restartGuardError(inst); err != nil {
-					// The restore-restart is gated too (A-03): the
-					// processes are already stopped here, so a failed
-					// sync leaves the guarded kernel down — the same
-					// fail-closed end state as Control start.
-					m.logGeo(job.kernelType, "恢复原文件后 nft 规则同步失败，受保护内核保持停止: "+err.Error())
-				} else {
-					m.startProcesses(inst)
+				if m.restartAfterRestore(inst, job.kernelType, "分流数据") {
+					m.logGeo(job.kernelType, "新的分流数据无法启动内核，已恢复原来的文件")
 				}
-				m.logGeo(job.kernelType, "新的分流数据无法启动内核，已恢复原来的文件")
 				return
 			}
 		}
