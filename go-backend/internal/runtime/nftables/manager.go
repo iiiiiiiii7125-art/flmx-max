@@ -13,6 +13,10 @@ type Manager struct {
 	// the table from the plan, which the handler fills with the same
 	// key, so the two always agree in production.
 	instance string
+	// installID is this panel install's per-install identity
+	// (FLMX_INSTALL_ID; R18-C3-02). It joins instance in the table
+	// derivation; "" keeps the legacy instance-only derivation.
+	installID string
 }
 
 func NewManager(runner Runner) *Manager {
@@ -22,10 +26,19 @@ func NewManager(runner Runner) *Manager {
 // NewManagerWithInstance builds a Manager for a non-default panel
 // instance; the handler passes panelInstanceID() here.
 func NewManagerWithInstance(runner Runner, instance string) *Manager {
+	return NewManagerWithInstall(runner, instance, "")
+}
+
+// NewManagerWithInstall builds a Manager for a panel instance with
+// its per-install identity; the handler passes panelInstanceID()
+// and panelInstallID() here. Empty installID keeps the legacy
+// instance-only table derivation (smooth migration for deployed
+// installs without an identity on file).
+func NewManagerWithInstall(runner Runner, instance, installID string) *Manager {
 	if runner == nil {
-		runner = NewSSHRunner()
+		runner = NewSSHRunnerWithInstall(instance, installID)
 	}
-	return &Manager{runner: runner, instance: instance}
+	return &Manager{runner: runner, instance: instance, installID: installID}
 }
 
 // tableName returns this panel install's nft table.
@@ -33,7 +46,7 @@ func (m *Manager) tableName() string {
 	if m == nil {
 		return TableNameForInstance("")
 	}
-	return TableNameForInstance(m.instance)
+	return TableNameForInstall(m.instance, m.installID)
 }
 
 func (m *Manager) Test(ctx context.Context, cfg SSHConfig) error {

@@ -112,10 +112,28 @@ type Runner interface {
 
 type SSHRunner struct {
 	Timeout time.Duration
+	// instance/installID select this runner's pause table
+	// (R18-C3-01): the pause table is isolated per install like the
+	// main table. Zero values read as the default instance with no
+	// install identity (legacy derivation).
+	instance  string
+	installID string
 }
 
 func NewSSHRunner() *SSHRunner {
-	return &SSHRunner{Timeout: 15 * time.Second}
+	return NewSSHRunnerWithInstall("", "")
+}
+
+// NewSSHRunnerWithInstance builds an SSHRunner whose pause-table
+// operations target the given panel instance's isolated table.
+func NewSSHRunnerWithInstance(instance string) *SSHRunner {
+	return NewSSHRunnerWithInstall(instance, "")
+}
+
+// NewSSHRunnerWithInstall builds an SSHRunner whose pause-table
+// operations target the given panel install's isolated table.
+func NewSSHRunnerWithInstall(instance, installID string) *SSHRunner {
+	return &SSHRunner{Timeout: 15 * time.Second, instance: instance, installID: installID}
 }
 
 func (r *SSHRunner) Test(ctx context.Context, cfg SSHConfig) error {

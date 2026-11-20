@@ -387,7 +387,9 @@ func (h *Handler) syncForwardServicesWithWarnings(forward *forwardRecord, method
 		if tunnelIsRealm(tunnel) {
 			return nil, fmt.Errorf("隧道 %d 使用 realm 引擎，入口节点不能为 nftables 模式", forward.TunnelID)
 		}
-		if err := h.validateNftablesForwardRequest(tunnel, forward.RemoteAddr, entryNodeIDs); err != nil {
+		// R18-C3-03：此处无 BindIP 在手（分发点只校验隧道与目标），
+		// 传 ""；混用族由渲染层 ValidatePlan 兜底。
+		if err := h.validateNftablesForwardRequest(tunnel, forward.RemoteAddr, entryNodeIDs, ""); err != nil {
 			return nil, err
 		}
 		if len(entryNodeIDs) == 0 {

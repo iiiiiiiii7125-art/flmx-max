@@ -592,7 +592,7 @@ func TestValidateNftablesForwardRequestRejectsHostnameTarget(t *testing.T) {
 		t.Fatalf("load tunnel: %v", err)
 	}
 
-	err = h.validateNftablesForwardRequest(tunnel, "example.com:443", []int64{fixture.nodeID})
+	err = h.validateNftablesForwardRequest(tunnel, "example.com:443", []int64{fixture.nodeID}, "")
 	if err == nil {
 		t.Fatalf("expected hostname target to be rejected")
 	}
@@ -616,7 +616,7 @@ func TestValidateNftablesForwardRequestRejectsLoopbackTarget(t *testing.T) {
 
 	loopback := []string{"127.0.0.1:8080", "127.0.0.2:8080", "127.255.255.255:8080", "[::1]:8080"}
 	for _, target := range loopback {
-		if err := h.validateNftablesForwardRequest(tunnel, target, []int64{fixture.nodeID}); err == nil {
+		if err := h.validateNftablesForwardRequest(tunnel, target, []int64{fixture.nodeID}, ""); err == nil {
 			t.Fatalf("loopback target %q must be rejected", target)
 		} else if !strings.Contains(err.Error(), "回环") {
 			t.Fatalf("loopback rejection must name the loopback cause, got %q", err)
@@ -625,7 +625,7 @@ func TestValidateNftablesForwardRequestRejectsLoopbackTarget(t *testing.T) {
 
 	// 对照：局域网/公网目标仍放行。
 	for _, target := range []string{"192.168.22.10:8080", "203.0.113.9:8080", "8.8.8.8:53"} {
-		if err := h.validateNftablesForwardRequest(tunnel, target, []int64{fixture.nodeID}); err != nil {
+		if err := h.validateNftablesForwardRequest(tunnel, target, []int64{fixture.nodeID}, ""); err != nil {
 			t.Fatalf("non-loopback target %q must pass: %v", target, err)
 		}
 	}

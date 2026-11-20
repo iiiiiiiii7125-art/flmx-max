@@ -1138,7 +1138,9 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 		return 0, relayCreateErr(err)
 	}
 	if isNftTunnel {
-		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes); err != nil {
+		// R18-C3-03：此处无 BindIP 在手（中继创建只定目标），传 ""；
+		// 混用族由渲染层 ValidatePlan 兜底。
+		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes, ""); err != nil {
 			return 0, relayCreateErr(err)
 		}
 	}

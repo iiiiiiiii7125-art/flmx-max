@@ -2397,6 +2397,42 @@ const agentContainerDataDir = agentDataBaseDir
 // 安装脚本为每个面板实例写不同的值进各自后端的运行环境。
 const panelInstanceEnv = "FLMX_INSTANCE"
 
+// panelInstallIDEnv 是面板每安装唯一身份的环境变量名：安装脚本
+// 在新装时生成一个 UUID 写进部署 .env（R18-C3-02），与实例键一
+// 起派生 nft 表名；两套默认实例面板跨机共管同一节点时不再共用
+// flmx_e3b0c442。
+const panelInstallIDEnv = "FLMX_INSTALL_ID"
+
+// panelInstallID 返回本面板的每安装唯一身份。口径：首字符字母
+// 数字、其后可含字母/数字/连字符/下划线、全长 ≤64（UUID 通过）。
+// 未设置或不合规一律按无身份（空）处理，走实例键旧口径派生表
+// 名——已部署安装平滑迁移、不丢规则；新装由安装脚本生成合法值。
+func panelInstallID() string {
+	id := strings.TrimSpace(os.Getenv(panelInstallIDEnv))
+	if !validInstallID(id) {
+		return ""
+	}
+	return id
+}
+
+// validInstallID 是安装身份的白名单校验（与 nftables 包内同名
+// 校验同口径：首字符字母数字、其后字母/数字/-/_、全长 ≤64）。
+func validInstallID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9':
+		case (c == '-' || c == '_') && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // panelInstanceID 返回本面板的实例键。口径：小写字母/数字开头，
 // 其后可含小写字母、数字、连字符与下划线，全长 ≤32——该值将拼进
 // 容器名与宿主机路径，必须先过白名单校验，杜绝路径穿越与命令
@@ -5691,8 +5727,11 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 		respondInternalError(w, "forwardCreate: tunnelUsesNftables failed", err)
 		return
 	}
+	// R18-C3-03：intake 的族一致性校验要提交的 inIp；此处先读，
+	// 下方剥离/校验复用同一值（不再重读）。
+	inIp := strings.TrimSpace(asString(req["inIp"]))
 	if isNftTunnel {
-		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes); err != nil {
+		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes, inIp); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
@@ -5711,7 +5750,7 @@ func (h *Handler) forwardCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	inIp := strings.TrimSpace(asString(req["inIp"]))
+	inIp = strings.TrimSpace(asString(req["inIp"]))
 	// R30-FIX-F01：intake 剥离含 :port 的 inIp（与 buildTunnelInIP
 	// 同口径复用 stripShareHostPort，R25 口径）。节点显式字段含
 	// :port 时前端下拉会原样提交该值；不剥离则原值落库，下发层
@@ -5902,7 +5941,9 @@ func (h *Handler) forwardUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isNftTunnel {
-		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes); err != nil {
+		// R18-C3-03：intake 按生效监听IP 校验族一致：显式提交的
+		// inIp 优先，否则用存量端口行的 inIp（只改目标时不得漏检）。
+		if err := h.validateNftablesForwardRequest(tunnel, remoteAddr, entryNodes, effectiveNftBindIP(req, oldPorts)); err != nil {
 			response.WriteJSON(w, response.ErrDefault(err.Error()))
 			return
 		}
