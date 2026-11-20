@@ -36,6 +36,11 @@ func logSubSigV1Used() {
 // (flvx-subsig-v1:{userID}) are still accepted for backwards compatibility,
 // with a deprecation log. Existing links keep working.
 //
+// D-6: the v1 fallback sunsets on 2027-02-02 (aligned with the legacy
+// agent v1 traffic-report sunset): on/after that date remove the v1
+// fallback in verifySubURLSigForToken below, leaving only v3/v2.
+// Until then v1 links keep working; re-copy the link to get a v3 sig.
+//
 // 改名 FLMX 后新链接改用 v3 前缀（flmx-subsig-v3:{token}:{userID}）；
 // 校验侧 v3 → v2 → v1 依次回退，三代链接全部有效。
 func (h *Handler) subURLSig(userID int64) string {
@@ -75,6 +80,8 @@ func (h *Handler) verifySubURLSig(userID int64, sig string) bool {
 
 // verifySubURLSigForToken verifies a sig against the current v3
 // (flmx-subsig) format first, then the legacy v2 (flvx-subsig), then v1.
+// D-6: the v1 fallback below sunsets on 2027-02-02 — remove it on/after
+// that date, leaving only v3/v2.
 func (h *Handler) verifySubURLSigForToken(token string, userID int64, sig string) bool {
 	if len(sig) != 32 {
 		return false
