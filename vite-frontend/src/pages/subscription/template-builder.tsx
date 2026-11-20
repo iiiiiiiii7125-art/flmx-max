@@ -4,59 +4,30 @@ import type {
   TemplateRuleCategoryItem,
 } from "@/api";
 
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
 import { Checkbox } from "@/shadcn-bridge/heroui/checkbox";
 import { Input } from "@/shadcn-bridge/heroui/input";
 import { Segmented, ToggleRow } from "@/pages/subscription/controls";
-
-export const BUILDER_MAIN = "节点选择";
-
-/** Reserved group names the backend refuses in a builder recipe
- * (TemplateBuilder.validate): the main group plus the client builtins.
- * Lowercase direct/reject are refused too — clients treat names
- * case-insensitively there, so the backend rejects both cases. */
-const BUILDER_RESERVED_GROUP_NAMES = new Set([
+import {
   BUILDER_MAIN,
-  "DIRECT",
-  "REJECT",
-  "direct",
-  "reject",
-]);
+  builderGroupFilterConflicts,
+  builderGroupNameConflicts,
+  builderRecipeConflicts,
+  builderRuleConflicts,
+} from "@/pages/subscription/template-builder-validation";
 
-/**
- * R18-E2-05: builder group-name conflicts, mirroring the backend
- * TemplateBuilder.validate() name rule exactly (exact-string match,
- * no trim/normalisation): an empty name, a reserved name, or a name
- * already used by an earlier group. Returns one message per
- * conflicting group row (keyed by group index), so the form can mark
- * the row inline and the page can gate saving on the same verdict —
- * a recipe the backend would refuse never reaches the save call.
- */
-export function builderGroupNameConflicts(
-  builder: TemplateBuilder,
-): Map<number, string> {
-  const conflicts = new Map<number, string>();
-  const seen = new Set<string>();
-  builder.groups.forEach((g, i) => {
-    if (g.name === "") {
-      conflicts.set(i, "组名不能为空");
-      return;
-    }
-    if (BUILDER_RESERVED_GROUP_NAMES.has(g.name)) {
-      conflicts.set(i, `组名「${g.name}」是保留名，后端会拒绝保存`);
-      return;
-    }
-    if (seen.has(g.name)) {
-      conflicts.set(i, `组名「${g.name}」重复，后端会拒绝保存`);
-      return;
-    }
-    seen.add(g.name);
-  });
-  return conflicts;
-}
+// Re-exported for the save gate in templates.tsx (same verdict as
+// the inline marks in this form).
+export {
+  BUILDER_MAIN,
+  builderGroupFilterConflicts,
+  builderGroupNameConflicts,
+  builderRecipeConflicts,
+  builderRuleConflicts,
+} from "@/pages/subscription/template-builder-validation";
 
 export const PRESET_OPTIONS: Array<[string, string]> = [
   ["minimal", "极简"],
@@ -124,10 +95,29 @@ export function TemplateBuilderForm({
     () => [BUILDER_MAIN, ...value.groups.map((g) => g.name), "DIRECT", "REJECT"],
     [value.groups],
   );
-  // R18-E2-05: per-row group-name conflicts (same verdict as the
-  // save gate in templates.tsx).
+  // R18-E2-05 / R18-R2-E2-01: per-row group-name, filter and rule
+  // conflicts plus recipe-level problems (same verdict as the save
+  // gate in templates.tsx). Validators live in
+  // template-builder-validation.ts and mirror the backend's
+  // TemplateBuilder.validate() rule for rule.
   const groupConflicts = useMemo(
     () => builderGroupNameConflicts(value),
+    [value],
+  );
+  const groupFilterConflicts = useMemo(
+    () => builderGroupFilterConflicts(value),
+    [value],
+  );
+  const catalogKeys = useMemo(
+    () => new Set(catalog.map((c) => c.key)),
+    [catalog],
+  );
+  const ruleConflicts = useMemo(
+    () => builderRuleConflicts(value, catalogKeys),
+    [value, catalogKeys],
+  );
+  const recipeConflicts = useMemo(
+    () => builderRecipeConflicts(value),
     [value],
   );
   const picked = useMemo(
@@ -208,6 +198,16 @@ export function TemplateBuilderForm({
           极简只分国内/国外；均衡多分 AI、视频、通讯等常用服务；完整包含全部{" "}
           {catalog.length} 类。勾选变化会自动切到自定义。
         </p>
+        {/* R18-E2-05：配方级问题（版本/预设/数量/兜底），后端会拒绝保存。 */}
+        {recipeConflicts.length > 0 && (
+          <div className="space-y-0.5">
+            {recipeConflicts.map((m) => (
+              <p key={m} className="text-xs font-semibold text-danger-700">
+                {m}
+              </p>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -238,7 +238,8 @@ export function TemplateBuilderForm({
           </p>
         )}
         {value.rules.map((r, i) => (
-          <div key={i} className="flex flex-wrap items-center gap-1.5">
+          <Fragment key={i}>
+            <div className="flex flex-wrap items-center gap-1.5">
             {r.type === "category" ? (
               <span className="min-w-28 text-sm font-medium">
                 {catByKey.get(r.value)?.name ?? r.value}
@@ -308,7 +309,14 @@ export function TemplateBuilderForm({
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
-          </div>
+            </div>
+            {/* R18-E2-05：规则行问题（目标不存在/分类重复/值无效），后端会拒绝保存。 */}
+            {ruleConflicts.get(i) && (
+              <p className="text-xs font-semibold text-danger-700">
+                {ruleConflicts.get(i)}
+              </p>
+            )}
+          </Fragment>
         ))}
         <div className="flex items-center gap-1.5">
           <span className="min-w-28 text-sm font-medium">兜底（未命中）</span>
@@ -403,6 +411,12 @@ export function TemplateBuilderForm({
               variant="bordered"
               onChange={(e) => patchGroup(i, { filter: e.target.value })}
             />
+            {/* R18-E2-05：过滤条件超长/含逗号换行/正则无效，后端会拒绝保存。 */}
+            {groupFilterConflicts.get(i) && (
+              <span className="text-xs font-semibold text-danger-700">
+                {groupFilterConflicts.get(i)}
+              </span>
+            )}
             <Button
               isIconOnly
               color="danger"
