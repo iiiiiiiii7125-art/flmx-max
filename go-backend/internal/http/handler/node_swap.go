@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -40,7 +41,32 @@ const (
 
 	nodeSwapMinSizeGB = 1
 	nodeSwapMaxSizeGB = 32
+
+	// nodeSwapReserveMB 是目标大小之外的磁盘预留，与 agent
+	// swapReserveMB 同值（R18-D2-01-mirror）。
+	nodeSwapReserveMB = 256
 )
+
+// checkNodeSwapCapacity 是面板侧对 agent checkSwapCapacity
+// （go-gost/x/socket/swap.go）的逐字镜像（R18-D2-01-mirror，
+// R3-NODE-01）：只认真实磁盘剩余。重建时旧文件只是改名备份、仍占
+// 盘，新文件再整块 fallocate，峰值占用是旧+新——旧文件占量绝不能
+// 计入可用；existingFileMB 只用于报错文案，不参与可用计算。
+//
+// 本函数是口径钉子：前端预检与回归测试凭它共用同一组边界数字，
+// 执行面的权威校验仍在 agent。nodeSwapSet 下发时不另取 SwapInfo
+// 做前置拦截——多一次现状往返会让现状拉取失败时本可执行的设置
+// 也被拒，存量用法不断链优先于面板侧二次拦截；agent 复判失败时
+// 回执原文透传。
+func checkNodeSwapCapacity(diskFreeMB int64, existingFileMB int64, sizeGB int) error {
+	needMB := int64(sizeGB)*1024 + nodeSwapReserveMB
+	availMB := diskFreeMB
+	if availMB < needMB {
+		return fmt.Errorf("磁盘空间不足：设置 %d GB Swap 需要至少 %d MB 磁盘剩余（目标 %d MB＋预留 %d MB），当前磁盘剩余 %d MB（现有 /swapfile 占用 %d MB 在重建期间仍占盘，不计入可用）",
+			sizeGB, needMB, int64(sizeGB)*1024, nodeSwapReserveMB, availMB, existingFileMB)
+	}
+	return nil
+}
 
 // nodeSwapLookup 取节点并做两个 swap 接口共用的前置判定：仓储
 // 错误走内部错误口径，节点不存在与 nftables 无 agent 分别点名。

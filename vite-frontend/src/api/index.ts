@@ -1588,8 +1588,10 @@ export interface NodeSwapInfo {
   managedFilePresent: boolean;
   /**
    * /swapfile 在磁盘上的实际文件大小（MB），不在盘为 0；在盘未启用
-   * 也回真实大小——agent 容量校验把这块占量计入可用（重建时释放），
-   * 弹窗空间预检凭此字段逐字镜像 agent 谓词（R3-NODE-01）。
+   * 也回真实大小。R18-D2-01：这块占量在重建期间仍占盘，不计入 agent
+   * 容量校验的可用（只认真实磁盘剩余）；弹窗空间预检凭 diskFreeMB
+   * 逐字镜像 agent 谓词（R3-NODE-01），本字段只用于不足提示里说明
+   * 仍占盘的占量。
    */
   fileSizeMB: number;
 }
