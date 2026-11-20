@@ -28,10 +28,18 @@ import (
 //  4. Ensure (migration gate input): before a tunnel deploy renders
 //     verified TLS, ensureNodeTunnelTLSReady confirms the agent still
 //     holds the issued material (TunnelTLSStatus) and re-issues when
-//     it does not. Any failure here returns false — the render keeps
-//     the legacy (unverified) form and the running chain is never
-//     touched. Old agents answer "unknown command" and therefore
-//     stay not-ready (legacy) until upgraded.
+//     it does not. A node that was never issued certificates and
+//     cannot be reached stays not-ready and its segments keep the
+//     legacy (unverified) form — the running chain is never touched.
+//     The one exception is fail-closed: a node that WAS issued
+//     certificates before but still has none after the re-issue
+//     attempt refuses the whole deploy (tunnelTLSReadyForState
+//     returns an error before anything is pushed), so a verified
+//     chain is never silently downgraded to unverified rendering.
+//     Old agents answer "unknown command" and therefore stay
+//     not-ready (legacy) until upgraded — unless they were issued
+//     certificates before, in which case the deploy fails closed
+//     and the operator sees why.
 //
 // The agent-relative render paths (tls/ca.pem etc.) must match the
 // agent's tunnelTLSPathsForRender (go-gost/x/socket/tunnel_tls.go);
@@ -214,15 +222,42 @@ func tunnelRuntimeNodeIDs(nodes []tunnelRuntimeNode) []int64 {
 	return ids
 }
 
+// nodeTunnelTLSWasIssued reports whether the panel ever distributed
+// tunnel certificates to this node: a node_tunnel_tls row exists.
+// The row is created only by a fingerprint-matching issue ack and is
+// never deleted (ClearNodeTunnelTLSReady only flips Ready to 0), so
+// its presence means "distributed before". A DB read error returns
+// false (fail-open to legacy) and logs: a DB blip must never break a
+// deploy, and the next deploy re-evaluates.
+func (h *Handler) nodeTunnelTLSWasIssued(nodeID int64) bool {
+	if h == nil || h.repo == nil || nodeID <= 0 {
+		return false
+	}
+	st, err := h.repo.GetNodeTunnelTLS(nodeID)
+	if err != nil {
+		log.Printf("tunnel-tls: 读取节点 %d 的证书下发记录失败，按未下发处理: %v", nodeID, err)
+		return false
+	}
+	return st != nil
+}
+
 // tunnelTLSReadyForState runs the certificate distribution ensure
 // for every node of a tunnel deploy and returns the ready set the
-// render gate reads. It sends no commands at all when the tunnel
-// uses no TLS-family segment (non-TLS tunnels never need
-// certificates), and a failed ensure for one node only keeps that
-// node's segments legacy — it never fails the deploy.
-func (h *Handler) tunnelTLSReadyForState(state *tunnelCreateState) map[int64]bool {
+// render gate reads, plus a fail-closed error. It sends no commands
+// at all when the tunnel uses no TLS-family segment (non-TLS tunnels
+// never need certificates). A failed ensure for a node that was
+// NEVER issued certificates only keeps that node's segments legacy
+// — it never fails the deploy. A failed ensure for a node that WAS
+// issued certificates before (row exists) but still has none after
+// the re-issue attempt returns an error: the deploy is refused
+// before anything is pushed, so the running chain keeps its
+// last-good (verified) config instead of being silently downgraded
+// to unverified rendering — and a legacy dialer pushed while the
+// node's on-disk listener is still verified would be rejected for
+// lack of a client certificate, breaking the leg.
+func (h *Handler) tunnelTLSReadyForState(state *tunnelCreateState) (map[int64]bool, error) {
 	if h == nil || state == nil || state.Type != 2 {
-		return map[int64]bool{}
+		return map[int64]bool{}, nil
 	}
 	var ids []int64
 	seen := make(map[int64]bool)
@@ -256,12 +291,17 @@ func (h *Handler) tunnelTLSReadyForState(state *tunnelCreateState) map[int64]boo
 		}
 	}
 	if !usesTLS {
-		return map[int64]bool{}
+		return map[int64]bool{}, nil
 	}
 	for _, id := range ids {
-		h.ensureNodeTunnelTLSReady(id)
+		if h.ensureNodeTunnelTLSReady(id) {
+			continue
+		}
+		if h.nodeTunnelTLSWasIssued(id) {
+			return map[int64]bool{}, fmt.Errorf("节点 %d 的隧道证书曾已下发、现仍缺失且重新下发失败，拒绝以未验证方式建链（R18-F1-01 fail-closed）：请检查节点在线状态与 agent 版本后重试", id)
+		}
 	}
-	return h.tunnelTLSReadyMap(ids)
+	return h.tunnelTLSReadyMap(ids), nil
 }
 
 // tunnelTLSReadyMap reads the ready set for a batch of nodes in one

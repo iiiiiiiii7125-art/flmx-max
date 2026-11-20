@@ -8796,10 +8796,16 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 	}
 	// R18-F1-01 (D-3): distribute tunnel certificates to every node
 	// of this tunnel before rendering, then gate the render on the
-	// resulting ready set. ensure() never fails the deploy: nodes
-	// that cannot be reached (or run old agents) stay not-ready and
-	// their segments keep the legacy form.
-	tlsReady := h.tunnelTLSReadyForState(state)
+	// resulting ready set. ensure() never fails the deploy for a
+	// node that was never issued certificates (those segments keep
+	// the legacy form); it fails the deploy fail-closed only when a
+	// previously-issued node still has no certificate after the
+	// re-issue attempt — nothing is pushed in that case, so the
+	// running chain keeps its last-good config.
+	tlsReady, err := h.tunnelTLSReadyForState(state)
+	if err != nil {
+		return createdChains, createdServices, err
+	}
 
 	for _, inNode := range state.InNodes {
 		targets := state.OutNodes

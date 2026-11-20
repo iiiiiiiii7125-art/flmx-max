@@ -404,6 +404,102 @@ func TestTunnelTLSSegmentEndsFlipTogether(t *testing.T) {
 	}
 }
 
+// TestTunnelTLSReadyForStateFailsClosedAfterPriorIssue (R18-F1-01
+// C3): a node that was issued certificates before (its
+// node_tunnel_tls row exists) but still has none after the re-issue
+// attempt refuses the deploy — the chain is never silently
+// downgraded to unverified rendering.
+func TestTunnelTLSReadyForStateFailsClosedAfterPriorIssue(t *testing.T) {
+	h := openTunnelTLSHandler(t)
+	_, _, _, caSHA, certSHA, serverName, err := h.issueNodeTunnelTLSCert(7)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if err := h.repo.MarkNodeTunnelTLSReady(7, caSHA, certSHA, serverName, time.Now().Unix()); err != nil {
+		t.Fatalf("mark ready: %v", err)
+	}
+	fake := &fakeTunnelTLSSender{issueErr: errFakeTunnelTLSNodeOffline, statusErr: errFakeTunnelTLSNodeOffline}
+	h.tunnelTLSCommandSender = fake.send
+	state := &tunnelCreateState{
+		TunnelID: 99, Type: 2, TunnelProtocol: "tls",
+		InNodes:  []tunnelRuntimeNode{{NodeID: 7}},
+		OutNodes: []tunnelRuntimeNode{{NodeID: 8}},
+	}
+	ready, err := h.tunnelTLSReadyForState(state)
+	if err == nil {
+		t.Fatalf("previously-issued node without a certificate must fail the deploy closed, got ready=%v", ready)
+	}
+	if len(ready) != 0 {
+		t.Fatalf("fail-closed deploy must return an empty ready set, got %v", ready)
+	}
+}
+
+// TestTunnelTLSReadyForStateNeverIssuedOfflineStaysLegacy (R18-F1-01
+// C3): nodes that were never issued certificates keep the legacy
+// rendering when they cannot be reached — the deploy proceeds and
+// the running chain is untouched.
+func TestTunnelTLSReadyForStateNeverIssuedOfflineStaysLegacy(t *testing.T) {
+	h := openTunnelTLSHandler(t)
+	fake := &fakeTunnelTLSSender{issueErr: errFakeTunnelTLSNodeOffline, statusErr: errFakeTunnelTLSNodeOffline}
+	h.tunnelTLSCommandSender = fake.send
+	state := &tunnelCreateState{
+		TunnelID: 99, Type: 2, TunnelProtocol: "tls",
+		InNodes:  []tunnelRuntimeNode{{NodeID: 7}},
+		OutNodes: []tunnelRuntimeNode{{NodeID: 8}},
+	}
+	ready, err := h.tunnelTLSReadyForState(state)
+	if err != nil {
+		t.Fatalf("never-issued offline nodes must keep legacy rendering, got error: %v", err)
+	}
+	if len(ready) != 0 {
+		t.Fatalf("ready = %v, want empty", ready)
+	}
+}
+
+// TestTunnelTLSReadyForStateReturnsReadySet (R18-F1-01 C3):
+// reachable never-issued nodes are distributed to on deploy and
+// come back in the ready set.
+func TestTunnelTLSReadyForStateReturnsReadySet(t *testing.T) {
+	h := openTunnelTLSHandler(t)
+	fake := &fakeTunnelTLSSender{}
+	h.tunnelTLSCommandSender = fake.send
+	state := &tunnelCreateState{
+		TunnelID: 99, Type: 2, TunnelProtocol: "tls",
+		InNodes:  []tunnelRuntimeNode{{NodeID: 7}},
+		OutNodes: []tunnelRuntimeNode{{NodeID: 8}},
+	}
+	ready, err := h.tunnelTLSReadyForState(state)
+	if err != nil {
+		t.Fatalf("tunnelTLSReadyForState: %v", err)
+	}
+	if !ready[7] || !ready[8] {
+		t.Fatalf("ready = %v, want both nodes ready", ready)
+	}
+}
+
+// TestTunnelTLSReadyForStateSkipsNonTLSTunnels (R18-F1-01 C3):
+// tunnels with no TLS-family segment send no certificate commands.
+func TestTunnelTLSReadyForStateSkipsNonTLSTunnels(t *testing.T) {
+	h := openTunnelTLSHandler(t)
+	fake := &fakeTunnelTLSSender{}
+	h.tunnelTLSCommandSender = fake.send
+	state := &tunnelCreateState{
+		TunnelID: 99, Type: 2, TunnelProtocol: "tcp",
+		InNodes:  []tunnelRuntimeNode{{NodeID: 7}},
+		OutNodes: []tunnelRuntimeNode{{NodeID: 8}},
+	}
+	ready, err := h.tunnelTLSReadyForState(state)
+	if err != nil {
+		t.Fatalf("non-TLS tunnel must not fail: %v", err)
+	}
+	if len(ready) != 0 {
+		t.Fatalf("ready = %v, want empty", ready)
+	}
+	if fake.issueCalls != 0 || fake.statusCalls != 0 {
+		t.Fatalf("issueCalls=%d statusCalls=%d, want 0/0 (no commands for non-TLS tunnels)", fake.issueCalls, fake.statusCalls)
+	}
+}
+
 // TestTunnelTLSAgentPathsMatchContract pins the agent-relative render
 // paths; the agent resolves the same relative paths under its
 // workdir (go-gost/x/socket/tunnel_tls.go tunnelTLSPathsForRender).
