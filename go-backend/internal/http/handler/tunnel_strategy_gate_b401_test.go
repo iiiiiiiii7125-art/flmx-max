@@ -36,12 +36,12 @@ func TestB401StoredIllegalStrategyRejectedOnRedeployValidation(t *testing.T) {
 		},
 		{
 			name:  "跳行 best（chainType 2 不含 best）",
-			state: b401State(nil, []tunnelRuntimeNode{{NodeID: 2, ChainType: 2, Strategy: "best"}}, nil),
+			state: b401State([]tunnelRuntimeNode{{NodeID: 1, ChainType: 1, Strategy: "round"}}, []tunnelRuntimeNode{{NodeID: 2, ChainType: 2, Strategy: "best"}}, nil),
 			want:  "best",
 		},
 		{
 			name:  "大小写异形 FIFO",
-			state: b401State(nil, nil, []tunnelRuntimeNode{{NodeID: 3, ChainType: 3, Strategy: "FIFO"}}),
+			state: b401State([]tunnelRuntimeNode{{NodeID: 1, ChainType: 1, Strategy: "round"}}, nil, []tunnelRuntimeNode{{NodeID: 3, ChainType: 3, Strategy: "FIFO"}}),
 			want:  "FIFO",
 		},
 	}
@@ -61,12 +61,15 @@ func TestB401LegalStoredStrategiesPassTheGate(t *testing.T) {
 	// (含出口 best 与空串=缺省 round) 都不得被策略门拦下——用
 	// 「错误不来自策略门」判读 (后续配对检查因节点表为空报错
 	// 与本门无关), 故把节点两两配对面留空: 只放单段单节点且
-	// 无相邻段时配对循环不执行。
+	// 无相邻段时配对循环不执行。R18-B7-01 入口非空门在策略门之
+	// 前：夹具必须带合法入口行，否则够不着策略门；空串用例改放
+	// 入口行（策略门逐段同判据，覆盖不变），不带中段、避免配对
+	// 循环因节点表为空报错。
 	st := b401State([]tunnelRuntimeNode{{NodeID: 1, ChainType: 1, Strategy: "best"}}, nil, nil)
 	if err := validateTunnelRuntimeBeforeApply(st); err != nil {
 		t.Fatalf("legal in-node strategy (best, chainType 1) must pass, got %v", err)
 	}
-	st = b401State(nil, []tunnelRuntimeNode{{NodeID: 2, ChainType: 2, Strategy: ""}}, nil)
+	st = b401State([]tunnelRuntimeNode{{NodeID: 2, ChainType: 1, Strategy: ""}}, nil, nil)
 	if err := validateTunnelRuntimeBeforeApply(st); err != nil {
 		t.Fatalf("empty stored strategy (default round) must pass, got %v", err)
 	}
