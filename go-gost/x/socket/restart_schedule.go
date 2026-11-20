@@ -209,6 +209,18 @@ func applyRestartSchedule(ctx context.Context, s restartScheduleSetting) error {
 	// file the first write actually created is removed again when
 	// the second write fails (a pre-existing identical file is
 	// left alone — writeUnitIfChanged reports it as unchanged).
+	// R18-R2-D2-04: a pre-existing service unit with different
+	// content (a previous version's rendering, or another agent
+	// service name) is NOT removed — it is restored byte for byte,
+	// so a failed setting change cannot dismantle a previously
+	// working schedule. Only a service file this apply created
+	// (no pre-existing file) may be removed again.
+	var prevService []byte
+	serviceExisted := false
+	if cur, err := os.ReadFile(servicePath); err == nil {
+		prevService = cur
+		serviceExisted = true
+	}
 	svcChanged, err := writeUnitIfChanged(servicePath, renderRestartServiceUnit(agentService))
 	if err != nil {
 		return fmt.Errorf("写入定时重启单元失败 %s: %w", servicePath, err)
@@ -217,7 +229,15 @@ func applyRestartSchedule(ctx context.Context, s restartScheduleSetting) error {
 	timerChanged, err := writeUnitIfChanged(timerPath, renderRestartTimerUnit(s))
 	if err != nil {
 		if svcChanged {
-			_ = os.Remove(servicePath)
+			if serviceExisted {
+				// Best effort: the apply already fails loudly;
+				// a failed restore leaves the half-installed
+				// pair, same as before, and is retried on the
+				// next apply.
+				_ = writeFileAtomic(servicePath, prevService, 0o644)
+			} else {
+				_ = os.Remove(servicePath)
+			}
 		}
 		return fmt.Errorf("写入定时重启单元失败 %s: %w", timerPath, err)
 	}
