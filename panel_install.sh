@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.05"
+SCRIPT_VERSION="20261120.06"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -829,11 +829,14 @@ run_verified_installer_script() {
   fi
   local tmp actual rc
   tmp=$(mktemp) || return 1
-  # A1-02：与 download_verified 同套看门狗（L2-11 口径）——旧实
-  # 现裸 curl 无超时/重试，get.docker.com 连通后停滞（TCP 开、
-  # 零/涓流字节）时本函数永不返回，install_docker 的包管理器
-  # 兜底永不触发、首装无限挂死。脚本体积小，总界取 120s。
-  if ! curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 120 "$url" -o "$tmp"; then
+  # R18-A1-03：与 download_verified 同套看门狗（L2-11 口径）——旧实
+  # 现 --max-time 120 只管单次尝试，--retry 2 可把一腿拖到约 364s，
+  # 注释「总界取 120s」与实现不符。现拼 panel_retry_max_args 120
+  # 生成的 --retry-max-time 120（curl <7.66 时自动回退为空组），
+  # 单次 120s、重试总计 120s。
+  local -a retry_max_args=()
+  mapfile -t retry_max_args < <(panel_retry_max_args 120)
+  if ! curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 120 "${retry_max_args[@]}" "$url" -o "$tmp"; then
     rm -f "$tmp"
     echo "⚠️ 安装脚本下载失败: $url"
     return 1

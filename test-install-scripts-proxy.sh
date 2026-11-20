@@ -439,6 +439,7 @@ test_panel_installer_script_curl_uses_timeouts() (
   grep -q -- '--max-time' "$log" || fail "A1-02: the installer-script curl must carry --max-time"
   grep -q -- '--speed-limit' "$log" || fail "A1-02: the installer-script curl must carry the stall watchdog (--speed-limit/--speed-time)"
   grep -q -- '--retry' "$log" || fail "A1-02: the installer-script curl must carry --retry"
+  grep -q -- '--retry-max-time' "$log" || fail "R18-A1-03: the installer-script curl must cap total retry time (--retry-max-time 120, single-leg 120s is not a total bound)"
 )
 
 # A2-05（audit-max）：菜单 5 保留式写入不得整块删除共享站点——
