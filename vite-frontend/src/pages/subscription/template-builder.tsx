@@ -14,6 +14,50 @@ import { Segmented, ToggleRow } from "@/pages/subscription/controls";
 
 export const BUILDER_MAIN = "节点选择";
 
+/** Reserved group names the backend refuses in a builder recipe
+ * (TemplateBuilder.validate): the main group plus the client builtins.
+ * Lowercase direct/reject are refused too — clients treat names
+ * case-insensitively there, so the backend rejects both cases. */
+const BUILDER_RESERVED_GROUP_NAMES = new Set([
+  BUILDER_MAIN,
+  "DIRECT",
+  "REJECT",
+  "direct",
+  "reject",
+]);
+
+/**
+ * R18-E2-05: builder group-name conflicts, mirroring the backend
+ * TemplateBuilder.validate() name rule exactly (exact-string match,
+ * no trim/normalisation): an empty name, a reserved name, or a name
+ * already used by an earlier group. Returns one message per
+ * conflicting group row (keyed by group index), so the form can mark
+ * the row inline and the page can gate saving on the same verdict —
+ * a recipe the backend would refuse never reaches the save call.
+ */
+export function builderGroupNameConflicts(
+  builder: TemplateBuilder,
+): Map<number, string> {
+  const conflicts = new Map<number, string>();
+  const seen = new Set<string>();
+  builder.groups.forEach((g, i) => {
+    if (g.name === "") {
+      conflicts.set(i, "组名不能为空");
+      return;
+    }
+    if (BUILDER_RESERVED_GROUP_NAMES.has(g.name)) {
+      conflicts.set(i, `组名「${g.name}」是保留名，后端会拒绝保存`);
+      return;
+    }
+    if (seen.has(g.name)) {
+      conflicts.set(i, `组名「${g.name}」重复，后端会拒绝保存`);
+      return;
+    }
+    seen.add(g.name);
+  });
+  return conflicts;
+}
+
 export const PRESET_OPTIONS: Array<[string, string]> = [
   ["minimal", "极简"],
   ["balanced", "均衡"],
@@ -79,6 +123,12 @@ export function TemplateBuilderForm({
   const targets = useMemo(
     () => [BUILDER_MAIN, ...value.groups.map((g) => g.name), "DIRECT", "REJECT"],
     [value.groups],
+  );
+  // R18-E2-05: per-row group-name conflicts (same verdict as the
+  // save gate in templates.tsx).
+  const groupConflicts = useMemo(
+    () => builderGroupNameConflicts(value),
+    [value],
   );
   const picked = useMemo(
     () =>
@@ -331,6 +381,12 @@ export function TemplateBuilderForm({
               variant="bordered"
               onChange={(e) => patchGroup(i, { name: e.target.value })}
             />
+            {/* R18-E2-05：冲突组名行内标红并点名，后端会拒绝保存。 */}
+            {groupConflicts.get(i) && (
+              <span className="text-xs font-semibold text-danger-700">
+                {groupConflicts.get(i)}
+              </span>
+            )}
             <select
               className={selectCls}
               value={g.type}
