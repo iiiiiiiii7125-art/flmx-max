@@ -1091,6 +1091,24 @@ else
   note_ok "R18-A5-01：auth.md updatePassword 例文键与后端 changePasswordRequest 一致（${a5_code_keys})，skills 内无 oldPassword"
 fi
 
+# ── 31. 发版 Release notes Quick Install 校验门（R18-A4-02 常设门）：
+# docker-build.yml 的 create-release 作业在 --notes 里印 4 条 Quick
+# Install 命令（定版 ×2、latest ×2）；每条须先下同名 .sha256 再
+# sha256sum -c、失败即中止，与 README 的校验纪律同形。只下载即执
+# 行是未校验路径（Release 资产被换即投毒），故逐条计数点名。
+A4_WF=".github/workflows/docker-build.yml"
+a4_p_cmds=$(grep -cF 'panel_install.sh -o panel_install.sh' "$A4_WF" || true)
+a4_p_ok=$(grep -cF 'sha256sum -c panel_install.sh.sha256' "$A4_WF" || true)
+a4_n_cmds=$(grep -cF 'install.sh -o install.sh' "$A4_WF" || true)
+a4_n_ok=$(grep -cF 'sha256sum -c install.sh.sha256' "$A4_WF" || true)
+if [ "$a4_p_cmds" -ne 2 ] || [ "$a4_n_cmds" -ne 2 ]; then
+  note_fail "R18-A4-02：发版 Release notes Quick Install 命令前提失效（面板 $a4_p_cmds 条、节点 $a4_n_cmds 条，期望各 2 条，请人工复核）"
+elif [ "$a4_p_ok" -ne 2 ] || [ "$a4_n_ok" -ne 2 ]; then
+  note_fail "R18-A4-02：发版 Release notes Quick Install 有未校验 sha256 的安装命令（面板校验 $a4_p_ok/2 条、节点校验 $a4_n_ok/2 条），与 README 校验纪律打架"
+else
+  note_ok "R18-A4-02：发版 Release notes Quick Install 4 条命令均先下 .sha256 再 sha256sum -c"
+fi
+
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
   echo "RESULT: PASS（known-pending 项不计失败）"

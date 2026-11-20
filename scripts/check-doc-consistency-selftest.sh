@@ -384,4 +384,22 @@ grep -q "R18-A5-01" "$TMP/v25.log" && echo "OK: variant 25 caught and named" || 
   echo "FAIL: variant 25 caught but the drift was not named"; sed 's/^/    /' "$TMP/v25.log"; exit 1; }
 cp "$ROOT/skills/flmx-api/references/auth.md" "$MIR/skills/flmx-api/references/auth.md"
 
+echo "== variant 26: Quick Install drops its sha256 check must FAIL and name it (§31, R18-A4-02) =="
+python3 - "$MIR/.github/workflows/docker-build.yml" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = " && curl -L https://github.com/${{ github.repository }}/releases/download/${VERSION}/panel_install.sh.sha256 -o panel_install.sh.sha256 && sha256sum -c panel_install.sh.sha256"
+assert old in s, "baseline shape changed"
+open(p, "w").write(s.replace(old, "", 1))
+PYEOF
+[ "$(grep -c 'sha256sum -c panel_install.sh.sha256' "$MIR/.github/workflows/docker-build.yml")" = "1" ] || {
+  echo "FAIL: variant 26 mutation did not land (exactly one panel check must remain)"; exit 1; }
+if run_gate "$TMP/v26.log"; then
+  echo "FAIL: variant 26 was not caught"; exit 1
+fi
+grep -q "R18-A4-02" "$TMP/v26.log" && echo "OK: variant 26 caught and named" || {
+  echo "FAIL: variant 26 caught but the drift was not named"; sed 's/^/    /' "$TMP/v26.log"; exit 1; }
+cp "$ROOT/.github/workflows/docker-build.yml" "$MIR/.github/workflows/docker-build.yml"
+
 echo "SELFTEST PASS"
