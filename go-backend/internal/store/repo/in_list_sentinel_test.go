@@ -38,8 +38,8 @@ type inListSiteClass struct {
 // 增删点位只须改此处，门禁以此处为准（W8 对账）。
 var inListSiteRegistry = map[string]inListSiteClass{
 	// —— 分块（chunkInt64IDs）——
-	"repository_subscription.go:LastSubscriptionCounterUpdates":                {"chunkInt64IDs", "F4/D-06：订阅列表页当前页订阅 id 集，按 inListChunkSize 分块求 MAX(updated_time)"},
-	"repository.go:LatestNodeMetricTimes":                                       {"chunkInt64IDs", "F5/A-低-6：节点列表 stale 打标的节点集，按 inListChunkSize 分块求 MAX(timestamp)（集成补登：F5 引入时漏登记，repo 门红）"},
+	"repository_subscription.go:LastSubscriptionCounterUpdates":         {"chunkInt64IDs", "F4/D-06：订阅列表页当前页订阅 id 集，按 inListChunkSize 分块求 MAX(updated_time)"},
+	"repository.go:LatestNodeMetricTimes":                               {"chunkInt64IDs", "F5/A-低-6：节点列表 stale 打标的节点集，按 inListChunkSize 分块求 MAX(timestamp)（集成补登：F5 引入时漏登记，repo 门红）"},
 	"repository.go:ListNodes":                                           {"chunkInt64IDs", "整表节点集，T2-NEW-01 已分块"},
 	"repository_upgrade_verify.go:ListVisibleNodeUpgradeVerifications":  {"chunkInt64IDs", "整表节点集（升级核验可见行），A4-V-06 已分块"},
 	"repository.go:ListForwards":                                        {"chunkInt64IDs", "整表转发集，已分块"},
@@ -85,8 +85,9 @@ var inListSiteRegistry = map[string]inListSiteClass{
 	"repository_mutations.go:DeleteUserCascade": {"", "forwardIDs/userTunnelIDs 为 Select 子查询，X01 A 集已核"},
 
 	// —— 有界豁免（前提经 R3 复核仍成立；复核底稿未归档，见上注）——
-	"repository.go:GetConfigsByNames":               {"", "全部调用方传代码字面量小清单（X01 A 集已核 5 处）"},
-	"repository_kernel.go:applyInboundCounterChunk": {"", "调用方 ApplyInboundCounters 已按 200 条分片（X01 A 集）"},
+	"repository.go:GetConfigsByNames":                    {"", "全部调用方传代码字面量小清单（X01 A 集已核 5 处）"},
+	"repository_kernel.go:applyInboundCounterChunk":      {"", "调用方 ApplyInboundCounters 已按 200 条分片（X01 A 集）"},
+	"migration_rmshare_v6.go:migrateV6FederationRemoval": {"", "R18-B7-01：一次性迁移，IN 集是已删除联邦的远端节点 id（is_remote=1 的存量行）；联邦功能已删除、不再新增远端节点，上界为迁移执行时的存量远端节点数，远低于 SQLite/PG 变量上限"},
 
 	// —— 排除集反连接（K8/B5）——
 	"repository_port_occupancy.go:existsOccupantNotExcludedTx": {"inListChunkSize", "小集合单条 NOT IN、大集合候选反连接；备份预检整单排除集经此收口"},
