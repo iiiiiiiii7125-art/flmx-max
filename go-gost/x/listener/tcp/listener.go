@@ -65,7 +65,25 @@ func (l *tcpListener) Init(md md.Metadata) (err error) {
 
 	l.logger.Debugf("pp: %d", l.options.ProxyProtocol)
 
-	ln = proxyproto.WrapListener(l.options.ProxyProtocol, ln, 10*time.Second)
+	// R18-C5-01: PROXY receive is only armed with a non-empty
+	// allowlist of trusted senders (panel-supplied listener
+	// metadata). Without one the bare listener is used — no
+	// PROXY header is parsed, so a direct client cannot forge
+	// the "real client IP" — and the service keeps running.
+	if l.options.ProxyProtocol > 0 {
+		if len(l.md.proxyProtocolAllowlist) == 0 {
+			l.logger.Warnf("proxy protocol receive requested without an allowlist, PROXY headers will be ignored")
+			ln = proxyproto.WrapListener(0, ln, 10*time.Second)
+		} else {
+			wrapped, err := proxyproto.WrapListenerWithAllowlist(l.options.ProxyProtocol, l.md.proxyProtocolAllowlist, ln, 10*time.Second)
+			if err != nil {
+				l.logger.Warnf("proxy protocol allowlist invalid (%v), PROXY headers will be ignored", err)
+			}
+			ln = wrapped
+		}
+	} else {
+		ln = proxyproto.WrapListener(l.options.ProxyProtocol, ln, 10*time.Second)
+	}
 	ln = metrics.WrapListener(l.options.Service, ln)
 	ln = stats.WrapListener(ln, l.options.Stats)
 	ln = admission.WrapListener(l.options.Admission, ln)

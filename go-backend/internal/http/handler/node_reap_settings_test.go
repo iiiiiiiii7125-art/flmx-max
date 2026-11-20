@@ -97,7 +97,7 @@ func TestBuildForwardServiceConfigs_ReapMetadata(t *testing.T) {
 		TCPListenAddr: "[::]", UDPListenAddr: "[::]",
 		EdgeIdleTimeoutSeconds: 900, BackstopIdleTimeoutSeconds: 3600, BackstopTrickleBps: 128,
 	}
-	services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 22000, "", forwardRuntimeLimiters{}, false)
+	services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 22000, "", forwardRuntimeLimiters{}, false, nil)
 	if len(services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(services))
 	}
@@ -114,7 +114,7 @@ func TestBuildForwardServiceConfigs_ReapMetadata(t *testing.T) {
 	}
 
 	nodeOff := &nodeRecord{TCPListenAddr: "[::]", UDPListenAddr: "[::]"}
-	services = buildForwardServiceConfigs("1_2_0", forward, nil, nodeOff, 22000, "", forwardRuntimeLimiters{}, false)
+	services = buildForwardServiceConfigs("1_2_0", forward, nil, nodeOff, 22000, "", forwardRuntimeLimiters{}, false, nil)
 	for _, svc := range services {
 		if md, ok := svc["metadata"].(map[string]interface{}); ok {
 			for _, key := range []string{"edgeIdleTimeout", "backstopIdleTimeout", "backstopTrickleBps"} {

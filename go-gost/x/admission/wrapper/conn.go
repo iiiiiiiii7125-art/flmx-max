@@ -50,6 +50,17 @@ func (c *serverConn) SyscallConn() (rc syscall.RawConn, err error) {
 	return
 }
 
+// Raw returns the underlying connection (R18-C5-01): it lets the
+// service layer reach the proxyproto.Conn underneath the wrapper
+// chain to record the raw peer (PeerIP) for the connection log,
+// without the wrappers having to know about PROXY at all.
+func (c *serverConn) Raw() net.Conn {
+	if r, ok := c.Conn.(interface{ Raw() net.Conn }); ok {
+		return r.Raw()
+	}
+	return c.Conn
+}
+
 func (c *serverConn) Metadata() metadata.Metadata {
 	if md, ok := c.Conn.(metadata.Metadatable); ok {
 		return md.Metadata()

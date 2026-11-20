@@ -82,7 +82,7 @@ type ConnEvent struct {
 	EntryKind   string `json:"entryKind"`            // forward | inbound
 	EntryID     string `json:"entryId"`              // forward service name (panel encoding carries the forward id) / inbound tag in-<ID>
 	ClientIP    string `json:"clientIp"`             // effective peer at the entry; the real client IP under PROXY-protocol receive
-	PeerIP      string `json:"peerIp,omitempty"`     // raw previous-hop address when the stack exposes both (gost entries leave it empty)
+	PeerIP      string `json:"peerIp,omitempty"`     // raw previous-hop address when it differs from ClientIP (PROXY receive); empty for direct connections
 	ClientPort  int    `json:"clientPort,omitempty"` // 0 when the peer address carries no port
 	Network     string `json:"network"`              // tcp | udp
 	SessionKind string `json:"sessionKind"`          // tcp_conn | udp_session | kernel_session | event_only
@@ -235,11 +235,48 @@ func connNetwork(conn net.Conn) string {
 	return "tcp"
 }
 
+// rawPeerIP returns the host part of the innermost connection's
+// remote address (R18-C5-01): unwrapping through any Raw()
+// forwarding wrappers down to the underlying connection. For a
+// PROXY-protocol connection this is the real previous hop, while
+// RemoteAddr() would report the claimed client; for a direct
+// connection both are the same peer. "" when the connection or
+// its address is missing, or the host is not an IP.
+func rawPeerIP(conn net.Conn) string {
+	c := conn
+	for i := 0; i < 16 && c != nil; i++ {
+		r, ok := c.(interface{ Raw() net.Conn })
+		if !ok {
+			break
+		}
+		next := r.Raw()
+		if next == nil || next == c {
+			break
+		}
+		c = next
+	}
+	if c == nil {
+		return ""
+	}
+	addr := c.RemoteAddr()
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil || net.ParseIP(host) == nil {
+		return ""
+	}
+	return host
+}
+
 // newConnEvent builds one event for the Serve hook. clientAddr and
 // clientIP are the values Serve already finalised for the
-// connection; the port is split out of clientAddr (0 when
+// connection; peerIP is the raw previous hop captured before any
+// PROXY folding ("" when unknown) and is only recorded when it
+// differs from clientIP, so direct connections stay wire-
+// identical; the port is split out of clientAddr (0 when
 // unparsable).
-func (s *defaultService) newConnEvent(typ, sid, clientAddr, clientIP string, conn net.Conn, startMs, endMs int64) ConnEvent {
+func (s *defaultService) newConnEvent(typ, sid, clientAddr, clientIP, peerIP string, conn net.Conn, startMs, endMs int64) ConnEvent {
 	network := connNetwork(conn)
 	sessionKind := ConnSessionKindTCP
 	if network == "udp" {
@@ -257,7 +294,7 @@ func (s *defaultService) newConnEvent(typ, sid, clientAddr, clientIP string, con
 	if entryID == "" {
 		entryID = s.name
 	}
-	return ConnEvent{
+	event := ConnEvent{
 		Type:        typ,
 		ConnID:      sid,
 		EntryKind:   ConnEntryForward,
@@ -270,4 +307,8 @@ func (s *defaultService) newConnEvent(typ, sid, clientAddr, clientIP string, con
 		EndMs:       endMs,
 		Status:      status,
 	}
+	if peerIP != "" && peerIP != clientIP {
+		event.PeerIP = peerIP
+	}
+	return event
 }

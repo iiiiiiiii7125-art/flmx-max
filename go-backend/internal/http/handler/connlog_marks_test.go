@@ -19,7 +19,7 @@ func TestBuildForwardServiceConfigs_ConnlogEntryMark(t *testing.T) {
 	forward := &forwardRecord{RemoteAddr: "1.2.3.4:80", Strategy: "fifo", TunnelID: 7}
 	node := &nodeRecord{TCPListenAddr: "[::]", UDPListenAddr: "[::]"}
 
-	services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 22000, "", forwardRuntimeLimiters{}, true)
+	services := buildForwardServiceConfigs("1_2_0", forward, nil, node, 22000, "", forwardRuntimeLimiters{}, true, nil)
 	if len(services) != 2 {
 		t.Fatalf("expected 2 services, got %d", len(services))
 	}
@@ -33,7 +33,7 @@ func TestBuildForwardServiceConfigs_ConnlogEntryMark(t *testing.T) {
 		}
 	}
 
-	chained := buildForwardServiceConfigs("1_2_0", forward, &tunnelRecord{Type: 2}, node, 22000, "", forwardRuntimeLimiters{}, true)
+	chained := buildForwardServiceConfigs("1_2_0", forward, &tunnelRecord{Type: 2}, node, 22000, "", forwardRuntimeLimiters{}, true, nil)
 	for _, svc := range chained {
 		if svc["handler"].(map[string]interface{})["chain"] == nil {
 			t.Fatalf("service %v: chain setting lost", svc["name"])
@@ -44,7 +44,7 @@ func TestBuildForwardServiceConfigs_ConnlogEntryMark(t *testing.T) {
 		}
 	}
 
-	plain := buildForwardServiceConfigs("1_2_0", forward, nil, node, 22000, "", forwardRuntimeLimiters{}, false)
+	plain := buildForwardServiceConfigs("1_2_0", forward, nil, node, 22000, "", forwardRuntimeLimiters{}, false, nil)
 	for _, svc := range plain {
 		if md, ok := svc["metadata"].(map[string]interface{}); ok {
 			if _, present := md[connlogEntryKindMetadataKey]; present {
