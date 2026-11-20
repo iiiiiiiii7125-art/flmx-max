@@ -47,6 +47,15 @@
 # R18-A5-01 扩围：变体 25 覆盖 §30（改密请求体对齐门），auth.md
 # 的 updatePassword 例文改回 oldPassword 旧形必须被 §30 抓红并
 # 点名 R18-A5-01。
+# R18-A2-02 扩围：变体 26 覆盖 §31（迁移镜像 digest 钉选门），
+# panel_install.sh 任一 docker run 镜像回退为字面 alpine 必须被
+# §31 抓红并点名 R18-A2-02。
+# R18-A2-06 扩围：变体 27 覆盖 §32（安装预检回归测试在场门），
+# test-install-scripts-proxy.sh 内 panel_find_free_port 的词引
+# 用全部删除后必须被 §32 抓红并点名 R18-A2-06。
+# R18-A2-11 扩围：变体 28 覆盖 §33（v6 判别锚对账门），
+# docker-compose-v6.yml 的 IPv6 子网改值后必须被 §33 抓红并点
+# 名 R18-A2-11。
 # FIX-GATE-CALIB 改钉（R2-GATE-02）：上文 55/153、59/149 均为历史
 # 标定记录（出处见各重标定提交），不再是变体 8 的写死锚点——变体
 # 8 改为运行时从镜像内 ci-build.yml 机械读现行标记值（其后标记又
@@ -383,5 +392,38 @@ fi
 grep -q "R18-A5-01" "$TMP/v25.log" && echo "OK: variant 25 caught and named" || {
   echo "FAIL: variant 25 caught but the drift was not named"; sed 's/^/    /' "$TMP/v25.log"; exit 1; }
 cp "$ROOT/skills/flmx-api/references/auth.md" "$MIR/skills/flmx-api/references/auth.md"
+
+echo "== variant 26: migration image unpins back to bare alpine must FAIL and name it (§31, R18-A2-02) =="
+sed -i '0,/"\$FLMX_MIGRATE_ALPINE_IMAGE"/s//alpine/' "$MIR/panel_install.sh"
+grep -q 'docker run.*alpine sh' "$MIR/panel_install.sh" || {
+  echo "FAIL: variant 26 mutation did not land (alpine image anchor drifted)"; exit 1; }
+if run_gate "$TMP/v26.log"; then
+  echo "FAIL: variant 26 was not caught"; exit 1
+fi
+grep -q "R18-A2-02" "$TMP/v26.log" && echo "OK: variant 26 caught and named" || {
+  echo "FAIL: variant 26 caught but the drift was not named"; sed 's/^/    /' "$TMP/v26.log"; exit 1; }
+cp "$ROOT/panel_install.sh" "$MIR/panel_install.sh"
+
+echo "== variant 27: preflight helper loses all test references must FAIL and name it (§32, R18-A2-06) =="
+sed -i '/panel_find_free_port/d' "$MIR/test-install-scripts-proxy.sh"
+! grep -Fwq panel_find_free_port "$MIR/test-install-scripts-proxy.sh" || {
+  echo "FAIL: variant 27 mutation did not land (panel_find_free_port references remain)"; exit 1; }
+if run_gate "$TMP/v27.log"; then
+  echo "FAIL: variant 27 was not caught"; exit 1
+fi
+grep -q "R18-A2-06" "$TMP/v27.log" && echo "OK: variant 27 caught and named" || {
+  echo "FAIL: variant 27 caught but the drift was not named"; sed 's/^/    /' "$TMP/v27.log"; exit 1; }
+cp "$ROOT/test-install-scripts-proxy.sh" "$MIR/test-install-scripts-proxy.sh"
+
+echo "== variant 28: v6 compose subnet drifts from the script anchor must FAIL and name it (§33, R18-A2-11) =="
+sed -i 's/fd00:dead:beef::\/48/fd00:dead:beee::\/48/' "$MIR/docker-compose-v6.yml"
+grep -q 'fd00:dead:beee::/48' "$MIR/docker-compose-v6.yml" || {
+  echo "FAIL: variant 28 mutation did not land (v6 subnet anchor drifted)"; exit 1; }
+if run_gate "$TMP/v28.log"; then
+  echo "FAIL: variant 28 was not caught"; exit 1
+fi
+grep -q "R18-A2-11" "$TMP/v28.log" && echo "OK: variant 28 caught and named" || {
+  echo "FAIL: variant 28 caught but the drift was not named"; sed 's/^/    /' "$TMP/v28.log"; exit 1; }
+cp "$ROOT/docker-compose-v6.yml" "$MIR/docker-compose-v6.yml"
 
 echo "SELFTEST PASS"

@@ -732,6 +732,13 @@ test_panel_explicit_version_format_validated() (
   check_docker() { DOCKER_CMD="true"; }
   resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
   validate_panel_update_environment() { :; }
+  # R18-A2-08 回归修（L2-12）：update_panel 新增的两道门（实例
+  # id 守卫与更新端口预检）在全打桩夹具里无桩、无 .env 可读——预
+  # 检读不到端口即 return 1，夹具在真正断言之前就失败；两门各有
+  # 专属用例覆盖（A2-08 实例守卫 / 更新预检四用例），此处只桩到
+  # 放行，不削弱生产门禁语义。
+  panel_assert_instance_id_valid() { return 0; }
+  panel_preflight_update_port_conflicts() { return 0; }
   get_current_db_type() { echo "sqlite"; }
   get_deployed_panel_version() { return 1; }
   resolve_latest_release_tag() { echo "9.9.9"; }
@@ -981,11 +988,521 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log() (
   grep -q 'request>uri query' "$CADDYFILE_PATH" || fail "§9.6: the filter must target the request URI query string"
   grep -q 'delete secret' "$CADDYFILE_PATH" || fail "§9.6: the filter must delete the secret query parameter from the access log"
 
-  # 菜单 6 随后追加订阅前置块：不得被误加（其 token 在路径段），
-  # 全文件 delete secret 仍只出现一次（面板块内）。
+  # R18-A2-12：菜单 6 随后追加订阅前置块——与菜单 5 同形，订阅
+  # 前置域名反代到同一前端，面板 WS 握手可经该域名到达，故同
+  # 样带 secret 过滤；全文件 delete secret 应出现两次。
   setup_subscription_front_domain <<< "sub.example.com" >/dev/null || \
     fail "§9.6: the menu 6 run should succeed"
-  assert_equals "1" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "§9.6: only the panel block may carry the secret filter; the menu 6 block must not gain one"
+  assert_equals "2" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "R18-A2-12: both the panel block and the menu 6 block must carry the secret filter"
+)
+
+# R18-A2-03：迁移的 gost.db.bak 必须是 0600 的全库副本——旧实现
+# 只 cp，备份按 0644 落在部署目录，本机任一非特权用户可读全库。
+# 本例抽出出厂备份复制 docker run 行原文（路径改写到夹具目录）
+# 实际执行，断言落盘副本为 0600；旧实现载荷无 chmod，本例必红。
+test_panel_migrate_backup_copy_is_0600() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  # 按 finding 的复现条件：源库 0644、umask 022。
+  umask 022
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/data" "$work/backup"
+  printf 'fake-sqlite-db-content' > "$work/data/gost.db"
+  chmod 644 "$work/data/gost.db"
+
+  # docker 桩：只承接备份复制这一行——把 -v 映射的宿主路径改写
+  # 进 sh -c 载荷后实际执行，证明出厂载荷本身落盘即 0600。
+  docker() {
+    local payload=""
+    payload="${!#}"
+    payload=$(printf '%s' "$payload" | sed -e "s|/data/|$work/data/|g" -e "s|/backup/|$work/backup/|g")
+    sh -c "$payload"
+  }
+  sqlite_volume="fixture-volume"
+
+  local line
+  line=$(grep -F 'docker run' "$ROOT_DIR/panel_install.sh" | grep -F 'gost.db.bak' | grep -F 'sh -c' | head -n 1)
+  [[ -n "$line" ]] || fail "R18-A2-03: could not find the backup-copy docker run line in panel_install.sh"
+  line=$(printf '%s' "$line" | sed 's/^.*docker run/docker run/; s/; then$//')
+  grep -q 'chmod 600' <<< "$line" || fail "R18-A2-03: the backup-copy payload must chmod the copy to 0600"
+  eval "$line" || fail "R18-A2-03: the backup-copy docker run line must succeed on the fixture database"
+
+  [[ -f "$work/backup/gost.db.bak" ]] || fail "R18-A2-03: the backup copy must exist after the docker run line"
+  assert_equals "fake-sqlite-db-content" "$(cat "$work/backup/gost.db.bak")" \
+    "R18-A2-03: the backup copy must carry the source database content"
+  assert_equals "600" "$(stat -c %a "$work/backup/gost.db.bak")" \
+    "R18-A2-03: the backup copy must be mode 0600, not world-readable"
+  assert_equals "644" "$(stat -c %a "$work/data/gost.db")" \
+    "R18-A2-03: the backup step must not change the source database mode"
+  rm -rf "$work"
+)
+
+# R18-A2-02：迁移的 6 处 docker run 镜像必须钉到 digest——tag 可变
+# 时未钉选的 alpine:latest / dimitri/pgloader:latest 会让被污染
+# 的镜像在迁移容器内读/改全库与 .env 密钥。两镜像集中为顶部常量，
+# 6 处只引用常量；旧实现字面写 alpine / pgloader:latest，本例必红。
+test_panel_migrate_images_pinned_to_digest() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  # 常量本身必须含 tag+digest，且与 registry 核验过的取值逐字一致。
+  assert_equals "alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f" \
+    "$FLMX_MIGRATE_ALPINE_IMAGE" "R18-A2-02: the alpine migration image must be pinned to the verified digest"
+  assert_equals "dimitri/pgloader:v3.6.7@sha256:d29ea680cf1aaaf7269690a922dd69167567b91b35e9c48a0b54a99cef96c0ed" \
+    "$FLMX_MIGRATE_PGLOADER_IMAGE" "R18-A2-02: the pgloader migration image must be pinned to the verified digest"
+
+  # 8 处 docker run 逐行核：每行须引用两常量之一（常量自带 digest），
+  # 不得出现字面未钉选镜像名。
+  local run_lines bad
+  run_lines=$(grep -n 'docker run -' "$ROOT_DIR/panel_install.sh")
+  [[ -n "$run_lines" ]] || fail "R18-A2-02: no docker run lines found in panel_install.sh (premise failure)"
+  bad=$(printf '%s\n' "$run_lines" | grep -v 'FLMX_MIGRATE_\(ALPINE\|PGLOADER\)_IMAGE' || true)
+  [[ -z "$bad" ]] || fail "R18-A2-02: docker run lines must use the pinned image constants, unpinned: $bad"
+  # 计数：迁移 docker run 恰 8 处，新增调用点而不钉选即红（计数漂移
+  # 本身也是信号，改计数时须同步钉选新调用点）。第 7 处是 R18-A2-05
+  # 的回滚 SQLite 恢复（wipe-then-copy），第 8 处是 R18-A2-13 在
+  # migrate_restore_snapshot 末尾补的 gost-migrate.db 清理（与成功
+  # 路径同命令、同常量）。
+  assert_equals "8" "$(printf '%s\n' "$run_lines" | grep -c .)" "R18-A2-02: panel_install.sh must have exactly 8 docker run call sites"
+  if printf '%s\n' "$run_lines" | grep -q 'pgloader:latest'; then
+    fail "R18-A2-02: dimitri/pgloader:latest must not appear as a docker run image"
+  fi
+  if printf '%s\n' "$run_lines" | grep -q ' alpine '; then
+    fail "R18-A2-02: bare 'alpine' must not appear as a docker run image"
+  fi
+)
+
+# R18-A2-01：前后端端口相同必须在三处都被拒绝——安装输入
+# （get_config_params）、更新 .env（validate_panel_update_
+# environment）、安装预检（panel_preflight_install_conflicts，
+# 第二道防线）。旧实现三处都只验各自范围，同值空闲时一路通过、
+# 最后一步 compose bind 才失败。
+test_panel_equal_frontend_backend_ports_rejected() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work rc="0" out
+  work=$(mktemp -d)
+
+  # 安装输入：两端口同值 7000 → 拒绝，文案点名两键相同。
+  get_config_params <<< $'7000\n7000\n' >"$work/install-equal.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-01: install input with equal frontend/backend ports must be rejected"
+  grep -q '相同' "$work/install-equal.log" || fail "R18-A2-01: the install rejection must name the equal ports"
+
+  # 前导零同值（07000 与 7000）同样拒绝——字符串比对会漏过。
+  rc="0"
+  get_config_params <<< $'07000\n7000\n' >"$work/install-equal-zero.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-01: leading-zero equal ports (07000 vs 7000) must be rejected"
+
+  # 安装输入正控制：不同端口照常通过（读到数据库选择后以默认
+  # SQLite 完成），端口值逐字保留。
+  rc="0"
+  get_config_params <<< $'6366\n6365\n1\n' >"$work/install-ok.log" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-01: distinct ports must still pass install input"
+  assert_equals "6366" "$FRONTEND_PORT" "R18-A2-01: distinct frontend port must be kept"
+  assert_equals "6365" "$BACKEND_PORT" "R18-A2-01: distinct backend port must be kept"
+)
+
+test_panel_update_equal_ports_rejected() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work rc="0"
+  work=$(mktemp -d)
+  cd "$work"
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=7000\nFRONTEND_PORT=7000\nDB_TYPE=sqlite\n' > .env
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > docker-compose.yml
+  # compose 校验桩：若执行到该步即证明相等性检查漏过，本例必红。
+  run_panel_compose() { touch "$work/compose-called"; return 0; }
+  validate_panel_update_environment >"$work/update-equal.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-01: update with equal ports in .env must be rejected"
+  grep -q '相同' "$work/update-equal.log" || fail "R18-A2-01: the update rejection must name the equal ports"
+  [[ ! -e "$work/compose-called" ]] || fail "R18-A2-01: the equal-port rejection must happen before compose config validation"
+
+  # 更新正控制：不同端口照常通过（走到桩化的 compose 校验）。
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=7000\nFRONTEND_PORT=7001\nDB_TYPE=sqlite\n' > .env
+  rc="0"
+  validate_panel_update_environment >"$work/update-ok.log" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-01: distinct ports must still pass update validation"
+)
+
+test_panel_preflight_equal_ports_rejected() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  BACKEND_PORT=7000
+  FRONTEND_PORT=7000
+  unset PANEL_FORCE_REINSTALL FLMX_INSTANCE
+  # 两端口皆空闲：ss 无输出、docker ps 无输出——旧实现两次探活
+  # 都通过，本例必红。
+  ss() { return 0; }
+  docker() { return 0; }
+  local rc="0" out
+  out=$(panel_preflight_install_conflicts 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-01: preflight with equal ports must be rejected even when both ports are free"
+  [[ "$out" == *"相同"* ]] || fail "R18-A2-01: the preflight rejection must name the equal ports, got: $out"
+  [[ "$out" != *"自动换端口"* ]] || fail "R18-A2-01: equal ports must not fall through to the port-swap offer"
+)
+
+# R18-A2-06 安装预检回归测试组：2.1.18 共存改造交付的
+# panel_preflight_install_conflicts 及其探活/点名/选口助手在
+# test-install-scripts-proxy.sh 中零引用——本组补齐覆盖。夹具
+# 以 ss/docker 桩承接探活与占用者点名：ss 桩按
+# FIXTURE_BUSY_PORTS（空格分隔）输出监听行；docker ps 桩输出
+# FIXTURE_PS_FILE 的内容；docker inspect 桩按
+# FIXTURE_EXISTING_CONTAINERS（空格分隔）判容器存在。
+setup_preflight_fixture() {
+  local dir="$1"
+  mkdir -p "$dir"
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=sqlite\n' > "$dir/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > "$dir/docker-compose.yml"
+  FIXTURE_BUSY_PORTS=""
+  FIXTURE_PS_FILE="$dir/ps.txt"
+  : > "$FIXTURE_PS_FILE"
+  FIXTURE_EXISTING_CONTAINERS=""
+
+  ss() {
+    local p
+    for p in $FIXTURE_BUSY_PORTS; do
+      printf 'LISTEN 0 4096 0.0.0.0:%s 0.0.0.0:* users:(("docker-proxy",pid=123,fd=4))\n' "$p"
+    done
+    return 0
+  }
+  docker() {
+    case "$1" in
+      ps)
+        cat "$FIXTURE_PS_FILE" 2>/dev/null || true
+        return 0
+        ;;
+      inspect)
+        if [[ "$2" == "-f" ]]; then
+          case "$3" in
+            *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18" ;;
+            *State.Status*) printf '%s\n' "running" ;;
+            *) printf '\n' ;;
+          esac
+          return 0
+        fi
+        case " $FIXTURE_EXISTING_CONTAINERS " in
+          *" $2 "*) return 0 ;;
+        esac
+        return 1
+        ;;
+    esac
+    return 0
+  }
+}
+
+# R18-A2-06：pty 场景的预检 harness——把截断后的 panel_install.sh
+# 与 ss/docker 桩拼成可执行文件，预检结果（rc 与两端口）写进
+# $dir/result（pty_run 的输出被丢弃，断言只能读结果文件）。
+preflight_pty_harness() {
+  local dir="$1" psfile="$2"
+  {
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/panel_install.sh"
+    cat <<STUBEOF
+BACKEND_PORT=6365
+FRONTEND_PORT=6366
+PREFLIGHT_BUSY_PORTS="6365"
+PREFLIGHT_PS_FILE="$psfile"
+PREFLIGHT_RESULT="$dir/result"
+ss() {
+  local p
+  for p in \$PREFLIGHT_BUSY_PORTS; do
+    printf 'LISTEN 0 4096 0.0.0.0:%s 0.0.0.0:* users:(("docker-proxy",pid=123,fd=4))\\n' "\$p"
+  done
+  return 0
+}
+docker() {
+  case "\$1" in
+    ps) cat "\$PREFLIGHT_PS_FILE" 2>/dev/null || true; return 0 ;;
+    inspect) return 1 ;;
+  esac
+  return 0
+}
+rc=0
+panel_preflight_install_conflicts || rc=\$?
+printf '%s %s %s\n' "\$rc" "\$BACKEND_PORT" "\$FRONTEND_PORT" > "\$PREFLIGHT_RESULT"
+exit \$rc
+STUBEOF
+  } > "$dir/harness.sh"
+}
+
+test_panel_port_helpers_probe_listen_owner_and_free_port() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  FIXTURE_BUSY_PORTS="6365"
+  printf '%s\n' "flmx-panel-backend ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+
+  [[ -n "$(panel_port_listener_text 6365)" ]] || fail "R18-A2-06: listener text must be non-empty for a busy port"
+  [[ -z "$(panel_port_listener_text 6366)" ]] || fail "R18-A2-06: listener text must be empty for a free port"
+  panel_port_is_listening 6365 || fail "R18-A2-06: a busy port must report listening"
+  panel_port_is_listening 6366 && fail "R18-A2-06: a free port must not report listening"
+
+  assert_equals "flmx-panel-backend (ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18)" \
+    "$(panel_port_container_owners 6365)" "R18-A2-06: container owners must list the occupying container with its image"
+  assert_equals "" "$(panel_port_container_owners 6366)" "R18-A2-06: no container must own a free port"
+  [[ "$(panel_port_listener_owner 6365)" == *"flmx-panel-backend"* ]] || fail "R18-A2-06: the owner description must name the container"
+  [[ "$(panel_port_listener_owner 6366)" == *"未知进程"* ]] || fail "R18-A2-06: a free port with no owner info must be reported as unknown, got: $(panel_port_listener_owner 6366)"
+
+  assert_equals "6367" "$(panel_find_free_port 6366 6366)" "R18-A2-06: free-port search must skip both the busy port and the excluded value"
+  assert_equals "6366" "$(panel_find_free_port 6366 6365)" "R18-A2-06: free-port search must return the start port when it is free and not excluded"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_refuses_occupied_port_naming_owner() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  BACKEND_PORT=6365
+  FRONTEND_PORT=6366
+  unset PANEL_FORCE_REINSTALL FLMX_INSTANCE
+  FIXTURE_BUSY_PORTS="6365"
+  printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+  local rc="0" out
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-06: preflight must refuse when the backend port is occupied"
+  [[ "$out" == *"other-panel-backend"* ]] || fail "R18-A2-06: the refusal must name the occupying container, got: $out"
+  [[ "$out" == *"非交互终端"* ]] || fail "R18-A2-06: the non-TTY refusal must say so, got: $out"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_swaps_port_interactively() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir rc
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp" > "$dir/ps.txt"
+  preflight_pty_harness "$dir" "$dir/ps.txt"
+  rc="0"
+  pty_run $'1\n' "$dir/harness.sh" || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-06: preflight must continue after the interactive port swap (choice 1)"
+  [[ -f "$dir/result" ]] || fail "R18-A2-06: the swap harness must record the resulting ports"
+  assert_equals "0 6367 6366" "$(cat "$dir/result")" "R18-A2-06: the occupied backend port must swap to the next free port, skipping the frontend port value"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_refuses_on_choice_two() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir rc
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp" > "$dir/ps.txt"
+  preflight_pty_harness "$dir" "$dir/ps.txt"
+  rc="0"
+  pty_run $'2\n' "$dir/harness.sh" || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-06: preflight must abort when the user chooses to abort (choice 2)"
+  [[ -f "$dir/result" ]] || fail "R18-A2-06: the abort harness must record the resulting ports"
+  assert_equals "1 6365 6366" "$(cat "$dir/result")" "R18-A2-06: an aborted preflight must leave both ports unchanged"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_container_name_conflict_points_to_instance() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  BACKEND_PORT=6365
+  FRONTEND_PORT=6366
+  unset PANEL_FORCE_REINSTALL FLMX_INSTANCE
+  FIXTURE_EXISTING_CONTAINERS="flmx-panel-backend"
+  local rc="0" out
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-06: preflight must refuse when a panel container name is already taken even though the ports are free"
+  [[ "$out" == *"换端口修不了容器名占用"* ]] || fail "R18-A2-06: the name-conflict refusal must say a port swap cannot fix it, got: $out"
+  [[ "$out" == *"FLMX_INSTANCE"* ]] || fail "R18-A2-06: the name-conflict refusal must point at the instance id, got: $out"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_force_reinstall_allows_own_container() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  BACKEND_PORT=6365
+  FRONTEND_PORT=6366
+  PANEL_FORCE_REINSTALL=1
+  unset FLMX_INSTANCE
+  FIXTURE_BUSY_PORTS="6365"
+  printf '%s\n' "flmx-panel-backend ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+  FIXTURE_EXISTING_CONTAINERS="flmx-panel-backend flmx-panel-frontend"
+  local rc="0" out
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-06: PANEL_FORCE_REINSTALL must let an own-directory install reuse its own containers"
+  [[ "$out" == *"自家容器占用"* ]] || fail "R18-A2-06: the own-container pass must be named in the output, got: $out"
+  rm -rf "$dir"
+)
+
+# R18-A2-07：预检的自家容器放行须逐 token 精确匹配——旧实现对
+# 占用描述整串做子串匹配，两种非自家形态都会被误判为自家而放
+# 行：(a) 别家实例的容器名是自家名的前缀扩展（如
+# flmx-panel-backend-2）；(b) 别家手动命名的容器跑的正是自家镜
+# 像。两形态在 PANEL_FORCE_REINSTALL=1 下都必须拒绝并点名，且
+# 不得报“自家容器占用”。
+test_panel_preflight_force_reinstall_refuses_foreign_container() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  BACKEND_PORT=6365
+  FRONTEND_PORT=6366
+  PANEL_FORCE_REINSTALL=1
+  unset FLMX_INSTANCE
+  FIXTURE_BUSY_PORTS="6365"
+  FIXTURE_EXISTING_CONTAINERS=""
+  local rc="0" out
+
+  printf '%s\n' "flmx-panel-backend-2 ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-07: PANEL_FORCE_REINSTALL must not pass off a foreign instance container whose name merely extends the own container name"
+  [[ "$out" == *"flmx-panel-backend-2"* ]] || fail "R18-A2-07: the refusal must name the foreign container, got: $out"
+  [[ "$out" != *"自家容器占用"* ]] || fail "R18-A2-07: the foreign container must not be reported as an own-container occupation, got: $out"
+
+  printf '%s\n' "other-panel ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+  rc="0"
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-07: PANEL_FORCE_REINSTALL must not pass off a foreign-named container merely because it runs the own image"
+  [[ "$out" == *"other-panel"* ]] || fail "R18-A2-07: the refusal must name the foreign container, got: $out"
+  [[ "$out" != *"自家容器占用"* ]] || fail "R18-A2-07: the foreign container must not be reported as an own-container occupation, got: $out"
+  rm -rf "$dir"
+)
+
+# R18-A2-08 更新端口预检夹具：.env 供 get_env_var 读端口；ss 桩
+# 按 UPDATE_PREFLIGHT_BUSY_PORTS 输出监听行；docker ps 桩输出
+# UPDATE_PREFLIGHT_PS_FILE 的内容。自家容器名由调用方置
+# PANEL_BACKEND_CONTAINER / PANEL_FRONTEND_CONTAINER。
+setup_update_preflight_fixture() {
+  local dir="$1"
+  mkdir -p "$dir"
+  printf 'BACKEND_PORT=6365\nFRONTEND_PORT=6366\n' > "$dir/.env"
+  UPDATE_PREFLIGHT_PS_FILE="$dir/ps.txt"
+  : > "$UPDATE_PREFLIGHT_PS_FILE"
+  UPDATE_PREFLIGHT_BUSY_PORTS=""
+  PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+
+  ss() {
+    local p
+    for p in $UPDATE_PREFLIGHT_BUSY_PORTS; do
+      printf 'LISTEN 0 4096 0.0.0.0:%s 0.0.0.0:* users:(("docker-proxy",pid=123,fd=4))\n' "$p"
+    done
+    return 0
+  }
+  docker() {
+    case "$1" in
+      ps) cat "$UPDATE_PREFLIGHT_PS_FILE" 2>/dev/null || true; return 0 ;;
+    esac
+    return 0
+  }
+}
+
+test_panel_update_preflight_refuses_foreign_port_owner() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_update_preflight_fixture "$dir"
+  cd "$dir"
+  UPDATE_PREFLIGHT_BUSY_PORTS="6365"
+  printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp" > "$UPDATE_PREFLIGHT_PS_FILE"
+  local rc="0" out
+  out=$(panel_preflight_update_port_conflicts 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-08: update preflight must refuse when the backend port is held by a foreign container"
+  [[ "$out" == *"other-panel-backend"* ]] || fail "R18-A2-08: the refusal must name the foreign container, got: $out"
+  [[ "$out" == *"更新不自动换端口"* ]] || fail "R18-A2-08: the refusal must say the update does not swap ports, got: $out"
+  rm -rf "$dir"
+)
+
+test_panel_update_preflight_passes_own_and_free_ports() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_update_preflight_fixture "$dir"
+  cd "$dir"
+  UPDATE_PREFLIGHT_BUSY_PORTS="6365"
+  printf '%s\n' "flmx-panel-backend ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$UPDATE_PREFLIGHT_PS_FILE"
+  local rc="0" out
+  out=$(panel_preflight_update_port_conflicts 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-08: update preflight must pass when the backend port is held by the own container"
+  [[ "$out" == *"自家容器占用"* ]] || fail "R18-A2-08: the own-container pass must be named, got: $out"
+
+  UPDATE_PREFLIGHT_BUSY_PORTS=""
+  : > "$UPDATE_PREFLIGHT_PS_FILE"
+  rc="0"
+  out=$(panel_preflight_update_port_conflicts 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-08: update preflight must pass when both ports are free"
+  rm -rf "$dir"
+)
+
+test_panel_update_preflight_refuses_unknown_owner() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_update_preflight_fixture "$dir"
+  cd "$dir"
+  UPDATE_PREFLIGHT_BUSY_PORTS="6365"
+  # ss 行无 users 字段：占用者无法确认，fail-closed 中止。
+  ss() {
+    printf 'LISTEN 0 4096 0.0.0.0:6365 0.0.0.0:*\n'
+    return 0
+  }
+  local rc="0" out
+  out=$(panel_preflight_update_port_conflicts 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-08: update preflight must refuse when the port owner cannot be identified"
+  [[ "$out" == *"未知进程"* ]] || fail "R18-A2-08: the refusal must say the owner is unknown, got: $out"
+  rm -rf "$dir"
+)
+
+test_panel_update_aborts_before_backup_on_foreign_port_owner() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_rename_update_fixture "$dir" "current"
+  cd "$dir"
+  # 占用形态：后端 6365 被别家容器占；前端空闲。rename 夹具的
+  # docker 桩只答裸名、点不出占用者，本例重定义 docker/ss 承接
+  # 预检面；流程在预检中止，此后不触 docker inspect，故重定义
+  # 桩只需 ps 一支。
+  ss() {
+    printf 'LISTEN 0 4096 0.0.0.0:6365 0.0.0.0:* users:(("docker-proxy",pid=123,fd=4))\n'
+    return 0
+  }
+  docker() {
+    case "$1" in
+      ps) printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp"; return 0 ;;
+    esac
+    return 0
+  }
+  panel_port_is_listening() {
+    [[ "$1" == "6365" ]]
+  }
+  local rc="0" out
+  out=$(update_panel 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-08: update must abort when the backend port is held by a foreign container"
+  [[ "$out" == *"other-panel-backend"* ]] || fail "R18-A2-08: the abort must name the foreign container, got: $out"
+  [[ "$out" == *"更新不自动换端口"* ]] || fail "R18-A2-08: the abort must say the update does not swap ports, got: $out"
+  [[ ! -e "$dir/backup" ]] || fail "R18-A2-08: the abort must happen before the update backup is created"
+  rm -rf "$dir"
 )
 
 # A2-04 附带钉格（XC-1 指出）：A2-04 本体（.env 读取与 Compose
@@ -3901,6 +4418,13 @@ test_update_panel_downloads_without_prompt() (
   validate_panel_update_environment() {
     calls+=" validate-current"
   }
+  # R18-A2-08 回归修（L2-12）：update_panel 新增的两道门（实例
+  # id 守卫与更新端口预检）在全打桩夹具里无桩、无 .env 可读——预
+  # 检读不到端口即 return 1，夹具在真正断言之前就失败；两门各有
+  # 专属用例覆盖（A2-08 实例守卫 / 更新预检四用例），此处只桩到
+  # 放行，不削弱生产门禁语义。
+  panel_assert_instance_id_valid() { return 0; }
+  panel_preflight_update_port_conflicts() { return 0; }
 
   get_current_db_type() {
     echo "sqlite"
@@ -3970,6 +4494,13 @@ test_update_panel_backup_failure_names_force_reinstall_only_when_container_missi
   check_docker() { DOCKER_CMD="true"; }
   resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
   validate_panel_update_environment() { :; }
+  # R18-A2-08 回归修（L2-12）：update_panel 新增的两道门（实例
+  # id 守卫与更新端口预检）在全打桩夹具里无桩、无 .env 可读——预
+  # 检读不到端口即 return 1，夹具在真正断言之前就失败；两门各有
+  # 专属用例覆盖（A2-08 实例守卫 / 更新预检四用例），此处只桩到
+  # 放行，不削弱生产门禁语义。
+  panel_assert_instance_id_valid() { return 0; }
+  panel_preflight_update_port_conflicts() { return 0; }
   get_current_db_type() { echo "sqlite"; }
   resolve_latest_release_tag() { echo "v-test"; }
   download_panel_update_compose() { UPDATE_COMPOSE_CANDIDATE="candidate"; }
@@ -6244,7 +6775,7 @@ test_update_panel_crosschecks_deployed_image_version() (
   local calls=""
   local deploy_dir
   deploy_dir=$(mktemp -d)
-  printf 'FLMX_VERSION=1.0.0\nJWT_SECRET=x\n' > "$deploy_dir/.env"
+  printf 'FLMX_VERSION=1.0.0\nJWT_SECRET=x\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\n' > "$deploy_dir/.env"
   printf 'services: {}\n' > "$deploy_dir/docker-compose.yml"
 
   docker() {
@@ -6259,6 +6790,11 @@ test_update_panel_crosschecks_deployed_image_version() (
   }
   ask_proxy_config() { PROXY_ENABLED="false"; }
   validate_panel_update_environment() { :; }
+  # R18-A2-08 回归修（L2-12 同根）：本夹具 cd 进部署目录、但
+  # .env 无端口，真实预检读不到端口即 return 1，更新在预检就失
+  # 败、降级判定从未被走到（空过）；补端口并把监听探活桩为空闲，
+  # 让真实预检放行、降级判定真正被执行。
+  panel_port_is_listening() { return 1; }
   get_current_db_type() { echo "sqlite"; }
   resolve_latest_release_tag() { echo "1.5.0"; }
   download_panel_update_compose() { calls+=" download"; }
@@ -7618,7 +8154,7 @@ CREATE TABLE peer_share_resource (id INTEGER PRIMARY KEY, release_legacy_family 
 EOF
 
   local payload="$work/payload.sh" runner="$work/runner.sh"
-  awk '/alpine sh -c '"'"'$/{f=1; next} /^  '"'"'; then$/{f=0} f' \
+  awk '/FLMX_MIGRATE_ALPINE_IMAGE" sh -c '"'"'$/{f=1; next} /^  '"'"'; then$/{f=0} f' \
     "$ROOT_DIR/panel_install.sh" > "$payload"
   grep -q 'DROP INDEX IF EXISTS idx_user_username_fold_unique' "$payload" || \
     fail "RR-LIVE-01: could not extract the preprocessing payload (fold index drop) from panel_install.sh"
@@ -8260,6 +8796,71 @@ test_panel_migrate_postgres_rollbacks() (
   assert_equals "0" "$rc" "L2-02: migration should succeed when every step succeeds"
   grep -q '^DB_TYPE=postgres' .env || fail "L2-02: successful migration must switch .env to postgres"
   [[ ! -e .env.pre-postgres-migration ]] || fail "L2-02: successful migration must delete the env snapshot"
+)
+
+# R18-A2-13：迁移失败时 gost-migrate.db（全库副本）残留在实况
+# 数据卷内——旧实现只在成功路径清理，回滚口 migrate_restore_
+# snapshot 不删，残留会撑大后续备份。pgloader 失败一幕：夹具卷
+# 预置 gost.db 与 gost-migrate.db，docker 桩只执行单命令清理
+# 载荷（行尾锚 ` rm -f /sqlite/gost-migrate.db`；预处理/对账的
+# sh -c 载荷内含同串但不在行尾，不误执行），断言回滚后副本已
+# 删、源库未动；旧实现回滚不清理，本例必红。
+test_panel_migrate_rollback_cleans_gost_migrate_db() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  cd "$work"
+  printf 'JWT_SECRET=<redacted>\nDB_TYPE=sqlite\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\n' > .env
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > docker-compose.yml
+  cp .env env-original
+  mkdir -p "$work/vol" "$work/flags"
+  printf 'live-db' > "$work/vol/gost.db"
+  printf 'migrate-copy' > "$work/vol/gost-migrate.db"
+  FIXTURE_FLAGS="$work/flags"
+  FIXTURE_VOL="$work/vol"
+
+  check_docker() { DOCKER_CMD="fixture_compose"; return 0; }
+  fixture_compose() {
+    case "$*" in
+      "down") [[ ! -f "$FIXTURE_FLAGS/down-fail" ]] ;;
+      "up -d postgres backend frontend") [[ ! -f "$FIXTURE_FLAGS/final-up-fail" ]] ;;
+      *) return 0 ;;
+    esac
+  }
+  docker() {
+    case "$1" in
+      ps)
+        printf '%s\n' "flux-panel-postgres" "flux-panel-backend" "vite-frontend"
+        return 0
+        ;;
+      inspect)
+        case "$*" in
+          *Health.Status*) printf 'healthy\n' ;;
+        esac
+        return 0
+        ;;
+    esac
+    case "$*" in
+      *" rm -f /sqlite/gost-migrate.db")
+        rm -f "$FIXTURE_VOL/gost-migrate.db"
+        return 0
+        ;;
+      *pgloader*) [[ ! -f "$FIXTURE_FLAGS/pgloader-fail" ]] ;;
+      *) return 0 ;;
+    esac
+  }
+  sleep() { :; }
+
+  : > "$work/flags/pgloader-fail"
+  local rc="0"
+  migrate_to_postgres >"$work/act.log" 2>&1 || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-13: pgloader failure must fail the migration"
+  [[ ! -e "$work/vol/gost-migrate.db" ]] || fail "R18-A2-13: rollback must remove gost-migrate.db from the live data volume"
+  [[ -f "$work/vol/gost.db" ]] || fail "R18-A2-13: rollback must not touch the live gost.db"
+  diff -q env-original .env >/dev/null || fail "R18-A2-13: pgloader failure must restore .env from the snapshot"
+  rm -rf "$work"
 )
 
 # R3-F7-01: 迁移的健康等待必须按部署 .env 的身份名查容器——旧实
@@ -9097,6 +9698,13 @@ test_panel_update_honors_version_priority_chain() (
   check_docker() { DOCKER_CMD="true"; }
   resolve_panel_deployment() { PANEL_DEPLOY_DIR=$(mktemp -d); }
   validate_panel_update_environment() { :; }
+  # R18-A2-08 回归修（L2-12）：update_panel 新增的两道门（实例
+  # id 守卫与更新端口预检）在全打桩夹具里无桩、无 .env 可读——预
+  # 检读不到端口即 return 1，夹具在真正断言之前就失败；两门各有
+  # 专属用例覆盖（A2-08 实例守卫 / 更新预检四用例），此处只桩到
+  # 放行，不削弱生产门禁语义。
+  panel_assert_instance_id_valid() { return 0; }
+  panel_preflight_update_port_conflicts() { return 0; }
   get_current_db_type() { echo "sqlite"; }
   get_deployed_panel_version() { return 1; }
   resolve_latest_release_tag() { echo "9.9.9"; }
@@ -9673,6 +10281,14 @@ setup_rename_update_fixture() {
   FIXTURE_RMLOG="$1/rm.log"
   mkdir -p "$FIXTURE_EXIST"
   : > "$FIXTURE_RMLOG"
+  # R18-A2-09：夹具 SQLite 卷目录——docker volume inspect -f
+  # '{{.Mountpoint}}' 的答复面；缺省含 gost.db，
+  # FIXTURE_SQLITE_VOL_EMPTY=1 时不建、模拟同名空卷。
+  FIXTURE_SQLITE_VOLDIR="$1/sqlite-vol"
+  mkdir -p "$FIXTURE_SQLITE_VOLDIR"
+  if [[ -z "${FIXTURE_SQLITE_VOL_EMPTY:-}" ]]; then
+    : > "$FIXTURE_SQLITE_VOLDIR/gost.db"
+  fi
   # 第三种部署形态 current：身份键已是现行名（不触发改名），供升
   # 级后卷名自检的「已有键路径」用例使用；resolve 桩按形态给名。
   FIXTURE_RESOLVE_BACKEND="flux-panel-backend"
@@ -9768,6 +10384,15 @@ EOF
         return 0
         ;;
       volume)
+        # R18-A2-09：volume inspect -f '{{.Mountpoint}}' 答夹具
+        # SQLite 卷目录；只答 SQLite 卷名（实挂名/重建后名），裸
+        # volume inspect <name> 仍答失败（未知卷口径不变）。
+        if [[ "$2" == "inspect" && "$3" == "-f" && -n "${5:-}" ]]; then
+          if [[ "${5:-}" == "${FIXTURE_SQLITE_VOLUME:-sqlite_data}" ]] || [[ -n "${FIXTURE_REBUILT_SQLITE_VOLUME:-}" && "${5:-}" == "$FIXTURE_REBUILT_SQLITE_VOLUME" ]]; then
+            printf '%s' "$FIXTURE_SQLITE_VOLDIR"
+            return 0
+          fi
+        fi
         return 1
         ;;
       inspect)
@@ -9834,6 +10459,9 @@ EOF
     cd "$FIXTURE_DIR"
   }
   validate_panel_update_environment() { :; }
+  # R18-A2-08：更新预检的探活桩——本夹具不建模真实监听面，恒答
+  # 空闲；占用形态由各用例自备 ss/docker 桩（见 A2-08 用例）。
+  panel_port_is_listening() { return 1; }
   get_current_db_type() { echo "sqlite"; }
   get_deployed_panel_version() { return 1; }
   resolve_latest_release_tag() { echo "1.9.8"; }
@@ -9852,6 +10480,14 @@ YAML
     UPDATE_BACKUP_DIR="$FIXTURE_DIR/backup"
     mkdir -p "$UPDATE_BACKUP_DIR"
     cp -p "$FIXTURE_DIR/.env" "$FIXTURE_DIR/docker-compose.yml" "$UPDATE_BACKUP_DIR/"
+    # R18-A2-05：真实备份恒含数据库备份——回滚恢复以它为源，夹具
+    # 须同契约建 sqlite/gost.db，否则回滚的数据库恢复在夹具里恒
+    # 以“备份缺失”失败。
+    mkdir -p "$UPDATE_BACKUP_DIR/sqlite"
+    : > "$UPDATE_BACKUP_DIR/sqlite/gost.db"
+    # A2-05 同契约 PG 面：真实备份恒含 postgres.sql（非空），PG
+    # 模式回滚恢复以它为源；缺失时回滚 fail-closed。
+    printf 'PRE-UPDATE-PG-DUMP\n' > "$UPDATE_BACKUP_DIR/postgres.sql"
   }
   pull_panel_update_images() { return 0; }
 }
@@ -9974,6 +10610,205 @@ test_panel_update_volume_check_rolls_back_on_mismatch() (
   diff -q "$dir/env.pristine" "$dir/.env" >/dev/null || fail "FIX199-B: rollback after a self-check failure must restore the pre-update .env verbatim"
 )
 
+# R18-A2-05 回滚数据库恢复夹具（SQLite）：卷内为新版本迁移后内容
+# （gost.db 已前向迁移＋残留新版 -wal），备份为更新前内容；docker
+# 桩把恢复拷卷的 -v 映射改写到夹具目录后实际执行，compose/健康/
+# 网络标签桩只记调用。夹具根目录记 ROLLBACK_FIXTURE_DIR、调用记
+# 录记 ROLLBACK_CALL_LOG。调用方置 UPDATE_BACKUP_DIR、PANEL_*_
+# CONTAINER、PANEL_UPDATE_REBUILD_STARTED 后调 rollback_panel_update。
+setup_rollback_sqlite_fixture() {
+  ROLLBACK_FIXTURE_DIR=$(mktemp -d)
+  local work="$ROLLBACK_FIXTURE_DIR"
+  mkdir -p "$work/vol" "$work/backup/sqlite"
+  printf 'PRE-UPDATE-DB' > "$work/backup/sqlite/gost.db"
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=sqlite\n' > "$work/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$work/docker-compose.yml"
+  cp -p "$work/.env" "$work/backup/.env"
+  cp -p "$work/docker-compose.yml" "$work/backup/docker-compose.yml"
+  printf 'MIGRATED-DB' > "$work/vol/gost.db"
+  printf 'stale-wal' > "$work/vol/gost.db-wal"
+  ROLLBACK_CALL_LOG="$work/calls.log"
+  : > "$ROLLBACK_CALL_LOG"
+
+  docker() {
+    case "$1" in
+      inspect) return 0 ;;
+      stop)
+        printf 'stop %s\n' "$*" >> "$ROLLBACK_CALL_LOG"
+        return 0
+        ;;
+      run)
+        local payload="${!#}"
+        payload=$(printf '%s' "$payload" | sed -e "s|/data/|$ROLLBACK_FIXTURE_DIR/vol/|g" -e "s|/backup/|$ROLLBACK_FIXTURE_DIR/backup/sqlite/|g")
+        printf 'docker-run-restore\n' >> "$ROLLBACK_CALL_LOG"
+        sh -c "$payload"
+        ;;
+      ps)
+        printf '%s\n' "flmx-panel-backend" "flmx-panel-frontend"
+        return 0
+        ;;
+    esac
+    return 0
+  }
+  run_panel_compose() {
+    printf 'compose %s\n' "$*" >> "$ROLLBACK_CALL_LOG"
+    return 0
+  }
+  panel_reconcile_network_label() { return 0; }
+  wait_for_backend_healthy() { return 0; }
+}
+
+# R18-A2-05：更新回滚必须恢复数据库——新版本后端启动时已执行前
+# 向 schema 迁移、随后健康检查失败时，只恢复配置会让旧容器跑在
+# 新 schema 上。本例以卷/备份双夹具直验 rollback_panel_update：
+# 卷内为迁移后内容、备份为更新前内容，回滚后卷内容必须回到备份
+# 态、陈旧 -wal 须清掉；旧实现不恢复数据库，本例必红。
+test_panel_update_rollback_restores_sqlite_database() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  setup_rollback_sqlite_fixture
+
+  cd "$ROLLBACK_FIXTURE_DIR"
+  UPDATE_BACKUP_DIR="$ROLLBACK_FIXTURE_DIR/backup"
+  PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+  PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
+  PANEL_DEPLOY_DIR="$ROLLBACK_FIXTURE_DIR"
+  PANEL_UPDATE_REBUILD_STARTED=1
+  UPDATE_ROLLBACK_SQLITE_VOLUME="fixture-sqlite-vol"
+
+  rollback_panel_update "sqlite" >"$ROLLBACK_FIXTURE_DIR/rollback.log" 2>&1 || \
+    fail "R18-A2-05: rollback after a rebuild must succeed when the backup is intact"
+  assert_equals "PRE-UPDATE-DB" "$(cat "$ROLLBACK_FIXTURE_DIR/vol/gost.db")" \
+    "R18-A2-05: rollback must restore the volume database from the update backup"
+  [[ ! -e "$ROLLBACK_FIXTURE_DIR/vol/gost.db-wal" ]] || \
+    fail "R18-A2-05: rollback must clear the migrated -wal left by the new version"
+  grep -q '已恢复更新前 SQLite 数据库' "$ROLLBACK_FIXTURE_DIR/rollback.log" || \
+    fail "R18-A2-05: the database restore must be named in the rollback output"
+  # 顺序：先停后端、再拷卷、最后拉起——不得在活写者眼皮底下换库。
+  local stop_line run_line up_line
+  stop_line=$(grep -n '^stop ' "$ROLLBACK_CALL_LOG" | head -n 1 | cut -d: -f1)
+  run_line=$(grep -n '^docker-run-restore$' "$ROLLBACK_CALL_LOG" | head -n 1 | cut -d: -f1)
+  up_line=$(grep -n '^compose up' "$ROLLBACK_CALL_LOG" | head -n 1 | cut -d: -f1)
+  [[ -n "$stop_line" && -n "$run_line" && -n "$up_line" ]] || \
+    fail "R18-A2-05: rollback must stop the backend, restore the volume, then relaunch (log: $(cat "$ROLLBACK_CALL_LOG"))"
+  [[ "$stop_line" -lt "$run_line" && "$run_line" -lt "$up_line" ]] || \
+    fail "R18-A2-05: rollback order must be stop < restore < relaunch"
+  rm -rf "$ROLLBACK_FIXTURE_DIR"
+)
+
+# R18-A2-05（PG 面）：回滚必须把 postgres.sql 备份导回数据库——
+# 删库重建再导入，停后端在先、拉起在后；旧实现不恢复数据库，本
+# 例必红。
+test_panel_update_rollback_restores_postgres_database() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/backup"
+  printf 'PRE-UPDATE-PG-DUMP\n' > "$work/backup/postgres.sql"
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=postgres\nPOSTGRES_DB=flmx_panel\nPOSTGRES_USER=flmx_panel\nPOSTGRES_PASSWORD=test-pg-pass\nDATABASE_URL=postgresql://flmx_panel:test-pg-pass@postgres:5432/flmx_panel?sslmode=disable\n' > "$work/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$work/docker-compose.yml"
+  cp -p "$work/.env" "$work/backup/.env"
+  cp -p "$work/docker-compose.yml" "$work/backup/docker-compose.yml"
+  printf 'MIGRATED-PG-DB' > "$work/pgdb"
+  local call_log="$work/calls.log"
+  : > "$call_log"
+
+  cd "$work"
+  UPDATE_BACKUP_DIR="$work/backup"
+  PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+  PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
+  PANEL_DEPLOY_DIR="$work"
+  PANEL_UPDATE_REBUILD_STARTED=1
+
+  docker() {
+    case "$1" in
+      inspect) return 0 ;;
+      stop)
+        printf 'stop %s\n' "$*" >> "$call_log"
+        return 0
+        ;;
+      exec)
+        # psql 仿真：-c DROP 清库、-c CREATE 空操作、无 -c 即自 stdin 导入。
+        if [[ "$*" == *'DROP DATABASE'* ]]; then
+          printf 'drop\n' >> "$call_log"
+          : > "$work/pgdb"
+          return 0
+        fi
+        if [[ "$*" == *'CREATE DATABASE'* ]]; then
+          printf 'create\n' >> "$call_log"
+          return 0
+        fi
+        printf 'import\n' >> "$call_log"
+        cat > "$work/pgdb"
+        return 0
+        ;;
+      ps)
+        printf '%s\n' "flmx-panel-backend" "flmx-panel-frontend" "flmx-panel-postgres"
+        return 0
+        ;;
+    esac
+    return 0
+  }
+  run_panel_compose() {
+    printf 'compose %s\n' "$*" >> "$call_log"
+    return 0
+  }
+  panel_reconcile_network_label() { return 0; }
+  wait_for_postgres_healthy() { return 0; }
+  wait_for_backend_healthy() { return 0; }
+
+  rollback_panel_update "postgres" >"$work/rollback.log" 2>&1 || \
+    fail "R18-A2-05: postgres rollback after a rebuild must succeed when the backup is intact"
+  assert_equals "PRE-UPDATE-PG-DUMP" "$(cat "$work/pgdb")" \
+    "R18-A2-05: rollback must restore the postgres database from the update backup"
+  grep -q '已恢复更新前 PostgreSQL 数据库' "$work/rollback.log" || \
+    fail "R18-A2-05: the postgres database restore must be named in the rollback output"
+  local stop_line drop_line import_line up_line
+  stop_line=$(grep -n '^stop ' "$call_log" | head -n 1 | cut -d: -f1)
+  drop_line=$(grep -n '^drop$' "$call_log" | head -n 1 | cut -d: -f1)
+  import_line=$(grep -n '^import$' "$call_log" | head -n 1 | cut -d: -f1)
+  up_line=$(grep -n '^compose up -d --force-recreate' "$call_log" | head -n 1 | cut -d: -f1)
+  [[ -n "$stop_line" && -n "$drop_line" && -n "$import_line" && -n "$up_line" ]] || \
+    fail "R18-A2-05: postgres rollback must stop, drop/import, then relaunch (log: $(cat "$call_log"))"
+  [[ "$stop_line" -lt "$drop_line" && "$drop_line" -lt "$import_line" && "$import_line" -lt "$up_line" ]] || \
+    fail "R18-A2-05: postgres rollback order must be stop < drop/import < relaunch"
+  rm -rf "$work"
+)
+
+# R18-A2-05 门控面：重建前的失败（激活/改名/网络标签）新版本从
+# 未启动、数据库未被触及，回滚须跳过数据库恢复、沿用既有纯配置
+# 回滚——卷内容一字不动、也不得多一次拷卷调用。
+test_panel_update_rollback_skips_db_restore_before_rebuild() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  setup_rollback_sqlite_fixture
+
+  cd "$ROLLBACK_FIXTURE_DIR"
+  UPDATE_BACKUP_DIR="$ROLLBACK_FIXTURE_DIR/backup"
+  PANEL_BACKEND_CONTAINER="flmx-panel-backend"
+  PANEL_FRONTEND_CONTAINER="flmx-panel-frontend"
+  PANEL_POSTGRES_CONTAINER="flmx-panel-postgres"
+  PANEL_DEPLOY_DIR="$ROLLBACK_FIXTURE_DIR"
+  PANEL_UPDATE_REBUILD_STARTED=""
+  UPDATE_ROLLBACK_SQLITE_VOLUME="fixture-sqlite-vol"
+
+  rollback_panel_update "sqlite" >"$ROLLBACK_FIXTURE_DIR/rollback.log" 2>&1 || \
+    fail "R18-A2-05: rollback before any rebuild must succeed"
+  assert_equals "MIGRATED-DB" "$(cat "$ROLLBACK_FIXTURE_DIR/vol/gost.db")" \
+    "R18-A2-05: rollback before a rebuild must leave the untouched database alone"
+  [[ -e "$ROLLBACK_FIXTURE_DIR/vol/gost.db-wal" ]] || \
+    fail "R18-A2-05: rollback before a rebuild must not touch the volume at all"
+  grep -q '无需恢复数据库' "$ROLLBACK_FIXTURE_DIR/rollback.log" || \
+    fail "R18-A2-05: the skipped database restore must be named in the rollback output"
+  grep -q '^docker-run-restore$' "$ROLLBACK_CALL_LOG" && \
+    fail "R18-A2-05: rollback before a rebuild must not invoke the volume restore"
+  rm -rf "$ROLLBACK_FIXTURE_DIR"
+)
+
 # FIX199-B: 升级后卷名自检·已有键路径两幕——身份键已是现行名、
 # 不触发改名时自检同样生效：第一幕重建挂载与 .env 既有卷名
 # （kept_vol）相符，更新成功、自检通过被点名、卷键逐字不动；
@@ -10009,6 +10844,25 @@ test_panel_update_volume_check_existing_key_path() (
   grep -q '升级后卷名自检失败' "$dir2/update.log" || fail "FIX199-B: the existing-key path self-check failure must be named"
   grep -q '已恢复更新前版本' "$dir2/update.log" || fail "FIX199-B: the existing-key path self-check failure must roll back"
   diff -q "$dir2/env.pristine" "$dir2/.env" >/dev/null || fail "FIX199-B: rollback on the existing-key path must restore the pre-update .env verbatim"
+)
+
+# R18-A2-09：SQLite 卷自检只比卷名会蒙过同名空卷——删卷重建后
+# 同名空卷挂上来，名字比对通过、新后端播种空库却报更新成功。
+# 现与 PG 面对称验卷内物：卷名一致但卷内无 gost.db 即判失败。
+# 夹具以 FIXTURE_SQLITE_VOL_EMPTY=1 建同名空卷；旧实现无内容
+# 检查，本例必红。
+test_panel_update_sqlite_volume_check_rejects_same_name_empty_volume() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  FIXTURE_SQLITE_VOL_EMPTY=1 setup_rename_update_fixture "$dir" "current"
+  cd "$dir"
+  local rc="0" out
+  out=$(verify_panel_update_sqlite_volume "sqlite_data" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-09: the sqlite volume self-check must fail when the same-named volume holds no gost.db"
+  [[ "$out" == *"gost.db"* ]] || fail "R18-A2-09: the failure must name the missing gost.db, got: $out"
+  rm -rf "$dir"
 )
 
 # FIX199-B: 钉键与改名解耦——容器键齐全非旧名（不触发改名）但
@@ -10894,6 +11748,11 @@ test_panel_update_aborts_on_accident_state_volume() (
   setup_rename_update_fixture "$dir2" keyless
   FIXTURE_VOLROOT="$dir2/volroot"
   mkdir -p "$FIXTURE_VOLROOT/sqlite_data"
+  # R18-A2-09：live 卷 flmx-sqlite-data 是在跑后端的数据卷，卷
+  # 内须有 gost.db——否则升级后卷自检（内容面）会在门放行后把
+  # 更新判失败；旧卷 sqlite_data 仍为空（本幕的断言面）。
+  mkdir -p "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  : > "$FIXTURE_VOLROOT/flmx-sqlite-data/gost.db"
   wrap_volume_docker
   FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
   VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
@@ -10953,6 +11812,12 @@ test_panel_update_aborts_on_pg_accident_state_volume() (
   setup_rename_update_fixture "$dir2" keyless
   FIXTURE_VOLROOT="$dir2/volroot"
   mkdir -p "$FIXTURE_VOLROOT/postgres_data"
+  # R18-A2-09：live SQLite 卷 sqlite_data 是在跑后端的数据卷，
+  # 卷内须有 gost.db——否则升级后卷自检（内容面）会在 PG 门放
+  # 行后把更新判失败；旧 PG 卷 postgres_data 仍无 PG_VERSION
+  # （本幕的断言面）。
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data"
+  : > "$FIXTURE_VOLROOT/sqlite_data/gost.db"
   wrap_volume_docker
   FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
   VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
@@ -12305,6 +13170,7 @@ test_install_script_download_resumes_across_routes
 test_install_script_resolve_budget_enforced
 test_install_script_uppercase_sha256_accepted
 test_panel_migrate_postgres_rollbacks
+test_panel_migrate_rollback_cleans_gost_migrate_db
 test_panel_migrate_waits_use_deployment_container_names
 test_panel_ownership_predicates_matrix
 test_panel_resolve_refuses_foreign_panel_deployment
@@ -12475,6 +13341,7 @@ test_panel_update_rename_pins_custom_resource_names
 test_panel_update_rename_health_failure_rolls_back
 test_panel_update_volume_check_rolls_back_on_mismatch
 test_panel_update_volume_check_existing_key_path
+test_panel_update_sqlite_volume_check_rejects_same_name_empty_volume
 test_panel_update_pins_keys_without_rename
 test_panel_migrate_placeholder_password_sentinels
 test_panel_migrate_volume_split_and_rollback_cleanup
@@ -13213,6 +14080,25 @@ test_panel_uninstall_docker_branch_verifies_poststate() (
   [[ "$rc" != "0" ]] || fail "W1-PANEL-UNINSTALL-VERDICT: leftover compose must fail the uninstall"
   [[ "$out" == *"卸载未完全完成"* ]] || fail "W1-PANEL-UNINSTALL-VERDICT: leftover must be named, got: $out"
   [[ "$out" != *"✅ 卸载完成"* ]] || fail "W1-PANEL-UNINSTALL-VERDICT: leftover must not print completion"
+
+  # R18-A2-14：密钥级 .env 备份删不掉时同样不得报完成——旧实现
+  # 只验三项，.bak 残留照印 ✅。本幕只让 .env.bak 删失败（主
+  # 文件均可删），断言失败并逐项点名残留文件名。
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=<redacted>\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=sqlite\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  printf 'JWT_SECRET=<redacted>\n' > "$d/.env.bak.20250101000000"
+  rm() {
+    local a
+    for a in "$@"; do [[ "$a" == *.env.bak.* ]] && return 1; done
+    command rm "$@"
+  }
+  rc="0"
+  out=$( ( cd "$d" && uninstall_panel <<< "y" 2>&1 ) ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "R18-A2-14: a leftover key-bearing .env backup must fail the uninstall"
+  [[ "$out" == *"卸载未完全完成"* ]] || fail "R18-A2-14: the leftover backup must be named, got: $out"
+  [[ "$out" == *".env.bak.20250101000000"* ]] || fail "R18-A2-14: the leftover file name must be named, got: $out"
+  [[ "$out" != *"✅ 卸载完成"* ]] || fail "R18-A2-14: leftover must not print completion"
 )
 
 # W1-SELFCHECK: delete_self 本体校验须为多因子——仅含 REPO 钉死
@@ -13295,5 +14181,24 @@ test_install_uninstall_verdict_requires_poststate
 test_panel_uninstall_docker_branch_verifies_poststate
 test_delete_self_multifactor_rejects_repo_line_only
 test_report_compose_up_failure_branches
+test_panel_equal_frontend_backend_ports_rejected
+test_panel_update_equal_ports_rejected
+test_panel_preflight_equal_ports_rejected
+test_panel_port_helpers_probe_listen_owner_and_free_port
+test_panel_preflight_refuses_occupied_port_naming_owner
+test_panel_preflight_swaps_port_interactively
+test_panel_preflight_refuses_on_choice_two
+test_panel_preflight_container_name_conflict_points_to_instance
+test_panel_preflight_force_reinstall_allows_own_container
+test_panel_preflight_force_reinstall_refuses_foreign_container
+test_panel_update_preflight_refuses_foreign_port_owner
+test_panel_update_preflight_passes_own_and_free_ports
+test_panel_update_preflight_refuses_unknown_owner
+test_panel_update_aborts_before_backup_on_foreign_port_owner
+test_panel_migrate_images_pinned_to_digest
+test_panel_migrate_backup_copy_is_0600
+test_panel_update_rollback_restores_sqlite_database
+test_panel_update_rollback_restores_postgres_database
+test_panel_update_rollback_skips_db_restore_before_rebuild
 
 echo "install script tests passed"

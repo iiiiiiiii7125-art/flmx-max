@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.05"
+SCRIPT_VERSION="20261120.14"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -127,6 +127,26 @@ self_update_check() {
 
 # 固定版本号（Release 构建时自动填充，留空则获取最新版）
 PINNED_VERSION=""
+
+# R18-A2-02：迁移全程拉取的镜像钉到 digest——tag 可变（仓库改写/
+# 入侵、中间人替换）时，未钉选的 alpine:latest 与
+# dimitri/pgloader:latest 会让被污染的镜像在迁移容器内读/改全库
+# 与 .env 密钥。下文 6 处 docker run 只引用这两常量、不再写字面
+# 镜像名；scripts/check-doc-consistency.sh 第 31 项对账“docker
+# run 镜像必须带 digest（字面 @sha256: 或本常量）”防漂移。轮换
+# 版本时按下法重取 digest 后同改两处（常量值＋本注的版本号），
+# 不得只改 tag 不改 digest：
+#   token=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/alpine:pull" | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+#   curl -sI -H "Authorization: Bearer $token" -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+#     https://registry-1.docker.io/v2/library/alpine/manifests/3.22 | grep -i docker-content-digest
+# （pgloader 同理，仓库 dimitri/pgloader、tag v3.6.7。）
+# 取值核验（2026-11-20，registry 权威 digest）：alpine:3.22 为多架
+# 构清单 digest（含 linux/amd64 与 linux/arm64）；
+# dimitri/pgloader:v3.6.7 为单 manifest digest（该 tag 即迁移验证
+# 过的版本，原 latest≈3.6.7~devel；上游仅提供 latest / ccl.latest /
+# v3.6.7 三个 tag，无 3.6.9）。
+FLMX_MIGRATE_ALPINE_IMAGE="alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f"
+FLMX_MIGRATE_PGLOADER_IMAGE="dimitri/pgloader:v3.6.7@sha256:d29ea680cf1aaaf7269690a922dd69167567b91b35e9c48a0b54a99cef96c0ed"
 
 # GitHub 下载路线配置（1.7.7）：默认走内置候选测速直选（见下方
 # PROXY_CANDIDATES 与 ensure_download_routes），不再交互询问、不再
@@ -1806,6 +1826,20 @@ setup_subscription_front_domain() {
   if ! cat >> "$caddyfile" <<EOF
 $SUB_DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
+    # R18-A2-12：与菜单 5 站点块同形（§9.6）——订阅前置域名反代
+    # 到同一前端，面板 WS 握手可经该域名到达，secret 查询参数
+    # 须同样从访问日志中删除（老版本 Caddy 会在下方 validate
+    # 环节明确失败并回滚，不会静默带病生效）。
+    log {
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    delete secret
+                }
+            }
+        }
+    }
 }
 EOF
   then
@@ -3126,6 +3160,13 @@ validate_panel_update_environment() {
     return 1
   fi
 
+  # R18-A2-01：与安装路径 get_config_params 同律——两端口相等即
+  # 拒绝（数值比较，前导零同值不漏过）。
+  if (( 10#$backend_port == 10#$frontend_port )); then
+    echo "❌ BACKEND_PORT 与 FRONTEND_PORT 相同（均为 $backend_port）：两端口必须不同，更新终止"
+    return 1
+  fi
+
   configured_db_type=$(get_env_var "DB_TYPE" || true)
   normalized_db_type=$(normalize_db_type "$configured_db_type")
   if [[ -n "$normalized_db_type" && "$normalized_db_type" != "sqlite" && "$normalized_db_type" != "postgres" ]]; then
@@ -3583,6 +3624,103 @@ backup_postgres_for_update() {
   fi
 }
 
+# 更新回滚的数据库恢复面（R18-A2-05）：create_panel_update_backup
+# 采集的数据库备份（postgres.sql / sqlite/ 目录）此前只被采集、
+# 从未被回滚消费——新版本后端启动时已执行前向 schema 迁移、随后
+# 健康检查失败时，旧容器跑在新 schema 上，迁移含改名/删列等非后
+# 向兼容变更即持续不可用，直到操作员手工恢复数据库。两恢复函数
+# 由 rollback_panel_update 在“重建已开始”时调用（见该处门控）：
+# 恢复失败即回滚失败（不带病拉起旧后端），备份保留、人工恢复法
+# 在回执中点名。
+
+# 停容器（恢复前防写入）：容器不存在即无须停（返回 0）；在册而
+# 停失败即返回 1——不得在活写者眼皮底下替换数据库文件。
+panel_stop_container_if_present() {
+  local target="$1"
+  [[ -n "$target" ]] || return 1
+  if ! docker inspect "$target" >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! docker stop -t 30 "$target" >/dev/null 2>&1; then
+    echo "❌ 恢复数据库前停止容器 $target 失败（容器在册但停不下来），本次回滚中止、数据库未动；备份保留在 $UPDATE_BACKUP_DIR，请人工处理后重试"
+    return 1
+  fi
+  return 0
+}
+
+# SQLite 恢复：停后端后，把备份目录整体拷回数据卷（先清卷内旧
+# 内容再拷——新版本可能已在卷内留下前向迁移后的 gost.db/-wal 与
+# 新文件，只覆盖同名文件会残留新版 -wal，SQLite 下次打开即把旧
+# 库与新版 WAL 混用）。备份须含 gost.db（缺失即 fail-closed，
+# 卷一字不动）；卷名由调用方传入（update_panel 在重建前定格的钉
+# 键后有效卷名，见 UPDATE_ROLLBACK_SQLITE_VOLUME——备份 .env 是
+# 钉键前的、无键时不能再从恢复后的 .env 推导）。文件模式随备份
+# 原样（cp -a，不另改权：该模式即备份时刻的运行模式）。
+restore_sqlite_for_update() {
+  local backup_dir="$1" volume="$2"
+  local backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  if [[ ! -f "$backup_dir/gost.db" ]]; then
+    echo "❌ 更新备份 $backup_dir 中缺少 gost.db，无法恢复 SQLite 数据库（卷未动；备份保留，请人工恢复：停后端后把该目录拷回数据卷 $volume）"
+    return 1
+  fi
+  if [[ -z "$volume" ]]; then
+    echo "❌ 未给出 SQLite 数据卷名，无法恢复数据库（卷未动；备份保留在 $backup_dir，请人工恢复）"
+    return 1
+  fi
+  panel_stop_container_if_present "$backend_container" || return 1
+  if ! docker run --rm -v "$volume":/data -v "$backup_dir":/backup "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c 'rm -rf /data/* /data/.[!.]* /data/..?* 2>/dev/null; cp -a /backup/. /data/'; then
+    echo "❌ SQLite 数据库回滚恢复失败（备份 $backup_dir 未能拷回卷 $volume，卷内可能为新旧混合态；备份保留，请人工恢复后重跑更新）"
+    return 1
+  fi
+  echo "↩️ 已恢复更新前 SQLite 数据库（备份：$backup_dir，卷：$volume）"
+  return 0
+}
+
+# PostgreSQL 恢复：停后端后，删库重建再以备份的 pg_dump 导入。
+# 库名/用户名口径与 backup_postgres_for_update 一致（.env 键优先、
+# 缺键实读容器环境、仍无回退模板缺省 flmx_panel）；连接串不走
+# 命令行（psql 与 pg_dump 同走容器内本地信任认证，不拼口令）。
+# 库名/用户名须过标识符合法性（进 SQL 双引号标识符，非法即拒）。
+restore_postgres_for_update() {
+  local backup_file="$1"
+  local postgres_db postgres_user pg_container backend_container
+  if [[ ! -s "$backup_file" ]]; then
+    echo "❌ 更新备份 $backup_file 缺失或为空，无法恢复 PostgreSQL 数据库（库未动；备份保留，请人工恢复：停后端后 psql < $backup_file）"
+    return 1
+  fi
+  postgres_db=$(get_env_var "POSTGRES_DB" || true)
+  postgres_user=$(get_env_var "POSTGRES_USER" || true)
+  pg_container="${PANEL_POSTGRES_CONTAINER:-$DEFAULT_PANEL_POSTGRES_CONTAINER}"
+  backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  if [[ -z "$postgres_db" ]]; then
+    postgres_db=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$pg_container" 2>/dev/null | sed -n 's/^POSTGRES_DB=//p' | head -n 1 || true)
+  fi
+  if [[ -z "$postgres_user" ]]; then
+    postgres_user=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$pg_container" 2>/dev/null | sed -n 's/^POSTGRES_USER=//p' | head -n 1 || true)
+  fi
+  postgres_db=${postgres_db:-flmx_panel}
+  postgres_user=${postgres_user:-flmx_panel}
+  if [[ ! "$postgres_db" =~ ^[A-Za-z_][A-Za-z0-9_]*$ || ! "$postgres_user" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    echo "❌ PostgreSQL 库名/用户名非法（$postgres_db/$postgres_user，仅允许字母/数字/下划线且首字符非数字），拒绝恢复数据库（库未动；备份保留在 $backup_file，请人工恢复）"
+    return 1
+  fi
+  panel_stop_container_if_present "$backend_container" || return 1
+  if ! docker exec "$pg_container" psql -U "$postgres_user" -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$postgres_db\";" >/dev/null 2>&1; then
+    echo "❌ PostgreSQL 数据库回滚恢复失败（DROP DATABASE $postgres_db 未成；库未动，备份保留在 $backup_file，请人工恢复）"
+    return 1
+  fi
+  if ! docker exec "$pg_container" psql -U "$postgres_user" -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$postgres_db\";" >/dev/null 2>&1; then
+    echo "❌ PostgreSQL 数据库回滚恢复失败（CREATE DATABASE $postgres_db 未成；库已被删、备份保留在 $backup_file，请人工导入恢复：psql -U $postgres_user -d $postgres_db < $backup_file）"
+    return 1
+  fi
+  if ! docker exec -i "$pg_container" psql -U "$postgres_user" -d "$postgres_db" -v ON_ERROR_STOP=1 < "$backup_file" >/dev/null 2>&1; then
+    echo "❌ PostgreSQL 数据库回滚恢复失败（备份 $backup_file 导入未成；库为空库态，备份保留，请人工导入恢复：psql -U $postgres_user -d $postgres_db < $backup_file）"
+    return 1
+  fi
+  echo "↩️ 已恢复更新前 PostgreSQL 数据库（备份：$backup_file，库：$postgres_db）"
+  return 0
+}
+
 create_panel_update_backup() {
   local db_type="$1"
   local timestamp
@@ -4008,6 +4146,22 @@ rollback_panel_update() {
     run_panel_compose up -d postgres || return 1
     wait_for_postgres_healthy || return 1
   fi
+  # R18-A2-05：重建已开始时恢复数据库——新版本后端可能已启动并对
+  # 数据库做了前向 schema 迁移，只恢复配置会让旧容器跑在新 schema
+  # 上（迁移含改名/删列等非后向兼容变更即持续不可用）。恢复失败即
+  # 回滚失败（不带病拉起旧后端），备份保留、人工恢复法在恢复函数
+  # 的回执中点名。重建前的失败（激活/改名/网络标签）由 update_panel
+  # 的 PANEL_UPDATE_REBUILD_STARTED 门控跳过：新版本从未启动、数据
+  # 库未被触及，沿用既有纯配置回滚。
+  if [[ "${PANEL_UPDATE_REBUILD_STARTED:-}" == "1" ]]; then
+    if [[ "$db_type" == "postgres" ]]; then
+      restore_postgres_for_update "$UPDATE_BACKUP_DIR/postgres.sql" || return 1
+    else
+      restore_sqlite_for_update "$UPDATE_BACKUP_DIR/sqlite" "${UPDATE_ROLLBACK_SQLITE_VOLUME:-$(panel_sqlite_volume_name)}" || return 1
+    fi
+  else
+    echo "ℹ️ 本次失败发生在新版本重建之前，数据库未被新版本触及，无需恢复数据库"
+  fi
   run_panel_compose up -d --force-recreate --remove-orphans backend frontend || return 1
   wait_for_backend_healthy
 }
@@ -4028,7 +4182,24 @@ verify_panel_update_sqlite_volume() {
     echo "❌ 升级后卷名自检失败：后端容器 $backend_container 在 /app/data 实际挂载卷「${actual:-（未读到）}」，与升级前记录的卷「$expected」不一致——新后端可能挂在空卷上，本次更新判失败并回滚" >&2
     return 1
   fi
-  echo "🔎 升级后卷名自检通过：后端 /app/data 挂载卷为 $actual（与升级前记录一致）"
+  # R18-A2-09：只比卷名不够——同名空卷（删后重建）会蒙过名字比
+  # 对、新后端挂空卷播种却报更新成功（与 PG 面 A2-02 已防的形
+  # 态同构）。与 PG 的 PG_VERSION 检查对称：SQLite 部署卷内须
+  # 见 gost.db。但 PG 部署的后端数据在 PostgreSQL 里，全新 PG
+  # 安装的 /app/data 卷内本无 gost.db（后端走 PG，不建 sqlite
+  # 文件），内容面只在 SQLite 部署上强制；PG 部署仍只比卷名，
+  # 否则全新 PG 存量的更新会被误判失败。
+  local db_type
+  db_type=$(get_current_db_type || true)
+  if [[ "$db_type" != "postgres" ]] && ! panel_volume_file_exists "$actual" gost.db; then
+    echo "❌ 升级后卷名自检失败：卷 $actual 内未见 gost.db（不像真实 SQLite 数据目录，可能挂到了同名的空卷/异属卷），本次更新判失败并回滚" >&2
+    return 1
+  fi
+  if [[ "$db_type" == "postgres" ]]; then
+    echo "🔎 升级后卷名自检通过：后端 /app/data 挂载卷为 $actual（与升级前记录一致；PG 部署不验卷内 gost.db）"
+  else
+    echo "🔎 升级后卷名自检通过：后端 /app/data 挂载卷为 $actual（与升级前记录一致），卷内已见 gost.db"
+  fi
   return 0
 }
 
@@ -4211,6 +4382,17 @@ get_config_params() {
     fi
   done
 
+  # R18-A2-01：两端口相等即拒绝——预检只查“是否被监听”，两端口
+  # 取同一值且空闲时两次都通过，安装在最后一步 compose bind 才
+  # 失败、报错远离输入点。数值比较（前导零输入如 07000 与 7000
+  # 同值，字符串比对会漏过）；更新路径
+  # validate_panel_update_environment 与预检
+  # panel_preflight_install_conflicts 各有一道同律断言。
+  if (( 10#$FRONTEND_PORT == 10#$BACKEND_PORT )); then
+    echo "❌ 前端端口与后端端口相同（均为 $FRONTEND_PORT）：两端口必须不同"
+    return 1
+  fi
+
   echo "请选择数据库类型："
   echo "1. SQLite（默认）"
   echo "2. PostgreSQL"
@@ -4379,6 +4561,25 @@ panel_port_container_owners() {
     | awk -v p=":$port->" 'index($0, p) {print $1 " (" $2 ")"}' || true
 }
 
+# R18-A2-07：端口占用者是否为指定容器——对
+# panel_port_container_owners 的输出逐行取首 token 精确比较，
+# 子串不算（flmx-panel-backend-2 不是 flmx-panel-backend；镜像
+# 名含容器名也不算）。占用者清单为空时返回 1。A2-08 的更新预检
+# 复用同一谓词。
+panel_port_owned_by() {
+  local port="$1"; shift
+  local owners line name want
+  owners=$(panel_port_container_owners "$port" || true)
+  [[ -n "$owners" ]] || return 1
+  while IFS= read -r line; do
+    name="${line%% *}"
+    for want in "$@"; do
+      [[ "$name" == "$want" ]] && return 0
+    done
+  done <<< "$owners"
+  return 1
+}
+
 # 占用描述：容器优先，否则 ss 进程字段，否则如实报未知。
 panel_port_listener_owner() {
   local port="$1" owners text proc
@@ -4415,6 +4616,15 @@ panel_preflight_install_conflicts() {
   backend_container="${NEW_PANEL_BACKEND_CONTAINER}$(panel_instance_suffix)"
   frontend_container="${NEW_PANEL_FRONTEND_CONTAINER}$(panel_instance_suffix)"
 
+  # R18-A2-01：自冲突第二道防线——两端口相等时监听检查两次都
+  # 通过，换端口分支也修不了（panel_find_free_port 只能换被占用
+  # 的端口），在此直接拒绝并点名两键。数值比较（前导零同值不漏
+  # 过）；调用方 get_config_params 已先验范围，此处只补相等性。
+  if (( 10#$BACKEND_PORT == 10#$FRONTEND_PORT )); then
+    echo "❌ 前端端口与后端端口相同（均为 $BACKEND_PORT）：两端口必须不同，安装未开始（未写任何文件）"
+    return 1
+  fi
+
   if [[ "$(pwd -P)" != "/opt/flmx-panel" && ( -f /opt/flmx-panel/.env || -f /opt/flmx-panel/docker-compose.yml ) ]]; then
     echo "ℹ️ /opt/flmx-panel 下已有另一套面板部署文件（本次安装目录为当前目录，不动它；只有端口或容器名撞上时才需处理）"
   fi
@@ -4431,13 +4641,9 @@ panel_preflight_install_conflicts() {
     label="${label%%:*}"
     if panel_port_is_listening "$port"; then
       owner=$(panel_port_listener_owner "$port" || true)
-      if [[ -n "$own_force_reinstall" ]]; then
-        case " $owner " in
-          *"$backend_container"*|*"$frontend_container"*)
-            echo "ℹ️ ${label}端口 $port 正被自家容器占用（强制重装，原地重建）"
-            continue
-            ;;
-        esac
+      if [[ -n "$own_force_reinstall" ]] && panel_port_owned_by "$port" "$backend_container" "$frontend_container"; then
+        echo "ℹ️ ${label}端口 $port 正被自家容器占用（强制重装，原地重建）"
+        continue
       fi
       conflicts="$conflicts
 ❌ ${label}端口 $port 已被占用（占用者：$owner）"
@@ -4780,6 +4986,41 @@ get_deployed_panel_version() {
   printf '%s' "$tag"
 }
 
+# R18-A2-08：更新路径的只读端口预检——安装有、更新无的不对称。
+# 在备份之前检查 BACKEND_PORT/FRONTEND_PORT 是否被占用：端口空
+# 闲、或占用者为自家后端/前端容器（逐 token 精确匹配，R18-A2-07
+# 同律）时放行；被非自家占用时点名并中止——不自动换端口，更新
+# 改端口会改变访问地址，须由操作员显式决定；占用者不明时
+# fail-closed 中止。端口读数缺失/非法同样中止（validate 已先行
+# 校验，本函数独立调用时亦须自守）。
+panel_preflight_update_port_conflicts() {
+  local backend_port frontend_port
+  backend_port=$(get_env_var BACKEND_PORT || true)
+  frontend_port=$(get_env_var FRONTEND_PORT || true)
+  if [[ ! "$backend_port" =~ ^[0-9]+$ ]] || [[ ! "$frontend_port" =~ ^[0-9]+$ ]]; then
+    echo "❌ 更新端口预检失败：.env 的 BACKEND_PORT/FRONTEND_PORT 读数缺失或非法（后端：${backend_port:-空}，前端：${frontend_port:-空}），更新终止"
+    return 1
+  fi
+  local backend_container="${PANEL_BACKEND_CONTAINER:-$DEFAULT_PANEL_BACKEND_CONTAINER}"
+  local frontend_container="${PANEL_FRONTEND_CONTAINER:-$NEW_PANEL_FRONTEND_CONTAINER}"
+  local label port owner
+  for label in "后端:$backend_port" "前端:$frontend_port"; do
+    port="${label#*:}"
+    label="${label%%:*}"
+    if panel_port_is_listening "$port"; then
+      if panel_port_owned_by "$port" "$backend_container" "$frontend_container"; then
+        echo "ℹ️ ${label}端口 $port 正被自家容器占用（更新原地重建）"
+        continue
+      fi
+      owner=$(panel_port_listener_owner "$port" || true)
+      echo "❌ ${label}端口 $port 已被占用（占用者：${owner:-未知}），更新终止：请先释放该端口，或确认占用者身份后再更新（更新不自动换端口）"
+      return 1
+    fi
+  done
+  echo "✅ 更新端口预检通过：后端端口 $backend_port、前端端口 $frontend_port 未被非自家占用"
+  return 0
+}
+
 update_panel() {
   echo "🔄 开始更新面板..."
 
@@ -4801,6 +5042,16 @@ update_panel() {
   # 后缀上），与卸载确认同口径（B2-04）。
   echo "🎯 本次更新目标：部署目录：$PANEL_DEPLOY_DIR，后端容器：${PANEL_BACKEND_CONTAINER:-未知}"
   validate_panel_update_environment || return 1
+
+  # R18-A2-08：更新路径的只读端口预检——备份之前先确认两端口未
+  # 被非自家占用；被占即点名中止，不自动换端口。
+  panel_preflight_update_port_conflicts || return 1
+
+  # R18-A2-05：回滚口状态复位——同进程内多次 update_panel 调用
+  # （套件同子 shell 两幕）不得把上一次的重建标记与回滚卷带到下
+  # 一次；本次的标记在重建前置位、回滚卷在钉键后定格（见下）。
+  PANEL_UPDATE_REBUILD_STARTED=""
+  UPDATE_ROLLBACK_SQLITE_VOLUME=""
 
   CURRENT_DB_TYPE=$(get_current_db_type)
   echo "🗄️ 当前数据库类型：$CURRENT_DB_TYPE"
@@ -4954,7 +5205,7 @@ update_panel() {
 
   if ! activate_panel_update_files; then
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -4968,7 +5219,7 @@ update_panel() {
   if ! apply_panel_identity_rename; then
     echo "❌ 身份改名写入失败，更新已中止"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -4982,6 +5233,11 @@ update_panel() {
   # 后 .env 与容器都已是新态，事后追认无从分辨挂错没挂错。
   local update_expected_sqlite_volume
   update_expected_sqlite_volume=$(panel_sqlite_volume_name)
+  # R18-A2-05：回滚恢复数据库的目标卷——钉键后的有效卷名（与自检
+  # 期望同源）。备份 .env 是钉键前的（可能无键），回滚时不能再从
+  # 恢复后的 .env 推导卷名（无键回退 sqlite_data 会指错卷），故在
+  # 此定格进全局供 rollback_panel_update 使用。
+  UPDATE_ROLLBACK_SQLITE_VOLUME="$update_expected_sqlite_volume"
   # A2-02：PG 部署同点定格 PG 卷期望（口径同上：重建前取，事后
   # 追认无从分辨），自检在 SQLite 自检之后并列执行。
   local update_expected_postgres_volume=""
@@ -4996,7 +5252,7 @@ update_panel() {
   if ! panel_reconcile_network_label; then
     echo "🛑 存量网络标签对账未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -5004,10 +5260,13 @@ update_panel() {
   fi
 
   echo "🚀 原地重建更新后的服务..."
+  # R18-A2-05：自此新版本后端可能启动并前向迁移数据库，回滚必须
+  # 恢复数据库（见 rollback_panel_update 的门控）。
+  PANEL_UPDATE_REBUILD_STARTED=1
   if ! start_panel_after_update "$CURRENT_DB_TYPE"; then
     echo "🛑 新版本启动失败"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -5017,7 +5276,7 @@ update_panel() {
   if ! verify_panel_update_sqlite_volume "$update_expected_sqlite_volume"; then
     echo "🛑 升级后卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -5029,7 +5288,7 @@ update_panel() {
   if [[ "$CURRENT_DB_TYPE" == "postgres" ]] && ! verify_panel_update_postgres_volume "$update_expected_postgres_volume"; then
     echo "🛑 升级后 PG 卷名自检未通过"
     if rollback_panel_update "$CURRENT_DB_TYPE"; then
-      echo "✅ 已恢复更新前版本与配置（数据库未自动回滚；如需恢复数据库，请用 $UPDATE_BACKUP_DIR 中的更新前数据库备份人工恢复）"
+      echo "✅ 已恢复更新前版本与配置（数据库恢复情况见上方回滚记录）"
     else
       echo "❌ 自动回滚失败，请从 $UPDATE_BACKUP_DIR 手动恢复"
     fi
@@ -5297,6 +5556,12 @@ migrate_to_postgres() {
         fi
       done
     fi
+    # R18-A2-13：预处理在实况数据卷内建的 gost-migrate.db（全库
+    # 副本）只在成功路径清理；失败回滚经本函数时不删，残留会撑
+    # 大后续备份（下次 backup_sqlite_for_update 整目录拷走）。
+    # 与成功路径同命令、同样 || true 兜底（卷/镜像异常不推翻
+    # 回滚本身）。
+    docker run --rm -v "$sqlite_volume":/sqlite "$FLMX_MIGRATE_ALPINE_IMAGE" rm -f /sqlite/gost-migrate.db 2>/dev/null || true
   }
 
   # PG 三键是切换凭据面：任一写入失败即以快照回写 .env 后中止
@@ -5327,7 +5592,11 @@ migrate_to_postgres() {
   fi
 
   echo "💾 备份 SQLite 数据到当前目录..."
-  if ! docker run --rm -v "$sqlite_volume":/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"; then
+  # R18-A2-03：备份副本落盘即 0600——旧实现只 cp，备份按源模式
+  # 0644 落在部署目录，本机任一非特权用户可读全库。chmod 与 cp
+  # 在同一条 sh -c 内：任一步失败备份步整体失败、走既有回滚口，
+  # 不留 0644 的副本。
+  if ! docker run --rm -v "$sqlite_volume":/data -v "$(pwd)":/backup "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c "cp /data/gost.db /backup/gost.db.bak && chmod 600 /backup/gost.db.bak"; then
     echo "❌ SQLite 备份失败，迁移终止，正在恢复迁移前状态..."
     migrate_restore_snapshot
     return 1
@@ -5382,7 +5651,7 @@ migrate_to_postgres() {
   # 自检不通过即整段预处理失败、走下方回退原始库分支。
   pgloader_source="/sqlite/gost.db"
   echo "🧹 预处理 SQLite 副本（release_legacy_family 默认值兼容 + 删除毒死 pgloader 的函数索引）..."
-  if docker run --rm -v "$sqlite_volume":/sqlite alpine sh -c '
+  if docker run --rm -v "$sqlite_volume":/sqlite "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c '
     set -e
     apk add --no-cache sqlite >/dev/null 2>&1
     sqlite3 /sqlite/gost.db .dump > /tmp/dump.sql
@@ -5444,9 +5713,10 @@ migrate_to_postgres() {
   # 性承载（RA2-S-04 残余登记：两通道读的都是消费文件，dump/
   # 重建步本身的静默少行不在本门可见域内）。
   migrate_reconcile_row_counts() {
-    # 载荷经变量传递而非行内字面量：脚本套件以「行尾 alpine
-    # sh -c '」为锚提取预处理载荷，全文件该形态只许预处理一处，
-    # 本处若同形会污染提取（RR-LIVE-01 用例口径）。
+    # 载荷经变量传递而非行内字面量：脚本套件以「行尾
+    # FLMX_MIGRATE_ALPINE_IMAGE" sh -c '」为锚提取预处理载荷，全文
+    # 件该形态只许预处理一处，本处若同形会污染提取（RR-LIVE-01
+    # 用例口径）。
     local reconcile_payload='
       apk add --no-cache sqlite >/dev/null 2>&1 || exit 9
       db="$1"
@@ -5456,7 +5726,7 @@ migrate_to_postgres() {
       done
     '
     local src_counts=""
-    src_counts=$(docker run --rm -v "$sqlite_volume":/sqlite alpine sh -c "$reconcile_payload" flmx-migrate-reconcile "$pgloader_source" 2>/dev/null) || src_counts=""
+    src_counts=$(docker run --rm -v "$sqlite_volume":/sqlite "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c "$reconcile_payload" flmx-migrate-reconcile "$pgloader_source" 2>/dev/null) || src_counts=""
     if [[ -z "$src_counts" ]]; then
       migrate_reconcile_row_counts_via_scratch
       return $?
@@ -5511,7 +5781,7 @@ LOAD DATABASE
      FROM sqlite://${pgloader_source}
      INTO postgresql://${postgres_user}:${postgres_password}@postgres:5432/${scratch_db};
 EOF
-    docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$scratch_load_file":/tmp/flmx-reconcile.load:ro dimitri/pgloader:latest pgloader /tmp/flmx-reconcile.load >/dev/null 2>&1 || scratch_rc=$?
+    docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$scratch_load_file":/tmp/flmx-reconcile.load:ro "$FLMX_MIGRATE_PGLOADER_IMAGE" pgloader /tmp/flmx-reconcile.load >/dev/null 2>&1 || scratch_rc=$?
     rm -f "$scratch_load_file"
     if [[ $scratch_rc -ne 0 ]]; then
       reconcile_scratch_drop || true
@@ -5562,14 +5832,15 @@ EOF
   pgloader_load_file=$(mktemp)
   chmod 600 "$pgloader_load_file"
   # F-R4-01: INTO 行尾的分号是 pgloader 命令文件的语句终止符，不可省——
-  # 缺失时现行 dimitri/pgloader:latest（3.6.7~devel）解析直接 KABOOM
+  # 缺失时现行 dimitri/pgloader:v3.6.7（原 latest≈3.6.7~devel，R18-A2-02
+  # 已钉选 FLMX_MIGRATE_PGLOADER_IMAGE）解析直接 KABOOM
   # （ESRAP-PARSE-ERROR），整个迁移不可用（真机三变体判别实验已证）。
   cat > "$pgloader_load_file" <<EOF
 LOAD DATABASE
      FROM sqlite://${pgloader_source}
      INTO postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db};
 EOF
-  docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$pgloader_load_file":/tmp/flmx-migrate.load:ro dimitri/pgloader:latest pgloader /tmp/flmx-migrate.load || pgloader_rc=$?
+  docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$pgloader_load_file":/tmp/flmx-migrate.load:ro "$FLMX_MIGRATE_PGLOADER_IMAGE" pgloader /tmp/flmx-migrate.load || pgloader_rc=$?
   rm -f "$pgloader_load_file"
   if [[ $pgloader_rc -ne 0 ]]; then
     echo "❌ pgloader 迁移失败（如报 28P01，可执行 docker volume rm $postgres_volume 后重试）"
@@ -5632,10 +5903,10 @@ EOF
   fi
 
   rm -f "$env_snapshot"
-  docker run --rm -v "$sqlite_volume":/sqlite alpine rm -f /sqlite/gost-migrate.db 2>/dev/null || true
+  docker run --rm -v "$sqlite_volume":/sqlite "$FLMX_MIGRATE_ALPINE_IMAGE" rm -f /sqlite/gost-migrate.db 2>/dev/null || true
   echo "✅ SQLite -> PostgreSQL 迁移完成"
   echo "ℹ️ 迁移遗留物（脚本不自动删除，确认 PostgreSQL 运行无误后可人工清理）："
-  echo "   - $(pwd)/gost.db.bak：迁移前 SQLite 数据库的备份副本（含全量数据，请注意保管）"
+  echo "   - $(pwd)/gost.db.bak：迁移前 SQLite 数据库的备份副本（含全量数据，权限 0600，请注意保管）"
   echo "   - SQLite 数据卷 $sqlite_volume：原库所在卷，原样保留未删；确认不再回迁 SQLite 后可执行 docker volume rm $sqlite_volume 回收空间"
 }
 
@@ -5805,15 +6076,23 @@ uninstall_panel() {
   # 一并回收（按上文读出的前端端口判归属整块摘除，失败只告警、
   # 不推翻已完成的卸载）。
   uninstall_caddy_panel_blocks "$uninstall_caddy_port"
-  # 回执前验后置状态：主部署文件与备份目录确已删除才许宣称完成
-  # （旧实现 rm 集裸调用、失败照印 ✅）。
+  # R18-A2-14：回执前验后置状态须与删除集一致——旧实现只验
+  # docker-compose.yml/.env/backups 三项，密钥级 .bak 文件删
+  # 不掉（如 chattr +i、只读挂载）时仍照印 ✅ 卸载完成。与
+  # no-docker 分支同集：固定名逐项验、glob 集用 nullglob 展
+  # 开，任一残留即报未完成并逐项点名。
   local uninstall_leftovers=""
-  local uninstall_item
-  for uninstall_item in docker-compose.yml .env backups; do
+  local uninstall_item uninstall_match
+  for uninstall_item in docker-compose.yml .env backups .env.pre-postgres-migration gost.db.bak .env.upgrade.bak docker-compose.yml.upgrade.bak upgrade.log .flmx_upgrade_status.json .flmx_upgrade_heartbeat; do
     if [[ -e "$uninstall_item" ]]; then
       uninstall_leftovers="$uninstall_leftovers $uninstall_item"
     fi
   done
+  shopt -s nullglob
+  for uninstall_match in .env.bak.* docker-compose.yml.bak.* .docker-compose.yml.update.* .docker-compose.yml.install.*; do
+    uninstall_leftovers="$uninstall_leftovers $uninstall_match"
+  done
+  shopt -u nullglob
   if [[ -n "$uninstall_leftovers" ]]; then
     echo "❌ 卸载未完全完成，以下项目未能删除：$uninstall_leftovers，请人工处理（容器与数据卷已随 down 删除的部分不受影响）"
     return 1
