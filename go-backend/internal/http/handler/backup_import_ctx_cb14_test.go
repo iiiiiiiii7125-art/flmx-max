@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -88,15 +87,13 @@ func cb14Envelope(t *testing.T, rec *httptest.ResponseRecorder) (int, string) {
 // cb14WaitSnapshot polls until the pre-import snapshot file exists,
 // i.e. the snapshot phase has finished publishing and the handler is
 // at/just past the phase boundary into the write phase.
+// R18-B9-02：快照改为时间戳多份保留，无固定单文件路径，改为按
+// 快照清单轮询（任一份出现即算快照相位已发布）。
 func cb14WaitSnapshot(t *testing.T, h *Handler) {
 	t.Helper()
-	path := h.importAutoBackupPath()
-	if path == "" {
-		t.Fatal("snapshot path unavailable in fixture")
-	}
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
+		if len(h.listImportAutoBackupSnapshots()) > 0 {
 			return
 		}
 		time.Sleep(2 * time.Millisecond)
