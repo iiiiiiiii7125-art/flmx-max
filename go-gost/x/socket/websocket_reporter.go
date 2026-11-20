@@ -1374,16 +1374,22 @@ func (w *WebSocketReporter) handleReceivedMessage(messageType int, message []byt
 				// once its requestId claim expires, instead of
 				// replayable forever.
 				var innerEnvelope struct {
-					Timestamp int64 `json:"timestamp"`
+					Timestamp int64  `json:"timestamp"`
+					RequestId string `json:"requestId"`
 				}
 				if err := json.Unmarshal(decryptedData, &innerEnvelope); err != nil || innerEnvelope.Timestamp == 0 {
 					fmt.Printf("❌ 拒绝加密命令: 缺少内层时间戳\n")
-					w.sendErrorResponse("MissingInnerTimestamp", "加密命令缺少内层时间戳（面板版本过旧或信封被篡改），拒绝执行", "")
+					// R18-R2-D1-03：解密已成功，requestId 就在
+					// decryptedData 顶层——带上它，面板
+					// tryResolvePending 才能把拒绝直达等待方，
+					// 而不是让调用方等满命令超时（最长 300s）
+					// 才见通用超时。
+					w.sendErrorResponse("MissingInnerTimestamp", "加密命令缺少内层时间戳（面板版本过旧或信封被篡改），拒绝执行", innerEnvelope.RequestId)
 					return
 				}
 				if err := validateEncryptedTimestamp(innerEnvelope.Timestamp, time.Now()); err != nil {
 					fmt.Printf("❌ 拒绝加密命令: %v\n", err)
-					w.sendErrorResponse("StaleTimestamp", err.Error(), "")
+					w.sendErrorResponse("StaleTimestamp", err.Error(), innerEnvelope.RequestId)
 					return
 				}
 				message = decryptedData
@@ -4510,11 +4516,13 @@ func (w *WebSocketReporter) sendResponse(response CommandResponse) bool {
 // 命令执行之前，requestId 的可得性因失败点而异：压缩帧与明文帧在
 // 解析失败时仍可从帧上读出 requestId（压缩帧取信封字段、明文帧走
 // bestEffortRequestID 宽松提取），回执带上它，面板 tryResolvePending
-// 即可把失败原因直达等待方而不是超时；加密信封三型（StaleTimestamp/
-// DecryptError/NoDecryptor）的 requestId 在未解密的信封内层，构造上
-// 不可得，传空串——该情形由面板侧按类型白名单记录 message 兜底
-// （ws/server.go 的 agentPreParseErrorReason），双侧都不改
-// fail-closed 语义。
+// 即可把失败原因直达等待方而不是超时；解密后的内层时间戳拒绝
+// （MissingInnerTimestamp / StaleTimestamp，R18-R2-D1-03）同样带
+// 上已解密的 requestId。仍带不上的只有解密前就失败的两型
+// （DecryptError / NoDecryptor）与解密前的外层 StaleTimestamp
+// 预筛——其 requestId 在未解密的信封内层，构造上不可得，传空串；
+// 该情形由面板侧按类型白名单记录 message 兜底（ws/server.go 的
+// agentPreParseErrorReason），双侧都不改 fail-closed 语义。
 func (w *WebSocketReporter) sendErrorResponse(responseType, message, requestID string) {
 	response := CommandResponse{
 		Type:      responseType,
