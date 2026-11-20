@@ -187,6 +187,7 @@ type Server struct {
 type wsAuthFailBucket struct {
 	count       int
 	windowStart time.Time
+	lastSeen    time.Time
 }
 
 type wsAuthFailLimiter struct {
@@ -220,26 +221,50 @@ func (l *wsAuthFailLimiter) recordFailure(ip string, now time.Time) {
 	defer l.mu.Unlock()
 	b, ok := l.buckets[ip]
 	if !ok {
-		if len(l.buckets) >= wsAuthFailMaxHosts {
-			// 满额先清过期桶，避免 map 无界增长（与 D6-05 同型治理）。
-			for k, v := range l.buckets {
-				if now.Sub(v.windowStart) >= wsAuthFailWindow {
-					delete(l.buckets, k)
-				}
-			}
-			if len(l.buckets) >= wsAuthFailMaxHosts {
-				return
-			}
-		}
-		l.buckets[ip] = &wsAuthFailBucket{count: 1, windowStart: now}
+		// R18-C4-03：满桶时淘汰最旧活跃桶并告警（与
+		// loginUsernameLimiter.evictIfNeededLocked 同口径），绝不
+		// 静默丢弃新 IP 的失败记账（旧实现满桶直接 return，
+		// fail-open：4096 桶打满后新 IP 永不计数、限流失效）。
+		l.evictIfNeededLocked(now)
+		l.buckets[ip] = &wsAuthFailBucket{count: 1, windowStart: now, lastSeen: now}
 		return
 	}
+	b.lastSeen = now
 	if now.Sub(b.windowStart) >= wsAuthFailWindow {
 		b.count = 1
 		b.windowStart = now
 		return
 	}
 	b.count++
+}
+
+// evictIfNeededLocked 淘汰策略（与 loginUsernameLimiter 同形态）：
+// 优先清理过期桶；无过期桶时按 lastSeen 淘汰最旧活跃桶并告警；
+// 绝不让新键无条件挤占，也绝不让 map 无界增长。调用方须持 l.mu。
+func (l *wsAuthFailLimiter) evictIfNeededLocked(now time.Time) {
+	if len(l.buckets) < wsAuthFailMaxHosts {
+		return
+	}
+	for k, v := range l.buckets {
+		if now.Sub(v.windowStart) >= wsAuthFailWindow {
+			delete(l.buckets, k)
+		}
+	}
+	if len(l.buckets) < wsAuthFailMaxHosts {
+		return
+	}
+	var oldestKey string
+	var oldest time.Time
+	first := true
+	for k, v := range l.buckets {
+		if first || v.lastSeen.Before(oldest) {
+			oldestKey, oldest, first = k, v.lastSeen, false
+		}
+	}
+	if oldestKey != "" {
+		log.Printf("warning: ws auth fail limiter full (%d buckets), evicting oldest active bucket", len(l.buckets))
+		delete(l.buckets, oldestKey)
+	}
 }
 
 type SystemInfo struct {
