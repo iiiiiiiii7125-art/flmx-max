@@ -143,8 +143,8 @@ func (m *failFirstReconcileManager) CollectCounters(ctx context.Context, cfg run
 	return m.inner.CollectCounters(ctx, cfg)
 }
 
-func (m *failFirstReconcileManager) SetBlocked(ctx context.Context, cfg runtimenft.SSHConfig, port int, blocked bool) error {
-	return m.inner.SetBlocked(ctx, cfg, port, blocked)
+func (m *failFirstReconcileManager) SetBlocked(ctx context.Context, cfg runtimenft.SSHConfig, port int, blocked bool, cleanupLegacy bool) error {
+	return m.inner.SetBlocked(ctx, cfg, port, blocked, cleanupLegacy)
 }
 
 func (m *failFirstReconcileManager) ListBlockedPorts(ctx context.Context, cfg runtimenft.SSHConfig) ([]int, error) {

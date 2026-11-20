@@ -49,7 +49,7 @@ func (pcIntNftPassthrough) CollectCounters(_ context.Context, _ runtimenft.SSHCo
 	return nil, nil
 }
 
-func (pcIntNftPassthrough) SetBlocked(_ context.Context, _ runtimenft.SSHConfig, _ int, _ bool) error {
+func (pcIntNftPassthrough) SetBlocked(_ context.Context, _ runtimenft.SSHConfig, _ int, _ bool, _ bool) error {
 	return nil
 }
 

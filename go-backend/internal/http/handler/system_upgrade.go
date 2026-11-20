@@ -23,6 +23,7 @@ import (
 	"go-backend/internal/http/response"
 	"go-backend/internal/store/repo"
 
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1494,6 +1495,11 @@ const (
 	// 键（脚本 write_new_panel_identity 落盘同名键）：定位旧 PG 容
 	// 器时优先取部署自带声明，其次按 Compose 项目+服务标签查找。
 	envKeyPanelPostgresContainer = "PANEL_POSTGRES_CONTAINER"
+	// envKeyInstallID 是部署 .env 中每安装唯一身份的键
+	// （FLMX_INSTALL_ID，R18-C3-02）：新装由 panel_install.sh
+	// 生成 UUID 落盘；存量部署由升级路径补发（R18-R2-C3-01，
+	// 见 installIDPin / pinLegacyResourceNames）。
+	envKeyInstallID = "FLMX_INSTALL_ID"
 	// envKeyPostgresUser/DB 是部署 .env 中 PG 库名/用户名的键：
 	// PG 快照身份的首选来源（脚本面 backup_postgres_for_update
 	// 同口径先读 .env）。
@@ -2131,6 +2137,20 @@ func (e *systemUpgradeExecutor) dockerVolumeFileExists(ctx context.Context, volu
 	return false, fmt.Errorf("探针容器查看卷 %s 内文件失败: %v", volume, runErr)
 }
 
+// installIDPin 是存量部署的安装身份补发（R18-R2-C3-01）：部署
+// .env 缺 FLMX_INSTALL_ID 时生成一个 UUID 钉入，与实例键一起
+// 派生 nft 表名，两套默认实例面板共管同一节点时不再共用
+// flmx_e3b0c442。键已有值时绝不重写——哪怕值不合规
+// （panelInstallID 会按无身份回落旧口径）：重写会切表名、
+// 旧表成孤儿残留。空值行视为缺键（applyEnvPins 的补空语义
+// 会就地填值）。生成值恒过 validInstallID（UUID 口径）。
+func installIDPin(env map[string]string) (envKeyValue, bool) {
+	if strings.TrimSpace(env[envKeyInstallID]) != "" {
+		return envKeyValue{}, false
+	}
+	return envKeyValue{envKeyInstallID, uuid.NewString()}, true
+}
+
 // pinLegacyResourceNames 在升级动任何文件之前执行钉键：读部署
 // .env → 实读旧容器 → 纯规划 → 有钉键/改写才原子改写 .env（mode
 // 帽与 updateEnvVersion 同口径；钉入走 applyEnvPins 只补缺、卷键
@@ -2148,6 +2168,13 @@ func (e *systemUpgradeExecutor) pinLegacyResourceNames(ctx context.Context) (str
 	plan, err := planLegacyResourcePins(env, insp)
 	if err != nil {
 		return "", "", err
+	}
+	// R18-R2-C3-01：存量部署补发安装身份，与资源名钉键同一
+	// 次原子写盘（本函数在备份/换 compose 之前执行，备份
+	// .env 已含新键，回滚亦保留身份；身份一旦签发永不撤销）。
+	// 只补缺、不重写，见 installIDPin。
+	if pin, ok := installIDPin(env); ok {
+		plan.pins = append(plan.pins, pin)
 	}
 	expectedPG := plan.expectedPostgresVolume
 	if !isPostgresMode(env) {

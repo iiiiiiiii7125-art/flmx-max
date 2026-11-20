@@ -399,6 +399,54 @@ EOF
   grep -q '^FLMX_POSTGRES_VOLUME=my_pg$' "$dir3/.env" || fail "A2-03: the live-read postgres volume must be pinned"
 )
 
+# R18-R2-C3-01：存量部署补发安装唯一身份。ensure_panel_install_id
+# 只补缺、绝不重写；update_panel 在备份前调用它（备份 .env 已
+# 含新键，回滚亦保留身份）。三幕：① 无键 .env 补发 UUID、其余
+# 键不动、再跑一次值不变；② 已有键原样保留；③ 接线静态断言：
+# update_panel 内的补发调用须在备份调用之前。
+test_ensure_panel_install_id_backfills_only_when_missing() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  # ① 无键补发
+  local dir1
+  dir1=$(mktemp -d)
+  cat > "$dir1/.env" <<'EOF'
+DB_TYPE=sqlite
+FLMX_VERSION=1.9.7
+EOF
+  ( cd "$dir1" && ensure_panel_install_id ) || fail "R18-R2-C3-01: backfill must succeed on a keyless .env"
+  local id1
+  id1=$(get_env_var FLMX_INSTALL_ID "$dir1/.env")
+  [[ -n "$id1" ]] || fail "R18-R2-C3-01: backfill must write FLMX_INSTALL_ID"
+  [[ "$id1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || fail "R18-R2-C3-01: backfilled identity must be a lowercase UUID, got $id1"
+  grep -q '^DB_TYPE=sqlite$' "$dir1/.env" || fail "R18-R2-C3-01: backfill must not disturb other keys"
+  grep -q '^FLMX_VERSION=1.9.7$' "$dir1/.env" || fail "R18-R2-C3-01: backfill must not disturb the version key"
+  ( cd "$dir1" && ensure_panel_install_id ) || fail "R18-R2-C3-01: second backfill must succeed"
+  local id2
+  id2=$(get_env_var FLMX_INSTALL_ID "$dir1/.env")
+  assert_equals "$id1" "$id2" "R18-R2-C3-01: an issued identity must never be rewritten"
+
+  # ② 已有键原样保留
+  local dir2
+  dir2=$(mktemp -d)
+  cat > "$dir2/.env" <<'EOF'
+DB_TYPE=sqlite
+FLMX_INSTALL_ID=11111111-1111-1111-1111-111111111111
+EOF
+  ( cd "$dir2" && ensure_panel_install_id ) || fail "R18-R2-C3-01: backfill must succeed when the key exists"
+  assert_equals "11111111-1111-1111-1111-111111111111" "$(get_env_var FLMX_INSTALL_ID "$dir2/.env")" "R18-R2-C3-01: an existing identity must be kept verbatim"
+
+  # ③ 接线：update_panel 在备份前补发
+  local update_body ensure_line backup_line
+  update_body=$(sed -n '/^update_panel()/,/^}/p' "$ROOT_DIR/panel_install.sh")
+  ensure_line=$(printf '%s' "$update_body" | grep -n 'ensure_panel_install_id' | head -1 | cut -d: -f1)
+  backup_line=$(printf '%s' "$update_body" | grep -n 'create_panel_update_backup' | head -1 | cut -d: -f1)
+  [[ -n "$ensure_line" ]] || fail "R18-R2-C3-01: update_panel must call ensure_panel_install_id"
+  [[ -n "$backup_line" ]] || fail "R18-R2-C3-01: update_panel body must still back up before rebuilding"
+  [[ "$ensure_line" -lt "$backup_line" ]] || fail "R18-R2-C3-01: update_panel must backfill the identity before the pre-update backup (ensure at $ensure_line, backup at $backup_line)"
+)
+
 # A1-01（audit-max）：路由下载加跨腿总预算——旧实现只有单腿
 # 600s×重试×双腿×约 10 路线，涓流路线（高于 1KB/s 地板看门狗）
 # 可把一次下载拖到小时级；install.sh 同面已有 240s 总预算
@@ -13889,6 +13937,7 @@ test_panel_pin_accident_gate_unknown_mount_aborts
 test_panel_env_dollar_rejected_fail_closed
 test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key
+test_ensure_panel_install_id_backfills_only_when_missing
 test_panel_download_routed_total_budget
 test_panel_installer_script_curl_uses_timeouts
 test_panel_budget_seconds_rejects_non_numeric

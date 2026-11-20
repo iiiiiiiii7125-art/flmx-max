@@ -178,11 +178,11 @@ func (m *serializedNftManager) Clear(ctx context.Context, nodeID int64, cfg runt
 // 操作，必须经 per-node 锁与 Reconcile/Clear 串行（否则 Clear 删表与
 // SetBlocked 建表/加元素会互相覆盖）；但它不触碰主表与计数器，采集
 // 侧的 D18 脏读防护不依赖它，故不置 applying、不递增 gen。
-func (m *serializedNftManager) SetBlocked(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig, port int, blocked bool) error {
+func (m *serializedNftManager) SetBlocked(ctx context.Context, nodeID int64, cfg runtimenft.SSHConfig, port int, blocked bool, cleanupLegacy bool) error {
 	mu := m.lockFor(nodeID)
 	mu.Lock()
 	defer m.unlockFor(nodeID, mu)
-	return m.inner.SetBlocked(ctx, cfg, port, blocked)
+	return m.inner.SetBlocked(ctx, cfg, port, blocked, cleanupLegacy)
 }
 
 // ListBlockedPorts 是只读采集，与 CollectCounters 同口径不取写锁

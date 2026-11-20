@@ -100,6 +100,17 @@ func TestSyncReblocksPausedForwardAndUnblocksActive(t *testing.T) {
 	if hasBlockedCall(calls, 20000, true) {
 		t.Fatalf("active port 20000 must not be blocked, got %+v", calls)
 	}
+	// R18-R2-C3-03：封禁腿不碰 plain 表；恢复收敛的解除带
+	// cleanupLegacy=true（本面板自己的转发端口，plain 表残留
+	// 必须一并清掉，否则恢复后流量仍被残留规则 drop）。
+	for _, c := range calls {
+		if c.blocked && c.cleanupLegacy {
+			t.Fatalf("block leg must never clean the legacy plain table: %+v", c)
+		}
+		if c.port == 20000 && !c.blocked && !c.cleanupLegacy {
+			t.Fatalf("convergence unblock must clean the legacy plain-table residue: %+v", c)
+		}
+	}
 	ops := manager.opList()
 	if at, rec := opIndex(ops, "block:20001:true"), opIndex(ops, "reconcile"); at < 0 || rec < 0 || at > rec {
 		t.Fatalf("expected block of paused port before reconcile, ops=%v", ops)
@@ -132,6 +143,13 @@ func TestResumeSyncUnblocksPortAndDoesNotReblock(t *testing.T) {
 	}
 	if !hasBlockedCall(calls, 20000, false) {
 		t.Fatalf("expected resumed port 20000 unblocked, got %+v", calls)
+	}
+	// R18-R2-C3-03：恢复收敛的解除带 cleanupLegacy=true——被恢复
+	// 的是本面板自己的转发端口，plain 表残留必须一并清掉。
+	for _, c := range calls {
+		if c.port == 20000 && !c.blocked && !c.cleanupLegacy {
+			t.Fatalf("resumed port unblock must clean the legacy plain-table residue: %+v", c)
+		}
 	}
 }
 

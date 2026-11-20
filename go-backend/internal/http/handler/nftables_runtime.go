@@ -28,7 +28,13 @@ type nftablesRuntimeManager interface {
 	// only with proof may the one-shot plain-table migration run.
 	Clear(ctx context.Context, cfg runtimenft.SSHConfig, migratePlain bool) error
 	CollectCounters(ctx context.Context, cfg runtimenft.SSHConfig) ([]runtimenft.CounterSample, error)
-	SetBlocked(ctx context.Context, cfg runtimenft.SSHConfig, port int, blocked bool) error
+	// SetBlocked 切换暂停过滤表中的端口封禁状态。cleanupLegacy
+	// 只在解除（blocked=false）时有意义：为 true 时一并清理
+	// 升级前 plain 表里同端口的残留元素（R18-R2-C3-03：只
+	// 有 sync 的恢复收敛可带 true——被恢复的是本面板自己的
+	// 转发端口；清扫解除无主端口必须带 false，plain 表元素
+	// 归属无法证明，绝不能碰）。
+	SetBlocked(ctx context.Context, cfg runtimenft.SSHConfig, port int, blocked bool, cleanupLegacy bool) error
 	ListBlockedPorts(ctx context.Context, cfg runtimenft.SSHConfig) ([]int, error)
 }
 
@@ -516,7 +522,7 @@ func (h *Handler) syncNftablesNodeWithOverridesCtx(ctx context.Context, nodeID i
 		return err
 	}
 	for _, port := range sortedBlockedPorts(blockedPorts) {
-		if err := h.nftablesManager.SetBlocked(ctx, nodeID, sshCfg, port, true); err != nil {
+		if err := h.nftablesManager.SetBlocked(ctx, nodeID, sshCfg, port, true, false); err != nil {
 			return err
 		}
 	}
@@ -545,11 +551,17 @@ func (h *Handler) syncNftablesNodeWithOverridesCtx(ctx context.Context, nodeID i
 	// 恢复收敛：plan 内端口若残留封禁（节点离线期间在面板恢复、封禁
 	// 后未及解除、或端口曾被已删转发封禁后复用）一律解除，保证恢复
 	// 后规则清零、不残留。应封禁的端口不在 plan 内，不受影响。
+	// R18-R2-C3-03：此处带 cleanupLegacy=true——被恢复的是本面板
+	// 自己的转发端口，升级前 plain 表里的同端口残留必须一并清
+	// 掉，否则恢复后流量仍被残留规则 drop。残留窗口：若另一套
+	// 尚未升级的面板同号端口正暂停，其 plain 表元素会被一并摘
+	// 掉，直到对方下次 sync 按 DB 期望集重封（有界、自愈；集合
+	// 元素本身不带归属，无法再分清）。
 	for _, rule := range plan.Rules {
 		if blockedPorts[rule.InPort] {
 			continue
 		}
-		if err := h.nftablesManager.SetBlocked(ctx, nodeID, sshCfg, rule.InPort, false); err != nil {
+		if err := h.nftablesManager.SetBlocked(ctx, nodeID, sshCfg, rule.InPort, false, true); err != nil {
 			return err
 		}
 	}

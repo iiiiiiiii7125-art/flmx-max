@@ -87,25 +87,15 @@ func (r *SSHRunner) pauseTableName() string {
 	return PauseTableNameForInstall(r.instance, r.installID)
 }
 
-func (r *SSHRunner) SetBlocked(ctx context.Context, cfg SSHConfig, port int, blocked bool) error {
+// SetBlocked 切换暂停过滤表中的端口封禁状态。cleanupLegacy 只
+// 在解除时有意义：为 true 时一并清理升级前 plain 表里同端口
+// 的残留元素（恢复收敛）；为 false 时只动本安装的隔离表
+// （清扫解除无主端口——plain 表元素归属无法证明，绝不能碰）。
+func (r *SSHRunner) SetBlocked(ctx context.Context, cfg SSHConfig, port int, blocked bool, cleanupLegacy bool) error {
 	if port < 1 || port > 65535 {
 		return errors.New("invalid nftables port")
 	}
-	return r.run(ctx, cfg, buildSetBlockedCommand(nftBinary(cfg), r.pauseTableName(), port, blocked))
-}
-
-// buildPauseTableMigrationCommand 生成建隔离表时的一次性认领片段
-// （R18-C3-01）：把升级前 plain 表里的封禁端口抄进隔离表。最佳
-// 努力：解析/写入任一步失败都不让本次封禁失败（同步的期望集
-// 下轮仍会重封；见 syncNftablesNodeWithOverridesCtx 的
-// nftBlockedPorts 自愈口径）。plain 表本身不删除——另一套尚未
-// 升级的面板可能仍在用它，删表即重演本发现的互删。
-func buildPauseTableMigrationCommand(nft, table string) string {
-	return "(if " + nft + " list table inet " + legacyPauseTableName + " >/dev/null 2>&1; then\n" +
-		"  for p in $(" + nft + " list set inet " + legacyPauseTableName + " " + pauseSetName + " 2>/dev/null | sed -n 's/^[[:space:]]*elements = { \\(.*\\) }/\\1/p' | tr ',' ' '); do\n" +
-		"    " + nft + " add element inet " + table + " " + pauseSetName + " \"{ $p }\" 2>/dev/null || true\n" +
-		"  done\n" +
-		"fi) || true\n"
+	return r.run(ctx, cfg, buildSetBlockedCommand(nftBinary(cfg), r.pauseTableName(), port, blocked, cleanupLegacy))
 }
 
 // buildLegacyPauseElementCleanupCommand 生成恢复路径的残留清理片段
@@ -115,6 +105,14 @@ func buildPauseTableMigrationCommand(nft, table string) string {
 // 表里，会被一并摘掉，但对方下次 sync 按 DB 期望集重封（与
 // 本面板的自愈口径相同），窗口有界；而不清理则本面板的恢复
 // 永久失效。元素不存在时安静成功。
+//
+// R18-R2-C3-03：本片段只由 cleanupLegacy=true 的解除调用发出
+// （sync 的恢复收敛：被恢复的是本面板自己的转发端口）。清扫
+// （无主端口解除）绝不带本片段：无主端口没有归属转发，plain
+// 表里同号元素更可能是另一套面板的封禁，清掉只会害人、于己
+// 无益——端口复用时恢复收敛会再清残留。plain 表集合元素本身
+// 不带归属，恢复收敛腿的残留窗口（对方同号暂停被短暂解除、
+// 对方下次 sync 自愈）无法再分清，见 buildSetBlockedCommand。
 func buildLegacyPauseElementCleanupCommand(nft string, port int) string {
 	element := fmt.Sprintf(" element inet %s %s '{ %d }'", legacyPauseTableName, pauseSetName, port)
 	return "if " + nft + " list table inet " + legacyPauseTableName + " >/dev/null 2>&1; then\n" +
@@ -122,29 +120,45 @@ func buildLegacyPauseElementCleanupCommand(nft string, port int) string {
 		"fi\n"
 }
 
-func buildSetBlockedCommand(nft, table string, port int, blocked bool) string {
+// buildSetBlockedCommand 生成暂停/恢复的单端口命令。cleanupLegacy
+// 只在解除（blocked=false）时有意义，见
+// buildLegacyPauseElementCleanupCommand。
+//
+// R18-R2-C3-03：建表时不再盲认领 plain 表元素。旧迁移把 plain
+// 表 flmx_quota 的全部元素抄进本安装表——其中可能有另一套面板
+// 的暂停端口，本面板会替它执法，直到每小时清扫按本面板 DB
+// 判定无主再摘掉（窗口 ≤1h）。认领本就无必要：每次 sync 都
+// 按本面板 DB 期望集逐个重封（见 syncNftablesNodeWithOverridesCtx），
+// 应封的端口都会经由本函数加进来；plain 表本身永不删除，升
+// 级前已封的端口在首次 sync 前仍由它继续执法，不留空档；
+// 恢复时残留元素由 cleanupLegacy 腿逐个清理。
+func buildSetBlockedCommand(nft, table string, port int, blocked bool, cleanupLegacy bool) string {
 	element := fmt.Sprintf(" element inet %s %s '{ %d }'", table, pauseSetName, port)
 	if blocked {
 		// 表不存在先建（整表加载是幂等的：表已存在时跳过，不动既有
-		// 封禁集），再把端口加入封禁集。建表时一次性认领升级前
-		// plain 表里的旧封禁（R18-C3-01 迁移）。
+		// 封禁集），再把端口加入封禁集。建表时不再认领 plain 表
+		// 元素，见文件头 R18-R2-C3-03 说明。
 		return "set -eu\n" +
 			"if ! " + nft + " list table inet " + table + " >/dev/null 2>&1; then\n" +
 			nft + " -f - <<'EOF'\n" + renderPauseTable(table) + "\nEOF\n" +
-			buildPauseTableMigrationCommand(nft, table) +
 			"fi\n" +
 			nft + " add" + element
 	}
 	// 解除封禁不建表：表不存在即无封禁可解；元素不存在同样视为已解除，
 	// 保证恢复路径可重复执行不报错。升级前 plain 表里的同端口残留
-	// 一并清理（R18-C3-01），否则恢复后流量仍被残留规则 drop。
-	return "set -eu\n" +
+	// 是否一并清理由 cleanupLegacy 决定（见
+	// buildLegacyPauseElementCleanupCommand）：恢复收敛带 true，
+	// 否则恢复后流量仍被残留规则 drop；清扫带 false。
+	cmd := "set -eu\n" +
 		"if " + nft + " list table inet " + table + " >/dev/null 2>&1; then\n" +
 		"if " + nft + " get" + element + " >/dev/null 2>&1; then\n" +
 		nft + " delete" + element + "\n" +
 		"fi\n" +
-		"fi\n" +
-		buildLegacyPauseElementCleanupCommand(nft, port)
+		"fi\n"
+	if cleanupLegacy {
+		cmd += buildLegacyPauseElementCleanupCommand(nft, port)
+	}
+	return cmd
 }
 
 // ClearBlocks 删除本安装的整张暂停过滤表（节点清理时调用），封禁
@@ -161,17 +175,17 @@ func buildClearBlocksCommand(nft, table string) string {
 		"fi"
 }
 
-func (m *Manager) SetBlocked(ctx context.Context, cfg SSHConfig, port int, blocked bool) error {
+func (m *Manager) SetBlocked(ctx context.Context, cfg SSHConfig, port int, blocked bool, cleanupLegacy bool) error {
 	if err := m.ensureInitialized(); err != nil {
 		return err
 	}
 	runner, ok := m.runner.(interface {
-		SetBlocked(context.Context, SSHConfig, int, bool) error
+		SetBlocked(context.Context, SSHConfig, int, bool, bool) error
 	})
 	if !ok {
 		return errors.New("nftables runner does not support traffic blocking")
 	}
-	return runner.SetBlocked(ctx, cfg, port, blocked)
+	return runner.SetBlocked(ctx, cfg, port, blocked, cleanupLegacy)
 }
 
 // ListBlockedPorts 读取节点当前封禁集（R2-038 对账清扫的读面）。

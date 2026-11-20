@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.14"
+SCRIPT_VERSION="20261121.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -2610,6 +2610,33 @@ panel_deploy_dir_is_ours() {
 # 落盘的 Compose 若是旧版模板（无 FLMX_SQLITE_VOLUME 标记，资源名仍
 # 写死旧名），身份必须回退旧名才能与模板对上——装旧版也能跑；该分
 # 支命名由旧模板写死，实例后缀不生效（会显式告警，不静默假装隔离）。
+# R18-R2-C3-01：为部署补发安装唯一身份 FLMX_INSTALL_ID（UUID）
+# 落盘 .env；后端据此与实例键一起派生 nft 表名，两套默认实例
+# 面板跨机共管同一节点时不再共用 flmx_e3b0c442。键已存在时绝
+# 不重写（重写会切表名、旧表成孤儿残留）；生成失败只告警续行
+# （本次继续用实例键旧口径派生表名，下次更新再补）。调用方：
+# 新装（write_new_panel_identity）与脚本更新（update_panel，
+# 备份之前——备份 .env 已含新键，回滚亦保留身份，身份一旦签
+# 发永不撤销）；面板内升级的 Go 面同口径钉键，见
+# pinLegacyResourceNames。写入失败返回 1（调用方中止）。
+ensure_panel_install_id() {
+  if [[ -n "$(get_env_var FLMX_INSTALL_ID .env || true)" ]]; then
+    return 0
+  fi
+  local install_id=""
+  if command -v uuidgen >/dev/null 2>&1; then
+    install_id=$(uuidgen | tr 'A-Z' 'a-z' || true)
+  elif [[ -r /proc/sys/kernel/random/uuid ]]; then
+    install_id=$(cat /proc/sys/kernel/random/uuid || true)
+  fi
+  if [[ -n "$install_id" ]]; then
+    upsert_env_var .env FLMX_INSTALL_ID "$install_id" || return 1
+    echo "🆔 安装唯一身份 FLMX_INSTALL_ID 已写入 .env：升级后首次同步起用隔离表名，旧表规则由同步全量重建、旧表本身保留为残留（清理口径见 doc/guide/install.md）"
+  else
+    echo "⚠️ 未能生成安装唯一身份 FLMX_INSTALL_ID（无 uuidgen 且 /proc/sys/kernel/random/uuid 不可读）：本次继续用实例键旧口径派生 nft 表名；两套默认实例面板共管同一节点时请手工为其一设置 FLMX_INSTANCE"
+  fi
+}
+
 write_new_panel_identity() {
   local suffix legacy_template=""
   suffix=$(panel_instance_suffix)
@@ -2642,24 +2669,11 @@ write_new_panel_identity() {
       echo "⚠️ 目标版本的 Compose 模板使用旧版共享资源名，实例后缀不生效：该实例的容器/卷/网络仍用旧缺省名，同机请勿再并存第二套该版本部署"
     fi
   fi
-  # R18-C3-02：新装生成每安装唯一身份 FLMX_INSTALL_ID（UUID）落盘
-  # .env；后端据此与实例键一起派生 nft 表名，两套默认实例面板跨
-  # 机共管同一节点时不再共用 flmx_e3b0c442。键已存在时绝不重写
-  # （重写会切表名、旧表成孤儿残留）；本函数只在新装路径调用，
-  # 存量部署升级不会因此切表。
-  if [[ -z "$(get_env_var FLMX_INSTALL_ID .env || true)" ]]; then
-    local install_id=""
-    if command -v uuidgen >/dev/null 2>&1; then
-      install_id=$(uuidgen | tr 'A-Z' 'a-z' || true)
-    elif [[ -r /proc/sys/kernel/random/uuid ]]; then
-      install_id=$(cat /proc/sys/kernel/random/uuid || true)
-    fi
-    if [[ -n "$install_id" ]]; then
-      upsert_env_var .env FLMX_INSTALL_ID "$install_id" || return 1
-    else
-      echo "⚠️ 未能生成安装唯一身份 FLMX_INSTALL_ID（无 uuidgen 且 /proc/sys/kernel/random/uuid 不可读）：本次安装继续用实例键旧口径派生 nft 表名；两套默认实例面板共管同一节点时请手工为其一设置 FLMX_INSTANCE"
-    fi
-  fi
+  # R18-C3-02 / R18-R2-C3-01：新装生成每安装唯一身份
+  # FLMX_INSTALL_ID（UUID）落盘 .env；存量部署由更新路径
+  # （update_panel）与面板内升级同口径补发，见
+  # ensure_panel_install_id。
+  ensure_panel_install_id || return 1
   PANEL_BACKEND_CONTAINER="$backend"
   PANEL_POSTGRES_CONTAINER="$postgres"
   PANEL_FRONTEND_CONTAINER="$frontend"
@@ -5133,6 +5147,15 @@ update_panel() {
   # R18-A2-08：更新路径的只读端口预检——备份之前先确认两端口未
   # 被非自家占用；被占即点名中止，不自动换端口。
   panel_preflight_update_port_conflicts || return 1
+
+  # R18-R2-C3-01：存量部署补发安装唯一身份——备份之前落盘，
+  # 备份 .env 已含新键，回滚亦保留身份（身份一旦签发永不撤销；
+  # 否则回滚后再升级会另发身份、表名再切一次）。只补缺、绝不
+  # 重写已有键；写入失败即中止（此时容器未动、compose 未换）。
+  if ! ensure_panel_install_id; then
+    echo "❌ 安装唯一身份补发失败，更新已中止（未改动现有部署与运行中的服务）"
+    return 1
+  fi
 
   # R18-A2-05：回滚口状态复位——同进程内多次 update_panel 调用
   # （套件同子 shell 两幕）不得把上一次的重建标记与回滚卷带到下
