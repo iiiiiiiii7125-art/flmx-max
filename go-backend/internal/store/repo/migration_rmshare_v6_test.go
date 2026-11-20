@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"fmt"
 	"testing"
 
 	"go-backend/internal/store/model"
@@ -88,5 +89,73 @@ func TestMigrateV6FederationRemoval(t *testing.T) {
 	// 幂等：二跑直接按版本记录跳过、无错误。
 	if err := migrateV6FederationRemoval(db); err != nil {
 		t.Fatalf("second migrateV6FederationRemoval run: %v", err)
+	}
+}
+
+// R18-B7-01：v6 迁移删远端节点时，引用该节点的隧道行本身保留、
+// 但入口随节点一起没了——迁移前必须把受影响的隧道 ID 记下来
+// （日志点名 + vite_config 一次性待办键），否则断链静默、
+// 隧道列表也无任何信号。
+func TestMigrateV6FederationRemovalOrphanTunnels(t *testing.T) {
+	r, err := Open(t.TempDir() + "/rmshare-v6-orphan.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	db := r.DB()
+
+	for _, col := range []string{
+		"is_remote INTEGER DEFAULT 0",
+		"remote_url TEXT DEFAULT ''",
+		"remote_token TEXT DEFAULT ''",
+		"remote_config TEXT DEFAULT ''",
+	} {
+		if err := db.Exec("ALTER TABLE node ADD COLUMN " + col).Error; err != nil {
+			t.Fatalf("add legacy column %s: %v", col, err)
+		}
+	}
+	if err := db.Exec("INSERT INTO node (name, secret, server_ip, port, created_time, updated_time, status, is_remote) VALUES ('v6-local', 's-local', '10.0.0.1', '1000-2000', 1, 1, 1, 0)").Error; err != nil {
+		t.Fatalf("seed local node: %v", err)
+	}
+	if err := db.Exec("INSERT INTO node (name, secret, server_ip, port, created_time, updated_time, status, is_remote, remote_url, remote_token) VALUES ('v6-remote', 's-remote', '10.0.0.2', '1000-2000', 1, 1, 1, 1, 'http://peer.example', 'tok')").Error; err != nil {
+		t.Fatalf("seed remote node: %v", err)
+	}
+	var remoteID int64
+	if err := db.Table("node").Where("is_remote = ?", 1).Pluck("id", &remoteID).Error; err != nil {
+		t.Fatalf("read remote node id: %v", err)
+	}
+	// 受影响的隧道：入口就是这台远端节点。
+	if err := db.Exec("INSERT INTO tunnel (name, type, flow, status, created_time, updated_time) VALUES ('orphan-tun', 2, 0, 1, 1, 1)").Error; err != nil {
+		t.Fatalf("seed tunnel: %v", err)
+	}
+	var tunnelID int64
+	if err := db.Table("tunnel").Where("name = ?", "orphan-tun").Pluck("id", &tunnelID).Error; err != nil {
+		t.Fatalf("read tunnel id: %v", err)
+	}
+	if err := db.Exec("INSERT INTO chain_tunnel (tunnel_id, chain_type, node_id, inx) VALUES (?, '1', ?, 1)", tunnelID, remoteID).Error; err != nil {
+		t.Fatalf("seed chain tunnel: %v", err)
+	}
+	if err := db.Exec("DELETE FROM schema_migration WHERE version = ?", migrationRMShareV6Version).Error; err != nil {
+		t.Fatalf("clear v6 version record: %v", err)
+	}
+
+	if err := migrateV6FederationRemoval(db); err != nil {
+		t.Fatalf("migrateV6FederationRemoval: %v", err)
+	}
+
+	// 隧道行本身保留（只丢了入口节点），且待办键点名该隧道。
+	var tunnelCount int64
+	if err := db.Table("tunnel").Count(&tunnelCount).Error; err != nil {
+		t.Fatalf("count tunnels: %v", err)
+	}
+	if tunnelCount != 1 {
+		t.Fatalf("tunnel rows after migration = %d, want 1 (tunnel kept, only its entry node removed)", tunnelCount)
+	}
+	cfg, err := r.GetConfigByName(RMShareOrphanTunnelsKey)
+	if err != nil || cfg == nil {
+		t.Fatalf("orphan-tunnel todo key %q must be recorded, got %+v err=%v", RMShareOrphanTunnelsKey, cfg, err)
+	}
+	if cfg.Value != fmt.Sprintf("[%d]", tunnelID) {
+		t.Fatalf("orphan-tunnel todo key = %q, want [%d]", cfg.Value, tunnelID)
 	}
 }

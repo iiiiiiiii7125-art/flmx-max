@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -9,6 +10,13 @@ import (
 
 	"gorm.io/gorm"
 )
+
+// RMShareOrphanTunnelsKey 是 v6 联邦移除迁移写的一次性 vite_config
+// 待办键（R18-B7-01）：值是 JSON 数组，列出因远端节点被删而丢了
+// 入口/出口节点的隧道 ID。tunnelList 据此给这些隧道打
+// orphanedByFederationRemoval 标记；管理员重部署或删除隧道后逐条
+// 清除（键空时整键删除）。
+const RMShareOrphanTunnelsKey = "rmshare_orphan_tunnels"
 
 // DEV-RM-SHARE v6：跨面板共享/联邦功能整体移除的一次性数据清理。
 //
@@ -65,6 +73,15 @@ func migrateV6FederationRemoval(db *gorm.DB) error {
 		if err := db.Table("node").Where("is_remote = ?", 1).Pluck("id", &remoteNodeIDs).Error; err != nil {
 			return fmt.Errorf("migration %s: list remote nodes: %w", migrationRMShareV6Version, err)
 		}
+		// R18-B7-01：先算出引用远端节点的隧道——DeleteNodeCascade
+		// 会静默删掉 chain_tunnel 行，删完就再也算不出来了；隧道
+		// 行本身保留，但入口随节点一起没了，不断链也无信号。
+		var orphanTunnelIDs []int64
+		if len(remoteNodeIDs) > 0 && db.Migrator().HasTable("chain_tunnel") {
+			if err := db.Table("chain_tunnel").Where("node_id IN ?", remoteNodeIDs).Distinct("tunnel_id").Pluck("tunnel_id", &orphanTunnelIDs).Error; err != nil {
+				return fmt.Errorf("migration %s: list tunnels referencing remote nodes: %w", migrationRMShareV6Version, err)
+			}
+		}
 		r := &Repository{db: db}
 		for _, nodeID := range remoteNodeIDs {
 			if err := r.DeleteNodeCascade(nodeID); err != nil {
@@ -73,6 +90,19 @@ func migrateV6FederationRemoval(db *gorm.DB) error {
 		}
 		if len(remoteNodeIDs) > 0 {
 			log.Printf("migration %s: removed %d remote (federation) node row(s)", migrationRMShareV6Version, len(remoteNodeIDs))
+		}
+		if len(orphanTunnelIDs) > 0 {
+			// 断链点名：日志写清隧道 ID，另写 vite_config 一次性
+			// 待办键供隧道列表打标记；键写失败只警告不阻断启动
+			// （清理本身已完成，待办键是提示信号而非数据状态）。
+			log.Printf("migration %s: %d tunnel(s) referenced removed remote node(s) and lost entry/exit nodes, manual fix required (tunnel_ids=%v)", migrationRMShareV6Version, len(orphanTunnelIDs), orphanTunnelIDs)
+			if !db.Migrator().HasTable("vite_config") {
+				log.Printf("migration %s: WARNING vite_config table missing, orphan-tunnel todo key not recorded (tunnel_ids=%v)", migrationRMShareV6Version, orphanTunnelIDs)
+			} else if value, err := json.Marshal(orphanTunnelIDs); err != nil {
+				log.Printf("migration %s: WARNING orphan-tunnel todo key not recorded: %v (tunnel_ids=%v)", migrationRMShareV6Version, err, orphanTunnelIDs)
+			} else if err := r.UpsertConfig(RMShareOrphanTunnelsKey, string(value), time.Now().UnixMilli()); err != nil {
+				log.Printf("migration %s: WARNING orphan-tunnel todo key write failed: %v (tunnel_ids=%v)", migrationRMShareV6Version, err, orphanTunnelIDs)
+			}
 		}
 	}
 

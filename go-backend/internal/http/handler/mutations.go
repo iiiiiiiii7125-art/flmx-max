@@ -5030,6 +5030,9 @@ func (h *Handler) redeployTunnelAndForwards(tunnelID int64) error {
 		}
 	}
 
+	// R18-B7-01：重部署成功即证明入口节点已恢复（入口门现为
+	// fail-closed），该隧道的联邦移除待办标记随之清除。
+	h.clearOrphanTunnelFlag(tunnelID)
 	return nil
 }
 
@@ -8439,6 +8442,12 @@ func validateTunnelRuntimeBeforeApply(state *tunnelCreateState) error {
 	if state.Type != 2 {
 		return nil
 	}
+	// R18-B7-01：入口非空门——Type 2 隧道没有入口节点时部署/重放
+	// 必须 fail-closed 点名，不能静默下发空入口（v6 联邦移除迁移
+	// 删掉远端入口节点后，存量隧道正是此态；须先经编辑面修正）。
+	if len(state.InNodes) == 0 {
+		return errors.New("隧道缺少入口节点，请先修正隧道配置")
+	}
 	// B4-01 残面：存量状态重放面补门。请求写面（create/update）
 	// 的 strategy 都过 normalizeChainStrategy，但 redeploy 类路径
 	// 经 reconstructTunnelState 把 chain_tunnel 存量策略原文装入
@@ -8878,6 +8887,11 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 	createdServices := make([]int64, 0)
 	if state.Type != 2 {
 		return createdChains, createdServices, nil
+	}
+	// R18-B7-01：入口非空防御门——与 validateTunnelRuntimeBeforeApply
+	// 同判据；直接调本函数的路径也不得静默下发空入口。
+	if len(state.InNodes) == 0 {
+		return createdChains, createdServices, errors.New("隧道缺少入口节点，请先修正隧道配置")
 	}
 	// R18-F1-01 (D-3): distribute tunnel certificates to every node
 	// of this tunnel before rendering, then gate the render on the
@@ -10387,6 +10401,8 @@ func (h *Handler) deleteTunnelByIDWithOutcome(id int64) (*repo.TunnelCascadeOutc
 	if err != nil {
 		return nil, err
 	}
+	// R18-B7-01：隧道已删，其联邦移除待办标记随之清除。
+	h.clearOrphanTunnelFlag(id)
 	if h.bestExit != nil {
 		h.bestExit.forgetTunnel(id)
 	}
