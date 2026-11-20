@@ -130,6 +130,11 @@
 #      例文与 ai-skill.md 对话例的 remoteAddr／目标地址不得为私网
 #      地址（普通用户照抄即 403 "resolves to internal IP"）；auth.md
 #      的 list 响应回显（R4D-02 已裁定非问题）排除在外。
+#   30. 改密请求体对齐门（R18-A5-01 常设门）：auth.md 的
+#      updatePassword 请求体例文键集合须与后端 changePasswordRequest
+#      的 json tag 集合一致（旧例文的 oldPassword 键后端根本不读，
+#      缺 3 个必填字段，照抄即报“新用户名不能为空”）；skills 内不
+#      得再出现 oldPassword。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -1059,6 +1064,31 @@ elif [ "$(grep -c 'IsSafeRemoteAddr(remoteAddr)' go-backend/internal/http/handle
   note_fail "R4D-01：mutations.go 的 IsSafeRemoteAddr 守卫不足两处（create/update 各一处；前提失效，请人工复核）"
 else
   note_ok "R4D-01：请求体例文 remoteAddr 与 ai-skill 对话例目标地址均无私网地址，IsSafeRemoteAddr 守卫两处在场"
+fi
+
+# ── 30. 改密请求体对齐门（R18-A5-01 常设门）
+# auth.md 的 updatePassword 请求体例文键集合须与后端
+# changePasswordRequest 的 json tag 集合一致。旧例文只写
+# oldPassword/newPassword：oldPassword 键后端根本不读（全仓无读取
+# 点），缺 newUsername/currentPassword/confirmPassword 三个必填字
+# 段，照抄即在首检报“新用户名不能为空”，且受限 token 的唯一逃生
+# 口正是该端点。双侧机械对账，不许手抄清单。
+A5_AUTH="skills/flmx-api/references/auth.md"
+A5_HANDLER="go-backend/internal/http/handler/handler.go"
+a5_doc_keys=$(awk '/^## POST \/api\/v1\/user\/updatePassword/{f=1; next} f && /^## /{exit} f' "$A5_AUTH" \
+  | awk '/^```json/{f=1; next} f && /^```/{exit} f' \
+  | grep -o '"[A-Za-z][A-Za-z0-9]*":' | tr -d '":' | sort -u | tr '\n' ' ')
+a5_code_keys=$(awk '/^type changePasswordRequest struct \{/{f=1; next} f && /^\}/{exit} f' "$A5_HANDLER" \
+  | grep -o 'json:"[A-Za-z][A-Za-z0-9]*"' | sed 's/json:"//; s/"//' | sort -u | tr '\n' ' ')
+a5_old=$(grep -rn 'oldPassword' skills/ || true)
+if [ -z "$a5_doc_keys" ] || [ -z "$a5_code_keys" ]; then
+  note_fail "R18-A5-01：改密请求体对齐前提失效（文档键为空或后端 tag 为空，请人工复核）"
+elif [ "$a5_doc_keys" != "$a5_code_keys" ]; then
+  note_fail "R18-A5-01：auth.md updatePassword 例文键（${a5_doc_keys}) 与后端 changePasswordRequest（${a5_code_keys}) 不一致"
+elif [ -n "$a5_old" ]; then
+  note_fail "R18-A5-01：skills 内仍有 oldPassword（后端不读该键）：$(echo "$a5_old" | head -3 | tr '\n' ';')"
+else
+  note_ok "R18-A5-01：auth.md updatePassword 例文键与后端 changePasswordRequest 一致（${a5_code_keys})，skills 内无 oldPassword"
 fi
 
 echo "----"
