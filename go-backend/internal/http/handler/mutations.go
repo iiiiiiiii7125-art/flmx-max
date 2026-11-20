@@ -3346,7 +3346,11 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 		// R18-B4-01：apply 内被跳过的节点（离线/超时）不在
 		// applyErr 里——隧道已落库成功，但这些节点缺整条链/服务。
 		// 跳过须进回执警告并排期重试，不得裸成功。
-		if warnings := h.handleTunnelRuntimeSkipped(runtimeState); len(warnings) > 0 {
+		// R18-R2-F1-03：同口径——未完成证书下发的节点所涉 TLS 段
+		// 以未验证方式建成，也须进回执警告，不得静默。
+		warnings := h.handleTunnelRuntimeSkipped(runtimeState)
+		warnings = append(warnings, h.tunnelTLSLegacyWarnings(runtimeState)...)
+		if len(warnings) > 0 {
 			response.WriteJSON(w, response.OKWithWarning(nil, strings.Join(warnings, "；")))
 			return
 		}
@@ -4117,6 +4121,9 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 		// 在线节点的超时分叉在失败重推前无人认领；成功/defer 分支
 		// 的警告经下方 respondTunnelUpdateOK 闭包带出。
 		tunnelRuntimeWarnings = h.handleTunnelRuntimeSkipped(runtimeState)
+		// R18-R2-F1-03：未完成证书下发的节点所涉 TLS 段以未验证
+		// 方式建成——与跳过警告同通道进回执，不得静默。
+		tunnelRuntimeWarnings = append(tunnelRuntimeWarnings, h.tunnelTLSLegacyWarnings(runtimeState)...)
 		if applyErr != nil {
 			updateProtocol := "tls"
 			if len(runtimeState.InNodes) > 0 && strings.TrimSpace(runtimeState.InNodes[0].Protocol) != "" {
@@ -7799,6 +7806,14 @@ type tunnelCreateState struct {
 	// receipt and get a retry instead of silently diverging the
 	// data plane. Callers drain it via handleTunnelRuntimeSkipped.
 	SkippedNodes []tunnelRuntimeSkippedNode
+	// TLSLegacyNodes records the nodes whose tunnel certificates
+	// could not be distributed during this apply (never issued
+	// before, still not ready after the ensure attempt), so their
+	// TLS segments render legacy (unverified). Populated by
+	// tunnelTLSReadyForState; create/update receipts surface them
+	// via tunnelTLSLegacyWarnings (R18-R2-F1-03) instead of
+	// silently building an unverified chain.
+	TLSLegacyNodes []tunnelTLSLegacyNode
 }
 
 // tunnelRuntimeSkippedNode is one node whose tunnel runtime
@@ -9011,7 +9026,7 @@ func (h *Handler) applyTunnelChainOnNode(nodeID int64, chainData map[string]inte
 	return err
 }
 
-func (h *Handler) applyBestExitChainOrder(tunnelID, ownerNodeID int64, outNodes []chainNodeRecord, scores []bestExitCandidateScore, ipPreference string) error {
+func (h *Handler) applyBestExitChainOrder(tunnelID, ownerNodeID int64, outNodes []chainNodeRecord, scores []bestExitCandidateScore, ipPreference string, dialerGroup []int64) error {
 	if h == nil {
 		log.Printf("best_exit: invalid chain update context tunnel=%d owner=%d", tunnelID, ownerNodeID)
 		return errors.New("invalid best exit chain update context")
@@ -9037,19 +9052,63 @@ func (h *Handler) applyBestExitChainOrder(tunnelID, ownerNodeID int64, outNodes 
 			nodes[target.NodeID] = node
 		}
 	}
-	// R18-F1-01: best-exit reorder re-renders only the dialer; gate
-	// it on the current ready set (pure DB read, no distribution —
-	// the next full redeploy picks up newly-ready nodes). The dialer
-	// group is unknown here (the listener's dialers are the tunnel's
-	// full entry group, not just this owner), so the group is nil and
-	// the dialer never flips to verified on a reorder — flipping it
-	// on both-endpoints-ready alone could point a verified dialer at
-	// a still-legacy listener and break the leg.
-	tlsIDs := []int64{ownerNodeID}
-	for _, t := range targets {
-		tlsIDs = append(tlsIDs, t.NodeID)
+	// R18-R2-F1-01: the dialer group is the full set of nodes that
+	// dial these targets — the owner's own group (the entry nodes
+	// when there are no middle hops, the last hop otherwise), as
+	// passed by the caller (probeBestExitOwners). It is what the
+	// dialer gate in buildTunnelChainConfig reads: a verified
+	// dialer flips only when it, its target, and every sibling
+	// dialer are ready, mirroring the listener's flip predicate
+	// exactly. Passing nil here used to re-render every reorder
+	// as a legacy dialer and push it over the running verified
+	// chain, while the peer listener stayed verified
+	// (RequireAndVerifyClientCert) — the legacy dialer has no
+	// client certificate, so the leg broke until the next full
+	// redeploy. The group must therefore be known before anything
+	// is pushed: a TLS-family reorder with an unknown group, an
+	// unreadable ready set, or a previously-issued leg member
+	// that is no longer ready is refused outright (the prober
+	// records the failure and retries on a later round), so the
+	// running chain keeps its last-good config.
+	tunnelProtocol := h.tunnelProtocolOf(tunnelID)
+	usesTLS := isVerifiedTLSTunnelProtocol(tunnelProtocol)
+	if !usesTLS {
+		for _, target := range targets {
+			if isVerifiedTLSTunnelProtocol(effectiveSegmentProtocol(target.Protocol, tunnelProtocol)) {
+				usesTLS = true
+				break
+			}
+		}
 	}
-	chainData, err := h.buildTunnelChainConfig(tunnelID, ownerNodeID, targets, nodes, ipPreference, h.tunnelTLSReadyMap(tlsIDs), nil)
+	if usesTLS && len(dialerGroup) == 0 {
+		log.Printf("best_exit: refusing reorder without a dialer group tunnel=%d owner=%d (TLS tunnel, unknown group would render a legacy dialer)", tunnelID, ownerNodeID)
+		return fmt.Errorf("best_exit: 隧道 %d 的拨号组未知，拒绝重排（TLS 隧道无拨号组会渲出未验证拨号端）", tunnelID)
+	}
+	tlsIDs := make([]int64, 0, len(targets)+len(dialerGroup)+1)
+	seen := make(map[int64]bool, len(targets)+len(dialerGroup)+1)
+	addTLSID := func(id int64) {
+		if id > 0 && !seen[id] {
+			seen[id] = true
+			tlsIDs = append(tlsIDs, id)
+		}
+	}
+	addTLSID(ownerNodeID)
+	for _, t := range targets {
+		addTLSID(t.NodeID)
+	}
+	for _, id := range dialerGroup {
+		addTLSID(id)
+	}
+	tlsReady, err := h.tunnelTLSReadyMapErr(tlsIDs)
+	if err != nil {
+		log.Printf("best_exit: refusing reorder, ready set unreadable tunnel=%d owner=%d err=%v", tunnelID, ownerNodeID, err)
+		return fmt.Errorf("best_exit: 隧道 %d 的证书就绪态读取失败，拒绝重排: %w", tunnelID, err)
+	}
+	if usesTLS && h.bestExitReorderWouldDowngrade(ownerNodeID, targets, tunnelProtocol, dialerGroup, tlsReady) {
+		log.Printf("best_exit: refusing reorder that would downgrade a verified leg tunnel=%d owner=%d", tunnelID, ownerNodeID)
+		return fmt.Errorf("best_exit: 隧道 %d 重排会把已验证链路降级为未验证，拒绝重排（请检查节点证书状态后重新部署）", tunnelID)
+	}
+	chainData, err := h.buildTunnelChainConfig(tunnelID, ownerNodeID, targets, nodes, ipPreference, tlsReady, dialerGroup)
 	if err != nil {
 		log.Printf("best_exit: build chain failed tunnel=%d owner=%d err=%v", tunnelID, ownerNodeID, err)
 		return err

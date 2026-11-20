@@ -24,10 +24,14 @@ type fakeTunnelTLSSender struct {
 
 	issueErr        error
 	issueAckWrongFP bool
-	statusErr       error
-	statusReady     bool
-	statusCA        string
-	statusCert      string
+	// issueRejectMessage simulates an old agent answering the
+	// issue command with success=false (e.g. "未知命令类型:
+	// TunnelTLSIssue") instead of a transport error.
+	issueRejectMessage string
+	statusErr          error
+	statusReady        bool
+	statusCA           string
+	statusCert         string
 
 	lastIssueData map[string]interface{}
 }
@@ -38,6 +42,9 @@ func (f *fakeTunnelTLSSender) send(nodeID int64, cmdType string, data interface{
 		f.issueCalls++
 		if f.issueErr != nil {
 			return ws.CommandResult{}, f.issueErr
+		}
+		if f.issueRejectMessage != "" {
+			return ws.CommandResult{Success: false, Message: f.issueRejectMessage}, nil
 		}
 		m, _ := data.(map[string]interface{})
 		f.lastIssueData = m

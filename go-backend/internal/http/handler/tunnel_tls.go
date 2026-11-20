@@ -192,20 +192,54 @@ func (h *Handler) checkNodeTunnelTLSStatus(nodeID int64) (ready bool, caSHA, cer
 // agent (status + fingerprints) before it is trusted; a mismatch
 // triggers a re-issue.
 func (h *Handler) ensureNodeTunnelTLSReady(nodeID int64) bool {
+	ready, _ := h.ensureNodeTunnelTLSReadyDetailed(nodeID)
+	return ready
+}
+
+// classifyTunnelTLSIssueCause maps a certificate distribution
+// failure to the short user-facing cause the create/update receipt
+// shows (R18-R2-F1-03). Only the two causes the panel can tell
+// apart from the error are named — an offline node ("节点不在线"
+// from the command transport) and an old agent (it answers the
+// TunnelTLSIssue command with "未知命令", the same match the
+// uninstall path uses). Anything else returns "" and the receipt
+// falls back to the generic "证书下发失败".
+func classifyTunnelTLSIssueCause(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "不在线") {
+		return "节点离线"
+	}
+	if strings.Contains(msg, "未知命令") {
+		return "agent 版本过旧"
+	}
+	return ""
+}
+
+// ensureNodeTunnelTLSReadyDetailed is ensureNodeTunnelTLSReady
+// plus the failure cause for the receipt: when the node ends up
+// not ready, cause names why the distribution failed ("节点离线",
+// "agent 版本过旧", or "" when the cause cannot be told apart).
+// The cause is only meaningful for a node that was never issued
+// certificates — a previously-issued node that still fails fails
+// the deploy closed instead (see tunnelTLSReadyForState).
+func (h *Handler) ensureNodeTunnelTLSReadyDetailed(nodeID int64) (ready bool, cause string) {
 	if h == nil || h.repo == nil || nodeID <= 0 {
-		return false
+		return false, ""
 	}
 	if st, err := h.repo.GetNodeTunnelTLS(nodeID); err == nil && st != nil && st.Ready == 1 {
 		if ok, caSHA, certSHA := h.checkNodeTunnelTLSStatus(nodeID); ok && caSHA == st.CASha256 && certSHA == st.CertSha256 {
-			return true
+			return true, ""
 		}
 		log.Printf("tunnel-tls: 节点 %d 已标记就绪但 agent 回查不符（缺失/过期/指纹不匹配），重新下发", nodeID)
 	}
 	if err := h.distributeNodeTunnelTLS(nodeID); err != nil {
 		log.Printf("tunnel-tls: 节点 %d 证书下发失败，保持旧渲染（链路不受影响）: %v", nodeID, err)
-		return false
+		return false, classifyTunnelTLSIssueCause(err)
 	}
-	return true
+	return true, ""
 }
 
 // tunnelRuntimeNodeIDs returns the node IDs of a runtime node list
@@ -293,15 +327,72 @@ func (h *Handler) tunnelTLSReadyForState(state *tunnelCreateState) (map[int64]bo
 	if !usesTLS {
 		return map[int64]bool{}, nil
 	}
+	// R18-R2-F1-03: a node that was never issued certificates and
+	// still is not ready after the ensure attempt keeps the legacy
+	// rendering — record it on the state so the create/update
+	// receipt can warn the operator (name, cause, impact,
+	// remediation) instead of silently building an unverified
+	// chain. The list is reset here so a reused state cannot carry
+	// a stale warning from an earlier apply.
+	state.TLSLegacyNodes = nil
 	for _, id := range ids {
-		if h.ensureNodeTunnelTLSReady(id) {
+		ready, cause := h.ensureNodeTunnelTLSReadyDetailed(id)
+		if ready {
 			continue
 		}
 		if h.nodeTunnelTLSWasIssued(id) {
 			return map[int64]bool{}, fmt.Errorf("节点 %d 的隧道证书曾已下发、现仍缺失且重新下发失败，拒绝以未验证方式建链（R18-F1-01 fail-closed）：请检查节点在线状态与 agent 版本后重试", id)
 		}
+		state.TLSLegacyNodes = append(state.TLSLegacyNodes, tunnelTLSLegacyNode{NodeID: id, Cause: cause})
 	}
 	return h.tunnelTLSReadyMap(ids), nil
+}
+
+// tunnelTLSLegacyNode is one node whose tunnel certificates could
+// not be distributed during an apply (never issued before, still
+// not ready after the ensure attempt). Its TLS segments render
+// legacy (unverified). Cause is the short classified reason from
+// ensureNodeTunnelTLSReadyDetailed ("" when unclassified).
+type tunnelTLSLegacyNode struct {
+	NodeID int64
+	Cause  string
+}
+
+// tunnelTLSLegacyWarnings renders one receipt warning per node in
+// state.TLSLegacyNodes (R18-R2-F1-03): the tunnel is built, but
+// the segments touching that node render legacy (unverified TLS —
+// no mutual certificate authentication). Each line names the node,
+// the cause when known, the impact, and the remediation (bring the
+// node online or upgrade the agent, then redeploy to flip the
+// segments to verified). Non-TLS tunnels and fully-ready tunnels
+// record no legacy nodes, so no warning is produced.
+func (h *Handler) tunnelTLSLegacyWarnings(state *tunnelCreateState) []string {
+	if state == nil || len(state.TLSLegacyNodes) == 0 {
+		return nil
+	}
+	warnings := make([]string, 0, len(state.TLSLegacyNodes))
+	for _, n := range state.TLSLegacyNodes {
+		cause := n.Cause
+		if strings.TrimSpace(cause) == "" {
+			cause = "证书下发失败"
+		}
+		warnings = append(warnings, fmt.Sprintf("节点 %s %s：与该节点相关的 TLS 段以未验证方式建成（无双向证书认证），节点恢复在线或升级 agent 后重新部署即可转为验证", nodeDisplayName(state.Nodes[n.NodeID]), cause))
+	}
+	return warnings
+}
+
+// tunnelTLSReadyMapErr reads the ready set for a batch of nodes in
+// one query. Unlike tunnelTLSReadyMap it reports a DB error to the
+// caller instead of failing open to an empty set: a caller that is
+// about to push a re-rendered chain (best-exit reorder) must be
+// able to tell "no node is ready" apart from "the read failed" —
+// the latter must refuse the push, or a DB blip would downgrade a
+// verified leg to a legacy dialer against a verified listener.
+func (h *Handler) tunnelTLSReadyMapErr(nodeIDs []int64) (map[int64]bool, error) {
+	if h == nil || h.repo == nil || len(nodeIDs) == 0 {
+		return map[int64]bool{}, nil
+	}
+	return h.repo.ListNodeTunnelTLSReady(nodeIDs)
 }
 
 // tunnelTLSReadyMap reads the ready set for a batch of nodes in one
@@ -309,13 +400,53 @@ func (h *Handler) tunnelTLSReadyForState(state *tunnelCreateState) (map[int64]bo
 // rendering) and logs — a DB blip must never flip a segment to
 // verified, and must never break a deploy.
 func (h *Handler) tunnelTLSReadyMap(nodeIDs []int64) map[int64]bool {
-	if h == nil || h.repo == nil || len(nodeIDs) == 0 {
-		return map[int64]bool{}
-	}
-	ready, err := h.repo.ListNodeTunnelTLSReady(nodeIDs)
+	ready, err := h.tunnelTLSReadyMapErr(nodeIDs)
 	if err != nil {
 		log.Printf("tunnel-tls: 读取节点证书就绪态失败，保持旧渲染: %v", err)
 		return map[int64]bool{}
 	}
 	return ready
+}
+
+// bestExitReorderWouldDowngrade reports whether rendering a
+// best-exit reorder with the current ready set could downgrade a
+// leg that is currently verified. A leg owner→target is currently
+// verified only if, at deploy time, the owner, the target, and
+// every sibling dialer of that target were all ready — which
+// implies every one of them was issued certificates (a Ready=1 row
+// exists only after an issue ack). So a leg is at risk exactly
+// when all of its gate dependencies were previously issued but any
+// of them is not ready now: the re-render would come out legacy
+// while the peer listener is still verified, and the legacy dialer
+// would be rejected for lack of a client certificate. A leg with a
+// never-issued member was legacy at deploy (its listener never
+// flipped), so rendering it legacy again is consistent and safe.
+func (h *Handler) bestExitReorderWouldDowngrade(ownerNodeID int64, targets []tunnelRuntimeNode, tunnelProtocol string, dialerGroup []int64, tlsReady map[int64]bool) bool {
+	if h == nil || len(targets) == 0 {
+		return false
+	}
+	for _, target := range targets {
+		if !isVerifiedTLSTunnelProtocol(effectiveSegmentProtocol(target.Protocol, tunnelProtocol)) {
+			continue
+		}
+		deps := make([]int64, 0, len(dialerGroup)+2)
+		deps = append(deps, ownerNodeID, target.NodeID)
+		deps = append(deps, dialerGroup...)
+		allIssued := true
+		for _, id := range deps {
+			if !h.nodeTunnelTLSWasIssued(id) {
+				allIssued = false
+				break
+			}
+		}
+		if !allIssued {
+			continue
+		}
+		for _, id := range deps {
+			if !tlsReady[id] {
+				return true
+			}
+		}
+	}
+	return false
 }
