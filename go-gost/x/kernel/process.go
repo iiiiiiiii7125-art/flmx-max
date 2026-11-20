@@ -296,10 +296,13 @@ func (p *process) signal(sig syscall.Signal) {
 }
 
 // sighup asks the process to reload its configuration in place.
-// sing-box re-reads its config file on SIGHUP without dropping
-// established connections (C-(4)); other kernels ignore it or
-// treat it as a restart signal, so only the manager calls this for
-// sing-box types. A no-op when the process is not running.
+// A SIGHUP reload only spares a process restart (same PID, no
+// supervisor relaunch, no startup cost); it does NOT preserve
+// established connections — sing-box drops every user's sessions
+// on reload (C-(4) live proof, 2026-11-15 test machine). Other
+// kernels ignore it or treat it as a restart signal, so only the
+// manager calls this for sing-box types. A no-op when the process
+// is not running.
 func (p *process) sighup() {
 	p.signal(syscall.SIGHUP)
 }
