@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"go-backend/internal/auth"
+	"go-backend/internal/config"
 	"go-backend/internal/health"
 	"go-backend/internal/http/middleware"
 	"go-backend/internal/http/response"
@@ -58,8 +59,15 @@ type Handler struct {
 	// reconcile 轮。深度 >0 时 applyKernelWithMode 抑制 settle。
 	importTailBatchDepth atomic.Int32
 	wsServer             *ws.Server
-	metrics              *metrics.IngestionService
-	healthCheck          *health.Checker
+	// R18-F1-01（D-3）：面板分发的隧道 TLS 证书。tunnelTLSCA 是
+	// 每安装唯一的 CA（惰性加载，见 tunnelTLSAuthority；绝不静默
+	// 重建）；tunnelTLSCommandSender 是节点命令发送缝（默认走
+	// sendNodeCommand，测试可注入假发送方）。
+	tunnelTLSMu            sync.Mutex
+	tunnelTLSCA            *config.TunnelTLSCA
+	tunnelTLSCommandSender func(nodeID int64, cmdType string, data interface{}, timeout time.Duration) (ws.CommandResult, error)
+	metrics                *metrics.IngestionService
+	healthCheck            *health.Checker
 	// R5-B5 D14: 下沉到 manager 层的 per-node 串行化包装。
 	// 所有触碰节点 nft 状态的方法必须经此，不依赖调用方自觉。
 	nftablesManager *serializedNftManager
