@@ -195,7 +195,12 @@ func (h *Handler) syncRemoteSource(ctx context.Context, src *model.RemoteSource,
 			log.Printf("remote source %d sync failed (storage): %v", src.ID, err)
 			lastErr = "内部错误，请稍后重试"
 		}
-		_ = h.repo.UpdateRemoteSourceStatus(src.ID, map[string]interface{}{"last_fetch": now, "last_error": truncate(lastErr, 500)})
+		// R18-F3-01: a failed sync must not advance last_fetch — only
+		// a success stamps "last fetched". Writing it here silently
+		// postponed the next automatic retry by a whole IntervalHours,
+		// because remoteSourceDue gates on LastFetch alone. The error
+		// is still recorded; the next 10-minute loop tick retries.
+		_ = h.repo.UpdateRemoteSourceStatus(src.ID, map[string]interface{}{"last_error": truncate(lastErr, 500)})
 		return res, err
 	}
 

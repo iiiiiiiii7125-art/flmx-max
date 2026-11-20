@@ -167,6 +167,64 @@ func TestSubscriptionTemplateRefreshTwoStates(t *testing.T) {
 	}
 }
 
+// TestSubscriptionTemplateRefreshFailureKeepsLastFetch (R18-F3-01): a
+// failed auto-refresh must not advance LastFetch — only a success
+// stamps "last fetched". Advancing it on failure silently postpones
+// the next automatic retry by a whole interval (24h for templates),
+// because refreshDueTemplates gates on LastFetch alone.
+func TestSubscriptionTemplateRefreshFailureKeepsLastFetch(t *testing.T) {
+	t.Setenv("FLMX_FETCH_PRIVATE_ALLOWLIST", "127.0.0.0/8")
+	h, r := tplTestHandler(t)
+
+	good := tplTestClash
+	var serveErr bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if serveErr {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(good))
+	}))
+	defer srv.Close()
+
+	now := time.Now().UnixMilli()
+	// Last successful fetch was 25h ago: the template is due.
+	tpl := &model.SubscriptionTemplate{Name: "远程", Kind: "clash", SourceURL: srv.URL,
+		Content: tplTestClash, LastFetch: now - 25*60*60*1000,
+		CreatedTime: now, UpdatedTime: now}
+	if err := r.SaveSubscriptionTemplate(tpl); err != nil {
+		t.Fatal(err)
+	}
+	lastFetchBefore := tpl.LastFetch
+
+	// Failure (HTTP 500): error recorded, content kept, LastFetch untouched.
+	serveErr = true
+	if err := h.refreshTemplate(context.Background(), tpl); err == nil {
+		t.Fatal("refresh of a broken source succeeded")
+	}
+	got, _ := r.GetSubscriptionTemplate(tpl.ID)
+	if got.LastFetch != lastFetchBefore {
+		t.Fatalf("failed refresh advanced LastFetch %d -> %d, want unchanged", lastFetchBefore, got.LastFetch)
+	}
+	if got.LastError == "" || got.Content != tplTestClash {
+		t.Fatalf("after failed refresh: %+v", got)
+	}
+
+	// The next 10-minute loop tick must retry instead of waiting
+	// another 24h: with the source healthy again, refreshDueTemplates
+	// at +10min re-fetches and lands the new content.
+	serveErr = false
+	good = "proxies: []\nproxy-groups:\n  - {name: 选择2, type: select, include-all: true}\nrules: [MATCH，选择2]\n"
+	h.refreshDueTemplates(context.Background(), time.UnixMilli(now).Add(10*time.Minute))
+	got, _ = r.GetSubscriptionTemplate(tpl.ID)
+	if got.Content != good {
+		t.Fatalf("due template was not retried on the next tick: content %q, LastFetch %d", got.Content, got.LastFetch)
+	}
+	if got.LastFetch == lastFetchBefore {
+		t.Fatalf("successful retry did not advance LastFetch")
+	}
+}
+
 func tplJSONStr(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
