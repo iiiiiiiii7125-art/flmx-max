@@ -2,6 +2,7 @@ package udp
 
 import (
 	"context"
+	"fmt"
 	"net"
 
 	"github.com/go-gost/core/dialer"
@@ -44,7 +45,17 @@ func (d *udpDialer) Dial(ctx context.Context, addr string, opts ...dialer.DialOp
 	if err != nil {
 		return nil, err
 	}
+	// The underlying dialer may return a non-*net.UDPConn conn: with a
+	// multiplex front node in the route, chain/route.go returns a
+	// *relay.udpConn or a *packetConn instead. An unchecked assertion
+	// panics here and kills the whole chain leg on every UDP dial
+	// (R18-D4-02); fail closed with the conn closed instead.
+	uc, ok := c.(*net.UDPConn)
+	if !ok {
+		c.Close()
+		return nil, fmt.Errorf("udp dialer: unexpected conn type %T", c)
+	}
 	return &conn{
-		UDPConn: c.(*net.UDPConn),
+		UDPConn: uc,
 	}, nil
 }
