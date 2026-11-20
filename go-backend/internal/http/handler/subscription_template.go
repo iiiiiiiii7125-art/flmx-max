@@ -311,6 +311,7 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
+	req.SourceURL = strings.TrimSpace(req.SourceURL)
 	if req.Name == "" || len([]rune(req.Name)) > 100 {
 		response.WriteJSON(w, response.ErrDefault("请填写名称（最多 100 个字）"))
 		return
@@ -332,12 +333,23 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	content, err := req.content(r.Context(), h)
-	if err != nil {
-		// RAW291 Type C：同 subscriptionTemplateCheck 的 content()
-		// 口径，只产 errText 固定校验文案，原样回。
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
-		return
+	// R18-B6-04：同址更新只改元数据时不再重下载——上游挂了也能改
+	// 名，且不静默拉入远端内容变化；换址/新建仍下载；CheckTemplate
+	// 校验照常对（复用的）内容跑。LastFetch 只在真正下载时重打。
+	var content string
+	var err error
+	downloaded := false
+	if req.ID > 0 && req.Builder == nil && req.SourceURL != "" && req.SourceURL == t.SourceURL {
+		content = t.Content
+	} else {
+		content, err = req.content(r.Context(), h)
+		if err != nil {
+			// RAW291 Type C：同 subscriptionTemplateCheck 的 content()
+			// 口径，只产 errText 固定校验文案，原样回。
+			response.WriteJSON(w, response.ErrDefault(err.Error()))
+			return
+		}
+		downloaded = req.Builder == nil && req.SourceURL != ""
 	}
 	if _, err := kernel.CheckTemplate(req.Kind, content, nil); err != nil {
 		// RAW291 Type C：kernel.CheckTemplate 校验错误，文本源于
@@ -363,7 +375,7 @@ func (h *Handler) subscriptionTemplateSave(w http.ResponseWriter, r *http.Reques
 		t.BuilderConfig = string(raw)
 	}
 	t.LastError = ""
-	if t.SourceURL != "" {
+	if downloaded {
 		t.LastFetch = now
 	}
 	if err := h.repo.SaveSubscriptionTemplate(t); err != nil {
