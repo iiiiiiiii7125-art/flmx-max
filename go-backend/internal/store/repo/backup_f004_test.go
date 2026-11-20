@@ -228,6 +228,7 @@ func TestBackupTableCoverage(t *testing.T) {
 		"flow_legacy_batch_dedupe":  "旧版无序号流量批次去重台账，24 小时保留的运行时簿记（F2-03）",
 		"schema_version":            "迁移簿记",
 		"schema_migration":          "迁移簿记",
+		"node_tunnel_tls":           "隧道证书分发就绪态缓存（R18-F1-01 D-3）：派生状态，无用户数据；随备份恢复会复活已失效的就绪标记，下发时按节点重新分发+验证重建",
 	}
 
 	var tables []string

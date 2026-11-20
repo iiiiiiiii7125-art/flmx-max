@@ -1,6 +1,10 @@
 package repo
 
-import "testing"
+import (
+	"testing"
+
+	"go-backend/internal/store/model"
+)
 
 // TestNodeTunnelTLSReadyRoundTrip pins the R18-F1-01 readiness store:
 // mark → get → batch list → clear → get. A missing node reads as
@@ -56,5 +60,39 @@ func TestNodeTunnelTLSReadyRoundTrip(t *testing.T) {
 	ready, _ = r.ListNodeTunnelTLSReady([]int64{7})
 	if ready[7] {
 		t.Fatal("cleared node must not read as ready")
+	}
+}
+
+// TestListNodeTunnelTLSReadyChunksLargeSets (R18-F1-01 C3): the ready
+// batch read must chunk its IN list (inListChunkSize=500). A single
+// IN ? over 33000 ids exceeds SQLite's 32766-variable limit and
+// fails the whole query, so the unchunked form goes red here.
+func TestListNodeTunnelTLSReadyChunksLargeSets(t *testing.T) {
+	r, err := Open(t.TempDir() + "/tunnel-tls.db")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+
+	const n = 33000
+	rows := make([]model.NodeTunnelTLS, 0, n)
+	ids := make([]int64, 0, n)
+	for i := int64(1); i <= n; i++ {
+		rows = append(rows, model.NodeTunnelTLS{
+			NodeID: i, CASha256: "ca", CertSha256: "cert",
+			ServerName: "node.flmx.internal", Ready: 1,
+			IssuedAt: 1000, VerifiedAt: 1000,
+		})
+		ids = append(ids, i)
+	}
+	if err := r.DB().CreateInBatches(rows, 500).Error; err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+	ready, err := r.ListNodeTunnelTLSReady(ids)
+	if err != nil {
+		t.Fatalf("list ready over %d ids: %v", n, err)
+	}
+	if len(ready) != n {
+		t.Fatalf("ready set size = %d, want %d", len(ready), n)
 	}
 }

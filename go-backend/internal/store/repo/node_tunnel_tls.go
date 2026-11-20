@@ -87,8 +87,11 @@ func (r *Repository) ClearNodeTunnelTLSReady(nodeID int64) error {
 
 // ListNodeTunnelTLSReady returns the ready set for a batch of nodes
 // (missing rows and Ready=0 both read as false). It is the render
-// gate's single read per deploy: one indexed query, no per-node
-// round trips.
+// gate's single read per deploy: one indexed query per chunk, no
+// per-node round trips. The id list is chunked (inListChunkSize):
+// a single IN ? over an unbounded set would exceed SQLite's
+// 32766-variable limit (R3 K8: a single entity's subset is not a
+// bounded exemption).
 func (r *Repository) ListNodeTunnelTLSReady(nodeIDs []int64) (map[int64]bool, error) {
 	out := make(map[int64]bool, len(nodeIDs))
 	if r == nil || r.db == nil {
@@ -98,8 +101,12 @@ func (r *Repository) ListNodeTunnelTLSReady(nodeIDs []int64) (map[int64]bool, er
 		return out, nil
 	}
 	var rows []model.NodeTunnelTLS
-	if err := r.db.Where("node_id IN ? AND ready = 1", nodeIDs).Find(&rows).Error; err != nil {
-		return out, err
+	for _, chunk := range chunkInt64IDs(nodeIDs) {
+		var chunkRows []model.NodeTunnelTLS
+		if err := r.db.Where("node_id IN ? AND ready = 1", chunk).Find(&chunkRows).Error; err != nil {
+			return out, err
+		}
+		rows = append(rows, chunkRows...)
 	}
 	for _, row := range rows {
 		out[row.NodeID] = true
