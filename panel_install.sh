@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.11"
+SCRIPT_VERSION="20261120.12"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -1808,6 +1808,20 @@ setup_subscription_front_domain() {
   if ! cat >> "$caddyfile" <<EOF
 $SUB_DOMAIN {
     reverse_proxy 127.0.0.1:${FRONTEND_PORT:-6366}
+    # R18-A2-12：与菜单 5 站点块同形（§9.6）——订阅前置域名反代
+    # 到同一前端，面板 WS 握手可经该域名到达，secret 查询参数
+    # 须同样从访问日志中删除（老版本 Caddy 会在下方 validate
+    # 环节明确失败并回滚，不会静默带病生效）。
+    log {
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    delete secret
+                }
+            }
+        }
+    }
 }
 EOF
   then

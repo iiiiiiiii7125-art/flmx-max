@@ -956,11 +956,12 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log() (
   grep -q 'request>uri query' "$CADDYFILE_PATH" || fail "§9.6: the filter must target the request URI query string"
   grep -q 'delete secret' "$CADDYFILE_PATH" || fail "§9.6: the filter must delete the secret query parameter from the access log"
 
-  # 菜单 6 随后追加订阅前置块：不得被误加（其 token 在路径段），
-  # 全文件 delete secret 仍只出现一次（面板块内）。
+  # R18-A2-12：菜单 6 随后追加订阅前置块——与菜单 5 同形，订阅
+  # 前置域名反代到同一前端，面板 WS 握手可经该域名到达，故同
+  # 样带 secret 过滤；全文件 delete secret 应出现两次。
   setup_subscription_front_domain <<< "sub.example.com" >/dev/null || \
     fail "§9.6: the menu 6 run should succeed"
-  assert_equals "1" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "§9.6: only the panel block may carry the secret filter; the menu 6 block must not gain one"
+  assert_equals "2" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "R18-A2-12: both the panel block and the menu 6 block must carry the secret filter"
 )
 
 # R18-A2-03：迁移的 gost.db.bak 必须是 0600 的全库副本——旧实现
