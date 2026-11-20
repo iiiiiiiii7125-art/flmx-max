@@ -5308,6 +5308,52 @@ EOF
   unset -f '['
 )
 
+# OPEN-14（与 R18-A1-01 同根的 v1 偏好）：check_docker 在 v2 与 v1
+# 都在场时必须选 docker compose v2；v2 不可用时才退到 docker-compose
+# v1；两者皆无时仍以点名文案失败。docker/docker-compose 皆为函数
+# 桩（command -v 能检出函数），daemon 探活恒过。
+test_check_docker_prefers_compose_v2_over_v1() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  docker() {
+    if [[ "${1:-}" == "compose" ]]; then
+      [[ "${DOCKER_V2:-1}" == "1" ]] && return 0 || return 1
+    fi
+    return 0
+  }
+  docker-compose() { return 0; }
+
+  local out_file rc
+  out_file=$(mktemp)
+
+  # 形态一：v2 与 v1 都在场 → 选 v2。
+  DOCKER_V2="1"
+  DOCKER_CMD=""
+  rc="0"
+  check_docker >"$out_file" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "OPEN-14: check_docker must succeed when both compose forms are present"
+  assert_equals "docker compose" "$DOCKER_CMD" "OPEN-14: check_docker must prefer docker compose v2 over docker-compose v1"
+  grep -q '检测到 Docker 命令：docker compose' "$out_file" || \
+    fail "OPEN-14: check_docker must report the v2 command it selected"
+
+  # 形态二：v2 不可用、v1 在场 → 退到 v1。
+  DOCKER_V2="0"
+  DOCKER_CMD=""
+  rc="0"
+  check_docker >"$out_file" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "OPEN-14: check_docker must succeed with v1 when v2 is unavailable"
+  assert_equals "docker-compose" "$DOCKER_CMD" "OPEN-14: check_docker must fall back to docker-compose v1 when v2 is unavailable"
+
+  # 形态三：docker 在场、两种 compose 形态皆无 → 失败并点名。
+  unset -f docker-compose
+  DOCKER_V2="0"
+  rc="0"
+  ( check_docker >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "OPEN-14: check_docker must fail when docker has no compose form at all"
+  rm -f "$out_file"
+)
+
 # R7-02（静态半）：钉住启动接线与复检探活，防文本回退——helper
 # 本体必须含 systemd 与 OpenRC 两种启动形态；install_docker 本
 # 体必须在官方路径与兜底各支共 5 处以上调用 start_docker_
@@ -6740,6 +6786,7 @@ test_install_docker_alpine_prefers_docker_cli_compose
 test_install_docker_alpine_compose_fallback_order
 test_install_docker_fallback_starts_daemon_all_distros
 test_check_docker_requires_reachable_daemon_on_install_path
+test_check_docker_prefers_compose_v2_over_v1
 test_install_docker_daemon_start_wiring_static
 test_download_verified_fail_closed_edges
 test_verify_downloaded_binary_retries_transient_checksum_failure

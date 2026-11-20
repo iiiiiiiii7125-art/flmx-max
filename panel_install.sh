@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.01"
+SCRIPT_VERSION="20261120.02"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -760,15 +760,16 @@ get_docker_compose_url() {
 # Docker 就不可能有容器化的面板部署，绝不为这些操作反向安装 Docker。
 check_docker() {
   local noinstall="${1:-}"
-  if command -v docker-compose &> /dev/null; then
+  # OPEN-14（与 R18-A1-01 同根的 v1 偏好）：docker compose v2（插件
+  # 形态）优先于已 EOL 的 docker-compose v1——两者都在场时旧实现先
+  # 认 v1；v1 只作 v2 不可用时的回退（v2 插件缺失但 v1 二进制在场）。
+  if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+    DOCKER_CMD="docker compose"
+  elif command -v docker-compose &> /dev/null; then
     DOCKER_CMD="docker-compose"
   elif command -v docker &> /dev/null; then
-    if docker compose version &> /dev/null; then
-      DOCKER_CMD="docker compose"
-    else
-      echo "错误：检测到 docker，但不支持 'docker compose' 命令。请安装 docker-compose 或更新 docker 版本。"
-      exit 1
-    fi
+    echo "错误：检测到 docker，但不支持 'docker compose' 命令。请安装 docker-compose 或更新 docker 版本。"
+    exit 1
   elif [[ "$noinstall" == "noinstall" ]]; then
     return 1
   else
@@ -897,8 +898,8 @@ install_docker() {
   # 条命令失败，连同支的引擎本体也装不上，兜底必然失败。现口径：
   # Debian/Ubuntu 用发行源内的 docker.io＋docker-compose-v2（旧发
   # 行版只有 v1 包名 docker-compose 时退到它；两个包名提供的都是
-  # docker-compose 二进制，check_docker 先认 docker-compose、再认
-  # docker compose 子命令，两形态都可被检出）；RHEL 系默认源既无
+  # docker-compose 二进制，check_docker 先认 docker compose 子命令、
+  # 再认 docker-compose（OPEN-14），两形态都可被检出）；RHEL 系默认源既无
   # 引擎也无插件，先落 Docker 官方 yum 源（repo 文件自带
   # gpgcheck=1、包经 Docker 发布密钥验签）再装官方包名。装后还须
   # 启动守护进程才算装好，见 start_docker_daemon（R7-02）。
