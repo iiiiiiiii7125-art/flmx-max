@@ -4984,6 +4984,98 @@ test_install_docker_fallback_package_names_exist_in_repos() (
     fail "R6-01: RHEL fallback must add the Docker official repo before using official package names"
 )
 
+# R18-A1-01（静态半）：Alpine 分支必须先试 docker-cli-compose（现行
+# Alpine 唯一在架的 compose 包名）、再以旧包名 docker-compose 兜底。
+# 旧写法只写 docker-compose：apk 事务性安装整条失败、连 docker 本
+# 体都装不上，install_docker 在 Alpine 上整条死路。
+test_install_docker_alpine_prefers_docker_cli_compose() (
+  set -euo pipefail
+  local body alpine_line
+  body=$(awk '/^install_docker\(\) \{/,/^\}/' "$ROOT_DIR/panel_install.sh")
+  [[ -n "$body" ]] || fail "R18-A1-01: install_docker body must be extractable"
+  alpine_line=$(grep -F 'apk add' <<< "$body" | head -n 1 || true)
+  [[ -n "$alpine_line" ]] || fail "R18-A1-01: install_docker must have an Alpine apk branch"
+  grep -q 'docker-cli-compose' <<< "$alpine_line" || \
+    fail "R18-A1-01: Alpine branch must try docker-cli-compose first (docker-compose package no longer exists on current Alpine)"
+  grep -q 'docker-compose' <<< "$alpine_line" || \
+    fail "R18-A1-01: Alpine branch must keep docker-compose as a fallback for old Alpine releases"
+  # 新包名必须出现在旧包名之前（优先顺序即调用顺序）。
+  case "$alpine_line" in
+    *docker-cli-compose*docker-compose*) ;;
+    *) fail "R18-A1-01: docker-cli-compose must precede the docker-compose fallback on the Alpine line" ;;
+  esac
+)
+
+# R18-A1-01（行为半）：Alpine 上两幕都须装成功——①现行 Alpine（旧
+# docker-compose 包已退场：apk 遇裸 docker-compose 即失败）首选
+# docker-cli-compose 一次成功；②旧 Alpine（无 docker-cli-compose）
+# 首选失败后退到 docker-compose 仍成功。发行版分支按 `[` 桩定
+# Alpine；守护进程走 OpenRC 桩。
+test_install_docker_alpine_compose_fallback_order() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work apk_log
+  work=$(mktemp -d)
+  apk_log="$work/apk.log"
+  export APK_LOG="$apk_log"
+  curl() {
+    local out="" prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      prev="$a"
+    done
+    if [[ -n "$out" ]]; then printf '#!/bin/sh\nexit 0\n' > "$out"; fi
+    return 0
+  }
+  apk() {
+    printf 'apk %s\n' "$*" >> "$APK_LOG"
+    local a
+    for a in "$@"; do
+      if [[ "$a" == "${APK_FAIL_TOKEN:-__none__}" ]]; then return 1; fi
+    done
+    return 0
+  }
+  rc-update() { printf 'rc-update %s\n' "$*" >> "$APK_LOG"; return 0; }
+  rc-service() { printf 'rc-service %s\n' "$*" >> "$APK_LOG"; return 0; }
+  [() {
+    if [[ "${1:-}" == "-f" ]]; then
+      case "${2:-}" in
+        /etc/debian_version) return 1 ;;
+        /etc/redhat-release) return 1 ;;
+        /etc/alpine-release) return 0 ;;
+      esac
+    fi
+    builtin test "${@:1:$#-1}"
+  }
+
+  local rc
+  # 幕一：现行 Alpine，裸 docker-compose 不可得。
+  APK_FAIL_TOKEN="docker-compose"
+  : > "$apk_log"
+  rc="0"
+  ( install_docker >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R18-A1-01: install_docker must succeed on current Alpine via docker-cli-compose"
+  grep -q 'apk add --no-cache docker docker-cli-compose' "$apk_log" || \
+    fail "R18-A1-01: current-Alpine install must request docker-cli-compose"
+  grep -q '^rc-service docker start$' "$apk_log" || \
+    fail "R18-A1-01: Alpine fallback must start the daemon after install"
+
+  # 幕二：旧 Alpine，无 docker-cli-compose，退到 docker-compose。
+  APK_FAIL_TOKEN="docker-cli-compose"
+  : > "$apk_log"
+  rc="0"
+  ( install_docker >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R18-A1-01: install_docker must succeed on old Alpine via the docker-compose fallback"
+  [[ "$(grep -c '^apk add' "$apk_log")" -eq 2 ]] || \
+    fail "R18-A1-01: old-Alpine install must try docker-cli-compose first, then fall back (expected 2 apk calls)"
+  grep -q 'apk add --no-cache docker docker-compose$' "$apk_log" || \
+    fail "R18-A1-01: old-Alpine fallback must request bare docker-compose second"
+  grep -q '^rc-service docker start$' "$apk_log" || \
+    fail "R18-A1-01: Alpine fallback must start the daemon after install"
+  unset -f '['
+)
+
 # R7-02（行为半）：兜底各支装后必须启动守护进程——包管理器与服务
 # 管理器桩共用一份保序 argv 日志，逐发行版断言：装包成功后、返回
 # 0 前出现本发行版的启动动作（systemd 支 systemctl enable --now；
@@ -6644,6 +6736,8 @@ test_install_panel_prints_generated_initial_admin_password
 test_install_docker_rejects_unverified_script
 test_install_docker_fallback_succeeds_with_working_package_managers
 test_install_docker_fallback_package_names_exist_in_repos
+test_install_docker_alpine_prefers_docker_cli_compose
+test_install_docker_alpine_compose_fallback_order
 test_install_docker_fallback_starts_daemon_all_distros
 test_check_docker_requires_reachable_daemon_on_install_path
 test_install_docker_daemon_start_wiring_static

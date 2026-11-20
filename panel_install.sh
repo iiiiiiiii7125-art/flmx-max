@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261119.01"
+SCRIPT_VERSION="20261120.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -915,7 +915,10 @@ install_docker() {
         yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin && { start_docker_daemon; return 0; }
     fi
   elif [ -f /etc/alpine-release ]; then
-    apk add --no-cache docker docker-compose && { start_docker_daemon openrc; return 0; }
+    # R18-A1-01: 现行 Alpine 已无 docker-compose（v1）包，旧写法
+    # apk 整条事务失败、连 docker 本体都装不上。docker-cli-compose
+    #（v2 插件，自 Alpine 3.15 起在 community）优先，旧包名兜底。
+    { apk add --no-cache docker docker-cli-compose || apk add --no-cache docker docker-compose; } && { start_docker_daemon openrc; return 0; }
   fi
 
   return 1
