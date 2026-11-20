@@ -47,6 +47,9 @@
 # R18-A5-01 扩围：变体 25 覆盖 §30（改密请求体对齐门），auth.md
 # 的 updatePassword 例文改回 oldPassword 旧形必须被 §30 抓红并
 # 点名 R18-A5-01。
+# R18-A2-02 扩围：变体 26 覆盖 §31（迁移镜像 digest 钉选门），
+# panel_install.sh 任一 docker run 镜像回退为字面 alpine 必须被
+# §31 抓红并点名 R18-A2-02。
 # FIX-GATE-CALIB 改钉（R2-GATE-02）：上文 55/153、59/149 均为历史
 # 标定记录（出处见各重标定提交），不再是变体 8 的写死锚点——变体
 # 8 改为运行时从镜像内 ci-build.yml 机械读现行标记值（其后标记又
@@ -383,5 +386,16 @@ fi
 grep -q "R18-A5-01" "$TMP/v25.log" && echo "OK: variant 25 caught and named" || {
   echo "FAIL: variant 25 caught but the drift was not named"; sed 's/^/    /' "$TMP/v25.log"; exit 1; }
 cp "$ROOT/skills/flmx-api/references/auth.md" "$MIR/skills/flmx-api/references/auth.md"
+
+echo "== variant 26: migration image unpins back to bare alpine must FAIL and name it (§31, R18-A2-02) =="
+sed -i '0,/"\$FLMX_MIGRATE_ALPINE_IMAGE"/s//alpine/' "$MIR/panel_install.sh"
+grep -q 'docker run.*alpine sh' "$MIR/panel_install.sh" || {
+  echo "FAIL: variant 26 mutation did not land (alpine image anchor drifted)"; exit 1; }
+if run_gate "$TMP/v26.log"; then
+  echo "FAIL: variant 26 was not caught"; exit 1
+fi
+grep -q "R18-A2-02" "$TMP/v26.log" && echo "OK: variant 26 caught and named" || {
+  echo "FAIL: variant 26 caught but the drift was not named"; sed 's/^/    /' "$TMP/v26.log"; exit 1; }
+cp "$ROOT/panel_install.sh" "$MIR/panel_install.sh"
 
 echo "SELFTEST PASS"

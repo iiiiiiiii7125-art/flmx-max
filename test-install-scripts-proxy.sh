@@ -963,6 +963,38 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log() (
   assert_equals "1" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "§9.6: only the panel block may carry the secret filter; the menu 6 block must not gain one"
 )
 
+# R18-A2-02：迁移的 6 处 docker run 镜像必须钉到 digest——tag 可变
+# 时未钉选的 alpine:latest / dimitri/pgloader:latest 会让被污染
+# 的镜像在迁移容器内读/改全库与 .env 密钥。两镜像集中为顶部常量，
+# 6 处只引用常量；旧实现字面写 alpine / pgloader:latest，本例必红。
+test_panel_migrate_images_pinned_to_digest() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  # 常量本身必须含 tag+digest，且与 registry 核验过的取值逐字一致。
+  assert_equals "alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f" \
+    "$FLMX_MIGRATE_ALPINE_IMAGE" "R18-A2-02: the alpine migration image must be pinned to the verified digest"
+  assert_equals "dimitri/pgloader:v3.6.7@sha256:d29ea680cf1aaaf7269690a922dd69167567b91b35e9c48a0b54a99cef96c0ed" \
+    "$FLMX_MIGRATE_PGLOADER_IMAGE" "R18-A2-02: the pgloader migration image must be pinned to the verified digest"
+
+  # 6 处 docker run 逐行核：每行须引用两常量之一（常量自带 digest），
+  # 不得出现字面未钉选镜像名。
+  local run_lines bad
+  run_lines=$(grep -n 'docker run -' "$ROOT_DIR/panel_install.sh")
+  [[ -n "$run_lines" ]] || fail "R18-A2-02: no docker run lines found in panel_install.sh (premise failure)"
+  bad=$(printf '%s\n' "$run_lines" | grep -v 'FLMX_MIGRATE_\(ALPINE\|PGLOADER\)_IMAGE' || true)
+  [[ -z "$bad" ]] || fail "R18-A2-02: docker run lines must use the pinned image constants, unpinned: $bad"
+  # 计数：迁移 docker run 恰 6 处，新增调用点而不钉选即红（计数漂移
+  # 本身也是信号，改计数时须同步钉选新调用点）。
+  assert_equals "6" "$(printf '%s\n' "$run_lines" | grep -c .)" "R18-A2-02: panel_install.sh must have exactly 6 docker run call sites"
+  if printf '%s\n' "$run_lines" | grep -q 'pgloader:latest'; then
+    fail "R18-A2-02: dimitri/pgloader:latest must not appear as a docker run image"
+  fi
+  if printf '%s\n' "$run_lines" | grep -q ' alpine '; then
+    fail "R18-A2-02: bare 'alpine' must not appear as a docker run image"
+  fi
+)
+
 # R18-A2-01：前后端端口相同必须在三处都被拒绝——安装输入
 # （get_config_params）、更新 .env（validate_panel_update_
 # environment）、安装预检（panel_preflight_install_conflicts，
@@ -7665,7 +7697,7 @@ CREATE TABLE peer_share_resource (id INTEGER PRIMARY KEY, release_legacy_family 
 EOF
 
   local payload="$work/payload.sh" runner="$work/runner.sh"
-  awk '/alpine sh -c '"'"'$/{f=1; next} /^  '"'"'; then$/{f=0} f' \
+  awk '/FLMX_MIGRATE_ALPINE_IMAGE" sh -c '"'"'$/{f=1; next} /^  '"'"'; then$/{f=0} f' \
     "$ROOT_DIR/panel_install.sh" > "$payload"
   grep -q 'DROP INDEX IF EXISTS idx_user_username_fold_unique' "$payload" || \
     fail "RR-LIVE-01: could not extract the preprocessing payload (fold index drop) from panel_install.sh"
@@ -13335,5 +13367,6 @@ test_report_compose_up_failure_branches
 test_panel_equal_frontend_backend_ports_rejected
 test_panel_update_equal_ports_rejected
 test_panel_preflight_equal_ports_rejected
+test_panel_migrate_images_pinned_to_digest
 
 echo "install script tests passed"

@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.05"
+SCRIPT_VERSION="20261120.06"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -127,6 +127,26 @@ self_update_check() {
 
 # 固定版本号（Release 构建时自动填充，留空则获取最新版）
 PINNED_VERSION=""
+
+# R18-A2-02：迁移全程拉取的镜像钉到 digest——tag 可变（仓库改写/
+# 入侵、中间人替换）时，未钉选的 alpine:latest 与
+# dimitri/pgloader:latest 会让被污染的镜像在迁移容器内读/改全库
+# 与 .env 密钥。下文 6 处 docker run 只引用这两常量、不再写字面
+# 镜像名；scripts/check-doc-consistency.sh 第 31 项对账“docker
+# run 镜像必须带 digest（字面 @sha256: 或本常量）”防漂移。轮换
+# 版本时按下法重取 digest 后同改两处（常量值＋本注的版本号），
+# 不得只改 tag 不改 digest：
+#   token=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/alpine:pull" | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+#   curl -sI -H "Authorization: Bearer $token" -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+#     https://registry-1.docker.io/v2/library/alpine/manifests/3.22 | grep -i docker-content-digest
+# （pgloader 同理，仓库 dimitri/pgloader、tag v3.6.7。）
+# 取值核验（2026-11-20，registry 权威 digest）：alpine:3.22 为多架
+# 构清单 digest（含 linux/amd64 与 linux/arm64）；
+# dimitri/pgloader:v3.6.7 为单 manifest digest（该 tag 即迁移验证
+# 过的版本，原 latest≈3.6.7~devel；上游仅提供 latest / ccl.latest /
+# v3.6.7 三个 tag，无 3.6.9）。
+FLMX_MIGRATE_ALPINE_IMAGE="alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f"
+FLMX_MIGRATE_PGLOADER_IMAGE="dimitri/pgloader:v3.6.7@sha256:d29ea680cf1aaaf7269690a922dd69167567b91b35e9c48a0b54a99cef96c0ed"
 
 # GitHub 下载路线配置（1.7.7）：默认走内置候选测速直选（见下方
 # PROXY_CANDIDATES 与 ensure_download_routes），不再交互询问、不再
@@ -5331,7 +5351,7 @@ migrate_to_postgres() {
   fi
 
   echo "💾 备份 SQLite 数据到当前目录..."
-  if ! docker run --rm -v "$sqlite_volume":/data -v "$(pwd)":/backup alpine sh -c "cp /data/gost.db /backup/gost.db.bak"; then
+  if ! docker run --rm -v "$sqlite_volume":/data -v "$(pwd)":/backup "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c "cp /data/gost.db /backup/gost.db.bak"; then
     echo "❌ SQLite 备份失败，迁移终止，正在恢复迁移前状态..."
     migrate_restore_snapshot
     return 1
@@ -5386,7 +5406,7 @@ migrate_to_postgres() {
   # 自检不通过即整段预处理失败、走下方回退原始库分支。
   pgloader_source="/sqlite/gost.db"
   echo "🧹 预处理 SQLite 副本（release_legacy_family 默认值兼容 + 删除毒死 pgloader 的函数索引）..."
-  if docker run --rm -v "$sqlite_volume":/sqlite alpine sh -c '
+  if docker run --rm -v "$sqlite_volume":/sqlite "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c '
     set -e
     apk add --no-cache sqlite >/dev/null 2>&1
     sqlite3 /sqlite/gost.db .dump > /tmp/dump.sql
@@ -5448,9 +5468,10 @@ migrate_to_postgres() {
   # 性承载（RA2-S-04 残余登记：两通道读的都是消费文件，dump/
   # 重建步本身的静默少行不在本门可见域内）。
   migrate_reconcile_row_counts() {
-    # 载荷经变量传递而非行内字面量：脚本套件以「行尾 alpine
-    # sh -c '」为锚提取预处理载荷，全文件该形态只许预处理一处，
-    # 本处若同形会污染提取（RR-LIVE-01 用例口径）。
+    # 载荷经变量传递而非行内字面量：脚本套件以「行尾
+    # FLMX_MIGRATE_ALPINE_IMAGE" sh -c '」为锚提取预处理载荷，全文
+    # 件该形态只许预处理一处，本处若同形会污染提取（RR-LIVE-01
+    # 用例口径）。
     local reconcile_payload='
       apk add --no-cache sqlite >/dev/null 2>&1 || exit 9
       db="$1"
@@ -5460,7 +5481,7 @@ migrate_to_postgres() {
       done
     '
     local src_counts=""
-    src_counts=$(docker run --rm -v "$sqlite_volume":/sqlite alpine sh -c "$reconcile_payload" flmx-migrate-reconcile "$pgloader_source" 2>/dev/null) || src_counts=""
+    src_counts=$(docker run --rm -v "$sqlite_volume":/sqlite "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c "$reconcile_payload" flmx-migrate-reconcile "$pgloader_source" 2>/dev/null) || src_counts=""
     if [[ -z "$src_counts" ]]; then
       migrate_reconcile_row_counts_via_scratch
       return $?
@@ -5515,7 +5536,7 @@ LOAD DATABASE
      FROM sqlite://${pgloader_source}
      INTO postgresql://${postgres_user}:${postgres_password}@postgres:5432/${scratch_db};
 EOF
-    docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$scratch_load_file":/tmp/flmx-reconcile.load:ro dimitri/pgloader:latest pgloader /tmp/flmx-reconcile.load >/dev/null 2>&1 || scratch_rc=$?
+    docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$scratch_load_file":/tmp/flmx-reconcile.load:ro "$FLMX_MIGRATE_PGLOADER_IMAGE" pgloader /tmp/flmx-reconcile.load >/dev/null 2>&1 || scratch_rc=$?
     rm -f "$scratch_load_file"
     if [[ $scratch_rc -ne 0 ]]; then
       reconcile_scratch_drop || true
@@ -5566,14 +5587,15 @@ EOF
   pgloader_load_file=$(mktemp)
   chmod 600 "$pgloader_load_file"
   # F-R4-01: INTO 行尾的分号是 pgloader 命令文件的语句终止符，不可省——
-  # 缺失时现行 dimitri/pgloader:latest（3.6.7~devel）解析直接 KABOOM
+  # 缺失时现行 dimitri/pgloader:v3.6.7（原 latest≈3.6.7~devel，R18-A2-02
+  # 已钉选 FLMX_MIGRATE_PGLOADER_IMAGE）解析直接 KABOOM
   # （ESRAP-PARSE-ERROR），整个迁移不可用（真机三变体判别实验已证）。
   cat > "$pgloader_load_file" <<EOF
 LOAD DATABASE
      FROM sqlite://${pgloader_source}
      INTO postgresql://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db};
 EOF
-  docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$pgloader_load_file":/tmp/flmx-migrate.load:ro dimitri/pgloader:latest pgloader /tmp/flmx-migrate.load || pgloader_rc=$?
+  docker run --rm --network "$network_name" -v "$sqlite_volume":/sqlite -v "$pgloader_load_file":/tmp/flmx-migrate.load:ro "$FLMX_MIGRATE_PGLOADER_IMAGE" pgloader /tmp/flmx-migrate.load || pgloader_rc=$?
   rm -f "$pgloader_load_file"
   if [[ $pgloader_rc -ne 0 ]]; then
     echo "❌ pgloader 迁移失败（如报 28P01，可执行 docker volume rm $postgres_volume 后重试）"
@@ -5636,7 +5658,7 @@ EOF
   fi
 
   rm -f "$env_snapshot"
-  docker run --rm -v "$sqlite_volume":/sqlite alpine rm -f /sqlite/gost-migrate.db 2>/dev/null || true
+  docker run --rm -v "$sqlite_volume":/sqlite "$FLMX_MIGRATE_ALPINE_IMAGE" rm -f /sqlite/gost-migrate.db 2>/dev/null || true
   echo "✅ SQLite -> PostgreSQL 迁移完成"
   echo "ℹ️ 迁移遗留物（脚本不自动删除，确认 PostgreSQL 运行无误后可人工清理）："
   echo "   - $(pwd)/gost.db.bak：迁移前 SQLite 数据库的备份副本（含全量数据，请注意保管）"

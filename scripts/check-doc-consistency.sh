@@ -135,6 +135,10 @@
 #      的 json tag 集合一致（旧例文的 oldPassword 键后端根本不读，
 #      缺 3 个必填字段，照抄即报“新用户名不能为空”）；skills 内不
 #      得再出现 oldPassword。
+#   31. 迁移镜像 digest 钉选门（R18-A2-02 常设门）：panel_install.sh
+#      内全部 docker run 镜像引用必须带 digest——字面形态须含
+#      @sha256:，或引用 FLMX_MIGRATE_*_IMAGE 常量（常量定义本身须
+#      为含 @sha256: 的钉选值）；任一 docker run 行不满足即红。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -1089,6 +1093,21 @@ elif [ -n "$a5_old" ]; then
   note_fail "R18-A5-01：skills 内仍有 oldPassword（后端不读该键）：$(echo "$a5_old" | head -3 | tr '\n' ';')"
 else
   note_ok "R18-A5-01：auth.md updatePassword 例文键与后端 changePasswordRequest 一致（${a5_code_keys})，skills 内无 oldPassword"
+fi
+
+# ── 31. 迁移镜像 digest 钉选门（R18-A2-02 常设门）
+# panel_install.sh 内全部 docker run 镜像引用必须带 digest：字面
+# 形态须含 @sha256:，或引用 FLMX_MIGRATE_*_IMAGE 常量（常量定义
+# 本身须含 @sha256: 的 64 位十六进制 digest）。任一 docker run 行
+# 不满足即红；常量定义缺失/未钉 digest 同样红（前提失效）。
+MIG_IMG_BAD=$(grep -n 'docker run -' panel_install.sh | grep -v 'FLMX_MIGRATE_\(ALPINE\|PGLOADER\)_IMAGE' | grep -v '@sha256:' || true)
+if [ -n "$MIG_IMG_BAD" ]; then
+  note_fail "R18-A2-02：panel_install.sh 存在未钉 digest 的 docker run 镜像引用：$(echo "$MIG_IMG_BAD" | head -3 | tr '\n' ';')"
+elif ! grep -q '^FLMX_MIGRATE_ALPINE_IMAGE="[^"]*@sha256:[0-9a-f]\{64\}"' panel_install.sh \
+  || ! grep -q '^FLMX_MIGRATE_PGLOADER_IMAGE="[^"]*@sha256:[0-9a-f]\{64\}"' panel_install.sh; then
+  note_fail "R18-A2-02：迁移镜像常量 FLMX_MIGRATE_ALPINE_IMAGE / FLMX_MIGRATE_PGLOADER_IMAGE 必须定义为含 @sha256: 的钉选值（前提失效，请人工复核）"
+else
+  note_ok "R18-A2-02：panel_install.sh 全部 docker run 镜像引用均已钉 digest（字面或迁移镜像常量）"
 fi
 
 echo "----"
