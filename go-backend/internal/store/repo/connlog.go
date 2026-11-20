@@ -463,6 +463,20 @@ func (r *Repository) CountNodeConnLogs(entryNodeID int64, ip string) (int64, err
 	return total, err
 }
 
+// HasRecentConnlogRows 报告该节点在 sinceMs 之后是否有新行入库
+// （按面板 created_time 判定，R18-C5-03 “已关仍有行到达”探测的
+// 读面：开关关后仍有行到达，说明 agent 仍持旧配置上报）。
+func (r *Repository) HasRecentConnlogRows(entryNodeID, sinceMs int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("repository not initialized")
+	}
+	var total int64
+	err := r.db.Model(&model.InboundConnLog{}).
+		Where("entry_node_id = ? AND created_time > ?", entryNodeID, sinceMs).
+		Count(&total).Error
+	return total > 0, err
+}
+
 // PruneInboundConnLogsBefore 删除 created_time 早于 cutoffMs 的行
 // （保留天数限，设计 §5.2）。分批删防长事务锁表。返回删除行数。
 // R18-C5-02：按面板摄入时刻 created_time（面板时钟，可信）而非

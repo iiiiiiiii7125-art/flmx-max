@@ -117,6 +117,24 @@ func (h *Handler) flowConnlogV2(w http.ResponseWriter, r *http.Request) {
 			"stream": envelope.Stream, "sequence": envelope.Sequence, "error": reason,
 		})
 	}
+	// R18-C5-03：摄入侧执法采集开关（总开关 AND 节点开关）。只靠
+	// 标记下发侧执法时，离线/重推丢失窗口内旧标记 agent 的上报会
+	// 照单入库，违背“关则不采”的承诺。查询失败 fail-closed 拒收
+	// 503（与标记下发面“查询失败整单中止”同口径）；开关关时整批
+	// 拒收并回专用错误码 collection_disabled（409，与
+	// invalid_batch 区分，避免 agent 二分误判为批次非法；不认此
+	// 码的旧 agent 按普通失败保留批次、退避重报，不丢数据）。
+	enabled, err := h.connlogEnabledForNode(node.ID)
+	if err != nil {
+		log.Printf("connlog upload switch check failed node_id=%d err=%v", node.ID, err)
+		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if !enabled {
+		log.Printf("connlog upload rejected node_id=%d class=collection_disabled", node.ID)
+		reject(http.StatusConflict, "collection_disabled")
+		return
+	}
 	if err := validateConnlogEvents(envelope.Events, time.Now()); err != nil {
 		log.Printf("connlog upload invalid batch node_id=%d err=%v", node.ID, err)
 		reject(http.StatusBadRequest, "invalid_batch")

@@ -51,6 +51,11 @@ const connlogAgentMinVersion = "2.1.5"
 // 显示 unknown 而非误报 not_ready。
 const connlogReadinessRowFreshMs = int64(24 * 60 * 60 * 1000)
 
+// connlogStaleReportWindow 是 R18-C5-03“已关仍有行到达”探测的
+// 窗口：开关关且此时长内仍有该节点新行入库，即 agent 仍持旧配置
+// 上报（重推未到达），须在 reason 里点名提示。
+const connlogStaleReportWindow = time.Hour
+
 // parseConnlogAgentVersion 把 agent 上报的版本串归一成严格
 // semver（供 compareVersions）。上报串是 go-gost/main.go 的
 // fullVersion 形，如 "2.1.8-cand (debian/amd64)" 或 "2.1.5"：
@@ -178,6 +183,17 @@ func (h *Handler) nodeConnlogReadiness(w http.ResponseWriter, r *http.Request) {
 	}
 	if node.ConnLogEnabled != 1 {
 		reasons = append(reasons, "节点连接日志开关未开启")
+	}
+	// R18-C5-03“已关仍有行到达”探测：开关关且最近 1 小时内仍有
+	// 该节点新行入库，说明 agent 仍持旧配置上报（重推未到达），
+	// 把该原因置于首位（最具可操作性）。读错不拖垮主查询（按无
+	// 行处理并记日志，与页脚 dropped 的回落口径同形）。
+	if !masterOn || node.ConnLogEnabled != 1 {
+		if stale, rerr := h.repo.HasRecentConnlogRows(nodeID, time.Now().Add(-connlogStaleReportWindow).UnixMilli()); rerr != nil {
+			log.Printf("connlog readiness stale-report check failed node_id=%d err=%v (stale check falls back to false)", nodeID, rerr)
+		} else if stale {
+			reasons = append([]string{"连接日志开关已关闭，但最近 1 小时内仍有该节点连接记录入库：agent 可能仍持旧配置上报，请检查节点重推（节点重连时自动重推，或点“重新下发配置”）"}, reasons...)
+		}
 	}
 	if forwardMode == "nftables" {
 		reasons = append(reasons, "nftables 模式无 agent 采集通道")

@@ -58,6 +58,16 @@ func newConnlogTestRig(t *testing.T) *connlogTestRig {
 		t.Fatalf("create relay: %v", err)
 	}
 	rig.h = New(r, "unit-test-secret")
+	// R18-C5-03：摄入侧执法采集开关——rig 的两个节点默认开节点
+	// 开关（总开关默认开），使摄入测试以前置条件通过；开关关时
+	// 的拒收由 TestConnlogIngestRejectedWhenSwitchOff 覆盖。
+	// readiness 测试的初始 off 态在该测试内显式关掉。
+	if err := r.UpdateNodeConnLogEnabled(rig.entryID, 1); err != nil {
+		t.Fatalf("enable entry connlog: %v", err)
+	}
+	if err := r.UpdateNodeConnLogEnabled(rig.landingID, 1); err != nil {
+		t.Fatalf("enable landing connlog: %v", err)
+	}
 	return rig
 }
 
@@ -240,6 +250,11 @@ func TestConnlogNodeQueryPermissionsPaginationAndEnrichment(t *testing.T) {
 	admin := &auth.Claims{Sub: "1", RoleID: 0}
 	user := &auth.Claims{Sub: "2", RoleID: 1}
 
+	// R18-C5-03：rig 默认开节点开关（摄入前置条件），此处先显式
+	// 关掉再查：开关关时查询仍见历史行、enabled 报 false。
+	if err := rig.r.UpdateNodeConnLogEnabled(rig.entryID, 0); err != nil {
+		t.Fatalf("disable node connlog: %v", err)
+	}
 	entryQ := fmt.Sprintf("nodeId=%d&offset=0&limit=2", rig.entryID)
 	code, page := rig.queryNode(t, admin, entryQ)
 	if code != 0 {
@@ -249,7 +264,7 @@ func TestConnlogNodeQueryPermissionsPaginationAndEnrichment(t *testing.T) {
 		t.Fatalf("total = %d, want 4", page.Total)
 	}
 	if page.Enabled {
-		t.Fatal("enabled = true, want false (node switch defaults off)")
+		t.Fatal("enabled = true, want false (node switch off)")
 	}
 	page1 := page.Rows
 	if len(page1) != 2 || page1[0].StartTime != base+2000 || page1[1].StartTime != base+1000 {
