@@ -4088,6 +4088,11 @@ func (h *Handler) reconcileNodeKernels(nodeID int64) {
 	h.ensureCompanionKernel(nodeID)
 	kernels, err := h.repo.ListNodeKernels(nodeID)
 	if err != nil {
+		// R18-B9-03：读内核列表失败不得静默 return——调用方
+		// （导入尾钩子等）无从察觉本轮重推整轮丢弃，在线节点
+		// 将静默跑旧内核配置至重连。失败只记日志（本函数无回执
+		// 通道，逐内核失败同口径）。
+		log.Printf("kernel reconcile failed node_id=%d list kernels err=%v", nodeID, err)
 		return
 	}
 	for _, k := range kernels {

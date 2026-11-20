@@ -33,8 +33,34 @@ func setupBC01Test(t *testing.T) (*Handler, string) {
 	return New(r, "test-secret"), dir
 }
 
-func bc01SnapshotPath(dir string) string {
-	return filepath.Join(dir, importAutoBackupFileName)
+func bc01SnapshotPath(t *testing.T, dir string) string {
+	t.Helper()
+	// R18-B9-02：快照改为时间戳多份保留，无固定单文件路径；本文件
+	// 用例每次只留一份新快照时，最新份即所求份。
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	var newest string
+	var newestMod time.Time
+	for _, e := range entries {
+		n := e.Name()
+		if n != importAutoBackupFileName &&
+			!(strings.HasPrefix(n, "import-auto-backup-") && strings.HasSuffix(n, ".json")) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if newest == "" || info.ModTime().After(newestMod) {
+			newest, newestMod = n, info.ModTime()
+		}
+	}
+	if newest == "" {
+		t.Fatal("no pre-import snapshot found in dir")
+	}
+	return filepath.Join(dir, newest)
 }
 
 func callBC01Import(t *testing.T, h *Handler, raw []byte) *httptest.ResponseRecorder {
@@ -98,7 +124,7 @@ func TestSEC01BC01ImportRetainsServerSideSnapshot(t *testing.T) {
 	}
 	assertSEC01ReceiptClean(t, rec.Body.String())
 
-	path := bc01SnapshotPath(dir)
+	path := bc01SnapshotPath(t, dir)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("snapshot file missing after import: %v", err)
@@ -255,7 +281,7 @@ func TestSEC01BC01ExpiredSnapshotPurged(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("backupImport code = %d body = %s", code, rec.Body.String())
 	}
-	path := bc01SnapshotPath(dir)
+	path := bc01SnapshotPath(t, dir)
 
 	// 未过期（23h 前）：仍有效。
 	recent := time.Now().Add(-23 * time.Hour)
@@ -302,7 +328,7 @@ func TestSEC01BC01ExpiredSnapshotPurged(t *testing.T) {
 		t.Fatalf("expired snapshot download: HTTP status = %d, want 404", dlRec.Code)
 	}
 
-	// 再次导入：过期快照在导入入口被清理，新快照覆盖留存。
+	// 再次导入：过期快照在导入入口被清理，并落盘一份新快照。
 	rec = callBC01Import(t, h, bc01ImportBody(t))
 	code, _, _ = decodeBC01Envelope(t, rec)
 	if code != 0 {

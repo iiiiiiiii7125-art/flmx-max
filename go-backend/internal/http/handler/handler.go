@@ -412,6 +412,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/system/check-updates", h.systemCheckUpdates)
 	mux.HandleFunc("/api/v1/system/upgrade", h.systemUpgrade)
 	mux.HandleFunc("/api/v1/system/upgrade/status", h.systemUpgradeStatus)
+	// R18-B8-01：镜像缓存按版本清除（仅管理员，见 requiresAdmin）。
+	mux.HandleFunc("/api/v1/system/gh-cache/purge", h.ghMirrorPurgeCache)
 	// 备份端点全集（B14-002）：正常前缀与历史双前缀别名
 	// （/api/v1/api/v1/backup/...，兼容曾把基址拼重一层的旧客户端/脚本）
 	// 由同一清单注册。新增备份端点只许往此清单加行，两个前缀自动齐全；
@@ -2793,6 +2795,17 @@ func decodeBackupImportRequest(body io.ReadCloser, out *backupImportRequest, lim
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err == nil {
+		// R18-B9-05：快径此前只解第一个 JSON 值即返回，尾部垃圾
+		// （拼接/损坏备份）被静默丢弃；与慢径 Unmarshal 的严格口
+		// 径对齐：尾部除空白外不得再有内容。第二值是合法 JSON
+		// 时明文报错；其余尾部内容按解码错原样返回。
+		var extra json.RawMessage
+		if err := dec.Decode(&extra); err != io.EOF {
+			if err == nil {
+				return nil, errors.New("备份文件尾部存在多余数据")
+			}
+			return nil, err
+		}
 		return nil, nil
 	} else if unknownJSONFieldName(err) == "" {
 		return nil, err
@@ -3314,6 +3327,11 @@ func (h *Handler) runBackupImportTailHooks(result *model.ImportResult, backup *m
 		go func() {
 			nodeIDs, err := h.repo.ListKernelNodeIDs()
 			if err != nil {
+				// R18-B9-03：读节点列表失败不得静默丢弃整轮重推——
+				// goroutine 在回执发出后才跑，失败进不了回执，至少
+				// 须记日志，否则在线节点静默跑旧内核配置至重连，
+				// 与转发重推 R13X-001 的披露口径分裂。
+				log.Printf("backup restore: kernel repush skipped, list kernel nodes failed: %v (kernels keep pre-import config until nodes reconnect)", err)
 				return
 			}
 			for _, nodeID := range nodeIDs {
