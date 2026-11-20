@@ -3306,6 +3306,13 @@ func (h *Handler) tunnelCreate(w http.ResponseWriter, r *http.Request) {
 			response.WriteJSON(w, response.ErrDefault(applyErr.Error()))
 			return
 		}
+		// R18-B4-01：apply 内被跳过的节点（离线/超时）不在
+		// applyErr 里——隧道已落库成功，但这些节点缺整条链/服务。
+		// 跳过须进回执警告并排期重试，不得裸成功。
+		if warnings := h.handleTunnelRuntimeSkipped(runtimeState); len(warnings) > 0 {
+			response.WriteJSON(w, response.OKWithWarning(nil, strings.Join(warnings, "；")))
+			return
+		}
 	}
 	response.WriteJSON(w, response.OKEmpty())
 }
@@ -4032,10 +4039,15 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 	// 闭包在同步执行之后调用、读取届时值（与 entryPortSyncWarnings
 	// 同形态）。
 	var entryCleanupWarnings []string
+	// R18-B4-01：apply 内被跳过的节点（离线/超时）的警告与
+	// entryPortSyncWarnings 同形态——闭包在 apply 执行之后调用、
+	// 读取届时值；defer 分支（applyErr 可延期）同样经此闭包回执。
+	var tunnelRuntimeWarnings []string
 	respondTunnelUpdateOK := func() {
 		warnings := append(append([]string{}, portChangeWarnings...), relayResyncWarnings...)
 		warnings = append(warnings, entryPortSyncWarnings...)
 		warnings = append(warnings, entryCleanupWarnings...)
+		warnings = append(warnings, tunnelRuntimeWarnings...)
 		// T-001：白名单刷新失败进回执 warnings（见上方 refreshFailed）。
 		warnings = append(warnings, whitelistRefreshNotes(refreshFailed, refreshPending)...)
 		if len(warnings) > 0 {
@@ -4063,6 +4075,11 @@ func (h *Handler) tunnelUpdate(w http.ResponseWriter, r *http.Request) {
 			applyRuntime = h.applyTunnelRuntimeUpsert
 		}
 		createdChains, createdServices, applyErr := applyRuntime(runtimeState)
+		// R18-B4-01：无论 applyErr 是否为空都先排空跳过集——硬失败
+		// 时回执是错误（警告无处可去），但重试载体仍须排期，否则
+		// 在线节点的超时分叉在失败重推前无人认领；成功/defer 分支
+		// 的警告经下方 respondTunnelUpdateOK 闭包带出。
+		tunnelRuntimeWarnings = h.handleTunnelRuntimeSkipped(runtimeState)
 		if applyErr != nil {
 			updateProtocol := "tls"
 			if len(runtimeState.InNodes) > 0 && strings.TrimSpace(runtimeState.InNodes[0].Protocol) != "" {
@@ -4958,6 +4975,9 @@ func (h *Handler) redeployTunnelAndForwards(tunnelID int64) error {
 		}
 		h.cleanupTunnelRuntime(tunnelID)
 		_, _, applyErr := h.applyTunnelRuntime(state)
+		// R18-B4-01：后台重推无回执可警告——跳过的节点只记日志
+		// 并排期重试（handleTunnelRuntimeSkipped 内处理），不得静默。
+		_ = h.handleTunnelRuntimeSkipped(state)
 		if applyErr != nil {
 			return applyErr
 		}
@@ -7716,6 +7736,25 @@ type tunnelCreateState struct {
 	// type-1 tunnels whose segment rows prepare builds no runtime
 	// topology for (L9 观察 1).
 	SegmentPorts map[tunnelChainPortKey]int
+	// SkippedNodes records the nodes applyTunnelRuntimeWithMode
+	// skipped because they were offline or their command timed out
+	// (R18-B4-01). The tunnel row is already committed when apply
+	// runs, so a skip is not an error — but it must surface in the
+	// receipt and get a retry instead of silently diverging the
+	// data plane. Callers drain it via handleTunnelRuntimeSkipped.
+	SkippedNodes []tunnelRuntimeSkippedNode
+}
+
+// tunnelRuntimeSkippedNode is one node whose tunnel runtime
+// (chain and/or service) was not pushed in this apply pass.
+// Reason is "offline" (node unreachable / DB status offline) or
+// "timeout" (node reachable but the command timed out); Detail
+// carries the underlying error text for the log line.
+type tunnelRuntimeSkippedNode struct {
+	NodeID int64
+	Name   string
+	Reason string
+	Detail string
 }
 
 // tunnelChainPortKey identifies one non-entry segment slot of a tunnel
@@ -8806,7 +8845,8 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 			return createdChains, createdServices, err
 		}
 		if err := h.applyTunnelChainOnNode(inNode.NodeID, chainData, upsert); err != nil {
-			if shouldDeferTunnelRuntimeApplyError(err) {
+			if reason, ok := deferTunnelRuntimeApplyReason(err); ok {
+				noteTunnelRuntimeSkipped(state, inNode.NodeID, reason, err.Error(), "转发链")
 				continue
 			}
 			return createdChains, createdServices, fmt.Errorf("入口节点 %s 下发转发链失败: %w", nodeDisplayName(state.Nodes[inNode.NodeID]), err)
@@ -8824,6 +8864,7 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 			}
 			node := state.Nodes[chainNode.NodeID]
 			if node != nil && node.Status != 1 {
+				noteTunnelRuntimeSkipped(state, chainNode.NodeID, "offline", "节点状态为离线", "转发链/服务")
 				continue
 			}
 			chainData, err := h.buildTunnelChainConfig(state.TunnelID, chainNode.NodeID, nextTargets, state.Nodes, state.IPPreference, state.TunnelProtocol)
@@ -8831,7 +8872,8 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 				return createdChains, createdServices, err
 			}
 			if err := h.applyTunnelChainOnNode(chainNode.NodeID, chainData, upsert); err != nil {
-				if shouldDeferTunnelRuntimeApplyError(err) {
+				if reason, ok := deferTunnelRuntimeApplyReason(err); ok {
+					noteTunnelRuntimeSkipped(state, chainNode.NodeID, reason, err.Error(), "转发链")
 					continue
 				}
 				return createdChains, createdServices, fmt.Errorf("转发链节点 %s 下发转发链失败: %w", nodeDisplayName(state.Nodes[chainNode.NodeID]), err)
@@ -8840,7 +8882,8 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 
 			serviceData := h.buildTunnelChainServiceConfig(state.TunnelID, chainNode, state.Nodes[chainNode.NodeID], len(nextTargets), state.TunnelProtocol)
 			if err := h.addTunnelServiceOnNodeWithMode(chainNode.NodeID, state.TunnelID, serviceData, upsert); err != nil {
-				if shouldDeferTunnelRuntimeApplyError(err) {
+				if reason, ok := deferTunnelRuntimeApplyReason(err); ok {
+					noteTunnelRuntimeSkipped(state, chainNode.NodeID, reason, err.Error(), "服务")
 					continue
 				}
 				return createdChains, createdServices, fmt.Errorf("转发链节点 %s 下发服务失败: %w", nodeDisplayName(state.Nodes[chainNode.NodeID]), err)
@@ -8852,11 +8895,13 @@ func (h *Handler) applyTunnelRuntimeWithMode(state *tunnelCreateState, upsert bo
 	for _, outNode := range state.OutNodes {
 		node := state.Nodes[outNode.NodeID]
 		if node != nil && node.Status != 1 {
+			noteTunnelRuntimeSkipped(state, outNode.NodeID, "offline", "节点状态为离线", "服务")
 			continue
 		}
 		serviceData := h.buildTunnelChainServiceConfig(state.TunnelID, outNode, state.Nodes[outNode.NodeID], 1, state.TunnelProtocol)
 		if err := h.addTunnelServiceOnNodeWithMode(outNode.NodeID, state.TunnelID, serviceData, upsert); err != nil {
-			if shouldDeferTunnelRuntimeApplyError(err) {
+			if reason, ok := deferTunnelRuntimeApplyReason(err); ok {
+				noteTunnelRuntimeSkipped(state, outNode.NodeID, reason, err.Error(), "服务")
 				continue
 			}
 			return createdChains, createdServices, fmt.Errorf("出口节点 %s 下发服务失败: %w", nodeDisplayName(state.Nodes[outNode.NodeID]), err)
@@ -9009,20 +9054,92 @@ func (h *Handler) rollbackTunnelRuntime(chainNodeIDs, serviceNodeIDs []int64, tu
 }
 
 func shouldDeferTunnelRuntimeApplyError(err error) bool {
+	_, ok := deferTunnelRuntimeApplyReason(err)
+	return ok
+}
+
+// deferTunnelRuntimeApplyReason classifies a tunnel runtime apply
+// error: offline nodes and command timeouts are deferred (the
+// tunnel row is already committed, so the apply must not fail the
+// request — but the skip must be recorded, warned about and
+// retried, see noteTunnelRuntimeSkipped /
+// handleTunnelRuntimeSkipped, R18-B4-01). A node that is online
+// but whose command times out lands in the same "timeout" bucket
+// as an offline node here — and, unlike before, now gets the same
+// 30s retry carrier instead of diverging forever. Any other error
+// (agent explicitly failed, bad config) is a hard failure.
+func deferTunnelRuntimeApplyReason(err error) (string, bool) {
 	if err == nil {
-		return false
+		return "", false
 	}
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
 	if msg == "" {
-		return false
+		return "", false
 	}
 	if strings.Contains(msg, "节点不在线") {
-		return true
+		return "offline", true
 	}
 	if strings.Contains(msg, "等待节点响应超时") || strings.Contains(msg, "timeout") || strings.Contains(msg, "超时") {
-		return true
+		return "timeout", true
 	}
-	return false
+	return "", false
+}
+
+// noteTunnelRuntimeSkipped records one skipped node on the apply
+// state (first skip per node wins — a chain node whose chain push
+// and service push both defer is one skipped node, not two) and
+// logs it with tunnel/node/step, so a skip is never silent even
+// on paths without a user receipt (background redeploy).
+func noteTunnelRuntimeSkipped(state *tunnelCreateState, nodeID int64, reason, detail, step string) {
+	if state == nil || nodeID <= 0 {
+		return
+	}
+	for _, s := range state.SkippedNodes {
+		if s.NodeID == nodeID {
+			return
+		}
+	}
+	name := nodeDisplayName(state.Nodes[nodeID])
+	state.SkippedNodes = append(state.SkippedNodes, tunnelRuntimeSkippedNode{
+		NodeID: nodeID,
+		Name:   name,
+		Reason: reason,
+		Detail: detail,
+	})
+	log.Printf("tunnel runtime apply skipped node_id=%d node=%s tunnel_id=%d step=%s reason=%s err=%v", nodeID, name, state.TunnelID, step, reason, detail)
+}
+
+// tunnelRuntimeSkippedWarning renders one skipped node for a
+// receipt: it names the node, the cause and the retry, so the
+// operator can tell a deferred node from a healthy one.
+func tunnelRuntimeSkippedWarning(s tunnelRuntimeSkippedNode) string {
+	cause := "不在线"
+	if s.Reason == "timeout" {
+		cause = "下发超时"
+	}
+	return fmt.Sprintf("节点「%s」%s，已跳过隧道运行时下发，已排期 30 秒后重试", s.Name, cause)
+}
+
+// handleTunnelRuntimeSkipped drains the skips apply recorded on
+// state: every skipped node gets the 30s local-runtime retry
+// (scheduleNodeLocalRuntimeRetry — the same carrier the reconnect
+// path uses, so an online node whose command timed out is
+// re-pushed without waiting for a reconnect) and one warning line
+// per node for the caller's receipt. Receipt-less callers
+// (background redeploy) ignore the returned warnings; the log line
+// from noteTunnelRuntimeSkipped is the record there.
+func (h *Handler) handleTunnelRuntimeSkipped(state *tunnelCreateState) []string {
+	if state == nil || len(state.SkippedNodes) == 0 {
+		return nil
+	}
+	warnings := make([]string, 0, len(state.SkippedNodes))
+	for _, s := range state.SkippedNodes {
+		if h != nil {
+			h.scheduleNodeLocalRuntimeRetry(s.NodeID)
+		}
+		warnings = append(warnings, tunnelRuntimeSkippedWarning(s))
+	}
+	return warnings
 }
 
 // isNodeOfflineOrTimeoutError returns true when the error indicates a node

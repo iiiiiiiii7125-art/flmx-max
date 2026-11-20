@@ -265,10 +265,11 @@ func TestK9TunnelRenameKeepsNonEntryPorts(t *testing.T) {
 	if got := k9ChainPort(t, h, 88, "2"); got != 36008 {
 		t.Fatalf("P01-002: chain port drifted on rename: got %d, want 36008 kept", got)
 	}
-	if warnings, ok := env.Data["warnings"]; ok {
-		if s, _ := warnings.([]interface{}); len(s) > 0 {
-			t.Fatalf("P01-002: no port change happened, receipt must not warn, got %v", warnings)
-		}
+	// R18-B4-01: runtime-skip warnings (offline nodes, retry
+	// scheduled) are allowed here — the P01-002 rule is about
+	// port warnings only; see k6WarningsWithoutRuntimeSkips.
+	if joined := k6WarningsWithoutRuntimeSkips(env); joined != "" {
+		t.Fatalf("P01-002: no port change happened, receipt must not warn, got %q", joined)
 	}
 }
 

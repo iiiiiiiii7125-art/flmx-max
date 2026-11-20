@@ -74,6 +74,32 @@ func k6WarningsJoined(env k9Envelope) string {
 	return strings.Join(parts, ";")
 }
 
+// k6WarningsWithoutRuntimeSkips returns the receipt warnings with
+// R18-B4-01 tunnel runtime skip warnings removed. Since B4-01 the
+// tunnelUpdate receipt also carries skip warnings (offline nodes,
+// retry scheduled) even when no port moved, so the B06-001
+// "must not warn" assertions below only cover non-skip warnings
+// (e.g. port repicks). A single warning string may itself join
+// several lines with "；", so both separators are split.
+func k6WarningsWithoutRuntimeSkips(env k9Envelope) string {
+	warnings, _ := env.Data["warnings"].([]interface{})
+	parts := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		s, ok := w.(string)
+		if !ok || s == "" {
+			continue
+		}
+		for _, seg := range strings.Split(s, "；") {
+			seg = strings.TrimSpace(seg)
+			if seg == "" || strings.Contains(seg, "已跳过隧道运行时下发") {
+				continue
+			}
+			parts = append(parts, seg)
+		}
+	}
+	return strings.Join(parts, ";")
+}
+
 func k6TwoHopRows() []k6ChainRow {
 	return []k6ChainRow{
 		{"1", 10, nil, 1},
@@ -115,7 +141,10 @@ func TestK6TunnelUpdateHopSwapKeepsPortsByNode(t *testing.T) {
 	if got := k6ChainPortByNode(t, h, 90, "3", 11); got != 35009 {
 		t.Fatalf("B06-001: exit port must stay 35009, got %d", got)
 	}
-	if joined := k6WarningsJoined(env); joined != "" {
+	// R18-B4-01: runtime-skip warnings (offline nodes, retry
+	// scheduled) are allowed here — the B06-001 rule is about
+	// port warnings only; see k6WarningsWithoutRuntimeSkips.
+	if joined := k6WarningsWithoutRuntimeSkips(env); joined != "" {
 		t.Fatalf("B06-001: no port moved, receipt must not warn, got %q", joined)
 	}
 	// 入口段不变断言：入口行仍是 node10、无端口、inx 不动。
@@ -148,7 +177,9 @@ func TestK6TunnelUpdatePrependHopKeepsExistingPorts(t *testing.T) {
 	if got := k6ChainPortByNode(t, h, 91, "2", 15); got < 36600 || got > 36610 {
 		t.Fatalf("B06-001: genuinely new hop must get a fresh in-spec port, got %d", got)
 	}
-	if joined := k6WarningsJoined(env); joined != "" {
+	// R18-B4-01: runtime-skip warnings are allowed here (see the
+	// hop-swap test above); only port warnings are excluded.
+	if joined := k6WarningsWithoutRuntimeSkips(env); joined != "" {
 		t.Fatalf("B06-001: prepend without port moves must not warn, got %q", joined)
 	}
 }
@@ -166,7 +197,9 @@ func TestK6TunnelUpdateDeleteFirstHopKeepsSecondHopPort(t *testing.T) {
 	if got := k6ChainPortByNode(t, h, 92, "2", 14); got != 36508 {
 		t.Fatalf("B06-001: deleting the first hop must not move node14's port, got %d, want 36508", got)
 	}
-	if joined := k6WarningsJoined(env); joined != "" {
+	// R18-B4-01: runtime-skip warnings are allowed here (see the
+	// hop-swap test above); only port warnings are excluded.
+	if joined := k6WarningsWithoutRuntimeSkips(env); joined != "" {
 		t.Fatalf("B06-001: delete-first-hop without port moves must not warn, got %q", joined)
 	}
 }
