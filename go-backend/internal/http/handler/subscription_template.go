@@ -150,6 +150,14 @@ func (h *Handler) refreshTemplate(ctx context.Context, t *model.SubscriptionTemp
 	} else {
 		t.Content, t.LastError, t.UpdatedTime = body, "", now
 	}
+	// R18-B6-02：删除与刷新竞态——模板在下载/校验期间被删时，
+	// Save() 的 upsert 会把已删模板复活。落库前复核仍在：已被删
+	// 则不写库、点名返回（手动刷新面原样回给用户；后台循环只记日志）。
+	if existing, err := h.repo.GetSubscriptionTemplate(t.ID); err != nil {
+		return markRepoError(err)
+	} else if existing == nil {
+		return errText("模板已被删除")
+	}
 	if saveErr := h.repo.SaveSubscriptionTemplate(t); saveErr != nil {
 		// RAW291：仓储直通错误标 repoError，调用点 guard 后
 		// 改走通用文案；fetch/校验失败为固定文案不经此标记。
