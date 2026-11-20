@@ -44,6 +44,26 @@ else
   note_ok "R18-A5-03: go-backend/patch.py absent"
 fi
 
+# ── R18-A5-05: e2e assertions must be real — no always-true, conditional
+# or fake assertions. Banned patterns in the browser/API test files:
+# `or True` (tautology), `count >= 0` (counts are never negative),
+# `localStorage.clear()` as a logout substitute (never exercises the
+# product logout path), and `if response["code"] == 0:` guarding the
+# only assertions in test_api.py (a non-zero code then passes silently).
+for pat in 'or True' 'count >= 0' 'localStorage.clear()'; do
+  hits="$(grep -rn -- "$pat" tests/e2e/test_*.py || true)"
+  if [ -n "$hits" ]; then
+    note_fail "R18-A5-05: fake-green pattern '$pat' in e2e tests: $(echo "$hits" | head -3 | tr '\n' ';')"
+  fi
+done
+hits="$(grep -rn 'if response\["code"\] == 0:' tests/e2e/test_api.py || true)"
+if [ -n "$hits" ]; then
+  note_fail "R18-A5-05: conditional assertion in test_api.py: $(echo "$hits" | head -3 | tr '\n' ';')"
+fi
+if [ "$FAIL" -eq 0 ]; then
+  note_ok "R18-A5-05: no fake-green assertion patterns in tests/e2e/test_*.py"
+fi
+
 echo "----"
 if [ "$FAIL" -eq 0 ]; then
   echo "RESULT: PASS"

@@ -28,36 +28,55 @@ class TestDashboard:
 
         page.wait_for_load_state("networkidle")
 
-        assert page.locator("nav, [data-testid='sidebar'], aside").count() > 0 or True
+        assert page.locator("nav, [data-testid='sidebar'], aside").count() > 0
 
     def test_dashboard_shows_user_info(self, page: Page):
         """Test that page shows user information."""
         page.wait_for_load_state("networkidle")
 
-        user_element = page.locator("text=admin@user, [data-testid='user-name']")
-        if user_element.count() > 0:
-            expect(user_element.first).to_be_visible()
+        # The dashboard greets the logged-in admin by name (dashboard.tsx
+        # renders the session username), so the name must be visible.
+        expect(page.locator("text=admin@user").first).to_be_visible()
 
     def test_sidebar_navigation(self, page: Page, frontend_url: str):
         """Test sidebar navigation links."""
         page.wait_for_load_state("networkidle")
 
-        nav_items = ["forward", "tunnel", "node", "user", "config"]
+        # Sidebar items are <nav> entries with Chinese labels and onClick
+        # navigation (layouts/admin.tsx) — not <a href> links, so locate
+        # them by label inside the nav and assert each landing URL.
+        nav_items = [
+            ("规则", "/forward"),
+            ("节点", "/node"),
+            ("用户", "/user"),
+            ("设置", "/config"),
+        ]
 
-        for item in nav_items:
-            link = page.locator(f'a[href*="{item}"], button:has-text("{item.title()}")')
-            if link.count() > 0:
-                link.first.click()
-                page.wait_for_load_state("networkidle")
-                assert item in page.url.lower() or True
+        for label, path in nav_items:
+            link = page.locator(f"nav >> text={label}")
+            expect(link.first).to_be_visible()
+            link.first.click()
+            page.wait_for_load_state("networkidle")
+            assert path in page.url, (
+                f"After clicking sidebar {label!r}, expected {path} in URL, got {page.url}"
+            )
 
     def test_dashboard_responsive_layout(self, page: Page, frontend_url: str):
         """Test dashboard responsive layout."""
         page.set_viewport_size({"width": 375, "height": 667})
         page.wait_for_timeout(500)
 
+        # No horizontal overflow at mobile width, and the dashboard still
+        # greets the logged-in user.
+        assert page.evaluate("document.documentElement.scrollWidth") <= 375, (
+            "dashboard must not overflow horizontally at 375px width"
+        )
+        expect(page.locator("text=admin@user").first).to_be_visible()
+
         page.set_viewport_size({"width": 1920, "height": 1080})
         page.wait_for_timeout(500)
+
+        expect(page.locator("nav").first).to_be_visible()
 
 
 @pytest.mark.e2e

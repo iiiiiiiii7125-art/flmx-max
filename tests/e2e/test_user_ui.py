@@ -31,15 +31,17 @@ class TestUserManagementUI:
         page.wait_for_load_state("networkidle")
         assert "/user" in page.url
 
-    def test_user_list_displays(self, page: Page, frontend_url: str):
+    def test_user_list_displays(self, page: Page, frontend_url: str, test_user):
         """Test that user list displays correctly."""
         user_page = UserPage(page, frontend_url)
         user_page.goto()
         page.wait_for_load_state("networkidle")
 
-        users = page.locator("table tr, [data-testid='user-item'], [role='row']")
-        count = users.count()
-        assert count >= 0, "Should be able to access user list"
+        # The admin (role_id 0) is excluded from /user/list by design
+        # (ListUsers filters role_id != 0), so assert on a user that is
+        # actually listed: the API-created test_user fixture.
+        expect(page.locator("table").first).to_be_visible()
+        expect(page.locator(f"text={test_user.username}").first).to_be_visible()
 
     def test_create_user_dialog(self, page: Page, frontend_url: str):
         """Test opening create user dialog."""
@@ -48,27 +50,26 @@ class TestUserManagementUI:
         page.wait_for_load_state("networkidle")
 
         create_btn = page.locator('button:has-text("创建"), button:has-text("新增")')
-        if create_btn.count() > 0:
-            create_btn.first.click()
-            page.wait_for_timeout(500)
+        expect(create_btn.first).to_be_visible()
+        create_btn.first.click()
+        page.wait_for_timeout(500)
 
-            dialog = page.locator('[role="dialog"], .modal, [data-testid="create-dialog"]')
-            if dialog.count() > 0:
-                expect(dialog.first).to_be_visible()
+        # The create modal header renders only when the dialog opens.
+        expect(page.locator("text=新增用户").first).to_be_visible()
 
-    def test_search_users(self, page: Page, frontend_url: str):
+    def test_search_users(self, page: Page, frontend_url: str, test_user):
         """Test user search functionality."""
         user_page = UserPage(page, frontend_url)
         user_page.goto()
         page.wait_for_load_state("networkidle")
 
         search_input = page.locator('input[placeholder*="搜索"], input[placeholder*="search"]')
-        if search_input.count() > 0:
-            search_input.first.fill("admin")
-            search_input.first.press("Enter")
-            page.wait_for_load_state("networkidle")
+        expect(search_input.first).to_be_visible()
+        search_input.first.fill(test_user.username)
+        search_input.first.press("Enter")
+        page.wait_for_load_state("networkidle")
 
-            assert page.locator("text=admin@user").count() >= 1
+        expect(page.locator(f"text={test_user.username}").first).to_be_visible()
 
     def test_user_pagination(self, page: Page, frontend_url: str):
         """Test user list pagination."""

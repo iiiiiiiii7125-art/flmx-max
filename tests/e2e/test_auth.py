@@ -7,7 +7,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from pages import LoginPage, DashboardPage
-from utils.api_client import ADMIN_USER
+from utils.api_client import ADMIN_USER, APIClient
 
 
 @pytest.mark.e2e
@@ -99,7 +99,7 @@ class TestAuthentication:
         assert "/dashboard" in page.url
 
     def test_logout_clears_session(
-        self, page: Page, frontend_url: str, browser_admin_password: str
+        self, page: Page, frontend_url: str, backend_url: str, browser_admin_password: str
     ):
         """Test that logout clears the session."""
         login_page = LoginPage(page, frontend_url)
@@ -109,12 +109,27 @@ class TestAuthentication:
 
         assert "/dashboard" in page.url
 
-        page.evaluate("localStorage.clear()")
+        # Capture the session token before logging out: the server must
+        # revoke it, so a later API call with it has to come back 401.
+        token = page.evaluate("localStorage.getItem('token')")
+        assert token, "expected a session token in localStorage after login"
 
-        page.goto(f"{frontend_url}/dashboard")
+        # Real product logout path: the /profile button runs safeLogout()
+        # (POST /user/logout revokes server-side, then local state clears
+        # and the app routes back to the login page).
+        page.goto(f"{frontend_url}/profile")
         page.wait_for_load_state("networkidle")
-
+        dashboard_page = DashboardPage(page, frontend_url)
+        expect(dashboard_page.logout_button.first).to_be_visible()
+        dashboard_page.logout_button.first.click()
         expect(page).to_have_url(f"{frontend_url}/")
+
+        client = APIClient(backend_url)
+        client.set_token(token)
+        response = client.post("/user/list", {})
+        assert response["code"] == 401, (
+            f"revoked token must be rejected with code 401, got: {response}"
+        )
 
 
 @pytest.mark.e2e
