@@ -25,7 +25,7 @@ tests/e2e/
 ## Prerequisites
 
 - Python 3.11+
-- Go 1.24+ (for backend)
+- Go 1.25 (for backend)
 - Node.js 18+ (for frontend)
 
 ## Setup
@@ -61,7 +61,9 @@ Notes (X02-002):
 - If the servers are not running, tests fail hard. Set `E2E_SKIP_OK=1`
   only when you explicitly want them skipped; the skip is then called
   out in the run summary. CI runs the `-m api` subset on every push
-  (job `e2e-api` in `.github/workflows/ci-build.yml`).
+  (job `e2e-api` in `.github/workflows/ci-build.yml`) and the browser
+  subset `-m e2e` (job `e2e-browser`, which also starts the frontend
+  and installs Playwright Chromium).
 
 ### Quick Start
 
@@ -160,7 +162,6 @@ Key fixtures in `conftest.py`:
 - `server_info` - Server configuration
 - `backend_url` / `frontend_url` - Base URLs
 - `page` - Fresh browser page
-- `authenticated_page` - Page with logged-in session
 - `api_client` - API client instance
 - `authenticated_api` - Authenticated API client
 - `auth_token` - JWT token string
@@ -180,12 +181,14 @@ pytest -v --html=report.html --self-contained-html
 
 ## CI Integration
 
-```yaml
-# Example GitHub Actions
-- name: Run E2E tests
-  run: |
-    cd tests/e2e
-    pip install -e ".[dev]"
-    playwright install chromium
-    python with_server.py -- pytest -v --junit-xml=test-results.xml
-```
+CI runs both subsets on every push (`.github/workflows/ci-build.yml`):
+
+- job `e2e-api`: builds the real backend, starts it with a temporary
+  DB, then `python -m pytest -m api` (no browser).
+- job `e2e-browser`: same backend plus the frontend via
+  `with_server.py` and Playwright Chromium, then
+  `python -m pytest -m e2e`.
+
+Both jobs inject the seed password through `FLMX_ADMIN_PASSWORD`
+(`E2eSeed!2026x`) and never set `E2E_SKIP_OK`, so a missing server
+fails the run instead of silently skipping.

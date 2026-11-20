@@ -375,8 +375,8 @@ jobs:
   # 整套 42 条用例实际零回归保护。本 job 跑 API 子集（-m api，不起
   # 浏览器）：构建真后端、以临时 DB 启动，再跑 pytest。conftest 在
   # 服务缺席时硬失败（仅显式 E2E_SKIP_OK 才跳过并汇总提示），本 job
-  # 不设 E2E_SKIP_OK，杜绝全量 skip 假绿。浏览器子集（-m e2e）需前端
-  # 构建与浏览器下载，暂未纳入，属已知缺口登记。
+  # 不设 E2E_SKIP_OK，杜绝全量 skip 假绿。浏览器子集（-m e2e）由下面的
+  # e2e-browser job 跑（前端构建与浏览器下载）。
   e2e-api:
     name: E2E API Subset (pytest -m api)
     runs-on: ubuntu-latest
@@ -434,3 +434,56 @@ jobs:
           # value as the Start backend step) and the fixtures read it.
           FLMX_ADMIN_PASSWORD: 'E2eSeed!2026x'
         run: python -m pytest -m api
+
+  # W2-03 (R18-A5-04): the browser subset (-m e2e) was dead since 2.0.0
+  # (retired default password, never wired into CI). This job starts the
+  # real backend + frontend through with_server.py and runs it. Pinned
+  # ubuntu-24.04 like the frontend job: the Playwright browser install
+  # is the constraint. No E2E_SKIP_OK: a missing server fails the run.
+  e2e-browser:
+    name: E2E Browser Subset (pytest -m e2e)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: go-backend/go.sum
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          # Same Node 22 as the frontend job.
+          node-version: '22'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.28.1
+
+      - name: Install frontend dependencies
+        working-directory: vite-frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install e2e dependencies
+        # Same lockfile discipline as the e2e-api job (A4-08).
+        run: |
+          pip install -r tests/e2e/requirements.lock
+          pip install --no-deps "./tests/e2e[dev]"
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run browser e2e subset
+        working-directory: tests/e2e
+        env:
+          # FIX-CI-1: same seed password the backend is started with
+          # (with_server.py injects it into the backend and exports it
+          # to the fixtures).
+          FLMX_ADMIN_PASSWORD: 'E2eSeed!2026x'
+        run: python with_server.py -- python -m pytest -m e2e

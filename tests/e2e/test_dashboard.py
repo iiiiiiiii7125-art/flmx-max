@@ -7,6 +7,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from pages import DashboardPage, LoginPage
+from utils.api_client import ADMIN_USER
 
 
 @pytest.mark.e2e
@@ -14,15 +15,16 @@ class TestDashboard:
     """Dashboard E2E tests."""
 
     @pytest.fixture(autouse=True)
-    def login(self, page: Page, frontend_url: str):
+    def login(self, page: Page, frontend_url: str, browser_admin_password: str):
         """Login before each test."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin@user", "admin@user")
+        result = login_page.login(ADMIN_USER, browser_admin_password)
+        assert result, "Login should succeed with valid credentials"
 
-    def test_login_redirects_to_change_password(self, page: Page, frontend_url: str):
-        """Test that login with default password redirects to change-password."""
-        assert "/change-password" in page.url
+    def test_login_redirects_to_dashboard(self, page: Page, frontend_url: str):
+        """Test that login with a changed admin password redirects to dashboard."""
+        assert "/dashboard" in page.url
 
         page.wait_for_load_state("networkidle")
 
@@ -63,11 +65,12 @@ class TestNavigation:
     """Navigation E2E tests."""
 
     @pytest.fixture(autouse=True)
-    def login(self, page: Page, frontend_url: str):
+    def login(self, page: Page, frontend_url: str, browser_admin_password: str):
         """Login before each test."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin@user", "admin@user")
+        result = login_page.login(ADMIN_USER, browser_admin_password)
+        assert result, "Login should succeed with valid credentials"
 
     def test_navigate_to_user_page(self, page: Page, frontend_url: str):
         """Test navigation to user management page."""

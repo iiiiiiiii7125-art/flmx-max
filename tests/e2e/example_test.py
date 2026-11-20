@@ -44,13 +44,25 @@ def test_login_flow():
             print("Login form elements found")
 
             username_input.fill("admin@user")
-            password_input.fill("admin@user")
+            # Since 2.0.0 there is no fixed default password: the harness
+            # injects the seed password via FLMX_ADMIN_PASSWORD (same
+            # source as the pytest fixtures). A seed login lands on
+            # /change-password (requirePasswordChange), a changed-password
+            # login on /dashboard — accept either.
+            seed_password = os.getenv("FLMX_ADMIN_PASSWORD", "")
+            assert seed_password, "FLMX_ADMIN_PASSWORD is not set (see with_server.py / CI e2e jobs)"
+            password_input.fill(seed_password)
             login_button.click()
 
-            page.wait_for_url("**/dashboard**", timeout=5000)
-            print("Login successful, redirected to dashboard")
+            try:
+                page.wait_for_url("**/dashboard**", timeout=5000)
+            except Exception:
+                page.wait_for_url("**/change-password**", timeout=2000)
+            print(f"Login successful, redirected to {page.url}")
 
-            assert "/dashboard" in page.url, f"Expected dashboard URL, got {page.url}"
+            assert "/dashboard" in page.url or "/change-password" in page.url, (
+                f"Expected dashboard or change-password URL, got {page.url}"
+            )
             print("Test passed!")
 
         except Exception as e:

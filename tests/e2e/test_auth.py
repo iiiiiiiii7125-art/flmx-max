@@ -7,6 +7,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from pages import LoginPage, DashboardPage
+from utils.api_client import ADMIN_USER
 
 
 @pytest.mark.e2e
@@ -23,12 +24,19 @@ class TestAuthentication:
         expect(login_page.password_input).to_be_visible()
         expect(login_page.login_button).to_be_visible()
 
-    def test_login_with_valid_credentials_redirects_to_change_password(self, page: Page, frontend_url: str):
-        """Test successful login with default credentials redirects to change-password."""
+    def test_login_with_valid_credentials_redirects_to_change_password(
+        self, page: Page, frontend_url: str, seed_password_admin: str
+    ):
+        """Test successful login with default credentials redirects to change-password.
+
+        Only valid while the admin password is the seed (default) one:
+        the seed_password_admin fixture restores it for this test, so
+        requirePasswordChange is true and login lands on /change-password.
+        """
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
 
-        result = login_page.login("admin@user", "admin@user")
+        result = login_page.login(ADMIN_USER, seed_password_admin)
         assert result, "Login should succeed with valid credentials"
 
         assert "/change-password" in page.url
@@ -74,26 +82,32 @@ class TestAuthentication:
 
         expect(page).to_have_url(f"{frontend_url}/")
 
-    def test_session_persists_on_refresh(self, page: Page, frontend_url: str):
+    def test_session_persists_on_refresh(
+        self, page: Page, frontend_url: str, browser_admin_password: str
+    ):
         """Test that session persists after page refresh."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin@user", "admin@user")
+        result = login_page.login(ADMIN_USER, browser_admin_password)
+        assert result, "Login should succeed with valid credentials"
 
-        assert "/change-password" in page.url
+        assert "/dashboard" in page.url
 
         page.reload()
         page.wait_for_load_state("networkidle")
 
-        assert "/change-password" in page.url
+        assert "/dashboard" in page.url
 
-    def test_logout_clears_session(self, page: Page, frontend_url: str):
+    def test_logout_clears_session(
+        self, page: Page, frontend_url: str, browser_admin_password: str
+    ):
         """Test that logout clears the session."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin@user", "admin@user")
+        result = login_page.login(ADMIN_USER, browser_admin_password)
+        assert result, "Login should succeed with valid credentials"
 
-        assert "/change-password" in page.url
+        assert "/dashboard" in page.url
 
         page.evaluate("localStorage.clear()")
 
@@ -108,10 +122,13 @@ class TestAuthentication:
 class TestPasswordChange:
     """Password change E2E tests."""
 
-    def test_password_change_page_accessible(self, page: Page, frontend_url: str):
+    def test_password_change_page_accessible(
+        self, page: Page, frontend_url: str, seed_password_admin: str
+    ):
         """Test that password change page is accessible after login with default password."""
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        login_page.login("admin@user", "admin@user")
+        result = login_page.login(ADMIN_USER, seed_password_admin)
+        assert result, "Login should succeed with valid credentials"
 
         assert "/change-password" in page.url
