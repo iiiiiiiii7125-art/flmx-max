@@ -117,6 +117,12 @@ func (h *forwardHandler) Handle(ctx context.Context, conn net.Conn, opts ...hand
 		ro.InputBytes = pStats.Get(stats.KindInputBytes)
 		ro.OutputBytes = pStats.Get(stats.KindOutputBytes)
 		ro.Duration = time.Since(start)
+		// R18-D4-03: write the handler recorder like every other
+		// handler (remote included). Record is nil-safe, so with no
+		// recorder configured this stays a no-op.
+		if err := ro.Record(ctx, h.recorder.Recorder); err != nil {
+			h.options.Logger.Errorf("record: %v", err)
+		}
 
 	}()
 
