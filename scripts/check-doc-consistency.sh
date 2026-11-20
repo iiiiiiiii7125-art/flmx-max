@@ -145,6 +145,10 @@
 #      proxy.sh 中有非注释行按词引用——新增 panel_* 函数须有同
 #      名测试引用，防再次漏测。只守本函数组：全仓 panel_* 函数
 #      的通用门会把历史上大量无测试的助手一并判红，不属本项范围。
+#   33. v6 判别锚对账门（R18-A2-11 常设门）：panel_install.sh
+#      以 fd00:dead:beef 字面量判别部署是否 v6 世代，该锚须与
+#      docker-compose-v6.yml 的 IPv6 子网前缀逐字一致；模板改
+#      子网后存量 v6 部署更新时会误判为 v4、下载错世代 compose。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -1132,6 +1136,23 @@ if [ -n "$PREFLIGHT_UNTESTED" ]; then
   note_fail "R18-A2-06：安装预检函数在测试套件中无引用（须补回归测试）：$PREFLIGHT_UNTESTED"
 else
   note_ok "R18-A2-06：安装预检函数组 6 个均在 test-install-scripts-proxy.sh 中有测试引用"
+fi
+
+# ── 33. v6 判别锚对账门（R18-A2-11 常设门）
+# panel_install.sh 以 fd00:dead:beef 字面量判别部署是否 v6 世代
+# （update_panel 内 grep docker-compose.yml 的判别行）；该锚须
+# 与 docker-compose-v6.yml 的 IPv6 子网前缀逐字一致。锚提取限
+# 定到含 docker-compose.yml 的判别行——脚本另有 fd00::/80
+#（docker daemon fixed-cidr-v6），裸 grep 会先命中它。
+V6_ANCHOR=$(grep 'fd00:' panel_install.sh | grep 'docker-compose.yml' | grep -o 'fd00:[0-9a-f:]*' | head -n 1 || true)
+V6_SUBNET=$(grep -o 'fd00:[0-9a-f:]*::/[0-9]*' docker-compose-v6.yml | head -n 1 || true)
+V6_PREFIX=${V6_SUBNET%%::/*}
+if [[ -z "$V6_ANCHOR" || -z "$V6_PREFIX" ]]; then
+  note_fail "R18-A2-11：v6 判别锚对账前提失效（脚本锚：${V6_ANCHOR:-缺失}，模板子网：${V6_SUBNET:-缺失}），请人工复核"
+elif [[ "$V6_ANCHOR" != "$V6_PREFIX" ]]; then
+  note_fail "R18-A2-11：panel_install.sh 的 v6 判别锚 $V6_ANCHOR 与 docker-compose-v6.yml 的 IPv6 子网前缀 $V6_PREFIX 不一致"
+else
+  note_ok "R18-A2-11：v6 判别锚与 docker-compose-v6.yml 的 IPv6 子网前缀一致（$V6_ANCHOR）"
 fi
 
 echo "----"
