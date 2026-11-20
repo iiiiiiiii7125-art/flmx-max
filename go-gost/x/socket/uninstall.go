@@ -117,7 +117,14 @@ func AgentUninstalled() bool {
 //      never re-executes. Idempotency key: the panel-supplied
 //      issuedAt (UnixMilli JSON number, canonical since
 //      R2-ISSUEDAT) when present, else the first dispatch's
-//      requestId.
+//      requestId. In container form the process does NOT exit
+//      while the report is undelivered (R18-D2-03): the wipe
+//      already deleted config.json, so a restarted container holds
+//      no panel address or secret to reconnect with, and exiting
+//      would strand the panel in pending_uninstall forever. The
+//      executor waits for the in-process reporter — which still
+//      holds the credentials in memory — to deliver the stored
+//      final state, and only then crosses the point of no return.
 
 // uninstallStepResult is one judged step of the uninstall.
 type uninstallStepResult struct {
@@ -408,9 +415,42 @@ func (w *WebSocketReporter) executeUninstall(ackCh chan bool, st *uninstallState
 	if w.reportUninstallFinal(st) {
 		st.Reported = true
 		saveUninstallState(st)
+	} else if outcome.pendingExit {
+		// R18-D2-03: the inline report did not land and this is
+		// the container form — exiting now would strand the panel
+		// in pending_uninstall (see the protocol comment above).
+		// Wait for the report to land instead; the exit below is
+		// the point of no return.
+		w.waitUninstallReportFlushed(st)
 	}
 	if outcome.pendingExit {
 		uninstallExit(0)
+	}
+}
+
+// waitUninstallReportFlushed retries the stored final report until
+// it lands — either this waiter's own send succeeds, or another
+// path (the reporter's reconnect flush, a duplicate dispatch's
+// re-send) marks the persisted state reported first. It only runs
+// in container form, where the process still holds the panel
+// credentials in memory; the reporter's reconnect loop keeps
+// redialling underneath, so each round's send succeeds as soon as
+// the connection is back. The wait is deliberately unbounded:
+// exiting unreported is the failure this closes, and the wiped
+// container has nothing else left to do.
+func (w *WebSocketReporter) waitUninstallReportFlushed(st *uninstallState) {
+	fmt.Println("⚠️ 卸载终局上报未达，容器形态下暂缓退出、随连接恢复继续补报（面板在终局到达前保持 pending_uninstall）")
+	for {
+		if cur, ok := loadUninstallState(); ok && cur.Reported {
+			return
+		}
+		if w.reportUninstallFinal(st) {
+			st.Reported = true
+			saveUninstallState(st)
+			fmt.Println("✅ 卸载终局已补报，退出容器")
+			return
+		}
+		time.Sleep(uninstallReportRetryWait)
 	}
 }
 
