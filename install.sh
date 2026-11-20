@@ -2558,9 +2558,14 @@ install_flmx_agent() {
   # 失败一律 return 而非 exit：main 以 rc 分流 delete_self（失败
   # 保留脚本并点名），函数内 exit 会绕过该分流、用户得不到「脚本
   # 已保留可重试」的回执（下同）。
-  ensure_download_url_initialized || return 1
-
+  # R18-A3-02：先问配置、再解析版本。ensure_download_url_initialized
+  # 经 resolve_latest_release_tag 建路线表时用 SERVER_ADDR 派生面板
+  # 源；旧顺序菜单路径下 SERVER_ADDR 仍为空、面板源分支被跳过，
+  # 仅面板可达的受限网络里版本解析直接失败、装机在问到地址之前
+  # 就中止（-a 路径下地址早已就绪、解析能走面板源，本可成功）。
   get_config_params || return 1
+
+  ensure_download_url_initialized || return 1
 
   # 共存守卫（C2-02）：在下载、停服、写文件之前先判定既有 agent 的
   # 归属；不属于本面板时终止，不留任何改动。

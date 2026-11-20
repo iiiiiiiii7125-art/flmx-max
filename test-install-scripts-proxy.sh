@@ -7767,6 +7767,77 @@ test_install_script_routes_panel_first_when_panel_alive() (
   assert_equals "3" "$ROUTES_STAGE" "panel-alive: stage should be 3 (panel-exclusive, extendable)"
 )
 
+# R18-A3-02：菜单安装须先读面板地址、再解析版本。旧顺序
+# ensure_download_url_initialized 先跑版本解析：解析子 shell 内
+# 建路线表时 SERVER_ADDR 仍为空、面板源分支被跳过；仅面板可达
+# 的受限网络里直连与代理全败、解析失败，装机在问到地址之前就中
+# 止（-a 路径下地址早已就绪、解析能走面板源，本可成功）。本用例
+# 以菜单形态（SERVER_ADDR 与 SECRET 均空）走真实
+# install_flmx_agent：get_config_params 桩供入面板地址；curl 桩
+# 只让面板线路成功（其余一律 22），解析/建表/复核全走真实函数，
+# 下载桩在父 shell 重建路线表后即败；断言路线表首条为面板源前
+# 缀且日志出现「面板源」。旧代码上解析即败、表为空，必红。
+test_install_flmx_agent_menu_reads_panel_addr_before_routes() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+  VERSION="" FLMX_VERSION="" PINNED_VERSION=""
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  mkdir -p "$INSTALL_DIR"
+  SERVICE_MANAGER="systemd"
+  PROXY_ENABLED=""
+  PROXY_URL=""
+  SERVER_ADDR=""
+  SECRET=""
+  DOWNLOAD_ROUTES=()
+  ROUTES_STAGE=0
+
+  get_config_params() {
+    SERVER_ADDR="wss://panel.example.com:8443"
+    SECRET="test-secret"
+  }
+  ensure_small_host_swap() { :; }
+  ensure_alpine_runtime_dependencies() { :; }
+  guard_agent_dir_ownership() { :; }
+  agent_dir_has_agent() { return 1; }
+  check_and_install_tcpkill() { :; }
+  guard_agent_reinstall_conflict() { :; }
+  ensure_service_manager() { :; }
+  download_agent_binary() { ensure_download_routes; return 1; }
+
+  # 仅面板可达：含 panel.example.com 的请求按 -w 形态供数，
+  # 其余一律失败（直连/代理全死，还原受限网络）。
+  curl() {
+    case "$*" in
+      *panel.example.com*) ;;
+      *) return 22 ;;
+    esac
+    case "$*" in
+      *'%{time_total} %{url_effective}'*)
+        printf '0.050 https://github.com/%s/releases/tag/9.9.9' "$REPO"
+        ;;
+      *'%{http_code} %{size_download} %{time_total}'*)
+        printf '206 262144 0.500000'
+        ;;
+      *'%{url_effective}'*)
+        printf 'https://github.com/%s/releases/tag/9.9.9' "$REPO"
+        ;;
+      *) return 22 ;;
+    esac
+  }
+
+  local rc="0" log
+  log="$work/install.log"
+  install_flmx_agent >"$log" 2>&1 </dev/null || rc="$?"
+  assert_equals "1" "$rc" "R18-A3-02: install must stop when the (stubbed) download fails"
+  grep -q "面板源" "$log" || fail "R18-A3-02: menu install on a panel-only network must reach the panel source (route line missing)"
+  assert_equals "https://panel.example.com:8443/api/v1/open_api/gh" "${DOWNLOAD_ROUTES[0]:-}" \
+    "R18-A3-02: menu install must build the route table after reading the panel address, so the panel source ranks first"
+  rm -rf "$work"
+)
+
 # 面板源分发（install.sh）：面板线路探不通 -> 原样回退既有流程：
 # 直连活则直连短路（阶段 1）；直连也死则代理排名（阶段 2）且路线
 # 表里没有面板前缀。
@@ -12334,6 +12405,7 @@ test_install_script_routes_rank_proxies_when_direct_dead
 test_install_script_download_failover_extends_routes
 test_derive_panel_prefix_table
 test_install_script_routes_panel_first_when_panel_alive
+test_install_flmx_agent_menu_reads_panel_addr_before_routes
 test_install_script_routes_panel_dead_falls_back
 test_panel_install_routes_direct_needs_throughput_gate
 test_install_script_panel_route_extends_on_download_failure
