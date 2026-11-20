@@ -412,6 +412,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/system/check-updates", h.systemCheckUpdates)
 	mux.HandleFunc("/api/v1/system/upgrade", h.systemUpgrade)
 	mux.HandleFunc("/api/v1/system/upgrade/status", h.systemUpgradeStatus)
+	// R18-B8-01：镜像缓存按版本清除（仅管理员，见 requiresAdmin）。
+	mux.HandleFunc("/api/v1/system/gh-cache/purge", h.ghMirrorPurgeCache)
 	// 备份端点全集（B14-002）：正常前缀与历史双前缀别名
 	// （/api/v1/api/v1/backup/...，兼容曾把基址拼重一层的旧客户端/脚本）
 	// 由同一清单注册。新增备份端点只许往此清单加行，两个前缀自动齐全；

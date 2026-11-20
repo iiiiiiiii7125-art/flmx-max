@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"go-backend/internal/clientip"
+	"go-backend/internal/http/response"
 )
 
 // 面板的 GitHub 镜像。/api/v1/open_api/gh/<GitHub 地址> 用法与公开的
@@ -27,9 +28,11 @@ import (
 // 就可以经面板安装、升级和拉内核。旧 agent 无需更新：它们本来就会在 URL
 // 前拼接代理前缀。
 //
-// 只服务面板安装用到的仓库。tag 下的 release 文件永不变化，永久缓存在
-// 磁盘；"latest" 文件、raw 文件和 API 响应按 TTL 刷新；GitHub 不可达时
-// 返回旧副本。
+// 只服务面板安装用到的仓库。tag 下的 release 文件按 24h TTL 缓存
+// 在磁盘（R18-B8-01：tag 本身可被删除重打，永久缓存会在 tag 移动
+// 后永久污染节点升级的期望哈希信任根，且无清除入口）；"latest"
+// 文件、raw 文件和 API 响应按各自 TTL 刷新；GitHub 不可达时在
+// 年龄上限内返回旧副本。
 
 const (
 	ghMirrorPath     = "/api/v1/open_api/gh/"
@@ -37,11 +40,18 @@ const (
 	ghMirrorMaxCache = 2 << 30
 	ghMirrorFreshAPI = 10 * time.Minute
 	ghMirrorFreshRaw = 6 * time.Hour
+	// ghMirrorFreshTagRelease 是 tag 下 release 资产的缓存 TTL
+	// （R18-B8-01）：名义上不可变的 release 文件仍以 24h 为上限，
+	// tag 被删除重打/同名 release 重切后，最迟 24h 内回源重验证，
+	// 期望哈希信任根不再永久中毒；过期后下载失败仍按
+	// ghMirrorMaxStaleAge 的年龄上限 stale 回退，不额外放宽。
+	ghMirrorFreshTagRelease = 24 * time.Hour
 	ghMirrorLatest   = 10 * time.Minute
 	ghMirrorServeFor = 30 * time.Minute
-	// F-137：下载失败时 stale 回退的年龄上限。tag 下的 release 文件是
-	// 不可变的（fresh==0，永不重下），不受此限；此限只约束 API/raw/
-	// latest 这类可变内容的旧副本最多能旧到什么程度。
+	// F-137：下载失败时 stale 回退的年龄上限。tag 下的 release 文件
+	// 按 ghMirrorFreshTagRelease（24h）刷新，不受此限之外的永久
+	// 效力；此限只约束 API/raw/latest 这类可变内容与过期 tag 资产
+	// 的旧副本最多能旧到什么程度。
 	ghMirrorMaxStaleAge = 24 * time.Hour
 )
 
@@ -292,7 +302,9 @@ func parseGHMirrorPath(rest, rawQuery string) (*ghMirrorUpstream, error) {
 		repo := parts[0] + "/" + parts[1]
 		switch {
 		case len(parts) == 6 && parts[3] == "download":
-			return &ghMirrorUpstream{url: ghMirrorBases.github + "/" + path}, nil
+			// R18-B8-01：tag 资产不再永久缓存（fresh==0），改按
+			// ghMirrorFreshTagRelease（24h）过期重验证。
+			return &ghMirrorUpstream{url: ghMirrorBases.github + "/" + path, fresh: ghMirrorFreshTagRelease}, nil
 		case len(parts) == 6 && parts[3] == "latest" && parts[4] == "download":
 			return &ghMirrorUpstream{repo: repo, file: parts[5], latest: true}, nil
 		case len(parts) == 4 && parts[3] == "latest":
@@ -374,6 +386,9 @@ func (h *Handler) githubMirror(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		up.url = ghMirrorBases.github + "/" + up.repo + "/releases/download/" + tag + "/" + up.file
+		// R18-B8-01：latest 解析出的也是 tag 下的 release 资产，
+		// 与直指 tag 的下载同口径按 24h TTL 刷新，不永久缓存。
+		up.fresh = ghMirrorFreshTagRelease
 	}
 
 	path, err := ghMirrorFetch(up)
@@ -713,8 +728,8 @@ func isPanelGithubMirror(proxyURL string) bool {
 //
 // agent 侧已把本端点作为一条下载线路纳入测速排名（面板源一期），
 // 缓存冷时首台节点要等本端点回源 GitHub。下发侧在派发前先行
-// 预热：同一版本同一架构全网只回源一次（singleflight + 永久
-// 缓存），预热失败只记日志、绝不阻塞下发（agent 侧有懒加载与
+// 预热：同一版本同一架构全网只回源一次（singleflight + 24h TTL
+// 缓存，R18-B8-01），预热失败只记日志、绝不阻塞下发（agent 侧有懒加载与
 // 全套线路回退兜底）。期望哈希取自本端点缓存的官方 .sha256，
 // 经 WSS 控制通道随升级命令下发，成为校验的信任根。
 
@@ -759,4 +774,73 @@ func ghMirrorReleaseSHA256(version, arch string) string {
 		return ""
 	}
 	return strings.ToLower(fields[0])
+}
+
+// ghMirrorReleaseAssetFiles 是节点安装/升级预热会写入镜像缓存的
+// release 资产全集（upgrade.go 的 warmAgentReleaseAssets /
+// preheatInstallReleaseAssets）：按版本清除时按此表逐个定位缓存
+// 文件；新增预热资产须同步此表，否则 purge 会漏删。
+var ghMirrorReleaseAssetFiles = []string{"install.sh", "install.sh.sha256", "gost-amd64", "gost-arm64", "gost-amd64.sha256", "gost-arm64.sha256"}
+
+// ghMirrorPurgeReleaseAssets 清除指定版本在镜像缓存中的全部
+// release 资产（含 .sha256 校验文件），返回实际删除份数。
+// R18-B8-01 的管理面清除入口：tag 被移动/重切后，管理员可经此
+// 立即清除中毒缓存，不必登录宿主机删盘。version 须过
+// validRedirectTag 校验（fail-closed：非法版本报错、不删任何文件）；
+// 缓存中不存在的版本返回 removed=0，不报错。
+func ghMirrorPurgeReleaseAssets(version string) (int, error) {
+	if !validRedirectTag(version) {
+		return 0, fmt.Errorf("版本号不合法: %q", version)
+	}
+	removed := 0
+	for _, file := range ghMirrorReleaseAssetFiles {
+		up, err := ghMirrorReleaseAssetUpstream(version, file)
+		if err != nil {
+			return removed, err
+		}
+		sum := sha256.Sum256([]byte(up.url))
+		path := filepath.Join(ghMirrorCacheDir(), hex.EncodeToString(sum[:]))
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return removed, err
+		}
+		ghMirrorClearAttempt(path)
+		removed++
+	}
+	return removed, nil
+}
+
+// ghMirrorPurgeCache 是 R18-B8-01 的管理面清除入口：
+// POST /api/v1/system/gh-cache/purge {"version":"2.1.18"}。
+// 仅管理员（路由前缀 /api/v1/system/ 已由 requiresAdmin 守卫，
+// 此处再复查 isAdminRequest，防路由守卫口径漂移）。
+// 清除失败（非法版本/磁盘错误）返回 -2，不静默谎报成功。
+func (h *Handler) ghMirrorPurgeCache(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.ErrDefault("请求失败"))
+		return
+	}
+	if !isAdminRequest(r) {
+		response.WriteJSON(w, response.Err(403, "禁止访问敏感配置"))
+		return
+	}
+	var req struct {
+		Version string `json:"version"`
+	}
+	if err := decodeJSON(r.Body, &req); err != nil {
+		response.WriteJSON(w, response.Err(-2, "请求体解析失败"))
+		return
+	}
+	removed, err := ghMirrorPurgeReleaseAssets(strings.TrimSpace(req.Version))
+	if err != nil {
+		response.WriteJSON(w, response.Err(-2, err.Error()))
+		return
+	}
+	log.Printf("gh_mirror: 管理员清除版本 %s 的镜像缓存 %d 个文件", req.Version, removed)
+	response.WriteJSON(w, response.OK(map[string]interface{}{
+		"version": req.Version,
+		"removed": removed,
+	}))
 }
