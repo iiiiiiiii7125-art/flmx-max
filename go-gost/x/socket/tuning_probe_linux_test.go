@@ -5,6 +5,8 @@ package socket
 import (
 	"encoding/binary"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // buildDiagMsg builds a synthetic inet_diag_msg payload: the 72-byte
@@ -57,7 +59,86 @@ func TestBuildDiagRequestFamily(t *testing.T) {
 	}
 }
 
-// The offset is pinned here, not by a live netlink dump: the old
+// buildDiagDatagram packs diag-message payloads plus NLMSG_DONE
+// into one netlink datagram, the unit sockDiagDump reads at a time.
+func buildDiagDatagram(t *testing.T, payloads ...[]byte) []byte {
+	t.Helper()
+	var dg []byte
+	for _, p := range payloads {
+		hdr := make([]byte, 16)
+		binary.LittleEndian.PutUint32(hdr[0:4], uint32(16+len(p)))
+		binary.LittleEndian.PutUint16(hdr[4:6], sockDiagByFamily)
+		dg = append(dg, hdr...)
+		dg = append(dg, p...)
+		for len(dg)%4 != 0 {
+			dg = append(dg, 0)
+		}
+	}
+	done := make([]byte, 16)
+	binary.LittleEndian.PutUint32(done[0:4], 16)
+	binary.LittleEndian.PutUint16(done[4:6], unix.NLMSG_DONE)
+	return append(dg, done...)
+}
+
+// R18-D2-14: the old fixed 64KB buffer silently truncated a busy
+// node's dump datagram and the parse failed the whole RTT leg.
+// The dump must now detect the truncation via MSG_TRUNC and retry
+// with a bigger buffer instead of failing. The recv path is staged
+// through the sockDiagRecvfrom seam: a live kernel cannot be relied
+// on here (this sandbox's kernel answers every inet_diag dump with
+// NLMSG_ERROR -2, as does ss — it falls back to /proc), so the
+// truncation/retry ladder is pinned by stub, and the live leg
+// still needs a real host to exercise.
+func TestR18D214SockDiagDumpRetriesAfterTruncation(t *testing.T) {
+	old := sockDiagRecvfrom
+	defer func() { sockDiagRecvfrom = old }()
+	var bufSizes []int
+	calls := 0
+	sockDiagRecvfrom = func(fd int, p []byte, flags int) (int, unix.Sockaddr, error) {
+		bufSizes = append(bufSizes, len(p))
+		if flags&unix.MSG_TRUNC == 0 {
+			t.Errorf("recv call %d: MSG_TRUNC flag missing (flags=%d)", calls+1, flags)
+		}
+		calls++
+		if calls == 1 {
+			// First attempt (256KB buffer): the kernel's datagram
+			// does not fit — MSG_TRUNC reports its true length.
+			return len(p) + 1, nil, nil
+		}
+		// Second attempt (1MB buffer): one established socket
+		// plus DONE, delivered whole.
+		dg := buildDiagDatagram(t, buildDiagMsg(t, tcpEstablished, tcpInfoBlob(12345, 0)))
+		copy(p, dg)
+		return len(dg), nil, nil
+	}
+	rtts, err := sockDiagDump(unix.AF_INET)
+	if err != nil {
+		t.Fatalf("dump after truncation retry: %v", err)
+	}
+	if len(rtts) != 1 || rtts[0] != 12345 {
+		t.Fatalf("rtts = %v, want [12345]", rtts)
+	}
+	if len(bufSizes) != 2 || bufSizes[0] != 256<<10 || bufSizes[1] != 1<<20 {
+		t.Fatalf("retry ladder = %v, want [262144 1048576]", bufSizes)
+	}
+}
+
+func TestR18D214SockDiagDumpGivesUpAfterLadderExhausted(t *testing.T) {
+	old := sockDiagRecvfrom
+	defer func() { sockDiagRecvfrom = old }()
+	var bufSizes []int
+	sockDiagRecvfrom = func(fd int, p []byte, flags int) (int, unix.Sockaddr, error) {
+		bufSizes = append(bufSizes, len(p))
+		return len(p) + 1, nil, nil
+	}
+	_, err := sockDiagDump(unix.AF_INET)
+	if err == nil {
+		t.Fatal("dump must fail once every buffer size is exhausted")
+	}
+	if len(bufSizes) != 3 || bufSizes[0] != 256<<10 || bufSizes[1] != 1<<20 || bufSizes[2] != 4<<20 {
+		t.Fatalf("retry ladder = %v, want [262144 1048576 4194304]", bufSizes)
+	}
+}
 // code read offset 72 (tcpi_rttvar), which is 0 on stable connections
 // and made the probe see zero samples on every real machine.
 func TestExtractTCPRTT(t *testing.T) {
