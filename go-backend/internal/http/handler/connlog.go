@@ -37,6 +37,14 @@ import (
 
 const connlogMaxEventsPerBatch = 1000
 
+// connlogMaxFutureSkew 是 R18-C5-02 摄入侧未来方向容差：事件的
+// StartTime/EndTime 超出面板时间此值即整批拒收（invalid_batch）。
+// 1 小时远大于正常时钟漂移（分钟级），又远小于可绕过保留期剪枝
+// 的偏移（天级）。只约束未来方向：spool/断线重放会产生旧事件，
+// 过去方向无害（剪枝改按面板 created_time 后旧事件只会被正常
+// 清理，不会挤占合法行），故过去时间一律放行。
+const connlogMaxFutureSkew = time.Hour
+
 type connlogEvent struct {
 	Type        string `json:"type"`
 	ConnID      string `json:"connId"`
@@ -109,7 +117,7 @@ func (h *Handler) flowConnlogV2(w http.ResponseWriter, r *http.Request) {
 			"stream": envelope.Stream, "sequence": envelope.Sequence, "error": reason,
 		})
 	}
-	if err := validateConnlogEvents(envelope.Events); err != nil {
+	if err := validateConnlogEvents(envelope.Events, time.Now()); err != nil {
 		log.Printf("connlog upload invalid batch node_id=%d err=%v", node.ID, err)
 		reject(http.StatusBadRequest, "invalid_batch")
 		return
@@ -201,9 +209,18 @@ func (h *Handler) flowConnlogV2(w http.ResponseWriter, r *http.Request) {
 // invalid_batch 供 agent 二分定位，与 flow v2 同口径）。每条事件
 // 必须自带全字段：close 事件在 open 丢失时要能独立建行，故字段
 // 校验不因 type 放宽（仅 open 强制 startTime/clientIp，close 强
-// 制 endTime）。
-func validateConnlogEvents(events []connlogEvent) error {
+// 制 endTime）。now 为面板当前时间：StartTime/EndTime 超出
+// now+connlogMaxFutureSkew 即拒收（R18-C5-02，未来方向的时钟
+// 偏移会绕过保留期剪枝、挤占行数帽）。
+func validateConnlogEvents(events []connlogEvent, now time.Time) error {
+	futureLimit := now.Add(connlogMaxFutureSkew).UnixMilli()
 	for i, ev := range events {
+		if ev.StartTime > 0 && ev.StartTime > futureLimit {
+			return fmt.Errorf("event %d: startTime too far in the future", i)
+		}
+		if ev.EndTime > 0 && ev.EndTime > futureLimit {
+			return fmt.Errorf("event %d: endTime too far in the future", i)
+		}
 		if len(ev.ConnID) == 0 || len(ev.ConnID) > 64 {
 			return fmt.Errorf("event %d: connId length out of range", i)
 		}
