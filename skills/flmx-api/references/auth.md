@@ -120,15 +120,24 @@ curl -X POST "${FLMX_BASE_URL}/api/v1/node/list" \
 
 ## POST /api/v1/user/updatePassword
 
-Change current user's password.
+Change current user's password (and optionally username — the
+endpoint renames the account at the same time).
 
 **Request:**
 ```json
 {
-  "oldPassword": "current-password",
-  "newPassword": "new-password"
+  "newUsername": "current-username",
+  "currentPassword": "current-password",
+  "newPassword": "new-password",
+  "confirmPassword": "new-password"
 }
 ```
+
+All four fields are required. `newUsername` is the username to keep
+(or rename to — 1–100 characters, trimmed); pass the current username
+when only changing the password. `newPassword` must equal
+`confirmPassword`, be at least 6 characters and at most 72 bytes, and
+differ from `currentPassword`.
 
 **Response:**
 ```json

@@ -44,6 +44,9 @@
 # emptyForm 默认改回 false 必须被 §25 抓红并点名——证明转跑本身
 # 真实执行，不止子门自检（子门自检只证子门，§25 被拆线时本变体
 # 即绿、直接暴露接线丢失）。
+# R18-A5-01 扩围：变体 25 覆盖 §30（改密请求体对齐门），auth.md
+# 的 updatePassword 例文改回 oldPassword 旧形必须被 §30 抓红并
+# 点名 R18-A5-01。
 # FIX-GATE-CALIB 改钉（R2-GATE-02）：上文 55/153、59/149 均为历史
 # 标定记录（出处见各重标定提交），不再是变体 8 的写死锚点——变体
 # 8 改为运行时从镜像内 ci-build.yml 机械读现行标记值（其后标记又
@@ -357,5 +360,28 @@ fi
 grep -q "S05 前端计量默认开门" "$TMP/v24.log" && echo "OK: variant 24 caught and named" || {
   echo "FAIL: variant 24 caught but the drift was not named"; sed 's/^/    /' "$TMP/v24.log"; exit 1; }
 cp "$ROOT/vite-frontend/src/pages/inbound/presets.ts" "$MIR/vite-frontend/src/pages/inbound/presets.ts"
+
+echo "== variant 25: updatePassword doc example reverts to oldPassword must FAIL and name it (§30, R18-A5-01) =="
+python3 - "$MIR/skills/flmx-api/references/auth.md" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '''  "newUsername": "current-username",
+  "currentPassword": "current-password",
+  "newPassword": "new-password",
+  "confirmPassword": "new-password"'''
+new = '''  "oldPassword": "current-password",
+  "newPassword": "new-password"'''
+assert old in s, "baseline shape changed"
+open(p, "w").write(s.replace(old, new, 1))
+PYEOF
+grep -q '"oldPassword"' "$MIR/skills/flmx-api/references/auth.md" || {
+  echo "FAIL: variant 25 mutation did not land (updatePassword example anchor drifted)"; exit 1; }
+if run_gate "$TMP/v25.log"; then
+  echo "FAIL: variant 25 was not caught"; exit 1
+fi
+grep -q "R18-A5-01" "$TMP/v25.log" && echo "OK: variant 25 caught and named" || {
+  echo "FAIL: variant 25 caught but the drift was not named"; sed 's/^/    /' "$TMP/v25.log"; exit 1; }
+cp "$ROOT/skills/flmx-api/references/auth.md" "$MIR/skills/flmx-api/references/auth.md"
 
 echo "SELFTEST PASS"

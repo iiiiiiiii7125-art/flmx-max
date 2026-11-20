@@ -1018,7 +1018,7 @@ test_panel_install_env_carries_trusted_proxies_entry() (
   }
   get_docker_compose_url() { echo "https://example.com/docker-compose-v4.yml"; }
   download_verified() {
-    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\n' > "$2"
+    printf 'services:\n  backend:\n    image: example/backend:9.9.9\n  frontend:\n    image: example/frontend:9.9.9\nnetworks:\n  gost-network:\n    ipam:\n      config:\n        - subnet: 172.30.0.0/16\n' > "$2"
     return 0
   }
   wait_for_backend_healthy() { return 0; }
@@ -1044,7 +1044,7 @@ test_panel_install_env_carries_trusted_proxies_entry() (
   ( cd "$work" && install_panel >/dev/null 2>&1 ) || rc="$?"
   assert_equals "0" "$rc" "C4-01 follow-up: install_panel should succeed in the fixture"
   [[ -f "$work/.env" ]] || fail "C4-01 follow-up: install must generate .env"
-  grep -q '^FLMX_TRUSTED_PROXIES=$' "$work/.env" || fail "C4-01 follow-up: the generated .env must carry FLMX_TRUSTED_PROXIES, empty by default (loopback-only trust)"
+  grep -q '^FLMX_TRUSTED_PROXIES=172.30.0.0/16$' "$work/.env" || fail "R18-C4-01: the generated .env must prefill FLMX_TRUSTED_PROXIES from the compose network subnet (172.30.0.0/16), not leave it empty"
   grep -q '转发者所在子网' "$work/.env" || fail "C4-01 follow-up: the guidance must name what to fill (the frontend container subnet CIDR)"
   grep -q '172.30.0.0/16' "$work/.env" || fail "C4-01 follow-up: the guidance must give the shipped template subnet as the concrete example"
   grep -q '共享' "$work/.env" || fail "C4-01 follow-up: the guidance must state the shared-bucket consequence of leaving it empty"
@@ -1065,6 +1065,33 @@ test_shipped_compose_templates_carry_trusted_proxies_passthrough() (
     assert_equals "1" "$(grep -cF 'FLMX_TRUSTED_PROXIES: ${FLMX_TRUSTED_PROXIES:-}' "$ROOT_DIR/$tpl")" \
       "C4-01: $tpl must carry the passthrough line exactly once"
   done
+)
+
+# R18-C4-01（helper 半）：panel_compose_network_subnets 只认 networks
+# 段内的子网——随版 v4 模板抽出 172.30.0.0/16、v6 模板抽出双子网
+# （逗号分隔）；无 networks 段、缺文件、0.0.0.0/0 一律输出空（调用
+# 方留空并告警，绝不预填过宽范围）。
+test_panel_compose_network_subnets_prefills_from_template() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  assert_equals "172.30.0.0/16" "$(panel_compose_network_subnets "$ROOT_DIR/docker-compose-v4.yml")" \
+    "R18-C4-01: v4 template subnet must be extracted for the trusted-proxies prefill"
+  assert_equals "172.30.0.0/16,fd00:dead:beef::/48" "$(panel_compose_network_subnets "$ROOT_DIR/docker-compose-v6.yml")" \
+    "R18-C4-01: v6 template subnets must both be extracted for the trusted-proxies prefill"
+
+  local work f
+  work=$(mktemp -d)
+  f="$work/no-networks.yml"
+  printf 'services:\n  backend:\n    image: example/backend:9.9.9\n' > "$f"
+  assert_equals "" "$(panel_compose_network_subnets "$f")" \
+    "R18-C4-01: a compose file without a networks section must yield an empty prefill"
+  assert_equals "" "$(panel_compose_network_subnets "$work/missing.yml")" \
+    "R18-C4-01: a missing compose file must yield an empty prefill"
+  f="$work/wide.yml"
+  printf 'networks:\n  gost-network:\n    ipam:\n      config:\n        - subnet: 0.0.0.0/0\n' > "$f"
+  assert_equals "" "$(panel_compose_network_subnets "$f")" \
+    "R18-C4-01: 0.0.0.0/0 must never be prefilled as a trusted proxy range"
 )
 
 test_install_script_respects_disabled_proxy() (
@@ -4984,6 +5011,98 @@ test_install_docker_fallback_package_names_exist_in_repos() (
     fail "R6-01: RHEL fallback must add the Docker official repo before using official package names"
 )
 
+# R18-A1-01（静态半）：Alpine 分支必须先试 docker-cli-compose（现行
+# Alpine 唯一在架的 compose 包名）、再以旧包名 docker-compose 兜底。
+# 旧写法只写 docker-compose：apk 事务性安装整条失败、连 docker 本
+# 体都装不上，install_docker 在 Alpine 上整条死路。
+test_install_docker_alpine_prefers_docker_cli_compose() (
+  set -euo pipefail
+  local body alpine_line
+  body=$(awk '/^install_docker\(\) \{/,/^\}/' "$ROOT_DIR/panel_install.sh")
+  [[ -n "$body" ]] || fail "R18-A1-01: install_docker body must be extractable"
+  alpine_line=$(grep -F 'apk add' <<< "$body" | head -n 1 || true)
+  [[ -n "$alpine_line" ]] || fail "R18-A1-01: install_docker must have an Alpine apk branch"
+  grep -q 'docker-cli-compose' <<< "$alpine_line" || \
+    fail "R18-A1-01: Alpine branch must try docker-cli-compose first (docker-compose package no longer exists on current Alpine)"
+  grep -q 'docker-compose' <<< "$alpine_line" || \
+    fail "R18-A1-01: Alpine branch must keep docker-compose as a fallback for old Alpine releases"
+  # 新包名必须出现在旧包名之前（优先顺序即调用顺序）。
+  case "$alpine_line" in
+    *docker-cli-compose*docker-compose*) ;;
+    *) fail "R18-A1-01: docker-cli-compose must precede the docker-compose fallback on the Alpine line" ;;
+  esac
+)
+
+# R18-A1-01（行为半）：Alpine 上两幕都须装成功——①现行 Alpine（旧
+# docker-compose 包已退场：apk 遇裸 docker-compose 即失败）首选
+# docker-cli-compose 一次成功；②旧 Alpine（无 docker-cli-compose）
+# 首选失败后退到 docker-compose 仍成功。发行版分支按 `[` 桩定
+# Alpine；守护进程走 OpenRC 桩。
+test_install_docker_alpine_compose_fallback_order() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local work apk_log
+  work=$(mktemp -d)
+  apk_log="$work/apk.log"
+  export APK_LOG="$apk_log"
+  curl() {
+    local out="" prev=""
+    for a in "$@"; do
+      if [[ "$prev" == "-o" ]]; then out="$a"; fi
+      prev="$a"
+    done
+    if [[ -n "$out" ]]; then printf '#!/bin/sh\nexit 0\n' > "$out"; fi
+    return 0
+  }
+  apk() {
+    printf 'apk %s\n' "$*" >> "$APK_LOG"
+    local a
+    for a in "$@"; do
+      if [[ "$a" == "${APK_FAIL_TOKEN:-__none__}" ]]; then return 1; fi
+    done
+    return 0
+  }
+  rc-update() { printf 'rc-update %s\n' "$*" >> "$APK_LOG"; return 0; }
+  rc-service() { printf 'rc-service %s\n' "$*" >> "$APK_LOG"; return 0; }
+  [() {
+    if [[ "${1:-}" == "-f" ]]; then
+      case "${2:-}" in
+        /etc/debian_version) return 1 ;;
+        /etc/redhat-release) return 1 ;;
+        /etc/alpine-release) return 0 ;;
+      esac
+    fi
+    builtin test "${@:1:$#-1}"
+  }
+
+  local rc
+  # 幕一：现行 Alpine，裸 docker-compose 不可得。
+  APK_FAIL_TOKEN="docker-compose"
+  : > "$apk_log"
+  rc="0"
+  ( install_docker >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R18-A1-01: install_docker must succeed on current Alpine via docker-cli-compose"
+  grep -q 'apk add --no-cache docker docker-cli-compose' "$apk_log" || \
+    fail "R18-A1-01: current-Alpine install must request docker-cli-compose"
+  grep -q '^rc-service docker start$' "$apk_log" || \
+    fail "R18-A1-01: Alpine fallback must start the daemon after install"
+
+  # 幕二：旧 Alpine，无 docker-cli-compose，退到 docker-compose。
+  APK_FAIL_TOKEN="docker-cli-compose"
+  : > "$apk_log"
+  rc="0"
+  ( install_docker >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "0" "$rc" "R18-A1-01: install_docker must succeed on old Alpine via the docker-compose fallback"
+  [[ "$(grep -c '^apk add' "$apk_log")" -eq 2 ]] || \
+    fail "R18-A1-01: old-Alpine install must try docker-cli-compose first, then fall back (expected 2 apk calls)"
+  grep -q 'apk add --no-cache docker docker-compose$' "$apk_log" || \
+    fail "R18-A1-01: old-Alpine fallback must request bare docker-compose second"
+  grep -q '^rc-service docker start$' "$apk_log" || \
+    fail "R18-A1-01: Alpine fallback must start the daemon after install"
+  unset -f '['
+)
+
 # R7-02（行为半）：兜底各支装后必须启动守护进程——包管理器与服务
 # 管理器桩共用一份保序 argv 日志，逐发行版断言：装包成功后、返回
 # 0 前出现本发行版的启动动作（systemd 支 systemctl enable --now；
@@ -5214,6 +5333,52 @@ EOF
   grep -q '检测到 Docker 命令' <<< "$out" || \
     fail "R7-02: post-install recheck should report the detected command once the daemon is verified"
   unset -f '['
+)
+
+# OPEN-14（与 R18-A1-01 同根的 v1 偏好）：check_docker 在 v2 与 v1
+# 都在场时必须选 docker compose v2；v2 不可用时才退到 docker-compose
+# v1；两者皆无时仍以点名文案失败。docker/docker-compose 皆为函数
+# 桩（command -v 能检出函数），daemon 探活恒过。
+test_check_docker_prefers_compose_v2_over_v1() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  docker() {
+    if [[ "${1:-}" == "compose" ]]; then
+      [[ "${DOCKER_V2:-1}" == "1" ]] && return 0 || return 1
+    fi
+    return 0
+  }
+  docker-compose() { return 0; }
+
+  local out_file rc
+  out_file=$(mktemp)
+
+  # 形态一：v2 与 v1 都在场 → 选 v2。
+  DOCKER_V2="1"
+  DOCKER_CMD=""
+  rc="0"
+  check_docker >"$out_file" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "OPEN-14: check_docker must succeed when both compose forms are present"
+  assert_equals "docker compose" "$DOCKER_CMD" "OPEN-14: check_docker must prefer docker compose v2 over docker-compose v1"
+  grep -q '检测到 Docker 命令：docker compose' "$out_file" || \
+    fail "OPEN-14: check_docker must report the v2 command it selected"
+
+  # 形态二：v2 不可用、v1 在场 → 退到 v1。
+  DOCKER_V2="0"
+  DOCKER_CMD=""
+  rc="0"
+  check_docker >"$out_file" 2>&1 || rc="$?"
+  assert_equals "0" "$rc" "OPEN-14: check_docker must succeed with v1 when v2 is unavailable"
+  assert_equals "docker-compose" "$DOCKER_CMD" "OPEN-14: check_docker must fall back to docker-compose v1 when v2 is unavailable"
+
+  # 形态三：docker 在场、两种 compose 形态皆无 → 失败并点名。
+  unset -f docker-compose
+  DOCKER_V2="0"
+  rc="0"
+  ( check_docker >/dev/null 2>&1 ) || rc="$?"
+  assert_equals "1" "$rc" "OPEN-14: check_docker must fail when docker has no compose form at all"
+  rm -f "$out_file"
 )
 
 # R7-02（静态半）：钉住启动接线与复检探活，防文本回退——helper
@@ -6644,8 +6809,11 @@ test_install_panel_prints_generated_initial_admin_password
 test_install_docker_rejects_unverified_script
 test_install_docker_fallback_succeeds_with_working_package_managers
 test_install_docker_fallback_package_names_exist_in_repos
+test_install_docker_alpine_prefers_docker_cli_compose
+test_install_docker_alpine_compose_fallback_order
 test_install_docker_fallback_starts_daemon_all_distros
 test_check_docker_requires_reachable_daemon_on_install_path
+test_check_docker_prefers_compose_v2_over_v1
 test_install_docker_daemon_start_wiring_static
 test_download_verified_fail_closed_edges
 test_verify_downloaded_binary_retries_transient_checksum_failure
@@ -7203,20 +7371,35 @@ test_uninstall_removes_custom_kernel_dir() (
   FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
   printf '[Service]\nExecStart=%s/flmx_agent\n' "$INSTALL_DIR" > "$FLMX_AGENT_SYSTEMD_SERVICE_FILE"
   mkdir -p "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d"
-  local kdir="$work/custom-kernels"
-  mkdir -p "$kdir"
-  printf '{}' > "$kdir/state.json"
-  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$kdir" > "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+  # R18-A3-01: 正例夹具须落在黑名单前缀之外——mktemp 在 /tmp、$HOME
+  # 也在名单内，都不可用。/data 是审计建议的可删前缀之一；建目录要
+  # 特权：root 直接建，非 root 走 sudo -n（CI runner 免密 sudo）；
+  # 两者皆无时只跳过正例并明示（沿用本套件 root 门 skip 先例），拒
+  # 绝形态仍全程断言。
+  local kbase="/data/flmx-a3-test-$$-$RANDOM" kdir="" kbase_sudo=""
+  if mkdir -p "$kbase" 2>/dev/null; then
+    :
+  elif command -v sudo >/dev/null 2>&1 && sudo -n mkdir -p "$kbase" 2>/dev/null; then
+    kbase_sudo="sudo -n"
+  else
+    echo "skip: custom kernel dir positive case needs a non-blacklisted fixture dir (root or passwordless sudo to create /data)"
+  fi
 
   local rc="0" out
   out=$(mktemp)
-  rc="0"
-  printf 'y\n' | uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
-  assert_equals "0" "$rc" "R2-F7-I02: uninstall with a custom kernel dir should succeed"
-  [[ ! -d "$INSTALL_DIR" ]] || fail "R2-F7-I02: install dir should be removed"
-  [[ ! -d "$kdir" ]] || fail "R2-F7-I02: custom kernel dir should be removed on uninstall"
-  grep -q "custom-kernels" "$out" || \
-    fail "R2-F7-I02: uninstall output should name the custom kernel dir"
+  if [[ -n "$kbase_sudo" || -d "$kbase" ]]; then
+    kdir="$kbase/custom-kernels"
+    if [[ -n "$kbase_sudo" ]]; then sudo -n mkdir -p "$kdir"; else mkdir -p "$kdir"; fi
+    printf '{}' > "$kdir/state.json"
+    printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$kdir" > "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+    rc="0"
+    printf 'y\n' | uninstall_flmx_agent >"$out" 2>&1 || rc="$?"
+    assert_equals "0" "$rc" "R2-F7-I02: uninstall with a custom kernel dir should succeed"
+    [[ ! -d "$INSTALL_DIR" ]] || fail "R2-F7-I02: install dir should be removed"
+    [[ ! -d "$kdir" ]] || fail "R2-F7-I02: custom kernel dir should be removed on uninstall"
+    grep -q "custom-kernels" "$out" || \
+      fail "R2-F7-I02: uninstall output should name the custom kernel dir"
+  fi
 
   # 拒绝形态：单元内指向系统目录 → 不删、点名披露、卸载仍成功
   INSTALL_DIR="$work/agent2"
@@ -7229,6 +7412,44 @@ test_uninstall_removes_custom_kernel_dir() (
   assert_equals "0" "$rc" "R2-F7-I02: uninstall should still succeed when the kernel dir value is refused"
   grep -q "不自动清理" "$out" || \
     fail "R2-F7-I02: refused kernel dir value should be disclosed, not silently skipped"
+  if [[ -d "$kbase" ]]; then
+    if [[ -n "$kbase_sudo" ]]; then sudo -n rm -rf "$kbase"; else rm -rf "$kbase"; fi
+  fi
+)
+
+# R18-A3-01: resolve_custom_kernel_dir 必须以前缀匹配拦系统目录子
+# 目录——/etc/nginx、/var/lib/docker、/home/<用户>、/root/.cache、
+# /opt/<应用> 等一律不得置 CUSTOM_KERNEL_DIR（旧实现只比精确顶级
+# 名，这些值全部放行、卸载时 rm -rf 整棵树）。正例对照：黑名单前
+# 缀之外的目录仍被接受。只读断言，不创建/不删除任何系统路径（被
+# 拒值仅写进临时单元文件，不落盘到该路径）。
+test_resolve_custom_kernel_dir_rejects_system_subdirs() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/install.sh"
+
+  local work
+  work=$(mktemp -d)
+  INSTALL_DIR="$work/agent"
+  mkdir -p "$INSTALL_DIR"
+  FLMX_AGENT_SYSTEMD_SERVICE_FILE="$work/flmx_agent.service"
+  LEGACY_FLUX_AGENT_SYSTEMD_SERVICE_FILE="$work/flux_agent.service"
+  mkdir -p "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d"
+
+  local bad_dir
+  for bad_dir in /etc /etc/nginx /var/lib/docker /home/ops /root/.cache /opt/app /; do
+    printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$bad_dir" > "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+    CUSTOM_KERNEL_DIR="sentinel"
+    resolve_custom_kernel_dir >/dev/null 2>&1
+    assert_equals "" "$CUSTOM_KERNEL_DIR" "R18-A3-01: FLMX_KERNEL_DIR=$bad_dir must not be accepted for uninstall cleanup"
+  done
+
+  # 正例：黑名单前缀之外的目录仍被接受（该路径不存在也可断言：目
+  # 录不存在时痕迹检查跳过、直接接受；真实目录的端到端删除由
+  # test_uninstall_removes_custom_kernel_dir 的正例覆盖）。
+  local kdir="/data/flmx-a3-resolve-$$"
+  printf '[Service]\nEnvironment=FLMX_KERNEL_DIR=%s\n' "$kdir" > "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d/override.conf"
+  resolve_custom_kernel_dir >/dev/null 2>&1
+  assert_equals "$kdir" "$CUSTOM_KERNEL_DIR" "R18-A3-01: a non-system custom kernel dir must still be accepted"
 )
 
 # R2-F7-02: 首装 get_config_params 校验失败（非法端口）必须在下载与
@@ -12191,6 +12412,7 @@ test_main_delete_self_only_on_success
 test_panel_main_delete_self_only_on_success
 test_install_uninstall_cancel_keeps_script
 test_uninstall_removes_custom_kernel_dir
+test_resolve_custom_kernel_dir_rejects_system_subdirs
 test_install_panel_invalid_port_aborts_before_download
 test_main_requires_root
 test_script_secret_surfaces_closed
@@ -12469,6 +12691,7 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log
 test_env_var_reading_crlf_shape
 test_panel_install_env_carries_trusted_proxies_entry
 test_shipped_compose_templates_carry_trusted_proxies_passthrough
+test_panel_compose_network_subnets_prefills_from_template
 
 
 # FIX2/D-05（节点审计 D 路）：install.sh 的 probe_route 与
