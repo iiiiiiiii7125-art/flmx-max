@@ -292,27 +292,57 @@ func releasesCacheKey(apiBase string) string {
 var releasesCache = struct {
 	sync.Mutex
 	entries map[string]releasesCacheEntry
-}{entries: map[string]releasesCacheEntry{}}
+	flights map[string]*releasesFetchCall
+}{entries: map[string]releasesCacheEntry{}, flights: map[string]*releasesFetchCall{}}
 
 type releasesCacheEntry struct {
 	at       time.Time
 	releases []githubRelease
 }
 
-func cachedReleases(key string) ([]githubRelease, bool) {
-	releasesCache.Lock()
-	defer releasesCache.Unlock()
-	e, ok := releasesCache.entries[key]
-	if !ok || time.Since(e.at) >= releasesCacheTTL {
-		return nil, false
-	}
-	return e.releases, true
+// releasesFetchCall 是一次进行中的版本列表抓取（singleflight 合并
+// 单元，与内核版本抓取 kernelVersionFetchCall 同型）：同 key 的并发
+// 调用方等在 done 上共享结果，不再各自全量拉取。
+type releasesFetchCall struct {
+	done     chan struct{}
+	releases []githubRelease
+	err      error
 }
 
-func storeReleasesCache(key string, releases []githubRelease) {
+// fetchReleasesCached 是版本列表的缓存 + singleflight 入口
+// （R18-B8-02）：冷缓存时首个调用者执行 fetch，其余调用方等在
+// done 上共享同一结果，不再各自全量拉取烧未认证 GitHub API 配额
+// （60 次/小时/IP，面板出口常为共享 NAT）。锁只护 map 读写，网络
+// 抓取在锁外；失败不入缓存，等待方共享同一错误。
+// 节点侧 fetchGitHubReleases 与面板侧 fetchSystemUpgradeReleases
+// 两路共用本入口（同一缓存键即合并，不再各烧一遍）。
+func fetchReleasesCached(cacheKey string, fetch func() ([]githubRelease, error)) ([]githubRelease, error) {
 	releasesCache.Lock()
-	defer releasesCache.Unlock()
-	releasesCache.entries[key] = releasesCacheEntry{at: time.Now(), releases: releases}
+	if e, ok := releasesCache.entries[cacheKey]; ok && time.Since(e.at) < releasesCacheTTL {
+		releases := e.releases
+		releasesCache.Unlock()
+		return releases, nil
+	}
+	if call, ok := releasesCache.flights[cacheKey]; ok {
+		releasesCache.Unlock()
+		<-call.done
+		return call.releases, call.err
+	}
+	call := &releasesFetchCall{done: make(chan struct{})}
+	releasesCache.flights[cacheKey] = call
+	releasesCache.Unlock()
+
+	releases, err := fetch()
+
+	releasesCache.Lock()
+	if err == nil {
+		releasesCache.entries[cacheKey] = releasesCacheEntry{at: time.Now(), releases: releases}
+	}
+	delete(releasesCache.flights, cacheKey)
+	call.releases, call.err = releases, err
+	close(call.done)
+	releasesCache.Unlock()
+	return releases, err
 }
 
 func sliceReleases(releases []githubRelease, perPage int) []githubRelease {
@@ -339,33 +369,35 @@ func fetchGitHubReleases(perPage int) ([]githubRelease, error) {
 		perPage = 20
 	}
 	cacheKey := releasesCacheKey(githubAPIBase)
-	if releases, ok := cachedReleases(cacheKey); ok {
-		return sliceReleases(releases, perPage), nil
-	}
 
 	directURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", githubAPIBase, githubRepo, releasesFetchPerPage)
-	var releases []githubRelease
-	var rateLimitedErr error
-	err := forEachGitHubRoute(githubFetchStageBudget, func(prefix string, attemptTimeout time.Duration) error {
-		ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
-		defer cancel()
-		rs, err := fetchGitHubReleasesPageCtx(ctx, prefixURL(prefix, directURL), attemptTimeout)
-		if err != nil {
-			if strings.Contains(err.Error(), "已限流") && rateLimitedErr == nil {
-				rateLimitedErr = err
+	releases, err := fetchReleasesCached(cacheKey, func() ([]githubRelease, error) {
+		var rs []githubRelease
+		var rateLimitedErr error
+		err := forEachGitHubRoute(githubFetchStageBudget, func(prefix string, attemptTimeout time.Duration) error {
+			ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
+			defer cancel()
+			page, err := fetchGitHubReleasesPageCtx(ctx, prefixURL(prefix, directURL), attemptTimeout)
+			if err != nil {
+				if strings.Contains(err.Error(), "已限流") && rateLimitedErr == nil {
+					rateLimitedErr = err
+				}
+				return err
 			}
-			return err
+			rs = page
+			return nil
+		})
+		if err != nil {
+			if rateLimitedErr != nil {
+				return nil, rateLimitedErr
+			}
+			return nil, err
 		}
-		releases = rs
-		return nil
+		return rs, nil
 	})
 	if err != nil {
-		if rateLimitedErr != nil {
-			return nil, rateLimitedErr
-		}
 		return nil, err
 	}
-	storeReleasesCache(cacheKey, releases)
 	return sliceReleases(releases, perPage), nil
 }
 

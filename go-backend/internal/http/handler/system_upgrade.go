@@ -2912,10 +2912,6 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 	// releasesFetchPerPage 条存缓存、读取时各自 slice，本注释与实现
 	// 自此一致（生产中 systemUpgradeAPIBaseURL 与 githubAPIBase 同值）。
 	cacheKey := releasesCacheKey(systemUpgradeAPIBaseURL)
-	if releases, ok := cachedReleases(cacheKey); ok {
-		return sliceReleases(releases, perPage), nil
-	}
-
 	apiURL := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", strings.TrimRight(systemUpgradeAPIBaseURL, "/"), githubRepo, releasesFetchPerPage)
 
 	// U1-001 的「代理先行失败降级直连」在 1.7.7 升级为内置候选测速
@@ -2924,21 +2920,28 @@ func (h *Handler) fetchSystemUpgradeReleases(perPage int) ([]githubRelease, erro
 	// 失败落到下一名，全链路不再系于单点配置。
 	// U1-006/C-02 口径不变：单次尝试客户端走共用加固助手（钉死拨
 	// 号 + 逐跳重定向复检），超时按段预算剩余量收紧（上限 30s）。
-	var releases []githubRelease
-	err := forEachGitHubRoute(githubFetchStageBudget, func(prefix string, attemptTimeout time.Duration) error {
-		client := githubVersionFetchClientWithTimeout(attemptTimeout)
-		rs, err := h.fetchSystemUpgradeReleasePage(client, prefixURL(prefix, apiURL))
+	// R18-B8-02：与节点侧 fetchGitHubReleases 共用 fetchReleasesCached
+	// 的 singleflight 入口，冷缓存并发只拉取一次。
+	releases, err := fetchReleasesCached(cacheKey, func() ([]githubRelease, error) {
+		var rs []githubRelease
+		err := forEachGitHubRoute(githubFetchStageBudget, func(prefix string, attemptTimeout time.Duration) error {
+			client := githubVersionFetchClientWithTimeout(attemptTimeout)
+			page, err := h.fetchSystemUpgradeReleasePage(client, prefixURL(prefix, apiURL))
+			if err != nil {
+				log.Printf("system_upgrade: 版本API请求失败（路线 %s）: %v", gitHubRouteLabel(prefix), err)
+				return err
+			}
+			rs = page
+			return nil
+		})
 		if err != nil {
-			log.Printf("system_upgrade: 版本API请求失败（路线 %s）: %v", gitHubRouteLabel(prefix), err)
-			return err
+			return nil, fmt.Errorf("请求GitHub API失败（全部候选路线均已尝试）: %v", err)
 		}
-		releases = rs
-		return nil
+		return rs, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("请求GitHub API失败（全部候选路线均已尝试）: %v", err)
+		return nil, err
 	}
-	storeReleasesCache(cacheKey, releases)
 	return sliceReleases(releases, perPage), nil
 }
 
