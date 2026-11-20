@@ -11786,8 +11786,18 @@ test_install_script_rejects_malformed_explicit_versions() (
   # 合法值放行（稳定渠道：可选 v 前缀的纯点分数字）。
   VERSION="1.9.9" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
   assert_equals "1.9.9" "$(resolve_version)" "A3-02: plain version must pass validation"
+  # R18-A3-11 (M-2): v 前缀在 resolve_version 归一化为裸 tag（仓库
+  # tag 无 v 前缀），旧断言「原样回显 v1.9.9」钉的是导致 404 的
+  # 行为，现改为归一化后的裸 tag；下载 URL 亦须为裸 tag 形态。
   VERSION="v1.9.9" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
-  assert_equals "v1.9.9" "$(resolve_version)" "A3-02: v-prefixed version must pass validation"
+  assert_equals "1.9.9" "$(resolve_version)" "R18-A3-11: v-prefixed version must be normalized to the bare tag"
+  VERSION="v2.1.18" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
+  RESOLVED_VERSION="$(resolve_version)" || fail "R18-A3-11: resolve_version must accept v2.1.18"
+  assert_equals "2.1.18" "$RESOLVED_VERSION" "R18-A3-11: v2.1.18 must resolve to the bare tag"
+  assert_equals \
+    "https://github.com/${REPO}/releases/download/2.1.18/gost-$(get_architecture)" \
+    "$(build_download_url)" \
+    "R18-A3-11: download URL for a v-prefixed version must use the bare tag"
 
   # build_download_url 双点断言：RESOLVED_VERSION 被污染时不得拼 URL。
   RESOLVED_VERSION='../../../evil'
