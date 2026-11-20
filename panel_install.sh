@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.08"
+SCRIPT_VERSION="20261120.09"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -4512,6 +4512,25 @@ panel_port_container_owners() {
     | awk -v p=":$port->" 'index($0, p) {print $1 " (" $2 ")"}' || true
 }
 
+# R18-A2-07：端口占用者是否为指定容器——对
+# panel_port_container_owners 的输出逐行取首 token 精确比较，
+# 子串不算（flmx-panel-backend-2 不是 flmx-panel-backend；镜像
+# 名含容器名也不算）。占用者清单为空时返回 1。A2-08 的更新预检
+# 复用同一谓词。
+panel_port_owned_by() {
+  local port="$1"; shift
+  local owners line name want
+  owners=$(panel_port_container_owners "$port" || true)
+  [[ -n "$owners" ]] || return 1
+  while IFS= read -r line; do
+    name="${line%% *}"
+    for want in "$@"; do
+      [[ "$name" == "$want" ]] && return 0
+    done
+  done <<< "$owners"
+  return 1
+}
+
 # 占用描述：容器优先，否则 ss 进程字段，否则如实报未知。
 panel_port_listener_owner() {
   local port="$1" owners text proc
@@ -4573,13 +4592,9 @@ panel_preflight_install_conflicts() {
     label="${label%%:*}"
     if panel_port_is_listening "$port"; then
       owner=$(panel_port_listener_owner "$port" || true)
-      if [[ -n "$own_force_reinstall" ]]; then
-        case " $owner " in
-          *"$backend_container"*|*"$frontend_container"*)
-            echo "ℹ️ ${label}端口 $port 正被自家容器占用（强制重装，原地重建）"
-            continue
-            ;;
-        esac
+      if [[ -n "$own_force_reinstall" ]] && panel_port_owned_by "$port" "$backend_container" "$frontend_container"; then
+        echo "ℹ️ ${label}端口 $port 正被自家容器占用（强制重装，原地重建）"
+        continue
       fi
       conflicts="$conflicts
 ❌ ${label}端口 $port 已被占用（占用者：$owner）"

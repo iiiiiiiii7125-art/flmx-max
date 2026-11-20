@@ -1312,6 +1312,42 @@ test_panel_preflight_force_reinstall_allows_own_container() (
   rm -rf "$dir"
 )
 
+# R18-A2-07：预检的自家容器放行须逐 token 精确匹配——旧实现对
+# 占用描述整串做子串匹配，两种非自家形态都会被误判为自家而放
+# 行：(a) 别家实例的容器名是自家名的前缀扩展（如
+# flmx-panel-backend-2）；(b) 别家手动命名的容器跑的正是自家镜
+# 像。两形态在 PANEL_FORCE_REINSTALL=1 下都必须拒绝并点名，且
+# 不得报“自家容器占用”。
+test_panel_preflight_force_reinstall_refuses_foreign_container() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  BACKEND_PORT=6365
+  FRONTEND_PORT=6366
+  PANEL_FORCE_REINSTALL=1
+  unset FLMX_INSTANCE
+  FIXTURE_BUSY_PORTS="6365"
+  FIXTURE_EXISTING_CONTAINERS=""
+  local rc="0" out
+
+  printf '%s\n' "flmx-panel-backend-2 ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-07: PANEL_FORCE_REINSTALL must not pass off a foreign instance container whose name merely extends the own container name"
+  [[ "$out" == *"flmx-panel-backend-2"* ]] || fail "R18-A2-07: the refusal must name the foreign container, got: $out"
+  [[ "$out" != *"自家容器占用"* ]] || fail "R18-A2-07: the foreign container must not be reported as an own-container occupation, got: $out"
+
+  printf '%s\n' "other-panel ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+  rc="0"
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-07: PANEL_FORCE_REINSTALL must not pass off a foreign-named container merely because it runs the own image"
+  [[ "$out" == *"other-panel"* ]] || fail "R18-A2-07: the refusal must name the foreign container, got: $out"
+  [[ "$out" != *"自家容器占用"* ]] || fail "R18-A2-07: the foreign container must not be reported as an own-container occupation, got: $out"
+  rm -rf "$dir"
+)
+
 # A2-04 附带钉格（XC-1 指出）：A2-04 本体（.env 读取与 Compose
 # 语义一致）已在他路修好，但 CRLF 形态此前无套件断言——Windows
 # 编辑过的 .env 若把 \r 带进取值，实例 id/DB 类型等比较会整体
@@ -13822,6 +13858,7 @@ test_panel_preflight_swaps_port_interactively
 test_panel_preflight_refuses_on_choice_two
 test_panel_preflight_container_name_conflict_points_to_instance
 test_panel_preflight_force_reinstall_allows_own_container
+test_panel_preflight_force_reinstall_refuses_foreign_container
 test_panel_migrate_images_pinned_to_digest
 test_panel_migrate_backup_copy_is_0600
 test_panel_update_rollback_restores_sqlite_database
