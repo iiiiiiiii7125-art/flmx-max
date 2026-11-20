@@ -157,6 +157,18 @@ func TestLocalizeDownloadsAndRewrites(t *testing.T) {
 	}
 }
 
+// R18-D3-07: a remote rule set over plain http (non-loopback) must
+// fail closed at localize time — the SRS bytes would travel
+// without authenticity. Loopback http stays exempt (the other
+// localize tests fetch from httptest servers on 127.0.0.1).
+func TestLocalizeRejectsPlainHTTPURL(t *testing.T) {
+	m, inst, runDir := newRuleSetManager(t)
+	req := ApplyRequest{Type: "singbox", Hash: "h1", Files: []File{{Name: "config.json", Content: configWithURL(t, "http://example.invalid/geosite-cn.srs")}}}
+	if _, err := m.localizeSingboxRuleSets(inst, req, runDir); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("localize with a plain-http rule-set URL must fail naming https, got %v", err)
+	}
+}
+
 func TestLocalizeRejectsFakeAliveContent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("<!DOCTYPE html><html>landing</html>"))

@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ func stubProbeSeams(t *testing.T, rtts []uint32, rttErr error) {
 	t.Helper()
 	oldRTT, oldRef := tuneProbeTCPRTTs, tuneProbeReferenceRT
 	tuneProbeTCPRTTs = func() (tcpRTTSamples, error) { return tcpRTTSamples{RTTs: rtts}, rttErr }
-	tuneProbeReferenceRT = func(string) (probeSeriesStats, error) {
+	tuneProbeReferenceRT = func(context.Context, string) (probeSeriesStats, error) {
 		return probeSeriesStats{}, errors.New("no reference")
 	}
 	t.Cleanup(func() {
@@ -129,7 +130,7 @@ func TestTuneProbeFallbackOnFailure(t *testing.T) {
 func TestTuneProbeReferenceLeg(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	stubProbeSeams(t, []uint32{80000}, nil)
-	tuneProbeReferenceRT = func(string) (probeSeriesStats, error) {
+	tuneProbeReferenceRT = func(context.Context, string) (probeSeriesStats, error) {
 		return probeSeriesStats{Sent: 3, Received: 3, RTTsMs: []int{42, 42, 42}}, nil
 	}
 
@@ -173,7 +174,7 @@ func TestTuneProbeReferenceLeg(t *testing.T) {
 func TestTuneProbeReferenceLegFailureWarns(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	stubProbeSeams(t, []uint32{80000}, nil)
-	tuneProbeReferenceRT = func(string) (probeSeriesStats, error) {
+	tuneProbeReferenceRT = func(context.Context, string) (probeSeriesStats, error) {
 		return probeSeriesStats{}, errors.New("reference host is a private address")
 	}
 
@@ -263,7 +264,7 @@ func TestTuneProbeRTTDistributionMs(t *testing.T) {
 func TestTuneProbeReferenceSeriesFields(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	stubProbeSeams(t, []uint32{10000, 30000, 20000, 90000}, nil)
-	tuneProbeReferenceRT = func(string) (probeSeriesStats, error) {
+	tuneProbeReferenceRT = func(context.Context, string) (probeSeriesStats, error) {
 		return probeSeriesStats{Sent: 10, Received: 8, RTTsMs: []int{10, 14, 12, 20, 11, 13, 12, 40}}, nil
 	}
 	out, err := handleTuneCommand("TuneProbe", map[string]interface{}{"referenceHost": "panel.example:443"})
@@ -300,7 +301,7 @@ func TestTuneProbeReferenceSeriesFields(t *testing.T) {
 func TestTuneProbeReferenceTotalLoss(t *testing.T) {
 	fakeProcSys(t, "reno cubic bbr")
 	stubProbeSeams(t, []uint32{80000}, nil)
-	tuneProbeReferenceRT = func(string) (probeSeriesStats, error) {
+	tuneProbeReferenceRT = func(context.Context, string) (probeSeriesStats, error) {
 		return probeSeriesStats{Sent: 10, Received: 0}, nil
 	}
 	out, err := handleTuneCommand("TuneProbe", map[string]interface{}{"referenceHost": "panel.example:443"})

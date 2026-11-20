@@ -349,3 +349,30 @@ func TestApplyRestartScheduleRefusesSelfManaged(t *testing.T) {
 		t.Fatalf("disable must still apply for a self-managed agent: %v", err)
 	}
 }
+
+// R18-D2-08: the two units used to be written via map iteration
+// (random order), so a failed second write left a half-installed
+// pair behind. With the timer path blocked (a directory), the
+// service file must never survive a failed apply.
+func TestApplyRestartScheduleRemovesServiceWhenTimerWriteFails(t *testing.T) {
+	stubRestartScheduleEnv(t)
+	setting := restartScheduleSetting{Enabled: true, Time: "04:00", JitterMinutes: 0}
+	// Map iteration is random per run (~50/50), so one apply
+	// only exposes the old code half the time; twenty fresh
+	// attempts make a false pass ~1e-6.
+	for i := 0; i < 20; i++ {
+		dir := t.TempDir()
+		restartScheduleUnitDir = dir
+		// Block the timer write: its path is a directory.
+		if err := os.MkdirAll(filepath.Join(dir, restartTimerUnitName), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		err := applyRestartSchedule(context.Background(), setting)
+		if err == nil {
+			t.Fatalf("attempt %d: apply must fail when the timer path is a directory", i)
+		}
+		if _, serr := os.Stat(filepath.Join(dir, restartServiceUnitName)); !os.IsNotExist(serr) {
+			t.Fatalf("attempt %d: a failed apply left the service unit behind (half-installed pair)", i)
+		}
+	}
+}

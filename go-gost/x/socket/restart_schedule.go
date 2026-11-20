@@ -203,16 +203,25 @@ func applyRestartSchedule(ctx context.Context, s restartScheduleSetting) error {
 	}
 	agentService := agentServiceNameFor(binaryPath)
 	changed := false
-	for path, body := range map[string]string{
-		servicePath: renderRestartServiceUnit(agentService),
-		timerPath:   renderRestartTimerUnit(s),
-	} {
-		c, err := writeUnitIfChanged(path, body)
-		if err != nil {
-			return fmt.Errorf("写入定时重启单元失败 %s: %w", path, err)
-		}
-		changed = changed || c
+	// Fixed order (R18-D2-08): service first, then timer. The
+	// old map iteration wrote them in random order, so a failed
+	// second write could leave a half-installed pair behind; the
+	// file the first write actually created is removed again when
+	// the second write fails (a pre-existing identical file is
+	// left alone — writeUnitIfChanged reports it as unchanged).
+	svcChanged, err := writeUnitIfChanged(servicePath, renderRestartServiceUnit(agentService))
+	if err != nil {
+		return fmt.Errorf("写入定时重启单元失败 %s: %w", servicePath, err)
 	}
+	changed = changed || svcChanged
+	timerChanged, err := writeUnitIfChanged(timerPath, renderRestartTimerUnit(s))
+	if err != nil {
+		if svcChanged {
+			_ = os.Remove(servicePath)
+		}
+		return fmt.Errorf("写入定时重启单元失败 %s: %w", timerPath, err)
+	}
+	changed = changed || timerChanged
 	if changed {
 		if _, err := tuneCommand(ctx, "systemctl", "daemon-reload"); err != nil {
 			return fmt.Errorf("systemctl daemon-reload 失败: %w", err)

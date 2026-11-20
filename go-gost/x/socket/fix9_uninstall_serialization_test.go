@@ -81,6 +81,24 @@ func TestR9UninstallQueuesBehindBlockedMutation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("R9-06: uninstall did not start after the in-flight mutation settled")
 	}
+	// R18-D2-03: completion is the persisted final state now. In
+	// container form the exit waits for the final report to land,
+	// and there is no panel connection in this test, so delivery
+	// is simulated by marking the stored state reported — the
+	// waiter must then let the process exit.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if st, ok := loadUninstallState(); ok && st.State == "succeeded" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("R9-06: uninstall did not reach a persisted final state after the in-flight mutation settled")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	st, _ := loadUninstallState()
+	st.Reported = true
+	saveUninstallState(st)
 	select {
 	case code := <-exited:
 		if code != 0 {

@@ -727,6 +727,51 @@ func (m *Manager) restartGuardError(inst *instance) error {
 	return m.syncGuardBeforeRestart()
 }
 
+// restartAfterRestore restarts the kernel after a geodata /
+// rule-set restore (R18-D3-04): the pre-fix code started the
+// processes and logged "已恢复原来的文件" without ever checking
+// whether the restored files actually run — a kernel that crashes
+// on the restored files too was reported as recovered while it
+// was down. Returns true only when the kernel is stable again.
+// On a guard failure the kernel stays stopped (already logged);
+// on an unstable restart the failure is recorded on the instance
+// (surfaced in State.Error) instead of the misleading recovery
+// line.
+func (m *Manager) restartAfterRestore(inst *instance, kernelType, what string) bool {
+	m.stopProcesses(inst)
+	if err := m.restartGuardError(inst); err != nil {
+		// The restore-restart is gated too (A-03): the processes
+		// are already stopped here, so a failed sync leaves the
+		// guarded kernel down — the same fail-closed end state
+		// as Control start.
+		m.logGeo(kernelType, "恢复原文件后 nft 规则同步失败，受保护内核保持停止: "+err.Error())
+		return false
+	}
+	m.startProcesses(inst)
+	if !m.waitStable(kernelType) {
+		m.setErr(inst, fmt.Errorf("新的%s无法启动内核，恢复原文件后内核仍无法启动", what))
+		return false
+	}
+	return true
+}
+
+// sameBins reports whether two binary maps name the same binaries
+// at the same paths (R18-D3-06): comparing only the map length
+// let an extra-binary path change slip through — same hash, same
+// main binary, same count, but a different extra version on disk,
+// so the extra process was never restarted onto the new path.
+func sameBins(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}
+
 // Apply installs (if needed), writes the configuration and makes the
 // processes match req.Enabled. Unchanged running kernels are left alone.
 func (m *Manager) Apply(req ApplyRequest) (State, error) {
@@ -809,7 +854,7 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 		}
 	}
 	m.mu.Lock()
-	changed := inst.req.Hash != req.Hash || inst.bins[""] != mainBin || len(inst.bins) != len(bins)
+	changed := inst.req.Hash != req.Hash || inst.bins[""] != mainBin || !sameBins(inst.bins, bins)
 	running := len(inst.procs) > 0
 	for _, p := range inst.procs {
 		if r, _, _, _, _ := p.snapshot(); !r {
@@ -824,7 +869,7 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	// up; anything else restarts as before.
 	reloadable := isSingboxType(req.Type) && running &&
 		prev.req.Hash != req.Hash && req.Hash != "" &&
-		prev.bins[""] == mainBin && len(prev.bins) == len(bins)
+		prev.bins[""] == mainBin && sameBins(prev.bins, bins)
 	// F-032: 上一版是否"曾确认可用"在覆盖 inst.req 前定格，与瞬时
 	// 进程快照无关（退避间隙 procs 不在运行，prev 仍是可回滚的好配置）。
 	prevGood := prev.req.Enabled && prev.req.Hash != "" && prev.req.Hash == inst.goodHash
@@ -1490,7 +1535,12 @@ func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) error 
 
 // isSingboxType reports whether a kernel type runs the sing-box
 // binary (main or metering companion). Only these support a SIGHUP
-// config reload that preserves established connections.
+// config reload — a config-only change needs no process restart.
+// The reload does NOT preserve established connections: sing-box
+// drops every user's sessions on reload (C-(4) live proof,
+// 2026-11-15 test machine; see clashapi.go). That is why a
+// removal-only change may skip the reload and use selective kill
+// + tombstone instead.
 func isSingboxType(t string) bool {
 	return t == "singbox" || t == "singbox-companion"
 }
@@ -1552,9 +1602,15 @@ func checkSingboxConfig(bin, configPath string) error {
 }
 
 // tryReloadSingbox SIGHUPs a running sing-box instance so it re-reads
-// its (already written) config without dropping established
-// connections. It returns (applied, restarted):
-//   - (true, false): reloaded in place; sessions preserved.
+// its (already written) config without a process restart — same PID,
+// no supervisor relaunch, no startup cost. It does NOT preserve
+// sessions: sing-box drops every user's established connections on
+// reload (C-(4) live proof, 2026-11-15 test machine; see clashapi.go),
+// so user-level removal still uses selective kill + tombstone, and a
+// removal-only change may skip the reload entirely.
+// It returns (applied, restarted):
+//   - (true, false): reloaded in place; the process was not
+//     restarted, but sessions were dropped.
 //   - (true, true): the process restarted on its own (supervisor
 //     relaunch) with the new config; sessions were lost but the
 //     config is applied — the caller must NOT restart it again.
@@ -1614,21 +1670,29 @@ func (m *Manager) tryReloadSingbox(inst *instance, reloadable bool) (applied, re
 	}
 }
 
-// waitStable 在探活窗口（startupProbeIn）内持续观察进程存活：达到过
-// Running 后在窗口内退出即判失败；全程未 Running 也判失败。窗口长度
-// 与旧的单次 Sleep 一致，不增加 Apply/Control 时延（F-032）。
+// waitStable 在探活窗口内持续观察进程存活：外层窗口
+// （startupProbeIn）等首次 Running，见到后还需持续存活
+// startupSteadyFor 才判稳定；见到后在稳态窗口内退出即判失败，
+// 全程未 Running 也判失败。慢启动内核有 10 秒外层窗口可等，
+// 常见快启动仍约 1.5 秒返回，启动即崩的内核也仍被立刻判失败
+// （R18-D3-03，F-032）。
 func (m *Manager) waitStable(kernelType string) bool {
 	deadline := time.Now().Add(startupProbeIn)
-	seenRunning := false
+	var steadyDeadline time.Time
 	for {
 		running := m.state(kernelType, false).Running
 		if running {
-			seenRunning = true
-		} else if seenRunning {
+			if steadyDeadline.IsZero() {
+				steadyDeadline = time.Now().Add(startupSteadyFor)
+			}
+			if !time.Now().Before(steadyDeadline) {
+				return true
+			}
+		} else if !steadyDeadline.IsZero() {
+			// Seen Running, then exited before holding steady.
 			return false
-		}
-		if !time.Now().Before(deadline) {
-			return seenRunning && running
+		} else if !time.Now().Before(deadline) {
+			return false
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

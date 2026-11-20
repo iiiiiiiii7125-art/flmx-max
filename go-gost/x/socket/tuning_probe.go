@@ -251,11 +251,14 @@ func (s probeSeriesStats) distributionMs() (minMs, p95Ms, maxMs int, ok bool) {
 // in the series, not returned as errors; an error means the target
 // itself was judged invalid before any dial. Connect time, not
 // application RTT, and labelled as a reference value in the result.
-func probeReferenceSeries(host string) (probeSeriesStats, error) {
+// The round honors ctx (R18-D2-09): a cancelled context stops the
+// series and returns the partial stats, so a probe never outlives
+// its caller's command budget.
+func probeReferenceSeries(ctx context.Context, host string) (probeSeriesStats, error) {
 	// R7-C-02: judge before dialing (hard-deny always, non-public
 	// rejected by default, port range checked) and dial the
 	// validated IPs, not the name — see outbound_guard.go.
-	_, port, ips, err := validateProbeReferenceHost(context.Background(), host)
+	_, port, ips, err := validateProbeReferenceHost(ctx, host)
 	if err != nil {
 		return probeSeriesStats{}, err
 	}
@@ -265,7 +268,14 @@ func probeReferenceSeries(host string) (probeSeriesStats, error) {
 	var st probeSeriesStats
 	for i := 0; i < probeSeriesCount; i++ {
 		if i > 0 {
-			time.Sleep(probeSeriesInterval)
+			select {
+			case <-ctx.Done():
+				return st, nil
+			case <-time.After(probeSeriesInterval):
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return st, nil
 		}
 		st.Sent++
 		start := time.Now()
@@ -276,7 +286,7 @@ func probeReferenceSeries(host string) (probeSeriesStats, error) {
 			if ip4 := ip.To4(); ip4 != nil {
 				dialIP = ip4
 			}
-			conn, derr = dialer.Dial("tcp", net.JoinHostPort(dialIP.String(), port))
+			conn, derr = dialer.DialContext(ctx, "tcp", net.JoinHostPort(dialIP.String(), port))
 			if derr == nil {
 				break
 			}
@@ -299,8 +309,8 @@ func probeReferenceSeries(host string) (probeSeriesStats, error) {
 // probeReferenceSeries for callers that need a single reference
 // value; an error means the target was judged invalid or no
 // attempt in the series succeeded.
-func probeReferenceConnectRTT(host string) (int, error) {
-	st, err := probeReferenceSeries(host)
+func probeReferenceConnectRTT(ctx context.Context, host string) (int, error) {
+	st, err := probeReferenceSeries(ctx, host)
 	if err != nil {
 		return 0, err
 	}
@@ -407,7 +417,7 @@ func probeTuneContext(ctx context.Context, req tuneProbeRequest) (tuneProbeResul
 	// live WebSocket (a private/intranet address), and the
 	// operator previously saw a missing leg with no cause.
 	if host := strings.TrimSpace(req.ReferenceHost); host != "" {
-		if st, err := tuneProbeReferenceRT(host); err == nil {
+		if st, err := tuneProbeReferenceRT(ctx, host); err == nil {
 			res.PanelRTTSent = st.Sent
 			res.PanelRTTReceived = st.Received
 			if rate, ok := st.lossRate(); ok {

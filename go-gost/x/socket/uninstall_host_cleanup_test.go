@@ -179,6 +179,43 @@ func TestCleanupHostTuningFilesRestoresGaiFromBackup(t *testing.T) {
 	}
 }
 
+// R18-D2-06: gai 备份还原失败时备份必须保留（旧实现无论还原
+// 成败都删备份，原文件与备份同时丢失），且 Failed 须记录备份
+// 路径与人工还原方法。
+func TestCleanupHostTuningFilesKeepsGaiBackupOnRestoreFailure(t *testing.T) {
+	tree := stubHostCleanupTree(t)
+	stubLegacyFootprint(t, false)
+	orig := "label ::/0          1\n"
+	writeHostFile(t, tree.gaiBackup)
+	if err := os.WriteFile(tree.gaiBackup, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeHostFile(t, tree.gai)
+	if err := os.WriteFile(tree.gai, []byte(orig+gaiPrecedenceLine+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldWrite := writeFileAtomic
+	writeFileAtomic = func(path string, data []byte, mode os.FileMode) error {
+		if path == tree.gai {
+			return errors.New("boom")
+		}
+		return oldWrite(path, data, mode)
+	}
+	t.Cleanup(func() { writeFileAtomic = oldWrite })
+
+	rep := cleanupHostTuningFiles()
+	if _, err := os.Stat(tree.gaiBackup); err != nil {
+		t.Fatalf("gai backup must survive a failed restore, stat: %v", err)
+	}
+	joined := strings.Join(rep.Failed, "\n")
+	if !strings.Contains(joined, tree.gaiBackup) || !strings.Contains(joined, "人工") {
+		t.Fatalf("Failed = %v, want the retained backup path plus the manual-restore method", rep.Failed)
+	}
+	if b, _ := os.ReadFile(tree.gai); !strings.Contains(string(b), gaiPrecedenceLine) {
+		t.Fatalf("gai.conf = %q, want the tuning line still present after the failed restore", b)
+	}
+}
+
 // 足迹判定与 install.sh legacy_gost_footprint_present 同口径：
 // 旧配置目录里的二进制/连接配置、或命中指纹的 gost.service。
 func TestLegacyGostFootprintPresent(t *testing.T) {

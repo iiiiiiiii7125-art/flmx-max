@@ -182,8 +182,11 @@ func tuneOutputTail(s string) string {
 func tuneShellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 
 // writeFileAtomic replaces path in one step, so a full disk or a crash
-// never leaves a half-written file behind.
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+// never leaves a half-written file behind. Variable form (same
+// signature and behavior) so tests can inject a write failure,
+// like the other tuning seams (tuneCommand, tuneLookPath,
+// tuneWrite).
+var writeFileAtomic = func(path string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
@@ -769,10 +772,12 @@ func applyNICTuning(ctx context.Context) ([]string, error) {
 // tuneKernelSnapshot is the on-disk record of the tuning state as
 // it was immediately before the first apply of any runtime-writing
 // face overwrote it: every sysctl value any face writes, plus the
-// NIC ring sizes face ④ pushes to their maxima. Rollback restores
-// exactly this state; nothing else can reconstruct it (the
-// distribution defaults are not knowable once overwritten, and
-// `sysctl --system` does not reset keys no remaining conf covers).
+// NIC ring sizes face ④ pushes to their maxima, plus the
+// per-queue RPS steering values face ④ overwrites. Rollback
+// restores exactly this state; nothing else can reconstruct it
+// (the distribution defaults are not knowable once overwritten,
+// and `sysctl --system` does not reset keys no remaining conf
+// covers).
 type tuneKernelSnapshot struct {
 	Values map[string]string `json:"values"`
 	// Absent lists keys that did not exist at capture time. They
@@ -784,6 +789,23 @@ type tuneKernelSnapshot struct {
 	// rings as they are — exactly the pre-recording behavior,
 	// since there is nothing truthful to write back.
 	Rings map[string]tuneRingSnapshot `json:"rings,omitempty"`
+	// RPS holds the pre-apply rps_cpus / rps_flow_cnt values per
+	// receive queue, keyed "iface/rx-N". Like Rings it postdates
+	// the first snapshot format: a nil RPS means the snapshot
+	// predates recording (or capture failed) and rollback falls
+	// back to the historical clear-to-0, named loudly (R18-D2-05);
+	// a non-nil RPS — even an empty map — is a complete record.
+	// A queue recorded with an empty field means that file was
+	// unreadable at capture, so that field too falls back to 0
+	// with a warning.
+	RPS map[string]tuneRPSQueueSnapshot `json:"rps,omitempty"`
+}
+
+// tuneRPSQueueSnapshot is one receive queue's pre-apply steering
+// values. An empty field means the file was unreadable at capture.
+type tuneRPSQueueSnapshot struct {
+	CPUs    string `json:"cpus"`
+	FlowCnt string `json:"flowCnt"`
 }
 
 // tuningSnapshotSysctls is the union of every sysctl key any face
@@ -840,6 +862,9 @@ func captureTuningSnapshot(ctx context.Context) []string {
 	}
 	rings, warnings := captureNICRings(ctx)
 	snap.Rings = rings
+	rps, rpsWarnings := captureRPS()
+	warnings = append(warnings, rpsWarnings...)
+	snap.RPS = rps
 	raw, err := json.Marshal(snap)
 	if err != nil {
 		return append(warnings, fmt.Sprintf("序列化调优前快照失败: %v", err))
@@ -890,6 +915,41 @@ func captureNICRings(ctx context.Context) (map[string]tuneRingSnapshot, []string
 	return rings, warnings
 }
 
+// captureRPS records the current rps_cpus / rps_flow_cnt values of
+// every receive queue on every interface face ④ would steer. An
+// interface enumeration failure leaves RPS nil (the apply path
+// reports the enumeration itself); a per-file read failure is
+// named and the queue is recorded with the unreadable field
+// empty, so rollback knows it is guessing for that field
+// (R18-D2-05).
+func captureRPS() (map[string]tuneRPSQueueSnapshot, []string) {
+	ifaces, err := listTuneInterfaces()
+	if err != nil {
+		return nil, []string{fmt.Sprintf("枚举网卡失败，未留存 RPS 快照（回滚将把 rps_cpus/flow_cnt 清零）: %v", err)}
+	}
+	rps := make(map[string]tuneRPSQueueSnapshot, len(ifaces))
+	var warnings []string
+	for _, iface := range ifaces {
+		queues, _ := filepath.Glob(filepath.Join(tuneNetDir, iface, "queues", "rx-*"))
+		for _, q := range queues {
+			key := iface + "/" + filepath.Base(q)
+			snap := tuneRPSQueueSnapshot{}
+			if b, err := os.ReadFile(filepath.Join(q, "rps_cpus")); err != nil {
+				warnings = append(warnings, fmt.Sprintf("读取 %s/rps_cpus 失败，未留存其调优前值: %v", key, err))
+			} else {
+				snap.CPUs = strings.TrimSpace(string(b))
+			}
+			if b, err := os.ReadFile(filepath.Join(q, "rps_flow_cnt")); err != nil {
+				warnings = append(warnings, fmt.Sprintf("读取 %s/rps_flow_cnt 失败，未留存其调优前值: %v", key, err))
+			} else {
+				snap.FlowCnt = strings.TrimSpace(string(b))
+			}
+			rps[key] = snap
+		}
+	}
+	return rps, warnings
+}
+
 // restoreKernelSysctls is the rollback counterpart for the sysctl
 // part of the snapshot. With a snapshot, every recorded value is
 // written back and every absent key is reported (it did not exist
@@ -904,11 +964,20 @@ func captureNICRings(ctx context.Context) (map[string]tuneRingSnapshot, []string
 // with a snapshot, the recorded values are the whole restore set,
 // net.core.rps_sock_flow_entries included; a legacy snapshot that
 // predates recording that key keeps the historical reset to 0.
-// The snapshot file is consumed here, in every case. The parsed
-// snapshot is returned (nil when none was usable) so the caller
-// can restore the ring sizes from the same record.
-func restoreKernelSysctls(kernelConfPresent bool) ([]string, *tuneKernelSnapshot) {
-	defer func() { _ = os.Remove(tuneKernelSnapshotPath) }()
+// The snapshot file is consumed (deleted) only when the restore
+// fully succeeds (R18-D2-04): on a partial failure it is retained
+// so a later rollback can retry the values that refused the
+// write, and the retention is reported as a warning. Two paths
+// do not retain: a snapshot proven unusable by a failed parse is
+// consumed per the TL-02 fail-safe contract (nothing in it can
+// ever be restored, and the footprint must not linger), and a
+// file that cannot be read at all is retained — its content is
+// unknown, so destroying it could discard a recoverable record.
+// The parsed snapshot is returned (nil when none was usable) so
+// the caller can restore the ring sizes from the same record;
+// consumed is false when the file must be kept, true when it is
+// safe to delete (or there was no file at all).
+func restoreKernelSysctls(kernelConfPresent bool) ([]string, *tuneKernelSnapshot, bool) {
 	// The memory-dependent buffer keys vary per machine; the set
 	// itself does not, so any buffer size yields the full key set.
 	settings := kernelTuneSettings(0)
@@ -935,24 +1004,27 @@ func restoreKernelSysctls(kernelConfPresent bool) ([]string, *tuneKernelSnapshot
 	if err != nil {
 		if !os.IsNotExist(err) {
 			writeDefaults()
-			return []string{fmt.Sprintf("读取调优前快照失败: %v；以下 sysctl 键未能回退: %s", err, strings.Join(unrestored(), ", "))}, nil
+			return []string{fmt.Sprintf("读取调优前快照失败: %v；以下 sysctl 键未能回退: %s", err, strings.Join(unrestored(), ", "))}, nil, false
 		}
 		writeDefaults()
 		if kernelConfPresent {
-			return []string{fmt.Sprintf("调优前快照缺失，以下 sysctl 键未能回退（仍为调优值）: %s", strings.Join(unrestored(), ", "))}, nil
+			return []string{fmt.Sprintf("调优前快照缺失，以下 sysctl 键未能回退（仍为调优值）: %s", strings.Join(unrestored(), ", "))}, nil, true
 		}
-		return nil, nil
+		return nil, nil, true
 	}
 	var snap tuneKernelSnapshot
 	if jerr := json.Unmarshal(raw, &snap); jerr != nil || snap.Values == nil {
 		writeDefaults()
-		return []string{fmt.Sprintf("调优前快照损坏（%v），以下 sysctl 键未能回退（仍为调优值）: %s", jerr, strings.Join(unrestored(), ", "))}, nil
+		// Proven unusable: consume per the TL-02 fail-safe
+		// contract (see TestKernelSnapshotFailSafe/corrupt).
+		return []string{fmt.Sprintf("调优前快照损坏（%v），以下 sysctl 键未能回退（仍为调优值）: %s", jerr, strings.Join(unrestored(), ", "))}, nil, true
 	}
 	absent := make(map[string]bool, len(snap.Absent))
 	for _, k := range snap.Absent {
 		absent[k] = true
 	}
 	var warnings []string
+	consumed := true
 	for _, s := range tuningSnapshotSysctls() {
 		v, ok := snap.Values[s.key]
 		if !ok {
@@ -960,6 +1032,7 @@ func restoreKernelSysctls(kernelConfPresent bool) ([]string, *tuneKernelSnapshot
 		}
 		if err := tuneWrite(s.key, v); err != nil {
 			warnings = append(warnings, fmt.Sprintf("回退 %s 失败: %v", s.key, err))
+			consumed = false
 		}
 	}
 	// A legacy snapshot predates recording the face-④ counter:
@@ -971,7 +1044,10 @@ func restoreKernelSysctls(kernelConfPresent bool) ([]string, *tuneKernelSnapshot
 	if len(snap.Absent) > 0 {
 		warnings = append(warnings, fmt.Sprintf("以下 sysctl 键在调优前不存在、无法回退删除: %s", strings.Join(snap.Absent, ", ")))
 	}
-	return warnings, &snap
+	if !consumed {
+		warnings = append(warnings, fmt.Sprintf("调优前快照已保留（%s），部分 sysctl 键未能回退，可重试回滚", tuneKernelSnapshotPath))
+	}
+	return warnings, &snap, consumed
 }
 
 // restoreNICRings writes the snapshot's per-interface ring sizes
@@ -979,12 +1055,15 @@ func restoreKernelSysctls(kernelConfPresent bool) ([]string, *tuneKernelSnapshot
 // carries. A snapshot without ring data (written by an older
 // agent, or captured when ethtool was unavailable) leaves the
 // rings as they are: there is nothing truthful to write back.
-func restoreNICRings(ctx context.Context, snap *tuneKernelSnapshot) []string {
+// The second return reports whether the rings were fully
+// restored; a failure (or a missing ethtool) keeps the snapshot
+// alive for a retry, same as the sysctl side (R18-D2-04).
+func restoreNICRings(ctx context.Context, snap *tuneKernelSnapshot) ([]string, bool) {
 	if snap == nil || len(snap.Rings) == 0 {
-		return nil
+		return nil, true
 	}
 	if _, err := tuneLookPath("ethtool"); err != nil {
-		return []string{"ethtool 不存在，调优前网卡环形缓冲值未能恢复"}
+		return []string{"ethtool 不存在，调优前网卡环形缓冲值未能恢复"}, false
 	}
 	ifaces := make([]string, 0, len(snap.Rings))
 	for iface := range snap.Rings {
@@ -992,10 +1071,68 @@ func restoreNICRings(ctx context.Context, snap *tuneKernelSnapshot) []string {
 	}
 	sort.Strings(ifaces)
 	var warnings []string
+	ok := true
 	for _, iface := range ifaces {
 		if _, err := tuneCommand(ctx, "ethtool", ethtoolRingRestoreArgs(iface, snap.Rings[iface])...); err != nil {
 			warnings = append(warnings, fmt.Sprintf("恢复网卡 %s 环形缓冲失败: %v", iface, err))
+			ok = false
 		}
+	}
+	return warnings, ok
+}
+
+// restoreRPS puts the per-queue steering values back from the
+// snapshot. With a recorded value the queue is restored exactly
+// (R18-D2-05 — the operator's mask survives the round trip).
+// Without a usable record — a snapshot that predates RPS
+// recording, a capture failure, or a queue whose file was
+// unreadable at capture — the queue keeps the historical
+// clear-to-0 (TL-03) and is named in one consolidated warning,
+// so the fallback stays loud instead of silent. A queue that no
+// longer exists is skipped: there is nothing to write.
+func restoreRPS(snap *tuneKernelSnapshot) []string {
+	ifaces, err := listTuneInterfaces()
+	if err != nil {
+		return nil
+	}
+	var warnings []string
+	var fallback []string
+	write := func(path, value string) {
+		if err := tuneWriteSysFile(path, value); err != nil {
+			warnings = append(warnings, fmt.Sprintf("回退 %s 失败: %v", path, err))
+		}
+	}
+	for _, iface := range ifaces {
+		queues, _ := filepath.Glob(filepath.Join(tuneNetDir, iface, "queues", "rx-*"))
+		for _, q := range queues {
+			key := iface + "/" + filepath.Base(q)
+			cpusPath := filepath.Join(q, "rps_cpus")
+			flowPath := filepath.Join(q, "rps_flow_cnt")
+			if snap != nil && snap.RPS != nil {
+				if rec, ok := snap.RPS[key]; ok {
+					if rec.CPUs != "" {
+						write(cpusPath, rec.CPUs)
+					} else {
+						write(cpusPath, "0")
+						fallback = append(fallback, key+"/rps_cpus")
+					}
+					if rec.FlowCnt != "" {
+						write(flowPath, rec.FlowCnt)
+					} else {
+						write(flowPath, "0")
+						fallback = append(fallback, key+"/rps_flow_cnt")
+					}
+					continue
+				}
+			}
+			// No record for this queue: historical clear-to-0.
+			write(cpusPath, "0")
+			write(flowPath, "0")
+			fallback = append(fallback, key)
+		}
+	}
+	if len(fallback) > 0 {
+		warnings = append(warnings, fmt.Sprintf("以下队列无调优前 RPS 记录，已清零（运维掩码未恢复）: %s", strings.Join(fallback, ", ")))
 	}
 	return warnings
 }
@@ -1040,8 +1177,10 @@ func rollbackTuning(ctx context.Context) []string {
 	_, statErr := os.Stat(tuneKernelConfPath)
 	kernelConfPresent := statErr == nil
 	// 1. Files: new model + first-generation leftovers. The
-	// snapshot is consumed by restoreKernelSysctls below, not
-	// here: it must survive until step 3 has read it.
+	// snapshot is consumed in steps 3–4 below, not here: it must
+	// survive until step 3 has read it, and only goes away once
+	// both the sysctl and the ring restores fully succeeded
+	// (R18-D2-04) — a partial restore keeps it for a retry.
 	removeTuneFile(tuneKernelConfPath, &warnings)
 	removeTuneFile(tuneLimitsConfPath, &warnings)
 	removeTuneFile(tuneBBRConfPath, &warnings)
@@ -1071,26 +1210,26 @@ func rollbackTuning(ctx context.Context) []string {
 	// 3. In-memory sysctl values back to the pre-apply snapshot
 	// (TL-02); without one, the scripted headline defaults plus a
 	// fail-safe warning for the keys that cannot be restored.
-	sysctlWarnings, snap := restoreKernelSysctls(kernelConfPresent)
+	sysctlWarnings, snap, sysctlOK := restoreKernelSysctls(kernelConfPresent)
 	warnings = append(warnings, sysctlWarnings...)
 	// 4. NIC ring sizes back to the snapshot's per-interface
 	// originals: face ④'s runtime-only write set, restorable only
-	// from the same record step 3 just consumed.
-	warnings = append(warnings, restoreNICRings(ctx, snap)...)
+	// from the same record step 3 just read. The snapshot is
+	// deleted only when both restores fully succeeded (R18-D2-04);
+	// a partial failure keeps it so a later rollback can retry.
+	ringWarnings, ringsOK := restoreNICRings(ctx, snap)
+	warnings = append(warnings, ringWarnings...)
+	if sysctlOK && ringsOK {
+		if err := os.Remove(tuneKernelSnapshotPath); err != nil && !os.IsNotExist(err) {
+			warnings = append(warnings, fmt.Sprintf("删除调优前快照失败: %v", err))
+		}
+	}
 	// 5. MSS clamp rule.
 	tuneMSSClampRemove(ctx)
 	// 6. Per-queue steering off: rps_cpus and rps_flow_cnt are a
-	// pair — apply sets both, rollback clears both (TL-03).
-	if ifaces, err := listTuneInterfaces(); err == nil {
-		for _, iface := range ifaces {
-			for _, name := range []string{"rps_cpus", "rps_flow_cnt"} {
-				files, _ := filepath.Glob(filepath.Join(tuneNetDir, iface, "queues", "rx-*", name))
-				for _, f := range files {
-					_ = tuneWriteSysFile(f, "0")
-				}
-			}
-		}
-	}
+	// pair — apply sets both, rollback restores both from the
+	// snapshot when recorded, else clears both (TL-03).
+	warnings = append(warnings, restoreRPS(snap)...)
 	// 7. Reload whatever conf files remain (other tools' settings).
 	if commandExists("sysctl") {
 		_, _ = tuneCommand(ctx, "sysctl", "--system")

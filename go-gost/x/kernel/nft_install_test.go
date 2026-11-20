@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // nftables 自动安装测试。安装器本身（发行版→命令、失败明错）与
@@ -303,6 +304,44 @@ func TestNftSyncInstallFailureFailsClosed(t *testing.T) {
 	}
 	if len(*scripts) != 0 {
 		t.Fatal("no ruleset may be applied when the install failed")
+	}
+}
+
+// TestNftSyncDoesNotHoldLockAcrossInstall is the R18-D3-02 gate:
+// sync used to hold n.mu across the whole nft auto-install (up to
+// 5 minutes), starving read() — the panel's traffic poll — for the
+// duration. A slow install must not block a concurrent read.
+func TestNftSyncDoesNotHoldLockAcrossInstall(t *testing.T) {
+	s := &installStub{}
+	stubNftInstall(t, "ID=debian\n", s)
+	// Slow the package-manager install leg down to ~2s.
+	oldRunner := installRunner
+	installRunner = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "apt-get" && len(args) > 0 && args[0] == "install" {
+			time.Sleep(2 * time.Second)
+		}
+		return oldRunner(ctx, name, args...)
+	}
+	t.Cleanup(func() { installRunner = oldRunner })
+	stubSyncNft(t, s)
+	n := newNftCounters(t.TempDir())
+	ports := []Port{{InboundID: 7, Port: 443, Network: "tcp", Allow: []string{"203.0.113.0/24"}}}
+	done := make(chan error, 1)
+	go func() { done <- n.sync(ports, nil, nil) }()
+	// Give sync a moment to enter the install, then read(): on
+	// old code read() blocks on n.mu until the install finishes.
+	time.Sleep(200 * time.Millisecond)
+	start := time.Now()
+	_, _, _, rerr := n.read()
+	elapsed := time.Since(start)
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("read() during a slow install took %v, want well under the install time (n.mu must not be held across the install)", elapsed)
+	}
+	if rerr == nil || !strings.Contains(rerr.Error(), "未安装 nftables") {
+		t.Fatalf("read() during the install = %v, want the not-installed error", rerr)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("sync after the slow install = %v, want nil", err)
 	}
 }
 

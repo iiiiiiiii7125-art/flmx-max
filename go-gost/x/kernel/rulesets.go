@@ -40,7 +40,9 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +107,36 @@ func (s *remoteRuleSet) localPath(dir string) string {
 	return filepath.Join(dir, ruleSetFileName(s.tag, s.directURL))
 }
 
+// checkRuleSetURL enforces https for remote rule-set downloads
+// (R18-D3-07), mirroring GeoFile.validate: over plain http the
+// SRS bytes travel without authenticity — a middlebox can replace
+// the set, and the panel has no digest anchor for it (the C2-03
+// exemption: the sing-box format carries no integrity field, so
+// the channel must provide it). Loopback is exempted: on-host
+// fixtures and tests fetch over http://127.0.0.1, and an attacker
+// who can serve loopback already owns the host.
+func checkRuleSetURL(u string) error {
+	if strings.HasPrefix(u, "https://") {
+		return nil
+	}
+	if parsed, err := url.Parse(u); err == nil && parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("规则集地址必须使用 https: %s", u)
+}
+
+// isLoopbackHost reports whether host is a loopback address:
+// localhost, 127.0.0.0/8, or ::1.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 // extractRemoteRuleSets parses a rendered sing-box config and returns
 // its root object plus every remote, binary rule-set definition in it
 // (route.rule_set and, on newer sing-box, the top-level rule_set).
@@ -116,7 +148,11 @@ func extractRemoteRuleSets(content string) (map[string]interface{}, []*remoteRul
 		return nil, nil, err
 	}
 	var sets []*remoteRuleSet
+	var urlErr error
 	collect := func(holder map[string]interface{}) {
+		if urlErr != nil {
+			return
+		}
 		defs, _ := holder["rule_set"].([]interface{})
 		for _, raw := range defs {
 			def, _ := raw.(map[string]interface{})
@@ -131,12 +167,23 @@ func extractRemoteRuleSets(content string) (map[string]interface{}, []*remoteRul
 			if tag == "" || rawURL == "" {
 				continue
 			}
-			sets = append(sets, &remoteRuleSet{tag: tag, directURL: directForm(rawURL), def: def})
+			direct := directForm(rawURL)
+			if err := checkRuleSetURL(direct); err != nil {
+				urlErr = err
+				return
+			}
+			sets = append(sets, &remoteRuleSet{tag: tag, directURL: direct, def: def})
 		}
 	}
 	collect(root)
+	if urlErr != nil {
+		return nil, nil, urlErr
+	}
 	if route, _ := root["route"].(map[string]interface{}); route != nil {
 		collect(route)
+	}
+	if urlErr != nil {
+		return nil, nil, urlErr
 	}
 	return root, sets, nil
 }
@@ -533,17 +580,9 @@ func (m *Manager) swapRuleSets(job ruleSetJob, staged []*remoteRuleSet) {
 						_ = os.Remove(path)
 					}
 				}
-				m.stopProcesses(inst)
-				if err := m.restartGuardError(inst); err != nil {
-					// The restore-restart is gated too (A-03): the
-					// processes are already stopped here, so a failed
-					// sync leaves the guarded kernel down — the same
-					// fail-closed end state as Control start.
-					m.logGeo(job.kernelType, "恢复原文件后 nft 规则同步失败，受保护内核保持停止: "+err.Error())
-				} else {
-					m.startProcesses(inst)
+				if m.restartAfterRestore(inst, job.kernelType, "分流规则集") {
+					m.logGeo(job.kernelType, "新的分流规则集无法启动内核，已恢复原来的文件")
 				}
-				m.logGeo(job.kernelType, "新的分流规则集无法启动内核，已恢复原来的文件")
 				return
 			}
 		}

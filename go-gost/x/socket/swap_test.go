@@ -779,3 +779,18 @@ func TestSwapSetBackupDeleteFailureWarns(t *testing.T) {
 		t.Fatalf("fstab must still converge:\n%s", fstab)
 	}
 }
+
+// R18-D2-13: restoreFromBackup(false, true) used to report
+// "机器保持执行前状态" even though the old swap had already been
+// closed by swapoff and no backup file exists to restore from —
+// the machine is left with no swap at all.
+func TestRestoreFromBackupNoBackupActive(t *testing.T) {
+	env, _ := newSwapSimEnv(t, swapsHeader)
+	got := env.restoreFromBackup(false, true)
+	if !strings.Contains(got, "旧 Swap 已关闭") || !strings.Contains(got, "无 Swap 生效") || !strings.Contains(got, "人工重建") {
+		t.Fatalf("restoreFromBackup(false, true) = %q, want the no-swap-left truth with a manual rebuild", got)
+	}
+	if got2 := env.restoreFromBackup(false, false); !strings.Contains(got2, "保持执行前状态") {
+		t.Fatalf("restoreFromBackup(false, false) = %q, want the unchanged-state note", got2)
+	}
+}

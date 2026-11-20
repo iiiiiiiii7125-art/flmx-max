@@ -481,7 +481,12 @@ type nftState struct {
 // legacy root). The epoch changes whenever the table is rebuilt so
 // the panel knows the counters restarted from zero.
 type nftCounters struct {
-	mu        sync.Mutex
+	mu sync.Mutex
+	// installMu serializes concurrent auto-installs only. It is
+	// never held across state access, so a slow install (up to
+	// nftInstallTimeout) cannot starve read()/setMarkBase() the
+	// way holding mu across the install did (R18-D3-02).
+	installMu sync.Mutex
 	statePath string
 	// baseDir is this agent's kernel root. It decides whether this
 	// install ever owned a shared plain table (hadPlainTable) and
@@ -757,6 +762,57 @@ func (n *nftCounters) installStatus() (autoInstalled bool, installErr string) {
 	return n.autoInstalled, n.installErr
 }
 
+// setInstallFailure records a failed auto-install. Short n.mu
+// take, callable from the unlocked preflight.
+func (n *nftCounters) setInstallFailure(err error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.installErr = err.Error()
+	n.autoInstalled = false
+	n.lastErr = err.Error()
+}
+
+// setAutoInstalled records a successful auto-install. Short n.mu
+// take, callable from the unlocked preflight.
+func (n *nftCounters) setAutoInstalled() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.autoInstalled = true
+	n.installErr = ""
+}
+
+// installNftIfNeeded runs the slow auto-install OUTSIDE n.mu
+// (R18-D3-02): sync used to hold the state lock across the whole
+// install (up to nftInstallTimeout), starving read() — the panel's
+// traffic poll — and setMarkBase() for minutes. installMu
+// serializes concurrent installs only; state updates go through
+// short n.mu takes. The locked section re-checks availability, so
+// an install that did not stick (or a binary that vanished in the
+// window) fails closed for whitelists without reinstalling under
+// the lock.
+func (n *nftCounters) installNftIfNeeded(ports []Port) error {
+	if nftAvailable() == nil || !portsHaveWhitelist(ports) {
+		return nil
+	}
+	n.installMu.Lock()
+	defer n.installMu.Unlock()
+	if nftAvailable() == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), nftInstallTimeout)
+	defer cancel()
+	installed, ierr := nftEnsureInstalled(ctx)
+	if ierr != nil {
+		n.setInstallFailure(ierr)
+		return ierr
+	}
+	if installed {
+		n.setAutoInstalled()
+		log.Printf("nftables 已自动安装（入站白名单需要）")
+	}
+	return nil
+}
+
 // hasAppliedState reports whether this agent has ever applied a table
 // (the signature in nft.json survives restarts). The periodic verify
 // loop only guards a table that exists by design — a fresh agent
@@ -774,39 +830,31 @@ func (n *nftCounters) hasAppliedState() bool {
 // whitelist in play, a missing nft binary or a failed ruleset load
 // is a hard error so the caller can refuse to run the kernel
 // unguarded.
+//
+// The auto-install runs in the unlocked preflight above
+// (R18-D3-02): the state lock is taken only for the ruleset work,
+// so a slow install never starves read().
 func (n *nftCounters) sync(ports []Port, users []int64, blocked []int64) error {
+	if err := n.installNftIfNeeded(ports); err != nil {
+		return err
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := nftAvailable(); err != nil {
 		if portsHaveWhitelist(ports) {
-			// 白名单在场且 nft 缺失：先尝试自动安装（用户已明
-			// 确不要手动装）。装不上才明错 fail-closed——错误
-			// 必含 nftables 与失败原因，面板原样展示；绝不静
-			// 默跳过（无规则放行即无保护运行）。
-			ctx, cancel := context.WithTimeout(context.Background(), nftInstallTimeout)
-			defer cancel()
-			installed, ierr := nftEnsureInstalled(ctx)
-			if ierr != nil {
-				n.installErr = ierr.Error()
-				n.autoInstalled = false
-				n.lastErr = ierr.Error()
-				return ierr
-			}
-			if installed {
-				n.autoInstalled = true
-				n.installErr = ""
-				log.Printf("nftables 已自动安装（入站白名单需要）")
-			}
-			// nft 现已可用，落到下方正常同步。
-		} else {
-			n.lastErr = "未安装 nftables，无法统计流量"
-			return nil
+			// The preflight either already installed it or
+			// failed and returned; reaching here with a
+			// whitelist and no nft means the install did not
+			// stick (or the binary vanished in the window):
+			// fail closed without reinstalling under the lock.
+			return fmt.Errorf("nftables 自动安装失败：安装后 nft 命令仍不可用，白名单端口拒绝无保护运行")
 		}
-	} else {
-		// nft 在场：清除陈旧的安装失败记录（上次失败后已由他
-		// 途装好，或本次无需安装）。
-		n.installErr = ""
+		n.lastErr = "未安装 nftables，无法统计流量"
+		return nil
 	}
+	// nft 在场：清除陈旧的安装失败记录（上次失败后已由他途装
+	// 好，或本次无需安装）。
+	n.installErr = ""
 	rules := expandPorts(ports)
 	users = sortedUsers(users)
 	blocked = sortedUsers(blocked)
