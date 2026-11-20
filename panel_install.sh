@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261119.01"
+SCRIPT_VERSION="20261120.01"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -2517,6 +2517,24 @@ write_new_panel_identity() {
     upsert_env_var .env FLMX_INSTANCE "$instance_id" || return 1
     if [[ -n "$legacy_template" ]]; then
       echo "⚠️ 目标版本的 Compose 模板使用旧版共享资源名，实例后缀不生效：该实例的容器/卷/网络仍用旧缺省名，同机请勿再并存第二套该版本部署"
+    fi
+  fi
+  # R18-C3-02：新装生成每安装唯一身份 FLMX_INSTALL_ID（UUID）落盘
+  # .env；后端据此与实例键一起派生 nft 表名，两套默认实例面板跨
+  # 机共管同一节点时不再共用 flmx_e3b0c442。键已存在时绝不重写
+  # （重写会切表名、旧表成孤儿残留）；本函数只在新装路径调用，
+  # 存量部署升级不会因此切表。
+  if [[ -z "$(get_env_var FLMX_INSTALL_ID .env || true)" ]]; then
+    local install_id=""
+    if command -v uuidgen >/dev/null 2>&1; then
+      install_id=$(uuidgen | tr 'A-Z' 'a-z' || true)
+    elif [[ -r /proc/sys/kernel/random/uuid ]]; then
+      install_id=$(cat /proc/sys/kernel/random/uuid || true)
+    fi
+    if [[ -n "$install_id" ]]; then
+      upsert_env_var .env FLMX_INSTALL_ID "$install_id" || return 1
+    else
+      echo "⚠️ 未能生成安装唯一身份 FLMX_INSTALL_ID（无 uuidgen 且 /proc/sys/kernel/random/uuid 不可读）：本次安装继续用实例键旧口径派生 nft 表名；两套默认实例面板共管同一节点时请手工为其一设置 FLMX_INSTANCE"
     fi
   fi
   PANEL_BACKEND_CONTAINER="$backend"

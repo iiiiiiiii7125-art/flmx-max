@@ -34,6 +34,10 @@ services:
       # AI-03：实例 id 须透传进后端进程，后端据此派生本实例的节点
       # 容器名/数据目录；默认实例 .env 无此键、替换为空，不影响存量。
       FLMX_INSTANCE: ${FLMX_INSTANCE:-}
+      # R18-C3-02：每安装唯一身份须透传进后端进程，后端据此与实例
+      # 键一起派生 nft 表名；新装由安装脚本生成落盘 .env，缺键时
+      # 替换为空、走实例键旧口径，不影响存量。
+      FLMX_INSTALL_ID: ${FLMX_INSTALL_ID:-}
     ports:
       - "${BACKEND_PORT}:6365"
     volumes:

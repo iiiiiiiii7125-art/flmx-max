@@ -367,7 +367,7 @@ func (h *Handler) buildNftablesNodePlanWithOverrides(nodeID int64, exclude map[i
 			forwards = append(forwards, *inc)
 		}
 	}
-	plan := runtimenft.NodePlan{NodeID: nodeID, InstanceID: panelInstanceID(), Rules: make([]runtimenft.Rule, 0, len(forwards))}
+	plan := runtimenft.NodePlan{NodeID: nodeID, InstanceID: panelInstanceID(), InstallID: panelInstallID(), Rules: make([]runtimenft.Rule, 0, len(forwards))}
 	for i := range forwards {
 		forward := &forwards[i]
 		tunnel, err := h.getTunnelRecord(forward.TunnelID)

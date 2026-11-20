@@ -27,16 +27,71 @@ const (
 // restarts (same instance, same table), distinct per instance, and
 // a valid nft identifier. The default instance hashes to the fixed
 // name flmx_e3b0c442 (sha256("") = e3b0c442...).
+//
+// Legacy derivation, kept verbatim as the fallback when no install
+// identity is configured (R18-C3-02): already-deployed installs
+// keep their table, so upgrading does not orphan rules. New code
+// must prefer TableNameForInstall, which mixes in the per-install
+// identity; the legacy name alone is NOT collision-free across
+// installs (two default-instance panels share flmx_e3b0c442).
 func TableNameForInstance(instance string) string {
 	sum := sha256.Sum256([]byte(instance))
 	return "flmx_" + hex.EncodeToString(sum[:])[:8]
+}
+
+// validInstallID reports whether id is usable as a per-install
+// identity (FLMX_INSTALL_ID): 1-64 chars, alphanumerics, hyphen
+// and underscore, starting with an alphanumeric. UUIDs as written
+// by panel_install.sh pass. Anything else is treated as absent
+// (legacy fallback), never hashed in: hashing an unvalidated value
+// would silently mint a new table for a typo'd identity.
+func validInstallID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9':
+		case (c == '-' || c == '_') && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// tableNameSuffix is the 8-hex suffix shared by the main and pause
+// tables of one install: sha256(instance + "|" + installID) when a
+// valid install identity is present, else the legacy sha256(instance).
+// The "|" separator keeps ("a", "b|c") distinct from ("a|b", "c").
+func tableNameSuffix(instance, installID string) string {
+	input := instance
+	if validInstallID(installID) {
+		input = instance + "|" + installID
+	}
+	sum := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
+// TableNameForInstall derives this panel install's nft table name
+// from its instance key plus its per-install identity (R18-C3-02):
+// flmx_<first 8 hex of sha256(instance + "|" + installID)>.
+// The identity is generated once at install time and persisted in
+// the deployment .env (FLMX_INSTALL_ID); two default-instance
+// panels on different hosts therefore get different tables and no
+// longer delete each other's rules. With no (or an invalid)
+// identity it falls back to TableNameForInstance, so deployed
+// installs migrate smoothly without losing rules.
+func TableNameForInstall(instance, installID string) string {
+	return "flmx_" + tableNameSuffix(instance, installID)
 }
 
 // TableName returns the nft table this plan renders into. A plan
 // without an instance key (zero value, old callers) renders into
 // the default instance's table, never the plain name.
 func (p NodePlan) TableName() string {
-	return TableNameForInstance(p.InstanceID)
+	return TableNameForInstall(p.InstanceID, p.InstallID)
 }
 
 func RenderTable(plan NodePlan) string {

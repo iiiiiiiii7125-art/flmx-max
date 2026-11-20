@@ -35,6 +35,14 @@ type NodePlan struct {
 	// node must not render into the same table. Zero value reads as
 	// the default instance, never the plain table.
 	InstanceID string
+	// InstallID is this panel install's per-install identity
+	// (FLMX_INSTALL_ID, a UUID generated once at install time and
+	// persisted in the deployment .env; R18-C3-02). It joins the
+	// instance key in the table derivation, so two default-instance
+	// panels on different hosts get different tables. Empty means
+	// "no identity configured": the legacy instance-only derivation
+	// applies, and deployed installs keep their table.
+	InstallID string
 	// MigratePlainTables is the B-01 ownership proof for the one-shot
 	// upgrade migration (see buildApplyCommand): true only when this
 	// panel install has previously applied nft rules to this node
