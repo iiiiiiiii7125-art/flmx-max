@@ -191,7 +191,7 @@ func TestNodeSwapOfflineNode(t *testing.T) {
 
 func TestNodeSwapAgentBusinessErrorPassthrough(t *testing.T) {
 	a := newNodeSwapFakeAgent(t)
-	const bizMsg = "设置 Swap 失败（校验磁盘空间）: 磁盘空间不足：设置 4 GB Swap 需要可用 4352 MB（目标 4096 MB＋预留 256 MB），当前可用 1000 MB（磁盘剩余 1000 MB＋现有 /swapfile 占量 0 MB）；机器状态未改变"
+	const bizMsg = "设置 Swap 失败（校验磁盘空间）: 磁盘空间不足：设置 4 GB Swap 需要至少 4352 MB 磁盘剩余（目标 4096 MB＋预留 256 MB），当前磁盘剩余 1000 MB（现有 /swapfile 占用 0 MB 在重建期间仍占盘，不计入可用）；机器状态未改变"
 	a.reply = func(command cleanupAgentCommand) (bool, string, map[string]interface{}) {
 		if command.Type == "SwapSet" {
 			return false, bizMsg, nil
@@ -240,7 +240,7 @@ func TestNodeSwapSuccessPassthrough(t *testing.T) {
 		t.Fatalf("info data must pass through untouched, got %+v", gotInfo)
 	}
 	if gotInfo["fileSizeMB"] != float64(1536) {
-		t.Fatalf("fileSizeMB must pass through untouched (frontend precheck mirrors the agent predicate with it), got %+v", gotInfo)
+		t.Fatalf("fileSizeMB must pass through untouched (shown in the modal shortage note as still-occupying-disk; the precheck itself mirrors the agent predicate on diskFreeMB only, R18-D2-01-mirror), got %+v", gotInfo)
 	}
 	if cmds := a.commandsOfType("SwapInfo"); len(cmds) != 1 {
 		t.Fatalf("expected exactly one SwapInfo command, got %+v", cmds)
@@ -285,5 +285,43 @@ func TestNodeSwapSetSizeValidation(t *testing.T) {
 	}
 	if cmds := a.commandsOfType("SwapSet"); len(cmds) != 0 {
 		t.Fatalf("invalid sizes must never reach the agent, got %+v", cmds)
+	}
+}
+
+func TestCheckNodeSwapCapacityMirror(t *testing.T) {
+	// R18-D2-01-mirror：面板侧预检与 agent checkSwapCapacity 同谓词——
+	// 只认真实磁盘剩余。重建时旧文件只是改名备份、仍占盘，新文件再整块
+	// fallocate，峰值占用是旧+新，现有 /swapfile 占量绝不能计入可用。
+	// 恰好达标（磁盘剩余 == 目标＋预留）放行。
+	if err := checkNodeSwapCapacity(2048+256, 0, 2); err != nil {
+		t.Fatalf("exact fit must pass: %v", err)
+	}
+	// 审计复现数：磁盘剩余 1000MB、已有 2GB 文件时调到 2GB 必须拒绝
+	// （旧谓词 1000+2048=3048 ≥ 2304 会放行，随后在 swapoff 之后 ENOSPC）。
+	if err := checkNodeSwapCapacity(1000, 2048, 2); err == nil {
+		t.Fatalf("existing file space must not count toward capacity")
+	}
+	// 磁盘剩余本身达标时，已有文件大小不影响放行。
+	if err := checkNodeSwapCapacity(2048+256, 2048, 2); err != nil {
+		t.Fatalf("sufficient disk free must pass regardless of existing file: %v", err)
+	}
+	// 边界与 agent TestCheckSwapCapacityBoundaryMirror 共用一组数字：
+	// diskFree 2304 → 恰达需求放行；2303 → 差 1MB 拒绝（在盘文件
+	// 1024MB 的大小不影响边界）。
+	if err := checkNodeSwapCapacity(2304, 1024, 2); err != nil {
+		t.Fatalf("exact boundary must pass: %v", err)
+	}
+	if err := checkNodeSwapCapacity(2303, 1024, 2); err == nil {
+		t.Fatalf("1MB below boundary must be rejected")
+	}
+	// 差 1MB 拒绝，且错误带全部关键数字（与 agent 新文案同口径）。
+	err := checkNodeSwapCapacity(2048+255, 0, 2)
+	if err == nil {
+		t.Fatalf("1MB short must be rejected")
+	}
+	for _, want := range []string{"磁盘空间不足", "2304", "2048", "256", "2303", "不计入可用"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("capacity error must carry %q: %v", want, err)
+		}
 	}
 }
