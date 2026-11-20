@@ -7,20 +7,27 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from pages import DashboardPage, LoginPage
-from utils.api_client import ADMIN_USER
 
 
 @pytest.mark.e2e
+@pytest.mark.reuse_login
 class TestDashboard:
     """Dashboard E2E tests."""
 
     @pytest.fixture(autouse=True)
-    def login(self, page: Page, frontend_url: str, browser_admin_password: str):
-        """Login before each test."""
+    def login(self, page: Page, frontend_url: str):
+        """Start authenticated via the reused storage state (reuse_login).
+
+        The class does no per-test form login: the suite's ~20 logins
+        in ~2 min hit the backend's 10/min login bucket, so form
+        logins get 429'd mid-run. goto("/") redirects an authenticated
+        session to /dashboard (LoginRoute); if the state is stale the
+        wait times out and the test fails loudly instead of silently
+        running logged out.
+        """
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        result = login_page.login(ADMIN_USER, browser_admin_password)
-        assert result, "Login should succeed with valid credentials"
+        page.wait_for_url("**/dashboard**", timeout=15000, wait_until="commit")
 
     def test_login_redirects_to_dashboard(self, page: Page, frontend_url: str):
         """Test that login with a changed admin password redirects to dashboard."""
@@ -30,13 +37,19 @@ class TestDashboard:
 
         assert page.locator("nav, [data-testid='sidebar'], aside").count() > 0
 
-    def test_dashboard_shows_user_info(self, page: Page):
-        """Test that page shows user information."""
+    def test_dashboard_shows_overview(self, page: Page):
+        """Test that the dashboard renders its overview for the session.
+
+        The routed dashboard (vite-frontend/src/pages/dashboard/
+        admin-overview.tsx) renders no username greeting — the greeting
+        in src/pages/dashboard.tsx belongs to an unrouted file — so
+        this asserts what the page actually shows: the 概览 heading
+        and the session's stat cards once its data has loaded.
+        """
         page.wait_for_load_state("networkidle")
 
-        # The dashboard greets the logged-in admin by name (dashboard.tsx
-        # renders the session username), so the name must be visible.
-        expect(page.locator("text=admin@user").first).to_be_visible()
+        expect(page.locator("h1").filter(has_text="概览").first).to_be_visible()
+        expect(page.locator("text=节点在线").first).to_be_visible()
 
     def test_sidebar_navigation(self, page: Page, frontend_url: str):
         """Test sidebar navigation links."""
@@ -45,8 +58,11 @@ class TestDashboard:
         # Sidebar items are <nav> entries with Chinese labels and onClick
         # navigation (layouts/admin.tsx) — not <a href> links, so locate
         # them by label inside the nav and assert each landing URL.
+        # All four must be admin-visible: /forward ("规则") is
+        # userOnly, so an admin never sees it — use /inbound ("落地")
+        # instead.
         nav_items = [
-            ("规则", "/forward"),
+            ("落地", "/inbound"),
             ("节点", "/node"),
             ("用户", "/user"),
             ("设置", "/config"),
@@ -66,12 +82,14 @@ class TestDashboard:
         page.set_viewport_size({"width": 375, "height": 667})
         page.wait_for_timeout(500)
 
-        # No horizontal overflow at mobile width, and the dashboard still
-        # greets the logged-in user.
+        # No horizontal overflow at mobile width, and the dashboard
+        # heading is visible. (The routed dashboard renders no username
+        # greeting — see test_dashboard_shows_overview — so assert the
+        # 概览 heading instead of a "admin@user" text that never appears.)
         assert page.evaluate("document.documentElement.scrollWidth") <= 375, (
             "dashboard must not overflow horizontally at 375px width"
         )
-        expect(page.locator("text=admin@user").first).to_be_visible()
+        expect(page.locator("h1").filter(has_text="概览").first).to_be_visible()
 
         page.set_viewport_size({"width": 1920, "height": 1080})
         page.wait_for_timeout(500)
@@ -80,16 +98,24 @@ class TestDashboard:
 
 
 @pytest.mark.e2e
+@pytest.mark.reuse_login
 class TestNavigation:
     """Navigation E2E tests."""
 
     @pytest.fixture(autouse=True)
-    def login(self, page: Page, frontend_url: str, browser_admin_password: str):
-        """Login before each test."""
+    def login(self, page: Page, frontend_url: str):
+        """Start authenticated via the reused storage state (reuse_login).
+
+        The class does no per-test form login: the suite's ~20 logins
+        in ~2 min hit the backend's 10/min login bucket, so form
+        logins get 429'd mid-run. goto("/") redirects an authenticated
+        session to /dashboard (LoginRoute); if the state is stale the
+        wait times out and the test fails loudly instead of silently
+        running logged out.
+        """
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        result = login_page.login(ADMIN_USER, browser_admin_password)
-        assert result, "Login should succeed with valid credentials"
+        page.wait_for_url("**/dashboard**", timeout=15000, wait_until="commit")
 
     def test_navigate_to_user_page(self, page: Page, frontend_url: str):
         """Test navigation to user management page."""

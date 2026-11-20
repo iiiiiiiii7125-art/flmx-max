@@ -7,21 +7,25 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from pages import LoginPage, UserPage
-from utils.api_client import ADMIN_USER
 
 
 @pytest.mark.e2e
 @pytest.mark.slow
+@pytest.mark.reuse_login
 class TestUserManagementUI:
     """User management UI E2E tests."""
 
     @pytest.fixture(autouse=True)
-    def login(self, page: Page, frontend_url: str, browser_admin_password: str):
-        """Login before each test."""
+    def login(self, page: Page, frontend_url: str):
+        """Start authenticated via the reused storage state (reuse_login).
+
+        See test_dashboard.py: per-test form logins hit the backend's
+        10/min login bucket and get 429'd mid-run. goto("/") redirects
+        an authenticated session to /dashboard (LoginRoute).
+        """
         login_page = LoginPage(page, frontend_url)
         login_page.goto()
-        result = login_page.login(ADMIN_USER, browser_admin_password)
-        assert result, "Login should succeed with valid credentials"
+        page.wait_for_url("**/dashboard**", timeout=15000, wait_until="commit")
 
     def test_user_page_loads(self, page: Page, frontend_url: str):
         """Test that user management page loads."""
@@ -40,6 +44,12 @@ class TestUserManagementUI:
         # The admin (role_id 0) is excluded from /user/list by design
         # (ListUsers filters role_id != 0), so assert on a user that is
         # actually listed: the API-created test_user fixture.
+        # The user page defaults to grid view (viewMode defaults to
+        # "grid" in src/pages/user.tsx and is only persisted to
+        # localStorage once toggled), so users render as cards and no
+        # <table> exists until the view is switched to list mode. The
+        # toggle is the icon-only button showing the List icon.
+        page.locator("button:has(svg.lucide-list)").first.click()
         expect(page.locator("table").first).to_be_visible()
         expect(page.locator(f"text={test_user.username}").first).to_be_visible()
 
@@ -63,6 +73,10 @@ class TestUserManagementUI:
         user_page.goto()
         page.wait_for_load_state("networkidle")
 
+        # The search input is not rendered until the search toggle is
+        # opened: src/pages/user.tsx only renders the input when
+        # isSearchVisible is true (the 搜索 icon button sets it).
+        page.locator('button[aria-label="搜索"]').first.click()
         search_input = page.locator('input[placeholder*="搜索"], input[placeholder*="search"]')
         expect(search_input.first).to_be_visible()
         search_input.first.fill(test_user.username)

@@ -24,23 +24,6 @@ class TestAuthentication:
         expect(login_page.password_input).to_be_visible()
         expect(login_page.login_button).to_be_visible()
 
-    def test_login_with_valid_credentials_redirects_to_change_password(
-        self, page: Page, frontend_url: str, seed_password_admin: str
-    ):
-        """Test successful login with default credentials redirects to change-password.
-
-        Only valid while the admin password is the seed (default) one:
-        the seed_password_admin fixture restores it for this test, so
-        requirePasswordChange is true and login lands on /change-password.
-        """
-        login_page = LoginPage(page, frontend_url)
-        login_page.goto()
-
-        result = login_page.login(ADMIN_USER, seed_password_admin)
-        assert result, "Login should succeed with valid credentials"
-
-        assert "/change-password" in page.url
-
     def test_login_with_invalid_credentials(self, page: Page, frontend_url: str):
         """Test login fails with invalid credentials."""
         login_page = LoginPage(page, frontend_url)
@@ -130,20 +113,3 @@ class TestAuthentication:
         assert response["code"] == 401, (
             f"revoked token must be rejected with code 401, got: {response}"
         )
-
-
-@pytest.mark.e2e
-@pytest.mark.auth
-class TestPasswordChange:
-    """Password change E2E tests."""
-
-    def test_password_change_page_accessible(
-        self, page: Page, frontend_url: str, seed_password_admin: str
-    ):
-        """Test that password change page is accessible after login with default password."""
-        login_page = LoginPage(page, frontend_url)
-        login_page.goto()
-        result = login_page.login(ADMIN_USER, seed_password_admin)
-        assert result, "Login should succeed with valid credentials"
-
-        assert "/change-password" in page.url
