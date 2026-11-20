@@ -318,6 +318,7 @@ sudo systemctl restart caddy
   access_log /var/log/nginx/panel.access.log panel_no_query;
   ```
   改完 `nginx -t` 校验并 reload，自检同上（日志中不应再出现 `secret=`）。
+- **节点 secret 仍走 URL query（C4-05 与 OPEN-2 已合并处理）**：上面说的是同一件事的另一面——agent 到面板的四个通道都把节点 secret 放在 URL 的 query 里：实时连接（`/system-info`）、流量上报（`/flow/upload`）、配置拉取（`/flow/config`）、连接日志（`/flow/connlog/v2`，复用上报 URL 只改路径、query 原样跟随）。目前的残留敞口只在**运维自加的前置反代 / WAF / 日志采集**把完整 URL 落盘时；面板自身的请求日志只记路径、不记 query，脚本生成的 Caddy 已过滤 `secret`，nginx 按上条配好即无此口径。分阶段迁移法（本轮不做——需 agent 与面板协同发版）：① 面板先同时接受新请求头 `X-FLMX-Node-Secret` 与 query；② agent 改为头与 query 双发；③ 待最低支持 agent 版本都发头后，面板再下掉 query 支持、发版说明里公告。只发头不下 query 等于没改——在 query 下掉之前不要动这四处任一处的 query 读取。浏览器打开的实时连接不在此列：它走 30 秒单次票据，不带节点 secret。
 
 ### 登录限流与可信代理跳数
 

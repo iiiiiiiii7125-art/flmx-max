@@ -1685,6 +1685,11 @@ func (h *Handler) flowConfig(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 		return
 	}
+	// C4-05 + OPEN-2 (merged): the node secret still travels in the URL
+	// query on this channel; staged migration to the X-FLMX-Node-Secret
+	// header is recorded in doc/guide/install.md ("反向代理" section) —
+	// keep accepting the query until the agent floor version sends the
+	// header; do not drop query support here alone.
 	secret := r.URL.Query().Get("secret")
 	node, err := h.repo.GetNodeBySecret(secret)
 	if err != nil || node == nil {
@@ -1756,6 +1761,11 @@ func (h *Handler) flowUpload(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("error"))
 		return
 	}
+	// C4-05 + OPEN-2 (merged): the node secret still travels in the URL
+	// query on this channel; staged migration to the X-FLMX-Node-Secret
+	// header is recorded in doc/guide/install.md ("反向代理" section) —
+	// keep accepting the query until the agent floor version sends the
+	// header; do not drop query support here alone.
 	secret := r.URL.Query().Get("secret")
 	node, _ := h.repo.GetNodeBySecret(secret)
 	if node == nil {

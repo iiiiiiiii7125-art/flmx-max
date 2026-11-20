@@ -432,6 +432,11 @@ func wsClientIP(r *http.Request) string {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	typeVal := query.Get("type")
+	// C4-05 + OPEN-2 (merged): the node secret still travels in the URL
+	// query on this channel; staged migration to the X-FLMX-Node-Secret
+	// header is recorded in doc/guide/install.md ("反向代理" section) —
+	// keep accepting the query until the agent floor version sends the
+	// header; do not drop query support here alone.
 	secret := query.Get("secret")
 	clientIP := wsClientIP(r)
 	now := time.Now()
