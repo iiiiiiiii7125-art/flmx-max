@@ -15,7 +15,6 @@ type Config struct {
 	DatabaseURL  string
 	JWTSecret    string
 	JWTEphemeral bool // true when JWTSecret was auto-generated (sessions won't survive restart)
-	LogDir       string
 }
 
 func FromEnv() Config {
@@ -25,7 +24,6 @@ func FromEnv() Config {
 		DBPath:      getEnv("DB_PATH", "/app/data/gost.db"),
 		DatabaseURL: getEnv("DATABASE_URL", ""),
 		JWTSecret:   getEnv("JWT_SECRET", ""),
-		LogDir:      getEnv("LOG_DIR", "/app/logs"),
 	}
 	if cfg.JWTSecret == "" {
 		// Never use an empty HMAC key: it makes JWTs and the subscription
