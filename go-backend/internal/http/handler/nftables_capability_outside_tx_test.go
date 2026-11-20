@@ -57,7 +57,7 @@ func (m *blockingNftablesManager) ListBlockedPorts(_ context.Context, _ runtimen
 	return nil, nil
 }
 
-func (m *blockingNftablesManager) SetBlocked(_ context.Context, _ runtimenft.SSHConfig, _ int, _ bool) error {
+func (m *blockingNftablesManager) SetBlocked(_ context.Context, _ runtimenft.SSHConfig, _ int, _ bool, _ bool) error {
 	return nil
 }
 

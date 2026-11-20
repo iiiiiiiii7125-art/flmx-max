@@ -64,8 +64,9 @@ type fakeNftablesManager struct {
 }
 
 type fakeBlockedCall struct {
-	port    int
-	blocked bool
+	port          int
+	blocked       bool
+	cleanupLegacy bool
 }
 
 func (f *fakeNftablesManager) Test(_ context.Context, cfg runtimenft.SSHConfig) error {
@@ -103,11 +104,11 @@ func (f *fakeNftablesManager) Clear(_ context.Context, _ runtimenft.SSHConfig, m
 	return f.clearErr
 }
 
-func (f *fakeNftablesManager) SetBlocked(_ context.Context, cfg runtimenft.SSHConfig, port int, blocked bool) error {
+func (f *fakeNftablesManager) SetBlocked(_ context.Context, cfg runtimenft.SSHConfig, port int, blocked bool, cleanupLegacy bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lastConfig = cfg
-	f.blockedCalls = append(f.blockedCalls, fakeBlockedCall{port: port, blocked: blocked})
+	f.blockedCalls = append(f.blockedCalls, fakeBlockedCall{port: port, blocked: blocked, cleanupLegacy: cleanupLegacy})
 	f.ops = append(f.ops, fmt.Sprintf("block:%d:%t", port, blocked))
 	if f.blockErr != nil {
 		return f.blockErr

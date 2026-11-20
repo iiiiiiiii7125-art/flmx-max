@@ -151,6 +151,12 @@ func TestSweepNodeOrphanedBlockedPorts(t *testing.T) {
 		if call.port != 23199 {
 			t.Fatalf("sweep unblocked a non-orphan port: %+v", call)
 		}
+		// R18-R2-C3-03：清扫解除无主端口只动本安装的隔离表，
+		// 绝不清理 plain 表残留——同号元素更可能是另一套面板
+		// 的封禁。
+		if call.cleanupLegacy {
+			t.Fatalf("sweep unblock must not clean the legacy plain table: %+v", call)
+		}
 	}
 	if unblocks != 1 {
 		t.Fatalf("expected exactly one orphan unblock, got %d", unblocks)

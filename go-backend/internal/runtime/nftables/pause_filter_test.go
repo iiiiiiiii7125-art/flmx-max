@@ -37,7 +37,7 @@ func TestRenderPauseTableDropsEstablishedFlows(t *testing.T) {
 }
 
 func TestBuildSetBlockedCommandBlockCreatesTableAndAddsPort(t *testing.T) {
-	cmd := buildSetBlockedCommand("nft", PauseTableNameForInstance(""), 20000, true)
+	cmd := buildSetBlockedCommand("nft", PauseTableNameForInstance(""), 20000, true, false)
 	for _, want := range []string{
 		"if ! nft list table inet flmx_quota_e3b0c442 >/dev/null 2>&1; then",
 		"nft -f - <<'EOF'",
@@ -59,7 +59,7 @@ func TestBuildSetBlockedCommandBlockCreatesTableAndAddsPort(t *testing.T) {
 }
 
 func TestBuildSetBlockedCommandUnblockDeletesOnlyExistingPort(t *testing.T) {
-	cmd := buildSetBlockedCommand("nft", PauseTableNameForInstance(""), 20001, false)
+	cmd := buildSetBlockedCommand("nft", PauseTableNameForInstance(""), 20001, false, true)
 	for _, want := range []string{
 		"if nft list table inet flmx_quota_e3b0c442 >/dev/null 2>&1; then",
 		"if nft get element inet flmx_quota_e3b0c442 blocked_ports '{ 20001 }' >/dev/null 2>&1; then",
@@ -90,7 +90,7 @@ func TestBuildClearBlocksCommandDeletesWholeTable(t *testing.T) {
 func TestSSHRunnerSetBlockedRejectsInvalidPort(t *testing.T) {
 	runner := NewSSHRunner()
 	for _, port := range []int{0, -1, 65536} {
-		if err := runner.SetBlocked(context.Background(), SSHConfig{}, port, true); err == nil {
+		if err := runner.SetBlocked(context.Background(), SSHConfig{}, port, true, false); err == nil {
 			t.Fatalf("expected error for port %d", port)
 		}
 	}
@@ -106,12 +106,13 @@ type blockingRunner struct {
 }
 
 type fakeBlockedCall struct {
-	port    int
-	blocked bool
+	port          int
+	blocked       bool
+	cleanupLegacy bool
 }
 
-func (f *blockingRunner) SetBlocked(_ context.Context, _ SSHConfig, port int, blocked bool) error {
-	f.blockedCalls = append(f.blockedCalls, fakeBlockedCall{port: port, blocked: blocked})
+func (f *blockingRunner) SetBlocked(_ context.Context, _ SSHConfig, port int, blocked bool, cleanupLegacy bool) error {
+	f.blockedCalls = append(f.blockedCalls, fakeBlockedCall{port: port, blocked: blocked, cleanupLegacy: cleanupLegacy})
 	return nil
 }
 
@@ -199,17 +200,17 @@ func TestManagerListBlockedPortsUnsupportedRunner(t *testing.T) {
 func TestManagerSetBlockedDelegatesToRunner(t *testing.T) {
 	runner := &blockingRunner{}
 	manager := NewManager(runner)
-	if err := manager.SetBlocked(context.Background(), SSHConfig{}, 20000, true); err != nil {
+	if err := manager.SetBlocked(context.Background(), SSHConfig{}, 20000, true, false); err != nil {
 		t.Fatalf("SetBlocked: %v", err)
 	}
-	if len(runner.blockedCalls) != 1 || runner.blockedCalls[0] != (fakeBlockedCall{port: 20000, blocked: true}) {
+	if len(runner.blockedCalls) != 1 || runner.blockedCalls[0] != (fakeBlockedCall{port: 20000, blocked: true, cleanupLegacy: false}) {
 		t.Fatalf("unexpected blocked calls: %+v", runner.blockedCalls)
 	}
 }
 
 func TestManagerSetBlockedUnsupportedRunner(t *testing.T) {
 	manager := NewManager(&fakeRunner{})
-	if err := manager.SetBlocked(context.Background(), SSHConfig{}, 20000, true); err == nil {
+	if err := manager.SetBlocked(context.Background(), SSHConfig{}, 20000, true, false); err == nil {
 		t.Fatalf("expected error when runner lacks blocking support")
 	}
 }

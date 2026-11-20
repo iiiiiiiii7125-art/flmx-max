@@ -80,7 +80,11 @@ func (h *Handler) sweepNodeOrphanedBlockedPorts(ctx context.Context, nodeID int6
 		return err
 	}
 	for _, port := range orphanBlockedPorts(blocked, ownedPorts) {
-		if err := h.nftablesManager.SetBlocked(ctx, nodeID, sshCfg, port, false); err != nil {
+		// R18-R2-C3-03：清扫解除无主端口只动本安装的隔离表，
+		// cleanupLegacy=false——无主端口没有归属转发，plain 表
+		// 里同号元素更可能是另一套面板的封禁，绝不能碰；若该
+		// 端口日后被新转发复用，sync 的恢复收敛会再清残留。
+		if err := h.nftablesManager.SetBlocked(ctx, nodeID, sshCfg, port, false, false); err != nil {
 			return err
 		}
 		log.Printf("nftables blocked-port sweep removed orphan node_id=%d port=%d", nodeID, port)

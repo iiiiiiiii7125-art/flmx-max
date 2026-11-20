@@ -54,7 +54,7 @@ func TestRenderPauseTableForInstallIsolated(t *testing.T) {
 
 func TestBuildSetBlockedCommandUsesIsolatedTable(t *testing.T) {
 	table := PauseTableNameForInstall("blue", "")
-	cmd := buildSetBlockedCommand("nft", table, 20000, true)
+	cmd := buildSetBlockedCommand("nft", table, 20000, true, false)
 	for _, want := range []string{
 		"if ! nft list table inet flmx_quota_16477688 >/dev/null 2>&1; then",
 		"table inet flmx_quota_16477688 {",
@@ -65,31 +65,32 @@ func TestBuildSetBlockedCommandUsesIsolatedTable(t *testing.T) {
 		}
 	}
 	// No plain-table reference as the operating table: the block
-	// must not touch the shared table except for the one-shot
-	// migration adopt below.
+	// must not touch the shared table at all.
 	if strings.Contains(cmd, "list table inet flmx_quota {") || strings.Contains(cmd, "delete table inet flmx_quota") {
 		t.Fatalf("block command must never operate on the plain shared table:\n%s", cmd)
 	}
 	if strings.Contains(cmd, "delete table") {
 		t.Fatalf("block command must not delete any table:\n%s", cmd)
 	}
-	// One-shot migration: creating the isolated table adopts the
-	// pre-upgrade blocks from the plain table (best-effort only:
-	// the adopt must never fail the block itself).
-	if !strings.Contains(cmd, "list table inet flmx_quota >/dev/null 2>&1") {
-		t.Fatalf("block command must adopt pre-upgrade blocks from the plain table when creating the isolated table:\n%s", cmd)
+	// R18-R2-C3-03: no blind adopt of the pre-upgrade plain table
+	// on table creation. The old one-shot migration copied every
+	// plain-table element into this install's table — including
+	// ports another panel had blocked. The adopt is also
+	// unnecessary: every sync re-blocks this install's full DB
+	// expected set port by port, and the plain table itself is
+	// never deleted, so it keeps enforcing its ports until the
+	// resume path clears each residue element.
+	if strings.Contains(cmd, "list table inet flmx_quota >/dev/null 2>&1") {
+		t.Fatalf("block command must not read the plain shared table (no blind adopt):\n%s", cmd)
 	}
-	if !strings.Contains(cmd, "add element inet flmx_quota_16477688 blocked_ports") {
-		t.Fatalf("migration adopt must add elements into the isolated table:\n%s", cmd)
-	}
-	if strings.Count(cmd, "|| true") == 0 {
-		t.Fatalf("migration adopt must be best-effort (|| true):\n%s", cmd)
+	if strings.Contains(cmd, "list set inet flmx_quota ") {
+		t.Fatalf("block command must not copy elements out of the plain shared table:\n%s", cmd)
 	}
 }
 
 func TestBuildSetBlockedCommandUnblockIsolatedAndClearsLegacyResidue(t *testing.T) {
 	table := PauseTableNameForInstall("blue", "")
-	cmd := buildSetBlockedCommand("nft", table, 20001, false)
+	cmd := buildSetBlockedCommand("nft", table, 20001, false, true)
 	for _, want := range []string{
 		"if nft list table inet flmx_quota_16477688 >/dev/null 2>&1; then",
 		"nft delete element inet flmx_quota_16477688 blocked_ports '{ 20001 }'",
@@ -160,8 +161,8 @@ func TestSSHRunnerPauseTableFollowsInstall(t *testing.T) {
 	}
 	// Two panels blocking the same port build commands against
 	// different tables: neither side can unblock the other's port.
-	a := buildSetBlockedCommand("nft", NewSSHRunnerWithInstall("", "11111111-1111-1111-1111-111111111111").pauseTableName(), 20000, true)
-	b := buildSetBlockedCommand("nft", NewSSHRunnerWithInstall("", "22222222-2222-2222-2222-222222222222").pauseTableName(), 20000, true)
+	a := buildSetBlockedCommand("nft", NewSSHRunnerWithInstall("", "11111111-1111-1111-1111-111111111111").pauseTableName(), 20000, true, false)
+	b := buildSetBlockedCommand("nft", NewSSHRunnerWithInstall("", "22222222-2222-2222-2222-222222222222").pauseTableName(), 20000, true, false)
 	if a == b {
 		t.Fatal("two installs blocking the same port must build different commands")
 	}
