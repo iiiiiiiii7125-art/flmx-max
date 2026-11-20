@@ -155,8 +155,8 @@ var authenticatedConfigKeys = map[string]struct{}{
 	// 在 sensitiveConfigKeys；日报台账键 notify_daily_last /
 	// notify_daily_inbound_total 是运行时状态而非配置，不入本表，
 	// 对非管理员按默认 sensitive 收口，管理员与后端直读不受影响）。
-	"notify_enabled":          {},
-	"notify_events":           {},
+	"notify_enabled": {},
+	"notify_events":  {},
 	// F3-NEW-01：三项资源告警的独立开关（notify_conntrack_high /
 	// notify_disk_high / notify_agent_memory_high）。值域 true/false，
 	// 缺键＝开（撞墙前预警默认必须在）；与 notify_events 列表无关，
@@ -164,9 +164,9 @@ var authenticatedConfigKeys = map[string]struct{}{
 	"notify_conntrack_high":    {},
 	"notify_disk_high":         {},
 	"notify_agent_memory_high": {},
-	"notify_daily_hour":       {},
-	"notify_latency_loss_pct": {},
-	"notify_latency_ms":       {},
+	"notify_daily_hour":        {},
+	"notify_latency_loss_pct":  {},
+	"notify_latency_ms":        {},
 	// 连接日志总开关（入站连接日志设计 §4.5）：gost 中转入口采集的
 	// 启停键、默认开（缺失即开，故不在 required 表——清空回落默认
 	// 开是合法语义）；值域 true/false 在保存面校验。非凭据，归
@@ -271,6 +271,12 @@ var backupRuntimeExcludedConfigKeys = map[string]struct{}{
 	// 上重发已送达的告警／回滚水位复活过时文案。
 	"notify_upgrade_failed_pending":     {},
 	"notify_upgrade_failed_pending_gen": {},
+	// R18-B7-01：v6 联邦移除迁移写的一次性孤儿隧道待办键（隧道
+	// id 清单，供隧道列表打 orphanedByFederationRemoval 标记），
+	// 是本机运行时台账、不是管理员配置——随备份往返会在目标实
+	// 例上把另一台机器的隧道 id 标成孤儿，且目标实例的迁移永不
+	// 重跑、无清理路径。
+	"rmshare_orphan_tunnels": {},
 }
 
 func isBackupRuntimeExcludedConfigKey(name string) bool {
