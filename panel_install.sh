@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.13"
+SCRIPT_VERSION="20261120.14"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -6053,15 +6053,23 @@ uninstall_panel() {
   # 一并回收（按上文读出的前端端口判归属整块摘除，失败只告警、
   # 不推翻已完成的卸载）。
   uninstall_caddy_panel_blocks "$uninstall_caddy_port"
-  # 回执前验后置状态：主部署文件与备份目录确已删除才许宣称完成
-  # （旧实现 rm 集裸调用、失败照印 ✅）。
+  # R18-A2-14：回执前验后置状态须与删除集一致——旧实现只验
+  # docker-compose.yml/.env/backups 三项，密钥级 .bak 文件删
+  # 不掉（如 chattr +i、只读挂载）时仍照印 ✅ 卸载完成。与
+  # no-docker 分支同集：固定名逐项验、glob 集用 nullglob 展
+  # 开，任一残留即报未完成并逐项点名。
   local uninstall_leftovers=""
-  local uninstall_item
-  for uninstall_item in docker-compose.yml .env backups; do
+  local uninstall_item uninstall_match
+  for uninstall_item in docker-compose.yml .env backups .env.pre-postgres-migration gost.db.bak .env.upgrade.bak docker-compose.yml.upgrade.bak upgrade.log .flmx_upgrade_status.json .flmx_upgrade_heartbeat; do
     if [[ -e "$uninstall_item" ]]; then
       uninstall_leftovers="$uninstall_leftovers $uninstall_item"
     fi
   done
+  shopt -s nullglob
+  for uninstall_match in .env.bak.* docker-compose.yml.bak.* .docker-compose.yml.update.* .docker-compose.yml.install.*; do
+    uninstall_leftovers="$uninstall_leftovers $uninstall_match"
+  done
+  shopt -u nullglob
   if [[ -n "$uninstall_leftovers" ]]; then
     echo "❌ 卸载未完全完成，以下项目未能删除：$uninstall_leftovers，请人工处理（容器与数据卷已随 down 删除的部分不受影响）"
     return 1

@@ -14012,6 +14012,25 @@ test_panel_uninstall_docker_branch_verifies_poststate() (
   [[ "$rc" != "0" ]] || fail "W1-PANEL-UNINSTALL-VERDICT: leftover compose must fail the uninstall"
   [[ "$out" == *"卸载未完全完成"* ]] || fail "W1-PANEL-UNINSTALL-VERDICT: leftover must be named, got: $out"
   [[ "$out" != *"✅ 卸载完成"* ]] || fail "W1-PANEL-UNINSTALL-VERDICT: leftover must not print completion"
+
+  # R18-A2-14：密钥级 .env 备份删不掉时同样不得报完成——旧实现
+  # 只验三项，.bak 残留照印 ✅。本幕只让 .env.bak 删失败（主
+  # 文件均可删），断言失败并逐项点名残留文件名。
+  d=$(mktemp -d)
+  printf 'JWT_SECRET=<redacted>\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=sqlite\n' > "$d/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n' > "$d/docker-compose.yml"
+  printf 'JWT_SECRET=<redacted>\n' > "$d/.env.bak.20250101000000"
+  rm() {
+    local a
+    for a in "$@"; do [[ "$a" == *.env.bak.* ]] && return 1; done
+    command rm "$@"
+  }
+  rc="0"
+  out=$( ( cd "$d" && uninstall_panel <<< "y" 2>&1 ) ) || rc="$?"
+  [[ "$rc" != "0" ]] || fail "R18-A2-14: a leftover key-bearing .env backup must fail the uninstall"
+  [[ "$out" == *"卸载未完全完成"* ]] || fail "R18-A2-14: the leftover backup must be named, got: $out"
+  [[ "$out" == *".env.bak.20250101000000"* ]] || fail "R18-A2-14: the leftover file name must be named, got: $out"
+  [[ "$out" != *"✅ 卸载完成"* ]] || fail "R18-A2-14: leftover must not print completion"
 )
 
 # W1-SELFCHECK: delete_self 本体校验须为多因子——仅含 REPO 钉死
