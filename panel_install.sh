@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.10"
+SCRIPT_VERSION="20261120.11"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -4150,7 +4150,24 @@ verify_panel_update_sqlite_volume() {
     echo "❌ 升级后卷名自检失败：后端容器 $backend_container 在 /app/data 实际挂载卷「${actual:-（未读到）}」，与升级前记录的卷「$expected」不一致——新后端可能挂在空卷上，本次更新判失败并回滚" >&2
     return 1
   fi
-  echo "🔎 升级后卷名自检通过：后端 /app/data 挂载卷为 $actual（与升级前记录一致）"
+  # R18-A2-09：只比卷名不够——同名空卷（删后重建）会蒙过名字比
+  # 对、新后端挂空卷播种却报更新成功（与 PG 面 A2-02 已防的形
+  # 态同构）。与 PG 的 PG_VERSION 检查对称：SQLite 部署卷内须
+  # 见 gost.db。但 PG 部署的后端数据在 PostgreSQL 里，全新 PG
+  # 安装的 /app/data 卷内本无 gost.db（后端走 PG，不建 sqlite
+  # 文件），内容面只在 SQLite 部署上强制；PG 部署仍只比卷名，
+  # 否则全新 PG 存量的更新会被误判失败。
+  local db_type
+  db_type=$(get_current_db_type || true)
+  if [[ "$db_type" != "postgres" ]] && ! panel_volume_file_exists "$actual" gost.db; then
+    echo "❌ 升级后卷名自检失败：卷 $actual 内未见 gost.db（不像真实 SQLite 数据目录，可能挂到了同名的空卷/异属卷），本次更新判失败并回滚" >&2
+    return 1
+  fi
+  if [[ "$db_type" == "postgres" ]]; then
+    echo "🔎 升级后卷名自检通过：后端 /app/data 挂载卷为 $actual（与升级前记录一致；PG 部署不验卷内 gost.db）"
+  else
+    echo "🔎 升级后卷名自检通过：后端 /app/data 挂载卷为 $actual（与升级前记录一致），卷内已见 gost.db"
+  fi
   return 0
 }
 

@@ -10154,6 +10154,14 @@ setup_rename_update_fixture() {
   FIXTURE_RMLOG="$1/rm.log"
   mkdir -p "$FIXTURE_EXIST"
   : > "$FIXTURE_RMLOG"
+  # R18-A2-09：夹具 SQLite 卷目录——docker volume inspect -f
+  # '{{.Mountpoint}}' 的答复面；缺省含 gost.db，
+  # FIXTURE_SQLITE_VOL_EMPTY=1 时不建、模拟同名空卷。
+  FIXTURE_SQLITE_VOLDIR="$1/sqlite-vol"
+  mkdir -p "$FIXTURE_SQLITE_VOLDIR"
+  if [[ -z "${FIXTURE_SQLITE_VOL_EMPTY:-}" ]]; then
+    : > "$FIXTURE_SQLITE_VOLDIR/gost.db"
+  fi
   # 第三种部署形态 current：身份键已是现行名（不触发改名），供升
   # 级后卷名自检的「已有键路径」用例使用；resolve 桩按形态给名。
   FIXTURE_RESOLVE_BACKEND="flux-panel-backend"
@@ -10249,6 +10257,15 @@ EOF
         return 0
         ;;
       volume)
+        # R18-A2-09：volume inspect -f '{{.Mountpoint}}' 答夹具
+        # SQLite 卷目录；只答 SQLite 卷名（实挂名/重建后名），裸
+        # volume inspect <name> 仍答失败（未知卷口径不变）。
+        if [[ "$2" == "inspect" && "$3" == "-f" && -n "${5:-}" ]]; then
+          if [[ "${5:-}" == "${FIXTURE_SQLITE_VOLUME:-sqlite_data}" ]] || [[ -n "${FIXTURE_REBUILT_SQLITE_VOLUME:-}" && "${5:-}" == "$FIXTURE_REBUILT_SQLITE_VOLUME" ]]; then
+            printf '%s' "$FIXTURE_SQLITE_VOLDIR"
+            return 0
+          fi
+        fi
         return 1
         ;;
       inspect)
@@ -10341,6 +10358,9 @@ YAML
     # 以“备份缺失”失败。
     mkdir -p "$UPDATE_BACKUP_DIR/sqlite"
     : > "$UPDATE_BACKUP_DIR/sqlite/gost.db"
+    # A2-05 同契约 PG 面：真实备份恒含 postgres.sql（非空），PG
+    # 模式回滚恢复以它为源；缺失时回滚 fail-closed。
+    printf 'PRE-UPDATE-PG-DUMP\n' > "$UPDATE_BACKUP_DIR/postgres.sql"
   }
   pull_panel_update_images() { return 0; }
 }
@@ -10697,6 +10717,25 @@ test_panel_update_volume_check_existing_key_path() (
   grep -q '升级后卷名自检失败' "$dir2/update.log" || fail "FIX199-B: the existing-key path self-check failure must be named"
   grep -q '已恢复更新前版本' "$dir2/update.log" || fail "FIX199-B: the existing-key path self-check failure must roll back"
   diff -q "$dir2/env.pristine" "$dir2/.env" >/dev/null || fail "FIX199-B: rollback on the existing-key path must restore the pre-update .env verbatim"
+)
+
+# R18-A2-09：SQLite 卷自检只比卷名会蒙过同名空卷——删卷重建后
+# 同名空卷挂上来，名字比对通过、新后端播种空库却报更新成功。
+# 现与 PG 面对称验卷内物：卷名一致但卷内无 gost.db 即判失败。
+# 夹具以 FIXTURE_SQLITE_VOL_EMPTY=1 建同名空卷；旧实现无内容
+# 检查，本例必红。
+test_panel_update_sqlite_volume_check_rejects_same_name_empty_volume() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  FIXTURE_SQLITE_VOL_EMPTY=1 setup_rename_update_fixture "$dir" "current"
+  cd "$dir"
+  local rc="0" out
+  out=$(verify_panel_update_sqlite_volume "sqlite_data" 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-09: the sqlite volume self-check must fail when the same-named volume holds no gost.db"
+  [[ "$out" == *"gost.db"* ]] || fail "R18-A2-09: the failure must name the missing gost.db, got: $out"
+  rm -rf "$dir"
 )
 
 # FIX199-B: 钉键与改名解耦——容器键齐全非旧名（不触发改名）但
@@ -11582,6 +11621,11 @@ test_panel_update_aborts_on_accident_state_volume() (
   setup_rename_update_fixture "$dir2" keyless
   FIXTURE_VOLROOT="$dir2/volroot"
   mkdir -p "$FIXTURE_VOLROOT/sqlite_data"
+  # R18-A2-09：live 卷 flmx-sqlite-data 是在跑后端的数据卷，卷
+  # 内须有 gost.db——否则升级后卷自检（内容面）会在门放行后把
+  # 更新判失败；旧卷 sqlite_data 仍为空（本幕的断言面）。
+  mkdir -p "$FIXTURE_VOLROOT/flmx-sqlite-data"
+  : > "$FIXTURE_VOLROOT/flmx-sqlite-data/gost.db"
   wrap_volume_docker
   FIXTURE_SQLITE_VOLUME="flmx-sqlite-data"
   VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
@@ -11641,6 +11685,12 @@ test_panel_update_aborts_on_pg_accident_state_volume() (
   setup_rename_update_fixture "$dir2" keyless
   FIXTURE_VOLROOT="$dir2/volroot"
   mkdir -p "$FIXTURE_VOLROOT/postgres_data"
+  # R18-A2-09：live SQLite 卷 sqlite_data 是在跑后端的数据卷，
+  # 卷内须有 gost.db——否则升级后卷自检（内容面）会在 PG 门放
+  # 行后把更新判失败；旧 PG 卷 postgres_data 仍无 PG_VERSION
+  # （本幕的断言面）。
+  mkdir -p "$FIXTURE_VOLROOT/sqlite_data"
+  : > "$FIXTURE_VOLROOT/sqlite_data/gost.db"
   wrap_volume_docker
   FIXTURE_POSTGRES_VOLUME="flmx-postgres-data"
   VERSION="" FLMX_VERSION="" FLUX_VERSION="" PINNED_VERSION=""
@@ -13153,6 +13203,7 @@ test_panel_update_rename_pins_custom_resource_names
 test_panel_update_rename_health_failure_rolls_back
 test_panel_update_volume_check_rolls_back_on_mismatch
 test_panel_update_volume_check_existing_key_path
+test_panel_update_sqlite_volume_check_rejects_same_name_empty_volume
 test_panel_update_pins_keys_without_rename
 test_panel_migrate_placeholder_password_sentinels
 test_panel_migrate_volume_split_and_rollback_cleanup
