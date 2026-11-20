@@ -196,6 +196,11 @@ func main() {
 	// 已被面板卸载（容器形态留有标记）：配置已清除，先于配置加载
 	// 拦截，空转等待人工删除容器。
 	if socket.AgentUninstalled() {
+		// R18-R2-D2-02: 上一进程可能在终局上报未达时被外因重启
+		// （宿主机重启、docker restart、OOM kill）——空转前用
+		// 状态文件里随卸载持久化的面板凭据做一次有界补报。
+		// Best effort：补报失败不改变任何事，下方照常空转。
+		socket.FlushPendingUninstallAfterRestart(30 * time.Second)
 		idleAfterUninstall()
 		return
 	}
