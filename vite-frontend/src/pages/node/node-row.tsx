@@ -1,3 +1,5 @@
+import type { Node } from "@/pages/node/types";
+
 import { memo } from "react";
 import { GripVertical } from "lucide-react";
 
@@ -17,15 +19,11 @@ import {
   SortableItem,
 } from "@/pages/node/helpers";
 import { NodeLiveStats } from "@/pages/node/node-live-stats";
-import {
-  trafficDownShare,
-  type NodeCardTags,
-} from "@/pages/node/card-tags";
+import { trafficDownShare, type NodeCardTags } from "@/pages/node/card-tags";
 import {
   formatNodeRenewalTime,
   getNodeRenewalCycleLabel,
 } from "@/pages/node/renewal";
-import type { Node } from "@/pages/node/types";
 
 export interface NodeUpgradeProgressEntry {
   stage: string;
@@ -225,6 +223,7 @@ function NodeUpgradeVerificationLine({ node }: { node: Node }) {
       </div>
     );
   }
+
   return null;
 }
 
@@ -250,11 +249,10 @@ export function NodeRestartPushLine({
 }) {
   if (node.restartPushStatus === "failed") {
     const reason = node.restartPushError?.trim();
+
     return (
       <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold">
-        <span className="font-semibold text-danger-700">
-          定时重启下发失败
-        </span>
+        <span className="font-semibold text-danger-700">定时重启下发失败</span>
         {reason && (
           <span
             className="min-w-0 truncate font-semibold text-danger-700"
@@ -303,6 +301,7 @@ export function NodeRestartPushLine({
       </div>
     );
   }
+
   return null;
 }
 
@@ -329,8 +328,7 @@ export function NodeUninstallStateChip({ node }: { node: Node }) {
   const reason = node.uninstallReason?.trim();
   const showReason =
     reason &&
-    (node.uninstallState === "failed" ||
-      node.uninstallState === "unconfirmed");
+    (node.uninstallState === "failed" || node.uninstallState === "unconfirmed");
 
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
@@ -382,6 +380,7 @@ export function NodeCardTagChips({
       : tags.speedLimitNames.length > 0
         ? `本节点转发绑定的限速规则：${tags.speedLimitNames.join("、")}（仅统计已启用隧道上状态正常的转发）`
         : "本节点转发未绑定限速规则（仅统计已启用隧道上状态正常的转发）";
+
   return (
     <div className="flex flex-wrap gap-1.5" data-node-card-tags="true">
       <Chip
@@ -423,8 +422,10 @@ export function NodeTrafficProgressBar({
   month?: [number, number];
 }) {
   const share = trafficDownShare(month);
+
   if (share === null) return null;
   const upShare = 100 - share;
+
   return (
     <div className="space-y-1" data-traffic-progress="true">
       <div
@@ -436,10 +437,7 @@ export function NodeTrafficProgressBar({
         role="progressbar"
         title={`本月流量：下行 ${share}%／上行 ${upShare}%（网卡口径，无月度上限）`}
       >
-        <div
-          className="h-full bg-sky-500"
-          style={{ width: `${share}%` }}
-        />
+        <div className="h-full bg-sky-500" style={{ width: `${share}%` }} />
         <div className="h-full flex-1 bg-emerald-500" />
       </div>
     </div>
@@ -469,13 +467,8 @@ const NodeCardContent = memo(function NodeCardContent({
   whitelistSaving,
   listeners,
 }: RowContentProps<NodeCardRowProps>) {
-  const expiryMeta = getNodeExpiryMeta(
-    node.expiryTime,
-    node.renewalCycle,
-  );
-  const connectionStatusMeta = getConnectionStatusMeta(
-    node.connectionStatus,
-  );
+  const expiryMeta = getNodeExpiryMeta(node.expiryTime, node.renewalCycle);
+  const connectionStatusMeta = getConnectionStatusMeta(node.connectionStatus);
   const hasRemark = Boolean(node.remark?.trim());
   const hasExpiryInfo = Boolean(
     node.expiryTime &&
@@ -487,7 +480,13 @@ const NodeCardContent = memo(function NodeCardContent({
   const infoCount = Number(hasExpiryInfo) + Number(hasRemark);
   const month = monthTuple(monthIn, monthOut);
   const renderRowLatency = () =>
-    renderLatencySlot({ node, variant: "card", latencyPoolEmpty, probing, actions });
+    renderLatencySlot({
+      node,
+      variant: "card",
+      latencyPoolEmpty,
+      probing,
+      actions,
+    });
 
   return (
     <Card
@@ -598,9 +597,7 @@ const NodeCardContent = memo(function NodeCardContent({
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              actions.dismissExpiryReminder(
-                                node.id,
-                              );
+                              actions.dismissExpiryReminder(node.id);
                             }}
                           >
                             关闭提醒
@@ -618,9 +615,7 @@ const NodeCardContent = memo(function NodeCardContent({
                           </Chip>
                         </div>
                         <div className="rounded-lg border border-divider/80 glass-inset px-3 py-2 text-xs font-semibold leading-5 text-default-700">
-                          {formatNodeRenewalTime(
-                            expiryMeta.nextDueTime,
-                          )}
+                          {formatNodeRenewalTime(expiryMeta.nextDueTime)}
                         </div>
                       </div>
                     )}
@@ -653,16 +648,13 @@ const NodeCardContent = memo(function NodeCardContent({
         </div>
         {/* 基础信息 */}
         <div className="space-y-2 mb-4">
-          {node.expiryTime &&
-            node.expiryTime > 0 &&
-            node.renewalCycle && <div className="hidden" />}
+          {node.expiryTime && node.expiryTime > 0 && node.renewalCycle && (
+            <div className="hidden" />
+          )}
           <div className="flex justify-between items-center text-sm min-w-0">
-            <span className="text-foreground flex-shrink-0">
-              IP
-            </span>
+            <span className="text-foreground flex-shrink-0">IP</span>
             <div className="text-right text-xs font-semibold min-w-0 flex-1 ml-2 min-h-[2.125rem]">
-              {node.serverIpV4?.trim() ||
-              node.serverIpV6?.trim() ? (
+              {node.serverIpV4?.trim() || node.serverIpV6?.trim() ? (
                 <div className="space-y-0.5">
                   {node.serverIpV4?.trim() && (
                     <span
@@ -692,89 +684,73 @@ const NodeCardContent = memo(function NodeCardContent({
             </div>
           </div>
           <>
-              <div className="flex justify-between text-sm">
-                <span className="text-foreground">
-                  版本
-                </span>
-                <span className="text-xs font-semibold">
-                  {node.version || "未知"}
-                </span>
+            <div className="flex justify-between text-sm">
+              <span className="text-foreground">版本</span>
+              <span className="text-xs font-semibold">
+                {node.version || "未知"}
+              </span>
+            </div>
+            <NodeUpgradeVerificationLine node={node} />
+            {/* R18-E2-01：定时重启下发结果行（failed/pending/未知均常驻，applied 不渲染）。 */}
+            <NodeRestartPushLine
+              node={node}
+              onRepush={actions.openRestartSchedule}
+            />
+            {upgradeProgressEntry && upgradeProgressEntry.percent < 100 && (
+              <div className="mt-1">
+                <Progress
+                  showValueLabel
+                  aria-label="升级进度"
+                  color="warning"
+                  label={upgradeProgressEntry.message}
+                  size="sm"
+                  value={upgradeProgressEntry.percent}
+                />
               </div>
-              <NodeUpgradeVerificationLine node={node} />
-              {/* R18-E2-01：定时重启下发结果行（failed/pending/未知均常驻，applied 不渲染）。 */}
-              <NodeRestartPushLine
-                node={node}
-                onRepush={actions.openRestartSchedule}
-              />
-              {upgradeProgressEntry &&
-                upgradeProgressEntry.percent < 100 && (
-                  <div className="mt-1">
-                    <Progress
-                      showValueLabel
-                      aria-label="升级进度"
-                      color="warning"
-                      label={
-                        upgradeProgressEntry.message
-                      }
-                      size="sm"
-                      value={
-                        upgradeProgressEntry.percent
-                      }
-                    />
-                  </div>
-                )}
+            )}
+            <div className="flex justify-between text-sm">
+              <span className="text-foreground">开机时间</span>
+              <span className="text-xs font-semibold">
+                {node.connectionStatus === "online" && node.systemInfo
+                  ? formatUptime(node.systemInfo.uptime)
+                  : "-"}
+              </span>
+            </div>
+            {monthLabel && (
               <div className="flex justify-between text-sm">
-                <span className="text-foreground">
-                  开机时间
-                </span>
-                <span className="text-xs font-semibold">
-                  {node.connectionStatus === "online" &&
-                  node.systemInfo
-                    ? formatUptime(node.systemInfo.uptime)
-                    : "-"}
-                </span>
+                <span className="text-foreground">本月流量（网卡）</span>
+                <span className="text-xs font-semibold">{monthLabel}</span>
               </div>
-              {monthLabel && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-foreground">
-                    本月流量（网卡）
-                  </span>
-                  <span className="text-xs font-semibold">
-                    {monthLabel}
-                  </span>
-                </div>
-              )}
-              {/* X06 恢复：本月流量上下行分段进度条（零流量不渲染）。 */}
-              <NodeTrafficProgressBar month={month} />
+            )}
+            {/* X06 恢复：本月流量上下行分段进度条（零流量不渲染）。 */}
+            <NodeTrafficProgressBar month={month} />
           </>
         </div>
 
         {node.latency ||
         latencyPoolEmpty ||
         node.latencyTargets?.points.length === 0 ? (
-          <div className="mb-4 empty:hidden">
-            {renderRowLatency()}
-          </div>
+          <div className="mb-4 empty:hidden">{renderRowLatency()}</div>
         ) : null}
 
         <div className="mb-4 space-y-2">
-            <NodeLiveStats
-              info={node.systemInfo ?? null}
-              month={month}
-              monthFreshness={monthFreshness}
-              variant="card"
-            />
-            {showMonitor && actions.openMonitor && (
-              <Button
-                className="min-h-8 w-full"
-                size="sm"
-                variant="flat"
-                onPress={() => actions.openMonitor?.(node.id)}
-              >
-                监控
-              </Button>
-            )}
-          </div>
+          <NodeLiveStats
+            info={node.systemInfo ?? null}
+            month={month}
+            monthFreshness={monthFreshness}
+            variant="card"
+          />
+          {showMonitor && actions.openMonitor && (
+            <Button
+              className="min-h-8 w-full"
+              size="sm"
+              variant="flat"
+              onPress={() => actions.openMonitor?.(node.id)}
+            >
+              监控
+            </Button>
+          )}
+        </div>
 
         <div className="mt-auto space-y-3">
           {/* 连接日志开关：按节点 opt-in，默认关。nftables 节点无 agent
@@ -916,79 +892,69 @@ const NodeCardContent = memo(function NodeCardContent({
           {/* 操作按钮 */}
           <div className="space-y-1.5">
             <div className="grid grid-cols-3 gap-1.5">
-                <Button
-                  className="min-h-8"
-                  color="success"
-                  isLoading={node.copyLoading}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => actions.openInstallSelector(node)}
-                >
-                  安装
-                </Button>
-                <Button
-                  className="min-h-8"
-                  color="warning"
-                  isDisabled={
-                    node.connectionStatus !== "online"
-                  }
-                  isLoading={node.upgradeLoading}
-                  size="sm"
-                  variant="flat"
-                  onPress={() =>
-                    actions.openUpgradeModal("single", node.id)
-                  }
-                >
-                  升级
-                </Button>
-                <Button
-                  className="min-h-8"
-                  color="secondary"
-                  isDisabled={
-                    node.connectionStatus !== "online"
-                  }
-                  isLoading={node.rollbackLoading}
-                  size="sm"
-                  variant="flat"
-                  onPress={() => actions.rollbackNode(node)}
-                >
-                  回退
-                </Button>
-              </div>
+              <Button
+                className="min-h-8"
+                color="success"
+                isLoading={node.copyLoading}
+                size="sm"
+                variant="flat"
+                onPress={() => actions.openInstallSelector(node)}
+              >
+                安装
+              </Button>
+              <Button
+                className="min-h-8"
+                color="warning"
+                isDisabled={node.connectionStatus !== "online"}
+                isLoading={node.upgradeLoading}
+                size="sm"
+                variant="flat"
+                onPress={() => actions.openUpgradeModal("single", node.id)}
+              >
+                升级
+              </Button>
+              <Button
+                className="min-h-8"
+                color="secondary"
+                isDisabled={node.connectionStatus !== "online"}
+                isLoading={node.rollbackLoading}
+                size="sm"
+                variant="flat"
+                onPress={() => actions.rollbackNode(node)}
+              >
+                回退
+              </Button>
+            </div>
             <div className="grid gap-1.5 grid-cols-3">
               {/* R2X-041：调优仅 agent 模式有入口（nodes.md:161），
                   nftables 节点无 agent 通道、点了必失败，故不渲染 */}
               {node.forwardMode !== "nftables" && (
-                  <Button
-                    className="min-h-8"
-                    color="success"
-                    isDisabled={
-                      node.connectionStatus !== "online"
-                    }
-                    size="sm"
-                    variant="flat"
-                    onPress={() => actions.openTune(node)}
-                  >
-                    调优
-                  </Button>
-                )}
+                <Button
+                  className="min-h-8"
+                  color="success"
+                  isDisabled={node.connectionStatus !== "online"}
+                  size="sm"
+                  variant="flat"
+                  onPress={() => actions.openTune(node)}
+                >
+                  调优
+                </Button>
+              )}
               {/* 设置 Swap 与调优同为 agent 本机操作：nftables 节点无
                   agent 通道、点了必失败，故同样不渲染；离线时禁用
                   （现状与执行都须 agent 在线）。 */}
               {node.forwardMode !== "nftables" && (
-                  <Button
-                    className="min-h-8"
-                    color="primary"
-                    isDisabled={
-                      node.connectionStatus !== "online"
-                    }
-                    size="sm"
-                    variant="flat"
-                    onPress={() => actions.openSwap(node)}
-                  >
-                    Swap
-                  </Button>
-                )}
+                <Button
+                  className="min-h-8"
+                  color="primary"
+                  isDisabled={node.connectionStatus !== "online"}
+                  size="sm"
+                  variant="flat"
+                  onPress={() => actions.openSwap(node)}
+                >
+                  Swap
+                </Button>
+              )}
               <Button
                 className="min-h-8"
                 color="primary"
@@ -1037,9 +1003,7 @@ const NodeCardContent = memo(function NodeCardContent({
   );
 });
 
-export const NodeCardRow = memo(function NodeCardRow(
-  props: NodeCardRowProps,
-) {
+export const NodeCardRow = memo(function NodeCardRow(props: NodeCardRowProps) {
   return (
     <SortableItem id={props.node.id}>
       {(listeners) => <NodeCardContent {...props} listeners={listeners} />}
@@ -1064,10 +1028,7 @@ const NodeListContent = memo(function NodeListContent({
   listeners,
 }: RowContentProps<NodeListRowProps>) {
   const online = node.connectionStatus === "online";
-  const expiryMeta = getNodeExpiryMeta(
-    node.expiryTime,
-    node.renewalCycle,
-  );
+  const expiryMeta = getNodeExpiryMeta(node.expiryTime, node.renewalCycle);
   const showExpiry = Boolean(
     node.expiryTime &&
       node.expiryTime > 0 &&
@@ -1078,9 +1039,7 @@ const NodeListContent = memo(function NodeListContent({
   const progress = upgradeProgressEntry;
   const upgrading = progress && progress.percent < 100;
   const address =
-    node.serverIpV4?.trim() ||
-    node.serverIpV6?.trim() ||
-    node.serverIp.trim();
+    node.serverIpV4?.trim() || node.serverIpV6?.trim() || node.serverIp.trim();
   const meta = [
     address,
     upgrading
@@ -1096,7 +1055,13 @@ const NodeListContent = memo(function NodeListContent({
   ];
   const month = monthTuple(monthIn, monthOut);
   const renderRowLatency = () =>
-    renderLatencySlot({ node, variant: "list", latencyPoolEmpty, probing, actions });
+    renderLatencySlot({
+      node,
+      variant: "list",
+      latencyPoolEmpty,
+      probing,
+      actions,
+    });
 
   return (
     <ListRow
@@ -1157,9 +1122,7 @@ const NodeListContent = memo(function NodeListContent({
       selectMode={selectMode}
       selected={selected}
       status={upgrading ? "warn" : online ? "ok" : "bad"}
-      statusTitle={
-        getConnectionStatusMeta(node.connectionStatus).text
-      }
+      statusTitle={getConnectionStatusMeta(node.connectionStatus).text}
       title={node.name}
       onPress={() => actions.openSheet(node.id)}
       onSelect={() => actions.toggleSelect(node.id)}
@@ -1167,9 +1130,7 @@ const NodeListContent = memo(function NodeListContent({
   );
 });
 
-export const NodeListRow = memo(function NodeListRow(
-  props: NodeListRowProps,
-) {
+export const NodeListRow = memo(function NodeListRow(props: NodeListRowProps) {
   return (
     <SortableItem id={props.node.id}>
       {(listeners) => <NodeListContent {...props} listeners={listeners} />}

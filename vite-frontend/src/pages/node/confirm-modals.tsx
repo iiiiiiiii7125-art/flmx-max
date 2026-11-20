@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
+
 import { useEffect, useState } from "react";
 
 import { Button } from "@/shadcn-bridge/heroui/button";
@@ -25,7 +26,7 @@ function useUninstallChoice(open: boolean) {
 
   useEffect(() => {
     if (open) setUninstall(DELETE_NODE_UNINSTALL_DEFAULT);
-  }, [open ]);
+  }, [open]);
 
   return [uninstall, setUninstall] as const;
 }
@@ -39,11 +40,7 @@ function UninstallAgentOption({
 }) {
   return (
     <div className="space-y-1 rounded-xl border border-default-200 glass-inset px-3 py-2.5">
-      <Checkbox
-        isSelected={isSelected}
-        size="sm"
-        onValueChange={onValueChange}
-      >
+      <Checkbox isSelected={isSelected} size="sm" onValueChange={onValueChange}>
         同时卸载服务器上的 agent
       </Checkbox>
       <p className="pl-6 text-xs font-semibold text-foreground">

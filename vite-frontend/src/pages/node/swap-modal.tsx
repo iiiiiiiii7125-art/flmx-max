@@ -43,6 +43,7 @@ const isSwapInfoShapeOk = (data: unknown): data is NodeSwapInfo => {
   const d = data as Partial<NodeSwapInfo>;
   const finite = (v: unknown): v is number =>
     typeof v === "number" && Number.isFinite(v);
+
   if (
     !finite(d.totalMB) ||
     !finite(d.usedMB) ||
@@ -55,6 +56,7 @@ const isSwapInfoShapeOk = (data: unknown): data is NodeSwapInfo => {
   if (d.fileSizeMB !== undefined && !finite(d.fileSizeMB)) {
     return false;
   }
+
   return d.entries.every(
     (e) =>
       !!e &&
@@ -131,7 +133,6 @@ export function SwapModal({
     setResult(null);
     void loadInfo();
     // loadInfo 以 node/open 为界重置并拉取，seqRef 防旧响应覆盖。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, node]);
 
   const customNum = Number(customText);
@@ -152,7 +153,8 @@ export function SwapModal({
   const fileSizeMB = info?.fileSizeMB ?? 0;
   const availMB = info ? info.diskFreeMB : 0;
   const needMB = selectedGB !== null ? selectedGB * 1024 + 256 : 0;
-  const shortMB = info && selectedGB !== null ? Math.max(0, needMB - availMB) : 0;
+  const shortMB =
+    info && selectedGB !== null ? Math.max(0, needMB - availMB) : 0;
 
   const confirmDisabled =
     !info ||
@@ -340,12 +342,14 @@ export function SwapModal({
 
               {info.managedFilePresent ? (
                 <p className="text-xs font-semibold text-foreground">
-                  已有面板管理的 /swapfile，执行将调整为所选大小（总量随之变化），并同步更新
+                  已有面板管理的
+                  /swapfile，执行将调整为所选大小（总量随之变化），并同步更新
                   fstab。
                 </p>
               ) : info.totalMB > 0 ? (
                 <p className="text-xs font-semibold text-foreground">
-                  现有 swap 非面板管理，面板不会动它；执行将另建 /swapfile，总量叠加。
+                  现有 swap 非面板管理，面板不会动它；执行将另建
+                  /swapfile，总量叠加。
                 </p>
               ) : (
                 <p className="text-xs font-semibold text-foreground">

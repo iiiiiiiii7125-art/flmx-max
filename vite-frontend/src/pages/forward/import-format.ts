@@ -31,11 +31,7 @@ export const isValidForwardDestAddress = (value: string): boolean => {
     const host = trimmed.slice(1, closeIdx);
     const rest = trimmed.slice(closeIdx + 1);
 
-    if (
-      !rest.startsWith(":") ||
-      host.includes("[") ||
-      host.includes("]")
-    ) {
+    if (!rest.startsWith(":") || host.includes("[") || host.includes("]")) {
       return false;
     }
 

@@ -40,21 +40,26 @@ export function builderGroupNameConflicts(
 ): Map<number, string> {
   const conflicts = new Map<number, string>();
   const seen = new Set<string>();
+
   builder.groups.forEach((g, i) => {
     if (g.name === "") {
       conflicts.set(i, "组名不能为空");
+
       return;
     }
     if (BUILDER_RESERVED_GROUP_NAMES.has(g.name)) {
       conflicts.set(i, `组名「${g.name}」是保留名，后端会拒绝保存`);
+
       return;
     }
     if (seen.has(g.name)) {
       conflicts.set(i, `组名「${g.name}」重复，后端会拒绝保存`);
+
       return;
     }
     seen.add(g.name);
   });
+
   return conflicts;
 }
 
@@ -121,7 +126,12 @@ export function TemplateBuilderForm({
     [catalog],
   );
   const targets = useMemo(
-    () => [BUILDER_MAIN, ...value.groups.map((g) => g.name), "DIRECT", "REJECT"],
+    () => [
+      BUILDER_MAIN,
+      ...value.groups.map((g) => g.name),
+      "DIRECT",
+      "REJECT",
+    ],
     [value.groups],
   );
   // R18-E2-05: per-row group-name conflicts (same verdict as the
@@ -141,22 +151,29 @@ export function TemplateBuilderForm({
   );
 
   const setRules = (rules: TemplateBuilderRule[], preset = "custom") =>
-    onChange({ ...value, rules, preset: value.preset === preset ? value.preset : preset });
+    onChange({
+      ...value,
+      rules,
+      preset: value.preset === preset ? value.preset : preset,
+    });
 
   const pickPreset = (preset: string) => {
     if (preset === "custom") {
       onChange({ ...value, preset });
+
       return;
     }
     // Switching presets keeps custom rules and groups (upstream behavior).
     const customs = value.rules.filter((r) => r.type !== "category");
     const base = builderFromPreset(catalog, preset, value.groups);
+
     onChange({ ...value, preset, rules: [...base.rules, ...customs] });
   };
 
   const toggleCategory = (key: string, on: boolean) => {
     if (on) {
       const cat = catByKey.get(key);
+
       if (!cat) return;
       setRules([
         ...value.rules,
@@ -170,14 +187,19 @@ export function TemplateBuilderForm({
   };
 
   const patchRule = (idx: number, patch: Partial<TemplateBuilderRule>) => {
-    const rules = value.rules.map((r, i) => (i === idx ? { ...r, ...patch } : r));
+    const rules = value.rules.map((r, i) =>
+      i === idx ? { ...r, ...patch } : r,
+    );
+
     setRules(rules, value.preset);
   };
 
   const moveRule = (idx: number, dir: -1 | 1) => {
     const j = idx + dir;
+
     if (j < 0 || j >= value.rules.length) return;
     const rules = [...value.rules];
+
     [rules[idx], rules[j]] = [rules[j], rules[idx]];
     setRules(rules, value.preset);
   };
@@ -189,7 +211,10 @@ export function TemplateBuilderForm({
       ...value.rules,
     ]);
 
-  const patchGroup = (idx: number, patch: Partial<TemplateBuilder["groups"][number]>) =>
+  const patchGroup = (
+    idx: number,
+    patch: Partial<TemplateBuilder["groups"][number]>,
+  ) =>
     onChange({
       ...value,
       groups: value.groups.map((g, i) => (i === idx ? { ...g, ...patch } : g)),
@@ -364,7 +389,10 @@ export function TemplateBuilderForm({
             onPress={() =>
               onChange({
                 ...value,
-                groups: [...value.groups, { name: "", type: "select", filter: "" }],
+                groups: [
+                  ...value.groups,
+                  { name: "", type: "select", filter: "" },
+                ],
               })
             }
           >
