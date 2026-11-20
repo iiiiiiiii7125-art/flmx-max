@@ -404,14 +404,35 @@ func (h *Handler) subscriptionTemplateRefresh(w http.ResponseWriter, r *http.Req
 	}
 	if err := h.refreshTemplate(r.Context(), t); err != nil {
 		// R18-B6-03：刷新失败分流——仓储错才走通用文案；上游下载/
-		// 校验失败是固定文案，原样回给用户才知道为什么没刷成。
+		// 校验失败回固定分类文案、原文记服务端日志（R2-F4-01 门：
+		// err 可能带仓储标记，ErrDefault(err.Error()) 原样回即红；
+		// 分类文案仍点名原因类别，不回通用 "Internal error"）。
 		if respondInternalIfRepoError(w, "subscriptionTemplateRefresh", err) {
 			return
 		}
-		response.WriteJSON(w, response.ErrDefault(err.Error()))
+		log.Printf("subscription template %d refresh failed: %v", t.ID, err)
+		response.WriteJSON(w, response.ErrDefault(templateRefreshUserMessage(err)))
 		return
 	}
 	response.WriteJSON(w, response.OK(templateView(t, h.templateUsage()[t.ID])))
+}
+
+// templateRefreshUserMessage maps a refreshTemplate failure to a fixed
+// user-facing reason. Only fixed strings are returned: the raw error
+// may carry upstream detail (URL, dial/TLS text) and refreshTemplate
+// can also return repo-marked errors, so returning err.Error()
+// verbatim trips the R2-F4-01 admin raw-error gate. The download
+// prefix is kept so the B6-03/B6-04 assertions on "下载模板失败"
+// keep holding; the full error stays in the server log.
+func templateRefreshUserMessage(err error) string {
+	msg := err.Error()
+	if strings.HasPrefix(msg, "下载模板失败") {
+		return "下载模板失败，请检查模板地址与网络后重试"
+	}
+	if msg == "模板已被删除" {
+		return "模板已被删除"
+	}
+	return "模板校验失败，请检查模板内容后重试"
 }
 
 func (h *Handler) subscriptionTemplateDelete(w http.ResponseWriter, r *http.Request) {
