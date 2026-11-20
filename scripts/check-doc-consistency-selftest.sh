@@ -50,6 +50,9 @@
 # R18-A2-02 扩围：变体 26 覆盖 §31（迁移镜像 digest 钉选门），
 # panel_install.sh 任一 docker run 镜像回退为字面 alpine 必须被
 # §31 抓红并点名 R18-A2-02。
+# R18-A2-06 扩围：变体 27 覆盖 §32（安装预检回归测试在场门），
+# test-install-scripts-proxy.sh 内 panel_find_free_port 的词引
+# 用全部删除后必须被 §32 抓红并点名 R18-A2-06。
 # FIX-GATE-CALIB 改钉（R2-GATE-02）：上文 55/153、59/149 均为历史
 # 标定记录（出处见各重标定提交），不再是变体 8 的写死锚点——变体
 # 8 改为运行时从镜像内 ci-build.yml 机械读现行标记值（其后标记又
@@ -397,5 +400,16 @@ fi
 grep -q "R18-A2-02" "$TMP/v26.log" && echo "OK: variant 26 caught and named" || {
   echo "FAIL: variant 26 caught but the drift was not named"; sed 's/^/    /' "$TMP/v26.log"; exit 1; }
 cp "$ROOT/panel_install.sh" "$MIR/panel_install.sh"
+
+echo "== variant 27: preflight helper loses all test references must FAIL and name it (§32, R18-A2-06) =="
+sed -i '/panel_find_free_port/d' "$MIR/test-install-scripts-proxy.sh"
+! grep -Fwq panel_find_free_port "$MIR/test-install-scripts-proxy.sh" || {
+  echo "FAIL: variant 27 mutation did not land (panel_find_free_port references remain)"; exit 1; }
+if run_gate "$TMP/v27.log"; then
+  echo "FAIL: variant 27 was not caught"; exit 1
+fi
+grep -q "R18-A2-06" "$TMP/v27.log" && echo "OK: variant 27 caught and named" || {
+  echo "FAIL: variant 27 caught but the drift was not named"; sed 's/^/    /' "$TMP/v27.log"; exit 1; }
+cp "$ROOT/test-install-scripts-proxy.sh" "$MIR/test-install-scripts-proxy.sh"
 
 echo "SELFTEST PASS"

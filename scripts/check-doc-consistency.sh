@@ -139,6 +139,12 @@
 #      内全部 docker run 镜像引用必须带 digest——字面形态须含
 #      @sha256:，或引用 FLMX_MIGRATE_*_IMAGE 常量（常量定义本身须
 #      为含 @sha256: 的钉选值）；任一 docker run 行不满足即红。
+#   32. 安装预检回归测试在场门（R18-A2-06 常设门）：2.1.18 共存
+#      改造交付的预检函数组（panel_preflight_install_conflicts
+#      及其 5 个探活/点名/选口助手）须在 test-install-scripts-
+#      proxy.sh 中有非注释行按词引用——新增 panel_* 函数须有同
+#      名测试引用，防再次漏测。只守本函数组：全仓 panel_* 函数
+#      的通用门会把历史上大量无测试的助手一并判红，不属本项范围。
 #
 # 退出码：0 = 全部硬检查通过；1 = 存在不一致。只读，不修改任何文件。
 set -u
@@ -1108,6 +1114,24 @@ elif ! grep -q '^FLMX_MIGRATE_ALPINE_IMAGE="[^"]*@sha256:[0-9a-f]\{64\}"' panel_
   note_fail "R18-A2-02：迁移镜像常量 FLMX_MIGRATE_ALPINE_IMAGE / FLMX_MIGRATE_PGLOADER_IMAGE 必须定义为含 @sha256: 的钉选值（前提失效，请人工复核）"
 else
   note_ok "R18-A2-02：panel_install.sh 全部 docker run 镜像引用均已钉 digest（字面或迁移镜像常量）"
+fi
+
+# ── 32. 安装预检回归测试在场门（R18-A2-06 常设门）
+# 预检函数组 6 个须在 test-install-scripts-proxy.sh 中有非注释
+# 行按词引用（grep -Fw：test_panel_find_free_port_* 这类测试函数
+# 名本身不算引用，须是真正的调用/断言行；纯注释行不算）。只守
+# 本函数组，不扩到全仓 panel_* 函数。
+PREFLIGHT_FUNCS="panel_preflight_install_conflicts panel_find_free_port panel_port_is_listening panel_port_container_owners panel_port_listener_owner panel_port_listener_text"
+PREFLIGHT_UNTESTED=""
+for _pf in $PREFLIGHT_FUNCS; do
+  if ! grep -Fw "$_pf" test-install-scripts-proxy.sh | grep -v '^[[:space:]]*#' | grep -q .; then
+    PREFLIGHT_UNTESTED="$PREFLIGHT_UNTESTED $_pf"
+  fi
+done
+if [ -n "$PREFLIGHT_UNTESTED" ]; then
+  note_fail "R18-A2-06：安装预检函数在测试套件中无引用（须补回归测试）：$PREFLIGHT_UNTESTED"
+else
+  note_ok "R18-A2-06：安装预检函数组 6 个均在 test-install-scripts-proxy.sh 中有测试引用"
 fi
 
 echo "----"

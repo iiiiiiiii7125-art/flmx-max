@@ -1110,6 +1110,208 @@ test_panel_preflight_equal_ports_rejected() (
   [[ "$out" != *"自动换端口"* ]] || fail "R18-A2-01: equal ports must not fall through to the port-swap offer"
 )
 
+# R18-A2-06 安装预检回归测试组：2.1.18 共存改造交付的
+# panel_preflight_install_conflicts 及其探活/点名/选口助手在
+# test-install-scripts-proxy.sh 中零引用——本组补齐覆盖。夹具
+# 以 ss/docker 桩承接探活与占用者点名：ss 桩按
+# FIXTURE_BUSY_PORTS（空格分隔）输出监听行；docker ps 桩输出
+# FIXTURE_PS_FILE 的内容；docker inspect 桩按
+# FIXTURE_EXISTING_CONTAINERS（空格分隔）判容器存在。
+setup_preflight_fixture() {
+  local dir="$1"
+  mkdir -p "$dir"
+  printf 'JWT_SECRET=test-secret\nBACKEND_PORT=6365\nFRONTEND_PORT=6366\nDB_TYPE=sqlite\n' > "$dir/.env"
+  printf 'services:\n  backend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-flux-panel-backend:v-test\n  frontend:\n    image: ghcr.io/iiiiiiiii7125-art/flmx-vite-frontend:v-test\n' > "$dir/docker-compose.yml"
+  FIXTURE_BUSY_PORTS=""
+  FIXTURE_PS_FILE="$dir/ps.txt"
+  : > "$FIXTURE_PS_FILE"
+  FIXTURE_EXISTING_CONTAINERS=""
+
+  ss() {
+    local p
+    for p in $FIXTURE_BUSY_PORTS; do
+      printf 'LISTEN 0 4096 0.0.0.0:%s 0.0.0.0:* users:(("docker-proxy",pid=123,fd=4))\n' "$p"
+    done
+    return 0
+  }
+  docker() {
+    case "$1" in
+      ps)
+        cat "$FIXTURE_PS_FILE" 2>/dev/null || true
+        return 0
+        ;;
+      inspect)
+        if [[ "$2" == "-f" ]]; then
+          case "$3" in
+            *Config.Image*) printf '%s\n' "ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18" ;;
+            *State.Status*) printf '%s\n' "running" ;;
+            *) printf '\n' ;;
+          esac
+          return 0
+        fi
+        case " $FIXTURE_EXISTING_CONTAINERS " in
+          *" $2 "*) return 0 ;;
+        esac
+        return 1
+        ;;
+    esac
+    return 0
+  }
+}
+
+# R18-A2-06：pty 场景的预检 harness——把截断后的 panel_install.sh
+# 与 ss/docker 桩拼成可执行文件，预检结果（rc 与两端口）写进
+# $dir/result（pty_run 的输出被丢弃，断言只能读结果文件）。
+preflight_pty_harness() {
+  local dir="$1" psfile="$2"
+  {
+    sed '/^# 执行主函数$/,$d' "$ROOT_DIR/panel_install.sh"
+    cat <<STUBEOF
+BACKEND_PORT=6365
+FRONTEND_PORT=6366
+PREFLIGHT_BUSY_PORTS="6365"
+PREFLIGHT_PS_FILE="$psfile"
+PREFLIGHT_RESULT="$dir/result"
+ss() {
+  local p
+  for p in \$PREFLIGHT_BUSY_PORTS; do
+    printf 'LISTEN 0 4096 0.0.0.0:%s 0.0.0.0:* users:(("docker-proxy",pid=123,fd=4))\\n' "\$p"
+  done
+  return 0
+}
+docker() {
+  case "\$1" in
+    ps) cat "\$PREFLIGHT_PS_FILE" 2>/dev/null || true; return 0 ;;
+    inspect) return 1 ;;
+  esac
+  return 0
+}
+rc=0
+panel_preflight_install_conflicts || rc=\$?
+printf '%s %s %s\n' "\$rc" "\$BACKEND_PORT" "\$FRONTEND_PORT" > "\$PREFLIGHT_RESULT"
+exit \$rc
+STUBEOF
+  } > "$dir/harness.sh"
+}
+
+test_panel_port_helpers_probe_listen_owner_and_free_port() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  FIXTURE_BUSY_PORTS="6365"
+  printf '%s\n' "flmx-panel-backend ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+
+  [[ -n "$(panel_port_listener_text 6365)" ]] || fail "R18-A2-06: listener text must be non-empty for a busy port"
+  [[ -z "$(panel_port_listener_text 6366)" ]] || fail "R18-A2-06: listener text must be empty for a free port"
+  panel_port_is_listening 6365 || fail "R18-A2-06: a busy port must report listening"
+  panel_port_is_listening 6366 && fail "R18-A2-06: a free port must not report listening"
+
+  assert_equals "flmx-panel-backend (ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18)" \
+    "$(panel_port_container_owners 6365)" "R18-A2-06: container owners must list the occupying container with its image"
+  assert_equals "" "$(panel_port_container_owners 6366)" "R18-A2-06: no container must own a free port"
+  [[ "$(panel_port_listener_owner 6365)" == *"flmx-panel-backend"* ]] || fail "R18-A2-06: the owner description must name the container"
+  [[ "$(panel_port_listener_owner 6366)" == *"未知进程"* ]] || fail "R18-A2-06: a free port with no owner info must be reported as unknown, got: $(panel_port_listener_owner 6366)"
+
+  assert_equals "6367" "$(panel_find_free_port 6366 6366)" "R18-A2-06: free-port search must skip both the busy port and the excluded value"
+  assert_equals "6366" "$(panel_find_free_port 6366 6365)" "R18-A2-06: free-port search must return the start port when it is free and not excluded"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_refuses_occupied_port_naming_owner() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  BACKEND_PORT=6365
+  FRONTEND_PORT=6366
+  unset PANEL_FORCE_REINSTALL FLMX_INSTANCE
+  FIXTURE_BUSY_PORTS="6365"
+  printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+  local rc="0" out
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-06: preflight must refuse when the backend port is occupied"
+  [[ "$out" == *"other-panel-backend"* ]] || fail "R18-A2-06: the refusal must name the occupying container, got: $out"
+  [[ "$out" == *"非交互终端"* ]] || fail "R18-A2-06: the non-TTY refusal must say so, got: $out"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_swaps_port_interactively() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir rc
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp" > "$dir/ps.txt"
+  preflight_pty_harness "$dir" "$dir/ps.txt"
+  rc="0"
+  pty_run $'1\n' "$dir/harness.sh" || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-06: preflight must continue after the interactive port swap (choice 1)"
+  [[ -f "$dir/result" ]] || fail "R18-A2-06: the swap harness must record the resulting ports"
+  assert_equals "0 6367 6366" "$(cat "$dir/result")" "R18-A2-06: the occupied backend port must swap to the next free port, skipping the frontend port value"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_refuses_on_choice_two() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir rc
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  printf '%s\n' "other-panel-backend ghcr.io/example/other-backend:1.0 0.0.0.0:6365->6365/tcp" > "$dir/ps.txt"
+  preflight_pty_harness "$dir" "$dir/ps.txt"
+  rc="0"
+  pty_run $'2\n' "$dir/harness.sh" || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-06: preflight must abort when the user chooses to abort (choice 2)"
+  [[ -f "$dir/result" ]] || fail "R18-A2-06: the abort harness must record the resulting ports"
+  assert_equals "1 6365 6366" "$(cat "$dir/result")" "R18-A2-06: an aborted preflight must leave both ports unchanged"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_container_name_conflict_points_to_instance() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  BACKEND_PORT=6365
+  FRONTEND_PORT=6366
+  unset PANEL_FORCE_REINSTALL FLMX_INSTANCE
+  FIXTURE_EXISTING_CONTAINERS="flmx-panel-backend"
+  local rc="0" out
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A2-06: preflight must refuse when a panel container name is already taken even though the ports are free"
+  [[ "$out" == *"换端口修不了容器名占用"* ]] || fail "R18-A2-06: the name-conflict refusal must say a port swap cannot fix it, got: $out"
+  [[ "$out" == *"FLMX_INSTANCE"* ]] || fail "R18-A2-06: the name-conflict refusal must point at the instance id, got: $out"
+  rm -rf "$dir"
+)
+
+test_panel_preflight_force_reinstall_allows_own_container() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+  local dir
+  dir=$(mktemp -d)
+  setup_preflight_fixture "$dir"
+  cd "$dir"
+  BACKEND_PORT=6365
+  FRONTEND_PORT=6366
+  PANEL_FORCE_REINSTALL=1
+  unset FLMX_INSTANCE
+  FIXTURE_BUSY_PORTS="6365"
+  printf '%s\n' "flmx-panel-backend ghcr.io/iiiiiiiii7125-art/flmx-panel-backend:2.1.18 0.0.0.0:6365->6365/tcp" > "$FIXTURE_PS_FILE"
+  FIXTURE_EXISTING_CONTAINERS="flmx-panel-backend flmx-panel-frontend"
+  local rc="0" out
+  out=$(panel_preflight_install_conflicts </dev/null 2>&1) || rc="$?"
+  assert_equals "0" "$rc" "R18-A2-06: PANEL_FORCE_REINSTALL must let an own-directory install reuse its own containers"
+  [[ "$out" == *"自家容器占用"* ]] || fail "R18-A2-06: the own-container pass must be named in the output, got: $out"
+  rm -rf "$dir"
+)
+
 # A2-04 附带钉格（XC-1 指出）：A2-04 本体（.env 读取与 Compose
 # 语义一致）已在他路修好，但 CRLF 形态此前无套件断言——Windows
 # 编辑过的 .env 若把 \r 带进取值，实例 id/DB 类型等比较会整体
@@ -13614,6 +13816,12 @@ test_report_compose_up_failure_branches
 test_panel_equal_frontend_backend_ports_rejected
 test_panel_update_equal_ports_rejected
 test_panel_preflight_equal_ports_rejected
+test_panel_port_helpers_probe_listen_owner_and_free_port
+test_panel_preflight_refuses_occupied_port_naming_owner
+test_panel_preflight_swaps_port_interactively
+test_panel_preflight_refuses_on_choice_two
+test_panel_preflight_container_name_conflict_points_to_instance
+test_panel_preflight_force_reinstall_allows_own_container
 test_panel_migrate_images_pinned_to_digest
 test_panel_migrate_backup_copy_is_0600
 test_panel_update_rollback_restores_sqlite_database
