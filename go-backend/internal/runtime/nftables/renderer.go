@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"sort"
 	"strings"
@@ -139,6 +140,10 @@ func RenderTable(plan NodePlan) string {
 	for _, rule := range sortedRules(plan.Rules) {
 		family := nftAddressFamily(rule.TargetHost)
 		if family == "" {
+			// R18-C3-05：纵深——ValidatePlan 已拒主机名目标，此
+			// 分支只在绕过 ValidatePlan 直接渲染时可达；跳过计数
+			// 时点名转发 ID，绝不静默丢计数。
+			log.Printf("nftables render: forward %d target %q is not an IP literal, forward-chain counting rules skipped", rule.ForwardID, rule.TargetHost)
 			continue
 		}
 		targetHost := strings.Trim(strings.TrimSpace(rule.TargetHost), "[]")
@@ -283,7 +288,16 @@ func ValidatePlan(plan NodePlan) error {
 		if err := ValidateBindIP(rule.BindIP); err != nil {
 			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
 		}
-		// R18-C3-03：BindIP 与目标地址族混用整单拒绝（见上）。
+		// R18-C3-05：主机名目标整单拒绝——ValidateTargetHost 放行
+		// 主机名、DNAT 照常下发，但 forward 链按族跳过该规则、流
+		// 量全程不计量。intake（validateNftablesForwardRequest）
+		// 本就只接受 IP 目标，渲染层须同口径，绝不一面放行、一面
+		// 静默丢计数。走到这里时 TargetHost 已过 ValidateTarget-
+		// Host，故无族即严格主机名。
+		if nftAddressFamily(rule.TargetHost) == "" {
+			return fmt.Errorf("转发 %d: nftables 目标地址 %q 不是 IP 地址：主机名目标无法生成 forward 链计数规则，流量将不被计量，请填写目标 IP 地址", rule.ForwardID, strings.Trim(strings.TrimSpace(rule.TargetHost), "[]"))
+		}
+		// R18-C3-03：BindIP 与目标地址族混用整单拒绝。
 		if err := ValidateBindIPTargetFamily(rule.BindIP, rule.TargetHost); err != nil {
 			return fmt.Errorf("转发 %d: %w", rule.ForwardID, err)
 		}
