@@ -963,6 +963,49 @@ test_panel_menu5_site_block_filters_secret_query_from_access_log() (
   assert_equals "1" "$(grep -c 'delete secret' "$CADDYFILE_PATH")" "§9.6: only the panel block may carry the secret filter; the menu 6 block must not gain one"
 )
 
+# R18-A2-03：迁移的 gost.db.bak 必须是 0600 的全库副本——旧实现
+# 只 cp，备份按 0644 落在部署目录，本机任一非特权用户可读全库。
+# 本例抽出出厂备份复制 docker run 行原文（路径改写到夹具目录）
+# 实际执行，断言落盘副本为 0600；旧实现载荷无 chmod，本例必红。
+test_panel_migrate_backup_copy_is_0600() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  # 按 finding 的复现条件：源库 0644、umask 022。
+  umask 022
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/data" "$work/backup"
+  printf 'fake-sqlite-db-content' > "$work/data/gost.db"
+  chmod 644 "$work/data/gost.db"
+
+  # docker 桩：只承接备份复制这一行——把 -v 映射的宿主路径改写
+  # 进 sh -c 载荷后实际执行，证明出厂载荷本身落盘即 0600。
+  docker() {
+    local payload=""
+    payload="${!#}"
+    payload=$(printf '%s' "$payload" | sed -e "s|/data/|$work/data/|g" -e "s|/backup/|$work/backup/|g")
+    sh -c "$payload"
+  }
+  sqlite_volume="fixture-volume"
+
+  local line
+  line=$(grep -F 'docker run' "$ROOT_DIR/panel_install.sh" | grep -F 'gost.db.bak' | grep -F 'sh -c' | head -n 1)
+  [[ -n "$line" ]] || fail "R18-A2-03: could not find the backup-copy docker run line in panel_install.sh"
+  line=$(printf '%s' "$line" | sed 's/^.*docker run/docker run/; s/; then$//')
+  grep -q 'chmod 600' <<< "$line" || fail "R18-A2-03: the backup-copy payload must chmod the copy to 0600"
+  eval "$line" || fail "R18-A2-03: the backup-copy docker run line must succeed on the fixture database"
+
+  [[ -f "$work/backup/gost.db.bak" ]] || fail "R18-A2-03: the backup copy must exist after the docker run line"
+  assert_equals "fake-sqlite-db-content" "$(cat "$work/backup/gost.db.bak")" \
+    "R18-A2-03: the backup copy must carry the source database content"
+  assert_equals "600" "$(stat -c %a "$work/backup/gost.db.bak")" \
+    "R18-A2-03: the backup copy must be mode 0600, not world-readable"
+  assert_equals "644" "$(stat -c %a "$work/data/gost.db")" \
+    "R18-A2-03: the backup step must not change the source database mode"
+  rm -rf "$work"
+)
+
 # R18-A2-02：迁移的 6 处 docker run 镜像必须钉到 digest——tag 可变
 # 时未钉选的 alpine:latest / dimitri/pgloader:latest 会让被污染
 # 的镜像在迁移容器内读/改全库与 .env 密钥。两镜像集中为顶部常量，
@@ -13368,5 +13411,6 @@ test_panel_equal_frontend_backend_ports_rejected
 test_panel_update_equal_ports_rejected
 test_panel_preflight_equal_ports_rejected
 test_panel_migrate_images_pinned_to_digest
+test_panel_migrate_backup_copy_is_0600
 
 echo "install script tests passed"

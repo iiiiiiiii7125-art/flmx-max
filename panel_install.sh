@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.06"
+SCRIPT_VERSION="20261120.07"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -5351,7 +5351,11 @@ migrate_to_postgres() {
   fi
 
   echo "💾 备份 SQLite 数据到当前目录..."
-  if ! docker run --rm -v "$sqlite_volume":/data -v "$(pwd)":/backup "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c "cp /data/gost.db /backup/gost.db.bak"; then
+  # R18-A2-03：备份副本落盘即 0600——旧实现只 cp，备份按源模式
+  # 0644 落在部署目录，本机任一非特权用户可读全库。chmod 与 cp
+  # 在同一条 sh -c 内：任一步失败备份步整体失败、走既有回滚口，
+  # 不留 0644 的副本。
+  if ! docker run --rm -v "$sqlite_volume":/data -v "$(pwd)":/backup "$FLMX_MIGRATE_ALPINE_IMAGE" sh -c "cp /data/gost.db /backup/gost.db.bak && chmod 600 /backup/gost.db.bak"; then
     echo "❌ SQLite 备份失败，迁移终止，正在恢复迁移前状态..."
     migrate_restore_snapshot
     return 1
@@ -5661,7 +5665,7 @@ EOF
   docker run --rm -v "$sqlite_volume":/sqlite "$FLMX_MIGRATE_ALPINE_IMAGE" rm -f /sqlite/gost-migrate.db 2>/dev/null || true
   echo "✅ SQLite -> PostgreSQL 迁移完成"
   echo "ℹ️ 迁移遗留物（脚本不自动删除，确认 PostgreSQL 运行无误后可人工清理）："
-  echo "   - $(pwd)/gost.db.bak：迁移前 SQLite 数据库的备份副本（含全量数据，请注意保管）"
+  echo "   - $(pwd)/gost.db.bak：迁移前 SQLite 数据库的备份副本（含全量数据，权限 0600，请注意保管）"
   echo "   - SQLite 数据卷 $sqlite_volume：原库所在卷，原样保留未删；确认不再回迁 SQLite 后可执行 docker volume rm $sqlite_volume 回收空间"
 }
 
