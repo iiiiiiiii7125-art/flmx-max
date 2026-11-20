@@ -1237,13 +1237,20 @@ func (h *Handler) createRelayForward(userID int64, name string, tunnel *tunnelRe
 		}
 		if isNftTunnel {
 			if err := h.reconcileNftablesNodeByRequest(entryNodes[0]); err != nil {
-				_ = h.deleteForwardByID(forwardID)
+				// R18-B4-02：同 createForwardWithPortRetry——补偿先清
+				// 数据面再删库，残留写进返回错误。
+				if compErr := h.compensateFailedForwardCreate(created); compErr != nil {
+					err = fmt.Errorf("%w；创建失败补偿清理未完成：%v", err, compErr)
+				}
 				return 0, relayCreateErr(err)
 			}
 			return forwardID, nil
 		}
 		if err := h.syncForwardServices(created, "UpdateService", true); err != nil {
-			_ = h.deleteForwardByID(forwardID)
+			// R18-B4-02：同上。
+			if compErr := h.compensateFailedForwardCreate(created); compErr != nil {
+				err = fmt.Errorf("%w；创建失败补偿清理未完成：%v", err, compErr)
+			}
 			if auto && isBindAddressInUseError(err) {
 				lastErr = err
 				tried[port] = true
@@ -1285,6 +1292,45 @@ func (h *Handler) removeForwardWithServices(forward *forwardRecord) error {
 		return h.reconcileNftablesNodeByRequest(nftNodeID)
 	}
 	return nil
+}
+
+// compensateFailedForwardCreate removes a just-created forward whose
+// sync failed, clearing already-pushed data-plane services first
+// (R18-B4-02): a bare deleteForwardByID leaves live services on nodes
+// that already received UpdateService, with no DB record left to clean
+// them up. removeForwardWithServices deletes the services first; because
+// it aborts on the first hard per-node error, a per-node best-effort
+// sweep (mode-aware: gost DeleteService, nft reconcile, realm re-render)
+// follows any failure so a node later in port order is not skipped.
+// Only then do we fall back to a DB-only delete, logging the residue and
+// reporting it so the caller can name the affected nodes in the failure
+// receipt. A nil error means the forward is fully gone, services included.
+func (h *Handler) compensateFailedForwardCreate(fwd *forwardRecord) error {
+	if fwd == nil {
+		return errors.New("invalid forward compensation context")
+	}
+	if err := h.removeForwardWithServices(fwd); err == nil {
+		return nil
+	} else {
+		firstErr := err
+		var sweepErrs []string
+		if ports, perr := h.listForwardPorts(fwd.ID); perr != nil {
+			log.Printf("create compensation: list forward ports failed forward_id=%d err=%v", fwd.ID, perr)
+		} else {
+			for _, nodeID := range forwardPortNodeIDs(ports) {
+				if serr := h.deleteForwardServicesOnNodeBatch(fwd, nodeID); serr != nil {
+					sweepErrs = append(sweepErrs, fmt.Sprintf("节点 %s: %v", h.nodeLabel(nodeID), serr))
+				}
+			}
+		}
+		if derr := h.deleteForwardByID(fwd.ID); derr != nil {
+			return fmt.Errorf("data-plane cleanup failed: %v; per-node sweep: %v; DB delete also failed: %w", firstErr, strings.Join(sweepErrs, "; "), derr)
+		}
+		if len(sweepErrs) > 0 {
+			return fmt.Errorf("data-plane cleanup failed: %v; per-node sweep left residue: %s", firstErr, strings.Join(sweepErrs, "; "))
+		}
+		return fmt.Errorf("data-plane cleanup failed: %w", firstErr)
+	}
 }
 
 func (h *Handler) inboundRelayDelete(w http.ResponseWriter, r *http.Request) {

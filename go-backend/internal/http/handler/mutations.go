@@ -5558,7 +5558,12 @@ func (h *Handler) createForwardWithPortRetry(userID int64, userName, name string
 		// gost 绑 IP 回退、节点离线跳过）必须回传前端。
 		createWarnings, err := h.syncForwardServicesWithWarnings(createdForward, "UpdateService", true)
 		if err != nil {
-			_ = h.deleteForwardByID(forwardID)
+			// R18-B4-02：同步失败的补偿须先清已下发的数据面服务再删库，
+			// 否则先推成功的节点残留 live 服务；清理失败时把残留写进
+			// 返回错误（调用方已按失败回执），不 `_ =` 丢弃。
+			if compErr := h.compensateFailedForwardCreate(createdForward); compErr != nil {
+				err = fmt.Errorf("%w；创建失败补偿清理未完成：%v", err, compErr)
+			}
 			if auto && isBindAddressInUseError(err) {
 				lastErr = err
 				tried[port] = true
