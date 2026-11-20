@@ -1107,25 +1107,6 @@ if ! timeout 1200 docker compose pull $UPGRADE_SERVICES >> "$LOGFILE" 2>&1; then
   exit 1
 fi
 
-# R3-SCRIPT-01：存量网络标签对账前置于一切会动服务的动作（快照停
-# 后端、force-recreate 重建），且其拒绝结论必须在此被消费。对账
-# 前置拒绝（项目外容器占用标签不符的存量网络）时：恢复升级前文件
-# （rollback files 语义——容器分毫未动）、写回滚终态、点名中止，
-# 绝不续行。旧实现把对账裸调用放在 up 之前且不消费返回码：set -e
-# 在拒绝瞬间静默杀死脚本，状态文件永不落终态、拒绝原因不进任何
-# 回执，面板只能按心跳过期把本次升级判作残留（且拒绝时服务虽未
-# 停、终态却全无交代）；若对账点再后移或 -e 失效则会带病续行到
-# up 才撞标签墙（2.1.1 事故形态）。对账通过（含就地删除标签不符
-# 的存量网络）后，快照与重建段照常。
-if ! reconcile_network_label; then
-  log "错误: 存量网络标签对账前置拒绝（原因见上），升级中止：未停任何服务、未做 DB 快照、未重建任何容器；请先按上文指引人工处理占用该网络的项目外容器，再重试升级"
-  rollback files
-  exit 1
-fi
-
-log "等待旧容器释放资源..."
-sleep 3
-
 # DB 快照（R18-B8-03，PG 模式，面板侧以 FLMX_UPGRADE_PG_CONTAINER
 # 等透传快照身份时启用）：停旧后端前，对在跑 PG 容器做 pg_dump
 # 只读导出到部署目录快照目录的 postgres/postgres.sql（与脚本
@@ -1139,6 +1120,14 @@ sleep 3
 # 用。转储非空且含标准头才算成功；随后按 mtime 保留最近 3 份
 # panel-update-*（与 SQLite 段同口径，两面备份同目录同 glob 一
 # 并轮换）。
+# R18-R2-B8-01：本段必须在 reconcile_network_label 之前——对账在标
+# 签不符时 docker compose stop 会停掉全部服务（含 postgres），
+# pg_dump 若在其后必对已停容器失败，其中止路径 rollback files 只
+# 恢复文件、不重建容器，面板会被留在全停状态、状态却写
+# rolled_back。置于对账之前时，本段失败的中止日志“未停任何服务、
+# 面板保持旧版本可用”才为真（pull 与只读 pg_dump 均不动服务）。
+# 快照是只读导出，放在对账之前不影响对账本身；对账仍前置于一切
+# 会动服务的动作（SQLite 快照停后端、force-recreate 重建）。
 if [ -n "${FLMX_UPGRADE_PG_CONTAINER:-}" ]; then
   SNAPSHOT_DIR="$PANEL_DEPLOY_DIR/$FLMX_UPGRADE_SNAPSHOT_DIR"
   PG_SNAPSHOT_FILE="$SNAPSHOT_DIR/postgres/postgres.sql"
@@ -1162,6 +1151,33 @@ if [ -n "${FLMX_UPGRADE_PG_CONTAINER:-}" ]; then
   done
   SNAPSHOT_TAKEN=1
   log "PG 数据库快照完成: $FLMX_UPGRADE_SNAPSHOT_DIR/postgres/postgres.sql"
+fi
+
+# R3-SCRIPT-01：存量网络标签对账前置于一切会动服务的动作（SQLite
+# 快照停后端、force-recreate 重建），且其拒绝结论必须在此被消费。
+# PG 快照为只读导出，按 R18-R2-B8-01 置于对账之前（对账的停服会
+# 停掉 postgres，pg_dump 在其后必败）。对账
+# 前置拒绝（项目外容器占用标签不符的存量网络）时：恢复升级前文件
+# （rollback files 语义——容器分毫未动）、写回滚终态、点名中止，
+# 绝不续行。旧实现把对账裸调用放在 up 之前且不消费返回码：set -e
+# 在拒绝瞬间静默杀死脚本，状态文件永不落终态、拒绝原因不进任何
+# 回执，面板只能按心跳过期把本次升级判作残留（且拒绝时服务虽未
+# 停、终态却全无交代）；若对账点再后移或 -e 失效则会带病续行到
+# up 才撞标签墙（2.1.1 事故形态）。对账通过（含就地删除标签不符
+# 的存量网络）后，SQLite 快照与重建段照常。
+if ! reconcile_network_label; then
+  if [ -n "${SNAPSHOT_TAKEN:-}" ]; then
+    log "错误: 存量网络标签对账前置拒绝（原因见上），升级中止：未停任何服务、未重建任何容器；PG 数据库快照已落盘于 $FLMX_UPGRADE_SNAPSHOT_DIR（仅备份，不影响回滚）；请先按上文指引人工处理占用该网络的项目外容器，再重试升级"
+  else
+    log "错误: 存量网络标签对账前置拒绝（原因见上），升级中止：未停任何服务、未做 DB 快照、未重建任何容器；请先按上文指引人工处理占用该网络的项目外容器，再重试升级"
+  fi
+  rollback files
+  exit 1
+fi
+
+log "等待旧容器释放资源..."
+sleep 3
+
 # DB 快照（1.9.9，SQLite 模式，面板侧以 FLMX_UPGRADE_SNAPSHOT_DIR
 # 透传部署内相对路径时启用）：停旧后端后、重建前，把数据卷整目
 # 录复制到部署目录的快照目录 sqlite/ 子目录（整目录口径与脚本
@@ -1173,7 +1189,11 @@ if [ -n "${FLMX_UPGRADE_PG_CONTAINER:-}" ]; then
 # 不得静默跳过后照常升级）。快照只备不自动恢复，恢复由人工按
 # 状态文件点名的路径执行。源目录经 --volumes-from 与后端同挂
 # 载、恒为 /app/data（FLMX_UPGRADE_DATA_DIR 仅供测试覆盖）。
-elif [ -n "${FLMX_UPGRADE_SNAPSHOT_DIR:-}" ]; then
+# R18-R2-B8-01：PG 段已提前到对账之前、与本段不再是同一 if/elif
+# 链——此处须显式排除 PG 模式（PG 容器键在场），否则 PG 升级会
+# 在 pg_dump 成功后再走 SQLite 段停后端拷数据卷（旧链的 elif
+# 语义：PG 优先、SQLite 仅在无 PG 容器时启用）。
+if [ -z "${FLMX_UPGRADE_PG_CONTAINER:-}" ] && [ -n "${FLMX_UPGRADE_SNAPSHOT_DIR:-}" ]; then
   SNAPSHOT_DIR="$PANEL_DEPLOY_DIR/$FLMX_UPGRADE_SNAPSHOT_DIR"
   DATA_DIR="${FLMX_UPGRADE_DATA_DIR:-/app/data}"
   log "创建升级前 DB 快照: $FLMX_UPGRADE_SNAPSHOT_DIR"
