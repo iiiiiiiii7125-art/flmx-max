@@ -8,10 +8,12 @@ import (
 	"testing"
 )
 
-// B7-03（披露半）: PG 升级无升级前快照这一事实必须在回执与状态
-// 面显式点名 (pgSnapshotDeferred), 不得只剩恒空的 snapshotPath
-// 让运维误判已有兜底。本组钉三面: 状态落盘往返、回执 JSON 形
-// 态、helper 终态回写保留。
+// B7-03（披露半，遗留口径）: 2.1.18 及更早的 PG 升级无升级前
+// 快照, 该事实在回执与状态面以 pgSnapshotDeferred 显式点名,
+// 不得以恒空的 snapshotPath 让运维误判已有兜底。自 R18-B8-03
+// 起 PG 模式亦落快照, 该字段仅作旧状态文件的兼容保留（新发起
+// 的升级恒为 false）; 本组钉两面：旧字段的状态落盘往返与回执
+// JSON 形态仍可解析，helper 不再产生新的切出标记。
 
 func TestB703StatusRoundTripCarriesPgSnapshotDeferred(t *testing.T) {
 	dir := t.TempDir()
@@ -62,12 +64,11 @@ func TestB703RunDataJSONNamesPgSnapshotDeferred(t *testing.T) {
 	}
 }
 
-func TestB703HelperTerminalStatusPreservesDeferred(t *testing.T) {
+func TestB703HelperTerminalStatusNoLongerDefers(t *testing.T) {
+	// R18-B8-03：PG 快照已落地，helper 不得再产生新的切出标记；
+	// 旧状态文件的 pgSnapshotDeferred 仍由 Go 面字段兼容解析。
 	script := (&systemUpgradeExecutor{}).helperScript()
-	if !strings.Contains(script, "FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED") {
-		t.Fatal("helper write_status must consult the deferred env passthrough")
-	}
-	if !strings.Contains(script, `\"pgSnapshotDeferred\": true`) {
-		t.Fatal("helper write_status must emit pgSnapshotDeferred into the terminal status")
+	if strings.Contains(script, "FLMX_UPGRADE_PG_SNAPSHOT_DEFERRED") || strings.Contains(script, "pgSnapshotDeferred") {
+		t.Fatal("helper must not reference the retired PG snapshot deferral")
 	}
 }

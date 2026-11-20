@@ -62,18 +62,20 @@ func TestPlanPinsPostgresqlAliasPinsInspectedPGVolume(t *testing.T) {
 	}
 }
 
-func TestPrepareUpgradeSnapshotPostgresqlAliasDefers(t *testing.T) {
+// R18-B8-03：postgresql 别名与 postgres 同口径——PG 模式亦落
+// 快照；定位不到在跑 PG 容器时 fail-closed 中止（可定位时点名
+// 快照路径，见 TestFixD5PrepareUpgradeSnapshotPgNamesSnapshot）。
+func TestPrepareUpgradeSnapshotPostgresqlAliasFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("DB_TYPE=postgresql\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(.env) error = %v", err)
 	}
 	executor := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flmx-panel-backend"}
-	executor.prepareUpgradeSnapshot("1.9.10")
-	if executor.snapshotPath != "" {
-		t.Fatalf("alias PG mode must not name a sqlite snapshot path, got %q", executor.snapshotPath)
+	if err := executor.prepareUpgradeSnapshot(context.Background(), "1.9.10"); err == nil {
+		t.Fatal("alias PG mode with unlocatable container must fail closed, got nil error")
 	}
-	if !executor.pgSnapshotDeferred {
-		t.Fatal("alias PG mode must mark the snapshot as deferred")
+	if executor.snapshotPath != "" {
+		t.Fatalf("failed snapshot must not name a path, got %q", executor.snapshotPath)
 	}
 }
 

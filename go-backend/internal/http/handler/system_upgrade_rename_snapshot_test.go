@@ -241,27 +241,28 @@ func TestPrepareUpgradeSnapshot(t *testing.T) {
 			t.Fatalf("WriteFile(.env) error = %v", err)
 		}
 		executor := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flmx-panel-backend"}
-		executor.prepareUpgradeSnapshot("1.9.9")
+		if err := executor.prepareUpgradeSnapshot(context.Background(), "1.9.9"); err != nil {
+			t.Fatalf("prepareUpgradeSnapshot error = %v", err)
+		}
 		pattern := regexp.MustCompile(`^backups/panel-update-1\.9\.9-\d{8}-\d{6}$`)
 		if !pattern.MatchString(executor.snapshotPath) {
 			t.Fatalf("snapshotPath = %q, want backups/panel-update-1.9.9-<UTC timestamp>", executor.snapshotPath)
 		}
-		if executor.pgSnapshotDeferred {
-			t.Fatal("sqlite mode must not mark the snapshot deferred")
-		}
 	})
-	t.Run("postgres defers explicitly", func(t *testing.T) {
+	// R18-B8-03：PG 模式不再切出快照——定位不到在跑 PG 容器时
+	// fail-closed 中止（可定位时点名快照路径，见
+	// TestFixD5PrepareUpgradeSnapshotPgNamesSnapshot）。
+	t.Run("postgres without locatable container fails closed", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("DB_TYPE=postgres\n"), 0o600); err != nil {
 			t.Fatalf("WriteFile(.env) error = %v", err)
 		}
 		executor := &systemUpgradeExecutor{deployDir: dir, backendContainer: "flmx-panel-backend"}
-		executor.prepareUpgradeSnapshot("1.9.9")
-		if executor.snapshotPath != "" {
-			t.Fatalf("postgres mode must not name a snapshot path, got %q", executor.snapshotPath)
+		if err := executor.prepareUpgradeSnapshot(context.Background(), "1.9.9"); err == nil {
+			t.Fatal("unlocatable PG container must fail closed, got nil error")
 		}
-		if !executor.pgSnapshotDeferred {
-			t.Fatal("postgres mode must mark the snapshot as deferred (registered cut-out)")
+		if executor.snapshotPath != "" {
+			t.Fatalf("failed snapshot must not name a path, got %q", executor.snapshotPath)
 		}
 	})
 }
@@ -294,7 +295,9 @@ func TestBuildHelperRunArgsCarryRenameAndSnapshot(t *testing.T) {
 	executor.recreatePostgres = false
 	executor.snapshotPath = ""
 	executor.removeLegacyPGContainer = "flux-panel-postgres"
-	executor.pgSnapshotDeferred = true
+	executor.pgSnapshotContainer = "flmx-panel-postgres"
+	executor.pgSnapshotUser = "flmx_panel"
+	executor.pgSnapshotDB = "flmx_panel"
 	args, err = executor.buildHelperRunArgs("sha256:abc", "helper")
 	if err != nil {
 		t.Fatalf("buildHelperRunArgs error = %v", err)
@@ -302,8 +305,15 @@ func TestBuildHelperRunArgsCarryRenameAndSnapshot(t *testing.T) {
 	if !hasEnvArg(args, removePGContainerEnvKey+"=flux-panel-postgres") {
 		t.Fatalf("args must carry the legacy PG removal target: %v", args)
 	}
-	if !hasEnvArg(args, pgSnapshotDeferredEnvKey+"=1") {
-		t.Fatalf("args must carry the PG snapshot deferral flag: %v", args)
+	// R18-B8-03：PG 快照身份随快照安排透传 helper（切出标记已退役）。
+	for _, want := range []string{
+		pgSnapshotContainerEnvKey + "=flmx-panel-postgres",
+		pgSnapshotUserEnvKey + "=flmx_panel",
+		pgSnapshotDBEnvKey + "=flmx_panel",
+	} {
+		if !hasEnvArg(args, want) {
+			t.Fatalf("args must carry the PG snapshot identity %q: %v", want, args)
+		}
 	}
 	for _, arg := range args {
 		if strings.HasPrefix(arg, upgradeServicesEnvKey+"=") || strings.HasPrefix(arg, snapshotDirEnvKey+"=") {
@@ -545,25 +555,5 @@ func TestHelperRemovesLegacyPGContainerOnSuccess(t *testing.T) {
 	}
 	if !strings.Contains(calls, "rm -f flux-panel-postgres") {
 		t.Fatalf("legacy PG container must be removed before the success write; calls:\n%s", calls)
-	}
-}
-
-func TestHelperPostgresSnapshotDeferredIsNamed(t *testing.T) {
-	var deployDirSeen string
-	status, _, _, runErr := runHelperRenameSnapshot(t, map[string]string{
-		pgSnapshotDeferredEnvKey: "1",
-	}, "", func(deployDir string) { deployDirSeen = deployDir })
-	if runErr != nil {
-		t.Fatalf("helper must succeed with the deferral flag, err = %v", runErr)
-	}
-	if strings.Contains(status, "snapshotPath") {
-		t.Fatalf("deferred PG snapshot must not claim a snapshot path: %s", status)
-	}
-	logData, err := os.ReadFile(filepath.Join(deployDirSeen, "upgrade.log"))
-	if err != nil {
-		t.Fatalf("ReadFile(upgrade.log) error = %v", err)
-	}
-	if !strings.Contains(string(logData), "DB 快照未随面板内升级落地（切出登记项）") {
-		t.Fatalf("helper log must name the deferred PG snapshot, got:\n%s", logData)
 	}
 }
