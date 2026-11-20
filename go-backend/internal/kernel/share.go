@@ -555,7 +555,8 @@ func SurgeLine(e Endpoint) (string, bool) {
 	// F-081: 行式格式（逗号分字段、首个等号分键值）里全部用户可控值与
 	// proxySurge 同口径过 surgeEscape，否则凭据含逗号时字段错位。
 	// 名称仍用含 = 的旧替换器（名称出现在 " = " 分隔符之前，口径不同）。
-	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ").Replace(e.Name)
+	// R18-B5-02：名称里的 \r 同样劈行（值转义器早有 \r，此处补齐）。
+	name := strings.NewReplacer(",", " ", "=", " ", "\n", " ", "\r", " ").Replace(e.Name)
 	// host 同为用户可控值（分享地址），与凭据同口径过 surgeEscape 作
 	// 纵深防御（F-A-01/C-01）：合法主机名/IP 不含逗号与换行，转义对
 	// 它们是恒等变换；坏值则退化为空格分隔，不再劈字段或注入新行。
