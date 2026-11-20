@@ -642,8 +642,18 @@ func TestUnauthenticatedHTTPErrorGate(t *testing.T) {
 	}
 	// 锚点：现行五点必须都被推导面找到且判为可放行（计数在、
 	// 无违规）；点位被删或提取口径损坏即红。
-	if siteCounts["githubMirror"] < 4 {
-		t.Fatalf("gate: http.Error raw sites in githubMirror = %d, want >= 4 (I-C1-06 census anchor) — extraction caliber broken", siteCounts["githubMirror"])
+	// githubMirror 锚点 >= 1（父 agent 定夺 2026-11-21 07:22）：
+	// R1-08b 的 B10-02（b2a9a026）有意把 gh_mirror.go 里 3 处
+	// http.Error(w, err.Error(), 502) 改为固定文案 helper
+	// ghMirrorUpstreamUnavailable（公开端点不得原文直出上游
+	// *url.Error），计数 4 → 1 是预期结果、不是提取口径损坏。
+	// 仅剩的 1 处是 :374 的解析失败 404，其 error 只可能是
+	// parseGHMirrorPath 的两个本地固定文案（"不支持的地址" /
+	// "只能下载面板用到的 GitHub 仓库文件"，纯字符串解析、无
+	// 上游调用），带不出上游原文，故不改代码、只调锚点。文案
+	// 口径的最终裁决留给复审第二轮复核。
+	if siteCounts["githubMirror"] < 1 {
+		t.Fatalf("gate: http.Error raw sites in githubMirror = %d, want >= 1 (I-C1-06 census anchor) — extraction caliber broken", siteCounts["githubMirror"])
 	}
 	if siteCounts["openSubscription"] < 1 {
 		t.Fatalf("gate: http.Error raw sites in openSubscription = %d, want >= 1 (I-C1-06 census anchor) — extraction caliber broken", siteCounts["openSubscription"])
