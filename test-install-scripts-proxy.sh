@@ -442,6 +442,39 @@ test_panel_installer_script_curl_uses_timeouts() (
   grep -q -- '--retry-max-time' "$log" || fail "R18-A1-03: the installer-script curl must cap total retry time (--retry-max-time 120, single-leg 120s is not a total bound)"
 )
 
+# R18-A1-09：预算 env 须为正整数秒。旧实现把 FLMX_*_BUDGET_SECONDS
+# 直接算进 $(( ))：写成 240s 时算术求值报错、set -e 杀死整个安装
+# 脚本且无点名。功能臂：FLMX_RESOLVE_BUDGET_SECONDS=240s 时解析
+# 入口须点名失败、不得裸炸；助手臂：非法值必拒、合法值回显、
+# 前导零按十进制计；静态臂：下载入口同样走助手（两处算术点同口
+# 径）。旧代码上助手不存在、解析裸炸，必红。
+test_panel_budget_seconds_rejects_non_numeric() (
+  set -euo pipefail
+  load_script_without_main "$ROOT_DIR/panel_install.sh"
+
+  local out rc="0"
+  out=$(FLMX_RESOLVE_BUDGET_SECONDS="240s" resolve_latest_release_tag 2>&1) || rc="$?"
+  assert_equals "1" "$rc" "R18-A1-09: resolve must fail on a non-numeric budget"
+  [[ "$out" == *"FLMX_RESOLVE_BUDGET_SECONDS"* ]] || \
+    fail "R18-A1-09: the budget failure must name FLMX_RESOLVE_BUDGET_SECONDS (got: $out)"
+  [[ "$out" == *"取值非法"* ]] || \
+    fail "R18-A1-09: the budget failure must say the value is invalid"
+
+  assert_equals "120" "$(panel_budget_seconds "120" "FLMX_RESOLVE_BUDGET_SECONDS")" \
+    "R18-A1-09: a numeric budget must pass through"
+  assert_equals "120" "$(panel_budget_seconds "0120" "FLMX_RESOLVE_BUDGET_SECONDS")" \
+    "R18-A1-09: leading zeros must count as decimal, not octal"
+  panel_budget_seconds "240s" "FLMX_RESOLVE_BUDGET_SECONDS" >/dev/null 2>&1 && \
+    fail "R18-A1-09: 240s must be rejected"
+  panel_budget_seconds "0" "FLMX_RESOLVE_BUDGET_SECONDS" >/dev/null 2>&1 && \
+    fail "R18-A1-09: 0 must be rejected"
+  panel_budget_seconds "" "FLMX_RESOLVE_BUDGET_SECONDS" >/dev/null 2>&1 && \
+    fail "R18-A1-09: an empty budget must be rejected"
+
+  grep -q 'panel_budget_seconds "${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}"' "$ROOT_DIR/panel_install.sh" || \
+    fail "R18-A1-09: the download entry must validate its budget through the same helper"
+)
+
 # A2-05（audit-max）：菜单 5 保留式写入不得整块删除共享站点——
 # 旧实现 caddyfile_without_site 任一地址 token 命中目标域名即丢
 # 整块，`panel.example.com, sub.example.com { ... }` 共享块里的
@@ -12781,6 +12814,7 @@ test_panel_update_pg_volume_check_rolls_back_on_mismatch
 test_panel_pin_no_live_read_no_volume_key
 test_panel_download_routed_total_budget
 test_panel_installer_script_curl_uses_timeouts
+test_panel_budget_seconds_rejects_non_numeric
 test_panel_caddy_source_fetches_use_timeouts
 test_panel_caddyfile_without_site_keeps_shared_addresses
 test_panel_uninstall_without_docker_cleans_full_residual_set

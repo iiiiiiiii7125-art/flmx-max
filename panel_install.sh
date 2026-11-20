@@ -20,7 +20,7 @@ REPO="iiiiiiiii7125-art/flmx-max"
 
 # 脚本版本号：每次修改脚本后递增，确保用户拉到最新版
 # 自更新检查会比对仓库中的最新版本，不一致时自动重拉
-SCRIPT_VERSION="20261120.06"
+SCRIPT_VERSION="20261120.07"
 
 # --- 自更新检查 ---
 # F-006：旧实现从 main 分支 raw 拉脚本、仅比对 SCRIPT_VERSION 字符串就
@@ -559,6 +559,33 @@ extend_download_routes() {
   return 1
 }
 
+# R18-A1-09：预算 env 校验。${FLMX_RESOLVE_BUDGET_SECONDS} /
+# ${FLMX_DOWNLOAD_BUDGET_SECONDS} 直接算进 $(( )) 时，写成 240s
+# 会让算术求值报错、set -e 杀死整个安装脚本且无点名。本函数前置
+# 校验、非法即点名失败（fail-closed），不静默回落缺省——回落会掩
+# 盖运维的显式配置错误；缺省值由调用方 :- 给出。返回值以 10#
+# 归一化（"0120" 按十进制 120 计，不掉进 $(( )) 的八进制陷阱）；
+# 超过 18 位数字同样拒收（int64 算术已不可靠，当天写成这值本就
+# 会在算术处炸掉，点名失败只比裸炸多一句根因）。
+panel_budget_seconds() {
+  local raw="$1" name="$2"
+  case "$raw" in
+    ''|*[!0-9]*)
+      echo "❌ $name 取值非法：\"${raw}\"，须为正整数秒" >&2
+      return 1
+      ;;
+  esac
+  if (( ${#raw} > 18 )); then
+    echo "❌ $name 取值非法：\"${raw}\"，位数超出算术安全范围" >&2
+    return 1
+  fi
+  if (( 10#$raw == 0 )); then
+    echo "❌ $name 取值非法：0，总预算须为正整数秒" >&2
+    return 1
+  fi
+  printf '%s' "$((10#$raw))"
+}
+
 resolve_latest_release_tag() {
   local effective_url tag api_tag latest_url api_url tag_pattern
 
@@ -577,7 +604,9 @@ resolve_latest_release_tag() {
   # 可调）——旧实现每路线重定向法 30s＋API 法 30s 串行，11 线路＋
   # extend 一轮可达 11 分钟以上且无上限。逐次尝试按剩余预算收紧
   # --max-time，耗尽即整轮失败返回。
-  local resolve_deadline=$(( $(date +%s) + ${FLMX_RESOLVE_BUDGET_SECONDS:-120} ))
+  local resolve_budget
+  resolve_budget=$(panel_budget_seconds "${FLMX_RESOLVE_BUDGET_SECONDS:-120}" "FLMX_RESOLVE_BUDGET_SECONDS") || return 1
+  local resolve_deadline=$(( $(date +%s) + resolve_budget ))
   ensure_download_routes
   local prefix remain max_time
   while :; do
@@ -3374,7 +3403,9 @@ download_verified_routed() {
   local url="$1"
   local dest="$2"
   ensure_download_routes
-  local deadline=$(( $(date +%s) + ${FLMX_DOWNLOAD_BUDGET_SECONDS:-240} ))
+  local download_budget
+  download_budget=$(panel_budget_seconds "${FLMX_DOWNLOAD_BUDGET_SECONDS:-240}" "FLMX_DOWNLOAD_BUDGET_SECONDS") || return 1
+  local deadline=$(( $(date +%s) + download_budget ))
   local prefix
   while :; do
     for prefix in "${DOWNLOAD_ROUTES[@]}"; do
