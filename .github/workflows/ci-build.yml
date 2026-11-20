@@ -88,6 +88,13 @@ jobs:
           bash scripts/check-agent-image-tools.sh
           bash scripts/check-agent-image-tools-selftest.sh
 
+      # R18-E2-06 (D-7): import-format.test.ts was a dead test — 9
+      # node:test cases with no runner and no CI step. Minimal
+      # node:test runner only (no vitest/jest, this pure-function file
+      # only); a failing case fails this job, existing steps untouched.
+      - name: Test import-format (node:test)
+        run: pnpm run test
+
       - name: Build
         run: pnpm run build
 
