@@ -104,6 +104,17 @@ func ParseNode(hop string, cfg *config.NodeConfig, log logger.Logger) (*chain.No
 		nodeLogger.Error(err)
 		return nil, err
 	}
+	// R18-F1-01 (D-3, transition hardening): a TLS-family chain dial
+	// hop rendered without secure verification silently accepts any
+	// peer certificate (LoadClientConfig sets InsecureSkipVerify when
+	// Secure is false). Never stay silent about it: warn at load time,
+	// naming the hop, until the panel issues tunnel certificates for
+	// this node (TunnelTLSIssue) and the render switches to verified
+	// TLS. Non-TLS dialers (tcp/kcp/udp/ws) are not TLS hops and do
+	// not warn; a verified dialer (secure=true) does not warn either.
+	if msg, ok := insecureTLSDialWarning(hop, cfg.Dialer.Type, tlsCfg); ok {
+		nodeLogger.Warn(msg)
+	}
 
 	var ppv int
 	if nm != nil {
@@ -257,4 +268,31 @@ func ParseNode(hop string, cfg *config.NodeConfig, log logger.Logger) (*chain.No
 		opts = append(opts, chain.TLSNodeOption(tlsCfg))
 	}
 	return chain.NewNode(cfg.Name, cfg.Addr, opts...), nil
+}
+
+// isTLSFamilyDialerType reports whether a dialer type carries its traffic
+// over TLS (R18-F1-01): tls/mtls are raw TLS, wss/mwss are TLS-wrapped
+// WebSocket. All four share the node-parse dialer TLS face and therefore
+// the same unauthenticated-hop exposure when Secure is false.
+func isTLSFamilyDialerType(dialerType string) bool {
+	switch strings.ToLower(strings.TrimSpace(dialerType)) {
+	case "tls", "mtls", "wss", "mwss":
+		return true
+	default:
+		return false
+	}
+}
+
+// insecureTLSDialWarning returns the startup warning for a TLS-family
+// chain dial hop whose TLS config does not verify the peer certificate
+// (R18-F1-01 transition hardening). It returns ("", false) for non-TLS
+// dialers and for verified dialers (Secure=true). The message names the
+// hop and the dialer type so an operator can tell which chain leg is
+// unauthenticated; it points at the panel-issued tunnel certificates
+// that remove the warning.
+func insecureTLSDialWarning(hop, dialerType string, tlsCfg *config.TLSConfig) (string, bool) {
+	if tlsCfg == nil || tlsCfg.Secure || !isTLSFamilyDialerType(dialerType) {
+		return "", false
+	}
+	return fmt.Sprintf("R18-F1-01: TLS dial hop %q (dialer %q) does not verify the peer certificate (secure=false, no CA): the hop is encrypted but unauthenticated, a network-position attacker can impersonate the next hop; issue panel tunnel certificates for this node to verify it", hop, strings.ToLower(strings.TrimSpace(dialerType))), true
 }

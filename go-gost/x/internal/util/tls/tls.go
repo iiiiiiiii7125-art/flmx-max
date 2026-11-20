@@ -285,6 +285,16 @@ func LoadServerConfig(config *config.TLSConfig) (*tls.Config, error) {
 }
 
 // LoadClientConfig loads the certificate from cert & key files and CA file.
+//
+// R18-F1-01: a nil/empty TLSConfig keeps the historical insecure default
+// (Secure=false → InsecureSkipVerify=true). That default is preserved
+// here for stock gost compatibility, but the panel-issued tunnel path
+// must never rely on it: the chain dial face (config/parsing/node)
+// warns at load time when a TLS-family dialer runs unverified, and the
+// panel renders secure=true + caFile once the node's tunnel
+// certificates are distributed (TunnelTLSIssue). Do not "fix" this
+// default in place — every caller that wants verification must set
+// Secure explicitly, so the insecure callers stay visible.
 func LoadClientConfig(config *config.TLSConfig) (*tls.Config, error) {
 	var cfg *tls.Config
 

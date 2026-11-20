@@ -1552,7 +1552,11 @@ func isMutationCommand(commandType string) bool {
 		// 这一时序，此处是 agent 侧的兜底串行化（老面板/重连拦截再下发
 		// 时同样有序）；回执超时上面板按未确认登记待卸载，重连时再下
 		// 发，与离线口径一致。
-		"setprotocol", "setrestartschedule", "swapset", "upgradeagent", "rollbackagent", "uninstallagent":
+		// R18-F1-01（D-3）：TunnelTLSIssue 写证书文件，后续配置
+		// 下发（AddChains/AddService）引用它，须与配置应用串行化，
+		// 否则配置可能在证书落盘前加载而失败。Status 是只读回查，
+		// 不进串行集。
+		"setprotocol", "setrestartschedule", "swapset", "upgradeagent", "rollbackagent", "uninstallagent", "tunneltlsissue":
 		return true
 	default:
 		return false
@@ -1775,6 +1779,18 @@ func (w *WebSocketReporter) routeCommand(ctx context.Context, cmd CommandMessage
 	case "CheckPortListening":
 		response.Type = "CheckPortListeningResponse"
 		response.Data, err = handleCheckPortListening(cmd.Data)
+
+	// R18-F1-01（D-3）：面板分发的隧道 TLS 证书。Issue 是变更
+	// （写证书文件，后续配置下发引用它），走串行变更队列（见
+	// isMutationCommand），避免与 AddChains/AddService 的配置应用
+	// 交错；Status 是只读回查。
+	case "TunnelTLSIssue":
+		response.Type = "TunnelTLSIssueResponse"
+		response.Data, err = handleTunnelTLSIssue(cmd.Data)
+
+	case "TunnelTLSStatus":
+		response.Type = "TunnelTLSStatusResponse"
+		response.Data, err = handleTunnelTLSStatus(cmd.Data)
 
 	default:
 		err = fmt.Errorf("未知命令类型: %s", cmd.Type)
