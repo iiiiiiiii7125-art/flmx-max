@@ -48,6 +48,16 @@ func TestD1R18CompareAgentVersions(t *testing.T) {
 		{"2.1.18", "dev", 1, false},
 		{"dev", "2.1.18", -1, false},
 		{"dev", "dev", 0, false},
+		// R18-R3-D1-01: production dev binaries report the full
+		// "dev (distro/arch)" form (main.go fullVersion) — the
+		// bare-"dev" calibre must still apply after the head cut.
+		{"2.1.19", "dev (debian/amd64)", 1, false},
+		{"2.1.19", "dev (ubuntu/arm64)", 1, false},
+		{"dev (debian/amd64)", "2.1.18", -1, false},
+		{"dev", "dev (debian/amd64)", 0, false},
+		{"dev (debian/amd64)", "dev (debian/amd64)", 0, false},
+		{"2.1.18", "2.1.18 (debian/amd64)", 0, false},
+		{"2.1.19", "2.1.18 (debian/amd64)", 1, false},
 		{"2.1.18", "bogus", 0, true},
 		{"bogus", "2.1.18", 0, true},
 		{"2.1", "2.1.18", 0, true},
@@ -74,6 +84,11 @@ func TestD1R18UpgradeDirectionUnknownCurrentAllows(t *testing.T) {
 	}
 	if err := checkUpgradeAgentVersionDirection("2.1.19", "dev"); err != nil {
 		t.Fatalf("release target above a dev build must not block, got %v", err)
+	}
+	// R18-R3-D1-01: same calibre for the production dev report
+	// form "dev (debian/amd64)" (main.go fullVersion).
+	if err := checkUpgradeAgentVersionDirection("2.1.19", "dev (debian/amd64)"); err != nil {
+		t.Fatalf("release target above a dev build reporting its distro/arch must not block, got %v", err)
 	}
 	if err := checkUpgradeAgentVersionDirection("2.1.17", "2.1.18"); err == nil {
 		t.Fatal("target below the running version must be refused")

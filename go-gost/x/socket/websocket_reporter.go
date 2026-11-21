@@ -3169,12 +3169,25 @@ func smokeTestAgentBinary(path, wantVersion string) error {
 // the panel's compareVersions calibre: "dev" sorts below every
 // release, and an unparsable side fails closed with an error instead
 // of a guessed ordering.
+// R18-R3-D1-01: a production dev binary reports "dev (debian/amd64)"
+// (main.go fullVersion), so the bare-"dev" check below only matches
+// after the head is cut at the first space — the same head extraction
+// the panel applies to reported versions (extractLeadingSemver).
+// Without the cut, parseLeadingVersionTriple truncates "dev" to one
+// segment and the direction gate refuses every UpgradeAgent on a
+// dev-built node.
 // normalizeAgentVersion strips the optional "v" prefix so a panel
 // version ("2.1.3") and a binary banner ("v2.1.3" / "2.1.3") compare
 // equal in the smoke test and rollback pre-flight.
 func compareAgentVersions(target, current string) (int, error) {
 	t := strings.TrimPrefix(strings.TrimSpace(target), "v")
 	c := strings.TrimPrefix(strings.TrimSpace(current), "v")
+	if i := strings.IndexByte(t, ' '); i >= 0 {
+		t = t[:i]
+	}
+	if i := strings.IndexByte(c, ' '); i >= 0 {
+		c = c[:i]
+	}
 	if t == "dev" && c == "dev" {
 		return 0, nil
 	}
