@@ -120,8 +120,14 @@ export function builderGroupFilterConflicts(
 
       return;
     }
+    // R18-R3-E2-02: Go's regexp (RE2) accepts Python-style named
+    // groups "(?P<name>...)", which JS RegExp rejects — normalize them
+    // to the "(?<name>...)" form both engines accept before compiling,
+    // so a filter the backend accepts is not wrongly flagged here.
+    // (Other JS/RE2 gaps, e.g. lookahead, stay backend-gated as noted
+    // in the module header.)
     try {
-      new RegExp(g.filter);
+      new RegExp(g.filter.replace(/\(\?P</g, "(?<"));
     } catch {
       conflicts.set(i, `策略组「${g.name}」的正则表达式无效，后端会拒绝保存`);
     }
