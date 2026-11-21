@@ -2,6 +2,7 @@ package repo
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -17,6 +18,33 @@ import (
 // orphanedByFederationRemoval 标记；管理员重部署或删除隧道后逐条
 // 清除（键空时整键删除）。
 const RMShareOrphanTunnelsKey = "rmshare_orphan_tunnels"
+
+// ListOrphanedType2TunnelIDs derives the orphaned Type 2 tunnels
+// at list time (R18-R3-B7-01): a Type 2 tunnel with no live entry
+// segment — zero chain_tunnel rows, no chain_type='1' row at all,
+// or an entry row pointing at a node that no longer exists. This
+// covers DBs that already ran the v6 migration before this fix
+// existed: the migration recorded its version and will skip on
+// upgrade, so the todo key is never written for them, but the
+// orphaned rows are still there. Read-only by design: tunnelList
+// derives the flag from this query instead of backfilling the key,
+// so listing never writes (no repeat full-table rewrite per call).
+// SQLite and PostgreSQL share this one statement (chain_type is
+// varchar '1' on both; tunnel.type is a non-reserved column name).
+func (r *Repository) ListOrphanedType2TunnelIDs() ([]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("repository not initialized")
+	}
+	var ids []int64
+	err := r.db.Raw(`SELECT t.id FROM tunnel t WHERE t.type = 2 AND NOT EXISTS (
+		SELECT 1 FROM chain_tunnel c WHERE c.tunnel_id = t.id AND c.chain_type = '1'
+		AND EXISTS (SELECT 1 FROM node n WHERE n.id = c.node_id)
+	) ORDER BY t.id ASC`).Scan(&ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
 
 // DEV-RM-SHARE v6：跨面板共享/联邦功能整体移除的一次性数据清理。
 //
