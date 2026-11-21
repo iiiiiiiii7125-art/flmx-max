@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-backend/internal/config"
+	"go-backend/internal/store/model"
 	"go-backend/internal/ws"
 )
 
@@ -260,19 +261,29 @@ func tunnelRuntimeNodeIDs(nodes []tunnelRuntimeNode) []int64 {
 // tunnel certificates to this node: a node_tunnel_tls row exists.
 // The row is created only by a fingerprint-matching issue ack and is
 // never deleted (ClearNodeTunnelTLSReady only flips Ready to 0), so
-// its presence means "distributed before". A DB read error returns
-// false (fail-open to legacy) and logs: a DB blip must never break a
-// deploy, and the next deploy re-evaluates.
-func (h *Handler) nodeTunnelTLSWasIssued(nodeID int64) bool {
+// its presence means "distributed before". A DB read error is
+// reported to the caller instead of returning false (R18-R3-F1-02):
+// both callers treat "unknown" as issued — the best-exit downgrade
+// guard skips no check and the deploy fail-closed gate refuses —
+// so a transient read error can never silently clear the gate and
+// let a legacy dialer be pushed against a verified listener. A
+// never-issued node reads (nil, nil) and returns false, nil.
+func (h *Handler) nodeTunnelTLSWasIssued(nodeID int64) (bool, error) {
 	if h == nil || h.repo == nil || nodeID <= 0 {
-		return false
+		return false, nil
 	}
-	st, err := h.repo.GetNodeTunnelTLS(nodeID)
+	var st *model.NodeTunnelTLS
+	var err error
+	if h.nodeTunnelTLSRowReader != nil {
+		st, err = h.nodeTunnelTLSRowReader(nodeID)
+	} else {
+		st, err = h.repo.GetNodeTunnelTLS(nodeID)
+	}
 	if err != nil {
-		log.Printf("tunnel-tls: 读取节点 %d 的证书下发记录失败，按未下发处理: %v", nodeID, err)
-		return false
+		log.Printf("tunnel-tls: 读取节点 %d 的证书下发记录失败，按曾下发处理（fail-closed）: %v", nodeID, err)
+		return false, err
 	}
-	return st != nil
+	return st != nil, nil
 }
 
 // tunnelTLSReadyForState runs the certificate distribution ensure
@@ -340,7 +351,14 @@ func (h *Handler) tunnelTLSReadyForState(state *tunnelCreateState) (map[int64]bo
 		if ready {
 			continue
 		}
-		if h.nodeTunnelTLSWasIssued(id) {
+		// R18-R3-F1-02: a read error is treated as issued — the
+		// deploy is refused rather than letting an offline
+		// previously-issued node fall through to legacy + warning.
+		issued, err := h.nodeTunnelTLSWasIssued(id)
+		if err != nil {
+			return map[int64]bool{}, fmt.Errorf("节点 %d 的隧道证书下发记录读取失败，无法确认是否曾下发，按曾下发处理拒绝以未验证方式建链（R18-F1-01 fail-closed）: %w", id, err)
+		}
+		if issued {
 			return map[int64]bool{}, fmt.Errorf("节点 %d 的隧道证书曾已下发、现仍缺失且重新下发失败，拒绝以未验证方式建链（R18-F1-01 fail-closed）：请检查节点在线状态与 agent 版本后重试", id)
 		}
 		state.TLSLegacyNodes = append(state.TLSLegacyNodes, tunnelTLSLegacyNode{NodeID: id, Cause: cause})
@@ -434,7 +452,15 @@ func (h *Handler) bestExitReorderWouldDowngrade(ownerNodeID int64, targets []tun
 		deps = append(deps, dialerGroup...)
 		allIssued := true
 		for _, id := range deps {
-			if !h.nodeTunnelTLSWasIssued(id) {
+			issued, err := h.nodeTunnelTLSWasIssued(id)
+			if err != nil {
+				// R18-R3-F1-02: a read error must not clear the
+				// gate — "unknown" counts as issued, so a
+				// not-ready member still trips the downgrade
+				// check below instead of skipping it.
+				continue
+			}
+			if !issued {
 				allIssued = false
 				break
 			}
