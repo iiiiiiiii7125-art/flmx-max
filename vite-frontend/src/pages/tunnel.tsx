@@ -142,6 +142,8 @@ interface Tunnel {
   bestExitState?: BestExitState;
   status: number;
   createdTime: string;
+  /** R18-R3-B7-02：联邦移除致孤——后端 tunnelList 下发，列表行据此渲染警告徽标；无标记为 undefined。 */
+  orphanedByFederationRemoval?: boolean;
 }
 
 const DEFAULT_PROBE_TARGET_HOST = "www.bing.com";
@@ -346,6 +348,40 @@ const renderBestExitState = (state?: BestExitState) => {
     >
       <span className="min-w-0 truncate">最优出口：{displaySummary}</span>
     </span>
+  );
+};
+
+// R18-R3-B7-02：联邦移除致孤徽标。后端 tunnelList 对丢了入口节点的
+// Type 2 隧道下发 orphanedByFederationRemoval=true；有标记的行显示
+// 警告徽标、点击打开隧道编辑面补齐入口节点，无标记行渲染为 null
+// 零变化（与 forward.tsx 的 ForwardBindWarningBadge 同形态）。
+const OrphanTunnelBadge = ({
+  tunnel,
+  onEdit,
+}: {
+  tunnel: Tunnel;
+  onEdit: (tunnel: Tunnel) => void;
+}) => {
+  if (tunnel.orphanedByFederationRemoval !== true) {
+    return null;
+  }
+
+  return (
+    <button
+      className="inline-flex shrink-0"
+      title="联邦功能移除时入口节点被删除，该隧道已无法部署；点击打开编辑面补齐入口节点。"
+      type="button"
+      onClick={() => onEdit(tunnel)}
+    >
+      <Chip
+        className="text-xs font-semibold whitespace-nowrap"
+        color="warning"
+        size="sm"
+        variant="flat"
+      >
+        ⚠ 联邦移除致孤
+      </Chip>
+    </button>
   );
 };
 
@@ -1836,6 +1872,12 @@ export default function TunnelPage() {
     return sortedByDb;
   }, [tunnels, tunnelOrder, searchKeyword]);
 
+  // R18-R3-B7-02：孤儿隧道汇总数（不过滤、不随搜索变化，顶部横幅用）。
+  const orphanTunnelCount = useMemo(
+    () => tunnels.filter((t) => t.orphanedByFederationRemoval === true).length,
+    [tunnels],
+  );
+
   const sortableTunnelIds = useMemo(
     () => sortedTunnels.map((t) => t.id),
     [sortedTunnels],
@@ -2195,6 +2237,17 @@ export default function TunnelPage() {
         </div>
       )}
 
+      {/* R18-R3-B7-02：孤儿隧道汇总提示——联邦移除致孤的隧道无法部署，点行内徽标进编辑面补齐入口。 */}
+      {orphanTunnelCount > 0 && (
+        <div className="mb-4">
+          <Alert
+            color="warning"
+            description={`有 ${orphanTunnelCount} 条隧道因联邦功能移除丢失了入口节点，无法部署；点击隧道行的“联邦移除致孤”徽标打开编辑面补齐入口节点。`}
+            variant="flat"
+          />
+        </div>
+      )}
+
       {/* 隧道卡片网格 */}
       {tunnels.length > 0 ? (
         sortedTunnels.length === 0 ? (
@@ -2295,6 +2348,10 @@ export default function TunnelPage() {
                           >
                             {tunnel.status === 1 ? "启用" : "已禁用"}
                           </Chip>
+                          <OrphanTunnelBadge
+                            tunnel={tunnel}
+                            onEdit={handleEdit}
+                          />
                         </div>
                       </TableCell>
                       <TableCell>
@@ -2466,6 +2523,10 @@ export default function TunnelPage() {
                                   >
                                     {tunnel.status === 1 ? "启用" : "已禁用"}
                                   </Chip>
+                                  <OrphanTunnelBadge
+                                    tunnel={tunnel}
+                                    onEdit={handleEdit}
+                                  />
                                 </div>
                               </div>
                               <div
