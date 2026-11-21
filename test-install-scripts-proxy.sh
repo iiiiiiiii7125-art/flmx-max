@@ -8578,14 +8578,26 @@ test_uninstall_removes_custom_kernel_dir() (
   mkdir -p "${FLMX_AGENT_SYSTEMD_SERVICE_FILE}.d"
   # R18-A3-01: 正例夹具须落在黑名单前缀之外——mktemp 在 /tmp、$HOME
   # 也在名单内，都不可用。/data 是审计建议的可删前缀之一；建目录要
-  # 特权：root 直接建，非 root 走 sudo -n（CI runner 免密 sudo）；
-  # 两者皆无时只跳过正例并明示（沿用本套件 root 门 skip 先例），拒
-  # 绝形态仍全程断言。
+  # 特权：root 直接建，非 root 走 sudo -n（CI runner 免密 sudo）后
+  # 立即 chown 给当前用户——sudo 建的目录属 root，只把写文件改走
+  # sudo 是不够的：卸载时 rm -rf 同样以 runner 身份跑，root 属主的
+  # 父目录一样会 EACCES；chown 后建子目录、写 state.json、卸载删除、
+  # 收尾清理全程以 runner 身份走产品路径，不再需要 sudo。两者皆无
+  # （或 chown 失败）时只跳过正例并明示（沿用本套件 root 门 skip
+  # 先例），拒绝形态仍全程断言。
   local kbase="/data/flmx-a3-test-$$-$RANDOM" kdir="" kbase_sudo=""
   if mkdir -p "$kbase" 2>/dev/null; then
     :
   elif command -v sudo >/dev/null 2>&1 && sudo -n mkdir -p "$kbase" 2>/dev/null; then
     kbase_sudo="sudo -n"
+    if sudo -n chown "$(id -u):$(id -g)" "$kbase" 2>/dev/null; then
+      kbase_sudo=""
+    else
+      echo "skip: custom kernel dir positive case needs ownership of $kbase (passwordless sudo chown failed)"
+      sudo -n rm -rf "$kbase" 2>/dev/null
+      kbase=""
+      kbase_sudo=""
+    fi
   else
     echo "skip: custom kernel dir positive case needs a non-blacklisted fixture dir (root or passwordless sudo to create /data)"
   fi

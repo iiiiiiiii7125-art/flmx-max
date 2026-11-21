@@ -40,7 +40,7 @@ def find_free_port(start: int = 3000, max_tries: int = 100) -> int:
     raise RuntimeError(f"No free port found in range {start}-{start + max_tries}")
 
 
-def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
+def wait_for_port(port: int, host: str = "localhost", timeout: float = 180.0) -> bool:
     """Wait for a port to become available."""
     start = time.time()
     while time.time() - start < timeout:
@@ -64,7 +64,9 @@ class ServerProcess:
         cwd: Optional[Path] = None,
         env: Optional[dict] = None,
         name: Optional[str] = None,
-        ready_timeout: float = 30.0,
+        # Server startup budget; kept in sync with the --timeout default
+        # below (cold-compile headroom, see there).
+        ready_timeout: float = 180.0,
     ):
         self.command = command
         self.port = port
@@ -228,11 +230,18 @@ Examples:
         default=":memory:",
         help="Database path for backend (default: :memory: for SQLite in-memory)",
     )
+    # Server startup budget: a cold `go run` compile of paneld exceeds
+    # the old 30s budget on CI runners (two consecutive timeouts at
+    # exactly 30s; sandbox cold build 130s @1.5 CPU, runner warm build
+    # 11s, cold estimate ~60-100s on a 2-vCPU runner). 180s covers a
+    # cold compile with headroom; a genuinely dead backend only fails
+    # 150s later. The CI e2e-browser job does not pass --timeout, so
+    # this default is the effective budget.
     parser.add_argument(
         "--timeout",
         type=float,
-        default=30.0,
-        help="Timeout for server startup (default: 30s)",
+        default=180.0,
+        help="Timeout for server startup (default: 180s)",
     )
 
     parser.add_argument(
