@@ -27,6 +27,12 @@ type GlobalTrafficManager struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	reportTicker   *time.Ticker
+	// reportWG  joins startReporting：Stop 返回后上报 goroutine 已
+	// 退出，不再读 httpReportURL/httpAESCrypto/reportDo 等包级
+	// 共享状态（R18-R3-01：旧 Stop 只停 ticker + cancel，不等
+	// goroutine 退出，测试里泄漏的 goroutine 仍在后续测试重配
+	// stub 面板期间读加密器；R-BASE-02 同根）。
+	reportWG sync.WaitGroup
 
 	// 连续上报失败计数与下次重试时刻（CPU-S1 退避）：与 connlog
 	// reporter 的 failCount/retryAt 同口径（2s 起、翻倍、上限
@@ -87,6 +93,7 @@ func GetGlobalTrafficManager() *GlobalTrafficManager {
 			reportTicker:   time.NewTicker(5 * time.Second),
 		}
 		// 启动定时上报协程
+		globalManager.reportWG.Add(1)
 		go globalManager.startReporting()
 	})
 	return globalManager
@@ -176,6 +183,7 @@ func (m *GlobalTrafficManager) isTrafficEmptyLocked(name string) bool {
 
 // startReporting 启动定时上报协程（每5秒执行一次）
 func (m *GlobalTrafficManager) startReporting() {
+	defer m.reportWG.Done()
 
 	for {
 		select {
@@ -360,6 +368,12 @@ func (m *GlobalTrafficManager) Stop() {
 	if m.cancel != nil {
 		m.cancel()
 	}
+	// 先 join 上报 goroutine 再落盘：Stop 返回后 collectAndReport
+	// 不可能再读包级上报状态（R18-R3-01/R-BASE-02）。Wait 不持
+	// reportMu——进行中的 collectAndReport 须先拿到该锁才能结束，
+	// 持锁等会死锁。未启动过上报 goroutine 的管理器（测试本地
+	// 构造）计数为 0，Wait 立即返回。
+	m.reportWG.Wait()
 	m.reportMu.Lock()
 	if err := m.persistTraffic(); err != nil {
 		fmt.Printf("❌ 流量停机落盘失败: %v\n", err)
