@@ -918,7 +918,14 @@ func (m *Manager) Apply(req ApplyRequest) (State, error) {
 	// the nft rules are never synced for the bad config.
 	if reloadable {
 		if cerr := checkSingboxConfig(mainBin, singboxConfigPath(req, runDir)); cerr != nil {
-			restorePrevFiles(runDir, prev)
+			// A failed restore must not be reported as "已保留旧配
+			// 置": the bad config would stay on disk while the
+			// instance claims the old one.
+			if rerr := restorePrevFiles(runDir, prev); rerr != nil {
+				err := fmt.Errorf("sing-box 配置校验失败，且旧配置恢复失败: %v（校验错误: %w）", rerr, cerr)
+				m.setErr(inst, err)
+				return m.state(req.Type, false), err
+			}
 			m.mu.Lock()
 			inst.req = prev.req
 			inst.binDir = prev.binDir
@@ -1480,19 +1487,32 @@ type prevApply struct {
 // over the run dir (nil content removes the file). Used by rollback
 // and by the reload config-check failure path, both of which must
 // leave the on-disk config consistent with the in-memory request.
-func restorePrevFiles(runDir string, prev prevApply) {
+func restorePrevFiles(runDir string, prev prevApply) error {
 	for name, content := range prev.files {
 		path := filepath.Join(runDir, name)
 		if content == nil {
-			_ = os.Remove(path)
-		} else {
-			_ = writeFileAtomic(path, content, 0o600)
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("恢复 %s 失败（删除新文件）: %w", name, err)
+			}
+		} else if err := writeFileAtomic(path, content, 0o600); err != nil {
+			return fmt.Errorf("恢复 %s 失败: %w", name, err)
 		}
 	}
+	return nil
 }
 
 func (m *Manager) rollback(inst *instance, runDir string, prev prevApply) error {
-	restorePrevFiles(runDir, prev)
+	// A failed file restore must fail the rollback loudly instead
+	// of proceeding: re-syncing and restarting on top of files
+	// that were never restored would run the bad config under the
+	// previous request's rules while reporting a recovery. The
+	// in-memory request is left untouched here (it still names the
+	// new config, matching what is actually on disk); the apply
+	// stays unconfirmed, so a later restart heals from the last
+	// persisted good request.
+	if err := restorePrevFiles(runDir, prev); err != nil {
+		return fmt.Errorf("回滚恢复旧文件失败: %w", err)
+	}
 	m.mu.Lock()
 	inst.req = prev.req
 	inst.binDir = prev.binDir

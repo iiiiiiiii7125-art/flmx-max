@@ -794,3 +794,71 @@ func TestSwapRuleSetsProbesRestoreRestart(t *testing.T) {
 		t.Fatalf("the misleading recovery line must not be logged when the restore restart fails, logs:\n%s", logs)
 	}
 }
+
+// TestRestorePrevFilesReturnsWriteErrors (R18-R2-D3-02-restore):
+// restoring the previous files must report a write failure instead
+// of silently leaving the bad config on disk while the rollback
+// reports a recovery. The run directory is a regular file here so
+// the atomic write fails deterministically (ENOTDIR, root-proof —
+// a permission bit would not stop root).
+func TestRestorePrevFilesReturnsWriteErrors(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "run")
+	if err := os.WriteFile(runDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := prevApply{files: map[string][]byte{"config.json": []byte("cfg-v1")}}
+	if err := restorePrevFiles(runDir, prev); err == nil {
+		t.Fatal("restorePrevFiles must report the failed write")
+	} else if !strings.Contains(err.Error(), "config.json") {
+		t.Fatalf("restore error must name the file, got %v", err)
+	}
+
+	// Happy path: a real directory restores contents, and a nil
+	// entry removes a file the new config created.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"crash":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prev = prevApply{files: map[string][]byte{"config.json": []byte("cfg-v1"), "extra.txt": nil}}
+	if err := restorePrevFiles(dir, prev); err != nil {
+		t.Fatalf("restorePrevFiles must succeed on a writable directory, got %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "config.json")); string(got) != "cfg-v1" {
+		t.Fatalf("restore must write the previous content, got %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "extra.txt")); !os.IsNotExist(err) {
+		t.Fatalf("restore must remove a file the previous config did not have, stat err=%v", err)
+	}
+}
+
+// TestRollbackFailsClosedWhenRestoreFails (R18-R2-D3-02-restore):
+// a rollback whose file restore fails must return the error
+// instead of re-syncing and restarting on top of the unrestored
+// bad config — and must not touch the in-memory request, which
+// still names what is actually on disk.
+func TestRollbackFailsClosedWhenRestoreFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as fake kernel")
+	}
+	m := NewManager(t.TempDir())
+	runDir := filepath.Join(t.TempDir(), "run")
+	if err := os.WriteFile(runDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := prevApply{
+		req:   whitelistRequest("xray", "9.9.9", "xray", "cfg-v1", []string{"203.0.113.0/24"}),
+		files: map[string][]byte{"config.json": []byte("cfg-v1")},
+	}
+	inst := &instance{logs: &logRing{}}
+	if err := m.rollback(inst, runDir, prev); err == nil {
+		t.Fatal("rollback must fail closed when the file restore fails")
+	} else if !strings.Contains(err.Error(), "回滚恢复旧文件失败") || !strings.Contains(err.Error(), "config.json") {
+		t.Fatalf("rollback error must name the restore failure and the file, got %v", err)
+	}
+	if inst.req.Type != "" {
+		t.Fatalf("failed rollback must not adopt the previous request, inst.req=%+v", inst.req)
+	}
+}
