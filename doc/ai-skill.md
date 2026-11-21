@@ -7,10 +7,10 @@
 ### 方式 1: Release 资产（推荐）
 
 ```bash
-npm install -g https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/2.1.18/flmx-skill-api-2.1.18.tgz
+npm install -g https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/2.1.19/flmx-skill-api-2.1.19.tgz
 ```
 
-也可以在 GitHub Releases 页面下载 `flmx-skill-api-2.1.18.tgz` 后本地安装。
+也可以在 GitHub Releases 页面下载 `flmx-skill-api-2.1.19.tgz` 后本地安装。
 
 postinstall 脚本会自动链接到 `~/.agents/skills/flmx-api/`。
 
@@ -61,7 +61,7 @@ OpenCode 是命令行 AI 编程助手，支持通过 skills 扩展能力。
 
 **安装 skill:**
 ```bash
-npm install -g https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/2.1.18/flmx-skill-api-2.1.18.tgz
+npm install -g https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/2.1.19/flmx-skill-api-2.1.19.tgz
 ```
 
 **使用:**
@@ -89,7 +89,7 @@ OpenClaw 同样支持 skills 机制。
 
 **安装 skill:**
 ```bash
-npm install -g https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/2.1.18/flmx-skill-api-2.1.18.tgz
+npm install -g https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/2.1.19/flmx-skill-api-2.1.19.tgz
 
 # 或手动链接
 mkdir -p ~/.openclaw/skills
@@ -212,14 +212,14 @@ cat ~/.agents/skills/flmx-api/SKILL.md >> ~/.claude/CLAUDE.md
 
 ## 发布
 
-技能包随 FLMX 产品版本一起发布，不单独打 tag：推送**纯数字 tag**（与产品版本相同，如 `2.1.18`）会触发产品构建，发版流水线（`.github/workflows/docker-build.yml`）在 create-release 里自动把技能包打成 tgz 并作为 Release 资产上传，不再经过 npm。版本号不由流水线改写：发版提交须先把三处字面量（`skills/flmx-api/SKILL.md`、`skills/flmx-api/package.json` 与本文示例）人工 bump 到待发版本；发版流水线在打 tgz 前断言 package.json 的版本与 tag 一致，不一致即中止发布——漏 bump 不会再静默发出 SKILL.md 与包版本错位的包。
+技能包随 FLMX 产品版本一起发布，不单独打 tag：推送**纯数字 tag**（与产品版本相同，如 `2.1.19`）会触发产品构建，发版流水线（`.github/workflows/docker-build.yml`）在 create-release 里自动把技能包打成 tgz 并作为 Release 资产上传，不再经过 npm。版本号不由流水线改写：发版提交须先把三处字面量（`skills/flmx-api/SKILL.md`、`skills/flmx-api/package.json` 与本文示例）人工 bump 到待发版本；发版流水线在打 tgz 前断言 package.json 的版本与 tag 一致，不一致即中止发布——漏 bump 不会再静默发出 SKILL.md 与包版本错位的包。
 
 ```bash
 # 随产品版本发布（示例）
-git tag 2.1.18
+git tag 2.1.19
 git push --tags
 ```
 
 注意：不要再使用 `skill-v<版本>` 形式的 tag——现行流水线的触发器只认纯数字 tag，`skill-v*` 不会触发任何发布。仓库内 `skills/flmx-api/SKILL.md`、`skills/flmx-api/package.json` 与本文示例的版本号字面量应保持一致（`scripts/check-doc-consistency.sh` 会校验）。
 
-技能包的下载地址就是该版本的 Release 资产，例如 `https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/2.1.18/flmx-skill-api-2.1.18.tgz`，下载不需要账号或 token。
+技能包的下载地址就是该版本的 Release 资产，例如 `https://github.com/iiiiiiiii7125-art/flmx-max/releases/download/2.1.19/flmx-skill-api-2.1.19.tgz`，下载不需要账号或 token。
