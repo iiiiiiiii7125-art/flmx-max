@@ -8672,17 +8672,25 @@ test_main_requires_root() (
 
 # R18-A1-02：panel main 的 root 检查须在自更新之前。旧顺序非 root
 # 调用者先等自更新走完联网预算（断网时数分钟）才被拒绝；新顺序
-# 0 秒 fail-fast，且自更新不被触发（桩函数留痕断言）。EUID 只读、
-# root 环境下跳过功能臂（与 test_main_requires_root 同口径）；
+# 0 秒 fail-fast，且自更新不被触发（桩函数留痕断言）。root 环境下
+# 功能臂改走 setpriv/runuser 以 nobody 执行（R18-R3-A1-01：此前
+# root 下直接跳过，排序回归零拦截）；两者皆无才跳过并点名原因。
 # 文档臂（install.md 登记 SELF_UPDATE_SKIP 逃生口）与环境无关、
 # 始终执行。
 test_panel_main_root_check_precedes_self_update() (
   set -euo pipefail
   grep -Fq 'SELF_UPDATE_SKIP=1' "$ROOT_DIR/doc/guide/install.md" || \
     fail "R18-A1-02: install.md must document the SELF_UPDATE_SKIP=1 escape hatch"
+  local -a drop_priv=()
   if [[ $EUID -eq 0 ]]; then
-    echo "skip: test_panel_main_root_check_precedes_self_update needs a non-root environment"
-    return 0
+    if command -v setpriv >/dev/null 2>&1; then
+      drop_priv=(setpriv --reuid=65534 --regid=65534 --clear-groups)
+    elif command -v runuser >/dev/null 2>&1; then
+      drop_priv=(runuser -u nobody --)
+    else
+      echo "skip: test_panel_main_root_check_precedes_self_update needs setpriv or runuser to run the functional arm as non-root"
+      return 0
+    fi
   fi
   local work file marker rc out
   work=$(mktemp -d)
@@ -8693,7 +8701,11 @@ test_panel_main_root_check_precedes_self_update() (
 self_update_check() { touch "$marker"; }
 main
 STUBEOF
-  rc="0"; out=$(SELF_UPDATE_SKIP= bash "$file" 2>&1) || rc="$?"
+  if [[ ${#drop_priv[@]} -gt 0 ]]; then
+    chmod 644 "$file"
+    chmod 777 "$work"
+  fi
+  rc="0"; out=$("${drop_priv[@]}" env SELF_UPDATE_SKIP= bash "$file" 2>&1) || rc="$?"
   assert_equals "1" "$rc" "R18-A1-02: panel main must fail fast for non-root"
   [[ ! -f "$marker" ]] || fail "R18-A1-02: self-update must not run before the root check"
   [[ "$out" == *"需要 root 权限运行"* ]] || \
