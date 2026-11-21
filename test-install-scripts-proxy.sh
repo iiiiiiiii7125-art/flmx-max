@@ -49,6 +49,34 @@ assert_equals() {
   fi
 }
 
+# R18-R3-A4-01: rollback .env comparison that tolerates exactly one
+# newly issued FLMX_INSTALL_ID line (lowercase UUID) and nothing else.
+# R18-R2-C3-01 issues the install identity before the backup is taken
+# (panel_install.sh:5225-5231), so the backup — and therefore the
+# rolled-back .env — already contains it; stripping it on rollback
+# would revert the deployment to the shared default identity
+# flmx_e3b0c442. Any other difference (changed/removed/reordered old
+# key, a second added line, a non-UUID value) is still a failure.
+assert_env_restored_allow_install_id() {
+  local pristine="$1"
+  local current="$2"
+  local message="$3"
+  local diff_out
+  diff_out=$(diff "$pristine" "$current" || true)
+  if [[ -z "$diff_out" ]]; then
+    return 0
+  fi
+  local uuid_re='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+  local line_count
+  line_count=$(printf '%s\n' "$diff_out" | wc -l)
+  if [[ "$line_count" -eq 2 ]] \
+    && printf '%s\n' "$diff_out" | sed -n '1p' | grep -Eq '^[0-9]+a[0-9]+$' \
+    && printf '%s\n' "$diff_out" | sed -n '2p' | grep -Eq "^> FLMX_INSTALL_ID=${uuid_re}$"; then
+    return 0
+  fi
+  fail "$message (only one added FLMX_INSTALL_ID=<lowercase-uuid> line is allowed):$(printf '\n%s' "$diff_out")"
+}
+
 load_script_without_main() {
   local script_path="$1"
   local temp_file
@@ -459,7 +487,8 @@ test_panel_update_pg_volume_check_rolls_back_on_mismatch() (
   grep -q 'flmx-postgres-data' "$dir1/update.log" || fail "A2-02: the PG self-check failure must name the actually mounted volume"
   grep -q 'real_pg' "$dir1/update.log" || fail "A2-02: the PG self-check failure must name the expected recorded volume"
   grep -q '已恢复更新前版本' "$dir1/update.log" || fail "A2-02: a PG self-check failure must roll back to the pre-update version"
-  diff -q "$dir1/env.pristine" "$dir1/.env" >/dev/null || fail "A2-02: rollback after a PG self-check failure must restore the pre-update .env verbatim"
+  # R18-R3-A4-01: allow the single FLMX_INSTALL_ID line issued before the backup (panel_install.sh:5225-5231); every other line must match verbatim.
+  assert_env_restored_allow_install_id "$dir1/env.pristine" "$dir1/.env" "A2-02: rollback after a PG self-check failure must restore the pre-update .env verbatim"
 
   # ② 相符通过
   local dir2
@@ -11306,7 +11335,8 @@ test_panel_update_rename_health_failure_rolls_back() (
   grep -q '身份改名回滚' "$dir/update.log" || fail "RN-1: the rollback must name the identity-rename rollback step"
   grep -Fxq 'flmx-panel-backend' "$dir/rm.log" || fail "RN-1: rollback must remove the new-name backend container before relaunching under the old name"
   grep -Fxq 'flux-panel-backend' "$dir/rm.log" || fail "RN-1: the rename step must have removed the legacy backend container"
-  diff -q "$dir/env.pristine" "$dir/.env" >/dev/null || fail "RN-1: rollback must restore the pre-update .env verbatim (legacy names and version)"
+  # R18-R3-A4-01: allow the single FLMX_INSTALL_ID line issued before the backup (panel_install.sh:5225-5231); every other line must match verbatim.
+  assert_env_restored_allow_install_id "$dir/env.pristine" "$dir/.env" "RN-1: rollback must restore the pre-update .env verbatim (legacy names and version)"
   assert_equals "flux-panel-backend" "$PANEL_BACKEND_CONTAINER" "RN-1: process globals must be restored to the old backend name after rollback"
   assert_equals "flux-panel-postgres" "$PANEL_POSTGRES_CONTAINER" "RN-1: process globals must be restored to the old postgres name after rollback"
 )
@@ -11333,7 +11363,8 @@ test_panel_update_volume_check_rolls_back_on_mismatch() (
   grep -q 'flmx-sqlite-data' "$dir/update.log" || fail "FIX199-B: the self-check failure must name the actually mounted volume"
   grep -q 'sqlite_data' "$dir/update.log" || fail "FIX199-B: the self-check failure must name the expected recorded volume"
   grep -q '已恢复更新前版本' "$dir/update.log" || fail "FIX199-B: a self-check failure must roll back to the pre-update version"
-  diff -q "$dir/env.pristine" "$dir/.env" >/dev/null || fail "FIX199-B: rollback after a self-check failure must restore the pre-update .env verbatim"
+  # R18-R3-A4-01: allow the single FLMX_INSTALL_ID line issued before the backup (panel_install.sh:5225-5231); every other line must match verbatim.
+  assert_env_restored_allow_install_id "$dir/env.pristine" "$dir/.env" "FIX199-B: rollback after a self-check failure must restore the pre-update .env verbatim"
 )
 
 # R18-A2-05 回滚数据库恢复夹具（SQLite）：卷内为新版本迁移后内容
@@ -11569,7 +11600,8 @@ test_panel_update_volume_check_existing_key_path() (
   assert_equals "1" "$rc" "FIX199-B: the existing-key path must also fail the update when the rebuilt mount differs"
   grep -q '升级后卷名自检失败' "$dir2/update.log" || fail "FIX199-B: the existing-key path self-check failure must be named"
   grep -q '已恢复更新前版本' "$dir2/update.log" || fail "FIX199-B: the existing-key path self-check failure must roll back"
-  diff -q "$dir2/env.pristine" "$dir2/.env" >/dev/null || fail "FIX199-B: rollback on the existing-key path must restore the pre-update .env verbatim"
+  # R18-R3-A4-01: allow the single FLMX_INSTALL_ID line issued before the backup (panel_install.sh:5225-5231); every other line must match verbatim.
+  assert_env_restored_allow_install_id "$dir2/env.pristine" "$dir2/.env" "FIX199-B: rollback on the existing-key path must restore the pre-update .env verbatim"
 )
 
 # R18-A2-09：SQLite 卷自检只比卷名会蒙过同名空卷——删卷重建后
@@ -11630,7 +11662,43 @@ test_panel_update_rejects_same_name_empty_volume_before_rebuild() (
   fi
   [[ ! -e "$FIXTURE_SQLITE_VOLDIR/gost.db" ]] || fail "R18-R2-A2-01: the new backend must never have started and seeded the empty volume"
   [[ ! -e "$dir/.rebuilt" ]] || fail "R18-R2-A2-01: the rebuild must never have started"
-  diff -q "$dir/env.pristine" "$dir/.env" >/dev/null || fail "R18-R2-A2-01: rollback must restore the pre-update .env verbatim"
+  # R18-R3-A4-01: allow the single FLMX_INSTALL_ID line issued before the backup (panel_install.sh:5225-5231); every other line must match verbatim.
+  assert_env_restored_allow_install_id "$dir/env.pristine" "$dir/.env" "R18-R2-A2-01: rollback must restore the pre-update .env verbatim"
+
+  # R18-R3-A4-01 否定用例：新断言必须仍抓住真正的逐字破坏——
+  # 非合规 UUID 值、多出第二行、旧名/版本键被改时都须红。断言在
+  # 子 shell 内跑（stderr 丢弃，预期的 FAIL 行不进日志），红只杀
+  # 子 shell、不杀本测试；断言若错放行，外层 fail 让本测试红。
+  local neg_dir
+  neg_dir=$(mktemp -d)
+  printf 'COMPOSE_PROJECT_NAME=kept_project\nFLMX_VERSION=2.1.18\n' > "$neg_dir/env.pristine"
+  # ① 相同文件须过（正对照）
+  cp -p "$neg_dir/env.pristine" "$neg_dir/env.same"
+  assert_env_restored_allow_install_id "$neg_dir/env.pristine" "$neg_dir/env.same" "R18-R3-A4-01 negative-case harness: identical .env must pass" || fail "R18-R3-A4-01: negative-case harness is broken (identical .env rejected)"
+  # ② 合规小写 UUID 单行须过（正对照）
+  printf 'COMPOSE_PROJECT_NAME=kept_project\nFLMX_VERSION=2.1.18\nFLMX_INSTALL_ID=4c38e3a9-1111-4222-8333-444455556666\n' > "$neg_dir/env.uuid-ok"
+  assert_env_restored_allow_install_id "$neg_dir/env.pristine" "$neg_dir/env.uuid-ok" "R18-R3-A4-01 negative-case harness: single compliant FLMX_INSTALL_ID line must pass" || fail "R18-R3-A4-01: negative-case harness is broken (compliant UUID line rejected)"
+  # ③ 大写 UUID 须红
+  printf 'COMPOSE_PROJECT_NAME=kept_project\nFLMX_VERSION=2.1.18\nFLMX_INSTALL_ID=4C38E3A9-1111-4222-8333-444455556666\n' > "$neg_dir/env.upper"
+  if ( assert_env_restored_allow_install_id "$neg_dir/env.pristine" "$neg_dir/env.upper" "R18-R3-A4-01 negative case" 2>/dev/null ); then
+    fail "R18-R3-A4-01: assertion must reject an uppercase FLMX_INSTALL_ID value"
+  fi
+  # ④ 非 UUID 值须红
+  printf 'COMPOSE_PROJECT_NAME=kept_project\nFLMX_VERSION=2.1.18\nFLMX_INSTALL_ID=not-a-uuid\n' > "$neg_dir/env.garbage"
+  if ( assert_env_restored_allow_install_id "$neg_dir/env.pristine" "$neg_dir/env.garbage" "R18-R3-A4-01 negative case" 2>/dev/null ); then
+    fail "R18-R3-A4-01: assertion must reject a non-UUID FLMX_INSTALL_ID value"
+  fi
+  # ⑤ 多出第二行须红
+  printf 'COMPOSE_PROJECT_NAME=kept_project\nFLMX_VERSION=2.1.18\nFLMX_INSTALL_ID=4c38e3a9-1111-4222-8333-444455556666\nFLMX_EXTRA_KEY=1\n' > "$neg_dir/env.two-lines"
+  if ( assert_env_restored_allow_install_id "$neg_dir/env.pristine" "$neg_dir/env.two-lines" "R18-R3-A4-01 negative case" 2>/dev/null ); then
+    fail "R18-R3-A4-01: assertion must reject a second added line"
+  fi
+  # ⑥ 旧名/版本键被改须红（夹具改一行旧键）
+  printf 'COMPOSE_PROJECT_NAME=kept_project\nFLMX_VERSION=2.1.19\nFLMX_INSTALL_ID=4c38e3a9-1111-4222-8333-444455556666\n' > "$neg_dir/env.key-changed"
+  if ( assert_env_restored_allow_install_id "$neg_dir/env.pristine" "$neg_dir/env.key-changed" "R18-R3-A4-01 negative case" 2>/dev/null ); then
+    fail "R18-R3-A4-01: assertion must reject a changed old version key"
+  fi
+  rm -rf "$neg_dir"
   rm -rf "$dir"
 )
 
