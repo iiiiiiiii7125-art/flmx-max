@@ -69,6 +69,10 @@ func TestApplyRollbackSkippedWhenPrevGuardedAndSyncFails(t *testing.T) {
 	}
 	stub := stubWhitelistNft(t)
 	m := NewManager(t.TempDir())
+	// R18-R2-D3-02-scope: count only this manager's syncs — a
+	// leaked background sync from an earlier test must not move
+	// the "last script" assertion.
+	stub.scopeToTable(m.nft.tableName())
 	t.Cleanup(m.Shutdown)
 	marker := filepath.Join(t.TempDir(), "starts")
 	placeCrashKernel(t, m, "xray", "9.9.9", "xray", marker)
@@ -108,6 +112,10 @@ func TestApplyRollbackStillRunsWhenPrevGuardedAndSyncOK(t *testing.T) {
 	}
 	stub := stubWhitelistNft(t)
 	m := NewManager(t.TempDir())
+	// R18-R2-D3-02-scope: count only this manager's syncs — a
+	// leaked background sync from an earlier test must not move
+	// the "last script" assertion.
+	stub.scopeToTable(m.nft.tableName())
 	t.Cleanup(m.Shutdown)
 	marker := filepath.Join(t.TempDir(), "starts")
 	placeCrashKernel(t, m, "xray", "9.9.9", "xray", marker)
@@ -161,6 +169,16 @@ func TestApplyRollbackResyncFailureStopsGuardedKernel(t *testing.T) {
 	stub := stubWhitelistNft(t)
 	stub.failLoadAfter = 2 // v1 + v2 syncs succeed; the rollback re-sync fails
 	m := NewManager(t.TempDir())
+	// R18-R2-D3-02-scope: the failLoadAfter budget counts only
+	// this manager's syncs. Before the scope, a leaked background
+	// sync from an earlier test in the same package run (verify
+	// tick, supervisor relaunch guard, geo/rule-set restart) could
+	// land between v1's and v2's sync, consume the second budget
+	// slot, fail v2's own sync, and send Apply down the B-02
+	// skip-rollback branch — leaving {"crash":true} on disk and
+	// failing this test at the config assertion with no product
+	// defect involved. The scope makes the budget hermetic.
+	stub.scopeToTable(m.nft.tableName())
 	t.Cleanup(m.Shutdown)
 	marker := filepath.Join(t.TempDir(), "starts")
 	placeCrashKernel(t, m, "xray", "9.9.9", "xray", marker)

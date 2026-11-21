@@ -27,6 +27,40 @@ type whitelistNftStub struct {
 	// same order as scripts (R18-R2-D3-02: proves a re-sync
 	// happened before — not after — the process it guards).
 	scriptTimes []time.Time
+	// scopeTable, when set, confines the stub's budget and script
+	// record to loads for one nft table (R18-R2-D3-02-scope).
+	// The kernel package runs many managers in one process, and
+	// leaked background syncs — verify-loop ticks, supervisor
+	// relaunch guards, geo/rule-set restarts of managers from
+	// earlier tests — legitimately call the global nftRunner while
+	// a later test's stub is live. Counting those foreign loads
+	// against this test's failLoadAfter budget (or in its script
+	// record) makes count-sensitive tests fail whenever one lands
+	// in their window; the budget must count only the manager
+	// under test. Unset means the old global counting.
+	scopeTable string
+}
+
+// scopeToTable confines the stub to one manager's nft table: loads
+// for any other table still succeed (the other manager's sync is
+// unaffected) but consume no budget and leave no record here. The
+// table name comes from the manager under test
+// (m.nft.tableName()); it is stable for the manager's lifetime
+// (derived from its baseDir).
+func (s *whitelistNftStub) scopeToTable(table string) {
+	s.scopeTable = table
+}
+
+// scriptConcernsTable reports whether an nft script installs or
+// deletes the named table. The match is on the exact "table inet
+// <name>" header token, so flmx_kernel_80070693 never matches
+// flmx_kernel_204f7d22 or the plain flmx_kernel.
+func scriptConcernsTable(script, table string) bool {
+	if table == "" {
+		return true
+	}
+	return strings.Contains(script, "table inet "+table+" {") ||
+		strings.Contains(script, "table inet "+table+"\n")
 }
 
 func stubWhitelistNft(t *testing.T) *whitelistNftStub {
@@ -37,6 +71,11 @@ func stubWhitelistNft(t *testing.T) *whitelistNftStub {
 		joined := strings.Join(args, " ")
 		switch {
 		case joined == "-f -":
+			// Scoped stubs ignore foreign-table loads: they are
+			// other managers' background syncs, not this test's.
+			if s.scopeTable != "" && !scriptConcernsTable(stdin, s.scopeTable) {
+				return nil, nil
+			}
 			if s.failLoad || (s.failLoadAfter > 0 && len(s.scripts) >= s.failLoadAfter) {
 				return nil, errors.New("nft load failed (stub)")
 			}
@@ -300,5 +339,47 @@ func TestControlWhitelistStartFailsClosed(t *testing.T) {
 	}
 	if got := markerStarts(t, marker); got != 1 {
 		t.Fatalf("kernel must not start before its rules are installed, got %d starts", got)
+	}
+}
+
+// TestStubScopeIgnoresForeignTableLoads (R18-R2-D3-02-scope):
+// a scoped stub spends its failLoadAfter budget only on loads for
+// its own table. Loads for another manager's table — the shape a
+// leaked verify tick / supervisor relaunch guard / geo restart
+// from an earlier test takes while this stub is live — succeed
+// (the other manager's sync is unaffected) but consume no budget
+// and leave no record, so count-sensitive tests cannot be moved
+// by background syncs they do not own.
+func TestStubScopeIgnoresForeignTableLoads(t *testing.T) {
+	stub := stubWhitelistNft(t)
+	stub.failLoadAfter = 1
+	stub.scopeToTable("flmx_kernel_aaaaaaaa")
+	ctx := context.Background()
+	foreign := "table inet flmx_kernel_bbbbbbbb {}\ndelete table inet flmx_kernel_bbbbbbbb\ntable inet flmx_kernel_bbbbbbbb {\n}\n"
+	own := "table inet flmx_kernel_aaaaaaaa {}\ndelete table inet flmx_kernel_aaaaaaaa\ntable inet flmx_kernel_aaaaaaaa {\n}\n"
+
+	if _, err := nftRunner(ctx, foreign, "-f", "-"); err != nil {
+		t.Fatalf("foreign-table load must succeed, got %v", err)
+	}
+	if len(stub.scripts) != 0 {
+		t.Fatalf("foreign-table load must not be recorded, got %d scripts", len(stub.scripts))
+	}
+	if _, err := nftRunner(ctx, own, "-f", "-"); err != nil {
+		t.Fatalf("first own-table load must succeed, got %v", err)
+	}
+	if len(stub.scripts) != 1 {
+		t.Fatalf("own-table load must be recorded, got %d scripts", len(stub.scripts))
+	}
+	if _, err := nftRunner(ctx, foreign, "-f", "-"); err != nil {
+		t.Fatalf("foreign-table load must still succeed after the budget is spent, got %v", err)
+	}
+	if _, err := nftRunner(ctx, own, "-f", "-"); err == nil {
+		t.Fatal("second own-table load must fail once failLoadAfter is spent")
+	}
+	if len(stub.scripts) != 1 {
+		t.Fatalf("failed own-table load must not append, got %d scripts", len(stub.scripts))
+	}
+	if len(stub.scriptTimes) != len(stub.scripts) {
+		t.Fatalf("scriptTimes must track scripts, got %d times for %d scripts", len(stub.scriptTimes), len(stub.scripts))
 	}
 }
