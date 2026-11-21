@@ -67,6 +67,53 @@ func TestImportShareLinksRoundTrip(t *testing.T) {
 	}
 }
 
+func TestImportPlainSocks5(t *testing.T) {
+	n := mustImportOne(t, "203.0.113.10:1080:alice:s3cret")
+	if n.Proxy.Type() != "socks5" || n.Host != "203.0.113.10" || n.Port != 1080 ||
+		n.Proxy.str("username") != "alice" || n.Proxy.str("password") != "s3cret" ||
+		!n.Proxy.flag("udp") {
+		t.Fatalf("plain socks5: %+v %v", n, n.Proxy)
+	}
+	if n.Name != "203.0.113.10:1080" {
+		t.Fatalf("plain socks5 default name: %q", n.Name)
+	}
+	// The plain form lands in the same shape as the socks5:// link form,
+	// so it renders back to the same share link.
+	uri, ok := proxyURI(Endpoint{Name: n.Name, Host: n.Host, Port: n.Port, Proxy: n.Proxy, Direct: true})
+	if !ok {
+		t.Fatalf("no link for plain socks5: %v", n.Proxy)
+	}
+	back := mustImportOne(t, uri)
+	if !reflect.DeepEqual(normalized(back.Proxy), normalized(n.Proxy)) {
+		t.Fatalf("plain socks5 round trip changed the node:\n%v\n%v", n.Proxy, back.Proxy)
+	}
+
+	// Passwords may contain ':' or '=' — SplitN keeps the tail whole, and
+	// the plain form is tried before the Surge branch, so '=' in the
+	// password must not reroute the line to parseSurgeLine.
+	n = mustImportOne(t, "203.0.113.10:1080:alice:a:b:c")
+	if n.Proxy.str("password") != "a:b:c" {
+		t.Fatalf("colon password: %q", n.Proxy.str("password"))
+	}
+	n = mustImportOne(t, "203.0.113.10:1080:alice:ab=c")
+	if n.Proxy.str("password") != "ab=c" {
+		t.Fatalf("equals password: %q", n.Proxy.str("password"))
+	}
+
+	// Bracketed IPv6.
+	n = mustImportOne(t, "[2001:db8::1]:1080:bob:pw")
+	if n.Host != "2001:db8::1" || n.Port != 1080 || n.Proxy.str("username") != "bob" {
+		t.Fatalf("plain socks5 v6: %+v %v", n, n.Proxy)
+	}
+
+	// Mixed paste: a plain line, a link line and a bad line — per-line
+	// reporting keeps the good nodes and names the bad line.
+	nodes, errs := ParseImport("203.0.113.10:1080:alice:s3cret\nsocks5://user:pass@5.6.7.8:1080#Socks\nnot a node\n")
+	if len(nodes) != 2 || len(errs) != 1 || !strings.Contains(errs[0], "第 3 行") {
+		t.Fatalf("mixed paste: nodes=%d errs=%v", len(nodes), errs)
+	}
+}
+
 func TestImportProfiles(t *testing.T) {
 	clash := `
 port: 7890
@@ -184,6 +231,10 @@ func TestImportRejections(t *testing.T) {
 		"vless://u@1.2.3.4:443?security=reality&sni=a.com":                                                     "pbk",
 		"wireguard://x@1.2.3.4:51820": "暂不支持",
 		"hello world":                 "无法识别",
+		"203.0.113.10:abc:alice:pw":   "无法识别",
+		"203.0.113.10:99999:alice:pw": "端口",
+		"203.0.113.10:1080:alice":     "无法识别",
+		"203.0.113.10:1080::pw":       "无法识别",
 	}
 	for input, want := range bad {
 		_, errs := ParseImport(input)
