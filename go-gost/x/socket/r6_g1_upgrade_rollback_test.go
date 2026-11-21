@@ -137,11 +137,11 @@ func TestUpgradeAutoRollbackAtomicStagingBothManagers(t *testing.T) {
 			t.Fatalf("buildAgentRestartScriptFor %s: %v", manager, err)
 		}
 		for _, want := range []string{
-			"rollback_tmp=$(mktemp /etc/flux_agent/.flux_agent.upgrade-rollback-XXXXXX)",
-			"cp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
+			"rollback_tmp=$(mktemp '/etc/flux_agent/.flux_agent.upgrade-rollback-XXXXXX')",
+			"cp '/etc/flux_agent/flux_agent.old' \"$rollback_tmp\"",
 			"chmod 755 \"$rollback_tmp\"",
-			"cmp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
-			"mv \"$rollback_tmp\" /etc/flux_agent/flux_agent",
+			"cmp '/etc/flux_agent/flux_agent.old' \"$rollback_tmp\"",
+			"mv \"$rollback_tmp\" '/etc/flux_agent/flux_agent'",
 			"rm -f \"$rollback_tmp\"",
 			"agent upgrade rollback swap failed",
 			"agent upgrade rollback aborted",
@@ -151,7 +151,7 @@ func TestUpgradeAutoRollbackAtomicStagingBothManagers(t *testing.T) {
 			}
 		}
 		// No copy may write the binary path directly any more.
-		if strings.Contains(script, "cp /etc/flux_agent/flux_agent.old /etc/flux_agent/flux_agent") {
+		if strings.Contains(script, "cp '/etc/flux_agent/flux_agent.old' '/etc/flux_agent/flux_agent'") {
 			t.Fatalf("%s restart script still copies the backup straight onto the binary path:\n%s", manager, script)
 		}
 		// Inside the auto-rollback leg, the service stop must come
@@ -164,7 +164,7 @@ func TestUpgradeAutoRollbackAtomicStagingBothManagers(t *testing.T) {
 		if stopInLeg < 0 || chainInLeg < 0 || stopInLeg > chainInLeg {
 			t.Fatalf("%s restart script: auto-rollback leg must stop the service before the staged copy:\n%s", manager, script)
 		}
-		if mvIdx, okIdx := strings.Index(script, "mv \"$rollback_tmp\" /etc/flux_agent/flux_agent"), strings.Index(script, "rollback succeeded"); mvIdx < 0 || okIdx < mvIdx {
+		if mvIdx, okIdx := strings.Index(script, "mv \"$rollback_tmp\" '/etc/flux_agent/flux_agent'"), strings.Index(script, "rollback succeeded"); mvIdx < 0 || okIdx < mvIdx {
 			t.Fatalf("%s restart script: 'rollback succeeded' must sit past the staged mv:\n%s", manager, script)
 		}
 	}

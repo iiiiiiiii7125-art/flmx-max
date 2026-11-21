@@ -51,7 +51,7 @@ func TestBuildAgentRestartScriptSelfManaged(t *testing.T) {
 		"flmx_agent_health_ok",
 		"agent upgrade restart ok",
 		"rollback succeeded",
-		"if mv /root/scratch-r2b2-high/.flmx_agent.upgrade-1 /root/scratch-r2b2-high/flmx_agent; then",
+		"if mv '/root/scratch-r2b2-high/.flmx_agent.upgrade-1' '/root/scratch-r2b2-high/flmx_agent'; then",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("self restart script missing %q:\n%s", want, script)

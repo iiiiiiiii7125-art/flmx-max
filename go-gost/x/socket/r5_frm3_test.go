@@ -79,10 +79,10 @@ func TestAgentRollbackScriptSwapGuardBothManagers(t *testing.T) {
 		for _, want := range []string{
 			// FRM4: the guarded copy is staged atomically — mktemp
 			// sibling, verified copy, mv into place.
-			"rollback_tmp=$(mktemp /etc/flux_agent/.flux_agent.rollback-XXXXXX)",
-			"cp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
-			"cmp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
-			"mv \"$rollback_tmp\" /etc/flux_agent/flux_agent",
+			"rollback_tmp=$(mktemp '/etc/flux_agent/.flux_agent.rollback-XXXXXX')",
+			"cp '/etc/flux_agent/flux_agent.old' \"$rollback_tmp\"",
+			"cmp '/etc/flux_agent/flux_agent.old' \"$rollback_tmp\"",
+			"mv \"$rollback_tmp\" '/etc/flux_agent/flux_agent'",
 			"agent rollback swap failed",
 			"agent rollback aborted",
 		} {

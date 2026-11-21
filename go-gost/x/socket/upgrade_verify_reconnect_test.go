@@ -317,7 +317,7 @@ func TestDegradedTargetScriptRendering(t *testing.T) {
 	if strings.Contains(up, "then flmx_marker_gate=1") {
 		t.Fatalf("upgrade script for a pre-marker target must not arm the reconnect gate:\n%s", up)
 	}
-	if !strings.Contains(up, "flmx_rb_marker_gate=0; if [ -f /etc/flmx_agent/agent-connected.state ]; then flmx_rb_marker_gate=1; fi") {
+	if !strings.Contains(up, "flmx_rb_marker_gate=0; if [ -f '/etc/flmx_agent/agent-connected.state' ]; then flmx_rb_marker_gate=1; fi") {
 		t.Fatalf("auto-rollback leg gate must stay armed on mechanism presence regardless of the upgrade target generation:\n%s", up)
 	}
 
