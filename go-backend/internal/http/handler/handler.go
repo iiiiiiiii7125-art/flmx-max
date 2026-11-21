@@ -66,6 +66,11 @@ type Handler struct {
 	tunnelTLSMu            sync.Mutex
 	tunnelTLSCA            *config.TunnelTLSCA
 	tunnelTLSCommandSender func(nodeID int64, cmdType string, data interface{}, timeout time.Duration) (ws.CommandResult, error)
+	// R18-R3-F1-02：node_tunnel_tls 单行读的测试缝。置位时替代
+	// nodeTunnelTLSWasIssued 内的仓储读，测试用它模拟瞬时读错
+	// （批量就绪集读成功、单行读失败的交错）；生产恒为 nil，走
+	// 仓储读。
+	nodeTunnelTLSRowReader func(nodeID int64) (*model.NodeTunnelTLS, error)
 	metrics                *metrics.IngestionService
 	healthCheck            *health.Checker
 	// R5-B5 D14: 下沉到 manager 层的 per-node 串行化包装。

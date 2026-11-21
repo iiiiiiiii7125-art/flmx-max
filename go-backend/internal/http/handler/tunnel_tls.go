@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-backend/internal/config"
+	"go-backend/internal/store/model"
 	"go-backend/internal/ws"
 )
 
@@ -189,8 +190,8 @@ func (h *Handler) checkNodeTunnelTLSStatus(nodeID int64) (ready bool, caSHA, cer
 // never fails a deploy: every failure path logs and returns false,
 // and the render falls back to the legacy form for the affected
 // segments. A node already marked Ready is re-confirmed against the
-// agent (status + fingerprints) before it is trusted; a mismatch
-// triggers a re-issue.
+// agent (status + fingerprints + CA generation) before it is
+// trusted; a mismatch triggers a re-issue.
 func (h *Handler) ensureNodeTunnelTLSReady(nodeID int64) bool {
 	ready, _ := h.ensureNodeTunnelTLSReadyDetailed(nodeID)
 	return ready
@@ -218,6 +219,31 @@ func classifyTunnelTLSIssueCause(err error) string {
 	return ""
 }
 
+// nodeTunnelTLSMatchesCurrentCA reports whether the CA fingerprint
+// the agent holds belongs to the panel's current CA generation
+// (R18-R3-F1-01, option 1: bind the generation check into the
+// ensure fast path). The panel CA is recreated when
+// tunnel_tls_ca.* are lost while node_tunnel_tls rows survive, so
+// a row/agent pair that agree with each other can still be a stale
+// generation — trusting it would mix two CA generations in one TLS
+// tunnel and break cross-generation legs. A CA load failure
+// returns false (do not trust the fast path; the re-issue attempt
+// surfaces the error). Wiping the table when a CA is created
+// (option 2) was not chosen: it destroys derived state, needs the
+// CA loader to report creation, and cannot catch rows reintroduced
+// after the CA was created — the ensure check self-heals on the
+// next deploy in all of those cases.
+func (h *Handler) nodeTunnelTLSMatchesCurrentCA(agentCASHA string) bool {
+	if strings.TrimSpace(agentCASHA) == "" {
+		return false
+	}
+	ca, err := h.tunnelTLSAuthority()
+	if err != nil || ca == nil {
+		return false
+	}
+	return agentCASHA == ca.CASha256()
+}
+
 // ensureNodeTunnelTLSReadyDetailed is ensureNodeTunnelTLSReady
 // plus the failure cause for the receipt: when the node ends up
 // not ready, cause names why the distribution failed ("节点离线",
@@ -230,10 +256,10 @@ func (h *Handler) ensureNodeTunnelTLSReadyDetailed(nodeID int64) (ready bool, ca
 		return false, ""
 	}
 	if st, err := h.repo.GetNodeTunnelTLS(nodeID); err == nil && st != nil && st.Ready == 1 {
-		if ok, caSHA, certSHA := h.checkNodeTunnelTLSStatus(nodeID); ok && caSHA == st.CASha256 && certSHA == st.CertSha256 {
+		if ok, caSHA, certSHA := h.checkNodeTunnelTLSStatus(nodeID); ok && caSHA == st.CASha256 && certSHA == st.CertSha256 && h.nodeTunnelTLSMatchesCurrentCA(caSHA) {
 			return true, ""
 		}
-		log.Printf("tunnel-tls: 节点 %d 已标记就绪但 agent 回查不符（缺失/过期/指纹不匹配），重新下发", nodeID)
+		log.Printf("tunnel-tls: 节点 %d 已标记就绪但 agent 回查不符（缺失/过期/指纹不匹配/CA 代际已变），重新下发", nodeID)
 	}
 	if err := h.distributeNodeTunnelTLS(nodeID); err != nil {
 		log.Printf("tunnel-tls: 节点 %d 证书下发失败，保持旧渲染（链路不受影响）: %v", nodeID, err)
@@ -260,19 +286,29 @@ func tunnelRuntimeNodeIDs(nodes []tunnelRuntimeNode) []int64 {
 // tunnel certificates to this node: a node_tunnel_tls row exists.
 // The row is created only by a fingerprint-matching issue ack and is
 // never deleted (ClearNodeTunnelTLSReady only flips Ready to 0), so
-// its presence means "distributed before". A DB read error returns
-// false (fail-open to legacy) and logs: a DB blip must never break a
-// deploy, and the next deploy re-evaluates.
-func (h *Handler) nodeTunnelTLSWasIssued(nodeID int64) bool {
+// its presence means "distributed before". A DB read error is
+// reported to the caller instead of returning false (R18-R3-F1-02):
+// both callers treat "unknown" as issued — the best-exit downgrade
+// guard skips no check and the deploy fail-closed gate refuses —
+// so a transient read error can never silently clear the gate and
+// let a legacy dialer be pushed against a verified listener. A
+// never-issued node reads (nil, nil) and returns false, nil.
+func (h *Handler) nodeTunnelTLSWasIssued(nodeID int64) (bool, error) {
 	if h == nil || h.repo == nil || nodeID <= 0 {
-		return false
+		return false, nil
 	}
-	st, err := h.repo.GetNodeTunnelTLS(nodeID)
+	var st *model.NodeTunnelTLS
+	var err error
+	if h.nodeTunnelTLSRowReader != nil {
+		st, err = h.nodeTunnelTLSRowReader(nodeID)
+	} else {
+		st, err = h.repo.GetNodeTunnelTLS(nodeID)
+	}
 	if err != nil {
-		log.Printf("tunnel-tls: 读取节点 %d 的证书下发记录失败，按未下发处理: %v", nodeID, err)
-		return false
+		log.Printf("tunnel-tls: 读取节点 %d 的证书下发记录失败，按曾下发处理（fail-closed）: %v", nodeID, err)
+		return false, err
 	}
-	return st != nil
+	return st != nil, nil
 }
 
 // tunnelTLSReadyForState runs the certificate distribution ensure
@@ -340,7 +376,14 @@ func (h *Handler) tunnelTLSReadyForState(state *tunnelCreateState) (map[int64]bo
 		if ready {
 			continue
 		}
-		if h.nodeTunnelTLSWasIssued(id) {
+		// R18-R3-F1-02: a read error is treated as issued — the
+		// deploy is refused rather than letting an offline
+		// previously-issued node fall through to legacy + warning.
+		issued, err := h.nodeTunnelTLSWasIssued(id)
+		if err != nil {
+			return map[int64]bool{}, fmt.Errorf("节点 %d 的隧道证书下发记录读取失败，无法确认是否曾下发，按曾下发处理拒绝以未验证方式建链（R18-F1-01 fail-closed）: %w", id, err)
+		}
+		if issued {
 			return map[int64]bool{}, fmt.Errorf("节点 %d 的隧道证书曾已下发、现仍缺失且重新下发失败，拒绝以未验证方式建链（R18-F1-01 fail-closed）：请检查节点在线状态与 agent 版本后重试", id)
 		}
 		state.TLSLegacyNodes = append(state.TLSLegacyNodes, tunnelTLSLegacyNode{NodeID: id, Cause: cause})
@@ -434,7 +477,15 @@ func (h *Handler) bestExitReorderWouldDowngrade(ownerNodeID int64, targets []tun
 		deps = append(deps, dialerGroup...)
 		allIssued := true
 		for _, id := range deps {
-			if !h.nodeTunnelTLSWasIssued(id) {
+			issued, err := h.nodeTunnelTLSWasIssued(id)
+			if err != nil {
+				// R18-R3-F1-02: a read error must not clear the
+				// gate — "unknown" counts as issued, so a
+				// not-ready member still trips the downgrade
+				// check below instead of skipping it.
+				continue
+			}
+			if !issued {
 				allIssued = false
 				break
 			}

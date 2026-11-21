@@ -596,7 +596,10 @@ func (h *Handler) processTunnelDeleteReplaceAction(tunnelID, targetTunnelID int6
 	outcome, err := h.deleteTunnelAndCleanupWithOutcome(tunnelID)
 	if err != nil {
 		h.rollbackTunnelForwardMigrationPlans(plans)
-		_ = h.redeployTunnelAndForwards(tunnelID)
+		// R18-R3-F1-03: TLS legacy warnings are logged + queued
+		// for repush inside redeployTunnelAndForwards; this
+		// receipt-less rollback only needs the error swallowed.
+		_, _ = h.redeployTunnelAndForwards(tunnelID)
 		// R4X-003(b)：删源隧道失败回滚同理——迁移已把转发搬到目标
 		// 隧道并按目标口径下发过服务，回滚后须按回滚后 DB 补刷一次
 		// 白名单（redeploy 只重下发隧道运行时与转发服务、不含

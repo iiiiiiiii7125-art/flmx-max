@@ -5003,19 +5003,27 @@ func (h *Handler) reconstructTunnelState(tunnelID int64) (*tunnelCreateState, er
 	return state, nil
 }
 
-func (h *Handler) redeployTunnelAndForwards(tunnelID int64) error {
+// redeployTunnelAndForwards re-pushes a tunnel's runtime and its
+// forwards, returning the TLS legacy warnings of the apply
+// (R18-R3-F1-03): a type-2 TLS tunnel whose never-issued nodes
+// stayed offline (or on an old agent) is built unverified — the
+// caller surfaces the warnings in its receipt when it has one,
+// and the background callers rely on the per-node log line +
+// queued repush from scheduleTunnelTLSLegacyRetry.
+func (h *Handler) redeployTunnelAndForwards(tunnelID int64) ([]string, error) {
 	tunnel, err := h.getTunnelRecord(tunnelID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	var tlsWarnings []string
 	if tunnel.Type == 2 {
 		state, err := h.reconstructTunnelState(tunnelID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := validateTunnelRuntimeBeforeApply(state); err != nil {
-			return err
+			return nil, err
 		}
 		h.cleanupTunnelRuntime(tunnelID)
 		_, _, applyErr := h.applyTunnelRuntime(state)
@@ -5023,24 +5031,52 @@ func (h *Handler) redeployTunnelAndForwards(tunnelID int64) error {
 		// 并排期重试（handleTunnelRuntimeSkipped 内处理），不得静默。
 		_ = h.handleTunnelRuntimeSkipped(state)
 		if applyErr != nil {
-			return applyErr
+			return nil, applyErr
 		}
+		// R18-R3-F1-03: the apply recorded the never-issued
+		// nodes that stayed legacy — hand their warnings to the
+		// caller (the batch receipt) and log + queue a repush
+		// per node for the receipt-less callers.
+		tlsWarnings = h.tunnelTLSLegacyWarnings(state)
+		h.scheduleTunnelTLSLegacyRetry(state)
 	}
 
 	forwards, err := h.listForwardsByTunnel(tunnelID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for i := range forwards {
 		if err := h.syncForwardServices(&forwards[i], "UpdateService", true); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	// R18-B7-01：重部署成功即证明入口节点已恢复（入口门现为
 	// fail-closed），该隧道的联邦移除待办标记随之清除。
 	h.clearOrphanTunnelFlag(tunnelID)
-	return nil
+	return tlsWarnings, nil
+}
+
+// scheduleTunnelTLSLegacyRetry (R18-R3-F1-03) records the TLS
+// legacy nodes of a redeploy that built an unverified chain: one
+// log line per node naming it (the receipt-less background callers
+// have no other record) and one queued repush per node through the
+// local-runtime retry carrier, so the segments flip to verified
+// when the node is back online or upgraded — the same carrier the
+// skipped-node path uses (handleTunnelRuntimeSkipped), with the
+// same backoff/exhaustion bounds (R18-F3-02).
+func (h *Handler) scheduleTunnelTLSLegacyRetry(state *tunnelCreateState) {
+	if h == nil || state == nil || len(state.TLSLegacyNodes) == 0 {
+		return
+	}
+	for _, n := range state.TLSLegacyNodes {
+		cause := strings.TrimSpace(n.Cause)
+		if cause == "" {
+			cause = "证书下发失败"
+		}
+		queued := h.scheduleNodeLocalRuntimeRetry(n.NodeID)
+		log.Printf("tunnel-tls: 隧道 %d 以未验证方式建成，节点 %s（%s）已排期重推 retryQueued=%v，节点恢复在线或升级 agent 后重新部署即可转为验证", state.TunnelID, nodeDisplayName(state.Nodes[n.NodeID]), cause, queued)
+	}
 }
 
 type batchFailureDetail struct {
@@ -5139,6 +5175,7 @@ func (h *Handler) tunnelBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 	success := 0
 	fail := 0
 	failures := make([]batchFailureDetail, 0)
+	warnings := make([]string, 0)
 	for _, tunnelID := range ids {
 		tunnel, tunnelErr := h.getTunnelRecord(tunnelID)
 		tunnelName := ""
@@ -5175,14 +5212,20 @@ func (h *Handler) tunnelBatchRedeploy(w http.ResponseWriter, r *http.Request) {
 			success++
 			continue
 		}
-		if err := h.redeployTunnelAndForwards(tunnelID); err != nil {
+		// R18-R3-F1-03: a redeploy that builds an unverified chain
+		// (offline / old-agent nodes) still counts as success,
+		// but its TLS legacy warnings ride the receipt instead of
+		// staying a server-side log line.
+		tlsWarnings, err := h.redeployTunnelAndForwards(tunnelID)
+		if err != nil {
 			fail++
 			failures = appendBatchFailure(failures, tunnelID, tunnelName, err)
 			continue
 		}
+		warnings = append(warnings, tlsWarnings...)
 		success++
 	}
-	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures}))
+	response.WriteJSON(w, response.OK(batchOperationResult{SuccessCount: success, FailCount: fail, Failures: failures, Warnings: warnings}))
 }
 
 func (h *Handler) userTunnelAssign(w http.ResponseWriter, r *http.Request) {
