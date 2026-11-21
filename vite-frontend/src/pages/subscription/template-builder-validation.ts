@@ -120,8 +120,14 @@ export function builderGroupFilterConflicts(
 
       return;
     }
+    // R18-R3-E2-02: Go's regexp (RE2) accepts Python-style named
+    // groups "(?P<name>...)", which JS RegExp rejects — normalize them
+    // to the "(?<name>...)" form both engines accept before compiling,
+    // so a filter the backend accepts is not wrongly flagged here.
+    // (Other JS/RE2 gaps, e.g. lookahead, stay backend-gated as noted
+    // in the module header.)
     try {
-      new RegExp(g.filter);
+      new RegExp(g.filter.replace(/\(\?P</g, "(?<"));
     } catch {
       conflicts.set(i, `策略组「${g.name}」的正则表达式无效，后端会拒绝保存`);
     }
@@ -238,6 +244,15 @@ function isValidIPv6(ip: string): boolean {
     return checked.ok && checked.count === 8;
   }
   const right = halves[1] === "" ? [] : halves[1].split(":");
+  // R18-R3-E2-01: an embedded IPv4 address must be the last element
+  // of the whole address — netip.ParsePrefix rejects anything after
+  // it, including "::" itself ("192.168.1.1::/120" is invalid even
+  // though the right half is empty). checkGroups below only requires
+  // it to be last within its own half, so reject a dotted left half
+  // outright here.
+  if (halves[0].includes(".")) {
+    return false;
+  }
   const checkedLeft = checkGroups(left);
   const checkedRight = checkGroups(right);
 
@@ -258,7 +273,10 @@ function isValidCIDR(s: string): boolean {
   const ip = s.slice(0, slash);
   const bits = s.slice(slash + 1);
 
-  if (!/^\d+$/.test(bits)) {
+  // R18-R3-E2-01: netip.ParsePrefix rejects a leading zero in the
+  // prefix length ("1.2.3.4/024", "1.2.3.4/00"), so require "0" or a
+  // non-zero leading digit instead of any digit run.
+  if (!/^(0|[1-9][0-9]*)$/.test(bits)) {
     return false;
   }
   const n = Number(bits);
