@@ -190,8 +190,8 @@ func (h *Handler) checkNodeTunnelTLSStatus(nodeID int64) (ready bool, caSHA, cer
 // never fails a deploy: every failure path logs and returns false,
 // and the render falls back to the legacy form for the affected
 // segments. A node already marked Ready is re-confirmed against the
-// agent (status + fingerprints) before it is trusted; a mismatch
-// triggers a re-issue.
+// agent (status + fingerprints + CA generation) before it is
+// trusted; a mismatch triggers a re-issue.
 func (h *Handler) ensureNodeTunnelTLSReady(nodeID int64) bool {
 	ready, _ := h.ensureNodeTunnelTLSReadyDetailed(nodeID)
 	return ready
@@ -219,6 +219,31 @@ func classifyTunnelTLSIssueCause(err error) string {
 	return ""
 }
 
+// nodeTunnelTLSMatchesCurrentCA reports whether the CA fingerprint
+// the agent holds belongs to the panel's current CA generation
+// (R18-R3-F1-01, option 1: bind the generation check into the
+// ensure fast path). The panel CA is recreated when
+// tunnel_tls_ca.* are lost while node_tunnel_tls rows survive, so
+// a row/agent pair that agree with each other can still be a stale
+// generation — trusting it would mix two CA generations in one TLS
+// tunnel and break cross-generation legs. A CA load failure
+// returns false (do not trust the fast path; the re-issue attempt
+// surfaces the error). Wiping the table when a CA is created
+// (option 2) was not chosen: it destroys derived state, needs the
+// CA loader to report creation, and cannot catch rows reintroduced
+// after the CA was created — the ensure check self-heals on the
+// next deploy in all of those cases.
+func (h *Handler) nodeTunnelTLSMatchesCurrentCA(agentCASHA string) bool {
+	if strings.TrimSpace(agentCASHA) == "" {
+		return false
+	}
+	ca, err := h.tunnelTLSAuthority()
+	if err != nil || ca == nil {
+		return false
+	}
+	return agentCASHA == ca.CASha256()
+}
+
 // ensureNodeTunnelTLSReadyDetailed is ensureNodeTunnelTLSReady
 // plus the failure cause for the receipt: when the node ends up
 // not ready, cause names why the distribution failed ("节点离线",
@@ -231,10 +256,10 @@ func (h *Handler) ensureNodeTunnelTLSReadyDetailed(nodeID int64) (ready bool, ca
 		return false, ""
 	}
 	if st, err := h.repo.GetNodeTunnelTLS(nodeID); err == nil && st != nil && st.Ready == 1 {
-		if ok, caSHA, certSHA := h.checkNodeTunnelTLSStatus(nodeID); ok && caSHA == st.CASha256 && certSHA == st.CertSha256 {
+		if ok, caSHA, certSHA := h.checkNodeTunnelTLSStatus(nodeID); ok && caSHA == st.CASha256 && certSHA == st.CertSha256 && h.nodeTunnelTLSMatchesCurrentCA(caSHA) {
 			return true, ""
 		}
-		log.Printf("tunnel-tls: 节点 %d 已标记就绪但 agent 回查不符（缺失/过期/指纹不匹配），重新下发", nodeID)
+		log.Printf("tunnel-tls: 节点 %d 已标记就绪但 agent 回查不符（缺失/过期/指纹不匹配/CA 代际已变），重新下发", nodeID)
 	}
 	if err := h.distributeNodeTunnelTLS(nodeID); err != nil {
 		log.Printf("tunnel-tls: 节点 %d 证书下发失败，保持旧渲染（链路不受影响）: %v", nodeID, err)
