@@ -1673,7 +1673,7 @@ func (h *Handler) redeployLocalNodeRuntime(nodeID int64) error {
 	// First pass: deploy everything
 	tunnelFailed := make(map[int64]struct{})
 	for _, tunnelID := range tunnelIDs {
-		if err := h.redeployTunnelAndForwards(tunnelID); err != nil {
+		if _, err := h.redeployTunnelAndForwards(tunnelID); err != nil {
 			tunnelFailed[tunnelID] = struct{}{}
 			fmt.Printf("post-upgrade redeploy: tunnel %d failed on node %d: %v\n", tunnelID, nodeID, err)
 		}
@@ -1849,7 +1849,7 @@ func (h *Handler) retryFailedRedeploys(nodeID int64, tunnelFailed map[int64]stru
 
 		// Retry failed tunnels
 		for tunnelID := range tunnelFailed {
-			if err := h.redeployTunnelAndForwards(tunnelID); err == nil {
+			if _, err := h.redeployTunnelAndForwards(tunnelID); err == nil {
 				delete(tunnelFailed, tunnelID)
 				// R21-X-02：隧道重试成功时其下转发已在 redeployTunnelAndForwards
 				// 内重推成功，但该路径不带失势清理；逐条补删（与首轮 forward
