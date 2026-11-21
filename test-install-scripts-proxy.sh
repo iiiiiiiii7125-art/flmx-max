@@ -5426,6 +5426,24 @@ test_panel_install_script_uses_builtin_routes_by_default() (
   assert_equals "builtin" "$(route_mode)" "panel_install.sh should use built-in route selection when no override is given (no implicit default proxy)"
 )
 
+# panel_install.sh requires root (F-125 fail-fast; since R18-A1-02 the
+# root check precedes self-update). The self-update fixtures execute the
+# script's main flow, so they must run it as root: directly when already
+# root, else via passwordless sudo (GitHub runner) with the stub PATH and
+# the fixture env passed through explicitly (sudo resets PATH and drops
+# most env). Without root and without sudo the fixture cannot exercise
+# self-update at all, so it fails closed instead of passing vacuously.
+run_panel_install_as_root() {
+  local work="$1" stubbin="$2" log="$3"
+  if [[ $EUID -eq 0 ]]; then
+    ( cd "$work" && printf '6\n' | PATH="$stubbin:$PATH" PROXY_ENABLED=false bash ./panel_install.sh >"$log" 2>&1 ) || true
+  elif command -v sudo >/dev/null 2>&1; then
+    ( cd "$work" && printf '6\n' | sudo -n env PATH="$stubbin:$PATH" "STUB_SHA256=${STUB_SHA256:-}" "STUB_GOOD_SCRIPT=${STUB_GOOD_SCRIPT:-}" "REAL_CAT=${REAL_CAT:-}" "SELF_UPDATE_SENTINEL=${SELF_UPDATE_SENTINEL:-}" PROXY_ENABLED=false bash ./panel_install.sh >"$log" 2>&1 ) || true
+  else
+    fail "self-update fixture requires root (panel_install.sh refuses non-root since R18-A1-02); no sudo available"
+  fi
+}
+
 # F-006: panel_install 自更新必须走带 sha256 校验的 Release 通道。
 # 夹具：stub curl 按 URL 供数——releases/latest 提供版本重定向，
 # 版本化资产提供脚本本体与 .sha256。
@@ -5483,7 +5501,7 @@ EOF
   cp "$ROOT_DIR/panel_install.sh" "$work/panel_install.sh"
   export SELF_UPDATE_SENTINEL="$work/sentinel"
   rm -f "$SELF_UPDATE_SENTINEL"
-  ( cd "$work" && printf '6\n' | PATH="$stubbin:$PATH" PROXY_ENABLED=false bash ./panel_install.sh >/dev/null 2>&1 ) || true
+  run_panel_install_as_root "$work" "$stubbin" /dev/null
   echo "$work"
 }
 
@@ -5599,7 +5617,7 @@ EOF
   cp "$ROOT_DIR/panel_install.sh" "$work/panel_install.sh"
   export SELF_UPDATE_SENTINEL="$work/sentinel"
   rm -f "$SELF_UPDATE_SENTINEL"
-  ( cd "$work" && printf '6\n' | PATH="$stubbin:$PATH" PROXY_ENABLED=false bash ./panel_install.sh > "$work/run.log" 2>&1 ) || true
+  run_panel_install_as_root "$work" "$stubbin" "$work/run.log"
   echo "$work"
 }
 
