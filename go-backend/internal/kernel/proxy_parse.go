@@ -79,6 +79,8 @@ func parseLines(text string) ([]ImportedNode, []string) {
 		var err error
 		if strings.Contains(line, "://") {
 			p, err = parseURI(line)
+		} else if pp, ok := parsePlainSocks5(line); ok {
+			p = pp
 		} else if strings.Contains(line, "=") {
 			p, err = parseSurgeLine(line)
 		} else {
@@ -1229,6 +1231,46 @@ func parseSocksURI(rest string) (Proxy, error) {
 		p.set("password", pw)
 	}
 	return p, nil
+}
+
+// parsePlainSocks5 parses the bare "host:port:user:pass" form pasted from
+// proxy lists (no scheme, no '='). It only claims lines whose shape is
+// unambiguous — no whitespace, a numeric port, exactly four colon-separated
+// fields with a non-empty username — so Surge lines (which carry spaces
+// and '=' before any ':') and other formats can never be misrouted here;
+// a password may itself contain ':' or '=' (SplitN keeps the tail whole).
+// Host and port validity are left to finishProxy, exactly as for
+// socks5:// links. IPv6 hosts must be bracketed ([2001:db8::1]:1080:u:p).
+func parsePlainSocks5(line string) (Proxy, bool) {
+	if strings.ContainsAny(line, " \t") {
+		return nil, false
+	}
+	var host, tail string
+	if strings.HasPrefix(line, "[") {
+		end := strings.IndexByte(line, ']')
+		if end <= 1 || end+1 >= len(line) || line[end+1] != ':' {
+			return nil, false
+		}
+		host, tail = line[1:end], line[end+2:]
+	} else {
+		i := strings.IndexByte(line, ':')
+		if i <= 0 {
+			return nil, false
+		}
+		host, tail = line[:i], line[i+1:]
+	}
+	parts := strings.SplitN(tail, ":", 3)
+	if len(parts) != 3 || parts[1] == "" {
+		return nil, false
+	}
+	port, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return nil, false
+	}
+	p := Proxy{"type": "socks5", "server": host, "port": port, "udp": true}
+	p.set("username", parts[1])
+	p.set("password", parts[2])
+	return p, true
 }
 
 func firstNonEmptyString(values ...string) string {
