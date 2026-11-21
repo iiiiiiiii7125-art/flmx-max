@@ -189,9 +189,9 @@ func TestAgentRestartScriptSwapGuardBothManagers(t *testing.T) {
 			t.Fatalf("buildAgentRestartScriptFor %s: %v", manager, err)
 		}
 		for _, want := range []string{
-			"if mv /etc/flux_agent/.flux_agent.upgrade-1 /etc/flux_agent/flux_agent; then",
+			"if mv '/etc/flux_agent/.flux_agent.upgrade-1' '/etc/flux_agent/flux_agent'; then",
 			"agent upgrade swap failed",
-			"rm -f /etc/flux_agent/.flux_agent.upgrade-1",
+			"rm -f '/etc/flux_agent/.flux_agent.upgrade-1'",
 		} {
 			if !strings.Contains(script, want) {
 				t.Fatalf("%s restart script missing %q:\n%s", manager, want, script)

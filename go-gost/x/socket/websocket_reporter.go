@@ -2486,7 +2486,7 @@ const agentReconnectPollSec = 2
 // as epoch 0 (never satisfies a real since).
 func agentReconnectCheckFunctionFor(markerPath string, windowSec, pollSec int) string {
 	return fmt.Sprintf("flmx_agent_reconnected_ok() { _since=$1; _waited=0; while :; do _ts=$(head -n 1 %s 2>/dev/null); case \"$_ts\" in ''|*[!0-9]*) _ts=0 ;; esac; if [ \"$_ts\" -ge \"$_since\" ]; then return 0; fi; if [ \"$_waited\" -ge %d ]; then return 1; fi; sleep %d; _waited=$((_waited + %d)); done; }",
-		markerPath, windowSec, pollSec, pollSec)
+		quoteShellPath(markerPath), windowSec, pollSec, pollSec)
 }
 
 // agentMarkerIntroVersion 是首个在连接成功点写回连标记的
@@ -2615,7 +2615,7 @@ func agentReconnectGateSetupFor(markerPath string, capability agentTargetMarkerC
 	switch capability {
 	case agentTargetMarkerCapable:
 		return fmt.Sprintf("flmx_marker_gate=0; flmx_reconnect_since=0; if [ -f %s ]; then flmx_marker_gate=1; else echo 'warning: panel connection marker not found (%s); upgrade verdict falls back to process liveness only'; fi; ",
-			markerPath, markerPath)
+			quoteShellPath(markerPath), markerPath)
 	case agentTargetMarkerIncapable:
 		msg := fmt.Sprintf("warning: target agent version %s predates the panel connection marker (written since agent %s) and never refreshes it; verdict falls back to process liveness only", displayVersion(targetVersion), agentMarkerIntroVersion)
 		return "flmx_marker_gate=0; flmx_reconnect_since=0; echo " + tuneShellQuote(msg) + "; "
@@ -2631,7 +2631,7 @@ func agentReconnectGateSetupFor(markerPath string, capability agentTargetMarkerC
 // presence (see agentRollbackReconnectGateFunction).
 func agentUpgradeGateSetupFor(markerPath string, capability agentTargetMarkerCapability, targetVersion string) string {
 	return agentReconnectGateSetupFor(markerPath, capability, targetVersion) +
-		fmt.Sprintf("flmx_rb_marker_gate=0; if [ -f %s ]; then flmx_rb_marker_gate=1; fi; ", markerPath)
+		fmt.Sprintf("flmx_rb_marker_gate=0; if [ -f %s ]; then flmx_rb_marker_gate=1; fi; ", quoteShellPath(markerPath))
 }
 
 // agentUpgradeVerdictFunctions renders the full verdict surface
@@ -2795,6 +2795,16 @@ func legacyGostCleanupSegment(ownAddr, legacyAddr string) string {
 // 每次升级/回滚 append 一段，口径上真无界（增速极低、KB 级/年）。
 const agentUpgradeLogMaxBytes = 1048576
 
+// quoteShellPath renders a filesystem path as a single shell word for
+// the upgrade/rollback scripts (F1-03): tuneShellQuote's single-quote
+// escaping already handles spaces, $, backticks, quotes and globs, so
+// it is reused for paths. It is total — there is no quoting failure
+// mode — and the script builders below reject an empty path outright,
+// so no path is ever spliced into mv/cp/rm unquoted or empty.
+func quoteShellPath(p string) string {
+	return tuneShellQuote(p)
+}
+
 // agentUpgradeLogCapSegment renders the size cap prepended to the
 // upgrade/rollback scripts: before the script redirects its output
 // into agent-upgrade.log, a log already past the cap is truncated
@@ -2804,7 +2814,7 @@ const agentUpgradeLogMaxBytes = 1048576
 // effort (wc failure reads as 0 = under cap) and truncation failure
 // never blocks the upgrade script itself.
 func agentUpgradeLogCapSegment(logPath string) string {
-	return fmt.Sprintf("if [ -f %s ]; then _flmx_log_size=$(wc -c < %s 2>/dev/null || echo 0); case \"$_flmx_log_size\" in ''|*[!0-9]*) _flmx_log_size=0 ;; esac; if [ \"$_flmx_log_size\" -gt %d ]; then : > %s || true; fi; fi; ", logPath, logPath, agentUpgradeLogMaxBytes, logPath)
+	return fmt.Sprintf("if [ -f %s ]; then _flmx_log_size=$(wc -c < %s 2>/dev/null || echo 0); case \"$_flmx_log_size\" in ''|*[!0-9]*) _flmx_log_size=0 ;; esac; if [ \"$_flmx_log_size\" -gt %d ]; then : > %s || true; fi; fi; ", quoteShellPath(logPath), quoteShellPath(logPath), agentUpgradeLogMaxBytes, quoteShellPath(logPath))
 }
 
 // buildAgentRestartScriptFor builds the self-contained upgrade restart
@@ -2822,6 +2832,9 @@ func buildAgentRestartScriptFor(manager serviceManager, tmpPath, binaryPath, bac
 }
 
 func buildAgentRestartScriptForCap(manager serviceManager, tmpPath, binaryPath, backupPath string, capability agentTargetMarkerCapability, targetVersion string) (string, error) {
+	if strings.TrimSpace(tmpPath) == "" || strings.TrimSpace(binaryPath) == "" || strings.TrimSpace(backupPath) == "" {
+		return "", fmt.Errorf("升级脚本路径不能为空")
+	}
 	serviceName := agentServiceNameFor(binaryPath)
 	stop, start, _, err := serviceManagerCommandsFor(manager, serviceName)
 	if err != nil {
@@ -2843,7 +2856,7 @@ func buildAgentRestartScriptForCap(manager serviceManager, tmpPath, binaryPath, 
 	// 后标记时间戳变新只能出自新进程。
 	// F-211-01：gate setup 按目标二进制世代判定（见
 	// agentUpgradeGateSetupFor），不按停服前标记是否存在判定。
-	fmt.Fprintf(&b, "%sexec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s%s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); ", agentUpgradeLogCapSegment(logPath), logPath, agentUpgradeGateSetupFor(markerPath, capability, targetVersion), verdictFns, stop)
+	fmt.Fprintf(&b, "%sexec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s%s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); ", agentUpgradeLogCapSegment(logPath), quoteShellPath(logPath), agentUpgradeGateSetupFor(markerPath, capability, targetVersion), verdictFns, stop)
 	if manager == serviceManagerSystemd {
 		// Legacy pre-FLMX gost cleanup (systemd units only), gated
 		// on the C4-F01 ownership guard: the fingerprint alone does
@@ -2891,7 +2904,7 @@ func buildAgentRestartScriptForCap(manager serviceManager, tmpPath, binaryPath, 
 	// 前世代备份、恒写标记，其门（flmx_rb_marker_gate）只按本
 	// 机标记机制是否在场收放，与升级目标世代无关。
 	fmt.Fprintf(&b, "if mv %s %s; then %s; sleep 3; flmx_new_ok=0; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then flmx_new_ok=1; else echo 'agent upgrade failed: new agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'new agent failed health check'; fi; if [ \"$flmx_new_ok\" = \"1\" ]; then echo 'agent upgrade restart ok'; else echo 'rolling back to previous version'; if [ -f %s ]; then %s; flmx_reconnect_since=$(date +%%s); sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok && flmx_agent_rb_reconnect_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
-		tmpPath, binaryPath, start, backupPath, stop, rollbackTmpTemplate, backupPath, backupPath, binaryPath, start, start, tmpPath, start)
+		quoteShellPath(tmpPath), quoteShellPath(binaryPath), start, quoteShellPath(backupPath), stop, quoteShellPath(rollbackTmpTemplate), quoteShellPath(backupPath), quoteShellPath(backupPath), quoteShellPath(binaryPath), start, start, quoteShellPath(tmpPath), start)
 	return b.String(), nil
 }
 
@@ -2906,6 +2919,9 @@ func buildAgentRollbackScriptFor(manager serviceManager, backupPath, binaryPath 
 }
 
 func buildAgentRollbackScriptForCap(manager serviceManager, backupPath, binaryPath string, capability agentTargetMarkerCapability, targetVersion string) (string, error) {
+	if strings.TrimSpace(backupPath) == "" || strings.TrimSpace(binaryPath) == "" {
+		return "", fmt.Errorf("回滚脚本路径不能为空")
+	}
 	serviceName := agentServiceNameFor(binaryPath)
 	stop, start, _, err := serviceManagerCommandsFor(manager, serviceName)
 	if err != nil {
@@ -2954,7 +2970,7 @@ func buildAgentRollbackScriptForCap(manager serviceManager, backupPath, binaryPa
 	// 降级为进程判活＋日志明示，绝不写 'rollback failed' 误判
 	// 实际成功的回退；世代不可判同降级。
 	return fmt.Sprintf("%sexec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s%s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then %s; sleep 2; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then echo 'rollback restart ok'; else echo 'rollback failed: restored agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; %s; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
-		agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetupFor(markerPath, capability, targetVersion), verdictFns, stop, tmpTemplate, backupPath, backupPath, binaryPath, start, start), nil
+		agentUpgradeLogCapSegment(logPath), quoteShellPath(logPath), agentReconnectGateSetupFor(markerPath, capability, targetVersion), verdictFns, stop, quoteShellPath(tmpTemplate), quoteShellPath(backupPath), quoteShellPath(backupPath), quoteShellPath(binaryPath), start, start), nil
 }
 
 // --- F-R2B-V2-05: self-managed installs (no init service of their own) ---
@@ -3061,6 +3077,9 @@ func buildAgentRestartScriptSelf(tmpPath, binaryPath, backupPath string, self *a
 }
 
 func buildAgentRestartScriptSelfCap(tmpPath, binaryPath, backupPath string, self *agentSelfRestartContext, capability agentTargetMarkerCapability, targetVersion string) (string, error) {
+	if strings.TrimSpace(tmpPath) == "" || strings.TrimSpace(binaryPath) == "" || strings.TrimSpace(backupPath) == "" {
+		return "", fmt.Errorf("升级脚本路径不能为空")
+	}
 	dir := filepath.Dir(binaryPath)
 	logPath := filepath.Join(dir, "agent-upgrade.log")
 	markerPath := filepath.Join(dir, agentConnectedMarkerName)
@@ -3076,7 +3095,7 @@ func buildAgentRestartScriptSelfCap(tmpPath, binaryPath, backupPath string, self
 	// 程已死、不可能再刷新标记）捕获回连判据的 since 时刻——此
 	// 后标记时间戳变新只能出自新进程。
 	fmt.Fprintf(&b, "%sexec >>%s 2>&1; echo \"=== agent upgrade restart $(date) ===\"; %s%s; %s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); ",
-		agentUpgradeLogCapSegment(logPath), logPath, agentUpgradeGateSetupFor(markerPath, capability, targetVersion), verdictFns, startFn, agentSelfStopSegment(self.pid))
+		agentUpgradeLogCapSegment(logPath), quoteShellPath(logPath), agentUpgradeGateSetupFor(markerPath, capability, targetVersion), verdictFns, startFn, agentSelfStopSegment(self.pid))
 	rollbackTmpTemplate := filepath.Join(dir, "."+filepath.Base(binaryPath)+".upgrade-rollback-XXXXXX")
 	// 主判活与回滚腿与服务版同口径：健康检查通过只说明进程活着，
 	// 新进程必须在 60s 内把回连标记刷新才许记 'agent upgrade
@@ -3085,7 +3104,7 @@ func buildAgentRestartScriptSelfCap(tmpPath, binaryPath, backupPath string, self
 	// 本身走与服务版相同的 staged copy＋cmp＋mv（F-RM-01/L2-02
 	// 同律：未证明完整的 staged 换版不得记成功）。
 	fmt.Fprintf(&b, "if mv %s %s; then flmx_start_agent; sleep 3; flmx_new_ok=0; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then flmx_new_ok=1; else echo 'agent upgrade failed: new agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'new agent failed health check'; fi; if [ \"$flmx_new_ok\" = \"1\" ]; then echo 'agent upgrade restart ok'; else echo 'rolling back to previous version'; if [ -f %s ]; then kill $flmx_agent_pid 2>/dev/null; for i in 1 2 3 4 5; do kill -0 $flmx_agent_pid 2>/dev/null || break; sleep 1; done; if kill -0 $flmx_agent_pid 2>/dev/null; then echo 'agent upgrade rollback aborted: new version still running (could not stop it)'; else flmx_reconnect_since=$(date +%%s); sleep 1; rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then flmx_start_agent; sleep 2; if flmx_agent_health_ok && flmx_agent_rb_reconnect_ok; then echo 'rollback succeeded'; else echo 'rollback start failed'; fi; else echo 'agent upgrade rollback swap failed: backup binary could not be staged and swapped into place intact, keeping new version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; flmx_start_agent; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade rollback aborted: new version still running'; else echo 'agent upgrade rollback aborted and new version failed to restart'; fi; fi; fi; else echo 'no backup available for rollback'; fi; fi; else echo 'agent upgrade swap failed: staged binary could not be moved into place, keeping current version'; rm -f %s; flmx_start_agent; sleep 2; if flmx_agent_health_ok; then echo 'agent upgrade aborted: previous version still running'; else echo 'agent upgrade aborted and previous version failed to restart'; fi; fi",
-		tmpPath, binaryPath, backupPath, rollbackTmpTemplate, backupPath, backupPath, binaryPath, tmpPath)
+		quoteShellPath(tmpPath), quoteShellPath(binaryPath), quoteShellPath(backupPath), quoteShellPath(rollbackTmpTemplate), quoteShellPath(backupPath), quoteShellPath(backupPath), quoteShellPath(binaryPath), quoteShellPath(tmpPath))
 	return b.String(), nil
 }
 
@@ -3100,6 +3119,9 @@ func buildAgentRollbackScriptSelf(backupPath, binaryPath string, self *agentSelf
 }
 
 func buildAgentRollbackScriptSelfCap(backupPath, binaryPath string, self *agentSelfRestartContext, capability agentTargetMarkerCapability, targetVersion string) (string, error) {
+	if strings.TrimSpace(backupPath) == "" || strings.TrimSpace(binaryPath) == "" {
+		return "", fmt.Errorf("回滚脚本路径不能为空")
+	}
 	dir := filepath.Dir(binaryPath)
 	logPath := filepath.Join(dir, "agent-upgrade.log")
 	markerPath := filepath.Join(dir, agentConnectedMarkerName)
@@ -3111,7 +3133,7 @@ func buildAgentRollbackScriptSelfCap(backupPath, binaryPath string, self *agentS
 	// 判活与升级路径同口径（R4-N2 两次采样），避免 'rollback restart ok'
 	// 在 flap 窗口内误报；换版走 staged copy＋cmp＋mv（FRM3/FRM4 同律）。
 	return fmt.Sprintf("%sexec >>%s 2>&1; echo \"=== agent rollback $(date) ===\"; %s%s; %s; sleep 1; %s; flmx_reconnect_since=$(date +%%s); rollback_tmp=; if rollback_tmp=$(mktemp %s) && cp %s \"$rollback_tmp\" && chmod 755 \"$rollback_tmp\" && cmp %s \"$rollback_tmp\" && mv \"$rollback_tmp\" %s; then flmx_start_agent; sleep 2; if flmx_agent_health_ok; then if flmx_agent_reconnect_ok; then echo 'rollback restart ok'; else echo 'rollback failed: restored agent process is alive but did not reconnect to the panel within 60s'; fi; else echo 'rollback start failed'; fi; else echo 'agent rollback swap failed: backup binary could not be staged and swapped into place intact, keeping current version'; if [ -n \"$rollback_tmp\" ]; then rm -f \"$rollback_tmp\"; fi; flmx_start_agent; sleep 2; if flmx_agent_health_ok; then echo 'agent rollback aborted: current version still running'; else echo 'agent rollback aborted and current version failed to restart'; fi; fi",
-		agentUpgradeLogCapSegment(logPath), logPath, agentReconnectGateSetupFor(markerPath, capability, targetVersion), verdictFns, startFn, agentSelfStopSegment(self.pid), tmpTemplate, backupPath, backupPath, binaryPath), nil
+		agentUpgradeLogCapSegment(logPath), quoteShellPath(logPath), agentReconnectGateSetupFor(markerPath, capability, targetVersion), verdictFns, startFn, agentSelfStopSegment(self.pid), quoteShellPath(tmpTemplate), quoteShellPath(backupPath), quoteShellPath(backupPath), quoteShellPath(binaryPath)), nil
 }
 
 // agentVersionsEqual compares two agent version strings, tolerating

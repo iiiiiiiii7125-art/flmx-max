@@ -115,11 +115,11 @@ func TestAgentRollbackScriptAtomicStagingBothManagers(t *testing.T) {
 			t.Fatalf("buildAgentRollbackScriptFor %s: %v", manager, err)
 		}
 		for _, want := range []string{
-			"rollback_tmp=$(mktemp /etc/flux_agent/.flux_agent.rollback-XXXXXX)",
-			"cp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
+			"rollback_tmp=$(mktemp '/etc/flux_agent/.flux_agent.rollback-XXXXXX')",
+			"cp '/etc/flux_agent/flux_agent.old' \"$rollback_tmp\"",
 			"chmod 755 \"$rollback_tmp\"",
-			"cmp /etc/flux_agent/flux_agent.old \"$rollback_tmp\"",
-			"mv \"$rollback_tmp\" /etc/flux_agent/flux_agent",
+			"cmp '/etc/flux_agent/flux_agent.old' \"$rollback_tmp\"",
+			"mv \"$rollback_tmp\" '/etc/flux_agent/flux_agent'",
 			"rm -f \"$rollback_tmp\"",
 		} {
 			if !strings.Contains(script, want) {
@@ -127,11 +127,11 @@ func TestAgentRollbackScriptAtomicStagingBothManagers(t *testing.T) {
 			}
 		}
 		// No copy may write the binary path directly any more.
-		if strings.Contains(script, "cp /etc/flux_agent/flux_agent.old /etc/flux_agent/flux_agent") {
+		if strings.Contains(script, "cp '/etc/flux_agent/flux_agent.old' '/etc/flux_agent/flux_agent'") {
 			t.Fatalf("%s rollback script still copies straight onto the binary path:\n%s", manager, script)
 		}
 		// 'rollback restart ok' is only reachable past the atomic mv.
-		if mvIdx, okIdx := strings.Index(script, "mv \"$rollback_tmp\" /etc/flux_agent/flux_agent"), strings.Index(script, "rollback restart ok"); mvIdx < 0 || okIdx < mvIdx {
+		if mvIdx, okIdx := strings.Index(script, "mv \"$rollback_tmp\" '/etc/flux_agent/flux_agent'"), strings.Index(script, "rollback restart ok"); mvIdx < 0 || okIdx < mvIdx {
 			t.Fatalf("%s rollback script: 'rollback restart ok' must sit past the staged mv:\n%s", manager, script)
 		}
 	}
