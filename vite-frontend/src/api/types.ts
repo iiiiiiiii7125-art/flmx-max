@@ -101,6 +101,8 @@ export interface TunnelApiItem {
   inNodeId?: TunnelChainNodePayload[];
   outNodeId?: TunnelChainNodePayload[];
   chainNodes?: TunnelChainNodePayload[][];
+  /** R18-R3-B7-02：联邦移除致孤标记——后端 tunnelList 对丢了入口节点的 Type 2 隧道下发 true；无标记时不下发此字段。 */
+  orphanedByFederationRemoval?: boolean;
   inx?: number;
   [key: string]: unknown;
 }

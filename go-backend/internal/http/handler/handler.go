@@ -1108,25 +1108,34 @@ func (h *Handler) tunnelList(w http.ResponseWriter, r *http.Request) {
 }
 
 // attachOrphanTunnelFlags marks list items whose tunnels lost nodes to
-// the v6 federation-removal migration (R18-B7-01). The todo key is
-// advisory: a read/parse failure logs and leaves the list unflagged
-// rather than failing the list call.
+// the v6 federation-removal migration (R18-B7-01). Two sources are
+// merged: the v6 orphan-todo key, and the list-time derivation
+// (R18-R3-B7-01, Repository.ListOrphanedType2TunnelIDs) for DBs that
+// already ran v6 before the key existed. The flag is advisory: a
+// read/parse/derivation failure logs and leaves the affected items
+// unflagged rather than failing the list call; listing never writes
+// the todo key.
 func (h *Handler) attachOrphanTunnelFlags(items []map[string]interface{}) {
+	orphaned := make(map[int64]bool)
 	cfg, err := h.repo.GetConfigByName(repo.RMShareOrphanTunnelsKey)
-	if err != nil || cfg == nil {
-		if err != nil {
-			log.Printf("tunnelList: orphan-tunnel flag read failed: %v", err)
+	if err != nil {
+		log.Printf("tunnelList: orphan-tunnel flag read failed: %v", err)
+	} else if cfg != nil {
+		var ids []int64
+		if err := json.Unmarshal([]byte(cfg.Value), &ids); err != nil {
+			log.Printf("tunnelList: orphan-tunnel flag parse failed: %v", err)
+		} else {
+			for _, id := range ids {
+				orphaned[id] = true
+			}
 		}
-		return
 	}
-	var ids []int64
-	if err := json.Unmarshal([]byte(cfg.Value), &ids); err != nil {
-		log.Printf("tunnelList: orphan-tunnel flag parse failed: %v", err)
-		return
-	}
-	orphaned := make(map[int64]bool, len(ids))
-	for _, id := range ids {
-		orphaned[id] = true
+	if derived, err := h.repo.ListOrphanedType2TunnelIDs(); err != nil {
+		log.Printf("tunnelList: orphan-tunnel derivation failed: %v", err)
+	} else {
+		for _, id := range derived {
+			orphaned[id] = true
+		}
 	}
 	for _, item := range items {
 		if id, ok := item["id"].(int64); ok && orphaned[id] {
