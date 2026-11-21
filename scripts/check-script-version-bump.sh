@@ -87,6 +87,13 @@ body_hash() {
   git show "$1:$SCRIPT_FILE" 2>/dev/null | grep -v '^SCRIPT_VERSION=' | git hash-object --stdin
 }
 
+commit_touches_body() {
+  # $1 = commit。返回 0 = 该 commit 的 panel_install.sh diff 含正文行
+  # （SCRIPT_VERSION 行除外）；只含印记行或无 +/- 行时返回 1。
+  git show --format= --unified=0 "$1" -- "$SCRIPT_FILE" 2>/dev/null |
+    grep '^[-+][^-+]' | cut -c2- | grep -vq '^SCRIPT_VERSION='
+}
+
 base_stamp="$(stamp_at "$base_ref")"
 head_stamp="$(stamp_at "$head_ref")"
 [ -n "$base_stamp" ] && [ -n "$head_stamp" ] || {
@@ -103,6 +110,36 @@ fi
 # 印记为定宽 YYYYMMDD.NN，字典序即版本序。
 if [ "$head_stamp" \> "$base_stamp" ]; then
   echo "script-version-bump: 正文相对 $base_ref 有变更，印记已递增 $base_stamp → $head_stamp"
+  # R18-R3-A1-02：两端比较只看净值，盖不住跨 commit 的情形——
+  # bf6d4ebb 改本体未同 commit bump，却被后来的 43216b7b 的 bump
+  # 在净值上掩盖。补一条覆盖检查：取区间内最近一次改动正文的
+  # 非 merge commit L，要求 HEAD 印记严格大于 L 的父提交印记，
+  # 即 L 之后（含自身）至少有一次 bump；L 之后再改本体不 bump
+  # 即红。merge commit 不计入（其内容来自被合入分支的各 commit；
+  # 合入冲突解出的正文改动不在此检查内，仍由两端净值兜底）。
+  latest_body=""
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    if commit_touches_body "$c"; then
+      latest_body="$c"
+      break
+    fi
+  done <<EOF
+$(git rev-list --no-merges "$base_ref..$head_ref" -- "$SCRIPT_FILE")
+EOF
+  if [ -n "$latest_body" ]; then
+    parent_stamp=""
+    if git rev-parse --verify --quiet "$latest_body^^{commit}" >/dev/null; then
+      parent_stamp="$(git show "$latest_body^:$SCRIPT_FILE" 2>/dev/null | grep -m1 '^SCRIPT_VERSION=' | sed 's/^SCRIPT_VERSION=//; s/^"//; s/"$//')"
+    fi
+    if [ -z "$parent_stamp" ] || [ "$head_stamp" \> "$parent_stamp" ]; then
+      echo "script-version-bump: 最近一次正文改动 $latest_body 已被其后 bump 覆盖（父提交印记 ${parent_stamp:-无} → $head_stamp）"
+    else
+      echo "FAIL  $SCRIPT_FILE 最近一次正文改动 $latest_body 之后印记未再递增（父提交印记 $parent_stamp → HEAD $head_stamp）：改本体的 commit 须同 commit bump SCRIPT_VERSION（R18-R3-A1-02；bf6d4ebb 同类再犯）"
+      echo "RESULT: FAIL"
+      exit 1
+    fi
+  fi
   echo "RESULT: PASS"
   exit 0
 fi

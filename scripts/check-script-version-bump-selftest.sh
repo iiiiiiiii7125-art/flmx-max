@@ -106,4 +106,39 @@ awk '/script-version-bump:/{f=1} f && /fetch-depth: 0/{ok=1; exit} f && /^  [a-z
   echo "FAIL: ci-build.yml script-version-bump job lacks fetch-depth: 0 (tags missing -> the gate NOTE-passes, unwired in effect)"; exit 1; }
 echo "OK: ci-build.yml wires the bump gate with full history"
 
+# ── R18-R3-A1-02：跨 commit 盲区。两端比较只看净值时，中间某个
+# 改本体不 bump 的 commit 会被后来的 bump 在净值上掩盖（bf6d4ebb
+# 原形）。变体 6：本体改动（无 bump）→ 本体改动 + bump（净值愈
+# 合）→ 本体再改动（无 bump），门必须 FAIL 点名最近一次改动；
+# 变体 7：在变体 6 之上再补一次本体改动 + bump，门必须 PASS（后
+# 来的 bump 覆盖了最近一次本体改动，窗口只存在于历史中间态）。
+echo "== variant 6: cross-commit: unbumped body change masked by an intermediate bump, then another unbumped body change, must FAIL =="
+# variant 5 leaves install.sh's placeholder filled; restore it first so
+# the PINNED check does not fire before the stamp check under test.
+sed -i 's|PINNED_VERSION="1.2.3"|PINNED_VERSION=""|' install.sh
+git commit -qam "restore install.sh placeholder after variant 5"
+sed -i 's|echo body-v2|echo body-v3|' panel_install.sh
+git commit -qam "body change without bump (first)"
+sed -i 's|echo body-v3|echo body-v4|' panel_install.sh
+sed -i 's|SCRIPT_VERSION="20260101.02"|SCRIPT_VERSION="20260101.03"|' panel_install.sh
+git commit -qam "body change with bump (heals the first)"
+sed -i 's|echo body-v4|echo body-v5|' panel_install.sh
+git commit -qam "body change without bump (latest)"
+if run_gate "$TMP/v6.log"; then
+  echo "FAIL: variant 6 was not caught (cross-commit unbumped body change)"; exit 1
+fi
+grep -q "未再递增" "$TMP/v6.log" && echo "OK: variant 6 caught and named" || {
+  echo "FAIL: variant 6 caught but the latest body change was not named"; sed 's/^/    /' "$TMP/v6.log"; exit 1; }
+
+echo "== variant 7: cross-commit healed: latest body change carries its own bump, must PASS =="
+sed -i 's|echo body-v5|echo body-v6|' panel_install.sh
+sed -i 's|SCRIPT_VERSION="20260101.03"|SCRIPT_VERSION="20260101.04"|' panel_install.sh
+git commit -qam "body change with bump (heals the latest)"
+if run_gate "$TMP/v7.log"; then
+  grep -q "已被其后 bump 覆盖" "$TMP/v7.log" && echo "OK: variant 7 PASS (latest body change covered)" || {
+    echo "FAIL: variant 7 passed but not via the coverage check"; sed 's/^/    /' "$TMP/v7.log"; exit 1; }
+else
+  echo "FAIL: variant 7 should pass (latest body change is covered by its own bump)"; sed 's/^/    /' "$TMP/v7.log"; exit 1
+fi
+
 echo "SELFTEST PASS"

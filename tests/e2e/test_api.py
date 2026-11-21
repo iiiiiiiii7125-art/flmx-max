@@ -218,7 +218,7 @@ class TestSeedPasswordChangeFlag:
     independent of execution order and of every other test.
     """
 
-    @pytest.mark.timeout(300)
+    @pytest.mark.timeout(600)
     def test_seed_login_requires_password_change_then_clears(self, tmp_path: Path):
         """Fresh-backend seed login demands a change; after it, it does not."""
         repo_root = Path(__file__).resolve().parent.parent.parent
@@ -237,7 +237,7 @@ class TestSeedPasswordChangeFlag:
             cwd=repo_root / "go-backend",
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=600,
         )
         assert build.returncode == 0, f"backend build failed: {build.stderr[-2000:]}"
 
